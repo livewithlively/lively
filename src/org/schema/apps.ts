@@ -263,6 +263,57 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   원본 zip 판을 잃었거나 곧 지워질 옛 판을 읽으면 같은 빌드의 지금 zip 으로 새 판을 고정해 별칭을 옮긴다(app-server-watch ⑦).
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health JSONB;`);
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health_checked_at TIMESTAMPTZ;`);
+  //  #4486(v2-7) cur_guard · pub_guard — 그 별칭의 함수 판에 단 신원 검사 층의 판(app-server-guard GUARD_VERSION). 백그라운드 작업은 4 판부터 받는다
+  //   (작업 신원 확인 · 사람 요청 시간 끊기 · 함수 시간 15분) — 그 전 판(빈 칸)이면 다시 올리라고 말한다(app_server_outdated 와 같은 안내).
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS pub_guard INT;`);
+  //  org_app_job(#4486 앱 v2-7) — 앱 백그라운드 작업 한 건: 앱 서버의 라우트 하나를 게이트웨이가 함수에 비동기로 맡긴 것(함수 시간 15분까지).
+  //   흐름: queued(줄) → dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원)
+  //   → done · failed · canceled(검사 층의 결과 보고 · 감시). 판정은 apps/app-jobs-plan.ts · 흐름은 apps/app-jobs.ts.
+  //   ⚠ 비밀 **값**은 없다 — sha256 만. 상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만»(청/녹 두 슬롯 · 감시 · 검사 층 보고가 겹쳐도 한 번만).
+  //   lambda_version · token_hash = 이 작업이 돌 함수 판과 그 판에 구운 앱 서버 토큰 — 작업이 열려 있는 동안 배포가 그 판을 정리하거나 토큰을 회수하지 않는다.
+  //   body = 앱이 넘긴 JSON 글(job_body_kb 까지 · 시작(claim)하거나 끝나면 비운다 — 시작 못 하고 끝난 줄도) · result = 앱 응답의 앞 64KB(글 · JSON · base64).
+  //   끝난 지 app_server_policy.job_keep_days(기본 30일)가 지나면 행째 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_job(
+      id BIGSERIAL PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','dispatched','running','done','failed','canceled')),
+      requester TEXT NOT NULL,
+      variant TEXT NOT NULL CHECK (variant IN ('pub','draft')),
+      alias TEXT NOT NULL CHECK (alias IN ('cur','pub')),
+      function_name TEXT NOT NULL,
+      lambda_version TEXT NOT NULL,
+      token_hash TEXT,
+      route TEXT NOT NULL,
+      body TEXT NOT NULL,
+      body_bytes INT NOT NULL DEFAULT 0,
+      label TEXT,
+      timeout_s INT NOT NULL,
+      source TEXT,
+      parent_id BIGINT,
+      depth INT NOT NULL DEFAULT 0,
+      call_hash TEXT,
+      run_hash TEXT,
+      attempts INT NOT NULL DEFAULT 0,
+      cancel_requested BOOLEAN NOT NULL DEFAULT false,
+      status_code INT,
+      result JSONB,
+      error TEXT,
+      duration_ms INT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      dispatched_at TIMESTAMPTZ,
+      claimed_at TIMESTAMPTZ,
+      last_tick_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  //  감시 · 배차가 보는 것(열린 작업) · 앱의 작업 목록 · 내 작업 · 보존 정리.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_open_idx ON org_app_job(app_id, id) WHERE status IN ('queued','dispatched','running');`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_app_idx ON org_app_job(app_id, id DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_requester_idx ON org_app_job(requester, id DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_ended_idx ON org_app_job(ended_at) WHERE ended_at IS NOT NULL;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
   await pool.query(`ALTER TABLE org_app_server_build ADD COLUMN IF NOT EXISTS keep_until TIMESTAMPTZ;`);
   //  #4801 org_app_server_build.zip_version — 빌드가 올린 zip 의 S3 판 번호(버킷이 판 번호를 켰을 때). Lambda 가 코드를 복사하지 않고 이 판을

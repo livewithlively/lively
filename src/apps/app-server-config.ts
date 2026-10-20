@@ -15,8 +15,12 @@ import { APP_PORT, GUARD_BOOTSTRAP_PATH, GUARD_PORT, GUARD_READY_PATH } from "./
 import { currentTenant } from "../org/tenant-context.js";
 import type { FnCode, FnCodeLocation, LogGroupTag } from "../net/aws/lambda-lite.js";
 
-/** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다. */
-export interface AppServerDecl { start: string | null; build: string | null; dir: string | null }
+/**
+ * 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다.
+ *  memory_mb · tmp_mb(#4486 앱 v2-7 · 결정 상민 2026-10-20) — 함수 메모리 · 임시 디스크(/tmp). null 이면 워크스페이스 기본(app_server_policy.memory_mb · 512MB).
+ *   요청과 백그라운드 작업이 같은 함수라 같은 값을 쓴다(함수 하나). 빌드 지문에는 넣지 않는다 — 설정만 바뀌므로 다시 빌드하지 않는다.
+ */
+export interface AppServerDecl { start: string | null; build: string | null; dir: string | null; memory_mb?: number | null; tmp_mb?: number | null }
 
 const cmd = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
@@ -27,10 +31,32 @@ const cmd = (v: unknown): string | null => {
 /** 매니페스트 → 서버 선언(없으면 null). `web.server` 가 객체이거나 true 면 서버 앱이다. */
 export function serverDeclOf(manifest: unknown): AppServerDecl | null {
   const s = (manifest as { web?: { server?: unknown } } | null)?.web?.server;
-  if (s === true) return { start: null, build: null, dir: null };
+  if (s === true) return { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null };
   if (!s || typeof s !== "object" || Array.isArray(s)) return null;
   const o = s as Record<string, unknown>;
-  return { start: cmd(o.start), build: cmd(o.build), dir: dirOf(o.dir) };
+  return { start: cmd(o.start), build: cmd(o.build), dir: dirOf(o.dir), memory_mb: mbOf(o.memory_mb, 128, 10_240), tmp_mb: mbOf(o.tmp_mb, 512, 10_240) };
+}
+
+/** 메모리 · 임시 디스크 선언(MB) — 정수가 아니거나 Lambda 범위 밖이면 null(= 기본값 · 배포가 «선언을 읽지 못함» 을 알린다). */
+const mbOf = (v: unknown, lo: number, hi: number): number | null => (typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi ? v : null);
+
+/**
+ * 함수 크기(#4486) — 메모리는 앱 선언(없으면 워크스페이스 기본 memory_mb)을 워크스페이스 천장(memory_max_mb)까지, 임시 디스크는 앱 선언(없으면 512MB).
+ *  선언을 줄였거나 못 읽었으면 notes 에 사람 말로(배포 결과 warnings).
+ */
+export function functionSizingFor(manifest: unknown, policy: { memory_mb: number; memory_max_mb: number }): { memory: number; tmp: number; notes: string[] } {
+  const raw = (manifest as { web?: { server?: unknown } } | null)?.web?.server;
+  const o = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const decl = serverDeclOf(manifest);
+  const notes: string[] = [];
+  if (o.memory_mb !== undefined && decl?.memory_mb == null) notes.push("web.server.memory_mb 를 읽지 못해 기본 메모리로 올렸습니다(128~10240 사이 정수 · MB)");
+  if (o.tmp_mb !== undefined && decl?.tmp_mb == null) notes.push("web.server.tmp_mb 를 읽지 못해 기본 임시 디스크(512MB)로 올렸습니다(512~10240 사이 정수 · MB)");
+  let memory = decl?.memory_mb ?? policy.memory_mb;
+  if (memory > policy.memory_max_mb) {
+    notes.push(`메모리 ${memory}MB 를 이 워크스페이스의 천장 ${policy.memory_max_mb}MB 로 줄였습니다(관리자 app_server_limits_set memory_max_mb)`);
+    memory = policy.memory_max_mb;
+  }
+  return { memory, tmp: decl?.tmp_mb ?? 512, notes };
 }
 
 /** 올릴 폴더 — 다듬기만 한다(경로 모양 검사는 빌더가 빌드 전에 한다 · 틀리면 빌드가 «dir» 로 실패해 까닭을 말한다). '.' · './' 는 전체(null). */
@@ -177,6 +203,11 @@ export interface AppServerRuntime {
    *   ③ 을 먼저 하면 다시 올리지 않은 함수의 검사 층이 새 kid 를 몰라 모두 401 이다(게이트웨이 쪽 판정은 env 를 바로 따른다).
    */
   identityPubkeys: string;
+  /**
+   * 사람 요청 하나의 시간(초 · app_server_policy.timeout_s) — #4486 부터 함수 시간은 작업 시간(15분)이라, 사람 요청은 검사 층이 이 시간에 끊는다(504).
+   *  꼭 준다 — 빠뜨리면 사람 요청이 함수 시간(15분)까지 붙잡힌다(정책은 있는데 집행이 없는 꼴 · 격리 리뷰).
+   */
+  requestTimeoutS: number;
 }
 
 /** 검사 층(app-server-guard)과 웹 어댑터를 잇는 값 — 앱 코드가 보지 않아도 되는 칸이라 고칠 때는 문 판과 함께 본다. */
@@ -198,6 +229,8 @@ export const ENV_ROTATING = new Set(["LIVELY_APP_TOKEN"]);
  *  준비 판정은 검사 층의 /_lively/guard/ready — 앱 포트가 열렸을 때만 200 이다(그 전 v2-5 의 «포트가 열렸나(tcp)» 와 같은 뜻 · 앱의 «/» 가 500 이어도 뜬다).
  *  응답은 흘려 보낸다(response_stream) — 게이트웨이가 InvokeWithResponseStream 으로 부르고 조각째 잇는다(SSE · 큰 응답).
  *  앱 코드가 쓰는 값: PORT · LIVELY_APP_ID · LIVELY_WORKSPACE · LIVELY_API_URL · LIVELY_APP_TOKEN(SDK lively-db.mjs 가 읽는다).
+ *  검사 층이 쓰는 값: LIVELY_TENANT_ID · LIVELY_APP_IDENTITY_PUBKEYS · LIVELY_REQUEST_TIMEOUT_S(#4486 사람 요청 시간) · LIVELY_API_URL · LIVELY_APP_TOKEN
+ *   (#4486 백그라운드 작업의 시작 확인 · 박동 · 결과 보고를 게이트웨이에).
  *   LLM 주소(SDK 호환 base URL)는 v2-9(#4488)가 **워크스페이스 API 키가 있는 워크스페이스에서만** 여기에 더한다(설계 §3-E · §12 ⑤-3 — 고급 길).
  *   앱의 AI 작업 기본 입구는 `/_lively/ai/runs` 다.
  *  rt 가 없으면(시험 · 옛 판정) 검사 층 칸까지만 — 운영 배포는 늘 rt 를 넘긴다.
@@ -215,6 +248,7 @@ export function lambdaEnvFor(appId: string, rt?: AppServerRuntime): Record<strin
       LIVELY_API_URL: rt.apiUrl,
       LIVELY_APP_TOKEN: rt.token,
       LIVELY_APP_IDENTITY_PUBKEYS: rt.identityPubkeys,
+      LIVELY_REQUEST_TIMEOUT_S: String(rt.requestTimeoutS),
     } : {}),
   };
 }

@@ -16,6 +16,8 @@
 //   GET    /ai/targets                           → app_ai_targets        (#4488 앱 v2-9 — 고를 수 있는 실행 계정 · 작업 · 붙은 세션 · 만든 대화)
 //   POST   /ai/runs            {prompt, schema, …} → app_ai_run           AI 실행 입구 하나(단발+API 키=프록시 · 그 밖=작업 컨테이너)
 //   GET    /ai/runs?status&limit                 → app_ai_runs           GET /ai/runs/<id> → app_ai_run_get · POST /ai/runs/<id>/cancel → app_ai_run_cancel
+//   POST   /jobs               {route, body, …}  → app_job_start         (#4486 앱 v2-7 — 이 앱 서버의 라우트를 뒤에서 · 15분)
+//   GET    /jobs?status&limit                    → app_jobs              GET /jobs/<id>?wait → app_job_get · POST /jobs/<id>/cancel → app_job_cancel
 //   (GET /me 는 앞단이 /api/app-front/me 로 따로 넘긴다 — app-front-routes.ts appFrontMe)
 //  답: 성공은 그 도구의 결과 JSON 그대로. 실패는 `{error, code?, consent_url?}` + 상태 코드.
 //   · 403 + code "consent_required" — 이 사람이 이 앱에 아직 동의하지 않았거나 예전 범위다. consent_url(라이블리 화면의 동의 자리)로
@@ -63,6 +65,7 @@ export function memberPrincipal(m: Pick<OrgMember, "id" | "email" | "scopes">, a
 
 const STORE_OP_RE = /^\/store\/([A-Za-z0-9_]{1,63})\/(query|insert|update|delete)$/;
 const AI_RUN_RE = /^\/ai\/runs\/([1-9][0-9]{0,15})(\/cancel)?$/;
+const JOB_RE = /^\/jobs\/([1-9][0-9]{0,15})(\/cancel)?$/;
 const TOOL_RE = /^\/tools\/([a-z][a-z0-9_]{0,79})$/;
 
 const obj = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {});
@@ -87,6 +90,18 @@ export function routeAppFrontApi(method: string, path: string, body: unknown, qu
     const id = Number(ar[1]);
     if (ar[2]) return m === "POST" ? { kind: "tool", name: "app_ai_run_cancel", args: { id } } : "method";
     return m === "GET" || m === "HEAD" ? { kind: "tool", name: "app_ai_run_get", args: { id } } : "method";
+  }
+  // #4486 백그라운드 작업 — 이 앱 서버의 라우트를 뒤에서. app_id 는 주소가 정한다(본문의 app_id 는 받지 않는다).
+  if (path === "/jobs") {
+    if (m === "POST") return { kind: "tool", name: "app_job_start", args: pick(b, ["route", "body", "label", "timeout_s", "type", "wait"]) };
+    if (m === "GET" || m === "HEAD") return { kind: "tool", name: "app_jobs", args: { ...(query.status ? { status: query.status } : {}), ...(query.limit ? { limit: Number(query.limit) } : {}) } };
+    return "method";
+  }
+  const jr = JOB_RE.exec(path);
+  if (jr) {
+    const id = Number(jr[1]);
+    if (jr[2]) return m === "POST" ? { kind: "tool", name: "app_job_cancel", args: { id } } : "method";
+    return m === "GET" || m === "HEAD" ? { kind: "tool", name: "app_job_get", args: { id, ...(query.wait ? { wait: Number(query.wait) } : {}) } } : "method";
   }
   if (path === "/store/tables") return m === "GET" || m === "HEAD" ? { kind: "tool", name: "store_tables", args: {} } : "method";
   if (path === "/store/sql") return m === "POST" ? { kind: "tool", name: "store_sql", args: pick(b, ["sql", "params", "format", "strict"]) } : "method";

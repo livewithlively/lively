@@ -28,6 +28,9 @@ export interface LivelyUser {
   //  (apps/visibility.ts Viewer.address). 앞단이 서명한 것에서만 채운다 — 기계 헤더(apps/app-front-api.ts) · 앱 서버가 실어 온 사람 신원의 판
   //  (#4485 apps/app-server-auth.ts — 서버 코드가 도는 판과 같은 판의 표).
   appAddress?: "pub" | "draft";
+  // 앱 백그라운드 작업 안에서 온 호출이면 그 작업 번호(#4486) — 앱의 SDK 가 «돌기 신원» 을 실어 부른 것(apps/app-jobs.ts resolveJobRunPrincipal).
+  //  그때 userId 는 작업을 시작한 사람이고 appServer 도 true 다. 작업이 시작하는 다음 작업은 이 번호를 부모로 적는다(깊이 상한).
+  appJobId?: number;
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

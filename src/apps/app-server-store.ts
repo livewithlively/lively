@@ -15,6 +15,12 @@ export async function appServerPolicy(): Promise<AppServerPolicy> {
   const row = await appServerPolicyRow().catch((err) => { logger.warn({ err: String(err) }, "앱 서버 상한을 읽지 못해 기본값을 쓴다(#4484)"); return {}; });
   return resolveAppServerPolicy(Object.keys(row).length ? row : null);
 }
+/** 못 읽으면 던진다(기본값으로 접지 않는다) — 지우기처럼 «기본값으로 잘못 읽으면 되돌릴 수 없는» 일이 쓴다(#4486 작업 기록 보존 · #4828 과 같은 규칙). */
+export async function appServerPolicyStrict(): Promise<AppServerPolicy> {
+  const r = await itemsPool.query(`SELECT app_server_policy FROM org_runtime_config WHERE id=1`);
+  const row = r.rows[0]?.app_server_policy;
+  return resolveAppServerPolicy(row && typeof row === "object" && Object.keys(row).length ? row : null);
+}
 export async function setAppServerPolicy(next: Record<string, number>, ctx: { actor?: string; source?: string }): Promise<void> {
   const before = await appServerPolicyRow();
   await itemsPool.query(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(next)]);
@@ -181,6 +187,8 @@ export interface ServerRow {
   lock_until: string | null; last_error: string | null;
   /** #4485 — 그 별칭의 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 옛 줄(v2-5)은 없다. */
   cur_token_hash?: string | null; pub_token_hash?: string | null;
+  /** #4486 — 그 별칭의 함수 판에 단 신원 검사 층의 판(GUARD_VERSION). 백그라운드 작업은 4 판부터(app-jobs-plan JOB_GUARD_MIN). 옛 줄은 없다. */
+  cur_guard?: number | null; pub_guard?: number | null;
   /** #4792 이 함수의 코드 저장(바이트) — 마지막 배포 · 옛 판 정리 때 AWS 가 알려 준 판마다의 CodeSize 합($LATEST 포함). */
   code_bytes: number;
   /** #4791 지금 판 · 공개 판 둘 다 서버 선언이 없다고 하우스키핑이 처음 본 때(null = 쓰는 중). unused_retire_days 가 지나면 함수를 걷는다. */
@@ -345,7 +353,7 @@ export async function unlockServer(appId: string): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET lock_until = NULL WHERE app_id=$1`, [appId]);
 }
 
-export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string; token_hash?: string | null }): Promise<void> {
+export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string; token_hash?: string | null; guard?: number | null }): Promise<void> {
   const c = alias === "cur" ? "cur" : "pub";
   //  별칭을 옮겼다 = 서버 선언이 있는 판을 올렸다 — «쓰지 않음» 표시(#4791)를 걷는다(다음 하우스키핑을 기다리지 않게).
   //   #4887 점검 결과도 비운다 — 옛 판의 결과(못 고침 등)가 새 판에 남지 않게 · 다음 틱에 새 판을 본다.
@@ -353,6 +361,15 @@ export async function setServerAlias(appId: string, alias: AliasName, v: { versi
     `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_token_hash=$5, ${c}_at=now(), last_error=NULL, unused_since=NULL,
             health=NULL, health_checked_at=NULL, updated_at=now() WHERE app_id=$1`,
     [appId, v.version_no, v.build_key, v.lambda_version, v.token_hash ?? null]);
+  //  #4486 검사 층 판은 따로 적는다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 공용 DB 마이그레이션을 맨 끝에 돌린다(약 5분 · 지식
+  //   roll-order-migrate-after-gw-swap-auth-outage-2026-10-20). 그 사이 칸이 없다고 위 문장까지 실패하면 AWS 별칭은 옮겼는데 줄은 옛 판이고,
+  //   배포의 실패 길이 새 판에 구운 토큰을 회수해 그 앱 서버가 다음 배포까지 401 이 된다. 칸이 없으면 비워 둔다(작업은 다음 배포까지 «다시 올려야» 409).
+  //   ⚠ 롤 순서(마이그레이션 먼저 · 교대 나중)가 고쳐지면 이 42703 예외는 걷는다 — 남겨 두면 마이그레이션이 조용히 실패한 때 오류를 가린다.
+  //   위 문장(별칭 · 판 · 토큰)에 새 칸을 더할 때마다 같은 창이 다시 열린다 — 새 칸은 이렇게 따로 적는다.
+  await itemsPool.query(`UPDATE org_app_server SET ${c}_guard=$2 WHERE app_id=$1`, [appId, v.guard ?? null]).catch((err: unknown) => {
+    if ((err as { code?: unknown })?.code !== "42703") throw err;   // undefined_column — 마이그레이션 전
+    logger.warn({ app: appId, alias: c }, "검사 층 판 칸이 아직 없다(공용 DB 마이그레이션 전) — 비워 둔다(#4486)");
+  });
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);
