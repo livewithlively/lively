@@ -93,8 +93,11 @@ export interface NewAgentJob {
   timeoutSec: number;
   /** 단발(도구 없음) — 없으면 false. */
   bare?: boolean;
-  /** #4891 사람 홈 없는 작업 컨테이너에서 돌린다 — 앱 서버가 보낸 API 키 에이전트 작업만(ai-runs/service). 작업 폴더는 앱 폴더여야 한다. */
-  homeless?: boolean;
+  /**
+   * #4891 사람 홈 없는 작업 컨테이너에서 돌린다 — 앱 서버가 보낸 API 키 에이전트 작업만(ai-runs/service). 작업 폴더는 앱 폴더여야 한다.
+   *  필수다 — 접수하는 자리가 빠뜨리면 컴파일이 잡는다(빠지면 사람 홈에서 돈다).
+   */
+  homeless: boolean;
 }
 
 /**

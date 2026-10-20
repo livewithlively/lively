@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX,
+  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, HOMELESS_OS_USER, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX,
   type RunnerReport, type SweepFacts,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
@@ -259,6 +259,12 @@ t("HL2 전용 계정 이름은 어떤 구성원 계정과도 겹치지 않는다
     assert.notEqual(osUsername(memberSlug(id)), HOMELESS_OS_USER, id);
   }
   assert.ok(/^box_/.test(HOMELESS_OS_USER) && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(HOMELESS_OS_USER.replace(/^box_/, "")));
+});
+
+t("HL3 작업 AI 의 앱 토큰 — 홈 없는 작업이면 앱 서버 급 주체(능력 API · /mcp 만 · EXEMPT 없음) · 사람 자리는 종전 꼴(그 칸 없음)", () => {
+  assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900), { ttlSec: 900, appServerPrincipal: true });
+  assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900), { ttlSec: 900 });
+  assert.deepEqual(jobAppTokenOpts({}, 60), { ttlSec: 60 });
 });
 
 console.log(`# ${pass} pass`);

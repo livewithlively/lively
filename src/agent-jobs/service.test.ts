@@ -1001,7 +1001,7 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
 async function endedJob(w: World, prompt: string, endedAgoDays: number): Promise<number> {
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
-    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900,
+    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false,
   }, { ...w.policy, max_queued: 500 });
   assert.ok("row" in r);
   const row = w.rows.get(r.row.id)!;

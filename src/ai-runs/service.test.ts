@@ -10,7 +10,7 @@ import { DEFAULT_AI_RUN_POLICY, type AiRunPolicy } from "../org/policies/ai-run-
 import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js";
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings } from "./plan.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -67,7 +67,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     apiKey: async () => w.key,
     getApp: async (id) => app(id, { ai: { jobs: [{ name: "summarize" }] } }),
     assertAppUsable: async () => undefined,
-    submitJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.submitted.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: j.model, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null } as unknown as AgentJobRow); return { id }; },
+    submitJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.submitted.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: j.model, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null, homeless: j.homeless === true } as unknown as AgentJobRow); return { id }; },
     getJob: async (id) => w.jobs.get(id) ?? null,
     cancelJob: async (id) => { w.canceled.push(id); },
     singleShot: async (_k, i) => { w.llm.push(i); return w.llmReply(i, w.llm.length); },
@@ -201,7 +201,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   //  사람이 보낸 에이전트 작업은 그 사람의 자리(홈)에서 돈다 — homeless 를 싣지 않는다(무회귀).
   const human = world();
   const mine = await submitRun({ prompt: "x", files: ["a.md"] }, appUser("alice", "crm"), { source: "app-ui" }, human.d);
-  assert.equal(mine.executor, "job"); assert.equal(human.w.submitted.at(-1)!.homeless, undefined);
+  assert.equal(mine.executor, "job"); assert.equal(human.w.submitted.at(-1)!.homeless, false);
   const single = world();
   const srvOk = await submitRun({ prompt: "x" }, srvUser, { source: "web" }, single.d);
   assert.equal(srvOk.executor, "proxy"); assert.equal(srvOk.requester_kind, "app_server"); assert.equal(single.w.submitted.length, 0);
@@ -272,6 +272,34 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await fails(submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, bad.d), 429, /대기열/);
   assert.equal(bad.w.runs.get(1)!.status, "failed"); assert.match(bad.w.runs.get(1)!.error!, /보내지 못했습니다/);
   ok("S14 작업 접수 실패 → 행 failed · 오류 그대로 전달");
+}
+
+// ── S5b 홈 없는 작업의 형식 재시도(#4891) — 재시도 작업도 홈 없는 자리로 간다(격리 리뷰: 둘째 접수 자리가 표시를 빠뜨렸다) ──
+{
+  const { w, d } = world();
+  const srvUser = { ...appUser("alice", "crm"), appServer: true } as LivelyUser;
+  await submitRun({ prompt: "요약", files: ["a.md"], schema }, srvUser, { source: "web" }, d);
+  assert.equal(w.submitted[0]!.homeless, true);
+  const j1 = w.jobs.get(101)!; j1.status = "done"; j1.conversation_id = "conv-1"; j1.result = { text: "형식 밖 글" };
+  const mid = (await syncRun(w.runs.get(1)!, d))!;
+  assert.equal(mid.retries, 1, "재시도가 나갔다(관측 장치 확인)");
+  assert.equal(w.submitted[1]!.homeless, true, "재시도도 홈 없는 자리");
+  assert.equal(w.submitted[1]!.resumeJobId, 101);
+  ok("S5b 홈 없는 작업의 형식 재시도도 홈 없는 자리");
+}
+
+// ── S5c 작업 접수 → 작업 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다) ──
+{
+  const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7 };
+  const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
+  const homeless = agentJobOfRun({ ...base, homeless: true }, o);
+  assert.deepEqual(homeless, {
+    requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
+    model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true,
+  });
+  assert.equal(agentJobOfRun({ ...base, homeless: false }, o).homeless, false);
+  ok("S5c 작업 접수 → 작업 행이 홈 없는 표시를 그대로 옮긴다");
 }
 
 // ── S15~S19 동기화 — 작업 상태를 따라간다 · 형식 판정 · 재시도 1회 ──

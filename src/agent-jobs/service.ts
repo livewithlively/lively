@@ -203,6 +203,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     appId, projectId, cwd, harness: "claude", model, label, prompt,
     resumeConversation: resumeConv, resumeJobId,
     timeoutSec: timeoutSecOf(input.timeout_min, p),
+    homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });

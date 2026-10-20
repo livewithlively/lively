@@ -76,12 +76,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
         if (!prev || !prev.conversation_id) throw new HttpError(409, "이어받을 작업의 대화가 없습니다");
         resumeConv = prev.conversation_id;
       }
-      const row = await svc.enqueueAgentJob({
-        requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd,
-        harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: resumeConv, resumeJobId: j.resumeJobId,
-        timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p), bare: j.bare,
-        ...(j.homeless ? { homeless: true } : {}),
-      }, p, jobs);
+      const ai = await import("./service.js");
+      const row = await svc.enqueueAgentJob(ai.agentJobOfRun(j, { cwd, resumeConversation: resumeConv, timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p) }), p, jobs);
       return { id: row.id };
     },
     getJob: async (id) => (await import("../agent-jobs/store.js")).getAgentJob(id),

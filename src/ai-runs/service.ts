@@ -15,7 +15,7 @@ import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
-import type { AgentJobRow } from "../agent-jobs/store.js";
+import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { RUNNER_GATEWAY } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
@@ -31,8 +31,23 @@ type Store = typeof import("./store.js");
 export interface SubmitJobInput {
   requester: string; accountKind: "api_key" | "subscription"; accountMember: string | null; appId: string; projectId: number | null;
   model: string | null; label: string | null; prompt: string; timeoutMin: number | null; bare: boolean; resumeJobId: number | null;
-  /** #4891 사람 홈 없는 작업 컨테이너에서 돌린다(앱 서버가 보낸 에이전트 작업) — 앱 폴더에서만(projectId 는 null). */
-  homeless?: boolean;
+  /**
+   * #4891 사람 홈 없는 작업 컨테이너에서 돌린다(앱 서버가 보낸 에이전트 작업) — 앱 폴더에서만(projectId 는 null).
+   *  필수다 — 접수하는 자리(첫 접수 · 형식 재시도)가 하나라도 빠뜨리면 앱 서버의 에이전트 작업이 사람 홈에서 돈다(격리 리뷰).
+   */
+  homeless: boolean;
+}
+
+/**
+ * (순수) AI 실행의 작업 접수 → 작업 컨테이너 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다).
+ *  작업 폴더 · 이어받을 대화 · 시간 상한은 부르는 쪽(live.submitJob)이 정한다.
+ */
+export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConversation: string | null; timeoutSec: number }): NewAgentJob {
+  return {
+    requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
+    harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless,
+  };
 }
 
 export interface AiRunDeps {
@@ -142,7 +157,8 @@ async function sessionTieOf(ctx: { session?: string }, who: { member: string; ki
 }
 
 /**
- * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(400) → 상한(429) → 행 → 띄움.
+ * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절)
+ *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 행 → 띄움.
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
 export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string; session?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -235,7 +251,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       const job = await d.submitJob({
         requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model, label: label ?? `AI 실행 #${row.id}`,
         prompt: jobPrompt(row, input.files), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single", resumeJobId: null,
-        ...(homeless ? { homeless: true } : {}),
+        homeless,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
@@ -391,6 +407,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         requester: run.requester, accountKind: run.account_kind, accountMember: run.account_member, appId: run.app_id, projectId: job.project_id,
         model: job.model, label: `${run.label ?? `AI 실행 #${run.id}`} (형식 다시)`, prompt: retryInstruction(judged.errors, run.schema),
         timeoutMin: Math.max(1, Math.round(job.timeout_sec / 60)), bare: run.kind === "single", resumeJobId: job.id,
+        //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
+        homeless: job.homeless === true,
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {

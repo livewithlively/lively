@@ -199,6 +199,31 @@ try {
     chk("E16d ★ 목록에 보일 회수 시각이 실제로 찍혔다(사고 당시 이 자리가 비어 있었다)",
       (await revokedAt(f.tokenHash)) != null, "revoked_at 이 비어 있다");
   }
+
+  // ── #4891 앱 서버 급 토큰 — 사람 홈 없는 작업 AI 의 토큰. 검증이 appServer 를 켜야 문(auth/http-auth)과 EXEMPT 끄기(apps/principal)가 선다 ──
+  {
+    const app = await tok.mintToken({ userId: MID, scopes: ["items"], label: "pgtest-asp", memberId: MID, appId: "pgt-app", appServerPrincipal: true }, ACTOR, SOURCE);
+    touched.add(app.tokenHash);
+    const v = await tok.verifyDbToken(app.token);
+    chk("AS1 앱 서버 급으로 만든 앱 토큰 — 검증이 appServer 를 켜고 앱 · 구성원을 그대로 싣는다",
+      v !== null && v.appServer === true && v.appId === "pgt-app" && v.userId === MID, JSON.stringify(v));
+    const plainApp = await tok.mintToken({ userId: MID, scopes: ["items"], label: "pgtest-app", memberId: MID, appId: "pgt-app" }, ACTOR, SOURCE);
+    touched.add(plainApp.tokenHash);
+    const pv = await tok.verifyDbToken(plainApp.token);
+    chk("AS2 표시 없는 앱 토큰 · 일반 토큰은 appServer 칸이 없다(무회귀)",
+      pv !== null && !("appServer" in pv) && !("appServer" in ((await tok.verifyDbToken((await mint("pgtest-plain")).token)) ?? {})), JSON.stringify(pv));
+    let threw = null;
+    try { await tok.mintToken({ userId: MID, scopes: ["items"], label: "pgtest-asp-noapp", memberId: MID, appServerPrincipal: true }, ACTOR, SOURCE); } catch (e) { threw = e; }
+    chk("AS3 앱 없이 앱 서버 급으로는 못 만든다", threw !== null && /appId/.test(String(threw?.message)), String(threw?.message));
+    //  있어선 안 되는 행(표시는 켜졌는데 앱이 없다)을 직접 넣어도 검증이 받지 않는다 — 앱 도구 게이트가 안 걸리는 주체가 생기지 않게.
+    const bogus = "lvk_" + crypto.randomBytes(24).toString("base64url");
+    const bh = crypto.createHash("sha256").update(bogus).digest("hex");
+    touched.add(bh);
+    await itemsPool.query(
+      `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by, app_id, app_server_principal)
+         VALUES($1,$2,'["items"]'::jsonb,'["*"]'::jsonb,'pgtest-bogus',$2,$3,NULL,true)`, [bh, MID, ACTOR]);
+    chk("AS4 표시만 있고 앱이 없는 토큰은 검증이 거부한다", (await tok.verifyDbToken(bogus)) === null);
+  }
 } catch (e) {
   bad("예외", e?.stack || String(e));
 } finally {
