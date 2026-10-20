@@ -2452,6 +2452,18 @@ for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "
   const vers3 = fns.get(FNJ).versions.map((v) => v.Version);
   const toks3 = await fnTokens(ID);
   chk("J7b 작업이 끝난 뒤 배포 — 그 판을 정리하고 그 토큰을 회수한다", !vers3.includes(pinnedVer) && toks3.some((t) => t.token_hash === pinnedTok && !!t.revoked_at), JSON.stringify({ vers3, toks3 }));
+  //  J7d 회수 함수의 두 갈래 — 기본은 열린 작업이 붙잡은 토큰을 남기고(keep 이 비어도), jobPins:false(앱 지우기 · 걷기 — 작업을 먼저 끝낸 쪽)는 전부 거둔다.
+  const rj4 = await rowOf(ID);
+  const tok4 = rj4.cur_token_hash;
+  const jid4 = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, token_hash, route, body, timeout_s)
+                         VALUES ($1,'running','pgt-alice','pub','cur',$2,$3,$4,'/x','{}',900) RETURNING id`, [ID, FNJ, rj4.cur_lambda_version, tok4]))[0].id;
+  await revokeStaleFunctionTokens(ID, [], "t");
+  const kept4 = (await fnTokens(ID)).find((t) => t.token_hash === tok4);
+  await revokeStaleFunctionTokens(ID, [], "t", { jobPins: false });
+  const gone4 = (await fnTokens(ID)).find((t) => t.token_hash === tok4);
+  chk("J7d 회수 — 기본은 열린 작업의 토큰을 남기고(keep 비어도) · jobPins:false 는 그것까지 거둔다", !!kept4 && !kept4.revoked_at && !!gone4?.revoked_at,
+    JSON.stringify({ kept4, gone4 }));
+  await q(`UPDATE org_app_job SET status='failed', ended_at=now() WHERE id=$1`, [jid4]);
   await q(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(savedPol)]);
   await call("org_app_remove", { app_id: ID }, boss);
 }

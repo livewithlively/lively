@@ -484,6 +484,10 @@ t("J5 작업 상한 — 기본(함수 900초 · 메모리 천장 10GB · 동시 
   assert.equal(normalizeAppServerPolicy({ memory_mb: 8192, memory_max_mb: 2048 }).memory_mb, 2048);
   assert.equal(normalizeAppServerPolicy({ job_timeout_s: 10 }).job_timeout_s, 60, "바닥 60초");
   assert.equal(APP_SERVER_POLICY_MIN.job_timeout_s, 60);
+  //  작업 기록 보존(일) — 기본 30 · 바닥 1 · 천장 3650(작업 컨테이너 keep_days 와 같은 자리 · 0 은 «값 없음» = 기본).
+  assert.deepEqual([d.job_keep_days, APP_SERVER_POLICY_MIN.job_keep_days, APP_SERVER_POLICY_MAX.job_keep_days], [30, 1, 3650]);
+  assert.equal(normalizeAppServerPolicy({ job_keep_days: 0 }).job_keep_days, 30);
+  assert.equal(normalizeAppServerPolicy({ job_keep_days: 99_999 }).job_keep_days, 3650);
 });
 
 //  S7 재사용 판정이 기대는 이음매 — 실제 어댑터의 getFunction 이 판(Qualifier)을 실어 보내고 Code(코드 자리)를 그대로 돌려주는가(격리 리뷰).

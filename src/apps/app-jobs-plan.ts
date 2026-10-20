@@ -142,6 +142,8 @@ export function jobAdmissionError(p: AppJobPolicy, have: { queuedApp: number; da
 // ── 부르기 ──────────────────────────────────────────────────────────────────────────────
 /** 라우트 → 함수 주소(Function URL) 모양 이벤트(순수 — 시험 대상). 웹 어댑터가 이것을 앱의 HTTP 요청(POST)으로 바꾼다. */
 export function jobInvokeEvent(j: { id: number; route: string; body: string; attempts: number }, credential: string, host: string, now: number): Record<string, unknown> {
+  //  본문은 늘 JSON(최소 «{}» — encodeJobBody) — 빈 글이면 본문을 읽지 않은 가벼운 줄을 잘못 넘긴 것이다. 조용히 빈 본문으로 부르지 않는다(격리 리뷰).
+  if (!j.body) throw new Error(`작업 ${j.id} 의 본문이 없습니다(가벼운 줄로 부르려 했다)`);
   const i = j.route.indexOf("?");
   const rawPath = i < 0 ? j.route : j.route.slice(0, i);
   const rawQueryString = i < 0 ? "" : j.route.slice(i + 1);
@@ -213,8 +215,9 @@ export function resultViewOf(r: JobResultReport): JobResultView | null {
     if (s !== null) {
       try {
         const v: unknown = JSON.parse(s);
-        //  글에 NUL 이 없어도 이스케이프(«\u0000»)로 들어올 수 있다 — 다시 써 본 글에 홀로 선 \u0000 이 있으면 base64 로(너무 깊어 못 쓰는 것도).
-        if (!NUL_ESCAPE_RE.test(JSON.stringify(v))) { out.json = v; return out; }
+        //  글에 NUL 이 없어도 이스케이프(«\u0000»)로 들어올 수 있다 — 다시 써 본 글에 홀로 선 \u0000 · 짝 없는 서로게이트(\ud800~\udfff —
+        //   이모지 가운데를 자른 글)가 있으면 base64 로(jsonb 가 둘 다 받지 않는다 · 너무 깊어 못 쓰는 것도).
+        if (!JSONB_BAD_ESCAPE_RE.test(JSON.stringify(v))) { out.json = v; return out; }
       } catch { /* 글 · base64 로 둔다 */ }
     }
   }
@@ -224,8 +227,11 @@ export function resultViewOf(r: JobResultReport): JobResultView | null {
   return out;
 }
 
-/** JSON.stringify 결과 안의 NUL 이스케이프 — 앞의 역슬래시가 홀수 개일 때만 진짜 «\u0000» 이다(«\\u0000» 은 역슬래시 글자 + u0000). */
-const NUL_ESCAPE_RE = /(?:^|[^\\])(?:\\\\)*\\u0000/;
+/**
+ * JSON.stringify 결과 안의 jsonb 가 받지 않는 이스케이프 — NUL(\u0000)과 짝 없는 서로게이트(\ud800~\udfff). 앞의 역슬래시가 홀수 개일 때만 진짜
+ *  이스케이프다(«\\u0000» 은 역슬래시 글자 + u0000). JSON.stringify 는 짝 맞는 서로게이트는 글자 그대로, 짝 없는 것만 소문자 \ud… 로 쓴다(ES2019).
+ */
+const JSONB_BAD_ESCAPE_RE = /(?:^|[^\\])(?:\\\\)*\\u(?:0000|d[89a-f][0-9a-f]{2})/;
 
 /** 보고 → 끝 상태 · 오류 글. 앱이 2xx 로 답했으면 done, 그 밖은 failed(앱이 고를 수 있게 상태 · 본문을 함께 남긴다). */
 export function endOf(r: JobResultReport, ctx: { timeoutSec: number; cancelRequested: boolean }): { status: "done" | "failed" | "canceled"; error: string | null } {
@@ -238,7 +244,7 @@ export function endOf(r: JobResultReport, ctx: { timeoutSec: number; cancelReque
     case "canceled": return { status: "canceled", error: "취소했습니다" };
     case "timeout":
       if (ctx.cancelRequested) return { status: "canceled", error: "취소했습니다" };
-      return { status: "failed", error: `작업 시간 상한(${ctx.timeoutSec}초)을 넘어 검사 층이 끊었습니다 — 더 긴 일은 여러 작업으로 나누거나 에이전트 작업으로 보내세요` };
+      return { status: "failed", error: `작업 시간 상한(${ctx.timeoutSec}초 — 함수가 끝나기 15초 전이 더 이르면 그때)을 넘어 검사 층이 끊었습니다 — 더 긴 일은 여러 작업으로 나누거나 에이전트 작업으로 보내세요` };
     case "app_unreachable": return { status: "failed", error: "앱 서버에 닿지 못했습니다(서버가 뜨지 않았거나 작업 도중 끝났습니다)" };
     case "app_bad_response": return { status: "failed", error: "앱 서버가 HTTP 응답으로 읽을 수 없는 답을 보냈습니다" };
     default: return { status: "failed", error: "앱 서버 앞의 검사 층이 작업을 끝맺지 못했습니다" };

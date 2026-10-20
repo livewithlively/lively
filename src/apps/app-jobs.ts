@@ -19,7 +19,7 @@ import { AwsError } from "../net/aws/aws-json.js";
 import { addressVariantFor, addressViewFor, canSeeApp, isAdminViewer } from "./visibility.js";
 import { appDomain, appHost } from "./app-address.js";
 import { appServerEnv, type AppServerEnv } from "./app-server-config.js";
-import { realLambdaApi, publicError } from "./app-server-deploy.js";
+import { realLambdaApi } from "./app-server-deploy.js";
 import { parseAppServerUserId } from "./app-server-id.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import * as st from "./app-server-store.js";
@@ -51,8 +51,8 @@ export function liveAppJobDeps(): AppJobDeps {
   };
 }
 
-/** 감시가 한 번에 보는 열린 작업 — 한 판 · 판 수. */
-const SWEEP_PAGE = 200, SWEEP_PAGES = 25;
+/** 감시가 한 번에 보는 열린 작업 — 한 판의 줄 수 · 판 수 상한. */
+const SWEEP_PAGE_SIZE = 200, SWEEP_MAX_PAGES = 25;
 
 const actorSource = (user: LivelyUser, source?: string): string =>
   user.appServer ? (user.appJobId ? "app-job" : "app-server") : source ?? (user.appId ? "app-ui" : "person");
@@ -172,7 +172,7 @@ export async function listAppJobsFor(input: Record<string, unknown>, user: Livel
 
 /** 취소 — 기다리는 · 부른 작업은 곧바로 끝내고, 도는 작업은 표시만(검사 층이 다음 박동에 앱 요청을 끊는다 · 그동안 그 작업의 라이블리 호출은 막힌다). */
 export async function cancelAppJobFor(id: number, user: LivelyUser, deps: AppJobDeps = liveAppJobDeps()): Promise<Record<string, unknown>> {
-  const r = await js.getAppJob(id);
+  const r = await js.getAppJob(id, { view: true });
   const how = r ? accessOf(r, user) : null;
   const admin = !user.appId && isAdminViewer({ userId: user.userId, scopes: user.scopes ?? [] });
   if (!r || !how) throw new HttpError(404, "없는 작업입니다");
@@ -214,8 +214,8 @@ export async function dispatchAppJobs(deps: AppJobDeps = liveAppJobDeps()): Prom
       await deps.invokeAsync(env, j.function_name, j.lambda_version, event);
       n++;
     } catch (e) {
-      //  구성원이 보는 오류 칸엔 AWS 의 짧은 오류 이름만 — 그 밖의 원문(우리 코드 · 연결 오류)은 기록에만 남긴다(#4887 «상태에 원문 안 싣기» 와 같다 · 격리 리뷰).
-      const why = e instanceof AwsError ? publicError(e) : "일시 오류";
+      //  구성원이 보는 오류 칸엔 AWS 의 짧은 오류 이름(code)만 — 원문(함수 경로 · 요청 번호 · 우리 코드의 글)은 기록에만 남긴다(#4887 «상태에 원문 안 싣기» · 격리 리뷰).
+      const why = e instanceof AwsError ? e.code : "일시 오류";
       const onEndFail = (err: unknown): void => logger.warn({ err: (err as Error)?.message ?? err, job: j.id }, "[app-jobs] 작업 끝내기 실패 — 감시가 끝낸다");
       if (permanentInvokeError(e)) {
         logger.warn({ err: (e as Error)?.message, app: j.app_id, job: j.id }, "[app-jobs] 함수를 부르지 못했다(다시 해도 같다) — 작업을 끝낸다");
@@ -250,6 +250,9 @@ const conflict = (reason: string, message: string): HttpError => new HttpError(4
  * 시작 확인 — 그 앱의 함수가 · 부른 그 작업의 · 그 부르기 비밀로 · 아직 시작 안 했고 · 취소 안 됐을 때만 한 번 넘긴다.
  *  넘기면 돌기 신원과 작업을 시작한 사람 · 판 · 시간 상한(검사 층이 앱에 넘길 것). 아니면 401 · 404 · 409(앱 코드에 닿기 전에 끝).
  */
+//  ⓘ claim 응답이 오다 끊기면(서버는 시작으로 적었는데 검사 층이 못 받음) 다시 묻는 claim 은 409 claimed 를 받고 앱을 부르지 않는다 —
+//   작업은 running 으로 남았다가 90초 뒤 감시가 «응답을 멈췄습니다» 로 끝낸다. 두 번 도는 것보다 안전한 쪽을 골랐다(같은 비밀에 새 돌기 신원을
+//   또 주면 AWS 의 중복 전달도 두 번 돈다 · 격리 리뷰 메모).
 export async function onJobClaim(id: number, caller: JobCaller, secret: string): Promise<Record<string, unknown>> {
   const j = await js.getAppJob(id);
   if (!j || j.app_id !== caller.appId) throw new HttpError(404, "없는 작업입니다");
@@ -305,7 +308,15 @@ export async function onJobResult(id: number, caller: JobCaller, runCred: string
   if (!j) throw new HttpError(401, "작업 신원이 맞지 않습니다");
   const rep = normalizeResultReport(raw);
   const e = endOf(rep, { timeoutSec: j.timeout_s, cancelRequested: j.cancel_requested });
-  const ended = await js.endAppJob(id, ["running"], { status: e.status, error: e.error, statusCode: rep.status_code, result: resultViewOf(rep), durationMs: rep.duration_ms }, j.run_hash!);
+  const end = { status: e.status, error: e.error, statusCode: rep.status_code, result: resultViewOf(rep), durationMs: rep.duration_ms };
+  //  Postgres 가 결과 칸(jsonb)을 받지 않으면(데이터 예외 22xxx — 판정이 못 거른 이스케이프 등) base64 꼴로 한 번 더 — 결과 때문에 끝맺음을 잃지 않게.
+  //   (잃으면 검사 층이 다섯 번 다시 보낸 뒤 90초 뒤 «응답을 멈췄습니다» 로 엉뚱하게 끝난다 · 격리 리뷰)
+  const ended = await js.endAppJob(id, ["running"], end, j.run_hash!).catch(async (err: unknown) => {
+    if (!/^22/.test(String((err as { code?: unknown })?.code ?? "")) || !end.result) throw err;
+    logger.warn({ job: id, code: (err as { code?: unknown }).code }, "[app-jobs] 결과를 그대로 적지 못해 base64 로 적는다(#4486)");
+    const { json: _j, text: _t, ...meta } = end.result;
+    return js.endAppJob(id, ["running"], { ...end, result: { ...meta, base64: rep.body_b64 ?? undefined } }, j.run_hash!);
+  });
   if (!ended) throw conflict("ended", "이미 끝난 작업입니다(감시가 먼저 끝냈습니다)");
   logger.info({ app: j.app_id, job: id, status: ended.status, code: rep.status_code, ms: rep.duration_ms }, "[app-jobs] 작업 끝(#4486)");
   //  자리가 났다 — 기다리는 작업을 민다.
@@ -352,8 +363,8 @@ export async function sweepAppJobs(deps: AppJobDeps = liveAppJobDeps()): Promise
   let ended = 0, requeued = 0;
   //  열린 작업을 끝까지 판을 이어 본다(한 판 200줄 · 25판까지) — 앞줄만 보면 뒤의 죽은 작업이 동시 자리를 붙잡는다(격리 리뷰).
   let after = 0;
-  for (let page = 0; page < SWEEP_PAGES; page++) {
-    const rows = await js.openAppJobs(after, SWEEP_PAGE);
+  for (let page = 0; page < SWEEP_MAX_PAGES; page++) {
+    const rows = await js.openAppJobs(after, SWEEP_PAGE_SIZE);
     for (const j of rows) {
       const v = sweepVerdict(j, now, p);
       if (v.kind === "requeue") { if (await js.requeueAppJob(j.id, j.call_hash)) requeued++; continue; }
@@ -365,8 +376,9 @@ export async function sweepAppJobs(deps: AppJobDeps = liveAppJobDeps()): Promise
         }
       }
     }
-    if (rows.length < SWEEP_PAGE) break;
+    if (rows.length < SWEEP_PAGE_SIZE) break;
     after = rows[rows.length - 1]!.id;
+    if (page === SWEEP_MAX_PAGES - 1) logger.warn({ seen: SWEEP_PAGE_SIZE * SWEEP_MAX_PAGES, after }, "[app-jobs] 열린 작업이 감시 한 번의 상한을 넘었다 — 뒤쪽은 다음 감시가 본다(#4486)");
   }
   const dispatched = deps.env() ? await dispatchAppJobs(deps) : 0;
   return { ended, requeued, dispatched };
@@ -385,7 +397,7 @@ export async function pruneAppJobRecords(policy: () => Promise<AppServerPolicy> 
 
 /**
  * 앱을 지울 때 — 열린 작업을 끝낸다(함수 · 토큰이 곧 사라진다). 행(결과)은 보존 기간까지 남긴다 — 누구 이름으로 무엇이 돌았나의 기록이고,
- *  요청 본문은 시작할 때 이미 비웠다.
+ *  요청 본문은 끝낼 때 비운다.
  */
 export async function endJobsForApp(appId: string, why: string): Promise<number> {
   return js.endOpenAppJobsForApp(appId, "failed", why);

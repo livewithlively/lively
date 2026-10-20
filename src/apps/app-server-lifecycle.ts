@@ -104,6 +104,8 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   const s3 = appBundleS3Config();
   const { zipKeys } = await st.deleteServerBuildRows(appId).catch((e) => { errors.push(`기록: ${publicError(e)}`); return { zipKeys: [] as string[] }; });
   if (row) await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
+  //  #4486 함수를 지우는 몇 초 사이에 들어온 작업도 끝낸다 — 줄이 사라진 뒤엔 새 작업이 들어오지 못한다(서버 없음 409 · 격리 리뷰).
+  await endJobsForApp(appId, "앱(서버)을 지워 작업을 끝냈습니다").catch((e) => errors.push(`작업: ${publicError(e)}`));
   //  #4485 — 이 앱의 함수 토큰을 모두 회수한다 — 함수 줄이 없어도(앞서 걷기가 회수를 못 했을 수 있다 · 합치기 격리 리뷰). 같은 id 로 앱을 다시 만들어도
   //   옛 토큰이 살아나지 않게. 줄을 남기는 때(pending — 함수를 아직 못 지움)는 위에서 돌아갔다 — 하우스키핑이 다시 지우며 거둔다.
   await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, [], "app-server-remove", { jobPins: false }).catch((e) => errors.push(`토큰: ${publicError(e)}`));
@@ -150,6 +152,7 @@ export async function retireServer(appId: string, recheck: () => Promise<boolean
     await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, [], "app-server-retire", { jobPins: false }).catch((e) => errors.push(`토큰: ${publicError(e)}`));
     await st.keepServerBuilds(appId, [row.cur_build_key, row.pub_build_key], BUILD_KEEP_AFTER_RETIRE_DAYS);
     await st.deleteServerRow(appId);
+    await endJobsForApp(appId, "앱이 서버 선언(web.server)을 뺀 채 오래되어 서버를 걷으며 작업을 끝냈습니다").catch((e) => errors.push(`작업: ${publicError(e)}`));
     gone = true;
     return { retired: true, errors };
   } catch (e) {

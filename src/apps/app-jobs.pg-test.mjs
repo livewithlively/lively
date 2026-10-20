@@ -186,6 +186,14 @@ try {
   await finish(j3.id, { outcome: "response", status_code: 500, content_type: "text/plain", body_b64: Buffer.from("transcribe api down").toString("base64"), truncated: false, bytes: 19, duration_ms: 5 }, c3.run);
   const r3b = await jobRow(j3.id);
   chk("C3c 앱이 500 → failed · 오류에 응답 앞부분 · 결과 text", r3b.status === "failed" && /500 로 답했습니다 — transcribe api down/.test(r3b.error) && r3b.result?.text === "transcribe api down", r3b.error);
+  //  C3d jsonb 가 받지 않는 글(짝 없는 서로게이트 이스케이프 — 이모지 가운데를 자른 JSON)이어도 작업은 끝난다(결과 때문에 끝맺음을 잃지 않는다).
+  const j3d = await start({});
+  const c3d = await claimOf(j3d.id);
+  const loneB64 = Buffer.from('{"t":"x\\ud83d","n":1}').toString("base64");
+  const f3d = await finish(j3d.id, { outcome: "response", status_code: 200, content_type: "application/json", body_b64: loneB64, truncated: false, bytes: 18, duration_ms: 5 }, c3d.run);
+  const r3d = await jobRow(j3d.id);
+  chk("C3d 짝 없는 서로게이트가 든 JSON 결과 — done · 결과는 글(또는 base64)로 남는다", f3d.status === "done" && r3d.status === "done" && (typeof r3d.result?.text === "string" || typeof r3d.result?.base64 === "string") && r3d.result?.json === undefined,
+    JSON.stringify(r3d.result));
 
   // ── C5 동시 상한 — 앱 2 · 워크스페이스 3 · 넘는 것은 줄 · 하나 끝나면 다음을 부름 ──
   await resetJobs();
@@ -261,6 +269,9 @@ try {
   const wait9 = await start({});
   const cq = await svc.cancelAppJobFor(wait9.id, srvUser("notes"), deps);
   chk("C9 기다리는 작업 취소 → 곧바로 canceled", cq.status === "canceled" && (await jobRow(wait9.id)).status === "canceled", cq.status);
+  //  C9e 시작하지 못하고 끝난 작업도 요청 본문을 비운다(끝낸 뒤엔 다시 부르지 않는다 · 앱 자료를 보존 기간 동안 쥐지 않게).
+  const body9 = (await q(`SELECT body FROM org_app_job WHERE id=$1`, [wait9.id]))[0].body;
+  chk("C9e 기다리다 취소된 작업의 요청 본문도 비운다", body9 === "", JSON.stringify(body9));
   const c9 = await claimOf(run9.id);
   const byBob = await errOf(svc.cancelAppJobFor(run9.id, srvUser("notes", "pgt-bob"), deps));
   const cr9 = await svc.cancelAppJobFor(run9.id, srvUser("notes"), deps);
@@ -320,7 +331,8 @@ try {
   await resetJobs();
   invokeMode = "missing";
   const m11 = await start({});
-  chk("C11 함수(판) 없음(404) → 곧바로 failed(다시 해도 같다)", m11.status === "failed" && /함수를 부르지 못했습니다/.test(m11.error), JSON.stringify(m11));
+  chk("C11 함수(판) 없음(404) → 곧바로 failed(다시 해도 같다) · 오류 칸엔 AWS 짧은 이름만(원문 · 경로 없음)",
+    m11.status === "failed" && /함수를 부르지 못했습니다: ResourceNotFoundException$/.test(m11.error) && !/Function not found|2015-03-31/.test(m11.error), JSON.stringify(m11));
   invokeMode = "big";
   const b11 = await start({});
   chk("C11b 이벤트 너무 큼(413) → failed", b11.status === "failed", b11.status);
@@ -395,6 +407,26 @@ try {
   const sw = await svc.sweepAppJobs({ ...deps, env: () => null });
   const left10g = (await q(`SELECT count(*)::int AS n FROM org_app_job WHERE status='queued'`))[0].n;
   chk("C10g 대기 초과 줄 450 — 한 번의 감시가 모두 끝낸다(판을 이어 본다)", sw.ended === 450 && left10g === 0, JSON.stringify({ sw, left10g }));
+
+  // ── C14b 함수를 지우는 사이에 들어온 작업도 끝낸다(줄이 사라진 뒤엔 새 작업이 못 들어온다) ──
+  await resetJobs();
+  await mkApp("gone2");
+  let slipped = null;
+  await removeServer("gone2", {
+    env: deps.env(),
+    api: {
+      getFunction: async () => ({ Tags: { "lvly:tenant": SINGLE_TENANT_ID } }),
+      deleteFunction: async () => {
+        slipped = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, route, body, timeout_s)
+                             VALUES ('gone2','queued','pgt-alice','pub','cur','lvly-app-gone2-ws','3','/r','{}',900) RETURNING id`))[0].id;
+      },
+      deleteLogGroup: async () => {},
+    },
+    revokeFunctionTokens: async () => 0,
+  });
+  const s14b = slipped ? (await jobRow(Number(slipped))) : null;
+  chk("C14b 함수를 지우는 사이에 들어온 작업 — 지운 뒤 failed(줄로 남아 대기 초과까지 기다리지 않는다)", !!s14b && s14b.status === "failed" && /지워/.test(s14b.error),
+    JSON.stringify({ slipped, s: s14b?.status }));
 
   // ── C15 새로 도입한 칸 부재 — 작업의 토큰 칸이 비어도 핀에 빈 값이 없다 ──
   await resetJobs();

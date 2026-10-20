@@ -156,12 +156,12 @@ export async function tickAppJob(id: number, runHash: string): Promise<{ cancel:
   return row ? { cancel: row.cancel_requested === true } : null;
 }
 
-/** 끝 — 지금 상태가 from 중 하나일 때만(그리고 runHash 를 주면 그 돌기 신원일 때만). 끝냈으면 그 줄. */
+/** 끝 — 지금 상태가 from 중 하나일 때만(그리고 runHash 를 주면 그 돌기 신원일 때만). 끝냈으면 그 줄. 요청 본문은 비운다(시작하지 못하고 끝난 줄도 — 다시 부르지 않는다). */
 export async function endAppJob(id: number, from: readonly AppJobStatus[], end: {
   status: "done" | "failed" | "canceled"; error: string | null; statusCode?: number | null; result?: JobResultView | null; durationMs?: number | null;
 }, runHash?: string): Promise<AppJobRow | null> {
   const r = await itemsPool.query(
-    `UPDATE org_app_job SET status=$3, error=$4, status_code=$5, result=$6::jsonb, duration_ms=$7, ended_at=now(), updated_at=now()
+    `UPDATE org_app_job SET status=$3, error=$4, status_code=$5, result=$6::jsonb, duration_ms=$7, body='', ended_at=now(), updated_at=now()
       WHERE id=$1 AND status = ANY($2::text[]) AND ($8::text IS NULL OR run_hash = $8) RETURNING ${LIGHT}`,
     [id, from, end.status, end.error ? end.error.slice(0, JOB_ERROR_MAX) : null, end.statusCode ?? null, end.result ? JSON.stringify(end.result) : null,
       end.durationMs ?? null, runHash ?? null]);
@@ -185,7 +185,7 @@ export async function openAppJobs(afterId = 0, limit = 200): Promise<AppJobRow[]
 /** 앱의 열린 작업을 한꺼번에 끝낸다(앱 · 서버를 지울 때). 끝낸 수. */
 export async function endOpenAppJobsForApp(appId: string, status: "failed" | "canceled", error: string): Promise<number> {
   const r = await itemsPool.query(
-    `UPDATE org_app_job SET status=$2, error=$3, ended_at=now(), updated_at=now() WHERE app_id=$1 AND status IN ('queued','dispatched','running')`, [appId, status, error]);
+    `UPDATE org_app_job SET status=$2, error=$3, body='', ended_at=now(), updated_at=now() WHERE app_id=$1 AND status IN ('queued','dispatched','running')`, [appId, status, error]);
   return r.rowCount ?? 0;
 }
 

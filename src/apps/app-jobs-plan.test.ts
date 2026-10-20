@@ -150,8 +150,14 @@ test("B11b 결과 보기 — NUL(U+0000)이 든 응답은 글 · JSON 으로 두
   assert.equal(esc?.text, '{"v":"a\\u0000b"}', "글로는 남긴다(역슬래시 글자라 저장된다)");
   const lit = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"v":"a\\\\u0000b"}') }));
   assert.deepEqual(lit?.json, { v: "a\\u0000b" }, "역슬래시 글자 + u0000 은 NUL 이 아니다 — json 그대로");
-  //  저장되는 꼴(jsonb 로 갈 JSON 글)에 NUL 이스케이프가 없어야 한다 — 세 경우 모두.
-  for (const v of [raw, esc, lit]) assert.doesNotMatch(JSON.stringify(v), /(?:^|[^\\])(?:\\\\)*\\u0000/, JSON.stringify(v));
+  //  짝 없는 서로게이트(이모지 가운데를 자른 글)도 jsonb 가 받지 않는다 — json 으로 두지 않는다. 짝 맞는 이스케이프는 그대로 json.
+  const lone = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"t":"x\\ud83d","n":1}') }));
+  assert.equal(lone?.json, undefined, "짝 없는 서로게이트");
+  assert.equal(lone?.text, '{"t":"x\\ud83d","n":1}');
+  const pair = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"e":"\\ud83d\\ude00"}') }));
+  assert.deepEqual(pair?.json, { e: "😀" }, "짝 맞는 서로게이트는 json 그대로");
+  //  저장되는 꼴(jsonb 로 갈 JSON 글)에 NUL · 짝 없는 서로게이트 이스케이프가 없어야 한다 — 모든 경우.
+  for (const v of [raw, esc, lit, lone, pair]) assert.doesNotMatch(JSON.stringify(v), /(?:^|[^\\])(?:\\\\)*\\u(?:0000|d[89a-f][0-9a-f]{2})/, JSON.stringify(v));
   //  실패 오류 글(응답 앞부분)에도 NUL · 제어문자가 없다.
   const f = endOf(rep({ status_code: 500, body_b64: b("bad\u0000thing\u0007here") }), { timeoutSec: 900, cancelRequested: false });
   assert.match(f.error!, /500 로 답했습니다 — bad thing here/);
@@ -202,6 +208,8 @@ test("B13 함수 이벤트 — 라우트 → 경로 · 쿼리 · POST · 본문 
   assert.equal(Object.keys(ev.headers).filter((k) => k.startsWith("x-lively-")).join(","), "x-lively-identity", "우리 머리글은 부르기 신원 하나");
   const plain = jobInvokeEvent({ id: 1, route: "/x", body: "{}", attempts: 1 }, jobCredential("call", 1, S), "h", 0) as Record<string, any>;
   assert.equal(plain.rawQueryString, "");
+  //  본문을 읽지 않은 가벼운 줄(body «»)을 잘못 넘기면 조용히 빈 본문으로 부르지 않고 던진다.
+  assert.throws(() => jobInvokeEvent({ id: 2, route: "/x", body: "", attempts: 1 }, jobCredential("call", 2, S), "h", 0), /본문이 없습니다/);
 });
 
 test("B14 보기 — 시작한 사람은 결과까지 · 남(관리자)은 상태 · 오류만 · 요청 본문은 크기만", () => {
