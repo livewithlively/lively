@@ -5,7 +5,7 @@
 //  엣지 표: 스크래치패드 spec.md §D(D1~D4) — 케이스 이름의 [D#] 가 그 행 번호다.
 //   Cursor 실측(번들 2026.10.19): 서브에이전트 frontmatter 는 단순 key:value(모르는 키 무시 — 그래도 이식 최소셋 규칙) ·
 //   커맨드는 **frontmatter 를 해석하지 않는다**(전문이 프롬프트·첫 줄이 제목) · 스킬은 claude 와 같은 오픈표준.
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
@@ -24,9 +24,23 @@ const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 
-// ⓪ 실 ~/.cursor 무접촉(관측 장치 없이 통과하는 vacuous test 방지).
+// ⓪ 실 ~/.cursor 무접촉 — 러너가 쓰는 하위 트리(skills·agents·commands)의 경로·크기·시각 지문.
+//  ⚠ ~/.cursor 자체의 mtime 으로 재면 이미 있는 하위 폴더 안으로 새는 쓰기를 못 본다(격리 리뷰 #7 실측) — 트리를 걷는다.
 const REAL = join(homedir(), ".cursor");
-const fingerprint = () => (existsSync(REAL) ? String(statSync(REAL).mtimeMs) : "(none)");
+const fingerprint = () => {
+  const out = [];
+  const walk = (d) => {
+    let ents = [];
+    try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else { try { const st = statSync(p); out.push(`${p}:${st.size}:${st.mtimeMs}`); } catch { out.push(`${p}:?`); } }
+    }
+  };
+  for (const sub of ["skills", "agents", "commands"]) walk(join(REAL, sub));
+  return createHash("sha256").update(out.sort().join("\n")).digest("hex") + `/${out.length}`;
+};
 const REAL_BEFORE = fingerprint();
 
 let ASSETS = [];

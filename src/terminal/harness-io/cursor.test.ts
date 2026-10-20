@@ -59,6 +59,10 @@ t("[E4] turn_ended — success=turn_duration(시간 없음) · aborted(±이유)
   assert.equal("durationMs" in sys[0], false, "작성기는 턴 시간을 안 쓴다 — 지어내지 않는다");
   assert.match(sys[3].text, /Rate limit exceeded/);
   assert.equal(state.turnOpen, false);
+  //  error 가 객체로 와도 내용이 보인다(«[object Object]» 금지)
+  const obj = run(['{"type":"turn_ended","status":"error","error":{"code":429,"message":"slow down"}}']).lines[0] as any;
+  assert.match(obj.text, /slow down/);
+  assert.doesNotMatch(obj.text, /\[object Object\]/);
 });
 t("[E5] 버리는 것 — metadata · 모르는 type · role tool/system · 깨진 줄 · 빈 content · 공백 text · 빈 줄", () => {
   const junk = [

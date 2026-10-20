@@ -584,10 +584,11 @@ function uninstallCursorWiring() {
   let ledger = []; try { ledger = JSON.parse(readFileSync(join(LIVELY, "managed-cursor-mcp.json"), "utf8")); if (!Array.isArray(ledger)) ledger = []; } catch { /* 없음 = 불가침 */ }
   if (existsSync(CURSOR_MCP) && ledger.length) {
     const cur = readJsonObj(CURSOR_MCP);
-    if (!cur) log("  ⚠️ ~/.cursor/mcp.json 파싱 실패 — 수동으로 lively 서버 제거 필요");
+    const msBad = !!cur && cur.mcpServers !== undefined && (!cur.mcpServers || typeof cur.mcpServers !== "object" || Array.isArray(cur.mcpServers));
+    if (!cur || msBad) log(`  ⚠️ ~/.cursor/mcp.json ${cur ? "의 mcpServers 가 객체가 아님" : "파싱 실패"} — 무수정(수동으로 lively 서버 제거 필요)`);
     else {
       let ub = {}; try { ub = JSON.parse(readFileSync(join(LIVELY, "cursor-mcp-user-backup.json"), "utf8")) || {}; } catch { /* */ }
-      const ms = (cur.mcpServers && typeof cur.mcpServers === "object" && !Array.isArray(cur.mcpServers)) ? { ...cur.mcpServers } : {};
+      const ms = { ...(cur.mcpServers || {}) };
       for (const name of ledger) {
         if (ub[name] && typeof ub[name] === "object") ms[name] = ub[name];   // 설치 전 사용자 값 복원
         else delete ms[name];

@@ -18,6 +18,11 @@ import { TERM_UI_UNKNOWN } from "./term-ui.js";
 import { parseJsonLines, type ChatBlock, type ChatLine, type ParseState } from "./chat-line.js";
 
 const asObj = (v: unknown): Record<string, any> | null => (v && typeof v === "object" && !Array.isArray(v)) ? v as Record<string, any> : null;
+//  turn_ended.error 는 작성기가 문자열로 쓰지만(번들) 객체가 와도 «[object Object]» 가 아니라 내용이 보이게.
+const errText = (e: unknown): string => {
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
+};
 
 export function parseCursor(text: string, state: ParseState): { lines: ChatLine[]; state: ParseState } {
   const st: ParseState = { ...state };
@@ -29,7 +34,7 @@ export function parseCursor(text: string, state: ParseState): { lines: ChatLine[
     if (o.type === "turn_ended") {
       const status = String(o.status || "");
       if (status === "aborted") lines.push({ type: "system", subtype: "interrupted", timestamp: "" });
-      else if (status === "error") lines.push({ type: "system", subtype: "error", timestamp: "", text: `Cursor 턴이 오류로 끝났습니다${o.error ? `: ${String(o.error)}` : ""}` });
+      else if (status === "error") lines.push({ type: "system", subtype: "error", timestamp: "", text: `Cursor 턴이 오류로 끝났습니다${o.error ? `: ${errText(o.error)}` : ""}` });
       else lines.push({ type: "system", subtype: "turn_duration", timestamp: "" });
       st.turnOpen = false;
       continue;

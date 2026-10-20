@@ -51,9 +51,16 @@ export function isForeignGrokInvocation(argv = process.argv.slice(2), env = proc
 //   띄운 명령엔 CURSOR_AGENT=1 만 있고 이 둘은 없다(그래서 Cursor 안에서 셸로 띄운 claude 는 오탐하지 않는다).
 //   ⚠ CLAUDECODE 가 있으면 비켜서지 않는다 — Claude Code 는 자기 훅·자식에 CLAUDECODE=1 을 준다. Cursor IDE 의 내장 터미널
 //    env 가 미실측이라, 거기서 띄운 claude 세션의 우리 훅을 «Cursor 사본» 으로 오탐해 통째로 죽이는 쪽을 막는다(grok 가드의
-//    «중첩 claude 세션 오탐 금지» 와 같은 경계). 우리 어댑터가 띄운 러너는 LIVELY_HARNESS=cursor 라 통과한다.
+//    «중첩 claude 세션 오탐 금지» 와 같은 경계).
+//   사본의 모양: compat 사본은 claude 형 항목이라 **명령줄에 --harness 가 없다**(settings.json·플러그인 hooks.json 둘 다 — 실측).
+//    명령줄에 하네스를 밝힌 러너(codex config.toml·grok·antigravity 어댑터가 띄운 것)는 Cursor 훅 env 를 물려받았어도 그 하네스의
+//    것이라 비켜서지 않는다(격리 리뷰: 종전엔 Cursor 훅이 띄운 codex 의 러너까지 꺼졌다). 우리 어댑터가 인자 없이 띄우는 러너
+//    (stop-writeback-gate)는 env LIVELY_HARNESS=cursor 로 온다. ⚠ env 만 보고 «선언됨» 으로 치지 않는다 — 부모에게서 물려받은
+//    LIVELY_HARNESS=claude 가 있으면 사본이 그대로 통과한다.
 export function isForeignCursorInvocation(argv = process.argv.slice(2), env = process.env) {
-  return !!env.CURSOR_VERSION && !!env.CURSOR_PROJECT_DIR && !env.CLAUDECODE && resolveHarness(argv, env) !== "cursor";
+  if (!env.CURSOR_VERSION || !env.CURSOR_PROJECT_DIR || env.CLAUDECODE) return false;
+  if (Array.isArray(argv) && argv.includes("--harness")) return false;
+  return String(env.LIVELY_HARNESS || "").toLowerCase().trim() !== "cursor";
 }
 
 // Cursor CLI 승인 설정(cli-config.json)이 사는 디렉터리 — 번들 실측(cursor-config/paths.js): CURSOR_CONFIG_DIR >

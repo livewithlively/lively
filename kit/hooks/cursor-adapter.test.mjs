@@ -71,6 +71,19 @@ HOOK_SCRIPTS.includes("cursor-adapter.mjs") ? ok("P3 HOOK_SCRIPTS 등재") : bad
   eq("P4b 배선 이벤트마다 어댑터 분기가 있다", handled, []);
 }
 
+// ── P5. 시간 예산 ↔ hooks.json timeout — 어댑터는 동기라 상한이 러너 타임박스의 합이다. 그 합(+stdin+여유 1초)이
+//   Cursor 가 우리를 죽이는 시간보다 짧아야 유효 출력·부작용(쉼 보고 등)이 끝까지 간다(격리 리뷰: 세 이벤트가 0초 여유였다).
+{
+  const r = spawnSync(process.execPath, [ADAPTER, "--budget"], { encoding: "utf8", timeout: 10000 });
+  let b = null; try { b = JSON.parse(r.stdout); } catch { b = null; }
+  if (!b || !b.events) bad("P5 예산 표 읽기", JSON.stringify([r.status, String(r.stdout).slice(0, 80)]));
+  else {
+    const short = CURSOR_HOOK_EVENTS.filter(([e, sec]) => !(Number.isFinite(b.events[e]) && b.events[e] + b.stdinMs + 1000 <= sec * 1000))
+      .map(([e, sec]) => `${e}: 예산 ${b.events[e]}ms+stdin ${b.stdinMs}ms > ${sec}s`);
+    eq("P5 배선 이벤트마다 예산(+stdin+1초) ≤ hooks.json timeout", short, []);
+  }
+}
+
 // ── R. 실행 검증 — 스텁 러너를 심은 샌드박스(LIVELY_HOME·TMPDIR 격리)에서 어댑터를 직접 실행 ──
 const SB = mkdtempSync(join(tmpdir(), "cursor-adapter-test-"));
 const HOOKS = join(SB, ".lively", "hooks");
@@ -281,6 +294,40 @@ try {
   }
   // [A27] 모르는 이벤트 → {}.
   eq("R27[A27] 모르는 이벤트 → {}", outOf(runAdapter("afterAgentThought", { ...BASE })), {});
+
+  // [A28] MCP 의 org ask → permission:ask(+사유). beforeMCPExecution 검증기는 ask 를 받는다(번들 실측) — preToolUse 는 R7 대로 안 싣는다.
+  {
+    stub("run-custom.mjs", JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "외부 전송 확인" } }));
+    const o = outOf(runAdapter("beforeMCPExecution", { ...BASE, tool_name: "slack_send_message", tool_input: "{}", mcp_server_name: "lively", tool_use_id: "m9" }));
+    eq("R28[A28] MCP ask → permission:ask · 사유", [o.permission, /외부 전송 확인/.test(o.user_message || ""), /외부 전송 확인/.test(o.agent_message || "")], ["ask", true, true]);
+    stub("run-custom.mjs", JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }));
+    eq("R28b[A28] MCP allow → permission 없음(allow 는 승인을 못 건너뛴다)", "permission" in outOf(runAdapter("beforeMCPExecution", { ...BASE, tool_name: "x", tool_input: "{}", mcp_server_name: "lively", tool_use_id: "m10" })), false);
+    stub("run-custom.mjs");
+  }
+
+  // [A29] 러너가 멈춰도(끝나지 않음) 타임박스 뒤 유효 JSON 한 줄 · exit 0 · 제때 끝난다. 타임박스는 시험 env 로 줄인다(제품 15초).
+  {
+    const hang = `setInterval(() => {}, 1000);\n`;
+    for (const f of RUNNERS) writeFileSync(join(HOOKS, f), hang);
+    const t0 = Date.now();
+    const results = CURSOR_HOOK_EVENTS.map(([e]) => [e, runAdapter(e, { ...BASE, status: "completed", tool_name: "Shell", tool_input: {} }, { LIVELY_TEST_CURSOR_TIMEBOX_MS: "300" })]);
+    const took = Date.now() - t0;
+    eq("R29[A29] 러너 hang → 배선 이벤트 전부 유효 JSON 한 줄", results.filter(([, r]) => !isOneObject(r)).map(([e]) => e), []);
+    eq("R29b[A29] hang 중 beforeSubmitPrompt 는 continue:true", outOf(results.find(([e]) => e === "beforeSubmitPrompt")[1]), { continue: true });
+    took < 20000 ? ok(`R29c[A29] 타임박스대로 끝남(${took}ms, 이벤트 ${results.length}개)`) : bad("R29c[A29] 타임박스대로 끝남", `${took}ms`);
+    for (const f of RUNNERS) stub(f);
+  }
+
+  // [A30] 64KB 를 넘는 sessionStart 맥락이 **온전히** 나간다(종전: 쓰자마자 exit → macOS 파이프에서 65,537바이트에서 잘린 JSON).
+  //  스텁은 자기 쓰기가 끝난 뒤에 끝낸다(관측 장치가 먼저 자르면 이 행은 아무것도 못 본다).
+  {
+    const big = "가나다라마바사".repeat(30000);   // 21만 자 ≈ 63만 바이트
+    writeFileSync(join(HOOKS, "session-preload.mjs"), `process.stdout.write(${JSON.stringify(envelope("SessionStart", big))} + "\\n", () => process.exit(0));\n`);
+    const r = runAdapter("sessionStart", { ...BASE });
+    const o = outOf(r);
+    eq("R30[A30] 큰 맥락 — 유효 JSON 한 줄 · 본문 전부", [isOneObject(r), typeof o.additional_context === "string" && o.additional_context.includes(big), Buffer.byteLength(String(r.stdout)) > 600000], [true, true, true]);
+    stub("session-preload.mjs");
+  }
 } finally {
   rmSync(SB, { recursive: true, force: true });
 }

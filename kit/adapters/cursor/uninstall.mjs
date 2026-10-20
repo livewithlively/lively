@@ -86,8 +86,12 @@ export function removeMcpServers({ dry = false } = {}) {
   if (!existsSync(CURSOR_MCP) || !ledger.length) { log(`  · ~/.cursor/mcp.json — ${existsSync(CURSOR_MCP) ? "lively 원장 없음" : "없음"}. 무수정`); return 0; }
   const cur = readJsonObj(CURSOR_MCP);
   if (!cur) { log("  ⚠️ ~/.cursor/mcp.json 파싱 실패 — 무수정(수동으로 lively 서버 제거 필요)"); return 0; }
+  // mcpServers 가 객체가 아니면 손대지 않는다 — {} 로 갈아끼우면 사용자 값이 사라진다(설치기 mergeCursorMcp 와 같은 규칙).
+  if (cur.mcpServers !== undefined && (!cur.mcpServers || typeof cur.mcpServers !== "object" || Array.isArray(cur.mcpServers))) {
+    log("  ⚠️ ~/.cursor/mcp.json 의 mcpServers 가 객체가 아님 — 무수정(수동으로 lively 서버 제거 필요)"); return 0;
+  }
   let ub = {}; try { ub = JSON.parse(readFileSync(join(LIVELY, "cursor-mcp-user-backup.json"), "utf8")) || {}; } catch { /* */ }
-  const ms = (cur.mcpServers && typeof cur.mcpServers === "object" && !Array.isArray(cur.mcpServers)) ? { ...cur.mcpServers } : {};
+  const ms = { ...(cur.mcpServers || {}) };
   for (const name of ledger) {
     if (ub[name] && typeof ub[name] === "object") ms[name] = ub[name];   // 설치 전 사용자 값 복원
     else delete ms[name];

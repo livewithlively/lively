@@ -9,7 +9,8 @@
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { isForeignCursorInvocation } from "./harness-registry.mjs";
@@ -34,8 +35,12 @@ eq("B3 + CLAUDECODE=1(Claude 세션) → false", isForeignCursorInvocation([], {
 eq("B4 CURSOR_AGENT=1 만 → false", isForeignCursorInvocation([], { CURSOR_AGENT: "1", CURSOR_CONVERSATION_ID: "c" }), false);
 eq("B5 CURSOR_VERSION 만(PROJECT_DIR 없음) → false", isForeignCursorInvocation([], { CURSOR_VERSION: "x" }), false);
 eq("B6 Cursor env 없음 → false", isForeignCursorInvocation([], {}), false);
-// 다른 하네스 명시(기형 경로)도 사본 취급 — 정본은 cursor 경로뿐(grok 가드 GG2b 와 같은 규칙).
-eq("B1b + LIVELY_HARNESS=codex → true", isForeignCursorInvocation([], { ...HOOK_ENV, LIVELY_HARNESS: "codex" }), true);
+// [B1b] env 만의 하네스 표시는 «선언» 이 아니다 — 부모에게서 물려받은 LIVELY_HARNESS 로 사본이 통과하면 안 된다.
+eq("B1b + LIVELY_HARNESS=codex(env 만) → true", isForeignCursorInvocation([], { ...HOOK_ENV, LIVELY_HARNESS: "codex" }), true);
+eq("B1c + LIVELY_HARNESS=claude(물려받음) → true", isForeignCursorInvocation([], { ...HOOK_ENV, LIVELY_HARNESS: "claude" }), true);
+// [B8] 명령줄에 하네스를 밝힌 러너는 그 하네스의 것이다 — Cursor 훅 env 를 물려받은 codex·grok 러너를 끄면 안 된다(격리 리뷰 #6).
+eq("B8 + argv --harness codex → false(codex 의 러너)", isForeignCursorInvocation(["PreToolUse", "--harness", "codex"], { ...HOOK_ENV }), false);
+eq("B8b + argv --harness grok → false", isForeignCursorInvocation(["--harness", "grok"], { ...HOOK_ENV, LIVELY_HARNESS: "grok" }), false);
 
 // ── 통합 (B7) — 러너를 **실제로 스폰**해 가드의 부작용 차단을 지문으로 본다 ──
 const SB = mkdtempSync(join(tmpdir(), "cursor-guard-test-"));
@@ -133,6 +138,39 @@ const CURSOR_PAYLOAD = (sid) => ({ hook_event_name: "postToolUse", conversation_
   (r.status === 0 && flags.some((f) => f.endsWith("cg-claude.lively")))
     ? ok("B7c Claude 세션(CLAUDECODE) — 가드가 비켜서지 않음(플래그 생성)")
     : bad("B7c Claude 세션", `exit=${r.status} flags=${JSON.stringify(flags)}`);
+}
+
+// [B7e] sync-harness-assets — 사본 env 에선 게이트웨이 요청 0건 · 정본 경로(--harness cursor)는 실제로 요청한다(관측 장치 생존).
+//  격리 리뷰 #7: 종전엔 B7s 정적 정규식뿐이라 가드를 지워도 동작 시험은 초록이었다. 토큰·게이트웨이가 있어야 부작용(요청)이
+//  생기므로 따로 홈(home2)을 쓴다 — 위 B7 의 «토큰 없음» 전제를 건드리지 않게. 스텁은 이 프로세스 안이라 spawnSync 금지.
+{
+  const HOME2 = join(SB, "home2");
+  mkdirSync(join(HOME2, ".lively"), { recursive: true });
+  const hits = [];
+  const srv = createServer((req, res) => {
+    hits.push(req.url);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(req.url.startsWith("/api/ui/org/runner/assets") ? JSON.stringify({ assets: [] }) : "{}");
+    if (req.method === "POST") req.resume();
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  writeFileSync(join(HOME2, ".lively", "token"), "test-token\n");
+  writeFileSync(join(HOME2, ".lively", "gateway-url"), `http://127.0.0.1:${srv.address().port}\n`);
+  const runSync = (args, extraEnv) => new Promise((resolve) => {
+    const p = spawn(process.execPath, [join(HOOKS_DIR, "sync-harness-assets.mjs"), ...args], {
+      env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", LIVELY_HOME: HOME2, HOME: HOME2, USERPROFILE: HOME2, TMPDIR: TMP, TEMP: TMP, TMP: TMP,
+        ...HOOK_ENV, CLAUDECODE: "", GROK_HOOK_EVENT: "", LIVELY_HARNESS: "", ...extraEnv },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const kill = setTimeout(() => p.kill("SIGKILL"), 20000);
+    p.on("close", (status) => { clearTimeout(kill); resolve(status); });
+  });
+  const s1 = await runSync([], {});
+  const compatHits = hits.length;
+  const s2 = await runSync(["--harness", "cursor"], { LIVELY_HARNESS: "cursor" });
+  srv.close();
+  eq("B7e sync-harness-assets — 사본은 요청 0건 · 정본은 요청함",
+    [s1, compatHits, s2, hits.some((u) => u.startsWith("/api/ui/org/runner/assets?harness=cursor"))], [0, 0, 0, true]);
 }
 
 rmSync(SB, { recursive: true, force: true });

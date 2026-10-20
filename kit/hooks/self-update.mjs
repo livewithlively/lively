@@ -188,7 +188,7 @@ async function installedHarnesses() {
   const GROKDIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
   try { if (existsSync(join(GROKDIR, "hooks", "lively-grok.json"))) out.push("grok"); } catch { /* 미배선 */ }
   //  cursor(#4927): ~/.cursor/hooks.json 은 **사용자와 공유**라 파일 존재가 아니라 우리 어댑터 엔트리가 신호다(CLI cursorWired 와 같은 규칙).
-  try { if (/[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs/.test(readFileSync(join(HOME, ".cursor", "hooks.json"), "utf8"))) out.push("cursor"); } catch { /* 미배선 */ }
+  try { if (/[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/.test(readFileSync(join(HOME, ".cursor", "hooks.json"), "utf8"))) out.push("cursor"); } catch { /* 미배선 */ }
 
   let reg = null;
   try { reg = await import("./harness-registry.mjs"); } catch { /* 구 번들 — 레지스트리 없음 */ }

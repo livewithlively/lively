@@ -185,7 +185,7 @@ const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
 const CURSOR_DIR = join(HOME, ".cursor");
 const CURSOR_HOOKS_JSON = join(CURSOR_DIR, "hooks.json");
 const CURSOR_MCP_JSON = join(CURSOR_DIR, "mcp.json");
-const CURSOR_ADAPTER_RE = /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs/;
+const CURSOR_ADAPTER_RE = /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/;   // 설치기·제거기와 같은 판정(cursor-wiring C19)
 const cursorWired = () => { try { return CURSOR_ADAPTER_RE.test(readFileSync(CURSOR_HOOKS_JSON, "utf8")); } catch { return false; } };
 // 자산 충족 판정 — status 색상·조치 힌트·doctor 체크가 **한 산식**을 공유한다(표면끼리 어긋나면 그게 이 판정의 결함).
 //  collision = 같은 이름의 멤버 자산이 이겨서 조직 사본을 안 깐 것(정상). null = 판정 불가 → 보수적으로 결손 취급하고
@@ -1130,6 +1130,14 @@ export function installTarget(want, harnesses = []) {
   return !t || harnesses.includes(t) ? "" : t;
 }
 
+/** (순수) 설치 끝 안내의 «무엇을 켜면» — 배선한 하네스를 사람이 켜는 이름으로. 종전엔 claude(+codex)로 고정이라
+ *  Cursor·grok 만 쓰는 사람에게 «claude 를 켜면» 이라고 말했다(#4927 격리 리뷰). 모르는 id 는 그대로, 비면 claude. */
+const LAUNCH_NAME = { claude: "claude", codex: "codex", opencode: "opencode", antigravity: "agy", grok: "grok", cursor: "Cursor" };
+export function launchNames(harnesses = []) {
+  const names = [...new Set(harnesses.map((h) => LAUNCH_NAME[h] || h).filter(Boolean))];
+  return names.length ? names : ["claude"];
+}
+
 async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
   //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
   //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
@@ -1250,7 +1258,7 @@ async function syncKit({ label, offerHarness, want = "" }) {
 
     say("");
     say(green(bold("=== 끝! ===")));
-    say(`  이제 아무 폴더에서든 ${bold("claude")}${harnesses.includes("codex") ? " · " + bold("codex") : ""} 를 켜면 회사 맥락이 따라옵니다.`);
+    say(`  이제 아무 폴더에서든 ${launchNames(harnesses).map(bold).join(" · ")} 를 켜면 회사 맥락이 따라옵니다.`);
     say(dim("  (훅은 세션 시작에 스냅샷됩니다 — 이미 켜 둔 세션이 있으면 껐다 켜세요.)"));
     say(dim("  상태 확인: ") + bold("lively status") + dim("    문제 진단: ") + bold("lively doctor"));
     return version;

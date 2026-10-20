@@ -13,8 +13,10 @@
 //  · ⚠⚠ **권한 단계(preToolUse·beforeMCPExecution 등)는 비어 있지 않은 비JSON 출력이면 그 툴을 막는다.** 그래서 이 어댑터는
 //    어떤 실패 경로에서도 stdout 에 **정확히 한 번, 유효한 JSON 객체**를 쓴다(antigravity 어댑터와 같은 불변식). 빈 출력·
 //    다른 종료코드·타임아웃은 무시되고(fail-open) 툴이 그대로 간다.
-//  · 결정은 deny 만 강제된다 — preToolUse 의 allow·ask 는 무시되고, allow 가 승인 창을 건너뛰게 하지도 않는다. 그래서
-//    org 훅의 deny 만 전파한다(없는 강제력을 있는 척하지 않는다).
+//  · 결정 — preToolUse 는 deny 만 강제된다(allow·ask 무시, allow 가 승인 창을 건너뛰게 하지도 않는다) → deny 만 전파한다.
+//    beforeMCPExecution 은 검증기가 ask 도 받는다 — CLI 는 deny 만 집행하고(번들 실측) IDE 는 문서상 ask 를 사람에게 묻는다
+//    → MCP 는 deny·ask 를 싣는다(CLI 에선 ask 가 그냥 통과 — 종전과 같다). ⚠ 셸 명령의 ask 는 beforeShellExecution 에서만
+//    집행되는데(CLI 실측) 셸은 preToolUse 로 받으므로 지금은 빠진다(알려진 공백 — 기본 조직 훅에 ask 를 내는 것은 없다).
 //  · MCP 툴은 preToolUse·postToolUse 에 **서버 이름 없이** `MCP:<툴>` 로 온다. 서버 이름은 beforeMCPExecution 의
 //    mcp_server_name 에만 있다. 같은 툴 호출의 훅들은 tool_use_id 를 공유하므로, beforeMCPExecution 에서
 //    `mcp__<서버>__<툴>`(claude 형)로 정규화해 org 훅을 돌리고 그 서버를 tool_use_id 로 남겨 postToolUse 가 이어 쓴다.
@@ -73,12 +75,31 @@ const asObj = (v) => (v && typeof v === "object" && !Array.isArray(v)) ? v : nul
 // tool_input 은 객체로 오지만(일반 툴) beforeMCPExecution 에선 **JSON 문자열**이다(실측) — 둘 다 객체로 맞춘다.
 const argsOf = (ti) => asObj(ti) || asObj(typeof ti === "string" ? tryJson(ti) : null) || {};
 
+// ── 시간 상한 ──────────────────────────────────────────────────────────────
+// handle() 은 동기(spawnSync)라 타이머가 돌 수 없다 — 이 어댑터의 상한은 러너마다 건 SIGKILL 타임박스의 **합**이다.
+//  이벤트별 합(BUDGET_MS) + stdin 이 hooks.json timeout(user-install CURSOR_HOOK_EVENTS)보다 작아야 Cursor 가 우리를 죽이기
+//  전에 유효 출력으로 끝난다 — cursor-adapter 시험(P5)이 `node cursor-adapter.mjs --budget` 으로 읽어 그 표와 대조한다.
+const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, gate: 10000, workFlag: 5000, stdin: 2000 };
+const BUDGET_MS = {
+  sessionStart: T.preload + T.sync + T.runner + T.workFlag,
+  beforeSubmitPrompt: T.runner + T.workFlag,
+  preToolUse: T.runner,
+  beforeMCPExecution: T.runner,
+  postToolUse: T.runner + T.workFlag,
+  stop: T.gate + T.runner + T.workFlag,
+  sessionEnd: T.runnerEnd + T.workFlag,
+  subagentStop: T.runner + T.workFlag,
+  preCompact: T.runner + T.workFlag,
+};
+// 시험 전용 — 러너 타임박스를 줄여 «러너가 멈춰도 제때 유효 출력» 을 몇 초 안에 잰다(제품 경로엔 이 env 가 없다).
+const TEST_TIMEBOX_MS = Number(process.env.LIVELY_TEST_CURSOR_TIMEBOX_MS) || 0;
+
 // 러너 1회 실행 → stdout(문자열). 어떤 실패든 "" 로 삼킨다(fail-open).
 //  killSignal SIGKILL: 러너가 타임아웃을 살아남아 세션을 막는 일이 없게(no-block 불변식, 타 어댑터와 동형).
 function runScript(script, args, stdin, timeout) {
   try {
     const r = spawnSync(NODE, [join(HOOKS, script), ...args], {
-      input: stdin, encoding: "utf8", timeout, killSignal: "SIGKILL",
+      input: stdin, encoding: "utf8", timeout: TEST_TIMEBOX_MS ? Math.min(timeout, TEST_TIMEBOX_MS) : timeout, killSignal: "SIGKILL",
       env: { ...process.env, LIVELY_HARNESS: HARNESS },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -87,7 +108,7 @@ function runScript(script, args, stdin, timeout) {
 }
 
 // stdin 을 타임박스로 읽는다 — Cursor 는 stdin 으로 페이로드를 쓰고 닫지만 hang 은 원리적으로 차단.
-function readStdin(ms = 2000) {
+function readStdin(ms = T.stdin) {
   return new Promise((resolve) => {
     let buf = ""; let done = false;
     const finish = () => { if (!done) { done = true; resolve(buf); } };
@@ -116,10 +137,10 @@ const payload = (event, input, extra) => JSON.stringify({
   ...extra,
 });
 
-const runner = (event, input, extra, timeout = 15000) =>
+const runner = (event, input, extra, timeout = T.runner) =>
   runScript("run-custom.mjs", [event, "--harness", HARNESS], payload(event, input, extra), timeout);
 const workFlag = (event, input, extra) =>
-  runScript("work-flag.mjs", ["--harness", HARNESS], payload(event, input, extra), 5000);
+  runScript("work-flag.mjs", ["--harness", HARNESS], payload(event, input, extra), T.workFlag);
 
 // 러너 출력에서 컨텍스트 본문을 꺼낸다 — JSON 봉투(hookSpecificOutput.additionalContext)면 그 본문, 아니면 원문.
 //  (cursor 의 contextEnvelope 는 json 이라 러너는 봉투로 낸다. 원문 폴백은 구버전 러너 대비.)
@@ -145,12 +166,16 @@ function decisionOf(out) {
   return null;
 }
 
-// org 훅 결정 → Cursor 권한 출력. deny 만 강제된다(위 머리말). 컨텍스트는 상한 안에서 함께 싣는다.
-function permissionOut(d) {
+// org 훅 결정 → Cursor 권한 출력. deny 는 늘, ask 는 그 단계가 받을 때만(ask:true — beforeMCPExecution, 위 머리말).
+//  ⚠ ask 를 못 받는 단계에 실으면 검증에서 출력 전체가 틀린 것이 된다 — 그래서 단계별로 연다.
+//  컨텍스트는 상한 안에서 함께 싣는다.
+function permissionOut(d, { ask = false } = {}) {
   const out = {};
-  if (d?.permissionDecision === "deny") {
-    const msg = `Lively 정책으로 차단됨: ${d.permissionDecisionReason || "관리자 훅이 이 도구 호출을 거부했습니다."}`;
-    out.permission = "deny";
+  const pd = d?.permissionDecision;
+  if (pd === "deny" || (ask && pd === "ask")) {
+    const why = d.permissionDecisionReason || (pd === "deny" ? "관리자 훅이 이 도구 호출을 거부했습니다." : "관리자 훅이 이 도구 호출에 확인을 요청했습니다.");
+    const msg = `${pd === "deny" ? "Lively 정책으로 차단됨" : "Lively 정책이 확인을 요청함"}: ${why}`;
+    out.permission = pd;
     out.user_message = msg;
     out.agent_message = msg;
   }
@@ -197,8 +222,8 @@ function handle(input) {
     //  work-flag(압축 직후 재개 넛지)를 차례로 돌리고 본문만 모아 한 번에 싣는다.
     const extra = { source: "startup" };
     const ctx = [];
-    ctx.push(contextOf(runScript("session-preload.mjs", ["--harness", HARNESS], "", 20000)));
-    runScript("sync-harness-assets.mjs", ["--harness", HARNESS], "", 20000);
+    ctx.push(contextOf(runScript("session-preload.mjs", ["--harness", HARNESS], "", T.preload)));
+    runScript("sync-harness-assets.mjs", ["--harness", HARNESS], "", T.sync);
     ctx.push(contextOf(runner("SessionStart", input, extra)));
     ctx.push(contextOf(workFlag("SessionStart", input, extra)));
     const text = joinCtx(ctx);
@@ -228,7 +253,7 @@ function handle(input) {
     if (!server || !tool) return {};
     rememberMcpServer(toolUseId, server);
     const d = decisionOf(runner("PreToolUse", input, { tool_name: mcpFull(server, tool), tool_input: argsOf(input?.tool_input), cursor_tool_name: `MCP:${tool}`, tool_use_id: toolUseId }));
-    const out = permissionOut(d);
+    const out = permissionOut(d, { ask: true });
     delete out.additional_context;     // beforeMCPExecution 은 컨텍스트 계약이 없다(결정만) — 실어도 버려진다
     return out;
   }
@@ -260,7 +285,7 @@ function handle(input) {
     //  루프가드: 게이트가 <sid>.blocked 로 세션당 1회를 보장하고, 후속 턴이면(loop_count>0) stop_hook_active 로 알린다.
     const status = String(input?.status || "");
     const extra = { stop_hook_active: Number(input?.loop_count) > 0 };
-    const gate = status === "completed" ? runScript("stop-writeback-gate.mjs", [], payload("Stop", input, extra), 10000) : "";
+    const gate = status === "completed" ? runScript("stop-writeback-gate.mjs", [], payload("Stop", input, extra), T.gate) : "";
     runner("Stop", input, extra);
     workFlag("Stop", input, extra);
     for (const l of String(gate || "").split(/\r?\n/)) {
@@ -272,7 +297,7 @@ function handle(input) {
 
   if (EVENT === "sessionEnd") {
     const extra = { reason: String(input?.reason || input?.final_status || "") };
-    runner("SessionEnd", input, extra, 10000);
+    runner("SessionEnd", input, extra, T.runnerEnd);
     workFlag("SessionEnd", input, extra);
     return {};
   }
@@ -289,34 +314,29 @@ function handle(input) {
 }
 
 // stdout 은 **정확히 한 번**. 권한 단계에서 비JSON·중복이면 그 툴이 막힌다(머리말 ⚠⚠).
+//  ⚠ 끝내기는 쓰기가 다 나간 **뒤**다 — process.exit 는 파이프에 남은 쓰기를 버린다. macOS 의 파이프 쓰기는 비동기라
+//   64KB 를 넘는 sessionStart 맥락이 잘린 JSON 으로 나갔다(격리 리뷰 재현 2026-10-20: 65,537바이트에서 끊김 → 맥락 주입
+//   통째로 유실). 읽는 쪽이 멈춰 콜백이 영영 안 오면 5초 뒤 끝낸다(그땐 어차피 Cursor 가 우리를 기다리지 않는다).
 let wrote = false;
-function emitOnce(obj) {
+function emitAndExit(obj) {
   if (wrote) return;
   wrote = true;
-  try { process.stdout.write(JSON.stringify(obj) + "\n"); } catch { /* 파이프가 이미 닫혔다 */ }
+  setTimeout(() => process.exit(0), 5000);
+  try { process.stdout.write(JSON.stringify(obj) + "\n", () => process.exit(0)); }
+  catch { process.exit(0); }   // 파이프가 이미 닫혔다
 }
 const fallbackFor = (ev) => (ev === "beforeSubmitPrompt" ? { continue: true } : {});
 
-// 우리 스스로의 마감시각 — 하네스 timeout(hooks.json)보다 짧게 잡아, 늦어도 유효 출력 한 번으로 끝낸다.
-//  sessionStart 만 길다(러너 셋이 연달아 돈다 — hooks.json 75초 안).
-const DEADLINE_MS = EVENT === "sessionStart" ? 70_000 : 20_000;
-
 async function main() {
-  const fallback = fallbackFor(EVENT);
-  const watchdog = setTimeout(() => { emitOnce(fallback); process.exit(0); }, DEADLINE_MS);
-  if (typeof watchdog.unref === "function") watchdog.unref();
-  let out = fallback;
+  let out = fallbackFor(EVENT);
   try {
     let input = {};
     try { input = JSON.parse((await readStdin()) || "{}"); } catch { /* 비JSON — 빈 입력으로 진행 */ }
-    out = handle(asObj(input) || {}) || fallback;
-  } catch { out = fallback; }   // 어떤 실패도 아래 유효 출력 한 번으로 수렴
-  clearTimeout(watchdog);
-  emitOnce(out);
+    out = handle(asObj(input) || {}) || out;
+  } catch { /* 어떤 실패도 아래 유효 출력 한 번으로 수렴 */ }
+  emitAndExit(out);
 }
 
-main().then(() => process.exit(0)).catch(() => {
-  // 최후 방어 — main 자체가 죽어도 유효 JSON 을 내고 끝낸다(권한 단계 차단 방지, 머리말 ⚠⚠).
-  emitOnce(fallbackFor(EVENT));
-  process.exit(0);
-});
+// `--budget` 은 Cursor 이벤트가 아니다 — 시험이 시간 예산 표를 읽는 입구(위 «시간 상한»).
+if (EVENT === "--budget") process.stdout.write(JSON.stringify({ stdinMs: T.stdin, events: BUDGET_MS }) + "\n");
+else main().catch(() => emitAndExit(fallbackFor(EVENT)));   // 최후 방어 — main 이 죽어도 유효 JSON 한 줄(권한 단계 차단 방지)

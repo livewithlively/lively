@@ -36,8 +36,10 @@ const REAL_BEFORE = REAL.map(digest);
 const DECOY_CCD = join(SANDBOX, "decoy-ccd");
 const DECOY_XDG = join(SANDBOX, "decoy-xdg");
 mkdirSync(DECOY_CCD, { recursive: true }); mkdirSync(join(DECOY_XDG, "cursor"), { recursive: true });
-writeFileSync(join(DECOY_CCD, "cli-config.json"), JSON.stringify({ permissions: { allow: ["Shell(decoy)"], deny: [] } }));
-writeFileSync(join(DECOY_XDG, "cursor", "cli-config.json"), JSON.stringify({ permissions: { allow: ["Shell(decoy)"], deny: [] } }));
+//  미끼에 **우리 규칙**도 넣는다 — LIVELY_HOME 격리를 무시하는 제거기는 원장 규칙을 여기서 걷어 지문이 바뀐다(격리 리뷰 #4:
+//   사용자 규칙만 있던 미끼는 격리를 어긴 제거기도 «바꿀 게 없어» 그대로 둬서 아무것도 못 봤다).
+writeFileSync(join(DECOY_CCD, "cli-config.json"), JSON.stringify({ permissions: { allow: ["Shell(decoy)", "Mcp(lively:whoami)"], deny: [] } }));
+writeFileSync(join(DECOY_XDG, "cursor", "cli-config.json"), JSON.stringify({ permissions: { allow: ["Shell(decoy)", "Mcp(lively:whoami)"], deny: [] } }));
 const DECOY_BEFORE = [digest(join(DECOY_CCD, "cli-config.json")), digest(join(DECOY_XDG, "cursor", "cli-config.json"))];
 
 // ── 발행물 번들(publish() 배치 최소 재현 — grok-wiring 과 같은 방식) ──────────────────
@@ -145,23 +147,87 @@ try {
   // [C12] 조직이 목록에서 뺀 규칙은 다음 설치에서 회수(사용자 규칙 불가침).
   makeBundle({ autoApprove: ["mcp__lively__whoami"] }); install();
   eq("C12[C12] 뺀 규칙 회수 · 사용자 규칙 유지", readJson(CLICFG)?.permissions?.allow, ["Shell(git)", "Mcp(lively:whoami)"]);
-  // [C13] 제거(kit 어댑터) — 우리 것만 사라진다. 사용자 훅·서버·규칙 보존 · 손으로 넣었던 lively 복원.
-  makeBundle();
-  freshHome({ hooks: { version: 1, hooks: { sessionStart: [USER_ENTRY] } }, mcp: { mcpServers: { notion: { url: "https://mcp.notion.com/mcp" }, lively: USER_LIVELY } }, cli: { permissions: { allow: ["Shell(git)"], deny: [] } } });
+  // [C13] 제거 — **두 제거기**(kit 어댑터 · 멤버용 자립 user-uninstall — 실제 `lively uninstall` 경로)에 같은 표를 돌린다
+  //  (격리 리뷰 #4: 멤버 제거기는 «우리 것만 있던 파일 삭제» 하나만 재서, 사용자 훅까지 지우는 변이도 초록이었다).
+  //  우리 것만 사라진다 — 사용자 훅·서버·규칙 보존 · 손으로 넣었던 lively 복원 · env 미끼 무접촉.
+  for (const member of [false, true]) {
+    const who = member ? "멤버 제거기" : "kit 제거기";
+    makeBundle();
+    freshHome({ hooks: { version: 1, hooks: { sessionStart: [USER_ENTRY] } }, mcp: { mcpServers: { notion: { url: "https://mcp.notion.com/mcp" }, lively: USER_LIVELY } }, cli: { permissions: { allow: ["Shell(git)"], deny: [] } } });
+    install();
+    const r = uninstall({ member });
+    const h = readJson(HOOKSFILE); const m = readJson(MCPFILE)?.mcpServers || {}; const p = readJson(CLICFG)?.permissions || {};
+    eq(`C13a[C13] ${who} exit 0`, r.status, 0);
+    eq(`C13b[C13] ${who} — 사용자 훅만 남음`, h?.hooks, { sessionStart: [USER_ENTRY] });
+    eq(`C13c[C13] ${who} — lively-local 제거 · notion 보존 · 손으로 넣은 lively 복원`, [m["lively-local"], m.notion?.url, m.lively], [undefined, "https://mcp.notion.com/mcp", USER_LIVELY]);
+    eq(`C13d[C13] ${who} — 승인 규칙은 사용자 것만`, p.allow, ["Shell(git)"]);
+    eq(`C13f[C13] ${who} — CURSOR_CONFIG_DIR·XDG 미끼 무접촉`, [digest(join(DECOY_CCD, "cli-config.json")), digest(join(DECOY_XDG, "cursor", "cli-config.json"))], DECOY_BEFORE);
+    // [C13e] 우리 엔트리뿐이던 hooks.json 은 지운다(설치↔제거 대칭).
+    freshHome(); install();
+    const r2 = uninstall({ member });
+    eq(`C13e[C13] ${who} — 우리 것만 있던 hooks.json 삭제`, [r2.status, existsSync(HOOKSFILE)], [0, false]);
+    // [C17] 설치 뒤 사용자가 mcpServers 를 깨뜨림 → 무수정({} 로 갈아끼우면 사용자 값이 사라진다).
+    freshHome(); install();
+    writeFileSync(MCPFILE, JSON.stringify({ mcpServers: "oops" }));
+    { const d = digest(MCPFILE); uninstall({ member }); eq(`C17[C17] ${who} — 깨진 mcpServers 무수정`, digest(MCPFILE), d); }
+  }
+
+  // [C15] 조직 MCP 서버(번들 mcp-servers.json) — stdio 는 명령을 나눠 싣고 · url 형은 보류 · 이름 규칙 밖·꺼진 것은 건너뛰고 ·
+  //  우리 이름(lively)은 못 덮는다. 조직이 뺀 서버는 다음 설치에서 원장으로 회수(사용자 서버 불가침).
+  makeBundle({ servers: [
+    { name: "gh", transport: "stdio", command: "npx -y @org/gh-mcp --ro" },
+    { name: "remote", transport: "http", url: "https://mcp.example.com/mcp" },
+    { name: "bad name!", transport: "stdio", command: "x" },
+    { name: "off", transport: "stdio", command: "y", enabled: false },
+    { name: "lively", transport: "stdio", command: "evil" },
+  ] });
+  freshHome({ mcp: { mcpServers: { notion: { url: "https://mcp.notion.com/mcp" } } } });
   install();
   {
-    const r = uninstall();
-    const h = readJson(HOOKSFILE); const m = readJson(MCPFILE)?.mcpServers || {}; const p = readJson(CLICFG)?.permissions || {};
-    eq("C13a[C13] 제거 exit 0", r.status, 0);
-    eq("C13b[C13] 사용자 훅만 남음", h?.hooks, { sessionStart: [USER_ENTRY] });
-    eq("C13c[C13] lively-local 제거 · notion 보존 · 손으로 넣은 lively 복원", [m["lively-local"], m.notion?.url, m.lively], [undefined, "https://mcp.notion.com/mcp", USER_LIVELY]);
-    eq("C13d[C13] 승인 규칙은 사용자 것만", p.allow, ["Shell(git)"]);
+    const m = readJson(MCPFILE)?.mcpServers || {};
+    eq("C15a[C15] stdio 조직 서버 = 명령 분해", m.gh, { type: "stdio", command: "npx", args: ["-y", "@org/gh-mcp", "--ro"] });
+    eq("C15b[C15] url 형·이름 위반·꺼짐은 안 실음 · 우리 이름 불가침", [m.remote, m["bad name!"], m.off, m.lively?.args], [undefined, undefined, undefined, ["mcp"]]);
   }
-  // [C13e] 우리 엔트리뿐이던 hooks.json 은 지운다(멤버용 자립 제거기 경로 — 설치↔제거 대칭).
-  freshHome(); install();
+  makeBundle({ servers: [] }); install();
   {
-    const r = uninstall({ member: true });
-    eq("C13e[C13] 멤버 제거기 — 우리 것만 있던 hooks.json 삭제", [r.status, existsSync(HOOKSFILE)], [0, false]);
+    const m = readJson(MCPFILE)?.mcpServers || {};
+    eq("C15c[C15] 조직이 뺀 서버 회수 · 사용자 서버·우리 서버 유지", [m.gh, m.notion?.url, m.lively?.args], [undefined, "https://mcp.notion.com/mcp", ["mcp"]]);
+  }
+  makeBundle();
+
+  // [C16] 모양이 틀린 사용자 파일 — 설치기는 셋 다 무수정(격리 리뷰 #8: 종전엔 우리 값으로 갈아끼웠다).
+  freshHome({ hooks: { version: 1, hooks: "oops" }, mcp: { mcpServers: ["x"] }, cli: { permissions: { allow: "oops" } } });
+  {
+    const before = [digest(HOOKSFILE), digest(MCPFILE), digest(CLICFG)];
+    install();
+    eq("C16a[C16] hooks 객체 아님 · mcpServers 배열 · allow 문자열 → 셋 다 무수정", [digest(HOOKSFILE), digest(MCPFILE), digest(CLICFG)], before);
+  }
+  for (const [tag, cli] of [["C16b", { permissions: "oops" }], ["C16c", { permissions: { allow: [], deny: "x" } }]]) {
+    freshHome({ cli });
+    const d = digest(CLICFG); install();
+    eq(`${tag}[C16] cli-config ${JSON.stringify(cli)} → 무수정`, digest(CLICFG), d);
+  }
+
+  // [C19] «우리 엔트리» 판정 다섯 벌(설치기·두 제거기·CLI·자가 업데이트)이 같은 표본에 같은 답을 낸다(격리 리뷰 #9).
+  //  자립 규약 때문에 사본이 다섯이다 — 하나라도 다르게 답하면 설치·제거·감지가 서로 다른 것을 «우리 것» 으로 본다.
+  {
+    const FILES = ["setup/user-install.mjs", "setup/user-uninstall.mjs", "adapters/cursor/uninstall.mjs", "cli/lively.mjs", "hooks/self-update.mjs"];
+    const LIT = /\/\[\/\\\\\]\\\.lively\[\/\\\\\]hooks\[\/\\\\\]cursor-adapter\\\.mjs(?:\\b)?\//g;
+    const SAMPLES = [
+      `"/opt/n/bin/node" "/home/u/.lively/hooks/cursor-adapter.mjs" stop`,
+      `node "C:/Users/u/.lively/hooks/cursor-adapter.mjs" preToolUse`,
+      `node C:\\Users\\u\\.lively\\hooks\\cursor-adapter.mjs stop`,
+      `node /x/.lively/hooks/cursor-adapter.mjsx stop`,
+      `node /x/lively/hooks/cursor-adapter.mjs stop`,
+      `./hooks/format.sh`,
+    ];
+    const vectors = FILES.map((f) => {
+      const lits = [...readFileSync(join(KIT, f), "utf8").matchAll(LIT)].map((m) => m[0]);
+      return [f, lits.length, lits.map((l) => SAMPLES.map((x) => (new RegExp(l.slice(1, -1)).test(x) ? "1" : "0")).join(""))];
+    });
+    eq("C19a[C19] 다섯 곳 모두 판정 정규식이 있다", vectors.filter(([, n]) => n < 1).map(([f]) => f), []);
+    const all = vectors.flatMap(([, , v]) => v);
+    eq("C19b[C19] 다섯 곳이 같은 답(표본 6개)", [...new Set(all)].length === 1 ? all[0] : vectors.map(([f, , v]) => `${f}=${v.join("/")}`), "111000");
   }
   // [C14] 실 홈·미끼 무접촉.
   eq("C14a[C14] 실 ~/.cursor 무접촉", REAL.map(digest), REAL_BEFORE);
@@ -175,6 +241,11 @@ try {
   eq("D5[D5] 파일 없음 → 만들지 않음", [reconcileCursorAutoApprove(DIR, ["mcp__lively__whoami"], F), existsSync(F)], [false, false]);
   writeFileSync(F, JSON.stringify({ permissions: { allow: "notalist" } }));
   { const d = digest(F); eq("D6[D6] allow 가 배열 아님 → 손대지 않음", [reconcileCursorAutoApprove(DIR, ["mcp__lively__whoami"], F), digest(F)], [false, d]); }
+  for (const [tag, cfg] of [["D6b", { permissions: "oops" }], ["D6c", { permissions: { allow: [], deny: "x" } }]]) {
+    writeFileSync(F, JSON.stringify(cfg));
+    const d = digest(F);
+    eq(`${tag}[D6] ${JSON.stringify(cfg)} → 손대지 않음(설치기와 같은 규칙)`, [reconcileCursorAutoApprove(DIR, ["mcp__lively__whoami"], F), digest(F)], [false, d]);
+  }
   writeFileSync(F, JSON.stringify({ permissions: { allow: ["Shell(ls)"], deny: [] } }));
   eq("D7a[D7] 정상 → 반영", [reconcileCursorAutoApprove(DIR, ["mcp__lively__whoami", "mcp__notion__x"], F), readJson(F)?.permissions?.allow], [true, ["Shell(ls)", "Mcp(lively:whoami)"]]);
   { const d = digest(F); eq("D7b[D7] 변화 없음 → 무기록", [reconcileCursorAutoApprove(DIR, ["mcp__lively__whoami"], F), digest(F)], [false, d]); }

@@ -286,14 +286,17 @@ export function reconcileCodexAutoApprove(want) {
 //  (managed-cursor-permission.json) — 둘이 다른 원장을 쓰면 한쪽이 넣은 규칙을 다른 쪽이 영영 못 걷는다.
 //  ⚠ 파일이 없으면 만들지 않는다 — CLI 가 첫 실행에 스스로 만든다(만들어진 뒤의 세션이 채운다). IDE 의 승인 허용목록은
 //   파일 표면이 없어 여기서 못 다룬다(정직 표기 — 지식 cursor-harness-judgment-4927).
-//  ⚠ 타입이 틀리면 CLI 가 파일을 .bad 로 옮기고 기본값으로 갈아끼운다(실측) — allow 가 배열이 아니면 손대지 않는다.
+//  ⚠ 타입이 틀리면 CLI 가 파일을 .bad 로 옮기고 기본값으로 갈아끼운다(실측) — permissions 가 객체가 아니거나 allow·deny 가
+//   배열이 아니면 손대지 않는다(user-install mergeCursorPermissions 와 같은 규칙).
 export function reconcileCursorAutoApprove(dir, want, file = harness("cursor").autoApprove.file(homedir())) {
   try {
     if (!existsSync(file)) return false;
     let cur; try { cur = JSON.parse(readFileSync(file, "utf8")); } catch { return false; }
     if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
-    const perms = (cur.permissions && typeof cur.permissions === "object" && !Array.isArray(cur.permissions)) ? cur.permissions : {};
-    if (perms.allow !== undefined && !Array.isArray(perms.allow)) return false;
+    const p0 = cur.permissions;
+    if (p0 !== undefined && (!p0 || typeof p0 !== "object" || Array.isArray(p0))) return false;   // 객체가 아니면 손대지 않는다(설치기와 같은 규칙)
+    const perms = p0 || {};
+    if ((perms.allow !== undefined && !Array.isArray(perms.allow)) || (perms.deny !== undefined && !Array.isArray(perms.deny))) return false;
     const allow = Array.isArray(perms.allow) ? perms.allow : [];
     const rules = [];
     for (const full of want) { const p = managedAutoApproveParts(full); if (p) rules.push(`Mcp(${p.server}:${p.tool})`); }

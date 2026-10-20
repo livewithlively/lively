@@ -1358,28 +1358,31 @@ const cursorHookCmd = (event) => WIN
   : `"${NODEBIN}" "${hookAbs(CURSOR_ADAPTER)}" ${event}`;
 
 // 배선할 Cursor 이벤트와 timeout(초). 어댑터가 받는 argv 는 **Cursor 이벤트 이름 그대로**다(번역은 어댑터 몫).
-//  timeout 은 어댑터 내부 러너 타임박스 합보다 넉넉히 — 초과하면 Cursor 가 훅을 죽이고 fail-open 으로 넘어간다
-//  (권한 훅인 preToolUse 도 failClosed 를 켜지 않는 한 그렇다 — 우리는 켜지 않는다: 배선 고장이 곧 장애가 되면 안 된다).
+//  timeout 은 어댑터의 시간 예산(러너 타임박스 합 + stdin — cursor-adapter.mjs BUDGET_MS)보다 넉넉히. 초과하면 Cursor 가
+//  훅을 죽이고 fail-open 으로 넘어간다(권한 훅인 preToolUse 도 failClosed 를 켜지 않는 한 그렇다 — 우리는 켜지 않는다:
+//  배선 고장이 곧 장애가 되면 안 된다). 두 표의 대조는 cursor-adapter 시험 P5 가 고정한다.
 //  beforeMCPExecution 은 MCP 툴의 org 훅 자리다 — preToolUse 엔 MCP 서버 이름이 없다(`MCP:<툴>` — 번들 실측).
 export const CURSOR_HOOK_EVENTS = [
   ["sessionStart", 75],
-  ["sessionEnd", 15],
+  ["sessionEnd", 20],
   ["beforeSubmitPrompt", 25],
   ["preToolUse", 25],
   ["beforeMCPExecution", 25],
   ["postToolUse", 25],
   ["stop", 40],
-  ["subagentStop", 20],
-  ["preCompact", 20],
+  ["subagentStop", 25],
+  ["preCompact", 25],
 ];
 
 // (순수) 사용자 hooks.json + 우리 엔트리 → 새 hooks.json. 우리 엔트리는 **전부 걷고** 다시 넣는다(어느 세대 표기든).
 //  사용자 엔트리·다른 최상위 키(version 등)는 그대로. 값이 배열이 아닌 이벤트 키(손상)는 건드리지 않고 그 이벤트만 건너뛴다.
 //  두 번 돌려도 결과가 같다(멱등) — 우리 엔트리는 늘 각 이벤트 배열의 끝에 한 벌.
+//  `hooks` 가 있는데 객체가 아니면 next=null — 손대지 않는다(우리가 {} 로 갈아끼우면 사용자 값이 조용히 사라진다 — 격리 리뷰 #8).
 export function mergeCursorHooks(cur, entries) {
   const base = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
+  if (base.hooks !== undefined && (!base.hooks || typeof base.hooks !== "object" || Array.isArray(base.hooks))) return { next: null, skipped: [] };
   if (base.version === undefined) base.version = 1;
-  const hooks = (base.hooks && typeof base.hooks === "object" && !Array.isArray(base.hooks)) ? { ...base.hooks } : {};
+  const hooks = { ...(base.hooks || {}) };
   const skipped = [];
   for (const [ev, arr] of Object.entries(hooks)) {
     if (!Array.isArray(arr)) continue;
@@ -1393,11 +1396,6 @@ export function mergeCursorHooks(cur, entries) {
   }
   base.hooks = hooks;
   return { next: base, skipped };
-}
-
-// (순수) 우리 엔트리만 걷는다 — 제거기와 같은 규칙(설치↔제거 대칭). 비게 된 이벤트 키는 지운다.
-export function stripCursorHooks(cur) {
-  return mergeCursorHooks(cur, []).next;
 }
 
 function cursorHookEntries() {
@@ -1415,6 +1413,7 @@ function cursorMergeHooks() {
   const cur = readJsonOrNull(CURSOR_HOOKS);
   if (cur === null) { console.warn("  ⚠️ ~/.cursor/hooks.json 을 JSON 객체로 못 읽음 — 훅 배선 건너뜀(기존 파일 무수정). 파일을 고친 뒤 다시 설치하세요."); return; }
   const { next, skipped } = mergeCursorHooks(cur, cursorHookEntries());
+  if (next === null) { console.warn("  ⚠️ ~/.cursor/hooks.json 의 hooks 가 객체가 아님 — 훅 배선 건너뜀(기존 파일 무수정)."); return; }
   if (skipped.length) console.warn(`  ⚠️ ~/.cursor/hooks.json 의 ${skipped.join(", ")} 값이 배열이 아님 — 그 이벤트만 배선 건너뜀(사용자 값 보존).`);
   if (JSON.stringify(next) === JSON.stringify(cur)) { console.log("  · ~/.cursor/hooks.json — 변화 없음(이미 최신 배선)"); return; }
   if (existsSync(CURSOR_HOOKS)) {
@@ -1460,9 +1459,11 @@ function cursorMcpServers() {
 // (순수) 사용자 mcp.json + 우리 서버 + 지난번 우리 이름 → 새 mcp.json. 지난번에 넣었는데 이번에 없는 이름만 회수한다.
 //  사용자가 직접 넣은 다른 이름은 불가침. ⚠ 우리 이름과 같은 사용자 항목(예: 손으로 넣은 url 형 `lively`)은 덮는다 —
 //  정본은 stdio 프록시다. 덮기 전 값은 호출부가 원장(cursor-mcp-user-backup.json)에 **최초 1회** 남겨 제거 때 되돌린다.
+//  `mcpServers` 가 있는데 객체가 아니면 null — 손대지 않는다(훅·승인 머지와 같은 규칙).
 export function mergeCursorMcp(cur, servers, prevManaged) {
   const base = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
-  const ms = (base.mcpServers && typeof base.mcpServers === "object" && !Array.isArray(base.mcpServers)) ? { ...base.mcpServers } : {};
+  if (base.mcpServers !== undefined && (!base.mcpServers || typeof base.mcpServers !== "object" || Array.isArray(base.mcpServers))) return null;
+  const ms = { ...(base.mcpServers || {}) };
   const want = new Set(Object.keys(servers));
   for (const name of prevManaged || []) if (!want.has(name)) delete ms[name];
   for (const [name, entry] of Object.entries(servers)) ms[name] = entry;
@@ -1476,6 +1477,7 @@ function cursorMergeMcp() {
   const cur = readJsonOrNull(CURSOR_MCP);
   if (cur === null) { console.warn("  ⚠️ ~/.cursor/mcp.json 을 JSON 객체로 못 읽음 — MCP 등록 건너뜀(기존 파일 무수정)."); return; }
   const servers = cursorMcpServers();
+  if (mergeCursorMcp(cur, servers, []) === null) { console.warn("  ⚠️ ~/.cursor/mcp.json 의 mcpServers 가 객체가 아님 — MCP 등록 건너뜀(기존 파일 무수정)."); return; }
   const ledgerPath = join(LIVELY, "managed-cursor-mcp.json");
   let prev = []; try { prev = JSON.parse(readFileSync(ledgerPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* 첫 설치 */ }
   // 우리 이름과 같은 **사용자** 항목을 덮기 전에 최초 1회 스냅샷(제거 때 되돌린다 — mcp-register 의 USER_BACKUP 과 동형).
@@ -1503,17 +1505,22 @@ function cursorMergeMcp() {
 }
 
 // (순수) cli-config.json permissions.allow reconcile — 우리가 넣었다 뺀 것만 회수, 사용자 규칙 보존(claude·agy 와 동형).
+//  모양이 틀리면(permissions 가 객체가 아님 · allow/deny 가 배열이 아님) **null — 손대지 않는다**. CLI 는 타입이 틀린 파일을
+//  .bad 로 옮기고 기본값으로 갈아끼운다(번들 실측) — 우리가 «고쳐» 쓰면 그 값이 조용히 사라진다(격리 리뷰 #8, session-preload
+//  reconcileCursorAutoApprove 와 같은 규칙). 없는 deny 는 채운다(CLI 가 요구하는 키 — 덮어쓰는 것이 아니다).
 export function mergeCursorPermissions(cur, want, prev) {
-  const base = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
-  const perms = (base.permissions && typeof base.permissions === "object" && !Array.isArray(base.permissions)) ? { ...base.permissions } : {};
-  const allow = Array.isArray(perms.allow) ? perms.allow : [];
+  if (!cur || typeof cur !== "object" || Array.isArray(cur)) return null;
+  const p0 = cur.permissions;
+  if (p0 !== undefined && (!p0 || typeof p0 !== "object" || Array.isArray(p0))) return null;
+  const perms = { ...(p0 || {}) };
+  if ((perms.allow !== undefined && !Array.isArray(perms.allow)) || (perms.deny !== undefined && !Array.isArray(perms.deny))) return null;
+  const allow = perms.allow || [];
   const wantSet = new Set(want); const prevSet = new Set(prev || []);
   const next = allow.filter((e) => !(prevSet.has(e) && !wantSet.has(e)));
   for (const e of want) if (!next.includes(e)) next.push(e);
   perms.allow = next;
-  if (!Array.isArray(perms.deny)) perms.deny = [];
-  base.permissions = perms;
-  return base;
+  if (!perms.deny) perms.deny = [];
+  return { ...cur, permissions: perms };
 }
 
 // auto-approve(Cursor CLI) — 두 Lively 서버 도구를 CLI 규칙 문법 `Mcp(<server>:<tool>)` 로 옮겨 반영한다.
@@ -1531,6 +1538,7 @@ function cursorMergePermissions() {
   const prevPath = join(LIVELY, "managed-cursor-permission.json");
   let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
   const next = mergeCursorPermissions(cur, want, prev);
+  if (next === null) { console.warn("  ⚠️ Cursor cli-config.json 의 permissions 모양이 예상과 다름(객체·배열 아님) — 승인 머지 건너뜀(기존 파일 무수정)."); return; }
   try {
     const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
     copyFileSync(CURSOR_CLI_CONFIG, join(backupDir, "cursor-cli-config.json.bak"));
