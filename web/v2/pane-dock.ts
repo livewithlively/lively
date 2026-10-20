@@ -41,6 +41,7 @@ import { appMatches, appRank } from '../lib/app-match.js';
 import { openLaunchpad } from './apps.js';
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { listSessionApps, type SessionApp } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import {
   DOCK_DEFAULTS, DOCK_METRICS, DOCK_MIN, MAG_GROW, SCALE_PRESETS, appColor, dockClick, dockInset, dockItems, dockPins, dockThickness, dragScale, effectiveHome, fitIconSize, floatAt, floatCenter, floatIconSize,
   magnify, movePinBefore, pinSlot, placeDock, readDockPrefs, scaledIcon, togglePin, writeDockPins, writeDockPrefs,
@@ -963,11 +964,11 @@ export function mountDock(host: DockHost): DockHandle {
       }))) : null;
       //  ② 이 세션에 붙일 앱 — 화면이 있거나 AI 가 쓸 데이터가 있는 설치 앱(시스템 앱 제외). 붙으면 곁칸에 그 앱 탭이 선다.
       const sid = host.curSession();
-      const att = (sApps ?? []).filter((a) => a.id !== 'ai-session' && !a.system && (a.pages.length > 0 || a.tables.length > 0));
+      const att = (sApps ?? []).filter((a) => a.id !== 'ai-session' && !a.system && (hasAppScreen(a) || a.tables.length > 0));
       const attQ = byQ(att.map((a) => ({ ...a, desc: a.id })));
       const secAtt = !host.attach ? null : sApps === null ? section('이 세션에 붙이기', '불러오는 중…', [])
         : attQ.length ? section('이 세션에 붙이기', sid ? 'AI 도 같이 써요 · 누르면 사이드바에 붙어요' : '세션을 열면 붙일 수 있어요', attQ.map((a) => tileBtn({
-          ic: appGlassIcon(installedAppFace({ id: a.id, hasUi: a.pages.length > 0, icon: a.icon })), name: a.title, off: !sid,
+          ic: appGlassIcon(installedAppFace({ id: a.id, hasUi: hasAppScreen(a), icon: a.icon })), name: a.title, off: !sid,
           hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요` : '세션을 열면 붙일 수 있어요',
           onClick: () => { close(); void host.attach?.({ id: a.id, title: a.title }); },
         }))) : null;

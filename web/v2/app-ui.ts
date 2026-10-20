@@ -100,7 +100,9 @@ function addrBlockedHere(): boolean { try { return addrBlockValid(localStorage.g
 function markAddrBlocked(): void { try { localStorage.setItem(ADDR_BLOCK_KEY, JSON.stringify({ ua: navigator.userAgent, at: Date.now() })); } catch (_) { /* 저장소가 막혀도 이번 화면은 srcdoc 으로 바뀐다 */ } }
 /** 이 워크스페이스·이 브라우저에서 앱을 앱 주소로 띄우나. */
 export function appAddressOn(): boolean { return !!(state.me && state.me.app_domain) && !addrBlockedHere(); }
-interface AppLaunch { url: string; origin: string; page_key?: string; title?: string; variant?: 'pub' | 'draft'; devices?: string[] }
+interface AppLaunch { url: string; origin: string; page_key?: string | null; title?: string; variant?: 'pub' | 'draft'; devices?: string[];
+  /** #4485 후속 — 인사가 없을 때 바꿔 띄울 종전 화면(화면 파일)이 있나. false = 서버가 화면을 만드는 앱(화면 파일 없음) · 없으면(옛 게이트웨이) 있다고 본다. */
+  fallback?: boolean }
 
 function launchEmbed(appId: string, next: string): Promise<AppLaunch> {
   return api('/api/ui/apps/' + encodeURIComponent(appId) + '/launch', { method: 'POST', body: JSON.stringify({ mode: 'embed', next }) }) as Promise<AppLaunch>;
@@ -203,6 +205,8 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
 
   //  인사 감시(#4480) — 앱 주소로 띄운 문서가 정해진 시간 안에 `ui/initialize` 로 인사하지 않으면 그 자리에서 종전 srcdoc 으로 바꾼다.
   //   앱 주소의 앞단·코어가 서빙하는 앱 문서는 SDK 런타임을 머리에 달고 있고 런타임은 실리자마자 인사한다(app-ui-runtime.ts api.ready).
+  //   앱 서버가 만든 문서도 게이트웨이가 런타임을 넣는다(#4485 후속 · src/apps/app-server-page.ts). 바꿔 띄울 화면 파일이 없는 앱
+  //   (launch.fallback === false — 서버가 화면을 만드는 앱)은 바꾸지 않고 그 자리에 둔다(앞단 · 서버의 오류 화면이 그대로 보인다).
   //   그러니 «떴는데 말이 없다» 는 그 길이 막혔다는 뜻이다 — 앞단의 오류 화면(404·503), DNS·인증서 문제, 게이트웨이 장애 같은 것.
   //   그런 실패는 postMessage 신호를 내지 못해(오류 화면·브라우저 오류 화면) 감시가 없으면 깨진 칸이 그대로 남는다.
   //   이 브라우저를 «막힘» 으로 적지는 않는다 — 쿠키 문제가 아니라 그 순간의 장애일 수 있다(다음에 열면 다시 앱 주소로 시도한다).
@@ -260,8 +264,14 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
       .then((l) => { if (!appOrigin) return; appOrigin = l.origin; armHello(); frame.src = l.url; })
       .catch(() => { void toSrcdoc(); });
   };
+  const noFallback = launch?.fallback === false;
   onSilent = (): void => {
     if (!appOrigin || greeted) return;
+    if (noFallback) {
+      clearHello();
+      console.warn('[app-ui] 앱 주소 문서가 인사하지 않았지만 바꿔 띄울 종전 화면이 없어 그대로 둡니다 —', appId);
+      return;
+    }
     console.warn('[app-ui] 앱 주소 문서가 인사하지 않아 종전 화면(srcdoc)으로 바꿉니다 —', appId);
     void toSrcdoc();
   };
