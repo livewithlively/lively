@@ -31,7 +31,7 @@ const { resolveAppServerPrincipal } = await import(`${D}/apps/app-server-auth.js
 const { setAppServerPolicy, appServerPolicy } = await import(`${D}/apps/app-server-store.js`);
 const { appJobCapabilities } = await import(`${D}/capabilities/app-jobs.js`);
 const { parseJobCredential, jobCredential } = await import(`${D}/apps/app-jobs-plan.js`);
-const { removeServer } = await import(`${D}/apps/app-server-lifecycle.js`);
+const { removeServer, retireServer } = await import(`${D}/apps/app-server-lifecycle.js`);
 const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
 const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
 
@@ -194,6 +194,31 @@ try {
   const r3d = await jobRow(j3d.id);
   chk("C3d 짝 없는 서로게이트가 든 JSON 결과 — done · 결과는 글(또는 base64)로 남는다", f3d.status === "done" && r3d.status === "done" && (typeof r3d.result?.text === "string" || typeof r3d.result?.base64 === "string") && r3d.result?.json === undefined,
     JSON.stringify(r3d.result));
+  //  C3e 다시 적기 갈래만 — 판정이 못 거른 무언가로 Postgres 가 결과 칸을 거절하면(데이터 예외 22xxx) base64 꼴로 한 번 더 적어 끝낸다.
+  //   임시 트리거가 json 결과를 22P02 로 거절하게 해 판정 층을 지나 이 갈래만 탄다. 22xxx 가 아닌 오류(40001)는 그대로 던지고 줄은 running 이다.
+  const trig = async (code) => q(`CREATE OR REPLACE FUNCTION pgt_reject_json() RETURNS trigger LANGUAGE plpgsql AS $f$
+      BEGIN IF NEW.result ? 'json' THEN RAISE EXCEPTION 'pgt reject' USING ERRCODE = '${code}'; END IF; RETURN NEW; END $f$;
+    DROP TRIGGER IF EXISTS pgt_reject_json ON org_app_job;
+    CREATE TRIGGER pgt_reject_json BEFORE UPDATE ON org_app_job FOR EACH ROW EXECUTE FUNCTION pgt_reject_json();`);
+  const okJson = { outcome: "response", status_code: 200, content_type: "application/json", body_b64: Buffer.from('{"ok":true}').toString("base64"), truncated: false, bytes: 11, duration_ms: 7 };
+  try {
+    await trig("22P02");
+    const j3e = await start({});
+    const c3e = await claimOf(j3e.id);
+    const f3e = await finish(j3e.id, okJson, c3e.run);
+    const r3e = await jobRow(j3e.id);
+    await trig("40001");
+    const j3f = await start({});
+    const c3f = await claimOf(j3f.id);
+    const err3f = await errOf(finish(j3f.id, okJson, c3f.run));
+    const r3f = await jobRow(j3f.id);
+    chk("C3e 결과 칸을 Postgres 가 거절(22P02) → base64 꼴로 다시 적어 done · 22xxx 가 아니면(40001) 던지고 running 그대로",
+      f3e.status === "done" && r3e.status === "done" && r3e.result?.json === undefined && r3e.result?.base64 === okJson.body_b64 && r3e.result?.status_code === 200
+        && err3f?.code === "40001" && r3f.status === "running",
+      JSON.stringify({ r3e: r3e.result, e: err3f?.code, s: r3f.status }));
+  } finally {
+    await q(`DROP TRIGGER IF EXISTS pgt_reject_json ON org_app_job; DROP FUNCTION IF EXISTS pgt_reject_json();`);
+  }
 
   // ── C5 동시 상한 — 앱 2 · 워크스페이스 3 · 넘는 것은 줄 · 하나 끝나면 다음을 부름 ──
   await resetJobs();
@@ -425,8 +450,27 @@ try {
     revokeFunctionTokens: async () => 0,
   });
   const s14b = slipped ? (await jobRow(Number(slipped))) : null;
-  chk("C14b 함수를 지우는 사이에 들어온 작업 — 지운 뒤 failed(줄로 남아 대기 초과까지 기다리지 않는다)", !!s14b && s14b.status === "failed" && /지워/.test(s14b.error),
-    JSON.stringify({ slipped, s: s14b?.status }));
+  const body14b = slipped ? (await q(`SELECT body FROM org_app_job WHERE id=$1`, [slipped]))[0].body : null;
+  chk("C14b 함수를 지우는 사이에 들어온 작업 — 지운 뒤 failed(줄로 남아 대기 초과까지 기다리지 않는다) · 요청 본문도 비운다",
+    !!s14b && s14b.status === "failed" && /지워/.test(s14b.error) && body14b === "", JSON.stringify({ slipped, s: s14b?.status, body14b }));
+  //  C14c 걷기(서버 선언을 뺀 채 오래된 앱)도 같다 — 함수를 지우는 사이에 들어온 작업을 줄을 지운 뒤 끝낸다.
+  await mkApp("gone3");
+  let slipped3 = null;
+  const ret3 = await retireServer("gone3", async () => true, {
+    env: deps.env(),
+    api: {
+      getFunction: async () => ({ Tags: { "lvly:tenant": SINGLE_TENANT_ID } }),
+      deleteFunction: async () => {
+        slipped3 = (await q(`INSERT INTO org_app_job(app_id, status, requester, variant, alias, function_name, lambda_version, route, body, timeout_s)
+                              VALUES ('gone3','queued','pgt-alice','pub','cur','lvly-app-gone3-ws','3','/r','{}',900) RETURNING id`))[0].id;
+      },
+      deleteLogGroup: async () => {},
+    },
+    revokeFunctionTokens: async () => 0,
+  });
+  const s14c = slipped3 ? (await jobRow(Number(slipped3))) : null;
+  chk("C14c 걷는 사이에 들어온 작업 — 걷은 뒤 failed", ret3.retired === true && !!s14c && s14c.status === "failed" && /서버 선언/.test(s14c.error),
+    JSON.stringify({ ret3, s: s14c?.status }));
 
   // ── C15 새로 도입한 칸 부재 — 작업의 토큰 칸이 비어도 핀에 빈 값이 없다 ──
   await resetJobs();

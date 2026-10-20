@@ -192,7 +192,9 @@ export function normalizeResultReport(raw: unknown): JobResultReport {
     const buf = Buffer.from(b64, "base64");
     if (buf.length > JOB_RESULT_MAX) { body = buf.subarray(0, JOB_RESULT_MAX).toString("base64"); truncated = true; }
   }
-  const ct = typeof o.content_type === "string" ? o.content_type.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200) : null;
+  //  머리글 값은 ASCII 다 — 보이는 글자 · 빈칸만 남긴다(제어문자 · 그 밖의 글자는 정직한 검사 층에선 나올 수 없고, 보고를 꾸민 앱이 넣으면
+  //   잘린 서로게이트가 jsonb 를 깨 결과 기록이 통째로 실패한다 · 격리 리뷰).
+  const ct = typeof o.content_type === "string" ? o.content_type.replace(/[^\x20-\x7e]/g, "").slice(0, 200) : null;
   return {
     outcome, status_code: int(o.status_code, 100, 599), content_type: ct || null, body_b64: body, truncated,
     bytes: int(o.bytes, 0, Number.MAX_SAFE_INTEGER), duration_ms: int(o.duration_ms, 0, 7 * 24 * 3600 * 1000),

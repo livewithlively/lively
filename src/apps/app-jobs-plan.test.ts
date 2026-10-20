@@ -103,6 +103,10 @@ test("B9 결과 보고 다듬기 — 모르는 끝은 guard_error · 상태 범�
   const edge = normalizeResultReport({ outcome: "response", body_b64: Buffer.alloc(JOB_RESULT_MAX, 65).toString("base64") });
   assert.equal(edge.truncated, false, "경계 — 정확히 64KB");
   assert.equal(normalizeResultReport({ outcome: "response", content_type: "text/plain\r\nx: y" }).content_type, "text/plainx: y");
+  //  ASCII 밖 글자는 걷는다 — 200자에서 자르다 이모지 가운데가 남으면(짝 없는 서로게이트) jsonb 가 결과를 통째로 거절한다.
+  const cut = normalizeResultReport({ outcome: "response", content_type: "x".repeat(199) + "😀" }).content_type!;
+  assert.equal(cut, "x".repeat(199));
+  assert.equal(normalizeResultReport({ outcome: "response", content_type: "text/plain; charset=utf-8" }).content_type, "text/plain; charset=utf-8");
   assert.equal(normalizeResultReport({ outcome: "response", duration_ms: -1 }).duration_ms, null);
 });
 
@@ -154,10 +158,12 @@ test("B11b 결과 보기 — NUL(U+0000)이 든 응답은 글 · JSON 으로 두
   const lone = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"t":"x\\ud83d","n":1}') }));
   assert.equal(lone?.json, undefined, "짝 없는 서로게이트");
   assert.equal(lone?.text, '{"t":"x\\ud83d","n":1}');
+  const low = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"t":"\\ude00"}') }));
+  assert.equal(low?.json, undefined, "짝 없는 낮은 서로게이트도");
   const pair = resultViewOf(rep({ content_type: "application/json", body_b64: b('{"e":"\\ud83d\\ude00"}') }));
   assert.deepEqual(pair?.json, { e: "😀" }, "짝 맞는 서로게이트는 json 그대로");
   //  저장되는 꼴(jsonb 로 갈 JSON 글)에 NUL · 짝 없는 서로게이트 이스케이프가 없어야 한다 — 모든 경우.
-  for (const v of [raw, esc, lit, lone, pair]) assert.doesNotMatch(JSON.stringify(v), /(?:^|[^\\])(?:\\\\)*\\u(?:0000|d[89a-f][0-9a-f]{2})/, JSON.stringify(v));
+  for (const v of [raw, esc, lit, lone, low, pair]) assert.doesNotMatch(JSON.stringify(v), /(?:^|[^\\])(?:\\\\)*\\u(?:0000|d[89a-f][0-9a-f]{2})/, JSON.stringify(v));
   //  실패 오류 글(응답 앞부분)에도 NUL · 제어문자가 없다.
   const f = endOf(rep({ status_code: 500, body_b64: b("bad\u0000thing\u0007here") }), { timeoutSec: 900, cancelRequested: false });
   assert.match(f.error!, /500 로 답했습니다 — bad thing here/);

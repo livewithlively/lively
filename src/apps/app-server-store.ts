@@ -364,6 +364,8 @@ export async function setServerAlias(appId: string, alias: AliasName, v: { versi
   //  #4486 검사 층 판은 따로 적는다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 공용 DB 마이그레이션을 맨 끝에 돌린다(약 5분 · 지식
   //   roll-order-migrate-after-gw-swap-auth-outage-2026-10-20). 그 사이 칸이 없다고 위 문장까지 실패하면 AWS 별칭은 옮겼는데 줄은 옛 판이고,
   //   배포의 실패 길이 새 판에 구운 토큰을 회수해 그 앱 서버가 다음 배포까지 401 이 된다. 칸이 없으면 비워 둔다(작업은 다음 배포까지 «다시 올려야» 409).
+  //   ⚠ 롤 순서(마이그레이션 먼저 · 교대 나중)가 고쳐지면 이 42703 예외는 걷는다 — 남겨 두면 마이그레이션이 조용히 실패한 때 오류를 가린다.
+  //   위 문장(별칭 · 판 · 토큰)에 새 칸을 더할 때마다 같은 창이 다시 열린다 — 새 칸은 이렇게 따로 적는다.
   await itemsPool.query(`UPDATE org_app_server SET ${c}_guard=$2 WHERE app_id=$1`, [appId, v.guard ?? null]).catch((err: unknown) => {
     if ((err as { code?: unknown })?.code !== "42703") throw err;   // undefined_column — 마이그레이션 전
     logger.warn({ app: appId, alias: c }, "검사 층 판 칸이 아직 없다(공용 DB 마이그레이션 전) — 비워 둔다(#4486)");

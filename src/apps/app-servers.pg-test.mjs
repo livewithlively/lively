@@ -2466,18 +2466,37 @@ for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "
   await q(`UPDATE org_app_job SET status='failed', ended_at=now() WHERE id=$1`, [jid4]);
   //  J9 공용 DB 마이그레이션 전(검사 층 판 칸이 아직 없다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 마이그레이션을 맨 끝에 돌린다)에 배포해도
   //   별칭 · 판 · 토큰은 맞게 적히고 칸만 빈다. 칸 탓에 별칭 기록이 실패하면 실패 길이 새 판에 구운 토큰을 회수해 앱 서버가 401 이 된다.
+  //   실제 창엔 작업 표(org_app_job)도 없다 — 배포 쪽 작업 핀 읽기는 모두 비치명이어야 한다(잠깐 이름을 바꿔 둔다).
   await q(`ALTER TABLE org_app_server DROP COLUMN cur_guard, DROP COLUMN pub_guard`);
+  await q(`ALTER TABLE org_app_job RENAME TO org_app_job_pgt_hidden`);
   let dj9, rj9, toks9;
   try {
     await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j9')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
     dj9 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
     rj9 = await rowOf(ID);
     toks9 = await fnTokens(ID);
-  } finally { await q(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT, ADD COLUMN IF NOT EXISTS pub_guard INT`); }
+  } finally {
+    await q(`ALTER TABLE org_app_job_pgt_hidden RENAME TO org_app_job`);
+    await q(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT, ADD COLUMN IF NOT EXISTS pub_guard INT`);
+  }
   chk("J9 ★ 검사 층 판 칸이 없는(마이그레이션 전) 배포 — 별칭 · 판 · 토큰은 적히고 그 토큰은 살아 있다",
     dj9?.status === "deployed" && rj9?.cur_lambda_version !== rj4.cur_lambda_version && rj9?.cur_lambda_version === fns.get(FNJ).aliases.get("cur")
       && toks9.some((t) => t.token_hash === rj9.cur_token_hash && !t.revoked_at) && !("cur_guard" in rj9),
     JSON.stringify({ s: dj9?.status, err: dj9?.error, v: rj9?.cur_lambda_version, alias: fns.get(FNJ).aliases.get("cur"), before: rj4.cur_lambda_version }));
+  //  J9b 검사 층 판 칸 쓰기가 «칸 없음» 이 아닌 오류로 실패하면 배포는 실패로 끝나지만, 별칭 · 판 · 토큰은 첫 문장으로 이미 적혔고
+  //   실패 길은 그 줄(새 토큰)을 남긴다 — 새 판에 구운 토큰이 회수되어 앱 서버가 401 이 되지 않는다.
+  await q(`ALTER TABLE org_app_server ADD CONSTRAINT pgt_guard_neg CHECK (cur_guard IS NULL OR cur_guard < 0)`);
+  let dj9b, rj9b, toks9b;
+  try {
+    await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j9b')).listen(Number(process.env.PORT));", decl: { memory_mb: 2048, tmp_mb: 1024 } }) }, alice, aliceCtx);
+    dj9b = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
+    rj9b = await rowOf(ID);
+    toks9b = await fnTokens(ID);
+  } finally { await q(`ALTER TABLE org_app_server DROP CONSTRAINT IF EXISTS pgt_guard_neg`); }
+  chk("J9b 검사 층 판 칸이 다른 오류(23514)로 실패 — 배포 실패 · 별칭 · 판 · 새 토큰은 맞고 그 토큰은 살아 있다",
+    dj9b?.status === "failed" && rj9b?.cur_lambda_version === fns.get(FNJ).aliases.get("cur") && rj9b?.cur_lambda_version !== rj9?.cur_lambda_version
+      && toks9b.some((t) => t.token_hash === rj9b.cur_token_hash && !t.revoked_at),
+    JSON.stringify({ s: dj9b?.status, v: rj9b?.cur_lambda_version, alias: fns.get(FNJ).aliases.get("cur") }));
   await q(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(savedPol)]);
   await call("org_app_remove", { app_id: ID }, boss);
 }
