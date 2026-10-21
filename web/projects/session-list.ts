@@ -6,6 +6,10 @@
 //   · 무엇을: 지금 스코프(리스트 · 폴더 · 전체) 안 프로젝트들의 **세션**. 열 = 세션 · 프로젝트 · 상태 · 사람 · 생성 시각 · 마지막 활동.
 //   · 위 세 층(브레드크럼 · 뷰 탭 · 툴바)은 보드 것. 「그룹」 단추가 세션 묶기 기준을 고르고, 툴바 검색이 세션 이름 · 프로젝트 이름에 걸린다.
 //   · 재료: 셸과 **같은 함수**(v2/sess-merge.ts mergeSessions)로 라이브 + 기록을 한 목록으로 접는다. 거르기 · 묶기 · 정렬 잣대는 lib/sess-all.ts.
+//  3판(원준 2026-10-21 «프로젝트 자체는 모두가 다 들어가서 볼 수 있어야 · 세션에 들어갈 순 없더라도 프로젝트는 리스트에서 모두가 다 볼 수 있었으면»):
+//   세션 목록은 **내가 볼 수 있는 세션**만 준다(남의 세션은 초대받은 것만). 그래서 남이 만든 프로젝트 대부분이 줄이 없어 안 보였다.
+//   이제 스코프 안 프로젝트 중 **내가 볼 세션이 하나도 없는 것**은 프로젝트 한 줄로 선다(이름 · 프로젝트 상태 · 만든 사람 · 만든 때 · 마지막 수정).
+//   세션이 있는 프로젝트는 세션 줄의 「프로젝트」 칸에 이미 보이므로 따로 줄을 더하지 않는다(같은 것이 두 줄로 서지 않게).
 //  ⚠ 툴바의 프로젝트 전용 단추(하위 태스크 · 컬럼 · 필터 · 완료 · 담당자 · 나)는 이 뷰에서 숨는다(CSS .pjv-sess-mode).
 import { api, currentWorkspace, el, loadPeopleAvatars, personDisplayName, state } from '../core.js';
 import { cacheGet, cacheSet } from '../lib/idb-cache.js';   // «지난 판» 먼저 그리기(보드와 같은 보관함)
@@ -19,6 +23,7 @@ import { DAY_BUCKETS, ownerCounts, selectAllSess, type SessGroupBy } from '../li
 import { SESS_STATES, sessIsDead } from '../session-status.js';
 import { countMyLiveSessions } from '../lib/board-view.js';
 import { enterSession, openRouteRow } from './detail-hub-kit.js';
+import { pjvProjStatusMeta, pjvResolveProjStatus } from './status.js';
 import { pjvPopover } from './popover.js';
 
 const PAGE = SESS_TABLE_PAGE;
@@ -119,6 +124,13 @@ export function pjvSessGroupMenu(anchor: HTMLElement, onChange: () => void): voi
 }
 
 interface Item extends SessTableItem { proj: any | null }
+/** 프로젝트 줄의 상태 키 — 세션 상태(SESS_STATES)와 겹치지 않는 값. 상태 칩(확인 필요 · 작업 중)에 걸리지 않고, 상태로 묶으면 «프로젝트» 한 묶음. */
+const PROJ_STATE = 'proj';
+const countText = (rows: readonly Item[]): string => {
+  const np = rows.filter((it) => it.pj).length;
+  const ns = rows.length - np;
+  return [ns ? `세션 ${ns}개` : '', np ? `프로젝트 ${np}개` : ''].filter(Boolean).join(' · ') || '0개';
+};
 
 export interface SessListCtx {
   /** 이 스코프의 프로젝트(툴바 좁히기 전 — 세션을 좁히는 것은 이 뷰의 거르개와 검색이다). */
@@ -164,6 +176,22 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
       owner: isMineSess(s) ? 'me' : String((s.raw && s.raw.owner) || ''), name: t.main || s.label || s.id, untitled: t.untitled,
       proj: projById.get(Number(s.projectId)) || null });
   }
+  //  내가 볼 세션이 없는 프로젝트 — 프로젝트 한 줄(3판). 휴지통 · 보관은 보드도 세우지 않는다.
+  const hasSess = new Set(items.map((it) => Number(it.projectId)));
+  for (const p of ctx.projects) {
+    if (hasSess.has(Number(p.id)) || p.trashed_at || p.archived_at) continue;
+    const id = Number(p.id);
+    const st = pjvResolveProjStatus(p);
+    const made = Date.parse(p.created_at || '') || 0;
+    const owner = String(p.created_by || '');
+    items.push({
+      s: { id: 'proj:' + id, label: String(p.name || ''), projectId: id, node: null, live: false, alive: false, owned: false,
+        stateKey: PROJ_STATE, stateLabel: '', lastSeen: 0, raw: null },
+      pj: { id, status: st ? String(st.label || '') : pjvProjStatusMeta(p.status).label, made },
+      projectId: id, trashedAt: null, lastSeen: Date.parse(p.updated_at || '') || made, stateKey: PROJ_STATE,
+      owner: owner && owner === meId ? 'me' : owner, name: String(p.name || '') || '이름 없는 프로젝트', untitled: false, proj: p,
+    });
+  }
   const q = { proj: null, group: null, period: ui.period, owner: ui.owner, state: ui.state, now };
   const inScope = selectAllSess(items, { ...q, period: 'all', owner: '', state: '' });
   const needle = ctx.query.trim().toLowerCase();
@@ -173,22 +201,22 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
   //  거르개 줄 — [세션 목록] 앱 도구줄과 같은 부품(기간 · 사람 · 상태 칩) + 오른쪽에 개수.
   const picks = sessFilterPicks(ui, { owners: ownerCounts(items, q), ownerName, myStateCount: byState, repaint });
   const tools = el('div', { class: 'v2-sa-tools pjv-sl-tools' }, ...picks.filter((x): x is HTMLElement => !!x), el('span', { class: 'sp' }),
-    el('span', { class: 'pjv-sl-count', text: vis.length === inScope.length ? `세션 ${inScope.length}개` : `${vis.length}개 표시 · 전체 ${inScope.length}` }));
+    el('span', { class: 'pjv-sl-count', text: (vis.length === inScope.length ? '' : `${vis.length}개 표시 · `) + countText(inScope) }));
   const by = ui.by;
   const groupLabel = (key: string): string => by === 'project' ? (projName(Number(key)) || NO_PROJECT_NAME)
     : by === 'owner' ? ownerName(key)
-    : by === 'state' ? ((SESS_STATES[key] && SESS_STATES[key].label) || (key === 'log' ? '기록' : key || '상태 모름'))
+    : by === 'state' ? (key === PROJ_STATE ? '프로젝트' : (SESS_STATES[key] && SESS_STATES[key].label) || (key === 'log' ? '기록' : key || '상태 모름'))
     : (DAY_BUCKETS as readonly string[]).includes(key) ? key : key;
   const { list, more } = sessTable({
-    vis, by, ui, now, cols: by !== 'project', meId, projName, ownerName, groupLabel, repaint,
+    vis, by, ui, now, cols: by !== 'project', meId, projName, ownerName, groupLabel, repaint, nameHead: '세션 · 프로젝트',
     open: (s) => enterSession({ id: s.id, label: s.label, node: s.node ? { id: s.node } : null }),
-    menuRows: (it) => [
+    openProj: (it) => { location.hash = '#/projects2/p/' + it.pj!.id; },
+    menuRows: (it) => it.pj ? [openRouteRow('새 탭에서 열기', '#/projects2/p/' + it.pj.id)] : [
       openRouteRow('새 탭에서 열기', '#/s/' + encodeURIComponent(it.s.id)),
       ...(it.proj ? [{ label: '프로젝트 열기', icon: 'doc', run: () => { location.hash = '#/projects2/p/' + it.proj.id; } }] : []),
     ],
   });
-  const empty = !inScope.length
-    ? (ctx.projects.length ? '이 범위의 프로젝트에서 연 세션이 아직 없습니다.' : '이 범위에 프로젝트가 없습니다.')
-    : '이 조건에 맞는 세션이 없습니다. 기간 · 사람 · 상태 · 검색어를 바꿔 보세요.';
+  const empty = !inScope.length ? '이 범위에 프로젝트가 없습니다.'
+    : '이 조건에 맞는 세션 · 프로젝트가 없습니다. 기간 · 사람 · 상태 · 검색어를 바꿔 보세요.';
   host.replaceChildren(...[tools, list, more, !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null].filter((x): x is HTMLElement => !!x));
 }

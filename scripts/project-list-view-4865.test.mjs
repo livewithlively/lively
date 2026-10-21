@@ -123,5 +123,17 @@ ok(/if \(shown\) return;/.test(entry2), "S17 새 판을 못 받아도 서 있는
 ok(/await cacheClear\(\);/.test(cut(code(read("web/core.ts")), "async function logout", "export {")), "S18 로그아웃이 보관함을 비운다");
 ok(/'projects-board:v1:' \+ \(currentWorkspace\(\) \|\| '-'\) \+ ':' \+ meId/.test(entry2 + code(read("web/projects/board.ts"))), "S19 보관함 열쇠는 사람 · 워크스페이스로 가른다");
 
+// ── S: 3판(2026-10-21) — 내가 볼 세션이 없는 프로젝트도 리스트 뷰에 한 줄로 선다(«프로젝트는 리스트에서 모두가 다 볼 수 있었으면») ──
+const paint3 = code(cut(read("web/projects/session-list.ts"), "function paintList", "\n}"));
+const projLoop = cut(paint3, "for (const p of ctx.projects)", "const q = ");
+ok(/const hasSess = new Set\(items\.map\(\(it\) => Number\(it\.projectId\)\)\)/.test(paint3) && /if \(hasSess\.has\(Number\(p\.id\)\)/.test(projLoop), "S20 세션이 하나라도 보이는 프로젝트는 프로젝트 줄을 더하지 않는다(같은 것 두 줄 금지)");
+ok(/items\.push\(\{/.test(projLoop) && /pj: \{ id,/.test(projLoop), "S21 세션이 안 보이는 프로젝트는 프로젝트 줄(pj)로 선다");
+ok(/p\.trashed_at \|\| p\.archived_at\) continue;/.test(projLoop), "S22 휴지통 · 보관 프로젝트는 세우지 않는다");
+ok(/owner === meId \? 'me' : owner/.test(projLoop) && /String\(p\.created_by/.test(projLoop), "S23 프로젝트 줄의 사람 = 만든 사람(나면 'me' — 사람 거르개가 같은 자로 센다)");
+ok(paint3.indexOf("for (const p of ctx.projects)") > 0 && paint3.indexOf("for (const p of ctx.projects)") < paint3.indexOf("const inScope = selectAllSess"), "S24 프로젝트 줄은 거르기 · 세기 전에 들어간다(개수 · 사람 칸에 같이 센다)");
+const table3 = code(read("web/v2/sess-table.ts"));
+ok(/const rowOf = \(it: T\): HTMLElement => \(it\.pj \? projRowOf\(it, it\.pj\) : sessRowOf\(it\)\);/.test(table3), "S25 공용 표가 프로젝트 줄을 따로 그린다");
+ok(/href = '#\/projects2\/p\/' \+ pj\.id/.test(table3) && !/세션 열기/.test(cut(table3, "const projRowOf", "const sessRowOf")), "S26 프로젝트 줄은 프로젝트로 연다(«세션 열기» 없음)");
+
 console.log(`project-list-view-4865: ${pass} pass, ${fails.length} fail`);
 if (fails.length) { for (const f of fails) console.error("  ✗ " + f); process.exit(1); }
