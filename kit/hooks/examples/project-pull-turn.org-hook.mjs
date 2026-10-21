@@ -383,6 +383,17 @@ function healBaselines(projDir, files, keyOf) {
   if (n) writeLedger(projDir, next, tombs);
 }
 
+// 세션 시작 판(project-pull)이 뒤에서 받는 중인가 — 그 판의 잠금(.lively/pull-bg.json)과 **같은 규약**이다
+//  (pid 가 살아 있고 그 판의 마감 15분 + 1분 안). 소스가 따로 배포되므로 판정을 복제한다 — 고칠 땐 둘 다.
+const BG_LOCK_TTL_MS = 16 * 60_000;
+function bgPullAlive(projDir) {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(projDir, ".lively", "pull-bg.json"), "utf8"));
+    if (!(Date.now() - Number(o.at || 0) < BG_LOCK_TTL_MS)) return false;
+    try { process.kill(Number(o.pid), 0); return true; } catch (e) { return !!(e && e.code === "EPERM"); }
+  } catch { return false; }
+}
+
 (async () => {
   // ── 저장 지역성 게이트 (#2258 Phase 4) ──────────────────────────────────────
   //  ★ 세션 파일이 **게이트웨이와 같은 저장소**면 동기화할 것이 없다. 매니지드에서 세션과
@@ -448,6 +459,9 @@ function healBaselines(projDir, files, keyOf) {
   if (!SYNC_MODES.includes(mode) || mode === "none") return;
   if (!fs.existsSync(projDir)) { if (!target.slot) return; try { fs.mkdirSync(projDir, { recursive: true }); } catch { return; } }
   writeMarker(projDir, { project_id: projectId, sync: mode });
+  // 세션 시작 판이 남은 받기를 뒤에서 하는 중이면 물러난다(#4959) — 원장을 둘이 따로 다시 쓰면 한쪽 기준선이 덮인다.
+  //  그 판이 끝나면(잠금이 사라지면) 다음 턴·도구가 그 사이 바뀐 것을 이어 받는다.
+  if (bgPullAlive(projDir)) return;
   const lastPull = Number((readMarker(projDir) || {}).last_pull) || 0;
   // 본문 받기 전용(#4609) — jfetch 의 4초는 헤더까지만 지킨다. `download=1` 은 빼면 안 된다(위 「받기」 절).
   const getFile = (p, signal) => fetch(`${base}/api/ui/v6/projects/${projectId}/file?download=1&path=${encodeURIComponent(p)}`,
