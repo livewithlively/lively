@@ -304,6 +304,7 @@ async function runHook(hook, stdin) {
 }
 
 const HOOK_MAX_BUFFER = 4 * 1024 * 1024;
+const PIPE_GRACE_MS = 200;
 
 // 자식 node 를 비동기로 띄워 끝날 때까지 기다린다 — execFileSync 와 같은 결과 모양(stdout·stderr·status·signal)을
 //  돌려주되 이벤트 루프를 막지 않아서 같은 묶음의 훅들이 동시에 돈다. 실패를 throw 하지 않고 값으로 돌려준다.
@@ -313,8 +314,20 @@ function execNode(file, { input, timeout, env }) {
     let child;
     try { child = spawn("node", [file], { env, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { resolve({ stdout: "", stderr: String((e && e.message) || ""), status: null, signal: null }); return; }
-    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false; let killed = false;
-    const kill = () => { killed = true; try { child.kill("SIGKILL"); } catch { /* 이미 끝남 */ } };
+    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false;
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    // 상한에서 손을 뗀다 — 파이프에 남은 마지막 출력이 들어올 짧은 유예를 준 뒤 스트림을 닫고 끝낸다.
+    //  close 를 끝까지 기다리지 않는 이유: 훅이 stdio 를 물려받은 손자(예: 백그라운드 git fetch)를 남기면 그 손자가
+    //  끝날 때까지 파이프가 안 닫혀 timeout 이 상한 노릇을 못 한다(execFileSync 는 상한에서 바로 돌아왔다).
+    const letGo = (code, signal) => setTimeout(() => {
+      try { child.stdout.destroy(); child.stderr.destroy(); } catch { /* */ }
+      finish(code, signal);
+    }, PIPE_GRACE_MS);
+    // 아직 도는 훅만 죽인다 — 이미 끝났는데 파이프만 손자가 붙잡고 있으면 그 시점의 결과로 끝낸다.
+    const kill = () => {
+      if (exited()) { letGo(child.exitCode, child.signalCode); return; }
+      try { child.kill("SIGKILL"); } catch { /* 그 사이 끝남 — exit 가 온다 */ }
+    };
     const timer = setTimeout(kill, timeout);
     const take = (buf, chunks, len) => { if (len + buf.length > HOOK_MAX_BUFFER) { kill(); return len; } chunks.push(buf); return len + buf.length; };
     child.stdout.on("data", (b) => { outLen = take(b, out, outLen); });
@@ -329,13 +342,7 @@ function execNode(file, { input, timeout, env }) {
       });
     };
     child.on("error", (e) => finish(null, null, String((e && e.message) || "")));
-    // 우리가 죽인 훅은 exit 에서 끝낸다 — close 는 파이프가 닫혀야 오는데, 훅이 stdio 를 물려받은 손자(예: 백그라운드
-    //  git fetch)를 남기면 그 손자가 끝날 때까지 파이프가 안 닫혀 timeout 이 상한 노릇을 못 한다(execFileSync 는 즉시 반환했다).
-    child.on("exit", (code, signal) => {
-      if (!killed) return;
-      try { child.stdout.destroy(); child.stderr.destroy(); } catch { /* */ }
-      finish(code, signal);
-    });
+    child.on("exit", (code, signal) => { if (signal === "SIGKILL") letGo(code, signal); });
     child.on("close", (code, signal) => finish(code, signal));
     // 훅이 stdin 을 안 읽고 먼저 끝나면 EPIPE 가 난다 — 훅의 정상 동작이므로 삼킨다.
     child.stdin.on("error", () => { /* */ });

@@ -844,6 +844,18 @@ const before = (s, a, b) => s.includes(a) && s.includes(b) && s.indexOf(a) < s.i
     ? ok(`W6b timeout 훅이 남긴 자식이 파이프를 붙잡아도 러너는 기다리지 않는다(${r.elapsed}ms)`)
     : bad("W6b timeout 훅의 자식 대기", `elapsed=${r.elapsed}ms ${dbg(r)}`);
 }
+// W6c (S9): 훅이 스스로 정상 종료했는데 stdio 를 물려받은 자식이 파이프를 붙잡고 있어도, 러너는 그 훅의 상한 안에
+//  성공으로 마무리한다 — 출력은 전달되고 실패로 보고되지 않는다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w6c-done", sort: 1, timeout_sec: 1, src: 'const { spawn } = require("node:child_process");\n'
+      + 'spawn(process.execPath, ["-e", "setTimeout(() => {}, 8000)"], { stdio: "inherit" }).unref();\n'
+      + 'process.stdout.write("W6C-DONE ", () => process.exit(0));\n' },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("W6C-DONE") && !r.stderr.includes("w6c-done") && r.elapsed < 5000
+    ? ok(`W6c 정상 종료한 훅의 자식이 파이프를 붙잡아도 상한 안에 성공으로 끝난다(${r.elapsed}ms)`)
+    : bad("W6c 정상 종료 훅의 자식 대기", `elapsed=${r.elapsed}ms ${dbg(r)}`);
+}
 // W7 (S7): 같은 묶음에서 한 훅이 크래시해도 그 훅만 실패로 드러나고, 더 늦게 끝나는 이웃의 출력은 전달된다.
 {
   const r = run("UserPromptSubmit", [
