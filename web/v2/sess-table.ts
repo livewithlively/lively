@@ -13,7 +13,12 @@ import { showCtxMenu, type CtxRow } from './ctx-menu.js';
 import { dotCls, type Sess } from './sess-merge.js';
 
 /** 표의 한 줄 — 거르기 잣대(AllSessLike) + 그릴 글. 부르는 쪽이 sessNameFace 로 이름을 정해 넘긴다. */
-export interface SessTableItem extends AllSessLike { s: Sess; name: string; untitled: boolean }
+export interface SessTableItem extends AllSessLike {
+  s: Sess; name: string; untitled: boolean;
+  /** 세션이 아니라 **프로젝트 한 줄**(프로젝트 보드 리스트 뷰 — 내가 볼 세션이 없는 프로젝트도 목록에 선다, 원준 2026-10-21
+   *  «프로젝트는 리스트에서 모두가 다 볼 수 있었으면»). 이 줄의 s 는 자리채움이다 — 표는 s 를 읽지 않고 이 값과 name · lastSeen 을 쓴다. */
+  pj?: { id: number; status: string; made: number };
+}
 /** 표가 쥐는 화면 상태 — 부르는 쪽이 모듈 수준으로 들고 있다(통째로 다시 그려도 남게). */
 export interface SessTableUi { shown: number; closed: Set<string>; openUntitled: Set<string>; sort: SessSort | null }
 export const SESS_TABLE_PAGE = 50;
@@ -99,6 +104,10 @@ export interface SessTableOpts<T extends SessTableItem> {
   meId: string;
   /** 줄을 누르면 연다. */
   open: (s: Sess) => void;
+  /** 프로젝트 줄(it.pj)을 누르면 연다 — 프로젝트 줄을 넣는 쪽만 준다. */
+  openProj?: (it: T) => void;
+  /** 첫 열 머리 글 — 기본 「세션」. */
+  nameHead?: string;
   /** ⋯ 메뉴의 줄 — 「세션 열기」 다음에 붙는다. */
   menuRows?: (it: T) => CtxRow[];
   /** 줄에 붙는 클래스 · 이름 뒤 꼬리표(예: 「치움」). */
@@ -125,11 +134,40 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
       on ? svgI(on.dir === 'asc' ? IC_UP : IC_CHEV, 'v2-sa-ic sm') : null);
   };
   const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
-    hc('name', '세션'),
+    hc('name', o.nameHead || '세션'),
     ...(cols ? [hc('proj', '프로젝트')] : []),
     hc('state', '상태'), hc('owner', '사람'),
     hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
-  const rowOf = (it: T): HTMLElement => {
+  const rowOf = (it: T): HTMLElement => (it.pj ? projRowOf(it, it.pj) : sessRowOf(it));
+  //  프로젝트 줄 — 세션 줄과 같은 칸에 프로젝트 것을 넣는다: 이름(과녁) · 프로젝트 칸 비움(이름과 겹친다) · 상태 = 프로젝트 상태 · 사람 = 만든 사람.
+  const projRowOf = (it: T, pj: NonNullable<SessTableItem['pj']>): HTMLElement => {
+    const go = (): void => { if (o.openProj) o.openProj(it); };
+    const href = '#/projects2/p/' + pj.id;
+    const more = el('button', { class: 'v2-sa-more', type: 'button', 'aria-label': '더 보기', title: '열기 · 그 밖의 일',
+      onclick: (ev: MouseEvent) => {
+        ev.stopPropagation();
+        const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+        showCtxMenu(r.right - 180, r.bottom + 4, [
+          { label: '프로젝트 열기', icon: 'open', run: go },
+          ...(o.menuRows ? o.menuRows(it) : []),
+        ], { title: it.name });
+      } }, svgI(IC_MORE));
+    const row = el('div', { class: 'v2-sa-row pj' + (cols ? '' : ' np') + (o.rowClass ? o.rowClass(it) : ''),
+      role: 'button', tabindex: '0', 'data-pid': String(pj.id) },
+      el('div', { class: 'c-name' }, projIcon(true),
+        el('a', { class: 't', href, text: it.name, onclick: (ev: MouseEvent) => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); ev.stopPropagation(); go(); } }),
+        o.rowTag ? o.rowTag(it) : null),
+      cols ? el('div', { class: 'c-proj none' }) : null,
+      el('div', { class: 'c-kind' }, el('span', { class: 'v2-sa-st quiet' }, el('span', { text: pj.status }))),
+      el('div', { class: 'c-who' }, it.owner ? personFace(it.owner === 'me' ? o.meId : it.owner, 'v2-sall-face', o.ownerName(it.owner)) : null),
+      el('div', { class: 'c-made' }, madeCell(pj.made)),
+      el('div', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(it.lastSeen) || 0), title: it.lastSeen ? new Date(Number(it.lastSeen)).toLocaleString() : '' })),
+      el('div', { class: 'c-acts' }, more));
+    row.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('button, a, input, select')) return; go(); });
+    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); go(); } });
+    return row;
+  };
+  const sessRowOf = (it: T): HTMLElement => {
     const s = it.s;
     //  ⌘/Ctrl/Shift+클릭은 브라우저 몫으로 둔다(새 창·새 탭) — 셸 안 링크의 관례(main.ts bindAltOpen 머리말)와 같다.
     const nameClick = (ev: MouseEvent): void => {
@@ -165,7 +203,7 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
   const list = el('div', { class: 'v2-sa-list', 'aria-label': '세션 목록' });
   //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
   const sortFields = (it: T) => ({ name: it.name, proj: o.projName(it.projectId) || '', owner: o.ownerName(it.owner),
-    rank: stateRank(String(it.stateKey || '')), made: Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
+    rank: stateRank(String(it.stateKey || '')), made: it.pj ? it.pj.made : Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
   const ordered = (rs: readonly T[]): T[] => sortAllSess(rs, ui.sort, sortFields);
   const groups = by === 'none' ? [] : groupAllSess(vis, by, o.now, stateRank);
   //  [더 보기]의 «외 N개» — 쪽수 때문에 못 그린 줄만 센다. 접은 묶음 · 접은 «이름 없는 세션» 은 더 보기로 나오지 않으니 빼고 센다.
