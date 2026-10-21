@@ -279,7 +279,7 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 /* 툴바의 프로젝트 전용 단추 — 세션 뷰에서는 뜻이 없다(세션을 좁히는 것은 아래 거르개 줄과 검색). */
 .pjv-sess-mode .pjv-subtask-btn, .pjv-sess-mode .pjv-cols-btn, .pjv-sess-mode .pjv-filter-btn,
-.pjv-sess-mode .pjv-closed-btn, .pjv-sess-mode .pjv-asg-btn, .pjv-sess-mode .pjv-mine-btn { display: none; }
+.pjv-sess-mode .pjv-asg-btn, .pjv-sess-mode .pjv-mine-btn { display: none; }
 
 .pjv-sl { padding-bottom: 24px; }
 .pjv-sl .v2-sa-tools { height: 48px; padding: 0 2px; border-bottom: 0; }

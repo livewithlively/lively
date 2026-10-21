@@ -133,6 +133,7 @@ ok(/owner === meId \? 'me' : owner/.test(projLoop) && /String\(p\.created_by/.te
 ok(/sess: \{ n: ss\.length, key: top \? top\.stateKey/.test(projLoop) && /stateRank\(x\.stateKey\) - stateRank\(y\.stateKey\)/.test(projLoop), "S24 「세션」 칸 = 볼 수 있는 세션 중 가장 급한 상태 + 수");
 ok(/Math\.max\(Date\.parse\(p\.updated_at/.test(projLoop) && /ss\.map\(\(x\) => Number\(x\.lastSeen\)/.test(projLoop), "S24b 마지막 활동 = 프로젝트 수정과 세션 활동 중 늦은 것");
 ok(/!ui\.state \|\| it\.mine\.has\(ui\.state\)/.test(paint3) && /state: '', now/.test(paint3), "S24c 상태 칩은 «내 세션이 그 상태인 프로젝트» 를 남긴다");
+ok(/if \(p\.status === 'done' && !pjvProjClosedView\.done\) continue;/.test(projLoop) && !/\.pjv-sess-mode \.pjv-closed-btn/.test(read("public/styles/30-projects-views.css")), "S24e 완료 프로젝트는 [완료 표시]를 켤 때만 — 그 단추가 이 뷰에서 보인다");
 ok(!/key: 'project'/.test(cut(read("web/projects/session-list.ts"), "const GROUP_BYS", "];")) && /key: 'list'/.test(cut(read("web/projects/session-list.ts"), "const GROUP_BYS", "];")), "S24d 묶기에 «프로젝트» 는 없고 «리스트» 가 있다");
 const table3 = code(read("web/v2/sess-table.ts"));
 ok(/const rowOf = \(it: T\): HTMLElement => \(it\.pj \? projRowOf\(it, it\.pj\) : sessRowOf\(it\)\);/.test(table3), "S25 공용 표가 프로젝트 줄을 따로 그린다");

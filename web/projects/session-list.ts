@@ -12,7 +12,7 @@
 //   열 = 프로젝트 · 세션(내가 볼 수 있는 세션 중 가장 급한 상태 + 나머지 수) · 상태(프로젝트 상태) · 사람(만든 사람) · 생성 시각 · 마지막 활동.
 //   마지막 활동은 프로젝트 수정과 그 안 세션 활동 중 늦은 것. 표의 겉(열 머리 · 묶음 · 46px 행 · 더 보기)은 [세션 목록] 앱과 같은 sessTable.
 //   묶기 = 시간 · 리스트 · 상태 · 사람 · 묶지 않음. 상태 칩(확인 필요 · 작업 중)은 «내 세션이 그 상태인 프로젝트» 를 남긴다.
-//  ⚠ 툴바의 프로젝트 전용 단추(하위 태스크 · 컬럼 · 필터 · 완료 · 담당자 · 나)는 이 뷰에서 숨는다(CSS .pjv-sess-mode).
+//  ⚠ 툴바의 프로젝트 전용 단추(하위 태스크 · 컬럼 · 필터 · 담당자 · 나)는 이 뷰에서 숨는다(CSS .pjv-sess-mode). [완료 표시]는 4판부터 보인다(줄이 프로젝트라).
 import { api, currentWorkspace, el, loadPeopleAvatars, personDisplayName, state } from '../core.js';
 import { cacheGet, cacheSet } from '../lib/idb-cache.js';   // «지난 판» 먼저 그리기(보드와 같은 보관함)
 import { isMineSess, mergeSessions, type Sess } from '../v2/sess-merge.js';
@@ -25,6 +25,7 @@ import { sessIsDead } from '../session-status.js';
 import { countMyLiveSessions } from '../lib/board-view.js';
 import { enterSession, openRouteRow } from './detail-hub-kit.js';
 import { pjvProjStatusMeta, pjvResolveProjStatus } from './status.js';
+import { pjvProjClosedView } from './state.js';
 import { pjvPopover } from './popover.js';
 
 const PAGE = SESS_TABLE_PAGE;
@@ -175,6 +176,7 @@ function paintList(host: HTMLElement, all: Sess[], ctx: SessListCtx, repaint: ()
   const items: Item[] = [];
   for (const p of ctx.projects) {
     if (p.trashed_at || p.archived_at) continue;   // 휴지통 · 보관은 보드도 세우지 않는다
+    if (p.status === 'done' && !pjvProjClosedView.done) continue;   // 완료는 툴바 [완료 표시]를 켤 때만 — 사이드바 · 다른 뷰의 수와 같은 자
     const id = Number(p.id);
     const ss = (sessOf.get(id) || []).slice().sort((x, y) => stateRank(x.stateKey) - stateRank(y.stateKey) || (Number(y.lastSeen) || 0) - (Number(x.lastSeen) || 0));
     const top = ss[0] || null;
