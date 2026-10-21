@@ -140,6 +140,30 @@ const INJECTIONS = new Set(["always", "recalled"]);
   ok("cwd 싱크 훅 4종이 기본 켜짐 + push 가 Stop·PostToolUse 양쪽에 걸림(#3787)");
 }
 
+// ── 앞뒤가 있는 시드 훅 짝은 sort 가 **엄격히** 달라야 한다 — 러너는 같은 sort 를 동시에 돌린다. ──
+//  같으면 둘이 겹쳐 돌아, 같은 동기화 원장을 다시 쓰는 짝은 한쪽 기록이 덮이고(push-tool/pull-tool),
+//  프로젝트가 붙기 전에 받고·규칙을 싣는 짝은 첫 지시 턴을 빈손으로 지나간다(auto-bind 뒤의 둘).
+{
+  const PAIRS: Array<[later: string, earlier: string, event: string]> = [
+    ["project-push-tool", "project-pull-tool", "PostToolUse"],
+    ["project-pull-turn", "project-auto-bind", "UserPromptSubmit"],
+    ["project-agents-inject", "project-auto-bind", "UserPromptSubmit"],
+    ["project-push-turn", "project-pull-turn", "UserPromptSubmit"],
+  ];
+  const hookOf = (id: string, event: string) => {
+    const h = DEFAULT_HOOKS.find((x) => x.id === id);
+    assert.ok(h, `시드 훅 '${id}' 이 없음`);
+    assert.equal(h!.event, event, `시드 훅 '${id}' 은 ${event} 여야 한다`);
+    assert.equal(typeof h!.sort, "number", `시드 훅 '${id}' 의 sort 가 숫자가 아님 — 러너가 순서 정보 없음으로 본다`);
+    return h!;
+  };
+  for (const [later, earlier, event] of PAIRS) {
+    const a = hookOf(later, event), b = hookOf(earlier, event);
+    assert.ok(a.sort > b.sort, `${event}: '${later}'(sort ${a.sort}) 가 '${earlier}'(sort ${b.sort}) 보다 엄격히 뒤여야 한다 — 같으면 동시에 돈다`);
+  }
+  ok("앞뒤가 있는 시드 훅 짝 4쌍의 sort 가 엄격히 오름차순(같은 sort 동시 실행에 겹치지 않음)");
+}
+
 // ── 스킬 무결성 + 짝훅 참조 해결(paired_hook_id → 실제 시드 훅) ──
 {
   const ids = new Set<string>();

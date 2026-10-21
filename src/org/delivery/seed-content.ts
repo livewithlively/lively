@@ -37,6 +37,13 @@ const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → pr
 const PROMOTE_ENABLED = new Set(["session-log-capture",
   "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool", "project-push-turn", "project-push-start"]);
 
+// 기본 sort 가 옮겨진 시드 훅 — 행의 sort 가 **옛 기본값 그대로**일 때만 새 기본값으로 따라간다(조직이 고른 값은 보존).
+//  run-custom 은 sort 가 같은 훅을 동시에 돌린다. 아래 둘은 옛 기본값(0)에서 짝 훅과 같은 묶음이 되어 겹쳐 돌면 안 된다:
+//  · project-pull-turn — 첫 지시에서 project-auto-bind(0)가 프로젝트를 붙인 **뒤에** 받아야 그 턴에 자료가 온다.
+//  · project-push-tool — project-pull-tool(0)과 같은 폴더의 동기화 원장을 통째로 다시 써서, 겹치면 한쪽 기록이 덮인다.
+//  옛 기본값이 아닌 행은 손대지 않는다 — 조직이 일부러 같은 묶음에 넣었다면 그 결정이 이긴다.
+const MOVED_SORT: Record<string, number> = { "project-pull-turn": 0, "project-push-tool": 0 };
+
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
   const res: SeedResult = { hooks: 0, skills: 0, knowledge: 0 };
@@ -76,6 +83,15 @@ export async function seedDefaultContent(): Promise<SeedResult> {
           id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
           source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,
           enabled: true, target_members: before.target_members, sort: h.sort,
+        }, ctx);
+        res.hooks++;
+        continue;
+      }
+      if (h.id in MOVED_SORT && before.sort === MOVED_SORT[h.id] && h.sort !== before.sort) {
+        await upsertOrgHook({
+          id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
+          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,
+          enabled: before.enabled, target_members: before.target_members, sort: h.sort,
         }, ctx);
         res.hooks++;
         continue;

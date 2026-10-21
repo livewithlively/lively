@@ -49,6 +49,7 @@ function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, 
       event,
       matcher: h.matcher ?? null,
       timeout_sec: h.timeout_sec ?? 5,
+      ...(h.sort !== undefined ? { sort: h.sort } : {}), // 생략 = 구버전 게이트웨이 응답(§W3)
       source_code: h.src,
       content_hash: h.hash ?? sha256(h.src), // §G: 기본은 정상 해시, 변조 시나리오만 h.hash 로 어긴다
     })),
@@ -685,6 +686,199 @@ const graceHook = (id) => ({ id, src: decide({ decision: "deny", reason: id }) }
   existsSync(sentinel)
     ? ok("J2 오프라인에서도 캐시된 SessionEnd 훅은 실행된다(기능 보존)")
     : bad("J2 캐시된 SessionEnd 훅 실행", dbg(r));
+}
+
+// ── §W 실행 순서(sort 묶음) ──
+// 같은 sort 는 동시에, 다른 sort 는 오름차순으로 차례차례 돈다. 순서 정보가 하나라도 빠지면 전부 하나씩.
+//  '겹쳤나'는 경과시간보다 **랑데부**로 본다: 두 훅이 각자 시작 표식을 남기고 상대 표식을 기다린다 —
+//  동시에 돌면 둘 다 상대를 보고, 하나씩 돌면 먼저 돈 쪽은 끝내 혼자다. 부하에 흔들리지 않는 관측이다.
+//  경과시간 단정(W1b·W3a)은 사양이 'T vs 2T' 로 말하는 부분만 본다 — W3a 의 하한(2T)은 구조상 부하에 흔들리지 않는다.
+const UPS = { session_id: "s1", prompt: "안녕" };
+const SS = { session_id: "s1", source: "startup" };
+const wDir = (name) => { const d = join(SANDBOX, `w-${name}`); rmSync(d, { recursive: true, force: true }); mkdirSync(d, { recursive: true }); return d; };
+// 동기 sleep — CJS/ESM 어느 쪽으로 실행돼도 동작하고 이벤트루프 없이 정확히 기다린다.
+const sleepSrc = (ms) => `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${ms});\n`;
+const sayHook = (text) => `process.stdout.write(${JSON.stringify(text)});\n`;
+// 랑데부 훅: 내 표식을 남기고 상대 표식을 waitMs 까지 기다린 뒤 "<me>:SAW " / "<me>:ALONE " 를 낸다.
+const meet = (dir, me, other, waitMs) => 'const fs = require("node:fs"); const path = require("node:path");\n'
+  + `fs.writeFileSync(path.join(${JSON.stringify(dir)}, ${JSON.stringify(me)}), "1");\n`
+  + `const end = Date.now() + ${waitMs}; let saw = false;\n`
+  + `while (Date.now() < end) { if (fs.existsSync(path.join(${JSON.stringify(dir)}, ${JSON.stringify(other)}))) { saw = true; break; } `
+  + 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); }\n'
+  + `process.stdout.write(${JSON.stringify(me)} + (saw ? ":SAW " : ":ALONE "));\n`;
+// 실행 순서 로그: (선택적으로 잠깐 잔 뒤) 자기 id 를 공용 로그에 덧붙인다.
+const logHook = (log, id, delayMs = 0) => 'const fs = require("node:fs");\n'
+  + (delayMs ? sleepSrc(delayMs) : "")
+  + `fs.appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(id + "\n")});\n`;
+const readLog = (log) => { try { return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).join(","); } catch { return ""; } };
+// 출력 안에서 a 가 b 보다 앞에 있나(둘 다 있어야 참).
+const before = (s, a, b) => s.includes(a) && s.includes(b) && s.indexOf(a) < s.indexOf(b);
+
+// W1a (S1): 모든 훅에 sort 가 있고 값이 같으면 동시에 돈다 — 두 훅이 서로의 시작 표식을 본다.
+{
+  const d = wDir("1a");
+  const r = run("UserPromptSubmit", [
+    { id: "w1a-p", sort: 3, timeout_sec: 10, src: meet(d, "p", "q", 4000) },
+    { id: "w1a-q", sort: 3, timeout_sec: 10, src: meet(d, "q", "p", 4000) },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("p:SAW") && r.stdout.includes("q:SAW")
+    ? ok("W1a 같은 sort 의 훅들은 겹쳐서(동시에) 돈다")
+    : bad("W1a 같은 sort 동시 실행", dbg(r));
+}
+// W1b (S1): 같은 sort 의 T초 훅 둘 → 이벤트 전체는 2T 가 아니라 약 T.
+//  T=2.5초, 상한 4.4초: 러너·자식 기동 오버헤드(직렬 실측 ~0.6초)를 얹어도 T 쪽은 1.3초 여유, 2T(5초) 쪽도 0.6초 아래다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w1b-1", sort: 0, src: sleepSrc(2500) + sayHook("W1B-ONE ") },
+    { id: "w1b-2", sort: 0, src: sleepSrc(2500) + sayHook("W1B-TWO ") },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("W1B-ONE") && r.stdout.includes("W1B-TWO") && r.elapsed < 4400
+    ? ok(`W1b 같은 sort 의 2.5초 훅 둘이 2T(5초)가 아니라 약 T 에 끝난다 (${r.elapsed}ms)`)
+    : bad("W1b 같은 sort 소요시간", `elapsed=${r.elapsed}ms (4400 미만이어야 함) ${dbg(r)}`);
+}
+// W2a (S2): 큰 sort 는 작은 sort 묶음이 **모두** 끝난 뒤에 시작한다 — 같은 묶음의 느린 훅이 남긴 부수효과까지 본다.
+{
+  const d = wDir("2a");
+  const mark = join(d, "slow-done");
+  const r = run("UserPromptSubmit", [
+    { id: "w2a-fast", sort: 1, src: sayHook("W2A-FAST ") },
+    { id: "w2a-slow", sort: 1, src: 'const fs = require("node:fs");\n' + sleepSrc(800) + `fs.writeFileSync(${JSON.stringify(mark)}, "1");\n` },
+    { id: "w2a-later", sort: 2, src: 'const fs = require("node:fs");\n'
+      + `process.stdout.write(fs.existsSync(${JSON.stringify(mark)}) ? "W2A-SEEN " : "W2A-MISSING ");\n` },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("W2A-SEEN")
+    ? ok("W2a 큰 sort 훅은 작은 sort 묶음이 모두 끝난 뒤 시작한다(느린 앞 훅의 부수효과를 본다)")
+    : bad("W2a sort 묶음 간 선후", dbg(r));
+}
+// W2b (S2): 받은 목록이 sort 내림차순으로 와도 실행은 sort 오름차순이다.
+{
+  const d = wDir("2b");
+  const mark = join(d, "low-done");
+  const r = run("UserPromptSubmit", [
+    { id: "w2b-high", sort: 10, src: 'const fs = require("node:fs");\n'
+      + `process.stdout.write(fs.existsSync(${JSON.stringify(mark)}) ? "W2B-SEEN " : "W2B-MISSING ");\n` },
+    { id: "w2b-low", sort: 1, src: 'const fs = require("node:fs");\n' + sleepSrc(500) + `fs.writeFileSync(${JSON.stringify(mark)}, "1");\n` },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("W2B-SEEN")
+    ? ok("W2b 높은 sort 가 목록 앞에 있어도 낮은 sort 가 먼저 끝난 뒤에 돈다")
+    : bad("W2b 받은 순서 ≠ sort 순서", dbg(r));
+}
+// W2c (S2): 음수·소수·여러 자리 수도 **숫자로** 비교된다(문자열 비교면 "10" < "9" 가 된다).
+//  앞 sort 일수록 오래 자게 했다 — 한꺼번에 돌면 로그가 거꾸로(늦게 잔 순) 찍혀 잡힌다.
+{
+  const d = wDir("2c");
+  const log = join(d, "order.log");
+  const r = run("UserPromptSubmit", [
+    { id: "w2c-ten", sort: 10, src: logHook(log, "ten") },
+    { id: "w2c-half", sort: 0.5, src: logHook(log, "half", 400) },
+    { id: "w2c-neg", sort: -1, src: logHook(log, "neg", 600) },
+    { id: "w2c-nine", sort: 9, src: logHook(log, "nine", 200) },
+  ], { payload: UPS });
+  const order = readLog(log);
+  r.status === 0 && order === "neg,half,nine,ten"
+    ? ok("W2c sort 는 음수·소수 포함 숫자 오름차순으로 돈다")
+    : bad("W2c 숫자 비교", `order=${order} (기대 neg,half,nine,ten) ${dbg(r)}`);
+}
+// W3a (S3): sort 가 전부 빠지면(구 게이트웨이) 하나씩 돈다 — T초 훅 둘이면 2T 이상.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w3a-1", src: sleepSrc(1500) + sayHook("W3A-ONE ") },
+    { id: "w3a-2", src: sleepSrc(1500) + sayHook("W3A-TWO ") },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("W3A-ONE") && r.stdout.includes("W3A-TWO") && r.elapsed >= 2900
+    ? ok(`W3a sort 가 없는 훅들은 겹치지 않고 하나씩 돈다 (${r.elapsed}ms)`)
+    : bad("W3a sort 부재 직렬", `elapsed=${r.elapsed}ms (2900 이상이어야 함) ${dbg(r)}`);
+}
+// W3b (S3): **하나만** sort 가 빠져도 전부 하나씩 돈다 — 나머지 훅의 sort 가 같아도 겹치지 않는다.
+//  (빠진 sort 를 0 으로 채우는 구현이면 sort:0 짝과 한 묶음이 되어 여기서 잡힌다.)
+{
+  const d = wDir("3b");
+  const r = run("UserPromptSubmit", [
+    { id: "w3b-p", sort: 0, timeout_sec: 10, src: meet(d, "p", "q", 1500) },
+    { id: "w3b-q", timeout_sec: 10, src: meet(d, "q", "p", 1500) },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("p:ALONE") && r.stdout.includes("q:SAW")
+    ? ok("W3b 하나라도 sort 가 없으면 모든 훅이 받은 순서대로 하나씩 돈다")
+    : bad("W3b 일부 sort 부재 직렬", dbg(r));
+}
+// W3c (S3): 그 하나씩은 **받은 순서**다 — 다른 훅들의 sort 값은 이때 순서를 정하지 않는다.
+{
+  const d = wDir("3c");
+  const log = join(d, "order.log");
+  const r = run("UserPromptSubmit", [
+    { id: "w3c-x", sort: 2, src: logHook(log, "x") },
+    { id: "w3c-y", sort: 1, src: logHook(log, "y") },
+    { id: "w3c-z", src: logHook(log, "z") },
+  ], { payload: UPS });
+  const order = readLog(log);
+  r.status === 0 && order === "x,y,z"
+    ? ok("W3c sort 가 빠진 묶음은 sort 와 무관하게 받은 순서대로 돈다")
+    : bad("W3c 받은 순서 실행", `order=${order} (기대 x,y,z) ${dbg(r)}`);
+}
+// W4a (S4): 같은 sort 안에서 컨텍스트 순서 = 받은 순서. 먼저 받은 훅을 **느리게** 해 '먼저 끝난 순서'와 갈라 놓는다.
+{
+  for (const [ev, payload] of [["UserPromptSubmit", UPS], ["SessionStart", SS]]) {
+    const r = run(ev, [
+      { id: `w4a-${ev}-slow`, sort: 5, src: sleepSrc(800) + sayHook("W4A-FIRST-RECEIVED ") },
+      { id: `w4a-${ev}-fast`, sort: 5, src: sayHook("W4A-SECOND-RECEIVED ") },
+    ], { payload });
+    r.status === 0 && before(r.stdout, "W4A-FIRST-RECEIVED", "W4A-SECOND-RECEIVED")
+      ? ok(`W4a ${ev} 같은 sort 의 컨텍스트는 먼저 끝난 순서가 아니라 받은 순서로 이어붙는다`)
+      : bad(`W4a ${ev} 같은 sort 출력 순서`, dbg(r));
+  }
+}
+// W4b (S4): 다른 sort 끼리는 받은 목록 순서와 무관하게 sort 오름차순으로 이어붙는다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w4b-high", sort: 7, src: sayHook("W4B-HIGH ") },
+    { id: "w4b-low", sort: -2, src: sayHook("W4B-LOW ") },
+  ], { payload: UPS });
+  r.status === 0 && before(r.stdout, "W4B-LOW", "W4B-HIGH")
+    ? ok("W4b 컨텍스트는 sort 오름차순으로 이어붙는다(목록에 높은 sort 가 먼저 와도)")
+    : bad("W4b sort 순 출력", dbg(r));
+}
+// W5a (S5): PreToolUse 같은 등급(deny) 사유 합치기도 받은 순서 — 먼저 받은 쪽이 늦게 끝나도.
+{
+  const r = run("PreToolUse", [
+    { id: "w5a-slow", sort: 1, src: sleepSrc(800) + decide({ decision: "deny", reason: "W5A-REASON-FIRST" }) },
+    { id: "w5a-fast", sort: 1, src: decide({ decision: "deny", reason: "W5A-REASON-SECOND" }) },
+  ]);
+  const a = answer(r);
+  a?.permissionDecision === "deny" && before(a?.permissionDecisionReason ?? "", "W5A-REASON-FIRST", "W5A-REASON-SECOND")
+    ? ok("W5a 같은 sort 의 deny 사유는 먼저 끝난 순서가 아니라 받은 순서로 합쳐진다")
+    : bad("W5a 사유 순서(같은 sort)", dbg(r));
+}
+// W5b (S5): 다른 sort 의 같은 등급 사유는 sort 오름차순으로 합쳐진다(목록엔 높은 sort 가 먼저).
+{
+  const r = run("PreToolUse", [
+    { id: "w5b-high", sort: 4, src: decide({ decision: "deny", reason: "W5B-REASON-HIGH" }) },
+    { id: "w5b-low", sort: 2, src: decide({ decision: "deny", reason: "W5B-REASON-LOW" }) },
+  ]);
+  const a = answer(r);
+  a?.permissionDecision === "deny" && before(a?.permissionDecisionReason ?? "", "W5B-REASON-LOW", "W5B-REASON-HIGH")
+    ? ok("W5b 다른 sort 의 deny 사유는 sort 오름차순으로 합쳐진다")
+    : bad("W5b 사유 순서(sort 순)", dbg(r));
+}
+// W6 (S6): 같은 묶음에서 한 훅이 timeout_sec 을 넘기면 그 훅만 끊기고, 이웃의 출력은 그대로 나간다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w6-hang", sort: 1, timeout_sec: 1, src: sleepSrc(5000) + sayHook("W6-LATE ") },
+    { id: "w6-ok", sort: 1, src: sleepSrc(300) + sayHook("W6-SURVIVOR ") },
+  ], { payload: UPS, timeoutMs: 15000 });
+  r.status === 0 && r.stdout.includes("W6-SURVIVOR") && !r.stdout.includes("W6-LATE")
+    && r.stderr.includes("[lively] hook 'w6-hang' timeout") && r.elapsed < 4500
+    ? ok(`W6 같은 묶음의 timeout 훅만 끊기고 이웃 출력은 전달된다(exit 0, ${r.elapsed}ms)`)
+    : bad("W6 묶음 내 timeout 격리", `elapsed=${r.elapsed}ms ${dbg(r)}`);
+}
+// W7 (S7): 같은 묶음에서 한 훅이 크래시해도 그 훅만 실패로 드러나고, 더 늦게 끝나는 이웃의 출력은 전달된다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w7-crash", sort: 1, src: 'throw new Error("w7-boom");\n' },
+    { id: "w7-ok", sort: 1, src: sleepSrc(500) + sayHook("W7-SURVIVOR ") },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("W7-SURVIVOR") && r.stderr.includes("[lively] hook 'w7-crash' crash")
+    ? ok("W7 같은 묶음의 크래시 훅만 실패로 드러나고 이웃 출력은 전달된다(exit 0)")
+    : bad("W7 묶음 내 크래시 격리", dbg(r));
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

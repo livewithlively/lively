@@ -104,7 +104,7 @@ export const hooksCapabilities: Capability[] = [
       note: z.string().optional().describe("메모"),
       summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
-      sort: z.number().optional().describe("정렬 순서"),
+      sort: z.number().optional().describe("실행 순서 — 러너는 sort 오름차순으로 돌고, sort 가 같은 훅끼리는 동시에 돈다. 다른 훅이 끝난 뒤에 돌아야 하면 더 큰 값을 준다"),
     }),
   restRuntime("org_hook_remove", "커스텀 훅 제거",
     "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
@@ -150,6 +150,8 @@ export const hooksCapabilities: Capability[] = [
       return { hooks: effectiveHooks(hooks).map((h) => ({
         id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
         content_hash: h.content_hash, timeout_sec: h.timeout_sec,
+        // 러너가 sort 가 같은 훅을 한 묶음으로 동시에 돌린다. 구 러너는 이 필드를 무시하고 종전처럼 차례로 돈다.
+        sort: h.sort,
       })), relay_decisions: relay };
     },
     false, { harness: z.string().optional(), event: z.string().optional() }),   // #1403 — types.ts input 규약
