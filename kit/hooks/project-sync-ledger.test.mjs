@@ -38,7 +38,8 @@ let FAIL = new Set();   // 이 경로의 본문 GET 은 실패시킨다(개별 �
 const PREVIEW_MAX = 256;
 let STAMP = false;      // 응답에 판 도장(X-File-Mtime · X-File-Size)을 싣는다(지금 서버) / 안 싣는다(옛 서버)
 let SWAP = {};          // path → { body, mtime } — 매니페스트와 다른 판을 내준다(매니페스트를 읽은 뒤 서버본이 바뀜)
-let SLOW = new Set();   // 이 경로는 머리와 첫 바이트만 보내고 본문 끝을 4초 끈다
+let SLOW = new Set();   // 이 경로는 머리와 첫 바이트만 보내고 본문 끝을 SLOW_MS(기본 4초) 끈다
+let SLOW_MS = 4000;
 let HOLD = null;        // { path, requested(), release: Promise } — 본문을 시험이 풀어 줄 때까지 붙든다
 let GETS = [];          // 본문 요청 기록 { path, download }
 let STALL = new Set();  // 이 경로는 머리조차 4초 안 보낸다(서버·망이 잠깐 멈춤)
@@ -77,7 +78,7 @@ const server = http.createServer((req, res) => {
     }
     if (SLOW.has(p)) {
       res.writeHead(200, head); res.write(buf.subarray(0, 1));
-      const t = setTimeout(() => res.end(buf.subarray(1)), 4000);
+      const t = setTimeout(() => res.end(buf.subarray(1)), SLOW_MS);
       res.on("close", () => clearTimeout(t));
       return;
     }
@@ -112,13 +113,17 @@ async function mkProj(marker, files = {}, ledger = null) {
   }
   return dir;
 }
+// LIVELY_PULL_BG_OFF=1 이 기본 — 아래 시나리오 대부분은 «이 실행 안에서 받는» 계약(원장·보류·마감)을 동기적으로 잰다.
+//  세션 시작 판이 남은 것을 뒤로 넘기는 동작(#4959)은 맨 끝 묶음이 이 값을 끄고 따로 잰다.
 function spawnHook(hookPath, dir, extraEnv = {}) {
   const c = spawn(process.execPath, [hookPath], {
-    cwd: dir, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir, ...extraEnv }, stdio: ["pipe", "pipe", "pipe"],
+    cwd: dir, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_TOKEN: "t", LIVELY_GATEWAY_URL: BASE, LIVELY_HOME: dir, LIVELY_PULL_BG_OFF: "1", ...extraEnv }, stdio: ["pipe", "pipe", "pipe"],
   });
   c.stdin.end(JSON.stringify({ cwd: dir }));
+  let out = "";
+  c.stdout.on("data", (d) => { out += d; });
   const t0 = Date.now();
-  return new Promise((r) => c.on("exit", (code) => r({ code, ms: Date.now() - t0 })));
+  return new Promise((r) => c.on("close", (code) => r({ code, ms: Date.now() - t0, out })));
 }
 async function runHook(hookPath, dir, extraEnv) {
   const { code, ms } = await spawnHook(hookPath, dir, extraEnv);
@@ -144,7 +149,13 @@ function tempsIn(dir) {
   return out;
 }
 function resetServer(files) {
-  SERVER = files; FAIL = new Set(); STAMP = true; SWAP = {}; SLOW = new Set(); HOLD = null; GETS = []; STALL = new Set(); DELAY = {};   // 지금 서버는 늘 도장을 싣는다
+  SERVER = files; FAIL = new Set(); STAMP = true; SWAP = {}; SLOW = new Set(); SLOW_MS = 4000; HOLD = null; GETS = []; STALL = new Set(); DELAY = {};   // 지금 서버는 늘 도장을 싣는다
+}
+// 뒤에서 받는 판(#4959)처럼 이 시험이 기다리지 않는 일을 기다린다 — 조건이 설 때까지 짧게 재 본다.
+async function waitFor(cond, ms, why) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) { if (cond()) return; await new Promise((r) => setTimeout(r, 100)); }
+  assert.fail(why);
 }
 const within = (p, ms, why) => {
   let t; const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(why)), ms); });
@@ -648,6 +659,98 @@ try {
       assert.equal(readOr(path.join(dir, "b.txt")), B1, `[${id}] 🔴 1ms 흔적 파일을 «로컬 편집»으로 보고 서버 새 판을 안 받았다`);
       assert.equal(markerOf(dir).last_pull, 9_500_000);
     });
+  }
+  // ═══ #4959 — 세션 시작 판은 세션을 짧게만 붙들고, 못 받은 것은 뒤에서 끝까지 받는다. ══════════════════════════
+  //  실측 출처: 2026-10-21 맥미니 프로젝트 4606 — 처음 여는 폴더에서 공유 파일 248개를 순차로 받느라 SessionStart 가
+  //  85초 멈췄다(파일당 고정 지연 약 0.35초). 여기선 뒤로 넘기기를 켠다(LIVELY_PULL_BG_OFF 끔). 뒤 판의 사본이 남는지
+  //  보려고 임시 폴더를 시험 전용으로 준다. 사양·엣지 표: 이 묶음의 E1~E7.
+  {
+    const PULL = HOOKS["project-pull"], TURN = HOOKS["project-pull-turn"];
+    const bgTmp = path.join(root, "bgtmp");
+    await fsp.mkdir(bgTmp, { recursive: true });
+    const BG_ON = { LIVELY_PULL_BG_OFF: "", TMPDIR: bgTmp, TEMP: bgTmp, TMP: bgTmp };
+    const lockOf = (dir) => path.join(dir, ".lively", "pull-bg.json");
+    const copiesLeft = () => fs.readdirSync(bgTmp).filter((n) => n.startsWith("lively-pull-bg-"));
+    const filesOf = (n, body) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`d${String(i).padStart(2, "0")}.md`, { body: `${body}${i}`, mtime: 9_000_000 + i }]));
+    const deadPid = await new Promise((r) => { const c = spawn(process.execPath, ["-e", ""]); c.on("exit", () => r(c.pid)); });
+
+    // E1 — 많고 느리다: 훅은 창 안에 끝내고 안내를 남기며, 뒤 판이 전부 받아 수렴한다(동시 받기라 순차보다 훨씬 빨리)
+    await scenario("[project-pull] #4959 E1 많고 느림 → 수 초 만에 세션 놓아줌 · 뒤에서 전량 수렴", async () => {
+      const files = filesOf(24, "느린 문서 ");
+      resetServer(files);
+      DELAY = Object.fromEntries(Object.keys(files).map((p) => [p, 1500]));   // 순차면 36초
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      const { code, ms, out } = await spawnHook(PULL, dir, BG_ON);
+      assert.equal(code, 0);
+      assert.ok(ms < 7000, `🔴 세션 시작 판이 받기를 다 끝날 때까지 붙들었다(${ms}ms)`);
+      assert.ok(out.trim().length > 0, "뒤로 넘겼는데 AI 에게 아무 안내도 안 했다");
+      assert.equal(markerOf(dir).last_pull, undefined, "다 못 받았는데 last_pull 을 올렸다");
+      const t0 = Date.now();
+      await waitFor(() => (markerOf(dir).last_pull === 9_000_023) && !fs.existsSync(lockOf(dir)), 20_000,
+        "🔴 뒤에서 받는 판이 끝까지 수렴하지 못했다(last_pull·잠금)");
+      assert.ok(Date.now() - t0 + ms < 20_000, "뒤 판이 순차로 받았다");
+      for (const [p, v] of Object.entries(files)) assert.equal(readOr(path.join(dir, p)), v.body, `${p} 를 못 받았다`);
+      assert.equal(Object.keys(ledgerMust(dir, "뒤 판의 진척")).length, 24, "원장이 전량이 아니다");
+      assert.deepEqual(tempsIn(dir), [], "받기 임시 파일이 남았다");
+      assert.deepEqual(copiesLeft(), [], "뒤 판의 훅 사본이 임시 폴더에 남았다");
+    });
+
+    // E2 — 창 안에 다 끝나면 뒤 판을 안 띄운다
+    await scenario("[project-pull] #4959 E2 창 안에 다 받음 → 뒤 판 없음 · 바로 수렴", async () => {
+      resetServer(filesOf(3, "빠른 문서 "));
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      const { out } = await spawnHook(PULL, dir, BG_ON);
+      assert.equal(out, "", "받을 게 남지 않았는데 «뒤에서 받는 중» 안내를 했다");
+      assert.equal(markerOf(dir).last_pull, 9_000_002);
+      assert.equal(fs.existsSync(lockOf(dir)), false, "뒤 판을 띄웠다");
+      assert.deepEqual(copiesLeft(), []);
+    });
+
+    // E3 — 짧은 창에서 끊긴 큰 느린 파일은 «느린 파일» 보류가 아니다(적으면 뒤 판이 30분간 안 받는다)
+    await scenario("[project-pull] #4959 E3 창에서 끊긴 큰 파일 → 보류 안 적음 · 뒤 판이 받음", async () => {
+      const BIG = "B".repeat(1024 * 1024 + 10);
+      resetServer({ "big.bin": { body: BIG, mtime: 9_000_000 } });
+      SLOW = new Set(["big.bin"]); SLOW_MS = 7500;                           // 창(6초)보다 길다
+      const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+      const { ms } = await spawnHook(PULL, dir, BG_ON);
+      assert.ok(ms < 7000, `🔴 세션 시작 판이 큰 파일을 끝까지 붙들었다(${ms}ms)`);
+      assert.equal(skipOf(dir)["big.bin"], undefined, "🔴 짧은 창에서 끊긴 것을 «느린 파일»로 보류했다");
+      await waitFor(() => fs.existsSync(path.join(dir, "big.bin")) && !fs.existsSync(lockOf(dir)), 20_000, "뒤 판이 큰 파일을 못 받았다");
+      assert.equal(fs.statSync(path.join(dir, "big.bin")).size, BIG.length);
+      assert.equal(markerOf(dir).last_pull, 9_000_000);
+    });
+
+    // E4·E5 — 살아 있는 잠금이 있으면 턴 판·세션 시작 판 모두 받지 않는다(원장을 둘이 따로 쓰지 않게)
+    for (const [label, hook] of [["E4 턴 판", TURN], ["E5 세션 시작 판", PULL]]) {
+      await scenario(`[${label}] #4959 살아 있는 잠금 → 본문 요청 0건`, async () => {
+        resetServer({ "new.md": { body: "웹에서 올린 문서", mtime: 9_000_000 } });
+        const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+        fs.writeFileSync(lockOf(dir), JSON.stringify({ pid: process.pid, at: Date.now() }));
+        await spawnHook(hook, dir, BG_ON);
+        assert.equal(GETS.length, 0, `🔴 뒤 판이 받는 중인데 같이 받았다: ${JSON.stringify(GETS)}`);
+        assert.equal(readOr(path.join(dir, "new.md")), null);
+        assert.ok(fs.existsSync(lockOf(dir)), "남의 잠금을 지웠다");
+      });
+    }
+
+    // E6·E7 — 죽은 판의 잠금(pid 죽음 · 마감 넘게 옛것) · 깨진 잠금은 없는 것으로 본다
+    const staleLocks = [
+      ["E6 pid 죽음", JSON.stringify({ pid: deadPid, at: Date.now() })],
+      ["E6 마감 넘은 옛 잠금", JSON.stringify({ pid: process.pid, at: Date.now() - 17 * 60_000 })],
+      ["E7 깨진 잠금", "{\"pid\":"],
+    ];
+    for (const [label, lock] of staleLocks) {
+      for (const [id, hook] of [["project-pull-turn", TURN], ["project-pull", PULL]]) {
+        await scenario(`[${id}] #4959 ${label} → 무시하고 정상 받기`, async () => {
+          resetServer({ "new.md": { body: "웹에서 올린 문서", mtime: 9_000_000 } });
+          const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
+          fs.writeFileSync(lockOf(dir), lock);
+          await spawnHook(hook, dir, BG_ON);
+          assert.equal(readOr(path.join(dir, "new.md")), "웹에서 올린 문서", `🔴 죽은·깨진 잠금 때문에 영영 안 받는다`);
+          assert.equal(markerOf(dir).last_pull, 9_000_000);
+        });
+      }
+    }
   }
   if (failures.length) throw new Error(`#4609 시나리오 ${failures.length}건 실패:\n  ${failures.join("\n  ")}`);
   console.log(`\n${pass} passed`);
