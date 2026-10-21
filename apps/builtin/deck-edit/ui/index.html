@@ -111,6 +111,8 @@
   .clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sp { flex: 1; min-width: 0; }
   .fine { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .dlNow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+  .modal .sect { font-size: 12px; color: var(--muted); margin: 12px 0 2px; padding-top: 10px; border-top: 1px solid var(--line); }
 
   /* ── 단추 ── 기본(ib) · 그림만(ic) · 주 동작(pri) · 작은(sm) */
   .ib { flex: none; height: var(--ctl); min-width: var(--ctl); padding: 0 11px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--bg); color: var(--ink-sub); font-size: 12.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; transition: border-color .12s, background .12s, color .12s; }
@@ -178,7 +180,7 @@
   body.compact .aist .lb { display: none; }
   #moreBtn.hot { color: var(--blue-deep); border-color: var(--blue); }
   body.compact #undoBtn { display: none; }
-  body.compact #dlBtn { display: none; }   /* 좁은 폭은 ⋯ 의 「이 버전 내려받기」 로 */
+  body.compact #dlBtn { display: none; }   /* 좁은 폭은 ⋯ 의 「HTML + PDF 받기」 로 */
   .menu { position: absolute; right: 10px; top: 44px; z-index: 25; min-width: 230px; background: var(--bg); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: var(--shadow); padding: 6px; display: grid; }
   .menu button { height: 34px; padding: 0 12px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; }
   .menu button:hover { background: var(--soft-2); }
@@ -885,7 +887,7 @@
   <button type="button" class="ib ic ghost" id="redoBtn" hidden aria-label="되돌린 것을 다시"><svg class="i"><use href="#i-redo"/></svg></button>
   <div class="menu" id="undoMenu" hidden></div>
   <button type="button" class="ib ic ghost" id="presBtn" hidden title="발표 · 장표만 화면 가득 (F)" aria-label="발표"><svg class="i"><use href="#i-play"/></svg></button>
-  <button type="button" class="ib ic ghost" id="dlBtn" hidden aria-label="내려받기"><svg class="i"><use href="#i-dl"/></svg></button>
+  <button type="button" class="ib ic ghost" id="dlBtn" hidden aria-label="이 버전 HTML + PDF 받기"><svg class="i"><use href="#i-dl"/></svg></button>
   <button type="button" class="ib ic ghost" id="fullBtn" hidden title="화면 가득 · 사이드바 없이 이 앱만 크게 띄웁니다(닫기 · Esc 로 돌아옵니다)" aria-label="화면 가득"><svg class="i"><use href="#i-full"/></svg></button>
   <button type="button" class="ib ic ghost" id="talkBtn" hidden title="대화 · 보낸 묶음과 AI 의 답 · 질문을 한 줄기로" aria-label="대화" aria-pressed="false"><svg class="i"><use href="#i-chat"/></svg></button>
   <button type="button" class="ib ic" id="moreBtn" title="더 보기" aria-label="더 보기"><svg class="i dots"><use href="#i-more"/></svg></button>
@@ -983,6 +985,8 @@
   <div class="card">
     <div class="mh"><span>내려받기</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="mb">
+      <div class="opt"><div class="lab">바로 받기</div><div class="dlNow"><button type="button" class="ib sm pri" id="dlNowBoth">HTML + PDF (zip 하나)</button><button type="button" class="ib sm" id="dlNowHtml">HTML 만</button><button type="button" class="ib sm" id="dlNowPdf">PDF 만</button></div><div class="fine" id="dlNowFine"></div></div>
+      <div class="sect">세션에 청하기 — 범위를 고르거나 의견을 얹을 때(AI 가 만들어 받는 링크를 세션에 보냅니다)</div>
       <div class="opt"><div class="lab">형식</div><div class="seg" id="dlFmtSeg"><button type="button" data-v="pdf" class="on">PDF</button><button type="button" data-v="html">HTML</button></div></div>
       <div class="opt"><div class="lab">범위</div><div class="seg" id="dlRangeSeg"><button type="button" data-v="all" class="on">전체</button><button type="button" data-v="cur">이 장</button><button type="button" data-v="chg">바뀐 장만</button><button type="button" data-v="cm">의견 있는 장만</button></div><div class="fine" id="dlRangeFine"></div></div>
       <div class="chks"><label class="chk"><input type="checkbox" id="dlNotes">의견을 장 위에 얹기(번호표 · 오른쪽 칸)</label><label class="chk"><input type="checkbox" id="dlPicks" checked>고른 안으로(끄면 기본 안)</label></div>
@@ -1002,7 +1006,7 @@
       <div><b>장 옮기기</b><span>왼쪽 장 번호를 끌어 순서를 바꿉니다. 머리의 휴지통은 그 장을 통째로 지웁니다(보내기 전에는 되살릴 수 있습니다).</span></div>
       <div><b>장 넘기기</b><span><kbd>←</kbd> <kbd>→</kbd> 또는 장 번호 · 장표 밀기. 고정(핀)하면 장표를 밀어도 오른쪽은 그 장에 머뭅니다.</span></div>
       <div><b>보내기</b><span>아래 「AI에게 보내기」 — 안 보낸 고침과 의견만 묶어 세션에 보냅니다. 되돌리기는 <kbd>⌘Z</kbd>.</span></div>
-      <div><b>버전</b><span>AI 가 새 버전을 올리면 위에 띠가 뜹니다. 「앞 버전과 비교하기」 로 바뀐 장을 그림으로 견줍니다(왼쪽 레일에서 바뀐 장을 고르고 「이 장 전체를 앞 버전으로」 도 됩니다). 내려받기는 머리줄의 ↓(형식 · 범위 · 의견 얹기).</span></div>
+      <div><b>버전</b><span>AI 가 새 버전을 올리면 위에 띠가 뜹니다. 「앞 버전과 비교하기」 로 바뀐 장을 그림으로 견줍니다(왼쪽 레일에서 바뀐 장을 고르고 「이 장 전체를 앞 버전으로」 도 됩니다). 머리줄의 ↓ 는 보고 있는 버전의 HTML + PDF 를 바로 받습니다(한 파일 zip · PDF 가 아직 없는 버전은 HTML 만 받고 세션에 PDF 를 청합니다). 범위 · 의견 얹기는 ⋯ 「내려받기 옵션」.</span></div>
       <div><b>대화 · 개요 · 발표</b><span>머리줄 말풍선은 보낸 묶음과 AI 의 답 · 질문을 한 줄기로. 글 줄 칸 머리의 ≡ 는 모든 장의 글을 한 화면에(개요). ▶ 는 발표 모드(← → 넘기기 · 숫자 Enter · P 발표자 보기).</span></div>
       <div><b>단축키</b><span><kbd>←</kbd> <kbd>→</kbd> 장 넘기기 · <kbd>G</kbd> 숫자 <kbd>Enter</kbd> 그 장 · <kbd>1</kbd>~<kbd>4</kbd> 고르기 · 핀 · 영역 · 펜 · <kbd>O</kbd> 개요 · <kbd>F</kbd> 발표 · <kbd>⌘F</kbd> 찾기 · <kbd>⌘Enter</kbd> 보내기 · <kbd>⌘Z</kbd> 되돌리기 · <kbd>⇧⌘Z</kbd> 다시 · <kbd>Tab</kbd> 의견 칸 · <kbd>Esc</kbd> 닫기 · <kbd>?</kbd> 이 창. 글 칸 안에서는 글자 키가 먹지 않습니다.</span></div>
     </div>
@@ -1940,7 +1944,7 @@
     var head = (rows.filter(function (r) { return r.kind === 'head'; })[0] || st.heads[ver] || {}).body || '';
     var tail = (rows.filter(function (r) { return r.kind === 'tail'; })[0] || {}).body || '';
     var slides = rows.filter(function (r) { return r.kind === 'slide'; });
-    var v = { head: await fill(head), tail: tail, slides: slides, html: null };
+    var v = { head: await fill(head), tail: tail, slides: slides, html: null, pdf: rows.filter(function (r) { return r.kind === 'pdf'; })[0] || null };   // pdf: deck-push 가 판에 붙인 PDF(2.2)
     st.verCache[key] = v; return v;
   }
   /** 지금 버전에 안이 없는 장마다, 앞 버전들(가까운 것부터 셋까지)에서 안이 붙어 있던 가장 가까운 버전을 찾는다 → st.oldVars[장 id] = { ver, vars }. */
@@ -2306,7 +2310,7 @@
           var rows = await q('versions', { doc: d.doc, ver: v }, 1000);
           //  머리 행이 없거나(버전이 비었다) 행이 상한에 닿았으면(잘린 행으로 센 지문은 틀린 값이다) 세지 않고, 다시 묻지도 않는다.
           if (rows.length >= 1000 || !rows.some(function (r) { return r.kind === 'head'; })) { SRC.skip[vk] = 1; continue; }
-          await srcPut({ doc: d.doc, ver: v, fp: fpOf(rows), path: '', bytes: 0, mtime: '', session: L.session || '' });
+          await srcPut({ doc: d.doc, ver: v, fp: fpOf(rows.filter(function (r) { return r.kind !== 'pdf'; })), path: '', bytes: 0, mtime: '', session: L.session || '' });
         } catch (e) {}
       }
     };
@@ -4347,7 +4351,8 @@
     if (st.doc) items.push({ id: 'doccm', label: '문서 전체 의견', run: openDocCm });
     if (st.doc) items.push({ id: 'copycm', label: '내 의견 복사(글로)', run: copyMyComments });
     if (st.doc) items.push({ id: 'link', label: '링크 복사 · 이 문서' + (cs ? ' · ' + (posOf(cs.i) + 1) + '쪽' : ''), run: function () { copyLocator(null, cs ? cs.id : null); } });
-    if (st.doc) items.push({ id: 'dl', label: '내려받기 · PDF · HTML · 의견 얹기', run: function () { openDl(); } });
+    if (st.doc) items.push({ id: 'dlnow', label: 'HTML + PDF 받기 · 버전 ' + st.ver, run: function () { downloadNow('both').catch(fail); } });
+    if (st.doc) items.push({ id: 'dl', label: '내려받기 옵션 · 범위 · 의견 얹기', run: function () { openDl(); } });
     if (st.doc && st.mode === 'slides') items.push({ id: 'present', label: '발표 모드 (F)', run: function () { openPresent().catch(fail); } });
     items.push({ id: 'help', label: '쓰는 법', run: function () { $('helpModal').hidden = false; } });
     return items;
@@ -4355,7 +4360,7 @@
   /** 이 버전의 의견을 장 위에 얹은 PDF 를 세션에 청한다 — 앱 화면은 샌드박스라 인쇄 · 내려받기를 못 하므로 세션의 AI 가 bin/deck-export.mjs 로 뽑는다. 묶음은 잠그지 않는다(보내기와 따로다). */
   var DL_FMT = { pdf: 'PDF', html: 'HTML', pdfc: 'PDF' };
   function dlFmt() { var f = pref('dlFmt'); return DL_FMT[f] ? f : 'pdf'; }
-  function paintDl() { var b = $('dlBtn'); if (!b || !DL_FMT) return; b.hidden = !st.doc; b.title = '내려받기 · 형식 · 범위 · 의견 얹기'; var pb = $('presBtn'); if (pb) pb.hidden = !st.doc || st.mode !== 'slides'; }
+  function paintDl() { var b = $('dlBtn'); if (!b || !DL_FMT) return; b.hidden = !st.doc; var v = st.doc ? st.verCache[st.doc + '#' + st.ver] : null; b.title = '이 버전의 HTML + PDF 받기' + (v && !v.pdf ? ' (PDF 는 아직 없음 · HTML 만 받고 세션에 청함)' : ''); var pb = $('presBtn'); if (pb) pb.hidden = !st.doc || st.mode !== 'slides'; }
   /* 2.1 G1 — 내려받기 창 하나: 형식(PDF · HTML) · 범위(전체 · 이 장 · 바뀐 장만 · 의견 있는 장만) · 의견 얹기 · 고른 안으로 → 세션에 청한다(앱은 샌드박스라 스스로 못 받는다). */
   var dlSel = { fmt: 'pdf', range: 'all' };
   function dlRangeIds() {
@@ -4366,6 +4371,9 @@
     return [];
   }
   function paintDl2() {
+    var v = st.verCache[st.doc + '#' + st.ver], hasPdf = !!pdfShaOf(v);
+    $('dlNowPdf').disabled = !hasPdf; $('dlNowBoth').textContent = hasPdf ? 'HTML + PDF (zip 하나)' : 'HTML (PDF 는 세션에 청함)';
+    $('dlNowFine').textContent = hasPdf ? '보고 있는 버전 ' + st.ver + ' 그대로 · 고른 안이 반영됩니다 · 세션을 거치지 않습니다' : '버전 ' + st.ver + ' 의 PDF 는 아직 안 올라왔어요 · HTML 은 바로 받고 PDF 는 세션에 청합니다';
     [].forEach.call($('dlFmtSeg').children, function (b) { b.classList.toggle('on', b.getAttribute('data-v') === dlSel.fmt); });
     [].forEach.call($('dlRangeSeg').children, function (b) { var v = b.getAttribute('data-v'); b.classList.toggle('on', v === dlSel.range); b.disabled = dlSel.fmt === 'html' && v !== 'all'; });
     if (dlSel.fmt === 'html' && dlSel.range !== 'all') dlSel.range = 'all';
@@ -4388,18 +4396,90 @@
       toast(r && r.sent ? '청했습니다 · 다 되면 세션에 받는 링크가 옵니다' : (r && r.draft ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 · 세션에서 보내 주세요' : '세션에 알리지 못했어요 · 세션에서 「이 버전 내려받게 해 줘」 라고 말해 주세요'), 4600);
     })().catch(fail);
   });
-  /** 지금 보는 버전을 파일로 받는다(원준 2026-10-12 «해당 버전을 다운로드 · 기본은 PDF · 형식은 설정에서»). 앱 화면은 샌드박스라 스스로 내려받지 못한다 —
-   *  세션의 AI 가 bin/deck-export.mjs(PDF) · bin/deck-pull.mjs(HTML) 로 만들어 받는 링크를 세션에 보낸다. 고른 안이 반영된다. 묶음은 건드리지 않는다. */
-  async function downloadVer() {
-    var f = dlFmt();
-    if (f === 'pdfc') { await exportPdf(); return; }
-    if (!sdk.chat) { toast('세션에 붙여 연 화면에서만 받을 수 있어요 · 세션에서 「이 버전 ' + DL_FMT[f] + ' 로 내려받게 해 줘」 라고 말해 주세요', 4600); return; }
-    await flushSaves();
-    var msg = '[장표 수정] ' + st.title + ' · 버전 ' + st.ver + ' → 이 버전을 ' + DL_FMT[f] + ' 로 내려받게 해 주세요 (문서 ' + st.doc + ' · 형식 ' + f + ')';
-    var r = null; try { r = await sdk.chat.send(msg); } catch (e) {}
-    toast(r && r.sent ? '버전 ' + st.ver + ' 을 ' + DL_FMT[f] + ' 로 청했습니다 · 다 되면 세션에 받는 링크가 옵니다' : (r && r.draft ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 · 세션에서 보내 주세요' : '세션에 알리지 못했어요 · 세션에서 「이 버전 ' + DL_FMT[f] + ' 로 내려받게 해 줘」 라고 말해 주세요'), 4600);
+  /** 2.2 — ↓ 는 세션을 거치지 않고 **보고 있는 버전의 HTML + PDF 를 바로 받는다**(원준 2026-10-21 «다운로드 버튼 누르면 거기에 있는 html 하고 pdf 한 번에 클릭하자마자 다운까지»).
+   *  HTML 은 표의 행(머리 · 장마다 고른 안 · 꼬리 · 자원)을 앱이 이어 만든다(deck-pull assembleHtml 과 같은 규칙). PDF 는 deck-push 가 판에 붙여 둔 것(kind 'pdf' 행 → assets 의 base64).
+   *  둘을 한 번의 클릭으로 받으려면 한 파일이어야 한다 — 브라우저가 한 동작의 둘째 내려받기를 막거나 묻는다(크롬 DownloadRequestLimiter). 그래서 압축 없는 zip 하나로 묶고, 하나만 받을 때는 그대로 준다.
+   *  PDF 가 아직 없는 버전은 HTML 만 받고 세션에 PDF 를 한 번 청해 둔다(deck-export --plain --push 로 판에 붙는다 · 올라오면 알린다). 앱 화면은 srcdoc 샌드박스지만 allow-downloads 가 있어 내려받기가 된다(#4482). */
+  function dlName() { return String(st.title || st.doc || '장표').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) + '_버전' + st.ver; }
+  function saveBlob(name, blob) { var url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = name; a.rel = 'noopener'; a.style.display = 'none'; document.body.appendChild(a); a.click(); setTimeout(function () { a.remove(); URL.revokeObjectURL(url); }, 60000); }
+  function b64Bytes(b64) { var bin = atob(b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+  var CRC_T = (function () { var t = new Int32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c; } return t; })();
+  function crc32(u8) { var c = -1; for (var i = 0; i < u8.length; i++) c = CRC_T[(c ^ u8[i]) & 0xFF] ^ (c >>> 8); return (c ^ -1) >>> 0; }
+  /** 압축 없이 담는 zip(파일 이름은 UTF-8 · 깃발 bit 11). files = [{ name, data: Uint8Array }]. 4GB 아래만(zip64 없음). */
+  function zipStore(files) {
+    var enc = new TextEncoder(), parts = [], cd = [], off = 0, now = new Date();
+    var dt = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF, dd = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+    function u16(v) { return [v & 255, (v >>> 8) & 255]; }
+    function u32(v) { return [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]; }
+    files.forEach(function (f) {
+      var name = enc.encode(f.name), crc = crc32(f.data), n = f.data.length;
+      var lh = new Uint8Array([].concat(u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(dt), u16(dd), u32(crc), u32(n), u32(n), u16(name.length), u16(0)));
+      parts.push(lh, name, f.data);
+      cd.push(new Uint8Array([].concat(u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(dt), u16(dd), u32(crc), u32(n), u32(n), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(off))), name);
+      off += lh.length + name.length + n;
+    });
+    var cdLen = 0; cd.forEach(function (x) { cdLen += x.length; });
+    var end = new Uint8Array([].concat(u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(cdLen), u32(off), u16(0)));
+    return new Blob(parts.concat(cd, [end]), { type: 'application/zip' });
   }
-  $('dlBtn').addEventListener('click', function () { openDl(); });
+  function pdfShaOf(v) { var m = /__ASSET:([0-9a-f]{64})__/.exec(v && v.pdf ? String(v.pdf.body || '') : ''); return m ? m[1] : ''; }
+  /** 이 버전의 HTML 한 장 — 머리 + 장마다 고른 안(effSlide) + 꼬리, 자원을 메우고 앱 전용 글꼴 별칭은 뺀다(deck-pull assembleHtml 과 같은 결과). */
+  async function assembleVer(v, ver) {
+    var order = [], seen = {};
+    v.slides.forEach(function (r) { if (!seen[r.slide_id]) { seen[r.slide_id] = 1; order.push(r.slide_id); } });
+    var html = v.head;
+    for (var i = 0; i < order.length; i++) { var s = effSlide(v, ver, order[i]); html += await fill(s ? (s.body || '') : ''); }
+    html += v.tail;
+    return html.replace(/<style data-deck-edit="alias">[\s\S]*?<\/style>/g, '');
+  }
+  var pdfAsked = {}, dlBusy = false;
+  async function downloadNow(what) {
+    if (!st.doc || dlBusy) return;
+    what = what || 'both';
+    var key = st.doc + '#' + st.ver, v = st.verCache[key];
+    if (!v) { toast('버전을 아직 읽는 중이에요 · 잠시 뒤 다시 눌러 주세요', 2600); return; }
+    var base = dlName(), files = [], sha = pdfShaOf(v);
+    dlBusy = true; $('dlBtn').disabled = true;
+    try {
+      if (what !== 'pdf') files.push({ name: base + '.html', data: new TextEncoder().encode(await assembleVer(v, st.ver)), type: 'text/html' });
+      if (what !== 'html' && sha) { var b64 = await asset(sha); if (b64) files.push({ name: base + '.pdf', data: b64Bytes(b64), type: 'application/pdf' }); }
+    } catch (e) { dlBusy = false; $('dlBtn').disabled = false; fail(e); return; }
+    dlBusy = false; $('dlBtn').disabled = false;
+    if (!files.length) { if (what === 'pdf') askPdf(key, '이 버전에는 PDF 가 아직 없어요 ·'); return; }
+    if (files.length === 1) saveBlob(files[0].name, new Blob([files[0].data], { type: files[0].type }));
+    else saveBlob(base + '.zip', zipStore(files));
+    var gotPdf = files.some(function (f) { return f.type === 'application/pdf'; });
+    if (what !== 'html' && !gotPdf) askPdf(key, 'HTML 을 받았어요 · PDF 는 이 버전에 아직 없어');
+    else toast((files.length > 1 ? 'HTML + PDF 를 한 파일(zip)로 받았어요 · ' + base + '.zip' : (gotPdf ? 'PDF 를' : 'HTML 을') + ' 받았어요 · ' + files[0].name), 3600);
+  }
+  /** PDF 가 없는 버전 — 세션에 한 번만 청한다(세션의 AI 가 deck-export --plain --push 로 판에 붙인다). 올라오면 checkPdfArrived 가 알린다. */
+  function askPdf(key, lead) {
+    if (pdfAsked[key]) { toast(lead + ' 세션에 이미 청해 두었어요 · 올라오면 알립니다', 3600); return; }
+    if (!sdk.chat) { toast(lead + ' 세션에 붙여 연 화면이 아니라 청하지 못했어요 · 세션에서 「버전 ' + st.ver + ' PDF 를 앱에 올려 줘」 라고 말해 주세요', 5200); return; }
+    pdfAsked[key] = 1;
+    var msg = '[장표 수정] ' + st.title + ' · 버전 ' + st.ver + ' → 이 버전의 PDF 를 앱에 올려 주세요 (문서 ' + st.doc + ' · 버전 ' + st.ver + ')';
+    sdk.chat.send(msg).then(function (r) {
+      if (!(r && (r.sent || r.draft))) pdfAsked[key] = 0;
+      toast(lead + (r && r.sent ? ' 세션에 청했어요 · 올라오면 알립니다(그때 ↓ 로 HTML + PDF 를 받습니다)' : (r && r.draft ? ' 세션이 멈춰 있어 입력칸에 넣어 두었어요 · 세션에서 보내 주세요' : ' 세션에 알리지 못했어요 · 세션에서 「버전 ' + st.ver + ' PDF 를 앱에 올려 줘」 라고 말해 주세요')), 5200);
+    }).catch(function () { pdfAsked[key] = 0; toast(lead + ' 세션에 알리지 못했어요', 3600); });
+  }
+  var pdfChkBusy = false, pdfTold = {};
+  /** 표가 바뀔 때마다 — 보고 있는 버전에 PDF 가 붙었으면 받아 두고(청했던 것이면 한 번 알린다). 다시 읽기(refreshNow)가 먼저 버전을 새로 읽어 왔을 수도 있다. */
+  async function checkPdfArrived() {
+    var key = st.doc ? st.doc + '#' + st.ver : '', v = key && st.verCache[key];
+    if (!v || pdfChkBusy) return;
+    if (!v.pdf) {
+      pdfChkBusy = true;
+      try { var rows = await q('versions', { doc: st.doc, ver: st.ver, kind: 'pdf' }, 1); var v2 = st.verCache[key]; if (rows.length && v2 && !v2.pdf) v2.pdf = rows[0]; } catch (e) {} finally { pdfChkBusy = false; }
+    }
+    var v3 = st.verCache[key]; if (!v3 || !v3.pdf) return;
+    paintDl(); if (!$('dlModal').hidden) paintDl2();
+    if (pdfAsked[key] && !pdfTold[key]) { pdfTold[key] = 1; toast('버전 ' + st.ver + ' 의 PDF 가 올라왔어요 · ↓ 를 누르면 HTML + PDF 를 받습니다', 5200); }
+  }
+  $('dlBtn').addEventListener('click', function () { downloadNow('both').catch(fail); });
+  $('dlNowBoth').addEventListener('click', function () { $('dlModal').hidden = true; downloadNow('both').catch(fail); });
+  $('dlNowHtml').addEventListener('click', function () { $('dlModal').hidden = true; downloadNow('html').catch(fail); });
+  $('dlNowPdf').addEventListener('click', function () { $('dlModal').hidden = true; downloadNow('pdf').catch(fail); });
   async function exportPdf() {
     await flushSaves();
     if (unsaved()) { toast('아직 저장되지 않은 것이 있어 내보내지 않았어요 · 연결을 확인하고 「저장 안 됨」 을 눌러 주세요', 4200); return; }
@@ -4846,6 +4926,7 @@
     if (ev && ev.source === 'app-ui') return;
     clearTimeout(reloadT);
     reloadT = setTimeout(refreshNow, 600);
+    setTimeout(function () { checkPdfArrived().catch(function () {}); }, 900);
   });
   /* 알림을 놓쳐도 따라잡는다 — 사파리는 가려진 탭의 알림 줄(SSE)을 재우고, 깨어난 뒤 그 사이의 것을 다시 주지 않는다. 새 버전이 올라왔는데 화면이 모르는 일이 생긴다.
      화면이 보이는 동안 10초마다(그리고 다시 보이게 된 순간) 문서 행과 «답을 기다리는 질문» 만 가볍게 읽어, 달라졌으면 그때 전부 다시 읽는다. */
