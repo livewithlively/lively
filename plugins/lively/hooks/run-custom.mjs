@@ -314,7 +314,7 @@ function execNode(file, { input, timeout, env }) {
     let child;
     try { child = spawn("node", [file], { env, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { resolve({ stdout: "", stderr: String((e && e.message) || ""), status: null, signal: null }); return; }
-    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false;
+    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false; let killed = false; let overflow = false;
     const exited = () => child.exitCode !== null || child.signalCode !== null;
     // 상한에서 손을 뗀다 — 파이프에 남은 마지막 출력이 들어올 짧은 유예를 준 뒤 스트림을 닫고 끝낸다.
     //  close 를 끝까지 기다리지 않는 이유: 훅이 stdio 를 물려받은 손자(예: 백그라운드 git fetch)를 남기면 그 손자가
@@ -326,10 +326,11 @@ function execNode(file, { input, timeout, env }) {
     // 아직 도는 훅만 죽인다 — 이미 끝났는데 파이프만 손자가 붙잡고 있으면 그 시점의 결과로 끝낸다.
     const kill = () => {
       if (exited()) { letGo(child.exitCode, child.signalCode); return; }
+      killed = true;
       try { child.kill("SIGKILL"); } catch { /* 그 사이 끝남 — exit 가 온다 */ }
     };
     const timer = setTimeout(kill, timeout);
-    const take = (buf, chunks, len) => { if (len + buf.length > HOOK_MAX_BUFFER) { kill(); return len; } chunks.push(buf); return len + buf.length; };
+    const take = (buf, chunks, len) => { if (len + buf.length > HOOK_MAX_BUFFER) { overflow = true; kill(); return len; } chunks.push(buf); return len + buf.length; };
     child.stdout.on("data", (b) => { outLen = take(b, out, outLen); });
     child.stderr.on("data", (b) => { errLen = take(b, err, errLen); });
     const finish = (status, signal, extraErr) => {
@@ -337,12 +338,13 @@ function execNode(file, { input, timeout, env }) {
       resolve({
         stdout: Buffer.concat(out).toString("utf8"),
         stderr: Buffer.concat(err).toString("utf8") + (extraErr || ""),
-        status: typeof status === "number" ? status : null,
-        signal: signal || null,
+        // 출력 상한 초과는 훅이 어떻게 끝났든 실패다(잘린 출력이 성공으로 나가면 안 된다) — execFileSync 처럼 강제 종료로 본다.
+        status: overflow ? null : (typeof status === "number" ? status : null),
+        signal: overflow ? "SIGKILL" : (signal || null),
       });
     };
     child.on("error", (e) => finish(null, null, String((e && e.message) || "")));
-    child.on("exit", (code, signal) => { if (signal === "SIGKILL") letGo(code, signal); });
+    child.on("exit", (code, signal) => { if (killed || signal === "SIGKILL") letGo(code, signal); });
     child.on("close", (code, signal) => finish(code, signal));
     // 훅이 stdin 을 안 읽고 먼저 끝나면 EPIPE 가 난다 — 훅의 정상 동작이므로 삼킨다.
     child.stdin.on("error", () => { /* */ });
