@@ -156,6 +156,12 @@ const liveFrames = new Map<string, Set<AppUiFrame>>();
 /** 이 앱의 화면을 띄울 때 탐침을 함께 넣는다(검토 중). 이미 떠 있는 프레임엔 들어가지 않는다 — 다시 띄우면(reload) 들어간다. */
 export function markReviewProbe(appId: string, on: boolean): void { if (on) reviewProbe.add(appId); else reviewProbe.delete(appId); }
 /** 지금 떠 있는 이 앱의 프레임을 전부 다시 띄운다(새 판). 세션 곁칸은 제 사건으로 스스로 다시 띄우니 뺀다(두 번 깜빡이지 않게). */
+/** #4769 살아 있는 앱 화면에 새 state 를 민다 — 알림(#/open/<앱>?…)을 눌렀는데 그 앱이 이미 떠 있으면 다시 띄우지 않고 그 자리에서 옮겨 가게. 앱 SDK 는 lively.ui.onState 로 받는다. */
+export function pushAppState(appId: string, state: Record<string, unknown>): number {
+  let n = 0;
+  liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected) { f.notify('ui/notifications/state', { state }); n++; } });
+  return n;
+}
 export function reloadAppFrames(appId: string): number {
   let n = 0;
   liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && !f.root.closest('.pn-sessapp')) { f.reload(); n++; } });
