@@ -15,9 +15,10 @@ import { dotCls, type Sess } from './sess-merge.js';
 /** 표의 한 줄 — 거르기 잣대(AllSessLike) + 그릴 글. 부르는 쪽이 sessNameFace 로 이름을 정해 넘긴다. */
 export interface SessTableItem extends AllSessLike {
   s: Sess; name: string; untitled: boolean;
-  /** 세션이 아니라 **프로젝트 한 줄**(프로젝트 보드 리스트 뷰 — 내가 볼 세션이 없는 프로젝트도 목록에 선다, 원준 2026-10-21
-   *  «프로젝트는 리스트에서 모두가 다 볼 수 있었으면»). 이 줄의 s 는 자리채움이다 — 표는 s 를 읽지 않고 이 값과 name · lastSeen 을 쓴다. */
-  pj?: { id: number; status: string; made: number };
+  /** 세션이 아니라 **프로젝트 한 줄**(프로젝트 보드 리스트 뷰 — 원준 2026-10-21 «프로젝트 탭인데 세션마다 한 행을 구성하게 하면 안되지»).
+   *  이 줄의 s 는 자리채움이다 — 표는 s 를 읽지 않고 이 값과 name · lastSeen 을 쓴다.
+   *  rank: 「상태」 열 정렬 순위(프로젝트 상태). sess: 「세션」 열 — 내가 볼 수 있는 세션 중 가장 급한 상태와 그 수(없으면 n 0). */
+  pj?: { id: number; status: string; made: number; rank?: number; sess?: { n: number; key: string; label: string } | null };
 }
 /** 표가 쥐는 화면 상태 — 부르는 쪽이 모듈 수준으로 들고 있다(통째로 다시 그려도 남게). */
 export interface SessTableUi { shown: number; closed: Set<string>; openUntitled: Set<string>; sort: SessSort | null }
@@ -36,9 +37,8 @@ export const harnessName = (s: Sess): string => {
 };
 export const stateRank = (k: string): number => (SESS_STATES[k] ? SESS_STATES[k].rank : 99);
 /** 상태 표시 — 눈에 띄어야 할 셋(확인 필요 · 작업 완료 · 작업 중)은 알약, 나머지는 점 + 흐린 글. */
-function stateCell(s: Sess): HTMLElement {
-  const k = s.stateKey;
-  const label = s.stateLabel || '지난 세션';
+function stateCell(s: Sess): HTMLElement { return stateFace(s.stateKey, s.stateLabel || '지난 세션'); }
+function stateFace(k: string, label: string): HTMLElement {
   if (k === 'waiting' || k === 'done' || k === 'busy') return el('span', { class: 'v2-sa-st ' + dotCls(k) }, dot(k), el('span', { text: label }));
   return el('span', { class: 'v2-sa-st quiet' }, dot(k), el('span', { text: label }));
 }
@@ -108,6 +108,8 @@ export interface SessTableOpts<T extends SessTableItem> {
   openProj?: (it: T) => void;
   /** 첫 열 머리 글 — 기본 「세션」. */
   nameHead?: string;
+  /** 둘째 열(「프로젝트」) 머리 글 — 프로젝트 줄만 그리는 자리는 이 칸에 세션 요약을 넣고 「세션」 으로 부른다. */
+  projHead?: string;
   /** ⋯ 메뉴의 줄 — 「세션 열기」 다음에 붙는다. */
   menuRows?: (it: T) => CtxRow[];
   /** 줄에 붙는 클래스 · 이름 뒤 꼬리표(예: 「치움」). */
@@ -135,7 +137,7 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
   };
   const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
     hc('name', o.nameHead || '세션'),
-    ...(cols ? [hc('proj', '프로젝트')] : []),
+    ...(cols ? [hc('proj', o.projHead || '프로젝트')] : []),
     hc('state', '상태'), hc('owner', '사람'),
     hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
   const rowOf = (it: T): HTMLElement => (it.pj ? projRowOf(it, it.pj) : sessRowOf(it));
@@ -157,7 +159,7 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
       el('div', { class: 'c-name' }, projIcon(true),
         el('a', { class: 't', href, text: it.name, onclick: (ev: MouseEvent) => { if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return; ev.preventDefault(); ev.stopPropagation(); go(); } }),
         o.rowTag ? o.rowTag(it) : null),
-      cols ? el('div', { class: 'c-proj none' }) : null,
+      cols ? sessSumCell(pj.sess) : null,
       el('div', { class: 'c-kind' }, el('span', { class: 'v2-sa-st quiet' }, el('span', { text: pj.status }))),
       el('div', { class: 'c-who' }, it.owner ? personFace(it.owner === 'me' ? o.meId : it.owner, 'v2-sall-face', o.ownerName(it.owner)) : null),
       el('div', { class: 'c-made' }, madeCell(pj.made)),
@@ -167,6 +169,10 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
     row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); go(); } });
     return row;
   };
+  //  「세션」 칸 — 가장 급한 상태 하나 + 수. 볼 세션이 없으면 흐린 «—»(남의 세션은 초대받은 것만 보인다 — 0 이 «세션 없음» 은 아니다).
+  const sessSumCell = (ss: NonNullable<SessTableItem['pj']>['sess']): HTMLElement => (ss && ss.n
+    ? el('div', { class: 'c-proj c-sess' }, stateFace(ss.key, ss.label || '지난 세션'), ss.n > 1 ? el('span', { class: 'n', text: `외 ${ss.n - 1}` }) : null)
+    : el('div', { class: 'c-proj none' }, ss ? el('span', { class: 'm', text: '—' }) : null));
   const sessRowOf = (it: T): HTMLElement => {
     const s = it.s;
     //  ⌘/Ctrl/Shift+클릭은 브라우저 몫으로 둔다(새 창·새 탭) — 셸 안 링크의 관례(main.ts bindAltOpen 머리말)와 같다.
@@ -202,8 +208,11 @@ export function sessTable<T extends SessTableItem>(o: SessTableOpts<T>): { list:
   };
   const list = el('div', { class: 'v2-sa-list', 'aria-label': '세션 목록' });
   //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
-  const sortFields = (it: T) => ({ name: it.name, proj: o.projName(it.projectId) || '', owner: o.ownerName(it.owner),
-    rank: stateRank(String(it.stateKey || '')), made: it.pj ? it.pj.made : Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
+  //  프로젝트 줄의 「세션」 열은 급한 상태 순 → 많은 순으로 선다(글자 비교라 순위·수를 자릿수 맞춘 글로 만든다 · 세션 없음 '~' 은 맨 뒤).
+  const sessSort = (ss: NonNullable<SessTableItem['pj']>['sess']): string => (ss && ss.n
+    ? String(stateRank(ss.key)).padStart(3, '0') + String(9999 - Math.min(ss.n, 9999)).padStart(4, '0') : '~');
+  const sortFields = (it: T) => ({ name: it.name, proj: it.pj && it.pj.sess !== undefined ? sessSort(it.pj.sess) : o.projName(it.projectId) || '', owner: o.ownerName(it.owner),
+    rank: it.pj && it.pj.rank != null ? it.pj.rank : stateRank(String(it.stateKey || '')), made: it.pj ? it.pj.made : Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
   const ordered = (rs: readonly T[]): T[] => sortAllSess(rs, ui.sort, sortFields);
   const groups = by === 'none' ? [] : groupAllSess(vis, by, o.now, stateRank);
   //  [더 보기]의 «외 N개» — 쪽수 때문에 못 그린 줄만 센다. 접은 묶음 · 접은 «이름 없는 세션» 은 더 보기로 나오지 않으니 빼고 센다.

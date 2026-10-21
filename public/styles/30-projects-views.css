@@ -287,3 +287,5 @@
 .pjv-sl .v2-bin-more { margin: 10px 0 0; }
 .pjv-sl .v2-bin-empty { margin: 14px 2px; }
 .pjv-sl-count { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+/* 4판 — 줄 = 프로젝트. 「세션」 칸: 가장 급한 상태 알약 + «외 N» */
+.pjv-sl .c-sess .n { flex: none; font-size: 12px; color: var(--muted); }

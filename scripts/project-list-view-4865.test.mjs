@@ -123,14 +123,17 @@ ok(/if \(shown\) return;/.test(entry2), "S17 새 판을 못 받아도 서 있는
 ok(/await cacheClear\(\);/.test(cut(code(read("web/core.ts")), "async function logout", "export {")), "S18 로그아웃이 보관함을 비운다");
 ok(/'projects-board:v1:' \+ \(currentWorkspace\(\) \|\| '-'\) \+ ':' \+ meId/.test(entry2 + code(read("web/projects/board.ts"))), "S19 보관함 열쇠는 사람 · 워크스페이스로 가른다");
 
-// ── S: 3판(2026-10-21) — 내가 볼 세션이 없는 프로젝트도 리스트 뷰에 한 줄로 선다(«프로젝트는 리스트에서 모두가 다 볼 수 있었으면») ──
+// ── S: 4판(2026-10-21) — 한 줄 = 프로젝트 하나(«프로젝트 탭인데 세션마다 한 행을 구성하게 하면 안되지») · 세션은 줄 안 요약 ──
 const paint3 = code(cut(read("web/projects/session-list.ts"), "function paintList", "\n}"));
 const projLoop = cut(paint3, "for (const p of ctx.projects)", "const q = ");
-ok(/const hasSess = new Set\(items\.map\(\(it\) => Number\(it\.projectId\)\)\)/.test(paint3) && /if \(hasSess\.has\(Number\(p\.id\)\)/.test(projLoop), "S20 세션이 하나라도 보이는 프로젝트는 프로젝트 줄을 더하지 않는다(같은 것 두 줄 금지)");
-ok(/items\.push\(\{/.test(projLoop) && /pj: \{ id,/.test(projLoop), "S21 세션이 안 보이는 프로젝트는 프로젝트 줄(pj)로 선다");
+ok(!/for \(const s of all\)[^]*?items\.push/.test(cut(paint3, "for (const s of all)", "for (const p of ctx.projects)")) && (paint3.match(/items\.push\(/g) || []).length === 1, "S20 세션마다 줄을 세우지 않는다 — items 에 넣는 곳은 프로젝트 고리 하나");
+ok(/items\.push\(\{/.test(projLoop) && /pj: \{ id,/.test(projLoop) && !/hasSess/.test(projLoop), "S21 스코프 안 프로젝트는 세션이 보이든 말든 전부 프로젝트 줄로 선다");
 ok(/p\.trashed_at \|\| p\.archived_at\) continue;/.test(projLoop), "S22 휴지통 · 보관 프로젝트는 세우지 않는다");
 ok(/owner === meId \? 'me' : owner/.test(projLoop) && /String\(p\.created_by/.test(projLoop), "S23 프로젝트 줄의 사람 = 만든 사람(나면 'me' — 사람 거르개가 같은 자로 센다)");
-ok(paint3.indexOf("for (const p of ctx.projects)") > 0 && paint3.indexOf("for (const p of ctx.projects)") < paint3.indexOf("const inScope = selectAllSess"), "S24 프로젝트 줄은 거르기 · 세기 전에 들어간다(개수 · 사람 칸에 같이 센다)");
+ok(/sess: \{ n: ss\.length, key: top \? top\.stateKey/.test(projLoop) && /stateRank\(x\.stateKey\) - stateRank\(y\.stateKey\)/.test(projLoop), "S24 「세션」 칸 = 볼 수 있는 세션 중 가장 급한 상태 + 수");
+ok(/Math\.max\(Date\.parse\(p\.updated_at/.test(projLoop) && /ss\.map\(\(x\) => Number\(x\.lastSeen\)/.test(projLoop), "S24b 마지막 활동 = 프로젝트 수정과 세션 활동 중 늦은 것");
+ok(/!ui\.state \|\| it\.mine\.has\(ui\.state\)/.test(paint3) && /state: '', now/.test(paint3), "S24c 상태 칩은 «내 세션이 그 상태인 프로젝트» 를 남긴다");
+ok(!/key: 'project'/.test(cut(read("web/projects/session-list.ts"), "const GROUP_BYS", "];")) && /key: 'list'/.test(cut(read("web/projects/session-list.ts"), "const GROUP_BYS", "];")), "S24d 묶기에 «프로젝트» 는 없고 «리스트» 가 있다");
 const table3 = code(read("web/v2/sess-table.ts"));
 ok(/const rowOf = \(it: T\): HTMLElement => \(it\.pj \? projRowOf\(it, it\.pj\) : sessRowOf\(it\)\);/.test(table3), "S25 공용 표가 프로젝트 줄을 따로 그린다");
 ok(/href = '#\/projects2\/p\/' \+ pj\.id/.test(table3) && !/세션 열기/.test(cut(table3, "const projRowOf", "const sessRowOf")), "S26 프로젝트 줄은 프로젝트로 연다(«세션 열기» 없음)");
