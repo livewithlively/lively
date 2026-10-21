@@ -92,5 +92,10 @@ const who = read("src/capabilities/whoami.ts");
 check(/\.\.\.\(isApp \? \{ avatar: member\?\.avatar \?\? null, avatar_char: member\?\.avatar_char \?\? null, avatar_color: member\?\.avatar_color \?\? null \} : \{\}\)/.test(who),
   "W7 whoami — 앱 principal 에만 얼굴(아바타 · 글자 · 색)을 준다");
 
+const ns = read("src/v6/notify-store.ts");
+check(/n\.kind = 'app'/.test(ns) && /key: "app:" \+ n\.id, kind: "app"/.test(ns) && /if \(it\.kind === "app"\) return \{ title: it\.title/.test(ns),
+  "W8 ★ 데스크톱 배너 피드(/api/ui/notify/feed)가 앱 알림(kind app)을 싣는다 — 종전엔 「확인할 것」 에만 쌓여 배너가 한 번도 안 떴다");
+check(/AND n\.actor IS DISTINCT FROM \$1/.test(ns.slice(ns.indexOf("n.kind = 'app'"))), "W8b 내가 보낸 앱 알림(actor = 나)은 내 배너로 안 온다");
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
