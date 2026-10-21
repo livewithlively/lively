@@ -184,6 +184,7 @@
   .menu button:hover { background: var(--soft-2); }
   .menu button.hot { color: var(--blue-deep); font-weight: 800; }
   .menu .mdiv { height: 1px; margin: 5px 6px; background: var(--line); }
+  .menu .mlab { padding: 4px 12px 6px; font-size: 11.5px; font-weight: 800; color: var(--muted); }
 
   /* ── 띠(알림 한 줄) ── */
   .strip { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 700; background: var(--blue-bg); color: var(--blue-deep); border-bottom: 1px solid var(--line); }
@@ -243,6 +244,27 @@
   body.rows.compact.zoom .chips { display: none; }
   .chip { position: relative; flex: none; width: 30px; height: 26px; padding: 0; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); color: var(--ink-sub); font: 700 12px var(--mono); display: inline-grid; place-items: center; touch-action: none; }
   .chip:hover { border-color: var(--muted-2); color: var(--ink); }
+  /* 2.1 B1 — 썸네일 레일 */
+  .chips.th { width: 96px; gap: 7px; padding-right: 2px; }
+  .stageWrap.th { padding-left: 102px; }
+  .railTg { position: sticky; top: 0; z-index: 2; flex: none; width: 30px; height: 22px; margin: 0 0 2px; padding: 0; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); color: var(--muted); display: grid; place-items: center; }
+  .chips.th .railTg { width: 90px; }
+  .railTg .i { width: 13px; height: 13px; }
+  .railTg:hover { color: var(--ink); border-color: var(--muted-2); }
+  .chip.th { width: 90px; height: auto; display: grid; grid-template-rows: auto auto; gap: 2px; padding: 3px; text-align: left; }
+  .chip.th .tb { position: relative; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; border-radius: 4px; background: var(--soft-2); }
+  .chip.th .tb iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; opacity: 0; transition: opacity .2s; }
+  .chip.th .tb iframe.on { opacity: 1; }
+  .chip.th .tt { display: flex; align-items: baseline; gap: 4px; min-width: 0; font: 600 12px/1.25 var(--font); color: var(--ink-sub); }
+  .chip.th .tt b { flex: none; font: 800 12px var(--mono); color: var(--ink); }
+  .chip.th .tt span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip.th.on { background: var(--blue-bg); border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); color: var(--ink); }
+  .chip.th.on .tt b { color: var(--blue-deep); }
+  .chip.th.gone { text-decoration: none; opacity: .55; }
+  .chip.th.gone .tt span { text-decoration: line-through; }
+  .chip.th.chg::after { left: auto; right: 5px; bottom: 5px; top: auto; }
+  .chip.th i { right: -5px; top: -5px; }
+  #railMenu { position: fixed; }
   .chip.on { background: var(--blue); color: #fff; border-color: var(--blue); }
   .chip.chg::after { content: ""; position: absolute; left: 3px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--violet); }
   .chip.on.chg::after { background: #fff; }
@@ -280,9 +302,19 @@
   .canvas iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; background: transparent; }
   .stage.doc .canvas iframe { background: #fff; }
   .hit { position: absolute; inset: 0; cursor: pointer; }
+  /* 장표 위에서 바로 고치는 동안 — 누름이 장표(자식 문서)로 간다 */
+  body.inl .canvas iframe { pointer-events: auto; }
+  body.inl .hit, body.inl .ftool, body.inl #hl, body.inl #ohl { pointer-events: none; opacity: 0; }
   body.compact .hit { cursor: zoom-in; }
   .curp { position: absolute; left: 0; pointer-events: none; border-radius: 2px; box-shadow: inset 0 0 0 2.5px var(--blue), 0 8px 24px rgba(21,35,59,.14); z-index: 2; }
   body.rows .curp, .stage.doc .curp { display: none; }
+  .ftool { position: absolute; z-index: 7; display: flex; gap: 2px; padding: 3px; border-radius: 9px; background: var(--bg); box-shadow: 0 2px 10px rgba(21,35,59,.22); opacity: .35; transition: opacity .12s; }
+  .canvas:hover .ftool, .ftool:focus-within { opacity: 1; }
+  .ftool button { height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: none; font: 700 12px var(--font); color: var(--ink-sub); white-space: nowrap; }
+  .ftool button:hover { background: var(--soft-2); color: var(--ink); }
+  .ftool button.has { color: var(--amber-text); }
+  .ftool button.gone { color: var(--coral-text); }
+  body.reorder .ftool { display: none !important; }
   .pno { position: absolute; left: 4px; display: none; min-width: 18px; height: 16px; padding: 0 4px; border-radius: 5px; font: 800 12px/16px var(--mono); color: #fff; background: rgba(21,35,59,.72); pointer-events: none; z-index: 3; text-align: center; }
   .pno.on { background: var(--blue); }
   .pno.has { background: var(--coral); }
@@ -293,6 +325,7 @@
   .spot.box { border: 2px dashed var(--amber); background: rgba(217,154,91,.10); border-radius: 4px; pointer-events: none; }
   .spot.box b { position: absolute; left: -2px; top: -2px; min-width: 20px; height: 20px; padding: 0 5px; border: 0; border-radius: 4px 0 7px 0; display: grid; place-items: center; font: 800 12px/1 var(--mono); color: #3A2400; background: var(--amber); pointer-events: auto; cursor: pointer; }
   .spot.box.obj { border-style: solid; }
+  .spot.box.obj.more b { opacity: .75; }
   .spot.sent.pin, .spot.sent.box b { background: var(--muted-2); color: #fff; }
   .spot.sent.box { border-color: var(--muted-2); background: rgba(138,153,181,.08); }
   .spot.applied.pin, .spot.applied.box b { background: var(--mint); color: #fff; }
@@ -303,8 +336,17 @@
   body.cols.compact:not(.zoom) .spot { display: none; }
   .ohl { position: absolute; z-index: 3; pointer-events: none; border: 2px solid var(--blue); border-radius: 4px; background: rgba(45,107,240,.06); }
   .mq { position: absolute; z-index: 7; pointer-events: none; border: 2px dashed var(--blue); background: rgba(45,107,240,.10); border-radius: 4px; }
-  body.tool-pin .hit, body.tool-box .hit { cursor: crosshair; }
-  body.tool-box .hit { touch-action: none; }
+  body.tool-pin .hit, body.tool-box .hit, body.tool-pen .hit { cursor: crosshair; }
+  body.tool-box .hit, body.tool-pen .hit { touch-action: none; }
+  /* 2.1 C3 — 펜 획(자리 의견) */
+  .spot.path { position: absolute; overflow: visible; pointer-events: none; z-index: 6; }
+  .spot.path polyline { fill: none; stroke: var(--amber); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .spot.path.sent polyline { stroke: var(--muted-2); } .spot.path.applied polyline { stroke: var(--mint); }
+  .spot.path.on polyline { stroke-width: 5; filter: drop-shadow(0 0 3px rgba(45,107,240,.6)); }
+  .spot.path b { position: absolute; transform: translate(-50%, -50%); min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; display: grid; place-items: center; font: 800 12px/1 var(--mono); color: #3A2400; background: var(--amber); border: 2px solid #fff; box-shadow: 0 2px 7px rgba(21,35,59,.38); pointer-events: auto; cursor: pointer; }
+  .spot.path.sent b { background: var(--muted-2); color: #fff; } .spot.path.applied b { background: var(--mint); color: #fff; }
+  #penLive { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 8; overflow: visible; }
+  #penLive polyline { fill: none; stroke: var(--amber); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
   .hl { position: absolute; pointer-events: none; border: 2px solid var(--blue); background: rgba(45,107,240,.10); border-radius: 4px; box-shadow: 0 0 0 3px rgba(45,107,240,.16); transition: all .08s; z-index: 4; }
   .wait { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; background: var(--stage-bg); z-index: 5; min-height: 120px; }
   /* 좁은 폭에서 작은 장표를 누르면 크게 — 칸 가득 */
@@ -343,6 +385,18 @@
   .rh { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; background: var(--bg); border-bottom: 1px solid var(--line); padding: 8px 12px 8px; }
   body.compact .rh { padding: 6px 10px 6px; }
   .rhLine { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-height: 26px; font-size: 13px; min-width: 0; }
+  /* 2.1 D3 — 찾기 · 바꾸기 줄(⌘F) */
+  #findBar { display: grid; gap: 6px; padding: 0 0 8px; border-bottom: 1px solid var(--line); }
+  #findBar[hidden] { display: none; }
+  #findBar .fb1, #findBar .fb2 { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  #findBar .fb1 > .i { flex: none; width: 15px; height: 15px; color: var(--muted); }
+  #findBar input { flex: 1 1 60px; min-width: 40px; height: 28px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 7px; background: var(--bg); color: var(--ink); font: 600 13px var(--font); }
+  #findBar input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }
+  #findBar .fbCnt { flex: none; font: 700 12px var(--mono); color: var(--muted); white-space: nowrap; }
+  #findBar .fbCnt.none { color: var(--coral-text); }
+  #findBar .ib.sm { height: 26px; }
+  #findBar .fb2 { padding-left: 19px; }
+  .row.fhit { background: var(--yellow-bg); border-left-color: var(--amber); }
   .rhLine .nav { display: inline-flex; align-items: center; gap: 0; flex: none; }
   .rhLine .nav .ib { width: 24px; height: 24px; min-width: 0; }
   .rhLine small { flex: none; font: 800 12px var(--mono); color: var(--muted); padding: 0 4px; min-width: 46px; text-align: center; }
@@ -376,6 +430,48 @@
   body.rows:not(.compact) .rowsWrap { column-count: 2; column-gap: 24px; padding: 6px 16px 8px; }
   body.rows .rowsWrap > * { break-inside: avoid; }
   .sep { margin: 10px 14px 2px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; font-weight: 800; color: var(--muted); letter-spacing: .3px; }
+  /* 2.1 D2 — 개요 보기 */
+  .olHead { margin: 2px 12px 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .olH { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 4px; margin: 8px 6px 2px; padding: 4px 6px; border-radius: 8px; background: var(--soft); border: 1px solid var(--line); }
+  .olH.on { background: var(--blue-bg); border-color: var(--blue); }
+  .olH.gone .olT { text-decoration: line-through; color: var(--coral-text); }
+  .olH .olT { flex: 1 1 60px; min-width: 0; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 4px; border: 0; background: none; text-align: left; font: 800 13px var(--font); color: var(--ink); }
+  .olH .olT b { flex: none; font: 800 12px var(--mono); color: var(--blue-deep); }
+  .olH .olT .clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .olH .cnt { flex: none; font: 700 12px var(--font); color: var(--amber-text); white-space: nowrap; }
+  .olH .cnt:empty { display: none; }
+  .olH .ib.ic { width: 24px; height: 24px; min-width: 0; }
+  .olNone { margin: 2px 14px 6px; font-size: 12px; color: var(--muted); }
+  /* 2.1 B2 — 대화 서랍 */
+  #talkBtn.hot::after { content: ""; position: absolute; right: 4px; top: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--violet); box-shadow: 0 0 0 2px var(--bg); }
+  #talkBtn { position: relative; }
+  #talkBtn.on { background: var(--blue-bg); border-color: var(--blue); color: var(--blue-deep); }
+  .tkHead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 4px 12px 8px; font-size: 12.5px; color: var(--muted); }
+  .tkHead b { font-size: 13.5px; color: var(--ink); }
+  .tkHead span { flex: 1 1 160px; min-width: 0; }
+  .tkCard { margin: 0 10px 10px; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--bg); display: grid; gap: 6px; }
+  .tkCard.ask { border-color: var(--violet); background: var(--violet-bg); }
+  .tkH { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; }
+  .tkH b { font-weight: 800; color: var(--ink); white-space: nowrap; }
+  .tkH small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .tkH .sp { flex: 1; }
+  .tkCnt { font-size: 11.5px; font-weight: 700; color: var(--amber-text); text-align: right; }
+  .tkGo { height: 20px; padding: 0 7px; border: 1px solid var(--violet); border-radius: 10px; background: var(--bg); color: var(--violet-text); font: 800 11.5px var(--font); }
+  .tkQ { font: 600 13px/1.45 var(--font); color: var(--ink); white-space: pre-wrap; }
+  .tkList { display: grid; gap: 2px; }
+  .tkIt { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; padding: 4px 6px; border: 0; border-left: 3px solid var(--line-2); border-radius: 0 6px 6px 0; background: var(--soft); text-align: left; font: 500 12.5px/1.4 var(--font); color: var(--ink); }
+  .tkIt:hover { background: var(--soft-2); }
+  .tkIt b { font: 800 11.5px var(--mono); color: var(--muted); white-space: nowrap; }
+  .tkIt .clip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tkIt i { font: 800 11px var(--font); font-style: normal; color: var(--muted); white-space: nowrap; }
+  .tkIt.ok { border-left-color: var(--mint); } .tkIt.ok i { color: var(--mint-deep); }
+  .tkIt.no { border-left-color: var(--coral); } .tkIt.no i { color: var(--coral-text); }
+  .tkIt.opt { border-left-color: var(--violet); } .tkIt.opt i { color: var(--violet-text); }
+  .tkIt small { grid-column: 2 / -1; font-size: 11.5px; color: var(--coral-text); white-space: normal; }
+  .tkA { font: 700 12.5px/1.4 var(--font); color: var(--mint-deep); padding: 4px 8px; border-radius: 6px; background: var(--soft); }
+  .tkA.wait { color: var(--blue-deep); background: var(--blue-bg); }
+  .tkA.me { color: var(--violet-text); background: var(--bg); }
+  #outlineToggle.on { background: var(--blue); color: #fff; border-color: var(--blue); }
   .sep:empty { padding-top: 0; margin: 6px 14px 0; }
   .rowsWrap > .sep:first-child { border-top: 0; margin-top: 2px; padding-top: 4px; }
   .rowsWrap > .sep:first-child:empty { display: none; }
@@ -388,26 +484,21 @@
   .row.cm { border-left-color: var(--amber); }
   .row.ed.cm { border-left-color: var(--yellow); }
   .row.sent { opacity: .8; }
+  .row.sent:focus-within, .row.sent:hover { opacity: 1; }   /* 보낸 줄도 다시 고치고 의견을 더할 수 있다 — 흐림은 「이미 보냈다」 표시일 뿐 */
   .row.sed .ed { background: var(--soft-2); border-color: var(--muted-2); border-width: 0 0 2px; border-radius: 6px 6px 0 0; }
   .row.sed .orig { display: flex; }
   .row.sed:not(.ed) .orig button { display: none; }
   .no { padding-top: 7px; text-align: right; font: 700 12px var(--mono); color: var(--muted-2); user-select: none; }
   .row.ed .no { color: var(--amber-text); }
   .col { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
-  .ed { font-size: var(--row-fs); line-height: 1.5; font-weight: 500; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 5px 30px 5px 8px; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; min-height: 32px; }
+  .ed { font-size: var(--row-fs); line-height: 1.5; font-weight: 500; color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 5px 8px; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; min-height: 32px; }
   .row:hover .ed { border-color: var(--line-2); background: var(--bg); }
   .ed:focus { border-color: var(--blue); background: var(--bg); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }
   .row.ed .ed { background: var(--yellow-bg); border-color: var(--yellow); border-width: 0 0 2px; border-radius: 6px 6px 0 0; }
   .row.del .ed::before { content: "(삭제) 이 글을 뺍니다"; color: var(--coral-text); font-weight: 700; }
   .row.del .ed { background: var(--coral-bg); }
-  .ed[contenteditable=false] { cursor: default; padding-right: 8px; }
-  /* 줄 오른쪽의 「의견」 — 지나가거나 들어가면 보인다. 누르면 그 글의 의견 칸이 선다(Tab 과 같다) */
-  .cmBtn { position: absolute; right: 12px; top: 5px; height: 24px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: 700 12px var(--font); display: inline-flex; align-items: center; gap: 4px; opacity: 0; transition: opacity .1s; }
-  .cmBtn .i { width: 13px; height: 13px; }
-  .row:hover .cmBtn, .row:focus-within .cmBtn { opacity: 1; }
-  .cmBtn:hover { background: var(--amber-bg); color: var(--amber-text); }
-  .row.cm .cmBtn, .row.show .cmBtn, .row.sent .cmBtn { display: none; }
-  body.rows:not(.compact) .cmBtn { right: 4px; }
+  .ed[contenteditable=false] { cursor: default; }
+  /* 줄의 의견 칸 — 줄에 들어가면(누르거나 Tab) 글 바로 아래에 늘 선다(2.0.1, 원준 2026-10-20: 글 끝에 떠 있던 「의견」 단추가 긴 글과 겹쳤다 — 1.x 처럼 누르면 아래에 칸). 비워 두고 떠나면 접힌다. */
   .orig { display: none; font-size: 12px; line-height: 1.45; font-weight: 600; color: var(--muted); padding: 0 8px; align-items: baseline; gap: 8px; }
   .row.ed .orig { display: flex; }
   .orig s { text-decoration-color: var(--muted-2); flex: 1 1 auto; min-width: 0; }
@@ -463,12 +554,47 @@
   #sendBar { flex: none; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding: 8px 12px calc(8px + var(--lively-inset-bottom, 0px)); background: var(--bg); }
   #sendBar .fine { flex: 1; min-width: 0; font-size: 12px; line-height: 1.4; }
   #sendBar .ib.pri { height: 34px; padding: 0 16px; font-size: 13px; }
+  /* 2.1 — AI 의 질문이 있으면 바닥 막대가 질문 카드가 된다(보내기 단추 자리에서 바로 답한다) */
+  #sendBar.asking { flex-wrap: wrap; background: var(--violet-bg); border-top-color: var(--violet); }
+  #sendBar.asking > .fine, #sendBar.asking > #sendBtn2 { display: none; }
+  #askBar { width: 100%; display: grid; gap: 6px; }
+  #askBar[hidden] { display: none; }
+  .akH { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; }
+  .akH b { color: var(--violet-text); font-weight: 800; }
+  .akH .sp { flex: 1; }
+  .akGo { height: 22px; padding: 0 8px; border: 1px solid var(--violet); border-radius: 11px; background: var(--bg); color: var(--violet-text); font: 800 12px var(--font); white-space: nowrap; }
+  .akQ { font: 600 13px/1.45 var(--font); color: var(--ink); white-space: pre-wrap; }
+  .akOpts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .akOpts .ib { height: 30px; }
   body.compact #sendBar { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px calc(8px + var(--lively-inset-bottom, 0px)); }
   body.compact #sendBar .ib.pri { width: 100%; height: 38px; }
   body.compact #sendBar .fine { text-align: center; }
 
   /* ── 바뀐 곳 훑어보기(앞 판과 견주기) — 몸통 전체를 덮는다 ── */
-  #rvWrap { position: absolute; inset: 0; z-index: 9; background: var(--bg); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #rvWrap { position: absolute; inset: 0; z-index: 9; background: var(--bg); display: flex; flex-direction: row; min-width: 0; min-height: 0; }
+  #rvMain { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  /* 2.1 F2 — 바뀐 장 레일(왼쪽 · 끌어서 접음 · 다시 펼침) */
+  #rvRail { flex: none; width: 168px; min-width: 0; overflow-y: auto; border-right: 1px solid var(--line); background: var(--soft); display: flex; flex-direction: column; gap: 4px; padding: 8px 6px; }
+  #rvRail[hidden] { display: none; }
+  #rvRailH { flex: none; width: 8px; cursor: col-resize; background: var(--bg); border-right: 1px solid var(--line); position: relative; }
+  #rvRailH::after { content: ""; position: absolute; left: 2px; top: 50%; width: 3px; height: 28px; margin-top: -14px; border-radius: 2px; background: var(--line-2); }
+  #rvRailH:hover::after { background: var(--muted-2); }
+  #rvRail .rvRh { font: 800 12px var(--font); color: var(--muted); padding: 0 4px 4px; display: flex; align-items: center; gap: 4px; }
+  #rvRail .rvRh .sp { flex: 1; }
+  .rvIt { display: grid; grid-template-columns: 1fr; gap: 3px; padding: 5px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--bg); text-align: left; font: 600 12px/1.3 var(--font); color: var(--ink); }
+  .rvIt .tb { position: relative; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; border-radius: 4px; background: var(--soft-2); }
+  .rvIt .tb iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; pointer-events: none; background: #fff; opacity: 0; transition: opacity .2s; }
+  .rvIt .tb iframe.on { opacity: 1; }
+  .rvIt .t { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+  .rvIt .t b { flex: none; font: 800 12px var(--mono); color: var(--blue-deep); }
+  .rvIt .t span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rvIt small { font-size: 12px; color: var(--amber-text); font-weight: 700; }
+  .rvIt.on { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); background: var(--blue-bg); }
+  .rvIt.ok { border-color: var(--mint); } .rvIt.ok .t b::after { content: " ✓"; color: var(--mint-deep); }
+  .rvRailTab { flex: none; width: 22px; writing-mode: vertical-rl; border: 0; border-right: 1px solid var(--line); background: var(--soft); color: var(--ink-sub); font: 700 12px var(--font); padding: 10px 0; }
+  .rvOk { display: inline-flex; align-items: center; gap: 6px; font: 700 12.5px var(--font); color: var(--ink-sub); cursor: pointer; }
+  .rvOk input { width: 15px; height: 15px; margin: 0; accent-color: var(--mint-deep); }
+  .rvActs2 { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 2px; }
   #review { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
   .rvHead { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 13px; min-width: 0; background: var(--bg); }
   .rvHead b { flex: none; font-weight: 800; white-space: nowrap; }
@@ -614,6 +740,24 @@
   .help b { font-size: 12.5px; color: var(--ink); }
   .help kbd { font: 700 12px var(--mono); border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: var(--soft); }
 
+  /* 2.1 G2 — 발표 모드 */
+  #pres { position: fixed; inset: 0; z-index: 60; background: #000; display: grid; grid-template-rows: 1fr auto; color: #fff; }
+  #pres[hidden] { display: none; }
+  #pres.side { grid-template-columns: 1fr 300px; grid-template-rows: 1fr auto; }
+  #presStage { position: relative; overflow: hidden; display: grid; place-items: center; }
+  #presStage iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; background: #fff; pointer-events: none; }
+  #presSide { grid-row: 1; grid-column: 2; display: grid; gap: 12px; align-content: start; padding: 16px 14px; background: #111; border-left: 1px solid #333; }
+  #presSide[hidden] { display: none; }
+  .psNext b { display: block; font: 800 12px var(--font); color: #aaa; margin-bottom: 6px; }
+  .psTb { position: relative; aspect-ratio: 16 / 9; width: 100%; overflow: hidden; border-radius: 6px; background: #222; }
+  .psTb iframe { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; border: 0; transform-origin: 0 0; background: #fff; pointer-events: none; }
+  .psInfo { font: 600 13px/1.5 var(--font); color: #ddd; white-space: pre-wrap; }
+  .psInfo b { display: block; font-size: 15px; color: #fff; }
+  #presBar { grid-row: 2; grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: #111; border-top: 1px solid #333; font: 700 12.5px var(--mono); color: #ccc; opacity: .25; transition: opacity .15s; }
+  #pres:hover #presBar, #presBar:focus-within { opacity: 1; }
+  #presBar .sp { flex: 1; }
+  #presBar .ib { background: #222; border-color: #444; color: #eee; }
+  #presBar .ib:hover:not(:disabled) { background: #333; color: #fff; }
   #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50; background: var(--ink); color: var(--bg); font: 700 13px var(--font); border-radius: 10px; padding: 10px 16px; box-shadow: 0 10px 30px rgba(21,35,59,.3); opacity: 0; pointer-events: none; transition: opacity .15s; max-width: 92vw; text-align: center; }
   #toast.on { opacity: 1; }
   /* ── v30(1.13.1) 이 더한 것: 홈 · 옛 버전 의견 상자 · 비교할 버전 고르기 · 문서 메뉴의 홈 줄 ── */
@@ -665,6 +809,14 @@
   .hmB.cm { background: var(--amber-bg); color: var(--amber-text); }
   .hmB.ask { background: var(--violet-bg); color: var(--violet-text); }
   .hmB.cur { background: var(--blue); color: #fff; }
+  .hmB.ai, .hmB.nv { background: var(--blue-bg); color: var(--blue-deep); }
+  .hmMore { position: absolute; right: 6px; top: 6px; z-index: 2; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--bg); color: var(--ink-sub); box-shadow: 0 1px 3px rgba(21,35,59,.18); opacity: 0; transition: opacity .12s; }
+  .hmCard:hover .hmMore, .hmCard:focus-within .hmMore { opacity: 1; }
+  .hmMore:hover { color: var(--ink); background: var(--soft-2); }
+  .hmMore .i { width: 14px; height: 14px; }
+  .hmRen { width: 100%; font: inherit; font-weight: 800; border: 1px solid var(--blue); border-radius: 6px; padding: 2px 6px; background: var(--bg); color: var(--ink); }
+  #hmMenu { position: absolute; }
+  .hmHid { height: 26px; font-size: 12px; }
   .hmN { padding: 0 12px; font-size: 13.5px; font-weight: 800; color: var(--ink); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .hmM { padding: 0 12px; font-size: 12px; color: var(--muted); }
   .hmP { padding: 0 12px; font-size: 12px; color: var(--muted-2); direction: rtl; text-align: left; }
@@ -703,6 +855,12 @@
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16 M9 7V4h6v3 M6 7l1 13h10l1-13 M10 11v6 M14 11v6"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4H6.5A2.5 2.5 0 0 1 4 13.5z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20l4-1 11-11-3-3L5 16z M13 8l3 3"/></symbol>
+  <symbol id="i-outline" viewBox="0 0 24 24"><path d="M5 5h14 M5 9h9 M5 13h14 M5 17h9"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.5 1.5 M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.5-1.5"/></symbol>
   <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14 M5 12h14"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 15l-4.5 4.5 M14.5 4l5.5 5.5 M15 4.5l-4 4l-4 1.5l-1.5 1.5l7 7l1.5-1.5l1.5-4l4-4"/></symbol>
   <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/></symbol>
@@ -724,8 +882,12 @@
   <button type="button" class="svst" id="saveState" hidden></button>
   <span class="aist" id="aiState" hidden><b></b><span class="lb">AI 고치는 중</span><i></i></span>
   <button type="button" class="ib ic ghost" id="undoBtn" hidden aria-label="되돌리기"><svg class="i"><use href="#i-undo"/></svg></button>
-  <button type="button" class="ib ic ghost" id="dlBtn" hidden aria-label="이 버전 내려받기"><svg class="i"><use href="#i-dl"/></svg></button>
+  <button type="button" class="ib ic ghost" id="redoBtn" hidden aria-label="되돌린 것을 다시"><svg class="i"><use href="#i-redo"/></svg></button>
+  <div class="menu" id="undoMenu" hidden></div>
+  <button type="button" class="ib ic ghost" id="presBtn" hidden title="발표 · 장표만 화면 가득 (F)" aria-label="발표"><svg class="i"><use href="#i-play"/></svg></button>
+  <button type="button" class="ib ic ghost" id="dlBtn" hidden aria-label="내려받기"><svg class="i"><use href="#i-dl"/></svg></button>
   <button type="button" class="ib ic ghost" id="fullBtn" hidden title="화면 가득 · 사이드바 없이 이 앱만 크게 띄웁니다(닫기 · Esc 로 돌아옵니다)" aria-label="화면 가득"><svg class="i"><use href="#i-full"/></svg></button>
+  <button type="button" class="ib ic ghost" id="talkBtn" hidden title="대화 · 보낸 묶음과 AI 의 답 · 질문을 한 줄기로" aria-label="대화" aria-pressed="false"><svg class="i"><use href="#i-chat"/></svg></button>
   <button type="button" class="ib ic" id="moreBtn" title="더 보기" aria-label="더 보기"><svg class="i dots"><use href="#i-more"/></svg></button>
   <button type="button" class="ib pri" id="sendBtn" hidden>AI에게 보내기</button>
   <div class="menu" id="menu" hidden></div>
@@ -739,8 +901,8 @@
 <div id="main">
   <section id="left">
     <div class="stageBar" id="stageBar">
-      <div class="seg tools" id="tools" role="group" aria-label="장표에서 누를 때" hidden><button type="button" data-t="sel" class="on" title="고르기 · 글을 누르면 그 줄로, 상자 · 도식 · 그림을 누르면 그 개체에 의견" aria-label="고르기"><svg class="i"><use href="#i-cursor"/></svg></button><button type="button" data-t="pin" title="핀 · 누른 자리에 의견" aria-label="핀"><svg class="i"><use href="#i-spot"/></svg></button><button type="button" data-t="box" title="영역 · 끌어서 그 영역에 의견" aria-label="영역"><svg class="i"><use href="#i-area"/></svg></button></div>
-      <span class="hint" id="stageHint">글을 누르면 오른쪽 그 줄로 · 상자나 그림을 누르면 거기에 의견</span>
+      <div class="seg tools" id="tools" role="group" aria-label="장표에서 누를 때" hidden><button type="button" data-t="sel" class="on" title="고르기 · 글을 누르면 그 줄로, 상자 · 도식 · 그림을 누르면 그 개체에 의견" aria-label="고르기"><svg class="i"><use href="#i-cursor"/></svg></button><button type="button" data-t="pin" title="핀 · 누른 자리에 의견" aria-label="핀"><svg class="i"><use href="#i-spot"/></svg></button><button type="button" data-t="box" title="영역 · 끌어서 그 영역에 의견" aria-label="영역"><svg class="i"><use href="#i-area"/></svg></button><button type="button" data-t="pen" title="펜 · 장표 위에 그린 획에 의견(4)" aria-label="펜"><svg class="i"><use href="#i-pen"/></svg></button></div>
+      <span class="hint" id="stageHint">글을 누르면 오른쪽 그 줄로(두 번 누르면 그 자리에서 고침) · 상자나 그림을 누르면 거기에 의견 · ⌘+누름으로 여러 개체 · 펜으로 그린 획에도</span>
       <span class="sp"></span>
     </div>
     <div class="leftIn" id="leftIn">
@@ -758,19 +920,26 @@
   <section id="right">
     <div id="split" role="separator" tabindex="-1" title="끌어서 칸 크기를 정합니다 · 두 번 누르면 처음대로"></div>
     <div class="rh" id="rh">
+      <div id="findBar" hidden>
+        <div class="fb1"><svg class="i"><use href="#i-search"/></svg><input type="search" id="findQ" placeholder="문서 전체 글에서 찾기" aria-label="찾을 말" autocomplete="off" spellcheck="false"><span class="fbCnt" id="findCnt"></span><button type="button" class="ib sm ic ghost" id="findPrev" title="앞으로(⇧Enter)" aria-label="앞 결과"><svg class="i"><use href="#i-up"/></svg></button><button type="button" class="ib sm ic ghost" id="findNext" title="다음(Enter)" aria-label="다음 결과"><svg class="i"><use href="#i-down"/></svg></button><button type="button" class="ib sm ghost" id="findRepT" aria-expanded="false">바꾸기</button><button type="button" class="ib sm ic ghost" id="findClose" title="닫기(Esc)" aria-label="찾기 닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
+        <div class="fb2" id="findRep" hidden><input type="text" id="findR" placeholder="바꿀 말" aria-label="바꿀 말" autocomplete="off" spellcheck="false"><button type="button" class="ib sm" id="findRep1">이 줄만</button><button type="button" class="ib sm pri" id="findRepAll">전부</button></div>
+      </div>
       <div class="rhLine" id="rhLine"></div>
       <div id="rhVars"></div>
       <div class="cmBox" id="cmBox"><button type="button" class="ib sm ghost" id="cmToggle" title="이 장 전체에 대한 의견"><svg class="i"><use href="#i-plus"/></svg><span>이 장 전체 의견</span></button><textarea class="ta" id="slideCm" rows="1" placeholder="이 장 전체에 대한 의견(구도 · 빼거나 더할 것). 글 하나에 대한 의견은 그 글 아래에."></textarea></div>
     </div>
     <div class="rowsScroll" id="rowsScroll"><div class="rowsWrap" id="rows"></div></div>
-    <div id="sendBar"><div class="fine" id="sendFine">누르면 세션에 바로 전달됩니다</div><button type="button" class="ib pri" id="sendBtn2">AI에게 보내기</button></div>
+    <div id="sendBar"><div id="askBar" hidden></div><div class="fine" id="sendFine">누르면 세션에 바로 전달됩니다</div><button type="button" class="ib pri" id="sendBtn2">AI에게 보내기</button></div>
   </section>
   <div id="rvWrap" hidden>
+    <div id="rvRail" hidden></div><div id="rvRailH" title="끌어서 접거나 펼칩니다"></div>
+    <div id="rvMain">
     <div class="rvHead" id="rvHead"><button type="button" class="ib sm ic" id="rvClose" aria-label="닫기" title="닫기(Esc)"><svg class="i"><use href="#i-x"/></svg></button><select id="rvFrom" title="비교할 앞 버전 고르기" aria-label="비교할 앞 버전"></select><b id="rvTitle">앞 버전과 비교하기</b><span id="cmpWhere"></span><div class="seg2" id="cmpMode"><button type="button" data-m="two" class="on">나란히</button><button type="button" data-m="flip">겹쳐<span> 보기</span></button></div><button type="button" class="ib sm" id="rvPrev" title="이전 장(←)">‹<span> 이전</span></button><span class="cnt" id="rvCnt"></span><button type="button" class="ib sm pri" id="rvNext" title="다음 장(→)">다음</button></div>
     <div id="cmp" hidden><button type="button" id="cmpHold" hidden>누르는 동안 앞 버전</button>
       <div class="cmpGrid two" id="cmpGrid"><div class="cmpPane was"><b id="cmpWasL">전</b><div class="cmpShot" id="cmpWas"></div></div><div class="cmpPane now"><b id="cmpNowL">후</b><div class="cmpShot" id="cmpNow"></div></div></div></div>
     <div id="rvSplit" role="separator" tabindex="-1" title="끌어서 그림과 의견 칸의 크기를 정합니다 · 두 번 누르면 처음대로"></div>
     <div id="review" hidden><div class="rvBody" id="rvBody"></div></div>
+    </div>
   </div>
 </div>
 <div id="empty" class="empty" hidden><div class="home" id="home" hidden></div><div class="box" id="startBox"></div></div>
@@ -800,7 +969,6 @@
       <div class="opt"><div class="lab">배치</div><div class="seg" data-pref="layout"><button type="button" data-v="cols"><svg class="i"><use href="#i-cols"/></svg>2열</button><button type="button" data-v="rows"><svg class="i"><use href="#i-rows"/></svg>2행</button></div><div class="fine">고른 배치는 칸이 좁아도 그대로입니다. 2열은 왼쪽에 장 목록, 2행은 위에 장표가 섭니다.</div></div>
       <div class="opt"><div class="lab">장표 크기</div><div class="seg" data-pref="slide"><button type="button" data-v="fit">한 화면에</button><button type="button" data-v="big">폭 가득</button></div><div class="fine" id="slideFine"></div></div>
       <div class="opt"><div class="lab">글 줄 글자</div><div class="seg" data-pref="font"><button type="button" data-v="s">작게</button><button type="button" data-v="m">보통</button><button type="button" data-v="l">크게</button></div></div>
-      <div class="opt"><div class="lab">내려받는 형식</div><div class="seg" data-pref="dlFmt"><button type="button" data-v="pdf">PDF</button><button type="button" data-v="html">HTML</button><button type="button" data-v="pdfc">의견 얹은 PDF</button></div><div class="fine">머리줄의 내려받기 단추가 이 형식으로 받습니다. 세션의 AI 가 파일을 만들어 받는 링크를 세션에 보냅니다.</div></div>
       <div class="chks">
         <label class="chk"><input type="checkbox" data-pref="collapseSent">보낸 줄 접기</label>
         <label class="chk"><input type="checkbox" data-pref="askSend">보내기 전에 확인 창 띄우기</label>
@@ -811,18 +979,32 @@
     <div class="mf"><button type="button" class="ib pri" data-close>닫기</button></div>
   </div>
 </div>
+<div class="modal" id="dlModal" hidden>
+  <div class="card">
+    <div class="mh"><span>내려받기</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
+    <div class="mb">
+      <div class="opt"><div class="lab">형식</div><div class="seg" id="dlFmtSeg"><button type="button" data-v="pdf" class="on">PDF</button><button type="button" data-v="html">HTML</button></div></div>
+      <div class="opt"><div class="lab">범위</div><div class="seg" id="dlRangeSeg"><button type="button" data-v="all" class="on">전체</button><button type="button" data-v="cur">이 장</button><button type="button" data-v="chg">바뀐 장만</button><button type="button" data-v="cm">의견 있는 장만</button></div><div class="fine" id="dlRangeFine"></div></div>
+      <div class="chks"><label class="chk"><input type="checkbox" id="dlNotes">의견을 장 위에 얹기(번호표 · 오른쪽 칸)</label><label class="chk"><input type="checkbox" id="dlPicks" checked>고른 안으로(끄면 기본 안)</label></div>
+      <div class="fine" id="dlFine">세션의 AI 가 파일을 만들어 받는 링크를 세션에 보냅니다.</div>
+    </div>
+    <div class="mf"><button type="button" class="ib" data-close>취소</button><button type="button" class="ib pri" id="dlGo">세션에 청하기</button></div>
+  </div>
+</div>
 <div class="modal" id="helpModal" hidden>
   <div class="card">
     <div class="mh"><span>쓰는 법</span><span class="sp"></span><button type="button" class="ib ic" data-close aria-label="닫기"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div class="mb help">
-      <div><b>글 고치기</b><span>오른쪽 글을 눌러 바로 고치면 장표에 곧바로 반영됩니다. <kbd>Enter</kbd> 는 줄 나눔, <kbd>Tab</kbd> 은 그 글의 의견 칸.</span></div>
+      <div><b>글 고치기</b><span>오른쪽 글을 눌러 바로 고치면 장표에 곧바로 반영됩니다. 장표의 글을 <b>두 번 누르면</b> 그 자리에서도 칩니다(<kbd>Esc</kbd> 로 끝). <kbd>Enter</kbd> 는 줄 나눔, <kbd>Tab</kbd> 은 그 글의 의견 칸.</span></div>
       <div><b>강조</b><span>글을 끌어 고르면 「색 강조 · 굵게 · 풀기」 가 뜹니다.</span></div>
-      <div><b>의견</b><span>글 줄 오른쪽 「의견」 또는 <kbd>Tab</kbd>. 장 전체는 머리의 「이 장 전체 의견」, 문서 전체는 글 줄 맨 아래.</span></div>
-      <div><b>그림 · 도식</b><span>장표에서 상자 · 도식 · 그림을 누르면 그 개체에 의견이 달립니다. 장표 위 도구의 핀 · 영역으로 한 자리 · 넓은 곳에도.</span></div>
+      <div><b>의견</b><span>글을 누르면 그 아래 의견 칸이 섭니다(<kbd>Tab</kbd> 으로 바로 그 칸). 이미 보낸 줄도 같습니다 — 새 의견은 다음 묶음에 실리고 앞 의견은 「보냄」 칩으로 남습니다. 장 전체는 머리의 「이 장 전체 의견」, 문서 전체는 글 줄 맨 아래.</span></div>
+      <div><b>그림 · 도식</b><span>장표에서 상자 · 도식 · 그림을 누르면 그 개체에 의견이 달립니다. <kbd>⌘</kbd>(윈도우 <kbd>Ctrl</kbd>)를 누른 채 다른 개체를 누르면 여러 개체에 한 의견. 장표 위 도구의 핀 · 영역 · 펜(그린 획)으로 한 자리 · 넓은 곳에도.</span></div>
       <div><b>장 옮기기</b><span>왼쪽 장 번호를 끌어 순서를 바꿉니다. 머리의 휴지통은 그 장을 통째로 지웁니다(보내기 전에는 되살릴 수 있습니다).</span></div>
       <div><b>장 넘기기</b><span><kbd>←</kbd> <kbd>→</kbd> 또는 장 번호 · 장표 밀기. 고정(핀)하면 장표를 밀어도 오른쪽은 그 장에 머뭅니다.</span></div>
       <div><b>보내기</b><span>아래 「AI에게 보내기」 — 안 보낸 고침과 의견만 묶어 세션에 보냅니다. 되돌리기는 <kbd>⌘Z</kbd>.</span></div>
-      <div><b>버전</b><span>AI 가 새 버전을 올리면 위에 띠가 뜹니다. 「앞 버전과 비교하기」 로 바뀐 장을 그림으로 견줍니다. 내려받기는 머리줄의 ↓(형식은 ⋯ 표시 설정).</span></div>
+      <div><b>버전</b><span>AI 가 새 버전을 올리면 위에 띠가 뜹니다. 「앞 버전과 비교하기」 로 바뀐 장을 그림으로 견줍니다(왼쪽 레일에서 바뀐 장을 고르고 「이 장 전체를 앞 버전으로」 도 됩니다). 내려받기는 머리줄의 ↓(형식 · 범위 · 의견 얹기).</span></div>
+      <div><b>대화 · 개요 · 발표</b><span>머리줄 말풍선은 보낸 묶음과 AI 의 답 · 질문을 한 줄기로. 글 줄 칸 머리의 ≡ 는 모든 장의 글을 한 화면에(개요). ▶ 는 발표 모드(← → 넘기기 · 숫자 Enter · P 발표자 보기).</span></div>
+      <div><b>단축키</b><span><kbd>←</kbd> <kbd>→</kbd> 장 넘기기 · <kbd>G</kbd> 숫자 <kbd>Enter</kbd> 그 장 · <kbd>1</kbd>~<kbd>4</kbd> 고르기 · 핀 · 영역 · 펜 · <kbd>O</kbd> 개요 · <kbd>F</kbd> 발표 · <kbd>⌘F</kbd> 찾기 · <kbd>⌘Enter</kbd> 보내기 · <kbd>⌘Z</kbd> 되돌리기 · <kbd>⇧⌘Z</kbd> 다시 · <kbd>Tab</kbd> 의견 칸 · <kbd>Esc</kbd> 닫기 · <kbd>?</kbd> 이 창. 글 칸 안에서는 글자 키가 먹지 않습니다.</span></div>
     </div>
     <div class="mf"><button type="button" class="ib pri" data-close>닫기</button></div>
   </div>
@@ -851,6 +1033,7 @@
 <div id="roHint" hidden></div>
 <input type="file" id="filePick" accept=".html,.htm,text/html" hidden>
 <div id="dropVeil">여기에 놓으면 문서로 불러옵니다</div>
+<div id="pres" hidden><div id="presStage"></div><div id="presSide" hidden><div class="psNext"><b>다음 장</b><div class="psTb" id="presNext"></div></div><div class="psInfo" id="presInfo"></div></div><div id="presBar"><button type="button" class="ib sm" id="presPrev">‹</button><span id="presCnt"></span><button type="button" class="ib sm" id="presNextB">›</button><span class="sp"></span><span id="presClock">00:00</span><button type="button" class="ib sm" id="presView">발표자 보기 (P)</button><button type="button" class="ib sm" id="presClose">닫기 (Esc)</button></div></div>
 <div id="toast"></div>
 
 <script>
@@ -870,13 +1053,35 @@
   document.addEventListener('pointermove', function (e) { if (pressing && !e.buttons) pressEnd(); }, true);   // 창 밖에서 뗐다가 돌아왔다
   function whenUp(fn) { if (!pressing) { fn(); return; } if (afterPress.indexOf(fn) < 0) afterPress.push(fn); }
   /* 되돌리기 — 앱이 한 일의 더미. 글 칸 안에서 치는 것은 브라우저가 되돌린다(여기 쌓지 않는다). */
-  var undos = [], undoing = false;
-  function pushUndo(label, fn) { if (undoing) return; undos.push({ label: label, fn: fn }); if (undos.length > 60) undos.shift(); paintUndo(); }
-  function paintUndo() { var b = document.getElementById('undoBtn'); if (!b) return; var last = undos[undos.length - 1]; b.hidden = !last; b.title = last ? '되돌리기: ' + last.label + ' (⌘Z)' : ''; }
-  async function doUndo() {
-    var u = undos.pop(); paintUndo(); if (!u) { toast('되돌릴 것이 없습니다'); return; }
-    undoing = true; try { await u.fn(); toast('되돌렸습니다: ' + u.label, 2600); } catch (e) { toast('되돌리지 못했어요: ' + (e && e.message ? e.message : e), 3200); } finally { undoing = false; }
+  //  2.1: redo(되돌린 것을 다시)는 걸음을 쌓을 때 «다시 하는 법»(redo)을 같이 준 걸음만 된다(글 고침 · 의견). 새 걸음이 쌓이면 다시 할 것은 비운다.
+  var undos = [], redos = [], undoing = false;
+  function pushUndo(label, fn, redo) { if (undoing) return; undos.push({ label: label, fn: fn, redo: redo || null }); if (undos.length > 60) undos.shift(); redos = []; paintUndo(); }
+  function paintUndo() {
+    var b = document.getElementById('undoBtn'), r = document.getElementById('redoBtn'); if (!b) return;
+    var last = undos[undos.length - 1]; b.hidden = !last; b.title = last ? '되돌리기: ' + last.label + ' (⌘Z) · 길게 누르거나 우클릭하면 걸음 목록' : '';
+    if (r) { var lr = redos[redos.length - 1]; r.hidden = !lr; r.title = lr ? '되돌린 것을 다시: ' + lr.label + ' (⇧⌘Z)' : ''; }
   }
+  async function doUndo() {
+    var u = undos.pop(); if (!u) { paintUndo(); toast('되돌릴 것이 없습니다'); return; }
+    undoing = true; try { await u.fn(); if (u.redo) redos.push(u); toast('되돌렸습니다: ' + u.label, 2600); } catch (e) { toast('되돌리지 못했어요: ' + (e && e.message ? e.message : e), 3200); } finally { undoing = false; paintUndo(); }
+  }
+  async function doRedo() {
+    var r = redos.pop(); if (!r) { paintUndo(); toast('다시 할 것이 없습니다'); return; }
+    undoing = true; try { await r.redo(); undos.push(r); toast('다시 했습니다: ' + r.label, 2600); } catch (e) { toast('다시 하지 못했어요: ' + (e && e.message ? e.message : e), 3200); } finally { undoing = false; paintUndo(); }
+  }
+  /** 걸음 목록에서 고른 데까지 되돌린다(n걸음). */
+  async function undoTo(n) {
+    var done = 0;
+    for (var i = 0; i < n; i++) { var u = undos.pop(); if (!u) break; undoing = true; try { await u.fn(); if (u.redo) redos.push(u); done++; } catch (e) { undoing = false; paintUndo(); fail(e); return; } finally { undoing = false; } }
+    paintUndo(); toast('되돌렸습니다 · ' + done + '걸음', 2200);
+  }
+  function openUndoMenu() {
+    var m = document.getElementById('undoMenu'), b = document.getElementById('undoBtn'); if (!m || !undos.length) return;
+    m.innerHTML = ''; m.appendChild(el('div', 'mlab', '되돌리기 — 누른 데까지 되돌립니다'));
+    undos.slice().reverse().slice(0, 20).forEach(function (u, i) { var x = el('button', '', (i + 1) + '. ' + u.label); x.type = 'button'; x.onclick = function () { m.hidden = true; undoTo(i + 1); }; m.appendChild(x); });
+    var r = b.getBoundingClientRect(); m.style.right = 'auto'; m.style.left = Math.max(6, Math.min(window.innerWidth - 246, r.left)) + 'px'; m.hidden = false;
+  }
+  document.addEventListener('DOMContentLoaded', function () {});
   /** 단추의 글을 바꾼다 — 글 마디를 새로 끼우지 않고 값만(누르는 중에 바뀌어도 그 누름이 산다). */
   function setText(e, t) { var f = e.firstChild; if (f && f.nodeType === 3 && e.childNodes.length === 1) { if (f.nodeValue !== t) f.nodeValue = t; } else e.textContent = t; }
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -903,7 +1108,7 @@
     scale: 1, fw: 1280, fh: 720, prevText: {}, changed: {}, focused: null, layoutNarrow: false, zoom: false,
     cmOpen: {}, cmScope: 'slide', unnotified: null, want: {}, wantScope: {}, order: null, tool: 'sel', spotOn: null, pages: [], total: 0, compact: false, laySig: '', spyHold: 0, files: null, filesErr: '', importing: '', importNote: '', importName: '', importPct: null
   };
-  var DEF = { layout: '', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastBySession: {}, lastSlide: {}, askSend: true, dlFmt: 'pdf', recent: [], homeSort: 'recent', homeView: 'grid' };
+  var DEF = { layout: '', font: 'm', collapseSent: true, sideThumb: true, lastDoc: '', lastBySession: {}, lastSlide: {}, askSend: true, dlFmt: 'pdf', recent: [], homeSort: 'mine', homeView: 'grid', seenVer: {}, hiddenDocs: [], rail: 'thumb', rvRail: true };
   function pref(k) { return st.prefs[k] != null ? st.prefs[k] : DEF[k]; }
   /** 지금 배치 — 고른 것이 있으면 **그대로**(폭이 좁아도 바꾸지 않는다). 고른 적이 없을 때만 폭으로: 640 미만은 2행(위 장표 · 아래 글 줄). */
   function layoutOf() { var v = st.prefs.layout; if (v === 'cols' || v === 'rows') return v; return document.documentElement.clientWidth < 640 ? 'rows' : 'cols'; }
@@ -985,6 +1190,8 @@
         + ' .pw,.de-pw{visibility:visible!important;display:block!important;position:fixed!important;left:0!important;margin:0!important;padding:0!important;width:auto!important;height:auto!important;overflow:visible!important;transform:none!important;background:#fff!important}'
         + ' .pw>section.page,.de-pw>section.page{transform:none!important;margin:0!important;box-shadow:none!important;border-radius:0!important;position:relative!important;left:0!important;top:0!important}'
         + ' .note,.counter,.hint,.ncopy,.pnav{display:none!important} *{animation:none!important;transition:none!important}'
+        + ' .de-editing{outline:2px solid #2D6BF0!important;outline-offset:2px!important;border-radius:3px;background:rgba(45,107,240,.06)!important;cursor:text!important}'
+        + ' .de-edit{display:inline}'
         // 순서를 끄는 동안 — 장들이 새 자리로 미끄러지고, 든 장은 들린 것처럼(테두리 · 그림자) 맨 위에 선다. 손을 따라오는 동안(de-follow)은 미끄러지지 않는다.
         + ' html.de-drag .pw,html.de-drag .de-pw{transition:top .22s cubic-bezier(.2,.8,.2,1)!important}'
         + ' html.de-drag .de-lift{z-index:9!important;box-shadow:0 0 0 6px #2D6BF0,0 36px 90px rgba(21,35,59,.5)!important}'
@@ -1138,7 +1345,7 @@
         var t = n.tagName.toLowerCase();
         if (t === 'br') { into.appendChild(document.createElement('br')); return; }
         var k = n.getAttribute('data-k');
-        if (k != null && u.inl[k]) { var c = u.inl[k].cloneNode(false); n.childNodes.forEach(function (x) { conv(x, c); }); if (c.textContent.trim()) into.appendChild(c); return; }
+        if (k != null && u.inl[k]) { var c = u.inl[k].cloneNode(false); c.setAttribute('data-dek', k); n.childNodes.forEach(function (x) { conv(x, c); }); if (c.textContent.trim()) into.appendChild(c); return; }   // data-dek: 장표 위에서 바로 고칠 때 어느 꾸밈인지 되찾는 번호표
         if ((t === 'div' || t === 'p') && into.childNodes.length) into.appendChild(document.createElement('br'));
         n.childNodes.forEach(function (x) { conv(x, into); });
       }
@@ -1223,6 +1430,57 @@
       return list;
     }
     function find(k) { var p = k.split('|'); var list = unitsOf(+p[0]); return list[+p[1]]; }
+    /* ── 장표 위에서 바로 고치기(2.1 C1) — 그 글 줄의 요소(없으면 임시 span 으로 감싼 것)에 contenteditable 을 걸고, 칠 때마다 편집기 HTML(부모의 글 칸과 같은 꼴)을 올린다. ── */
+    var editing = null;
+    function tagInl(u, host) {   // 꾸밈 요소에 번호표 — 원본 그대로면 toEditorHTML 과 같은 차례(앞순회)로, 이미 번호표가 있으면(앱이 써 넣은 것) 그대로
+      if (host.querySelector('[data-dek]')) return;
+      var i = 0; (function w(n) { [].forEach.call(n.childNodes, function (c) { if (c.nodeType !== 1) return; var t = c.tagName.toLowerCase(); if (t === 'br' || t === 'wbr') return; c.setAttribute('data-dek', String(i++)); w(c); }); })(host);
+    }
+    function fromDOM(u, host) {   // 지금 DOM → 편집기 HTML(span data-k)
+      function conv(n) {
+        if (n.nodeType === 3) return esc(n.textContent.replace(/\s+/g, ' '));
+        if (n.nodeType !== 1) return '';
+        var t = n.tagName.toLowerCase(); if (t === 'br') return '<br>'; if (t === 'wbr' || t === 'script' || t === 'style') return '';
+        var inner = ''; n.childNodes.forEach(function (c) { inner += conv(c); });
+        var d = n.getAttribute('data-dek');
+        if (d != null && u.kstyle[+d] != null) return '<span data-k="' + d + '" style="' + u.kstyle[+d] + '">' + inner + '</span>';
+        if (t === 'div' || t === 'p') return '<br>' + inner;
+        return inner;
+      }
+      var s = ''; [].forEach.call(host.childNodes, function (c) { s += conv(c); });
+      return s.replace(/\s*<br>\s*/g, '<br>').replace(/^(<br>)+/, '').replace(/^\s+|\s+$/g, '');
+    }
+    function editOn(k, x, y) {
+      editOff();
+      var u = find(k); if (!u || u.svg) return false;
+      var host = u.el, wrap = null;
+      if (!host) { wrap = document.createElement('span'); wrap.className = 'de-edit'; u.parent.insertBefore(wrap, u.nodes[0]); u.nodes.forEach(function (n) { wrap.appendChild(n); }); host = wrap; }
+      tagInl(u, host);
+      host.setAttribute('contenteditable', 'true'); host.setAttribute('spellcheck', 'false'); host.classList.add('de-editing');
+      editing = { u: u, host: host, wrap: wrap, k: k };
+      host.addEventListener('input', onEdInput); host.addEventListener('keydown', onEdKey); host.addEventListener('blur', onEdBlur); host.addEventListener('paste', onEdPaste);
+      host.focus();
+      try { var rg = document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null; if (rg && host.contains(rg.startContainer)) { var s = getSelection(); s.removeAllRanges(); s.addRange(rg); } } catch (e) {}
+      return true;
+    }
+    function onEdInput() { if (editing) post({ op: 'typed', k: editing.k, html: fromDOM(editing.u, editing.host) }); }
+    function onEdKey(e) {
+      if (!editing) return;
+      if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); document.execCommand('insertLineBreak'); }
+      else if (e.key === 'Escape') { e.preventDefault(); editOff(); }
+      else if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); var k = editing.k; editOff(); post({ op: 'tab', k: k }); }
+    }
+    function onEdPaste(e) { e.preventDefault(); var t = (e.clipboardData || window.clipboardData).getData('text'); document.execCommand('insertText', false, String(t || '').replace(/\r/g, '')); }
+    function onEdBlur() { setTimeout(function () { if (editing && document.activeElement !== editing.host) editOff(); }, 0); }
+    function editOff() {
+      var ed = editing; if (!ed) return; editing = null;
+      var host = ed.host, u = ed.u, html = fromDOM(u, host);
+      host.removeEventListener('input', onEdInput); host.removeEventListener('keydown', onEdKey); host.removeEventListener('blur', onEdBlur); host.removeEventListener('paste', onEdPaste);
+      host.removeAttribute('contenteditable'); host.removeAttribute('spellcheck'); host.classList.remove('de-editing');
+      if (ed.wrap) { var nn = [].slice.call(ed.wrap.childNodes); nn.forEach(function (n) { ed.wrap.parentNode.insertBefore(n, ed.wrap); }); ed.wrap.remove(); if (!nn.length) { nn = [document.createTextNode('')]; u.parent.appendChild(nn[0]); } u.nodes = nn; }
+      else u.nodes = [].slice.call(host.childNodes);
+      post({ op: 'edited', k: ed.k, html: html });
+    }
     function frameRect(fi) { return frames[fi].getBoundingClientRect(); }
     //  무대 칸이 맞출 크기 — 장은 제 배치 크기(offset — transform 과 무관), 문서는 창 폭 × 내용 높이.
     function frameSize(fi) {
@@ -1248,8 +1506,12 @@
           r.sections = frames.map(function (s, i) { return { i: i, id: mode === 'slides' ? (s.id || ('s' + (i + 1))) : 'doc', title: mode === 'slides' ? titleOf(s, i) : (document.title || '문서') }; });
           showFrame(0); r.frame = frameSize(0);
           if (mode === 'slides') { layout(); r.pages = pages; r.total = total; r.frame = { w: maxW || r.frame.w, h: r.frame.h }; }
-        } else if (m.op === 'show') {
-          showFrame(m.fi);
+        } else if (m.op === 'editon') {
+          r.ok = editOn(m.k, m.x, m.y);
+        } else if (m.op === 'editoff') {
+          editOff(); r.ok = true;
+        } else if (m.op === 'show' || m.op === 'units') {
+          if (m.op === 'show') showFrame(m.fi);
           var fonts = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
           Promise.race([fonts, new Promise(function (res) { setTimeout(res, 3000); })]).then(function () {
             var list = unitsOf(m.fi);
@@ -1624,6 +1886,7 @@
   window.addEventListener('message', function (ev) {
     var m = ev.data; if (!m || m.__de !== 1 || !frame || ev.source !== frame.contentWindow) return;
     if (m.op === 'hello') { if (helloRes) { helloRes(m); helloRes = null; } return; }
+    if (m.id == null && (m.op === 'typed' || m.op === 'edited' || m.op === 'tab')) { onSlideEdit(m); return; }   // 장표 위에서 바로 고치는 중(C1) — 묻지 않고 오는 글
     var w = waits[m.id]; if (w) { delete waits[m.id]; if (m.error) w.rej(new Error(m.error)); else w.res(m); }
   });
   function ask(op, params, ms) {
@@ -2634,17 +2897,56 @@
     roEnd(e.type === 'pointercancel');
   }
   $('hit').addEventListener('pointerup', pageDragEnd); $('hit').addEventListener('pointercancel', pageDragEnd);
+  /** 2.1 B1 — 레일 꼴: 썸네일(기본) ↔ 번호만. 칸이 좁으면(사이드바를 끌어 줄였다) 번호만 — 원준 2026-10-20 «줄이면 이전처럼». */
+  function railThumb() { return pref('rail') !== 'num' && !st.compact && st.mode === 'slides' && ($('left').clientWidth || 0) >= 520; }
+  var railTh = {}, railIO = null;
+  function railThumbLoad(sid, fi, host) {
+    var key = st.doc + '#' + st.ver + '#' + sid, v = st.verCache[st.doc + '#' + st.ver]; if (!v || host._f) return;
+    var cached = railTh[key];
+    var paint = function (html) { if (!host.isConnected || host._f) return; var f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.setAttribute('tabindex', '-1'); f.setAttribute('aria-hidden', 'true'); f.title = ''; f._w = st.fw || 1280; f._h = st.fh || 720; host._f = f; host.appendChild(f); f.srcdoc = html; hm.frames.push(f); thumbFit(f); setTimeout(function () { f.classList.add('on'); }, 1200); };
+    if (cached) { paint(cached); return; }
+    var s = effSlide(v, st.ver, sid); if (!s) return;
+    fill(s.body || '').then(function (body) { railTh[key] = thumbDoc(v.head, body, v.tail); paint(railTh[key]); }).catch(function () {});
+  }
+  function openRailMenu(s, pos, anchor, x, y) {
+    var m = $('railMenu'); if (!m) { m = el('div', 'menu'); m.id = 'railMenu'; document.body.appendChild(m); }
+    var sid = s.id, gone = !!delRow(sid), N = st.sections.length, o = ord();
+    var items = [
+      { label: (pos + 1) + '쪽에 의견', run: function () { st.cmOpen[sid] = true; setPin(true); showSlide(s.i).then(function () { syncSlideCm(sid); autoGrow($('slideCm')); $('slideCm').focus(); }).catch(fail); } },
+      { label: gone ? '되살리기(지우기 취소)' : '통째로 지우기', run: function () { setSlideDel(sid, !gone).catch(fail); } },
+      { label: '「이 장 같은 것 하나 더」 요청', run: function () { var key = 'slide:' + st.doc + ':' + st.ver + ':' + sid, had = String(scopeNote('slide', sid)).trim(); var note = (had ? had + '\n' : '') + '이 장과 같은 꼴의 장을 하나 더 만들어 주세요 — 내용: '; st.wantScope[key] = { doc: st.doc, ver: st.ver, scope: 'slide', sid: sid, note: note }; schedule(key, scopeJob(key)); st.cmOpen[sid] = true; setPin(true); showSlide(s.i).then(function () { syncSlideCmValue(s); syncSlideCm(sid); var ta = $('slideCm'); autoGrow(ta); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }).catch(fail); } },
+      { label: '맨 앞으로', off: pos === 0, run: function () { var was = o.slice(), n = o.slice(); n.splice(pos, 1); n.unshift(s.i); pushUndo((pos + 1) + '쪽을 맨 앞으로', function () { return applyOrder(was, true); }, function () { return applyOrder(n, true); }); applyOrder(n, true).catch(fail); } },
+      { label: '맨 뒤로', off: pos >= N - 1, run: function () { var was = o.slice(), n = o.slice(); n.splice(pos, 1); n.push(s.i); pushUndo((pos + 1) + '쪽을 맨 뒤로', function () { return applyOrder(was, true); }, function () { return applyOrder(n, true); }); applyOrder(n, true).catch(fail); } },
+    ];
+    m.innerHTML = ''; m.appendChild(el('div', 'mlab', (pos + 1) + '쪽 · ' + s.title));
+    items.forEach(function (it) { var b = el('button', '', it.label); b.type = 'button'; b.disabled = !!it.off; b.onclick = function (e) { e.stopPropagation(); m.hidden = true; it.run(); }; m.appendChild(b); });
+    m.hidden = false; var mw = m.offsetWidth || 230, mh = m.offsetHeight || 200;
+    m.style.right = 'auto'; m.style.left = Math.max(4, Math.min(window.innerWidth - mw - 4, x)) + 'px'; m.style.top = Math.max(4, Math.min(window.innerHeight - mh - 4, y)) + 'px';
+    setTimeout(function () { document.addEventListener('click', function off() { m.hidden = true; document.removeEventListener('click', off); }); }, 0);
+  }
   function renderChips() {
     if (ro) return;   // 끄는 동안은 번호 줄을 다시 그리지 않는다(잡은 번호가 사라지면 끌기가 끊긴다)
-    var box = $('chips'); box.innerHTML = ''; var on = null, moved = !!st.order;
+    var box = $('chips'); box.innerHTML = ''; var on = null, moved = !!st.order, th = railThumb();
+    box.classList.toggle('th', th); $('stageWrap').classList.toggle('th', th);
+    if (railIO) { railIO.disconnect(); railIO = null; }
+    if (th) railIO = new IntersectionObserver(function (es) { es.forEach(function (e) { if (e.isIntersecting) { railIO.unobserve(e.target); railThumbLoad(e.target._sid, e.target._fi, e.target); } }); }, { root: box, rootMargin: '120px' });
+    if (st.mode === 'slides' && st.sections.length > 1 && !st.compact) {
+      var tg = el('button', 'railTg'); tg.type = 'button'; tg.innerHTML = svg(th ? 'list' : 'grid'); tg.title = th ? '번호만 보기' : '썸네일로 보기'; tg.setAttribute('aria-label', tg.title);
+      tg.onclick = function () { setPref({ rail: th ? 'num' : 'thumb' }); renderChips(); fit(); }; box.appendChild(tg);
+    }
     ord().forEach(function (fi, pos) {
       var s = st.sections[fi];
-      var b = el('button', 'chip' + (st.cur === s.i ? ' on' : '') + (st.changed[s.id] ? ' chg' : '') + (moved && fi !== pos ? ' mv' : '') + (delRow(s.id) ? ' gone' : '') + (st.oldVars && st.oldVars[s.id] ? ' alt' : '')); b.type = 'button'; b.textContent = String(pos + 1);
-      b.title = s.title + (moved && fi !== pos ? ' (원래 ' + (fi + 1) + '쪽)' : '') + (delRow(s.id) ? ' · 지우기로 표시함' : '') + (st.oldVars && st.oldVars[s.id] ? ' · 버전 ' + st.oldVars[s.id].ver + ' 에 안 ' + st.oldVars[s.id].vars.length + '개' : '') + (st.sections.length > 1 ? ' · 들어서 옮기면 순서가 바뀝니다' : ''); b.setAttribute('data-fi', String(fi));
+      var b = el('button', 'chip' + (th ? ' th' : '') + (st.cur === s.i ? ' on' : '') + (st.changed[s.id] ? ' chg' : '') + (moved && fi !== pos ? ' mv' : '') + (delRow(s.id) ? ' gone' : '') + (st.oldVars && st.oldVars[s.id] ? ' alt' : '')); b.type = 'button';
+      if (th) { var tb = el('div', 'tb'); tb._sid = s.id; tb._fi = fi; b.appendChild(tb); var tt = el('div', 'tt'); tt.appendChild(el('b', '', String(pos + 1) + (moved && fi !== pos ? '←' + (fi + 1) : ''))); tt.appendChild(el('span', '', s.title)); b.appendChild(tt); if (railIO) railIO.observe(tb); }
+      else b.textContent = String(pos + 1);
+      b.title = s.title + (moved && fi !== pos ? ' (원래 ' + (fi + 1) + '쪽)' : '') + (delRow(s.id) ? ' · 지우기로 표시함' : '') + (st.oldVars && st.oldVars[s.id] ? ' · 버전 ' + st.oldVars[s.id].ver + ' 에 안 ' + st.oldVars[s.id].vars.length + '개' : '') + (st.sections.length > 1 ? ' · 들어서 옮기면 순서가 바뀝니다 · 우클릭으로 더' : ''); b.setAttribute('data-fi', String(fi));
       var c = counts(s.id);
       if (c.n) b.appendChild(el('i', '', String(c.n)));
       else if (c.e) b.appendChild(el('i', 'e', String(c.e)));
       b.onclick = function () { if (chipDragged || noClick) return; setPin(true); showSlide(s.i).catch(fail); };
+      b.addEventListener('contextmenu', function (e) { e.preventDefault(); chipDrag = null; openRailMenu(s, pos, b, e.clientX, e.clientY); });
+      b.addEventListener('pointerdown', function (e) { if (e.button) return; clearTimeout(b._lp); var x0 = e.clientX, y0 = e.clientY; b._lp = setTimeout(function () { if (chipDrag && chipDrag.on) return; chipDrag = null; noClick = true; setTimeout(function () { noClick = false; }, 300); openRailMenu(s, pos, b, x0, y0); }, 550); });
+      ['pointerup', 'pointercancel', 'pointerleave', 'pointermove'].forEach(function (ev) { b.addEventListener(ev, function (e) { if (ev === 'pointermove' && Math.abs(e.clientX - (chipDrag ? chipDrag.x : e.clientX)) + Math.abs(e.clientY - (chipDrag ? chipDrag.y : e.clientY)) < 6) return; clearTimeout(b._lp); }); });
       b.addEventListener('pointerdown', function (e) { if (e.button || st.sections.length < 2) return; chipDrag = { fi: fi, el: b, x: e.clientX, y: e.clientY, on: false, t: null }; try { b.setPointerCapture(e.pointerId); } catch (x) {} });
       b.addEventListener('pointermove', chipDragMove);
       b.addEventListener('pointerup', chipDragEnd);
@@ -2663,6 +2965,7 @@
     var cur = $('curp'), pg = st.pages[st.cur], sc = st.scale;
     if (st.mode !== 'slides' || !pg) { cur.hidden = true; return; }
     cur.style.top = (pg.t * sc) + 'px'; cur.style.width = (pg.w * sc) + 'px'; cur.style.height = (pg.h * sc) + 'px'; cur.hidden = st.pages.length < 2;
+    paintFtool(pg, sc);
     st.pages.forEach(function (p, i) {
       var sn = el('i', 'snap'); sn.style.top = (p.t * sc) + 'px'; canvas.appendChild(sn);
       var sec = st.sections[i]; if (!sec) return;
@@ -2673,8 +2976,18 @@
       spotsOf(sec.id).forEach(function (c, n) {
         var g = spotGeo(c), cls = (c.status === 'applied' ? ' applied' : (c.status !== 'draft' ? ' sent' : '')) + (st.spotOn === c ? ' on' : '') + (i === st.cur ? '' : ' far');
         var e, hit;
-        if (g.k === 'pin') { e = el('button', 'spot pin' + cls, String(n + 1)); e.type = 'button'; e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; hit = e; }
-        else { e = el('div', 'spot box' + (g.k === 'obj' ? ' obj' : '') + cls); e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; e.style.width = (g.w * p.w * sc) + 'px'; e.style.height = (g.h * p.h * sc) + 'px'; hit = el('b', '', String(n + 1)); e.appendChild(hit); }
+        if (g.k === 'path') {
+          e = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); e.setAttribute('class', 'spot path' + cls); e.setAttribute('viewBox', '0 0 1 1'); e.setAttribute('preserveAspectRatio', 'none');
+          e.style.left = '0px'; e.style.top = (p.t * sc) + 'px'; e.style.width = (p.w * sc) + 'px'; e.style.height = (p.h * sc) + 'px';
+          var pl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline'); pl.setAttribute('points', g.pts.map(function (q) { return q.x + ',' + q.y; }).join(' ')); e.appendChild(pl);
+          var wrap = el('div', 'spot path' + cls); wrap.style.left = (g.pts[0].x * p.w * sc) + 'px'; wrap.style.top = ((p.t + g.pts[0].y * p.h) * sc) + 'px'; wrap.style.width = '0'; wrap.style.height = '0';
+          hit = el('b', '', String(n + 1)); wrap.appendChild(hit); canvas.appendChild(wrap);
+        }
+        else if (g.k === 'pin') { e = el('button', 'spot pin' + cls, String(n + 1)); e.type = 'button'; e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; hit = e; }
+        else {
+          e = el('div', 'spot box' + (g.k === 'obj' ? ' obj' : '') + cls); e.style.left = (g.x * p.w * sc) + 'px'; e.style.top = ((p.t + g.y * p.h) * sc) + 'px'; e.style.width = (g.w * p.w * sc) + 'px'; e.style.height = (g.h * p.h * sc) + 'px'; hit = el('b', '', String(n + 1)); e.appendChild(hit);
+          (g.rects || []).slice(1).forEach(function (r) { var e2 = el('div', 'spot box obj more' + cls); e2.style.left = (r.x * p.w * sc) + 'px'; e2.style.top = ((p.t + r.y * p.h) * sc) + 'px'; e2.style.width = (r.w * p.w * sc) + 'px'; e2.style.height = (r.h * p.h * sc) + 'px'; e2.appendChild(el('b', '', String(n + 1))); canvas.appendChild(e2); });   // 같은 번호 — 한 의견의 다른 개체
+        }
         hit.title = (c.note ? String(c.note).slice(0, 80) : '자리에 단 의견') + (c.orig ? ' · ' + c.orig : '');
         hit.addEventListener('click', function (ev) { ev.stopPropagation(); focusSpot(i, c).catch(fail); });
         canvas.appendChild(e);
@@ -2682,13 +2995,169 @@
     });
   }
 
+  /* 2.1 — 지금 장의 오른쪽 위에 떠 있는 작은 도구(B3): 의견 · 크게 · 지우기. 멀리 있는 단추(글 줄 칸 머리 · 머리줄)를 손 옆으로. 지나가면 또렷해진다. */
+  function paintFtool(pg, sc) {
+    var canvas = $('canvas'), ft = $('ftool');
+    if (!ft) { ft = el('div', 'ftool'); ft.id = 'ftool'; canvas.appendChild(ft); }
+    var sec = st.sections[st.cur], on = !!sec && st.mode === 'slides' && !st.zoom && !document.body.classList.contains('reorder') && !(st.compact && layoutOf() === 'cols');
+    ft.hidden = !on; if (!on) return;
+    ft.innerHTML = '';
+    var gone = !!delRow(sec.id), has = !!String(scopeNote('slide', sec.id)).trim();
+    var cm = el('button', has ? 'has' : '', has ? '의견 있음' : '의견'); cm.type = 'button'; cm.title = (posOf(sec.i) + 1) + '쪽 전체에 의견 달기'; cm.onclick = function (e) { e.stopPropagation(); st.cmOpen[sec.id] = true; syncSlideCm(sec.id); autoGrow($('slideCm')); $('slideCm').focus(); }; ft.appendChild(cm);
+    if (st.compact) { var zb = el('button', '', '크게'); zb.type = 'button'; zb.title = '이 장을 크게 봅니다'; zb.onclick = function (e) { e.stopPropagation(); setZoom(true); }; ft.appendChild(zb); }
+    if (st.sections.length > 1) { var db = el('button', gone ? 'gone' : '', gone ? '되살리기' : '지우기'); db.type = 'button'; db.title = gone ? '이 장 되살리기(지우기 취소)' : '이 장을 통째로 지우기 · 보내면 AI 가 원본에서 지웁니다'; db.onclick = function (e) { e.stopPropagation(); setSlideDel(sec.id, !gone).catch(fail); }; ft.appendChild(db); }
+    ft.style.top = (pg.t * sc + 6) + 'px'; ft.style.left = 'auto'; ft.style.right = Math.max(6, canvas.clientWidth - pg.w * sc + 6) + 'px';
+  }
+  /* ───────────── 2.1 G2 — 발표 모드: 장표만 검은 바탕에 꽉 차게 · ← → 넘기기 · 숫자 + Enter 로 그 장 · 발표자 보기(지금 · 다음 · 시계) ───────────── */
+  var pres = null;
+  function presDoc(sid) { var v = st.verCache[st.doc + '#' + st.ver]; if (!v) return Promise.resolve(''); var s = effSlide(v, st.ver, sid); if (!s) return Promise.resolve(''); return fill(s.body || '').then(function (body) { return varCmpDoc(v, body); }); }
+  function presFit(f, host) { var W = host.clientWidth, H = host.clientHeight, w = st.fw || 1280, h = st.fh || 720; if (!W || !H) return; var k = Math.min(W / w, H / h); f.style.width = w + 'px'; f.style.height = h + 'px'; f.style.transform = 'translate(' + ((W - w * k) / 2).toFixed(1) + 'px,' + ((H - h * k) / 2).toFixed(1) + 'px) scale(' + k + ')'; }
+  async function presShow() {
+    if (!pres) return; var o = ord(), fi = o[pres.i], s = st.sections[fi], next = o[pres.i + 1] != null ? st.sections[o[pres.i + 1]] : null;
+    setText($('presCnt'), (pres.i + 1) + ' / ' + o.length); $('presPrev').disabled = pres.i <= 0; $('presNextB').disabled = pres.i >= o.length - 1;
+    var stage = $('presStage'), html = await presDoc(s.id); if (!pres || ord()[pres.i] !== fi) return;
+    var f = pres.frames[s.id]; if (!f) { f = document.createElement('iframe'); f.setAttribute('sandbox', 'allow-scripts'); f.title = s.title; f.srcdoc = html; pres.frames[s.id] = f; }
+    [].forEach.call(stage.querySelectorAll('iframe'), function (x) { if (x !== f) x.remove(); }); if (f.parentNode !== stage) stage.appendChild(f); presFit(f, stage);
+    var nb = $('presNext'); nb.innerHTML = ''; if (next) { var nh = await presDoc(next.id); if (!pres) return; var nf = document.createElement('iframe'); nf.setAttribute('sandbox', 'allow-scripts'); nf.title = next.title; nf.srcdoc = nh; nb.appendChild(nf); presFit(nf, nb); }
+    var info = $('presInfo'); info.innerHTML = ''; info.appendChild(el('b', '', (pres.i + 1) + '쪽 · ' + s.title)); info.appendChild(el('span', '', next ? '다음: ' + (pres.i + 2) + '쪽 · ' + next.title : '마지막 장입니다'));
+    if (next) presDoc(next.id);   // 다음 장을 미리 만든다
+  }
+  async function openPresent() {
+    if (!st.doc || st.mode !== 'slides') { toast('장 구분이 있는 문서에서만 발표할 수 있습니다'); return; }
+    if (inl) await inlineStop(); if (rv) closeReview();
+    pres = { i: posOf(st.cur), frames: {}, since: Date.now(), clock: 0, typed: '' };
+    $('pres').hidden = false; $('pres').classList.toggle('side', pref('presSide') === true); $('presSide').hidden = pref('presSide') !== true;
+    try { if (document.fullscreenEnabled && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function () {}); } catch (e) {}
+    pres.clock = setInterval(function () { if (!pres) return; var sec = Math.floor((Date.now() - pres.since) / 1000); setText($('presClock'), ('0' + Math.floor(sec / 60)).slice(-2) + ':' + ('0' + (sec % 60)).slice(-2)); }, 1000);
+    await presShow();
+  }
+  function closePresent() {
+    if (!pres) return; var at = ord()[pres.i]; clearInterval(pres.clock); pres = null; $('pres').hidden = true; $('presStage').innerHTML = ''; $('presNext').innerHTML = '';
+    try { if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {}); } catch (e) {}
+    if (at != null && at !== st.cur) { setPin(true); showSlide(at).catch(fail); }
+  }
+  function presGo(d) { if (!pres) return; var n = Math.max(0, Math.min(ord().length - 1, pres.i + d)); if (n === pres.i) return; pres.i = n; presShow().catch(fail); }
+  $('presBtn').addEventListener('click', function () { openPresent().catch(fail); });
+  $('presPrev').addEventListener('click', function () { presGo(-1); }); $('presNextB').addEventListener('click', function () { presGo(1); });
+  $('presClose').addEventListener('click', closePresent);
+  $('presView').addEventListener('click', function () { var on = pref('presSide') !== true; setPref({ presSide: on }); $('pres').classList.toggle('side', on); $('presSide').hidden = !on; presShow().catch(fail); });
+  $('presStage').addEventListener('click', function (e) { var r = $('presStage').getBoundingClientRect(); presGo(e.clientX - r.left < r.width / 3 ? -1 : 1); });
+  new ResizeObserver(function () { if (pres) presShow().catch(function () {}); }).observe($('presStage'));
+  document.addEventListener('keydown', function (e) {
+    if (!pres) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePresent(); return; }
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown' || (e.key === 'Enter' && !pres.typed)) { e.preventDefault(); presGo(1); return; }
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'Backspace') { e.preventDefault(); presGo(-1); return; }
+    if (e.key === 'Home') { e.preventDefault(); pres.i = 0; presShow().catch(fail); return; } if (e.key === 'End') { e.preventDefault(); pres.i = ord().length - 1; presShow().catch(fail); return; }
+    if (/^[0-9]$/.test(e.key)) { e.preventDefault(); pres.typed += e.key; toast(pres.typed + '쪽으로 — Enter', 1500); return; }
+    if (e.key === 'Enter' && pres.typed) { e.preventDefault(); var n = Math.max(1, Math.min(ord().length, Number(pres.typed))); pres.typed = ''; pres.i = n - 1; presShow().catch(fail); return; }
+    if (e.key === 'p' || e.key === 'P') { e.preventDefault(); $('presView').click(); return; }
+    if (e.key === 'f' || e.key === 'F') { e.preventDefault(); closePresent(); return; }
+  }, true);
+  /* ───────────── 2.1 D3 — 찾기(⌘F) · 바꾸기 ───────────── */
+  var fd = { q: '', hits: [], i: -1, on: false };
+  /** 그 글 줄의 지금 글(안 보낸 고침 > 보낸 고침 > 원문) — 꾸밈 표시 없이. */
+  function unitTextNow(sid, u) {
+    var w = st.want[unitKey(sid, u)], dr = draftRow(sid, u), se = sentEdit(sid, u);
+    var t = w && 'edited' in w && w.edited != null ? w.edited : (dr && dr.edited != null ? dr.edited : (se ? se.edited : (u.origMark != null ? u.origMark : u.origText)));
+    return unmark(t == null ? '' : t);
+  }
+  async function unitsAll() {   // 모든 장의 글 줄(없는 장은 조용히 뽑아 온다 — 장표를 바꾸지 않는다)
+    for (var fi = 0; fi < st.sections.length; fi++) { if (!st.units[fi] && st.mode === 'slides') { try { var r = await ask('units', { fi: fi }, 20000); st.units[fi] = r.units || []; } catch (e) { st.units[fi] = []; } } }
+  }
+  function openFind(sel) {
+    if (!st.doc) return;
+    var bar = $('findBar'); bar.hidden = false; fd.on = true;
+    var inp = $('findQ'); if (sel && !inp.value) inp.value = sel; inp.focus(); inp.select();
+    if (inp.value) runFind().catch(fail); fit();
+  }
+  function closeFind() { fd.on = false; fd.hits = []; fd.i = -1; $('findBar').hidden = true; $('findRep').hidden = true; $('findRepT').setAttribute('aria-expanded', 'false'); fit(); }
+  var findT = 0;
+  async function runFind() {
+    var q = $('findQ').value.trim(); fd.q = q; fd.hits = []; fd.i = -1;
+    if (!q) { $('findCnt').textContent = ''; $('findCnt').classList.remove('none'); return; }
+    await unitsAll();
+    var lq = q.toLowerCase(), slides = {};
+    ord().forEach(function (fi) { var s = st.sections[fi]; (st.units[fi] || []).forEach(function (u) { var t = unitTextNow(s.id, u); var at = t.toLowerCase().indexOf(lq); if (at < 0) return; var n = t.toLowerCase().split(lq).length - 1; fd.hits.push({ fi: fi, sid: s.id, k: u.k, no: u.no, origText: u.origText, n: n }); slides[fi] = 1; }); });
+    var total = fd.hits.reduce(function (a, x) { return a + x.n; }, 0), ns = Object.keys(slides).length;
+    $('findCnt').textContent = total ? total + '곳 · ' + ns + '장' : '없음'; $('findCnt').classList.toggle('none', !total);
+    if (fd.hits.length) { var cur = fd.hits.map(function (x) { return x.fi; }).indexOf(st.cur); fd.i = cur >= 0 ? cur : 0; await goHit(); }
+  }
+  async function goHit() {
+    var hit = fd.hits[fd.i]; if (!hit) return;
+    $('findCnt').textContent = (fd.i + 1) + ' / ' + fd.hits.length + '줄';
+    if (!st.outline && hit.fi !== st.cur) { setPin(true); await showSlide(hit.fi, { scroll: 'near' }); }
+    var u = unitByK(hit.k); if (!u || !u.row || !u.row.isConnected) { if (st.outline) { await showSlide(hit.fi, { scroll: 'near' }); u = unitByK(hit.k); } if (!u || !u.row) return; }
+    [].forEach.call(document.querySelectorAll('#rows .row.fhit'), function (r) { r.classList.remove('fhit'); });
+    focusRow(u); u.row.classList.add('fhit'); mark(u); $('findQ').focus({ preventScroll: true });   // 초점은 찾기 칸에 두고(Enter 로 계속) 그 줄은 띠로 표시
+  }
+  /** 글 칸 안에서 그 말을 찾아 고른다(겉보기만 — 글은 바뀌지 않는다). */
+  function selectIn(ed, q) {
+    if (!ed || !q) return;
+    var lq = q.toLowerCase(), nodes = [], text = '';
+    (function w(x) { x.childNodes.forEach(function (c) { if (c.nodeType === 3) { nodes.push({ n: c, at: text.length }); text += c.textContent; } else if (c.nodeType === 1) { if (c.tagName === 'BR') text += '\n'; else w(c); } }); })(ed);
+    var at = text.toLowerCase().indexOf(lq); if (at < 0) return;
+    var find = function (off) { var hit = null; nodes.forEach(function (t) { if (hit) return; if (off >= t.at && off <= t.at + t.n.textContent.length) hit = [t.n, off - t.at]; }); return hit; };
+    var a = find(at), b = find(at + q.length); if (!a || !b) return;
+    try { var r = document.createRange(); r.setStart(a[0], a[1]); r.setEnd(b[0], b[1]); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch (e) {}
+  }
+  function replIn(t, q, to) { var lq = q.toLowerCase(), out = '', i = 0; while (i < t.length) { var at = t.toLowerCase().indexOf(lq, i); if (at < 0) { out += t.slice(i); break; } out += t.slice(i, at) + to; i = at + q.length; } return out; }
+  async function replaceHit(all) {
+    var q = fd.q, to = $('findR').value; if (!q || !fd.hits.length) { toast('먼저 찾을 말을 적어 주세요'); return; }
+    var targets = all ? fd.hits.slice() : [fd.hits[fd.i]].filter(Boolean), steps = [], n = 0;
+    for (var i = 0; i < targets.length; i++) {
+      var hit = targets[i], s = st.sections[hit.fi], u = unitByK(hit.k); if (!u) continue;
+      var was = unitTextNow(s.id, u), now = replIn(was, q, to); if (was === now) continue;
+      await setUnitText(s.id, { no: u.no, origText: u.origText }, now); steps.push({ sid: s.id, u: { no: u.no, origText: u.origText }, was: was, now: now }); n++;
+    }
+    if (!n) { toast('바꿀 것이 없습니다'); return; }
+    pushUndo('바꾸기 「' + q + '」 → 「' + to + '」 · ' + n + '줄', async function () { for (var i = 0; i < steps.length; i++) await setUnitText(steps[i].sid, steps[i].u, steps[i].was); }, async function () { for (var i = 0; i < steps.length; i++) await setUnitText(steps[i].sid, steps[i].u, steps[i].now); });
+    toast(n + '줄을 바꿨습니다 · 보내면 반영됩니다', 2600);
+    await runFind();
+  }
+  $('findQ').addEventListener('input', function () { clearTimeout(findT); findT = setTimeout(function () { runFind().catch(fail); }, 220); });
+  $('findQ').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); if (!fd.hits.length) { runFind().catch(fail); return; } fd.i = (fd.i + (e.shiftKey ? -1 : 1) + fd.hits.length) % fd.hits.length; goHit().catch(fail); } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); } });
+  $('findR').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); replaceHit(false).catch(fail); } if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); } });
+  $('findNext').addEventListener('click', function () { if (!fd.hits.length) return; fd.i = (fd.i + 1) % fd.hits.length; goHit().catch(fail); });
+  $('findPrev').addEventListener('click', function () { if (!fd.hits.length) return; fd.i = (fd.i - 1 + fd.hits.length) % fd.hits.length; goHit().catch(fail); });
+  $('findRepT').addEventListener('click', function () { var r = $('findRep'); r.hidden = !r.hidden; $('findRepT').setAttribute('aria-expanded', String(!r.hidden)); if (!r.hidden) $('findR').focus(); fit(); });
+  $('findRep1').addEventListener('click', function () { replaceHit(false).catch(fail); });
+  $('findRepAll').addEventListener('click', function () { replaceHit(true).catch(fail); });
+  $('findClose').addEventListener('click', closeFind);
   /* ───────────── 자리에 단 의견(핀 · 영역) ───────────── */
   var tmpSeq = 0;
+  /** unit_key → 자리. 개체(obj)는 `;` 로 이어 여러 테두리를 가질 수 있다(⌘+누름으로 고른 여러 개체 — 한 의견) — 첫 테두리가 대표, 전부는 .rects. */
   function spotGeo(c) {
-    var m = /^(pin|box|obj):([\d.,]+)$/.exec(String(c.unit_key || '')); if (!m) return null;
-    var a = m[2].split(',').map(Number); if (a.some(function (v) { return !(v >= 0 && v <= 1); })) return null;
-    if (m[1] === 'pin') return a.length === 2 ? { k: 'pin', x: a[0], y: a[1], w: 0, h: 0 } : null;
-    return a.length === 4 && a[2] > 0 && a[3] > 0 ? { k: m[1], x: a[0], y: a[1], w: a[2], h: a[3] } : null;
+    var m = /^(pin|box|obj|path):([\d.,;]+)$/.exec(String(c.unit_key || '')); if (!m) return null;
+    if (m[1] === 'path') {   // 펜 획 — 비율 좌표 점열 · bbox 를 x,y,w,h 로
+      var pts = m[2].split(';').map(function (s) { var a = s.split(',').map(Number); return a.length === 2 && a[0] >= 0 && a[0] <= 1 && a[1] >= 0 && a[1] <= 1 ? { x: a[0], y: a[1] } : null; }).filter(Boolean);
+      if (pts.length < 2) return null;
+      var xs = pts.map(function (q) { return q.x; }), ys = pts.map(function (q) { return q.y; }), x0 = Math.min.apply(null, xs), y0 = Math.min.apply(null, ys);
+      return { k: 'path', pts: pts, x: x0, y: y0, w: Math.max(0.001, Math.max.apply(null, xs) - x0), h: Math.max(0.001, Math.max.apply(null, ys) - y0) };
+    }
+    var parts = m[2].split(';'), rects = [];
+    for (var i = 0; i < parts.length; i++) {
+      var a = parts[i].split(',').map(Number); if (a.some(function (v) { return !(v >= 0 && v <= 1); })) return null;
+      if (m[1] === 'pin') { if (a.length !== 2 || parts.length !== 1) return null; return { k: 'pin', x: a[0], y: a[1], w: 0, h: 0 }; }
+      if (!(a.length === 4 && a[2] > 0 && a[3] > 0)) return null;
+      rects.push({ x: a[0], y: a[1], w: a[2], h: a[3] });
+      if (m[1] === 'box' && parts.length !== 1) return null;
+    }
+    var g = { k: m[1], x: rects[0].x, y: rects[0].y, w: rects[0].w, h: rects[0].h }; if (rects.length > 1) g.rects = rects; return g;
+  }
+  function rectKey(r) { return [r.x, r.y, r.w, r.h].map(frac).join(','); }
+  function sameRect(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.w - b.w) + Math.abs(a.h - b.h) < 0.012; }
+  /** 고르고 있는 개체 의견(지금 장 · 초안 · obj)에 테두리를 더하거나(이미 든 것이면) 뺀다 — ⌘/Ctrl 을 누른 채 개체를 눌렀을 때. 표의 행은 unit_key · orig 를 같이 고친다. */
+  async function toggleObjIn(c, g, ctx) {
+    var cur = spotGeo(c), rects = (cur.rects || [cur]).slice(), i = -1;
+    rects.forEach(function (r, n) { if (sameRect(r, g)) i = n; });
+    var ctxs = String(c.orig || '').split(' ∥ ').filter(Boolean);
+    if (i >= 0) { if (rects.length < 2) return; rects.splice(i, 1); if (ctxs.length === rects.length + 1) ctxs.splice(i, 1); }
+    else { rects.push({ x: g.x, y: g.y, w: g.w, h: g.h }); ctxs.push(ctx || '(개체)'); }
+    c.unit_key = 'obj:' + rects.map(rectKey).join(';'); c.orig = ctxs.join(' ∥ ');
+    if (!c._tmp) { try { await sdk.store.update('comments', { id: c.id }, { unit_key: c.unit_key, orig: c.orig }); } catch (e) { fail(e); } }
+    renderRows(); renderPageMarks();
+    toast(rects.length > 1 ? '개체 ' + rects.length + '개에 한 의견 · ⌘ 를 누른 채 더 고르거나 다시 누르면 뺍니다' : '개체 1개', 1600);
   }
   function frac(n) { return String(Math.round(Math.max(0, Math.min(1, n)) * 10000) / 10000); }
   /** 이 장에 보일 자리 의견 — 이 버전의 것 전부 + 지난 버전에 남긴 채 안 보낸 것. 번호는 이 차례(먼저 단 것부터 · 아직 저장 전인 것은 뒤). */
@@ -2697,7 +3166,7 @@
       .sort(function (a, b) { return (a._tmp ? 1 : 0) - (b._tmp ? 1 : 0) || (a._tmp ? a._seq - b._seq : Number(a.id) - Number(b.id)); });
   }
   function setTool(t) {
-    st.tool = t; var cl = document.body.classList; cl.toggle('tool-pin', t === 'pin'); cl.toggle('tool-box', t === 'box');
+    st.tool = t; var cl = document.body.classList; cl.toggle('tool-pin', t === 'pin'); cl.toggle('tool-box', t === 'box'); cl.toggle('tool-pen', t === 'pen');
     [].forEach.call($('tools').children, function (b) { var on = b.getAttribute('data-t') === t; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
     if (t !== 'sel') mark(null);
   }
@@ -2707,9 +3176,9 @@
     var sec = st.sections[fi], pg = st.pages[fi]; if (!sec || !pg || st.mode !== 'slides') return;
     if (fi !== st.cur) await showSlide(fi, { scroll: 'near' });
     var ctx = known || '';
-    if (known == null) { try { var r = await ask('probe', { fi: fi, x: g.x * pg.w, y: g.y * pg.h, w: (g.w || 0) * pg.w, h: (g.h || 0) * pg.h }, 4000); ctx = r.ctx || ''; } catch (e) {} }
+    if (known == null) { try { var r = await ask('probe', { fi: fi, x: g.x * pg.w, y: g.y * pg.h, w: (g.w || 0) * pg.w, h: (g.h || 0) * pg.h }, 4000); ctx = (g.k === 'path' && r.ctx ? '획이 지나는 곳 · ' : '') + (r.ctx || ''); } catch (e) {} }
     var c = { id: 'tmp' + (++tmpSeq), _tmp: true, _seq: tmpSeq, doc: st.doc, ver: st.ver, slide_id: sec.id,
-      unit_key: g.w ? (g.k === 'obj' ? 'obj:' : 'box:') + [g.x, g.y, g.w, g.h].map(frac).join(',') : 'pin:' + frac(g.x) + ',' + frac(g.y),
+      unit_key: g.k === 'path' ? 'path:' + g.pts.map(function (q) { return frac(q.x) + ',' + frac(q.y); }).join(';') : (g.w ? (g.k === 'obj' ? 'obj:' : 'box:') + [g.x, g.y, g.w, g.h].map(frac).join(',') : 'pin:' + frac(g.x) + ',' + frac(g.y)),
       orig: ctx, edited: null, note: '', scope: 'spot', bundle: null, status: 'draft', reply: '', session: L.session || '' };
     st.comments.push(c);
     if (st.zoom) setZoom(false);
@@ -2752,14 +3221,14 @@
     var g = spotGeo(c), sent = c.status !== 'draft';
     var row = el('div', 'row spotrow' + (sent ? ' sent' : '')), no = el('span', 'no'), col = el('div', 'col');
     no.appendChild(el('b', 'sbadge' + (c.status === 'applied' ? ' applied' : (sent ? ' sent' : '')), String(n)));
-    var ctx = el('div', 'spotctx'); ctx.appendChild(el('span', 'clip', (g.k === 'pin' ? '핀' : (g.k === 'obj' ? '개체' : '영역')) + (c.orig ? ' · ' + c.orig : ''))); ctx.title = c.orig || '';
+    var ctx = el('div', 'spotctx'); ctx.appendChild(el('span', 'clip', (g.k === 'pin' ? '핀' : (g.k === 'obj' ? (g.rects ? '개체 ' + g.rects.length + '개' : '개체') : (g.k === 'path' ? '펜 획' : '영역'))) + (c.orig ? ' · ' + c.orig : ''))); ctx.title = c.orig || '';
     col.appendChild(ctx);
     if (!sent) {
       var del = el('button', '', '지우기'); del.type = 'button'; del.tabIndex = -1; del.addEventListener('mousedown', function (e) { e.preventDefault(); }); del.onclick = function () { removeSpot(c).catch(fail); }; ctx.appendChild(del);
-      var cm = el('textarea', 'nt'); cm.rows = 1; cm.placeholder = g.k === 'pin' ? '이 자리에 대한 의견' : (g.k === 'obj' ? '이 개체에 대한 의견' : '이 영역에 대한 의견'); cm.value = c.note || '';
+      var cm = el('textarea', 'nt'); cm.rows = 1; cm.placeholder = g.k === 'pin' ? '이 자리에 대한 의견' : (g.k === 'obj' ? (g.rects ? '이 개체 ' + g.rects.length + '개에 대한 의견' : '이 개체에 대한 의견 · ⌘ 를 누른 채 다른 개체를 누르면 함께') : (g.k === 'path' ? '이 획(펜으로 표시한 곳)에 대한 의견' : '이 영역에 대한 의견')); cm.value = c.note || '';
       cm.addEventListener('input', function () { autoGrow(cm); c.note = cm.value; schedule('spot:' + (c._seq || c.id), function () { return saveSpot(c); }); });
       //  글 없이 떠나면 핀을 거둔다(잘못 누른 핀이 남지 않게). 저장된 것이면 표에서도 지운다.
-      cm.addEventListener('blur', function () { setTimeout(function () { whenUp(function () { if (!String(c.note || '').trim() && document.activeElement !== cm && st.comments.indexOf(c) >= 0) removeSpot(c).catch(fail); }); }, 180); });   // 다른 것을 누르는 중이면 손을 뗀 뒤에 거둔다(글 줄을 다시 그리면 그 누름이 사라진다)
+      cm.addEventListener('blur', function () { setTimeout(function () { whenUp(function () { if (Date.now() - keepSpotAt < 1500) return; if (!String(c.note || '').trim() && document.activeElement !== cm && st.comments.indexOf(c) >= 0) removeSpot(c).catch(fail); }); }, 180); });   // 다른 것을 누르는 중이면 손을 뗀 뒤에 거둔다(글 줄을 다시 그리면 그 누름이 사라진다)
       col.appendChild(cm); c._ta = cm; if (cm.value) setTimeout(function () { autoGrow(cm); }, 0);
     } else { var t = el('div', 'ed'); t.contentEditable = 'false'; t.textContent = c.note || ''; col.appendChild(t); col.appendChild(aiChip(c)); c._ta = null; }
     row.appendChild(no); row.appendChild(col);
@@ -2768,6 +3237,39 @@
     c._row = row;
     return row;
   }
+  // 펜(도구가 「펜」일 때) — 누른 장 안에서 획을 긋는다. 놓으면 획이 자리 의견이 된다(unit_key `path:` · 점은 비율 좌표, 80개까지 간추린다).
+  var pen = null;
+  $('hit').addEventListener('pointerdown', function (e) {
+    if (st.tool !== 'pen' || e.button || st.mode !== 'slides') return;
+    var p = pointAt(e); if (!p || !st.pages[p.fi]) return;
+    var pg = st.pages[p.fi], sv = $('penLive');
+    if (!sv) { sv = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); sv.id = 'penLive'; $('canvas').appendChild(sv); }
+    sv.setAttribute('width', $('canvas').clientWidth); sv.setAttribute('height', $('canvas').clientHeight); sv.innerHTML = '';
+    var pl = document.createElementNS('http://www.w3.org/2000/svg', 'polyline'); sv.appendChild(pl);
+    pen = { fi: p.fi, pts: [{ x: p.x / pg.w, y: p.y / pg.h }], pl: pl };
+    try { $('hit').setPointerCapture(e.pointerId); } catch (x) {}
+    e.preventDefault();
+  });
+  $('hit').addEventListener('pointermove', function (e) {
+    if (!pen) return;
+    var b = $('canvas').getBoundingClientRect(), pg = st.pages[pen.fi], s = st.scale;
+    var x = Math.max(0, Math.min(pg.w, (e.clientX - b.left) / s)) / pg.w, y = Math.max(0, Math.min(pg.h, (e.clientY - b.top) / s - pg.t)) / pg.h, last = pen.pts[pen.pts.length - 1];
+    if (Math.abs(x - last.x) + Math.abs(y - last.y) < 0.003) return;
+    pen.pts.push({ x: x, y: y });
+    pen.pl.setAttribute('points', pen.pts.map(function (q) { return (q.x * pg.w * s) + ',' + ((pg.t + q.y * pg.h) * s); }).join(' '));
+  });
+  function penEnd(e) {
+    var p = pen; pen = null; if (!p) return;
+    var sv = $('penLive'); if (sv) sv.remove();
+    mqJust = true; setTimeout(function () { mqJust = false; }, 0);
+    if (e.type === 'pointercancel' || p.pts.length < 3) return;
+    var pts = p.pts; while (pts.length > 80) pts = pts.filter(function (q, i) { return i % 2 === 0 || i === pts.length - 1; });   // 간추리기
+    var xs = pts.map(function (q) { return q.x; }), ys = pts.map(function (q) { return q.y; }), x0 = Math.min.apply(null, xs), y0 = Math.min.apply(null, ys), x1 = Math.max.apply(null, xs), y1 = Math.max.apply(null, ys);
+    if ((x1 - x0) + (y1 - y0) < 0.01) return;
+    addSpot(p.fi, { k: 'path', pts: pts, x: x0, y: y0, w: Math.max(0.001, x1 - x0), h: Math.max(0.001, y1 - y0) }).catch(fail);
+  }
+  $('hit').addEventListener('pointerup', penEnd);
+  $('hit').addEventListener('pointercancel', penEnd);
   // 영역 끌기(도구가 「영역」일 때) — 누른 장 안에서만. 너무 작으면 끈 것으로 치지 않는다.
   var mq = null, mqJust = false;
   $('hit').addEventListener('pointerdown', function (e) {
@@ -2916,6 +3418,9 @@
     hovT = setTimeout(function () { pickObj(p.fi, p.x, p.y).then(function (o) { if (seq === hovSeq) markObj(p.fi, o && o.rect); }); }, 60);
   });
   $('hit').addEventListener('mouseleave', function () { hovSeq++; markObj(0, null); mark(st.focused); });
+  //  ⌘/Ctrl 을 누른 채 장표를 누르는 순간 — 의견 칸이 초점을 잃어도 빈 자리 의견을 거두지 않는다(그 의견에 개체를 더하려는 누름이다)
+  var keepSpotAt = 0;
+  $('hit').addEventListener('mousedown', function (e) { if (e.metaKey || e.ctrlKey) keepSpotAt = Date.now(); });
   $('hit').addEventListener('click', function (e) {
     if (mqJust || pageDragged || noClick) return;
     var p = pointAt(e); if (!p || p.fi == null) return;
@@ -2935,12 +3440,51 @@
       if (!pg || was !== p.fi) return;
       var o = await pickObj(p.fi, p.x, p.y); if (!o) return;
       var g = { k: 'obj', x: o.rect.l / pg.w, y: o.rect.t / pg.h, w: o.rect.w / pg.w, h: o.rect.h / pg.h };
-      var had = spotsOf(st.sections[p.fi].id).filter(function (c) { var q2 = spotGeo(c); return c.status === 'draft' && q2.k === 'obj' && Math.abs(q2.x - g.x) + Math.abs(q2.y - g.y) + Math.abs(q2.w - g.w) + Math.abs(q2.h - g.h) < 0.012; })[0];
+      //  ⌘/Ctrl 을 누른 채 — 고르고 있는 개체 의견(지금 장의 초안)에 이 개체를 더한다(이미 든 것이면 뺀다). 고르는 중인 것이 없으면 보통 누름과 같다.
+      var on = st.spotOn, onG = on && on.status === 'draft' && on.slide_id === st.sections[p.fi].id && st.comments.indexOf(on) >= 0 ? spotGeo(on) : null;
+      if ((e.metaKey || e.ctrlKey) && onG && onG.k === 'obj') { if (st.zoom) setZoom(false); await toggleObjIn(on, g, o.ctx); await focusSpot(p.fi, on); return; }
+      var had = spotsOf(st.sections[p.fi].id).filter(function (c) { var q2 = spotGeo(c); return c.status === 'draft' && q2.k === 'obj' && (q2.rects || [q2]).some(function (r) { return sameRect(r, g); }); })[0];
       if (had) { if (st.zoom) setZoom(false); await focusSpot(p.fi, had); return; }   // 이미 의견을 달던 개체 — 그 의견으로
       await addSpot(p.fi, g, o.ctx);
     })().catch(fail);
   });
   $('zoomClose').addEventListener('click', function () { setZoom(false); });
+  /* ── 2.1 C1 — 장표의 글을 두 번 누르면 그 자리에서 친다. 오른쪽 글 줄이 같이 바뀌고 저장 · 되돌리기 · 강조는 글 줄 칸의 규칙 그대로. ── */
+  var inl = null;   // { sid, u, was } — 지금 장표 위에서 고치는 글 줄
+  function unitByK(k) { var fi = +String(k).split('|')[0]; return (st.units[fi] || []).filter(function (x) { return x.k === k; })[0] || null; }
+  async function inlineStart(u, x, y) {
+    if (!u || u.svg || !u.ed || !u.ed.isContentEditable) return;
+    var sec = st.sections[st.cur]; if (!sec) return;
+    await inlineStop();
+    var pg = st.pages[st.cur] || { t: 0 };
+    var r = await ask('editon', { k: u.k, x: x, y: pg.t + y }, 4000); if (!r.ok) return;
+    inl = { sid: sec.id, u: u, was: u.svg ? edText(u.ed) : markText(u.ed, u.kinds) };
+    document.body.classList.add('inl'); mark(u); st.focused = u;
+  }
+  async function inlineStop() { if (!inl) return; try { await ask('editoff', {}, 2000); } catch (e) {} }
+  function onSlideEdit(m) {
+    var u = unitByK(m.k); if (!u || !u.ed) { if (m.op !== 'typed') { inl = null; document.body.classList.remove('inl'); } return; }
+    var sid = (st.sections.filter(function (s) { return s.i === +String(m.k).split('|')[0]; })[0] || {}).id; if (!sid) return;
+    if (m.op === 'typed') {   // 치는 중 — 글 칸만 따라가고 장표는 건드리지 않는다(장표가 곧 편집기다)
+      u.ed.innerHTML = m.html;
+      var now = markText(u.ed, u.kinds), same = now === u.base, ukey = unitKey(sid, u);
+      u.row.classList.toggle('ed', !same); u.row.classList.toggle('del', now === '');
+      wantOf(sid, u).edited = same ? null : now; schedule('u:' + ukey, saveUnitJob(ukey));
+      return;
+    }
+    // 끝났다(edited · tab) — 장표의 글을 편집기 규칙으로 한 번 고쳐 쓰고(fromEditor) 되돌리기 걸음을 쌓는다
+    u.ed.innerHTML = m.html; onEdit(sid, u);
+    var was = inl && inl.u === u ? inl.was : null, now2 = markText(u.ed, u.kinds);
+    if (was != null && was !== now2) pushUndo('글 고침(' + u.no + '번 글 · 장표에서)', function () { return setUnitText(sid, u, was); }, function () { return setUnitText(sid, u, now2); });
+    u.ed._at = now2; inl = null; document.body.classList.remove('inl'); pump('u:' + unitKey(sid, u));
+    if (m.op === 'tab') { u.row.classList.add('show'); focusRow(u); if (u.cm) u.cm.focus(); }
+  }
+  $('hit').addEventListener('dblclick', function (e) {
+    if (st.mode !== 'slides' || st.tool !== 'sel' || (st.compact && !st.zoom)) return;
+    var p = pointAt(e); if (!p || p.fi !== st.cur) return;
+    var u = unitAt(p.x, p.y); if (!u) return;
+    e.preventDefault(); inlineStart(u, p.x, p.y).catch(fail);
+  });
   async function refreshRects() {
     if (st.cur == null) return;
     try { var r = await ask('rects', { fi: st.cur }); st.rects = {}; r.rects.forEach(function (x) { st.rects[x.k] = x.rect; }); mark(st.focused); } catch (e) {}
@@ -3027,9 +3571,93 @@
   $('fmt').addEventListener('mousedown', function (e) { e.preventDefault(); });   // 누르는 동안 고른 범위를 잃지 않게
   [].forEach.call($('fmt').querySelectorAll('button'), function (b) { b.addEventListener('click', function () { if (fmtU) { applyEmph(fmtU.sid, fmtU.u, b.getAttribute('data-f')); placeFmt(); } }); });
   function autoGrow(ta) { ta.style.height = 'auto'; var h = Math.max(30, ta.scrollHeight + 2); if (ta.id === 'slideCm') { var cap = Math.max(84, Math.round(($('right').clientHeight || 600) * 0.4)); h = Math.min(h, cap); } ta.style.height = h + 'px'; }
+  /* ── 2.1 D2 — 개요 보기: 글 줄 칸에 모든 장의 글을 장마다 묶어 놓는다(접기 · 순서 ↑↓ · 바로 고치기와 의견은 같은 규칙). ── */
+  function toggleOutline(on) {
+    st.outline = on == null ? !st.outline : !!on; document.body.classList.toggle('outline', st.outline);
+    if (st.outline) { unitsAll().then(function () { renderRows(); }).catch(fail); } else renderRows();
+  }
+  function renderOutline(box) {
+    var pt0 = st.prevText, cur = st.sections[st.cur];
+    box.appendChild(el('div', 'olHead', '개요 · 모든 장 ' + st.sections.length + '개 — 글을 바로 고치고 의견을 답니다 · 장 머리를 누르면 그 장으로'));
+    ord().forEach(function (fi, pos) {
+      var s = st.sections[fi], sid = s.id, list = st.units[fi] || [], open = st.olOpen[sid] !== false, c = counts(sid), gone = !!delRow(sid);
+      var hd = el('div', 'olH' + (s.i === (cur || {}).i ? ' on' : '') + (gone ? ' gone' : '')); hd.setAttribute('data-fi', String(fi));
+      var tg = el('button', 'ib sm ic ghost'); tg.type = 'button'; tg.innerHTML = svg(open ? 'down' : 'right'); tg.title = open ? '접기' : '펼치기'; tg.onclick = function (e) { e.stopPropagation(); st.olOpen[sid] = !open; renderRows(); }; hd.appendChild(tg);
+      var tt = el('button', 'olT'); tt.type = 'button'; tt.appendChild(el('b', '', String(pos + 1))); tt.appendChild(el('span', 'clip', s.title)); tt.title = '이 장으로'; tt.onclick = function () { setPin(true); showSlide(fi, { scroll: 'top' }).catch(fail); }; hd.appendChild(tt);
+      hd.appendChild(el('span', 'cnt', [c.e ? '고침 ' + c.e : '', c.n ? '의견 ' + c.n : '', gone ? '지울 장' : ''].filter(Boolean).join(' · ')));
+      var up = el('button', 'ib sm ic ghost'); up.type = 'button'; up.innerHTML = svg('up'); up.title = '앞으로'; up.disabled = pos === 0; up.onclick = function (e) { e.stopPropagation(); var was = ord().slice(), o = ord().slice(); o.splice(pos, 1); o.splice(pos - 1, 0, fi); pushUndo((pos + 1) + '쪽을 앞으로', function () { return applyOrder(was, true).then(renderRows); }, function () { return applyOrder(o, true).then(renderRows); }); applyOrder(o, true).then(renderRows).catch(fail); }; hd.appendChild(up);
+      var dn = el('button', 'ib sm ic ghost'); dn.type = 'button'; dn.innerHTML = svg('down'); dn.title = '뒤로'; dn.disabled = pos >= st.sections.length - 1; dn.onclick = function (e) { e.stopPropagation(); var was = ord().slice(), o = ord().slice(); o.splice(pos, 1); o.splice(pos + 1, 0, fi); pushUndo((pos + 1) + '쪽을 뒤로', function () { return applyOrder(was, true).then(renderRows); }, function () { return applyOrder(o, true).then(renderRows); }); applyOrder(o, true).then(renderRows).catch(fail); }; hd.appendChild(dn);
+      box.appendChild(hd);
+      if (!open) return;
+      if (!list.length) { box.appendChild(el('div', 'olNone', '글 줄을 읽는 중…')); return; }
+      var pt = pt0[sid], lastBlock = null;
+      list.forEach(function (u) { if (u.bk !== lastBlock) { box.appendChild(el('div', 'sep', u.block)); lastBlock = u.bk; } box.appendChild(buildRow(sid, u, draftRow(sid, u), sentRows(sid, u), pt)); });
+    });
+    renderChips(); renderSend(); renderMenu(); fit();
+  }
+  /* ── 2.1 B2 — 「대화」 서랍: 글 줄 칸 자리에 보낸 묶음(시간순) → AI 답(반영 · 보류 · 안) → 질문 카드 · 내 답. 항목을 누르면 그 장 · 그 줄로. ── */
+  function toggleTalk(on) { st.talk = on == null ? !st.talk : !!on; paintTalkBtn(); renderRows(); if (st.talk) $('rowsScroll').scrollTop = $('rowsScroll').scrollHeight; }
+  function paintTalkBtn() {
+    var b = $('talkBtn'); if (!b) return; b.hidden = !st.doc;
+    var hot = !!(sdk.chat && !st.unnotified && waitingInfo()) || !!asks().length;
+    b.classList.toggle('hot', hot); b.classList.toggle('on', !!st.talk); b.setAttribute('aria-pressed', String(!!st.talk));
+  }
+  function secOf(sid) { return st.sections.filter(function (x) { return x.id === sid; })[0] || null; }
+  function talkGo(c) {
+    var sec = secOf(c.slide_id); if (!sec) return;
+    toggleTalk(false); setPin(true);
+    showSlide(sec.i).then(function () {
+      if (c.scope === 'spot') { var sp = spotsOf(sec.id).filter(function (x) { return x.id === c.id; })[0]; if (sp) focusSpot(sec.i, sp); return; }
+      if (c.scope === 'unit') { var u = (st.units[sec.i] || []).filter(function (x) { return x.origText === unmark(c.orig) || (sentRows(sec.id, x).indexOf(c) >= 0) || sameText(c, x); })[0]; if (u) focusRow(u); }
+    }).catch(fail);
+  }
+  function renderTalk(box) {
+    var rows = st.comments.filter(function (c) { return c.doc === st.doc && (c.bundle || c.scope === 'ask'); });
+    var by = {}, order = [];
+    rows.forEach(function (c) { var k = c.scope === 'ask' ? 'q' + c.id : 'b' + c.bundle; if (!by[k]) { by[k] = { k: k, ask: c.scope === 'ask' ? c : null, bundle: c.bundle, rows: [], at: 0 }; order.push(k); } var g = by[k]; if (c.scope !== 'ask') g.rows.push(c); var t = Date.parse(c.sent_at || c.replied_at || '') || Number(c.id) || 0; if (t > g.at) g.at = t; });
+    order.sort(function (a, b) { return (by[a].bundle || 1e12) - (by[b].bundle || 1e12) || by[a].at - by[b].at; });
+    var head = el('div', 'tkHead'); head.appendChild(el('b', '', '대화 · 「' + st.title + '」')); head.appendChild(el('span', '', order.length ? '보낸 묶음과 AI 의 답 · 질문 — 항목을 누르면 그 장으로' : '아직 보낸 것이 없습니다 · 글을 고치거나 의견을 달아 보내면 여기에 쌓입니다'));
+    var cl = el('button', 'ib sm', '글 줄로'); cl.type = 'button'; cl.onclick = function () { toggleTalk(false); }; head.appendChild(cl); box.appendChild(head);
+    var wi = waitingInfo();
+    order.forEach(function (k) {
+      var g = by[k];
+      if (g.ask) {
+        var q = g.ask, qc = el('div', 'tkCard ask'), qh = el('div', 'tkH'); qh.appendChild(el('b', '', 'AI 의 질문 #' + q.id)); var qs = secOf(q.slide_id); if (qs) { var qg = el('button', 'tkGo', (posOf(qs.i) + 1) + '쪽'); qg.type = 'button'; qg.onclick = function () { toggleTalk(false); setPin(true); showSlide(qs.i).catch(fail); }; qh.appendChild(qg); } qh.appendChild(el('span', 'sp')); qh.appendChild(el('small', '', when(q.replied_at || q.sent_at) || '')); qc.appendChild(qh);
+        qc.appendChild(el('div', 'tkQ', String(q.note || '')));
+        if (q.status === 'ask') { var ab = el('button', 'ib sm pri', '바닥 막대에서 답하기'); ab.type = 'button'; ab.onclick = function () { toggleTalk(false); var f = $('askBar').querySelector('button'); if (f) f.focus(); }; qc.appendChild(ab); }
+        else qc.appendChild(el('div', 'tkA me', '내 답 · ' + String(q.reply || '')));
+        box.appendChild(qc); return;
+      }
+      var c = countsOf(g.rows), ver = Math.max.apply(null, g.rows.map(function (r) { return Number(r.ver) || 0; })), card = el('div', 'tkCard'), h = el('div', 'tkH');
+      h.appendChild(el('b', '', '묶음 #' + g.bundle)); h.appendChild(el('small', '', '버전 ' + ver + (g.at ? ' · ' + when(g.at) : '')));
+      h.appendChild(el('span', 'sp')); h.appendChild(el('span', 'tkCnt', [c.e ? '고친 글 ' + c.e : '', c.n ? '의견 ' + c.n : '', c.s ? '장 전체 ' + c.s : '', c.p ? '자리 ' + c.p : '', c.x ? '지울 장 ' + c.x : '', c.k ? '안 고름 ' + c.k : '', c.o ? '장 순서' : '', c.d ? '문서 전체 ' + c.d : ''].filter(Boolean).join(' · ')));
+      card.appendChild(h);
+      var list = el('div', 'tkList');
+      g.rows.slice().sort(function (a, b) { var sa = secOf(a.slide_id), sb = secOf(b.slide_id); return (sa ? posOf(sa.i) : 999) - (sb ? posOf(sb.i) : 999) || Number(a.id) - Number(b.id); }).forEach(function (r) {
+        var it = el('button', 'tkIt' + (r.status === 'applied' ? ' ok' : (r.status === 'declined' ? ' no' : (r.status === 'options' ? ' opt' : '')))); it.type = 'button';
+        var sec = secOf(r.slide_id); it.appendChild(el('b', '', sec ? (posOf(sec.i) + 1) + '쪽' : (r.scope === 'doc' ? '문서' : (r.scope === 'order' ? '순서' : ''))));
+        var what = r.scope === 'unit' ? (r.edited != null ? '「' + unmark(r.orig).slice(0, 40) + '」 → 「' + (unmark(r.edited) || '지움').slice(0, 40) + '」' + (r.note ? ' · ' + String(r.note).slice(0, 60) : '') : String(r.note || '').slice(0, 80))
+          : (r.scope === 'spot' ? spotWhere(r).slice(0, 36) + ' · ' + String(r.note || '').slice(0, 60) : String(r.note || '').slice(0, 90));
+        it.appendChild(el('span', 'clip', what));
+        it.appendChild(el('i', '', r.status === 'applied' ? '반영' : (r.status === 'declined' ? '보류' : (r.status === 'options' ? '안' : (r.status === 'sent' ? '…' : r.status)))));
+        if (r.reply && String(r.reply).trim() && r.status !== 'applied') it.appendChild(el('small', '', String(r.reply).trim()));
+        it.onclick = function () { talkGo(r); }; list.appendChild(it);
+      });
+      card.appendChild(list);
+      var a = g.rows.filter(function (r) { return r.status === 'applied'; }).length, d = g.rows.filter(function (r) { return r.status === 'declined'; }).length, o = g.rows.filter(function (r) { return r.status === 'options'; }).length, left = g.rows.filter(function (r) { return r.status === 'sent' && !(r.reply && String(r.reply).trim()); }).length;
+      var nv = st.vers.filter(function (v) { return v > ver; })[0];
+      var ans = el('div', 'tkA'); ans.textContent = left && wi && wi.bundle === g.bundle ? 'AI 고치는 중 · ' + Math.floor((Date.now() - wi.since) / 60000) + '분' : (left ? '답 기다리는 중 ' + left + '건' : ('AI 답 · ' + [nv ? '버전 ' + nv + ' 올림' : '', a ? '반영 ' + a : '', d ? '보류 ' + d : '', o ? '안 올림 ' + o : ''].filter(Boolean).join(' · ')));
+      ans.classList.toggle('wait', !!left); card.appendChild(ans);
+      box.appendChild(card);
+    });
+    renderChips(); renderSend(); renderMenu(); fit();
+  }
   function renderRows() {
     var box = $('rows'); box.innerHTML = '';
     var sec = st.sections[st.cur]; if (!sec) { $('rhLine').innerHTML = ''; return; }
+    paintTalkBtn();
+    if (st.talk) { renderHead(sec); renderTalk(box); return; }
+    if (st.outline && st.mode === 'slides' && st.sections.length > 1) { renderHead(sec); renderOutline(box); return; }
     var sid = sec.id; var list = st.units[st.cur] || [];
     var c = counts(sid);
     renderHead(sec);
@@ -3099,10 +3727,9 @@
     var chg = pt != null && u.origText && pt.replace(/\s+/g, '').indexOf(u.origText.replace(/\s+/g, '')) < 0;
     if (chg) { var head = el('div', 'tags'); head.appendChild(el('span', 'st chg', '바뀜')); col.appendChild(head); }
     col.appendChild(ed);
-    var cb = el('button', 'cmBtn'); cb.type = 'button'; cb.tabIndex = -1; cb.innerHTML = svg('plus') + '<span>의견</span>'; cb.title = '이 글에 의견 달기(Tab)'; cb.addEventListener('mousedown', function (e) { e.preventDefault(); }); cb.onclick = function () { row.classList.add('show'); cm.focus(); }; row.appendChild(cb);
     st.pins.forEach(function (p) { if ((!p.slide_id || p.slide_id === sid) && p.match && u.origText.indexOf(p.match) >= 0) { var pn = el('div', 'pin'); pn.innerHTML = svg('pin'); pn.appendChild(el('span', '', (p.memo || '') + (p.author ? ' · ' + p.author : ''))); col.appendChild(pn); row.classList.add('pinned'); } });
     col.appendChild(og); col.appendChild(cm);
-    if (sents && sents.length) { col.appendChild(aiChip(sents[0])); if (!dr) row.classList.add('sent'); }
+    if (sents && sents.length) { col.appendChild(aiChip(sents[0])); if (!dr) row.classList.add('sent'); cm.placeholder = '이 글에 다시 의견 (앞서 보낸 의견은 위에 남습니다 · 다음 묶음에 실립니다)'; }
     row.appendChild(no); row.appendChild(col);
     u.row = row; u.ed = ed; u.cm = cm;
     //  무엇을 보이나: 아직 저장 중인 «바라는 값» > 안 보낸 고침(초안) > 이 버전에서 이미 보낸 고침(바탕 글) > 원문.
@@ -3133,16 +3760,16 @@
       wantOf(sid, u).edited = null; schedule('u:' + ukey, saveUnitJob(ukey), 0);
     });
     ed.addEventListener('focus', function () { ed._at = u.svg ? edText(ed) : markText(ed, u.kinds); });
-    ed.addEventListener('blur', function () { var now = u.svg ? edText(ed) : markText(ed, u.kinds), was = ed._at; if (was != null && now !== was) pushUndo('글 고침(' + u.no + '번 글)', function () { return setUnitText(sid, u, was); }); ed._at = now; });
+    ed.addEventListener('blur', function () { var now = u.svg ? edText(ed) : markText(ed, u.kinds), was = ed._at; if (was != null && now !== was) pushUndo('글 고침(' + u.no + '번 글)', function () { return setUnitText(sid, u, was); }, function () { return setUnitText(sid, u, now); }); ed._at = now; });
     cm.addEventListener('focus', function () { cm._at = cm.value; });
-    cm.addEventListener('blur', function () { var was = cm._at; if (was != null && cm.value !== was) pushUndo('의견(' + u.no + '번 글)', function () { return setUnitNote(sid, u, was); }); });
+    cm.addEventListener('blur', function () { var was = cm._at, now = cm.value; if (was != null && now !== was) pushUndo('의견(' + u.no + '번 글)', function () { return setUnitNote(sid, u, was); }, function () { return setUnitNote(sid, u, now); }); cm._at = now; });
     cm.addEventListener('input', function () {
       autoGrow(cm); row.classList.toggle('cm', !!cm.value.trim());
       wantOf(sid, u).note = cm.value; schedule('u:' + ukey, saveUnitJob(ukey));
     });
     cm.addEventListener('keydown', function (e) { if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); var next = nextEd(row); if (next) next.focus(); } });
     row.addEventListener('mouseenter', function () { mark(u); });
-    row.addEventListener('focusin', function () { st.focused = u; mark(u); if (!st.pin) setPin(true); });
+    row.addEventListener('focusin', function () { st.focused = u; mark(u); if (!st.pin) setPin(true); row.classList.add('show'); });   // 들어가면 의견 칸이 글 아래 선다 — 이미 의견을 보낸 줄도(앞 의견은 칩으로 남고, 새 의견은 다음 묶음에 실린다)
     row.addEventListener('focusout', function () { pump('u:' + ukey); setTimeout(function () { if (st.focused === u && !row.contains(document.activeElement)) { st.focused = null; row.classList.remove('show'); mark(null); } }, 0); });   // 칸을 떠나면 기다리지 않고 곧바로 쓴다
     if (cm.value) autoGrow(cm);
     return row;
@@ -3182,7 +3809,7 @@
   async function openDoc(doc) {
     kickSaves();   // 다른 문서로 가기 전에 기다리던 저장을 내보낸다(저장은 제 문서 · 버전을 쥐고 있어 옮긴 뒤에 끝나도 제자리에 쓴다)
     st.pin = false; st.oldVars = {};
-    st.doc = doc; st.cur = null; st.units = {}; st.rects = {}; st.sections = []; st.verCache = {}; st.changed = {}; st.prevText = {}; st.cmOpen = {};
+    st.doc = doc; st.cur = null; st.units = {}; st.rects = {}; st.sections = []; st.verCache = {}; st.changed = {}; st.prevText = {}; st.cmOpen = {}; st.olOpen = {};
     var d = docOf(doc); st.title = d ? (d.title || d.doc) : doc;
     $('empty').hidden = true; $('home').hidden = true; $('empty').classList.remove('isHome'); $('main').hidden = false; $('top').hidden = false;
     renderDocBtn(); applyPrefs();
@@ -3202,6 +3829,7 @@
     kickSaves();
     st.pendingVer = null; st.offerVer = null; if (rv) closeReview();
     st.ver = ver; st.units = {}; st.rects = {}; st.focused = null;
+    var sv = Object.assign({}, pref('seenVer') || {}); if ((Number(sv[st.doc]) || 0) < ver) { sv[st.doc] = ver; setPref({ seenVer: sv }); }   // 홈 카드의 「새 버전 n」 기준
     waitMsg('버전 ' + ver + ' 을 여는 중…');
     $('newVerBanner').hidden = true;
     var v = await loadVersion(st.doc, ver);
@@ -3235,6 +3863,7 @@
   var showSeq = 0;
   async function showSlide(fi, opt) {
     var s = st.sections[fi]; if (!s) return;
+    if (inl) await inlineStop();
     var seq = ++showSeq;
     st.cur = fi; st.focused = null; mark(null);
     var ls = Object.assign({}, pref('lastSlide') || {}); ls[st.doc] = s.id; setPref({ lastSlide: ls });
@@ -3261,7 +3890,8 @@
     renderHead(s); syncSlideCmValue(s);
     adoptOrphans(s.id, units).then(function (did) { if (did && st.cur === fi) whenUp(refreshRowsSoon); }).catch(function () {});
     renderRows(); renderChips();
-    $('rowsScroll').scrollTop = 0;
+    if (st.outline) { var oh = $('rows').querySelector('.olH[data-fi="' + fi + '"]'); if (oh) { var sc2 = $('rowsScroll'); sc2.scrollTop = Math.max(0, oh.offsetTop - $('rows').offsetTop - 6); } }
+    else $('rowsScroll').scrollTop = 0;
     if (how !== 'none') scrollToPage(fi, how);          // 장 높이가 방금 정해졌을 수 있다(첫 장)
   }
   /** 장표 아래 한 줄: 「2 / 18 · 제목」(말줄임) · 안 고르기 · ‹ › · 장 전체 의견(좁은 화면 · 2행에서는 눌러야 펴진다). */
@@ -3292,6 +3922,7 @@
     syncVarCmp(s, vars, ov);
     var c = counts(s.id);
     u.appendChild(el('span', 'cnt', [c.e ? '고침 ' + c.e : '', c.n ? '의견 ' + c.n : ''].filter(Boolean).join(' · ')));
+    if (st.mode === 'slides' && st.sections.length > 1) { var ob2 = el('button', 'ib sm ic' + (st.outline ? ' on' : '')); ob2.type = 'button'; ob2.id = 'outlineToggle'; ob2.innerHTML = svg('outline'); ob2.title = st.outline ? '개요 닫기 · 이 장만 보기(O)' : '개요 · 모든 장의 글을 한 화면에(O)'; ob2.setAttribute('aria-pressed', String(!!st.outline)); ob2.onclick = function () { toggleOutline(); }; u.appendChild(ob2); }
     if (st.mode === 'slides' && st.sections.length > 1) { var pb = el('button', 'ib sm ic'); pb.type = 'button'; pb.id = 'pinToggle'; pb.innerHTML = svg('pin'); pb.setAttribute('aria-label', '이 장에 고정'); paintPin(pb); pb.onclick = function () { setPin(!st.pin); if (!st.pin) { var fi = pageInView(); if (fi >= 0 && fi !== st.cur) showSlide(fi, { scroll: 'none' }).catch(fail); } }; u.appendChild(pb); }
     if (st.mode === 'slides' && st.sections.length > 1) {
       var gone = !!delRow(s.id), db = el('button', 'ib sm ic' + (gone ? ' gone' : '')); db.type = 'button'; db.id = 'delToggle'; db.innerHTML = svg(gone ? 'undo' : 'trash');
@@ -3532,7 +4163,7 @@
      (동료에게 붙여 주거나 · 다른 세션에 넣거나 · 메모에 남길 때). 아직 저장 전인 글(st.want · st.wantScope)도 화면에 선 값으로 넣는다 —
      저장을 기다리면 사람이 누른 동작이 끝나 복사가 막힌다(Safari). */
   function spotWhere(c) {
-    var k = String(c.unit_key || ''), kind = /^obj:/.test(k) ? '개체' : (/^box:/.test(k) ? '영역' : '핀');
+    var k = String(c.unit_key || ''), g = spotGeo(c), kind = /^obj:/.test(k) ? (g && g.rects ? '개체 ' + g.rects.length + '개' : '개체') : (/^box:/.test(k) ? '영역' : (/^path:/.test(k) ? '펜 획' : '핀'));
     return kind + (c.orig ? ' · ' + String(c.orig).trim() : '');
   }
   function myCommentsText() {
@@ -3638,14 +4269,29 @@
       $('menu').hidden = true; closeDocMenu(); closeVerMenu(); if (st.tool !== 'sel') setTool('sel'); if (st.zoom) setZoom(false);
       return;
     }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'f' || e.key === 'F') && st.doc && st.mode === 'slides' && !rv) { e.preventDefault(); var sl = String(window.getSelection() || '').trim(); openFind(sl.length < 60 ? sl : ''); return; }
     var t = e.target; if (t && (t.isContentEditable || /^(TEXTAREA|INPUT|SELECT)$/.test(t.tagName))) return;   // 글 칸 안의 ⌘Z 는 브라우저가 되돌린다
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && ((e.shiftKey && (e.key === 'z' || e.key === 'Z')) || (!e.shiftKey && (e.key === 'y' || e.key === 'Y')))) { e.preventDefault(); doRedo(); return; }
     if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); doUndo(); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === 'Enter') { e.preventDefault(); if (st.doc && !$('sendBar').classList.contains('asking')) openSend().catch(fail); return; }
     if (rv && !e.metaKey && !e.ctrlKey && !e.altKey) { if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); rvGo(1); return; } if (e.key === 'ArrowLeft') { e.preventDefault(); rvGo(-1); return; } }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === '?' ) { e.preventDefault(); $('helpModal').hidden = false; return; }
     if (st.cur == null) return;
+    //  2.1 H1 — 글자 키(글 칸 밖에서만): 1 2 3 4 도구 · F 발표 · O 개요 · G 뒤 숫자 Enter 로 그 장
+    if (gotoBuf != null) {
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); gotoBuf += e.key; toast(gotoBuf + '쪽으로 — Enter', 1600); return; }
+      if (e.key === 'Enter') { e.preventDefault(); var gn = Number(gotoBuf); gotoBuf = null; if (gn >= 1 && gn <= st.sections.length) { setPin(true); showSlide(ord()[gn - 1]).catch(fail); } return; }
+      gotoBuf = null;
+    }
+    if (st.mode === 'slides' && !rv && /^[1-4]$/.test(e.key) && !$('tools').hidden) { e.preventDefault(); setTool(['sel', 'pin', 'box', 'pen'][Number(e.key) - 1]); toast(['고르기', '핀', '영역', '펜'][Number(e.key) - 1] + ' 도구', 1200); return; }
+    if (st.mode === 'slides' && !rv && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openPresent().catch(fail); return; }
+    if (st.mode === 'slides' && !rv && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); toggleOutline(); return; }
+    if (st.mode === 'slides' && !rv && (e.key === 'g' || e.key === 'G')) { e.preventDefault(); gotoBuf = ''; toast('장 번호를 치고 Enter', 1600); return; }
     if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); showSlide(ord()[Math.min(st.sections.length - 1, posOf(st.cur) + 1)]).catch(fail); }
     else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); showSlide(ord()[Math.max(0, posOf(st.cur) - 1)]).catch(fail); }
   });
+  var gotoBuf = null;
 
   /* ───────────── 표시 설정 ───────────── */
   //  호스트의 앱 탭 ⋯ 메뉴 「표시 설정」 — 구독해야 그 항목이 켜진다(구독하지 않은 앱은 흐리게 뜬다).
@@ -3700,15 +4346,48 @@
     if (cs) { var cg = !!delRow(cs.id); items.push({ id: 'delslide', label: (posOf(cs.i) + 1) + '쪽 ' + (cg ? '되살리기(지우기 취소)' : '통째로 지우기'), run: function () { setSlideDel(cs.id, !cg).catch(fail); } }); }
     if (st.doc) items.push({ id: 'doccm', label: '문서 전체 의견', run: openDocCm });
     if (st.doc) items.push({ id: 'copycm', label: '내 의견 복사(글로)', run: copyMyComments });
-    if (st.doc) items.push({ id: 'dl', label: '이 버전 내려받기 · ' + DL_FMT[dlFmt()], run: function () { downloadVer().catch(fail); } });
-    if (st.doc && sdk.chat) items.push({ id: 'export', label: '의견 얹은 PDF 로 내보내기', run: function () { exportPdf().catch(fail); } });
+    if (st.doc) items.push({ id: 'link', label: '링크 복사 · 이 문서' + (cs ? ' · ' + (posOf(cs.i) + 1) + '쪽' : ''), run: function () { copyLocator(null, cs ? cs.id : null); } });
+    if (st.doc) items.push({ id: 'dl', label: '내려받기 · PDF · HTML · 의견 얹기', run: function () { openDl(); } });
+    if (st.doc && st.mode === 'slides') items.push({ id: 'present', label: '발표 모드 (F)', run: function () { openPresent().catch(fail); } });
     items.push({ id: 'help', label: '쓰는 법', run: function () { $('helpModal').hidden = false; } });
     return items;
   }
   /** 이 버전의 의견을 장 위에 얹은 PDF 를 세션에 청한다 — 앱 화면은 샌드박스라 인쇄 · 내려받기를 못 하므로 세션의 AI 가 bin/deck-export.mjs 로 뽑는다. 묶음은 잠그지 않는다(보내기와 따로다). */
-  var DL_FMT = { pdf: 'PDF', html: 'HTML', pdfc: '의견 얹은 PDF' };
+  var DL_FMT = { pdf: 'PDF', html: 'HTML', pdfc: 'PDF' };
   function dlFmt() { var f = pref('dlFmt'); return DL_FMT[f] ? f : 'pdf'; }
-  function paintDl() { var b = $('dlBtn'); if (!b || !DL_FMT) return; b.hidden = !st.doc; b.title = '이 버전 내려받기 · ' + DL_FMT[dlFmt()] + ' (형식은 ⋯ 표시 설정에서 바꿉니다)'; }
+  function paintDl() { var b = $('dlBtn'); if (!b || !DL_FMT) return; b.hidden = !st.doc; b.title = '내려받기 · 형식 · 범위 · 의견 얹기'; var pb = $('presBtn'); if (pb) pb.hidden = !st.doc || st.mode !== 'slides'; }
+  /* 2.1 G1 — 내려받기 창 하나: 형식(PDF · HTML) · 범위(전체 · 이 장 · 바뀐 장만 · 의견 있는 장만) · 의견 얹기 · 고른 안으로 → 세션에 청한다(앱은 샌드박스라 스스로 못 받는다). */
+  var dlSel = { fmt: 'pdf', range: 'all' };
+  function dlRangeIds() {
+    var cur = st.sections[st.cur];
+    if (dlSel.range === 'cur') return cur ? [cur.id] : [];
+    if (dlSel.range === 'chg') return ord().map(function (fi) { return st.sections[fi].id; }).filter(function (sid) { return !!st.changed[sid]; });
+    if (dlSel.range === 'cm') return ord().map(function (fi) { return st.sections[fi].id; }).filter(function (sid) { var c = counts(sid); return c.e || c.n || spotsOf(sid).length || String(scopeNote('slide', sid)).trim(); });
+    return [];
+  }
+  function paintDl2() {
+    [].forEach.call($('dlFmtSeg').children, function (b) { b.classList.toggle('on', b.getAttribute('data-v') === dlSel.fmt); });
+    [].forEach.call($('dlRangeSeg').children, function (b) { var v = b.getAttribute('data-v'); b.classList.toggle('on', v === dlSel.range); b.disabled = dlSel.fmt === 'html' && v !== 'all'; });
+    if (dlSel.fmt === 'html' && dlSel.range !== 'all') dlSel.range = 'all';
+    $('dlNotes').disabled = dlSel.fmt === 'html'; if (dlSel.fmt === 'html') $('dlNotes').checked = false;
+    var ids = dlRangeIds(), N = st.sections.length;
+    $('dlRangeFine').textContent = dlSel.range === 'all' ? '모든 장 ' + N + '개' : (ids.length ? ids.length + '장 — ' + ids.map(function (sid) { var s = secOf(sid); return s ? (posOf(s.i) + 1) + '쪽' : sid; }).join(' · ') : (dlSel.range === 'chg' ? '앞 버전과 달라진 장이 없습니다' : '의견 있는 장이 없습니다'));
+    $('dlGo').disabled = !sdk.chat || (dlSel.range !== 'all' && !ids.length);
+    $('dlFine').textContent = sdk.chat ? '세션의 AI 가 파일을 만들어 받는 링크를 세션에 보냅니다.' : '세션에 붙여 연 화면에서만 청할 수 있어요 · 세션에서 「이 버전 PDF 로 내려받게 해 줘」 라고 말해 주세요.';
+  }
+  function openDl() { if (!st.doc) return; dlSel.fmt = dlFmt() === 'html' ? 'html' : 'pdf'; dlSel.range = 'all'; paintDl2(); $('dlModal').hidden = false; }
+  [].forEach.call($('dlFmtSeg').children, function (b) { b.addEventListener('click', function () { dlSel.fmt = b.getAttribute('data-v'); setPref({ dlFmt: dlSel.fmt }); paintDl2(); }); });
+  [].forEach.call($('dlRangeSeg').children, function (b) { b.addEventListener('click', function () { dlSel.range = b.getAttribute('data-v'); paintDl2(); }); });
+  $('dlGo').addEventListener('click', function () {
+    (async function () {
+      await flushSaves();
+      var ids = dlSel.range === 'all' ? [] : dlRangeIds(), notes = !!$('dlNotes').checked, picks = !!$('dlPicks').checked;
+      var msg = '[장표 수정] ' + st.title + ' · 버전 ' + st.ver + ' → 이 버전을 ' + (dlSel.fmt === 'html' ? 'HTML' : 'PDF') + ' 로 내려받게 해 주세요 (문서 ' + st.doc + ' · 형식 ' + dlSel.fmt + ' · 범위 ' + (ids.length ? ids.join(',') : 'all') + ' · 의견 얹기 ' + (notes ? 'yes' : 'no') + ' · 고른 안 ' + (picks ? 'yes' : 'no') + ')';
+      $('dlModal').hidden = true;
+      var r = null; try { r = await sdk.chat.send(msg); } catch (e) {}
+      toast(r && r.sent ? '청했습니다 · 다 되면 세션에 받는 링크가 옵니다' : (r && r.draft ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 · 세션에서 보내 주세요' : '세션에 알리지 못했어요 · 세션에서 「이 버전 내려받게 해 줘」 라고 말해 주세요'), 4600);
+    })().catch(fail);
+  });
   /** 지금 보는 버전을 파일로 받는다(원준 2026-10-12 «해당 버전을 다운로드 · 기본은 PDF · 형식은 설정에서»). 앱 화면은 샌드박스라 스스로 내려받지 못한다 —
    *  세션의 AI 가 bin/deck-export.mjs(PDF) · bin/deck-pull.mjs(HTML) 로 만들어 받는 링크를 세션에 보낸다. 고른 안이 반영된다. 묶음은 건드리지 않는다. */
   async function downloadVer() {
@@ -3720,7 +4399,7 @@
     var r = null; try { r = await sdk.chat.send(msg); } catch (e) {}
     toast(r && r.sent ? '버전 ' + st.ver + ' 을 ' + DL_FMT[f] + ' 로 청했습니다 · 다 되면 세션에 받는 링크가 옵니다' : (r && r.draft ? '세션이 멈춰 있어 입력칸에 넣어 두었어요 · 세션에서 보내 주세요' : '세션에 알리지 못했어요 · 세션에서 「이 버전 ' + DL_FMT[f] + ' 로 내려받게 해 줘」 라고 말해 주세요'), 4600);
   }
-  $('dlBtn').addEventListener('click', function () { downloadVer().catch(fail); });
+  $('dlBtn').addEventListener('click', function () { openDl(); });
   async function exportPdf() {
     await flushSaves();
     if (unsaved()) { toast('아직 저장되지 않은 것이 있어 내보내지 않았어요 · 연결을 확인하고 「저장 안 됨」 을 눌러 주세요', 4200); return; }
@@ -3752,6 +4431,7 @@
   });
   document.addEventListener('click', function (e) {
     if (!$('menu').hidden && !$('menu').contains(e.target)) $('menu').hidden = true;
+    if (!$('undoMenu').hidden && !$('undoMenu').contains(e.target)) $('undoMenu').hidden = true;
     if (!$('docMenu').hidden && !$('docMenu').contains(e.target) && !$('docBtn').contains(e.target)) closeDocMenu();
     if (!$('verPills').hidden && !$('verPills').contains(e.target)) closeVerMenu();
   });
@@ -3900,7 +4580,7 @@
   function rvShare() { var sp = st.prefs.split, f = sp && typeof sp === 'object' ? Number(sp.rv) : NaN; return f >= 0.14 && f <= 0.75 ? f : null; }
   function cmpLayout() {
     if (!rv) return; var wrap = $('rvWrap'), g = $('cmpGrid'), cmp = $('cmp'), dockEl = $('review'), flip = rv.mode === 'flip';
-    var W = wrap.clientWidth, H = wrap.clientHeight; if (!W || !H) return;
+    var W = $('rvMain').clientWidth || wrap.clientWidth, H = wrap.clientHeight; if (!W || !H) return;
     wrap.classList.toggle('wide', W >= 760); wrap.classList.toggle('slim', W < 560);
     var f = rvShare(), dock = f != null ? Math.round(H * f) : Math.max(180, Math.round(H * 0.3));
     var availH = Math.max(110, H - $('rvHead').offsetHeight - dock), availW = Math.max(120, W - 16), LAB = 21, GAP = 8, PAD = 14;
@@ -3945,7 +4625,7 @@
     var b; try { b = await buildReview(fromVer); } finally { waitMsg(null); }
     if (!b.steps.length) { toast((fromVer != null ? '버전 ' + b.prev : '바로 앞 버전') + ' 과 달라진 장이 없습니다' + (st.vers.indexOf(st.ver) > 1 && fromVer == null ? ' · ⋯ 의 「앞 버전과 비교하기」 에서 더 앞 버전을 고를 수 있습니다' : ''), 3600); if (rv) paintRvFrom(); return; }
     if (pk) { pk.was.f.remove(); pk.now.f.remove(); pk = null; }   // 다른 앞 버전으로 바꿨다 — 앞 그림 틀을 새로
-    rv = { prev: b.prev, steps: b.steps, i: 0, mode: rv ? rv.mode : 'two' }; document.body.classList.add('review'); paintRvFrom();
+    rv = { prev: b.prev, steps: b.steps, i: 0, mode: rv ? rv.mode : 'two', ok: rv ? rv.ok : {} }; document.body.classList.add('review'); paintRvFrom(); paintRvRail();
     if (st.zoom) setZoom(false);
     $('rvWrap').hidden = false; $('review').hidden = false; $('cmp').hidden = false;
     pk = { was: pkOpen(b.prevHtml, $('cmpWas')), now: pkOpen(b.curHtml, $('cmpNow')) };
@@ -3959,8 +4639,32 @@
     sel.disabled = idx < 2;
   }
   $('rvFrom').addEventListener('change', function () { var v = Number(this.value); if (rv && v !== rv.prev) { kickSaves(); openReview(v).catch(fail); } });
+  /* 2.1 F2 — 바뀐 장 레일 */
+  function paintRvRail() {
+    var rail = $('rvRail'), h = $('rvRailH'); if (!rv) { rail.hidden = true; h.hidden = true; return; }
+    var open = pref('rvRail') !== false; rail.hidden = !open; h.hidden = false;
+    var tab = $('rvRailTab'); if (!tab) { tab = el('button', 'rvRailTab'); tab.id = 'rvRailTab'; tab.type = 'button'; $('rvWrap').insertBefore(tab, h); tab.onclick = function () { setPref({ rvRail: true }); paintRvRail(); cmpLayout(); }; }
+    tab.hidden = open; tab.textContent = '바뀐 장 ' + rv.steps.length + ' › 펼치기';
+    rail.innerHTML = '';
+    var rh = el('div', 'rvRh'); rh.appendChild(el('span', '', '바뀐 장 ' + rv.steps.length)); rh.appendChild(el('span', 'sp')); var fold = el('button', 'ib sm ic ghost'); fold.type = 'button'; fold.innerHTML = svg('left'); fold.title = '레일 접기'; fold.onclick = function () { setPref({ rvRail: false }); paintRvRail(); cmpLayout(); }; rh.appendChild(fold); rail.appendChild(rh);
+    rv.steps.forEach(function (stp, i) {
+      var sec = stp.fi >= 0 ? st.sections[stp.fi] : null, it = el('button', 'rvIt' + (i === rv.i ? ' on' : '') + (rv.ok[stp.sid] ? ' ok' : '')); it.type = 'button';
+      if (sec) { var tb = el('div', 'tb'); it.appendChild(tb); railThumbLoad(sec.id, sec.i, tb); }
+      var t = el('div', 't'); t.appendChild(el('b', '', sec ? String(posOf(sec.i) + 1) : '–')); t.appendChild(el('span', '', sec ? sec.title : stp.title)); it.appendChild(t);
+      it.appendChild(el('small', '', stp.kind === 'newslide' ? '새 장' : (stp.kind === 'gone' ? '빠진 장' : (stp.changes.length ? '바뀐 글 ' + stp.changes.length : '그림 · 배치'))));
+      it.onclick = function () { if (!rv) return; kickSaves(); rv.i = i; rvShow().catch(fail); }; rail.appendChild(it);
+    });
+    if (open) { var on = rail.querySelector('.rvIt.on'); if (on && (on.offsetTop < rail.scrollTop || on.offsetTop + on.offsetHeight > rail.scrollTop + rail.clientHeight)) rail.scrollTop = Math.max(0, on.offsetTop - 40); }
+  }
+  (function () {   // 레일 경계 — 왼쪽으로 끌어 접는다
+    var h = $('rvRailH'), drag = null;
+    h.addEventListener('pointerdown', function (e) { if (e.button) return; e.preventDefault(); drag = { id: e.pointerId, x: e.clientX, moved: false }; try { h.setPointerCapture(e.pointerId); } catch (x) {} });
+    h.addEventListener('pointermove', function (e) { if (!drag || e.pointerId !== drag.id) return; if (Math.abs(e.clientX - drag.x) > 3) drag.moved = true; });
+    function end(e) { if (!drag || (e && e.pointerId !== drag.id)) return; var dx = e.clientX - drag.x, moved = drag.moved; drag = null; try { h.releasePointerCapture(e.pointerId); } catch (x) {} if (!moved) { setPref({ rvRail: pref('rvRail') === false }); } else if (dx < -40) setPref({ rvRail: false }); else if (dx > 40) setPref({ rvRail: true }); paintRvRail(); cmpLayout(); }
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end);
+  })();
   function closeReview() {
-    if (!rv) return; rv = null; document.body.classList.remove('review'); $('rvWrap').hidden = true; $('review').hidden = true; $('cmp').hidden = true;
+    if (!rv) return; rv = null; document.body.classList.remove('review'); $('rvWrap').hidden = true; $('review').hidden = true; $('cmp').hidden = true; $('rvRail').hidden = true; $('rvRailH').hidden = true; var tb0 = $('rvRailTab'); if (tb0) tb0.hidden = true;
     if (pk) { pk.was.f.remove(); pk.now.f.remove(); pk = null; }
     kickSaves(); fit(); var s = st.sections[st.cur]; if (s) { keepFocus(renderRows); syncSlideCmValue(s); }
   }
@@ -3995,6 +4699,13 @@
     body.innerHTML = '';
     var colL = el('div', 'rvCol'), colR = el('div', 'rvCol say'), lab = el('div', 'rvLab');
     lab.appendChild(el('span', 'rvTag', stp.kind === 'newslide' ? '새로 생긴 장' : (stp.kind === 'gone' ? '빠진 장' : (stp.changes.length ? '바뀐 글 ' + stp.changes.length + '곳' : '그림 · 배치만')))); colL.appendChild(lab);
+    paintRvRail();
+    if (sec) {   // 2.1 F2 — 「이 장 괜찮음 ✓」(이번 열기 동안) · 「이 장 전체를 앞 버전으로」(앞 버전의 장을 안으로 담는다 · 보내면 반영)
+      var acts2 = el('div', 'rvActs2'), okl = el('label', 'rvOk'), okc = document.createElement('input'); okc.type = 'checkbox'; okc.checked = !!rv.ok[stp.sid];
+      okc.onchange = function () { rv.ok[stp.sid] = okc.checked; paintRvRail(); }; okl.appendChild(okc); okl.appendChild(el('span', '', '이 장 괜찮음 — 훑었다는 표시')); acts2.appendChild(okl);
+      if (stp.kind === 'slide') { var prq = pickReqOf(pickReq(sec.id)), onPrev = !!(prq && prq.ver === rv.prev); var bk = el('button', 'ib sm' + (onPrev ? ' has' : ''), onPrev ? '앞 버전으로 담음 · 거두기' : '이 장 전체를 버전 ' + rv.prev + ' 으로'); bk.type = 'button'; bk.title = '이 장을 통째로 앞 버전의 모습으로 되돌려 달라고 담습니다(새로 들어온 글 · 빠진 글까지) · 보내면 AI 가 바꿉니다'; bk.onclick = function () { setPickReq(sec.id, rv.prev, onPrev ? null : '').then(function () { toast(onPrev ? '거뒀습니다' : '버전 ' + rv.prev + ' 의 이 장으로 바꿔 달라고 담았습니다 · 보내면 반영됩니다', 2600); rvShow(); }).catch(fail); }; acts2.appendChild(bk); }
+      colL.appendChild(acts2);
+    }
     if (stp.kind === 'slide' && !stp.changes.length) colL.appendChild(el('div', 'rvNote', '글은 그대로이고 그림이나 배치가 달라졌습니다. 위의 두 그림을 비교해 보세요(「겹쳐 보기」 가 찾기 쉽습니다).'));
     if (stp.kind === 'newslide') colL.appendChild(el('div', 'rvNote', '앞 버전에는 없던 장입니다.'));
     if (stp.kind === 'gone') colL.appendChild(el('div', 'rvNote', '이 버전에서 빠진 장입니다. 다시 넣어야 하면 장표 전체 의견에 적어 주세요.'));
@@ -4035,18 +4746,51 @@
   }
   $('rvClose').addEventListener('click', closeReview);
   $('rvPrev').addEventListener('click', function () { rvGo(-1); });
-  $('undoBtn').addEventListener('click', function () { doUndo(); });
+  $('undoBtn').addEventListener('click', function () { if (undoHeld) { undoHeld = false; return; } doUndo(); });
+  $('redoBtn').addEventListener('click', function () { doRedo(); });
+  $('talkBtn').addEventListener('click', function () { toggleTalk(); });
+  var undoHeld = false, undoHoldT = 0;
+  $('undoBtn').addEventListener('contextmenu', function (e) { e.preventDefault(); openUndoMenu(); });
+  $('undoBtn').addEventListener('pointerdown', function () { undoHeld = false; clearTimeout(undoHoldT); undoHoldT = setTimeout(function () { undoHeld = true; openUndoMenu(); }, 480); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { $('undoBtn').addEventListener(ev, function () { clearTimeout(undoHoldT); }); });
   /* ───────────── AI 의 질문 — 앱 안에서 답한다 ───────────── */
   function asks() { return st.comments.filter(function (c) { return c.doc === st.doc && c.scope === 'ask' && c.status === 'ask'; }).sort(function (a, b) { return Number(a.id) - Number(b.id); }); }
   var askSeen = {};
   function paintAsk() {
     var b = $('askBanner'), a = asks(); b.hidden = !a.length;
-    if (!a.length) { if (!$('askModal').hidden) $('askModal').hidden = true; return; }
+    if (!a.length) { if (!$('askModal').hidden) $('askModal').hidden = true; paintAskBar(); return; }
     var q = String(a[0].note || '').replace(/\s+/g, ' ');
     b.querySelector('span').textContent = 'AI가 결정을 기다립니다' + (a.length > 1 ? ' · ' + a.length + '건' : '') + ' · ' + (q.length > 60 ? q.slice(0, 60) + '…' : q);
-    var fresh = a.filter(function (c) { return !askSeen[c.id]; }); a.forEach(function (c) { askSeen[c.id] = 1; });
-    if (fresh.length && $('askModal').hidden && !userBusy()) openAsk();   // 새 질문이면 곧바로 편다(치는 중이면 띠만)
-    else if (!$('askModal').hidden) renderAsk();
+    a.forEach(function (c) { askSeen[c.id] = 1; });
+    b.hidden = true;   // 2.1: 위의 띠 대신 바닥 막대가 질문 카드가 된다(E3) — 치던 것을 끊지 않는다
+    if (!$('askModal').hidden) renderAsk();
+    paintAskBar();
+  }
+  /* 2.1 — 질문 카드(바닥 막대): 「AI 가 묻습니다 · 7쪽」 질문 · 선택지(누르면 바로 답을 보낸다) · 직접 적기(창). 질문이 둘 이상이면 › 로 넘긴다. */
+  var askI = 0;
+  function paintAskBar() {
+    var a = st.doc ? asks() : [], bar = $('sendBar'), box = $('askBar'); if (!box) return;
+    bar.classList.toggle('asking', !!a.length); box.hidden = !a.length; if (!a.length) { box.innerHTML = ''; return; }
+    if (askI >= a.length) askI = 0; var c = a[askI]; box.innerHTML = '';
+    var head = el('div', 'akH'); head.appendChild(el('b', '', 'AI 가 묻습니다' + (a.length > 1 ? ' · ' + (askI + 1) + '/' + a.length : '')));
+    var sec = c.slide_id ? st.sections.filter(function (x) { return x.id === c.slide_id; })[0] : null;
+    if (sec) { var gb = el('button', 'akGo', (posOf(sec.i) + 1) + '쪽 보기'); gb.type = 'button'; gb.title = sec.title; gb.onclick = function () { setPin(true); showSlide(sec.i).catch(fail); }; head.appendChild(gb); }
+    head.appendChild(el('span', 'sp'));
+    if (a.length > 1) { var nx = el('button', 'ib sm ic ghost'); nx.type = 'button'; nx.innerHTML = svg('right'); nx.title = '다음 질문'; nx.setAttribute('aria-label', '다음 질문'); nx.onclick = function () { askI = (askI + 1) % a.length; paintAskBar(); }; head.appendChild(nx); }
+    box.appendChild(head);
+    box.appendChild(el('div', 'akQ', String(c.note || '')));
+    var opts = String(c.orig || '').split('\n').map(function (x) { return x.trim(); }).filter(Boolean), ob = el('div', 'akOpts');
+    opts.forEach(function (o) { var b = el('button', 'ib sm pri', o); b.type = 'button'; b.title = '누르면 이 답을 바로 보냅니다'; b.onclick = function () { answerAsk(c, o, b).catch(function (e) { b.disabled = false; fail(e); }); }; ob.appendChild(b); });
+    var wr = el('button', 'ib sm', opts.length ? '직접 적기' : '답 적기'); wr.type = 'button'; wr.onclick = openAsk; ob.appendChild(wr);
+    box.appendChild(ob);
+  }
+  async function answerAsk(c, ans, btn) {
+    if (btn) btn.disabled = true;
+    await sdk.store.update('comments', { id: c.id }, { reply: ans, status: 'answered', replied_at: nowIso() }); c.reply = ans; c.status = 'answered';
+    paintAsk(); if (!asks().length) $('askModal').hidden = true;
+    var msg = '[장표 수정] ' + st.title + ' · 질문 #' + c.id + ' 에 답했습니다: 「' + ans.replace(/\n/g, ' / ') + '」 → 이어서 진행해 주세요 (문서 ' + st.doc + ')';
+    if (sdk.chat) { var r = null; try { r = await sdk.chat.send(msg); } catch (e) {} toast(r && r.sent ? '답을 세션에 보냈습니다' : '답은 저장했습니다 · 세션에는 알리지 못했어요(세션에서 「질문 답 확인해 줘」 라고 말해 주세요)', 3600); }
+    else toast('답을 저장했습니다');
   }
   function openAsk() { renderAsk(); $('askModal').hidden = false; }
   function renderAsk() {
@@ -4296,8 +5040,12 @@
   async function hmLoad() {
     try {
       await loadDocs(); await loadProjNames();
-      var dr = await q('comments', { status: 'draft' }, 1000), ak = await q('comments', { scope: 'ask', status: 'ask' }, 200), info = {};
-      var box = function (k) { return info[k] || (info[k] = { cm: 0, ask: 0 }); };
+      var dr = await q('comments', { status: 'draft' }, 1000), ak = await q('comments', { scope: 'ask', status: 'ask' }, 200), sn = await q('comments', { status: 'sent' }, 1000), info = {};
+      var box = function (k) { return info[k] || (info[k] = { cm: 0, ask: 0, ai: 0, nv: 0 }); };
+      //  AI 고치는 중 — 가장 뒤 묶음에 답 없는 행이 있고 보낸 지 40분 안(앱 안의 waitingInfo 와 같은 규칙)
+      var lastB = {}; sn.forEach(function (c) { var k = Number(c.bundle) || 0; if (k > (lastB[c.doc] || 0)) lastB[c.doc] = k; });
+      sn.forEach(function (c) { if (Number(c.bundle) !== lastB[c.doc] || (c.reply && String(c.reply).trim())) return; var at = Date.parse(c.sent_at || '') || 0; if (at && Date.now() - at < 40 * 60 * 1000) box(c.doc).ai = Math.max(box(c.doc).ai, at); });
+      var seen = pref('seenVer') || {}; hmDocs().forEach(function (d) { var sv = Number(seen[d.doc]) || 0, lv = Number(d.latest_ver) || 1; if (sv && lv > sv) box(d.doc).nv = lv - sv; });
       dr.forEach(function (c) {
         var has = /^(order|del|pick)$/.test(c.scope) || !!String(c.note || '').trim() || (c.scope === 'unit' && c.edited != null && c.edited !== '' && c.edited !== c.orig);
         if (has) box(c.doc).cm++;
@@ -4328,7 +5076,8 @@
       items.forEach(function (it) { var b = el('button'); b.type = 'button'; b.dataset.v = it[0]; b.title = it[2] || it[1]; if (it[3]) { b.innerHTML = svg(it[3]); b.setAttribute('aria-label', it[1]); } else b.textContent = it[1]; b.onclick = function () { var p = {}; p[key] = it[0]; setPref(p); hm.more = false; renderHome(); }; g.appendChild(b); });
       bar.appendChild(g); return g;
     }
-    var sort = seg('homeSort', [['recent', '최근 수정'], ['name', '이름'], ['folder', '프로젝트별', '원본 파일이 있는 프로젝트로 묶기']], '정렬');
+    var sort = seg('homeSort', [['mine', '내가 손댄 순', '내 의견 · 질문이 있는 문서와 내 세션이 올린 문서 먼저'], ['recent', '최근 수정'], ['name', '이름'], ['folder', '프로젝트별', '원본 파일이 있는 프로젝트로 묶기']], '정렬');
+    var hid = el('button', 'ib sm hmHid'); hid.type = 'button'; hid.hidden = true; hid.onclick = function () { hm.showHidden = !hm.showHidden; renderHome(); }; bar.appendChild(hid);
     var view = seg('homeView', [['grid', '바둑판', '그림으로 크게', 'grid'], ['list', '목록', '한 줄씩', 'list']], '보기');
     box.appendChild(bar);
     var body = el('div', 'hmBody'); box.appendChild(body);
@@ -4341,12 +5090,15 @@
     var bd = hm.back && docOf(hm.back);
     ui.back.hidden = !bd; ui.back.innerHTML = '';
     if (bd) { ui.back.innerHTML = svg('left'); ui.back.appendChild(el('span', '', (bd.title || bd.doc) + ' 로 돌아가기')); ui.back.title = '보던 문서로 돌아갑니다'; ui.back.onclick = function () { openFromHome(bd.doc); }; }
-    var sort = pref('homeSort') || 'recent', view = pref('homeView') || 'grid';
+    var sort = pref('homeSort') || 'mine', view = pref('homeView') || 'grid';
+    var hidden = pref('hiddenDocs') || [];
+    ui.sort.parentNode.querySelector('.hmHid').hidden = !hidden.length; if (hidden.length) ui.sort.parentNode.querySelector('.hmHid').textContent = (hm.showHidden ? '숨긴 문서 감추기' : '숨긴 문서 보기') + ' · ' + hidden.length;
     [].forEach.call(ui.sort.children, function (b) { b.classList.toggle('on', b.dataset.v === sort); });
     [].forEach.call(ui.view.children, function (b) { b.classList.toggle('on', b.dataset.v === view); });
-    var all = hmDocs(), words = hm.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    var all = hmDocs().filter(function (d) { return hm.showHidden || hidden.indexOf(d.doc) < 0; }), words = hm.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     var docs = all.filter(function (d) { var h = ((d.title || '') + ' ' + d.doc + ' ' + (d.source_path || '')).toLowerCase(); return words.every(function (w) { return h.indexOf(w) >= 0; }); });
     if (sort === 'name') docs.sort(function (a, b) { return String(a.title || a.doc).localeCompare(String(b.title || b.doc), 'ko'); });
+    if (sort === 'mine') { var sc0 = function (d) { var i = hm.info[d.doc] || {}; return (i.cm || i.ask ? 4 : 0) + (i.ai || i.nv ? 2 : 0) + (mineOf(d) ? 1 : 0); }; docs.sort(function (a, b) { return sc0(b) - sc0(a); }); }   // 안정 정렬 — 같은 점수는 최근 수정순 그대로
     ui.cnt.textContent = words.length ? '찾은 문서 ' + docs.length + '개 · 전체 ' + all.length + '개' : '문서 ' + all.length + '개';
     var body = ui.body; body.innerHTML = '';
     hm.queue = []; hm.frames = hm.frames.filter(function (f) { return f.isConnected; });
@@ -4368,7 +5120,7 @@
       if (show.length < list.length) { var m = el('button', 'ib hmMore', '더 보기 · ' + (list.length - show.length)); m.type = 'button'; m.onclick = function () { hm.more = true; renderHome(); }; sec.appendChild(m); }
       body.appendChild(sec);
     }
-    if (!words.length && sort === 'recent' && all.length > 4) {
+    if (!words.length && (sort === 'recent' || sort === 'mine') && all.length > 4) {
       var rc = (pref('recent') || []).map(docOf).filter(Boolean).slice(0, view === 'list' ? 3 : 4);
       if (rc.length) section('', '최근에 연 문서', '', rc);
     }
@@ -4376,7 +5128,7 @@
       var order = [], by = {};
       docs.forEach(function (d) { var w = hmWhere(d), k = w.proj ? 'p' + w.proj : 'etc'; if (!by[k]) { by[k] = { name: w.proj ? hmProjName(w.proj) : '프로젝트 밖', list: [] }; order.push(k); } by[k].list.push(d); });
       order.forEach(function (k) { section('folder', by[k].name, by[k].list.length + '개', by[k].list, order.length > 1 ? 8 : HM_SHOW); });
-    } else section('', words.length ? '찾은 문서' : (sort === 'name' ? '모든 문서 · 이름순' : '모든 문서 · 최근 수정순'), '', docs, HM_SHOW);
+    } else section('', words.length ? '찾은 문서' : (sort === 'name' ? '모든 문서 · 이름순' : (sort === 'mine' ? '모든 문서 · 내가 손댄 것 먼저' : '모든 문서 · 최근 수정순')), '', docs, HM_SHOW);
   }
   function hmCard(d) {
     var b = el('button', 'hmCard' + (d.doc === hm.back ? ' cur' : '')); b.type = 'button';
@@ -4386,6 +5138,10 @@
     if (d.doc === hm.back) bg.appendChild(el('span', 'hmB cur', '보던 문서'));
     if (info.ask) bg.appendChild(el('span', 'hmB ask', '질문 ' + info.ask));
     if (info.cm) bg.appendChild(el('span', 'hmB cm', '안 보낸 의견 ' + info.cm));
+    if (info.ai) { var sec0 = Math.max(0, Math.floor((Date.now() - info.ai) / 1000)); bg.appendChild(el('span', 'hmB ai', 'AI 고치는 중 · ' + Math.floor(sec0 / 60) + ':' + ('0' + (sec0 % 60)).slice(-2))); }
+    if (info.nv) bg.appendChild(el('span', 'hmB nv', '새 버전 ' + info.nv));
+    var mb = el('span', 'hmMore'); mb.setAttribute('role', 'button'); mb.setAttribute('aria-label', '더 보기'); mb.innerHTML = svg('more'); mb.title = '이름 바꾸기 · 링크 복사 · 목록에서 숨기기';
+    mb.onclick = function (e) { e.stopPropagation(); e.preventDefault(); openHmMenu(d, b, mb); }; b.appendChild(mb);
     b.appendChild(el('div', 'hmN', d.title || d.doc));
     var m = el('div', 'hmM clip'); b.appendChild(m);
     var where = [w.proj ? hmProjName(w.proj) : '', w.dir].filter(Boolean).join(' / ');
@@ -4396,6 +5152,37 @@
     var t = hm.thumbs[thKey(d)];
     if (t && t.done) thumbPaint(b, t); else hm.io.observe(b);
     return b;
+  }
+  /* 2.1 — 카드 ⋯: 이름 바꾸기(제자리에서) · 링크 복사(G4) · 목록에서 숨기기(나에게만) */
+  function openHmMenu(d, card, anchor) {
+    var m = $('hmMenu'); if (!m) { m = el('div', 'menu'); m.id = 'hmMenu'; $('home').appendChild(m); }
+    m.innerHTML = '';
+    [{ label: '이름 바꾸기', run: function () { hmRename(d, card); } },
+     { label: '링크 복사', run: function () { copyLocator(d, null); } },
+     { label: (pref('hiddenDocs') || []).indexOf(d.doc) >= 0 ? '목록에 다시 보이기' : '목록에서 숨기기 (나에게만)', run: function () { var hd = (pref('hiddenDocs') || []).slice(), i = hd.indexOf(d.doc); if (i >= 0) hd.splice(i, 1); else hd.push(d.doc); setPref({ hiddenDocs: hd }); renderHome(); } }]
+      .forEach(function (it) { var x = el('button', '', it.label); x.type = 'button'; x.onclick = function (e) { e.stopPropagation(); m.hidden = true; it.run(); }; m.appendChild(x); });
+    var r = anchor.getBoundingClientRect(), hr = $('home').getBoundingClientRect();
+    m.style.right = 'auto'; m.style.left = Math.max(0, Math.min(hr.width - 240, r.right - hr.left - 230)) + 'px'; m.style.top = (r.bottom - hr.top + 4 + $('empty').scrollTop) + 'px'; m.hidden = false;
+    setTimeout(function () { document.addEventListener('click', function off() { m.hidden = true; document.removeEventListener('click', off); }); }, 0);
+  }
+  function hmRename(d, card) {
+    var nm = card.querySelector('.hmN'); if (!nm) return;
+    var inp = document.createElement('input'); inp.type = 'text'; inp.value = d.title || d.doc; inp.className = 'hmRen'; inp.setAttribute('aria-label', '문서 이름');
+    inp.onclick = function (e) { e.stopPropagation(); };
+    var done = false, fin = function (save) { if (done) return; done = true; var t = inp.value.trim(); nm.textContent = save && t ? t : (d.title || d.doc); if (save && t && t !== (d.title || d.doc)) { sdk.store.update('docs', { id: d.id }, { title: t }).then(function () { d.title = t; var dd = docOf(d.doc); if (dd) dd.title = t; toast('이름을 바꿨습니다', 1600); }).catch(fail); } };
+    inp.onkeydown = function (e) { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); fin(true); } if (e.key === 'Escape') { e.preventDefault(); fin(false); } };
+    inp.onblur = function () { fin(true); };
+    nm.textContent = ''; nm.appendChild(inp); inp.focus(); inp.select();
+  }
+  /* G4 — 이 문서 · 이 장을 가리키는 링크. 앱 주소로 연 화면(location 이 https)에서는 ?doc=&ver=&slide= 주소를, 세션 옆(srcdoc) 화면에서는 호스트가 앱 딥링크를 아직 주지 않아 글 자리표를 복사한다. */
+  function copyLocator(d, sid) {
+    var doc = d ? d.doc : st.doc, title = d ? (d.title || d.doc) : st.title, ver = d ? (Number(d.latest_ver) || 1) : st.ver;
+    var sec = sid ? st.sections.filter(function (x) { return x.id === sid; })[0] : null, pos = sec ? posOf(sec.i) + 1 : 0;
+    var alone = /^https?:$/.test(location.protocol) && location.pathname !== '/' + 'srcdoc';
+    var text;
+    if (alone) { var u = new URL(location.href); u.search = ''; u.searchParams.set('doc', doc); u.searchParams.set('ver', String(ver)); if (sid) u.searchParams.set('slide', sid); text = u.toString(); }
+    else text = '장표 수정 › 「' + title + '」 (문서 ' + doc + ') · 버전 ' + ver + (pos ? ' · ' + pos + '쪽' : '');
+    copyText(text).then(function (ok) { toast(ok ? (alone ? '링크를 복사했습니다 · 열면 ' + (pos ? pos + '쪽으로' : '그 문서로') + ' 갑니다' : '자리표를 복사했습니다 · 세션이나 글에 붙이면 어느 문서 · 장인지 알 수 있습니다(앱 딥링크는 호스트 지원 뒤에)') : '복사하지 못했어요', 3600); });
   }
   function hmMeta(b) {
     var d = b._d, t = hm.thumbs[thKey(d)], a = ['버전 ' + (Number(d.latest_ver) || 1)];
@@ -4459,6 +5246,15 @@
     await loadDocs();
     applyPrefs();
     var want = keepDoc && st.doc && docOf(st.doc) ? st.doc : null;
+    //  G4 — 앱 주소로 열며 ?doc=&ver=&slide= 를 붙였으면 그 문서 · 버전 · 장으로(한 번만)
+    var qp = null; try { qp = new URLSearchParams(location.search || ''); } catch (e) {}
+    if (!want && !keepDoc && qp && qp.get('doc') && docOf(qp.get('doc'))) {
+      await openDoc(qp.get('doc'));
+      var qv = Number(qp.get('ver')) || 0, qs = qp.get('slide') || '';
+      if (qv && st.vers.indexOf(qv) >= 0 && qv !== st.ver) await openVersion(qv, qs);
+      else if (qs) { var qfi = -1; st.sections.forEach(function (s) { if (s.id === qs || String(posOf(s.i) + 1) === qs) qfi = s.i; }); if (qfi >= 0) await showSlide(qfi); }
+      return;
+    }
     if (!want && homeOn()) { hmLoad(); return; }   // 홈을 보고 있었다 — 그대로 둔다
     if (!want && !L.session && st.docs.length) { showHome(); return; }   // 세션 없이 연 화면(앱 찾기에서 열었다)은 홈에서 고른다(원준 2026-10-14)
     if (!want) {

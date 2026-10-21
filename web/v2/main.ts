@@ -20,6 +20,7 @@ import { renderLiv } from '../liv.js';
 import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
 import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledApp, openAppById, setLaunchpadContext } from './apps.js';
 import { installedRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱의 최근 기록 키
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { writeLeftAt } from '../lib/console-phase.js';   // #4876 — 세션을 떠난 때(곁칸 «콘솔» 의 «다녀온 사이» 기준)
 import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다 · #4769 선언한 그림
 import { browserSurface } from './browser-surface.js';
@@ -53,6 +54,8 @@ import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 �
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, routeSticky, type ShellTab, type TabsApi } from './tabs.js';
+import { rememberFirstPrompt } from './quick-session.js';   // #4906 — 액자에서 만든 세션의 첫 지시를 이 문서의 기억으로 옮긴다
+import { openRouteFirstPrompt } from '../lib/open-route.js';
 import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
 import { confirmSessionArchive, watchSessionTrash, SESSION_LEFT_EVENT } from '../session-actions.js';
 import { mountMobileChrome, type MobileChrome, MOBILE_MQ } from './mobile.js';
@@ -544,6 +547,10 @@ export async function bootV2(): Promise<void> {
     // #3784 — 액자(클래식 화면) 안 우클릭 메뉴의 「새 탭에서 열기」. 프레임은 셸 탭을 못 만드니 한 줄 올려 보낸다.
     //  같은 오리진 + 문자열 해시만. 어느 탭이 보냈든 결과는 같다(새 탭 하나).
     if (m && m.type === 'lively:open-route' && typeof m.href === 'string' && m.href.startsWith('#/')) {
+      //  #4906 — 액자에서 만든 세션이면 그 첫 지시가 함께 온다(액자 문서의 기억은 이 문서가 못 읽는다 — lib/open-route.ts 머리말).
+      //   탭을 열기 **전에** 이 문서의 기억으로 옮긴다 — 그 세션 화면이 마운트될 때 꺼내 쓴다(views.ts takeFirstPrompt).
+      const first = openRouteFirstPrompt(m);
+      if (first) rememberFirstPrompt(first.sid, first.text);
       //  세션은 홈에서 연다 — 세션 목록의 [세션 열기](paintSessAll onOpen)와 같이 구역을 홈으로 옮긴다.
       //   안 옮기면 프로젝트 탭(구역 «프로젝트»)에서 연 세션 옆에 프로젝트 사이드바가 남는다(#3870).
       if (routeKey(m.href).startsWith('s:')) setRailSection('home', { navigate: false });
@@ -1654,7 +1661,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       //  #4769 설치한 앱도 최근 줄에 선다(원준 2026-10-17 «팀 채널 여러 번 눌렀는데 안 뜸») — 기록은 `i:<앱 id>`, 목록엔 바로 올려 레일이 그린다.
       if (!instance.app.system?.route) {
         noteAppUse(installedRecentKey(instance.app_id));
-        noteInstalledApp({ id: instance.app_id, title: instance.app.title, hasUi: !!(instance.app.ui && instance.app.ui.pages && instance.app.ui.pages.length), icon: instance.app.icon ?? null, systemRoute: null });
+        noteInstalledApp({ id: instance.app_id, title: instance.app.title, hasUi: hasAppScreen({ pages: instance.app.ui?.pages ?? [], server: instance.app.server }), icon: instance.app.icon ?? null, systemRoute: null });
         drawRail();
       }
       const renderer = instance.app.system?.renderer;
@@ -2014,7 +2021,7 @@ function sideRowFace(route: string, draft?: string): Omit<SideInstance, 'id' | '
   else if (page === 'i' && segs[1]) {
     const id = decodeURIComponent(segs[1]);
     const inst = cachedAppInstance(id) || appInstances.find((x) => x.id === id) || null;
-    if (inst) icon = (registerAppIcon(inst.app.id, inst.app.icon) || instanceSideIcon(inst.app.id, !!(inst.app.ui && inst.app.ui.pages && inst.app.ui.pages.length))) as SideInstance['icon'];   // #4769 선언한 그림이 있으면 그것
+    if (inst) icon = (registerAppIcon(inst.app.id, inst.app.icon) || instanceSideIcon(inst.app.id, hasAppScreen({ pages: inst.app.ui?.pages ?? [], server: inst.app.server }))) as SideInstance['icon'];   // #4769 선언한 그림이 있으면 그것
   }
   else {
     const appKey = page === 'app' ? segs[1] : CLASSIC_PAGES[page];

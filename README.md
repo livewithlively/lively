@@ -114,7 +114,7 @@ Check status with `curl http://<server-address>:8080/readyz`. Updates, backups, 
 
 ## What's supported
 
-**AI tools**: Claude Code (default), Codex, OpenCode, Antigravity CLI, Grok Build. Whichever tool you use, the same context is injected, and shared setups are installed in the format each tool expects.
+**AI tools**: Claude Code (default), Codex, OpenCode, Antigravity CLI, Grok Build, Cursor (IDE · CLI). Whichever tool you use, the same context is injected, and shared setups are installed in the format each tool expects.
 
 **Collectors**: Slack, Discord, Notion, Google Drive, Gmail, Outlook, GitHub, GitLab, Linear, ClickUp, Figma, and file upload. Internal APIs not on the list connect through the generic driver (HTTP, RSS, webhooks) without writing code. Code repositories and internal databases connect read-only as well.
 

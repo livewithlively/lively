@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
-const { installTarget } = await import(pathToFileURL(join(HERE, "lively.mjs")));
+const { installTarget, launchNames } = await import(pathToFileURL(join(HERE, "lively.mjs")));
 const { installPlanFor, HARNESS_IDS } =
   await import(pathToFileURL(join(HERE, "..", "hooks", "harness-registry.mjs")));
 
@@ -136,4 +136,12 @@ test("E20 윈도우 설치기는 **자식 프로세스**로 돌린다(사용자 
   assert.ok(/"-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", plan\.cmd/.test(CLI),
     "남의 프로필을 태우거나 실행정책에 걸리면 조용히 아무 일도 안 일어난다");
   assert.ok(/has\("pwsh"\) \? "pwsh" : "powershell"/.test(CLI), "pwsh 우선 · 없으면 내장 powershell");
+});
+
+//  #4927 격리 리뷰 — 설치 끝 안내가 claude(+codex)로 고정이라 Cursor·grok 만 쓰는 사람에게 «claude 를 켜면» 이라고 말했다.
+test("E21 설치 끝 안내는 배선한 하네스를 켜는 이름으로 말한다(비면 claude)", () => {
+  assert.deepEqual(launchNames(["cursor"]), ["Cursor"]);
+  assert.deepEqual(launchNames(["claude", "codex", "antigravity"]), ["claude", "codex", "agy"]);
+  assert.deepEqual(launchNames([]), ["claude"], "종전 규약 — 아무것도 없으면 claude");
+  assert.deepEqual(launchNames(["newharness"]), ["newharness"], "모르는 id 는 그대로(지우지 않는다)");
 });

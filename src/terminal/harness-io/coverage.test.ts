@@ -4,14 +4,16 @@
 //  백그라운드 셸·서브에이전트·아티팩트가 통째로 빠진 화면이 남의 기본이 됐다(2026-08-31 사고).
 import assert from "node:assert/strict";
 import { COVERAGE, COVERAGE_AXES, NODE_BLOCKED_AXES, coverageOf, isFullyCovered, sessionTerminalOnlyAxes, terminalOnlyAxes } from "./coverage.js";
-import { CHAT_ADAPTERS } from "./chat-adapters.js";
+import { CHAT_ADAPTERS, canOpenChatRuntime } from "./chat-adapters.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
+//  #4927 — 대화 어댑터 표엔 런타임을 안 여는 하네스(cursor: 기록 읽기만)도 있다. 이 표는 **여는** 하네스의 것이다.
 t("[1] 우리가 여는 하네스가 **전부** 표에 있다", () => {
-  for (const a of CHAT_ADAPTERS) assert.ok(coverageOf(a.key), `${a.key} 가 커버리지 표에 있다`);
-  assert.equal(COVERAGE.length, CHAT_ADAPTERS.length, "유령 항목이 없다");
+  const opened = CHAT_ADAPTERS.filter((a) => canOpenChatRuntime(a.key));
+  for (const a of opened) assert.ok(coverageOf(a.key), `${a.key} 가 커버리지 표에 있다`);
+  assert.equal(COVERAGE.length, opened.length, "유령 항목이 없다");
 });
 
 t("[2] ★ 모든 하네스가 **모든 축**을 답한다 — 빈칸은 «모른다» 가 아니라 «안 적었다» 다", () => {

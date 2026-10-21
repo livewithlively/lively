@@ -12,6 +12,7 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { requireScope, type LivelyUser } from "../context.js";
+import { viewerOf } from "./principal.js";
 import { requireAppTool } from "../apps/principal.js";
 import { needsRegrant } from "../apps/grant.js";
 import { getActiveGrant } from "../org/store/apps.js";
@@ -19,8 +20,12 @@ import { getApp } from "../org/store/apps.js";
 import { canSeeApp } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { logToolCall } from "../org/policies/tool-log.js";
+import { logger } from "../log.js";
 import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
+
+/** 세션 id 꼴(box-<slug>-<8hex> 등) — 형식만. 권한은 소비처(ai-runs 구독 tie)가 본다. */
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 // 방어심화: grant 에 있어도 UI 브리지가 절대 호출하지 않는 도구(신원·자격·grant·앱관리 mutator). 관리자 도구는
 //  이미 scope 게이트로 막히므로(앱은 admin/runtime 불가), 여기선 scope-null 이면서 보안상태를 바꾸는 것들을 겨냥한다.
@@ -31,13 +36,16 @@ const appToolCall: Capability = {
   title: "앱 UI 도구 호출(브리지)",
   description: "샌드박스 앱 UI 가 요청한 도구를 그 앱 principal 로 실행한다(호스트 중개). 호출자(멤버)가 이 앱에 grant 가 있어야 하고, 도구는 그 grant allowlist 안이어야 하며, appUser 스코프(멤버∩grant)로 판정된다. REST 전용.",
   scope: null,
-  input: { app_id: z.string(), name: z.string(), arguments: z.record(z.unknown()).optional() },
+  input: {
+    app_id: z.string(), name: z.string(), arguments: z.record(z.unknown()).optional(),
+    session_id: z.string().max(128).optional().describe("띄운 쪽(라이블리 화면)이 싣는 붙은 세션 id — 앱 arguments 의 것이 아니다. 구독 AI 실행의 «초대받은 사람» 판정(#4488)"),
+  },
   expose: {
     mcp: false, // 브라우저 UI 브리지 전용 — 하네스 세션은 앱 토큰으로 직접 MCP 를 쓴다(이 우회 불필요).
     rest: [{ method: "POST", paths: ["/api/ui/apps/:id/tool-call"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { app_id: (req.params as Record<string, string>)?.id, name: b.name, arguments: b.arguments };
+        return { app_id: (req.params as Record<string, string>)?.id, name: b.name, arguments: b.arguments, session_id: b.session_id };
       } }],
   },
   handler: async (input: Record<string, unknown>, member: LivelyUser | undefined) => {
@@ -45,7 +53,15 @@ const appToolCall: Capability = {
     const appId = String(input.app_id ?? "").trim();
     const name = String(input.name ?? "").trim();
     if (!appId || !name) throw new HttpError(400, "app_id 와 name 이 필요합니다");
-    const result = await runAppTool(member, appId, name, input.arguments ?? {}, { source: "app-ui" });
+    //  세션 id 는 띄운 쪽(라이블리 화면 opts.sessionId)이 본문에 싣는다 — 앱 arguments 의 것이 아니다. 형식을 보고, **그 사람이 들어갈 수 있는 세션일 때만**
+    //  ctx.session 으로 넘긴다 — ctx.session 을 믿는 다른 도구(앱 변경 알림 · 지식 공개범위 · 위탁 출처)에 남의 세션 id 가 새지 않게(격리 리뷰 blocking 2). 아니면 세션 없이.
+    let sid = typeof input.session_id === "string" && SESSION_ID_RE.test(input.session_id) ? input.session_id : undefined;
+    if (sid) {
+      const { requireSessionParticipant } = await import("../apps/session-apps.js");
+      try { await requireSessionParticipant(sid, member.userId); }
+      catch (e) { logger.warn({ session: sid, member: member.userId, err: (e as Error)?.message }, "[app-tool-call] 본문의 세션 id 를 버린다 — 들어갈 수 없는 세션"); sid = undefined; }
+    }
+    const result = await runAppTool(member, appId, name, input.arguments ?? {}, { source: "app-ui", sessionId: sid });
     return { app_id: appId, name, result };
   },
 };
@@ -59,18 +75,19 @@ export { CONSENT_REQUIRED };
  *  opts.address — 앱 주소로 들어온 호출이면 그 주소의 판(pub|draft): 선언(도구 · 표)을 사람이 아니라 주소의 판에서 읽는다(Viewer.address).
  */
 export async function runAppTool(member: LivelyUser, appId: string, name: string, rawArgs: unknown,
-  opts: { source: AppScreenSource; address?: "pub" | "draft" }): Promise<unknown> {
+  opts: { source: AppScreenSource; address?: "pub" | "draft"; sessionId?: string }): Promise<unknown> {
   if (!member?.userId) throw new HttpError(401, "인증이 필요합니다");
   if (BRIDGE_DENY.test(name)) throw new HttpError(403, `이 도구는 앱 UI 에서 호출할 수 없습니다: ${name}`);
-  const viewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };
+  //  앱을 보는 사람(앱 공개범위 판정용) — 아래 핸들러 ctx 의 viewer(데이터 공개범위 · 문자열)와 다르다.
+  const appViewer = { userId: member.userId, scopes: member.scopes ?? [], ...(opts.address ? { address: opts.address } : {}) };
 
   // 앱 존재·활성 확인. #4667 — 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다(404).
   const installed = await getApp(appId);
-  if (!installed || !canSeeApp(installed, viewer)) throw new HttpError(404, `앱 없음: ${appId}`);
+  if (!installed || !canSeeApp(installed, appViewer)) throw new HttpError(404, `앱 없음: ${appId}`);
   if (installed.status !== "active" || !installed.enabled) throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다`);
   //  선언은 **이 사람이 보는 판**의 것 — 공개 판을 보는 사람의 화면이 남의 초안이 새로 선언한 도구를 쓰지 않게.
   //   앱 주소로 들어온 호출이면 그 주소의 판(#4482 — 공개 주소는 초안을 고친 사람에게도 공개 판).
-  const seen = await viewAppFor(installed, viewer);
+  const seen = await viewAppFor(installed, appViewer);
   if (seen.view === "none") throw new HttpError(404, `앱 없음: ${appId}`);
   const app = seen.app;
 
@@ -114,7 +131,9 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
 
   const started = Date.now();
   try {
-    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId });
+    //  열람 신원(#1291)은 앱 세션 MCP 경로(capabilities/index.ts)와 같다 — 도구는 그 사람의 공개범위로 읽고 쓴다.
+    //  session 은 다리가 확인한 사람 세션(#4488 구독 선) — 없으면 칸을 안 둔다.
+    const result = await cap.handler(args as Record<string, unknown>, appUser, { source: opts.source, actor: member.userId, viewer: viewerOf(member), ...(opts.sessionId ? { session: opts.sessionId } : {}) });
     logToolCall({ tool: name, harness: opts.source, actor: member.userId, app: appId, args, ok: true, durationMs: Date.now() - started });
     return result;
   } catch (e) {

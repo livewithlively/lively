@@ -210,6 +210,10 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   ok(/\/chat-send'/.test(branch) && /session_id: sid/.test(branch), "S2-5 chat/send 는 /api/ui/apps/:id/chat-send 로, 세션은 opts 의 sid 로 간다");
   ok(/ensureAppGrant\(appId/.test(branch) && /동의\|grant/.test(branch), "S2-5 403 「동의」 면 그 자리에서 동의 창 → 1회 재시도(tools/call 과 같은 규칙)");
   ok(/putIntoSession\(\[sid\]/.test(branch) && /draft_text/.test(branch), "S2-5 멈춘 세션(409 draft)이면 표식 붙은 draft_text 를 그 세션 입력칸에 넣어 둔다");
+  //  #4488 tools/call 의 세션 id 배선(소스) — 호스트가 본문 맨 바깥에 싣고(S2-6b 가 실제로 돌려 본다), 서버 다리는 그 값을 형식만 보고 ctx.session 으로 넘긴다(앱 arguments 는 보지 않는다).
+  const bridge = read("src/capabilities/app-tool-call.ts");
+  ok(/session_id: b\.session_id/.test(bridge) && /SESSION_ID_RE\.test\(input\.session_id\)/.test(bridge) && /session: opts\.sessionId/.test(bridge),
+    "S2-6c 서버 다리(app-tool-call)는 본문 맨 바깥 session_id 를 형식 검사 뒤 ctx.session 으로 넘긴다 — arguments 안의 것은 안 본다");
   ok(/userActivation/.test(branch), "S2-5 사람이 누른 동작(userActivation)에서만 보낸다");
   const dts = read("apps/sdk/lively-app.d.ts");
   ok(/chat:\s*\{[\s\S]*send\(text: string\)/.test(dts) && /prefs:\s*\{[\s\S]*\bget[<(][\s\S]*\bset[<(]/.test(dts) && /onPrefsOpen\(/.test(dts), "S2-5 d.ts 에 chat.send(text) · prefs.get/set · ui.onPrefsOpen");
@@ -338,6 +342,27 @@ if (!existsSync(built)) {
   const lastReply = () => replies[replies.length - 1];
   const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
 
+  // S2-6b #4488 tools/call 도 세션 id 는 띄운 쪽(opts)의 것을 본문 맨 바깥에 싣는다 — 구독 AI 실행의 «초대받은 사람» 판정에 쓴다. 세션 없이 띄운 화면은 안 싣는다.
+  {
+    const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });
+    plan = { "/tool-call": { status: 200, json: { app_id: "deck-edit", name: "app_ai_run", result: { id: 7, status: "queued" } } } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "app_ai_run", arguments: { prompt: "요약", session_id: "box-victim" } } });
+    await settle();
+    const call = fetches.find((x) => x.url.includes("/tool-call"));
+    ok(call, "S2-6b 호스트가 /api/ui/apps/deck-edit/tool-call 을 부른다");
+    eq(call.body, { name: "app_ai_run", arguments: { prompt: "요약", session_id: "box-victim" }, session_id: "box-mine" }, "S2-6b 본문 맨 바깥 session_id 는 opts 의 것(앱 arguments 안의 것은 그대로 두되 서버가 보지 않는다)");
+    eq(lastReply(), { jsonrpc: "2.0", id: 11, result: { id: 7, status: "queued" } }, "S2-6b 앱에는 도구 결과만");
+  }
+  {
+    const { fire } = await mount({ title: "장표 수정" });
+    plan = { "/tool-call": { status: 200, json: { app_id: "deck-edit", name: "whoami", result: {} } } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "whoami", arguments: {} } });
+    await settle();
+    const call = fetches.find((x) => x.url.includes("/tool-call"));
+    ok(call && !("session_id" in call.body), "S2-6b 세션 없이 띄운 화면(앱 찾기 · 크게 보기)은 session_id 를 싣지 않는다");
+  }
   // S2-6 세션 id 는 띄운 쪽(opts)의 것 — 앱 params 의 session_id 는 무시
   {
     const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });

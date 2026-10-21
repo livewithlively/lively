@@ -245,10 +245,10 @@ check(!!pickFn && !/label: '아래 칸 열기'/.test(pickFn) && !/openPicker\(an
 check(/const h = openAppDrawer\(anchor, \{/.test(pickFn) && /more: has\(d\.type\), ic: \(\) => dockTile\(d\.icon, d\.type\), pick: \(\) => \{ addPart\(zone, d\.type\); \}/.test(pickFn)
   && /sections: \[\{ title: '사이드바 앱', note: '누르면 사이드바에 탭으로 열려요', items: side \}, attachSec\(null\)\]/.test(pickFn) && !/anchoredPopover\(/.test(pickFn),
   "X4c [＋] 는 앱 서랍 — «사이드바 앱»(넣을 수 있는 부품 · 독과 같은 타일 · 이미 열린 multi 는 하나 더) + «이 세션에 붙이기»");
-check(/title: '이 세션에 붙이기'/.test(pickFn) && /a\.id !== 'ai-session' && !a\.system && \(a\.pages\.length > 0 \|\| a\.tables\.length > 0\)/.test(pickFn) && /off: !sid/.test(pickFn)
+check(/title: '이 세션에 붙이기'/.test(pickFn) && /a\.id !== 'ai-session' && !a\.system && \(hasAppScreen\(a\) \|\| a\.tables\.length > 0\)/.test(pickFn) && /off: !sid/.test(pickFn)
   && /pick: \(\) => \{ void attachApp\(\{ id: a\.id, title: a\.title \}\); \}/.test(pickFn) && /listSessionApps\(\)\.then\(\(apps\) => h\.setSection\(1, attachSec\(apps\)\)\)/.test(pickFn)
   && /attach: \(a\) => attachApp\(a\),/.test(PANES),
-  "X4d «이 세션에 붙이기» 묶음 — 독 ⊞ 와 같은 표(시스템 · ai-session 제외) · 세션 없으면 흐림 · 독과 같은 붙이기 길(attachApp) · 늦게 온 목록을 채운다(원준 10-05 «두개 나눈건 … 살려줘»)");
+  "X4d «이 세션에 붙이기» 묶음 — 독 ⊞ 와 같은 표(화면 앱 · 서버 앱 · 데이터 앱 — 시스템 · ai-session 제외) · 세션 없으면 흐림 · 독과 같은 붙이기 길(attachApp) · 늦게 온 목록을 채운다(원준 10-05 «두개 나눈건 … 살려줘»)");
 check(/b\.onclick = \(\) => openPicker\(b, zone\);/.test(PANES), "X4b [＋] 는 같은 고르기를 연다");
 const tabMenuFn = fn("  function tabMenu(e: MouseEvent, zone: Zone, key: TabKey): void {");
 check(/\.\.\.\(\['side'\] as Zone\[\]\)\.filter\(canGo\)\.map\(/.test(tabMenuFn) && !/\['side', 'bottom'\] as Zone\[\]\)\.filter\(canGo\)/.test(tabMenuFn), "X10 탭 우클릭에 «아래 칸으로 보내기» 가 없다 — 아래 칸의 옛 탭은 곁칸으로 보낼 수 있다");

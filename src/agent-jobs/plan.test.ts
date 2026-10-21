@@ -3,8 +3,10 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SweepFacts,
+  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, HOMELESS_OS_USER, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX,
+  type RunnerReport, type SweepFacts,
 } from "./plan.js";
+import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
 import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
 
 let pass = 0;
@@ -56,6 +58,8 @@ t("S4 띄우는 중 — 시작 상한 정확히는 그대로, 넘으면 failed +
   assert.deepEqual(sweepDecision(base({ status: "starting", claimedAt: NOW - P.start_timeout_sec * 1000 }), NOW, P), { act: "none" });
   const a = sweepDecision(base({ status: "starting", claimedAt: NOW - P.start_timeout_sec * 1000 - 1 }), NOW, P);
   assert.ok(a.act === "end" && a.status === "failed" && a.kill === true, JSON.stringify(a));
+  //  판이 실패를 알렸다면 그 사유로 이미 끝났다(#4829) — 여기 오는 것은 판이 게이트웨이에 한 번도 못 닿은 경우다.
+  assert.ok(a.act === "end" && /180초 안에 시작하지 못했습니다 — 컨테이너가 뜨지 않았거나 게이트웨이에 닿지 못했습니다/.test(a.error), a.act === "end" ? a.error : "");
 });
 t("S5 띄우는 중인데 자리 받은 시각이 없으면 접수 시각으로 잰다", () => {
   assert.equal(sweepDecision(base({ status: "starting", claimedAt: null, createdAt: NOW - P.start_timeout_sec * 1000 - 1 }), NOW, P).act, "end");
@@ -200,6 +204,66 @@ t("ID2 앱 폴더·프로젝트 폴더 경로 — 규칙 밖 id 면 경로를 �
   assert.equal(projectFolderCwd(4478), "/work/shared/project/4478");
   for (const bad of ["", "a", "Memo", "../x", "a/b", "-x", "x".repeat(33)]) assert.throws(() => appFolderCwd(bad), bad);
   for (const bad of [0, -1, 1.5, NaN]) assert.throws(() => projectFolderCwd(bad), String(bad));
+});
+
+t("BF1 시작 실패 보고 거르기(#4829) — 판은 작업 AI 와 같은 uid 라 칸마다 거른다: 단계 둘 · 상태 0..999 정수 · 한 줄 300자", () => {
+  assert.deepEqual(parseBootFailure({ stage: "runner", status: 0, message: "본체 깨짐" }), { stage: "runner", status: 0, message: "본체 깨짐" });
+  assert.deepEqual(parseBootFailure({ stage: "boot", status: 503, message: "  바쁨\n\t둘째 줄\r\n" }), { stage: "boot", status: 503, message: "바쁨 둘째 줄" });
+  assert.deepEqual(parseBootFailure({ stage: "rm -rf", status: 999, message: "a\u0000b" }), { stage: "boot", status: 999, message: "ab" }, "모르는 단계는 boot · NUL 은 뺀다");
+  for (const bad of [1000, -1, 1.5, "503", NaN, null]) assert.equal(parseBootFailure({ status: bad }).status, null, String(bad));
+  assert.deepEqual(parseBootFailure(null), { stage: "boot", status: null, message: "" });
+  assert.deepEqual(parseBootFailure("x"), { stage: "boot", status: null, message: "" });
+  assert.equal(parseBootFailure({ message: { x: 1 } }).message, "", "글이 아니면 버린다");
+  assert.equal(parseBootFailure({ message: "가".repeat(500) }).message.length, 300);
+  assert.equal(parseBootFailure({ message: "a".repeat(299) + "\ud83d\ude00" }).message, "a".repeat(299) + "\ufffd", "자르다 남은 외톨이 서로게이트는 고친다(jsonb)");
+});
+
+t("BF2 시작 실패 문장 — 본체 · 응답이 닿지 않은 부트(도는 중 401) · 읽지 못한 응답(200) · 게이트웨이에 못 닿음 · 그 밖의 상태", () => {
+  const f = (o: Partial<ReturnType<typeof parseBootFailure>>) => ({ stage: "boot" as const, status: null, message: "", ...o });
+  assert.equal(bootFailureError(f({ stage: "runner", status: 0, message: "본체 깨짐" }), "running"), "작업 컨테이너의 실행기가 시작하자마자 멈췄습니다: 본체 깨짐");
+  assert.equal(bootFailureError(f({ stage: "runner" }), "running"), "작업 컨테이너의 실행기가 시작하자마자 멈췄습니다");
+  //  도는 중인데 부트가 401 — 게이트웨이는 시작을 받았고(부트 비밀을 지웠다) 응답만 판에 못 닿았다. «비밀이 틀렸다» 가 아니다.
+  assert.equal(bootFailureError(f({ status: 401, message: '{"error":"작업 비밀이 맞지 않습니다"}' }), "running"),
+    "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)");
+  assert.equal(bootFailureError(f({ status: 401, message: "no" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(401): no");
+  //  200 인데 JSON 이 아니다 — 응답은 받았으니 «받지 못했다» 가 아니라 «읽지 못했다».
+  assert.equal(bootFailureError(f({ status: 200, message: "응답이 JSON 이 아닙니다" }), "starting"), "작업 컨테이너가 게이트웨이의 시작 응답을 읽지 못했습니다: 응답이 JSON 이 아닙니다");
+  assert.equal(bootFailureError(f({ status: 0, message: "connect ECONNREFUSED" }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다: connect ECONNREFUSED");
+  assert.equal(bootFailureError(f({ status: null }), "starting"), "작업 컨테이너가 게이트웨이에 닿지 못했습니다");
+  assert.equal(bootFailureError(f({ status: 503, message: "busy" }), "starting"), "작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(503): busy");
+  assert.ok(bootFailureError(f({ status: 502, message: "x".repeat(300) }), "starting").length <= 600);
+});
+
+t("HL1 홈 없는 작업의 조건(#4891) — API 키 · 앱 작업 · 프로젝트 없음 · 작업 폴더가 그 앱 폴더 / 홈 없는 작업이 아니면 판정에 안 걸린다", () => {
+  type J = { homeless?: boolean; account_kind: string; app_id: string | null; project_id: number | null; cwd: string };
+  const ok: J = { homeless: true, account_kind: "api_key", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  assert.equal(homelessJobRefusal(ok), null);
+  const rows: Array<[Partial<J>, RegExp]> = [
+    [{ account_kind: "subscription" }, /API 키 실행만/],
+    [{ app_id: null }, /앱 작업만/],
+    [{ app_id: "Bad_Id" }, /앱 작업만/],
+    [{ project_id: 3, cwd: "/work/shared/project/3" }, /프로젝트 폴더/],
+    [{ cwd: "/work/apps/other" }, /그 앱 폴더/],
+    [{ cwd: "/work/apps/crm/sub" }, /그 앱 폴더/],
+    [{ cwd: "/work/apps" }, /그 앱 폴더/],
+  ];
+  for (const [o, re] of rows) assert.match(homelessJobRefusal({ ...ok, ...o }) ?? "", re, JSON.stringify(o));
+  //  홈 없는 작업이 아니면(사람 자리) 무엇이든 null — 종전 작업은 이 판정을 안 탄다.
+  assert.equal(homelessJobRefusal({ ...ok, homeless: false, account_kind: "subscription", project_id: 3, cwd: "/work/shared/project/3" }), null);
+  assert.equal(homelessJobRefusal({ ...ok, homeless: undefined, app_id: null }), null);
+});
+
+t("HL2 전용 계정 이름은 어떤 구성원 계정과도 겹치지 않는다 — 구성원 slug 엔 `_` 가 없다(memberSlug) · 브로커 이름 규칙(box_ + SAFE)은 지킨다", () => {
+  assert.equal(HOMELESS_OS_USER, "box_lvly_job");
+  for (const id of ["lvly_job", "LVLY_JOB", "lvly job", "lvly-job", "_lvly_job_", "box_lvly_job", "job"]) {
+    assert.notEqual(osUsername(memberSlug(id)), HOMELESS_OS_USER, id);
+  }
+  assert.ok(/^box_/.test(HOMELESS_OS_USER) && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(HOMELESS_OS_USER.replace(/^box_/, "")));
+});
+
+t("HL3 작업 AI 의 앱 토큰 — 홈 없는 작업이면 앱 서버 급 주체(능력 API · /mcp 만 · EXEMPT 없음) · 사람 자리는 종전 꼴(그 칸 없음)", () => {
+  assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900), { ttlSec: 900, appServerPrincipal: true });
+  assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900), { ttlSec: 900 });
 });
 
 console.log(`# ${pass} pass`);

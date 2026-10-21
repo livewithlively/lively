@@ -19,6 +19,16 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("H1 헤더 — 자격 · 쿠키 · host 는 안 넘기고 워크스페이스 키만");
 }
 
+// ── H1b 워크스페이스에 묶이지 않은 키 — anthropic-workspace-id 는 자격 meta 에서만 · 앱이 보낸 건 버림 · 모양 틀리면 안 실음 ──
+{
+  const h = forwardHeaders({ "anthropic-workspace-id": "wrkspc_from_app" }, "sk-ws", "wrkspc_ours");
+  assert.equal(h["anthropic-workspace-id"], "wrkspc_ours", "자격의 워크스페이스 id 가 이긴다");
+  assert.equal(forwardHeaders({ "anthropic-workspace-id": "wrkspc_from_app" }, "sk-ws")["anthropic-workspace-id"], undefined, "자격에 없으면 앱이 보낸 것도 안 넘긴다");
+  assert.equal(forwardHeaders({}, "sk-ws", null)["anthropic-workspace-id"], undefined);
+  assert.equal(forwardHeaders({}, "sk-ws", "bad id\n")["anthropic-workspace-id"], undefined, "모양 틀린 값은 안 실음(헤더 주입 방지)");
+  ok("H1b anthropic-workspace-id — 자격 meta 에서만 · 모양 검사");
+}
+
 // ── H2 SSE 사용량 — message_start(입력 · 캐시) + message_delta(출력 누계) · 줄이 조각으로 와도 ──
 {
   const c = new SseUsageCollector();

@@ -2,7 +2,7 @@
 
 *[한국어](architecture.ko.md)*
 
-Lively's **unified context store** — a single in-house **MCP gateway** that every local AI tool (Claude Code · Codex · OpenCode · Antigravity CLI · Grok Build …) connects to.
+Lively's **unified context store** — a single in-house **MCP gateway** that every local AI tool (Claude Code · Codex · OpenCode · Antigravity CLI · Grok Build · Cursor …) connects to.
 It exposes organizational knowledge (WIKI) · taxonomy (category) · projects/tasks · domain context · DB (read-only)
 in one place, governed by **per-user authentication + scopes**. The gateway also runs the web UI · web terminal · collectors · scheduler.
 

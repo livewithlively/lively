@@ -34,6 +34,15 @@ export async function workspaceApiKey(): Promise<string | null> {
   return v ? v : null;
 }
 
+/** 워크스페이스 키의 Anthropic 워크스페이스 id(자격 meta.workspace_id) — 워크스페이스에 묶이지 않은 키일 때 헤더로 싣는다. 없거나 모양이 틀리면 null. */
+export async function workspaceAnthropicWorkspaceId(): Promise<string | null> {
+  const { getMemberSecret, GATEWAY_OWNER } = await import("../org/credentials/member-secret-store.js");
+  const { ANTHROPIC_WORKSPACE_ID_RE } = await import("./anthropic.js");
+  const s = await getMemberSecret(GATEWAY_OWNER, ANTHROPIC_KEY_KIND, "").catch(() => null);
+  const v = typeof s?.meta?.workspace_id === "string" ? s.meta.workspace_id.trim() : "";
+  return v && ANTHROPIC_WORKSPACE_ID_RE.test(v) ? v : null;
+}
+
 /** 이 사람이 이 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 작업 컨테이너와 같은 판정. */
 async function assertAppUsableFor(user: LivelyUser, appId: string): Promise<void> {
   const { getApp, getActiveGrant } = await import("../org/store/apps.js");
@@ -57,6 +66,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     policy: () => pol.effectiveAiRunPolicy(async () => pol.resolveAiRunPolicy(await store.aiRunPolicyRow())),
     accountSettings: async () => parseAccountSettings(await store.aiAccountRow()),
     apiKey: workspaceApiKey,
+    apiWorkspaceId: workspaceAnthropicWorkspaceId,
     getApp: async (id) => (await import("../org/store/apps.js")).getApp(id),
     assertAppUsable: assertAppUsableFor,
     submitJob: async (j: SubmitJobInput, user: LivelyUser) => {
@@ -66,6 +76,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (!(await jobs.available())) throw new HttpError(501, "작업 컨테이너는 매니지드 워크스페이스에서만 돕니다 — 이 실행은 단발(프록시)로만 됩니다");
       const plan = await import("../agent-jobs/plan.js");
       const p = await jobs.policy();
+      //  #4891 — 홈 없는 작업은 앱 폴더에서만 돈다(부르는 쪽이 이미 걸렀다 — 여기서도 프로젝트 폴더를 받지 않는다).
+      if (j.homeless && j.projectId != null) throw new HttpError(400, "홈 없는 작업은 앱 폴더에서만 돕니다");
       if (j.projectId != null) await jobs.assertProjectCwd(user, j.projectId);
       const cwd = j.projectId != null ? plan.projectFolderCwd(j.projectId) : plan.appFolderCwd(j.appId);
       let resumeConv: string | null = null;
@@ -74,11 +86,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
         if (!prev || !prev.conversation_id) throw new HttpError(409, "이어받을 작업의 대화가 없습니다");
         resumeConv = prev.conversation_id;
       }
-      const row = await svc.enqueueAgentJob({
-        requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd,
-        harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: resumeConv, resumeJobId: j.resumeJobId,
-        timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p), bare: j.bare,
-      }, p, jobs);
+      const ai = await import("./service.js");
+      const row = await svc.enqueueAgentJob(ai.agentJobOfRun(j, { cwd, resumeConversation: resumeConv, timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p) }), p, jobs);
       return { id: row.id };
     },
     getJob: async (id) => (await import("../agent-jobs/store.js")).getAgentJob(id),
@@ -102,6 +111,16 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (ms <= 0) setImmediate(run); else setTimeout(run, ms).unref?.();
     },
     now: () => Date.now(),
+    sessionTie: async (sid, member) => {
+      const { sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
+      const { getSessionState } = await import("../sessions/session-state.js");
+      const { normalizeSessionKind } = await import("../sessions/session-kind.js");
+      const st = await getSessionState(sid).catch(() => undefined);
+      //  주인은 다리(requireSessionParticipant → sessionOwnerOf)와 같은 근거로 — 상태 행이 없고 tmux 에만 주인이 있는 세션에서 둘이 어긋나지 않게(재검토 nit).
+      const owner = String(st?.owner ?? "").trim() || (await sessionOwnerOf(sid).catch(() => null));
+      if (!owner) return { owner: null, participant: false, human: false };
+      return { owner, participant: owner === member || (await sessionCanEnter(sid, member).catch(() => false)), human: normalizeSessionKind(st?.kind) === "human" };
+    },
     attachedSessions: async (appId, member) => {
       const { sessionsWithApp, sessionCanEnter, sessionOwnerOf } = await import("../apps/session-apps.js");
       const { getSessionLabel } = await import("../terminal/tmux-exec.js");

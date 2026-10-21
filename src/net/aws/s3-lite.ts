@@ -146,10 +146,11 @@ export async function s3Put(cfg: S3Config, key: string, body: Buffer, opts: { co
  * 있으면 크기와 지금 판 번호(versionId), 없으면 null. 판 번호는 버킷이 판 번호를 켰을 때만 온다(#4801 — Lambda 가 그 판을 바로 읽게 함수에 적는다).
  *  판 번호를 끈 적이 있는 버킷의 옛 객체는 «null» 이라는 글자를 준다 — 판 번호 없음으로 읽는다.
  */
-export async function s3Head(cfg: S3Config, key: string, deps: S3Deps = {}): Promise<{ size: number; versionId: string | null } | null> {
+export async function s3Head(cfg: S3Config, key: string, deps: S3Deps = {}, opts: { versionId?: string | null } = {}): Promise<{ size: number; versionId: string | null } | null> {
   return withRetry(deps, async () => {
-    const res = await send(cfg, deps, { method: "HEAD", key });
-    if (res.status === 404) return null;
+    const res = await send(cfg, deps, { method: "HEAD", key, ...(opts.versionId ? { query: { versionId: opts.versionId } } : {}) });
+    //  판 번호를 주면 그 판(#4887 — 함수가 읽는 판이 아직 있나) — 영구 삭제한 판은 404, 지움 표시 판은 405 다(둘 다 «없음»).
+    if (res.status === 404 || (opts.versionId && res.status === 405)) return null;
     if (!res.ok) throw new S3Error(res.status, `HTTP${res.status}`, `S3 HEAD ${key} 실패: ${res.status}`);
     const v = res.headers.get("x-amz-version-id");
     return { size: Number(res.headers.get("content-length") ?? "0"), versionId: v && v !== "null" ? v : null };

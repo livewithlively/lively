@@ -235,12 +235,85 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   //  stop_kind 는 표를 만든 뒤에 더한 칸이라 ALTER 로(이미 만들어진 표에도 붙게 — 관례).
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS stop_kind TEXT CHECK (stop_kind IN ('auto','manual'));`);
+  //  #4485(v2-6) — 별칭이 가리키는 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 판마다 새로 발급하고, 어느 별칭도 안 가리키게 된 판의 토큰은 회수한다.
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_token_hash TEXT;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS pub_token_hash TEXT;`);
+  //  org_app_server_usage(#4485) — 앱 주소 → 함수 호출 수 · 실행 시간(5분 칸). 함수를 부르는 길이 게이트웨이뿐이라 이 수가 전부다 —
+  //   자동 멈춤 감시가 CloudWatch 지표 대신 본다(app-server-usage.ts). rejected = 동시 처리 상한으로 함수를 부르지 않고 거절한 수. 7일 뒤 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_server_usage(
+      app_id TEXT NOT NULL,
+      bucket TIMESTAMPTZ NOT NULL,
+      calls INT NOT NULL DEFAULT 0,
+      billed_ms BIGINT NOT NULL DEFAULT 0,
+      errors INT NOT NULL DEFAULT 0,
+      rejected INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (app_id, bucket)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_server_usage_bucket_idx ON org_app_server_usage(bucket);`);
   //  #4792 code_bytes — 이 함수의 코드 저장(판마다의 CodeSize 합 · $LATEST 포함). 배포 · 옛 판 정리 때 AWS 에서 잰 값을 적고,
   //   워크스페이스 코드 저장 상한(app_server_policy.workspace_code_mb)이 이 합을 본다.
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS code_bytes BIGINT NOT NULL DEFAULT 0;`);
   //  #4791 unused_since — 지금 판 · 공개 판 둘 다 서버 선언(web.server)이 없다고 하우스키핑이 처음 본 때. 정책 unused_retire_days(기본 7일)가
   //   지나면 함수 · 로그 그룹 · 이 줄을 걷는다(빌드 기록은 남긴다). 서버 판을 다시 올리면(별칭을 옮기면) 걷는다.
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS unused_since TIMESTAMPTZ;`);
+  //  #4887 health · health_checked_at — 하우스키핑이 하루 한 번 별칭(cur · pub)이 가리키는 함수 판을 보고 남긴 결과(정상 · 쉬는 판 · 옮김 · 멈춤 · 못 고침)와 그 시각.
+  //   원본 zip 판을 잃었거나 곧 지워질 옛 판을 읽으면 같은 빌드의 지금 zip 으로 새 판을 고정해 별칭을 옮긴다(app-server-watch ⑦).
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health JSONB;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS health_checked_at TIMESTAMPTZ;`);
+  //  #4486(v2-7) cur_guard · pub_guard — 그 별칭의 함수 판에 단 신원 검사 층의 판(app-server-guard GUARD_VERSION). 백그라운드 작업은 4 판부터 받는다
+  //   (작업 신원 확인 · 사람 요청 시간 끊기 · 함수 시간 15분) — 그 전 판(빈 칸)이면 다시 올리라고 말한다(app_server_outdated 와 같은 안내).
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT;`);
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS pub_guard INT;`);
+  //  org_app_job(#4486 앱 v2-7) — 앱 백그라운드 작업 한 건: 앱 서버의 라우트 하나를 게이트웨이가 함수에 비동기로 맡긴 것(함수 시간 15분까지).
+  //   흐름: queued(줄) → dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원)
+  //   → done · failed · canceled(검사 층의 결과 보고 · 감시). 판정은 apps/app-jobs-plan.ts · 흐름은 apps/app-jobs.ts.
+  //   ⚠ 비밀 **값**은 없다 — sha256 만. 상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만»(청/녹 두 슬롯 · 감시 · 검사 층 보고가 겹쳐도 한 번만).
+  //   lambda_version · token_hash = 이 작업이 돌 함수 판과 그 판에 구운 앱 서버 토큰 — 작업이 열려 있는 동안 배포가 그 판을 정리하거나 토큰을 회수하지 않는다.
+  //   body = 앱이 넘긴 JSON 글(job_body_kb 까지 · 시작(claim)하거나 끝나면 비운다 — 시작 못 하고 끝난 줄도) · result = 앱 응답의 앞 64KB(글 · JSON · base64).
+  //   끝난 지 app_server_policy.job_keep_days(기본 30일)가 지나면 행째 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_job(
+      id BIGSERIAL PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','dispatched','running','done','failed','canceled')),
+      requester TEXT NOT NULL,
+      variant TEXT NOT NULL CHECK (variant IN ('pub','draft')),
+      alias TEXT NOT NULL CHECK (alias IN ('cur','pub')),
+      function_name TEXT NOT NULL,
+      lambda_version TEXT NOT NULL,
+      token_hash TEXT,
+      route TEXT NOT NULL,
+      body TEXT NOT NULL,
+      body_bytes INT NOT NULL DEFAULT 0,
+      label TEXT,
+      timeout_s INT NOT NULL,
+      source TEXT,
+      parent_id BIGINT,
+      depth INT NOT NULL DEFAULT 0,
+      call_hash TEXT,
+      run_hash TEXT,
+      attempts INT NOT NULL DEFAULT 0,
+      cancel_requested BOOLEAN NOT NULL DEFAULT false,
+      status_code INT,
+      result JSONB,
+      error TEXT,
+      duration_ms INT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      dispatched_at TIMESTAMPTZ,
+      claimed_at TIMESTAMPTZ,
+      last_tick_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  //  감시 · 배차가 보는 것(열린 작업) · 앱의 작업 목록 · 내 작업 · 보존 정리.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_open_idx ON org_app_job(app_id, id) WHERE status IN ('queued','dispatched','running');`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_app_idx ON org_app_job(app_id, id DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_requester_idx ON org_app_job(requester, id DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_ended_idx ON org_app_job(ended_at) WHERE ended_at IS NOT NULL;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
   await pool.query(`ALTER TABLE org_app_server_build ADD COLUMN IF NOT EXISTS keep_until TIMESTAMPTZ;`);
   //  #4801 org_app_server_build.zip_version — 빌드가 올린 zip 의 S3 판 번호(버킷이 판 번호를 켰을 때). Lambda 가 코드를 복사하지 않고 이 판을
@@ -565,6 +638,10 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_id TEXT;`);
+  //  #4891 app_server_principal — 이 앱 토큰의 주체는 앱 서버 급이다(사람 ∩ 앱 동의 · 능력 API 와 /mcp 에서만 · 무조건 통과 도구 없음).
+  //   사람 홈 없는 작업 컨테이너의 작업 AI 토큰이 쓴다 — 그 AI 를 부린 것은 앱 서버 코드라 사람의 다른 길(세션 · 파일 · 계정)을 열지 않는다.
+  //   app_id 없이는 뜻이 없다(검증이 거부한다 — tokens.verifyDbToken).
+  await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_server_principal BOOLEAN NOT NULL DEFAULT false;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS auth_token_app_idx ON auth_token(app_id) WHERE app_id IS NOT NULL;`);
   //  org_session_state.app_id — 세션이 어느 앱으로 떴나(desired-state 미러).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS app_id TEXT;`);

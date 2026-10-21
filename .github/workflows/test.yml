@@ -517,6 +517,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-servers.pg-test.mjs
+      # ⑤-m2b 앱 백그라운드 작업(#4486 앱 v2-7) — 받기 · 줄 세우기(앱 · 워크스페이스 동시 상한 · 대기 · 하루 상한) · 가짜 Lambda 비동기 부르기 ·
+      #    검사 층의 claim(한 번 쓰는 비밀 — 재전송 409 · 위조 401) · 박동 · 결과 · 돌기 신원의 사람 주체 · 취소 · 감시(다시 부름 · 박동 없음 ·
+      #    시간 초과) · 배포가 열린 작업의 판 · 토큰을 남기는지 · 앱 지우기 · 보존은 진짜 SQL 조건과 잠금에서만 보인다.
+      - name: 앱 백그라운드 작업(받기 · 부르기 · claim · 박동 · 결과 · 감시) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-jobs.pg-test.mjs
       # ⑤-n3 앱 폴더 보관(#4778) — 앱을 지우는 모든 입구(관리자 제거 · 나만 보는 앱 지우기 · 기본 앱 은퇴 · 빈 예약 거두기)가 앱 폴더를
       #    보관으로 옮기는지, 같은 id 로 새로 만들 때 남은 폴더를 먼저 옮겨 새 앱이 빈 폴더로 시작하는지(옛 파일 서명 주소 404 · 탐색기 빈 목록),
       #    보관 기간이 지나면 지우는지, 관리자 목록 · 비우기 · 되돌리기 · 고아 옮기기가 기록 표와 실제 폴더를 같이 맞추는지는 진짜 DB · 폴더에서만 보인다.

@@ -85,6 +85,12 @@ export interface SessionEnsureRequest {
    *  `LVLY_NO_SESSION_CONTAINER` 로 답하고 아무것도 만들지 않는다 — 앱 하나 붙이자고 끝난 세션을 되살리지 않는다.
    */
   noCreate?: boolean;
+  /**
+   * #4891 — 사람 홈 없는 작업 컨테이너(앱 서버가 보낸 API 키 에이전트 작업). 브로커는 멤버 홈을 붙이지 않고 컨테이너 안에 빈 홈을 만든다 —
+   *  작업 세션(`job-`) · 앱 폴더 작업 폴더 · 전용 계정(agent-jobs/plan.HOMELESS_OS_USER)일 때만 받는다. 받으면 응답에 `homeless: true` 를 싣는다 —
+   *  모르는 브로커(#4891 전)는 이 필드를 무시하고 홈을 붙이므로, 부르는 쪽은 그 표시가 없으면 그 컨테이너를 쓰지 않는다(launch.ts).
+   */
+  homeless?: boolean;
 }
 
 /**

@@ -47,6 +47,7 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   const claudeExecution = String(process.env.CLAUDE_SESSION_ID || "").trim();
   const executionId = directExecution
     || (harness === "codex" ? `codex-${sessionId}` : "")
+    || (harness === "cursor" ? `cursor-${sessionId}` : "")   // #4927 cursor-adapter
     || (harness === "claude" ? `claude-${sessionId}` : "")
     || (codexExecution ? `codex-${codexExecution}` : "")
     || (claudeExecution ? `claude-${claudeExecution}` : "");

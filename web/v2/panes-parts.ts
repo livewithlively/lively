@@ -37,6 +37,7 @@ import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { openInstalledApp } from './app-instance.js';
 import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
@@ -140,7 +141,9 @@ export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
   // #4876(원준 2026-10-19) — 첫 탭. 세션을 열고 첫 답 전엔 «알려 줄 것» 점검표, 첫 답 뒤엔 «다녀온 사이 · 남긴 것». 조작(파일 넣기 · 지시 문장 · 멈추기)은 바닥 줄.
   { type: 'console', name: '콘솔', icon: 'console', hint: '이 세션에 시키는 일을 돕고, 다른 세션에 갔다 돌아왔을 때 그 사이 생긴 것과 남긴 것을 보여 줍니다.' },
-  { type: 'files', name: '자료', icon: 'folder', multi: true, hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
+  //  #4882(원준 2026-10-19 «세션 우측의 자료 위젯도 자료 앱에서 나온 위젯인걸로») — 자료 앱(apps.ts APPS 'sources')의 세션 위젯이다.
+  //   그림은 그 앱의 이름(src)을 써서 탭 · 독 · 앱 서랍이 런치패드의 자료 앱과 같은 얼굴(폴더 · 자료 색)로 선다. 칸 머리에 그 앱으로 가는 문이 있다(panes-files).
+  { type: 'files', name: '자료', icon: 'src', multi: true, hint: '자료 앱의 세션 위젯 — 이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   // #4088 후속(2026-09-23) — 세션이 만든 파일이 **프로젝트 폴더 밖**(프로젝트 없는 세션·개인 폴더)에 있으면 여기서 본다. 폰의 «자료로 바로 가기»가 이 칸을 연다.
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
   { type: 'knowledge', name: '지식', icon: 'wiki', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
@@ -1499,10 +1502,10 @@ function appsPart(ctx: PartCtx): Part {
       return;
     }
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
-      const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
+      const hasUi = hasAppScreen(a) || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
       //  붙일 수 있는 앱 = 세션 옆에 둘 화면이 있거나 AI 가 쓸 데이터가 있는 앱. 브라우저 같은 시스템 앱은 제 탭이 정본이다.
-      const attachable = (a.pages.length > 0 || a.tables.length > 0) && !a.system;
+      const attachable = (hasAppScreen(a) || a.tables.length > 0) && !a.system;
       const openTab = (): void => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); };
       const tile = el('button', { class: 'pn-app', type: 'button',
         title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',

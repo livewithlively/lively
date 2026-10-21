@@ -95,7 +95,7 @@ export function multiFileFallbackHtml(title: string, appUrl?: string | null): st
 }
 
 /** HTML 안에 넣는 스크립트가 문서를 깨지 않게 — `</script` 를 끊는다(원본 둘 다 우리 코드지만 한 번 더 막는다). */
-const inlineSafe = (js: string): string => js.replace(/<\/script/gi, "<\\/script");
+export const inlineSafe = (js: string): string => js.replace(/<\/script/gi, "<\\/script");
 
 /** SDK 런타임(+ 탐침)을 문서 머리에 끼운다(doctype 뒤 · 없으면 맨 앞). app-ui.ts wrapAppHtml 과 같은 자리. */
 export function buildAppPageHtml(html: string, scripts: { runtime: string; probe?: string | null }): string {

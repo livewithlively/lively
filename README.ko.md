@@ -114,7 +114,7 @@ PUBLIC_URL=http://<서버 주소>:8080 BOOTSTRAP_ADMIN_EMAIL=you@example.com bas
 
 ## 지원 범위
 
-**AI 도구**: Claude Code(기본), Codex, OpenCode, Antigravity CLI, Grok Build. 어느 도구를 써도 같은 맥락이 주입되고, 공유 세팅이 도구마다 맞는 형식으로 깔립니다.
+**AI 도구**: Claude Code(기본), Codex, OpenCode, Antigravity CLI, Grok Build, Cursor(IDE·CLI). 어느 도구를 써도 같은 맥락이 주입되고, 공유 세팅이 도구마다 맞는 형식으로 깔립니다.
 
 **수집기**: Slack, Discord, Notion, Google Drive, Gmail, Outlook, GitHub, GitLab, Linear, ClickUp, Figma, 파일 업로드. 목록에 없는 사내 API는 범용 드라이버(HTTP·RSS·웹훅)로 코드 없이 붙입니다. 코드 레포와 사내 DB도 읽기 전용으로 연결합니다.
 

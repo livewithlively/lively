@@ -499,6 +499,37 @@ export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
   }
 }
 
+/** tmux 가 «이 소켓엔 서버가 없다» 고 답했나 — 스테일 소켓 "no server running" · 소켓 파일 없음 "error connecting … (No such file …)". */
+export function isTmuxServerAbsentError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown };
+  if (e.killed || e.signal) return false;       // 타임아웃·시그널 — 서버가 답한 게 아니다
+  return RELAY_SERVER_GONE_RE.test(String(e.stderr ?? ""));
+}
+
+/**
+ * 노드(멤버 PC)가 «gone» op 에 내는 답 (#4917) — 그 PC 에 **tmux 서버가 아예 없으면** 끝남 확답이다.
+ *
+ * ── 왜 (실측 2026-10-19~20, 맥미니) ─────────────────────────────────────────────
+ *  tmux 서버가 비정상 종료하면(3.6a segfault) 그 PC 의 세션이 전부 함께 사라지고, 다음 세션을 띄우기 전까지
+ *  서버가 없다. 그동안 `has-session` 은 "can't find session" 이 아니라 "error connecting to …" 를 내고, 기본
+ *  소켓의 규약(#835 — 모르면 끝났다고 말하지 않는다)이 그걸 «모른다 → 살아 있음» 으로 접었다. 그래서
+ *  `POST …/restore` 가 `already:true` 로 끝났고, 화면은 «이어받기 세션을 열었어요» 뒤에 같은 세션에 머물렀다 —
+ *  세 세션이 17시간 동안 되살릴 수 없었다. 첫 세션을 누가 띄워 서버가 다시 선 뒤에야 풀렸다.
+ *
+ * ★ 노드에서는 «서버 부재» 가 «모른다» 가 아니다. 노드 에이전트는 세션을 **자기가 부르는 바로 그 소켓**에
+ *  만들고, 중계·전송 층이 없다(tmuxViaRelay 머리말). 그 소켓에 서버가 없으면 거기 살던 세션은 회수 불가다 —
+ *  살아 있는 세션이 있다면 서버가 살아 있어 이 문구가 나올 수 없다(#1437 과 같은 논리).
+ *  `has-session` 한 번으로 믿지 않고 `list-sessions` 로 서버 부재를 한 번 더 확인한다. 서버가 있는데 «모른다» 면
+ *  (타임아웃 등) 종전대로 살아 있음으로 둔다 — 바뀌는 것은 «서버가 없다» 갈래 하나뿐이다.
+ */
+export async function sessionGoneOnNode(id: string): Promise<boolean> {
+  const verdict = await sessionGoneVerdict(id);
+  if (verdict !== null) return verdict;
+  try { await tmux(["list-sessions", "-F", "#{session_name}"]); return false; }   // 서버는 있다 — 모름은 종전대로
+  catch (err) { return isTmuxServerAbsentError(err); }
+}
+
 // 리사이즈로 tmux 히스토리에 쌓인 프롬프트 중복(shrink→grow 시 overflow가 history 로 밀림)을 정리.
 //  force=false: 히스토리가 작을 때만(=신선/경량 세션의 시작 churn) 정리 → 실작업 스크롤백은 보존.
 //  force=true: 무조건 정리('다시 그리기' 버튼). clear-history 는 보이는 화면이 아니라 스크롤백만 비운다.

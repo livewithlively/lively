@@ -73,7 +73,7 @@ const appServerDeploy: Capability = {
     "start 'HOSTNAME=0.0.0.0 node server.js'). 앱 폴더(/var/task)는 읽기 전용이고 /tmp 만 쓸 수 있다 — /tmp 아래를 가리키는 링크는 시작 전에 그 자리를 만든다. " +
     "올린 뒤 GET / 로 한 번 불러 서버가 뜨는지 본다(안 뜨면 기록과 함께 실패 · 앱 주소는 그대로). 그 판을 **저장한 사람**의 세션에서만 빌드한다 — 남이 저장한 판은 이미 빌드됐을 때만 올라간다. " +
     "빌드는 몇 분 걸릴 수 있어 wait_s(기본 50초) 안에 안 끝나면 status 'running' 으로 돌아오고 뒤에서 이어 간다 — app_server_status 로 본다(실패하면 이 세션에 기록이 들어온다). " +
-    "공개(app_visibility_set 'all' · publish:true)는 그 판이 빌드된 뒤에만 된다. 앱 주소 → 서버 연결은 v2-6 에서 열린다(지금은 함수만 생긴다). " +
+    "공개(app_visibility_set 'all' · publish:true)는 그 판이 빌드된 뒤에만 된다. 앱 주소의 /_lively/* 밖 경로는 이 함수가 답한다(v2-6 — 게이트웨이가 부르고 · 사람 신원은 함수 안 검사 층이 확인해 x-lively-member 로 넘긴다). " +
     "status 'deployed' 여도 warnings 가 있으면 읽는다(예: 로그 그룹을 못 맞춤 — 그 함수 기록이 CloudWatch 에 안 남을 수 있다 · 다시 넣으면 다시 맞춘다).",
   scope: null,
   input: {
@@ -132,6 +132,8 @@ const appServerStatus: Capability = {
   title: "앱 서버 상태",
   description: "앱 서버의 상태 — 서버 선언(web.server) · 지금 판의 빌드(빌드 중이면 지금 하는 일 · 실패면 단계와 까닭) · 함수(cur = 고친 사람이 보는 판 · pub = 공개 판이 가리키는 판) · " +
     "멈춤 여부 · code_mb(이 함수의 코드 저장) · retire(지금 판 · 공개 판 둘 다 web.server 를 뺐으면 함수를 걷는 날 retire_at — 서버 판을 다시 올리면 걷힌다) · " +
+    "health(하루 한 번 점검 — checked_at · 별칭마다 ok · idle(쉬는 판) · moved(곧 지워질 옛 zip 판 · 원본 잃은 판을 같은 빌드로 옮김) · repaired(멈췄던 판을 다시 올림) · " +
+    "unfixed · failed(못 고침 — 서버를 다시 넣으면 다시 빌드) · deferred(이번에 못 본 까닭 · 연속 횟수)) · " +
     "최근 빌드 5개(걸린 시간 · zip 크기 · 세션 안 메모리 최저). 앱을 볼 수 있는 구성원 누구나.",
   scope: null,
   input: { app_id: z.string() },
@@ -196,8 +198,11 @@ const appServerLimits: Capability = {
   description: "앱 서버 상한 — policy(지금 값: memory_mb 함수 메모리 · timeout_s 요청 시간 · build_timeout_s 빌드 시간 · build_mem_floor_mb 빌드를 멈추는 세션 남은 메모리 · " +
     "build_heap_mb 빌드 node 힙 · stop_invocations_5m · stop_duration_s_5m 자동 멈춤 기준 · log_retention_days · keep_versions · " +
     "workspace_functions_max 이 워크스페이스의 서버 함수 수(앱마다 하나 · 새 함수만 막는다) · workspace_code_mb 이 워크스페이스 함수들의 코드 저장 합(MiB · AWS 가 세는 판마다의 zip 크기 · " +
-    "늘리는 배포만 막는다) · unused_retire_days 지금 판 · 공개 판 둘 다 web.server 가 없는 앱의 함수를 걷기까지의 날수) · workspace_setting · platform_default · min · ceiling · " +
-    "usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
+    "늘리는 배포만 막는다) · unused_retire_days 지금 판 · 공개 판 둘 다 web.server 가 없는 앱의 함수를 걷기까지의 날수 · " +
+    "max_inflight_workspace · max_inflight_app 동시 처리 상한 — 워크스페이스 · 앱마다 지금 처리 중인 요청 수, 넘으면 함수를 부르지 않고 429 · 앱 값은 워크스페이스 값까지만 쓴다 · " +
+    "#4486 백그라운드 작업: job_timeout_s 함수 시간 = 작업 하나의 시간(사람 요청은 timeout_s 에서 검사 층이 끊는다) · memory_max_mb 앱이 web.server.memory_mb 로 고를 수 있는 천장 · " +
+    "jobs_running_workspace · jobs_running_app 동시에 도는 작업 수(넘으면 줄을 선다) · jobs_queued_app 앱의 대기 줄 · jobs_daily_app 앱의 최근 24시간 작업 수 · job_wait_s 대기 시간 · job_body_kb 작업 본문 · job_keep_days 끝난 작업 기록 보존 일수) · " +
+    "workspace_setting(저장한 값) · platform_default · min · ceiling · usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
   scope: null,
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/app-server-limits"], parse: () => ({}) }] },
@@ -207,10 +212,13 @@ const appServerLimits: Capability = {
 const appServerLimitsSet: Capability = {
   name: "app_server_limits_set",
   title: "앱 서버 상한 고치기",
-  description: "이 워크스페이스의 앱 서버 상한을 고친다(배포 없이 · 함수 메모리 · 시간은 다음 배포부터 · 함수 수 · 코드 저장은 다음 배포부터 — 내려도 있는 함수는 그대로). " +
-    "준 값만 바뀌고 reset:true 면 플랫폼 기본으로. " +
+  description: "이 워크스페이스의 앱 서버 상한을 고친다(배포 없이 · 함수 메모리 · 시간은 다음 배포부터 · 함수 수 · 코드 저장은 다음 배포부터 — 내려도 있는 함수는 그대로 · " +
+    "동시 처리 상한은 10초 안에). 준 값만 바뀌고 reset:true 면 플랫폼 기본으로. " +
     `천장: 메모리 ${APP_SERVER_POLICY_MAX.memory_mb}MB · 요청 ${APP_SERVER_POLICY_MAX.timeout_s}초 · 빌드 ${APP_SERVER_POLICY_MAX.build_timeout_s}초 · ` +
-    `함수 ${APP_SERVER_POLICY_MAX.workspace_functions_max}개 · 코드 저장 ${APP_SERVER_POLICY_MAX.workspace_code_mb}MB. 관리자.`,
+    `함수 ${APP_SERVER_POLICY_MAX.workspace_functions_max}개 · 코드 저장 ${APP_SERVER_POLICY_MAX.workspace_code_mb}MB · ` +
+    `동시 처리 워크스페이스 ${APP_SERVER_POLICY_MAX.max_inflight_workspace} · 앱 ${APP_SERVER_POLICY_MAX.max_inflight_app}(앱 값은 워크스페이스 값까지만 쓴다) · ` +
+    `작업 시간 ${APP_SERVER_POLICY_MAX.job_timeout_s}초 · 앱 메모리 천장 ${APP_SERVER_POLICY_MAX.memory_max_mb}MB · 동시 작업 워크스페이스 ${APP_SERVER_POLICY_MAX.jobs_running_workspace} · ` +
+    `앱 ${APP_SERVER_POLICY_MAX.jobs_running_app} · 작업 본문 ${APP_SERVER_POLICY_MAX.job_body_kb}KB · 작업 기록 보존 ${APP_SERVER_POLICY_MAX.job_keep_days}일(작업 시간 · 메모리는 다음 배포부터 · 작업 수 · 보존은 곧바로). 관리자.`,
   scope: "admin",
   input: {
     ...Object.fromEntries(APP_SERVER_POLICY_KEYS.map((k) => [k, z.number().int().min(APP_SERVER_POLICY_MIN[k]).max(APP_SERVER_POLICY_MAX[k]).optional()])),
@@ -236,7 +244,8 @@ const appServerLimitsSet: Capability = {
         if (!Number.isInteger(n) || n < APP_SERVER_POLICY_MIN[k] || n > APP_SERVER_POLICY_MAX[k]) throw new HttpError(400, `${k} 는 ${APP_SERVER_POLICY_MIN[k]}~${APP_SERVER_POLICY_MAX[k]} 정수여야 합니다`);
         next[k] = n;
       }
-      const norm: AppServerPolicy = normalizeAppServerPolicy(next, envAppServerPolicy());
+      //  저장은 준 값 그대로(칸끼리 맞추지 않는다) — 앱 동시 처리 상한이 워크스페이스 값보다 커도 쓸 때만 깎는다(normalizeAppServerPolicy effective).
+      const norm: AppServerPolicy = normalizeAppServerPolicy(next, envAppServerPolicy(), { effective: false });
       next = Object.fromEntries(Object.keys(next).map((k) => [k, norm[k as keyof AppServerPolicy]]));
     }
     await setAppServerPolicy(next, { actor: actorOf(user), source: ctx?.source ?? "web" });

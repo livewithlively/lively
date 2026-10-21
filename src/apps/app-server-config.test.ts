@@ -3,14 +3,17 @@
 //  B1~B12 는 사양 엣지 표(spec-4484.md B절 · E절)의 행 번호다.
 import assert from "node:assert/strict";
 import {
-  LOG_GROUP_TAG, appServerEnv, buildKeyOf, codeAt, functionCodeFor, functionNameFor, lambdaEnvFor, logGroupArnFor, logGroupTagBundleFor, logGroupTagsFor, serverDeclOf, smokeFailure, zipKeyFor,
+  GUARD_ENV, LOG_GROUP_TAG, appServerApiUrl, appServerEnv, buildKeyOf, codeAt, functionCodeFor, functionNameFor, functionSizingFor, lambdaEnvFor, logGroupArnFor, logGroupTagBundleFor,
+  logGroupTagsFor, serverDeclOf, smokeFailure, zipKeyFor,
 } from "./app-server-config.js";
 import {
   APP_SERVER_POLICY_DEFAULT, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, autoStopReason, codeBytesAfterDeploy, codeBytesOf, codeCapDenial, envAppServerPolicy, functionsCapDenial,
   normalizeAppServerPolicy, retentionDaysFor,
 } from "./app-server-policy.js";
 import type { AppBundle } from "./app-bundle.js";
-import { REFERENCE_PERMISSION_RE, ZIP_MISSING_RE, publicError, realLambdaApi, scrubAws } from "./app-server-deploy.js";
+import { REFERENCE_PERMISSION_RE, ZIP_MISSING_RE, configDrift, publicError, realLambdaApi, scrubAws } from "./app-server-deploy.js";
+import { GUARD_BOOTSTRAP_PATH, GUARD_PORT, GUARD_READY_PATH } from "./app-server-guard.js";
+import type { FnConfiguration } from "../net/aws/lambda-lite.js";
 import { appServerEnabledFor } from "./app-server-config.js";
 import { withTenant } from "../org/tenant-context.js";
 import { AwsError } from "../net/aws/aws-json.js";
@@ -20,8 +23,8 @@ const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`o
 const h = (c: string): string => c.repeat(64).slice(0, 64);
 
 t("B1 서버 선언 — true · 객체(다듬음) · 없음 · 배열 · 문자열", () => {
-  assert.deepEqual(serverDeclOf({ web: { server: true } }), { start: null, build: null, dir: null });
-  assert.deepEqual(serverDeclOf({ web: { server: { start: "  node s.js ", build: "npm run b" } } }), { start: "node s.js", build: "npm run b", dir: null });
+  assert.deepEqual(serverDeclOf({ web: { server: true } }), { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: "  node s.js ", build: "npm run b" } } }), { start: "node s.js", build: "npm run b", dir: null, memory_mb: null, tmp_mb: null });
   assert.equal(serverDeclOf({ web: { root: "dist" } }), null);
   assert.equal(serverDeclOf({}), null);
   assert.equal(serverDeclOf(null), null);
@@ -30,10 +33,10 @@ t("B1 서버 선언 — true · 객체(다듬음) · 없음 · 배열 · 문자�
 });
 
 t("B2 서버 선언 칸 — 빈 글 · 2,001자 · NUL · 숫자는 null(=package.json 을 쓴다)", () => {
-  assert.deepEqual(serverDeclOf({ web: { server: { start: "   " } } }), { start: null, build: null, dir: null });
-  assert.deepEqual(serverDeclOf({ web: { server: { start: "x".repeat(2001), build: "a\0b" } } }), { start: null, build: null, dir: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: "   " } } }), { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: "x".repeat(2001), build: "a\0b" } } }), { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null });
   assert.deepEqual(serverDeclOf({ web: { server: { start: "x".repeat(2000) } } })?.start?.length, 2000);
-  assert.deepEqual(serverDeclOf({ web: { server: { start: 5 } } }), { start: null, build: null, dir: null });
+  assert.deepEqual(serverDeclOf({ web: { server: { start: 5 } } }), { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null });
 });
 
 t("B11 서버 선언 dir — 다듬음 · 끝 빗금 · '.' · 200자 경계 · 201자 · 숫자", () => {
@@ -60,7 +63,7 @@ t("B3 함수 이름 — 64자까지 · 65자 null · 금지 글자 null", () => 
 
 const bundle = (files: Array<[string, string]>): AppBundle => ({ v: 1, files: files.map(([p, c]) => ({ p, h: h(c), s: 1 })) });
 const rt = { runtime: "nodejs22.x", arch: "arm64" };
-const decl = { start: null, build: null, dir: null };
+const decl = { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null };
 t("B4 빌드 지문 — 매니페스트만 다름 · 파일 순서만 다름이면 같다", () => {
   const a = buildKeyOf(bundle([["lively-app.json", "1"], ["server.js", "2"], ["package.json", "3"]]), decl, rt);
   const b = buildKeyOf(bundle([["package.json", "3"], ["lively-app.json", "9"], ["server.js", "2"]]), decl, rt);
@@ -110,10 +113,67 @@ t("B8 시험 호출 실패 판독 — 오류 없음 null · 시작 직후 끝남
   assert.match(smokeFailure("Unhandled", JSON.stringify({ errorType: "Runtime.ExitError" }), "Error: Cannot find module")!, /시작하자마자/);
   assert.match(smokeFailure("Unhandled", JSON.stringify({ errorType: "Extension.Crash" }), "INFO app is not ready after 2000ms url=http://127.0.0.1:8080/")!, /PORT/);
   assert.match(smokeFailure("Unhandled", "not json", "")!, /Unhandled/);
-  const env = lambdaEnvFor("my-app");
-  assert.equal(env.AWS_LAMBDA_EXEC_WRAPPER, "/opt/bootstrap");
-  assert.equal(env.AWS_LWA_READINESS_CHECK_PROTOCOL, "tcp", "«/» 가 500 이어도 뜬다(2026-10-15 실측)");
-  assert.equal(env.PORT, env.AWS_LWA_PORT);
+});
+
+t("I1 ★ 함수 환경(#4485) — 웹 어댑터는 검사 층(:8099)으로 · 준비 판정도 검사 층 · 흘려 보내기 · 앱은 $PORT 8080 · 앱 값(주소 · 토큰 · 워크스페이스 · 공개 키)", () => {
+  const env = lambdaEnvFor("my-app", { tenantId: "11111111-2222-4333-8444-555555555555".toUpperCase(), slug: "lively-46e3", apiUrl: "https://lively-46e3.app.lvly.io", token: "lvk_x", identityPubkeys: "{\"k1\":\"x\"}", requestTimeoutS: 30 });
+  assert.equal(env.AWS_LAMBDA_EXEC_WRAPPER, GUARD_BOOTSTRAP_PATH, "웹 어댑터의 /opt/bootstrap 을 그대로 쓰면 검사 층이 앞에 서지 않는다");
+  assert.equal(env.AWS_LWA_PORT, String(GUARD_PORT));
+  assert.equal(env.LIVELY_GUARD_PORT, String(GUARD_PORT));
+  assert.equal(env.AWS_LWA_READINESS_CHECK_PORT, String(GUARD_PORT));
+  assert.equal(env.AWS_LWA_READINESS_CHECK_PATH, GUARD_READY_PATH);
+  assert.equal(env.AWS_LWA_READINESS_CHECK_PROTOCOL, "http");
+  assert.equal(env.AWS_LWA_INVOKE_MODE, "response_stream");
+  assert.equal(env.PORT, "8080");
+  assert.notEqual(env.PORT, env.AWS_LWA_PORT, "앱과 검사 층이 같은 포트면 앱이 검사 층 없이 받는다");
+  assert.equal(env.LIVELY_APP_ID, "my-app");
+  assert.equal(env.LIVELY_TENANT_ID, "11111111-2222-4333-8444-555555555555", "검사 층은 소문자로 대조한다");
+  assert.equal(env.LIVELY_WORKSPACE, "lively-46e3");
+  assert.equal(env.LIVELY_API_URL, "https://lively-46e3.app.lvly.io");
+  assert.equal(env.LIVELY_APP_TOKEN, "lvk_x");
+  assert.equal(env.LIVELY_APP_IDENTITY_PUBKEYS, "{\"k1\":\"x\"}");
+  for (const k of ["DATABASE_URL", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "LIVELY_LLM_BASE_URL"]) assert.equal(env[k], undefined, `${k} 를 넣었다(설계 §3-D · §12 ⑤-3)`);
+  assert.deepEqual(Object.keys(lambdaEnvFor("a")).filter((k) => k.startsWith("LIVELY_") && k !== "LIVELY_APP_ID" && k !== "LIVELY_GUARD_PORT"), [], "rt 없이 앱 값이 들어갔다");
+  for (const [k, v] of Object.entries(GUARD_ENV)) assert.equal(lambdaEnvFor("a")[k], v);
+});
+
+t("I2 라이블리 주소 — 프로필이 그 워크스페이스 주소면 그대로 · CP 주소면 PUBLIC_URL 앞에 슬러그 · 슬러그 없음 → 프로필 · 둘 다 없음 → null", () => {
+  const env = { PUBLIC_URL: "https://app.lvly.io" };
+  assert.equal(appServerApiUrl("lively-46e3", "https://lively-46e3.app.lvly.io/", env), "https://lively-46e3.app.lvly.io");
+  assert.equal(appServerApiUrl("lively-46e3", "https://app.lvly.io", env), "https://lively-46e3.app.lvly.io", "CP 주소로 보내면 앱 서버가 CP 를 부른다");
+  assert.equal(appServerApiUrl("LIVELY-46E3", null, env), "https://lively-46e3.app.lvly.io");
+  assert.equal(appServerApiUrl("lively-46e3", "https://other-1a2b.app.lvly.io", env), "https://lively-46e3.app.lvly.io", "남의 워크스페이스 주소");
+  assert.equal(appServerApiUrl(null, "https://dev.lvly.io", {}), "https://dev.lvly.io");
+  assert.equal(appServerApiUrl("x", "not a url", {}), null);
+  assert.equal(appServerApiUrl(null, null, {}), null);
+  assert.equal(appServerApiUrl("lively-46e3", "ftp://lively-46e3.app.lvly.io", env), "https://lively-46e3.app.lvly.io", "http(s) 밖 프로필은 쓰지 않는다");
+});
+
+t("I3 ★ 설정 비교 — 토큰 값만 다르면 같다(새 판 없음) · exact 면 다르다 · 토큰 칸이 없으면 다르다 · 레이어 순서 · 개수", () => {
+  const want = { role: "r", handler: "h", runtime: "nodejs22.x", memory: 512, timeout: 30, layers: ["L1", "L2"], vars: { A: "1", LIVELY_APP_TOKEN: "new" } };
+  const cfg = (o: Partial<FnConfiguration> = {}): FnConfiguration => ({ FunctionName: "f", FunctionArn: "a", Role: "r", Handler: "h", Runtime: "nodejs22.x", MemorySize: 512, Timeout: 30,
+    Layers: [{ Arn: "L1" }, { Arn: "L2" }], Environment: { Variables: { A: "1", LIVELY_APP_TOKEN: "old" } }, ...o });
+  assert.deepEqual(configDrift(cfg(), want), {}, "토큰 값만 다른데 새 판을 만든다");
+  assert.ok(configDrift(cfg(), want, { exact: true }).Environment, "새 판을 고정할 때 옛 토큰을 그대로 둔다");
+  assert.ok(configDrift(cfg({ Environment: { Variables: { A: "1" } } }), want).Environment, "토큰이 없는 판을 재사용한다(v2-5 판)");
+  assert.ok(configDrift(cfg({ Environment: { Variables: { A: "1", LIVELY_APP_TOKEN: "" } } }), want).Environment, "빈 토큰");
+  assert.ok(configDrift(cfg({ Environment: { Variables: { A: "2", LIVELY_APP_TOKEN: "old" } } }), want).Environment, "다른 값");
+  assert.deepEqual(configDrift(cfg({ Layers: [{ Arn: "L2" }, { Arn: "L1" }] }), want).Layers, ["L1", "L2"], "레이어 순서");
+  assert.deepEqual(configDrift(cfg({ Layers: [{ Arn: "L1" }] }), want).Layers, ["L1", "L2"], "검사 층 레이어가 빠진 판(v2-5)");
+});
+
+t("I4 동시 처리 상한 — 기본 워크스페이스 50 · 앱 20 · 앱 상한이 워크스페이스 상한을 넘으면 워크스페이스 값 · 바닥 1", () => {
+  assert.equal(APP_SERVER_POLICY_DEFAULT.max_inflight_workspace, 50);
+  assert.equal(APP_SERVER_POLICY_DEFAULT.max_inflight_app, 20);
+  assert.equal(normalizeAppServerPolicy({ max_inflight_workspace: 10, max_inflight_app: 30 }).max_inflight_app, 10);
+  assert.equal(normalizeAppServerPolicy({ max_inflight_workspace: 10, max_inflight_app: 10 }).max_inflight_app, 10, "경계 — 같으면 그대로");
+  assert.equal(normalizeAppServerPolicy({ max_inflight_app: 0 }).max_inflight_app, 20, "0 은 «그 값 없음» = 기본");
+  assert.equal(normalizeAppServerPolicy({ max_inflight_workspace: 999_999 }).max_inflight_workspace, APP_SERVER_POLICY_MAX.max_inflight_workspace);
+  //  Q1 저장할 값은 칸끼리 맞추지 않는다 — 앱 500 · 워크스페이스 50 을 저장해 두면 지금은 50 을 쓰고, 워크스페이스를 600 으로 올리면 500 이 살아난다.
+  const stored = normalizeAppServerPolicy({ max_inflight_workspace: 50, max_inflight_app: 500 }, APP_SERVER_POLICY_DEFAULT, { effective: false });
+  assert.equal(stored.max_inflight_app, 500, "저장할 값을 깎았다");
+  assert.equal(normalizeAppServerPolicy(stored).max_inflight_app, 50, "쓰는 값은 워크스페이스 값까지");
+  assert.equal(normalizeAppServerPolicy({ ...stored, max_inflight_workspace: 600 }).max_inflight_app, 500, "워크스페이스를 올리면 저장한 앱 값이 살아난다");
 });
 
 t("B9 상한 정규화 — 모르는 키 버림 · 잡값 기본 · 바닥 · 천장 · 힙 0 허용 · 다른 칸 0 은 기본 · 보관 일수 맞춤", () => {
@@ -373,6 +433,62 @@ t("S5b zip 없음 원문도 버킷 · 키를 싣지 않는다 — 정해 둔 글
     assert.deepEqual(seen[1]!.body, { ...code, Publish: false });
   });
 }
+
+// ── #4486 앱 v2-7 백그라운드 작업 — 함수 하나 · 함수 시간 = 작업 시간 · 사람 요청 시간은 검사 층이 끊는다 · 크기는 앱 선언 ──
+t("J1 함수 크기 선언(web.server.memory_mb · tmp_mb) — Lambda 범위의 정수만 · 밖이면 null(기본값)", () => {
+  assert.deepEqual(serverDeclOf({ web: { server: { memory_mb: 2048, tmp_mb: 4096 } } }), { start: null, build: null, dir: null, memory_mb: 2048, tmp_mb: 4096 });
+  for (const [m, want] of [[128, 128], [10_240, 10_240], [127, null], [10_241, null], [1.5, null], ["1024", null], [-1, null]] as const) {
+    assert.equal(serverDeclOf({ web: { server: { memory_mb: m } } })?.memory_mb, want, `memory_mb ${m}`);
+  }
+  for (const [m, want] of [[512, 512], [10_240, 10_240], [511, null], [10_241, null]] as const) assert.equal(serverDeclOf({ web: { server: { tmp_mb: m } } })?.tmp_mb, want, `tmp_mb ${m}`);
+});
+
+t("J2 함수 크기 — 선언 없으면 워크스페이스 기본(512 · 임시 512) · 선언은 천장까지 줄이고 알림 · 못 읽은 선언도 알림", () => {
+  const pol = { memory_mb: 512, memory_max_mb: 4096 };
+  assert.deepEqual(functionSizingFor({ web: { server: {} } }, pol), { memory: 512, tmp: 512, notes: [] });
+  assert.deepEqual(functionSizingFor(null, pol), { memory: 512, tmp: 512, notes: [] }, "판 매니페스트를 못 읽은 상태 점검 길");
+  assert.deepEqual(functionSizingFor({ web: { server: { memory_mb: 3008, tmp_mb: 2048 } } }, pol), { memory: 3008, tmp: 2048, notes: [] });
+  const cut = functionSizingFor({ web: { server: { memory_mb: 8192 } } }, pol);
+  assert.equal(cut.memory, 4096);
+  assert.match(cut.notes[0]!, /8192MB.*4096MB/);
+  const bad = functionSizingFor({ web: { server: { memory_mb: "big", tmp_mb: 100 } } }, pol);
+  assert.deepEqual([bad.memory, bad.tmp], [512, 512]);
+  assert.equal(bad.notes.length, 2, "못 읽은 두 선언을 모두 알린다");
+});
+
+t("J3 함수 환경 — 사람 요청 시간(LIVELY_REQUEST_TIMEOUT_S)을 검사 층에 늘 넘긴다(앱 값을 싣는 함수엔 빠질 수 없다)", () => {
+  const rt = { tenantId: "11111111-2222-4333-8444-555555555555", slug: "w", apiUrl: "https://w.app.lvly.io", token: "t", identityPubkeys: "{}" };
+  assert.equal(lambdaEnvFor("a", { ...rt, requestTimeoutS: 30 }).LIVELY_REQUEST_TIMEOUT_S, "30");
+  assert.equal(lambdaEnvFor("a", { ...rt, requestTimeoutS: 60 }).LIVELY_REQUEST_TIMEOUT_S, "60");
+});
+
+t("J4 설정 비교 — 임시 디스크가 다르면 고친다 · AWS 가 칸을 안 보이면 512 로 본다 · want 에 없으면 보지 않는다(옛 부르는 쪽)", () => {
+  const base = { role: "r", handler: "h", runtime: "nodejs22.x", memory: 512, timeout: 900, layers: ["L1"], vars: { A: "1" } };
+  const cfg = (o: Partial<FnConfiguration> = {}): FnConfiguration => ({ FunctionName: "f", FunctionArn: "a", Role: "r", Handler: "h", Runtime: "nodejs22.x", MemorySize: 512, Timeout: 900,
+    Layers: [{ Arn: "L1" }], Environment: { Variables: { A: "1" } }, ...o });
+  assert.deepEqual(configDrift(cfg(), { ...base, tmp: 512 }), {}, "칸이 없는 함수 = 512");
+  assert.deepEqual(configDrift(cfg({ EphemeralStorage: { Size: 512 } }), { ...base, tmp: 2048 }).EphemeralStorage, { Size: 2048 });
+  assert.deepEqual(configDrift(cfg({ EphemeralStorage: { Size: 2048 } }), base), {}, "tmp 를 안 주면 보지 않는다");
+  assert.deepEqual(configDrift(cfg({ Timeout: 30 }), { ...base, tmp: 512 }).Timeout, 900, "옛 함수(요청 시간 30초)는 작업 시간으로 고친다");
+});
+
+t("J5 작업 상한 — 기본(함수 900초 · 메모리 천장 10GB · 동시 10/5 · 대기 100 · 하루 1,000 · 대기 30분 · 본문 256KB) · 앱 동시 ≤ 워크스페이스 · 기본 메모리 ≤ 천장", () => {
+  const d = APP_SERVER_POLICY_DEFAULT;
+  assert.deepEqual([d.job_timeout_s, d.memory_max_mb, d.jobs_running_workspace, d.jobs_running_app, d.jobs_queued_app, d.jobs_daily_app, d.job_wait_s, d.job_body_kb],
+    [900, 10_240, 10, 5, 100, 1000, 1800, 256]);
+  assert.equal(APP_SERVER_POLICY_MAX.job_timeout_s, 900, "Lambda 의 끝");
+  assert.equal(APP_SERVER_POLICY_MAX.memory_mb, 10_240);
+  assert.ok(APP_SERVER_POLICY_MAX.job_body_kb * 1024 * 4 / 3 < 1_000_000, "본문 천장의 base64 가 비동기 호출 한도(1MB) 안");
+  assert.equal(normalizeAppServerPolicy({ jobs_running_workspace: 3, jobs_running_app: 8 }).jobs_running_app, 3);
+  assert.equal(normalizeAppServerPolicy({ jobs_running_workspace: 3, jobs_running_app: 8 }, APP_SERVER_POLICY_DEFAULT, { effective: false }).jobs_running_app, 8, "저장은 준 값 그대로");
+  assert.equal(normalizeAppServerPolicy({ memory_mb: 8192, memory_max_mb: 2048 }).memory_mb, 2048);
+  assert.equal(normalizeAppServerPolicy({ job_timeout_s: 10 }).job_timeout_s, 60, "바닥 60초");
+  assert.equal(APP_SERVER_POLICY_MIN.job_timeout_s, 60);
+  //  작업 기록 보존(일) — 기본 30 · 바닥 1 · 천장 3650(작업 컨테이너 keep_days 와 같은 자리 · 0 은 «값 없음» = 기본).
+  assert.deepEqual([d.job_keep_days, APP_SERVER_POLICY_MIN.job_keep_days, APP_SERVER_POLICY_MAX.job_keep_days], [30, 1, 3650]);
+  assert.equal(normalizeAppServerPolicy({ job_keep_days: 0 }).job_keep_days, 30);
+  assert.equal(normalizeAppServerPolicy({ job_keep_days: 99_999 }).job_keep_days, 3650);
+});
 
 //  S7 재사용 판정이 기대는 이음매 — 실제 어댑터의 getFunction 이 판(Qualifier)을 실어 보내고 Code(코드 자리)를 그대로 돌려주는가(격리 리뷰).
 {

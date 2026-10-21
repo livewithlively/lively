@@ -112,13 +112,19 @@ async function bootZip(z: ZEnt[]): Promise<string> {
     if ((e.mode & 0o170000) === 0o120000) fs.symlinkSync(e.data.toString(), abs); else fs.writeFileSync(abs, e.data, { mode: e.mode & 0o777 });
   }
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: "ignore" });
+  //  detached = 제 프로세스 그룹. 시작 스크립트는 sh 라 서버(node)는 그 손자다 — sh 만 죽이면 node 가 PID 1 에 붙어 영영 남는다.
+  //   그래서 그룹째 죽인다.
+  const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: "ignore", detached: true });
   let body = "";
-  for (let i = 0; i < 50 && !body; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
+  try {
+    for (let i = 0; i < 50 && !body; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
+    }
+  } finally {
+    if (srvProc.pid) { try { process.kill(-srvProc.pid, "SIGKILL"); } catch { /* 이미 끝났다 */ } }
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   }
-  srvProc.kill("SIGKILL");
   return body;
 }
 const memFile = (mb: number): string => {

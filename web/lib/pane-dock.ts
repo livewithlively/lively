@@ -23,8 +23,16 @@ export interface DockPrefs {
   fx: number;
   /** 확대 — 마우스 밑 아이콘과 이웃이 커진다(macOS 의 «확대»). */
   mag: boolean;
+  /** 최소화 — 알약을 접어 손잡이 하나만 남긴다(원준 10-20 «핸들 부분 더블클릭해서 최소화»). 누르면 다시 펼친다. */
+  min: boolean;
+  /** 크기 배율 — 자리가 정한 아이콘 크기(이음매 22~32 · 곁칸 아래는 곁칸 폭을 따라)에 곱한다(원준 10-20 «사이즈 조절»).
+   *  1 = 보통. DOCK_SCALE 범위로 자른다. 들어갈 자리보다 크게는 안 선다(scaledIcon). */
+  sc: number;
 }
-export const DOCK_DEFAULTS: Readonly<DockPrefs> = { home: 'seam', at: 0.5, fx: 0.5, mag: true };
+export const DOCK_DEFAULTS: Readonly<DockPrefs> = { home: 'seam', at: 0.5, fx: 0.5, mag: true, min: false, sc: 1 };
+/** 크기 배율의 범위 — 0.5 = 이음매 아이콘 16px · 1.6 = 들어갈 자리가 있으면 이음매 51px. 메뉴의 «작게 · 크게» 는 SCALE_PRESETS. */
+export const DOCK_SCALE = { min: 0.5, max: 1.6 } as const;
+export const SCALE_PRESETS: readonly { label: string; sc: number }[] = [{ label: '작게', sc: 0.75 }, { label: '보통', sc: 1 }, { label: '크게', sc: 1.25 }];
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -40,11 +48,19 @@ export function readDockPrefs(raw: unknown): DockPrefs {
   const f = Number(m.fx);
   const fx = m.fx === undefined || m.fx === '' || !Number.isFinite(f) ? DOCK_DEFAULTS.fx : round2(clamp01(f));
   const mag = m.mag === '1' ? true : m.mag === '0' ? false : DOCK_DEFAULTS.mag;
-  return { home, at, fx, mag };
+  const min = m.min === '1';
+  const c = Number(m.sc);
+  const sc = m.sc === undefined || m.sc === '' || !Number.isFinite(c) ? DOCK_DEFAULTS.sc : clampScale(c);
+  return { home, at, fx, mag, min, sc };
 }
 /** 설정 → 계정에 적을 문자열 맵(서버 map 저장소는 문자열→문자열, 값 64자 상한). */
 export function writeDockPrefs(p: DockPrefs): Record<string, string> {
-  return { home: p.home, at: round2(clamp01(p.at)).toFixed(2), fx: round2(clamp01(p.fx)).toFixed(2), mag: p.mag ? '1' : '0' };
+  return { home: p.home, at: round2(clamp01(p.at)).toFixed(2), fx: round2(clamp01(p.fx)).toFixed(2), mag: p.mag ? '1' : '0',
+    min: p.min ? '1' : '0', sc: clampScale(p.sc).toFixed(2) };
+}
+/** 크기 배율을 범위로 자르고 소수 둘째 자리로. 깨진 값은 보통(1). */
+export function clampScale(v: number): number {
+  return Number.isFinite(v) ? round2(Math.max(DOCK_SCALE.min, Math.min(DOCK_SCALE.max, v))) : DOCK_DEFAULTS.sc;
 }
 /** 지금 실제로 서는 곳 — 이음매가 없으면(좁은 폭의 서랍 · 곁칸이 화면 전체인 카드 모드 · 접힘) 곁칸 아래. */
 export function effectiveHome(p: Pick<DockPrefs, 'home'>, hasSeam: boolean): DockHome { return hasSeam ? p.home : 'float'; }
@@ -216,6 +232,23 @@ export function floatIconSize(width: number, n: number, o: { min: number; max: n
   const s = Math.floor((width - 2 * o.margin - (o.extra ?? 0) - 2 * o.pad - o.gap * (n - 1)) / (n + (o.grow ?? 0)));
   return Math.max(o.min, Math.min(o.max, s));
 }
+/** 크기 배율을 입힌 아이콘 한 변 — auto = 자리가 정한 크기(보통), cap = 그 자리에 들어가는 가장 큰 크기(최대 제한 없이 잰 것).
+ *  키우면 cap 까지만(넘치면 곁칸 테두리에서 잘린다), 줄이면 floor(14px)까지. 보통(1)이면 auto 그대로. */
+export function scaledIcon(auto: number, cap: number, sc: number, floor = 14): number {
+  if (sc === 1) return auto;
+  return Math.max(floor, Math.min(Math.max(auto, cap), Math.round(auto * sc)));
+}
+/** 구분선을 끌어 크기를 바꾼다(macOS 독의 구분선 끌기) — 끈 거리(delta px, 커지는 쪽이 +)만큼 아이콘 한 변이 따라온다.
+ *  auto = 배율을 입히기 전의 보통 크기 · size0 = 끌기 시작 때 실제로 선 크기(들어갈 자리 · 14px 에 막혔으면 auto × 배율과 다르다 —
+ *  그래서 배율은 «지금 선 크기» 에서 잰다: 막힌 자리에서 줄여도 곧바로 작아진다). 보통(1) 근처(±0.05)는 보통으로 붙는다. */
+export function dragScale(auto: number, size0: number, delta: number): number {
+  if (!(auto > 0)) return DOCK_DEFAULTS.sc;
+  const sc = clampScale((size0 + delta) / auto);
+  return Math.abs(sc - 1) <= 0.05 + 1e-9 ? 1 : sc;
+}
+/** 최소화한 독(손잡이만 남은 알약)의 크기 — 길이 × 두께. 이음매는 세로, 곁칸 아래는 가로로 눕는다. 42-v2-dock.css .pn-dock.min 과 짝. */
+export const DOCK_MIN = { len: 44, thick: 14 } as const;
+
 /** 확대가 독 축으로 불어나는 몫(아이콘 몇 개분) — 확대 max · 범위(아이콘 range 개)의 코사인 종을 이웃 간격(1 + gap/size ≈ 1.1)으로 더한 값. */
 export const MAG_GROW = 1.75;
 
@@ -229,10 +262,11 @@ export const DOCK_METRICS = { pad: 6, margin: 8, dot: 6 } as const;
 export function dockThickness(home: DockHome, size: number, m: { pad: number; margin: number; dot: number } = DOCK_METRICS): number {
   return size + 2 * m.pad + (home === 'float' ? m.dot : 0);
 }
-/** 부품이 비키는 폭 — 곁칸 아래 독만 바닥을 비킨다(두께 + 바깥 여백×2). 이음매 독은 0(경계선 위에 떠 있다). */
-export function dockInset(home: DockHome, size: number, m: { pad: number; margin: number; dot: number } = DOCK_METRICS): Inset {
+/** 부품이 비키는 폭 — 곁칸 아래 독만 바닥을 비킨다(두께 + 바깥 여백×2). 이음매 독은 0(경계선 위에 떠 있다).
+ *  최소화한 독은 손잡이 두께만큼만(목록 끝의 빈 자리가 알약만큼 줄어든다 — 접었는데 목록 끝에 큰 빈 자리가 남으면 접은 보람이 없다). */
+export function dockInset(home: DockHome, size: number, m: { pad: number; margin: number; dot: number } = DOCK_METRICS, min = false): Inset {
   const z: Inset = { bottom: 0, top: 0, left: 0, right: 0 };
-  if (home === 'float') z.bottom = dockThickness(home, size, m) + 2 * m.margin;
+  if (home === 'float') z.bottom = (min ? DOCK_MIN.thick : dockThickness(home, size, m)) + 2 * m.margin;
   return z;
 }
 

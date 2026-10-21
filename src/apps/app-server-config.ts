@@ -11,11 +11,16 @@
 import crypto from "node:crypto";
 import type { AppBundle } from "./app-bundle.js";
 import { BUILDER_VERSION, ZIP_EXCLUDE, RUN_SCRIPT } from "./app-server-builder.js";
+import { APP_PORT, GUARD_BOOTSTRAP_PATH, GUARD_PORT, GUARD_READY_PATH } from "./app-server-guard.js";
 import { currentTenant } from "../org/tenant-context.js";
 import type { FnCode, FnCodeLocation, LogGroupTag } from "../net/aws/lambda-lite.js";
 
-/** 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다. */
-export interface AppServerDecl { start: string | null; build: string | null; dir: string | null }
+/**
+ * 앱이 선언한 서버 — start/build 가 null 이면 package.json 의 scripts 를 쓴다 · dir 이 null 이면 앱 폴더 전체를 올린다.
+ *  memory_mb · tmp_mb(#4486 앱 v2-7 · 결정 상민 2026-10-20) — 함수 메모리 · 임시 디스크(/tmp). null 이면 워크스페이스 기본(app_server_policy.memory_mb · 512MB).
+ *   요청과 백그라운드 작업이 같은 함수라 같은 값을 쓴다(함수 하나). 빌드 지문에는 넣지 않는다 — 설정만 바뀌므로 다시 빌드하지 않는다.
+ */
+export interface AppServerDecl { start: string | null; build: string | null; dir: string | null; memory_mb?: number | null; tmp_mb?: number | null }
 
 const cmd = (v: unknown): string | null => {
   if (typeof v !== "string") return null;
@@ -26,10 +31,32 @@ const cmd = (v: unknown): string | null => {
 /** 매니페스트 → 서버 선언(없으면 null). `web.server` 가 객체이거나 true 면 서버 앱이다. */
 export function serverDeclOf(manifest: unknown): AppServerDecl | null {
   const s = (manifest as { web?: { server?: unknown } } | null)?.web?.server;
-  if (s === true) return { start: null, build: null, dir: null };
+  if (s === true) return { start: null, build: null, dir: null, memory_mb: null, tmp_mb: null };
   if (!s || typeof s !== "object" || Array.isArray(s)) return null;
   const o = s as Record<string, unknown>;
-  return { start: cmd(o.start), build: cmd(o.build), dir: dirOf(o.dir) };
+  return { start: cmd(o.start), build: cmd(o.build), dir: dirOf(o.dir), memory_mb: mbOf(o.memory_mb, 128, 10_240), tmp_mb: mbOf(o.tmp_mb, 512, 10_240) };
+}
+
+/** 메모리 · 임시 디스크 선언(MB) — 정수가 아니거나 Lambda 범위 밖이면 null(= 기본값 · 배포가 «선언을 읽지 못함» 을 알린다). */
+const mbOf = (v: unknown, lo: number, hi: number): number | null => (typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi ? v : null);
+
+/**
+ * 함수 크기(#4486) — 메모리는 앱 선언(없으면 워크스페이스 기본 memory_mb)을 워크스페이스 천장(memory_max_mb)까지, 임시 디스크는 앱 선언(없으면 512MB).
+ *  선언을 줄였거나 못 읽었으면 notes 에 사람 말로(배포 결과 warnings).
+ */
+export function functionSizingFor(manifest: unknown, policy: { memory_mb: number; memory_max_mb: number }): { memory: number; tmp: number; notes: string[] } {
+  const raw = (manifest as { web?: { server?: unknown } } | null)?.web?.server;
+  const o = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const decl = serverDeclOf(manifest);
+  const notes: string[] = [];
+  if (o.memory_mb !== undefined && decl?.memory_mb == null) notes.push("web.server.memory_mb 를 읽지 못해 기본 메모리로 올렸습니다(128~10240 사이 정수 · MB)");
+  if (o.tmp_mb !== undefined && decl?.tmp_mb == null) notes.push("web.server.tmp_mb 를 읽지 못해 기본 임시 디스크(512MB)로 올렸습니다(512~10240 사이 정수 · MB)");
+  let memory = decl?.memory_mb ?? policy.memory_mb;
+  if (memory > policy.memory_max_mb) {
+    notes.push(`메모리 ${memory}MB 를 이 워크스페이스의 천장 ${policy.memory_max_mb}MB 로 줄였습니다(관리자 app_server_limits_set memory_max_mb)`);
+    memory = policy.memory_max_mb;
+  }
+  return { memory, tmp: decl?.tmp_mb ?? 512, notes };
 }
 
 /** 올릴 폴더 — 다듬기만 한다(경로 모양 검사는 빌더가 빌드 전에 한다 · 틀리면 빌드가 «dir» 로 실패해 까닭을 말한다). '.' · './' 는 전체(null). */
@@ -159,32 +186,97 @@ export function buildKeyOf(bundle: AppBundle, decl: AppServerDecl, rt: { runtime
   return crypto.createHash("sha256").update(canon).digest("hex");
 }
 
+/** 앱 코드가 받는 라이블리 값(#4485 앱 v2-6) — 함수 판마다 굽는다. 토큰은 판마다 새로 발급한다(app-server-deploy). */
+export interface AppServerRuntime {
+  /** 워크스페이스(테넌트) UUID — 검사 층이 신원의 ws 칸과 대조한다. */
+  tenantId: string;
+  /** 워크스페이스 슬러그. */
+  slug: string;
+  /** 앱 서버가 라이블리를 부를 주소(SDK 의 LIVELY_API_URL) — 워크스페이스 주소(https://<slug>.app.lvly.io). */
+  apiUrl: string;
+  /** 앱 서버 토큰(app-server-auth) — 혼자서는 아무것도 못 한다(사람 신원과 함께일 때만). */
+  token: string;
+  /**
+   * 신원 공개 키(JSON {kid: base64url}) — 검사 층이 서명을 본다. 비밀이 아니다.
+   *  ⚠ 함수 판의 환경에 **구워진다**(다음 배포 때만 바뀐다). 서명 키를 바꿀 때는 ① 새 kid 를 공개 키 목록에 더해(옛 kid 와 함께) 게이트웨이를 롤하고
+   *   ② 모든 서버 앱을 다시 올려(app_server_deploy — 설정이 달라진 함수는 새 판이 된다) ③ 그 뒤에 앞단의 서명 kid 를 바꾸고 ④ 옛 kid 를 맨 마지막에 뺀다.
+   *   ③ 을 먼저 하면 다시 올리지 않은 함수의 검사 층이 새 kid 를 몰라 모두 401 이다(게이트웨이 쪽 판정은 env 를 바로 따른다).
+   */
+  identityPubkeys: string;
+  /**
+   * 사람 요청 하나의 시간(초 · app_server_policy.timeout_s) — #4486 부터 함수 시간은 작업 시간(15분)이라, 사람 요청은 검사 층이 이 시간에 끊는다(504).
+   *  꼭 준다 — 빠뜨리면 사람 요청이 함수 시간(15분)까지 붙잡힌다(정책은 있는데 집행이 없는 꼴 · 격리 리뷰).
+   */
+  requestTimeoutS: number;
+}
+
+/** 검사 층(app-server-guard)과 웹 어댑터를 잇는 값 — 앱 코드가 보지 않아도 되는 칸이라 고칠 때는 문 판과 함께 본다. */
+export const GUARD_ENV = {
+  AWS_LAMBDA_EXEC_WRAPPER: GUARD_BOOTSTRAP_PATH,
+  AWS_LWA_PORT: String(GUARD_PORT),
+  AWS_LWA_READINESS_CHECK_PORT: String(GUARD_PORT),
+  AWS_LWA_READINESS_CHECK_PATH: GUARD_READY_PATH,
+  AWS_LWA_READINESS_CHECK_PROTOCOL: "http",
+  AWS_LWA_INVOKE_MODE: "response_stream",
+  LIVELY_GUARD_PORT: String(GUARD_PORT),
+} as const;
+
+/** 배포 때 판마다 바뀌어도 «같은 설정» 으로 보는 칸 — 앱 서버 토큰은 판마다 새로 굽지만 그것만으로 새 판을 만들지 않는다(app-server-deploy configDrift). */
+export const ENV_ROTATING = new Set(["LIVELY_APP_TOKEN"]);
+
 /**
- * 함수 환경 — 웹 어댑터(레이어)가 우리 시작 스크립트를 띄우고 $PORT(8080)로 요청을 넘긴다.
- *  준비 판정은 «포트가 열렸나»(tcp) — 기본(http «/» 가 100~499)이면 «/» 가 500 을 내는 앱이 영영 못 뜬다(2026-10-15 실측: 안 받으면 20초 뒤
- *  «did not become ready» 로 실패). v2-6 이 앱 서버 토큰 · 서명 신원 검사 층을 여기에 더한다.
+ * 함수 환경 — 웹 어댑터(레이어)가 요청을 우리 검사 층(:8099)으로 넘기고, 검사 층이 사람 신원을 본 뒤 앱의 $PORT(8080)로 넘긴다(#4485).
+ *  준비 판정은 검사 층의 /_lively/guard/ready — 앱 포트가 열렸을 때만 200 이다(그 전 v2-5 의 «포트가 열렸나(tcp)» 와 같은 뜻 · 앱의 «/» 가 500 이어도 뜬다).
+ *  응답은 흘려 보낸다(response_stream) — 게이트웨이가 InvokeWithResponseStream 으로 부르고 조각째 잇는다(SSE · 큰 응답).
+ *  앱 코드가 쓰는 값: PORT · LIVELY_APP_ID · LIVELY_WORKSPACE · LIVELY_API_URL · LIVELY_APP_TOKEN(SDK lively-db.mjs 가 읽는다).
+ *  검사 층이 쓰는 값: LIVELY_TENANT_ID · LIVELY_APP_IDENTITY_PUBKEYS · LIVELY_REQUEST_TIMEOUT_S(#4486 사람 요청 시간) · LIVELY_API_URL · LIVELY_APP_TOKEN
+ *   (#4486 백그라운드 작업의 시작 확인 · 박동 · 결과 보고를 게이트웨이에).
+ *   LLM 주소(SDK 호환 base URL)는 v2-9(#4488)가 **워크스페이스 API 키가 있는 워크스페이스에서만** 여기에 더한다(설계 §3-E · §12 ⑤-3 — 고급 길).
+ *   앱의 AI 작업 기본 입구는 `/_lively/ai/runs` 다.
+ *  rt 가 없으면(시험 · 옛 판정) 검사 층 칸까지만 — 운영 배포는 늘 rt 를 넘긴다.
  */
-export function lambdaEnvFor(appId: string): Record<string, string> {
+export function lambdaEnvFor(appId: string, rt?: AppServerRuntime): Record<string, string> {
   return {
-    AWS_LAMBDA_EXEC_WRAPPER: "/opt/bootstrap",
-    PORT: "8080",
-    AWS_LWA_PORT: "8080",
-    AWS_LWA_READINESS_CHECK_PROTOCOL: "tcp",
+    ...GUARD_ENV,
     AWS_LWA_READINESS_CHECK_TIMEOUT_SECONDS: "20",
+    PORT: String(APP_PORT),
     NODE_ENV: "production",
     LIVELY_APP_ID: appId,
+    ...(rt ? {
+      LIVELY_TENANT_ID: rt.tenantId.toLowerCase(),
+      LIVELY_WORKSPACE: rt.slug,
+      LIVELY_API_URL: rt.apiUrl,
+      LIVELY_APP_TOKEN: rt.token,
+      LIVELY_APP_IDENTITY_PUBKEYS: rt.identityPubkeys,
+      LIVELY_REQUEST_TIMEOUT_S: String(rt.requestTimeoutS),
+    } : {}),
   };
 }
 export const LAMBDA_HANDLER = RUN_SCRIPT;
 
-/** 시험 호출 — 함수 주소(Function URL) 모양의 GET / . 웹 어댑터가 이 모양을 받아 앱의 $PORT 로 넘긴다(2026-10-15 실측). */
-export function smokeEvent(host: string, now: number = Date.now()): Record<string, unknown> {
+/**
+ * 앱 서버가 라이블리를 부를 주소 — 워크스페이스 주소. 매니지드는 `https://<슬러그>.<PUBLIC_URL 의 호스트>`(= https://lively-46e3.app.lvly.io).
+ *  org 프로필의 게이트웨이 주소가 그 워크스페이스 주소면 그것을 쓴다. 매니지드 PUBLIC_URL 은 CP 주소(https://app.lvly.io)라 그대로 쓰면 CP 로 간다 —
+ *  그래서 슬러그를 앞에 붙인다(lvly-cloud deploy/lvly-gw.sh PUBLIC_URL_FALLBACK). 못 정하면 null(배포가 까닭을 말하고 멈춘다).
+ */
+export function appServerApiUrl(slug: string | null | undefined, profileUrl: string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+  const s = String(slug ?? "").trim().toLowerCase();
+  const clean = (u: string): string | null => { try { const x = new URL(u); return x.protocol === "https:" || x.protocol === "http:" ? `${x.protocol}//${x.host}` : null; } catch { return null; } };
+  const prof = profileUrl ? clean(profileUrl) : null;
+  if (s && prof && new URL(prof).host.startsWith(`${s}.`)) return prof;
+  const pub = clean(String(env.PUBLIC_URL ?? "").trim());
+  if (s && pub) { const u = new URL(pub); return `${u.protocol}//${s}.${u.host}`; }
+  return prof;
+}
+
+/** 시험 호출 — 함수 주소(Function URL) 모양의 이벤트. 웹 어댑터가 이 모양을 받아 검사 층으로 넘긴다(2026-10-15 · 16 실측). */
+export function smokeEvent(host: string, now: number = Date.now(), path = "/"): Record<string, unknown> {
   return {
-    version: "2.0", routeKey: "$default", rawPath: "/", rawQueryString: "",
+    version: "2.0", routeKey: "$default", rawPath: path, rawQueryString: "",
     headers: { host, "user-agent": "lively-deploy-check", accept: "*/*" },
     requestContext: {
       accountId: "anonymous", apiId: "lively", domainName: host, domainPrefix: host.split(".")[0] ?? host,
-      http: { method: "GET", path: "/", protocol: "HTTP/1.1", sourceIp: "127.0.0.1", userAgent: "lively-deploy-check" },
+      http: { method: "GET", path, protocol: "HTTP/1.1", sourceIp: "127.0.0.1", userAgent: "lively-deploy-check" },
       requestId: `deploy-check-${now}`, routeKey: "$default", stage: "$default", time: new Date(now).toUTCString(), timeEpoch: now,
     },
     isBase64Encoded: false,

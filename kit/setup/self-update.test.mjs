@@ -615,6 +615,33 @@ try {
         : bad("⑯ grok 감지", `~/.grok/config.toml 이 갱신되지 않았다 — 목록이 비어 설치기가 기본값(claude)으로 돌았다는 뜻. conf=${JSON.stringify(conf.slice(0, 120))}`);
     }
 
+    // ⑯b #4927 — **cursor 만 배선된 머신**도 자동 업데이트가 그 하네스로 돈다. 배선 신호는 ~/.cursor/hooks.json 속
+    //  우리 어댑터 엔트리다(그 파일은 사용자와 공유라 파일 존재가 아니라 내용이 신호 — 설치기·제거기·CLI 와 같은 규칙).
+    //  ⚠ kit 홈에선 ⑯c 의 IDE 존재 신호(~/.cursor)가 같은 머신을 함께 잡는다 — 배선 신호만 지우는 mutation 은 여기서
+    //   빨간불이 안 된다(동치 mutant, 2026-10-20 실측). 이 케이스가 고정하는 건 «cursor 만 쓰는 머신이 갱신된다» 는 결과다.
+    {
+      const hc = freshHome(null);
+      rmSync(join(hc, ".claude", "settings.json"), { force: true });   // claude 배선을 지운다 — cursor 만 남는 머신
+      mkdirSync(join(hc, ".cursor"), { recursive: true });
+      writeFileSync(join(hc, ".cursor", "hooks.json"), JSON.stringify({ version: 1, hooks: { stop: [{ command: `node "${join(hc, ".lively", "hooks", "cursor-adapter.mjs")}" stop` }] } }, null, 2) + "\n");
+      await runUpdater(hc);
+      const mcp = (() => { try { return JSON.parse(readFileSync(join(hc, ".cursor", "mcp.json"), "utf8")); } catch { return null; } })();
+      (mcp && mcp.mcpServers && mcp.mcpServers.lively)
+        ? ok("⑯b cursor 단독 머신도 cursor 로 배선 갱신된다 (#4927)")
+        : bad("⑯b cursor 감지", `~/.cursor/mcp.json 에 lively 가 없다 — 목록에서 cursor 가 빠졌다는 뜻. mcp=${JSON.stringify(mcp)}`);
+    }
+    // ⑯c #4927 — IDE 만 쓰는 사람(PATH 에 cursor-agent 없음 · ~/.cursor 만 있음)도 kit 이 깔린 홈이면 cursor 를 배선한다
+    //  (CLI detectHarnesses 와 같은 판정 — 두 판정이 갈리면 그게 결함이라는 머리말 데드락 실측과 같은 축).
+    {
+      const hi = freshHome(null);
+      mkdirSync(join(hi, ".cursor", "extensions"), { recursive: true });   // IDE 가 첫 실행에 만드는 자리 흉내(배선 없음)
+      await runUpdater(hi);
+      const hooks = (() => { try { return readFileSync(join(hi, ".cursor", "hooks.json"), "utf8"); } catch { return ""; } })();
+      /cursor-adapter\.mjs/.test(hooks)
+        ? ok("⑯c IDE 만 쓰는 사람도 kit 홈이면 cursor 배선 (#4927)")
+        : bad("⑯c IDE 감지", `~/.cursor/hooks.json 에 우리 엔트리가 없다 — hooks=${JSON.stringify(hooks.slice(0, 120))}`);
+    }
+
     // ⑰ #3591 — `--mcp-only`: 되살리는 자리를 **세션보다 앞으로**. box-spawn 이 하네스를 exec 하기 직전에
     //  이 모드로 부른다. 종전엔 자가치유가 SessionStart 훅뿐이라 **구조적으로 한 세션 늦었다** — 훅은 하네스가
     //  설정을 스냅샷한 뒤에 도니, 그 시점에 등록이 비어 있으면 그 세션은 끝까지 툴 0개다

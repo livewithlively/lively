@@ -25,7 +25,7 @@ import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
 import { provisionProjectOnNode, provisionStatusOnNode, nodeProjectSessions } from "../node/provision-remote.js";
-import { launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { launchReply, launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { isSelfNode, gatewayDefersHere } from "../node/registry.js";
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
@@ -650,7 +650,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //   실행 위치만 바꾸면 «중앙=나만 / 노드=팀 전원» 으로 갈렸다. 이제 두 경로가 같은 값을 쓴다.
     const nodeId = String(b.node ?? "").trim();
     const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
-    res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+    //  #4906 — 서버가 넣을 첫 지시(태스크로 채운 글 포함)를 함께 답한다 — 화면이 그 글을 첫 지시로 기억한다(launchReply 머리말).
+    res.json(launchReply(await launchSession(userOf(req), input, { nodeId, invites }), input));
   }));
   // ── ②-a 세션을 태스크에 붙이기(#4135 허브 세션 위젯 「태스크에 붙이기」) — 이미 도는 세션에 이 프로젝트의 태스크를 잇는다.
   //  잇기 규칙은 v6/session-task.ts bindSessionTask 그대로(세션 주인만 · 같은 프로젝트의 태스크만 · 잇는 순간 «진행 중»).

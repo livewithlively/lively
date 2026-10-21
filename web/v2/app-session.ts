@@ -12,6 +12,7 @@ import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 �
 import { api, el, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
 import { toolExplain } from '../lib/tool-explain.js';   // #4632 동의 창 도구 칩의 쉬운 설명
+import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 화면 앱 판정 한 벌
 
 export interface SessionApp {
   id: string;
@@ -20,6 +21,7 @@ export interface SessionApp {
   scopes: string[];   // 매니페스트 선언 상한(동의 창 표시용)
   tools: string[];    // 〃 (permissions.tools ∪ ext_tools)
   pages: Array<{ key: string; title: string }>;  // #1780 PR5 — ui.pages(있으면 UI 앱). 없으면 [](세션 앱).
+  server: boolean;    // #4485 후속 — 매니페스트 web.server(서버가 화면을 만든다) — 화면 파일(pages)이 없어도 화면 앱이다(lib/app-screen hasAppScreen)
   tables: string[];   // #4225 — data.tables 이름. 있으면 세션에 붙여 AI 가 쓸 데이터가 있는 앱
   editMode: 'all' | 'members';   // #4225 누가 고칠 수 있나(app_save) — 기본 전원
   editMembers: string[];
@@ -62,6 +64,7 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         const perm = (a.manifest && a.manifest.permissions) || {};
         const tools = [...(perm.tools || []), ...(perm.ext_tools || [])].map(String);
         const pages = (((a.manifest && a.manifest.ui) || {}).pages || []).map((p: any) => ({ key: String(p.key), title: String(p.title || p.key) }));
+        const server = declaresServer(a.manifest);
         const tables = (((a.manifest && a.manifest.data) || {}).tables || []).map((t: any) => String((t && t.name) || '')).filter(Boolean);
         const csp = (a.manifest && a.manifest.csp) || {};
         const sites = (csp.frame_domains || []).map(String);
@@ -71,7 +74,7 @@ export async function listSessionApps(): Promise<SessionApp[]> {
         // system renderer는 builtin에서만 신뢰한다(서버 AppInstance 응답과 같은 경계). 외부 앱은 generic iframe.
         const system = source.kind === 'builtin' && a.manifest ? (a.manifest.system || null) : null;
         return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-          scopes: (perm.scopes || []).map(String), tools, pages, tables, sites, net, instances, system, source,
+          scopes: (perm.scopes || []).map(String), tools, pages, server, tables, sites, net, instances, system, source,
           editMode: a.edit_mode === 'members' ? 'members' as const : 'all' as const,
           editMembers: Array.isArray(a.edit_members) ? a.edit_members.map(String) : [], canEdit: a.can_edit === true,
           installedBy: String(a.installed_by || ''), installedAt: (() => { const t = Date.parse(String(a.installed_at || '')); return Number.isFinite(t) ? t : 0; })(),
@@ -127,7 +130,7 @@ export function ensureAppGrant(appId: string, title?: string): Promise<boolean> 
   if (cur) return cur;
   const run = (async (): Promise<boolean> => {
     const app = (await listSessionApps()).find((a) => a.id === appId)
-      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [], appFolder: false,
+      || { id: appId, title: title || appId, version: '', scopes: [], tools: [], pages: [], server: false, tables: [], sites: [], net: [], notifications: false, chatSend: false, projectFiles: [], workspaceFiles: [], appFolder: false,
         editMode: 'all' as const, editMembers: [], canEdit: false, installedBy: '', installedAt: 0, studio: null, ...appStateOf(null),
         instances: { project: 'optional' as const, multiplicity: 'multiple' as const }, system: null, source: {}, icon: null };
     if (!(await appConsent(app))) return false;
@@ -250,6 +253,10 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.tools.includes('app_ai_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: 'AI 실행' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '이 앱이 AI 에게 일을 시킬 수 있어요 — 워크스페이스 API 키가 있으면 그 돈으로, 아니면 내 Claude 구독으로(내가 이 앱 화면에서 보낸 요청만 · 내 이름으로 새 대화) 돌아요. 실행 기록은 이 앱의 AI 실행 목록에 남아요' }))) : null,
+        // 백그라운드 작업(#4486 앱 v2-7) — '앱 서버가 내 이름으로 뒤에서 일을 하나'. 서버를 둔 앱(web.server)이 함의한다. 화면을 닫아도 15분까지 돈다.
+        app.tools.includes('app_job_start') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '백그라운드 작업' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '이 앱의 서버가 오래 걸리는 일을 뒤에서 내 이름으로 처리할 수 있어요 — 화면을 닫아도 한 번에 15분까지 돌고, 이 앱에 동의한 범위 안에서만 움직여요. 진행과 결과는 이 앱의 작업 목록에 남아요' }))) : null,
         // 프로젝트 자료 읽기(#4592) — '내 프로젝트의 파일이 앱으로 들어오나'. 붙인 세션의 프로젝트에서, 선언한 종류만, 읽기만.
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },

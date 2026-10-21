@@ -57,6 +57,7 @@ export interface AppInstanceRecord {
     system: { renderer: 'session' | 'browser' | 'classic'; route?: string; home?: string } | null;
     runtime: AppWorkerRuntime | null;
     ui: { pages: Array<{ key: string; title: string; display: string[] }> };
+    server?: boolean;   // #4485 후속 — 서버가 화면을 만드는 앱(web.server · 옛 게이트웨이는 없다)
     icon?: { path: string; color: string; color_dark?: string } | null;   // #4769 선언한 앱 아이콘
   };
 }
