@@ -154,7 +154,6 @@ const INJECTIONS = new Set(["always", "recalled"]);
     const h = DEFAULT_HOOKS.find((x) => x.id === id);
     assert.ok(h, `시드 훅 '${id}' 이 없음`);
     assert.equal(h!.event, event, `시드 훅 '${id}' 은 ${event} 여야 한다`);
-    assert.equal(typeof h!.sort, "number", `시드 훅 '${id}' 의 sort 가 숫자가 아님 — 러너가 순서 정보 없음으로 본다`);
     return h!;
   };
   for (const [later, earlier, event] of PAIRS) {

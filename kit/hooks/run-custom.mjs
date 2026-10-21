@@ -313,8 +313,8 @@ function execNode(file, { input, timeout, env }) {
     let child;
     try { child = spawn("node", [file], { env, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { resolve({ stdout: "", stderr: String((e && e.message) || ""), status: null, signal: null }); return; }
-    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false;
-    const kill = () => { try { child.kill("SIGKILL"); } catch { /* 이미 끝남 */ } };
+    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false; let killed = false;
+    const kill = () => { killed = true; try { child.kill("SIGKILL"); } catch { /* 이미 끝남 */ } };
     const timer = setTimeout(kill, timeout);
     const take = (buf, chunks, len) => { if (len + buf.length > HOOK_MAX_BUFFER) { kill(); return len; } chunks.push(buf); return len + buf.length; };
     child.stdout.on("data", (b) => { outLen = take(b, out, outLen); });
@@ -329,6 +329,13 @@ function execNode(file, { input, timeout, env }) {
       });
     };
     child.on("error", (e) => finish(null, null, String((e && e.message) || "")));
+    // 우리가 죽인 훅은 exit 에서 끝낸다 — close 는 파이프가 닫혀야 오는데, 훅이 stdio 를 물려받은 손자(예: 백그라운드
+    //  git fetch)를 남기면 그 손자가 끝날 때까지 파이프가 안 닫혀 timeout 이 상한 노릇을 못 한다(execFileSync 는 즉시 반환했다).
+    child.on("exit", (code, signal) => {
+      if (!killed) return;
+      try { child.stdout.destroy(); child.stderr.destroy(); } catch { /* */ }
+      finish(code, signal);
+    });
     child.on("close", (code, signal) => finish(code, signal));
     // 훅이 stdin 을 안 읽고 먼저 끝나면 EPIPE 가 난다 — 훅의 정상 동작이므로 삼킨다.
     child.stdin.on("error", () => { /* */ });
