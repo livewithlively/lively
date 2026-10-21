@@ -271,7 +271,7 @@ export function rememberSeen(seen, events, max = SEEN_MAX) {
  */
 export function personLink(link) {
   const s = String(link || "");
-  return /^#\/[A-Za-z0-9/_.:%-]{1,200}$/.test(s) ? s : null;
+  return /^#\/[A-Za-z0-9/_.:%?=&-]{1,240}$/.test(s) ? s : null;   // #4769 ?·=·& — 앱 알림은 #/open/<앱>?ch=…&m=…&t=… 로 그 자리를 가리킨다
 }
 
 /** 여러 건이면 개별 배너 대신 한 장으로 — 세션 쪽 planBanners 와 같은 규칙(워크스페이스 윗줄 포함)을 사람 알림에도 적용한다. */
@@ -383,7 +383,7 @@ export function streamUrl(gatewayUrl) {
   return gw ? `${gw}/api/ui/notify/stream?all=1` : null;
 }
 
-const HASH_RE = /^#\/[A-Za-z0-9/_.:%-]{1,200}$/;
+const HASH_RE = /^#\/[A-Za-z0-9/_.:%?=&-]{1,240}$/;   // #4769 앱 알림의 물음표 뒤 값까지
 const ENTER_PATH_RE = /^\/ws\/[0-9a-fA-F-]{36}\/enter$/;
 
 /**

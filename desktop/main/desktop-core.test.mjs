@@ -2508,6 +2508,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
   t("A21 사람 알림 링크 — 해시 형태만 통과시킨다(서버가 준 값이라도 다시 본다)", () => {
     assert.equal(personLink("#/projects2/p/7"), "#/projects2/p/7");
+    assert.equal(personLink("#/open/talk?ch=5&m=30&t=1792563307441"), "#/open/talk?ch=5&m=30&t=1792563307441", "#4769 앱 알림은 물음표 뒤 값으로 자리를 가리킨다");
     for (const bad of ["", null, "https://evil.example/x", "javascript:alert(1)", "#/a b", "#/" + "x".repeat(300)]) {
       assert.equal(personLink(bad), null, String(bad));
     }
