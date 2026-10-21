@@ -668,7 +668,8 @@ try {
     const PULL = HOOKS["project-pull"], TURN = HOOKS["project-pull-turn"];
     const bgTmp = path.join(root, "bgtmp");
     await fsp.mkdir(bgTmp, { recursive: true });
-    const BG_ON = { LIVELY_PULL_BG_OFF: "", TMPDIR: bgTmp, TEMP: bgTmp, TMP: bgTmp };
+    // 창은 min(제한 시간 × 0.7, 6초) — 시험은 제한 시간을 1.5초로 줘 창을 1.05초로 줄인다(실제 창을 기다리면 파일당 예산 45초를 넘는다).
+    const BG_ON = { LIVELY_PULL_BG_OFF: "", TMPDIR: bgTmp, TEMP: bgTmp, TMP: bgTmp, LIVELY_HOOK_TIMEOUT_MS: "1500" };
     const lockOf = (dir) => path.join(dir, ".lively", "pull-bg.json");
     const copiesLeft = () => fs.readdirSync(bgTmp).filter((n) => n.startsWith("lively-pull-bg-"));
     const filesOf = (n, body) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`d${String(i).padStart(2, "0")}.md`, { body: `${body}${i}`, mtime: 9_000_000 + i }]));
@@ -678,17 +679,17 @@ try {
     await scenario("[project-pull] #4959 E1 많고 느림 → 수 초 만에 세션 놓아줌 · 뒤에서 전량 수렴", async () => {
       const files = filesOf(24, "느린 문서 ");
       resetServer(files);
-      DELAY = Object.fromEntries(Object.keys(files).map((p) => [p, 1500]));   // 순차면 36초
+      DELAY = Object.fromEntries(Object.keys(files).map((p) => [p, 500]));    // 순차면 12초
       const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
       const { code, ms, out } = await spawnHook(PULL, dir, BG_ON);
       assert.equal(code, 0);
-      assert.ok(ms < 7000, `🔴 세션 시작 판이 받기를 다 끝날 때까지 붙들었다(${ms}ms)`);
+      assert.ok(ms < 3000, `🔴 세션 시작 판이 창을 넘겨 붙들었다(${ms}ms)`);
       assert.ok(out.trim().length > 0, "뒤로 넘겼는데 AI 에게 아무 안내도 안 했다");
       assert.equal(markerOf(dir).last_pull, undefined, "다 못 받았는데 last_pull 을 올렸다");
       const t0 = Date.now();
-      await waitFor(() => (markerOf(dir).last_pull === 9_000_023) && !fs.existsSync(lockOf(dir)), 20_000,
+      await waitFor(() => (markerOf(dir).last_pull === 9_000_023) && !fs.existsSync(lockOf(dir)), 10_000,
         "🔴 뒤에서 받는 판이 끝까지 수렴하지 못했다(last_pull·잠금)");
-      assert.ok(Date.now() - t0 + ms < 20_000, "뒤 판이 순차로 받았다");
+      assert.ok(Date.now() - t0 + ms < 8000, `뒤 판이 순차로 받았다(${Date.now() - t0 + ms}ms — 순차면 12초)`);
       for (const [p, v] of Object.entries(files)) assert.equal(readOr(path.join(dir, p)), v.body, `${p} 를 못 받았다`);
       assert.equal(Object.keys(ledgerMust(dir, "뒤 판의 진척")).length, 24, "원장이 전량이 아니다");
       assert.deepEqual(tempsIn(dir), [], "받기 임시 파일이 남았다");
@@ -710,12 +711,12 @@ try {
     await scenario("[project-pull] #4959 E3 창에서 끊긴 큰 파일 → 보류 안 적음 · 뒤 판이 받음", async () => {
       const BIG = "B".repeat(1024 * 1024 + 10);
       resetServer({ "big.bin": { body: BIG, mtime: 9_000_000 } });
-      SLOW = new Set(["big.bin"]); SLOW_MS = 7500;                           // 창(6초)보다 길다
+      SLOW = new Set(["big.bin"]); SLOW_MS = 1500;                           // 창(1.05초)보다 길다
       const dir = await mkProj({ project_id: PROJECT_ID, sync: "both" });
       const { ms } = await spawnHook(PULL, dir, BG_ON);
-      assert.ok(ms < 7000, `🔴 세션 시작 판이 큰 파일을 끝까지 붙들었다(${ms}ms)`);
+      assert.ok(ms < 3000, `🔴 세션 시작 판이 큰 파일을 끝까지 붙들었다(${ms}ms)`);
       assert.equal(skipOf(dir)["big.bin"], undefined, "🔴 짧은 창에서 끊긴 것을 «느린 파일»로 보류했다");
-      await waitFor(() => fs.existsSync(path.join(dir, "big.bin")) && !fs.existsSync(lockOf(dir)), 20_000, "뒤 판이 큰 파일을 못 받았다");
+      await waitFor(() => fs.existsSync(path.join(dir, "big.bin")) && !fs.existsSync(lockOf(dir)), 10_000, "뒤 판이 큰 파일을 못 받았다");
       assert.equal(fs.statSync(path.join(dir, "big.bin")).size, BIG.length);
       assert.equal(markerOf(dir).last_pull, 9_000_000);
     });
