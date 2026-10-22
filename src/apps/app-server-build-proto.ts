@@ -5,7 +5,7 @@
 export const BUILDER_VERSION = 2;   // 2 = 올릴 폴더(dir) · /tmp 링크(시작할 때 그 자리를 만든다)
 /** 결과 줄 표식 — builderMain 안의 MARK 와 같아야 한다(app-server-builder.test 가 본다). */
 export const BUILD_RESULT_MARK = "@@lively-build-result@@ ";
-/** zip 에 우리가 더하는 시작 스크립트 — Lambda 핸들러 이름이 RUN_SCRIPT 다(AWS_LAMBDA_EXEC_WRAPPER=/opt/bootstrap 이 그 파일을 실행한다). */
+/** zip 에 우리가 더하는 시작 스크립트 — Lambda 핸들러 이름이 RUN_SCRIPT 다(AWS_LAMBDA_EXEC_WRAPPER 가 가리키는 시작 파일이 그 파일을 실행한다 — #4485 부터 검사 층의 /opt/lively/bootstrap). */
 export const RUN_SCRIPT = "lively-run.sh";
 export const START_SCRIPT = "lively-start.sh";
 /** zip 에 담지 않는 파일 — 매니페스트는 빌드 지문에서도 뺀다(이름·설명만 바꾼 판이 같은 zip 을 쓰게). */

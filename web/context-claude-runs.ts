@@ -50,7 +50,8 @@ function ingestText(r: any): { text: string; title: string; fail: boolean } {
     g.unread ? '안 읽은 단위 ' + fmtNum(g.unread) : '', g.unparsed ? '풀지 못한 결과 ' + fmtNum(g.unparsed) : '',
     g.failed ? '저장 실패 ' + fmtNum(g.failed) : '', g.proof_passed ? '확인 읽기 통과 ' + fmtNum(g.proof_passed) : '',
     g.proof_failed ? '확인 읽기 실패 ' + fmtNum(g.proof_failed) + '(저장된 글과 다름 — 넣지 않음)' : '',
-    g.proof_held ? '확인 대기 ' + fmtNum(g.proof_held) + '(맡은 비공개 단위 — 확인 읽기 뒤에 모음)' : ''].filter(Boolean).join(' · ');
+    g.proof_held ? '확인 대기 ' + fmtNum(g.proof_held) + '(맡은 비공개 단위 — 확인 읽기 뒤에 모음)' : '',
+    g.unsearched ? '검색을 못 써 옛 스레드를 못 찾은 단위 ' + fmtNum(g.unsearched) : ''].filter(Boolean).join(' · ');
   return { text: '자료 ' + fmtNum(g.stored ?? 0) + (g.inserted ? ' (새 ' + fmtNum(g.inserted) + ')' : '') + (g.partial ? ' · 확인 필요' : ''), title: why || g.error || '', fail: !!g.stuck };
 }
 

@@ -383,6 +383,13 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-fcsep { flex: none; font-size: 11px; color: var(--muted-3); }
 .pn-frow1 .pn-fine { flex: none; }
 .pn-frow1 .pn-fine.sel { color: var(--blue); font-weight: 700; }
+/* #4882 자료 앱의 위젯 — 경로 첫 칸에 자료 앱의 얼굴(폴더 · 자료 색), 줄 끝에 자료 앱으로 가는 문. */
+.pn-fcrumb.app { display: inline-flex; align-items: center; gap: 4px; }
+.pn-fcrumb.app > span { overflow: hidden; text-overflow: ellipsis; }
+.pn-fapp-ic { flex: none; stroke: var(--gi-c-src); }
+.pn-fapp { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.pn-fapp:hover { background: var(--bg-punch); color: var(--ink); }
 
 .pn-files:focus-visible .pn-fbody { box-shadow: inset 0 0 0 2px rgba(45,107,240,.28); border-radius: 9px; }   /* 키보드로 들어왔을 때만 — 이 칸이 키를 받는다 */
 

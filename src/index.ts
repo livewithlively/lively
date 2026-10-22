@@ -20,6 +20,7 @@ import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
 import { fileUrlRouter } from "./files/signed-routes.js";   // #4673 서명 주소 받는 곳
+import { appFrontServerRouter } from "./apps/app-front-routes.js";   // #4485 앱 서버 쓰기 요청(본문 날것)
 import { liveSignedRouteDeps } from "./files/files-live.js";
 import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
@@ -154,6 +155,10 @@ app.use("/api/webhook", domainmapWebhookRouter());
 //  octet-stream 으로만 와서 이 일이 없었다). 인증 미들웨어 밖이다 — 토큰 서명이 자격이고, 판정은 쓰는 순간 다시 탄다(files/signed-routes).
 app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
 
+// 앱 서버의 쓰기 요청(#4485 앱 v2-6 — POST·PUT·PATCH·DELETE /api/app-front/server?path=…). 역시 전역 express.json() **이전**: 앱이 받는 본문은
+//  보낸 바이트 그대로여야 한다(JSON 이면 전역 파서가 먼저 먹는다). 문은 앞단 기계 헤더(x-lvly-app-front) — 사람 로그인을 타지 않는다(apps/app-front-routes.ts).
+app.use("/api/app-front/server", ...appFrontServerRouter());
+
 // 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
 //  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.
 app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
@@ -238,7 +243,8 @@ registerMcpTransport(app, auth);
 //  격리 모델: **조직당 1 게이트웨이+DB 인스턴스**(배포 유형화 T1~T5, 멀티테넌트 SaaS 제외). 따라서 org-content
 //  테이블에 org_id 컬럼이 없고 모든 멤버 토큰이 그 단일 조직 묶음을 받는다 — 이건 설계상 의도다.
 //  ⚠️ 만약 한 게이트웨이를 여러 조직이 공유하도록 바꾼다면 org_id 격리(스키마+모든 쿼리 필터)가 선행 필수.
-app.get("/install", auth, async (_req, res) => {
+//  #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 작업 AI)는 /install 을 못 쓴다(앱 도구 게이트 밖 · 요청마다 묶음을 만든다). 그 밖은 /mcp 와 같다.
+app.get("/install", bearerWithResourceMetadata(verifier, "deny"), async (_req, res) => {
   try {
     const { buffer } = await buildInstallBundle("claude");
     res.setHeader("Content-Type", "application/gzip");

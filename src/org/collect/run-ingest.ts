@@ -41,7 +41,12 @@ export function toIngestPlan(mode: unknown, raw: unknown): IngestPlan | null {
     const x = u as Record<string, unknown>;
     return !!x && Number.isInteger(x.id) && typeof x.app === "string" && typeof x.ref === "string" && validUnitRef(x.app, x.ref)
       && typeof x.instance === "string" && (x.since == null || typeof x.since === "string");
-  }).map((u) => ({ ...u, proof: (u as { proof?: unknown }).proof === true })) : [];
+  }).map((u): PlannedUnit => {
+    //  #4744 스레드 글 검색은 슬랙 단위의 아는 값만(모르는 값이면 검색 없는 계획으로 판정한다 — 배포 전 계획과 같다).
+    const s: unknown = u.search;
+    const { search: _s, ...rest } = u;
+    return { ...rest, proof: (u as { proof?: unknown }).proof === true, ...(u.app === "slack" && (s === "public" || s === "private") ? { search: s } : {}) };
+  }) : [];
   //  #4744 이 판에 실은 링크 — 모양이 맞는 것만(노션 uuid · 슬랙 채널 + 스레드 ts).
   const links = Array.isArray(p.links) ? p.links.filter((l): l is PlannedLink => {
     const x = l as Record<string, unknown>;
@@ -63,6 +68,13 @@ export interface IngestUnitResult {
   next?: { at: string; why: string; interval_sec: number } | null;
   /** 확인 읽기 결과(확인 읽기 단위) · held = 확인 안 된 사람이 맡은 보호 단위라 넣지 않고 확인 대기만 걸었다. */
   proof?: ProofResult | "held";
+  /**
+   * #4744 옛 스레드(구간 전에 시작한 스레드에 구간 안 답글) — 검색으로 찾은 수 · 끝까지 읽은 수. 슬랙 검색 단위만.
+   *  unsearched — 검색을 못 써(오류 · 권한 · 꼴) 그 판은 옛 스레드를 못 찾았다(종전 규칙으로 판정 — 판은 «확인 필요»).
+   */
+  old_threads?: { found: number; read: number; unsearched?: boolean };
+  /** #4744 «없는 스레드»(thread_not_found)라 읽을 것이 없던 스레드 수. */
+  gone_threads?: number;
 }
 
 export interface IngestResult {
@@ -77,6 +89,8 @@ export interface IngestResult {
   proof_pending?: number; proof_passed?: number; proof_failed?: number; proof_held?: number;
   /** 수집: 단위별 결과와 합계. partial — 못 다 읽은 단위 · 못 푼 결과 · 저장 실패가 하나라도 있다(화면이 «확인 필요» 로 보인다). */
   units?: number; stored?: number; inserted?: number; stray?: number; unparsed?: number; failed?: number; incomplete?: number;
+  /** #4744 검색을 못 써 옛 스레드를 못 찾은 슬랙 단위 수. */
+  unsearched?: number;
   /** 맡겼는데 이 판이 안 읽은 단위 · 구간을 더 줄일 수 없는데 못 다 읽은 단위(같은 자리에 머문다). */
   unread?: number; stuck?: number;
   partial?: boolean;
@@ -112,8 +126,11 @@ export async function resolveInstance(app: string, refs: readonly string[]): Pro
   return { instance: "", via: "none" };
 }
 
-const capturesOf = (files: readonly CaptureFile[]): Capture[] =>
-  files.map((f) => readCapture(f)).filter((c): c is Capture => !!c);
+/** 원문 파일 → 결과 캡처 · 실패한 호출 캡처(#4744 — «없는 스레드» 판정에만 쓴다. 결과와 섞으면 실패가 «못 푼 결과» 로 세진다). */
+const capturesOf = (files: readonly CaptureFile[]): { caps: Capture[]; failed: Capture[] } => {
+  const all = files.map((f) => readCapture(f)).filter((c): c is Capture => !!c);
+  return { caps: all.filter((c) => c.error == null), failed: all.filter((c) => c.error != null) };
+};
 
 /** 목록 실행 → recordUnitListing(verified:true). */
 async function ingestListing(member: string, app: string, caps: Capture[], truncated: boolean): Promise<Omit<IngestResult, "captures" | "truncated">> {
@@ -158,13 +175,14 @@ const PROOF_REASON: Record<ProofResult, string> = {
 };
 
 /** 수집 실행 → 단위마다 storeUnitItems · advanceUnitCursor. */
-async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], now: number, truncated: boolean, runId: string | null): Promise<Omit<IngestResult, "captures" | "truncated">> {
+async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], now: number, truncated: boolean, runId: string | null,
+  failedCaps: readonly Capture[] = []): Promise<Omit<IngestResult, "captures" | "truncated">> {
   const by: UnitReadBy = { member, runId };
   const units = plan.units ?? [];
   if (!units.length) return { state: "failed", mode: "collect", error: "계획에 단위가 없다" };
-  const { byUnit, stray, linked, linkStray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null, links: plan.links ?? [] });
+  const { byUnit, stray, linked, linkStray } = harvestUnits(caps, units, { plannedAt: plan.planned_at ?? null, links: plan.links ?? [], failed: failedCaps });
   const per: IngestUnitResult[] = [];
-  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0, proofPassed = 0, proofFailed = 0, proofHeld = 0;
+  let stored = 0, inserted = 0, unparsed = 0, failed = 0, incomplete = 0, unread = 0, stuck = 0, proofPassed = 0, proofFailed = 0, proofHeld = 0, unsearched = 0;
   //  이 사람 기준 보호 단위 — 확인되지 않은 사람의 판은 저장된 글과 맞춰 봐야 넣을 수 있다(가짜 글을 남의 비공개 대화에 끼워 넣지 못하게).
   const guard = await guardsByUnitId(member, units.map((u) => u.id));
   for (const u of units) {
@@ -172,8 +190,10 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
     const row: IngestUnitResult = {
       id: u.id, app: u.app, ref: u.ref, reads: h.reads, items: h.items.length,
       stored: 0, inserted: 0, conflicts: 0, failed: 0, unparsed: h.unparsed, complete: h.complete, cursor_moved: false, window_shrunk: false, stuck: false,
+      ...(u.search ? { old_threads: h.oldThreads } : {}), ...(h.gone ? { gone_threads: h.gone } : {}),
     };
     unparsed += h.unparsed;
+    if (h.oldThreads.unsearched) unsearched++;
     if (!h.reads) {
       row.reason = "이 판이 읽지 않음"; per.push(row);
       //  확인 읽기 단위는 주기 단위가 아니다 — 다음 확인 시각·임대를 건드리지 않는다(안 읽었으면 다음 판이 다시 싣는다).
@@ -222,6 +242,7 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
       continue;
     }
     if (!h.complete) { incomplete++; row.reason = h.why ?? undefined; }
+    else if (h.oldThreads.unsearched) row.reason = "검색을 못 써 옛 스레드를 못 찾음(이 판은 검색 없이 판정)";
     try {
       if (h.items.length) {
         const r = await storeUnitItems(u.id, h.items, { member });
@@ -266,9 +287,10 @@ async function ingestCollect(member: string, plan: IngestPlan, caps: Capture[], 
   return {
     links: { recorded, linked: linkedRes, stray: linkStray },
     state: anyRead ? "done" : "failed", mode: "collect", units: units.length, stored, inserted, stray, unparsed, failed, incomplete, unread, stuck,
-    proof_passed: proofPassed, proof_failed: proofFailed, proof_held: proofHeld,
-    //  확인이 필요한 판 — 못 다 읽음 · 못 풂 · 저장 실패 · 잘림 · 맡긴 단위를 안 읽음 · 요청 안 한 그릇을 읽음(모델이 지시를 벗어남).
-    partial: incomplete > 0 || unparsed > 0 || failed > 0 || truncated || unread > 0 || stray > 0, per_unit: per,
+    proof_passed: proofPassed, proof_failed: proofFailed, proof_held: proofHeld, ...(unsearched ? { unsearched } : {}),
+    //  확인이 필요한 판 — 못 다 읽음 · 못 풂 · 저장 실패 · 잘림 · 맡긴 단위를 안 읽음 · 요청 안 한 그릇을 읽음(모델이 지시를 벗어남) ·
+    //   검색을 못 써 옛 스레드를 못 찾음(#4744).
+    partial: incomplete > 0 || unparsed > 0 || failed > 0 || truncated || unread > 0 || stray > 0 || unsearched > 0, per_unit: per,
     ...(anyRead ? {} : { error: "맡긴 단위를 하나도 읽지 않았다" }),
   };
 }
@@ -279,12 +301,12 @@ export async function ingestRun(input: {
   /** #4744 그 실행의 id — 이 판이 건 단위 임대를 알아본다(담당이 바뀐 뒤 늦게 끝난 판이 임대만 푼다). */
   runId?: string | null;
 }): Promise<IngestResult> {
-  const caps = capturesOf(input.files);
+  const { caps, failed } = capturesOf(input.files);
   const truncated = input.truncated === true;
   const base = { captures: caps.length, truncated };
   try {
     if (input.plan.mode === "listing") return { ...base, ...(await ingestListing(input.member, String(input.plan.app ?? ""), caps, truncated)) };
-    return { ...base, ...(await ingestCollect(input.member, input.plan, caps, input.now ?? Date.now(), truncated, input.runId ?? null)) };
+    return { ...base, ...(await ingestCollect(input.member, input.plan, caps, input.now ?? Date.now(), truncated, input.runId ?? null, failed)) };
   } catch (e) {
     const error = String((e as Error)?.message ?? e).slice(0, 300);
     logger.warn({ member: input.member, mode: input.plan.mode, err: error }, "[collect-ingest] 저장 단계 실패");

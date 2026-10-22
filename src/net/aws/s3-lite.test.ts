@@ -123,10 +123,43 @@ await t("E11 GET/HEAD — 404 는 null · 200 은 내용/크기", async () => {
   assert.equal(await s3Get(cfg, "a", d), null);
   assert.equal((await s3Get(cfg, "a", d))?.toString(), "hello");
   assert.equal(await s3Head(cfg, "a", d), null);
-  assert.deepEqual(await s3Head(cfg, "a", d), { size: 5 });
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 5, versionId: null });
   assert.equal(seen.length, 4);
   assert.equal(seen[0].headers["x-amz-content-sha256"], EMPTY_SHA256);
   assert.equal(seen[2].method, "HEAD");
+});
+
+await t("E11b HEAD 판 번호(#4801) — 머리 x-amz-version-id 가 있으면 그 값 · «null»(판 번호 끈 적 있는 버킷의 옛 객체) · 없으면 null", async () => {
+  const seen: Seen[] = [];
+  const d = deps(fakeFetch([
+    { status: 200, headers: { "content-length": "7", "x-amz-version-id": "GphBDgso437Z5WE45HG2Rx1gsprz0Rbu" } },
+    { status: 200, headers: { "content-length": "7", "x-amz-version-id": "null" } },
+    { status: 200, headers: { "content-length": "7" } },
+  ], seen));
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 7, versionId: "GphBDgso437Z5WE45HG2Rx1gsprz0Rbu" });
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 7, versionId: null });
+  assert.deepEqual(await s3Head(cfg, "a", d), { size: 7, versionId: null });
+  assert.equal(seen.length, 3);
+});
+
+await t("E11c HEAD 그 판(#4887) — ?versionId= 를 싣고 서명한다 · 영구 삭제 404 · 지움 표시 405 는 null · 권한 거절 403 은 오류", async () => {
+  const seen: Seen[] = [];
+  const d = { ...deps(fakeFetch([
+    { status: 200, headers: { "content-length": "9", "x-amz-version-id": "v-old" } },
+    { status: 404 },
+    { status: 405 },
+    { status: 403 },
+  ], seen)), attempts: 1 };
+  assert.deepEqual(await s3Head(cfg, "t/w/z/a/k.zip", d, { versionId: "v-old" }), { size: 9, versionId: "v-old" });
+  assert.equal(new URL(seen[0]!.url).searchParams.get("versionId"), "v-old");
+  assert.match(seen[0]!.headers.authorization ?? "", /Signature=[0-9a-f]{64}/);
+  assert.equal(await s3Head(cfg, "t/w/z/a/k.zip", d, { versionId: "v-gone" }), null, "영구 삭제한 판");
+  assert.equal(await s3Head(cfg, "t/w/z/a/k.zip", d, { versionId: "v-marker" }), null, "지움 표시 판");
+  await assert.rejects(s3Head(cfg, "t/w/z/a/k.zip", d, { versionId: "v-x" }), "권한 거절은 «없음» 이 아니다");
+  //  판 번호 없이 405 는 종전대로 오류(지금 객체 HEAD 는 405 를 «없음» 으로 읽지 않는다).
+  const seen2: Seen[] = [];
+  await assert.rejects(s3Head(cfg, "a", { ...deps(fakeFetch([{ status: 405 }], seen2)), attempts: 1 }));
+  assert.equal(new URL(seen2[0]!.url).search, "", "판 번호를 안 주면 쿼리도 없다");
 });
 
 await t("E12 DELETE — 204 · 404 둘 다 성공", async () => {

@@ -14,6 +14,17 @@ type AsyncHandler = (req: express.Request, res: express.Response) => Promise<voi
 /** wrap 의 선택. logPath — 로그에 남길 경로 이름(기본 req.path). 경로 자체가 자격인 라우트(서명 주소 #4673)는 고정 이름을 준다. */
 export interface WrapOptions { logPath?: string }
 
+/**
+ * store 의 plain Error 문구 → 상태 코드와 응답 글. wrap 과 앱 주소의 같은 주소 API(apps/app-front-api.ts apiErrorReply)가 함께 쓴다 —
+ *  같은 도구를 어느 길로 불러도 같은 상태가 나오게. 해당 없으면 null(부르는 쪽이 500 으로).
+ */
+export function domainErrorReply(msg: string): { status: 404 | 502 | 400; error: string } | null {
+  if (msg.includes("없음")) return { status: 404, error: msg };
+  if (msg.includes("domainmap")) return { status: 502, error: `domainmap 연결 실패 — ${msg}` };
+  if (/검증 실패|허용|필수|미지정|형식/.test(msg)) return { status: 400, error: msg };
+  return null;
+}
+
 // Express 4 는 async rejection 을 전파하지 않음 — 전 라우트에 적용하는 래퍼.
 // store 의 plain Error 메시지를 상태코드로 매핑: '없음'→404 · 'domainmap'→502 · 검증 문구→400 · 그 외→500.
 // 이 한국어 부분문자열 매핑은 load-bearing — 신규 에러 메시지는 토큰('없음'/'검증 실패' 등)을 포함해야 한다.
@@ -57,9 +68,8 @@ export function wrap(fn: AsyncHandler, opts: WrapOptions = {}): express.RequestH
         res.status(503).json({ error: "공유 저장소 연결이 끊겼습니다 — 잠시 뒤 다시 시도하세요. 계속되면 이 워크스페이스의 세션 컨테이너를 다시 띄워야 합니다(관리자)." });
         return;
       }
-      if (msg.includes("없음")) { res.status(404).json({ error: msg }); return; }
-      if (msg.includes("domainmap")) { res.status(502).json({ error: `domainmap 연결 실패 — ${msg}` }); return; }
-      if (/검증 실패|허용|필수|미지정|형식/.test(msg)) { res.status(400).json({ error: msg }); return; }
+      const mapped = domainErrorReply(msg);
+      if (mapped) { res.status(mapped.status).json({ error: mapped.error }); return; }
       logger.error({ err, path: where }, "web ui request failed");
       res.status(500).json({ error: "internal_error" });
     });

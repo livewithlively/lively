@@ -271,3 +271,21 @@
 .vax-warn span { font-size: 13px; opacity: .85; }
 .vax-samples { margin: 10px 0 0; padding-left: 20px; font-size: 13px; max-height: 180px; overflow-y: auto; }
 .vax-samples li { margin: 2px 0; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   #4865 뷰: 리스트(세션) — 스코프 안 프로젝트들의 세션 목록(projects/session-list.ts).
+   2판(2026-10-19): 표는 [세션 목록] 앱과 **같은 함수**(v2/sess-table.ts)가 같은 클래스(.v2-sa-* — 47-v2-rail.css)로 그린다.
+   여기는 보드 칼럼 안에 앉히는 맞춤뿐이다(보드 칼럼이 이미 좌우 여백을 가진다).
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* 툴바의 프로젝트 전용 단추 — 세션 뷰에서는 뜻이 없다(세션을 좁히는 것은 아래 거르개 줄과 검색). */
+.pjv-sess-mode .pjv-subtask-btn, .pjv-sess-mode .pjv-cols-btn, .pjv-sess-mode .pjv-filter-btn,
+.pjv-sess-mode .pjv-asg-btn, .pjv-sess-mode .pjv-mine-btn { display: none; }
+
+.pjv-sl { padding-bottom: 24px; }
+.pjv-sl .v2-sa-tools { height: 48px; padding: 0 2px; border-bottom: 0; }
+.pjv-sl .v2-sa-list { padding: 0; }
+.pjv-sl .v2-bin-more { margin: 10px 0 0; }
+.pjv-sl .v2-bin-empty { margin: 14px 2px; }
+.pjv-sl-count { font-size: 12.5px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+/* 4판 — 줄 = 프로젝트. 「세션」 칸: 가장 급한 상태 알약 + «외 N» */
+.pjv-sl .c-sess .n { flex: none; font-size: 12px; color: var(--muted); }

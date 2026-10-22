@@ -12,7 +12,7 @@
 //   · 아카이브는 같은 표에서 동사만 다르다(보관 해제 · 휴지통으로). 종전 카드 깔림(#1851)을 걷어냈다.
 //  완전 삭제의 실제 삭제 범위는 #1850 P2~P4(session-actions·session-footprint-store) — 여기는 그 창을 부를 뿐이다.
 //  행 문법은 홈·확인할 것과 같은 토큰(v2-dot·bg-sel·line-row)만 쓴다 — 새 시각 언어를 만들지 않는다.
-import { api, el, personFace, relTime, renderMarkdown, replaceKids, state, sv, toast } from '../core.js';
+import { api, el, relTime, renderMarkdown, replaceKids, state, sv, toast } from '../core.js';
 import { ICONS, projGlyph } from '../lib/icon-paths.js';   // #4233 — 프로젝트 = 과녁
 import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize } from '../projects/files-format.js';
@@ -23,10 +23,9 @@ import { listDismissedSessions, restoreDismissedSessions, type DismissedSession 
 import { TRASH_TABS, auditProjItems, bundleOpen, extraCountsOf, fileTrashUrl, groupByProject, knowItems, levelLabel, matchesQuery, pickInitialTab, srcItems, type DeletedEntry, type SrcItem, type TabCounts, type TrashTab, type TrashedFile } from '../lib/trash-tabs.js';   // #3778 — 휴지통 네 탭의 잣대(순수)
 import { invalidateTrashCounts, setTrashCounts } from './trash-counts.js';   // 사이드바 「휴지통 N」과 같은 값(#3778)
 import { groupPastByProject, isDismissedSess, pastNames, PAST_PERIODS, selectPast, standsInPast, type PastPeriod, type PastScope, type PastSessLike } from '../lib/past-sess.js';   // #3778 — 「지난 세션」의 잣대(순수)
-import { groupAllSess, mainGroupBy, nextSessSort, ownerCounts, selectAllSess, SESS_GROUP_BYS, sortAllSess, type SessSort, type SessSortKey } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 열 머리 정렬
+import { mainGroupBy, ownerCounts, selectAllSess, SESS_GROUP_BYS, type SessSort } from '../lib/sess-all.js';   // #4158 — [AI 세션] 전체 목록의 잣대(순수) · #4233 묶기 · 열 머리 정렬
 import { sessGroupName, sessScope } from './sess-scope.js';   // #4233 2안 — 묶기 기준 · 고른 카드는 사이드바가 쥐고 여기선 읽기만
-import { SESS_STATES } from '../session-status.js';   // #4233 — 상태 묶기 · 카드의 순위
-import { showCtxMenu } from './ctx-menu.js';   // #4233 — 묶기 고르개 · 행 ⋯ 메뉴
+import { sessFilterPicks, sessTable, svgI, IC_SEARCH, IC_PLUS } from './sess-table.js';   // #4865 — 세션 표 한 벌(프로젝트 보드 「리스트」 뷰와 같이 쓴다)
 import { verdictStands, type SessRowVerdict } from './sess-visibility.js';   // #4158 — 홈 목록에서의 자리(판정은 셸이 홈과 같은 재료로 넘긴다)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
@@ -961,36 +960,7 @@ const allUi = {
   sort: null as SessSort | null,
 };
 
-const HARNESS_NAME: Record<string, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini', grok: 'Grok', opencode: 'OpenCode', antigravity: 'Antigravity', shell: '셸' };
-const harnessName = (s: Sess): string => {
-  const h = String((s.raw && s.raw.harness) || '').toLowerCase();
-  return HARNESS_NAME[h] || (h ? h[0].toUpperCase() + h.slice(1) : '');
-};
-const stateRank = (k: string): number => (SESS_STATES[k] ? SESS_STATES[k].rank : 99);
-/** 상태 표시 — 눈에 띄어야 할 셋(확인 필요 · 작업 완료 · 작업 중)은 알약, 나머지는 점 + 흐린 글. */
-function stateCell(s: Sess): HTMLElement {
-  const k = s.stateKey;
-  const label = s.stateLabel || '지난 세션';
-  if (k === 'waiting' || k === 'done' || k === 'busy') return el('span', { class: 'v2-sa-st ' + dotCls(k) }, dot(k), el('span', { text: label }));
-  return el('span', { class: 'v2-sa-st quiet' }, dot(k), el('span', { text: label }));
-}
-/** 「만든 때」 칸 — 오늘 것은 시:분, 그 밖은 월/일 시:분. **마지막 활동(상대 표기)과 눈으로 갈리게** 절대 시각으로 적는다
- *  (#4233, 원준 2026-09-26 «기존의 시각은 구분되게 이름 변경»). 모르면 빈 칸으로 둔다 — 「방금」 으로 꾸미지 않는다. */
-function madeCell(ms: number): HTMLElement {
-  if (!ms || !Number.isFinite(ms)) return el('span', { class: 'm none', text: '' });
-  const d = new Date(ms);
-  const p2 = (n: number): string => String(n).padStart(2, '0');
-  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
-  const today = new Date();
-  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
-  return el('span', { class: 'm', text: sameDay ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`, title: d.toLocaleString() });
-}
-const svgI = (d: string, cls = 'v2-sa-ic'): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
-const IC_SEARCH = 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-4.3-4.3';
-const IC_CHEV = 'M6 9l6 6 6-6';
-const IC_UP = 'M18 15l-6-6-6 6';
-const IC_MORE = 'M5 12h.01 M12 12h.01 M19 12h.01';
-const IC_PLUS = 'M12 5v14 M5 12h14';
+//  표 부품(이름 없는 세션 이름 · 상태 칸 · 만든 때 칸 · 아이콘)은 sess-table.ts 로 옮겼다(#4865).
 
 export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHooks): void {
   const ui = allUi;
@@ -1011,7 +981,6 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
       name: t.main || s.label || s.id, untitled: t.untitled,
     };
   });
-  type Item = (typeof items)[number];
   const meId = String((state.me && state.me.userId) || '');
   const ownerName = (k: string): string => (k === 'me' ? '나' : (people[k] && people[k].display_name) || k || '알 수 없음');
   const q = { proj: sc.proj, group: sc.group !== null ? { by: sc.by, key: sc.group } : null, period: ui.period, owner: ui.owner, state: ui.state, now };
@@ -1027,30 +996,14 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   const open = (s: Sess): void => hooks.onOpen(s);
 
   // ── 2행 도구줄 — 기간 · 사람 · 상태 칩 · 찾기 · ＋ 새 세션(묶기는 사이드바 머리의 드롭다운) ──
-  const period = el('select', { class: 'v2-sa-pick', 'aria-label': '기간', 'data-pick': 'period',
-    onchange: (e: Event) => { ui.period = (e.target as HTMLSelectElement).value as PastPeriod; ui.shown = PAGE; repaint(); } },
-    ...PAST_PERIODS.map((p) => el('option', { value: p.key, text: p.label }))) as HTMLSelectElement;
-  period.value = ui.period;
-  const who = el('select', { class: 'v2-sa-pick', 'aria-label': '사람', 'data-pick': 'owner',
-    onchange: (e: Event) => { ui.owner = (e.target as HTMLSelectElement).value; ui.shown = PAGE; repaint(); } },
-    el('option', { value: '', text: '모든 사람' }),
-    ...ownerCounts(items, q).map((o) => el('option', { value: o.key, text: `${ownerName(o.key)} ${o.n}` }))) as HTMLSelectElement;
-  who.value = ui.owner;
-  const chip = (key: string, label: string, cls: string): HTMLElement | null => {
-    const n = byState(key);
-    if (!n && ui.state !== key) return null;
-    const on = ui.state === key;
-    return el('button', { class: `v2-sa-chip ${cls}${on ? ' on' : ''}`, type: 'button', 'aria-pressed': String(on),
-      title: on ? '거르기를 풉니다' : `내 세션 중 ${label}만 봅니다`,
-      onclick: () => { ui.state = on ? '' : key; ui.shown = PAGE; repaint(); } }, el('span', { text: `${label} ${n}` }));
-  };
+  //  기간 · 사람 · 상태 칩은 sess-table.ts 한 벌(#4865 — 프로젝트 보드 「리스트」 뷰도 같은 것을 쓴다).
+  const picks = sessFilterPicks(ui, { owners: ownerCounts(items, q), ownerName, myStateCount: byState, repaint });
   const search = ui.searching || ui.q
     ? el('input', { class: 'v2-sa-q', type: 'search', placeholder: '세션 이름 · 프로젝트 찾기', 'data-pick': 'q', value: ui.q,
         oninput: (e: Event) => { ui.q = (e.target as HTMLInputElement).value; ui.shown = PAGE; repaint(); },
         onkeydown: (e: KeyboardEvent) => { if (e.key === 'Escape') { ui.q = ''; ui.searching = false; repaint(); } } })
     : el('button', { class: 'v2-sa-tb ic', type: 'button', 'aria-label': '찾기', title: '세션 찾기', onclick: () => { ui.searching = true; repaint(); host.querySelector<HTMLElement>('[data-pick="q"]')?.focus(); } }, svgI(IC_SEARCH));
-  const tools = el('div', { class: 'v2-sa-tools' }, period, who,
-    chip('waiting', '확인 필요', 'warn'), chip('busy', '작업 중', 'blue'),
+  const tools = el('div', { class: 'v2-sa-tools' }, ...picks,
     el('span', { class: 'sp' }), search,
     hooks.onNew ? el('button', { class: 'v2-sa-new', type: 'button', title: '새 세션 — 홈에서 무엇이든 시키면 열려요', onclick: () => hooks.onNew?.() },
       svgI(IC_PLUS), el('span', { text: '새 세션' })) : null);
@@ -1059,98 +1012,16 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
   //   거기로 가는 것이 우선인데, 실행 상태별로 보여주는 것은 이 탭의 취지와 안 맞는다». 상태로 좁히는 길은
   //   도구줄의 상태 칩(확인 필요 · 작업 중)에 남아 있다.
 
-  // ── 묶음별 목록 ──
-  const cols = sc.proj === null;
-  //  열 머리는 **표 맨 위 한 줄**뿐이다(#4233, 원준 2026-09-26 «리스트별로 묶으면 묶음마다 열 제목이 화면 절반»).
-  //   종전엔 묶음 머리줄마다 열 이름을 되풀이했다. 클릭업 리스트 뷰와 같게 머리를 하나만 두고 **붙여 둔다**(sticky) —
-  //   그래서 «맨 위만 두고 지우면 이상하다» 가 안 된다. 묶음 머리줄은 이름과 개수만 든다.
-  //  「AI」 열은 걷었다(원준 «AI 는 일반적으로 하나만 쓴다»). 시각은 둘로 갈랐다 — 만든 때(절대) · 마지막 활동(상대).
-  //  ★ 열 머리를 누르면 그 열로 정렬한다(원준 2026-09-27 «클릭업 참고»). 오름차순 → 내림차순 → 기본.
-  //   ⚠ 묶는 기준(시간별 · 리스트별 …)은 **건드리지 않는다** — 묶음의 순서·구성은 그대로 두고 묶음 안 줄만 다시 센다.
-  const hc = (key: SessSortKey, label: string): HTMLElement => {
-    const on = ui.sort && ui.sort.key === key ? ui.sort : null;
-    return el('button', { class: 'hc' + (on ? ' on' : ''), type: 'button',
-      'aria-sort': on ? (on.dir === 'asc' ? 'ascending' : 'descending') : 'none',
-      title: on ? (on.dir === 'asc' ? `${label} 오름차순 — 다시 누르면 내림차순` : `${label} 내림차순 — 다시 누르면 기본 순서로`) : `${label} 순으로 묶음 안 줄을 정렬합니다`,
-      onclick: () => { ui.sort = nextSessSort(ui.sort, key); ui.shown = PAGE; repaint(); } },
-      el('span', { text: label }),
-      on ? svgI(on.dir === 'asc' ? IC_UP : IC_CHEV, 'v2-sa-ic sm') : null);
-  };
-  const tableHead = (): HTMLElement => el('div', { class: 'v2-sa-head' + (cols ? '' : ' np') },
-    hc('name', '세션'),
-    ...(cols ? [hc('proj', '프로젝트')] : []),
-    hc('state', '상태'), hc('owner', '사람'),
-    hc('made', '생성 시각'), hc('seen', '마지막 활동'), el('span', {}));
-  const groupLabel = (key: string): string => sessGroupName(mby, key, data, ownerName);
-  const rowOf = (it: Item): HTMLElement => {
-    const s = it.s;
-    const v = hooks.verdict(s);
-    //  ⌘/Ctrl/Shift+클릭은 브라우저 몫으로 둔다(새 창·새 탭) — 셸 안 링크의 관례(main.ts bindAltOpen 머리말)와 같다.
-    const nameClick = (ev: MouseEvent): void => {
-      if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
-      ev.preventDefault(); ev.stopPropagation(); open(s);
-    };
-    const more = el('button', { class: 'v2-sa-more', type: 'button', 'aria-label': '더 보기', title: '열기 · 홈에서 치우기',
-      onclick: (ev: MouseEvent) => {
-        ev.stopPropagation();
-        const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-        //  치우기는 **홈 목록에 서 있는 내 세션**에만 — 안 서 있는 줄에서 «목록에서 치우기» 는 뜻이 없다(홈의 × 도 선 줄에만 있다).
-        showCtxMenu(r.right - 180, r.bottom + 4, [
-          { label: '세션 열기', icon: 'open', run: () => open(s) },
-          ...(v && verdictStands(v) ? [{ label: '홈에서 치우기', hint: '세션은 그대로 돌아요', run: () => hooks.onDismiss(s) }] : []),
-        ], { title: it.untitled ? '이름 없는 세션' : it.name });
-      } }, svgI(IC_MORE));
-    const row = el('div', { class: 'v2-sa-row' + (cols ? '' : ' np') + (v === 'dismissed' ? ' dism' : ''),
-      role: 'button', tabindex: '0', 'data-sid': s.id },
-      el('div', { class: 'c-name' }, sessIcon(),
-        el('a', { class: 't' + (it.untitled ? ' un' : ''), href: '#/s/' + encodeURIComponent(s.id), text: it.untitled ? `이름 없는 세션 · ${harnessName(s)}` : it.name, onclick: nameClick }),
-        v === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
-      cols ? el('div', { class: 'c-proj' + (s.projectId ? '' : ' none') }, projIcon(!!s.projectId), el('span', { text: projName(data, s.projectId) || NO_PROJECT_NAME })) : null,
-      el('div', { class: 'c-kind' }, stateCell(s)),
-      el('div', { class: 'c-who' }, personFace(it.owner === 'me' ? meId : it.owner, 'v2-sall-face', ownerName(it.owner))),
-      el('div', { class: 'c-made' }, madeCell(Number(s.createdAt) || 0)),
-      el('div', { class: 'c-when' }, el('span', { class: 'm', text: whenMs(Number(s.lastSeen) || 0), title: s.lastSeen ? new Date(Number(s.lastSeen)).toLocaleString() : '' })),
-      el('div', { class: 'c-acts' }, more));
-    //  #4233(원준 2026-09-26 «사이드 피크 개념 그냥 없애자») — 한 번 누르면 바로 그 세션을 홈에서 연다.
-    row.addEventListener('click', (ev) => { if ((ev.target as HTMLElement).closest('button, a, input, select')) return; open(s); });
-    row.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && ev.target === row) { ev.preventDefault(); open(s); } });
-    return row;
-  };
-  const list = el('div', { class: 'v2-sa-list', 'aria-label': '세션 목록' });
-  //  정렬이 읽는 값 — 표에 그려진 그 글자여야 사람이 «이 열 기준» 을 눈으로 확인할 수 있다.
-  const sortFields = (it: Item) => ({ name: it.name, proj: projName(data, it.projectId) || '', owner: ownerName(it.owner),
-    rank: stateRank(String(it.stateKey || '')), made: Number(it.s.createdAt) || 0, seen: Number(it.lastSeen) || 0 });
-  const ordered = (rs: readonly Item[]): Item[] => sortAllSess(rs, ui.sort, sortFields);
-  let budget = ui.shown;
-  //  묶지 않음 — 묶음 머리 없이 열 머리 한 줄, 이름 없는 세션도 접지 않고 전부 최근 순(«완전 raw 한 전체보기»).
-  if (vis.length) list.append(tableHead());
-  if (mby === 'none' && vis.length) {
-    for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); }
-  }
-  for (const g of mby === 'none' ? [] : groupAllSess(vis, mby, now, stateRank)) {
-    if (budget <= 0) break;
-    const gk = `${mby}:${g.key}`;
-    const closed = ui.closed.has(gk);
-    list.append(el('div', { class: 'v2-sa-gh plain' },
-      el('button', { class: 'l', type: 'button', 'aria-expanded': String(!closed), onclick: () => { if (closed) ui.closed.delete(gk); else ui.closed.add(gk); repaint(); } },
-        el('span', { class: 'car' + (closed ? ' shut' : '') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
-        el('span', { class: 'pill', text: groupLabel(g.key) }), el('span', { class: 'n', text: String(g.rows.length) }))));
-    if (closed) continue;
-    const rows = ordered(g.rows);
-    const named = rows.filter((it) => !it.untitled);
-    const unnamed = rows.filter((it) => it.untitled);
-    for (const it of named) { if (budget-- <= 0) break; list.append(rowOf(it)); }
-    if (unnamed.length && budget > 0) {
-      const uOpen = ui.openUntitled.has(gk);
-      const hs = [...new Set(unnamed.map((it) => harnessName(it.s)).filter(Boolean))].join(' · ');
-      list.append(el('button', { class: 'v2-sa-fold', type: 'button', 'aria-expanded': String(uOpen),
-        onclick: () => { if (uOpen) ui.openUntitled.delete(gk); else ui.openUntitled.add(gk); repaint(); } },
-        el('span', { class: 'car' + (uOpen ? '' : ' shut') }, svgI(IC_CHEV, 'v2-sa-ic sm')),
-        el('span', { text: `이름 없는 세션 ${unnamed.length}개${hs ? ' · ' + hs : ''}` })));
-      if (uOpen) for (const it of unnamed) { if (budget-- <= 0) break; list.append(rowOf(it)); }
-    }
-  }
-  const left = vis.length - Math.min(vis.length, ui.shown);
+  // ── 묶음별 목록 — 표는 sess-table.ts 한 벌(#4865: 프로젝트 보드 「리스트」 뷰도 같은 함수를 부른다) ──
+  const { list, more } = sessTable({
+    vis, by: mby, ui, now, cols: sc.proj === null, meId, open,
+    projName: (pid) => projName(data, pid ?? null), ownerName, groupLabel: (key) => sessGroupName(mby, key, data, ownerName),
+    //  치우기는 **홈 목록에 서 있는 내 세션**에만 — 안 서 있는 줄에서 «목록에서 치우기» 는 뜻이 없다(홈의 × 도 선 줄에만 있다).
+    menuRows: (it) => { const s = it.s; const v = hooks.verdict(s); return v && verdictStands(v) ? [{ label: '홈에서 치우기', hint: '세션은 그대로 돌아요', run: () => hooks.onDismiss(s) }] : []; },
+    rowClass: (it) => (hooks.verdict(it.s) === 'dismissed' ? ' dism' : ''),
+    rowTag: (it) => (hooks.verdict(it.s) === 'dismissed' ? el('span', { class: 'v2-bin-tag', text: '치움', title: '내가 홈 목록에서 치운 세션이에요. 열면 홈 목록에 돌아와요' }) : null),
+    repaint,
+  });
   const empty = !inProj.length
     ? (sc.group === null && sc.proj === null ? '아직 세션이 없어요. 홈에서 무엇이든 시켜 보세요.' : '고른 묶음에 세션이 없어요.')
     : '이 조건에 맞는 세션이 없어요. 기간 · 사람 · 상태를 바꿔 보세요.';
@@ -1170,7 +1041,7 @@ export function renderSessAll(host: HTMLElement, data: V2Data, hooks: SessAllHoo
     tools,
     el('div', { class: 'v2-sa-body' },
       list,
-      left > 0 ? el('button', { class: 'btn-text v2-bin-more', type: 'button', text: `외 ${left}개 더 보기`, onclick: () => { ui.shown += PAGE; repaint(); } }) : null,
+      more,
       !vis.length ? el('p', { class: 'v2-bin-empty', text: empty }) : null,
       //  클래식 세션 관리(만들기 폼 · 노드 · 여러 개 한꺼번에 종료·복원)는 없애지 않았다 — 셸 안 `#/terminal` 로 그대로 열린다.
       el('p', { class: 'v2-bin-fine', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원은 세션 관리 화면에서 해요.' },

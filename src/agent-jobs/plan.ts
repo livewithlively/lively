@@ -54,12 +54,41 @@ export function jobSessionId(jobId: number, hex8: string): string {
 export const JOB_SESSION_ID_RE = /^job-[1-9][0-9]{0,15}-[0-9a-f]{8}$/;
 
 /**
- * (순수) 작업이 앉는 자리(OS 계정 · 홈)의 구성원 — 구독 실행은 실행 계정 구성원, API 키 실행(#4488 v2-9)은 보낸 사람.
- *  API 키 실행도 사람의 자리에서 돈다(이 코어의 작업 컨테이너는 구성원 홈을 붙인다 — launch.ts 머리말). 키는 그 자리에 들어가지 않고 하네스는
- *  빈 설정 폴더 + 프록시 토큰으로 돈다(ai-runs/service.bootEnvForJob). «홈 없는 작업 컨테이너» 는 후속이다.
+ * (순수) 작업의 판정 · 권한 기준 구성원 — 구독 실행은 실행 계정 구성원, API 키 실행(#4488 v2-9)은 보낸 사람. 동시 상한 셈 · 활성 판정
+ *  (live.assertJobAllowed) · 작업 AI 토큰(live.mintMcpToken)이 이 사람으로 본다. 키는 어느 자리에도 들어가지 않고 하네스는 빈 설정 폴더 +
+ *  프록시 토큰으로 돈다(ai-runs/service.bootEnvForJob).
+ *  컨테이너의 자리(OS 계정 · 홈)는 이와 다를 수 있다: 홈 없는 작업(#4891 — 앱 서버가 보낸 API 키 에이전트 작업)은 이 사람의 홈을 붙이지 않고
+ *  전용 계정(HOMELESS_OS_USER)의 빈 홈에서 돈다(launch.ts).
  */
 export function jobSeatMember(job: { account_kind: string; account_member: string | null; requester: string }): string | null {
   return job.account_kind === "api_key" ? job.requester : job.account_member;
+}
+
+/**
+ * #4891 — 홈 없는 작업 컨테이너의 OS 계정(브로커 HOMELESS_OS_USER 와 같은 값). 구성원 계정은 `box_<slug>` 이고 slug 엔 `_` 가 없다
+ *  (terminal-isolation.memberSlug — [a-z0-9-]) → 어떤 구성원과도 겹치지 않는다. 브로커는 이 계정으로는 홈 없는 확보만 받는다.
+ */
+export const HOMELESS_OS_USER = "box_lvly_job";
+
+/**
+ * (순수) 작업 AI 의 앱 토큰 옵션 — 작업 상한만큼 살고(ttlSec), 홈 없는 작업(#4891)이면 주체를 앱 서버 급으로: 능력 API · /mcp 에서만 통하고
+ *  무조건 통과 도구가 꺼진다(auth/http-auth · apps/principal). 그 AI 를 부린 것은 앱 서버 코드라 사람 이름으로 세션 · 파일 · 계정 길을 열지 않게.
+ */
+export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number): { ttlSec: number; appServerPrincipal?: true } {
+  return job.homeless === true ? { ttlSec, appServerPrincipal: true } : { ttlSec };
+}
+
+/**
+ * (순수) 홈 없는 작업이 될 수 있나(#4891) — API 키 실행 · 앱 작업 · 프로젝트 없음 · 작업 폴더가 그 앱 폴더. 어기면 사유, 맞으면 null.
+ *  구독은 그 사람의 로그인(홈)으로만 돌고, 프로젝트 폴더는 사람 경계(공개범위)라 홈 없는 자리에 붙이지 않는다. 홈 없는 작업이 아니면 null.
+ */
+export function homelessJobRefusal(job: { homeless?: boolean; account_kind: string; app_id: string | null; project_id: number | null; cwd: string }): string | null {
+  if (job.homeless !== true) return null;
+  if (job.account_kind !== "api_key") return "홈 없는 작업은 API 키 실행만 됩니다";
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "홈 없는 작업은 앱 작업만 됩니다";
+  if (job.project_id != null) return "홈 없는 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "홈 없는 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  return null;
 }
 
 /** (순수) 요청한 실행 시간(분) → 초. 없으면 기본, 넘으면 최대로 접는다(거절하지 않는다 — 앱이 상한을 몰라도 돈다). */
@@ -139,7 +168,8 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
   if (f.status === "starting") {
     const since = f.claimedAt ?? f.createdAt;
     if (nowMs - since > p.start_timeout_sec * 1000) {
-      return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.start_timeout_sec}초 안에 시작하지 않았습니다`, kill: true };
+      //  판이 실패를 알렸다면(#4829 boot-failed) 그 사유로 이미 끝났다 — 여기까지 온 것은 판이 게이트웨이에 한 번도 닿지 못한 경우다.
+      return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.start_timeout_sec}초 안에 시작하지 못했습니다 — 컨테이너가 뜨지 않았거나 게이트웨이에 닿지 못했습니다`, kill: true };
     }
     return { act: "none" };
   }
@@ -155,6 +185,36 @@ export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPoli
     return { act: "none" };
   }
   return { act: "none" };
+}
+
+/** 보존 정리(#4828) — 한 판에 지우는 행 수 · 꽉 찬 판이 이어질 때 한 번의 정비에서 도는 판 수(밀린 것을 몇 주에 걸쳐 지우지 않게 — 격리 리뷰). */
+export const PRUNE_BATCH = 1000;
+export const PRUNE_ROUNDS_MAX = 10;
+
+/** 판의 시작 실패 보고(#4829 — runner.ts BOOT_SOURCE 의 boot-failed 본문): 어느 단계 · 게이트웨이가 준 상태 코드(못 닿았으면 0) · 짧은 말. */
+export interface BootFailure { stage: "boot" | "runner"; status: number | null; message: string }
+
+/** (순수) 시작 실패 보고를 거른다 — 판은 작업 AI 와 같은 uid 라 보고를 믿지 않고 칸마다 거르고 자른다(한 줄 · 300자). */
+export function parseBootFailure(body: unknown): BootFailure {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const status = typeof b.status === "number" && Number.isInteger(b.status) && b.status >= 0 && b.status < 1000 ? b.status : null;
+  const message = typeof b.message === "string" ? wellFormed(noNul(b.message).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300)) : "";
+  return { stage: b.stage === "runner" ? "runner" : "boot", status, message };
+}
+
+/**
+ * (순수) 시작 실패를 사람이 읽을 오류 문장으로(600자까지).
+ *  ★ 도는 중인 작업에 부트가 401 이면 게이트웨이는 시작을 받았는데 그 응답이 판에 못 닿은 것이다 — 부트 비밀은 한 번 쓰면 지워져
+ *   다시 물으면 401 이다(service.onBoot 머리말). «비밀이 틀렸다» 로 말하면 틀린 말이 된다.
+ */
+export function bootFailureError(f: BootFailure, jobStatus: AgentJobStatus): string {
+  const detail = f.message ? `: ${f.message}` : "";
+  const s = f.stage === "runner" ? `작업 컨테이너의 실행기가 시작하자마자 멈췄습니다${detail}`
+    : f.status === 401 && jobStatus === "running" ? "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)"
+      : f.status === 200 ? `작업 컨테이너가 게이트웨이의 시작 응답을 읽지 못했습니다${detail}`
+      : !f.status ? `작업 컨테이너가 게이트웨이에 닿지 못했습니다${detail}`
+        : `작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(${f.status})${detail}`;
+  return s.slice(0, 600);
 }
 
 /** 판이 보내는 마지막 보고(runner.ts 의 result 본문). */

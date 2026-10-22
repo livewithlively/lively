@@ -1204,10 +1204,11 @@ function render(): void {
   //    사이드바가 갈아엎이면 방금 보던 목록이 사라진다.
   //  #2423 — 자료 앱이 활성인 동안 사이드바 칸은 자료의 것이다(앱 소유 사이드바). 구역이 아니라 주소로
   //   판정한다(자료는 레일의 '갈 곳'이 아니라 앱이다) — 구역 기억(section)은 건드리지 않아서, 자료를 떠나면
-  //   보던 구역이 그대로 돌아온다. 조립은 아래 renderSourcesSection — 구역들과 같은 틀(topBits·secHead·secFoot)이라
-  //   레일을 숨겨도 문패·구역 이동·발치 도크가 똑같이 선다.
+  //   보던 구역이 그대로 돌아온다. 조립은 아래 renderSourcesSection — 구역들과 같은 틀(topBits·secHead)이라
+  //   레일을 숨겨도 문패·구역 이동이 똑같이 선다. 발치는 앱의 것(appFoot — #4632 구역 도크는 안 선다).
   //  #4632 — 누가 이 사이드바를 갖나는 lib/side-owner 한 자리가 정한다(원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야»). 앱이 제 사이드바를 가지면
-  //   그 앱의 것만 선다. 사이드바가 없는 앱은 셸이 이 열을 접는다(main.ts app-ctx) — 그때 여기 그리는 구역 목록은 넓은 화면에선 안 보이고 폰 서랍에만 쓰인다.
+  //   그 앱의 것만 선다(발치까지 — appFoot). 사이드바가 없는 앱은 셸이 이 열을 접고(main.ts app-ctx) 좁은 폭에선 ☰ 를 걷는다(mobile.ts setSide) —
+  //   그때 여기 그리는 구역 목록은 어디에도 안 보인다. 폰 아래 탭 바로 구역을 고르면 셸이 주인을 «구역» 으로 넘겨 그 구역의 목록으로 다시 그린다.
   const own = ownerNow();
   if (own === 'sources') { sideRoot?.setAttribute('data-sec', 'sources'); renderSourcesSection(); return; }
   //  #4233 분류체계 앱도 앱 소유 사이드바다(자료와 같은 판정 · 같은 틀).
@@ -1240,7 +1241,7 @@ function secHead(title: string, count: number | null, ...acts: Array<HTMLElement
 }
 
 /** 레일을 숨겼을 때 사이드바 머리 한 줄(#2016 안 B) — [스택 타일 + 이름 ▾] … [지금 구역 ▾]. 레일이 보이면 그리지 않는다.
- *  왼쪽은 레일 맨 위의 그 문패(같은 팝오버), 오른쪽은 구역 드롭다운(여섯 행 + 레일 펼치기). 앱·나는 발치 한 줄로(secFoot). */
+ *  왼쪽은 레일 맨 위의 그 문패(같은 팝오버), 오른쪽은 구역 드롭다운(여섯 행 + 레일 펼치기). 앱·나는 발치 한 줄로(secFoot · appFoot 의 footRow). */
 function wsHead(): HTMLElement {
   const sec = hooks.section?.() || 'home';
   const ak = last ? last.activeKey() : '';
@@ -1295,6 +1296,15 @@ function secFoot(...rows: Array<HTMLElement | null>): HTMLElement {
       dock('connect', '외부 앱 연결', 0, '외부 앱 연결 — 슬랙·노션·드라이브 같은 바깥 서비스를 잇습니다')),
     //  레일을 숨겼으면 레일 발치의 [앱]·[나]가 여기로 내려온다(안 B).
     railIsHidden() ? footRow() : null);
+}
+
+/** 제 사이드바를 그리는 앱(자료 · 분류체계 · 세션 이력 · 앱빌더)의 발치 — **그 앱의 것만** 선다(#4632).
+ *  원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야» → 2026-10-19 자료 · 분류체계 · 세션 이력에 남아 있던 구역 발치 도크(지난 세션 · 휴지통 · 외부 앱 연결)도 뺀다(«ㅇㅇ»).
+ *   도크는 구역의 것이다(secFoot) — 앱 사이드바에선 레일이 그 구역으로 가는 길이다.
+ *  셸의 것 둘은 남는다: 데스크톱 업데이트 알림(#1838 — 어느 화면에서든 같은 자리) · 레일을 숨겼을 때 내려오는 [앱] · [나](footRow — 레일 그 자체다).
+ *  rows = 그 앱의 문(세션 이력의 「세션 목록」 · 앱빌더의 「앱 찾기」). 다 비면 발치 줄도 안 선다(47-v2-rail.css .v2-app-foot). */
+function appFoot(...rows: Array<HTMLElement | null>): HTMLElement {
+  return el('footer', { class: 'v2-side-foot v2-app-foot' }, updateSlot(), ...rows, railIsHidden() ? footRow() : null);
 }
 
 /** 발치의 '갈 곳' 한 줄(세션 이력 등) — 목록의 항목이 아니라 같은 급의 문이다. */
@@ -1433,7 +1443,7 @@ function renderSourcesSection(): void {
       ...(findOn ? [el('div', { class: 'v2-find v2-find--apps' }, sourcesFindInput(() => redraw()))] : []),
       el('nav', { class: 'v2-kviews', 'aria-label': '모든 자료' }, allRow),
       listEl),
-    secFoot());
+    appFoot());
   fitWikiList(listEl, order, sizes, forced, build);
   listAfter(keep);
   bindSideKeys();
@@ -1547,7 +1557,7 @@ function renderTaxonomySection(): void {
         fixRow('#/taxonomy', 'chart', '전체 지도', d ? active.length : null, at.view === 'map', '전체 지도: 묶음마다 분류와 지식 수 · 프로젝트 수'),
         fixRow('#/taxonomy?view=fix', 'alert', '손볼 것', fixN, at.view === 'fix', '손볼 것: 정의 없음 · 빈 분류 · 제안 대기')),
       listEl),
-    secFoot());
+    appFoot());
   fitWikiList(listEl, order, sizes, forced, build);
   listAfter(keep);
   bindSideKeys();
@@ -1908,10 +1918,9 @@ function renderBuilderSection(): void {
         fix(builderRoute('new'), 'plus', '새 앱 만들기', null, 'new', '새 앱을 처음부터 만들어요', ' v2-bld-new'),
         fix(builderRoute('list'), 'grid', '모든 앱', M ? M.drafts.length + M.mine.length : null, 'all', '만들던 앱과 내가 만든 앱을 한눈에 봐요')),
       listEl),
-    //  레일을 숨겼으면 레일 발치의 [앱] · [나] 가 내려온다(footRow) — 그 [앱] 이 같은 앱 찾기라 「앱 찾기」 줄은 그때 두지 않는다.
-    el('footer', { class: 'v2-side-foot v2-bld-foot' }, updateSlot(),
-      railIsHidden() ? footRow() : el('button', { class: 'v2-nav v2-foot-link', type: 'button', title: '다 만든 앱은 앱 찾기에서 열어요', onclick: () => openLaunchpad() },
-        icon('apps', 'v2-nav-ic'), el('span', { class: 'n', text: '앱 찾기' }))));
+    //  레일을 숨겼으면 레일 발치의 [앱] · [나] 가 내려온다(appFoot → footRow) — 그 [앱] 이 같은 앱 찾기라 「앱 찾기」 줄은 그때 두지 않는다.
+    appFoot(railIsHidden() ? null : el('button', { class: 'v2-nav v2-foot-link', type: 'button', title: '다 만든 앱은 앱 찾기에서 열어요', onclick: () => openLaunchpad() },
+      icon('apps', 'v2-nav-ic'), el('span', { class: 'n', text: '앱 찾기' }))));
   listAfter(keep);
   bindSideKeys();
 }
@@ -2065,7 +2074,7 @@ function renderHistorySection(): void {
       secHead('세션 이력', total || null, byBtn, findBtnEl),
       el('nav', { class: 'v2-kviews', 'aria-label': '전체 기록' }, allRow),
       listEl),
-    secFoot(door));
+    appFoot(door));
   fitSessCards(listEl, plans.length, (fit) => {
     const p = planFor(fit);
     return { order: p.shown.filter((k) => !full(k)), sizes, forced, build: build(p.shown, p.hidden) };

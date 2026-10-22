@@ -38,6 +38,7 @@ import { appLaunchCapabilities } from "./app-launch.js";
 import { fileCapabilities } from "./files.js";
 import { agentJobCapabilities } from "./agent-jobs.js";
 import { aiRunCapabilities } from "./ai-runs.js";
+import { appJobCapabilities } from "./app-jobs.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { shellPrefsCapabilities } from "./shell-prefs.js";
@@ -78,6 +79,7 @@ import { memberCollectAppCapabilities } from "./member-collect-apps.js";
 import { orgAppTools, orgAppToolsSetWrite } from "./app-tools.js";
 import { appInstanceCapabilities } from "./app-instances.js";
 import { appNotificationCapabilities } from "./app-notifications.js";
+import { linkPreviewCapabilities } from "./link-preview.js";   // #4769 링크 미리보기 — 앱 화면이 붙인 링크의 카드 재료를 서버가 읽는다
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
@@ -158,6 +160,7 @@ const all: Capability[] = [
   ...googleConnectCapabilities, // #1881 G5: 구글 "팀 자료로 모으기" — org_google_collect(상태)/set(토글=동의 시작)/connect(범위 넓히기)/oauth_complete(CP 릴레이). 수집기는 token_source=member:<켠 관리자> 로 그 사람의 연결을 가리킨다(구글엔 봇 개념이 없어 조직 토큰이라는 게 없다). ★Gmail 은 제한범위라 명시적으로 골라야 켜진다 — 안 쓰는 서비스를 끼우면 미검증 100명 한도를 되돌릴 수 없게 태운다.
   ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
   ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
+  ...linkPreviewCapabilities, // #4769 link_preview — 링크 카드(unfurl) 재료. 앱 토큰도 부른다(permissions.tools 선언).
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
@@ -173,6 +176,7 @@ const all: Capability[] = [
   ...appLaunchCapabilities, // #4480 v2-1 앱 주소(<앱>-<워크스페이스>.lvly.app)로 들어갈 일회용 코드(org_app_launch, REST 전용) — 사람 구성원 본인만.
   ...fileCapabilities, // #4673 파일 주소 — file_url(짧은 수명 서명 주소 GET·PUT, 받는 곳 /api/files/s/<토큰>) · file_address(세션 안 경로 → 주소) · file_path(주소 → 이 세션 안 경로). MCP+REST(/api/ui/files/*).
   ...aiRunCapabilities, // #4488 앱 AI 실행 — app_ai_run(입구 하나 · 단발+API 키=프록시 · 그 밖=작업 컨테이너) · get/runs/cancel/targets(scope null · 앱 동의) · app_ai_account(_set) · app_ai_limits(_set admin). MCP+REST(/api/ui/ai-runs* · /api/ui/ai-targets · /api/ui/ai-account · /api/ui/ai-run-limits).
+  ...appJobCapabilities, // #4486 앱 백그라운드 작업 — app_job_start(앱 서버 라우트를 함수에 비동기로 · 15분) · app_job_get · app_jobs · app_job_cancel(scope null · 앱 동의 — web.server 가 함의). MCP+REST(/api/ui/app-jobs*).
   ...agentJobCapabilities, // #4490 작업 컨테이너 — agent_job_run/get/list/cancel(scope=context, 보낸 사람 본인 구독 · 앱 화면은 다리로) · agent_job_limits(보기)/_set(admin). MCP+REST(/api/ui/agent-jobs*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).

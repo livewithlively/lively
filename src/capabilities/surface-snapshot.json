@@ -1674,7 +1674,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "d25993d565867490"
+  "input_hash": "930ae2b98ee3a3a6"
  },
  {
   "name": "org_hook_remove",
@@ -1814,7 +1814,7 @@
   "rest": [
    "POST /api/ui/org/harness-asset"
   ],
-  "input_hash": "a96bbcc213915060"
+  "input_hash": "3b14d9e5183ab650"
  },
  {
   "name": "org_harness_asset_remove",
@@ -2852,7 +2852,7 @@
   "rest": [
    "GET /api/ui/v6/projects"
   ],
-  "input_hash": "58a40d9e96c6e092"
+  "input_hash": "3bb0ac2ae2b6c795"
  },
  {
   "name": "project_grep",
@@ -4845,6 +4845,16 @@
   "input_hash": "c0922e821b084a79"
  },
  {
+  "name": "link_preview",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/link-preview"
+  ],
+  "input_hash": "1a5c5e2cd5970e6d"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,
@@ -5153,7 +5163,7 @@
   "rest": [
    "POST /api/ui/apps/:id/tool-call"
   ],
-  "input_hash": "05e07fe981720e97"
+  "input_hash": "04ea7395cbbfc1c0"
  },
  {
   "name": "store_insert",
@@ -5373,7 +5383,7 @@
   "rest": [
    "POST /api/ui/app-server-limits"
   ],
-  "input_hash": "c5c2331807e4d7c4"
+  "input_hash": "0135e126e888b26a"
  },
  {
   "name": "app_folder_limit_set",
@@ -5566,6 +5576,46 @@
   "input_hash": "8d6eea919f231c8c"
  },
  {
+  "name": "app_job_start",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-jobs"
+  ],
+  "input_hash": "1c46338bf43e1d21"
+ },
+ {
+  "name": "app_job_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-jobs/:id"
+  ],
+  "input_hash": "ca68465d3bbdd1a1"
+ },
+ {
+  "name": "app_jobs",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-jobs"
+  ],
+  "input_hash": "29cbb303f1e260ed"
+ },
+ {
+  "name": "app_job_cancel",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-jobs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
   "name": "agent_job_run",
   "scope": "context",
   "mcp": true,
@@ -5623,6 +5673,6 @@
   "rest": [
    "POST /api/ui/agent-job-limits"
   ],
-  "input_hash": "dcb45d30d8b1a5f8"
+  "input_hash": "8d77283b0070ed8e"
  }
 ]

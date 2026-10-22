@@ -205,9 +205,14 @@ try {
       JSON.stringify({ lost, running: v.stats.running }));
   }
   {
+    //  #4744 저장 결과의 «검색을 못 씀» 수가 목록 요약에 실린다(화면 «확인 필요» 의 이유).
+    await itemsPool.query(`UPDATE collect_run SET ingest = $2::jsonb WHERE run_id = $1`,
+      [r1, JSON.stringify({ state: "done", stored: 3, unsearched: 2, partial: true, per_unit: [{ unit_id: 1 }] })]);
     const v = await stats.handler({ days: 1, tz: "Asia/Seoul", recent: 200 }, ADMIN);
     const mine = v.recent.filter((x) => x.member_id === A || x.member_id === B);
     const a1 = v.recent.find((x) => x.run_id === r1);
+    chk("S3 저장 결과 요약 — 검색을 못 쓴 단위 수(unsearched) · 확인 필요 · 단위 줄은 싣지 않는다",
+      a1?.ingest?.unsearched === 2 && a1?.ingest?.partial === true && a1?.ingest?.stored === 3 && !("per_unit" in (a1?.ingest ?? {})), JSON.stringify(a1?.ingest));
     const okN = v.stats.ok, oomN = v.stats.outcomes.find((o) => o.outcome === "oom")?.count ?? 0;
     chk("S1 지표 — 내 실행이 실리고 이름이 붙는다 · 결과별로 센다 · 지금 크기와 출처", mine.length >= 4 && a1?.member_name === "PG 시험 A" && a1?.mem_peak_mb === 657
       && okN >= 3 && oomN >= 1 && v.stats.memory.samples >= 3 && v.policy.max_mb === 2048 && v.policy.source === "db" && v.window.tz === "Asia/Seoul",

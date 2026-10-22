@@ -3,7 +3,7 @@
 //  상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만» 조건을 단다 — 청/녹 두 슬롯·감시·판 보고가 겹쳐도 한 번만 넘어간다.
 import crypto from "node:crypto";
 import { itemsPool, q, withTx } from "../db/client.js";
-import { planClaims, type AgentJobStatus } from "./plan.js";
+import { planClaims, PRUNE_BATCH, type AgentJobStatus } from "./plan.js";
 import { AGENT_JOB_POLICY_RANGE, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
 export interface AgentJobRow {
@@ -24,8 +24,12 @@ export interface AgentJobRow {
   timeout_sec: number;
   /** #4488 단발 실행 — 도구 없이(`--tools ""` · MCP 없음) 글만 받는다. */
   bare: boolean;
+  /** #4891 사람 홈 없는 작업 컨테이너에서 도나(앱 서버가 보낸 API 키 에이전트 작업 — 작업 폴더는 앱 폴더뿐). */
+  homeless: boolean;
   session_id: string | null;
   boot_hash: string | null;
+  /** #4829 시작 실패 보고 비밀의 sha256 — 부트 비밀과 같은 값(자리 줄 때 단다) · 첫 박동이 지운다(그 전까지만 연다). */
+  fail_hash: string | null;
   secret_hash: string | null;
   mcp_token_hash: string | null;
   conversation_id: string | null;
@@ -47,7 +51,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, bare, session_id, boot_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
+  resume_conversation, resume_job_id, timeout_sec, bare, homeless, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -89,6 +93,11 @@ export interface NewAgentJob {
   timeoutSec: number;
   /** 단발(도구 없음) — 없으면 false. */
   bare?: boolean;
+  /**
+   * #4891 사람 홈 없는 작업 컨테이너에서 돌린다 — 앱 서버가 보낸 API 키 에이전트 작업만(ai-runs/service). 작업 폴더는 앱 폴더여야 한다.
+   *  필수다 — 접수하는 자리가 빠뜨리면 컴파일이 잡는다(빠지면 사람 홈에서 돈다).
+   */
+  homeless: boolean;
 }
 
 /**
@@ -98,7 +107,7 @@ export interface NewAgentJob {
 export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "max_queued" | "max_running">): Promise<{ row: AgentJobRow } | { full: { queued: number; running: number } }> {
   return withTx(async (c) => {
     await lockTenantQueue(c);
-    //  WHERE 로 열린 작업만 센다 — 끝난 작업은 쌓이기만 하므로(보존 정리는 후속) 접수마다 표 전체를 훑지 않게 열린 작업 인덱스를 탄다.
+    //  WHERE 로 열린 작업만 센다 — 끝난 작업이 보존 기간(#4828 keep_days)만큼 쌓이므로 접수마다 표 전체를 훑지 않게 열린 작업 인덱스를 탄다.
     const cnt = await q(c, `SELECT count(*) FILTER (WHERE status='queued')::int AS queued,
                                    count(*) FILTER (WHERE status IN ('starting','running'))::int AS running
                               FROM org_agent_job WHERE status IN ('queued','starting','running')`);
@@ -107,10 +116,10 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec, bare)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true]);
     return { row: norm(rows[0])! };
   });
 }
@@ -153,7 +162,7 @@ export async function claimAgentJobs(
       //  «대기 중이고 취소 요청이 없을 때만» — 고른 뒤 다른 쪽(취소 · 감시 — 잠금 밖)이 끝냈거나 취소를 걸었으면 넘기지 않는다.
       //   지난 띄우기 실패 사유(error)는 비운다(도는 작업에 «다시 기다립니다» 가 남지 않게) · 시도 횟수를 센다.
       const rows = await q(c,
-        `UPDATE org_agent_job SET status='starting', claimed_at=now(), session_id=$2, boot_hash=$3, error=NULL, attempts=attempts+1, updated_at=now()
+        `UPDATE org_agent_job SET status='starting', claimed_at=now(), session_id=$2, boot_hash=$3, fail_hash=$3, error=NULL, attempts=attempts+1, updated_at=now()
           WHERE id=$1 AND status='queued' AND NOT cancel_requested RETURNING ${COLS}`, [id, m.sessionId, m.boot.hash]);
       const row = norm(rows[0]);
       if (row) out.push({ row, bootSecret: m.boot.secret });
@@ -171,11 +180,14 @@ export async function getAgentJob(id: number): Promise<AgentJobRow | null> {
 }
 
 /** 판 콜백의 대조에 필요한 것만 — 비밀이 맞는지 모르는 요청에 프롬프트·결과(행당 수백 KB)를 읽지 않는다. */
-export interface AgentJobAuthRow { id: number; status: AgentJobStatus; boot_hash: string | null; secret_hash: string | null }
+export interface AgentJobAuthRow { id: number; status: AgentJobStatus; boot_hash: string | null; fail_hash: string | null; secret_hash: string | null }
 export async function getAgentJobAuth(id: number): Promise<AgentJobAuthRow | null> {
   if (!Number.isSafeInteger(id) || id < 1) return null;
-  const r = (await q(itemsPool, `SELECT id, status, boot_hash, secret_hash FROM org_agent_job WHERE id=$1`, [id]))[0];
-  return r ? { id: Number(r.id), status: r.status as AgentJobStatus, boot_hash: (r.boot_hash as string | null) ?? null, secret_hash: (r.secret_hash as string | null) ?? null } : null;
+  const r = (await q(itemsPool, `SELECT id, status, boot_hash, fail_hash, secret_hash FROM org_agent_job WHERE id=$1`, [id]))[0];
+  return r ? {
+    id: Number(r.id), status: r.status as AgentJobStatus, boot_hash: (r.boot_hash as string | null) ?? null,
+    fail_hash: (r.fail_hash as string | null) ?? null, secret_hash: (r.secret_hash as string | null) ?? null,
+  } : null;
 }
 
 /**
@@ -185,7 +197,7 @@ export async function getAgentJobAuth(id: number): Promise<AgentJobAuthRow | nul
  */
 export async function requeueAgentJob(id: number, why: string, maxAttempts: number): Promise<boolean> {
   const rows = await q(itemsPool,
-    `UPDATE org_agent_job SET status='queued', session_id=NULL, boot_hash=NULL, claimed_at=NULL, error=$2, updated_at=now()
+    `UPDATE org_agent_job SET status='queued', session_id=NULL, boot_hash=NULL, fail_hash=NULL, claimed_at=NULL, error=$2, updated_at=now()
       WHERE id=$1 AND status='starting' AND NOT cancel_requested AND attempts < $3 RETURNING id`, [id, why, maxAttempts]);
   return rows.length > 0;
 }
@@ -220,10 +232,13 @@ export async function setAgentJobMcpToken(id: number, tokenHash: string): Promis
   return rows.length > 0;
 }
 
-/** 박동 — 진행 꼬리·대화 id 를 싣는다. 도는 작업에만. 돌려주는 것: 취소 요청 여부(행이 없거나 끝났으면 null). */
+/**
+ * 박동 — 진행 꼬리·대화 id 를 싣는다. 도는 작업에만. 돌려주는 것: 취소 요청 여부(행이 없거나 끝났으면 null).
+ *  첫 박동이 시작 실패 보고 비밀(fail_hash)을 지운다(#4829) — 박동한 판은 살아 있으니 «시작하지 못했다» 로 끝낼 길을 닫는다.
+ */
 export async function tickAgentJob(id: number, o: { tail: string; conversationId: string | null }): Promise<{ cancel: boolean } | null> {
   const rows = await q(itemsPool,
-    `UPDATE org_agent_job SET last_tick_at=now(), output_tail=$2, conversation_id=COALESCE($3, conversation_id), updated_at=now()
+    `UPDATE org_agent_job SET last_tick_at=now(), output_tail=$2, conversation_id=COALESCE($3, conversation_id), fail_hash=NULL, updated_at=now()
       WHERE id=$1 AND status='running' RETURNING cancel_requested`, [id, o.tail, o.conversationId]);
   return rows.length ? { cancel: rows[0].cancel_requested === true } : null;
 }
@@ -251,12 +266,26 @@ export async function finishAgentJob(id: number, o: {
             error = CASE WHEN $2 = 'canceled' AND cancel_reason IS NOT NULL THEN cancel_reason ELSE $3 END,
             result=COALESCE($4::jsonb, result), exit_code=COALESCE($5, exit_code),
             conversation_id=COALESCE($6, conversation_id), output_tail=COALESCE($7, output_tail),
-            ended_at=now(), boot_hash=NULL, updated_at=now(),
+            ended_at=now(), boot_hash=NULL, fail_hash=NULL, updated_at=now(),
             reaped = (session_id IS NULL AND mcp_token_hash IS NULL)
       WHERE id=$1 AND status = ANY($8::text[])
         AND ($9::int IS NULL OR COALESCE(last_tick_at, started_at, claimed_at, created_at) < now() - make_interval(secs => $9::int))
       RETURNING ${COLS}`,
     [id, o.status, o.error ?? null, o.result ? JSON.stringify(o.result) : null, o.exitCode ?? null, o.conversationId ?? null, o.tail ?? null, from, silent]);
+  return norm(rows[0]);
+}
+
+/**
+ * 판의 시작 실패 보고(#4829) — 그 작업을 실패로 끝낸다. 실패 보고 비밀(fail_hash)이 맞을 때만: 띄우는 중(starting)이거나, 도는 중이라도
+ *  부트가 시작을 받고 응답을 못 받은 판(아직 박동 전). 비밀은 부트가 지우지 않고 첫 박동 · 되돌리기 · 끝내기가 지운다 — 박동이 온 판(살아 있다)은
+ *  비밀이 없어 null 이다. 실패 보고로 도는 작업을 끝낼 수 없다.
+ */
+export async function failBootAgentJob(id: number, failHash: string, error: string): Promise<AgentJobRow | null> {
+  const rows = await q(itemsPool,
+    `UPDATE org_agent_job SET status='failed', error=$3, ended_at=now(), boot_hash=NULL, fail_hash=NULL, updated_at=now(),
+            reaped = (session_id IS NULL AND mcp_token_hash IS NULL)
+      WHERE id=$1 AND fail_hash=$2 AND status IN ('starting','running')
+      RETURNING ${COLS}`, [id, failHash, error]);
   return norm(rows[0]);
 }
 
@@ -284,6 +313,23 @@ export async function openAgentJobs(limit = 1000): Promise<AgentJobSweepRow[]> {
   return rows.map((r) => ({ ...r, id: Number(r.id) }) as unknown as AgentJobSweepRow);
 }
 
+/**
+ * 보존 정리(#4828) — 끝났고 걷기를 마친 작업 가운데 끝난 지 keepDays 일이 지난 행을 지운다(끝난 때가 오래된 것부터 batch 행까지).
+ *  keepDays 가 1 일 아래(0 · 음수 · 1 미만 소수 · 숫자 아님)면 무기한이라 아무것도 지우지 않는다 — 버림 뒤 0 일로 돌면 걷은 행을 다 지운다.
+ *  걷기 전(reaped=false) 행은 남긴다 — 감시가 컨테이너 · 토큰을 걷는 근거다. 돌려주는 것 = 지운 행 수.
+ */
+export async function pruneAgentJobs(keepDays: number, batch: number = PRUNE_BATCH): Promise<number> {
+  const days = Math.floor(keepDays);
+  if (!(days >= 1)) return 0;
+  const r = await itemsPool.query(
+    `DELETE FROM org_agent_job WHERE id IN (
+       SELECT id FROM org_agent_job
+        WHERE reaped = true AND status IN ('done','failed','timeout','canceled') AND ended_at < now() - make_interval(days => $1)
+        ORDER BY ended_at LIMIT $2)`,
+    [days, Math.max(1, Math.floor(batch))]);
+  return r.rowCount ?? 0;
+}
+
 /** 걷기를 마쳤다 — 종료 신호(kill-session 성공 또는 이미 없다는 확답)를 보냈고 토큰을 폐기했다. 컨테이너 철거 자체는 브로커(#4696) 몫이다. */
 export async function markAgentJobReaped(id: number): Promise<void> {
   await q(itemsPool, `UPDATE org_agent_job SET reaped=true, updated_at=now() WHERE id=$1 AND status IN ('done','failed','timeout','canceled')`, [id]);
@@ -291,14 +337,14 @@ export async function markAgentJobReaped(id: number): Promise<void> {
 
 export interface AgentJobListFilter { requester?: string | null; appId?: string | null; status?: string | null; limit: number }
 /** 목록 한 줄 — 프롬프트·결과 전문·진행 꼬리·비밀 해시는 싣지 않는다(목록 100건이면 수십 MB 가 된다). 답은 앞머리만. */
-export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "result" | "boot_hash" | "secret_hash" | "mcp_token_hash"> & {
+export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "result" | "boot_hash" | "fail_hash" | "secret_hash" | "mcp_token_hash"> & {
   result_preview: string | null;
   has_result: boolean;
 };
 /** 목록이 싣는 답 앞머리 길이(문자). */
 export const RESULT_PREVIEW_MAX = 280;
 const SUMMARY_COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label,
-  resume_conversation, resume_job_id, timeout_sec, session_id, conversation_id, exit_code, error, cancel_requested,
+  resume_conversation, resume_job_id, timeout_sec, homeless, session_id, conversation_id, exit_code, error, cancel_requested,
   created_at, claimed_at, started_at, last_tick_at, ended_at, reaped,
   left(result->>'text', ${RESULT_PREVIEW_MAX}) AS result_preview, (result IS NOT NULL) AS has_result`;
 export async function listAgentJobs(f: AgentJobListFilter): Promise<AgentJobSummaryRow[]> {

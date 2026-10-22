@@ -4,7 +4,7 @@
 //  (엣지 표 D1~D4·E1~E10 — 사양은 scratchpad spec.md)
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { sessionInputFromBody, themeOf } from "./session-launch.js";
+import { launchReply, sessionInputFromBody, themeOf } from "./session-launch.js";
 
 test("themeOf: 헤더가 정본, 바디는 폴백, 모르는 값은 미지정 (D1~D4)", () => {
   assert.equal(themeOf({ headers: { "x-lively-theme": "dark" } }, { theme: "light" }), "dark");
@@ -79,4 +79,27 @@ test("sessionInputFromBody: 첫 지시는 20_000자에서 자르고, 앞뒤 공�
   assert.equal(sessionInputFromBody({}, { initialPrompt: "x".repeat(25_000) }).initialPrompt?.length, 20_000);
   assert.equal(sessionInputFromBody({}, { initialPrompt: "x".repeat(20_000) }).initialPrompt?.length, 20_000);   // 경계값 그대로
   assert.equal(sessionInputFromBody({}, { initialPrompt: "  pwd  " }).initialPrompt, "  pwd  ");
+});
+
+// #4906 — 두 입구가 같은 모양으로 답한다: 세션과 함께 **서버가 넣을 첫 지시**(화면이 그 글을 첫 지시로 기억한다 — launchReply 머리말).
+//  엣지 표 B1~B8(태스크 이름 채우기 · 태스크 여러 개 · 첨부 좌표 고침 · 평범 · 없음 · 옛 서버 · 이상값) — 화면 쪽 표는 scripts/spawn-first-prompt-runtime.test.mjs.
+test("launchReply: 넣을 첫 지시를 세션과 함께 답한다 — 서버가 지은 글 그대로(다듬지 않는다) (#4906 B1~B5)", () => {
+  const s = { id: "box-a", projectId: 7 };
+  assert.deepEqual(launchReply(s, { initialPrompt: "태스크 #9 진행해\n\n본문 끝 공백  " }), { session: s, initialPrompt: "태스크 #9 진행해\n\n본문 끝 공백  " });
+  assert.equal(launchReply(s, { initialPrompt: "지시" }).session, s);   // 같은 세션 객체 — 복사 · 변형 없이 싣는다
+});
+
+test("launchReply: 넣을 첫 지시가 없으면 싣지 않는다 — 없음 · 빈 · 공백뿐 · 문자열 아님 (#4906 B6·B8)", () => {
+  const s = { id: "box-a" };
+  for (const v of [undefined, null, "", "   ", "\n\t", 123, {}]) {
+    const r = launchReply(s, { initialPrompt: v });
+    assert.deepEqual(r, { session: s }, JSON.stringify(v));
+    assert.equal(Object.prototype.hasOwnProperty.call(r, "initialPrompt"), false, JSON.stringify(v));
+  }
+});
+
+test("launchReply: 관문이 읽은 첫 지시를 그대로 답한다 — sessionInputFromBody 의 20,000자 자르기 뒤의 글 (#4906)", () => {
+  const input = sessionInputFromBody({}, { harness: "claude", initialPrompt: "가".repeat(25_000) });
+  assert.equal(launchReply({ id: "x" }, input).initialPrompt, "가".repeat(20_000));
+  assert.equal(launchReply({ id: "x" }, sessionInputFromBody({}, { harness: "claude", initialPrompt: "   " })).initialPrompt, undefined);
 });

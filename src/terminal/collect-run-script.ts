@@ -148,6 +148,10 @@ process.stdin.on("data", (c) => { buf += c; }).on("end", () => {
  *  · ⚠ 그 파일만 읽는다 — tool_response **전체가** 안내문 문자열일 때, 그 사람 홈의 그 자리 모양(폴더/36자 세션/tool-results/*.txt)일 때만.
  *    커넥터가 돌려준 글(배열) 속에 같은 문구가 있어도 읽지 않는다 — 남이 쓴 글이 이 훅에게 아무 파일이나 읽히게 할 수 없게.
  *  · 첫 호출이 이 실행의 Claude 프로젝트 폴더(transcript_path 의 부모)를 적어 둔다 — 러너가 끝날 때 그 폴더를 치운다.
+ *  · #4744 그 큰 결과에서는 모델도 본문을 못 본다 — 다음 쪽 cursor · 펼칠 스레드 ts · 지메일 threadId 같은 **정해진 모양의 값만** 골라
+ *    additionalContext 로 모델에게 돌려준다(본문 글은 넣지 않는다). 안 그러면 쪽을 못 넘겨 같은 호출을 되풀이한다.
+ *  · #4744 PostToolUseFailure 로도 불린다 — 실패한 호출은 결과 대신 오류 글(failed · error)을 남긴다. 저장 단계는 «없는 스레드»
+ *    (thread_not_found — 지워진 부모 · 본문 속 가짜 머리)를 가리는 데만 쓴다(읽을 것이 없는 스레드가 «다 읽음» 을 영영 막지 않게).
  */
 export const COLLECT_CAPTURE_JS = String.raw`"use strict";
 const fs = require("fs"), path = require("path"), os = require("os"), crypto = require("crypto");
@@ -169,17 +173,75 @@ function savedFile(resp) {
   if (rel.length !== 4 || !/^[0-9a-f-]{36}$/.test(rel[1]) || rel[2] !== "tool-results" || !/\.txt$/.test(rel[3])) return null;
   return fs.statSync(real).isFile() ? real : null;
 }
+//  큰 결과의 표시 — 본문이 파일로 넘어가면 모델은 다음 쪽 cursor 도, 펼칠 스레드도 못 본다(매니지드 실측 2026-10-19: 100건 75,398자 →
+//   같은 호출 6번 되풀이). 지시를 이어 가는 데 필요한 값만 **정해진 모양일 때만** 골라 돌려준다(글 본문은 넣지 않는다 — 결과 글은 지시가 아니다).
+const TS = /^\d{9,11}\.\d{1,6}$/, TOKEN = /^[A-Za-z0-9+\/=_.:-]{1,512}$/;
+const uniq = (a) => Array.from(new Set(a));
+function hint(tool, text) {
+  let j = null;
+  try { j = JSON.parse(text); } catch (_) {}
+  if (!j || typeof j !== "object" || Array.isArray(j)) j = {};
+  const short = String(tool || "").replace(/^mcp__claude_ai_[A-Za-z0-9_]+?__/, "");
+  const pag = typeof j.pagination_info === "string" ? j.pagination_info : "";
+  const inner = [j.messages, j.results, j.result].find((v) => typeof v === "string") || "";
+  const out = [];
+  let cur = null, end = false;
+  if (/^slack_/.test(short)) {
+    //  대화 목록(slack_list_user_channels)만 다음 쪽 표시가 본문 맨 끝 줄 «Pagination: … Use cursor: "…"» 에 온다(맥 실측 2026-10-19) —
+    //   그 맨 끝 줄에서만 읽는다(채널 목적·주제 글 속 문구는 읽지 않는다). 다른 도구는 pagination_info 에서만 읽는다.
+    const m = /use cursor:?\s*\x60([^\x60]+)\x60/i.exec(pag)
+      || (short === "slack_list_user_channels" ? /(?:^|\n)Pagination:[^\n]*Use cursor:\s*"([^"\n]+)"\s*$/.exec(inner) : null);
+    cur = m && TOKEN.test(m[1]) ? m[1] : null;
+    end = !cur && (/no more (messages|replies|pages)|end of results/i.test(pag) || (short === "slack_list_user_channels" && !/cursor/i.test(inner)));
+    if (short === "slack_read_channel") {
+      const ts = [];
+      for (const b of inner.split(/^=== Message from .+ ===[ \t]*$/m).slice(1)) {
+        const t = /^Message TS:\s*(\S+)\s*$/m.exec(b);
+        if (t && TS.test(t[1]) && /^Thread:\s*\d+\s+repl/m.test(b)) ts.push(t[1]);
+      }
+      if (ts.length) out.push("«Thread: N replies» 가 붙은 메시지의 Message TS: " + uniq(ts).join(", "));
+    } else if (/^slack_search_/.test(short)) {
+      const th = [];
+      for (const b of inner.split(/^### Result \d+ of \d+[ \t]*$/m).slice(1)) {
+        const head = b.split(/^Text:/m)[0];
+        const t = /^Message_ts:\s*(\S+)\s*$/m.exec(head), p = /[?&]thread_ts=(\d{9,11}\.\d{1,6})/.exec(head.replace(/\\\//g, "/"));
+        if (t && p && TS.test(t[1]) && p[1] !== t[1]) th.push(p[1]);
+      }
+      if (th.length) out.push("검색 결과 가운데 답글의 thread_ts: " + uniq(th).join(", "));
+    }
+  } else if (short === "search_threads") {
+    const ids = (Array.isArray(j.threads) ? j.threads : []).map((t) => t && typeof t.id === "string" ? t.id : null).filter((x) => x && TOKEN.test(x));
+    if (ids.length) out.push("찾은 스레드 threadId: " + uniq(ids).join(", "));
+    cur = typeof j.nextPageToken === "string" && TOKEN.test(j.nextPageToken) ? j.nextPageToken : null;
+    end = !cur;
+  } else if (/^notion-(list-|search)/.test(short)) {
+    const c = [j.next_cursor, j.nextCursor].find((v) => typeof v === "string");
+    cur = c && TOKEN.test(c) ? c : null;
+    end = !cur && j.has_more !== true;
+  }
+  const page = cur ? "다음 쪽 cursor(지메일은 pageToken): \x60" + cur + "\x60" : end ? "다음 쪽: 없음(끝)" : null;
+  return ["[수집 실행 안내] 이 결과(" + short + ")는 본문이 커서 파일로만 저장됐다. 원문은 이미 받아 두었다 — 파일을 읽으려 하거나 같은 호출을 되풀이하지 말고, 아래 값으로 지시를 이어 간다."]
+    .concat(page ? ["- " + page] : [], out.map((l) => "- " + l)).join("\n");
+}
 const parts = [];
 process.stdin.on("data", (c) => parts.push(c)).on("end", () => {
   const ts = new Date().toISOString();
+  let tell = null;
   try {
     const j = JSON.parse(Buffer.concat(parts).toString("utf8"));
+    const file = Date.now() + "-" + crypto.randomBytes(3).toString("hex") + ".json";
+    fs.mkdirSync(path.join(dir, "cap"), { recursive: true, mode: 0o700 });
+    if (j.hook_event_name === "PostToolUseFailure") {
+      //  실패한 호출 — 결과 대신 오류 글을 남긴다(저장 단계가 «없는 스레드» 를 가린다). 목록 줄에는 failed 로 적는다(받은 원문 수에서 뺀다).
+      const err = (typeof j.error === "string" ? j.error : JSON.stringify(j.error === undefined ? null : j.error)).slice(0, 500);
+      fs.writeFileSync(path.join(dir, "cap", file), JSON.stringify({ tool_name: j.tool_name, tool_input: j.tool_input, tool_use_id: j.tool_use_id, failed: true, error: err }), { mode: 0o600 });
+      fs.appendFileSync(path.join(dir, "caps.jsonl"), JSON.stringify({ ts, tool: j.tool_name, id: j.tool_use_id || null, chars: err.length, sha256: crypto.createHash("sha256").update(err).digest("hex"), file, failed: true }) + "\n", { mode: 0o600 });
+      process.exit(0);
+    }
     const resp = j.tool_response === undefined ? null : j.tool_response;
     const saved = savedFile(resp);
     const text = saved ? fs.readFileSync(saved, "utf8") : null;
     const flat = text != null ? text : JSON.stringify(resp);
-    const file = Date.now() + "-" + crypto.randomBytes(3).toString("hex") + ".json";
-    fs.mkdirSync(path.join(dir, "cap"), { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(dir, "cap", file), JSON.stringify(Object.assign({ tool_name: j.tool_name, tool_input: j.tool_input, tool_use_id: j.tool_use_id, tool_response: resp },
       text != null ? { saved_text: text } : {})), { mode: 0o600 });
     fs.appendFileSync(path.join(dir, "caps.jsonl"), JSON.stringify(Object.assign({ ts, tool: j.tool_name, id: j.tool_use_id || null, chars: flat.length, sha256: crypto.createHash("sha256").update(flat).digest("hex"), file },
@@ -187,9 +249,12 @@ process.stdin.on("data", (c) => parts.push(c)).on("end", () => {
     const tp = typeof j.transcript_path === "string" ? j.transcript_path : "";
     const note = path.join(dir, "claude-project.txt");
     if (tp && !fs.existsSync(note)) fs.writeFileSync(note, path.dirname(tp), { mode: 0o600 });
+    if (text != null) { try { tell = hint(j.tool_name, text); } catch (_) {} }
   } catch (e) {
     try { fs.appendFileSync(path.join(dir, "caps.jsonl"), JSON.stringify({ ts, error: String(e && e.message ? e.message : e).slice(0, 200) }) + "\n", { mode: 0o600 }); } catch (_) {}
   }
+  //  모델에게 돌려줄 표시(PostToolUse 의 additionalContext — 맥 실측 2026-10-19: 헤드리스 haiku 가 그 cursor 를 그대로 썼다).
+  if (tell) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: tell } }));
   process.exit(0);
 });
 `;
@@ -345,7 +410,8 @@ function finish(o) {
     container: mi0 ? { totalMb: Math.round(mi0.totalKb / 1024), startMb: Math.round(mi0.usedKb / 1024), peakMb: Math.round(mem.miPeakKb / 1024) } : null };
   let sum = {};
   try { sum = summarize(); } catch (e) { sum = { summarizeError: String(e && e.message || e) }; }
-  const caps = (rd(P("caps.jsonl")) || "").split("\n").filter(Boolean).length;
+  //  받은 원문 수 — 실패한 호출의 줄(failed)은 뺀다(도구 오류는 calls 의 error 로 따로 센다).
+  const caps = (rd(P("caps.jsonl")) || "").split("\n").filter((l) => l && l.indexOf('"failed":true') < 0).length;
   try { W("summary.json", Object.assign({ runId: job && job.runId, apps: job ? job.apps : [], claude: { version: info.version, flags: info.flags, account: info.account }, servers: info.servers, connectors: info.connectors, allowed: info.allowed, missing: info.missing, denied: info.denied.length, attempts: info.attempts, loadMisses: info.loadMisses, captures: caps, mem: memOut, stderrTail: (rd(P("err.log")) || "").slice(-1500) }, sum)); } catch (_) {}
   const ex = Object.assign({ startedAt: new Date(t0).toISOString(), endedAt: new Date().toISOString(), durationMs: Date.now() - t0, timedOut }, o);
   try { W("exit.json.tmp", ex); fs.renameSync(P("exit.json.tmp"), P("exit.json")); } catch (_) {}
@@ -391,10 +457,15 @@ process.on("uncaughtException", (e) => finish({ code: null, error: "runner: " + 
   if (!allowed.length) { clearTimeout(deadline); finish({ code: null, error: "no-connector" }); return; }
   W("gate.json", { servers: allowed.map((c) => c.key) });
   const node = process.execPath, q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
-  W("settings.json", { hooks: {
+  //  실패한 호출도 받는다(#4744 — «없는 스레드» 판정). 실측한 판(2.1.300 이상 — 맥 2.1.303: 페이로드에 error · 모르는 훅 이름이 있어도 다른 훅은
+  //   그대로 돈다)에서만 싣는다 — 더 옛 claude 가 모르는 이름 때문에 설정을 통째로 버리면 문지기(쓰기 막기)까지 사라지므로(격리 리뷰).
+  const capHook = [{ matcher: "mcp__claude_ai_.*", hooks: [{ type: "command", command: q(node) + " " + q(P("cap.cjs")) + " " + q(dir), timeout: 120 }] }];
+  const atLeast = (v, want) => { const a = /^(\d+)\.(\d+)\.(\d+)/.exec(String(v || "")); if (!a) return false;
+    for (let i = 0; i < 3; i++) { const x = Number(a[i + 1]); if (x !== want[i]) return x > want[i]; } return true; };
+  W("settings.json", { hooks: Object.assign({
     PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command: q(node) + " " + q(P("gate.cjs")) + " " + q(dir), timeout: 30 }] }],
-    PostToolUse: [{ matcher: "mcp__claude_ai_.*", hooks: [{ type: "command", command: q(node) + " " + q(P("cap.cjs")) + " " + q(dir), timeout: 120 }] }],
-  } });
+    PostToolUse: capHook,
+  }, atLeast(info.version, [2, 1, 300]) ? { PostToolUseFailure: capHook } : {}) });
   const args = ["-p", "--output-format", "stream-json", "--verbose", "--max-turns", String(job.maxTurns), "--model", job.model, "--settings", P("settings.json"),
     "--allowedTools", ...allowed.map((c) => "mcp__" + c.key),
     "--disallowedTools", ...info.denied, "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Task", "Agent"];
@@ -510,8 +581,8 @@ export function collectReadSh(dir: string): string {
   ].join("\n");
 }
 
-/** 원문 하나의 목록 줄(caps.jsonl). */
-export interface CollectCapture { ts: string; tool: string | null; id: string | null; chars: number | null; sha256: string | null; file: string | null; error?: string }
+/** 원문 하나의 목록 줄(caps.jsonl) — error 는 받기 훅 자체의 실패 · failed 는 실패한 도구 호출(#4744 — 결과 대신 오류 글을 남긴 줄). */
+export interface CollectCapture { ts: string; tool: string | null; id: string | null; chars: number | null; sha256: string | null; file: string | null; error?: string; failed?: true }
 
 /** 읽은 상태. */
 export interface CollectRunRead {
@@ -544,7 +615,7 @@ export function parseCollectRead(out: string): CollectRunRead {
       captures.push({
         ts: String(j.ts ?? ""), tool: j.tool == null ? null : String(j.tool), id: j.id == null ? null : String(j.id),
         chars: typeof j.chars === "number" ? j.chars : null, sha256: j.sha256 == null ? null : String(j.sha256),
-        file: j.file == null ? null : String(j.file), ...(j.error ? { error: String(j.error) } : {}),
+        file: j.file == null ? null : String(j.file), ...(j.error ? { error: String(j.error) } : {}), ...(j.failed === true ? { failed: true as const } : {}),
       });
     } catch { /* 반쯤 쓰인 줄 — 다음 읽기에 온전해진다 */ }
   }

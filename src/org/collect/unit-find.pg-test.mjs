@@ -186,9 +186,9 @@ try {
     chk("S1c 웹 화면의 의미검색(세션 헤더 없는 REST)에는 안내를 계산하지 않는다 · 세션이 부른 REST·MCP 에는 붙는다",
       !web.collect_hint && !!script.collect_hint?.units?.length && !!mcp.collect_hint?.units?.length,
       JSON.stringify({ web: !!web.collect_hint, script: !!script.collect_hint, mcp: !!mcp.collect_hint }));
-    //  앱 화면 다리(열람 신원이 실리지 않는 app-ui · app-front)에는 계산하지 않는다 · 특권 열람 신원(null)으로 불러도 안내는 그 사람 것으로만.
-    const appUi = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-ui", actor: A });
-    const appFront = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-front", actor: A });
+    //  앱 화면 다리(app-ui · app-front — 세션이 아니다)에는 계산하지 않는다 · 특권 열람 신원(null)으로 불러도 안내는 그 사람 것으로만.
+    const appUi = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-ui", actor: A, viewer: A });
+    const appFront = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, userOf(A), { source: "app-front", actor: A, viewer: A });
     const priv = await handler("knowledge_search")({ q: "롤아웃 날짜 확정 메모" }, userOf(A), { source: "mcp", viewer: null });
     const lockedId = (await itemsPool.query(`SELECT id FROM source WHERE name=$1`, [`${SRC}-locked`])).rows[0].id;
     const viaApp = await handler("knowledge_search")({ q: "결제 롤아웃 날짜 확정" }, { ...userOf(A), appId: "app-ci-find" }, { source: "mcp", viewer: A });

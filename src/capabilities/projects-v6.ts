@@ -157,6 +157,9 @@ const projectListV6Input = {
   // #1851 휴지통 — 버린 프로젝트(trashed_at). 기본 제외. 버리기·복원은 project_trash_v6, 완전 삭제는 project_purge_v6.
   trashed: z.enum(["exclude", "include", "only"]).optional()
     .describe("휴지통에 버린 프로젝트 처리 — exclude(기본: 제외) · include(포함) · only(버린 것만)."),
+  // #4865 — 본문(description) 빼고 받기. 보드 첫 화면은 본문을 그리지 않는데, 실측(2026-10-17 · 1,299건) 응답 5.2MB 중
+  //  4.26MB(82%)가 본문이었다 — 「프로젝트를 불러오는 중」 이 길던 주된 이유. 본문이 필요한 화면(상세)은 /:id 로 따로 받는다.
+  slim: z.boolean().optional().describe("true 면 본문(description)을 빼고 준다 — 목록만 그릴 때. 본문은 project_get_v6."),
 };
 type ProjectListV6Input = z.infer<z.ZodObject<typeof projectListV6Input>>;
 const projectListV6: Capability = {
@@ -176,6 +179,7 @@ const projectListV6: Capability = {
           mine: query.mine === "1" || query.mine === "true",
           archived: query.archived === "include" || query.archived === "only" ? String(query.archived) as "include" | "only" : undefined,
           trashed: query.trashed === "include" || query.trashed === "only" ? String(query.trashed) as "include" | "only" : undefined,
+          slim: query.slim === "1" || query.slim === "true",
         };
       } }],
   },
@@ -204,6 +208,7 @@ const projectListV6: Capability = {
         for (const p of projects as any[]) p.my_session_count = byProj.get(Number(p.id)) || 0;
       } catch { /* 세션 조회 실패 → my_session_count 미부여(프론트는 0=비활성으로 처리) */ }
     }
+    if (input.slim) for (const p of projects as any[]) delete p.description;
     return { projects };
   },
 };

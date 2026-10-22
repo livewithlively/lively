@@ -208,8 +208,9 @@ async function planRun(user: LivelyUser, input: CollectRunStart): Promise<{
   return {
     mode, prompt, apps,
     //  #4744 링크 읽기 몫 — 실은 링크마다 둘(스레드 이어 읽기) · 같은 판 링크를 따라가는 단위(sameRunLinkUnit — 확인 읽기 단위는 아니다)마다 상한만큼.
+    //   스레드 글 검색을 하는 슬랙 단위(옛 스레드의 새 답글)마다 둘 더.
     maxTurns: collectMaxTurns(units.filter((u) => !u.proof).length, units.filter((u) => u.app === "gmail" && !u.proof).length, units.filter((u) => u.proof).length,
-      links.length * 2 + units.filter(sameRunLinkUnit).length * SAME_APP_LINKS_PER_UNIT),
+      links.length * 2 + units.filter(sameRunLinkUnit).length * SAME_APP_LINKS_PER_UNIT, units.filter((u) => u.search && !u.proof).length),
     plan: {
       mode: "collect", units, planned_at: Math.floor(now / 1000), ...(scheduled ? { trigger: "schedule" as const } : {}),
       ...(links.length ? { links } : {}),

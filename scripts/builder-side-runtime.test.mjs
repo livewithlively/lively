@@ -82,7 +82,7 @@ async function PAGE_MAIN() {
   R.d1 = {
     sec: side.getAttribute("data-sec"), head: txt($(".v2-app-space-head .v2-k")),
     spaces: $$(".v2-app-space").map((s) => s.getAttribute("aria-label")),
-    fixed: fixed(), dock: !!$(".v2-app-dock"), foot: $$(".v2-bld-foot .v2-foot-link").map((b) => txt($(".n", b))),
+    fixed: fixed(), dock: !!$(".v2-app-dock"), foot: $$(".v2-app-foot .v2-foot-link").map((b) => txt($(".n", b))),
   };
   R.d3 = cards();
   // ── D5 · D6 — 켜진 줄 ──

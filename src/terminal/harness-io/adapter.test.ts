@@ -32,8 +32,10 @@ t("[A3] 모든 어댑터가 모든 축을 답한다(null 도 답이다 — undef
     assert.ok(Array.isArray(a.roots(["/home/x"], "yoon")), `${a.key}.roots 는 배열`);
   }
 });
-t("[A4] 실측된 파서 — claude·antigravity·codex·grok 은 읽고, opencode·shell 은 아직 못 읽는다(있는 척 안 한다)", () => {
-  assert.deepEqual([...READABLE_HARNESSES].sort(), ["antigravity", "claude", "codex", "grok"]);
+//  cursor(#4927) 는 실파일이 아니라 번들 작성기 코드로 형식을 확인한 파서다(harness-io/cursor.ts 머리말) — 승인 UI 는 없다.
+t("[A4] 파서 — claude·antigravity·codex·grok·cursor 는 읽고, opencode·shell 은 아직 못 읽는다(있는 척 안 한다)", () => {
+  assert.deepEqual([...READABLE_HARNESSES].sort(), ["antigravity", "claude", "codex", "cursor", "grok"]);
+  assert.deepEqual(chatIoCaps("cursor"), { read: true, answer: false });
   assert.deepEqual(chatIoCaps("claude"), { read: true, answer: true });
   assert.deepEqual(chatIoCaps("grok"), { read: true, answer: false });      // 승인 UI 미실측 → 화면이 버튼을 안 그린다
   assert.deepEqual(chatIoCaps("antigravity"), { read: true, answer: false });

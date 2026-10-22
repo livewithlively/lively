@@ -610,9 +610,17 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS cancel_reason TEXT`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS bare BOOLEAN NOT NULL DEFAULT false`);
+  //  #4829 fail_hash — 판의 시작 실패 보고(boot-failed)를 여는 비밀의 sha256. 부트 비밀과 같은 값이라 자리 줄 때 함께 달고, 부트가 지워도
+  //   남는다 — 첫 말의 응답을 못 받은 판(401)도 실패를 알릴 수 있게. 첫 박동 · 되돌리기 · 끝내기가 지운다(store.failBootAgentJob — 박동한 판은 못 끝낸다).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fail_hash TEXT`);
+  //  #4891 homeless — 사람 홈 없는 작업 컨테이너에서 도는 작업(앱 서버가 보낸 API 키 에이전트 작업). 그 작업 폴더는 앱 폴더뿐이고
+  //   브로커는 멤버 홈을 붙이지 않는다(agent-jobs/launch.ts). 접수 때 정해지고 바뀌지 않는다.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS homeless BOOLEAN NOT NULL DEFAULT false`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_requester_idx ON org_agent_job(requester, id DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_app_idx ON org_agent_job(app_id, id DESC) WHERE app_id IS NOT NULL`);
+  //  #4828 보존 정리가 보는 것 — 걷기를 마친 작업을 끝난 때 순으로(agent-jobs/store.pruneAgentJobs).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_ended_idx ON org_agent_job(ended_at) WHERE reaped = true`);
 }

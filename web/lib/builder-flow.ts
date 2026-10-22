@@ -110,6 +110,20 @@ export function builderRoute(view: BuilderView, id = '', how: 'edit' | 'copy' = 
   if (view === 'app') return '#/builder/app/' + encodeURIComponent(id) + (how === 'copy' ? '?how=copy' : '');
   return id ? '#/builder?sel=' + encodeURIComponent(id) : '#/builder';
 }
+/** ③ 「세션 위젯으로 보기」 · 「앱 화면으로 보기」 — 만들고 있는 앱을 **실제 화면**으로 써 보는 중(#4632).
+ *  그 화면의 주인은 만들고 있는 앱이라 앱빌더 사이드바를 접는다(원준 2026-10-19 «3단계에서 앱 전체화면 보면서 만들 때 … 앱 빌더의 사이드바가 등장하네. 안그렇게 해줘»).
+ *  주소에 적는다(#/builder/s/<세션>?see=widget|app) — 사이드바 주인(lib/side-owner)이 주소 하나로 정하고, 새로고침해도 접힌 채 그 화면으로 돌아온다. */
+export type BuilderSee = 'widget' | 'app';
+export function builderSeeRoute(sid: string, see: BuilderSee): string { return builderRoute('resume', sid) + '?see=' + see; }
+/** 이 주소가 ③ 실제 화면을 보는 중인가 — 이어 만드는 주소(#/builder/s/<세션>)에 see=widget|app 이 있을 때만. 그 밖(모르는 값 · 다른 앱빌더 화면 · 다른 앱)은 ''. */
+export function builderSeeing(hash: string | null | undefined): BuilderSee | '' {
+  const h = String(hash || '').replace(/^#\/?/, '');
+  const q = h.indexOf('?');
+  const segs = (q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean);
+  if (segs[0] !== 'builder' || segs[1] !== 's' || !segs[2]) return '';
+  const v = new URLSearchParams(q >= 0 ? h.slice(q + 1) : '').get('see');
+  return v === 'widget' || v === 'app' ? v : '';
+}
 /** 앱빌더 사이드바에서 켜질 줄 — 「모든 앱」('all') · 「새 앱 만들기」('new') · 만들던 앱 하나(«draft:<세션>») · 앱 하나(«app:<앱>»).
  *  만들던 앱을 이어 만드는 화면이면 그 만들던 앱이, 있는 앱을 고치는(사본 포함) 화면이면 그 앱이 켜진다. 목록에서 고른 카드도 같은 줄을 켠다. */
 export function builderSideKey(where: BuilderWhere): string {

@@ -25,14 +25,15 @@
 //  ②뷰 탭·③툴바의 실체(필터 엔진 · 팝오버 5종 · 뷰 탭 줄)는 web/projects/filters.ts 로 나갔다(#1313 R32).
 //  이 파일에는 ①브레드크럼과 세 층을 조립하는 보드 렌더(pjvProjectListBoard)가 남는다.
 // ════════════════════════════════════════════════════════════════════════════
-import { api, el, errorNote, keepSideScroll, personFace, state, sv, toast } from '../core.js';
+import { api, currentWorkspace, el, errorNote, keepSideScroll, personFace, state, sv, toast } from '../core.js';
+import { cacheGet, cacheSet } from '../lib/idb-cache.js';   // #4865 — 보드 재료 «지난 판» 보관함
 import { skeleton } from '../learn.js';
 import { pjvPopover, pjvSwitchRow } from './popover.js';
 import { pjvBundleIcon, pjvSideSearchIcon, pjvTbIcon, pjvViewIcon } from './icons.js';
 import { avatarColor } from './files.js';
 // ⚠ 보기 상태 싱글턴은 projects/state.ts 소유(#1313 R31) — 여기선 읽고 프로퍼티만 바꾸며, 통째 교체는 세터 경유.
-import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvOwnSideAllowed, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScopeKept, pjvSetFolderOpen, pjvSideDrag, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
-import { PJV_DEFAULT_STATUS_DEFS, PJV_PRIORITY, pjvFmtDate, pjvIsOverdue, pjvListIsCustomStatus, pjvListStatusDefs, pjvLoadStatusTemplates, pjvNativeStatusOf, pjvResolveProjStatus, pjvSetStatusRegistry, pjvStatusIcon, pjvStatusIconStd } from './status.js';
+import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvOwnSideAllowed, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScrollHost, pjvScrollTop, pjvScopeKept, pjvSetFolderOpen, pjvSideDrag, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
+import { PJV_DEFAULT_STATUS_DEFS, PJV_PRIORITY, pjvFmtDate, pjvIsOverdue, pjvListIsCustomStatus, pjvListStatusDefs, pjvApplyStatusTemplates, pjvLoadStatusTemplates, pjvNativeStatusOf, pjvResolveProjStatus, pjvSetStatusRegistry, pjvStatusIcon, pjvStatusIconStd } from './status.js';
 import { pjvAssignees } from './task-controls.js';
 import { PJV_STD_COLS, PJV_STD_COL_VAR, PJV_STD_COL_W, pjvApplyColOrder, pjvApplyColWidths, pjvApplyHiddenCols, pjvFieldsForList, pjvGetColSort, pjvGetShownCols, pjvInitNameResize, pjvNameResizeHandle, pjvProjGridTemplate, pjvSetListRegistry, pjvStdColHead, pjvWireColReorder, setBoardFieldsCur } from './columns.js';
 import { pjvAddColumnButton, pjvColumnHead } from './fields.js';
@@ -41,9 +42,11 @@ import { pjvSelReset } from './selection.js';
 import { PJV_GROUPBY_FIELDS, pjvColSortCmp, pjvContainerCmp, pjvGetAlsoList, pjvGetGroupBy, pjvManualCmp, pjvProjAddRow, pjvProjRow, pjvRenderStatusGroups, pjvSetAlsoList, pjvSetGroupBy } from './rows.js';
 import { pjvTableDefaultCmp, pjvTimelineView } from './timeline.js';
 import { openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace } from './list-forms.js';
+import { isMyProject } from '../lib/board-view.js';   // #4865 — '내 할당' 술어(서버 mine=1 과 같은 것)
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 바깥 셸이 알려 온 리스트 즐겨찾기 변경
 import { PJV_ARCHIVE_FOLDER_NAME, pjvArchiveDropTarget, pjvArchiveFolderIds, pjvBuildListGroups, pjvFavListCacheSet, pjvFavSecOpen, pjvFindArchiveFolder, pjvFolderDropTarget, pjvFolderTreeMenu, pjvListGlyph, pjvListGroup, pjvListSettingsMenu, pjvMoveFolderToParent, pjvMoveListToFolder, pjvMoveNear, pjvReorderFolders, pjvReorderLists, pjvSetFavSecOpen, pjvSetFavorite, pjvSideIndent, pjvSideNavDrop, pjvTrashDropTarget, pjvVisLock, setFavListCache } from './sidebar.js';
 import { openProjectV2Form } from './project-form.js';
+import { pjvMySessionCounts, pjvPrefetchSessions, pjvSessGroupLabel, pjvSessGroupMenu, pjvSessionListView } from './session-list.js';   // #4865 「리스트」 뷰 = 스코프 안 프로젝트(줄마다 세션 요약)
 
 // ════════════════════════════════════════════
 // 프로젝트(v2) #/projects2 — 맥락 = 카테고리 + 지식 + 프로젝트 중 '프로젝트'(= 맥락의 *변화*).
@@ -195,7 +198,7 @@ function pjvKanbanBoard(projects, selList, ctx) {
   return wrap;
 }
 
-async function renderProjectV2Board(view, scopeKey?) {
+async function renderProjectV2Board(view, scopeKey?, fresh?: boolean) {
   // URL 딥링크로 진입(#/projects2/l|f/<id>) — 스코프 선택. reload(scopeKey 없음)은 현재 선택 유지.
   //  사이드바 열림은 스코프 유무와 무관하게 열림 선호(localStorage) 반영 — 기본 ON, 사용자가 닫았으면 닫힌 채(#662:
   //  사이드바를 닫아도 스코프는 유지되므로, 스코프 딥링크가 사이드바를 강제로 다시 열지 않는다).
@@ -215,51 +218,97 @@ async function renderProjectV2Board(view, scopeKey?) {
   if (!pjvOwnSideAllowed()) pjvBoardView.byArea = false;
   pjvSelReset(); // 화면 진입/재렌더 시 다중선택·하단 바 초기화(이전 화면 선택 잔존 방지)
   const { y: keepY, host: keepHost } = consumeKeepScroll(); // 인라인 편집 재렌더면 스켈레톤 스킵 + 스크롤 복원(#358)
-  if (keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
   const head = projectPageHead();
+  const meId = (state.me && (state.me.userId || state.me.email)) || '';
+  const reload = () => renderProjectV2Board(view, undefined, true);
+  // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
+  const canDelete = (_p?) => !!meId;
 
-  let allProjects: any, mineProjects: any, lists: any, folders: any, favData: any;
+  // 받은 재료 한 벌로 보드를 그린다 — «지난 판»(보관함)과 새 판(서버)이 같은 길을 지난다.
+  const paint = (d: PjvBoardData) => {
+    //  행 객체는 그릴 때마다 새로 만든다 — 아래에서 덧붙이는 값(내 세션 수 · 컬럼 값)이 보관함 사본을 더럽히지 않게.
+    const allProjects = d.projects.map((p: any) => ({ ...p }));
+    const mySess = new Map<number, number>(d.mySess);
+    // 내 세션 수 — 프로젝트 행 「내 세션」 칸의 신호(있으면 활성).
+    for (const p of allProjects) p.my_session_count = mySess.get(Number(p.id)) || 0;
+    // '내가 할당된' = 생성자 OR 팀원 — 서버 mine=1 과 같은 술어(project-store listProjects viewer)를 받은 목록 위에서 잰다. '내 할당만' 토글의 기준.
+    const mineIds = new Set<number>(allProjects.filter((p: any) => isMyProject(p, meId)).map((p: any) => p.id));
+    const board: any = d.board || { anchorId: null, fields: [], valuesByProject: {} };
+    for (const p of allProjects) p.field_values = (board.valuesByProject && board.valuesByProject[p.id]) || {};
+    // 페이지 크롬(제목만) — 사이드바(byArea) 켜지면 셸의 우측 컬럼(main) 상단으로, 꺼지면 카드 위 전폭으로.
+    //  이 배치를 pjvProjectListBoard 가 byArea 에 따라 옮긴다(#607 — WIKI 형 풀블리드 사이드바).
+    //  옛 '프로젝트 보드 / 폴더·리스트로 정리한 프로젝트.' 중분류 헤드(eyebrow+설명)는 WIKI 탭과 통일감 위해 제거(#617)
+    //  — 이제 head(제목+설명) 바로 아래 보드. 중분류 탭 폐지(#629)와 같은 방향(보드 하나).
+    const pageChrome = head ? el('div', { class: 'pjv-board-chrome' }, head) : null; // 헤드 없으면 크롬 줄 자체를 안 그림(#670)
+    view.replaceChildren(
+      pjvProjectListBoard(allProjects, d.lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, d.folders, pageChrome, d.fav),
+      // '회사 전체'(회사 활동 피드)는 터미널 탭의 '작업 로그' 섹션으로 이관(#609 — companyTimelineSection).
+    );
+  };
+
+  // ── «지난 판» 먼저(#4865) — 들어올 때마다 1,300건을 다시 받느라 「프로젝트를 불러오는 중」 이 서 있었다(실측: 셸에서 누름 → 보드 1.07초).
+  //  보관함(IndexedDB)에 둔 지난 재료로 곧바로 그리고, 새 재료는 뒤에서 받아 **달라졌을 때만** 보던 자리를 지키며 다시 그린다.
+  //  다시 받기(reload — 인라인 편집 뒤 등)와 스크롤을 지키는 재렌더는 보관함을 건너뛴다 — 방금 바꾼 것이 옛 판으로 한 번 되돌아 보이면 안 된다.
+  const cacheKey = pjvBoardCacheKey(meId);
+  let shown: PjvBoardData | null = null;
+  if (keepY == null && !fresh && cacheKey) {
+    const c = await cacheGet<PjvBoardData>(cacheKey);
+    if (c && c.v && Array.isArray(c.v.projects) && view.isConnected) {
+      if (c.v.st) pjvApplyStatusTemplates(c.v.st);
+      void pjvSidePrefsEnsure();   // 폴더 접힘 — 이 브라우저 캐시를 동기로 먼저 세운다(서버 판은 뒤에서)
+      paint(c.v);
+      shown = c.v;
+    }
+  }
+  if (!shown && keepY == null) view.replaceChildren(skeleton('프로젝트를 불러오는 중'));
+
+  let fresh_: PjvBoardData;
+  // 보드 커스텀 컬럼(클릭업식 (+)) — 정의 + 프로젝트별 값. 실패해도 컬럼 없이 진행. 아래 묶음과 함께 출발한다(#4865 — 종전엔 묶음 뒤에 따로 기다렸다).
+  const boardP = api('/api/ui/v6/board-fields').catch(() => null);
+  pjvPrefetchSessions();   // #4865 — 기본 뷰(리스트)가 그릴 세션도 같이 출발시킨다(프로젝트 목록을 기다리는 동안 받아 둔다)
   try {
-    // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 프로젝트(세션수·'내 할당' 판정) + 리스트 + 폴더(#475) + 즐겨찾기(#670) 를 병렬로.
-    [allProjects, mineProjects, lists, folders, favData] = await Promise.all([
-      api('/api/ui/v6/projects').then((d) => (d && d.projects) || []),
-      api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => []),
+    // 전체 프로젝트(리스트별 그룹 — 접힌 리스트도 보이게) + 내 세션 수 + 리스트 + 폴더(#475) + 즐겨찾기(#670) 를 병렬로.
+    //  slim=1(#4865) — 보드는 본문을 그리지 않는다. 본문까지 받으면 1,299건에 5.2MB(본문이 82%)라 첫 화면이 그만큼 늦었다.
+    //  ⚠ 종전엔 '내 프로젝트'(mine=1)도 따로 받았다 — 서버가 프로젝트 목록을 한 벌 더 만들고 tmux 목록까지 훑어 가장 늦게 왔다(0.6초).
+    //   그 응답이 주던 둘(내 세션 수 · '내 할당' 집합)은 이미 받는 재료로 같은 셈을 한다(paint).
+    const [projects, mySess, lists, folders, fav, st] = await Promise.all([
+      api('/api/ui/v6/projects?slim=1').then((d) => (d && d.projects) || []),
+      pjvMySessionCounts(),
       api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
       api('/api/ui/v6/favorites').then((d) => d || {}).catch(() => ({})),
       pjvLoadStatusTemplates(), // #729 스페이스 기본 상태 스킴 로드 — pjvSetStatusRegistry/pjvListStatusDefs 가 참조(inherit 상속).
       pjvSidePrefsEnsure(), // #1227 폴더 접힘(계정별) — 첫 트리 렌더 전에 반영해 '펼쳐졌다 접히는' 깜빡임 방지. 세션당 1회.
     ]);
+    fresh_ = { projects, mySess: [...mySess.entries()], lists, folders, fav, st, board: await boardP };
   } catch (e) {
+    if (shown) return;   // 지난 판이 이미 서 있다 — 새 판을 못 받았다고 그 화면을 오류로 덮지 않는다(다음 진입이 다시 받는다)
     view.replaceChildren(head, errorNote(e, '프로젝트를 불러오지 못했습니다'));
     return;
   }
-  // 내 세션 수는 mine=1 응답에만 부여됨 → id 로 머지(전체 목록 행에 '내 세션' 신호 복원).
-  const sessById = new Map<number, number>(mineProjects.map((p: any) => [p.id, p.my_session_count || 0]));
-  for (const p of allProjects) p.my_session_count = sessById.get(p.id) || 0;
-  // '내가 할당된' = 서버 mine=1(생성자 OR 팀원) 집합 — '내 할당만' 토글의 기준.
-  const mineIds = new Set<number>(mineProjects.map((p: any) => p.id));
-
-  // 보드 커스텀 컬럼(클릭업식 (+)) — 정의 + 프로젝트별 값. 실패해도 컬럼 없이 진행.
-  let board: any = { anchorId: null, fields: [], valuesByProject: {} };
-  try { board = await api('/api/ui/v6/board-fields'); } catch (_) { /* graceful */ }
-  for (const p of allProjects) p.field_values = (board.valuesByProject && board.valuesByProject[p.id]) || {};
-
-  const reload = () => renderProjectV2Board(view);
-  const meId = (state.me && (state.me.userId || state.me.email)) || '';
-  // 삭제 전원 개방(#280) — 인증만 되면 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
-  const canDelete = (_p?) => !!meId;
-
-  // 페이지 크롬(제목만) — 사이드바(byArea) 켜지면 셸의 우측 컬럼(main) 상단으로, 꺼지면 카드 위 전폭으로.
-  //  이 배치를 pjvProjectListBoard 가 byArea 에 따라 옮긴다(#607 — WIKI 형 풀블리드 사이드바).
-  //  옛 '프로젝트 보드 / 폴더·리스트로 정리한 프로젝트.' 중분류 헤드(eyebrow+설명)는 WIKI 탭과 통일감 위해 제거(#617)
-  //  — 이제 head(제목+설명) 바로 아래 보드. 중분류 탭 폐지(#629)와 같은 방향(보드 하나).
-  const pageChrome = head ? el('div', { class: 'pjv-board-chrome' }, head) : null; // 헤드 없으면 크롬 줄 자체를 안 그림(#670)
-  view.replaceChildren(
-    pjvProjectListBoard(allProjects, lists, mineIds, reload, canDelete, board.fields || [], board.anchorId, meId, folders, pageChrome, favData),
-    // '회사 전체'(회사 활동 피드)는 터미널 탭의 '작업 로그' 섹션으로 이관(#609 — companyTimelineSection).
-  );
+  if (cacheKey) void cacheSet(cacheKey, fresh_);
+  if (shown) {
+    //  지난 판과 같으면 손대지 않는다 — 보던 자리 · 입력 중인 검색어 · 펼친 것이 그대로다.
+    if (!view.isConnected || pjvSameBoardData(shown, fresh_)) return;
+    const host = pjvScrollHost(); const y = pjvScrollTop(host);
+    paint(fresh_);
+    pjvRestoreScroll(y, host);
+    return;
+  }
+  paint(fresh_);
   pjvRestoreScroll(keepY, keepHost); // 인라인 편집 재렌더면 원래 스크롤 위치 복원(#358)
+}
+
+// ── 보드 재료 한 벌(#4865) — 서버에서 받은 그대로(행 객체는 paint 가 복사해 덧붙인다). 보관함에 이 모양 그대로 들어간다. ──
+interface PjvBoardData { projects: any[]; mySess: Array<[number, number]>; lists: any[]; folders: any[]; fav: any; st: any; board: any }
+//  보관함 열쇠 — 사람 · 워크스페이스로 가른다(같은 브라우저의 다른 사람 · 다른 워크스페이스 판이 섞이지 않게). 모르면 쓰지 않는다.
+function pjvBoardCacheKey(meId: string): string | null {
+  if (!meId) return null;
+  return 'projects-board:v1:' + (currentWorkspace() || '-') + ':' + meId;
+}
+//  같은 재료인가 — 직렬화가 같으면 같다(1,300건 · 1MB 남짓을 두 번 문자열로 바꾸는 값은 수 ms 다).
+function pjvSameBoardData(a: PjvBoardData, b: PjvBoardData): boolean {
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
 }
 
 // 리스트 1차 그룹 보드 — 한 카드(태스크 리스트와 동일 톤). 헤더 버튼: 하위태스크 표시 · 내 할당만 · Closed · ＋새 리스트.
@@ -338,7 +387,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   // '그룹' — 그룹바이 필드+방향(#541 ClickUp group by 파리티). 기본값=ClickUp 뷰 grouping, 리스트별 로컬 오버라이드.
   const groupBtn = el('button', { class: 'pjv-tb-btn pjv-tb-pill pjv-groupby-btn', type: 'button', title: '그룹 — 필드와 방향으로 묶어 보기' },
     pjvTbIcon('group'), el('span', { class: 'pjv-view-btn-label', text: '상태' }));
-  groupBtn.onclick = (e) => { e.stopPropagation(); pjvGroupByMenu(groupBtn); };
+  //  #4865 — 「리스트」(세션) 뷰에서는 세션 묶기 기준(프로젝트 · 시간 · 상태 · 사람 · 묶지 않음)을 고른다.
+  groupBtn.onclick = (e) => { e.stopPropagation(); if (pjvBoardView.sessions) pjvSessGroupMenu(groupBtn, () => render()); else pjvGroupByMenu(groupBtn); };
   // 열 정렬 — 값·헤더 가로 정렬(#607). 순수 CSS(카드 클래스)라 재렌더 없이 즉시 반영, per-user localStorage. 이제 설정 팝오버에서.
   const pjvIsAlignLeft = () => { try { return localStorage.getItem('pjv:colAlign') === 'left'; } catch (_) { return false; } };
   const applyAlign = () => { card.classList.toggle('pjv-align-left', pjvIsAlignLeft()); };
@@ -525,15 +575,15 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
     syncCrumbs(); // 브레드크럼 재동기(#1067) — render() 시점엔 sel 이 '__all__' 일 수 있어, 자동 해소된 실제 스코프로 다시 그린다
     (viewTabs as any)._sync(); // 뷰 탭도 재동기 — 위 pjvApplyView 가 스코프 저장뷰(칸반 등)로 갈아탔을 수 있다
+    card.classList.toggle('pjv-sess-mode', !!pjvBoardView.sessions); // 같은 이유로 리스트(세션) 뷰 표식도(#4865 — render() 가 세운 값은 로드 전 것)
     // 필터·담당자 값 후보를 **이 스코프**로 재수집(#1067) — 전체 기준이면 "윤상민 216" 처럼 화면(59개)과 안 맞는
     //  숫자가 나와 오해를 부른다. 툴바 필터가 걸리기 전(raw) 스코프 집합이 기준이라 후보가 자기 자신에 의해 줄지 않는다.
-    {
-      const inScope = sel[0] === 'F' ? new Set(folderListsDeep(Number(sel.slice(1))).map((l) => Number(l.id)))
-        : sel[0] === 'L' ? new Set([Number(sel.slice(1))]) : null;
-      const scoped = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
-        : sel === '__none__' ? projects.filter((p) => p.list_id == null) : projects;
-      pjvSetFilterUniverse(scoped, lists);
-    }
+    //  (#4865) 이 원본 스코프 집합은 「리스트」(세션) 뷰의 재료이기도 하다 — 세션을 좁히는 것은 그 뷰의 줄과 검색이지 프로젝트 필터가 아니다.
+    const inScope = sel[0] === 'F' ? new Set(folderListsDeep(Number(sel.slice(1))).map((l) => Number(l.id)))
+      : sel[0] === 'L' ? new Set([Number(sel.slice(1))]) : null;
+    const scopeRaw = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
+      : sel === '__none__' ? projects.filter((p) => p.list_id == null) : projects;
+    pjvSetFilterUniverse(scopeRaw, lists);
     const selectArea = (key) => {
       // 스코프 전환 — URL push(뒤로가기 가능) + 인메모리 render(리페치 없음). 뷰 로드는 renderArea 재진입이 처리.
       pjvSidebarSel.key = key;
@@ -625,7 +675,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 가로 스크롤 상태 표시(#req) — 고정 제목 열 우측 그림자 토글(엑셀식 고정 경계).
     boardBox.addEventListener('scroll', () => { boardBox.classList.toggle('is-xscroll', boardBox.scrollLeft > 0); }, { passive: true });
     const selFolder = sel[0] === 'F' ? folderList.find((x) => String(x.id) === sel.slice(1)) : null;
-    if (pjvBoardView.overview && selFolder) {
+    if (pjvBoardView.sessions) {
+      // 리스트(#4865) — 이 스코프 프로젝트들의 세션. 세션 목록 화면과 같은 열 · 프로젝트 표의 결.
+      main.append(pjvSessionListView({ projects: scopeRaw, scopeKey: sel, query: pjvBoardSearch.q, lists }));
+    } else if (pjvBoardView.overview && selFolder) {
       // 개요(Overview) 뷰(#541) — 폴더/스페이스 진입 기본. 하위 폴더·리스트를 카드로 요약(개수·상태 미니바). 클릭→진입.
       const isSpace = pjvFolderIsSpace(selFolder);
       // 개요 통계도 Closed 토글을 따른다(#541 리뷰) — 사이드바 navcount·본문과 '보이는 것' 일치. 완료(done)는 Closed 켤 때만 집계.
@@ -1156,6 +1209,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     (viewTabs as any)._sync();  // 뷰 탭 활성 표시(#1067) — 설정 팝오버로 바꿔도 탭이 따라온다
     // 테이블 껍데기는 CSS 모드 하나로 — 어느 렌더 경로로 가든 여기서 한 번만 정한다(다른 뷰로 나갈 때 확실히 벗겨진다).
     body.classList.toggle('pjv-table-mode', !!pjvBoardView.table);
+    // 리스트(세션) 뷰(#4865) — 프로젝트 전용 툴바 단추(하위 태스크 · 컬럼 · 필터 · 완료 · 담당자 · 나)를 숨긴다(CSS). 같은 자리에서 한 번만.
+    card.classList.toggle('pjv-sess-mode', !!pjvBoardView.sessions);
     pjvSetFilterUniverse(projects, lists); // 필터·담당자 팝오버의 값 후보(상태·사람·태그)를 현재 데이터로 갱신
     // WIKI 형 풀블리드 셸(#607)은 사이드바 여닫이와 무관하게 항상(#1067) — 접으면 '사이드바만' 사라지고
     //  제목·툴바·보드가 시작하는 y 는 그대로다. (예전엔 접을 때 카드형 배치로 갈아타 높이가 튀고 여백이 달라졌다.)
@@ -1171,8 +1226,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     mainNo.append(headerStack);
     mainNo.append(body);
     shellHost.replaceChildren(mainNo);
-    if (byFolder) { renderByFolder(byStatus); return; }
     const base = boardProjects(); // 아카이브 안(#1067)은 전체 보기에서 제외 — 아카이브 스코프로 들어가야 보인다
+    if (pjvBoardView.sessions) { body.replaceChildren(pjvSessionListView({ projects: base, scopeKey: '__all__', query: pjvBoardSearch.q, lists })); return; } // 리스트(#4865) — 세션
+    if (byFolder) { renderByFolder(byStatus); return; }
     // 툴바 좁히기(#1067 필터·담당자·검색)는 '내 할당만' 과 같은 자리에서 한 번에 — 모든 하위 뷰가 같은 목록을 본다.
     const shown = pjvApplyToolbarFilters(pjvBoardMineOnly.on ? base.filter((p) => mineIds.has(p.id)) : base);
     if (pjvBoardView.kanban) { body.replaceChildren(pjvKanbanBoard(shown, null, { reload, canDelete })); return; } // 칸반(#541) — 전체 스코프는 표준 3버킷
@@ -1427,6 +1483,14 @@ async function pjvSetProjStatusCustom(id, def, reload) {
 // '그룹' 버튼 라벨/강조 동기 — 그룹: <필드> (↑/↓). 리스트 미선택 스코프에선 비활성 표시.
 function pjvSyncGroupBtn(btn, gb, enabled, scopeKey?) {
   const lbl = btn.querySelector('.pjv-view-btn-label');
+  // 「리스트」(세션) 뷰(#4865) — 이 단추는 세션 묶기 기준을 말한다. 프로젝트 그룹 기준은 태스크 뷰로 돌아가면 그대로 있다.
+  if (pjvBoardView.sessions) {
+    if (lbl) lbl.textContent = pjvSessGroupLabel();
+    btn.classList.remove('active', 'is-off');
+    btn.setAttribute('aria-disabled', 'false');
+    btn.title = '그룹 — 세션을 무엇으로 묶어 볼지';
+    return;
+  }
   const f = PJV_GROUPBY_FIELDS.find((x) => x.key === gb.field);
   // #req 폴더·스페이스에서 '리스트로도 묶기'를 끄면 라벨에 그 사실을 붙인다 — 팝오버를 열지 않아도
   //  리스트 박스가 사라진 이유가 보이게(안 그러면 '왜 리스트가 안 나뉘지?'가 된다).

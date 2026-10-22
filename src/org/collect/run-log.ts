@@ -122,6 +122,8 @@ export interface CollectRunListRow {
     state?: string; stored?: number; inserted?: number; units?: number; listed?: number; created?: number; refused?: number;
     unparsed?: number; failed?: number; incomplete?: number; unread?: number; stuck?: number; partial?: boolean; error?: string;
     proof_pending?: number; proof_passed?: number; proof_failed?: number; proof_held?: number;
+    /** #4744 검색을 못 써 옛 스레드를 못 찾은 단위 수(그 판은 검색 없이 판정했다). */
+    unsearched?: number;
   } | null;
 }
 
@@ -195,7 +197,7 @@ function ingestBrief(v: unknown): CollectRunListRow["ingest"] {
     stored: n(j.stored), inserted: n(j.inserted), units: n(j.units), listed: n(j.listed), created: n(j.created), refused: n(j.refused),
     unparsed: n(j.unparsed), failed: n(j.failed), incomplete: n(j.incomplete), unread: n(j.unread), stuck: n(j.stuck),
     proof_pending: n(j.proof_pending), proof_passed: n(j.proof_passed), proof_failed: n(j.proof_failed), proof_held: n(j.proof_held),
-    partial: j.partial === true ? true : undefined,
+    unsearched: n(j.unsearched), partial: j.partial === true ? true : undefined,
     error: typeof j.error === "string" ? j.error.slice(0, 200) : undefined,
   };
 }

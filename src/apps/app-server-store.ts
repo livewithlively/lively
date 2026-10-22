@@ -15,6 +15,12 @@ export async function appServerPolicy(): Promise<AppServerPolicy> {
   const row = await appServerPolicyRow().catch((err) => { logger.warn({ err: String(err) }, "앱 서버 상한을 읽지 못해 기본값을 쓴다(#4484)"); return {}; });
   return resolveAppServerPolicy(Object.keys(row).length ? row : null);
 }
+/** 못 읽으면 던진다(기본값으로 접지 않는다) — 지우기처럼 «기본값으로 잘못 읽으면 되돌릴 수 없는» 일이 쓴다(#4486 작업 기록 보존 · #4828 과 같은 규칙). */
+export async function appServerPolicyStrict(): Promise<AppServerPolicy> {
+  const r = await itemsPool.query(`SELECT app_server_policy FROM org_runtime_config WHERE id=1`);
+  const row = r.rows[0]?.app_server_policy;
+  return resolveAppServerPolicy(row && typeof row === "object" && Object.keys(row).length ? row : null);
+}
 export async function setAppServerPolicy(next: Record<string, number>, ctx: { actor?: string; source?: string }): Promise<void> {
   const before = await appServerPolicyRow();
   await itemsPool.query(`UPDATE org_runtime_config SET app_server_policy=$1::jsonb WHERE id=1`, [JSON.stringify(next)]);
@@ -31,6 +37,8 @@ export interface ServerBuildRow {
   zip_key: string | null;
   zip_bytes: number | null;
   zip_sha256: string | null;
+  /** #4801 zip 의 S3 판 번호 — 함수가 이 판을 바로 읽는다(REFERENCE). 판 번호를 끈 버킷 · 칸이 생기기 전의 빌드면 null. */
+  zip_version: string | null;
   unzipped_bytes: number | null;
   entries: number | null;
   stage: string | null;
@@ -43,7 +51,7 @@ export interface ServerBuildRow {
   finished_at: string | null;
   lease_until: string | null;
 }
-const BUILD_COLS = `app_id, build_key, version_no, status, zip_key, zip_bytes::float8 AS zip_bytes, zip_sha256, unzipped_bytes::float8 AS unzipped_bytes, entries,
+const BUILD_COLS = `app_id, build_key, version_no, status, zip_key, zip_bytes::float8 AS zip_bytes, zip_sha256, zip_version, unzipped_bytes::float8 AS unzipped_bytes, entries,
   stage, error, log_tail, detail, built_by, session_id, started_at, finished_at, lease_until`;
 
 export async function getServerBuild(appId: string, key: string): Promise<ServerBuildRow | null> {
@@ -67,7 +75,7 @@ export async function claimServerBuild(appId: string, key: string, info: { versi
      ON CONFLICT (tenant_id, app_id, build_key) DO UPDATE SET
        version_no=EXCLUDED.version_no, status='building', built_by=EXCLUDED.built_by, session_id=EXCLUDED.session_id,
        started_at=now(), finished_at=NULL, lease_until=EXCLUDED.lease_until, stage=NULL, error=NULL, log_tail=NULL, detail='{}'::jsonb,
-       zip_key=NULL, zip_bytes=NULL, zip_sha256=NULL, unzipped_bytes=NULL, entries=NULL
+       zip_key=NULL, zip_bytes=NULL, zip_sha256=NULL, zip_version=NULL, unzipped_bytes=NULL, entries=NULL
      WHERE org_app_server_build.status='failed'
         OR (org_app_server_build.status='building' AND org_app_server_build.lease_until < now())
      RETURNING ${BUILD_COLS}`,
@@ -83,7 +91,8 @@ export async function touchServerBuild(appId: string, key: string, leaseSec: num
 
 export interface BuildFinish {
   ok: boolean;
-  zip?: { key: string; bytes: number; sha256_b64: string; unzipped: number; entries: number };
+  /** version — 올라온 zip 의 S3 판 번호(#4801 · 저장소가 판 번호를 안 주면 null). */
+  zip?: { key: string; bytes: number; sha256_b64: string; unzipped: number; entries: number; version?: string | null };
   stage?: string | null;
   error?: string | null;
   log_tail?: string | null;
@@ -92,10 +101,10 @@ export interface BuildFinish {
 export async function finishServerBuild(appId: string, key: string, f: BuildFinish): Promise<ServerBuildRow | null> {
   const r = await itemsPool.query(
     `UPDATE org_app_server_build SET status=$3, finished_at=now(), lease_until=NULL,
-       zip_key=$4, zip_bytes=$5, zip_sha256=$6, unzipped_bytes=$7, entries=$8, stage=$9, error=$10, log_tail=$11, detail=$12::jsonb
+       zip_key=$4, zip_bytes=$5, zip_sha256=$6, unzipped_bytes=$7, entries=$8, stage=$9, error=$10, log_tail=$11, detail=$12::jsonb, zip_version=$13
      WHERE app_id=$1 AND build_key=$2 RETURNING ${BUILD_COLS}`,
     [appId, key, f.ok ? "ok" : "failed", f.zip?.key ?? null, f.zip?.bytes ?? null, f.zip?.sha256_b64 ?? null, f.zip?.unzipped ?? null, f.zip?.entries ?? null,
-      f.stage ?? null, f.error ?? null, f.log_tail ?? null, JSON.stringify(f.detail ?? {})]);
+      f.stage ?? null, f.error ?? null, f.log_tail ?? null, JSON.stringify(f.detail ?? {}), f.zip?.version ?? null]);
   return (r.rows[0] as ServerBuildRow | undefined) ?? null;
 }
 
@@ -121,21 +130,33 @@ export async function failStaleServerBuilds(): Promise<number> {
 }
 
 /**
+ * 정리 후보 빌드 — function_name 은 그 앱의 함수 줄이 있을 때(그 함수의 남은 판이 이 zip 을 아직 읽는지 부르는 쪽이 본다 · #4801).
+ *  started_at 은 다음 쪽을 이어 고를 자리 — timestamptz 를 글자로(마이크로초까지 그대로 되돌려 넣는다 · JS Date 는 밀리초에서 잘린다).
+ */
+export interface PruneCandidate { app_id: string; build_key: string; zip_key: string | null; zip_sha256: string | null; function_name: string | null; started_at: string }
+/** 정리 후보를 이어 고르는 자리(started_at · app_id · build_key 순). */
+export interface PruneCursor { started_at: string; app_id: string; build_key: string }
+/**
  * 지울 zip — 앱이 사라졌거나, 별칭이 안 가리키고 오래된 빌드(성공 · 실패). 실패한 빌드는 zip 이 없다(행만 지운다).
  *  keep_until(#4791) 이 남은 빌드는 앱이 있는 한 지우지 않는다 — 서버 선언을 뺀 앱의 함수를 걷을 때 그 함수가 쓰던 빌드에 유예를 준다
  *  (빌드한 지 30일이 지났어도 걷은 뒤 30일 동안은 서버 판으로 되돌리면 빌드 없이 함수를 다시 만든다 · 격리 리뷰).
+ *  ★ #4801 앱이 사라졌어도 함수 줄이 남아 있으면(앱을 지울 때 함수를 못 지움 — 고아 쓸기가 다시 지운다) 고르지 않는다: 그 함수는 아직 이 zip 을
+ *   바로 읽는다(REFERENCE). 함수가 지워진 뒤 removeServer 가 기록과 zip 을 함께 걷는다. 별칭 밖의 남은 판($LATEST · 최근 판)이 읽는 zip 은
+ *   부르는 쪽(pruneServerBuilds)이 함수의 판 목록으로 거른다.
  */
-export async function serverBuildsToPrune(olderThanDays: number, limit = 50): Promise<Array<{ app_id: string; build_key: string; zip_key: string | null }>> {
+export async function serverBuildsToPrune(olderThanDays: number, limit = 50, after: PruneCursor | null = null): Promise<PruneCandidate[]> {
   const r = await itemsPool.query(
-    `SELECT b.app_id, b.build_key, b.zip_key FROM org_app_server_build b
+    `SELECT b.app_id, b.build_key, b.zip_key, b.zip_sha256, s.function_name, b.started_at::text AS started_at FROM org_app_server_build b
        LEFT JOIN org_app a ON a.id = b.app_id
        LEFT JOIN org_app_server s ON s.app_id = b.app_id
       WHERE b.status <> 'building'
-        AND (a.id IS NULL OR (b.started_at < now() - make_interval(days => $1)
+        AND ((a.id IS NULL AND s.app_id IS NULL) OR (a.id IS NOT NULL AND b.started_at < now() - make_interval(days => $1)
              AND (b.keep_until IS NULL OR b.keep_until < now())
              AND b.build_key IS DISTINCT FROM s.cur_build_key AND b.build_key IS DISTINCT FROM s.pub_build_key))
-      ORDER BY b.started_at LIMIT $2`, [olderThanDays, limit]);
-  return r.rows as Array<{ app_id: string; build_key: string; zip_key: string | null }>;
+        AND ($3::timestamptz IS NULL OR (b.started_at, b.app_id, b.build_key) > ($3::timestamptz, $4::text, $5::text))
+      ORDER BY b.started_at, b.app_id, b.build_key LIMIT $2`,
+    [olderThanDays, limit, after?.started_at ?? null, after?.app_id ?? null, after?.build_key ?? null]);
+  return r.rows as PruneCandidate[];
 }
 /** 빌드 유예(#4791) — 걷는 함수가 쓰던 빌드(별칭이 가리키던 빌드)를 days 일 동안 정리에서 뺀다. */
 export async function keepServerBuilds(appId: string, keys: Array<string | null>, days: number): Promise<void> {
@@ -146,6 +167,10 @@ export async function keepServerBuilds(appId: string, keys: Array<string | null>
 /** zip 크기를 모르는 성공 빌드(옛 줄)에 저장소에서 본 크기를 적는다(#4792 — 코드 저장 셈이 0 으로 새지 않게). */
 export async function setServerBuildZipBytes(appId: string, key: string, bytes: number): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server_build SET zip_bytes=$3 WHERE app_id=$1 AND build_key=$2 AND zip_bytes IS NULL`, [appId, key, bytes]);
+}
+/** 판 번호를 모르는 성공 빌드(#4801 칸이 생기기 전)에 저장소의 지금 판 번호를 적는다 — 함수에 그 판을 못 박게. 비어 있을 때만. */
+export async function setServerBuildZipVersion(appId: string, key: string, version: string): Promise<void> {
+  await itemsPool.query(`UPDATE org_app_server_build SET zip_version=$3 WHERE app_id=$1 AND build_key=$2 AND zip_version IS NULL AND status='ok'`, [appId, key, version]);
 }
 export async function deleteServerBuild(appId: string, key: string): Promise<void> {
   await itemsPool.query(`DELETE FROM org_app_server_build WHERE app_id=$1 AND build_key=$2 AND status <> 'building'`, [appId, key]);
@@ -160,12 +185,37 @@ export interface ServerRow {
   pub_version_no: number | null; pub_build_key: string | null; pub_lambda_version: string | null; pub_at: string | null;
   stopped_at: string | null; stopped_by: string | null; stop_kind: "auto" | "manual" | null; stop_reason: string | null;
   lock_until: string | null; last_error: string | null;
+  /** #4485 — 그 별칭의 함수 판에 구운 앱 서버 토큰(auth_token.token_hash). 옛 줄(v2-5)은 없다. */
+  cur_token_hash?: string | null; pub_token_hash?: string | null;
+  /** #4486 — 그 별칭의 함수 판에 단 신원 검사 층의 판(GUARD_VERSION). 백그라운드 작업은 4 판부터(app-jobs-plan JOB_GUARD_MIN). 옛 줄은 없다. */
+  cur_guard?: number | null; pub_guard?: number | null;
   /** #4792 이 함수의 코드 저장(바이트) — 마지막 배포 · 옛 판 정리 때 AWS 가 알려 준 판마다의 CodeSize 합($LATEST 포함). */
   code_bytes: number;
   /** #4791 지금 판 · 공개 판 둘 다 서버 선언이 없다고 하우스키핑이 처음 본 때(null = 쓰는 중). unused_retire_days 가 지나면 함수를 걷는다. */
   unused_since: string | null;
+  /** #4887 마지막 상태 점검 결과(별칭마다) · 그 시각 — 하루 한 번. */
+  health: ServerHealth | null;
+  health_checked_at: string | null;
   created_at: string; updated_at: string;
 }
+
+/**
+ * #4887 별칭 하나의 점검 결과. ok 정상 · idle 쉬는 판(오래 안 불려 Inactive · 원본은 멀쩡 — 건드리지 않는다) · moved 곧 지워질 옛 zip 판 · 원본을 잃었지만
+ *  아직 도는 판을 같은 빌드의 지금 zip 으로 옮김(알림 없음) · repaired 멈췄던 판을 다시 올림 · failed 다시 올리기 실패 ·
+ *  unfixed 못 고침 — 다시 올릴 zip 이 없음 · 다시 올린 새 판도 문제(to = 옮겨 간 판 — 다음 날은 다시 올리지 않는다) · 멈춘 함수가 AWS 에 없음 · 앱이 없음(고아).
+ */
+export interface AliasHealth {
+  state: "ok" | "idle" | "moved" | "repaired" | "unfixed" | "failed";
+  /** 본 함수 판 · to = 옮긴 뒤의 판(moved · repaired · 다시 올린 새 판도 문제인 unfixed — 같은 까닭이면 다음 날 다시 올리지 않는 표지). */
+  version: string; to?: string;
+  /** 왜(옛 zip 판 · 원본 없음 · 코드 오류 코드 · AWS 상태 · 실패 글 — 버킷 · 계정은 걷은 글). */
+  why?: string;
+}
+/**
+ * 점검 결과 — checked_at 은 실제로 끝낸 시각(미룬 때는 안 바뀐다). deferred 는 이번에 못 본 까닭 · 연속 횟수(일시 오류 · 잠김 · 틱 몫 —
+ *  상태에 보이게 · 하루 넘게 이어지면 관리자에게 한 번 알린다 — notified). 별칭을 옮기면(배포 · 공개 · 되돌리기 · 점검의 고치기) 결과를 비워 곧 다시 본다.
+ */
+export interface ServerHealth { checked_at?: string; cur?: AliasHealth; pub?: AliasHealth; deferred?: { at: string; why: string; count: number; notified?: boolean } }
 //  code_bytes 는 BIGINT 라 드라이버가 글자로 준다 — 숫자로 읽는다(빌드 기록의 ::float8 과 같은 까닭).
 const toServerRow = (x: Record<string, unknown>): ServerRow => ({ ...x, code_bytes: Number(x.code_bytes ?? 0) || 0 }) as ServerRow;
 
@@ -241,6 +291,50 @@ export async function reserveServerCode(appId: string, policy: AppServerPolicy, 
   });
 }
 
+/**
+ * #4887 상태 점검 차례 — 별칭이 있고 · 하루 안에 안 봤고 · 배포 · 걷기 · 정리가 잠그지 않은 줄(가장 오래 안 본 것부터). 잠긴 줄은 다음 틱에.
+ */
+export async function serverRowsForHealth(limit = 20, everyHours = 24): Promise<ServerRow[]> {
+  const r = await itemsPool.query(
+    `SELECT * FROM org_app_server
+      WHERE (cur_lambda_version IS NOT NULL OR pub_lambda_version IS NOT NULL)
+        AND (health_checked_at IS NULL OR health_checked_at < now() - make_interval(hours => $2))
+        AND (lock_until IS NULL OR lock_until < now())
+        AND unused_since IS NULL
+      ORDER BY health_checked_at NULLS FIRST, app_id LIMIT $1`, [limit, everyHours]);
+  return r.rows.map(toServerRow);
+}
+/**
+ * 점검을 끝냈다 — 결과(checked_at 포함)를 적고 다음 차례는 everyHours 뒤(recheckHours 를 주면 그만큼 뒤 — 고친 뒤 재확인을 못 했을 때).
+ *  별칭 판이 seen(고를 때 본 판 · 점검이 옮겼으면 옮긴 판)과 같을 때만 쓴다 — 그사이 사람이 옮겼으면(setServerAlias 가 결과를 비웠다) 낡은 결과로
+ *  덮지 않는다(격리 리뷰). 썼으면 true.
+ */
+export async function setServerHealth(appId: string, health: ServerHealth, seen: { cur: string | null; pub: string | null }, everyHours: number, recheckHours?: number): Promise<boolean> {
+  const back = recheckHours == null ? 0 : Math.max(0, everyHours - recheckHours);
+  const r = await itemsPool.query(
+    `UPDATE org_app_server SET health=$2::jsonb, health_checked_at = now() - make_interval(hours => $3)
+      WHERE app_id=$1 AND cur_lambda_version IS NOT DISTINCT FROM $4 AND pub_lambda_version IS NOT DISTINCT FROM $5`,
+    [appId, JSON.stringify(health), back, seen.cur, seen.pub]);
+  return (r.rowCount ?? 0) > 0;
+}
+/**
+ * 이번엔 못 봤다(일시 오류 · 잠김 · 틱 몫) — 결과는 그대로 두고 deferred{at · why · 연속 횟수 · 알렸나}만 적고, retryHours 쯤 뒤 다시 본다(하루 주기의
+ *  앞자리를 붙잡지 않게 뒤로 보낸다). 연속 횟수가 stuckAfter 이상인데 아직 안 알렸으면 tell — 부르는 쪽이 한 번 알린다(횟수가 건너뛰어도 놓치지 않게).
+ */
+export async function deferServerHealth(appId: string, why: string, everyHours: number, stuckAfter: number, retryHours = 1): Promise<{ n: number; tell: boolean }> {
+  const r = await itemsPool.query(
+    `WITH o AS (SELECT coalesce((health->'deferred'->>'count')::int, 0) + 1 AS n, coalesce((health->'deferred'->>'notified')::boolean, false) AS told
+                  FROM org_app_server WHERE app_id=$1 FOR UPDATE)
+     UPDATE org_app_server s SET health_checked_at = now() - make_interval(hours => $2),
+            health = jsonb_set(coalesce(s.health, '{}'::jsonb), '{deferred}',
+                     jsonb_build_object('at', now(), 'why', $3::text, 'count', o.n, 'notified', o.told OR o.n >= $4))
+       FROM o WHERE s.app_id=$1
+     RETURNING o.n AS n, (NOT o.told AND o.n >= $4) AS tell`,
+    [appId, Math.max(0, everyHours - retryHours), why.slice(0, 500), stuckAfter]);
+  const row = r.rows[0] as { n?: number; tell?: boolean } | undefined;
+  return { n: Number(row?.n ?? 0), tell: row?.tell === true };
+}
+
 /** 별칭이 있는데 코드 크기를 모르는 줄(0) — 칸을 더하기 전에 올린 함수 · 재기에 실패한 함수. 하우스키핑이 AWS 에서 다시 잰다(#4792). */
 export async function serverRowsWithoutCodeSize(limit = 20): Promise<Array<{ app_id: string; function_name: string }>> {
   const r = await itemsPool.query(
@@ -259,12 +353,23 @@ export async function unlockServer(appId: string): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET lock_until = NULL WHERE app_id=$1`, [appId]);
 }
 
-export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string }): Promise<void> {
+export async function setServerAlias(appId: string, alias: AliasName, v: { version_no: number | null; build_key: string; lambda_version: string; token_hash?: string | null; guard?: number | null }): Promise<void> {
   const c = alias === "cur" ? "cur" : "pub";
   //  별칭을 옮겼다 = 서버 선언이 있는 판을 올렸다 — «쓰지 않음» 표시(#4791)를 걷는다(다음 하우스키핑을 기다리지 않게).
+  //   #4887 점검 결과도 비운다 — 옛 판의 결과(못 고침 등)가 새 판에 남지 않게 · 다음 틱에 새 판을 본다.
   await itemsPool.query(
-    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_at=now(), last_error=NULL, unused_since=NULL, updated_at=now() WHERE app_id=$1`,
-    [appId, v.version_no, v.build_key, v.lambda_version]);
+    `UPDATE org_app_server SET ${c}_version_no=$2, ${c}_build_key=$3, ${c}_lambda_version=$4, ${c}_token_hash=$5, ${c}_at=now(), last_error=NULL, unused_since=NULL,
+            health=NULL, health_checked_at=NULL, updated_at=now() WHERE app_id=$1`,
+    [appId, v.version_no, v.build_key, v.lambda_version, v.token_hash ?? null]);
+  //  #4486 검사 층 판은 따로 적는다 — 매니지드 롤은 새 게이트웨이를 먼저 띄우고 공용 DB 마이그레이션을 맨 끝에 돌린다(약 5분 · 지식
+  //   roll-order-migrate-after-gw-swap-auth-outage-2026-10-20). 그 사이 칸이 없다고 위 문장까지 실패하면 AWS 별칭은 옮겼는데 줄은 옛 판이고,
+  //   배포의 실패 길이 새 판에 구운 토큰을 회수해 그 앱 서버가 다음 배포까지 401 이 된다. 칸이 없으면 비워 둔다(작업은 다음 배포까지 «다시 올려야» 409).
+  //   ⚠ 롤 순서(마이그레이션 먼저 · 교대 나중)가 고쳐지면 이 42703 예외는 걷는다 — 남겨 두면 마이그레이션이 조용히 실패한 때 오류를 가린다.
+  //   위 문장(별칭 · 판 · 토큰)에 새 칸을 더할 때마다 같은 창이 다시 열린다 — 새 칸은 이렇게 따로 적는다.
+  await itemsPool.query(`UPDATE org_app_server SET ${c}_guard=$2 WHERE app_id=$1`, [appId, v.guard ?? null]).catch((err: unknown) => {
+    if ((err as { code?: unknown })?.code !== "42703") throw err;   // undefined_column — 마이그레이션 전
+    logger.warn({ app: appId, alias: c }, "검사 층 판 칸이 아직 없다(공용 DB 마이그레이션 전) — 비워 둔다(#4486)");
+  });
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);

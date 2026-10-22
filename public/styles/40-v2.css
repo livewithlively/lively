@@ -1664,6 +1664,11 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-consent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .v2-consent-chip { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--blue); background: var(--bg-tint); border: 1px solid var(--line-net-2); border-radius: 7px; padding: 2px 8px; }
 .v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
+/* 도구 칩의 쉬운 설명(#4632 · v2/app-session.ts · lib/tool-explain) — 올려 두거나 · 초점 · 누르면 창 위에 뜬다. 이름은 그대로 두고 설명이 있다는 표시만 점선으로. */
+.v2-consent-chip.has-tip { cursor: help; text-decoration: underline dotted; text-decoration-color: color-mix(in srgb, var(--blue) 45%, transparent); text-underline-offset: 3px; }
+.v2-consent-chip.has-tip:hover, .v2-consent-chip.has-tip[aria-describedby] { background: color-mix(in srgb, var(--blue) 10%, var(--bg-tint)); }
+.v2-consent-chip.has-tip:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.v2-consent-tip { position: fixed; z-index: 2; max-width: min(300px, calc(100vw - 24px)); padding: 9px 12px; border-radius: 10px; background: var(--ink); color: var(--bg); font-size: 13px; font-weight: 500; line-height: 1.55; box-shadow: 0 10px 28px rgba(var(--shadow-ink), .22); pointer-events: none; word-break: keep-all; }
 .v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 /* ── 앱 만들기(#4592 · v2/app-studio.ts) — 창 전체. ① 시작(무엇을 · 어디에) ② 만드는 중(가운데 앱 · 옆에 대화) ── */
@@ -1677,6 +1682,10 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio, .v2-review-bar, .v2-wb { word-break: keep-all; overflow-wrap: break-word; }
 .v2-studio--in { position: absolute; z-index: 5; padding-top: 0; }   /* 앱빌더 안의 자리(#4632) — 창을 덮지 않고 가운데 칸을 채운다(창 맨 윗줄에 닿지 않으니 비우지 않는다) */
 .v2-studio-crumb { font-size: 12.5px; font-weight: 800; color: var(--purple-text, #5B3FD0); white-space: nowrap; }
+/* 「앱빌더 ›」 는 단추다 — 누르면 앱빌더 첫 화면으로(#4632 원준 2026-10-19). 글자 모양은 그대로 두고 단추 붓만 걷는다. */
+button.v2-studio-crumb { flex: none; border: 0; background: none; padding: 2px 4px; margin: 0 -4px; border-radius: 6px; font-family: inherit; line-height: inherit; cursor: pointer; }
+button.v2-studio-crumb:hover { text-decoration: underline; text-underline-offset: 3px; }
+button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0); outline-offset: 1px; }
 .v2-studio-top--build .v2-studio-crumb { color: rgba(255, 255, 255, .85); }
 .v2-studio-top { flex: none; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 14px; background: var(--bg); border-bottom: 1px solid var(--line); }
 .v2-studio-top--build { background: var(--purple, #7B61E0); border-bottom-color: transparent; color: #fff; }
@@ -1766,7 +1775,7 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-studio-bar span.done { color: var(--ink-sub); }
 .v2-studio-bar button.go { flex: 1; min-width: 0; text-align: center; padding: 4px 6px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .v2-studio-bar button.go:hover { background: rgba(123, 97, 224, .08); color: var(--purple-text, #5B3FD0); }
-.v2-studio-back { flex: none; }
+.v2-studio-back, .v2-studio-next { flex: none; }
 .v2-studio-now { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: rgba(123, 97, 224, .08); color: var(--purple-text, #5B3FD0); font-size: 13.5px; font-weight: 800; flex-wrap: wrap; }
 .v2-studio-now-t { min-width: 0; }
 .v2-studio-now-pri { height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: var(--purple, #7B61E0); color: #fff; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; white-space: nowrap; }

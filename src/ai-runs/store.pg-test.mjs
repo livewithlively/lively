@@ -81,6 +81,17 @@ try {
   // ── T8 목록 — 앱 · 사람 · 상태 필터 · 요지 200자 · has_result ──
   const list = await st.listAiRuns({ appId: APP, requester: `${REQ}a`, status: null, limit: 10 });
   const done = await st.listAiRuns({ appId: APP, requester: null, status: "done", limit: 10 });
+  //  T8b 사람 필터 = 보낸 사람 **또는** 그 구독의 주인(초대받은 사람이 보내 내 구독으로 도는 실행 — #4488 리뷰 반영). API 키 실행은 보낸 사람만.
+  const inv = await st.insertAiRun(base({ requester: `${REQ}guest`, accountKind: "subscription", accountMember: `${REQ}owner`, executor: "job", status: "queued" }));
+  const keyRun = await st.insertAiRun(base({ requester: `${REQ}guest2`, accountKind: "api_key", accountMember: null }));
+  const byOwner = await st.listAiRuns({ appId: APP, requester: `${REQ}owner`, status: null, limit: 10 });
+  const byGuest = await st.listAiRuns({ appId: APP, requester: `${REQ}guest`, status: null, limit: 10 });
+  const byNobody = await st.listAiRuns({ appId: APP, requester: `${REQ}nobody`, status: null, limit: 10 });
+  chk("T8b 목록 사람 필터 — 구독 주인도 · 보낸 사람도 · 제3자는 0 · API 키 실행은 주인 없음",
+    byOwner.map((r) => r.id).join() === String(inv.id) && byGuest.map((r) => r.id).join() === String(inv.id) && byNobody.length === 0 && !byOwner.some((r) => r.id === keyRun.id),
+    JSON.stringify([byOwner.map((r) => r.id), byGuest.map((r) => r.id), byNobody.length]));
+  await st.finishAiRun(inv.id, { status: "canceled", result: null, error: "t8b" });   // 뒤 T9(열린 작업 실행만)에 끼지 않게 닫는다
+  await st.finishAiRun(keyRun.id, { status: "done", result: { text: "t8b" }, error: null });
   chk("T8 목록 — 필터 · 요지(줄바꿈 공백) · has_result",
     list.length === 3 && list[0].id > list[1].id && list.every((r) => r.prompt_preview === "지시 원문 둘째 줄") && done.length === 1 && done[0].has_result === true && list.every((r) => r.prompt === undefined),
     JSON.stringify(list.map((r) => [r.id, r.status, r.prompt_preview, r.has_result])));

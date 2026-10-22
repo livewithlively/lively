@@ -21,6 +21,7 @@ import { createPreviewKit } from './file-preview.js';
 import { placeChildren, reuseKeyed, type KeyedCard } from './keyed-cards.js';   // #4135 — 제자리 되그리기(바뀐 카드만 새로)
 import { closeCtxMenu, showCtxMenu, type CtxRow } from './ctx-menu.js';
 import type { Part, PartCtx } from './panes-parts.js';
+import { requestOpenRoute } from './ctx-registry.js';
 
 /** 곁칸 밖에서 이 부품을 쓰는 자리(프로젝트 화면의 공유 폴더 모달, #4135)가 거는 고리 — 전부 선택 사항이라 곁칸(PartCtx)은 그대로 들어온다.
  *  같은 폴더를 보여 주는 화면이 둘이면 그림도 몸짓도 같아야 한다(원준 2026-09-27: «곁칸이랑 같은 디자인으로») — 그래서 베끼지 않고 이 부품을 그대로 세운다. */
@@ -169,7 +170,11 @@ export function filesPart(ctx: FilesCtx): Part {
   const moreBtn = el('button', { class: 'pn-fbtn pn-fmore-tools', type: 'button', title: '도구 더 보기', 'aria-label': '도구 더 보기', 'aria-haspopup': 'menu', hidden: true },
     pnIcon('more', 'pn-i sm')) as HTMLButtonElement;
   const tools = el('div', { class: 'pn-ftools' }, upGrp, mkBtn, el('span', { class: 'pn-fsp' }), findIn, viewBtn, sizeIn, sortBtn, moreBtn) as HTMLElement;
-  const head = el('div', { class: 'pn-fhead' }, el('div', { class: 'pn-frow1' }, crumbs, count), tools);
+  //  #4882 — 곁칸의 이 칸은 **자료 앱의 위젯**이다. 맨 위 경로의 첫 칸이 자료 앱의 얼굴을 달고(crumbBar), 줄 끝의 문이 자료 앱 화면을 연다.
+  //   곁칸 밖(프로젝트 화면의 공유 폴더 모달)에선 세우지 않는다 — 그 자리는 프로젝트 화면의 일부다.
+  const appDoor = hasPane(ctx) ? el('button', { class: 'pn-fapp', type: 'button', title: '자료 앱에서 열기 — 올린 자료 · 수집한 자료 · 라이블리에서 만든 자료를 한 화면에서 봅니다',
+    'aria-label': '자료 앱에서 열기', onclick: () => requestOpenRoute('#/sources') }, pnIcon('expand', 'pn-i sm')) : null;
+  const head = el('div', { class: 'pn-fhead' }, el('div', { class: 'pn-frow1' }, crumbs, count, appDoor), tools);
   root.append(upIn, upDirIn, noteEl, head, body);
 
   // ── 메뉴 단추 — 다시 누르면 닫힌다(열린 메뉴는 밖을 누르는 순간 닫히므로, 방금 이 단추로 닫힌 것이면 다시 열지 않는다) ──
@@ -885,7 +890,8 @@ export function filesPart(ctx: FilesCtx): Part {
   function crumbBar(): void {
     const segs = cwd ? cwd.split('/') : [];
     const kids: HTMLElement[] = [];
-    const rootBtn = el('button', { class: 'pn-fcrumb' + (segs.length ? '' : ' on'), type: 'button', text: ctx.rootLabel || '자료', title: '맨 위 폴더', onclick: () => goto('') }) as HTMLElement;
+    const rootBtn = el('button', { class: 'pn-fcrumb' + (segs.length ? '' : ' on') + (appDoor ? ' app' : ''), type: 'button', title: '맨 위 폴더', onclick: () => goto('') },
+      appDoor ? pnIcon('src', 'pn-i sm pn-fapp-ic') : null, el('span', { text: ctx.rootLabel || '자료' })) as HTMLElement;
     wireCrumbDrop(rootBtn, '');
     kids.push(rootBtn);
     let acc = '';

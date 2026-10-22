@@ -34,7 +34,7 @@ import { effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatal
 import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults } from './run-prefs.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, notifyBrief, parseCard, parseCheck, parseStep, planBrief, splitList, stageIndex, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, splitList, stageIndex, stageTabs, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -55,6 +55,14 @@ export interface StudioRec {
   named?: boolean;
   /** #4667 「만들기 시작」 때 서버가 예약한 앱 id — AI 가 이 id 로 저장하면 그게 이 만들기의 앱이다(appId 는 첫 판이 생긴 뒤에 선다). */
   draftId?: string;
+  /** 와 본 가장 뒤 단계(0~4, lib/studio-flow reachedOf) — 단계 바에서 앞으로도 간다(원준 2026-10-19). 그 뒤 내용이 낡으면 당긴다(기획을 다시 받으면 1 · 새 버전이 나오면 2). */
+  reached?: number;
+  /** 초안(또는 다시 만들기)을 청할 때의 기획 카드 글 — ②에서 카드를 그 뒤에 고쳤는지 본다(안 고쳤으면 「다음 →」 는 그냥 ③ 으로 간다 · 고쳤으면 「바꾼 기획대로 다시 만들기」). */
+  cardSent?: string;
+  /** ④ 의 마지막 대조 결과 — 같은 버전 · 같은 기획 카드면 다시 ④ 로 와도 AI 에게 다시 묻지 않는다. */
+  check?: { have: string[]; missing: string[]; ver: number; card: string };
+  /** ①로 돌아와 고치던 것(아직 「이 내용으로 다시 기획」 전) — 단계를 옮겨 다녀도 날아가지 않게(원준 2026-10-14 «입력했던 내용은 절대 안 날아가게»). */
+  whatEdit?: { name: string; what: string; place: StudioPlace };
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
@@ -207,7 +215,12 @@ async function makeCopy(origin: { id: string; title: string; by: string }, place
 
 // ── 화면 뿌리 ──────────────────────────────────────────────────────────────────────────
 //  창 전체를 덮는 창(기본)이거나, 앱빌더(#4632) 안의 자리(host)에 선다 — 그때 머리줄에 「앱빌더 ›」 가 붙고 닫으면 onClose 가 불린다(목록으로).
-export interface StudioMountOpts { host?: HTMLElement | null; onClose?: () => void; /** 세션이 생겼다(① 만들기 시작 · ⑧ 사본/원본) — 앱빌더가 주소를 그 세션으로 바꿔 새로고침해도 돌아오게 한다. */ onSession?: (sid: string) => void }
+export interface StudioMountOpts {
+  host?: HTMLElement | null; onClose?: () => void;
+  /** 세션이 생겼다(① 만들기 시작 · ⑧ 사본/원본) — 앱빌더가 주소를 그 세션으로 바꿔 새로고침해도 돌아오게 한다. */ onSession?: (sid: string) => void;
+  /** ③ 실제 화면으로 써 보기 시작 · 끝(null) — 앱빌더가 주소에 적어(lib/builder-flow builderSeeRoute) 그동안 앱빌더 사이드바를 접는다(#4632 원준 2026-10-19). */
+  onSee?: (sid: string, see: 'widget' | 'app' | null) => void;
+}
 let root: HTMLElement | null = null;
 let teardown: (() => void) | null = null;
 let mountOpts: StudioMountOpts = {};
@@ -225,7 +238,11 @@ function mountRoot(opts?: StudioMountOpts): HTMLElement {
   const r = el('div', { class: 'v2-studio' + (mountOpts.host ? ' v2-studio--in' : ''), role: 'dialog', 'aria-modal': mountOpts.host ? 'false' : 'true', 'aria-label': '앱 만들기' });
   root = r; (mountOpts.host || document.body).append(r); return r;
 }
-const crumb = (): HTMLElement | null => (mountOpts.host ? el('span', { class: 'v2-studio-crumb', text: '앱빌더 ›' }) : null);
+//  머리줄 = 「앱빌더 › <만들고 있는 앱 이름>」(원준 2026-10-19 «앱 만들기 이 말이 왜 필요한건지? 차라리 만들고 있는 앱 이름을 · 앱빌더 누르면 앱 맨앞으로 나가져야»).
+//   「앱빌더」 는 단추다 — 누르면 앱빌더 첫 화면(목록)으로 나간다(닫기와 같은 길 · onClose). 만들던 것은 기록에 남아 「만들던 앱」 에서 이어진다.
+const crumb = (): HTMLElement | null => (mountOpts.host ? el('button', { class: 'v2-studio-crumb', type: 'button', text: '앱빌더 ›', title: '앱빌더 첫 화면으로 나가요. 만들던 내용은 그대로 남아요.', onclick: () => closeAppStudio() }) : null);
+/** 머리줄의 앱 이름 — 이름을 아직 안 정했으면 「새 앱」. */
+const NEW_APP_NAME = '새 앱';
 export { me as studioMe };
 
 /** 이어서 열 세션 — 이 브라우저에 기록이 없으면 세션 이름(what)과 그 세션이 만든 앱(appId)으로 되살린다(앱빌더 #4632). */
@@ -264,7 +281,7 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
 /** ⑧ 남이 만든(또는 내가 만든) 앱을 내게 맞게 — 사본을 떠서, 또는 원본을 그대로 고치기. ③ 시안 확인 · 고치기에서 연다. */
 export async function openAppStudioFor(app: { id: string; title: string; by: string; place?: StudioPlace }, how: 'copy' | 'edit', opts?: StudioMountOpts): Promise<void> {
   const r = mountRoot(opts);
-  r.replaceChildren(el('div', { class: 'v2-studio-top' }, crumb(), el('span', { class: 'v2-studio-tag', text: '앱 만들기' }), el('span', { class: 'v2-studio-sp' })),
+  r.replaceChildren(el('div', { class: 'v2-studio-top' }, crumb(), el('b', { class: 'v2-studio-name', text: app.title || NEW_APP_NAME }), el('span', { class: 'v2-studio-sp' })),
     el('div', { class: 'v2-studio-wait v2-studio-wait--page' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: how === 'copy' ? '사본을 만드는 중이에요' : '수정할 준비를 하는 중이에요' })));
   const place: StudioPlace = app.place || 'both';
   try {
@@ -388,20 +405,53 @@ function cardView(c: StudioCard, onEdit: ((c: StudioCard) => void) | null): HTML
   return box;
 }
 
+// ── 단계 바 — 지금 · 돌아가기 · 다시 가기(와 본 곳) · 아직 ─────────────────────────────────────────────
+//  원준 2026-10-19 «상단 탭을 클릭하는 방향으로도 적절히 원하는 위치로 이동할 수 있어야» — 지난 단계뿐 아니라 와 본 앞 단계도 눌러서 간다(lib/studio-flow stageTabs).
+const CIRC = '① ② ③ ④ ⑤ ⑥'.split(' ');
+//  busy — AI 가 고치는 중(③ 수정하기를 보냈다). 그동안 앞 단계로는 못 간다 — ④ 대조를 고침 한가운데 청하게 되고, 고침이 끝난 것을 ③ 이 못 받는다(격리 리뷰).
+function paintStageBar(bar: HTMLElement, cur: number, reached: number, mode: 'new' | 'copy' | 'edit', labelOf: (i: number, label: string) => string, onGo: (k: 'what' | StudioStage) => void, busy = false): void {
+  const tabs = stageTabs(cur, busy ? cur : reached, mode);
+  bar.replaceChildren(...STAGES.map((x, i) => {
+    const text = CIRC[x.n - 1] + ' ' + labelOf(i, x.label);
+    const st = tabs[i];
+    if (st === 'back') return el('button', { type: 'button', class: 'done go', text, title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => onGo(x.key) });
+    if (st === 'ahead') return el('button', { type: 'button', class: 'go ahead', text, title: '이 단계로 다시 가요. 저장한 내용 그대로예요.', onclick: () => onGo(x.key) });
+    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', text, ...(st === 'on' ? { 'aria-current': 'step' } : {}) });
+  }));
+}
+/** 「다음 →」 — 바로 다음 단계가 와 본 곳일 때만(아직 안 간 단계는 그 단계의 주 단추가 연다). 「← 이전」 과 짝. */
+function nextBtnFor(cur: number, reached: number, mode: 'new' | 'copy' | 'edit', onGo: (k: 'what' | StudioStage) => void, busy = false): HTMLElement | null {
+  if (busy) return null;   // AI 가 고치는 중 — 위 paintStageBar 의 busy 와 같은 까닭
+  const i = nextStageOpen(cur, reached, mode);
+  return i < 0 ? null : el('button', { class: 'btn btn-ghost btn-sm v2-studio-next', type: 'button', text: '다음 →', title: '다음 단계로 가요. 저장한 내용 그대로예요.', onclick: () => onGo(STAGES[i].key) });
+}
+
 // ── ① 앱 이름과 기능 정하기 — 이름 · 설명(자세할수록 좋다) · 자리 · 누가 어디서 만드나 ──────────────
 const DRAFT_KEY = 'lively_v2_app_studio_draft';   // ① 에 적던 것(세션이 생기기 전) — 닫았다 열어도 남는다
 function readDraft(): { name: string; what: string; place: StudioPlace } { try { const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}'); return { name: String(d.name || ''), what: String(d.what || ''), place: d.place === 'full' || d.place === 'both' ? d.place : 'side' }; } catch (_) { return { name: '', what: '', place: 'side' }; } }
 function writeDraft(d: { name: string; what: string; place: StudioPlace } | null): void { try { if (d) localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); else localStorage.removeItem(DRAFT_KEY); } catch (_) { /* noop */ } }
-/** ① — prefill 을 주면 이미 세션이 있는 것(뒤로 온 것): 적었던 것을 그대로 보이고, 「만들기 시작」 은 그 세션에 기획을 다시 청한다. */
+/** ① — prefill 을 주면 이미 세션이 있는 것(뒤로 온 것): 적었던 것을 그대로 보이고, 단계 바 · 「다음 →」 로 와 본 단계에 그대로 다시 간다.
+ *  적은 것을 바꿨을 때만 「이 내용으로 다시 기획」 이 눌린다(그 세션에 기획을 다시 청한다). 바꾸던 것은 기록에 남는다(whatEdit). */
 function start(prefill?: StudioRec | null): void {
   if (!root) return;
-  const draft = prefill ? { name: prefill.title || '', what: prefill.what, place: prefill.place } : readDraft();
+  const orig = prefill ? { name: prefill.title || '', what: prefill.what, place: prefill.place } : null;
+  const draft = prefill ? (prefill.whatEdit || orig!) : readDraft();
   let place: StudioPlace = draft.place;
   const nameIn = el('input', { class: 'v2-studio-name-field', type: 'text', maxlength: '40', placeholder: '예: 회의록', 'aria-label': '앱 이름' }) as HTMLInputElement;
   const input = el('textarea', { class: 'v2-studio-what', rows: '6', maxlength: '4000', placeholder: DESC_PH, 'aria-label': '어떤 앱인가요' }) as HTMLTextAreaElement;
   nameIn.value = draft.name; input.value = draft.what;
   const go = el('button', { class: 'v2-studio-go', type: 'button', text: prefill ? '이 내용으로 다시 기획' : '만들기 시작' }) as HTMLButtonElement;
-  const sync = (): void => { go.disabled = !input.value.trim(); if (!prefill) writeDraft({ name: nameIn.value, what: input.value, place }); };
+  const topName = el('b', { class: 'v2-studio-name', text: draft.name.trim() || (prefill && prefill.card && prefill.card.name) || NEW_APP_NAME });
+  const changed = (): boolean => !!orig && (nameIn.value.trim() !== orig.name.trim() || input.value.trim() !== orig.what.trim() || place !== orig.place);
+  const sync = (): void => {
+    topName.textContent = nameIn.value.trim() || (prefill && prefill.card && prefill.card.name) || NEW_APP_NAME;
+    if (!prefill) { go.disabled = !input.value.trim(); writeDraft({ name: nameIn.value, what: input.value, place }); return; }
+    //  뒤로 온 ① — 바꾼 게 있어야 다시 기획한다. 바꾸던 것은 기록에(단계를 옮겨 다녀도 그대로) · 되돌려 놓으면 지운다.
+    go.disabled = !changed() || !input.value.trim();
+    if (changed()) prefill.whatEdit = { name: nameIn.value, what: input.value, place }; else delete prefill.whatEdit;
+    saveRec(prefill);
+  };
+  nameIn.addEventListener('input', sync);
   const cards = (Object.keys(PLACE) as StudioPlace[]).map((k) => {
     const b = el('button', { class: 'v2-studio-place' + (k === place ? ' on' : ''), type: 'button', 'data-place': k },
       placePic(k), el('b', { text: PLACE[k].title }), el('small', { text: PLACE[k].sub }));
@@ -443,9 +493,13 @@ function start(prefill?: StudioRec | null): void {
     go.disabled = true; go.textContent = '준비하는 중…';
     if (prefill) {
       //  뒤로 와서 고친 뒤 — 세션은 그대로, 기획 카드만 다시 청한다. 적은 것은 기록에 남는다.
-      const rec = prefill; rec.what = what; rec.place = place; if (nm) { rec.title = nm; rec.named = true; } else { delete rec.title; rec.named = false; }
-      rec.card = null; rec.stage = 'plan'; saveRec(rec);
+      const rec = prefill;
+      //  먼저 보낸다 — 못 보냈으면 기록을 그대로 둔다(고치던 것은 whatEdit 에 남아 있다 · 격리 리뷰).
       if (!(await sendPrompt(rec, planBrief(what, place, nm)))) { go.disabled = false; go.textContent = '이 내용으로 다시 기획'; return; }
+      rec.what = what; rec.place = place; if (nm) { rec.title = nm; rec.named = true; } else { delete rec.title; rec.named = false; }
+      //  기획을 다시 받는다 — ④ · ⑤ 는 옛 기획의 것이라 «와 본 곳» 을 당긴다(앱이 이미 있으면 ③ 의 옛 시안은 그대로 볼 수 있다). 넣은 앱이어도(done) 다시 만드는 중이다.
+      //   청한 카드를 빈 글로 두어, 새 카드가 오면 ② 에 「바꾼 기획대로 다시 만들기」 가 선다(옛 시안으로 그냥 넘어가지 않게).
+      rec.card = null; rec.stage = 'plan'; rec.reached = 1; rec.done = false; rec.cardSent = ''; delete rec.whatEdit; delete rec.check; saveRec(rec);
       void relabel(rec.sid, nm, 'new');
       void build(rec); return;
     }
@@ -470,12 +524,22 @@ function start(prefill?: StudioRec | null): void {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); input.focus(); } });
   const help = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '?', title: '안내 다시 보기', 'aria-label': '안내' });
   help.onclick = () => helpMenu(help, () => showIntro(() => input.focus(), () => showTour(() => input.focus())), () => showTour(() => input.focus()));
+  //  뒤로 온 ① 에서 와 본 단계로 — 적은 것을 바꾼 채여도 그대로 간다(바꾸던 것은 whatEdit 에 남아 ①로 돌아오면 다시 보인다).
+  const goStage = (k: 'what' | StudioStage): void => {
+    if (!prefill || k === 'what') return;
+    prefill.stage = k === 'fix' && !prefill.appId ? 'draft' : k; saveRec(prefill); void build(prefill);
+  };
+  const bar = el('div', { class: 'v2-studio-bar' });
+  const reached = prefill ? reachedOf(prefill) : 0;
+  paintStageBar(bar, 0, reached, prefill ? prefill.mode : 'new', (_i, label) => label, goStage);
+  const next = prefill ? nextBtnFor(0, reached, prefill.mode, goStage) : null;
   root.replaceChildren(
     el('div', { class: 'v2-studio-top' },
-      crumb(), el('span', { class: 'v2-studio-tag', text: '앱 만들기' }),
+      crumb(), topName,
       el('span', { class: 'v2-studio-sp' }), help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
-    el('div', { class: 'v2-studio-bar' }, ...STAGES.map((x) => el('span', { class: x.n === 1 ? 'on' : '', text: '① ② ③ ④ ⑤ ⑥'.split(' ')[x.n - 1] + ' ' + x.label }))),
+    bar,
+    ...(next ? [el('div', { class: 'v2-studio-now' }, next, el('span', { class: 'v2-studio-now-t', text: '적은 내용을 바꾸면 「이 내용으로 다시 기획」으로 기획 카드를 다시 받아요.' }))] : []),
     el('div', { class: 'v2-studio-start' },
       el('h2', { text: '앱의 이름과 기능을 정해주세요.' }),
       el('label', { class: 'v2-studio-lab' }, el('span', { text: '앱 이름' }), el('small', { text: '비워 두면 AI가 지어요. 나중에 바꿀 수 있어요.' })),
@@ -487,10 +551,12 @@ function start(prefill?: StudioRec | null): void {
       el('div', { class: 'v2-studio-places' }, ...cards),
       el('div', { class: 'v2-studio-ai' },
         el('div', { class: 'v2-studio-ai-h' }, el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', { text: '이 앱은 AI가 만들어요' })),
-        el('p', { text: '「만들기 시작」을 누르면 AI 세션이 하나 열려서 이를 바탕으로 더 궁금한 점을 물어볼거예요.' }),
+        el('p', { text: prefill ? '적은 내용을 바꾸고 「이 내용으로 다시 기획」을 누르면 AI가 기획 카드를 다시 써요. 바꾸지 않았으면 「다음 단계로」로 그대로 이어가요.' : '「만들기 시작」을 누르면 AI 세션이 하나 열려서 이를 바탕으로 더 궁금한 점을 물어볼거예요.' }),
         el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '어디서 실행할까요' }), nodeSel, nodeNote),
-        el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '모델 · 생각 깊이' }), modelChip, el('small', { class: 'v2-studio-ai-note', text: '앱 만들기에 맞게 정해 두었어요' }), el('span', { class: 'v2-studio-sp' }), go))));
-  go.disabled = !input.value.trim();   // 적어 둔 것이 있으면 바로 갈 수 있다(쓰기 전엔 draft 를 건드리지 않는다)
+        el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '모델 · 생각 깊이' }), modelChip, el('small', { class: 'v2-studio-ai-note', text: '앱 만들기에 맞게 정해 두었어요' }), el('span', { class: 'v2-studio-sp' }),
+          //  뒤로 온 ① — 아래 단추 자리에도 「다음 단계로」(원준 2026-10-19 «밑에 이 내용으로 다시 기획 이거밖에 없어서 어색해»). 위 「다음 →」 과 같은 길.
+          ...(next ? [el('button', { class: 'btn btn-ghost', type: 'button', text: '다음 단계로', title: '바꾸지 않고 다음 단계로 가요. 저장한 내용 그대로예요.', onclick: () => goStage(STAGES[nextStageOpen(0, reached, prefill!.mode)].key) })] : []), go))));
+  go.disabled = prefill ? !changed() || !input.value.trim() : !input.value.trim();   // 적어 둔 것이 있으면 바로 갈 수 있다(쓰기 전엔 draft 를 건드리지 않는다) · 뒤로 온 ① 은 바꿔야 다시 기획
   // ① 엔 말풍선을 띄우지 않는다 — 칸 이름과 안내글로 충분하다(원준 2026-10-14).
   const focusName = (): void => { nameIn.focus(); };
   if (!prefill && !readSeen().intro) showIntro(focusName, () => showTour(focusName));
@@ -516,9 +582,8 @@ async function build(rec: StudioRec): Promise<void> {
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null };
-  const tag = el('span', { class: 'v2-studio-tag', text: '앱 만드는 중' });
-  const name = el('b', { class: 'v2-studio-name', text: S.title });
+    waiting: false, waitT0: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null };
+  const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 버전으로', hidden: true }) as HTMLButtonElement;
   //  #4667 「공개하기」 — 공개한 앱을 고쳐 생긴 내 초안을 모두에게 내보낼 때, 또는 ⑤ 에서 「나만」 으로 둔 앱을 나중에 공개할 때. 새 앱의 첫 공개는 ④ 「누가 쓰나」 → 「이대로 넣기」 가 한다.
@@ -563,20 +628,14 @@ async function build(rec: StudioRec): Promise<void> {
     winHead.addEventListener('pointermove', move); winHead.addEventListener('pointerup', up); winHead.addEventListener('pointercancel', up);
   });
   const body = el('div', { class: 'v2-studio-body' }, stage, side);
-  const circ = (n: number): string => '① ② ③ ④ ⑤ ⑥'.split(' ')[n - 1];
-
   const paintBar = (): void => {
-    const cur = stageIndex(rec.stage);
-    bar.replaceChildren(...STAGES.map((x, i) => {
-      let label = x.label;
-      if (rec.mode !== 'new' && i < 3) label = i === 0 ? '앱 이름과 기능(원본)' : i === 1 ? '세부 기획(물려받음)' : '원본 시안 확인 · 수정';
-      if (x.key === 'fix' && rec.round > 0) label += ' · ' + (rec.round + (rec.stage === 'fix' && !S.waiting ? 1 : 0)) + '번째';
-      //  지난 단계는 눌러서 돌아간다(원준 2026-10-14 «뒤로 가는 게 너무 없다») — 적은 것은 기록에 있으니 날아가지 않는다.
-      const canGo = i < cur && (rec.mode === 'new' || i >= 2);
-      return canGo
-        ? el('button', { type: 'button', class: 'done go', text: circ(x.n) + ' ' + label, title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => { void goTo(x.key); } })
-        : el('span', { class: i < cur ? 'done' : i === cur ? 'on' : '', text: circ(x.n) + ' ' + label });
-    }));
+    //  지난 단계는 눌러서 돌아가고(원준 2026-10-14 «뒤로 가는 게 너무 없다»), 와 본 앞 단계는 눌러서 다시 간다(원준 2026-10-19) — 적은 것은 기록에 있으니 날아가지 않는다.
+    paintStageBar(bar, stageIndex(rec.stage), reachedOf(rec), rec.mode, (i, label) => {
+      let t = label;
+      if (rec.mode !== 'new' && i < 3) t = i === 0 ? '앱 이름과 기능(원본)' : i === 1 ? '세부 기획(물려받음)' : '원본 시안 확인 · 수정';
+      if (STAGES[i].key === 'fix' && rec.round > 0) t += ' · ' + (rec.round + (rec.stage === 'fix' && !S.waiting ? 1 : 0)) + '번째';
+      return t;
+    }, (k) => { void goTo(k); }, S.waiting);
   };
   /** 한 단계 뒤 — ①로 가면 세션은 두고 적었던 것을 다시 보인다. 없으면 null(① 이거나 고치기 흐름의 ①~③). */
   const prevOf = (): 'what' | StudioStage | null => {
@@ -588,14 +647,20 @@ async function build(rec: StudioRec): Promise<void> {
   const goTo = async (k: 'what' | StudioStage): Promise<void> => {
     rec.pins = S.pins; rec.general = S.general; saveRec(rec);
     if (k === 'what') { if (teardown) { teardown(); teardown = null; } closeCoach(); start(rec); return; }   // ①로 — 열린 안내는 닫는다(다시 와도 또 서지 않게)
-    await setStage(k);
+    await setStage(k === 'fix' && !rec.appId ? 'draft' : k);
   };
   const nowBtn = (text: string, pri: boolean, run: () => void, disabled = false): HTMLButtonElement => { const b = el('button', { class: pri ? 'v2-studio-now-pri' : 'btn btn-ghost btn-sm', type: 'button', text, onclick: run }) as HTMLButtonElement; b.disabled = disabled; return b; };
   const cmCount = (): number => S.pins.filter((p) => p.note.trim()).length + (S.general.trim() ? 1 : 0);
   const paintNow = (): void => {
     const kids: Array<HTMLElement | null> = []; let text = '';
     const hasCm = cmCount() > 0;
-    if (rec.stage === 'plan') { text = rec.card ? '기획 카드에서 틀린 내용을 고쳐주세요' : 'AI가 기획 카드를 쓰는 중이에요'; kids.push(nowBtn('완료 · 다음 단계로', true, () => { void toDraft(); }, !rec.card)); }
+    if (rec.stage === 'plan') {
+      text = rec.card ? '기획 카드에서 틀린 내용을 고쳐주세요' : 'AI가 기획 카드를 쓰는 중이에요';
+      //  이미 이 기획으로 시안을 청했다(와 본 곳이 ③ 이상) — 카드를 안 고쳤으면 「다음 →」 로 그대로 간다(다시 만들지 않는다).
+      //   고쳤으면 「바꾼 기획대로 다시 만들기」(앱이 있으면 새 버전 · 아직 첫 판 전이면 초안을 다시 청한다).
+      if (reachedOf(rec) < 2) kids.push(nowBtn('완료 · 다음 단계로', true, () => { void toDraft(); }, !rec.card));
+      else if (rec.card && rec.cardSent != null && cardText(rec.card) !== rec.cardSent) kids.push(nowBtn('바꾼 기획대로 다시 만들기', true, () => { void remake(); }, S.waiting));
+    }
     else if (rec.stage === 'draft' || rec.stage === 'fix') {
       if (!rec.appId) text = 'AI가 초안을 만들고 있어요(' + (S.step ? DRAFT_STEPS[S.step - 1] : '시작하는 중') + '). 몇 분 걸려요.';
       else if (S.waiting) text = 'AI가 수정하고 있어요. 다음 버전이 나오면 화면이 바뀌어요.';
@@ -604,7 +669,9 @@ async function build(rec: StudioRec): Promise<void> {
     } else if (rec.stage === 'check') { text = '아래 네 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
     const prev = prevOf();
+    const next = nextBtnFor(stageIndex(rec.stage), reachedOf(rec), rec.mode, (k) => { void goTo(k); }, S.waiting);
     now.replaceChildren(...(prev ? [el('button', { class: 'btn btn-ghost btn-sm v2-studio-back', type: 'button', text: '← 이전', title: '이전 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => { void goTo(prev); } })] : []),
+      ...(next ? [next] : []),
       el('span', { class: 'v2-studio-now-t', text }), el('span', { class: 'v2-studio-sp' }), ...kids.filter(Boolean) as HTMLElement[]);
     rec.pins = S.pins; rec.general = S.general; saveRec(rec);   // 적던 의견은 늘 기록에(뒤로 가도 · 닫아도 그대로)
     syncFixIn();
@@ -673,6 +740,7 @@ async function build(rec: StudioRec): Promise<void> {
     markReviewOpen(null);   // 앱빌더로 돌아왔다 — 새로고침해도 이 화면(허브)으로
     closeReview(); S.review = null; dropTry();
     if (root) root.hidden = false;
+    if (mountOpts.onSee) mountOpts.onSee(rec.sid, null);   // 앱빌더 화면(허브)으로 — 앱빌더 사이드바가 돌아온다
     if (mountOpts.host && !/^#\/builder(\/|\?|$)/.test(location.hash)) location.hash = builderRoute('resume', rec.sid);
   };
   let opening = false;   // 앱 화면을 마련하는 동안 두 번 눌러도 한 번만 간다
@@ -716,8 +784,11 @@ async function build(rec: StudioRec): Promise<void> {
       onSend: () => { void sendFix(); },
       onLike: () => { backToBuilder(); void setStage('check'); },
       onBack: () => { backToBuilder(); },
-      onClose: () => { S.review = null; dropTry(); if (root) root.hidden = false; markReviewOpen(null); },   // 막대가 걷혔다(돌아옴 · 다른 데로 · 창 닫힘) — 새로고침으로는 안 불린다
+      onClose: () => { S.review = null; dropTry(); if (root) root.hidden = false; markReviewOpen(null); if (mountOpts.onSee) mountOpts.onSee(rec.sid, null); },   // 막대가 걷혔다(돌아옴 · 다른 데로 · 창 닫힘) — 새로고침으로는 안 불린다
     });
+    //  이 자리에 만들고 있는 앱의 실제 화면(시험 세션)이 섰다 — 그 화면의 주인은 그 앱이라 앱빌더 사이드바를 접는다(원준 2026-10-19 «안그렇게 해줘»).
+    //   ⚠ 막대를 연 **뒤에** 적는다 — openReview 가 제 주소(route)로 맞추며 이 표시를 지운다.
+    if (S.tryS && mountOpts.onSee) mountOpts.onSee(rec.sid, 'widget');
     //  이 화면을 보는 중이라고 적어 둔다 — 새로고침하면 앱빌더가 같은 화면 · 막대로 다시 연다(v2/review-resume.ts).
     markReviewOpen({ sid: rec.sid, appId: rec.appId, view, route });
   };
@@ -819,8 +890,11 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.dead) return;
     if (!rec.appId) { if (ev.kind === 'updated' || ev.kind === 'attach') { window.clearTimeout(S.pollT); void findApp(); } return; }
     if (ev.app_id === rec.appId && ev.kind === 'updated') {
-      if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
-      if (S.waiting) { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; S.pins = []; S.general = ''; rec.pins = []; rec.general = ''; saveRec(rec); }
+      //  고침을 기다리던 중이면 어느 단계에 있든 먼저 끝맺는다 — ② 로 돌아가 있어도 ③ 이 «수정하고 있어요» 에 멈추지 않게(격리 리뷰).
+      //   새 버전이 나왔다 — ④ 확인 · ⑤ 넣기는 그 버전으로 다시 해야 하니 «와 본 곳» 을 ③ 으로 당긴다.
+      const settled = S.waiting;
+      if (S.waiting) { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; S.pins = []; S.general = ''; rec.pins = []; rec.general = ''; rec.reached = 2; saveRec(rec); }
+      if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); if (settled) { band.hidden = true; paintBar(); paintNow(); } return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
       void showApp(ev.note || '고쳤어요');
     }
   });
@@ -831,7 +905,7 @@ async function build(rec: StudioRec): Promise<void> {
       //   그 이름이 곧 이 앱의 이름이다 — 머리줄 · 앱빌더 카드 · 세션 이름이 같은 글을 쓴다(원준 2026-10-15).
       if (!rec.named && !rec.title && c.name) { rec.named = true; rec.title = c.name; S.title = c.name; name.textContent = c.name; saveRec(rec); void relabel(rec.sid, c.name, 'new'); } } }
     else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; paintSteps(); paintNow(); } }
-    else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; paintCheck(); paintNow(); } }
+    else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; if (S.checkFor && S.checkFor.ver > 0) { rec.check = { ...ck, ...S.checkFor }; saveRec(rec); } paintCheck(); paintNow(); } }
   };
   const pump = async (): Promise<void> => {
     if (S.dead) return;
@@ -845,6 +919,8 @@ async function build(rec: StudioRec): Promise<void> {
   // ── 단계 화면들 ──
   const paintPlan = (): void => {
     const h = appHost();
+    //  옛 기록(카드 글을 안 적던 판)으로 ② 에 왔다 — 지금 카드를 «청한 카드» 로 잡아 둔다(이 뒤에 고친 것만 «바꾼 기획» 이다).
+    if (rec.card && rec.cardSent == null && reachedOf(rec) >= 2) { rec.cardSent = cardText(rec.card); saveRec(rec); }
     if (!rec.card) { waiting('AI가 기획 카드를 쓰는 중이에요', '한 줄 요청을 읽고 AI가 정리해요(1분 안팎).\n카드가 오면 다르게 생각하신 내용이 있는지 확인해주세요.'); return; }
     // 대화를 접어 두었으니 카드를 통째로 다시 쓰게 하는 한마디는 카드 아래에서 받는다.
     const ask = el('input', { class: 'v2-studio-ask-in', type: 'text', maxlength: '400', placeholder: '고칠 내용을 적어주세요. 예: 더 단순하게, 담당자 칸 추가', 'aria-label': '기획 카드 수정 요청' }) as HTMLInputElement;
@@ -862,6 +938,7 @@ async function build(rec: StudioRec): Promise<void> {
       rec.card = c; const nn = String(c.name || '').trim();
       if (nn && nn !== String(rec.title || '').trim()) { rec.title = nn; rec.named = true; S.title = nn; name.textContent = nn; void relabel(rec.sid, nn, rec.mode); }
       saveRec(rec);
+      paintNow();   // 카드를 고쳤다 — 이미 시안을 청한 기획이면 「바꾼 기획대로 다시 만들기」 가 선다
     };
     h.replaceChildren(cardView(rec.card, onCard), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
     coach('plan', h.querySelector('.v2-studio-card'), '틀린 줄을 누르면 바로 고칠 수 있어요. 다 맞으면 「완료 · 다음 단계로」를 눌러주세요.', '「무엇을 적나」에 「담당자」를 더하면 앱에 그 칸이 생겨요');
@@ -959,20 +1036,39 @@ async function build(rec: StudioRec): Promise<void> {
   const setStage = async (s0: StudioStage): Promise<void> => {
     const s: StudioStage = s0 === 'draft' && rec.appId ? 'fix' : s0;
     leaveCoach(s === 'fix' || s === 'draft' ? 'draft' : s);
-    rec.stage = s; if (s !== 'put') rec.done = false; saveRec(rec);
+    rec.stage = s; if (s !== 'put') rec.done = false; rec.reached = Math.max(reachedOf(rec), stageIndex(s)); saveRec(rec);   // done 을 먼저 — reachedOf 는 넣은 앱을 ⑤ 까지로 본다
     if (s !== 'fix' && S.review) backToBuilder();
     body.classList.toggle('v2-studio-body--put', s === 'put'); body.classList.toggle('v2-studio-body--hub', s === 'fix' || s === 'draft'); body.classList.toggle('v2-studio-body--plan', s === 'plan' || s === 'check');
     appBox.className = 'v2-studio-app ' + (s === 'plan' || s === 'check' ? 'v2-studio-app--side' : 'v2-studio-app--full');
-    tag.textContent = s === 'put' ? '앱 완성' : (rec.mode === 'new' ? '앱 만드는 중' : '앱 고치는 중'); undo.hidden = s === 'put' || !S.prevVer;
+    undo.hidden = s === 'put' || !S.prevVer;
     appBox.replaceChildren();
     if (s === 'put') { rec.done = true; saveRec(rec); paintPut(); }
     else if (s === 'plan') paintPlan();
     else if (s === 'draft') paintDraft();
     else if (s === 'fix') { if (!rec.appId) paintDraft(); else { paintHub(); void paintVer().then(() => { if (!S.dead && rec.stage === 'fix') paintHub(); }); } }
-    else if (s === 'check') { S.check = null; paintCheck(); if (rec.card && rec.appId) { S.checkWait = true; void sendPrompt(rec, checkBrief(rec.card, rec.appId)); } }
+    else if (s === 'check') {
+      //  같은 버전 · 같은 기획 카드로 이미 대조했으면 그 결과를 그대로 — 단계 바로 오갈 때마다 AI 에게 다시 묻지 않는다.
+      if (rec.appId && !S.curVer) { await paintVer(); if (S.dead || rec.stage !== 'check') return; }   // 기다리는 사이 다른 단계로 갔거나 닫혔다
+      //  버전을 못 읽었으면(0) 지난 결과를 믿지 않는다 — 다른 버전의 대조를 그대로 보일 수 있다.
+      const same = !!rec.check && S.curVer > 0 && rec.check.ver === S.curVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
+      S.check = same && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; paintCheck();
+      //  청한 때의 버전 · 카드로 결과에 도장을 찍는다(답이 올 때의 것이 아니라 — 그 사이 바뀌었으면 다음에 다시 묻는다).
+      if (!same && rec.card && rec.appId) { S.checkWait = true; S.checkFor = { ver: S.curVer, card: cardText(rec.card) }; void sendPrompt(rec, checkBrief(rec.card, rec.appId)); }
+    }
     applyPlace(); paintBar(); paintNow(); paintTray();
   };
-  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await sendPrompt(rec, draftBrief(rec.card, rec.place, rec.draftId || ''))) { S.step = 0; await setStage('draft'); } };
+  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await sendPrompt(rec, draftBrief(rec.card, rec.place, rec.draftId || ''))) { rec.cardSent = cardText(rec.card); saveRec(rec); S.step = 0; await setStage('draft'); } };
+  //  ② 에서 기획 카드를 고친 뒤 「바꾼 기획대로 다시 만들기」 — 앱이 있으면 고침 한 번(바뀐 카드 전문을 앱 전체 코멘트로 · 새 버전), 첫 판 전이면 초안을 다시 청한다.
+  const remake = async (): Promise<void> => {
+    if (!rec.card || S.waiting) return;
+    if (!rec.appId) { await toDraft(); return; }
+    const say = '기획 카드를 이렇게 바꿨어요. 바뀐 카드대로 앱을 고쳐주세요.\n' + cardText(rec.card);
+    if (await sendPrompt(rec, fixBrief(rec.round + 1, [], say, rec.place, rec.appId))) {
+      rec.cardSent = cardText(rec.card); saveRec(rec);
+      S.waiting = true; S.waitT0 = Date.now(); tickWait();
+      await setStage('fix');
+    }
+  };
   const sendFix = async (): Promise<void> => {
     if (S.waiting) return;
     const pins = S.pins.filter((p) => p.note.trim()); if (!pins.length && !S.general.trim()) return;
@@ -1015,13 +1111,13 @@ async function build(rec: StudioRec): Promise<void> {
   undo.onclick = async () => {
     if (!rec.appId || !S.prevVer) return;
     undo.disabled = true; const to = await revertApp(rec.appId, S.prevVer, S.title); undo.disabled = false;
-    if (to != null) await showApp(verJ(to, '으로') + ' 되돌렸어요');
+    if (to != null) { rec.reached = 2; saveRec(rec); await showApp(verJ(to, '으로') + ' 되돌렸어요'); }   // 되돌린 버전으로 ④ · ⑤ 를 다시
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
     window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
-    el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), tag, name, ver,
+    el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
       el('span', { class: 'v2-studio-sp' }), pubBtn, undo, chatBtn, help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
@@ -1035,7 +1131,9 @@ async function build(rec: StudioRec): Promise<void> {
   await setStage(rec.stage);
   void pump();
   //  새로고침 전에 실제 화면(시험 세션 · 앱 화면)을 보던 중이었으면 그 화면과 막대를 다시 연다(원준 2026-10-16 «새로고침하니까 밑에 떠 있는 창 사라짐»).
-  { const m = readReviewOpen(); if (m && m.sid === rec.sid && m.appId === rec.appId && rec.stage === 'fix' && rec.appId && !S.dead) void openReal(m.view); }
+  { const m = readReviewOpen();
+    if (m && m.sid === rec.sid && m.appId === rec.appId && rec.stage === 'fix' && rec.appId && !S.dead) void openReal(m.view);
+    else if (mountOpts.onSee) mountOpts.onSee(rec.sid, null); }   // 다시 열 화면이 없다 — 주소에 남은 «보는 중» 표시를 걷어 앱빌더 사이드바를 되돌린다
   // AI 세션 — 그 세션 화면을 끼운다(리브와 같은 방식: 목록을 한 번 읽어 그 세션 한 장으로). 기본 터미널 보기(chatHome 아님).
   try {
     const [live, logs] = await Promise.all([

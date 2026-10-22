@@ -81,6 +81,11 @@ check(sh("builder", "wiki") === "wiki" && sh("", "sess") === "sess", "B5 앱 화
     check(threw === null && A("#/s/%") === "s:%", "C6 틀린 %-꼴의 세션 주소에도 던지지 않는다(그리기마다 묻는 값)", threw);
     check(O.sideOwnerOfRoute("#/app/sessions") === "sessions" && O.sideOwnerOfRoute("#/app/context") === "none" && O.sideOwnerOfRoute("#/app/system") === "none"
       && O.sideOwnerOfRoute("#/builder/s/box-1") === "builder" && O.sideOwnerOfRoute("#/builder?sel=memo") === "builder", "C7 #/app/<키> · 앱빌더 안의 주소");
+    //  #4632 원준 2026-10-19 «3단계에서 앱 전체화면 보면서 만들 때 … 앱 빌더의 사이드바가 등장하네. 안그렇게 해줘» — ③ 실제 화면을 보는 중(see)엔 앱빌더 사이드바가 없다.
+    const W = (h) => O.sideOwnerOfRoute(h);
+    check(W("#/builder/s/box-1?see=widget") === "none" && W("#/builder/s/box-1?see=app") === "none", "C8 앱빌더 ③ 실제 화면을 보는 중(see=widget · app)엔 사이드바 없음", [W("#/builder/s/box-1?see=widget"), W("#/builder/s/box-1?see=app")]);
+    check(W("#/builder/s/box-1") === "builder" && W("#/builder/s/box-1?see=zzz") === "builder" && W("#/builder?see=widget") === "builder" && W("#/builder/new?see=app") === "builder",
+      "C9 경계 — 표시 없음 · 모르는 값 · 목록 · 새 앱은 앱빌더 사이드바 그대로", [W("#/builder/s/box-1?see=zzz"), W("#/builder?see=widget")]);
   } else console.log("C  건너뜀 — 빌드 없음(shell-surfaces.js · classic-pages.js)");
 }
 
