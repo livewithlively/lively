@@ -124,7 +124,9 @@ function readStdin(ms = 800) {
   });
 }
 
-// → { hooks, relay } | null(게이트웨이 미도달). relay 는 org 정책(관리탭) — 구버전 게이트웨이면 기본값.
+// → { hooks, relay, concurrent } | null(게이트웨이 미도달). relay 는 org 정책(관리탭) — 구버전 게이트웨이면 기본값.
+//  concurrent 는 «같은 sort 의 훅을 동시에 돌려도 된다» 는 조직 설정(runtime_config.hooks.concurrent, 기본 꺼짐) —
+//  true 일 때만 겹친다. 필드가 없으면(구 게이트웨이) 종전처럼 하나씩.
 async function fetchHooks(input) {
   if (!TOKEN) return null;
   const ctl = new AbortController();
@@ -134,8 +136,8 @@ async function fetchHooks(input) {
     const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input) } });
     if (!res.ok) return null;
     const j = await res.json();
-    if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY };
-    return { hooks: j.hooks, relay: Array.isArray(j?.relay_decisions) ? j.relay_decisions : DEFAULT_RELAY };
+    if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY, concurrent: false };
+    return { hooks: j.hooks, relay: Array.isArray(j?.relay_decisions) ? j.relay_decisions : DEFAULT_RELAY, concurrent: j?.concurrent === true };
   } catch { return null; }
   finally { clearTimeout(t); }
 }
@@ -176,8 +178,8 @@ async function reportFailures(fails, input) {
   finally { clearTimeout(t); }
 }
 
-function saveCache(hooks, relay) {
-  try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(cacheFile(), JSON.stringify({ at: Date.now(), hooks, relay }), { mode: 0o600 }); } catch { /* fail-open */ }
+function saveCache(hooks, relay, concurrent) {
+  try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(cacheFile(), JSON.stringify({ at: Date.now(), hooks, relay, concurrent: concurrent === true }), { mode: 0o600 }); } catch { /* fail-open */ }
 }
 // 캐시 유효기간(ms) — hooks-config.json 의 hook_grace_ms(runtime-config 발, session-preload 가 매 세션 미러)에서 읽는다.
 //  null/미설정/못읽음/잡값 = 무제한(마지막 접속 기준 영구 실행 — #1008 기본). 양수 = 그 ms 경과 후 fail-CLOSED(회수창).
@@ -197,7 +199,7 @@ function loadCache() {
     if (!c || typeof c.at !== "number" || !Array.isArray(c.hooks)) return null;
     const grace = graceMs();
     if (grace !== null && Date.now() - c.at > grace) return null; // grace 설정 + 만료 → fail-CLOSED. null(무제한)이면 나이 무관 사용.
-    return { hooks: c.hooks, relay: Array.isArray(c.relay) ? c.relay : DEFAULT_RELAY };
+    return { hooks: c.hooks, relay: Array.isArray(c.relay) ? c.relay : DEFAULT_RELAY, concurrent: c.concurrent === true };
   } catch { return null; }
 }
 
@@ -390,16 +392,31 @@ async function spawnHook(hook, stdin, ext, expectHash) {
   finally { try { rmSync(tmp, { force: true }); } catch { /* */ } }
 }
 
-// 실행 순서 — 훅의 sort 가 같으면 한 묶음으로 **동시에**, 다른 묶음은 sort 오름차순으로 **차례로** 돈다.
+// 실행 순서 — 조직이 동시 실행을 켰으면(concurrent) 훅의 sort 가 같은 것끼리 한 묶음으로 **동시에**, 다른 묶음은
+//  sort 오름차순으로 **차례로** 돈다. 끄면(기본) 종전처럼 받은 순서(서버 정렬 sort·id)대로 하나씩 돈다.
 //  종전엔 전부 차례로 돌아 한 이벤트의 시간이 훅 소요의 합이었다(훅 12개면 매 프롬프트 2~5초). sort 는 관리자가
 //  이미 '뒤에 돌아야 하는 훅'(예: 프로젝트를 붙인 뒤에 그 프로젝트 문맥을 싣는 훅)을 뒤로 미는 데 쓰고 있었으므로,
 //  그 뜻은 묶음 사이 순서로 그대로 지키고 묶음 안에서만 겹친다.
-//  ⚠ sort 를 모르면(구버전 게이트웨이 응답·그때 저장된 캐시) 전부 차례로 돈다 — 순서 정보 없이 겹치면 종전에
-//   우연히 지켜지던 순서가 깨질 수 있고, 느린 쪽이 안전한 쪽이다.
+//  ⚠ 기본이 꺼짐인 이유: 조직이 만든 훅은 기본 sort 0 이라 켜는 순간 시드와 한 묶음이 된다 — 종전엔 id 순으로 우연히
+//   지켜지던 선후(같은 파일을 쓰거나 앞 훅의 결과에 기대는 훅)가 소리 없이 깨질 수 있어, 조직이 확인하고 켠다.
+//  ⚠ sort 를 모르면(구버전 게이트웨이 응답·그때 저장된 캐시) 켜져 있어도 전부 차례로 돈다 — 순서 정보 없이 겹치면
+//   종전에 우연히 지켜지던 순서가 깨질 수 있고, 느린 쪽이 안전한 쪽이다.
+//  한 묶음에서 동시에 도는 훅은 HOOK_PARALLEL_MAX 개까지다(같은 sort 의 훅이 수십 개여도 프로세스가 한꺼번에 뜨지 않게).
 //  결과는 sort 오름차순, 같은 sort 안에서는 받은 순서로 돌려준다(끝난 순서가 아니다) — 컨텍스트 이어붙이기·결정
 //   병합이 매번 같아야 한다.
-async function runAll(hooks, stdin) {
-  const ordered = hooks.every((hk) => typeof hk.sort === "number" && Number.isFinite(hk.sort));
+const HOOK_PARALLEL_MAX = 8;
+// 훅 하나의 예외(예: 캐시가 깨져 source_code 가 문자열이 아님)가 같은 묶음의 이웃을 끌고 가지 않게 값으로 바꾼다.
+const runHookIsolated = (hk, stdin) => runHook(hk, stdin).catch((e) =>
+  ({ out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || e).slice(-STDERR_KEEP) } }));
+async function runWave(wave, stdin) {
+  const rs = new Array(wave.length);
+  let next = 0;
+  const worker = async () => { while (next < wave.length) { const i = next++; rs[i] = await runHookIsolated(wave[i], stdin); } };
+  await Promise.all(Array.from({ length: Math.min(HOOK_PARALLEL_MAX, wave.length) }, worker));
+  return rs;
+}
+async function runAll(hooks, stdin, concurrent) {
+  const ordered = concurrent === true && hooks.every((hk) => typeof hk.sort === "number" && Number.isFinite(hk.sort));
   const waves = [];
   if (!ordered) for (const hk of hooks) waves.push([hk]);
   else {
@@ -409,7 +426,7 @@ async function runAll(hooks, stdin) {
   }
   const results = [];
   for (const wave of waves) {
-    const rs = await Promise.all(wave.map((hk) => runHook(hk, stdin)));
+    const rs = await runWave(wave, stdin);
     wave.forEach((hk, i) => results.push({ hk, ...rs[i] }));
   }
   return results;
@@ -490,14 +507,14 @@ async function main() {
   try { input = JSON.parse(stdin || "{}"); toolName = input.tool_name || input.toolName || ""; } catch { /* */ }
 
   const fetched = await fetchHooks(input);
-  const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY }) : fetched; // 미도달 → grace 캐시
-  if (fetched !== null) saveCache(fetched.hooks, fetched.relay);                                  // 성공 → 캐시 갱신
+  const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY, concurrent: false }) : fetched; // 미도달 → grace 캐시
+  if (fetched !== null) saveCache(fetched.hooks, fetched.relay, fetched.concurrent);                                // 성공 → 캐시 갱신
   const relay = cfg.relay.filter((d) => RANK[d]); // 잡값 방어
   const hooks = cfg.hooks.filter((hk) => hk && (hk.event === EVENT) && matches(hk, toolName));
   if (!hooks.length) return;
 
   const outputs = []; const fails = [];
-  for (const { hk, out, fail } of await runAll(hooks, stdin)) {
+  for (const { hk, out, fail } of await runAll(hooks, stdin, cfg.concurrent)) {
     const trimmed = out && out.trim() ? out.trim() : "";
     if (trimmed) outputs.push(trimmed);
     // PreToolUse 에서 훅이 뭔가 뱉었는데 결정으로 못 읽히면(예: JSON 앞에 console.log 한 줄) 하네스는 그걸
