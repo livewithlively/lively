@@ -190,6 +190,15 @@ export function excludeSeedHooks(rows) {
   for (const r of rows || []) ((r && SEED_EXCLUDED_HOOK_IDS.has(r.id)) ? excluded : kept).push(r);
   return { kept, excluded };
 }
+// 잠긴 연결 스킬 분리(#4970) — `liv-connect`·`liv-connect-<앱>` 은 DB 캡처가 아니라 레포 원본(src/org/delivery/connect-skills/*.md)이
+//  정본이고 seed-content 가 따로 시딩한다. canonical DB 에도 그 행이 있으므로 여기서 빼지 않으면 DEFAULT_SKILLS 로 되돌아와
+//  두 시더가 같은 행을 놓고 다툰다. id 규칙은 connect-skills.test.ts 가 카탈로그 전체에 대해 강제한다.
+export const isLockedConnectSkillId = (id) => id === "liv-connect" || /^liv-connect-[a-z0-9-]+$/.test(String(id || ""));
+export function excludeLockedSkills(rows) {
+  const kept = [], excluded = [];
+  for (const r of rows || []) ((r && isLockedConnectSkillId(r.id)) ? excluded : kept).push(r);
+  return { kept, excluded };
+}
 // 현재 시드 vs DB 캡처 항목별 판정(추가/변경/제거) — id 기준, JSON 동등성으로 변경 감지.
 export function diffRows(current, next) {
   const c = byId(current), n = byId(next), added = [], changed = [], removed = [];
@@ -259,8 +268,11 @@ async function main() {
   const { kept: nextHooks, excluded: internalHooks } = excludeSeedHooks(capturedHooks);
   if (internalHooks.length) console.warn(`ⓘ Lively 조직 전용이라 시드에서 제외: ${internalHooks.map((r) => r.id).join(", ")}`);
 
+  // 잠긴 연결 스킬(#4970)은 레포 원본이 정본 — DB 캡처에서 뺀다(위 excludeLockedSkills 주석).
+  const { kept: unlockedSkills, excluded: lockedSkills } = excludeLockedSkills(capturedSkills);
+  if (lockedSkills.length) console.warn(`ⓘ 잠긴 연결 스킬이라 캡처에서 제외(원본 connect-skills/*.md): ${lockedSkills.map((r) => r.id).join(", ")}`);
   // 내부 전용(frontmatter.internal_only) 자산은 고객 시드에서 통째로 제외 — 본문도 안 나간다(위 헤더 ⚠ 참조).
-  const { kept: nextSkills, excluded: internalSkills } = excludeInternalOnly(capturedSkills);
+  const { kept: nextSkills, excluded: internalSkills } = excludeInternalOnly(unlockedSkills);
   if (internalSkills.length) console.warn(`ⓘ 내부 전용이라 시드에서 제외(frontmatter.internal_only): ${internalSkills.map((r) => r.id).join(", ")}`);
 
   // 신규 설치 기본값 고정 — 우리 조직 토글이 고객 디폴트로 새지 않게. diff 가 '실제 쓰일 값'을 반영하도록 먼저.
@@ -276,7 +288,7 @@ async function main() {
   const capturedCurrentHooks = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_HOOKS") : [];
   const { kept: currentHooks, excluded: leakedCurrentHooks } = excludeSeedHooks(capturedCurrentHooks);
   if (leakedCurrentHooks.length) console.warn(`⚠ 현행 시드에 섞인 Lively 조직 전용 훅을 제거: ${leakedCurrentHooks.map((r) => r.id).join(", ")}`);
-  const currentSkills = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_SKILLS") : [];
+  const currentSkills = excludeLockedSkills(currentSrc ? parseModuleArray(currentSrc, "DEFAULT_SKILLS") : []).kept;
 
   const hookD = diffRows(currentHooks, nextHooks), skillD = diffRows(currentSkills, nextSkills);
   if (args.only) {

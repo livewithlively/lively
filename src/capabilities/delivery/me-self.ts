@@ -11,6 +11,7 @@ import {
   type LocalSessionMode
 } from "../../org/store.js";
 import { effectiveVisible, targetsMember } from "../../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
+import { effectiveAsset, effectiveAssets, isLockedSkill, lockedSkillMessage } from "../../org/delivery/connect-skills.js"; // #4970 잠긴 연결 스킬
 import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, HOOK_HARNESSES_MSG, actorOf, assertPrefKind, parseAssetFrontmatter, restRead, str, wctx } from "./shared.js";
 
 export const meProfileCapabilities: Capability[] = [
@@ -107,9 +108,11 @@ export const meSelfCapabilities: Capability[] = [
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const [assets, hooks, prefs] = await Promise.all([listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId })]);
+      const [assets, hooks, prefs] = await Promise.all([listOrgHarnessAssets().then(effectiveAssets), listOrgHooks(), listAssetPrefs({ member_id: userId })]);
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
+        // #4970 — 잠긴 연결 스킬은 모두에게 늘 켜져 있다(개인 설정이 없다). 화면은 locked 로 스위치 대신 «항상 켜짐»을 그린다.
+        if (kind === "harness_asset" && isLockedSkill(id)) return { override: null, byDefault: true, effective: true, locked: true };
         const key = `${kind}:${id}`;
         const override = prefMap.has(key) ? (prefMap.get(key) as boolean) : null; // null=오버라이드 없음(관리자 기본값)
         const byDefault = targetsMember(targetMembers, userId);
@@ -130,6 +133,7 @@ export const meSelfCapabilities: Capability[] = [
       if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 설정할 수 없습니다 — 관리자에게 문의하세요");
       const targetKind = assertPrefKind(input.target_kind);
       const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      if (targetKind === "harness_asset" && isLockedSkill(refId)) throw new HttpError(409, lockedSkillMessage(refId));
       const exists = targetKind === "org_hook" ? await getOrgHook(refId) : await getOrgHarnessAsset(refId);
       if (!exists || exists.enabled === false) throw new HttpError(404, "대상 스킬/훅이 없거나 비활성입니다");
       const wc = { actor: actorOf(user), source: "web-self" };
@@ -238,10 +242,11 @@ export const meSelfCapabilities: Capability[] = [
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const { getHarnessSnapshots, getHarnessLocalPref, getHarnessMachineAlias, getLocalModePreferences } = await import("../../org/store.js");
       const [assets, hooks, prefs, snaps, localPref, aliases, modePrefs] = await Promise.all([
-        listOrgHarnessAssets(), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId), getHarnessMachineAlias(userId), getLocalModePreferences(userId),
+        listOrgHarnessAssets().then(effectiveAssets), listOrgHooks(), listAssetPrefs({ member_id: userId }), getHarnessSnapshots(userId), getHarnessLocalPref(userId), getHarnessMachineAlias(userId), getLocalModePreferences(userId),
       ]);
       const prefMap = new Map(prefs.map((p) => [`${p.target_kind}:${p.ref_id}`, p.state]));
       const meta = (kind: AssetPrefKind, id: string, targetMembers: string[] | null) => {
+        if (kind === "harness_asset" && isLockedSkill(id)) return { override: null, byDefault: true, effective: true, locked: true };   // #4970
         const override = prefMap.has(`${kind}:${id}`) ? (prefMap.get(`${kind}:${id}`) as boolean) : null;
         return { override, byDefault: targetsMember(targetMembers, userId), effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
       };
@@ -346,7 +351,8 @@ export const meSelfCapabilities: Capability[] = [
         return { id: h.id, kind: "hook", label: h.label, description: h.note ?? null, body: h.source_code ?? "", frontmatter: null };
       }
       // skill·subagent·command = org_harness_asset. 인증 멤버면 조회 OK(어차피 로컬로 배포되는 것 — redact 불요).
-      const a = await getOrgHarnessAsset(id);
+      const raw = await getOrgHarnessAsset(id);
+      const a = raw ? effectiveAsset(raw) : null;   // #4970 잠긴 연결 스킬 = 코드 본문
       if (!a || !a.enabled) throw new HttpError(404, "항목이 없거나 비활성입니다");
       return { id: a.id, kind: a.kind, label: a.label, description: a.description ?? null, body: a.body ?? "", frontmatter: a.frontmatter ?? null };
     },

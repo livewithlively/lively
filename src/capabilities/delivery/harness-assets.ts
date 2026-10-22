@@ -17,6 +17,7 @@ import {
 import { workspacePersonIds } from "../../org/store/members.js";
 import { managedMode } from "../../org/tenancy/state.js";
 import { effectiveVisible, targetsMember } from "../../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
+import { effectiveAssets, isLockedSkill, lockedSkillIds, lockedSkillMessage, withLockedAssets } from "../../org/delivery/connect-skills.js"; // #4970 잠긴 연결 스킬
 import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, HOOK_HARNESSES_MSG, assertPrefKind, parseAssetFrontmatter, parseTargetMembers, restRead, restRuntime, slug, str, wctx } from "./shared.js";
 
 // ── 시딩 스킬 편집 경고(#878) — 지식 seedSyncWarning(knowledge.ts)과 대칭. 시딩되는 스킬(org_harness_asset)을
@@ -39,12 +40,15 @@ export const harnessAssetsCapabilities: Capability[] = [
   restRuntime("org_harness_assets", "스킬·서브에이전트·커맨드 목록",
     "조직 스킬·서브에이전트·슬래시커맨드 전체(본문 포함) — runtime 권한 전용. 멤버 materializer fetch 는 org_runner_assets(별도).",
     [{ method: "GET", paths: ["/api/ui/org/harness-assets"], parse: () => ({}) }],
-    async () => ({ assets: await listOrgHarnessAssets(), meaning: MEANING["harness-asset"] })),
+    // #4970 — 잠긴 연결 스킬은 DB 행이 무엇이든 코드 본문으로 보인다(화면 = 실제 배포본). locked_asset_ids 로 프론트가 read-only·배지를 그린다.
+    async () => ({ assets: effectiveAssets(await listOrgHarnessAssets()), locked_asset_ids: lockedSkillIds(), meaning: MEANING["harness-asset"] })),
   restRuntime("org_harness_asset_upsert", "스킬·서브에이전트·커맨드 추가·수정",
     "구성원 하네스에 배포되는 스킬/서브에이전트/커맨드를 저장한다(runtime). 본문은 멤버 디스크에 materialize 되며 스킬은 도구·셸 실행권한을 가질 수 있다(위험 통제=짝훅).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = assertAssetId(input.id);
+      // #4970 — 외부 앱 연결 스킬은 라이블리가 배포하고 잠근다(코드가 SoT). 본문·켜기/끄기·대상 구성원 어느 것도 조직이 바꾸지 않는다.
+      if (isLockedSkill(id)) throw new HttpError(409, lockedSkillMessage(id));
       // 미전송 = 기존 유지(부분수정 안전). 전송했을 때만 검증한다.
       const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 12);
       if (kind !== undefined && !HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
@@ -92,7 +96,10 @@ export const harnessAssetsCapabilities: Capability[] = [
     "스킬·서브에이전트·커맨드를 제거한다 — 다음 세션부터 materializer 가 멤버 디스크에서 제거한다(미접속 머신은 직전 상태 유지).",
     [{ method: "POST", paths: ["/api/ui/org/harness-asset/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
-      await removeOrgHarnessAsset(assertAssetId(input.id), wctx(user, ctx));
+      const rmId = assertAssetId(input.id);
+      // #4970 — 잠긴 연결 스킬은 지워도 다음 부팅 시딩이 되살리고 배포는 코드가 하므로 '지웠다'가 거짓말이 된다.
+      if (isLockedSkill(rmId)) throw new HttpError(409, lockedSkillMessage(rmId));
+      await removeOrgHarnessAsset(rmId, wctx(user, ctx));
       return { ok: true };
     }, {
       id: z.string().describe("제거할 자산 id — 다음 세션부터 materializer 가 멤버 디스크에서 지운다(미접속 머신은 직전 상태 유지)"),
@@ -104,10 +111,12 @@ export const harnessAssetsCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/harness-asset/adopt"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const draftId = assertAssetId(input.draft_id);
+      const newId = assertAssetId(input.new_id);
+      // #4970 — 잠긴 연결 스킬 이름으로는 승격할 수 없다(그 이름은 라이블리 배포본 자리다). DB 를 읽기 전에 거절한다.
+      if (isLockedSkill(newId)) throw new HttpError(409, lockedSkillMessage(newId));
       const draft = await getOrgHarnessAsset(draftId);
       if (!draft) throw new HttpError(404, "초안을 찾을 수 없습니다");
       if (draft.enabled || !draft.created_by) throw new HttpError(400, "이 자산은 멤버 초안이 아닙니다 — 승격은 비활성(enabled=false)·제출자(created_by) 있는 초안만 대상입니다");
-      const newId = assertAssetId(input.new_id);
       if (newId === draftId) throw new HttpError(400, "new_id 는 초안 id 와 달라야 합니다 — 배포될 클린 id 를 정하세요");
       if (await getOrgHarnessAsset(newId)) throw new HttpError(409, `'${newId}' 자산이 이미 있습니다 — 다른 id 를 쓰세요`);
       const asset = await upsertOrgHarnessAsset({
@@ -136,7 +145,8 @@ export const harnessAssetsCapabilities: Capability[] = [
       const harness = typeof input.harness === "string" && input.harness ? input.harness : undefined;
       const kind = typeof input.kind === "string" && input.kind ? input.kind : undefined;
       const memberId = user?.userId || null;
-      const assets = await listEnabledAssets(harness, kind, memberId);
+      // #4970 — 잠긴 연결 스킬은 DB 행(켜짐·대상·개인 설정)과 무관하게 이 게이트웨이 판(매니지드/셀프호스트)으로 **항상** 내려간다.
+      const assets = withLockedAssets(await listEnabledAssets(harness, kind, memberId), { harness, kind });
       return { assets: assets.map((a) => ({
         id: a.id, kind: a.kind, harness: a.harness, description: a.description,
         body: a.body, frontmatter: a.frontmatter, content_hash: a.content_hash, paired_hook_id: a.paired_hook_id,
@@ -167,6 +177,7 @@ export const harnessAssetsCapabilities: Capability[] = [
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const targetKind = assertPrefKind(input.target_kind);
       const refId = targetKind === "org_hook" ? assertHookId(input.ref_id) : assertAssetId(input.ref_id);
+      if (targetKind === "harness_asset" && isLockedSkill(refId)) throw new HttpError(409, lockedSkillMessage(refId));
       const memberId = slug(input.member_id, "member_id");
       if (input.clear === true) { await clearAssetPref(targetKind, refId, memberId, wctx(user, ctx)); return { ok: true, cleared: true }; }
       const pref = await setAssetPref(targetKind, refId, memberId, Boolean(input.state), wctx(user, ctx));

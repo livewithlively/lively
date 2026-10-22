@@ -4735,6 +4735,16 @@
   "input_hash": "8779c8483d0fd640"
  },
  {
+  "name": "org_connect_status",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connect-status"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "app_instance_list",
   "scope": null,
   "mcp": false,

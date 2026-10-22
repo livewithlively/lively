@@ -15,7 +15,7 @@ import { listCollectors, upsertCollector, type CollectorView } from "../org/stor
 import { getMemberSecret, listSecretsByKindPublic, memberOwner, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
 import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl } from "../org/credentials/slack-oauth.js";
 import { getOrgProfile } from "../org/store.js";
-import { completeSlackInstall } from "../org/credentials/oauth-broker.js";
+import { completeSlackInstall, slackAppReady } from "../org/credentials/oauth-broker.js";
 import { COLLECT_INTERVALS, normalizeInterval } from "./member-collect.js";
 
 export const SEARCH_INSTANCE = "lively-search";
@@ -44,6 +44,8 @@ export interface SlackCollectState {
   backfill_since: string;
   /** 마지막으로 실제 읽은 때. */
   last_run: { status: string; started_at: string; finished_at: string | null } | null;
+  /** 슬랙 앱이 준비됐는가 — 매니지드 = CP 릴레이, 셀프호스트 = 관리자가 등록한 Slack 앱 client(#4970, 다른 앱의 app_ready 와 같은 뜻). */
+  app_ready: boolean;
 }
 
 async function memberConnected(memberId: string): Promise<boolean> {
@@ -74,12 +76,13 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
     last_run: search?.last_run
       ? { status: search.last_run.status, started_at: search.last_run.started_at, finished_at: search.last_run.finished_at }
       : null,
+    app_ready: await slackAppReady().catch(() => false),
   };
 }
 
 const orgSlackCollect: Capability = {
   name: "org_slack_collect", title: "슬랙 자료 가져오기 상태",
-  description: "\"자료 가져오기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부. 토글은 org_slack_collect_set.",
+  description: "\"자료 가져오기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부, 슬랙 앱 준비 여부(app_ready). 토글은 org_slack_collect_set.",
   scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
