@@ -51,11 +51,19 @@
 //       R5a 선언된 소프트캡 필드에 zod max 가 (되)붙었다 = 선언만 남고 효력이 사라진 회귀.
 //       R5b heavy 툴에 분류 없는 하드캡 짧은 필드가 있다 = 새 필드를 넣을 때 사람이 판단하도록 강제.
 //       R5c 선언된 필드가 스키마에 없다 = rename·삭제 뒤 남은 죽은 선언(표가 거짓이 된다).
+//   R6) 입력 스키마의 `pattern` 은 하네스 쪽 검증기가 받는 정규식이어야 한다. z.string().regex(RE) 는 RE.source 를
+//       플래그 없이 그대로 JSON Schema pattern 으로 내보내는데, 플래그 없는 JS 는 레거시 모드라 문자 클래스 안의
+//       미이스케이프 `[`(`[a-z.\-[\]]`)를 리터럴로 받아준다. Rust·Java·ECMAScript v 모드는 그걸 중첩 클래스로 읽어
+//       무효로 본다 — Anthropic API 가 그 툴 하나 때문에 **요청 전체**를 400(tools.N.custom.input_schema: JSON
+//       schema is invalid)으로 튕겨, 전 툴을 upfront 로 싣는 헤드리스 세션이 첫 턴부터 죽었다(#4488 MODEL_RE 가
+//       app_ai_account_set·app_ai_run 에 실린 경로). 판정 둘: ①u 모드 컴파일(JSON Schema 가 규정한 ECMA-262 방언)
+//       ②클래스 안 미이스케이프 `[` 금지. v 모드 전체를 기준으로 삼지 않는 건 `[a-z_-]` 의 끝 `-` 까지 거부해,
+//       이 검증기가 받아온 기존 pattern 들을 헛짚기 때문이다.
 //  핸들러의 수동검증은 방어심층으로 유지 — 스키마의 목적은 *하네스가 무엇을 보낼지 알게* 하는 것.
 //  입력을 안 쓰는 capability(파라미터 없음 / `_input` 미사용)는 빈 input 이 정상 — 예외목록 불요.
 import assert from "node:assert/strict";
 import { z } from "zod";
-import { registry } from "./index.js";
+import { registry, toInputSchema } from "./index.js";
 import type { Capability, RestMount } from "./types.js";
 import { SOFT_CAPS, HARD_CAP_OK, HEAVY_PAYLOAD_CHARS } from "./soft-cap.js";
 
@@ -227,6 +235,44 @@ function mcpOptional(zt: unknown): boolean {
   return typeof f === "function" ? f.call(zt) : true;                      // 판정 불가 → fail-open(오탐 억제)
 }
 
+/** 하네스 검증기가 거부하는 문자 클래스 위치(없으면 -1) — 클래스 안 미이스케이프 `[`, 그리고 빈 클래스 `[]`·`[^]`.
+ *  JS 는 `[]`·`[^]` 를 빈 클래스·아무 문자로 읽지만 Rust·Java 는 그 `]` 를 리터럴로 읽어 클래스가 닫히지 않는다. */
+export function nestedClassBracket(src: string): number {
+  let inClass = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") { i++; continue; }
+    if (!inClass) {
+      if (c !== "[") continue;
+      if (src[i + 1] === "]" || (src[i + 1] === "^" && src[i + 2] === "]")) return i;
+      inClass = true;
+      continue;
+    }
+    if (c === "]") inClass = false;
+    else if (c === "[") return i;
+  }
+  return -1;
+}
+
+/** JSON Schema 안의 모든 pattern 중 하네스 검증기가 거부할 것 — `경로: pattern (사유)` 목록. */
+export function invalidPatterns(schema: unknown, path = ""): string[] {
+  if (Array.isArray(schema)) return schema.flatMap((v, i) => invalidPatterns(v, `${path}[${i}]`));
+  if (!schema || typeof schema !== "object") return [];
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (k === "pattern" && typeof v === "string") {
+      let why: string | null = null;
+      try { new RegExp(v, "u"); } catch (e) { why = `u 모드 컴파일 실패: ${(e as Error).message}`; }
+      const at = nestedClassBracket(v);
+      if (!why && at >= 0) why = `문자 클래스 안 미이스케이프 [ 또는 빈 클래스 (위치 ${at})`;
+      if (why) out.push(`${path || "/"} pattern ${JSON.stringify(v)} (${why})`);
+    } else {
+      out.push(...invalidPatterns(v, `${path}/${k}`));
+    }
+  }
+  return out;
+}
+
 /** 한 capability 의 R1/R2/R3 위반 메시지(없으면 []). 메인 루프와 합성-capability 회귀테스트가 **같은 배선**을 공유한다
  *  — 회귀는 이 함수 하나에 고정되고(#970 event 부류), 루프는 registry 순회만 한다. */
 //  tables — R5 의 선언 표를 주입(자기검증 전용). 미지정이면 실제 soft-cap.ts 표를 cap.name 으로 찾는다(본 검사 경로).
@@ -236,11 +282,13 @@ export function checkCapability(
 ): string[] {
   const declared = new Set(Object.keys(cap.input ?? {}));
   const { uses, fields } = inputUsage(cap.handler);
-  const out: string[] = [];
+  // R6 은 입력 사용 여부와 무관하게 스키마 자체를 본다 — 아래 조기 return 들보다 먼저 모은다.
+  const out: string[] = invalidPatterns(toInputSchema(cap.input)).map((m) =>
+    `R6 ${cap.name} — 하네스 검증기가 거부하는 pattern: ${m} → 그 툴을 싣는 요청 전체가 400 으로 튕긴다`);
   if (cap.expose.mcp) {
-    if (!uses) return [];                              // 입력을 안 씀 → 빈 스키마 정상
+    if (!uses) return out;                             // 입력을 안 씀 → 빈 스키마 정상
     if (!declared.size) {                              // 스키마가 비면 먼저 R1(그 상태선 R2/R3/R4 판정이 무의미)
-      return [`R1 ${cap.name} [scope=${cap.scope}] — 핸들러가 입력을 쓰는데 input 스키마가 비었다(전 필드 strip)`];
+      return [...out, `R1 ${cap.name} [scope=${cap.scope}] — 핸들러가 입력을 쓰는데 input 스키마가 비었다(전 필드 strip)`];
     }
     const missing = fields.filter((f) => !declared.has(f));
     if (missing.length) {
@@ -254,7 +302,7 @@ export function checkCapability(
       }
     }
   } else if (!uses) {
-    return [];                                         // REST 전용 + 입력 미사용 → 빈 스키마 정상
+    return out;                                        // REST 전용 + 입력 미사용 → 빈 스키마 정상
   }
   // R4 — 어댑터(REST parse)가 **싣는** 키 기준. 핸들러 쪽 신호(R2)가 없는 읽기 방식이어도 여기서 잡힌다.
   //  ⚠ mcp:false 도 검사한다(#1403): input 은 expose.mcp 와 무관하게 parse 산출을 선언하는 게 규약이고
@@ -314,7 +362,9 @@ assert.equal(offenders.length, 0,
   "\n    둘 중 하나를 하지 않으면 description 의 restEquivHint('REST body = 이 입력 스키마와 동일 필드')가 거짓이 된다." +
   "\n  → R5(#1442): heavy payload 툴의 짧은 문자열 필드는 zod .max() 로 막지 말고 soft-cap.ts 에 분류를 선언하라 —" +
   "\n    SOFT_CAPS(핸들러가 조정 + 응답 capped 로 보고) 또는 HARD_CAP_OK(기계값이라 거부가 맞다는 판단, 이유를 주석으로)." +
-  "\n    하드 상한을 두면 그 한 필드 때문에 본문 전체가 튕기고(SDK 는 핸들러 앞에서 검증) 그 실패는 mcp_call_log 에도 안 남는다.");
+  "\n    하드 상한을 두면 그 한 필드 때문에 본문 전체가 튕기고(SDK 는 핸들러 앞에서 검증) 그 실패는 mcp_call_log 에도 안 남는다." +
+  "\n  → R6: z.string().regex() 의 정규식을 고쳐라 — 문자 클래스 안 [ 는 \\[ 로. 무효 pattern 하나가 그 툴을 싣는" +
+  "\n    모든 하네스 요청을 400 으로 튕긴다.");
 
 // ── 자기검증 — 가드가 '무력화'되지 않았음을 known-bad 로 증명(#923 이전엔 35종이 다 통과했었다) ──
 let pass = 0;
@@ -669,5 +719,34 @@ t("R5 C16 표본(stringCap): 문자열 아님→null · 상한 없는 문자열�
   assert.deepEqual(stringCap(z.string().max(7)), { max: 7 });
 });
 
+// ── R6(무효 pattern) 자기검증 — #4488 MODEL_RE 의 원형 그대로를 known-bad 로 고정한다. ──
+const r6 = (input: z.ZodRawShape): string[] => checkCapability(capOf(input)).filter((m) => m.startsWith("R6"));
+
+t("R6 (1) known-bad: 문자 클래스 안 미이스케이프 [ — 레거시 JS 는 받지만 하네스 검증기는 거부 → red", () => {
+  const found = r6({ model: z.string().regex(/^[a-z0-9][a-z0-9.\-[\]]{1,63}$/i).optional() });
+  assert.equal(found.length, 1);
+  assert.match(found[0], /^R6 synthetic_soft_cap — .*\/properties\/model pattern/);
+});
+t("R6 (2) (복원 대칭) [ 를 이스케이프하면 green", () => {
+  assert.deepEqual(r6({ model: z.string().regex(/^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i).optional() }), []);
+});
+t("R6 (3) known-bad: u 모드만 거부하는 식별자 이스케이프(\\a)도 red", () => {
+  assert.equal(r6({ s: z.string().regex(/^\a+$/) }).length, 1);
+});
+t("R6 (3b) 헛짚지 않는다: 끝 - · 이스케이프된 [ · 클래스 밖 \\[ 는 green", () => {
+  assert.deepEqual(r6({ a: z.string().regex(/^[A-Za-z0-9._-]+$/), b: z.string().regex(/^[\[\]x]+$/), c: z.string().regex(/^\[[a-z]+\]$/) }), []);
+});
+t("R6 (3c) known-bad: 빈 클래스 [] · [^] 도 red — JS 관용구지만 Rust·Java 에선 클래스가 닫히지 않는다", () => {
+  assert.equal(r6({ a: z.string().regex(/^[^]{1,3}$/) }).length, 1);
+  assert.equal(r6({ b: z.string().regex(/a[]b/) }).length, 1);
+});
+t("R6 (4) 중첩(배열·객체 안)의 pattern 도 찾는다", () => {
+  assert.equal(r6({ xs: z.array(z.object({ k: z.string().regex(/[[]/) })) }).length, 1);
+});
+t("R6 (5) 입력을 안 쓰는 핸들러여도 스키마의 무효 pattern 은 red — 조기 return 이 R6 을 삼키지 않는다", () => {
+  const cap: Capability = { ...capOf({ m: z.string().regex(/[a[]/) }), handler: (() => ({})) as unknown as Capability["handler"] };
+  assert.equal(checkCapability(cap).filter((m) => m.startsWith("R6")).length, 1);
+});
+
 const exposed = [...registry.values()].filter((c) => c.expose.mcp).length;
-console.log(`ok  #923 MCP input 스키마 가드 — 노출 ${exposed}종 R1/R2/R3/R4 위반 0 + 자기검증 ${pass}건`);
+console.log(`ok  #923 MCP input 스키마 가드 — 노출 ${exposed}종 R1~R6 위반 0 + 자기검증 ${pass}건`);
