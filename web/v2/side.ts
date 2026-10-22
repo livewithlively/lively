@@ -27,6 +27,7 @@
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다.
 //  ⚠ #2460 — 그중 **사람이 고른 것**(고정·접힘·묶는 축)은 서버가 정본이고 브라우저는 첫 페인트용
 //   캐시다(shell-prefs.ts). 선언 한 줄이 어느 쪽인지 말한다 — shellPrefStore = 계정 · deviceStore = 이 기기.
+import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { api, el, hasScope, loadPeopleAvatars, navOn, personFace, personName, profileAvatar, relTime, state, sv, toast } from '../core.js';
 import { planWikiCards, allocWikiRows } from './wiki-cards.js';
 import { newItemPlan, newRowSlot, planProjCards, type ProjCard } from './proj-cards.js';   // #4233 안 1 — [프로젝트] 사이드바 카드 계획(순수)
@@ -2695,7 +2696,7 @@ function renderLegacy(): void {
   const rows = buildRows(data);
   // [필터]의 '세션 상태' 항목은 **트리에 있는 세션 전부**를 센다 — 지난 세션까지(중단됨만 골라 보는 렌즈가 여기서 생긴다).
   const liveAll = rows.flatMap((r) => [...r.live, ...r.past]);
-  const livOn = navOn('liv') !== false;
+  const livOn = LIV_ENTRY_VISIBLE && navOn('liv') !== false;   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
   // 20초 폴링마다 통째로 다시 그린다 — 스크롤 위치와 검색칸 포커스는 이어져야 한다(수백 행에서 매번 맨 위로 튀면 못 쓴다).
   const hadOld = !!treeEl && treeEl.isConnected;
   const anchor = hadOld ? anchorRead() : null;

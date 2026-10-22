@@ -1606,6 +1606,16 @@
   "input_hash": "71c432d82ed7faa9"
  },
  {
+  "name": "me_connect_session_open",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/connect-session"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "project_chat_turn",
   "scope": null,
   "mcp": false,

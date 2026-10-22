@@ -26,6 +26,7 @@ import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 �
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 회사 계정 «관리자 허용» 안내(세 화면이 한 벌)
 import { renderConnectBoard } from './connect-board.js';   // #4213 T13 — 맨 위 «앱 × 구성원» 현황판
+import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';   // #4970 — [연결 도와줘](처음 설정의 [연결할게요]와 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
 //   그 패널들은 host 에 붙은 표식(markEmbedded)을 보고 자기 제목만 접는다 — 저장 경로·조회 경로는 한 벌.
@@ -275,7 +276,10 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   const boardHost = el('div', { class: 'cn-board-host' });
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect' },
     el('h1', { class: 'v2-title', text: '외부 앱 연결' }),
-    el('p', { class: 'v2-desc', text: '기본 연결은 각자의 Claude 계정이에요 — Claude 에 연결해 둔 Slack·Notion·Gmail 같은 앱을 리브가 그대로 써서 일 자료를 모읍니다. 아래 표는 앱마다 누가 연결했는지와 어디를 모으는지 보여 줘요.' }),
+    //  ★ #4970 — 맨 위는 «연결을 시작하는 문» 이다. 처음 설정의 [연결할게요]와 같은 문: 서버에 로그인된 AI 가 있으면 연결 스킬(liv-connect)을
+    //   부르는 대화를 열고, 없으면 «쓰는 AI 에서 하기» 세 걸음을 이 자리에 그린다. 앱마다의 갈림(매니지드 중계 · 셀프호스트 앱 등록 · 관리 권한)은 그 대화가 한다.
+    connectStarter(),
+    el('p', { class: 'v2-desc', text: '아래 표는 앱마다 누가 연결했는지와 어디를 모으는지 보여 줘요. Claude 에 연결해 둔 Slack·Notion·Gmail 로 모으는 경우도 여기 함께 보입니다.' }),
     boardHost,
     el('section', { class: 'cn-group cn-direct' },
       groupHead('라이블리로 직접 연결', null, 'Claude 로 안 되는 앱을 잇거나, AI 가 내 계정으로 직접 쓰게 하는 연결이에요'),
@@ -295,6 +299,32 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   //  개수는 화면이 선 뒤에 채운다 — 목록을 여는 속도가 관리 데이터 조회에 매달리면 안 된다(실패해도 카드는 산다).
   void fillGitCounts(gitCard.stat);
   if (dbCard) void fillDbCount(dbCard.stat);
+}
+
+/** (#4970) 계정 연결 길이 있어도 개인 토큰 칸을 늘 보이는 앱 — 위 «개인 토큰으로 연결» 주석. */
+const PAT_ALWAYS = new Set(['gitlab', 'github']);
+
+/** (#4970) [연결 도와줘] — 연결 스킬을 부르는 대화를 연다(로그인된 AI 가 있을 때). 없으면 «쓰는 AI 에서 하기» 를 그 자리에 펼친다.
+ *  다시 눌러도 같은 대화로 간다(서버가 좌표를 기억한다). 실패는 서버 말 그대로 보여 준다. */
+function connectStarter(): HTMLElement {
+  const out = el('div', { class: 'cn-start-out' });
+  const btn = el('button', { class: 'btn btn-primary', type: 'button', text: '연결 도와줘' }) as HTMLButtonElement;
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = '확인하고 있어요…';
+    try {
+      const r = await openConnectSession();
+      if (r.ai) { location.hash = r.href; return; }
+      out.innerHTML = ownAiStepsHtml();
+      wireOwnAiSteps(out);
+      btn.textContent = '연결 도와줘';
+    } catch (e: any) {
+      toast('연결을 도와드릴 대화를 열지 못했어요 — ' + ((e && e.message) || e), true);
+      btn.textContent = '연결 도와줘';
+    } finally { btn.disabled = false; }
+  };
+  return el('section', { class: 'cn-start' },
+    el('p', { class: 'v2-desc', text: '[연결 도와줘]를 누르면 AI가 앱마다 무엇이 준비됐는지 보고, 연결을 한 걸음씩 도와드려요.' }),
+    btn, out);
 }
 
 /** [코드와 데이터] 카드 — 앱 카드와 **같은 껍데기**(타일·이름·설명·상태줄·발). 상태줄만 축 대신 «등록 개수»다. */
@@ -724,6 +754,12 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   } else if (spec && (spec.help || spec.docUrl) && !account) {
     readActs.appendChild(el('span', { class: 'h', style: 'margin-left:0', text: String(spec.help || '') }));
     if (spec.docUrl) readActs.appendChild(el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' }));
+  }
+  //  #4970 — 깃허브·깃랩은 개인 토큰 칸이 **늘** 있어야 한다. 깃랩은 계정 로그인 토큰으로는 자료를 못 읽고(수집은 read_api 개인 토큰),
+  //   앱을 아직 등록하지 않은 셀프호스트의 깃허브는 계정 연결 길이 막혀 있다. 처음 설정의 토큰 단계가 없어진 뒤로는 이 자리가 웹의 유일한 입력칸이다.
+  //   스위치는 계정 길(account)로 가므로, 토큰 길은 옆의 버튼으로 연다(svcTokenForm — 호스트·헤더 형식은 CRED_KINDS 가 정한다).
+  if (PAT_ALWAYS.has(svc.key) && svc.token && !viaToken) {
+    readActs.appendChild(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '개인 토큰으로 연결', onclick: () => openToken(svc, reload) }));
   }
   //  쓰기 상자가 이 카드 «안»에 들어간다 — 연결은 하나인데 쓰기를 옆줄로 세우면 연결이 둘로 보인다(원준 2026-08-30).
   const writeBox = el('div');

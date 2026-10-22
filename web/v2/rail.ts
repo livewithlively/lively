@@ -19,6 +19,7 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
+import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
 import { APPS, appHref, installedAppDefs, openLaunchpad, primeInstalledApps, RECENT_STORE_KEY, type AppDef } from './apps.js';
@@ -66,7 +67,8 @@ const SECTIONS: SecDef[] = [
 //  구역이 아닌 '갈 곳' — 누르면 그 화면으로 가지만 사이드바는 바뀌지 않는다. 활성은 주소(activeKey)로 판정.
 interface LinkDef { key: string; label: string; route: string; tab: string | null; icon: string }
 const LINKS: LinkDef[] = [
-  { key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' },
+  //  #4970 — 리브 진입점은 숨김(lib/liv-entry.ts 한 곳에서 켜고 끈다). 저장된 순서에 남은 'liv' 키는 init()·normalizeOrder 가 조용히 떨어뜨린다.
+  ...(LIV_ENTRY_VISIBLE ? [{ key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' }] : []),
   //  ⚠ 자료(#2423)는 여기 없다 — 한때 있었고 걷었다(원준 2026-08-31): "고정해서 보이지 않고 맥락관리·사용가이드
   //   저 위계정도로 앱에서만 보이고, 눌러서 최근에 나오다가, 원하면 독에 고정하고 싶으면 하는 방식".
   //   즉 **레일에 줄을 얻는 것은 사람이 정한다.** 새 앱을 이 표에 더하면 그 결정을 우리가 대신 내리는 것이다 —

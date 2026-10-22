@@ -14,7 +14,6 @@
 //   S3 체크리스트 «구성원» 은 잣대 함수로 센다(사람 수 · 토큰 보유 사람 수)
 //   S4 명부 응답·자산 구성원 응답이 행마다 잣대에서 온 is_person 을 싣는다
 //   S5 관리 ▸ 구성원 합계 · 자산 대상 요약 · 셀프호스트 구성원 창이 is_person 으로 센다
-//   S6 팀 소개의 수는 나를 뺀 수 — 서버가 except: userId 로 세어 others_count 로 싣는다(화면 쪽은 invitee-onboarding C5)
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -84,8 +83,4 @@ test("S5 화면의 사람 수는 is_person 으로 센다 — 관리 ▸ 구성�
   assert.doesNotMatch(box, /m\.kind === 'human' && m\.state === 'active'/, "셀프호스트 구성원 창이 kind 만 본다(미러된 사람 행이 구성원이 된다)");
 });
 
-test("S6 팀 소개의 수는 나를 뺀 수다 — 서버가 except: userId 로 세어 others_count 로 싣는다", () => {
-  const welcome = code("src/capabilities/delivery/welcome.ts");
-  assert.match(welcome, /countWorkspacePeople\(\{ managed: managedMode\(\), except: userId \}\)/, "보는 사람을 빼고 세지 않는다");
-  assert.match(welcome, /others_count: Number\(others\) \|\| 0/, "나를 뺀 수를 joining 에 싣지 않는다");
-});
+//  S6(팀 소개의 수 = 나를 뺀 수)은 #4970 에서 걷었다 — 처음 설정이 팀 소개 장면을 더는 그리지 않아 서버도 그 수를 싣지 않는다.
