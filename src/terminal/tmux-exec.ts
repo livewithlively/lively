@@ -9,6 +9,7 @@ import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated, type TmuxListScope } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
+import { muxGenerationsActive, muxTmux, muxGoneOnNode, muxServerAbsent, muxNoSuchSession, TMUX_SERVER_GONE_RE } from "./mux-generations.js";   // #4931 — 노드 tmux 세대(판별 전용 소켓)
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(노드 박스 브로커 소켓 · 허브는 T3-a 로 걷었다)
 import { makeTmuxCallCensus, censusSite } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
 import { logger } from "../log.js";                                               // 계수 창 보고
@@ -30,6 +31,8 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
   }
   return env;
 })();
+/** tmux CLI 호출의 env(UTF-8 강제 — 위 TMUX_ENV). 세대별로 직접 부르는 자리(#4931 빈 서버 정리)가 같은 env 를 쓰게 한다. */
+export function tmuxCliEnv(): NodeJS.ProcessEnv { return TMUX_ENV; }
 
 /**
  * tmux 실행 seam — 기본은 **로컬 execFile**(설정 없으면 종전과 완전히 동일하다).
@@ -142,6 +145,9 @@ export async function tmux(args: string[]): Promise<string> {
   //  #2600 T2 (d) d2 — 플래그가 `on` 이고 길이 있을 때만 코어 직접 경로. 아니면 아래 종전 경로가 **한 바이트도** 안 바뀐다.
   const via = tmuxRouteTransport();
   if (via) return tmuxViaRoute(args, via);
+  //  #4931 — 노드(멤버 PC)면 세대 규칙으로(새 세션 = 고정판 전용 소켓 · 옛 세션 = 그 세션이 사는 서버). 노드 에이전트가 부팅에서
+  //   켜기 전·게이트웨이·매니지드 세션 호스트·윈도우에선 거짓이라 아래 종전 경로가 그대로다.
+  if (muxGenerationsActive()) return muxTmux(args, { timeoutMs: TMUX_LOCAL_TIMEOUT_MS, env: TMUX_ENV });
   const relay = tmuxExecArgv();
   const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
   const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: tmuxTimeoutMs(relay), env: TMUX_ENV });
@@ -393,14 +399,14 @@ export function tmuxViaRelay(): boolean {
 // 중계에서 'tmux 서버 자체가 없다'의 확답 문구 — 소켓이 스테일(서버 죽음)이면 "no server running on <path>",
 //  소켓 파일이 없으면(재생성된 빈 컨테이너) "error connecting to <path> (No such file or directory)".
 //  ⚠ 컨테이너 보장/생성 실패("tmux 컨테이너 …")는 여기 안 걸린다 = 판정 불가로 남는다(도커·노드 일시장애 → 재연결 유지).
-const RELAY_SERVER_GONE_RE = /\bno server running\b|error connecting to .+\((?:No such file or directory|Connection refused)\)/i;
+const RELAY_SERVER_GONE_RE = TMUX_SERVER_GONE_RE;   // #4931 — 정의는 mux-generations 한 곳(노드 세대의 gone 판정이 같은 자를 쓴다)
 export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN, serverAbsenceIsFinal: boolean = tmuxServerAbsenceIsFinal()): boolean {
   if (!err || typeof err !== "object") return false;
   const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
   if (e.killed || e.signal) return false; // 타임아웃(SIGTERM 으로 kill)·시그널 종료 → 판정 불가
   // tmux 응답: "can't find session: <id>". 소켓 접속불가("error connecting to …", "no server running")는
   //  로컬 단일호스트에선 tmux 서버가 죽었거나 못 붙은 것 = 판정 불가로 둔다(일시장애일 수 있음 → 재연결 유지).
-  if (/can't find session|session not found/i.test(String(e.stderr ?? ""))) return true;
+  if (muxNoSuchSession(err)) return true;   // 문구의 정본은 mux-generations(#4931 — 세대 라우터가 같은 자로 «없다» 를 판다)
   // ── 관리형 중계: tmux 서버 부재를 **확답으로 승격**한다(#1437 — 이미지 롤아웃이 테넌트 tmux 컨테이너를 재생성하면
   //  그 안의 tmux 서버가 새로 뜨며 **인메모리 세션이 전부 증발**한다. OOM 으로 서버만 죽어도 같다. 어느 쪽도 스스로
   //  돌아오지 않는다 — 복원만이 길이다). 종전엔 이 문구가 로컬 규약대로 '판정 불가'라 sessionGone 이 false 를 줘,
@@ -446,8 +452,7 @@ export function sessionInList(raw: string, id: string): boolean {
  *  sessions.ts 를 import 하면 순환이 된다. sessions.ts 는 그대로 재수출한다(호출부 무변경).
  */
 export function isNoTmuxServer(e: unknown): boolean {
-  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
-  return /no server running|error connecting/i.test(stderr);
+  return muxServerAbsent(e);   // #4931 — 정본은 mux-generations(세대 팬아웃이 같은 자로 «세션 0» 을 판다)
 }
 /**
  * 이 세션이 **정말 끝났나** — `true` 일 때만 '죽었다'로 다뤄도 된다(#835 '확답 only').
@@ -524,6 +529,9 @@ export function isTmuxServerAbsentError(err: unknown): boolean {
  *  (타임아웃 등) 종전대로 살아 있음으로 둔다 — 바뀌는 것은 «서버가 없다» 갈래 하나뿐이다.
  */
 export async function sessionGoneOnNode(id: string): Promise<boolean> {
+  //  #4931 — 세대가 켜져 있으면 **그 세션의 세대 하나**로 판정한다(mux-generations `goneByGeneration`). 아래 이중 확인을 그대로
+  //   쓰면 «다른 세대 서버가 살아 있다» 가 «이 세션의 서버가 있다» 로 읽혀, 서버째 죽은 세대의 세션이 «살아 있음» 이 된다.
+  if (muxGenerationsActive()) return ID_RE.test(id) ? muxGoneOnNode(id, { timeoutMs: TMUX_LOCAL_TIMEOUT_MS, env: TMUX_ENV }) : false;
   const verdict = await sessionGoneVerdict(id);
   if (verdict !== null) return verdict;
   try { await tmux(["list-sessions", "-F", "#{session_name}"]); return false; }   // 서버는 있다 — 모름은 종전대로

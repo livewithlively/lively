@@ -52,7 +52,8 @@ import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer, tmuxCliEnv, TMUX_LOCAL_TIMEOUT_MS } from "./tmux-exec.js";
+import { muxGenerationsActive, killEmptyMuxServers } from "./mux-generations.js";   // #4931 — 노드 tmux 세대
 import { sessionActivityTitle, scrapePane, screenRunEffects, screenReadPlan, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase, backgroundHolds } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
@@ -237,6 +238,13 @@ export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<Sess
 export { isNoTmuxServer } from "./tmux-exec.js";
 
 export async function killEmptyTmuxServer(): Promise<void> {
+  //  #4931 — 노드 tmux 세대가 켜져 있으면 **전용 세대만** 본다. 기본 소켓은 이제 사람의 개인 tmux 이거나 같은 박스의
+  //   다른 게이트웨이 서버일 수 있어(맥미니 실측: 노드·olddev·개인 세션이 한 서버) 그 서버를 죽이면 남의 세션이 끝난다.
+  if (muxGenerationsActive()) {
+    const killed = await killEmptyMuxServers({ timeoutMs: TMUX_LOCAL_TIMEOUT_MS, env: tmuxCliEnv() });
+    if (killed.length) logger.info({ killed }, "빈 tmux 세대 서버 정리(세션 0 확답) — 다음 새 세션이 이 데몬의 env 로 서버를 다시 띄운다");
+    return;
+  }
   let raw: string;
   try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
   catch (e) {   // 못 봤다 ≠ 비었다
