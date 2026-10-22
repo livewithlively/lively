@@ -84,6 +84,44 @@ export interface SessionRow {
   container: string;
   /** 번들에 «tmux 안쪽» 표식이 있나 — 팬아웃 대상은 참인 것뿐이다(옛 경로 잔재를 가른다). */
   inside: boolean;
+  /** #4939 — 런타임이 답한 상태(`running`·`stopped`·`unknown` …). 옛 브로커는 안 싣는다(칸 없음 = 모름). */
+  state?: string;
+}
+
+/**
+ * #4939 — 세션 호스트가 게이트웨이에 올리는 **컨테이너 한 줄의 관측**(판정 재료 — 판정은 게이트웨이가 한다).
+ *  «컨테이너는 있는데 그 목록에 세션이 없다» 를 게이트웨이가 볼 수 있게 하는 칸이다. 종전 상태 push 는 tmux 가 답한 세션만 실어,
+ *  안은 살아 있는데 목록이 비는 컨테이너(실측 #4939 — 39일)를 게이트웨이가 아예 알 수 없었다.
+ */
+export interface ContainerObservation {
+  sid: string;
+  container: string;
+  state?: string;
+  inside: boolean;
+  /** 그 컨테이너에서 받은 목록 결과 — ok(받았다) · no-server(tmux 서버 없음 확답) · gone(컨테이너 없음) · skipped(안쪽 표식 없음 — 안 물었다) · error(못 봤다) */
+  outcome: "ok" | "no-server" | "gone" | "skipped" | "error";
+  /** 그 sid 가 이 컨테이너의 목록에 있었나 — outcome 이 ok 일 때만 뜻이 있다. */
+  listed: boolean;
+}
+
+/**
+ * 팬아웃 한 번 → 컨테이너별 관측(순수, #4939). 목록 줄의 첫 칸(탭 앞)이 세션 이름이다(코어 LIST_FMT · `#{session_name}` 둘 다).
+ *  팬아웃 대상이 아니었던 줄(안쪽 표식 없음)은 skipped 로 남긴다 — «안 물었다» 를 «없다» 로 읽지 않게.
+ */
+export function summarizeFanout(
+  rows: ReadonlyArray<SessionRow>, parts: ReadonlyArray<{ container: string; outcome: TmuxOutcome }>,
+): ContainerObservation[] {
+  const byContainer = new Map(parts.map((p) => [p.container, p.outcome]));
+  return rows.map((r) => {
+    const base = { sid: r.sid, container: r.container, inside: r.inside, ...(r.state !== undefined ? { state: r.state } : {}) };
+    if (!r.inside) return { ...base, outcome: "skipped" as const, listed: false };
+    const o = byContainer.get(r.container);
+    if (!o) return { ...base, outcome: "error" as const, listed: false };
+    if (o.gone) return { ...base, outcome: "gone" as const, listed: false };
+    if (o.code !== 0) return { ...base, outcome: TMUX_SERVER_ABSENT_RE.test(o.stderr) ? "no-server" as const : "error" as const, listed: false };
+    const names = o.stdout.split("\n").map((l) => l.split("\t")[0]!.trim()).filter(Boolean);
+    return { ...base, outcome: "ok" as const, listed: names.includes(r.sid) };
+  });
 }
 
 /** 세션 컨테이너 이름 — 브로커 `sessionContainerName` 과 같은 규칙. 슬러그·sid 가 형식 밖이면 던진다(조용히 다른 이름을 만들지 않는다). */
@@ -199,6 +237,8 @@ export function outcomeToError(o: TmuxOutcome): TmuxExecError {
 export async function runPlan(
   plan: TmuxPlan, slug: string, args: readonly string[], observed: boolean,
   exec: (container: string, argv: string[]) => Promise<TmuxOutcome>,
+  /** #4939 — 팬아웃이면 컨테이너별 결과를 병합 **전에** 건넨다(세션 호스트의 컨테이너 관측 재료). 그 밖의 계획은 안 부른다. */
+  observe?: (parts: ReadonlyArray<{ container: string; outcome: TmuxOutcome }>) => void,
 ): Promise<TmuxOutcome> {
   const argv = ["tmux", "-L", `lvly-${slug}`, "-f", "/dev/null", ...args];
   switch (plan.kind) {
@@ -206,6 +246,10 @@ export async function runPlan(
       return classifyExecOutcome(await exec(plan.container, argv), plan.sid, plan.container);
     case "fanout": {
       const parts = await Promise.all(plan.containers.map(async (c) => classifyExecOutcome(await exec(c, argv), null, c)));
+      if (observe) {
+        try { observe(plan.containers.map((c, i) => ({ container: c, outcome: parts[i]! }))); }
+        catch { /* 관측은 곁가지다 — 목록 답을 흔들지 않는다 */ }
+      }
       return mergeFanout(parts, observed);
     }
     case "gone":

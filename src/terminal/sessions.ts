@@ -33,6 +33,7 @@ import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로
 import { effectiveSessionMemoryPolicy, effectiveCollectSessionPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡 · #4213 T11 수집 세션 크기
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates, getSessionState, setClaudeSessionId, reviveSessionState, markSessionEnded, revertSessionEnded, restoreSessionEndNote, type SessionState, type SessionStateInput } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원) · #3891 복원 대화 선기록 · #4694 같은 id 복원 · #4783 끝난 사유
 import { endNoteForRow, lastResultSeenFrom, LAST_RESULT_SEEN_FMT, type SessionEndInput, type SessionEndNote } from "../sessions/session-end.js";   // #4783 — 이 판이 왜 끝났나
+import { exitedByUserOf } from "../sessions/session-unreachable-rule.js";   // #4939 — 도달 불가는 사람이 끝낸 것이 아니다(순수)
 import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "./terminal-member-fs.js";
 import os from "node:os";
 import path from "node:path";
@@ -190,7 +191,7 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       //   발견 행은 `isStartingDesiredRow` 가 이미 걸러서 위 #2022 판정과 부딪히지 않는다.
       ...(starting ? { agentState: "idle" as const, restorable: false, starting: true } : {}),
       discovered: !!s.discovered,
-      exitedByUser: !!s.exited_at, // #1059 — 사용자 정상 종료 표시가 찍혔으면 '종료됨', 아니면 '복원 가능(중단됨)'.
+      exitedByUser: exitedByUserOf(s), // #1059 — 사용자 정상 종료 표시가 찍혔으면 '종료됨', 아니면 '복원 가능(중단됨)'. #4939 — 도달 불가(게이트웨이 판정)는 사람 종료가 아니다.
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
       oomKilled: !s.exited_at && s.exit_reason === "oom",
       claudeSessionId: s.claude_session_id || undefined,   // #1719 — 죽은 세션도 대화 uuid 를 알면 기록을 잇는다

@@ -14,7 +14,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { installTenantSlugResolver } from "./catalog.js";
-import { tmux, tmuxRouteTransport, isSessionGoneError, isNoTmuxServer } from "./tmux-exec.js";
+import { tmux, tmuxRouteTransport, isSessionGoneError, isNoTmuxServer, takeContainerObservation } from "./tmux-exec.js";
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-trs-"));
 const SLUG = "acme";
@@ -31,8 +31,8 @@ afterEach(() => {
 const relayCalls = (): string[] => { try { return fs.readFileSync(RELAY_LOG, "utf8").trim().split("\n").filter(Boolean); } catch { return []; } };
 
 //  가짜 브로커 — d1 표면 + 도커 exec 계약(create → start(101, 8바이트 프레임) → inspect). 받은 요청을 기록한다.
-type Sess = { sid: string; container: string; inside: boolean };
-function fakeBroker(o: { sessions: Sess[]; observed?: boolean; listStatus?: number; exitCode?: number }) {
+type Sess = { sid: string; container: string; inside: boolean; state?: string };
+function fakeBroker(o: { sessions: Sess[]; observed?: boolean; listStatus?: number; exitCode?: number; out?: (container: string) => string }) {
   const got: string[] = [];
   const execs = new Map<string, string>();   // execId → container
   const frame = (stream: number, s: string): Buffer => { const b = Buffer.from(s); const h = Buffer.alloc(8); h[0] = stream; h.writeUInt32BE(b.length, 4); return Buffer.concat([h, b]); };
@@ -42,7 +42,7 @@ function fakeBroker(o: { sessions: Sess[]; observed?: boolean; listStatus?: numb
       const p = q.url!.split("?")[0]!; got.push(`${q.method} ${p}`);
       if (p === "/lvly/sessions") {
         s.writeHead(o.listStatus ?? 200, { "content-type": "application/json" });
-        s.end(JSON.stringify({ observed: o.observed ?? true, node: "local", sessions: o.sessions.map((x) => ({ ...x, node: "local", state: "running" })) })); return;
+        s.end(JSON.stringify({ observed: o.observed ?? true, node: "local", sessions: o.sessions.map((x) => ({ node: "local", state: "running", ...x })) })); return;
       }
       let m = /^\/containers\/([^/]+)\/exec$/.exec(p);
       if (m && q.method === "POST") { const id = "ab".repeat(32).slice(0, 62) + String(execs.size).padStart(2, "0"); execs.set(id, m[1]!); s.writeHead(201, { "content-type": "application/json" }); s.end(JSON.stringify({ Id: id })); return; }
@@ -55,7 +55,7 @@ function fakeBroker(o: { sessions: Sess[]; observed?: boolean; listStatus?: numb
     const p = q.url!.split("?")[0]!; got.push(`UPGRADE ${p}`);
     const id = /^\/exec\/([^/]+)\/start$/.exec(p)?.[1] ?? ""; const c = execs.get(id) ?? "?";
     sock.write("HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n");
-    sock.write(frame(1, `${c}\n`)); if ((o.exitCode ?? 0) !== 0) sock.write(frame(2, "can't find session: x\n"));
+    sock.write(frame(1, o.out ? o.out(c) : `${c}\n`)); if ((o.exitCode ?? 0) !== 0) sock.write(frame(2, "can't find session: x\n"));
     sock.end();
   });
   return { srv, got, listen: () => new Promise<void>((r) => srv.listen(SOCK, () => r())), close: () => new Promise<void>((r) => srv.close(() => r())) };
@@ -130,6 +130,29 @@ test("[R2] ★ 플래그 on — 목록 → 팬아웃(세션마다 exec) → 병�
     assert.deepEqual(relayCalls(), [], "🔴 새 경로인데 중계가 spawn 됐다");
     assert.equal(b.got.filter((g) => g === "GET /lvly/sessions").length, 1);
     assert.deepEqual(b.got.filter((g) => g.startsWith("POST /containers/")).sort(), [`POST /containers/${A.container}/exec`, `POST /containers/${B.container}/exec`], "표식 없는 잔재엔 exec 을 안 보낸다");
+  } finally { await b.close(); }
+});
+
+test("[R8] ★ #4939 — 세션 이름 목록의 팬아웃만 컨테이너별 관측을 남긴다(보임 · 서버는 있는데 안 보임 · 안쪽 표식 없음 · 상태) · 다른 목록·형식은 안 남긴다", async () => {
+  on();
+  const A = { sid: "box-a-11111111", container: `lvly-s-${SLUG}-box-a-11111111`, inside: true };
+  const B = { sid: "box-b-22222222", container: `lvly-s-${SLUG}-box-b-22222222`, inside: true, state: "running" };
+  const OLD = { sid: "box-old-9999", container: `lvly-s-${SLUG}-box-old-9999`, inside: false, state: "stopped" };
+  const b = fakeBroker({ sessions: [A, B, OLD], out: (c) => (c === A.container ? `${A.sid}\t1700000000\n` : "box-other-1\t1700000000\n") }); await b.listen();
+  try {
+    const t0 = Date.now();
+    await tmux(["list-panes", "-a", "-F", "#{session_name}"]);
+    await tmux(["list-sessions", "-F", "x"]);
+    assert.equal(takeContainerObservation(t0, SLUG), null, "🔴 세션 이름 목록이 아닌 팬아웃으로 «목록에 있나» 를 쟀다(산 세션을 «안 보임» 으로 센다)");
+    await tmux(["list-sessions", "-F", "#{session_name}\t#{session_created}"]);
+    const got = takeContainerObservation(t0, SLUG);
+    assert.deepEqual(got?.map((o) => [o.sid, o.container, o.outcome, o.listed, o.state ?? null]), [
+      [A.sid, A.container, "ok", true, "running"],
+      [B.sid, B.container, "ok", false, "running"],
+      [OLD.sid, OLD.container, "skipped", false, "stopped"],
+    ]);
+    assert.equal(takeContainerObservation(Date.now() + 1_000, SLUG), null, "그 뒤 시각을 물으면 없다(낡은 관측을 새것으로 내지 않는다)");
+    assert.equal(takeContainerObservation(t0, "other"), null, "다른 테넌트의 관측을 내줬다");
   } finally { await b.close(); }
 });
 

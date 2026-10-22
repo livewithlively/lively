@@ -182,6 +182,14 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 세션 목록·장부·얼굴 줄 전부 그 워크스페이스 것이다.
   { key: "session-stop-rule", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("./session-stop-rule.js").then((m) => m.sweepSessionStopRule()) },
+  // 도달 불가 세션 판정(#4939 재설계 v2 — 판정 한 곳) — 세션 호스트가 «컨테이너는 있는데 목록에 세션이 없다» 를 15분 연속 확답하고 마지막 작업이
+  //  1시간 이전이면 장부에 «끝남»(exit_reason='unreachable')으로 적는다. 집행(컨테이너 걷기)은 브로커가 장부를 보고 한다 — 여기는 tmux 를 안 죽인다.
+  //  스위치 LIVELY_SESSION_LOST_RULE(기본 shadow — 판정만 로그로 남긴다). 판정은 «모르면 안 적는다»(session-unreachable-rule.ts 머리말 · 배선은 session-unreachable-sweep.ts).
+  //  주기는 종료 규칙과 같은 30초 — 시계가 15분 단위라 그보다 촘촘할 이유는 없고, 다시 보인 세션의 표식을 빨리 지우는 쪽이 낫다.
+  //  ⓘ 셀프호스팅은 이 표가 안 돈다(하우스키핑이 스스로 돈다) — 거기엔 세션 호스트가 없어 판정할 재료도 없다.
+  //  ⚠ 테넌트 스코프 — 세션 호스트 관측·장부·상시 세션 전부 그 워크스페이스 것이다.
+  { key: "session-unreachable", intervalMs: STOP_RULE_SWEEP_MS,
+    run: () => import("./session-unreachable-sweep.js").then((m) => m.sweepSessionUnreachable()) },
   // 앱 폴더 주기 재조정(#4786) — 사건(붙이기 · 떼기 · 앱 끄기 · 동의 회수 …)으로 맞추다 실패한 세션(브로커 무응답 · 시간초과 · 노드 재기동)을
   //  다시 맞춘다. 대상 고르기 · 동시 수 · 고친 횟수는 apps/session-app-folders.ts 의 «주기 재조정» 절. 요약(대상 · 고침 · 실패 …)이 이 로그에 찍힌다.
   //  ⚠ 테넌트 스코프 — 세션 · 붙은 앱 · 맞춘 기록 전부 그 워크스페이스 것이고(RLS), 브로커 중계도 tenantSlug() 로 그 워크스페이스에 간다.

@@ -32,7 +32,7 @@ export type BrokerTransport = { kind: "socket"; socketPath: string };
 
 export interface BrokerClient {
   /**
-   * `GET /lvly/sessions` → `{ observed, sessions }`. SessionRow 는 tmux-route 의 것({sid, container, inside}) — 그 밖의 칸은 버린다.
+   * `GET /lvly/sessions` → `{ observed, sessions }`. SessionRow 는 tmux-route 의 것({sid, container, inside, state?}) — 그 밖의 칸(node)은 버린다.
    *  HTTP 비-2xx·JSON 오류·행 형식 오류는 **throw** — 목록을 못 본 것을 빈 목록으로 접지 않는다(#2616).
    */
   listSessions(): Promise<{ observed: boolean; sessions: SessionRow[] }>;
@@ -163,9 +163,10 @@ export function makeBrokerClient(
       const o = (j && typeof j === "object" ? j : {}) as { observed?: unknown; sessions?: unknown };
       if (!Array.isArray(o.sessions)) throw new Error("broker sessions 본문에 sessions 배열이 없다");
       const sessions: SessionRow[] = o.sessions.map((row: unknown, i: number) => {
-        const s = (row && typeof row === "object" ? row : {}) as { sid?: unknown; container?: unknown; inside?: unknown };
+        const s = (row && typeof row === "object" ? row : {}) as { sid?: unknown; container?: unknown; inside?: unknown; state?: unknown };
         if (typeof s.sid !== "string" || typeof s.container !== "string") throw new Error(`broker sessions 행 ${i} 에 sid/container 가 없다`);
-        return { sid: s.sid, container: s.container, inside: s.inside === true };
+        //  #4939 — 런타임 상태도 싣는다(컨테이너 관측 재료 — 안 도는 컨테이너는 «세션이 안 보임» 으로 세지 않는다). 없으면 칸을 안 만든다(모름).
+        return { sid: s.sid, container: s.container, inside: s.inside === true, ...(typeof s.state === "string" ? { state: s.state } : {}) };
       });
       return { observed: o.observed === true, sessions };
     },

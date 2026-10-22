@@ -128,11 +128,11 @@ test("[T1] 소켓 전송 — listSessions 가 observed·sessions 를 그대로 �
       { sid: "box-a-11111111", container: "lvly-s-acme-box-a-11111111", inside: true },
       { sid: "box-b-22222222", container: "lvly-s-acme-box-b-22222222", inside: false },
     ];
-    //  브로커의 행은 칸이 더 있다(node·state) — 그 밖의 칸은 버리고 tmux-route 의 세 칸만 돌려준다.
-    f.sessions = { observed: false, node: "n1", sessions: rows.map((r) => ({ ...r, node: "n1", state: "running" })) };
+    //  브로커의 행은 칸이 더 있다(node·state) — node 는 버리고, state 는 싣는다(#4939 — 컨테이너 관측 재료). state 가 없는 옛 브로커는 칸을 안 만든다.
+    f.sessions = { observed: false, node: "n1", sessions: rows.map((r, i) => ({ ...r, node: "n1", ...(i === 0 ? { state: "running" } : {}) })) };
     const c = makeBrokerClient(sockT(f));
     const got = await c.listSessions();
-    assert.deepEqual(got, { observed: false, sessions: rows });
+    assert.deepEqual(got, { observed: false, sessions: [{ ...rows[0]!, state: "running" }, rows[1]!] });
     assert.equal(f.log.length, 1);
     assert.equal(f.log[0]!.url, "/lvly/sessions", "🔴 소켓 전송에 경로 접두가 붙었다");
     assert.equal(f.log[0]!.headers["x-lvly-channel-auth"], undefined, "🔴 소켓 전송에 인증 헤더가 붙었다");

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import os from "node:os";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { execTopology, tmuxArgvFor, tmuxServerIsDedicated, type TmuxListScope } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
-import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
+import { planTmux, runPlan, outcomeToError, tmuxSessionOf, summarizeFanout, type ContainerObservation } from "./tmux-route.js";   // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로» · #4939 컨테이너 관측
 import { muxGenerationsActive, muxTmux, muxGoneOnNode, muxServerAbsent, muxNoSuchSession, TMUX_SERVER_GONE_RE } from "./mux-generations.js";   // #4931 — 노드 tmux 세대(판별 전용 소켓)
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(노드 박스 브로커 소켓 · 허브는 T3-a 로 걷었다)
 import { makeTmuxCallCensus, censusSite } from "./tmux-call-census.js";   // #2600 T2 d4 — 「이 프로세스가 아직 tmux 를 부르나」의 계기(전수·route 무관)
@@ -92,12 +92,31 @@ export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transp
 }
 
 /**
+ * #4939 — 세션 호스트의 **컨테이너 관측**: 세션 이름 목록(`list-sessions -F '#{session_name}…'`) 팬아웃을 지날 때마다 마지막 것을 기억한다.
+ *  상태 push(node/agent)가 «방금 본 목록과 같은 순간의 관측» 을 싣는 재료다 — 판정은 게이트웨이가 한다(sessions/session-unreachable-rule).
+ *  ⚠ 첫 칸이 세션 이름인 목록만 잡는다 — 그 밖의 목록(list-panes·기본 형식)으로 «목록에 있나» 를 재면 산 세션을 «안 보임» 으로 센다.
+ */
+const lastFanout = new Map<string, { at: number; containers: ContainerObservation[] }>();
+function listsSessionNames(args: readonly string[]): boolean {
+  const { verb } = tmuxSessionOf(args);
+  if (verb !== "list-sessions" && verb !== "ls") return false;
+  const f = args.indexOf("-F");
+  return f >= 0 && (args[f + 1] ?? "").startsWith("#{session_name}");
+}
+/** 이 시각 이후에 본 컨테이너 관측 — 없으면 null(코어 직접 경로가 아니거나 그 사이 목록을 안 봤다 = 그 판은 «모름»). */
+export function takeContainerObservation(sinceMs: number, slug: string | null = tenantSlug()): ContainerObservation[] | null {
+  const o = slug ? lastFanout.get(slug) : undefined;
+  return o && o.at >= sinceMs ? o.containers : null;
+}
+
+/**
  * 코어 직접 경로 — 브로커 `/lvly/tmux` 가 하던 «세션 의미» 를 코어가 한다: 목록(`GET /lvly/sessions`) → 계획(`planTmux`) →
  *  실행(범용 exec API) → 병합. 성공은 stdout, 실패는 execFile 오류와 **같은 필드**(`code`·`stdout`·`stderr`)로 던진다 —
  *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
  *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
  */
 export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string; listScope?: TmuxListScope }): Promise<string> {
+  const at = Date.now();
   //  ⚠ 전송 실패(소켓 없음 — 중앙 게이트웨이의 `on` 오설정)·형식 밖 슬러그도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면
   //   상위 판정이 전부 거짓으로 떨어져 «못 봤다» 조차 못 된다(블라인드 리뷰 ⑥-4). 여기서 접으면 strict 호출은 던지고 목록은 desired 폴백으로 간다.
   const fold = (why: string, e: unknown): never => {
@@ -110,7 +129,10 @@ export async function tmuxViaRoute(args: string[], via: { transport: BrokerTrans
   let out;
   try {
     const plan = planTmux(via.slug, args, listed.sessions, listed.observed);
-    out = await runPlan(plan, via.slug, args, listed.observed, (c, argv) => client.execCapture(c, argv));
+    const observe = plan.kind === "fanout" && listsSessionNames(args)
+      ? (parts: Parameters<typeof summarizeFanout>[1]) => { lastFanout.set(via.slug, { at, containers: summarizeFanout(listed.sessions, parts) }); }
+      : undefined;
+    out = await runPlan(plan, via.slug, args, listed.observed, (c, argv) => client.execCapture(c, argv), observe);
   } catch (e) { return fold("코어 직접 경로 실행 오류", e); }
   if (out.code !== 0) throw outcomeToError(out);
   return out.stdout;

@@ -188,6 +188,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/sessions/session-end.pg-test.mjs
+      # ④-d2d 도달 불가 판정(#4939) — 목으로는 못 보는 것: **사람이 끝낸 표식은 안 덮나 · 이어진 행은 안 적나 · 안 보이기 시작한 뒤
+      #    살아 있다는 기록(생성·복원·작업 표시)을 받은 행은 안 적나(복원 경합) · 되살림은 이 규칙이 적은 것만 지우나** — 전부 UPDATE 의
+      #    WHERE 라 행을 되읽어 판정한다. 화면(복원 가능 목록 행)이 도달 불가를 «사람이 끝냄» 으로 안 그리는지도 실제 행으로 잰다.
+      - name: 도달 불가 판정 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-unreachable.pg-test.mjs
       # ④-d1c 위탁 running 기록(markRunning) — 목으로는 못 보는 것: **queued 행에만 쓰는 UPDATE 조건이다**. «늦게 온 기록은 false 이고
       #    첫 판의 좌표가 그대로다» · «취소된 행은 running 으로 뒤집히지 않는다» · «재큐된 행은 다시 기록된다». 행을 되읽어 판정한다.
       - name: 위탁 running 기록 PG 통합 테스트

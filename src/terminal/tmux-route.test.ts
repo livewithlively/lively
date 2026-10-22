@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   classifyExecOutcome, isServerWideList, mergeFanout, outcomeToError, planTmux, runPlan, sessionContainerName,
-  sessionGoneResult, tmuxSessionOf, TMUX_NO_SERVER, TMUX_UNOBSERVED, type SessionRow, type TmuxOutcome,
+  sessionGoneResult, summarizeFanout, tmuxSessionOf, TMUX_NO_SERVER, TMUX_UNOBSERVED, type SessionRow, type TmuxOutcome,
 } from "./tmux-route.js";
 import { isNoTmuxServer, isSessionGoneError } from "./tmux-exec.js";
 
@@ -168,4 +168,44 @@ test("[R2] runPlan — fanout 중 한 컨테이너가 runsc «없음» 으로 �
   const exec = async (c: string): Promise<TmuxOutcome> => (c === B.container ? bad("loading container: file does not exist") : ok(`${c}\n`));
   const fan = await runPlan({ kind: "fanout", containers: [A.container, B.container], verb: "list-sessions" }, SLUG, ["list-sessions"], true, exec);
   assert.deepEqual(fan, { code: 0, stdout: `${A.container}\n`, stderr: "" });
+});
+
+// ── #4939 컨테이너 관측 — 세션 호스트가 게이트웨이에 «컨테이너는 있는데 목록에 세션이 없다» 를 올리는 재료 ─────────────
+
+test("[O1] ★ summarizeFanout — 컨테이너마다 목록 결과와 그 sid 가 보였나 · 안쪽 표식 없는 줄은 skipped(안 물었다)", () => {
+  const D = row("box-d-44444444"), E = row("box-e-55555555");
+  const rows: SessionRow[] = [{ ...A, state: "running" }, { ...B, state: "running" }, { ...C, inside: false }, D, E];
+  const obs = summarizeFanout(rows, [
+    { container: A.container, outcome: ok(`${A.sid}\t1700000000\t0\n`) },
+    { container: B.container, outcome: bad("no server running on /tmp/tmux-200069/lvly-acme-1a2b") },
+    { container: D.container, outcome: sessionGoneResult(null, D.container) },
+    { container: E.container, outcome: ok("box-other-99999999\t1\t0\n") },
+  ]);
+  assert.deepEqual(obs.map((o) => [o.sid, o.outcome, o.listed]), [
+    [A.sid, "ok", true],
+    [B.sid, "no-server", false],
+    [C.sid, "skipped", false],
+    [D.sid, "gone", false],
+    [E.sid, "ok", false],
+  ]);
+  assert.equal(obs[0]!.state, "running", "런타임 상태를 같이 싣는다(게이트웨이가 running 만 센다)");
+  assert.equal(obs[3]!.state, undefined, "옛 브로커는 상태를 안 싣는다 — 칸을 지어내지 않는다");
+});
+
+test("[O2] summarizeFanout — 그 밖의 실패는 error(못 봤다 — «세션 없음» 이 아니다) · 결과가 없는 줄도 error", () => {
+  const obs = summarizeFanout([A, B], [{ container: A.container, outcome: bad("exec timeout") }]);
+  assert.deepEqual(obs.map((o) => [o.sid, o.outcome, o.listed]), [[A.sid, "error", false], [B.sid, "error", false]]);
+});
+
+test("[O3] runPlan — 팬아웃이면 병합 전에 컨테이너별 결과를 건넨다 · one·gone 은 안 부른다", async () => {
+  const seen: Array<ReadonlyArray<{ container: string; outcome: TmuxOutcome }>> = [];
+  const exec = async (c: string): Promise<TmuxOutcome> => (c === A.container ? ok(`${A.sid}\n`) : bad("no server running"));
+  const merged = await runPlan({ kind: "fanout", containers: [A.container, B.container], verb: "list-sessions" }, SLUG, ["list-sessions"], true, exec,
+    (parts) => { seen.push(parts); });
+  assert.equal(merged.code, 0);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0]!.map((p) => [p.container, p.outcome.code]), [[A.container, 0], [B.container, 1]]);
+  await runPlan({ kind: "one", sid: A.sid, container: A.container, verb: "has-session" }, SLUG, ["has-session", "-t", A.sid], true, exec, () => { seen.push([]); });
+  await runPlan({ kind: "gone", sid: null, container: null, verb: "kill-server" }, SLUG, ["kill-server"], true, exec, () => { seen.push([]); });
+  assert.equal(seen.length, 1, "팬아웃이 아니면 관측을 안 건넨다");
 });
