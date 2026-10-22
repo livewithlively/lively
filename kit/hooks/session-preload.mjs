@@ -15,7 +15,7 @@
 //        + [라이브 현황 (게이트웨이, 토큰 필요)]. 어느 쪽이든 있으면 주입, 둘 다 없으면 무동작(fail-open).
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -552,14 +552,26 @@ export function claudeMcpMissing() {
   } catch { return false; }                          // fail-soft — 판단 못 하면 종전대로 무동작
 }
 
+// ── 새 하네스 확인 주기 (#4927) ───────────────────────────────────────────────
+//  버전이 같아도 업데이터를 가끔 띄운다 — «새로 깐 하네스» 배선 확인. 실측(2026-10-22 상민님 윈도우 PC): 키트가 최신인 PC 에
+//   Cursor 를 나중에 깔았더니, 버전이 같으면 업데이터를 안 띄우는 탓에 다음 키트 판까지 Cursor 가 라이블리와 안 붙었다.
+//  판정(배선 신호·PATH·IDE 존재·«한 번이라도 배선됐나» 기록)은 업데이터 한 곳(self-update freshHarnesses)에 두고 여기선 주기만
+//   정한다 — 새 하네스가 없으면 업데이터는 파일 몇 개만 보고 끝난다(내려받기 0). 세션이 몰려도 5분에 한 번(도장 파일 시각).
+const FRESH_CHECK_MS = 5 * 60 * 1000;
+export function freshCheckDue(now = Date.now(), file = join(homedir(), ".lively", "fresh-harness-check")) {
+  try { if (now - statSync(file).mtimeMs < FRESH_CHECK_MS) return false; } catch { /* 도장 없음 = 할 때다 */ }
+  try { writeFileSync(file, ""); } catch { /* 못 찍으면 다음 세션도 띄운다 — 업데이터 자체가 가볍다 */ }
+  return true;
+}
+
 function maybeSelfUpdate(remoteVersion) {
   try {
     if (!remoteVersion || typeof remoteVersion !== "string") return; // 게이트웨이가 버전을 안 줌 → 무동작
     if (process.env.LIVELY_NO_AUTO_UPDATE === "1") return;
     if (hookDisabled("self_update")) return;                          // 어드민 토글
-    //  최신이면 대부분의 세션이 여기서 끝난다 — 단 **MCP 등록이 비어 있으면** 예외다(claudeMcpMissing 머리말:
-    //   그 상태는 스스로 못 돌아온다. self-update 가 additive reconcile 로 되살린다).
-    if (readLocal("kit-version") === remoteVersion && !claudeMcpMissing()) return;
+    //  최신이면 대부분의 세션이 여기서 끝난다 — 예외 둘: **MCP 등록이 비어 있으면**(claudeMcpMissing 머리말: 그 상태는 스스로
+    //   못 돌아온다) · **새 하네스 확인 때가 되면**(freshCheckDue — 5분에 한 번).
+    if (readLocal("kit-version") === remoteVersion && !claudeMcpMissing() && !freshCheckDue()) return;
     const runner = join(homedir(), ".lively", "hooks", "self-update.mjs");
     if (!existsSync(runner)) return;                                  // 구형 kit — 수동 업데이트가 경로
     const argv = [runner, "--to", remoteVersion];

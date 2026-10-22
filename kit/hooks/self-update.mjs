@@ -172,7 +172,9 @@ function binOnPath(bin) {
 //  경계: `lively uninstall --harness X` 는 opt-out 흔적을 남기지 않으므로, 뗀 하네스가 PATH 에 남아 있으면
 //   다시 배선된다 — 그건 CLI update 가 이미 하던 동작이라 새로 생기는 위험이 아니다(영구 off 는 --harness all
 //   또는 LIVELY_NO_AUTO_UPDATE=1).
-async function installedHarnesses() {
+//  반환: wired = 디스크의 배선 신호만(정본) · all = 배선 대상 목록(wired ∪ PATH ∪ IDE 존재 ∪ 세션 힌트).
+//   둘을 가르는 이유 — 버전이 같을 때 «한 번도 배선된 적 없는 하네스» 를 고르려면 배선 신호만의 집합이 따로 필요하다(#4927).
+async function harnessState() {
   const out = [];
   try { if (readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8").includes(".lively/hooks/")) out.push("claude"); } catch { /* 미배선 */ }
   try { if (readFileSync(join(CODEX_DIR, "config.toml"), "utf8").includes("lively-managed")) out.push("codex"); } catch { /* 미배선 */ }
@@ -189,6 +191,7 @@ async function installedHarnesses() {
   try { if (existsSync(join(GROKDIR, "hooks", "lively-grok.json"))) out.push("grok"); } catch { /* 미배선 */ }
   //  cursor(#4927): ~/.cursor/hooks.json 은 **사용자와 공유**라 파일 존재가 아니라 우리 어댑터 엔트리가 신호다(CLI cursorWired 와 같은 규칙).
   try { if (/[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/.test(readFileSync(join(HOME, ".cursor", "hooks.json"), "utf8"))) out.push("cursor"); } catch { /* 미배선 */ }
+  const wired = [...out];
 
   let reg = null;
   try { reg = await import("./harness-registry.mjs"); } catch { /* 구 번들 — 레지스트리 없음 */ }
@@ -213,7 +216,16 @@ async function installedHarnesses() {
   const hint = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
   const known = reg?.HARNESS_IDS || ["claude", "codex", "opencode", "antigravity", "grok", "cursor"];
   if (known.includes(hint) && !out.includes(hint)) out.push(hint);
-  return out;
+  return { wired, all: out };
+}
+
+// 버전이 같아도 배선할 «새 하네스» — 감지됐는데 이 머신에서 **한 번도 배선된 적 없는** 것(#4927 실측: 키트가 최신인 PC 에
+//  Cursor 를 나중에 깔았더니, 버전이 같으면 설치기를 안 돌리는 탓에 다음 키트 판까지 배선이 안 생겼다).
+//  한 번이라도 배선된 적 있는 하네스(state.wired_ever)는 뺀다 — 사람이 `lively uninstall --harness X` 로 뗀 것을 버전이 같은데
+//  되붙이지 않는다(그건 종전대로 다음 키트 판의 몫 — 위 «경계»). 기록이 없는 머신은 지금의 배선을 기록으로 삼는다.
+function freshHarnesses(state, wired, all) {
+  const ever = new Set([...(Array.isArray(state?.wired_ever) ? state.wired_ever : []), ...wired]);
+  return { ever: [...ever].sort(), fresh: all.filter((h) => !ever.has(h)) };
 }
 
 // 게이트웨이가 서빙하는 최신 버전(직접 실행용 — session-preload 는 --to 로 넘겨줘 왕복을 아낀다).
@@ -407,7 +419,7 @@ async function main() {
   if (!target) return;                               // 게이트웨이가 버전을 안 줌(구버전/장애) → 무동작(fail-safe)
   const local = readL("kit-version");
   const forced = process.argv.includes("--force");
-  const harnesses = await installedHarnesses();
+  const { wired, all: harnesses } = await harnessState();
 
   // 최신이어도 **MCP 등록 정합은 맞춘다**(#1079 실측 결함).
   //  새 배선이 담긴 버전을 설치하는 실행은 언제나 **구버전 코드**가 수행한다 → 그 배선(#862 additive 등록,
@@ -419,7 +431,16 @@ async function main() {
     if (harnesses.includes("claude")) {
       try { reconcileClaudeMcp(gw, token); } catch (e) { log(`MCP reconcile 예외(무시): ${(e && e.message) || e}`); }
     }
-    return;
+    // 새 하네스(freshHarnesses 머리말) — 없으면 여기서 끝(내려받기 0). 기록은 바뀔 때만 쓴다(매 세션 쓰기 없음).
+    const st0 = loadState();
+    const { ever, fresh } = freshHarnesses(st0, wired, harnesses);
+    if (JSON.stringify(ever) !== JSON.stringify(st0.wired_ever || [])) saveState({ ...st0, wired_ever: ever });
+    if (!fresh.length) return;
+    //  같은 «새 하네스» 묶음을 최근에 시도했으면 쉰다 — 배선이 안 되는 PC(손상된 설정 파일 등)에서 매 세션 내려받지 않게.
+    const key = [...fresh].sort().join(",");
+    if (st0.fresh_tried === key && typeof st0.fresh_at === "number" && Date.now() - st0.fresh_at < BACKOFF_MS) return;
+    saveState({ ...loadState(), fresh_tried: key, fresh_at: Date.now() });
+    log(`새 하네스 — 키트 버전(${local})은 같지만 한 번 배선한다: ${fresh.join(",")}`);
   }
 
   if (!harnesses.length) { log("설치된 하네스 배선을 못 찾음 — 건너뜀"); return; }
@@ -448,7 +469,11 @@ async function main() {
     let installed = target;
     try { installed = readFileSync(join(tmp, ".lively", "kit-version"), "utf8").trim() || target; } catch { /* 구 번들 → --to */ }
     writeFileSync(STAMP, installed + "\n", { mode: 0o600 });
-    saveState({ ok_version: installed, ok_at: Date.now() });
+    //  기록(wired_ever)은 남긴다 — 다음 «같은 버전» 판정의 기준이다. 실패 흔적(failed_*)만 지운다.
+    const prev = loadState();
+    const { ever } = freshHarnesses(prev, (await harnessState()).wired, []);
+    saveState({ ok_version: installed, ok_at: Date.now(), wired_ever: ever,
+      ...(prev.fresh_tried ? { fresh_tried: prev.fresh_tried, fresh_at: prev.fresh_at } : {}) });
     // #862 — 새 MCP 서버(lively-local 등)를 기존 멤버에게도 additive 등록(claude 전용; codex 는 설치기가 config.toml 로 처리).
     if (harnesses.includes("claude")) { try { reconcileClaudeMcp(gw, token); } catch (e) { log(`MCP reconcile 예외(무시): ${(e && e.message) || e}`); } }
     // 다음 세션에 한 번 알린다(그때는 이미 새 키트가 돌고 있다). session-preload 가 읽고 지운다.
