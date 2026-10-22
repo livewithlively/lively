@@ -64,3 +64,11 @@ test("D5 판 번호·저장한 사람 — current_version_no 가 version_no 로,
   assert.equal(none.saved_by, null);
   assert.equal(describeAttached(row, null).version_no, null);
 });
+
+test("D6 #4489 붙은 세션에서 실행 선언 — 매니페스트 도구에 app_ai_fork 가 있을 때만 ai_fork true(앱 칸 메뉴의 «이 세션 대화로 돌린 실행» 줄)", () => {
+  assert.equal(describeAttached(row, app({ permissions: { tools: ["app_ai_run", "app_ai_fork"] } })).ai_fork, true);
+  assert.equal(describeAttached(row, app({ permissions: { tools: ["app_ai_run"] } })).ai_fork, false);
+  assert.equal(describeAttached(row, app({ permissions: { ai_fork: true } })).ai_fork, false, "선언만으로는 아니다 — 저장된 매니페스트는 표지를 도구로 함의한다(manifest.parseAppManifest)");
+  assert.equal(describeAttached(row, app({})).ai_fork, false);
+  assert.equal(describeAttached(row, null).ai_fork, false);
+});

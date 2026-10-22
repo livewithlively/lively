@@ -78,14 +78,15 @@ export function jobTmuxArgv(o: { sessionId: string; jobId: number; bootSecret: s
 /**
  * (순수) 브로커 확보 요청(`/lvly/session/ensure` 본문) — 사람 세션(createSession)과 같은 꼴에 작업 컨테이너의 몫만 얹는다.
  *  · 프로젝트 폴더에서 도는 앱 작업이면 그 앱 폴더를 `<작업 폴더>/.lively/apps/<앱>` 에 붙인다(#4684 와 같은 길). 앱 폴더가 작업 폴더면 붙일 것이 없다.
+ *    #4489 세션 분기도 붙인다 — 분기는 그 세션의 작업 폴더에서 돌고, 그 세션에 붙은 앱의 폴더를 본 세션처럼 읽는다(판정기가 그 자리만 연다).
  *  · `fresh` 를 싣지 않는다 — 그 필드는 «같은 id 복원 전용»(#4694)이고, 작업 세션 id 는 무작위 꼬리가 붙어 늘 처음 보는 id 다.
  *  · 홈 없는 작업(#4891)은 `homeless: true` — 계정은 전용 계정이어야 한다(브로커가 다시 본다).
  */
 export function jobEnsureRequest(
-  job: Pick<AgentJobRow, "session_id" | "cwd" | "app_id" | "project_id" | "homeless">,
+  job: Pick<AgentJobRow, "session_id" | "cwd" | "app_id" | "project_id" | "homeless" | "fork">,
   o: { osUser: string; memMb: number; memRequestMb: number },
 ): SessionEnsureRequest {
-  const apps = job.app_id && job.project_id != null ? [job.app_id] : undefined;
+  const apps = job.app_id && (job.project_id != null || job.fork) ? [job.app_id] : undefined;
   return {
     sessionId: job.session_id ?? "", osUser: o.osUser, cwd: job.cwd, memMb: o.memMb, memRequestMb: o.memRequestMb, tmux: "inside",
     ...(apps ? { apps } : {}),

@@ -24,7 +24,9 @@ import {
   type AiAccount, type AiAccountSettings, type RunKind, type SessionTie,
 } from "./plan.js";
 import type { SingleShotInput, SingleShotOutput, Usage } from "./anthropic.js";
-import type { AiRunRow, AiRunSummaryRow, NewAiRun } from "./store.js";
+import { FORK_SESSION_RE, forkNoticeText, forkPrompt, forkRefusal, forkRetryPrompt, forkTargetOf, judgeForkOutput, type ForkConsent, type ForkFacts } from "./fork.js";
+import type { ForkSpec } from "../agent-jobs/fork-boot.js";
+import type { AiRunRow, AiRunSummaryRow, FinishAiRun, NewAiRun } from "./store.js";
 
 type Store = typeof import("./store.js");
 
@@ -52,6 +54,7 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
 
 export interface AiRunDeps {
   store: Pick<Store, "insertAiRun" | "getAiRun" | "getAiRunByToken" | "getAiRunByJob" | "setAiRunJob" | "setAiRunProxyToken" | "markAiRunRunning" | "retryAiRun"
+    | "markAiRunRetried"
     | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp">;
   policy(): Promise<AiRunPolicy>;
   accountSettings(): Promise<AiAccountSettings>;
@@ -82,6 +85,20 @@ export interface AiRunDeps {
   subscriptionLoggedIn(member: string): Promise<boolean | null>;
   /** 요청이 매인 세션(ctx.session — MCP 헤더 · 앱 화면 다리가 서버 쪽에서 붙임)의 주인과, 이 사람이 그 세션에 들어갈 수 있나(apps/session-apps). 세션이 없으면 owner null. */
   sessionTie(sessionId: string, member: string): Promise<SessionTie>;
+  /**
+   * #4489 분기 — 대상 세션의 사실(존재 · 주인 · 종류 · 하네스 · 작업 폴더 · 노드 · 이 앱이 붙었나 · 이 사람이 들어갈 수 있나 · 지금 대화 id)과
+   *  분기 좌표를 만들 실행 설정(프로젝트 · 하네스 인자). 세션이 없으면 exists:false. `transcript: false` 면 대화 파일이 그 자리에 있나(원격 stat)는
+   *  보지 않는다(대상 목록용 — 싼 판정만).
+   */
+  forkSession(sessionId: string, member: string, appId: string, opts?: { transcript?: boolean }): Promise<ForkSessionFacts>;
+  /** #4489 — 이 앱이 분기를 선언했고(permissions.ai_fork) 이 사람의 동의가 그것을 덮나 — 표지 이름 그대로만(글롭 선언은 동의 창에 줄이 안 선다). */
+  forkConsent(member: string, app: OrgApp): Promise<ForkConsent>;
+  /** #4489 — 작업 컨테이너를 띄울 수 있는 배포인가(매니지드). */
+  forkManaged(): Promise<boolean>;
+  /** #4489 — 구성원 AI 계정(Claude) 커넥터를 막은 워크스페이스인가(본 세션도 같은 env 로 떴다 — catalog.harnessSettingsArgv). */
+  blockConnectors(): Promise<boolean>;
+  /** #4489 — 분기 작업 접수(agent-jobs enqueueAgentJob — 그 세션 주인의 자리·구독 · 그 세션의 작업 폴더). 대기열이 차면 429. */
+  submitForkJob(j: SubmitForkJobInput): Promise<{ id: number }>;
   isAdmin(user: LivelyUser): boolean;
   /** 이 토큰이 작업 컨테이너의 작업 토큰인가(agent-jobs store.isAgentJobToken) — 작업이 작업을 낳지 않게(#4490 규칙과 같다). */
   isJobToken(tokenHashPrefix: string): Promise<boolean>;
@@ -98,6 +115,18 @@ const memberOf = (u: LivelyUser | undefined): string => String(u?.userId || "");
 export interface SubmitInput {
   app_id?: unknown; prompt?: unknown; system?: unknown; schema?: unknown; job?: unknown; model?: unknown; label?: unknown;
   files?: unknown; project_id?: unknown; cwd?: unknown; agent?: unknown; timeout_min?: unknown; max_tokens?: unknown; wait?: unknown;
+  /** #4489 — `{fork: "<세션 id>"}` 면 그 세션 대화를 이어받는 분기 실행. 없으면 새 대화. */
+  target?: unknown;
+}
+
+/** #4489 분기 대상 세션의 사실 + 분기 좌표 재료(live 가 모은다). */
+export type ForkSessionFacts = ForkFacts["session"] & {
+  projectId: number | null;
+  /** 세션 실행 설정의 하네스 인자({"--model": "opus", "--effort": "high"}). */
+  flags: Record<string, unknown>;
+};
+export interface SubmitForkJobInput {
+  requester: string; owner: string; appId: string; projectId: number | null; cwd: string; spec: ForkSpec; label: string; prompt: string; timeoutMin: number | null;
 }
 
 // ── 공개 모양 ──
@@ -105,7 +134,7 @@ function head(r: AiRunRow | AiRunSummaryRow): Record<string, unknown> {
   return {
     id: r.id, status: r.status, app_id: r.app_id, requester: r.requester, requester_kind: r.requester_kind, job: r.job_name, kind: r.kind,
     account: r.account_kind === "subscription" ? { kind: "subscription", member: r.account_member } : { kind: "api_key" },
-    executor: r.executor, job_id: r.job_id, model: r.model, label: r.label, error: r.error, retries: r.retries,
+    executor: r.executor, job_id: r.job_id, model: r.model, label: r.label, error: r.error, retries: r.retries, fork_session: r.fork_session ?? null,
     usage: r.input_tokens != null || r.output_tokens != null ? { input_tokens: r.input_tokens, output_tokens: r.output_tokens } : null,
     created_at: r.created_at, started_at: r.started_at, ended_at: r.ended_at,
   };
@@ -195,6 +224,10 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       throw new HttpError(400, `작업 '${jobName}' 은 이 앱 매니페스트(ai.jobs)에 없습니다 — 선언한 것: ${declared.map((j) => j.name).join(", ")}`);
     }
   }
+  //  #4489 — 대상이 분기면 그 길로(실행 계정 · 자리 · 상한이 다르다 — 그 세션 주인의 구독 · 그 세션의 작업 폴더).
+  const ft = forkTargetOf(input.target);
+  if (ft && "error" in ft) throw new HttpError(400, ft.error);
+  if (ft) return submitForkRun({ input, user, who, app, appId, sessionId: ft.session, prompt, system, schema, label, jobName, fromSession: ctx.session, source: ctx.source ?? null }, d);
   const kind: RunKind = runKindOf(input);
   let projectId: number | null = null;
   if (input.project_id !== undefined && input.project_id !== null && input.project_id !== "") {
@@ -263,6 +296,84 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     }
   }
   const waitSec = waitSecOf(input.wait);
+  const latest = waitSec > 0 ? await waitForRun(row.id, waitSec, d) : await d.store.getAiRun(row.id);
+  return publicRun(latest ?? row, { own: true });
+}
+
+/** 세션 실행 설정의 하네스 인자 하나(--model · --effort) — 글이 아니면 null. 형식 검사는 분기 좌표를 읽을 때(agent-jobs/fork-boot.parseForkSpec) 한다. */
+const flagOf = (flags: Record<string, unknown>, name: string): string | null => (typeof flags?.[name] === "string" && String(flags[name]).trim() ? String(flags[name]).trim() : null);
+
+/**
+ * #4489 분기 실행 접수 — 순서: 분기 판정(사람 · 동의 · 세션 · 주인/초대 · 사람 세션 · 앱 붙음 · 하네스 · 매니지드 · 대화) → 구독 선(#1449 — 대상 세션이 tie) →
+ *  상한(앱당 빈도 · 사람당 동시) → 행 → 분기 작업 접수. 실행 계정은 늘 **그 세션 주인의 구독**이다(대화가 그 사람의 것이다 — 워크스페이스 실행 계정
+ *  설정을 타지 않는다). 작업 자리의 사람당 동시 상한은 그 주인으로 센다(agent-jobs claimAgentJobs — 주인의 구독을 지킨다).
+ */
+async function submitForkRun(o: {
+  input: SubmitInput; user: LivelyUser; who: { member: string; kind: "member" | "app_server" }; app: OrgApp; appId: string; sessionId: string;
+  prompt: string; system: string | null; schema: Record<string, unknown> | null; label: string | null; jobName: string | null;
+  /** 요청이 매인 세션(ctx.session — MCP 헤더 · 앱 화면 다리). 대상 세션과 다르면 그 세션도 사람이 보는 세션이어야 한다. */
+  fromSession?: string;
+  /** 요청이 온 길(app-ui · app-front · mcp …) — 실행 행에 남긴다(감사). */
+  source: string | null;
+}, d: AiRunDeps): Promise<Record<string, unknown>> {
+  const { who, appId, sessionId } = o;
+  if (o.input.project_id !== undefined && o.input.project_id !== null && o.input.project_id !== "") throw new HttpError(400, "분기는 그 세션의 작업 폴더에서 돕니다 — project_id 는 받지 않습니다");
+  if (typeof o.input.cwd === "string" && o.input.cwd.trim()) throw new HttpError(400, "분기는 그 세션의 작업 폴더에서 돕니다 — cwd 는 받지 않습니다");
+  const [facts, consent, managed] = await Promise.all([
+    d.forkSession(sessionId, who.member, appId),
+    who.kind === "member" ? d.forkConsent(who.member, o.app) : Promise.resolve("ok" as const),
+    d.forkManaged(),
+  ]);
+  //  주인의 동의 — 주인이 보냈으면 같은 판정, 아니면 그 세션에 들어갈 수 있는 사람에게만 따로 묻는다(못 들어가는 세션의 주인 사정을 묻지 않는다).
+  const ownerConsent: ForkConsent = !facts.owner || facts.owner === who.member ? consent
+    : facts.participant ? await d.forkConsent(facts.owner, o.app).catch(() => "no_grant" as const) : "no_grant";
+  const no = forkRefusal({ requester: who, consent, ownerConsent, session: facts, managed });
+  if (no) throw new HttpError(no.status, no.message, no.code ? { body: { code: no.code } } : undefined);
+  const owner = facts.owner!;
+  //  구독 선(#1449 · 상민 2026-10-19) — 분기는 그 세션 주인의 구독으로 돈다. tie = 대상 세션(그 세션 주인 · 이 사람이 들어갈 수 있나 · 사람 세션인가).
+  const account: AiAccount = { kind: "subscription", member: owner };
+  const refusal = subscriptionRefusal(account, who, { owner, participant: owner === who.member || facts.participant, human: facts.kind === "human" });
+  if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
+  //  요청이 다른 세션에 매여 왔으면(예: 위탁 세션의 AI 가 도구로 부름) 그 세션도 사람이 보는 세션이어야 한다 — 사람 없이 구독이 도는 모양을 막는다
+  //   (10-19 구독 선의 «사람 세션이 아닌 · 모르는 세션에 매인 요청은 본인 토큰이라도 거절» 과 같은 자 · 대상 세션은 위에서 봤다).
+  const from = typeof o.fromSession === "string" ? o.fromSession.trim() : "";
+  if (from && from !== sessionId) {
+    const tie = await d.sessionTie(from, who.member).catch(() => ({ owner: null, participant: false, human: false }));
+    if (tie.owner === null || !tie.human) {
+      throw new HttpError(403, "이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 세션 분기는 사람이 보는 세션에서 보낸 요청만 돌립니다", { body: { code: ACCOUNT_UNAVAILABLE } });
+    }
+  }
+
+  const p = await d.policy();
+  if (!d.rate.take(`${d.tenant()}\0${appId}`, d.now())) throw new HttpError(429, `이 앱이 AI 실행을 너무 자주 보내고 있습니다(분당 ${p.app_per_minute}회) — 요청을 모아 한 번에 보내세요`);
+  if ((await d.store.openRunCountOf(who.member)) >= p.max_running_per_member) {
+    throw new HttpError(429, `${who.member}님의 AI 실행이 이미 ${p.max_running_per_member}개 돌고 있습니다 — 끝난 뒤 다시 보내세요`);
+  }
+  const row = await d.store.insertAiRun({
+    appId, requester: who.member, requesterKind: who.kind, source: o.source, jobName: o.jobName, kind: "agent",
+    accountKind: "subscription", accountMember: owner, executor: "job", model: null, label: o.label, prompt: o.prompt, systemPrompt: o.system, schema: o.schema,
+    status: "queued", forkSession: sessionId,
+  });
+  logger.info({ run: row.id, app: appId, requester: who.member, owner, session: sessionId }, "[ai-run] 분기 접수");
+  const spec: ForkSpec = {
+    session: sessionId, conversation: facts.conversation!, harness: "claude",
+    model: flagOf(facts.flags, "--model"), effort: flagOf(facts.flags, "--effort"),
+    block_connectors: await d.blockConnectors().catch(() => false), app_folder: `.lively/apps/${appId}`,
+  };
+  const files = Array.isArray(o.input.files) ? o.input.files.filter((f) => typeof f === "string" && f.trim()).slice(0, 50).map((f) => `- ${String(f).trim()}`) : [];
+  const text = forkPrompt({ appTitle: o.app.title || appId, appId, requester: who.member, owner, prompt: o.prompt + (files.length ? `\n\n관련 파일(작업 폴더 기준):\n${files.join("\n")}` : ""), system: o.system, schema: o.schema });
+  try {
+    const job = await d.submitForkJob({
+      requester: who.member, owner, appId, projectId: facts.projectId, cwd: facts.dir!, spec,
+      label: o.label ?? `세션 분기 #${row.id}`, prompt: text, timeoutMin: typeof o.input.timeout_min === "number" ? o.input.timeout_min : null,
+    });
+    await d.store.setAiRunJob(row.id, job.id);
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `분기 작업을 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);
+    throw e;
+  }
+  const waitSec = waitSecOf(o.input.wait);
   const latest = waitSec > 0 ? await waitForRun(row.id, waitSec, d) : await d.store.getAiRun(row.id);
   return publicRun(latest ?? row, { own: true });
 }
@@ -399,6 +510,7 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
   const toks = { inputTokens: typeof usage?.input_tokens === "number" ? usage.input_tokens : null, outputTokens: typeof usage?.output_tokens === "number" ? usage.output_tokens : null };
   const finish = (f: { status: "done" | "failed" | "canceled"; result: Record<string, unknown> | null; error: string | null }): Promise<AiRunRow | null> =>
     d.store.finishAiRun(run.id, { ...f, ...toks }).then(async (r) => { if (r?.proxy_token_hash) await d.store.setAiRunProxyToken(r.id, null).catch(() => undefined); return r; });
+  if (run.fork_session) return finishForkRun(run, job, { text, base, toks }, st as "done" | "failed" | "canceled", d);
   if (st !== "done" || jr.is_error === true) {
     return finish({ status: st === "canceled" ? "canceled" : "failed", result: text ? { ...base } : null, error: job.error ?? (jr.is_error ? "하네스가 오류로 끝났습니다" : "작업이 실패했습니다") });
   }
@@ -419,6 +531,50 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
     }
   }
   return finish({ status: "failed", result: { ...base }, error: `답이 결과 형식에 맞지 않습니다(${judged.errors.slice(0, 3).join(" · ")}) — 원문은 result.text 에` });
+}
+
+/**
+ * #4489 분기 실행 끝맺기 — 결과(result) + 그 세션에 남길 요지(session_note)로 나누어 적고, 그 세션의 **안 읽은 알림**을 쌓는다(실패도 «앱 요청 실패 — 사유»).
+ *  «형식에 맞게 다시» 는 이미 같은 프로세스에서 한 번 썼다(onForkTurn) — 여기서는 새 작업으로 다시 하지 않는다(분기 대화는 저장되지 않아 이어받을 수 없다).
+ *  알림은 끝맺는 조건부 쓰기와 같은 문장에서 쌓인다(store.finishAiRun notice) — 정비와 걷기가 겹쳐도 한 줄. 취소는 알리지 않는다(사람이 거둔 것).
+ */
+async function finishForkRun(run: AiRunRow, job: AgentJobRow, r: { text: string; base: Record<string, unknown>; toks: { inputTokens: number | null; outputTokens: number | null } },
+  st: "done" | "failed" | "canceled", d: AiRunDeps): Promise<AiRunRow | null> {
+  const jr = (job.result ?? {}) as Record<string, unknown>;
+  //  분기 대화는 저장되지 않는다(--no-session-persistence) — 이어받을 대화 id 를 앱에 주지 않는다. 턴 수는 판이 센 것.
+  const base = { ...r.base, conversation_id: null, turns: typeof jr.turns === "number" ? jr.turns : null };
+  const title = (await d.getApp(run.app_id).catch(() => null))?.title || run.app_id;
+  const notice = (o: { note?: string; error?: string }): FinishAiRun["notice"] => (run.fork_session ? {
+    sessionId: run.fork_session, appId: run.app_id, requester: run.requester,
+    text: forkNoticeText({ appTitle: title, runId: run.id, requester: run.requester, owner: run.account_member ?? run.requester, prompt: run.prompt, ...o }),
+  } : null);
+  if (st !== "done" || jr.is_error === true) {
+    const error = job.error ?? (jr.is_error ? "하네스가 오류로 끝났습니다" : "분기 작업이 실패했습니다");
+    return d.store.finishAiRun(run.id, { status: st === "canceled" ? "canceled" : "failed", result: r.text ? base : null, error, ...r.toks,
+      notice: st === "canceled" ? null : notice({ error }) });
+  }
+  const judged = judgeForkOutput(r.text, run.schema);
+  if (!judged.ok) {
+    const error = `답이 결과 형식에 맞지 않습니다(${judged.errors.slice(0, 3).join(" · ")}) — 원문은 result.text 에`;
+    return d.store.finishAiRun(run.id, { status: "failed", result: base, error, ...r.toks, notice: notice({ error }) });
+  }
+  const shown = typeof judged.result === "string" ? judged.result : JSON.stringify(judged.result);
+  return d.store.finishAiRun(run.id, { status: "done", error: null, sessionNote: judged.note, ...r.toks, notice: notice({ note: judged.note }),
+    result: { ...base, text: shown, ...(run.schema ? { json: judged.result } : {}) } });
+}
+
+/**
+ * #4489 분기 작업의 턴 보고(agent-jobs onTurn) — 답이 결과 모양(result + session_note)에 안 맞으면 «형식에 맞게 다시» 를 **같은 프로세스에** 한 번 넣는다.
+ *  맞거나 · 이미 한 번 썼거나 · 오류 턴이면 null(판이 입력을 닫아 끝낸다 — 끝맺기는 finishForkRun 이 마지막 답으로 판정한다).
+ */
+export async function onForkTurn(job: Pick<AgentJobRow, "id">, turn: { text: string | null; is_error: boolean }, d: AiRunDeps): Promise<string | null> {
+  const run = await d.store.getAiRunByJob(job.id);
+  if (!run || !run.fork_session || isEndedRun(run.status) || turn.is_error) return null;
+  const judged = judgeForkOutput(turn.text ?? "", run.schema);
+  if (judged.ok) return null;
+  if (!(await d.store.markAiRunRetried(run.id))) return null;
+  logger.info({ run: run.id, job: job.id }, "[ai-run] 분기 — 형식에 맞게 다시(같은 프로세스)");
+  return forkRetryPrompt(judged.errors, run.schema);
 }
 
 /** 작업이 끝났을 때(agent-jobs reapJob) — 그 작업에 붙은 실행을 곧바로 맞춘다. 던지지 않는다. */
@@ -483,14 +639,17 @@ export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Pro
   return publicRun(row, { own: isOwnRun(row, user), withPrompt: true });
 }
 
-export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
+export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown; fork_session?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   const limit = Math.min(Math.max(Number(f.limit) || 20, 1), 100);
   const status = typeof f.status === "string" && /^[a-z]{4,10}$/.test(f.status) ? f.status : null;
   const admin = d.isAdmin(user) && !user.appId;
   const appId = user.appId ? user.appId : (typeof f.app_id === "string" && f.app_id ? f.app_id : null);
   const me = memberOf(user);
   //  requester 필터는 «내 실행»(보낸 것 + 내 구독으로 도는 것)이다 — store.listAiRuns 의 SQL 조건과 isOwnRun 이 한 뜻.
-  const rows = await d.store.listAiRuns({ appId, requester: admin ? null : me, status, limit });
+  //  #4489 — 그 세션 대화로 돈 분기만(세션 앱 칸의 «이 앱이 이 세션 대화로 보낸 요청» 기록). 꼴이 틀리면 «전부» 로 접지 않고 거절.
+  const forkSession = f.fork_session === undefined || f.fork_session === null || f.fork_session === "" ? null : String(f.fork_session);
+  if (forkSession !== null && !FORK_SESSION_RE.test(forkSession)) throw new HttpError(400, "fork_session 은 세션 id 여야 합니다");
+  const rows = await d.store.listAiRuns({ appId, requester: admin ? null : me, status, limit, forkSession });
   return { runs: rows.map((r) => publicRunSummary(r, { own: isOwnRun(r, user) })), limit };
 }
 
@@ -513,7 +672,7 @@ export async function cancelRunFor(id: number, user: LivelyUser, d: AiRunDeps): 
 
 /**
  * 고를 수 있는 대상(설계 §5) — 실행 계정(워크스페이스가 정한 것 · 쓸 수 있나) · 이 앱이 붙은 내 세션(본 대화에 보내기 — chat.send) ·
- *  이 앱이 만든 대화(이어받기) · 선언한 작업과 그 실행 계정. 분기(fork)는 v2-10 — 지금은 false.
+ *  이 앱이 만든 대화(이어받기) · 선언한 작업과 그 실행 계정 · 붙은 세션마다 분기(#4489)가 되나(can_fork · 안 되면 fork_reason).
  *  구독 로그인 판정은 여기서만 부르고 짧게 기억한다(설계 §12 ④).
  */
 export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, d: AiRunDeps, ctx: { session?: string } = {}): Promise<Record<string, unknown>> {
@@ -540,14 +699,34 @@ export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, 
   }));
   const attached = who.kind === "member" ? await d.attachedSessions(appId, who.member).catch(() => []) : [];
   const conversations = await d.store.appConversations(appId, who.member).catch(() => []);
+  //  #4489 — 붙은 세션마다 분기가 되나. 동의 · 배포는 한 번만 본다(세션은 많아야 50). 대화 파일이 그 자리에 있나(원격 stat)는 보지 않는다 —
+  //   목록을 열 때마다 세션 수만큼 나가는 비싼 확인이라 보낼 때(submitForkRun)만 한다. 주인의 동의는 주인마다 한 번.
+  const managed = await d.forkManaged().catch(() => false);
+  const consent: ForkConsent = app && who.kind === "member" ? await d.forkConsent(who.member, app).catch(() => "no_grant" as const) : "undeclared";
+  const ownerConsents = new Map<string, Promise<ForkConsent>>();
+  const ownerConsentOf = (owner: string): Promise<ForkConsent> => {
+    if (owner === who.member) return Promise.resolve(consent);
+    let p = ownerConsents.get(owner);
+    if (!p) { p = app ? d.forkConsent(owner, app).catch(() => "no_grant" as const) : Promise.resolve("undeclared" as const); ownerConsents.set(owner, p); }
+    return p;
+  };
+  const forkOf = async (sid: string): Promise<{ can_fork: boolean; fork_reason: string | null }> => {
+    const facts = await d.forkSession(sid, who.member, appId, { transcript: false }).catch(() => null);
+    if (!facts) return { can_fork: false, fork_reason: "세션을 확인하지 못했습니다" };
+    const ownerConsent: ForkConsent = facts.owner && (facts.owner === who.member || facts.participant) ? await ownerConsentOf(facts.owner) : "no_grant";
+    const no = forkRefusal({ requester: who, consent, ownerConsent, session: facts, managed });
+    return { can_fork: !no, fork_reason: no?.message ?? null };
+  };
+  const attachedOut = await Promise.all(attached.map(async (s) => ({ ...s, can_send: true, ...(await forkOf(s.session_id)) })));
   return {
     invoker: { member: who.member, kind: who.kind },
     account: await describe(def?.account ?? null, def?.from ?? null),
     default_model: settings.default_model ?? DEFAULT_MODEL,
     llm_proxy: !!key,
     jobs,
-    attached: attached.map((s) => ({ ...s, can_send: true, can_fork: false })),
+    attached: attachedOut,
     conversations: conversations.map((c) => ({ run_id: c.run_id, conversation_id: c.conversation_id, label: c.label, ended_at: c.ended_at })),
-    fork: false,
+    //  이 배포 · 이 앱이 분기를 쓸 수 있나(붙은 세션별 가부는 attached[].can_fork).
+    fork: managed && consent === "ok",
   };
 }

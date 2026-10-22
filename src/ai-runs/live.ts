@@ -142,8 +142,75 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     }),
     isAdmin,
     isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
+    forkSession: forkSessionFacts,
+    forkConsent: async (member, app) => {
+      //  선언(그 사람이 보는 판의 매니페스트) → 동의(활성 grant) → 동의가 그 표지를 덮나(옛 범위면 다시 동의). ★ 표지 이름 그대로만 본다 —
+      //   글롭(`app_*` · `*`) 선언은 동의 창에 «붙은 세션에서 실행» 줄을 세우지 않으니(web/v2/app-session.ts) 그 동의로 분기를 열지 않는다(격리 리뷰).
+      const { forkConsentOf } = await import("./fork.js");
+      const { getActiveGrant } = await import("../org/store/apps.js");
+      const { viewAppFor } = await import("../apps/app-view.js");
+      const view = await viewAppFor(app, { userId: member }).then((v) => v.app).catch(() => app);
+      const p = (view.manifest as { permissions?: { tools?: unknown } } | null)?.permissions;
+      const declared = Array.isArray(p?.tools) ? p.tools.map(String) : [];
+      const grant = await getActiveGrant(app.id, member);
+      return forkConsentOf(declared, grant ? { tools: Array.isArray(grant.tools) ? grant.tools.map(String) : [] } : null);
+    },
+    forkManaged: async () => (await import("../agent-jobs/launch.js")).jobContainersAvailable(),
+    blockConnectors: async () => (await import("../terminal/claude-ai-connectors-policy.js")).claudeAiConnectorsBlocked("claude"),
+    submitForkJob: async (j) => {
+      //  분기 작업 접수 — 그 세션 주인의 자리 · 구독(account_member = 주인) · 그 세션의 작업 폴더. 보낸 사람(requester)은 행에 따로 남는다.
+      const svc = await import("../agent-jobs/service.js");
+      const jobs = await (await import("../agent-jobs/live.js")).liveAgentJobDeps();
+      const plan = await import("../agent-jobs/plan.js");
+      const p = await jobs.policy();
+      const row = await svc.enqueueAgentJob({
+        requester: j.requester, accountKind: "subscription", accountMember: j.owner, appId: j.appId, projectId: j.projectId, cwd: j.cwd,
+        harness: "claude", model: j.spec.model, label: j.label, prompt: j.prompt, resumeConversation: null, resumeJobId: null,
+        timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p), homeless: false, fork: j.spec as unknown as Record<string, unknown>,
+      }, p, jobs);
+      return { id: row.id };
+    },
   };
   return cached;
+}
+
+/**
+ * #4489 분기 대상 세션의 사실 — 세션 복제(#4135 terminal/routes.ts fork 라우트)와 같은 출처를 쓴다: 실행 설정 행(org_session_state) ·
+ *  주인(행 · 없으면 tmux) · 입장(canAttach) · 대화 id(훅 보고 → 대화 파일 경로) · 그 대화 파일이 그 자리에 있나(resumeTranscriptCheck).
+ *  ⚠ 들어갈 수 없는 사람에게는 주인 · 들어갈 수 없음만 채운다 — 남의 세션의 폴더 · 하네스 · 대화 id 를 판정 재료로도 들고 다니지 않는다.
+ */
+async function forkSessionFacts(sid: string, member: string, appId: string, opts: { transcript?: boolean } = {}): Promise<import("./service.js").ForkSessionFacts> {
+  const none = { exists: false, owner: null, kind: null, harness: null, dir: null, nodeId: null, appAttached: false, participant: false, conversation: null,
+    projectId: null, flags: {}, incognito: false };
+  const { getSessionState } = await import("../sessions/session-state.js");
+  const { sessionCanEnter, sessionOwnerOf, listAttachedApps } = await import("../apps/session-apps.js");
+  const st = await getSessionState(sid).catch(() => undefined);
+  const owner = String(st?.owner ?? "").trim() || (await sessionOwnerOf(sid).catch(() => null));
+  if (!st || !owner) return { ...none, exists: !!owner, owner: owner ?? null };
+  const participant = owner === member || (await sessionCanEnter(sid, member).catch(() => false));
+  if (!participant) return { ...none, exists: true, owner };
+  const { normalizeSessionKind } = await import("../sessions/session-kind.js");
+  const { convIdFromTranscriptPath } = await import("../sessions/conv-mapping.js");
+  const { nodeOfSession } = await import("../node/registry.js");
+  const { getNode } = await import("../node/store.js");
+  //  사람 PC 노드인가 — 가르는 자는 노드 종류(org_node.kind): worker(세션호스트 — 소유자 홈을 우리와 같이 본다)는 매니지드 자리, member 는 사람 PC
+  //   (resumeTranscriptCheck 머리말과 같은 자). 노드 좌표가 없으면 중앙(컨테이너) 세션이다.
+  const rawNode = nodeOfSession(sid) || String(st.node_id ?? "").trim();
+  const nodeKind = rawNode ? await getNode(rawNode).then((n) => n?.kind ?? null).catch(() => null) : null;
+  const nodeId = rawNode && nodeKind !== "worker" ? rawNode : null;
+  const conversation = st.claude_session_id || convIdFromTranscriptPath(st.harness, st.transcript_path) || null;
+  const appAttached = (await listAttachedApps(sid).catch(() => [])).some((a) => a.app_id === appId);
+  let convOk: string | null = conversation;
+  if (conversation && !nodeId && opts.transcript !== false) {
+    //  그 대화 파일이 그 자리에 실제로 있나 — «없다» 는 확답일 때만 대화 없음으로 본다(«못 봤다» 는 그대로 시도한다 · 복원과 같은 규율).
+    const { resumeTranscriptCheck } = await import("../terminal/routes.js");
+    const check = await resumeTranscriptCheck(sid, st, conversation, null).catch(() => "unknown" as const);
+    if (check === "absent") convOk = null;
+  }
+  return {
+    exists: true, owner, kind: normalizeSessionKind(st.kind), harness: st.harness || "claude", dir: st.dir || null, nodeId, appAttached, participant,
+    conversation: convOk, projectId: st.project_id ? Number(st.project_id) : null, flags: st.flags ?? {}, incognito: !!st.incognito,
+  };
 }
 
 /** 로그인 판정은 비싸다(원격 실행 2번) — 60초 기억(설계 §12 ④ «짧게 기억»). 모름(null)도 기억한다. */

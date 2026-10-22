@@ -15,7 +15,7 @@ import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant, getAppVersionHead, type OrgApp } from "../org/store/apps.js";
 import { canSeeApp, isEmptyDraftApp, type Viewer } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
-import { appIconSpecOf } from "../apps/manifest.js";   // #4769 앱 아이콘 선언
+import { AI_FORK_TOOL, appIconSpecOf } from "../apps/manifest.js";   // #4769 앱 아이콘 선언 · #4489 붙은 세션에서 실행 표지
 import { serverDeclOf } from "../apps/app-server-config.js";   // #4485 후속 — 서버가 화면을 만드는 앱도 «화면 있음»
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
@@ -24,6 +24,7 @@ import {
 } from "../apps/session-apps.js";
 import { syncSessionAppFolders, APP_FOLDER_REL, type FolderSync } from "../apps/session-app-folders.js";   // #4684 — 앱 폴더
 import { sessionEnsureConfigured } from "../terminal/session-tmux.js";
+import { ackSessionNotices, unreadSessionNotices } from "../ai-runs/store.js";   // #4489 — 세션의 안 읽은 알림(앱 분기 결과)
 
 const SID = z.string().max(128).optional().describe("대상 세션 id — 보통 생략한다(기본 = 이 요청을 보낸 세션 자신)");
 const APP = z.string().min(1).max(128).describe("앱 id(org_apps 의 id)");
@@ -40,6 +41,7 @@ const me = (u: LivelyUser): string => {
 };
 
 interface ManifestView {
+  permissions?: { tools?: unknown };
   ui?: { pages?: Array<{ key?: string; title?: string }> };
   data?: { tables?: Array<{ name?: string; columns?: unknown[] }> };
   runtime?: unknown;
@@ -82,6 +84,8 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy
     //  #4684 — 매니지드 세션에서 이 앱의 폴더가 보이는 자리(작업 폴더 기준). 실제로 붙었는지는 세션 안에서 본다(훅이 있는지 확인하고
     //   알린다 — 이 기능 전에 뜬 세션·작업 폴더에 링크가 있는 세션엔 없다). 셀프호스트엔 없다(null).
     folder: opts.folders ? `${APP_FOLDER_REL}/${row.app_id}` : null,
+    //  #4489 — 이 앱이 «붙은 세션에서 실행»(분기)을 선언했나 — 앱 칸 메뉴가 «이 세션 대화로 돌린 실행» 줄을 그린다.
+    ai_fork: Array.isArray(m.permissions?.tools) && (m.permissions.tools as unknown[]).includes(AI_FORK_TOOL),
   };
 }
 
@@ -130,6 +134,9 @@ const HINT = "붙어 있는 동안 이 세션에서 store_query·store_insert·s
   + "사람도 세션 오른쪽에서 같은 앱 화면을 보고 있고, 쓴 내용은 그 화면에 바로 반영된다. "
   + "folder 가 있으면 그 앱의 파일 폴더가 작업 폴더 아래 그 자리에 보인다(읽고 쓰기 — 워크스페이스의 그 앱 폴더 원본이고, 이 세션에 들어온 사람 모두가 본다).";
 
+/** 한 번에 내주는 안 읽은 알림 수(#4489) — 훅은 이 가운데 일부만 싣고 나머지는 다음 턴에 받는다. */
+const NOTICES_PAGE = 20;
+
 const sessionApps: Capability = {
   name: "session_apps",
   title: "세션에 붙은 앱",
@@ -137,16 +144,48 @@ const sessionApps: Capability = {
     "이 세션에 지금 붙어 있는 앱(세션 오른쪽 앱 칸) 목록 — 각 앱의 제목·화면 유무·데이터 테이블(이름·컬럼). "
     + "붙은 앱의 테이블은 store_* 로 읽고 쓴다(붙은 앱이 하나면 app_id 생략 가능). session_id 생략 = 이 세션 자신.",
   scope: null,
-  input: { session_id: SID },
+  input: {
+    session_id: SID,
+    notices: z.boolean().optional().describe("true 면 이 세션의 안 읽은 알림(앱이 이 세션 대화로 돌린 분기의 결과 메모)도 싣는다 — 다음 턴 훅이 쓴다"),
+  },
   expose: {
     mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/terminal/sessions/:id/apps"], parse: (req) => ({ session_id: String(req.params?.id ?? "") }) }],
+    rest: [{ method: "GET", paths: ["/api/ui/terminal/sessions/:id/apps"],
+      parse: (req) => ({ session_id: String(req.params?.id ?? ""), ...(String((req.query as Record<string, unknown> | undefined)?.notices ?? "") === "1" ? { notices: true } : {}) }) }],
   },
-  handler: async (input: { session_id?: string }, user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: { session_id?: string; notices?: boolean }, user: LivelyUser, ctx?: CapabilityCtx) => {
     const sid = sidOf(input, ctx);
     if (!(await canAttach(sid, me(user)))) throw new HttpError(403, "이 세션에 들어갈 수 있는 사람만 붙은 앱을 볼 수 있습니다");
     const apps = await describeAll(await listAttachedApps(sid), viewerOf(user));
-    return { session_id: sid, apps, ...(apps.length ? { hint: HINT } : {}) };
+    //  #4489 — 알림은 그 세션 대화에서 나온 글이다(분기 AI 가 그 대화를 읽고 쓴 메모) — 그 세션에 들어갈 수 있는 사람이면 대화도 본다.
+    const notices = input.notices
+      ? (await unreadSessionNotices(sid, NOTICES_PAGE)).map((n) => ({ id: n.id, app_id: n.app_id, run_id: n.run_id, requester: n.requester, text: n.text, created_at: n.created_at }))
+      : undefined;
+    return { session_id: sid, apps, ...(apps.length ? { hint: HINT } : {}), ...(notices ? { notices } : {}) };
+  },
+};
+
+/**
+ * #4489 «이 알림들을 AI 에게 전했다» — 다음 턴 훅이 알림을 AI 입력에 붙인 **뒤에** 부른다(at-least-once: 붙이고 나서 못 부르면 다음 턴에
+ *  같은 알림이 다시 온다 — 훅이 깃발 파일로 한 번 더 거른다). ids 의 안 읽은 알림을 읽음으로 — 몇 번 불러도 같다.
+ */
+const sessionNoticesAck: Capability = {
+  name: "session_notices_ack",
+  title: "세션 알림 전달 표시",
+  description: "이 세션의 안 읽은 알림 중 ids 를 «AI 에게 전함» 으로 표시한다(다음 턴 훅 전용). 그 세션에 들어갈 수 있는 사람만.",
+  scope: null,
+  input: { session_id: SID, ids: z.array(z.number().int().positive()).min(1).max(NOTICES_PAGE).describe("AI 입력에 붙인 알림 번호들") },
+  expose: {
+    mcp: false,
+    rest: [{ method: "POST", paths: ["/api/ui/terminal/sessions/:id/notices/ack"],
+      parse: (req) => ({ session_id: String(req.params?.id ?? ""), ids: ((req.body ?? {}) as Record<string, unknown>).ids }) }],
+  },
+  handler: async (input: { session_id?: string; ids: number[] }, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const sid = sidOf(input, ctx);
+    if (!(await canAttach(sid, me(user)))) throw new HttpError(403, "이 세션에 들어갈 수 있는 사람만 알림을 전함으로 표시할 수 있습니다");
+    const ids = [...new Set((Array.isArray(input.ids) ? input.ids : []).map(Number))].filter((n) => Number.isSafeInteger(n) && n > 0);
+    if (!ids.length) throw new HttpError(400, "ids 는 양의 정수 목록이어야 합니다");
+    return { session_id: sid, acked: await ackSessionNotices(sid, ids) };
   },
 };
 
@@ -214,4 +253,4 @@ const sessionAppDetach: Capability = {
   },
 };
 
-export const sessionAppsCapabilities: Capability[] = [sessionApps, sessionAppAttach, sessionAppDetach];
+export const sessionAppsCapabilities: Capability[] = [sessionApps, sessionAppAttach, sessionAppDetach, sessionNoticesAck];

@@ -3,7 +3,10 @@
 //
 // 왜 이 계층인가: 이 설계의 약속 — 한 번만 끝남 · 프록시 토큰은 열린 실행에만 · 사람당 동시 셈은 열린 실행만 · 하루 토큰은 오늘 · 그 앱 · 네 종류 합 ·
 //  재시도는 열린 실행만 — 이 전부 **SQL 한 문장의 조건**이다. 가짜 저장소(service.test)는 그 조건을 흉내 낼 뿐이라 조건을 지워도 초록이다.
-//  T1~T11.
+//  T1~T11. #4489 분기(T12~T16): «그 세션 분기만 거르기» · «재요청 표시는 열린 실행에 한 번» · «메모는 끝낼 때 한 번» ·
+//  «안 읽은 알림은 그 세션 것만 · 먼저 온 것부터 · 전함 표시는 번호 하나하나(다른 세션 · 이미 읽은 것은 안 셈)» · 작업 행의 분기 좌표 왕복 ·
+//  «끝맺기와 알림은 한 문장(T17)» · «분기 실행은 이어받을 대화가 아니다(T18)».
+import { isDeepStrictEqual } from "node:util";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 if (!process.env.ITEMS_DATABASE_URL) { console.error("ITEMS_DATABASE_URL 이 필요하다(실 Postgres)"); process.exit(2); }
 const { itemsPool } = await import(`${DIST}/db/client.js`);
@@ -17,7 +20,9 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 
 const APP = "__airun_pg__";
 const REQ = "__airun_req__";
+const SID = "__airun_pg_sess";
 const cleanup = async () => {
+  await itemsPool.query(`DELETE FROM org_session_notice WHERE session_id LIKE $1`, [`${SID}%`]);
   await itemsPool.query(`DELETE FROM org_app_llm_call WHERE app_id LIKE $1`, [`${APP}%`]);
   await itemsPool.query(`DELETE FROM org_app_ai_run WHERE app_id LIKE $1`, [`${APP}%`]);
   await itemsPool.query(`DELETE FROM org_agent_job WHERE requester LIKE $1`, [`${REQ}%`]);
@@ -130,6 +135,78 @@ try {
   const pol = await st.aiRunPolicyRow();
   const acc = await st.aiAccountRow();
   chk("T11 설정 칸 왕복", pol.max_inflight === 7 && acc.default.member === "alice" && acc.apps.crm.jobs.s.kind === "api_key", JSON.stringify([pol, acc]));
+
+  // ── T12 분기 칸 — 행에 그 세션 · 목록은 fork_session 으로 그 세션 분기만 ──
+  const fk1 = await st.insertAiRun(base({ executor: "job", status: "queued", kind: "agent", accountKind: "subscription", accountMember: `${REQ}a`, forkSession: `${SID}A` }));
+  const fk2 = await st.insertAiRun(base({ executor: "job", status: "queued", kind: "agent", accountKind: "subscription", accountMember: `${REQ}a`, forkSession: `${SID}B` }));
+  const onlyA = await st.listAiRuns({ appId: APP, requester: null, status: null, limit: 50, forkSession: `${SID}A` });
+  const all = await st.listAiRuns({ appId: APP, requester: null, status: null, limit: 50, forkSession: null });
+  chk("T12 분기 칸 — 행에 세션 · fork_session 으로 그 세션 분기만 · 거르지 않으면 다", fk1.fork_session === `${SID}A` && onlyA.length === 1 && onlyA[0].id === fk1.id && onlyA[0].fork_session === `${SID}A`
+    && all.some((r) => r.id === fk2.id) && all.some((r) => r.id === p1.id), JSON.stringify([fk1.fork_session, onlyA.map((r) => r.id), all.length]));
+
+  // ── T13 재요청 표시 — 열린 실행에 한 번만 · 끝난 실행엔 안 된다 ──
+  const m1 = await st.markAiRunRetried(fk1.id);
+  const m2 = await st.markAiRunRetried(fk1.id);
+  const m3 = await st.markAiRunRetried(j2.id);   // 끝난 행(T3 에서 failed · retries 0 — 횟수 조건이 아니라 상태 조건이 막아야 한다)
+  const r13 = await row(fk1.id);
+  const r13b = await row(j2.id);
+  chk("T13 재요청 표시 — 열린 실행에 한 번(retries 1) · 두 번째 false · 끝난 행(retries 0) false", m1 === true && m2 === false && m3 === false && r13.retries === 1 && r13b.retries === 0,
+    JSON.stringify([m1, m2, m3, r13.retries, r13b.retries]));
+
+  // ── T14 메모는 끝낼 때 — 두 번째 끝내기가 덮지 못한다 ──
+  const e1 = await st.finishAiRun(fk1.id, { status: "done", result: { text: "r" }, error: null, sessionNote: "앱이 묻고 답함" });
+  const e2 = await st.finishAiRun(fk1.id, { status: "failed", result: null, error: "늦음", sessionNote: "덮어쓰기" });
+  const r14 = await row(fk1.id);
+  chk("T14 메모 — 끝낼 때 적히고 두 번째 끝내기는 null · 그대로", e1?.session_note === "앱이 묻고 답함" && e2 === null && r14.session_note === "앱이 묻고 답함", JSON.stringify([e1?.session_note, e2, r14.session_note]));
+
+  // ── T15 세션 알림 — 그 세션 것만 · 먼저 온 것부터 · 전함은 번호 하나하나 ──
+  const putNotice = async (sid, runId, text) => Number((await itemsPool.query(
+    `INSERT INTO org_session_notice(session_id, kind, app_id, run_id, requester, text) VALUES($1,'ai_run',$2,$3,$4,$5) RETURNING id`, [sid, APP, runId, `${REQ}a`, text])).rows[0].id);
+  const nA1 = await putNotice(`${SID}A`, fk1.id, "첫 메모");
+  const nB1 = await putNotice(`${SID}B`, fk2.id, "B 메모");
+  const nA2 = await putNotice(`${SID}A`, null, "둘째 메모");
+  const nA3 = await putNotice(`${SID}A`, null, "셋째 메모");
+  const u0 = await st.unreadSessionNotices(`${SID}A`, 20);
+  const uLim = await st.unreadSessionNotices(`${SID}A`, 2);
+  const a1 = await st.ackSessionNotices(`${SID}A`, [nA1, nA3, nB1]);   // B 의 번호는 A 에서 읽음이 되지 않는다
+  const a2 = await st.ackSessionNotices(`${SID}A`, [nA1, nA3]);        // 이미 읽음 — 0
+  const a3 = await st.ackSessionNotices(`${SID}A`, []);
+  const u1 = await st.unreadSessionNotices(`${SID}A`, 20);
+  const uB = await st.unreadSessionNotices(`${SID}B`, 20);
+  chk("T15 알림 — 그 세션 것만 · 번호 순 · 상한 · 전함은 그 세션의 그 번호만(이미 읽은 것 · 다른 세션은 안 셈) · 빈 목록 0",
+    u0.map((n) => n.id).join() === [nA1, nA2, nA3].join() && u0[0].text === "첫 메모" && u0[0].run_id === fk1.id && u0[0].kind === "ai_run"
+      && uLim.length === 2 && a1 === 2 && a2 === 0 && a3 === 0 && u1.map((n) => n.id).join() === String(nA2) && uB.map((n) => n.id).join() === String(nB1),
+    JSON.stringify({ u0: u0.map((n) => n.id), uLim: uLim.length, a1, a2, a3, u1: u1.map((n) => n.id), uB: uB.map((n) => n.id) }));
+
+  // ── T16 작업 행의 분기 좌표 — 적고 그대로 읽는다(없으면 null) ──
+  const spec = { session: `${SID}A`, conversation: "11111111-2222-3333-4444-555555555555", harness: "claude", model: null, effort: "high", auto_approve: false, block_connectors: true, app_folder: `.lively/apps/${APP}` };
+  const fj = await jobs.insertAgentJob({ requester: `${REQ}a`, accountKind: "subscription", accountMember: `${REQ}a`, appId: APP, projectId: null, cwd: "/work/proj", harness: "claude",
+    model: null, label: null, prompt: "p", resumeConversation: null, resumeJobId: null, timeoutSec: 60, fork: spec }, { max_queued: 500, max_running: 20 });
+  const fjRead = await jobs.getAgentJob(fj.row.id);
+  chk("T16 분기 좌표 왕복 · 보통 작업은 null", isDeepStrictEqual(fj.row.fork, spec) && isDeepStrictEqual(fjRead.fork, spec) && jr.row.fork === null,
+    JSON.stringify([fj.row.fork, fjRead?.fork, jr.row.fork]));
+
+  // ── T17 끝맺기와 알림은 한 문장 — 끝맺기가 된 때만 한 줄(run_id = 그 실행) · 이미 끝난 실행엔 안 생긴다 · notice 가 없으면 안 생긴다 ──
+  const noticesOf = async (sid) => (await itemsPool.query(`SELECT run_id, text FROM org_session_notice WHERE session_id=$1 ORDER BY id`, [sid])).rows;
+  const fk3 = await st.insertAiRun(base({ executor: "job", status: "queued", kind: "agent", forkSession: `${SID}C` }));
+  const g1 = await st.finishAiRun(fk3.id, { status: "done", result: { text: "r" }, error: null, sessionNote: "메모", notice: { sessionId: `${SID}C`, appId: APP, requester: `${REQ}a`, text: "끝 알림" } });
+  const g2 = await st.finishAiRun(fk3.id, { status: "failed", result: null, error: "늦음", notice: { sessionId: `${SID}C`, appId: APP, requester: `${REQ}a`, text: "늦은 알림" } });
+  const fk4 = await st.insertAiRun(base({ executor: "job", status: "queued", kind: "agent", forkSession: `${SID}C` }));
+  await st.finishAiRun(fk4.id, { status: "canceled", result: null, error: "취소", notice: null });
+  const nC = await noticesOf(`${SID}C`);
+  chk("T17 끝맺기와 알림 한 문장 — 끝낸 때만 한 줄(run_id 그 실행) · 이미 끝난 실행 · notice 없음은 0",
+    g1?.status === "done" && g2 === null && nC.length === 1 && Number(nC[0].run_id) === fk3.id && nC[0].text === "끝 알림", JSON.stringify({ g1: g1?.status, g2, nC }));
+
+  // ── T18 분기 실행은 «이어받을 대화» 목록에 안 나온다(분기 대화는 저장되지 않는다) ──
+  const fj2 = await jobs.insertAgentJob({ requester: `${REQ}a`, accountKind: "subscription", accountMember: `${REQ}a`, appId: APP, projectId: null, cwd: "/work/proj", harness: "claude",
+    model: null, label: null, prompt: "p", resumeConversation: null, resumeJobId: null, timeoutSec: 60, fork: spec }, { max_queued: 500, max_running: 20 });
+  const fk5 = await st.insertAiRun(base({ executor: "job", status: "queued", kind: "agent", forkSession: `${SID}A` }));
+  await st.setAiRunJob(fk5.id, fj2.row.id);
+  await itemsPool.query(`UPDATE org_agent_job SET conversation_id='fork-conv-x' WHERE id=$1`, [fj2.row.id]);
+  await st.finishAiRun(fk5.id, { status: "done", result: { text: "t" }, error: null });
+  const convs = await st.appConversations(APP, `${REQ}a`);
+  chk("T18 분기 실행은 이어받을 대화 목록에 없다 · 보통 실행(T10)은 그대로", !convs.some((c) => c.run_id === fk5.id) && convs.some((c) => c.conversation_id === "conv-x"),
+    JSON.stringify(convs.map((c) => [c.run_id, c.conversation_id])));
 } catch (e) {
   bad("예외", String((e && e.stack) || e));
 } finally {

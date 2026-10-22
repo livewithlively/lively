@@ -141,6 +141,9 @@ const storeQuery: Capability = {
   scope: null,
   input: { table: z.string(), match: z.record(z.unknown()).optional(), limit: z.number().optional(), app_id: APP_ID },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/query"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, limit: b.limit, app_id: appIdOf(b) }; } }] },
+  //  #4489 — 조회다(SELECT 하나). REST 가 POST(본문으로 match 를 받는다)라 «쓰기» 로 파생되던 것을 바로잡는다 — 읽기 전용 세션(#1007)과
+  //   세션 분기 실행(읽기 전용 모드로 돈다)이 앱 표를 읽을 수 있어야 한다. 쓰기(store_insert · update · delete · sql)는 그대로 쓰기다.
+  mutates: false,
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const appId = await resolveStoreApp(user, input, ctx, "store_query");
     const table = String(input.table ?? "");

@@ -5169,7 +5169,7 @@
   "name": "store_query",
   "scope": null,
   "mcp": true,
-  "mutates": true,
+  "mutates": false,
   "rest": [
    "POST /api/ui/store/:table/query"
   ],
@@ -5253,7 +5253,7 @@
   "rest": [
    "GET /api/ui/terminal/sessions/:id/apps"
   ],
-  "input_hash": "fdcb2d507c187945"
+  "input_hash": "cf8f0e2f6d302aac"
  },
  {
   "name": "session_app_attach",
@@ -5274,6 +5274,16 @@
    "POST /api/ui/terminal/sessions/:id/apps/detach"
   ],
   "input_hash": "915c12efe88f26fd"
+ },
+ {
+  "name": "session_notices_ack",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/notices/ack"
+  ],
+  "input_hash": "989345acd0a0b85b"
  },
  {
   "name": "org_app_project_files",
@@ -5483,7 +5493,7 @@
   "rest": [
    "POST /api/ui/ai-runs"
   ],
-  "input_hash": "8143941d8f503d5f"
+  "input_hash": "19cd3514980e7330"
  },
  {
   "name": "app_ai_run_get",
@@ -5503,7 +5513,7 @@
   "rest": [
    "GET /api/ui/ai-runs"
   ],
-  "input_hash": "bb0f2ea9b3caab27"
+  "input_hash": "f6f1787058b71d39"
  },
  {
   "name": "app_ai_run_cancel",

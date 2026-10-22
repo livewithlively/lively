@@ -25,6 +25,8 @@ export interface AiRunRow {
   error: string | null;
   session_note: string | null;
   proxy_token_hash: string | null;
+  /** #4489 분기 실행이면 대화를 이어받은 사람 세션 id(없으면 새 대화). */
+  fork_session?: string | null;
   retries: number;
   input_tokens: number | null;
   output_tokens: number | null;
@@ -35,7 +37,7 @@ export interface AiRunRow {
 }
 
 const COLS = `id, status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, job_id, model, label, prompt,
-  system_prompt, schema, result, error, session_note, proxy_token_hash, retries, input_tokens, output_tokens, created_at, started_at, ended_at, updated_at`;
+  system_prompt, schema, result, error, session_note, proxy_token_hash, fork_session, retries, input_tokens, output_tokens, created_at, started_at, ended_at, updated_at`;
 
 const norm = (r: Record<string, unknown> | undefined): AiRunRow | null =>
   r ? ({ ...r, id: Number(r.id), job_id: r.job_id == null ? null : Number(r.job_id) } as unknown as AiRunRow) : null;
@@ -46,15 +48,17 @@ export interface NewAiRun {
   model: string | null; label: string | null; prompt: string; systemPrompt: string | null; schema: Record<string, unknown> | null;
   /** 프록시 실행은 곧바로 running(기다리는 줄이 없다) · 작업 실행은 queued(작업 행이 자리를 받으면 running). */
   status: "queued" | "running";
+  /** #4489 분기 실행의 대상 세션(없으면 새 대화). */
+  forkSession?: string | null;
 }
 
 export async function insertAiRun(n: NewAiRun): Promise<AiRunRow> {
   const r = await itemsPool.query(
     `INSERT INTO org_app_ai_run(status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, model, label, prompt,
-                                system_prompt, schema, started_at)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, CASE WHEN $1='running' THEN now() ELSE NULL END) RETURNING ${COLS}`,
+                                system_prompt, schema, fork_session, started_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, CASE WHEN $1='running' THEN now() ELSE NULL END) RETURNING ${COLS}`,
     [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
-      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null]);
+      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, n.forkSession ?? null]);
   return norm(r.rows[0])!;
 }
 
@@ -88,6 +92,15 @@ export async function markAiRunRunning(id: number): Promise<void> {
   await itemsPool.query(`UPDATE org_app_ai_run SET status='running', started_at=COALESCE(started_at, now()), updated_at=now() WHERE id=$1 AND status='queued'`, [id]);
 }
 
+/**
+ * #4489 분기 — «형식에 맞게 다시» 를 같은 작업(같은 프로세스)에서 한 번 쓴다. 아직 안 썼고 열린 실행일 때만 센다(두 번째 부름은 false).
+ */
+export async function markAiRunRetried(id: number): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_app_ai_run SET retries=retries+1, updated_at=now() WHERE id=$1 AND retries=0 AND status IN ('queued','running') RETURNING id`, [id]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 /** «형식에 맞게 다시» — 재시도 작업 행으로 갈아 끼우고 횟수를 센다(열린 실행만). */
 export async function retryAiRun(id: number, newJobId: number | null): Promise<boolean> {
   const r = await itemsPool.query(
@@ -103,14 +116,28 @@ export interface FinishAiRun {
   outputTokens?: number | null;
   /** 프록시 실행의 «형식에 맞게 다시» 횟수 — 작업 실행은 retryAiRun 이 센다. */
   retries?: number | null;
+  /** #4489 분기 — 그 세션에 남길 요지(분기 AI 가 쓴 session_note). 없으면 그대로. */
+  sessionNote?: string | null;
+  /** #4489 분기 — 끝맺기와 **같은 문장에서** 그 세션에 쌓을 안 읽은 알림(끝맺기가 된 때만 · 실행 한 건에 하나). */
+  notice?: { sessionId: string; appId: string | null; requester: string | null; text: string } | null;
 }
-/** 한 번만 끝난다 — 열린 실행일 때만. 끝낸 행을 돌려준다(이미 끝났으면 null). */
+/**
+ * 한 번만 끝난다 — 열린 실행일 때만. 끝낸 행을 돌려준다(이미 끝났으면 null).
+ *  notice 가 있으면 끝맺는 UPDATE 와 알림 INSERT 를 한 문장(CTE)으로 — 끝맺기가 된 쪽만 알림이 생기고, 둘 사이에 프로세스가 죽어 알림만 빠지는 일이 없다.
+ */
 export async function finishAiRun(id: number, f: FinishAiRun): Promise<AiRunRow | null> {
+  const n = f.notice ?? null;
   const r = await itemsPool.query(
-    `UPDATE org_app_ai_run SET status=$2, result=$3::jsonb, error=$4, input_tokens=COALESCE($5, input_tokens), output_tokens=COALESCE($6, output_tokens),
-            retries=COALESCE($7, retries), ended_at=now(), updated_at=now()
-      WHERE id=$1 AND status IN ('queued','running') RETURNING ${COLS}`,
-    [id, f.status, f.result ? JSON.stringify(f.result) : null, f.error, f.inputTokens ?? null, f.outputTokens ?? null, f.retries ?? null]);
+    `WITH f AS (
+       UPDATE org_app_ai_run SET status=$2, result=$3::jsonb, error=$4, input_tokens=COALESCE($5, input_tokens), output_tokens=COALESCE($6, output_tokens),
+              retries=COALESCE($7, retries), session_note=COALESCE($8, session_note), ended_at=now(), updated_at=now()
+        WHERE id=$1 AND status IN ('queued','running') RETURNING ${COLS}),
+     n AS (
+       INSERT INTO org_session_notice(session_id, kind, app_id, run_id, requester, text)
+       SELECT $9, 'ai_run', $10, f.id, $11, $12 FROM f WHERE $9::text IS NOT NULL RETURNING id)
+     SELECT * FROM f`,
+    [id, f.status, f.result ? JSON.stringify(f.result) : null, f.error, f.inputTokens ?? null, f.outputTokens ?? null, f.retries ?? null, f.sessionNote ?? null,
+      n?.sessionId ?? null, n?.appId ?? null, n?.requester ?? null, n?.text ?? null]);
   return norm(r.rows[0]);
 }
 
@@ -134,18 +161,19 @@ export async function openRunCountOf(requester: string): Promise<number> {
   return Number(r.rows[0]?.n ?? 0);
 }
 
-export interface AiRunListFilter { appId: string | null; requester: string | null; status: string | null; limit: number }
+export interface AiRunListFilter { appId: string | null; requester: string | null; status: string | null; limit: number; forkSession?: string | null }
 export type AiRunSummaryRow = Omit<AiRunRow, "prompt" | "result" | "schema" | "system_prompt" | "proxy_token_hash"> & { prompt_preview: string; has_result: boolean };
 export async function listAiRuns(f: AiRunListFilter): Promise<AiRunSummaryRow[]> {
   const r = await itemsPool.query(
     `SELECT id, status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, job_id, model, label,
-            left(regexp_replace(prompt, '\\s+', ' ', 'g'), 200) AS prompt_preview, (result IS NOT NULL) AS has_result, error, session_note, retries,
+            left(regexp_replace(prompt, '\\s+', ' ', 'g'), 200) AS prompt_preview, (result IS NOT NULL) AS has_result, error, session_note, fork_session, retries,
             input_tokens, output_tokens, created_at, started_at, ended_at, updated_at
        FROM org_app_ai_run
       WHERE ($1::text IS NULL OR app_id=$1)
         AND ($2::text IS NULL OR requester=$2 OR (account_kind='subscription' AND account_member=$2))  -- 내 실행 = 보낸 것 + 내 구독으로 도는 것(service.isOwnRun 과 한 뜻)
         AND ($3::text IS NULL OR status=$3)
-      ORDER BY id DESC LIMIT $4`, [f.appId, f.requester, f.status, f.limit]);
+        AND ($5::text IS NULL OR fork_session=$5)
+      ORDER BY id DESC LIMIT $4`, [f.appId, f.requester, f.status, f.limit, f.forkSession ?? null]);
   return r.rows.map((x) => ({ ...x, id: Number(x.id), job_id: x.job_id == null ? null : Number(x.job_id) } as unknown as AiRunSummaryRow));
 }
 
@@ -154,9 +182,29 @@ export async function appConversations(appId: string, requester: string, limit =
   const r = await itemsPool.query(
     `SELECT r.id AS run_id, j.id AS job_id, j.conversation_id, r.label, r.ended_at
        FROM org_app_ai_run r JOIN org_agent_job j ON j.id = r.job_id
-      WHERE r.app_id=$1 AND r.requester=$2 AND r.status='done' AND j.conversation_id IS NOT NULL
+      WHERE r.app_id=$1 AND r.requester=$2 AND r.status='done' AND j.conversation_id IS NOT NULL AND r.fork_session IS NULL
       ORDER BY r.id DESC LIMIT $3`, [appId, requester, limit]);
   return r.rows.map((x) => ({ run_id: Number(x.run_id), job_id: Number(x.job_id), conversation_id: String(x.conversation_id), label: (x.label as string | null) ?? null, ended_at: (x.ended_at as Date | null) ?? null }));
+}
+
+// ── #4489 세션의 안 읽은 알림(org_session_notice) ──
+export interface SessionNoticeRow { id: number; session_id: string; kind: string; app_id: string | null; run_id: number | null; requester: string | null; text: string; created_at: Date }
+/** 그 세션의 안 읽은 알림 — 먼저 온 것부터 limit 건. */
+export async function unreadSessionNotices(sessionId: string, limit = 20): Promise<SessionNoticeRow[]> {
+  const r = await itemsPool.query(
+    `SELECT id, session_id, kind, app_id, run_id, requester, text, created_at FROM org_session_notice
+      WHERE session_id=$1 AND delivered_at IS NULL ORDER BY id LIMIT $2`, [sessionId, limit]);
+  return r.rows.map((x) => ({ ...x, id: Number(x.id), run_id: x.run_id == null ? null : Number(x.run_id) } as unknown as SessionNoticeRow));
+}
+/**
+ * «이것들을 전했다» — 그 세션의 안 읽은 알림 중 ids 를 읽음으로. 돌려주는 것: 이번에 읽음이 된 수(이미 읽은 것은 세지 않는다 — 몇 번 불러도 같다).
+ *  번호 «까지» 가 아니라 번호를 하나하나 받는다 — 먼저 번호를 받은 알림이 늦게 들어오면(동시에 끝난 두 실행) «까지» 는 못 본 알림을 읽음으로 만든다.
+ */
+export async function ackSessionNotices(sessionId: string, ids: number[]): Promise<number> {
+  if (!ids.length) return 0;
+  const r = await itemsPool.query(
+    `UPDATE org_session_notice SET delivered_at=now() WHERE session_id=$1 AND id = ANY($2::bigint[]) AND delivered_at IS NULL`, [sessionId, ids]);
+  return r.rowCount ?? 0;
 }
 
 // ── 프록시 계측 ──

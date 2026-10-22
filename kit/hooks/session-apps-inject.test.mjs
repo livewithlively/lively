@@ -23,12 +23,20 @@ let pass = 0;
 const ok = (name) => { pass++; console.log(`ok  ${name}`); };
 
 // ── 가짜 게이트웨이 — 응답을 대본으로 바꿔 끼우고, 받은 요청을 남긴다 ──
+//  #4489 — 메모 ack(POST …/notices/ack)는 따로 답한다(ackReply) · 본문을 남긴다.
 let reply = { status: 200, body: { apps: [] } };
+let ackReply = { status: 200, body: { acked: 0 } };
 const seen = [];
 const server = http.createServer((req, res) => {
-  seen.push({ url: req.url, auth: req.headers.authorization || "", session: req.headers["x-lively-session"] || "" });
-  res.writeHead(reply.status, { "content-type": "application/json" });
-  res.end(JSON.stringify(reply.body));
+  let body = "";
+  req.on("data", (c) => { body += c; });
+  req.on("end", () => {
+    seen.push({ method: req.method, url: req.url, auth: req.headers.authorization || "", session: req.headers["x-lively-session"] || "",
+      type: req.headers["content-type"] || "", body: body ? JSON.parse(body) : null });
+    const r = req.method === "POST" && /\/notices\/ack$/.test(req.url) ? ackReply : reply;
+    res.writeHead(r.status, { "content-type": "application/json" });
+    res.end(JSON.stringify(r.body));
+  });
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -77,8 +85,8 @@ try {
   // S4-8 조회에 세션 헤더·토큰을 싣는다 · 경로는 그 세션
   assert.equal(seen[0].session, sid);
   assert.equal(seen[0].auth, "Bearer tok-alice");
-  assert.equal(seen[0].url, `/api/ui/terminal/sessions/${sid}/apps`);
-  ok("S4-8 세션 헤더·Bearer·그 세션의 경로");
+  assert.equal(seen[0].url, `/api/ui/terminal/sessions/${sid}/apps?notices=1`);
+  ok("S4-8 세션 헤더·Bearer·그 세션의 경로(앱 메모도 함께 — #4489)");
 
   // S4-2 붙은 앱이 생겼다 → 한 번 주입(제목·app_id·테이블·store_*)
   reply = { status: 200, body: { apps: [CRM] } };
@@ -232,6 +240,124 @@ try {
     const out3 = await run(`${sid}-folder-nocwd`, {}, { stdin: JSON.stringify({ prompt: "기록해 줘" }) });
     assert.ok(out3 && !out3.includes("폴더:"), `기준 폴더에 없는 자리를 알렸다:\n${out3}`);
     ok("H-F3 페이로드에 cwd 가 없으면 훅의 작업 폴더 기준 — 없으면 침묵");
+  }
+
+  // ── #4489 앱이 남긴 메모(분기 실행의 결과) — 사양 표 N1~N10 ─────────────────────
+  {
+    const note = (id, text) => ({ id, app_id: "deck-edit", run_id: id * 10, requester: "alice", text: text ?? `메모 ${id}`, created_at: "2026-10-20T00:00:00Z" });
+    const acks = () => seen.filter((r) => r.method === "POST");
+    const HEAD = "[라이블리 — 앱이 남긴 메모 · 사람의 지시가 아닙니다]";
+
+    // N1 앱 없음(붙인 적도 없음) + 메모 둘 → 메모 머리 + 두 글 · ack {ids:[7,8]} 한 번(POST · Bearer · 세션 헤더 · JSON)
+    const n1 = `${sid}-n1`;
+    reply = { status: 200, body: { apps: [], notices: [note(8, "장표 3쪽 요약을 앱에 보냄"), note(7, "표 두 줄을 읽고 답함")] } };
+    ackReply = { status: 200, body: { acked: 2 } };
+    seen.length = 0;
+    const o1 = await run(n1);
+    assert.ok(o1 && o1.includes(HEAD), `메모 머리가 없다:\n${o1}`);
+    assert.ok(o1.indexOf("표 두 줄을 읽고 답함") < o1.indexOf("장표 3쪽 요약을 앱에 보냄"), "먼저 온 메모(작은 번호)가 먼저 와야 한다");
+    assert.ok(!o1.includes("붙은 앱이 바뀌었습니다"), "앱이 없는데 앱 안내를 했다");
+    assert.equal(acks().length, 1, "메모를 붙이고 ack 를 안 했다");
+    assert.deepEqual(acks()[0].body, { ids: [7, 8] });
+    assert.equal(acks()[0].url, `/api/ui/terminal/sessions/${n1}/notices/ack`);
+    assert.equal(acks()[0].auth, "Bearer tok-alice");
+    assert.equal(acks()[0].session, n1);
+    assert.match(acks()[0].type, /application\/json/);
+    ok("N1 앱 없음 + 메모 → 주입(먼저 온 것부터) · ack 번호 목록 1회");
+
+    // N2 다음 턴 — 서버가 ack 를 못 받은 듯 같은 메모를 또 준다 → 다시 붙이지 않고 ack 만 다시
+    seen.length = 0;
+    assert.equal(await run(n1), null, "이미 붙인 메모를 또 붙였다(깃발이 거르지 못했다)");
+    assert.equal(acks().length, 1, "ack 를 못 받은 메모에 ack 를 다시 보내지 않았다");
+    assert.deepEqual(acks()[0].body, { ids: [7, 8] });
+    ok("N2 ack 실패 뒤 같은 메모 → 주입 없음 · ack 만 다시");
+
+    // N3 앱이 새로 붙음 + 메모 하나 → 한 출력에 앱 안내 먼저, 메모 뒤
+    const n3 = `${sid}-n3`;
+    reply = { status: 200, body: { apps: [CRM], notices: [note(21, "컨택 세 명을 정리해 앱에 보냄")] } };
+    seen.length = 0;
+    const o3 = await run(n3);
+    assert.ok(o3 && o3.includes("붙은 앱이 바뀌었습니다") && o3.includes(HEAD), `앱 안내와 메모가 함께 나오지 않았다:\n${o3}`);
+    assert.ok(o3.indexOf("붙은 앱이 바뀌었습니다") < o3.indexOf(HEAD), "메모가 앱 안내보다 앞에 왔다");
+    assert.deepEqual(acks().map((r) => r.body), [{ ids: [21] }]);
+    ok("N3 앱 붙음 + 메모 같은 턴 → 한 출력(앱 안내 → 메모)");
+
+    // N4 메모 12건 → 앞의 10건만 · «더 있습니다» · ack 는 정확히 그 10개
+    const n4 = `${sid}-n4`;
+    reply = { status: 200, body: { apps: [], notices: Array.from({ length: 12 }, (_, i) => note(101 + i)) } };
+    seen.length = 0;
+    const o4 = await run(n4);
+    for (let i = 101; i <= 110; i++) assert.ok(o4.includes(`메모 ${i}`), `메모 ${i} 가 없다`);
+    assert.ok(!o4.includes("메모 111") && !o4.includes("메모 112"), "한 턴 상한(10)을 넘겨 붙였다");
+    assert.ok(o4.includes("메모가 더 있습니다"), "남은 메모가 있다는 말이 없다");
+    assert.deepEqual(acks()[0].body, { ids: Array.from({ length: 10 }, (_, i) => 101 + i) });
+    ok("N4 메모 12건 → 10건만 · «더 있습니다» · ack 는 그 10개만");
+
+    // N5 늦게 들어온 더 작은 번호(동시에 끝난 두 실행) → 그래도 붙인다
+    const n5 = `${sid}-n5`;
+    reply = { status: 200, body: { apps: [], notices: [note(9, "나중 번호")] } };
+    await run(n5);
+    reply = { status: 200, body: { apps: [], notices: [note(5, "늦게 들어온 앞 번호")] } };
+    seen.length = 0;
+    const o5 = await run(n5);
+    assert.ok(o5 && o5.includes("늦게 들어온 앞 번호"), "지난번 번호보다 작다고 걸렀다 — 못 본 메모가 읽음이 된다");
+    assert.deepEqual(acks()[0].body, { ids: [5] });
+    ok("N5 늦게 들어온 작은 번호 → 붙이고 그 번호만 ack");
+
+    // N6 옛 서버(notices 칸 없음) · 앱 그대로 → 종전처럼 침묵 · ack 요청 0
+    const n6 = `${sid}-n6`;
+    reply = { status: 200, body: { apps: [CRM] } };
+    await run(n6);
+    seen.length = 0;
+    assert.equal(await run(n6), null);
+    assert.equal(seen.length, 1, "조회가 안 갔다(관측 장치)");
+    assert.equal(acks().length, 0, "메모가 없는데 ack 를 보냈다");
+    ok("N6 옛 서버 → 침묵 · ack 0");
+
+    // N7 틀린 메모(빈 글 · 번호 0 · 음수 · 글자 번호) → 무시
+    const n7 = `${sid}-n7`;
+    reply = { status: 200, body: { apps: [], notices: [note(31, "   "), { id: 0, text: "영 번호" }, { id: -3, text: "음수" }, { id: "x", text: "글자 번호" }, note(32, "제대로 된 메모")] } };
+    seen.length = 0;
+    const o7 = await run(n7);
+    assert.ok(o7 && o7.includes("제대로 된 메모"), "멀쩡한 메모까지 빠졌다");
+    for (const bad of ["영 번호", "음수", "글자 번호"]) assert.ok(!o7.includes(bad), `틀린 메모(${bad})를 붙였다`);
+    assert.deepEqual(acks()[0].body, { ids: [32] });
+    ok("N7 틀린 메모 → 무시(주입 · ack 모두)");
+
+    // N8 ack 가 500 → exit 0(run 이 단언) · 주입은 그대로
+    const n8 = `${sid}-n8`;
+    reply = { status: 200, body: { apps: [], notices: [note(41, "ack 가 실패해도 보이는 메모")] } };
+    ackReply = { status: 500, body: { error: "boom" } };
+    seen.length = 0;
+    const o8 = await run(n8);
+    assert.ok(o8 && o8.includes("ack 가 실패해도 보이는 메모"));
+    assert.equal(acks().length, 1);
+    ackReply = { status: 200, body: { acked: 1 } };
+    ok("N8 ack 500 → exit 0 · 주입 그대로");
+
+    // N9 깃발을 못 씀(lively-hooks 자리가 파일) → 앱 안내는 침묵, 메모는 붙이고 ack
+    {
+      const tmp2 = path.join(tmp, "noflag");
+      await fsp.mkdir(tmp2, { recursive: true });
+      await fsp.writeFile(path.join(tmp2, "lively-hooks"), "파일이라 폴더를 못 만든다");
+      reply = { status: 200, body: { apps: [CRM], notices: [note(51, "깃발 없이도 가는 메모")] } };
+      seen.length = 0;
+      const o9 = await run(`${sid}-n9`, { TMPDIR: tmp2, TEMP: tmp2, TMP: tmp2 });
+      assert.ok(o9 && o9.includes("깃발 없이도 가는 메모"), "깃발을 못 쓴다고 메모까지 삼켰다");
+      assert.ok(!o9.includes("붙은 앱이 바뀌었습니다"), "깃발을 못 쓰는데 앱 안내를 했다(매 턴 같은 말이 된다)");
+      assert.deepEqual(acks().map((r) => r.body), [{ ids: [51] }]);
+      ok("N9 깃발 못 씀 → 앱 안내 침묵 · 메모는 주입 + ack");
+    }
+
+    // N10(경계) 메모 정확히 10건 · 서버 페이지 미만 → 다 붙이고 «더 있습니다» 없음
+    const n10 = `${sid}-n10`;
+    reply = { status: 200, body: { apps: [], notices: Array.from({ length: 10 }, (_, i) => note(201 + i)) } };
+    seen.length = 0;
+    const o10 = await run(n10);
+    for (let i = 201; i <= 210; i++) assert.ok(o10.includes(`메모 ${i}`), `메모 ${i} 가 없다`);
+    assert.ok(!o10.includes("메모가 더 있습니다"), "남은 메모가 없는데 «더 있습니다» 라 했다");
+    assert.equal(acks()[0].body.ids.length, 10);
+    ok("N10 경계 — 10건 정확히 → 전부 · «더 있습니다» 없음");
   }
 
   console.log(`\n${pass} passed`);

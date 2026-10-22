@@ -19,7 +19,7 @@ import { onAppEvent, type LiveAppEvent } from './live-sync.js';
 import { ctxMenu, pnIcon } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 import { openVersionsMenu, revertToOrigin, revertToPrevious } from './app-versions.js';
-import { bandText, draftTextFor, isOwnWriteSource, sessAppMenuRows } from '../lib/app-menu.js';
+import { bandText, draftTextFor, forkRunNote, forkRunRows, isOwnWriteSource, sessAppMenuRows, type ForkRunSummary } from '../lib/app-menu.js';
 import { installedAppFace, type AppIconSpec } from './glass-icon.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { verName } from '../lib/studio-flow.js';
@@ -37,12 +37,31 @@ export interface AttachedApp {
   /** #4600 — 지금 판 번호(app_versions 의 version_no · 옛 게이트웨이는 안 준다) · 워크스페이스 판이 원본을 덮고 있나. */
   version_no?: number | null;
   overrides_builtin?: boolean;
+  /** #4489 — 이 앱이 붙은 세션에서 실행(분기)을 선언했나(옛 게이트웨이는 안 준다). */
+  ai_fork?: boolean;
 }
 
 /** 「AI에게 고치기」 — 세션 대화 화면의 입력칸을 **채우기만** 한다(보내지 않는다 · 사람이 뒤를 잇는다). 받는 쪽은 web/session-chat.ts(fork A, SPEC §1-4). */
 export const COMPOSE_DRAFT_EVT = 'lively:compose-draft';
 export function composeDraft(session: string, text: string): void {
   window.dispatchEvent(new CustomEvent(COMPOSE_DRAFT_EVT, { detail: { session, text } }));
+}
+
+/**
+ * #4489 「이 세션 대화로 돌린 실행…」 — 이 앱이 이 세션 대화를 이어받아 보이지 않게 돌린 실행(분기)의 기록. 세션 주인은 제 구독으로 돈 것을,
+ *  초대받은 사람은 제가 보낸 것을 본다(서버 app_ai_runs 의 «내 실행»). 줄을 누르면 그 실행이 이 세션에 남긴 메모(실패면 사유)를 보인다.
+ */
+async function openForkRunsMenu(x: number, y: number, app: { id: string; title: string }, sid: string): Promise<void> {
+  let runs: ForkRunSummary[] = [];
+  try {
+    const out: any = await api('/api/ui/ai-runs?app_id=' + encodeURIComponent(app.id) + '&fork_session=' + encodeURIComponent(sid) + '&limit=20');
+    runs = Array.isArray(out?.runs) ? out.runs : [];
+  } catch (e: any) { toast('실행 기록을 불러오지 못했어요. ' + (e && e.message ? e.message : e), true); return; }
+  if (!runs.length) { toast(`「${app.title}」이(가) 아직 이 세션 대화로 돌린 실행이 없어요.`); return; }
+  const rows = forkRunRows(runs, (id) => {
+    void api('/api/ui/ai-runs/' + id).then((r: any) => toast(forkRunNote(r))).catch((e: any) => toast('실행을 불러오지 못했어요. ' + (e && e.message ? e.message : e), true));
+  });
+  ctxMenu(x, y, rows, { title: `「${app.title}」이 이 세션 대화로 돌린 실행`, sub: '사람 화면에 안 보이게 이 대화를 읽고 답한 기록이에요. 누르면 남긴 메모를 보여요.', minWidth: 280 });
 }
 
 /** 곁칸의 붙은 앱 탭 — 부품 종류 이름이자 탭 열쇠. 배치에 저장하지 않는다(머리말). */
@@ -311,6 +330,7 @@ export function sessAppPart(ctx: PartCtx): Part {
       edit: () => { composeDraft(s, draftTextFor(cur.title)); toast('세션 입력칸에 채워 두었어요 — 어떻게 고칠지 이어서 적고 보내세요.'); },
       prefs: () => { frame?.notify('ui/notifications/prefs-open', {}); },
       versions: () => { void openVersionsMenu(x, y, { id: cur.app_id, title: cur.title }, afterRevert); },
+      ...(cur.ai_fork ? { forkRuns: () => { void openForkRunsMenu(x, y, { id: cur.app_id, title: cur.title }, s); } } : {}),
       original: () => { void revertToOrigin(cur.app_id, cur.title).then((v) => { if (v != null) afterRevert(v); }); },
       big: () => { openAppBig(cur.app_id, { title: cur.title, sessionId: s, page: cur.pages[0]?.key }); },   // 새 탭에서 화면 가득(폰은 그 자리에서)
       //  #4482 맨 앱 주소를 새 탭으로 — 감싸는 라이블리 화면이 없어 세션 기능(chat.send · ui.*)은 빠지고, 표 · 설정 · 앱 폴더는 /_lively/* 로 돈다.

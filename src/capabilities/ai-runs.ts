@@ -34,6 +34,8 @@ const aiRunInput = {
   agent: z.boolean().optional().describe("true 면 파일을 안 줘도 에이전트 작업(도구 있음)으로 돈다"),
   timeout_min: z.number().int().positive().optional().describe("에이전트 작업의 실행 시간 상한(분)"),
   wait: z.number().int().min(0).max(WAIT_MAX_SEC).optional().describe(`끝날 때까지 기다릴 초(최대 ${WAIT_MAX_SEC}) — 단발은 보통 몇 초라 한 번에 결과를 받는다. 안 끝나면 지금 상태를 돌려준다(app_ai_run_get 으로 다시)`),
+  target: z.object({ fork: z.string().max(128).optional().describe("이 앱이 붙은 세션 id — 그 세션 대화를 이어받아 보이지 않게 한 번 돈다(본 세션 기록은 그대로)") }).passthrough().optional()
+    .describe("#4489 — {fork: \"<세션 id>\"} 면 붙은 세션 분기 실행(그 세션 주인의 구독 · 그 세션 작업 폴더 · 읽기만). 결과는 앱에, 분기 AI 가 함께 쓴 session_note 는 그 세션의 안 읽은 알림이 되어 사람이 다음 말을 보낼 때 AI 가 받는다. 생략하면 새 대화"),
 };
 const AI_RUN_KEYS = Object.keys(aiRunInput);
 
@@ -43,7 +45,8 @@ const appAiRun: Capability = {
   description:
     "앱의 AI 작업 입구 하나(/_lively/ai/runs). 프롬프트(+결과 스키마 · 파일 · 작업 이름)를 보내면 게이트웨이가 실행 계정(작업별 > 앱별 > 워크스페이스 기본값 — API 키 또는 본인 구독)과 자리를 고른다: " +
     "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만 — 앱 서버 · 자동화는 API 키. " +
-    "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits).",
+    "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits). " +
+    "target:{fork:<세션 id>} 면 그 세션 대화를 이어받는 분기 실행(#4489 — 매니페스트 permissions.ai_fork 선언 · 보낸 사람과 그 세션 주인의 동의 · 그 세션 주인이나 초대받은 사람 · 앱이 그 세션에 붙어 있어야 한다).",
   scope: null,
   input: aiRunInput,
   expose: {
@@ -70,12 +73,18 @@ const appAiRunGet: Capability = {
 const appAiRuns: Capability = {
   name: "app_ai_runs",
   title: "앱 AI 실행 목록",
-  description: "내 AI 실행 목록(최근 것부터 · 요약 — 전문은 app_ai_run_get). 앱 화면에서 부르면 그 앱의 내 실행만, 관리자는 워크스페이스 전체(남의 것은 상태·오류만). status · app_id 로 좁힌다.",
+  description: "내 AI 실행 목록(최근 것부터 · 요약 — 전문은 app_ai_run_get). 앱 화면에서 부르면 그 앱의 내 실행만, 관리자는 워크스페이스 전체(남의 것은 상태·오류만). status · app_id · fork_session(그 세션 대화로 돈 분기만) 으로 좁힌다.",
   scope: null,
-  input: { app_id: z.string().optional(), status: z.string().optional().describe("queued · running · done · failed · canceled"), limit: z.number().int().min(1).max(100).optional() },
+  input: {
+    app_id: z.string().optional(), status: z.string().optional().describe("queued · running · done · failed · canceled"), limit: z.number().int().min(1).max(100).optional(),
+    fork_session: z.string().max(128).optional().describe("#4489 — 이 세션 대화로 돈 분기 실행만"),
+  },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-runs"], parse: (req) => {
     const q = (req.query ?? {}) as Record<string, unknown>;
-    return { ...(q.app_id ? { app_id: String(q.app_id) } : {}), ...(q.status ? { status: String(q.status) } : {}), ...(q.limit ? { limit: Number(q.limit) } : {}) };
+    return {
+      ...(q.app_id ? { app_id: String(q.app_id) } : {}), ...(q.status ? { status: String(q.status) } : {}), ...(q.limit ? { limit: Number(q.limit) } : {}),
+      ...(q.fork_session ? { fork_session: String(q.fork_session) } : {}),
+    };
   } }] },
   handler: async (input: Record<string, unknown>, user: LivelyUser) => (await svc()).listRunsFor(input, user, await deps()),
 };
@@ -93,7 +102,7 @@ const appAiRunCancel: Capability = {
 const appAiTargets: Capability = {
   name: "app_ai_targets",
   title: "앱 AI 실행 대상",
-  description: "이 앱이 지금 고를 수 있는 것 — 실행 계정(워크스페이스가 정한 것 · 쓸 수 있나 · 구독이면 로그인 여부) · 선언한 작업과 그 실행 계정 · 이 앱이 붙은 내 세션(본 대화에 보내기 가능) · 이 앱이 만든 대화(이어받기). 분기(fork)는 아직 없다.",
+  description: "이 앱이 지금 고를 수 있는 것 — 실행 계정(워크스페이스가 정한 것 · 쓸 수 있나 · 구독이면 로그인 여부) · 선언한 작업과 그 실행 계정 · 이 앱이 붙은 내 세션(본 대화에 보내기 가능 · 분기 가능하면 can_fork, 안 되면 fork_reason) · 이 앱이 만든 대화(이어받기) · fork(이 배포 · 이 앱이 분기를 쓸 수 있나).",
   scope: null,
   input: { app_id: z.string().optional() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-targets"], parse: (req) => { const q = (req.query ?? {}) as Record<string, unknown>; return q.app_id ? { app_id: String(q.app_id) } : {}; } }] },

@@ -26,6 +26,8 @@ export interface AgentJobRow {
   bare: boolean;
   /** #4891 사람 홈 없는 작업 컨테이너에서 도나(앱 서버가 보낸 API 키 에이전트 작업 — 작업 폴더는 앱 폴더뿐). */
   homeless: boolean;
+  /** #4489 세션 분기 실행의 좌표(fork-boot.ForkSpec 의 저장 모양 — 읽을 때 parseForkSpec 로 고른다). 보통 작업은 null. */
+  fork?: Record<string, unknown> | null;
   session_id: string | null;
   boot_hash: string | null;
   /** #4829 시작 실패 보고 비밀의 sha256 — 부트 비밀과 같은 값(자리 줄 때 단다) · 첫 박동이 지운다(그 전까지만 연다). */
@@ -51,7 +53,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, bare, homeless, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
+  resume_conversation, resume_job_id, timeout_sec, bare, homeless, fork, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -98,6 +100,8 @@ export interface NewAgentJob {
    *  필수다 — 접수하는 자리가 빠뜨리면 컴파일이 잡는다(빠지면 사람 홈에서 돈다).
    */
   homeless: boolean;
+  /** #4489 세션 분기 실행의 좌표 — 없으면 보통 작업. */
+  fork?: Record<string, unknown> | null;
 }
 
 /**
@@ -116,10 +120,10 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless, fork)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, j.fork ? JSON.stringify(j.fork) : null]);
     return { row: norm(rows[0])! };
   });
 }
@@ -300,10 +304,13 @@ export async function requestCancelAgentJob(id: number, reason: string | null = 
   return norm(rows[0]);
 }
 
-/** 감시가 보는 칸 — 판단(시각·상한·취소)과 걷기(세션·토큰)에 필요한 것만. 프롬프트·결과(행당 수백 KB)는 읽지 않는다. */
+/**
+ * 감시가 보는 칸 — 판단(시각·상한·취소)과 걷기(세션·토큰)에 필요한 것만. 프롬프트·결과(행당 수백 KB)는 읽지 않는다.
+ *  fork(#4489) — 도는 동안의 허락 재확인(assertJobAllowed)이 분기 작업의 «붙은 세션에서 실행» 동의도 다시 본다(빠지면 동의를 거둬도 안 멈춘다).
+ */
 export type AgentJobSweepRow = Pick<AgentJobRow, "id" | "status" | "reaped" | "session_id" | "mcp_token_hash" | "timeout_sec" | "cancel_requested" | "account_kind" | "requester"
-  | "created_at" | "claimed_at" | "started_at" | "last_tick_at" | "ended_at" | "error" | "app_id" | "account_member">;
-const SWEEP_COLS = `id, status, reaped, session_id, mcp_token_hash, timeout_sec, cancel_requested, account_kind, requester, app_id, account_member,
+  | "created_at" | "claimed_at" | "started_at" | "last_tick_at" | "ended_at" | "error" | "app_id" | "account_member" | "fork">;
+const SWEEP_COLS = `id, status, reaped, session_id, mcp_token_hash, timeout_sec, cancel_requested, account_kind, requester, app_id, account_member, fork,
   created_at, claimed_at, started_at, last_tick_at, ended_at, left(error, 600) AS error`;
 
 /** 감시 대상 — 열린 작업과, 끝났지만 아직 걷지 않은 작업(열린 작업 인덱스의 조건과 같은 꼴). */

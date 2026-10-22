@@ -16,7 +16,8 @@
 //    lively.store.onChange(function (ev) { … })  → 이 앱의 데이터가 **바깥에서** 바뀌었다(#4225 — 세션에 붙은 AI 가 썼다 등).
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
-//    await lively.ai.run({prompt, schema?, job?, files?, wait?}) → AI 실행 하나(#4488 — {id,status,result}; wait 초를 주면 끝날 때까지). get(id) · list() · cancel(id) · targets()
+//    await lively.ai.run({prompt, schema?, job?, files?, wait?, target?}) → AI 실행 하나(#4488 — {id,status,result}; wait 초를 주면 끝날 때까지). get(id) · list() · cancel(id) · targets()
+//                                                target:{fork: lively.session} 은 붙은 세션 대화를 이어받는 분기(#4489 — 결과는 앱에 · session_note 는 그 세션의 다음 턴에).
 //    await lively.jobs.start(route, body?, {label?, timeout_s?, wait?}) → 이 앱 서버의 라우트를 뒤에서(#4486 — 15분까지 · {id,status,result}). get(id,{wait}) · list() · cancel(id) · wait(id)
 //    await lively.chat.send(text)            → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602,
 //                                                사람이 누른 동작 밖(타이머 등)이면 -32001. { sent, session, transport } ·

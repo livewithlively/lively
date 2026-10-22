@@ -67,8 +67,26 @@ export interface RunnerJob {
   prompt: string;
   /** 하네스에 줄 MCP 설정({mcpServers}) — 없으면 MCP 없이 돈다(--strict-mcp-config). */
   mcp: Record<string, unknown> | null;
-  /** 하네스에 더 줄 env — 지금은 늘 비어 있다(service.onBoot). API 키 갈래(v2-9)의 프록시 주소·실행 토큰이 들어올 자리다. */
+  /** 하네스에 더 줄 env — API 키 갈래(v2-9)의 프록시 주소·실행 토큰 · 분기 실행(#4489)의 세션 신원·훅 끄기·읽기 전용. 값의 자리표도 바뀐다. */
   env: Record<string, string>;
+  /**
+   * #4489 — 판 임시 폴더(0700)에 쓸 파일(분기 실행의 도구 경계 판정기 · 그 설정 · 하네스 설정). argv · env 값 · 파일 내용 안의
+   *  `{{LVLY_FILE:<이름>}}` 은 그 파일 경로로, `{{LVLY_NODE}}` 는 판을 돌리는 노드 실행 파일로 바뀐다. 없으면 빈 목록.
+   */
+  files?: Array<{ name: string; content: string }>;
+  /**
+   * 첫 지시를 넣는 길 — "stdin"(기본: 프롬프트 파일을 stdin 으로) · "stream"(#4489 — claude `--input-format stream-json`:
+   *  지시를 메시지 한 줄로 넣고 같은 프로세스에 다음 턴을 넣을 수 있다). stream 이면 하네스가 되돌려 준 내 메시지(`isReplay`) 뒤의 답만 센다
+   *  (`--replay-user-messages` — 이어받은 대화에 남아 있던 알림이 내는 빈 답을 내 답으로 읽지 않게 · 실측 2026-10-20).
+   */
+  input?: "stdin" | "stream";
+  /** #4489 — 턴 끝마다 게이트웨이에 답을 보여 주고(/turn) 다음 지시를 받는 횟수(«형식에 맞게 다시» 1회). 0 이면 묻지 않는다. stream 일 때만. */
+  turns?: number;
+  /**
+   * #4489 — stream 에서 첫 지시를 되돌려 받기(isReplay)까지 기다리는 상한(ms). 넘으면 «하네스가 지시를 되돌려 주지 않음» 으로 곧바로 끝낸다 —
+   *  되돌려 받지 못하면 답을 셀 수 없어 실행 시간 상한까지 서 있게 된다(하네스 판이 바뀌어 그 기능이 빠진 경우). 0 · 없음이면 기다림 상한 없음.
+   */
+  replayWaitMs?: number;
   /** 작업 폴더(컨테이너 경로). */
   cwd: string;
   timeoutMs: number;
@@ -118,23 +136,56 @@ const promptPath = path.join(dir, "prompt.txt");
 fs.writeFileSync(promptPath, J.prompt, { mode: 0o600 });
 let mcpPath = null;
 if (J.mcp) { mcpPath = path.join(dir, "mcp.json"); fs.writeFileSync(mcpPath, JSON.stringify(J.mcp), { mode: 0o600 }); }
-const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a)).filter((a) => a !== null);
+// #4489 — 판 임시 폴더에 쓸 파일(분기 실행의 판정기 · 그 설정 · 하네스 설정). 이름은 판이 고른 자리로만 간다(경로 문자는 지운다).
+const FILES = {};
+const fileList = Array.isArray(J.files) ? J.files : [];
+for (const f of fileList) FILES[String(f.name)] = path.join(dir, "f-" + String(f.name).replace(/[^A-Za-z0-9._-]/g, "_"));
+const sub = (s) => String(s).replace(/\{\{LVLY_FILE:([A-Za-z0-9._-]+)\}\}/g, (m, n) => (FILES[n] || m)).replace(/\{\{LVLY_NODE\}\}/g, process.execPath);
+for (const f of fileList) fs.writeFileSync(FILES[String(f.name)], sub(f.content), { mode: 0o600 });
+const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : (a === null ? null : sub(a)))).filter((a) => a !== null);
 const env = Object.assign({}, process.env, J.env || {});
 delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV};
 // 빈 설정 폴더 자리표(#4488 API 키 실행) — 하네스가 멤버 홈의 로그인을 읽지 않게 이 작업만의 설정 폴더를 만든다. 빈 값은 «그 변수를 지워라» 다.
 for (const k of Object.keys(env)) {
   if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; }
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
+  else if ((J.env || {})[k] !== undefined) env[k] = sub(env[k]);
 }
+// #4489 — 지시를 메시지 한 줄씩 넣는 길(claude --input-format stream-json · --replay-user-messages). 하네스가 되돌려 준 내 메시지(isReplay)를
+//  센다(acked) — 그 뒤에 온 답만 내 지시의 답이다(answered). 이어받은 대화에 남아 있던 알림이 내는 빈 답은 내 메시지보다 먼저 와서 버려진다.
+//  턴 끝마다 게이트웨이에 답을 보이고(/turn) 다음 지시가 오면 같은 프로세스에 넣는다(«형식에 맞게 다시» — 캐시가 이어진다 · 실측). 없으면 입력을 닫아 끝낸다.
+const STREAM = J.input === "stream";
+let turnsLeft = STREAM && Number.isFinite(J.turns) ? Math.max(0, Math.floor(J.turns)) : 0;
+let acked = 0, answered = 0, inputClosed = false, turnChain = Promise.resolve();
+const usageSum = {};
+const addUsage = (u) => { if (!u || typeof u !== "object") return; for (const k of Object.keys(u)) if (typeof u[k] === "number" && isFinite(u[k])) usageSum[k] = (usageSum[k] || 0) + u[k]; };
 let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null;
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
+const sendUser = (text) => {
+  if (inputClosed || !child || !child.stdin) return;
+  try { child.stdin.write(JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text: String(text) }] } }) + "\n"); } catch (e) {}
+};
+const closeInput = () => { if (inputClosed) return; inputClosed = true; try { child && child.stdin && child.stdin.end(); } catch (e) {} };
+//  턴 하나가 끝났다(stream) — 남은 턴이 있으면 게이트웨이에 답을 보이고 다음 지시를 받는다. 받지 못하면(없음 · 실패 · 끊김) 입력을 닫는다.
+const afterTurn = async (ev) => {
+  if (turnsLeft > 0 && !stopped && ev.is_error !== true) {
+    const r = await call("turn", { n: answered, text: typeof ev.result === "string" ? ev.result.slice(0, J.resultMax) : null, is_error: ev.is_error === true, subtype: typeof ev.subtype === "string" ? ev.subtype : null }, 3);
+    if (r && typeof r.next === "string" && r.next && !stopped) { turnsLeft--; sendUser(r.next); return; }
+  }
+  closeInput();
+};
 const onLine = (line) => {
   if (!line.trim()) return;
   events++;
   let ev; try { ev = JSON.parse(line); } catch (e) { pushTail(line); return; }
   if (ev && ev.type === "system" && ev.subtype === "init") { if (typeof ev.session_id === "string") conv = ev.session_id; if (typeof ev.model === "string") model = ev.model; }
-  if (ev && ev.type === "result") { last = ev; if (typeof ev.session_id === "string") conv = ev.session_id; }
+  if (STREAM && ev && ev.type === "user" && ev.isReplay === true) acked++;
+  if (ev && ev.type === "result") {
+    if (typeof ev.session_id === "string") conv = ev.session_id;
+    if (!STREAM) last = ev;
+    else if (answered < acked) { answered++; last = ev; addUsage(ev.usage); turnChain = turnChain.then(() => afterTurn(ev)).catch(() => closeInput()); }
+  }
   if (ev && ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
     for (const c of ev.message.content) {
       if (c && c.type === "text" && c.text) pushTail(c.text);
@@ -144,7 +195,17 @@ const onLine = (line) => {
 };
 let child;
 try {
-  child = cp.spawn(argv[0], argv.slice(1), { cwd: J.cwd, env, stdio: [fs.openSync(promptPath, "r"), "pipe", "pipe"] });
+  child = cp.spawn(argv[0], argv.slice(1), { cwd: J.cwd, env, stdio: [STREAM ? "pipe" : fs.openSync(promptPath, "r"), "pipe", "pipe"] });
+  if (STREAM) {
+    child.stdin.on("error", () => {});
+    sendUser(J.prompt);
+    //  되돌려 받지 못하면 답을 셀 수 없다 — 시간 상한까지 서 있지 않고 사유를 남겨 끝낸다(격리 리뷰).
+    if (J.replayWaitMs > 0) setTimeout(() => {
+      if (acked || stopped) return;
+      errTail = (errTail + "\n하네스가 보낸 지시를 되돌려 주지 않았습니다(--replay-user-messages) — 답을 셀 수 없어 끝냅니다").slice(-J.stderrMax);
+      kill("no_replay");
+    }, J.replayWaitMs).unref();
+  }
 } catch (e) {
   errTail = "spawn: " + (e && e.message);
 }
@@ -162,8 +223,10 @@ const finish = async (code, signal) => {
     is_error: last.is_error === true, subtype: typeof last.subtype === "string" ? last.subtype : null,
     num_turns: typeof last.num_turns === "number" ? last.num_turns : null,
     duration_ms: typeof last.duration_ms === "number" ? last.duration_ms : null,
-    cost_usd: typeof last.total_cost_usd === "number" ? last.total_cost_usd : null,
-    usage: last.usage && typeof last.usage === "object" ? last.usage : null,
+    //  stream(#4489 분기)은 이어받은 대화의 누적 비용이 섞여 올 수 있어(실측: 빈 답에 13.6) 싣지 않는다 — 토큰 합이 기준이다.
+    cost_usd: !STREAM && typeof last.total_cost_usd === "number" ? last.total_cost_usd : null,
+    usage: STREAM ? usageSum : (last.usage && typeof last.usage === "object" ? last.usage : null),
+    turns: STREAM ? answered : null,
   } : null;
   await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n") }, 24);
   clearInterval(ticker);

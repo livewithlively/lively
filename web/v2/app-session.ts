@@ -253,6 +253,11 @@ function appConsent(app: SessionApp): Promise<boolean> {
         app.tools.includes('app_ai_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: 'AI 실행' }),
           el('div', { class: 'v2-consent-chips' },
             el('span', { class: 'v2-consent-chip', text: '이 앱이 AI 에게 일을 시킬 수 있어요 — 워크스페이스 API 키가 있으면 그 돈으로, 아니면 내 Claude 구독으로(내가 이 앱 화면에서 보낸 요청만 · 내 이름으로 새 대화) 돌아요. 실행 기록은 이 앱의 AI 실행 목록에 남아요' }))) : null,
+        // 붙은 세션에서 실행(#4489 앱 v2-10) — '앱이 내 세션 대화를 읽고 AI 를 돌리나'. AI 실행보다 무겁다: 그 세션 대화 · 작업 폴더 파일이
+        //  답의 재료가 되고 답은 앱으로 간다. 그래서 제 줄로 따로 묻는다(매니페스트 permissions.ai_fork — 선언했을 때만).
+        app.tools.includes('app_ai_fork') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '붙은 세션에서 실행' }),
+          el('div', { class: 'v2-consent-chips' },
+            el('span', { class: 'v2-consent-chip', text: '이 앱을 붙인 세션의 대화를 이어받아 AI 가 보이지 않게 한 번 답해요 — 그 세션 주인의 Claude 구독으로, 그 세션의 대화 · 작업 폴더 파일(숨김 · 비밀 파일 제외) · 이 앱의 표 · 라이블리에서 읽을 수 있는 내용을 읽기만 해요. 답은 이 앱으로 가고, 짧은 메모가 그 세션의 다음 대화에 붙어요. 초대받은 사람이 보낼 때는 세션 주인도 이 앱에 이렇게 동의해 두어야 해요' }))) : null,
         // 백그라운드 작업(#4486 앱 v2-7) — '앱 서버가 내 이름으로 뒤에서 일을 하나'. 서버를 둔 앱(web.server)이 함의한다. 화면을 닫아도 15분까지 돈다.
         app.tools.includes('app_job_start') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '백그라운드 작업' }),
           el('div', { class: 'v2-consent-chips' },

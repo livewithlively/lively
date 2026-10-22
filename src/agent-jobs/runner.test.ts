@@ -284,5 +284,173 @@ await t("R6 결과를 올리는 동안에도 박동한다 — 게이트웨이가
   } finally { await g.close(); }
 });
 
+// ── #4489 stream 입력(세션 분기) — 지시를 메시지 한 줄씩 · 되돌려 받은 내 메시지 뒤의 답만 · 턴 보고 · 판 파일과 자리표 ──
+//  가짜 하네스는 claude `--input-format stream-json --replay-user-messages` 의 꼴을 흉내 낸다: 이어받은 대화의 대기 알림이 내 메시지보다 먼저
+//  빈 답(0 토큰 · 누적 비용)을 내고(FAKE_PRE), 받은 메시지마다 되돌려 준 뒤(isReplay) 답을 낸다. 입력이 닫히면 받은 것을 기록하고 끝난다.
+const FAKE_STREAM = path.join(tmp, "fake-stream.cjs");
+fs.writeFileSync(FAKE_STREAM, `
+const fs = require("fs");
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+const got = [];
+out({ type: "system", subtype: "init", session_id: "fork-conv-0001", model: "fake-model" });
+if (process.env.FAKE_PRE === "1") out({ type: "result", subtype: "success", is_error: false, result: "", total_cost_usd: 13.6, usage: { input_tokens: 0, output_tokens: 0 } });
+let buf = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (d) => {
+  buf += d; let i;
+  while ((i = buf.indexOf("\\n")) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1);
+    const m = JSON.parse(line); got.push(m);
+    const n = got.length;
+    if (process.env.FAKE_NOREPLAY !== "1") out({ type: "user", isReplay: true, message: m.message });
+    out({ type: "assistant", message: { content: [{ type: "text", text: "생각 " + n }] } });
+    const bad = process.env.FAKE_ERR_TURN === String(n);
+    out({ type: "result", subtype: bad ? "error_during_execution" : "success", is_error: bad, result: process.env["FAKE_T" + n] || ("답 " + n), total_cost_usd: 99, usage: { input_tokens: 10 * n, output_tokens: n } });
+  }
+});
+process.stdin.on("end", () => {
+  const si = process.argv.indexOf("--settings");
+  const settingsPath = si > 0 ? process.argv[si + 1] : null;
+  fs.writeFileSync(process.env.FAKE_RECORD, JSON.stringify({
+    argv: process.argv.slice(2), texts: got.map((m) => m.message.content[0].text), types: got.map((m) => m.type),
+    env: { session: process.env.LIVELY_SESSION_ID ?? null, guardEnv: process.env.GUARD_AT ?? null },
+    settingsPath, settings: settingsPath && fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, "utf8") : null,
+    settingsMode: settingsPath && fs.existsSync(settingsPath) ? (fs.statSync(settingsPath).mode & 0o777) : null,
+  }));
+  process.exit(0);
+});
+`);
+
+//  판 폴더 밖으로 나가려는 파일 이름(«../»)의 표적 — 시험마다 다른 이름이라 남은 흔적에 걸리지 않는다.
+const EVIL = `evil-${process.pid}-${Date.now()}`;
+/** stream 판의 가짜 게이트웨이 — 턴 보고(/turn)에 대본대로 다음 지시를 준다. */
+async function streamGateway(o: { record: string; env?: Record<string, string>; turns: number; next?: (n: number) => string | null; timeoutMs?: number; replayWaitMs?: number }):
+  Promise<{ port: number; turns: Array<Record<string, unknown>>; results: Array<Record<string, any>>; close: () => Promise<void> }> {
+  const turns: Array<Record<string, unknown>> = [];
+  const results: Array<Record<string, any>> = [];
+  const srv = http.createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (d) => { body += d; });
+    req.on("end", () => {
+      const json = (status: number, v: unknown): void => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(v)); };
+      if (req.url === "/api/agent-jobs/1/boot") {
+        return json(200, {
+          id: 1, secret: "CALLBACK-SECRET", code: RUNNER_SOURCE.replace(/port: 8080/, `port: ${port}`),
+          argv: [process.execPath, FAKE_STREAM, "-p", "--settings", "{{LVLY_FILE:settings.json}}"],
+          prompt: "첫 지시", mcp: null, cwd: tmp,
+          env: { FAKE_RECORD: o.record, GUARD_AT: "{{LVLY_FILE:guard.json}}", LIVELY_SESSION_ID: "box-alice", ...(o.env ?? {}) },
+          files: [
+            { name: "settings.json", content: JSON.stringify({ hooks: { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command: "\"{{LVLY_NODE}}\" \"{{LVLY_FILE:guard.cjs}}\"" }] }] } }) },
+            { name: "guard.cjs", content: "// 판정기" }, { name: "guard.json", content: "{}" }, { name: `../${EVIL}`, content: "x" },
+          ],
+          input: "stream", turns: o.turns, ...(o.replayWaitMs ? { replayWaitMs: o.replayWaitMs } : {}),
+          timeoutMs: o.timeoutMs ?? 20_000, tickMs: 150, tailMax: 4000, resultMax: 1000, stderrMax: 500,
+        });
+      }
+      if (req.url === "/api/agent-jobs/1/tick") return json(200, { cancel: false });
+      if (req.url === "/api/agent-jobs/1/turn") {
+        const b = JSON.parse(body || "{}");
+        turns.push(b);
+        return json(200, { next: o.next ? o.next(Number(b.n)) : null });
+      }
+      if (req.url === "/api/agent-jobs/1/result") { results.push(JSON.parse(body || "{}")); return json(200, { ok: true }); }
+      json(404, {});
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+  const port = (srv.address() as { port: number }).port;
+  return { port, turns, results, close: () => new Promise<void>((r) => srv.close(() => r())) };
+}
+
+await t("RS1 stream — 대기 알림의 빈 답은 버리고 내 답만 · 턴 보고에 «다시» 가 오면 같은 프로세스에 둘째 지시 · 마지막 답 · 턴 2 · 토큰 합 · 비용은 안 싣는다", async () => {
+  const record = path.join(tmp, "rs1.json");
+  const g = await streamGateway({ record, env: { FAKE_PRE: "1", FAKE_T1: "모양 틀린 답", FAKE_T2: "{\"result\":\"r\",\"session_note\":\"n\"}" }, turns: 1, next: (n) => (n === 1 ? "형식에 맞게 다시" : null) });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.deepEqual(g.turns.map((x) => [x.n, x.text, x.is_error]), [[1, "모양 틀린 답", false]], "턴 보고는 첫 턴 한 번(남은 턴 1)");
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.deepEqual(h.texts, ["첫 지시", "형식에 맞게 다시"], "두 지시가 한 프로세스에 메시지 한 줄씩");
+    assert.deepEqual(h.types, ["user", "user"]);
+    assert.equal(g.results.length, 1);
+    const r = g.results[0]!.result;
+    assert.equal(r.text, "{\"result\":\"r\",\"session_note\":\"n\"}"); assert.equal(r.turns, 2);
+    assert.deepEqual(r.usage, { input_tokens: 30, output_tokens: 3 }, "빈 답(0 토큰)은 안 세고 두 턴의 합");
+    assert.equal(r.cost_usd, null, "누적 비용(빈 답의 13.6 · 턴마다 99)을 싣지 않는다");
+    assert.equal(g.results[0]!.conversation_id, "fork-conv-0001");
+  } finally { await g.close(); }
+});
+
+await t("RS2 stream — 다음 지시가 없으면 첫 답에서 입력을 닫아 끝낸다(턴 1)", async () => {
+  const record = path.join(tmp, "rs2.json");
+  const g = await streamGateway({ record, env: { FAKE_T1: "한 번에 맞은 답" }, turns: 1, next: () => null });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.deepEqual(h.texts, ["첫 지시"]);
+    assert.equal(g.results[0]!.result.text, "한 번에 맞은 답"); assert.equal(g.results[0]!.result.turns, 1);
+    assert.equal(g.turns.length, 1);
+  } finally { await g.close(); }
+});
+
+await t("RS3 판 파일 — 0600 으로 쓰고 자리표를 그 경로 · 노드 실행 파일로 바꾼다(argv · env · 파일 내용) · 이름의 경로 문자는 지운다 · 끝나면 지운다", async () => {
+  const record = path.join(tmp, "rs3.json");
+  const g = await streamGateway({ record, turns: 0 });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.ok(h.settingsPath && !h.settingsPath.includes("{{"), `settings 자리표가 그대로: ${h.settingsPath}`);
+    assert.equal(h.settingsMode, 0o600);
+    const cmd = JSON.parse(h.settings).hooks.PreToolUse[0].hooks[0].command as string;
+    assert.ok(cmd.startsWith(`"${process.execPath}" "`) && !cmd.includes("{{"), `훅 명령의 자리표: ${cmd}`);
+    const guardPath = cmd.split("\" \"")[1]!.replace(/"$/, "");
+    assert.equal(path.dirname(guardPath), path.dirname(h.settingsPath), "판정기는 같은 판 폴더에");
+    assert.equal(h.env.guardEnv, path.join(path.dirname(h.settingsPath), "f-guard.json"), "env 값의 자리표도 바뀐다");
+    assert.equal(h.env.session, "box-alice");
+    assert.ok(!fs.existsSync(path.join(path.dirname(path.dirname(h.settingsPath)), EVIL)), "이름의 경로 문자로 판 폴더 밖에 쓰지 않는다");
+    assert.ok(!fs.existsSync(h.settingsPath), "끝나면 판 폴더를 지운다");
+    assert.equal(g.turns.length, 0, "턴 0 이면 묻지 않는다");
+  } finally { fs.rmSync(path.join(os.tmpdir(), EVIL), { force: true }); await g.close(); }   // 판(같은 TMPDIR)이 새어 썼다면 치운다
+});
+
+await t("RS4 stream — 첫 턴이 오류면 묻지 않고 끝낸다(오류 답 그대로)", async () => {
+  const record = path.join(tmp, "rs4.json");
+  const g = await streamGateway({ record, env: { FAKE_ERR_TURN: "1", FAKE_T1: "오류 답" }, turns: 1, next: () => "다시" });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.turns.length, 0);
+    assert.equal(g.results[0]!.result.is_error, true); assert.equal(g.results[0]!.result.text, "오류 답");
+  } finally { await g.close(); }
+});
+
+await t("RS5 stream — 하네스가 내 메시지를 되돌려 주지 않으면 그 답을 내 답으로 읽지 않는다(기다림 상한 없음 → 시간 상한에 끝남)", async () => {
+  const record = path.join(tmp, "rs5.json");
+  const g = await streamGateway({ record, env: { FAKE_NOREPLAY: "1", FAKE_PRE: "1" }, turns: 1, next: () => null, timeoutMs: 1_500 });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.turns.length, 0);
+    assert.equal(g.results[0]!.stopped, "timeout"); assert.equal(g.results[0]!.result, null);
+  } finally { await g.close(); }
+});
+
+await t("RS6 stream — 되돌려 받기 상한을 넘기면 시간 상한을 기다리지 않고 사유를 남겨 끝낸다 · 상한 안에 되돌려 받으면 그대로", async () => {
+  const record = path.join(tmp, "rs6.json");
+  const g = await streamGateway({ record, env: { FAKE_NOREPLAY: "1" }, turns: 1, next: () => null, timeoutMs: 20_000, replayWaitMs: 700 });
+  const t0 = Date.now();
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.ok(Date.now() - t0 < 10_000, `시간 상한(20초)까지 기다렸다: ${Date.now() - t0}ms`);
+    const r = g.results[0]!;
+    assert.equal(r.stopped, "no_replay"); assert.equal(r.result, null);
+    assert.match(String(r.stderr_tail), /되돌려 주지 않았습니다/);
+  } finally { await g.close(); }
+  const ok2 = path.join(tmp, "rs6b.json");
+  const g2 = await streamGateway({ record: ok2, env: { FAKE_T1: "제때 되돌려 받은 답" }, turns: 1, next: () => null, replayWaitMs: 5_000 });
+  try {
+    assert.equal(await runBoot(g2.port), 0);
+    assert.equal(g2.results[0]!.stopped, null); assert.equal(g2.results[0]!.result.text, "제때 되돌려 받은 답");
+  } finally { await g2.close(); }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`# ${pass} pass`);

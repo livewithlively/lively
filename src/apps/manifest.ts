@@ -59,6 +59,11 @@ export const FILE_URL_TOOL = "file_url";
 export const AI_RUN_TOOLS = ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"] as const;
 export const AI_RUN_TOOL = AI_RUN_TOOLS[0];
 /**
+ * #4489 — 「붙은 세션에서 실행」(세션 분기) 권한(permissions.ai_fork)이 함의하는 동의 표지. 도구가 아니라 표지다(app_chat_send 와 같은 꼴) —
+ *  `/_lively/ai/runs` 의 `target: {fork}` 가 그 사람의 grant 에서 이 이름을 찾는다(ai-runs/live.forkConsent). 분기는 AI 실행 도구로 가므로 AI_RUN_TOOLS 도 함께 함의한다.
+ */
+export const AI_FORK_TOOL = "app_ai_fork";
+/**
  * #4486 — 서버를 선언한 앱(web.server)이 함의하는 «백그라운드 작업» 도구들(capabilities/app-jobs.ts 와 같은 글자). 앱 서버 SDK livelyJobs() · 앱 주소 /_lively/jobs ·
  *  lively.jobs.* 가 이 도구를 grant 에서 찾는다. 작업은 그 앱의 서버 코드를 그 사람 이름으로 뒤에서(15분까지) 돌리는 것이라 동의 창에 «백그라운드 작업» 줄로 보인다.
  */
@@ -112,6 +117,9 @@ const permissionsSchema = z.object({
   // #4488 — 이 앱이 **AI 를 실행**할 수 있나(/_lively/ai/runs · lively.ai.run). 기본 false(fail-closed). 워크스페이스 API 키의 돈을 쓰거나 그 사람 구독으로 작업을
   //  돌리는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_ai_run 이 있어야 한다(ai-runs/service · 동의 창 web/v2/app-session.ts).
   ai_runs: z.boolean().default(false),
+  // #4489 — 이 앱이 **붙은 세션의 대화로** AI 를 실행할 수 있나(세션 분기 — `target: {fork: <세션>}`). 기본 false(fail-closed). 그 세션 대화 전부를 읽고
+  //  그 세션 주인의 구독으로 도는 능력이라 따로 선언 · 따로 동의받는다(grant 에 app_ai_fork). 선언하면 ai_runs 도 함께 켜진다.
+  ai_fork: z.boolean().default(false),
 }).strict();
 
 // #4488 — AI 를 쓰는 작업 선언(ai.jobs). 이름으로 선언해 두면 워크스페이스 관리 도구(app_ai_account_set)에서 작업별 실행 계정을 따로 걸 수 있다(설계 §12 ④ 조건 ④).
@@ -399,8 +407,12 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   }
   // #4673 — `app_folder: true` 는 `file_url` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「앱 폴더에 파일을 올리고 받기」).
   // #4488 — `ai_runs: true` 는 AI 실행 도구 다섯을 함의한다(사람에게 보이는 권한은 「AI 실행」, 도구 이름은 배관).
-  if (m.permissions.ai_runs) {
+  if (m.permissions.ai_runs || m.permissions.ai_fork) {
     for (const t of AI_RUN_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
+  }
+  // #4489 — `ai_fork: true` 는 「붙은 세션에서 실행」 동의 표지(app_ai_fork)를 함의한다(사람에게 보이는 권한은 동의 창의 그 줄).
+  if (m.permissions.ai_fork && !m.permissions.tools.includes(AI_FORK_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, AI_FORK_TOOL];
   }
   if (m.permissions.app_folder && !m.permissions.tools.includes(FILE_URL_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, FILE_URL_TOOL];

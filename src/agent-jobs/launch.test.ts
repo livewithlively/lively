@@ -122,6 +122,20 @@ await t("H1 확보 요청(#4891) — 홈 없는 작업은 homeless:true · 전�
   assert.ok(!("homeless" in proj));
 });
 
+await t("H1b 확보 요청(#4489) — 세션 분기는 프로젝트 폴더가 아니어도 그 앱 폴더를 붙인다 · 앱이 없거나 분기가 아니면 종전대로", () => {
+  const mem = { memMb: 2048, memRequestMb: 768 };
+  const fork = { session: "box-alice", conversation: "11111111-2222-3333-4444-555555555555" };
+  const personal = jobEnsureRequest({ session_id: "job-10-0123abcd", cwd: "/work/personal", app_id: "memo", project_id: null, homeless: false, fork }, { osUser: "box_alice", ...mem });
+  assert.deepEqual(personal.apps, ["memo"], "개인 폴더 세션의 분기도 그 앱 폴더를 본다");
+  assert.ok(!("homeless" in personal) && !("fresh" in personal), JSON.stringify(personal));
+  const proj = jobEnsureRequest({ session_id: "job-11-0123abcd", cwd: "/work/shared/project/3", app_id: "memo", project_id: 3, homeless: false, fork }, { osUser: "box_alice", ...mem });
+  assert.deepEqual(proj.apps, ["memo"]);
+  const noApp = jobEnsureRequest({ session_id: "job-12-0123abcd", cwd: "/work/personal", app_id: null, project_id: null, homeless: false, fork }, { osUser: "box_alice", ...mem });
+  assert.ok(!("apps" in noApp), "붙일 앱이 없다");
+  const plain = jobEnsureRequest({ session_id: "job-13-0123abcd", cwd: "/work/apps/memo", app_id: "memo", project_id: null, homeless: false, fork: null }, { osUser: "box_alice", ...mem });
+  assert.ok(!("apps" in plain), "분기가 아닌 앱 폴더 작업은 붙일 것이 없다(종전)");
+});
+
 await t("H2 홈 없는 작업의 조건은 부수효과 앞 — 구독 · 프로젝트 폴더 · 다른 앱 폴더 · 앱 없음이면 일시가 아닌 실패(OS 계정 · 브로커를 부르지 않는다)", async () => {
   const base = { id: 7, session_id: "job-7-0123abcd", requester: "alice", account_member: null, account_kind: "api_key", app_id: "crm", project_id: null, cwd: "/work/apps/crm", homeless: true };
   const rows: Array<[Record<string, unknown>, RegExp]> = [
