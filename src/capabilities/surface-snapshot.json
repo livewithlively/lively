@@ -783,7 +783,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "464e5ed37a5f5954"
+  "input_hash": "23a48ef055eb02d4"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -1674,7 +1674,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "930ae2b98ee3a3a6"
+  "input_hash": "beabf5627ea64762"
  },
  {
   "name": "org_hook_remove",
@@ -2595,6 +2595,16 @@
    "POST /api/ui/knowledge/:name/title"
   ],
   "input_hash": "3f9f3b9278775b20"
+ },
+ {
+  "name": "knowledge_set_fields",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/fields"
+  ],
+  "input_hash": "4153f82a5d044aaf"
  },
  {
   "name": "knowledge_link_category",

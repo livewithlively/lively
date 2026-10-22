@@ -104,7 +104,7 @@ export const hooksCapabilities: Capability[] = [
       note: z.string().optional().describe("메모"),
       summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
-      sort: z.number().optional().describe("정렬 순서"),
+      sort: z.number().optional().describe("실행 순서 — 러너는 sort 오름차순으로 돈다. 조직이 동시 실행(runtime_config.hooks.concurrent)을 켜면 sort 가 같은 훅끼리는 동시에 돈다. 다른 훅이 끝난 뒤에 돌아야 하면 더 큰 값을 준다"),
     }),
   restRuntime("org_hook_remove", "커스텀 훅 제거",
     "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
@@ -144,13 +144,17 @@ export const hooksCapabilities: Capability[] = [
       if (event) hooks = hooks.filter((h) => h.event === event);
       // relay_decisions(#892) — 러너가 PreToolUse 에서 하네스로 전파할 결정값. 이미 매 이벤트 오는 응답에
       //  얹으므로 왕복이 늘지 않는다. 구버전 러너는 이 필드를 무시하고, 신 러너는 필드가 없으면 자체 기본값을 쓴다.
-      const relay = (await getRuntimeConfig()).hook_relay_decisions;
+      const rc = await getRuntimeConfig();
+      const relay = rc.hook_relay_decisions;
       // 시드 훅은 코드 본문으로 덮어 내려준다(#1836) — 과거에 편집된 행이 남아 있어도 실행은 항상 최신 제품 코드다.
       //  content_hash 도 함께 덮이므로 런너의 무결성 게이팅은 그대로 성립한다.
       return { hooks: effectiveHooks(hooks).map((h) => ({
         id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
         content_hash: h.content_hash, timeout_sec: h.timeout_sec,
-      })), relay_decisions: relay };
+        // 동시 실행이 켜졌으면 러너가 sort 가 같은 훅을 한 묶음으로 동시에 돌린다. 구 러너는 이 필드를 무시하고 종전처럼 차례로 돈다.
+        sort: h.sort,
+        // concurrent — 조직 설정(runtime_config.hooks.concurrent, 기본 false). 러너는 true 일 때만 겹친다.
+      })), relay_decisions: relay, concurrent: rc.hooks.concurrent === true };
     },
     false, { harness: z.string().optional(), event: z.string().optional() }),   // #1403 — types.ts input 규약
 

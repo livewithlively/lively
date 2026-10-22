@@ -41,7 +41,7 @@ const PRE_PAYLOAD = { session_id: "s1", tool_name: "Write", tool_input: { file_p
 //  · relay 를 생략하면 캐시에 relay 키 자체가 없다 = "정책 미지" → 기본 정책 경로를 탄다(§D).
 //  · execFileSync 는 반환값이 stdout 뿐이라 exit code(§E)와 진단 stderr(§F)를 함께 관측할 수 없다 → spawnSync 를 쓴다
 //    (같은 node:child_process 의 동기 실행, 여전히 진짜 자식 프로세스).
-function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, graceMs, token, gatewayUrl } = {}) {
+function run(event, hooks, { relay, concurrent, payload, timeoutMs = 20000, cacheAgeMs = 0, graceMs, token, gatewayUrl } = {}) {
   const cache = {
     at: Date.now() - cacheAgeMs, // 기본 0 = 지금. cacheAgeMs 로 '오래된 캐시'를 재현한다(#1008 grace 테스트)
     hooks: hooks.map((h) => ({
@@ -49,11 +49,14 @@ function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, 
       event,
       matcher: h.matcher ?? null,
       timeout_sec: h.timeout_sec ?? 5,
+      ...(h.sort !== undefined ? { sort: h.sort } : {}), // 생략 = 구버전 게이트웨이 응답(§W3)
       source_code: h.src,
       content_hash: h.hash ?? sha256(h.src), // §G: 기본은 정상 해시, 변조 시나리오만 h.hash 로 어긴다
     })),
   };
   if (relay !== undefined) cache.relay = relay;
+  // concurrent — 조직의 동시 실행 설정(게이트웨이 응답과 함께 캐시된다). 생략 = 구 캐시·꺼짐(종전처럼 하나씩, §W0).
+  if (concurrent !== undefined) cache.concurrent = concurrent;
   writeFileSync(join(HOME, ".lively", `custom-hooks-${event.replace(/[^A-Za-z]/g, "")}.json`), JSON.stringify(cache));
   // hook_grace_ms(#1008) — graceMs 를 주면 hooks-config.json 에 심어 캐시 유효기간을 정하고, 안 주면 파일을 지워
   //  '무제한(기본)' 경로를 재현한다(같은 HOME 재사용이라 직전 테스트가 남긴 값이 새지 않게 매번 명시).
@@ -685,6 +688,273 @@ const graceHook = (id) => ({ id, src: decide({ decision: "deny", reason: id }) }
   existsSync(sentinel)
     ? ok("J2 오프라인에서도 캐시된 SessionEnd 훅은 실행된다(기능 보존)")
     : bad("J2 캐시된 SessionEnd 훅 실행", dbg(r));
+}
+
+// ── §W 실행 순서(sort 묶음) ──
+// 조직이 동시 실행을 켜면(concurrent) 같은 sort 는 동시에, 다른 sort 는 오름차순으로 차례차례 돈다. 순서 정보가 하나라도
+//  빠지면 전부 하나씩. 끄면(기본 — 설정이 없는 구 캐시 포함) 종전처럼 받은 순서대로 하나씩(§W0).
+//  '겹쳤나'는 경과시간보다 **랑데부**로 본다: 두 훅이 각자 시작 표식을 남기고 상대 표식을 기다린다 —
+//  동시에 돌면 둘 다 상대를 보고, 하나씩 돌면 먼저 돈 쪽은 끝내 혼자다. 부하에 흔들리지 않는 관측이다.
+//  경과시간 단정은 하한(W3a: 하나씩이면 구조상 2T 이상)과 넉넉한 상한(W6·W6b)에만 쓴다 — 부하에 흔들리지 않게.
+const UPS = { session_id: "s1", prompt: "안녕" };
+const wDir = (name) => { const d = join(SANDBOX, `w-${name}`); rmSync(d, { recursive: true, force: true }); mkdirSync(d, { recursive: true }); return d; };
+// 동기 sleep — CJS/ESM 어느 쪽으로 실행돼도 동작하고 이벤트루프 없이 정확히 기다린다.
+const sleepSrc = (ms) => `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${ms});\n`;
+const sayHook = (text) => `process.stdout.write(${JSON.stringify(text)});\n`;
+// 랑데부 훅: 내 표식을 남기고 상대 표식을 waitMs 까지 기다린 뒤 "<me>:SAW " / "<me>:ALONE " 를 낸다.
+const meet = (dir, me, other, waitMs) => 'const fs = require("node:fs"); const path = require("node:path");\n'
+  + `fs.writeFileSync(path.join(${JSON.stringify(dir)}, ${JSON.stringify(me)}), "1");\n`
+  + `const end = Date.now() + ${waitMs}; let saw = false;\n`
+  + `while (Date.now() < end) { if (fs.existsSync(path.join(${JSON.stringify(dir)}, ${JSON.stringify(other)}))) { saw = true; break; } `
+  + 'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); }\n'
+  + `process.stdout.write(${JSON.stringify(me)} + (saw ? ":SAW " : ":ALONE "));\n`;
+// 실행 순서 로그: (선택적으로 잠깐 잔 뒤) 자기 id 를 공용 로그에 덧붙인다.
+const logHook = (log, id, delayMs = 0) => 'const fs = require("node:fs");\n'
+  + (delayMs ? sleepSrc(delayMs) : "")
+  + `fs.appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(id + "\n")});\n`;
+const readLog = (log) => { try { return readFileSync(log, "utf8").trim().split("\n").filter(Boolean).join(","); } catch { return ""; } };
+// 출력 안에서 a 가 b 보다 앞에 있나(둘 다 있어야 참).
+const before = (s, a, b) => s.includes(a) && s.includes(b) && s.indexOf(a) < s.indexOf(b);
+
+// W0a (기본): 동시 실행 설정이 없으면(구 캐시 · 조직이 안 켬) sort 가 같아도 하나씩 돈다 — 먼저 돈 쪽은 끝내 혼자다.
+{
+  const d = wDir("0a");
+  const r = run("UserPromptSubmit", [
+    { id: "w0a-p", sort: 3, timeout_sec: 10, src: meet(d, "p", "q", 1500) },
+    { id: "w0a-q", sort: 3, timeout_sec: 10, src: meet(d, "q", "p", 1500) },
+  ], { payload: UPS });
+  r.status === 0 && r.stdout.includes("p:ALONE") && r.stdout.includes("q:SAW")
+    ? ok("W0a 동시 실행 설정이 없으면 같은 sort 여도 겹치지 않는다(기본 꺼짐)")
+    : bad("W0a 기본 꺼짐 직렬", dbg(r));
+}
+// W0b: concurrent:false 로 명시해도 같다 — true 만 켠다.
+{
+  const d = wDir("0b");
+  const r = run("UserPromptSubmit", [
+    { id: "w0b-p", sort: 3, timeout_sec: 10, src: meet(d, "p", "q", 1500) },
+    { id: "w0b-q", sort: 3, timeout_sec: 10, src: meet(d, "q", "p", 1500) },
+  ], { payload: UPS, concurrent: false });
+  r.status === 0 && r.stdout.includes("p:ALONE") && r.stdout.includes("q:SAW")
+    ? ok("W0b concurrent:false 면 하나씩 돈다")
+    : bad("W0b 명시 꺼짐 직렬", dbg(r));
+}
+// W0c: 꺼져 있으면 러너는 순서를 다시 정하지 않는다 — 받은 순서(서버가 sort·id 로 정렬해 준 순서) 그대로다(종전 동작).
+{
+  const d = wDir("0c");
+  const log = join(d, "order.log");
+  const r = run("UserPromptSubmit", [
+    { id: "w0c-high", sort: 7, src: logHook(log, "high") },
+    { id: "w0c-low", sort: -2, src: logHook(log, "low") },
+  ], { payload: UPS });
+  const order = readLog(log);
+  r.status === 0 && order === "high,low"
+    ? ok("W0c 꺼져 있으면 받은 순서 그대로 돈다(종전 동작)")
+    : bad("W0c 꺼짐 받은 순서", `order=${order} (기대 high,low) ${dbg(r)}`);
+}
+
+// W1a (S1): 모든 훅에 sort 가 있고 값이 같으면 동시에 돈다 — 두 훅이 서로의 시작 표식을 본다.
+{
+  const d = wDir("1a");
+  const r = run("UserPromptSubmit", [
+    { id: "w1a-p", sort: 3, timeout_sec: 10, src: meet(d, "p", "q", 4000) },
+    { id: "w1a-q", sort: 3, timeout_sec: 10, src: meet(d, "q", "p", 4000) },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("p:SAW") && r.stdout.includes("q:SAW")
+    ? ok("W1a 같은 sort 의 훅들은 겹쳐서(동시에) 돈다")
+    : bad("W1a 같은 sort 동시 실행", dbg(r));
+}
+// W2a (S2): 큰 sort 는 작은 sort 묶음이 **모두** 끝난 뒤에 시작한다 — 같은 묶음의 느린 훅이 남긴 부수효과까지 본다.
+{
+  const d = wDir("2a");
+  const mark = join(d, "slow-done");
+  const r = run("UserPromptSubmit", [
+    { id: "w2a-fast", sort: 1, src: sayHook("W2A-FAST ") },
+    { id: "w2a-slow", sort: 1, src: 'const fs = require("node:fs");\n' + sleepSrc(800) + `fs.writeFileSync(${JSON.stringify(mark)}, "1");\n` },
+    { id: "w2a-later", sort: 2, src: 'const fs = require("node:fs");\n'
+      + `process.stdout.write(fs.existsSync(${JSON.stringify(mark)}) ? "W2A-SEEN " : "W2A-MISSING ");\n` },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("W2A-SEEN")
+    ? ok("W2a 큰 sort 훅은 작은 sort 묶음이 모두 끝난 뒤 시작한다(느린 앞 훅의 부수효과를 본다)")
+    : bad("W2a sort 묶음 간 선후", dbg(r));
+}
+// W2c (S2): 음수·소수·여러 자리 수도 **숫자로** 비교된다(문자열 비교면 "10" < "9" 가 된다).
+//  앞 sort 일수록 오래 자게 했다 — 한꺼번에 돌면 로그가 거꾸로(늦게 잔 순) 찍혀 잡힌다.
+{
+  const d = wDir("2c");
+  const log = join(d, "order.log");
+  const r = run("UserPromptSubmit", [
+    { id: "w2c-ten", sort: 10, src: logHook(log, "ten") },
+    { id: "w2c-half", sort: 0.5, src: logHook(log, "half", 400) },
+    { id: "w2c-neg", sort: -1, src: logHook(log, "neg", 600) },
+    { id: "w2c-nine", sort: 9, src: logHook(log, "nine", 200) },
+  ], { payload: UPS, concurrent: true });
+  const order = readLog(log);
+  r.status === 0 && order === "neg,half,nine,ten"
+    ? ok("W2c sort 는 음수·소수 포함 숫자 오름차순으로 돈다")
+    : bad("W2c 숫자 비교", `order=${order} (기대 neg,half,nine,ten) ${dbg(r)}`);
+}
+// W3a (S3): sort 가 전부 빠지면(구 게이트웨이) 하나씩 돈다 — T초 훅 둘이면 2T 이상.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w3a-1", src: sleepSrc(1500) + sayHook("W3A-ONE ") },
+    { id: "w3a-2", src: sleepSrc(1500) + sayHook("W3A-TWO ") },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("W3A-ONE") && r.stdout.includes("W3A-TWO") && r.elapsed >= 2900
+    ? ok(`W3a sort 가 없는 훅들은 겹치지 않고 하나씩 돈다 (${r.elapsed}ms)`)
+    : bad("W3a sort 부재 직렬", `elapsed=${r.elapsed}ms (2900 이상이어야 함) ${dbg(r)}`);
+}
+// W3b (S3): **하나만** sort 가 빠져도 전부 하나씩 돈다 — 나머지 훅의 sort 가 같아도 겹치지 않는다.
+//  (빠진 sort 를 0 으로 채우는 구현이면 sort:0 짝과 한 묶음이 되어 여기서 잡힌다.)
+{
+  const d = wDir("3b");
+  const r = run("UserPromptSubmit", [
+    { id: "w3b-p", sort: 0, timeout_sec: 10, src: meet(d, "p", "q", 1500) },
+    { id: "w3b-q", timeout_sec: 10, src: meet(d, "q", "p", 1500) },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("p:ALONE") && r.stdout.includes("q:SAW")
+    ? ok("W3b 하나라도 sort 가 없으면 모든 훅이 받은 순서대로 하나씩 돈다")
+    : bad("W3b 일부 sort 부재 직렬", dbg(r));
+}
+// W3c (S3): 그 하나씩은 **받은 순서**다 — 다른 훅들의 sort 값은 이때 순서를 정하지 않는다.
+{
+  const d = wDir("3c");
+  const log = join(d, "order.log");
+  const r = run("UserPromptSubmit", [
+    { id: "w3c-x", sort: 2, src: logHook(log, "x") },
+    { id: "w3c-y", sort: 1, src: logHook(log, "y") },
+    { id: "w3c-z", src: logHook(log, "z") },
+  ], { payload: UPS, concurrent: true });
+  const order = readLog(log);
+  r.status === 0 && order === "x,y,z"
+    ? ok("W3c sort 가 빠진 묶음은 sort 와 무관하게 받은 순서대로 돈다")
+    : bad("W3c 받은 순서 실행", `order=${order} (기대 x,y,z) ${dbg(r)}`);
+}
+// W4a (S4): 같은 sort 안에서 컨텍스트 순서 = 받은 순서. 먼저 받은 훅을 **느리게** 해 '먼저 끝난 순서'와 갈라 놓는다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w4a-slow", sort: 5, src: sleepSrc(800) + sayHook("W4A-FIRST-RECEIVED ") },
+    { id: "w4a-fast", sort: 5, src: sayHook("W4A-SECOND-RECEIVED ") },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && before(r.stdout, "W4A-FIRST-RECEIVED", "W4A-SECOND-RECEIVED")
+    ? ok("W4a 같은 sort 의 컨텍스트는 먼저 끝난 순서가 아니라 받은 순서로 이어붙는다")
+    : bad("W4a 같은 sort 출력 순서", dbg(r));
+}
+// W4b (S4): 다른 sort 끼리는 받은 목록 순서와 무관하게 sort 오름차순으로 이어붙는다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w4b-high", sort: 7, src: sayHook("W4B-HIGH ") },
+    { id: "w4b-low", sort: -2, src: sayHook("W4B-LOW ") },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && before(r.stdout, "W4B-LOW", "W4B-HIGH")
+    ? ok("W4b 컨텍스트는 sort 오름차순으로 이어붙는다(목록에 높은 sort 가 먼저 와도)")
+    : bad("W4b sort 순 출력", dbg(r));
+}
+// W5a (S5): PreToolUse 같은 등급(deny) 사유 합치기도 받은 순서 — 먼저 받은 쪽이 늦게 끝나도.
+{
+  const r = run("PreToolUse", [
+    { id: "w5a-slow", sort: 1, src: sleepSrc(800) + decide({ decision: "deny", reason: "W5A-REASON-FIRST" }) },
+    { id: "w5a-fast", sort: 1, src: decide({ decision: "deny", reason: "W5A-REASON-SECOND" }) },
+  ], { concurrent: true });
+  const a = answer(r);
+  a?.permissionDecision === "deny" && before(a?.permissionDecisionReason ?? "", "W5A-REASON-FIRST", "W5A-REASON-SECOND")
+    ? ok("W5a 같은 sort 의 deny 사유는 먼저 끝난 순서가 아니라 받은 순서로 합쳐진다")
+    : bad("W5a 사유 순서(같은 sort)", dbg(r));
+}
+// W6 (S6): 같은 묶음에서 한 훅이 timeout_sec 을 넘기면 그 훅만 끊기고, 이웃의 출력은 그대로 나간다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w6-hang", sort: 1, timeout_sec: 1, src: sleepSrc(5000) + sayHook("W6-LATE ") },
+    { id: "w6-ok", sort: 1, src: sleepSrc(300) + sayHook("W6-SURVIVOR ") },
+  ], { payload: UPS, concurrent: true, timeoutMs: 15000 });
+  r.status === 0 && r.stdout.includes("W6-SURVIVOR") && !r.stdout.includes("W6-LATE")
+    && r.stderr.includes("[lively] hook 'w6-hang' timeout") && r.elapsed < 4500
+    ? ok(`W6 같은 묶음의 timeout 훅만 끊기고 이웃 출력은 전달된다(exit 0, ${r.elapsed}ms)`)
+    : bad("W6 묶음 내 timeout 격리", `elapsed=${r.elapsed}ms ${dbg(r)}`);
+}
+// W6b (S8): timeout 된 훅이 stdio 를 물려받은 자식(백그라운드 작업)을 남겨도, 러너는 그 훅의 상한 직후 진행한다.
+//  자식이 8초 살아 있으므로 러너가 자식을 기다리면 8초를 넘긴다. 상한 5초는 timeout(1초)+기동 오버헤드에 넉넉하다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w6b-orphan", sort: 1, timeout_sec: 1, src: 'const { spawn } = require("node:child_process");\n'
+      + 'spawn(process.execPath, ["-e", "setTimeout(() => {}, 8000)"], { stdio: "inherit" });\n' + sleepSrc(5000) },
+    { id: "w6b-ok", sort: 1, src: sayHook("W6B-SURVIVOR ") },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("W6B-SURVIVOR") && r.stderr.includes("[lively] hook 'w6b-orphan' timeout") && r.elapsed < 5000
+    ? ok(`W6b timeout 훅이 남긴 자식이 파이프를 붙잡아도 러너는 기다리지 않는다(${r.elapsed}ms)`)
+    : bad("W6b timeout 훅의 자식 대기", `elapsed=${r.elapsed}ms ${dbg(r)}`);
+}
+// W6c (S9): 훅이 스스로 정상 종료했는데 stdio 를 물려받은 자식이 파이프를 붙잡고 있어도, 러너는 그 훅의 상한 안에
+//  성공으로 마무리한다 — 출력은 전달되고 실패로 보고되지 않는다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w6c-done", sort: 1, timeout_sec: 1, src: 'const { spawn } = require("node:child_process");\n'
+      + 'spawn(process.execPath, ["-e", "setTimeout(() => {}, 8000)"], { stdio: "inherit" }).unref();\n'
+      + 'process.stdout.write("W6C-DONE ", () => process.exit(0));\n' },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("W6C-DONE") && !r.stderr.includes("w6c-done") && r.elapsed < 5000
+    ? ok(`W6c 정상 종료한 훅의 자식이 파이프를 붙잡아도 상한 안에 성공으로 끝난다(${r.elapsed}ms)`)
+    : bad("W6c 정상 종료 훅의 자식 대기", `elapsed=${r.elapsed}ms ${dbg(r)}`);
+}
+// W7 (S7): 같은 묶음에서 한 훅이 크래시해도 그 훅만 실패로 드러나고, 더 늦게 끝나는 이웃의 출력은 전달된다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w7-crash", sort: 1, src: 'throw new Error("w7-boom");\n' },
+    { id: "w7-ok", sort: 1, src: sleepSrc(500) + sayHook("W7-SURVIVOR ") },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("W7-SURVIVOR") && r.stderr.includes("[lively] hook 'w7-crash' crash")
+    ? ok("W7 같은 묶음의 크래시 훅만 실패로 드러나고 이웃 출력은 전달된다(exit 0)")
+    : bad("W7 묶음 내 크래시 격리", dbg(r));
+}
+
+// W8: 한 묶음에서 동시에 도는 훅은 8개까지다 — 같은 sort 의 훅 10개가 각자 «지금 도는 훅 수» 를 세어 남긴다.
+//  상한이 없으면 10개가 한꺼번에 떠 최대값이 8 을 넘는다. 2 이상이어야 실제로 겹친 것이다.
+{
+  const d = wDir("8");
+  const runDir = join(d, "run"); mkdirSync(runDir, { recursive: true });
+  const counted = (id) => 'const fs = require("node:fs"); const path = require("node:path");\n'
+    + `const me = path.join(${JSON.stringify(runDir)}, ${JSON.stringify(id)}); fs.writeFileSync(me, "1");\n`
+    + `fs.appendFileSync(${JSON.stringify(join(d, "counts.log"))}, fs.readdirSync(${JSON.stringify(runDir)}).length + "\\n");\n`
+    + sleepSrc(700) + 'fs.unlinkSync(me);\n' + sayHook(`${id} `);
+  const hooks = Array.from({ length: 10 }, (_, i) => ({ id: `w8-${i}`, sort: 1, timeout_sec: 10, src: counted(`w8-${i}`) }));
+  const r = run("UserPromptSubmit", hooks, { payload: UPS, concurrent: true, timeoutMs: 30000 });
+  const counts = (() => { try { return readFileSync(join(d, "counts.log"), "utf8").trim().split("\n").map(Number); } catch { return []; } })();
+  const max = counts.length ? Math.max(...counts) : 0;
+  r.status === 0 && counts.length === 10 && max >= 2 && max <= 8 && hooks.every((h) => r.stdout.includes(h.id))
+    ? ok(`W8 같은 sort 의 훅 10개 — 동시에 도는 건 최대 8개(관측 최대 ${max})`)
+    : bad("W8 동시 실행 상한", `counts=${counts.join(",")} max=${max} ${dbg(r)}`);
+}
+// W9: 한 훅을 실행하다 러너 쪽에서 예외가 나도(캐시가 깨져 source_code 가 문자열이 아님) 같은 묶음의 이웃은 끝까지 돈다.
+{
+  const r = run("UserPromptSubmit", [
+    { id: "w9-broken", sort: 1, src: 12345, hash: "not-a-hash" },
+    { id: "w9-ok", sort: 1, src: sleepSrc(300) + sayHook("W9-SURVIVOR ") },
+  ], { payload: UPS, concurrent: true });
+  r.status === 0 && r.stdout.includes("W9-SURVIVOR") && r.stderr.includes("[lively] hook 'w9-broken'")
+    ? ok("W9 러너 쪽 예외는 그 훅의 실패로 갇히고 이웃 출력은 전달된다(exit 0)")
+    : bad("W9 훅 단위 예외 격리", dbg(r));
+}
+// W10a: 출력이 4MB 상한을 넘는 훅은 끊기고 실패로 드러난다(잘린 출력이 성공으로 나가지 않는다) · 이웃은 그대로.
+//  stderr 로 쏟는다 — stdout 으로 쏟으면 회수한 앞부분이 러너 출력으로 그대로 나가 이 시험의 spawnSync 버퍼를 넘친다.
+{
+  const flood = 'const b = Buffer.alloc(1024 * 1024, 120); for (let i = 0; i < 5; i++) require("node:fs").writeSync(2, b);\n';
+  const r = run("UserPromptSubmit", [
+    { id: "w10a-flood", sort: 1, timeout_sec: 20, src: flood },
+    { id: "w10a-ok", sort: 1, src: sayHook("W10A-SURVIVOR ") },
+  ], { payload: UPS, concurrent: true, timeoutMs: 30000 });
+  r.status === 0 && r.stdout.includes("W10A-SURVIVOR") && r.stderr.includes("[lively] hook 'w10a-flood'")
+    ? ok("W10a 출력 4MB 상한을 넘긴 훅은 실패로 드러나고 이웃 출력은 전달된다")
+    : bad("W10a 출력 상한", dbg({ ...r, stderr: r.stderr.slice(-600) }));
+}
+// W10b: 훅이 stdin 을 안 읽고 먼저 끝나면(큰 입력에서 EPIPE) 러너는 죽지 않고 다음 훅까지 돈다.
+{
+  const big = { ...UPS, prompt: "x".repeat(512 * 1024) };
+  const r = run("UserPromptSubmit", [
+    { id: "w10b-noread", src: "process.exit(0);\n" },
+    { id: "w10b-ok", src: sayHook("W10B-SURVIVOR ") },
+  ], { payload: big, timeoutMs: 30000 });
+  r.status === 0 && r.stdout.includes("W10B-SURVIVOR") && !r.stderr.includes("w10b-noread")
+    ? ok("W10b stdin 을 안 읽고 끝난 훅(EPIPE)에도 러너는 exit 0 으로 다음 훅까지 돈다")
+    : bad("W10b stdin EPIPE", dbg({ ...r, stderr: r.stderr.slice(-600) }));
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

@@ -17,7 +17,7 @@
 //  멱등: 두 번째 실행부터는 전부 present → 0 삽입. 새 디폴트가 추가되면 그 행만 다음 update(재기동)에 유입된다.
 //  비치명: 시딩 실패는 게이트웨이 기동을 막지 않는다(호출부가 .catch — baseline 시드와 동일 best-effort).
 import { itemsPool } from "../../db/client.js";
-import { getOrgHook, upsertOrgHook, assetContentHash,
+import { getOrgHook, upsertOrgHook, moveOrgHookSort, assetContentHash,
   type WriteCtx, type HookHarness } from "../store.js";
 import { DEFAULT_HOOKS, DEFAULT_SKILLS, DEFAULT_KNOWLEDGE } from "./default-content.js";
 import { logger } from "../../log.js";
@@ -36,6 +36,13 @@ const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → pr
 //    만든 산출물도 웹 자료함에 안 올라갔다. 매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다.
 const PROMOTE_ENABLED = new Set(["session-log-capture",
   "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool", "project-push-turn", "project-push-start"]);
+
+// 기본 sort 가 옮겨진 시드 훅 — 행의 sort 가 **옛 기본값 그대로**일 때만 새 기본값으로 따라간다.
+//  run-custom 은 sort 가 같은 훅을 동시에 돌린다. 아래 둘은 옛 기본값(0)에서 짝 훅과 같은 묶음이 되어 겹쳐 돌면 안 된다:
+//  · project-pull-turn — 첫 지시에서 project-auto-bind(0)가 프로젝트를 붙인 **뒤에** 받아야 그 턴에 자료가 온다.
+//  · project-push-tool — project-pull-tool(0)과 같은 폴더의 동기화 원장을 통째로 다시 써서, 겹치면 한쪽 기록이 덮인다.
+//  아래 표의 값이 그 옛 기본값이다. 옛 기본값이 아닌 행은 이 블록이 손대지 않는다.
+const LEGACY_SEED_SORT: Record<string, number> = { "project-pull-turn": 0, "project-push-tool": 0 };
 
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
@@ -79,6 +86,11 @@ export async function seedDefaultContent(): Promise<SeedResult> {
         }, ctx);
         res.hooks++;
         continue;
+      }
+      //  sort 한 칸만 옮긴다(moveOrgHookSort) — upsertOrgHook 은 updated_by 를 'system' 으로 덮어, 사람이 끈 훅을 위 승격
+      //  블록이 다음 부팅에 다시 켠다. continue 하지 않는다: 소스도 바뀐 릴리스면 아래 일반 경로가 같은 부팅에 이어서 갱신한다.
+      if (Object.hasOwn(LEGACY_SEED_SORT, h.id) && before.sort === LEGACY_SEED_SORT[h.id] && h.sort !== before.sort) {
+        if (await moveOrgHookSort(h.id, before.sort, h.sort, ctx)) { res.hooks++; before.sort = h.sort; }
       }
       // 기존 행 — 소스가 실제로 달라졌을 때만 갱신.
       //  ⚠ 종전엔 `updated_by='system'`(손 안 댄 시드)까지 요구했다. #1836 에서 시드 훅이 **편집 불가**가 되면서

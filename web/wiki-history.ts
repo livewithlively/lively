@@ -19,7 +19,7 @@ import { diffView, lineDiff, rqEnsureStyles } from './review.js';
 const OP_LABEL: Record<string, string> = {
   insert: '문서 생성', update: '본문 수정', set_title: '제목 변경', delete: '삭제', restore: '복원',
   link_category: '분류 지정', unlink_category: '분류 해제', propose_category: '분류 제안',
-  set_lifecycle: '상태 변경', set_wiki: 'WIKI 핀', move: '위치 이동', set_props_ui: '표시 설정',
+  set_lifecycle: '상태 변경', set_wiki: 'WIKI 핀', move: '위치 이동', set_props_ui: '표시 설정', set_fields: '메타데이터 변경',
   set_visibility: '공개범위 변경',
   link_knowledge: '문서 연결', unlink_knowledge: '연결 해제',
   link_source: '자료 연결', unlink_source: '자료 연결 해제',

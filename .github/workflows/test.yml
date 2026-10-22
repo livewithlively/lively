@@ -462,6 +462,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/capabilities/knowledge/write-gate-name.pg-test.mjs
+      # ⑤-m3 지식 fields 부분 갱신 — 잠근 행 위에서 병합·버전 대조·감사가 한 트랜잭션에 묶이는가. 목으로는 jsonb 왕복과
+      #    FOR UPDATE 위의 CAS 가 안 보인다(그 파일 머리말의 사양 엣지 표).
+      - name: 지식 fields 갱신 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/knowledge/set-fields.pg-test.mjs
       # ⑤-n 개인 해제(break-glass) — 위와 같은 경계의 **예외** 경로다. 해제가 실제로 열리는가보다
       #    «해제가 끝나면 닫히는가 · 남의 것은 안 열리는가» 가 중요한데 그것도 SQL 조건이다.
       - name: 가시성 개인 해제 PG 통합 테스트
@@ -619,6 +626,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/collect/collect-links.pg-test.mjs
+      # ⑤-w 시드 훅 기본 sort 이행 + 러너 응답(#1470) — 목으로는 못 보는 것: 이행이 updated_by 를 남기나(바꾸면 사람이 끈 훅을
+      #    기본값 승격 블록이 **다음 부팅에** 다시 켠다 — 부팅을 두 번 돌려야 드러난다) · 조직이 바꾼 sort 를 덮지 않나 ·
+      #    러너 응답이 숫자 sort 와 조직의 동시 실행 설정(기본 꺼짐)을 싣나. 시드가 기본 콘텐츠를 통째로 심으므로 임시 DB 에서 돈다.
+      - name: 시드 훅 sort 이행 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/delivery/seed-sort-migrate.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

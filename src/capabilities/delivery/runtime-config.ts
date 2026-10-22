@@ -361,7 +361,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
         patch.hooks = {};
-        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update"]) {
+        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update", "concurrent"]) {
           if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
         }
       }
@@ -659,7 +659,9 @@ export const runtimeConfigCapabilities: Capability[] = [
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
-      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean() }).partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트)"),
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean(),
+        concurrent: z.boolean().describe("커스텀 훅 러너가 sort 가 같은 훅을 동시에 돌린다(기본 꺼짐 = 하나씩). 같은 sort 의 훅끼리 같은 파일을 쓰거나 서로의 결과에 기대면 켜기 전에 sort 를 나눠라") })
+        .partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트 · concurrent=같은 sort 훅 동시 실행)"),
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
       // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──
       ui_nav: z.object({ tabs: z.record(z.boolean()).optional().describe("탭 슬러그(data-tab) → 노출 여부. **명시적 false 만** 숨김") })

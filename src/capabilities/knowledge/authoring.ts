@@ -9,8 +9,9 @@ import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeGateFields, setKnowledgeWiki, deleteKnowledge,
   findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
   applyKnowledgeEdits, type KnowledgeEdit,
-  setKnowledgeTitle, sessionStampListId, KnowledgeExistsError,
+  setKnowledgeTitle, sessionStampListId, KnowledgeExistsError, patchKnowledgeFields,
 } from "../../v6/knowledge-store.js";
+import { isJsonObject } from "../../v6/knowledge-fields.js";
 // #4824 증류 저장 — 저장 · 원본 연결 · 공개범위를 한 트랜잭션에서(사양 R6) · 증류 배치는 원본 없이 못 쓴다(R7).
 import {
   derivedEnforced, linkDerivedSources, planNewDerivedKnowledge, withDerivedTx, writeNewDerivedKnowledge,
@@ -28,7 +29,7 @@ import {
 } from "./shared.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
-import { assertNoContentSecrets } from "../content-secrets.js";
+import { assertNoContentSecrets, assertNoSecretKeys } from "../content-secrets.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -617,6 +618,172 @@ export const knowledgeSetTitle: Capability = {
   },
 };
 
+// fields(메타데이터) 부분 갱신 — set_title 과 같은 경량 메타 툴 계열(본문을 받지 않는다). knowledge_save 에 fields_patch 를
+//  얹지 않은 이유: save 는 body_md 가 필수(replace·append)이거나 edits 가 필수(edit)라, code_sot 한 줄을 고치려고 본문이나
+//  가짜 edit 를 실어야 한다 — set_title(#1442)이 없애려던 바로 그 재전송이다. 그리고 save 의 인입 게이트·서술 형식·리비전은
+//  전부 제목·본문을 다루는 장치라 fields 만 바꾸는 저장엔 맞지 않는다.
+//  인입 허용선 게이트(#783)는 탄다 — drop 이면 수정이 막힌 지식이라 fields 도 막는다. stage·review 도 거절한다:
+//  수정 제안 모델(리비전)이 제목·본문만 담아 fields 를 실을 자리가 없어, stage 는 접수할 수 없고 review 는 반영해도
+//  사람이 사후 검토할 diff 가 큐에 오르지 않는다(반려해도 되돌릴 수 없다) — 정책이 걸렸는데 집행이 빠진 «조용한 통과» 가 된다.
+//  외부 미러(observed)는 거절한다 — append·edit 와 같은 이유(다음 재싱크가 fields 를 통째로 덮어 고친 값이 사라진다).
+const KFIELDS_CAPS = SOFT_CAPS.knowledge_set_fields;
+/** 패치 하나의 직렬화 상한 — fields 는 몇 개 키의 메타데이터다. 본문을 fields 로 우회해 싣는 것을 막는다. */
+const FIELDS_PATCH_MAX_BYTES = 16 * 1024;
+/** 병합 결과 상한 — 상한 안에 있던 fields 를 상한 밖으로 **넘기는** 패치만 거절한다. 커넥터가 이미 상한 넘게 채운 fields 는
+ *  고칠 때마다 몇 바이트씩 늘 수 있으므로(code_sot 을 더 긴 문장으로 바꾸는 것도 증가다) 막지 않는다 — 그쪽 증가폭은 patch 상한이 묶는다. */
+const FIELDS_MAX_BYTES = 64 * 1024;
+/** 밑줄로 시작하는 최상위 키는 커넥터가 쓰는 시스템 값이다(_item_type — 미러가 원 item.type 을 보존하는 자리). */
+const RESERVED_FIELD_KEY = /^_/;
+/** 커넥터가 **읽고 그 값으로 행동하는** 최상위 키 — 노션 후처리(v6/mirror/notion-post.ts)는 external_system='notion' 인
+ *  지식이면 provenance 와 무관하게 fields.notion.links·children_order 로 링크를 만들고 다른 지식의 sort 를 바꾼다.
+ *  입양한(authored + 외부 좌표) 노션 문서에서 이 값을 고치면 남의 문서 순서를 바꾸는 우회로가 되므로 막는다. */
+const CONNECTOR_FIELD_KEYS = new Set(["notion"]);
+/** patch 의 중첩 깊이 상한 — fields 는 몇 단짜리 메타데이터다. 깊은 중첩은 재귀 병합·직렬화를 스택 초과(500)로 죽인다. */
+const FIELDS_PATCH_MAX_DEPTH = 32;
+
+/** patch 를 스택 없이 한 번 훑어 저장할 수 없는 값을 찾는다(없으면 null) — 깊이 상한 · `__proto__` 키 ·
+ *  NUL(\u0000)·짝 없는 서로게이트(PG jsonb 가 거절해 500 이 된다) · 유한하지 않은 수(JSON 으로 못 쓴다 — null 로 바뀌어 저장된다).
+ *  `__proto__` 를 막는 이유: JSON.parse 는 이걸 자기 키로 만들지만 병합의 `out[k] = …` 대입은 키가 아니라 프로토타입을 바꿔,
+ *  저장되지 않은 채 changed:false 로 «성공» 한다(조용한 무시). 그래서 입구에서 400 으로 알린다. */
+const BAD_JSON_TEXT = /\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+function fieldsPatchProblem(root: unknown): string | null {
+  const stack: Array<[unknown, number]> = [[root, 0]];
+  while (stack.length) {
+    const [v, depth] = stack.pop()!;
+    if (typeof v === "string") { if (BAD_JSON_TEXT.test(v)) return "문자열에 NUL(\\u0000)이나 짝 없는 서로게이트가 있습니다"; continue; }
+    if (typeof v === "number") { if (!Number.isFinite(v)) return "유한하지 않은 수(Infinity·NaN)는 쓸 수 없습니다"; continue; }
+    if (v === null || typeof v !== "object") continue;
+    if (depth >= FIELDS_PATCH_MAX_DEPTH) return `중첩이 ${FIELDS_PATCH_MAX_DEPTH}단을 넘습니다`;
+    if (Array.isArray(v)) { for (const x of v) stack.push([x, depth + 1]); continue; }
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "__proto__") return "__proto__ 키는 쓸 수 없습니다";
+      if (BAD_JSON_TEXT.test(k)) return "키에 NUL(\\u0000)이나 짝 없는 서로게이트가 있습니다";
+      stack.push([x, depth + 1]);
+    }
+  }
+  return null;
+}
+
+/** expected_version 이 있으면 잠근 행의 판과 같아야 한다 — 어긋나면 409(current_version 을 실어 다시 읽게 한다). */
+function assertFieldsVersion(current: number | string, expected: number | undefined): void {
+  if (expected == null || Number(current) === expected) return;
+  throw new HttpError(409, `이 지식은 그 사이 바뀌었습니다(보낸 판 ${expected}, 지금 판 ${current}). knowledge_get 으로 지금 값을 다시 읽고 고치세요 — 그대로 고치면 그 변경을 덮어씁니다.`,
+    { body: { conflict: "version", expected_version: expected, current_version: Number(current) } });
+}
+
+/** REST·MCP 공통 patch 검증 — 객체 · 비어 있지 않음 · 예약 키 없음 · 저장할 수 없는 값 없음(깊이·`__proto__`·NUL 등) ·
+ *  크기 상한 · 키 속 시크릿 없음. 통과하면 그대로 돌려준다. 재귀하는 검사(시크릿 키)는 깊이·크기를 확인한 **뒤에** 돈다. */
+function validateFieldsPatch(raw: unknown): Record<string, unknown> {
+  if (!isJsonObject(raw)) throw new HttpError(400, "patch 는 객체여야 합니다 — 예: {\"domain_wiki\": {\"code_sot\": \"…\"}} (null 값은 그 키를 지웁니다)");
+  const keys = Object.keys(raw);
+  if (!keys.length) throw new HttpError(400, "patch 가 비었습니다 — 바꿀 키를 하나 이상 지정하세요.");
+  const reserved = keys.filter((k) => RESERVED_FIELD_KEY.test(k));
+  if (reserved.length) {
+    throw new HttpError(400, `밑줄로 시작하는 키(${reserved.join(", ")})는 커넥터가 관리하는 시스템 값이라 고칠 수 없습니다.`);
+  }
+  const connector = keys.filter((k) => CONNECTOR_FIELD_KEYS.has(k));
+  if (connector.length) {
+    throw new HttpError(400, `${connector.join(", ")} 키는 커넥터가 읽어 링크·순서를 정하는 값이라 고칠 수 없습니다 — 원본에서 고치세요.`);
+  }
+  const problem = fieldsPatchProblem(raw);
+  if (problem) throw new HttpError(400, `patch 를 저장할 수 없습니다 — ${problem}.`);
+  const bytes = Buffer.byteLength(JSON.stringify(raw), "utf8");
+  if (bytes > FIELDS_PATCH_MAX_BYTES) {
+    throw new HttpError(400, `patch 가 ${FIELDS_PATCH_MAX_BYTES / 1024}KiB 를 넘습니다(${bytes}바이트) — fields 는 짧은 메타데이터 자리입니다. 긴 내용은 본문(knowledge_save)에 쓰세요.`);
+  }
+  assertNoSecretKeys(raw, "patch");   // assertNoContentSecrets 는 값만 본다 — patch 는 키도 호출자가 정한다
+  return raw;
+}
+
+const knowledgeSetFieldsInput = {
+  name: z.string().min(1).max(64).describe("fields 를 고칠 지식 이름"),
+  patch: z.record(z.unknown())
+    .describe("fields 에 적용할 JSON Merge Patch(RFC 7396) — 적은 키만 바뀌고 나머지는 그대로 남는다. 값이 객체면 안쪽까지 병합한다"
+      + "(예: {\"domain_wiki\": {\"code_sot\": \"…\"}} 는 domain_wiki.relpath 를 보존한다). 값이 null 이면 그 키를 지운다. 배열은 통째로 바뀐다. "
+      + "밑줄로 시작하는 최상위 키(_item_type 등)와 커넥터가 읽는 notion 키는 고칠 수 없다."),
+  expected_version: z.number().int().positive().optional()
+    .describe("읽었을 때의 version(knowledge_get 의 knowledge.version). 보내면 지금 판과 다를 때 바꾸지 않고 409(current_version 포함)로 알린다."),
+  change_note: z.string().optional()
+    .describe(`#968 변경 요약 — 무엇을·왜 바꾸는지 1~2문장(변화 기록에 남는다). ${softCapHint(KFIELDS_CAPS.change_note)}`),
+};
+type KnowledgeSetFieldsInput = z.infer<z.ZodObject<typeof knowledgeSetFieldsInput>>;
+export const knowledgeSetFields: Capability = {
+  name: "knowledge_set_fields",
+  title: "지식 fields 갱신",
+  description:
+    "기존 지식의 **fields(메타데이터)만** 고친다 — 본문·제목·provenance 는 그대로다. knowledge_get 응답의 knowledge.fields(예: domain_wiki.code_sot)를 바꿀 때 쓴다. " +
+    "patch 는 JSON Merge Patch 다: 적은 키만 바뀌고, 객체는 안쪽까지 병합되며(형제 키 보존), null 은 그 키를 지운다. " +
+    "version 이 올라가고 변화 기록(knowledge_history include_meta)에 남는다. 바뀐 게 없으면 저장하지 않고 changed:false 로 알린다. " +
+    "외부 미러(observed) 지식과, 인입 허용선 정책이 수정을 막거나(drop) 검토를 요구하는(stage·review) 지식은 거절된다 — 수정 제안·검토 큐는 fields 를 담지 못한다. " +
+    "외부 원본 좌표가 남은 지식이면 응답 resync_warning 이 온다 — 그 커넥터가 다시 싱크하면 fields 가 원본값으로 통째로 바뀐다. " +
+    "응답 knowledge 에는 본문(body_md)이 없다(메타데이터만).",
+  scope: "memory",
+  input: knowledgeSetFieldsInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/fields"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        // REST 는 zod 를 안 타므로 여기서 거른다 — 숫자가 아닌 값을 조용히 버리면 CAS 를 요청한 호출이 대조 없이 덮어쓴다.
+        //  Number() 로 바꾸지 않는다: true→1 · "0x10"→16 · [5]→5 · "1e1"→10 처럼 다른 판으로 대조하게 된다. 정수나 숫자 문자열만 받는다.
+        let expected_version: number | undefined;
+        const ev = b.expected_version;
+        if (ev != null && ev !== "") {
+          expected_version = typeof ev === "number" ? ev : typeof ev === "string" && /^\d+$/.test(ev) ? Number(ev) : NaN;
+          if (!Number.isSafeInteger(expected_version) || expected_version < 1) throw new HttpError(400, "expected_version 은 1 이상의 정수");
+        }
+        return {
+          name: String(req.params?.name ?? ""),
+          patch: validateFieldsPatch(b.patch),
+          expected_version,
+          change_note: b.change_note ? String(b.change_note) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: KnowledgeSetFieldsInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const patch = validateFieldsPatch(input.patch);   // MCP 경로(zod 는 객체 여부만 본다)도 같은 판정 — 깊이를 먼저 묶어 아래 재귀 검사가 스택을 넘지 않게
+    assertNoContentSecrets(input);   // #4501 — patch 안쪽 문자열까지 본다
+    const capped = applySoftCaps("knowledge_set_fields", input, KFIELDS_CAPS);
+    // 이름 정규화 → 공개범위 검사 순서는 set_title 과 같다(정규화한 이름의 행을 고치므로 검사도 그 이름을 본다).
+    input.name = slugify(input.name);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
+    if (gate.isCreate || !gate.before) {
+      throw new HttpError(404, `지식 '${input.name}' 없음 — fields 갱신은 기존 지식에만 됩니다.`);
+    }
+    if (gate.update === "drop") {
+      throw new HttpError(403, "인입 허용선 정책상 이 지식은 수정할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
+    }
+    if (gate.update === "stage" || gate.update === "review") {
+      throw new HttpError(403, `이 지식의 수정은 사람 검토(${gate.update})를 거치는 정책인데, 수정 제안·검토 큐는 제목·본문만 담을 수 있어 fields 변경을 검토에 올릴 수 없습니다 — 관리탭 '인입 허용선' 규칙을 확인하세요.`);
+    }
+    if (gate.before.provenance === "observed") {
+      throw new HttpError(400, "외부 미러(observed) 지식엔 fields 갱신이 허용되지 않습니다 — 다음 재싱크가 fields 를 통째로 덮어 고친 값이 사라집니다. 원본에서 고치세요.");
+    }
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const result = await patchKnowledgeFields(gate.before.name, patch, {
+      changeNote: input.change_note ?? null,
+      // 잠근 행 기준으로 본다 — 게이트가 읽은 판(gate.before)은 잠금 전 값이라 그 사이 저장을 못 본다.
+      check: (before, merged) => {
+        assertFieldsVersion(before.version, input.expected_version);
+        const size = Buffer.byteLength(JSON.stringify(merged), "utf8");
+        if (size > FIELDS_MAX_BYTES && Buffer.byteLength(JSON.stringify(before.fields ?? {}), "utf8") <= FIELDS_MAX_BYTES) {
+          throw new HttpError(400, `병합 결과 fields 가 ${FIELDS_MAX_BYTES / 1024}KiB 를 넘습니다(${size}바이트) — 긴 내용은 본문에 쓰세요.`);
+        }
+      },
+    }, writeCtx);
+    // 게이트 조회와 잠금 사이에 지워진 경우.
+    if (!result.found) throw new HttpError(404, `지식 '${input.name}' 없음`);
+    // 응답에서 본문을 뺀다 — 이 툴은 본문 재전송을 없애려고 있는데, 15만 자 문서의 키 하나를 고쳐도 본문 전문이 되돌아오면
+    //  그 비용을 응답이 다시 낸다(knowledge_save append 의 withBody 와 같은 판단).
+    const { body_md: _body, ...k } = result.knowledge as Record<string, unknown>;
+    const resync = k.external_system
+      ? { resync_warning: `이 지식은 외부 원본(${String(k.external_system)}) 좌표를 갖고 있습니다 — 그 커넥터가 이 항목을 다시 싱크하면 fields 가 원본값으로 통째로 바뀝니다(본문·제목도). 오래 남길 값이면 원본에도 같이 고치세요.` }
+      : {};
+    return { knowledge: k, changed: result.changed, ...capped, ...resync };
+  },
+};
+
 // WIKI 핀 토글 — is_wiki 만 갱신. 핀된 지식의 제목+메타가 가이드 ${wiki} 로 매 세션 항상-주입(본문 제외).
 const knowledgeSetWikiInput = {
   name: z.string().min(1).max(64),
@@ -715,7 +882,7 @@ export const knowledgeMove: Capability = {
 export const authoringCapabilities: Capability[] = [
   // #1442 knowledgeSetTitle 은 **맨 뒤**에 붙인다 — 앞에 끼우면 기존 op 들의 등록 순서(= tools/list 순 ·
   //  REST 마운트 순 · 표면 스냅샷)가 통째로 밀린다. 새 op 추가만이 표면 변화이도록 자리를 고른다.
-  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeSetTitle,
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeSetTitle, knowledgeSetFields,
 ];
 // #592 트리 이동 — 원본 등록 배열에서 **맨 뒤**(다른 :name 하위 경로들 뒤)였다. 도메인은 저작이지만
 //  등록 순서(= tools/list 순 · REST 마운트 순 · 표면 스냅샷)를 바꾸지 않으려 자리를 지켜 따로 내보낸다.
