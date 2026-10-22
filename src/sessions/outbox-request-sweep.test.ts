@@ -292,9 +292,8 @@ t("[G4b] 컨테이너를 끄는 정비는 둘 — 하네스 종료 규칙(#4690 
   //   (종전 매처는 `agent-job-sweep` 을 못 잡아 «하나» 가 둘이 된 뒤에도 참이었다 — 격리 리뷰).
   const killers = SWEEP_JOBS.filter((j) => /stop|reap-idle|idle-reap|kill|agent-job/.test(j.key)).map((j) => j.key).sort();
   assert.deepEqual(killers, ["agent-job-sweep", "session-stop-rule"]);
-  //  #4939 도달 불가 세션 판정은 **끄지 않는다** — 장부에 «끝남» 을 적을 뿐이고, 컨테이너는 브로커가 그 장부를 보고 걷는다(판정 한 곳 · 집행은 브로커).
-  //   그래도 그 끝이 컨테이너 회수라 판단의 주인(상민님 2026-10-22 «판정 한 곳으로» · H1~H6)을 표 주석에 남긴다.
-  assert.match(table, /#4939/, "도달 불가 판정의 근거를 표 주석에 남긴다");
+  //  #4939 도달 불가 세션 판정(session-unreachable)은 **끄지 않는다** — 장부에 «끝남» 을 적을 뿐이고, 컨테이너는 브로커가 그 장부를 보고 걷는다
+  //   (판정 한 곳 · 집행은 브로커). 그래서 위 매처에 안 걸리는 것이 맞다.
 });
 t("[G4c] 작업 컨테이너 감시(#4490)는 테넌트 정비다 — 걷는 것은 자기가 띄운 `job-` 컨테이너뿐(행동은 agent-jobs service.test R3 · launch.test K1)", () => {
   const src = readFileSync(SRC, "utf8");

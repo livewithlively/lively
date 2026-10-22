@@ -113,7 +113,7 @@ test("[#4939 G12] ★ 도달 불가로 적힌 상시 세션은 상시 목록에�
   const b = await buildSessionLedger({
     listRows: async () => rows, listLive: async () => [],
     listManaged: async () => [{ session_id: "box-m-5555" }, { session_id: "box-m-7777" }],
-    unreachableManaged: () => new Map([["box-m-5555", at]]),
+    unreachableMemory: () => new Map([["box-m-5555", at]]),
   });
   assert.deepEqual(b.managed, ["box-m-7777"]);
   const m = b.desired.find((r) => r.id === "box-m-5555");
@@ -121,15 +121,28 @@ test("[#4939 G12] ★ 도달 불가로 적힌 상시 세션은 상시 목록에�
   //  지금 다시 보이면 표식이 있어도 끝남으로 안 낸다(되살아남 — 정비가 표식을 지우기 전 창).
   const live = await buildSessionLedger({
     listRows: async () => rows, listLive: async () => [], listManaged: async () => [{ session_id: "box-m-5555" }],
-    unreachableManaged: () => new Map([["box-m-5555", at]]), liveAnywhere: () => new Set(["box-m-5555"]),
+    unreachableMemory: () => new Map([["box-m-5555", at]]), liveAnywhere: () => new Set(["box-m-5555"]),
   });
   assert.deepEqual(live.managed, ["box-m-5555"]);
   assert.equal(live.desired.find((r) => r.id === "box-m-5555"), undefined);
+});
+
+test("[#4939 G12b] ★ 행 없는 세션(keep-alive 가 갈아 끼운 옛 상시 세션)도 «끝남» 행으로 실린다 · 같은 id 의 DB 행이 있으면 그 행이 정본", async () => {
+  const at = Date.parse("2026-10-22T09:00:00.000Z");
+  const b = await buildSessionLedger({
+    listRows: async () => rows, listLive: async () => [], listManaged: async () => [{ session_id: "box-m-7777" }],
+    unreachableMemory: () => new Map([["box-old-8888", at], ["box-a-1111", at]]),
+  });
+  assert.deepEqual(b.desired.find((r) => r.id === "box-old-8888"),
+    { id: "box-old-8888", superseded_by: null, node_id: null, exited_at: new Date(at).toISOString(), exit_reason: "unreachable" });
+  assert.equal(b.desired.filter((r) => r.id === "box-a-1111").length, 1, "DB 행이 있는 id 에 끝남 행을 덧붙였다");
+  assert.equal(b.desired.find((r) => r.id === "box-a-1111")?.exited_at, null);
+  assert.deepEqual(b.managed, ["box-m-7777"], "상시 목록은 그대로");
 });
 
 test("[#4939 WIRE] 라우트가 최종 판정 재료 둘을 잇는다 — 지금 보이는 세션(신선한 세션 호스트의 합) · 도달 불가로 적힌 상시 세션(메모리 표식)", () => {
   const src = fs.readFileSync(path.join(process.cwd(), "src", "terminal", "session-ledger.ts"), "utf8");
   const route = src.slice(src.indexOf("export function registerSessionLedgerRoute"));
   assert.match(route, /liveAnywhere: \(\) => sessionHostLiveUnion\(\)/, "🔴 G8 이 라우트에 안 이어졌다 — 살아 있는 세션의 끝남 표식이 그대로 나간다");
-  assert.match(route, /unreachableManaged: \(\) => unreachableManagedMarks\(\)/, "🔴 H6 이 라우트에 안 이어졌다 — 상시 세션 판정이 브로커에 안 닿는다");
+  assert.match(route, /unreachableMemory: \(\) => unreachableMemoryMarks\(\)/, "🔴 H6 이 라우트에 안 이어졌다 — DB 행 없는 세션의 판정이 브로커에 안 닿는다");
 });

@@ -29,7 +29,7 @@ const AFTER = () => Date.now() + 10 * 60_000;
 const BEFORE = () => Date.now() - 10 * 60_000;
 
 async function cleanup() {
-  const ids = Array.from({ length: 12 }, (_, i) => S(i));
+  const ids = Array.from({ length: 16 }, (_, i) => S(i));
   await itemsPool.query(`DELETE FROM org_session_state WHERE id = ANY($1::text[])`, [ids]);
 }
 
@@ -105,6 +105,33 @@ try {
     chk("U6c 판정 밖 행(이어진 행 · 사람이 끝낸 행)은 안 읽는다", !all.some((x) => x.id === S(3) || x.id === S(2)), JSON.stringify(all.filter((x) => x.id === S(3) || x.id === S(2))));
     const lr = (await st.listSessionLedgerRows()).find((x) => x.id === id);
     chk("U6b 장부 행에 사유가 실린다(브로커가 판정 시각을 읽는다)", lr?.exit_reason === "unreachable" && !!lr?.exited_at, JSON.stringify(lr));
+  }
+
+  // ── U8 ★ OOM 사유가 적힌 행(exited_at 없음 · exit_reason=oom)은 «도달 불가» 로 덮지 않는다 ──
+  {
+    const id = S(11);
+    await st.upsertSessionState(row0(id));
+    await st.markSessionOomKilled(id);
+    const w = await st.markSessionUnreachable(id, AFTER());
+    const r = await get(id);
+    chk("U8 OOM 표식을 덮지 않는다", w === false && r?.exit_reason === "oom" && r?.exited_at === null, JSON.stringify({ w, r }));
+    const rr = (await st.listUnreachableRuleRows()).find((x) => x.id === id);
+    chk("U8b OOM 행은 판정 재료(원하는 행)로 안 읽는다", rr === undefined, JSON.stringify(rr));
+  }
+
+  // ── U9 되살림 창 — 오래전에 적은 표식은 30초마다 읽지 않는다 · 호스트가 «안 보임» 으로 보고한 sid 의 행은 상태 무관 읽는다 ──
+  {
+    const old = S(12), ex = S(13);
+    await st.upsertSessionState(row0(old));
+    await st.markSessionUnreachable(old, AFTER());
+    await itemsPool.query("UPDATE org_session_state SET exited_at = now() - interval '2 days' WHERE id=$1", [old]);
+    const plain = await st.listUnreachableRuleRows();
+    chk("U9 되살림 창(1일)을 넘긴 표식은 안 읽는다", !plain.some((x) => x.id === old), JSON.stringify(plain.filter((x) => x.id === old)));
+    await st.upsertSessionState(row0(ex));
+    await st.markSessionExited(ex, A, "prompt_input_exit");
+    const asked = await st.listUnreachableRuleRows([old, ex]);
+    chk("U9b «안 보임» sid 의 행은 상태 무관 읽는다(행이 있는지가 «행 없는 세션» 판정의 근거)",
+      asked.some((x) => x.id === old) && asked.find((x) => x.id === ex)?.exit_reason === "prompt_input_exit", JSON.stringify(asked.filter((x) => x.id === old || x.id === ex)));
   }
 
   // ── U7 화면 — 도달 불가로 적힌 세션은 «사람이 끝냄» 이 아니라 «중단됨(복원 가능)» ──

@@ -41,7 +41,7 @@ import { listManagedSessions } from "../sessions/managed-sessions.js";
 import { listLiveSessionIds } from "./terminal-sessions.js";
 import { sessionHostNodeId } from "../node/session-host-provision.js";   // #2600 T2 d6 — (테넌트, 노드) → 세션 호스트 id 는 한 벌
 import { sessionHostLiveIds, sessionHostLiveUnion } from "../node/registry.js";
-import { unreachableManagedMarks } from "../sessions/session-unreachable-sweep.js";   // #4939 — 도달 불가로 적힌 상시 세션(메모리 표식)
+import { unreachableMemoryMarks } from "../sessions/session-unreachable-sweep.js";   // #4939 — 도달 불가로 적힌 DB 행 없는 세션(메모리 표식)
 
 export interface SessionLedgerBody {
   authoritative: true;
@@ -62,8 +62,11 @@ export interface LedgerDeps {
    *  장부의 최종 판정에 쓴다: 끝남 표식이 있어도 지금 살아 있으면 «끝남» 으로 내지 않는다(종전엔 브로커가 tmux 로 이걸 뒤집었다).
    */
   liveAnywhere?: () => ReadonlySet<string> | null;
-  /** #4939 — 도달 불가로 적힌 상시 세션(DB 행이 없어 메모리 표식) → 적은 시각(ms). 장부가 상시 목록에서 빼고 «끝남» 행으로 싣는다. */
-  unreachableManaged?: () => ReadonlyMap<string, number>;
+  /**
+   * #4939 — 도달 불가로 적힌 DB 행 없는 세션(메모리 표식) → 적은 시각(ms). 상시 세션이면 상시 목록에서 빼고, 행 없는 세션(keep-alive 가
+   *  갈아 끼운 옛 상시 세션 등)이면 그대로 «끝남» 행으로 싣는다. 같은 id 의 DB 행이 있으면 그 행이 정본이다(표식은 무시).
+   */
+  unreachableMemory?: () => ReadonlyMap<string, number>;
 }
 
 /**
@@ -78,18 +81,22 @@ export async function buildSessionLedger(d: LedgerDeps): Promise<SessionLedgerBo
   //  #4939 — 장부의 **최종 판정**(판정 한 곳). 끝남 표식이 있어도 지금 어느 세션 호스트 목록에든 보이면 끝남으로 내지 않는다 —
   //   훅이 먼저 보고하고 하네스가 아직 안 죽은 창 · 같은 id 로 다시 띄운 직후. 종전엔 이걸 브로커가 tmux 로 뒤집었다(sessionledger orphanPlan).
   //   이어짐(superseded)은 관측과 무관하다 — 새 id 쪽이 산 세션이다.
+  //   ⚠ 이 줄은 도달 불가 판정의 스위치(LIVELY_SESSION_LOST_RULE)와 무관하게 늘 돈다 — off 여도 남는다. 종전 브로커(legacy·shadow)에겐
+  //    같은 결과다(살아 있는 세션의 exited 행은 종전에도 «tmux 가 있으면 남긴다» 로 보류됐다).
   const alive = d.liveAnywhere?.() ?? null;
   //   새 배열이다 — 아래에서 상시 세션 행을 덧붙이므로 listRows 가 준 배열을 건드리지 않는다.
   const desired = rows.map((r) => (alive && r.exited_at && !r.superseded_by && alive.has(r.id) ? { ...r, exited_at: null, exit_reason: null } : r));
-  //  #4939 H6 — 도달 불가로 적힌 상시 세션은 상시 목록에서 빼고 «끝남» 행으로 싣는다(DB 행이 없는 것이 설계라 이 자리에서 만든다).
-  //   그 사이 다시 보이면(정비가 표식을 지우기 전 창) 위와 같은 까닭으로 끝남으로 내지 않는다.
-  const marks = d.unreachableManaged?.() ?? new Map<string, number>();
-  const managed: string[] = [];
-  for (const id of managedRows.map((m) => m.session_id).filter((x): x is string => !!x)) {
-    const at = marks.get(id);
-    if (at === undefined || alive?.has(id)) { managed.push(id); continue; }
+  //  #4939 H6 — 도달 불가로 적힌 DB 행 없는 세션(상시 · 행 없음)은 «끝남» 행으로 싣는다(행이 없으니 이 자리에서 만든다). 상시 세션이면 상시
+  //   목록에서도 뺀다. 그 사이 다시 보이면(정비가 표식을 지우기 전 창) 위와 같은 까닭으로 끝남으로 내지 않는다.
+  const marks = d.unreachableMemory?.() ?? new Map<string, number>();
+  const rowIds = new Set(rows.map((r) => r.id));
+  const ended = new Set<string>();
+  for (const [id, at] of marks) {
+    if (rowIds.has(id) || alive?.has(id)) continue;
+    ended.add(id);
     desired.push({ id, superseded_by: null, node_id: null, exited_at: new Date(at).toISOString(), exit_reason: "unreachable" });
   }
+  const managed = managedRows.map((m) => m.session_id).filter((x): x is string => !!x && !ended.has(x));
   return { authoritative: true, observed: live !== null, desired, managed, live };
 }
 
@@ -172,7 +179,7 @@ export function registerSessionLedgerRoute(app: express.Express): void {
         tmuxLive: () => listLiveSessionIds({ strict: true }),
       }),
       liveAnywhere: () => sessionHostLiveUnion(),
-      unreachableManaged: () => unreachableManagedMarks(),
+      unreachableMemory: () => unreachableMemoryMarks(),
     }));
   }));
 }

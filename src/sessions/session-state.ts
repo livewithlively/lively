@@ -632,19 +632,27 @@ export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
   }));
 }
 
+/** 도달 불가로 적은 행을 되살림 후보로 볼 창 — 그보다 오래된 표식의 컨테이너는 이미 걷혔다(브로커 gateway 모드). 다시 열면 복원이 표식을 지운다. */
+export const UNREACHABLE_REVIVE_WINDOW = "1 day";
+
 /**
  * #4939 — 도달 불가 판정(sessions/session-unreachable-rule.ts)이 쓰는 칸. 판정은 순수 함수가 하고 여기는 읽기만 한다.
  *  last_busy 는 훅(markSessionActive → touchSessionBusy)과 목록 관측이 올리는 마지막 작업 시각(epoch초)이다.
- *  판정이 볼 행만 읽는다 — 원하는 행(끝남 표식 없음) · 이 규칙이 적은 행(되살림 후보). 이어진 행·사람이 끝낸 행은 판정 밖이고
- *   시간이 갈수록 쌓이므로(30초마다 테넌트 전 행을 읽지 않게) 여기서 거른다. 판정도 같은 조건을 다시 본다(이중).
+ *  판정이 볼 행만 읽는다(30초마다 테넌트 전 행을 읽지 않게) — 판정도 같은 조건을 다시 본다(이중).
+ *   · 원하는 행 — 끝남 표식 · 사유(OOM 등) · 이어짐이 없다.
+ *   · 최근(UNREACHABLE_REVIVE_WINDOW) 이 규칙이 적은 행 — 되살림 후보.
+ *   · `missingIds`(호스트가 «컨테이너는 있는데 세션 없음» 을 보고한 sid)의 행은 **상태 무관** 전부 — 행이 있는지가 «행 없는 세션» 판정의 근거다.
  */
-export async function listUnreachableRuleRows(): Promise<Array<{
+export async function listUnreachableRuleRows(missingIds: readonly string[] = []): Promise<Array<{
   id: string; superseded_by: string | null; exited_at: string | null; exit_reason: string | null; last_busy: number | null;
 }>> {
   if (onNode()) return [];
   const r = await itemsPool.query(
     `SELECT id, superseded_by, exited_at, exit_reason, last_busy FROM org_session_state
-      WHERE superseded_by IS NULL AND (exited_at IS NULL OR exit_reason = 'unreachable')`);
+      WHERE (superseded_by IS NULL AND ((exited_at IS NULL AND exit_reason IS NULL)
+              OR (exit_reason = 'unreachable' AND exited_at > now() - $2::interval)))
+         OR id = ANY($1::text[])`,
+    [[...missingIds], UNREACHABLE_REVIVE_WINDOW]);
   return r.rows.map((x: Record<string, unknown>) => ({
     id: String(x.id),
     superseded_by: (x.superseded_by as string | null) ?? null,
@@ -656,18 +664,25 @@ export async function listUnreachableRuleRows(): Promise<Array<{
 
 /**
  * #4939 — 게이트웨이가 «도달 불가로 끝났다» 고 판정한 세션을 적는다(exited_at · exit_reason='unreachable').
- *  브로커는 이 판정을 판정 시각보다 먼저 뜬 컨테이너에 집행한다. 행은 남는다 — 다시 열면 같은 id 로 복원된다(#4694 reviveSessionState).
- *  ⚠ 이미 끝난 행(사람 종료·OOM 사유 등 exited_at 있음)·이어진 행은 덮지 않는다 — 조건부 UPDATE. 반환 = 적었나.
- *  ⚠ `sinceMs`(«컨테이너는 있는데 세션이 안 보임» 이 시작된 시각) 뒤에 그 행이 **살아 있다는 기록**(last_seen — 생성·복원 upsert 와
- *   작업 표시 touchSessionBusy 만 쓴다)을 받았으면 안 적는다. 복원이 옛 컨테이너 안에 세션을 다시 띄운 직후 그 목록이 게이트웨이에
- *   닿기 전(상태 push 3초)에 판정이 돌면, 이 조건이 없을 때 방금 되살린 세션을 끝남으로 적고 브로커가 그 컨테이너를 걷는다.
+ *  브로커는 이 판정을 판정 시각보다 먼저 뜬 컨테이너에 집행한다. 행은 남는다 — 다시 열면 복원된다.
+ *  ⚠ 덮지 않는 행 — 조건부 UPDATE. 반환 = 적었나.
+ *   · 끝난 행(exited_at — 사람 종료 등) · 이어진 행(superseded_by).
+ *   · **사유가 이미 적힌 행**(exit_reason — OOM). markSessionOomKilled 는 exit_reason='oom' 만 쓰고 exited_at 은 비워 두므로
+ *     exited_at 만 보면 OOM 행을 «도달 불가» 로 덮는다(OOM 은 관측 추정이지만 이 판정보다 구체적이다).
+ *  ⚠ `sinceMs`(«컨테이너는 있는데 세션이 안 보임» 이 시작된 시각) 뒤에 그 행이 **살아 있다는 기록**(last_seen — 생성·복원 upsert ·
+ *   발견 기록 insert · 작업 표시 touchSessionBusy 가 쓴다)을 받았으면 안 적는다. 같은 id 복원(#4694 — 옛 판이 없다는 확답 뒤에만)은
+ *   표식을 지우고 **새 자리(새 컨테이너)** 에 세션을 띄운다(session-tmux `fresh`). 그 목록이 게이트웨이에 닿기 전(상태 push 3초)에
+ *   옛 컨테이너의 관측으로 판정이 돌면, 이 조건이 없을 때 방금 되살린 세션을 끝남으로 적고 — 그 판정 시각보다 먼저 뜬 — 새 컨테이너까지
+ *   브로커가 걷는다. (상시 세션의 keep-alive 는 같은 id 로 다시 띄우지 않는다 — 새 sid 로 만들고 session_id 를 갈아 끼운다
+ *   (managed-sessions ensureManagedSession). 그 세션들은 DB 행이 없어 이 함수가 아니라 메모리 표식으로 간다.)
  *  owner 게이트가 없는 이유: 사람 요청이 아니라 게이트웨이 자신의 관측이다(markSessionOomKilled 와 같다).
  */
 export async function markSessionUnreachable(id: string, sinceMs: number): Promise<boolean> {
   if (onNode()) return false;
   const r = await itemsPool.query(
     `UPDATE org_session_state SET exited_at=now(), exit_reason='unreachable', updated_at=now()
-      WHERE id=$1 AND exited_at IS NULL AND superseded_by IS NULL AND last_seen < to_timestamp($2::double precision / 1000)`,
+      WHERE id=$1 AND exited_at IS NULL AND exit_reason IS NULL AND superseded_by IS NULL
+        AND last_seen < to_timestamp($2::double precision / 1000)`,
     [id, sinceMs],
   );
   return (r.rowCount ?? 0) > 0;

@@ -328,9 +328,6 @@ export function sessionHostLiveUnion(now: number = Date.now()): Set<string> | nu
   return out;
 }
 
-/** 시험용 — 컨테이너 관측 기억을 비운다. */
-export function resetContainerWatches(): void { watches.clear(); }
-
 /**
  * 이 세션의 일을 맡을 **세션 호스트** — 호스트 id, 아니면 null(호출부는 종전 게이트웨이 경로) (#2600 T2 d6).
  *  판정은 순수 함수 `self-node.sessionHostTarget` 이 하고, 여기는 재료(스냅샷 좌표·선언·자격 관측·op 지원)만 모은다.

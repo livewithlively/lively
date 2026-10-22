@@ -18,12 +18,12 @@ const missing = (sid: string, ageMs: number, container = `lvly-s-acme-${sid}`) =
 const rowOf = (id: string, o: Partial<UnreachableRow> = {}): UnreachableRow =>
   ({ id, superseded_by: null, exited_at: null, exit_reason: null, last_busy: sec(NOW - 2 * HOUR), ...o });
 const input = (o: Partial<UnreachableInput> = {}): UnreachableInput =>
-  ({ nowMs: NOW, hosts: [host()], rows: [], managed: [], lastBusyMem: () => 0, upMs: 2 * HOUR, markedManaged: new Map(), ...o });
+  ({ nowMs: NOW, hosts: [host()], rows: [], managed: [], lastBusyMem: () => 0, upMs: 2 * HOUR, memoryMarks: new Map(), ...o });
 
-test("[G1] ★★ 신선한 호스트가 «컨테이너는 있는데 세션 없음» 을 16분 연속 · 마지막 작업 2시간 전 → 끝남으로 적는다(지금 코드: 아무도 안 끈다)", () => {
+test("[G1] ★★ 신선한 호스트가 «컨테이너는 있는데 세션 없음» 을 16분 연속 · 마지막 작업 2시간 전 → 끝남으로 적는다(#4939 전엔 아무도 끄지 않았다)", () => {
   const d = judgeUnreachable(input({ hosts: [host({ missing: missing("box-a", 16 * MIN) })], rows: [rowOf("box-a")] }));
   assert.equal(d.blind, null);
-  assert.deepEqual(d.mark.map((m) => [m.id, m.node, m.container, m.managed]), [["box-a", "i-node-a", "lvly-s-acme-box-a", false]]);
+  assert.deepEqual(d.mark.map((m) => [m.id, m.node, m.container, m.holder, m.memory]), [["box-a", "i-node-a", "lvly-s-acme-box-a", "row", false]]);
 });
 
 test("[G1] 경계 — 연속 14분은 아직 · 정확히 15분이면 적는다", () => {
@@ -88,7 +88,7 @@ test("[G7] ★ 다시 보이면 이 규칙이 적은 것만 지운다(되살아�
     hosts: [host({ listed: new Set(["box-u", "box-x"]) }), host({ nodeId: "i-node-b", fresh: false })],
     rows: [rowOf("box-u", { exited_at: ended, exit_reason: UNREACHABLE_REASON }), rowOf("box-x", { exited_at: ended, exit_reason: "logout" })],
   }));
-  assert.deepEqual(d.revive, [{ id: "box-u", managed: false }]);
+  assert.deepEqual(d.revive, [{ id: "box-u", memory: false }]);
   assert.ok(d.blind, "그 판은 적기는 보류다");
 });
 
@@ -101,7 +101,7 @@ test("[G10] 세션 호스트가 없는 배포(셀프호스트 · 호스트가 �
 test("[G12] ★ H6 — 상시 세션도 적는다(DB 행 없음 → 메모리 표식) · 작업 근거가 없고 게이트웨이가 뜬 지 1시간 미만이면 보류", () => {
   const h = [host({ missing: missing("box-m", 30 * MIN) })];
   const ok = judgeUnreachable(input({ hosts: h, managed: ["box-m"], upMs: 2 * HOUR }));
-  assert.deepEqual(ok.mark.map((m) => [m.id, m.managed]), [["box-m", true]]);
+  assert.deepEqual(ok.mark.map((m) => [m.id, m.holder, m.memory]), [["box-m", "managed", true]]);
   const young = judgeUnreachable(input({ hosts: h, managed: ["box-m"], upMs: 30 * MIN }));
   assert.equal(young.mark.length, 0);
   assert.match(young.hold[0]?.why ?? "", /모른다|모름/);
@@ -109,9 +109,9 @@ test("[G12] ★ H6 — 상시 세션도 적는다(DB 행 없음 → 메모리 �
   assert.equal(busy.mark.length, 0);
   //  이미 적은 상시 세션은 다시 안 적고, 다시 보이면 지운다.
   const marked = new Map([["box-m", NOW - 5 * MIN]]);
-  assert.equal(judgeUnreachable(input({ hosts: h, managed: ["box-m"], markedManaged: marked })).mark.length, 0);
-  const back = judgeUnreachable(input({ hosts: [host({ listed: new Set(["box-m"]) })], managed: ["box-m"], markedManaged: marked }));
-  assert.deepEqual(back.revive, [{ id: "box-m", managed: true }]);
+  assert.equal(judgeUnreachable(input({ hosts: h, managed: ["box-m"], memoryMarks: marked })).mark.length, 0);
+  const back = judgeUnreachable(input({ hosts: [host({ listed: new Set(["box-m"]) })], managed: ["box-m"], memoryMarks: marked }));
+  assert.deepEqual(back.revive, [{ id: "box-m", memory: true }]);
 });
 
 test("[G11] ★ shadow 는 판정을 로그로만 남긴다(DB·메모리 표식 무변경) · on 은 적는다 · off 는 읽지도 않는다", async () => {
@@ -119,8 +119,12 @@ test("[G11] ★ shadow 는 판정을 로그로만 남긴다(DB·메모리 표식
   const logs: string[] = [];
   const base = {
     nowMs: NOW, upMs: 2 * HOUR, lastBusyMem: () => 0, said: new Map<string, string>(),
-    hosts: () => [host({ missing: new Map([["box-a", { sinceMs: NOW - HOUR, container: "c-a" }], ["box-m", { sinceMs: NOW - HOUR, container: "c-m" }]]) })],
-    rows: async () => { calls.push("rows"); return [rowOf("box-a")]; },
+    hosts: () => [host({
+      missing: new Map([["box-a", { sinceMs: NOW - HOUR, container: "c-a" }], ["box-m", { sinceMs: NOW - HOUR, container: "c-m" }]]),
+      listed: new Set(["box-u"]),
+    })],
+    //  box-u — 이 규칙이 적었는데 다시 보인 세션(되살림 후보). shadow 는 이것도 지우지 않는다.
+    rows: async () => { calls.push("rows"); return [rowOf("box-a"), rowOf("box-u", { exited_at: new Date(NOW - HOUR).toISOString(), exit_reason: UNREACHABLE_REASON })]; },
     managed: async () => ["box-m"],
     markRow: async (id: string) => { calls.push(`mark:${id}`); return true; },
     reviveRow: async (id: string) => { calls.push(`revive:${id}`); return true; },
@@ -129,12 +133,13 @@ test("[G11] ★ shadow 는 판정을 로그로만 남긴다(DB·메모리 표식
   const marks = new Map<string, number>();
   const sh = await runUnreachableSweep({ ...base, mode: "shadow", marks });
   assert.equal(sh?.mark.length, 2);
-  assert.deepEqual(calls, ["rows"], "shadow 가 DB 에 적었다");
+  assert.equal(sh?.revive.length, 1);
+  assert.deepEqual(calls, ["rows"], "shadow 가 DB 에 적었거나 표식을 지웠다");
   assert.equal(marks.size, 0, "shadow 가 상시 세션 표식을 남겼다");
   assert.ok(logs.some((m) => /그림자/.test(m)), "그림자 판정이 로그에 안 남는다");
   calls.length = 0;
   await runUnreachableSweep({ ...base, mode: "on", marks, said: new Map() });
-  assert.deepEqual(calls, ["rows", "mark:box-a"]);
+  assert.deepEqual(calls, ["rows", "mark:box-a", "revive:box-u"]);
   assert.deepEqual([...marks.keys()], ["box-m"]);
   calls.length = 0;
   assert.equal(await runUnreachableSweep({ ...base, mode: "off", marks }), null);
@@ -184,7 +189,7 @@ test("[G11b] 말은 바뀔 때만 — 같은 판정을 판마다 되풀이하지
   assert.deepEqual([...said.keys()], ["*blind"], "판정에서 빠진 세션을 계속 기억한다");
 });
 
-test("[G7b] on — 되살림은 이 규칙이 적은 DB 행만 지우고(reviveRow) · 상시 목록에서 빠진 세션의 메모리 표식은 버린다", async () => {
+test("[G7b] on — 되살림은 이 규칙이 적은 DB 행만 지우고(reviveRow) · 상시 목록에도 호스트 관측에도 없는(걷힌) 메모리 표식은 버린다", async () => {
   const calls: string[] = [];
   const marks = new Map([["box-gone", NOW - HOUR]]);
   await runUnreachableSweep({
@@ -197,7 +202,7 @@ test("[G7b] on — 되살림은 이 규칙이 적은 DB 행만 지우고(reviveR
     log: () => {},
   });
   assert.deepEqual(calls, ["revive:box-u"]);
-  assert.equal(marks.size, 0, "상시 목록에 없는 세션의 표식이 남았다(장부가 계속 끝남으로 싣는다)");
+  assert.equal(marks.size, 0, "걷힌 세션의 표식이 남았다(장부가 계속 끝남으로 싣는다)");
 });
 
 test("[G13] on — DB 행에 적을 때 «안 보이기 시작한 시각» 을 넘긴다(그 뒤 살아 있다는 기록을 받은 행은 DB 가 거른다 — 복원 경합)", async () => {
@@ -212,4 +217,86 @@ test("[G13] on — DB 행에 적을 때 «안 보이기 시작한 시각» 을 �
     log: () => {},
   });
   assert.deepEqual(got, [["box-a", NOW - 20 * MIN]]);
+});
+
+const sweepDeps = (o: Partial<Parameters<typeof runUnreachableSweep>[0]> = {}) => ({
+  mode: "on" as const, nowMs: NOW, upMs: 2 * HOUR, lastBusyMem: () => 0, said: new Map<string, string>(), marks: new Map<string, number>(),
+  hosts: () => [host()], rows: async () => [], managed: async () => [],
+  markRow: async () => true, reviveRow: async () => true, log: () => {},
+  ...o,
+});
+
+test("[G14] ★ 행 없는 세션 — DB 행도 상시 목록도 없는 sid(keep-alive 가 갈아 끼운 옛 상시 세션)도 같은 규칙으로 메모리 표식을 단다", () => {
+  const h = [host({ missing: new Map([
+    ["box-old", { sinceMs: NOW - 30 * MIN, container: "c-old" }],
+    ["job-7-0123abcd", { sinceMs: NOW - 30 * MIN, container: "c-job" }],
+    ["box-x", { sinceMs: NOW - 30 * MIN, container: "c-x" }],
+  ]) })];
+  const job = (id: string) => id.startsWith("job-");
+  //  box-x 는 사람이 끝낸 행이 있다 — 행이 있으면 «행 없는 세션» 이 아니다(그 행이 정본).
+  const rows = [rowOf("box-x", { exited_at: new Date(NOW - HOUR).toISOString(), exit_reason: "prompt_input_exit" })];
+  const d = judgeUnreachable(input({ hosts: h, rows, ownedElsewhere: job }));
+  assert.deepEqual(d.mark.map((m) => [m.id, m.holder, m.memory]), [["box-old", "rowless", true]], "위탁 작업·행 있는 세션은 빼고 행 없는 세션만");
+  const young = judgeUnreachable(input({ hosts: h, rows, ownedElsewhere: job, upMs: 30 * MIN }));
+  assert.equal(young.mark.length, 0);
+  assert.equal(young.hold.find((x) => x.id === "box-old")?.kind, "no-evidence", "메모리 근거만 있는데 뜬 지 1시간 미만이면 보류");
+  assert.equal(judgeUnreachable(input({ hosts: h, rows, ownedElsewhere: job, memoryMarks: new Map([["box-old", NOW - MIN]]) })).mark.length, 0,
+    "이미 적은 것은 다시 안 적는다");
+});
+
+test("[G15] OOM 사유가 적힌 행(exited_at 없음 · exit_reason=oom)은 판정하지 않는다 — 그 사실을 «도달 불가» 로 덮지 않는다", () => {
+  const d = judgeUnreachable(input({ hosts: [host({ missing: missing("box-a", HOUR) })], rows: [rowOf("box-a", { exit_reason: "oom" })] }));
+  assert.deepEqual([d.mark.length, d.hold.length], [0, 0]);
+});
+
+test("[G16] 여러 호스트가 같은 sid 를 «안 보임» 으로 보면 가장 오래된 관측을 쓴다(노드·컨테이너도 그 관측의 것)", () => {
+  const a = host({ nodeId: "i-a", missing: missing("box-a", 10 * MIN, "c-new") });
+  const b = host({ nodeId: "i-b", missing: missing("box-a", 20 * MIN, "c-old") });
+  for (const hosts of [[a, b], [b, a]]) {
+    const d = judgeUnreachable(input({ hosts, rows: [rowOf("box-a")] }));
+    assert.deepEqual(d.mark.map((m) => [m.node, m.container, m.sinceMs]), [["i-b", "c-old", NOW - 20 * MIN]], hosts.map((h) => h.nodeId).join(","));
+  }
+});
+
+test("[G7c] 되살림 경계 — 이어진 행은 안 되살리고(새 id 가 산 세션) · 낡은 호스트의 목록은 «보였다» 가 아니다", () => {
+  const ended = new Date(NOW - HOUR).toISOString();
+  const sup = judgeUnreachable(input({
+    hosts: [host({ listed: new Set(["box-u"]) })],
+    rows: [rowOf("box-u", { exited_at: ended, exit_reason: UNREACHABLE_REASON, superseded_by: "box-u2" })],
+  }));
+  assert.deepEqual(sup.revive, []);
+  const stale = judgeUnreachable(input({
+    hosts: [host({ nodeId: "i-stale", fresh: false, listed: new Set(["box-u", "box-m"]) })],
+    rows: [rowOf("box-u", { exited_at: ended, exit_reason: UNREACHABLE_REASON })],
+    memoryMarks: new Map([["box-m", NOW - HOUR]]),
+  }));
+  assert.deepEqual(stale.revive, [], "낡은 호스트의 목록으로 되살렸다");
+});
+
+test("[G11c] 세션 호스트가 없으면 DB 도 상시 목록도 안 읽는다(셀프호스트 · 호스트가 목록을 안 쥔 테넌트)", async () => {
+  const calls: string[] = [];
+  const d = await runUnreachableSweep(sweepDeps({
+    hosts: () => [],
+    rows: async () => { calls.push("rows"); return []; },
+    managed: async () => { calls.push("managed"); return []; },
+  }));
+  assert.match(d?.blind ?? "", /세션 호스트/);
+  assert.deepEqual(calls, []);
+});
+
+test("[G11d] DB 행은 호스트가 «안 보임» 으로 보고한 sid 를 실어 묻는다(행이 있는지가 «행 없는 세션» 판정의 근거)", async () => {
+  let asked: readonly string[] | null = null;
+  await runUnreachableSweep(sweepDeps({
+    hosts: () => [host({ missing: missing("box-a", MIN) }), host({ nodeId: "i-b", missing: new Map([["box-a", { sinceMs: NOW, container: "c" }], ["box-b", { sinceMs: NOW, container: "c2" }]]) })],
+    rows: async (ids) => { asked = ids; return []; },
+  }));
+  assert.deepEqual([...(asked ?? [])].sort(), ["box-a", "box-b"]);
+});
+
+test("[G7d] 메모리 표식 정리 — 판단 보류(모름) 판엔 안 버리고 · 컨테이너가 아직 보고되거나 상시 목록에 있으면 남긴다", async () => {
+  const marks = new Map([["box-gone", NOW - HOUR], ["box-still", NOW - HOUR], ["box-m", NOW - HOUR]]);
+  await runUnreachableSweep(sweepDeps({ marks, hosts: () => [host({ fresh: false })] }));
+  assert.equal(marks.size, 3, "모르는 판에 표식을 버렸다");
+  await runUnreachableSweep(sweepDeps({ marks, managed: async () => ["box-m"], hosts: () => [host({ missing: missing("box-still", MIN) })] }));
+  assert.deepEqual([...marks.keys()].sort(), ["box-m", "box-still"]);
 });

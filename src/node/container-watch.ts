@@ -22,25 +22,28 @@ export interface ContainerWatch {
   known: boolean;
   /** sid → «컨테이너는 있는데 목록에 세션이 없다» 가 처음 보인 시각과 그 컨테이너. */
   missing: Map<string, { sinceMs: number; container: string }>;
+  /** 컨테이너 관측 없이 온 상태 push 가 연속 몇 판인가(관측이 오면 0) — 그림자 대조용(판정 재료가 없는 호스트가 얼마나 오래 그랬나). */
+  nullStreak: number;
 }
 
-/** 상태 push 한 번을 반영한다(순수 — 새 값을 돌려준다). `containers` 가 없으면(옛 판) known:false. */
+/** 상태 push 한 번을 반영한다(순수 — 새 값을 돌려준다). `containers` 가 없으면(옛 판·모양 틀림) known:false. */
 export function observeContainers(
   prev: ContainerWatch | undefined, containers: ReadonlyArray<ContainerObservation> | undefined, now: number, staleMs: number,
 ): ContainerWatch {
-  if (!containers) return { lastAt: now, known: false, missing: new Map() };
+  if (!containers) return { lastAt: now, known: false, missing: new Map(), nullStreak: (prev?.nullStreak ?? 0) + 1 };
   //  틈이 있었으면(그동안 목록에 보였을 수 있다) 이어 보지 않는다 — 처음부터 다시 센다.
   const carry = prev && prev.known && now - prev.lastAt <= staleMs ? prev.missing : null;
   const missing = new Map<string, { sinceMs: number; container: string }>();
   for (const c of containers) {
     //  판정 재료가 아닌 관측 — 안쪽 표식 없음(목록을 안 물었다) · 못 봄(error) · 컨테이너 없음(gone) · 안 도는 컨테이너.
+    //   상태는 running 만 센다 — stopped·created·paused 와 브로커가 목록에서 못 본 색인 항목(`unknown`)은 재료가 아니다.
     if (!c.inside || c.outcome === "skipped" || c.outcome === "error" || c.outcome === "gone") continue;
     if (c.state !== undefined && c.state !== "running") continue;
     if (c.outcome === "ok" && c.listed) continue;   // 목록에 보였다 — 산 세션
     const before = carry?.get(c.sid);
     missing.set(c.sid, { sinceMs: before && before.container === c.container ? before.sinceMs : now, container: c.container });
   }
-  return { lastAt: now, known: true, missing };
+  return { lastAt: now, known: true, missing, nullStreak: 0 };
 }
 
 const OUTCOMES: ReadonlySet<string> = new Set(["ok", "no-server", "gone", "skipped", "error"]);
@@ -67,10 +70,10 @@ export function parseContainerObservations(raw: unknown): ContainerObservation[]
   return out;
 }
 
-/** 박동 한 번(«지난번 그대로») — 나이만 되돌린다. 틈이 길었으면 다시 센다. 본 적 없는 노드면 아무것도 안 만든다. */
+/** 박동 한 번(«지난번 그대로») — 나이만 되돌린다. 틈이 길었으면(정확히 staleMs 는 이어진 것이다) 다시 센다. 본 적 없는 노드면 아무것도 안 만든다. */
 export function observeBeat(prev: ContainerWatch | undefined, now: number, staleMs: number): ContainerWatch | undefined {
   if (!prev) return undefined;
-  if (now - prev.lastAt > staleMs) return { lastAt: now, known: prev.known, missing: new Map() };
+  if (now - prev.lastAt > staleMs) return { ...prev, lastAt: now, missing: new Map() };
   return { ...prev, lastAt: now };
 }
 
@@ -103,6 +106,7 @@ export function hostViewsOf(nodes: ReadonlyArray<HostFacts>, now: number, staleM
       known: !!w && w.known,
       listed: new Set(n.sessionIds),
       missing: w?.missing ?? new Map(),
+      nullStreak: w?.nullStreak ?? 0,
     });
   }
   return out;

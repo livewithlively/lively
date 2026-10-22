@@ -53,12 +53,16 @@ test("[W4] 박동(«지난번 그대로»)은 이어 본 것이다 · 박동 사
   assert.equal(w.lastAt, 17_000);
   const gap = observeBeat(w, 17_000 + STALE + 1, STALE)!;
   assert.equal(gap.missing.size, 0, "틈 — 그동안 목록에 보였을 수 있다");
+  //  경계 — 박동 사이가 정확히 STALE 이면 이어진 것이다(상태 push 와 같은 자).
+  assert.equal(observeBeat(w, 17_000 + STALE, STALE)!.missing.get("box-a")?.sinceMs, 1_000);
   assert.equal(observeBeat(undefined, 1_000, STALE), undefined);
 });
 
 test("[W5] ★ G5 — 판정 재료가 아닌 관측은 지운다: 안쪽 표식 없음 · 안 물음 · 못 봄 · 컨테이너 없음 · running 아님", () => {
   for (const o of [
     { inside: false }, { outcome: "skipped" as const }, { outcome: "error" as const }, { outcome: "gone" as const }, { state: "stopped" },
+    //  브로커가 목록에서 못 본 색인 항목(`unknown`) — «모름» 이지 «안 도는 것» 이 아니지만 재료도 아니다.
+    { state: "unknown" }, { state: "created" },
   ]) {
     let w = observeContainers(undefined, [obs("box-a")], 1_000, STALE);
     w = observeContainers(w, [obs("box-a", o)], 4_000, STALE);
@@ -98,7 +102,8 @@ test("[W8] 노드가 보낸 칸은 모양을 믿지 않는다 — 한 줄이라�
 
 test("[W9] ★ 판정 재료 — 선언된 호스트만 · 죽은 호스트(하루)는 빼고 · 끊김·낡음·관측 없음·관측 낡음은 넣되 «신선 아님»(= 판정이 모름으로 읽는다)", () => {
   const NOW = 10_000_000;
-  const watch = (lastAt: number, known = true): ContainerWatch => ({ lastAt, known, missing: new Map([["box-a", { sinceMs: 1, container: "c-a" }]]) });
+  const watch = (lastAt: number, known = true, nullStreak = 0): ContainerWatch =>
+    ({ lastAt, known, missing: new Map([["box-a", { sinceMs: 1, container: "c-a" }]]), nullStreak });
   const f = (nodeId: string, o: Partial<HostFacts> = {}): HostFacts =>
     ({ nodeId, declared: true, online: true, stateAgeMs: 1_000, sessionIds: ["box-b"], watch: watch(NOW - 1_000), ...o });
   const v = hostViewsOf([
@@ -109,7 +114,7 @@ test("[W9] ★ 판정 재료 — 선언된 호스트만 · 죽은 호스트(하�
     f("stale", { stateAgeMs: STALE + 1 }),
     f("no-watch", { watch: undefined }),
     f("watch-stale", { watch: watch(NOW - STALE - 1) }),
-    f("old-agent", { watch: watch(NOW - 1_000, false) }),
+    f("old-agent", { watch: watch(NOW - 1_000, false, 7) }),
   ], NOW, STALE);
   assert.deepEqual(v.map((h) => [h.nodeId, h.fresh, h.known]), [
     ["ok", true, true], ["offline", false, true], ["stale", false, true], ["no-watch", false, false],
@@ -117,7 +122,18 @@ test("[W9] ★ 판정 재료 — 선언된 호스트만 · 죽은 호스트(하�
   ]);
   const ok = v[0]!;
   assert.deepEqual([...ok.listed], ["box-b"]);
+  assert.equal(v.find((h) => h.nodeId === "old-agent")?.nullStreak, 7, "연속 null 판 수가 판정 재료로 넘어간다(그림자 대조)");
   assert.equal(ok.missing.get("box-a")?.container, "c-a");
   //  경계 — 정확히 하루는 아직 죽은 것이 아니다(목록 소유 판정과 같은 자).
   assert.equal(hostViewsOf([f("edge", { online: false, stateAgeMs: SESSION_HOST_DEAD_MS })], NOW, STALE).length, 1);
+});
+
+test("[W10] 컨테이너 관측 없이 온 상태 push 를 연속으로 센다 — 관측이 오면 0 · 박동은 세지도 지우지도 않는다(그림자 대조용)", () => {
+  let w = observeContainers(undefined, undefined, 1_000, STALE);
+  w = observeContainers(w, undefined, 4_000, STALE);
+  assert.equal(w.nullStreak, 2);
+  w = observeBeat(w, 7_000, STALE)!;
+  assert.equal(w.nullStreak, 2);
+  w = observeContainers(w, [obs("box-a")], 10_000, STALE);
+  assert.equal(w.nullStreak, 0);
 });

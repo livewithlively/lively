@@ -92,12 +92,6 @@ export function tmuxRouteTransport(slug: string | null = tenantSlug()): { transp
 }
 
 /**
- * 코어 직접 경로 — 브로커 `/lvly/tmux` 가 하던 «세션 의미» 를 코어가 한다: 목록(`GET /lvly/sessions`) → 계획(`planTmux`) →
- *  실행(범용 exec API) → 병합. 성공은 stdout, 실패는 execFile 오류와 **같은 필드**(`code`·`stdout`·`stderr`)로 던진다 —
- *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
- *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
- */
-/**
  * #4939 — 세션 호스트의 **컨테이너 관측**: 세션 이름 목록(`list-sessions -F '#{session_name}…'`) 팬아웃을 지날 때마다 마지막 것을 기억한다.
  *  상태 push(node/agent)가 «방금 본 목록과 같은 순간의 관측» 을 싣는 재료다 — 판정은 게이트웨이가 한다(sessions/session-unreachable-rule).
  *  ⚠ 첫 칸이 세션 이름인 목록만 잡는다 — 그 밖의 목록(list-panes·기본 형식)으로 «목록에 있나» 를 재면 산 세션을 «안 보임» 으로 센다.
@@ -115,6 +109,12 @@ export function takeContainerObservation(sinceMs: number, slug: string | null = 
   return o && o.at >= sinceMs ? o.containers : null;
 }
 
+/**
+ * 코어 직접 경로 — 브로커 `/lvly/tmux` 가 하던 «세션 의미» 를 코어가 한다: 목록(`GET /lvly/sessions`) → 계획(`planTmux`) →
+ *  실행(범용 exec API) → 병합. 성공은 stdout, 실패는 execFile 오류와 **같은 필드**(`code`·`stdout`·`stderr`)로 던진다 —
+ *  상위(`isSessionGoneError`·`isNoTmuxServer`·strict 호출)가 종전과 똑같이 갈린다.
+ *  목록 조회 자체가 실패하면 «못 봤다» 다 — «서버 없음»·«세션 없음» 문구로 위장하지 않는다(#2616).
+ */
 export async function tmuxViaRoute(args: string[], via: { transport: BrokerTransport; slug: string; listScope?: TmuxListScope }): Promise<string> {
   const at = Date.now();
   //  ⚠ 전송 실패(소켓 없음 — 중앙 게이트웨이의 `on` 오설정)·형식 밖 슬러그도 execFile 오류 모양으로 던진다 — 맨 Error 가 나가면
