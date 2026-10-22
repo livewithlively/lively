@@ -10,6 +10,7 @@ import {
   listDbSources, listConnectors
 } from "../../org/store.js";
 import { effectiveHooks, seedHookIds } from "../../org/delivery/seed-hook-lock.js";
+import { effectiveAssets, lockedSkillIds } from "../../org/delivery/connect-skills.js"; // #4970 잠긴 연결 스킬
 import { envSourcesPayload, maskDbSource } from "./db-sources.js";
 import { membersPayload } from "./members.js";
 import { sectionsPayload } from "./org-content.js";
@@ -51,7 +52,7 @@ export const overviewCapabilities: Capability[] = [
       // #1836 — 시드 훅은 코드가 SoT 라 화면도 실행본(코드 본문)을 보여야 한다. lockedHookIds 로 관리탭이
       //  read-only·배지를 그린다(편집 시도는 서버가 409 로 막지만, 막히기 전에 화면이 먼저 말해야 한다).
       const orgHooks = isRuntime ? effectiveHooks(await listOrgHooks()) : [];
-      const orgHarnessAssets = isRuntime ? await listOrgHarnessAssets() : [];
+      const orgHarnessAssets = isRuntime ? effectiveAssets(await listOrgHarnessAssets()) : [];   // #4970 잠긴 연결 스킬 = 코드 본문
       const orgAssetPrefs = isRuntime ? await listAssetPrefs() : []; // #699: 멤버 개인 오버라이드(관리탭 '일괄 조회')
       const tools = isRuntime ? await listTools() : [];
       const rc = isRuntime ? (runtimeConfig ?? await getRuntimeConfig()) : null;
@@ -62,7 +63,7 @@ export const overviewCapabilities: Capability[] = [
         profile, sections: sectionMap, sectionDefaults, writebackNoticeDefault,
         members: memberRows, tokens, runtimeConfig, injectionConfig, mcpServers, connectors,
         dbSources: dbSources.map(maskDbSource), envSources,
-        orgHooks, lockedHookIds: isRuntime ? seedHookIds() : [], orgHarnessAssets, orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
+        orgHooks, lockedHookIds: isRuntime ? seedHookIds() : [], orgHarnessAssets, lockedAssetIds: isRuntime ? lockedSkillIds() : [], orgAssetPrefs, tools, builtins: isRuntime ? toolCandidates() : [], toolPolicy,
         meaning: MEANING, canEdit: isAdmin, canManage: canManageWorkspace(user), canRuntime: isRuntime,
       };
     }),
