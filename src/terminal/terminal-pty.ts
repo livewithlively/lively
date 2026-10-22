@@ -18,6 +18,7 @@ import { accessSync, constants as fsConstants } from "node:fs";
 import { TMUX_BIN } from "./terminal-sessions.js";
 import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
+import { muxAttachPrefix } from "./mux-generations.js";   // #4931 — 노드 tmux 세대(그 세션이 사는 서버로 붙는다)
 import { tmuxArgvFor } from "../exec-topology.js";   // #3545 — 소유 프로세스가 죽은 뒤엔 argv 를 슬러그로 **다시** 지어야 한다(렉시컬 캡처가 같이 사라졌다)
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
@@ -31,6 +32,10 @@ export interface AttachSocket {
 export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
 const CONTROL_MODE = process.env.TERMINAL_LEGACY_ATTACH !== "1"; // 기본 control mode, =1 이면 plain attach 폴백
+/** #4931 — attach 전 세대 찾기(has-session)의 호출 하나 상한. 로컬 유닉스 소켓이라 tmux-exec 의 로컬 상한과 같은 값이다. */
+const ATTACH_LOCATE_TIMEOUT_MS = 5_000;
+/** #4931 — attach 를 띄우기 전에 온 메시지를 쥐는 상한. 첫 크기·몇 글자 입력이면 충분하다 — 넘치면 버린다(무한히 쌓이지 않게). */
+const EARLY_MSG_MAX = 256;
 const execFileP = promisify(cpExecFile);
 
 // ── attach PTY 수명 관리(#687 PTY 누수) ──
@@ -608,11 +613,33 @@ export function attachSession(ws: AttachSocket, id: string, opts: AttachSessionO
   // attach 는 tmux **클라이언트**일 뿐 — 그 cwd 는 세션 pane 에 영향 없다. 세션 작업디렉터리(격리 시 멤버 700 홈)로
   //  chdir 하면 게이트웨이가 못 들어가 'chdir(2) failed: Permission denied' 가 반복된다(격리 개인폴더 attach 버그 #524).
   //  게이트웨이가 늘 접근 가능한 서버 홈을 쓴다.
+  //  #4931 — 노드(멤버 PC)는 attach 전에 **그 세션이 사는 tmux 세대**(판별 전용 소켓)를 찾는다(has-session 한두 번).
+  //   그 사이 소켓이 먼저 닫히면 아래 close 처리기가 아직 안 걸려 있으므로, 여기서 먼저 표시해 두고 띄우지 않는다
+  //   (안 그러면 아무도 회수하지 않는 attach 클라이언트가 남는다 — #687·#2148 이 막아 온 그 유령이다).
+  //   같은 틈에 오는 **메시지**도 버리지 않는다 — 게이트웨이는 노드의 `opened` 를 기다리지 않고 브라우저의 첫 크기·입력을 흘리고,
+  //   채널 어댑터는 처리기가 없으면 조용히 버린다. 그 첫 크기를 잃으면 판이 노드 PTY 기본값(80x24)으로 서고, 같은 페이지의 재연결엔
+  //   다시 보내는 길이 없다. 그래서 처리기를 **먼저 하나** 걸어 두고, 띄운 뒤의 처리기로 넘기며 쌓인 것을 순서대로 재생한다.
+  let closedBeforeSpawn = false;
+  const markClosed = (): void => { closedBeforeSpawn = true; };
+  ws.on("close", markClosed);
+  ws.on("error", markClosed);
+  let onMessage: ((raw: unknown) => void) | null = null;
+  const early: unknown[] = [];
+  ws.on("message", (raw) => {
+    if (onMessage) { onMessage(raw); return; }
+    if (early.length < EARLY_MSG_MAX) early.push(raw);
+  });
   Promise.resolve()
-    .then(() => {
+    .then(() => (opts.relayArgv ? null : muxAttachPrefix(id, { timeoutMs: ATTACH_LOCATE_TIMEOUT_MS, env: attachEnv() })))
+    .then((nodeMux) => {
+      if (closedBeforeSpawn) return;
+      //  종료 중이면 띄우지 않는다 — 세대를 찾는 사이 SIGTERM 이 와서 killAttachedPtys 가 이미 돌았다면, 지금 띄우는 PTY 는 아무도
+      //   회수하지 않는 고아가 된다(노드엔 고아 attach 회수가 없다). 소켓은 닫아 브라우저가 다시 붙게 한다.
+      if (attachShuttingDown) { try { ws.close(); } catch { /* already closed */ } return; }
       // 게이트웨이가 launchd/nohup 로 떠 LANG 이 없으면 tmux 클라이언트가 utf8=0 으로 잡혀 한글(멀티바이트)
       //  렌더가 깨진다. UTF-8 로케일을 강제(env) + `tmux -u`(로케일과 무관하게 UTF-8 출력)로 이중 보장.
-      const env = attachEnv();
+      //  #4931 — 노드 세대면 세대가 준 env(노드 토큰·$TMUX 를 뺀 것 — mux-generations `muxClientEnv`)를 쓴다.
+      const env = (nodeMux?.env as Record<string, string> | undefined) ?? attachEnv();
       // control mode: `-CC`(echo off) + `-u`(UTF-8). 폴백: plain attach.
       const args = CONTROL_MODE ? ["-u", "-CC", "attach", "-t", id] : ["-u", "attach", "-t", id];
       // ⚠ 백엔드는 멀티플렉서가 고른다(#1541) — tmux=node-pty(tty 필수) · psmux=파이프(PTY 에선 -CC 가 침묵).
@@ -624,7 +651,8 @@ export function attachSession(ws: AttachSocket, id: string, opts: AttachSessionO
       //   게이트웨이와 tmux 서버가 다른 곳에 있는 배포를 위해 여기도 갈아끼울 수 있어야 한다.
       //   계약은 같다: 지정한 프로그램에 tmux argv 를 그대로 이어 붙인다.
       const relay = (opts.relayArgv ?? tmuxExecArgv)();
-      const [abin, ...aprefix] = relay.length ? relay : [TMUX_BIN];
+      //  ⚠ 노드 세대 접두는 `relay` 에 섞지 않는다 — 아래 «끊긴 중계 흡수»(absorb)는 `relay.length` 로 켜지는 매니지드 전용 규칙이다.
+      const [abin, ...aprefix] = relay.length ? relay : (nodeMux?.argv ?? [TMUX_BIN]);
       const spawn = opts.spawn ?? spawnAttachTerm;
       const attachArgv = [...aprefix, ...args];
       term = spawn(abin!, attachArgv, env);
@@ -731,13 +759,14 @@ export function attachSession(ws: AttachSocket, id: string, opts: AttachSessionO
         bind(t, true);
       };
       bind(term, false);
-      ws.on("message", (raw) => {
+      onMessage = (raw) => {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };
-        try { msg = JSON.parse(raw.toString()); } catch { return; }
+        try { msg = JSON.parse(String(raw)); } catch { return; }
         if (!term) return;
         if (CONTROL_MODE) handleControlMsg(writeCmd, msg, psmuxSink);
         else handleLegacyMsg(term, msg);
-      });
+      };
+      for (const raw of early.splice(0)) onMessage(raw);   // 띄우기 전에 온 것 — 온 순서 그대로(명령은 writeCmd 가 준비될 때까지 쥔다)
       // 회수는 **SIGTERM 명시** — 기본 SIGHUP 은 tmux -CC 클라가 무시해 좀비로 남는다(위 (3)). 여기가 연결 단위
       //  회수의 유일한 관문이라(탭 종료·heartbeat terminate·에러 전부 이 경로) 시그널 하나가 곧 누수 여부다.
       // ⚠ 'close' 와 'error' 에 **둘 다** 걸리므로 두 번 불릴 수 있다 — 참조수를 두 번 빼면

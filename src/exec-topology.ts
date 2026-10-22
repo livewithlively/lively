@@ -147,6 +147,45 @@ export interface ExecTopology {
    *  null = 배포가 모른다(셀프호스트·구 배포) — 호출부는 종전대로 실물(자리)을 본다.
    */
   sessionHarnesses: readonly string[] | null;
+  /**
+   * 노드(멤버 PC)의 tmux 운용 방식(`LIVELY_MUX_PIN`, #4931) — 새 세션을 **어느 tmux 세대**에 띄우나.
+   *  · `auto`(기본) = 고정판(`terminal/mux-pin` 의 TMUX_PIN)을 판별 전용 소켓(`tmux -L lively-mux-<판>`)에서.
+   *  · `bin` = TMUX_BIN 을 그 판 이름의 전용 소켓에서(사람이 바이너리를 직접 고른 경우).
+   *  · `off` = 종전처럼 기본 소켓·TMUX_BIN(되돌리기 스위치). ⚠ off 여도 이미 전용 세대에 있는 세션은 계속 본다 —
+   *    스위치가 세션을 «사라지게» 하면 되돌리기가 아니라 또 하나의 사고다.
+   *  게이트웨이·매니지드 세션 호스트(중계)·윈도우 노드에선 읽기만 하고 쓰이지 않는다(`terminal/mux-generations` 의 켜짐 조건).
+   */
+  muxPin: MuxPinMode;
+}
+
+/** `LIVELY_MUX_PIN` 의 세 값(#4931) — `muxPin` 필드 머리말 참조. */
+export type MuxPinMode = "auto" | "bin" | "off";
+
+/**
+ * 값이 없을 때(또는 형식 밖일 때)의 `LIVELY_MUX_PIN` — **1단계는 off** 다(#4931).
+ *  ★ 왜 바로 auto 가 아닌가: 노드는 게이트웨이가 서빙하는 번들로 **자동으로 내려간다**(자가 갱신은 지문이 다르면 받는다 — 판 순서를
+ *   안 본다). 세대를 모르는 번들로 내려간 노드는 전용 세대의 세션을 못 봐서, 그 세션을 «죽었다» 로 답하고 화면은 그걸 자동 복원한다
+ *   — 같은 대화에 하네스가 둘 붙는다. 그래서 «세대를 아는 번들» 이 먼저 깔려 되돌림의 바닥이 된 뒤에 기본값을 켠다(2단계).
+ *   그 전엔 노드마다 env 로 켠다(`LIVELY_MUX_PIN=auto`). 자가 갱신도 세대를 모르는 번들로는 내려가지 않게 막는다(node/agent).
+ */
+export const MUX_PIN_DEFAULT: MuxPinMode = "off";
+
+/**
+ * `LIVELY_MUX_PIN` 파서(순수) — **정확히** `auto`·`bin`·`off`(앞뒤 공백만 벗긴다). 그 밖(빈 값·대소문자·오타)은 MUX_PIN_DEFAULT.
+ *  스위치를 켜는 값은 관대하게 읽지 않는다(`LIVELY_TMUX_ROUTE` 와 같은 규율) — 오타가 조용히 켜지거나 꺼지면 안 된다.
+ */
+export function parseMuxPin(raw: string | undefined): MuxPinMode {
+  const v = (raw ?? "").trim();
+  return v === "auto" || v === "bin" || v === "off" ? v : MUX_PIN_DEFAULT;
+}
+
+/**
+ * 노드 tmux 세대(#4931)를 **쓸 수 있는 자리**인가 — 노드 에이전트 · tmux 가 이 호스트의 기본 소켓 배치 · 윈도우가 아님.
+ *  매니지드 세션 호스트(중계 배치)는 거짓이다(세션이 노드 박스의 컨테이너에 산다). 윈도우(psmux)는 이름공간(`-L`)이 판마다
+ *  달라 실기기 확인 뒤 다음 단계에서 켠다. 이 질문의 답은 여기 하나다 — 켜는 쪽(node/mux-install)이 이걸 부른다.
+ */
+export function nodeMuxGenerationsApply(t: ExecTopology = execTopology(), platform: string = process.platform): boolean {
+  return t.sessionHost === "node" && t.tmux.kind === "socket" && t.tmux.socket === null && platform !== "win32";
 }
 
 /**
@@ -253,7 +292,10 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   // ── sessionHarnesses (#4067) ──  세션 이미지의 하네스 목록. 없거나 깨졌으면 null(모름).
   const sessionHarnesses = parseSessionHarnesses(env.LIVELY_SESSION_HARNESSES);
 
-  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker, sessionHarnesses };
+  // ── muxPin (#4931) ──  노드 tmux 세대 스위치. 쓰이는 자리는 노드(소켓 배치·비윈도우)뿐이다.
+  const muxPin = parseMuxPin(env.LIVELY_MUX_PIN);
+
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker, sessionHarnesses, muxPin };
 }
 
 let frozen: ExecTopology | null = null;

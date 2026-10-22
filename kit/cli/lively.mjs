@@ -1559,23 +1559,56 @@ export function planTmuxGlobalEnvFix({ showOutput = "", gw, tok, sessionId = "",
   return out;
 }
 
+// ── 노드 tmux 세대 소켓 (#4931) — 노드가 새 세션을 띄우는 판별 전용 서버들(`tmux -L lively-mux-<판>`). ──
+//  기본 소켓만 보는 CLI 자리(로그인 뒤 전역 env 교정 · reclaim 의 «작업 중 세션» 보호)가 이 서버들을 빠뜨리면, 거기 사는 세션의
+//  env 가 옛 신원으로 남거나 빌드 중인 폴더의 파생물이 지워진다.
+//  ⚠ 소켓 폴더 규칙은 src/node/mux-install.ts `muxSocketDir` 와 같다(tmux 자신의 규칙 — TMUX_TMPDIR 가 실제로 있으면 그것, 아니면
+//   /tmp 의 실경로). 키트는 src 를 import 할 수 없어 한 벌 더 둔다 — 두 벌이 같은 답을 내는지는 kit/cli/mux-sockets.test.mjs 가 잰다.
+/** (테스트 seam) 그 폴더의 우리 세대 소켓 이름들(이름순). 윈도우·폴더 없음은 빈 목록. */
+export function livelyMuxSockets(env = process.env, uid = typeof process.getuid === "function" ? process.getuid() : 0) {
+  if (WIN) return [];
+  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+  const base = (env.TMUX_TMPDIR ? real(env.TMUX_TMPDIR) : null) ?? real("/tmp") ?? "/tmp";
+  try {
+    return readdirSync(join(base, `tmux-${uid}`), { withFileTypes: true })
+      .filter((e) => e.name.startsWith("lively-mux-") && e.isSocket()).map((e) => e.name).sort();
+  } catch { return []; }
+}
+/** 이 PC 의 tmux 서버들에 말할 argv 접두 — 기본 소켓(플래그 없음) + 세대 소켓마다 `-L`. PATH 에 tmux 가 없으면 고정판으로 말한다. */
+function tmuxServersCli() {
+  if (WIN) return { bin: null, servers: [] };
+  let bin = has("tmux") ? "tmux" : null;
+  if (!bin) {
+    try {
+      const dir = join(HOME, ".lively", "bin");
+      const pins = readdirSync(dir).filter((n) => /^tmux-[A-Za-z0-9._-]+$/.test(n)).sort().reverse();
+      bin = pins.map((n) => join(dir, n, "tmux")).find((p) => existsSync(p)) || null;
+    } catch { /* 없음 */ }
+  }
+  return { bin, servers: [[], ...livelyMuxSockets().map((s) => ["-L", s])] };
+}
+
 function syncTmuxGlobalEnv(gw, tok) {
   if (WIN) return;
   try {
-    if (!has("tmux")) return;
-    const cur = run("tmux", ["show-environment", "-g"], { quiet: true, allowFail: true });
-    if (cur.code !== 0) return;                                            // 안전선 ② (서버 없음 — 새로 띄우지 않는다)
-    const plan = planTmuxGlobalEnvFix({
-      showOutput: cur.out, gw, tok,
-      sessionId: process.env.LIVELY_SESSION_ID, normalizeGw: normGw,
-    });
-    const fixed = [];
-    for (const [name, want] of plan) {
-      const r = run("tmux", ["set-environment", "-g", name, want], { quiet: true, allowFail: true });
-      if (r.code === 0) fixed.push(name);
+    const { bin, servers } = tmuxServersCli();
+    if (!bin) return;
+    const fixed = new Set();
+    //  #4931 — 기본 소켓만이 아니라 노드의 세대 서버마다 같은 규칙으로(안전선 셋은 서버마다 그대로).
+    for (const flags of servers) {
+      const cur = run(bin, [...flags, "show-environment", "-g"], { quiet: true, allowFail: true });
+      if (cur.code !== 0) continue;                                        // 안전선 ② (서버 없음 — 새로 띄우지 않는다)
+      const plan = planTmuxGlobalEnvFix({
+        showOutput: cur.out, gw, tok,
+        sessionId: process.env.LIVELY_SESSION_ID, normalizeGw: normGw,
+      });
+      for (const [name, want] of plan) {
+        const r = run(bin, [...flags, "set-environment", "-g", name, want], { quiet: true, allowFail: true });
+        if (r.code === 0) fixed.add(name);
+      }
     }
     // 값은 안 찍는다 — 토큰이 섞여 있다. 무엇을 고쳤는지와 '새 pane 부터'라는 한계만 말한다.
-    if (fixed.length) info(`tmux 전역 env 를 새 로그인으로 맞췄습니다(${fixed.join(" · ")}) — 지금부터 여는 창에 적용됩니다.`);
+    if (fixed.size) info(`tmux 전역 env 를 새 로그인으로 맞췄습니다(${[...fixed].join(" · ")}) — 지금부터 여는 창에 적용됩니다.`);
   } catch { /* 로그인은 이것 때문에 실패하지 않는다 */ }
 }
 
@@ -2713,9 +2746,17 @@ async function cmdReclaim(rest) {
   // 이 워크트리에서 **작업 중인 세션**이 있으면 회수를 통째로 막는다(빌드 중인 node_modules 를 지우면 그 세션이 깨진다).
   //  서버는 세션 레지스트리를 보지만 이 PC 엔 그게 없다 — tmux pane 들의 현재 경로 + 지금 이 셸의 cwd 를 쓴다.
   //  tmux 가 없거나 실패하면 빈 목록이 되는데, 그래도 코어의 나머지 안전선(gitignored∩allow-list·보호목록)은 그대로다.
+  //  #4931 — 노드는 새 세션을 판별 전용 서버(`tmux -L lively-mux-<판>`)에 띄운다. 기본 소켓만 보면 그 세션들의 폴더를 놓쳐 «작업 중»
+  //   보호가 빠진다 — 서버마다 묻는다.
   const paneDirs = (() => {
-    const r = run("tmux", ["list-panes", "-a", "-F", "#{pane_current_path}"], { quiet: true, allowFail: true });
-    return r.code === 0 ? String(r.out).split("\n").map((x) => x.trim()).filter(Boolean) : [];
+    const { bin, servers } = tmuxServersCli();
+    if (!bin) return [];
+    const dirs = [];
+    for (const flags of servers) {
+      const r = run(bin, [...flags, "list-panes", "-a", "-F", "#{pane_current_path}"], { quiet: true, allowFail: true });
+      if (r.code === 0) dirs.push(...String(r.out).split("\n").map((x) => x.trim()).filter(Boolean));
+    }
+    return dirs;
   })();
   const activeSessionDirs = [...new Set([...paneDirs, process.cwd()])];
 
