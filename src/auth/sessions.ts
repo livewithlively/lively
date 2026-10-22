@@ -47,6 +47,15 @@ export async function revokeSession(sessionId: string): Promise<RevokedSession |
   return row ? { authMethod: row.auth_method, ssoIdTokenEnc: row.sso_id_token_enc } : null;
 }
 
+// 끝난 세션의 보관 토큰 정리(정비 스윕) — 로그아웃 없이 창을 닫은 세션은 회수되지 않고 만료만 된다.
+//  만료·회수된 행은 다시 쓰이지 않으므로 IdP 토큰을 지운다. 삭제·비활성 구성원의 세션도 30일 안에 만료돼 여기서 정리된다.
+export async function reapEndedSessionTokens(): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE web_session SET sso_id_token_enc=NULL
+      WHERE sso_id_token_enc IS NOT NULL AND (revoked_at IS NOT NULL OR expires_at < now())`);
+  return r.rowCount ?? 0;
+}
+
 // (#1631) 사람만 — 사람이 아닌 구성원(운영 계정 등)의 세션은 종류가 바뀐 시점과 무관하게 통과하지 못한다(nonhuman-login.test).
 // 세션 → LivelyUser. scope = 멤버에서 LIVE(세션은 사람 본인 행위 → 최소권한 캡 없음). 멤버 비활성/만료/회수면 null.
 export async function userFromSession(sessionId: string): Promise<LivelyUser | null> {

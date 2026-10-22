@@ -11,11 +11,12 @@
 //   R2 그 행은 회수 시각이 찍히고 보관 토큰이 NULL 이 된다
 //   R3 2차 회수(이미 끊긴 세션)는 null — 로그아웃을 두 번 눌러도 IdP 로 두 번 보내지 않는다
 //   R4 비밀번호 로그인 세션(authMethod 없음)은 {authMethod:null, ssoIdTokenEnc:null}
+//   R5 정비 스윕(reapEndedSessionTokens)은 만료된 세션의 보관 토큰만 지운다 — 살아 있는 세션의 토큰은 그대로
 import crypto from "node:crypto";
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
 const { initMemberAuth } = await import(`${DIST}/org/schema/member-auth.js`);
-const { createSession, revokeSession } = await import(`${DIST}/auth/sessions.js`);
+const { createSession, revokeSession, reapEndedSessionTokens } = await import(`${DIST}/auth/sessions.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -49,6 +50,17 @@ try {
     const r = await revokeSession(sessionId);
     chk("R4 비밀번호 로그인 세션은 방식·토큰 모두 null",
       r !== null && r.authMethod === null && r.ssoIdTokenEnc === null, `r=${JSON.stringify(r)}`);
+  }
+  {
+    // 로그아웃 없이 창을 닫은 세션 — 회수되지 않고 만료만 된다.
+    const expired = await createSession(MID, { authMethod: "oidc", ssoIdTokenEnc: "gcm$left" });
+    await itemsPool.query(`UPDATE web_session SET expires_at = now() - interval '1 day' WHERE session_hash=$1`, [sha256(expired.sessionId)]);
+    const live = await createSession(MID, { authMethod: "oidc", ssoIdTokenEnc: "gcm$live" });
+    const n = await reapEndedSessionTokens();
+    chk("R5a 만료 세션의 보관 토큰을 지운다", n >= 1 && (await rowOf(expired.sessionId))?.sso_id_token_enc === null,
+      `n=${n} row=${JSON.stringify(await rowOf(expired.sessionId))}`);
+    chk("R5b 살아 있는 세션의 토큰은 그대로", (await rowOf(live.sessionId))?.sso_id_token_enc === "gcm$live",
+      `row=${JSON.stringify(await rowOf(live.sessionId))}`);
   }
 } catch (e) {
   bad("예외", e?.stack || String(e));
