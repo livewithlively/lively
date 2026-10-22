@@ -79,6 +79,10 @@ export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapS
     change_note: { limit: 600, policy: "clamp",
       effect: "변경 요약이 상한을 넘어 잘라 기록했습니다(1~2문장이면 충분합니다)." },
   },
+  knowledge_set_fields: {
+    change_note: { limit: 600, policy: "clamp",
+      effect: "변경 요약이 상한을 넘어 잘라 기록했습니다(1~2문장이면 충분합니다)." },
+  },
   source_save: {
     title: { limit: 200, policy: "clamp",
       effect: "제목이 상한을 넘어 앞부분만 남기고 잘라 저장했습니다(원문 body_md 는 그대로입니다)." },

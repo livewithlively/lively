@@ -24,3 +24,16 @@ export function assertNoContentSecrets(input: unknown, skip: ReadonlySet<string>
   };
   walk(input, "");
 }
+
+/**
+ * 자유 형식 객체(키를 호출자가 정하는 jsonb — knowledge_set_fields 의 patch 등)의 **키** 를 검사한다. assertNoContentSecrets 는
+ *  값만 보므로 `{"<토큰>": 1}` 이 그대로 저장된다. 걸리면 400 — 경로엔 부모 경로만 싣는다(키 자체가 시크릿이라 메시지에 넣으면 샌다).
+ */
+export function assertNoSecretKeys(input: unknown, path: string): void {
+  if (Array.isArray(input)) { input.forEach((x, i) => assertNoSecretKeys(x, `${path}.${i}`)); return; }
+  if (!input || typeof input !== "object") return;
+  for (const [k, x] of Object.entries(input)) {
+    assertNoHardSecrets(k, `${path} 의 키`, HINT);
+    assertNoSecretKeys(x, `${path}.${k}`);
+  }
+}

@@ -55,10 +55,11 @@ const call = async (name: string, input: unknown): Promise<Outcome> => {
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
 
-// ── ① 입구 21곳 — 텍스트 칸마다 토큰 → 400 · 칸 경로 · 값 미포함 ──
+// ── ① 입구마다 — 텍스트 칸마다 토큰 → 400 · 칸 경로 · 값 미포함 ──
 const ENTRIES: Array<[string, Record<string, unknown>, string]> = [
   ["knowledge_save", { name: "k", title: "t", body_md: `본문 ${GH}`, category: "c", type: "reference" }, "body_md"],
   ["knowledge_set_title", { name: "k", title: `제목 ${GH}` }, "title"],
+  ["knowledge_set_fields", { name: "k", patch: { domain_wiki: { code_sot: `코드 ${GH}` } } }, "patch"],
   ["category_create", { key: "c", name: "n", should: `정의 ${GH}` }, "should"],
   ["category_update", { id: 1, description: `설명 ${GH}` }, "description"],
   ["category_group_upsert", { name: `묶음 ${GH}` }, "name"],
@@ -132,6 +133,12 @@ await t("E7 새로 넣은 종류 — Anthropic sk-ant-… · GitHub gho_ 도 400
 await t("E8 경계 — 낱말 안의 «sk-» 는 키가 아니다(긴 산문 저장이 막히지 않게)", async () => {
   const r = await call("task_comment_v6", { id: 2, text: "risk-managementprocedures2026 · task-descriptionupdatelog" });
   assert.ok(!r.blocked, `산문을 키로 오인했다: ${r.message}`);
+});
+await t("E6-b 자유 형식 객체의 키에 든 토큰도 400 — knowledge_set_fields patch(메시지엔 키를 싣지 않는다)", async () => {
+  const r = await call("knowledge_set_fields", { name: "k", patch: { domain_wiki: { [GH]: 1 } } });
+  assert.ok(r.blocked, r.message);
+  assert.match(r.message, /patch\.domain_wiki 의 키/);
+  assert.ok(!r.message.includes(GH), "오류 메시지에 시크릿 키가 실렸다");
 });
 await t("E9 빈 문자열·null·숫자는 검사 대상이 아니다", async () => {
   const r = await call("task_field_value_set_v6", { taskId: 2, fieldId: 3, value: [null, 0, "", { n: 42 }] });
