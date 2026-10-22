@@ -57,6 +57,8 @@ export interface AppInstanceRecord {
     system: { renderer: 'session' | 'browser' | 'classic'; route?: string; home?: string } | null;
     runtime: AppWorkerRuntime | null;
     ui: { pages: Array<{ key: string; title: string; display: string[] }> };
+    server?: boolean;   // #4485 후속 — 서버가 화면을 만드는 앱(web.server · 옛 게이트웨이는 없다)
+    icon?: { path: string; color: string; color_dark?: string } | null;   // #4769 선언한 앱 아이콘
   };
 }
 
@@ -167,7 +169,12 @@ export async function openInstalledApp(app: {
   pages?: Array<{ key: string }>;
   runtime?: AppWorkerRuntime | null;
   system?: { renderer?: string; home?: string } | null;
-}, projectId?: number | null): Promise<boolean> {
+}, projectId?: number | null, extra?: {
+  /** #4769 앱에 줄 값(#/open/<앱>?… 의 물음표 뒤) — 인스턴스 state 로 실어 앱이 lively.state 로 읽는다. */
+  state?: Record<string, unknown>;
+  /** 주소를 바꾸는 법 — 없으면 location.hash. 라우터 안에서 부르면 replace 로 넘겨 뒤로 가기에 자리를 남기지 않는다. */
+  go?: (hash: string) => void;
+}): Promise<boolean> {
   try {
     if (app.runtime) {
       const { ensureAppGrant } = await import('./app-session.js');
@@ -176,9 +183,14 @@ export async function openInstalledApp(app: {
     const execution = app.runtime ? await chooseAppExecution(app.title, app.runtime) : undefined;
     if (app.runtime && !execution) return false;
     const page = app.pages && app.pages[0] ? app.pages[0].key : undefined;
-    const state = app.system?.renderer === 'browser' ? { url: app.system.home || 'https://www.google.com/' } : undefined;
-    const instance = await createAppInstance(app.id, { projectId: projectId ?? null, page, title: app.title, state, execution: execution ?? undefined });
-    location.hash = '#/i/' + encodeURIComponent(instance.id);
+    const state = app.system?.renderer === 'browser' ? { url: app.system.home || 'https://www.google.com/' } : extra?.state;
+    let instance = await createAppInstance(app.id, { projectId: projectId ?? null, page, title: app.title, state, execution: execution ?? undefined });
+    //  #4769 멱등 재열기(single · subject)는 옛 state 를 지킬 수 있다 — 이번에 줄 값이 있으면 그 값으로 덮는다(없으면 앱은 그냥 열린다).
+    if (extra?.state && JSON.stringify(instance.state ?? {}) !== JSON.stringify(extra.state)) {
+      try { instance = await updateAppInstance(instance.id, { state: extra.state }); } catch (_) { /* 값 없이도 앱은 열린다 */ }
+    }
+    const hash = '#/i/' + encodeURIComponent(instance.id);
+    if (extra?.go) extra.go(hash); else location.hash = hash;
     return true;
   } catch (e: any) {
     toast('앱을 열지 못했어요 — ' + (e && e.message ? e.message : e), true);

@@ -76,10 +76,30 @@ export interface GatewayCapabilities {
    *  그 컴퓨터의 경로라 서버의 공유 폴더와 뜻이 다르다(routes.ts 홈 입구의 #4551 노드 제외와 같은 판단).
    */
   assertSessionCwdVisible?: (user: LivelyUser, rootKey: string, subpath: string) => Promise<void>;
+  /**
+   * 세션에 붙인 앱 폴더(#4684) — createSession 이 세션 컨테이너를 청할 때 실을 «붙어 있어야 할 앱» 목록(붙은 앱 기록 × 붙인 사람의
+   *  동의 × 앱 상태)과, 새 id 복원 때 옛 세션의 붙은 앱을 새 id 로 넘기기. DB 를 탄다 → 게이트웨이 전용.
+   *  노드 에이전트에는 등록이 없어 undefined 이고 호출부는 목록을 싣지 않는다(브로커가 앱 폴더를 건드리지 않는다).
+   */
+  sessionAppFolders?: {
+    listFor: (sessionId: string) => Promise<string[]>;
+    carry: (fromId: string, toId: string) => Promise<number>;
+    /** 승계한 뒤 만들기가 실패했을 때 — 한 번도 안 뜬 그 id 의 붙은 앱 기록을 지운다. */
+    drop: (sessionId: string) => Promise<number>;
+    /** 만든 직후 — 확보 응답의 앱 폴더 결과를 남기고(#4786 — 못 읽은 목록은 undefined), 실은 목록과 지금 목록이 다르면 한 번 더 맞춘다(기다리지 않는다). */
+    afterCreate: (sessionId: string, sent: readonly string[] | undefined, madeApps?: unknown, ensureStartedAt?: number) => void;
+  };
+  /**
+   * 이 워크스페이스가 구성원 AI 계정(Claude) 커넥터를 쓰나(#4213 T6 #4427 — org_runtime_config.allow_member_ai_connectors).
+   *  «allowed» 가 아니면(blocked · unknown) createSession·대화 런타임이 claude 에 claude.ai 커넥터를 싣지 않는다 —
+   *  판정은 terminal/claude-ai-connectors-policy.ts 한 곳(fail-closed). DB 를 탄다 → 게이트웨이 전용. 노드 에이전트에는 등록이 없어
+   *  undefined 이고 그 판정은 «막지 않음» 이다 — 노드 세션은 그 사람 컴퓨터의 Claude 라 이 정책은 안내문으로만 닿는다.
+   */
+  memberAiConnectorsPolicy?: () => Promise<"allowed" | "blocked" | "unknown">;
 }
 
 /** 선언된 능력 이름 — 배선 가드가 이 목록으로 index.ts 를 검사한다(추가하면 가드가 자동으로 요구한다). */
-export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat", "outboxHost", "assertSessionCwdVisible"] as const;
+export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat", "outboxHost", "assertSessionCwdVisible", "sessionAppFolders", "memberAiConnectorsPolicy"] as const;
 
 const caps: GatewayCapabilities = {};
 

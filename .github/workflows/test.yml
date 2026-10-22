@@ -134,6 +134,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/app-instance-dismiss.pg-test.mjs
+      # ④-c2 아웃박스 결말 SQL(#4697 T7) — 모든 프롬프트 배달이 지나는 UPDATE 에 측정용 RETURNING 을 붙였다. SQL 이 틀리면
+      #    배달 루프가 결말마다 던져 사람의 말이 하나도 안 간다 — 목 풀은 SQL 문자열이 무엇이든 초록이라 실 Postgres 로만 판정된다.
+      - name: 아웃박스 결말 SQL PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-outbox-mark.pg-test.mjs
       # ④-d 새 셸 개인화 저장(#3887) — 목으로는 못 보는 것: **저장소 단위 병합이 다른 저장소를 안 지우나 · jsonb 를 지나도
       #    치움 순서가 되살아나나**. 병합은 SQL 한 문장(`prefs - 지울 칸 || 넣을 칸`)이고, jsonb 는 객체 키를 길이순으로
       #    다시 늘어놓는다 — 둘 다 실제 Postgres 가 돌려주는 값으로만 판정된다.
@@ -150,6 +157,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/session-task.pg-test.mjs
+      # ④-d2a 세션·태스크 제목이 한 번 정해지면 그대로 간다(#4418) — 목으로는 못 보는 것: **노드 상태 보고(발견 행)가 생성 기록보다
+      #    먼저 와도 이름 출처·종류가 정해지나**(ON CONFLICT 의 CASE) · **세션이 스스로 만든 태스크만 한 번 따라가나**(UPDATE … WHERE
+      #    순위) · 사람이 이름을 실제로 바꾸면·고르면 사람 것인가. 진짜 발견 기록 → 노드 미러 → 이름짓기를 순서대로 부르고 행을 되읽는다.
+      - name: 세션·태스크 제목 걸쇠 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-naming.pg-test.mjs
       # ④-d2b 같은 id 복원(#4694) — 목으로는 못 보는 것: **같은 id 로 다시 쓴 행이 무엇을 남기고 무엇을 잃나**. upsert 의
       #    ON CONFLICT 가 지난 판의 종료 표식은 남기고(그래서 정리가 필요하다) 대화 매핑·이름 출처는 지키는지, 정리가 주인·이음
       #    조건을 지키는지, 되살린 세션이 사람이 치운 인스턴스를 목록에 되올리지 않는지 — 전부 SQL 조건이라 행을 되읽어 판정한다.
@@ -158,6 +173,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/sessions/session-revive.pg-test.mjs
+      # ④-d2c 이 판이 왜 끝났나(#4783) — 목으로는 못 보는 것: **그 판의 첫 사실이 이기나**(뒤늦은 런처 보고가 끄기 사유를 못 덮는다) ·
+      #    주인 행만 · 그 판보다 먼저 뜬 하네스의 보고는 버리나 · 판이 새로 서면 지난 사유가 지워지나 · 열어 보면 «안 본 결과» 가 걷히나 —
+      #    전부 UPDATE 의 WHERE 와 upsert 의 ON CONFLICT 라 행을 되읽어 판정한다.
+      - name: 끝난 사유 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/sessions/session-end.pg-test.mjs
       # ④-d1c 위탁 running 기록(markRunning) — 목으로는 못 보는 것: **queued 행에만 쓰는 UPDATE 조건이다**. «늦게 온 기록은 false 이고
       #    첫 판의 좌표가 그대로다» · «취소된 행은 running 으로 뒤집히지 않는다» · «재큐된 행은 다시 기록된다». 행을 되읽어 판정한다.
       - name: 위탁 running 기록 PG 통합 테스트
@@ -165,6 +188,21 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/node/task-mark-running.pg-test.mjs
+      # ④-d1d 작업 컨테이너 작업 행(#4490) — 목으로는 못 보는 것: **동시 상한·대기열 상한이 테넌트 잠금 안의 셈이고, 일회용 부트 · 한 번만
+      #    끝남 · 무응답 재확인 · 일시 실패 되돌리기 · 고른 뒤 끝난 행 넘기지 않기가 UPDATE 한 문장의 조건이다**. 병렬로 부르고(청/녹 두 슬롯)
+      #    다른 트랜잭션으로 잠금·행을 쥐어 순서를 고정한 뒤 행을 되읽어 판정한다. 조건을 지우면 빨개지는 것을 확인했다.
+      - name: 작업 컨테이너 작업 행 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/agent-jobs/store.pg-test.mjs
+      # ④-c2 앱 AI 실행 행(#4488 앱 v2-9) — 목으로는 못 보는 것: «한 번만 끝남» · «프록시 토큰은 열린 실행에만» · «사람당 동시 셈은 열린 실행만» ·
+      #    «하루 토큰은 오늘 · 그 앱 · 네 종류 합» · «재시도는 열린 실행만» · «만든 대화는 끝난 실행 + 대화 id 있는 작업 join» 이 전부 SQL 조건이다.
+      - name: 앱 AI 실행 행 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/ai-runs/store.pg-test.mjs
       # ④-d1b ⌘K 대화 검색 색인(#4517) — 목으로는 못 보는 것: **이어 읽기와 권한이 SQL 조건이다**. «사람 말·AI 말만 행이 된다» ·
       #    «쓰는 중인 반 줄은 다음에 · 같은 창을 두 번 담지 않는다(커서 CAS)» · «주인 + 초대받은 사람만 찾는다» · «완전 삭제·보존
       #    정리 뒤엔 색인도 없다». session_msg 행 · 커서 · 검색 결과 id 를 되읽어 판정한다.
@@ -347,6 +385,47 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/lively-db-sdk.pg-test.mjs
+      # ⑤-i4 파일 서명 주소(#4673) — 진짜 게이트웨이(구성원 토큰 · 앱 서버 토큰 + 서명한 사람 신원 · 서명 주소 받는 곳 · 홈 탐색기).
+      #    앱 서버가 제 앱 폴더에 올리고 받기(바이트 같음) · 동의 없음 · 공유 폴더 · 남의 앱 폴더 403 · 신원 없음 401 ·
+      #    사람은 앱 폴더 받기만 · 동의를 거두면 이미 받은 주소도 막힘 · 탐색기는 동의한 앱만 · 공유 폴더 올리기만 자료가 생김.
+      - name: 파일 서명 주소(앱 폴더 · 앱 서버 자격) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/files/file-url.pg-test.mjs
+      # ⑤-i5 이름 바꾸기·옮기기 기록 + 자료 좌표 이동(#4688) — 진짜 게이트웨이(구성원 토큰 · 프로젝트 자료 라우트 · 홈 탐색기).
+      #    같은 자료 번호가 새 좌표로(updated_at · 지식 근거 그대로) · 옛 링크 풀기(연쇄 접기 · 되돌리기 · 가장 긴 접두 · 실제 파일 먼저) ·
+      #    도착 좌표의 휴지통·닫힌 기록은 비켜 두고 되살리면 되찾기 · 잠긴 자리는 새 자리 기준 재판정 · 개인 폴더는 주인별 ·
+      #    프로젝트 폴더 자리 자체 이름 바꾸기 400.
+      - name: 이름 바꾸기·옮기기 기록 · 자료 좌표 이동 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/file-move.pg-test.mjs
+      # ⑤-i2 옛 주소 따라가기 넓히기(#4822) — 목으로는 못 보는 것: **웹에서 옮긴 파일의 옛 주소가 다른 입구로 와도 지금 자리로 가나**.
+      #    파일 주소 도구(file_url 받기 · file_path) · 프로젝트 파일 읽기(본문 그림 주소)가 «옛 경로 → 새 경로» 기록을 따라가되, 옛 자리 판정 먼저 ·
+      #    실제 파일이 이긴다 · 닿은 자리 재판정 · 같은 프로젝트 안에서만 · 쓰기는 안 따라감 — 진짜 라우트로 옮기고 받은 바이트로 판정한다.
+      - name: 옛 주소 따라가기(파일 주소 도구 · 프로젝트 파일 읽기) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/files/moved-address.pg-test.mjs
+      # ⑤-i6 자료 보기(#4672) — 진짜 게이트웨이(구성원 토큰 · 프로젝트 자료 올리기 · 홈 탐색기 정보 · 같은 이름 후보).
+      #    정보(속한 프로젝트 · 앱 · 주소 · 잠김 · 자료와 거기서 나온 지식) · 안 보이는 자리 404 · 앱 폴더 동의 안내(403 app_consent_required) ·
+      #    같은 이름 후보는 범위(프로젝트 · 앱 · 맨 위 폴더) 안에서 · 하나하나 다시 판정.
+      - name: 자료 보기 정보 · 같은 이름 후보 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/files/file-view.pg-test.mjs
+      # ⑤-i7 홈 탐색기 같은 답(#4847) — 진짜 게이트웨이(구성원 토큰 · 프로젝트 공개범위 · 공유 폴더 공개범위 · 홈 탐색기 라우트 열 개).
+      #    볼 수 없는 자리(숨은 프로젝트 · 잠긴 폴더)와 없는 자리가 라우트마다 같은 답(상태 · 몸 · 머리) · 이상한 이름은 어느 자리든 같은 400 ·
+      #    루트 밖 링크의 400 은 판정 뒤에만 · 휴지통 되살리기의 같은 404.
+      - name: 홈 탐색기 — 볼 수 없는 자리와 없는 자리의 같은 답 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/terminal/browse-answers.pg-test.mjs
       # ⑤-j 신원 전역 표 — 계정행이 워크스페이스마다 갈라지지 않는가. 이 버그는 **컬럼 기본값**(`tenant_id
       #    DEFAULT current_setting(...)`)에 살았다: 쓰는 쪽 코드는 한 줄도 안 틀렸는데 DB 가 컨텍스트를 따라가
       #    행을 늘린다. 기본값은 실 DDL 위에서만 발화하므로 목으로는 재현 자체가 불가능하다.
@@ -390,6 +469,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/vis-personal-unlock.pg-test.mjs
+      # ⑤-n2 증류 지식 공개범위(#4824) — 목으로는 못 보는 것: **저장·원본 연결·공개범위가 한 트랜잭션**이라 연결이 실패하면 지식 행도
+      #    없다(D6) · 잠긴 자료를 남이 보던 지식에 합치면 본문도 그대로다(E1) · 단위를 좁히면 이미 만든 지식도 같은 트랜잭션에서
+      #    좁혀진다(N1) · 연결과 좁히기가 겹쳐도 지식이 자료보다 넓게 남지 않는다(C1). 핸들러를 부르고 DB 를 되읽어 판정한다.
+      - name: 증류 지식 공개범위 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/derived-visibility.pg-test.mjs
       # ⑤-n2 ClickUp 반출의 부모 좌표 치유 — 위 가시성 축과 같은 경계다. 치유가 부모 프로젝트의 list_id 를 옮기는데,
       #    미러 안 된 리스트로 옮겨졌을 때 list_id 를 비우면 «미분류 = 전원 공개» 가 된다. 판정이 UPDATE 한 문장의
       #    CASE·서브쿼리·NULL 비교라 목으로는 조건 하나를 지워도 초록이다 — 행을 깔고 기록 뒤 되읽어 바깥 사람 가시성까지 본다.
@@ -428,6 +515,46 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-archive.pg-test.mjs
+      # ⑤-m2 앱 서버(#4484 앱 v2-5) — 진짜 빌더(세션 컨테이너 대신 이 러너의 node)로 판을 빌드해 zip 을 받고, 메모리 속 가짜 Lambda 에 올린다.
+      #    첫 배포(함수 만들기 · 판 고정 · 시험 호출 · cur) · 이름만 바꾼 판 재빌드 없음 · 빌드 안 된 판 공개 409 · 저장한 사람의 세션에서만 빌드 ·
+      #    시험 호출 실패 · 빌드 실패 · 다른 워크스페이스 태그 · 멈춤/다시 켜기 권한 · 자동 멈춤 감시 · 되돌리기 · 앱 지우기 · 죽은 빌드 · 꺼진 배포.
+      - name: 앱 서버(빌드 · Lambda 배포 · 공개 · 멈춤) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-servers.pg-test.mjs
+      # ⑤-m2b 앱 백그라운드 작업(#4486 앱 v2-7) — 받기 · 줄 세우기(앱 · 워크스페이스 동시 상한 · 대기 · 하루 상한) · 가짜 Lambda 비동기 부르기 ·
+      #    검사 층의 claim(한 번 쓰는 비밀 — 재전송 409 · 위조 401) · 박동 · 결과 · 돌기 신원의 사람 주체 · 취소 · 감시(다시 부름 · 박동 없음 ·
+      #    시간 초과) · 배포가 열린 작업의 판 · 토큰을 남기는지 · 앱 지우기 · 보존은 진짜 SQL 조건과 잠금에서만 보인다.
+      - name: 앱 백그라운드 작업(받기 · 부르기 · claim · 박동 · 결과 · 감시) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-jobs.pg-test.mjs
+      # ⑤-n3 앱 폴더 보관(#4778) — 앱을 지우는 모든 입구(관리자 제거 · 나만 보는 앱 지우기 · 기본 앱 은퇴 · 빈 예약 거두기)가 앱 폴더를
+      #    보관으로 옮기는지, 같은 id 로 새로 만들 때 남은 폴더를 먼저 옮겨 새 앱이 빈 폴더로 시작하는지(옛 파일 서명 주소 404 · 탐색기 빈 목록),
+      #    보관 기간이 지나면 지우는지, 관리자 목록 · 비우기 · 되돌리기 · 고아 옮기기가 기록 표와 실제 폴더를 같이 맞추는지는 진짜 DB · 폴더에서만 보인다.
+      - name: 앱 폴더 보관(지우기 입구 · 새로 만들기 · 정비 · 관리자 도구) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-folder-archive.pg-test.mjs
+      # ⑤-m3 앱 폴더 판정 · 승계 DB 함수(#4788 · #4684 후속) — 판정 · 맞추기 유닛은 DB 함수를 가짜로 끼워, 뗀 행 거르기 · 붙인 사람 거르기 ·
+      #    승계의 충돌 키 · 앱 제거가 돌려주는 세션 · 주인 조회 오류를 던지는가는 실제 SQL 에서만 보인다. 행 격리 정책을 실제로 켜고 앱 역할로 붙어
+      #    같은 세션 id 를 쓰는 다른 워크스페이스 행이 섞이지 않는지도 본다(격리는 함수가 아니라 정책이 한다).
+      - name: 앱 폴더 판정 · 승계 DB 함수(행 격리 포함) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/session-apps.pg-test.mjs
+      # ⑤-m4 앱 폴더 상한 · 사용량(#4785) — 진짜 게이트웨이(구성원 토큰 · 권한 범위). 책임자 · 관리자만 상한을 바꾸고(남 403 · 못 보는 앱 404),
+      #    CP 쿼터 정비가 부르는 상한 목록 · 사용량 보내기는 관리자만 · 80% · 100% 를 처음 넘을 때만 책임자 + 관리자 알림 · 내려가면 다시 ·
+      #    목록 · 상세의 folder 칸 · 앱을 지우면 사용량 행도. 판정이 SQL(upsert · 단계 기록)과 REST 범위 검사에 있어 목으로는 못 본다.
+      - name: 앱 폴더 상한 · 사용량 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-folder-quota.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트
@@ -435,6 +562,63 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/canary/run-canary.pg-test.mjs
+      # ⑤-p 수집 단위 표(#4742) — 목으로는 못 보는 것: **같은 외부 좌표가 한 행으로 합쳐지고 그 행의 source_member 가 단위
+      #    구성원의 합집합(∩ 조직 정책)이 되나**, 담당이 아닌 실행이 읽은 위치를 못 옮기나, 수집기 설정이 단위로 풀리나.
+      #    전부 ON CONFLICT·조인·RLS 술어라 자료·단위 행을 되읽어 판정한다(완료 조건 두 줄을 E1·E2 로 재현).
+      - name: 수집 단위 표 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-unit.pg-test.mjs
+      # ⑤-q 구성원 Claude 커넥터 기록(#4427 · #4213 T6) — 목으로는 못 보는 것: 판정이 전부 SQL 이다. «목록에 없는 앱은 removed» ·
+      #    «상태가 바뀐 줄만 status_at» · «옛 관측은 버린다»(FOR UPDATE 뒤 비교) · (tenant_id, …) 중재자. read-back 으로 판정하고,
+      #    정책이 라이브 주입(previewMemberContext)·관리 화면(sectionsPayload) 문장을 실제로 바꾸는지도 같은 DB 로 본다.
+      - name: 구성원 Claude 커넥터 기록 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/store/member-ai-connectors.pg-test.mjs
+      # ⑤-r 수집 실행 기록 · 수집 세션 크기(#4213 T11) — 목으로는 못 보는 것: **같은 판의 끝이 처음 것으로 남나**(게이트웨이 추정만
+      #    러너 끝이 덮는다 — ON CONFLICT … WHERE), 크기를 안 건드린 저장이 그 칸을 비운 채 두나(긴 INSERT 의 매개변수 자리 하나).
+      - name: 수집 실행 기록 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-run-log.pg-test.mjs
+      # ⑤-s 수집 실행의 저장 단계(#4213 T11) — 목으로는 못 보는 것: 원문을 푼 뒤 **T10 표가 지키는 사실**이다. 목록으로 본 사람이
+      #    확인된 구성원이 되나 · 같은 좌표는 두 번 넣어도 새 행이 없나 · 요청 안 한 채널의 글이 안 들어가나 · 안 읽은 단위의 위치가
+      #    그대로인가 · 볼 수 있는 구성원이 아닌 실행이 저장·위치 이동을 못 하나 · 한 실행이 한 번만 처리되나(차례 잡기 UPDATE).
+      - name: 수집 실행 저장 단계 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-ingest.pg-test.mjs
+      # ⑤-t 지속 수집 트리거(#4213 T12) — 목으로는 못 보는 것: 저장 단계가 단위마다 **다음 확인 시각을 표에 적나**(주기 뒤 · 곧바로 ·
+      #    물러섬 — 실패 수가 판을 넘어 이어지나) · 사람이 정한 주기는 빈도가 안 덮나 · 모으기로 켠 단위는 곧바로인가 · 실행이 실은 단위는
+      #    저장이 끝날 때까지 붙잡히나(임대) · 지금 담당의 판만 쓰나 · 틱이 때가 된 단위의 담당자만, 도는 사람(실행 중·저장 중)·실패가 이어진
+      #    사람·하루 상한에 닿은 사람은 빼고 상한 안에서 띄우나 · 503 은 그 사람만 물러서나 · 물러서기 기억이 워크스페이스마다인가 ·
+      #    저장 단계를 못 탄 끝난 실행을 마저 처리하고 오래 못 읽는 판만 닫나.
+      - name: 지속 수집 트리거 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-schedule.pg-test.mjs
+      # ⑤-u 검색 실패 보조 안내(#4213 T12) — 목으로는 못 보는 것: «가져올 곳» 이 질문한 사람이 다 보는 단위만인가(신고만 한 사람·남의 비공개·
+      #    모으지 않기로 한 단위는 이름도 안 나온다) · 지식이 강하면 안 붙고 원문 자료가 있으면 그것이 먼저인가 · 원문 자료도 그 사람의 공개범위대로인가 ·
+      #    구성원 Claude 커넥터를 막은 워크스페이스는 단위를 안 싣나 · 단위 설명 벡터 백필과 뜻으로 맞추기(pgvector).
+      - name: 검색 실패 보조 안내 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/unit-find.pg-test.mjs
+      # ⑤-v 링크 따라 읽기(#4213 T12) — 목으로는 못 보는 것: 글 속 링크가 (앱 · 대상 · 나온 단위) 한 줄로 적히고 상태가 그 사람의 커넥터대로
+      #    갈리나 · 링크로 읽은 문서가 링크가 있던 단위가 아니라 그 문서의 단위에 들어가나(노션 페이지는 후보·볼 수 있는 사람만으로 생긴다 ·
+      #    슬랙은 그 채널 단위의 구성원일 때만 · 남의 «나만» 은 거절) · 못 넣은 링크는 7일 쉬고 3번에서 멈추나 · 연결 제안은 앱별 개수만.
+      - name: 링크 따라 읽기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/collect/collect-links.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

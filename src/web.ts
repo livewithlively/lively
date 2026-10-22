@@ -40,7 +40,8 @@ import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
-import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트
+import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트(redeem · me · page · #4482 lively)
+import { registerAppJobRoutes } from "./apps/app-jobs-routes.js"; // #4486 v2-7 — 앱 백그라운드 작업의 콜백(함수 안 검사 층 → 시작 확인 · 박동 · 결과)
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -132,7 +133,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     // #1631 — 리브 2턴(증류 지시). 자체호스팅은 background-sweeps 가 1분마다 돌리지만 그 스텝은
     //  요청별 테넌시에서 통째로 꺼진다(gate:'scheduler') — 되살리는 자리가 여기다. 이게 없으면
     //  매니지드 고객은 처음 설정 뒤 1턴(현황 보고)만 받고 **2턴이 영영 안 와서 레인이 안 세워진다.**
-    //  후보 목록은 신원 전역이라 어느 테넌트의 틱으로 불러도 전부 훑는다(내부 가드가 동시 실행을 막는다).
+    //  ⚠ #4851 실측 — 매니지드의 구성원 표는 워크스페이스마다 갈려 있어(행 수준 격리) 이 틱은 **이 워크스페이스의 후보만** 본다.
+    //   그래서 스윕은 등록부가 모르는 후보를 이 틱의 워크스페이스로 다룬다(second-turn.secondTurnTenant). 내부 가드가 동시 실행을 막는다.
     await step("liv-second-turn", async () => {
       const { sweepLivSecondTurn } = await import("./org/liv/second-turn-sweep.js");
       return await sweepLivSecondTurn();
@@ -147,21 +149,41 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const { runDailyAppSnapshots } = await import("./apps/app-snapshot.js");
       return await runDailyAppSnapshots();
     });
+    // #4778 — 앱을 지울 때 보관으로 옮긴 앱 폴더 중 보관 기간(앱 데이터와 같은 7일)이 지난 것을 지운다. 기록 표만 먼저 보고 지울 것이
+    //  있을 때만 파일을 만진다 — 보관이 없는 워크스페이스는 파일 작업 헬퍼를 깨우지 않는다. 자가호스팅은 부팅 정비 타이머가 같은 함수를 부른다.
+    await step("app-folder-archive", async () => {
+      const { pruneAppFolderArchives } = await import("./apps/app-folder-archive.js");
+      return await pruneAppFolderArchives();
+    });
     // #4481 — 앱 판 묶음: 옛 판을 파일 목록 + 저장소로 옮기고 · 30일 지난 옛 코어 호환 사본을 비우고 · 안 쓰는 파일을 정리한다(6시간에 한 번).
     //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
     await step("app-bundles", async () => {
       const { runAppBundleHousekeeping } = await import("./apps/app-bundle-migrate.js");
       return await runAppBundleHousekeeping();
     });
+    // #4484 — 앱 서버: 자동 멈춤 감시(5분 호출 · 실행 시간 → 동시 실행 0) · 죽은 빌드 걷기 · 옛 빌드 zip 정리. 앱 서버가 꺼진 배포면 «disabled».
+    await step("app-servers", async () => {
+      const { runAppServerHousekeeping } = await import("./apps/app-server-watch.js");
+      return await runAppServerHousekeeping();
+    });
     await step("session-reaper", () => reapIdleSessions());
     // #4695 T5 — 하네스 종료 규칙(완료+안 봄 N분 · 질의+안 봄 M분). 주로는 요청에 얹은 정비(30초)와 마감 깨움이 돌리고, 이 틱(5분)은
     //  아무도 안 쓰는 테넌트의 받침이다. 셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다.
-    await step("session-stop-rule", async () => (await import("./sessions/session-stop-rule.js")).sweepSessionStopRule());
+    //  #4697 T7 — 이 틱의 판은 워크스페이스당 한 줄을 남긴다(7일 측정 — «왜 안 껐나» 분포. logStopRuleTick 머리말).
+    await step("session-stop-rule", async () => {
+      const rule = await import("./sessions/session-stop-rule.js");
+      const r = await rule.sweepSessionStopRule();
+      rule.logStopRuleTick(r);
+      return r;
+    });
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
     //  결과의 `throttled` 가 "이번 호출은 남이 이미 돌렸다"를 말한다(안 돈 것과 구분돼야 한다).
     await step("session-pressure-reaper", () => reapPressureSessions());
+    // #4783 — 사유 없이 사라진 판을 확답으로 확인해 «고장(lost)» 으로 적는다(세션 노드·컨테이너 고장). 매니지드만 돈다 —
+    //  셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다. 근거는 세션마다의 tmux 확답뿐이다(session-end-lost 머리말).
+    await step("session-end-lost", async () => (await import("./sessions/session-end-lost.js")).sweepLostSessions());
     res.json({ ok: true, steps: out });
   }));
 
@@ -219,6 +241,9 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  앱 주소(<앱>-<워크스페이스>.lvly.app)의 앞단(CP 라우터)만 부르고, 그 문은 `x-lvly-app-front` 서명이다(테넌트 헤더만으론 부족 —
   //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
   registerAppFrontRoutes(app);
+  // ── 앱 백그라운드 작업의 콜백(#4486 v2-7) — /api/app-jobs/:id/{claim,tick,result}. 함수 안 검사 층이 부른다(사람 로그인이 아니라
+  //  그 함수의 앱 서버 토큰 + 작업 비밀). 본문은 apps/app-jobs-routes.ts.
+  registerAppJobRoutes(app, verifier);
 
   // IdP 로 로그인한 세션이면 redirect(IdP 로그아웃 문)를 함께 준다 — 브라우저가 그리로 가야 IdP 세션까지 끝난다.
   //  그 외 로그인은 종전 응답 {ok:true} 그대로다(auth/logout-redirect.ts).

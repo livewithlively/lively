@@ -9,7 +9,7 @@
 //   목록(GET …/ls) · 미리보기(GET …/file — 공용 렌더러 lib/file-preview) · 다운로드 · 업로드(PUT …/file) ·
 //   새 폴더(POST …/mkdir) · 공유 링크 복사(#/f?root=&path= — lib/sharelink).
 //   미리보기는 **제자리 전환**이다(대시보드 폴더 위젯과 같은 문법): 목록 자리에 본문을 깔고 [← 뒤로]로 돌아온다.
-//   우패널은 좁으므로 정독·공유는 [⛶ 전체화면](#/f 새 탭)이 맡는다.
+//   우패널은 좁으므로 정독·공유는 [↗ 자료 보기](#/f 새 탭 — 자료 보기 화면 #4672)가 맡는다.
 //
 //  ── 심링크(#1744) ──
 //   세션 폴더의 `project` 처럼 **폴더를 가리키는 링크**는 종전에 목록에서 '파일'로 나와 눌러도 미리보기만 열렸다
@@ -176,7 +176,7 @@ export function createSessionFiles(host: HTMLElement, opts: FilesOpts): FilesHan
     }
     if (destroyed || mine !== seq) return;
     bar.append(...out.tools,
-      shareRel ? el('a', { class: 'fx-hbtn', href: fileLinkUrl(shareRoot as string, shareRel), target: '_blank', rel: 'noopener', title: '전체화면(새 탭)으로 열기', text: '⛶' }) : null,
+      shareRel ? el('a', { class: 'fx-hbtn', href: fileLinkUrl(shareRoot as string, shareRel), target: '_blank', rel: 'noopener', title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', 'aria-label': '자료 보기(새 탭)', text: '↗' }) : null,
       el('button', { class: 'fx-hbtn', type: 'button', title: '다운로드', text: '⬇', onclick: () => { void download(rel, name); } }));
     stage.replaceChildren(out.body);
   }

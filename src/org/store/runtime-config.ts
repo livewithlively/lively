@@ -42,6 +42,11 @@ import {
   contextJobPolicySource,
 } from "../policies/context-job-policy.js";
 import { audit } from "./audit.js";
+// 수집 실행 세션 크기(#4213 T11) — «한 칸 전용 입구»(아래 getCollectSessionPolicy · setCollectSessionPolicy). 큰 SELECT 에 섞지 않는다.
+import {
+  type CollectSessionPolicy, type CollectSessionPolicyPatch, resolveCollectSessionPolicy, normalizeCollectSessionPolicy,
+  collectSessionPolicySource, invalidateCollectSessionPolicyCache,
+} from "../../sessions/session-memory-policy.js";
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
 export interface OrgRuntimeConfig {
@@ -498,4 +503,47 @@ export async function getUiSurface(): Promise<UiSurfaceConfig> {
   } catch {
     return { ui_nav: {}, announcement: null, ui_profile: "full", usage_url: null, ui_mode: "v2", workspace_kind: "team", workspace_hub_url: null };
   }
+}
+
+// ── 수집 실행 세션 크기(#4213 T11) — org_runtime_config.collect_session_policy 한 칸 ─────────────────
+//  member-ai-connectors · app_bundle_policy 와 같은 «한 칸 전용 입구» 다: getRuntimeConfig 의 큰 SELECT · org_runtime_update 에 섞지 않는다.
+//   ① 이 칸만 바꾸는 관리 화면([수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집])이 보안 필드와 묶인 입구를 지나지 않게.
+//   ② 큰 SELECT 가 새 칸을 부르면 스키마보다 먼저 뜬 게이트웨이의 런타임 설정 읽기가 통째로 깨진다 — 여기서는 이 칸 읽기만 실패하고,
+//      세션 생성은 정책 캐시의 폴백(기본값)으로 뜬다.
+//  저장은 «안 건드린 칸은 그대로» 를 따로 지킬 필요가 없다 — 이 칸만 쓴다. null = 저장값을 비워 기본값으로 되돌리기.
+
+async function collectSessionPolicyRaw(): Promise<unknown> {
+  const r = await itemsPool.query(`SELECT collect_session_policy FROM org_runtime_config WHERE id=1`);
+  return (r.rows[0] as { collect_session_policy?: unknown } | undefined)?.collect_session_policy ?? null;
+}
+
+/** 유효 크기 — DB 우선, 비면 env 시드 → 1,024/640. 못 읽으면 **던진다**(세션 생성 쪽 캐시가 마지막 값 → 기본값으로 받는다). */
+export async function getCollectSessionPolicy(): Promise<CollectSessionPolicy> {
+  return resolveCollectSessionPolicy(await collectSessionPolicyRaw());
+}
+
+/** 화면 안내용 — 유효 크기 · 출처 · 되돌리면 될 값(env 시드가 있으면 그 값). */
+export async function getCollectSessionPolicyView(): Promise<CollectSessionPolicy & { source: "db" | "env" | "default"; reset_to: CollectSessionPolicy }> {
+  const raw = await collectSessionPolicyRaw();
+  return { ...resolveCollectSessionPolicy(raw), source: collectSessionPolicySource(raw), reset_to: resolveCollectSessionPolicy({}) };
+}
+
+/**
+ * 크기 저장 — 이 칸만 쓴다. patch 는 지금 유효 값 위에 얹어 정규화(예약 ≤ 상한)하고, null 이면 저장값을 비운다.
+ *  지금 값을 못 읽으면 던진다(못 읽음을 «기본값 위에 얹기» 로 접지 않는다). 감사에 남기고, 저장 즉시 다음 수집 실행이 새 크기를 본다.
+ */
+export async function setCollectSessionPolicy(
+  patch: CollectSessionPolicyPatch | null, ctx: { actor?: string; source?: string } = {},
+): Promise<CollectSessionPolicy> {
+  const beforeRaw = await collectSessionPolicyRaw();
+  const next = patch === null ? {} : normalizeCollectSessionPolicy({ ...resolveCollectSessionPolicy(beforeRaw), ...patch });
+  //  행이 없는 워크스페이스(처음 저장)도 있다 — 다른 칸은 전부 컬럼 기본값으로 선다.
+  await itemsPool.query(
+    `INSERT INTO org_runtime_config(id, collect_session_policy, updated_at, updated_by) VALUES(1, $1::jsonb, now(), $2)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET collect_session_policy=EXCLUDED.collect_session_policy,
+       version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [JSON.stringify(next), ctx.actor ?? null]);
+  invalidateCollectSessionPolicyCache();
+  await audit("org_runtime_config", "1", "collect_session_policy", beforeRaw ?? {}, next, ctx.actor, ctx.source);
+  return resolveCollectSessionPolicy(next);
 }

@@ -383,6 +383,13 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-fcsep { flex: none; font-size: 11px; color: var(--muted-3); }
 .pn-frow1 .pn-fine { flex: none; }
 .pn-frow1 .pn-fine.sel { color: var(--blue); font-weight: 700; }
+/* #4882 자료 앱의 위젯 — 경로 첫 칸에 자료 앱의 얼굴(폴더 · 자료 색), 줄 끝에 자료 앱으로 가는 문. */
+.pn-fcrumb.app { display: inline-flex; align-items: center; gap: 4px; }
+.pn-fcrumb.app > span { overflow: hidden; text-overflow: ellipsis; }
+.pn-fapp-ic { flex: none; stroke: var(--gi-c-src); }
+.pn-fapp { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.pn-fapp:hover { background: var(--bg-punch); color: var(--ink); }
 
 .pn-files:focus-visible .pn-fbody { box-shadow: inset 0 0 0 2px rgba(45,107,240,.28); border-radius: 9px; }   /* 키보드로 들어왔을 때만 — 이 칸이 키를 받는다 */
 
@@ -611,7 +618,8 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 
 /* ══ 프로젝트 설정 창 ═══════════════════════════════════════════════════════ */
 .pn-modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(var(--shadow-ink), .34); }
-.pn-modal { position: fixed; z-index: 61; top: 0; right: 0; bottom: 0; width: min(520px, 94vw); display: flex; flex-direction: column;
+/* 오른쪽 시트는 창 맨 윗줄까지 올라가 닫기 X 가 윈도우 창 단추(닫기) 밑에 깔렸다 — 안쪽 위를 비운다(40-v2.css .v2-studio 설명 · #4480) */
+.pn-modal { position: fixed; z-index: 61; top: 0; right: 0; bottom: 0; padding-top: var(--v2-desk-tb, 0px); width: min(520px, 94vw); display: flex; flex-direction: column;
   background: var(--bg); box-shadow: -18px 0 48px rgba(var(--shadow-ink), .20); }
 .pn-modal-h { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); }
 .pn-modal-h h2 { margin: 0; font-size: 16px; font-weight: 800; flex: 1; }

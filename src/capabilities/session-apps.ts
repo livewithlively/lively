@@ -15,11 +15,15 @@ import { HttpError } from "../http/rest-util.js";
 import { getApp, getActiveGrant, getAppVersionHead, type OrgApp } from "../org/store/apps.js";
 import { canSeeApp, isEmptyDraftApp, type Viewer } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
+import { appIconSpecOf } from "../apps/manifest.js";   // #4769 앱 아이콘 선언
+import { serverDeclOf } from "../apps/app-server-config.js";   // #4485 후속 — 서버가 화면을 만드는 앱도 «화면 있음»
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
   attachAppRow, detachAppRow, listAttachedApps, publishAppEventToSession, requireSessionParticipant, requireUsableApp,
   type SessionAppRow,
 } from "../apps/session-apps.js";
+import { syncSessionAppFolders, APP_FOLDER_REL, type FolderSync } from "../apps/session-app-folders.js";   // #4684 — 앱 폴더
+import { sessionEnsureConfigured } from "../terminal/session-tmux.js";
 
 const SID = z.string().max(128).optional().describe("대상 세션 id — 보통 생략한다(기본 = 이 요청을 보낸 세션 자신)");
 const APP = z.string().min(1).max(128).describe("앱 id(org_apps 의 id)");
@@ -48,7 +52,7 @@ interface ManifestView {
  *   session-apps-inject 가 테이블 안내 뒤에 **그 앱의 행동 규칙**을 붙이게 한다(종전엔 테이블 이름만 알려 AI 가 앱의
  *   목적을 짐작해야 했다). `version`·`source_kind`·`overrides_builtin` 은 앱 탭이 「N판 · 워크스페이스 판」을 그리는 재료(#4600).
  */
-export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy: string | null = null): Record<string, unknown> {
+export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy: string | null = null, opts: { folders?: boolean } = {}): Record<string, unknown> {
   const m = (app?.manifest ?? {}) as ManifestView;
   const pages = (m.ui?.pages ?? []).map((p) => ({ key: String(p.key ?? ""), title: String(p.title ?? p.key ?? "") })).filter((p) => p.key);
   const tables = (m.data?.tables ?? []).map((t) => ({ name: String(t.name ?? ""), columns: Array.isArray(t.columns) ? t.columns : [] })).filter((t) => t.name);
@@ -61,7 +65,9 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy
     attached_at: row.attached_at,
     attached_by: row.member_id,
     usable: !!app && app.status === "active" && app.enabled,
-    has_ui: pages.length > 0,
+    //  화면 파일이 있거나, 서버가 화면을 만드는 앱(web.server — 화면 파일 없이도 앱 주소로 뜬다 · #4485 후속).
+    has_ui: pages.length > 0 || serverDeclOf(app?.manifest) !== null,
+    icon: appIconSpecOf(app?.manifest ?? null),   // #4769 — 앱 탭 · 독 · 머리줄이 그 앱의 그림을 그린다(없으면 기본 그림)
     pages,
     tables,
     instructions,
@@ -73,6 +79,9 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy
     //  이름으로 들어가는 자리라, 판 번호와 저장한 사람을 함께 실어 훅이 「이 워크스페이스에서 고친 앱(N판 · 저장: 누구)」 로 적는다.
     version_no: app?.current_version_no ?? null,
     saved_by: savedBy,
+    //  #4684 — 매니지드 세션에서 이 앱의 폴더가 보이는 자리(작업 폴더 기준). 실제로 붙었는지는 세션 안에서 본다(훅이 있는지 확인하고
+    //   알린다 — 이 기능 전에 뜬 세션·작업 폴더에 링크가 있는 세션엔 없다). 셀프호스트엔 없다(null).
+    folder: opts.folders ? `${APP_FOLDER_REL}/${row.app_id}` : null,
   };
 }
 
@@ -85,7 +94,29 @@ async function describeOne(row: SessionAppRow, app: OrgApp | null, who: Viewer):
   const no = shown?.current_version_no;
   //  #4481 저장한 사람만 본다 — 판 머리만(파일 내용을 읽지 않는다).
   const ver = shown && no != null ? await getAppVersionHead(shown.id, no).catch(() => null) : null;
-  return describeAttached(row, shown, ver?.saved_by ?? null);
+  return describeAttached(row, shown, ver?.saved_by ?? null, { folders: sessionEnsureConfigured() });
+}
+
+/** 붙이기·떼기 뒤 앱 폴더의 상태(#4684). */
+export type FolderState = "attached" | "detached" | "failed" | "after-restart" | "next-start" | "none" | "error";
+
+/** 붙이기·떼기 응답에 싣는 앱 폴더 결과(#4684, 응답의 folder_status) — AI 가 «폴더가 지금 보이나» 를 안다. */
+export function folderNote(r: FolderSync, appId: string, attached: boolean): { state: FolderState; path?: string; why?: string; note?: string } {
+  const p = `${APP_FOLDER_REL}/${appId}`;
+  if (r.applied) {
+    //  접점이 없는 컨테이너 — 붙일 수도 뗄 것도 없다. 붙이기면 다시 뜰 때 붙고, 떼기면 원래 안 보였다.
+    if (!r.supported) return attached
+      ? { state: "after-restart", path: p, note: "이 세션은 앱 폴더 기능 전에 떴거나 작업 폴더에 링크가 있어 지금은 폴더가 안 보인다 — 세션이 다시 뜨면 붙는다" }
+      : { state: "detached", path: p };
+    const here = r.bound.includes(appId);
+    const failed = r.failed.find((f) => f.app === appId);
+    if (attached && !here) return { state: "failed", path: p, why: failed?.why ?? "붙일 수 있는 조건이 아니다(앱 상태 · 세션 주인이 볼 수 있는가 · 붙인 사람의 동의)" };
+    if (!attached && here) return { state: "failed", path: p, ...(failed ? { why: failed.why } : {}) };
+    return { state: attached ? "attached" : "detached", path: p };
+  }
+  if (r.reason === "not-managed") return { state: "none" };
+  if (r.reason === "not-running") return { state: "next-start", note: "세션 컨테이너가 떠 있지 않다 — 다음에 뜰 때 맞춘다" };
+  return { state: "error", ...(r.detail ? { why: r.detail } : {}) };
 }
 
 async function describeAll(rows: SessionAppRow[], who: Viewer): Promise<Array<Record<string, unknown>>> {
@@ -96,7 +127,8 @@ const viewerOf = (u: LivelyUser): Viewer => ({ userId: me(u), scopes: u?.scopes 
 
 const HINT = "붙어 있는 동안 이 세션에서 store_query·store_insert·store_update·store_delete·store_tables 로 그 앱의 테이블을 읽고 쓸 수 있다"
   + "(붙은 앱이 하나면 app_id 생략 가능). 집계·조인·여러 행 쓰기는 store_sql 로 SQL 한 문장(워크스페이스가 만든 앱에서만). "
-  + "사람도 세션 오른쪽에서 같은 앱 화면을 보고 있고, 쓴 내용은 그 화면에 바로 반영된다.";
+  + "사람도 세션 오른쪽에서 같은 앱 화면을 보고 있고, 쓴 내용은 그 화면에 바로 반영된다. "
+  + "folder 가 있으면 그 앱의 파일 폴더가 작업 폴더 아래 그 자리에 보인다(읽고 쓰기 — 워크스페이스의 그 앱 폴더 원본이고, 이 세션에 들어온 사람 모두가 본다).";
 
 const sessionApps: Capability = {
   name: "session_apps",
@@ -148,8 +180,10 @@ const sessionAppAttach: Capability = {
     }
     const fresh = await attachAppRow(sid, appId, member);
     if (fresh) publishAppEventToSession(member, sid, { kind: "attach", app_id: appId, session: sid, source: ctx?.source });
+    //  #4684 — 앱 폴더를 지금 세션에 붙인다(이미 붙어 있었어도 맞춘다 — 지난번에 못 붙었으면 여기서 낫는다). 실패해도 붙이기는 된 것이다.
+    const folder_status = folderNote(await syncSessionAppFolders(sid), appId, true);
     const row = (await listAttachedApps(sid)).find((r) => r.app_id === appId);
-    return { session_id: sid, attached: fresh, app: row ? await describeOne(row, app, who) : null, hint: HINT };
+    return { session_id: sid, attached: fresh, app: row ? await describeOne(row, app, who) : null, folder_status, hint: HINT };
   },
 };
 
@@ -174,7 +208,9 @@ const sessionAppDetach: Capability = {
     await requireSessionParticipant(sid, member);
     const detached = await detachAppRow(sid, appId);
     if (detached) publishAppEventToSession(member, sid, { kind: "detach", app_id: appId, session: sid, source: ctx?.source });
-    return { session_id: sid, detached };
+    //  #4684 — 앱 폴더도 뗀다(그 순간부터 경로로는 안 보인다).
+    const folder_status = folderNote(await syncSessionAppFolders(sid), appId, false);
+    return { session_id: sid, detached, folder_status };
   },
 };
 

@@ -24,7 +24,12 @@ export const APP_TOKEN_TTL_SEC = 12 * 60 * 60;
  *  실제 scope 축소는 verifyDbToken 이 intersection(token, member LIVE) 으로 한 번 더 하므로, 여기서 grant.scopes 를
  *  토큰 scope 로 심으면 최종 유효권한 = member ∩ grant ∩ member = member ∩ grant 가 된다(이중 안전).
  */
-export async function mintAppToken(memberId: string, appId: string, actor?: string): Promise<{ token: string; expiresAt: Date | null }> {
+export async function mintAppToken(
+  memberId: string, appId: string, actor?: string,
+  //  #4490 — 작업 컨테이너는 작업 상한만큼만 살 토큰을 받고(ttlSec), 끝날 때 해시로 폐기한다(tokenHash). 생략하면 종전 그대로.
+  //  #4891 — appServerPrincipal: 주체를 앱 서버 급으로(능력 API · /mcp 에서만 · 무조건 통과 도구 없음 — tokens.mintToken 머리말).
+  opts: { ttlSec?: number; appServerPrincipal?: boolean } = {},
+): Promise<{ token: string; expiresAt: Date | null; tokenHash: string }> {
   const app = await getApp(appId);
   //  #4667 — 남이 만들고 있는(나만 보는) 앱으로는 세션을 못 연다(없는 앱과 같다).
   //   관리자는 책임자가 떠난 앱도 연다 — 그 사람의 지금 권한으로 본다(드문 경우에만 한 번 더 읽는다 · 격리 리뷰 NB-5).
@@ -32,11 +37,12 @@ export async function mintAppToken(memberId: string, appId: string, actor?: stri
   if (!app.enabled || app.status !== "active") throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다(${app.status})`);
   const grant = await getActiveGrant(appId, memberId);
   if (!grant) throw new HttpError(403, `앱 '${appId}' 사용 동의(grant)가 없습니다 — me_app_grant 필요`);
-  const { token, expiresAt } = await mintToken({
+  const { token, expiresAt, tokenHash } = await mintToken({
     userId: memberId, memberId, scopes: grant.scopes,
-    label: `app:${appId}`, appId, expiresInSec: APP_TOKEN_TTL_SEC,
+    label: `app:${appId}`, appId, expiresInSec: opts.ttlSec && opts.ttlSec > 0 ? Math.min(opts.ttlSec, APP_TOKEN_TTL_SEC) : APP_TOKEN_TTL_SEC,
+    ...(opts.appServerPrincipal === true ? { appServerPrincipal: true } : {}),
   }, actor ?? "app-spawn", "terminal-sessions");
-  return { token, expiresAt };
+  return { token, expiresAt, tokenHash };
 }
 
 // grant.tools 캐시 — (tenant 는 요청 컨텍스트가 이미 고정하므로 키에 안 넣는다; app,member 로 충분).

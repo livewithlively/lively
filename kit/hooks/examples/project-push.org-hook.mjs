@@ -88,6 +88,7 @@ function executionSessionId(input, env = process.env) {
   const native = String((input && (input.session_id || input.sessionId)) || "").trim();
   const harness = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase();
   if (native && harness === "codex" && SID_RE.test(`codex-${native}`)) return `codex-${native}`;
+  if (native && harness === "cursor" && SID_RE.test(`cursor-${native}`)) return `cursor-${native}`;   // #4927 cursor-adapter
   if (native && harness === "claude" && SID_RE.test(`claude-${native}`)) return `claude-${native}`;
   const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
   if (codex && SID_RE.test(`codex-${codex}`)) return `codex-${codex}`;

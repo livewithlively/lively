@@ -1,24 +1,29 @@
-/* 32-file-share.css — 공유 링크(#1436): 착지 전체페이지(#/f)와 링크 복사 폴백 박스.
+/* 32-file-share.css — 파일 링크(#1436 → #4672 자료 보기): 착지 화면(#/f)과 링크 복사 폴백 박스.
    ⚠ index.html <link> 나열 순서가 캐스케이드 계약이다(01-base.css 헤더 주석) — 이 파일은 **끝**에 붙는다.
    재정렬·중간 삽입 금지. */
 
-/* ── 셸 감추기 — "내비바 등 없이"가 이 화면의 요구다. ────────────────────────────
-   앱 셸(상단바·좌하단 동기칩)을 숨기고 main 의 중앙정렬·여백을 걷어 전폭 캔버스로 만든다.
+/* ── 클래식 셸에서 — 상단바는 둔 채 본문을 전폭 캔버스로(#4672 «워크스페이스 안 화면»). ─────────────────
+   #1436 첫 판은 상단바까지 감춘 내비 없는 전체 페이지였다. 자료 보기는 워크스페이스 화면이라 상단 탭을 남기고
+   좌하단 동기칩만 감춘다(정보 칸 아래를 가린다). main 의 중앙정렬·여백을 걷어 남는 높이를 화면에 준다.
    #app 은 그대로 쓴다 — 로그인 게이트(#gate)와 토스트(#toasts)가 이 셸에 걸려 있어야 링크를 받은 사람이
-   미로그인일 때 정상적으로 로그인 화면을 만난다(별도 standalone HTML 을 만들지 않은 이유). */
+   미로그인일 때 정상적으로 로그인 화면을 만난다(별도 standalone HTML 을 만들지 않은 이유).
+   새 셸(v2)에서는 body[data-route] 가 'v2' 라 이 블록이 안 걸린다 — 화면이 셸의 탭 본창(.v2-tabpane)에 선다. */
 body[data-route="f"] { height: 100vh; overflow: hidden; }
-body[data-route="f"] .topbar,
 body[data-route="f"] .app-foot { display: none; }
 body[data-route="f"] #app { height: 100%; display: flex; flex-direction: column; }
 body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 .fpg { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 
-/* 상단 바 — 이 파일에 필요한 것만. 왼쪽 이름·경로, 오른쪽 액션. */
+/* 상단 바 — 이 파일에 필요한 것만. 왼쪽 아이콘·이름·위치, 오른쪽 액션. */
 .fpg-head { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line);
   background: var(--bg); flex: 0 0 auto; }
 .fpg-idbox { min-width: 0; flex: 1 1 auto; }
-.fpg-name { font-size: 15.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpg-titlerow { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.fpg-ic { flex: 0 0 auto; width: 22px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
+.fpg-ic svg { width: 22px; height: 24px; }
+.fpg-name { margin: 0; font-size: 15.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpg-crumbbox { min-width: 0; }
 .fpg-crumb { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 12px; color: var(--muted-2);
   overflow: hidden; white-space: nowrap; }
 .fpg-crumb-seg { color: var(--muted-2); text-decoration: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
@@ -38,11 +43,61 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 /* 본문 스테이지 — 남는 높이를 전부 쓴다(PDF·html 은 100% 로 채운다). */
 .fpg-stage { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column;
   align-items: center; justify-content: flex-start; padding: 18px 20px 24px; scrollbar-width: thin; }
+
+/* 본문 = 왼쪽 미리보기(남는 폭·높이 전부) + 오른쪽 정보 칸(#4672 — 드라이브의 «세부정보» 자리).
+   정보가 오기 전이거나 못 받으면(없는 자리 · 동의 안내 · 옛 게이트웨이) 칸은 숨고 미리보기가 폭을 다 쓴다. */
+.fpg-main { flex: 1 1 auto; min-height: 0; display: flex; }
+.fpg-main > .fpg-stage { min-width: 0; }
+.fpg-info { flex: 0 0 300px; min-width: 0; overflow: auto; padding: 16px 18px 24px; border-left: 1px solid var(--line);
+  background: var(--bg); scrollbar-width: thin; }
+.fpg-info[hidden] { display: none; }
+.fpg-info-h { margin: 0 0 9px; font-size: 12px; font-weight: 700; color: var(--muted-2); letter-spacing: .02em; }
+.fpg-info-h:not(:first-child) { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--bg-tint-2); }
+.fpg-dl { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px 10px; margin: 0; font-size: 13px; line-height: 1.5; }
+.fpg-dl dt { color: var(--muted-2); }
+.fpg-dl dd { margin: 0; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+.fpg-locked { font-weight: 600; color: var(--ink-sub); }
+/* 위치 — 속한 프로젝트 · 앱 이름 + 그리로 가는 문. */
+.fpg-place { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.fpg-place-name { font-weight: 600; }
+.fpg-door { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; font: inherit;
+  font-size: 12.5px; font-weight: 600; color: var(--blue); cursor: pointer; text-decoration: none; }
+.fpg-door:hover { text-decoration: underline; }
+.fpg-door-block { margin-top: 10px; }
+/* 주소 — 세션 안 AI 에게 그대로 건넬 수 있는 글자(shared/… · apps/…). */
+.fpg-addr { display: flex; align-items: flex-start; gap: 6px; }
+.fpg-addr-text { flex: 1 1 auto; min-width: 0; padding: 2px 6px; border-radius: 6px; background: var(--bg-tint);
+  font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--ink-sub); overflow-wrap: anywhere; }
+/* 여기서 나온 지식 — 자료 앱(.v2-src-kn)과 같은 민트 축. */
+.fpg-kn { margin-top: 14px; }
+.fpg-kn-h { font-size: 12px; font-weight: 700; color: var(--mint-deep); }
+.fpg-kn-row { display: block; margin-top: 6px; font-size: 13px; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.fpg-kn-row:hover { color: var(--blue); text-decoration: underline; }
+
+/* 같은 이름 후보(#4672) — 못 찾음 안내 아래. 넘기지 않고 고르게 한다(셸 mv 로 옮긴 것은 서버가 모른다). */
+.fpg-near { width: min(560px, 100%); margin-top: 18px; text-align: left; }
+.fpg-near-h { margin-bottom: 4px; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.fpg-near-row .fpg-row-nm { display: flex; flex-direction: column; gap: 1px; }
+.fpg-near-row .fpg-row-nm b { font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.fpg-near-at { font-size: 11.5px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 900px) {
+  /* 좁으면 정보 칸을 미리보기 아래로 — 본문 전체가 한 번에 스크롤된다. 높이는 내용만큼(PDF·html 은 제 최소 높이 420px). */
+  .fpg-main { flex-direction: column; overflow: auto; }
+  .fpg-main > .fpg-stage { flex: 0 0 auto; overflow: visible; }
+  .fpg-info { flex: 0 0 auto; overflow: visible; border-left: 0; border-top: 1px solid var(--line); }
+}
 .fpg-msg { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: auto; padding: 24px;
   color: var(--muted-2); font-size: 13.5px; text-align: center; line-height: 1.6; }
 .fpg-msg-empty b { font-size: 15px; color: var(--ink); }
 .fpg-msg-empty span { max-width: 460px; }
 .fpg-msg-path { margin-top: 4px; font-size: 12px; color: var(--muted-2); word-break: break-all; max-width: 520px; }
+
+/* 옮긴 파일의 옛 링크로 왔을 때(#4688) — 새 자리로 열었다는 한 줄과 받은 링크의 예전 자리. 넘어온 직후 한 번만 선다. */
+.fpg-moved { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 8px 20px; flex: 0 0 auto;
+  font-size: 12.5px; color: var(--ink-sub); background: var(--bg-tint); border-bottom: 1px solid var(--line); }
+.fpg-moved b { color: var(--ink); font-weight: 600; }
+.fpg-moved-from { color: var(--muted-2); word-break: break-all; }
 
 /* 타입별 표시면 */
 .fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(var(--shadow-ink), .14); }
@@ -84,6 +139,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 @media (max-width: 720px) {
   .fpg-head { flex-wrap: wrap; gap: 10px; padding: 10px 14px; }
   .fpg-acts { width: 100%; }
+  .fpg-moved { padding: 8px 14px; }
   .fpg-stage { padding: 12px 12px 18px; }
   .fpg-row-dt { display: none; }
 }
@@ -102,7 +158,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 .sharelink-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
 /* ── 공용 미리보기 렌더러(web/lib/file-preview.ts)의 기본 스타일 ──────────────
-   #1436 후속: 프로젝트 모달·홈 모달·공유 링크 전체페이지가 **같은 렌더러**를 쓴다. 여기 `fp-*` 는 그 기본이고,
+   #1436 후속: 프로젝트 모달·홈 모달·파일 링크의 자료 보기 화면(#4672)이 **같은 렌더러**를 쓴다. 여기 `fp-*` 는 그 기본이고,
    각 화면은 자기 클래스(.proj-file-* / .dash-fp-* / .fpg-*)를 같은 노드에 함께 얹어 **크기만** 덮는다
    (컨테이너가 달라 max-height 등이 다른 건 정당한 차이다).
    ⚠ 기존 셀렉터는 지우지 않는다 — scripts/check-css-drops.mjs 가 HEAD 셀렉터 유실을 실패로 잡는다. */

@@ -27,7 +27,8 @@ import { copyText } from './v2/ctx-menu.js';
 import { prependKeepingView } from './lib/older-autoload.js';   // #3778 위로 붙이는 동안 보던 자리 지키기 — 헤드리스 테스트가 같은 함수를 잰다
 // #4707 tui 문법 — 글자 규칙(chat-tui.ts)과 웹 터미널 설정(lib/term-prefs.ts)은 DOM 없는 모듈이 쥔다. 여기는 칠하기만 한다.
 import { addToGroup, asyncAgentId, bashPopsOut, dispWidth, fmtElapsed, fmtTokens, groupSegs, groupVisible, idleHintPlan, idleHintSegs, isAsyncAgent, mdPlain, newGroup, pickVerb, seedOf, TUI_DIFF_ROWS, TUI_SPIN_FRAMES, tuiCollapse, tuiHighlight, tuiMode, tuiTableLayout, tuiToolHead, tuiToolResult, turnEndSegs, wrapWords, type TuiAlign, type TuiDiffRow, type TuiCollapse, type TuiGroup, type TuiResult, type TuiSeg } from './chat-tui.js';
-import { caretShape, isWheelNotch, parseTermPrefs, TERM_PREFS_KEY, termFace, wheelPx, type TermPrefs } from './lib/term-prefs.js';
+import { caretShape, ccWheelRows, isWheelNotch, newCcWheel, newWheelTickAcc, parseTermPrefs, TERM_PREFS_KEY, termFace, termWheelTicks, type TermPrefs } from './lib/term-prefs.js';
+import { routeKey, type FocusSpot } from './lib/chat-keys.js';   // #4797 터미널처럼 — 이 화면이 보이면 글쇠가 입력칸으로
 import { isDark } from './theme.js';
 
 /** 도구 이름 → 사람 말. label 은 필수, detail 은 한 줄 요약(경로·명령 — Claude Code 의 `Read(src/x.ts)` 자리). */
@@ -93,8 +94,14 @@ export interface ChatTurn {
 
 export interface ChatView {
   root: HTMLElement; list: HTMLElement; input: HTMLTextAreaElement; form: HTMLFormElement; noteEl: HTMLElement;
-  /** 새 턴(사람 말 한 마디). userText=null 이면 사람 말 없이 AI 가 한 일만(창을 중간부터 읽을 때). */
-  turn(userText: string | null, opts?: { ts?: string; at?: 'end' | 'start' }): ChatTurn;
+  /**
+   * 새 턴(사람 말 한 마디). userText=null 이면 사람 말 없이 AI 가 한 일만(창을 중간부터 읽을 때).
+   *  pinned — #4850 아직 대화 기록에 안 들어간 내 말(대기 말풍선): 맨 아래에 붙들어 두고, 그동안 끝에 붙는 턴·구분선·알림은 그 위에 선다
+   *  (하네스가 하던 일의 출력이 그 말 위로 쌓인다 — 터미널이 대기 중인 말을 맨 아래에 두는 것처럼). 기록에 그 말이 적히면 unpin 한다.
+   */
+  turn(userText: string | null, opts?: { ts?: string; at?: 'end' | 'start'; pinned?: boolean }): ChatTurn;
+  /** #4850 — 붙들어 둔 턴을 놓는다: 아직 붙들린 것들 바로 위(= 지금까지 쌓인 것의 맨 끝, 기록에 그 말이 적힌 자리)로 간다. 지운 턴이면 목록에서만 뺀다. */
+  unpin(t: ChatTurn): void;
   /** 완성본 이벤트(assistant/user 메시지)를 그 턴에 반영. text=그 줄에 AI 의 글이 있었나. */
   event(t: ChatTurn, ev: any): { text?: string };
   /** 조각(stream_event) — 글자가 오는 대로. */
@@ -634,6 +641,9 @@ const fmtDur = (ms: number): string => {
   return `${Math.floor(m / 60)}시간 ${m % 60}분`;
 };
 
+/** 사람이 마지막으로 손댄(누름·초점) tui 대화창 — 대화창이 둘 보일 때 «터미널처럼 받는 키»(#4797)를 어느 쪽이 받을지 가른다. */
+let lastTouchedChat: HTMLElement | null = null;
+
 // ── 컴포넌트 ─────────────────────────────────────────────────────────────────────────────
 export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView {
   const style: 'journal' | 'desktop' | 'tui' = opts.style === 'desktop' || opts.style === 'tui' ? opts.style : 'journal';
@@ -740,24 +750,45 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     class: 'livc-jump', type: 'button', hidden: true, text: jumpText(0),
     onclick: () => { stick = true; toBottom(); },
   }) as HTMLButtonElement;
-  // ⚠ 우리가 바닥으로 내린 직후의 scroll 이벤트는 '사람이 올렸다'가 아니다 — 내용이 연달아 붙는 되그리기 중에는 내린 뒤
-  //  다음 덩이가 먼저 붙어 이벤트가 '바닥이 아님'으로 잡히고, 그 한 번에 stick 이 풀려 [최신 대화로] 가 괜히 뜬다(실측).
-  //  프로그램 스크롤 뒤 120ms 안의 이벤트는 stick 을 풀지 않는다(붙이는 방향은 그대로 반영).
-  let progAt = 0;
+  // ⚠ «사람이 올렸다» 는 scroll 사건이 아니라 **사람의 입력**(휠 · 터치 · 스크롤 막대 누름 · 글쇠)으로 안다.
+  //  종전엔 «우리가 내린 뒤 120ms 안의 사건이 아니면 사람» 으로 쳤는데, 큰 대화를 처음 그릴 때(2,400px tui 글 · 한글 두 칸 감싸기)는
+  //  프레임이 늦어 우리가 내린 스크롤의 사건이 1초 넘게 뒤에 오고, 그 사이 안내 줄·입력칸이 서서 «바닥이 아님» 으로 잡혀 stick 이 풀렸다
+  //  (실측 2026-10-19, 꺼진 세션 box-wonjoon-jang-febbca30: 사건 1.4초 지연 → 마지막 답 54px 숨음 · «Jump to bottom» 만 섬).
+  //  내용이 자라거나 칸이 줄어 생기는 스크롤(브라우저 고정 · 글꼴 도착 · 우리 toBottom)은 사람이 아니다 — stick 을 건드리지 않는다.
+  let userAt = 0;
+  const USER_WINDOW_MS = 1500;
+  const markUser = (): void => { userAt = Date.now(); };
+  for (const ev of ['wheel', 'touchstart', 'touchmove', 'pointerdown'] as const) list.addEventListener(ev, markUser, { passive: true });
+  list.addEventListener('keydown', markUser);
   list.addEventListener('scroll', () => {
     const near = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM;
     if (near) { stick = true; jump.hidden = true; unseen = 0; return; }
+    if (Date.now() - userAt > USER_WINDOW_MS) return;        // 사람이 아닌 스크롤 — 바닥 따라가기는 그대로(다음 크기 변화에서 다시 내린다)
     //  tui — 터미널은 바닥을 떠나는 순간 그 단추를 세운다(새 글이 오기 전에도).
-    if (tui && Date.now() - progAt > 120 && jump.hidden) { jump.textContent = jumpText(unseen); jump.hidden = false; }
-    if (Date.now() - progAt > 120) stick = false;
+    if (tui && jump.hidden) { jump.textContent = jumpText(unseen); jump.hidden = false; }
+    stick = false;
   });
-  const toBottom = (): void => { progAt = Date.now(); list.scrollTop = list.scrollHeight; jump.hidden = true; unseen = 0; };
+  const toBottom = (): void => { list.scrollTop = list.scrollHeight; jump.hidden = true; unseen = 0; };
   const scroll = (): void => {
     if (stick) { toBottom(); return; }
     unseen++;
     jump.textContent = jumpText(unseen);
     jump.hidden = false;
   };
+  //  바닥에 붙어 있는 동안 **크기가 바뀌면** 다시 바닥으로 — 안내 줄·입력칸이 서서 목록 칸이 줄거나, 늦게 그려진 표·그림으로 내용이 자랄 때.
+  //  ⚠ 꺼진 세션 실측(2026-10-19, box-wonjoon-jang-febbca30 · …86a360ca): 처음 열며 바닥으로 내린 **뒤에** «꺼 두었어요» 안내 줄(36px)과
+  //   입력칸(75px)이 서서 목록 칸이 줄고 늦게 그려진 내용이 더 자라, 마지막 답이 90~244px 아래에 숨었다. 폴링이 멈춘 세션이라 scroll() 이
+  //   다시 불리지 않아 영영 그 자리였고, 사람은 마지막으로 보이는 제 질문만 보고 «답을 안 보여 준다» 고 읽었다(원준 2026-10-19).
+  //   브라우저는 칸이 줄어도 scrollTop 을 그대로 두므로 scroll 사건이 없다 — 크기 관찰자가 그 틈을 메운다. 사람이 올려 둔 동안(stick 거짓)엔 손대지 않는다.
+  //   목록 자체(칸 크기)와 끝에 붙는 덩이(턴 · 구분선 · 알림 — 내용 크기)를 함께 본다.
+  let stickRo: ResizeObserver | null = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    stickRo = new ResizeObserver(() => { if (stick) toBottom(); });
+    stickRo.observe(list);
+  }
+  const watchSize = (n: Element): void => { try { stickRo?.observe(n); } catch { /* 관찰자가 없는 브라우저 — 종전대로 scroll() 만 */ } };
+  //  관찰자가 없거나 늦는 틈(안내 줄·입력칸은 레이아웃 뒤 한 틱이면 선다)을 위해 — 바닥에 붙어 있었으면 다음 틱에 한 번 더 내린다.
+  const restickSoon = (): void => { if (!stick) return; setTimeout(() => { if (stick) toBottom(); }, 0); };
 
   //  tui — 위에 붙는 사람 말 머리(Claude Code 전체 화면): 지금 읽는 턴의 사람 말이 화면 위로 지나가면 맨 위에 그 말 한 줄(`❯ …`)이
   //   선다(흐린 글자 · 사람 말 띠 바탕 · 넘치면 «…»). 누르면 그 말로 올라간다.
@@ -799,6 +830,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   //  바뀌면 그 자리에서 따라간다: 다른 문서(터미널 액자·다른 탭)가 바꾸면 storage 신호, 이 문서가 바꾸면 TERM_PREFS_EVENT,
   //  앱 테마가 바뀌면 lv:theme-change(web/theme.ts)·OS 다크 전환.
   let termPrefs: TermPrefs = readTermPrefs();
+  /** 입력칸 높이를 다시 재는 손잡이 — 그 함수(fitInput)는 아래에서 만들어진 뒤 여기에 걸린다(마운트 중 applyCell 이 먼저 불리므로). */
+  let refitInput: (() => void) | null = null;
   //  칸 크기 — 글꼴이 늦게 도착하면(구글 글꼴) 그때 다시 잰다. 재는 값은 터미널 격자와 같은 셈(measureCell).
   const applyCell = (): void => {
     const cell = measureCell(termPrefs.fontFamily, termPrefs.fontSize);
@@ -807,6 +840,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     root.style.setProperty('--tui-ls', `${(cell.w - cell.natW).toFixed(3)}px`);
     root.style.setProperty('--tui-wgap', `${(2 * cell.w - cell.wide).toFixed(3)}px`);
     root.style.setProperty('--tui-bgap', `${(cell.w - cell.box).toFixed(3)}px`);
+    //  줄 높이가 바뀌었다(대체 글꼴 16px → 도착한 글꼴 18px 등) — 글에 맞춰 둔 입력칸 높이도 다시 잰다. 안 그러면 한 줄 글에도 스크롤 막대가 선다.
+    refitInput?.();
   };
   let fontGen = 0;
   const applyTermLook = (): void => {
@@ -859,7 +894,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     document.addEventListener('lv:theme-change', applyTermLook);
     try { darkMq = window.matchMedia('(prefers-color-scheme: dark)'); darkMq.addEventListener('change', applyTermLook); } catch { darkMq = null; }
   }
-  //  스크롤도 터미널의 배수를 따른다 — 마우스 휠은 «한 칸 = scrollSpeed 줄», 트랙패드는 «손가락 이동 × padGain»(terminal.ts setupWheel 과 같은 단위).
+  //  스크롤은 터미널과 **같은 줄 수**다(#4797 상민님 «설정값에따라 똑같은속도로 느껴지게»): 휠 한 번을 터미널이 Claude Code 에 보낼
+  //   틱 수로 바꾸고(termWheelTicks — terminal.ts wheelStep 과 같은 셈), 틱마다 Claude Code 가 굴리는 줄 수(가속 포함, ccWheelRows)를 더한다.
   //  ⚠ 안쪽에 스스로 세로로 굴러가는 칸(코드 블록이 아니라 높이 상한이 있는 칸)이 있으면 그 칸이 먼저다 — 그 휠까지 가로채면 안쪽이 안 굴러간다.
   const innerScrolls = (from: EventTarget | null, dy: number): boolean => {
     for (let n = from as HTMLElement | null; n && n !== list; n = n.parentElement) {
@@ -893,13 +929,22 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     tableRo.observe(list);
   }
   if (tui) {
+    const wheelAcc = newWheelTickAcc();   // 트랙패드 잔차 — 터미널 페이지가 쥐는 것과 같은 기억
+    const ccWheel = newCcWheel();         // Claude Code 의 휠 가속 기억(틱 사이 간격으로 줄 수가 늘어난다)
     list.addEventListener('wheel', (e: WheelEvent) => {
       if (e.ctrlKey || e.defaultPrevented || e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY) || !e.deltaY) return;   // 확대·가로 굴림은 브라우저 몫
       if (innerScrolls(e.target, e.deltaY)) return;
       const linePx = parseFloat(getComputedStyle(list).lineHeight) || termPrefs.fontSize * 1.35;
-      const px = wheelPx(e, isWheelNotch(e as WheelEvent & { wheelDeltaY?: number }), termPrefs, linePx, list.clientHeight);
       e.preventDefault();
-      list.scrollTop += px;
+      const rows = Math.max(1, Math.floor(list.clientHeight / linePx));
+      const ticks = termWheelTicks(e, isWheelNotch(e as WheelEvent & { wheelDeltaY?: number }), termPrefs, linePx, rows, wheelAcc);
+      if (!ticks) return;                 // 아직 한 줄이 안 찼다(미세 스와이프) — 터미널도 이때는 아무것도 보내지 않는다
+      const dir = ticks < 0 ? -1 : 1;
+      //  한 이벤트의 틱은 터미널이 한 번에 보낸다 — Claude Code 에는 같은 순간에 도착한다(같은 now).
+      const now = e.timeStamp || performance.now();
+      let lines = 0;
+      for (let i = 0; i < Math.abs(ticks); i++) lines += ccWheelRows(ccWheel, dir, now);
+      if (lines) list.scrollTop += dir * lines * linePx;
     }, { passive: false });
   }
 
@@ -1013,7 +1058,32 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       el('span', { class: 'tui-spin-m' }));
   }
 
-  function turn(userText: string | null, o?: { ts?: string; at?: 'end' | 'start' }): ChatTurn {
+  //  #4850 — 맨 아래에 붙들어 둔 턴(아직 기록에 안 들어간 내 말) · 보낸 순서. 끝에 붙는 것은 그 첫 턴 위에 선다(appendEnd).
+  const pinnedTurns: ChatTurn[] = [];
+  const firstPinned = (): ChatTurn | null => pinnedTurns.find((p) => p.root.parentElement === list) ?? null;
+  const appendEnd = (node: HTMLElement): void => {
+    const a = firstPinned()?.root;
+    if (a && a !== node) list.insertBefore(node, a); else list.append(node);
+    watchSize(node);   // 끝에 붙은 덩이가 늦게 자라도(표·그림) 바닥 따라가기가 풀리지 않게
+  };
+  /** turnsArr 도 화면 순서와 같게 — 붙들린 첫 턴 앞에 넣는다(없으면 끝). */
+  const turnsInsert = (t: ChatTurn): void => {
+    const i = turnsArr.findIndex((x) => pinnedTurns.includes(x));
+    if (i < 0) turnsArr.push(t); else turnsArr.splice(i, 0, t);
+  };
+  const unpin = (t: ChatTurn): void => {
+    const i = pinnedTurns.indexOf(t);
+    if (i < 0) return;
+    pinnedTurns.splice(i, 1);
+    if (t.root.parentElement !== list) return;                 // 지운 턴(지우기·다시 그리기) — 목록에서만 뺀다
+    const a = firstPinned()?.root;
+    //  아직 붙들린 턴보다 아래에 있었으면 그 위로 옮긴다(보낸 순서와 들어간 순서가 다를 때). 이미 위면 그 자리가 곧 «쌓인 것의 맨 끝» 이다.
+    if (a && (a.compareDocumentPosition(t.root) & Node.DOCUMENT_POSITION_FOLLOWING)) list.insertBefore(t.root, a);
+    const k = turnsArr.indexOf(t);
+    if (k >= 0) { turnsArr.splice(k, 1); turnsInsert(t); }
+  };
+
+  function turn(userText: string | null, o?: { ts?: string; at?: 'end' | 'start'; pinned?: boolean }): ChatTurn {
     let work: HTMLElement; let ask: HTMLElement | null = null;
     if (tui) {
       // Claude Code 터미널 문법 — 내 말은 `> …` 한 띠(옅은 바탕), AI 가 한 일은 그 아래 `⏺` 덩이들. 이름표·말풍선 없음.
@@ -1058,7 +1128,8 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     const t: ChatTurn = { root: root0, work, ask, text: userText ?? '', ts: o?.ts, r: { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() }, live: null, startedAt: Number.isFinite(t0) ? t0 : Date.now() };
     if (o?.at === 'start') { list.prepend(root0); turnsArr.unshift(t); }
     else {
-      list.append(root0); turnsArr.push(t);
+      if (o?.pinned) { list.append(root0); turnsArr.push(t); pinnedTurns.push(t); watchSize(root0); }   // 대기 말풍선 — 맨 끝(앞서 붙든 것들 아래)
+      else { appendEnd(root0); turnsInsert(t); }
       //  새 턴이 섰다 — 쉬는 동안의 안내는 걷는다(Claude Code 도 턴이 시작되면 걷고, 끝나면 시계를 다시 건다).
       if (tui && idleAt != null) { idleAt = null; paintIdle(); }
     }
@@ -1387,7 +1458,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
         ? el('details', { class: 'livc-divider' }, el('summary', { text }), el('div', { class: 'livc-divider-body', text: details }))
         : el('div', { class: 'livc-divider' }, el('span', { text }));
     }
-    if (at === 'start') list.prepend(node); else list.append(node);
+    if (at === 'start') list.prepend(node); else appendEnd(node);
   }
   const splitLinesForErr = (s: string): string[] => { const ls = String(s || '').replace(/\s+$/, '').split('\n'); return ls.length ? ls : ['Error']; };
 
@@ -1451,22 +1522,106 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     e.preventDefault();
     form.requestSubmit();
   });
-  input.addEventListener('input', () => {
+  //  입력칸 높이는 글에 맞춘다(친 만큼 늘어난다).
+  //  ⚠ 안 보이는 동안엔 재지 않는다(#4797 원인): 화면에 안 그려진 글칸은 scrollHeight 가 0 이라, 그대로 적으면 높이가 0px 로 굳어
+  //   입력칸이 사라진다 — `❯` 만 남고 누를 자리가 없어 커서도 안 서고 친 글자도 안 들어간다. 본 창(홈 화면의 칸 셸)은 세션 화면을
+  //   문서에 붙이기 전에 만들고, 그때 «쓰던 글 되살리기»(#4695 · #3891)가 이 이벤트를 쏜다(실측: 같은 세션이 본 창 0px · 새 창 16px).
+  //   그래서 안 보이면 기본 높이(rows=1)로 두고, 보이게 되는 순간(크기가 생김) 다시 잰다.
+  let fitLater = false;
+  const fitInput = (): void => {
+    if (!input.getClientRects().length) { input.style.height = ''; fitLater = true; return; }
+    fitLater = false;
     input.style.height = 'auto';
     //  tui — 터미널처럼 친 만큼 늘어난다(창 높이의 40% 까지). 그 밖은 종전 상한(160px).
     const cap = tui ? Math.max(160, Math.round(window.innerHeight * 0.4)) : 160;
     input.style.height = `${Math.min(input.scrollHeight, cap)}px`;
-  });
+  };
+  input.addEventListener('input', fitInput);
+  const fitRo = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (fitLater) fitInput(); }) : null;
+  fitRo?.observe(input);
+  refitInput = (): void => { if (input.style.height) fitInput(); };   // 글에 맞춰 둔 높이가 있을 때만(비어 있으면 rows=1 기본 높이가 줄 높이를 따른다)
+
+  // ── tui — 터미널처럼: 이 화면이 보이는 동안 친 글자는 입력칸으로 간다(#4797) ──────────────────────────────
+  //  상민님(2026-10-16): «그부분 눌렀을때만 거기에 입력되는게 아니라 그냥 항상 실제 터미널처럼 그 화면 활성화돼있을때 입력되게».
+  //  세 길: ① 대화창 어디를 눌러도(글을 고른 게 아니면) 입력칸에 커서가 선다 — 프롬프트 띠의 빈 자리·`❯`·상태 줄 포함
+  //   ② 이 화면이 다시 보이면(탭을 옮겨 왔다) 초점이 빈 채일 때 입력칸으로 ③ 초점이 «아무 데도 아닌 곳»일 때 친 키는 입력칸으로
+  //   (판정은 lib/chat-keys.ts routeKey — 다른 글칸·창·메뉴·곁칸·단추 위 Space/Enter 의 키는 뺏지 않는다).
+  //  ⚠ 주기 갱신에서 초점을 걸지 않는다(#1907 — 앞에 열린 창의 글자가 뒤 화면으로 샌다). 셋 다 사람의 동작 · 화면이 보이게 된 순간에만 돈다.
+  /** 입력칸에 커서 — 쓰던 글이 있으면 그 끝에 선다(처음 초점을 받는 글칸은 맨 앞에 서기 때문). 스크롤은 옮기지 않는다. */
+  const focusInput = (): void => {
+    if (document.activeElement === input) return;
+    try { input.focus({ preventScroll: true }); const n = input.value.length; input.setSelectionRange(n, n); } catch { /* 가려진 입력칸 */ }
+  };
+  /** 지금 이 입력칸이 글을 받을 수 있나 — 보이고(숨은 탭·터미널 보기가 아니다) 막히지 않았다(끝난 세션의 footer 가 아니다). */
+  const canTake = (): boolean => tui && root.isConnected && !form.hidden && !input.disabled && input.getClientRects().length > 0;
+  //  대화창이 둘 보이면(곁칸에 다른 세션 등) 사람이 마지막으로 손댄 쪽이 키를 받는다.
+  const markTouched = (): void => { lastTouchedChat = root; };
+  const otherChatInUse = (): boolean => !!lastTouchedChat && lastTouchedChat !== root && lastTouchedChat.isConnected && lastTouchedChat.getClientRects().length > 0;
+  /** 글쇠를 스스로 쓰는 영역 — 창 · 메뉴 · 고르기 목록 · 곁칸(파일 칸의 파인더 키 등) · 우패널 · 다른 대화창. */
+  const KEY_OWNERS = '[role="dialog"], [aria-modal="true"], dialog, [role="menu"], [role="listbox"], .pn-pane[data-zone="side"], .pn-pane[data-zone="bottom"], .v2-aside, .livc-wrap';
+  const NOT_TEXT = /^(checkbox|radio|button|submit|reset|range|color|file|image)$/i;
+  const focusSpot = (a: Element | null): FocusSpot => {
+    if (!a || a === document.body || a === document.documentElement) return { kind: 'none', owned: false };
+    if (a === input) return { kind: 'mine', owned: false };
+    const h = a as HTMLElement;
+    //  가장 가까운 주인이 이 대화창(root)이면 내 몫이다 — 이 대화창이 곁칸 안에 있어도 그렇다(closest 는 가까운 것부터 찾는다).
+    const owner = h.closest(KEY_OWNERS);
+    const owned = h.tagName === 'IFRAME' || (!!owner && owner !== root);
+    const editable = h.isContentEditable || h.tagName === 'TEXTAREA' || h.tagName === 'SELECT'
+      || (h.tagName === 'INPUT' && !NOT_TEXT.test((h as HTMLInputElement).type || 'text'));
+    if (editable) return { kind: 'editable', owned };
+    if (h.closest('a[href], button, summary, label, input, [role="button"], [role="link"], [role="tab"], [role="option"], [role="menuitem"], [role="checkbox"], [role="switch"]')) return { kind: 'interactive', owned };
+    return { kind: 'other', owned };
+  };
+  const onRouteKey = (e: KeyboardEvent): void => {
+    if (!canTake() || otherChatInUse()) return;
+    const r = routeKey(e, focusSpot(document.activeElement));
+    if (!r) return;
+    focusInput();                                   // 키는 막지 않는다 — 브라우저가 이 키를 새 초점(입력칸)에서 마저 처리한다
+    if (r === 'enter') { e.preventDefault(); form.requestSubmit(); }   // Enter 는 입력칸의 keydown 을 못 거쳤다 — 보내기를 직접 부른다
+  };
+  //  ① 누르면 입력칸 — 단추·링크·펼침·승인 칸·떠 있는 줄은 제 일을 하게 두고, 글을 골랐으면(끌어서 고름) 그 고름을 지우지 않는다.
+  const CLICKY = 'a, button, input, textarea, select, summary, label, details, [role="button"], [role="link"], [contenteditable="true"], .tui-sticky, .livc-jump, .cxl-dock';
+  const onRootClick = (e: MouseEvent): void => {
+    if (!canTake() || e.button !== 0 || e.defaultPrevented) return;
+    const t = e.target as HTMLElement | null;
+    if (!t || t.closest(CLICKY)) return;
+    const s = window.getSelection();
+    if (s && !s.isCollapsed && s.toString().trim()) return;
+    focusInput();
+  };
+  //  프롬프트 띠(가로줄 사이 · `❯` · 상태 줄)는 누르는 순간 커서가 선다 — 그 자리에서 글자 고르기가 시작되지 않게 막고 초점을 준다.
+  const onFormDown = (e: MouseEvent): void => {
+    if (!canTake() || e.button !== 0) return;
+    const t = e.target as HTMLElement | null;
+    if (!t || t === input || t.closest('a, button, input, textarea, select, label, [role="button"]')) return;
+    e.preventDefault();
+    focusInput();
+  };
+  //  ② 다시 보이면 — 탭을 옮겨 오거나 터미널 보기에서 돌아왔을 때. 초점이 비었거나 숨은 자리에 남아 있을 때만 가져온다.
+  const visObs = tui && typeof IntersectionObserver !== 'undefined' ? new IntersectionObserver((ents) => {
+    if (!ents.some((x) => x.isIntersecting) || !canTake() || otherChatInUse()) return;
+    const a = document.activeElement as HTMLElement | null;
+    if (!a || a === document.body || a === document.documentElement || !a.getClientRects().length) focusInput();
+  }) : null;
+  if (tui) {
+    document.addEventListener('keydown', onRouteKey);
+    root.addEventListener('click', onRootClick);
+    form.addEventListener('mousedown', onFormDown);
+    root.addEventListener('pointerdown', markTouched, true);
+    root.addEventListener('focusin', markTouched);
+    visObs?.observe(form);
+  }
 
   return {
     root, list, input, form, noteEl: note, style,
-    turn, event, stream, settle, running, busy, scroll,
+    turn, unpin, event, stream, settle, running, busy, scroll,
     scrollToBottom: () => { stick = true; toBottom(); },
-    setNote: (text: string) => { note.textContent = text; },
+    setNote: (text: string) => { note.textContent = text; restickSoon(); },   // 안내 줄이 서면 목록 칸이 준다 — 바닥에 붙어 있었으면 그대로 붙어 있게
     error: (t, text) => {
       //  tui — 빨간 `⎿` 덩이(Claude Code 가 도구·API 오류를 그리는 자리). 그 밖은 종전 오류 줄.
       const n = tui ? el('div', { class: 'livc-err tui-res tui-err' }, ...splitLinesForErr(text).map((l) => rl(l))) : el('div', { class: 'livc-err', text });
-      if (t) appendWork(t, n); else list.append(n);
+      if (t) appendWork(t, n); else appendEnd(n);
       scroll();
     },
     divider,
@@ -1480,7 +1635,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       //   줄이 넘치면 0번 칸부터 잇는다(걸친 들여쓰기 없음 — 2.1.299 실측). 그래서 점도 글 흐름 안에 둔다.
       const segs: TuiSeg[] = typeof text === 'string' ? [{ t: text }] : text;
       const n = el('div', { class: 'tui-notice tui-notice-' + tone }, el('span', { class: 'tui-dot', 'aria-hidden': 'true', text: '⏺' + VS15 }), ' ', ...segEls(segs));
-      if (t) appendWork(t, n); else list.append(n);
+      if (t) appendWork(t, n); else appendEnd(n);
     },
     bgDone: (id) => {
       if (!id) return;
@@ -1497,7 +1652,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       paintIdle();
     },
     removeOpening: () => { list.querySelector('.livc-open')?.remove(); },
-    setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; },
+    setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; restickSoon(); },
     turns: () => turnsArr.slice(),
     setFontStep: (step) => {
       const n = parseFontStep(String(Math.round(step)));
@@ -1508,10 +1663,15 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     prependKeepingView: (fn) => prependKeepingView(list, fn),
     destroy: () => {
       document.removeEventListener('keydown', onEsc);
+      fitRo?.disconnect();
+      stickRo?.disconnect();
       if (ticker) clearInterval(ticker);
       if (spinTimer) clearInterval(spinTimer);
       try { (document as Document & { fonts?: FontFaceSet }).fonts?.removeEventListener('loadingdone', onFontsDone); } catch { /* 구형 */ }
       if (tui) {
+        document.removeEventListener('keydown', onRouteKey);
+        visObs?.disconnect();
+        if (lastTouchedChat === root) lastTouchedChat = null;
         if (idleTimer != null) clearTimeout(idleTimer);
         document.removeEventListener('visibilitychange', onIdleVis);
         wideObs?.disconnect();

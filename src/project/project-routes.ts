@@ -11,6 +11,7 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
+import { assertNotAppFolderMount } from "../terminal/app-folder-guard.js";   // #4684 — `.lively/apps` 는 세션 앱 폴더 자리
 import { projectAbsPath } from "./project-fs.js";
 import { projectStorage, type ProjectStorage } from "./project-storage.js";
 import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
@@ -24,7 +25,7 @@ import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
 import { provisionProjectOnNode, provisionStatusOnNode, nodeProjectSessions } from "../node/provision-remote.js";
-import { launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { launchReply, launchSession, sessionInputFromBody } from "../terminal/session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { isSelfNode, gatewayDefersHere } from "../node/registry.js";
 import { relayNodeId } from "../node/self-node.js";   // #2592 — 셀프 노드 좌표는 릴레이 지시가 아니다(중앙 경로로 접는다)
 import { decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
@@ -37,6 +38,11 @@ import { deleteSource, canSeeSource } from "../v6/source-store.js";
 import { purgeDeleted } from "../v6/trash-store.js";
 import { auditOrgContent } from "../v6/content-audit.js";
 import { finishUpload } from "../ingest/upload-finish.js";
+import { settleFileMove } from "../files/file-move.js";   // #4688 — 이름 바꾸기·옮기기 뒤 자료 좌표 + «옛 경로 → 새 경로»
+import { SHARED_MOVE_SCOPE, findFileMove } from "../v6/file-move-store.js";
+import { followMovedPath, normalizeMovePath } from "../files/file-move-core.js";   // #4822 — 읽기 라우트가 옛 경로를 따라간다
+import { logger } from "../log.js";
+import { projectFoldersUnder, isFolderOrAncestorOf } from "../v6/shared-folder-store.js";
 import { uploadEntryOf } from "../ingest/upload-entry.js";   // #4233: 들어온 길(up-sync 훅은 세션 헤더를 싣는다 → AI 가 만든 파일)   // #3787 D: 업로드 마무리는 브라우즈 라우트와 한 함수
 import { bindSessionTask, sessionTaskList, setSessionTaskOrder, taskForProjectSession, taskKickoffPrompt, tasksKickoffPrompt } from "../v6/session-task.js";   // #4084 — 태스크에서 연 세션 · #4135 허브 「태스크에 붙이기」
 
@@ -184,6 +190,68 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     return { project, store, base: store.base };
   };
 
+  // 다른 프로젝트의 폴더 자리(#4688) — DB 에 이 프로젝트 폴더 안쪽으로 적힌 프로젝트 폴더(또는 그것을 담은 폴더)는 이름을 바꾸거나
+  //  옮기지 않는다. 그 프로젝트의 폴더 · 자료 좌표 · 공개범위 판정이 그 경로를 기준으로 한다(홈 탐색기와 같은 판정 — shared-folder-store).
+  //  안쪽 프로젝트 폴더 목록(nested)은 요청마다 한 번 읽는다(projectFoldersUnder) — 묶음 옮기기에서 항목마다 묻지 않게.
+  const assertNotProjectFolder = (project: { folder: string }, nested: readonly string[], ...rels: string[]): void => {
+    for (const rel of rels) {
+      if (isFolderOrAncestorOf(path.join(project.folder, rel), nested)) throw new HttpError(400, "프로젝트 폴더(또는 그것을 담은 폴더)라 이름을 바꾸거나 옮길 수 없어요");
+    }
+  };
+
+  // 이름 바꾸기·옮기기 뒷일(#4688) — 파일을 옮긴 **뒤에** 그 자리에서: 자료 좌표(`project:<id>/…`)를 같은 행 그대로 옮기고,
+  //  링크 좌표(공유 루트의 `<folder>/…` — localFileUrl 과 같은 꼴)로 «옛 경로 → 새 경로» 를 남긴다. 실패는 남기고 삼킨다(files/file-move).
+  //  isDir = 옮긴 것이 폴더인가(옮기기 전에 잰 값) — 파일이면 자료를 좌표 하나로 바로 찾는다(폴더만 하위 전부를 훑는다).
+  const settleProjectMove = (project: { id: number; name: string; folder: string }, base: string, fromAbs: string, toAbs: string, isDir: boolean, req: express.Request): Promise<void> => {
+    const fromRel = path.relative(base, fromAbs);
+    const toRel = path.relative(base, toAbs);
+    return settleFileMove({
+      scope: SHARED_MOVE_SCOPE,
+      fromPath: path.join(project.folder, fromRel),
+      toPath: path.join(project.folder, toRel),
+      local: { root: { kind: "project", id: project.id }, fromRel, toRel, folder: project.folder, channelFallback: project.name, isDir },
+      by: viewerOf(userOf(req)),
+    });
+  };
+
+  // 옛 경로 → 이 프로젝트 안의 지금 자리(#4822) — 읽기 라우트(미리보기 · 내려받기 · HEAD)가 파일을 못 찾으면 «옛 경로 → 새 경로» 기록을
+  //  따라간다. 본문에 박힌 그림 주소(`…/file?path=<옛 경로>`)가 웹에서 이름을 바꾸거나 옮긴 뒤에도 그대로 보이게 하는 것이 목적이다.
+  //  규칙은 옛 링크 풀기(terminal-files browse/moved)와 같고, 판정은 이 프로젝트의 projStore 그대로다 — 그래서 **같은 프로젝트 안에서만**
+  //  닿는다(다른 프로젝트 · 공유 폴더로 옮겨졌으면 없는 것과 같다). 기록은 공유 루트 기준 경로라 `<프로젝트 폴더>/<상대경로>` 로 묻는다.
+  //  쓰기 라우트(올리기 · 지우기 · 이름 바꾸기)는 부르지 않는다 — 옛 자리에 새로 쓰는 것이 그 경로의 뜻이다.
+  //  ⚠ «닿은 자리 재판정» 은 여기선 «같은 프로젝트 안인가» 하나다 — 프로젝트 폴더 안에는 경로마다 다른 공개범위가 없고(이 라우트의 직접 읽기도
+  //   같은 판정이다), 탐색기만 그 안에 담긴 다른 프로젝트 폴더를 따로 가린다. 그 안쪽 이름은 이 라우트의 직접 읽기로도 이미 열리는 자리다.
+  const movedInProject = async (project: { folder: string }, store: ProjectStorage, base: string, abs: string)
+    : Promise<{ abs: string; rel: string; st: NonNullable<Awaited<ReturnType<ProjectStorage["stat"]>>> } | null> => {
+    const root = normalizeMovePath(project.folder);
+    if (!root) return null;
+    const inProject = (p: string): string | null => (p.startsWith(root + "/") ? p.slice(root.length + 1) : null);
+    //  이 프로젝트 안의 그 자리 — 글자 판정 · 멤버 봉쇄를 지난 절대경로와 stat. 밖이거나 봉쇄에 걸리면 null. 자리마다 한 번만 본다
+    //   (마지막 자리를 따라가기 안에서 보고 답할 때 또 보지 않게 — 멤버 저장소면 한 번이 중계 두 번이다).
+    const seen = new Map<string, Promise<{ abs: string; st: Awaited<ReturnType<ProjectStorage["stat"]>> } | null>>();
+    const at = (rel: string) => {
+      let v = seen.get(rel);
+      if (!v) {
+        v = (async () => {
+          let a: string;
+          try { a = resolveIn(base, rel, true); await jailIfMember(store, a); } catch { return null; }
+          return { abs: a, st: await store.stat(a).catch(() => null) };
+        })();
+        seen.set(rel, v);
+      }
+      return v;
+    };
+    const hit = await followMovedPath(path.join(project.folder, path.relative(base, abs)), {
+      lookup: (p, since) => findFileMove(SHARED_MOVE_SCOPE, p, since),
+      //  이 프로젝트 밖은 «여기엔 없다» — 이 라우트가 열 자리가 아니다(따라가기는 그 너머의 기록을 더 볼 수 있다).
+      exists: async (p) => { const rel = inProject(p); return rel !== null && !!(await at(rel))?.st; },
+      visible: (p) => inProject(p) !== null,
+    });
+    const rel = hit ? inProject(hit.path) : null;
+    const got = rel !== null ? await at(rel) : null;
+    return rel !== null && got?.st ? { abs: got.abs, rel, st: got.st } : null;
+  };
+
   // ── ① 공유 폴더 — 목록 / 검색(q) ──
   app.get(`${prefix}/:id/files`, auth, wrap(async (req, res) => {
     const { store, base } = await projStore(Number(req.params.id), req);
@@ -217,14 +285,26 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
 
   // 다운로드 / 미리보기
   app.get(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
-    const abs = resolveIn(base, req.query.path, true);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
+    let abs = resolveIn(base, req.query.path, true);
     await jailIfMember(store, abs);
-    const st = await store.stat(abs);
+    let st = await store.stat(abs);
+    //  #4822 — 없으면 옮긴 기록을 따라 이 프로젝트 안의 지금 자리를 연다(본문 그림 주소가 이름 바꾸기에 안 깨지게). 옛 자리에 무엇이 있으면 그것이 이긴다.
+    let movedTo: string | null = null;
+    if (!st) {
+      //  최선 노력 — 기록 조회가 실패하면 따라가지 않고 남기기만 한다(없는 파일은 종전처럼 404 — 따라가기 때문에 500 이 되면 안 된다).
+      const moved = await movedInProject(project, store, base, abs).catch((e) => {
+        logger.warn({ err: e, project: Number(req.params.id) }, "[project] 옛 경로 따라가기 실패(비치명 — 종전대로 답한다)");
+        return null;
+      });
+      if (moved) { abs = moved.abs; st = moved.st; movedTo = moved.rel; }
+    }
     if (!st) throw new HttpError(404, "파일 없음");
     if (!st.file) throw new HttpError(400, "파일이 아닙니다");
     const download = req.query.download === "1";
     if (!download && st.size > MAX_PREVIEW) throw new HttpError(413, "미리보기엔 너무 큽니다 — 다운로드하세요");
+    //  따라갔으면 어디로 갔는지 머리로 남긴다(X-File-Moved-To — 프로젝트 폴더 기준 지금 경로, URI 인코딩). 성공 응답에만 싣는다.
+    if (movedTo !== null) res.setHeader("X-File-Moved-To", encodeURIComponent(movedTo));
     //  #3870 판이 실린 미리보기(`&v=`)는 판이 지금 파일과 같을 때만 브라우저가 보관해도 된다 — 판정은 fileCacheHeaders 한 자리.
     for (const [k, v] of Object.entries(fileCacheHeaders(req.query.v, st, download))) res.setHeader(k, v);
     // 파일 도장(#762) — 뷰어의 «살아 있는 미리보기»가 HEAD 로 「바뀌었나」만 묻는다. 시각은 ms, 크기까지 둘이라
@@ -258,6 +338,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  덮는다**(같은 바이트 크기 · 다른 내용은 흔하다). 기존 클라이언트는 이 필드를 무시하므로 하위호환.
   app.put(`${prefix}/:id/file`, auth, wrap(async (req, res) => {
     const { project, store, base } = await projStore(Number(req.params.id), req);
+    assertNotAppFolderMount(req.query.path);
     const abs = await resolveInProject(store, nfcPath(req.query.path), true);   // 저장 이름은 NFC 정본(#1278b)
     try { await store.receive(req, abs, MAX_UPLOAD); }
     catch (e) { const he = uploadError(e, MAX_UPLOAD); if (!he) return; throw he; } // he=null → 업로드 취소, 응답할 상대가 없다
@@ -273,6 +354,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   // 새 폴더 생성
   app.post(`${prefix}/:id/folder`, auth, wrap(async (req, res) => {
     const { store } = await projStore(Number(req.params.id), req);
+    assertNotAppFolderMount(req.query.path);
     const abs = await resolveInProject(store, nfcPath(req.query.path), true);   // 폴더 이름도 NFC 정본(#1278b)
     // 게이트웨이 소유(lively)·umask(755)로 생긴 폴더는 box_ 격리 세션(lively-shared 그룹)이 못 쓴다 —
     //  프로젝트 폴더 자체(2770)와 같은 계약을 하위에도(#1246 신고 증상: 웹에서 만든 폴더에 클로드 쓰기 불가).
@@ -291,7 +373,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //   **프로젝트 이름이 조용히 바뀐다**. 파일 이름은 파일 이름의 자리(`/file/…`)에서 바꾼다.
   //   같은 종류의 충돌을 다시 만들지 않게 scripts/route-collision.test.mjs 가 전 경로를 훑는다.
   app.post(`${prefix}/:id/file/rename`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const fromAbs = resolveIn(base, b.path, true);
     const newName = nfcPath(b.name).trim();   // 새 이름도 NFC 정본(#1278b)
@@ -300,11 +382,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     }
     const toAbs = path.join(path.dirname(fromAbs), newName);
     if (toAbs !== base && !toAbs.startsWith(base + path.sep)) throw new HttpError(400, "허용 경로를 벗어났습니다");
+    assertNotAppFolderMount(path.relative(base, fromAbs), path.relative(base, toAbs));
     await jailIfMember(store, fromAbs);
     await jailIfMember(store, toAbs);
-    if (!(await store.stat(fromAbs))) throw new HttpError(404, "대상이 없습니다");
+    const fromStat = await store.stat(fromAbs);
+    if (!fromStat) throw new HttpError(404, "대상이 없습니다");
     if (await store.stat(toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
+    assertNotProjectFolder(project, await projectFoldersUnder(project.folder), path.relative(base, fromAbs), path.relative(base, toAbs));
     await store.move(fromAbs, toAbs);
+    await settleProjectMove(project, base, fromAbs, toAbs, fromStat.dir, req);   // #4688 — 자료가 새 이름으로 이어지고 옛 링크가 새 자리로 열린다
     res.json({ ok: true });
   }));
 
@@ -313,16 +399,18 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
   //  왜 여러 개를 한 번에 받나: 사각형 선택으로 고른 여러 자료를 한 번에 끌어다 놓는 게 이 기능의 본래 쓰임이라,
   //  건별 왕복이면 중간에 실패했을 때 사용자가 '어디까지 갔는지' 알 길이 없다. 건별 결과를 모아 돌려준다.
   app.post(`${prefix}/:id/move`, auth, wrap(async (req, res) => {
-    const { store, base } = await projStore(Number(req.params.id), req);
+    const { project, store, base } = await projStore(Number(req.params.id), req);
     const b = (req.body ?? {}) as Record<string, unknown>;
     const list = Array.isArray(b.paths) ? b.paths : (b.path != null ? [b.path] : []);
     if (!list.length) throw new HttpError(400, "옮길 대상이 필요합니다");
     const destDir = resolveIn(base, nfcPath(b.to ?? ""), false);
+    assertNotAppFolderMount(path.relative(base, destDir), ...list);
     await jailIfMember(store, destDir);
     const dstat = await store.stat(destDir);
     if (!dstat || !dstat.dir) throw new HttpError(400, "목적지가 폴더가 아닙니다");
     const moved: string[] = [];
     const failed: Array<{ path: string; error: string }> = [];
+    const nested = await projectFoldersUnder(project.folder);   // #4688 — 안쪽 프로젝트 폴더(대개 없다)는 한 번만 읽는다
     for (const raw of list) {
       const fromAbs = resolveIn(base, raw, true);
       const name = path.basename(fromAbs);
@@ -332,10 +420,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
         // 폴더를 자기 안으로 넣으면 트리가 사라진다(rename 이 EINVAL 을 주기도, 조용히 먹기도 한다) — 먼저 막는다.
         if (toAbs.startsWith(fromAbs + path.sep)) throw new HttpError(400, "폴더를 자기 안으로 옮길 수 없습니다");
         await jailIfMember(store, fromAbs);
+        const fromStat = await store.stat(fromAbs);
+        if (!fromStat) throw new HttpError(404, "대상이 없습니다");
         if (await store.stat(toAbs)) throw new HttpError(409, "같은 이름이 이미 있습니다");
+        assertNotProjectFolder(project, nested, path.relative(base, fromAbs), path.relative(base, toAbs));
         await store.move(fromAbs, toAbs);
-        //  그룹 rw 는 로컬 저장소 계약이다 — 멤버 저장소는 권한 비트를 안 건드리므로 종류를 묻는 왕복도 하지 않는다.
-        if (!store.osUser) await store.grantGroup(toAbs, (await store.stat(toAbs))?.dir ? "dir" : "file");
+        //  #4688 — 옮긴 바로 뒤, 항목마다(일부만 성공이 보통이라). 뒷일은 던지지 않는다 — 아래 권한 비트가 실패해도 파일은 이미 옮겨졌다.
+        await settleProjectMove(project, base, fromAbs, toAbs, fromStat.dir, req);
+        //  그룹 rw 는 로컬 저장소 계약이다 — 멤버 저장소는 권한 비트를 안 건드린다. 종류는 옮기기 전에 잰 값을 쓴다(왕복 한 번 덜).
+        if (!store.osUser) await store.grantGroup(toAbs, fromStat.dir ? "dir" : "file");
         moved.push(path.relative(base, toAbs));
       } catch (e) {
         failed.push({ path: String(raw), error: e instanceof HttpError ? e.message : String((e as Error)?.message || e) });
@@ -557,7 +650,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //   실행 위치만 바꾸면 «중앙=나만 / 노드=팀 전원» 으로 갈렸다. 이제 두 경로가 같은 값을 쓴다.
     const nodeId = String(b.node ?? "").trim();
     const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];   // 실제 org 멤버만·요청자(owner) 제외·중복 제거
-    res.json({ session: await launchSession(userOf(req), input, { nodeId, invites }) });
+    //  #4906 — 서버가 넣을 첫 지시(태스크로 채운 글 포함)를 함께 답한다 — 화면이 그 글을 첫 지시로 기억한다(launchReply 머리말).
+    res.json(launchReply(await launchSession(userOf(req), input, { nodeId, invites }), input));
   }));
   // ── ②-a 세션을 태스크에 붙이기(#4135 허브 세션 위젯 「태스크에 붙이기」) — 이미 도는 세션에 이 프로젝트의 태스크를 잇는다.
   //  잇기 규칙은 v6/session-task.ts bindSessionTask 그대로(세션 주인만 · 같은 프로젝트의 태스크만 · 잇는 순간 «진행 중»).

@@ -69,6 +69,16 @@ t("[T7] 잎 git-auth-prepare.ts — node: 외 런타임 import 0 (import type �
     "DB(itemsPool)·GitHub App 자격이 여기로 되돌아오면 노드 번들이 다시 그걸 싣는다.");
 });
 
+t("[T8] 잎 session-end.ts — 런타임 import 0 (#4783 — session-state·sessions 가 값으로 import 해 노드 번들에 실린다)", () => {
+  assert.deepEqual(runtimeImports("src/sessions/session-end.ts"), [],
+    "끝난 사유의 판정은 순수해야 한다 — 여기에 DB·tmux 가 들어오면 노드 번들이 그 무게를 다시 싣는다(허용 목록이 이 파일을 «순수» 로 받았다).");
+});
+
+t("[T9] 잎 claude-ai-connectors-off.ts — 런타임 import 0 (#4427 — catalog 와 대화 런타임이 같이 읽는 값 한 벌)", () => {
+  assert.deepEqual(runtimeImports("src/terminal/claude-ai-connectors-off.ts"), [],
+    "catalog.ts(노드 번들) 가 이 잎을 import 한다 — 여기에 무언가가 붙으면 노드 번들이 그 무게를 끌어온다.");
+});
+
 // ── 가드가 실제로 막는가(T1·T2) — 부채 목록을 한 항목 빼고 돌려 본다 ──────────
 //  ⚠ 목록 파일을 잠시 바꾸므로 반드시 finally 로 되돌린다(git 추적 파일이라 최악에도 checkout 으로 복구).
 {

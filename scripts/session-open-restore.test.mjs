@@ -130,7 +130,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   //   메타(has-session 확답)로 «중단됨» 을 받아 배너를 띄운다 — 사람이 보는 것은 그 배너 한 줄뿐이었다
   //   (대화도, 말 걸 입력창도, 이 화면의 안내 setNote 도 액자에 가린다).
   //  ⚠ 그러면서 **얼지는 않아야 한다**(2026-09-08 교훈) — 아래 세 줄이 그 균형을 지킨다.
-  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore\)/.test(chat),
+  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore[,)]/.test(chat),   // #4783 — 둘째 인자(끝난 사실)가 붙었다
     "③-l ★ 프레임이 '박스 없음'을 알리면 액자를 걷는다(대화·입력창이 배너에 가리지 않게)");
   ok(/goneByFrame = true;[\s\S]{0,500}setMode\('chat'\)/.test(chat),
     "③-m 액자를 걷은 뒤 대화 화면으로 내려앉는다");
@@ -143,7 +143,9 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   ok(/termGoneN < 2 && mode === 'chat'/.test(chat),
     "③-q 자동 되돌리기는 한 번만 다시 시도한다 — blip 출구는 남기고 터미널↔대화 왕복은 막는다");
   //  #3891 이 같은 줄에 «전달 못 한 글을 들고 왔으면 대화로» 를 한 항 더 붙였다 — 재는 것은 observed:false 항이 살아 있나다.
-  ok(/setMode\(chatHome\(\) \|\| target\.raw\?\.observed === false (\|\| draftBack )?\? 'chat' : 'term'\)/.test(chat),
+  //  #4794 가 그 조건을 chatFirstView 로 꺼내고 «말을 보낸 직후(warmFirst — 대화창에 머물며 터미널을 숨겨 붙인다)» 를 더했다.
+  //   observed:false 는 여전히 «대화가 첫 화면» 조건 안에 있어야 한다.
+  ok(/const chatFirstView = chatHome\(\) \|\| target\.raw\?\.observed === false( \|\| draftBack)?;[\s\S]{0,600}setMode\(chatFirstView( \|\| warmFirst)? \? 'chat' : 'term'\)/.test(chat),
     "③-r 서버가 '관측 못 함'(#2544 observed:false)이라 한 세션은 터미널이 아니라 대화로 연다");
   // 액자 안에서 복원하면 **액자인 채로** 옮겨야 한다 — embed 를 빠뜨리면 레거시 터미널 크롬이 액자 안에 또 뜬다.
   {
@@ -332,7 +334,8 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "⑩-C3a ★ 말 전달 실패가 라우팅을 막지 않는다 — 제자리에 남으면 두 줄·갇힘이 그대로다(글은 새 화면 입력칸으로)");
   ok(/draft: takeUnsentDraft\(s\.id\)/.test(read("web/v2/views.ts")) && /if \(opts\.draft && !view\.input\.value\) \{\s*\n\s*view\.input\.value = opts\.draft;/.test(chat),
     "⑩-C3b 옮겨 간 화면이 못 간 글을 입력칸에 되돌려 둔다(보낸 척 그리지 않는다)");
-  ok(/const draftBack = !!opts\.draft && view\.input\.value === opts\.draft;\s*\n\s*if \(draftBack\) modeChosen = true;\s*\n\s*setMode\([^\n]*\|\| draftBack \? 'chat' : 'term'\);/.test(chat),
+  //  #4794 — 두 줄 사이에 «대화가 첫 화면인 조건(chatFirstView)» 이 끼었다. 재는 것은 그대로: 못 간 글을 들고 왔으면 대화가 첫 화면이다.
+  ok(/const draftBack = !!opts\.draft && view\.input\.value === opts\.draft;\s*\n\s*if \(draftBack\) modeChosen = true;[\s\S]{0,600}const chatFirstView = [^\n]*\|\| draftBack;[\s\S]{0,400}setMode\(chatFirstView[^\n]*\? 'chat' : 'term'\);/.test(chat),
     "⑩-C3c ★ 그 글이 **보이는** 대화로 연다 — 터미널이 첫 화면이면 입력칸이 숨어 «입력칸에 넣어 두었어요» 가 거짓말이 된다");
   // C4 — 되살리는 중 또 보내면 복원을 하나 더 띄우지 않는다.
   const guardAt = revive.indexOf("if (reviving) {");

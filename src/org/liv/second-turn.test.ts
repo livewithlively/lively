@@ -2,10 +2,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
+import { readFileSync } from "node:fs";
 import { GROUP_SETS } from "../../v6/category-groups.js";
+import * as turnNs from "./second-turn.js";
 
 const DONE = Date.parse("2026-08-29T05:00:00Z");
 const st = (over: Partial<SecondTurnState> = {}): SecondTurnState => ({
@@ -321,4 +323,82 @@ test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건
   assert.equal(gi2.job, "디자인");
   assert.deepEqual(gi2.intended.map((g) => g.name), GROUP_SETS["디자인"].map((g) => g.name));
   assert.equal(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length, 3);   // 재료가 없어도 빈손 없음
+});
+
+// ── #4851 — 하루가 지난 2턴은 쏘지 않는다(stale). 사양·엣지 표: 지식 outbox-echo-typed-window-4851 §사양 의 H 행. ──
+const DAY = 24 * 60 * 60_000;
+test("★ H1 세션이 살아 쉬는 중 · 수집 끝 — 처음 설정 뒤 정확히 하루면 쏘고, 그 1ms 뒤는 쏘지 않고 포기(stale)", () => {
+  assert.equal(decideSecondTurn(st({ now: DONE + DAY })).action, "fire");
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1 })), { action: "giveup", reason: "stale" });
+});
+test("H2 하루가 지났는데 세션이 일하는 중 — 기다리지 않고 포기(stale)", () => {
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, session: { working: true, agentState: "busy" } })), { action: "giveup", reason: "stale" });
+});
+test("H3 앞선 판정은 그대로 — 하루가 지나도 세션이 없으면 session-gone · 1턴이 안 들어갔으면 turn1-never-delivered", () => {
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, session: null })), { action: "giveup", reason: "session-gone" });
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, outboxPending: 1 })), { action: "giveup", reason: "turn1-never-delivered" });
+  //  상한 상수가 사양(하루)과 같다 — 옛 판엔 없다(네임스페이스로 읽어 그 행만 빨간불).
+  assert.equal((turnNs as { SECOND_TURN_STALE_MS?: number }).SECOND_TURN_STALE_MS, DAY);
+});
+
+// ── #4213 T13 — 1턴 갈래(flow)에 따른 2턴 판정. 사양 scratchpad spec.md §C 의 표(S1~S9) 행마다 한 검사. ──
+//  · 합류자(join)는 2턴이 없다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다(다른 판정보다 먼저).
+//  · 설치자 «처음 연결»(connect)은 리브가 처음 수집 끝(collect_done_at)을 찍을 때까지, 그러나 90분까지만 기다린다.
+const MIN = 60_000;
+const cw = (extra: Record<string, unknown>, at: number, over: Partial<SecondTurnState> = {}): SecondTurnState =>
+  st({ welcome: { done_at: new Date(DONE).toISOString(), session_id: "box-a-1", ...extra }, now: DONE + at, ...over });
+
+test("S1 합류자 — 세션이 쉬어도 2턴을 건너뛴다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "join" }, 10 * MIN)), { action: "skip", reason: "join" });
+});
+test("S2 합류자 — 이미 쏜 표식이 있어도 이유는 «합류자» 다(먼저 판정)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "join", distill_at: new Date(DONE).toISOString() }, 10 * MIN)), { action: "skip", reason: "join" });
+});
+test("S3 처음 연결 — 리브가 처음 수집 끝을 안 찍었으면 세션이 쉬어도 기다린다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 10 * MIN)), { action: "wait", reason: "connecting" });
+});
+test("S4 처음 연결 — 처음 수집 끝이 찍혔으면 종전 판정으로 쏜다", () => {
+  const d = decideSecondTurn(cw({ flow: "connect", collect_done_at: new Date(DONE + 9 * MIN).toISOString() }, 10 * MIN));
+  assert.equal(d.action, "fire");
+});
+test("S5 처음 연결 — 정확히 상한(90분)이면 신호 없이도 기다리지 않는다(경계)", () => {
+  assert.equal(CONNECT_FLOW_MAX_WAIT_MS, 90 * MIN);
+  const d = decideSecondTurn(cw({ flow: "connect" }, CONNECT_FLOW_MAX_WAIT_MS));
+  assert.deepEqual(d, { action: "fire", partial: false, waitedMin: 90 });
+});
+test("S5′ 처음 연결 — 상한 1초 전이면 아직 기다린다(경계)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, CONNECT_FLOW_MAX_WAIT_MS - 1000)), { action: "wait", reason: "connecting" });
+});
+test("S6 처음 연결 대기 중 세션이 사라지면 다시 열지 않고 기다린다(사람이 리브 탭으로 되살릴 수 있다)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 30 * MIN, { session: null })), { action: "wait", reason: "connecting" });
+});
+test("S6′ 상한이 지났는데 세션이 없으면 종전대로 한 번 다시 연다(1턴 배달 상한 안)", () => {
+  assert.ok(CONNECT_FLOW_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "다시 여는 길이 남도록 처음 연결 상한이 1턴 배달 상한보다 짧아야 한다");
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 95 * MIN, { session: null })), { action: "reopen", reason: "session-gone" });
+});
+test("S7 갈래 없는 옛 행은 종전과 같다 — 쉬면 쏜다", () => {
+  assert.equal(decideSecondTurn(cw({}, 10 * MIN)).action, "fire");
+});
+test("S8 처음 수집 끝이 찍혀도 리브가 일하는 중이면 기다린다", () => {
+  const d = decideSecondTurn(cw({ flow: "connect", collect_done_at: new Date(DONE).toISOString() }, 10 * MIN, { session: { working: true, agentState: "busy" } }));
+  assert.deepEqual(d, { action: "wait", reason: "turn1-running" });
+});
+test("S9 처음 수집 끝이 null(명시)이면 찍히지 않은 것이다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect", collect_done_at: null }, 10 * MIN)), { action: "wait", reason: "connecting" });
+});
+test("S10 후보 조회가 합류자 행을 뺀다 — 영원히 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지하지 않게", () => {
+  const SRC = readFileSync(new URL("../store/members.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const fn = SRC.slice(SRC.indexOf("export async function listLivSecondTurnCandidates"), SRC.indexOf("ORDER BY welcome->>'done_at' ASC LIMIT 200"));
+  assert.match(fn, /AND COALESCE\(welcome->>'flow', ''\) <> 'join'/);
+});
+test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시 읽고 설명·성격을 채우게 한다(설계 §3)", () => {
+  const p = buildSecondTurnPrompt({ displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 5 });
+  assert.match(p, /`collect_units`\(Claude 커넥터로 모으는 곳 — 수집 단위\)/);
+  assert.match(p, /`collect_unit_update` 로 손본다/);
+  //  (격리 리뷰 2026-10-17) 사람이 처음 연결 대화에서 정한 모을지·공개범위를 2턴이 묻지 않고 뒤집지 않는다 — 설명·메타·주기만 묻지 않는다.
+  assert.match(p, /모을지\(`state`\)와 공개범위\(`visibility`\)는 처음 연결 대화에서 사람이 정한 것이다 — 뒤집지 않는다/);
+  assert.doesNotMatch(p, /`state:\"excluded\"`/, "2턴이 묻지 않고 단위를 빼라는 지시가 남았다");
+  //  (T12 #4744 와 맞물림) 활동량·주기는 서버가 글 빈도로 잰다 — 2턴이 interval_sec·activity 를 쓰라고 하면 자동 주기가 멈춘다.
+  assert.doesNotMatch(p, /`interval_sec` 를 맞춘다|activity: 하루 평균/, "2턴이 서버가 재는 주기·활동량을 손으로 쓰게 한다");
+  assert.match(p, /`description`\(이 단위에서 오가는 일/);
 });

@@ -314,3 +314,30 @@ export function popClosed(stack: readonly ClosedTab[][]): { batch: ClosedTab[]; 
   const batch = stack[stack.length - 1].slice().sort((a, b) => a.at - b.at);
   return { batch, rest: stack.slice(0, -1) };
 }
+
+// ── #4876 «콘솔» 탭을 곁칸 맨 앞에 한 번만 세운다 ─────────────────────────────────────────────────────
+//  원준(2026-10-19): 첫 탭은 세션 조작을 돕고 다녀온 사이·남긴 것을 보여 주는 «콘솔», 자료는 둘째. 기본 배치(DEF_LAYOUT)만 고치면
+//  이미 배치를 저장한 사람에겐 영영 안 보이고, 열 때마다 넣으면 사람이 닫은 탭이 되살아난다 — 그래서 표식(seeded.console)을 남기고
+//  그 뒤론 손대지 않는다(seedTasksTab · unparkBottom · dropAppsTab 과 같은 틀). 배치가 아예 없는 브라우저도 표식은 찍는다.
+//  규칙: 곁칸(side)에 'console' 이 없으면 맨 앞에 넣고, 켜진 곁칸 탭이 기본(files)이었거나 없었으면 콘솔을 켠다(사람이 다른 탭을
+//  켜 두었으면 그대로). 이미 있으면(사람이 [＋] 로 넣었다) 자리를 옮기지 않는다.
+//  store · lay 가 any 인 것은 localStorage 에서 읽은 믿을 수 없는 JSON 이라서다.
+export function seedConsoleTab(store: any): { store: any; changed: boolean; added: number } {
+  const st = store && typeof store === 'object' ? store : {};
+  if (st.seeded && st.seeded.console) return { store: st, changed: false, added: 0 };
+  let added = 0;
+  const one = (lay: any): void => {
+    if (!lay || typeof lay !== 'object') return;
+    const side = Array.isArray(lay.side) ? lay.side.map((k: unknown) => String(k)) : [];
+    const base = (k: string): string => k.split('#')[0];   // 'editor#2' → 'editor'(tab-key 와 같은 규칙 · 잎 모듈이라 안 들인다)
+    if (side.some((k) => base(k) === 'console')) return;
+    lay.side = ['console', ...side];
+    if (!lay.act || typeof lay.act !== 'object') lay.act = {};
+    if (!lay.act.side || base(String(lay.act.side)) === 'files') lay.act.side = 'console';
+    added++;
+  };
+  one(st.last);
+  if (st.p && typeof st.p === 'object') for (const k of Object.keys(st.p)) one(st.p[k]);
+  st.seeded = { ...(st.seeded || {}), console: 1 };
+  return { store: st, changed: true, added };
+}

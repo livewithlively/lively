@@ -39,8 +39,10 @@ export const ICONS: Record<string, string> = {
   // ── 앱 ──
   dashboard: 'M4 4h7v9H4z M13 4h7v5h-7z M13 11h7v9h-7z M4 15h7v5H4z',
   ctx: 'M3 5h5l4 7h9 M3 12h9 M3 19h5l4-7 M18 9l3 3-3 3',
-  //  자료(#2423 · #4233). 모서리가 접힌 문서 하나. 상자로 그리면 「지난 세션」(archive)과 겹친다.
-  src: 'M6 3h8l5 5v13H6z M14 3v5h5',
+  //  자료(#2423 · #4233 · #4882). **둥근 폴더** — 아래 folder 와 같은 그림이다(원준 2026-10-19 «일부는 폴더 아이콘이고 일부는 종이 한 장
+  //   접혀있는 느낌이었는데 전부 폴더 느낌으로 통일»). 종전의 모서리 접힌 문서는 앱 · 레일 · 검색에만 서고, 곁칸 자료 탭 · 세션 [자료] 단추 ·
+  //   프로젝트 공유 폴더는 폴더라 한 앱이 두 얼굴이었다. 상자(archive · 지난 세션)와는 여전히 다르다. 파일 한 장(doc · pn-doc)은 파일의 그림으로 남는다.
+  src: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
   sess: 'M3 4h12v9H8l-5 4z M18 8h3v13l-4-3H9v-2',
   sys: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
   web: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z M3 12h18 M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z',
@@ -87,6 +89,9 @@ export const ICONS: Record<string, string> = {
   plus: 'M12 5v14 M5 12h14',
   //  adduser = 사람 하나 + 오른쪽 위 플러스('이 워크스페이스에 사람을 더한다'). 문패 오른쪽 초대 아이콘.
   adduser: 'M15 20v-1.5a3.5 3.5 0 0 0-3.5-3.5h-4A3.5 3.5 0 0 0 4 18.5V20 M9.5 4.5a3.4 3.4 0 1 1 0 6.8 3.4 3.4 0 0 1 0-6.8 M19 8v6 M16 11h6',
+  //  people = 사람 둘(앞 하나 · 뒤에 반쯤 가린 하나). «함께 하는 세션»(초대받은 · 초대한) 층 토글 — 플러스가 없다:
+  //   원준 2026-10-17 «사람 아이콘 뒤에 + 있으니까 사람 초대하는 것 같아 너무 어색함».
+  people: 'M9 11.5a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5z M2.5 20.5a6.5 6.5 0 0 1 13 0 M15.5 4.3a3.75 3.75 0 0 1 0 7.2 M17 14.2a6.5 6.5 0 0 1 4.5 6.3',
   x: 'M18 6 6 18 M6 6l12 12',
   chevD: 'M6 9l6 6 6-6',
   chevL: 'M15 18l-6-6 6-6',
@@ -120,6 +125,8 @@ export const ICONS: Record<string, string> = {
   //  리스트는 이 표에 없어서 「앱」 그림(사각 넷)이 대신 나왔다. 우측 사이드바의 「세션 파일」은 「자료」와, 「미리보기」는 「웹」과 같은 그림이었다.
   list: 'M8 6h13 M8 12h13 M8 18h13 M3.5 6h.01 M3.5 12h.01 M3.5 18h.01',
   sessfiles: 'M3 5h6l2 2.5h10V19H3z M9.5 11l2 2-2 2 M13.5 15h3',
+  // #4876 콘솔 — 세션 옆에 붙은 좁은 칸(오른쪽 칸 + 줄 셋) · 왼쪽은 프롬프트 꺾쇠. «세션의 조작을 돕는 칸»(원준 2026-10-19 «사이드 콘솔 같은 느낌»).
+  console: 'M3 4.5h18v15H3z M14 4.5v15 M6.5 10l2 2-2 2 M16.5 9h2 M16.5 12h2 M16.5 15h2',
   task: 'M3.5 7 5 8.5 8 5.5 M11 7h9 M3.5 16 5 17.5 8 14.5 M11 16h9',
   timeline: 'M7 3v1.5 M7 7.5v3 M7 13.5v3 M7 19.5V21 M5.5 6a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0z M5.5 12a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0z M5.5 18a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0z M11.5 6h8.5 M11.5 12h6 M11.5 18h8.5',
   preview: 'M3 4h18v16H3z M10 9l5 3-5 3z',
@@ -176,7 +183,12 @@ export const ICONS: Record<string, string> = {
 /** 이름으로 그림을 찾는다. 표에 없는 이름이면 예비 그림(기본 「앱」)을 준다.
  *  표의 열쇠만 본다: `constructor` 같은 이름은 객체에 늘 있는 값이라 `ICONS[name] || …` 로는 걸러지지 않는다. */
 export const iconPath = (name: string, fallback = 'apps'): string =>
-  (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : ICONS[fallback]);
+  (Object.prototype.hasOwnProperty.call(ICONS, name) ? ICONS[name] : (REGISTERED.has(name) ? (REGISTERED.get(name) as string) : ICONS[fallback]));
+
+/** #4769 구성원 앱이 선언한 그림(매니페스트 icon.path) — 앱마다 이름(`app-<id>`)으로 등록해 두면 표의 그림처럼 iconPath 로 찾는다.
+ *  표(ICONS)의 이름은 덮지 못한다(표가 먼저다). 그림 글자는 등록하는 쪽(v2/glass-icon registerAppIcon)이 거른다. */
+const REGISTERED = new Map<string, string>();
+export function registerIconPath(name: string, d: string): void { if (!Object.prototype.hasOwnProperty.call(ICONS, name)) REGISTERED.set(name, d); }
 
 /** 앱 표(v2/apps.ts APPS)의 icon 이름 → 이 표의 이름. 「대시보드」(옛 「홈(클래식)」)의 icon 은 home 이지만 그림은 판 넷(dashboard)이다.
  *  레일 · 앱 화면 · 구역 메뉴가 같은 앱을 같은 그림으로 그리게 이 함수 하나를 지난다. */

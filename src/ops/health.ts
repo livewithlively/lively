@@ -28,10 +28,23 @@ export type Status = "ok" | "degraded" | "down" | "starting";
 export interface Thresholds {
   warnPct: number;
   criticalPct: number;
+  /**
+   * #4780 — 위험이 되려면 **남은 공간도** 이것(바이트)보다 적어야 한다. 0·생략 = 사용률만 본다(종전).
+   *  왜: 사용률 하나로는 디스크가 클수록 남겨야 하는 양이 커진다 — 95% 면 245GB 맥미니는 12GB, 1TB PC 는 50GB 가
+   *  남아 있어도 새 세션을 막는다. 세션 하나가 실제로 늘리는 양(레포 + node_modules 약 0.4GB)과 무관한 수치다
+   *  (2026-10-16 맥미니 노드 실측: 96.7% · 7.6GB 남음에 차단 — 스왑은 6.4GB 뿐이고 퍼저블은 0 이었다).
+   *  그래서 **둘 다** 넘을 때만 위험이다: 큰 디스크에선 이 바닥이, 작은 디스크(95% 기준이면 바닥의 20배 미만 —
+   *  테넌트 쿼터 10GB 등)에선 사용률이 먼저 걸린다 → 어느 디스크에서도 종전보다 일찍 막지 않는다.
+   *  Elasticsearch 디스크 워터마크의 max_headroom(flood 95% · 최대 100GB)과 같은 꼴이다.
+   */
+  criticalFreeBytes?: number;
 }
 
+const GIB = 1024 ** 3;
+
 // DB 를 못 읽는 상황(=DB 다운, 헬스체크가 가장 필요한 순간)에도 판정은 해야 한다 → 최후 폴백.
-export const FALLBACK_THRESHOLDS: Thresholds = { warnPct: 85, criticalPct: 95 };
+//  ⚠ 저장소 정책 기본값(DEFAULT_STORAGE_POLICY)과 같은 판정이어야 한다 — storage-policy.test 가 둘을 맞대어 본다.
+export const FALLBACK_THRESHOLDS: Thresholds = { warnPct: 85, criticalPct: 95, criticalFreeBytes: 5 * GIB };
 
 /** pg.Pool 중 우리가 쓰는 부분만 — 테스트가 스텁을 넣을 수 있게 좁힌다. */
 export interface QueryablePool {
@@ -61,8 +74,11 @@ export interface ReadyReport {
   uptimeSec: number;
 }
 
-export function levelFor(usedPct: number, t: Thresholds = FALLBACK_THRESHOLDS): Level {
-  if (usedPct >= t.criticalPct) return "critical";
+// availBytes 를 모르면 사용률만으로 판정한다 — 바닥은 «넉넉히 남았으면 봐준다» 는 완화라, 남은 양을 모르는 채로 봐주지 않는다.
+//  위험 비율은 넘었는데 바닥보다 많이 남았으면 경고다(위험 임계 > 경고 임계는 정책 불변식이 지킨다).
+export function levelFor(usedPct: number, t: Thresholds = FALLBACK_THRESHOLDS, availBytes?: number): Level {
+  const roomy = !!t.criticalFreeBytes && availBytes !== undefined && availBytes >= t.criticalFreeBytes;
+  if (usedPct >= t.criticalPct && !roomy) return "critical";
   if (usedPct >= t.warnPct) return "warn";
   return "ok";
 }
@@ -84,7 +100,8 @@ export async function checkDisk(p: string, t: Thresholds = FALLBACK_THRESHOLDS):
     const used = blocks - bfree;
     const denom = used + bavail;
     const usedPct = denom > 0 ? Math.round((used / denom) * 1000) / 10 : 0;
-    return { path: p, totalBytes: blocks * bsize, availBytes: bavail * bsize, usedPct, level: levelFor(usedPct, t) };
+    const availBytes = bavail * bsize;
+    return { path: p, totalBytes: blocks * bsize, availBytes, usedPct, level: levelFor(usedPct, t, availBytes) };
   } catch (err) {
     // 경로 부재(미프로비저닝 세션 루트)·statfs 미지원 — 치명 아님. 리포트에서 빠지고 나머지는 계속 본다.
     logger.warn({ err, path: p }, "디스크 점검 실패 — 리포트에서 제외");

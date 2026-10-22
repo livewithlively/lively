@@ -8,7 +8,8 @@ import { HttpError } from "./rest-util.js";
 import { canSeeProjectRow } from "../v6/visibility.js";
 import { listSessions } from "../terminal/terminal-sessions.js";
 import { getSessionState, getSessionStates } from "../sessions/session-state.js";
-import { parseAppManifest, type LivelyAppManifest } from "../apps/manifest.js";
+import { parseAppManifest, appIconSpecOf, type LivelyAppManifest } from "../apps/manifest.js";
+import { serverDeclOf } from "../apps/app-server-config.js";
 import { appViewFor, canSeeApp } from "../apps/visibility.js";
 import { asPublished, viewAppFor } from "../apps/app-view.js";
 import { normalizeInstanceProject, normalizeInstanceState } from "../apps/instance-policy.js";
@@ -87,6 +88,9 @@ function publicAppMeta(app: apps.OrgApp, manifest: LivelyAppManifest): Record<st
     runtime: manifest.runtime ? { kind: "worker", placement: manifest.runtime.placement,
       idle_timeout_sec: manifest.runtime.idle_timeout_sec, memory_mb: manifest.runtime.memory_mb } : null,
     ui: { pages: manifest.ui.pages.map((p) => ({ key: p.key, title: p.title, display: p.display })) },
+    //  #4485 후속 — 서버가 화면을 만드는 앱(web.server): 화면 파일(ui.pages)이 없어도 화면 앱이다.
+    server: serverDeclOf(manifest) !== null,
+    icon: appIconSpecOf(manifest),   // #4769 — 사이드바의 설치한 앱 줄이 그 앱의 그림을 그린다
   };
 }
 

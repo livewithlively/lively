@@ -19,6 +19,7 @@
 # 쓰임
 #   scripts/serve-sync.sh            # 한 번 동기화(깨끗할 때만)
 #   scripts/serve-sync.sh --check    # 판정만 — 아무것도 바꾸지 않는다
+#   LIVELY_SERVE_RETRY_SEC=0 scripts/serve-sync.sh   # 밀린 단계(실패한 빌드·재시작)를 지금 바로 다시 시도
 #   launchd io.lvly.stage-sync 가 주기 실행한다(deploy/io.lvly.stage-sync.plist).
 set -uo pipefail
 
@@ -36,13 +37,17 @@ say() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
 #  ⚠ 사유는 **거친 분류만** 싣는다 — /readyz 는 미인증이라 원문 메시지(남의 브랜치·파일명)를 내보내지 않는다.
 STATUS="$CLONE/logs/stage-sync.status"
 now_iso() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
-# 연속으로 건너뛴 시작 시각은 이어 간다 — 매번 새로 찍으면 '얼마나 오래 막혔나'를 영영 모른다.
-prev_since() { [ -f "$STATUS" ] && grep -q '"state":"skipped"' "$STATUS" 2>/dev/null \
-  && sed -n 's/.*"since":"\([^"]*\)".*/\1/p' "$STATUS" 2>/dev/null | head -1; }
-write_status() { # $1=state $2=code
+status_field() { # $1=키 — 셸 내장만 쓴다(틱마다 여러 번 불린다)
+  [ -f "$STATUS" ] || return 1
+  local l re="\"$1\":\"([^\"]*)\""; l=$(<"$STATUS")
+  [[ $l =~ $re ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+# 같은 상태(skipped·failed)가 이어지면 시작 시각을 이어 간다 — 매번 새로 찍으면 '얼마나 오래 막혔나'를 영영 모른다.
+prev_since() { [ "$(status_field state)" = "$1" ] && status_field since; }
+write_status() { # $1=state(synced|skipped|failed) $2=code
   mkdir -p "$(dirname "$STATUS")" 2>/dev/null || return 0
   local n s; n="$(now_iso)"; s=""
-  [ "$1" = "skipped" ] && { s="$(prev_since)"; [ -n "$s" ] || s="$n"; }
+  [ "$1" = "synced" ] || { s="$(prev_since "$1")"; [ -n "$s" ] || s="$n"; }
   printf '{"at":"%s","state":"%s","code":"%s","since":"%s"}\n' "$n" "$1" "${2:-}" "${s:-$n}" > "$STATUS" 2>/dev/null || true
 }
 
@@ -51,6 +56,15 @@ skip() { # $1=거친 사유 코드, 나머지=사람 말
   [ $CHECK_ONLY -eq 1 ] || write_status skipped "$code"
   say "건너뜀 — $*"; exit 0
 }   # 정상 종료: 이 스크립트가 손대면 안 되는 상태라는 뜻이다
+
+# 당긴 커밋은 들어왔는데 서빙이 못 따라갔다(#4814) — **synced 라 말하지 않는다.** 종전엔 여기서 상태를 안 쓰고
+#  exit 1 만 해서 앞 틱의 synced 가 남았고, 다음 틱은 «이미 최신» 경로로 빠져 synced 를 다시 찍었다.
+#  2026-10-16 실측: stage 의 tsc 깨짐으로 03:28 부터 13시간 재시작이 실패했는데 /readyz 는 내내 synced 였다.
+fail() { # $1=거친 사유 코드, 나머지=사람 말
+  local code="$1"; shift
+  write_status failed "$code"
+  say "⚠ $*"; exit 1
+}
 
 # ── 의존성 — package-lock 이 바뀌면 설치한다 (#4685) ──────────────────────────────────────
 #  종전엔 이 단계가 없어 **새 의존성이 dev 에 영영 안 깔렸다**. 2026-10-14 실측: mermaid(devDependencies — build:web 이
@@ -74,18 +88,61 @@ sync_deps() {
   [ "$want" = "$have" ] && return 0
   say "의존성(package-lock) 변경 — npm install"
   ( cd "$CLONE" && npm install --no-save --no-audit --no-fund >/dev/null 2>&1 ) \
-    || { say "⚠ npm install 실패 — 새 의존성 없이 돈다(다음 틱에 다시 시도한다 · 사람이 봐야 한다)"; exit 1; }
+    || fail deps "npm install 실패 — 새 의존성 없이 돈다(다음 틱에 다시 시도한다 · 사람이 봐야 한다)"
   mkdir -p "$(dirname "$LOCK_STAMP")" 2>/dev/null
   printf '%s\n' "$want" > "$LOCK_STAMP"
   DEPS_CHANGED=1
 }
 build_web() {
+  say "build:web"
   ( cd "$CLONE" && rm -f .tsbuildinfo-web && npm run build:web >/dev/null 2>&1 ) \
-    || { say "⚠ build:web 실패 — 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"; exit 1; }
+    || fail web "build:web 실패 — 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"
+}
+build_standalone() {
+  say "build-standalone"
+  ( cd "$CLONE" && node scripts/build-standalone.mjs >/dev/null 2>&1 ) \
+    || fail standalone "build-standalone 실패 — terminal.js 등 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"
 }
 restart_gateway() {
+  say "restart-gateway.sh"
   ( cd "$CLONE" && scripts/restart-gateway.sh >/dev/null 2>&1 ) \
-    || { say "⚠ 게이트웨이 재시작 실패 — 기존 프로세스는 그대로 살아 있다"; exit 1; }
+    || fail restart "게이트웨이 재시작 실패 — 기존 프로세스는 그대로 살아 있다"
+}
+
+# ── 밀린 단계 (#4814) ─────────────────────────────────────────────────────────────────────
+#  당긴 뒤 web·standalone·restart 중 하나가 실패하면 그 단계는 **다음 틱으로 넘어가야** 한다. 종전엔 실패하면
+#  그냥 끝났고, 다음 틱은 이미 최신이라 아무것도 안 했다 — 실패 뒤 들어온 커밋이 src 를 안 건드리면 재시작은 영영 없었다.
+#  · 당긴 직후, 하기 **전에** 적는다 — 어느 단계에서 멈춰도 남는다. 끝낸 단계만 지운다. 비면 파일을 지운다.
+#  · 새 커밋이 오면 그 커밋이 요구하는 단계와 **합쳐서** 한다.
+#  · 새 커밋이 없으면 마지막 시도 뒤 RETRY_SEC 가 지났을 때만 다시 한다 — 깨진 빌드를 1분마다 다시 빌드하지 않는다.
+#    그 사이 틱은 failed 를 다시 찍는다(시작 시각은 이어 간다). 안 찍으면 /readyz 가 «잡이 죽었다(stale)» 로 오판한다.
+#    지금 바로 다시: LIVELY_SERVE_RETRY_SEC=0 scripts/serve-sync.sh
+#  · 시도 시각은 이 파일의 mtime 이다 — 시도를 시작할 때 touch 한다.
+PENDING="$CLONE/logs/stage-sync.pending"
+RETRY_SEC="${LIVELY_SERVE_RETRY_SEC:-900}"
+STEP_ORDER="web standalone restart"   # 하는 순서이자 적는 순서 — 웹 산출물이 서야 새 게이트웨이가 그걸 서빙한다
+pending_list() { [ -f "$PENDING" ] || return 0; local l; l=$(<"$PENDING"); set -- $l; printf '%s' "$*"; }   # 공백·줄바꿈을 한 칸으로
+pending_has() { case " $(pending_list) " in *" $1 "*) return 0 ;; esac; return 1; }
+pending_any() { [ -n "$(pending_list)" ]; }   # 파일 크기가 아니라 내용으로 — 빈 줄만 있는 파일은 «밀린 것 없음»이다
+pending_set() { # $@=남은 단계(STEP_ORDER 순으로 다시 적는다)
+  local s cur=" $* " out=""
+  for s in $STEP_ORDER; do case "$cur" in *" $s "*) out="${out:+$out }$s" ;; esac; done
+  if [ -z "$out" ]; then rm -f "$PENDING"; return 0; fi
+  mkdir -p "$(dirname "$PENDING")" 2>/dev/null
+  printf '%s\n' "$out" > "$PENDING"
+}
+pending_add() { pending_set $(pending_list) "$@"; }
+pending_done() { local s keep=""; for s in $(pending_list); do [ "$s" = "$1" ] || keep="$keep $s"; done; pending_set $keep; }
+pending_age() { # 마지막 시도 뒤 지난 초(파일이 없으면 아주 큰 값). LIVELY_SERVE_NOW(epoch 초)는 시험이 시계를 고정하는 자리다
+  local m; m=$(stat -c %Y "$PENDING" 2>/dev/null || stat -f %m "$PENDING" 2>/dev/null) || { echo 999999999; return; }
+  echo $(( ${LIVELY_SERVE_NOW:-$(date +%s)} - m ))
+}
+run_pending() { # 실패하면 fail 이 그 자리에서 끝낸다 — 남은 단계는 파일에 그대로 있다
+  pending_any || return 0
+  touch "$PENDING"
+  if pending_has web; then build_web; pending_done web; fi
+  if pending_has standalone; then build_standalone; pending_done standalone; fi
+  if pending_has restart; then restart_gateway; pending_done restart; fi
 }
 
 [ -d "$CLONE/.git" ] || { say "오류: 서빙 클론이 아니다 — $CLONE"; exit 1; }
@@ -122,15 +179,25 @@ if [ "$local_sha" = "$remote_sha" ]; then
   if [ $CHECK_ONLY -eq 1 ]; then
     say "최신 — ${local_sha:0:8}"
     [ "$(lock_sha)" = "$(cat "$LOCK_STAMP" 2>/dev/null)" ] || say "의존성 설치 필요(package-lock 지문이 마지막 설치와 다르다)"
+    pending_any && say "밀린 단계 — $(pending_list) (마지막 시도 $(pending_age)초 전 · ${RETRY_SEC}초마다 다시 시도)"
     exit 0
   fi
   #  커밋은 그대로여도 의존성은 따로 본다 — 이 단계가 생기기 전에 당겨 온 lock 변경을 여기서 잡는다(위 «의존성» 절).
   sync_deps
   if [ $DEPS_CHANGED -eq 1 ]; then
     say "의존성을 깔았다 — build:web · restart-gateway.sh"
-    build_web
-    restart_gateway
+    pending_add web restart
+  elif pending_any; then
+    #  밀린 단계가 있다(위 «밀린 단계» 절). 간격 전이면 다시 돌리지 않고 실패를 다시 찍기만 한다 — 사유는 맨 앞 단계다
+    #  (순서대로 하다 거기서 멈췄으므로).
+    if [ "$(pending_age)" -lt "$RETRY_SEC" ]; then
+      set -- $(pending_list)
+      write_status failed "${1:-unknown}"
+      exit 0
+    fi
+    say "밀린 단계 다시 시도 — $(pending_list)"
   fi
+  run_pending
   write_status synced ""
   exit 0
 fi
@@ -143,23 +210,16 @@ behind=$(git -C "$CLONE" rev-list --count "HEAD..origin/$BRANCH")
 if [ $CHECK_ONLY -eq 1 ]; then say "동기화 필요 — ${behind}커밋 뒤짐(${local_sha:0:8} → ${remote_sha:0:8})"; exit 0; fi
 
 say "동기화 — ${behind}커밋 (${local_sha:0:8} → ${remote_sha:0:8})"
-git -C "$CLONE" merge --ff-only "origin/$BRANCH" >/dev/null || { say "오류: ff 실패(히스토리가 갈렸다) — 사람이 봐야 한다"; exit 1; }
+git -C "$CLONE" merge --ff-only "origin/$BRANCH" >/dev/null || fail ff "ff 실패(히스토리가 갈렸거나 미추적 파일이 부딪힌다) — 사람이 봐야 한다"
 
-# 의존성 먼저 — 웹 빌드가 node_modules 에서 벤더를 복사하므로 빌드보다 앞서야 한다(위 «의존성» 절).
-sync_deps
+# 이 커밋들이 요구하는 단계를 **하기 전에** 밀린 단계로 적는다(위 «밀린 단계» 절) — 앞서 밀린 것과 합쳐진다.
+need=""
 # 웹 산출물은 git 밖이므로(#2054) 받은 소스로 **여기서** 다시 만든다. 안 만들면 :8080 이 옛 화면을 서빙한다.
-if [ $DEPS_CHANGED -eq 1 ] || ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/ public/styles/ 2>/dev/null; then
-  say "web·의존성 변경 있음 — build:web"
-  build_web
-fi
+git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/ public/styles/ 2>/dev/null || need="$need web"
 # 단독 페이지 번들(public/terminal.js·md.js·page-scrollbar.js)은 build:web 이 안 만든다 — 별 파이프라인(#1313 R51,
 #  scripts/build-standalone.mjs)이다. 종전엔 여기서 안 돌려 **web/standalone/ 변경이 dev 에 영영 안 나갔다**
 #  (#3784 실측 2026-09-09: 터미널 우클릭 메뉴를 stage 에 올렸는데 olddev 의 terminal.js 는 옛 판 그대로).
-if ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/standalone/ scripts/build-standalone.mjs 2>/dev/null; then
-  say "단독 페이지(web/standalone) 변경 있음 — build-standalone"
-  ( cd "$CLONE" && node scripts/build-standalone.mjs >/dev/null 2>&1 ) \
-    || { say "⚠ build-standalone 실패 — terminal.js 등 옛 산출물이 그대로 서빙된다(사람이 봐야 한다)"; exit 1; }
-fi
+git -C "$CLONE" diff --quiet "$local_sha" HEAD -- web/standalone/ scripts/build-standalone.mjs 2>/dev/null || need="$need standalone"
 
 # src/** 가 바뀌었으면 게이트웨이가 새 코드를 들어야 한다. 빌드 실패면 restart-gateway.sh 가 스스로 멈춘다.
 #
@@ -173,14 +233,21 @@ fi
 #  그 캐시는 build-context.mjs 가 **정적 import 하는 것들에도** 걸린다(지금은 `kit/setup/kit-manifest.mjs`).
 #  그래서 경로를 하나씩 세지 않는다 — import 가 하나 늘 때마다 여기가 조용히 낡기 때문이다.
 #  대신 kit/ 전체를 보고 **테스트 파일만 뺀다**: 과잉 재시작은 몇 초로 무해하지만, 누락은 조용한 버그다.
-if [ $DEPS_CHANGED -eq 1 ] || ! git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ kit/ ':(exclude)kit/**/*.test.mjs' 2>/dev/null; then
-  say "src·kit·의존성 변경 있음 — restart-gateway.sh"
-  restart_gateway
-fi
+git -C "$CLONE" diff --quiet "$local_sha" HEAD -- src/ kit/ ':(exclude)kit/**/*.test.mjs' 2>/dev/null || need="$need restart"
+carried="$(pending_list)"
+[ -n "$carried" ] && say "밀린 단계 이어받음 — $carried"
+pending_add $need
 
-code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 localhost:8080/healthz || echo "000")
-write_status synced ""
+# 의존성 먼저 — 웹 빌드가 node_modules 에서 벤더를 복사하므로 빌드보다 앞서야 한다(위 «의존성» 절).
+#  설치가 실패해도 위에 적은 단계는 남는다 — 다음 틱이 설치를 다시 시도하고 이어서 한다.
+sync_deps
+[ $DEPS_CHANGED -eq 1 ] && pending_add web restart
+run_pending
+
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 localhost:8080/healthz 2>/dev/null); [ -n "$code" ] || code="000"
 say "완료 — HEAD ${remote_sha:0:8} · healthz $code"
 # ⚠ healthz 가 200 이 아니면 **동기화는 됐는데 게이트웨이가 못 서고 있다**는 뜻이다. 조용히 넘기지 않는다 —
 #  이 잡이 성공으로 끝나면 아무도 안 본다(로그는 no-op 일 때 비어 있어서 사람이 들여다볼 이유가 없다).
-[ "$code" = "200" ] || { say "⚠ healthz=$code — dev 가 응답하지 않는다(사람이 봐야 한다)"; exit 1; }
+#  상태도 synced 가 아니다(#4814 — 종전엔 synced 를 먼저 쓰고 실패로 끝났다).
+[ "$code" = "200" ] || fail healthz "healthz=$code — dev 가 응답하지 않는다(사람이 봐야 한다)"
+write_status synced ""

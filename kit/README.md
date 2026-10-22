@@ -25,13 +25,13 @@ kit/
 ├─ generator/build-context.mjs   # Core: org-content input → assemble the published artifact + --init/--check
 ├─ hooks/                         # Shared hooks (harness-agnostic) — 5 wired hooks: session-preload · sync-harness-assets · work-flag · stop-writeback-gate
 │                                 #   · run-custom (custom hook runner: fetches and runs org_hook from the gateway every session, never stored on disk, kill-switch)
-│                                 #   + self-update (background self-updater) · usage-report (statusLine) · harness adapters (opencode-plugin.js · antigravity-adapter · grok-adapter)
+│                                 #   + self-update (background self-updater) · usage-report (statusLine) · harness adapters (opencode-plugin.js · antigravity-adapter · grok-adapter · cursor-adapter)
 │                                 #   + shared modules (harness-registry · host-effects-port) — the canonical install list is setup/kit-manifest.mjs
 │                                 #   + settings-hooks.json (PROJECT-DIR template) · test-hooks.sh · examples/ (example org custom hooks)
 ├─ adapters/
 │  ├─ claude/                     # Per-harness uninstaller (uninstall.mjs) + managed example · wiring doc
 │  ├─ codex/                      # Same (the only canonical installer is setup/user-install.mjs — adapter installers were deleted in #1475)
-│  └─ opencode/ · antigravity/ · grok/   # Per-harness uninstallers (uninstall.mjs)
+│  └─ opencode/ · antigravity/ · grok/ · cursor/   # Per-harness uninstallers (uninstall.mjs)
 ├─ template-org/                  # One-time INIT source for new organization content (generic skeleton, nothing Lively-specific)
 ├─ setup/                         # Install engine (user-install.mjs), uninstallers + guides + vendored register-clients.sh
 ├─ aws/                           # AWS credential_process helper (issues short-lived AWS credentials from the gateway)
@@ -62,7 +62,7 @@ node generator/build-context.mjs --org ../<org>-org --install-hooks <dir> [<dir>
 |---|---|
 | `--org <dir>` | Organization content directory (required for publishing/installing hooks). Checks that `org/` exists. |
 | `--publish <dir>` | Target for the published artifact. Idempotent (preserves .git and members/local.md, then reassembles). |
-| `--harness claude\|codex\|opencode\|antigravity\|grok` | Harness settings to emit into the artifact (default claude). Multiple allowed, e.g. `claude,codex`. Harnesses other than claude have no artifact-specific files and are wired by the bundled user-install.mjs, so publish them together with claude. |
+| `--harness claude\|codex\|opencode\|antigravity\|grok\|cursor` | Harness settings to emit into the artifact (default claude). Multiple allowed, e.g. `claude,codex`. Harnesses other than claude have no artifact-specific files and are wired by the bundled user-install.mjs, so publish them together with claude. |
 | `--org-name <name>` | Override the header display name (if omitted: the `org-name:` frontmatter in `org/org-defaults.md` → the first H1 → the directory name). |
 | `--emit-root` | Also generate CLAUDE.md/AGENTS.md at the `--org` root (optional, dogfooding inside the source repo). |
 | `--install-hooks <dir>…` | Non-destructively merge only the PROJECT-DIR hooks into each directory. |
@@ -77,7 +77,7 @@ Override the canonical location of register-clients.sh with the `GATEWAY_DIR` en
 
 ## Delivery = user-level hooks (design doc D2/D3)
 
-The installer (`setup/user-install.mjs`, usually called by `lively install`) installs at the **user level** (`~/.lively/` + per-harness settings: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode, Antigravity, and Grok settings) → members get context + reflexes whichever folder they start in. The working directory doesn't matter.
+The installer (`setup/user-install.mjs`, usually called by `lively install`) installs at the **user level** (`~/.lively/` + per-harness settings: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode, Antigravity, Grok, and Cursor settings) → members get context + reflexes whichever folder they start in. The working directory doesn't matter.
 
 - **Context**: `session-preload` (SessionStart) fetches organization context (`/api/ui/org/preview`) and live status from the gateway and injects them. The fetched context is cached in `~/.lively/context.md` and used as a fallback in sessions that can't reach the gateway (seeded once at install).
 - **Organization assets**: `sync-harness-assets` (SessionStart) downloads the skills, subagents, and commands registered on the gateway into each harness's location (members' own assets are never touched).
@@ -87,4 +87,4 @@ The installer (`setup/user-install.mjs`, usually called by `lively install`) ins
 
 ## Multi-harness (design doc D5)
 
-One shared set of hook scripts; only the settings files are emitted differently per harness. Supports Claude, Codex, OpenCode, Antigravity, and Grok Build (#1475, #1519, #1689, #1701) — per-harness differences are collected in one table, `hooks/harness-registry.mjs`. openclaw/pi are TODO.
+One shared set of hook scripts; only the settings files are emitted differently per harness. Supports Claude, Codex, OpenCode, Antigravity, Grok Build, and Cursor (#1475, #1519, #1689, #1701, #4927) — per-harness differences are collected in one table, `hooks/harness-registry.mjs`. openclaw/pi are TODO.

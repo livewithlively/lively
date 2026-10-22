@@ -11,8 +11,9 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_STORAGE_POLICY, normalizeStoragePolicy, resolveStoragePolicy, storagePolicySource,
-  effectiveStoragePolicy, invalidateStoragePolicyCache,
+  effectiveStoragePolicy, invalidateStoragePolicyCache, diskThresholds,
 } from "./org/policies/storage-policy.js";
+import { FALLBACK_THRESHOLDS } from "./ops/health.js";
 import { rotateFile, sweepLogs } from "./ops/log-janitor.js";
 import { sessionCacheEnv, sharedCacheRoot, safeCacheEnv, homeRelocateEnv, dirSize } from "./ops/build-cache.js";
 
@@ -40,6 +41,37 @@ import { sessionCacheEnv, sharedCacheRoot, safeCacheEnv, homeRelocateEnv, dirSiz
   const flipped = normalizeStoragePolicy({ disk_warn_pct: 90, disk_critical_pct: 80 });
   assert.ok(flipped.disk_warn_pct < flipped.disk_critical_pct, `경고가 위험보다 낮아야: ${JSON.stringify(flipped)}`);
   assert.equal(flipped.disk_warn_pct, 79);
+}
+
+// ── #4780 디스크 위험 판정 여유 바닥 — 기본 5GB · 잡값 · env 시드 · «비율을 직접 정한 곳엔 기본 바닥을 안 붙인다» ──
+{
+  const G = 1024 ** 3;
+  assert.equal(DEFAULT_STORAGE_POLICY.disk_critical_free_gb, 5);
+  // 폴백 판정(DB 다운 · 노드)과 정책 기본값이 같은 판정이어야 한다 — 두 자리가 어긋나면 노드와 서버가 다르게 막는다.
+  assert.deepEqual(diskThresholds(DEFAULT_STORAGE_POLICY), FALLBACK_THRESHOLDS);
+  assert.equal(diskThresholds(resolveStoragePolicy({ disk_critical_free_gb: 2 })).criticalFreeBytes, 2 * G, "GB → 바이트");
+  assert.equal(normalizeStoragePolicy({ disk_critical_free_gb: -3 }).disk_critical_free_gb, 0, "음수는 0(끔)으로");
+  assert.equal(normalizeStoragePolicy({ disk_critical_free_gb: 99999 }).disk_critical_free_gb, 10_000, "상한 클램프");
+  assert.equal(normalizeStoragePolicy({ disk_critical_free_gb: null }).disk_critical_free_gb, 5, "null 은 끔(0)이 아니라 기본값");
+  // 바닥이 생기기 전에 비율을 기본(95)과 다르게 저장해 둔 곳 — 그 비율이 뜻한 대로 사용률만으로 판정한다.
+  assert.equal(resolveStoragePolicy({ disk_critical_pct: 99 }).disk_critical_free_gb, 0, "직접 정한 비율(우리 매니지드 99)엔 기본 바닥을 안 붙인다");
+  assert.equal(resolveStoragePolicy({ disk_critical_pct: 95 }).disk_critical_free_gb, 5, "기본 비율이면 기본 바닥");
+  assert.equal(resolveStoragePolicy({ disk_critical_pct: 99, disk_critical_free_gb: 8 }).disk_critical_free_gb, 8, "바닥을 저장했으면 그 값");
+  assert.equal(normalizeStoragePolicy({ disk_critical_pct: 99, disk_critical_free_gb: 0 }).disk_critical_free_gb, 0);
+  // env 시드 — 노드(사람 컴퓨터)는 DB 가 없어 이것뿐이다.
+  const saved = { pct: process.env.DISK_CRITICAL_PCT, gb: process.env.DISK_CRITICAL_FREE_GB };
+  try {
+    process.env.DISK_CRITICAL_FREE_GB = "3";
+    assert.equal(resolveStoragePolicy(null).disk_critical_free_gb, 3, "env 시드가 먹는다");
+    delete process.env.DISK_CRITICAL_FREE_GB;
+    process.env.DISK_CRITICAL_PCT = "90";
+    assert.equal(resolveStoragePolicy(null).disk_critical_free_gb, 0, "env 로 비율만 정했으면 기본 바닥을 안 붙인다");
+    process.env.DISK_CRITICAL_FREE_GB = "4";
+    assert.equal(resolveStoragePolicy(null).disk_critical_free_gb, 4, "비율과 바닥을 둘 다 정했으면 둘 다 먹는다");
+  } finally {
+    if (saved.pct === undefined) delete process.env.DISK_CRITICAL_PCT; else process.env.DISK_CRITICAL_PCT = saved.pct;
+    if (saved.gb === undefined) delete process.env.DISK_CRITICAL_FREE_GB; else process.env.DISK_CRITICAL_FREE_GB = saved.gb;
+  }
 }
 
 // ── 캐시: DB 가 죽어도 정책을 낸다 (readyz 가 가장 필요한 순간이 DB 다운이다) ──
@@ -181,4 +213,4 @@ import { sessionCacheEnv, sharedCacheRoot, safeCacheEnv, homeRelocateEnv, dirSiz
   await fsp.rm(dir, { recursive: true, force: true });
 }
 
-console.log("storage-policy.test.ts ok — 관리탭 값 우선 · DB 다운에도 정책 응답 · copytruncate(inode 유지) · keep 초과 삭제 · 공유캐시 기본 안전(홈 이전 opt-in) · dirSize 예산/심링크");
+console.log("storage-policy.test.ts ok — 관리탭 값 우선 · 디스크 여유 바닥 기본 5GB(직접 정한 비율은 존중) · DB 다운에도 정책 응답 · copytruncate(inode 유지) · keep 초과 삭제 · 공유캐시 기본 안전(홈 이전 opt-in) · dirSize 예산/심링크");

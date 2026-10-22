@@ -263,6 +263,10 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const faces = await viewerFaces(id);
     pushViewers(id, faces);
     await markSessionSeen(id);
+    //  #4783 — 꺼진 세션이면 tmux 도장은 갈 곳이 없다(위 줄은 조용히 넘어간다). 대신 장부의 «안 본 결과가 남은 채 꺼졌다» 표시를 걷는다 —
+    //   화면이 꺼진 세션을 «작업 완료» 로 그리는 근거라, 열어 본 뒤에도 남으면 초록점이 영영 안 꺼진다. 살아 있는 세션엔 해당 행이 없어 아무 일도 없다.
+    const { markSessionEndSeen } = await import("../sessions/session-state.js");
+    await markSessionEndSeen(id).catch(() => false);
     res.json({ ok: true, applied: true, viewers: faces });
   }));
 
@@ -287,9 +291,13 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const id = String(req.params.id ?? "");
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
     await gateRead(id, req);
-    const { listOutbox } = await import("../sessions/session-outbox.js");
+    //  #4819 — 15초 창이 «미확인» 이라고만 한 말은 기록과 다시 대조해, 이미 들어가 있으면 빼고 준다. 안 그러면 답까지 끝난 말이
+    //   회수 뒤 다시 열 때 «보냈지만 세션 기록에서 확인되지 않았어요» 로 맨 아래에 또 그려진다(outbox-late-echo.ts 머리말).
+    //   ⚠ 그래서 이 GET 은 행을 고쳐 쓴다('delivered·echo-late') — 기록에서 도출되고 멱등이며, 읽는 사람도 같은 기록을 볼 수 있다.
+    //   대조는 2초까지만 기다리고 나머지는 뒤에서 마저 한다(3초 폴링이 중계 정체에 묶이지 않게).
+    const { listOutboxReconciled } = await import("../sessions/outbox-late-echo.js");
     res.setHeader("Cache-Control", "no-store");
-    res.json({ items: await listOutbox(id) });
+    res.json({ items: await listOutboxReconciled(id) });
   }));
   //  재시도·삭제는 **보내기와 동급 게이트**(canAttach) — 큐를 움직이는 건 세션에 입력하는 것과 같은 행동이다.
   app.post("/api/ui/terminal/sessions/:id/outbox/:oid/retry", auth, wrap(async (req, res) => {

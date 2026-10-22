@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   INBOX_HIDDEN_KINDS, NOTIFY_DEDUPE_COOLDOWN_MS, NOTIFY_KINDS, NOTIFY_TITLE_MAX,
   decideNotifyAllowed, inInbox, normalizeActor, normalizeKind, normalizeNotification, normalizeScope, pickAwaitingTransitions, safeHref, shouldSuppressDuplicate,
+  NOTIFY_APP_ID_RE, isAppMutedByMember, normalizeAppMutes,
 } from "./notify-policy.js";
 
 const allow = (patch: Partial<Parameters<typeof decideNotifyAllowed>[0]> = {}) =>
@@ -272,6 +273,40 @@ test("N27 빌트인이어도 권한 선언이 없으면 거부한다 — 빌트�
 
 // ── E. 종류(kind)와 렌즈(scope) — #4180 「확인할 것」에서 세션 알림을 뺀다 ──
 //  회의(2026-09-21): 세션 대기·완료 알림은 확인할 것에서 빼고, 댓글·언급·리브의 답·앱 알림만 남긴다. 배너는 전부 본다.
+
+// ── M. 사람이 앱마다 끈 알림(#4769) — 사양 표 M1~M6(스크래치 spec-notify-recent.md) ──
+
+test("M1 ★ 저장할 꼴 — false 인 앱 id 만 남긴다(true · 글자 · 앱 id 꼴이 아닌 키는 버린다)", () => {
+  assert.deepEqual(normalizeAppMutes({ talk: false, memo: true, "Bad Id": false, x: "no", " deck ": false }), { talk: false, deck: false });
+});
+
+test("M2 객체가 아니면 빈 표 — null · 글자 · 배열 · 없음", () => {
+  for (const v of [null, undefined, "talk", ["talk"], 7]) assert.deepEqual(normalizeAppMutes(v), {});
+});
+
+test("M3 ★ 끈 앱이면 true", () => {
+  assert.equal(isAppMutedByMember({ talk: false }, "talk"), true);
+});
+
+test("M4 다른 앱 · 빈 표 · 표 없음은 안 끈 것", () => {
+  assert.equal(isAppMutedByMember({ talk: false }, "memo"), false);
+  assert.equal(isAppMutedByMember({}, "talk"), false);
+  assert.equal(isAppMutedByMember(null, "talk"), false);
+  assert.equal(isAppMutedByMember(undefined, "talk"), false);
+  assert.equal(isAppMutedByMember({ talk: true }, "talk"), false);
+});
+
+test("M5 ★ 빌트인(제품 자신)은 앱 끔에 걸리지 않는다 — 종류 토글이 맡는다", () => {
+  assert.equal(isAppMutedByMember({ "ai-session": false }, "ai-session", true), false);
+});
+
+test("M6 앱 id 경계 — 64자 통과 · 65자 거부 · 대문자 · 첫 글자 하이픈 거부", () => {
+  assert.equal(NOTIFY_APP_ID_RE.test("a".repeat(64)), true);
+  assert.equal(NOTIFY_APP_ID_RE.test("a".repeat(65)), false);
+  assert.equal(NOTIFY_APP_ID_RE.test("Talk"), false);
+  assert.equal(NOTIFY_APP_ID_RE.test("-talk"), false);
+  assert.deepEqual(normalizeAppMutes({ ["b".repeat(64)]: false, ["c".repeat(65)]: false }), { ["b".repeat(64)]: false });
+});
 
 test("K1 세션 알림만 「확인할 것」에서 빠진다 — 댓글·언급·리브·앱은 선다", () => {
   assert.deepEqual([...INBOX_HIDDEN_KINDS], ["session"]);

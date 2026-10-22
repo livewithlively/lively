@@ -276,12 +276,19 @@ function dashFolderBrowser(root, startPath) {
     upDropZone(ov || container, hi || container, (items, emptyDirs) => uploadItems(items, emptyDirs));
   }, 0);
 
+  //  지우거나 이름을 바꾸려던 항목이 그새 사라졌으면 서버는 404(#4847 — 없는 대상 = 못 보는 자리와 같은 답)다. 낡은 줄을 남기지 않게 목록을 다시 읽는다.
+  const goneReload = async (e: any): Promise<boolean> => {
+    if (!e || e.status !== 404) return false;
+    toast('이미 없는 항목이에요 — 목록을 새로 읽었어요');
+    await load();
+    return true;
+  };
   const renameItem = async (name) => {
     const to = (prompt('새 이름', name) || '').trim();
     if (!to || to === name) return;
     setBusy(true);
     try { await api('/api/ui/terminal/browse/rename?' + qp(relOf(name)) + '&to=' + encodeURIComponent(to), { method: 'POST' }); await load(); }
-    catch (e) { toast('이름 변경 실패 — ' + e.message, true); setBusy(false); }
+    catch (e) { if (await goneReload(e)) return; toast('이름 변경 실패 — ' + e.message, true); setBusy(false); }
   };
   const deleteItem = async (name, isDir) => {
     //  #3778 — 서버가 자료로 등록된 파일을 숨김 자리에 보관한다(휴지통 ▸ 자료 탭에서 되살린다). 그 밖(압축·영상·빈 폴더)은 종전대로
@@ -295,7 +302,7 @@ function dashFolderBrowser(root, startPath) {
       toast(kept ? '휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요' + (isDir ? ` (자료 ${kept}건)` : '') : '삭제했어요');
       await load();
     }
-    catch (e) { toast('삭제 실패 — ' + e.message, true); setBusy(false); }
+    catch (e) { if (await goneReload(e)) return; toast('삭제 실패 — ' + e.message, true); setBusy(false); }
   };
   const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);
 
@@ -304,7 +311,7 @@ function dashFolderBrowser(root, startPath) {
   //   종전엔 이 함수와 프로젝트 파일 뷰어(projects/files-cards.openFileViewer)가 각자 판정을 갖고 있어 같은 파일이
   //   화면마다 다르게 열렸다 — .csv 는 여기선 표·저기선 원문, .mp4 는 여기선 재생·저기선 '미지원', .md 편집은
   //   저기만 가능. 여기는 이제 '어디에 놓을지(제자리 전환)'와 '버튼 모양'만 정한다.
-  //  이 화면이 새로 얻은 것: **md·텍스트 편집·저장**(프로젝트 모달의 장점) + [⛶ 전체화면].
+  //  이 화면이 새로 얻은 것: **md·텍스트 편집·저장**(프로젝트 모달의 장점) + [↗ 자료 보기](#4672 — 자료 보기 화면을 새 탭으로).
   // 편집 저장 — browse 업로드(PUT)와 같은 라우트(파일 바이트라 JSON api() 를 쓰지 않는다).
   //  이 루트는 셸(터미널)로 이미 rw 라 UI 편집이 새 권한경계를 열지 않는다 — browse CRUD 를 연 것과 같은 근거.
   const browsePutFile = (url: string, text: string): Promise<Response> => {
@@ -323,10 +330,10 @@ function dashFolderBrowser(root, startPath) {
       el('span', { class: 'dash-fb-spacer' }));
     const stage = el('div', { class: 'dash-fp-stage' }, el('div', { class: 'dash-fp-load' }, skeleton('불러오는 중')));
     container.replaceChildren(bar, stage);
-    // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
-    //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 전체페이지가 맡는다.
+    // ↗ 자료 보기 — 같은 파일을 자료 보기 화면(#/f, #4672)으로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
+    //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 자료 보기 화면이 맡는다.
     const fullBtn = el('a', { class: 'dash-fb-btn', href: fileLinkUrl(root, rel), target: '_blank', rel: 'noopener',
-      title: '전체화면(새 탭)으로 열기', text: '⛶ 전체화면' });
+      title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' });
     let out;
     try {
       out = await buildFilePreview({

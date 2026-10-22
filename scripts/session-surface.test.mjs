@@ -142,9 +142,26 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
     "㉚-b ★ 코덱스는 app-server·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
   ok(/const chatHome = \(\): boolean => livKickoff\(\) \|\| livChat\(\) \|\| !!opts\.chatHome/.test(chat),
     "㉚-c 리브 세션·명시 요청은 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
+  //  ㉚-d #4632 앱빌더 시험 세션은 터미널로 바로 열린다(원준 2026-10-16 «그냥 한 방에 터미널로») — 대화 겹으로 바꿔 보면 앱빌더가 넣은 첫 지시는
+  //   사람 말로 그리지 않는다(«이거 안보여줄 수는 없나?»): 라이브(applyLine) · 되그리기(older) · 낙관 첫 말 · 되감기 넷 다.
+  ok(!/trySess\(\)/.test(chat), "㉚-d 시험 세션을 대화 보기로 붙잡지 않는다(터미널이 본자리)");
+  ok(/if \(isHiddenBrief\(text\)\) \{ cur = newRec\(null, o\.timestamp\); running = true; return; \}/.test(chat)
+    && /if \(isHiddenBrief\(ut\)\) \{ b = \{ text: null,/.test(chat)
+    && /opts\.firstPrompt && !isHiddenBrief\(String\(opts\.firstPrompt\)\)/.test(chat),
+    "㉚-d 시험 세션의 첫 지시는 라이브 · 되그리기 · 낙관 첫 말 어디서도 말풍선이 되지 않는다");
+  {
+    const trail = readFileSync(join(root, "web/session-trail.ts"), "utf8");
+    //  #4850 — 되감기의 제외 규칙(끊김·이어 가기·주입·시험 세션 첫 지시)을 notHumanSay 한 벌로 모았다(사람 말 줄 · 끼워 넣은 말 두 가지가 같이 쓴다).
+    ok(/export const isHiddenBrief = \(t: string\): boolean => isTrySessionTitle\(t\);/.test(trail)
+      && /export const notHumanSay = \(t: string\): boolean => [^\n]*\|\| isHiddenBrief\(t\);/.test(trail)
+      && /if \(o\.isMeta \|\| !text\.trim\(\) \|\| notHumanSay\(text\)\) continue;/.test(trail)
+      && /if \(!notHumanSay\(q\.text\)\) trailSay\(/.test(trail),
+      "㉚-d 되감기(발자취)도 시험 세션의 첫 지시를 사람 말로 세우지 않는다 — 판정은 시험 세션 첫 지시 머리(lib/builder-flow TRY_TITLE_RE)");
+  }
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
   //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
-  ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),
+  //  #4794 — 첫 화면 판정이 chatFirstView 로 꺼내졌다(그 뒤 «말을 보낸 직후» 가 붙는다). 그 축이 여전히 chatHome() 에서 시작하는지 잰다.
+  ok(/const chatFirstView = chatHome\(\)[^;\n]{0,80};[\s\S]{0,600}setMode\(chatFirstView[^;\n]{0,40}\? 'chat' : 'term'\)/.test(chat),
     "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
   ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\)/.test(chat),
     "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");

@@ -43,3 +43,11 @@ export function isLoginSessRow(r: LoginRowLike | null | undefined): boolean {
 export function isSpentLoginSess(r: LoginRowLike | null | undefined, alive: boolean): boolean {
   return !alive && isLoginSessRow(r);
 }
+
+/**
+ * 수집 실행 세션인가(#4213 T11) — 서버가 수집 러너 한 판을 돌리려고 연 세션이다(종류 collect). 판이 러너 하나라 사람이 들어가
+ *  볼 화면이 없고, 끝나면 서버가 바로 지운다. 그래서 도는 중이든 끝났든 목록에 세우지 않는다. 종류는 서버만 붙인다(요청으로 못 만든다).
+ */
+export function isCollectSessRow(r: LoginRowLike | null | undefined): boolean {
+  return String(r?.kind || '').trim().toLowerCase() === 'collect';
+}

@@ -116,7 +116,8 @@ if (L && P && F) {
 }
 
 // ───────────────────────── W. 배선 ─────────────────────────
-const VIEWS = code(read("web/v2/views.ts")), MAIN = code(read("web/v2/main.ts")), SIDE = code(read("web/v2/side.ts"));
+// #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다) — 둘을 함께 본다.
+const VIEWS = code(read("web/v2/views.ts") + "\n" + read("web/v2/sess-merge.ts")), MAIN = code(read("web/v2/main.ts")), SIDE = code(read("web/v2/side.ts"));
 ok(/projectId: r\.projectId \? Number\(r\.projectId\) : null,\s*task: taskMarkOf\(r\.task\),/.test(VIEWS) && !/standingProjectId/.test(VIEWS),
   "W1 ★★ 세션을 짤 때 표식만 읽는다 — **소속(projectId)은 서버가 준 그대로다**(파생값으로 덮으면 보관 · 휴지통이 워커를 건드린다)");
 ok(/placeLivWork\(sessions, new Set\(projects\.map\(\(p\) => Number\(p\.id\)\)\)\);/.test(MAIN)

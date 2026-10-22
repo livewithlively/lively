@@ -72,7 +72,8 @@ t("P5 중복 방지 4요소 — 새 name 재저장·배치 분할이 같은 지�
     const c = String(p.criteria_md ?? "");
     assert.match(c, /knowledge_similar/, `${key}: 저장 전 유사 확인 규약이 없다`);
     assert.match(c, /같은 name/, `${key}: '같은 name 으로 갱신' 규약이 없다`);
-    assert.match(c, /source_link_knowledge/, `${key}: 자료 링크 규약이 없다`);
+    //  #4824 — 자료 연결은 knowledge_save 의 derived_from 한 번에(두 번 호출은 둘째를 빠뜨리면 잠긴 자료로 만든 지식이 공개로 남는다).
+    assert.match(c, /derived_from:\[이 지식이 나온 자료 id 전부\]/, `${key}: 자료 링크 규약(knowledge_save derived_from)이 없다`);
     assert.match(c, /서브에이전트로 쪼개지 마라/, `${key}: 배치 분할 금지가 없다`);
   }
 });

@@ -5,6 +5,7 @@ import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 // 저장소·로그(#813) — 관리탭이 박스 디스크·로그를 보는 창구(고객 박스엔 우리가 SSH 로 못 들어간다).
 import { checkDisks } from "../../ops/health.js";
+import { diskThresholds } from "../../org/policies/storage-policy.js";
 import { listLogs } from "../../ops/log-janitor.js";
 import { stateRoot, logRoot } from "../../ops/state-dir.js";
 import { roots as terminalRoots, sharedRoot as terminalSharedRoot, listSessionsRaw } from "../../terminal/terminal-sessions.js";
@@ -102,7 +103,7 @@ export const boxStatusCapabilities: Capability[] = [
       const p = cfg.storage_policy;
       const disks = await checkDisks(
         [stateRoot(), logRoot(), ...terminalRoots().map((r) => r.base)],
-        { warnPct: p.disk_warn_pct, criticalPct: p.disk_critical_pct },
+        diskThresholds(p),
       );
       const files = await listLogs(logRoot());
       // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).

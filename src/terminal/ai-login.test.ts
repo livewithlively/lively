@@ -114,7 +114,8 @@ t("⑥b 결정 지점(리브 킥오프)은 **정확한** 사실을 쓴다 — �
   //   화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 열어 주지 않는다.
   const kick = WELCOME.slice(WELCOME.indexOf("export async function kickoffLivAfterWelcome"));
   assert.match(kick, /memberUsableHarnesses/, "킥오프 게이트가 프로브까지 본 사실을 쓰지 않는다");
-  assert.match(kick, /planLivKickoff\(o\.priorSession, usable\)/, "게이트에 넘기는 값이 그 사실이 아니다");
+  //  (#4213 T13) 세 번째 인자는 «원하는 하네스»(claude 먼저)일 뿐 — 로그인 목록은 그대로 그 사실이다.
+  assert.match(kick, /planLivKickoff\(o\.priorSession, usable(?:, "claude")?\)/, "게이트에 넘기는 값이 그 사실이 아니다");
   assert.match(kick, /aiHarnesses: usable/, "1턴 프롬프트가 게이트와 다른 사실을 본다");
 });
 

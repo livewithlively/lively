@@ -46,10 +46,23 @@ export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "
 export const NOTIFY_TOOL = "app_notify";
 /** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */
 export const CHAT_SEND_TOOL = "app_chat_send";
+/** #4482 앱 주소 iframe 에 선언으로만 위임하는 장치 권한(권한 정책 이름 그대로). */
+export const APP_DEVICES = ["microphone", "camera", "clipboard-read", "geolocation"] as const;
+export type AppDevice = (typeof APP_DEVICES)[number];
 /** #4592 — 「붙은 세션의 프로젝트 자료에서 파일 읽기」 권한(permissions.project_files)이 함의하는 능력 이름. 앱 화면의 lively.files 가 이 도구를 grant 에서 찾는다. */
 export const PROJECT_FILES_TOOL = "app_project_files";
 /** #4629 — 「전체 자료에서 파일 읽기」 권한(permissions.workspace_files)이 함의하는 능력 이름. lively.files 의 scope 'all' 이 이 도구를 grant 에서 찾는다. */
 export const WORKSPACE_FILES_TOOL = "app_workspace_files";
+/** #4673 — 「이 앱의 앱 폴더에 파일을 올리고 받기」 권한(permissions.app_folder)이 함의하는 능력 이름. 앱 주체가 file_url 로 제 앱 폴더(apps/<앱>/…)의 서명 주소를 받는다. */
+export const FILE_URL_TOOL = "file_url";
+/** #4488 — 「AI 실행」 권한(permissions.ai_runs)이 함의하는 능력 이름들(capabilities/ai-runs.ts AI_RUN_TOOLS 와 같은 글자). 앱 주소 /_lively/ai/* · lively.ai.* 가 이 도구를 grant 에서 찾는다. */
+export const AI_RUN_TOOLS = ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"] as const;
+export const AI_RUN_TOOL = AI_RUN_TOOLS[0];
+/**
+ * #4486 — 서버를 선언한 앱(web.server)이 함의하는 «백그라운드 작업» 도구들(capabilities/app-jobs.ts 와 같은 글자). 앱 서버 SDK livelyJobs() · 앱 주소 /_lively/jobs ·
+ *  lively.jobs.* 가 이 도구를 grant 에서 찾는다. 작업은 그 앱의 서버 코드를 그 사람 이름으로 뒤에서(15분까지) 돌리는 것이라 동의 창에 «백그라운드 작업» 줄로 보인다.
+ */
+export const APP_JOB_TOOLS = ["app_job_start", "app_job_get", "app_jobs", "app_job_cancel"] as const;
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -92,7 +105,22 @@ const permissionsSchema = z.object({
   //  project_files 보다 넓은 능력이라 **따로** 선언하고 따로 동의받는다(app_workspace_files) — 붙은 세션의 프로젝트 밖 파일이 앱으로 들어온다.
   //  읽기뿐이고, 여전히 세션에 붙은 앱 화면에서만 · 프로젝트 공개 범위 안에서만 닿는다(apps/app-project-files.ts).
   workspace_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
+  // #4673 — 이 앱(화면 · 서버)이 **제 앱 폴더**(워크스페이스 apps/<앱>/)에 파일을 올리고 받을 수 있나. 기본 false(fail-closed).
+  //  그 사람 이름으로 워크스페이스 저장소에 쓰는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 file_url 이 있어야 한다
+  //  (files/file-access.ts). 남의 앱 폴더 · 공유 폴더는 이 선언으로 열리지 않는다(프로젝트 파일 읽기는 project_files 그대로).
+  app_folder: z.boolean().default(false),
+  // #4488 — 이 앱이 **AI 를 실행**할 수 있나(/_lively/ai/runs · lively.ai.run). 기본 false(fail-closed). 워크스페이스 API 키의 돈을 쓰거나 그 사람 구독으로 작업을
+  //  돌리는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_ai_run 이 있어야 한다(ai-runs/service · 동의 창 web/v2/app-session.ts).
+  ai_runs: z.boolean().default(false),
 }).strict();
+
+// #4488 — AI 를 쓰는 작업 선언(ai.jobs). 이름으로 선언해 두면 워크스페이스 관리 도구(app_ai_account_set)에서 작업별 실행 계정을 따로 걸 수 있다(설계 §12 ④ 조건 ④).
+const aiJobSchema = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "ai.jobs[].name 은 소문자·숫자·_·- 1~64자"),
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+}).strict();
+const aiSchema = z.object({ jobs: z.array(aiJobSchema).max(32).default([]) }).passthrough().optional();
 
 const uiPageSchema = z.object({
   key: slugSchema,
@@ -222,7 +250,14 @@ export const SUPPORTED_MANIFEST_SCHEMA = 1;
 //   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
 //   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
 //   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
-export const appManifestSchema = z.object({
+export // #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
+const appIconSchema = z.object({
+  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB"),
+  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").optional(),
+}).strict().optional();
+
+const appManifestSchema = z.object({
   // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
   //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
   $schema: z.string().max(500).optional(),
@@ -252,7 +287,14 @@ export const appManifestSchema = z.object({
   //   ★ 최상위 칸에 둔다(ui 안이 아니라) — ui 는 strict 라, 이 칸을 모르는 옛 코어로 되돌리면 여러 파일 앱의 매니페스트를 아예 못 읽는다.
   //    최상위는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다(그 앱을 화면 한 장 앱으로 본다 — 격리 리뷰 롤백 메모).
   //    web 안도 같은 까닭으로 passthrough — 다음 단계(v2-5 서버 등)가 web 에 칸을 더한 뒤 이 코어로 되돌려도 읽힌다.
-  web: z.object({ root: z.string().min(1).max(512).optional() }).passthrough().optional(),
+  //  #4482 앱 v2-3 — 앱 주소 iframe 에 넘길 장치 권한(web.devices). 선언한 앱의 iframe 에만 `allow` 로 위임한다(상민님 2026-10-16 «선언한 앱만»):
+  //   크롬 · 파이어폭스는 iframe 의 권한을 **맨 위 사이트(워크스페이스 주소) 이름**으로 받고 한 번 허용하면 같은 워크스페이스의 다른 앱 iframe 도
+  //   다시 묻지 않고 쓴다 — 늘 위임하면 한 앱에 준 마이크를 다른 앱이 몰래 쓴다. 클립보드 쓰기 · 전체 화면 · 공유는 늘 위임한다(사람이 누를 때만 돈다).
+  //   permissions(strict)가 아니라 web(passthrough)에 두는 까닭은 web.root 와 같다 — 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
+  web: z.object({
+    root: z.string().min(1).max(512).optional(),
+    devices: z.array(z.enum(APP_DEVICES)).max(APP_DEVICES.length).optional(),
+  }).passthrough().optional(),
   // 실행 인스턴스 정책. 기존 v1 앱은 optional+multiple 로 해석해 무회귀.
   instances: instancesSchema,
   // builtin/system app 만 소비하는 셸 renderer 선언. 설치 파서는 보존하고 실행 경계가 source.kind 로 제한한다.
@@ -263,9 +305,37 @@ export const appManifestSchema = z.object({
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
   agent: agentSchema,
+  //  #4769 앱 아이콘 — 구성원이 만든 앱도 제 그림을 갖는다. 24 격자 선 그림(path d)과 색 둘(라이트 · 다크). 선언이 없으면
+  //   화면이 있는 앱은 liv, 없는 앱은 term(web/v2/glass-icon.ts builtinAppIcon). 최상위 passthrough 라 이 칸을 모르는 옛 코어도 읽는다.
+  icon: appIconSchema,
+  //  #4488 AI 실행 작업 선언 — 최상위 passthrough 라 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
+  ai: aiSchema,
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/** #4769 앱 아이콘 선언 — 화면(SVG · CSS)에 그대로 들어가므로 글자를 좁게 받는다. path 는 SVG path 명령 · 숫자 · 구분자만, 색은 #RRGGBB. */
+export const APP_ICON_PATH_RE = /^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]{1,2000}$/;
+export const APP_ICON_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export interface AppIconSpec { path: string; color: string; color_dark?: string }
+/** 저장된 매니페스트에서 아이콘 선언을 읽는다 — 모양이 틀리면 null(화면은 기본 그림). 던지지 않는다. */
+export function appIconSpecOf(manifest: unknown): AppIconSpec | null {
+  const raw = (manifest as { icon?: unknown } | null)?.icon;
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const path = typeof o.path === "string" ? o.path.trim() : "";
+  const color = typeof o.color === "string" ? o.color.trim() : "";
+  const dark = typeof o.color_dark === "string" ? o.color_dark.trim() : "";
+  if (!APP_ICON_PATH_RE.test(path) || !APP_ICON_COLOR_RE.test(color)) return null;
+  return dark && APP_ICON_COLOR_RE.test(dark) ? { path, color, color_dark: dark } : { path, color };
+}
+
+/** 선언한 장치 권한(중복 · 모르는 값은 버린다). 저장된 매니페스트를 읽는 자리라 던지지 않는다. */
+export function webDevicesOf(manifest: unknown): AppDevice[] {
+  const raw = (manifest as { web?: { devices?: unknown } } | null)?.web?.devices;
+  if (!Array.isArray(raw)) return [];
+  return APP_DEVICES.filter((d) => raw.includes(d));
+}
 
 /**
  * #4481 여러 파일 앱의 화면 폴더 — 패키지 기준 정규 상대경로(맨 위면 ""). v1 앱(web.root 없음)이면 null. 모양이 틀리면 null(설치 관문은
@@ -326,6 +396,20 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   // #4629 — `workspace_files: ["html"]` 은 `app_workspace_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「전체 자료에서 파일 읽기」).
   if (m.permissions.workspace_files.length && !m.permissions.tools.includes(WORKSPACE_FILES_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, WORKSPACE_FILES_TOOL];
+  }
+  // #4673 — `app_folder: true` 는 `file_url` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「앱 폴더에 파일을 올리고 받기」).
+  // #4488 — `ai_runs: true` 는 AI 실행 도구 다섯을 함의한다(사람에게 보이는 권한은 「AI 실행」, 도구 이름은 배관).
+  if (m.permissions.ai_runs) {
+    for (const t of AI_RUN_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
+  }
+  if (m.permissions.app_folder && !m.permissions.tools.includes(FILE_URL_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, FILE_URL_TOOL];
+  }
+  // #4486 — 서버를 선언한 앱(web.server 가 객체이거나 true — apps/app-server-config.ts serverDeclOf 와 같은 판정)은 백그라운드 작업 도구 넷을 함의한다
+  //  (사람에게 보이는 권한은 「백그라운드 작업」 — 그 앱의 서버 코드를 내 이름으로 뒤에서 돌리기). web 은 passthrough 라 원문을 본다.
+  const srv = (m as { web?: { server?: unknown } }).web?.server;
+  if (srv === true || (!!srv && typeof srv === "object" && !Array.isArray(srv))) {
+    for (const t of APP_JOB_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

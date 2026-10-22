@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const mod = join(root, "public/app/lib/builder-flow.js");
+//  BUILDER_FLOW_JS — 다른 빌드(fail-first · 옛 트리)를 물릴 때. 없으면 이 트리의 빌드.
+const mod = process.env.BUILDER_FLOW_JS || join(root, "public/app/lib/builder-flow.js");
 if (!existsSync(mod)) { console.log("builder-flow: 빌드 없음(public/app/lib/builder-flow.js) — 건너뜀"); process.exit(0); }
 const F = await import(mod);
 
@@ -49,12 +50,37 @@ check(true, "R3 짓고 다시 읽으면 같다(왕복)");
 const T = (view, how = "edit") => F.builderTabTitle({ view, id: "m", how });
 check(T("list") === "앱빌더" && T("new") === "앱빌더 · 새 앱" && T("resume") === "앱빌더 · 이어서" && T("app") === "앱빌더 · 고치기" && T("app", "copy") === "앱빌더 · 사본", "R4 탭 이름 다섯");
 
+// ── 앱빌더 사이드바(#4632 원준 2026-10-17 «앱 빌더의 사이드바도 기획해줘») — 고른 카드도 주소에 · 켜진 줄 · 짧은 단계. 엣지 표: 스크래치패드 spec-side-owner.md C ──
+check(JSON.stringify(F.parseBuilderRoute(["builder"], q({ sel: "memo" }))) === JSON.stringify({ view: "list", id: "memo", how: "edit" })
+  && F.parseBuilderRoute(["builder"], q({ sel: "  memo " })).id === "memo" && F.parseBuilderRoute(["builder"], q({ sel: "" })).id === "", "R5 목록의 고른 카드는 ?sel= — 앞뒤 공백은 떼고 빈 값은 고른 것 없음");
+check(F.parseBuilderRoute(["builder", "new"], q({ sel: "x" })).id === "" && F.parseBuilderRoute(["builder", "zzz"], q({ sel: "x" })).id === "", "R6 목록이 아닌 칸 · 모르는 칸에 붙은 sel 은 고른 것이 아니다");
+{
+  const back = (r) => { const [path, qs] = r.replace(/^#\//, "").split("?"); return F.parseBuilderRoute(path.split("/"), q(qs ? Object.fromEntries(new URLSearchParams(qs)) : {})); };
+  check(F.builderRoute("list", "memo") === "#/builder?sel=memo" && back(F.builderRoute("list", "memo")).id === "memo" && back(F.builderRoute("list", "draft:box-1")).id === "draft:box-1"
+    && F.builderRoute("list", "") === "#/builder", "R7 고른 카드 주소 짓기 ↔ 읽기 왕복(앱 · 만들던 앱 «draft:<세션>») · 빈 값은 맨 목록");
+}
+const K = (view, id = "", how = "edit") => F.builderSideKey({ view, id, how });
+check(K("new") === "new" && K("resume", "box-1") === "draft:box-1" && K("app", "memo") === "app:memo" && K("app", "memo", "copy") === "app:memo", "R8 켜질 줄 — 새 앱 · 이어서 = 그 만들던 앱 · 고치기 · 사본 = 그 앱");
+check(K("list") === "all" && K("list", "memo") === "app:memo" && K("list", "draft:box-1") === "draft:box-1", "R9 목록 — 고른 것 없으면 「모든 앱」 · 고른 앱 · 고른 만들던 앱");
+const H = (h) => F.parseBuilderHash(h);
+check(H("#/sources") === null && H("") === null && H(null) === null && H("#/") === null, "R10 앱빌더 주소가 아니면 null");
+check(JSON.stringify(H("#/builder/s/box%201")) === JSON.stringify({ view: "resume", id: "box 1", how: "edit" }) && H("#builder").view === "list"
+  && H("#/builder?sel=a").id === "a" && JSON.stringify(H("#/builder/app/m?how=copy")) === JSON.stringify({ view: "app", id: "m", how: "copy" }), "R11 주소 한 줄 읽기 — 이어서(디코드) · 슬래시 없는 꼴 · 고른 카드 · 사본");
+check(F.draftStageShort("put", true, true) === "다 만듦" && F.draftStageShort("plan", false, false) === "② 기획" && F.draftStageShort("draft", false, false) === "③ 시안"
+  && F.draftStageShort("fix", true, false) === "③ 시안" && F.draftStageShort("draft", true, false) === "③ 시안" && F.draftStageShort("check", true, false) === "④ 확인"
+  && F.draftStageShort("put", true, false) === "⑤ 넣기" && F.draftStageShort("zzz", true, false) === "③ 시안", "R12 사이드바 줄의 짧은 단계 — 긴 글(draftStageText)과 같은 번호");
+{
+  let threw = null; let w1 = null, w2 = null;
+  try { w1 = F.parseBuilderHash("#/builder/s/%"); w2 = F.parseBuilderHash("#/builder/app/%E0%A4%A"); } catch (e) { threw = String(e); }
+  check(threw === null && w1 && w1.view === "resume" && w1.id === "%" && w2 && w2.view === "app" && w2.id === "%E0%A4%A", "R13 틀린 %-꼴에도 던지지 않고 그대로 읽는다(사이드바가 그리기마다 읽는다)", threw || [w1, w2]);
+}
+
 // ── 만들던 앱 상태 글 ──
 //  다섯 단계(원준 2026-10-14 «생성된 시안과 고치기는 하나의 과정») — 속 단계 draft · fix 는 사람에게 같은 ③.
 check(F.draftStageText("plan", false, false) === "② 세부 기획 정하기" && F.draftStageText("draft", false, false) === "③ 시안 만드는 중", "D1 앱이 아직 없으면 ②, 첫 판을 만드는 중이면 ③ 만드는 중");
-check(F.draftStageText("draft", true, false) === "③ 시안 확인 · 고치기" && F.draftStageText("fix", true, false) === "③ 시안 확인 · 고치기" && F.draftStageText("check", true, false) === "④ 확인" && F.draftStageText("put", true, false) === "⑤ 넣기", "D2 앱이 있으면 그 단계 — draft 와 fix 는 같은 ③ · 확인 ④ · 넣기 ⑤");
+check(F.draftStageText("draft", true, false) === "③ 시안 확인 · 수정" && F.draftStageText("fix", true, false) === "③ 시안 확인 · 수정" && F.draftStageText("check", true, false) === "④ 확인" && F.draftStageText("put", true, false) === "⑤ 넣기", "D2 앱이 있으면 그 단계 — draft 와 fix 는 같은 ③ · 확인 ④ · 넣기 ⑤");
 check(F.draftStageText("put", true, true) === "다 만든 앱 · 이어서 고치기" && F.draftStageText("fix", false, true) === "다 만든 앱 · 이어서 고치기", "D3 다 만든 것은 단계와 무관");
-check(F.draftStageText("zzz", true, false) === "③ 시안 확인 · 고치기", "D4 모르는 단계(앱 있음)는 ③ 으로");
+check(F.draftStageText("zzz", true, false) === "③ 시안 확인 · 수정", "D4 모르는 단계(앱 있음)는 ③ 으로");
 check(!/④ 고치기|⑥/.test([F.draftStageText("fix", true, false), F.draftStageText("put", true, false), F.draftStageText("zzz", true, false)].join(" ")), "D5 옛 여섯 단계 글(④ 고치기 · ⑥)은 어디에도 없다");
 
 // ── 만드는 중인 앱(원준 2026-10-15 «끝까지 안 만들었는데 왜 먼저 앱으로 나와») — 앱 찾기와 앱빌더가 같은 자로 잰다 ──
@@ -108,6 +134,22 @@ check(F.isTrySession(F.trySessionLabel("회의록")) && F.isTrySession(F.trySess
   check(F.isTrySessionRow(logRow) && F.isTrySessionRow({ label: '"회의록" 앱 시험' }) && F.isTrySessionRow({ name: '"회의록" 앱 시험' }) && F.isTrySessionRow({ label: "x", logTitle: brief }) && F.isTrySessionRow({ label: "x", raw: { title: brief } }), "G9 isTrySessionRow — 박스 줄(label) · 기록 줄(name · title) · 접힌 줄(logTitle) · 날 줄(raw.title)");
   check(!F.isTrySessionRow({ label: '"회의록" 앱 제작', title: "회의록 앱을 만들고 싶어" }) && !F.isTrySessionRow(null) && !F.isTrySessionRow({}) && !F.isTrySessionRow({ label: 3, raw: null }), "G10 시험 세션이 아닌 줄 · 빈 값 · 이상한 값은 거르지 않는다");
   check(F.findTrySession([{ id: "box-x", label: '"회의록" 앱 시험', projectId: 4680, owned: false }, { id: "box-y", label: '"회의록" 앱 시험', projectId: 4680, trashedAt: "2026-10-15" }, { id: "box-z", label: '"회의록" 앱 시험', projectId: 4680 }], '"회의록" 앱 시험', 4680) === "box-z", "G11 남의 세션 · 치운 세션은 다시 쓰지 않는다");
+}
+
+// V ③ 실제 화면을 보는 중 — 주소에 적는다(#4632 원준 2026-10-19 «3단계에서 앱 전체화면 보면서 만들 때 … 앱 빌더의 사이드바가 등장하네. 안그렇게 해줘»)
+//  사이드바 주인(lib/side-owner)이 이 표시로 앱빌더 사이드바를 접는다. 이게 틀리면 시험 세션 옆에 앱빌더 목록이 서거나, 허브로 돌아와도 사이드바가 안 돌아온다.
+{
+  const has = typeof F.builderSeeRoute === "function" && typeof F.builderSeeing === "function";
+  check(has, "V0 builderSeeRoute · builderSeeing 이 있다");
+  if (has) {
+    const r = F.builderSeeRoute("box 1", "widget");
+    check(r === "#/builder/s/box%201?see=widget" && F.builderSeeing(r) === "widget" && F.builderSeeing(F.builderSeeRoute("s2", "app")) === "app", "V1 짓기 ↔ 읽기 — 세션 id 를 싸서 · 꼴 둘(widget · app)");
+    check(F.parseBuilderHash(r) && F.parseBuilderHash(r).view === "resume" && F.parseBuilderHash(r).id === "box 1", "V1 보는 중 주소도 그 세션을 이어 만드는 주소다(앱빌더가 같은 화면을 그린다)");
+    const S = F.builderSeeing;
+    check(S("#/builder/s/x?see=zzz") === "" && S("#/builder/s/x?see=") === "" && S("#/builder/s/x") === "" && S("#/builder?see=widget") === "" && S("#/builder/new?see=widget") === ""
+      && S("#/builder/app/memo?see=app") === "" && S("#/s/box-1?see=widget") === "" && S("") === "" && S(null) === "" && S(undefined) === "" && S("#/builder/s/?see=widget") === "",
+      "V2 그 밖은 '' — 모르는 값 · 빈 값 · 표시 없음 · 목록 · 새 앱 · 고치기 · 다른 화면 · 빈 주소 · 세션 없는 주소");
+  }
 }
 
 console.log(`builder-flow: ${pass} 통과 · ${fail} 실패`);

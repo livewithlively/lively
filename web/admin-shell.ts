@@ -21,6 +21,7 @@ import { myAiSection } from './me-ai.js';
 import { myLoginsSection } from './me-logins.js';
 import { myAssetsSection } from './me-assets.js';
 import { memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
+import { memberAiConnectorsPanel } from './admin-ai-connectors.js';   // #4427 구성원 Claude 커넥터 — 정책 스위치 · 연결 현황
 import { reposPanel } from './admin-repos.js';
 import { myNodesPanel, orgNodesPanel } from './admin-nodes.js';
 import { injectionMap } from './admin-injection.js';
@@ -229,9 +230,10 @@ const ADMIN_SECTIONS = [
   { key: 'storage', label: '컴퓨팅 리소스', meaning: null, group: 'ops' },
   // #1059 — 로그(회전·보관)는 별도 메뉴. 컴퓨팅 리소스(메모리·저장소)와 성격이 달라 분리(사용자 피드백).
   { key: 'logs', label: '로그', meaning: null, group: 'ops' },
-  // #4733 앱 보관 표 — 앱이 표를 빼거나 칸을 지울 때 데이터를 잃지 않으려고 옮겨 둔 표. 워크스페이스 표 개수 한도에 세어지는데
-  //  앱을 고쳐서는 줄지 않아 관리자가 보고 비운다(지우기 직전 백업 7일). 서버 scope 가 admin 이라 ADMIN_ONLY.
-  { key: 'app-archives', label: '앱 보관 표', meaning: null, group: 'ops' },
+  // #4733 앱 보관 — 앱이 표를 빼거나 칸을 지울 때 데이터를 잃지 않으려고 옮겨 둔 표. 워크스페이스 표 개수 한도에 세어지는데
+  //  앱을 고쳐서는 줄지 않아 관리자가 보고 비운다(지우기 직전 백업 7일). #4778 앱을 지울 때 옮겨 둔 앱 폴더 · 앱 없는 앱 폴더도 여기서
+  //  보고 비우거나 되돌린다. 서버 scope 가 admin 이라 ADMIN_ONLY.
+  { key: 'app-archives', label: '앱 보관', meaning: null, group: 'ops' },
   // #1059 F — 세션: 이 박스에서 도는 전 AI 세션 메타뷰 + 수동 회수(idle 누적이 OOM 의 만성 원인. 여기서 보고 회수).
   { key: 'sessions', label: '세션', meaning: null, group: 'ops' },
   // 컴퓨터(노드) — 조직에 연결된 컴퓨터 **전체**와 공유 지정(#1540). 개인이 자기 컴퓨터를 관리하는 화면은
@@ -568,12 +570,14 @@ function memberAddSection(detail, data) {
 // ── [구성원 권한 관리] — 접속 토큰 + AI 실행 계정(구 [구성원] 서브탭 둘을 그대로 옮김, #1085). ──
 function memberAccessSection(detail, data) {
   detail.replaceChildren(
-    sectionHead('구성원 권한 관리', '구성원이 무엇으로 라이블리에 접속하는지, 그 사람의 AI가 어느 계정으로 실행되는지 관리합니다.'),
+    sectionHead('구성원 권한 관리', '구성원이 무엇으로 라이블리에 접속하는지, 그 사람의 AI가 어느 계정으로 실행되는지, 그 계정에 연결한 앱을 쓰는지 관리합니다.'),
     segTabs('member-access', [
       // 접속 토큰 = 우리 게이트웨이에 접속하는 bearer 토큰(auth_token). [외부 서비스 관리]의 서비스 로그인과 다른 것 — 용어 사전 참조.
       { key: 'tokens', label: '접속 토큰', render: (h) => tokensPanel(h, data) },
       // 'AI 실행 계정' — 구 '중앙박스 계정(프로필)'. '프로필'은 우상단 [내 프로필]과 겹쳐 버렸다(#524 에서 개념도 은퇴).
       { key: 'accounts', label: 'AI 실행 계정', render: (h) => { void profilesEditor(h); } },
+      // #4213 T6 — 구성원이 자기 Claude 계정에 연결한 앱을 쓰나(정책) + 누가 무엇을 연결했나(보기). [AI 도구]는 개인형에서 숨겨져 여기다.
+      { key: 'ai-connectors', label: 'Claude 커넥터', render: (h) => { void memberAiConnectorsPanel(h, data); } },
     ]));
 }
 

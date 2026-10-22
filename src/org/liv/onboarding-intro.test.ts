@@ -119,7 +119,8 @@ test("E3·E4·E5 아무것도 답하지 않은 자리(인사·팀 소개·빈 �
 
 test("E6·E7 답이 하나라도 있으면 남긴다 — 이름을 적었거나 이름 다음 장면에 닿았다", () => {
   assert.equal(worthSaving({ scene: "intro", nameSet: true }), true, "이름을 적고 인사로 되돌아간 사람의 답을 버린다");
-  const later = list("ORDER").filter((k) => k !== "intro" && k !== "name");
+  //  (T13) 차례표가 «인사 · 이름 · Claude 로그인» 으로 줄었다 — 옛 진행(빠진 장면에 멈춘 탭)도 남겨야 하므로 전체 순서로 잰다.
+  const later = list("SEQ_ALL").filter((k) => !["intro", "team", "name"].includes(k));
   assert.ok(later.length >= 5, "이름 다음 장면을 못 찾았다 — 검사가 헛돈다");
   for (const scene of later) {
     assert.equal(worthSaving({ scene, nameSet: false }), true, `${scene} 까지 온 사람의 진행을 안 남긴다`);

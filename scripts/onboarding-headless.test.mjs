@@ -52,9 +52,11 @@ ok(ONB.length > 10000 && OFFER.length > 2000, "W0 [배선] 두 소스를 실제�
   ok(i > 0 && j > i, "W2′ [배선] 연결됨 갈래를 찾았다");
   ok(/const hlWait = HL\.pending\(c\.harness\);/.test(branch), "W2 O1 허용이 남았나는 칸의 상태 한 벌에서 읽는다");
   ok(/hlWait \? '한 번만 더 허용해 주세요\.' : '연결됐어요\.'/.test(branch), "W3 O1·O2 허용이 남았으면 «연결됐어요» 라고 하지 않는다");
-  ok(/\$\{hlWait \? '' : cards\}/.test(branch), "W4 O1 다른 AI 카드는 허용이 끝난 뒤에 보인다");
-  ok(/hlWait\s*\?\s*`<button class="ob-q-skip" id="cGo">지금은 건너뛸게요<\/button>`\s*:\s*`<button class="ob-btn ob-btn-pri" id="cGo">이만하면 됐어요, 계속<\/button>`/.test(branch),
-    "W5 O1 남았으면 주 버튼 대신 조용한 건너뛰기 문(가두지 않는다) · 끝났으면 주 버튼 [계속]");
+  //  (#4213 T13) 연결됨 갈래의 덧붙임은 «다른 AI 카드» 가 아니라 «Claude 에 연결해 두신 앱» 칸이고, 주 버튼은 [리브와 시작하기]다 —
+  //   허용이 남았으면 둘 다 감춘다는 규칙(O1)은 그대로다.
+  ok(/\$\{hlWait \? '' : claudeAppsHtml\(c\.harness\)\}/.test(branch), "W4 O1 «Claude 에 연결해 두신 앱» 칸은 허용이 끝난 뒤에 보인다");
+  ok(/hlWait\s*\?\s*`<button class="ob-q-skip" id="cGo">지금은 건너뛸게요<\/button>`\s*:\s*`<button class="ob-btn ob-btn-pri" id="cGo">리브와 시작하기<\/button>`/.test(branch),
+    "W5 O1 남았으면 주 버튼 대신 조용한 건너뛰기 문(가두지 않는다) · 끝났으면 주 버튼 [리브와 시작하기]");
   ok(/id="hlBox" data-wait="\$\{hlWait \? '1' : '0'\}"/.test(branch), "W6 O12 칸은 장면이 그린 판단(data-wait)을 들고 있다 — 사실이 바뀌면 칸이 장면을 다시 그린다");
   ok(/HEADLESS_INLINE\[c\.harness\] \?/.test(branch) && (ONB.match(/id="hlBox"/g) || []).length === 1,
     "W7 O8 칸은 화면에서 받을 수 있는 하네스의 연결됨 갈래에만 있다(로그인 전 갈래에는 없다)");

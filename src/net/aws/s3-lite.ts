@@ -8,7 +8,7 @@
 //  모든 동작이 멱등이라(같은 이름에 같은 내용 · 지우기 · 읽기) 일시 오류(5xx · 네트워크)는 두 번까지 다시 한다.
 import crypto from "node:crypto";
 import { Readable } from "node:stream";
-import { signRequestV4, type AwsCreds } from "./aws-sigv4.js";
+import { amzDate, sha256HexOf, signRequestV4, signStringV4, type AwsCreds } from "./aws-sigv4.js";
 import { resolveGatewayBaseCreds } from "./aws-broker.js";
 
 export interface S3Config {
@@ -142,13 +142,18 @@ export async function s3Put(cfg: S3Config, key: string, body: Buffer, opts: { co
   });
 }
 
-/** 있으면 크기, 없으면 null. */
-export async function s3Head(cfg: S3Config, key: string, deps: S3Deps = {}): Promise<{ size: number } | null> {
+/**
+ * 있으면 크기와 지금 판 번호(versionId), 없으면 null. 판 번호는 버킷이 판 번호를 켰을 때만 온다(#4801 — Lambda 가 그 판을 바로 읽게 함수에 적는다).
+ *  판 번호를 끈 적이 있는 버킷의 옛 객체는 «null» 이라는 글자를 준다 — 판 번호 없음으로 읽는다.
+ */
+export async function s3Head(cfg: S3Config, key: string, deps: S3Deps = {}, opts: { versionId?: string | null } = {}): Promise<{ size: number; versionId: string | null } | null> {
   return withRetry(deps, async () => {
-    const res = await send(cfg, deps, { method: "HEAD", key });
-    if (res.status === 404) return null;
+    const res = await send(cfg, deps, { method: "HEAD", key, ...(opts.versionId ? { query: { versionId: opts.versionId } } : {}) });
+    //  판 번호를 주면 그 판(#4887 — 함수가 읽는 판이 아직 있나) — 영구 삭제한 판은 404, 지움 표시 판은 405 다(둘 다 «없음»).
+    if (res.status === 404 || (opts.versionId && res.status === 405)) return null;
     if (!res.ok) throw new S3Error(res.status, `HTTP${res.status}`, `S3 HEAD ${key} 실패: ${res.status}`);
-    return { size: Number(res.headers.get("content-length") ?? "0") };
+    const v = res.headers.get("x-amz-version-id");
+    return { size: Number(res.headers.get("content-length") ?? "0"), versionId: v && v !== "null" ? v : null };
   });
 }
 
@@ -180,6 +185,37 @@ export async function s3Delete(cfg: S3Config, key: string, deps: S3Deps = {}): P
     if (!res.ok && res.status !== 404) throw await fail(res, `DELETE ${key}`);
     await res.arrayBuffer().catch(() => undefined);
   });
+}
+
+/**
+ * (#4484) 서명한 주소(presigned URL) — 자격 없는 쪽(세션 컨테이너의 빌더)이 이 키 **하나에만** PUT(또는 GET) 하게 한다.
+ *  쿼리 문자열 서명(https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html): 서명 머리는 host 하나 · 본문은
+ *  UNSIGNED-PAYLOAD · 임시 자격이면 X-Amz-Security-Token 도 서명에 든다. ⚠ 주소의 수명은 X-Amz-Expires 와 **자격의 남은 수명 중 짧은 쪽**이다
+ *  (임시 자격이 만료되면 주소도 죽는다) — 부르는 쪽이 넉넉한 자격으로 만든다(aws-broker resolveGatewayBaseCreds 의 남은 시간).
+ *  s3-lite.test.ts 가 AWS 문서의 예시 주소 서명을 그대로 맞춘다.
+ */
+export function s3PresignUrl(cfg: S3Config, key: string, opts: { method: "GET" | "PUT"; expiresSec: number; creds: AwsCreds; now: Date }): string {
+  return presignAt(target(cfg, key), cfg.region, opts);
+}
+
+/** 서명 본체 — 주소(host · 경로)를 바로 받는다(시험이 AWS 문서 예시의 옛 전역 주소 `<버킷>.s3.amazonaws.com` 로 맞춘다). */
+export function presignAt(t: { url: string; host: string; path: string }, region: string, opts: { method: "GET" | "PUT"; expiresSec: number; creds: AwsCreds; now: Date }): string {
+  const { amzDate: xAmzDate, dateStamp } = amzDate(opts.now);
+  const cfg = { region };
+  const scope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
+  const q: Record<string, string> = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${opts.creds.accessKeyId}/${scope}`,
+    "X-Amz-Date": xAmzDate,
+    "X-Amz-Expires": String(Math.max(1, Math.min(604_800, Math.floor(opts.expiresSec)))),
+    "X-Amz-SignedHeaders": "host",
+  };
+  if (opts.creds.sessionToken) q["X-Amz-Security-Token"] = opts.creds.sessionToken;
+  const query = s3CanonicalQuery(q);
+  const canonical = [opts.method, t.path, query, `host:${t.host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
+  const toSign = ["AWS4-HMAC-SHA256", xAmzDate, scope, sha256HexOf(canonical)].join("\n");
+  const sig = signStringV4(toSign, opts.creds.secretAccessKey, dateStamp, cfg.region, "s3");
+  return `${t.url}?${query}&X-Amz-Signature=${sig}`;
 }
 
 export interface S3ListItem { key: string; size: number; lastModified: string }

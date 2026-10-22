@@ -199,7 +199,12 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("opencode 에 말을 걸지 못했습니다");
         r = { convId: e.convId };
       } else {
-        r = await sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: localState?.claude_session_id || null });
+        //  #4427 — 판(pane)의 claude 와 같은 판정(claude-ai-connectors-policy). 프로세스를 처음 띄울 때만 뜻이 있어,
+        //   이미 살아 있는 런타임이면 정책을 다시 읽지 않는다(메시지마다 DB 왕복을 늘리지 않게).
+        const { isClaudeChatLive } = await import("./harness-io/claude-chat-runtime.js");
+        const { claudeAiConnectorsBlocked } = await import("./claude-ai-connectors-policy.js");
+        const blockClaudeAiConnectors = !isClaudeChatLive(sessionId) && await claudeAiConnectorsBlocked(harnessKey);
+        r = await sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: localState?.claude_session_id || null, blockClaudeAiConnectors });
       }
       //  ★ **대화 id 를 적는다.** 화면이 대화 파일을 찾는 유일한 단서가 이 매핑이다(chat-routes:
       //   «매핑이 없으면 404 가 정답이다 — 폴더의 최신 파일을 집지 않는다»). 종전엔 세션 **안에서** 도는
@@ -265,7 +270,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   return deliverPromptToNode({ harness: harnessKey, stamp: await nodeSessionStamp(nodeId, sessionId) }, {
     chatSend: () => nodeRpc(nodeId, "chatSend", { id: sessionId, text, harness: harnessKey }),
     inject: opts?.firstPromptTrustOk === undefined
-      ? () => injectPrompt(sessionId, text)
+      ? () => injectPrompt(sessionId, text, { harness: harnessKey })
       : async () => {
         await nodeRpc(nodeId, "injectFirstPrompt", {
           id: sessionId, harness: harnessKey, text, trustOk: opts.firstPromptTrustOk,

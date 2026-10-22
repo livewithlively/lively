@@ -8,7 +8,7 @@
 //  B1 남의 세션으로 예약 403 · B2 예약 → 나만 보는 빈 앱(멱등 · 목록·역조회) · B3 예약한 세션에서 다른 id 로 저장 409
 //  B4 예약 id 로 저장 → 1판 · 서버 기록(매니페스트 studio.made_by 위조 무시) · 남에겐 404 일곱 길  B5 남이 같은 id 로 덮어쓰기 403
 //  B6 공개하기(남 404 · 만든 사람 OK) → 모두에게  B7 공개 뒤 고치면 초안 — 고친 사람만 새 판, 나머지는 공개 판(목록·화면·판 이력·내려받기)
-//  B8 초안이 새로 선언한 표 · 공개 판의 표에 쓰기  B9 초안이 뺀 표는 공개 판이 쓰는 동안 남고, 공개하면 보관된다
+//  B8 초안이 새로 선언한 표 · 공개 판의 표에 쓰기  B8b 앱 서버 주체는 주소의 판의 표(#4485)  B9 초안이 뺀 표는 공개 판이 쓰는 동안 남고, 공개하면 보관된다
 //  B10 남(고치기 전원)이 고친 초안 — 그 사람만 보고 책임자가 공개  B11 되돌리기 + publish  B12 사본 — 원본 기록 · 못 보는 원본 404
 //  B13 공개 거두기 — 남은 다시 404 · 붙여 둔 세션에서도 막힘  B14 오래된 빈 예약은 새 시작 때 거둔다
 //  B15 떠난 사람 — 책임자만 관리자로(만든 사람 그대로) · 관리자에게 알림  B16 관리자가 책임자를 바꿈 → 새 책임자가 보고 지운다
@@ -25,6 +25,11 @@
 //      그 밖의 구성원 403 · 못 보는 앱 404 · 빈 앱 409 · 빈 행이면 막힘 · 다른 연결이 표를 쥐면 짧게 기다리고 «다 못 봄» · 미리 보기 == 실제 공개 ·
 //      전후 카탈로그 · 데이터 · 앱 행 같음 · 판 번호(되돌려 공개) · 없는 판 · 남의 공개 전 판 404 · 전체 시간 상한(E9c) · 설치 락이 바쁘면 짧게(E17) ·
 //      정리할 표 세기도 짧게(E18) · 선언에서만 뺀 칸은 «알아 둘 것» 만(E15b) · 되돌려 공개의 실제 결과 == 미리 본 것(E16)
+//  B24 #4482 /_lively/* 는 주소의 판 — 초안 주인도 공개 주소면 공개 판의 표 · 초안 주소면 초안의 표 · 다리는 사람의 판 · 남의 초안 주소 404 ·
+//      동의 없음 code consent_required · 빈도는 사람마다
+//  B25 #4744 다리 · 앱 주소로 부른 도구는 **그 사람의 공개범위**로 읽고 쓴다 — 잠긴 지식은 그 지식의 사람만(단건 · grep · 저장) · 관리자도 같다 ·
+//      앱 주소 HTTP 는 안 보이는 것 = 없는 것 = 404 · 열린 지식과 직접 부른 특권 경로로는 그대로 보인다(시험이 빈 것을 재지 않는다는 배선)
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -75,7 +80,7 @@ for (const [sid, owner] of [["box-alice-1", "pgt-alice"], ["box-alice-2", "pgt-a
 }
 const manifest = (id, o = {}) => JSON.stringify({
   id, title: o.title ?? "회의 안건", version: o.version ?? "0.1.0",
-  permissions: { scopes: [], tools: ["store_insert", "store_query"] },
+  permissions: { scopes: o.scopes ?? [], tools: o.tools ?? ["store_insert", "store_query"] },
   data: { tables: (o.tables ?? ["notes"]).map((name) => ({ name, columns: [{ name: "text", type: "text" }] })) },
   ui: { pages: [{ key: "main", title: o.title ?? "회의 안건", entry: "ui/index.html" }] },
   ...(o.studio ? { studio: o.studio } : {}),
@@ -164,6 +169,30 @@ try {
   const ins = await call("store_insert", { table: "notes", row: { text: "bob 의 메모" } }, appBob, { source: "app-ui" });
   const extraExists = (await q(`SELECT count(*)::int AS n FROM information_schema.tables WHERE table_name LIKE $1`, [`%__extra`]))[0].n;
   chk("B8 공개 판의 표에 쓰기(남 · 앱 화면) · 초안이 새로 선언한 표도 만들어져 있다", ins.id != null && extraExists >= 1, JSON.stringify({ ins, extraExists }));
+
+  // B8b #4485 앱 서버 주체의 주소 판 — 서버 코드는 주소의 판으로 돈다(공개 주소 = 공개 판의 함수 pub). 그 코드가 SDK 로 부르는 표도 그 판의 선언이어야 한다.
+  {
+    const { resolveAppServerPrincipal } = await import(`${D}/apps/app-server-auth.js`);
+    const { appServerUserId } = await import(`${D}/apps/app-server-id.js`);
+    const { appSqlTenantId } = await import(`${D}/apps/app-sql-exec.js`);
+    const IDK = await import(`${D}/apps/app-identity.js`);
+    const key = IDK.ed25519FromSeed(Buffer.alloc(32, 7));
+    const opts = { identity: { keys: new Map([["k1", IDK.ed25519PublicKey(key.publicKeyB64)]]) } };
+    const ws = appSqlTenantId();
+    const nowS = Math.floor(Date.now() / 1000);
+    const idOf = (sub, v) => IDK.signAppIdentity({ ws, app: ID, var: v, sub, name: sub, iat: nowS, exp: nowS + 600 }, key.privateKey, "k1");
+    const tokenUser = { userId: appServerUserId(ws, ID), email: "", scopes: [], projects: ["*"], appId: ID };
+    await call("me_app_grant", { app_id: ID }, alice);
+    await call("me_app_grant", { app_id: ID }, bob);   // B8 이 이미 했지만 이 행만 떼어 돌려도 서게(순서에 기대지 않는다 · 격리 리뷰)
+    const aPub = await resolveAppServerPrincipal(tokenUser, idOf("pgt-alice", "pub"), opts);
+    const aDraft = await resolveAppServerPrincipal(tokenUser, idOf("pgt-alice", "draft"), opts);
+    const bPub = await resolveAppServerPrincipal(tokenUser, idOf("pgt-bob", "pub"), opts);
+    const names = async (u) => (await call("store_tables", { app_id: ID }, u, { source: "rest" })).tables.map((t) => t.name).sort().join(",");
+    const tPubAlice = await names(aPub), tDraftAlice = await names(aDraft), tPubBob = await names(bPub);
+    chk("B8b ★#4485 앱 서버 주체에 주소의 판 — 초안을 고친 사람도 공개 주소면 공개 판의 표(notes) · 초안 주소면 초안의 표(extra,notes) · 남은 공개 판",
+      aPub.appAddress === "pub" && aDraft.appAddress === "draft" && tPubAlice === "notes" && tDraftAlice === "extra,notes" && tPubBob === "notes",
+      JSON.stringify({ aPub: aPub.appAddress, aDraft: aDraft.appAddress, tPubAlice, tDraftAlice, tPubBob }));
+  }
 
   // B9 — 초안이 notes 를 뺀다 → 공개 판(1판)이 아직 쓰므로 남는다 → 공개하면 데이터가 있어 보관된다
   const s9 = await call("app_save", { files: files(ID, "<p>v3 초안</p>", { title: "회의 안건 3", tables: ["extra"] }), note: "notes 뺌" }, alice, inSession("box-alice-1"));
@@ -813,6 +842,123 @@ try {
     chk("B23 E12 기본 앱 — 깨는 초안(logs.msg 지우기)이 걸려 있어도 할 일 0 · 막힘 0(같은 초안이 일반 앱일 땐 할 일이 있었다)",
       e12before.changes.some((l) => l.startsWith("logs 표: msg 칸 지우기")) && e12.changes.length === 0 && e12.blocked.length === 0 && e12.tables === null && (await row(PV)).draft_by === "pgt-alice",
       JSON.stringify({ e12before: e12before.changes, e12 }));
+  }
+
+  // B24 #4482 앱 주소의 같은 주소 API(/_lively/*) — 선언(표 · 도구)은 사람이 아니라 **주소의 판** · 동의 없음은 code consent_required ·
+  //  빈도는 사람마다(격리 리뷰 3 — 순수 판정 V1~V5 가 실제 표 · 도구 응답에 착지하는지).
+  {
+    const { runAppTool } = await import(`${D}/capabilities/app-tool-call.js`);
+    const { memberPrincipal } = await import(`${D}/apps/app-front-api.js`);
+    const AID = "addr-view-4482";
+    const T24 = ["store_insert", "store_query", "store_tables", "store_sql"];
+    await call("app_save", { files: files(AID, "<p>a1 공개</p>", { tables: ["pubt"], tools: T24 }), note: "a1" }, alice);
+    await call("app_visibility_set", { app_id: AID, visibility: "all" }, alice);
+    const sd = await call("app_save", { files: files(AID, "<p>a2 초안</p>", { tables: ["draftt"], tools: T24 }), note: "a2 — pubt 뺌 · draftt 더함" }, alice);
+    await call("me_app_grant", { app_id: AID }, alice);
+    const memA = (await q(`SELECT * FROM org_member WHERE id='pgt-alice'`))[0];
+    const memB = (await q(`SELECT * FROM org_member WHERE id='pgt-bob'`))[0];
+    const viaAddr = (m, v, name, args) => runAppTool(memberPrincipal(m, v), AID, name, args, { source: "app-front", address: v });
+    const viaBridge = (u, name, args) => runAppTool(u, AID, name, args, { source: "app-ui" });
+    const got = {
+      pubPubT: await status(viaAddr(memA, "pub", "store_query", { table: "pubt" })),
+      pubDraftT: await status(viaAddr(memA, "pub", "store_query", { table: "draftt" })),
+      draftDraftT: await status(viaAddr(memA, "draft", "store_query", { table: "draftt" })),
+      draftPubT: await status(viaAddr(memA, "draft", "store_query", { table: "pubt" })),
+      bridgeDraftT: await status(viaBridge(alice, "store_query", { table: "draftt" })),
+      bridgePubT: await status(viaBridge(alice, "store_query", { table: "pubt" })),
+      tablesPub: (await viaAddr(memA, "pub", "store_tables", {})).tables.map((t) => t.name).join(),
+      tablesDraft: (await viaAddr(memA, "draft", "store_tables", {})).tables.map((t) => t.name).join(),
+      sqlPub: await status(viaAddr(memA, "pub", "store_sql", { sql: "SELECT count(*)::int AS n FROM pubt" })),
+      sqlPubDraftT: await status(viaAddr(memA, "pub", "store_sql", { sql: "SELECT count(*)::int AS n FROM draftt" })),
+      bobDraftAddr: await status(viaAddr(memB, "draft", "store_query", { table: "draftt" })),
+    };
+    const noGrant = await errOf(viaAddr(memB, "pub", "store_query", { table: "pubt" }));
+    chk("B24 /_lively/* — 초안 주인도 공개 주소면 공개 판의 표(pubt 됨 · draftt 404) · 초안 주소면 초안의 표 · 다리(주소 없음)는 사람의 판(초안) · 남의 초안 주소 404 · 동의 없음 403 code consent_required",
+      sd.state === "draft" && got.pubPubT === 200 && got.pubDraftT === 404 && got.draftDraftT === 200 && got.draftPubT === 404
+        && got.bridgeDraftT === 200 && got.bridgePubT === 404 && got.tablesPub === "pubt" && got.tablesDraft === "draftt"
+        && got.sqlPub === 200 && got.sqlPubDraftT !== 200 && got.bobDraftAddr === 404
+        && noGrant?.status === 403 && noGrant?.body?.code === "consent_required",
+      JSON.stringify({ sd: sd.state, got, noGrant: { status: noGrant?.status, body: noGrant?.body, msg: noGrant?.message } }));
+    //  빈도 — 주소로 들어온 호출은 사람마다 센다: 앨리스가 제 몫을 다 써도 밥은 된다(앱 하나에 한 통이면 한 사람이 모두를 막는다).
+    //   시계는 시험이 쥔다 — 실제 시계면 호출이 느린 CI 에서 버킷이 그새 다시 차 429 가 안 날 수 있다(격리 리뷰). 사람 순간 3 · 거의 안 참.
+    await call("me_app_grant", { app_id: AID }, bob);
+    const { resetAppSqlLimits } = await import(`${D}/apps/app-sql-exec.js`);
+    const clock = 5_000_000;
+    resetAppSqlLimits({ LIVELY_APP_SQL_RATE: "0.001", LIVELY_APP_SQL_BURST: "3", LIVELY_APP_SQL_SERVER_RATE: "1000", LIVELY_APP_SQL_SERVER_BURST: "1000" }, () => clock);
+    let rate;
+    try {
+      const a = [];
+      for (let i = 0; i < 4; i++) a.push(await status(viaAddr(memA, "pub", "store_query", { table: "pubt" })));
+      rate = { a, bob: await status(viaAddr(memB, "pub", "store_query", { table: "pubt" })) };
+    } finally { resetAppSqlLimits(process.env); }
+    chk("B24 빈도 — /_lively/* 는 사람마다: 앨리스가 순간 3 을 다 쓰면 넷째는 429 · 그 뒤에도 밥은 200",
+      JSON.stringify(rate.a) === JSON.stringify([200, 200, 200, 429]) && rate.bob === 200, JSON.stringify(rate));
+  }
+
+  // B25 #4744 다리(라이블리 화면 · org_app_tool_call)와 앱 주소(/_lively/*)로 부른 도구는 **그 사람의 공개범위**로 읽고 쓴다 —
+  //  앱 세션이 MCP 로 부를 때와 같은 열람 신원(capabilities/index.ts viewer: viewerOf(u)). 앱 주소는 HTTP 상태까지 본다(REST 와 같은 매핑).
+  {
+    const { runAppTool } = await import(`${D}/capabilities/app-tool-call.js`);
+    const { memberPrincipal, handleAppFrontApi } = await import(`${D}/apps/app-front-api.js`);
+    const { appFrontLiveDepsForTest } = await import(`${D}/apps/app-front-routes.js`);
+    const { registry } = await import(`${D}/capabilities/index.js`);
+    const { getApp } = await import(`${D}/org/store/apps.js`);
+    const AID = "vis-viewer-4744";
+    const TOK = "b25viewertoken";
+    const K_LOCK = "pgt-b25-locked", K_OPEN = "pgt-b25-open";
+    const NOT_FOUND = `지식 '${K_LOCK}' 없음`;
+    const mkK = (name, vis) => q(`INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, confidence, source, visibility)
+      VALUES($1,$1,$2,'recalled','authored','active','ai','authored',$3)`, [name, `${TOK} ${name} 본문`, vis]);
+    await mkK(K_LOCK, "members");
+    await mkK(K_OPEN, "open");
+    await q(`INSERT INTO knowledge_member(name, subject_kind, member_id) VALUES($1,'member','pgt-alice')`, [K_LOCK]);
+    await call("app_save", { files: files(AID, "<p>지식 보기</p>", { scopes: ["memory"], tools: ["knowledge_get", "knowledge_grep", "knowledge_save"] }), note: "b25" }, alice);
+    await call("app_visibility_set", { app_id: AID, visibility: "all" }, alice);
+    for (const u of [alice, bob, boss]) await call("me_app_grant", { app_id: AID }, u);
+    const [memB] = await q(`SELECT * FROM org_member WHERE id='pgt-bob'`);
+    const bridge = (u, name, args) => runAppTool(u, AID, name, args, { source: "app-ui" });
+    const viaAddr = (m, name, args) => runAppTool(memberPrincipal(m, "pub"), AID, name, args, { source: "app-front", address: "pub" });
+    const live = appFrontLiveDepsForTest();
+    const addrHttp = async (m, name, body) => (await handleAppFrontApi({
+      act: { op: "act", t: "tenant-b25", ws: "ws-b25", app: AID, var: "pub", mid: m.id, iat: Math.floor(Date.now() / 1000) },
+      tenant: { id: "tenant-b25", slug: "ws-b25" }, member: m, app: await getApp(AID), method: "POST", rawPath: `/tools/${name}`, body, env: process.env,
+    }, live.api)).status;
+    const bodyOf = async (p) => String((await p).knowledge?.body_md ?? "");
+    const errOrOk = async (p) => { try { await p; return "OK"; } catch (e) { return String(e?.message ?? e); } };
+    const grepNames = async (p) => ((await p).entries ?? []).map((x) => x.name).sort().join();
+    const got = {
+      privileged: await bodyOf(registry.get("knowledge_get").handler({ name: K_LOCK }, alice, { source: "mcp", viewer: null })),
+      aliceLock: await bodyOf(bridge(alice, "knowledge_get", { name: K_LOCK })),
+      bobOpen: await bodyOf(bridge(bob, "knowledge_get", { name: K_OPEN })),
+      bobLock: await errOrOk(bridge(bob, "knowledge_get", { name: K_LOCK })),
+      bobLockRest: await errOrOk(call("org_app_tool_call", { app_id: AID, name: "knowledge_get", arguments: { name: K_LOCK } }, bob, { source: "web", viewer: "pgt-bob" })),
+      bobLockAddr: await errOrOk(viaAddr(memB, "knowledge_get", { name: K_LOCK })),
+      bossLock: await errOrOk(bridge(boss, "knowledge_get", { name: K_LOCK })),
+      aliceGrep: await grepNames(bridge(alice, "knowledge_grep", { q: TOK, mode: "names" })),
+      bobGrep: await grepNames(bridge(bob, "knowledge_grep", { q: TOK, mode: "names" })),
+      bobGrepAddr: await grepNames(viaAddr(memB, "knowledge_grep", { q: TOK, mode: "names" })),
+      httpLock: await addrHttp(memB, "knowledge_get", { name: K_LOCK }),
+      httpOpen: await addrHttp(memB, "knowledge_get", { name: K_OPEN }),
+      httpMissing: await addrHttp(memB, "knowledge_get", { name: "pgt-b25-none" }),
+    };
+    chk("B25 읽기 — 잠긴 지식은 그 지식의 사람(앨리스)만 · 밥은 다리 · 화면 REST · 앱 주소 모두 «없음» · 관리자도 «없음» · grep 은 열린 것만 · 앱 주소 HTTP 는 안 보이는 것 = 없는 것 = 404 · 열린 지식과 특권 경로로는 보인다",
+      got.privileged.includes(TOK) && got.aliceLock.includes(TOK) && got.bobOpen.includes(TOK)
+        && got.bobLock === NOT_FOUND && got.bobLockRest === NOT_FOUND && got.bobLockAddr === NOT_FOUND && got.bossLock === NOT_FOUND
+        && got.aliceGrep === [K_LOCK, K_OPEN].sort().join() && got.bobGrep === K_OPEN && got.bobGrepAddr === K_OPEN
+        && got.httpLock === 404 && got.httpOpen === 200 && got.httpMissing === 404,
+      JSON.stringify(got));
+    const stored = async () => (await q(`SELECT body_md FROM knowledge WHERE name=$1`, [K_LOCK]))[0]?.body_md;
+    const before = await stored();
+    const w = {
+      bobBridge: await errOrOk(bridge(bob, "knowledge_save", { name: K_LOCK, body_md: "b25 bob bridge" })),
+      bobAddr: await addrHttp(memB, "knowledge_save", { name: K_LOCK, body_md: "b25 bob addr" }),
+    };
+    w.afterBob = await stored();
+    w.alice = await errOrOk(bridge(alice, "knowledge_save", { name: K_LOCK, body_md: `${TOK} b25 alice` }));
+    w.afterAlice = await stored();
+    chk("B25 쓰기 — 잠긴 지식에 밥이 저장하면 다리 «없음» · 앱 주소 404 · 본문 그대로 · 그 지식의 사람(앨리스)의 저장은 된다",
+      w.bobBridge.includes(NOT_FOUND) && w.bobAddr === 404 && w.afterBob === before && w.alice === "OK" && w.afterAlice === `${TOK} b25 alice`,
+      JSON.stringify({ before, ...w }));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);

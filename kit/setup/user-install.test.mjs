@@ -232,6 +232,28 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
     : bad("⑫ SessionEnd timeout", "미지정 — 종료 경로에서 floor 1500ms 로 fetch 조기 abort");
 }
 
+// ⑭ #4821 — API 오류로 끝난 턴(StopFailure)의 «턴 종료» 보고 배선. 없으면 사용 한도로 막힌 턴이 «작업 중» 으로만 남아 하네스 종료 규칙이
+//  자동 이어감 대기를 못 본다. 설치(병합)를 두 번 해도 한 벌이어야 한다(엔트리가 쌓이면 이벤트마다 훅이 두 번 돈다 — 15→30 누적 사고).
+{
+  const sf = (userLevelHooksBlock().StopFailure || []);
+  const wfOnly = sf.length === 1 && !sf[0].matcher && (sf[0].hooks || []).length === 1 && (sf[0].hooks[0].command || "").includes("work-flag.mjs");
+  wfOnly ? ok("⑭ StopFailure 에 work-flag 배선 하나(matcher 없음 · 기록 게이트는 안 건다)")
+    : bad("⑭ StopFailure 배선", `실제=${JSON.stringify(sf)}`);
+  writeFileSync(SP, "{}\n");
+  safeMergeUserSettings(FULL());
+  safeMergeUserSettings(FULL());
+  const got = (readS().hooks?.StopFailure || []).flatMap((e) => e.hooks || []).filter((h) => (h.command || "").includes("work-flag.mjs"));
+  got.length === 1 ? ok("⑭ 두 번 병합해도 StopFailure work-flag 는 한 벌") : bad("⑭ StopFailure 병합", `실제=${JSON.stringify(got)}`);
+}
+
+// ⑮ #4821 — 프로젝트 배선(kit/hooks/settings-hooks.json)에도 같은 StopFailure 배선이 있다. 설치기 정본과 이 템플릿은 두 벌이라
+//  (격리 리뷰) 한쪽만 고치면 프로젝트 배선으로 도는 세션만 조용히 «작업 중» 으로 남는다.
+{
+  const tmpl = JSON.parse(readFileSync(new URL("../hooks/settings-hooks.json", import.meta.url), "utf8"));
+  const sf = (tmpl.hooks?.StopFailure || []).flatMap((e) => e.hooks || []).filter((h) => (h.command || "").includes("work-flag.mjs"));
+  sf.length === 1 ? ok("⑮ settings-hooks.json 에도 StopFailure work-flag 배선 하나") : bad("⑮ settings-hooks.json", `실제=${JSON.stringify(tmpl.hooks?.StopFailure)}`);
+}
+
 // ⑬ ★ 2026-08-19 실측 — LIVELY_HOME(샌드박스) 밖의 CLAUDE_CONFIG_DIR 는 상속된 **실 프로필**이다. 설치기가 그걸 존중하면
 //   실 프로필 settings.json 에 곧 지워질 샌드박스 훅 경로가 써져(harness-registry.test D 가 실제로 냈던 사고) 이후 모든 세션 훅이
 //   Cannot find module 로 죽는다. 설치기는 밖의 값을 무시하고 <LIVELY_HOME>/.claude 에 써야 한다(harness-registry.claudeConfigDir 계약).

@@ -65,6 +65,30 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   let caught = null;
   try { await p; } catch (e) { caught = e; }
   ok(caught instanceof Error && caught.code === -32602 && /붙은 세션/.test(caught.message), "S2-2 붙은 세션이 없으면 -32602 로 reject");
+  ok(caught.reason === null && caught.status === null, "S2-2 서버까지 안 간 거절(data 없음)은 reason · status 가 null(#4848 C12)");
+}
+
+// ══ S2-2b #4848 호스트가 실어 준 서버의 실패(error.data) — 맨몸과 같은 규칙으로 e.status · e.reason · 사람이 읽을 글 ══
+{
+  const { lively, posted, deliver } = boot();
+  const fail = async (data, message = "요청 실패 (413)", code = -32000) => {
+    const p = lively.store.insert("notes", { text: "x".repeat(10) });
+    const req = posted.filter((m) => m.method === "tools/call").pop();
+    deliver({ jsonrpc: "2.0", id: req.id, error: { code, message, ...(data === undefined ? {} : { data }) } });
+    return p.then(() => null, (e) => e);
+  };
+  const a = await fail({ status: 413 });
+  ok(a && a.reason === "body_too_large" && a.status === 413 && a.code === -32000, "S2-2b data {status:413}(JSON 아닌 413) → reason body_too_large · status 413 · code 는 호스트가 준 그대로(C11)");
+  ok(a.message !== "요청 실패 (413)" && /[가-힣]/.test(a.message) && /1MB/.test(a.message), `S2-2b 글은 사람이 읽을 말(${a.message})`);
+  const b = await fail({ status: 403, error: "권한 밖", code: "consent_required" }, "권한 밖", -32001);
+  ok(b && b.reason === "consent_required" && b.status === 403 && b.code === -32001 && b.message === "권한 밖", "S2-2b 서버의 code → reason · 본문 거절이 아니면 글은 그대로");
+  const c = await fail(undefined, "요청 실패 (413)");
+  ok(c && c.reason === null && c.status === null && c.message === "요청 실패 (413)", "S2-2b data 가 없으면(옛 호스트) 종전 그대로 — 지어내지 않는다(C12)");
+  const d = await fail({ status: 413, error: 7, code: { x: 1 } });
+  ok(d && d.reason === "body_too_large", "S2-2b data 의 error · code 가 문자열이 아니면 쓰지 않는다(413 이라 body_too_large)");
+  //  서버가 제 글을 준 413(개인 설정 16KB 등 — 코드 없음)은 «1MB» 로 짐작하지 않는다 — reason null · 그 글 그대로(격리 리뷰 B1)
+  const e = await fail({ status: 413, error: "설정이 너무 큽니다(16KB 까지)" }, "설정이 너무 큽니다(16KB 까지)", -32602);
+  ok(e && e.reason === null && e.status === 413 && e.message === "설정이 너무 큽니다(16KB 까지)" && e.code === -32602, "S2-2b 서버 글이 있는 413 → reason null · 글 그대로");
 }
 
 // ══ S2-3 prefs.get / prefs.set ══
@@ -186,6 +210,10 @@ const ok = (v, name) => { assert.ok(v, name); pass++; };
   ok(/\/chat-send'/.test(branch) && /session_id: sid/.test(branch), "S2-5 chat/send 는 /api/ui/apps/:id/chat-send 로, 세션은 opts 의 sid 로 간다");
   ok(/ensureAppGrant\(appId/.test(branch) && /동의\|grant/.test(branch), "S2-5 403 「동의」 면 그 자리에서 동의 창 → 1회 재시도(tools/call 과 같은 규칙)");
   ok(/putIntoSession\(\[sid\]/.test(branch) && /draft_text/.test(branch), "S2-5 멈춘 세션(409 draft)이면 표식 붙은 draft_text 를 그 세션 입력칸에 넣어 둔다");
+  //  #4488 tools/call 의 세션 id 배선(소스) — 호스트가 본문 맨 바깥에 싣고(S2-6b 가 실제로 돌려 본다), 서버 다리는 그 값을 형식만 보고 ctx.session 으로 넘긴다(앱 arguments 는 보지 않는다).
+  const bridge = read("src/capabilities/app-tool-call.ts");
+  ok(/session_id: b\.session_id/.test(bridge) && /SESSION_ID_RE\.test\(input\.session_id\)/.test(bridge) && /session: opts\.sessionId/.test(bridge),
+    "S2-6c 서버 다리(app-tool-call)는 본문 맨 바깥 session_id 를 형식 검사 뒤 ctx.session 으로 넘긴다 — arguments 안의 것은 안 본다");
   ok(/userActivation/.test(branch), "S2-5 사람이 누른 동작(userActivation)에서만 보낸다");
   const dts = read("apps/sdk/lively-app.d.ts");
   ok(/chat:\s*\{[\s\S]*send\(text: string\)/.test(dts) && /prefs:\s*\{[\s\S]*\bget[<(][\s\S]*\bset[<(]/.test(dts) && /onPrefsOpen\(/.test(dts), "S2-5 d.ts 에 chat.send(text) · prefs.get/set · ui.onPrefsOpen");
@@ -314,6 +342,27 @@ if (!existsSync(built)) {
   const lastReply = () => replies[replies.length - 1];
   const settle = async () => { for (let i = 0; i < 6; i++) await tick(); };
 
+  // S2-6b #4488 tools/call 도 세션 id 는 띄운 쪽(opts)의 것을 본문 맨 바깥에 싣는다 — 구독 AI 실행의 «초대받은 사람» 판정에 쓴다. 세션 없이 띄운 화면은 안 싣는다.
+  {
+    const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });
+    plan = { "/tool-call": { status: 200, json: { app_id: "deck-edit", name: "app_ai_run", result: { id: 7, status: "queued" } } } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 11, method: "tools/call", params: { name: "app_ai_run", arguments: { prompt: "요약", session_id: "box-victim" } } });
+    await settle();
+    const call = fetches.find((x) => x.url.includes("/tool-call"));
+    ok(call, "S2-6b 호스트가 /api/ui/apps/deck-edit/tool-call 을 부른다");
+    eq(call.body, { name: "app_ai_run", arguments: { prompt: "요약", session_id: "box-victim" }, session_id: "box-mine" }, "S2-6b 본문 맨 바깥 session_id 는 opts 의 것(앱 arguments 안의 것은 그대로 두되 서버가 보지 않는다)");
+    eq(lastReply(), { jsonrpc: "2.0", id: 11, result: { id: 7, status: "queued" } }, "S2-6b 앱에는 도구 결과만");
+  }
+  {
+    const { fire } = await mount({ title: "장표 수정" });
+    plan = { "/tool-call": { status: 200, json: { app_id: "deck-edit", name: "whoami", result: {} } } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 12, method: "tools/call", params: { name: "whoami", arguments: {} } });
+    await settle();
+    const call = fetches.find((x) => x.url.includes("/tool-call"));
+    ok(call && !("session_id" in call.body), "S2-6b 세션 없이 띄운 화면(앱 찾기 · 크게 보기)은 session_id 를 싣지 않는다");
+  }
   // S2-6 세션 id 는 띄운 쪽(opts)의 것 — 앱 params 의 session_id 는 무시
   {
     const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });
@@ -491,6 +540,34 @@ if (!existsSync(built)) {
   }
 
 
+  // S2-20 (#4482) 호스트 다리의 새 메서드 — ui/me(보는 사람 · 붙은 세션) · ui/grant(사람이 누른 동작만) · 인사의 capabilities(사양 표 F H1~H3)
+  {
+    state.me = { userId: "alice", email: "a@x.io", display_name: "앨리스", workspace_registry: { current: "lively-46e3" } };
+    const { fire } = await mount({ sessionId: "box-mine" });
+    fire({ jsonrpc: "2.0", id: 71, method: "ui/initialize", params: {} });
+    fire({ jsonrpc: "2.0", id: 72, method: "ui/me", params: { session: "box-evil" } });
+    await settle();
+    const caps = replies.find((m) => m && m.id === 71).result.capabilities;
+    eq([caps.chat, caps.me, caps.grant, caps.standalone], [true, true, true, false], "S2-20 H3 세션이 붙은 자리 — chat · me · grant · standalone false");
+    eq(replies.find((m) => m && m.id === 72).result, { member: { id: "alice", name: "앨리스", email: "a@x.io" }, workspace: { slug: "lively-46e3" }, app: { id: "deck-edit", variant: null }, session: "box-mine" },
+      "S2-20 H1 ui/me — 보는 사람 · 워크스페이스 · 이 앱 · 띄운 쪽 세션(앱이 말한 세션은 무시)");
+    const { fire: fire2 } = await mount({});
+    fire2({ jsonrpc: "2.0", id: 73, method: "ui/initialize", params: {} });
+    await settle();
+    eq(replies.find((m) => m && m.id === 73).result.capabilities.chat, false, "S2-20 H3 세션 없는 자리 — chat false");
+    globalThis.navigator.userActivation.isActive = false;
+    const before = document.body.children ? document.body.children.length : 0;
+    fire2({ jsonrpc: "2.0", id: 74, method: "ui/grant", params: {} });
+    await settle();
+    const r74 = replies.find((m) => m && m.id === 74);
+    ok(r74 && r74.error && r74.error.code === -32001, "S2-20 H2 사람이 누른 동작이 아니면 -32001");
+    eq(document.body.children ? document.body.children.length : 0, before, "S2-20 H2 동의 창을 띄우지 않는다");
+    globalThis.navigator.userActivation.isActive = true;
+  }
+
+  //  #4482 iframe 완화 — 두 길의 sandbox 값(web/lib/app-address.ts frameSandbox). 앱 주소는 출처 · 팝업까지, srcdoc 은 폼 · 대화창 · 내려받기만.
+  const ADDR_SB = "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads";
+  const SRC_SB = "allow-scripts allow-forms allow-modals allow-downloads";
   // S2-18 (#4480) 앱 주소 — 켜진 워크스페이스면 코드를 받아 앱 주소로 · 그 출처하고만 말한다 · 로그인 신호 · 쿠키 막힘 → srcdoc
   {
     const ORIGIN = "https://deck-edit-lively-46e3.lvly.app";
@@ -511,7 +588,8 @@ if (!existsSync(built)) {
     const launch = fetches.find((x) => x.url.includes("/launch"));
     eq(launch && launch.body, { mode: "embed", next: "/?page=settings" }, "S2-18 코드를 embed 로 받는다(화면 키는 앱 안 경로로)");
     ok(!fetches.some((x) => x.url.includes("/deck-edit/ui")), "S2-18 앱 주소로 띄우면 HTML 을 따로 받지 않는다");
-    eq([f.root.attrs.src, f.root.attrs.sandbox, f.root.attrs.srcdoc], [URL0, "allow-scripts allow-same-origin", undefined], "S2-18 src = 코드 붙은 앱 주소 · sandbox 에 allow-same-origin(다른 사이트) · srcdoc 없음");
+    eq([f.root.attrs.src, f.root.attrs.sandbox, f.root.attrs.srcdoc], [URL0, ADDR_SB, undefined], "S2-18 src = 코드 붙은 앱 주소 · sandbox 에 allow-same-origin(다른 사이트) · srcdoc 없음");
+    eq([f.root.attrs.allow, f.addressUrl()], ["clipboard-write; fullscreen; web-share", ORIGIN + "/?page=settings"], "S2-18 #4482 선언 없는 앱 — 장치 위임 없음 · 새 탭 주소는 그 화면");
     fire({ jsonrpc: "2.0", id: 61, method: "ui/initialize", params: {} }, "https://evil.lvly.app");
     await settle();
     eq(replies.length, 0, "S2-18 같은 프레임이어도 출처가 다르면 답하지 않는다");
@@ -525,32 +603,32 @@ if (!existsSync(built)) {
     fire({ type: "lively:app-auth", status: "code-invalid" });
     await settle();
     const swapped = f.root;
-    eq([swapped.attrs.sandbox, typeof swapped.attrs.srcdoc, swapped.attrs.src], ["allow-scripts", "string", undefined], "S2-18 두 번째 신호면 srcdoc 으로 — 새 프레임 · allow-same-origin 없음");
+    eq([swapped.attrs.sandbox, typeof swapped.attrs.srcdoc, swapped.attrs.src], [SRC_SB, "string", undefined], "S2-18 두 번째 신호면 srcdoc 으로 — 새 프레임 · allow-same-origin 없음");
     ok(fetches.some((x) => x.url.includes("/deck-edit/ui")), "S2-18 srcdoc 으로 바꿀 때 HTML 을 받는다");
     // 쿠키 막힘 → 이 브라우저는 다음부터 바로 srcdoc
     const m2 = await mountAddr({});
     m2.fire({ type: "lively:app-auth", status: "cookie-blocked" });
     await settle();
-    eq(m2.f.root.attrs.sandbox, "allow-scripts", "S2-18 cookie-blocked → 그 자리에서 srcdoc");
+    eq(m2.f.root.attrs.sandbox, SRC_SB, "S2-18 cookie-blocked → 그 자리에서 srcdoc");
     ok(localStorage.getItem("lively.appAddr.blocked"), "S2-18 쿠키 막힘을 기억한다");
     const m3 = await mountAddr({});
-    ok(!fetches.some((x) => x.url.includes("/launch")) && m3.f.root.attrs.sandbox === "allow-scripts", "S2-18 기억된 브라우저는 코드를 받지 않고 바로 srcdoc");
+    ok(!fetches.some((x) => x.url.includes("/launch")) && m3.f.root.attrs.sandbox === SRC_SB, "S2-18 기억된 브라우저는 코드를 받지 않고 바로 srcdoc");
     localStorage.removeItem("lively.appAddr.blocked");
     // 다른 출처의 신호는 무시
     const m4 = await mountAddr({});
     m4.fire({ type: "lively:app-auth", status: "cookie-blocked" }, "https://evil.lvly.app");
     await settle();
-    eq([m4.f.root.attrs.sandbox, localStorage.getItem("lively.appAddr.blocked")], ["allow-scripts allow-same-origin", null], "S2-18 다른 출처가 보낸 신호로는 바꾸지 않는다");
+    eq([m4.f.root.attrs.sandbox, localStorage.getItem("lively.appAddr.blocked")], [ADDR_SB, null], "S2-18 다른 출처가 보낸 신호로는 바꾸지 않는다");
     // 코드를 못 받으면(꺼짐 · 주소 없음 · 권한) 종전 길
     fetches.length = 0;
     plan = { "/launch": { status: 409, json: { code: "no_address", error: "x" } }, "/ui": { status: 200, json: { html: "<p>앱</p>" } } };
     const f5 = await mountAppUiFrame("deck-edit", {});
-    eq([f5.root.attrs.sandbox, typeof f5.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-18 코드를 못 받으면 종전 srcdoc");
+    eq([f5.root.attrs.sandbox, typeof f5.root.attrs.srcdoc], [SRC_SB, "string"], "S2-18 코드를 못 받으면 종전 srcdoc");
     // 그 밖의 덧붙임 스크립트(탐침이 아닌 것)는 앱 주소로 못 넣는다 → srcdoc
     fetches.length = 0;
     plan = { "/launch": launchPlan, "/ui": { status: 200, json: { html: "<p>앱</p>" } } };
     const f6 = await mountAppUiFrame("deck-edit", { extraScript: "console.log(1)" });
-    ok(!fetches.some((x) => x.url.includes("/launch")) && f6.root.attrs.sandbox === "allow-scripts", "S2-18 탐침이 아닌 덧붙임 스크립트는 srcdoc 으로");
+    ok(!fetches.some((x) => x.url.includes("/launch")) && f6.root.attrs.sandbox === SRC_SB, "S2-18 탐침이 아닌 덧붙임 스크립트는 srcdoc 으로");
     state.me = null;
   }
 
@@ -572,11 +650,11 @@ if (!existsSync(built)) {
     };
     // ① load 뒤 8초 안에 인사가 없으면 srcdoc
     const a = await mountAddr();
-    eq(a.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 앱 주소로 뜬다");
+    eq(a.g.root.attrs.sandbox, ADDR_SB, "S2-19 앱 주소로 뜬다");
     a.g.root.fireLoad();
     fireLong(8000);
     await settle();
-    eq([a.g.root.attrs.sandbox, typeof a.g.root.attrs.srcdoc], ["allow-scripts", "string"], "S2-19 load 뒤 인사가 없으면 그 자리에서 srcdoc");
+    eq([a.g.root.attrs.sandbox, typeof a.g.root.attrs.srcdoc], [SRC_SB, "string"], "S2-19 load 뒤 인사가 없으면 그 자리에서 srcdoc");
     eq(localStorage.getItem("lively.appAddr.blocked"), null, "S2-19 막힘으로 적지 않는다(다음엔 다시 앱 주소로)");
     // ② 인사한 문서는 감시가 멈춘다 — 이후 load·시간이 지나도 그대로
     longTimers.clear();
@@ -586,7 +664,7 @@ if (!existsSync(built)) {
     b.g.root.fireLoad();
     fireLong(8000); fireLong(20000);
     await settle();
-    eq(b.g.root.attrs.sandbox, "allow-scripts allow-same-origin", "S2-19 인사한 문서는 그대로 둔다");
+    eq(b.g.root.attrs.sandbox, ADDR_SB, "S2-19 인사한 문서는 그대로 둔다");
     eq(longTimers.size, 0, "S2-19 인사하면 감시 타이머를 거둔다");
     // ③ 다른 출처가 보낸 인사로는 감시가 안 멈춘다 · load 가 아예 안 와도 20초 받침
     longTimers.clear();
@@ -595,7 +673,7 @@ if (!existsSync(built)) {
     await settle();
     fireLong(20000);
     await settle();
-    eq(c.g.root.attrs.sandbox, "allow-scripts", "S2-19 load 가 없어도 20초 뒤 srcdoc · 남의 출처 인사는 인사가 아니다");
+    eq(c.g.root.attrs.sandbox, SRC_SB, "S2-19 load 가 없어도 20초 뒤 srcdoc · 남의 출처 인사는 인사가 아니다");
     // ④ 새 코드로 다시 띄우면(로그인 신호) 감시를 다시 건다 — 새 문서도 인사해야 한다
     longTimers.clear();
     const d = await mountAddr();
@@ -607,9 +685,49 @@ if (!existsSync(built)) {
     d.g.root.fireLoad();
     fireLong(8000);
     await settle();
-    eq(d.g.root.attrs.sandbox, "allow-scripts", "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
+    eq(d.g.root.attrs.sandbox, SRC_SB, "S2-19 다시 띄운 문서도 인사가 없으면 srcdoc");
     longTimers.clear();
     state.me = null;
+  }
+  // S2-20 #4848 호스트는 서버의 실패를 넘길 때 error.data 에 {status, error?, code?}(문자열만)를 싣는다 — 서버까지 안 간 거절은 data 없음
+  {
+    const { fire } = await mount({ sessionId: "box-mine", title: "장표 수정" });
+    //  서버가 JSON 아닌 413(코어 전역 파서의 HTML)으로 답한 도구 호출
+    plan = { "/tool-call": { status: 413, json: undefined } };
+    fetches.length = 0;
+    fire({ jsonrpc: "2.0", id: 80, method: "tools/call", params: { name: "store_insert", arguments: { table: "notes", row: { text: "x" } } } });
+    await settle();
+    ok(fetches.some((x) => x.url.includes("/api/ui/apps/deck-edit/tool-call")), "S2-20 배선 — 호스트가 서버를 불렀다");
+    eq(lastReply(), { jsonrpc: "2.0", id: 80, error: { code: -32000, message: "요청 실패 (413)", data: { status: 413 } } }, "S2-20 JSON 아닌 413 → data {status:413}");
+    //  서버가 짧은 코드를 준 실패(동의 문구가 아니라 그 자리 동의 창은 안 뜬다)
+    plan = { "/tool-call": { status: 403, json: { error: "이 도구는 선언되지 않았습니다", code: "tool_not_declared", extra: { secret: 1 } } } };
+    fire({ jsonrpc: "2.0", id: 81, method: "tools/call", params: { name: "whoami", arguments: {} } });
+    await settle();
+    eq(lastReply(), { jsonrpc: "2.0", id: 81, error: { code: -32001, message: "이 도구는 선언되지 않았습니다",
+      data: { status: 403, error: "이 도구는 선언되지 않았습니다", code: "tool_not_declared" } } }, "S2-20 403 → data {status, error, code} · 그 밖의 칸은 싣지 않는다");
+    //  개인 설정 413(16KB 넘음) — code 는 종전대로 -32602, data 도 싣는다
+    plan = { "/prefs": { status: 413, json: { error: "설정이 너무 큽니다(16KB 까지)" } } };
+    fire({ jsonrpc: "2.0", id: 82, method: "prefs/set", params: { patch: { big: "x" } } });
+    await settle();
+    eq(lastReply(), { jsonrpc: "2.0", id: 82, error: { code: -32602, message: "설정이 너무 큽니다(16KB 까지)", data: { status: 413, error: "설정이 너무 큽니다(16KB 까지)" } } }, "S2-20 prefs 413 → -32602 · data");
+    //  파일 읽기 · 세션에 글 보내기의 서버 실패도 같은 모양
+    plan = { "/file?": { status: 404, json: { error: "파일이 없습니다", code: "not_found" } }, "/chat-send": { status: 429, json: { error: "너무 잦습니다" } } };
+    fire({ jsonrpc: "2.0", id: 83, method: "files/read", params: { path: "a.html" } });
+    await settle();
+    eq(lastReply().error.data, { status: 404, error: "파일이 없습니다", code: "not_found" }, "S2-20 files/read 실패 → data");
+    fire({ jsonrpc: "2.0", id: 84, method: "chat/send", params: { text: "안녕" } });
+    await settle();
+    eq(lastReply().error.data, { status: 429, error: "너무 잦습니다" }, "S2-20 chat/send 실패 → data");
+    //  64자 넘는 code 는 자르지 않고 버린다 — 잘린 글이 짧은 코드가 되지 않게(격리 리뷰 N4)
+    plan = { "/tool-call": { status: 409, json: { error: "x", code: "a".repeat(65) } } };
+    fire({ jsonrpc: "2.0", id: 86, method: "tools/call", params: { name: "whoami", arguments: {} } });
+    await settle();
+    eq(lastReply().error.data, { status: 409, error: "x" }, "S2-20 64자 넘는 code 는 싣지 않는다");
+    //  서버까지 안 간 거절(붙은 세션 없음)은 data 없음 — 종전 모양 그대로
+    const { fire: fire2 } = await mount({});
+    fire2({ jsonrpc: "2.0", id: 85, method: "chat/send", params: { text: "x" } });
+    await settle();
+    ok(lastReply().error && lastReply().error.code === -32602 && !("data" in lastReply().error), "S2-20 서버 밖 거절은 data 를 싣지 않는다");
   }
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;

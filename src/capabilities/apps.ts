@@ -11,7 +11,10 @@ import { resolveGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
-import { removeInstalledApp } from "../apps/remove-run.js";
+import { removeInstalledApp, dropEmptyDraft, dropStaleDrafts } from "../apps/remove-run.js";
+import {
+  archiveLeftoverAppFolder, listAppFolderArchives, clearAppFolderArchives, restoreAppFolderArchive, archiveOrphanAppFolders,
+} from "../apps/app-folder-archive.js";   // #4778 앱 폴더 보관
 import { isBuiltinSource } from "../apps/store-ddl.js";
 import { restartWorkersForApp, stopWorkersForApp, stopWorkersForMemberApp } from "../apps/worker-service.js";
 import { editDenial, memberAppViolations } from "../apps/member-app.js";
@@ -34,12 +37,19 @@ import {
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
 import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
 import { multiFileFallbackHtml } from "../apps/app-front-page.js";
+import { appAddressUrlFor } from "./app-launch.js";   // #4482 맨 앱 주소(새 탭에서 열기)
+import { filesCspSource } from "../files/app-screen-csp.js";   // #4673 앱 폴더 서명 주소 자리(앱 화면 CSP)
 import { cleanupDroppedTables, appSchemaFor, ensureAppTables, tableSpecsOf, declaredColumnsOf, emptyTableReport, mergeReport, planDroppedTables, appTableCounts, type AppTableFailure, type AppTableReport } from "../apps/store-schema.js";
 import { describeTableChanges, previewLimits, splitFailures, type GoneTablePlan, type PublishPreview } from "../apps/publish-preview.js";
 import { listAppArchives, clearAppArchives } from "../apps/app-archive.js";
 import type { ArchiveReason } from "../apps/archive-meta.js";
 import { notifyAppInstaller } from "../apps/notify.js";
+import { afterPublishServer, afterRevertServer, installedBuildState, newFunctionDenial, publishServerDenial } from "../apps/app-server-deploy.js";
+import { appServerPolicy } from "../apps/app-server-store.js";
+import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { publishAppEvent, sessionOwnerOf } from "../apps/session-apps.js";
+import { resyncSessionsWithApp } from "../apps/session-app-folders.js";   // #4684 — 앱 상태·공개·동의가 바뀌면 붙은 세션의 앱 폴더를 다시 맞춘다
+import { appFolderUsageForView, folderFields } from "../apps/app-folder-quota.js";   // #4785 — 앱 폴더 상한 · 사용량 칸
 import { getMember } from "../org/store/members.js";
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
@@ -133,12 +143,15 @@ const appsIndex: Capability = {
     else if (input.include_empty !== true) rows = rows.filter((a) => !isEmptyDraftApp(a));
     //  공개 판을 볼 사람의 앱만 판 머리를 한 번에 읽는다 — 초안이 없는 앱(거의 전부)은 추가 조회가 없다.
     const heads = await store.listPublishedHeads(rows.filter((a) => appViewFor(a, who) === "published").map((a) => a.id));
+    //  #4785 앱 폴더 상한 · 사용량 — 한 번에 읽는다(CP 가 재어 보낸 것. 셀프호스트엔 없다).
+    const usage = await appFolderUsageForView(rows.map((a) => a.id));
     return {
       apps: rows.map((a) => {
         const v0 = appViewFor(a, who);
         const head = v0 === "published" ? heads.get(a.id) : undefined;
         const view: AppView = v0 === "published" && !head ? "installed" : v0;
-        return appRow(a, head ? asPublished(a, head) : a, who, view, a.origin_app_id ? byId.get(a.origin_app_id) ?? null : null);
+        return { ...appRow(a, head ? asPublished(a, head) : a, who, view, a.origin_app_id ? byId.get(a.origin_app_id) ?? null : null),
+          folder: folderFields(a, usage.get(a.id), isAppOwner(a, who) || isAdminViewer(who)) };
       }),
     };
   },
@@ -316,6 +329,10 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
   const why = publishDenial(app, who, editDenial(app, who, safeManifest(app)));
   if (why) throw new HttpError(403, why);
   if (app.visibility === "all" && !app.draft_by) return { version_no: app.published_version_no ?? app.current_version_no, changed: false };
+  //  #4484 서버 앱 — 공개할 판의 서버 빌드가 이미 있어야 한다(결정 상민 2026-10-15 «공개는 빌드가 끝난 판만»). 표를 만지기 전에 본다.
+  //   빌드는 「이대로 넣기」·app_server_deploy 가 그 판을 저장한 사람의 세션에서 한다 — 공개는 그 zip 을 함수의 공개 판(pub)으로 옮길 뿐이다.
+  const serverWhy = await publishServerDenial(app);
+  if (serverWhy) throw new HttpError(409, serverWhy);
   //  표와 무관한 준비(옛 공개 판 · 공개할 판 번호)는 표를 바꾸기 **전에** — 표를 바꾼 뒤엔 공개 표시 한 줄만 남긴다(격리 리뷰: 그 사이에 던지면
   //   표는 새 판인데 공개 판은 옛 판인 채 남는다).
   const old = app.visibility === "all" && app.published_version_no != null ? await store.getAppVersionHead(app.id, app.published_version_no) : null;
@@ -407,6 +424,13 @@ async function previewPublish(appId: string, who: Viewer, versionNo: number | nu
     ...base, tables: report, gone_tables: goneTables, blocked, changes, notes,
     incomplete: [incomplete, goneError].filter(Boolean).join(" · ") || null,
   };
+}
+
+/** #4484 공개가 끝난 뒤(설치 락 밖) — 공개 판의 서버 빌드를 함수의 pub · cur 로 옮긴다. 서버 앱이 아니면 null. 실패해도 공개는 됐다(응답 server 에 실는다). */
+async function serverAfterPublish(id: string): Promise<Awaited<ReturnType<typeof afterPublishServer>>> {
+  const app = await store.getApp(id);
+  if (!app || !serverDeclOf(app.manifest) || !appServerEnv()) return null;
+  return afterPublishServer(app, await appServerPolicy());
 }
 
 /** publish:true 의 공개 단계 — 실패해도 저장(설치 · 판 행 · 초안 표식)은 이미 끝났다. 잡아서 돌려주면 부르는 쪽이 저장 사건을 낸 뒤
@@ -514,7 +538,9 @@ const appGet: Capability = {
     const app = await requireVisibleApp(id, who);
     const { view, app: shown } = await viewApp(app, who);
     const origin = app.origin_app_id ? await store.getApp(app.origin_app_id) : null;
-    return { app: appRow(app, shown, who, view, origin), components: await store.listComponents(id) };
+    const usage = (await appFolderUsageForView([id])).get(id);   // #4785
+    return { app: { ...appRow(app, shown, who, view, origin), folder: folderFields(app, usage, isAppOwner(app, who) || isAdminViewer(who)) },
+      components: await store.listComponents(id) };
   },
 };
 
@@ -537,6 +563,8 @@ const appSetEnabled: Capability = {
     await requireVisibleApp(id, viewerOf(user));
     await store.setAppEnabled(id, !!input.enabled, wctx(user, ctx));
     if (!input.enabled) await stopWorkersForApp(id, "app_disabled");
+    //  #4684 — 끄면 붙은 세션에서 앱 폴더가 떨어지고, 다시 켜면 다시 붙는다(판정은 folderAppsFor — 기다리지 않는다).
+    resyncSessionsWithApp(id, input.enabled ? "앱 켬" : "앱 끔");
     return { ok: true, app_id: id, enabled: !!input.enabled };
   },
 };
@@ -568,6 +596,8 @@ const appGrant: Capability = {
       : undefined;
     const g = resolveGrant(m, requested);
     const row = await store.upsertGrant(id, actorOf(user), g.scopes, g.tools, wctx(user, ctx));
+    //  #4684 — 동의를 거둬 떨어졌던 앱 폴더가, 이 사람이 붙여 둔 세션에 다시 붙는다(기다리지 않는다).
+    resyncSessionsWithApp(id, "동의", actorOf(user));
     return { granted: row };
   },
 };
@@ -592,6 +622,8 @@ const appRevoke: Capability = {
     //  ⚠ 회수를 **먼저** 한다 — 앱 존재를 선검사하면 지워진 앱에 남은 동의를 영영 못 끈다(그건 더 나쁘다).
     const revoked = await store.revokeGrant(id, owner);
     await stopWorkersForMemberApp(owner, id, "grant_revoked");
+    //  #4684 — 이 사람이 붙여 둔 세션에서 그 앱 폴더를 뗀다(붙인 사람의 동의가 폴더의 근거다 — folderAppsFor).
+    if (revoked) resyncSessionsWithApp(id, "동의 회수", owner);
     // 아무것도 안 껐는데 그런 앱도 없다 = 오타다. (앱이 지워졌어도 살아있는 동의가 있었다면 위에서 껐으므로
     //  여기로 오지 않는다.) revoked=false 인데 앱은 있는 경우는 «이미 꺼져 있었다» — 약속된 결과 상태는
     //  성립하므로 성공이되 그 사실을 구분해 답한다.
@@ -664,6 +696,8 @@ const appInstall: Capability = {
       const workerRestart = !outcome.created && previousHash !== loaded.contentHash
         ? await restartWorkersForApp(outcome.id) : null;
       //  #4667 — 관리자 설치는 곧 공개다(칸 기본값 'all'). 새로 생긴 앱은 설치한 사람이 만든 사람·책임자.
+      //  #4484 — 관리자 설치는 «공개는 빌드된 판만»(publishCurrent) 을 거치지 않는다: 관리자가 직접 고른 묶음이라 믿는 길이고, 서버(web.server)는
+      //   설치한 관리자(= 저장한 사람)가 이어서 app_server_deploy 로 올린다(그 전에는 화면만 돌고 서버 호출은 «아직 없음»).
       if (outcome.created && actor !== "unknown") await store.stampAppCreatorIfMissing(outcome.id, actor).catch((err) => logger.warn({ err, id: outcome.id }, "만든 사람 기록 실패(비치명)"));
       const app = await store.getApp(outcome.id);
       return { app, created: outcome.created, components: outcome.components, tables: outcome.tables ?? null, worker_restart: workerRestart };
@@ -693,7 +727,7 @@ const appSave: Capability = {
     "있는 앱은 그 앱의 고치기 설정(기본 전원 · 관리자가 지정한 사람만으로 좁힐 수 있음 · 책임자는 늘)을 따른다. " +
     "기본 앱(빌트인)도 화면·데이터만으로 된 앱이면 고칠 수 있다 — 그러면 이 워크스페이스의 판이 릴리스 원본을 덮고(데이터 표는 그대로), " +
     "원본으로 되돌리려면 app_revert(원본 판). 저장마다 판이 남는다(app_versions · note 에 요지 한 줄). " +
-    "앱 화면은 샌드박스라 폼 제출이 막힌다 — 입력은 버튼 click · Enter keydown 으로. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관(공개 판이 아직 쓰는 표는 공개할 때까지 그대로). " +
+    "앱 화면은 평범한 웹처럼 돈다(#4482) — 폼 제출(onsubmit) · confirm · print · 내려받기가 되고, 앱 주소를 새 탭 · 폰에서 열어도 같은 SDK(window.lively)가 같은 주소의 /_lively/* 로 표 · 설정 · 앱 폴더를 쓴다(세션에 붙는 chat.send 등은 라이블리 화면 안에서만). 마이크 · 카메라는 web.devices 에 선언한 앱만. 칸 추가는 ADD COLUMN, 빠진 테이블은 비었으면 삭제·데이터 있으면 보관(공개 판이 아직 쓰는 표는 공개할 때까지 그대로). " +
     "★ 표 구조(#4724): 공개 앱의 초안에서 새 표 · 새 칸 · 풀기(not_null · 검사 빼기)는 저장 때 바로 되고, 공개 판이 쓰는 표를 깨는 변경은 공개할 때 적용된다 — " +
     "공개 판의 칸을 지우기(drop_columns) · 이름 · 종류 바꾸기 · not_null · unique · 외래키 조이기 · 기본값 더하기/바꾸기/빼기, 그 표의 새 검사 전부(새 칸 것까지), " +
     "기본값 없는 not_null 새 칸, 같은 값 기본값이 있는 칸의 unique · 외래키(옛 코드의 INSERT 는 모르는 칸을 빼고 넣는다). 목록은 응답 tables.deferred · hint — " +
@@ -757,6 +791,8 @@ const appSave: Capability = {
           //  #4667 새 앱 — 나만 보는 앱으로 먼저 예약한다. 만든 사람 · 책임자 · 만들기 세션 · 원본이 여기서 한 번 찍히고, 설치(upsertApp)는
           //   내용 칸만 채운다. 그래서 설치되는 순간에도 이 앱은 만든 사람에게만 보인다(공개로 생겼다가 닫히는 틈이 없다).
           const origin = input.origin_app_id ? await validOrigin(String(input.origin_app_id), id, who) : null;
+          //  #4778 — 같은 id 의 앱 폴더가 남아 있으면(지운 앱의 것) 먼저 보관으로 옮긴다. 새 앱은 빈 앱 폴더로 시작한다(못 보면 503).
+          await archiveLeftoverAppFolder(id, who.userId);
           if (!(await store.reserveDraftApp({ id, title: loaded.manifest.title, made_by: who.userId, build_session: sessionId, origin_app_id: origin }, wctx(user, ctx)))) {
             throw new HttpError(409, `앱 id '${id}' 를 다른 저장이 막 만들었습니다 — 잠시 뒤 다시 저장하세요`);
           }
@@ -795,7 +831,7 @@ const appSave: Capability = {
           });
         } catch (e) {
           await store.deleteAppVersions(id, [versionNo]).catch((err) => logger.warn({ err, id, versionNo }, "설치 실패 뒤 판 행 회수 실패(비치명)"));
-          if (reservedHere) await store.dropEmptyDraftApp(id).catch((err) => logger.warn({ err, id }, "설치 실패 뒤 예약 행 회수 실패(비치명)"));
+          if (reservedHere) await dropEmptyDraft(id, who.userId).catch((err) => logger.warn({ err, id }, "설치 실패 뒤 예약 행 회수 실패(비치명)"));
           if (claim && claim.before !== who.userId) await store.setAppDraftBy(id, claim.before).catch((err) => logger.warn({ err, id }, "설치 실패 뒤 초안 표식 되돌리기 실패(비치명 — 공개 판 쪽으로 틀린다)"));
           throw e;
         }
@@ -814,6 +850,15 @@ const appSave: Capability = {
         return { outcome, versionNo, created: reservedHere || firstFill, pub, pubError };
       });
       const versionNo = r.versionNo;
+      //  #4484 서버 앱 — 이 저장이 공개까지 했으면 공개 판의 서버를 옮긴다 · 아니면 «서버는 아직 이 판으로 빌드 안 됨» 을 알린다(저장은 빌드하지 않는다).
+      const server = r.pub?.changed ? await serverAfterPublish(id) : null;
+      const bs = !server && serverDeclOf(loaded.manifest) && appServerEnv() ? await installedBuildState((await store.getApp(id))!).catch(() => null) : null;
+      const serverNote = !bs ? null : {
+        state: bs.deployed ? "deployed" : bs.built ? "built" : "not_built", declared: true, built: bs.built, deployed: bs.deployed,
+        hint: bs.deployed ? "이 판의 서버는 이미 올라가 있습니다(같은 코드 — 매니페스트만 바뀌었다)"
+          : bs.built ? `같은 코드의 빌드가 있어 app_server_deploy {app_id:'${id}'} 하면 빌드 없이 바로 올라갑니다`
+            : `서버(web.server)는 저장만으로 빌드되지 않습니다 — 이 판을 시험하려면 app_server_deploy {app_id:'${id}'}(이 세션에서 빌드 · 몇 분), 사람은 앱 만들기 「이대로 넣기」`,
+      };
       //  세션 옆 앱 칸이 이 사건을 받아 그 앱 화면을 다시 띄운다(«N판 · 방금 고침 · 되돌리기»). 공개 판이 바뀌었으면 그 앱을 붙여 둔 사람들에게도.
       publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: versionNo, note, source: ctx?.source });
       if (r.pub?.changed) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: versionNo, note, source: ctx?.source });
@@ -827,6 +872,7 @@ const appSave: Capability = {
       return {
         app, created: r.created, tables, version_no: versionNo,
         visibility: app?.visibility ?? null, state, ...(skipped.length ? { skipped } : {}),
+        ...(server ? { server } : serverNote ? { server: serverNote } : {}),
         hint: state === "me" ? `나만 보는 앱으로 저장했습니다(책임자에게만 보임) — 워크스페이스 모두가 쓰게 하려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
           : state === "draft" ? `초안으로 저장했습니다 — ${versionNo}판은 저장한 사람에게만 보이고 다른 구성원은 공개 판을 계속 씁니다. 모두에게 내보내려면 app_visibility_set {app_id:'${id}', visibility:'all'}`
             + (deferredNow.length ? ` · 공개 판이 쓰는 칸이라 공개할 때 반영할 표 변경 ${deferredNow.length}개: ${deferredNow.map((d) => d.change).join(" · ")}`
@@ -1039,6 +1085,21 @@ const appRevert: Capability = {
       return { app: await store.getApp(id), version_no: target, changed: true, published: !!pub?.changed, deferred: pub?.changed ? [] : deferred, pubError };
     });
     if (result.changed) publishAppEvent(who.userId, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
+    //  #4484 서버 앱 — 공개까지 했으면 공개 판의 서버를 옮기고(기다린다), 되돌리기만이면 그 판의 빌드가 있을 때 cur 를 뒤에서 따라가게 한다
+    //   (빌드 없음 · 함수 판을 새로 올리면 수십 초 — 되돌리기 응답을 붙잡지 않는다). 빌드가 없던 판이면 서버는 그대로다(app_server_status 에 보인다).
+    let server: Awaited<ReturnType<typeof afterPublishServer>> | { state: "following"; following: true; message: string } | null = null;
+    if (result.published && !("pubError" in result && result.pubError)) server = await serverAfterPublish(id);
+    else if (result.changed && result.app && serverDeclOf(result.app.manifest) && appServerEnv()) {
+      const app1 = result.app;
+      const p = await appServerPolicy();
+      //  #4792 함수가 없는 앱이 워크스페이스 함수 수 상한에 닿았으면 뒤에서 옮기다 조용히 멈추지 말고 지금 알린다(격리 리뷰 — 줄이 없어 last_error 를 적을 곳이 없다).
+      const capWhy = await newFunctionDenial(app1.id, p).catch(() => null);
+      if (capWhy) server = { ok: false, state: "failed", message: `서버를 되돌린 판으로 옮기지 못했습니다: ${capWhy}` };
+      else {
+        void afterRevertServer(app1, p).catch((err) => logger.warn({ err, id }, "되돌린 뒤 앱 서버 따라가기 실패(비치명)"));
+        server = { state: "following", following: true, message: "그 판의 서버 빌드가 있으면 뒤에서 cur 를 옮깁니다 — app_server_status 로 보세요" };
+      }
+    }
     if (result.published) for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, { kind: "updated", app_id: id, session: null, version_no: target, note: `되돌림 → ${target}판`, source: ctx?.source });
     const after = result.app;
     if ("pubError" in result && result.pubError) {
@@ -1049,7 +1110,7 @@ const appRevert: Capability = {
     return {
       ok: true, app_id: id, version_no: result.version_no, changed: result.changed, app: after,
       visibility: after?.visibility ?? null, state: after?.visibility === "me" ? "me" : after?.draft_by ? "draft" : "published",
-      deferred,
+      deferred, ...(server ? { server } : {}),
     };
   },
 };
@@ -1084,10 +1145,14 @@ const appVisibilitySet: Capability = {
         const ev = { kind: "updated" as const, app_id: id, session: null, version_no: out.version_no ?? undefined, note: `${out.version_no ?? ""}판 공개`, source: ctx?.source };
         publishAppEvent(who.userId, ev);
         for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, ev);
+        //  #4684 — 다시 공개하면 «나만» 일 때 떨어졌던 남의 세션에 앱 폴더가 다시 붙는다.
+        resyncSessionsWithApp(id, "공개");
       }
       const app = await store.getApp(id);
+      //  #4484 서버 앱 — 공개 판의 서버 빌드를 함수의 pub · cur 로(설치 락 밖에서 · 실패해도 공개는 됐다).
+      const server = out.changed ? await serverAfterPublish(id) : null;
       //  tables — 공개하며 적용한 표 변경(초안이 미뤄 둔 칸 지우기 · 이름 · 형 바꾸기 · 조이기 — 지운 칸의 값은 dropped_columns.archived_as 에 보관).
-      return { ok: true, app_id: id, visibility: app?.visibility ?? "all", version_no: out.version_no, changed: out.changed, published_at: app?.published_at ?? null, tables: out.tables ?? null };
+      return { ok: true, app_id: id, visibility: app?.visibility ?? "all", version_no: out.version_no, changed: out.changed, published_at: app?.published_at ?? null, tables: out.tables ?? null, ...(server ? { server } : {}) };
     }
     const changed = await store.withAppInstallLock(id, async () => {
       const app = await requireVisibleApp(id, who);
@@ -1108,6 +1173,8 @@ const appVisibilitySet: Capability = {
       const ev = { kind: "updated" as const, app_id: id, session: null, note: "「나만」 으로 바꿈", source: ctx?.source };
       publishAppEvent(who.userId, ev);
       for (const m of await attachedMembers(id)) if (m !== who.userId) publishAppEvent(m, ev);
+      //  #4684 — 남이 붙여 둔 세션에서는 그 앱 폴더도 떨어진다(붙인 사람이 이제 못 보는 앱 — folderAppsFor).
+      resyncSessionsWithApp(id, "「나만」 으로 바꿈");
     }
     return { ok: true, app_id: id, visibility: "me", changed };
   },
@@ -1196,11 +1263,17 @@ const appBuildStart: Capability = {
     const mine = (await store.findAppsByBuildSession(sid)).find((a) => isAppOwner(a, who));
     if (mine) return { app_id: mine.id, created: false, bound: true, build_session: sid, visibility: mine.visibility, empty: isEmptyDraftApp(mine) };
     //  그만둔 만들기가 남긴 빈 예약(첫 판 없이 사흘 지난 내 것)은 새로 시작할 때 거둔다 — 따로 도는 청소 잡을 두지 않는다.
-    await store.dropStaleEmptyDrafts(who.userId).catch((err) => logger.warn({ err, member: who.userId }, "오래된 빈 예약 앱 정리 실패(비치명)"));
+    await dropStaleDrafts(who.userId).catch((err) => logger.warn({ err, member: who.userId }, "오래된 빈 예약 앱 정리 실패(비치명)"));
     const title = String(input.title ?? "").trim().slice(0, 200) || "새 앱";
     for (let i = 0; i < 6; i++) {
       const id = draftAppIdFrom(title, rand6());
-      if (await store.reserveDraftApp({ id, title, made_by: who.userId, build_session: sid, origin_app_id: null }, wctx(user, ctx))) {
+      //  #4778 — 새 id 라도 같은 이름의 앱 폴더가 남아 있으면 먼저 보관으로 옮긴다(app_save 의 새 id 와 같은 규칙 · 설치 락 안에서 «없음» 을 본다).
+      const reserved = await store.withAppInstallLock(id, async () => {
+        if (await store.getApp(id)) return false;
+        await archiveLeftoverAppFolder(id, who.userId);
+        return store.reserveDraftApp({ id, title, made_by: who.userId, build_session: sid, origin_app_id: null }, wctx(user, ctx));
+      });
+      if (reserved) {
         return { app_id: id, created: true, bound: true, build_session: sid, visibility: "me", empty: true };
       }
     }
@@ -1239,7 +1312,7 @@ const appDraftRemove: Capability = {
   name: "app_draft_remove",
   title: "나만 보는 앱 지우기",
   description: "아직 공개하지 않은(나만 보는) 앱을 지운다 — 그만둔 앱 만들기의 초안 정리. 데이터가 있으면 지우기 직전에 떠 둔다(7일, app_data_snapshots). " +
-    "책임자·관리자. 공개한 앱은 관리자가 org_app_remove 로 지운다.",
+    "앱 폴더(apps/<앱>/)는 보관으로 옮긴다(응답 app_folder · 7일 뒤 지움). 책임자·관리자. 공개한 앱은 관리자가 org_app_remove 로 지운다.",
   scope: null,
   input: { app_id: z.string() },
   expose: {
@@ -1254,7 +1327,7 @@ const appDraftRemove: Capability = {
       if (app.visibility !== "me") throw new HttpError(409, `「${app.title || id}」 은(는) 공개한 앱이라 관리자가 지웁니다(org_app_remove) — 먼저 「나만」 으로 되돌리면(app_visibility_set visibility:'me') 여기서 지울 수 있습니다`);
       if (isBuiltinSource(app.source)) throw new HttpError(409, `기본 앱(빌트인) '${id}' 은 지울 수 없습니다`);
       if (!isAppOwner(app, who) && !isAdminViewer(who)) throw new HttpError(403, `「${app.title || id}」 은(는) 책임자와 관리자만 지울 수 있습니다`);
-      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx))) };
+      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx), "discard")) };
     });
   },
 };
@@ -1296,6 +1369,7 @@ const appRemove: Capability = {
   name: "org_app_remove",
   title: "앱 제거",
   description: "앱과 그 전개물(하네스 자산·크론·툴·호스트)을 회수하고 레지스트리에서 삭제한다. 데이터 표와 그 앱의 보관 표(archives)는 지우기 직전 떠 둔다(7일, app_data_snapshots). "
+    + "앱 폴더(apps/<앱>/)는 보관으로 옮긴다(응답 app_folder — 같은 id 로 새로 만든 앱은 빈 앱 폴더로 시작 · 7일 뒤 지움 · app_folder_archives · 되돌리기 app_folder_restore). "
     + "builtin(코드 소유) 앱은 제거 대신 org_app_set_enabled 로 끈다(부팅 재시드). 관리자.",
   scope: "admin",
   input: { app_id: z.string() },
@@ -1309,8 +1383,8 @@ const appRemove: Capability = {
       const app = await requireVisibleApp(id, viewerOf(user));
       const src = (app.source ?? {}) as { kind?: string };
       if (src.kind === "builtin") throw new HttpError(409, `builtin 앱 '${id}' 은 제거 대신 org_app_set_enabled 로 끄세요(부팅 시 재시드됩니다)`);
-      //  지우는 순서(회수 → 데이터 떠 두기 → 테이블 → 인스턴스 → 앱 행)는 공용 코어에 있다 — 시더의 은퇴 앱 회수와 같은 길(#4554).
-      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx))) };
+      //  지우는 순서(회수 → 데이터 떠 두기 → 테이블 → 앱 폴더 보관 → 인스턴스 → 앱 행)는 공용 코어에 있다 — 시더의 은퇴 앱 회수와 같은 길(#4554).
+      return { ok: true, removed: id, ...(await removeInstalledApp(app, wctx(user, ctx), "remove")) };
     });
   },
 };
@@ -1336,6 +1410,16 @@ const appActivityCap: Capability = {
     return { activity: await store.appActivity(id, days) };
   },
 };
+
+/**
+ * 화면 파일이 없다 — 서버가 화면을 만드는 앱(#4485 · web.server)이면 종전 화면(srcdoc)으로는 못 열고 앱 주소로만 열린다고 말한다
+ *  (앱 주소 쿠키를 막는 브라우저가 라이블리 안에서 이 길로 온다 — 새 탭은 된다). 그 자리엔 «새 탭에서 열기» 단추가 없을 수 있어 주소를 글에 싣는다.
+ */
+function noUiPage(id: string, manifest: unknown, appUrl: string | null): HttpError {
+  return new HttpError(404, serverDeclOf(manifest) && appServerEnv()
+    ? `앱 '${id}' 은(는) 서버가 화면을 만드는 앱이라 이 화면에서는 열 수 없습니다 — 새 탭에서 앱 주소${appUrl ? `(${appUrl})` : ""}로 열어 주세요`
+    : `앱 '${id}' 에 UI 페이지가 없습니다`);
+}
 
 // ── 앱 UI 페이지 서빙(#1780 PR5) — 샌드박스 srcdoc iframe 용 entry HTML ──
 //  정적 URL 이 아니라 **인증 API**로 준다: 앱 UI 는 호스트가 fetch → sandbox="allow-scripts" srcdoc 으로 실어
@@ -1363,26 +1447,30 @@ const appUi: Capability = {
       if (pub) {
         //  #4481 — 화면 entry 파일만 꺼낸다(판 묶음이면 저장소에서 그 파일만 · 앱 주소 · 앱 열기와 같은 자리).
         const ui = uiPagesFromFiles(pub.manifest, pub.files);
-        if (ui.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
+        if (ui.length === 0) throw noUiPage(id, pub.manifest, appAddressUrlFor(app, who, null));
         const pick = input.page ? ui.find((u) => u.page_key === String(input.page)) : ui[0];
         if (!pick) throw new HttpError(404, `UI 페이지 없음: ${String(input.page)}`);
-        const csp = ((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
+        const csp = { ...(((pub.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(pub.manifest) };
         const multi = webRootOf(pub.manifest) !== null;
-        return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", ...(multi ? { multi_file: true } : {}) };
+        const appUrl = appAddressUrlFor(app, who, input.page ? pick.page_key : null);
+        return { app_id: id, page_key: pick.page_key, kind: pick.kind, title: pick.title, html: multi ? multiFileFallbackHtml(pick.title ?? app.title, appUrl) : pick.html, pages: ui.map((u) => ({ page_key: u.page_key, kind: u.kind, title: u.title })), csp, view: "published", app_url: appUrl, ...(multi ? { multi_file: true } : {}) };
       }
       logger.warn({ app: id, published: app.published_version_no }, "공개 판 행이 없어 설치된 화면을 준다(#4667 불변식)");
     }
     const pages = await store.listUiAssets(id);
-    if (pages.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
+    if (pages.length === 0) throw noUiPage(id, app.manifest, appAddressUrlFor(app, who, null));
     const key = input.page ? String(input.page) : pages[0].page_key;
     const a = await store.getUiAsset(id, key);
     if (!a) throw new HttpError(404, `UI 페이지 없음: ${key}`);
     // csp = 매니페스트 선언(없으면 빈 객체 = 네트워크·프레임 0). 호스트(app-ui.ts)가 이걸로 srcdoc CSP 를 짓는다 —
     //  선언에 없는 것은 브라우저가 막는다(우리 코드가 아니라 브라우저가 집행하는 경계).
-    const csp = ((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>;
+    //  #4673 앱 폴더를 선언한 앱은 그 서명 주소 자리(files)를 더 연다 — files/app-screen-csp.
+    const csp = { ...(((app.manifest as { csp?: unknown } | null)?.csp ?? {}) as Record<string, unknown>), files: await filesCspSource(app.manifest) };
     //  #4481 여러 파일 앱(web.root)은 앱 주소에서만 돈다 — srcdoc(이 길)으로는 /assets/… 를 못 싣는다. 쿠키가 막힌 브라우저가 이 길로 오면 까닭을 보인다.
     const multi = webRootOf(app.manifest) !== null;
-    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title) : a.html, pages, csp, view: "installed", ...(multi ? { multi_file: true } : {}) };
+    //  #4482 맨 앱 주소 — 화면이 「새 탭에서 열기」 를 그린다(쿠키가 막힌 브라우저도 새 탭은 맨 위 페이지라 된다).
+    const appUrl = appAddressUrlFor(app, who, input.page ? a.page_key : null);
+    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: multi ? multiFileFallbackHtml(a.title ?? app.title, appUrl) : a.html, pages, csp, view: "installed", app_url: appUrl, ...(multi ? { multi_file: true } : {}) };
   },
 };
 
@@ -1500,6 +1588,97 @@ const appArchiveClear: Capability = {
   },
 };
 
+// ── 앱 폴더 보관 보기 · 비우기 · 되돌리기 · 고아 옮기기(#4778, 관리자) ──
+//  앱을 지우면 그 앱 폴더(apps/<앱>/)는 apps 주소로 닿지 않는 보관 자리로 옮겨지고(remove-run), 보관 기간(앱 데이터 떠 두기와 같은 7일)이 지나면
+//  정비가 지운다. 관리자는 목록을 보고 비우거나, 같은 id 로 다시 만든 앱에 되돌린다(명시로만 — app_data_restore 와 같은 자세). 앱 행 없이 폴더만
+//  남은 것(고아)은 정비가 훑지 않는다 — 여기서 보고 보관으로 옮긴다(상민 2026-10-16). 실행 · 규칙은 apps/app-folder-archive.ts.
+const appFolderArchivesList: Capability = {
+  name: "app_folder_archives",
+  title: "앱 폴더 보관 목록",
+  description: "앱을 지울 때 보관으로 옮긴 앱 폴더(apps/<앱>/)와, 앱 없이 남은 앱 폴더(고아)를 본다. archives 항목 = name(비우기 · 되돌리기에 그대로) · app_id · "
+    + "archived_at · archived_by · entry(remove 관리자 제거 · discard 나만 보는 앱 지우기 · retire 기본 앱 은퇴 · draft-drop 빈 예약 거두기 · create 같은 id 로 새로 만들 때 남아 있던 것 · "
+    + "orphan 고아를 옮김 · unknown 기록 없이 파일만 있던 것) · files · bytes · truncated(세다 멈춤) · expires_at(이때 지운다) · expired(보관 기간이 지나 정비가 지우는 중) · "
+    + "last_error · last_try_at(지우려다 멈춘 보관의 까닭 · 시각 — 권한 · 시간 예산, 다시 비우면 이어서 지운다) · app_exists(같은 id 의 앱이 지금 있나) · "
+    + "missing(기록만 있고 파일이 없다). 되돌리기는 app_exists 이고 expired · last_try_at 이 없을 때만. "
+    + "orphans 항목 = app_id · files · bytes — app_folder_orphans_archive 로 보관에 옮긴다. 관리자.",
+  scope: "admin",
+  input: {},
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/app-folder-archives"], parse: () => ({}) }],
+  },
+  handler: async (_input: Record<string, unknown>, user: LivelyUser) => listAppFolderArchives(actorOf(user)),
+};
+
+const appFolderArchiveClear: Capability = {
+  name: "app_folder_archive_clear",
+  title: "앱 폴더 보관 비우기",
+  description: "보관한 앱 폴더를 지운다(app_folder_archives 의 name 그대로) — 되살릴 길이 없다(그 보관이 마지막 사본이다). 보관 이름 꼴이 아니거나 없는 이름은 "
+    + "건드리지 않고 missing 으로 알린다 · 못 지운 것은 kept(까닭). 보관 기간이 지난 것은 정비가 스스로 지운다. 관리자.",
+  scope: "admin",
+  input: { names: z.array(z.string()).min(1).max(200) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-folder-archives/clear"], parse: (req) => ({ names: (req.body as Record<string, unknown> | undefined)?.names }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    //  REST 는 zod 를 거치지 않는다 — 모양이 틀린 names 를 조용히 [] 로 읽지 않게 거절한다(app_archive_clear 와 같은 까닭).
+    if (!Array.isArray(input.names) || !input.names.length) throw new HttpError(400, "names(보관 이름들)가 필요합니다 — app_folder_archives 로 목록을 보세요");
+    const names = input.names.map((n) => String(n ?? ""));
+    const out = await clearAppFolderArchives(names, actorOf(user));
+    //  파일을 지우는 관리자 동작 — 누가 무엇을 지웠고 무엇이 남았나를 감사에 남긴다.
+    if (out.cleared.length || out.kept.length) {
+      await audit("app_folder_archive", null, "clear", { names }, { cleared: out.cleared, kept: out.kept }, user?.userId, ctx?.source)
+        .catch((err) => logger.warn({ err }, "앱 폴더 보관 비우기 감사 기록 실패(비치명)"));
+    }
+    return { ok: true, ...out };
+  },
+};
+
+const appFolderRestore: Capability = {
+  name: "app_folder_restore",
+  title: "앱 폴더 되돌리기",
+  description: "보관한 앱 폴더를 같은 id 의 앱 폴더(apps/<앱>/)로 되돌린다 — 그 앱이 지금 있고(지운 앱을 같은 id 로 다시 만든 뒤) 그 앱 폴더가 없거나 비었을 때만. "
+    + "앱 폴더에 파일이 있으면 409(새 앱의 파일을 덮지 않는다 · 아무것도 바꾸지 않는다). 앱이 없으면 409 · 보관 기간이 지났거나(expired) 지우다 멈춘 보관(last_try_at — "
+    + "일부가 이미 지워졌을 수 있다)이면 409 · 보관이 이미 지워졌으면 410. 앱 데이터는 app_data_restore 로 따로. 관리자.",
+  scope: "admin",
+  input: { name: z.string().max(200) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-folder-archives/restore"], parse: (req) => ({ name: (req.body as Record<string, unknown> | undefined)?.name }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    const name = String(input.name ?? "").trim();
+    const out = await restoreAppFolderArchive(name, actorOf(user));
+    await audit("app_folder_archive", out.app_id, "restore", { name }, out, user?.userId, ctx?.source)
+      .catch((err) => logger.warn({ err }, "앱 폴더 되돌리기 감사 기록 실패(비치명)"));
+    return { ok: true, restored: out.name, app_id: out.app_id };
+  },
+};
+
+const appFolderOrphansArchive: Capability = {
+  name: "app_folder_orphans_archive",
+  title: "고아 앱 폴더 보관으로",
+  description: "앱 행 없이 남은 앱 폴더(app_folder_archives 의 orphans)를 보관으로 옮긴다 — 앱 id 마다 설치 락 안에서 «그 앱이 없음» 을 다시 본 뒤. "
+    + "같은 id 의 앱이 있으면 건너뛴다(skipped — 그 앱의 폴더다). 옮긴 것은 다른 보관처럼 보관 기간 뒤 지운다. 관리자.",
+  scope: "admin",
+  input: { app_ids: z.array(z.string().max(64)).min(1).max(200) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/app-folder-archives/orphans"], parse: (req) => ({ app_ids: (req.body as Record<string, unknown> | undefined)?.app_ids }) }],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    if (!Array.isArray(input.app_ids) || !input.app_ids.length) throw new HttpError(400, "app_ids(고아 앱 폴더의 앱 id 들)가 필요합니다 — app_folder_archives 의 orphans 를 보세요");
+    const ids = input.app_ids.map((n) => String(n ?? ""));
+    const out = await archiveOrphanAppFolders(ids, actorOf(user));
+    if (out.archived.length) {
+      await audit("app_folder_archive", null, "archive_orphans", { app_ids: ids }, { archived: out.archived.map((a) => a.name), skipped: out.skipped }, user?.userId, ctx?.source)
+        .catch((err) => logger.warn({ err }, "고아 앱 폴더 보관 감사 기록 실패(비치명)"));
+    }
+    return { ok: true, ...out };
+  },
+};
+
 export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert,
   appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore,
-  appArchivesList, appArchiveClear];
+  appArchivesList, appArchiveClear, appFolderArchivesList, appFolderArchiveClear, appFolderRestore, appFolderOrphansArchive];

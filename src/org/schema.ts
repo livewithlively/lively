@@ -17,6 +17,7 @@ import { initMcpServerRegistry, initToolAndAssetRegistry, initOrgHookHealthColum
 import { initConnectorRegistry, initCollectorRegistry, initCollectorPresets, initClassifierRegistry, initManagerRegistry, initIngestPolicyAndDistillers, initSourceVisPolicy } from "./schema/connectors-ingest.js";
 import { initDbAccessPolicies } from "./schema/db-access.js";
 import { initSessionsInfra } from "./schema/sessions-infra.js";
+import { initAiRuns } from "./schema/ai-runs.js";
 import { initGroundTruthRegistries } from "./schema/registry.js";
 import { initMemberAuth } from "./schema/member-auth.js";
 import { initOAuthServer } from "./schema/oauth.js";
@@ -28,6 +29,7 @@ import { initNodeLinkLog } from "./schema/node-link-log.js";
 import { initSessionConvLog } from "./schema/session-conv.js";
 import { initWorkspaceRegistry } from "./schema/workspace-registry.js";
 import { initAppRegistry } from "./schema/apps.js";
+import { initMemberAiConnector } from "./schema/member-ai-connector.js";
 
 export async function initOrgSchema(): Promise<void> {
   await initOrgCore(itemsPool);                    // org_profile·org_member·org_content_audit·mcp_call_log·auth_token
@@ -39,6 +41,7 @@ export async function initOrgSchema(): Promise<void> {
   await initOrgHookHealthColumn(itemsPool);        // org_hook.health(훅 실행 실패 관측)
   await initDbAccessPolicies(itemsPool);           // org_db_*(소스·정책·마스킹·grant) + db_access_log
   await initSessionsInfra(itemsPool);              // org_cron·managed_session·session_state·preview_env·stack_profile·node·task
+  await initAiRuns(itemsPool);                     // #4488 org_app_ai_run · org_app_llm_call(앱 AI 실행 기록 · 프록시 계측)
   await initIngestPolicyAndDistillers(itemsPool);  // org_ingest_policy·org_distiller(+seen·prefilter)
   await initSourceVisPolicy(itemsPool);           // #1291 v4: 커넥터별 자료 공개범위 정책
   await initOrgCoreLateAdditions(itemsPool);       // org_member.status_message·project_member·org_content_audit 확장
@@ -61,5 +64,6 @@ export async function initOrgSchema(): Promise<void> {
   await initNodeState(itemsPool);                  // #1834: org_node_state(노드 세션 스냅샷의 정본 — 게이트웨이 재배포에도 목록이 남는다) — 맨 끝(신규 조각 규약)
   await initNodeLinkLog(itemsPool);                // #1849: org_node_link_log(노드 연결/해제 이력 — 잠자기 패턴 진단의 근거) — 맨 끝(신규 조각 규약)
   await initSessionConvLog(itemsPool);             // #2233: org_session_conv(한 박스가 살면서 돌린 대화 전부 — 타임라인이 세션 전체를 본다) — 맨 끝(신규 조각 규약)
+  await initMemberAiConnector(itemsPool);          // #4213 T6: member_ai_connector(+scan) — 구성원 AI 계정(Claude)에 연결된 앱 기록 — 맨 끝(신규 조각 규약)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

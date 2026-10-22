@@ -104,6 +104,13 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: collect_session_policy — 수집 실행 세션 크기(#4213 T11). 상한·예약(MB). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_COLLECT_MEM_MB·_REQUEST_MB) → 1,024/640 순(src/sessions/session-memory-policy.ts).
+  //  session_memory_policy 와 칸을 가른다 — 컨트롤플레인이 그 칸을 프로비저닝마다 통째로 다시 쓴다.
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS collect_session_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: session_reclaim_policy — idle 세션 자동 회수(reaper) 정책(#1059 F). idle TTL(분). ──
   // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_IDLE_TTL_MIN) → 0(회수 끔, 무회귀) 순으로 해석
   //  (src/sessions/session-reclaim-policy.ts). 켜면 그 시간 넘게 idle 인 세션을 reaper 가 회수하되 desired-state
@@ -226,5 +233,30 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   //  (상민 2026-10-15 «상한도 동적으로 수정 가능하게»).
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_bundle_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+  // ── org_runtime_config 확장(#4484 앱 v2-5): 앱 서버 상한 — 함수 메모리·시간 · 빌드 시간·메모리 바닥 · 자동 멈춤 기준 · 로그 보관.
+  //  비면 '{}' = env LIVELY_APP_SERVER_POLICY → 코드 기본값(apps/app-server-policy.ts). 관리자 도구 app_server_limits_set 이 이 칸만 쓴다.
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_server_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+  // ── org_runtime_config 확장(#4213 T6 #4427): 구성원 AI 계정(Claude) 커넥터를 이 워크스페이스에서 쓰나. 기본 TRUE(상민 2026-10-16
+  //  «허용이 기본» — 연결·수집 To-Be 의 기본 연결이 구성원 Claude 커넥터다). 끄면 세션 안내문이 «ext__ 만» 으로 바뀌고, 라이블리가
+  //  띄우는 claude 세션에 claude.ai 커넥터를 싣지 않으며, 구성원 AI 계정 수집이 돌지 않는다. 관리자 도구 member_ai_connectors_policy_set 이
+  //  이 칸만 쓴다(org/member-ai-connectors.ts — app_bundle_policy 와 같은 «한 칸 전용 입구» 규약).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allow_member_ai_connectors BOOLEAN NOT NULL DEFAULT TRUE;
+  `);
+  // ── org_runtime_config 확장(#4490 앱 v2-11): 작업 컨테이너 상한 — 워크스페이스 동시 · 실행 계정당 동시 · 대기열 · 대기 상한 · 실행 시간 ·
+  //  판 무응답 · 시작 상한. 비면 '{}' = env 시드 → 코드 기본값(org/policies/agent-job-policy.ts — 상민 2026-10-16 동시 2 · 대기 20 · 30분 ·
+  //  15/60분 · 90초). 관리자 도구 agent_job_limits_set 이 이 칸만 쓴다(앱 판 상한과 같은 꼴).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS agent_job_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+  // ── org_runtime_config 확장(#4488 앱 v2-9): 앱 AI 실행 — 상한(app_ai_policy: 사람당 동시 · 앱당 빈도 · 워크스페이스 동시 · 단발 시간 ·
+  //  출력 토큰 · 앱당 하루 토큰 — org/policies/ai-run-policy.ts) · 실행 계정(app_ai_account: 워크스페이스 기본 실행 계정 + 앱별·작업별 덮어쓰기 ·
+  //  기본 모델 — ai-runs/plan.ts AiAccountSettings). 비면 '{}'. 관리 도구 app_ai_limits_set · app_ai_account_set 이 이 두 칸만 쓴다.
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_account JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 }

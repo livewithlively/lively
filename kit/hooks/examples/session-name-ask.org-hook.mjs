@@ -42,6 +42,18 @@ function isWorkSessionEnv(env) {
   return !String(env.LIVELY_TASK_WS || "").trim();   // 구 세션 폴백
 }
 
+// #4418 — **이미 이름이 정해진 세션인가.** 세션을 열 때 서버가 pane 에 실어 준 이름 출처(LIVELY_SESSION_LABEL_SOURCE)를 본다.
+//  human — 태스크에서 연 세션(이름 = 태스크 이름) · 앱 만들기 · 이름을 지어 연 세션. agent — AI 가 이미 지은 세션을 되살린 것.
+//  둘 다 걸쇠상 AI 의 세션 이름짓기가 못 이기므로 ①(session_rename)을 안내하면 첫 턴에 헛 툴콜만 하나 붙는다(사람이 기다리는
+//  시간) — 그리고 종전엔 그 헛 툴콜이 노드 세션에서 실제로 이겨 사람이 지은 태스크 이름까지 바꿨다. 그래서 ①은 뺀다.
+//  ②(자동 생성 프로젝트의 이름)는 **남긴다** — 이름을 지어 연 세션이 프로젝트 없이 열리면 서버가 임시 이름(«새 작업»)의
+//  껍데기 프로젝트를 만드는데, 세션 이름이 사람 것이라 승계(①→프로젝트)가 일어나지 않으므로 ②가 그 이름을 지을 유일한 자리다.
+//  rule·id·값 없음(이 env 이전에 뜬 세션·옛 노드)은 종전대로 전부 안내한다 — 이름이 정해져 있으면 서버 걸쇠가 조용히 흡수한다.
+function alreadyNamedEnv(env) {
+  const src = String(env.LIVELY_SESSION_LABEL_SOURCE || "").trim().toLowerCase();
+  return src === "human" || src === "agent";
+}
+
 const readStdin = () => new Promise((resolve) => {
   let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };
   try {
@@ -58,6 +70,7 @@ function executionSessionId(input = {}, env = process.env) {
   const native = String(input.session_id || input.sessionId || "").trim();
   const harness = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase();
   if (native && harness === "codex" && SID_RE.test(`codex-${native}`)) return `codex-${native}`;
+  if (native && harness === "cursor" && SID_RE.test(`cursor-${native}`)) return `cursor-${native}`;   // #4927 cursor-adapter
   if (native && harness === "claude" && SID_RE.test(`claude-${native}`)) return `claude-${native}`;
   const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
   if (codex && SID_RE.test(`codex-${codex}`)) return `codex-${codex}`;
@@ -74,11 +87,24 @@ export function namingPromptOk(promptRaw) {
   return true;
 }
 
+// 이름이 이미 정해진 세션용 — ②만(위 alreadyNamedEnv 머리말). 세션 이름짓기 툴은 언급하지 않는다(부를 일이 없다).
+const PROJECT_ONLY_GUIDE =
+  "[라이블리 — 이름짓기(세션당 1회): 이 세션이 만든 프로젝트]\n" +
+  "이 세션의 이름은 이미 정해져 있습니다(사람이 지었거나 앞서 지은 이름) — 세션 이름은 따로 짓지 마세요.\n" +
+  "② **프로젝트 이름** — 지금 주입된 프로젝트 AGENTS.md 가 이 프로젝트를 «세션의 첫 지시에서·세션을 열 때 **자동 생성**된 " +
+  "프로젝트»라고 말하고 있으면(임시 이름 «새 작업» 포함), 이 일 전체를 말하는 이름을 지어 `project_rename_v6 {name: \"…\"}` " +
+  "(id 생략 = 이 세션이 붙어 있는 프로젝트)로 한 번 등록하세요.\n" +
+  "  · 한국어 명사구 · 공백 포함 20자 안팎 · **무슨 일인지**를 말합니다(예: `프로젝트 자동 이름짓기`, `앱 한글 자모분리 수정`).\n" +
+  "  · 자동 생성이 아닌 프로젝트(사람이 만든 것·이미 이름이 지어진 것)라면 **아무것도 하지 마세요** — " +
+  "그래도 불렀다면 서버가 `applied:false` 로 조용히 무시합니다(사람이 지은 이름은 덮이지 않습니다).\n" +
+  "· **답변을 막지 마세요** — 지금 받은 지시를 먼저 처리하고, 할 일이 있을 때만 그 턴 안에서 한 번 부르면 됩니다.\n";
+
 const GUIDE =
   "[라이블리 — 이름짓기(세션당 1회): 이 세션 · 이 세션이 만든 프로젝트]\n" +
   "① **세션 이름** — 이 세션이 **무엇을 하는 자리인지** 드러나는 이름을 지어 `session_rename {name: \"…\"}` " +
   "(lively MCP — session_id 는 생략, 이 세션 자신)로 한 번 등록하세요.\n" +
   "  · 한국어 명사구 한 줄 · 공백 포함 10자 이내 · 조사·서술어 없이 (예: `결제 백오프`, `한글 자모분리`)\n" +
+  "  · 이 세션이 프로젝트에 붙으며 **자동으로 만든 태스크**는 이 이름으로 한 번 바뀝니다(보드에서 이 일의 제목이 됩니다).\n" +
   "  · ⚠ **프로젝트 이름을 그대로 쓰지 마세요.** 소속은 트리·칩이 이미 말합니다. 한 프로젝트 아래 세션이 " +
   "전부 같은 이름이면 목록에서 서로 구분되지 않습니다(실측: 프로젝트 세션 147건 중 104건이 그랬습니다). " +
   "세션 이름은 '어디에 속하나'가 아니라 **'여기서 무엇을 시켰나'** 입니다.\n" +
@@ -108,6 +134,8 @@ const GUIDE =
   //  보드에서 진짜 작업과 구분되지 않았다. 게다가 배치마다 툴콜이 한 번씩 붙는 순수 낭비였다.
   //  ⚠ 폴백(LIVELY_TASK_WS)을 남겨 둔다 — 이 축이 생기기 **전에 뜬 세션**은 kind 를 안 달고 있다.
   if (!isWorkSessionEnv(process.env)) return;
+  // 이미 이름이 정해진 세션 — ①(세션 이름)은 빼고 ②(자동 생성 프로젝트)만 안내한다(alreadyNamedEnv 머리말).
+  const guide = alreadyNamedEnv(process.env) ? PROJECT_ONLY_GUIDE : GUIDE;
 
   const stdinData = await readStdin();
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }
@@ -124,6 +152,6 @@ const GUIDE =
   } catch { return; }                              // 이미 누가 만들었다(또는 tmp 를 못 쓴다) — 중복 안내 안 함
 
   process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: GUIDE },
+    hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: guide },
   }) + "\n");
 })().then(() => process.exit(0)).catch(() => process.exit(0));

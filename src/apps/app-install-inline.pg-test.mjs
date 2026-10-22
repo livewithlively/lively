@@ -10,6 +10,7 @@
 //  E2 갱신 — 칸 추가 · 빠진 테이블(데이터 있음) 보관 · 선언 밖 테이블 store 거부 · 설치한 사람에게 알림
 //  E3 빠진 빈 테이블은 삭제(알림 없음) · E4 타입 불일치는 바꾸지 않고 알림 · E5 퓨즈 409 + 알림 + 무변경
 //  E6 연속 하이픈 id + 테이블은 400 · E7 제거하면 하이픈 id 앱 테이블도 사라진다
+import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;

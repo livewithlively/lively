@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { buildKnowledgeIndex, substituteBlocks, effectiveSectionTemplate, isLockedSection, DEFAULT_CONTEXT_ONTOLOGY_GUIDE, CONTEXT_ONTOLOGY_GUIDE_SECTION, type CategoryMapEntry } from "./knowledge-index.js";
+import { buildKnowledgeIndex, substituteBlocks, effectiveSectionTemplate, isLockedSection, DEFAULT_CONTEXT_ONTOLOGY_GUIDE, CONTEXT_ONTOLOGY_GUIDE_SECTION, MEMBER_AI_CONNECTORS_GUIDE, fillMemberAiConnectorsLine, type CategoryMapEntry } from "./knowledge-index.js";
 import type { KnowledgeRow } from "../../v6/knowledge-store.js";
 
 let pass = 0;
@@ -202,10 +202,57 @@ t("lock 표9-10: 잠금 판정은 가이드 키 정확 일치만 — org-default
   assert.equal(effectiveSectionTemplate("Context-Ontology-Guide", "x", true), "x", "표10: 변형 키는 일반 규칙(행 본문)");
 });
 
-t("lock 표11: 코드 기본 가이드에 외부 MCP 라우팅 원칙(#1242)·플레이스홀더가 실려 있다(릴리스=갱신의 내용 검증)", () => {
-  assert.ok(DEFAULT_CONTEXT_ONTOLOGY_GUIDE.includes("외부 서비스 MCP 는 라이블리 `ext__*` 가 기본이다"), "ext__ 우선 원칙 불릿");
+t("lock 표11: 코드 기본 가이드에 외부 MCP 라우팅 줄 자리(#1242 → #4427)·플레이스홀더가 실려 있다(릴리스=갱신의 내용 검증)", () => {
+  assert.ok(DEFAULT_CONTEXT_ONTOLOGY_GUIDE.includes("${member_ai_connectors}"), "외부 서비스 MCP 줄 자리(정책으로 채운다)");
   assert.ok(DEFAULT_CONTEXT_ONTOLOGY_GUIDE.includes("${categories}"), "카테고리 플레이스홀더 보존");
   assert.ok(DEFAULT_CONTEXT_ONTOLOGY_GUIDE.includes("${wiki}"), "위키 플레이스홀더 보존");
+});
+
+// ── (#4427 · #4213 T6) 외부 서비스 MCP 줄 — 구성원 AI 계정(Claude) 커넥터 정책으로 두 벌 중 하나 ──
+//  G1 기본 가이드: 자리 한 번 · 옛 «폴백했음을 밝힌다» 문장 없음   G2 정책 생략·true → 허용 줄   G3 false → 막음 줄 · 허용 줄 없음
+//  G4 두 줄 모두 «같은 서비스면 ext__» 를 지킨다   G5 렌더 결과에 자리 문자열이 안 남는다   G6 buildKnowledgeIndex 가 정책을 넘긴다
+//  G7 fill 은 다른 자리(${categories}·${wiki})를 건드리지 않는다
+t("G1 기본 가이드에 외부 서비스 MCP 줄 자리가 정확히 한 번 · 옛 폴백 문장은 없다", () => {
+  assert.equal(DEFAULT_CONTEXT_ONTOLOGY_GUIDE.split("${member_ai_connectors}").length - 1, 1);
+  const rendered = substituteBlocks(DEFAULT_CONTEXT_ONTOLOGY_GUIDE, {});
+  assert.ok(!rendered.includes("폴백했음을 답변에 밝힌다"), "허용이 기본이 되며 걷은 문장이 남아 있다");
+});
+
+t("G2 정책을 안 주거나 true 면 허용 줄 — 라이블리에 없으면 본인 Claude 커넥터 1순위", () => {
+  for (const o of [{}, { memberAiConnectorsAllowed: true }]) {
+    const r = substituteBlocks(DEFAULT_CONTEXT_ONTOLOGY_GUIDE, o);
+    assert.ok(r.includes("본인의 Claude 커넥터(`mcp__claude_ai_*`)를 1순위로 쓴다"), JSON.stringify(o));
+    assert.ok(!r.includes("`ext__*` 만 쓴다(관리자 정책)"), JSON.stringify(o));
+  }
+});
+
+t("G3 정책이 false 면 막음 줄 — ext__ 만, 허용 줄은 없다", () => {
+  const r = substituteBlocks(DEFAULT_CONTEXT_ONTOLOGY_GUIDE, { memberAiConnectorsAllowed: false });
+  assert.ok(r.includes("`ext__*` 만 쓴다(관리자 정책)"));
+  assert.ok(r.includes("개인 커넥터로 대신하지 말고"));
+  assert.ok(!r.includes("1순위로 쓴다"), "막았는데 허용 줄이 남았다");
+});
+
+t("G4 두 줄 모두 «같은 서비스면 ext__» 를 지킨다(#1242 조직 통제)", () => {
+  assert.ok(MEMBER_AI_CONNECTORS_GUIDE.allowed.includes("양쪽에 보이면 **반드시 `ext__*` 를 쓴다**"));
+  assert.ok(MEMBER_AI_CONNECTORS_GUIDE.blocked.includes("`ext__*` 만 쓴다"));
+});
+
+t("G5 어느 정책이든 렌더 결과에 자리 문자열이 남지 않는다", () => {
+  for (const allowed of [true, false, undefined]) {
+    assert.ok(!substituteBlocks(DEFAULT_CONTEXT_ONTOLOGY_GUIDE, { memberAiConnectorsAllowed: allowed }).includes("${member_ai_connectors}"), String(allowed));
+  }
+});
+
+t("G6 buildKnowledgeIndex 가 정책을 그대로 넘긴다(발행물·미리보기 경로)", () => {
+  assert.ok(buildKnowledgeIndex([], [], undefined, new Map(), { memberAiConnectorsAllowed: false }).includes("`ext__*` 만 쓴다(관리자 정책)"));
+  assert.ok(buildKnowledgeIndex([], []).includes("1순위로 쓴다"), "정책 생략 = 허용");
+});
+
+t("G7 fillMemberAiConnectorsLine 은 다른 자리를 건드리지 않는다(관리 화면은 그 둘을 자리 그대로 보여 준다)", () => {
+  const f = fillMemberAiConnectorsLine(DEFAULT_CONTEXT_ONTOLOGY_GUIDE, false);
+  assert.ok(f.includes("${categories}") && f.includes("${wiki}"));
+  assert.ok(f.includes(MEMBER_AI_CONNECTORS_GUIDE.blocked) && !f.includes("${member_ai_connectors}"));
 });
 
 // ── (#1247 E9) ${wiki} 소스 배선 — 세 표면이 '핀 전량 조회'를 넘겨야 한다. ──

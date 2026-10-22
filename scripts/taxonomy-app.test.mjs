@@ -107,7 +107,9 @@ ok(/page === 'taxonomy'/.test(route) && /renderTaxonomyApp\(tab\.center/.test(ro
 ok(/const aliasTo = aliasRoute\(page, segs\);\s*if \(aliasTo\)/.test(route) && /export function aliasRoute\(/.test(APPS), "W2 라우터가 옛 주소를 새 앱 주소로 넘긴다(#/categories/<id> 는 그 분류로)");
 ok(/if \(p === 'taxonomy'\) return 'taxonomy';/.test(read("web/v2/tabs.ts")), "W1 분류체계는 한 창(탭 키 하나)");
 const SIDE = read("web/v2/side.ts");
-ok(/last\.activeKey\(\) === 'taxonomy'\) \{[^}]*renderTaxonomySection\(\)/.test(SIDE), "W1 사이드바가 분류체계 갈래를 그린다(앱 소유 사이드바)");
+//  #4632 — 누가 사이드바를 갖나는 lib/side-owner 한 자리(분류체계 = 'taxonomy')가 정하고, side.ts 는 그 답으로 갈래를 고른다.
+ok(/const own = ownerNow\(\);/.test(SIDE) && /if \(own === 'taxonomy'\) \{[^}]*renderTaxonomySection\(\)/.test(SIDE) && /taxonomy: 'taxonomy'/.test(read("web/lib/side-owner.ts")),
+  "W1 사이드바가 분류체계 갈래를 그린다(앱 소유 사이드바)");
 const taxSide = code(cut(SIDE, "function renderTaxonomySection(", "\nfunction renderHomeApps"));
 ok(/'전체 지도'/.test(taxSide) && /'손볼 것'/.test(taxSide) && /'묶음'/.test(taxSide) && /'정리'/.test(taxSide) && /fitWikiList\(/.test(taxSide) && /빈 분류/.test(taxSide),
   "W1 사이드바: 고정 두 줄 · 「묶음」 이름표와 [정리] · 높이에 맞춘 줄 나누기 · 빈 분류 접기");

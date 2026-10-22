@@ -22,6 +22,16 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("부재·잡값 → 기본값(켬) · 명시 false 만 끔(#1752)");
 }
 
+// ── #4927 — Cursor 세션 기록도 기본 수집(윤상민 2026-10-22 «커서 세션 기본으로 켜»). claude·codex 와 같은 자리다:
+//  한 번도 설정 안 한 박스는 Cursor 를 쓰는 구성원의 기록이 업그레이드로 바로 남는다. 명시 목록을 저장한 조직은 그 목록이 이긴다.
+{
+  assert.ok(DEFAULT_SESSION_SHARE.harnesses.includes("cursor"), "🔴 #4927 기본 수집에 cursor — 빠지면 관리자가 켜기 전까지 Cursor 기록이 안 남는다");
+  assert.ok(resolveSessionShare({}).harnesses.includes("cursor"), "빈 설정(한 번도 안 건드린 박스) → cursor 수집");
+  assert.deepEqual(resolveSessionShare({ harnesses: ["claude", "codex"] }).harnesses, ["claude", "codex"], "명시 목록은 그대로(기본값 변경이 덮지 않는다)");
+  assert.deepEqual(DEFAULT_SESSION_SHARE.harnesses.slice(0, 2), ["claude", "codex"], "종전 기본 둘은 그대로");
+  ok("cursor 기본 수집(#4927) · 명시 목록 존중");
+}
+
 // ── enum 필드 잡값 방어 ──
 {
   assert.equal(resolveSessionShare({ scope: "everything" }).scope, "main", "미지원 scope → 기본 main");

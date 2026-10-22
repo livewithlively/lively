@@ -1,6 +1,7 @@
 // 앱 데이터 store_* 능력(핸들러 게이트) 실-DB 스모크 (#1780 D6) — 설치가 app 테이블을 만들고,
 //  store_insert/query/tables 가 앱 principal 로 자기 테이블만 다루는지. (테넌트 RLS 격리는 app-store-rls.itest 가 별도 실증.)
 //  fail-first: store_* 는 이 PR 이전 없었다. ⚠ 수동 실행:  node scripts/app-store.itest.mjs
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os"; import path from "node:path";

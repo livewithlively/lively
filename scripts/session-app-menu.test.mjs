@@ -33,6 +33,22 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
   const bare = menu.sessAppMenuRows({ title: "x", hasPrefs: false, overridesBuiltin: false, versionNo: null }, h);
   eq([bare[1].off, bare[3].off, bare[2].hint], [true, true, undefined], "S6-1 표시 설정을 구독 안 했으면 그 줄이, 원본 그대로면 「원본으로」가 흐려진다 · 판을 모르면(옛 게이트웨이) 힌트 없음");
   ok(bare[1].hint === "이 앱은 표시 설정이 없어요" && /지금이 원본/.test(bare[3].hint), "S6-1 흐린 줄은 힌트가 까닭을 말한다(격리 리뷰 (1)·(3))");
+  //  #4482 「새 탭에서 열기」 — 앱 주소가 켜진 자리(손잡이 tab 이 있음)에서만, 「크게 보기」 다음 · 떼기 위에
+  const tabbed = [];
+  const withTab = menu.sessAppMenuRows({ title: "x", hasPrefs: true, overridesBuiltin: false, versionNo: 1 }, { ...h, tab: () => tabbed.push("tab") });
+  eq(withTab.map((r) => (r.sep ? "—" : r.label)), ["AI에게 고치기…", "표시 설정", "버전 이력…", "원본으로 되돌리기", "—", "크게 보기", "새 탭에서 열기", "이 세션에서 떼기"], "S6-1b 새 탭에서 열기는 크게 보기 다음");
+  withTab.find((r) => r.label === "새 탭에서 열기").run();
+  eq(tabbed, ["tab"], "S6-1b 그 줄이 tab 손잡이를 부른다");
+  ok(!rows.some((r) => r.label === "새 탭에서 열기"), "S6-1b 손잡이가 없으면(앱 주소 꺼짐) 줄도 없다");
+}
+
+// ══ S6-1c 제 손으로 쓴 것인가(#4482) — onChange 를 안 건 앱을 다시 불러오지 않는 출처 ══
+{
+  eq([menu.isOwnWriteSource("app-ui"), menu.isOwnWriteSource("app-front")], [true, true], "S6-1c 다리 · 같은 주소 API(/_lively/*)로 쓴 것은 제 손");
+  eq(["mcp", "web", null, undefined, "", "APP-UI"].map((s) => menu.isOwnWriteSource(s)), [false, false, false, false, false, false], "S6-1c 세션의 AI · 다른 사람 · 모르는 출처는 바깥 변경");
+  //  배선 — 세션 앱 칸의 «다시 불러오기» 거름이 이 판정을 쓴다(격리 리뷰: 'app-front' 를 몰라 /_lively/* 로 쓸 때마다 다시 불러왔다)
+  const pane = (await import("node:fs")).readFileSync(new URL("../web/v2/session-app-pane.ts", import.meta.url), "utf8");
+  ok(/if \(isOwnWriteSource\(ev\.source\)\) return;/.test(pane) && !/ev\.source === 'app-ui'/.test(pane), "S6-1c 앱 칸의 다시 불러오기 거름이 isOwnWriteSource 를 쓴다");
 }
 
 // ══ S6-2 「AI에게 고치기」 글 ═══════════════════════════════════════════════════
@@ -105,6 +121,26 @@ const pad = await import(join(root, "public/app/lib/pad-hidden.js"));
     ok(/const page = segs\[0\] \|\| '';\n[\s\S]{0,400}?if \(page !== 'full'\) dismissAppUi\(\);/.test(MAIN), "S6-1b 화면을 옮기면(full 밖) 덮개를 걷는다 — 알림 클릭이 화면을 바꾼다");
     const full = (MAIN.match(/page === 'full' && segs\[1\]\) \{[\s\S]*?\n    \} else if/) || [""])[0];
     ok(/if \(!window\.opener\) \{ back\(\); return; \}/.test(full) && full.indexOf("if (!window.opener)") >= 0 && full.indexOf("if (!window.opener)") < full.indexOf("try { window.close(); }"), "S6-1c #/full 닫기는 스크립트가 연 창(window.opener)일 때만 window.close() — 아니면 그 자리에서 되돌아간다(데스크톱 앱 본 창이 숨지 않게)");
+    //  #4480 (2026-10-16 상민님 실측) — 채팅 링크로 연 크게 보기를 닫으니 보던 세션이 아니라 첫 화면(새 세션 자리)으로 갔다 · 크게 보기를 연 채
+    //   알림이 이미 열린 세션 탭을 켜면 덮개가 남았다(renderRoute 의 걷기는 처음 그리는 탭에서만 돈다) · 남은 크게 보기 탭이 «가장 최근에 보던 창» 으로
+    //   다시 뽑혀 닫은 앱 화면이 되살아났다(격리 리뷰 재현). 줄 맨 앞의 실제 코드만 본다(주석으로 인용해도 초록이 되지 않게).
+    const back = (full.match(/\n      const back = \(\): void => \{\n[\s\S]*?\n      \};\n/) || [""])[0];
+    ok(back.length > 0 && /\n        if \(histPos > 0\) \{ history\.back\(\); return; \}\n/.test(back)
+      && /\n        location\.replace\(location\.pathname \+ location\.search \+ \(sid \? '#\/s\/' \+ encodeURIComponent\(sid\) : '#\/'\)\);\n      \};\n$/.test(back)
+      && back.indexOf("history.back()") < back.indexOf("location.replace("),
+      "S6-1d 닫기는 셸 안에서 왔으면(histPos > 0) 뒤로 가기 — 이 화면으로 처음 열었을 때만 그 세션(없으면 첫 화면)");
+    const act = (MAIN.match(/\n    onActivate: \(tab, fresh\) => \{\n[\s\S]*?\n    \},\n/) || [""])[0];
+    ok(act.length > 0 && /\n      const left = prevActiveTab; prevActiveTab = tab;\n      if \(!isFullRoute\(tab\.route\)\) dismissAppUi\(\);\n/.test(act),
+      "S6-1e 다른 탭을 켜면 크게 보기 덮개를 걷는다(알림이 이미 열린 세션 탭을 켤 때)");
+    ok(/\n      if \(left && left !== tab && isFullRoute\(left\.route\)\) \{\n        window\.setTimeout\(\(\) => \{ if \(tabsApi && tabsApi\.tabs\.includes\(left\) && tabsApi\.current\(\) !== left && isFullRoute\(left\.route\)\) tabsApi\.close\(left\); \}, 0\);\n      \}\n      if \(fresh\) void renderRoute\(tab\);\n/.test(act),
+      "S6-1e 크게 보기 탭을 떠나면(뒤로 가기 · 알림 · 다른 탭) 그 탭은 다음 틱에 닫힌다 — 남아서 착지 후보가 되지 않게");
+    const alive = (MAIN.match(/\nfunction tabTargetAlive\(route: string\): boolean \{\n[\s\S]*?\n\}\n/) || [""])[0];
+    ok(alive.length > 0 && /\n  if \(isFullRoute\(route\)\) return false;\n  return true;\n\}\n$/.test(alive) && /^const isFullRoute = \(route: string\): boolean => parseRoute\(route\)\.segs\[0\] === 'full';$/m.test(MAIN),
+      "S6-1e 크게 보기 탭은 착지 후보가 아니다(tabTargetAlive → canLand) — 닫은 앱 화면이 «가장 최근에 보던 창» 으로 되살아나지 않게");
+    const openUi = UI.slice(UI.indexOf("export async function openAppUi"), UI.indexOf("function uiKey")).split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");   // 주석은 빼고 코드만
+    ok(UI.indexOf("export async function openAppUi") >= 0 && openUi.length > 0 && /el\('span', \{ text: '닫기' \}\)\)\),/.test(openUi) && !/v2-appui-esc|\(Esc\)/.test(openUi)
+      && /^function uiKey\(e: KeyboardEvent\): void \{ if \(e\.key === 'Escape'\) closeAppUi\(\); \}$/m.test(UI),
+      "S6-1f 크게 보기 닫기 단추엔 «(Esc)» 안내가 없다(앱 화면을 누르면 Esc 가 앱으로 간다) — Esc 키 처리는 남는다");
   }
   ok(/kind: 'attach' \| 'detach' \| 'data' \| 'updated';/.test(LIVE), "S6-3 앱 사건 타입에 updated");
   const upd = (PANE.match(/if \(ev\.kind === 'updated'\) \{[\s\S]*?\n    \}/) || [""])[0];

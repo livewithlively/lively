@@ -15,7 +15,8 @@
 import { SHELL_CMDS } from "./phase.js";
 import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
-import { sendKeysToSession, sendKeyToSession, sendDownToSession } from "./send-keys.js";
+import { sendKeysToSession, sendKeyToSession, sendDownToSession, pastesFor, oneLineOf, startsWithKey, type SendKeysOpts } from "./send-keys.js";
+import { submitGuard, SUBMIT_POLL_MS } from "./submit-check.js";   // #4818 — 넣은 뒤 입력칸에 우리 글이 남았나
 
 export type FirstPromptStep = "wait" | "accept-trust" | "dismiss-update" | "send" | "give-up";
 
@@ -184,7 +185,8 @@ export interface FirstPromptRuntime {
   peek: (id: string) => Promise<{ pane: string; paneCmd: string }>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
-  send: (id: string, text: string) => Promise<void>;
+  /** `opts.paste` — 붙여넣기로 싣는다(#4818 · send-keys 규약 ⑤ — Claude Code 만) */
+  send: (id: string, text: string, opts?: SendKeysOpts) => Promise<void>;
   trustKeys: TrustKeys;
 }
 
@@ -321,9 +323,52 @@ export async function injectFirstPromptWithRuntime(
       continue;
     }
     if (step === "send") {
-      await runtime.send(id, text);
+      await runtime.send(id, text, pastesFor(harness) ? { paste: true } : undefined);
+      if (harness === "claude") await watchSubmit(id, text, runtime);
       return true;
     }
     await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
   }
+}
+
+/** 첫 지시를 넣은 뒤 입력칸을 지켜보는 시간(#4818) — 아웃박스의 에코 창 하나와 같다. 응답을 막지 않는다(createSession 이 `void` 로 띄운다). */
+export const FIRST_SUBMIT_WATCH_MS = 15_000;
+
+/**
+ * 첫 지시가 아닌 지시도 넣은 뒤 지킨다(#4852) — 노드의 sendKeys(멤버 PC 세션에 대화창이 보낸 말 · 크론 주입)와 게이트웨이 로컬 주입은
+ *  종전엔 치고 끝이었다. 보이지 않는 글자·제어 글자가 섞인 지시는 Claude Code 가 첫 Enter 를 «검토 후 Enter» 로 멈추는데(실측), 그 길엔
+ *  지킴이가 없어 사람이 Enter 를 눌러야 했다. 같은 지킴이(watchSubmit)를 뒤에서 돌린다.
+ *  · 붙여넣은 글(`pasted` — Claude Code 세션)만 지킨다 — 다른 하네스의 입력칸 문법은 모른다. 키로 시작하는 글(설정 명령)은 뺀다: 붙여넣지 않고
+ *    쳤고(send-keys LEADING_KEY), 그 뒤의 확인창은 따로 본다(#4772).
+ *  · 부른 쪽을 막지 않는다 — 돌려준 약속은 기다리지 않아도 된다(시험만 기다린다 · 지키지 않으면 null). 지킴이가 던져도 보낸 것은 되돌리지 않고 한 줄 남긴다.
+ */
+export function guardAfterSend(
+  id: string, text: string, pasted: boolean,
+  runtime: Pick<FirstPromptRuntime, "peek" | "sleep" | "now" | "trustKeys"> = { peek, sleep, now: Date.now, trustKeys: TMUX_TRUST_KEYS },
+): Promise<void> | null {
+  if (!pasted || startsWithKey(text)) return null;
+  return watchSubmit(id, text, runtime).catch((e) => {
+    console.warn(`[terminal] 넣은 지시를 지키다 멈췄다(${id}) — 보낸 것은 그대로다: ${(e as Error)?.message ?? e}`);
+  });
+}
+
+/**
+ * 넣은 뒤 FIRST_SUBMIT_WATCH_MS 동안 입력칸을 본다(#4818 — submit-check 머리말): 우리 글이 그대로 남아 있으면 Enter 를 더 누른다.
+ *  아웃박스와 달리 에코 확인이 없어 «창 끝 Enter» 는 없다 — 화면이 우리 글을 보여 줄 때만 누른다.
+ *  ⚠ 일찍 끝내지 않는다: 바쁜 Claude Code 는 글을 읽기 전까지 빈 입력칸을 그대로 보여 준다(«비었다» 가 «제출됐다» 가 아닌 구간).
+ *  누르기 직전에 한 번 더 본다(confirmBeforePress — #4852): 본 때와 누를 때 사이(한 박자)에 사람이 제 글을 치기 시작했으면 그 글을 제출하지 않는다.
+ *   걸음이 둘이 되지만 이 자리는 RPC 상한을 세지 않는다(아웃박스 지킴이는 한 박자 한 걸음 그대로).
+ */
+async function watchSubmit(id: string, text: string, runtime: Pick<FirstPromptRuntime, "peek" | "sleep" | "now" | "trustKeys">): Promise<void> {
+  const guard = submitGuard({
+    peek: async () => { try { return { ok: true, pane: (await runtime.peek(id)).pane }; } catch { return { ok: false }; } },
+    enter: () => runtime.trustKeys.enter(id),
+    now: runtime.now,
+  }, oneLineOf(text), { confirmBeforePress: true });
+  const until = runtime.now() + FIRST_SUBMIT_WATCH_MS;
+  while (runtime.now() < until) {
+    await runtime.sleep(SUBMIT_POLL_MS);
+    await guard.tick();
+  }
+  if (guard.presses()) console.warn(`[terminal] 지시가 입력칸에 남아 Enter 를 ${guard.presses()}번 더 눌렀다(${id}) — 제출 확인 #4818`);
 }

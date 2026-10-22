@@ -107,10 +107,12 @@ export function routeKey(route: string): string {
  *  · 경유 탭은 한 번 쓰고 끝이다. 되살아나면 이미 쓴 state 로 다시 열어, 워크스페이스를 열었는데 앱 주소의
  *    «로그인을 마치지 못했습니다» 로 넘어갔다(2026-10-14 상민님 실측, 사파리).
  *  · 크게 보기는 앱을 셸 위에 덮는 따로 연 창이다. 되살아나면 다음에 라이블리를 열 때 앱이 셸을 덮고 선다.
+ * #4482 — 앱 동의 경유(#/app-grant/<앱>?v=…&next=…)도 같다. 앱 주소(새 탭)에서 동의를 받으러 왔다 돌아가는 자리라, 되살아나면
+ *  라이블리를 열었는데 동의 창이 뜨고 앱 주소로 넘어간다.
  */
 export function routeSticky(route: string): boolean {
   const k = routeKey(route);
-  return k !== 'raw:welcome' && !/^raw:(app-open|full)(\/|\?|$)/.test(k);
+  return k !== 'raw:welcome' && !/^raw:(app-open|app-grant|full|open)(\/|\?|$)/.test(k);   // open — #4769 설치한 앱의 문(인스턴스로 넘긴다)
 }
 
 export interface TabsApi {

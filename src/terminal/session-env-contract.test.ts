@@ -22,6 +22,7 @@ import {
 import { HARNESSES, modeEnvArgs, themeEnvArgs, harnessThemeEnvArgs } from "./catalog.js";
 import { safeCacheEnv, homeRelocateEnv } from "../ops/build-cache.js";
 import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
+import { SESSION_LABEL_SOURCE_ENV } from "../sessions/session-label-source.js";
 
 // 실패 메시지에 항상 붙일 «다음 행동». 선언만 고치고 생성물을 안 돌리면 sudoers 가 그대로라 사고가 남는다.
 const REGEN = "→ src/terminal/session-env-contract.ts 에 선언한 뒤 `npm run gen:sudoers` 로 sudoers 를 재생성하라";
@@ -167,7 +168,7 @@ assert.ok(Object.keys(homeRelocateEnv("/tmp/x")).length > 0, "homeRelocateEnv �
 const LITERAL_RE = /"-e"\s*,\s*[`"]([A-Za-z_][A-Za-z0-9_]*)=/g;
 const DYNAMIC_RE = /"-e"\s*,\s*[`"]\$\{([^}]*)\}=/g;
 /** `${IDENT}=…` 로 주입되는 자리 — 이름이 상수에 있으므로 그 상수를 import 해 풀어 준다. */
-const KNOWN_CONST_ENV: Record<string, string> = { SESSION_KIND_ENV };
+const KNOWN_CONST_ENV: Record<string, string> = { SESSION_KIND_ENV, SESSION_LABEL_SOURCE_ENV };
 /** 반복문 주입(`${k}=${v}`) 자리의 **개수**를 고정한다. 늘면 «덮이지 않은 새 동적 주입» 이다.
  *  tasks.ts 는 0 — 그 자리는 자격 리스였는데 #4422 에서 명령줄을 떠나 작업 폴더의 0600 파일로 갔다(워커 uid 안에서 읽는다 —
  *  sudo 를 건너지 않는다). 리스 값이 `-e` 로 돌아오면 여기가 1 이 되어 깨진다 — 그건 토큰이 다시 argv 에 실린다는 뜻이다. */
@@ -216,6 +217,8 @@ for (const rel of [SESSIONS_TS, TASKS_TS]) {
 // SESSION_KIND_ENV 는 상수 참조로 풀렸어야 한다(위 루프의 결과를 다시 확인 — 상수 해석이 죽으면 조용히 빠진다).
 assert.ok(scannedNames.has(SESSION_KIND_ENV),
   `${SESSION_KIND_ENV}(세션 종류)가 스캔 결과에 없다 — 상수 참조 해석이 죽었다`);
+assert.ok(scannedNames.has(SESSION_LABEL_SOURCE_ENV),
+  `${SESSION_LABEL_SOURCE_ENV}(세션 이름 출처 #4418)가 스캔 결과에 없다 — 상수 참조 해석이 죽었거나 주입이 빠졌다`);
 
 // ── A 완전성 단언 ────────────────────────────────────────────────────────────
 const injected = new Map<string, string>();   // 이름 → 어느 축에서 왔나(실패 메시지용)

@@ -8,6 +8,22 @@ import { api, busy, cardHead, el, relTime, secretInput, secretRow, toast, uiText
 import { fmtBytes, fmtElapsed, sectionHead, segTabs } from './admin-widgets.js';
 import { planReclaimBatches, wtRemovable } from './admin-storage-plan.js';
 
+// #4780 — 디스크 위험(= 새 세션·클론 차단) 판정은 사용률 **과** 남은 공간 바닥 둘 다다(서버 ops/health.ts levelFor).
+//  배너(문장)와 경보 옵션(이름표)이 같은 기준을 말하도록 값 읽기를 여기 한 곳에 둔다. 바닥 0 = 사용률만(종전).
+function diskBlockRule(p: any): { pct: number; gb: number } {
+  return { pct: p?.disk_critical_pct ?? 95, gb: p?.disk_critical_free_gb ?? 5 };
+}
+function diskBlockSentence(p: any): string {
+  const r = diskBlockRule(p);
+  return r.gb > 0
+    ? `사용률이 ${r.pct}% 이상이고 남은 공간이 ${r.gb}GB보다 적어지면 새 세션·클론·업로드가 자동으로 차단됩니다.`
+    : `${r.pct}%를 넘으면 새 세션·클론·업로드가 자동으로 차단됩니다.`;
+}
+function diskBlockLabel(p: any): string {
+  const r = diskBlockRule(p);
+  return r.gb > 0 ? `사용 ${r.pct}% 이상이면서 남은 공간 ${r.gb}GB 미만일 때` : `위험 임계 ${r.pct}% 도달`;
+}
+
 function storageEditor(detail, data) {
   const canEdit = !!data.canEdit;
   const body = el('div');
@@ -37,7 +53,7 @@ function storageEditor(detail, data) {
       : worst && worst.level === 'warn'
         ? el('div', { class: 'storage-banner storage-banner-warn' },
           el('strong', { text: `디스크 경고 (${worst.usedPct}%) — 아직 정상 동작하지만 정리가 필요합니다.` }),
-          el('p', { text: `${p.disk_critical_pct ?? 95}%를 넘으면 새 세션·클론·업로드가 자동으로 차단됩니다.` }))
+          el('p', { text: diskBlockSentence(p) }))
         : null;
 
     // ── ① 지금 상태 — 디스크 게이지 ──
@@ -167,6 +183,7 @@ function storageEditor(detail, data) {
     };
     const warnIn = numIn(p.disk_warn_pct ?? 85, 1, 99);
     const critIn = numIn(p.disk_critical_pct ?? 95, 1, 100);
+    const critFreeIn = numIn(p.disk_critical_free_gb ?? 5, 0, 10000);   // #4780 위험 판정 여유(GB) — 0=끔(사용률만)
 
     // ── ② 정책 — 공유 빌드 캐시(#813 T3) ──
     const cache = st.cache || { root: '', vars: [], bytes: 0, partial: false };
@@ -194,6 +211,7 @@ function storageEditor(detail, data) {
         const storage_policy = {
           disk_warn_pct: Number(warnIn.value),
           disk_critical_pct: Number(critIn.value),
+          disk_critical_free_gb: Number(critFreeIn.value),
           shared_cache_enabled: cacheChk.checked,
           shared_cache_relocate_home: homeChk.checked,
         };
@@ -401,6 +419,8 @@ function storageEditor(detail, data) {
           el('label', {}, el('span', { text: '답을 기다린 뒤 끄기(분, 0=끔)' }), stopAskingIn)),
         el('p', { class: 'storage-calc', text: '아무도 세션을 보지 않는 채로 작업이 끝난 지(또는 승인·선택을 묻기 시작한 지) 이 시간이 지나면 그 세션의 AI(하네스)를 끕니다. 대화와 설정은 그대로 남고, 그 세션에 말을 걸면 AI 를 다시 띄워 이어서 답합니다(보통 5초 안팎 걸립니다).' }),
         el('p', { class: 'admin-hint' }, ...uiText('작업 중인 세션, 백그라운드 작업이나 예약된 다시 깨우기를 기다리는 세션, 누군가 보고 있는 세션은 끄지 않습니다. 끄기 전에 입력창에 쓰다 만 글과 답을 기다리던 질문을 남겨 두었다가, 다시 열 때 대화창에 돌려 놓습니다. 매니지드(세션 컨테이너) 워크스페이스에서만 적용됩니다. 기본값은 작업이 끝난 뒤 3분, 답을 기다린 뒤 60분입니다.')),
+        //  #4697 T7 — 옛 회수 시계와의 경계(session-stop-rule.ts sessionsUnderStopRule 머리말)를 관리자가 화면에서 알 수 있게.
+        el('p', { class: 'admin-hint' }, ...uiText('grok·opencode·셸 세션, 이어서 열 대화를 아직 모르는 세션, 위탁·앱 세션처럼 이 규칙이 판정하지 않는 세션은 아래 “idle 세션 자동 회수”가 맡습니다. 두 값을 모두 0으로 두면 모든 세션을 그 회수가 다시 맡습니다(그 회수의 idle 임계가 0이면 아무 세션도 회수되지 않습니다).')),
         el('div', { class: 'storage-actions' }, stopBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: 'idle 세션 자동 회수' }),
@@ -410,8 +430,9 @@ function storageEditor(detail, data) {
           el('label', {}, el('span', { text: '접속 중 임계(분, 0=끔)' }), attachIdleIn),
           el('label', {}, el('span', { text: '승인 대기·셸 작업 임계(분, 0=끔)' }), busyIdleIn)),
         el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }),
+        el('p', { class: 'admin-hint' }, ...uiText('매니지드 워크스페이스에서는 위 “하네스 종료 규칙”이 맡는 세션을 이 회수와 메모리 압박 회수가 건드리지 않습니다. 이 회수는 그 규칙이 판정하지 않는 세션에만 적용됩니다.')),
         el('p', { class: 'admin-hint' }, ...uiText('0=끔(무회귀, 기본). 상시(managed) 세션과 AI 가 스스로 알리는 작업 중 세션은 회수하지 않습니다. 확인 대기 세션과 셸에서 무언가 실행 중인 세션도 아래 “승인 대기·셸 작업 임계”를 켜기 전까지는 회수하지 않습니다. 예: 16GB 박스 180~1440분.')),
-        el('p', { class: 'admin-hint' }, ...uiText('“접속 중 임계”는 탭이 열려 있어도 그 시간 넘게 입출력이 없으면 회수합니다(0=탭이 열려 있으면 무기한 보존). idle 임계보다 길게 잡으세요 — 탭이 열려 있다는 건 그래도 사람이 보고 있었다는 신호입니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('“접속 중 임계”는 탭이 열려 있어도 그 시간 넘게 입출력이 없고 아무도 화면을 보지 않으면(숨긴 탭 포함) 회수합니다(0=탭이 열려 있으면 무기한 보존). 화면에 보이는 창은 몇 초마다 “보는 중”을 알리므로 회수하지 않습니다. idle 임계보다 길게 잡으세요 — 탭이 열려 있다는 건 그래도 사람이 보고 있었다는 신호입니다.')),
         el('p', { class: 'admin-hint' }, ...uiText('“승인 대기·셸 작업 임계”는 승인을 기다리거나 셸에서 무언가 실행 중인 것으로 보여도, 그 시간 넘게 아무도 세션을 열어 보지 않았으면 회수합니다(0=무기한 보존). AI 가 스스로 알리는 작업 중에는 적용되지 않습니다. 접속 중 임계보다 길게 잡으세요(예: 480분).')),
         el('div', { class: 'storage-actions' }, reclaimBtn)),
       el('div', { class: 'storage-block' },
@@ -489,9 +510,11 @@ function storageEditor(detail, data) {
           el('strong', { text: '디스크 경고' }),
           el('div', { class: 'storage-fields' },
             el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn),
-            el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)),
+            el('label', {}, el('span', { text: '위험 임계(%)' }), critIn),
+            el('label', {}, el('span', { text: '위험 판정 여유(GB, 0=끔)' }), critFreeIn)),
           el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }),
-          el('p', { class: 'admin-hint' }, ...uiText('경고 임계는 위험 임계보다 낮아야 합니다.'))),
+          el('p', { class: 'admin-hint' }, ...uiText('경고 임계는 위험 임계보다 낮아야 합니다.')),
+          el('p', { class: 'admin-hint' }, ...uiText('사용률이 위험 임계를 넘어도 남은 공간이 위험 판정 여유 이상이면 막지 않고 경고로 둡니다. 디스크가 클수록 비율만으로는 남는 양이 커서(1TB 의 5%는 50GB), 넉넉히 남아도 세션이 열리지 않기 때문입니다. 작은 디스크에서는 비율이 먼저 걸립니다. 0 이면 사용률만 봅니다.'))),
         el('div', { class: 'storage-block' },
           el('strong', { text: '공유 빌드 캐시' }),
           el('label', { class: 'storage-toggle' }, cacheChk,
@@ -549,7 +572,7 @@ function storageEditor(detail, data) {
 
     const minSel = el('select', { class: 'input' },
       el('option', { value: 'warn', text: `경고부터 (경고 임계 ${alertPolicy.disk_warn_pct ?? 85}% 도달 시 알림)` }),
-      el('option', { value: 'critical', text: `위험만 (위험 임계 ${alertPolicy.disk_critical_pct ?? 95}% 도달·DB 연결 불가 시 알림)` }));
+      el('option', { value: 'critical', text: `위험만 (${diskBlockLabel(alertPolicy)}·DB 연결 불가 시 알림)` }));
     minSel.value = a.min_severity || 'warn';
     minSel.disabled = !canEdit;
 

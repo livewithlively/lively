@@ -171,5 +171,20 @@ export async function resolveGatewayBaseCreds(imds?: ImdsHttp): Promise<AwsCreds
   return fetchImdsBaseCreds(imds);
 }
 
+/**
+ * (#4484) 앞으로 minValidMs 동안 쓸 수 있는 자격 + 그 자격의 만료 시각(ms · env 정적 키면 null = 만료 없음).
+ *  서명한 주소(presigned URL)는 자격이 만료되면 같이 죽는다 — 빌드가 10분 걸리는데 5분 남은 자격으로 주소를 만들면 올리기가 403 이다.
+ *  캐시된 자격이 그 시간을 못 버티면 IMDS 에서 다시 받는다(새 자격은 만료 몇 분 전부터 나온다 — 그래도 짧으면 받은 그대로 돌려주고
+ *  부르는 쪽이 만료 시각으로 주소 수명을 줄인다).
+ */
+export async function resolveGatewayBaseCredsWithin(minValidMs: number, imds?: ImdsHttp): Promise<{ creds: AwsCreds; expiresAtMs: number | null } | null> {
+  const env = gatewayBaseCreds();
+  if (env) return { creds: env, expiresAtMs: null };
+  if (imdsCache?.creds && imdsCache.expEpochMs < Date.now() + minValidMs) imdsCache = null;
+  const creds = await fetchImdsBaseCreds(imds);
+  if (!creds) return null;
+  return { creds, expiresAtMs: imdsCache?.expEpochMs ?? null };
+}
+
 // 테스트용 — IMDS 캐시 리셋(테스트 케이스 간 격리).
 export function __resetImdsCache(): void { imdsCache = null; }

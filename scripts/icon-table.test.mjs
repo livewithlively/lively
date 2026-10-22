@@ -82,7 +82,8 @@ const RING = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z";
 const PICKED = {
   home: "M3 11 12 4l9 7 M5 10v10h14V10",
   wiki: "M12 7 4 5v13l8 2 8-2V5z M12 7v13",
-  src: "M6 3h8l5 5v13H6z M14 3v5h5",
+  //  #4882(원준 2026-10-19 «전부 폴더 느낌으로 통일») — 자료는 모서리 접힌 문서가 아니라 둥근 폴더(folder 와 같은 그림)다.
+  src: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
   tags: "M2.5 5h6.5l8 8-6 6-8.5-8.5z M6.5 9h.01 M13 5l8 8-5.5 5.5",
   ctx: "M3 5h5l4 7h9 M3 12h9 M3 19h5l4-7 M18 9l3 3-3 3",
   sess: "M3 4h12v9H8l-5 4z M18 8h3v13l-4-3H9v-2",
@@ -168,13 +169,22 @@ ok(miss2.length === 0, "G2 pnIcon('이름') 으로 부르는 이름이 전부 �
 
 const partIcons = [...PARTS.matchAll(/\{ type: '([a-z]+)', name: '([^']+)', icon: '([a-z-]+)'/g)].map((m) => ({ type: m[1], name: m[2], icon: m[3] }));
 ok(partIcons.length >= 12 && partIcons.every((p) => pnHas(p.icon)), "G3 우측 사이드바 부품의 icon 이 전부 표에 닿는다", partIcons.filter((p) => !pnHas(p.icon)).map((p) => p.name + "=" + p.icon).join(" | "));
-const WANT = { sessions: "chat", files: "folder", sessfiles: "sessfiles", knowledge: "wiki", tasks: "proj", timeline: "timeline", liv: "liv", archive: "archive", web: "web", preview: "preview", editor: "eye", apps: "apps" };
+const WANT = { sessions: "chat", files: "src", sessfiles: "sessfiles", knowledge: "wiki", tasks: "proj", timeline: "timeline", liv: "liv", archive: "archive", web: "web", preview: "preview", editor: "eye", apps: "apps" };
 for (const [type, want] of Object.entries(WANT)) {
   const p = partIcons.find((x) => x.type === type);
   ok(!!p && pnName(p.icon) === want && !oldPn, `V3 우측 사이드바 ${type} 의 그림 = ${want}`, p ? p.icon : "없음");
 }
 const partPath = (type) => { const p = partIcons.find((x) => x.type === type); return p ? (oldPn ? oldPn[p.icon] : ICONS[pnName(p.icon)]) : ""; };
 ok(!!partPath("files") && partPath("files") !== partPath("sessfiles"), "V4 자료와 세션 파일은 다른 그림");
+//  #4882 — 곁칸 자료 칸은 자료 앱의 위젯이다: 앱 표의 자료(sources)와 같은 그림 이름을 쓰고, 그 그림은 폴더다(종이 한 장이 아니다).
+ok(ICONS.src === ICONS.folder && ICONS.src !== ICONS.doc && ICONS.src !== ICONS.archive, "V6 자료(src)는 둥근 폴더 — 폴더(folder)와 같고 문서 · 지난 세션과 다르다");
+{
+  const srcApp = (srcOf["web/v2/apps.ts"] || "").match(/\{ key: 'sources',[^\n]*?icon: '([a-z]+)'/);
+  const filesPart = partIcons.find((x) => x.type === "files");
+  ok(!!srcApp && !!filesPart && filesPart.icon === srcApp[1], "V6 곁칸 자료 칸의 그림 = 자료 앱(sources)의 그림 이름", `${filesPart && filesPart.icon} / ${srcApp && srcApp[1]}`);
+  const FILES = srcOf["web/v2/panes-files.ts"] || "";
+  ok(/requestOpenRoute\('#\/sources'\)/.test(FILES) && /hasPane\(ctx\) \? el\('button', \{ class: 'pn-fapp'/.test(FILES), "V6 곁칸 자료 칸에 자료 앱으로 가는 문이 있다(곁칸 안에서만)");
+}
 ok(!!partPath("web") && partPath("web") !== partPath("preview"), "V4 웹과 미리보기는 다른 그림");
 
 const APPS_SRC = srcOf["web/v2/apps.ts"] || "", GLASS_SRC = srcOf["web/v2/glass-icon.ts"] || "";

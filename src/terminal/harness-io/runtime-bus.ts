@@ -66,6 +66,11 @@ export function onSessionEvent(sessionId: string, fn: Listener): () => void {
  * 이벤트를 흘린다. **구독자가 던져도 다른 구독자에게 계속 간다** — 화면 하나의 버그가
  *  다른 화면(같은 세션을 보는 다른 탭)을 멈추게 하지 않는다.
  */
+/** 이 세션의 상태 통로를 지금 듣는 쪽이 몇인가(화면의 /events 연결 등) — 알림이 실제로 누구에게 닿았나를 운영 로그로 읽는다(#4794). */
+export function sessionListenerCount(sessionId: string): number {
+  return listeners.get(sessionId)?.size ?? 0;
+}
+
 export function emitSessionEvent(sessionId: string, e: SessionEvent): void {
   //  ★ 작업 이벤트는 **여기서 접어 스냅샷으로 바꿔** 내보낸다(#2439).
   //   왜: 델타를 그대로 흘리면 접는 규칙이 서버·화면 두 벌이 되고, 두 벌은 반드시 갈린다. 그리고 화면이

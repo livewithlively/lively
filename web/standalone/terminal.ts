@@ -1188,6 +1188,28 @@ export function paneMouseKnown(st) {
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
 //  순수 함수(전역 의존 없음). 드리프트 가드에서만 쓴다.
 export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.test(String(d || '')); }
+/**
+ * #4783 — 이 입력이 **사람이 친 것이 아니라** 터미널이 저절로 내보낸 것인가(순수).
+ *  xterm(5.5.0)은 키 입력뿐 아니라 ① 마우스 위치 보고(앱이 마우스 추적을 켜면 — Claude Code 는 any-motion 을 켠다, 실측
+ *  `mouse_any_flag=1`) ② 초점 보고(ESC[I · ESC[O — 앱이 1004 를 켜면) ③ 앱의 질의에 대한 자동 응답(장치 속성·커서 위치·모드·색 보고)을
+ *  **같은 onData 로** 낸다(CoreService.triggerDataEvent 는 wasUserInput 과 무관하게 onData 를 쏜다). 그래서 «이 탭에서 조작했다»
+ *  (userTyped)를 onData 로 세면 **마우스가 터미널 위를 지나가기만 해도** «조작함» 이 됐다 — 그 탭에서 세션이 꺼지면
+ *  «직접 종료한 것이면 그대로 두시면 됩니다» 라는 거짓 배너가 떴다(상민님 2026-10-16 신고, #4783).
+ *  ⚠ 수정자 F3(ESC[1;2R)이 커서 위치 보고와 모양이 같다 — 그 키 하나를 «조작» 으로 못 세는 쪽으로 틀린다(안전한 쪽).
+ */
+export function isAutoReply(d) {
+  const x = String(d || '');
+  if (!x) return false;
+  if (isMouseReport(x)) return true;
+  if (x === '\x1b[I' || x === '\x1b[O') return true;                                   // 초점 보고
+  if (/^\x1b\[[?>=]?[0-9;]*c$/.test(x)) return true;                                  // 장치 속성(DA1·DA2·DA3)
+  if (/^\x1b\[\??[0-9;]*[nR]$/.test(x)) return true;                                  // 상태·커서 위치 보고(DSR·CPR·DECXCPR)
+  if (/^\x1b\[\??[0-9;]*\$y$/.test(x)) return true;                                  // 모드 보고(DECRPM)
+  if (/^\x1b\[[0-9;]*t$/.test(x)) return true;                                        // 창 보고(크기·위치)
+  if (/^\x1b\][0-9]+;[^\x07\x1b]*(\x07|\x1b\\)$/.test(x)) return true;                 // OSC 응답(색·제목 질의)
+  if (/^\x1bP[\s\S]*\x1b\\$/.test(x)) return true;                                   // DCS 응답(DECRQSS·XTGETTCAP)
+  return false;
+}
 // 클라 xterm 상태를 tmux pane 실상태에 맞춘다. 모든 쓰기는 '실제 불일치일 때만'(가드) — 일치하면 no-op.
 export function applyPaneState(st) {
   if (!term || !st) return;
@@ -1675,7 +1697,9 @@ export function flushMouseReports(): void {
   }
 }
 export function handleTermData(d) {
-  userTyped = true;       // #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지)
+  //  #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지).
+  //  ⚠ #4783 — 터미널이 저절로 내보낸 것(마우스·초점·자동 응답)은 세지 않는다(isAutoReply 머리말 — 마우스만 지나가도 «조작함» 이었다).
+  if (!isAutoReply(d)) userTyped = true;
   // 사파리 IME 어댑터의 삼킴(#1300) — beforeinput 이 예약한 '그 이벤트의 xterm 유출' 1회만 걸러낸다.
   if (imeSwallow !== null && d === imeSwallow) { imeSwallow = null; dlog('ime', 'swallow ' + diagPreview(d, 8)); return; }
   // 실제 전송 바이트 트레이스(IME 트레이스와 짝) — 마우스 리포트는 제외(링버퍼 오염 방지).
@@ -2861,6 +2885,38 @@ function cellHeightPx() {
   } catch (_) { return 17; }
 }
 
+/**
+ * 휠 한 번 → 몇 줄(normal buffer 의 로컬 스크롤) · 앱에 보낼 SGR 휠 틱 수(alt-screen + 앱 마우스모드). 순수 함수다 —
+ *  세션 대화창(web/lib/term-prefs.ts termWheelTicks)이 같은 셈을 옮겨 적어 터미널과 같은 줄 수로 굴러가고(#4797),
+ *  scripts/term-prefs-parity.test.mjs 가 이 함수와 맞댄다. acc 는 트랙패드 픽셀 잔차(px)와 그 시각(at)이다.
+ *  · 마우스(이산 노치) — 종전 공식 그대로: 픽셀 근사 × scrollSpeed 줄 · 앱에는 이벤트당 round(scrollSpeed) 틱 고정.
+ *  · 트랙패드(연속 픽셀) — 손가락 이동 × padGain 을 칸 높이로 나눈 정수 줄(잔차 이월) · 앱에는 그 줄 수만큼(최대 12).
+ */
+export function wheelStep(e: { deltaY: number; deltaMode: number; timeStamp?: number }, notch: boolean, speed: number, gain: number,
+  cellPx: number, rows: number, acc: { px: number; at: number }): { lines: number; reps: number } {
+  let lines;
+  if (e.deltaMode === 2) {                         // page 단위(드묾)
+    lines = e.deltaY * rows;
+  } else if (notch) {
+    acc.px = 0;                                    // 입력원이 바뀌었다 — 남은 픽셀 잔차는 버린다
+    const approx = e.deltaMode === 1 ? e.deltaY : (Math.trunc(e.deltaY / 18) || (e.deltaY > 0 ? 1 : -1));
+    lines = approx * Math.max(1, Math.round(speed));
+  } else {
+    const now = e.timeStamp || 0;
+    if (acc.px && (Math.sign(acc.px) !== Math.sign(e.deltaY) || now - acc.at > 300)) acc.px = 0; // 방향전환·묵은 잔차는 리셋
+    acc.at = now;
+    acc.px += e.deltaY * Math.max(0.2, gain);
+    lines = Math.trunc(acc.px / cellPx);
+    acc.px -= lines * cellPx;                      // 소수 잔차는 남겨 다음 이벤트로 이월(픽셀 정확)
+  }
+  const n = Math.trunc(lines);
+  //  앱(Claude Code 등)에 보낼 틱. 마우스는 종전처럼 '이벤트당 scrollSpeed 틱' 고정이어야 한다 —
+  //   맥 가속으로 한 칸의 deltaY 가 4~161px 로 널뛰므로(실측) 픽셀 비례로 보내면 같은 한 칸이 최대 4배 빨라진다.
+  //   트랙패드는 반대로 픽셀 누적으로 찬 줄 수만큼 보낸다(잔차는 다음 이벤트로 이월).
+  const reps = notch ? Math.min(Math.max(1, Math.round(speed)), 12) : Math.min(Math.abs(n), 12);
+  return { lines: n, reps };
+}
+
 // 휠 처리 — 마우스 휠(이산 노치)과 트랙패드(연속 픽셀)를 서로 다른 단위로 다룬다(#1168).
 //  종전에는 한 배수(scrollSpeed)를 두 입력에 똑같이 곱하고 픽셀 잔차를 버렸다(`trunc(dy/18) || ±1` → 최소 1줄 강제).
 //  트랙패드는 1~10px 델타가 17ms 간격으로 오므로(실측 307건: median 5px·17ms) 손가락 이동량과 무관하게 '이벤트 수'만큼
@@ -2868,6 +2924,7 @@ function cellHeightPx() {
 //  · 마우스 휠 = 종전 공식 그대로(회귀 방지): 픽셀 근사 × scrollSpeed.
 //  · 트랙패드 = 손가락 이동 픽셀을 실측 셀높이로 나눠 줄로 환산하고 소수 잔차는 다음 이벤트로 이월 × padGain(1이면 1:1).
 //  분기는 종전과 같다: normal buffer=로컬 스크롤백 / alt+앱 마우스모드=SGR 휠 전달 / alt 만=xterm 기본.
+//  줄·틱 셈은 위 wheelStep 한 자리다(대화창이 같은 셈을 옮겨 적는다).
 function setupWheel() {
   if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
   const NOTCH_MIN_PX = 100; // wheelDeltaY 를 안 주는 브라우저용 폴백 임계 — 이보다 큰 픽셀 점프는 노치로 본다
@@ -2891,7 +2948,7 @@ function setupWheel() {
     if (typeof wdy === 'number' && wdy !== 0) return Math.abs(wdy) % 120 === 0;
     return Math.abs(e.deltaY) >= NOTCH_MIN_PX;       // wheelDeltaY 없는 브라우저(파이어폭스 트랙패드 등) 폴백
   };
-  let accPx = 0, accAt = 0;                          // 연속 입력의 픽셀 잔차(그리고 그 시각)
+  const acc = { px: 0, at: 0 };                      // 연속 입력의 픽셀 잔차(그리고 그 시각)
   term.attachCustomWheelEventHandler((e) => {
     cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 직접 휠을 굴리면 즉시 중단(#967)
     let alt = false, mouseOn = false;
@@ -2899,29 +2956,10 @@ function setupWheel() {
     try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
     const notch = isNotch(e);
     if (alt && mouseOn && notch && scrollSpeed <= 1) return true; // 1칸=1줄이면 xterm 의 검증된 전달 그대로(회귀 없음)
-    // 이 이벤트가 몇 줄인지 산출 — 마우스는 종전 공식, 트랙패드는 실측 셀높이로 픽셀→줄 환산.
-    let lines;
-    if (e.deltaMode === 2) {                         // page 단위(드묾)
-      lines = e.deltaY * term.rows;
-    } else if (notch) {
-      accPx = 0;                                     // 입력원이 바뀌었다 — 남은 픽셀 잔차는 버린다
-      const approx = e.deltaMode === 1 ? e.deltaY : (Math.trunc(e.deltaY / 18) || (e.deltaY > 0 ? 1 : -1));
-      lines = approx * Math.max(1, Math.round(scrollSpeed));
-    } else {
-      const now = e.timeStamp || 0;
-      if (accPx && (Math.sign(accPx) !== Math.sign(e.deltaY) || now - accAt > 300)) accPx = 0; // 방향전환·묵은 잔차는 리셋
-      accAt = now;
-      accPx += e.deltaY * Math.max(0.2, padGain);
-      const h = cellHeightPx();
-      lines = Math.trunc(accPx / h);
-      accPx -= lines * h;                            // 소수 잔차는 남겨 다음 이벤트로 이월(픽셀 정확)
-    }
-    const n = Math.trunc(lines);
+    // 이 이벤트가 몇 줄인지 산출 — 마우스는 종전 공식, 트랙패드는 실측 셀높이로 픽셀→줄 환산(wheelStep).
+    const { lines: n, reps } = wheelStep(e, notch, scrollSpeed, padGain, cellHeightPx(), term.rows, acc);
     if (alt && mouseOn) {
-      // 앱(Claude Code 등)에 SGR 휠을 직접 보낸다. 마우스는 종전처럼 '이벤트당 scrollSpeed 틱' 고정이어야 한다 —
-      //  맥 가속으로 한 칸의 deltaY 가 4~161px 로 널뛰므로(실측) 픽셀 비례로 보내면 같은 한 칸이 최대 4배 빨라진다.
-      //  트랙패드는 반대로 픽셀 누적으로 찬 줄 수만큼 보낸다(잔차는 다음 이벤트로 이월).
-      const reps = notch ? Math.min(Math.max(1, Math.round(scrollSpeed)), 12) : Math.min(Math.abs(n), 12);
+      // 앱(Claude Code 등)에 SGR 휠을 직접 보낸다(틱 수는 wheelStep 머리말).
       if (!reps) return false;                       // 아직 한 줄이 안 찼다(미세 스와이프) — 잔차만 쌓고 대기
       const c = cellFromEvent(e);
       const btn = n < 0 ? 64 : 65;                   // 64=휠↑ 65=휠↓ (SGR 1006)
@@ -3560,31 +3598,31 @@ const isTextLike = (name) => MD_RE.test(name) || TEXT_RE.test(name) || TEXT_NAME
 //   web/standalone 이고, 산출물 경로를 바꾸면 dist/standalone 을 직접 import 하는 테스트가 깨진다). 그래서 공용
 //   렌더러(lib/file-preview)를 **복제하지 않고 위임**한다:
 //    · 여기서 인라인으로 보여주는 것 = 터미널 문맥에 맞는 것뿐(이미지 · md 렌더 · 텍스트/코드).
-//    · pdf·표·음성·영상 등 나머지 = [⛶ 전체화면]으로 공용 렌더러(#/f)에 넘긴다.
+//    · pdf·표·음성·영상 등 나머지 = [↗ 자료 보기]로 자료 보기 화면(#/f — 공용 렌더러 · #4672)에 넘긴다.
 //   종전엔 그 자리에 '그래도 미리보기'가 있어 **바이너리를 텍스트로 뿌렸다**(깨진 글자 화면) — 선택지처럼 보이지만
 //   쓸 수 있는 답이 아니었다. 이제 실제로 볼 수 있는 곳으로 보낸다.
-//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 전체화면 버튼을 안 만든다.
+//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 자료 보기 버튼을 안 만든다.
 async function openPreview(p, name, shareRel?) {
   const id = 'file:' + p;
   const body = el('div', { class: 'preview-body' }, el('div', { class: 'gate-msg', text: '불러오는 중…' }));
-  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(전체화면·링크·다운로드).
+  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(자료 보기·링크·다운로드).
   const bar = el('div', { class: 'preview-bar' },
     el('span', { class: 'preview-bar-nm', title: name, text: name }),
     el('span', { class: 'preview-bar-sp' }),
-    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '전체화면(새 탭)', text: '⛶ 전체화면' }) : null,
+    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' }) : null,
     shareRel ? el('button', { class: 'tbtn', text: '🔗 링크', title: '링크 복사', onclick: () => copyShareLink(shareRel, false) }) : null,
     el('button', { class: 'tbtn', text: '⬇ 다운로드', onclick: () => downloadFile(p, name) }));
   const pane = el('div', { class: 'preview-pane' }, bar, body);
   addPane(id, name, true, pane);
   if (IMG_RE.test(name)) { renderImage(body, p, name); return; }
   if (isTextLike(name)) { renderTextPreview(body, p, MD_RE.test(name)); return; }
-  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(전체화면)으로 보낸다.
+  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(자료 보기 화면)으로 보낸다.
   body.replaceChildren(el('div', { class: 'unsupported' },
     el('div', { class: 'unsupported-card' },
-      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 전체화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
-      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 전체화면 미리보기가 렌더합니다.' : name }),
+      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 자료 보기 화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
+      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 자료 보기 화면(새 탭)이 보여 줍니다.' : name }),
       el('div', { class: 'unsupported-actions' },
-        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면으로 열기' }) : null,
+        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '↗ 자료 보기로 열기' }) : null,
         el('button', { class: 'tbtn', text: '다운로드', onclick: () => downloadFile(p, name) })))));
 }
 async function renderImage(body, p, name) {
@@ -4150,6 +4188,63 @@ function startSeenStamp(): void {
   window.addEventListener('pagehide', () => { void post('/leave', true).catch(() => { /* 비치명 — TTL 이 늦게라도 걷는다 */ }); });
 }
 
+/**
+ * #4794 — 하네스가 **처음 화면을 그렸다**고 세션 화면에 한 번 알린다(lively-term-painted).
+ *  세션 화면(web/session-chat.ts termWarm)은 말을 보내 되살린 세션을 열 때 이 액자를 숨긴 채 먼저 붙여 두고,
+ *  이 신호가 오면 그때 터미널로 넘긴다. 종전엔 넘긴 뒤 하네스가 뜰 때까지 2~3초 빈 터미널이 보였다(상민님 2026-10-16).
+ *  «그렸다» = 보이는 줄에 공백 아닌 글자가 생겼다. 하네스가 뜨기 전 pane 은 비어 있다 — 런처(catalog.ts LAUNCH_STOP_SH)는
+ *  정상 길에선 아무것도 안 찍는다. ⚠ 드문 길 하나: 이어 열 대화를 못 찾아 새 대화로 다시 띄울 때(런처 ②)는 안내 한 줄을 먼저 찍는다 —
+ *  그땐 그 줄로 넘어가 새 하네스가 그리기 전 잠깐 빈칸이 보인다(종전과 같다).
+ *  그 뒤 출력이 멎을 때까지 조금 더 기다린다(firstPaintDelay) — 첫 조각만 그린 화면으로 넘기지 않게.
+ *  액자 안(embed=1)에서만 보낸다. 신호를 못 보내면(구 xterm) 세션 화면은 상한(25초) 뒤에야 넘긴다 — 그 경우 터미널이 종전보다 늦게 보인다.
+ */
+export const FIRST_PAINT_QUIET_MS = 300;
+export const FIRST_PAINT_MAX_MS = 1500;
+/** 화면에 무언가 그려졌나 — 공백·빈 줄뿐이면 아직 아무것도 안 그린 화면이다. 순수. */
+export function screenHasInk(screen: string): boolean {
+  return /\S/.test(String(screen || ''));
+}
+/** 첫 글자를 본 뒤 알리기까지 기다릴 ms — 출력이 quiet 만큼 멎으면, 늦어도 첫 글자부터 max 뒤(스피너처럼 쉬지 않고 다시 그리는 화면). 순수. */
+export function firstPaintDelay(firstInkAt: number, now: number, quietMs = FIRST_PAINT_QUIET_MS, maxMs = FIRST_PAINT_MAX_MS): number {
+  return Math.max(0, Math.min(quietMs, firstInkAt + maxMs - now));
+}
+export function watchFirstPaint(): void {
+  if (!(EMBED && window.parent !== window)) return;
+  let inkAt = 0;
+  let sent = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const send = (): void => {
+    if (sent) return;
+    sent = true;
+    try { window.parent.postMessage({ type: 'lively-term-painted', id: SESSION_ID }, location.origin); } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  };
+  //  출력 한 묶음을 다 풀 때마다(onWriteParsed) 본다 — 그리기(onRender)는 숨은 액자에서 미뤄질 수 있지만 버퍼는 늘 지금이다.
+  const onParsed = (): void => {
+    if (sent) return;
+    if (!inkAt) {
+      if (!screenHasInk(autosendReadScreen())) return;
+      inkAt = Date.now();
+    }
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(send, firstPaintDelay(inkAt, Date.now()));
+  };
+  try { if (term.onWriteParsed) term.onWriteParsed(onParsed); } catch (_) { /* 구 xterm — 세션 화면이 상한 뒤 넘긴다 */ }
+}
+/**
+ * #4794 — 이 액자가 지금 사람 눈에 안 보이나. 세션 화면이 숨긴 채 먼저 붙여 둔 액자(36-chat.css .sc-term-warm — visibility:hidden · inert)다.
+ *  그런 액자는 붙자마자 제 터미널에 초점을 주면 안 된다 — 사람은 대화창 입력칸에 쓰는 중일 수 있다.
+ *  ⚠ inert 만으로는 못 막는다: 액자 안 스크립트의 focus() 는 inert 조상·visibility:hidden 아래에서도 초점을 가져간다
+ *   (실측 2026-10-16 Chromium 151, 같은 출처 — 부모의 activeElement 가 액자로 옮겨 갔다). 그래서 여기서 스스로 묻는다.
+ *  같은 출처라 frameElement 를 읽을 수 있다. 못 읽으면(다른 출처·단독 창) «보인다» 로 본다 — 종전 동작.
+ */
+export function frameHiddenNow(): boolean {
+  try {
+    const fe = window.frameElement as HTMLElement | null;
+    if (!fe) return false;
+    return !!fe.closest('[inert]') || getComputedStyle(fe).visibility === 'hidden';
+  } catch (_) { return false; }
+}
+
 export async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -4347,6 +4442,7 @@ export async function boot() {
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 본체는 handleTermData(최상위) —
   //  회귀 테스트가 실제 배선 그대로 직접 호출할 수 있게 분리(#1117). userTyped(#1059)·드리프트 가드(#1302)도 본체에.
   term.onData(handleTermData);
+  watchFirstPaint();   // #4794 — 액자 안이면 하네스가 처음 그린 순간을 세션 화면에 알린다(그때 터미널로 넘긴다)
   // 탭이 백그라운드→포그라운드로 돌아올 때: 끊겨 있으면 재연결, 연결돼 있으면 '이 탭'으로 창 크기를 다시 요구한다.
   //  서버는 window-size latest 라, 지금 보는 탭이 refresh-client 를 보내 '최근 활동'이 되면 pane 이 이 탭 크기로
   //  맞춰져 깨짐이 풀린다(다른 탭·잔존 연결이 더 큰 pane 을 잡고 있던 경우의 #252 증상 회복). forceRedraw =
@@ -4372,6 +4468,8 @@ export async function boot() {
 async function maybeRestoreOnOpen(meta) {
   if (!meta || !meta.restorable) return false;          // 살아 있다(또는 판정 근거 없음) — 종전대로 붙는다
   restoreTried = true;                                  // 이 화면의 복원 시도는 여기서 소진(4410 경로와 이중 실행 금지)
+  //  #4783 — 세션 화면 안의 액자는 끝난 세션에 대해 **정하지 않는다** — 이어졌으면 옮기고, 아니면 사실만 셸에 넘긴다(handOffToShell 머리말).
+  if (embeddedInShell()) { if (meta.movedTo) goToMoved(meta.movedTo); else handOffToShell(meta); return true; }
   // 방금 연 화면이라 '이 탭에서 조작함'(typed)은 언제나 false 다 — 그래서 판정표의 ask 행은 여기서 나오지 않는다.
   const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
   if (mode === 'moved') { goToMoved(meta.movedTo); return true; }   // #2231 — 이어진 세션으로 옮긴다
@@ -4391,24 +4489,50 @@ async function maybeRestoreOnOpen(meta) {
   startRestore(meta);
   return true;
 }
+/** 세션 화면(v2) 안에 실린 액자인가 — 끝난 세션의 처리를 부모(셸)에게 넘기는 조건(#1820 · #4783). */
+function embeddedInShell() { return EMBED && window.parent !== window; }
 /**
- * 세션 화면(v2) 안의 프레임이면 **복원을 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
+ * 끝난 판의 **사실**만 추린다(순수, #4783) — 셸이 대화창의 안내 문구를 고르고, 단독 창이 끝 배너의 말을 고르는 재료.
+ *  메타(GET …/sessions/:id)가 실어 온 것만 옮긴다 — 여기서 «누가 끝냈다» 를 단정하지 않는다(판정은 받는 쪽 한 곳).
+ */
+export function endFactsOf(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const n = m.endNote && typeof m.endNote === 'object' ? m.endNote : null;
+  return {
+    exitedByUser: !!m.exitedByUser,
+    oomKilled: !!m.oomKilled,
+    endWhy: n && typeof n.why === 'string' ? n.why : '',
+    endCode: n && typeof n.code === 'number' ? n.code : null,
+    stopWhy: typeof m.stopWhy === 'string' ? m.stopWhy : '',
+  };
+}
+/**
+ * 세션 화면(v2) 안의 프레임이면 **끝난 세션의 처리를 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
  *
  * 여기서 되살려 location 을 갈아타면 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 **프레임만
  *  새 세션**인 어긋난 화면이 된다 — #1808 에서 실제로 났던 사고다. 셸이 받으면 주소까지 함께 옮긴다.
  *  부모가 없거나(직접 embed URL로 열었거나) 안 듣더라도 사용자는 배너의 버튼으로 직접 되살릴 수 있다.
+ * ★ #4783 — **되살릴 때만이 아니라 언제나** 넘긴다. 종전엔 «되살릴 세션»(auto)만 넘기고 나머지(방금 끝남 · 남의 세션 · 곧 다시 끝남 ·
+ *  그냥 끝남)는 이 액자가 제 배너를 띄우고 입력을 막은 채 머물렀다 — 셸은 신호를 못 받아 액자를 못 걷었고(셸은 액자가 알려 와야
+ *  걷는다 — #3847), 사람은 그 세션에 돌아올 때마다 **조작할 수 없는 터미널**을 봤다(상민님 2026-10-16 신고). 무엇을 보여 줄지는 셸이
+ *  정한다 — 셸은 내 세션을 보기만 해서는 안 되살리고(#2439) 말을 걸면 이어 연다. «직접 끝낸 세션을 멋대로 안 살린다» 는 그대로다.
  */
 function handOffToShell(meta) {
-  if (!(EMBED && window.parent !== window)) return false;
+  if (!embeddedInShell()) return false;
+  const restorable = !!(meta && meta.restorable);
+  const canRestore = !!(meta && meta.canRestore);
   try {
-    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
+    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable, canRestore, end: endFactsOf(meta) }, location.origin);
   } catch (_) { /* 부모가 없거나 닫혔다 */ }
   sessionEnded = true;
+  try { term.options.disableStdin = true; } catch (_) { /* noop */ }
   //  ⚠ #3847 — «이어서 열고 있습니다» 라고 단정하지 않는다. 셸은 **일부러 기다리기도** 한다(#2439 «보기만
   //   해서는 안 되살린다» · 자동복원 연쇄 상한). 그때 이 배너만 남으면 사람은 오지 않을 «잠시만요» 를 계속 본다.
   //   지금 셸은 이 신호를 받으면 액자를 걷고 대화 화면으로 내려앉으므로(session-chat dropTermFrame) 이 배너는
   //   그 사이 잠깐이거나, 신호를 못 받는 옛 셸에서만 남는다 — 그 경우에도 읽고 누를 수 있는 정확한 말이어야 한다.
-  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  if (restorable && canRestore) showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  else if (restorable) showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 여는 건 세션을 만든 사람만 할 수 있어요.' });
+  else showEndedBar({});
   return true;
 }
 /**
@@ -4753,6 +4877,28 @@ export function canForceRestore(e) {
   return body.canForce === true;   // 참값 흉내(문자열 'true'·1)는 승격하지 않는다
 }
 
+/** 서버가 «사람이 끝냈다» 고 적었나(순수, #4783) — 멈춤·/exit·하네스 정상 종료. 단독 창이 그 세션을 저절로 되살리지 않는 근거. */
+export function userEndedFacts(f) {
+  const x = f || {};
+  return !!x.exitedByUser || x.endWhy === 'stop' || x.endWhy === 'harness_exit';
+}
+/**
+ * 단독 창의 «방금 끝남»(ask) 배너 문구 — 서버가 적은 끝난 사유로 고른다(순수, #4783). 사유를 모르면 «누가» 를 말하지 않는다.
+ *  f = endFactsOf(meta). 사유 이름은 src/sessions/session-end.ts 의 SessionEndWhy 와 같다.
+ */
+export function askBannerCopy(f) {
+  const x = f || {};
+  const tail = ' 대화를 이어서 다시 열 수 있습니다.';
+  if (x.exitedByUser || x.endWhy === 'harness_exit' || x.endWhy === 'stop') return { title: '이 세션은 끝났습니다.', body: '직접 끝낸 세션이에요 —' + tail };
+  if (x.endWhy === 'harness_crash') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 오류로 끝났어요' + (typeof x.endCode === 'number' ? '(종료 코드 ' + x.endCode + ')' : '') + ' —' + tail };
+  if (x.endWhy === 'launch_fail') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 뜨자마자 끝났어요 —' + tail };
+  if (x.endWhy === 'lost') return { title: '이 세션이 비정상적으로 끝났습니다.', body: '끝난 이유를 알 수 없어요 —' + tail };
+  if (x.oomKilled) return { title: '이 세션이 비정상적으로 끝났습니다.', body: '메모리가 모자라 멈췄어요 —' + tail };
+  if (x.stopWhy === 'asking') return { title: '이 세션은 꺼져 있습니다.', body: '답을 기다리다 자동으로 껐어요 —' + tail };
+  if (x.stopWhy === 'done') return { title: '이 세션은 꺼져 있습니다.', body: '작업이 끝나 자동으로 껐어요 —' + tail };
+  if (x.endWhy === 'reclaim') return { title: '이 세션은 꺼져 있습니다.', body: '시스템이 자동으로 껐어요 —' + tail };
+  return { title: '이 세션이 방금 끝났습니다.', body: tail.trim() };
+}
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
@@ -4780,13 +4926,28 @@ let restoreTried = false;
 //  거의 정확히 갈린다 — exit·Ctrl-D·kill 은 전부 입력을 수반한다.
 let userTyped = false;
 async function onSessionGone() {
+  //  #4783 — 세션 화면 안의 액자는 **어떤 끝이든** 셸에 넘긴다(handOffToShell 머리말). 이미 넘겼으면(sessionEnded) 아무것도 안 한다.
+  //   종전엔 아래 첫 줄(복원 시도를 이미 썼으면 그냥 끝 배너)이 먼저라, 한 번 되살린 화면에서 또 끝나면 셸이 아무것도 못 들었다.
+  if (embeddedInShell()) {
+    if (sessionEnded) return;
+    restoreTried = true;
+    clearTimeout(reconnectTimer);
+    let em = null;
+    try { em = await api(sUrl('')); } catch (_) { /* 403·기록 없음 — 셸은 «기록만» 으로 그린다 */ }
+    if (em && em.movedTo) { goToMoved(em.movedTo); return; }
+    handOffToShell(em);
+    return;
+  }
   if (sessionEnded || restoreTried) { endSession(); return; }
   restoreTried = true;
   clearTimeout(reconnectTimer);
   let meta = null;
   // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
   try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
-  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
+  //  #4783 — «되살리지 않음» 의 근거는 이 탭의 입력(typed)만이 아니다: 서버가 **사람이 끝냈다**(멈춤·/exit·하네스 정상 종료)고 적었으면
+  //   그것도 같은 뜻이다. 종전엔 마우스만 지나가도 typed 가 켜져 이 자리가 늘 ask 였는데, 이제 typed 가 키 입력만 세므로 사이드바 [종료]
+  //   같은 바깥 멈춤 뒤엔 auto(자동 복원)로 새어 사람이 끝낸 세션을 되살릴 수 있었다(격리 리뷰).
+  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped || userEndedFacts(endFactsOf(meta)));
   if (mode === 'moved') { goToMoved(meta.movedTo); return; }   // #2231 — 붙어 있다 끊겼는데 그새 이어져 있었다
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {
@@ -4806,9 +4967,10 @@ async function onSessionGone() {
     // #1820 — ask 는 이제 **한 가지 상황**뿐이다: 이 탭에서 조작한 뒤 끝났다(typed). 종전엔 '과거에 exit 했음'과
     //  '셸·코덱스 하네스'도 여기로 왔는데, 그건 '여는 것'이지 '끝낸 것'이 아니라 auto 로 넘겼다(위 goneMode).
     //  직접 exit 한 것까지 되살리면 exit 가 안 먹히는 UX 가 되므로 이 자리만 남긴다.
-    endSession({ info: true, title: '이 세션이 방금 끝났습니다.',
-      body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
-      restoreBtn: true });
+    //  ⚠ #4783 — 말은 **서버가 적은 끝난 사유**로 고른다. 종전 문구는 «사람이 직접 끝냈다» 를 전제로 했는데,
+    //   하네스 종료 규칙(완료+안 봄 3분)이 끈 세션에도 그 말이 떴다 — 이 탭에서 키를 친 적이 있으면 무조건이었다.
+    const c = askBannerCopy(endFactsOf(meta));
+    endSession({ info: true, title: c.title, body: c.body, restoreBtn: true });
     return;
   }
   // 자동 복원 — 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).
@@ -4968,7 +5130,7 @@ async function connectNow() {
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
-    if (!glassIdle) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle
+    if (!glassIdle && !frameHiddenNow()) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle · #4794 숨겨 붙인 액자도(보이게 되면 세션 화면이 focus 를 보낸다)
     if (AUTOSEND && !autosendDone) { autosendDeadline = Date.now() + 12000; autosendLastOut = Date.now(); scheduleAutosend(); }
   };
   sock.onmessage = (e) => {

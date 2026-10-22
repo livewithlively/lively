@@ -3,7 +3,7 @@
 //
 //  누가: **사람 구성원 본인**만 — 웹 세션 또는 그 사람의 DB 토큰(데스크톱 앱이 쓰는 것). 앱 세션 토큰(appId 가 박힌 것 —
 //   앱이 앱을 여는 길이 된다)과 정적 토큰(회수 불가 — 누구인지가 사람이 아니다)은 거부한다. 에이전트 구성원도 거부.
-//  무엇을: 앱이 있고(active·enabled) 이 사람에게 보이고(공개 범위 — apps/visibility.ts) 화면이 있을 때, 그 앱 주소 하나에 묶인
+//  무엇을: 앱이 있고(active·enabled) 이 사람에게 보이고(공개 범위 — apps/visibility.ts) 화면이 있을 때(화면 파일 · 또는 서버를 선언한 판), 그 앱 주소 하나에 묶인
 //   60초짜리 코드. 자리 둘 — embed(라이블리 안 iframe) · top(직접 접속, 앞단 상태값 state 필수). 교환은 앱 주소 앞단이 한다
 //   (apps/app-front-routes.ts redeem). 판(variant): 공개 주소는 모두에게 공개 판, 초안 주소는 그 초안을 고친 사람에게만(#4667 서버 기록
 //   draft_by · 판정 apps/visibility.ts addressViewFor — 남의 초안 주소는 없는 판과 같은 404). 판을 안 정하면 이 사람이 라이블리 화면에서
@@ -25,6 +25,8 @@ import { APP_LAUNCH_TTL_MS, isLaunchStateShape, mintAppLaunchCode, type AppLaunc
 import type { OrgMember } from "../org/store/members.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { managedMode } from "../org/tenancy/state.js";
+import { webDevicesOf } from "../apps/manifest.js";
+import { appServerEnv, serverDeclOf } from "../apps/app-server-config.js";
 import { logger } from "../log.js";
 
 const launchInput = {
@@ -63,6 +65,20 @@ const liveDeps: LaunchDeps = {
   mint: (i) => mintAppLaunchCode(i),
   now: () => Date.now(),
 };
+
+/**
+ * #4482 이 사람이 보는 판의 맨 앱 주소(「새 탭에서 열기」 · 여러 파일 앱의 srcdoc 안내) — 코드 없이 주소만. 그 주소로 가면 앞단이 로그인시킨다(직접 접속).
+ *  앱 주소가 꺼졌거나(매니지드 아님 · 스위치 밖) 이름으로 주소를 못 만들면 null.
+ */
+export function appAddressUrlFor(app: Pick<store.OrgApp, "id" | "visibility" | "owner_member" | "draft_by" | "published_version_no">, who: { userId: string; scopes?: readonly string[] },
+  page?: string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+  const tenant = currentTenant();
+  const domain = managedMode(env) && tenant ? appDomainFor(tenant.slug, env) : null;
+  if (!domain || !tenant) return null;
+  const host = appHost(tenant.slug, app.id, addressVariantFor(app, who), domain);
+  if (!host) return null;
+  return appOrigin(host) + (page ? "/?" + new URLSearchParams({ page }).toString() : "/");
+}
 
 export async function launchAppFor(input: Record<string, unknown>, user: LivelyUser | undefined, d: LaunchDeps = liveDeps): Promise<Record<string, unknown>> {
   const memberId = user?.userId || "";
@@ -115,10 +131,16 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
     }
   }
   const pages = pub ? uiPagesFromFiles(pub.manifest, pub.files as AppFile[]) : await d.listUiAssets(appId);
-  if (pages.length === 0) throw new HttpError(404, `앱 '${appId}' 에 UI 페이지가 없습니다`);
+  //  #4485 후속 — 서버가 화면을 만드는 앱(그 판의 매니페스트에 web.server · 이 워크스페이스에 앱 서버가 켜짐 — 앱 주소 길 viewDeclaresServer 와 같은
+  //   판정)은 화면 파일이 없어도 연다: 앱 주소의 모든 경로를 그 판의 함수가 답한다. `?page=` 도 서버가 맡는다(쪽 번호 같은 앱의 쿼리일 수 있다 —
+  //   화면 키로 따지지 않는다). 화면 파일이 없으면 라이블리 화면이 바꿔 띄울 종전 화면(srcdoc)도 없다 — fallback 으로 알린다.
+  const server = serverDeclOf(pub ? pub.manifest : app.manifest) !== null && appServerEnv(d.env, tenant.slug) !== null;
+  if (pages.length === 0 && !server) throw new HttpError(404, `앱 '${appId}' 에 UI 페이지가 없습니다`);
   const path = parseAppPath(next);
-  const pageKey = path?.page ?? pages[0].page_key;
-  if (path?.page && !pages.some((p) => p.page_key === path.page)) throw new HttpError(404, `UI 페이지 없음: ${path.page}`);
+  const wantPage = path?.page ?? null;
+  const known = wantPage !== null && pages.some((p) => p.page_key === wantPage);
+  if (wantPage !== null && !known && !server) throw new HttpError(404, `UI 페이지 없음: ${wantPage}`);
+  const pageKey = known ? wantPage : pages[0]?.page_key ?? null;
 
   const host = appHost(tenant.slug, appId, variant, domain);
   if (!host) throw deny(409, "no_address", `앱 '${appId}' 은(는) 앱 주소를 만들 수 없습니다(이름이 길거나 쓸 수 없는 꼴)`);
@@ -128,6 +150,10 @@ export async function launchAppFor(input: Record<string, unknown>, user: LivelyU
     url: `${origin}/_lively/auth?code=${encodeURIComponent(code)}&next=${encodeURIComponent(next)}`,
     origin, expires_in: Math.round(APP_LAUNCH_TTL_MS / 1000),
     app_id: appId, title: app.title || appId, page_key: pageKey, variant, mode,
+    //  #4482 그 판이 선언한 장치 권한 — 화면이 iframe 의 allow 에 이것만 위임한다(manifest.ts web.devices).
+    devices: webDevicesOf(pub ? pub.manifest : app.manifest),
+    //  #4485 후속 — 앱 주소 문서가 인사하지 않을 때 바꿔 띄울 종전 화면(화면 파일)이 있나. false 면 라이블리 화면은 바꾸지 않는다.
+    fallback: pages.length > 0,
   };
 }
 

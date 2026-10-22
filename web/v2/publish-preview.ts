@@ -37,7 +37,7 @@ async function ask(appId: string, opts?: { versionNo?: number; title?: string })
     }) as PublishPreview;
   } catch (e: any) {
     const st = Number(e && e.status);
-    if (st >= 400 && st < 500 && st !== 408 && st !== 429) { toast('공개할 수 없어요 — ' + (e && e.message ? e.message : e), true); return false; }
+    if (st >= 400 && st < 500 && st !== 408 && st !== 429) { toast('공개할 수 없어요. ' + (e && e.message ? e.message : e), true); return false; }
     return confirmDialog({
       title: '표에 할 일을 확인하지 못했어요', message: e && e.message ? e.message : String(e),
       note: '그래도 공개할 수 있어요. 공개하다가 데이터가 새 규칙에 맞지 않으면 아무것도 바뀌지 않고 멈춰요.', confirmText: '그래도 공개하기',
@@ -62,8 +62,8 @@ async function ask(appId: string, opts?: { versionNo?: number; title?: string })
   const what = opts && opts.versionNo ? verJ(opts.versionNo, '으로') + ' 되돌려 공개하면' : '공개하면';
   return confirmDialog({
     title: changes.length ? what + ' 표가 이렇게 바뀌어요' : '표에 할 일을 다 보지 못했어요',
-    message: p.incomplete ? (changes.length ? '다 보지는 못했어요 — ' : '') + p.incomplete : undefined,
-    lines: [...changes, ...notes.map((n) => '참고 — ' + n)],
+    message: p.incomplete ? (changes.length ? '다 보지는 못했어요. ' : '') + p.incomplete : undefined,
+    lines: [...changes, ...notes.map((n) => '참고: ' + n)],
     note: '공개하면 다른 사람도 모두 이 버전을 써요.' + (kept ? ' 지운 값은 따로 보관돼요(앱에서는 더 안 보여요).' : '')
       + (p.incomplete ? ' 공개하다가 데이터가 새 규칙에 맞지 않으면 아무것도 바뀌지 않고 멈춰요.' : ''),
     confirmText: changes.length ? '공개하기' : '그래도 공개하기',

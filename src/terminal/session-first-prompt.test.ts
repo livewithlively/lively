@@ -281,4 +281,118 @@ await ta("[U7] 창이 안 닫히면 Escape 를 상한(2)까지만 보낸다 — 
 });
 t("[P7] 운영 기본 조회 유예는 15초다", () => assert.equal(FIRST_PROMPT_PEEK_GRACE_MS, 15_000));
 
+// ── #4818 노드 첫 지시 — claude 면 붙여넣기로 넣고, 넣은 뒤 입력칸을 지켜 우리 글이 남으면 Enter 를 더 누른다(spec.md F1~F3) ────────
+//  실측(2.1.301): 글과 Enter 가 한 덩어리로 읽히면 Enter 가 글자 CR 로 박혀(빈 줄) 제출되지 않는다. 노드 첫 지시엔 에코 확인이 없어
+//   종전엔 그대로 멈췄다.
+const NBSP = "\u{A0}";
+const FIRST = "새 세션의 첫 지시 — 화면을 보고 넣고, 들어갔는지 화면으로 확인한다. 길게 써서 한 번에 읽히면 64자를 넘는다.";
+const RULE_4818 = "─".repeat(80);
+const claudeBox = (box: string[]): string => [RULE_4818, ...box, RULE_4818, "  ⏵⏵ auto mode on (shift+tab to cycle)"].join("\n");
+/** claude 첫 지시를 가짜 시계·화면으로 돌린다 — 넣기 전엔 빈 입력창, 넣은 뒤엔 after(누른 Enter 수) 화면. */
+async function runClaudeFirst(after: (entersAfterSend: number) => string, harness = "claude") {
+  let now = 0;
+  let sentAt = -1;
+  const sends: Array<{ text: string; opts: unknown }> = [];
+  const keys: string[] = [];
+  let entersAfterSend = 0;
+  let readsAfterSend = 0;
+  const ready = harness === "claude" ? claudeBox([`❯${NBSP}`]) : CODEX_READY;
+  const runtime = {
+    peek: async () => {
+      if (sentAt < 0) return { pane: ready, paneCmd: harness };
+      readsAfterSend++;
+      return { pane: after(entersAfterSend), paneCmd: harness };
+    },
+    sleep: async (ms: number) => { now += ms; },
+    now: () => now,
+    send: async (_id: string, text: string, opts?: unknown) => { sends.push({ text, opts }); sentAt = now; },
+    trustKeys: {
+      down: async () => { keys.push("down"); },
+      enter: async () => { keys.push("enter"); if (sentAt >= 0) entersAfterSend++; },
+      esc: async () => { keys.push("esc"); },
+    },
+  } as unknown as FirstPromptRuntime;
+  const ok = await injectFirstPromptWithRuntime("box-test", harness, FIRST, { maxMs: 100_000, pollMs: 5, peekGraceMs: 15 }, runtime);
+  return { ok, sends, keys, readsAfterSend, elapsedAfterSend: now - sentAt };
+}
+
+await ta("[F1] claude — 붙여넣기로 넣고(opts.paste), 넣은 뒤 우리 글이 남아 있으면 Enter 를 더 누른다 · 사라지면 멈춘다", async () => {
+  const stuck = claudeBox([`❯${NBSP}${FIRST}`, ""]);
+  const got = await runClaudeFirst((n) => (n >= 2 ? claudeBox([`❯${NBSP}`]) : stuck));
+  assert.equal(got.ok, true);
+  assert.deepEqual(got.sends, [{ text: FIRST, opts: { paste: true } }]);
+  assert.deepEqual(got.keys, ["enter", "enter"], "남아 있는데 안 눌렀거나, 제출된 뒤에도 눌렀다");
+  assert.ok(got.readsAfterSend > 2, "배선 — 넣은 뒤 화면을 안 봤다");
+});
+
+await ta("[F2] claude — 넣은 뒤 입력칸이 비면(제출됨) Enter 0", async () => {
+  const got = await runClaudeFirst(() => claudeBox([`❯${NBSP}`]));
+  assert.equal(got.ok, true);
+  assert.deepEqual(got.keys, [], "빈 입력칸에 Enter");
+  assert.ok(got.readsAfterSend > 0, "배선 — 넣은 뒤 화면을 안 봤다");
+});
+
+await ta("[F3] codex — 종전 그대로: 붙여넣기 안 함(opts 없음) · 넣은 뒤 지키지 않음(화면 0번)", async () => {
+  const got = await runClaudeFirst(() => CODEX_READY, "codex");
+  assert.equal(got.ok, true);
+  assert.deepEqual(got.sends, [{ text: FIRST, opts: undefined }]);
+  assert.equal(got.readsAfterSend, 0);
+  assert.deepEqual(got.keys, []);
+});
+
+// ── #4852 첫 지시가 아닌 지시도 넣은 뒤 지킨다(노드 sendKeys · 로컬 주입) — spec2.md F4 ─────────────────────────────
+//  이름은 네임스페이스로 받는다 — 옛 판에 대고 돌리면 이 행만 빨간불이다(파일 링크 오류 대신).
+const sfp = await import("./session-first-prompt.js") as Record<string, any>;
+async function runAfterSend(after: (enters: number, reads: number) => string, text = FIRST, pasted = true) {
+  let now = 0;
+  const keys: string[] = [];
+  let enters = 0;
+  let reads = 0;
+  const runtime = {
+    peek: async () => { reads++; return { pane: after(enters, reads), paneCmd: "claude" }; },
+    sleep: async (ms: number) => { now += ms; },
+    now: () => now,
+    trustKeys: { down: async () => { keys.push("down"); }, enter: async () => { keys.push("enter"); enters++; } },
+  };
+  const p = sfp.guardAfterSend("box-test", text, pasted, runtime);
+  if (p) await p;
+  return { keys, reads, elapsed: now, guarded: p !== null && p !== undefined };
+}
+await ta("[F4·#4852] guardAfterSend — 입력칸에 우리 글이 남으면 Enter(사라지면 멈춤) · 비어 있으면 0번 · 15초 지키고 끝난다", async () => {
+  assert.equal(typeof sfp.guardAfterSend, "function", "guardAfterSend 가 없다");
+  const stuck = claudeBox([`❯${NBSP}${FIRST}`]);
+  const a = await runAfterSend((n) => (n >= 1 ? claudeBox([`❯${NBSP}`]) : stuck));
+  assert.deepEqual(a.keys, ["enter"], "남았는데 안 눌렀거나, 제출된 뒤에도 눌렀다");
+  const b = await runAfterSend(() => claudeBox([`❯${NBSP}`]));
+  assert.deepEqual(b.keys, [], "빈 입력칸에 Enter");
+  assert.ok(b.reads > 5, "배선 — 넣은 뒤 화면을 안 봤다");
+  const watchMs = Number(sfp.FIRST_SUBMIT_WATCH_MS);
+  assert.ok(b.elapsed >= watchMs && b.elapsed <= watchMs + 2_000, `지킨 시간 ${b.elapsed}ms`);
+});
+await ta("[F5·#4852] guardAfterSend — 붙여넣지 않은 글·키로 시작하는 글(설정 명령)은 지키지 않는다(화면도 안 본다) · 지킴이가 던져도 부른 쪽에 안 던진다", async () => {
+  const stuck = claudeBox([`❯${NBSP}${FIRST}`]);
+  const a = await runAfterSend(() => stuck, FIRST, false);
+  assert.ok(!a.guarded && a.reads === 0 && a.keys.length === 0, `붙여넣지 않은 글을 지켰다 ${JSON.stringify(a)}`);
+  const b = await runAfterSend(() => stuck, "\x13/model opus", true);
+  assert.ok(!b.guarded && b.reads === 0 && b.keys.length === 0, `설정 명령을 지켰다 ${JSON.stringify(b)}`);
+  const warn = console.warn; const said: string[] = []; console.warn = (...x: unknown[]) => { said.push(x.join(" ")); };
+  try {
+    const p = sfp.guardAfterSend("box-test", FIRST, true, {
+      peek: async () => ({ pane: stuck, paneCmd: "claude" }), sleep: async () => { throw new Error("박자 실패"); }, now: () => 0,
+      trustKeys: { down: async () => {}, enter: async () => {} },
+    });
+    await p;   // 던지면 이 시험이 실패한다
+  } finally { console.warn = warn; }
+  assert.ok(said.some((x) => x.includes("박자 실패")), "지킴이가 멈춘 것을 남기지 않았다");
+});
+await ta("[F6·#4852] 뒤에서 지킬 때는 누르기 직전에 한 번 더 본다 — 그새 사람이 제 글을 치기 시작했으면 그 글을 제출하지 않는다", async () => {
+  const stuck = claudeBox([`❯${NBSP}${FIRST}`]);
+  const human = claudeBox([`❯${NBSP}사람이 새로 치는 다른 글`]);
+  const a = await runAfterSend((_e, reads) => (reads <= 2 ? stuck : human));
+  assert.deepEqual(a.keys, [], "본 뒤 바뀐 입력칸(사람의 글)에 Enter 를 눌렀다");
+  assert.ok(a.reads >= 3, "누르기 전에 다시 보지 않았다");
+  const b = await runAfterSend((n) => (n >= 1 ? claudeBox([`❯${NBSP}`]) : stuck));
+  assert.deepEqual(b.keys, ["enter"], "다시 봐도 우리 글이면 누른다");
+});
+
 console.log(`session-first-prompt: ${pass + asyncPass} passed`);

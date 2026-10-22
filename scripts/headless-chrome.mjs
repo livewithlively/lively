@@ -7,7 +7,7 @@
 //  그래서 한 자리로 모으고, 치우기를 셋으로 나눈다:
 //   ① 파이프를 쥔 프로세스가 전부 끝나기를 잠깐 기다린다(`close` — 보조 프로세스도 파이프를 물려받아 쥔다)
 //   ② 재시도하며 지운다   ③ 그래도 못 지우면 알리기만 한다(임시 디렉터리다 — 테스트를 실패시킬 이유가 없다).
-import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -55,20 +55,49 @@ async function startBreather() {
   };
 }
 
+/** dumpDom serve — 그 디렉터리의 파일만(이름 하나 — 하위 경로 없음) 내어 주는 정적 서버. 쿼리는 무시한다(액자 주소의 ?session=… 등). */
+async function startStatic(dir) {
+  const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+  const srv = http.createServer((q, r) => {
+    let name = "";
+    try { name = path.basename(decodeURIComponent(new URL(q.url || "/", "http://x").pathname)); } catch (_) { name = ""; }
+    const f = name ? path.join(dir, name) : "";
+    //  파일만 내준다 — 같은 디렉터리에 크롬 프로필(profile/)이 있어 그 이름을 물으면 readFileSync 가 EISDIR 로 던진다(요청 콜백 안이라 시험 프로세스가 죽는다).
+    let body = null;
+    try { if (f && statSync(f).isFile()) body = readFileSync(f); } catch (_) { body = null; }
+    if (!body) { r.writeHead(404); r.end(); return; }
+    r.writeHead(200, { "content-type": TYPES[path.extname(f)] || "application/octet-stream", "cache-control": "no-store" });
+    r.end(body);
+  });
+  await new Promise((res, rej) => { srv.once("error", rej); srv.listen(0, "127.0.0.1", res); });
+  return {
+    url: `http://127.0.0.1:${srv.address().port}/`,
+    close: () => { try { srv.closeAllConnections(); } catch (_) { /* 이미 닫혔다 */ } srv.close(); },
+  };
+}
+
 /**
  * `html` 을 임시 디렉터리의 page.html 로 쓰고(`copy` 의 파일은 같은 이름으로 옆에 둔다) 크롬 `--dump-dom` 으로 돌린다.
  *  stdout 에 `marker` 가 보이는 순간 끊는다 — ⚠ 종료를 기다리면 매달리는 페이지가 있다(ctx-rclick-runtime 실측:
  *  DOM 을 다 뱉고도 단독 2초, 러너 안에서는 45초 상한까지). 그 대기가 그대로 테스트 시간이 된다.
- * @returns dump 된 DOM — 표지 없이 끝났으면 그때까지 받은 것(판정은 호출자가 한다). 30초 안에 안 끝나면 던진다.
+ *  serve — 참이면 그 임시 디렉터리를 127.0.0.1 의 작은 정적 서버로 내어 http 로 싣는다(#4794). file:// 로 실으면 크롬이
+ *   문서마다 출처를 갈라(액자의 location.origin 은 "file://" · 받는 쪽 ev.origin 은 "null") 같은 출처 액자·대상 출처를 지정한
+ *   postMessage 를 잴 수 없다 — 세션 화면과 터미널 액자가 주고받는 시험이 그렇다. 기본은 종전 그대로(file://).
+ *  timeoutMs — 크롬의 **실시간** 상한(--timeout, 기본 20초). 장면이 많고 액자(xterm)를 여럿 싣는 시험은 가상시간이 남아도 이 상한에
+ *   먼저 걸려 결과 없이 끝난다(term-warm-runtime: 이 박스 실시간 13~15초, 동시 실행 3개면 «결과를 안 냄» — #4794 격리 검토).
+ * @returns dump 된 DOM — 표지 없이 끝났으면 그때까지 받은 것(판정은 호출자가 한다). 실시간 상한 + 10초(최소 30초) 안에 안 끝나면 던진다.
  */
-export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [] }) {
+export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", prefix = "headless-", virtualTimeBudget = 15000, args = [], serve = false, timeoutMs = 20000 }) {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
   let closed = Promise.resolve();
   let breather = null;
+  let server = null;
   try {
     if (html.includes(BREATHE_URL)) { breather = await startBreather(); html = html.split(BREATHE_URL).join(breather.url); }
     for (const src of copy) copyFileSync(src, path.join(dir, path.basename(src)));
     writeFileSync(path.join(dir, "page.html"), html);
+    if (serve) server = await startStatic(dir);
+    const pageUrl = server ? server.url + "page.html" : `file://${path.join(dir, "page.html")}`;
     return await new Promise((resolve, reject) => {
       const child = spawn(chrome, [
         "--headless=old", "--disable-gpu", "--no-sandbox", "--no-first-run", "--no-default-browser-check",
@@ -86,12 +115,13 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
         //  --virtual-time-budget 만으로는 안 끝난다(ctx-rclick-runtime 실측 90초).
         //  args — 부르는 쪽이 더하는 인자(예: `--window-size=1400,900` — 넓은 폭 미디어 쿼리를 재야 하는 시험, #4443).
         ...args,
-        "--timeout=20000", `--virtual-time-budget=${virtualTimeBudget}`, "--dump-dom", `file://${path.join(dir, "page.html")}`,
+        `--timeout=${timeoutMs}`, `--virtual-time-budget=${virtualTimeBudget}`, "--dump-dom", pageUrl,
       ], { env: { ...process.env, HOME: dir }, stdio: ["ignore", "pipe", "pipe"] });
       closed = new Promise((r) => child.once("close", r));
       let out = "", errOut = "", settled = false;
       const done = (fn, v) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch (_) { /* 이미 끝났다 */ } fn(v); };
-      const timer = setTimeout(() => done(reject, new Error("크롬이 30초 안에 결과를 안 냈다\n" + errOut.slice(0, 800))), 30_000);
+      const limitMs = Math.max(30_000, timeoutMs + 10_000);
+      const timer = setTimeout(() => done(reject, new Error(`크롬이 ${limitMs / 1000}초 안에 결과를 안 냈다\n` + errOut.slice(0, 800))), limitMs);
       //  ⚠ 글자로 받는다(setEncoding) — 조각(Buffer)마다 따로 바꾸면 조각 경계에 걸친 한글이 깨진다
       //   (CI 실측 2026-10-09: «기타» → «���타», session-history-side-runtime H9 가 무작위로 빨갰다 · headless-chrome-decode.test.mjs).
       child.stdout.setEncoding("utf8");
@@ -103,6 +133,7 @@ export async function dumpDom(chrome, { html, copy = [], marker = "ENDRESULT", p
     });
   } finally {
     breather?.close();
+    server?.close();
     await new Promise((r) => { const t = setTimeout(r, 3000); closed.then(() => { clearTimeout(t); r(); }); });
     try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
     catch (e) { console.log(`note  임시 디렉터리를 못 지웠습니다(${e.code}) — ${dir}`); }

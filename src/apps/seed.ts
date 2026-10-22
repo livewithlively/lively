@@ -128,7 +128,7 @@ export async function seedBuiltinApps(root: string = builtinAppsRoot(), deps: Se
       const done = await deps.withAppInstallLock(id, async () => {
         const existing = await deps.getApp(id);   // 락 안에서 다시 읽는다 — 그새 다른 경로가 지웠거나 다시 깔았을 수 있다
         if (!existing || !shouldRetireBuiltin(id, present, existing)) return false;
-        await deps.removeInstalledApp(existing, ctx);
+        await deps.removeInstalledApp(existing, ctx, "retire");
         return true;
       });
       if (done) res.retired.push(id);

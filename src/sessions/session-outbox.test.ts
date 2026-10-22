@@ -1,7 +1,8 @@
-// 순수 단위 체크(node:assert) — 아웃박스(#1753)의 정책·에코 바늘. 배달자(파일·tmux·DB)는 여기서 안 띄운다.
+// 순수 단위 체크(node:assert) — 아웃박스(#1753)의 정책. 배달자(파일·tmux·DB)는 여기서 안 띄운다.
+//  에코 판정(무엇이 «들어갔다» 의 증거인가)은 #4851 부터 판정 한 벌(outbox-echo-scan)이라 그 시험(outbox-echo-scan.test)이 맡는다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { deliveryTransport, echoNeedle, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
+import { deliveryTransport, flatOneLine, needsSubmitRetry, readyVerdictOnError, retryDelayMs, stallAction, unreachableDelayMs,
   READY_WINDOW_MS, NOT_READY_TTL_MS, UNREACHABLE_TTL_MS, STALE_SENDING, stalledSinceNext } from "./session-outbox.js";
 
 let pass = 0;
@@ -11,20 +12,6 @@ t("[1] flatOneLine — 개행은 공백 하나로(send-keys 규약 ①과 같은
   assert.equal(flatOneLine("a\nb"), "a b");
   assert.equal(flatOneLine("  a \n  b \n\n c  "), "a b c");
   assert.equal(flatOneLine(""), "");
-});
-t("[2] echoNeedle — JSON 이스케이프 형태(따옴표·역슬래시·한글 원문 유지)", () => {
-  assert.equal(echoNeedle('say "hi"'), 'say \\"hi\\"');
-  assert.equal(echoNeedle("경로는 C:\\tmp"), "경로는 C:\\\\tmp");
-  assert.equal(echoNeedle("안녕하세요"), "안녕하세요");
-  // 트랜스크립트 한 줄에 실제로 들어가는 형태 — JSON.stringify 로 감싼 문서에서 부분일치해야 한다.
-  const line = JSON.stringify({ type: "user", message: { role: "user", content: 'say "hi"' } });
-  assert.ok(line.includes(echoNeedle('say "hi"')));
-});
-t("[2b] echoNeedle — 접두 160자만(긴 텍스트 꼬리 뒤섞임 내성): 꼬리가 달라져도 매치된다", () => {
-  const long = "가".repeat(200) + " 꼬리";
-  const mangled = "가".repeat(200) + " 리꼬";           // 꼬리가 뒤섞인 주입 결과
-  const doc = JSON.stringify({ content: mangled });
-  assert.ok(doc.includes(echoNeedle(long)));
 });
 t("[3] retryDelayMs — 완만히 늘고 30초에 멈춘다(로그인 화면을 계속 두드리지 않는다)", () => {
   assert.equal(retryDelayMs(1), 15_000);
@@ -142,7 +129,7 @@ const SRC = "src/sessions/session-outbox.ts";
 //  같은 배포에서 하루 넘은 delivered/sent 30건이 안 지워진 것이 "그 경로가 아예 안 돈다"의 대조 증거였다.
 t("[#2244] 잔재 판정 시간은 resumeOutbox 와 recoverStaleSending 이 **같은 자**를 쓴다", () => {
   // 두 회수가 다른 자를 쓰면 한쪽만 고쳐지는 날이 온다 — 상수 하나로 묶어 둔 이유.
-  assert.equal(STALE_SENDING, "2 minutes");
+  assert.equal(STALE_SENDING, "4 minutes");   // #4818 — 제출 지킴이의 걸음이 늘어 2 → 3분 · #4851 — 늦은 에코 창 60초로 3 → 4분(상한의 합은 outbox-exec.test E15)
   const src = readFileSync(SRC, "utf8");
   const hardcoded = src.match(/interval '(\d+ minutes?)'/g) ?? [];
   assert.deepEqual(hardcoded, [], `SQL 에 시간을 직접 적은 자리가 남아 있다: ${hardcoded.join(", ")}`);
@@ -170,3 +157,21 @@ t("[#2244] 배달자는 돌기 전에 자기 잔재를 회수하고, 대화창 �
   assert.match(body, /if \(rows\.some\([\s\S]*?\) kickOutbox\(sessionId\)/,
     "깨우기는 **덜 끝난 행이 보일 때만** — 무조건 kick 은 3초 폴링에 얹혀 헛돈다");
 });
+
+// ── #4697 T7 — 결말 측정은 배달을 죽이지 않는다(측정부가 던져도 mark 는 null 을 돌려준다 — 던지면 codex 경로 catch 가 «못 보냄» 으로 읽어
+//  이미 간 말을 다시 큐에 넣는다, 격리 리뷰 C3). DB 는 목(얇은 페이크 — client.ts 가 허용하는 자리)이다.
+{
+  const { itemsPool } = await import("../db/client.js");
+  const { markOutboxRowForTest } = await import("./session-outbox.js");
+  const pool = itemsPool as unknown as { query?: unknown };
+  const hadOwn = Object.hasOwn(pool, "query");
+  const boom = new Proxy({}, { get() { throw new Error("측정 읽기 실패"); } });
+  pool.query = async () => ({ rows: [boom] });
+  try {
+    let threw: unknown = null, m: unknown = "unset";
+    try { m = await markOutboxRowForTest(1, "delivered"); } catch (e) { threw = e; }
+    assert.equal(threw, null, "측정이 던져도 결말 새기기는 던지지 않는다");
+    assert.equal(m, null);
+  } finally { if (!hadOwn) delete pool.query; }
+  pass++; console.log("ok  [T7-C3] 결말 측정이 던져도 mark 는 던지지 않는다");
+}

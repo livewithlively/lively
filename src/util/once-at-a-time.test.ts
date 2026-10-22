@@ -46,3 +46,24 @@ test("④ 셋이 동시에 와도 본체는 한 번", async () => {
   assert.deepEqual([await b, await c], ["busy", "busy"]);
   assert.equal(await a, "ok");
 });
+
+test("⑤ 칸(slotOf)을 나누면 같은 칸끼리만 하나씩 — 다른 칸은 함께 돈다 · 칸이 끝나면 그 칸만 풀린다(#4851)", async () => {
+  let calls = 0;
+  let slot = "ws:a";
+  const da = deferred(); const db = deferred();
+  const run = onceAtATime(async () => { calls++; await (slot === "ws:a" ? da.p : db.p); return slot; }, () => "busy", () => slot);
+  const a1 = run();                       // 칸 a 시작
+  const a2 = run();                       // 칸 a 는 바쁘다
+  slot = "ws:b";
+  const b1 = run();                       // 칸 b 는 따로 돈다
+  await Promise.resolve();
+  assert.equal(calls, 2, "다른 칸이 막혔거나 같은 칸이 두 번 돌았다");
+  assert.equal(await a2, "busy");
+  da.go(); await a1;
+  slot = "ws:a";
+  const a3 = run();                       // 칸 a 는 풀렸다 · 칸 b 는 아직 바쁘다
+  assert.equal(calls, 3);
+  slot = "ws:b";
+  assert.equal(await run(), "busy");
+  db.go(); await b1; await a3;
+});

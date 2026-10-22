@@ -5,6 +5,7 @@
 //  (구 src/db/write.ts — 소비자가 전부 v6 스토어라 v6/ 로 이관했다(#1313 R24). src/db/ 는 db_query 방화벽 스택 전용.)
 import { itemsPool } from "../db/client.js";
 import { one } from "../db/client.js";
+import type pg from "pg";
 
 // 쓰기 호출 맥락 — actor(누가)·source(어느 채널). v6 스토어 공통(구 5곳 중복 정의 통합).
 //  reason = 이 쓰기를 한 까닭(사람이 읽는 한 줄). 감사에는 싣지 않고, 외부 PM 으로 닫힘을 내보낼 때 코멘트 근거로 쓴다.
@@ -49,13 +50,14 @@ export function normalizeAuditChannel(raw?: string | null): string | null {
 // org_content_audit append-only INSERT(단일 진실). channel=source(어댑터가 결정적 주입). before/after 는 JSONB 직렬화.
 //  channelOverride 로 channel 을 source 와 분리(커넥터 미러처럼 source≠channel 인 경우).
 //  raw source 는 source 컬럼에 그대로 보존(포렌식) — 정규화는 channel 에만(normalizeAuditChannel).
+//  db(#4824) — 트랜잭션 안의 쓰기면 그 클라이언트로 남긴다(같이 커밋·같이 롤백 — 롤백된 쓰기의 감사가 남지 않게). 기본은 풀.
 export async function auditOrgContent(
   entity: string, entityKey: string, op: string, before: unknown, after: unknown,
-  ctx?: WriteCtx, channelOverride?: string,
+  ctx?: WriteCtx, channelOverride?: string, db: Pick<pg.PoolClient, "query"> = itemsPool,
 ): Promise<void> {
   const source = ctx?.source ?? null;
   const channel = normalizeAuditChannel(channelOverride ?? source);
-  await itemsPool.query(
+  await db.query(
     `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
      VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9)`,
     [entity, entityKey, op,

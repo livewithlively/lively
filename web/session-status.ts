@@ -21,6 +21,15 @@ export interface SessLike {
    *  관측된 행에는 이 필드가 없다(undefined = 종전 그대로).
    */
   observed?: boolean;
+  /** #4783 — 이 판이 **왜 끝났나**(서버 SessionInfo.endNote — src/sessions/session-end.ts). 복원 가능 행에만 실린다. */
+  endNote?: { why?: string; at?: number; code?: number; seen?: boolean } | null;
+  /** #4695 T5 — 하네스 종료 규칙이 끄며 남긴 쪽지(사유만 읽는다 — 본문은 대화창 몫). 복원 가능 행에만 실린다. */
+  stopNote?: { why?: string; at?: number } | null;
+  /**
+   * #4783 후속 — 종료 규칙이 **마지막으로 관측한 실행 상태**(서버 SessionInfo.lastRun — src/sessions/session-state.ts last_run_state).
+   *  endNote·stopNote 가 비어도(세션이 끝낸 자리를 안 거치고 꺼짐) 이 값이 «꺼질 때 무슨 상태였나» 를 말한다. 복원 가능 행에만 실린다.
+   */
+  lastRun?: { at?: number; run?: string } | null;
 }
 
 // 표시 문구 · CSS 클래스 · 정렬 우선순위(작을수록 먼저) · 필터 설명.
@@ -40,11 +49,19 @@ export const SESS_STATES: Record<string, { label: string; cls: string; rank: num
   //  이걸 구분해 주지 않으면 사용자는 자기 세션이 왜 사라졌는지 모른 채 원인을 엉뚱한 데서 찾는다.
   oom_killed:  { label: '메모리 부족', cls: 'oom-killed',  rank: 7, hint: '메모리가 모자라 OS 보호장치가 강제 종료한 세션 — 대화는 보존돼 있어 열면 이어진다' },
   exited_user: { label: '종료됨',    cls: 'exited-user',rank: 8, hint: '내가 직접 종료(exit)한 세션 — 그때 대화를 이어서 다시 열 수 있다' },
+  //  #4783 — **목록 줄의 표시 전용**이다(sessStateKey 는 이 값을 내지 않는다 — 생사·필터 어휘는 위 아홉 칸 그대로).
+  //   하네스가 비정상적으로 끝났거나(크래시·기동 실패) 세션이 돌던 곳이 고장 나 사라진 세션 — 사람이 들여다봐야 한다.
+  error:       { label: '오류',      cls: 'error',      rank: 0, hint: '비정상적으로 끝난 세션 — 열어서 무슨 일이 있었는지 보고, 말을 걸면 이어서 열린다' },
 };
 
 // 필터 항목 = 카드 라벨과 **같은 순서·같은 이름**. 종전엔 카드가 '종료됨'인데 필터엔 그 칸이 없어
 //  '복원 가능'으로 잡히는 어긋남이 있었다(감사 P1-②). 이제 key 가 곧 필터 버킷이다.
 export const SESS_STATE_KEYS = ['waiting', 'done', 'busy', 'idle', 'offline', 'shell', 'restorable', 'oom_killed', 'exited_user'] as const;
+/**
+ * #4783 — **목록 줄에만** 서는 상태(필터 어휘가 아니다). sessStateKey 는 이 값을 내지 않는다 — 꺼진 세션의 겉모습(stoppedDotKey)만 낸다.
+ *  필터에 넣으면 아무것도 안 걸리는 죽은 칸이 되므로 SESS_STATE_KEYS 와 따로 둔다. SESS_STATES 는 두 집합의 합이다(라벨·색·순위의 한 자리).
+ */
+export const ROW_ONLY_STATES = ['error'] as const;
 
 // '시킨 작업이 끝났는데 아직 안 봤나'(#1098) — 마지막 작업이 **마지막 열람보다 뒤**면 아직 안 본 결과다.
 //  24시간 가드: 하루 지난 건 알림이 아니라 이력이다.
@@ -166,18 +183,81 @@ export function shouldRestoreOnOpen(s: { restorable?: boolean; owned?: boolean; 
 //  ⚠ **이 규칙은 «글자 없이 점만 서는 목록 줄» 에만 적용된다.** 범례(필터 팝오버)·요약(개수 옆의 점)·
 //   상태 글자 옆의 점은 그대로 아홉 가지를 다 쓴다 — 거기선 글자나 숫자가 함께 있어 점이 혼자 뜻을 지지 않는다.
 //   「아무도 안 보고 있다(오프라인)」를 골라 보는 길은 그래서 필터에 그대로 남는다.
-export const DOT_STATES = ['waiting', 'busy', 'done'] as const;
+export const DOT_STATES = ['waiting', 'busy', 'done', 'error'] as const;
 
-/** 이 상태가 목록 줄에서 점으로 떠야 하나 — 곧 «지금 나를 기다리나». */
+/** 이 상태가 목록 줄에서 점으로 떠야 하나 — 곧 «지금 나를 기다리나». #4783 — 꺼진 세션의 «오류» 도 여기 든다. */
 export function isDotState(stateKey: string): boolean {
-  return stateKey === 'waiting' || stateKey === 'busy' || stateKey === 'done';
+  return stateKey === 'waiting' || stateKey === 'busy' || stateKey === 'done' || stateKey === 'error';
 }
 
 /**
  * 목록 줄의 점 색 클래스.
- *  셋이 아니면 `'quiet'` — **자리는 지키되 아무것도 안 그린다.** 요소를 빼 버리면 그 자리만큼
+ *  넷이 아니면 `'quiet'` — **자리는 지키되 아무것도 안 그린다.** 요소를 빼 버리면 그 자리만큼
  *  글자가 왼쪽으로 밀려 목록의 기둥이 줄마다 어긋난다(트리 `.v2-ss-row > .v2-dot` 의 margin).
+ *  ⚠ #4783 — «오류» 는 «확인 필요»(앰버 채움)와 **모양이 달라야** 한다(같은 색이면 «답할 것» 과 «고장» 이 안 갈린다) — `err`(속이 빈 붉은 고리 + 느낌표).
  */
 export function rowDotCls(stateKey: string): string {
-  return stateKey === 'waiting' ? 'wait' : isDotState(stateKey) ? stateKey : 'quiet';
+  return stateKey === 'waiting' ? 'wait' : stateKey === 'error' ? 'err' : isDotState(stateKey) ? stateKey : 'quiet';
+}
+
+// ── #4783 꺼진 세션을 **누가 끝냈나** 로 그린다 ─────────────────────────────────────────────
+//
+//  상민님(2026-10-16): «회수된 거면 오프라인이 아니라 직전 상태를 보여 주는 게 맞지 않나. 사용자가 직접 종료한 세션이면 오프라인으로
+//   해도 되겠지만» · «그 밖은 다 예외적인 오류 케이스 아님? 빨간 점 같은 걸로 오류 표시».
+//  #4690 규칙에선 박스가 꺼졌다는 것이 사람에게 보일 사실이 아니다 — 시스템은 일이 끝난 세션을 3분 뒤 끄고, 말을 걸면 같은 주소로 다시 띄운다.
+//  그래서 꺼진 세션의 겉모습은 **누가 끝냈나** 가 정한다(사유는 서버가 끝낸 자리에서 적는다 — src/sessions/session-end.ts):
+//   · user    — 사람이 끝냈다(/exit · 멈춤 · 휴지통). → 지금처럼 «지난 세션»(흐림·접힘).
+//   · system  — 시스템이 껐다(하네스 종료 규칙 · 옛 회수 시계). → 끄기 직전 모습 그대로(답을 기다리던 것은 «확인 필요», 안 본 결과는 «작업 완료»).
+//   · error   — 고장으로 끝났다(크래시 · 기동 실패 · 노드·컨테이너 고장 · 메모리 부족). → «오류» 점.
+//   · unknown — 사유를 모른다(이 기록 전에 끝난 옛 판 · 끝을 보고하지 않는 판(셸·grok·opencode)의 종료 · 멤버 PC). → 점 없는 보통 줄.
+//     상민님 결정(2026-10-16 «점없는 보통줄로»): 이 칸엔 사람이 직접 끝냈지만 적을 자리가 없는 판도 섞이고, 롤아웃 순간 지금까지의
+//      꺼진 세션도 흐림·접힘을 잃는다는 것을 알고 정했다 — «지난 세션» 으로 접는 것은 사람이 끝냈다고 **아는** 판뿐이다.
+//      점은 붙이지 않는다(무엇이 벌어졌는지 모르는 줄에 상태를 지어 붙이지 않는다).
+//  ⚠ 이건 **표시**다. 생사(sessIsDead)·필터 어휘(sessStateKey)는 안 바뀐다 — 그 값으로 터미널을 붙일지 정하는 자리가 있다(views.ts alive).
+export type SessEndKind = 'user' | 'system' | 'error' | 'unknown';
+
+/** 꺼진 세션을 누가 끝냈나(순수). 먼저 걸리는 것이 이긴다 — 판마다 새로 적히는 끝난 사유가 먼저, 판을 넘어 남을 수 있는 T5 쪽지가 나중. */
+export function sessEndKind(s: SessLike): SessEndKind {
+  if (!s) return 'unknown';
+  if (s.exitedByUser) return 'user';
+  const why = s.endNote && typeof s.endNote.why === 'string' ? s.endNote.why : '';
+  if (why === 'stop' || why === 'harness_exit') return 'user';
+  if (why === 'harness_crash' || why === 'launch_fail' || why === 'lost') return 'error';
+  if (s.oomKilled) return 'error';
+  if (why === 'reclaim') return 'system';
+  const sw = s.stopNote && typeof s.stopNote.why === 'string' ? s.stopNote.why : '';
+  if (sw === 'done' || sw === 'asking') return 'system';
+  //  #4783 후속(상민님 2026-10-16 «사유 모름이 유저 행동 필요한 세션을 숨기는 꼴») — 끝낸 자리가 사유를 안 남기고 꺼졌어도,
+  //   종료 규칙이 마지막으로 본 실행 상태가 있으면 그걸로 가른다(세션이 노드 죽음·재시작·PC 꺼짐으로 꺼져도 남는 값).
+  //   working 중 꺼짐 = 작업 도중 끊김(사람이 안 끝냈고 봐야 한다) → 고장. asking·완료·백그라운드·예약 중 꺼짐 = 끄기 직전 상태 보존(시스템).
+  const run = s.lastRun && typeof s.lastRun.run === 'string' ? s.lastRun.run : '';
+  if (run === 'working') return 'error';
+  if (run === 'asking' || run === 'done' || run === 'bg' || run === 'scheduled') return 'system';
+  return 'unknown';
+}
+
+/**
+ * 꺼진 세션이 목록 줄에 **어떤 점**으로 서나(순수). '' = 점 없음.
+ *  · error  → 'error'
+ *  · system → 답을 기다리다 꺼졌으면 'waiting' · 안 본 결과가 남은 채 꺼졌으면(서버가 끌 때 잰 seen=false) 24시간 동안 'done'
+ *  · user·unknown → '' (사람이 끝낸 것은 지난 세션, 사유 모름은 보통 줄 — 점은 «지금 벌어지는 일» 의 자리다, #1954 §4)
+ */
+export function stoppedDotKey(s: SessLike, nowMs: number = Date.now()): '' | 'waiting' | 'done' | 'error' {
+  const k = sessEndKind(s);
+  const run = s.lastRun && typeof s.lastRun.run === 'string' ? s.lastRun.run : '';
+  //  끝난 지 오래된 것은 «지금 볼 것» 이 아니라 이력이다 — 안 본 결과는 하루(isUnreadDone 과 같은 자), 답할 질문·고장은 이레.
+  const at = Number((s.endNote && s.endNote.at) || (s.stopNote && s.stopNote.at) || (s.lastRun && s.lastRun.at) || 0);
+  const age = at ? nowMs / 1000 - at : 0;
+  if (k === 'error') return !at || age <= 7 * 24 * 3600 ? 'error' : '';
+  if (k !== 'system') return '';
+  //  답을 기다리다 꺼졌으면 «확인 필요»(이레) — 끄기 쪽지가 asking 이거나, 마지막 관측이 질의 대기였거나(유저 행동이 필요한 세션 — 숨기지 않는다).
+  if ((s.stopNote && s.stopNote.why === 'asking') || run === 'asking') return !at || age <= 7 * 24 * 3600 ? 'waiting' : '';
+  //  안 본 결과가 남은 채 꺼졌으면 «작업 완료»(하루) — 서버가 끌 때 잰 seen=false. 마지막 관측만 «완료» 인 경우는 봤는지 모르니 점을 안 준다(보통 줄).
+  if (s.endNote && s.endNote.seen === false && at && age <= 24 * 3600) return 'done';
+  return '';
+}
+
+/** 꺼진 세션을 «지난 세션» 으로 접나(순수) — 사람이 끝냈다고 아는 판만. 시스템이 끈 것·고장은 끄기 직전 줄처럼, 사유 모름은 점 없는 보통 줄로 선다. */
+export function stoppedIsPast(s: SessLike): boolean {
+  return sessEndKind(s) === 'user';
 }

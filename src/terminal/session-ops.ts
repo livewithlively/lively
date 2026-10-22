@@ -23,11 +23,13 @@ import {
   sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount, isReportedSched,
   type CreateInput,
 } from "./terminal-sessions.js";
-import { sendKeysToSession } from "./send-keys.js";
-import { injectFirstPrompt } from "./session-first-prompt.js";
+import { sendKeysToSession, sessionPastes } from "./send-keys.js";
+import { injectFirstPrompt, guardAfterSend } from "./session-first-prompt.js";
 import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
 import { writeSessionTokens, removeSessionTokens } from "./session-token-file.js";   // #4135 — 살아 있는 세션에 자격을 나중에 심는 길
+import { sessionGoneOnNode } from "./tmux-exec.js";   // #4917 — 노드의 gone 답
+import { onNode } from "../exec-topology.js";
 import type { LivelyUser } from "../context.js";
 
 /**
@@ -79,8 +81,15 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
 
     // #1664 — 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와
     //  flush 지연 규약은 terminal/send-keys 안에 갇혀 있어 게이트웨이 로컬 주입과 **같은 코드**로 돈다.
+    //  #4818 — Claude Code 세션이면 붙여넣기로 싣는다(send-keys 규약 ⑤). 게이트웨이가 하네스를 실어 보내면 그것을, 옛 게이트웨이면
+    //   이 노드 tmux 의 @box_harness 를 본다(못 읽으면 종전대로 친다).
     case "sendKeys": {
-      await sendKeysToSession(String(args.id), String(args.text ?? ""));
+      const id = String(args.id);
+      const text = String(args.text ?? "");
+      const paste = await sessionPastes(id, typeof args.harness === "string" ? args.harness : null);
+      await sendKeysToSession(id, text, { paste });
+      //  #4852 — 넣은 뒤 입력칸을 지킨다(뒤에서 — RPC 응답을 막지 않는다 · 무엇을 지키나는 guardAfterSend 머리말).
+      void guardAfterSend(id, text, paste);
       return { ok: true };
     }
 
@@ -147,7 +156,8 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       return { ok: true };
     }
 
-    case "gone": return sessionGone(String(args.id));
+    //  #4917 — 노드는 «tmux 서버가 없다» 를 끝남 확답으로 낸다(sessionGoneOnNode 머리말). 게이트웨이·세션 호스트는 종전 그대로.
+    case "gone": return onNode() ? sessionGoneOnNode(String(args.id)) : sessionGone(String(args.id));
     case "label": return getSessionLabel(String(args.id));
 
     // ⚠ 소진 검사 — 종전엔 이 switch 가 `node/agent.ts` 안에 있었고 끝에 `default: throw unknown op` 가

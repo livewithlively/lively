@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf } from "./manifest.js";
+import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf, webDevicesOf, APP_DEVICES } from "./manifest.js";
 import { assertAssetId } from "../org/asset-id.js";
 
 // 최소 유효 매니페스트(각 케이스가 이걸 얕게 변형).
@@ -284,4 +284,49 @@ test("#4481 web 안의 모르는 칸은 통과(다음 단계가 더한 칸 — �
   assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", server: { entry: "server.js" } } }));
   assert.throws(() => parseAppManifest({ ...base(), ui: { root: "dist", pages: [] } }), /매니페스트/);
   assert.throws(() => parseAppManifest({ ...base(), web: { root: "" } }), /매니페스트/, "빈 값");
+});
+
+// ── #4482 앱 주소 iframe 의 장치 권한 선언(web.devices) — 선언한 앱의 iframe 에만 위임된다(상민님 2026-10-16 «선언한 앱만») ─────────────
+//  이게 틀리면: 모르는 장치 이름이 저장돼 화면이 엉뚱한 권한을 위임하거나(allow 속성), 선언이 저장은 되는데 읽는 쪽이 못 읽어 위임이 안 된다.
+test("#4482 web.devices — 아는 장치만 저장 · 모르는 값 · 꼴 밖은 거절 · 읽을 땐 정해진 순서로 거른다", () => {
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { devices: ["microphone", "camera"] } }));
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", devices: [] } }), "빈 목록 · root 와 함께");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: ["usb"] } }), /매니페스트/, "모르는 장치");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: "microphone" } }), /매니페스트/, "배열이 아님");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: ["microphone; camera *"] } }), /매니페스트/, "지시문을 끼워 넣는 값");
+  assert.deepEqual(webDevicesOf({ web: { devices: ["camera", "usb", "microphone", "camera"] } }), ["microphone", "camera"], "읽을 땐 아는 것만 · 정해진 순서 · 한 번씩");
+  assert.deepEqual(webDevicesOf({ web: { devices: "microphone" } }), [], "배열 아님 → 없음");
+  assert.deepEqual(webDevicesOf(null), []);
+  assert.deepEqual([...APP_DEVICES], ["microphone", "camera", "clipboard-read", "geolocation"]);
+});
+
+// ── #4486 서버를 선언한 앱 → 백그라운드 작업 도구 넷 함의 ─────────────────────────────────────────────
+//  이게 틀리면: 서버 앱의 SDK livelyJobs() · 앱 주소 /_lively/jobs 가 «권한 밖» 으로 막히거나, 서버 없는 앱이 작업 도구를 얻는다.
+test("#4486 web.server(객체 · true) → app_job_* 넷 함의(중복 없음) · 서버 없음 · 배열 · 글은 없음", () => {
+  const JOB = ["app_job_start", "app_job_get", "app_jobs", "app_job_cancel"];
+  for (const server of [{}, { start: "node s.js" }, true]) {
+    const tools = parseAppManifest({ ...base(), web: { server }, permissions: { tools: ["app_jobs"] } }).permissions.tools;
+    for (const t of JOB) assert.ok(tools.includes(t), `${JSON.stringify(server)} ${t}`);
+    assert.equal(tools.filter((t) => t === "app_jobs").length, 1, "이미 적은 도구는 한 번만");
+  }
+  for (const server of [undefined, false, [], "node s.js", null]) {
+    const tools = parseAppManifest({ ...base(), ...(server === undefined ? {} : { web: { server } }) }).permissions.tools;
+    assert.ok(!tools.some((t) => t.startsWith("app_job")), `${JSON.stringify(server)} 에 작업 도구가 붙었다`);
+  }
+});
+
+// ── #4488 AI 실행 선언(permissions.ai_runs · ai.jobs) — M1~M2 ─────────────────────────────────────────────────────────────────────────
+//  이게 틀리면: 선언만 하고 도구가 grant 에 안 들어가 앱 주소 /_lively/ai/* 가 «권한 밖» 으로 막히거나, 작업 이름 꼴 밖 선언이 저장돼 설정 칸과 어긋난다.
+test("#4488 permissions.ai_runs → AI 실행 도구 다섯 함의(중복 없음) · 기본 false 면 없음 · ai.jobs 이름 꼴", () => {
+  const m = parseAppManifest({ ...base(), permissions: { ai_runs: true, tools: ["app_ai_run"] } });
+  const tools = m.permissions.tools;
+  for (const t of ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"]) assert.ok(tools.includes(t), t);
+  assert.equal(tools.filter((t) => t === "app_ai_run").length, 1, "이미 적은 도구는 한 번만");
+  const off = parseAppManifest(base());
+  assert.equal(off.permissions.ai_runs, false);
+  assert.ok(!off.permissions.tools.some((t) => t.startsWith("app_ai_")), "선언 없으면 도구 없음(fail-closed)");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "summarize", title: "요약", description: "d" }] } }));
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "Bad Name" }] } }), /매니페스트/, "이름 꼴 밖");
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "x", prompt: "y" }] } }), /매니페스트/, "jobs 안 미지 키는 거부");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [], later: 1 } }), "ai 의 미지 키는 통과(전방호환)");
 });

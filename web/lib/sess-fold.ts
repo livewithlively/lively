@@ -16,8 +16,10 @@
 export const WARM_MS = 24 * 60 * 60 * 1000;
 
 /** 이 세션이 '지금 일감'인가 — 도는 중이거나, 멈췄어도 하루가 안 지났으면 참. */
-export function isWarmSess(s: { live?: boolean; alive?: boolean; lastSeen?: number }, now: number): boolean {
+export function isWarmSess(s: { live?: boolean; alive?: boolean; lastSeen?: number; stopDot?: string }, now: number): boolean {
   if (s.live && s.alive) return true;                       // 도는 중 — 언제나 본문
+  //  #4783 — 꺼졌어도 **점이 선 세션**(시스템이 끄며 답할 질문·안 본 결과가 남았거나 고장으로 끝났다 — views.ts stopDot)은 지금 일감이다.
+  if (s.stopDot) return true;
   const t = Number(s.lastSeen || 0);
   return t > 0 && now - t < WARM_MS;
 }
@@ -29,7 +31,7 @@ export function isWarmSess(s: { live?: boolean; alive?: boolean; lastSeen?: numb
  *  - `cold` = 「지난 세션 n」 뒤로 접히는 것(하루 넘게 조용한 것).
  * 들어온 순서를 그대로 지킨다 — 정렬은 부르는 쪽의 몫이다(도는 것은 상태순, 멈춘 것은 최근순).
  */
-export function splitFolderRows<T extends { live?: boolean; alive?: boolean; lastSeen?: number }>(
+export function splitFolderRows<T extends { live?: boolean; alive?: boolean; lastSeen?: number; stopDot?: string }>(
   live: T[], past: T[], now: number,
 ): { now: T[]; cold: T[] } {
   const warm = past.filter((s) => isWarmSess(s, now));

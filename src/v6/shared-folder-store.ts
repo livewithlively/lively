@@ -73,6 +73,57 @@ export function projectFolderOf(rel: string): string | null {
   return `${segs[0]}/${segs[1]}`;
 }
 
+/**
+ * 프로젝트 폴더를 **담는 자리 자체**인가 — `project` · `legacy-project` 와 그 바로 아래 한 칸(`project/<id>`). (#4688)
+ *  홈 탐색기는 이 이름을 바꾸지 않는다 — 프로젝트의 폴더 자리다(DB project.folder · 자료 좌표 `project:<id>/…` · 공개범위 판정이 이 경로를
+ *  기준으로 한다. 프로젝트 이름 바꾸기는 폴더를 옮기지 않는다). 그 안의 파일·폴더(`project/<id>/…`)는 바꿀 수 있다.
+ *  모양만 본다 — 더 깊게 적힌 프로젝트 폴더는 isProjectFolderOrAncestor 가 DB 로 본다. 이상한 경로는 false(부르는 쪽 경로 해소가 이미 걸었다).
+ */
+export function isProjectContainerPath(rel: string): boolean {
+  let segs: string[];
+  try { segs = normalizeSharedPath(rel).split("/").filter(Boolean); } catch { return false; }
+  return (segs.length === 1 || segs.length === 2) && (segs[0] === PROJECT_SUBDIR || segs[0] === LEGACY_SUBDIR);
+}
+
+/**
+ * 이 경로가 어느 프로젝트의 폴더(DB project.folder)이거나 그 조상인가(#4688) — 모양 판정이 못 덮는 자리(project/ 아래 더 깊게 적힌
+ *  폴더 `project/a/b` 와 그 조상)를 덮는다. project/ ↔ legacy-project/ 양형으로 본다(게이트와 같은 이유 — DB 값이 옛 접두일 수 있다).
+ *  판정을 못 하면(DB 장애) 던진다 — 이름 바꾸기를 하지 않는 쪽이다.
+ */
+export async function isProjectFolderOrAncestor(rel: string): Promise<boolean> {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return false; }
+  if (!norm) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM project p, unnest($1::text[]) AS v(x)
+      WHERE p.folder IS NOT NULL AND p.folder <> ''
+        AND (trim(both '/' from p.folder) = v.x OR starts_with(trim(both '/' from p.folder), v.x || '/'))
+      LIMIT 1`, [folderVariants(norm)]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 순수 — p 가 folders 중 하나이거나 그 조상인가('/' 경계 — `project/1` 이 `project/12` 를 잡지 않는다). */
+export function isFolderOrAncestorOf(p: string, folders: readonly string[]): boolean {
+  let norm: string;
+  try { norm = normalizeSharedPath(p); } catch { return false; }
+  if (!norm) return false;
+  return folders.some((f) => f === norm || f.startsWith(norm + "/"));
+}
+
+/**
+ * 이 폴더 **아래**(자기 제외)에 DB 로 적힌 프로젝트 폴더들 — 이 폴더의 꼴(project/ · legacy-project/)로 맞춰 돌려준다(#4688).
+ *  프로젝트 자료 화면의 이름 바꾸기·묶음 옮기기가 항목마다 DB 를 묻지 않게 요청마다 한 번 읽는다(대개 빈 목록 — 프로젝트 폴더는 평평하다).
+ */
+export async function projectFoldersUnder(rel: string): Promise<string[]> {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return []; }
+  if (!norm) return [];
+  const r = await itemsPool.query(
+    `SELECT DISTINCT trim(both '/' from p.folder) AS f, v.x AS under FROM project p, unnest($1::text[]) AS v(x)
+      WHERE p.folder IS NOT NULL AND starts_with(trim(both '/' from p.folder), v.x || '/')`, [folderVariants(norm)]);
+  return (r.rows as Array<{ f: string; under: string }>).map((row) => norm + String(row.f).slice(String(row.under).length));
+}
+
 /** 프로젝트 상속 구간이라 여기서 ACL 을 설정하면 안 되는 경로인가(설정 UI·API 가 이걸로 거절한다). */
 export function isProjectManagedPath(rel: string): boolean {
   const segs = normalizeSharedPath(rel).split("/").filter(Boolean);
@@ -100,9 +151,16 @@ export interface SharedFolderGate {
    *  세션 작업 폴더 판정용이다: 세션 셸은 작업 폴더 아래를 전부 파일로 보는데, ok 는 그 폴더 하나(자기·조상)만 본다.
    */
   subtreeOk(rel: string): boolean;
+  /**
+   * `rel` **아래**(자기는 빼고)에서 이 뷰어가 못 보는 자리들(공유 자리 기준 경로) — 숨은 프로젝트 폴더(project/ ↔ legacy-project/ 양형)와
+   *  막힌 ACL 경로. 같은 이름 후보 찾기(#4672)가 그 안으로 들어가지 않게 넘긴다 — 들어가면 못 보는 자리의 같은 이름이 후보 상한을 먼저 채운다.
+   *  보이는지의 판정은 여전히 ok 가 한다(이것은 걷는 양을 줄이는 몫). 게이트마다 반드시 답한다 — 빠뜨리면 못 보는 자리가 다시
+   *  후보 상한을 채우는데 아무 데서도 드러나지 않는다(전부 통과 · 앱 폴더 게이트는 빈 목록).
+   */
+  hiddenWithin(rel: string): string[];
 }
 
-const ALLOW_ALL: SharedFolderGate = { ok: () => true, restricted: () => false, subtreeOk: () => true };
+const ALLOW_ALL: SharedFolderGate = { ok: () => true, restricted: () => false, subtreeOk: () => true, hiddenWithin: () => [] };
 
 /**
  * `rel` **아래**(자기 포함)에 못 보는 프로젝트 폴더나 막힌 ACL 경로가 있는가 — 없으면 참(순수, #4687).
@@ -185,6 +243,22 @@ export function gateFromSets(sets: { hiddenFolders: ReadonlySet<string>; locked:
       return selfAndAncestors(norm).some((a) => locked.has(a));
     },
     subtreeOk: (rel: string): boolean => ok(rel) && subtreeFullyVisible(rel, hiddenFolders, blocked),
+    hiddenWithin(rel: string): string[] {
+      let norm: string;
+      try { norm = normalizeSharedPath(rel); } catch { return []; }
+      //  담김은 subtreeFullyVisible 과 같은 자(`rel + "/"`) — 자기 자신은 빼고(자기가 안 보이면 ok 가 이미 막았다).
+      const under = (p: string): boolean => (norm === "" ? p !== "" : p.startsWith(norm + "/"));
+      const out = new Set<string>();
+      for (const f of hiddenFolders) {
+        for (const v of folderVariants(f)) {
+          let nv: string;
+          try { nv = normalizeSharedPath(v); } catch { continue; }
+          if (under(nv)) out.add(nv);
+        }
+      }
+      for (const b of blocked) if (under(b)) out.add(b);
+      return [...out].sort();
+    },
   };
 }
 

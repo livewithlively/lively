@@ -313,7 +313,7 @@ test("A8 배선(보드 주소): 클래식 라우터가 /all 을 전체 스코프
 
 test("A9 배선(보드): 전체로 들어오면 스코프를 풀고(explicit 아님) 전체 보드 자신의 뷰를 쓰며 사이드바를 억지로 열지 않는다 · 전체 뷰도 기억한다", () => {
   const BOARD = readFileSync("web/projects/board.ts", "utf8");
-  const a = BOARD.indexOf("async function renderProjectV2Board(view, scopeKey?) {");
+  const a = BOARD.indexOf("async function renderProjectV2Board(view, scopeKey?");
   const head = BOARD.slice(a, a + 2400);
   assert.match(head, /if \(allScope\) \{ pjvSidebarSel\.key = '__all__'; pjvSidebarSel\.explicit = false; pjvApplyView\(pjvLoadScopeView\('__all__'\) \|\| pjvDefaultView\('__all__'\)\); \}\s*else if \(scopeKey\) \{ pjvSidebarSel\.key = scopeKey; pjvSidebarSel\.explicit = true; \}/);
   assert.match(head, /const picksScope = !!scopeKey && !allScope;/);

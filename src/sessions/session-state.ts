@@ -21,6 +21,8 @@ import { itemsPool } from "../db/client.js";
 import { type LabelSource } from "./session-label-source.js";
 // 노드 에이전트 프로세스 판별자 — #2599 T2 이후 실행 토폴로지가 그 판정의 단일 출처다(자리마다 되묻지 않는다).
 import { onNode } from "../exec-topology.js";
+// #4783 — 이 판이 왜 끝났나(끝낸 자리가 적는다). 모양·판정은 순수 모듈에 있다.
+import { endNoteOf, buildEndNote, END_NOTE_LIFE_MARK, END_REPORT_CLOCK_SLACK_SEC, type SessionEndNote, type SessionEndInput } from "./session-end.js";
 
 export interface SessionState {
   id: string;                 // 세션 id(box-<slug>-<hex>) = tmux 세션명 = claude --resume 인자(#905 C1)
@@ -73,6 +75,23 @@ export interface SessionState {
   // #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). 조회 결과에만 실린다(입력에선 안 받는다 —
   //  쓰는 자리는 setSessionStopNote 하나다). 모양은 session-stop-rule.ts StopNote.
   stop_note?: SessionStopNote | null;
+  // #4783 — 이 판이 **왜 끝났나**(session-end.ts). 판이 태어날 때 {v:1} 이 찍히고, 끝낸 자리가 why 를 적는다. 조회 결과에만 실린다
+  //  (쓰는 자리는 markSessionEnded·markSessionEndSeen 과 판 시작 upsert 뿐이다). null = 옛 판(사유를 모른다).
+  end_note?: SessionEndNote | null;
+  // #4783 후속 — **마지막으로 관측한 실행 상태**(종료 규칙 sweep 이 매 틱 관측할 때마다 적는다). end_note 가 빌 때의 폴백 —
+  //  세션이 끝낸 자리를 안 거치고 꺼져도(노드 죽음·재시작·PC 꺼짐·고장) 꺼질 때 상태를 안다. 조회 결과에만 실린다.
+  last_run_state?: SessionLastRunState | null;
+}
+
+/**
+ * #4783 후속 — 종료 규칙이 마지막으로 관측한 이 세션의 실행 상태. 세션이 어떤 길로 꺼지든 이 값이 남아
+ *  화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 도중 끊김=고장 · asking=확인 필요 · done=완료).
+ */
+export interface SessionLastRunState {
+  /** 관측 시각(epoch초) */
+  at: number;
+  /** working(턴·백그라운드 작업 전 작업 중) · done(턴 끝·기다리는 일 없음) · asking(승인·선택 대기) · bg(백그라운드 작업) · scheduled(예약 깨움 대기) */
+  run: "working" | "done" | "asking" | "bg" | "scheduled";
 }
 
 /**
@@ -104,7 +123,14 @@ export interface StopQuestion {
 
 // createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id·exited_at·
 //  exit_reason 은 생성 시점엔 미상(훅이 세션 시작/종료 때 사후 채움) — 전부 입력에서 제외(생성 시 NULL).
-export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "transcript_path" | "exited_at" | "exit_reason" | "stop_note">;
+export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "transcript_path" | "exited_at" | "exit_reason" | "stop_note" | "end_note"> & {
+  /**
+   * #4783 — 이 판의 pane 이 **끝을 보고하는 런처**(catalog LAUNCH_STOP_SH)로 뜨나. 참이면 판 시작 표식 {v:1} 을 찍는다 — 그 판은
+   *  끝내는 자리가 전부 사유를 적으므로 사유 없이 사라지면 고장으로 확인할 수 있다(session-end-lost). 거짓이면(셸 세션 · grok·opencode ·
+   *  대화 런타임·app-server pane · 셀프호스트 · 노드) 표식이 없다 — 정상 종료를 적는 자리가 없어 «사유 없음» 이 고장의 표시가 아니다.
+   */
+  end_mark?: boolean;
+};
 
 // export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
 export function rowToState(r: Record<string, any>): SessionState {
@@ -131,7 +157,18 @@ export function rowToState(r: Record<string, any>): SessionState {
     discovered: !!r.discovered,   // #2022 — 노드 스냅샷에서 발견한 행(좌표 미상)
     superseded_by: (r.superseded_by as string | null) ?? null,   // #2231 — 이어진 새 세션 id(이정표)
     stop_note: stopNoteOf(r.stop_note),                            // #4695 T5 — 끄기 전에 남긴 쪽지(모양이 틀리면 없음)
+    end_note: endNoteOf(r.end_note),                               // #4783 — 이 판이 왜 끝났나(모양이 틀리면 없음 = 모름)
+    last_run_state: lastRunStateOf(r.last_run_state),              // #4783 후속 — 마지막 관측 실행 상태(end_note 가 빌 때의 폴백)
   };
+}
+
+/** #4783 후속 — DB 의 last_run_state 를 읽는다. 시각·run 이 없거나 모르는 값이면 없음(손으로 넣은 값·깨진 행이 화면에 새지 않게). */
+export function lastRunStateOf(v: unknown): SessionLastRunState | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const n = v as Record<string, unknown>;
+  if (typeof n.at !== "number" || !Number.isFinite(n.at)) return null;
+  if (n.run !== "working" && n.run !== "done" && n.run !== "asking" && n.run !== "bg" && n.run !== "scheduled") return null;
+  return { at: n.at, run: n.run };
 }
 
 /** #4695 T5 — DB 의 쪽지를 읽는다. 끈 시각·사유가 없는 값은 쪽지가 아니다(손으로 넣은 값·깨진 행이 화면에 새지 않게). */
@@ -355,6 +392,90 @@ export async function markSessionOomKilled(id: string): Promise<boolean> {
 }
 
 /**
+ * #4783 — 이 판이 **왜 끝났나** 를 적는다(session-end.ts 머리말). 끝내는 자리가 **끄기 전에** 부른다.
+ *
+ *  ★ **그 판의 첫 사실이 이긴다** — why 가 이미 있으면 안 쓴다. 끄는 쪽(reclaim·stop)이 적고 tmux 를 죽이면 하네스가 신호를 받고
+ *   끝나며 런처가 종료코드를 다시 보고한다(harness_*). 그 뒤늦은 보고가 앞의 사실을 덮으면 «시스템이 끈 세션» 이 «사람이 끝낸 세션»
+ *   으로 둔갑한다. 판의 경계는 판 시작 upsert 가 긋는다(그 자리에서 why 가 지워진다).
+ *  ★ 예외 하나 — **임시 사유**(prov: 기동 실패 뒤 셸이 남은 판)는 그 뒤의 사실이 덮는다: 사람의 멈춤(stop)은 언제나,
+ *   그 밖은 **기록 뒤에 작업이 있었을 때만**(last_busy > at — 사람이 셸에서 하네스를 다시 띄워 일했다). 아무도 안 띄우고 꺼지면
+ *   기동 실패가 그 판의 끝으로 남는다.
+ *  · 옛 판(end_note 없음 — 이 규칙 전에 태어났거나 보고 런처 밖)에도 적는다 — 사유를 아는 자리가 적는 것은 지어내는 게 아니다.
+ *  · `guard.owner` — 런처 보고처럼 **그 세션 자격으로 온 요청**은 주인 행만 고친다(markSessionExited 와 같은 게이트).
+ *  · `guard.t0` — 런처가 하네스를 띄운 시각. 그 판보다 먼저 뜬 하네스의 보고(같은 id 복원 직후 옛 컨테이너가 걷히며 보낸 것)는
+ *    지금 판의 사실이 아니다 — 장부의 판 시작(created)보다 앞서면 버린다(시계 여유 END_REPORT_CLOCK_SLACK_SEC).
+ *  · `guard.created` — **확인한 그 판**에만 적는다(사라짐 확인처럼 목록을 읽고 한참 뒤에 적는 자리). 그 사이 같은 id 로 되살아났으면
+ *    (판 시작이 바뀌었으면) 아무것도 안 바꾼다 — 안 그러면 옛 판의 확답이 살아 있는 새 판에 «고장» 으로 적힌다(격리 리뷰).
+ *  반환 = 적었나(false: 행 없음 · 이미 적힘 · 남의 행 · 옛 판의 보고 · 다른 판). best-effort — 호출부는 실패해도 끄기를 계속한다.
+ */
+export async function markSessionEnded(id: string, e: SessionEndInput, guard: { owner?: string; t0?: number; created?: number } = {}, nowSec = Math.floor(Date.now() / 1000)): Promise<boolean> {
+  if (onNode()) return false;   // 노드엔 DB 가 없다(노드 세션의 행은 게이트웨이가 고친다)
+  const vals: unknown[] = [id, JSON.stringify(buildEndNote(e, nowSec)), e.why === "stop"];
+  let where = `id=$1 AND (end_note IS NULL OR end_note->>'why' IS NULL
+    OR (end_note->>'prov' = 'true' AND ($3::boolean OR COALESCE(last_busy, 0) > COALESCE((end_note->>'at')::bigint, 0))))`;
+  if (guard.owner !== undefined) { vals.push(guard.owner); where += ` AND owner=$${vals.length}`; }
+  if (guard.t0 !== undefined) { vals.push(Math.floor(guard.t0) + END_REPORT_CLOCK_SLACK_SEC); where += ` AND COALESCE(created, 0) <= $${vals.length}`; }
+  if (guard.created !== undefined) { vals.push(Math.floor(guard.created)); where += ` AND COALESCE(created, 0) = $${vals.length}`; }
+  const r = await itemsPool.query(`UPDATE org_session_state SET end_note=$2::jsonb, updated_at=now() WHERE ${where}`, vals);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #4783 — 끄기 전에 적은 사유를 **되돌린다**(끄기가 실패했다 — 세션이 살아 있다). 그 사유가 아직 내가 적은 그대로일 때만(같은 시각·같은 사유)
+ *  판 표식만 남긴다. 안 되돌리면 살아 있는 판에 사유가 남아, 그 판의 진짜 끝이 «첫 사실» 에 막힌다(격리 리뷰).
+ */
+export async function revertSessionEnded(id: string, why: string, atSec: number): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query(
+    `UPDATE org_session_state SET end_note = jsonb_build_object('v', 1), updated_at=now()
+      WHERE id=$1 AND end_note->>'why' = $2 AND end_note->>'at' = $3`,
+    [id, why, String(Math.floor(atSec))],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #4783 — 같은 id 되살리기가 **실패했을 때** 지난 판의 끝난 사유를 되돌린다(createSession dropOwnRow). 되살리기는 판 시작 upsert 로
+ *  사유를 지우고 시작하는데, 컨테이너 확보가 실패하면 새 판은 없다 — 지운 채 두면 «사람이 끝낸 세션» 이 사유 없는 행이 되어 오류로 뒤집힌다.
+ *  새 판이 그 사이 무언가를 적었으면(why 있음) 건드리지 않는다.
+ */
+export async function restoreSessionEndNote(id: string, prev: SessionEndNote | null): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query(
+    `UPDATE org_session_state SET end_note=$2::jsonb, updated_at=now() WHERE id=$1 AND (end_note IS NULL OR end_note->>'why' IS NULL)`,
+    [id, prev ? JSON.stringify(prev) : null],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #4783 — 꺼진 세션의 **안 본 결과를 봤다**(end_note.seen false → true). 화면이 그 꺼진 세션을 열어 보고 있을 때 부른다
+ *  (/seen — 살아 있는 세션의 @box_last_seen 도장과 같은 자리). 안 본 결과가 남지 않은 행은 안 건드린다(멱등).
+ */
+export async function markSessionEndSeen(id: string): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query(
+    `UPDATE org_session_state SET end_note = end_note || '{"seen":true}'::jsonb, updated_at=now()
+      WHERE id=$1 AND end_note->>'why' IS NOT NULL AND end_note->>'seen' = 'false'`,
+    [id],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * #4783 후속 — 종료 규칙 sweep 이 관측한 세션의 **마지막 실행 상태**를 적는다(덮어쓴다). 행이 없으면 아무 일도 없다.
+ *  sweep 은 run 이 바뀌었을 때만 부른다(매 틱 전수 UPDATE 를 피한다). best-effort — 반환은 «적었나».
+ */
+export async function markSessionLastRunState(id: string, s: SessionLastRunState): Promise<boolean> {
+  if (onNode()) return false;
+  const r = await itemsPool.query(
+    "UPDATE org_session_state SET last_run_state=$2::jsonb, updated_at=now() WHERE id=$1",
+    [id, JSON.stringify({ at: Math.floor(s.at), run: s.run })],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
  * #4694 — **같은 id 로 다시 띄운 세션**의 «끝났다» 표식을 지운다(createSession reuseId 가 행을 다시 쓴 직후 부른다).
  *
  *  upsertSessionState 는 이 칸들을 일부러 안 건드린다(생성 시점엔 미상 — 훅이 사후에 채운다). 새 id 로 복원하던 때는
@@ -511,8 +632,8 @@ export async function listSessionLedgerRows(): Promise<SessionLedgerRow[]> {
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   if (onNode()) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
   await itemsPool.query(
-    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, kind, last_seen, updated_at)
-     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,COALESCE($22,'human'),now(),now())
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, label_source, kind, end_note, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,$21,COALESCE($22,'human'),CASE WHEN $23::boolean THEN '${END_NOTE_LIFE_MARK}'::jsonb ELSE NULL END,now(),now())
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
@@ -528,17 +649,31 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        --  이름의 출처가 바뀌는 자리는 개명(claimSessionLabel·updateSessionStateMeta) 하나뿐이다.
        -- #2162 kind 도 **이 경로로 안 바뀐다**(INSERT 때만). 세션의 종류는 태어날 때 정해지고 변하지 않는다 —
        --  복원이 원래 종류를 되살려 보내지만(routes.ts), 만에 하나 그게 비면 기존 값이 살아남아야 한다.
+       -- #4418 — 단 **발견 행**(discovered)은 예외다. 노드는 세션을 띄우자마자 상태를 밀어 올리고, 그게 게이트웨이의 생성
+       --  기록보다 먼저 닿으면 discoverNodeSessions 가 출처·종류 없는 자리표시 행을 먼저 적는다(node-session-state.ts).
+       --  그 행에선 출처·종류가 «아직 아무도 안 정한 값» 이라 이 기록이 **처음으로 정하는 자리**다 — 안 채우면 사람이 준
+       --  이름이 rule 로 읽혀 AI 의 이름짓기가 덮고, 앱 세션이 사람 세션으로 읽힌다(맥미니 노드 실측 2026-10-16: 태스크에서 연
+       --  세션 넷의 출처가 비어 이름짓기가 이겼다). 좌표도 이 기록이 채우므로 발견 표식은 여기서 거둔다.
+       label_source=CASE WHEN org_session_state.discovered THEN EXCLUDED.label_source ELSE org_session_state.label_source END,
+       kind=CASE WHEN org_session_state.discovered THEN EXCLUDED.kind ELSE org_session_state.kind END,
+       discovered=false,
        restrict_read=EXCLUDED.restrict_read,
        created=EXCLUDED.created,
        -- node_id 는 세션 정체성의 일부다(같은 id 가 다른 노드로 옮겨 가는 일은 없다) — 그래도 EXCLUDED 로 그대로 쓴다:
        --  백필(중앙 tmux 만 훑는다)이 박스 세션에 NULL 을 넣고, 노드 릴레이가 노드 세션에 그 노드를 넣는다. 둘이 한 id 를 두고
        --  다투는 경우는 id 가 무작위라 없다.
        node_id=EXCLUDED.node_id,
+       -- #4783 — 이 upsert 는 **판이 새로 서는 자리**다(생성 · 같은 id 복원). 지난 판의 «끝난 사유» 를 지우고 새 판 표식(보고 런처 판만)을 찍는다 —
+       --  안 지우면 «그 판의 첫 사실이 이긴다» 규칙(markSessionEnded)이 새 판의 끝을 지난 판의 사유로 막는다. 되살리기가 실패하면
+       --  createSession 이 지난 판의 사유를 되돌린다(restoreSessionEndNote — 실패한 시도는 판이 아니다).
+       end_note=EXCLUDED.end_note,
+       -- #4783 후속 — 판이 새로 서면 지난 판의 «마지막 관측 상태» 도 지운다(새 판은 아직 관측 전이다). 다음 sweep 이 다시 채운다.
+       last_run_state=NULL,
        last_busy=EXCLUDED.last_busy, app_id=EXCLUDED.app_id, last_seen=now(), updated_at=now()`,
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,
      s.write_vis ?? null, s.restrict_read ?? false,
-     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null, s.kind ?? null],
+     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null, s.label_source ?? null, s.kind ?? null, !!s.end_mark],
   );
 }
 

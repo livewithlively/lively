@@ -19,6 +19,7 @@
 'use strict';
 
 // 토큰·API 베이스·fetch 는 leaf 모듈 web/lib/net.ts 소관(R29a). 401 처리기 배선은 main.ts 최상단(setUnauthorizedHandler).
+import { cacheClear } from './lib/idb-cache.js';   // #4865 — 로그아웃 때 화면 보관함(지난 판)도 비운다
 import { TOKEN_KEY, apiUrl } from './lib/net.js';
 import { state } from './lib/state.js';
 import { logoutRedirectTarget, ssoLogoutTarget } from './lib/logout-target.js';   // #2536 — 매니지드 로그아웃은 CP 세션까지 끝내야 한다
@@ -80,6 +81,7 @@ async function logout(message?: any) {
     ssoDoor = ssoLogoutTarget(await r.json().catch(() => null));
   } catch (_) { /* noop */ }
   localStorage.removeItem(TOKEN_KEY);
+  await cacheClear();   // #4865 — 화면이 먼저 그리던 «지난 판»(프로젝트 목록 · 세션)도 같이 비운다
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
   // SSO 로 로그인한 세션이면 서버가 IdP 로그아웃 문을 준다 — 거기로 최상위 이동해야 IdP 세션까지 끝난다.

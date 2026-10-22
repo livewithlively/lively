@@ -371,6 +371,43 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
     ? ok("E19 claude 가 아니면 예약 칸이 없다") : bad("E19 codex", `실제=${JSON.stringify(b4)}`);
 }
 
+// ── E20(#4821 ②): API 오류로 끝난 턴(StopFailure)도 턴 종료 — Stop 과 같은 idle 보고 ─────────────────────────────
+// Claude Code 는 API 오류(사용 한도·없는 모델 …)로 턴이 끝나면 Stop 대신 StopFailure 만 띄운다(2.1.301 실측: error=model_not_found ·
+//  last_assistant_message · prompt_id). 이게 «턴 종료» 로 안 읽히면 턴 시작의 busy 만 남아 «작업 중» 으로 10분 서 있다가 «모름» 이 되고,
+//  한도로 막힌 턴이 하네스 안에서 자동 이어감을 기다리는 동안 하네스 종료 규칙이 그 대기를 못 본다(옛 회수 시계가 걷는다).
+//   🔴 StopFailure 를 무시하면 — busy 다음 아무 보고도 안 나간다(이번 틈 그대로).
+//   🔴 오류 종류로 거르면 — 한도 오류만 고치고 다른 오류로 끝난 턴은 여전히 «작업 중» 으로 남는다(턴이 끝난 것은 같다).
+{
+  const bodies = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/active`)
+    .map((x) => { try { return JSON.parse(x.body); } catch { return null; } });
+  const conv = join(SANDBOX, "conv-sf.jsonl");
+  writeFileSync(conv, JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } }) + "\n");
+  fresh();
+  const sid = `sf${++n}`;
+  const r0 = await runHook({ session_id: sid, hook_event_name: "UserPromptSubmit", prompt: "긴 작업 해 줘", transcript_path: conv });
+  const r1 = await runHook({ session_id: sid, hook_event_name: "StopFailure", error: "rate_limit", error_details: "usage_limit_reached",
+    last_assistant_message: "You've hit your session limit · resets 4:10pm (Asia/Seoul)", transcript_path: conv });
+  const b0 = bodies(r0), b1 = bodies(r1);
+  b0.length === 1 && b0[0].state === "busy" && b1.length === 1 && b1[0].state === "idle" && b1[0].bg === 0 && b1[0].wake === 0 && b1[0].cron === 0
+    ? ok("E20 busy 뒤 StopFailure(rate_limit) → {state:idle, bg:0, wake:0, cron:0} — Stop 과 같은 턴 끝 보고(전이는 스로틀을 뚫는다)")
+    : bad("E20 rate_limit", `busy=${JSON.stringify(b0)} idle=${JSON.stringify(b1)}`);
+  const r2 = await runHook({ session_id: sid, hook_event_name: "StopFailure", error: "rate_limit", transcript_path: conv });
+  bodies(r2).length === 0 ? ok("E20 같은 idle 의 반복은 60초 스로틀(Stop 과 같다)") : bad("E20 스로틀", `실제=${JSON.stringify(bodies(r2))}`);
+  for (const ev of [{ error: "model_not_found" }, { error: "unknown" }, {}]) {
+    fresh();
+    const s2 = `sf${++n}`;
+    await runHook({ session_id: s2, hook_event_name: "UserPromptSubmit", prompt: "x" });
+    const b = bodies(await runHook({ session_id: s2, hook_event_name: "StopFailure", ...ev }));
+    b.length === 1 && b[0].state === "idle"
+      ? ok(`E20 오류 종류와 무관하게 턴 종료(${JSON.stringify(ev)})`) : bad("E20 오류 종류", `${JSON.stringify(ev)} → ${JSON.stringify(b)}`);
+  }
+  fresh();
+  const s3 = `sf${++n}`;
+  await runHook({ session_id: s3, hook_event_name: "UserPromptSubmit", prompt: "x" });
+  const b3 = bodies(await runHook({ session_id: s3, hook_event_name: "Stop", stop_hook_active: false }));
+  b3.length === 1 && b3[0].state === "idle" ? ok("E20 Stop 은 그대로 idle(회귀)") : bad("E20 Stop 회귀", `실제=${JSON.stringify(b3)}`);
+}
+
 server.close();
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`work-flag-lifecycle tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

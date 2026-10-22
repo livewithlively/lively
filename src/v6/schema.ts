@@ -20,6 +20,9 @@ import { initV6TaskDetail } from "./schema/task-detail.js";
 import { initV6GraphSource } from "./schema/graph-source.js";
 import { initV6UiVis } from "./schema/ui-vis.js";
 import { initV6ProjectChat } from "./schema/project-chat.js";
+import { initV6CollectUnit } from "./schema/collect-unit.js";
+import { initV6FileMove } from "./schema/file-move.js";
+import { initV6CollectTrigger } from "./schema/collect-trigger.js";
 
 export async function initV6Schema(): Promise<string> {
   const pool = itemsPool;
@@ -30,6 +33,9 @@ export async function initV6Schema(): Promise<string> {
   await initV6TaskDetail(pool);   // §11·⑫·⑧: 태그·시간·체크리스트·의존성·커스텀필드·첨부·댓글
   await initV6GraphSource(pool);  // ⑭(#290): 단일-home 유니크·knowledge_link·project_edge·source·knowledge_source
   await initV6UiVis(pool);        // ⑮(#592) UI·⑬ 임베딩·멤버 개인화·가시성(#1291)
-  await initV6ProjectChat(pool);  // ⑯(#1757) project_chat — 새 셸 프로젝트 화면의 리브 대화(프로젝트×사람) — 맨 끝(신규 조각 규약)
+  await initV6ProjectChat(pool);  // ⑯(#1757) project_chat — 새 셸 프로젝트 화면의 리브 대화(프로젝트×사람)
+  await initV6CollectUnit(pool);  // ⑰(#4742) 수집 단위 표 — 단위·볼 수 있는 구성원(담당 후보)·단위 자료·담당 건강
+  await initV6FileMove(pool);     // ⑱(#4688) 옛 경로 → 새 경로 기록 — 웹·API 이름 바꾸기·옮기기 뒤 옛 링크를 새 자리로
+  await initV6CollectTrigger(pool); // ⑲(#4744) 지속 수집 트리거 — 수집 단위의 다음 확인 시각·주기 자동 여부·판정 재료 — 맨 끝(신규 조각 규약)
   return "initialized v6 schema";
 }

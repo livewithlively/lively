@@ -187,6 +187,8 @@ async function installedHarnesses() {
   //   격리 시 GROK_HOME 무시. 이게 없으면 grok 만 쓰는 머신은 PATH 에 grok 이 안 잡히는 순간 목록에서 빠진다.
   const GROKDIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
   try { if (existsSync(join(GROKDIR, "hooks", "lively-grok.json"))) out.push("grok"); } catch { /* 미배선 */ }
+  //  cursor(#4927): ~/.cursor/hooks.json 은 **사용자와 공유**라 파일 존재가 아니라 우리 어댑터 엔트리가 신호다(CLI cursorWired 와 같은 규칙).
+  try { if (/[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/.test(readFileSync(join(HOME, ".cursor", "hooks.json"), "utf8"))) out.push("cursor"); } catch { /* 미배선 */ }
 
   let reg = null;
   try { reg = await import("./harness-registry.mjs"); } catch { /* 구 번들 — 레지스트리 없음 */ }
@@ -198,6 +200,10 @@ async function installedHarnesses() {
       if (typeof bin === "string" && bin && !out.includes(id) && binOnPath(bin)) out.push(id);
     }
   }
+  // cursor IDE(#4927) — IDE 만 쓰는 사람은 PATH 에 cursor-agent 가 없어 위 PATH 감지가 못 잡는다. ~/.cursor(IDE·CLI 가 첫 실행에
+  //  만든다)가 있으면 쓰는 하네스로 본다 — CLI detectHarnesses 와 **같은 판정**(두 판정이 갈리면 그게 결함 — 머리말 데드락 실측).
+  //  ⚠ PATH 보탬과 같은 게이트: kit 이 설치된 홈에서만(«엉뚱한 머신» 계약 — self-update.test ⑧).
+  if (existsSync(join(LIVELY, "hooks")) && !out.includes("cursor") && existsSync(join(HOME, ".cursor"))) out.push("cursor");
   // 세션 하네스 힌트 — '지금 그 하네스 안에서 불려왔다'는 **가장 강한 신호**라 합집합으로 넣는다(폴백 아님).
   //  ⚠ 종전엔 `!out.length` 가드 안이었다: 배선 신호가 하나도 없을 때만 발동. 위 PATH 감지가 out 을 먼저
   //   채우게 된 뒤로는 그 가드가 곧 **선점**이 된다 — detached PATH 에 자기 바이너리는 없고 남의 하네스만
@@ -205,7 +211,7 @@ async function installedHarnesses() {
   //  화이트리스트도 레지스트리를 따른다 — 하드코딩 목록은 grok 이 늘었을 때 갱신되지 않아 `LIVELY_HARNESS=grok`
   //   세션이 조용히 무시됐다(PATH 분기는 grok 을 넣을 수 있는데 힌트 분기는 못 넣는 비대칭). 구 번들 폴백만 하드코딩.
   const hint = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
-  const known = reg?.HARNESS_IDS || ["claude", "codex", "opencode", "antigravity", "grok"];
+  const known = reg?.HARNESS_IDS || ["claude", "codex", "opencode", "antigravity", "grok", "cursor"];
   if (known.includes(hint) && !out.includes(hint)) out.push(hint);
   return out;
 }

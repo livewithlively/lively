@@ -11,14 +11,16 @@
 //  쓰는 법(세션 안):
 //    node bin/deck-push.mjs --doc <문서이름> [--title <제목>] [--session <id>] [--gateway <url>] [--token <파일>] <html>
 //    node bin/deck-push.mjs --doc <문서이름> --variant <안 이름> [--slides a,b] <html>   ← 같은 판에 안(variant)을 덧붙인다
+//    node bin/deck-push.mjs --doc <문서이름> [--pdf <pdf> | --no-pdf] <html>             ← HTML 과 같은 이름의 .pdf 가 옆에 있으면(HTML 보다 새것) 그 판의 PDF 로 함께 올린다(2.2 — 앱의 ↓ 가 HTML + PDF 를 바로 받는다)
+//    node bin/deck-push.mjs --doc <문서이름> [--ver <판>] --pdf <pdf>                    ← 이미 올린 판에 PDF 만 붙인다(판은 안 는다 · 기본은 최신 판)
 //  토큰·게이트웨이 기본값은 ~/.lively/token · ~/.lively/gateway-url, 세션은 LIVELY_SESSION_ID. 표준 모듈만 쓴다(node 18+).
 //  순수 함수(splitHtml · assetize · fontAlias · checkExternal · chunk · plan)는 export 해 scripts/deck-push.test.mjs 가 시험한다.
 //  같은 함수들을 앱 화면(ui/index.html)도 쓴다 — 사람이 앱에서 폴더의 HTML 을 눌러 바로 올릴 때. 그래서 ⟦deck-split⟧ 블록으로 묶어 두 파일에 같은 글로 둔다.
 //  받는 쪽은 bin/deck-pull.mjs(앱의 최신 판을 HTML 파일로 — 원본이 이 세션에 없을 때).
-import { statSync, readFileSync } from "node:fs";
+import { statSync, readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, basename } from "node:path";
 
 export const APP_ID = "deck-edit";
 export const sha256 = (s) => createHash("sha256").update(s).digest("hex");
@@ -206,12 +208,43 @@ function fpOf(rows) {
 
 export { CHUNK, ASSET_MIN, chunk, splitHtml, assetize, usedFamilies, fontAlias, checkExternal, plan, fpOf };
 
+/** 판에 PDF 를 붙인다(#4770 2.2 — 앱의 ↓ 가 세션을 거치지 않고 HTML + PDF 를 바로 받는다). PDF 는 base64 로 assets 에 조각내 한 번만 올리고(sha 로 중복 제거),
+ *  versions 에 kind 'pdf' 행 하나(body '__ASSET:<sha>__' · summary '<파일 이름> · <바이트>')를 둔다 — 그 판에 이미 있으면 바꾼다.
+ *  판의 지문(fpOf)은 이 행을 세지 않는다(앱이 거른다). deck-export --push 도 이걸 쓴다. */
+const PDF_MAX = 40 * 1024 * 1024;
+export async function attachPdf({ gw, headers, doc, ver, file, sid }) {
+  const call = async (table, verb, body) => {
+    const res = await fetch(`${gw}/api/ui/store/${encodeURIComponent(table)}/${verb}`, { method: "POST", headers, body: JSON.stringify({ app_id: APP_ID, ...body }) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`${table}/${verb} ${res.status}: ${text.slice(0, 200)}`);
+    try { return JSON.parse(text); } catch { return {}; }
+  };
+  const bytes = readFileSync(file);
+  if (!bytes.length) throw new Error(`빈 파일: ${file}`);
+  if (bytes.length > PDF_MAX) throw new Error(`PDF 가 너무 큽니다(${(bytes.length / 1048576).toFixed(1)}MB > ${PDF_MAX / 1048576}MB) — 그림을 줄여 다시 만드세요`);
+  if (bytes.subarray(0, 5).toString("latin1") !== "%PDF-") throw new Error(`PDF 가 아닙니다: ${file}`);
+  const b64 = bytes.toString("base64");
+  const sha = sha256(b64);
+  let newAsset = false;
+  if (!((await call("assets", "query", { match: { sha }, limit: 1 })).rows || []).length) {
+    const parts = chunk(b64);
+    for (let i = 0; i < parts.length; i++) await call("assets", "insert", { row: { sha, seq: i, body: parts[i], bytes: byteLen(parts[i]), mime: "application/pdf" } });
+    newAsset = true;
+  }
+  const row = { kind: "pdf", seq: 9000, slide_id: "", variant: "", body: `__ASSET:${sha}__`, summary: `${basename(file)} · ${bytes.length}`, session: sid };
+  const had = (await call("versions", "query", { match: { doc, ver, kind: "pdf" }, limit: 5 })).rows || [];
+  if (had.length) await call("versions", "update", { match: { id: had[0].id }, set: row });
+  else await call("versions", "insert", { row: { doc, ver, ...row } });
+  return { sha, bytes: bytes.length, newAsset, replaced: had.length > 0 };
+}
+const mb = (n) => (n / 1048576).toFixed(1) + "MB";
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith("--")) { const k = a.slice(2); const v = argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[++i] : "1"; o[k] = v; }
+    if (a.startsWith("--")) { const k = a.slice(2); const v = argv[i + 1] && !argv[i + 1].startsWith("--") && k !== "no-pdf" ? argv[++i] : "1"; o[k] = v; }
     else o._.push(a);
   }
   return o;
@@ -221,11 +254,11 @@ function readLocal(rel) { try { return readFileSync(join(process.env.LIVELY_HOME
 async function main() {
   const a = parseArgs(process.argv.slice(2));
   const file = a._[0];
-  if (!file || !a.doc) {
-    console.error("쓰는 법: node bin/deck-push.mjs --doc <문서이름> [--title <제목>] [--variant <안> [--slides a,b]] [--session <id>] [--gateway <url>] [--token <파일>] <html>");
+  const pdfOnly = !file && !!a.pdf;   // 이미 올린 판에 PDF 만 붙인다
+  if ((!file && !pdfOnly) || !a.doc) {
+    console.error("쓰는 법: node bin/deck-push.mjs --doc <문서이름> [--title <제목>] [--variant <안> [--slides a,b]] [--pdf <pdf> | --no-pdf] [--session <id>] [--gateway <url>] [--token <파일>] <html>\n        node bin/deck-push.mjs --doc <문서이름> [--ver <판>] --pdf <pdf>   (판에 PDF 만 붙이기)");
     process.exit(2);
   }
-  const html = readFileSync(file, "utf8");
   const token = (a.token ? readFileSync(a.token, "utf8").trim() : (process.env.LIVELY_TOKEN || "").trim()) || readLocal("token");
   let gw = (a.gateway || process.env.LIVELY_GATEWAY_URL || readLocal("gateway-url") || "http://localhost:8080").replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, "");
   const sid = a.session || process.env.LIVELY_SESSION_ID || "";
@@ -243,11 +276,20 @@ async function main() {
   const ins = (table, row) => call(table, "insert", { row });
   const upd = (table, match, set) => call(table, "update", { match, set });
 
+  const existing = await q("docs", { doc: a.doc }, 1);
+  const latest = existing.length ? Number(existing[0].latest_ver || 0) : 0;
+  if (pdfOnly) {
+    if (!latest) { console.error(`문서가 없습니다: ${a.doc} — 먼저 HTML 을 올리세요.`); process.exit(1); }
+    const pv = Number(a.ver) || latest;
+    if (!(await q("versions", { doc: a.doc, ver: pv, kind: "head" }, 1)).length) { console.error(`판 ${pv} 이 없습니다(문서 ${a.doc} 의 최신 판은 ${latest}).`); process.exit(1); }
+    const r = await attachPdf({ gw, headers, doc: a.doc, ver: pv, file: resolve(a.pdf), sid });
+    console.log(`판 ${pv} 에 PDF ${r.replaced ? "바꿔 붙임" : "붙임"}(${mb(r.bytes)}${r.newAsset ? "" : " · 이미 있던 것"}) — 앱의 ↓ 가 HTML + PDF 를 바로 받습니다`);
+    return;
+  }
+  const html = readFileSync(file, "utf8");
   const p = plan(html, { variant: a.variant, slides: a.slides });
   for (const w of p.warnings) console.error("⚠ " + w);
   const now = new Date().toISOString();
-  const existing = await q("docs", { doc: a.doc }, 1);
-  const latest = existing.length ? Number(existing[0].latest_ver || 0) : 0;
   const ver = a.variant ? (latest || 1) : latest + 1;
   if (a.variant && !latest) console.error("⚠ 아직 판이 없는 문서에 안(variant)을 올립니다 — 판 1 로 올립니다. 먼저 variant 없이 한 번 올리는 것이 맞습니다.");
 
@@ -271,7 +313,37 @@ async function main() {
   //  이 판의 지문을 적어 둔다 — 앱이 자료의 파일을 이 값으로 견줘 «이 판과 같은 파일» · «이 판 뒤에 바뀐 파일» 을 가린다(경로 · 시각이 아니라 내용).
   //  안(variant)만 올릴 때는 판이 그대로라 적지 않는다. 표가 아직 없는 옛 앱 판이면 조용히 넘어간다(앱이 행에서 다시 센다).
   if (!a.variant) await ins("sources", { doc: a.doc, ver, fp: fpOf(p.rows), path: src, bytes: statSync(file).size, mtime: "", session: sid }).catch(() => {});
-  console.log(`판 ${ver} 올림 · 장 ${p.rows.filter((r) => r.kind === "slide").length}${a.variant ? ` (안 「${a.variant}」)` : ""} · 자원 ${shas.length}(새 ${newAssets})${p.alias ? " · 글꼴 별칭 걸음" : ""}${p.warnings.length ? ` · 경고 ${p.warnings.length}` : ""}`);
+  //  원본이 든 프로젝트의 이름을 적어 둔다 — 세션 없이 연 앱의 홈이 「프로젝트 #번호」 가 아니라 이름으로 묶는다(그 화면은 프로젝트를 읽을 길이 없다).
+  //  못 읽거나 표가 없는 옛 앱 판이면 조용히 넘어간다(올리기는 이미 끝났다).
+  const pm = /(?:^|\/)project\/(\d+)\//.exec(src);
+  if (pm) {
+    try {
+      const pid = Number(pm[1]);
+      const r = await fetch(`${gw}/api/ui/v6/projects/${pid}`, { headers });
+      const name = r.ok ? ((await r.json()).project || {}).name : "";
+      if (name) {
+        const had = await q("projects", { pid }, 1);
+        if (!had.length) await ins("projects", { pid, name });
+        else if (had[0].name !== name) await upd("projects", { id: had[0].id }, { name });
+      }
+    } catch {}
+  }
+  //  PDF(2.2): --pdf 로 준 것, 아니면 HTML 과 같은 이름의 .pdf 가 옆에 있고 HTML 보다 오래되지 않았을 때. 안(variant)만 올릴 때는 --pdf 로 줄 때만.
+  let pdfNote = "";
+  if (a["no-pdf"] !== "1") {
+    let pdfPath = a.pdf ? resolve(a.pdf) : null, why = "";
+    if (!pdfPath && !a.variant) {
+      const sib = resolve(file).replace(/\.html?$/i, "") + ".pdf";
+      if (!existsSync(sib)) why = `${basename(sib)} 가 옆에 없음`;
+      else if (statSync(sib).mtimeMs + 2000 < statSync(file).mtimeMs) why = `${basename(sib)} 가 HTML 보다 오래됨(다시 만든 뒤 --pdf 로)`;
+      else pdfPath = sib;
+    }
+    if (pdfPath) {
+      try { const r = await attachPdf({ gw, headers, doc: a.doc, ver, file: pdfPath, sid }); pdfNote = ` · PDF 함께(${mb(r.bytes)}${r.newAsset ? "" : " · 이미 있던 것"})`; }
+      catch (e) { console.error("⚠ PDF 를 못 붙였습니다: " + (e && e.message ? e.message : e)); pdfNote = " · PDF 못 붙임"; }
+    } else if (!a.variant) pdfNote = ` · PDF 없음(${why} — 만들어 두면 함께 올라갑니다)`;
+  }
+  console.log(`판 ${ver} 올림 · 장 ${p.rows.filter((r) => r.kind === "slide").length}${a.variant ? ` (안 「${a.variant}」)` : ""} · 자원 ${shas.length}(새 ${newAssets})${p.alias ? " · 글꼴 별칭 걸음" : ""}${p.warnings.length ? ` · 경고 ${p.warnings.length}` : ""}${pdfNote}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("deck-push.mjs")) {

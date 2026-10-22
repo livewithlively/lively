@@ -4,6 +4,7 @@
 import "./boot/tenancy-env.js";
 import express from "express";
 import { BearerVerifier } from "./auth/bearer.js";
+import { registerLlmProxyRoutes } from "./ai-runs/routes.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
 import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
@@ -18,6 +19,9 @@ import { finishConsent, abandonConsent, describeMicrosoftConsentError, MICROSOFT
 import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
+import { fileUrlRouter } from "./files/signed-routes.js";   // #4673 서명 주소 받는 곳
+import { appFrontServerRouter } from "./apps/app-front-routes.js";   // #4485 앱 서버 쓰기 요청(본문 날것)
+import { liveSignedRouteDeps } from "./files/files-live.js";
 import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
@@ -33,7 +37,7 @@ import { roots } from "./terminal/terminal-sessions.js";
 import { readyReport, gateBySchema } from "./ops/health.js";
 import { readStageSync } from "./ops/stage-sync-status.js";   // #2116 — dev 동기가 막혔는지 밖에서 보이게
 import { buildInfo } from "./build-info.js";
-import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
+import { effectiveStoragePolicy, diskThresholds } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
 import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
@@ -107,11 +111,20 @@ console.log(`[boot] ${installTenantBinding()}`);
   //  #4687 — 세션 작업 폴더의 공개범위 판정. 열람 신원은 링크·MCP 와 같은 규칙(viewerOf)으로 잰다 — 사람과 그 사람의 AI 가 같은 답.
   const { assertSessionCwdVisibleTo } = await import("./v6/shared-folder-store.js");
   const { viewerOf } = await import("./capabilities/principal.js");
-  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
+  //  #4684 — 세션에 붙인 앱 폴더(확보에 실을 목록 · 새 id 복원 때 넘기기).
+  const { folderAppsFor, afterSessionCreate } = await import("./apps/session-app-folders.js");
+  const { carrySessionApps, dropSessionApps } = await import("./apps/session-apps.js");
+  //  #4427 — 구성원 AI 계정(Claude) 커넥터 정책(allowed 가 아니면 claude 세션에 claude.ai 커넥터를 싣지 않는다 — fail-closed).
+  const { memberAiConnectorsPolicy } = await import("./org/store/member-ai-connectors.js");
+  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode, memberAiConnectorsPolicy,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
     harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
     outboxHost: { pick: sessionHostTargetFor, rpc: nodeRpc, defersHere: gatewayDefersHere },
     assertSessionCwdVisible: (user, rootKey, subpath) => assertSessionCwdVisibleTo(viewerOf(user), rootKey, subpath),
+    sessionAppFolders: {
+      listFor: (id) => folderAppsFor(id), carry: (from, to) => carrySessionApps(from, to), drop: (id) => dropSessionApps(id),
+      afterCreate: (id, sent, made, at) => { void afterSessionCreate(id, sent, made, at); },
+    },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 
@@ -137,14 +150,27 @@ app.use(outboxRequestSweepMiddleware());
 // bearer 인증 밖(구 :7700 과 동일 — HMAC 자체가 fail-closed 인증). raw 파싱은 라우터 내부 소유.
 app.use("/api/webhook", domainmapWebhookRouter());
 
+// 서명 주소 받는 곳(#4673 — GET·HEAD·PUT /api/files/s/<토큰>). 역시 전역 express.json() **이전**: PUT 본문이 그대로 파일 바이트라
+//  앱이 `Content-Type: application/json` 으로 JSON 파일을 올리면 전역 파서가 먼저 본문을 먹어 빈 파일이 된다(다른 업로드 입구는
+//  octet-stream 으로만 와서 이 일이 없었다). 인증 미들웨어 밖이다 — 토큰 서명이 자격이고, 판정은 쓰는 순간 다시 탄다(files/signed-routes).
+app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
+
+// 앱 서버의 쓰기 요청(#4485 앱 v2-6 — POST·PUT·PATCH·DELETE /api/app-front/server?path=…). 역시 전역 express.json() **이전**: 앱이 받는 본문은
+//  보낸 바이트 그대로여야 한다(JSON 이면 전역 파서가 먼저 먹는다). 문은 앞단 기계 헤더(x-lvly-app-front) — 사람 로그인을 타지 않는다(apps/app-front-routes.ts).
+app.use("/api/app-front/server", ...appFrontServerRouter());
+
 // 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
 //  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.
 app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
 //  #4225 app_save(구성원 저장) — 화면 + 데이터 앱뿐이라(스킬·worker 번들 없음) 4MB 로 충분하다(화면 한 장 상한 2MB).
 app.use("/api/ui/apps/save", express.json({ limit: "4mb" }));
+//  #4488 LLM 프록시(/api/llm/anthropic/*) — 본문을 바이트 그대로 위로 흘린다(앱 · Claude Code 가 보낸 JSON 을 다시 직렬화하지 않는다 · 1MB 를 넘는다).
+app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();
+//  #4488 LLM 프록시 — 실행 토큰 · 앱 서버 토큰(고급 길)으로 Anthropic Messages API 를 흘려 보낸다(ai-runs/routes.ts).
+registerLlmProxyRoutes(app, verifier);
 // /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가
 //  로그인 지점을 못 찾는다). 공개 주소가 미설정이면 종전 401 그대로.
 const auth = bearerWithResourceMetadata(verifier);
@@ -172,7 +198,7 @@ app.get("/readyz", async (_req, res) => {
     const report = await readyReport({
       pool: itemsPool,
       paths: [stateRoot(), ...roots().map((r) => r.base)],
-      thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
+      thresholds: diskThresholds(policy),
     });
     // 배포 신원(#1289) — "지금 도는 게 몇 버전인가"를 밖에서 한 번에. 없으면 null 로 정직하게 낸다.
     //  비밀이 아닌 것만 싣는다(버전·커밋·빌드시각). 경로·env 는 싣지 않는다 — 이 응답은 미인증이다.
@@ -217,7 +243,8 @@ registerMcpTransport(app, auth);
 //  격리 모델: **조직당 1 게이트웨이+DB 인스턴스**(배포 유형화 T1~T5, 멀티테넌트 SaaS 제외). 따라서 org-content
 //  테이블에 org_id 컬럼이 없고 모든 멤버 토큰이 그 단일 조직 묶음을 받는다 — 이건 설계상 의도다.
 //  ⚠️ 만약 한 게이트웨이를 여러 조직이 공유하도록 바꾼다면 org_id 격리(스키마+모든 쿼리 필터)가 선행 필수.
-app.get("/install", auth, async (_req, res) => {
+//  #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 작업 AI)는 /install 을 못 쓴다(앱 도구 게이트 밖 · 요청마다 묶음을 만든다). 그 밖은 /mcp 와 같다.
+app.get("/install", bearerWithResourceMetadata(verifier, "deny"), async (_req, res) => {
   try {
     const { buffer } = await buildInstallBundle("claude");
     res.setHeader("Content-Type", "application/gzip");

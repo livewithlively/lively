@@ -1,10 +1,13 @@
 // 중앙 박스 — 큐레이트 설정 카탈로그(허용 루트·하네스 플래그·세션 타입). terminal-sessions.ts 분할(#1313 R15).
 //  순수 상수·타입·무의존 순수함수만 둔다(다른 terminal 모듈이 전부 이 파일을 딛고 선다 — 역방향 import 금지).
 import type { SessionKind } from "../sessions/session-kind.js";
+import type { LabelSource } from "../sessions/session-label-source.js";   // #4418 — 타입만(노드 번들에도 들어간다)
 import type { SessionStopNote } from "../sessions/session-state.js";   // #4695 — 타입만(이 모듈은 노드 번들에도 들어간다)
+import type { SessionEndForRow } from "../sessions/session-end.js";   // #4783 — 타입만(같은 이유)
 import type { ReportedState } from "./phase.js";
 import path from "node:path";
 import os from "node:os";
+import { CLAUDE_AI_CONNECTORS_OFF_ENV } from "./claude-ai-connectors-off.js";   // #4427 — import 0 인 잎(대화 런타임과 한 벌)
 
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
 export const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
@@ -29,7 +32,16 @@ export const PANE_LOCALE: string = (() => {
 })();
 
 // ── 큐레이트 허용 루트 ──
-export interface Root { key: string; label: string; base: string; perUser?: boolean; }
+export interface Root {
+  key: string; label: string; base: string; perUser?: boolean;
+  /**
+   * 격리 멤버(#524)의 파일 op 가 이 자리를 보는 기준 경로(profiles.resolveRootPath). 없으면 종전 규칙 — 개인 = 멤버 홈/box,
+   *  그 밖 = 공유 자리(LIVELY_SHARED_DIR). 자리마다 기준이 다를 때만 적는다(#4673 apps — 매니지드 세션 경로 `/work/apps` 는 없다).
+   */
+  isolatedBase?: string;
+  /** false = 이 자리에서는 세션(셸)을 열지 않는다 — 세션 만들기 폼의 자리 목록에서 빠진다(#4673 apps · 판정은 #4687 sessionCwdRefusal). */
+  session?: boolean;
+}
 
 // ── 왜 상수가 아니라 함수인가 ───────────────────────────────────────────────
 //
@@ -104,18 +116,32 @@ function tenantRootBase(): string | null {
   return tpl.replace("{slug}", slug);
 }
 
-/** 지금 이 요청이 볼 수 있는 루트들. **호출 시점**에 만든다(위 머리말). */
+/** 앱 폴더 자리의 키(#4671 ② · #4673) — 주소 `apps/<앱>/…` 의 첫 조각과 같은 말. */
+export const APPS_ROOT_KEY = "apps";
+
+/**
+ * 지금 이 요청이 볼 수 있는 루트들. **호출 시점**에 만든다(위 머리말).
+ *  apps(#4673) = 앱 폴더 원본 `<테넌트>/apps/<앱>/`(공유 폴더 옆, #4671 ②). 누가 볼 수 있나(그 앱에 동의한 구성원)는 여기서 정하지 않는다 —
+ *   탐색기(terminal-files)와 주소 API(files/)가 files/file-access 로 가린다. 세션은 여기서 열지 않는다(session:false — 앱 에이전트 세션은 #4490).
+ *   · 매니지드(테넌트 템플릿): `<테넌트>/apps` — 파일 작업 헬퍼 감옥이 이 경로를 붙인다(lvly-cloud #4689). 격리 op 도 같은 경로를 본다.
+ *   · 셀프호스트: TERMINAL_ROOT_APPS(기본 ~/apps — 상민님 2026-10-15) · 중앙 박스 격리 멤버는 LIVELY_APPS_DIR(기본 /srv/lively/apps,
+ *     deploy/linux/install-isolation.sh 가 공유 자리와 같은 그룹 · setgid 로 만든다).
+ *   ⚠ 테넌트 템플릿 배포에선 LIVELY_APPS_DIR 을 보지 않는다 — 값 하나로 모든 워크스페이스가 같은 앱 폴더를 쓰게 되기 때문이다.
+ */
 export function roots(): Root[] {
   const t = tenantRootBase();
   if (t) {
     return [
       { key: "shared", label: "공유 워크스페이스", base: path.join(t, "shared") },
       { key: "personal", label: "개인 폴더", base: path.join(t, "personal"), perUser: true },
+      { key: APPS_ROOT_KEY, label: "앱 폴더", base: path.join(t, "apps"), isolatedBase: path.join(t, "apps"), session: false },
     ];
   }
   return [
     { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
     { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
+    { key: APPS_ROOT_KEY, label: "앱 폴더", base: process.env.TERMINAL_ROOT_APPS || path.join(os.homedir(), "apps"),
+      isolatedBase: process.env.LIVELY_APPS_DIR || "/srv/lively/apps", session: false },
   ];
 }
 
@@ -462,6 +488,12 @@ export interface SessionInfo {
   // #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글·답을 기다리던 질문). **복원 가능 행에만** 실린다 — 대화창이 입력칸을 채우고
   //  질문을 다시 보여 주는 재료다(web/session-chat.ts). 살아 있는 행엔 없다(그때 쪽지는 지난 일이다).
   stopNote?: SessionStopNote;
+  // #4783 — 이 판이 **왜 끝났나**(sessions/session-end.ts). **복원 가능 행에만** 실린다 — 화면이 «사람이 끝냄(지난 세션) · 시스템이 끔
+  //  (끄기 직전 모습) · 고장(오류)» 을 가르는 재료다. 없음 = 모름(옛 판이거나 아직 확인 전) — 화면은 종전처럼 지난 세션으로 그린다.
+  endNote?: SessionEndForRow;
+  // #4783 후속 — 종료 규칙이 **마지막으로 관측한 실행 상태**(session-state.ts last_run_state). **복원 가능 행에만** 실린다 — endNote 가 비어도
+  //  (세션이 끝낸 자리를 안 거치고 꺼짐) 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 끊김=고장 · asking=확인 필요). 없음 = 아직 관측 전.
+  lastRun?: { at: number; run: "working" | "done" | "asking" | "bg" | "scheduled" };
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // #2197 — 사람이 **마지막으로 시킨 말**(훅 UserPromptSubmit 보고 → org_session_state.last_prompt, 300자 상한). 사이드바 세션 행
@@ -539,6 +571,12 @@ export interface CreateInput {
   kind: SessionKind;
   label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   /**
+   * #4418 — `label` 의 **원래 출처**. 있던 세션을 잇는 길(복원 · 다른 AI 로 전환)만 싣는다 — 그 길은 저장된 이름을 `label` 로
+   *  싣고 오는데, 출처가 없으면 «받아 온 이름 = 사람 것» 으로 읽혀 새 id 로 뜨는 순간 규칙 이름도 사람 이름으로 굳는다.
+   *  새로 여는 세션은 비워 둔다(받아 온 이름은 사람 것 · 없으면 rule/id — session-label-source.openingLabelSource).
+   */
+  labelSource?: LabelSource;
+  /**
    * 이 세션의 **대화 런타임 모드** — "chat" 이면 pane 이 셸이고 대화는 런타임이 쥔다 (#2439).
    *  ⚠ 이 축이 없어서 «한 세션만 켜 보기» 가 불가능했고, 확인하려면 **남의 기본까지** 바꿔야 했다.
    *   그래서 두 번이나 배포 기본을 뒤집었다가 세션을 죽였다(2026-09-01). 세션 단위로 고를 수 있으면
@@ -569,6 +607,9 @@ export interface CreateInput {
   //  컨테이너는 늘 새 자리로 청한다(SessionEnsureRequest.fresh). 훅·MCP 토큰은 종전대로 이 id 로 다시 굽는다(옛 것은 mint 가 먼저 거둔다).
   //  ⚠ 부르는 쪽(routes.ts 복원)이 «그 id 의 tmux 가 없다» 를 확답받은 뒤에만 넘긴다.
   reuseId?: string;
+  // #4684 — 새 id 복원일 때 **옛 세션 id**. 옛 세션에 붙어 있던 앱을 새 세션으로 넘기고(org_session_app) 그 앱 폴더를 새 컨테이너에
+  //  붙인다. 같은 id 복원(reuseId)은 기록이 그 id 에 그대로 있어 필요 없다. 게이트웨이 능력(sessionAppFolders)이 없으면(노드) 무시한다.
+  carryAppsFrom?: string;
   // 이 세션을 만든 **상시세션(org_managed_session)의 id**. ensureManagedSession 만 넘긴다(사람·라우트 경로엔 없다).
   //  · #1059 E — 값이 있으면 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유).
   //  · #2170 — 그 id 를 `@box_managed` 로 세션에 **박는다**. 정리기가 "내가 만든 세션"을 판정하는 유일한 근거다
@@ -593,6 +634,10 @@ export interface CreateInput {
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
   loginFor?: string;
+  // #4213 T11 — 수집 실행 세션(kind "collect"): 판이 하네스 대신 **그 실행의 러너**(`node <dir>/run.cjs <dir>`)를 돌린다.
+  //  러너가 끝나면 판이 닫히고, 브로커가 컨테이너를 거둔다(하네스 종료 철거 #4696). 파일은 부르는 쪽이 먼저 써 둔다(collect-run.ts).
+  //  kind "collect" 와 짝이다 — 둘 중 하나만 오면 createSession 이 거절한다(복원이 러너 없이 빈 셸을 띄우지 않게).
+  collectRun?: { dir: string };
   // #1683 다크모드 — 이 세션을 만든 **브라우저 화면의 테마**(해석된 값: dark|light). pane env 로 내려보내
   //  안에서 도는 하네스·TUI 가 배경에 맞는 색을 고르게 한다(COLORFGBG·LIVELY_THEME — sessions.ts 참조).
   //  ⚠ 하네스 설정 파일(~/.claude/settings.json 의 theme 등)은 **건드리지 않는다** — 그건 사람의 설정이고
@@ -682,6 +727,14 @@ const LAUNCH_SH = [
 //  ⚠ 인젝션 안전은 위와 같다 — 고정 문자열이고 값은 위치인자로만 들어간다. 이어 열기 인자 수(nres)도 위치인자다(숫자가 아니면 0 으로 본다).
 //  ⓘ 이어 열기 인자는 실행 파일 **바로 뒤**에 붙는다(createSession — codex 는 서브커맨드라 그 자리가 계약이다). 그래서 빼는 자리는 [2, 1+nres] 다.
 //  ⓘ «20초» 는 LIVELY_LAUNCH_QUICK_SEC 로 바꿀 수 있다(시험·진단용 — 운영에선 안 둔다).
+//  ★ #4783 — 하네스가 **스스로** 끝나면 종료코드를 게이트웨이에 알린다(report → POST …/sessions/:id/ended). 이 판이 왜 끝났나의 마지막 조각이다:
+//   끄는 자리(하네스 종료 규칙·옛 회수·사람의 멈춤)는 게이트웨이가 스스로 적지만, 하네스가 제 발로 끝난 것은 이 런처만 안다 — 종료 훅은 claude 에만
+//   확실하고(agy 는 훅 자체가 없다) 크래시·기동 실패는 훅이 안 뜬다. 0 = 사람이 끝냈다(/exit·Ctrl-D) · 0 이 아님 = 고장(③ 은 기동 실패).
+//   · 129(SIGHUP)는 안 알린다 — tmux 가 판을 닫을 때 생기는 코드이고, 판을 닫은 자리가 이미 사유를 적었다(게이트웨이도 한 번 더 거른다).
+//   · ⚠ 토큰은 **argv 에 안 싣는다**(ps 로 보인다) — curl 설정을 표준입력(-K -)으로 넘긴다. 값은 안전한 글자만 받는다(설정 문법을 못 깨게).
+//   · 세션 토큰 파일(게이트웨이가 나중에 심은 정본 — harness-registry sessionTokenFile)이 있으면 그쪽, 없으면 env LIVELY_TOKEN.
+//   · 실패해도 아무것도 막지 않는다(최대 두 번 · 3초) — 못 알리면 게이트웨이가 «사유 없이 사라짐» 을 확답으로 확인해 적는다(session-end-lost).
+//   · 게이트웨이 주소·워크스페이스 머리글은 훅과 같은 출처다(kit/hooks/work-flag.mjs SCOPE_HDRS).
 const LAUNCH_STOP_SH = [
   'set -m',
   'notice=$1; notfound=$2; nres=$3; shift 3',
@@ -691,10 +744,28 @@ const LAUNCH_STOP_SH = [
   'clock() { date +%s 2>/dev/null || echo 0; }',
   //  기동 직후에 끝났나 — 시계가 없으면 «모른다»(2) 를 돌려 종전 동작으로 떨어진다.
   'early() { t1=$(clock); case "$t0$t1" in *[!0-9]*) return 2;; esac; [ "$t0" -gt 0 ] && [ "$t1" -ge "$t0" ] || return 2; [ $((t1 - t0)) -le "$quick_sec" ]; }',
+  'report() {',
+  '  [ "$1" -eq 129 ] && return 0',
+  '  sid=${LIVELY_SESSION_ID:-}; case "$sid" in box-*) ;; *) return 0;; esac; case "$sid" in *[!A-Za-z0-9._-]*) return 0;; esac',
+  '  command -v curl >/dev/null 2>&1 || return 0',
+  '  tok=$(sed -n \'s/.*"hook"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p\' "$HOME/.lively/session-tokens/$sid.json" 2>/dev/null | head -n 1)',
+  '  [ -n "$tok" ] || tok=${LIVELY_TOKEN:-}',
+  '  case "$tok" in ""|*[!A-Za-z0-9._~+/=-]*) return 0;; esac',
+  '  gw=${LIVELY_GATEWAY_URL:-}; [ -n "$gw" ] || gw=$(head -n 1 "$HOME/.lively/gateway-url" 2>/dev/null); [ -n "$gw" ] || gw=http://localhost:8080',
+  '  case "$gw" in http://*|https://*) ;; *) return 0;; esac; case "$gw" in *[!A-Za-z0-9._:/-]*) return 0;; esac',
+  '  ws=${LVLY_TENANT_SLUG:-}; case "$ws" in *[!A-Za-z0-9._-]*) ws=;; esac',
+  '  st=${t0:-0}; case "$st" in ""|*[!0-9]*) st=0;; esac',
+  '  for _try in 1 2; do',
+  '    { printf \'header = "authorization: Bearer %s"\\n\' "$tok"; printf \'header = "x-lively-session: %s"\\n\' "$sid"; [ -n "$ws" ] && printf \'header = "x-lively-workspace: %s"\\n\' "$ws"; } \\',
+  '      | curl -fsS -m 3 -o /dev/null -K - -X POST -H \'content-type: application/json\' --data "{\\"code\\":$1,\\"quick\\":$2,\\"t0\\":$st}" "${gw%/}/api/ui/terminal/sessions/$sid/ended" >/dev/null 2>&1 && return 0',
+  '    sleep 1',
+  '  done',
+  '  return 0',
+  '}',
   't0=$(clock)',
   '"$@"',
   'rc=$?',
-  '[ "$rc" -eq 0 ] && exit 0',
+  '[ "$rc" -eq 0 ] && { report 0 0; exit 0; }',
   'early; e=$?',
   //  ② 이어 열기가 곧바로 죽었다 → 이어 열기 인자를 빼고 새 대화로 한 번 더. 갈래는 **종료코드 1** 뿐이다 — 없는 대화 id 로 열면 claude·codex 가
   //   1 로 끝난다(T2 실측). 그 밖(127 실행 파일 없음 · 137 메모리 부족 강제 종료 · 143 신호)은 «대화를 못 찾았다» 가 아니다 — 새 대화로 열면
@@ -708,15 +779,25 @@ const LAUNCH_STOP_SH = [
   '  t0=$(clock)',
   '  "$@"',
   '  rc=$?',
-  '  [ "$rc" -eq 0 ] && exit 0',
+  '  [ "$rc" -eq 0 ] && { report 0 0; exit 0; }',
   '  early; e=$?',
   'fi',
   //  ① 한동안 돌던 하네스가 죽었다 → 셸 없이 끝낸다(tmux 가 끝나면 컨테이너도 걷힌다 — 다시 열면 이어진다).
-  '[ "$e" -eq 1 ] && exit "$rc"',
+  '[ "$e" -eq 1 ] && { report "$rc" 0; exit "$rc"; }',
   //  ③ 기동하자마자 죽었다(또는 시계를 못 읽었다) → 원인을 읽고 고칠 수 있게 안내와 셸을 남긴다(종전 런처와 같다).
   'if [ "$rc" -eq 127 ]; then printf \'\\n%s\\n\' "$notfound"; else printf \'\\n%s\\n\' "$notice"; fi',
+  //  #4783 — 기동 직후에 죽었으면 «기동 실패», 시계를 못 읽어 모르면 «비정상 종료» 로 알린다(어느 쪽이든 오류다). 안내를 먼저 찍고 알린다.
+  'if [ "$e" -eq 0 ]; then report "$rc" 1; else report "$rc" 0; fi',
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
+
+/**
+ * #4783 — 이 pane argv 가 **끝을 보고하는 런처**(LAUNCH_STOP_SH)인가. createSession 이 이 값으로 그 판에 «사유를 적는 판» 표식을 찍는다
+ *  (session-state upsert end_mark). 런처를 문자열로 대조한다 — 하네스·모드·플랫폼 조건을 다시 쓰지 않는다(조건이 두 벌이 되면 갈린다).
+ */
+export function launchReportsEnd(argv: readonly string[]): boolean {
+  return argv.length > 3 && argv[0] === "sh" && argv[1] === "-c" && argv[2] === LAUNCH_STOP_SH;
+}
 
 /** 하네스 종료 규칙을 따르는 하네스(카탈로그 키) — 런처 ①②③ 과 sessions/session-stop-rule.ts 가 같은 표를 본다. */
 export const STOP_RULE_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex", "antigravity"]);
@@ -1031,11 +1112,11 @@ function managedStatusLineSpec(): { type: string; command: string } {
 }
 
 /**
- * claude 스폰 argv 에 얹을 `--settings` 인자 — theme·statusLine 을 **한 객체로 합쳐 한 번만** 준다.
+ * claude 스폰 argv 에 얹을 `--settings` 인자 — theme·statusLine·(막을 때) env 를 **한 객체로 합쳐 한 번만** 준다.
  *  같은 `--settings` 플래그를 두 번 줬을 때 머지되는지 뒤가 이기는지가 미검증이라 합쳐서 준다(안전).
- *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀).
+ *  claude 외 하네스는 statusLine 주입 경로가 없어 종전 테마 argv 그대로(무회귀). claude.ai 커넥터도 claude 만의 것이다.
  */
-export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string }): string[] {
+export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown; managed?: boolean; platform?: string; blockClaudeAiConnectors?: boolean }): string[] {
   if (String(harnessKey || "") !== "claude") return harnessThemeArgv(harnessKey, opts.theme);
   const s: Record<string, unknown> = {};
   const t = normalizeTheme(opts.theme);
@@ -1043,6 +1124,8 @@ export function harnessSettingsArgv(harnessKey: string, opts: { theme?: unknown;
   // statusLine 명령은 POSIX 셸 문법이라 Windows Claude에는 싣지 않는다. theme JSON은 paneLaunchArgv의
   // psmux 직접 실행 경계가 보존하므로 Windows에서도 안전하다(#3982).
   if (opts.managed && opts.platform !== "win32") s.statusLine = managedStatusLineSpec();
+  //  #4427 — 구성원 AI 계정 커넥터를 막은 워크스페이스: claude.ai 커넥터를 싣지 않는다(claude-ai-connectors-off.ts 머리말 — 실측·경계).
+  if (opts.blockClaudeAiConnectors) s.env = { ...CLAUDE_AI_CONNECTORS_OFF_ENV };
   return Object.keys(s).length ? ["--settings", JSON.stringify(s)] : [];
 }
 

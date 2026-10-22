@@ -180,6 +180,13 @@ const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
 const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
 // 배선 신호는 **통째로 우리 소유**인 훅 배선 파일이다(user-install.mjs installGrok 이 심는다).
 const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
+// cursor(#4927) — 훅·MCP·자산은 ~/.cursor 고정(env 오버라이드 없음 — 번들 실측). ⚠ hooks.json 은 **사용자와 공유**라 파일
+//  존재만으로는 배선 신호가 약하다 — 우리 어댑터(cursor-adapter.mjs)를 가리키는 command 가 있어야 배선이다.
+const CURSOR_DIR = join(HOME, ".cursor");
+const CURSOR_HOOKS_JSON = join(CURSOR_DIR, "hooks.json");
+const CURSOR_MCP_JSON = join(CURSOR_DIR, "mcp.json");
+const CURSOR_ADAPTER_RE = /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/;   // 설치기·제거기와 같은 판정(cursor-wiring C19)
+const cursorWired = () => { try { return CURSOR_ADAPTER_RE.test(readFileSync(CURSOR_HOOKS_JSON, "utf8")); } catch { return false; } };
 // 자산 충족 판정 — status 색상·조치 힌트·doctor 체크가 **한 산식**을 공유한다(표면끼리 어긋나면 그게 이 판정의 결함).
 //  collision = 같은 이름의 멤버 자산이 이겨서 조직 사본을 안 깐 것(정상). null = 판정 불가 → 보수적으로 결손 취급하고
 //  불확실성은 문구로 밝힌다(아는 척 초록불로 덮지 않는다).
@@ -652,6 +659,10 @@ function detectHarnesses() {
   // grok: 바이너리 이름이 그대로 grok 이다(#1701). 배선 신호는 우리 소유 훅 파일(lively-grok.json).
   if (has("grok")) out.add("grok");
   try { if (existsSync(GROK_HOOKS_JSON)) out.add("grok"); } catch { /* */ }
+  // cursor(#4927): CLI 바이너리는 cursor-agent(`agent` 별칭은 너무 일반적이라 안 본다). ⚠ IDE 만 쓰는 사람은 PATH 에 그게 없다 —
+  //  ~/.cursor(IDE·CLI 가 첫 실행에 만든다)가 있으면 쓰는 하네스로 본다. 배선 신호는 hooks.json 속 우리 어댑터 엔트리.
+  if (has("cursor-agent")) out.add("cursor");
+  try { if (existsSync(CURSOR_DIR) || cursorWired()) out.add("cursor"); } catch { /* */ }
   return [...out];
 }
 
@@ -1119,6 +1130,14 @@ export function installTarget(want, harnesses = []) {
   return !t || harnesses.includes(t) ? "" : t;
 }
 
+/** (순수) 설치 끝 안내의 «무엇을 켜면» — 배선한 하네스를 사람이 켜는 이름으로. 종전엔 claude(+codex)로 고정이라
+ *  Cursor·grok 만 쓰는 사람에게 «claude 를 켜면» 이라고 말했다(#4927 격리 리뷰). 모르는 id 는 그대로, 비면 claude. */
+const LAUNCH_NAME = { claude: "claude", codex: "codex", opencode: "opencode", antigravity: "agy", grok: "grok", cursor: "Cursor" };
+export function launchNames(harnesses = []) {
+  const names = [...new Set(harnesses.map((h) => LAUNCH_NAME[h] || h).filter(Boolean))];
+  return names.length ? names : ["claude"];
+}
+
 async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
   //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
   //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
@@ -1239,7 +1258,7 @@ async function syncKit({ label, offerHarness, want = "" }) {
 
     say("");
     say(green(bold("=== 끝! ===")));
-    say(`  이제 아무 폴더에서든 ${bold("claude")}${harnesses.includes("codex") ? " · " + bold("codex") : ""} 를 켜면 회사 맥락이 따라옵니다.`);
+    say(`  이제 아무 폴더에서든 ${launchNames(harnesses).map(bold).join(" · ")} 를 켜면 회사 맥락이 따라옵니다.`);
     say(dim("  (훅은 세션 시작에 스냅샷됩니다 — 이미 켜 둔 세션이 있으면 껐다 켜세요.)"));
     say(dim("  상태 확인: ") + bold("lively status") + dim("    문제 진단: ") + bold("lively doctor"));
     return version;
@@ -1791,6 +1810,9 @@ async function gatherStatus() {
       // grok(#1701) — configOk = 우리 훅 배선 파일(lively-grok.json)이 JSON 으로 파싱되는가. grok 은 깨진 훅
       //  파일을 **조용히 건너뛰므로**(fail-open) 깨짐 = 우리 훅이 통째로 소리 없이 빠진 상태 — 그걸 여기서 드러낸다.
       grok: { installed: has("grok"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // cursor(#4927) — 설치 = CLI(cursor-agent) **또는** ~/.cursor(IDE 만 쓰는 사람은 PATH 에 CLI 가 없다). configOk = Cursor 가
+      //  ~/.cursor/hooks.json 을 받아 주는 형태인가 — 한 군데만 어긋나도 **사용자 훅까지 파일 전체**를 버린다(번들 실측).
+      cursor: { installed: has("cursor-agent") || existsSync(CURSOR_DIR), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
     // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
@@ -1942,6 +1964,28 @@ async function gatherStatus() {
       }
     } catch { /* 파일은 있는데 못 읽음 — null 유지(모름) */ }
   }
+  // cursor(#4927) — 배선·config 유효·MCP 등록 전부 **파일**에서 읽는다(비용 0 · 부작용 0). 연결(mcpConnected)은 null —
+  //  `cursor-agent mcp list` 는 로그인 없이 돌지만(실측) IDE 만 쓰는 사람에겐 CLI 가 없고, 진단이 하네스를 띄우지 않는다는 규칙.
+  {
+    const cu = st.harness.cursor;
+    try {
+      const raw = readFileSync(CURSOR_HOOKS_JSON, "utf8");
+      cu.wired = CURSOR_ADAPTER_RE.test(raw);
+      // Cursor 가 받아 주는 형태: JSON 객체 + version 숫자 + 문자열 속 `//` 없음(Cursor 의 주석 제거가 순진해 URL 한 줄이 파일을 죽인다).
+      let ok = false;
+      try { const j = JSON.parse(raw); ok = !!j && typeof j === "object" && !Array.isArray(j) && typeof j.version === "number" && !raw.includes("//"); } catch { ok = false; }
+      cu.configOk = ok;
+    } catch { /* 파일 없음 — wired=false · configOk=null(모름) */ }
+    try {
+      if (!existsSync(CURSOR_MCP_JSON)) cu.mcp = false;     // 파일 자체가 없다 = 등록한 적 없다(확정)
+      else {
+        const m = JSON.parse(readFileSync(CURSOR_MCP_JSON, "utf8"));
+        const e = m && m.mcpServers && m.mcpServers.lively;
+        cu.mcp = !!(e && typeof e === "object" && typeof e.command === "string");
+        cu.transport = cu.mcp ? "stdio" : null;              // command 형(stdio 프록시)만 설치한다
+      }
+    } catch { /* 못 읽음 — null 유지(모름) */ }
+  }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -1971,7 +2015,7 @@ async function gatherStatus() {
     //  경보를 숨기지도, 모르는 걸 정상이라 우기지도 않는다. 구분이 필요한 소비자는 --json 의 null 을 본다.
     let placementFor = null;
     try { ({ placementFor } = await import(new URL("../hooks/harness-registry.mjs", import.meta.url).href)); } catch { /* 발행 배치가 다르면 생략 */ }
-    for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1701 — grok 도 같은 자산 축
+    for (const h of ["claude", "codex", "opencode", "antigravity", "grok", "cursor"]) {   // #1701 — grok · #4927 — cursor 도 같은 자산 축
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
@@ -2162,6 +2206,13 @@ async function cmdStatus(opts) {
       : "";
     say(`  grok          ${mark(gk.installed)} 설치   ${gkWired}${gkMcp}${connOf(gk)}${assetsOf(gk)}`);
   }
+  // cursor(#4927) — 배선 신호는 hooks.json 속 우리 엔트리, configOk 는 Cursor 가 그 파일을 받아 주는가.
+  const cu = st.harness.cursor;
+  if (cu.installed || cu.wired) {
+    const cuWired = cu.configOk === false ? `${red("✘")} 배선 ${red("(~/.cursor/hooks.json 을 Cursor 가 못 읽음 — 사용자 훅까지 통째로 안 돕니다)")}` : `${mark(cu.wired)} 배선`;
+    const cuMcp = cu.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(cu.mcp)} MCP 등록${cu.mcp && cu.transport ? dim(`(${cu.transport})`) : ""}`;
+    say(`  cursor        ${mark(cu.installed)} 설치   ${cuWired}${cuMcp}${connOf(cu)}${assetsOf(cu)}`);
+  }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
   if (st.node?.registered) {
@@ -2178,10 +2229,11 @@ async function cmdStatus(opts) {
   else if (st.harness.opencode.configOk === false) say(dim("  → opencode 가 opencode.json 을 못 읽습니다(그 파일의 MCP·플러그인이 전부 무효): ") + bold("lively update"));
   else if (st.harness.antigravity.configOk === false) say(dim("  → antigravity 플러그인 JSON 이 깨졌습니다(그 파일의 훅/MCP 만 조용히 빠짐): ") + bold("lively update"));
   else if (st.harness.grok.configOk === false) say(dim("  → grok 훅 파일(lively-grok.json)이 깨졌습니다(우리 훅만 조용히 빠짐): ") + bold("lively update"));
+  else if (st.harness.cursor.configOk === false) say(dim("  → Cursor 가 ~/.cursor/hooks.json 을 못 읽습니다(version 누락·모르는 이벤트·문자열 속 // — 사용자 훅까지 전부 무효). 파일을 고친 뒤: ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && !assetsSatisfied(st.harness[h].assets)); // #1701 — grok 포함 · 충돌분 제외
+    const short = ["claude", "codex", "opencode", "antigravity", "grok", "cursor"].filter((h) => st.harness[h].assets && !assetsSatisfied(st.harness[h].assets)); // #1701 — grok 포함 · 충돌분 제외
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -2313,9 +2365,24 @@ async function cmdDoctor(opts) {
         st.harness.grok.mcp ? `lively 등록됨${st.harness.grok.transport ? ` (${st.harness.grok.transport})` : ""}` : "미등록", "lively update");
     }
   }
+  // cursor(#4927) — 배선(hooks.json 속 우리 어댑터 엔트리)·config 유효(Cursor 가 그 파일을 받아 주는 형태)·MCP 등록(mcp.json).
+  //  연결(mcpConnected)은 null 이라 체크를 만들지 않는다(진단이 하네스를 띄우지 않는다는 규칙 — 위 gather 주석).
+  if (st.harness.cursor.installed || st.harness.cursor.wired) {
+    chk("Cursor 배선", st.harness.cursor.wired,
+      st.harness.cursor.wired ? "~/.cursor/hooks.json 에 lively 엔트리 있음" : "훅 미배선 — 맥락 주입·조직 훅·기록 게이트가 하나도 안 돕니다", "lively update");
+    if (st.harness.cursor.configOk !== null) {
+      chk("Cursor 훅 파일 유효", st.harness.cursor.configOk,
+        st.harness.cursor.configOk ? "Cursor 가 읽는 형태" : "~/.cursor/hooks.json 을 Cursor 가 못 읽습니다(JSON·version 숫자·문자열 속 // 금지) — 사용자 훅까지 전부 안 돕니다",
+        "파일을 고친 뒤 lively update");
+    }
+    if (st.harness.cursor.mcp !== null) {
+      chk("Cursor MCP 등록", st.harness.cursor.mcp,
+        st.harness.cursor.mcp ? `lively 등록됨${st.harness.cursor.transport ? ` (${st.harness.cursor.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
   // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.
   //  ⚠ 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 → 업데이트 직후엔 정상적으로 어긋날 수 있다(해결 문구에 그 사실을 담는다).
-  for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
+  for (const h of ["claude", "codex", "opencode", "antigravity", "grok", "cursor"]) {   // #4927 cursor · #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
     const a = st.harness[h].assets;
     if (!a) continue;
     const kept = a.collision || 0;   // 같은 이름의 내 로컬 자산이 있어 조직 사본을 안 깐 것 = 정상(비파괴 정책)
@@ -2476,7 +2543,7 @@ function modeEnv(mode) {
   return {};
 }
 
-// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity|grok] [하네스 인자…]]`
+// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity|grok|cursor] [하네스 인자…]]`
 //  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
 //  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
 //  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
@@ -2497,10 +2564,12 @@ async function cmdRun(rest0) {
   // 프로젝트# 없음 → 하네스 직접 실행. --harness <name> 로 선택(기본 claude), 나머지는 하네스에 그대로 넘긴다.
   let harness = "claude"; const args = [];
   for (let i = 0; i < rest.length; i++) { if (rest[i] === "--harness") harness = rest[++i] || harness; else args.push(rest[i]); }
-  if (!has(harness)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
+  // 하네스 id ≠ 바이너리 이름인 칸(#4927): antigravity=agy · cursor=cursor-agent(harness-registry 의 bin 축과 같은 값).
+  const bin = ({ antigravity: "agy", cursor: "cursor-agent" })[harness] || harness;
+  if (!has(bin)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
   say(dim(`${harness} 실행`) + badge);
   // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형) — 셸 경유이므로 명령·인자를 **둘 다** 인용한다(#1087).
-  const [hc, ha] = WIN ? winSpawnArgs(harness, args) : [harness, args];
+  const [hc, ha] = WIN ? winSpawnArgs(bin, args) : [bin, args];
   onExit(spawn(hc, ha, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) }));
 }
 
@@ -2826,10 +2895,10 @@ ${bold("시작하기")}
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
       --harness <name>   ${dim("내가 쓸 AI — 이 컴퓨터에 없으면 동의를 받고 깔아 줍니다")}
-                         ${dim("claude · codex · opencode · antigravity · grok  (생략하면: 하나도 없을 때만 claude 를 제안)")}
+                         ${dim("claude · codex · opencode · antigravity · grok · cursor  (생략하면: 하나도 없을 때만 claude 를 제안)")}
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
-  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|all")}
+  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|cursor|all")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
@@ -2862,6 +2931,9 @@ ${bold("작업")}
   repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
   repo worktree <레포>   워크트리 생성(코드 작업면) — 프로젝트면 그 폴더의 <레포> 자리 ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
   reclaim [<경로>]       재생성 가능한 파생물 회수(node_modules·dist…) — ${dim("기본 dry-run  ·  --apply 로 실제 삭제  ·  --remove-worktree")}
+  file address <경로>     세션 안 경로 → 파일 주소 + 링크 ${dim("(shared/project/<번호>/… · apps/<앱>/… — 매니지드는 /work/ 를 뗀 것)")}
+  file path <주소>        파일 주소 → 이 세션 안 경로 ${dim("(이 세션에 안 붙은 곳이면 까닭을 알려 줍니다)")}
+  file url <주소>         받기 서명 주소(15분) ${dim("--put 올리기 주소  ·  --ttl <초>  ·  --json")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -2911,6 +2983,63 @@ async function cmdBackfill(args) {
 async function cmdShare(args) {
   const { sessionCommands } = await import(new URL("./cmd-session.mjs", import.meta.url));
   return sessionCommands(cliCtx()).cmdShare(args);
+}
+
+// lively file address <경로> · file path <주소> · file url <주소> [--put] [--ttl 초] [--json] — 파일 주소(#4673).
+//  판정 · 변환의 정본은 게이트웨이(capabilities/files.ts — MCP 도구 file_address · file_path · file_url 와 같은 handler)이고 여기는 겉이다.
+//  이 명령을 부른 세션(LIVELY_SESSION_ID)을 함께 싣는다 — 「이 세션 안 경로」 를 서버가 그 세션의 작업 폴더 · 붙은 앱으로 푼다.
+//  사람용 안내는 stderr, 결과 한 줄(주소 · 경로 · url)은 stdout — 스크립트가 `$(lively file path …)` 로 받게.
+async function cmdFile(args) {
+  const sub = args[0] || "";
+  const rest = args.slice(1);
+  const json = rest.includes("--json");
+  const ti = rest.indexOf("--ttl");
+  const ttl = ti >= 0 ? Number(rest[ti + 1]) : undefined;
+  const target = rest.filter((a, i) => !a.startsWith("--") && !(ti >= 0 && i === ti + 1)).join(" ").trim();   // 빈칸 든 경로를 따옴표 없이 줘도
+  if (!["address", "path", "url"].includes(sub) || !target) {
+    say("사용법: lively file address <경로> · lively file path <주소> · lively file url <주소> [--put] [--ttl 초] [--json]");
+    process.exit(2);
+  }
+  const gw = gateway(), tok = token();
+  if (!gw) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
+  if (!tok) die("로그인이 필요합니다 — `lively login` 을 먼저 실행하세요.");
+  //  상대경로는 지금 폴더 기준 절대경로로 — 그 자리에 파일 · 폴더가 있을 때만(주소 `shared/…` 를 경로로 잘못 읽지 않게).
+  let arg = target;
+  if (sub === "address" && !isAbsolute(arg) && existsSync(resolve(process.cwd(), arg))) arg = resolve(process.cwd(), arg);
+  //  address · path 는 읽기(GET ?path= · ?address=), url 은 발급(POST 본문).
+  const isUrl = sub === "url";
+  const route = sub === "address" ? `/api/ui/files/address?path=${encodeURIComponent(arg)}`
+    : sub === "path" ? `/api/ui/files/path?address=${encodeURIComponent(arg)}` : "/api/ui/files/url";
+  const body = isUrl ? { address: arg, method: rest.includes("--put") ? "PUT" : "GET", ...(Number.isFinite(ttl) ? { expires_in: ttl } : {}) } : null;
+  const headers = { authorization: `Bearer ${tok}`, ...(isUrl ? { "content-type": "application/json" } : {}) };
+  const sess = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (sess) headers["x-lively-session"] = sess;
+  //  세션 모드(#1007+) — MCP 프록시와 같은 헤더를 싣는다. 읽기전용 세션이면 게이트웨이가 올리기 주소를 주지 않는다.
+  const mode = (process.env.LIVELY_MODE || "").trim().toLowerCase();
+  if (mode) headers["x-lively-mode"] = mode;
+  let r, j = null;
+  try { r = await fetch(gw + route, { method: isUrl ? "POST" : "GET", headers, ...(isUrl ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
+  catch (e) { die(`게이트웨이에 닿지 못했습니다 — ${e?.cause?.code || e?.message || e}`); }
+  try { j = await r.json(); } catch { /* 본문 없음 */ }
+  if (!r.ok) die((j && j.error) || `게이트웨이 오류 ${r.status}`);
+  if (json) { process.stdout.write(JSON.stringify(j) + "\n"); return; }
+  if (sub === "address") {
+    if (!j.address) { say(red(j.reason || "주소가 없습니다")); process.exit(1); }
+    process.stdout.write(j.address + "\n");
+    if (j.link) say(dim(j.link));
+    return;
+  }
+  //  #4822 — 옛 주소였으면(웹에서 이름을 바꾸거나 옮긴 파일) 지금 자리로 답했다는 것을 stderr 로 알린다(stdout 은 경로 · url 한 줄 그대로).
+  const movedNote = () => { if (j.moved_from) say(dim(`옮겨진 파일 — 옛 주소 ${j.moved_from} → 지금 ${j.address}`)); };
+  if (sub === "path") {
+    if (!j.path) { say(red(j.reason || "이 세션엔 없는 자리입니다")); process.exit(1); }
+    process.stdout.write(j.path + "\n");
+    movedNote();
+    return;
+  }
+  process.stdout.write(j.url + "\n");
+  movedNote();
+  say(dim(`${j.method === "PUT" ? "올리기" : "받기"} · ${j.expires_at} 까지 — ${j.method === "PUT" ? "curl -fsS -T <파일> '<url>'" : "curl -fsSL -o <파일> '<url>'"}`));
 }
 
 // lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
@@ -3015,6 +3144,8 @@ async function dispatch(cmd, o, argv) {
     // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.
     case "backfill": return cmdBackfill(argv.slice(argv.indexOf("backfill") + 1));
     case "share": return cmdShare(argv.slice(argv.indexOf("share") + 1));
+    // file — 파일 주소(#4673): 세션 안 경로 ↔ 주소 · 서명 주소. 나머지 인자 원형 보존(빈칸 든 경로).
+    case "file": return cmdFile(argv.slice(argv.indexOf("file") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:

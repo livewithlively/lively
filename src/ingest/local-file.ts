@@ -10,6 +10,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
+import type { PoolClient } from "pg";
 import { withTx, itemsPool } from "../db/client.js";
 import type { RawItem } from "../items/store.js";
 import type { LivelyUser } from "../context.js";
@@ -28,7 +29,7 @@ import { keepEntry, entryFields, type UploadEntry } from "./upload-entry.js";   
 import {
   LOCAL_SYSTEM, LOCAL_INSTANCE, type LocalRoot, type LocalIngestKind,
   localExternalId, parseLocalExternalId, normalizeLocalRel, classifyLocalPath, localChannelOf, localFileUrl, localMimeOf, personalRootMember,
-  type FileTrashStamp,
+  type FileTrashStamp, movedLocalRow, LOCAL_ASIDE_PREFIX, type LocalMove, type LocalRowForMove, BODY_HEAD_SQL, BODY_TAIL_SQL,
   buildLocalBinaryStub, STUB_NOTE_VISION, stubNoteUnreadable, stubNoteExtractFailed, decodeLocalText, looksLikeText,
 } from "./local-file-core.js";
 
@@ -227,6 +228,73 @@ export async function supersedeLocalPath(root: LocalRoot, rel: string): Promise<
 }
 
 /**
+ * 이름 바꾸기·옮기기 전파(#4688) — 그 경로(폴더면 하위 전부)의 살아 있는 자료를 **같은 행 그대로** 새 좌표로 옮긴다.
+ *  파일 옮기기가 끝난 **뒤에** 부른다(지우기 전파와 같은 순서). 값 계산은 local-file-core movedLocalRow(순수).
+ *  ★ 도착 좌표를 먼저 비운다 — 좌표 고유 색인(source_external_uidx)은 생애주기와 무관하게 좌표 하나에 행 하나라, 도착 자리에 남은
+ *   다른 행(지운 파일의 닫힌 기록 · 휴지통 기록 · 셸에서 지워져 파일 없이 남은 행)과 부딪힌다. 지우면 그 행에 걸린 지식 근거가 CASCADE 로
+ *   사라지므로 지우지 않고 비켜 둔다(LOCAL_ASIDE_PREFIX + 번호, 원래 좌표는 fields.aside_from). 파일 옮기기는 도착 자리에 파일이 없을 때만
+ *   하므로(라우트가 409 로 막는다) 그 자리의 살아 있는 행은 파일 없이 남은 것이다 — 닫아서 비켜 둔다.
+ *  휴지통에 든 행(이미 닫힌 행)은 옮기지 않는다 — 되살리면 원래 자리로 간다(도장의 경로가 그 자리다).
+ *  본문은 통째로 읽지 않는다 — 바꿀 수 있는 두 자리(안내문 머리 줄 · 긴 본문 꼬리)만 읽고, 고치기는 SQL 이 그 자리에서 한다
+ *   (local-file-core applyBodyEdits 와 같은 규칙). 큰 글이 많은 폴더를 옮겨도 게이트웨이로 본문이 오지 않는다.
+ *  돌려주는 값 = 옮긴 자료 수 · 비켜 둔 행 수.
+ */
+export async function moveLocalPath(m: LocalMove): Promise<{ moved: number; aside: number }> {
+  const fromKey = localExternalId(m.root, m.fromRel);
+  const toKey = localExternalId(m.root, m.toRel);
+  if (!normalizeLocalRel(m.fromRel) || !normalizeLocalRel(m.toRel) || fromKey === toKey) return { moved: 0, aside: 0 };
+  const inst = normalizeExternalInstance(LOCAL_INSTANCE);
+  return await withTx(async (client) => {
+    //  파일이면 좌표 하나(색인으로 바로) · 폴더거나 모르면 하위까지(접두 — 훑는다).
+    const which = m.isDir === false ? `external_id=$3` : `(external_id=$3 OR starts_with(external_id, $3 || '/'))`;
+    const r = await client.query(
+      `SELECT id, external_id, external_url, title, fields, ${BODY_HEAD_SQL} AS body_head, ${BODY_TAIL_SQL} AS body_tail FROM source
+        WHERE external_system=$1 AND external_instance=$2 AND lifecycle='active' AND ${which}
+        ORDER BY id FOR UPDATE`,
+      [LOCAL_SYSTEM, inst, fromKey]);
+    const plans = (r.rows as Array<LocalRowForMove & { id: number }>)
+      .map((row) => ({ id: Number(row.id), next: movedLocalRow(row, m) }))
+      .filter((p): p is { id: number; next: NonNullable<ReturnType<typeof movedLocalRow>> } => p.next !== null);
+    if (!plans.length) return { moved: 0, aside: 0 };
+    const ids = plans.map((p) => p.id);
+    const aside = await setLocalRowsAside(client, plans.map((p) => p.next.external_id), ids);
+    //  ⚠ updated_at 은 그대로 — 증류기는 그 값을 «내용이 바뀐 시각» 으로 읽는다(distiller.ts). 이름·자리만 바뀌었다.
+    //  본문 고치기는 그 자리가 글자 그대로 같을 때만(applyBodyEdits 와 같은 규칙) — 그새 본문이 바뀌었으면 손대지 않는다.
+    await client.query(
+      `UPDATE source s SET external_id = v.eid, external_url = v.url, title = v.title, fields = v.fields::jsonb,
+              body_md = CASE
+                WHEN v.head_from IS NOT NULL AND split_part(s.body_md, E'\\n', 1) = v.head_from
+                  THEN v.head_to || substring(s.body_md from char_length(v.head_from) + 1)
+                WHEN v.tail_from IS NOT NULL AND right(s.body_md, char_length(v.tail_from)) = v.tail_from
+                  THEN left(s.body_md, char_length(s.body_md) - char_length(v.tail_from)) || v.tail_to
+                ELSE s.body_md END
+         FROM unnest($1::int[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[])
+              AS v(id, eid, url, title, fields, head_from, head_to, tail_from, tail_to)
+        WHERE s.id = v.id`,
+      [ids, plans.map((p) => p.next.external_id), plans.map((p) => p.next.external_url), plans.map((p) => p.next.title),
+       plans.map((p) => JSON.stringify(p.next.fields)),
+       plans.map((p) => p.next.head?.from ?? null), plans.map((p) => p.next.head?.to ?? null),
+       plans.map((p) => p.next.tail?.from ?? null), plans.map((p) => p.next.tail?.to ?? null)]);
+    return { moved: plans.length, aside: aside };
+  });
+}
+
+/**
+ * 좌표를 비켜 준다(#4688) — 그 좌표들을 쥔 행(except 의 행은 빼고)을 닫고 LOCAL_ASIDE_PREFIX + 번호로 옮긴다. 원래 좌표는 fields.aside_from.
+ *  지우지 않는 까닭: 그 행에 걸린 지식 근거가 CASCADE 로 사라진다. 휴지통 기록이면 휴지통에 그대로 남고, 되살릴 때 좌표를 되찾는다.
+ *  돌려주는 값 = 비켜 둔 행 수.
+ */
+async function setLocalRowsAside(client: PoolClient, externalIds: string[], except: number[]): Promise<number> {
+  if (!externalIds.length) return 0;
+  const r = await client.query(
+    `UPDATE source SET external_id = $5 || id::text, lifecycle = 'superseded',
+            fields = COALESCE(fields, '{}'::jsonb) || jsonb_build_object('aside_from', external_id)
+      WHERE external_system=$1 AND external_instance=$2 AND external_id = ANY($3::text[]) AND id <> ALL($4::int[])`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), externalIds, except, LOCAL_ASIDE_PREFIX]);
+  return r.rowCount ?? 0;
+}
+
+/**
  * supersedeLocalPath 의 역 — **그 좌표 한 건만** 다시 살린다(#4302 첨부 되돌리기: 파일이 원래 자리로 돌아왔다).
  *  하위 경로는 건드리지 않고, 휴지통 도장이 찍힌 행(사람이 지운 것)은 되살리지 않는다.
  */
@@ -274,6 +342,16 @@ export async function stampTrashedLocalPath(root: LocalRoot, rel: string, stamp:
   return r.rowCount ?? 0;
 }
 
+/** 그 좌표의 살아 있는 자료 번호 — 없으면 null. 자료 보기 화면(#4672)의 «올린 사람 · 여기서 나온 지식» 줄이 이 번호로 자료를 연다.
+ *  좌표 하나라 고유 색인(source_external_uidx)을 탄다. 공개범위는 부르는 쪽이 그 번호로 다시 본다(getSource). */
+export async function activeLocalSourceIdAt(root: LocalRoot, rel: string): Promise<number | null> {
+  const r = await itemsPool.query(
+    `SELECT id FROM source WHERE external_system=$1 AND external_instance=$2 AND external_id=$3 AND lifecycle='active' LIMIT 1`,
+    [LOCAL_SYSTEM, normalizeExternalInstance(LOCAL_INSTANCE), localExternalId(root, rel)]);
+  const id = (r.rows[0] as { id?: number } | undefined)?.id;
+  return id ? Number(id) : null;
+}
+
 export interface TrashedFileRow { id: number; title: string | null; path: string; stamp: FileTrashStamp }
 /** 휴지통의 파일 자료 한 건 — 도장이 없으면(이미 되살렸거나 옛 방식으로 지운 것) undefined. */
 export async function getTrashedFile(sourceId: number): Promise<TrashedFileRow | undefined> {
@@ -287,9 +365,24 @@ export async function getTrashedFile(sourceId: number): Promise<TrashedFileRow |
   return { id: Number(row.id), title: row.title, path: p, stamp };
 }
 
-/** 되살린 뒤 — 도장을 떼고 다시 active. */
+/**
+ * 되살린 뒤 — 도장을 떼고 다시 active.
+ *  #4688 — 휴지통에 있는 동안 다른 파일이 그 이름으로 옮겨 와 좌표를 비켜 줬던 행(fields.aside_from)이면 **원래 좌표를 되찾는다.**
+ *   되살리기는 원래 자리에 파일이 없을 때만 일어나므로(라우트가 409 로 막는다) 그새 그 좌표를 쥔 다른 행은 파일 없이 남은 것이다 — 비켜 둔다.
+ */
 export async function reviveTrashedFile(sourceId: number): Promise<void> {
-  await itemsPool.query(`UPDATE source SET lifecycle='active', updated_at=now(), fields = fields - 'trash' WHERE id=$1`, [sourceId]);
+  await withTx(async (client) => {
+    const r = await client.query(`SELECT fields->>'aside_from' AS back FROM source WHERE id=$1 FOR UPDATE`, [sourceId]);
+    const back = (r.rows[0] as { back?: string | null } | undefined)?.back ?? null;
+    if (!back) {
+      await client.query(`UPDATE source SET lifecycle='active', updated_at=now(), fields = fields - 'trash' WHERE id=$1`, [sourceId]);
+      return;
+    }
+    await setLocalRowsAside(client, [back], [sourceId]);
+    await client.query(
+      `UPDATE source SET lifecycle='active', updated_at=now(), external_id=$2, fields = fields - 'trash' - 'aside_from' WHERE id=$1`,
+      [sourceId, back]);
+  });
 }
 
 /** 같은 보관 묶음에 아직 도장 찍힌 자료가 몇 건 남았나 — 0 이면 묶음 폴더를 통째로 치워도 된다(자료 아닌 동행 파일 포함). */

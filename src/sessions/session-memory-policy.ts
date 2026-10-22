@@ -113,3 +113,60 @@ export async function effectiveSessionMemoryPolicy(
 export function invalidateSessionMemoryPolicyCache(): void {
   cache.invalidate();
 }
+
+// ── 수집 실행 세션 크기(#4213 T11) — 상한·예약(MB). org_runtime_config.collect_session_policy ──
+//  수집 실행은 한 사람의 대화 세션과 나눠 쓰지 않으려고 따로 띄우는 작은 세션이라, 크기도 위 정책과 따로 정한다.
+//  왜 칸을 따로 두나: 컨트롤플레인이 프로비저닝마다 session_memory_policy 를 세 칸 그대로 다시 쓴다(lvly-cloud provisioner) —
+//   같은 칸에 넣으면 그때마다 resolved 값이 DB 로 굳는다(#688 함정). 그리고 위 정책의 기본 0 = 무제한과 뜻이 다르다(여긴 늘 작게).
+//  기본 1,024 · 640 — 매니지드 실측(2026-10-16): 상한 768 에서 최고 657MB(여유 약 110MB) → 상민님 결정으로 올렸다.
+//   예약 640 = 최소 실행만으로 +389~450MB 늘던 실측 위에 실제 수집(여러 턴·큰 결과) 몫을 얹은 값.
+//  관리 화면: [수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집] — 실행 지표(실패율·최고 메모리)를 보며 같은 자리에서 고친다.
+export interface CollectSessionPolicy {
+  /** 수집 세션 컨테이너 상한(MB) — 넘으면 그 세션 안에서 OOM 으로 끝난다. */
+  max_mb: number;
+  /** 배치 예약치(MB) — 노드에 앉힐 때 차지하는 것으로 치는 양. 상한을 넘지 않는다. */
+  request_mb: number;
+}
+export type CollectSessionPolicyPatch = Partial<CollectSessionPolicy>;
+export const DEFAULT_COLLECT_SESSION_POLICY: CollectSessionPolicy = { max_mb: 1024, request_mb: 640 };
+export const COLLECT_MEM_MAX_MB_MIN = 256;
+export const COLLECT_MEM_REQUEST_MB_MIN = 128;
+export const COLLECT_MEM_MB_MAX = 8192;
+
+const collectPolicy = definePolicy<CollectSessionPolicy>({
+  defaults: DEFAULT_COLLECT_SESSION_POLICY,
+  fields: {
+    max_mb: { env: "LIVELY_COLLECT_MEM_MB", min: COLLECT_MEM_MAX_MB_MIN, max: COLLECT_MEM_MB_MAX },
+    request_mb: { env: "LIVELY_COLLECT_MEM_REQUEST_MB", min: COLLECT_MEM_REQUEST_MB_MIN, max: COLLECT_MEM_MB_MAX },
+  },
+  invariant(out) {
+    //  예약이 상한보다 크면 «자리는 크게 잡고 그만큼 못 쓰는» 모순이다(위 정책과 같은 규칙) — 상한으로 내린다.
+    if (out.request_mb > out.max_mb) out.request_mb = out.max_mb;
+  },
+});
+
+export function normalizeCollectSessionPolicy(raw: unknown): CollectSessionPolicy {
+  return collectPolicy.normalize(raw);
+}
+export function resolveCollectSessionPolicy(dbRaw: unknown): CollectSessionPolicy {
+  return collectPolicy.resolve(dbRaw);
+}
+export function collectSessionPolicySource(dbRaw: unknown): "db" | "env" | "default" {
+  return collectPolicy.source(dbRaw);
+}
+
+//  위 캐시와 같은 계약(테넌트별 · 조회 실패해도 던지지 않는다) — 수집 세션 생성마다 읽는다.
+const collectCache = tenantTtlCache<CollectSessionPolicy>(30_000, () => normalizeCollectSessionPolicy(null));
+
+export async function effectiveCollectSessionPolicy(
+  load: () => Promise<CollectSessionPolicy>,
+  ttlMs = 30_000,
+  now: () => number = Date.now,
+): Promise<CollectSessionPolicy> {
+  return collectCache.get(load, ttlMs, now);
+}
+
+/** 관리 화면에서 수집 크기를 저장한 직후 — 다음 수집 실행이 바로 새 크기로 뜨게. */
+export function invalidateCollectSessionPolicyCache(): void {
+  collectCache.invalidate();
+}

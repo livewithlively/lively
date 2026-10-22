@@ -65,3 +65,26 @@ test("E8 시계가 어긋나 미래 시각이 와도 음수 나이를 만들지 
 test("E9 사유가 비어 있어도 무엇인가는 말한다", () => {
   assert.equal(stageSyncHealth({ at: iso(-10), state: "skipped" }, T, STUCK, STALE)?.code, "unknown");
 });
+
+// #4814 — failed: 당긴 커밋은 들어왔는데 빌드·재시작이 못 따라갔다(게이트웨이는 옛 판으로 돈다).
+//  🔴 이걸 모르는 state 로 버리면(null) /readyz 에서 아예 사라진다 — 거짓 초록과 다를 바 없다.
+test("E10 ★ failed — 곧바로 degraded, 사유와 막힌 시간을 싣는다", () => {
+  const h = stageSyncHealth({ at: iso(-10), state: "failed", code: "restart", since: iso(-30) }, T, STUCK, STALE);
+  assert.deepEqual(h, { ok: false, state: "failed", code: "restart", stuckSec: 30 }, "🔴 재시작이 실패했는데 드러나지 않는다");
+});
+
+test("E11 ★ 경계 — 방금 실패했어도(막힌 시간 0) 유예하지 않는다", () => {
+  const h = stageSyncHealth({ at: iso(0), state: "failed", code: "web", since: iso(0) }, T, STUCK, STALE);
+  assert.equal(h?.ok, false, "🔴 건너뜀처럼 유예했다 — 기다린다고 풀리는 실패가 아니다");
+  assert.equal(h?.stuckSec, 0);
+});
+
+test("E12 failed 라도 잡이 오래 말이 없으면 stale 이 먼저다", () => {
+  assert.equal(stageSyncHealth({ at: iso(-STALE - 1), state: "failed", code: "restart" }, T, STUCK, STALE)?.state, "stale");
+});
+
+test("E13 failed 의 사유가 비면 unknown, since 가 없으면 at 을 시작으로 본다", () => {
+  const h = stageSyncHealth({ at: iso(-40), state: "failed" }, T, STUCK, STALE);
+  assert.equal(h?.code, "unknown");
+  assert.equal(h?.stuckSec, 40);
+});

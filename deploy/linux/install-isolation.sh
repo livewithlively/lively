@@ -55,6 +55,14 @@ install -d -m 2775 -o root -g lively-shared "$SHARED_DIR"
 chmod g+s "$SHARED_DIR"   # install -m 2775 로도 setgid 이지만 재실행 멱등 보강
 echo "공유 워크스페이스 → $SHARED_DIR (root:lively-shared 2775 setgid)"
 
+# ⑤-c 앱 폴더 자리(#4673 — resolveRootPath 의 apps 자리 격리 기준 · catalog.ts roots). 공유 자리와 같은 그룹 · setgid —
+#    앱이 그 사람 이름으로 올린 파일을 그 앱이 붙은 다른 멤버의 세션도 고칠 수 있게. 앱마다 하위 폴더는 첫 올리기 때 생긴다.
+#    ⚠ 이 배포의 멤버 셸은 공유 자리처럼 이 자리 전체를 그룹 권한으로 본다 — 앱 동의에 따른 가림은 웹 · API(탐색기 · 서명 주소)의 것이다.
+APPS_DIR="${LIVELY_APPS_DIR:-/srv/lively/apps}"
+install -d -m 2775 -o root -g lively-shared "$APPS_DIR"
+chmod g+s "$APPS_DIR"
+echo "앱 폴더 자리 → $APPS_DIR (root:lively-shared 2775 setgid)"
+
 # ② box-spawn wrapper (root:root 0755) — 코드(terminal-isolation.ts BOX_SPAWN)와 경로 일치
 install -d -m 0755 /opt/lively/libexec
 #  ★ env 계약 정본을 **먼저** 놓는다 — box-spawn 이 이걸 source 한다(#2258 이동 2).

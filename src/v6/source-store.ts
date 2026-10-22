@@ -65,6 +65,11 @@ export const SOURCE_CATEGORIES_SQL = `COALESCE((
        JOIN category c ON c.id = kc.category_id AND c.state <> 'merged'
       WHERE ks.source_id = s.id), '[]'::jsonb)`;
 
+// #4824 — 잠긴 자료의 «볼 수 있는 사람» 열쇠(같은 대상이면 같은 값 · 열린 자료는 NULL). 증류 배치를 같은 대상끼리 묶는 데 쓴다
+//  (org/distill/distiller.ts oneAudienceGroup). 's' 별칭 기준.
+export const AUD_KEY_SQL = `CASE WHEN s.visibility = 'members' THEN COALESCE((SELECT string_agg(sm.subject_kind || ':' || sm.member_id, ','
+    ORDER BY sm.subject_kind, sm.member_id) FROM source_member sm WHERE sm.source_id = s.id), '') END`;
+
 export const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
    EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge,
    ${SOURCE_CATEGORIES_SQL} AS categories`;
@@ -328,11 +333,13 @@ export async function listSourceUploaders(viewer?: Viewer): Promise<SourceUpload
 //  다음 조회에서 빠진다(멱등 수렴). 본문 미포함(source_get 으로 전문). #541.
 //  viewer(#1291): 증류 크론은 특권(null)으로 부른다 — 못 보면 그 자료는 영영 지식이 안 된다. 사람·에이전트가
 //   목록을 열 때는 자기 뷰어로 걸러 제목이 새지 않게 한다(listUnmappedKnowledge 와 같은 갈래).
-export async function listUndistilledSources(limit = 50, viewer?: Viewer): Promise<Record<string, unknown>[]> {
+//  withAudienceKey(#4824) — 증류 스케줄러만 켠다(배치를 같은 대상끼리 묶는 열쇠). 도구 응답(source_undistilled)에는 싣지 않는다 —
+//   열쇠가 «그 잠긴 자료를 누가 보나» 의 사람 id 목록이라, 비공개 채널 구성원 명단과 같은 급의 사생활이다.
+export async function listUndistilledSources(limit = 50, viewer?: Viewer, withAudienceKey = false): Promise<Record<string, unknown>[]> {
   const params: unknown[] = [Math.min(limit, 500)];
   const vis = await sourceVisWhere(viewer, params);
   return q(itemsPool,
-    `SELECT ${S_LIST_SEL} FROM source s
+    `SELECT ${S_LIST_SEL}${withAudienceKey ? `, ${AUD_KEY_SQL} AS aud_key` : ""} FROM source s
      WHERE s.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
        AND ${vis}
@@ -380,6 +387,47 @@ export async function getSource(id: number, viewer?: Viewer): Promise<(SourceRow
        ORDER BY COALESCE(s.occurred_at, s.updated_at) ASC LIMIT 200`, rParams);
   }
   return { ...(s as SourceRow), knowledge, parent, replies, reply_count: replies.length };
+}
+
+/** 자료 보기(#4672)가 파일 하나에 싣는 자료 요약 — 누가 · 언제 올렸고 거기서 어떤 지식이 나왔나. */
+export interface SourceFileSummary {
+  title: string | null;
+  /** 들어온 길(fields.entry — 'generated' = AI 세션이 만든 파일) */
+  entry: string | null;
+  uploaderId: string | null;
+  uploaderName: string | null;
+  /** 자료가 생긴 때(ISO — 밀리초까지) */
+  createdAt: string | null;
+  /** 이 자료에서 나온 지식(이 사람이 볼 수 있는 것만 · 한 지식은 관계가 여럿이어도 한 줄) */
+  knowledge: Array<{ name: string; title: string | null }>;
+}
+
+/**
+ * 자료 보기 화면(#4672)의 자료 요약 — getSource 의 가벼운 판. 링크를 열 때마다 도는 자리라 본문(body_md) · 분류 · 부모 · 답글은 읽지 않는다.
+ *  공개범위는 getSource 와 같은 두 술어(자료 sourceVisWhere · 지식 knowledgeVisWhere) — 자료가 안 보이면 undefined(호출부가 «자료 없음»).
+ */
+export async function getSourceFileSummary(id: number, viewer?: Viewer): Promise<SourceFileSummary | undefined> {
+  const params: unknown[] = [id];
+  const vis = await sourceVisWhere(viewer, params);
+  const s = await one(itemsPool,
+    `SELECT s.title, s.created_at, s.fields->>'entry' AS entry, s.fields->>'author_external_id' AS uploader_id, s.fields->>'author_name' AS uploader_name
+       FROM source s WHERE s.id=$1 AND ${vis}`, params) as Record<string, unknown> | undefined;
+  if (!s) return undefined;
+  const kParams: unknown[] = [id];
+  const kVis = await knowledgeVisWhere(viewer, kParams);
+  const knowledge = await q(itemsPool,
+    `SELECT DISTINCT ON (ks.name) ks.name, k.title FROM knowledge_source ks JOIN knowledge k ON k.name=ks.name
+      WHERE ks.source_id=$1 AND k.lifecycle='active' AND ${kVis} ORDER BY ks.name`, kParams) as Array<Record<string, unknown>>;
+  const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+  const at = s.created_at;
+  return {
+    title: str(s.title),
+    entry: str(s.entry),
+    uploaderId: str(s.uploader_id),
+    uploaderName: str(s.uploader_name),
+    createdAt: at instanceof Date ? at.toISOString() : at ? new Date(String(at)).toISOString() : null,
+    knowledge: knowledge.map((k) => ({ name: String(k.name), title: str(k.title) })),
+  };
 }
 
 export async function upsertSource(

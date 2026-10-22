@@ -43,6 +43,8 @@ export interface OrgApp {
   owner_member: string | null;
   build_session: string | null;
   origin_app_id: string | null;
+  /** #4785 앱 폴더 상한(GiB) — null = 무제한(기본). 거는 것은 CP 의 쿼터 정비다(apps/app-folder-quota.ts 머리말). 선택 칸 — 옛 행 · 시험 리터럴엔 없다. */
+  folder_limit_gb?: number | null;
 }
 export type AppEditMode = "all" | "members";
 export type AppVisibility = "all" | "me";
@@ -75,6 +77,7 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     owner_member: r.owner_member == null ? null : String(r.owner_member),
     build_session: r.build_session == null ? null : String(r.build_session),
     origin_app_id: r.origin_app_id == null ? null : String(r.origin_app_id),
+    folder_limit_gb: r.folder_limit_gb == null ? null : Number(r.folder_limit_gb),
   };
 }
 
@@ -156,6 +159,13 @@ export async function getApp(id: string, client?: pg.PoolClient): Promise<OrgApp
   return r.rows[0] ? rowToApp(r.rows[0]) : null;
 }
 
+/** 이 id 들의 앱(없는 id 는 빠진다) — 한 번에 읽는다(#4673 홈 탐색기 root=apps 목록은 동의한 앱만 본다). */
+export async function getAppsByIds(ids: readonly string[]): Promise<OrgApp[]> {
+  if (!ids.length) return [];
+  const r = await itemsPool.query(`SELECT * FROM org_app WHERE id = ANY($1::text[])`, [[...ids]]);
+  return r.rows.map(rowToApp);
+}
+
 export async function listApps(): Promise<OrgApp[]> {
   const r = await itemsPool.query(`SELECT * FROM org_app ORDER BY installed_at DESC`);
   return r.rows.map(rowToApp);
@@ -184,7 +194,26 @@ export async function setAppEditPolicy(id: string, mode: AppEditMode, members: s
   return after;
 }
 
-/** 앱 행 + 조인(component·grant)을 CASCADE 로 제거. 대상 행(harness_asset 등) 회수는 호출부가 component 를 읽어 먼저 수행. */
+/** #4785 앱 폴더 상한(GiB, null = 무제한)을 바꾼다 — 판정(관리자 · 책임자)은 부르는 쪽(capabilities/app-folders.ts). 없는 앱이면 null. */
+export async function setAppFolderLimit(id: string, limitGb: number | null, ctx: WriteCtx = {}): Promise<OrgApp | null> {
+  const before = await getApp(id);
+  if (!before) return null;
+  await itemsPool.query(`UPDATE org_app SET folder_limit_gb=$2, updated_at=now(), updated_by=$3 WHERE id=$1`, [id, limitGb, ctx.actor ?? null]);
+  const after = await getApp(id);
+  await audit("org_app", id, "update", before, after, ctx.actor, ctx.source);
+  return after;
+}
+
+/** #4785 설치된 앱마다 앱 폴더 상한 — CP 의 쿼터 정비가 읽는다(앱이 없는 폴더는 그 정비가 쿼터를 걷는다). */
+export async function listAppFolderLimits(): Promise<Array<{ app_id: string; limit_gb: number | null }>> {
+  const r = await itemsPool.query(`SELECT id, folder_limit_gb FROM org_app ORDER BY id`);
+  return r.rows.map((x) => ({ app_id: String(x.id), limit_gb: x.folder_limit_gb == null ? null : Number(x.folder_limit_gb) }));
+}
+
+/**
+ * 앱 행 + 조인(component·grant)을 CASCADE 로 제거. 대상 행(harness_asset 등) 회수는 호출부가 component 를 읽어 먼저 수행.
+ *  ⚠ 직접 부르지 말고 apps/remove-run.removeInstalledApp 을 부른다 — 데이터 떠 두기 · 보관 표 · 앱 폴더 보관(#4778)이 거기 한 벌로 있다.
+ */
 export async function deleteApp(id: string, ctx: WriteCtx = {}, client?: pg.PoolClient): Promise<void> {
   const exec: Q = client ?? itemsPool;
   const before = await getApp(id, client);
@@ -511,17 +540,25 @@ export async function reserveDraftApp(
   return true;
 }
 
-/** 예약만 하고 첫 판을 못 채운 앱 행을 거둔다(그 호출 안에서 설치가 실패했을 때) — 내용이 생긴 앱은 지우지 않는다. */
-export async function dropEmptyDraftApp(appId: string): Promise<void> {
-  await itemsPool.query(`DELETE FROM org_app WHERE id=$1 AND content_hash IS NULL AND current_version_no IS NULL`, [appId]);
+/**
+ * 예약만 하고 첫 판을 못 채운 앱 행을 거둔다(그 호출 안에서 설치가 실패했을 때) — 내용이 생긴 앱은 지우지 않는다. 거뒀으면 true.
+ *  ⚠ 앱 행을 지우는 입구다 — 앱 폴더도 같이 옮겨야 하므로 직접 부르지 말고 apps/remove-run.dropEmptyDraft 를 부른다(#4778).
+ */
+export async function dropEmptyDraftApp(appId: string): Promise<boolean> {
+  const r = await itemsPool.query(`DELETE FROM org_app WHERE id=$1 AND content_hash IS NULL AND current_version_no IS NULL`, [appId]);
+  return (r.rowCount ?? 0) > 0;
 }
 
-/** 그만둔 만들기가 남긴 빈 예약(이 사람의 것 · 첫 판 없이 days 일 지남)을 거둔다 — 새로 「만들기 시작」 할 때. 거둔 수. */
-export async function dropStaleEmptyDrafts(owner: string, days = 3): Promise<number> {
+/**
+ * 그만둔 만들기가 남긴 빈 예약(이 사람의 것 · 첫 판 없이 days 일 지남)을 거둔다 — 새로 「만들기 시작」 할 때. 거둔 앱 id.
+ *  ⚠ 앱 행을 지우는 입구다 — 직접 부르지 말고 apps/remove-run.dropStaleDrafts 를 부른다(#4778 — 앱 폴더도 같이 옮긴다).
+ */
+export async function dropStaleEmptyDrafts(owner: string, days = 3): Promise<string[]> {
   const r = await itemsPool.query(
     `DELETE FROM org_app WHERE owner_member=$1 AND visibility='me' AND content_hash IS NULL AND current_version_no IS NULL
-        AND installed_at < now() - make_interval(days => $2::int)`, [owner, days]);
-  return r.rowCount ?? 0;
+        AND installed_at < now() - make_interval(days => $2::int)
+     RETURNING id`, [owner, days]);
+  return r.rows.map((x) => String(x.id));
 }
 
 /** 이 세션이 만드는 앱들(최근 것 먼저) — 세션 → 앱 역조회. 판정(볼 수 있나)은 호출부. */
@@ -667,6 +704,12 @@ export async function revokeAllGrantsForMember(memberId: string): Promise<number
 export async function getActiveGrant(appId: string, memberId: string): Promise<AppGrantRow | null> {
   const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE app_id=$1 AND member_id=$2 AND revoked_at IS NULL`, [appId, memberId]);
   return r.rows[0] ? rowToGrant(r.rows[0]) : null;
+}
+
+/** 한 멤버의 활성 grant 전부 — 앱 폴더 목록(#4673 홈 탐색기 root=apps)이 «동의한 앱» 을 한 번에 가린다. 부분 인덱스 org_app_grant_member_idx 가 받친다. */
+export async function listActiveGrants(memberId: string): Promise<AppGrantRow[]> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_grant WHERE member_id=$1 AND revoked_at IS NULL`, [memberId]);
+  return r.rows.map(rowToGrant);
 }
 
 // ── 앱 활동(mcp_call_log.app 집계, design D3-5 관측 전용) ──────────────────────

@@ -3,6 +3,7 @@
 // WS(/terminal/ws, ticket 쿠키) = PTY 스트림(terminal-pty.ts). 브라우저는 Authorization 헤더를 WS/네비에
 // 못 실으므로, Bearer 로 인증된 멤버에게 HttpOnly 티켓 쿠키(userId 보유)를 발급해 WS 소유권 판정에 쓴다.
 import { normalizeSessionKind } from "../sessions/session-kind.js";
+import { carriedSourceOf } from "../sessions/session-label-source.js";   // #4418 — 복원이 원래 이름의 출처를 잇는다
 import type express from "express";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
@@ -30,13 +31,16 @@ import { locateTranscript } from "./harness-io/locate.js";              // #1437
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
 import { transcriptFsFor } from "./harness-io/transcript-fs.js";        //  하기 위한 파사드(chat-routes 대화창과 같은 관문)
 import { resolveSessionDir } from "../sessions/session-desired.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, clearSessionStopNote, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited, markSessionEnded, markSessionSuperseded, resolveSessionSuccessor, retiredSessionIds, conversationPeers, clearSessionStopNote, type SessionState } from "../sessions/session-state.js";   // #2231 — 복원된 옛 id 는 지우지 않고 이정표로 남긴다 · #3891 같은 대화를 도는 세션 후보
+import { harnessEndVerdict } from "../sessions/session-end.js";   // #4783 — 하네스가 스스로 끝났다는 런처 보고의 판정(순수)
 import { adoptVerdict, createKeyedSerializer, type AdoptProbe } from "./restore-adopt.js";   // #3891 — 복원을 다시(또는 동시에) 불러도 같은 대화를 둘로 만들지 않는다
 import { convIdFromTranscriptPath, mayForgetOldState, mappingReportStatus } from "../sessions/conv-mapping.js";   // #2122 — 복원이 대화 매핑을 잃지 않게 하는 순수 규칙 · #2151 — 매핑 보고 응답 규약 // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { currentTenant } from "../org/tenant-context.js";
+import { restoreMeasureMiddleware } from "./restore-measure.js";   // #4697 T7 — 복원 측정 한 줄
 import { PRIMARY_TENANT_ID, clearSessionWorkspace, sessionWorkspaceIds, sessionInWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본 / #1875 목록 격리
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { registerSessionLedgerRoute } from "./session-ledger.js";   // #2544 — 브로커용 세션 장부(사용자 auth 대신 테넌트 비밀로 연다)
+import { registerAgentJobRoutes } from "../agent-jobs/routes.js";   // #4490 — 작업 컨테이너 판의 콜백(작업별 비밀로 연다)
 import { registerSessionHostRoute } from "../node/session-host-route.js";   // #2600 T2 d5 — 브로커용 세션 호스트 자격 창구(같은 문)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { recordUsage } from "./usage-store.js"; // 세션 사용량(rate-limit 소진율) — statusLine 훅이 계정 단위로 보고
@@ -67,7 +71,7 @@ import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 �
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
-import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { launchReply, launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -261,6 +265,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   registerSessionLedgerRoute(app);        // #2544 — /session-ledger (브로커 회수 판정의 desired 입력 — 경로가 겹치지 않는다)
   registerSessionHostRoute(app);          // #2600 T2 d5 — /node/session-host/ensure (브로커가 세션 호스트 자격을 받아 가는 창구. 장부와 같은 «테넌트 비밀 + 서명» 문)
+  registerAgentJobRoutes(app);            // #4490 — /api/agent-jobs/:id/{boot,boot-failed,tick,result} (작업 컨테이너 판의 콜백 — 사용자 auth 대신 작업별 비밀)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);
@@ -329,7 +334,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       .map((m) => ({ id: m.id, name: m.display_name || m.id, kind: m.kind }));
     res.setHeader("Cache-Control", "no-store");
     res.json({
-      roots: roots().map((r) => ({ key: r.key, label: r.label })),
+      //  세션 만들기 폼의 자리 고르기 — 세션을 열지 않는 자리(#4673 apps)는 싣지 않는다(골라도 #4687 판정이 400 으로 막는다).
+      roots: roots().filter((r) => r.session !== false).map((r) => ({ key: r.key, label: r.label })),
       // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
       //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --dangerously-bypass-approvals-and-sandbox' 를 문장에
       //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
@@ -649,6 +655,11 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
           .filter((k) => HEADLESS_KEYS.includes(k));
       })(),
     ]);
+    //  #4742 — Claude 에 다시 로그인했으면 수집 단위의 «로그인 끊김» 을 지운다(그 사람이 다시 담당 후보 줄에 선다).
+    //   다음 실행이 또 실패하면 다시 끊김으로 돌아간다. 기다리지 않는다.
+    if (harness === "claude" && check.loggedIn === true && user.userId) {
+      void import("../org/collect/unit-store.js").then((m) => m.markAssigneeHealthy(user.userId)).catch(() => undefined);
+    }
     res.setHeader("Cache-Control", "no-store");
     res.json({ ...check, others: loggedIn.filter((k) => k !== harness) });
   }));
@@ -1309,6 +1320,18 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (nodeId) {
       // 노드 세션은 아웃박스 배달자가 닿지 않는다(tmux 가 그 컴퓨터에 있다) — 프롬프트와 같은 릴레이 경로.
       const { injectPrompt } = await import("../node/session-inject.js");
+      //  #4772 — 그 컴퓨터의 화면을 읽고(outboxStep peek) 확인창이면 Enter(outboxStep keys)를 눌러 준다. 노드 op 라
+      //   옛 번들은 지원하지 않을 수 있어 **best-effort** 다(못 읽으면 "unknown" 으로 조용히 포기 — 명령은 이미 나갔다).
+      const { nodeRpc } = await import("../node/registry.js");
+      const { confirmRuntimeSwitch } = await import("./runtime-switch-confirm.js");
+      const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+      const nodeSwitchExec = {
+        peek: async (): Promise<{ ok: boolean; pane?: string }> => {
+          const r = await nodeRpc<{ ok?: boolean; pane?: string }>(nodeId, "outboxStep", { step: "peek", id: req.params.id }).catch(() => null);
+          return r && r.ok ? { ok: true, pane: String(r.pane ?? "") } : { ok: false };
+        },
+        enter: async (): Promise<void> => { await nodeRpc(nodeId, "outboxStep", { step: "keys", id: req.params.id, down: 0, enter: true }).catch(() => undefined); },
+      };
       for (const c of typed) {
         try { await injectPrompt(req.params.id, c); }
         catch (e) {
@@ -1318,6 +1341,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           if (msg === "node-rpc-timeout") throw new HttpError(504, "그 컴퓨터가 응답하지 않습니다.");
           throw e;
         }
+        // 다음 명령을 넣기 전에 이 명령의 확인창을 닫는다(두 번째 명령이 첫 창에 타이핑되는 것 방지).
+        if (h.key === "claude") await confirmRuntimeSwitch(nodeSwitchExec, { sleep }).catch(() => undefined);
       }
       res.json({ ok: true, harness: h.key, sent: cmds });
       return;
@@ -1404,7 +1429,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];
       return launchSession(userOf(req), input, { nodeId, invites });
     });
-    res.json({ session });
+    //  #4906 — 서버가 넣을 첫 지시(첨부를 프로젝트로 옮기며 좌표를 고친 글 포함)를 함께 답한다(launchReply 머리말).
+    res.json(launchReply(session, input));
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
   // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),
@@ -1715,6 +1741,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         if (!killed && !nodeOnline(nodeId)) {
           throw new HttpError(503, "그 컴퓨터(" + nodeId + ")가 지금 연결돼 있지 않아 이 세션을 멈출 수 없어요 — 켜지면 다시 시도해 주세요");
         }
+        //  #4783 — 사람이 멈췄다(끝난 사유). 노드에 끄기를 **보낸 뒤** 적는다 — 노드 세션은 그 컴퓨터의 런처가 보고하지 않아 앞설 쪽이 없고,
+        //   못 끈 채 적으면 그 판의 다음 끝이 이 기록에 막힌다(첫 사실이 이긴다 — markSessionEnded).
+        if (st) await markSessionEnded(id, { why: "stop", by: me }).catch((e) => logger.warn({ err: e, id }, "끝난 사유 기록 실패(비치명)"));
         res.json({ ok: true, reclaimed: true, killed });
         return;
       }
@@ -1747,7 +1776,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  #1059 OOM 위기처럼 박스가 위태로우면 관리자가 작업 중·접속 중 세션도 즉시 회수해 메모리를 되찾아야 한다.
     //  파괴적이지 않다 — preserveState 로 desired-state 를 남겨 restorable 로 복원 가능(자동 reaper 가 정당세션을 보호하는 것과 역할 분담).
     const admin = reclaim && !!u.scopes?.includes("admin");
-    await killSession(u, req.params.id, { admin, preserveState: reclaim });
+    //  #4783 — 보관(회수)은 **사람이 멈춘 것**이다(세션 [종료]·보관 · 프로젝트 아카이브·정리 · 관리 화면 [회수]). 끝난 사유로 남긴다 —
+    //   화면이 이 세션을 «지난 세션» 으로 접는 근거다(시스템이 끈 세션은 끄기 직전 모습 그대로 둔다). 완전 삭제는 행이 사라지니 안 적는다.
+    await killSession(u, req.params.id, { admin, preserveState: reclaim, ...(reclaim ? { end: { why: "stop" as const, by: idOf(u) } } : {}) });
     if (!reclaim) forgetTenantMap(); // 회수(복원 가능)는 소속을 남긴다 — 복원 세션이 제 워크스페이스로 돌아가야 한다
     res.json({ ok: true });
   }));
@@ -1782,7 +1813,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //   그 밖(강제 복원·스위치 꺼짐·노드 갈래)은 종전대로 새 id 를 만들고 옛 행에 이정표(superseded_by, #2231)를 적는다.
   //  ★ #3891 — 같은 세션의 복원은 **한 줄로** 돈다(restoreSerial — createKeyedSerializer 머리말). 뒤 요청은 앞 요청이
   //   끝난 뒤 아래 판정을 처음부터(행을 다시 읽어) 한다 — 그래서 동시에 두 번 불려도 세션이 둘로 서지 않는다.
-  app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(restoreSerial.wrap((req: express.Request) => `${currentTenant()?.id ?? ""}|${req.params.id}`, async (req: express.Request, res: express.Response) => {
+  //  #4697 T7 — 복원 한 번마다 측정 한 줄(결말·걸린 시간·끄기 전 쪽지 — restore-measure.ts 머리말). 갈래 코드는 안 건드리고 라우트 앞에서 잰다.
+  app.post("/api/ui/terminal/sessions/:id/restore", auth, restoreMeasureMiddleware(async (id) => (await getSessionState(id))?.stop_note ?? null), wrap(restoreSerial.wrap((req: express.Request) => `${currentTenant()?.id ?? ""}|${req.params.id}`, async (req: express.Request, res: express.Response) => {
     res.setHeader("Cache-Control", "no-store");
     const id = req.params.id;
     const st = await getSessionState(id);
@@ -1870,6 +1902,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
         // #2162 — 복원은 **원래 종류를 되살린다**. human 으로 굳히면 앱 세션이 복원될 때 종류를 잃는다.
         kind: normalizeSessionKind(st.kind),
         label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
+        labelSource: carriedSourceOf(st.label_source),   // #4418 — 새 id 로 뜨는 복원도 원래 이름의 출처를 잇는다
         harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
         projectId: projRef.projectId, projectSrc: projRef.projectSrc,
         readOnly: st.read_only, incognito: st.incognito,
@@ -1996,8 +2029,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const sameId = await sameIdRestoreOn(goneVerdict);
     const session = await createSession(owner, {
       ...(sameId ? { reuseId: id } : {}),
+      //  #4684 — 새 id 면 옛 세션에 붙어 있던 앱을 넘긴다(같은 id 는 기록이 그대로라 필요 없다).
+      ...(sameId ? {} : { carryAppsFrom: id }),
       kind: normalizeSessionKind(st.kind),   // #2162 — 복원은 원래 종류를 되살린다
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
+      labelSource: carriedSourceOf(st.label_source),   // #4418 — 새 id 로 뜨는 복원도 원래 이름의 출처를 잇는다(같은 id 는 행이 그대로)
       harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
       invites: st.invites, projectId: projRef.projectId,   // #2549 — 삭제된 프로젝트면 undefined(위 판정)
       projectSrc: projRef.projectSrc,
@@ -2273,5 +2309,22 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const reason = String(((req.body ?? {}) as Record<string, unknown>).reason ?? "").trim().slice(0, 64);
     const ok = await markSessionExited(req.params.id, idOf(userOf(req)), reason);
     res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
+  }));
+
+  // #4783 — 하네스가 **스스로** 끝났다(세션 런처 LAUNCH_STOP_SH 의 보고 — catalog.ts). 종료코드 0 = 사람이 끝냈다(/exit·Ctrl-D·/quit —
+  //  claude 뿐 아니라 종료 훅이 없는 agy·사유를 다르게 싣는 codex 도 같은 길로 잡힌다) · 0 이 아님 = 고장(기동 직후면 기동 실패).
+  //  owner-gated(위 /exited 와 같다 — 그 세션 자격으로 온 요청만 그 세션의 행을 고친다) · 그 판보다 먼저 뜬 하네스의 보고는 버린다(t0).
+  //  «먼저 적은 쪽이 이긴다» — tmux 를 닫은 자리(끄기·멈춤)가 이미 적었으면 이 보고는 아무것도 안 바꾼다(markSessionEnded 머리말).
+  app.post("/api/ui/terminal/sessions/:id/ended", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const v = harnessEndVerdict(req.body);
+    if (!v) { res.json({ ok: false }); return; }   // 모양이 틀리거나 신호로 닫힌 판(129) — 보고를 사유로 읽지 않는다(실패가 아니다)
+    //  보고한 판이 자기를 밝혔으면(x-lively-session — 런처·훅이 싣는다) 그 판의 행만 고친다. 같은 주인의 다른 세션 안에서 돈 무언가가
+    //   형제 세션을 «고장» 으로 먼저 적지 못하게(격리 리뷰 — 위험은 낮다).
+    const claimed = String(req.headers["x-lively-session"] ?? "").trim();
+    if (claimed && claimed !== req.params.id) { res.json({ ok: false }); return; }
+    //  기동 실패(launch_fail)는 **임시 사유**다 — 셸이 남아 사람이 하네스를 다시 띄우면 판이 이어진다(SessionEndNote.prov 머리말).
+    const ok = await markSessionEnded(req.params.id, { why: v.why, code: v.code, ...(v.prov ? { prov: true } : {}) }, { owner: idOf(userOf(req)), t0: v.t0 });
+    res.json({ ok });   // ok=false: 남의 세션 · 행 없음 · 이미 적힘 · 옛 판의 보고(전부 무해)
   }));
 }

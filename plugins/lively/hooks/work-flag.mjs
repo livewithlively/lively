@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 다중 이벤트 훅 — 배선(user-install)에 따라 PostToolUse·SessionStart·SessionEnd·UserPromptSubmit·Notification·Stop
-//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact))으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
+//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact) · #4821 StopFailure)으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
 //  (종전엔 게이트웨이가 tmux 화면을 훔쳐보는 휴리스틱이었다 — reportedPhase 주석 참조). 이벤트별 동작:
 //  - SessionEnd (#1059)  → reason 이 **사용자 정상 종료**(prompt_input_exit=/exit·Ctrl-D, logout)면 게이트웨이에
 //      POST …/exited 로 보고 → 복원목록에서 '종료됨(대화 이어보기)'으로 구분(재부팅·강제kill 은 훅이 못 떠 미보고=중단됨).
@@ -27,7 +27,7 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 // 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
-import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
+import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isForeignCursorInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
 import { openWork } from "./bg-jobs.mjs";
@@ -45,7 +45,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 camelCase 페이로드 오파싱 + 이중 기록).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 // 어드민 런타임 설정 — ~/.lively/hooks-config.json 의 hooks[name]===false 면 이 훅 비활성(fail-open: 못 읽으면 활성).
 function hookDisabled(name) {
@@ -122,6 +123,9 @@ function effectivePullTools() {
 //   · PostToolUse      = 턴 진행 중(종전 활동 보고가 있던 자리 — 긴 턴의 신선도 유지도 겸한다).
 //   · Stop             = "Claude 가 응답을 마쳤다" → **턴 종료**. (Stop 게이트가 block 해서 턴이 이어지면 잠깐
 //     idle 로 어긋나지만, 게이트웨이 우선순위표가 스피너를 idle 보고 위에 둬서 곧바로 교정된다.)
+//   · StopFailure      = API 오류(사용 한도·인증·없는 모델 …)로 턴이 끝났다 — Claude Code 는 이때 Stop 대신 이것만 띄운다(2.1.301 실측:
+//     error=model_not_found). 이게 없으면 턴 시작의 busy 만 남아 «작업 중» 으로 10분 서 있다가 «모름» 이 되고, 사용 한도로 막힌 턴이
+//     하네스 안에서 자동 이어감을 기다리는 동안 하네스 종료 규칙이 그 대기를 못 본다(#4821 ②). 오류 종류와 무관하게 **턴 종료** 다.
 //   · Notification     = 승인 다이얼로그·MCP 입력요청·서브에이전트 입력대기 → **확인 필요**.
 //  ⚠ notification_type 은 비교적 최근 Claude Code 만 준다 — 없으면 message 문구로 판별한다(구버전에서도 작동).
 //   matcher 를 안 거는 이유도 같다: 타입 matcher 를 모르는 빌드에서 엔트리가 통째로 안 걸리면 조용히 죽는다.
@@ -131,7 +135,7 @@ function effectivePullTools() {
 //   (Claude 도 같은 이벤트를 갖지만 거기선 Notification 하나로 충분해 배선하지 않는다). 판정은 하네스 무관.
 function reportedPhase(input, event) {
   if (event === "UserPromptSubmit" || event === "PostToolUse") return "busy";
-  if (event === "Stop") return "idle";
+  if (event === "Stop" || event === "StopFailure") return "idle";
   if (event === "PermissionRequest") return "waiting";
   if (event !== "Notification") return null;
   const type = String(input?.notification_type ?? "");
