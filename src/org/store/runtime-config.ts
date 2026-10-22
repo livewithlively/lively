@@ -51,7 +51,8 @@ import {
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
 export interface OrgRuntimeConfig {
   // self_update(#858): 멤버 키트(훅 코드·배선) 자동 업데이트. 끄면 멤버는 수동 업데이트 명령이 유일한 경로.
-  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean };
+  // concurrent — 커스텀 훅 러너(run-custom)가 sort 가 같은 훅을 동시에 돌려도 되는가. 기본 꺼짐(종전처럼 하나씩).
+  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean; concurrent: boolean };
   writeback_notice: string | null;
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
@@ -162,6 +163,8 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
       stop_writeback_gate: hooksRaw.stop_writeback_gate !== false,
       // 기존 org 행엔 이 키가 없다 — `!== false` 규약이 곧 '없으면 켜짐'이라 마이그레이션 없이 전원 활성.
       self_update: hooksRaw.self_update !== false,
+      // 이건 반대로 **명시적 true 만** 켠다 — 기존 행엔 키가 없고, 없으면 꺼짐(종전 동작)이어야 한다.
+      concurrent: hooksRaw.concurrent === true,
     },
     writeback_notice: (row?.writeback_notice as string) ?? null,
     work_roots: strArrSafe(row?.work_roots),

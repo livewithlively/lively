@@ -36,7 +36,8 @@ function customHookEditor(detail, data) {
     // origin/main(#968 계열)의 개선된 안내 문구 + #892 의 정책 카드 — 둘 다 유지.
     el('p', { class: 'admin-hint' }, ...uiText('구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다. 「제품 기본」 표시가 붙은 훅은 라이블리가 배포하는 것이라 본문은 볼 수만 있고, 조직은 켜고 끄는 것과 대상 구성원만 정합니다.')),
     relayPolicyCard(data, detail),
-    gracePolicyCard(data, detail));
+    gracePolicyCard(data, detail),
+    concurrencyPolicyCard(data, detail));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -115,6 +116,29 @@ function gracePolicyCard(data, detail) {
     el('p', { class: 'admin-hint' }, ...uiText('게이트웨이에 연결되지 않는 동안, 마지막으로 받은 커스텀 훅을 얼마나 오래 계속 실행할지입니다. 무제한(기본)이면 마지막 접속 기준으로 계속 실행됩니다 — 게이트웨이 없이 동작하는 로컬 훅(스킬 라우터·품질 게이트 등)이 오프라인에서도 유지됩니다. 기간을 정하면 그 시간이 지난 뒤 커스텀 훅 실행을 멈춥니다(제거한 훅의 회수 목적). 어느 경우든 훅 본문 무결성(content_hash)은 캐시에서도 검증되고, 재연결 시 즉시 갱신·회수됩니다.')),
     field('연결 끊긴 뒤 유지 기간', sel),
     el('div', { class: 'admin-actions' }, save));
+}
+
+// 같은 sort 훅 동시 실행(#1470) — 러너가 sort 가 같은 커스텀 훅을 한꺼번에 돌린다(기본 꺼짐 = 종전처럼 하나씩).
+//  켜면 프롬프트마다 기다리는 시간이 훅 소요의 합에서 묶음별 최댓값의 합으로 준다. 조직 훅은 기본 sort 0 이라 시드 훅과
+//  한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅의 결과에 기대는 훅은 켜기 전에 sort 를 나눠야 한다 — 그래서 조직이 켠다.
+function concurrencyPolicyCard(data, detail) {
+  const rc = data.runtimeConfig;
+  if (!rc) return el('span', {}); // 비-admin 은 runtimeConfig 를 못 받는다 → 카드 숨김
+  const on = !!(rc.hooks && rc.hooks.concurrent === true);
+  const chk = el('input', { type: 'checkbox' }) as any;
+  chk.checked = on;
+  chk.addEventListener('change', async () => {
+    chk.disabled = true;
+    try {
+      // hooks 는 묶음 저장이라 다른 스위치 값을 함께 보낸다(서버가 키별로 병합하지만 지금 값을 그대로 둔다).
+      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks: { ...(rc.hooks || {}), concurrent: !!chk.checked } }) });
+      await loadAdmin(true); toast('저장됨 — 구성원 다음 실행부터'); rerenderPanel(detail, 'custom-hooks', state.admin.data);
+    } catch (e: any) { toast(e.message, true); chk.checked = on; chk.disabled = false; }
+  });
+  return el('div', { class: 'admin-subcard' },
+    el('h4', { text: '같은 순서(sort)의 훅 동시 실행' }),
+    el('p', { class: 'admin-hint' }, ...uiText('켜면 구성원 컴퓨터의 러너가 sort 값이 같은 커스텀 훅을 한꺼번에 실행하고, sort 가 다른 묶음은 작은 값부터 차례로 실행합니다(한 묶음에서 동시에 도는 훅은 8개까지). 끄면 지금처럼 하나씩 실행합니다. 직접 만든 훅은 sort 가 0 이면 제품 기본 훅과 한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅이 끝난 뒤에 돌아야 하는 훅은 켜기 전에 sort 를 더 큰 값으로 바꾸세요.')),
+    el('label', { class: 'admin-check' }, chk, ' 같은 sort 의 훅을 동시에 실행'));
 }
 
 function hookForm(root, h, data, detail, isNew, locked) {

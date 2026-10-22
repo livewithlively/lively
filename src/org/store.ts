@@ -121,7 +121,7 @@ export type {
 
 // ── org_hook(커스텀 훅) ──
 export {
-  listOrgHooks, listEnabledHooks, getOrgHook, recordHookFailures, upsertOrgHook, removeOrgHook,
+  listOrgHooks, listEnabledHooks, getOrgHook, recordHookFailures, upsertOrgHook, removeOrgHook, moveOrgHookSort,
 } from "./store/hooks.js";
 export type { HookHarness, OrgHook, OrgHookHealth, OrgHookInput } from "./store/hooks.js";
 

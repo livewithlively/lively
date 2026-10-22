@@ -23,6 +23,7 @@ import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTok
 import { hostEffects } from "./host-effects-port.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
+const spawn = (...args) => hostEffects.spawn(...args);
 const fetch = (...args) => hostEffects.fetch(...args);
 
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
@@ -123,7 +124,9 @@ function readStdin(ms = 800) {
   });
 }
 
-// → { hooks, relay } | null(게이트웨이 미도달). relay 는 org 정책(관리탭) — 구버전 게이트웨이면 기본값.
+// → { hooks, relay, concurrent } | null(게이트웨이 미도달). relay 는 org 정책(관리탭) — 구버전 게이트웨이면 기본값.
+//  concurrent 는 «같은 sort 의 훅을 동시에 돌려도 된다» 는 조직 설정(runtime_config.hooks.concurrent, 기본 꺼짐) —
+//  true 일 때만 겹친다. 필드가 없으면(구 게이트웨이) 종전처럼 하나씩.
 async function fetchHooks(input) {
   if (!TOKEN) return null;
   const ctl = new AbortController();
@@ -133,8 +136,8 @@ async function fetchHooks(input) {
     const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input) } });
     if (!res.ok) return null;
     const j = await res.json();
-    if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY };
-    return { hooks: j.hooks, relay: Array.isArray(j?.relay_decisions) ? j.relay_decisions : DEFAULT_RELAY };
+    if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY, concurrent: false };
+    return { hooks: j.hooks, relay: Array.isArray(j?.relay_decisions) ? j.relay_decisions : DEFAULT_RELAY, concurrent: j?.concurrent === true };
   } catch { return null; }
   finally { clearTimeout(t); }
 }
@@ -175,8 +178,8 @@ async function reportFailures(fails, input) {
   finally { clearTimeout(t); }
 }
 
-function saveCache(hooks, relay) {
-  try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(cacheFile(), JSON.stringify({ at: Date.now(), hooks, relay }), { mode: 0o600 }); } catch { /* fail-open */ }
+function saveCache(hooks, relay, concurrent) {
+  try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(cacheFile(), JSON.stringify({ at: Date.now(), hooks, relay, concurrent: concurrent === true }), { mode: 0o600 }); } catch { /* fail-open */ }
 }
 // 캐시 유효기간(ms) — hooks-config.json 의 hook_grace_ms(runtime-config 발, session-preload 가 매 세션 미러)에서 읽는다.
 //  null/미설정/못읽음/잡값 = 무제한(마지막 접속 기준 영구 실행 — #1008 기본). 양수 = 그 ms 경과 후 fail-CLOSED(회수창).
@@ -196,7 +199,7 @@ function loadCache() {
     if (!c || typeof c.at !== "number" || !Array.isArray(c.hooks)) return null;
     const grace = graceMs();
     if (grace !== null && Date.now() - c.at > grace) return null; // grace 설정 + 만료 → fail-CLOSED. null(무제한)이면 나이 무관 사용.
-    return { hooks: c.hooks, relay: Array.isArray(c.relay) ? c.relay : DEFAULT_RELAY };
+    return { hooks: c.hooks, relay: Array.isArray(c.relay) ? c.relay : DEFAULT_RELAY, concurrent: c.concurrent === true };
   } catch { return null; }
 }
 
@@ -284,62 +287,149 @@ function parsesUnder(file, expectHash) {
 
 // 훅 1개 실행 → { out, fail }. fail 은 관측용(#892 결함 C) — 종전엔 크래시를 통째로 삼켜(catch → "")
 //  '훅이 죽음'과 '훅이 출력 없음'이 구분 불가였고, 그래서 죽은 훅이 내내 발견되지 않았다.
-function runHook(hook, stdin) {
+async function runHook(hook, stdin) {
   // content_hash 무결성 — 해시가 없거나(변조 캐시) source 와 불일치면 실행 안 함(fail-CLOSED hard-gate).
   const h = crypto.createHash("sha256").update(hook.source_code || "").digest("hex");
   if (!hook.content_hash || hook.content_hash !== h) return { out: "", fail: { reason: "hash_mismatch" } };
   const first = moduleExt(hook.source_code);
-  const r = spawnHook(hook, stdin, first, h);
+  const r = await spawnHook(hook, stdin, first, h);
   // 실패했고 **그 확장자로는 파일이 파싱조차 안 되면** 확장자를 잘못 고른 것 → 반대로 딱 한 번 다시.
   //  파싱이 안 됐다 = 본문이 한 줄도 안 돌았다 → 부작용 중복이 원리적으로 불가능하다.
   //  분류(moduleExt)는 휴리스틱이라 변두리에서 틀리는데, 그때 훅을 죽이는 대신 자가교정한다
   //  (오분류의 비용이 '훅 사망'이면 안 된다 — 그게 #892 였다).
   //  훅 자체가 문법오류면 반대쪽도 파싱 실패라 재시도 1회로 끝나고 원래 실패를 보고한다.
   if (r.fail && r.parses === false) {
-    const retry = spawnHook(hook, stdin, first === "mjs" ? "cjs" : "mjs", h);
+    const retry = await spawnHook(hook, stdin, first === "mjs" ? "cjs" : "mjs", h);
     if (!retry.fail) return retry;
   }
   return r;
 }
 
-function spawnHook(hook, stdin, ext, expectHash) {
+const HOOK_MAX_BUFFER = 4 * 1024 * 1024;
+const PIPE_GRACE_MS = 200;
+
+// 자식 node 를 비동기로 띄워 끝날 때까지 기다린다 — execFileSync 와 같은 결과 모양(stdout·stderr·status·signal)을
+//  돌려주되 이벤트 루프를 막지 않아서 같은 묶음의 훅들이 동시에 돈다. 실패를 throw 하지 않고 값으로 돌려준다.
+//  maxBuffer 초과도 execFileSync 처럼 SIGKILL 로 끊는다(무한 출력 훅이 러너 메모리를 잡아먹지 않게).
+function execNode(file, { input, timeout, env }) {
+  return new Promise((resolve) => {
+    let child;
+    try { child = spawn("node", [file], { env, stdio: ["pipe", "pipe", "pipe"] }); }
+    catch (e) { resolve({ stdout: "", stderr: String((e && e.message) || ""), status: null, signal: null }); return; }
+    const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false; let killed = false; let overflow = false;
+    const exited = () => child.exitCode !== null || child.signalCode !== null;
+    // 상한에서 손을 뗀다 — 파이프에 남은 마지막 출력이 들어올 짧은 유예를 준 뒤 스트림을 닫고 끝낸다.
+    //  close 를 끝까지 기다리지 않는 이유: 훅이 stdio 를 물려받은 손자(예: 백그라운드 git fetch)를 남기면 그 손자가
+    //  끝날 때까지 파이프가 안 닫혀 timeout 이 상한 노릇을 못 한다(execFileSync 는 상한에서 바로 돌아왔다).
+    const letGo = (code, signal) => setTimeout(() => {
+      try { child.stdout.destroy(); child.stderr.destroy(); } catch { /* */ }
+      finish(code, signal);
+    }, PIPE_GRACE_MS);
+    // 아직 도는 훅만 죽인다 — 이미 끝났는데 파이프만 손자가 붙잡고 있으면 그 시점의 결과로 끝낸다.
+    const kill = () => {
+      if (exited()) { letGo(child.exitCode, child.signalCode); return; }
+      killed = true;
+      try { child.kill("SIGKILL"); } catch { /* 그 사이 끝남 — exit 가 온다 */ }
+    };
+    const timer = setTimeout(kill, timeout);
+    const take = (buf, chunks, len) => { if (len + buf.length > HOOK_MAX_BUFFER) { overflow = true; kill(); return len; } chunks.push(buf); return len + buf.length; };
+    child.stdout.on("data", (b) => { outLen = take(b, out, outLen); });
+    child.stderr.on("data", (b) => { errLen = take(b, err, errLen); });
+    const finish = (status, signal, extraErr) => {
+      if (settled) return; settled = true; clearTimeout(timer);
+      resolve({
+        stdout: Buffer.concat(out).toString("utf8"),
+        stderr: Buffer.concat(err).toString("utf8") + (extraErr || ""),
+        // 출력 상한 초과는 훅이 어떻게 끝났든 실패다(잘린 출력이 성공으로 나가면 안 된다) — execFileSync 처럼 강제 종료로 본다.
+        status: overflow ? null : (typeof status === "number" ? status : null),
+        signal: overflow ? "SIGKILL" : (signal || null),
+      });
+    };
+    child.on("error", (e) => finish(null, null, String((e && e.message) || "")));
+    child.on("exit", (code, signal) => { if (killed || signal === "SIGKILL") letGo(code, signal); });
+    child.on("close", (code, signal) => finish(code, signal));
+    // 훅이 stdin 을 안 읽고 먼저 끝나면 EPIPE 가 난다 — 훅의 정상 동작이므로 삼킨다.
+    child.stdin.on("error", () => { /* */ });
+    child.stdin.end(input);
+  });
+}
+
+async function spawnHook(hook, stdin, ext, expectHash) {
   const tmp = join(tmpdir(), `lively-hook-${crypto.randomBytes(8).toString("hex")}.${ext}`);
   try {
     writeFileSync(tmp, hook.source_code || "", { mode: 0o600 });
     const timeout = Math.min(Math.max(Number(hook.timeout_sec) || 10, 1), 120) * 1000;
-    try {
-      // killSignal SIGKILL — 훅이 SIGTERM 핸들러/동기 busy-loop 로 타임아웃을 살아남아 세션을 막는 것 방지(no-block 불변식).
-      // LIVELY_HOOK_TIMEOUT_MS — 훅에게 **자기가 죽는 시각**을 알려준다(#905 C3). SIGKILL 은 정리 코드조차 못 돌게
-      //  하므로, I/O 하는 훅은 그 전에 스스로 멈춰 결과를 남겨야 한다(project-push 의 충돌 기록이 그 예). 이 값이
-      //  없으면 훅이 상한을 추측해 하드코딩하게 되고, 관리자가 timeout_sec 을 줄이는 순간 조용히 어긋난다.
-      return { out: execFileSync("node", [tmp], {
-        input: stdin, timeout, killSignal: "SIGKILL", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          // 본문 훅도 러너가 고른 **같은 신원·같은 주소**로 나가게 한다(#959). 훅 본문은 대개 «env 먼저» 로 고르므로,
-          //  사람이 연 셸에서 rc 가 심은 옛 LIVELY_TOKEN 을 그대로 물려받으면 러너만 새 신원이고 본문은 옛 신원이 된다.
-          //  라이블리가 띄운 pane 에선 러너가 고른 값이 곧 그 env 라 달라지는 게 없다. 고른 값이 없으면 싣지 않는다.
-          ...(TOKEN ? { LIVELY_TOKEN: TOKEN } : {}),
-          ...(GW_PICKED ? { LIVELY_GATEWAY_URL: GW_PICKED } : {}),
-          ...(HARNESS ? { LIVELY_HARNESS: HARNESS } : {}),
-          LIVELY_HOOK_TIMEOUT_MS: String(timeout),
-        }, maxBuffer: 4 * 1024 * 1024,
-      }), fail: null, parses: true };
-    } catch (e) {
-      // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
-      const fail = {
-        reason: e && e.signal === "SIGKILL" ? "timeout" : "crash",
-        exit_code: e && typeof e.status === "number" ? e.status : null,
-        signal: (e && e.signal) || null,
-        // 꼬리를 남긴다 — 훅이 자기 로그를 뱉고 나서 죽으면 정작 치명오류 덤프가 맨 뒤에 오기 때문.
-        //  덤프(보통 수백 자)는 통째로 들어오고, errorHeadline 이 그 안에서 에러 줄을 골라낸다.
-        stderr: e && e.stderr ? String(e.stderr).slice(-STDERR_KEEP) : "",
-      };
-      // 실패했을 때만 파서에게 묻는다(느린 경로) — tmp 가 아직 살아 있는 이 안에서 불러야 한다(finally 가 지운다).
-      return { out: e && e.stdout ? String(e.stdout) : "", fail, parses: parsesUnder(tmp, expectHash) };
-    }
+    // SIGKILL 로 끊는다 — 훅이 SIGTERM 핸들러/동기 busy-loop 로 타임아웃을 살아남아 세션을 막는 것 방지(no-block 불변식).
+    // LIVELY_HOOK_TIMEOUT_MS — 훅에게 **자기가 죽는 시각**을 알려준다(#905 C3). SIGKILL 은 정리 코드조차 못 돌게
+    //  하므로, I/O 하는 훅은 그 전에 스스로 멈춰 결과를 남겨야 한다(project-push 의 충돌 기록이 그 예). 이 값이
+    //  없으면 훅이 상한을 추측해 하드코딩하게 되고, 관리자가 timeout_sec 을 줄이는 순간 조용히 어긋난다.
+    const r = await execNode(tmp, {
+      input: stdin, timeout,
+      env: {
+        ...process.env,
+        // 본문 훅도 러너가 고른 **같은 신원·같은 주소**로 나가게 한다(#959). 훅 본문은 대개 «env 먼저» 로 고르므로,
+        //  사람이 연 셸에서 rc 가 심은 옛 LIVELY_TOKEN 을 그대로 물려받으면 러너만 새 신원이고 본문은 옛 신원이 된다.
+        //  라이블리가 띄운 pane 에선 러너가 고른 값이 곧 그 env 라 달라지는 게 없다. 고른 값이 없으면 싣지 않는다.
+        ...(TOKEN ? { LIVELY_TOKEN: TOKEN } : {}),
+        ...(GW_PICKED ? { LIVELY_GATEWAY_URL: GW_PICKED } : {}),
+        ...(HARNESS ? { LIVELY_HARNESS: HARNESS } : {}),
+        LIVELY_HOOK_TIMEOUT_MS: String(timeout),
+      },
+    });
+    if (r.status === 0 && !r.signal) return { out: r.stdout, fail: null, parses: true };
+    // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
+    const fail = {
+      reason: r.signal === "SIGKILL" ? "timeout" : "crash",
+      exit_code: r.status,
+      signal: r.signal,
+      // 꼬리를 남긴다 — 훅이 자기 로그를 뱉고 나서 죽으면 정작 치명오류 덤프가 맨 뒤에 오기 때문.
+      //  덤프(보통 수백 자)는 통째로 들어오고, errorHeadline 이 그 안에서 에러 줄을 골라낸다.
+      stderr: r.stderr.slice(-STDERR_KEEP),
+    };
+    // 실패했을 때만 파서에게 묻는다(느린 경로) — tmp 가 아직 살아 있는 이 안에서 불러야 한다(finally 가 지운다).
+    return { out: r.stdout, fail, parses: parsesUnder(tmp, expectHash) };
   } catch (e) { return { out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || "").slice(-STDERR_KEEP) }, parses: true }; }
   finally { try { rmSync(tmp, { force: true }); } catch { /* */ } }
+}
+
+// 실행 순서 — 조직이 동시 실행을 켰으면(concurrent) 훅의 sort 가 같은 것끼리 한 묶음으로 **동시에**, 다른 묶음은
+//  sort 오름차순으로 **차례로** 돈다. 끄면(기본) 종전처럼 받은 순서(서버 정렬 sort·id)대로 하나씩 돈다.
+//  종전엔 전부 차례로 돌아 한 이벤트의 시간이 훅 소요의 합이었다(훅 12개면 매 프롬프트 2~5초). sort 는 관리자가
+//  이미 '뒤에 돌아야 하는 훅'(예: 프로젝트를 붙인 뒤에 그 프로젝트 문맥을 싣는 훅)을 뒤로 미는 데 쓰고 있었으므로,
+//  그 뜻은 묶음 사이 순서로 그대로 지키고 묶음 안에서만 겹친다.
+//  ⚠ 기본이 꺼짐인 이유: 조직이 만든 훅은 기본 sort 0 이라 켜는 순간 시드와 한 묶음이 된다 — 종전엔 id 순으로 우연히
+//   지켜지던 선후(같은 파일을 쓰거나 앞 훅의 결과에 기대는 훅)가 소리 없이 깨질 수 있어, 조직이 확인하고 켠다.
+//  ⚠ sort 를 모르면(구버전 게이트웨이 응답·그때 저장된 캐시) 켜져 있어도 전부 차례로 돈다 — 순서 정보 없이 겹치면
+//   종전에 우연히 지켜지던 순서가 깨질 수 있고, 느린 쪽이 안전한 쪽이다.
+//  한 묶음에서 동시에 도는 훅은 HOOK_PARALLEL_MAX 개까지다(같은 sort 의 훅이 수십 개여도 프로세스가 한꺼번에 뜨지 않게).
+//  결과는 sort 오름차순, 같은 sort 안에서는 받은 순서로 돌려준다(끝난 순서가 아니다) — 컨텍스트 이어붙이기·결정
+//   병합이 매번 같아야 한다.
+const HOOK_PARALLEL_MAX = 8;
+// 훅 하나의 예외(예: 캐시가 깨져 source_code 가 문자열이 아님)가 같은 묶음의 이웃을 끌고 가지 않게 값으로 바꾼다.
+const runHookIsolated = (hk, stdin) => runHook(hk, stdin).catch((e) =>
+  ({ out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || e).slice(-STDERR_KEEP) } }));
+async function runWave(wave, stdin) {
+  const rs = new Array(wave.length);
+  let next = 0;
+  const worker = async () => { while (next < wave.length) { const i = next++; rs[i] = await runHookIsolated(wave[i], stdin); } };
+  await Promise.all(Array.from({ length: Math.min(HOOK_PARALLEL_MAX, wave.length) }, worker));
+  return rs;
+}
+async function runAll(hooks, stdin, concurrent) {
+  const ordered = concurrent === true && hooks.every((hk) => typeof hk.sort === "number" && Number.isFinite(hk.sort));
+  const waves = [];
+  if (!ordered) for (const hk of hooks) waves.push([hk]);
+  else {
+    const bySort = new Map();
+    for (const hk of hooks) { if (!bySort.has(hk.sort)) bySort.set(hk.sort, []); bySort.get(hk.sort).push(hk); }
+    for (const k of [...bySort.keys()].sort((a, b) => a - b)) waves.push(bySort.get(k));
+  }
+  const results = [];
+  for (const wave of waves) {
+    const rs = await runWave(wave, stdin);
+    wave.forEach((hk, i) => results.push({ hk, ...rs[i] }));
+  }
+  return results;
 }
 
 // 훅 stderr 에서 '왜 죽었나' 한 줄을 뽑는다. Node 의 치명오류 덤프는 [소스발췌 → 빈줄 → `XxxError: 메시지` →
@@ -417,15 +507,14 @@ async function main() {
   try { input = JSON.parse(stdin || "{}"); toolName = input.tool_name || input.toolName || ""; } catch { /* */ }
 
   const fetched = await fetchHooks(input);
-  const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY }) : fetched; // 미도달 → grace 캐시
-  if (fetched !== null) saveCache(fetched.hooks, fetched.relay);                                  // 성공 → 캐시 갱신
+  const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY, concurrent: false }) : fetched; // 미도달 → grace 캐시
+  if (fetched !== null) saveCache(fetched.hooks, fetched.relay, fetched.concurrent);                                // 성공 → 캐시 갱신
   const relay = cfg.relay.filter((d) => RANK[d]); // 잡값 방어
   const hooks = cfg.hooks.filter((hk) => hk && (hk.event === EVENT) && matches(hk, toolName));
   if (!hooks.length) return;
 
   const outputs = []; const fails = [];
-  for (const hk of hooks) {
-    const { out, fail } = runHook(hk, stdin);
+  for (const { hk, out, fail } of await runAll(hooks, stdin, cfg.concurrent)) {
     const trimmed = out && out.trim() ? out.trim() : "";
     if (trimmed) outputs.push(trimmed);
     // PreToolUse 에서 훅이 뭔가 뱉었는데 결정으로 못 읽히면(예: JSON 앞에 console.log 한 줄) 하네스는 그걸
