@@ -125,6 +125,9 @@ function readStdin(ms = T.stdin) {
 // claude 형 러너 페이로드. session_id 는 Cursor 가 주는 session_id(없으면 conversation_id — 번들이 그렇게 채운다),
 //  cwd 는 페이로드 cwd → 워크스페이스 첫 경로 → CURSOR_PROJECT_DIR 순(사용자 훅의 실제 cwd 는 ~/.cursor 라 세션 작업
 //  위치가 아니다 — stop-writeback-gate 의 work-root 판정이 이 값을 쓴다). transcript_path 는 파일이 있을 때만 온다(없으면 null).
+//  ⚠ transcript_path 는 **.jsonl 만** 넘긴다 — 우리가 읽는 형식(harness-io/cursor.ts)은 CLI 가 쓰는 JSONL 뿐이다(번들 실측). 번들의
+//   경로 후보엔 .txt(옛 판)도 있고 IDE 의 형식은 미실측이라, 그런 파일을 기록 수집(기본 켬 — #4927 2026-10-22)이 올리면 서버가
+//   못 읽는 원본만 쌓이고 화면이 빈다. 서버의 보고 경로 판정(locate reportedPathOk)도 .jsonl 만 받는다.
 const sessionIdOf = (input) => String(input?.session_id || input?.conversation_id || "");
 const cwdOf = (input) => (typeof input?.cwd === "string" && input.cwd)
   || (Array.isArray(input?.workspace_roots) && typeof input.workspace_roots[0] === "string" && input.workspace_roots[0])
@@ -132,7 +135,7 @@ const cwdOf = (input) => (typeof input?.cwd === "string" && input.cwd)
 const payload = (event, input, extra) => JSON.stringify({
   hook_event_name: event,
   session_id: sessionIdOf(input),
-  transcript_path: typeof input?.transcript_path === "string" ? input.transcript_path : "",
+  transcript_path: typeof input?.transcript_path === "string" && /\.jsonl$/i.test(input.transcript_path) ? input.transcript_path : "",
   cwd: cwdOf(input),
   ...extra,
 });

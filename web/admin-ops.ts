@@ -170,7 +170,7 @@ function sessionShareEditor(detail, data) {
   const rc = data.runtimeConfig;                 // admin 만 non-null
   const canEdit = !!data.canEdit && !!rc;
   // 화면 폴백 기본값 — 서버 DEFAULT_SESSION_SHARE(src/sessions/session-share.ts #1752)와 같은 값이어야 한다(어긋나면 화면이 거짓말).
-  const DEF = { enabled: true, harnesses: ['claude', 'codex'], scope: 'main', store: 'slim', retention_days: 0, view_policy: 'attach', resume_policy: 'owner' };
+  const DEF = { enabled: true, harnesses: ['claude', 'codex', 'cursor'], scope: 'main', store: 'slim', retention_days: 0, view_policy: 'attach', resume_policy: 'owner' };
   const body = el('div');
   detail.replaceChildren(
     sectionHead('세션 공유', '구성원의 AI 대화 기록을 중앙에 모아, 컴퓨터가 꺼져 있어도 기록을 읽고 이어받게 합니다. 대화 전문이 이 조직의 저장소에 남으며 기본은 켜져 있습니다 — 끄면 그때부터 수집하지 않습니다.'),
@@ -200,7 +200,7 @@ function sessionShareEditor(detail, data) {
     const harnessRows = el('div', {},
       hChk('claude', 'Claude Code', ''),
       hChk('codex', 'Codex', ''),   // #1759 rollout 파서 + #1884 기본 캡처 — 종전 '미지원(실험)' 문구는 낡았다
-      hChk('cursor', 'Cursor', '구성원 PC 의 Cursor IDE·CLI'));   // #4927 — 파서(harness-io/cursor.ts)가 생겨 서버가 받는다. 기본은 꺼짐
+      hChk('cursor', 'Cursor', '구성원 PC 의 Cursor IDE·CLI'));   // #4927 — 파서(harness-io/cursor.ts)가 생겨 서버가 받는다. 기본 켬(2026-10-22)
 
     // ── select 헬퍼 ──
     const sel = (opts, val) => {

@@ -295,6 +295,12 @@ try {
   // [A27] 모르는 이벤트 → {}.
   eq("R27[A27] 모르는 이벤트 → {}", outOf(runAdapter("afterAgentThought", { ...BASE })), {});
 
+  // [A31] transcript_path 는 .jsonl 만 러너에 넘긴다(기록 수집 기본 켬 — 못 읽는 형식을 올리지 않게). .txt·확장자 없음은 "".
+  {
+    const sent = (tp) => { resetCaps(); runAdapter("stop", { ...BASE, status: "aborted", transcript_path: tp }); return sentOf("run-custom.mjs").transcript_path; };
+    eq("R31[A31] .jsonl 은 그대로 · .txt·확장자 없음·null 은 빈 값", [sent("/t/c.jsonl"), sent("/t/c.txt"), sent("/t/c"), sent(null)], ["/t/c.jsonl", "", "", ""]);
+  }
+
   // [A28] MCP 의 org ask → permission:ask(+사유). beforeMCPExecution 검증기는 ask 를 받는다(번들 실측) — preToolUse 는 R7 대로 안 싣는다.
   {
     stub("run-custom.mjs", JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: "외부 전송 확인" } }));
