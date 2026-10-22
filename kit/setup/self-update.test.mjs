@@ -7,10 +7,10 @@ import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
-import { sandboxEnv, WIN } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
+import { sandboxEnv, WIN, closedPath } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
@@ -151,10 +151,12 @@ try {
   }
 
   // ② 최신 상태 — 스탬프 == 서버 버전이면 다운로드조차 안 한다(매 세션 도는 경로라 이게 핵심 비용).
+  //  #4927 부터 «새 하네스»(감지됐는데 한 번도 배선 안 된 것)가 있으면 같은 버전에서도 한 번 깐다(⑯d) — 이 행은 그게 **없을 때**다.
+  //  PATH 를 밀폐한다: 이 머신 PATH 의 진짜 하네스(codex·grok…)가 새 하네스로 잡히면 다른 행이 된다.
   {
     const before = serving.installHits;
     const home = freshHome("v-aaa");
-    await runUpdater(home);
+    await runUpdater(home, { PATH: closedPath(dirname(process.execPath)) });
     (serving.installHits === before && !existsSync(lv(home, "update-notice")))
       ? ok("② 최신이면 무동작(다운로드 0회)") : bad("② 최신 무동작", `installHits +${serving.installHits - before}`);
   }
@@ -261,7 +263,7 @@ try {
   // ══ 프로덕션 경로 통합 — session-preload(훅) → detached 업데이터 → 설치 ══
   //  여기까지 붙어야 "멤버가 세션을 켜기만 하면 갱신된다"가 증명된다. 위 케이스들은 업데이터 단독 실행이었다.
   const PRELOAD = join(HERE, "..", "hooks", "session-preload.mjs");
-  const runPreload = (home) => pExecFile(process.execPath, [PRELOAD], { env: env(home), timeout: 30_000 });
+  const runPreload = (home, extra = {}) => pExecFile(process.execPath, [PRELOAD], { env: env(home, extra), timeout: 30_000 });
   const waitFor = async (fn, ms = 60_000) => {
     const t0 = Date.now();
     while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 25)); }
@@ -294,7 +296,9 @@ try {
       ? ok("⑨b 업데이트 안내 — 다음 세션에 1회만") : bad("⑨b 안내 1회", `s2=${s2.includes("업데이트됐습니다")} s3=${s3.includes("업데이트됐습니다")}`);
   }
 
-  // ⑩ 최신이면 훅은 업데이터를 아예 안 띄운다(매 세션 도는 경로 — 여기서 프로세스를 낳으면 안 된다).
+  // ⑩ 최신이면 훅이 **내려받기를 일으키지 않는다**(매 세션 도는 경로). #4927 부터 훅은 버전이 같아도 5분에 한 번 업데이터를 띄워
+  //  «새 하네스» 를 본다 — 새 하네스가 없으면 업데이터는 파일 몇 개만 보고 끝난다(내려받기 0 · 로그 0). 그래서 PATH 를 밀폐한다:
+  //  이 머신 PATH 의 진짜 하네스(codex·grok…)가 «새 하네스» 로 잡히면 이 행이 그 행(⑯g)과 섞인다.
   //  ⚠ '안 떴다'를 **고정 sleep 으로 기다리지 않는다** — 그건 예산만 먹고 증명력은 없다(짧으면 거짓 초록,
   //   길면 그냥 느림). 대신 같은 순간에 **양성 대조**(버전 불일치 홈)를 함께 띄워 그쪽 설치 완료까지만
   //   기다린다(고정 대기 → 유계 대기). 대조가 실제로 +1 을 올리는 것까지 단언하므로 픽스처가 통째로
@@ -308,7 +312,8 @@ try {
     installUpdaterFixture(home);
     const ctrl = freshHome("v-old");
     installUpdaterFixture(ctrl);
-    await Promise.all([runPreload(home), runPreload(ctrl)]);
+    const sealed = { PATH: closedPath(dirname(process.execPath)) };
+    await Promise.all([runPreload(home, sealed), runPreload(ctrl, sealed)]);
     const ctrlDone = await waitFor(() => readIf(lv(ctrl, "kit-version")) === "v-ddd");
     //  스탬프 뒤에도 대조군 업데이터는 MCP 재조정·알림·잠금 해제를 이어 간다 — 다음 케이스가 serving 을 바꾸기 전에 끝까지 기다린다.
     await waitFor(() => !!readIf(lv(ctrl, "update-notice")));
@@ -530,7 +535,8 @@ try {
       writeFileSync(join(h4, ".claude.json"), JSON.stringify({
         mcpServers: { lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } } },
       }, null, 2) + "\n");
-      await runUpdater(h4);
+      const sealed4 = { PATH: closedPath(dirname(process.execPath)) };   // 새 하네스 없음(②와 같은 밀폐 — #4927)
+      await runUpdater(h4, sealed4);
       const e4 = (JSON.parse(readFileSync(join(h4, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
       // 설치는 일어나지 않아야 한다(최신이므로) — 훅 파일이 안 깔린 것으로 확인.
       const noReinstall = !existsSync(join(h4, ".lively", "hooks", "session-preload.mjs"));
@@ -540,7 +546,7 @@ try {
 
       // 그리고 **멱등** — 이미 stdio 면 최신 경로에서 파일을 건드리지 않는다(정상 세션 비용 0).
       const before4 = readFileSync(join(h4, ".claude.json"), "utf8");
-      await runUpdater(h4);
+      await runUpdater(h4, sealed4);
       (readFileSync(join(h4, ".claude.json"), "utf8") === before4)
         ? ok("⑮f-b 최신 경로 멱등 — 이미 stdio 면 파일 미변경")
         : bad("⑮f-b 최신 경로 멱등", "파일이 또 변경됨");
@@ -640,6 +646,101 @@ try {
       /cursor-adapter\.mjs/.test(hooks)
         ? ok("⑯c IDE 만 쓰는 사람도 kit 홈이면 cursor 배선 (#4927)")
         : bad("⑯c IDE 감지", `~/.cursor/hooks.json 에 우리 엔트리가 없다 — hooks=${JSON.stringify(hooks.slice(0, 120))}`);
+    }
+
+    // ⑯d~⑯j #4927 — **버전이 같아도 «새 하네스» 는 한 번 배선한다**(사양 spec.md §G). 실측(2026-10-22 상민님 윈도우 PC):
+    //  키트가 최신인 PC 에 Cursor 를 나중에 깔았더니 업데이터가 «최신이니 할 일 없음» 으로 빠져 Cursor 가 라이블리와 안 붙었다.
+    //  «새» = 감지됐는데 **한 번도 배선된 적 없는**(update-state.json wired_ever 에 없는) 하네스. 사람이 뗀 것(기록에 있음)은 되붙이지 않는다.
+    //  PATH 는 밀폐한다 — 이 머신 PATH 의 진짜 하네스가 «새 하네스» 로 섞이면 행의 뜻이 흐려진다.
+    {
+      serving.body = makeBundle("v-fresh"); serving.version = "v-fresh";
+      const sealed = { PATH: closedPath(dirname(process.execPath)) };
+      const cursorHome = (state) => {
+        const h = freshHome("v-fresh");                                   // 스탬프 = 서빙 버전 → «최신»
+        mkdirSync(join(h, ".cursor", "extensions"), { recursive: true });  // Cursor IDE 를 나중에 깔았다(배선 없음)
+        if (state !== undefined) writeFileSync(lv(h, "update-state.json"), typeof state === "string" ? state : JSON.stringify(state));
+        return h;
+      };
+      const wiredCursor = (h) => { try { return /cursor-adapter\.mjs/.test(readFileSync(join(h, ".cursor", "hooks.json"), "utf8")); } catch { return false; } };
+      const stateOf = (h) => { try { return JSON.parse(readFileSync(lv(h, "update-state.json"), "utf8")); } catch { return {}; } };
+
+      // [G1] 기록 없음 + 새로 깐 Cursor → 내려받아 설치 → 배선 · 기록에 cursor.
+      {
+        const h = cursorHome(undefined);
+        const before = serving.installHits;
+        await runUpdater(h, sealed);
+        (serving.installHits === before + 1 && wiredCursor(h) && (stateOf(h).wired_ever || []).includes("cursor"))
+          ? ok("⑯d[G1] 버전이 같아도 새로 깐 Cursor 는 한 번 배선한다")
+          : bad("⑯d[G1] 새 하네스 배선", `installHits +${serving.installHits - before} wired=${wiredCursor(h)} ever=${JSON.stringify(stateOf(h).wired_ever)}`);
+      }
+      // [G2] 기록에 cursor 가 있다(한 번 배선했다가 사람이 뗐다) → 버전이 같은 동안은 되붙이지 않는다.
+      {
+        const h = cursorHome({ wired_ever: ["claude", "cursor"] });
+        const before = serving.installHits;
+        await runUpdater(h, sealed);
+        (serving.installHits === before && !wiredCursor(h))
+          ? ok("⑯e[G2] 사람이 뗀 하네스는 같은 버전에서 되붙이지 않는다")
+          : bad("⑯e[G2] 뗀 하네스", `installHits +${serving.installHits - before} wired=${wiredCursor(h)}`);
+      }
+      // [G3] 같은 «새 하네스» 묶음을 방금 시도했다 → 쉰다(배선이 안 되는 PC 에서 매 세션 내려받지 않게).
+      {
+        const h = cursorHome({ wired_ever: ["claude"], fresh_tried: "cursor", fresh_at: Date.now() });
+        const before = serving.installHits;
+        await runUpdater(h, sealed);
+        (serving.installHits === before) ? ok("⑯f[G3] 새 하네스 재시도 백오프") : bad("⑯f[G3] 백오프", `installHits +${serving.installHits - before}`);
+      }
+      // [G5] 기록 파일이 깨졌다 → 없는 것으로 보고 G1 판정(지금 배선된 claude 만 기록 → cursor 는 새 하네스).
+      {
+        const h = cursorHome("{ not json");
+        const before = serving.installHits;
+        await runUpdater(h, sealed);
+        (serving.installHits === before + 1 && wiredCursor(h))
+          ? ok("⑯g[G5] 깨진 기록 → 없는 것으로 보고 새 하네스 배선") : bad("⑯g[G5] 깨진 기록", `installHits +${serving.installHits - before} wired=${wiredCursor(h)}`);
+      }
+      // [G4] 새 하네스 없음 → 무동작이지만 기록은 남긴다(다음 판정의 기준).
+      {
+        const h = freshHome("v-fresh");
+        const before = serving.installHits;
+        await runUpdater(h, sealed);
+        (serving.installHits === before && JSON.stringify(stateOf(h).wired_ever) === JSON.stringify(["claude"]))
+          ? ok("⑯h[G4] 새 하네스 없음 → 내려받기 0 · 기록만") : bad("⑯h[G4] 무동작", `installHits +${serving.installHits - before} ever=${JSON.stringify(stateOf(h).wired_ever)}`);
+      }
+      // [G7][G6] 훅 — 최신이어도 확인 도장이 없으면 업데이터를 띄워 새 하네스를 배선하고, 도장이 5분 안이면 안 띄운다.
+      //  유계 대기: 두 홈을 함께 띄우고 «띄운 쪽» 이 배선될 때까지만 기다린 뒤 «안 띄운 쪽» 을 본다(⑩ 과 같은 양성 대조).
+      {
+        const due = cursorHome(undefined); installUpdaterFixture(due);
+        const fresh = cursorHome(undefined); installUpdaterFixture(fresh);
+        writeFileSync(lv(fresh, "fresh-harness-check"), "");             // 방금 확인했다(도장 = 지금)
+        const before = serving.installHits;
+        await Promise.all([runPreload(due, sealed), runPreload(fresh, sealed)]);
+        const done = await waitFor(() => wiredCursor(due));
+        await waitFor(() => !existsSync(lv(due, "update.lock")));          // 업데이터가 잠금을 풀 때까지(다음 행이 serving 을 바꾸기 전에)
+        (done && !wiredCursor(fresh) && serving.installHits === before + 1)
+          ? ok("⑯i[G7·G6] 훅: 최신이어도 도장이 없으면 새 하네스 배선 · 도장이 5분 안이면 안 띄움")
+          : bad("⑯i[G7·G6] 훅 주기", `due=${done} freshWired=${wiredCursor(fresh)} installHits +${serving.installHits - before}`);
+      }
+      // [G8] 경계 — 도장이 정확히 5분 전이면 할 때다(5분 이상 = 만료) · 5분 안이면 아니다 · 없으면 할 때고 도장을 찍는다.
+      {
+        const { freshCheckDue } = await import(pathToFileURL(PRELOAD).href);
+        const f = join(BOX, "fresh-check-stamp");
+        const T = 5 * 60 * 1000, now = Date.now();
+        rmSync(f, { force: true });
+        const missing = freshCheckDue(now, f) && existsSync(f);
+        const { utimesSync } = await import("node:fs");
+        utimesSync(f, new Date(now - T), new Date(now - T));
+        const atEdge = freshCheckDue(now, f);
+        utimesSync(f, new Date(now - T + 1000), new Date(now - T + 1000));
+        const inside = freshCheckDue(now, f);
+        (missing && atEdge && !inside) ? ok("⑯j[G8] 확인 주기 경계(없음·정확히 5분·5분 안)")
+          : bad("⑯j[G8] 경계", `missing=${missing} atEdge=${atEdge} inside=${inside}`);
+      }
+      // [G9] 버전이 다른 정상 업데이트도 기록을 남긴다 — 다음 «같은 버전» 판정의 기준.
+      {
+        const h = freshHome("v-older");
+        await runUpdater(h, sealed);
+        (stateOf(h).wired_ever || []).includes("claude") && stateOf(h).ok_version === "v-fresh"
+          ? ok("⑯k[G9] 정상 업데이트 뒤 기록(wired_ever) 남김") : bad("⑯k[G9] 기록", JSON.stringify(stateOf(h)));
+      }
     }
 
     // ⑰ #3591 — `--mcp-only`: 되살리는 자리를 **세션보다 앞으로**. box-spawn 이 하네스를 exec 하기 직전에
