@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 �
 import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 import { WIN } from "../testlib/os-sandbox.mjs";
 import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
+import { tgzOf } from "../testlib/tgz.mjs";   // 픽스처 번들 — 게이트웨이와 같은 pax 계약(#4927)
 // CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
 const SHIM = WIN ? "lively.cmd" : "lively";
 
@@ -61,7 +62,10 @@ function makeBundle(version, { corrupt = false, mcpServers = [] } = {}) {
   writeFileSync(join(lv, "kit-version"), version + "\n");
   if (corrupt) writeFileSync(join(stage, ".claude", "hooks", "session-preload.mjs"), "export const x = (((;\n");
   const tgz = join(BOX, `bundle-${version}.tgz`);
-  execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
+  //  윈도우는 시스템 tar 로 만들지 않는다 — 새 Windows tar.exe(libarchive 3.8.9)가 이 번들을 «만들 때» 죽는다(풀기는 정상 · #4927).
+  //   macOS·리눅스는 종전대로 시스템 tar(macOS tar 는 만들 때 디스크의 `._*` 를 빼서, JS 로 만들면 ⑭ 같은 픽스처의 뜻이 바뀐다).
+  if (WIN) writeFileSync(tgz, tgzOf(stage));
+  else execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
   return readFileSync(tgz);
 }
 

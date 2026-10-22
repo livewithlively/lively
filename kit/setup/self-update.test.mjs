@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { sandboxEnv, WIN } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
+import { tgzOf } from "../testlib/tgz.mjs";   // 픽스처 번들 — 게이트웨이와 같은 pax 계약(#4927)
 
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
@@ -68,7 +69,10 @@ function makeBundle(version, { corrupt = false, appledouble = false, noProxy = f
     }
   }
   const tgz = join(BOX, `bundle-${version}.tgz`);
-  execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
+  //  윈도우는 시스템 tar 로 만들지 않는다 — 새 Windows tar.exe(libarchive 3.8.9)가 이 번들을 «만들 때» 죽는다(풀기는 정상 · #4927).
+  //   macOS·리눅스는 종전대로 시스템 tar(macOS tar 는 만들 때 디스크의 `._*` 를 빼서, JS 로 만들면 ⑭ 같은 픽스처의 뜻이 바뀐다).
+  if (WIN) writeFileSync(tgz, tgzOf(stage));
+  else execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
   return readFileSync(tgz);
 }
 
