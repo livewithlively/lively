@@ -2604,7 +2604,7 @@
   "rest": [
    "POST /api/ui/knowledge/:name/fields"
   ],
-  "input_hash": "a995962e974212ad"
+  "input_hash": "4153f82a5d044aaf"
  },
  {
   "name": "knowledge_link_category",
