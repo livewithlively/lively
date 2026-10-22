@@ -8,6 +8,7 @@
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import type { KeepAwakeStatus } from "./keep-awake.js";   // #1849 — hello 로 보고하는 잠자기 억제 상태(타입만)
 import type { WorkerRunSnapshot } from "../apps/worker-host.js";
+import type { ContainerObservation } from "../terminal/tmux-route.js";   // #4939 — 세션 호스트의 컨테이너 관측(타입만)
 
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
@@ -80,7 +81,12 @@ export interface HelloMsg {
   agentVer?: string; caps?: string[]; harnesses?: string[]; host?: string; hasDocker?: boolean;
   keepAwake?: KeepAwakeStatus;
 }
-export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
+/**
+ * 세션 스냅샷. `containers`(#4939) = 세션 호스트가 목록을 팬아웃할 때 본 **컨테이너별 결과** — «컨테이너는 있는데 그 목록에 세션이 없다» 를
+ *  게이트웨이가 보는 유일한 재료다(도달 불가 판정 sessions/session-unreachable-rule). 코어 직접 경로가 아닌 노드(멤버 PC)·옛 판은 안 싣는다 —
+ *  게이트웨이는 그 노드를 «모름» 으로 읽는다(빈 배열이 아니다). 선택 칸이라 프로토콜 버전은 그대로다(옛 게이트웨이는 모르는 칸을 무시한다).
+ */
+export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources; containers?: ContainerObservation[] }
 /**
  * 내용 없는 박동 — «봤는데 지난번 그대로다» (#2600 T2 d6).
  *

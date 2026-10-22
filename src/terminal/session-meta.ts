@@ -9,6 +9,7 @@
 //
 // ⚠ DB·tmux·express 를 부르지 않는다(순수) — 그래야 표가 테스트로 고정된다.
 import { endNoteForRow, type SessionEndNote, type SessionEndForRow } from "../sessions/session-end.js";   // #4783 — 순수 모듈
+import { exitedByUserOf } from "../sessions/session-unreachable-rule.js";   // #4939 — 순수 모듈(도달 불가는 사람이 끝낸 것이 아니다)
 
 /** 복원 판정에 필요한 desired-state 필드만(= org_session_state 의 부분집합). */
 export interface DeadSessionStateLike {
@@ -120,7 +121,7 @@ export function deadSessionMeta(
       projectId,
       restorable: true,
       canRestore: mine,
-      exitedByUser: !!st.exited_at,
+      exitedByUser: exitedByUserOf(st),   // #4939 — 도달 불가로 적힌 세션은 «중단됨(복원 가능)»
       oomKilled: !st.exited_at && st.exit_reason === "oom",
       harness: st.harness || "shell",
       //  #4783 — 왜 끝났나(끝낸 자리가 적은 것). 없으면 모름 — 화면은 사람이 끝냈다고 **단정하지 않는다**.

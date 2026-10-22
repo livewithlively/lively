@@ -8,12 +8,14 @@
 //  있다 — 브로커가 그것을 볼 통로만 없었다. CP 는 이미 REST 로 세션 신호를 받는다(idle) — 회수만 tmux 를 봤다.
 //
 // ── 무엇을 주나 ─────────────────────────────────────────────────────────────
-//  desired  = org_session_state 전 행(id · superseded_by · node_id · exited_at) + 상시세션 id(DB 행이 없는 것이 설계다 — #1059 E)
-//             ★ exited_at = 사람이 /exit·logout 으로 끝낸 세션(#3822). 소비자는 이것을 «끝났다» 로 읽어 컨테이너를 걷되
-//               행은 남긴다(복원 좌표 보존) — 판정은 여기가 아니라 브로커(sessionledger.ts)가 한다.
+//  desired  = org_session_state 전 행(id · superseded_by · node_id · exited_at · exit_reason) + 상시세션 id(DB 행이 없는 것이 설계다 — #1059 E)
+//             ★ exited_at = 끝난 세션 — 사람이 /exit·logout 으로 끝냈거나(#3822) 게이트웨이가 도달 불가로 판정했다(#4939,
+//               exit_reason='unreachable'). 소비자는 이것을 «끝났다» 로 읽어 컨테이너를 걷되 행은 남긴다(복원 좌표 보존).
 //  observed = 지금 tmux 에 있는 box-* 세션 id. **못 봤으면 null** — «없다» 와 «모른다» 를 섞지 않는다(#835).
 //             #2600 T2 d6 — 브로커가 자기 노드를 실어 보내면 그 노드 **세션 호스트의 관측**으로 답한다(ledgerLiveFrom).
-//  판정(원한다/은퇴했다/모른다)은 소비자(브로커 sessionledger.ts)가 한다 — 여기는 사실만 준다.
+//  ★ #4939 — 세션이 살았나·끝났나는 **게이트웨이가 판정**하고 이 장부가 그 최종 판정이다(buildSessionLedger): 지금 보이는 세션은
+//   끝남으로 내지 않고, 도달 불가로 적힌 상시 세션은 «끝남» 행으로 덧붙인다. 브로커(sessionledger.ts)는 gateway 모드에서 그대로 집행하고,
+//   종전 모드(legacy·shadow)에선 여전히 이 사실 위에서 스스로 판정한다.
 //
 // ── 누가 부르나 · 어떻게 여나 ───────────────────────────────────────────────
 //  브로커에는 사람 세션도 ops 토큰도 없다. 있는 것은 CP↔코어가 이미 공유하는 테넌트 헤더 비밀
@@ -38,7 +40,8 @@ import { listSessionLedgerRows, type SessionLedgerRow } from "../sessions/sessio
 import { listManagedSessions } from "../sessions/managed-sessions.js";
 import { listLiveSessionIds } from "./terminal-sessions.js";
 import { sessionHostNodeId } from "../node/session-host-provision.js";   // #2600 T2 d6 — (테넌트, 노드) → 세션 호스트 id 는 한 벌
-import { sessionHostLiveIds } from "../node/registry.js";
+import { sessionHostLiveIds, sessionHostLiveUnion } from "../node/registry.js";
+import { unreachableManagedMarks } from "../sessions/session-unreachable-sweep.js";   // #4939 — 도달 불가로 적힌 상시 세션(메모리 표식)
 
 export interface SessionLedgerBody {
   authoritative: true;
@@ -54,6 +57,13 @@ export interface LedgerDeps {
   listManaged: () => Promise<Array<{ session_id: string | null }>>;
   /** strict — «못 봤다» 면 throw, 서버 부재(세션 0 확답)는 빈 배열. */
   listLive: () => Promise<string[]>;
+  /**
+   * #4939 — 지금 **어느** 세션 호스트 목록에든 보이는 세션(신선한 호스트만). 호스트가 목록을 쥐지 않은 배포면 null(이 칸은 아무것도 안 바꾼다).
+   *  장부의 최종 판정에 쓴다: 끝남 표식이 있어도 지금 살아 있으면 «끝남» 으로 내지 않는다(종전엔 브로커가 tmux 로 이걸 뒤집었다).
+   */
+  liveAnywhere?: () => ReadonlySet<string> | null;
+  /** #4939 — 도달 불가로 적힌 상시 세션(DB 행이 없어 메모리 표식) → 적은 시각(ms). 장부가 상시 목록에서 빼고 «끝남» 행으로 싣는다. */
+  unreachableManaged?: () => ReadonlyMap<string, number>;
 }
 
 /**
@@ -61,17 +71,26 @@ export interface LedgerDeps {
  *  빈 desired 로 답하면 모든 세션이 «행 없음» 이 되는데, 그건 사실이 아니라 우리 장애다.
  */
 export async function buildSessionLedger(d: LedgerDeps): Promise<SessionLedgerBody> {
-  const [desired, managed] = await Promise.all([d.listRows(), d.listManaged()]);
+  const [rows, managedRows] = await Promise.all([d.listRows(), d.listManaged()]);
   let live: string[] | null;
   try { live = await d.listLive(); }
   catch { live = null; }   // 못 봤다 — 관측 없음(빈 집합이 아니다)
-  return {
-    authoritative: true,
-    observed: live !== null,
-    desired,
-    managed: managed.map((m) => m.session_id).filter((x): x is string => !!x),
-    live,
-  };
+  //  #4939 — 장부의 **최종 판정**(판정 한 곳). 끝남 표식이 있어도 지금 어느 세션 호스트 목록에든 보이면 끝남으로 내지 않는다 —
+  //   훅이 먼저 보고하고 하네스가 아직 안 죽은 창 · 같은 id 로 다시 띄운 직후. 종전엔 이걸 브로커가 tmux 로 뒤집었다(sessionledger orphanPlan).
+  //   이어짐(superseded)은 관측과 무관하다 — 새 id 쪽이 산 세션이다.
+  const alive = d.liveAnywhere?.() ?? null;
+  //   새 배열이다 — 아래에서 상시 세션 행을 덧붙이므로 listRows 가 준 배열을 건드리지 않는다.
+  const desired = rows.map((r) => (alive && r.exited_at && !r.superseded_by && alive.has(r.id) ? { ...r, exited_at: null, exit_reason: null } : r));
+  //  #4939 H6 — 도달 불가로 적힌 상시 세션은 상시 목록에서 빼고 «끝남» 행으로 싣는다(DB 행이 없는 것이 설계라 이 자리에서 만든다).
+  //   그 사이 다시 보이면(정비가 표식을 지우기 전 창) 위와 같은 까닭으로 끝남으로 내지 않는다.
+  const marks = d.unreachableManaged?.() ?? new Map<string, number>();
+  const managed: string[] = [];
+  for (const id of managedRows.map((m) => m.session_id).filter((x): x is string => !!x)) {
+    const at = marks.get(id);
+    if (at === undefined || alive?.has(id)) { managed.push(id); continue; }
+    desired.push({ id, superseded_by: null, node_id: null, exited_at: new Date(at).toISOString(), exit_reason: "unreachable" });
+  }
+  return { authoritative: true, observed: live !== null, desired, managed, live };
 }
 
 /**
@@ -152,6 +171,8 @@ export function registerSessionLedgerRoute(app: express.Express): void {
         hostLive: sessionHostLiveIds,
         tmuxLive: () => listLiveSessionIds({ strict: true }),
       }),
+      liveAnywhere: () => sessionHostLiveUnion(),
+      unreachableManaged: () => unreachableManagedMarks(),
     }));
   }));
 }

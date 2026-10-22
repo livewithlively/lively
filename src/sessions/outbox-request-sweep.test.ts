@@ -223,8 +223,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //  #4486 — 앱 백그라운드 작업 감시(app-job-sweep)와 그 기록 보존(app-job-prune)이 테넌트 정비로 둘 늘었다. 작업 행 · 동시 상한이 그
   //   워크스페이스 것이라(RLS) 그 컨텍스트 안에서만 돌고, 사람이 없을 때 기다린 작업을 부르고 끊긴 작업을 끝내는 길이 요청(CP 60초 · 검사 층의
   //   박동)에 얹는 것뿐이다. DB 행과 함수 비동기 부르기만 한다(함수 안에서 도는 작업을 멈추지 않는다 — 파괴적 동작 없음).
-  assert.equal(perTenant.length, 21, "테넌트 정비 스물하나(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존)");
-  assert.equal(SWEEP_JOBS.length, 22, "전역 하나(task-dispatch)가 더 있다");
+  //  #4939 — 도달 불가 세션 판정(session-unreachable)이 테넌트 정비로 하나 늘었다. 세션 호스트 관측·장부·상시 세션이 그 워크스페이스 것이고,
+  //   매니지드에선 요청에 얹는 것 말고 닿는 길이 없다. 장부 칸만 적는다(컨테이너는 브로커가 장부를 보고 걷는다 — [G4b]).
+  assert.equal(perTenant.length, 22, "테넌트 정비 스물둘(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 도달 불가 세션 판정)");
+  assert.equal(SWEEP_JOBS.length, 23, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -254,6 +256,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "job-record-prune": SIX_HOURS_MS,                // #4828 — 새 정비. 일 단위 보존이라 세션 기록 정리(session-log-reap)와 같은 6시간
     "app-job-sweep": STOP_RULE_SWEEP_MS,             // #4486 — 새 정비. 박동 없음 상한(90초)보다 짧아야 끊긴 작업이 제때 끝나고, 기다린 작업이 30초 안에 불린다
     "app-job-prune": SIX_HOURS_MS,                   // #4486 — 새 정비. 일 단위 보존(30일)이라 작업 기록 보존 정리(job-record-prune)와 같은 6시간
+    "session-unreachable": STOP_RULE_SWEEP_MS,       // #4939 — 새 정비. 종료 규칙과 같은 30초(시계는 15분 단위 — 다시 보인 세션의 표식을 빨리 지우는 쪽이 낫다)
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -289,6 +292,9 @@ t("[G4b] 컨테이너를 끄는 정비는 둘 — 하네스 종료 규칙(#4690 
   //   (종전 매처는 `agent-job-sweep` 을 못 잡아 «하나» 가 둘이 된 뒤에도 참이었다 — 격리 리뷰).
   const killers = SWEEP_JOBS.filter((j) => /stop|reap-idle|idle-reap|kill|agent-job/.test(j.key)).map((j) => j.key).sort();
   assert.deepEqual(killers, ["agent-job-sweep", "session-stop-rule"]);
+  //  #4939 도달 불가 세션 판정은 **끄지 않는다** — 장부에 «끝남» 을 적을 뿐이고, 컨테이너는 브로커가 그 장부를 보고 걷는다(판정 한 곳 · 집행은 브로커).
+  //   그래도 그 끝이 컨테이너 회수라 판단의 주인(상민님 2026-10-22 «판정 한 곳으로» · H1~H6)을 표 주석에 남긴다.
+  assert.match(table, /#4939/, "도달 불가 판정의 근거를 표 주석에 남긴다");
 });
 t("[G4c] 작업 컨테이너 감시(#4490)는 테넌트 정비다 — 걷는 것은 자기가 띄운 `job-` 컨테이너뿐(행동은 agent-jobs service.test R3 · launch.test K1)", () => {
   const src = readFileSync(SRC, "utf8");

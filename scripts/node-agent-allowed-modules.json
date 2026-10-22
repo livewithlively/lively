@@ -66,6 +66,7 @@
   "dist/sessions/session-reclaim-policy.js",
   "dist/sessions/session-share.js",
   "dist/sessions/session-state.js",
+  "dist/sessions/session-unreachable-rule.js",
   "dist/sessions/transcript-range.js",
   "dist/terminal/broker-client.js",
   "dist/terminal/catalog.js",

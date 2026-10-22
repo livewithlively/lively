@@ -84,6 +84,13 @@ test("⑩⑪⑫ 사용자 종료와 메모리 부족 — 확정이 추정을 이
   assert.equal(both.oomKilled, false, "/exit 는 확정 사실, oom 표시는 관측 기반 추정 — 겹치면 확정이 이긴다");
 });
 
+test("[#4939] 도달 불가로 적힌 세션(exit_reason=unreachable)은 사람이 끝낸 것이 아니다 — «중단됨(복원 가능)» 으로 그린다", () => {
+  const u = okBody(deadSessionMeta(ID, st({ exited_at: "2026-10-22T00:00:00Z", exit_reason: "unreachable" }), "yoon", false, shared));
+  assert.equal(u.exitedByUser, false, "게이트웨이 판정을 «내가 끝냄» 으로 그렸다");
+  assert.equal(u.oomKilled, false);
+  assert.equal(u.restorable, true);
+});
+
 test("⑬⑭ 빈 라벨·하네스 미상 — id 와 'shell' 로 채운다(빈 제목이 화면에 나가지 않게)", () => {
   const nul = okBody(deadSessionMeta(ID, st({ label: null, harness: null }), "yoon", false, shared));
   assert.equal(nul.label, ID);

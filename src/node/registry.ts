@@ -18,6 +18,8 @@ import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from 
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
 import { beatRefreshes } from "./state-freshness.js";   // #2600 T2 d6 — 박동은 스냅샷이 있을 때만 나이를 되돌린다
 import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, sessionHostTarget, selfNodeMessage, SELF_NODE_REASON, type SessionHostTargetWhy } from "./self-node.js";
+import { hostViewsOf, observeBeat, observeContainers, parseContainerObservations, type ContainerWatch } from "./container-watch.js";   // #4939 — 컨테이너 관측을 이어 보기(판정 재료)
+import type { HostView } from "../sessions/session-unreachable-rule.js";
 import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
@@ -91,6 +93,9 @@ function inTenant<T>(c: NodeConn, fn: () => T): T {
 
 const conns = new Map<string, NodeConn>();
 const states = new Map<string, NodeState>();
+//  #4939 — 세션 호스트의 컨테이너 관측(«컨테이너는 있는데 목록에 세션이 없다» 가 언제부터 이어졌나). 스냅샷과 달리 **정본이 없다** —
+//   게이트웨이가 다시 뜨면 비고 처음부터 센다(모름 → 다시 센다 — 도달 불가 판정이 그만큼 늦어질 뿐 틀리지 않는다).
+const watches = new Map<string, ContainerWatch>();
 // 정본에 마지막으로 쓴 것 — 같은 목록을 3초마다 다시 쓰지 않기 위한 기억(node-state-store.shouldPersist).
 const persisted = new Map<string, { digest: string; at: number }>();
 
@@ -293,6 +298,40 @@ export function sessionHostLiveIds(nodeId: string, now: number = Date.now()): st
 }
 
 /**
+ * #4939 — 이 스코프의 세션 호스트마다 **컨테이너 관측** 한 벌(도달 불가 판정 `sessions/session-unreachable-rule` 의 재료).
+ *  판정(누구를 넣나 · 신선한가)은 순수 함수 `container-watch.hostViewsOf` 가 하고, 여기는 재료만 모은다.
+ *  ⚠ 재료는 한 번에 동기로 모은다 — 목록(listed)과 관측(missing)이 같은 순간의 것이어야 한다.
+ */
+export function sessionHostContainerViews(now: number = Date.now()): HostView[] {
+  return hostViewsOf([...inScope(states)].map(([id, st]) => ({
+    nodeId: id,
+    declared: declaredSessionHost({ session_host: st.sessionHost }),
+    online: conns.has(keyOf(id)),
+    stateAgeMs: now - st.ts,
+    sessionIds: st.sessions.map((s) => s.id),
+    watch: watches.get(keyOf(id)),
+  })), now, STATE_STALE_MS);
+}
+
+/**
+ * #4939 — 지금 **어느** 신선한 세션 호스트 목록에든 보이는 세션 id(세션 장부의 최종 판정 — 살아 있으면 «끝남» 으로 내지 않는다).
+ *  신선한 선언 호스트가 하나도 없으면 null(이 칸은 아무것도 안 바꾼다). 자격은 `sessionHostLiveIds` 와 같은 술어다.
+ */
+export function sessionHostLiveUnion(now: number = Date.now()): Set<string> | null {
+  let out: Set<string> | null = null;
+  for (const [id] of inScope(states)) {
+    const ids = sessionHostLiveIds(id, now);
+    if (!ids) continue;
+    out ??= new Set<string>();
+    for (const x of ids) out.add(x);
+  }
+  return out;
+}
+
+/** 시험용 — 컨테이너 관측 기억을 비운다. */
+export function resetContainerWatches(): void { watches.clear(); }
+
+/**
  * 이 세션의 일을 맡을 **세션 호스트** — 호스트 id, 아니면 null(호출부는 종전 게이트웨이 경로) (#2600 T2 d6).
  *  판정은 순수 함수 `self-node.sessionHostTarget` 이 하고, 여기는 재료(스냅샷 좌표·선언·자격 관측·op 지원)만 모은다.
  *  사유는 소유 판정 계수에 `session:<사유>` 로 센다 — 맡기지 못하는 이유가 프로덕션 로그에 그대로 나온다.
@@ -434,6 +473,7 @@ export function forgetNode(nodeId: string): void {
   }
   states.delete(k);
   persisted.delete(k);
+  watches.delete(k);
 }
 
 // ── 게이트웨이 자신이 노드로도 등록된 경우(#2108) ──
@@ -788,7 +828,11 @@ function applyBeat(c: NodeConn): void {
   const k = keyOf(c.node.id, c.tenant);
   const prev = states.get(k);
   if (!beatRefreshes(prev)) return;
-  states.set(k, { ...prev!, ts: Date.now() });
+  const now = Date.now();
+  states.set(k, { ...prev!, ts: now });
+  //  #4939 — 박동은 컨테이너 관측도 «지난번 그대로» 다(노드가 컨테이너 관측을 상태 비교 키에 넣는다 — agent pushState).
+  const w = observeBeat(watches.get(k), now, STATE_STALE_MS);
+  if (w) watches.set(k, w);
   replaySnapshotOnBeat(c.node.id, k, prev!.sessions);
 }
 
@@ -922,6 +966,10 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
   }
   if (m.t === "state") {
     applyState(c, Array.isArray(m.sessions) ? m.sessions : [], m.res ?? null);
+    //  #4939 — 컨테이너 관측은 **상태 push 에서만** 잇는다. applyState 의 다른 호출부(attach 전 RPC 재확인)는 그 칸이 없어
+    //   거기서 이으면 «옛 판» 으로 읽혀 연속 시계가 지워진다.
+    const wk = keyOf(c.node.id, c.tenant);
+    watches.set(wk, observeContainers(watches.get(wk), parseContainerObservations(m.containers), Date.now(), STATE_STALE_MS));
     const now = Date.now();
     if (now - c.lastTouch > TOUCH_MIN_MS) { c.lastTouch = now; void touchNode(c.node.id).catch(() => { /* 비치명 */ }); }
     return;

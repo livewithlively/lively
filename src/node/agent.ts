@@ -19,7 +19,7 @@ import {
   listSessionsRaw, killEmptyTmuxServer, sessionDir, sharedRoot,
 } from "../terminal/terminal-sessions.js";
 import { sweepSessionTokenFiles, sessionTokenFileIds, envCarriesSessionToken, sessionTokenPresence } from "../terminal/session-token-file.js";   // #4135 — 죽은 세션의 세션 토큰 파일 정리 · 세션별 신원 보유 보고
-import { tmux } from "../terminal/tmux-exec.js";   // #4135 — pane env 에 세션 신원이 실려 떴는지(세션당 한 번)
+import { tmux, takeContainerObservation } from "../terminal/tmux-exec.js";   // #4135 — pane env 에 세션 신원이 실려 떴는지(세션당 한 번) · #4939 컨테이너 관측
 import { type AttachSocket } from "../terminal/terminal-pty.js";
 // #2600 T1 — 세션을 소유하는 살림과 세션 op 는 **코어 한 곳**이다. 이 파일에 남는 것은 WS 중계 전송뿐.
 import { SessionHost } from "../terminal/session-host.js";
@@ -511,7 +511,11 @@ function connect(): void {
       //   서버 부재(«확답으로 없음»)는 strict 여도 빈 배열이라, 세션이 정말 0개인 노드는 종전 그대로다.
       //  ⇒ 못 봤으면 **아무것도 올리지 않는다.** 스냅샷이 낡으면 게이트웨이가 스스로 소유를 되찾는다(fail-closed).
       //   이 레포가 반복해 못박은 «못 봤다 ≠ 없다» 교리(#835·#1251·#2154·#2544)의 이 자리 판이다.
+      const obsAt = Date.now();
       const [rawSessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
+      //  #4939 — 방금 그 목록을 만든 팬아웃의 **컨테이너별 결과**(세션 호스트 — 코어 직접 경로만 있다). 게이트웨이가 «컨테이너는 있는데
+      //   목록에 세션이 없다» 를 이어 보는 재료다. 없으면(멤버 PC · 그 사이 팬아웃을 안 탔다) 칸을 안 싣는다 — 게이트웨이는 «모름» 으로 읽는다.
+      const containers = takeContainerObservation(obsAt);
       //  #4135 — 목록 밖의 세션 토큰 파일(~/.lively/session-tokens)은 죽은 세션의 것이다 — 걷는다(best-effort).
       //   ⚠ 빈 목록으로는 걷지 않는다(sweepSessionTokenFiles 머리말 — tmux 가 잠깐 못 받은 판에 전부 지워졌다).
       //  #4931 — tmux 세대가 켜진 노드는 목록이 **세대별로** 빠질 수 있다(한 세대가 잠깐 연결을 거부하면 그 세대 세션만 빠지고 목록은
@@ -523,7 +527,8 @@ function connect(): void {
       }
       //  #4135 — 세션마다 «세션 신원을 갖고 있나» 를 실어 올린다. 게이트웨이는 이 값으로만 «발급은 했는데 거기엔 없다» 를 안다.
       const sessions = await withTokenPresence(rawSessions);
-      const sesKey = JSON.stringify(sessions);
+      //  컨테이너 관측도 비교 키에 넣는다 — 세션 목록은 그대로인데 관측만 바뀐 판(새 컨테이너 · 멈춤 · 못 봄)을 박동으로 삼키면 게이트웨이가 낡은 관측으로 센다.
+      const sesKey = JSON.stringify([sessions, containers]);
       //  ★ 침묵하지 않는다 (#2600 T2 d6). 종전엔 «지난번과 같으면» 아무것도 안 보냈는데, 게이트웨이의 목록
       //   소유 판정은 **스냅샷의 나이**를 보므로(12초) 한가한 테넌트에서는 소유가 영영 안 넘어갔다. 실을 내용이
       //   없을 뿐 관측은 했으니 박동을 보낸다 — 근거·실측은 `state-freshness.ts` 머리말.
@@ -531,7 +536,7 @@ function connect(): void {
       const kind = statePushKind({ force, changed: sesKey !== lastPushed, tracked: trackedTasks.size });
       lastPushed = sesKey;
       ws.send(JSON.stringify(kind === "state"
-        ? ({ t: "state", sessions, res } satisfies NodeToGwMsg)
+        ? ({ t: "state", sessions, res, ...(containers ? { containers } : {}) } satisfies NodeToGwMsg)
         : ({ t: "beat" } satisfies NodeToGwMsg)));
       // 위탁 태스크 완료 감지(P2) — exit 파일 등장 시 1회 보고 후 감시 해제(세션 정리는 게이트웨이 지시).
       for (const w of [...trackedTasks.values()]) {
