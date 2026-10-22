@@ -90,6 +90,20 @@ export async function getOrgHook(id: string): Promise<OrgHook | null> {
   return r.rows[0] ? mapHook(r.rows[0]) : null;
 }
 
+// 시드 기본 sort 이행(delivery/seed-content.ts LEGACY_SEED_SORT) — sort 한 칸만 옮긴다(감사는 남긴다).
+//  upsertOrgHook 을 쓰면 updated_by 가 호출자('system')로 덮인다 — 사람이 끈 훅이 '손 안 댄 시드'로 보여, 기본값 승격
+//  블록(PROMOTE_ENABLED)이 다음 부팅에 다시 켠다. 그래서 enabled·updated_by·target_members 는 건드리지 않는다.
+//  옛 값일 때만(CAS) 바꾼다 — 그 사이 조직이 바꾼 sort 는 덮지 않는다. 바꿨으면 true.
+export async function moveOrgHookSort(id: string, from: number, to: number, ctx: WriteCtx): Promise<boolean> {
+  const before = await getOrgHook(id);
+  if (!before || before.sort !== from) return false;
+  const r = await itemsPool.query(
+    `UPDATE org_hook SET sort=$3, version=version+1, updated_at=now() WHERE id=$1 AND sort=$2`, [id, from, to]);
+  if (!r.rowCount) return false;
+  await audit("org_hook", id, "update", before, await getOrgHook(id), ctx.actor, ctx.source, ctx);
+  return true;
+}
+
 // 멤버 러너가 보고한 훅 실행 실패를 health 에 기록(#892). 멤버당 마지막 1건만 — 멤버 수로 유계라 정리 불요.
 //  audit 은 남기지 않는다: 설정 변경이 아니라 런타임 텔레메트리이고, 크래시마다 감사로그를 채우면 노이즈다.
 //  존재하지 않는 hook_id 는 UPDATE 가 0행으로 조용히 무시한다(멤버가 임의 키를 심을 수 없다).

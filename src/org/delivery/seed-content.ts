@@ -17,7 +17,7 @@
 //  멱등: 두 번째 실행부터는 전부 present → 0 삽입. 새 디폴트가 추가되면 그 행만 다음 update(재기동)에 유입된다.
 //  비치명: 시딩 실패는 게이트웨이 기동을 막지 않는다(호출부가 .catch — baseline 시드와 동일 best-effort).
 import { itemsPool } from "../../db/client.js";
-import { getOrgHook, upsertOrgHook, assetContentHash,
+import { getOrgHook, upsertOrgHook, moveOrgHookSort, assetContentHash,
   type WriteCtx, type HookHarness } from "../store.js";
 import { DEFAULT_HOOKS, DEFAULT_SKILLS, DEFAULT_KNOWLEDGE } from "./default-content.js";
 import { logger } from "../../log.js";
@@ -87,14 +87,10 @@ export async function seedDefaultContent(): Promise<SeedResult> {
         res.hooks++;
         continue;
       }
-      if (h.id in LEGACY_SEED_SORT && before.sort === LEGACY_SEED_SORT[h.id] && h.sort !== before.sort) {
-        await upsertOrgHook({
-          id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
-          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,
-          enabled: before.enabled, target_members: before.target_members, sort: h.sort,
-        }, ctx);
-        res.hooks++;
-        continue;
+      //  sort 한 칸만 옮긴다(moveOrgHookSort) — upsertOrgHook 은 updated_by 를 'system' 으로 덮어, 사람이 끈 훅을 위 승격
+      //  블록이 다음 부팅에 다시 켠다. continue 하지 않는다: 소스도 바뀐 릴리스면 아래 일반 경로가 같은 부팅에 이어서 갱신한다.
+      if (Object.hasOwn(LEGACY_SEED_SORT, h.id) && before.sort === LEGACY_SEED_SORT[h.id] && h.sort !== before.sort) {
+        if (await moveOrgHookSort(h.id, before.sort, h.sort, ctx)) { res.hooks++; before.sort = h.sort; }
       }
       // 기존 행 — 소스가 실제로 달라졌을 때만 갱신.
       //  ⚠ 종전엔 `updated_by='system'`(손 안 댄 시드)까지 요구했다. #1836 에서 시드 훅이 **편집 불가**가 되면서
