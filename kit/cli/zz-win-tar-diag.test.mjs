@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 진단 전용(#4927, 병합 안 함) — 새 Windows 러너 이미지(OS 26100.33650)에서 tar.exe 가 키트 번들 압축(-czf)에서
 //  0xC0000005 로 죽는 원인을 가른다: ① 내용(cursor-adapter.mjs) 탓인가 OS tar 탓인가 ② 압축 해제(-xzf — 구성원 자동 업데이트
-//  경로)도 깨지는가. 결과를 한 줄 JSON 으로 찍고 늘 exit 0(잡을 깨지 않는다). Windows 가 아니면 건너뛴다.
+//  경로)도 깨지는가. 결과를 한 줄 JSON 으로 찍고 exit 1(러너가 출력을 보여 주게). Windows 가 아니면 건너뛴다.
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, rmSync, cpSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, relative, sep } from "node:path";
@@ -60,4 +60,5 @@ for (const [k, dir] of [["A", A], ["B", B], ["C", C]]) {
 }
 console.log("WINTAR-DIAG " + JSON.stringify(out));
 try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ }
-process.exit(0);
+// 공통 러너는 통과한 시험의 출력을 숨긴다 — 결과 줄이 로그에 남도록 진단은 일부러 실패로 끝낸다(병합 금지 PR).
+process.exit(1);
