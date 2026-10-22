@@ -629,7 +629,8 @@ if (process.platform === "win32") {
       await waitFor("종료 줄", () => fs.readFileSync(x.log, "utf8").includes(EXIT_MARK));
       const log = fs.readFileSync(x.log, "utf8");
       assert.ok(log.indexOf(CAPTURED_LINE) >= 0 && log.indexOf(CAPTURED_LINE) < log.indexOf(EXIT_MARK), "잡음 → 종료 순서");
-      assert.ok(!fs.existsSync(cxHome), "CODEX_HOME 임시 폴더를 지웠다");
+      // 러너는 종료 줄을 쓴 **다음에** 임시 폴더를 지운다 — 종료 줄을 보자마자 단언하면 그 틈에 걸린다.
+      await waitFor("CODEX_HOME 임시 폴더를 지웠다", () => !fs.existsSync(cxHome));
       await sleep(700);
       assert.ok(runnerAlive("codex") && exists(x.pid), "안 거둔 자격이 있으니 러너는 기다린다");
       await markHeadlessStored(null, "codex");

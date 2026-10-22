@@ -477,7 +477,8 @@ export async function listThreadKnowledge(rows: Record<string, unknown>[]): Prom
 }
 
 // 배치에 낸 자료를 '판정함'으로 기록 — 다음 배치에서 빠진다. 배치 접수 직후 호출(스케줄러).
-//  멱등(ON CONFLICT DO NOTHING) — 같은 자료를 두 번 기록해도 안전.
+//  skip 한 자료도 여기서 함께 기록된다 — 프롬프트 ⑤ 가 «다시 올라오지 않는다» 고 말하는 근거가 이 호출이다.
+//  같은 자료를 두 번 기록해도 안전하다(ON CONFLICT 는 판정 시각을 전진시킨다 — 아래 SQL 주석).
 export async function markDistillerSeen(distillerId: number, sourceIds: number[], taskId: number | string | null): Promise<number> {
   const ids = sourceIds.filter((n) => Number.isFinite(n));
   if (!distillerId || !ids.length) return 0;
@@ -1134,7 +1135,7 @@ export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o:
         + "머리줄에 «잠김(볼 수 있는 사람만 봄)» 이 붙은 자료는 그 자료를 볼 수 있는 사람만 보는 지식이 된다 — 그 내용을 잠기지 않은(더 넓게 보이는) 기존 지식에 합치지 말고 새 지식으로 따로 써라(합치려 하면 서버가 409 로 거절한다).",
         `④ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정한다. ${o.policySummary} `
         + "lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리된다(승인 전엔 검색·주입에 안 뜸). drop 이면 저장하지 않는다(skip).",
-        "⑤ 기준에 안 걸리면 skip 한다(저장도 연결도 하지 마 — 다음 배치에 다시 올라온다).",
+        "⑤ 기준에 안 걸리면 skip 한다(저장도 연결도 하지 마). skip 도 판정으로 기록돼 그 자료는 다음 배치에 다시 올라오지 않는다(원문이 고쳐지면 그때 다시 본다).",
       ].join("\n");
   }
 }
