@@ -27,6 +27,7 @@
 //  ⚠ 단 서버를 더 부르는 화면([AI 계정 연결]·[AI 주입 문구]·[고급 설정])은 **처음 펼 때** 그린다 — 열 때마다
 //   ai-accounts·sessions 까지 부르면 안 볼 수도 있는 화면 때문에 창이 늦게 뜨고, 그러면 '잠깐 들르는 창'이
 //   아니게 된다.
+import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { api, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setUiModeOverride, state, sv, toast, uiText } from '../core.js';
 import { ICONS } from '../lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { field, skeleton } from '../ui-primitives.js';
@@ -294,7 +295,8 @@ function onboardingCard(liv: any): HTMLElement {
   if (!rows.length) {
     return meSection({ title: '리브가 설정한 내용', cls: 'is-liv',
       desc: '아직 리브와 나눈 대화가 없습니다. 리브의 질문에 답하면 하는 일과 일하는 방식이 여기에 모이고, 내 AI 세션이 시작될 때 자동으로 주입됩니다.' },
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/liv', text: '리브와 이야기하기' }));
+    //  #4970 — 리브 진입점 숨김(lib/liv-entry.ts). 숨긴 동안엔 이 칸에 문이 없다.
+    ...(LIV_ENTRY_VISIBLE ? [el('a', { class: 'btn btn-ghost btn-sm', href: '#/liv', text: '리브와 이야기하기' })] : []));
   }
   //  리브가 세팅한 것은 어디서나 같은 표시(리브 표시 1안 — 민트 바탕 + 왼쪽 띠, 배지 없음. 원준 2026-09-28).
   return meSection({ title: '리브가 설정한 내용', cls: 'is-liv',

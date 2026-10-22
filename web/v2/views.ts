@@ -121,7 +121,8 @@ function welcomeResumeRow(): HTMLElement | null {
     el('span', { class: 'v2-home-resume-l', text: 'L' }),
     el('span', { class: 'v2-home-resume-t' },
       el('b', { text: '처음 설정을 이어서 하시겠어요?' }),
-      el('span', { text: '리브가 자료를 읽고 워크스페이스를 대신 세팅해 드립니다. 2~3분이면 됩니다.' })),
+      //  (#4970) 처음 설정은 인사 → 이름 → «외부 앱을 연결하시겠어요?» 셋이다 — 리브가 자료를 읽는 단계는 없어졌다.
+      el('span', { text: '이름을 정하고 외부 앱 연결 여부만 고르면 끝나요.' })),
     el('span', { class: 'v2-home-resume-go', text: '이어서 하기' }));
 }
 

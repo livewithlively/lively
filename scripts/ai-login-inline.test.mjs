@@ -9,26 +9,23 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const SRC = readFileSync(new URL("../web/lib/ai-login-inline.ts", import.meta.url), "utf8");
-const ONB = readFileSync(new URL("../web/v2/onboarding.ts", import.meta.url), "utf8");
 const MEAI = readFileSync(new URL("../web/me-ai.ts", import.meta.url), "utf8");
-//  #4051 — 처음 설정의 «사람 없이 도는 작업» 허용 칸은 따로 된 파일이다(장면과 상태를 한 벌로 나누려고). 같은 규율을 진다.
-const ONB_HL = readFileSync(new URL("../web/v2/onboarding-headless.ts", import.meta.url), "utf8");
+//  (#4970) 처음 설정은 더는 AI 로그인을 묻지 않는다(인사 → 이름 → 외부 앱 연결) — 그 장면과 «사람 없이 도는 작업» 칸(onboarding-headless)을
+//   걷었다. 이 통로를 쓰는 화면은 [내 설정 ▸ 내 AI 계정] 하나가 남았다. 한 벌 규율은 그대로 지킨다(새 화면이 붙으면 아래 목록에 더한다).
 /** 주석은 계약이 아니다 — «종전엔 이랬다» 를 설명한 줄에 걸리면 검열이지 검사가 아니다. */
 const code = (s) => s.split("\n").filter((l) => {
   const t = l.trim();
   return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
 }).join("\n");
 
-test("배선 · 세 소스를 실제로 읽었다(vacuous 방지)", () => {
+test("배선 · 소스를 실제로 읽었다(vacuous 방지)", () => {
   assert.ok(SRC.length > 2000);
-  assert.ok(ONB.length > 10000);
   assert.ok(MEAI.length > 2000);
-  assert.ok(ONB_HL.length > 2000);
 });
 
-test("★ 한 벌이다 — 두 화면이 같은 모듈을 쓰고, 자기 폴링 루프를 갖지 않는다", () => {
+test("★ 한 벌이다 — 화면이 같은 모듈을 쓰고, 자기 폴링 루프를 갖지 않는다", () => {
   //  이 계약이 이 파일의 존재 이유다. 화면이 스스로 start/state 를 두드리기 시작하면 그 순간 사본이 둘이 된다.
-  for (const [name, s] of [["onboarding", ONB], ["me-ai", MEAI], ["onboarding-headless", ONB_HL]]) {
+  for (const [name, s] of [["me-ai", MEAI]]) {
     assert.match(s, /from ['"][^'"]*ai-login-inline\.js['"]/, `${name} 이 공용 모듈을 가져온다`);
     const c = code(s);
     //  #4051 — 헤드리스 발급(headless-login/*)도 같은 규율이다: 화면은 모듈만 부른다.
@@ -70,8 +67,6 @@ test("★ 어느 하네스가 «주소·코드로 끝나나» 는 한 곳에서�
   const keys = [...m[1].matchAll(/(\w+)\s*:\s*true/g)].map((x) => x[1]).sort();
   assert.deepEqual(keys, ["claude", "codex", "grok"],
     "agy 는 파이프 stdin 거절 + 60초 하드 타임아웃이라 여기 없다(실측 2026-09-01) — 그쪽은 인라인 터미널로 간다");
-  //  화면이 사본을 두지 않는다 — 온보딩은 그 표를 **가져다** 쓴다.
-  assert.match(ONB, /const LOGIN_INLINE = AI_LOGIN_INLINE/, "온보딩이 목록 사본을 만들지 않는다");
 });
 
 test("★ 다시 시도는 **새로** 띄운다 — 안 그러면 죽은 코드를 다시 보여 준다", () => {

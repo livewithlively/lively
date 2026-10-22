@@ -927,6 +927,14 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
    목록은 세션 트리와 같은 '행' 문법(아이콘 · 이름+메타 · 오른쪽 ›), 상세는 v2-center 문서 문법.
    새 시각 언어를 만들지 않는다 — 셸 안에서 화면마다 다른 결이 생기면 그게 '정리 안 된 느낌'의 뿌리다. */
 .cn-top { display: flex; align-items: center; gap: 16px; margin: 18px 0 4px; flex-wrap: wrap; }
+/* #4970 [연결 도와줘] — 화면 맨 위 «연결을 시작하는 문». AI 가 없으면 아래(cn-start-out)에 «쓰는 AI 에서 하기» 세 걸음이 펼쳐진다
+   (그 걸음표·복사 줄은 처음 설정과 한 벌 — 41-onboarding.css 의 .ob-ins-* · .ob-cmd). */
+.cn-start { margin: 6px 0 22px; }
+.cn-start .v2-desc { margin-bottom: 10px; }
+/* 걸음표는 .ob-root 밖에 선다 — 그 지역 토큰(걸음 번호 글자·회색 단추)을 여기서도 같은 값으로 둔다(41-onboarding.css .ob-root 와 한 벌).
+   안 두면 걸음 번호가 잉크 원 위의 잉크 글자가 돼 안 보인다(실측). */
+.cn-start-out { --ob-on-ink: var(--bg); --ob-sub: var(--line-row); --ob-sub-hover: var(--line); --ob-on-fill: #fff; }
+.cn-start-out:not(:empty) { margin-top: 18px; max-width: 640px; }
 .cn-sum { display: flex; align-items: center; gap: 18px; flex: 1; min-width: 0; }
 .cn-sum-i { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12.5px; color: var(--muted); }
 .cn-sum-i b { font-size: 19px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }

@@ -20,6 +20,7 @@
 //   · [더보기] = 슬랙의 「더보기」 — 리브·자료·맥락 관리·사용 가이드 같은 앱과 [내 프로필·환경설정] 이 아래 판(.v2-msheet)으로.
 //   · 맨 윗줄은 [☰] [검색 전폭] [타임라인] 한 줄 — 뒤로·앞으로는 브라우저 몫이라 폰에선 뺀다(CSS, 50-mobile.css).
 //   JS 짝은 이 파일, CSS 짝은 public/styles/50-mobile.css(≤640 블록). 문턱은 PHONE_MQ 하나다.
+import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { el, personName, state, sv } from '../core.js';
 import { ICONS, icon } from './icons.js';
 import { appHref, appIcon, openLaunchpad, visibleApps } from './apps.js';
@@ -188,7 +189,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     const row = (ic: SVGElement, label: string, attrs: Record<string, unknown>, tag: 'a' | 'button' = 'a'): HTMLElement =>
       el(tag, { class: 'v2-msheet-row', ...(tag === 'button' ? { type: 'button' } : {}), ...attrs }, ic, el('span', { class: 'v2-msheet-t', text: label }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-msheet-go', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' }))) as HTMLElement;
     rows.push(row(tabIcon('bell'), '확인할 것 — 받은 알림', { href: '#/inbox' }));   // #4180 — 홈 밖에서도 가는 길 하나
-    rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));
+    if (LIV_ENTRY_VISIBLE) rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
     for (const a of visibleApps()) { if (skip.has(a.key)) continue; rows.push(row(appIcon(a.icon, 'v2-mtab-ic'), a.title, { href: appHref(a) })); }
     rows.push(row(tabIcon('link'), '외부 앱 연결', { href: '#/connect' }));
     rows.push(row(tabIcon('apps'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }, 'button'));
