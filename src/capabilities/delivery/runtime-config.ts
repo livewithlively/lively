@@ -52,6 +52,7 @@ function publicOidc(s: OidcSettings): OidcSettingsPublic {
     client_secret_set: !!s.client_secret_enc,
     allowed_domains: s.allowed_domains, label: s.label,
     trust_unverified_email: s.trust_unverified_email,
+    idp_logout: s.idp_logout,
     source,
     env_present: !!env,
     // ★ #1601 — 설정은 갖춰졌는데 Enterprise 모듈이 없어 **실제로는 안 켜지는** 상태. source 만으로는
@@ -553,6 +554,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (o.allowed_domains !== undefined) p.allowed_domains = normalizeDomains(o.allowed_domains);
         if (o.label !== undefined) p.label = o.label === null ? null : str(o.label, "oidc_config.label", 100);
         if (o.trust_unverified_email !== undefined) p.trust_unverified_email = o.trust_unverified_email === true;
+        if (o.idp_logout !== undefined) p.idp_logout = o.idp_logout === true;
         if (o.client_secret !== undefined) {
           const plain = o.client_secret === null ? "" : str(o.client_secret, "oidc_config.client_secret", 1000).trim();
           if (!plain) p.client_secret_enc = null;
@@ -765,6 +767,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         allowed_domains: z.union([z.array(z.string()), z.string()]).optional().describe("자동 가입 허용 이메일 도메인(배열 또는 쉼표 구분). 비우면 자동 가입 없음 = 미리 등록된 구성원만 로그인"),
         label: z.string().nullable().optional().describe("로그인 버튼 문구. 비우면 issuer 로 추정(구글이면 'Google 계정으로 로그인')"),
         trust_unverified_email: z.boolean().optional().describe("⚠ IdP 가 email_verified 를 아예 안 줄 때만 켠다 — 켜면 미검증 이메일로도 구성원에 매칭된다"),
+        idp_logout: z.boolean().optional().describe("로그아웃하면 IdP(회사 SSO) 세션도 끝낸다(RP-Initiated Logout, 기본 꺼짐) — IdP 가 로그아웃 주소를 줄 때만 동작하고(구글은 안 줌), IdP 허용 목록에 <게이트웨이>/ui/ 를 로그아웃 후 이동 주소로 등록해야 한다. 같은 IdP 를 쓰는 다른 앱에서도 나가게 된다"),
       }).optional().describe("회사 계정(OIDC) 웹 로그인 설정(#1520) — DB 우선, 비면 .env(OIDC_*) 시드. 리디렉션 URI 는 <게이트웨이>/api/ui/auth/oidc/callback"),
     }),
   // #4052 — 워크스페이스 실행 멤버(D1)를 **정해진 적 없을 때만** 채운다. 매니지드 CP 가 새 워크스페이스의 오너를

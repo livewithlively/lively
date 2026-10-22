@@ -12,22 +12,48 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30d
 const COOKIE = "lively_sess";
 
 // 발급 — 평문 세션ID 를 1회 반환(저장은 sha256). prefix 'lvs_' 는 식별용.
+//  authMethod·ssoIdTokenEnc 는 로그아웃이 IdP 세션까지 끝낼지 판단하는 재료다(SSO 로그아웃).
+//  ssoIdTokenEnc 는 호출자가 이미 암호화한 값만 받는다 — 이 레이어는 IdP 를 모르고 평문 토큰을 만지지 않는다.
 export async function createSession(
   memberId: string,
-  meta?: { ip?: string | null; userAgent?: string | null },
+  meta?: { ip?: string | null; userAgent?: string | null; authMethod?: string | null; ssoIdTokenEnc?: string | null },
 ): Promise<{ sessionId: string; expiresAt: Date }> {
   const sessionId = "lvs_" + crypto.randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
   await itemsPool.query(
-    `INSERT INTO web_session(session_hash, member_id, expires_at, ip, user_agent) VALUES($1,$2,$3,$4,$5)`,
-    [sha256(sessionId), memberId, expiresAt.toISOString(), meta?.ip ?? null, meta?.userAgent ?? null],
+    `INSERT INTO web_session(session_hash, member_id, expires_at, ip, user_agent, auth_method, sso_id_token_enc)
+     VALUES($1,$2,$3,$4,$5,$6,$7)`,
+    [sha256(sessionId), memberId, expiresAt.toISOString(), meta?.ip ?? null, meta?.userAgent ?? null,
+      meta?.authMethod ?? null, meta?.ssoIdTokenEnc ?? null],
   );
   return { sessionId, expiresAt };
 }
 
-export async function revokeSession(sessionId: string): Promise<void> {
-  await itemsPool.query(
-    `UPDATE web_session SET revoked_at=now() WHERE session_hash=$1 AND revoked_at IS NULL`, [sha256(sessionId)]);
+/** 회수한 세션이 어떻게 로그인했는가 — 로그아웃이 IdP 로그아웃 문을 거칠지 정한다. */
+export interface RevokedSession { authMethod: string | null; ssoIdTokenEnc: string | null }
+
+// 회수 — 이번 호출이 실제로 끊은 세션이면 그 로그인 방식을 돌려주고, 이미 끊겼거나 없으면 null.
+//  보관했던 id_token 은 회수와 같은 문장에서 지운다 — 끝난 세션에 IdP 토큰을 남길 이유가 없다.
+//  옛 값은 CTE 로 읽는다: UPDATE 의 RETURNING 은 지운 뒤의 값(NULL)을 돌려준다.
+export async function revokeSession(sessionId: string): Promise<RevokedSession | null> {
+  const r = await itemsPool.query(
+    `WITH old AS (
+       SELECT session_hash, auth_method, sso_id_token_enc FROM web_session
+        WHERE session_hash=$1 AND revoked_at IS NULL FOR UPDATE)
+     UPDATE web_session w SET revoked_at=now(), sso_id_token_enc=NULL
+       FROM old WHERE w.session_hash = old.session_hash
+     RETURNING old.auth_method, old.sso_id_token_enc`, [sha256(sessionId)]);
+  const row = r.rows[0] as { auth_method: string | null; sso_id_token_enc: string | null } | undefined;
+  return row ? { authMethod: row.auth_method, ssoIdTokenEnc: row.sso_id_token_enc } : null;
+}
+
+// 끝난 세션의 보관 토큰 정리(정비 스윕) — 로그아웃 없이 창을 닫은 세션은 회수되지 않고 만료만 된다.
+//  만료·회수된 행은 다시 쓰이지 않으므로 IdP 토큰을 지운다. 삭제·비활성 구성원의 세션도 30일 안에 만료돼 여기서 정리된다.
+export async function reapEndedSessionTokens(): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE web_session SET sso_id_token_enc=NULL
+      WHERE sso_id_token_enc IS NOT NULL AND (revoked_at IS NOT NULL OR expires_at < now())`);
+  return r.rowCount ?? 0;
 }
 
 // (#1631) 사람만 — 사람이 아닌 구성원(운영 계정 등)의 세션은 종류가 바뀐 시점과 무관하게 통과하지 못한다(nonhuman-login.test).

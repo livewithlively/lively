@@ -22,7 +22,7 @@
 import { cacheClear } from './lib/idb-cache.js';   // #4865 — 로그아웃 때 화면 보관함(지난 판)도 비운다
 import { TOKEN_KEY, apiUrl } from './lib/net.js';
 import { state } from './lib/state.js';
-import { logoutRedirectTarget } from './lib/logout-target.js';   // #2536 — 매니지드 로그아웃은 CP 세션까지 끝내야 한다
+import { logoutRedirectTarget, ssoLogoutTarget } from './lib/logout-target.js';   // #2536 — 매니지드 로그아웃은 CP 세션까지 끝내야 한다
 
 // ── 매니지드 배포의 CP 주소(auth-config.login_redirect_url) — 없으면(셀프호스팅) null, 같은 호스트면 null(자기에게 튕기는 루프 방지).
 //  1회만 조회·캐시. 게이트(자동 SSO 재입장)와 로그아웃(CP 세션까지 끝내기, #2536)이 **같은 값**을 본다 — 두 자리가 따로 물으면 갈린다.
@@ -75,11 +75,19 @@ async function logout(message?: any) {
   //  여기서 localStorage 만 지우면 다음 창 열기에서 도로 로그인돼 '로그아웃이 안 된다' 로 보인다. 브라우저에선 없는 다리라 그대로 지나간다.
   const desk = (window as any).livelyDesktop;
   if (desk && typeof desk.logout === 'function') { try { await desk.logout(); } catch (_) { /* 앱 쪽 실패는 아래 웹 로그아웃을 막지 않는다 */ } }
-  try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
+  let ssoDoor: string | null = null;
+  try {
+    const r = await fetch(apiUrl('/api/ui/logout'), { method: 'POST' });
+    ssoDoor = ssoLogoutTarget(await r.json().catch(() => null));
+  } catch (_) { /* noop */ }
   localStorage.removeItem(TOKEN_KEY);
   await cacheClear();   // #4865 — 화면이 먼저 그리던 «지난 판»(프로젝트 목록 · 세션)도 같이 비운다
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
+  // SSO 로 로그인한 세션이면 서버가 IdP 로그아웃 문을 준다 — 거기로 최상위 이동해야 IdP 세션까지 끝난다.
+  //  데스크톱 앱 창은 건너뛴다: 앱은 다른 출처로 가는 이동을 시스템 브라우저로 넘겨서(desktop/main web-shell openTargetFor),
+  //  앱 창의 IdP 세션은 그대로 둔 채 브라우저에 로그인해 있던 IdP 세션을 끊게 된다.
+  if (ssoDoor && !desk) { location.replace(ssoDoor); return; }
   // 매니지드(#2536): 여기서 게이트를 띄우면 게이트가 CP 로 튕기고, CP 는 살아 있는 자기 세션으로 곧장 재입장시킨다 —
   //  «로그인 창 1~2초 뒤 자동 재로그인». 로그아웃은 CP 의 로그아웃 문으로 **최상위 이동**해 CP 세션까지 끝낸다
   //  (돌아올 자리 to 동봉 — 재로그인하면 같은 자리). 셀프호스팅·CP 없음·조회 실패면 종전 게이트.

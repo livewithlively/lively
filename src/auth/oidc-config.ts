@@ -23,11 +23,15 @@ export interface OidcSettings {
   allowed_domains: string[];     // 자동 가입 허용 도메인(소문자, @ 제거)
   label: string | null;          // 로그인 버튼 문구. null 이면 issuer 로 추정한다.
   trust_unverified_email: boolean;
+  // 로그아웃이 IdP(회사 SSO) 세션까지 끝낸다 — RP-Initiated Logout(ee/auth/oidc-logout.ts). 기본 꺼짐:
+  //  켜면 같은 IdP 세션을 쓰는 다른 회사 앱에서도 나가게 되고, IdP 클라이언트 허용 목록에 <공개 주소>/ui/ 를
+  //  «로그아웃 후 이동 주소»로 등록해야 한다(안 하면 IdP 가 오류 화면을 낸다). 그래서 운영자가 정해 켠다.
+  idp_logout: boolean;
 }
 
 export const EMPTY_OIDC_SETTINGS: OidcSettings = {
   enabled: false, issuer: "", client_id: "", client_secret_enc: null,
-  allowed_domains: [], label: null, trust_unverified_email: false,
+  allowed_domains: [], label: null, trust_unverified_email: false, idp_logout: false,
 };
 
 export const normalizeDomains = (v: unknown): string[] => {
@@ -51,6 +55,7 @@ export interface OidcSettingsPatch {
   allowed_domains?: string[] | string;
   label?: string | null;
   trust_unverified_email?: boolean;
+  idp_logout?: boolean;
 }
 
 // 저장 형태 정규화 — 부분 패치를 기존 값 위에 얹는다(미전송 필드 보존).
@@ -64,6 +69,7 @@ export function mergeOidcSettings(before: OidcSettings, patch: OidcSettingsPatch
     allowed_domains: patch.allowed_domains === undefined ? before.allowed_domains : normalizeDomains(patch.allowed_domains),
     label: patch.label === undefined ? before.label : ((patch.label ?? "").trim() || null),
     trust_unverified_email: patch.trust_unverified_email ?? before.trust_unverified_email,
+    idp_logout: patch.idp_logout ?? before.idp_logout,
   };
 }
 
@@ -79,6 +85,7 @@ export function readOidcSettings(raw: unknown): OidcSettings {
     allowed_domains: normalizeDomains(o.allowed_domains),
     label: typeof o.label === "string" && o.label.trim() ? o.label.trim() : null,
     trust_unverified_email: o.trust_unverified_email === true,
+    idp_logout: o.idp_logout === true,
   };
 }
 
@@ -93,6 +100,7 @@ export interface OidcConfig {
   allowedDomains: string[];   // 소문자. 비었으면 자동 가입 없음(기존 멤버만).
   label: string;
   trustUnverifiedEmail: boolean;
+  idpLogout: boolean;         // 로그아웃이 IdP 세션까지 끝내나(OidcSettings.idp_logout · OIDC_IDP_LOGOUT=1). 기본 false.
   scopes: string;
 }
 
@@ -116,6 +124,7 @@ export function oidcEnvSeed(): OidcConfig | null {
     issuer, clientId, clientSecret, allowedDomains,
     label: (process.env.OIDC_LABEL ?? "").trim() || defaultOidcLabel(issuer),
     trustUnverifiedEmail: process.env.OIDC_TRUST_UNVERIFIED_EMAIL === "1",
+    idpLogout: process.env.OIDC_IDP_LOGOUT === "1",
     scopes: oidcScopes(),
   };
 }
@@ -140,6 +149,7 @@ export interface OidcSettingsPublic {
   allowed_domains: string[];
   label: string | null;
   trust_unverified_email: boolean;
+  idp_logout: boolean;
   source: "db" | "env" | "none"; // 지금 실제로 무엇이 쓰이는지 — '분명히 저장했는데 왜 안 켜지지'를 없앤다
   env_present: boolean;          // 배포 env 로도 설정돼 있는가(DB 를 끄면 그리로 되돌아간다)
   // ★ #1601 — 설정은 다 맞는데 Enterprise 모듈(src/ee)이 없어서 **실제로는 안 켜지는** 상태.
