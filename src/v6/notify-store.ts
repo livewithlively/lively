@@ -17,7 +17,7 @@ import { itemsPool } from "../db/client.js";
 import { q } from "../db/client.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 
-export type NotifyKind = "mention" | "comment" | "invite";
+export type NotifyKind = "mention" | "comment" | "invite" | "app";   // app — 워크스페이스 앱이 보낸 알림(#4769, 팀 채널 등)
 
 export interface NotifyItem {
   /** 안정 키 — 같은 사건은 언제 조회해도 같은 값이다(앱이 이미 띄운 것을 다시 안 띄우는 근거). */
@@ -128,6 +128,24 @@ export async function listMyNotifications(
       body: snippet(n.body), link: typeof n.href === "string" && n.href.startsWith("#/") ? n.href : null, title: String(n.title || ""),
     });
   }
+  // ③ 앱 알림(#4769) — 워크스페이스 앱(팀 채널 등)이 app_notify 로 남긴 것. 종전엔 「확인할 것」 에만 쌓이고 이 피드에 없어서
+  //  데스크톱 배너가 한 번도 뜨지 않았다(원준 2026-10-21 «앱으로 라이블리 실행했을 때 알림 제대로 가는 거야?»). 저장할 때 이미
+  //  권한(선언 ∩ grant) · 사람의 앱별 끔을 지났으므로 여기선 받는 사람이 나인 행만 그대로 옮긴다. 내가 보낸 것(actor = 나)은 뺀다.
+  const appRows = await q(itemsPool, `
+    SELECT n.id, n.app_id, n.title, n.body, n.href, n.created_at, n.actor, m.display_name
+      FROM org_app_notification n
+      LEFT JOIN org_member m ON m.id = n.actor
+     WHERE n.member_id = $1 AND n.kind = 'app' AND n.created_at > $2::timestamptz
+       AND n.actor IS DISTINCT FROM $1
+     ORDER BY n.created_at DESC
+     LIMIT $3`, [me, since, limit]);
+  for (const n of appRows) {
+    items.push({
+      key: "app:" + n.id, kind: "app", ts: new Date(n.created_at).toISOString(),
+      actor: n.actor ?? null, actor_name: n.display_name ?? null, project_id: null, project_name: null,
+      body: snippet(n.body), link: typeof n.href === "string" && n.href.startsWith("#/") ? n.href : null, title: String(n.title || ""),
+    });
+  }
   items.sort((x, y) => Date.parse(y.ts) - Date.parse(x.ts));
   return items.slice(0, limit);
 }
@@ -148,6 +166,7 @@ export function notifyText(it: NotifyItem): { title: string; body: string } {
   const subj = withSubjectParticle((it.actor_name || it.actor || "누군가").trim());
   const where = it.project_name ? ` · ${it.project_name}` : "";
   if (it.kind === "invite") return { title: it.title || `${subj} 세션에 나를 초대했어요`, body: it.body || "눌러서 이 세션을 열어요." };
+  if (it.kind === "app") return { title: it.title || `${subj} 나를 불렀어요`, body: it.body || "" };   // 앱이 지은 제목 그대로(「#채널 · 보낸이」)
   if (it.kind === "mention") return { title: `${subj} 나를 언급했어요${where}`, body: it.body || "(내용 없음)" };
   return { title: `${subj} 댓글을 남겼어요${where}`, body: it.body || "(내용 없음)" };
 }

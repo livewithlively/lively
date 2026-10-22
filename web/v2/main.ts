@@ -76,7 +76,7 @@ import { mountCtxMenus } from './ctx-registry.js';   // #3784 우클릭 메뉴 �
 import { mountCtxShell } from './ctx-shell.js';     // #3784 셸이 아는 것(세션·프로젝트·앱·알림)의 메뉴   // 통합검색(⌘K) — 지식·프로젝트·자료·세션·세션이력 한 칸
 import { homeRowExcluded, instBrowserHost, rowStands, type InstFacts } from '../lib/row-stands.js';
 import { announceDeskTitlebar, mountTitlebar, type Titlebar } from './titlebar.js';      // 데스크톱 창 맨 윗줄(최소화·닫기와 같은 줄)을 탭 줄이 쓴다
-import { dismissAppUi, mountAppUiFrame, openAppUi } from './app-ui.js';
+import { dismissAppUi, mountAppUiFrame, openAppUi, pushAppState } from './app-ui.js';
 import { ensureAppGrant, listSessionApps } from './app-session.js';
 import { appGrantReturn } from '../lib/app-address.js';   // #4482 동의 경유에서 돌아갈 앱 주소(열린 리다이렉트 방지)
 import { cachedAppInstance, closeAppInstance, createAppInstance, openInstalledApp, dismissedRefsOf, dismissSessions, ensureSessionAppInstance, ensureSingletonAppInstance, getAppInstance, listAppInstances, updateAppInstance, type AppInstanceRecord } from './app-instance.js';
@@ -1654,6 +1654,8 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       const state: Record<string, string> = {};
       params.forEach((v, k) => { state[k] = v; });
       await openInstalledApp(a, null, { state: Object.keys(state).length ? state : undefined, go });
+      //  이미 떠 있던 앱 화면에도 새 값을 민다(다시 띄우지 않은 프레임은 인사 때 받은 옛 state 만 안다 — 알림을 눌렀는데 그 글로 안 가던 것).
+      if (Object.keys(state).length) pushAppState(a.id, state);
     } else if (page === 'i' && segs[1]) {
       const instance = await getAppInstance(decodeURIComponent(segs[1]));
       if (seq !== tab.seq) return;

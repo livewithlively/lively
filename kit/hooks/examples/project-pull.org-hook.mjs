@@ -2,7 +2,7 @@
 // org_hook 소스 (event=SessionStart, harness=all) — 관리탭 ▸ 커스텀 훅으로 등록.
 //  ⚠ 키트 번들 파일 아님. run-custom.mjs 가 매 세션 게이트웨이에서 fetch 해 임시 .mjs(ESM)로 실행한다.
 //  하는 일: 프로젝트 세션이면 공유폴더를 게이트웨이에서 pull(단방향). 마커 없으면 no-op(비프로젝트 세션).
-//  불변식: 절대 세션을 막지 않는다(무조건 exit 0). stdout 미출력(부수효과만 — 컨텍스트 주입 안 함).
+//  불변식: 절대 세션을 막지 않는다(무조건 exit 0). stdout 은 «뒤에서 받는 중» 안내 한 단락뿐(아래 「세션 시작을 막지 않는다」).
 //  ⚠ 이 훅은 **찾은 폴더에 서버 파일을 덮어쓴다** — 그래서 '어느 폴더에 써도 되는가' 게이트가 생명이다(아래 syncMode).
 // ───────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
@@ -10,6 +10,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -377,6 +379,77 @@ function healBaselines(projDir, files, keyOf) {
   if (n) writeLedger(projDir, next, tombs);
 }
 
+// ── 세션 시작을 막지 않는다(#4959) ──────────────────────────────────────────────
+//  🔴 종전엔 받을 것을 **전부 이 훅 안에서 한 건씩** 받았다. run-custom 이 이 훅을 끝날 때까지 기다리고, 하네스는
+//   SessionStart 훅이 다 끝나야 첫 프롬프트를 처리한다 → 처음 여는 프로젝트에서 세션이 «running SessionStart hooks»
+//   로 1분 넘게 멈췄다. #4959 실측(맥미니, 프로젝트 4606): 공유 파일 248개·38MB를 받느라 84초(제한 120초의 70%)를
+//   꽉 채우고도 못 끝냈다. 대역폭 탓이 아니라(3.9MB 한 건 0.07초) **파일당 고정 지연 약 0.35초 × 순차**였다.
+//  그래서: 이 판은 짧은 창(FG_START_MS 안에 시작 · FG_HARD_MS 에 끊음) 동안 작은 것부터 **동시에** 받고, 남은 것은
+//   자기 사본을 분리된 프로세스로 띄워 **뒤에서** 받는다(BG_HARD_MS). 하네스가 기다리지 않게 stdio 는 전부 닫는다 —
+//   자식이 파이프를 물면 하네스가 그 EOF 를 기다려 똑같이 멈춘다(session-preload 자가 업데이트와 같은 이유).
+//  뒤에서 받는 동안 같은 폴더의 다른 받기(턴 판·다른 세션의 시작 판)는 잠금(.lively/pull-bg.json)을 보고 물러난다 —
+//   원장은 받기마다 통째로 다시 쓰므로 둘이 겹치면 한쪽 기준선이 덮인다(healBaselines 주석). 올리기(push)는 겹쳐도
+//   안전하다: 받은 파일은 서버 판 시각이 찍혀 «서버와 같음»으로 건너뛰고, 받는 중인 임시 파일은 숨김이라 안 걷는다.
+//  LIVELY_PULL_BG_OFF=1 이면 종전 그대로(이 안에서 순차로 다 받는다) — 뒤에서 도는 프로세스를 둘 수 없는 자리·시험용.
+const FG_START_MS = 3000;            // 세션 시작 판이 새 받기를 시작하는 상한
+const FG_HARD_MS = 6000;             // 세션 시작 판이 진행 중인 받기까지 끊는 시각 — 남은 것은 뒤에서 다시 받는다
+const BG_HARD_MS = 15 * 60_000;      // 뒤에서 받는 판의 마감 — 넘기면 남은 것은 다음 세션·턴이
+const PULL_CONCURRENCY = 6;          // 동시 받기 수(#4959 실측: 40건 순차 13.9초 → 8개 동시 5.2초 — 서버가 일부 직렬화한다)
+const BG_LOCK = "pull-bg.json";
+const BG_SELF_TAG = "lively-pull-bg-";
+
+const bgLockPath = (projDir) => path.join(projDir, ".lively", BG_LOCK);
+/** 이 폴더를 뒤에서 받는 판이 지금 살아 있나 — 잠금의 pid 가 살아 있고 마감(+1분) 안이다. 못 읽으면 없다고 본다. */
+function bgPullAlive(projDir) {
+  try {
+    const o = JSON.parse(fs.readFileSync(bgLockPath(projDir), "utf8"));
+    if (!(Date.now() - Number(o.at || 0) < BG_HARD_MS + 60_000)) return false;   // 마감을 넘긴 잠금 = 죽은 판이 남긴 것
+    try { process.kill(Number(o.pid), 0); return true; } catch (e) { return !!(e && e.code === "EPERM"); }
+  } catch { return false; }
+}
+/** 뒤에서 받는 판의 잠금을 잡는다 — 살아 있는 다른 판이 있으면 false(그 판이 받는다). 끝나면 스스로 푼다. */
+function takeBgLock(projDir) {
+  const p = bgLockPath(projDir), body = JSON.stringify({ pid: process.pid, at: Date.now() });
+  try { fs.writeFileSync(p, body, { flag: "wx" }); }
+  catch (e) {
+    if (!e || e.code !== "EEXIST" || bgPullAlive(projDir)) return false;
+    try { fs.writeFileSync(p, body); } catch { return false; }        // 죽은 판의 잠금 — 넘겨받는다
+  }
+  process.on("exit", () => {
+    try { if (JSON.parse(fs.readFileSync(p, "utf8")).pid === process.pid) fs.unlinkSync(p); } catch { /* 이미 없음 */ }
+  });
+  return true;
+}
+/** 이 훅의 사본을 분리된 프로세스로 띄운다. run-custom 은 이 파일을 우리가 끝나는 즉시 지우므로 사본을 넘긴다
+ *  (사본은 자식이 뜨자마자 지운다 — dropSelfCopy). 대상은 이미 해석된 값을 env 로 넘긴다(자식엔 stdin 이 없다). */
+function spawnBackground(target) {
+  let copy = null;
+  try {
+    copy = path.join(os.tmpdir(), `${BG_SELF_TAG}${Date.now()}-${crypto.randomBytes(4).toString("hex")}.mjs`);
+    fs.writeFileSync(copy, fs.readFileSync(fileURLToPath(import.meta.url)), { mode: 0o600 });
+    const child = spawn(process.execPath, [copy], {
+      detached: true, stdio: "ignore", windowsHide: true,
+      env: { ...process.env, LIVELY_PULL_BG: "1", LIVELY_PULL_BG_TARGET: JSON.stringify(target), LIVELY_PULL_BG_SELF: copy },
+    });
+    child.on("error", () => drop(copy));
+    child.unref();
+    return true;
+  } catch { if (copy) drop(copy); return false; }
+}
+function dropSelfCopy() {
+  const p = String(process.env.LIVELY_PULL_BG_SELF || "");
+  if (p && path.dirname(p) === os.tmpdir() && path.basename(p).startsWith(BG_SELF_TAG)) drop(p);   // 남의 파일은 안 지운다
+}
+/** AI 에게 «아직 안 온 파일이 있다»고 알린다 — 모르면 빈 자리를 보고 없는 파일이라 단정하거나 직접 받으려 든다. */
+function bgNotice(projDir, left) {
+  const lines = [
+    "## ⏳ 프로젝트 자료를 뒤에서 받는 중",
+    `세션은 먼저 열렸고, 공유 자료${left ? ` 약 ${left}개` : ""}를 \`${projDir}\` 로 **백그라운드에서** 받고 있습니다(보통 수십 초~몇 분).`,
+    "필요한 파일이 아직 없으면 잠시 뒤 다시 확인하세요. 받는 중 표시는 `.lively/pull-bg.json` 이고, 다 받으면 사라집니다.",
+  ];
+  try { fs.writeSync(1, lines.join("\n") + "\n"); } catch { /* 안내 실패는 무해 */ }
+}
+
 (async () => {
   // ── 저장 지역성 게이트 (#2258 Phase 4) ──────────────────────────────────────
   //  ★ 세션 파일이 **게이트웨이와 같은 저장소**면 동기화할 것이 없다. 매니지드에서 세션과
@@ -387,11 +460,21 @@ function healBaselines(projDir, files, keyOf) {
   //   값을 넣는 쪽은 세션을 만드는 자리다(control/src/sessionbroker.ts storageLocality).
   if (String(process.env.LVLY_STORAGE_LOCALITY || "").trim().toLowerCase() === "colocated") return;
   const startedAt = Date.now();
+  // 뒤에서 받는 판인가(위 「세션 시작을 막지 않는다」) — 그 판은 하네스·run-custom 과 무관한 분리 프로세스다.
+  const BG = process.env.LIVELY_PULL_BG === "1";
+  if (BG) dropSelfCopy();
+  const bgAllowed = !BG && process.env.LIVELY_PULL_BG_OFF !== "1";
   // 시간(#4609) — run-custom 이 이 훅을 제한 시간에 SIGKILL 한다(LIVELY_HOOK_TIMEOUT_MS = 그 훅의 timeout_sec).
   //  죽으면 원장도 못 남기므로 70% 지점에서 진행 중인 받기를 끊고 그때까지의 진척을 적는다(project-push 와 같은 자).
-  //  모르면 시드 등록값(이 판 120초)으로 본다.
+  //  모르면 시드 등록값(이 판 120초)으로 본다. 뒤로 넘길 수 있으면 그보다 훨씬 짧은 창만 쓴다(#4959).
   const HOOK_TIMEOUT_MS = Number(process.env.LIVELY_HOOK_TIMEOUT_MS) > 0 ? Number(process.env.LIVELY_HOOK_TIMEOUT_MS) : 120_000;
-  const hardDeadline = startedAt + Math.floor(HOOK_TIMEOUT_MS * 0.7);
+  const hardDeadline = BG ? startedAt + BG_HARD_MS
+    : startedAt + Math.min(Math.floor(HOOK_TIMEOUT_MS * 0.7), bgAllowed ? FG_HARD_MS : Infinity);
+  const startDeadline = bgAllowed ? Math.min(startedAt + FG_START_MS, hardDeadline) : hardDeadline;
+  // 짧은 창에서 끊긴 큰 파일은 «느린 파일»이 아니다 — 보류로 적으면 뒤에서 받는 판이 30분 동안 그 파일을 안 받는다.
+  const markSlow = !bgAllowed;
+  // 종전 판(뒤로 못 넘김)은 순차 그대로 — 그 판의 시간 판정(fair)과 시험이 순차를 전제한다.
+  const concurrency = bgAllowed || BG ? PULL_CONCURRENCY : 1;
   // 1) 훅 입력(stdin JSON) — cwd 는 폴백 해석에만 쓴다(대상은 서버가 지목한다).
   const stdinData = await new Promise((resolve) => {
     let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };
@@ -416,17 +499,23 @@ function healBaselines(projDir, files, keyOf) {
   };
 
   // 3) 🔴 대상 해석 — 서버가 권위, 실패 시 마커 캐시. 둘 다 못 답하면 여기서 끝(아무 폴더도 안 건드린다).
-  const target = (await askServer(jfetch, executionSessionId(input), process.env.LIVELY_NODE_ID)) ?? fromCache(cwd);
+  //  뒤에서 받는 판은 세션 시작 판이 이미 해석한 대상을 그대로 받는다(다시 물으면 세션 정보가 없어 엉뚱한 답이 날 수 있다).
+  let target;
+  if (BG) { try { target = JSON.parse(process.env.LIVELY_PULL_BG_TARGET || "null"); } catch { target = null; } }
+  else target = (await askServer(jfetch, executionSessionId(input), process.env.LIVELY_NODE_ID)) ?? fromCache(cwd);
   if (!target || !target.projectId || !target.projDir) return;
   // 서버가 canonical 슬롯을 지목했는데 cwd 가 이미 이 프로젝트의 구 work.mjs 폴더 안이면 그쪽이 이긴다.
-  if (target.slot) { const legacy = legacyDirForCwd(cwd, target.projectId); if (legacy) { target.projDir = legacy; target.slot = false; } }
+  if (!BG && target.slot) { const legacy = legacyDirForCwd(cwd, target.projectId); if (legacy) { target.projDir = legacy; target.slot = false; } }
   const { projectId, projDir } = target;
   const mode = target.mode;
   if (!SYNC_MODES.includes(mode) || mode === "none") return;
   // 슬롯은 없으면 만든다(라이블리 소유). 명시 바인딩인데 폴더가 없으면 사람이 지운 것 → 건드리지 않는다.
-  if (!fs.existsSync(projDir)) { if (!target.slot) return; try { fs.mkdirSync(projDir, { recursive: true }); } catch { return; } }
+  if (!fs.existsSync(projDir)) { if (BG || !target.slot) return; try { fs.mkdirSync(projDir, { recursive: true }); } catch { return; } }
   // 캐시 갱신 — 다음 턴에 서버가 안 잡혀도 같은 판정이 나오게(서버가 저술한 값만 적는다).
   writeMarker(projDir, { project_id: projectId, sync: mode });
+  // 뒤에서 받는 판은 잠금을 잡고, 이미 다른 판이 받고 있으면 그 판에 맡긴다(#4959).
+  if (BG) { if (!takeBgLock(projDir)) return; }
+  else if (bgPullAlive(projDir)) { if (bgAllowed) bgNotice(projDir, 0); return; }
   const lastPull = Number((readMarker(projDir) || {}).last_pull) || 0;
   // 본문 받기 전용(#4609) — jfetch 의 4초는 헤더까지만 지키고 본문은 안 지킨다. 본문 마감은 fetchToTemp 가 신호로 건다.
   //  `download=1` 은 빼면 안 된다 — 위 「받기」 절.
@@ -532,30 +621,42 @@ function healBaselines(projDir, files, keyOf) {
     queue.push({ f, dest, key, seen: local, compare: false });
   }
   queue.sort((a, b) => (a.f.size || 0) - (b.f.size || 0));
-  for (const q of queue) {
-    if (Date.now() >= hardDeadline) { completed = false; break; }   // 남은 것은 다음 세션에
-    if (skipNow(skip[q.key], q.f, q.seen)) { completed = false; continue; }   // 보류 중 — 같은 헛수고를 되풀이하지 않는다
+  let deferred = 0;         // 시간 안에 못 받은 것(시작 못 함·마감에 끊김) — 세션 시작 판이면 뒤로 넘길 몫(#4959)
+  const pullOne = async (q) => {
+    if (skipNow(skip[q.key], q.f, q.seen)) { completed = false; return; }   // 보류 중 — 같은 헛수고를 되풀이하지 않는다
     // 시간을 넉넉히 받고 시작했나 — 앞의 파일들이 시간을 써서 늦게 시작한 받기가 끊긴 것까지 «느린 파일»로 적지 않게.
     const fair = hardDeadline - Date.now() >= (hardDeadline - startedAt) / 2;
     const got = await fetchToTemp(getFile, q.f, q.dest, hardDeadline);
     if (!got || got.err) {                                           // 개별 실패 → last_pull 미갱신 → 다음 실행 재시도
       completed = false;
-      if (got && got.err === "slow" && fair) {
+      if (Date.now() >= hardDeadline - 50) deferred++;               // 마감에 끊겼다 — 뒤에서 다시 받는다
+      if (got && got.err === "slow" && fair && markSlow) {
         const prev = skip[q.key];
         const n = prev && prev.why === "slow" && sameVer(prev.s, q.f.size, q.f.mtime) ? (Number(prev.n) || 1) + 1 : 1;
         skipSet[q.key] = { why: "slow", s: [q.f.size, q.f.mtime], at: Date.now(), n };
       }
-      continue;
+      return;
     }
     if (q.compare && !(await sameBytes(got.tmp, q.dest))) {          // 내용이 다르다 → 종전대로 손대지 않는다(독립 판본·로컬 편집 보호)
       drop(got.tmp); completed = false;
       skipSet[q.key] = { why: "differs", s: [q.f.size, q.f.mtime], l: [q.seen.size, Math.floor(q.seen.mtimeMs)], at: Date.now() };
-      continue;
+      return;
     }
-    if (!placeTemp(got, q.dest, q.seen)) { completed = false; continue; }   // 받는 사이 로컬이 바뀌었다 → 덮지 않는다
+    if (!placeTemp(got, q.dest, q.seen)) { completed = false; return; }   // 받는 사이 로컬이 바뀌었다 → 덮지 않는다
     if (skip[q.key]) skipDel.add(q.key);
     if (ledger) held[q.key] = { mtime: got.mtime, size: got.size };
-  }
+  };
+  // 작은 것부터 차례로 집어 가는 일꾼 concurrency 개(#4959). 판정·기록은 한 스레드라 held·skipSet 을 그대로 나눠 쓴다.
+  let nextIdx = 0;
+  const worker = async () => {
+    while (nextIdx < queue.length) {
+      if (Date.now() >= startDeadline) {                             // 남은 것은 뒤에서(세션 시작 판) 또는 다음 세션에
+        completed = false; deferred += queue.length - nextIdx; nextIdx = queue.length; break;
+      }
+      await pullOne(queue[nextIdx++]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
   writeSkip(projDir, skipSet, skipDel, manifest.truncated ? null : new Set(files.map((f) => nk(f.path))));
 
   // 6) 원장 갱신(both 전용) — 완주했으면 통째 교체(서버에서 사라진 항목은 자연히 빠진다), 끊겼으면 도달분만 병합.
@@ -583,4 +684,7 @@ function healBaselines(projDir, files, keyOf) {
   // 7) 마커 last_pull 갱신 — **전량 수렴했을 때만**(UserPromptSubmit 판과 동일 규칙). 실패분이 있는데 올리면
   //    그 파일은 서버가 또 바뀔 때까지 영구 누락되고, 더 나쁘게는 push 의 충돌검사 기준선이 거짓이 된다.
   if (completed) writeMarker(projDir, { project_id: projectId, sync: mode, last_pull: manifest.newest || lastPull });
+
+  // 8) 못 받은 것은 뒤로 넘긴다(#4959) — 원장·마커를 다 적은 **뒤에** 띄워야 뒤 판이 이 판의 진척 위에서 시작한다.
+  if (bgAllowed && deferred > 0 && spawnBackground({ projectId, projDir, mode })) bgNotice(projDir, deferred);
 })().then(() => process.exit(0)).catch(() => process.exit(0));

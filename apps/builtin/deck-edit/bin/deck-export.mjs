@@ -9,7 +9,8 @@
 //   쪽 크기는 장표 폭 + 의견 칸 폭 × 장표 높이(1280×720 장표면 1700×720).
 //
 //  쓰는 법(세션 안):
-//    node bin/deck-export.mjs --doc <문서이름> [--ver <판>] [--bundle <묶음>] [--draft] [--only-commented] [--slides p3,p4] [--by <이름>] [--base] [--plain] <받을 경로.pdf|.html>
+//    node bin/deck-export.mjs --doc <문서이름> [--ver <판>] [--bundle <묶음>] [--draft] [--only-commented] [--slides p3,p4] [--by <이름>] [--base] [--plain] [--push] <받을 경로.pdf|.html>
+//  --push 는 구운 PDF 를 그 판에 붙인다(deck-push --pdf 와 같다 · --plain 과 함께 — 앱의 ↓ 가 HTML + PDF 를 바로 받게 된다).
 //  --slides 는 그 장(id)만(앱의 내려받기 창 「이 장 · 바뀐 장만 · 의견 있는 장만」). --plain 과 같이 쓰면 그 장만 의견 없이.
 //  --plain 은 의견 없이 장표만(그 판을 그대로 PDF 로 — 장마다 한 쪽, 쪽 크기 = 장표 크기).
 //  받을 경로가 .pdf 면 같은 자리에 .html 도 함께 남기고 크롬(헤드리스)으로 PDF 를 굽는다(크롬 자리: --chrome <경로> 또는 CHROME_PATH).
@@ -21,6 +22,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { assembleHtml, APP_ID } from "./deck-pull.mjs";
+import { attachPdf } from "./deck-push.mjs";
 
 /** 내보낼 의견만 고른다 — 글이 있는 것(의견이나 고친 글). 질문(ask) · 빈 행은 뺀다. */
 export function pickComments(comments, { ver, bundle = null, draftOnly = false } = {}) {
@@ -214,7 +216,7 @@ function parseArgs(argv) {
   const o = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a.startsWith("--")) { const k = a.slice(2); const v = argv[i + 1] && !argv[i + 1].startsWith("--") && !["draft", "only-commented", "base", "plain"].includes(k) ? argv[++i] : "1"; o[k] = v; }
+    if (a.startsWith("--")) { const k = a.slice(2); const v = argv[i + 1] && !argv[i + 1].startsWith("--") && !["draft", "only-commented", "base", "plain", "push"].includes(k) ? argv[++i] : "1"; o[k] = v; }
     else o._.push(a);
   }
   return o;
@@ -244,7 +246,7 @@ async function main() {
   const docs = await q("docs", { doc: a.doc }, 1);
   if (!docs.length) { console.error(`문서가 없습니다: ${a.doc} — 앱의 docs 표에서 doc 칸을 확인하세요(store_query docs).`); process.exit(1); }
   const ver = Number(a.ver) || Number(docs[0].latest_ver) || 1;
-  const rows = await q("versions", { doc: a.doc, ver }, 1000);
+  const rows = (await q("versions", { doc: a.doc, ver }, 1000)).filter((r) => r.kind !== "pdf");   // 판에 붙은 PDF 행(2.2)은 장표가 아니다
   if (!rows.some((r) => r.kind === "head")) { console.error(`판 ${ver} 이 없습니다(문서 ${a.doc} 의 최신 판은 ${docs[0].latest_ver}).`); process.exit(1); }
   const shas = new Set();
   for (const r of rows) for (const m of String(r.body || "").matchAll(/__ASSET:([0-9a-f]{64})__/g)) shas.add(m[1]);
@@ -270,7 +272,13 @@ async function main() {
   const chrome = findChrome(a.chrome);
   if (!chrome) { console.error(`${sum} · HTML 은 남겼습니다: ${htmlOut}\n크롬을 못 찾아 PDF 는 굽지 못했습니다 — --chrome <경로> 를 주거나, 그 HTML 을 브라우저에서 열어 인쇄(PDF 로 저장 · 여백 없음 · 배경 그래픽)하세요.`); process.exit(1); }
   execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-pdf-header-footer", "--virtual-time-budget=8000", "--run-all-compositor-stages-before-draw", `--print-to-pdf=${resolve(out)}`, pathToFileURL(htmlOut).href], { stdio: "ignore", timeout: 120_000 });
-  console.log(`${sum} · ${resolve(out)} (HTML: ${htmlOut})`);
+  let pushed = "";
+  if (a.push) {
+    if (!a.plain) console.error("⚠ --push 는 의견 없는 장표(--plain)에 쓰는 것입니다 — 의견 얹은 PDF 를 판의 PDF 로 붙입니다.");
+    const r = await attachPdf({ gw, headers, doc: a.doc, ver, file: resolve(out), sid });
+    pushed = ` · 판 ${ver} 에 PDF ${r.replaced ? "바꿔 붙임" : "붙임"}(앱 ↓ 로 바로 받힘)`;
+  }
+  console.log(`${sum} · ${resolve(out)} (HTML: ${htmlOut})${pushed}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("deck-export.mjs")) {

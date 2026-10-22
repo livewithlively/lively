@@ -228,6 +228,7 @@ export const APP_RUNTIME_JS = `
     if (m.id == null) {
       if (m.method === 'ui/notifications/data-changed') fire('data', m.params || {});
       else if (m.method === 'ui/notifications/prefs-open') fire('prefs-open', m.params || {});
+      else if (m.method === 'ui/notifications/state') { api.state = (m.params && m.params.state && typeof m.params.state === 'object') ? m.params.state : null; fire('state', m.params || {}); }   // #4769 호스트가 새 state 를 밀었다(알림을 눌러 그 자리로)
       else if (m.method === 'ui/notifications/insets') applyInsets(m.params || {});
       return;
     }
@@ -315,6 +316,7 @@ export const APP_RUNTIME_JS = `
     ui: {
       openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); },
       onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); },
+      onState: function (cb) { return subscribe('state', cb); },   // #4769 lively.state 가 바뀌었다({state}) — 알림을 눌러 들어온 자리로 옮겨 간다
       chrome: function (opts) { return post('ui/chrome', { head: !(opts && opts.head === false) }); },
       openMenu: function (items, at) { return post('ui/menu', { items: items || [], x: at && at.x, y: at && at.y }); },
       expand: function () { return post('ui/expand', {}); },
