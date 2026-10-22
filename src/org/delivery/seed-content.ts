@@ -144,34 +144,10 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     }
   }
 
-  // ── 잠긴 연결 스킬(#4970) — **무조건 코드 판으로 맞춘다**(손 댄 행도). ──
-  //  외부 앱 연결 스킬은 라이블리가 배포하고 조직이 고치지 못한다(connect-skills.ts). 그래서 위 기본 스킬의
-  //   «손 안 댄 것만 갱신»이 아니라 시드 훅(#1836)처럼 코드가 정본이다 — 본문·설명·라벨은 물론 켜짐·대상 구성원까지
-  //   코드 값으로 되돌린다(잠긴 스킬엔 조직의 결정이 없다). 판(매니지드/셀프호스트)은 이 게이트웨이의 배포 방식을 따른다.
-  //  배포 자체는 이 행에 기대지 않는다 — materializer 응답(org_runner_assets)이 코드 판을 직접 싣는다. 이 행은 관리 화면·
-  //   감사·구성원 화면이 같은 것을 보게 맞추는 정리다. 실제로 달라졌을 때만 UPDATE(불필요한 version bump 방지).
+  // ── 잠긴 연결 스킬(#4970) — **무조건 코드 판으로 맞춘다**(손 댄 행도). 규칙은 seedLockedSkills 머리말. ──
   try {
-    for (const s of lockedSkillsNow()) {
-      const r = await itemsPool.query(
-        `INSERT INTO org_harness_asset(id, kind, label, harness, description, summary, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by)
-           VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,NULL,NULL,true,$9,1,$10,'system',now(),'system')
-         ON CONFLICT (tenant_id, id) DO UPDATE
-           SET kind = EXCLUDED.kind, label = EXCLUDED.label, harness = EXCLUDED.harness, description = EXCLUDED.description,
-               summary = EXCLUDED.summary, body = EXCLUDED.body, frontmatter = EXCLUDED.frontmatter,
-               target_members = NULL, paired_hook_id = NULL, enabled = true, sort = EXCLUDED.sort,
-               content_hash = EXCLUDED.content_hash, version = org_harness_asset.version + 1, updated_at = now(), updated_by = 'system'
-         WHERE org_harness_asset.content_hash IS DISTINCT FROM EXCLUDED.content_hash
-            OR org_harness_asset.label IS DISTINCT FROM EXCLUDED.label
-            OR org_harness_asset.summary IS DISTINCT FROM EXCLUDED.summary
-            OR org_harness_asset.sort IS DISTINCT FROM EXCLUDED.sort
-            OR org_harness_asset.enabled IS DISTINCT FROM true
-            OR org_harness_asset.target_members IS NOT NULL
-            OR org_harness_asset.paired_hook_id IS NOT NULL`,
-        [s.id, s.kind, s.label, s.harness, s.description, s.summary, s.body, JSON.stringify(s.frontmatter), s.sort, s.content_hash]);
-      if (r.rowCount) res.lockedSkills = (res.lockedSkills ?? 0) + r.rowCount;
-    }
-    // 잠기기 전에 남은 개인 설정(켜기/끄기)은 이제 아무 뜻이 없다(배포가 무시한다) — 화면이 «내가 꺼 둠»을 보여 주지 않게 정리.
-    await itemsPool.query(`DELETE FROM org_asset_pref WHERE target_kind = 'harness_asset' AND ref_id = ANY($1::text[])`, [lockedSkillIds()]);
+    const n = await seedLockedSkills();
+    if (n) res.lockedSkills = n;
   } catch (err) {
     logger.warn({ err }, "잠긴 연결 스킬 시딩 실패(건너뜀) — 배포는 코드 판으로 계속된다");
   }
@@ -229,4 +205,41 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     logger.info(res, "디폴트 콘텐츠 시딩(신규=삽입 · 손 안 댄 시드=갱신 · 은퇴 시드=회수)");
   }
   return res;
+}
+
+/**
+ * 잠긴 연결 스킬(#4970) — DB 행을 **무조건 코드 판으로 맞춘다**(손 댄 행도). 바뀐 행 수를 돌려준다(같으면 0 — 멱등).
+ *
+ *  외부 앱 연결 스킬은 라이블리가 배포하고 조직이 고치지 못한다(connect-skills.ts). 그래서 기본 스킬의 «손 안 댄 것만 갱신»이
+ *   아니라 시드 훅(#1836)처럼 코드가 정본이다 — 본문·설명·라벨은 물론 켜짐·대상 구성원까지 코드 값으로 되돌린다(잠긴 스킬엔
+ *   조직의 결정이 없다). 판(매니지드/셀프호스트)은 이 게이트웨이의 배포 방식을 따른다.
+ *  배포 자체는 이 행에 기대지 않는다 — materializer 응답(org_runner_assets)이 코드 판을 직접 싣는다. 이 행은 관리 화면·감사·
+ *   구성원 화면이 같은 것을 보게 맞추는 정리다. 실제로 달라졌을 때만 UPDATE(불필요한 version bump 방지).
+ *  seedDefaultContent 와 따로 둔 이유: 이 함수는 잠긴 스킬 행과 그 개인 설정만 만진다 — PG 통합 테스트가 다른 시드(지식·훅)로
+ *   공유 테스트 DB 를 더럽히지 않고 이것만 돌릴 수 있게(전체 시딩을 돌렸더니 시드 지식 3건이 뒤 테스트의 미분류 수를 바꿨다).
+ */
+export async function seedLockedSkills(): Promise<number> {
+  let changed = 0;
+  for (const s of lockedSkillsNow()) {
+    const r = await itemsPool.query(
+      `INSERT INTO org_harness_asset(id, kind, label, harness, description, summary, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,NULL,NULL,true,$9,1,$10,'system',now(),'system')
+       ON CONFLICT (tenant_id, id) DO UPDATE
+         SET kind = EXCLUDED.kind, label = EXCLUDED.label, harness = EXCLUDED.harness, description = EXCLUDED.description,
+             summary = EXCLUDED.summary, body = EXCLUDED.body, frontmatter = EXCLUDED.frontmatter,
+             target_members = NULL, paired_hook_id = NULL, enabled = true, sort = EXCLUDED.sort,
+             content_hash = EXCLUDED.content_hash, version = org_harness_asset.version + 1, updated_at = now(), updated_by = 'system'
+       WHERE org_harness_asset.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+          OR org_harness_asset.label IS DISTINCT FROM EXCLUDED.label
+          OR org_harness_asset.summary IS DISTINCT FROM EXCLUDED.summary
+          OR org_harness_asset.sort IS DISTINCT FROM EXCLUDED.sort
+          OR org_harness_asset.enabled IS DISTINCT FROM true
+          OR org_harness_asset.target_members IS NOT NULL
+          OR org_harness_asset.paired_hook_id IS NOT NULL`,
+      [s.id, s.kind, s.label, s.harness, s.description, s.summary, s.body, JSON.stringify(s.frontmatter), s.sort, s.content_hash]);
+    changed += r.rowCount ?? 0;
+  }
+  // 잠기기 전에 남은 개인 설정(켜기/끄기)은 이제 아무 뜻이 없다(배포가 무시한다) — 화면이 «내가 꺼 둠»을 보여 주지 않게 정리.
+  await itemsPool.query(`DELETE FROM org_asset_pref WHERE target_kind = 'harness_asset' AND ref_id = ANY($1::text[])`, [lockedSkillIds()]);
+  return changed;
 }
