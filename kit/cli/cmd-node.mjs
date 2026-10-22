@@ -613,7 +613,7 @@ async function cmdNode(rest) {
   //   `claude: command not found`. 그래서 로그인 셸에 PATH 를 물어(bakedNodePath) 현재 PATH 와 합쳐 굽는다.
   //   (TMUX_BIN 절대경로는 tmux 자체 해석용, PATH 는 그 tmux 서버가 띄우는 pane 의 명령 해석용 — 둘 다 필요.)
   //  #4931 — 노드 tmux 세대 스위치(LIVELY_MUX_PIN)는 **이 파일을 다시 써도 남아야 한다**(종전엔 통째로 다시 써서 사람이 넣은 줄이 사라졌다).
-  //   이번 실행의 env 가 있으면 그것(`LIVELY_MUX_PIN=auto lively node --daemon` 으로 켠다), 없으면 파일에 있던 값.
+  //   이번 실행의 env 가 있으면 그것(`LIVELY_MUX_PIN=off lively node --daemon` 으로 끈다 — 기본은 auto), 없으면 파일에 있던 값.
   const muxPin = nodeMuxPinLine(process.env.LIVELY_MUX_PIN, readEnvFile(NODE_ENV_FILE, "LIVELY_MUX_PIN"));
   writeLively("node-agent.env",
     `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\nPATH=${bakedNodePath()}\n${muxPin}`, 0o600);

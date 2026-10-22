@@ -696,8 +696,8 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     broker: null,
     //  #4067 — 세션 이미지 하네스 목록. 설정 없음 = 모름(호출부가 실물을 본다).
     sessionHarnesses: null,
-    //  #4931 — 노드 tmux 세대 스위치. 설정 없음 = 1단계 기본값 off(MUX_PIN_DEFAULT — 쓰는 자리는 노드뿐).
-    muxPin: "off",
+    //  #4931 — 노드 tmux 세대 스위치. 설정 없음 = 기본값 auto(2단계 — MUX_PIN_DEFAULT · 쓰는 자리는 노드뿐).
+    muxPin: "auto",
   });
 });
 
@@ -848,11 +848,13 @@ test("K32 목록은 다른 축을 바꾸지 않는다 — 매니지드 env 에 �
   assert.deepEqual(b.sessionHarnesses, ["claude", "codex"]);
 });
 
-test("K33 LIVELY_MUX_PIN — 정확히 auto·bin·off 만 그 값, 나머지(빈 값·대소문자·오타)는 1단계 기본값 off (#4931)", () => {
-  assert.equal(MUX_PIN_DEFAULT, "off", "1단계 — 세대를 아는 번들이 되돌림의 바닥이 되기 전엔 노드마다 env 로 켠다");
+test("K33 LIVELY_MUX_PIN — 정확히 auto·bin·off 만 그 값, 나머지(빈 값·대소문자·오타)는 기본값 auto (#4931 2단계)", () => {
+  assert.equal(MUX_PIN_DEFAULT, "auto", "2단계 — 세대를 아는 번들(1단계)이 되돌림의 바닥으로 깔린 뒤 기본값을 켰다");
   const table: Array<[string | undefined, string]> = [
-    [undefined, "off"], ["", "off"], ["auto", "auto"], [" auto ", "auto"], ["off", "off"], ["bin", "bin"], ["\tbin\n", "bin"],
-    ["AUTO", "off"], ["Auto", "off"], ["on", "off"], ["true", "off"], ["1", "off"], ["BIN", "off"], ["pinned", "off"],
+    [undefined, "auto"], ["", "auto"], ["auto", "auto"], [" auto ", "auto"], ["off", "off"], [" off\n", "off"], ["bin", "bin"], ["\tbin\n", "bin"],
+    ["AUTO", "auto"], ["Auto", "auto"], ["on", "auto"], ["true", "auto"], ["1", "auto"], ["BIN", "auto"], ["pinned", "auto"],
+    //  끄는 값도 **정확히** off 만 — 대소문자를 봐주지 않는다(같은 파일의 다른 스위치와 같은 규율 · 키트는 이 셋만 env 파일에 쓴다).
+    ["OFF", "auto"], ["Off", "auto"], ["0", "auto"], ["false", "auto"],
   ];
   for (const [raw, want] of table) {
     assert.equal(parseMuxPin(raw), want, JSON.stringify(raw));
@@ -863,9 +865,9 @@ test("K33 LIVELY_MUX_PIN — 정확히 auto·bin·off 만 그 값, 나머지(빈
 test("K34 LIVELY_MUX_PIN 은 다른 축을 바꾸지 않는다 — 노드 env 에 얹어도 나머지 값이 같다 (#4931)", () => {
   const node = { LIVELY_NODE_TOKEN: "lvk_x" };
   const a = computeExecTopology(E(node));
-  const b = computeExecTopology(E({ ...node, LIVELY_MUX_PIN: "auto" }));
+  const b = computeExecTopology(E({ ...node, LIVELY_MUX_PIN: "off" }));
   assert.deepEqual({ ...b, muxPin: MUX_PIN_DEFAULT }, a);
-  assert.equal(b.muxPin, "auto");
+  assert.equal(b.muxPin, "off");
 });
 
 test("K35 노드 tmux 세대를 쓸 수 있는 자리 — 노드 · 기본 소켓 배치 · 비윈도우만 (#4931)", () => {

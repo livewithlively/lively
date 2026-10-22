@@ -193,9 +193,13 @@ test("E8 bin → TMUX_BIN 을 그 판 이름 전용 소켓에서(고정판은 �
   assert.equal(p.wantPinned, false);
 });
 
-test("E9 off(1단계 기본값) → 전용 소켓이 없으면 세대를 안 쓴다 — 그 노드에선 종전 코드가 그대로", { skip }, () => {
-  assert.equal(plan({ topology: nodeTopo() }).setup, null, "값 없음 = off");
+test("E9 값 없음 = auto(2단계 기본값) → 고정판 세대 · off → 전용 소켓이 없으면 세대를 안 쓴다(그 노드에선 종전 코드가 그대로)", { skip }, () => {
+  assert.equal(plan({ topology: nodeTopo() }).setup?.current.key, SOCK_PIN, "값 없음 = auto — 새 세션은 고정판 전용 소켓");
+  const waiting = plan({ topology: nodeTopo(), pinnedBin: null });
+  assert.equal(waiting.setup, null, "값 없음 + 고정판 아직 없음 — 받는 동안은 종전 자리");
+  assert.equal(waiting.wantPinned, true, "값 없음 + 고정판 아직 없음 — 뒤에서 받는다");
   assert.equal(plan({ topology: nodeTopo("off") }).setup, null);
+  assert.equal(plan({ topology: nodeTopo("off"), pinnedBin: null }).wantPinned, false, "off 는 받지도 않는다");
 });
 
 test("E10 TMUX_BIN 이 안 돌고 고정판이 있으면 레거시도 고정판으로 말한다", { skip }, () => {
