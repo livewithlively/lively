@@ -695,7 +695,8 @@ export async function stampSessionVisibility(name: string, sessionId?: string | 
 //  activity_knowledge 는 FK ON DELETE CASCADE 라 링크가 동반 삭제된다(복원 시 링크는 돌아오지 않음 — project 와 동형).
 //  사람전용 게이트(에이전트 403)는 capability 계층(knowledge_delete)에서 선행한다(여기는 순수 데이터).
 export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  //  fields 도 스냅샷에 싣는다 — knowledge_set_fields 로 사람·에이전트가 쓴 값은 커넥터 재싱크로 되살아나지 않는다.
+  const before = await one(itemsPool, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1`, [name]);
   if (!before) throw new Error(`지식 '${name}' 없음`);
   await itemsPool.query(`DELETE FROM knowledge WHERE name=$1`, [name]);
   await auditKnowledge(name, "delete", before, null, ctx);
@@ -705,7 +706,9 @@ export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<Kno
 // 복원 — 마지막 delete 의 before 스냅샷(전문)을 그대로 재적재한다. 본문/메타는 삭제 시점 그대로,
 //  복원 사실(누가/언제)은 감사 op='restore' 로 기록된다. 이미 존재하면(삭제 상태 아님) 거부.
 export async function restoreKnowledge(before: Record<string, unknown>, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  const after = await restoreSnapshot<KnowledgeRow>("knowledge", K_COLS, "name", before);
+  //  fields 는 스냅샷에 있을 때만 되살린다(restoreSnapshot 은 스냅샷에 있는 키만 쓴다 — fields 를 싣기 전의 옛 삭제분은 기본값).
+  //  jsonb 칸에 객체를 그대로 넘기면 pg 가 직렬화한다.
+  const after = await restoreSnapshot<KnowledgeRow>("knowledge", `${K_COLS}, fields`, "name", before);
   await forgetClassifierSeen([after.name]);   // #4194 — 링크 없이 돌아온다(위 주석) → 카테고리 붙이기 레인이 다시 봐야 한다
   await auditKnowledge(after.name, "restore", null, after, ctx);
   return after;
