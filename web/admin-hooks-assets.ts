@@ -236,11 +236,13 @@ function harnessAssetEditor(detail, data) {
   const listCol = el('div', { class: 'admin-sublist' });
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
     onclick: () => { state.admin.assetSel = '__new__'; rerenderPanel(detail, 'harness-assets', data); } }));
+  const lockedIds = data.lockedAssetIds || [];   // #4970 — 라이블리가 배포하는 외부 앱 연결 스킬(코드가 SoT). 조직은 고치지도 끄지도 않는다.
   for (const a of assets) {
     listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
       onclick: () => { state.admin.assetSel = a.id; rerenderPanel(detail, 'harness-assets', data); } },
       el('div', { class: 'mini-title', text: a.id },
-        isDraft(a) ? el('span', { class: 'pill pill-warn', text: '제출 · ' + a.created_by })
+        lockedIds.includes(a.id) ? el('span', { class: 'pill', text: '제품 기본' })
+          : isDraft(a) ? el('span', { class: 'pill pill-warn', text: '제출 · ' + a.created_by })
           : (a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null)),
       el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
         + (a.target_members && a.target_members.length ? ' · 지정 ' + a.target_members.length + '명' : '')
@@ -250,9 +252,26 @@ function harnessAssetEditor(detail, data) {
   const editing = sel === '__new__'
     ? { id: '', kind: 'skill', label: '', harness: 'all', description: '', body: '', frontmatter: {}, target_members: null, paired_hook_id: '', enabled: true }
     : assets.find((a) => a.id === sel);
-  if (editing) assetForm(right, editing, data, detail, sel === '__new__');
+  if (editing && lockedIds.includes(editing.id)) lockedAssetView(right, editing);
+  else if (editing) assetForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint' }, ...uiText('스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 저장하면 구성원 세션 시작 때 디스크에 동기화되며, 스킬·커맨드는 진행 중인 세션에도 즉시 반영됩니다. 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.')));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('스킬 · 서브에이전트 · 커맨드'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+}
+
+// #4970 — 잠긴(제품 기본) 스킬: 숨기지 않고 **보여주되 못 고치게** 한다. 무엇이 배포되는지는 조직이 알아야 하고(감사),
+//  고칠 수 없다는 사실과 그 이유만 분명하면 된다. 훅(#1836)과 달리 켜고 끄기도 없다 — 연결 스킬은 서버 기능과 같다.
+function lockedAssetView(root, a) {
+  const bodyTa = el('textarea', { rows: '16', class: 'admin-ta', disabled: '' });
+  bodyTa.value = a.body || '';
+  root.replaceChildren(
+    el('div', { class: 'admin-subcard' },
+      el('h4', { text: '제품 소유 · 자동 갱신 · 항상 켜짐' }),
+      el('p', { class: 'admin-hint' }, ...uiText('라이블리가 배포하는 외부 앱 연결 스킬입니다. 연결법은 앱마다 바뀌기 때문에 본문은 제품 코드가 단일 출처이고, 업데이트마다 함께 바뀝니다. 그래서 여기서 고치거나 끄거나 지울 수 없고, 모든 구성원에게 늘 배포됩니다. 이 워크스페이스의 배포 방식(매니지드·셀프호스트)에 맞는 판이 내려갑니다. 조직만의 절차를 더하고 싶으면 [+ 추가]로 새 스킬을 만드세요.'))),
+    field('id', el('input', { type: 'text', value: a.id, disabled: '' })),
+    field('표시 이름', el('input', { type: 'text', value: a.label || '', disabled: '' })),
+    field('쉬운 한 줄 (구성원 화면에 보이는 말)', el('input', { type: 'text', value: a.summary || '', disabled: '' })),
+    field('설명(AI가 언제 쓸지 판단 — 상시 노출)', el('input', { type: 'text', value: a.description || '', disabled: '' })),
+    field('본문(마크다운)', bodyTa));
 }
 
 function assetForm(root, a, data, detail, isNew) {

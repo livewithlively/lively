@@ -127,6 +127,11 @@ async function myAssetsSection(detail) {
     //  ⚠ 껐다가 다시 켜면 '내가 바꿈'이 남아 원래 상태로 안 돌아간 것처럼 보였다(사용자 지적) →
     //   **기본값과 같은 값으로 되돌리면 개인 설정을 지운다**(clear). 그래서 '되돌리기' 버튼도 필요 없다.
     const onOffSeg = (targetKind: string, it: any) => {
+      // #4970 — 잠긴 연결 스킬은 스위치가 없다(끌 수 없다). 상태만 말한다.
+      if (it.locked) return el('div', { class: 'hrow-act' },
+        el('div', { class: 'sw-labels' },
+          el('span', { class: 'sw-state on', text: '항상 켜짐' }),
+          el('span', { class: 'sw-note' }, ...uiText('제품 기본'))));
       const def = !!it.byDefault;
       const following = it.override === null || it.override === undefined;
       const on = following ? def : !!it.override;
