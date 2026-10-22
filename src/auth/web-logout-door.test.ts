@@ -66,8 +66,8 @@ test("C2 클래식 셸(main.ts)은 자기 로그아웃 경로를 갖지 않는�
 });
 
 // ── SSO 로그아웃 문 — 서버가 {ok:true, redirect} 로 IdP 로그아웃 주소를 주면 그리로 간다 ──
-//  S1 http(s) 절대주소면 그대로 · S2 없음·종전 응답·비객체 → null · S3 javascript: 등 다른 스킴·깨진 값 → null
-//  C3 core.ts 의 logout 은 응답의 redirect 를 읽어 CP 문보다 먼저 최상위 이동한다
+//  S1 https 절대주소면 그대로 · S2 없음·종전 응답·비객체 → null · S3 javascript:·http: 등 다른 스킴·깨진 값 → null
+//  C3 core.ts 의 logout 은 응답의 redirect 를 읽어 CP 문보다 먼저 최상위 이동한다 — 데스크톱 앱 창에선 건너뛴다
 test("S1 IdP 로그아웃 주소가 오면 그대로 간다", async () => {
   const { ssoLogoutTarget } = await loadPure<{ ssoLogoutTarget: (b: unknown) => string | null }>("lib/logout-target.ts");
   const idp = "https://sso.example/realms/acme/protocol/openid-connect/logout?client_id=lively&post_logout_redirect_uri=https%3A%2F%2Fgw.example%2Fui%2F";
@@ -83,6 +83,8 @@ test("S2·S3 종전 응답·비정상 값 → null(종전 흐름)", async () => 
   assert.equal(ssoLogoutTarget({ ok: true, redirect: 42 }), null);
   assert.equal(ssoLogoutTarget({ ok: true, redirect: "javascript:alert(1)" }), null, "🔴 S3 스크립트 스킴으로 이동하면 안 된다");
   assert.equal(ssoLogoutTarget({ ok: true, redirect: "/ui/" }), null, "상대 경로는 IdP 문이 아니다");
+  assert.equal(ssoLogoutTarget({ ok: true, redirect: "http://sso.example/logout?id_token_hint=x" }), null,
+    "🔴 S3 평문 http 로 id_token 을 싣고 가면 안 된다");
 });
 
 test("C3 core.ts 의 logout 은 서버가 준 IdP 문으로 CP 문보다 먼저 이동한다", () => {
@@ -92,5 +94,6 @@ test("C3 core.ts 의 logout 은 서버가 준 IdP 문으로 CP 문보다 먼저 
   const cp = fn.indexOf("logoutRedirectTarget(");
   assert.ok(sso >= 0, "🔴 logout 이 응답의 redirect 를 안 본다 — SSO 세션이 살아 남아 다음 로그인이 묻지 않고 들어온다");
   assert.ok(sso < cp, "IdP 문은 CP 문·게이트보다 먼저 결정돼야 한다");
-  assert.match(fn, /if \(ssoDoor\) \{ location\.replace\(ssoDoor\); return; \}/);
+  assert.match(fn, /if \(ssoDoor && !desk\) \{ location\.replace\(ssoDoor\); return; \}/,
+    "데스크톱 앱 창은 다른 출처 이동을 시스템 브라우저로 넘긴다 — 앱 창에선 IdP 문으로 가지 않는다");
 });

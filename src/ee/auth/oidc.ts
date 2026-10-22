@@ -61,6 +61,7 @@ async function oidcConfigFromDb(): Promise<OidcConfig | null> {
       allowedDomains: s.allowed_domains,
       label: s.label || defaultOidcLabel(s.issuer),
       trustUnverifiedEmail: s.trust_unverified_email,
+      idpLogout: s.idp_logout,
       scopes: oidcScopes(),
     };
   } catch (err) {
@@ -109,7 +110,9 @@ export async function discover(cfg: OidcConfig): Promise<OidcDiscovery> {
     token_endpoint: doc.token_endpoint,
     jwks_uri: doc.jwks_uri,
     issuer: doc.issuer ?? cfg.issuer,
-    ...(doc.end_session_endpoint ? { end_session_endpoint: doc.end_session_endpoint } : {}),
+    // https 만 받는다 — 로그아웃 때 id_token(개인정보)을 이 주소의 쿼리로 보내므로, issuer 와 같은 기준을 둔다.
+    ...(typeof doc.end_session_endpoint === "string" && /^https:\/\//i.test(doc.end_session_endpoint)
+      ? { end_session_endpoint: doc.end_session_endpoint } : {}),
   };
   discoveryCache = { issuer: cfg.issuer, at: now, doc: full };
   return full;

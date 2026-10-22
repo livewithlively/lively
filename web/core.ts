@@ -85,7 +85,9 @@ async function logout(message?: any) {
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
   // SSO 로 로그인한 세션이면 서버가 IdP 로그아웃 문을 준다 — 거기로 최상위 이동해야 IdP 세션까지 끝난다.
-  if (ssoDoor) { location.replace(ssoDoor); return; }
+  //  데스크톱 앱 창은 건너뛴다: 앱은 다른 출처로 가는 이동을 시스템 브라우저로 넘겨서(desktop/main web-shell openTargetFor),
+  //  앱 창의 IdP 세션은 그대로 둔 채 브라우저에 로그인해 있던 IdP 세션을 끊게 된다.
+  if (ssoDoor && !desk) { location.replace(ssoDoor); return; }
   // 매니지드(#2536): 여기서 게이트를 띄우면 게이트가 CP 로 튕기고, CP 는 살아 있는 자기 세션으로 곧장 재입장시킨다 —
   //  «로그인 창 1~2초 뒤 자동 재로그인». 로그아웃은 CP 의 로그아웃 문으로 **최상위 이동**해 CP 세션까지 끝낸다
   //  (돌아올 자리 to 동봉 — 재로그인하면 같은 자리). 셀프호스팅·CP 없음·조회 실패면 종전 게이트.

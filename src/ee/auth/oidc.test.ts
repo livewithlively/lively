@@ -26,7 +26,7 @@ const ISSUER = "https://idp.example";
 const CLIENT_ID = "client-abc";
 const cfgBase: OidcConfig = {
   issuer: ISSUER, clientId: CLIENT_ID, clientSecret: "s3cret", allowedDomains: ["honest.ai"],
-  label: "Google 계정으로 로그인", trustUnverifiedEmail: false, scopes: "openid email profile",
+  label: "Google 계정으로 로그인", trustUnverifiedEmail: false, idpLogout: false, scopes: "openid email profile",
 };
 
 // ── 키·토큰 헬퍼 ────────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ const RS = { alg: "RS256", kid: "k1", typ: "JWT" };
 // ── C: 제공자 활성화(배포별 opt-in) ─────────────────────────────────────────
 {
   const saved = { ...process.env };
-  const KEYS = ["OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_ALLOWED_DOMAINS", "OIDC_LABEL", "OIDC_TRUST_UNVERIFIED_EMAIL"];
+  const KEYS = ["OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET", "OIDC_ALLOWED_DOMAINS", "OIDC_LABEL", "OIDC_TRUST_UNVERIFIED_EMAIL", "OIDC_IDP_LOGOUT"];
   const setEnv = (v: Record<string, string>): void => {
     for (const k of KEYS) delete process.env[k];
     for (const [k, val] of Object.entries(v)) process.env[k] = val;
@@ -137,6 +137,7 @@ const RS = { alg: "RS256", kid: "k1", typ: "JWT" };
   assert.deepEqual(c4.allowedDomains, ["honest.ai", "example.com"]);
   assert.equal(c4.label, "Google 계정으로 로그인");
   assert.equal(c4.trustUnverifiedEmail, false);
+  assert.equal(c4.idpLogout, false, "IdP 로그아웃은 운영자가 켜야 한다(기본 꺼짐)");
   ok("C4 issuer 말미 슬래시·도메인 대소문자/@/공백 정규화 + 라벨 추정");
 
   setEnv({ OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: "x", OIDC_CLIENT_SECRET: "y" });
@@ -145,6 +146,12 @@ const RS = { alg: "RS256", kid: "k1", typ: "JWT" };
   assert.deepEqual(c5.allowedDomains, [], "도메인 env 부재 → 빈 목록(자동 가입 대상 0개)");
   assert.equal(c5.label, "회사 SSO 로 로그인", "모르는 issuer 는 중립 문구");
   ok("C5 허용 도메인 env 부재 → 켜지되 자동 가입 대상 없음");
+
+  setEnv({ OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: "x", OIDC_CLIENT_SECRET: "y", OIDC_IDP_LOGOUT: "1" });
+  assert.equal((await oidcConfig())?.idpLogout, true);
+  setEnv({ OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: "x", OIDC_CLIENT_SECRET: "y", OIDC_IDP_LOGOUT: "true" });
+  assert.equal((await oidcConfig())?.idpLogout, false, "'1' 만 켠다(OIDC_TRUST_UNVERIFIED_EMAIL 과 같은 규칙)");
+  ok("C6 OIDC_IDP_LOGOUT=1 일 때만 IdP 로그아웃이 켜진다");
 
   process.env = saved;
 }

@@ -2,8 +2,10 @@
 //   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
 //
 // IdP 로그인 세션의 로그아웃 — OIDC RP-Initiated Logout 1.0. 웹 세션만 끊으면 IdP 세션이 살아 있어
-//  «SSO 로 로그인» 한 번에 묻지도 않고 같은 계정으로 돌아온다. 그래서 IdP 의 로그아웃 문(end_session_endpoint)으로
-//  브라우저를 보내 IdP 세션까지 끝낸다(CTO 결정 2026-10-08: 로그아웃하면 회사 SSO 에서도 나간다).
+//  «SSO 로 로그인» 한 번에 묻지도 않고 같은 계정으로 돌아온다(공용 PC 에서 로그아웃한 사람의 계정에 다음 사람이 들어간다).
+//  그래서 IdP 의 로그아웃 문(end_session_endpoint)으로 브라우저를 보내 IdP 세션까지 끝낸다.
+//  ★ 운영자가 켜는 기능이다(OIDC 설정 idp_logout · OIDC_IDP_LOGOUT=1, 기본 꺼짐) — 켜면 같은 IdP 세션을 쓰는 다른 회사 앱
+//   (메일·메신저 등)에서도 나가게 되고, IdP 허용 목록에 post_logout_redirect_uri 를 등록해야 한다. 둘 다 조직이 정할 일이다.
 //
 //  주소는 discovery 가 알려준 것만 쓴다 — IdP 마다 경로가 다르고(Keycloak 은 /protocol/openid-connect/logout),
 //   구글처럼 아예 안 주는 IdP 도 있다. 안 주면 null 이고 로그아웃은 웹 세션만 끝낸다(종전 동작).
@@ -49,7 +51,7 @@ export async function oidcLogoutUrl(
 ): Promise<string | null> {
   if (session.authMethod !== OIDC_AUTH_METHOD) return null;
   const cfg = await deps.config();
-  if (!cfg) return null;
+  if (!cfg || !cfg.idpLogout) return null;   // 꺼져 있으면 종전처럼 웹 세션만 끝낸다
   let disc: OidcDiscovery;
   try {
     disc = await deps.discover(cfg);

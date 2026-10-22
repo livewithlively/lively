@@ -113,7 +113,8 @@ export function registerOidcRoutes(app: express.Express): void {
 
       const { sessionId, expiresAt } = await createSession(resolved.memberId, {
         ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null,
-        authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: sealIdToken(idToken),
+        // id_token 은 로그아웃에 쓸 때만 보관한다 — IdP 로그아웃이 꺼졌거나 IdP 가 로그아웃 문을 안 주면(구글) 쓸 일이 없다.
+        authMethod: OIDC_AUTH_METHOD, ssoIdTokenEnc: cfg.idpLogout && disc.end_session_endpoint ? sealIdToken(idToken) : null,
       });
       res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
       res.redirect(302, pending.returnTo ?? "/ui/");
