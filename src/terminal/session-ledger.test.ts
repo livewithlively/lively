@@ -22,6 +22,7 @@ test("buildSessionLedger — desired 전 행(superseded 포함) + 상시세션 +
     listLive: async () => ["box-a-1111", "box-m-5555"],
   });
   assert.equal(b.authoritative, true);
+  assert.equal(b.final, true, "#4939 — 최종 판정 표지가 없으면 브로커 gateway 모드가 이 장부를 «못 받음» 으로 본다");
   assert.equal(b.observed, true);
   assert.deepEqual(b.desired, rows, "superseded 행도 그대로 준다(은퇴 판정은 소비자 몫)");
   assert.equal(b.desired.find((r) => r.id === "box-x-6666")?.exited_at, "2026-09-09T00:00:00.000Z",

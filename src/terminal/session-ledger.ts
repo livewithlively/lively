@@ -45,6 +45,12 @@ import { unreachableMemoryMarks } from "../sessions/session-unreachable-sweep.js
 
 export interface SessionLedgerBody {
   authoritative: true;
+  /**
+   * #4939 — 이 장부가 게이트웨이의 **최종 판정**이다(G8 «지금 보이는 세션은 끝남으로 안 냄» · DB 행 없는 세션의 도달 불가 표식).
+   *  브로커 gateway 모드(lvly-cloud sessionledger)는 이 표지가 없는 장부를 «못 받음» 으로 다룬다 — 옛 코어의 exited 는 살아 있는
+   *  세션의 것일 수 있어서다(롤아웃 순서가 뒤집혀도 브로커가 옛 장부로 지우지 않게).
+   */
+  final: true;
   /** tmux 를 봤나. false 면 live 는 null. */
   observed: boolean;
   desired: SessionLedgerRow[];
@@ -97,7 +103,7 @@ export async function buildSessionLedger(d: LedgerDeps): Promise<SessionLedgerBo
     desired.push({ id, superseded_by: null, node_id: null, exited_at: new Date(at).toISOString(), exit_reason: "unreachable" });
   }
   const managed = managedRows.map((m) => m.session_id).filter((x): x is string => !!x && !ended.has(x));
-  return { authoritative: true, observed: live !== null, desired, managed, live };
+  return { authoritative: true, final: true, observed: live !== null, desired, managed, live };
 }
 
 /**
