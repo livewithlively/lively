@@ -5,7 +5,7 @@
 //  · 리브 세션이 없으면 서버가 그 말로 연다 → 세션 화면이 첫 지시를 먼저 그릴 수 있게 남긴다(quick-session 과 같은 길).
 //  · 있으면 서버가 그 세션에 말을 넣는다 → 못 넣었으면(멈춘 세션 등) 그 말을 입력칸에 돌려 둔다 — 보내면 대화창이 되살리며 넣는다.
 //  · 로그인한 AI 가 없으면 ai:false — 부르는 쪽이 «쓰는 AI 에서 하기» 를 그린다.
-//  리브 세션 id 도 여기 둔다 — 셸이 어떤 세션이 리브 세션인지(대화 보기 · 오른쪽 «리브» 칸 · 물음 입력칸) 알아보는 재료다.
+//  리브 세션 id 도 여기 둔다 — 셸이 어떤 세션이 리브 세션인지(오른쪽 «리브» 칸 · 물음 자리) 알아보는 재료다(보기는 #4940 부터 일반 세션).
 import { api } from '../core.js';
 import { rememberCreated } from './created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft } from './quick-session.js';
@@ -61,7 +61,7 @@ export async function livSessionId(o: { fresh?: boolean } = {}): Promise<string 
 }
 
 /**
- * 리브 세션 id 를 **잠깐만** 기다린다 — 세션 화면을 그리기 전에 «이 세션이 리브 세션인가» 를 알아야 하지만(대화 보기 · 곁칸 «리브»),
+ * 리브 세션 id 를 **잠깐만** 기다린다 — 세션 화면을 그리기 전에 «이 세션이 리브 세션인가» 를 알아야 하지만(물음 자리 · 곁칸 «리브»),
  *  그 물음이 느리면 화면 전체가 빈 채로 선다(#3537 이 걷어낸 흰 화면과 같은 꼴 — 격리 리뷰). ms 가 지나면 기억한 값으로 간다.
  */
 export async function livSessionIdWithin(ms: number): Promise<string | null> {

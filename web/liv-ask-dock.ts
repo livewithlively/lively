@@ -8,7 +8,8 @@
 import { el } from './core.js';
 import { livAskCard, livAskTyping, pokeLivStatus, watchLivStatus } from './liv-cards.js';
 
-export interface LivAskDock { destroy(): void }
+/** el = 카드를 담는 자리 그 자체 — 대화창을 숨기고 터미널을 볼 때 세션 화면이 이 자리를 터미널 위로 옮긴다(#4940 session-chat.ts placeLivAsk). */
+export interface LivAskDock { el: HTMLElement; destroy(): void }
 
 /** dock = 대화창의 입력칸 바로 위 자리. say = 이 대화창으로 리브에게 한 마디 보내기. */
 export function mountLivAskDock(dock: HTMLElement, o: { say: (text: string) => void; isVisible: () => boolean }): LivAskDock {
@@ -22,5 +23,5 @@ export function mountLivAskDock(dock: HTMLElement, o: { say: (text: string) => v
     const card = livAskCard(st.secretAsk, hooks);
     host.replaceChildren(...(card ? [card] : []));
   }, () => host.isConnected && o.isVisible());
-  return { destroy: () => { off(); host.remove(); } };
+  return { el: host, destroy: () => { off(); host.remove(); } };
 }

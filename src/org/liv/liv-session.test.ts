@@ -3,7 +3,8 @@
 //  계기: 매니지드에서 리브 탭 [보내기](POST /api/ui/me/liv/turn)가 전부 500 이었다. 헤드리스 턴(spawnTaskSession)이 게이트웨이가 도는
 //  기계의 tmux 를 직접 불러, 판이 sudo 에서 즉사하고 다음 `tmux set-option` 이 «no server running» 으로 던졌다(게이트웨이 로그 6건).
 //  이제 리브는 그 사람의 리브 세션 하나다. (#4970 «리브 = 세션 하나») 레일 [리브] · [연결할게요] · [연결 도와줘]가 같은 세션으로 가고
-//   그 세션은 보통 세션 화면(대화 보기 · 입력칸 위 물음 · 곁칸 «리브»)에서 산다 — 리브 탭의 대화 칸(liv-chat.ts)은 걷었다.
+//   그 세션은 보통 세션 화면(일반 세션 보기 · 물음 자리 · 곁칸 «리브»)에서 산다 — 리브 탭의 대화 칸(liv-chat.ts)은 걷었다.
+//   (#4940) 보기는 대화 고정이 아니라 일반 세션이다 — 하네스가 뜨면 터미널로 넘어간다(상민님 2026-10-23).
 //
 //  사양·엣지 표: 표 A(지금의 리브 세션) · 표 B(좌표 읽기) · 표 C(첫 말 경계) · 표 D(한 줄로 선 확보) — 행마다 한 단언.
 //   표 E(리브 폴더의 신뢰 대화상자)는 판정 행 E1~E9 가 terminal/session-create-guards.test 에, 배선 E10 이 여기 있다.
@@ -195,12 +196,14 @@ test("★★ 표 E10 — 서버가 연 리브 세션은 신뢰 대화상자를 �
 });
 
 test("★★ 화면 — #/liv 는 리브 세션이 있으면 그 세션 화면으로 · 리브 세션은 이름이 아니라 좌표로 알아본다(#4970)", () => {
-  //  레일 [리브] · 리브 알림이 #/liv 로 온다. 리브 세션이 있으면 보통 세션 화면(대화 보기 · 입력칸 위 물음 · 곁칸 «리브»)으로 간다.
+  //  레일 [리브] · 리브 알림이 #/liv 로 온다. 리브 세션이 있으면 보통 세션 화면(일반 세션 보기 · 물음 자리 · 곁칸 «리브»)으로 간다.
   assert.match(WEB_MAIN, /const livId = await livSessionId\(\{ fresh: true \}\);/, "리브 라우트가 지금의 리브 세션을 안 묻는다(기억한 값으로 옛 세션에 간다)");
   assert.match(WEB_MAIN, /if \(livRoute\(\{ board, sessionId: livId \}\) === 'session' && livId\) \{/, "★ 리브 세션이 있는데 그 세션 화면으로 안 간다");
   assert.match(WEB_MAIN, /const board = params\.get\('board'\) === '1';/, "로컬 AI 링크(?board=1)가 세션으로 넘겨진다");
-  //  세션 화면 — 리브 세션이면 대화 보기가 본자리(원준 2026-09-14) · 물음 자리 · 곁칸 맨 앞 «리브».
-  assert.match(WEB_MAIN, /\.\.\.\(isLiv\(sid\) \? \{ chatHome: true, livAsks: true \} : \{\}\),/, "★ 리브 세션이 대화 보기·물음 자리로 안 열린다");
+  //  세션 화면 — 리브 세션은 물음 자리 · 곁칸 맨 앞 «리브». 보기는 일반 세션(#4940 상민님 2026-10-23 «그냥 터미널로 열면 되잖아»
+  //   — 종전 «대화 보기가 본자리»(원준 2026-09-14)를 걷었다. 대화 고정이면 하네스가 첫 실행 화면에서 기다릴 때 «전달하는 중…» 에 갇힌다).
+  assert.match(WEB_MAIN, /\.\.\.\(isLiv\(sid\) \? \{ livAsks: true \} : \{\}\),/, "★ 리브 세션이 물음 자리로 안 열린다");
+  assert.doesNotMatch(WEB_MAIN, /chatHome: true/, "★ 셸이 리브 세션(또는 다른 세션)을 대화 고정으로 연다 — 하네스가 떠도 터미널로 안 넘어간다");
   assert.match(WEB_MAIN, /livSession: projectId === 0 && isLiv\(sessionId\),/, "곁칸 «리브» 칸이 리브 세션에 안 선다");
   assert.match(WEB_MAIN, /return isLivSessionId\(\[sid, s\?\.id, s\?\.logId, s\?\.raw\?\.claudeSessionId\], knownLivSessionId\(\) \|\| livId\);/, "리브 세션을 좌표로 안 알아본다");
   assert.match(WEB_CHAT, /chatHome\?: boolean;/, "세션 대화창에 대화 보기 본자리 옵션이 없다");
@@ -208,6 +211,12 @@ test("★★ 화면 — #/liv 는 리브 세션이 있으면 그 세션 화면�
   assert.match(WEB_CHAT, /const chatHome = \(\): boolean => livKickoff\(\) \|\| !!opts\.chatHome/, "★ 옵션이 보기 판정에 안 들어간다(리브 세션에 터미널이 뜬다)");
   assert.doesNotMatch(WEB_CHAT, /LIV_CHAT_LABEL|livChat\(\)/, "★ 세션 화면이 아직 이름 글자로 리브 세션을 가른다 — 이름을 바꾸면 리브 세션이 터미널로 열린다");
   assert.match(WEB_CHAT, /const livDock = opts\.livAsks \? mountLivAskDock\(liveDock, \{/, "★ 리브 물음이 입력칸 바로 위(liveDock)에 안 뜬다");
+  //  #4940 — 터미널을 볼 때도 물음이 보인다: 보기가 바뀔 때마다 자리를 옮긴다(대화 = 입력칸 위 · 터미널 = 머리줄 아래). 런타임은 term-warm-runtime W33.
+  assert.match(WEB_CHAT, /livAskEl = livDock \? livDock\.el : null;/, "★ 리브 물음 자리를 보기에 맞춰 옮길 손잡이가 없다");
+  assert.match(WEB_CHAT, /function setMode\(m: 'term' \| 'chat'\): void \{[\s\S]{0,2400}?\n    placeLivAsk\(\);\n/, "★ 보기가 바뀌어도 리브 물음 자리를 안 옮긴다");
+  //  카드에 치는 중(비밀 값)이면 터미널로 넘겨도 초점을 빼앗지 않는다 — 넘기면 이어 치는 값이 하네스 입력칸으로 간다(격리 리뷰 실측). 런타임은 W34.
+  assert.match(WEB_CHAT, /if \(a && livAskEl\?\.contains\(a\)\) return;\n    if \(!a \|\| a === document\.body \|\| wrap\.contains\(a\)\) termSend\('focus'\);/, "★ 리브 물음 카드에 치는 중인데 터미널로 초점을 옮긴다");
+  assert.match(WEB_CHAT, /if \(mode === 'term'\) \{ if \(a\.parentElement !== wrap\) wrap\.insertBefore\(a, chatHost\); \}/, "★ 터미널을 볼 때 물음이 숨은 대화창 안에 남는다");
   assert.match(WEB_CHAT, /livDock\?\.destroy\(\);/, "세션 화면을 걷을 때 물음 자리를 안 걷는다(되묻기가 남는다)");
 });
 

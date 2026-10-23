@@ -60,6 +60,12 @@
 //       (에코는 Claude Code 가 제출 훅을 다 돈 뒤 적어 몇 초 늦다 — 매니지드 실측. 이 장면엔 에코가 아예 없다)
 //   W31 «다 쳤다» 가 다른 말(다른 탭에서 보낸 것)의 것 → 넘기지 않는다
 //   W32 «다 쳤다» 가 그리기 전에 왔다 → 그린 때 넘긴다
+//   W33 리브 세션(#4940 — 셸이 물음 자리(livAsks)만 주고 대화 고정은 안 준다) · 첫 지시가 하네스 첫 실행 화면(글자 스타일 고르기)에
+//       막혀 끝내 안 들어간다 → 그리기 전엔 tui 대화창(물음 카드는 입력칸 위) · 그린 때부터 8초 뒤 터미널 · 터미널을 보는 동안
+//       물음 카드는 머리줄 아래(숨은 대화창 안에 갇히지 않는다). 실측 2026-10-23 셀프호스트: 대화 고정이라 «전달하는 중…» 에 갇혔다.
+//   W33b 그 뒤 사람이 [⋯ ▸ 보기 ▸ 대화로] → 물음 카드가 입력칸 위(대화창 안)로 돌아온다
+//   W34 리브 세션 · 물음 카드의 입력칸에 치는 중(비밀 값일 수 있다)에 저절로 터미널로 넘어간다 → 넘어가되 초점·값은 그 칸에 남는다
+//       (격리 리뷰 실측: 카드를 옮기며 초점이 떨어지고 터미널이 가져가 이어 치는 값이 하네스 입력칸으로 갔다)
 //   G  겹친 읽기 가드(배선 — 소스 글로 본다): 오프셋·지켜보는 곳 둘 다 보고 버린 뒤 곧 다시 읽는다 · 압축 뒤 두 번째 읽기도 · 다시 여는 중엔
 //       읽지 않는다. 런타임으로 재기 어려운 갈래(지켜보는 곳 갈아타기 · 통보 중 30초 주기)는 격리 검토가 따로 재 두었다.
 //  순수 판정(«그렸나» · 기다릴 시간 · «숨었나» 의 액자 밖)은 노드 시험 term-first-paint.test.mjs 가 맡는다.
@@ -195,6 +201,8 @@ async function PAGE_MAIN() {
       return J({ session: { id: sid } });
     }
     if (/\/prompt$/.test(u.pathname)) return J({ outbox_id: 7 });
+    if (/\/api\/ui\/me\/liv$/.test(u.pathname)) return J({ mode: "ok", reason: "", findings: [], total: 0,   // W33 — 리브가 던진 물음 하나(객관식)
+      secretAsk: { kind: "choice", allow_other: true, key: "w33", question: "W33 자료를 어디에 쌓아 두셨어요?", options: [{ id: "a", label: "슬랙" }, { id: "b", label: "노션" }] } });
     return J({ error: "no" }, 404);
   };
   localStorage.setItem("lively_ui_token", "t");
@@ -617,6 +625,50 @@ async function PAGE_MAIN() {
       R.w28 = { after: v.snap(), inkAt: ink ? ink.at - v.t0 : null, termAt: v.termAt() };
       v.done();
     }
+    // W33 — 리브 세션 · 첫 지시가 첫 실행 화면에 막혀 안 들어간다(에코 없음) · 리브 물음 하나
+    {
+      const v = mount("box-w33", "ink=600", { firstPrompt: "liv-connect 스킬로 이 워크스페이스의 외부 앱 연결을 도와줘.", livAsks: true });
+      //  물음 자리가 어디 있나 — 대화창 안(chat) · 세션 겉(머리줄 아래, wrap) · 없음
+      const dockAt = () => {
+        const d = v.box.querySelector(".sc-liv-askdock");
+        if (!d) return { at: "none", card: false };
+        const at = d.closest(".sc-chat") ? "chat" : d.parentElement && d.parentElement.classList.contains("sc-wrap") ? "wrap" : "other";
+        return { at, card: d.childElementCount > 0, text: (d.textContent || "").slice(0, 40) };
+      };
+      await sleep(1500);
+      R.w33 = { before: v.snap(), dockBefore: dockAt(), tui: !!v.box.querySelector(".livc-tui") };
+      await sleep(9500);
+      const ink = v.fx()["test-ink"];
+      R.w33.after = v.snap(); R.w33.dockAfter = dockAt(); R.w33.inkAt = ink ? ink.at - v.t0 : null; R.w33.termAt = v.termAt();
+      //  W33b — 사람이 대화로 돌아간다
+      const more = v.box.querySelector('button[aria-label="더 보기"]');
+      if (more) more.click();
+      await sleep(150);
+      const back = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "대화로");
+      if (back) back.click();
+      await sleep(200);
+      R.w33.backBtn = !!back; R.w33.back = v.snap(); R.w33.dockBack = dockAt();
+      v.done();
+    }
+    // W34 — 리브 세션 · 물음 카드 입력칸에 치는 중에 저절로 터미널로 넘어간다
+    {
+      const v = mount("box-w34", "ink=600", { firstPrompt: "liv-connect 스킬로 이 워크스페이스의 외부 앱 연결을 도와줘.", livAsks: true });
+      await sleep(1200);
+      const inp = v.box.querySelector(".sc-liv-askdock .liv-ask-input");
+      R.w34 = { hasInput: !!inp, before: v.snap() };
+      if (inp) { inp.focus(); inp.value = "sk-w34-secret"; inp.dispatchEvent(new Event("input", { bubbles: true })); }
+      R.w34.focusedBefore = !!inp && document.activeElement === inp;
+      await sleep(9500);
+      const a = document.activeElement;
+      const d = v.box.querySelector(".sc-liv-askdock");
+      R.w34.after = v.snap();
+      R.w34.inWrap = !!d && !d.closest(".sc-chat") && !!d.parentElement && d.parentElement.classList.contains("sc-wrap");
+      R.w34.keptFocus = !!inp && a === inp;
+      R.w34.active = a ? a.tagName + "." + String(a.className || "") : "";
+      R.w34.value = inp ? inp.value : null;
+      R.w34.termFocused = !!v.fx()["test-focused"];
+      v.done();
+    }
   } catch (e) { R.err = String(e && e.stack || e); }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -785,6 +837,20 @@ check(w31.ink && (w31.after || {}).warm && !(w31.after || {}).term && !w31.termA
 const w32 = R.w32 || {};
 check((w32.before || {}).warm && !(w32.before || {}).term && (w32.after || {}).term && w32.inkAt != null && w32.termAt >= w32.inkAt && w32.termAt - w32.inkAt <= 700,
   "W32 «다 쳤다» 가 그리기 전에 왔으면 — 그리기 전엔 대화창 · 그린 때 넘긴다", { before: w32.before, inkAt: w32.inkAt, termAt: w32.termAt });
+const w33 = R.w33 || {};
+check((w33.before || {}).warm && !(w33.before || {}).term && w33.tui && (w33.dockBefore || {}).at === "chat" && (w33.dockBefore || {}).card,
+  "W33 리브 세션 — 그리기 전엔 tui 대화창(숨겨 붙임) · 물음 카드는 입력칸 위", { before: w33.before, tui: w33.tui, dock: w33.dockBefore });
+check((w33.after || {}).term && w33.inkAt != null && w33.termAt - w33.inkAt >= 7800 && w33.termAt - w33.inkAt <= 8900,
+  "W33 ★ 리브 세션도 첫 지시가 막혀 안 들어가면 그린 때부터 8초 뒤 터미널로 넘어간다(대화창에 머물지 않는다)", { after: w33.after, inkAt: w33.inkAt, termAt: w33.termAt });
+check((w33.dockAfter || {}).at === "wrap" && (w33.dockAfter || {}).card,
+  "W33 ★ 터미널을 보는 동안 리브 물음 카드가 머리줄 아래에 보인다(숨은 대화창 안에 갇히지 않는다)", w33.dockAfter);
+check(w33.backBtn && !(w33.back || {}).term && (w33.dockBack || {}).at === "chat" && (w33.dockBack || {}).card,
+  "W33b 대화로 돌아가면 리브 물음 카드도 입력칸 위(대화창 안)로 돌아온다", { btn: w33.backBtn, back: w33.back, dock: w33.dockBack });
+const w34 = R.w34 || {};
+check(w34.hasInput && w34.focusedBefore && (w34.after || {}).term && w34.inWrap,
+  "W34 카드에 치는 중이어도 하네스가 뜨면 터미널로 넘어간다(카드는 머리줄 아래)", w34);
+check(w34.keptFocus && w34.value === "sk-w34-secret" && !w34.termFocused,
+  "W34 ★ 넘어갈 때 초점·값이 카드 입력칸에 남는다 — 터미널이 초점을 가져가면 이어 치는 비밀 값이 하네스 입력칸으로 간다", { keptFocus: w34.keptFocus, active: w34.active, value: w34.value, termFocused: w34.termFocused });
 const w29 = R.w29 || {};
 check((w29.after || {}).term && w29.inkAt != null && w29.termAt >= w29.inkAt && w29.termAt - w29.inkAt <= 700,
   "W29 지켜볼 기록이 없는 화면(멤버 PC 행 · 대화 id 모름 · 파일 없음)은 기다리지 않고 그린 때 넘긴다", w29);

@@ -127,7 +127,9 @@ check(/const other = tabsApi\?\.find\(to\);\s*if \(other && other !== tab\) \{ t
 //  W9 — 리브 id 물음은 시간을 둔다(빈 화면 금지 · #3537) · 되살린 뒤엔 새로 묻는다 · 팝아웃도 리브 세션으로.
 check(/const livId = projectId > 0 \? knownLivSessionId\(\) : await livSessionIdWithin\(1500\);/.test(MAIN), "W9 ★ 세션 화면이 리브 id 물음을 끝없이 기다린다(느리면 빈 화면)");
 check(/void livSessionId\(\{ fresh: true \}\);\s*const href = '#\/s\/' \+ encodeURIComponent\(sid\);/.test(MAIN), "W9 되살린 뒤 리브 id 를 새로 안 묻는다(30초 동안 리브 세션을 못 알아본다)");
-check(/const soloLiv = isLivSessionId\(/.test(MAIN) && /\.\.\.\(soloLiv \? \{ chatHome: true, livAsks: true \} : \{\}\),/.test(MAIN), "W9 팝아웃 창의 리브 세션이 대화 보기 · 물음 자리로 안 열린다");
+//   (#4940) 보기는 본 창과 같이 일반 세션 — 대화 고정(chatHome)을 주지 않는다(상민님 2026-10-23 «그냥 터미널로 열면 되잖아»).
+check(/const soloLiv = isLivSessionId\(/.test(MAIN) && /\.\.\.\(soloLiv \? \{ livAsks: true \} : \{\}\),/.test(MAIN), "W9 팝아웃 창의 리브 세션이 물음 자리로 안 열린다");
+check(!/soloLiv \? \{ chatHome: true/.test(MAIN), "W9 ★ 팝아웃 창의 리브 세션이 대화 고정으로 열린다 — 하네스가 떠도 터미널로 안 넘어간다");
 check(/if \(inflight\) return inflight;/.test(OPEN), "W9 묻는 중이면 그 답을 기다린다(되살린 뒤 옛 id 로 그리지 않게)");
 
 //  보내기 다리 — 대화창일 때만 보낸다(터미널에 Enter 까지 쳐 넣지 않는다) · 보낸 쪽이 없으면 거짓(부르는 쪽이 서버 길로).
