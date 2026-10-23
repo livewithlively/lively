@@ -121,7 +121,9 @@ test("[W4] 화면 — 같은 id 응답을 성공으로 읽고, 그 탭을 살아
   const main = read(join(WEB, "v2", "main.ts"));
   assert.match(main, /function seedCreated\(id: string\): boolean \{/, "복원 응답으로 «중단됨» 행을 바꿔 끼우는 자리가 있어야 한다");
   assert.match(main, /if \(cur && !cur\.raw\?\.restorable\) return false;/, "살아 있는 행은 덮지 않는다(목록 폴링이 진실)");
-  assert.ok((main.match(/seedCreated\((?:id|sid)\);/g) || []).length >= 2, "세션 라우트·리브 칸 둘 다 복원 응답을 먼저 쓴다");
+  //  (#4970) 리브 칸(리브 탭의 대화 칸)은 걷었다 — 리브 세션은 보통 세션 라우트로 열리므로 그 한 자리가 둘 다를 맡는다.
+  assert.ok((main.match(/seedCreated\((?:id|sid)\);/g) || []).length >= 1, "세션 라우트가 복원 응답을 먼저 쓴다");
+  assert.doesNotMatch(main, /liv-chat\.js|mountSession: async \(h, sid, o\) => \{/, "리브 탭의 따로 붙이는 대화 칸이 남아 있다(복원 응답 규칙이 두 벌로 갈린다)");
   assert.match(main, /onResumed: \(nid\) => \{ tab\.chat\?\.destroy\(\); tab\.chat = null; resumedInTab\(tab, nid\); \}/, "팝아웃 창도 되살린 세션으로 다시 그린다(주소가 같아 hashchange 가 없다)");
 });
 

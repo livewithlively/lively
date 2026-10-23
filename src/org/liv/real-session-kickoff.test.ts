@@ -31,7 +31,7 @@ test("★★ 킥오프는 진짜 세션 — 리브 세션 모듈이 launchSessio
   assert.match(KICKOFF, /export const LIV_HREF = "#\/liv";/, "리브 탭 주소가 #/liv 가 아니다");
 });
 
-test("★★ (#4970) 처음 설정 반영은 리브 세션을 열지 않는다 — 외부 앱 연결은 사람이 누를 때 보통 세션으로(me_connect_session_open)", () => {
+test("★★ (#4970) 처음 설정 반영은 리브 세션을 열지 않는다 — 외부 앱 연결은 사람이 [연결할게요]를 누를 때 리브 세션에 맡긴다(me_liv_open)", () => {
   //  종전(#1631 → #4213 T13)엔 반영의 마지막 걸음이 리브 킥오프였다. 그 길이 AI 미로그인·Claude 아닌 하네스에서 막다른 길이라 걷었다.
   assert.doesNotMatch(WELCOME, /kickoffLivAfterWelcome|livKickoff\(|buildFirstTurnPrompt|planLivKickoff|startLivChatTurn/, "★ 처음 설정 반영이 아직 리브 세션을 연다");
   assert.doesNotMatch(WELCOME, /welcome: \{[^}]*\bflow\b/, "★ 새로 끝내는 사람에게 리브 갈래(flow)를 적는다 — 리브 2턴 후보가 된다");

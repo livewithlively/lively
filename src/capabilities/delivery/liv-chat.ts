@@ -1,10 +1,19 @@
-// delivery ▸ liv-chat — 리브 탭이 부르는 창구(#1631 · #4032). 리브는 **진짜 세션**이다(org/liv/session.ts).
+// delivery ▸ liv-chat — 화면이 리브를 여는 창구(#1631 · #4032 · #4970). 리브는 **진짜 세션**이다(org/liv/session.ts).
 //
 //  ── 무엇이 바뀌었나(#4032, 상민님 결정 2026-09-16) ──
 //  종전엔 리브 탭의 한 마디가 헤드리스 한 턴이었다(me_liv_turn → spawnTaskSession). 그 경로는 게이트웨이가 도는 기계의 tmux 를
 //  직접 불러, 세션을 노드의 세션 컨테이너에 띄우는 매니지드에서는 한 번도 안 떴다(500 — 판이 sudo 에서 즉사, 다음 set-option 이
-//  «no server running»). 이제 리브 탭은 그 사람의 리브 세션 하나를 찾아(없으면 첫 말로 연다) **그 세션 대화창**을 붙인다.
-//  말 보내기·멈춤·되살리기·되그리기는 전부 세션 대화창(web/session-chat.ts)의 것을 그대로 쓴다 — 여기엔 좌표 두 개만 남는다.
+//  «no server running»). 그래서 리브는 그 사람의 리브 세션 하나가 됐다.
+//
+//  ── 입구 하나, 일감만 다르다(#4970 «리브 = 세션 하나», 상민님 결정 2026-10-22) ──
+//  레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘] · 리브 칸의 [제가 해 드릴게요]가 **같은 리브 세션**으로 간다.
+//   첫 지시만 다르다(LIV_JOBS) — 그 말은 사람에게 그대로 보인다(숨길 이유가 없고, 사람이 같은 말을 자기 AI 에서 다시 쓸 수 있다).
+//  · 리브 세션이 없으면 그 말을 첫 지시로 연다. 띄울 하네스는 그 사람이 로그인한 것 가운데 첫 번째 — 특정 하네스를 우대하지 않는다.
+//    로그인한 AI 가 없으면 열지 않고 ai:false — 화면이 «쓰는 AI 에서 하기» 를 그린다.
+//  · 있으면 그 세션에 말을 넣는다 — 홈 입력창·2턴과 같은 통로(deliverPromptForMember). 못 넣었으면(멈춘 세션 등) delivered:false 로
+//    알리고 화면이 그 말을 입력칸에 돌려 둔다 — 사람이 보내면 대화창이 세션을 되살리며 넣는다.
+//  · ⚠ 좌표를 welcome.session_id 에 넣지 않는다 — 거기 있으면 리브 2턴(증류 지시) 후보가 돼 대화 한복판에 서버 지시가 끼어든다.
+//    좌표는 리브 세션 모듈이 liv_profile.liv_session 에 적는다.
 //
 //  ── mcp:false ──
 //  이 문들은 **화면이 리브를 여는 자리**다. 리브가 자기를 다시 부르면 세션이 겹쳐 선다.
@@ -13,7 +22,7 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-import { LIV_PROMPT_MAX, currentLivSessionId, ensureLivSession } from "../../org/liv/session.js";
+import { LIV_PROMPT_MAX, currentLivSessionId, ensureLivSession, type EnsuredLivSession } from "../../org/liv/session.js";
 
 /** (순수) 첫 말 검사 — 비었으면 400, 상한을 넘으면 몇 자 넘었는지 말하는 400. 통과하면 다듬은 글. */
 export function livFirstWords(raw: unknown): string {
@@ -23,38 +32,113 @@ export function livFirstWords(raw: unknown): string {
   return text;
 }
 
+/** 문마다 리브에게 건네는 첫 말 — 사람에게 그대로 보인다. 스킬 이름을 넣어 자동 호출이 빗나가도 사람이 알아본다. */
+export const LIV_JOBS = {
+  /** 레일 [리브] — 워크스페이스 점검. */
+  liv: "liv 스킬로 이 워크스페이스를 점검해 줘.",
+  /** 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘] — 외부 앱 연결(입구 스킬이 앱마다 상태를 보고 앱별 스킬로 넘긴다). */
+  connect: "liv-connect 스킬로 이 워크스페이스의 외부 앱 연결을 도와줘.",
+} as const;
+export type LivJob = keyof typeof LIV_JOBS;
+
+/** (순수) 리브에게 넣을 말 — 글(text)을 주면 그 글(첫 말 규칙대로), 없으면 일감(job, 기본 liv)의 정해진 말. 모르는 일감은 400. */
+export function livInstruction(input: { job?: unknown; text?: unknown } | null | undefined): string {
+  if (input?.text !== undefined && input?.text !== null) return livFirstWords(input.text);
+  const job = input?.job === undefined || input?.job === null || input?.job === "" ? "liv" : String(input.job);
+  if (!Object.prototype.hasOwnProperty.call(LIV_JOBS, job)) throw new HttpError(400, `모르는 일입니다: ${job}`);
+  return LIV_JOBS[job as LivJob];
+}
+
+/** (순수) 리브 세션을 띄울 하네스 — 로그인한 것(순서 그대로) 가운데 세션으로 띄울 수 있는 첫 번째. 없으면 null. */
+export function pickLivHarness(usable: readonly string[], launchable: readonly string[]): string | null {
+  for (const k of usable) if (k && k !== "shell" && launchable.includes(k)) return k;
+  return null;
+}
+
+/** 화면이 갈 곳 — 리브 세션 화면. */
+export const livSessionHref = (id: string): string => `#/s/${encodeURIComponent(id)}`;
+
+export type LivOpenResult =
+  | { ai: false; reason: "ai-not-connected" }
+  | { ai: true; session_id: string; href: string; created: true; harness?: string; session?: unknown; initialPrompt: string }
+  | { ai: true; session_id: string; href: string; created: false; delivered: boolean; text: string };
+
+/** 의존(시험 seam) — 실제 구현은 아래 realDeps. */
+export interface LivOpenDeps {
+  /** 리브 세션 확보 — 있으면 그 id, 없으면 그 말로 연다(하네스 물음은 열 때만). 로그인한 AI 가 없으면 null. */
+  ensure: (user: LivelyUser, text: string, harness: () => Promise<string | null>) => Promise<EnsuredLivSession | null>;
+  /** 이 사람이 로그인한 하네스(순서 그대로). */
+  usable: (userId: string) => Promise<string[]>;
+  /** 세션으로 띄울 수 있는 하네스. */
+  launchable: () => Promise<readonly string[]>;
+  /** 떠 있는 세션에 말을 넣는다(사람이 보낸 것과 같은 통로). 못 넣으면 던진다. */
+  deliver: (sessionId: string, userId: string, text: string) => Promise<unknown>;
+}
+
+/** 리브에게 일 맡기기 — 판정 순서: 말 검사 → (리브 세션 있음 → 넣기) / (없음 → 로그인 확인 → 그 말로 열기 · 없으면 ai:false). */
+export async function openLiv(user: LivelyUser, input: { job?: unknown; text?: unknown } | null | undefined, d: LivOpenDeps): Promise<LivOpenResult> {
+  const userId = String(user?.userId ?? "");
+  if (!userId) throw new HttpError(401, "인증이 필요합니다");
+  const text = livInstruction(input);
+  const harness = async (): Promise<string | null> => {
+    const [usable, launchable] = await Promise.all([d.usable(userId).catch(() => [] as string[]), d.launchable()]);
+    return pickLivHarness(usable, launchable);
+  };
+  let r: EnsuredLivSession | null;
+  try {
+    r = await d.ensure(user, text, harness);
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    //  세션을 못 연 이유를 사람에게 그대로 말한다 — 이 자리의 실패가 500 «internal_error» 로 뭉개져 원인을 못 찾은 것이 #4032 였다.
+    throw new HttpError(503, `리브를 열지 못했습니다 — ${(e as Error)?.message ?? e}`, { cause: e });
+  }
+  if (!r) return { ai: false, reason: "ai-not-connected" };
+  const href = livSessionHref(r.session_id);
+  if (r.created) return { ai: true, session_id: r.session_id, href, created: true, harness: r.harness, session: r.session, initialPrompt: text };
+  const delivered = await d.deliver(r.session_id, userId, text).then(() => true, () => false);
+  return { ai: true, session_id: r.session_id, href, created: false, delivered, text };
+}
+
+const realDeps: LivOpenDeps = {
+  ensure: (user, text, harness) => ensureLivSession(user, text, { harness }),
+  usable: async (userId) => {
+    const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
+    return memberUsableHarnesses(userId);
+  },
+  launchable: async () => {
+    const { HARNESSES } = await import("../../terminal/catalog.js");
+    return HARNESSES.map((h) => h.key).filter((k) => k !== "shell");
+  },
+  deliver: async (sessionId, userId, text) => {
+    const { deliverPromptForMember } = await import("../../terminal/deliver-prompt.js");
+    return deliverPromptForMember(sessionId, userId, text);
+  },
+};
+
 export const livChatCapabilities: Capability[] = [
   restRead("me_liv_session", "리브 세션 찾기",
     "이 사람이 이 워크스페이스에서 이어 가는 리브 세션 id(없으면 null). 세션이 복원돼 id 가 바뀌었으면 이어진 id 를 준다. " +
-    "화면은 이 id 의 세션 대화창을 리브 탭에 붙인다.",
+    "화면은 이 id 의 세션을 리브 세션으로 연다(대화가 본자리 · 오른쪽 «리브» 칸 · 물음 입력칸).",
     [{ method: "GET", paths: ["/api/ui/me/liv/session"], parse: () => ({}) }],
     async (_input: unknown, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      //  조회는 읽기만 한다(heal:false) — 옛 좌표 고쳐 적기는 첫 말·2턴 스윕이 한다.
+      //  조회는 읽기만 한다(heal:false) — 옛 좌표 고쳐 적기는 여는 문·2턴 스윕이 한다.
       return { session_id: await currentLivSessionId(userId, { heal: false }) };
     }),
 
-  restRead("me_liv_session_open", "리브에게 첫 말 걸기",
-    "리브 세션이 없으면 이 말을 첫 지시로 세션을 연다(created:true — session 에 생성 응답 한 장). " +
-    "이미 있으면 그 세션 id 만 돌려주고 말은 넣지 않는다(created:false) — 화면이 그 세션 대화창에서 보낸다.",
-    [{ method: "POST", paths: ["/api/ui/me/liv/session"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => {
-      const userId = user?.userId;
-      if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      const text = livFirstWords(input.text);
-      try {
-        return await ensureLivSession(user, text);
-      } catch (e) {
-        if (e instanceof HttpError) throw e;
-        //  세션을 못 연 이유를 사람에게 그대로 말한다 — 이 자리의 실패가 500 «internal_error» 로 뭉개져 원인을 못 찾은 것이 #4032 였다.
-        throw new HttpError(503, `리브를 열지 못했습니다 — ${(e as Error)?.message ?? e}`, { cause: e });
-      }
-    },
+  restRead("me_liv_open", "리브에게 일 맡기기",
+    "리브 세션에 일을 맡긴다 — 리브 세션이 없으면 그 말을 첫 지시로 연다(created:true), 있으면 그 세션에 말을 넣는다(created:false · " +
+    "delivered 가 넣었는지). 말은 text 로 주거나 job 으로 고른다(liv = 워크스페이스 점검 · connect = 외부 앱 연결). " +
+    "로그인한 AI 가 없고 리브 세션도 없으면 열지 않고 ai:false — 그때 화면은 «쓰는 AI 에서 하기» 를 안내한다. " +
+    "사람이 레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘] · 리브 칸에서 누르는 문이다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv/open"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => openLiv(user, input, realDeps),
     false,
     {
+      job: z.enum(["liv", "connect"]).optional().describe("맡길 일(text 가 없을 때) — liv = 워크스페이스 점검(기본) · connect = 외부 앱 연결"),
       // ⚠ text 에 zod .max() 를 두지 않는다 — 상한 초과는 핸들러가 "몇 자 넘었는지"를 말해 주는 게 낫다(#1442).
-      text: z.string().describe("리브에게 할 첫 말"),
+      text: z.string().optional().describe("리브에게 할 말(주면 job 대신 이 말)"),
     }),
 
   restRead("me_liv_ask_dismiss", "물음 접어두기",

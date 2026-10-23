@@ -394,14 +394,11 @@ export interface LivProfile {
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
   answers?: LivAnswer[];
-  /** 리브 탭이 붙는 세션(#4032). 없으면 첫 말이 새로 연다 — 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다. */
-  liv_session?: LivSessionRef | null;
   /**
-   * 외부 앱 연결 세션(#4970) — 처음 설정의 [연결할게요]·[외부 앱 연결] 화면의 [연결 도와줘]가 연 보통 세션. 다시 눌러도 같은
-   *  세션으로 간다(me_connect_session_open). ⚠ welcome.session_id 에 넣지 않는다 — 거기 있으면 리브 2턴(증류 지시) 후보가 돼
-   *  연결 대화 한복판에 서버 지시가 끼어든다(listLivSecondTurnCandidates). 리브 좌표(liv_session)와도 다르다 — 리브 부팅 훅을 안 받는다.
+   * 리브 세션(#4032). 레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘]가 모두 이 세션으로 간다(#4970 «리브 = 세션 하나» —
+   *  me_liv_open). 없으면 그 문의 첫 말이 새로 연다 — 옛 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다.
    */
-  connect_session?: LivSessionRef | null;
+  liv_session?: LivSessionRef | null;
 }
 
 const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
@@ -433,11 +430,6 @@ export async function setLivWelcomeProgress(id: string, progress: LivWelcomeProg
 /** 리브 세션 좌표를 이 워크스페이스 층에 적는다(null = 지운다, #4032). */
 export async function setLivSession(id: string, ref: LivSessionRef | null): Promise<LivProfile> {
   return await writeLivProfile(id, { liv_session: ref });
-}
-
-/** 외부 앱 연결 세션 좌표를 이 워크스페이스 층에 적는다(null = 지운다, #4970). */
-export async function setConnectSession(id: string, ref: LivSessionRef | null): Promise<LivProfile> {
-  return await writeLivProfile(id, { connect_session: ref });
 }
 
 /**
@@ -487,9 +479,8 @@ export async function livAnswerStats(): Promise<Array<{
 
 /** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다.
  *  `join`(#1631) — 이 워크스페이스에 만든 사람으로 왔나 초대로 왔나. 워크스페이스마다 다르다.
- *  `liv_session`(#4032) — 리브 탭이 붙는 세션. 세션은 워크스페이스마다 따로 산다.
- *  `connect_session`(#4970) — 외부 앱 연결 세션. 같은 이유로 워크스페이스마다 따로다. */
-export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions", "join", "liv_session", "connect_session"] as const;
+ *  `liv_session`(#4032) — 리브 세션. 세션은 워크스페이스마다 따로 산다. */
+export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions", "join", "liv_session"] as const;
 export type WorkspaceScopedKey = (typeof WORKSPACE_SCOPED_KEYS)[number];
 
 /** 워크스페이스 층이 사는 자리. */

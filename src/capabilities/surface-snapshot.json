@@ -1536,14 +1536,14 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "me_liv_session_open",
+  "name": "me_liv_open",
   "scope": null,
   "mcp": false,
   "mutates": true,
   "rest": [
-   "POST /api/ui/me/liv/session"
+   "POST /api/ui/me/liv/open"
   ],
-  "input_hash": "42bfce9995a59366"
+  "input_hash": "a224ad075c3d3da3"
  },
  {
   "name": "me_liv_ask_dismiss",
@@ -1604,16 +1604,6 @@
    "POST /api/ui/me/welcome"
   ],
   "input_hash": "71c432d82ed7faa9"
- },
- {
-  "name": "me_connect_session_open",
-  "scope": null,
-  "mcp": false,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/me/connect-session"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "project_chat_turn",

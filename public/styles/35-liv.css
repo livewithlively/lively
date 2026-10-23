@@ -306,3 +306,44 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 @media (prefers-reduced-motion: reduce) {
   .liv-letter-working .liv-quiet-say::before { animation: none; opacity: .6; }
 }
+
+/* ── #4970 «리브 = 세션 하나» ─────────────────────────────────────────────────────────
+   리브는 보통 세션 화면에서 산다 — 대화는 가운데, 오른쪽 «리브» 칸(web/v2/panes-liv.ts)에 지금 손볼 것·외부 앱 연결 상태.
+   물음 카드는 세션 대화창의 입력칸 바로 위(web/liv-ask-dock.ts) — 위 .liv-askdock 규칙을 그대로 쓰되 대화창 폭에 맞춘다. */
+.sc-liv-askdock:not(:empty) { margin: 0 0 6px; padding: 8px 0 2px; max-height: 40vh; }
+
+/* 오른쪽 «리브» 칸 */
+.pn-livdesk { padding: 12px 12px 16px; gap: 10px; overflow: auto; }
+.pn-livdesk-head { display: flex; align-items: center; gap: 8px; }
+.pn-livdesk-name { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.pn-livdesk-name b { font-size: 15px; }
+.pn-livdesk-role { font-size: 11.5px; color: var(--muted); }
+.pn-livdesk-say { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
+.pn-livdesk-ask { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1.5;
+  padding: 8px 10px; border: 1px solid var(--mint-deep); border-radius: 10px; background: var(--bg); }
+.pn-livdesk-ask[hidden] { display: none; }
+.pn-livdesk-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint-deep); flex: none; }
+.pn-livdesk-letter { padding: 12px; }
+.pn-livdesk-sec { display: flex; flex-direction: column; gap: 6px; }
+.pn-livdesk-h, .liv-apps-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.pn-livdesk-more, .liv-apps-more { font-size: 11.5px; color: var(--muted); text-decoration: none; }
+.pn-livdesk-more:hover, .liv-apps-more:hover { color: var(--ink); text-decoration: underline; }
+
+/* 외부 앱 연결 상태 한 줄씩(오른쪽 «리브» 칸 · 리브 화면 같이) */
+.liv-apps { display: flex; flex-direction: column; gap: 2px; }
+.liv-app { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px;
+  color: var(--ink); text-decoration: none; font-size: 12.5px; }
+.liv-app:hover { background: var(--bg-sel); }
+.liv-app-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.liv-app-s { flex: none; font-size: 11.5px; color: var(--muted); }
+.liv-app-collecting .liv-app-s, .liv-app-set_scope .liv-app-s { color: var(--mint-deep); }
+.liv-app-ask_admin .liv-app-s, .liv-app-register_app .liv-app-s { color: var(--ink-sub); }
+
+/* 리브 화면(단독) — 대화 칸이 없다. 문(대화 이어 가기 · 시작) · 물음 · 편지 · 외부 앱 연결 */
+.liv-board .liv-body { overflow: auto; }
+.liv-door { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.liv-door-note { font-size: 12px; color: var(--muted); }
+.liv-ownai[hidden] { display: none; }
+.liv-board-ask:not(:empty) { margin: 0; border-top: 0; padding: 0; max-height: none; }
+.liv-apps-sec { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line-net); border-radius: 12px;
+  background: var(--bg-tint); padding: 12px; }

@@ -24,11 +24,11 @@ const ROUTES = srcOf("./routes.ts");
 const RUN = srcOf("./ai-login-run.ts");   // #3668 T3 — 하네스 자리(세션 컨테이너)를 러너와 프로브가 공유한다
 const INDEX = srcOf("../index.ts");      // #3668 T3 — 그 자리를 잇는 배선(게이트웨이 능력 등록)
 //  #1631 — «폴링은 싸게, 결정 지점은 정확하게» 를 지키려면 그 두 자리가 있는 파일도 봐야 한다.
-//   (#4970) 결정 지점은 리브 킥오프가 아니라 외부 앱 연결 세션 열기(me_connect_session_open)다.
+//   (#4970) 결정 지점은 리브 킥오프가 아니라 리브에게 일 맡기기(me_liv_open — 새로 열 때만 로그인을 잰다)다.
 const WELCOME = readFileSync(
   new URL("../capabilities/delivery/welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const CONNECT = readFileSync(
-  new URL("../capabilities/delivery/connect-session.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  new URL("../capabilities/delivery/liv-chat.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 
 /** 사람에게 로그인하게 하는 AI 넷 → 하네스 key. (#4970) 처음 설정의 «AI 고르기» 표는 걷혔다 — 로그인은 [내 설정 ▸ AI 계정 연결]에서 하고,
  *  외부 앱 연결 세션은 그중 로그인된 첫 번째로 뜬다. 이 넷이 «이어졌나» 를 답하지 못하면 연결 세션이 영영 «AI 없음» 으로 떨어진다. */
@@ -106,11 +106,11 @@ t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번
     "프로브를 돌리는 자리가 POST 가 아니다 — 부수효과 있는 조회를 GET 계약에 얹으면 캐시·프리페치가 붙는다");
 });
 
-t("⑥b 결정 지점(외부 앱 연결 세션 열기)은 **정확한** 사실을 쓴다 — 제미나이만 이은 사람이 «AI 없음» 으로 막히면 안 된다(#1631 → #4970)", () => {
+t("⑥b 결정 지점(리브에게 일 맡기기 — 리브 세션을 새로 열 때)은 **정확한** 사실을 쓴다 — 제미나이만 이은 사람이 «AI 없음» 으로 막히면 안 된다(#1631 → #4970)", () => {
   //  자격 파일이 없는 하네스(antigravity)는 파일 표에 구조적으로 못 든다. 결정 지점이 그 목록을 그대로 쓰면
   //   제미나이로 로그인해 둔 사람에게 «로그인된 AI 가 없어요» 라고 하고 세션을 안 열어 준다.
   const usable = CONNECT.slice(CONNECT.indexOf("usable: async (userId) =>"), CONNECT.indexOf("launchable: async () =>"));
-  assert.match(usable, /memberUsableHarnesses\(userId\)/, "연결 세션의 AI 판정이 프로브까지 본 사실을 쓰지 않는다");
+  assert.match(usable, /memberUsableHarnesses\(userId\)/, "리브를 여는 문의 AI 판정이 프로브까지 본 사실을 쓰지 않는다");
   assert.doesNotMatch(usable, /memberLoggedInHarnessesAny/, "결정 지점이 폴링용(자격 파일만) 판정을 쓴다");
 });
 

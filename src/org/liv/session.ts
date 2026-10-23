@@ -9,8 +9,9 @@
 //  보통 세션이 됐다(상민님 결정 2026-09-16).
 //
 //  ── 한 사람에 세션 하나 ──
-//  · 리브 탭 · 처음 설정 킥오프 · 증류 2턴이 **같은 세션**을 본다. 좌표는 liv_profile.liv_session(워크스페이스 층)이고,
-//    없으면 킥오프가 연 세션(welcome.session_id)이 폴백이다.
+//  · 레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘] · 증류 2턴이 **같은 세션**을 본다(#4970 «리브 = 세션 하나»,
+//    상민님 결정 2026-10-22 — 입구는 하나, 일감만 다르다: me_liv_open). 좌표는 liv_profile.liv_session(워크스페이스 층)이고,
+//    없으면 옛 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다.
 //  · 세션이 회수돼 복원되면 새 id 가 된다 — 좌표는 복원 이정표(resolveSessionSuccessor)를 따라가 읽고, 읽은 김에 고쳐 적는다.
 //  · 작업 폴더는 <개인 루트>/liv 다 — 리브 부팅 훅(org_hook liv-session-boot)의 게이트가 basename(cwd) === "liv" 다.
 //    이 폴더가 아니면 그 세션은 리브의 정체성·현황을 못 받는다.
@@ -113,7 +114,9 @@ export async function openLivSession(user: LivelyUser, o: { prompt: string; labe
   const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
   const { launchSession } = await import("../../terminal/session-launch.js");
   //  하네스는 그 사람이 **로그인한 것**(claude 하드코딩 금지, #1884). 비용 주체 = 사용자.
-  const harness = await resolveHeadlessHarness(userId, o.harness ?? null);
+  //  (#4970) 부르는 쪽이 고른 하네스(me_liv_open — 로그인한 것 가운데 세션으로 띄울 수 있는 첫 번째)는 **그대로** 쓴다. 리브 세션은 보통
+  //   대화형 세션이라 헤드리스(위탁) 지원표로 거르지 않는다 — 거르면 그 표에 없는 하네스(opencode)로만 로그인한 사람에게 리브가 안 열린다(503).
+  const harness = String(o.harness ?? "").trim() || await resolveHeadlessHarness(userId, null);
   const session = await launchSession(user, {
     kind: "task",
     label: o.label,
@@ -150,20 +153,31 @@ export function serialByKey(): { run<T>(key: string, fn: () => Promise<T>): Prom
  */
 const opening = serialByKey();
 
-export interface EnsuredLivSession { session_id: string; created: boolean; session?: LaunchedSession }
+export interface EnsuredLivSession { session_id: string; created: boolean; session?: LaunchedSession; harness?: string }
+
+export interface EnsureLivOpts {
+  /**
+   * 새로 열 때만 부른다 — 그 세션을 띄울 하네스. null 이면 로그인한 AI 가 없다는 뜻이라 **열지 않고** null 을 돌려준다
+   *  (화면이 «쓰는 AI 에서 하기» 를 그린다). 생략하면 resolveHeadlessHarness 의 기본을 쓴다.
+   *  로그인 확인은 비싸다(자격 파일이 없을 때 프로브 — 실측 4.3초·상한 25초) — 그래서 세션이 이미 있으면 묻지 않는다.
+   */
+  harness?: () => Promise<string | null>;
+}
 
 /**
- * 리브 탭의 첫 말 — 이미 리브 세션이 있으면 **그 세션을 돌려주고 말은 넣지 않는다**(화면이 그 세션 대화창에서 보낸다 —
- *  멈춘 세션이면 대화창이 되살리면서 보낸다). 없으면 그 말을 첫 지시로 새로 연다.
+ * 리브 세션을 확보한다 — 이미 있으면 **그 세션 id 만 돌려주고 말은 넣지 않는다**(넣는 것은 부르는 쪽 몫 — me_liv_open 이
+ *  세션에 넣는다). 없으면 그 말을 첫 지시로 새로 연다. 로그인한 AI 가 없으면(o.harness 가 null) null.
  */
-export async function ensureLivSession(user: LivelyUser, text: string): Promise<EnsuredLivSession> {
+export async function ensureLivSession(user: LivelyUser, text: string, o: EnsureLivOpts = {}): Promise<EnsuredLivSession | null> {
   const userId = user?.userId;
   if (!userId) throw new Error("인증된 사용자가 아닙니다");
   const { currentTenant } = await import("../tenant-context.js");
   return await opening.run(`${currentTenant()?.id ?? ""}|${userId}`, async () => {
     const cur = await currentLivSessionId(userId);
     if (cur) return { session_id: cur, created: false };
-    const made = await openLivSession(user, { prompt: text, label: LIV_CHAT_LABEL });
-    return { session_id: made.session_id, created: true, session: made.session };
+    const harness = o.harness ? await o.harness() : undefined;
+    if (harness === null) return null;
+    const made = await openLivSession(user, { prompt: text, label: LIV_CHAT_LABEL, harness });
+    return { session_id: made.session_id, created: true, session: made.session, harness: made.harness };
   });
 }

@@ -20,6 +20,16 @@ import { livHomeMode } from "../../org/delivery/liv-home.js";
 /** 화면이 한 번에 보여주는 카드 수. 전부 나열하면 아무것도 안 된다. */
 const TOP = 3;
 
+/**
+ * 리브 화면(단독) 절대 주소 — 커서 같은 로컬 AI 가 사람에게 «이 링크에서 넣어 주세요» 로 줄 링크(#4970). 물음 카드가 거기 뜬다.
+ *  사람에게 주는 링크라 절대 주소다(상대 주소는 사람이 못 누른다). 게이트웨이 주소를 모르면 null.
+ */
+async function livBoardUrl(): Promise<string | null> {
+  const { gatewayUrl } = await import("../../gateway-url.js");
+  const base = await gatewayUrl().catch(() => null);
+  return base ? `${String(base).replace(/\/+$/, "")}/ui/#/liv?board=1` : null;
+}
+
 export const livCapabilities: Capability[] = [
   // ⚠ `mode`/`reason` 은 **더는 홈을 갈아치우는 데 쓰이지 않는다.** 리브가 홈을 덮던 설계를 걷어내고
   //  독립 페이지(#/liv)로 분리했다(대표 결정 — 기대한 화면이 아닌 게 뜨는 건 그 자체로 고장으로 읽힌다).
@@ -218,8 +228,9 @@ export const livCapabilities: Capability[] = [
   //   - 사람은 리브 화면을 벗어나지 않는다(탭 이동·경로 안내 자체가 사라진다).
   //   - 넣을 자리는 **서버가 저장해 둔 요청**에서만 온다 — 브라우저가 대상을 바꿔 보낼 수 없다.
   restRead("me_liv_ask_secret", "자격 입력칸 띄우기",
-    "리브가 사람에게 받아야 하는 자격 하나를 **요청**한다 — 리브 화면에 안전 입력칸이 뜬다. " +
-    "⚠ 시크릿을 대화로 받지 마라. 사람에게 다른 탭·메뉴로 가라고 하지도 마라. 이 도구를 쓰면 그 자리에서 끝난다. " +
+    "리브가 사람에게 받아야 하는 자격 하나를 **요청**한다 — 리브 세션 대화창의 입력칸 바로 위(와 리브 화면)에 안전 입력칸이 뜬다. " +
+    "⚠ 시크릿을 대화로 받지 마라. 사람에게 다른 탭·메뉴로 가라고 하지도 마라. 웹의 리브 세션이면 이 도구를 쓰면 그 자리에서 끝난다. " +
+    "커서 같은 로컬 AI 처럼 그 입력칸이 안 보이는 자리라면 응답의 board_url 을 사람에게 주고 «이 링크에서 넣어 주세요» 라고 하라(값은 대화로 받지 않는다). " +
     "값은 화면이 받아 곧바로 금고로 넣고, 너는 값을 보지 못한다(설정됐는지 여부만 확인된다).",
     [{ method: "POST", paths: ["/api/ui/me/liv-secret-ask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -258,7 +269,7 @@ export const livCapabilities: Capability[] = [
         hint: str(input.hint, 120) ?? f.hint ?? undefined,
       };
       await setLivSecretAsk(userId, ask);
-      return { ask };
+      return { ask, board_url: await livBoardUrl() };
       // ⚠ **MCP 로 노출한다**(mcp=true). 리브가 쓰라고 만든 도구인데 도구 목록에 없으면 못 쓴다 —
       //  실측: 리브가 ToolSearch 를 세 번 돌리고 REST 경로를 세 번 추측하느라 96초를 태웠고,
       //  그 사이 사람에게는 "칸이 떴을 거예요"라고 먼저 말해 버렸다(아직 안 떴는데).
@@ -303,7 +314,8 @@ export const livCapabilities: Capability[] = [
   //   없는 말을 지어내야 해서 어렵고, 답이 제각각이라 우리도 개선점을 못 뽑는다. 고르게 하면 둘 다 풀린다.
   //  ⚠ `key` 는 통계의 축이다 — 문구를 다듬어도 key 는 바꾸지 마라(집계가 갈라진다).
   restRead("me_liv_ask_choice", "객관식으로 묻기",
-    "리브 화면에 **고르는 질문**을 띄운다. 사람이 고르면 그 답이 구조화돼 쌓이고(통계), 너에게도 전달된다. " +
+    "리브 화면(리브 세션 대화창의 입력칸 바로 위 · 리브 화면)에 **고르는 질문**을 띄운다. 사람이 고르면 그 답이 구조화돼 쌓이고(통계), 너에게도 전달된다. " +
+    "커서 같은 로컬 AI 처럼 그 자리가 안 보이면 응답의 board_url 을 사람에게 준다. " +
     "⚠ 사람에게 자유서술을 시키지 마라 — 없는 말을 지어내는 건 어렵다. 선택지를 주는 게 기본이다. " +
     "목록에 없을 수 있으면 allow_other 로 탈출구를 열어라(거기 적히는 것이 다음에 만들 커넥터 후보다).",
     [{ method: "POST", paths: ["/api/ui/me/liv-choice-ask"], parse: (req) => req.body ?? {} }],
@@ -335,7 +347,7 @@ export const livCapabilities: Capability[] = [
         options, multi: input.multi === true, allow_other: input.allow_other === true,
       };
       await setLivSecretAsk(userId, ask);
-      return { ask };
+      return { ask, board_url: await livBoardUrl() };
     }, true, {
       key: z.string().optional().describe("통계 축이 되는 안정된 key(예: context_sources). 문구가 바뀌어도 유지한다."),
       question: z.string().optional().describe("사람에게 보일 질문 한 줄."),
@@ -425,7 +437,8 @@ export const livCapabilities: Capability[] = [
   //  종전 설계는 노드를 켜고 그 PC 를 훑는 것이었는데, 컴맹에게 설치·노드 등록을 시키는 값이 너무 크다.
   //  파일 몇 개면 끝나는 일이면 **끌어다 놓는 게 훨씬 간편하다**(대표 판단).
   restRead("me_liv_ask_upload", "파일 올리기 요청",
-    "리브 화면에 **파일 올리는 자리**를 띄운다. 사람이 올린 파일은 자료(source)로 저장돼 증류 대상이 된다. " +
+    "리브 화면(리브 세션 대화창의 입력칸 바로 위 · 리브 화면)에 **파일 올리는 자리**를 띄운다. 사람이 올린 파일은 자료(source)로 저장돼 증류 대상이 된다. " +
+    "커서 같은 로컬 AI 처럼 그 자리가 안 보이면 응답의 board_url 을 사람에게 준다. " +
     "⚠ 로컬 폴더를 뒤지려 하지 마라 — 파일 몇 개면 이게 훨씬 간편하다. 글자 파일만 된다(문서·메모·마크다운·CSV).",
     [{ method: "POST", paths: ["/api/ui/me/liv-upload-ask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -440,7 +453,7 @@ export const livCapabilities: Capability[] = [
         accept_hint: String(input.accept_hint ?? "").trim().slice(0, 120) || undefined,
       };
       await setLivSecretAsk(userId, ask);
-      return { ask };
+      return { ask, board_url: await livBoardUrl() };
     }, true, {
       label: z.string().optional().describe("올리는 자리의 이름(예: 회의록 파일)."),
       why: z.string().optional().describe("왜 필요한지 한 줄."),
