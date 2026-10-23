@@ -25,6 +25,7 @@ import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
+import { harnessInstalled } from "./harness-installed.js";   // #4970 — 설치 여부(게이트웨이 전용 — 노드 번들 밖)
 import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, isReportedSched, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
@@ -368,7 +369,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   //  없고 principal(userOf) 로만 대상이 정해진다 → 남의 계정을 조회·로그아웃할 표면이 아예 없다(admin 도 마찬가지).
   app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ accounts: await aiAccountStatus(userOf(req)) });
+    const accounts = await aiAccountStatus(userOf(req));
+    //  (#4970) 설치 여부 — 처음 설정 «AI 연결» 은 이 서버에서 띄울 수 있는 AI 만 보인다(harness-installed.ts). 모르면 null.
+    const installed = await Promise.all(accounts.map((a) => harnessInstalled(a.key).catch(() => null)));
+    res.json({ accounts: accounts.map((a, i) => ({ ...a, installed: installed[i] })) });
   }));
   // ── AI 로그인을 **터미널 없이** (#2055 후속, 2026-08-28) ─────────────────────────────────
   //  종전엔 «로그인 전용 세션 + 그 터미널을 새 탭»(웹) / **새 창**(데스크톱 앱)이었다. 사람이 실제로 할 일은
@@ -453,7 +457,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     //   쪽 프로세스는 15분을 더 기다리므로, 사람이 설정을 켜고 [다시 시도] 를 눌러도 start 는 «이미 돌고 있다» 며
     //   **죽은 코드를 그대로 다시 보여 준다.** 그러면 몇 번을 눌러도 같은 벽이다. 다시 시도는 새로 띄워야 한다.
     if (((req.body ?? {}) as Record<string, unknown>).restart === true) {
-      await cancelAiLogin(seat, h);
+      await cancelAiLogin(seat, h, userOf(req));
       //  자리도 함께 버린다 — 다시 시도는 **새 컨테이너**에서 시작해야 지난 프로세스가 안 남는다.
       await dropLoginSession(userOf(req), h);
     }
@@ -484,7 +488,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     }
     const seat = await loginSeat(req);
     const [raw, check] = await Promise.all([
-      readAiLogin(seat, h),
+      readAiLogin(seat, h, userOf(req)),
       aiLoginCheck(userOf(req), h).catch(() => null),
     ]);
     //  #3894 — 화면이 폴링하는 동안은 사람이 그 자리 앞에 있다. 장치 인증(최대 15분) 도중에 자리가 걷히지 않게 도장을 찍는다.
@@ -498,14 +502,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     const h = loginHarnessOf(req);
     const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
     if (await loginJobPaste(req, "login", h, code)) { res.json({ ok: true }); return; }
-    await pasteAiLogin(await loginSeat(req), h, code);
+    await pasteAiLogin(await loginSeat(req), h, code, userOf(req));
     await touchHarnessSeat(userOf(req), h);   // #3894 — 사람의 조작이다(위 state 와 같은 이유)
     res.json({ ok: true });
   }));
   app.post("/api/ui/me/ai-login/cancel", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
     if (await loginJobCancel(req, "login", h)) { res.json({ ok: true }); return; }
-    await cancelAiLogin(await loginSeat(req), h);
+    await cancelAiLogin(await loginSeat(req), h, userOf(req));
     //  로그인 자리(세션 컨테이너)도 치운다 — 안 치우면 로그인마다 컨테이너가 쌓인다.
     await dropLoginSession(userOf(req), h);
     res.json({ ok: true });

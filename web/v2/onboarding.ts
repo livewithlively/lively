@@ -1,20 +1,27 @@
-// v2/onboarding.ts — 처음 설정(#/welcome). (#4970) 인사 → 이름 → «외부 앱을 연결하시겠어요?» 세 장면이 전부다.
+// v2/onboarding.ts — 처음 설정(#/welcome). (#4970) 인사 → 이름 → AI 연결 → «외부 앱을 연결하시겠어요?» 네 장면이 전부다.
 //
 //  ★ #4970(상민님 결정 2026-10-22 — 지식 onboarding-single-flow-connect-in-own-ai-4970) — 처음 설정을 하나로 줄였다.
 //   종전(#4213 T13)엔 끝이 «Claude 계정 연결 + 리브 대화» 하나라, 서버에 로그인된 AI 가 없거나 Claude 가 아닌 사람(커서만 쓰는 사람)은
 //   처음 설정을 끝내도 아무 일도 없었다. 또 «누가 먼저 왔나»(합류자 판정)로 차례표를 갈랐는데, 셀프호스트 기본 워크스페이스에선 그
 //   판정이 인원수 폴백이라 관리자 계정을 먼저 만든 회사의 대표가 합류자로 읽혔다. 이제:
-//   · 매니지드·셀프호스트, 첫 관리자·초대 합류자 모두 같은 세 장면이다.
+//   · 매니지드·셀프호스트, 첫 관리자·초대 합류자 모두 같은 장면들이다(PR2 당시 셋 → PR4 에서 AI 연결이 더해져 넷).
 //   · [연결할게요] — 서버에 로그인된 AI 가 있으면 보통 세션을 열고(첫 지시 = 연결 스킬 liv-connect), 그 세션 화면으로 간다.
 //     없으면 같은 장면에서 «쓰는 AI 에서 하기» 세 걸음(데스크톱 앱 → 로그인 → 그 AI 에 한 마디)을 보여 준다. 어느 쪽이든 처음 설정은 끝난다.
 //   · [나중에 할게요] — 끝낸다(홈). 나중엔 [외부 앱 연결] 화면 맨 위의 같은 버튼으로 시작한다.
+//  ★ AI 연결(상민님 2026-10-23 «AI 연결 유도를 앱 연결 전에 해야 · 클로드만이 아니라 지원하는 거 다 · UX 쉽게») — PR2 가 걷은 «AI 고르기·AI 연결»
+//   두 장면을 **한 장면**으로 되살렸다. 이 서버에서 띄울 수 있는 AI(서버 installed)만 줄로 보이고, [연결]을 누르면 그 줄 아래에서 로그인한다
+//   ([AI 계정 연결]과 같은 칸 — ai-login-panel.ts · 줄은 onboarding-ai.ts). 하나라도 연결되면 [다음]. PC 의 AI(커서·클로드 코드)를 쓰는 사람은 «PC에서 쓰는 AI로»
+//   → 외부 앱 물음의 [연결할게요]가 서버 세션을 열지 않고 «쓰는 AI 에서 하기» 세 걸음을 그린다.
 //   · 서비스마다의 갈림(매니지드 중계 / 셀프호스트 앱 등록 / 관리 권한)은 세션 안의 연결 스킬이 한다 — 이 화면은 갈래를 모른다.
-//  종전 장면(팀 소개·무대·직무·파일·AI 고르기·AI 연결·앱 고르기·앱 연결·터미널·내 컴퓨터·앱 받기)과 챗 문답은 코드째 걷었다(git 기록에 있다).
+//  종전 장면(팀 소개·무대·직무·파일·AI 고르기·AI 연결·앱 고르기·앱 연결·터미널·내 컴퓨터·앱 받기)과 챗 문답은 PR2 에서 코드째 걷었다(git 기록에
+//   있다). PR4 의 AI 연결은 그 옛 두 장면을 되돌린 것이 아니라 [AI 계정 연결]의 칸 위에 새로 세운 한 장면이다.
 //  사이드바는 실제 것(side.ts)이 그린다 — 인사·이름에서는 숨겨 달라고(ctx.onBare), 연결 물음에서는 유령으로 세워 달라고(ctx.onGhost) 부탁한다.
 import { api, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 //  (#4970) 연결을 시작하는 문 한 벌 — [외부 앱 연결] 화면의 [연결 도와줘]와 같은 것을 쓴다(세션 열기 · «쓰는 AI 에서 하기» 세 걸음).
 import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';
+//  (#4970) AI 연결 장면의 줄·로그인 칸 — [AI 계정 연결]과 같은 칸 · 같은 로고·이름·순서(onboarding-ai.ts).
+import { mountAiList } from './onboarding-ai.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
@@ -54,6 +61,11 @@ export const OB_COPY = {
   introTitle: '라이블리에 오신 것을 환영합니다',
   introBody: 'Lively는 사용자가 놓여있는 맥락을 저희가 직접 AI에게 풍부하게 주입해서 AI의 세팅 난이도를 줄이고, 양질의 결과물을 얻을 수 있도록 합니다.',
   introNext: '이를 위해서 이 뒤에서는, 라이블리 사용을 위한 기본 설정을 진행합니다.',
+  aiTitle: '라이블리에서 쓸 AI를 연결해 주세요',
+  aiHelp: '외부 앱 연결과 자료 정리를 이 AI가 대신 합니다. 쓰시는 AI 하나면 돼요.',
+  aiNext: '다음',
+  aiPc: 'PC에서 쓰는 AI로 할게요 (커서·클로드 코드 등)',
+  aiNone: '이 서버에는 아직 연결할 수 있는 AI가 없어요. PC에서 쓰시는 AI로 하시면 됩니다.',
   connectTitle: '외부 앱을 연결하시겠어요?',
   connectHelp: '슬랙·노션·깃허브 같은 곳의 자료를 라이블리로 모읍니다.',
   connectYes: '연결할게요',
@@ -62,7 +74,8 @@ export const OB_COPY = {
 };
 
 type Ctx = { onBare?: (bare: boolean) => void; onGhost?: (on: boolean) => void; onDone?: () => void };
-interface ObState { scene: string; name: string; nameSet: boolean; trail: string[] }
+/** viaPc — AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다(#4970). 그러면 [연결할게요]가 서버 세션을 열지 않는다. */
+interface ObState { scene: string; name: string; nameSet: boolean; trail: string[]; viaPc: boolean }
 
 export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy(): void } {
   host.className = 'ob-root';
@@ -103,7 +116,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   const RESUME_WAIT_MS = 2500;
   /** 기다리는 말을 띄우기 전에 조용히 기다리는 시간 — 금방 답이 오면 그 말은 아예 안 보인다(#1631). */
   const RESUME_HINT_MS = 600;
-  const fresh = (): ObState => ({ scene: 'intro', name: '', nameSet: false, trail: [] });
+  const fresh = (): ObState => ({ scene: 'intro', name: '', nameSet: false, trail: [], viaPc: false });
   let S: ObState = fresh();
   /** 아직 **아무것도 답하지 않은** 장면 — 인사(intro)·이름(name). 여기 머문 것은 «하다 만 것» 이 아니다(이름을 적었으면 nameSet 이 말한다).
    *  ⚠ 마운트하는 동안 읽힌다 — 그래서 여기(hadLocal 보다 앞)에 둔다(뒤에 두면 선언 전 참조로 화면이 통째로 죽는다). */
@@ -122,6 +135,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       name: typeof v.name === 'string' ? v.name : '',
       nameSet: !!v.nameSet,
       trail: Array.isArray(v.trail) ? v.trail.filter((x: unknown) => typeof x === 'string') : [],
+      viaPc: v.viaPc === true,
     };
   }
 
@@ -162,7 +176,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /* 막1(인사·이름)은 민낯(셸 숨김), 연결 물음은 유령 셸(#2232) — 사이드바를 누르면 처음 설정에서 빠져나가 버리던 자리다. */
   const setStage = (s: string) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); ctx.onGhost && ctx.onGhost(s !== 'stage-name'); };
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['intro', 'name', 'connect-ask'];
+  const ORDER = ['intro', 'name', 'ai', 'connect-ask'];
   const STEP_OF: Record<string, number> = Object.fromEntries(ORDER.map((k, i) => [k, i]));
   /** 지금 차례표에서 이 장면 **다음**. 끝이면 null. */
   const nextScene = (cur: string): string | null => { const i = ORDER.indexOf(cur); return i >= 0 && i + 1 < ORDER.length ? ORDER[i + 1]! : null; };
@@ -231,7 +245,18 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
         inp.focus();
       },
     },
-    /* (#4970) 연결 물음 — 처음 설정의 마지막이자 유일한 물음. 고르는 순간 처음 설정은 끝난다(반영 먼저, 그다음 연결). */
+    /* (#4970 상민님 2026-10-23) AI 연결 — 외부 앱보다 먼저. 이 서버에서 띄울 수 있는 AI 만 줄로 보이고(서버 installed), [연결]은 그 줄 아래에서
+     *  로그인한다([AI 계정 연결]과 같은 칸). 하나라도 연결되면 [다음]. PC 의 AI 를 쓰는 사람은 아래 길로 간다. 묻지 않고 넘기는 길은 없다 —
+     *  머리의 [나중에 할게요](홈)가 그 자리다. */
+    ai: {
+      html: () => qHead(S.nameSet && S.name ? `${esc(S.name)}님이 쓰시는 AI부터 연결할게요.` : '쓰시는 AI부터 연결할게요.',
+        esc(OB_COPY.aiTitle), esc(OB_COPY.aiHelp))
+        + `<div class="ob-opt-cards ob-ai" id="aiList"><p class="ob-q-help">이 서버에서 쓸 수 있는 AI를 보고 있어요.</p></div>
+           <button class="ob-btn ob-btn-pri" id="aiNext" disabled>${esc(OB_COPY.aiNext)}</button>
+           <button class="ob-q-skip" id="aiPc">${esc(OB_COPY.aiPc)}</button>`,
+      bind: (el) => bindAi(el),
+    },
+    /* (#4970) 연결 물음 — 처음 설정의 마지막 물음. 고르는 순간 처음 설정은 끝난다(반영 먼저, 그다음 연결). */
     'connect-ask': {
       html: () => qHead(S.nameSet && S.name ? `${esc(S.name)}님, 마지막으로 하나만 여쭐게요.` : '마지막으로 하나만 여쭐게요.',
         esc(OB_COPY.connectTitle), esc(OB_COPY.connectHelp))
@@ -251,6 +276,24 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       },
     },
   };
+
+  /**
+   * AI 연결 장면을 잇는다 — 줄과 로그인 칸은 onboarding-ai.ts(mountAiList)가 그 자리에서 고친다. 여기는 [다음]·«PC에서 쓰는 AI로» 만 다룬다.
+   *  [다음]은 연결된 AI 가 하나라도 있을 때만 켠다. 띄울 AI 가 하나도 없으면 [다음]을 숨기고 PC 길을 주 버튼으로 세운다.
+   */
+  function bindAi(el: HTMLElement) {
+    const list = $('#aiList', el)!;
+    const next = $<HTMLButtonElement>('#aiNext', el)!;
+    const pc = $<HTMLButtonElement>('#aiPc', el)!;
+    next.onclick = () => { S.viaPc = false; goScene(nextScene('ai')!); };
+    pc.onclick = () => { S.viaPc = true; goScene(nextScene('ai')!); };
+    mountAiList(list, {
+      esc, noneText: OB_COPY.aiNone,
+      alive: () => !destroyed && list.isConnected,
+      onRows: (anyConnected) => { next.hidden = false; next.disabled = !anyConnected; },
+      onEmpty: () => { next.hidden = true; pc.className = 'ob-btn ob-btn-pri'; },   // 남은 길이 이것뿐이다 — 조용한 링크로 두지 않는다
+    });
+  }
 
   /** 장면 안에 한 줄 말한다(그 장면의 본문 자리를 갈아끼운다). */
   function say(el: HTMLElement, html: string) {
@@ -283,7 +326,17 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   async function connectYes(el: HTMLElement, yes: HTMLButtonElement, later: HTMLButtonElement) {
     yes.disabled = true; later.disabled = true; yes.textContent = '확인하고 있어요…';
     if (!(await finishOnboarding())) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
+    //  (#4970) AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다 — 서버 세션을 열지 않고 그 AI 에서 하는 세 걸음을 바로 그린다.
+    if (S.viaPc) { showOwnAi(el); return; }
     await openOrGuide(el);
+  }
+  /** «쓰는 AI 에서 하기» 세 걸음 — 처음 설정은 이미 끝났다(돌아와도 막다른 길에 다시 갇히지 않게). */
+  function showOwnAi(el: HTMLElement) {
+    const body = $('#cxBody', el); if (!body) return;
+    body.innerHTML = `${ownAiStepsHtml()}
+      <button class="ob-q-skip" id="cxHome">홈으로 갈게요</button>`;
+    wireOwnAiSteps(body);
+    $<HTMLButtonElement>('#cxHome', body)!.onclick = () => { location.hash = '#/'; };
   }
   /** 처음 설정은 이미 끝났다 — 여기서 실패해도 연결을 못 연 사실만 말하고 갈 길을 남긴다. */
   async function openOrGuide(el: HTMLElement) {
@@ -305,10 +358,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       return;
     }
     //  로그인된 AI 가 없다 — 처음 설정은 이미 끝난 것으로 둔다(돌아와도 막다른 길에 다시 갇히지 않게).
-    body.innerHTML = `${ownAiStepsHtml()}
-      <button class="ob-q-skip" id="cxHome">홈으로 갈게요</button>`;
-    wireOwnAiSteps(body);
-    $<HTMLButtonElement>('#cxHome', body)!.onclick = () => { location.hash = '#/'; };
+    showOwnAi(el);
   }
 
   function renderScene(key: string, animate?: boolean) {
@@ -359,13 +409,15 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   }
 
   /* ── 이어서 열기 (#2207) — 탭에 남은 것이 없을 때만 서버에 묻는다 ── */
-  /** 저장된 장면 → 지금 열 장면. 옛 판(장면 11개 시절)의 자리도 알아본다 — 이름 뒤의 장면이면 연결 물음, 팀 소개면 이름. 못 열 자리면 null. */
+  /** 저장된 장면 → 지금 열 장면. 옛 판(장면 11개 시절)의 자리도 알아본다 — 팀 소개면 이름, 반영 중이었으면 마지막 물음, 그 밖은 AI 연결. 못 열 자리면 null. */
   function fitScene(scene: unknown): string | null {
     const k = String(scene || '');
     if (STEP_OF[k] != null) return k;
     if (k === 'team') return 'name';
-    //  'done' = 반영을 누른 뒤 그게 실패했거나 끊긴 자리 · 그 밖 = 옛 판의 질문 장면들(이름 뒤에 있었다) → 마지막 물음으로 되돌린다.
-    return k ? 'connect-ask' : null;
+    //  'done' = 반영을 누른 뒤 그게 실패했거나 끊긴 자리 → 마지막 물음.
+    if (k === 'done') return 'connect-ask';
+    //  그 밖 = 옛 판의 질문 장면들(이름 뒤에 있었다 — AI 고르기·AI 연결도) → AI 연결부터(#4970: AI 연결이 외부 앱 앞이다).
+    return k ? 'ai' : null;
   }
   async function loadWelcome(): Promise<any> { try { return await api('/api/ui/me/welcome'); } catch (_) { return null; } }
   /** 서버에 남은 자리로 화면을 연다. 못 물으면 처음부터 — 온보딩이 **안 열리는** 것보다 낫다. */

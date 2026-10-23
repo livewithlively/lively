@@ -44,23 +44,24 @@ await t("E14 반영은 리브 세션을 열지 않는다 · 새로 끝내는 사
 const OB_RAW = readFileSync(new URL("../../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const OB = code(OB_RAW);
 
-await t("E15 차례는 인사 → 이름 → 연결 물음 하나뿐(첫 관리자·합류자 같음)", () => {
+await t("E15 차례는 인사 → 이름 → AI 연결 → 연결 물음(첫 관리자·합류자 같음) — (PR4) AI 연결이 외부 앱 앞이다", () => {
   const m = OB.match(/const ORDER = (\[[^\]]*\]);/);
   assert.ok(m, "차례표를 못 찾았다 — 검사가 헛돈다");
-  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "connect-ask"]);
+  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "ai", "connect-ask"]);
   assert.doesNotMatch(OB, /ORDER_JOIN|isJoin\(|JOIN\b/, "합류자 갈래가 남아 있다");
 });
 
-await t("E16 옛 판의 저장된 자리를 알아본다(team→name · 그 뒤의 장면·done→connect-ask · 빈 값→null)", () => {
+await t("E16 옛 판의 저장된 자리를 알아본다(team→name · done→connect-ask · 그 밖의 옛 장면→ai · 빈 값→null)", () => {
   const fn = OB.match(/function fitScene\(scene: unknown\): string \| null \{([\s\S]*?)\n  \}/);
   assert.ok(fn, "fitScene 을 못 찾았다");
   //  타입 표기만 걷어 그대로 돌린다(본문은 화면이 쓰는 그 글자다).
   const body = fn![1]!.replace(/: string \| null/g, "");
   const fitScene = new Function("STEP_OF", "scene", body) as (steps: Record<string, number>, s: unknown) => string | null;
-  const STEP_OF = { intro: 0, name: 1, "connect-ask": 2 };
+  const STEP_OF = { intro: 0, name: 1, ai: 2, "connect-ask": 3 };
   const cases: Array<[unknown, string | null]> = [
-    ["intro", "intro"], ["name", "name"], ["connect-ask", "connect-ask"],
-    ["team", "name"], ["claude", "connect-ask"], ["done", "connect-ask"], ["stage", "connect-ask"], ["app", "connect-ask"],
+    ["intro", "intro"], ["name", "name"], ["ai", "ai"], ["connect-ask", "connect-ask"],
+    //  (PR4) 옛 «AI 연결»(claude)·질문 장면들은 AI 연결부터 — 외부 앱 물음으로 건너뛰면 AI 를 안 잇고 지나간다.
+    ["team", "name"], ["claude", "ai"], ["done", "connect-ask"], ["stage", "ai"], ["app", "ai"],
     ["", null], [null, null],
   ];
   for (const [inp, want] of cases) assert.equal(fitScene(STEP_OF, inp), want, `fitScene(${JSON.stringify(inp)})`);
@@ -96,6 +97,80 @@ await t("E18 리브 진입점 네 자리가 한 스위치를 본다 — (PR3) �
       assert.match(line, /LIV_ENTRY_VISIBLE|livOn/, `${f}: 스위치 밖의 리브 링크 — ${line.trim().slice(0, 80)}`);
     }
   }
+});
+
+// ── F. (PR4 · 상민님 2026-10-23) AI 연결 장면 — 설계: 지식 onboarding-single-flow-connect-in-own-ai-4970 §16 · 표 = 아래 F 행 ─────────────────
+//  화면 틀([다음]·PC 길)은 onboarding.ts 의 bindAi, 줄·로그인 칸은 onboarding-ai.ts(mountAiList)다.
+const AI = OB.slice(OB.indexOf("function bindAi("), OB.indexOf("function say("));
+const OAI_RAW = readFileSync(new URL("../../../web/v2/onboarding-ai.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+const OAI = code(OAI_RAW);
+
+await t("F3 이 서버에서 띄울 수 있는(설치된) AI 만 줄로 — installed 가 false 면 안 보인다 · 모름은 보인다 · 순서는 [AI 계정 연결]과 같다", () => {
+  assert.ok(AI.length > 200 && OAI.length > 2000, "bindAi·mountAiList 를 못 찾았다 — 검사가 헛돈다");
+  assert.match(AI, /mountAiList\(list, \{/, "장면이 목록 부품을 안 붙인다");
+  assert.match(OAI, /api\('\/api\/ui\/me\/ai-accounts'\)/, "목록을 서버에 안 묻는다");
+  //  고르는 규칙 그 자체를 돌린다 — 타입만 걷어 화면이 쓰는 그 글자를 실행한다.
+  const m = OAI_RAW.match(/export function visibleAiRows\(accounts: readonly AiAccountRow\[\]\): AiAccountRow\[\] \{([\s\S]*?)\n\}/);
+  assert.ok(m, "visibleAiRows 를 못 찾았다");
+  const body = m![1]!.replace(/\(a\): a is AiAccountRow =>/, "(a) =>");
+  const pick = new Function("AI_ORDER", "accounts", body) as (order: string[], acc: Array<{ key: string; installed?: boolean | null }>) => Array<{ key: string }>;
+  const ORDER = ["claude", "codex", "antigravity", "grok"];
+  const got = pick(ORDER, [
+    { key: "grok", installed: true }, { key: "codex", installed: false }, { key: "claude", installed: null },
+    { key: "antigravity" }, { key: "opencode", installed: true },
+  ]).map((a) => a.key);
+  assert.deepEqual(got, ["claude", "antigravity", "grok"], "★ 설치 안 된 AI 를 고르게 하거나(위시스트는 클로드뿐) · 모름을 숨기거나 · 순서가 표와 다르다");
+  assert.match(OB, /aiNone: '/, "띄울 AI 가 하나도 없을 때 할 말이 없다");
+});
+
+await t("F4 [다음]은 연결된 AI 가 하나라도 있을 때만 켜진다", () => {
+  assert.match(AI, /onRows: \(anyConnected\) => \{ next\.hidden = false; next\.disabled = !anyConnected; \}/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
+  assert.match(OAI, /hooks\.onRows\(\[\.\.\.items\.values\(\)\]\.some\(\(it\) => it\.a\.loggedIn === true\)\)/, "«연결됨» 판정이 loggedIn === true 가 아니다(모름을 연결로 접는다)");
+  assert.match(OB, /<button class="ob-btn ob-btn-pri" id="aiNext" disabled>/, "처음부터 켜져 있다");
+});
+
+await t("F5 «PC에서 쓰는 AI로» — 다음 장면으로 가고, [연결할게요]가 서버 세션 대신 «쓰는 AI 에서 하기» 를 그린다", () => {
+  assert.match(AI, /pc\.onclick = \(\) => \{ S\.viaPc = true; goScene\(nextScene\('ai'\)!\); \};/);
+  assert.match(AI, /next\.onclick = \(\) => \{ S\.viaPc = false; goScene\(nextScene\('ai'\)!\); \};/, "AI 를 이은 사람의 PC 표식을 안 지운다");
+  const yes = OB.slice(OB.indexOf("async function connectYes"), OB.indexOf("function renderScene"));
+  const fin = yes.indexOf("await finishOnboarding()"), pc = yes.indexOf("if (S.viaPc) { showOwnAi(el); return; }"), open = yes.indexOf("await openOrGuide(el)");
+  assert.ok(fin > 0 && pc > fin && open > pc, "반영 뒤 · 세션 열기 전에 PC 길을 가르지 않는다");
+  assert.match(OB, /viaPc: v\.viaPc === true,/, "이어 열기에서 PC 표식을 잃는다");
+});
+
+await t("F6 로그인 칸은 한 벌 — [AI 계정 연결](me-ai)과 처음 설정이 같은 부품(ai-login-panel)을 쓴다", () => {
+  assert.match(OAI_RAW, /from '\.\.\/ai-login-panel\.js';/, "처음 설정이 공용 칸을 안 쓴다");
+  assert.match(OAI, /aiLoginPanel\(it\.a, /, "줄에 로그인 칸을 안 붙인다");
+  assert.match(OAI, /confirmSharedLogin\(it\.a\)/, "서버 공용 계정의 물음을 건너뛴다");
+  const ME = code(readFileSync(new URL("../../../web/me-ai.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
+  assert.match(ME, /from '\.\/ai-login-panel\.js';/, "[AI 계정 연결]이 공용 칸을 안 쓴다");
+  assert.doesNotMatch(ME + OAI, /ensureLoginTerminal|const paintCard|const paintTerminal/, "★ 로그인 칸이 두 벌이다 — 실측 처방이 갈린다");
+});
+
+await t("F7 다시 읽어도 줄을 갈아 끼우지 않는다 — 로그인 중인 칸(터미널 액자·받은 코드)이 옮겨지거나 지워지지 않는다(격리 리뷰 N1·N3)", () => {
+  //  줄 모음이 같으면 제자리 고침(update)만 — 통째 바꾸기(replaceChildren)는 «모음이 달라졌을 때» 한 곳뿐이다.
+  const paint = OAI.slice(OAI.indexOf("const paint = "), OAI.indexOf("let running"));
+  assert.ok(paint.length > 200, "paint 를 못 찾았다");
+  assert.equal((OAI.match(/list\.replaceChildren\(/g) || []).length, 1, "줄을 통째로 바꾸는 자리가 둘 이상이다");
+  assert.match(paint, /if \(!same\) \{[\s\S]*list\.replaceChildren\([\s\S]*\} else \{\s*for \(const a of rows\) update\(items\.get\(a\.key\)!, a\);/, "같은 줄 모음인데 통째로 다시 그린다");
+  //  다시 읽기가 실패해도 이미 그린 줄은 남는다 — 오류를 목록 자리에 쓰는 것은 «아직 하나도 못 그렸을 때» 뿐이다.
+  const fail = OAI.slice(OAI.indexOf("catch (e) {"), OAI.indexOf("const rows = visibleAiRows(acc)"));
+  assert.ok(fail.length > 100, "실패 갈래를 못 찾았다 — 검사가 헛돈다");
+  assert.match(fail, /if \(!items\.size\) \{[\s\S]*list\.innerHTML =[\s\S]*ob-ai-retry[\s\S]*\} else \{[\s\S]*note\.innerHTML =[\s\S]*ob-ai-retry/, "★ 다시 읽기 실패가 목록·로그인 칸을 지우거나 다시 읽을 길이 없다");
+  //  제미나이 확인(수 초)을 기다리느라 다른 줄이 늦지 않게 — 먼저 그리고 나서 묻는다.
+  const once = OAI.slice(OAI.indexOf("const once = "), OAI.indexOf("const reload = "));
+  assert.ok(once.indexOf("paint(rows);") > 0 && once.indexOf("paint(rows);") < once.indexOf("ai-accounts/check"), "프로브를 기다린 뒤에야 그린다");
+  //  겹친 다시 읽기는 끝난 뒤 한 번 더 — 진행 중인 낡은 답을 돌려주고 끝내지 않는다.
+  assert.match(OAI, /if \(running\) \{ again = true; return running; \}/, "겹친 다시 읽기가 낡은 답으로 끝난다");
+});
+
+await t("G 계정 목록이 설치 여부(installed)를 싣는다", () => {
+  const R = code(readFileSync(new URL("../../terminal/routes.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
+  const at = R.indexOf('app.get("/api/ui/me/ai-accounts"');
+  const body = R.slice(at, R.indexOf("}));", at));
+  assert.ok(at > 0, "목록 라우트를 못 찾았다");
+  assert.match(body, /harnessInstalled\(a\.key\)/, "설치를 안 묻는다");
+  assert.match(body, /installed: installed\[i\]/, "설치 여부를 안 싣는다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

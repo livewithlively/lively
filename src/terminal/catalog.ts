@@ -341,6 +341,27 @@ export const HARNESSES: Harness[] = [
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", provider: { id: "none", label: "AI 없음" }, flags: [] },
 ];
 
+/**
+ * (#4970) 사람이 여는 새 세션의 기본 플래그 — 서버가 세션을 대신 열 때(리브 세션) 쓴다. 화면(run-picker flagDefault)이 골라 두는 값과 같다.
+ *  규칙: 고르기(select) 플래그 가운데 default 가 자기 choices 안에 있는 것만. 선언이 없으면 싣지 않는다(그 AI 계정 설정 그대로).
+ *  왜: 서버가 연 리브 세션은 flags 가 비어 그 계정의 CLI 기본으로 떴다 — 무엇으로 도는지 라이블리가 말할 수 없었다(새 세션 화면이 #3778 에서
+ *   닫은 것과 같은 구멍). 사람이 보면서 하는 일이라 무인 자동화 기본(AUTOMATION_DEFAULTS)이 아니라 이 값이다.
+ */
+export function sessionFlagDefaults(harnessKey: string, list: readonly Harness[] = HARNESSES): Record<string, string> {
+  const h = list.find((x) => x.key === harnessKey);
+  const out: Record<string, string> = {};
+  for (const f of h?.flags ?? []) {
+    if (f.type !== "select" || !f.default) continue;
+    if (f.choices && !f.choices.includes(f.default)) continue;
+    out[f.name] = f.default;
+  }
+  //  그 모델이 받지 않는 강도는 싣지 않는다 — createSession 이 400 으로 거절하고 리브가 안 열린다(화면 effortChoices 와 같은 판단).
+  //   사람이 고를 틈이 없는 세션이라 «강도 기본» 보다 «열리는 것» 이 먼저다.
+  const allowed = out["--model"] ? h?.effortsByModel?.[out["--model"]] : undefined;
+  if (out["--effort"] && allowed && !allowed.includes(out["--effort"])) delete out["--effort"];
+  return out;
+}
+
 // ── 무인 자동화의 모델·추론강도 기본값(#4008) ─────────────────────────────────────────────
 //
 // 왜 별도 표인가: 위 `FlagDef.default` 는 **사람이 여는 새 세션 화면**의 기본값이다(claude=fable/high).

@@ -127,11 +127,14 @@ render_service_unit() {
       if [ -n "${GATEWAY_MEMORY_HIGH_MB:-}" ] && printf '%s' "${GATEWAY_MEMORY_HIGH_MB}" | grep -qE '^[0-9]+$' && [ "${GATEWAY_MEMORY_HIGH_MB}" -gt 0 ]; then
         mem_high_line="MemoryHigh=${GATEWAY_MEMORY_HIGH_MB}M"
       fi
+      # PATH 끝의 사용자 몫 폴더(#4970) — 세션 계약(session-env.sh ②)과 같은 셋·순서(.local → .npm-global → .lively).
+      #  provision.sh 가 claude 를 서비스 유저 홈(~/.local/bin)에 네이티브로 깐다.
+      #  tmux 는 게이트웨이 PATH 로만 명령을 찾으므로 이 폴더가 없으면 세션·화면 안 로그인이 «claude 없음» 이 된다(위시스트 실측 2026-10-23).
       sed -e "s#@APP_DIR@#$APP_DIR#g" \
           -e "s#@APP_USER@#$svc_user#g" \
           -e "s#@NODE_BIN@#$node_bin#g" \
           -e "s#@MEMORY_HIGH_LINE@#$mem_high_line#g" \
-          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
+          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.local/bin:$svc_home/.npm-global/bin:$svc_home/.lively/bin#g" \
           "$DEPLOY_DIR/linux/lively-gateway.service" | sudo tee "$unit" >/dev/null
       sudo systemctl daemon-reload
       ok "systemd 유닛 렌더: $unit (User=$svc_user${mem_high_line:+, $mem_high_line})"
@@ -145,7 +148,7 @@ render_service_unit() {
       if [ -f "$plist" ]; then cp "$plist" "$plist.bak-$(date +%Y%m%d-%H%M%S)"; warn "기존 plist 백업 후 갱신"; fi
       sed -e "s#@APP_DIR@#$APP_DIR#g" \
           -e "s#@NODE_BIN@#$node_bin#g" \
-          -e "s#@PATH@#$node_dir:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.npm-global/bin#g" \
+          -e "s#@PATH@#$node_dir:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.lively/bin#g" \
           "$DEPLOY_DIR/mac/io.lvly.lively.plist" > "$plist"
       ok "launchd plist 렌더: $plist"
       ;;
@@ -179,11 +182,12 @@ render_bluegreen_unit() {
     mem_high_line="MemoryHigh=${GATEWAY_MEMORY_HIGH_MB}M"
   fi
   local unit="/etc/systemd/system/lively-gateway@.service"
+  # PATH 끝의 ~/.local/bin·~/.lively/bin(#4970) — 단일 유닛(render_service_unit)과 같은 이유.
   sed -e "s#@LIVELY_ROOT@#$root#g" \
       -e "s#@APP_USER@#$svc_user#g" \
       -e "s#@NODE_BIN@#$node_bin#g" \
       -e "s#@MEMORY_HIGH_LINE@#$mem_high_line#g" \
-      -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
+      -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.local/bin:$svc_home/.npm-global/bin:$svc_home/.lively/bin#g" \
       "$DEPLOY_DIR/linux/lively-gateway@.service" | sudo tee "$unit" >/dev/null
   sudo systemctl daemon-reload
   ok "systemd 템플릿 유닛 렌더: $unit (User=$svc_user${mem_high_line:+, $mem_high_line})"

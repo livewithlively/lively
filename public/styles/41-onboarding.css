@@ -64,8 +64,8 @@
 .ob-q-prog i{flex:1; height:3px; border-radius:2px; background:var(--ghost)}
 .ob-q-prog i.ob-on,.ob-q-prog button.ob-on{background:var(--ink)}
 .ob-q-lead{font-size:14px; color:var(--ink-sub); margin-bottom:8px}
-.ob-q-title{font-size:26px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px}
-.ob-q-help{font-size:14px; color:var(--ink-sub); margin-bottom:26px}
+.ob-q-title{font-size:26px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px; word-break:keep-all; text-wrap:balance}   /* 좁은 폭에서 «주세 / 요» 처럼 낱말 가운데서 끊지 않는다(#4970 — 인사 제목과 같은 규칙) */
+.ob-q-help{font-size:14px; color:var(--ink-sub); margin-bottom:26px; word-break:keep-all}
 /* 노션식 선택 카드 */
 .ob-opt-cards{display:flex; flex-direction:column; gap:10px}
 .ob-opt-card{display:flex; align-items:center; gap:12px; text-align:left; border:1px solid var(--line); border-radius:10px; padding:13px 15px; background:var(--card); transition:border-color .12s, box-shadow .12s}
@@ -88,6 +88,18 @@
 .ob-q-write{display:flex; gap:8px; margin-top:12px}
 .ob-q-write input{flex:1; border:1px solid var(--line); border-radius:8px; padding:9px 12px; outline:none}
 .ob-q-write input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
+/* (#4970) AI 연결 — 줄은 위 카드(.ob-opt-card) 모양을 빌리되 누르는 자리가 아니다(오른쪽 [연결]만 누른다).
+   줄 아래 로그인 칸은 [AI 계정 연결]과 같은 .aiacct-login(06-learn.css) — 여기서는 간격만 맞춘다. */
+.ob-ai .ob-ai-item{display:flex; flex-direction:column}
+.ob-ai .ob-ai-card{cursor:default}
+.ob-ai .ob-ai-card:not(.ob-on):hover{border-color:var(--line); box-shadow:none}
+.ob-ai .ob-oc-ic svg{width:20px; height:20px; display:block}
+.ob-ai .ob-ai-txt{min-width:0}
+.ob-ai .ob-ai-act{margin-left:auto; flex:none; display:flex; align-items:center}
+.ob-ai .ob-ai-act .ob-btn{margin-top:0; padding:7px 14px; font-size:13px}
+.ob-ai .ob-ai-ok{font-size:13px; font-weight:600; color:var(--ob-mint-ic); white-space:nowrap}
+.ob-ai .aiacct-login{margin-top:8px}
+.ob-ai .ob-ai-note{margin:10px 0 0}
 .ob-btn{display:block; width:100%; text-align:center; border-radius:8px; padding:10px 14px; font-weight:600; font-size:14px; margin-top:18px}
 .ob-btn-pri{background:var(--blue-fill); color:var(--ob-on-fill)}
 .ob-btn-pri:hover{background:var(--blue-fill-deep)}

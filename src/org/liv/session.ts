@@ -118,11 +118,14 @@ export async function openLivSession(user: LivelyUser, o: { prompt: string; labe
   //  (#4970) 부르는 쪽이 고른 하네스(me_liv_open — 로그인한 것 가운데 세션으로 띄울 수 있는 첫 번째)는 **그대로** 쓴다. 리브 세션은 보통
   //   대화형 세션이라 헤드리스(위탁) 지원표로 거르지 않는다 — 거르면 그 표에 없는 하네스(opencode)로만 로그인한 사람에게 리브가 안 열린다(503).
   const harness = String(o.harness ?? "").trim() || await resolveHeadlessHarness(userId, null);
+  //  (#4970) 모델·추론강도는 새 세션 화면의 기본과 같게 지정한다(catalog.sessionFlagDefaults) — 비우면 그 계정의 CLI 기본으로 떠서
+  //   무엇으로 도는지 라이블리가 말할 수 없었다. 사람이 보면서 하는 대화라 무인 자동화 기본(AUTOMATION_DEFAULTS)이 아니다.
+  const { sessionFlagDefaults } = await import("../../terminal/catalog.js");
   const session = await launchSession(user, {
     kind: "task",
     label: o.label,
     rootKey: "personal", subpath: LIV_SUBPATH,
-    harness, flags: {}, autoApprove: false,
+    harness, flags: sessionFlagDefaults(harness), autoApprove: false,
     initialPrompt: prompt,
   }, { nodeId: "", invites: [] });
   const { setLivSession } = await import("../store.js");
