@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
-import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, runBootstrap } from "./bootstrap.mjs";
+import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, bootstrapManualHint, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
@@ -273,6 +273,7 @@ t("H1b ★ 윈도우 명령줄에 «내려받아 실행» 한 줄이 없다 — 
   assert.ok(!/\biex\b|Invoke-Expression|\birm\b|Invoke-RestMethod|Invoke-WebRequest|-Command\b|-EncodedCommand\b/i.test(line), `명령줄: ${line}`);
   // 로그에 찍는 '지금 실행할 한 줄' 도 실제로 하는 일과 같아야 한다(숨기지 않는다).
   assert.match(bootstrapPreview("https://dev.lvly.io", "win32"), /-File cli\.ps1/);
+  assert.ok(bootstrapPreview("https://dev.lvly.io/", "win32").includes(bootstrapScriptUrl("https://dev.lvly.io/", "win32")), "로그에 적은 주소와 실제로 받는 주소가 갈렸다");
   assert.ok(!/\biex\b/.test(bootstrapPreview("https://dev.lvly.io", "win32")), "로그엔 여전히 irm | iex 를 실행한다고 적는다");
   assert.equal(bootstrapPreview("https://dev.lvly.io", "darwin"), bootstrapOneLiner("https://dev.lvly.io", "darwin"));
 });
@@ -329,7 +330,7 @@ const winStub = (code = 0) => {
   return { s, seen };
 };
 
-await ta("H5 ★ 윈도우: 받은 스크립트를 BOM·UTF-8 출력으로 파일에 써서 -File 로 띄우고, 끝나면 그 폴더를 지운다", async () => {
+await ta("BW1 ★ 윈도우: 받은 스크립트를 BOM·UTF-8 출력으로 파일에 써서 -File 로 띄우고, 끝나면 그 폴더를 지운다", async () => {
   const root = bootRoot();
   try {
     const body = "Write-Host '라이블리 설치'\nWrite-Host \"끝\"\n";
@@ -362,7 +363,7 @@ await ta("H5 ★ 윈도우: 받은 스크립트를 BOM·UTF-8 출력으로 파�
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-await ta("H6 윈도우: 받은 본문이 BOM 으로 시작해도 파일의 BOM 은 하나다", async () => {
+await ta("BW2 윈도우: 받은 본문이 BOM 으로 시작해도 파일의 BOM 은 하나다", async () => {
   const root = bootRoot();
   try {
     const { s, seen } = winStub(0);
@@ -372,7 +373,7 @@ await ta("H6 윈도우: 받은 본문이 BOM 으로 시작해도 파일의 BOM �
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-await ta("H7 ★ 윈도우: 스크립트를 못 받으면 띄우지 않는다 — error 를 비워 호출자가 경로별 다음 행동을 말하게", async () => {
+await ta("BW3 ★ 윈도우: 스크립트를 못 받으면 띄우지 않는다 — error 를 비워 호출자가 경로별 다음 행동을 말하게", async () => {
   for (const [why, respond, reason] of [
     ["404", () => ({ ok: false, status: 404, text: async () => "Not Found" }), /404/],
     ["네트워크 예외", () => { throw Object.assign(new Error("fetch failed"), { cause: new Error("getaddrinfo ENOTFOUND a.io") }); }, /ENOTFOUND/],
@@ -392,7 +393,7 @@ await ta("H7 ★ 윈도우: 스크립트를 못 받으면 띄우지 않는다 �
   }
 });
 
-await ta("H8 윈도우: 실패로 끝나도·띄우지 못해도 받아 둔 폴더는 지운다", async () => {
+await ta("BW4 윈도우: 실패로 끝나도·띄우지 못해도 받아 둔 폴더는 지운다", async () => {
   const root = bootRoot();
   try {
     const { s } = winStub(1);
@@ -408,7 +409,7 @@ await ta("H8 윈도우: 실패로 끝나도·띄우지 못해도 받아 둔 폴�
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-await ta("H9 형식이 틀린 주소는 아무것도 받지 않는다 · 맥은 앱이 따로 받지 않는다", async () => {
+await ta("BW5 형식이 틀린 주소는 아무것도 받지 않는다 · 맥은 앱이 따로 받지 않는다", async () => {
   const f = fakeFetch(() => okBody("x"));
   const s = stubSpawn((c) => c.emit("close", 0, null));
   const bad = await runBootstrap({ gatewayUrl: "https://a.io; rm -rf /", platform: "win32", spawn: s.spawn, fetch: f.fn });
@@ -419,7 +420,7 @@ await ta("H9 형식이 틀린 주소는 아무것도 받지 않는다 · 맥은 
   assert.deepEqual([s.calls[0].cli, s.calls[0].args], ["/bin/sh", ["-c", "curl -fsSL https://a.io/cli | sh"]]);
 });
 
-await ta("H10 윈도우: tmpDir·fetch 를 안 주면 OS 임시 폴더와 전역 fetch 를 쓴다(앱의 실제 호출 꼴)", async () => {
+await ta("BW6 윈도우: tmpDir·fetch 를 안 주면 OS 임시 폴더와 전역 fetch 를 쓴다(앱의 실제 호출 꼴)", async () => {
   const realFetch = globalThis.fetch;
   const f = fakeFetch(() => okBody("Write-Host 1\n"));
   globalThis.fetch = f.fn;
@@ -434,7 +435,7 @@ await ta("H10 윈도우: tmpDir·fetch 를 안 주면 OS 임시 폴더와 전역
   } finally { globalThis.fetch = realFetch; }
 });
 
-await ta("H11 경계: 200 인데 빈 본문이어도 띄운다 — 성공 판정은 호출자가 'CLI 가 생겼나' 로 한다", async () => {
+await ta("BW7 경계: 200 인데 빈 본문이어도 띄운다 — 성공 판정은 호출자가 'CLI 가 생겼나' 로 한다", async () => {
   const root = bootRoot();
   try {
     const { s, seen } = winStub(0);
@@ -442,6 +443,51 @@ await ta("H11 경계: 200 인데 빈 본문이어도 띄운다 — 성공 판정
     assert.equal(s.calls.length, 1);
     assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("BW8 ★ 윈도우: 임시 폴더에 못 쓰면 던지지 않고 실패로 돌려준다 — 던지면 앱이 «진행 중» 에 멈춘다(main.ensureCli 는 await 만 한다)", async () => {
+  const root = bootRoot();
+  try {
+    const s = stubSpawn((c) => c.emit("close", 0, null));
+    let r = null, threw = null;
+    try {
+      r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("x")).fn, tmpDir: join(root, "없는 폴더", "더 안") });
+    } catch (e) { threw = e; }
+    assert.equal(threw, null, `던졌다: ${threw?.message}`);
+    assert.equal(r.ok, false);
+    assert.ok(r.error, "error 가 비면 main 이 주소 안내(bootstrapFailNote)를 보인다 — 주소 문제가 아니다");
+    assert.equal(s.calls.length, 0, "스크립트 없이 PowerShell 을 띄웠다");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// BW9 — **실제** Windows PowerShell 로 돌린다(윈도우 러너·윈도우 PC 에서만). BW1 은 바이트만 본다 — «5.1 이 BOM 붙은 UTF-8 을
+//  읽는다»·«프렐류드가 파이프 출력을 UTF-8 로 만든다» 는 여기서만 실제로 확인된다. CI 러너는 코드페이지가 1252/437 이라
+//  둘 중 하나만 빠져도 한글이 깨져 빨간불이 난다(한국어판 949 에서도 깨지는 것을 실측했다 — bootstrap.mjs psScriptFile).
+if (process.platform === "win32") {
+  await ta("BW9 ★ 실제 powershell.exe — 받은 한글 스크립트가 앱 로그(UTF-8)에 그대로 나온다", async () => {
+    const root = bootRoot();
+    try {
+      const lines = [];
+      const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", tmpDir: root, timeoutMs: 120_000,
+        fetch: fakeFetch(() => okBody('Write-Host "라이블리 설치 확인 한글"\nWrite-Output "둘째 줄"\n')).fn,
+        onLine: (l) => lines.push(l.replace(/\r$/, "")) });
+      assert.equal(r.ok, true, `종료 ${r.code} · ${r.error} · ${r.output}`);
+      assert.ok(lines.includes("라이블리 설치 확인 한글"), `한글이 깨졌다: ${JSON.stringify(lines)}`);
+      assert.ok(lines.includes("둘째 줄"), JSON.stringify(lines));
+      assert.deepEqual(readdirSync(root), [], "받아 둔 폴더가 남았다");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+} else console.log("skip BW9 실제 PowerShell 실행 — 윈도우에서만 돈다");
+
+t("BW10 윈도우에서 CLI 가 안 생기면 손으로 하는 한 줄을 붙인다 — 안내 문구와 같은 한 줄 · 맥·리눅스는 없음", () => {
+  const hint = bootstrapManualHint("https://acme.example.com/", "win32");
+  assert.ok(hint && hint.includes(bootstrapOneLiner("https://acme.example.com/", "win32")), `한 줄이 없다: ${hint}`);
+  assert.equal(bootstrapManualHint("https://acme.example.com", "darwin"), null);
+  assert.equal(bootstrapManualHint("https://acme.example.com", "linux"), null);
+  // 배선 — CLI 가 아예 안 생긴 실패에만 붙인다(있는데 옛 버전인 실패엔 그 한 줄이 답이 아니다).
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const ens = main.slice(main.indexOf("async function ensureCli("), main.indexOf("function bootstrapFailNote("));
+  assert.match(ens, /cli \? null : bootstrapManualHint\(src\.url\)/, "CLI 가 안 생긴 실패에 손 설치 한 줄을 안 붙인다");
 });
 
 // ── D. 진행 리듀서 ───────────────────────────────────────────────────────────

@@ -163,6 +163,8 @@ jobs:
       #  실측 v0.1.377(2026-10-23): 3시간 전 v0.1.376 과 **같은 러너 이미지(win25-vs2026 20261007.264)·같은 electron-builder**
       #  였고 PSGallery 의 최신 모듈도 그대로(0.5.8, 2025-07)였다 — 설치가 한 번 조용히 빈 것이다.
       #  여기서 깔아 두면 그쪽 설치가 또 비어도 이미 있는 모듈로 서명된다. 끝내 못 깔면 **여기서** 이유를 대고 멈춘다.
+      #  ⚠ 이 스텝이 pwsh 인 이유: electron-builder 26.16.1 은 PATH 에 pwsh.exe 가 있으면 그걸 쓴다(app-builder-lib vm.js) —
+      #   같은 셸이어야 같은 CurrentUser 모듈 경로에 앉는다. electron-builder 가 powershell.exe 로 바뀌면 이 스텝은 헛일이 된다.
       - name: 서명 모듈 (win)
         if: matrix.name == 'win'
         shell: pwsh
@@ -170,17 +172,26 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         run: |
           if (-not "$env:AZURE_CLIENT_ID".Trim()) { "서명 자격 없음 — 모듈 설치 건너뜀"; exit 0 }
+          $ok = $false
           for ($i = 1; $i -le 5; $i++) {
             try {
               # electron-builder 와 같은 인자(-MinimumVersion 0.5.0 · CurrentUser) — 다른 판을 깔면 두 벌이 섞인다.
               Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser -ErrorAction Stop
             } catch { Write-Warning "TrustedSigning 설치 실패($i/5): $($_.Exception.Message)" }
-            if (Get-Command Invoke-TrustedSigning -ErrorAction SilentlyContinue) { break }
-            Start-Sleep -Seconds (10 * $i)
+            # 확인도 electron-builder 처럼 **새 pwsh 프로세스**에서 한다 — 그쪽은 파일마다 `pwsh -NoProfile -NonInteractive -Command` 를 띄운다.
+            pwsh -NoProfile -NonInteractive -Command 'if (-not (Get-Command Invoke-TrustedSigning -ErrorAction SilentlyContinue)) { exit 1 }'
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            if ($i -lt 5) { Start-Sleep -Seconds (10 * $i) }
           }
-          $cmd = Get-Command Invoke-TrustedSigning -ErrorAction SilentlyContinue
-          if (-not $cmd) { "::error::TrustedSigning 모듈을 깔지 못했다 — 서명 단계가 Invoke-TrustedSigning 을 못 찾는다"; exit 1 }
-          "TrustedSigning $($cmd.Version) 준비 ($($cmd.Module.ModuleBase))"
+          if (-not $ok) {
+            "::error::TrustedSigning 모듈을 깔지 못했다 — 서명 단계가 Invoke-TrustedSigning 을 못 찾는다"
+            # 원인이 아직 모른다(설치가 조용히 빈 것) — 다음 사고 때 볼 수 있게 남긴다.
+            Get-Module -ListAvailable TrustedSigning | Format-Table Name, Version, ModuleBase -AutoSize | Out-String | Write-Host
+            "PSModulePath=$env:PSModulePath"
+            exit 1
+          }
+          $m = Get-Module -ListAvailable TrustedSigning | Sort-Object Version -Descending | Select-Object -First 1
+          "TrustedSigning $($m.Version) 준비 ($($m.ModuleBase))"
       - name: 빌드 (win)
         if: matrix.name == 'win'
         working-directory: desktop

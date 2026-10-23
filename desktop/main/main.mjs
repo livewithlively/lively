@@ -18,7 +18,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
-import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
+import { runBootstrap, bootstrapPreview, bootstrapManualHint } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
@@ -1304,7 +1304,10 @@ async function ensureCli(src) {
     progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
     progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
     state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
-    return { ok: false, error: b.error || bootstrapFailNote(src, cli) };
+    // CLI 가 아예 안 생겼으면(윈도우) 손으로 하는 한 줄을 붙인다 — 회사 정책·사내 프록시에 막힌 PC 의 출구다(bootstrap.mjs 머리 주석).
+    const note = b.error || bootstrapFailNote(src, cli);
+    const manual = cli ? null : bootstrapManualHint(src.url);
+    return { ok: false, error: manual ? `${note}\n${manual}` : note };
   }
   progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
   send(IPC.PROGRESS, progress);
