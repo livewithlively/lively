@@ -3,7 +3,7 @@
 //
 // 사양(엣지 표 — 행마다 시나리오 하나):
 //  C1 서버 판정(dist/org/connect-routes.js decideRoutes)이 낼 수 있는 길·상태 전부를 상세 칸으로 그리면 —
-//     어느 칸에도 글자 «null»·«undefined» 가 없고, 칸마다 단추·링크·입력 하나 또는 상태 문장이 있다(막다른 칸 없음).
+//     어느 칸에도 글자 «null»·«undefined» 가 없고, 준비 중·꺼짐이 아닌 칸에는 단추·링크·입력이 하나는 있다(막다른 칸 없음).
 //  C2 Claude 길 칸이 구성원·모으는 곳을 다 그린 뒤에도 «null» 이 없다(숨은 곳 0 — replaceChildren 에 null 을 넘기던 결함).
 //  C3 접힌 «다른 길» 의 Claude 칸은 펼 때 불러온다(펼치기 전 구성원 조회 0건 → 펼친 뒤 1건 이상).
 //  C4 슬랙 앱 등록 — 빈 칸으로 [등록] 하면 보내지 않고 «칸을 채워 주세요» · 채우면 POST /api/ui/org/connect/register {app, values} · 다시 그린다.
@@ -11,12 +11,15 @@
 //  C5 깃허브 앱 등록 — 키 파일(.pem)을 고르면 그 내용이 private_key 로 간다 · 키가 아닌 파일은 받지 않는다.
 //  C6 상태를 못 읽은 앱 — [다시 불러오기] 단추가 있고 누르면 다시 그린다.
 //  C7 목록 — 묶음 제목이 서고 «null» 이 없다 · 못 읽은 앱은 «상태를 불러오지 못했어요» 묶음.
+//  C8 앱 등록 걸음은 번호가 붙는다(스타일시트를 실어 li 가 list-item 인지 본다 — li 를 flex 로 만들어 번호가 사라졌던 결함).
+//  C9 길 목록에 원래 없는 앱(관리자가 등록한 앱)의 상세엔 길 칸을 세우지 않는다 · 상태를 통째로 못 읽었을 때만 «못 읽음» 칸.
+//  C10 관리자가 등록한 «표에 없는 앱» 은 목록 «그 밖에 연결할 수 있는 앱» 에 선다 · 상태를 못 읽으면 앱마다 상세로 가는 줄.
 //
 // 왜 런타임인가: 결함은 DOM 쪽에서 나왔다(replaceChildren 에 null · li 를 flex 로 만들어 번호가 사라짐). 말 표 시험
 //  (connect-routes-view.test.mjs)은 그것을 못 본다. 실제 화면 모듈(web/v2/connect-routes.ts)을 묶어 진짜 DOM 에서 돌리고,
 //  서버 자리(fetch)만 정해진 응답으로 바꾼다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { BREATHE_URL, dumpDom, findChrome, readOut } from "./headless-chrome.mjs";
@@ -71,9 +74,13 @@ const ERR = { app: "notion", label: "노션", app_ready: null, routes: null, rec
   can_register: false, connect_url: null, skill: "liv-connect-notion", note: null, error: "조회 실패" };
 const STATUS = { prereq: { vault_ready: true, callback_url: "https://lively.acme.example/oauth/callback" }, can_collect: true, gateway_url: "https://lively.acme.example",
   apps: [PRIMARY_AI, { ...LAZY, app: "github", label: "깃허브", routes: [{ kind: "app", state: "set_scope" }, { kind: "token", state: "connect" }] }, ERR, { ...SLACK_REG, app: "linear", label: "리니어", registration: regApp("linear", "리니어").registration }] };
+//  앱 등록 걸음 번호(C8)를 보려고 화면 스타일시트를 그대로 싣는다.
+const CSS = readFileSync(path.join(ROOT, "public/styles/40-v2.css"), "utf8").replace(/<\/style/gi, "<\\/style");
+const VIEW = { all: [{ key: "slack", label: "Slack" }, { key: "hubspot-crm", label: "Hubspot Crm", dynamic: true }, { key: "asana", label: "Asana", dynamic: true }],
+  connected: [{ key: "hubspot-crm", label: "Hubspot Crm" }] };
 const PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----\n";
 
-const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
+const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body>
 <div id="toasts"></div><div id="all"></div><div id="ai"></div><div id="lazy"></div><div id="slack"></div><div id="gh"></div><div id="err"></div><div id="list"></div>
 <pre id="out">PENDING</pre>
 <script>
@@ -117,8 +124,10 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
       all.appendChild(sec);
       for (const card of sec.querySelectorAll('.cn-rt-card')) {
         const st = (card.querySelector('.cn-rt-st') || {}).textContent || '';
+        const state = (Array.from(card.classList).find((c) => c.indexOf('s-') === 0) || '').slice(2);
         const act = card.querySelector('button, a, input, select');
-        if (!act && !st.trim()) dead.push(JSON.stringify(a.routes));
+        //  준비 중·꺼짐은 사람이 할 일이 없다 — 상태 문장만 있으면 된다. 그 밖의 칸은 누를 것이 하나는 있어야 한다.
+        if (!st.trim() || (!act && state !== 'preparing' && state !== 'off')) dead.push(state + ' ' + JSON.stringify(a.routes));
       }
     }
     await sleep(400);
@@ -200,6 +209,24 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"></head><body>
     R.c7_groups = heads.includes('바로 연결할 수 있어요') && heads.includes('상태를 불러오지 못했어요') && heads.includes('하나만 더 하면 돼요');
     R.c7_no_null = !bad(li.innerText);
     R.heads = heads;
+    // C8 — 걸음 번호
+    const li0 = document.querySelector('#slack ol.cn-reg-steps > li');
+    R.c8_numbered = !!li0 && getComputedStyle(li0).display === 'list-item' && !!li0.querySelector('.cn-reg-li');
+    // C9 — 길 목록에 없는 앱 · 못 읽음
+    const st9 = ${JSON.stringify(STATUS)};
+    R.c9_unlisted_none = CR.routesAppFor(st9, 'asana', 'Asana') === null;
+    R.c9_listed = (CR.routesAppFor(st9, 'slack', '슬랙') || {}).app === 'slack';
+    const errApp = CR.routesAppFor(null, 'notion', 'Notion');
+    R.c9_failed_error = !!errApp && !!errApp.error && errApp.routes === null;
+    // C10 — 그 밖의 앱 · 못 읽음 폴백
+    const v = ${JSON.stringify(VIEW)};
+    const o1 = document.createElement('div'); o1.append(...CR.otherRows(v, st9, ''));
+    const t1 = o1.innerText;
+    R.c10_dynamic = /그 밖에 연결할 수 있는 앱/.test(t1) && /Hubspot Crm/.test(t1) && /Asana/.test(t1) && !/Slack/.test(t1) && /내 계정으로 연결됨/.test(t1);
+    const o2 = document.createElement('div'); o2.append(...CR.otherRows(v, null, ''));
+    const heads2 = Array.from(o2.querySelectorAll('.cn-gh b')).map((b) => b.textContent);
+    R.c10_fallback = heads2.indexOf('앱') >= 0 && /Slack/.test(o2.innerText) && Array.from(o2.querySelectorAll('a.cn-row')).every((a) => (a.getAttribute('href') || '').indexOf('#/connect/') === 0);
+    R.c10_search = CR.otherRows(v, st9, 'asana').length === 1 && !/Hubspot/.test(CR.otherRows(v, st9, 'asana')[0].innerText);
   } catch (e) { R.error = String(e && e.stack || e); }
   document.getElementById('out').textContent = JSON.stringify(R) + 'ENDRESULT';
 })();
@@ -212,7 +239,7 @@ const R = JSON.parse(res.text.trim());
 if (R.error) console.error("페이지 예외:", R.error);
 let fails = 0, total = 0;
 const check = (k, why) => { total++; const ok = R[k] === true; console.log(`${ok ? "ok  " : "FAIL"}  ${k} — ${why}`); if (!ok) fails++; };
-check("c1_no_dead", `C1 서버가 낼 수 있는 길·상태 ${R.c1_count}가지 — 칸마다 단추·링크·입력 또는 상태 문장`);
+check("c1_no_dead", `C1 서버가 낼 수 있는 길·상태 ${R.c1_count}가지 — 칸마다 상태 문장 · 준비 중·꺼짐이 아니면 누를 것 하나`);
 check("c1_no_null", "C1 어느 칸에도 «null» · «undefined» 글자가 없다");
 check("c2_loaded", "C2 (배선) 권하는 Claude 길이 구성원·모으는 곳을 실제로 그렸다");
 check("c2_no_null", "★C2 다 그린 뒤에도 «null» 이 없다(숨은 곳 0)");
@@ -229,6 +256,13 @@ check("c5_post", "C5 키 파일 내용이 private_key 로 간다(다섯 값)");
 check("c6_reload", "C6 상태를 못 읽은 앱 — [다시 불러오기] 를 누르면 다시 그린다");
 check("c7_groups", "C7 목록 묶음(바로 연결 · 하나만 더 · 못 읽음)");
 check("c7_no_null", "C7 목록에 «null» 이 없다");
+check("c8_numbered", "C8 앱 등록 걸음에 번호가 붙는다(스타일을 실어 li 가 list-item)");
+check("c9_unlisted_none", "★C9 길 목록에 원래 없는 앱(관리자가 등록한 앱)은 길 칸을 세우지 않는다(가짜 «못 읽음» 없음)");
+check("c9_listed", "C9 길 목록에 있는 앱은 그 앱");
+check("c9_failed_error", "C9 상태를 통째로 못 읽었을 때만 «못 읽음» 칸");
+check("c10_dynamic", "C10 표에 없는 앱은 «그 밖에 연결할 수 있는 앱» 에 선다(길 목록의 앱은 다시 세우지 않는다 · 연결됨 표시)");
+check("c10_fallback", "C10 상태를 못 읽으면 앱마다 상세로 가는 줄");
+check("c10_search", "C10 찾기 칸이 그 밖의 앱에도 먹는다");
 if (fails) console.log(JSON.stringify({ dead: R.c1_dead, heads: R.heads }));
 console.log(fails ? `\n${fails}건 실패` : `\n${total}건 통과`);
 process.exit(fails ? 1 : 0);

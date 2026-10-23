@@ -30,6 +30,19 @@ export interface ConnectStatus {
   apps: ConnectAppStatus[];
 }
 
+/**
+ * 상세의 길 칸에 쓸 앱 — 서버가 그 앱을 길 목록에 실었으면 그것(그 앱만 못 읽었으면 error 가 실려 온다).
+ *  상태를 통째로 못 읽었으면 «못 읽음» 칸(다시 불러오기). 길 목록에 원래 없는 앱(관리자가 등록한 앱 · 내려 둔 앱)이면 null —
+ *  칸을 세우지 않는다(못 읽은 것이 아니다 — 다시 불러와도 같다).
+ */
+export function routesAppFor(status: ConnectStatus | null, key: string, label: string): ConnectAppStatus | null {
+  if (status) return status.apps.find((a) => a.app === key) ?? null;
+  return {
+    app: key, label, app_ready: null, routes: null, recommended: null, blocked_before: null,
+    can_register: false, connect_url: null, skill: '', note: null, error: '연결 상태를 불러오지 못했어요',
+  };
+}
+
 export async function loadConnectStatus(): Promise<ConnectStatus> {
   const r: any = await api('/api/ui/org/connect-status');
   return { prereq: r?.prereq || { vault_ready: true, callback_url: null }, can_collect: !!r?.can_collect, gateway_url: r?.gateway_url ?? null, apps: Array.isArray(r?.apps) ? r.apps : [] };
@@ -65,7 +78,7 @@ export function appRows(status: ConnectStatus | null, q = ''): HTMLElement {
   const n = rowSummary(status.apps);
   const sum = el('div', { class: 'cn-sum' },
     el('span', { class: 'cn-sum-i on' }, el('b', { text: String(n.on) }), el('span', { text: '연결됨' })),
-    ...(n.half ? [el('span', { class: 'cn-sum-i half' }, el('b', { text: String(n.half) }), el('span', { text: '정할 것 남음' }))] : []),
+    ...(n.half ? [el('span', { class: 'cn-sum-i half' }, el('b', { text: String(n.half) }), el('span', { text: '하나만 더' }))] : []),
     el('span', { class: 'cn-sum-i' }, el('b', { text: String(n.off) }), el('span', { text: '바로 연결할 수 있음' })),
     ...(n.soon ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(n.soon) }), el('span', { text: '준비 필요' }))] : []));
   const groups = GROUPS.map((g) => {
@@ -81,6 +94,40 @@ export function appRows(status: ConnectStatus | null, q = ''): HTMLElement {
     : null;
   return el('div', { class: 'cn-rt-list-wrap' }, ...(warn ? [warn] : []), sum,
     ...(groups.length ? groups : [el('p', { class: 'v2-empty', text: q ? `'${q}' 와(과) 맞는 앱이 없어요.` : '연결할 수 있는 앱이 없어요.' })]));
+}
+
+/** 내 연결 표(me-logins SvcView)의 줄 — 길 목록 밖의 줄을 그리는 데 쓰는 칸만. */
+export interface OtherAppIn { key: string; label: string; dynamic?: boolean }
+
+/**
+ * 길 목록(org_connect_status 의 앱 아홉) 밖의 줄.
+ *  · 관리자가 등록한 «표에 없는 앱»(me-logins svcFromConnector — dynamic) — AI 가 내 계정으로 직접 쓰는 연결이라 자료를 모으는 길은 없다.
+ *    원준 2026-08-21 «표에 없는 커넥터도 흘려보내지 않는다».
+ *  · 연결 상태를 못 읽었을 때(권한 · 서버 오류) — 앱마다 상세로 들어갈 줄만(거짓 «연결 전» 을 만들지 않는다).
+ */
+export function otherRows(view: { all: OtherAppIn[]; connected: OtherAppIn[] } | null, status: ConnectStatus | null, q: string): HTMLElement[] {
+  if (!view) return [];
+  const hit = (s: OtherAppIn): boolean => !q || s.label.toLowerCase().includes(q) || s.key.includes(q);
+  const isOn = (s: OtherAppIn): boolean => view.connected.some((x) => x.key === s.key);
+  const row = (s: OtherAppIn, word: string): HTMLElement => el('a', { class: 'cn-row cn-rt-row b-off', href: '#/connect/' + encodeURIComponent(s.key), title: s.label },
+    svcTile(s.key, s.label, true),
+    el('span', { class: 'cn-row-main' },
+      el('span', { class: 't' }, el('span', { text: s.label }), isOn(s) ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null),
+      el('span', { class: 'm cn-rt-word', text: word })),
+    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+  const group = (title: string, note: string, items: HTMLElement[]): HTMLElement => el('section', { class: 'cn-group' },
+    el('div', { class: 'cn-gh' }, el('b', { text: title }), el('span', { class: 'n', text: String(items.length) }), el('span', { class: 'h', text: note })),
+    el('div', { class: 'cn-list cn-rt-list' }, ...items));
+  const out: HTMLElement[] = [];
+  const known = new Set((status?.apps ?? []).map((a) => a.app));
+  if (!status) {
+    const base = view.all.filter((s) => !s.dynamic && hit(s));
+    if (base.length) out.push(group('앱', '앱을 누르면 그 앱의 연결을 볼 수 있어요', base.map((s) => row(s, isOn(s) ? '내 계정으로 연결됨' : '앱을 눌러 연결 상태를 봐 주세요'))));
+  }
+  const dyn = view.all.filter((s) => s.dynamic && !known.has(s.key) && hit(s));
+  if (dyn.length) out.push(group('그 밖에 연결할 수 있는 앱', '관리자가 등록한 앱이에요 — AI 가 내 계정으로 직접 써요(자료를 모으지는 않아요)',
+    dyn.map((s) => row(s, isOn(s) ? '내 계정으로 연결됨' : '아직 연결 전 — 계정으로 한 번 허용하면 돼요'))));
+  return out;
 }
 
 // ══ 상세 — 연결 길 ═══════════════════════════════════════════════════════════════════
@@ -239,7 +286,7 @@ function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: Routes
 /** [복사] — 같은 화면에 여럿이라 무엇을 복사하는지 이름으로 말한다(화면 읽기). */
 function copyBtn(what: string, value: string): HTMLButtonElement {
   const name = what === 'callback_url' ? '돌아올 주소' : what === 'gateway_url' ? '라이블리 주소' : '값';
-  const b = btn('복사', () => { void copyText(value, `${name}를 복사했어요.`); });
+  const b = btn('복사', () => { void copyText(value, `${name}${name === '값' ? '을' : '를'} 복사했어요.`); });
   b.setAttribute('aria-label', `${name} 복사`);
   return b;
 }
@@ -290,12 +337,13 @@ function regForm(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx): HTML
   const vals: Record<string, string> = {};
   const rows = reg.fields.map((f) => {
     if (f.file) {
-      const name = el('span', { class: 'cn-reg-file-n', text: '아직 고르지 않았어요' });
+      //  고르기 전엔 말을 붙이지 않는다 — 브라우저가 이미 «선택된 파일 없음» 을 보인다(두 말이 겹친다).
+      const name = el('span', { class: 'cn-reg-file-n' });
       const inp = el('input', { type: 'file', accept: '.pem,application/x-pem-file,text/plain', 'aria-label': f.label }) as HTMLInputElement;
       inp.onchange = async () => {
         const file = inp.files && inp.files[0];
         vals[f.key] = '';
-        if (!file) { name.textContent = '아직 고르지 않았어요'; return; }
+        if (!file) { name.textContent = ''; return; }
         const text = await file.text().catch(() => '');
         if (!looksLikePrivateKey(text)) { name.textContent = `${file.name} — 키 파일이 아니에요`; toast('Private key 파일(.pem)을 골라 주세요 — [Generate a private key] 로 받은 파일이에요.', true); inp.value = ''; return; }
         vals[f.key] = text;

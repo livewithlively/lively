@@ -184,6 +184,7 @@ export const SECRET_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
   org_git_credential_set: ["token"],
   org_oauth_client_upsert: ["clientSecret"],
   workspace_link_set: ["token"],
+  workspace_activate: ["app_dsn"],   // 앱 role 비밀번호가 든 Postgres 접속 문자열
 };
 
 function hiddenValue(v: unknown): string {

@@ -25,7 +25,7 @@ import { appAxes, collectTally, pendingAxes, skipKey,
 import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 — «사람이 고른 것»의 정본은 서버다
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 회사 계정 «관리자 허용» 안내(세 화면이 한 벌)
-import { appRows, loadConnectStatus, routesSection, type ConnectAppStatus, type ConnectStatus } from './connect-routes.js';   // #4970 — 앱마다 연결 길(목록 한 줄 · 상세 길 칸 · 앱 등록)
+import { appRows, loadConnectStatus, otherRows, routesAppFor, routesSection } from './connect-routes.js';   // #4970 — 앱마다 연결 길(목록 한 줄 · 상세 길 칸 · 앱 등록)
 import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';   // #4970 — [연결 도와줘](처음 설정의 [연결할게요]와 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
@@ -150,36 +150,6 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   //  개수는 화면이 선 뒤에 채운다 — 목록을 여는 속도가 관리 데이터 조회에 매달리면 안 된다(실패해도 카드는 산다).
   void fillGitCounts(gitCard.stat);
   if (dbCard) void fillDbCount(dbCard.stat);
-}
-
-/**
- * (#4970) 길 목록(org_connect_status 의 앱 아홉) 밖의 줄.
- *  · 관리자가 등록한 «표에 없는 앱»(svcFromConnector — dynamic) — AI 가 내 계정으로 직접 쓰는 연결이라 자료를 모으는 길은 없다.
- *  · 연결 상태를 못 읽었을 때(권한 · 서버 오류) — 앱마다 상세로 들어갈 줄만(거짓 «연결 전» 을 만들지 않는다).
- */
-function otherRows(view: SvcView | null, status: ConnectStatus | null, q: string): HTMLElement[] {
-  if (!view) return [];
-  const hit = (s: Svc): boolean => !q || s.label.toLowerCase().includes(q) || s.key.includes(q);
-  const isOn = (s: Svc): boolean => (view.connected as Svc[]).some((x) => x.key === s.key);
-  const row = (s: Svc, word: string): HTMLElement => el('a', { class: 'cn-row cn-rt-row b-off', href: '#/connect/' + encodeURIComponent(s.key), title: s.label },
-    svcTile(s.key, s.label, true),
-    el('span', { class: 'cn-row-main' },
-      el('span', { class: 't' }, el('span', { text: s.label }), isOn(s) ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null),
-      el('span', { class: 'm cn-rt-word', text: word })),
-    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
-  const group = (title: string, note: string, items: HTMLElement[]): HTMLElement => el('section', { class: 'cn-group' },
-    el('div', { class: 'cn-gh' }, el('b', { text: title }), el('span', { class: 'n', text: String(items.length) }), el('span', { class: 'h', text: note })),
-    el('div', { class: 'cn-list cn-rt-list' }, ...items));
-  const out: HTMLElement[] = [];
-  const known = new Set((status?.apps ?? []).map((a) => a.app));
-  if (!status) {
-    const base = (view.all as Svc[]).filter((s) => !(s as any).dynamic && hit(s));
-    if (base.length) out.push(group('앱', '앱을 누르면 그 앱의 연결을 볼 수 있어요', base.map((s) => row(s, isOn(s) ? '내 계정으로 연결됨' : '앱을 눌러 연결 상태를 봐 주세요'))));
-  }
-  const dyn = (view.all as Svc[]).filter((s) => (s as any).dynamic && !known.has(s.key) && hit(s));
-  if (dyn.length) out.push(group('그 밖에 연결할 수 있는 앱', '관리자가 등록한 앱이에요 — AI 가 내 계정으로 직접 써요(자료를 모으지는 않아요)',
-    dyn.map((s) => row(s, isOn(s) ? '내 계정으로 연결됨' : '아직 연결 전 — 계정으로 한 번 허용하면 돼요'))));
-  return out;
 }
 
 /** (#4970) 계정 연결 길이 있어도 개인 토큰 칸을 늘 보이는 앱 — 위 «개인 토큰으로 연결» 주석. */
@@ -345,6 +315,13 @@ const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이�
  * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
  * 한글이 아니면(영문 앱 이름 등) «를». 순수라 테스트가 표를 돈다.
  */
+/** 받침이 있으면 «은», 없으면 «는» — 한글 끝 글자로(한글이 아니면 «은(는)»). */
+function eunNeun(word: string): string {
+  const c = String(word || '').trim().slice(-1).charCodeAt(0);
+  if (!(c >= 0xac00 && c <= 0xd7a3)) return '은(는)';
+  return (c - 0xac00) % 28 ? '은' : '는';
+}
+
 export function eulReul(word: string): string {
   const c = (word || '').charCodeAt((word || '').length - 1);
   if (!(c >= 0xAC00 && c <= 0xD7A3)) return '를';
@@ -507,19 +484,19 @@ function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, r
   const set = (axis: 'use' | 'get', on: boolean) => {
     if (on) skip.add(skipKey(key, axis)); else skip.delete(skipKey(key, axis));
     saveSkip(skip);
-    toast(on ? `${AXIS_LABEL[axis]}는 안 쓰는 것으로 정했어요 — 이 칸은 더 묻지 않아요`
+    toast(on ? `${AXIS_LABEL[axis]}${eunNeun(AXIS_LABEL[axis])} 안 쓰는 것으로 정했어요 — 이 칸은 더 묻지 않아요`
              : `${AXIS_LABEL[axis]}를 다시 «아직 안 정함»으로 되돌렸어요`);
     reload();
   };
   for (const axis of pendingAxes(a)) {
     out.push(el('div', { class: 'cn-decide' }, icon('zap'),
-      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 를 아직 안 정했어요 — 아래에서 켜면 연결이 완료돼요. 안 쓸 거면 그렇게 정해 두세요.`)),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}**${eulReul(AXIS_LABEL[axis])} 아직 안 정했어요 — 아래에서 켜면 연결이 완료돼요. 안 쓸 거면 그렇게 정해 두세요.`)),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '안 쓸래요', onclick: () => set(axis, true) })));
   }
   for (const axis of ['use', 'get'] as const) {
     if (a[axis] !== 'skip') continue;
     out.push(el('div', { class: 'cn-decide done' }, icon('check'),
-      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 는 안 쓰기로 했어요 — 켜 두진 않았어요. 다시 쓰려면 [다시 정하기]를 누르세요.`)),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}**${eunNeun(AXIS_LABEL[axis])} 안 쓰기로 했어요 — 켜 두진 않았어요. 다시 쓰려면 [다시 정하기]를 누르세요.`)),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 정하기', onclick: () => set(axis, false) })));
   }
   return out;
@@ -539,7 +516,8 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   //  #3778 — 상세도 목록과 **같은 잣대**로 두 축을 읽는다. 여기서 «하나 남았다»를 말하고 그 자리에서 끝낸다.
   //  (#4970) 연결 길은 서버가 정한다 — 수집기 집계와 같이 읽는다(못 읽어도 아래 칸은 그린다).
   const [{ tally }, connStatus] = await Promise.all([loadCollect(), loadConnectStatus().catch(() => null)]);
-  const connApp: ConnectAppStatus | null = connStatus?.apps.find((x) => x.app === svc.key) || null;
+  //  길 목록에 원래 없는 앱(관리자가 등록한 앱 · 내려 둔 앱)은 길 칸을 세우지 않는다 — «못 읽음» 과 다르다(routesAppFor).
+  const connApp = routesAppFor(connStatus, svc.key, svc.label);
   const skip = loadSkip();
   const axes = appAxes(svc.key, st === 'blocked' ? 'soon' : st, tally, skip);
   const reload = () => { void renderConnectApp(host, key); };
@@ -744,14 +722,10 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     setTimeout(() => collect.row.classList.remove('cn-flash'), 1800);
   };
   //  연결 상태를 못 읽었어도 길 칸은 선다(다시 불러오기 단추) — 아래 칸들이 «위 «연결하는 길» 을 봐 주세요» 라고 가리키는 자리가 늘 있게.
-  const routesApp: ConnectAppStatus = connApp ?? {
-    app: svc.key, label: svc.label, app_ready: null, routes: null, recommended: null, blocked_before: null,
-    can_register: false, connect_url: null, skill: '', note: null, error: '연결 상태를 불러오지 못했어요',
-  };
-  const routes = routesSection(routesApp, {
+  const routes = connApp ? routesSection(connApp, {
     startAppConnect: account && (svc.key === 'slack' || svc.key === 'github') ? () => { void startOAuth(svc, reload); } : null,
     toCollect, openToken: svc.token ? () => openToken(svc, reload) : null, reload, canManage: isAdmin,
-  });
+  }) : null;
 
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
@@ -760,7 +734,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     el('div', { class: 'cn-head' }, svcTile(svc.key, svc.label, st === 'on'),
       el('div', { class: 'cn-head-tt' }, el('h1', { class: 'v2-title', text: svc.label }),
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: String((svc as any).blurb || '') }))),
-    routes,
+    ...(routes ? [routes] : []),
     el('section', { class: 'cn-sect', id: 'cn-tool' },
       sectHead('1', `${svc.label} 연결 두 가지`, '따로 켜고 끕니다'),
       ...decideRows(svc.label, axes, skip, svc.key, reload),

@@ -7,7 +7,7 @@ import { registry } from "./index.js";
 import { SECRET_ARG_FIELDS, argsForLog } from "../org/policies/tool-log.js";
 
 /** 이름으로 보아 비밀 값을 받는 칸. */
-const SECRETY = /(secret|password|passwd|private_?key|^token$|_token$|access_?token|refresh_?token|api_?key)/i;
+const SECRETY = /(secret|password|passwd|private_?key|^token$|_token$|access_?token|refresh_?token|api_?key|dsn)/i;
 /** 이름은 비밀 같지만 값은 비밀이 아닌 칸 — 까닭을 단다. */
 const NOT_SECRET: Readonly<Record<string, Record<string, string>>> = {
   org_runtime_update: { allowed_db_secret_refs: "비밀의 이름(참조) 목록이다 — 값이 아니다" },
