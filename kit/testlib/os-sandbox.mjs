@@ -14,7 +14,8 @@
 //      안 불려 테스트가 "스텁 호출 0건"만 본다. PATH 구분자도 `:` 가 아니라 `;` 다.
 //
 //  두 관례를 여기 한 곳에 못박아, 다음 테스트가 같은 함정을 다시 열지 않게 한다.
-import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, readdirSync, chmodSync, mkdirSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { join, delimiter } from "node:path";
 
 export const WIN = process.platform === "win32";
@@ -110,3 +111,35 @@ export function writeStubBin(dir, name, jsBody) {
 
 // 아무 일도 안 하고 성공하는 스텁(하네스를 PATH 에서 '가리기'만 할 때).
 export const writeNoopBin = (dir, name) => writeStubBin(dir, name, "process.exit(0);");
+
+// 번들(.tgz)을 node 로만 만든다(ustar + gzip) — 설치기가 그걸 tar 로 **푸는** 경로는 그대로 시험된다.
+//  왜(2026-10-23 실측): windows-latest 이미지 20261018판부터 System32 tar.exe 가 **묶기**(`-cf`·`-czf`)에서
+//   0xC0000005(접근 위반)로 죽어 kit 번들 시험 둘이 push 마다 깨졌다(20261007판은 통과). PATH 의 tar 도 같다.
+//  윈도우 전용이다 — 맥 tar 는 풀 때 `._이름` 항목을 AppleDouble 메타데이터로 읽어, 시스템 tar 로 묶은 것과 결과가 다르다.
+export function writeTgz(stage, tgz) {
+  const blocks = [];
+  const field = (buf, off, len, str) => { buf.write(str, off, Math.min(Buffer.byteLength(str), len), "utf8"); };
+  const octal = (buf, off, len, n) => field(buf, off, len, n.toString(8).padStart(len - 1, "0") + "\0");
+  const header = (name, size, dir) => {
+    const h = Buffer.alloc(512);
+    let prefix = "";
+    if (Buffer.byteLength(name) > 100) { const cut = name.lastIndexOf("/", 154); prefix = name.slice(0, cut); name = name.slice(cut + 1); }
+    field(h, 0, 100, name); octal(h, 100, 8, dir ? 0o755 : 0o644); octal(h, 108, 8, 0); octal(h, 116, 8, 0);
+    octal(h, 124, 12, size); octal(h, 136, 12, Math.floor(Date.now() / 1000));
+    h.fill(0x20, 148, 156); h[156] = dir ? 0x35 : 0x30; field(h, 257, 6, "ustar\0"); field(h, 263, 2, "00"); field(h, 345, 155, prefix);
+    let sum = 0; for (const b of h) sum += b;
+    field(h, 148, 8, sum.toString(8).padStart(6, "0") + "\0 ");
+    return h;
+  };
+  const walk = (abs, rel) => {
+    for (const e of readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const r = rel ? `${rel}/${e.name}` : e.name, a = join(abs, e.name);
+      if (e.isDirectory()) { blocks.push(header(`./${r}/`, 0, true)); walk(a, r); continue; }
+      const body = readFileSync(a);
+      blocks.push(header(`./${r}`, body.length, false), body, Buffer.alloc((512 - (body.length % 512)) % 512));
+    }
+  };
+  walk(stage, "");
+  blocks.push(Buffer.alloc(1024));
+  writeFileSync(tgz, gzipSync(Buffer.concat(blocks)));
+}
