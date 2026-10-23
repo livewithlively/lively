@@ -225,7 +225,8 @@ const orgConnectStatus: Capability = {
     "prereq{vault_ready(자격 금고 키 — 없으면 어떤 연결도 저장 못 함)·callback_url(외부 앱에 등록할 콜백 주소, gateway_url 미설정이면 null)} · " +
     "can_collect(수집 켜기 가능) · apps[]{app·label·skill(넘길 스킬)·connect_url(라이블리 화면 절대 주소)·note · " +
     "routes[](연결할 수 있는 길, 우선순위 순: kind app=라이블리 앱 · ai=구성원 Claude 커넥터(ai_app) · token=개인 토큰 / " +
-    "state collecting·set_scope·connected·connect·register·reconnect·ask_admin·preparing·off / needs=claude_login 이면 Claude 로그인부터) · " +
+    "state collecting·set_scope·connected·connect·register·reconnect·ask_admin·preparing·off / needs=claude_login 이면 Claude 로그인부터 / " +
+    "off 면 off_reason=blocked(관리자가 끔)·unknown(설정을 못 읽음 — 관리자가 껐다고 말하지 않는다)) · " +
     "recommended(권하는 길의 자리) · blocked_before(그 앞의 막힌 길) · registration(앱 등록 안내 — 라이블리 앱 길이 register·ask_admin 일 때만)}. " +
     "옛 칸(variant·next·app_ready·me_connected·collecting·can_register)도 함께 온다. 앱 하나의 조회가 실패해도 나머지는 돌려준다(그 앱만 error · routes=null).",
   scope: "memory", input: {},

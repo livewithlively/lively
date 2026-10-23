@@ -109,7 +109,8 @@ export async function renderAppClaude(host: HTMLElement, aiApp: string, opts: { 
               el('div', { class: 'cn-bd-unitlist' }, ...units.map((u) => unitNode(u, d, nameOf, paint, opts.onChanged))))
             : el('div', { class: 'cn-bd-unitlist' }, ...units.map((u) => unitNode(u, d, nameOf, paint, opts.onChanged))))
           : el('span', { class: 'cn-bd-note', text: '아직 없어요. 연결한 뒤 [연결 도와줘]로 AI 에게 맡기면 모을 곳을 찾아 제안해요.' })),
-      d.hidden ? el('p', { class: 'cn-bd-note', text: `다른 구성원만 볼 수 있는 곳 ${d.hidden}곳은 이름을 보여 드리지 않아요.` }) : null,
+      //  ⚠ replaceChildren 에 null 을 직접 넘기면 글자 «null» 이 찍힌다(lib/dom.ts replaceKids 머리말) — 있을 때만 펼친다.
+      ...(d.hidden ? [el('p', { class: 'cn-bd-note', text: `다른 구성원만 볼 수 있는 곳 ${d.hidden}곳은 이름을 보여 드리지 않아요.` })] : []),
       ...notes);
   };
   host.replaceChildren(el('p', { class: 'cn-bd-note', text: '구성원 연결을 불러오는 중이에요…' }));

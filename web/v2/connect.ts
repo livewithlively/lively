@@ -25,7 +25,7 @@ import { appAxes, collectTally, pendingAxes, skipKey,
 import { shellPrefStore, shellPrefsTouch } from './shell-prefs.js';   // #2460 — «사람이 고른 것»의 정본은 서버다
 import { NOTION_PICK_TIP, notionCollectedLine, notionCollectedPages } from './notion-pick.js';   // #1968 — 노션 고르기 안내·모은 페이지 수(처음 설정과 한 벌)
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 회사 계정 «관리자 허용» 안내(세 화면이 한 벌)
-import { appRows, loadConnectStatus, routesSection, type ConnectAppStatus } from './connect-routes.js';   // #4970 — 앱마다 연결 길(목록 한 줄 · 상세 길 칸 · 앱 등록)
+import { appRows, loadConnectStatus, routesSection, type ConnectAppStatus, type ConnectStatus } from './connect-routes.js';   // #4970 — 앱마다 연결 길(목록 한 줄 · 상세 길 칸 · 앱 등록)
 import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';   // #4970 — [연결 도와줘](처음 설정의 [연결할게요]와 한 벌)
 //  #2556 — 관리탭 [데이터 연결] 묶음을 여기로 걷어 왔다. 화면만 옮겼고 **패널은 그것 그대로 부른다**(사본 0):
 //   레포·DB 는 아래 [코드와 데이터] 두 화면이, 아웃바운드 둘은 노션·클릭업 **앱 상세의 [내보내기] 칸**이 편다.
@@ -99,12 +99,8 @@ function stateOf(v: SvcView, svc: Svc): State {
 }
 
 // ══ 목록 (#/connect) ═══════════════════════════════════════════════════════════
-//  #2243 안 2 «진열대» — 행이 아니라 카드다. 카드마다 «무엇을 해 주는지» 한 줄(LOGIN_SERVICES.short)이 있어 누르기 전에 고를 수 있다.
-//  상태는 셋뿐: 연결됨 · 연결할 수 있음 · 준비 중. «조직에 열어 둠»은 이 앱(셀프서브·비엔터프라이즈)에서 사용자의 세계관이
-//   아니다(원준 2026-08-28) — 조직이 아직 안 연 OAuth 앱은 사용자 눈엔 «라이블리가 아직 준비 중»과 같고, 온보딩(#2232)도
-//   같은 판정(soon || blocked)을 쓴다. 그래서 요약 칩·구역·관리자 문구가 전부 사라졌다.
-//  «둘 다 비활성처럼 보이면 헷갈린다»를 이렇게 푼다 — 회색 로고의 뜻을 «준비 중» 하나로 좁히고, 켤 수 있는 앱은 제 색 로고에
-//   [연결] 버튼이 붙어 «누를 수 있다»가 보인다. 준비 중 카드는 점선 테두리·틴트 바탕에 갈 곳(버튼) 대신 «준비 중 + 이유».
+//  #4970 — 앱마다 한 줄(어떤 길로 연결돼 있나 · 다음 걸음)은 connect-routes.ts 가 그린다. 여기엔 그 밖의 칸(표에 없는 앱 ·
+//   코드와 데이터 · 상태를 못 읽었을 때의 앱 줄)만 남는다. 종전 «진열대» 카드(#2243 안 2)와 두 축 카드(#3778)는 걷었다.
 /** 우리 자산(코드 저장소·데이터베이스) 타일 — 앱 타일과 같은 라운드 스퀘어에 우리 색. 글자 «{ }»·«DB» 를 쓰지 않는다. */
 function assetTile(ic: string): HTMLElement {
   return el('span', { class: 'svc-tile cn-asset-tile', 'aria-hidden': 'true' }, icon(ic));
@@ -115,11 +111,16 @@ function assetTile(ic: string): HTMLElement {
 //   «연결 두 가지» 로 옮겼다 — 목록이 답할 물음은 «이 앱은 지금 어떻게 이어져 있고, 나는 무엇을 하면 되나» 하나다.
 export async function renderConnect(host: HTMLElement): Promise<void> {
   host.replaceChildren(el('div', { class: 'v2-center' }, skeleton('연결 상태를 불러오는 중')));
-  const status = await loadConnectStatus().catch(() => null);
+  //  내 연결 표(me-logins)도 같이 읽는다 — 관리자가 등록한 «표에 없는 앱»(원준 2026-08-21 «흘려보내지 않는다»)과,
+  //   연결 상태를 못 읽었을 때 앱 상세로 들어갈 줄이 거기서 나온다.
+  const [status, view] = await Promise.all([
+    loadConnectStatus().catch(() => null),
+    load().then((r) => r.v).catch(() => null),
+  ]);
 
   let q = '';
   const listHost = el('div', { class: 'cn-groups' });
-  const paint = (): void => { listHost.replaceChildren(appRows(status, q)); };
+  const paint = (): void => { listHost.replaceChildren(appRows(status, q), ...otherRows(view, status, q)); };
   const search = el('input', {
     class: 'cn-find', type: 'search', placeholder: '앱 이름으로 찾기', 'aria-label': '앱 찾기',
     oninput: (e: any) => { q = String(e.target.value || '').trim().toLowerCase(); paint(); },
@@ -149,6 +150,36 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   //  개수는 화면이 선 뒤에 채운다 — 목록을 여는 속도가 관리 데이터 조회에 매달리면 안 된다(실패해도 카드는 산다).
   void fillGitCounts(gitCard.stat);
   if (dbCard) void fillDbCount(dbCard.stat);
+}
+
+/**
+ * (#4970) 길 목록(org_connect_status 의 앱 아홉) 밖의 줄.
+ *  · 관리자가 등록한 «표에 없는 앱»(svcFromConnector — dynamic) — AI 가 내 계정으로 직접 쓰는 연결이라 자료를 모으는 길은 없다.
+ *  · 연결 상태를 못 읽었을 때(권한 · 서버 오류) — 앱마다 상세로 들어갈 줄만(거짓 «연결 전» 을 만들지 않는다).
+ */
+function otherRows(view: SvcView | null, status: ConnectStatus | null, q: string): HTMLElement[] {
+  if (!view) return [];
+  const hit = (s: Svc): boolean => !q || s.label.toLowerCase().includes(q) || s.key.includes(q);
+  const isOn = (s: Svc): boolean => (view.connected as Svc[]).some((x) => x.key === s.key);
+  const row = (s: Svc, word: string): HTMLElement => el('a', { class: 'cn-row cn-rt-row b-off', href: '#/connect/' + encodeURIComponent(s.key), title: s.label },
+    svcTile(s.key, s.label, true),
+    el('span', { class: 'cn-row-main' },
+      el('span', { class: 't' }, el('span', { text: s.label }), isOn(s) ? el('span', { class: 'cn-dot on', 'aria-label': '연결됨' }) : null),
+      el('span', { class: 'm cn-rt-word', text: word })),
+    el('span', { class: 'cn-row-go', 'aria-hidden': 'true', text: '›' }));
+  const group = (title: string, note: string, items: HTMLElement[]): HTMLElement => el('section', { class: 'cn-group' },
+    el('div', { class: 'cn-gh' }, el('b', { text: title }), el('span', { class: 'n', text: String(items.length) }), el('span', { class: 'h', text: note })),
+    el('div', { class: 'cn-list cn-rt-list' }, ...items));
+  const out: HTMLElement[] = [];
+  const known = new Set((status?.apps ?? []).map((a) => a.app));
+  if (!status) {
+    const base = (view.all as Svc[]).filter((s) => !(s as any).dynamic && hit(s));
+    if (base.length) out.push(group('앱', '앱을 누르면 그 앱의 연결을 볼 수 있어요', base.map((s) => row(s, isOn(s) ? '내 계정으로 연결됨' : '앱을 눌러 연결 상태를 봐 주세요'))));
+  }
+  const dyn = (view.all as Svc[]).filter((s) => (s as any).dynamic && !known.has(s.key) && hit(s));
+  if (dyn.length) out.push(group('그 밖에 연결할 수 있는 앱', '관리자가 등록한 앱이에요 — AI 가 내 계정으로 직접 써요(자료를 모으지는 않아요)',
+    dyn.map((s) => row(s, isOn(s) ? '내 계정으로 연결됨' : '아직 연결 전 — 계정으로 한 번 허용하면 돼요'))));
+  return out;
 }
 
 /** (#4970) 계정 연결 길이 있어도 개인 토큰 칸을 늘 보이는 앱 — 위 «개인 토큰으로 연결» 주석. */
@@ -301,7 +332,7 @@ export async function renderConnectData(host: HTMLElement, page: string): Promis
 //  이름 근거: 원준 2026-08-30 — «읽기/쓰기/모으기가 감이 안 온다 · 실제로 연결하는 건 수집과 MCP 둘». 흩어져 있던
 //   이름 11개(수집기·자료 가져오기·모아 두기·가져오기 / 외부 앱 연결·AI 도구·외부 서비스·바로 쓰기…)를 이 둘로 모았다.
 //   ⚠ 비유로 짓지 않는다(같은 날 지시) — 기능을 그대로 쓴 말만.
-//  이름 둘은 임시다(원준님 검토 중, 2026-08-28) — 바꾸면 여기 문구와 목록 카드 메타(connMeta)를 같이.
+//  이름 둘은 임시다(원준님 검토 중, 2026-08-28) — 바꾸면 여기 문구와 상세 «연결 두 가지» 줄을 같이.
 //  종전의 «연결 안 됨 + 워크스페이스 2곳에서 모으는 중» 모순(#2202 B1)은 문패의 두 상태 한 줄로 푼다.
 type CollectState = (text: string, on: boolean) => void;
 const SCOPE_NOUN: Record<string, string> = {
@@ -468,7 +499,7 @@ function quietCollectFace(stateText: string, note: string, onState: CollectState
 /**
  * 「연결 중」을 끝내는 줄 (#3778, 원준 2026-09-20).
  *  하나만 켜진 앱은 목록에서 «연결 중»으로 서고, 여기 들어오면 **끝내는 길 둘**을 그 자리에서 고른다 —
- *   나머지를 켜거나(아래 스위치), «안 쓴다»고 정하거나(이 줄의 단추). 정하고 나면 목록이 «연결 완료»가 된다.
+ *   나머지를 켜거나(아래 스위치), «안 쓴다»고 정하거나(이 줄의 단추). 정한 것은 이 상세에만 남는다 — (#4970) 목록은 서버의 길 상태로 선다.
  *  ⚠ «안 쓴다»는 **표시일 뿐 아무것도 끄지 않는다** — 그래서 되돌리는 단추를 늘 같은 자리에 둔다.
  */
 function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, reload: () => void): HTMLElement[] {
@@ -476,7 +507,7 @@ function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, r
   const set = (axis: 'use' | 'get', on: boolean) => {
     if (on) skip.add(skipKey(key, axis)); else skip.delete(skipKey(key, axis));
     saveSkip(skip);
-    toast(on ? `${AXIS_LABEL[axis]}는 안 쓰는 것으로 정했어요 — 이 앱은 «연결 완료»로 표시됩니다`
+    toast(on ? `${AXIS_LABEL[axis]}는 안 쓰는 것으로 정했어요 — 이 칸은 더 묻지 않아요`
              : `${AXIS_LABEL[axis]}를 다시 «아직 안 정함»으로 되돌렸어요`);
     reload();
   };
@@ -488,7 +519,7 @@ function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, r
   for (const axis of ['use', 'get'] as const) {
     if (a[axis] !== 'skip') continue;
     out.push(el('div', { class: 'cn-decide done' }, icon('check'),
-      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 는 안 쓰기로 했어요 — ${label} 은(는) 목록에서 «연결 완료»로 보입니다. 켜 두진 않았어요.`)),
+      el('span', { class: 'm' }, ...uiText(`**${AXIS_LABEL[axis]}** 는 안 쓰기로 했어요 — 켜 두진 않았어요. 다시 쓰려면 [다시 정하기]를 누르세요.`)),
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 정하기', onclick: () => set(axis, false) })));
   }
   return out;
@@ -517,7 +548,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const viaOAuth = !!oc?.connected;
   const viaToken = !!cred?.has_secret;
   const spec = svc.token ? CRED_KINDS.find((x: any) => x.kind === svc.token) : null;
-  //  지금 이 앱을 켜는 길 — 목록(viaAccount)과 같은 판정. svc.oauth 만 보면 Slack 처럼 OAuth 가 안 열린 앱이 막다른 버튼이 된다(#2202 A1).
+  //  지금 이 앱을 켜는 길 — 조직이 등록한 OAuth 가 있거나 전용 창구(appConnect)가 있을 때. svc.oauth 만 보면 Slack 처럼 OAuth 가 안 열린 앱이 막다른 버튼이 된다(#2202 A1).
   const account = !!((svc.oauth && v.oauthMap.has(svc.oauth)) || (svc as any).appConnect);
   //  2026-09-12 대표 결정 — 팀 수집·쓰기 도구·아웃바운드는 «워크스페이스를 어떻게 굴릴까»라 구성원이 한다.
   //   (관리자 전용으로 남는 것은 인원 관리와 인프라뿐 — 데이터베이스·게이트웨이 열쇠는 위에서 따로 admin 을 본다.)
@@ -707,14 +738,20 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   //   라이블리 앱 길의 [연결]은 그 자리에서 시작할 수 있는 앱(슬랙·깃허브 — 계정 허용 한 번)만 바로 열고, 나머지(노션 페이지 고르기 ·
   //   구글 서비스 고르기 · 리니어·아웃룩 켜기)는 그 앱만의 단추가 있는 아래 «자료 가져오기» 칸으로 보낸다(같은 연결을 두 벌로 만들지 않는다).
   const toCollect = (): void => {
-    document.getElementById('cn-tool')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    document.getElementById('cn-tool')?.scrollIntoView({ behavior: calm ? 'auto' : 'smooth', block: 'start' });
     collect.row.classList.add('cn-flash');
     setTimeout(() => collect.row.classList.remove('cn-flash'), 1800);
   };
-  const routes = connApp ? routesSection(connApp, {
+  //  연결 상태를 못 읽었어도 길 칸은 선다(다시 불러오기 단추) — 아래 칸들이 «위 «연결하는 길» 을 봐 주세요» 라고 가리키는 자리가 늘 있게.
+  const routesApp: ConnectAppStatus = connApp ?? {
+    app: svc.key, label: svc.label, app_ready: null, routes: null, recommended: null, blocked_before: null,
+    can_register: false, connect_url: null, skill: '', note: null, error: '연결 상태를 불러오지 못했어요',
+  };
+  const routes = routesSection(routesApp, {
     startAppConnect: account && (svc.key === 'slack' || svc.key === 'github') ? () => { void startOAuth(svc, reload); } : null,
     toCollect, openToken: svc.token ? () => openToken(svc, reload) : null, reload, canManage: isAdmin,
-  }) : null;
+  });
 
   host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
@@ -723,7 +760,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     el('div', { class: 'cn-head' }, svcTile(svc.key, svc.label, st === 'on'),
       el('div', { class: 'cn-head-tt' }, el('h1', { class: 'v2-title', text: svc.label }),
         el('p', { class: 'v2-desc', style: 'margin-top:4px', text: String((svc as any).blurb || '') }))),
-    ...(routes ? [routes] : []),
+    routes,
     el('section', { class: 'cn-sect', id: 'cn-tool' },
       sectHead('1', `${svc.label} 연결 두 가지`, '따로 켜고 끕니다'),
       ...decideRows(svc.label, axes, skip, svc.key, reload),
@@ -1131,9 +1168,8 @@ function memberTokenCollectCard(key: string, onState: CollectState): CollectFace
     });
     const SF = SCOPE_FIELD[key];
     if (s.needs_scope && SF && SF.note) notes.push(SF.note);
-    //  #2247 Linear · #4211 Outlook — 라이블리 소유 OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 관리자에게 등록 칸을 먼저 낸다.
-    //   값은 이 화면에서 금고(조직 슬롯 <kind>/oauth:client)로 바로 간다 — 채팅·문서에 붙여넣을 일이 없다.
-    //   매니지드는 CP 릴레이가 앱을 쥐어 app_ready=true 라 이 칸이 안 보인다(셀프호스팅·dev 전용).
+    //  #2247 Linear · #4211 Outlook — 라이블리 소유 OAuth 앱이 아직 등록되지 않았으면(app_ready=false) 스위치를 막고 그 사실을 말한다.
+    //   (#4970) 등록 값은 위 «연결하는 길» 의 앱 등록 칸이 금고(조직 슬롯 <kind>/oauth:client)로 바로 넣는다 — 채팅·문서에 붙여넣을 일이 없다.
     const REG = NEEDS_APP.has(key);
     //  #4211 — 매니지드는 앱을 CP 가 쥔다(준비는 라이블리의 일). 준비 전이면 그 사실만 말한다.
     //   «켜면 … 화면이 열려요»(T.off)는 지운다 — 준비 전엔 열리지 않으니 두 문장이 서로를 부정한다(jsdom 실측).
@@ -1214,7 +1250,7 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
       : '연결은 돼 있어요 — 켜면 바로 모으기 시작합니다.');
     else if (s && s.ready) notes.push(`켜면 노션 화면이 열려요. ${NOTION_PICK_TIP} 토큰이나 설정을 만질 일은 없어요.`);
     //  (#4970) 셀프호스트의 노션 통합 등록은 위 «연결하는 길» 의 앱 등록 칸 한 곳에서 한다(종전 이 자리의 «통합 값 저장» 칸을 그리로 모았다).
-    else notes.push('노션 연결 준비가 아직 안 됐어요 — 위 «연결하는 길» 을 봐 주세요. 직접 설치한 라이블리는 앱 등록부터 해요.');
+    else notes.push('노션 연결 준비가 아직 안 됐어요 — 위 «연결하는 길» 을 봐 주세요.');
     const extra: HTMLElement[] = [];
     if (wsAll.length > 1) {
       // 워크스페이스마다 한 줄 — 하나가 실패해도 나머지는 돈다(수집기가 워크스페이스당 하나, #1881 N7).
@@ -1397,7 +1433,7 @@ function googleTeamCollectCard(onState: CollectState): CollectFace {
     }
     //  (#4970) 클라이언트 등록은 위 «연결하는 길» 의 앱 등록 칸 한 곳에서 한다(종전 이 자리의 «클라이언트 값 저장» 칸을 그리로 모았다).
     //   ready 만 본다 — 조직에 클라이언트가 없는데 나는 예전 방식으로 연결돼 있어도 그 사실을 말해야 한다(2026-08-26 dev 실측).
-    if (!(s && s.ready)) extra.push(el('p', { class: 'cn-help', text: '구글 연결 준비가 아직 안 됐어요 — 위 «연결하는 길» 을 봐 주세요. 직접 설치한 라이블리는 앱 등록부터 해요.' }));
+    if (!(s && s.ready)) extra.push(el('p', { class: 'cn-help', text: '구글 연결 준비가 아직 안 됐어요 — 위 «연결하는 길» 을 봐 주세요.' }));
 
     chk.onchange = async () => {
       chk.disabled = true;

@@ -10,7 +10,7 @@
 //   V12 관리자에게 — 앱 미등록 / 수집 켜기           → 서로 다른 말
 //   V13 준비 중 · 꺼짐                              → 할 일 없음
 //   V14~V15 앞의 막힌 길 한 줄 · 여럿이면 잇는다
-//   V16 요약 개수 · V17 앱 등록 값(빠진 칸 · 공백 · 선택 칸) · V18 키 파일 판별 · V19 조사 · V20 상세 길 순서 · V21 상세 상태 말
+//   V16 요약 개수 · V17 앱 등록 값(빠진 칸 · 공백 · 선택 칸) · V18 키 파일 판별 · V19 공개 주소가 이 컴퓨터 자신인가 · V20 상세 길 순서 · V21 상세 상태 말
 //   K1  계약 — 서버 판정(dist/org/connect-routes.js)이 낼 수 있는 모든 길·상태에 말과 단추가 있다
 import { strict as assert } from "node:assert";
 import { dirname, join } from "node:path";
@@ -22,40 +22,40 @@ const eq = (got, want, what) => { assert.deepEqual(got, want, what); pass++; };
 const ok = (cond, what) => { assert.ok(cond, what); pass++; };
 
 const V = await import(join(root, "public/app/lib/connect-routes-view.js"));
-ok(typeof V.rowView === "function" && typeof V.regValues === "function", "W0 배선 — 판정을 불러왔다");
+ok(typeof V.rowView === "function" && typeof V.regValues === "function" && typeof V.routeBlurb === "function", "W0 배선 — 판정을 불러왔다");
 
 const app = (o) => ({ app: "slack", label: "슬랙", app_ready: true, routes: [], recommended: -1, blocked_before: [], ...o });
-const pick = (v) => [v.action, v.bucket];
+const pick = (v) => [v.button, v.bucket];
 
 // V1
-eq(pick(V.rowView(app({ error: "조회 실패", routes: null, recommended: null, blocked_before: null }))), ["detail", "err"], "V1 못 읽음");
+eq(pick(V.rowView(app({ error: "조회 실패", routes: null, recommended: null, blocked_before: null }))), [null, "err"], "V1 못 읽음");
 eq(V.rowView(app({ routes: null })).word, "상태를 불러오지 못했어요", "V1 routes=null 도 못 읽음");
 // V2
-eq(pick(V.rowView(app({ routes: [], recommended: -1 }))), ["none", "soon"], "V2 길 없음");
+eq(pick(V.rowView(app({ routes: [], recommended: -1 }))), [null, "soon"], "V2 길 없음");
 // V3~V5
 eq(V.rowView(app({ routes: [{ kind: "app", state: "collecting" }], recommended: 0 })).word, "라이블리 앱으로 모으는 중", "V3");
 eq(V.rowView(app({ routes: [{ kind: "app", state: "connect" }, { kind: "token", state: "collecting" }], recommended: 1 })).word, "개인 토큰으로 모으는 중", "V4");
 const v5 = V.rowView(app({ routes: [{ kind: "app", state: "connect" }, { kind: "ai", state: "connected", ai_app: "slack" }], recommended: 1 }));
-eq([v5.word, ...pick(v5)], ["Claude 커넥터로 연결됨", "manage", "on"], "V5");
+eq([v5.word, ...pick(v5)], ["Claude 커넥터로 연결됨", null, "on"], "V5");
 // V6~V7
-eq(pick(V.rowView(app({ routes: [{ kind: "app", state: "set_scope" }], recommended: 0 }))), ["scope", "half"], "V6");
-eq(pick(V.rowView(app({ routes: [{ kind: "ai", state: "reconnect" }], recommended: 0 }))), ["reconnect", "half"], "V7");
+eq(pick(V.rowView(app({ routes: [{ kind: "app", state: "set_scope" }], recommended: 0 }))), ["범위 정하기", "half"], "V6");
+eq(pick(V.rowView(app({ routes: [{ kind: "ai", state: "reconnect" }], recommended: 0 }))), ["다시 연결", "half"], "V7");
 // V8
 const v8 = V.rowView(app({ app_ready: false, routes: [{ kind: "app", state: "register" }], recommended: 0, registration: { minutes: 5 } }));
-eq([v8.word, v8.button, v8.action], ["라이블리 앱 등록부터 해요(약 5분)", "앱 등록", "register"], "V8");
+eq([v8.word, ...pick(v8)], ["라이블리 앱 등록부터 해요(약 5분)", "앱 등록", "off"], "V8");
 // V9~V11
-eq(pick(V.rowView(app({ routes: [{ kind: "app", state: "connect" }], recommended: 0 }))), ["oauth", "off"], "V9");
-eq(pick(V.rowView(app({ routes: [{ kind: "token", state: "connect" }], recommended: 0 }))), ["token", "off"], "V10");
-eq(V.rowView(app({ routes: [{ kind: "ai", state: "connect", ai_app: "slack" }], recommended: 0 })).action, "claude", "V11 Claude 로 연결");
-eq(V.rowView(app({ routes: [{ kind: "ai", state: "connect", ai_app: "slack", needs: "claude_login" }], recommended: 0 })).action, "claude_login", "V11 로그인부터");
+eq(pick(V.rowView(app({ routes: [{ kind: "app", state: "connect" }], recommended: 0 }))), ["연결", "off"], "V9");
+eq(pick(V.rowView(app({ routes: [{ kind: "token", state: "connect" }], recommended: 0 }))), ["토큰 넣기", "off"], "V10");
+eq(V.rowView(app({ routes: [{ kind: "ai", state: "connect", ai_app: "slack" }], recommended: 0 })).button, "Claude 로 연결", "V11 Claude 로 연결");
+eq(V.rowView(app({ routes: [{ kind: "ai", state: "connect", ai_app: "slack", needs: "claude_login" }], recommended: 0 })).button, "Claude 로그인", "V11 로그인부터");
 // V12
 const unreg = V.rowView(app({ app_ready: false, routes: [{ kind: "app", state: "ask_admin" }], recommended: 0 }));
 const noCollect = V.rowView(app({ app_ready: true, routes: [{ kind: "app", state: "ask_admin" }], recommended: 0 }));
 ok(unreg.word !== noCollect.word && /등록/.test(unreg.word) && /수집/.test(noCollect.word), "V12 앱 미등록 ≠ 수집 켜기");
-eq(pick(unreg), ["detail", "soon"], "V12 남이 할 일 → 자세히");
+eq(pick(unreg), [null, "soon"], "V12 남이 할 일 — 내 단추 없음(상세가 부탁할 말을 준다)");
 // V13
-eq(pick(V.rowView(app({ routes: [{ kind: "app", state: "preparing" }], recommended: 0 }))), ["none", "soon"], "V13 준비 중");
-eq(pick(V.rowView(app({ routes: [{ kind: "ai", state: "off", off_reason: "blocked" }], recommended: 0 }))), ["none", "soon"], "V13 꺼짐");
+eq(pick(V.rowView(app({ routes: [{ kind: "app", state: "preparing" }], recommended: 0 }))), [null, "soon"], "V13 준비 중");
+eq(pick(V.rowView(app({ routes: [{ kind: "ai", state: "off", off_reason: "blocked" }], recommended: 0 }))), [null, "soon"], "V13 꺼짐");
 ok(V.rowView(app({ routes: [{ kind: "ai", state: "off", off_reason: "unknown" }], recommended: 0 })).word !== V.rowView(app({ routes: [{ kind: "ai", state: "off", off_reason: "blocked" }], recommended: 0 })).word, "V13 못 읽음 ≠ 관리자가 끔(관리자가 껐다고 말하지 않는다)");
 ok(!/관리자/.test(V.routeStateText({ kind: "ai", state: "off", off_reason: "unknown" }, { label: "슬랙", app_ready: true })), "V13 못 읽음 상세 말에 «관리자» 가 없다");
 // V14~V15
@@ -85,8 +85,9 @@ ok(V.looksLikePrivateKey(pem("PRIVATE KEY")), "V18 PKCS8");
 ok(!V.looksLikePrivateKey(pem("CERTIFICATE")), "V18 인증서는 아니다");
 ok(!V.looksLikePrivateKey(pem("PUBLIC KEY")), "V18 공개 키는 아니다");
 ok(!V.looksLikePrivateKey("-----BEGIN RSA PRIVATE KEY-----\nMII"), "V18 잘린 키");
-// V19 — 조사
-eq([V.josa("슬랙", "을", "를"), V.josa("노션", "을", "를"), V.josa("피그마", "을", "를"), V.josa("Slack", "을", "를")], ["을", "을", "를", "을(를)"], "V19");
+// V19 — 공개 주소가 이 컴퓨터 자신인가(그대로 저장하면 다른 사람이 못 돌아온다) · 사내망 주소는 막지 않는다
+for (const u of ["http://localhost:8080", "http://127.0.0.1:3000", "http://[::1]:80", "http://0.0.0.0", "http://app.localhost"]) ok(V.looksLoopbackAddress(u), `V19 ${u} — 이 컴퓨터`);
+for (const u of ["https://lively.acme.com", "http://10.0.0.5", "http://192.168.1.10:8080", "https://lively.corp.local", "not a url"]) ok(!V.looksLoopbackAddress(u), `V19 ${u} — 막지 않는다`);
 // V20
 eq(V.routeOrder({ routes: [{ kind: "app", state: "preparing" }, { kind: "ai", state: "connect" }], recommended: 1 }),
   { first: { kind: "ai", state: "connect" }, rest: [{ kind: "app", state: "preparing" }] }, "V20 권하는 길 먼저 · 나머지 순서 그대로");
@@ -95,7 +96,9 @@ eq(V.routeOrder({ routes: [{ kind: "app", state: "preparing" }], recommended: -1
 ok(/등록.*약 5분/.test(V.routeStateText({ kind: "app", state: "register" }, { label: "슬랙", app_ready: false, registration: { who: "슬랙 관리자", minutes: 5 } })), "V21 앱 등록 — 등록하면 연결 · 몇 분");
 ok(!/\(가\)|\(를\)/.test(V.routeStateText({ kind: "app", state: "register" }, { label: "깃허브", app_ready: false, registration: { who: "깃허브 조직 Owner", minutes: 10 } })), "V21 영어로 끝나는 이름에도 «이(가)» 자국이 없다");
 ok(/Claude 로그인/.test(V.routeStateText({ kind: "ai", state: "connect", needs: "claude_login" }, { label: "슬랙", app_ready: true })), "V21 로그인부터");
-ok(/슬랙을 연결하면/.test(V.routeStateText({ kind: "ai", state: "connect" }, { label: "슬랙", app_ready: true })), "V21 Claude 에서 연결");
+ok(/Claude 에서 Slack 커넥터를 연결하면/.test(V.routeStateText({ kind: "ai", state: "connect", ai_app: "slack" }, { label: "슬랙", app_ready: true })), "V21 Claude 에서 연결(커넥터 이름)");
+ok(/Gmail 커넥터/.test(V.routeStateText({ kind: "ai", state: "connect", ai_app: "gmail" }, { label: "구글", app_ready: true })) && !/구글을/.test(V.routeStateText({ kind: "ai", state: "connect", ai_app: "gmail" }, { label: "구글", app_ready: true })), "★V21 구글의 Claude 길은 «Gmail» 커넥터라고 말한다(드라이브를 연결한 사람이 헛걸음하지 않게)");
+ok(/Gmail 커넥터로 모아요/.test(V.routeBlurb({ kind: "ai", state: "connect", ai_app: "gmail" }, "구글")), "V21 길 설명도 커넥터 이름 · «구글으로» 같은 조사 없음");
 
 // K1 — 서버 판정이 낼 수 있는 모든 길·상태에 말과 단추가 있다(웹이 모르는 상태가 생기면 여기서 터진다).
 const R = await import(join(root, "dist/org/connect-routes.js"));

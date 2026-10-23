@@ -415,7 +415,7 @@ export function livToast(msg: string): void {
   setTimeout(() => t.remove(), 4000);
 }
 
-// ── 외부 앱 연결 상태 한 줄씩 — 서버 org_connect_status 그대로(화면이 판정하지 않는다). 상세는 [외부 앱 연결] 현황판 ──
+// ── 외부 앱 연결 상태 한 줄씩 — 서버 org_connect_status 그대로(화면이 판정하지 않는다). 말은 [외부 앱 연결] 목록과 한 벌 ──
 type ConnectApp = ConnectAppIn;
 
 /** 외부 앱 연결 상태를 host 에 그린다. 못 읽으면 그렇다고 한 줄. */

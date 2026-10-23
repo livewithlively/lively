@@ -5,14 +5,15 @@
 //   넣을 칸 · [등록]). 길과 상태는 서버가 정한다(org_connect_status — src/org/connect-routes.ts). 이 파일은 그리기만 하고,
 //   말은 lib/connect-routes-view.ts(순수 — 시험 있음)가 정한다. 같은 판정을 화면이 다시 하면 AI(연결 스킬)와 화면이 서로 다른 길을 권한다.
 //  비밀 값은 이 화면에서만 받는다 — 금고로 바로 가고 다시 보이지 않는다. 칸은 type=password 가 아니다(#1250 — 브라우저가 이 사이트
-//   로그인 비밀번호로 저장하려 든다). 글자 칸 + 가림(.secret-input).
+//   로그인 비밀번호로 저장하려 든다). 레포 도우미 secretInput · secretRow(가림 · 비밀번호 관리자 막기 · [보기])를 쓴다.
 import { api, el, toast } from '../core.js';
 import { svcTile } from '../svc-icons.js';
 import { CLAUDE_CONNECTORS_URL, scanErrorText } from '../lib/claude-connectors.js';
 import {
-  ROUTE_NAME, looksLikePrivateKey, regValues, routeBlurb, routeOrder, routeStateText, rowSummary, rowView,
+  ROUTE_NAME, looksLikePrivateKey, looksLoopbackAddress, regValues, routeBlurb, routeOrder, routeStateText, rowSummary, rowView,
   type ConnectAppIn, type RegistrationIn, type RouteIn, type RowBucket,
 } from '../lib/connect-routes-view.js';
+import { secretInput, secretRow } from '../lib/widgets.js';   // #1250 — 비밀 칸(가림 · 자동 채움 막기 · [보기])
 import { openMeModal } from './me-modal.js';
 import { renderAppClaude } from './connect-board.js';
 
@@ -37,10 +38,11 @@ export async function loadConnectStatus(): Promise<ConnectStatus> {
 // ══ 목록 ═══════════════════════════════════════════════════════════════════════════
 
 const GROUPS: Array<{ b: RowBucket[]; title: string; note: string }> = [
-  { b: ['half'], title: '정할 것이 남았어요', note: '연결은 됐어요 — 하나만 더 하면 모으기 시작해요' },
+  { b: ['half'], title: '하나만 더 하면 돼요', note: '무엇을 모을지 정하거나, 다시 로그인하면 돼요' },
   { b: ['off'], title: '바로 연결할 수 있어요', note: '눌러서 안내대로 하면 돼요' },
   { b: ['on'], title: '연결돼 있어요', note: '모으고 있거나, Claude 커넥터로 이어 두었어요' },
-  { b: ['soon', 'err'], title: '먼저 준비가 필요해요', note: '관리자나 라이블리가 먼저 할 일이 있어요' },
+  { b: ['soon'], title: '먼저 준비가 필요해요', note: '관리자나 라이블리가 먼저 할 일이 있어요' },
+  { b: ['err'], title: '상태를 불러오지 못했어요', note: '앱을 누르면 그 앱만 다시 불러와요' },
 ];
 
 /** 앱 한 줄 — 이름 · «어떻게 연결돼 있나» · 막힌 앞 길 한 줄 · 다음 걸음 단추. 줄 전체가 그 앱 상세로 간다(걸음은 상세가 이끈다). */
@@ -65,7 +67,7 @@ export function appRows(status: ConnectStatus | null, q = ''): HTMLElement {
     el('span', { class: 'cn-sum-i on' }, el('b', { text: String(n.on) }), el('span', { text: '연결됨' })),
     ...(n.half ? [el('span', { class: 'cn-sum-i half' }, el('b', { text: String(n.half) }), el('span', { text: '정할 것 남음' }))] : []),
     el('span', { class: 'cn-sum-i' }, el('b', { text: String(n.off) }), el('span', { text: '바로 연결할 수 있음' })),
-    ...(n.soon + n.err ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(n.soon + n.err) }), el('span', { text: '준비 필요' }))] : []));
+    ...(n.soon ? [el('span', { class: 'cn-sum-i soon' }, el('b', { text: String(n.soon) }), el('span', { text: '준비 필요' }))] : []));
   const groups = GROUPS.map((g) => {
     const items = hit.filter((a) => g.b.includes(rowView(a).bucket));
     if (!items.length) return null;
@@ -98,57 +100,67 @@ export interface RoutesCtx {
 
 /** 상세 맨 위 «연결 길» 칸 — 권하는 길 펼침 + «다른 길». */
 export function routesSection(a: ConnectAppStatus, ctx: RoutesCtx): HTMLElement {
+  const head = el('div', { class: 'cn-gh' }, el('b', { role: 'heading', 'aria-level': '2', text: '연결하는 길' }), el('span', { class: 'h', text: '위에서부터 권하는 순서예요' }));
   if (a.error || !Array.isArray(a.routes)) {
-    return el('section', { class: 'cn-sect cn-rt', id: 'cn-routes' },
-      el('p', { class: 'v2-desc', style: 'color:var(--warn-text)', text: `${a.label} 연결 상태를 불러오지 못했어요 — 아래 칸에서 직접 확인할 수 있어요.` }));
+    //  못 읽었으면 막다른 칸으로 두지 않는다 — 다시 불러오기 단추와, 그래도 안 되면 할 수 있는 일(아래 칸 · [연결 도와줘]).
+    return el('section', { class: 'cn-sect cn-rt', id: 'cn-routes' }, head,
+      el('div', { class: 'cn-rt-card' },
+        el('p', { class: 'cn-rt-st', style: 'color:var(--warn-text)', text: `${a.label} 연결 상태를 불러오지 못했어요.` }),
+        el('p', { class: 'cn-rt-bl', text: '잠시 뒤 다시 불러와 보세요. 그동안은 아래 칸에서 직접 켜거나, 목록 위 [연결 도와줘]로 AI 에게 맡길 수 있어요.' }),
+        el('div', { class: 'cn-rt-body' }, el('div', { class: 'cn-rt-acts' }, btn('다시 불러오기', ctx.reload, true)))));
   }
   const { first, rest } = routeOrder(a);
   const kids: HTMLElement[] = [];
-  if (first) kids.push(routeCard(first, a, ctx, true));
+  if (first) {
+    const c = routeCard(first, a, ctx, true);
+    kids.push(c.node);
+    c.load?.();
+  }
   if (rest.length) {
+    const cards = rest.map((r) => routeCard(r, a, ctx, false));
     const more = el('details', { class: 'cn-rt-more' },
-      el('summary', { text: `다른 길 ${rest.length}가지` }),
-      ...rest.map((r) => routeCard(r, a, ctx, false)));
+      el('summary', { text: `다른 길 ${rest.length}가지` }), ...cards.map((c) => c.node)) as HTMLDetailsElement;
+    //  접힌 칸은 펼 때 불러온다 — 구성원·수집 단위 조회 다섯 건을 아무도 안 보는 칸 때문에 매번 부르지 않게.
+    let loaded = false;
+    more.addEventListener('toggle', () => { if (more.open && !loaded) { loaded = true; for (const c of cards) c.load?.(); } });
     kids.push(more);
   }
   if (!kids.length) kids.push(el('p', { class: 'v2-desc', text: `${a.label}에는 지금 연결할 수 있는 길이 없어요.` }));
-  return el('section', { class: 'cn-sect cn-rt', id: 'cn-routes' },
-    el('div', { class: 'cn-gh' }, el('b', { text: '연결하는 길' }), el('span', { class: 'h', text: '위에서부터 권하는 순서예요' })),
-    ...kids);
+  return el('section', { class: 'cn-sect cn-rt', id: 'cn-routes' }, head, ...kids);
 }
 
-function routeCard(r: RouteIn, a: ConnectAppStatus, ctx: RoutesCtx, primary: boolean): HTMLElement {
+function routeCard(r: RouteIn, a: ConnectAppStatus, ctx: RoutesCtx, primary: boolean): { node: HTMLElement; load: (() => void) | null } {
   const body = el('div', { class: 'cn-rt-body' });
-  const card = el('div', { class: 'cn-rt-card' + (primary ? ' primary' : '') + ' s-' + r.state },
+  const node = el('div', { class: 'cn-rt-card' + (primary ? ' primary' : '') + ' s-' + r.state },
     el('div', { class: 'cn-rt-hd' },
       el('b', { text: ROUTE_NAME[r.kind] }),
       primary ? el('span', { class: 'cn-rt-rec', text: '권하는 길' }) : null,
       el('span', { class: 'cn-rt-st', text: routeStateText(r, a) })),
-    el('p', { class: 'cn-rt-bl', text: routeBlurb(r.kind, a.label) }),
+    el('p', { class: 'cn-rt-bl', text: routeBlurb(r, a.label) }),
     body);
-  fillRouteBody(body, r, a, ctx);
-  return card;
+  return { node, load: fillRouteBody(body, r, a, ctx) };
 }
 
 function btn(text: string, onclick: () => void, primary = false): HTMLButtonElement {
   return el('button', { class: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-ghost'), type: 'button', text, onclick }) as HTMLButtonElement;
 }
 
-function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: RoutesCtx): void {
+/** 길 칸 안 — 그 길의 단추와 칸. 따로 불러올 것이 있으면(Claude 길의 구성원·모으는 곳) 그 일을 돌려준다(펼칠 때 부른다). */
+function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: RoutesCtx): (() => void) | null {
   const acts = el('div', { class: 'cn-rt-acts' });
   if (r.kind === 'app') {
-    if (r.state === 'register' && a.registration) { body.appendChild(registrationPanel(a, a.registration, ctx, true)); return; }
+    if (r.state === 'register' && a.registration) { body.appendChild(registrationPanel(a, a.registration, ctx, true)); return null; }
     if (r.state === 'ask_admin' && a.app_ready === false) {
       body.appendChild(adminAsk(a, '라이블리 관리자에게 이 화면 주소를 보내 «앱 등록» 을 부탁해 주세요.'));
       if (a.registration) body.appendChild(el('details', { class: 'cn-rt-more' }, el('summary', { text: '관리자가 할 일 보기' }), registrationPanel(a, a.registration, ctx, false)));
-      return;
+      return null;
     }
     if (r.state === 'connect') acts.appendChild(ctx.startAppConnect ? btn('연결', ctx.startAppConnect, true) : btn('아래 «자료 가져오기» 에서 켜기 ↓', ctx.toCollect, true));
     if (r.state === 'set_scope') acts.appendChild(btn('무엇을 모을지 정하기 ↓', ctx.toCollect, true));
     if (r.state === 'collecting') acts.appendChild(btn('모으는 범위 보기 ↓', ctx.toCollect));
     if (r.state === 'ask_admin') body.appendChild(adminAsk(a, '수집을 켜는 건 관리자가 해요. 관리자에게 이 화면 주소를 보내 주세요.'));
   } else if (r.kind === 'ai') {
-    if (r.state === 'off') return;
+    if (r.state === 'off') return null;
     if (r.needs === 'claude_login') acts.appendChild(btn('Claude 로그인하기', () => openMeModal({ tab: 'aiacct' }), true));
     else if (r.state === 'connect' || r.state === 'reconnect') {
       acts.appendChild(el('a', { class: 'btn btn-sm btn-primary', href: CLAUDE_CONNECTORS_URL, target: '_blank', rel: 'noopener', text: r.state === 'reconnect' ? 'Claude 에서 다시 연결 ↗' : 'Claude 에서 연결 ↗',
@@ -157,8 +169,9 @@ function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: 
     if (r.needs !== 'claude_login') acts.appendChild(refreshBtn(ctx.reload));
     const who = el('div', { class: 'cn-rt-who' });
     body.append(acts, who);
-    if (r.ai_app) void renderAppClaude(who, r.ai_app, { onChanged: ctx.reload });
-    return;
+    //  공개범위·모을지를 바꿔도 길 상태는 그대로라 화면 전체를 다시 그리지 않는다(그 칸만 다시 그린다 — renderAppClaude 안의 repaint).
+    const aiApp = r.ai_app;
+    return aiApp ? () => { void renderAppClaude(who, aiApp); } : null;
   } else {
     if (r.state === 'connect' && ctx.openToken) acts.appendChild(btn('토큰 넣기', ctx.openToken, true));
     if (r.state === 'set_scope') acts.appendChild(btn('무엇을 모을지 정하기 ↓', ctx.toCollect, true));
@@ -166,6 +179,7 @@ function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: 
     if (r.state === 'ask_admin') body.appendChild(adminAsk(a, '수집을 켜는 건 관리자가 해요. 관리자에게 이 화면 주소를 보내 주세요.'));
   }
   if (acts.childNodes.length) body.appendChild(acts);
+  return null;
 }
 
 /** [내 Claude 앱 새로 확인] — 서버가 내 Claude 커넥터를 다시 본다(15초 안에 다시 누르면 방금 값). */
@@ -211,7 +225,7 @@ function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: Routes
     if (s.link) li.appendChild(stepLink(s.link));
     if (s.copy) {
       li.appendChild(s.copy.value
-        ? el('div', { class: 'cn-reg-copy' }, el('code', { text: s.copy.value }), btn('복사', () => { void copyText(s.copy!.value!, '복사했어요.'); }))
+        ? el('div', { class: 'cn-reg-copy' }, el('code', { text: s.copy.value }), copyBtn(s.copy.what, s.copy.value))
         : el('div', { class: 'cn-reg-copy none', text: '공개 주소를 넣으면 여기에 붙여 넣을 값이 보여요.' }));
     }
     ol.appendChild(el('li', {}, li));
@@ -220,6 +234,14 @@ function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: Routes
   if (editable) wrap.appendChild(regForm(a, reg, ctx));
   if (reg.notes.length) wrap.appendChild(el('div', { class: 'cn-reg-notes' }, el('b', { text: '알아 둘 것' }), el('ul', {}, ...reg.notes.map((n) => el('li', { text: n })))));
   return wrap;
+}
+
+/** [복사] — 같은 화면에 여럿이라 무엇을 복사하는지 이름으로 말한다(화면 읽기). */
+function copyBtn(what: string, value: string): HTMLButtonElement {
+  const name = what === 'callback_url' ? '돌아올 주소' : what === 'gateway_url' ? '라이블리 주소' : '값';
+  const b = btn('복사', () => { void copyText(value, `${name}를 복사했어요.`); });
+  b.setAttribute('aria-label', `${name} 복사`);
+  return b;
 }
 
 function stepLink(link: NonNullable<RegistrationIn['steps'][number]['link']>): HTMLElement {
@@ -243,9 +265,14 @@ function addressFirst(ctx: RoutesCtx): HTMLElement {
     return el('div', { class: 'cn-rt-ask' }, el('span', { text: '먼저 이 워크스페이스의 공개 주소가 필요해요. 워크스페이스 관리자에게 «공개 주소 넣기» 를 부탁해 주세요.' }));
   }
   const inp = el('input', { type: 'url', class: 'cn-scope-in', value: location.origin, 'aria-label': '이 워크스페이스의 공개 주소', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+  //  지금 주소가 «이 컴퓨터 자신» 이면 그대로 저장하지 않게 먼저 말한다 — 다른 사람의 브라우저는 그 주소로 못 돌아온다.
+  const warn = el('p', { class: 'cn-reg-t', style: 'color:var(--warn-text)' });
+  const check = (): void => { warn.textContent = looksLoopbackAddress(inp.value.trim()) ? '이 주소는 이 컴퓨터에서만 열려요 — 다른 사람이 라이블리를 여는 주소(예: https://lively.회사.com)를 넣어 주세요.' : ''; };
+  inp.addEventListener('input', check);
+  check();
   const save = btn('주소 저장', async () => {
     const v = inp.value.trim().replace(/\/+$/, '');
-    if (!/^https?:\/\/[^/\s]+/.test(v)) { toast('https:// 로 시작하는 주소를 넣어 주세요', true); inp.focus(); return; }
+    if (!/^https?:\/\/[^/\s]+/.test(v)) { toast('http:// 또는 https:// 로 시작하는 주소를 넣어 주세요', true); inp.focus(); return; }
     save.disabled = true;
     try {
       await api('/api/ui/org/profile', { method: 'POST', body: JSON.stringify({ gateway_url: v }) });
@@ -255,7 +282,7 @@ function addressFirst(ctx: RoutesCtx): HTMLElement {
   }, true);
   return el('div', { class: 'cn-reg-addr' },
     el('p', { class: 'cn-reg-t', text: '먼저 이 워크스페이스의 공개 주소를 넣어요 — 외부 앱이 연결을 마치고 돌아올 주소가 여기서 만들어져요. 보통은 지금 브라우저 주소창의 앞부분이에요.' }),
-    el('div', { class: 'cn-scope-row' }, inp, save));
+    el('div', { class: 'cn-scope-row' }, inp, save), warn);
 }
 
 /** 넣을 칸 + [등록] — 값은 금고로 바로 가고 다시 보이지 않는다. 빠진 칸은 서버에 보내기 전에 말한다. */
@@ -276,21 +303,20 @@ function regForm(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx): HTML
       };
       return el('label', { class: 'cn-reg-f' }, el('span', { class: 'k', text: f.label }), el('span', { class: 'cn-reg-file' }, inp, name));
     }
-    const inp = el('input', {
-      type: 'text', class: 'cn-scope-in' + (f.secret ? ' secret-input' : ''), placeholder: f.label, 'aria-label': f.label,
-      autocomplete: 'off', spellcheck: 'false',
-      oninput: (e: any) => { vals[f.key] = String(e.target.value || ''); },
-    }) as HTMLInputElement;
-    return el('label', { class: 'cn-reg-f' }, el('span', { class: 'k', text: f.label }), inp);
+    const inp = f.secret
+      ? secretInput({ class: 'cn-scope-in', placeholder: f.label, 'aria-label': f.label })
+      : el('input', { type: 'text', class: 'cn-scope-in', placeholder: f.label, 'aria-label': f.label, autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
+    inp.addEventListener('input', () => { vals[f.key] = String(inp.value || ''); });
+    return el('label', { class: 'cn-reg-f' }, el('span', { class: 'k', text: f.label }), f.secret ? secretRow(inp) : inp);
   });
   const go = btn('등록', async () => {
     const v = regValues(reg.fields, vals);
-    if (!v.ok) { toast(`«${v.missing}» 을(를) 넣어 주세요`, true); return; }
+    if (!v.ok) { toast(`«${v.missing}» 칸을 채워 주세요`, true); return; }
     go.disabled = true; go.textContent = '등록하는 중…';
     try {
       await api('/api/ui/org/connect/register', { method: 'POST', body: JSON.stringify({ app: a.app, values: v.values }) });
       for (const k of Object.keys(vals)) vals[k] = '';
-      toast(`${a.label} 앱을 등록했어요 — 이제 [연결]을 누르면 돼요.`);
+      toast(`${a.label} 앱을 등록했어요 — 위 «연결하는 길» 의 다음 단추를 누르면 돼요.`);
       ctx.reload();
     } catch (e: any) {
       toast((e && e.message) || '등록하지 못했어요', true);

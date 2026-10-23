@@ -92,7 +92,8 @@ const orgConnectRegister: Capability = {
     if (save.slackServer) {
       //  연결 창구가 이미 [연결]을 받을 모양이면 손대지 않는다(관리자가 고쳐 둔 범위·단계·기록 설정을 덮지 않게 — 꺼 둔 행도 그대로).
       //   없거나 모양이 틀리면(그대로면 [연결]이 «proxy MCP 서버 없음» 으로 실패한다) 프리셋 값으로 만든다.
-      const have = await getMcpServer("slack").catch(() => null);
+      //  읽기 실패는 그대로 올린다 — «없음» 으로 읽으면 관리자가 손본 창구를 프리셋으로 덮는다.
+      const have = await getMcpServer("slack");
       if (!slackServerUsable(have)) await MCP_UPSERT.handler(slackServerPayload(), user, ctx);
     }
     await CRED_SET.handler({
