@@ -11,7 +11,9 @@
 //   L4 | 서버 없음            | 시그널로 끝남        | 셀프호스트       | 모름(타임아웃류는 답이 아니다)
 //   L5 | 시그널로 끝남        | —                    | 셀프호스트       | 모름
 //   L6 | 권한 거부            | —                    | 셀프호스트       | 모름
-//   L7 | 서버 없음            | 서버 없음            | registry 게이트웨이 | 모름 — 컨텍스트를 잃은 호출이 기본 소켓으로 샐 수 있다(격리 리뷰)
+//   L7a| 서버 없음            | —                    | registry · 전용 소켓(lvly-*) 있음 | 모름 — 컨텍스트를 잃은 호출이 기본 소켓으로 샐 수 있다(격리 리뷰)
+//   L7b| 서버 없음            | 서버 없음            | registry · 전용 소켓 없음 | 끝남 — 셀프호스트 기본 설치가 이 모양이다(부팅이 registry 로 뜬다 · 워크스페이스 primary 하나)
+//   L7c| 서버 없음            | 서버 없음            | registry · 소켓 폴더 없음 | 끝남 — 서버가 한 번도 안 떴다(새 박스)
 //   L8 | 그 세션 없음         | —                    | 셀프호스트       | 끝남(종전 확답 — 무회귀)
 //   L9 | (직접) 타임아웃 오류 객체 | 부르지 않음      | 셀프호스트       | 모름 · list-sessions 를 부르지 않는다
 //   W1 | 배선 — tmuxKill 이 같은 확답을 «이미 없음» 으로 받는다([보관 ×]·관리자 회수가 서버 부재로 500 이던 자리)
@@ -40,6 +42,10 @@ fs.writeFileSync(BIN, [
   "exit 1",
 ].join("\n") + "\n", { mode: 0o755 });
 process.env.TMUX_BIN = BIN;
+//  tmux 소켓 폴더(`${TMUX_TMPDIR}/tmux-<uid>`) — registry 갈래가 «전용 서버 소켓이 있나» 를 여기서 본다. 이것도 로드 때 복사된다.
+const SOCK_ROOT = path.join(DIR, "sock");
+const SOCK_DIR = path.join(SOCK_ROOT, `tmux-${process.getuid?.() ?? 0}`);
+process.env.TMUX_TMPDIR = SOCK_ROOT;
 for (const k of ["LIVELY_TMUX_EXEC", "LIVELY_TENANCY_MODE", "LIVELY_NODE_TOKEN", "TMUX"]) delete process.env[k];
 const { sessionGoneVerdict, sessionGone, localServerAbsentVerdict } = await import("./tmux-exec.js");
 const { unfreezeExecTopology } = await import("../exec-topology.js");
@@ -89,12 +95,36 @@ test("L6 has-session 이 권한 거부 → 모름 · 목록을 부르지 않는�
   assert.deepEqual(calls(), ["has-session"]);
 });
 
-test("L7 registry 게이트웨이 · 서버 없음 두 번이어도 모름 — 컨텍스트를 잃은 호출이 기본 소켓으로 샐 수 있다", async () => {
-  process.env.LIVELY_TENANCY_MODE = "registry";
-  unfreezeExecTopology();
+const registry = (): void => { process.env.LIVELY_TENANCY_MODE = "registry"; unfreezeExecTopology(); };
+
+test("L7a registry · 다른 워크스페이스 전용 서버 소켓(lvly-*)이 있다 → 모름 · 목록으로 되묻지도 않는다", async () => {
+  registry();
+  fs.mkdirSync(SOCK_DIR, { recursive: true });
+  fs.writeFileSync(path.join(SOCK_DIR, "default"), "");
+  fs.writeFileSync(path.join(SOCK_DIR, "lvly-acme"), "");
+  try {
+    set("absent", "absent");
+    assert.equal(await sessionGoneVerdict(ID), null, "primary 엔 서버가 없다 ≠ 그 세션이 끝났다(acme 전용 소켓에 살아 있을 수 있다)");
+    assert.deepEqual(calls(), ["has-session"]);
+  } finally { fs.rmSync(SOCK_DIR, { recursive: true, force: true }); }
+});
+
+test("L7b registry · 전용 서버 소켓이 없다(primary 하나 — 셀프호스트 기본 설치) → 끝남", async () => {
+  registry();
+  fs.mkdirSync(SOCK_DIR, { recursive: true });
+  fs.writeFileSync(path.join(SOCK_DIR, "default"), "");   // 서버가 죽고 남은 낡은 기본 소켓(실측 모양 — tmux 가 «no server running» 을 낸다)
+  try {
+    set("absent", "absent");
+    assert.equal(await sessionGoneVerdict(ID), true, "셀프호스트 기본 설치(registry · primary 하나)에서 고쳐지지 않으면 이 수정은 거기서 아무것도 안 한다(실측)");
+    assert.deepEqual(calls(), ["has-session", "list-sessions"]);
+  } finally { fs.rmSync(SOCK_DIR, { recursive: true, force: true }); }
+});
+
+test("L7c registry · 소켓 폴더가 아예 없다(서버가 한 번도 안 떴다) → 끝남", async () => {
+  registry();
+  fs.rmSync(SOCK_DIR, { recursive: true, force: true });
   set("absent", "absent");
-  assert.equal(await sessionGoneVerdict(ID), null, "primary 엔 서버가 없다 ≠ 그 세션이 끝났다(전용 소켓에 살아 있을 수 있다)");
-  assert.deepEqual(calls(), ["has-session"], "registry 에선 목록으로 되묻지도 않는다");
+  assert.equal(await sessionGoneVerdict(ID), true);
 });
 
 test("L8 «그 세션 없음» 은 종전 확답 그대로(무회귀)", async () => {
