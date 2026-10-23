@@ -26,9 +26,17 @@ printf '#!/bin/sh\\necho "agy 1.1.99"\\n' > "$HOME/.local/share/agy/agy-real"; c
 ln -sf "$HOME/.local/share/agy/agy-real" "$HOME/.local/bin/agy"`;
 /** 진짜 grok 설치기처럼 — PATH 에 있고 쓸 수 있는 폴더에만 grok·agent 링크를 건다. */
 const GROK_POLITE = `echo "$PATH" >> "$PATH_LOG"
+echo "Add $HOME/.grok/bin to your PATH" >&2
 mkdir -p "$HOME/.grok/bin"
 printf '#!/bin/sh\\necho "grok 1.0.99"\\n' > "$HOME/.grok/bin/grok"; chmod +x "$HOME/.grok/bin/grok"
 IFS=:; for d in $PATH; do if [ -d "$d" ] && [ -w "$d" ]; then ln -sf "$HOME/.grok/bin/grok" "$d/grok"; ln -sf "$HOME/.grok/bin/grok" "$d/agent"; fi; done`;
+/** 덮고 실패 — 설치 자리의 agent 를 덮은 뒤 1 로 끝난다(안전망은 실패해도 먼저 돈다). */
+const GROK_HOSTILE_FAIL = `ln -sf "$HOME/nowhere" "$LVLY_HARNESS_BIN_DIR/agent"
+echo "boom: vendor installer failed" >&2
+exit 1`;
+/** 밖을 가리킴 — 실행 파일 자리에 HOME 밖 파일을 가리키는 링크를 둔다(root 가 따라가 복사하면 안 된다). */
+const GROK_OUTSIDE = `mkdir -p "$HOME/.grok/bin"
+ln -sf "$OUTSIDE_FILE" "$HOME/.grok/bin/grok"`;
 /** 막무가내 — PATH 와 무관하게 설치 자리의 agent 를 덮는다(안전망 시험). */
 const GROK_HOSTILE = `mkdir -p "$HOME/.grok/bin"
 printf '#!/bin/sh\\necho "grok 1.0.99"\\n' > "$HOME/.grok/bin/grok"; chmod +x "$HOME/.grok/bin/grok"
@@ -38,6 +46,7 @@ function sandbox({ grok = GROK_POLITE, agy = AGY } = {}) {
   const root = mkdtempSync(join(tmpdir(), "ihc-"));
   const bin = join(root, "bin"); const fake = join(root, "fake"); const log = join(root, "curl.log"); const pathLog = join(root, "path.log");
   mkdirSync(bin); mkdirSync(fake);
+  chmodSync(root, 0o755);   // root 로 도는 러너면 nobody 가 들어올 수 있게(mkdtemp 는 0700)
   writeFileSync(join(fake, "agy.sh"), agy); writeFileSync(join(fake, "grok.sh"), grok);
   //  가짜 curl — `-o <파일> <주소>` 만 받는다. 불린 인자를 그대로 남긴다(배선 · 상한 · 받기-뒤-실행 단언).
   writeFileSync(join(fake, "curl"), `#!/bin/sh
@@ -47,9 +56,11 @@ case "$url" in *antigravity*) src="${join(fake, "agy.sh")}";; *x.ai*) src="${joi
 [ -n "$out" ] && cp "$src" "$out" || cat "$src"
 `);
   chmodSync(join(fake, "curl"), 0o755);
-  const run = (args = [], env = {}) => spawnSync("bash", [SCRIPT, ...args], {
-    env: { PATH: `${fake}:/usr/bin:/bin`, LVLY_HARNESS_BIN_DIR: bin, PATH_LOG: pathLog, ...env }, encoding: "utf8",
-  });
+  //  opts.umask — 그 umask 로 돌린다(되돌린 파일의 모드 시험) · opts.cwd — 그 폴더에서 부른다(상대 경로 시험).
+  const run = (args = [], env = {}, opts = {}) => spawnSync("bash",
+    opts.umask ? ["-c", `umask ${opts.umask}; exec bash "$0" "$@"`, SCRIPT, ...args] : [SCRIPT, ...args], {
+      env: { PATH: `${fake}:/usr/bin:/bin:/usr/sbin:/sbin`, LVLY_HARNESS_BIN_DIR: bin, PATH_LOG: pathLog, ...env }, encoding: "utf8", cwd: opts.cwd,
+    });
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []);
   const paths = () => (existsSync(pathLog) ? readFileSync(pathLog, "utf8").trim().split("\n").filter(Boolean) : []);
   return { root, bin, fake, run, calls, paths, done: () => rmSync(root, { recursive: true, force: true }) };
@@ -79,7 +90,7 @@ t("H1 둘 다 새로 — 실체가 설치 자리로 옮겨져 돌고, 설치 자
 t("H10 설치기는 설치 자리를 뺀 PATH 로 돈다 — 진짜 grok 설치기처럼 PATH 의 쓸 수 있는 폴더에 링크를 거는 설치기도 설치 자리를 못 건드린다", () => {
   const s = sandbox();
   //  실제 박스처럼 설치 자리를 바깥 PATH 에 둔다(/usr/local/bin) — 그래야 «좁히지 않으면 설치기가 거기 링크를 건다» 가 재진다.
-  const r = s.run([], { PATH: `${s.fake}:${s.bin}:/usr/bin:/bin` });
+  const r = s.run([], { PATH: `${s.fake}:${s.bin}:/usr/bin:/bin:/usr/sbin:/sbin` });
   assert.equal(r.status, 0, r.stderr);
   assert.ok(!has(join(s.bin, "agent")), "★ 설치기가 설치 자리에 agent 링크를 걸었다");
   const seen = s.paths();
@@ -186,6 +197,64 @@ t("H9 임시 폴더를 못 만들면 멈춘다 — 빈 이름으로 나아가 �
   }
 });
 
+t("H2d 설치기가 남의 agent 를 덮고 **실패**해도 안전망이 먼저 돌아 되돌린다 · 실패로 끝나며 설치기 출력 끝을 보여 준다", () => {
+  const s = sandbox({ grok: GROK_HOSTILE_FAIL });
+  writeFileSync(join(s.bin, "agent"), "#!/bin/sh\necho OTHER\n"); chmodSync(join(s.bin, "agent"), 0o755);
+  const r = s.run(["grok"]);
+  assert.notEqual(r.status, 0, "설치기가 실패했는데 성공으로 끝났다");
+  assert.ok(!lstatSync(join(s.bin, "agent")).isSymbolicLink(), "★ 실패한 설치기가 덮은 agent 를 안 되돌렸다(종전엔 실패하면 안전망 전에 나갔다)");
+  assert.equal(readFileSync(join(s.bin, "agent"), "utf8"), "#!/bin/sh\necho OTHER\n");
+  assert.match(r.stderr, /boom: vendor installer failed/, "실패한 설치기의 출력을 안 보여 준다 — 운영자가 까닭을 모른다");
+  s.done();
+});
+
+t("H2e 되돌린 파일은 모드를 지킨다(umask 077 로 불러도 0755 그대로 — 종전 cp -P 는 0700 으로 되돌려 일반 사용자가 못 돌렸다)", () => {
+  const s = sandbox({ grok: GROK_HOSTILE });
+  writeFileSync(join(s.bin, "agent"), "#!/bin/sh\n"); chmodSync(join(s.bin, "agent"), 0o755);
+  const r = s.run(["grok"], {}, { umask: "077" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(lstatSync(join(s.bin, "agent")).mode & 0o777, 0o755, "★ 되돌린 agent 의 모드가 바뀌었다");
+  s.done();
+});
+
+t("H13 설치 자리를 상대 경로로 줘도 그 자리에 깐다(cd / 뒤에 엉뚱한 곳이 되지 않게)", () => {
+  const s = sandbox();
+  const r = s.run(["agy"], { LVLY_HARNESS_BIN_DIR: "bin" }, { cwd: s.root });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(has(join(s.bin, "agy")), "★ 상대 경로 설치 자리에 안 깔았다");
+  s.done();
+});
+
+t("H14 실행 파일이 설치기 HOME 밖을 가리키면 깔지 않는다(root 가 남의 파일을 따라가 공개 자리로 복사하지 않게)", () => {
+  const s = sandbox({ grok: GROK_OUTSIDE });
+  const outside = join(s.root, "outside-secret"); writeFileSync(outside, "#!/bin/sh\necho SECRET\n"); chmodSync(outside, 0o700);
+  const r = s.run(["grok"], { OUTSIDE_FILE: outside });
+  assert.notEqual(r.status, 0, "★ 밖을 가리키는 실행 파일을 깔았다");
+  assert.ok(!has(join(s.bin, "grok")), "★ 밖의 파일이 설치 자리로 복사됐다");
+  s.done();
+});
+
+t("H15 설치기 출력은 성공하면 숨긴다(«Add <곧 지워질 임시 경로> to your PATH» 같은 안내가 운영자를 헷갈리게 한다)", () => {
+  const s = sandbox();
+  const r = s.run(["grok"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout + r.stderr, /to your PATH/, "성공했는데 설치기의 임시 경로 안내가 나왔다");
+  assert.equal(s.paths().length, 1, "배선 — 설치기가 돌지 않았다(숨긴 게 아니라 안 돈 것)");
+  s.done();
+});
+
+t("H16 설치 자리에 쓰다 실패하면 쓰다 만 임시 이름을 남기지 않는다 · 옛 파일은 그대로", () => {
+  const s = sandbox();
+  writeFileSync(join(s.bin, "grok"), "#!/bin/sh\necho OLD\n"); chmodSync(join(s.bin, "grok"), 0o755);
+  //  가짜 install — 목적지에 반쯤 쓰고 실패한다(디스크가 찬 것처럼).
+  writeFileSync(join(s.fake, "install"), `#!/bin/sh\nfor a; do last="$a"; done\nprintf 'partial' > "$last"\nexit 1\n`); chmodSync(join(s.fake, "install"), 0o755);
+  const r = s.run(["grok"], { FORCE: "1" });
+  assert.notEqual(r.status, 0, "쓰기가 실패했는데 성공으로 끝났다");
+  assert.ok(!has(join(s.bin, ".grok.new")), "★ 쓰다 만 .grok.new 가 남았다");
+  assert.equal(readFileSync(join(s.bin, "grok"), "utf8"), "#!/bin/sh\necho OLD\n", "옛 grok 이 망가졌다");
+  s.done();
+});
+
 t("H12 root 로 돌 때 설치기와 «이미 있나» 확인은 권한 없는 계정(nobody)으로 — 소스", () => {
   const src = readFileSync(SCRIPT, "utf8");
   const code = src.split(/\r?\n/).filter((l) => !l.trimStart().startsWith("#")).join("\n");
@@ -198,7 +267,8 @@ t("H12 root 로 돌 때 설치기와 «이미 있나» 확인은 권한 없는 �
   assert.match(code, /backup="\$\(fresh_dir\)" \|\| return 1/, "★ 되돌림 백업이 권한 없는 계정 몫이다 — 설치기가 백업을 바꿔 칠 수 있다");
   assert.match(code, /\( cd "\$H" && as_plain env HOME=/, "설치기를 지금 폴더(«/»)에서 돌린다 — 받은 파일을 지금 폴더에 쓰는 설치기가 죽는다");
   assert.doesNotMatch(code, /install_one [^\n]*\|\|/, "호출부에 || 가 있다 — 함수 안 set -e 가 꺼진다");
-  assert.match(code, /trap cleanup EXIT INT TERM/, "중단돼도 임시 자리를 안 치운다");
+  assert.match(code, /trap cleanup EXIT\n/, "끝날 때 임시 자리를 안 치운다");
+  assert.match(code, /trap 'cleanup; exit 130' INT\ntrap 'cleanup; exit 143' TERM/, "중단돼도 안 치우거나 · 중단 뒤에도 본문이 이어진다");
 });
 
 t("H7 구성원 키트는 넷 다 배선한다 — 제미나이·그록으로 연 세션에도 라이블리 도구·스킬이 있게(provision-member)", () => {

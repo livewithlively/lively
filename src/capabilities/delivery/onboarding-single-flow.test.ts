@@ -179,7 +179,7 @@ await t("F8·G2 격리 박스 — 로그인 전에 그 사람 서버 계정을 �
   assert.match(OAI, /api\('\/api\/ui\/me\/ai-login\/prepare', \{ method: 'POST', body: JSON\.stringify\(\{ retry \}\) \}\)/, "장면이 계정 준비를 안 묻는다");
   const prep = OAI.slice(OAI.indexOf("const prepare = async"), OAI.lastIndexOf("void prepare();"));
   assert.ok(prep.length > 200, "준비 흐름을 못 찾았다 — 검사가 헛돈다");
-  assert.match(prep, /if \(state === 'preparing'\) \{[\s\S]*?setTimeout\(\(\) => \{ void prepare\(\); \}, PREP_POLL_MS\);[\s\S]*?return;/, "★ 만드는 중인데 목록을 그린다(«이 서버 공용 계정» 거짓 문구)");
+  assert.match(prep, /if \(state === 'preparing' \|\| \(!state && sawPreparing\)\) \{[\s\S]*?setTimeout\(\(\) => \{ void prepare\(\); \}, PREP_POLL_MS\);[\s\S]*?return;/, "★ 만드는 중인데 목록을 그린다(«이 서버 공용 계정» 거짓 문구)");
   assert.ok(prep.indexOf("void reload();") > prep.indexOf("state === 'failed'"), "준비 판정보다 먼저 목록을 그린다");
   const R = code(readFileSync(new URL("../../terminal/routes.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
   const pr = R.slice(R.indexOf('app.post("/api/ui/me/ai-login/prepare"'), R.indexOf('app.post("/api/ui/me/ai-login/start"'));
@@ -189,6 +189,11 @@ await t("F8·G2 격리 박스 — 로그인 전에 그 사람 서버 계정을 �
   const w = start.indexOf("await awaitMemberSeat(seatDeps(req));"), seat = start.indexOf("const seat = await loginSeat(req);");
   assert.ok(w > 0 && seat > w, "★ 로그인 자리를 정한 뒤에 계정을 기다린다 — 첫 로그인이 공용 자리로 간다");
   assert.match(R, /const seatDeps = [\s\S]*?inflight: \(\) => memberProvisioning\(u\)/, "진행 중인 만들기를 안 본다 — 계정만 생긴 순간 넘어간다");
+  const hl = R.slice(R.indexOf('app.post("/api/ui/me/headless-login/start"'), R.indexOf('app.get("/api/ui/me/headless-login/state"'));
+  assert.ok(hl.length > 100, "헤드리스 로그인 시작을 못 찾았다 — 검사가 헛돈다");
+  const hw = hl.indexOf("await awaitMemberSeat(seatDeps(req));"), hs = hl.indexOf("const seat = await loginSeat(req);");
+  assert.ok(hw > 0 && hs > hw, "★ 헤드리스 로그인 시작이 계정 준비를 안 기다린다 — 같은 틈");
+  assert.match(prep, /if \(state === 'preparing' \|\| \(!state && sawPreparing\)\) \{\s*sawPreparing = true;/, "★ «준비하는 중» 뒤 한 번 못 물으면 목록을 그린다(거짓 «공용 계정» 이 되살아난다)");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

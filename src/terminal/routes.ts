@@ -557,6 +557,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     //  저장할 수 없는 배포면 **시작하지 않는다** — 사람이 브라우저에서 승인까지 한 뒤에 «저장 못 함» 을 보면 헛수고다.
     const { secretsEnabled } = await import("../org/credentials/secret-box.js");
     if (!secretsEnabled()) throw new HttpError(400, "이 서버에는 자격을 암호화해 둘 키가 없어 연결할 수 없습니다 — 관리자에게 CONNECTOR_SECRET_KEY 설정을 요청해 주세요.");
+    //  (#4970) 대화형 로그인과 같은 틈 — 격리 박스에서 계정이 아직 없거나 만드는 중이면 그 사람 자리가 아니라 공용 자리로 갔다.
+    await awaitMemberSeat(seatDeps(req));
     const seat = await loginSeat(req);
     //  다시 시작은 **새로** 띄운다 — 대화형 로그인과 같은 이유(지난 시도의 주소·코드는 이미 죽었다, #2232).
     if (((req.body ?? {}) as Record<string, unknown>).restart === true) {

@@ -331,6 +331,8 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
 - Server AI CLIs: Claude comes with the installer (per member when isolated), ChatGPT per isolated member (install-codex-user). Gemini and Grok:
   `sudo bash deploy/install-harness-clis.sh [agy] [grok]` installs them box-wide (/usr/local/bin) — same install as the managed session image (#4970).
   First-run «AI 연결» only lists AIs installed on this server. To update Gemini/Grok, rerun the script with `FORCE=1` (updates do not refresh them).
+  Requires root, `runuser` (util-linux), a `nobody` account, curl, and an executable temp dir (`TMPDIR=/var/tmp` if `/tmp` is noexec). The vendor installers run as the unprivileged account.
+  On isolated boxes, every member who opens first-run «AI 연결» gets a server account (home plus member-scoped claude and codex, a few hundred MB), even if they then pick a PC AI.
   Isolated member kits wire all four (claude, codex, antigravity, grok) — **members provisioned earlier** get the four only after rerunning `provision-member.sh` (idempotent).
 
 ## Directory layout (Linux/Mac parity shows in the structure — main files only)
