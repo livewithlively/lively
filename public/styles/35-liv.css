@@ -344,6 +344,9 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-door { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .liv-door-note { font-size: 12px; color: var(--muted); }
 .liv-ownai[hidden] { display: none; }
+/* «쓰는 AI 에서 하기» 걸음표는 .ob-root 밖에 선다 — 그 지역 토큰을 여기서도 같은 값으로 둔다(40-v2.css .cn-start-out · 41-onboarding.css .ob-root 와 한 벌).
+   안 두면 걸음 번호가 잉크 원 위의 잉크 글자가 돼 안 보인다(2026-10-23 셀프호스트 테스트 박스 실측 — 리브 화면 [리브와 대화 시작], AI 없음). */
+.liv-ownai { --ob-on-ink: var(--bg); --ob-sub: var(--line-row); --ob-sub-hover: var(--line); --ob-on-fill: #fff; }
 .liv-board-ask:not(:empty) { margin: 0; border-top: 0; padding: 0; max-height: none; }
 .liv-apps-sec { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line-net); border-radius: 12px;
   background: var(--bg-tint); padding: 12px; }

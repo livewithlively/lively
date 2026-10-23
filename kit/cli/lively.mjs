@@ -1641,6 +1641,9 @@ async function afterLogin(gw, tok) {
     const { nodeCommands } = await import(new URL("./cmd-node.mjs", import.meta.url));
     await nodeCommands(cliCtx()).nodeRebindForGateway(gw);
   } catch (e) {
+    //  새 PC 의 첫 `setup` 은 키트를 깔기 **전에** 로그인한다 — 부트스트랩은 lively.mjs 만 놓으므로 cmd-node.mjs 가 아직 없고,
+    //  등록된 노드(node-agent.env)도 없어 옮길 것이 없다. 그 경우까지 경고하면 처음 설치마다 앱에 노란 경고가 뜬다(2026-10-23 실측).
+    if (e?.code === "ERR_MODULE_NOT_FOUND" && !existsSync(join(LIVELY, "node-agent.env"))) return;
     warn(`노드를 새 게이트웨이로 옮기지 못했습니다 — ${e.message}`);
     info("그 PC 에서 `lively node --daemon` 을 다시 실행하면 지금 로그인한 곳으로 등록됩니다.");
   }
