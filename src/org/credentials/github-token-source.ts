@@ -16,7 +16,19 @@ export interface GithubTokenResolution { token?: string; warning?: string }
  * 그 사람의 github_pat 슬롯 중 **어느 것을 쓸지** — 순수. 호스트 일치(정적 PAT) > 빈 scope_key(OAuth 묶음) > 첫 것.
  *  대소문자만 다른 호스트도 같은 것으로 본다(DNS 는 대소문자 무시 — repo-discover 와 같은 규칙).
  */
-export function pickGithubSlot(rows: MemberSecretPublic[], host: string): MemberSecretPublic | null {
+/**
+ * 이 칸이 [GitHub 연결](라이블리 앱 연결)이 저장한 토큰 묶음인가 — 붙여 넣은 개인 토큰과 같은 칸(github_pat)을 써서 meta 로만 갈린다.
+ *  묶음은 oauth-broker 의 tokenMeta 가 expires_at · token_type 을 싣고(parseGithubTokenResponse 가 token_type 을 늘 채운다),
+ *  개인 토큰의 meta 는 헤더 모양(auth_header · token_prefix)뿐이다. org_github_connect_status 의 connected_via 와
+ *  org_connect_status 의 깃허브 길(#4970)이 이 한 함수로 가른다.
+ *  ⚠ setMemberSecret 은 meta 를 합치지 않고 바꾼다 — 개인 토큰이 묶음을 덮으면 표지도 함께 사라진다(그때는 개인 토큰이 맞다).
+ */
+export function isGithubAppToken(row: Pick<MemberSecretPublic, "meta">): boolean {
+  const m = row.meta as Record<string, unknown> | null | undefined;
+  return !!m && (m.expires_at !== undefined || m.token_type !== undefined);
+}
+
+export function pickGithubSlot<T extends Pick<MemberSecretPublic, "kind" | "scope_key" | "has_secret">>(rows: readonly T[], host: string): T | null {
   const h = String(host ?? "github.com").trim().toLowerCase();
   const mine = rows.filter((r) => r.kind === GITHUB_TOKEN_KIND && r.has_secret);
   return mine.find((r) => r.scope_key.toLowerCase() === h)

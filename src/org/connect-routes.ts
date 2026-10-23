@@ -30,6 +30,8 @@ export interface ConnectRoute {
    *   Claude 에 커넥터를 연결해도 서버의 수집 실행이 그 로그인으로 읽으므로, 로그인부터 해야 한다.
    */
   needs?: "claude_login";
+  /** off 일 때 왜 — blocked = 관리자가 이 길을 껐다 · unknown = 설정을 지금 못 읽었다(막음으로 읽는다, fail-closed). 사람에게 하는 말이 다르다. */
+  off_reason?: "blocked" | "unknown";
 }
 
 export interface AppRouteFacts {
@@ -118,7 +120,8 @@ export function decideRoutes(f: AppRouteFacts): RoutesDecision {
     const state = aiRouteState(f.ai);
     //  연결이 필요한 때만 로그인을 먼저 말한다 — 이미 «연결됨» 이면 그 기록이 앞선 확인이어도 사람에게 할 일을 늘리지 않는다.
     const needs = (state === "connect" || state === "reconnect") && f.ai.login === false ? { needs: "claude_login" as const } : {};
-    routes.push({ kind: "ai", state, ai_app: f.ai.aiApp, ...needs });
+    const off = state === "off" ? { off_reason: f.ai.policy === "blocked" ? "blocked" as const : "unknown" as const } : {};
+    routes.push({ kind: "ai", state, ai_app: f.ai.aiApp, ...needs, ...off });
   }
   if (f.token) routes.push({ kind: "token", state: tokenRouteState(f.token) });
   if (!routes.length) return { routes, recommended: -1, blocked_before: [] };

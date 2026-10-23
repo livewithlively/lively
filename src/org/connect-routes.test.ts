@@ -1,4 +1,4 @@
-// 외부 앱 연결 «길» 판정(org/connect-routes.ts) — 사양 R1~R15(#4970 PR-A, 스크래치 spec-connect-routes.md · 설계 지식 §17).
+// 외부 앱 연결 «길» 판정(org/connect-routes.ts) — 사양 R1~R18(#4970 — 설계 지식 onboarding-single-flow-connect-in-own-ai-4970 의 «길» 절).
 //  실행: npm run build && node dist/org/connect-routes.test.js
 import assert from "node:assert/strict";
 import { decideRoutes, type AppRouteFacts, type RouteState } from "./connect-routes.js";
@@ -56,10 +56,11 @@ t("R8 Claude 커넥터 다시 로그인 필요(needs-auth · failed) → ai «�
   }
 });
 
-t("R9 정책 blocked·unknown(못 읽음) → ai «꺼짐» — 권하지 않는다(fail-closed)", () => {
+t("R9 정책 blocked·unknown(못 읽음) → ai «꺼짐» — 권하지 않는다(fail-closed) · 왜 꺼졌는지는 따로 싣는다", () => {
   for (const p of ["blocked", "unknown"] as const) {
     const v = view({ app: app({ ready: false, heldBy: "lively" }), ai: ai("connected", p) });
     assert.equal(v.states[1], "off", p);
+    assert.equal(decideRoutes({ ai: ai("connected", p) }).routes[0]!.off_reason, p, `${p}: 관리자가 껐나 · 못 읽었나`);
     assert.equal(v.rec, "app", `${p}: 막힌 길만 남으면 첫 길`);
     assert.deepEqual(v.blocked, [], p);
   }

@@ -172,11 +172,41 @@ export function errorForLog(_tool: string, raw: string | null | undefined): stri
  *    여기선 애초에 보존할 값이 없다. 남는 건 누가·언제·어떤 툴·성공여부(호출 행 자체)로 충분하다.
  *  · db_query → SQL 리터럴 스크럽(#705) 후 통상 가공. redactDeep(시크릿)만으론 PII 미포착이라 별도 처리.
  *  · agent_job_run → 지시(prompt) 값을 남기지 않고 길이만(#4490) — 작업 지시는 보낸 사람 것이다(관리자 API 도 남의 지시를 열지 않는다).
+ *  · 비밀을 받는 툴(SECRET_ARG_FIELDS) → 그 칸은 칸 이름·크기만(#4970).
  *  · 그 외(빌트인) → 현행 그대로(시크릿 마스킹 + 절단 + 총량 캡).
  */
+/**
+ * 비밀 값을 인자로 받는 툴 → 그 칸의 값을 남기지 않는다(#4970 리뷰). redactDeep 는 토큰 «모양»(sk- · ghp_ · xox · JWT · PEM)만
+ *  가려서, 모양이 없는 client secret(32자 hex · GOCSPX-… 같은 것)은 호출 기록에 그대로 남았다 — 관리자가 MCP 호출 통계에서
+ *  읽을 수 있었다. 칸 이름과 크기만 남긴다(무엇을 등록하려 했는지는 남고, 값은 남지 않는다).
+ *  REST 로만 열린 툴은 이 기록을 지나지 않는다 — 여기엔 MCP 로도 열린 것만 둔다.
+ */
+export const SECRET_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  org_connect_register: ["values"],
+  org_credential_set: ["secret"],
+  me_credential_set: ["secret"],
+  org_github_app_register: ["client_secret", "private_key"],
+  me_git_credential_set: ["token"],
+};
+
+function hiddenValue(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const keys = Object.keys(v as Record<string, unknown>).slice(0, MAX_KEYS).map((k) => k.slice(0, MAX_KEY_LEN));
+    return `(값 ${keys.length}개 — 기록하지 않음: ${keys.join(", ")})`;
+  }
+  if (typeof v === "string") return `(${v.length}자 — 기록하지 않음)`;
+  return "(기록하지 않음)";
+}
+
 export function argsForLog(tool: string, raw: unknown): unknown {
   if (externalArgsPolicy(tool) === "omit") return omitArgValues(raw);
   let args = raw;
+  const hide = SECRET_ARG_FIELDS[tool];
+  if (hide && args && typeof args === "object" && !Array.isArray(args)) {
+    const o: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+    for (const k of hide) if (o[k] !== undefined && o[k] !== null) o[k] = hiddenValue(o[k]);
+    args = o;
+  }
   if (tool === "agent_job_run" && args && typeof args === "object" && !Array.isArray(args)
       && typeof (args as Record<string, unknown>).prompt === "string") {
     args = { ...(args as Record<string, unknown>), prompt: `(지시 ${((args as Record<string, unknown>).prompt as string).length}자 — 기록하지 않음)` };

@@ -154,9 +154,18 @@ export function registrationView(app: string, ctx: { callbackUrl: string | null;
   const missing = new Set<RegPlaceholder>();
   const steps = r.steps.map((s) => {
     if (s.copy && !value(s.copy)) missing.add(s.copy);
+    //  슬랙 «앱 만들기» 링크도 돌아올 주소를 품는다 — 공개 주소가 없으면 서버가 링크를 못 만든다(org_slack_app_manifest 400).
+    if (s.link?.kind === "slack_manifest" && !ctx.callbackUrl) missing.add("callback_url");
     return { text: s.text, ...(s.link ? { link: s.link } : {}), ...(s.copy ? { copy: { what: s.copy, value: value(s.copy) } } : {}) };
   });
   return { who: r.who, minutes: r.minutes, what: r.what, missing: [...missing], steps, fields: r.fields.map((f) => ({ ...f })), notes: [...(r.notes ?? [])] };
+}
+
+/** 받침이 있으면 a, 없으면 b — 한글 끝 글자로. 한글이 아니면 «a(b)». 사람에게 그대로 말할 문장에 «을(를)» 자국을 남기지 않게. */
+function josa(word: string, a: string, b: string): string {
+  const c = word.trim().slice(-1).charCodeAt(0);
+  if (!(c >= 0xac00 && c <= 0xd7a3)) return `${a}(${b})`;
+  return (c - 0xac00) % 28 ? a : b;
 }
 
 /** 스킬용 — 자리표를 «어느 칸의 값» 으로 바꾼다(AI 는 org_connect_status 를 보고 실제 값을 말한다). */
@@ -172,7 +181,7 @@ export function registrationMarkdown(app: string): string {
   const lines: string[] = [];
   lines.push(`### 앱 등록 (한 번만 · ${r.who} · 약 ${r.minutes}분)`);
   lines.push("");
-  lines.push(`라이블리 앱 길이 \`register\` 일 때만 한다 — ${r.what}를 만들어 라이블리에 등록한다. 한 번에 한 걸음씩 안내하고, 사람이 «했어요» 라고 하면 다음 걸음으로 간다.`);
+  lines.push(`라이블리 앱 길이 \`register\` 일 때만 한다 — ${r.what}${josa(r.what, "을", "를")} 만들어 라이블리에 등록한다. 한 번에 한 걸음씩 안내하고, 사람이 «했어요» 라고 하면 다음 걸음으로 간다.`);
   lines.push(`- \`prereq.callback_url\` 이 null 이면 먼저 입구 스킬(\`liv-connect\`)의 «공개 주소 넣기» 를 한다 — 돌아올 주소가 없으면 앱을 만들 수 없다.`);
   lines.push(`- 화면으로 하면 더 쉽다: \`connect_url\`(그 앱 화면)에 같은 안내와 붙여 넣을 값·입력칸이 있다. 사람이 화면으로 하겠다고 하면 그쪽으로 보내고, 끝나면 확인만 한다.`);
   lines.push("");

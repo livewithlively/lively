@@ -127,7 +127,8 @@ export function assembleConnectBody(spec: ConnectSkillSpec, sources: Record<stri
   const hasSlot = own.includes(REGISTRATION_SLOT);
   const hasReg = !!APP_REGISTRATIONS[spec.source];
   if (hasSlot !== hasReg) throw new Error(`연결 스킬 '${spec.id}' 의 앱 등록 자리(${REGISTRATION_SLOT})와 안내(connect-registration.ts)가 맞지 않는다`);
-  if (hasSlot) own = own.replace(REGISTRATION_SLOT, registrationMarkdown(spec.source));
+  //  바꿀 글은 함수로 준다 — 문자열로 주면 «$&» 같은 자리 패턴이 해석된다.
+  if (hasSlot) own = own.replace(REGISTRATION_SLOT, () => registrationMarkdown(spec.source));
   return [own, connectSource(CONNECT_COMMON_SOURCE, sources)].map((p) => p.trim()).join("\n\n") + "\n";
 }
 

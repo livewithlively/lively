@@ -10,13 +10,14 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
-import { canManageWorkspace } from "./principal.js";
+import { canManageWorkspace, isAdmin } from "./principal.js";
 import { APP_REGISTRATIONS } from "../org/connect-registration.js";
 import { memberSecretCapabilities } from "./member-secret.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { mcpServersCapabilities } from "./delivery/mcp-servers.js";
 import { MCP_SERVER_PRESETS } from "../org/delivery/mcp-server-presets.js";
-import { listMcpServers } from "../org/store.js";
+import { getMcpServer } from "../org/store/mcp-servers.js";
+import { isSlackOAuthKind } from "../org/credentials/slack-oauth.js";
 
 /** 앱마다 저장 자리 — 금고 kind(OAuth 클라이언트 한 줄) 또는 GitHub App. 등록 권한은 org_connect_status 의 registerBy 와 같다. */
 export const REGISTER_SAVE: Readonly<Record<string, { cred?: string; slackServer?: true; github?: true; by: "admin" | "manage" }>> = Object.freeze({
@@ -33,6 +34,15 @@ const capOf = (caps: Capability[], name: string): Capability => {
   if (!c) throw new Error(`${name} 가 없다`);
   return c;
 };
+//  부를 도구는 모듈을 불러올 때 찾는다 — 이름이 바뀌면 고객의 첫 [등록] 이 아니라 부팅·시험에서 깨지게.
+const CRED_SET = capOf(memberSecretCapabilities, "org_credential_set");
+const GITHUB_APP_REGISTER = capOf(githubConnectCapabilities, "org_github_app_register");
+const MCP_UPSERT = capOf(mcpServersCapabilities, "org_mcp_upsert");
+
+/** 슬랙 연결 창구가 [연결]을 받을 모양인가 — slackAppReady(oauth-broker)가 보는 조건 그대로(proxy · oauth · 슬랙 인증). 켜짐 여부는 보지 않는다(관문도 안 본다). */
+export function slackServerUsable(srv: { mode?: string | null; auth_mode?: string | null; auth_kind?: string | null } | null): boolean {
+  return !!srv && srv.mode === "proxy" && srv.auth_mode === "oauth" && isSlackOAuthKind(srv.auth_kind);
+}
 
 /** 슬랙 연결 창구(MCP 서버 항목 slack) — 관리 ▸ 도구 화면의 프리셋 «Slack» 과 같은 값. 이게 없으면 [연결] 이 «proxy MCP 서버 없음» 으로 실패한다. */
 export function slackServerPayload(): Record<string, unknown> {
@@ -58,7 +68,7 @@ const orgConnectRegister: Capability = {
     "REST 등가: POST /api/ui/org/connect/register {app, values}.",
   scope: "memory", input: registerInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/connect/register"], parse: (req) => req.body ?? {} }] },
-  handler: async (input, user: LivelyUser) => {
+  handler: async (input, user: LivelyUser, ctx) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const i = (input ?? {}) as { app?: unknown; values?: unknown };
     const app = String(i.app ?? "");
@@ -66,31 +76,29 @@ const orgConnectRegister: Capability = {
     const reg = APP_REGISTRATIONS[app];
     if (!save || !reg) throw new HttpError(400, `앱 등록을 받지 않는 앱입니다: ${app}`);
     if (save.by === "admin") {
-      if (!(user.scopes ?? []).includes("admin")) throw new HttpError(403, "라이블리 관리자만 앱을 등록할 수 있습니다 — 관리자에게 이 화면을 열어 달라고 부탁해 주세요");
+      if (!isAdmin(user)) throw new HttpError(403, "라이블리 관리자만 앱을 등록할 수 있습니다 — 관리자에게 이 화면을 열어 달라고 부탁해 주세요");
     } else if (!canManageWorkspace(user)) throw new HttpError(403, "워크스페이스 관리 권한이 있어야 앱을 등록할 수 있습니다");
     const raw = (i.values && typeof i.values === "object" ? i.values : {}) as Record<string, unknown>;
     const values: Record<string, string> = {};
     for (const f of reg.fields) {
       const v = typeof raw[f.key] === "string" ? String(raw[f.key]).trim() : "";
-      if (!v && !f.optional) throw new HttpError(400, `«${f.label}» 을(를) 넣어 주세요`);
+      if (!v && !f.optional) throw new HttpError(400, `«${f.label}» 칸을 채워 주세요`);
       if (v) values[f.key] = v;
     }
     if (save.github) {
-      await capOf(githubConnectCapabilities, "org_github_app_register").handler(values, user);
+      await GITHUB_APP_REGISTER.handler(values, user, ctx);
       return { ok: true, app };
     }
     if (save.slackServer) {
-      //  연결 창구가 이미 켜져 있으면 손대지 않는다(관리자가 고쳐 둔 값을 덮지 않게).
-      const have = (await listMcpServers()).find((s) => s.name === "slack");
-      if (!have || !have.enabled) {
-        if (!canManageWorkspace(user)) throw new HttpError(403, "워크스페이스 관리 권한이 있어야 슬랙 연결 창구를 만들 수 있습니다");
-        await capOf(mcpServersCapabilities, "org_mcp_upsert").handler(slackServerPayload(), user);
-      }
+      //  연결 창구가 이미 [연결]을 받을 모양이면 손대지 않는다(관리자가 고쳐 둔 범위·단계·기록 설정을 덮지 않게 — 꺼 둔 행도 그대로).
+      //   없거나 모양이 틀리면(그대로면 [연결]이 «proxy MCP 서버 없음» 으로 실패한다) 프리셋 값으로 만든다.
+      const have = await getMcpServer("slack").catch(() => null);
+      if (!slackServerUsable(have)) await MCP_UPSERT.handler(slackServerPayload(), user, ctx);
     }
-    await capOf(memberSecretCapabilities, "org_credential_set").handler({
+    await CRED_SET.handler({
       kind: save.cred, scope_key: "oauth:client",
       secret: JSON.stringify({ client_id: values.client_id, client_secret: values.client_secret }),
-    }, user);
+    }, user, ctx);
     return { ok: true, app };
   },
 };

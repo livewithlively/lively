@@ -5,7 +5,7 @@
 //  → 원본 편집 → 이 스크립트 → `git diff src/org/delivery/connect-skills.sources.ts` 확인 → 커밋.
 //  connect-skills.test.ts 가 sources.ts == 원본 파일을 강제하므로, 편집 뒤 sync 를 빠뜨리면 `npm test` 가 깨져 알려준다.
 //
-//  파일 이름 규칙: `<키>.md`(두 배포 방식 공용) · `<키>.managed.md` / `<키>.selfhost.md`(판이 다를 때).
+//  파일 이름 규칙: `<키>.md` 하나(#4970 — 배포 방식으로 판을 나누지 않는다. 갈림은 org_connect_status 의 길 상태다).
 //   `_common`(모든 연결 스킬 끝에 붙는 공통 부분) · `_router`(입구 liv-connect) · 그 밖은 앱 키(slack·notion …).
 import fs from "node:fs";
 import path from "node:path";

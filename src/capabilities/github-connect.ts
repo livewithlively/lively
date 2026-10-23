@@ -11,6 +11,7 @@ import { HttpError } from "./rest-util.js";
 import { githubAppReady, startGithubAppConsent, saveGithubAppCredentials, completeGithubAppInstall } from "../org/credentials/oauth-broker.js";
 import { listSecretsByKindPublic } from "../org/credentials/member-secret-store.js";
 import { GITHUB_INSTALL_KIND } from "../org/credentials/github-app.js";
+import { isGithubAppToken } from "../org/credentials/github-token-source.js";
 import { listInstallationRepos } from "../org/credentials/github-app-git.js";
 import { GATEWAY_OWNER, memberOwner } from "../org/credentials/git-credential-store.js";
 
@@ -35,7 +36,7 @@ async function githubConnectState(memberId: string): Promise<Record<string, unkn
     app_ready: ready,
     connected: !!mine?.has_secret,
     // 붙여넣기 PAT 인지 OAuth 연결인지 — 같은 슬롯을 쓰므로 meta 로만 구분된다(둘 다 도구는 정상 동작).
-    connected_via: mine?.has_secret ? (mine.meta && Object.keys(mine.meta).some((k) => k === "expires_at" || k === "token_type") ? "oauth" : "token") : null,
+    connected_via: mine?.has_secret ? (isGithubAppToken(mine) ? "oauth" : "token") : null,
     installations: installs.map((s) => ({ installation_id: s.scope_key, connected_by: (s.meta as Record<string, unknown> | undefined)?.connected_by ?? null })),
     //  ★ 앱에 실제로 열린 저장소(#1881 G10) — 목록 드롭다운(user token, "내가 볼 수 있는 전부")과 **범위가 다르다**.
     //   clone 은 이 목록 안에서만 된다. 화면이 이 차이를 보여 주지 않으면 사용자는 안 열린 레포를 고르고

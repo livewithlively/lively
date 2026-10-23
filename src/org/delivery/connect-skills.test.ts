@@ -141,6 +141,19 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
   ok("E19 길 상태 — 앱 스킬 «길 고르기» · 옛 next= 없음 · 입구 스킬 범용 HTTP·웹훅 · Claude 커넥터 0절");
 }
 
+// ── E20 (#4970 리뷰) 스킬 본문이 부르라는 도구는 레지스트리에 있다 — 산문을 고쳐도 없는 도구를 부르게 하지 않는다 ──
+{
+  const names = new Set<string>();
+  for (const sk of connectSkills()) {
+    for (const m of sk.body.matchAll(/`([a-z][a-z0-9_]+) \{/g)) names.add(m[1]!);   // 부르는 모양: `org_x_set { … }`
+    for (const m of sk.body.matchAll(/`(org_[a-z0-9_]+)`/g)) names.add(m[1]!);      // 이름만: `org_connect_status`
+  }
+  const missing = [...names].filter((n) => !registry.get(n));
+  assert.deepEqual(missing, [], `연결 스킬이 없는 도구를 부르라고 한다: ${missing.join(", ")}`);
+  assert.ok(names.size >= 20, `도구 이름을 충분히 찾았다(배선) — ${names.size}개`);
+  ok(`E20 스킬이 부르는 도구 ${names.size}개 전부 레지스트리에 있다`);
+}
+
 // ── E18 / P11 content_hash — 내려가는 필드의 해시와 같다 ──
 {
   for (const s of connectSkills()) {
