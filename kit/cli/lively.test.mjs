@@ -720,6 +720,32 @@ try {
     const r2 = await pExecFile(process.execPath, [CLI, "onboarding", "메모리만", "정리", "--print"]);
     check("⑳ onboarding — 초기 프롬프트 override", r2.stderr.includes('claude "메모리만 정리"'), JSON.stringify(r2.stderr));
   }
+
+  // ㉑ 새 PC 의 첫 로그인 — 부트스트랩은 lively.mjs **한 파일만** 놓으므로 cmd-node.mjs 가 아직 없다(데스크톱 앱 setup 이 정확히 이 순서).
+  //   옮길 노드(node-agent.env)도 없으면 «노드를 새 게이트웨이로 옮기지 못했습니다» 경고를 내지 않는다 — 처음 설치마다 앱에 노란 경고가 떴다(2026-10-23 실측).
+  //   노드가 등록된 PC 라면 그 경고는 여전히 필요하다(다시 `lively node --daemon` 하라는 안내).
+  {
+    const bootDir = join(BOX, "boot-only");
+    mkdirSync(bootDir, { recursive: true });
+    writeFileSync(join(bootDir, "lively.mjs"), readFileSync(CLI));
+    const loginFrom = async (h) => {
+      const r = await pExecFile(process.execPath, [join(bootDir, "lively.mjs"), "login", "--gateway", GW, "--token", TOKEN], {
+        env: { ...process.env, ...offlineLivelyEnv(), HOME: h.home, LIVELY_HOME: h.home, CLAUDE_CONFIG_DIR: join(h.home, ".claude"), PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "" },
+        timeout: 60000,
+      });
+      return r.stderr;
+    };
+    const fresh = newHome("h-boot-fresh");
+    const errFresh = await loginFrom(fresh);
+    check("㉑ 새 PC 첫 로그인(cmd-node.mjs 없음 · 노드 없음) — 노드 경고 없음",
+      !errFresh.includes("노드를 새 게이트웨이로 옮기지 못했습니다") && existsSync(join(fresh.home, ".lively", "token")), errFresh.slice(-300));
+    const withNode = newHome("h-boot-node");
+    mkdirSync(join(withNode.home, ".lively"), { recursive: true });
+    writeFileSync(join(withNode.home, ".lively", "node-agent.env"), "LIVELY_NODE_ID=n-test\n");
+    const errNode = await loginFrom(withNode);
+    check("㉑ 노드가 등록된 PC(cmd-node.mjs 없음) — 노드 경고는 그대로 낸다",
+      errNode.includes("노드를 새 게이트웨이로 옮기지 못했습니다"), errNode.slice(-300));
+  }
 } finally {
   server.close();
   cleanup();
