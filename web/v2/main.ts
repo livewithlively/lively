@@ -235,8 +235,8 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   if (seq !== tab.seq) return;
   if (detail && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
   //  #4970 «리브 = 세션 하나» — 이 세션이 리브 세션인가(리브 좌표로 알아본다 — 이름 글자로 가르지 않는다). 리브 세션은 개인 폴더의 liv 에서
-  //   프로젝트 없이 열리므로 프로젝트 없는 세션 화면에서만 서버에 묻는다(30초 기억). 리브 세션이면 대화 보기가 본자리 · 입력칸 위 물음 자리 ·
-  //   곁칸 맨 앞 «리브» 칸.
+  //   프로젝트 없이 열리므로 프로젝트 없는 세션 화면에서만 서버에 묻는다(30초 기억). 리브 세션이면 물음 자리(입력칸 위 · 터미널이면 머리줄 아래) ·
+  //   곁칸 맨 앞 «리브» 칸. 보기는 일반 세션과 같다(#4940 — 아래 mountSession 주석).
   const livId = projectId > 0 ? knownLivSessionId() : await livSessionIdWithin(1500);
   if (seq !== tab.seq) return;
   const isLiv = (sid: string | null | undefined): boolean => {
@@ -296,8 +296,11 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     //  그릇은 셸(panes.ts)이 세션마다 쥐고 여기로 건네준다.
     mountSession: (host, sid, o) => {
       const h = renderSession(host, data, sid, {
-        //  #4970 — 리브 세션: 대화 보기가 본자리(원준 2026-09-14 «온보딩에서 만들어 주는 세션은 대화로 보기») · 리브 물음은 입력칸 바로 위.
-        ...(isLiv(sid) ? { chatHome: true, livAsks: true } : {}),
+        //  #4970 — 리브 세션: 리브 물음은 입력칸 바로 위(터미널을 볼 땐 머리줄 아래 — session-chat.ts placeLivAsk).
+        //   ★ 보기는 일반 세션과 같다(#4940 상민님 2026-10-23 «그냥 터미널로 열면 되잖아… 하네스 뜨기 전까진 터미널 모사한
+        //    대화화면 보여주다가 하네스 뜨면 넘어가면 된다») — 종전 «대화 보기가 본자리»(chatHome, 원준 2026-09-14)를 걷었다.
+        //    대화가 본자리면 하네스가 첫 실행 화면에서 기다릴 때 사람은 그 화면을 못 보고 «전달하는 중…» 에 갇힌다(셀프호스트 실측).
+        ...(isLiv(sid) ? { livAsks: true } : {}),
         trail: (o && o.trail) || null,
         //  머리줄 [자료](#4088 후속) — 곁칸의 자료 칸을 켠다(폰: 서랍). 셸(panes.ts)이 준 배선을 그대로 넘긴다.
         onOpenFiles: o && o.openFiles ? o.openFiles : undefined,
@@ -1655,12 +1658,13 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
       if (SOLO) {
         const trail = drawAsideSession(tab, s || null);
-        //  #4970 — 팝아웃 창에서 연 리브 세션도 대화 보기 · 입력칸 위 물음 자리(종전엔 세션 이름으로 알아봤다 — 이제 리브 좌표로).
+        //  #4970 — 팝아웃 창에서 연 리브 세션도 리브 물음 자리(종전엔 세션 이름으로 알아봤다 — 이제 리브 좌표로).
+        //   보기는 본 창과 같이 일반 세션이다(#4940 — 위 mountSession 주석).
         const soloLivId = await livSessionIdWithin(1500);
         if (seq !== tab.seq) return;
         const soloLiv = isLivSessionId([id, s?.id, s?.logId, s?.raw?.claudeSessionId], soloLivId);
         tab.chat = renderSession(tab.center, data, id, {
-          ...(soloLiv ? { chatHome: true, livAsks: true } : {}),
+          ...(soloLiv ? { livAsks: true } : {}),
           trail,
           onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
           onRename: (label) => renameSession(s ? s.id : id, label, tab),

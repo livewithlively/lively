@@ -20,7 +20,7 @@ export function livDeskPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-livdesk' });
   const askLine = el('p', { class: 'pn-livdesk-ask', hidden: true },
     el('span', { class: 'pn-livdesk-dot', 'aria-hidden': 'true' }),
-    el('span', { text: '리브가 대화 입력칸 바로 위에서 답을 기다리고 있어요.' }));
+    el('span', { text: '리브가 세션 화면에서 답을 기다리고 있어요 — 대화로 보면 입력칸 바로 위, 터미널로 보면 맨 위에 있어요.' }));
   const letter = el('section', { class: 'liv-letter pn-livdesk-letter' }, el('div', { class: 'liv-letter-skel' }));
   const appsList = el('div', { class: 'liv-apps pn-livdesk-apps' }, el('p', { class: 'pn-fine', text: '불러오는 중…' }));
   root.append(

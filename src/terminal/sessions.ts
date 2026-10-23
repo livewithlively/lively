@@ -26,7 +26,7 @@ import { loadStoragePolicy } from "../org/policies/runtime-loaders.js"; // #1313
 import { assertDiskWritable } from "../ops/disk-guard.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
-import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
+import { wrapAsMember, memberExecConfigured, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
 import { collectPaneArgv, isCollectRunDir } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
@@ -37,7 +37,7 @@ import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "
 import os from "node:os";
 import path from "node:path";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
-import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";
+import { ensureFolderTrusted, ensureClaudeOnboarded, TRUST_PLANS, type TrustIo } from "./harness-trust.js";
 import { ensureCodexUpdateCheckOff } from "./codex-update-check.js";   // #4135 후속 — 시작 «Update available» 창이 codex 를 죽이던 것
 import { ensureCodexHooksTrusted } from "./codex-hook-trust-apply.js";   // #4135 후속 — «Hooks need review» 를 미리 지운다   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
@@ -1103,6 +1103,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         write: async (p, t) => { await fsp.mkdir(path.dirname(p), { recursive: true, mode: 0o700 }); await fsp.writeFile(p, t, { mode: 0o600 }); },
       };
     await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
+    //  #4940 — 화면 안에서 로그인을 끝낸 claude 의 첫 실행 안내(글자 스타일 고르기 …)를 넘긴다. 안 넘기면 이 세션이 그 화면에서
+    //   기다리고 첫 지시가 영영 «전달하는 중…» 이다(harness-trust.ts ensureClaudeOnboarded 머리말). 폴더 신뢰(trustOk)와는 다른 축 —
+    //   계정의 일이라 폴더가 누구 것이든 넣는다. 로그인 전 설정엔 쓰지 않는다.
+    //   매니지드(중계)는 키트를 심을 때 이미 넣으므로(member-kit-seed.ts) 거기선 한 번 더 읽지 않는다 — 멤버 경계 왕복마다 0.5~1초다.
+    if (harness.key === "claude" && !memberExecConfigured()) await ensureClaudeOnboarded(io, configFile);
     //  ── codex «Hooks need review» 를 미리 지운다 (#4135 후속) ─────────────────────────────
     //  codex 는 훅을 돌리기 전에 그 창으로 신뢰를 받는다. 우리 킷이 심은 훅 21개가 매번 «새 훅» 으로 잡혀
     //   새 세션마다 그 창이 뜨고 **첫 지시가 그 뒤에서 멈췄다**(원준님 실측 2026-09-25). 그 상태에서는 상태

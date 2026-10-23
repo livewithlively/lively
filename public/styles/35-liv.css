@@ -311,6 +311,8 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
    리브는 보통 세션 화면에서 산다 — 대화는 가운데, 오른쪽 «리브» 칸(web/v2/panes-liv.ts)에 지금 손볼 것·외부 앱 연결 상태.
    물음 카드는 세션 대화창의 입력칸 바로 위(web/liv-ask-dock.ts) — 위 .liv-askdock 규칙을 그대로 쓰되 대화창 폭에 맞춘다. */
 .sc-liv-askdock:not(:empty) { margin: 0 0 6px; padding: 8px 0 2px; max-height: 40vh; }
+/* #4940 — 터미널을 볼 때는 머리줄 아래(대화창은 숨어 있다 — session-chat.ts placeLivAsk). 터미널과 선 하나로 가른다. */
+.sc-wrap > .sc-liv-askdock:not(:empty) { margin: 8px 12px 0; padding: 8px 0 10px; border-top: 0; border-bottom: 1px solid var(--line); }
 
 /* 오른쪽 «리브» 칸 */
 .pn-livdesk { padding: 12px 12px 16px; gap: 10px; overflow: auto; }

@@ -148,8 +148,8 @@ export interface SessAppDoor {
 //  #1631 — 서버 킥오프 세션 이름(src/org/liv/kickoff.ts LIV_SESSION_LABEL)과 **글자가 같아야** 이 세션을 알아본다(둘이 갈리면 숨김·로딩이 조용히 꺼진다 — liv-kickoff-chat-view 시험이 잠근다).
 //   ⚠ SessionInfo 에 kind 가 안 실려 지금은 이름으로 가른다 — 사람이 다른 세션을 이 이름으로 바꾸면 그 세션도 첫 말을 숨긴다(막다른 길은 아님, [터미널로 보기]로 원문). kind 가 프런트까지 오면 그걸로 바꾼다.
 //   (#4970) 처음 설정은 이제 킥오프를 열지 않는다 — 이 이름은 이미 진행 중인 리브 2턴(재개 세션)이 쓰는 동안만 남긴다(2턴과 함께 걷는다).
-//   리브 세션 자체(#4032 «리브 — 대화»)는 이름으로 알아보지 않는다 — 셸이 리브 좌표로 알아보고 opts.chatHome·opts.livAsks 를 준다
-//   (#4970 «리브 = 세션 하나» — 사람이 이름을 바꿔도 리브 세션은 리브 세션이다).
+//   리브 세션 자체(#4032 «리브 — 대화»)는 이름으로 알아보지 않는다 — 셸이 리브 좌표로 알아보고 opts.livAsks 를 준다
+//   (#4970 «리브 = 세션 하나» — 사람이 이름을 바꿔도 리브 세션은 리브 세션이다). 보기는 일반 세션이다(#4940 — chatHome 을 안 준다).
 const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
 /** 보낸 말이 대화 기록에 사람 말로 나타나나 — 슬래시 명령(`/compact`)·셸(`!ls`)은 하네스가 그 자리에서 실행하고 사람 말 줄로 안 남는다(에코 없음). */
 const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
@@ -159,9 +159,10 @@ const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
  *
  *  세션 화면은 같은 세션을 터미널과 대화 두 겹으로 보여 준다 — 대화 겹이 터미널과 같은 글자·같은 줄 문법이어야 두 겹을 오가도
  *  같은 세션으로 읽힌다. 그래서 세션 화면은 tui 가 기본이다.
- *  ⚠ **리브 대화는 예외**(종전 desktop 문법 그대로): 가입 온보딩의 리브 세션(킥오프)과 리브 탭(chatHome)은 «터미널이 낯선 사람에게
- *   대화로 보여 준다» 가 존재 이유다(원준 2026-09-14 «가입 온보딩 때 처음에 만들어 주는 세션은 대화로 보기 형식으로 기본»).
- *   그 화면을 터미널 모양으로 바꾸면 그 결정을 뒤집는다.
+ *  ⚠ **대화가 본자리인 화면(chatHome)과 옛 킥오프 세션만 예외**(종전 desktop 문법): «터미널이 낯선 사람에게 대화로 보여 준다» 가
+ *   그 화면들의 존재 이유였다(원준 2026-09-14 «가입 온보딩 때 처음에 만들어 주는 세션은 대화로 보기 형식으로 기본»).
+ *   리브 세션은 #4940(상민님 2026-10-23 «그냥 터미널로 열면 되잖아»)부터 그 예외가 아니다 — 셸이 chatHome 을 안 주므로 tui 로 그리고,
+ *   하네스가 뜨면 일반 세션처럼 터미널로 넘어간다. 옛 킥오프 이름은 진행 중인 리브 2턴과 함께 걷힌다.
  */
 export function sessionChatLook(label: string, chatHome: boolean): 'tui' | 'desktop' {
   const l = String(label || '');
@@ -229,10 +230,11 @@ export interface SessionChatOpts {
    *  ⚠ 미지정이면 이 화면이 전역 주소를 바꾼다. 셸 안에서는 그게 곧 **활성 탭의 주소**라, 숨은 탭에서 일어난
    *   복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다. 셸(v2/main.ts)은 이 콜백으로 **그 탭만** 옮긴다. */
   onResumed?: (newId: string) => void;
-  /** 이 화면은 **대화 보기가 본자리**다(#4032 리브 탭 → #4970 리브 세션) — 세션 이름·런타임과 무관하게 대화창으로 연다. 터미널은 [보기]로 여전히 열린다. */
+  /** 이 화면은 **대화 보기가 본자리**다 — 세션 이름·런타임과 무관하게 대화창으로 연다. 터미널은 [보기]로 여전히 열린다.
+   *  (#4032 리브 탭 → #4970 리브 세션이 쓰던 옵션 — #4940 부터 리브 세션은 일반 세션 보기라 셸이 주지 않는다.) */
   chatHome?: boolean;
   /** 이 세션은 **리브 세션**이다(#4970 «리브 = 세션 하나» — 셸이 리브 좌표로 알아본다). 리브가 던진 물음(자격·객관식·올리기)을
-   *  입력칸 바로 위에 띄운다(web/liv-ask-dock.ts). 값은 대화로 가지 않는다 — 카드가 금고로 곧바로 보낸다. */
+   *  입력칸 바로 위에 띄운다(web/liv-ask-dock.ts) — 터미널을 볼 땐 머리줄 아래(placeLivAsk). 값은 대화로 가지 않는다 — 카드가 금고로 곧바로 보낸다. */
   livAsks?: boolean;
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
@@ -567,6 +569,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // codex 실시간 층(#2055)의 승인·사용량이 앉는 자리 — 대화 목록과 달리 **스크롤에 안 떠내려간다**(입력칸 바로 위).
   //  승인은 답해야 턴이 진행되는 요청이라, 읽던 자리를 위로 올렸다고 사라지면 그 턴이 통째로 선다.
   const liveDock = el('div', { class: 'cxl-dock' });
+  //  #4940 — 리브 물음 카드 자리(livAsks 일 때만 — 아래 mountLivAskDock). 보기에 따라 자리를 옮긴다(placeLivAsk).
+  let livAskEl: HTMLElement | null = null;
   //  #2439 ③ — 작업(백그라운드 셸·서브에이전트)도 같은 자리에 선다. 승인과 같은 이유로 스크롤에 안 떠내려간다:
   //   «지금 무엇이 도는가» 는 읽던 자리를 위로 올렸다고 사라지면 안 되는 사실이다.
   let tasksDock: SessionTasksHandle | null = null;
@@ -677,8 +681,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //    (paintShellBar). 막다른 길이 아니므로, 사람이 고른 기본값을 내 걱정으로 덮을 이유가 없다.
   //   ── 새 세션은 이 줄이 없어도 터미널이다(chatMode='tmux'). 이 줄이 실제로 가르는 것은 **이 변경 전에
   //    태어난 app-server 세션**이고, 그 세션에서도 사람은 터미널을 먼저 보길 원한다.
-  //   ⚠ 리브 세션(셸이 opts.chatHome 으로 알려 준다 · 옛 킥오프 livKickoff)과 화면이 명시로 요청한 자리는 그대로 대화가 본자리다 —
-  //    그건 codex 여부와 무관한 «이 화면은 대화로 쓰라» 는 요청이다.
+  //   ⚠ 화면이 명시로 요청한 자리(opts.chatHome)와 옛 킥오프(livKickoff)는 그대로 대화가 본자리다 — 그건 codex 여부와 무관한
+  //    «이 화면은 대화로 쓰라» 는 요청이다. 리브 세션은 #4940 부터 그 요청을 안 한다(일반 세션 보기 — v2/main.ts mountSession 주석).
   const chatHome = (): boolean => livKickoff() || !!opts.chatHome
     || (!isCodex() && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat'));
 
@@ -1139,6 +1143,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  넘기는 때가 마운트 직후가 아니라 하네스가 그린 때(몇 초 뒤)라, 그사이 사람은 다른 데서 무언가를 치고 있을 수 있다. */
   function focusTermIfHere(): void {
     const a = document.activeElement;
+    //  #4940 — 리브 물음 카드(비밀 값·객관식)에 치는 중이면 빼앗지 않는다. 카드는 터미널을 볼 때도 이 화면 안(머리줄 아래)에 있어
+    //   아래 «이 화면 안이면 넘긴다» 에 걸리는데, 넘기면 이어 치는 비밀 값이 하네스 입력칸으로 간다(격리 리뷰 실측).
+    if (a && livAskEl?.contains(a)) return;
     if (!a || a === document.body || wrap.contains(a)) termSend('focus');
   }
   /** #4794 보낸 말이 아직 하네스에 안 들어갔나 — 서버가 «다 쳤다»(outbox.typed)를 알려 왔으면 들어갔다. 아니면 대기 말풍선이 에코를
@@ -1195,6 +1202,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     termHost.hidden = mode !== 'term';
   }
 
+  /** #4940 리브 물음 카드의 자리 — 대화를 볼 땐 입력칸 바로 위(liveDock), 터미널을 볼 땐 머리줄 아래(확인 대기 배너가 서는 자리).
+   *  리브 세션도 이제 터미널이 본자리라(v2/main.ts mountSession 주석) 카드가 대화창 안에만 있으면 터미널을 보는 사람에겐 물음이 안 보인다.
+   *  리브 세션이 아니면(livAskEl 없음) 아무것도 안 한다. */
+  function placeLivAsk(): void {
+    const a = livAskEl;
+    if (!a) return;
+    //  옮기면(DOM 이동) 그 안의 초점이 떨어진다 — 사람이 카드에 치던 중이면 옮긴 뒤 그 칸에 되돌린다(값은 그대로 남는다).
+    const held = a.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+    if (mode === 'term') { if (a.parentElement !== wrap) wrap.insertBefore(a, chatHost); }
+    else if (a.parentElement !== liveDock) liveDock.append(a);
+    if (held && held.isConnected && document.activeElement !== held) held.focus({ preventScroll: true });
+  }
+
   function setMode(m: 'term' | 'chat'): void {
     //  #4794 — 화면을 누가 정했다(사람 · 다른 갈래) — 숨겨 붙이던 판은 여기서 끝난다.
     const wasWarm = !!termWarm;
@@ -1220,6 +1240,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (m === 'chat') { if (waitBar.parentElement !== liveDock) liveDock.prepend(waitBar); }
       else if (waitBar.parentElement !== wrap) wrap.insertBefore(waitBar, chatHost);
     }
+    placeLivAsk();
     if (m === 'term') ensureTermFrame();
     wrap.classList.toggle('sc-mode-term', m === 'term');
     paintShellBar();
@@ -1336,6 +1357,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     },
     isVisible: () => !destroyed && (opts.isVisible ? opts.isVisible() : true),
   }) : null;
+  livAskEl = livDock ? livDock.el : null;   // 처음 자리는 liveDock(대화) — 보기가 바뀔 때마다 setMode 가 옮긴다(placeLivAsk)
 
   // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
   //  상단바를 합쳤으므로 '터미널이 하던 일'을 여기서 눌러 저기서 실행한다. 같은 오리진 프레임이라 postMessage 한 줄이면
@@ -2989,7 +3011,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   });
 
   // 기본 화면 — 코덱스를 포함해 터미널이 기본이다. Codex app-server는 대화·승인 층을 계속 제공하되,
-  //  사용자가 보는 첫 화면을 대화로 강제하지 않는다. 나머지 대화 런타임·리브 세션의 예외는 chatHome()에 둔다.
+  //  사용자가 보는 첫 화면을 대화로 강제하지 않는다. 나머지 대화 런타임·화면이 대화를 요청한 자리의 예외는 chatHome()에 둔다.
   //  ★ #3847 — **«모른다» 는 세션은 터미널로 열지 않는다.** 매니지드 중계가 tmux 를 못 보면 서버는 DB desired
   //   행을 observed:false 로 내보낸다(#2544 — «죽었다» 가 아니라 «모른다»). 그 행엔 restorable 이 없어 이 화면은
   //   «살아 있다» 로 읽고 터미널을 얹었고, 프레임은 곧 «중단됨» 배너를 띄웠다 — 사람이 본 것은 그 배너뿐이었다.

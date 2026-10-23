@@ -4,7 +4,9 @@
 //   호출부가 그 보증 없이 불러 화면 수락층의 가드가 우회됐다.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planTrustPatch, planAgyTrustPatch, ensureFolderTrusted, TRUST_KEY, AGY_TRUST_KEY, type TrustIo, planCodexTrustPatch } from "./harness-trust.js";
+import { readFileSync } from "node:fs";
+import { planTrustPatch, planAgyTrustPatch, ensureFolderTrusted, TRUST_KEY, AGY_TRUST_KEY, type TrustIo, planCodexTrustPatch,
+  planClaudeOnboardedPatch, ensureClaudeOnboarded, ONBOARDED_KEY } from "./harness-trust.js";
 
 const DIR = "/box/a";
 const parse = (p: { write: boolean; text?: string }) => JSON.parse((p as { text: string }).text);
@@ -221,4 +223,74 @@ test("㉓ 표에 없는 하네스는 읽지도 쓰지도 않는다", async () =>
   }
   assert.equal(reads, 0);
   assert.equal(writes, 0);
+});
+
+// ── #4940 화면 로그인 뒤 claude 첫 실행 안내 넘기기 (사양 C1~C9) ─────────────────────────────────
+//  실측(2026-10-23 셀프호스트): 화면에서 로그인(oauthAccount 있음)한 프로필로 연 세션이 «글자 스타일 고르기» 에서 기다려
+//   첫 지시가 영영 «전달하는 중…» 이었다. 로그인된 설정에만 · 비었을 때만 표식을 넣는다.
+const LOGGED = { oauthAccount: { emailAddress: "ceo@x.io" }, mcpServers: { lively: { type: "stdio" } }, userID: "u1" };
+const parsedOf = (p: { write: boolean; text?: string }) => (p.write ? JSON.parse((p as { text: string }).text) : null);
+
+test("C1 로그인됨 · 표식 없음 · 테마 없음 → 표식 true · 테마 dark · 나머지 키 그대로", () => {
+  assert.equal(ONBOARDED_KEY, "hasCompletedOnboarding", "Claude Code 와의 계약 글자 — 상수를 통해서만 견주면 오타가 살아남는다");
+  const p = planClaudeOnboardedPatch(JSON.stringify(LOGGED));
+  assert.equal(p.write, true);
+  const d = parsedOf(p);
+  assert.equal(d[ONBOARDED_KEY], true);
+  assert.equal(d.theme, "dark");
+  assert.deepEqual(d.oauthAccount, LOGGED.oauthAccount, "로그인 정보 보존");
+  assert.deepEqual(d.mcpServers, LOGGED.mcpServers, "MCP 배선 보존");
+  assert.equal(d.userID, "u1");
+});
+
+test("C2 로그인됨 · 표식 없음 · 테마 light → 표식만 넣고 테마는 그대로", () => {
+  const d = parsedOf(planClaudeOnboardedPatch(JSON.stringify({ ...LOGGED, theme: "light" })));
+  assert.equal(d[ONBOARDED_KEY], true);
+  assert.equal(d.theme, "light");
+});
+
+test("C3·C4 표식이 이미 있으면(true 든 false 든) 쓰지 않는다", () => {
+  assert.deepEqual(planClaudeOnboardedPatch(JSON.stringify({ ...LOGGED, [ONBOARDED_KEY]: true })), { write: false });
+  assert.deepEqual(planClaudeOnboardedPatch(JSON.stringify({ ...LOGGED, [ONBOARDED_KEY]: false })), { write: false });
+});
+
+test("C5 로그인 안 됨(oauthAccount 없음·빈 값) → 쓰지 않는다(«Not logged in» 입력칸에 떨어뜨리지 않는다)", () => {
+  assert.deepEqual(planClaudeOnboardedPatch(JSON.stringify({ mcpServers: {} })), { write: false });
+  assert.deepEqual(planClaudeOnboardedPatch(JSON.stringify({ oauthAccount: null })), { write: false });
+});
+
+test("C6·C7 파일 없음 · 빈 것 · 깨진 JSON · 배열 최상위 → 쓰지 않는다", () => {
+  for (const cur of [null, "", "   ", "{not json", "[1,2]", "\"str\""]) {
+    assert.deepEqual(planClaudeOnboardedPatch(cur), { write: false }, String(cur));
+  }
+});
+
+test("C8 실제로 그 파일로 나가고, 읽기·쓰기 실패는 던지지 않는다", async () => {
+  const wrote: Array<[string, string]> = [];
+  const f = "/home/lively/.lively/profiles/ceo/claude/.claude.json";
+  const io: TrustIo = { read: async (p) => (p === f ? JSON.stringify(LOGGED) : null), write: async (p, t) => { wrote.push([p, t]); } };
+  assert.equal(await ensureClaudeOnboarded(io, f), true);
+  assert.equal(wrote.length, 1);
+  assert.equal(wrote[0][0], f);
+  assert.equal(JSON.parse(wrote[0][1])[ONBOARDED_KEY], true);
+  //  다시 불러도(이미 넣은 파일) 쓰지 않는다 — 멱등
+  const io2: TrustIo = { read: async () => wrote[0][1], write: async () => { wrote.push(["again", ""]); } };
+  assert.equal(await ensureClaudeOnboarded(io2, f), false);
+  assert.equal(wrote.length, 1);
+  const boom: TrustIo = { read: async () => { throw new Error("EACCES"); }, write: async () => { throw new Error("EACCES"); } };
+  assert.equal(await ensureClaudeOnboarded(boom, f), false);
+  const wboom: TrustIo = { read: async () => JSON.stringify(LOGGED), write: async () => { throw new Error("EROFS"); } };
+  assert.equal(await ensureClaudeOnboarded(wboom, f), false);
+});
+
+test("C9 배선 — createSession 의 claude 갈래가 신뢰 심기와 같은 io·설정 파일로, 폴더 신뢰 판정과 무관하게 부른다(매니지드 중계는 키트 몫)", () => {
+  const src = readFileSync("src/terminal/sessions.ts", "utf8");   // 테스트는 레포 뿌리에서 돈다(dist 에서 실행 — 다른 배선 시험과 같은 방식)
+  const i = src.indexOf("await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);");
+  assert.ok(i > 0, "신뢰 심기 호출 자리를 못 찾음");
+  const after = src.slice(i, i + 900);
+  //  부르는 줄 그 자체를 본다(주석에도 함수 이름이 나오므로 이름만 찾으면 엉뚱한 줄을 본다) — 신뢰 심기와 같은 깊이의 한 줄이어야 한다.
+  const callLine = after.split("\n").find((l) => l.includes("await ensureClaudeOnboarded(")) ?? "";
+  //  매니지드(중계)는 키트 심기가 이미 넣으므로 건너뛴다(memberExecConfigured — 멤버 경계 왕복을 하나 아낀다).
+  assert.equal(callLine, '    if (harness.key === "claude" && !memberExecConfigured()) await ensureClaudeOnboarded(io, configFile);',
+    "★ 세션을 띄우기 전에 첫 실행 표식을 안 넣는다(또는 폴더 신뢰 판정 안에 갇혔다) — 화면 로그인 뒤 첫 세션이 테마 고르기에서 멈춘다");
 });

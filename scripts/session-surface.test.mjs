@@ -140,9 +140,10 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
     "㉚ 코덱스 여부를 하네스 행으로 판정한다");
   ok(/!isCodex\(\) && \(chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
     "㉚-b ★ 코덱스는 app-server·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
-  //  (#4970) 리브 세션은 이름 글자(livChat)가 아니라 셸이 리브 좌표로 알아보고 opts.chatHome 으로 알려 준다(옛 킥오프만 이름 — 2턴과 함께 걷는다).
+  //  (#4970) 리브 세션은 이름 글자(livChat)가 아니라 셸이 리브 좌표로 알아본다. (#4940) 셸은 리브 세션에 chatHome 을 안 준다(일반 세션 보기) —
+  //   chatHome 은 화면이 명시로 대화를 요청한 자리 몫으로 남는다. 옛 킥오프만 이름(2턴과 함께 걷는다).
   ok(/const chatHome = \(\): boolean => livKickoff\(\) \|\| !!opts\.chatHome/.test(chat),
-    "㉚-c 리브 세션·명시 요청은 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
+    "㉚-c 명시 요청(chatHome)·옛 킥오프는 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
   //  ㉚-d #4632 앱빌더 시험 세션은 터미널로 바로 열린다(원준 2026-10-16 «그냥 한 방에 터미널로») — 대화 겹으로 바꿔 보면 앱빌더가 넣은 첫 지시는
   //   사람 말로 그리지 않는다(«이거 안보여줄 수는 없나?»): 라이브(applyLine) · 되그리기(older) · 낙관 첫 말 · 되감기 넷 다.
   ok(!/trySess\(\)/.test(chat), "㉚-d 시험 세션을 대화 보기로 붙잡지 않는다(터미널이 본자리)");

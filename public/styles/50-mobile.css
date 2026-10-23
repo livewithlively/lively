@@ -408,6 +408,8 @@
   .sc-wrap > .sc-head > .sc-head-r { flex: none; gap: 2px; padding: 1px 3px; }
   /* 떠 있는 단추가 가리는 자리 — 이어서 여는 중 같은 안내 줄은 그 아래로 내린다. */
   .sc-wrap > .sc-wait { margin-top: 56px; }
+  /* #4940 — 터미널을 볼 때 머리줄 아래로 옮긴 리브 물음 카드도 같은 이유로 내린다(바로 위 안내 줄이 보이면 그 줄이 이미 내려 준다). */
+  .sc-wrap > .sc-wait[hidden] + .sc-liv-askdock:not(:empty) { margin-top: 56px; }
   .sc-wrap .sc-titlebox { min-width: 0; flex: 0 1 auto; }
   .sc-wrap button.sc-title, .sc-wrap .sc-title { font-size: 15.5px; }
   .sc-wrap .sc-title-pen { display: none; }
