@@ -168,6 +168,8 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
   const PREP_POLL_MS = 4000;
   let sawPreparing = false;
   const prepare = async (retry = false): Promise<void> => {
+    //  묻기 **전에도** 본다 — 장면을 떠난 뒤 이미 걸어 둔 다음 묻기(4초)가 한 번 더 나가지 않게(화면 시험 Q7).
+    if (!hooks.alive()) return;
     let state = '';
     try { state = String(((await api('/api/ui/me/ai-login/prepare', { method: 'POST', body: JSON.stringify({ retry }) })) as { state?: unknown } | null)?.state ?? ''); }
     catch (_) { state = ''; }
