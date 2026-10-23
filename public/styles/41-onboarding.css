@@ -89,7 +89,7 @@
 .ob-q-write input{flex:1; border:1px solid var(--line); border-radius:8px; padding:9px 12px; outline:none}
 .ob-q-write input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
 /* (#4970) AI 연결 — 줄은 위 카드(.ob-opt-card) 모양을 빌리되 누르는 자리가 아니다(오른쪽 [연결]만 누른다).
-   줄 아래 로그인 칸은 [AI 계정 연결]과 같은 .aiacct-login(46-v2-me.css) — 여기서는 간격만 맞춘다. */
+   줄 아래 로그인 칸은 [AI 계정 연결]과 같은 .aiacct-login(06-learn.css) — 여기서는 간격만 맞춘다. */
 .ob-ai .ob-ai-item{display:flex; flex-direction:column}
 .ob-ai .ob-ai-card{cursor:default}
 .ob-ai .ob-ai-card:not(.ob-on):hover{border-color:var(--line); box-shadow:none}
@@ -99,6 +99,7 @@
 .ob-ai .ob-ai-act .ob-btn{margin-top:0; padding:7px 14px; font-size:13px}
 .ob-ai .ob-ai-ok{font-size:13px; font-weight:600; color:var(--ob-mint-ic); white-space:nowrap}
 .ob-ai .aiacct-login{margin-top:8px}
+.ob-ai .ob-ai-note{margin:10px 0 0}
 .ob-btn{display:block; width:100%; text-align:center; border-radius:8px; padding:10px 14px; font-weight:600; font-size:14px; margin-top:18px}
 .ob-btn-pri{background:var(--blue-fill); color:var(--ob-on-fill)}
 .ob-btn-pri:hover{background:var(--blue-fill-deep)}

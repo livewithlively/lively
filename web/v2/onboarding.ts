@@ -4,24 +4,24 @@
 //   종전(#4213 T13)엔 끝이 «Claude 계정 연결 + 리브 대화» 하나라, 서버에 로그인된 AI 가 없거나 Claude 가 아닌 사람(커서만 쓰는 사람)은
 //   처음 설정을 끝내도 아무 일도 없었다. 또 «누가 먼저 왔나»(합류자 판정)로 차례표를 갈랐는데, 셀프호스트 기본 워크스페이스에선 그
 //   판정이 인원수 폴백이라 관리자 계정을 먼저 만든 회사의 대표가 합류자로 읽혔다. 이제:
-//   · 매니지드·셀프호스트, 첫 관리자·초대 합류자 모두 같은 세 장면이다.
+//   · 매니지드·셀프호스트, 첫 관리자·초대 합류자 모두 같은 장면들이다(PR2 당시 셋 → PR4 에서 AI 연결이 더해져 넷).
 //   · [연결할게요] — 서버에 로그인된 AI 가 있으면 보통 세션을 열고(첫 지시 = 연결 스킬 liv-connect), 그 세션 화면으로 간다.
 //     없으면 같은 장면에서 «쓰는 AI 에서 하기» 세 걸음(데스크톱 앱 → 로그인 → 그 AI 에 한 마디)을 보여 준다. 어느 쪽이든 처음 설정은 끝난다.
 //   · [나중에 할게요] — 끝낸다(홈). 나중엔 [외부 앱 연결] 화면 맨 위의 같은 버튼으로 시작한다.
 //  ★ AI 연결(상민님 2026-10-23 «AI 연결 유도를 앱 연결 전에 해야 · 클로드만이 아니라 지원하는 거 다 · UX 쉽게») — PR2 가 걷은 «AI 고르기·AI 연결»
 //   두 장면을 **한 장면**으로 되살렸다. 이 서버에서 띄울 수 있는 AI(서버 installed)만 줄로 보이고, [연결]을 누르면 그 줄 아래에서 로그인한다
-//   ([AI 계정 연결]과 같은 칸 — ai-login-panel.ts). 하나라도 연결되면 [다음]. PC 의 AI(커서·클로드 코드)를 쓰는 사람은 «PC에서 쓰는 AI로»
+//   ([AI 계정 연결]과 같은 칸 — ai-login-panel.ts · 줄은 onboarding-ai.ts). 하나라도 연결되면 [다음]. PC 의 AI(커서·클로드 코드)를 쓰는 사람은 «PC에서 쓰는 AI로»
 //   → 외부 앱 물음의 [연결할게요]가 서버 세션을 열지 않고 «쓰는 AI 에서 하기» 세 걸음을 그린다.
 //   · 서비스마다의 갈림(매니지드 중계 / 셀프호스트 앱 등록 / 관리 권한)은 세션 안의 연결 스킬이 한다 — 이 화면은 갈래를 모른다.
-//  종전 장면(팀 소개·무대·직무·파일·AI 고르기·AI 연결·앱 고르기·앱 연결·터미널·내 컴퓨터·앱 받기)과 챗 문답은 코드째 걷었다(git 기록에 있다).
+//  종전 장면(팀 소개·무대·직무·파일·AI 고르기·AI 연결·앱 고르기·앱 연결·터미널·내 컴퓨터·앱 받기)과 챗 문답은 PR2 에서 코드째 걷었다(git 기록에
+//   있다). PR4 의 AI 연결은 그 옛 두 장면을 되돌린 것이 아니라 [AI 계정 연결]의 칸 위에 새로 세운 한 장면이다.
 //  사이드바는 실제 것(side.ts)이 그린다 — 인사·이름에서는 숨겨 달라고(ctx.onBare), 연결 물음에서는 유령으로 세워 달라고(ctx.onGhost) 부탁한다.
 import { api, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 //  (#4970) 연결을 시작하는 문 한 벌 — [외부 앱 연결] 화면의 [연결 도와줘]와 같은 것을 쓴다(세션 열기 · «쓰는 AI 에서 하기» 세 걸음).
 import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';
-//  (#4970) AI 연결 장면 — 로그인 칸은 [AI 계정 연결]과 한 벌, 로고·이름·순서도 그 표와 같은 것을 쓴다.
-import { aiLoginPanel, confirmSharedLogin, type AiLoginPanel } from '../ai-login-panel.js';
-import { AI_BRAND, AI_LOGO, AI_ORDER } from '../lib/ai-logos.js';
+//  (#4970) AI 연결 장면의 줄·로그인 칸 — [AI 계정 연결]과 같은 칸 · 같은 로고·이름·순서(onboarding-ai.ts).
+import { mountAiList } from './onboarding-ai.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
@@ -278,10 +278,8 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   };
 
   /**
-   * AI 연결 장면을 잇는다 — 목록은 서버가 정한다(/api/ui/me/ai-accounts: 로그인 여부 + 설치 여부). 줄마다 로그인 칸 하나를 들고 있다가
-   *  다시 그릴 때 그 칸을 새 줄로 옮긴다(받은 주소·치던 코드를 지우지 않는다 — ai-login-panel 머리말).
-   *  ⚠ 제미나이(프로브 하네스)는 목록이 «모름» 으로 준다 — 확인은 4초쯤 걸리고 매니지드에선 자리를 띄우므로, **사람이 그 줄의 로그인을 연
-   *   뒤에만** 묻는다. 묻기 전의 모름은 연결 안 된 것처럼 [연결]로 보인다(누르면 그 자리 터미널이 이미 로그인된 화면을 보여 준다).
+   * AI 연결 장면을 잇는다 — 줄과 로그인 칸은 onboarding-ai.ts(mountAiList)가 그 자리에서 고친다. 여기는 [다음]·«PC에서 쓰는 AI로» 만 다룬다.
+   *  [다음]은 연결된 AI 가 하나라도 있을 때만 켠다. 띄울 AI 가 하나도 없으면 [다음]을 숨기고 PC 길을 주 버튼으로 세운다.
    */
   function bindAi(el: HTMLElement) {
     const list = $('#aiList', el)!;
@@ -289,70 +287,12 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     const pc = $<HTMLButtonElement>('#aiPc', el)!;
     next.onclick = () => { S.viaPc = false; goScene(nextScene('ai')!); };
     pc.onclick = () => { S.viaPc = true; goScene(nextScene('ai')!); };
-    const panels = new Map<string, AiLoginPanel>();
-    const asked = new Set<string>();
-    let rows: any[] = [];
-    let loading: Promise<void> | null = null;
-    const row = (a: any): HTMLElement => {
-      const on = a.loggedIn === true;
-      const wrap = document.createElement('div');
-      wrap.className = 'ob-ai-item';
-      wrap.innerHTML = `<div class="ob-opt-card ob-ai-card${on ? ' ob-on' : ''}" data-ai="${esc(a.key)}">
-          <span class="ob-oc-ic">${AI_LOGO[a.key] || ''}</span>
-          <span class="ob-ai-txt"><span class="ob-oc-t">${esc(AI_BRAND[a.key] || a.label)}</span><span class="ob-oc-d">${esc(a.label)}${a.scope === 'shared' ? ' · 이 서버 공용 계정' : ''}</span></span>
-          <span class="ob-ai-act">${on ? '<span class="ob-ai-ok">✓ 연결됨</span>' : '<button type="button" class="ob-btn ob-btn-pri ob-btn-inline ob-ai-go">연결</button>'}</span>
-        </div>`;
-      const go = wrap.querySelector<HTMLButtonElement>('.ob-ai-go');
-      const open = panels.get(a.key);
-      //  로그인 중인 칸은 새 줄로 옮긴다 — 끝났으면(연결됨) 붙이지 않는다(떨어진 칸은 폴링이 스스로 멈춘다).
-      if (open && !on) { wrap.append(open.panel); if (go) go.hidden = true; }
-      if (go) go.onclick = () => {
-        if (!confirmSharedLogin(a)) return;
-        let p = panels.get(a.key);
-        if (!p) { p = aiLoginPanel(a, () => { asked.add(a.key); return load(); }); panels.set(a.key, p); }
-        asked.add(a.key);
-        wrap.append(p.panel);
-        go.hidden = true;
-        p.run(true);   // 사람이 눌렀다 = 지금 새로(지난 시도의 코드는 이미 죽었다 — #2232)
-      };
-      return wrap;
-    };
-    const paint = () => {
-      if (!rows.length) {
-        list.innerHTML = `<p class="ob-q-help">${esc(OB_COPY.aiNone)}</p>`;
-        next.hidden = true;
-        pc.className = 'ob-btn ob-btn-pri';   // 남은 길이 이것뿐이다 — 조용한 링크로 두지 않는다
-        return;
-      }
-      list.replaceChildren(...rows.map(row));
-      next.hidden = false;
-      next.disabled = !rows.some((a) => a.loggedIn === true);
-    };
-    const load = (): Promise<void> => {
-      if (loading) return loading;
-      loading = (async () => {
-        let acc: any[] = [];
-        try { acc = ((await api('/api/ui/me/ai-accounts')) as any)?.accounts || []; }
-        catch (e: any) {
-          if (!destroyed && el.isConnected) list.innerHTML = `<p class="ob-q-help">AI 목록을 불러오지 못했어요. ${esc((e && e.message) || '')}</p>`;
-          return;
-        }
-        const byKey = new Map(acc.map((a) => [a.key, a]));
-        const got = AI_ORDER.map((k) => byKey.get(k)).filter((a) => a && a.installed !== false);
-        for (const a of got) {
-          if (a.loggedIn !== null || a.how !== 'probe' || !asked.has(a.key)) continue;
-          try {
-            const r: any = await api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: a.key }) });
-            a.loggedIn = r && typeof r.loggedIn === 'boolean' ? r.loggedIn : null;
-          } catch (_) { /* 모름 그대로 — 칸의 [상태 새로고침]이 다시 묻는다 */ }
-        }
-        if (destroyed || !el.isConnected) return;
-        rows = got;
-        paint();
-      })().finally(() => { loading = null; });
-      return loading;
-    };
-    void load();
+    mountAiList(list, {
+      esc, noneText: OB_COPY.aiNone,
+      alive: () => !destroyed && list.isConnected,
+      onRows: (anyConnected) => { next.hidden = false; next.disabled = !anyConnected; },
+      onEmpty: () => { next.hidden = true; pc.className = 'ob-btn ob-btn-pri'; },   // 남은 길이 이것뿐이다 — 조용한 링크로 두지 않는다
+    });
   }
 
   /** 장면 안에 한 줄 말한다(그 장면의 본문 자리를 갈아끼운다). */
