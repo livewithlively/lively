@@ -23,6 +23,9 @@ import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
 import { LIV_PROMPT_MAX, currentLivSessionId, ensureLivSession, type EnsuredLivSession } from "../../org/liv/session.js";
+import { currentTenant } from "../../org/tenant-context.js";
+
+const currentTenantId = (): string => currentTenant()?.id ?? "";
 
 /** (순수) 첫 말 검사 — 비었으면 400, 상한을 넘으면 몇 자 넘었는지 말하는 400. 통과하면 다듬은 글. */
 export function livFirstWords(raw: unknown): string {
@@ -61,7 +64,10 @@ export const livSessionHref = (id: string): string => `#/s/${encodeURIComponent(
 export type LivOpenResult =
   | { ai: false; reason: "ai-not-connected" }
   | { ai: true; session_id: string; href: string; created: true; harness?: string; session?: unknown; initialPrompt: string }
-  | { ai: true; session_id: string; href: string; created: false; delivered: boolean; text: string };
+  | { ai: true; session_id: string; href: string; created: false; delivered: boolean; text: string; repeated?: true };
+
+/** 같은 말을 같은 리브 세션에 이 사이 안에 두 번 넣지 않는다 — 단추를 두 번 누르거나 «다시 시도» 가 성공한 첫 시도와 겹치는 자리(격리 리뷰). */
+export const LIV_REPEAT_MS = 60_000;
 
 /** 의존(시험 seam) — 실제 구현은 아래 realDeps. */
 export interface LivOpenDeps {
@@ -71,8 +77,10 @@ export interface LivOpenDeps {
   usable: (userId: string) => Promise<string[]>;
   /** 세션으로 띄울 수 있는 하네스. */
   launchable: () => Promise<readonly string[]>;
-  /** 떠 있는 세션에 말을 넣는다(사람이 보낸 것과 같은 통로). 못 넣으면 던진다. */
+  /** 떠 있는 세션에 말을 넣는다(사람이 보낸 것과 같은 통로). 못 넣으면(멈춘 세션 포함) 던진다. */
   deliver: (sessionId: string, userId: string, text: string) => Promise<unknown>;
+  /** 이 말을 이 세션에 방금(LIV_REPEAT_MS 안에) 넣었나 — 넣은 것만 센다(못 넣은 시도는 다시 넣을 수 있어야 한다). 없으면 거르지 않는다. */
+  recent?: { seen: (key: string) => boolean; mark: (key: string) => void };
 }
 
 /** 리브에게 일 맡기기 — 판정 순서: 말 검사 → (리브 세션 있음 → 넣기) / (없음 → 로그인 확인 → 그 말로 열기 · 없으면 ai:false). */
@@ -95,9 +103,23 @@ export async function openLiv(user: LivelyUser, input: { job?: unknown; text?: u
   if (!r) return { ai: false, reason: "ai-not-connected" };
   const href = livSessionHref(r.session_id);
   if (r.created) return { ai: true, session_id: r.session_id, href, created: true, harness: r.harness, session: r.session, initialPrompt: text };
+  const key = `${userId}|${r.session_id}|${text}`;
+  if (d.recent?.seen(key)) return { ai: true, session_id: r.session_id, href, created: false, delivered: true, text, repeated: true };
   const delivered = await d.deliver(r.session_id, userId, text).then(() => true, () => false);
+  if (delivered) d.recent?.mark(key);
   return { ai: true, session_id: r.session_id, href, created: false, delivered, text };
 }
+
+/** (순수) 넣은 말 기억 — 열쇠마다 넣은 시각. 오래된 것은 볼 때 걷는다(사람 수 × 말 수만큼 쌓이지 않게). */
+export function livRecentMemo(now: () => number = Date.now, ttl: number = LIV_REPEAT_MS): { seen: (key: string) => boolean; mark: (key: string) => void } {
+  const at = new Map<string, number>();
+  const sweep = (t: number): void => { for (const [k, v] of at) if (t - v >= ttl) at.delete(k); };
+  return {
+    seen: (key) => { const t = now(); sweep(t); return at.has(key); },
+    mark: (key) => { const t = now(); sweep(t); at.set(key, t); },
+  };
+}
+const recentDeliveries = livRecentMemo();
 
 const realDeps: LivOpenDeps = {
   ensure: (user, text, harness) => ensureLivSession(user, text, { harness }),
@@ -110,8 +132,18 @@ const realDeps: LivOpenDeps = {
     return HARNESSES.map((h) => h.key).filter((k) => k !== "shell");
   },
   deliver: async (sessionId, userId, text) => {
+    //  멈춘(회수된) 리브 세션이면 넣지 않는다 — 아웃박스는 «복원 가능» 이면 말을 들고만 있어, 사람이 대화창에서 다시 열 때까지 아무것도
+    //   돌지 않는다(격리 리뷰). 못 넣었다고 알리면(delivered:false) 화면이 그 말을 입력칸에 돌려 두고, 보내는 순간 대화창이 되살리며 넣는다.
+    //   생사를 모르면(null — 못 닿음) 종전대로 넣는다(아웃박스가 상한까지 들고 있는다).
+    const { sessionGoneVerdict } = await import("../../terminal/tmux-exec.js");
+    if ((await sessionGoneVerdict(sessionId)) === true) throw new Error("리브 세션이 멈춰 있습니다");
     const { deliverPromptForMember } = await import("../../terminal/deliver-prompt.js");
     return deliverPromptForMember(sessionId, userId, text);
+  },
+  recent: {
+    //  워크스페이스마다 따로 센다 — 게이트웨이 한 프로세스가 여러 워크스페이스를 받는다(같은 사람 id 가 두 워크스페이스에 있을 수 있다).
+    seen: (key) => recentDeliveries.seen(`${currentTenantId()}|${key}`),
+    mark: (key) => recentDeliveries.mark(`${currentTenantId()}|${key}`),
   },
 };
 

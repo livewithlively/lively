@@ -48,6 +48,7 @@ import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, isHiddenBrief, trailMsg, trail
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
 import { mountLivAskDock } from './liv-ask-dock.js';   // #4970 리브 세션의 물음 자리(입력칸 바로 위)
+import { openLiv } from './v2/liv-open.js';   // #4970 리브 세션에 서버로 넣기(입력칸에 쓰던 글이 있을 때)
 import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';   // #2439 ③ 작업 표면(백그라운드 셸·서브에이전트)
 import { onSessionEvents } from './session-events.js';   // #3699 대화 파일 통보(되묻기 → 밀어주기)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
@@ -1307,23 +1308,26 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.input.dispatchEvent(new Event('input'));
     try { view.input.focus(); view.input.setSelectionRange(view.input.value.length, view.input.value.length); } catch { /* 가려진 입력칸 */ }
     return true;
-  }, (text) => {
-    //  #4970 — **보내기까지**(오른쪽 «리브» 칸의 [제가 해 드릴게요] · 리브 물음 카드의 «저장했어요» 한 마디). 대화창일 때만 보낸다 —
-    //   터미널 쪽이면 false 를 돌려 부르는 쪽이 서버로 넣는 길을 탄다(터미널에 Enter 까지 쳐 넣으면 사람이 고칠 틈이 없다).
-    if (destroyed || mode !== 'chat' || view.input.disabled) return false;
+  }, (text) => sendHere(text));
+  /**
+   * #4970 — 이 대화창으로 **보내기까지**(오른쪽 «리브» 칸의 [제가 해 드릴게요] · 리브 물음 카드의 «저장했어요» 한 마디). 보냈으면 true.
+   *  · 대화창일 때만 — 터미널 쪽이면 false(부르는 쪽이 서버로 넣는 길을 탄다 · 터미널에 Enter 까지 쳐 넣으면 사람이 고칠 틈이 없다).
+   *  · 사람이 쓰던 글이 있으면 덮지 않는다 — false(격리 리뷰: 덮으면 쓰던 글이 사라진다). 파일을 올리는 중이어도 false(보내기가 그 자리에서 멈춘다).
+   */
+  function sendHere(text: string): boolean {
+    if (destroyed || mode !== 'chat' || view.input.disabled || view.input.value.trim() || attachments.busy()) return false;
     view.input.value = text;
     view.input.dispatchEvent(new Event('input'));
     view.form.requestSubmit();
     return true;
-  });
+  }
   //  #4970 — 리브 세션이면 리브가 던진 물음(자격·객관식·올리기)을 입력칸 바로 위에 띄운다(web/liv-ask-dock.ts 머리말).
-  //   카드가 리브에게 건네는 한 마디(«저장했어요» 등)는 이 대화창으로 보낸다 — 사람이 보낸 말과 같은 길이다.
+  //   카드가 리브에게 건네는 한 마디(«저장했어요» 등)는 이 대화창으로 보낸다(사람이 보낸 말과 같은 길). 보낼 수 없으면(쓰던 글이 있다 ·
+  //   터미널 쪽) 서버가 이 리브 세션에 넣는다 — 입력칸을 건드리지 않는다.
   const livDock = opts.livAsks ? mountLivAskDock(liveDock, {
     say: (text) => {
-      if (destroyed) return;
-      view.input.value = text;
-      view.input.dispatchEvent(new Event('input'));
-      if (!view.input.disabled) view.form.requestSubmit();
+      if (destroyed || sendHere(text)) return;
+      void openLiv({ text }).catch(() => { /* 비치명 — 사람이 대화에서 이어 말하면 된다 */ });
     },
     isVisible: () => !destroyed && (opts.isVisible ? opts.isVisible() : true),
   }) : null;

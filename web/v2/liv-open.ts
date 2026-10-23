@@ -10,7 +10,8 @@ import { api } from '../core.js';
 import { rememberCreated } from './created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft } from './quick-session.js';
 
-export type LivOpen = { ai: true; href: string; sessionId: string; created: boolean } | { ai: false };
+/** delivered — 그 말이 리브 세션에 들어갔나(새로 열었으면 첫 지시라 참). 거짓이면 그 말은 그 세션 입력칸에 돌아갈 글로 남겨 두었다. */
+export type LivOpen = { ai: true; href: string; sessionId: string; created: boolean; delivered: boolean } | { ai: false };
 
 /** 리브에게 일을 맡긴다. 실패는 던진다 — 부르는 쪽이 사람에게 이유를 말한다. */
 export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string }): Promise<LivOpen> {
@@ -26,7 +27,7 @@ export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string }):
       rememberUnsentDraft(id, String(r.text));
     }
   } catch (_) { /* 비치명 — 화면은 목록이 오면 그린다 */ }
-  return { ai: true, href: String(r.href || `#/s/${encodeURIComponent(id)}`), sessionId: id, created: !!r.created };
+  return { ai: true, href: String(r.href || `#/s/${encodeURIComponent(id)}`), sessionId: id, created: !!r.created, delivered: !!r.created || r.delivered !== false };
 }
 
 // ── 리브 세션 id ──────────────────────────────────────────────────────────────
@@ -40,12 +41,23 @@ export function rememberLivSessionId(id: string | null): void { cached = { id: i
 export function knownLivSessionId(): string | null { return cached ? cached.id : null; }
 /** 리브 세션 id — o.fresh 면 기억을 건너뛰고 서버에 묻는다. 못 물으면 기억한 값(없으면 null). */
 export async function livSessionId(o: { fresh?: boolean } = {}): Promise<string | null> {
+  //  묻는 중이면 그 답을 기다린다 — 되살리기 뒤 새로 묻는 중(resumedInTab)에 셸이 기억한 옛 id 로 그리지 않게.
+  if (inflight) return inflight;
   if (!o.fresh && cached && Date.now() - cached.at < TTL_MS) return cached.id;
-  if (!inflight) {
-    inflight = api('/api/ui/me/liv/session')
-      .then((r: any) => { const id = r && r.session_id ? String(r.session_id) : null; rememberLivSessionId(id); return id; })
-      .catch(() => (cached ? cached.id : null))
-      .finally(() => { inflight = null; });
-  }
+  inflight = api('/api/ui/me/liv/session')
+    .then((r: any) => { const id = r && r.session_id ? String(r.session_id) : null; rememberLivSessionId(id); return id; })
+    .catch(() => (cached ? cached.id : null))
+    .finally(() => { inflight = null; });
   return inflight;
+}
+
+/**
+ * 리브 세션 id 를 **잠깐만** 기다린다 — 세션 화면을 그리기 전에 «이 세션이 리브 세션인가» 를 알아야 하지만(대화 보기 · 곁칸 «리브»),
+ *  그 물음이 느리면 화면 전체가 빈 채로 선다(#3537 이 걷어낸 흰 화면과 같은 꼴 — 격리 리뷰). ms 가 지나면 기억한 값으로 간다.
+ */
+export async function livSessionIdWithin(ms: number): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const late = new Promise<string | null>((res) => { timer = setTimeout(() => res(knownLivSessionId()), ms); });
+  try { return await Promise.race([livSessionId(), late]); }
+  finally { if (timer) clearTimeout(timer); }
 }

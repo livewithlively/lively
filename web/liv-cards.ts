@@ -121,23 +121,6 @@ export function livLetterBox(st: LivStatus, hooks: LivHooks, host: HTMLElement):
   return st.findings.length ? livLetter(st, hooks, host) : hooks.working?.() ? livWorking(hooks) : livQuiet(hooks);
 }
 
-/** 리브 화면(단독)의 갱신 한 번 — 물음 자리와 편지 자리를 함께 그린다. 사람이 물음 칸에 치는 중이면 손대지 않는다. */
-export async function fillLivCards(host: HTMLElement, askHost: HTMLElement, hooks: LivHooks): Promise<LivStatus | null> {
-  if (livAskTyping(askHost)) return null;
-  let st: LivStatus;
-  try { st = await livStatus(); }
-  catch {
-    host.replaceChildren(el('div', { class: 'liv-letter-quiet' },
-      el('p', { class: 'liv-quiet-say', text: '지금 상태를 읽지 못했습니다.' }),
-      el('p', { class: 'liv-quiet-sub', text: '잠시 뒤 다시 확인합니다.' })));
-    return null;
-  }
-  const ask = livAskCard(st.secretAsk, hooks);
-  askHost.replaceChildren(...(ask ? [ask] : []));
-  host.replaceChildren(livLetterBox(st, hooks, host));
-  return st;
-}
-
 /** 리브가 일하는 동안의 편지(#1631) — 지금 일하고 있다는 것 한 줄, 끝나면 대화에서 이어진다는 것 한 줄. */
 function livWorking(hooks: LivHooks): HTMLElement {
   return el('div', { class: 'liv-letter-quiet liv-letter-working' },

@@ -304,8 +304,9 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
 /** (#4970) 계정 연결 길이 있어도 개인 토큰 칸을 늘 보이는 앱 — 위 «개인 토큰으로 연결» 주석. */
 const PAT_ALWAYS = new Set(['gitlab', 'github']);
 
-/** (#4970) [연결 도와줘] — 연결 스킬을 부르는 대화를 연다(로그인된 AI 가 있을 때). 없으면 «쓰는 AI 에서 하기» 를 그 자리에 펼친다.
- *  다시 눌러도 같은 대화로 간다(서버가 좌표를 기억한다). 실패는 서버 말 그대로 보여 준다. */
+/** (#4970) [연결 도와줘] — 리브에게 외부 앱 연결을 맡긴다(리브 세션이 없으면 연결 말로 열고, 있으면 그 세션에 넣는다 — me_liv_open).
+ *  로그인된 AI 도 리브 세션도 없으면 «쓰는 AI 에서 하기» 를 그 자리에 펼친다. 다시 눌러도 같은 리브 세션으로 간다 — 같은 말은 1분 안에
+ *  두 번 넣지 않는다(서버 LIV_REPEAT_MS). 실패는 서버 말 그대로 보여 준다. */
 function connectStarter(): HTMLElement {
   const out = el('div', { class: 'cn-start-out' });
   const btn = el('button', { class: 'btn btn-primary', type: 'button', text: '연결 도와줘' }) as HTMLButtonElement;

@@ -28,8 +28,9 @@ import { LIV_SUBPATH } from "./folder.js";
 //  리브 폴더 이름은 잎 모듈(folder.ts)에 있다 — 세션 생성의 신뢰 판정도 같은 값을 본다.
 export { LIV_SUBPATH };
 /**
- * 리브 탭에서 첫 말로 연 세션의 이름. 화면(web/session-chat.ts)이 이 글자로 리브 세션을 알아보고 대화창으로 연다
- *  (liv-session.test 가 두 글자를 맞춘다). 킥오프 세션 이름은 kickoff.ts LIV_SESSION_LABEL 이다.
+ * 리브 세션의 이름(사람이 사이드바에서 보는 이름). (#4970) 화면은 이 글자로 리브 세션을 알아보지 않는다 — 셸이 리브 좌표
+ *  (liv_profile.liv_session)로 알아본다. 서버의 리브 답 알림(answer-notify)이 좌표를 못 읽을 때의 보조 단서로만 쓴다.
+ *  킥오프 세션 이름은 kickoff.ts LIV_SESSION_LABEL 이다.
  */
 export const LIV_CHAT_LABEL = "리브 — 대화";
 /** 첫 말 상한 — 사람이 채팅창에 치는 양이다(자료 본문은 올리기로 간다). */

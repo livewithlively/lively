@@ -14,6 +14,7 @@ import { api, el, toast } from './core.js';
 import { bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
 import { fillConnectApps, livAskCard, livAskTyping, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
 import { openLiv } from './v2/liv-open.js';
+import { rememberUnsentDraft } from './v2/quick-session.js';
 import { ownAiStepsHtml, wireOwnAiSteps } from './v2/connect-own-ai.js';
 
 export type { LivFinding, LivMode, LivSecretAsk, LivStatus } from './liv-cards.js';
@@ -93,15 +94,29 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   // #3784 빈 자리 우클릭 — 다시 확인
   bindCtxSurface(wrapEl, () => [{ label: '다시 확인하기', icon: 'refresh', run: () => pokeLivStatus() }]);
 
-  /** 카드가 리브에게 건네는 한 마디 — 리브 세션이 있으면 그 세션에 넣는다. 없으면(로컬 AI 를 쓰는 사람) 그 AI 에 전할 말을 알려 준다. */
+  /**
+   * 카드가 리브에게 건네는 한 마디 — 리브 세션이 있으면 그 세션에 넣는다. 없으면(로컬 AI 를 쓰는 사람) 그 AI 에 전할 말을 알려 준다.
+   *  ⚠ 세션이 없을 때 이 말로 리브 세션을 **새로 열지 않는다** — «자격 저장했어요» 같은 맞장구가 첫 지시가 되면 리브가 엉뚱한 일을 시작한다.
+   *  못 넣었으면(멈춘 세션 — delivered:false) 그 세션 화면으로 간다 — 입력칸에 그 말이 돌아와 있고, 보내면 되살리며 넣는다.
+   */
   const say = async (text: string): Promise<void> => {
     if (!sessionId) { livToast(`쓰시는 AI 에 «${text}» 라고 전해 주세요.`); return; }
     try {
       const r = await openLiv({ text });
-      if (r.ai) { sessionId = r.sessionId; livToast('리브 대화에 전했어요.'); }
+      if (!r.ai) return;
+      sessionId = r.sessionId;
+      if (r.delivered) { livToast('리브 대화에 전했어요.'); return; }
+      livToast('리브 세션이 멈춰 있어요 — 대화 입력칸에 담아 뒀으니 보내 주세요.');
+      location.hash = r.href;
     } catch (e) { toast('리브에게 전하지 못했어요 — ' + ((e as Error)?.message ?? e), true); }
   };
-  const hooks: LivHooks = { say: (t) => { void say(t); }, refresh: () => pokeLivStatus(), workingSub: '끝나면 리브 대화에서 이어서 말씀드릴게요.' };
+  /** 담기만(보내지 않는다) — 리브 세션 입력칸에 돌려 두고 그 대화로 간다. 세션이 없으면 쓰는 AI 에 전할 말로 알려 준다. */
+  const fill = (text: string): void => {
+    if (!sessionId) { livToast(`쓰시는 AI 에 «${text}» 라고 말해 보세요.`); return; }
+    rememberUnsentDraft(sessionId, text);
+    location.hash = '#/s/' + encodeURIComponent(sessionId);
+  };
+  const hooks: LivHooks = { say: (t) => { void say(t); }, fill, refresh: () => pokeLivStatus(), workingSub: '끝나면 리브 대화에서 이어서 말씀드릴게요.' };
 
   watchLivStatus((st) => {
     if (!wrapEl.isConnected || !st) return;

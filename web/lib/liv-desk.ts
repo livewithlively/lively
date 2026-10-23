@@ -5,6 +5,24 @@
 //   · 리브 화면(#/liv) — 리브 세션이 없는 사람(로그인한 AI 가 없거나 커서 같은 로컬 AI 를 쓰는 사람)과 그 링크를 받은 사람의 단독 화면.
 //  어느 쪽으로 가는지 · 어떤 세션이 리브 세션인지 · 외부 앱 상태를 무슨 말로 쓰는지를 여기 한 곳에서 정한다.
 
+/**
+ * 이 주소가 리브 주소(#/liv)인가 — 첫 경로 조각(물음표 앞)이 `liv` 이다.
+ *  ⚠ 셸의 routeKey 로 가르지 마라 — 리브 주소는 따로 접는 화면이 아니라 `raw:liv`(물음표까지 붙은 `raw:liv?board=1`)로 접힌다.
+ *   `routeKey(hash) === 'liv'` 로 갈랐다가 한 번도 참이 안 돼, 레일 [리브]를 누를 때마다 같은 리브 세션 탭이 하나씩 더 섰다(격리 리뷰).
+ */
+export function isLivRoute(hash: string | null | undefined): boolean {
+  const h = String(hash ?? '').replace(/^#\/?/, '');
+  const q = h.indexOf('?');
+  return ((q >= 0 ? h.slice(0, q) : h).split('/').filter(Boolean)[0] || '') === 'liv';
+}
+
+/** 리브 화면을 늘 띄우라는 주소(`?board=1`)인가 — 로컬 AI 가 주는 링크. */
+export function isLivBoard(hash: string | null | undefined): boolean {
+  const h = String(hash ?? '');
+  const q = h.indexOf('?');
+  return q >= 0 && new URLSearchParams(h.slice(q + 1)).get('board') === '1';
+}
+
 /** `#/liv` 가 갈 곳 — board=1 이면 늘 리브 화면, 아니면 리브 세션이 있으면 그 세션, 없으면 리브 화면. */
 export function livRoute(o: { board: boolean; sessionId: string | null | undefined }): 'board' | 'session' {
   if (o.board) return 'board';

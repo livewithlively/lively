@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { HttpError } from "../../http-error.js";
-import { LIV_JOBS, livInstruction, livSessionHref, openLiv, pickLivHarness, type LivOpenDeps } from "./liv-chat.js";
+import { LIV_JOBS, LIV_REPEAT_MS, livInstruction, livRecentMemo, livSessionHref, openLiv, pickLivHarness, type LivOpenDeps } from "./liv-chat.js";
 import { WORKSPACE_SCOPED_KEYS } from "../../org/store/members.js";
 
 let pass = 0, fail = 0;
@@ -160,6 +160,47 @@ await t("E17 (새로 도입한 칸) text 가 null 이면 글 없음과 같다 �
   assert.equal(livInstruction({ text: "  하이  ", job: "connect" }), "하이", "글이 있으면 일보다 글이 먼저");
 });
 
+// ── 같은 말을 두 번 넣지 않는다(격리 리뷰 — 단추 두 번 · «다시 시도» 가 성공한 첫 시도와 겹침) ──
+await t("E18 같은 말 · 같은 세션 · 1분 안에 두 번 → 넣기 1회 · 둘째는 delivered:true · repeated", async () => {
+  const { deps, log } = fake({ current: "box-u1-old" });
+  deps.recent = livRecentMemo(() => 1_000);
+  const a = await openLiv(user, { job: "connect" }, deps);
+  const b = await openLiv(user, { job: "connect" }, deps);
+  assert.equal(log.deliver.length, 1, "★ 같은 말을 같은 세션에 두 번 넣었다(리브가 같은 일을 두 번 시작한다)");
+  assert.equal(a.ai && !a.created ? a.delivered : null, true);
+  assert.deepEqual(b.ai && !b.created ? { d: b.delivered, r: b.repeated } : null, { d: true, r: true });
+});
+
+await t("E19 첫 넣기가 실패했으면 같은 말을 다시 넣는다(실패는 세지 않는다)", async () => {
+  const f1 = fake({ current: "box-u1-old", deliverFails: true });
+  const memo = livRecentMemo(() => 1_000);
+  f1.deps.recent = memo;
+  const a = await openLiv(user, { text: "연결해 줘" }, f1.deps);
+  assert.equal(a.ai && !a.created ? a.delivered : null, false);
+  const f2 = fake({ current: "box-u1-old" });
+  f2.deps.recent = memo;
+  await openLiv(user, { text: "연결해 줘" }, f2.deps);
+  assert.equal(f2.log.deliver.length, 1, "★ 못 넣은 말을 «넣었다» 로 세어 다시 시도를 막았다");
+});
+
+await t("E20 다른 말은 둘 다 넣는다", async () => {
+  const { deps, log } = fake({ current: "box-u1-old" });
+  deps.recent = livRecentMemo(() => 1_000);
+  await openLiv(user, { job: "connect" }, deps);
+  await openLiv(user, { job: "liv" }, deps);
+  assert.equal(log.deliver.length, 2);
+});
+
+await t("E21 기억 경계 — ttl-1 ms 는 본 것 · ttl ms 면 잊었다", () => {
+  let now = 0;
+  const m = livRecentMemo(() => now, LIV_REPEAT_MS);
+  m.mark("k");
+  now = LIV_REPEAT_MS - 1;
+  assert.equal(m.seen("k"), true, "ttl 안인데 잊었다");
+  now = LIV_REPEAT_MS;
+  assert.equal(m.seen("k"), false, "ttl 이 지났는데 기억한다(1분 뒤 다시 누른 사람의 일이 사라진다)");
+});
+
 // ── 배선 — 실제 문이 이 판정과 리브 세션 모듈을 탄다 · 따로 열던 연결 세션 좌표는 없다 ──
 const code = (s: string): string => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
 const src = (rel: string): string => code(readFileSync(new URL(rel, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
@@ -175,6 +216,14 @@ await t("W-S1 실제 문 = openLiv(realDeps) · 넣기는 사람이 보낸 것�
   //  고른 하네스는 헤드리스(위탁) 지원표로 다시 거르지 않는다 — 그 표에 없는 opencode 로만 로그인한 사람에게 리브가 안 열리던 자리(503).
   assert.match(SESSION, /const harness = String\(o\.harness \?\? ""\)\.trim\(\) \|\| await resolveHeadlessHarness\(userId, null\);/,
     "★ 고른 하네스가 위탁 지원표(resolveHeadlessHarness explicit)로 걸러진다 — opencode 만 이은 사람에게 리브가 안 열린다");
+});
+
+await t("W-S3 멈춘 리브 세션엔 넣지 않는다(delivered:false → 입력칸에 돌려 둔다) · 넣은 말 기억은 워크스페이스마다", () => {
+  const CAP = src("./liv-chat.ts");
+  const deliver = CAP.slice(CAP.indexOf("deliver: async (sessionId, userId, text) =>"), CAP.indexOf("recent: {"));
+  assert.match(deliver, /if \(\(await sessionGoneVerdict\(sessionId\)\) === true\) throw new Error/, "★ 멈춘 세션에 말을 넣어 아웃박스에만 쌓인다(사람이 다시 열 때까지 아무것도 안 돈다)");
+  assert.ok(deliver.indexOf("sessionGoneVerdict") < deliver.indexOf("deliverPromptForMember"), "멈춤 확인이 넣기보다 먼저다");
+  assert.match(CAP, /seen: \(key\) => recentDeliveries\.seen\(`\$\{currentTenantId\(\)\}\|\$\{key\}`\),/, "넣은 말 기억이 워크스페이스를 가르지 않는다");
 });
 
 await t("W-S2 PR2 의 따로 열던 연결 세션(좌표 connect_session · 문 me_connect_session_open)이 없다 — 연결도 리브 세션으로", () => {

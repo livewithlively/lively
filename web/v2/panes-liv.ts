@@ -11,6 +11,7 @@ import { el, toast } from '../core.js';
 import { fillConnectApps, livLetterBox, pokeLivStatus, watchLivStatus, type LivHooks } from '../liv-cards.js';
 import { putIntoSession, sendIntoSession } from './sess-input.js';
 import { knownLivSessionId, openLiv } from './liv-open.js';
+import { rememberUnsentDraft, takeUnsentDraft } from './quick-session.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
 const CONNECT_EVERY_MS = 30_000;   // 연결 상태는 천천히 바뀐다 — 셸 틱(8초)마다 묻지 않는다
@@ -40,20 +41,35 @@ export function livDeskPart(ctx: PartCtx): Part {
   /** 지금의 리브 세션 — 셸이 아는 좌표가 먼저, 모르면 지금 보는 세션(이 칸은 리브 세션에만 선다). */
   const livId = (): string | null => knownLivSessionId() || ctx.curSession();
 
-  /** 리브에게 한 마디 — 리브 세션 대화창이 떠 있으면 거기로 보내고(사람이 보낸 말과 같은 길), 아니면 서버가 그 세션에 넣는다. */
+  /**
+   * 리브에게 한 마디 — 리브 세션 대화창이 떠 있고 입력칸이 비어 있으면 거기로 보낸다(사람이 보낸 말과 같은 길). 아니면 서버가 그 세션에 넣는다.
+   *  서버가 못 넣었으면(멈춘 세션 — delivered:false) 그 말을 **지금 보이는** 입력칸에 담아 두고 알린다 — 보내면 대화창이 세션을 되살리며 넣는다.
+   */
   async function say(text: string): Promise<void> {
     const id = livId();
     if (id && sendIntoSession([id], text)) return;
     try {
       const r = await openLiv({ text });
       if (!r.ai) { toast('로그인된 AI 가 없어 리브에게 전하지 못했어요 — [AI 계정 연결]에서 로그인해 주세요.', true); return; }
+      if (!r.delivered) {
+        //  openLiv 가 다음 화면용으로 남긴 글을 걷고(안 걷으면 다음에 이 세션을 열 때 같은 글이 또 돌아온다) 지금 입력칸에 담는다.
+        if (putIntoSession([r.sessionId], takeUnsentDraft(r.sessionId) || text)) toast('리브 세션이 멈춰 있어 입력칸에 담아 뒀어요 — 보내면 이어집니다.');
+        else if (location.hash !== r.href) location.hash = r.href;   // 그 세션 화면이 안 떠 있다 — 열면 입력칸에 돌아와 있다
+        return;
+      }
       if (location.hash !== r.href) location.hash = r.href;
     } catch (e) { toast('리브에게 전하지 못했어요 — ' + ((e as Error)?.message ?? e), true); }
   }
   const hooks: LivHooks = {
     say: (t) => { void say(t); },
-    //  담기만 — 리브 세션 입력칸에 넣는다(보내지 않는다). 대화창이 없으면 리브에게 건넨다.
-    fill: (t) => { const id = livId(); if (!(id && putIntoSession([id], t))) void say(t); },
+    //  **담기만** — 리브 세션 입력칸에 넣는다(보내지 않는다 — 사람이 고쳐서 보낸다). 그 화면이 안 떠 있으면 그 세션을 열어 입력칸에 돌려 둔다.
+    fill: (t) => {
+      const id = livId();
+      if (!id) return;
+      if (putIntoSession([id], t)) return;
+      rememberUnsentDraft(id, t);
+      location.hash = '#/s/' + encodeURIComponent(id);
+    },
     refresh: () => pokeLivStatus(),
     working: () => {
       const id = livId();

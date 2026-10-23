@@ -36,6 +36,12 @@ eq(L.livRoute({ board: false, sessionId: "box-a" }), "session", "W1 세션이 �
 for (const none of [null, undefined, "", "   "]) eq(L.livRoute({ board: false, sessionId: none }), "board", `W1 세션 없음(${J(none)}) → 리브 화면`);
 eq(L.LIV_BOARD_HASH, "#/liv?board=1", "W1 로컬 AI 에게 줄 주소");
 
+// ── W8 리브 주소 판정(격리 리뷰 — 셸의 routeKey 는 리브 주소를 'raw:liv' 로 접는다: 그 값과 비교한 갈래는 한 번도 안 돌았다) ──
+for (const h of ["#/liv", "#/liv?board=1", "#liv", "#/liv/", "#/liv?x=1"]) check(L.isLivRoute(h) === true, `W8 리브 주소(${h})`);
+for (const h of ["#/s/x", "#/livx", "#/", "", null, undefined, "#/p/0", "#/s/liv"]) check(L.isLivRoute(h) === false, `W8 리브 주소 아님(${J(h)})`);
+check(L.isLivBoard("#/liv?board=1") === true, "W8 board=1 이면 리브 화면");
+for (const h of ["#/liv", "#/liv?board=0", "#/liv?x=1", "", null]) check(L.isLivBoard(h) === false, `W8 board 아님(${J(h)})`);
+
 // ── W2 리브 세션인가 ──
 check(L.isLivSessionId(["box-a", "uuid-1"], "box-a") === true, "W2 id 가 같으면 참");
 check(L.isLivSessionId([null, "uuid-1", undefined], "uuid-1") === true, "W2 대화 id 로도 알아본다(복원·기록 행)");
@@ -87,20 +93,36 @@ check(/const r = await openLiv\(\{ job: 'connect' \}\);/.test(OWN), "W4 ★ 연�
 check(/if \(r\.created\) \{\s*rememberCreated\(r\.session\);\s*if \(r\.initialPrompt\) rememberFirstPrompt\(id, String\(r\.initialPrompt\)\);/.test(OPEN), "W4 새로 열었으면 첫 지시를 먼저 그린다");
 check(/\} else if \(r\.delivered === false && r\.text\) \{\s*rememberUnsentDraft\(id, String\(r\.text\)\);/.test(OPEN), "W4 ★ 못 넣은 말을 입력칸에 안 돌려 둔다(누른 일이 사라진다)");
 check(/rememberLivSessionId\(id\);/.test(OPEN), "W4 맡긴 세션을 리브 세션으로 기억한다(곧바로 그 화면을 리브 세션으로 그린다)");
+check(/delivered: !!r\.created \|\| r\.delivered !== false/.test(OPEN), "W9 ★ 못 넣은 것을 부르는 쪽이 모른다(«전했어요» 라고 거짓말한다)");
 
 check(/export const LIV_ENTRY_VISIBLE: boolean = true;/.test(SW), "W5 리브 입구 켜짐");
 
 //  W1 배선 — 레일 [리브](#/liv)는 거쳐 가는 문이다: 탭을 고르기 **전에** 리브 세션 주소로 갈아 끼워, 이미 열린 그 세션 탭이 켜진다.
 const MAIN = code(read("web/v2/main.ts"));
-check(/if \(routeKey\(hash\) === 'liv' && parseRoute\(hash\)\.params\.get\('board'\) !== '1'\) \{\s*const lid = await livSessionId\(\);/.test(MAIN),
+//   ⚠ 판정은 위 W8 의 isLivRoute(실제로 돌려 본 함수)로만 — routeKey 와 비교하면 늘 거짓이라 이 갈래가 죽는다(격리 리뷰가 잡은 자리).
+check(/if \(isLivRoute\(hash\) && !isLivBoard\(hash\)\) \{\s*const lid = await livSessionIdWithin\(1500\);/.test(MAIN),
   "W1 ★ #/liv 가 탭을 고르기 전에 리브 세션 주소로 안 바뀐다(레일 [리브]를 다시 누르면 같은 세션이 탭 둘로 선다)");
-check(MAIN.indexOf("if (routeKey(hash) === 'liv'") > 0 && MAIN.indexOf("if (routeKey(hash) === 'liv'") < MAIN.indexOf("const other = tabsApi.find(hash);"),
+check(!/routeKey\(hash\) === 'liv'|routeKey\(tab\.route\) === 'liv'/.test(MAIN), "W1 ★ routeKey 를 'liv' 와 비교한다 — 늘 거짓인 판정(리브 주소는 raw:liv)");
+check(MAIN.indexOf("if (isLivRoute(hash)") > 0 && MAIN.indexOf("if (isLivRoute(hash)") < MAIN.indexOf("const other = tabsApi.find(hash);"),
   "W1 갈아 끼우기가 탭 찾기(tabsApi.find)보다 먼저다");
+//  W9 — 그 세션 탭이 이미 있으면 그 탭을 켜고 이 탭은 닫는다(저장된 옛 #/liv 탭 복원 · 새 탭으로 연 경우).
+check(/const other = tabsApi\?\.find\(to\);\s*if \(other && other !== tab\) \{ tabsApi\?\.activate\(other\); tabsApi\?\.close\(tab\); return; \}/.test(MAIN),
+  "W9 ★ 리브 갈래가 이미 열린 리브 세션 탭을 두고 같은 세션 탭을 하나 더 세운다");
+//  W9 — 리브 id 물음은 시간을 둔다(빈 화면 금지 · #3537) · 되살린 뒤엔 새로 묻는다 · 팝아웃도 리브 세션으로.
+check(/const livId = projectId > 0 \? knownLivSessionId\(\) : await livSessionIdWithin\(1500\);/.test(MAIN), "W9 ★ 세션 화면이 리브 id 물음을 끝없이 기다린다(느리면 빈 화면)");
+check(/void livSessionId\(\{ fresh: true \}\);\s*const href = '#\/s\/' \+ encodeURIComponent\(sid\);/.test(MAIN), "W9 되살린 뒤 리브 id 를 새로 안 묻는다(30초 동안 리브 세션을 못 알아본다)");
+check(/const soloLiv = isLivSessionId\(/.test(MAIN) && /\.\.\.\(soloLiv \? \{ chatHome: true, livAsks: true \} : \{\}\),/.test(MAIN), "W9 팝아웃 창의 리브 세션이 대화 보기 · 물음 자리로 안 열린다");
+check(/if \(inflight\) return inflight;/.test(OPEN), "W9 묻는 중이면 그 답을 기다린다(되살린 뒤 옛 id 로 그리지 않게)");
 
 //  보내기 다리 — 대화창일 때만 보낸다(터미널에 Enter 까지 쳐 넣지 않는다) · 보낸 쪽이 없으면 거짓(부르는 쪽이 서버 길로).
 check(/return e\.send \? e\.send\(text\) : false;/.test(SESSIN), "W3 보내기 다리 — 보낼 수 없는 화면이면 거짓");
-check(/if \(destroyed \|\| mode !== 'chat' \|\| view\.input\.disabled\) return false;/.test(CHAT), "W3 ★ 터미널 쪽이어도 보낸다(사람이 고칠 틈 없이 Enter)");
+check(/if \(destroyed \|\| mode !== 'chat' \|\| view\.input\.disabled \|\| view\.input\.value\.trim\(\) \|\| attachments\.busy\(\)\) return false;/.test(CHAT),
+  "W3 ★ 터미널 쪽이거나 사람이 쓰던 글이 있어도 보낸다(쓰던 글이 사라진다 · 사람이 고칠 틈 없이 Enter)");
+check(/if \(destroyed \|\| sendHere\(text\)\) return;\s*void openLiv\(\{ text \}\)/.test(CHAT), "W9 물음 카드의 한 마디 — 보낼 수 없으면 입력칸을 건드리지 않고 서버로 넣는다");
 check(/if \(id && sendIntoSession\(\[id\], text\)\) return;[\s\S]*?const r = await openLiv\(\{ text \}\);/.test(DESK), "W3 오른쪽 칸의 말 — 대화창이 있으면 거기로, 없으면 서버가 리브 세션에 넣는다");
+check(/if \(!r\.delivered\) \{[\s\S]*?putIntoSession\(\[r\.sessionId\], takeUnsentDraft\(r\.sessionId\) \|\| text\)/.test(DESK), "W9 ★ 못 넣은 말을 지금 보이는 입력칸에 안 담는다(다음에 열 때 유령 글로 돌아온다)");
+const fillBody = DESK.slice(DESK.indexOf("fill: (t) =>"), DESK.indexOf("refresh: () =>"));
+check(fillBody.length > 0 && !/say\(/.test(fillBody), "W9 ★ 담기만 하는 문이 보내기로 떨어진다(고쳐 보내려던 예시 문장이 그대로 간다)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
