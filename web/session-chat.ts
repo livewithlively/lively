@@ -1312,10 +1312,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   /**
    * #4970 — 이 대화창으로 **보내기까지**(오른쪽 «리브» 칸의 [제가 해 드릴게요] · 리브 물음 카드의 «저장했어요» 한 마디). 보냈으면 true.
    *  · 대화창일 때만 — 터미널 쪽이면 false(부르는 쪽이 서버로 넣는 길을 탄다 · 터미널에 Enter 까지 쳐 넣으면 사람이 고칠 틈이 없다).
-   *  · 사람이 쓰던 글이 있으면 덮지 않는다 — false(격리 리뷰: 덮으면 쓰던 글이 사라진다). 파일을 올리는 중이어도 false(보내기가 그 자리에서 멈춘다).
+   *  · 사람이 쓰던 글이 있으면 덮지 않는다 — false(격리 리뷰: 덮으면 쓰던 글이 사라진다). 파일을 올리는 중이거나 붙여 둔 파일이 있어도 false
+   *    (올리는 중이면 보내기가 그 자리에서 멈추고, 붙여 둔 파일은 이 말과 함께 나가 버린다).
    */
   function sendHere(text: string): boolean {
-    if (destroyed || mode !== 'chat' || view.input.disabled || view.input.value.trim() || attachments.busy()) return false;
+    if (destroyed || mode !== 'chat' || view.input.disabled || view.input.value.trim() || attachments.busy() || attachments.tail()) return false;
     view.input.value = text;
     view.input.dispatchEvent(new Event('input'));
     view.form.requestSubmit();
@@ -1327,7 +1328,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const livDock = opts.livAsks ? mountLivAskDock(liveDock, {
     say: (text) => {
       if (destroyed || sendHere(text)) return;
-      void openLiv({ text }).catch(() => { /* 비치명 — 사람이 대화에서 이어 말하면 된다 */ });
+      //  있는 리브 세션(이 세션)에만 — 못 넣었으면(멈춤) openLiv 가 이 입력칸에 덧붙여 둔다(쓰던 글 뒤에 — 덮지 않는다).
+      void openLiv({ text, onlyExisting: true })
+        .then((r) => { if (r.ai && !r.delivered) toast('리브 세션이 멈춰 있어 입력칸에 담아 뒀어요 — 보내면 이어집니다.'); })
+        .catch(() => { /* 비치명 — 사람이 대화에서 이어 말하면 된다 */ });
     },
     isVisible: () => !destroyed && (opts.isVisible ? opts.isVisible() : true),
   }) : null;

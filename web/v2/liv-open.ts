@@ -9,14 +9,23 @@
 import { api } from '../core.js';
 import { rememberCreated } from './created-cache.js';
 import { rememberFirstPrompt, rememberUnsentDraft } from './quick-session.js';
+import { putIntoSession } from './sess-input.js';
 
-/** delivered — 그 말이 리브 세션에 들어갔나(새로 열었으면 첫 지시라 참). 거짓이면 그 말은 그 세션 입력칸에 돌아갈 글로 남겨 두었다. */
-export type LivOpen = { ai: true; href: string; sessionId: string; created: boolean; delivered: boolean } | { ai: false };
+/** delivered — 그 말이 리브 세션에 들어갔나(새로 열었으면 첫 지시라 참). 거짓이면 그 말은 그 세션 입력칸에 담아 두었다(아래 openLiv).
+ *  reason(ai:false) — 'no-session' 은 onlyExisting 인데 리브 세션이 없다 · 그 밖은 로그인된 AI 가 없다. */
+export type LivOpen = { ai: true; href: string; sessionId: string; created: boolean; delivered: boolean } | { ai: false; reason?: string };
 
-/** 리브에게 일을 맡긴다. 실패는 던진다 — 부르는 쪽이 사람에게 이유를 말한다. */
-export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string }): Promise<LivOpen> {
-  const r: any = await api('/api/ui/me/liv/open', { method: 'POST', body: JSON.stringify(body) });
-  if (!(r && r.ai === true && r.session_id)) return { ai: false };
+/**
+ * 리브에게 일을 맡긴다. 실패는 던진다 — 부르는 쪽이 사람에게 이유를 말한다.
+ *  onlyExisting — 있는 리브 세션에만 넣는다(카드의 맞장구가 새 리브 세션의 첫 지시가 되지 않게).
+ *  못 넣었으면(멈춘 세션) 그 말을 **그 세션 입력칸**에 담는다: 그 세션 화면이 어느 탭에든 떠 있으면 지금 그 입력칸에(숨은 탭도 화면이 살아 있다),
+ *   안 떠 있으면 다음에 열 때 입력칸으로 돌아오게 남긴다. 보내면 대화창이 세션을 되살리며 넣는다(격리 리뷰 — 열린 화면은 다시 그려지지 않아
+ *   남겨 둔 글을 안 읽는다).
+ */
+export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string; onlyExisting?: boolean }): Promise<LivOpen> {
+  const payload = { job: body.job, text: body.text, ...(body.onlyExisting ? { only_existing: true } : {}) };
+  const r: any = await api('/api/ui/me/liv/open', { method: 'POST', body: JSON.stringify(payload) });
+  if (!(r && r.ai === true && r.session_id)) return { ai: false, reason: r && r.reason ? String(r.reason) : undefined };
   const id = String(r.session_id);
   rememberLivSessionId(id);
   try {
@@ -24,7 +33,7 @@ export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string }):
       rememberCreated(r.session);
       if (r.initialPrompt) rememberFirstPrompt(id, String(r.initialPrompt));
     } else if (r.delivered === false && r.text) {
-      rememberUnsentDraft(id, String(r.text));
+      if (!putIntoSession([id], String(r.text))) rememberUnsentDraft(id, String(r.text));
     }
   } catch (_) { /* 비치명 — 화면은 목록이 오면 그린다 */ }
   return { ai: true, href: String(r.href || `#/s/${encodeURIComponent(id)}`), sessionId: id, created: !!r.created, delivered: !!r.created || r.delivered !== false };

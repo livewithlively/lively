@@ -319,6 +319,16 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   }));
   tab.aside.replaceChildren();   // 우패널 없음 — 맥락은 화면 안(칸)에서 산다
   if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab);   // 좁은 폭의 [타임라인] 단추가 곁칸을 알게(#4088)
+  //  #4970 — 리브 id 를 1.5초 안에 못 받았으면 기억한 값으로 그렸다. 늦게 온 답이 «이 세션이 리브 세션인가» 를 바꾸면 **한 번** 다시 그린다
+  //   (안 그러면 첫 응답이 느린 날 리브 세션이 끝까지 터미널로 · 물음 자리 없이 남는다 — 격리 리뷰). 답이 같으면 아무것도 안 한다 —
+  //   다시 그릴 때는 기억이 새것이라 같은 답이 나와 되풀이되지 않는다. 쓰던 글은 세션별로 기억된다(saveComposeDraft).
+  if (projectId === 0 && sessionId) {
+    const drawnLiv = isLiv(sessionId);
+    void livSessionId().then(() => {
+      if (seq !== tab.seq) return;
+      if (isLiv(sessionId) !== drawnLiv) void renderRoute(tab);
+    });
+  }
 }
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
@@ -1318,11 +1328,14 @@ async function onHash(): Promise<void> {
   //   갈아 끼운 뒤** 탭을 고른다 — 그 세션 탭이 이미 있으면 그 탭이 켜진다(레일 [리브]를 다시 눌러도 같은 세션이 탭 둘로 서지 않게).
   //   ?board=1 은 건너뛴다(로컬 AI 가 주는 링크 — 늘 리브 화면). 탭 복원처럼 라우터가 곧바로 그리는 길은 renderRoute 의 'liv' 갈래가 같은 일을 한다.
   if (isLivRoute(hash) && !isLivBoard(hash)) {
+    const was = location.hash;
     const lid = await livSessionIdWithin(1500);
+    //  기다리는 사이 사람이 다른 곳으로 갔으면(다른 줄을 눌렀다 · 열린 창 목록에서 탭을 켰다) 그 이동이 이긴다 — 늦은 답으로 덮지 않는다(격리 리뷰).
+    if (location.hash !== was) return;
     if (lid) {
       hash = '#/s/' + encodeURIComponent(lid);
-      suppressHash++;
-      location.replace(location.pathname + location.search + hash);
+      //  ⚠ 값이 같으면 hashchange 가 안 나므로 그때는 세지 않는다(onSessionPicked 와 같은 규칙 — 안 그러면 다음 진짜 이동을 삼킨다).
+      if (location.hash !== hash) { suppressHash++; location.replace(location.pathname + location.search + hash); }
     }
   }
   const cur = tabsApi.active();

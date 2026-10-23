@@ -15,6 +15,7 @@ import { bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 
 import { fillConnectApps, livAskCard, livAskTyping, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
 import { openLiv } from './v2/liv-open.js';
 import { rememberUnsentDraft } from './v2/quick-session.js';
+import { putIntoSession } from './v2/sess-input.js';
 import { ownAiStepsHtml, wireOwnAiSteps } from './v2/connect-own-ai.js';
 
 export type { LivFinding, LivMode, LivSecretAsk, LivStatus } from './liv-cards.js';
@@ -102,8 +103,8 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   const say = async (text: string): Promise<void> => {
     if (!sessionId) { livToast(`쓰시는 AI 에 «${text}» 라고 전해 주세요.`); return; }
     try {
-      const r = await openLiv({ text });
-      if (!r.ai) return;
+      const r = await openLiv({ text, onlyExisting: true });
+      if (!r.ai) { if (r.reason === 'no-session') { sessionId = null; paintDoor(); livToast(`쓰시는 AI 에 «${text}» 라고 전해 주세요.`); } return; }
       sessionId = r.sessionId;
       if (r.delivered) { livToast('리브 대화에 전했어요.'); return; }
       livToast('리브 세션이 멈춰 있어요 — 대화 입력칸에 담아 뒀으니 보내 주세요.');
@@ -113,7 +114,8 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   /** 담기만(보내지 않는다) — 리브 세션 입력칸에 돌려 두고 그 대화로 간다. 세션이 없으면 쓰는 AI 에 전할 말로 알려 준다. */
   const fill = (text: string): void => {
     if (!sessionId) { livToast(`쓰시는 AI 에 «${text}» 라고 말해 보세요.`); return; }
-    rememberUnsentDraft(sessionId, text);
+    //  그 세션 화면이 어느 탭에든 떠 있으면 지금 그 입력칸에(열린 화면은 다시 그려지지 않아 남겨 둔 글을 안 읽는다), 아니면 다음에 열 때 돌아오게.
+    if (!putIntoSession([sessionId], text)) rememberUnsentDraft(sessionId, text);
     location.hash = '#/s/' + encodeURIComponent(sessionId);
   };
   const hooks: LivHooks = { say: (t) => { void say(t); }, fill, refresh: () => pokeLivStatus(), workingSub: '끝나면 리브 대화에서 이어서 말씀드릴게요.' };

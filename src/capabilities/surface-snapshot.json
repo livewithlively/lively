@@ -1543,7 +1543,7 @@
   "rest": [
    "POST /api/ui/me/liv/open"
   ],
-  "input_hash": "a224ad075c3d3da3"
+  "input_hash": "44e96f53add69301"
  },
  {
   "name": "me_liv_ask_dismiss",

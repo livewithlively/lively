@@ -20,17 +20,21 @@ function fake(o: {
   current?: string | null; usable?: string[] | Error; launchable?: string[]; launchId?: string;
   deliverFails?: boolean; ensureThrows?: Error;
 } = {}) {
-  const log = { ensure: [] as string[], usable: 0, open: [] as Array<{ harness: string | null; text: string }>, deliver: [] as Array<{ sid: string; text: string }> };
+  const log = { current: 0, ensure: [] as string[], usable: 0, open: [] as Array<{ harness: string | null; text: string }>, deliver: [] as Array<{ sid: string; text: string }> };
+  //  지금의 리브 세션 — 새로 열면 그 id 가 된다(열고 나서 다시 부르면 «있음» 으로 본다 — 실제 좌표 기록과 같다).
+  let cur: string | null = o.current ?? null;
   const deps: LivOpenDeps = {
+    current: async () => { log.current++; return cur; },
     //  실제 확보(ensureLivSession)의 계약 그대로 — 있으면 그 id(하네스 물음 없음), 없으면 하네스를 묻고 null 이면 안 연다.
     ensure: async (_u, text, harness) => {
       log.ensure.push(text);
       if (o.ensureThrows) throw o.ensureThrows;
-      if (o.current) return { session_id: o.current, created: false };
+      if (cur) return { session_id: cur, created: false };
       const h = await harness();
       if (h === null) return null;
       log.open.push({ harness: h, text });
-      return { session_id: o.launchId ?? "box-u1-new", created: true, session: { id: o.launchId ?? "box-u1-new" } as never, harness: h };
+      cur = o.launchId ?? "box-u1-new";
+      return { session_id: cur, created: true, session: { id: cur } as never, harness: h };
     },
     usable: async () => { log.usable++; if (o.usable instanceof Error) throw o.usable; return o.usable ?? []; },
     launchable: async () => o.launchable ?? ["claude", "codex", "opencode", "antigravity", "grok"],
@@ -171,16 +175,16 @@ await t("E18 같은 말 · 같은 세션 · 1분 안에 두 번 → 넣기 1회 
   assert.deepEqual(b.ai && !b.created ? { d: b.delivered, r: b.repeated } : null, { d: true, r: true });
 });
 
-await t("E19 첫 넣기가 실패했으면 같은 말을 다시 넣는다(실패는 세지 않는다)", async () => {
+await t("E19 첫 넣기가 실패했으면 같은 일을 다시 넣는다(실패는 세지 않는다)", async () => {
   const f1 = fake({ current: "box-u1-old", deliverFails: true });
   const memo = livRecentMemo(() => 1_000);
   f1.deps.recent = memo;
-  const a = await openLiv(user, { text: "연결해 줘" }, f1.deps);
+  const a = await openLiv(user, { job: "connect" }, f1.deps);
   assert.equal(a.ai && !a.created ? a.delivered : null, false);
   const f2 = fake({ current: "box-u1-old" });
   f2.deps.recent = memo;
-  await openLiv(user, { text: "연결해 줘" }, f2.deps);
-  assert.equal(f2.log.deliver.length, 1, "★ 못 넣은 말을 «넣었다» 로 세어 다시 시도를 막았다");
+  await openLiv(user, { job: "connect" }, f2.deps);
+  assert.equal(f2.log.deliver.length, 1, "★ 못 넣은 일을 «넣었다» 로 세어 다시 시도를 막았다");
 });
 
 await t("E20 다른 말은 둘 다 넣는다", async () => {
@@ -199,6 +203,39 @@ await t("E21 기억 경계 — ttl-1 ms 는 본 것 · ttl ms 면 잊었다", ()
   assert.equal(m.seen("k"), true, "ttl 안인데 잊었다");
   now = LIV_REPEAT_MS;
   assert.equal(m.seen("k"), false, "ttl 이 지났는데 기억한다(1분 뒤 다시 누른 사람의 일이 사라진다)");
+});
+
+await t("E22 글(text)은 거르지 않는다 — 같은 맞장구도 두 번 간다(자격을 둘 저장한 경우)", async () => {
+  const { deps, log } = fake({ current: "box-u1-old" });
+  deps.recent = livRecentMemo(() => 1_000);
+  await openLiv(user, { text: "자격 저장했어요. 확인해 주세요." }, deps);
+  await openLiv(user, { text: "자격 저장했어요. 확인해 주세요." }, deps);
+  assert.equal(log.deliver.length, 2, "★ 두 번째 자격의 맞장구가 삼켜졌다(리브가 둘째 자격을 확인하지 않는다)");
+});
+
+await t("E23 새로 연 세션의 첫 지시도 «넣은 것» 으로 센다 — 열고 나서 «다시 시도» 가 같은 일을 또 넣지 않는다", async () => {
+  const { deps, log } = fake({ usable: ["claude"], launchId: "box-u1-x" });
+  deps.recent = livRecentMemo(() => 1_000);
+  const a = await openLiv(user, { job: "connect" }, deps);
+  const b = await openLiv(user, { job: "connect" }, deps);
+  assert.equal(a.ai ? a.created : null, true);
+  assert.equal(log.deliver.length, 0, "★ 첫 지시로 연 바로 뒤 같은 지시를 또 넣었다(연결 안내가 두 번 시작된다)");
+  assert.deepEqual(b.ai && !b.created ? { d: b.delivered, r: b.repeated } : null, { d: true, r: true });
+});
+
+await t("E24 only_existing · 리브 세션 없음 → 열지 않고 ai:false(no-session) · 확보·넣기 0", async () => {
+  const { deps, log } = fake({ usable: ["claude"] });
+  assert.deepEqual(await openLiv(user, { text: "자격 저장했어요. 확인해 주세요.", only_existing: true }, deps), { ai: false, reason: "no-session" });
+  assert.equal(log.ensure.length + log.deliver.length + log.open.length, 0, "★ 맞장구가 새 리브 세션의 첫 지시가 됐다");
+  assert.equal(log.current, 1, "지금의 리브 세션을 안 물었다(배선)");
+});
+
+await t("E25 only_existing · 리브 세션 있음 → 그 세션에 넣는다(확보는 안 탄다)", async () => {
+  const { deps, log } = fake({ current: "box-u1-old" });
+  const r = await openLiv(user, { text: "파일 2개 올렸어요", only_existing: true }, deps);
+  assert.equal(r.ai && !r.created ? r.delivered : null, true);
+  assert.deepEqual(log.deliver, [{ sid: "box-u1-old", text: "파일 2개 올렸어요" }]);
+  assert.equal(log.ensure.length, 0);
 });
 
 // ── 배선 — 실제 문이 이 판정과 리브 세션 모듈을 탄다 · 따로 열던 연결 세션 좌표는 없다 ──
@@ -221,7 +258,8 @@ await t("W-S1 실제 문 = openLiv(realDeps) · 넣기는 사람이 보낸 것�
 await t("W-S3 멈춘 리브 세션엔 넣지 않는다(delivered:false → 입력칸에 돌려 둔다) · 넣은 말 기억은 워크스페이스마다", () => {
   const CAP = src("./liv-chat.ts");
   const deliver = CAP.slice(CAP.indexOf("deliver: async (sessionId, userId, text) =>"), CAP.indexOf("recent: {"));
-  assert.match(deliver, /if \(\(await sessionGoneVerdict\(sessionId\)\) === true\) throw new Error/, "★ 멈춘 세션에 말을 넣어 아웃박스에만 쌓인다(사람이 다시 열 때까지 아무것도 안 돈다)");
+  assert.match(deliver, /if \(!node && \(await sessionGoneVerdict\(sessionId\)\) === true\) \{/, "★ 멈춘 세션에 말을 넣어 아웃박스에만 쌓인다(사람이 다시 열 때까지 아무것도 안 돈다)");
+  assert.match(deliver, /const node = await remoteNodeOfSession\(sessionId, sessionGone\)/, "노드 좌표 세션을 이 게이트웨이 tmux 로 «멈춤» 판정한다(넣기 통로와 기준이 다르다)");
   assert.ok(deliver.indexOf("sessionGoneVerdict") < deliver.indexOf("deliverPromptForMember"), "멈춤 확인이 넣기보다 먼저다");
   assert.match(CAP, /seen: \(key\) => recentDeliveries\.seen\(`\$\{currentTenantId\(\)\}\|\$\{key\}`\),/, "넣은 말 기억이 워크스페이스를 가르지 않는다");
 });

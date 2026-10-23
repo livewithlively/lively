@@ -24,6 +24,7 @@ import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
 import { LIV_PROMPT_MAX, currentLivSessionId, ensureLivSession, type EnsuredLivSession } from "../../org/liv/session.js";
 import { currentTenant } from "../../org/tenant-context.js";
+import { logger } from "../../log.js";
 
 const currentTenantId = (): string => currentTenant()?.id ?? "";
 
@@ -52,6 +53,13 @@ export function livInstruction(input: { job?: unknown; text?: unknown } | null |
   return LIV_JOBS[job as LivJob];
 }
 
+/** (순수) 맡긴 일감 — 글(text)을 주면 null(사람·카드가 쓴 말이라 같은 말을 다시 할 수 있다), 아니면 job(기본 liv). 모르는 일감은 null(livInstruction 이 400). */
+export function livJobOf(input: { job?: unknown; text?: unknown } | null | undefined): LivJob | null {
+  if (input?.text !== undefined && input?.text !== null) return null;
+  const job = input?.job === undefined || input?.job === null || input?.job === "" ? "liv" : String(input.job);
+  return Object.prototype.hasOwnProperty.call(LIV_JOBS, job) ? (job as LivJob) : null;
+}
+
 /** (순수) 리브 세션을 띄울 하네스 — 로그인한 것(순서 그대로) 가운데 세션으로 띄울 수 있는 첫 번째. 없으면 null. */
 export function pickLivHarness(usable: readonly string[], launchable: readonly string[]): string | null {
   for (const k of usable) if (k && k !== "shell" && launchable.includes(k)) return k;
@@ -62,15 +70,21 @@ export function pickLivHarness(usable: readonly string[], launchable: readonly s
 export const livSessionHref = (id: string): string => `#/s/${encodeURIComponent(id)}`;
 
 export type LivOpenResult =
-  | { ai: false; reason: "ai-not-connected" }
+  | { ai: false; reason: "ai-not-connected" | "no-session" }
   | { ai: true; session_id: string; href: string; created: true; harness?: string; session?: unknown; initialPrompt: string }
   | { ai: true; session_id: string; href: string; created: false; delivered: boolean; text: string; repeated?: true };
 
-/** 같은 말을 같은 리브 세션에 이 사이 안에 두 번 넣지 않는다 — 단추를 두 번 누르거나 «다시 시도» 가 성공한 첫 시도와 겹치는 자리(격리 리뷰). */
+/**
+ * 같은 **일감**(job — [연결할게요] · [연결 도와줘] · [리브와 대화 시작])을 같은 리브 세션에 이 사이 안에 두 번 넣지 않는다 — 단추를 두 번
+ *  누르거나 «다시 시도» 가 성공한 첫 시도(새로 연 세션의 첫 지시 포함)와 겹치는 자리(격리 리뷰). 글(text — 카드의 «저장했어요» ·
+ *  [제가 해 드릴게요])은 거르지 않는다: 자격을 둘 저장하면 같은 맞장구가 두 번 가야 한다.
+ */
 export const LIV_REPEAT_MS = 60_000;
 
 /** 의존(시험 seam) — 실제 구현은 아래 realDeps. */
 export interface LivOpenDeps {
+  /** 지금의 리브 세션 id(없으면 null) — only_existing 일 때만 쓴다(새로 열지 않는다). */
+  current: (userId: string) => Promise<string | null>;
   /** 리브 세션 확보 — 있으면 그 id, 없으면 그 말로 연다(하네스 물음은 열 때만). 로그인한 AI 가 없으면 null. */
   ensure: (user: LivelyUser, text: string, harness: () => Promise<string | null>) => Promise<EnsuredLivSession | null>;
   /** 이 사람이 로그인한 하네스(순서 그대로). */
@@ -83,30 +97,45 @@ export interface LivOpenDeps {
   recent?: { seen: (key: string) => boolean; mark: (key: string) => void };
 }
 
-/** 리브에게 일 맡기기 — 판정 순서: 말 검사 → (리브 세션 있음 → 넣기) / (없음 → 로그인 확인 → 그 말로 열기 · 없으면 ai:false). */
-export async function openLiv(user: LivelyUser, input: { job?: unknown; text?: unknown } | null | undefined, d: LivOpenDeps): Promise<LivOpenResult> {
+/**
+ * 리브에게 일 맡기기 — 판정 순서: 말 검사 → (리브 세션 있음 → 넣기) / (없음 → 로그인 확인 → 그 말로 열기 · 없으면 ai:false).
+ *  only_existing — 있는 리브 세션에만 넣는다(새로 열지 않는다). 카드의 맞장구(«자격 저장했어요»)가 세션이 사라진 사이 새 리브 세션의 첫 지시가
+ *   되지 않게(격리 리뷰). 없으면 ai:false · reason no-session.
+ */
+export async function openLiv(user: LivelyUser, input: { job?: unknown; text?: unknown; only_existing?: unknown } | null | undefined, d: LivOpenDeps): Promise<LivOpenResult> {
   const userId = String(user?.userId ?? "");
   if (!userId) throw new HttpError(401, "인증이 필요합니다");
   const text = livInstruction(input);
-  const harness = async (): Promise<string | null> => {
-    const [usable, launchable] = await Promise.all([d.usable(userId).catch(() => [] as string[]), d.launchable()]);
-    return pickLivHarness(usable, launchable);
-  };
+  const job = livJobOf(input);
   let r: EnsuredLivSession | null;
-  try {
-    r = await d.ensure(user, text, harness);
-  } catch (e) {
-    if (e instanceof HttpError) throw e;
-    //  세션을 못 연 이유를 사람에게 그대로 말한다 — 이 자리의 실패가 500 «internal_error» 로 뭉개져 원인을 못 찾은 것이 #4032 였다.
-    throw new HttpError(503, `리브를 열지 못했습니다 — ${(e as Error)?.message ?? e}`, { cause: e });
+  if (input?.only_existing === true) {
+    const cur = await d.current(userId).catch(() => null);
+    if (!cur) return { ai: false, reason: "no-session" };
+    r = { session_id: cur, created: false };
+  } else {
+    const harness = async (): Promise<string | null> => {
+      const [usable, launchable] = await Promise.all([d.usable(userId).catch(() => [] as string[]), d.launchable()]);
+      return pickLivHarness(usable, launchable);
+    };
+    try {
+      r = await d.ensure(user, text, harness);
+    } catch (e) {
+      if (e instanceof HttpError) throw e;
+      //  세션을 못 연 이유를 사람에게 그대로 말한다 — 이 자리의 실패가 500 «internal_error» 로 뭉개져 원인을 못 찾은 것이 #4032 였다.
+      throw new HttpError(503, `리브를 열지 못했습니다 — ${(e as Error)?.message ?? e}`, { cause: e });
+    }
   }
   if (!r) return { ai: false, reason: "ai-not-connected" };
   const href = livSessionHref(r.session_id);
-  if (r.created) return { ai: true, session_id: r.session_id, href, created: true, harness: r.harness, session: r.session, initialPrompt: text };
-  const key = `${userId}|${r.session_id}|${text}`;
-  if (d.recent?.seen(key)) return { ai: true, session_id: r.session_id, href, created: false, delivered: true, text, repeated: true };
+  //  같은 일감을 짧은 사이 두 번 넣지 않는다 — 새로 연 세션의 첫 지시도 «넣은 것» 으로 센다(열고 나서 «다시 시도» 가 또 넣던 자리).
+  const key = job ? `${userId}|${r.session_id}|job:${job}` : null;
+  if (r.created) {
+    if (key) d.recent?.mark(key);
+    return { ai: true, session_id: r.session_id, href, created: true, harness: r.harness, session: r.session, initialPrompt: text };
+  }
+  if (key && d.recent?.seen(key)) return { ai: true, session_id: r.session_id, href, created: false, delivered: true, text, repeated: true };
   const delivered = await d.deliver(r.session_id, userId, text).then(() => true, () => false);
-  if (delivered) d.recent?.mark(key);
+  if (delivered && key) d.recent?.mark(key);
   return { ai: true, session_id: r.session_id, href, created: false, delivered, text };
 }
 
@@ -122,6 +151,7 @@ export function livRecentMemo(now: () => number = Date.now, ttl: number = LIV_RE
 const recentDeliveries = livRecentMemo();
 
 const realDeps: LivOpenDeps = {
+  current: (userId) => currentLivSessionId(userId),
   ensure: (user, text, harness) => ensureLivSession(user, text, { harness }),
   usable: async (userId) => {
     const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
@@ -135,8 +165,15 @@ const realDeps: LivOpenDeps = {
     //  멈춘(회수된) 리브 세션이면 넣지 않는다 — 아웃박스는 «복원 가능» 이면 말을 들고만 있어, 사람이 대화창에서 다시 열 때까지 아무것도
     //   돌지 않는다(격리 리뷰). 못 넣었다고 알리면(delivered:false) 화면이 그 말을 입력칸에 돌려 두고, 보내는 순간 대화창이 되살리며 넣는다.
     //   생사를 모르면(null — 못 닿음) 종전대로 넣는다(아웃박스가 상한까지 들고 있는다).
-    const { sessionGoneVerdict } = await import("../../terminal/tmux-exec.js");
-    if ((await sessionGoneVerdict(sessionId)) === true) throw new Error("리브 세션이 멈춰 있습니다");
+    //  ⚠ 이 판정은 이 게이트웨이의 tmux 를 본다 — 멤버 PC(노드) 좌표의 세션이면 «여기 없다» 가 «멈췄다» 가 아니다(그쪽은 넣기 통로가 릴레이로 판단한다).
+    //   리브 세션은 서버가 연다(노드 아님)지만, 넣기 통로(deliverPromptForMember)와 같은 기준으로 가른다(격리 리뷰).
+    const { sessionGone, sessionGoneVerdict } = await import("../../terminal/tmux-exec.js");
+    const { remoteNodeOfSession } = await import("../../node/registry.js");
+    const node = await remoteNodeOfSession(sessionId, sessionGone).catch(() => null);
+    if (!node && (await sessionGoneVerdict(sessionId)) === true) {
+      logger.info({ member: userId, session: sessionId }, "리브 세션이 멈춰 있어 말을 넣지 않음 — 화면이 입력칸에 돌려 둔다(delivered:false)");
+      throw new Error("리브 세션이 멈춰 있습니다");
+    }
     const { deliverPromptForMember } = await import("../../terminal/deliver-prompt.js");
     return deliverPromptForMember(sessionId, userId, text);
   },
@@ -171,6 +208,7 @@ export const livChatCapabilities: Capability[] = [
       job: z.enum(["liv", "connect"]).optional().describe("맡길 일(text 가 없을 때) — liv = 워크스페이스 점검(기본) · connect = 외부 앱 연결"),
       // ⚠ text 에 zod .max() 를 두지 않는다 — 상한 초과는 핸들러가 "몇 자 넘었는지"를 말해 주는 게 낫다(#1442).
       text: z.string().optional().describe("리브에게 할 말(주면 job 대신 이 말)"),
+      only_existing: z.boolean().optional().describe("true 면 있는 리브 세션에만 넣는다(새로 열지 않는다 — 없으면 ai:false · reason no-session)"),
     }),
 
   restRead("me_liv_ask_dismiss", "물음 접어두기",
