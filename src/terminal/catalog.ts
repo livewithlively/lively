@@ -220,12 +220,13 @@ export const HARNESSES: Harness[] = [
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
       // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
-      // haiku 는 빠른 기존 별칭으로 유지하고, 기본 표기만 현재 세션 기본인 fable 로 올린다(argv 고정은 하지 않는다).
+      // haiku 는 빠른 기존 별칭으로 유지한다. 새 세션 기본은 opus(상민님 2026-10-23 «기본 모델 opus high로 해. 클로드의 경우.
+      //  지금 fable이야.») — 종전엔 그때의 CLI 기본이던 fable 이었다.
       //  ⚠ 별칭 목록은 CLI 도움말을 실측해 맞춘다 — fable 이 빠져 있었다(원준님 2026-08-21 지적).
       //   실측(claude 2.1.238 `--help`): "Provide an alias for the latest model (e.g. 'fable', 'opus', or
       //   'sonnet') or a model's full name (e.g. 'claude-fable-5')." 목록에 없어도 터미널에서 `/model fable`
       //   로는 바뀌었기 때문에(이 박스 최근 대화 claude-fable-5 5,059줄) 폼만 모르고 있던 상태였다.
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "opus" },
       // default(#3778) — 화면이 «AI 기본값» 이라는 알 수 없는 말 대신 **이 값을 골라 둔다**. CLI 자체의 기본은
       //  «auto»(모델에 맞춰 자동)라 사람이 읽을 숫자가 없다(실측 claude 2.1.266: "auto: Use the default effort
       //  level for your model"). 그래서 라이블리가 새 세션의 기본을 하나 정해 **화면에 보이는 그대로** 넘긴다.
@@ -364,7 +365,7 @@ export function sessionFlagDefaults(harnessKey: string, list: readonly Harness[]
 
 // ── 무인 자동화의 모델·추론강도 기본값(#4008) ─────────────────────────────────────────────
 //
-// 왜 별도 표인가: 위 `FlagDef.default` 는 **사람이 여는 새 세션 화면**의 기본값이다(claude=fable/high).
+// 왜 별도 표인가: 위 `FlagDef.default` 는 **사람이 여는 새 세션 화면**의 기본값이다(claude=opus/high).
 //  대화형은 사람이 옆에서 보고 있고 한 번에 한 질문이라 비싼 기본이 합리적이지만, 무인 배치는 성격이 정반대다 —
 //  증류·분류·관리는 매 주기 수십 배치를 자동으로 접수하고 아무도 안 본다. 그 자리에 대화형 기본이 그대로
 //  흘러들면서 실제로 사고가 났다(원준님 2026-09-16: «증류가 페이블로 돌아 토큰이 다 빨렸다»).
