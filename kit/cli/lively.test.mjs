@@ -11,12 +11,11 @@ import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
-import { WIN, tarBin } from "../testlib/os-sandbox.mjs";
+import { WIN, writeTgz } from "../testlib/os-sandbox.mjs";
 import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 // CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
 const SHIM = WIN ? "lively.cmd" : "lively";
@@ -62,9 +61,8 @@ function makeBundle(version, { corrupt = false, mcpServers = [] } = {}) {
   writeFileSync(join(lv, "kit-version"), version + "\n");
   if (corrupt) writeFileSync(join(stage, ".claude", "hooks", "session-preload.mjs"), "export const x = (((;\n");
   const tgz = join(BOX, `bundle-${version}.tgz`);
-  // gzip 은 node 로 — windows-latest 20261018판부터 tar.exe 의 `-czf` 가 0xC0000005 로 죽는다(풀기는 설치기 그대로 tar).
-  execFileSync(tarBin(), ["-cf", tgz + ".tar", "-C", stage, "."], { stdio: "ignore" });
-  writeFileSync(tgz, gzipSync(readFileSync(tgz + ".tar")));
+  if (WIN) writeTgz(stage, tgz);   // 윈도우는 tar.exe 로 묶지 않는다 — os-sandbox.mjs writeTgz 주석
+  else execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
   return readFileSync(tgz);
 }
 

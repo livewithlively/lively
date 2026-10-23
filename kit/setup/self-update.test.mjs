@@ -7,11 +7,10 @@ import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { gzipSync } from "node:zlib";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
-import { sandboxEnv, WIN, tarBin, closedPath } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
+import { sandboxEnv, WIN, writeTgz, closedPath } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
@@ -69,9 +68,8 @@ function makeBundle(version, { corrupt = false, appledouble = false, noProxy = f
     }
   }
   const tgz = join(BOX, `bundle-${version}.tgz`);
-  // gzip 은 node 로 — windows-latest 20261018판부터 tar.exe 의 `-czf` 가 0xC0000005 로 죽는다(풀기는 설치기 그대로 tar).
-  execFileSync(tarBin(), ["-cf", tgz + ".tar", "-C", stage, "."], { stdio: "ignore" });
-  writeFileSync(tgz, gzipSync(readFileSync(tgz + ".tar")));
+  if (WIN) writeTgz(stage, tgz);   // 윈도우는 tar.exe 로 묶지 않는다 — os-sandbox.mjs writeTgz 주석
+  else execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
   return readFileSync(tgz);
 }
 
