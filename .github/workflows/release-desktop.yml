@@ -156,6 +156,31 @@ jobs:
       #  공인 코드서명 키는 2023-06부터 HSM 보관이 의무라 .p12(WIN_CSC_LINK) 경로는 새 인증서로 못 쓴다 → 클라우드 서명.
       #  러너엔 서비스 주체 자격만 온다(Entra 앱 등록 · 역할 «Artifact Signing Certificate Profile Signer»).
       #  서명 설정은 package.json 에 박지 않고 자격이 있을 때만 이 스텝에서 끼운다 — 박아 두면 자격 없는 빌드가 서명 단계에서 죽는다.
+      #
+      # ★ 서명 모듈은 **먼저, 재시도로** 깔고 깔렸는지 본다(#4940). electron-builder 는 서명 직전에
+      #  `Install-Module TrustedSigning` 을 한 번 돌리고, 그게 모듈을 못 남겨도 그냥 서명으로 넘어간다 →
+      #  파일마다 `Invoke-TrustedSigning … is not recognized` 로 윈도우 자산이 통째로 빠진다.
+      #  실측 v0.1.377(2026-10-23): 3시간 전 v0.1.376 과 **같은 러너 이미지(win25-vs2026 20261007.264)·같은 electron-builder**
+      #  였고 PSGallery 의 최신 모듈도 그대로(0.5.8, 2025-07)였다 — 설치가 한 번 조용히 빈 것이다.
+      #  여기서 깔아 두면 그쪽 설치가 또 비어도 이미 있는 모듈로 서명된다. 끝내 못 깔면 **여기서** 이유를 대고 멈춘다.
+      - name: 서명 모듈 (win)
+        if: matrix.name == 'win'
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          if (-not "$env:AZURE_CLIENT_ID".Trim()) { "서명 자격 없음 — 모듈 설치 건너뜀"; exit 0 }
+          for ($i = 1; $i -le 5; $i++) {
+            try {
+              # electron-builder 와 같은 인자(-MinimumVersion 0.5.0 · CurrentUser) — 다른 판을 깔면 두 벌이 섞인다.
+              Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser -ErrorAction Stop
+            } catch { Write-Warning "TrustedSigning 설치 실패($i/5): $($_.Exception.Message)" }
+            if (Get-Command Invoke-TrustedSigning -ErrorAction SilentlyContinue) { break }
+            Start-Sleep -Seconds (10 * $i)
+          }
+          $cmd = Get-Command Invoke-TrustedSigning -ErrorAction SilentlyContinue
+          if (-not $cmd) { "::error::TrustedSigning 모듈을 깔지 못했다 — 서명 단계가 Invoke-TrustedSigning 을 못 찾는다"; exit 1 }
+          "TrustedSigning $($cmd.Version) 준비 ($($cmd.Module.ModuleBase))"
       - name: 빌드 (win)
         if: matrix.name == 'win'
         working-directory: desktop

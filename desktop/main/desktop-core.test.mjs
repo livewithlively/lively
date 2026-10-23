@@ -6,11 +6,12 @@
 //  그래서 Electron API 의존을 main.mjs 한 파일에 가두고, 판단이 있는 코드는 전부 이쪽에 둔다.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readdirSync, readFileSync, existsSync as existsSyncReal } from "node:fs";
+import { readdirSync, readFileSync, existsSync as existsSyncReal, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
-import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
+import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
@@ -256,10 +257,24 @@ t("H1 플랫폼별 부트스트랩 명령 — 게이트웨이가 서빙하는 �
   const mac = bootstrapCommand("https://dev.lvly.io", "darwin");
   assert.equal(mac.cmd, "/bin/sh");
   assert.deepEqual(mac.args, ["-c", "curl -fsSL https://dev.lvly.io/cli | sh"]);
-  const win = bootstrapCommand("https://dev.lvly.io/", "win32");
+  // 윈도우는 그 스크립트를 받아 둔 파일로 돈다 — 받는 주소는 웹·CLI 가 사람에게 주는 한 줄과 같아야 한다.
+  assert.equal(bootstrapScriptUrl("https://dev.lvly.io/", "win32"), "https://dev.lvly.io/cli.ps1");
+  assert.ok(bootstrapOneLiner("https://dev.lvly.io/", "win32").includes(bootstrapScriptUrl("https://dev.lvly.io/", "win32")), "안내 한 줄과 받는 주소가 갈렸다");
+  assert.equal(bootstrapScriptUrl("https://dev.lvly.io", "darwin"), null, "맥·리눅스는 셸이 직접 받는다");
+  const win = bootstrapCommand("https://dev.lvly.io/", "win32", "C:\\T\\lively-bootstrap-x\\cli.ps1");
   assert.equal(win.cmd, "powershell.exe");
   assert.ok(win.args.includes("-NoProfile"), "프로필이 출력·PATH 를 오염시킨다");
-  assert.ok(win.args[win.args.length - 1] === "irm https://dev.lvly.io/cli.ps1 | iex");
+  assert.deepEqual(win.args.slice(-2), ["-File", "C:\\T\\lively-bootstrap-x\\cli.ps1"]);
+  assert.throws(() => bootstrapCommand("https://dev.lvly.io", "win32"), /스크립트/, "받아 둔 파일 없이 명령을 만들었다");
+});
+
+t("H1b ★ 윈도우 명령줄에 «내려받아 실행» 한 줄이 없다 — 디펜더가 Commando.A!ml 로 막는다(#4940)", () => {
+  const line = bootstrapCommand("https://dev.lvly.io", "win32", "C:\\T\\cli.ps1").args.join(" ");
+  assert.ok(!/\biex\b|Invoke-Expression|\birm\b|Invoke-RestMethod|Invoke-WebRequest|-Command\b|-EncodedCommand\b/i.test(line), `명령줄: ${line}`);
+  // 로그에 찍는 '지금 실행할 한 줄' 도 실제로 하는 일과 같아야 한다(숨기지 않는다).
+  assert.match(bootstrapPreview("https://dev.lvly.io", "win32"), /-File cli\.ps1/);
+  assert.ok(!/\biex\b/.test(bootstrapPreview("https://dev.lvly.io", "win32")), "로그엔 여전히 irm | iex 를 실행한다고 적는다");
+  assert.equal(bootstrapPreview("https://dev.lvly.io", "darwin"), bootstrapOneLiner("https://dev.lvly.io", "darwin"));
 });
 
 t("H2 ★ 셸 문자열에 주소가 들어간다 — 셸 메타문자는 절대 통과시키지 않는다", () => {
@@ -270,6 +285,7 @@ t("H2 ★ 셸 문자열에 주소가 들어간다 — 셸 메타문자는 절대
     "", "   ",
   ]) {
     assert.throws(() => bootstrapCommand(bad, "darwin"), /형식/, `통과해버림: ${JSON.stringify(bad)}`);
+    assert.throws(() => bootstrapScriptUrl(bad, "win32"), /형식/, `윈도우가 받을 주소로 통과해버림: ${JSON.stringify(bad)}`);
   }
 });
 
@@ -280,7 +296,7 @@ await ta("H3 출력은 줄 단위로 흘리고, 실패는 실패로 보고한다
     c.stdout.emit("data", " 중…\n");
     c.emit("close", 1, null);
   });
-  const r = await runBootstrap({ gatewayUrl: "https://a.io", spawn: s.spawn, onLine: (l) => lines.push(l) });
+  const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "darwin", spawn: s.spawn, onLine: (l) => lines.push(l) });
   assert.deepEqual(lines, ["  ✓ Node 준비 완료", "  · lively 설치 중…"], "청크 경계에서 줄이 깨졌다");
   assert.equal(r.ok, false);
   assert.match(r.error, /실패/);
@@ -288,8 +304,144 @@ await ta("H3 출력은 줄 단위로 흘리고, 실패는 실패로 보고한다
 
 await ta("H4 stdio 는 파이프다 — TTY 를 주면 스크립트가 `lively setup` 으로 인계해 흐름이 갈라진다", async () => {
   const s = stubSpawn((c) => c.emit("close", 0, null));
-  await runBootstrap({ gatewayUrl: "https://a.io", spawn: s.spawn });
+  await runBootstrap({ gatewayUrl: "https://a.io", platform: "darwin", spawn: s.spawn });
   assert.deepEqual(s.calls[0].opts.stdio, ["ignore", "pipe", "pipe"]);
+});
+
+// ── C2-w. 윈도우 부트스트랩 — 받아서 파일로 실행(#4940) ──────────────────────
+//  관측 장치: 가짜 fetch 의 URL 로그 · 스텁 spawn 의 argv/opts · 띄운 순간의 파일 바이트 · 임시 루트의 남은 항목.
+const fakeFetch = (respond) => {
+  const urls = [];
+  return { urls, fn: async (url) => { urls.push(url); return respond(url); } };
+};
+const okBody = (body) => ({ ok: true, status: 200, text: async () => body });
+const bootRoot = () => mkdtempSync(join(tmpdir(), "lively-boot-test-"));
+// 스텁 spawn 이 띄우는 순간 `-File` 파일을 읽어 둔다(끝난 뒤엔 지워져 있어야 하므로 그때만 볼 수 있다).
+const winStub = (code = 0) => {
+  const seen = {};
+  const s = stubSpawn((c) => {
+    const args = s.calls[s.calls.length - 1].args;
+    seen.file = args[args.indexOf("-File") + 1];
+    seen.bytes = existsSyncReal(seen.file) ? readFileSync(seen.file) : null;
+    c.stdout.emit("data", "  ✓ lively CLI 준비 완료\n");
+    c.emit("close", code, null);
+  });
+  return { s, seen };
+};
+
+await ta("H5 ★ 윈도우: 받은 스크립트를 BOM·UTF-8 출력으로 파일에 써서 -File 로 띄우고, 끝나면 그 폴더를 지운다", async () => {
+  const root = bootRoot();
+  try {
+    const body = "Write-Host '라이블리 설치'\nWrite-Host \"끝\"\n";
+    const f = fakeFetch(() => okBody(body));
+    const { s, seen } = winStub(0);
+    const env = { LIVELY_HOME: "C:\\sandbox", PATH: "x" };
+    const lines = [];
+    const r = await runBootstrap({ gatewayUrl: "https://acme.app.lvly.io/", platform: "win32", spawn: s.spawn, fetch: f.fn, tmpDir: root, env, onLine: (l) => lines.push(l) });
+    assert.deepEqual(f.urls, ["https://acme.app.lvly.io/cli.ps1"], "받는 주소가 안내 한 줄과 다르다");
+    assert.equal(s.calls.length, 1, "PowerShell 을 한 번 띄워야 한다");
+    const call = s.calls[0];
+    assert.equal(call.cli, "powershell.exe");
+    assert.ok(!call.args.some((a) => /\biex\b|\birm\b|-Command\b/i.test(a)), `명령줄에 내려받아 실행 한 줄이 남았다: ${call.args.join(" ")}`);
+    assert.equal(call.args[call.args.length - 2], "-File");
+    assert.deepEqual(call.opts.stdio, ["ignore", "pipe", "pipe"], "윈도우도 stdio 는 파이프여야 한다");
+    assert.equal(call.opts.windowsHide, true);
+    assert.equal(call.opts.env, env, "샌드박스 env 를 안 물려줬다");
+    // 띄운 순간의 파일 — BOM + (본문 앞) 출력 UTF-8 + 받은 본문 그대로.
+    assert.ok(seen.bytes, "띄운 순간 -File 파일이 없었다");
+    assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], "UTF-8 BOM 이 없다 — 5.1 이 ANSI 로 읽어 한글이 깨진다");
+    const text = seen.bytes.toString("utf8").slice(1);
+    const enc = text.search(/\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]/);
+    assert.ok(enc >= 0 && enc < text.indexOf(body), "본문보다 앞에서 출력을 UTF-8 로 바꾸지 않는다");
+    assert.ok(text.endsWith(body), "받은 본문이 바뀌었다");
+    assert.ok(seen.file.startsWith(root), "임시 폴더 밖에 썼다");
+    // 끝난 뒤 — 임시 루트에 아무것도 안 남는다.
+    assert.deepEqual(readdirSync(root), [], "받아 둔 스크립트 폴더가 남았다");
+    assert.equal(r.ok, true);
+    assert.deepEqual(lines, ["  ✓ lively CLI 준비 완료"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("H6 윈도우: 받은 본문이 BOM 으로 시작해도 파일의 BOM 은 하나다", async () => {
+  const root = bootRoot();
+  try {
+    const { s, seen } = winStub(0);
+    await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("\uFEFFWrite-Host 1\n")).fn, tmpDir: root });
+    assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    assert.ok(!seen.bytes.toString("utf8").slice(1).includes("\uFEFF"), "BOM 이 두 번 들어갔다 — 둘째 BOM 은 파서까지 간다");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("H7 ★ 윈도우: 스크립트를 못 받으면 띄우지 않는다 — error 를 비워 호출자가 경로별 다음 행동을 말하게", async () => {
+  for (const [why, respond, reason] of [
+    ["404", () => ({ ok: false, status: 404, text: async () => "Not Found" }), /404/],
+    ["네트워크 예외", () => { throw Object.assign(new Error("fetch failed"), { cause: new Error("getaddrinfo ENOTFOUND a.io") }); }, /ENOTFOUND/],
+  ]) {
+    const root = bootRoot();
+    try {
+      const s = stubSpawn((c) => c.emit("close", 0, null));
+      const lines = [];
+      const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(respond).fn, tmpDir: root, onLine: (l) => lines.push(l) });
+      assert.equal(s.calls.length, 0, `${why}: 받지도 못했는데 PowerShell 을 띄웠다`);
+      assert.equal(r.ok, false, why);
+      assert.equal(r.error, null, `${why}: error 를 채우면 main 이 bootstrapFailNote(다음 행동) 대신 그걸 보인다`);
+      assert.equal(lines.length, 1, `${why}: 이유가 로그에 안 남았다`);
+      assert.ok(lines[0].includes("https://a.io/cli.ps1") && reason.test(lines[0]), `${why}: 로그 줄에 URL·이유가 없다: ${lines[0]}`);
+      assert.deepEqual(readdirSync(root), [], `${why}: 임시 폴더를 만들었다`);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+await ta("H8 윈도우: 실패로 끝나도·띄우지 못해도 받아 둔 폴더는 지운다", async () => {
+  const root = bootRoot();
+  try {
+    const { s } = winStub(1);
+    const r1 = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("x")).fn, tmpDir: root });
+    assert.equal(r1.ok, false);
+    assert.match(r1.error, /실패/);
+    assert.deepEqual(readdirSync(root), [], "실패 뒤 폴더가 남았다");
+    const throwing = () => { throw new Error("spawn EACCES"); };
+    const r2 = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: throwing, fetch: fakeFetch(() => okBody("x")).fn, tmpDir: root });
+    assert.equal(r2.ok, false);
+    assert.match(r2.error, /실행하지 못했습니다/);
+    assert.deepEqual(readdirSync(root), [], "띄우지 못한 뒤 폴더가 남았다");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("H9 형식이 틀린 주소는 아무것도 받지 않는다 · 맥은 앱이 따로 받지 않는다", async () => {
+  const f = fakeFetch(() => okBody("x"));
+  const s = stubSpawn((c) => c.emit("close", 0, null));
+  const bad = await runBootstrap({ gatewayUrl: "https://a.io; rm -rf /", platform: "win32", spawn: s.spawn, fetch: f.fn });
+  assert.match(bad.error, /형식/);
+  await runBootstrap({ gatewayUrl: "https://a.io", platform: "darwin", spawn: s.spawn, fetch: f.fn });
+  assert.deepEqual(f.urls, [], "앱이 직접 받았다");
+  assert.equal(s.calls.length, 1);
+  assert.deepEqual([s.calls[0].cli, s.calls[0].args], ["/bin/sh", ["-c", "curl -fsSL https://a.io/cli | sh"]]);
+});
+
+await ta("H10 윈도우: tmpDir·fetch 를 안 주면 OS 임시 폴더와 전역 fetch 를 쓴다(앱의 실제 호출 꼴)", async () => {
+  const realFetch = globalThis.fetch;
+  const f = fakeFetch(() => okBody("Write-Host 1\n"));
+  globalThis.fetch = f.fn;
+  try {
+    const { s, seen } = winStub(0);
+    const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn });
+    assert.deepEqual(f.urls, ["https://a.io/cli.ps1"], "전역 fetch 를 안 썼다");
+    assert.ok(seen.bytes, "띄운 순간 파일이 없었다");
+    assert.ok(seen.file.startsWith(join(tmpdir(), "lively-bootstrap-")), `OS 임시 폴더 밖: ${seen.file}`);
+    assert.equal(existsSyncReal(seen.file), false, "끝난 뒤 파일이 남았다");
+    assert.equal(r.ok, true);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+await ta("H11 경계: 200 인데 빈 본문이어도 띄운다 — 성공 판정은 호출자가 'CLI 가 생겼나' 로 한다", async () => {
+  const root = bootRoot();
+  try {
+    const { s, seen } = winStub(0);
+    await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("")).fn, tmpDir: root });
+    assert.equal(s.calls.length, 1);
+    assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 // ── D. 진행 리듀서 ───────────────────────────────────────────────────────────
@@ -3056,8 +3208,7 @@ t("CL8 ★ 클라우드 CLI 는 워크스페이스를 몰라도 받아진다 —
     // 실제로 spawn 될 명령을 잰다(문구가 아니라 argv). 여기에 워크스페이스 주소가 들어갈 자리가 없다.
     assert.deepEqual(bootstrapCommand(cloudUrl(), "darwin"),
       { cmd: "/bin/sh", args: ["-c", "curl -fsSL https://app.lvly.io/cli | sh"] });
-    assert.deepEqual(bootstrapCommand(cloudUrl(), "win32").args.slice(-1),
-      ["irm https://app.lvly.io/cli.ps1 | iex"]);
+    assert.equal(bootstrapScriptUrl(cloudUrl(), "win32"), "https://app.lvly.io/cli.ps1");
     // env 미설정이면 argv 에도 주소를 안 붙인다 — CLI 의 기본값이 정본이다.
     assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud"]);
   } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
