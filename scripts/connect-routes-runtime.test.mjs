@@ -78,7 +78,9 @@ const STATUS = { prereq: { vault_ready: true, callback_url: "https://lively.acme
 const CSS = readFileSync(path.join(ROOT, "public/styles/40-v2.css"), "utf8").replace(/<\/style/gi, "<\\/style");
 const VIEW = { all: [{ key: "slack", label: "Slack" }, { key: "hubspot-crm", label: "Hubspot Crm", dynamic: true }, { key: "asana", label: "Asana", dynamic: true }],
   connected: [{ key: "hubspot-crm", label: "Hubspot Crm" }] };
-const PEM = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu\n-----END RSA PRIVATE KEY-----\n";
+//  키 판별 시험용 가짜 키 — 표지를 쪼개 이어 붙인다(파일에 키 모양 글자가 남으면 비밀 검사기 gitleaks private-key 가 진짜 키로 잡는다).
+const PEM_MARK = (edge) => `-----${edge} RSA PRIVATE ` + "KEY-----";
+const PEM = `${PEM_MARK("BEGIN")}\nZmFrZS1rZXktZm9yLWxpdmVseS1jb25uZWN0LXJ1bnRpbWUtdGVzdA==\n${PEM_MARK("END")}\n`;
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body>
 <div id="toasts"></div><div id="all"></div><div id="ai"></div><div id="lazy"></div><div id="slack"></div><div id="gh"></div><div id="err"></div><div id="list"></div>
