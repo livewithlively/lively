@@ -314,7 +314,9 @@ function connectStarter(): HTMLElement {
     btn.disabled = true; btn.textContent = '확인하고 있어요…';
     try {
       const r = await openConnectSession();
-      if (r.ai) { location.hash = r.href; return; }
+      //  #4940 — 세션으로 넘어가도 이 화면은 탭에 남는다(셸이 탭을 쥔다). 이름표를 되돌려 두지 않으면 돌아왔을 때
+      //   «확인하고 있어요…» 가 그대로 남아 멈춘 것처럼 보인다(실측 2026-10-23).
+      if (r.ai) { btn.textContent = '연결 도와줘'; location.hash = r.href; return; }
       out.innerHTML = ownAiStepsHtml();
       wireOwnAiSteps(out);
       btn.textContent = '연결 도와줘';

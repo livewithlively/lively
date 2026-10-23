@@ -497,11 +497,34 @@ export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
   catch (err) {
     //  ⚠ 여기가 «모른다» 다 — 중계 불통·타임아웃·브로커 503(LVLY_STATE_UNKNOWN). 종전엔 이 갈래가 곧바로
     //   false(살아있음)였다. 그 접기를 **부르는 쪽이 고르게** 남겨 둔다.
-    if (!isSessionGoneError(err)) return null;
+    //   단 로컬 소켓에 tmux 서버가 **아예 없다** 는 두 번의 답은 모름이 아니다(localServerAbsent — #4940).
+    if (!isSessionGoneError(err)) return localServerAbsent(err);
     if (!isPsmuxSilentExit(err)) return true;   // tmux 는 문구로 확답한다 — 되물을 것이 없다
     try { return !sessionInList(await tmux(["list-sessions", "-F", "#{session_name}"]), id); }
     catch { return true; }                      // 목록도 못 봤다 → 종전 판정 유지(#1791 무회귀)
   }
+}
+
+/**
+ * 로컬 소켓(중계 없음)에 tmux 서버가 **아예 없나** — 그러면 그 소켓의 세션은 끝났다(true). 아니면 모른다(null). (#4940)
+ *
+ * ── 왜 (실측 2026-10-23, 셀프호스트 테스트 박스) ─────────────────────────────────────────
+ *  세션이 하나도 안 남으면 tmux 서버도 함께 내려간다(재부팅 뒤 · 마지막 세션이 끝난 뒤 — 셀프호스트에선 흔한 상태다).
+ *  그때 `has-session` 은 "no server running on …" 을 내고, 게이트웨이는 그걸 #835 규약대로 «모름 → 살아 있음» 으로 접었다.
+ *  그래서 멈춘 리브 세션에 [연결 도와줘]를 누르면 말이 그 죽은 세션의 아웃박스에만 쌓였고(3초마다 다시 넣기),
+ *  [삭제]는 `kill-session` 실패로 500 이었고, 되살리기는 «모름» 에 막혔다.
+ * ★ 노드(#4917)와 같은 논리다: 로컬 소켓엔 전송 층이 없고, 격리 구성원 세션도 이 게이트웨이의 tmux 서버 안에서
+ *  pane 만 `sudo -u box_<id>` 로 내려 돈다(wrapAsMember) — 그 소켓에 서버가 없으면 거기 살던 세션은 하나도 안 산다.
+ *  `has-session` 한 번으로 믿지 않고 `list-sessions` 로 서버 부재를 한 번 더 확인한다(그 사이 서버가 떴으면 종전대로 모름).
+ *  ⚠ 타임아웃·시그널로 끝난 호출은 답이 아니다(isTmuxServerAbsentError — #687·#835 의 원래 걱정은 그쪽이다).
+ *  ⚠ 중계(매니지드)는 여기 오지 않는다 — 전용 컨테이너의 서버 부재는 이미 확답이고(isSessionGoneError), 그 밖의 중계
+ *   실패(503·불통)는 «못 닿았다» 라서 모름으로 남는다.
+ */
+async function localServerAbsent(err: unknown): Promise<true | null> {
+  //  세대(#4931 — 노드의 판별 전용 소켓)가 켜져 있으면 기본 소켓의 목록은 그 세션의 서버를 대표하지 않는다 — 노드는 sessionGoneOnNode 가 가른다.
+  if (tmuxViaRelay() || muxGenerationsActive() || !isTmuxServerAbsentError(err)) return null;
+  try { await tmux(["list-sessions", "-F", "#{session_name}"]); return null; }   // 서버가 있다(그새 떴다) — 모름은 종전대로
+  catch (e) { return isTmuxServerAbsentError(e) ? true : null; }
 }
 
 /** tmux 가 «이 소켓엔 서버가 없다» 고 답했나 — 스테일 소켓 "no server running" · 소켓 파일 없음 "error connecting … (No such file …)". */
