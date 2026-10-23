@@ -314,16 +314,16 @@ function connectStarter(): HTMLElement {
     btn.disabled = true; btn.textContent = '확인하고 있어요…';
     try {
       const r = await openConnectSession();
-      //  #4940 — 세션으로 넘어가도 이 화면은 탭에 남는다(셸이 탭을 쥔다). 이름표를 되돌려 두지 않으면 돌아왔을 때
-      //   «확인하고 있어요…» 가 그대로 남아 멈춘 것처럼 보인다(실측 2026-10-23).
-      if (r.ai) { btn.textContent = '연결 도와줘'; location.hash = r.href; return; }
+      if (r.ai) { location.hash = r.href; return; }
       out.innerHTML = ownAiStepsHtml();
       wireOwnAiSteps(out);
-      btn.textContent = '연결 도와줘';
     } catch (e: any) {
       toast('연결을 도와드릴 대화를 열지 못했어요 — ' + ((e && e.message) || e), true);
-      btn.textContent = '연결 도와줘';
-    } finally { btn.disabled = false; }
+    } finally {
+      //  #4940 — 이름표는 어느 갈래든 여기서 되돌린다. 세션으로 넘어가도 이 화면은 탭에 남아(셸이 탭을 쥔다), 성공 갈래만 안 되돌리면
+      //   돌아왔을 때 «확인하고 있어요…» 가 그대로 남아 멈춘 것처럼 보였다(실측 2026-10-23).
+      btn.disabled = false; btn.textContent = '연결 도와줘';
+    }
   };
   return el('section', { class: 'cn-start' },
     el('p', { class: 'v2-desc', text: '[연결 도와줘]를 누르면 AI가 앱마다 무엇이 준비됐는지 보고, 연결을 한 걸음씩 도와드려요.' }),

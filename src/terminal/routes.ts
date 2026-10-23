@@ -980,6 +980,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  내 세션 219건 중 198건이 이 상태 — 세션을 여는 일의 대부분이 막다른 길이었다).
     //  ⚠ sessionGone 은 tmux 가 "그런 세션 없다"고 **확답**할 때만 true 다(소켓 불통·타임아웃은 false) — 모르면
     //   종전 경로로 흘러 살아 있는 세션을 죽었다고 오판하지 않는다(#835 '확답 only').
+    //   (#4940) 셀프호스트(기본 소켓 하나뿐)에서 tmux 서버가 아예 없다는 두 번의 답도 확답이다(tmux-exec localServerAbsentVerdict).
     //  #3752 ④ — 판정을 **셋**으로 받는다. 종전 `sessionGone` 은 «모른다» 를 «살아 있다» 로 접었고, 매니지드에서
     //   샌드박스가 wedged 되면(브로커 503 LVLY_STATE_UNKNOWN) 그 접기 때문에 사람이 «응답이 없다» 로만 겪었다
     //   (#3688 실측). 자동 경로의 접기는 그대로 두고, 이 자리에서만 «못 봤다» 를 사람에게 말한다.

@@ -52,7 +52,7 @@ import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer, tmuxCliEnv, TMUX_LOCAL_TIMEOUT_MS } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, localServerAbsentVerdict, tmuxViaRelay, isNoTmuxServer, tmuxCliEnv, TMUX_LOCAL_TIMEOUT_MS } from "./tmux-exec.js";
 import { muxGenerationsActive, killEmptyMuxServers } from "./mux-generations.js";   // #4931 — 노드 tmux 세대
 import { sessionActivityTitle, scrapePane, screenRunEffects, screenReadPlan, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase, backgroundHolds } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
@@ -1349,8 +1349,10 @@ async function tmuxKill(id: string): Promise<void> {
   //  (상민님 2026-08-21 실측: 끝난 세션 보관 → HTTP 500 internal_error, 로그에 can't find session).
   //  보관·회수의 목표 상태는 '그 tmux 가 없음' 이므로, 이미 없으면 목표는 이미 이뤄진 것이다.
   //  소켓 접속불가·타임아웃은 판정 불가라 isSessionGoneError 가 false 를 주고 그대로 던진다(모르면 성공이라 말하지 않는다).
+  //  (#4940) 단 셀프호스트에서 tmux 서버가 아예 없다는 두 번의 답(localServerAbsentVerdict)도 «이미 없음» 이다 — 안 그러면 세션이 다 끝난 뒤
+  //   [보관 ×]·관리자 회수·수집 러너 정리가 "no server running" 으로 실패하고, killSession 은 훅 토큰 회수·행 정리 전에 멈춘다.
   try { await tmux(["kill-session", "-t", id]); }
-  catch (err) { if (!isSessionGoneError(err)) throw err; }
+  catch (err) { if (!isSessionGoneError(err) && (await localServerAbsentVerdict(err)) !== true) throw err; }
 }
 async function lastResultSeen(id: string): Promise<boolean | undefined> {
   try { return lastResultSeenFrom(await tmux(["display-message", "-p", "-t", id, LAST_RESULT_SEEN_FMT])); }
