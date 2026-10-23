@@ -16,8 +16,9 @@ import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 �
 import { deviceStore, onShellPrefsAdopted, shellPrefStore, shellPrefsPush, shellPrefsSync } from './shell-prefs.js';   // #2460 — 사람이 고른 것의 정본은 서버
 import { watchStaleShell } from '../gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
 import { workDayStart } from '../lib/sess-fold.js';   // #762 — 홈이 '오늘 일감'을 자르는 자(달력 자정이 아니다)
-import { renderLiv } from '../liv.js';
-import { livChatCleanup } from '../liv-chat.js';   // #4032 — 리브 칸 걷기
+import { renderLiv } from '../liv.js';   // #4970 — 리브 화면(단독). 리브 세션이 있으면 그 세션 화면으로 간다(lib/liv-desk livRoute)
+import { isLivBoard, isLivRoute, isLivSessionId, livRoute } from '../lib/liv-desk.js';
+import { knownLivSessionId, livSessionId, livSessionIdWithin } from './liv-open.js';
 import { CLASSIC_PAGES, aliasRoute, appByKey, appFrame, noteAppUse, noteInstalledApp, openAppById, setLaunchpadContext } from './apps.js';
 import { installedRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 앱의 최근 기록 키
 import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
@@ -216,6 +217,9 @@ function resumedInTab(tab: ShellTab, sid: string): void {
   //   복원이 **새 박스 id** 를 만들면(강제 복원 등 — #4694 이후 대개는 같은 id 라 옮길 것이 없다) 핀·이름 기억처럼 박스 id 를 키로 쓰는 것들은 여기서 안 옮기면
   //   가리킬 행이 사라져 사람 눈엔 "핀이 풀렸다 · 이름이 되돌아갔다"가 된다(원준 신고 2026-08-28).
   adoptSessionLocalState(prevSessionIdOf(tab), sid);
+  //  #4970 — 되살리기가 새 id 를 만들었으면 리브 좌표도 옮겨 갔다(서버가 이정표를 따라 읽는다) — 기억한 리브 id 를 새로 묻는다.
+  //   안 그러면 30초 동안 되살린 리브 세션을 리브 세션으로 못 알아본다(터미널로 열리고 물음 자리 · 곁칸 «리브» 가 없다 — 격리 리뷰).
+  void livSessionId({ fresh: true });
   const href = '#/s/' + encodeURIComponent(sid);
   tab.route = href;
   if (tabsApi?.current() === tab && location.hash !== href) { suppressHash++; location.hash = href; }
@@ -230,6 +234,16 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   if (projectId > 0) { try { detail = await api('/api/ui/v6/projects/' + projectId); } catch (_) { detail = null; } }
   if (seq !== tab.seq) return;
   if (detail && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
+  //  #4970 «리브 = 세션 하나» — 이 세션이 리브 세션인가(리브 좌표로 알아본다 — 이름 글자로 가르지 않는다). 리브 세션은 개인 폴더의 liv 에서
+  //   프로젝트 없이 열리므로 프로젝트 없는 세션 화면에서만 서버에 묻는다(30초 기억). 리브 세션이면 대화 보기가 본자리 · 입력칸 위 물음 자리 ·
+  //   곁칸 맨 앞 «리브» 칸.
+  const livId = projectId > 0 ? knownLivSessionId() : await livSessionIdWithin(1500);
+  if (seq !== tab.seq) return;
+  const isLiv = (sid: string | null | undefined): boolean => {
+    if (!sid) return false;
+    const s = findSess(sid);
+    return isLivSessionId([sid, s?.id, s?.logId, s?.raw?.claudeSessionId], knownLivSessionId() || livId);
+  };
   dropProjView(tab);
   shellProject.set(tab, projectId);
   if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
@@ -238,6 +252,7 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     id: projectId,
     detail,
     sessionId,
+    livSession: projectId === 0 && isLiv(sessionId),
     onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
     onRenameProject: (pid, name) => renameProject(pid, name),   // 문패 연필 — 사이드바 줄 더블클릭과 같은 경로(#2579)
     // 문패 [세션 옮기기](#3778) — [⋯ ▸ 이 세션 ▸ 프로젝트] 와 같은 실행, 그릇만 모달. 조건도 같다(주인·초대받은 사람 — #3870 canMoveSess).
@@ -281,6 +296,8 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     //  그릇은 셸(panes.ts)이 세션마다 쥐고 여기로 건네준다.
     mountSession: (host, sid, o) => {
       const h = renderSession(host, data, sid, {
+        //  #4970 — 리브 세션: 대화 보기가 본자리(원준 2026-09-14 «온보딩에서 만들어 주는 세션은 대화로 보기») · 리브 물음은 입력칸 바로 위.
+        ...(isLiv(sid) ? { chatHome: true, livAsks: true } : {}),
         trail: (o && o.trail) || null,
         //  머리줄 [자료](#4088 후속) — 곁칸의 자료 칸을 켠다(폰: 서랍). 셸(panes.ts)이 준 배선을 그대로 넘긴다.
         onOpenFiles: o && o.openFiles ? o.openFiles : undefined,
@@ -302,6 +319,21 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   }));
   tab.aside.replaceChildren();   // 우패널 없음 — 맥락은 화면 안(칸)에서 산다
   if (tabsApi && tabsApi.active() === tab) applyTabChrome(tab);   // 좁은 폭의 [타임라인] 단추가 곁칸을 알게(#4088)
+  //  #4970 — 리브 id 를 1.5초 안에 못 받았으면 기억한 값으로 그렸다. 늦게 온 답이 «이 세션이 리브 세션인가» 를 바꾸면 **한 번** 다시 그린다
+  //   (안 그러면 첫 응답이 느린 날 리브 세션이 끝까지 터미널로 · 물음 자리 없이 남는다 — 격리 리뷰). 답이 같으면 아무것도 안 한다 —
+  //   다시 그릴 때는 기억이 새것이라 같은 답이 나와 되풀이되지 않는다. 쓰던 글은 세션별로 기억된다(saveComposeDraft).
+  if (projectId === 0 && sessionId) {
+    const drawnLiv = isLiv(sessionId);
+    void livSessionId().then(() => {
+      if (seq !== tab.seq || isLiv(sessionId) === drawnLiv) return;
+      //  그사이 이 탭에서 다른 세션을 골랐으면(좁은 폭 서랍 — seq 를 안 올린다) 그 세션이 지금 화면이다 — 건드리지 않는다.
+      if (routeKey(tab.route) !== 's:' + sessionId) return;
+      //  숨은 탭이면 돌아올 때 다시 그린다(replaceRoute 와 같은 길) — 지금 그리면 renderRoute 의 전역 일(앱 겹창 닫기 · 사이드바 표시)이
+      //   보고 있는 다른 탭을 건드린다(격리 리뷰).
+      if (tabsApi?.current() !== tab) { tab.rendered = false; return; }
+      void renderRoute(tab);
+    });
+  }
 }
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
@@ -490,7 +522,6 @@ export async function bootV2(): Promise<void> {
     onClose: (tab) => {
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
       dropTabGuest(tab);   // 그 탭이 연 미리보기는 탭과 함께 걷는다(고정 문서는 어느 탭의 것도 아니라 남는다)
-      if (routeKey(tab.route) === 'liv') livChatCleanup();   // #4032 — 리브 탭을 닫으면 그 칸도 걷는다
       if (tab.appView) { tab.appView.destroy(); tab.appView = null; }
       // 탭 닫기 = AppWindow 연결 해제. AppInstance·세션·worker 생애주기는 별도라 여기서 종료 API를 부르지 않는다.
       dropProjView(tab); shellProject.delete(tab); drawSide();
@@ -588,6 +619,7 @@ export async function bootV2(): Promise<void> {
   //  #3887 — 저장 응답으로 캐시가 서버 값이 됐을 때(서버가 상한·형식으로 버렸거나 다른 기기가 바꾼 저장소)도 같은 일을 한다.
   onShellPrefsAdopted(reloadShellPrefs);
   const prefsSynced = shellPrefsSync().then((changed) => { if (changed) reloadShellPrefs(); });
+  void livSessionId();   // #4970 — 리브 세션 id 를 미리 물어 둔다(세션 화면이 그릴 때 기다리지 않게 — livSessionIdWithin)
   await loadData();
   void prefsSynced.then(() => migrateSessionDismissals());   // #3857 — 옛 치움 맵(세션 행)을 서버 정본으로 한 번 옮긴다
   await repairUnknownSessNames();   // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
@@ -760,11 +792,8 @@ async function syncShell(): Promise<void> {
   else if (isSessAllRoute(at.route)) paintSessAll(at);   // #4158 [AI 세션] 전체 목록 — 상태 점·치움이 같은 결로 따라온다
   for (const t of tabsApi.tabs) {
     if (!t.chat) continue;
-    //  #4032 — 리브 탭도 세션 대화창을 쥔다. 라우트에 세션 id 가 없으니 **붙어 있는 세션**(chat.id)으로 찾는다.
-    const livTab = routeKey(t.route) === 'liv';
-    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : livTab ? t.chat.id : '';
+    const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
     const s = sid ? findSess(sid) : null;
-    if (livTab) { if (s && t.chat.id === s.id) t.chat.update({ ...s, projectName: projName(data, s.projectId) }); continue; }
     // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
     //  세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
     //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
@@ -1300,6 +1329,20 @@ async function onHash(): Promise<void> {
       location.replace(location.pathname + location.search + hash);
     }
   }
+  //  #4970 «리브 = 세션 하나» — 리브 주소(#/liv)도 거쳐 가는 문이다(위 프로젝트 주소와 같은 결). 리브 세션이 있으면 **그 세션 주소로
+  //   갈아 끼운 뒤** 탭을 고른다 — 그 세션 탭이 이미 있으면 그 탭이 켜진다(레일 [리브]를 다시 눌러도 같은 세션이 탭 둘로 서지 않게).
+  //   ?board=1 은 건너뛴다(로컬 AI 가 주는 링크 — 늘 리브 화면). 탭 복원처럼 라우터가 곧바로 그리는 길은 renderRoute 의 'liv' 갈래가 같은 일을 한다.
+  if (isLivRoute(hash) && !isLivBoard(hash)) {
+    const was = location.hash;
+    const lid = await livSessionIdWithin(1500);
+    //  기다리는 사이 사람이 다른 곳으로 갔으면(다른 줄을 눌렀다 · 열린 창 목록에서 탭을 켰다) 그 이동이 이긴다 — 늦은 답으로 덮지 않는다(격리 리뷰).
+    if (location.hash !== was) return;
+    if (lid) {
+      hash = '#/s/' + encodeURIComponent(lid);
+      //  ⚠ 값이 같으면 hashchange 가 안 나므로 그때는 세지 않는다(onSessionPicked 와 같은 규칙 — 안 그러면 다음 진짜 이동을 삼킨다).
+      if (location.hash !== hash) { suppressHash++; location.replace(location.pathname + location.search + hash); }
+    }
+  }
   const cur = tabsApi.active();
   //  같은 화면 안의 이동(같은 routeKey — 앱빌더 목록 ↔ 이어 만들기 · 쿼리만 바뀜)도 크롬은 다시 맞춘다: 사이드바 주인이 주소 전체를 본다
   //   (#4632 ③ 실제 화면 ?see= — 뒤로 가기로 그 표시가 걷히면 사이드바 열도 돌아와야 한다).
@@ -1327,7 +1370,6 @@ async function onHash(): Promise<void> {
   if (!hop && fromHome && (cur.draft || '').trim()) { tabsApi.add(hash); return; }
   if (!hop && !fromHome && (targetInstance || currentInstance)) { tabsApi.add(hash); return; }
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
-  if (routeKey(cur.route) === 'liv') livChatCleanup();     // 리브 탭을 떠나면 그 칸(빈 대화·진행 중인 붙이기)도 걷는다(#4032)
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
   tabsApi.routed(cur);     // 제목·noAside 를 새 라우트로 먼저 — 그 뒤에 크롬을 맞춘다(거꾸로 하면 no-aside 가 한 화면 늦게 따라온다, 실측 #1777)
@@ -1520,36 +1562,31 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       else await renderConnect(tab.center);
       if (seq !== tab.seq) return;
     } else if (page === 'liv') {
+      //  #4970 «리브 = 세션 하나» — 레일 [리브]·리브 알림이 여기로 온다. 리브 세션이 있으면 **그 세션 화면**으로 간다(보통 세션 화면 + 오른쪽 «리브» 칸).
+      //   없으면 리브 화면(단독) — 지금 손볼 것 · 물음 · 외부 앱 연결 상태와 [리브와 대화 시작]. `?board=1` 이면 세션이 있어도 이 화면
+      //   (커서 같은 로컬 AI 가 «이 링크에서 넣어 주세요» 로 주는 주소 — lib/liv-desk LIV_BOARD_HASH).
       if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
       tab.center.replaceChildren();
+      tab.aside.replaceChildren();
+      const board = params.get('board') === '1';
+      const livId = await livSessionId({ fresh: true });
+      if (seq !== tab.seq) return;
+      if (livRoute({ board, sessionId: livId }) === 'session' && livId) {
+        //  지나가는 주소다 — 그 세션 주소로 갈아 끼운다(replace — 뒤로 가기에 이 자리를 남기지 않는다. #/open 과 같은 길).
+        const to = '#/s/' + encodeURIComponent(livId);
+        //  그 세션 탭이 이미 있으면 **그 탭을 켜고 이 탭은 닫는다** — 저장된 옛 #/liv 탭이 되살아나거나 새 탭으로 열었을 때
+        //   같은 리브 세션이 탭 둘(대화창 둘 · 되묻기 둘)로 서지 않게(격리 리뷰).
+        const other = tabsApi?.find(to);
+        if (other && other !== tab) { tabsApi?.activate(other); tabsApi?.close(tab); return; }
+        tab.route = to;
+        if (tabsApi?.current() === tab && location.hash !== to) { suppressHash++; location.replace(location.pathname + location.search + to); }
+        tabsApi?.routed(tab);
+        void renderRoute(tab);
+        return;
+      }
       const host = el('div', { class: 'v2-livpage' });
       tab.center.append(host);
-      tab.aside.replaceChildren();
-      await renderLiv(host, {
-        rail: null, embedded: true,   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
-        //  #4032 — 리브는 진짜 세션이다. 그 세션 대화창은 **이 셸의 목록**으로 붙인다: 20초 갱신이 tab.chat 으로 상태를 흘리고,
-        //   탭을 떠나면 셸이 부순다(세션 화면과 같은 수명). 목록에 아직 없으면(방금 열었거나 첫 판) 한 번 새로 읽는다.
-        mountSession: async (h, sid, o) => {
-          if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
-          seedCreated(sid);   // #4694 — 같은 id 로 되살린 리브 세션도 «중단됨» 행이 아니라 복원 응답으로 붙인다
-          if (!findSess(sid)) await loadData();
-          if (seq !== tab.seq || !h.isConnected) return null;
-          const handle = renderSession(h, data, sid, {
-            chatHome: true,
-            //  폰 머리줄 ≡(#4229 후속)은 사이드바가 있는 화면에서만 — 리브는 사이드바가 없는 앱이라(lib/side-owner · #4632 «각자 앱 사이드바로») 단추를 두지 않는다.
-            ...(sideOwnerOfRoute(tab.route) !== 'none' ? { onOpenSidebar: () => mobile?.openSide() } : {}),
-            isVisible: () => tabsApi?.current() === tab && o.isVisible(),
-            onResumed: o.onResumed,
-          });
-          tab.chat = handle;
-          return handle;
-        },
-        onSessionCreated: (row: any) => {
-          if (!row || !row.id) return;
-          data.sessions = mergeSessions([row], []).concat(data.sessions.filter((x) => x.id !== String(row.id)));
-          drawSide(); tabsApi?.paint();
-        },
-      });
+      await renderLiv(host, { embedded: true, sessionId: livId });
     } else if (page === 'welcome') {
       // 처음 설정(#1813) — 리브가 이름·무대·자료·AI 를 묻고 채팅으로 이어진다. 막1(이름)에서는 사이드바·탭 줄을 숨긴다(노션 p1).
       tab.center.replaceChildren();
@@ -1618,7 +1655,12 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
       if (SOLO) {
         const trail = drawAsideSession(tab, s || null);
+        //  #4970 — 팝아웃 창에서 연 리브 세션도 대화 보기 · 입력칸 위 물음 자리(종전엔 세션 이름으로 알아봤다 — 이제 리브 좌표로).
+        const soloLivId = await livSessionIdWithin(1500);
+        if (seq !== tab.seq) return;
+        const soloLiv = isLivSessionId([id, s?.id, s?.logId, s?.raw?.claudeSessionId], soloLivId);
         tab.chat = renderSession(tab.center, data, id, {
+          ...(soloLiv ? { chatHome: true, livAsks: true } : {}),
           trail,
           onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
           onRename: (label) => renameSession(s ? s.id : id, label, tab),

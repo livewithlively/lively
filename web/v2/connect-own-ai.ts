@@ -1,13 +1,13 @@
 // v2/connect-own-ai.ts — 외부 앱 연결을 **시작하는 문** 한 벌(#4970). 처음 설정의 [연결할게요]와 [외부 앱 연결] 화면의 [연결 도와줘]가 같이 쓴다.
 //
-//  · 서버에 로그인된 AI 가 있으면 — 서버(me_connect_session_open)가 보통 세션을 열고(첫 지시 = 연결 스킬 liv-connect) 그 세션으로 간다.
+//  · 리브 세션이 있거나 서버에 로그인된 AI 가 있으면 — 리브에게 맡긴다(me_liv_open job:connect — 리브 = 세션 하나, 상민님 결정 2026-10-22).
+//    리브 세션이 없으면 그 말(연결 스킬 liv-connect 를 부르는 말)로 열고, 있으면 그 세션에 넣고 그 세션으로 간다.
 //  · 없으면 — «쓰는 AI 에서 하기» 세 걸음을 그 자리에 그린다: 데스크톱 앱 받기 → 앱에서 이 워크스페이스에 로그인 → 쓰는 AI 에 한 마디.
 //   커서·Claude Code 처럼 사람이 이미 쓰는 AI 가 연결 스킬을 받아 같은 일을 한다(스킬은 데스크톱 앱 설치가 그 AI 에 내려 준다).
 //  두 자리가 따로 그리면 말이 갈린다 — 문구·내려받기 판정은 여기 한 곳에만 둔다.
-import { api, toast } from '../core.js';
+import { toast } from '../core.js';
 import { managedWorkspaces } from './switcher.js';   // 매니지드면 데스크톱 앱의 로그인 문이 다르다(클라우드 로그인 vs 주소 입력)
-import { rememberCreated } from './created-cache.js';
-import { rememberFirstPrompt } from './quick-session.js';
+import { openLiv } from './liv-open.js';
 
 /** 쓰는 AI 에 그대로 말할 한 마디 — 스킬 이름을 넣어 자동 호출이 빗나가도 사람과 AI 가 알아본다. */
 export const SAY_IN_AI = '라이블리 liv-connect 스킬로 외부 앱 연결 도와줘';
@@ -64,19 +64,16 @@ const cmdBox = (cmd: string) => `<div class="ob-cmd"><code>${esc(cmd)}</code><bu
 
 export type ConnectOpen = { ai: true; href: string } | { ai: false };
 
-/** 연결 세션을 연다(서버 me_connect_session_open). 새로 연 세션이면 세션 화면이 첫 지시를 먼저 그릴 수 있게 남긴다(quick-session 과 같은 길).
+/** 외부 앱 연결을 리브에게 맡긴다(서버 me_liv_open job:connect). 첫 지시 그리기·못 넣은 말 돌려 두기는 openLiv 가 남긴다.
  *  실패는 던진다 — 부르는 쪽이 사람에게 이유를 말한다. */
 export async function openConnectSession(): Promise<ConnectOpen> {
-  const r: any = await api('/api/ui/me/connect-session', { method: 'POST', body: '{}' });
-  if (!(r && r.ai === true && r.session_id)) return { ai: false };
-  if (!r.reused) {
-    try { rememberCreated(r.session); if (r.initialPrompt) rememberFirstPrompt(String(r.session_id), String(r.initialPrompt)); } catch (_) { /* 비치명 */ }
-  }
-  return { ai: true, href: String(r.href || `#/s/${encodeURIComponent(String(r.session_id))}`) };
+  const r = await openLiv({ job: 'connect' });
+  return r.ai ? { ai: true, href: r.href } : { ai: false };
 }
 
-/** «쓰는 AI 에서 하기» 세 걸음 — 서버에 로그인된 AI 가 없을 때. 사람이 손대는 것은 받기·로그인·붙여넣기 셋뿐이다. */
-export function ownAiStepsHtml(): string {
+/** «쓰는 AI 에서 하기» 세 걸음 — 서버에 로그인된 AI 가 없을 때. 사람이 손대는 것은 받기·로그인·붙여넣기 셋뿐이다.
+ *  say — 셋째 걸음에서 쓰는 AI 에 붙여 넣을 말(기본: 외부 앱 연결). 리브 화면은 점검하는 말을 준다. */
+export function ownAiStepsHtml(say: string = SAY_IN_AI): string {
   const os = desktopOs();
   const getBtn = '<button type="button" class="ob-btn ob-btn-sub ob-btn-inline ob-btn-mini" data-get>앱 받기</button>';
   const step1 = os === 'win'
@@ -104,8 +101,8 @@ export function ownAiStepsHtml(): string {
       <div class="ob-ins" data-n="3">
         <b class="ob-ins-t">쓰시는 AI에 이렇게 말합니다</b>
         <p class="ob-ins-p">설치가 끝나면 쓰시던 AI를 한 번 껐다 켜고, 새 대화에 아래 말을 그대로 붙여 넣으세요.</p>
-        ${cmdBox(SAY_IN_AI)}
-        <p class="ob-ins-n">그 AI가 앱마다 무엇이 준비됐는지 보고, 연결을 한 걸음씩 안내합니다. 서버에서 쓰는 AI는 왼쪽 아래 내 이름을 누르면 나오는 [AI 계정 연결]에서 언제든 로그인하실 수 있어요.</p>
+        ${cmdBox(say)}
+        <p class="ob-ins-n">${say === SAY_IN_AI ? '그 AI가 앱마다 무엇이 준비됐는지 보고, 연결을 한 걸음씩 안내합니다.' : '그 AI가 이 워크스페이스에서 손볼 것을 보고, 한 걸음씩 안내합니다.'} 서버에서 쓰는 AI는 왼쪽 아래 내 이름을 누르면 나오는 [AI 계정 연결]에서 언제든 로그인하실 수 있어요.</p>
       </div>
     </div>`;
 }

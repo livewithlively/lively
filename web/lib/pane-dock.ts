@@ -275,7 +275,7 @@ export function dockInset(home: DockHome, size: number, m: { pad: number; margin
 //   빌린다(새 색을 만들지 않는다 — 레일·런치패드의 같은 앱과 같은 색이어야 한 앱으로 읽힌다).
 const APP_COLOR: Readonly<Record<string, string>> = {
   tasks: 'proj', files: 'src', sessfiles: 'term', knowledge: 'wiki', web: 'web', timeline: 'ctx',
-  liv: 'liv', archive: 'sess', preview: 'learn', editor: 'bell', apps: 'apps', sessapp: 'liv', sessions: 'chat',
+  liv: 'liv', livdesk: 'liv', archive: 'sess', preview: 'learn', editor: 'bell', apps: 'apps', sessapp: 'liv', sessions: 'chat',
 };
 /** 그 종류의 색 토큰 이름(--gi-c-<이름>). 모르는 종류는 apps(회색). */
 export function appColor(type: string): string { return Object.prototype.hasOwnProperty.call(APP_COLOR, type) ? APP_COLOR[type] : 'apps'; }

@@ -459,8 +459,10 @@ export interface SessionViewOpts {
   isVisible?: () => boolean;
   /** 복원으로 새 세션이 생겼다 — 그 탭만 새 세션으로 옮긴다(전역 주소를 건드리지 않는다). */
   onResumed?: (newId: string) => void;
-  /** 대화 보기가 본자리인 화면(#4032 리브 탭) — session-chat.ts chatHome 주석. */
+  /** 대화 보기가 본자리인 화면(#4032 리브 탭 → #4970 리브 세션) — session-chat.ts chatHome 주석. */
   chatHome?: boolean;
+  /** 리브 세션이다(#4970) — 리브의 물음을 입력칸 바로 위에 띄운다(session-chat.ts livAsks 주석). */
+  livAsks?: boolean;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
@@ -507,6 +509,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     isVisible: vopts.isVisible,
     onResumed: vopts.onResumed,
     chatHome: vopts.chatHome,
+    livAsks: vopts.livAsks,
   });
 }
 

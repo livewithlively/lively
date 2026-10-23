@@ -29,6 +29,7 @@ import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
 import { consolePart } from './panes-console.js';   // #4876 곁칸 «콘솔»
+import { livDeskPart } from './panes-liv.js';   // #4970 리브 세션의 오른쪽 «리브» 칸
 import type { TlItem } from '../timeline.js';
 import { composerMention } from './compose-mention.js';
 import { composerTasks } from './compose-tasks.js';   // #4135 [담기]한 태스크 = 글칸의 번호 배지
@@ -57,7 +58,7 @@ function handIsElsewhere(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
 }
 
-export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
+export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'livdesk' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
 
 export interface PartCtx {
   id: number;
@@ -152,7 +153,11 @@ export const PART_DEFS: PartDef[] = [
   //   그림은 프로젝트 과녁(#4233, 원준 2026-10-05). 그리는 자리의 크기에 맞춰 glyphAt() 이 13px 이하에선 작은 과녁으로 바꾼다.
   { type: 'tasks', name: '프로젝트', icon: 'proj', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
   { type: 'timeline', name: '타임라인', icon: 'timeline', hint: '이 프로젝트에 남은 활동 기록입니다.' },
-  { type: 'liv', name: '리브', icon: 'liv', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
+  //  #4970 — 이름을 «리브» 에서 «프로젝트 대화» 로(상민님 2026-10-23 «이름만 구분가게»). «리브» 는 워크스페이스 담당자(아래 livdesk ·
+  //   레일 [리브] · 리브 세션)만 가리킨다. 종류 이름(type)은 그대로 둔다 — 저장된 배치가 이 이름으로 탭을 기억한다.
+  { type: 'liv', name: '프로젝트 대화', icon: 'liv', hint: '이 프로젝트를 아는 AI 와 대화합니다.' },
+  //  #4970 «리브 = 세션 하나» — 리브 세션의 오른쪽 칸(지금 손볼 것 · 외부 앱 연결 상태). [+] 로 넣지 않는다 — 리브 세션을 열면 셸이 맨 앞에 세운다.
+  { type: 'livdesk', name: '리브', icon: 'liv', pickable: false, hint: '워크스페이스 담당자 리브 — 지금 손볼 것과 외부 앱 연결 상태를 봅니다. 말은 대화에서 겁니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
   { type: 'archive', name: '지난 세션', icon: 'archive', hint: '박스가 멈춰 지금은 안 도는 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
   { type: 'web', name: '웹', icon: 'web', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
@@ -1618,5 +1623,6 @@ export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'timeline') return timelinePart(ctx);
   if (type === 'apps') return appsPart(ctx);
   if (type === 'sessapp') return sessAppPart(ctx);
+  if (type === 'livdesk') return livDeskPart(ctx);
   return livPart(ctx);
 }

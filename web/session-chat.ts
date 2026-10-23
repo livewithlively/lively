@@ -47,6 +47,8 @@ import { confirmSessionTrash, eulReul, leaveInvitedSession, sessionNames, sessio
 import { CONTINUED_RE, INJECTED_RE, INTERRUPT_RE, isHiddenBrief, trailMsg, trailSay, type TrailWidget } from './session-trail.js';
 import { sessionHandoffContext } from './session-handoff-context.js';
 import { mountCodexLive, type CodexLive } from './session-codex-live.js';   // #2055 codex 실시간 층(승인·타이핑)
+import { mountLivAskDock } from './liv-ask-dock.js';   // #4970 리브 세션의 물음 자리(입력칸 바로 위)
+import { openLiv } from './v2/liv-open.js';   // #4970 리브 세션에 서버로 넣기(입력칸에 쓰던 글이 있을 때)
 import { mountSessionTasks, type SessionTasksHandle } from './session-tasks.js';   // #2439 ③ 작업 표면(백그라운드 셸·서브에이전트)
 import { onSessionEvents } from './session-events.js';   // #3699 대화 파일 통보(되묻기 → 밀어주기)
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
@@ -145,9 +147,10 @@ export interface SessAppDoor {
 
 //  #1631 — 서버 킥오프 세션 이름(src/org/liv/kickoff.ts LIV_SESSION_LABEL)과 **글자가 같아야** 이 세션을 알아본다(둘이 갈리면 숨김·로딩이 조용히 꺼진다 — liv-kickoff-chat-view 시험이 잠근다).
 //   ⚠ SessionInfo 에 kind 가 안 실려 지금은 이름으로 가른다 — 사람이 다른 세션을 이 이름으로 바꾸면 그 세션도 첫 말을 숨긴다(막다른 길은 아님, [터미널로 보기]로 원문). kind 가 프런트까지 오면 그걸로 바꾼다.
+//   (#4970) 처음 설정은 이제 킥오프를 열지 않는다 — 이 이름은 이미 진행 중인 리브 2턴(재개 세션)이 쓰는 동안만 남긴다(2턴과 함께 걷는다).
+//   리브 세션 자체(#4032 «리브 — 대화»)는 이름으로 알아보지 않는다 — 셸이 리브 좌표로 알아보고 opts.chatHome·opts.livAsks 를 준다
+//   (#4970 «리브 = 세션 하나» — 사람이 이름을 바꿔도 리브 세션은 리브 세션이다).
 const LIV_KICKOFF_LABEL = '리브 — 처음 설정 점검';
-//  #4032 — 리브 탭에서 첫 말로 연 리브 세션(src/org/liv/session.ts LIV_CHAT_LABEL). 대화가 본자리인 것은 같고, 첫 말은 사람이 쓴 것이라 숨기지 않는다.
-const LIV_CHAT_LABEL = '리브 — 대화';
 /** 보낸 말이 대화 기록에 사람 말로 나타나나 — 슬래시 명령(`/compact`)·셸(`!ls`)은 하네스가 그 자리에서 실행하고 사람 말 줄로 안 남는다(에코 없음). */
 const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
 
@@ -162,7 +165,7 @@ const echoable = (t: string): boolean => !/^[/!]/.test(t.trim());
  */
 export function sessionChatLook(label: string, chatHome: boolean): 'tui' | 'desktop' {
   const l = String(label || '');
-  return chatHome || l === LIV_KICKOFF_LABEL || l === LIV_CHAT_LABEL ? 'desktop' : 'tui';
+  return chatHome || l === LIV_KICKOFF_LABEL ? 'desktop' : 'tui';
 }
 
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
@@ -226,8 +229,11 @@ export interface SessionChatOpts {
    *  ⚠ 미지정이면 이 화면이 전역 주소를 바꾼다. 셸 안에서는 그게 곧 **활성 탭의 주소**라, 숨은 탭에서 일어난
    *   복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다. 셸(v2/main.ts)은 이 콜백으로 **그 탭만** 옮긴다. */
   onResumed?: (newId: string) => void;
-  /** 이 화면은 **대화 보기가 본자리**다(#4032 리브 탭) — 세션 이름·런타임과 무관하게 대화창으로 연다. 터미널은 [보기]로 여전히 열린다. */
+  /** 이 화면은 **대화 보기가 본자리**다(#4032 리브 탭 → #4970 리브 세션) — 세션 이름·런타임과 무관하게 대화창으로 연다. 터미널은 [보기]로 여전히 열린다. */
   chatHome?: boolean;
+  /** 이 세션은 **리브 세션**이다(#4970 «리브 = 세션 하나» — 셸이 리브 좌표로 알아본다). 리브가 던진 물음(자격·객관식·올리기)을
+   *  입력칸 바로 위에 띄운다(web/liv-ask-dock.ts). 값은 대화로 가지 않는다 — 카드가 금고로 곧바로 보낸다. */
+  livAsks?: boolean;
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
@@ -652,10 +658,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *   리브 킥오프 세션(src/org/liv/kickoff.ts LIV_SESSION_LABEL)은 터미널이 아니라 대화창으로 연다. 알아보는 자는 세션 이름이다
    *   (서버 상수와 같은 글자 — liv-kickoff-chat-view 시험이 둘을 맞춘다). 사람이 이름을 바꾸면 여느 세션처럼 터미널이 기본으로 돌아간다.
    */
-  //  리브 세션 이름(LIV_KICKOFF_LABEL · LIV_CHAT_LABEL)은 파일 머리(mountSessionChat 위)에 있다 — 대화창 문법을 고르는 자리가
+  //  옛 킥오프 세션 이름(LIV_KICKOFF_LABEL)은 파일 머리(mountSessionChat 위)에 있다 — 대화창 문법을 고르는 자리가
   //   대화창을 만들기 **전**에 그 이름을 봐야 해서 올렸다(#4707). 규칙·사연은 그 자리 주석 그대로다.
   const livKickoff = (): boolean => String(target.label || '') === LIV_KICKOFF_LABEL;
-  const livChat = (): boolean => String(target.label || '') === LIV_CHAT_LABEL;
   //  ★ #4135 — 종전엔 여기에 `!isCodex() &&` 가 붙어 «코덱스는 무조건 터미널» 이었다. 그 한 줄은 **화면만**
   //   바꾼 것이라, pane 이 셸인 app-server 세션에서 사람이 터미널에 친 말이 zsh 로 갔다(원준님 실측 2026-09-25 —
   //   «터미널 뷰로 보고 명령을 쳐도 코덱스로 안 간다»). 이제 서버가 codex 를 기본으로 tmux(TUI)로 띄우므로
@@ -672,9 +677,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //    (paintShellBar). 막다른 길이 아니므로, 사람이 고른 기본값을 내 걱정으로 덮을 이유가 없다.
   //   ── 새 세션은 이 줄이 없어도 터미널이다(chatMode='tmux'). 이 줄이 실제로 가르는 것은 **이 변경 전에
   //    태어난 app-server 세션**이고, 그 세션에서도 사람은 터미널을 먼저 보길 원한다.
-  //   ⚠ 리브 세션(livKickoff·livChat)과 화면이 명시로 요청한 자리(opts.chatHome)는 그대로 대화가 본자리다 —
+  //   ⚠ 리브 세션(셸이 opts.chatHome 으로 알려 준다 · 옛 킥오프 livKickoff)과 화면이 명시로 요청한 자리는 그대로 대화가 본자리다 —
   //    그건 codex 여부와 무관한 «이 화면은 대화로 쓰라» 는 요청이다.
-  const chatHome = (): boolean => livKickoff() || livChat() || !!opts.chatHome
+  const chatHome = (): boolean => livKickoff() || !!opts.chatHome
     || (!isCodex() && (chatFirst() || String(target.raw?.runtimeMode || '') === 'chat'));
 
   // 하네스·모델·추론강도 바꾸기 — 홈 입력창과 같은 서버 카탈로그를 쓴다(목록 두 벌 금지).
@@ -1299,11 +1304,38 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return true;
     }
     const cur = view.input.value;
-    view.input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
+    //  같은 글을 거푸 넣으면 한 번만 — 멈춘 리브 세션에 [연결 도와줘]를 두 번 누르면 같은 말이 입력칸에 쌓였다(격리 리뷰). 끝이 같을 때만 건너뛴다.
+    if (!cur.trimEnd().endsWith(text.trim())) view.input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
     view.input.dispatchEvent(new Event('input'));
     try { view.input.focus(); view.input.setSelectionRange(view.input.value.length, view.input.value.length); } catch { /* 가려진 입력칸 */ }
     return true;
-  });
+  }, (text) => sendHere(text));
+  /**
+   * #4970 — 이 대화창으로 **보내기까지**(오른쪽 «리브» 칸의 [제가 해 드릴게요] · 리브 물음 카드의 «저장했어요» 한 마디). 보냈으면 true.
+   *  · 대화창일 때만 — 터미널 쪽이면 false(부르는 쪽이 서버로 넣는 길을 탄다 · 터미널에 Enter 까지 쳐 넣으면 사람이 고칠 틈이 없다).
+   *  · 사람이 쓰던 글이 있으면 덮지 않는다 — false(격리 리뷰: 덮으면 쓰던 글이 사라진다). 파일을 올리는 중이거나 붙여 둔 파일이 있어도 false
+   *    (올리는 중이면 보내기가 그 자리에서 멈추고, 붙여 둔 파일은 이 말과 함께 나가 버린다).
+   */
+  function sendHere(text: string): boolean {
+    if (destroyed || mode !== 'chat' || view.input.disabled || view.input.value.trim() || attachments.busy() || attachments.tail()) return false;
+    view.input.value = text;
+    view.input.dispatchEvent(new Event('input'));
+    view.form.requestSubmit();
+    return true;
+  }
+  //  #4970 — 리브 세션이면 리브가 던진 물음(자격·객관식·올리기)을 입력칸 바로 위에 띄운다(web/liv-ask-dock.ts 머리말).
+  //   카드가 리브에게 건네는 한 마디(«저장했어요» 등)는 이 대화창으로 보낸다(사람이 보낸 말과 같은 길). 보낼 수 없으면(쓰던 글이 있다 ·
+  //   터미널 쪽) 서버가 이 리브 세션에 넣는다 — 입력칸을 건드리지 않는다.
+  const livDock = opts.livAsks ? mountLivAskDock(liveDock, {
+    say: (text) => {
+      if (destroyed || sendHere(text)) return;
+      //  있는 리브 세션(이 세션)에만 — 못 넣었으면(멈춤) openLiv 가 이 입력칸에 덧붙여 둔다(쓰던 글 뒤에 — 덮지 않는다).
+      void openLiv({ text, onlyExisting: true })
+        .then((r) => { if (r.ai && !r.delivered) toast('리브 세션이 멈춰 있어 입력칸에 담아 뒀어요 — 보내면 이어집니다.'); })
+        .catch(() => { /* 비치명 — 사람이 대화에서 이어 말하면 된다 */ });
+    },
+    isVisible: () => !destroyed && (opts.isVisible ? opts.isVisible() : true),
+  }) : null;
 
   // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
   //  상단바를 합쳤으므로 '터미널이 하던 일'을 여기서 눌러 저기서 실행한다. 같은 오리진 프레임이라 postMessage 한 줄이면
@@ -3038,7 +3070,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         else if (src && src.kind === 'log' && isBox() && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; ctx = ctxNew(); view.idle(null); if (pollTimer) clearTimeout(pollTimer); schedule(); }
       }
     },
-    destroy() { destroyed = true; endTermWarm(false); offSessInput(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

@@ -93,6 +93,9 @@ export interface PanesOpts {
    *  파일을 열었는데 서랍이 닫혀 있으면 «눌렀는데 아무 일도 없다» 가 된다 — 곁칸에 무언가를 켤 때마다 부른다. */
   onOpenDrawer?: () => void;
   onCloseDrawer?: () => void;
+  /** 이 셸이 그리는 세션이 **리브 세션**이다(#4970 «리브 = 세션 하나» — 셸이 리브 좌표로 알아본다). 프로젝트 없는 세션 화면의 곁칸 맨 앞에
+   *  «리브» 칸(지금 손볼 것 · 외부 앱 연결 상태)을 켜서 세운다. 다른 세션엔 세우지 않는다. */
+  livSession?: boolean;
 }
 export interface PanesHandle {
   destroy(): void;
@@ -233,6 +236,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  #4088 후속(2026-09-23): 프로젝트가 없어도 **세션 작업 폴더**는 있다 — 그 파일을 보고 내려받는 자리(sessfiles)와 발자취를 곁칸에 둔다.
   //   데스크톱은 종전대로 접어 둔다(펴는 손잡이·머리줄 [세션 파일]로 편다). 좁은 폭에선 서랍이 이걸 든다.
   if (loose) { lay = { ...lay, side: ['sessfiles', 'timeline'], bottom: [], act: { ...lay.act, side: 'sessfiles', bottom: null }, bottomOn: false, sideOn: false, pin: [] }; }
+  //  #4970 — 리브 세션이면 곁칸을 펴고 «리브» 칸을 맨 앞에 켠다(지금 손볼 것 · 외부 앱 연결 상태). 자투리 화면의 임시 배치라 저장하지 않는다(위 loose 규칙).
+  if (loose && opts.livSession) { lay = { ...lay, side: ['livdesk', 'sessfiles', 'timeline'], act: { ...lay.act, side: 'livdesk' }, sideOn: true }; }
 
   // 칸 하나 = 탭 줄 + 본문(만드는 곳은 아래 makePane). **이 두 줄은 함수 맨 앞이어야 한다** —
   //  curSession() 이 `panes` 를 읽는데, actKey() → applySessionAct() 로 이어지는 그 길을 마운트가

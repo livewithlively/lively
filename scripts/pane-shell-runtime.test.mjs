@@ -585,7 +585,8 @@ check(r.R7 === "프로젝트", "R7 «처음으로» 가 없는 탭은 다시 눌
 check(h.H1 === "자료", "H1 머리줄 [자료] — 보이고 켜져 있으면 맨 위 폴더", h.H1);
 check(h.collapsed === true && !!h.H2a && h.H2a.side && h.H2a.crumb === "자료/docs" && !!h.H2b && h.H2b.act === "자료" && h.H2b.crumb === "자료/docs", "H2 곁칸이 접혀 있거나 다른 탭이 켜져 있으면 보이게만(폴더 그대로)", { a: h.H2a, b: h.H2b });
 check(i.count === 2 && i.first === "자료" && i.second === "자료/docs", "I1 자료가 둘이면 누른 탭의 자료만 맨 위로", i);
-const WANT = ["콘솔", "자료", "세션 파일", "지식", "프로젝트", "타임라인", "리브", "지난 세션", "웹", "미리보기"];
+//  (#4970) 옛 «리브»(프로젝트 대화)는 이름이 «프로젝트 대화» 다 — «리브» 는 워크스페이스 담당자(리브 세션의 곁칸 livdesk, [+] 로 못 넣는다)만 가리킨다.
+const WANT = ["콘솔", "자료", "세션 파일", "지식", "프로젝트", "타임라인", "프로젝트 대화", "지난 세션", "웹", "미리보기"];
 check(J(d.sideTabs) === J(["자료"]) && !!d.open && d.open.has && d.open.focus && d.open.top >= 0 && d.open.top <= 12 && d.open.inPane, "AD1 [＋] = 앱 서랍 — [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점", d.open);
 const s1 = (d.secs || [])[0] || { tiles: [] }, s2 = (d.secs || [])[1] || { tiles: [] };
 check(J((d.secs || []).map((x) => x.t)) === J(["사이드바 앱", "이 세션에 붙이기"]) && J(s1.tiles.map((x) => x.n)) === J(WANT) && s1.tiles.every((x) => x.gi && !x.off)

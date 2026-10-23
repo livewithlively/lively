@@ -575,7 +575,7 @@ export const welcomeCapabilities: Capability[] = [
       const { setLivWelcomeProgress } = await import("../../org/store.js");
       await setLivWelcomeProgress(userId, null).catch(() => { /* 비치명 */ });
       //  (#4970) 리브 킥오프는 없다 — 처음 설정이 끝나며 리브 세션을 저절로 열던 길(#1631 → #4213 T13)을 걷었다.
-      //   외부 앱 연결은 사람이 [연결할게요]를 눌렀을 때 me_connect_session_open 이 보통 세션을 열어 한다(로그인한 AI 가 있을 때).
+      //   외부 앱 연결은 사람이 [연결할게요]를 눌렀을 때 me_liv_open 이 리브 세션에 맡긴다(없으면 로그인한 AI 로 연다 — #4970 «리브 = 세션 하나»).
       return { ok: true, created, skipped, welcome: profile.welcome ?? null };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
@@ -620,7 +620,7 @@ export async function welcomeSnapshot(userId: string) {
   //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
   //  ⚠ 여기는 **폴링 자리**다(화면이 온보딩 내내 되묻는다) — 로그인 프로브(실측 4.3초·상한 25초)를 붙이면
   //   조회마다 네트워크 왕복이 붙는다. 그래서 싼 판정(자격 파일)만 쓴다. 자격 파일이 없는 하네스까지 재는
-  //   일은 **결정 지점**에서 한 번만 한다 — (#4970) 외부 앱 연결 세션을 열 때(me_connect_session_open). ai-login.test ⑥ 이 지킨다.
+  //   일은 **결정 지점**에서 한 번만 한다 — (#4970) 리브 세션을 새로 열 때(me_liv_open). ai-login.test ⑥ 이 지킨다.
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 

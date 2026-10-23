@@ -1,72 +1,33 @@
-// liv.ts — 리브 화면(#1631). **독립 전체화면**(#/liv) — 상단 내비·푸터를 걷고 화면 전부를 쓴다.
+// liv.ts — 리브 화면(#/liv, 단독) — #1631 → #4970 «리브 = 세션 하나»(상민님 결정 2026-10-22·23 — 주소는 남기고 내용만 바꾼다).
 //
 //  ── 이 화면이 무엇인가 ──
-//  "지금 손볼 것"을 왼쪽 레일에 카드로 보여주고, 오른쪽에서 **리브에게 맡기면 실제로 해 주는** 화면.
-//  카드의 [리브에게 맡기기]는 그 세션에 프롬프트를 주입한다 — 그래서 **사람이 터미널을 읽을 줄 몰라도
-//  일이 진행된다**. 이게 v0 가 웹터미널을 재사용하면서도 성립하는 이유다.
-//
-//  ── 왜 홈이 아니라 별도 페이지인가(대표 결정) ──
-//  처음엔 상태를 보고 **홈을 리브로 갈아치웠다**. 그건 과했다 — 사람이 기대한 화면이 아닌 게 뜨는 것은
-//  그 자체로 고장으로 읽힌다. 이제 상단 내비의 [리브] 버튼으로 들어오는 자기 페이지이고, 홈은 늘 홈이다.
-//  대신 여기서는 **크롬을 걷는다**: 대화가 주인공인 화면이라 탭·푸터가 높이를 먹으면 정작 말하기가 불편하다.
+//  리브는 그 사람의 리브 세션 하나다(src/org/liv/session.ts). 리브 세션이 있는 사람은 이 화면이 아니라 **그 세션 화면**으로 간다
+//   (보통 세션 화면 + 오른쪽 «리브» 칸 — v2/main.ts 'liv' 라우트 · lib/liv-desk livRoute). 이 화면에 남는 사람은 둘이다:
+//   · 리브 세션이 아직 없는 사람 — [리브와 대화 시작](로그인한 AI 가 있으면 그 AI 로 연다 · 없으면 «쓰는 AI 에서 하기» 세 걸음)
+//   · 커서 같은 로컬 AI 를 쓰는 사람 — 그 AI 가 «이 링크에서 넣어 주세요» 로 준 `#/liv?board=1` (물음 카드를 여기서 받는다)
+//  종전(#4032)엔 이 화면이 리브 세션 대화창을 통째로 붙였다(liv-chat.ts). 대화는 이제 세션 화면이 하므로 이 화면엔 대화 칸이 없다.
 //
 //  ── 판정은 여기서 하지 않는다 ──
-//  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv).
-//  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
-import { api, el, state } from './core.js';
-import { mountLivChat, livChatAsk, livChatBusy, livChatFill, type LivSessionMounter } from './liv-chat.js';
-import { bindCtx, bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
-import { copyText } from './v2/ctx-menu.js';
+//  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv). 화면이 자기 판정을 가지면 리브와 다른 답을 하고,
+//  그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다(카드는 web/liv-cards.ts 한 벌).
+import { api, el, toast } from './core.js';
+import { bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
+import { fillConnectApps, livAskCard, livAskTyping, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
+import { openLiv } from './v2/liv-open.js';
+import { rememberUnsentDraft } from './v2/quick-session.js';
+import { putIntoSession } from './v2/sess-input.js';
+import { ownAiStepsHtml, wireOwnAiSteps } from './v2/connect-own-ai.js';
 
-export type LivMode = 'login' | 'liv' | 'dashboard';
-export interface LivFinding {
-  key: string; severity: 'p0' | 'p1'; scope: 'org' | 'member';
-  title: string; detail: string; href?: string; prompt?: string;
-}
-/**
- * 리브가 지금 사람에게 받아야 하는 자격 하나. **값은 여기 오지 않는다** — 무엇이 필요한지만 온다.
- *
- * 이게 있으면 화면이 안전 입력칸을 띄운다. 그 값은 곧바로 금고로 가고 대화에는 남지 않는다.
- * (그래서 리브가 "시크릿을 여기 붙여넣어 주세요"라고 하거나 다른 탭으로 보낼 일이 없어진다.)
- */
-export interface LivSecretAsk {
-  kind?: 'secret' | 'choice' | 'upload';
-  collector_id?: number; field?: string; label?: string; why?: string; hint?: string;
-  /** 객관식 — 사람은 고르기만 하고, 그 답이 통계 축(key)으로 쌓인다. */
-  key?: string; question?: string; multi?: boolean; allow_other?: boolean;
-  options?: Array<{ id: string; label: string; hint?: string }>;
-  /** 업로드 — 어떤 파일을 올리면 되는지 한 줄. */
-  accept_hint?: string;
-}
+export type { LivFinding, LivMode, LivSecretAsk, LivStatus } from './liv-cards.js';
 
-export interface LivStatus {
-  mode: LivMode; reason: string; findings: LivFinding[]; total: number;
-  context?: { isAdmin?: boolean; claudeLoggedIn?: boolean | null; nodes?: { registered: number; online: number } | null };
-  secretAsk?: LivSecretAsk | null;
-}
+/** 쓰는 AI(로그인된 서버 AI 가 없을 때)에 붙여 넣을 말 — 리브 점검. */
+export const SAY_LIV_IN_AI = '라이블리 liv 스킬로 이 워크스페이스 점검해 줘';
 
-export async function livStatus(): Promise<LivStatus> {
-  return await api('/api/ui/me/liv') as LivStatus;
-}
-
-// ── 대화 ─────────────────────────────────────────────────────────────────────
-// v0 는 웹터미널 세션을 재사용했고, v1(2026-08-14)은 턴마다 서버가 헤드리스를 띄웠다 — 그땐 보통 세션을 말풍선으로
-// 그릴 길이 없었다. 세션 대화창(web/session-chat.ts)이 생긴 뒤로 그 이유가 사라졌고, 헤드리스 턴은 매니지드에서 뜨지도
-// 않았다(#4032). 그래서 리브는 다시 **진짜 세션**이다 — 대화 칸(web/liv-chat.ts)이 그 사람의 리브 세션 대화창을 붙인다.
-// 리브의 기억이 세션이 아니라 서버에 산다는 불변식(#1663) 덕분에 세션이 바뀌어도 리브는 같은 리브다.
-
-// ── 화면 ─────────────────────────────────────────────────────────────────────
-
-/** 셸이 이미 크롬(사이드바·우측 패널)을 주는 자리에 끼울 때의 선택지(#1719 v2).
- *  · rail — 카드("지금 손볼 것")를 그릴 바깥 호스트. 주면 본문은 대화 한 열만 남고, 카드는 그 호스트에 산다.
- *    v2 셸에선 우측 패널이 그 자리다 — 다른 페이지(본문 가운데·패널 오른쪽)와 같은 문법이 된다.
- *  · embedded — 나가는 길([← 라이블리])을 그리지 않는다(사이드바가 이미 있다). */
 export interface RenderLivOpts {
-  rail?: HTMLElement | null; embedded?: boolean;
-  /** 리브 세션 대화창을 붙이는 셸의 문(web/liv-chat.ts LivSessionMounter). 없으면 대화 칸이 스스로 목록을 읽는다. */
-  mountSession?: LivSessionMounter | null;
-  /** 첫 말로 리브 세션을 새로 열었다 — 셸이 사이드바에 곧바로 싣는다. */
-  onSessionCreated?: ((row: unknown) => void) | null;
+  /** 나가는 길([← 라이블리])을 그리지 않는다(셸의 사이드바가 이미 있다). */
+  embedded?: boolean;
+  /** 리브 세션 id(셸이 이미 물었으면 준다). undefined 면 이 화면이 묻는다 · null 이면 없다. */
+  sessionId?: string | null;
 }
 
 export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = {}): Promise<void> {
@@ -74,10 +35,13 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   view.replaceChildren();
   document.body.dataset.route = 'liv';
 
+  let sessionId: string | null = opts.sessionId === undefined
+    ? await api('/api/ui/me/liv/session').then((r: any) => (r && r.session_id ? String(r.session_id) : null), () => null)
+    : opts.sessionId;
+
   // ── 머리 = 이 화면이 무엇인지 3초 안에 ──────────────────────────────────────────────
   //  처음 온 사람은 '리브'라는 이름만 보고는 여기가 무엇을 하는 곳인지 모른다(실측 지적 2026-08-19).
   //  그래서 이름 아래에 **무엇을 해 주는 곳인가**를 두 줄로 적는다. 기능 목록이 아니라 약속 한 문장이다.
-  //  나가는 길([← 라이블리])은 셸이 없을 때만 — v2 안에서는 사이드바가 그 역할을 한다.
   const head = el('header', { class: 'liv-top' },
     el('div', { class: 'liv-top-row' },
       el('span', { class: 'liv-face', 'aria-hidden': 'true', text: 'L' }),
@@ -92,380 +56,77 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
       el('b', { text: '이 워크스페이스를 대신 손보는 담당자예요.' }),
       document.createTextNode(' 설명서를 드리지 않습니다 — 말씀하시면 제가 직접 합니다.')));
 
-  // 편지 = 이 화면의 본문. 카드 목록이 아니라 **리브가 쓴 글 한 통**이다(#1719 안 A).
-  //  현황판을 두지 않는 이유는 0818 회의 결정이다 — 리브는 대시보드가 아니라 컨설턴트다.
-  const letter = el('section', { class: 'liv-letter' }, el('div', { class: 'liv-letter-skel' }));
-  // 리브가 던진 물음이 앉는 자리 — 대화와 같은 칸, 입력 바로 위(스크롤에 안 떠내려간다).
-  const askHost = el('div', { class: 'liv-askdock' });
-  const chatWrap = el('div', { class: 'liv-chat' },
-    el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '준비하고 있습니다…' })));
-
-  // 한 열이다. 왼쪽 레일(할 일 목록)을 걷었다 — 목록이 있으면 그게 곧 대시보드가 되고,
-  //  이 화면이 하기로 한 일(제안 하나를 읽고 결정하기)에서 눈이 흩어진다.
-  //  rail 을 주는 셸(v2 우패널)에서는 편지를 그쪽에 두지 않는다 — 편지는 언제나 본문의 주인공이다.
-  const wrapEl = el('div', { class: 'liv-wrap' }, head,
-    el('div', { class: 'liv-body liv-body-solo' }, letter, chatWrap));
-  view.append(wrapEl);
-  // #3784 빈 자리 우클릭 — 다시 확인 · 리브에게 말하기
-  bindCtxSurface(wrapEl, () => [
-    { label: '다시 확인하기', icon: 'refresh', run: () => refreshLiv() },
-    { label: '리브에게 말하기', icon: 'ask', run: () => { (wrapEl.querySelector('.livc-input') as HTMLTextAreaElement | null)?.focus(); } },
-  ]);
-
-  // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
-  //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
-  refreshLiv = () => { void fillLivCards(letter, askHost); };
-  refreshLiv();
-  mountLivChat(chatWrap.querySelector('.liv-chat-body') as HTMLElement, askHost, {
-    mountSession: opts.mountSession ?? null,
-    onSessionCreated: opts.onSessionCreated ?? null,
-  });
-
-  // 리브가 대화 중에 자격을 요청하면(me_liv_ask_secret) 화면이 그걸 알아야 입력칸이 뜬다.
-  //  터미널은 iframe 이라 출력에서 신호를 읽을 수 없다 — 서버 상태를 가볍게 되묻는 쪽이 견고하다.
-  //  ⚠ 사람이 타이핑 중인 입력칸을 갈아치우지 않는다(fillLivCards 가 그 경우 그냥 넘어간다).
-  const poll = setInterval(() => {
-    if (document.body.dataset.route !== 'liv') { clearInterval(poll); return; }  // 라우트를 떠나면 끝
-    refreshLiv();
-  }, 6000);
-  //  리브가 일을 시작·마칠 때(liv-chat.ts — 세션 대화창의 «도는 중») 편지를 곧바로 다시 그린다 — 6초 폴링만 믿으면 그 사이 «드릴 말씀이 없습니다» 가 뜬다.
-  const onBusy = (): void => {
-    if (document.body.dataset.route !== 'liv' || !wrapEl.isConnected) { document.removeEventListener('liv:busy', onBusy); return; }
-    refreshLiv();
-  };
-  document.addEventListener('liv:busy', onBusy);
-}
-
-/** 화면 갱신 진입점 하나. 카드가 제출 뒤 자기 자신을 새로 그릴 때 **어느 칸에 사는지 알 필요가 없다** —
- *  물음은 대화 칸, 할 일은 레일로 갈렸는데 그 사실을 카드마다 인자로 나르면 한 자리만 틀려도 조용히 안 갱신된다. */
-let refreshLiv: () => void = () => { /* renderLiv 전 */ };
-
-/**
- * 물음을 **치우는 길**. 이게 없으면 리브가 건 물음은 답하기 전엔 영원히 남는다 —
- * 대화 칸에 고정한 뒤로는 그게 '리브가 지금 기다리는 것'이 아니라 **영구 가구**로 보인다(대표 지적).
- * 접으면 서버가 declined 에도 남겨, 다음 대화의 리브가 곧바로 다시 묻지 않는다.
- */
-function livDismissBtn(): HTMLElement {
-  return el('button', {
-    class: 'btn btn-sm btn-ghost liv-ask-later', type: 'button', text: '나중에',
-    title: '지금은 넘어갑니다. 리브가 이걸 다시 곧바로 묻지 않습니다.',
-    onclick: async (ev: Event) => {
-      const b = ev.currentTarget as HTMLButtonElement;
-      b.disabled = true;
-      await api('/api/ui/me/liv/ask-dismiss', { method: 'POST', body: '{}' }).catch(() => { /* 비치명 */ });
-      refreshLiv();
-    },
-  });
-}
-
-/**
- * 레일에는 **서 있는 일**(지금 손볼 것)만 그린다. 리브가 지금 던진 물음은 여기가 아니다 — askHost 로 간다.
- *
- * ⚠ 왜 갈랐나(실측 2026-08-15): 리브가 "어디에 쌓아 두셨어요?"를 물었는데 그 물음이 **대화와 다른 칸**에
- *  떴다. 사람은 오른쪽에서 리브의 말을 읽는데 정작 고를 것은 왼쪽 끝에 있었고, 선택지 9개가 레일을 통째로
- *  먹어 '지금 손볼 것'을 화면 밖으로 밀어냈다. 물음이 대화 밖에 있으면 그건 대화가 아니라 서식이다.
- *  → 리브가 던진 물음은 **말하는 자리 바로 위**에 붙인다(대화와 같은 칸, 스크롤에 떠내려가지 않는 자리).
- */
-export async function fillLivCards(host: HTMLElement, askHost: HTMLElement): Promise<void> {
-  // 사람이 자격을 입력하는 중이면 손대지 않는다 — 다시 그리면 타이핑하던 값이 사라진다.
-  const typing = askHost.querySelector('.liv-ask-input') as HTMLInputElement | null;
-  if (typing && (typing.value !== '' || document.activeElement === typing)) return;
-
-  let st: LivStatus;
-  try { st = await livStatus(); }
-  catch {
-    host.replaceChildren(el('div', { class: 'liv-letter-quiet' },
-      el('p', { class: 'liv-quiet-say', text: '지금 상태를 읽지 못했습니다.' }),
-      el('p', { class: 'liv-quiet-sub', text: '아래에서 저에게 직접 물어보셔도 됩니다.' })));
-    return;
-  }
-  // 리브가 기다리는 물음 — 대화 칸의 입력 바로 위에. 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
-  const ask = st.secretAsk
-    ? (st.secretAsk.kind === 'choice' ? livChoiceCard(st.secretAsk, askHost)
-      : st.secretAsk.kind === 'upload' ? livUploadCard(st.secretAsk, askHost)
-        : livSecretCard(st.secretAsk, askHost))
-    : null;
-  askHost.replaceChildren(...(ask ? [ask] : []));
-
-  //  리브가 일하는 동안(처음 설정 킥오프·증류 지시·사람이 맡긴 일)엔 «드릴 말씀이 없습니다» 가 거짓이다 — 대화 칸(liv-chat.ts)이 알려 준다.
-  host.replaceChildren(st.findings.length ? livLetter(st, host) : livChatBusy() ? livWorking() : livQuiet());
-}
-
-/** 리브가 일하는 동안의 편지(#1631) — 지금 일하고 있다는 것 한 줄, 끝나면 대화에서 이어진다는 것 한 줄. */
-function livWorking(): HTMLElement {
-  return el('div', { class: 'liv-letter-quiet liv-letter-working' },
-    el('p', { class: 'liv-quiet-say', text: '지금 리브가 일하고 있어요.' }),
-    el('p', { class: 'liv-quiet-sub', text: '끝나면 아래 대화에서 이어서 말씀드릴게요.' }));
-}
-
-/** 사람 이름 — 편지는 누구에게 쓰는지가 있어야 편지다. 모르면 호칭 없이 시작한다(억지로 '고객님' 하지 않는다). */
-function meName(): string {
-  const m: any = (state && (state as any).me) || {};
-  const n = String(m.name || m.display_name || '').trim();
-  return n ? n + '님, ' : '';
-}
-const ORDINAL = ['하나', '둘', '셋', '넷', '다섯', '여섯'];
-
-/**
- * 편지 — 카드 목록이 아니라 **리브가 쓴 글 한 통**(#1719 안 A · 0818 회의 §3).
- *
- * 왜 목록이 아닌가: 목록은 훑게 만들고, 훑으면 결정하지 않는다. 그리고 항목이 늘어나는 순간 그건 현황판이 된다 —
- *  이 화면이 대시보드가 되면 안 된다는 것이 대표 결정이다. 글은 끝까지 읽히거나 안 읽히거나 둘 중 하나라
- *  "몇 개인지"가 아니라 "무엇을 할지"가 남는다.
- * 어조 규칙 하나: **1인칭**이다. "제가 켜 드릴게요"는 제안이고 "설정을 켜세요"는 훈수다 — 주어를 바꾸면
- *  리브가 못 하는 일은 문장이 아예 안 만들어진다(훈수 차단이 문법에서 이뤄진다).
- */
-function livLetter(st: LivStatus, host: HTMLElement): HTMLElement {
-  const n = st.findings.length;
-  const lead = n === 1
-    ? `${meName()}지금 한 가지가 걸립니다.`
-    : `${meName()}지금 ${n}가지가 걸립니다.`;
-  return el('article', { class: 'liv-letter-body' },
-    el('p', { class: 'liv-lead', text: lead }),
-    ...st.findings.map((f, i) => livPara(f, i, n, host)),
-    el('p', { class: 'liv-sign' }, el('span', { text: '— 리브' })));
-}
-
-/** 편지의 한 문단 = 제안 하나. 무엇을 봤는지(제목·설명) + 제가 하겠다(버튼)까지가 한 덩어리다. */
-function livPara(f: LivFinding, i: number, total: number, host: HTMLElement): HTMLElement {
-  const acts = el('div', { class: 'liv-para-acts' });
-  if (f.prompt) {
-    acts.append(el('button', {
-      class: 'btn btn-sm btn-primary', type: 'button', text: '제가 해 드릴게요',
-      title: '이 일을 제가 대신 합니다 — 무엇을 했는지 아래 대화에 그대로 남습니다.',
-      onclick: (ev: Event) => void livDelegate(ev.currentTarget as HTMLButtonElement, f),
-    }));
-  }
-  if (f.href) acts.append(el('a', { class: 'btn btn-sm', href: f.href, text: f.prompt ? '직접 볼게요' : '보러 가기' }));
-  acts.append(el('button', {
-    class: 'btn btn-sm btn-ghost', type: 'button', text: '나중에',
-    // '나중에'는 이 화면에서 그 문단을 접어 둘 뿐, 서버에 거절로 남기지 않는다 — 거절 기록은 리브가
-    //  대화에서 사람 뜻을 확인하고 남길 일이다(버튼 한 번으로 영구 침묵시키는 건 더 위험하다).
-    onclick: (ev: Event) => {
-      (ev.currentTarget as HTMLElement).closest('.liv-para')?.remove();
-      if (!host.querySelector('.liv-para')) refreshLiv();
-    },
-  }));
-  const para = el('div', { class: 'liv-para liv-para-' + f.severity },
-    total > 1 ? el('span', { class: 'liv-para-no', text: ORDINAL[i] ?? String(i + 1) }) : null,
-    el('div', { class: 'liv-para-b' },
-      el('p', { class: 'liv-para-t', text: f.title }),
-      f.detail ? el('p', { class: 'liv-para-d', text: f.detail }) : null,
-      acts));
-  // #3784 우클릭 — 문단의 단추 셋과 같은 일 + 복사 · 리브에게 이 건 묻기
-  bindCtx(para, () => ({
-    title: f.title, sub: f.severity ? '리브의 제안 · ' + f.severity : '리브의 제안',
-    rows: [
-      ...(f.prompt ? [{ label: '제가 해 드릴게요', icon: 'bolt', run: () => { (acts.querySelector('.btn-primary') as HTMLButtonElement | null)?.click(); } }] : []),
-      ...(f.href ? [{ label: f.prompt ? '직접 볼게요' : '보러 가기', icon: 'open', run: () => { location.hash = f.href!; } }] : []),
-      { label: '리브에게 이 건 묻기', icon: 'ask', run: () => livChatFill(`「${f.title}」 — 이건 어떻게 하면 좋을까요?`) },
-      { sep: true, label: '' },
-      { label: '내용 복사', icon: 'copy', run: () => void copyText([f.title, f.detail || ''].filter(Boolean).join('\n')).then((ok) => { if (ok) livToast('복사했어요'); }) },
-      { sep: true, label: '' },
-      { label: '나중에', icon: 'clock', run: () => { (acts.querySelector('.btn-ghost') as HTMLButtonElement | null)?.click(); } },
-    ],
-  }));
-  return para;
-}
-
-/**
- * 할 말이 없는 날 — **이 화면의 기본 상태**다(1년의 대부분).
- *
- * 여길 목록으로 채우고 싶은 유혹이 곧 대시보드로 되돌아가는 길이다. 대신 **부탁할 수 있는 것**을 세 줄 둔다 —
- * 처음 온 사람에게는 이게 곧 사용법이고, 오래 쓴 사람에게는 "지금 조용하다"는 사실 자체가 정보다.
- * (누르면 그 말이 입력칸에 담긴다 — 보내지는 않는다. 고치고 보내는 건 사람 몫이다.)
- */
-function livQuiet(): HTMLElement {
-  const say = (t: string): HTMLElement => el('button', {
-    class: 'liv-can-row', type: 'button', onclick: () => livChatFill(t),
-  }, el('span', { class: 'liv-can-mark', 'aria-hidden': 'true', text: '·' }), el('span', { text: t }));
-  return el('div', { class: 'liv-letter-quiet' },
-    el('p', { class: 'liv-quiet-say', text: '오늘은 드릴 말씀이 없습니다.' }),
-    el('p', { class: 'liv-quiet-sub', text: '새로 눈에 띄는 게 생기면 제가 먼저 말씀드릴게요. 그동안 무엇이든 시키셔도 됩니다.' }),
-    el('div', { class: 'liv-can' },
-      el('div', { class: 'liv-can-h', text: '이런 것도 부탁하실 수 있어요' }),
-      say('쓰던 노션이랑 연결해 주세요'),
-      say('매주 회의록을 여기 쌓고 싶어요'),
-      say('지금 워크스페이스에서 손볼 게 있는지 봐 주세요')));
-}
-
-/**
- * 객관식 질문 — **사람은 고르기만 한다.**
- *
- * 실측에서 사람이 가장 오래 멈춘 자리가 자유서술이었다("어디에 쌓고 계셨나요?"). 없는 말을 지어내야 하니
- * 어렵고, 답이 제각각이라 우리도 개선점을 못 뽑는다. 고르게 하면 둘 다 풀린다 — 쉽고, **답이 저절로
- * 구조화된다**. 그래서 이 카드가 곧 통계 수집기다.
- */
-function livChoiceCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
-  const picked = new Set<string>();
-  const opts = el('div', { class: 'liv-ask-opts' });
-  const send = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이걸로' }) as HTMLButtonElement;
-  // 복수 선택이면 고른 게 있어야 보낼 수 있다. 단일 선택은 누르는 즉시 보낸다(한 번 덜 누르게).
-  const sync = (): void => { send.disabled = picked.size === 0 && !otherIn.value.trim(); };
-
-  const submit = async (): Promise<void> => {
-    send.disabled = true; const was = send.textContent; send.textContent = '보내는 중…';
-    try {
-      const r = await api('/api/ui/me/liv-answer', {
-        method: 'POST',
-        body: JSON.stringify({ choices: [...picked], other: otherIn.value.trim() || undefined }),
-      }) as { labels?: string[]; other?: string };
-      const said = [...(r.labels ?? []), ...(r.other ? [r.other] : [])].join(', ');
-      // ⚠ 비우고 포커스를 뗀다 — 안 그러면 '타이핑 중이면 갱신하지 않는다' 가드에 걸려
-      //  답을 보냈는데도 질문 카드가 그대로 남는다(실측).
-      otherIn.value = ''; otherIn.blur();
-      livToast('고르신 걸 전했습니다.');
-      // 사람이 다시 타이핑하지 않아도 대화가 이어지게 — 무엇을 골랐는지 리브에게 그대로 말해 준다.
-      if (said) livChatAsk(said);
-      setTimeout(() => refreshLiv(), 600);
-    } catch (e) {
-      send.disabled = false; send.textContent = was ?? '이걸로';
-      livToast(String((e as Error)?.message ?? e));
+  // ── 리브에게 가는 문 — 세션이 있으면 그 대화로, 없으면 시작(로그인한 AI 가 없으면 «쓰는 AI 에서 하기») ──
+  const door = el('div', { class: 'liv-door' });
+  const ownAi = el('div', { class: 'liv-ownai', hidden: true });
+  const paintDoor = (): void => {
+    if (sessionId) {
+      door.replaceChildren(el('a', { class: 'btn btn-primary', href: '#/s/' + encodeURIComponent(sessionId), text: '리브와 대화 이어 가기' }),
+        el('span', { class: 'liv-door-note', text: '대화 화면 오른쪽 «리브» 칸에 이 내용이 함께 보입니다.' }));
+      return;
     }
-  };
-
-  for (const o of ask.options ?? []) {
-    const b = el('button', { class: 'btn btn-sm liv-opt', type: 'button' },
-      el('b', { text: o.label }), o.hint ? el('span', { class: 'liv-opt-hint', text: o.hint }) : null) as HTMLButtonElement;
-    b.onclick = () => {
-      if (ask.multi) {
-        if (picked.has(o.id)) { picked.delete(o.id); b.classList.remove('liv-opt-on'); }
-        else { picked.add(o.id); b.classList.add('liv-opt-on'); }
-        sync();
-      } else { picked.clear(); picked.add(o.id); void submit(); }
-    };
-    opts.append(b);
-  }
-
-  const otherIn = el('input', {
-    class: 'liv-ask-input', type: 'text', autocomplete: 'off',
-    placeholder: '목록에 없으면 여기 적어 주세요', 'aria-label': '그 외',
-  }) as HTMLInputElement;
-  otherIn.oninput = sync;
-  otherIn.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Enter') { ev.preventDefault(); void submit(); } };
-  send.onclick = () => void submit();
-  sync();
-
-  return el('div', { class: 'liv-card liv-ask' },
-    el('div', { class: 'liv-ask-head' }, el('b', { text: ask.question ?? '' })),
-    ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
-    opts,
-    // '그 외'는 탈출구다 — 여기 적히는 것이 곧 다음에 만들 커넥터 후보라 버리지 않고 쌓는다.
-    ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null,
-    el('div', { class: 'liv-ask-row' }, (ask.multi || ask.allow_other) ? send : null, livDismissBtn()),
-    ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
-}
-
-/**
- * 파일 올리기 — **로컬 폴더를 뒤지는 대신 끌어다 놓는다**(대표 판단).
- *
- * 글자 파일만 받는다. PDF·이미지는 브라우저에서 글자를 못 뽑아 **올린 척만 하고 빈 자료가 쌓이므로**,
- * 되는 척하지 않고 그 자리에서 거른다.
- */
-function livUploadCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
-  const TEXT_RE = /\.(md|markdown|txt|csv|tsv|json|ya?ml|log|rtf|html?|tex|org)$/i;
-  const msg = el('div', { class: 'liv-ask-msg' });
-  const input = el('input', { class: 'liv-upload-in', type: 'file', multiple: 'multiple' }) as HTMLInputElement;
-
-  input.onchange = async (): Promise<void> => {
-    const files = [...(input.files ?? [])];
-    if (!files.length) return;
-    const ok = files.filter((f) => TEXT_RE.test(f.name));
-    const skipped = files.filter((f) => !TEXT_RE.test(f.name));
-    input.disabled = true;
-    let saved = 0; const failed: string[] = [];
-    for (const f of ok) {
+    const start = el('button', { class: 'btn btn-primary', type: 'button', text: '리브와 대화 시작' }) as HTMLButtonElement;
+    start.onclick = async () => {
+      start.disabled = true; const was = start.textContent; start.textContent = '여는 중…';
       try {
-        const body_md = await f.text();
-        if (!body_md.trim()) { failed.push(`${f.name}(비어 있음)`); continue; }
-        await api('/api/ui/sources', { method: 'POST', body: JSON.stringify({
-          kind: 'upload', title: f.name, body_md,
-          occurred_at: new Date(f.lastModified).toISOString(),
-        }) });
-        saved++;
-      } catch (e) { failed.push(`${f.name}(${(e as Error)?.message ?? e})`); }
-    }
-    input.disabled = false; input.value = '';
-    const parts = [`${saved}개 올렸습니다`];
-    if (skipped.length) parts.push(`${skipped.length}개는 글자 파일이 아니라 건너뛰었습니다`);
-    if (failed.length) parts.push(`${failed.length}개 실패`);
-    msg.replaceChildren(el('span', { class: failed.length ? 'liv-ask-err' : 'liv-ask-ok', text: parts.join(' · ') }));
-    if (saved) {
-      livChatAsk(`파일 ${saved}개 올렸어요: ${ok.slice(0, 10).map((f) => f.name).join(', ')}`);
-      setTimeout(() => refreshLiv(), 1200);
-    }
+        const r = await openLiv({ job: 'liv' });
+        if (r.ai) { location.hash = r.href; return; }
+        ownAi.innerHTML = ownAiStepsHtml(SAY_LIV_IN_AI);
+        wireOwnAiSteps(ownAi);
+        ownAi.hidden = false;
+      } catch (e) { toast('리브를 열지 못했어요 — ' + ((e as Error)?.message ?? e), true); }
+      start.disabled = false; start.textContent = was;
+    };
+    door.replaceChildren(start, el('span', { class: 'liv-door-note', text: '로그인된 AI 로 리브 세션을 엽니다. 첫 말은 «워크스페이스를 점검해 줘» 입니다.' }));
   };
+  paintDoor();
 
-  return el('div', { class: 'liv-card liv-ask' },
-    el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })),
-    ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
-    el('div', { class: 'liv-ask-row' }, input),
-    el('div', { class: 'liv-ask-row' }, livDismissBtn()),
-    el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }),
-    msg);
-}
+  // 편지 = 지금 손볼 것. 물음 = 리브가 사람에게 받아야 하는 것(자격·객관식·올리기) — 이 화면에선 머리 바로 아래(대화 칸이 없다).
+  const askHost = el('div', { class: 'liv-askdock liv-board-ask' });
+  const letter = el('section', { class: 'liv-letter' }, el('div', { class: 'liv-letter-skel' }));
+  const apps = el('div', { class: 'liv-apps' }, el('p', { class: 'pn-fine', text: '불러오는 중…' }));
+  const wrapEl = el('div', { class: 'liv-wrap liv-board' }, head,
+    el('div', { class: 'liv-body liv-body-solo' },
+      door, ownAi, askHost, letter,
+      el('section', { class: 'liv-apps-sec' },
+        el('div', { class: 'liv-apps-h' }, el('b', { text: '외부 앱 연결' }), el('a', { class: 'liv-apps-more', href: '#/connect', text: '현황판 →' })),
+        apps)));
+  view.append(wrapEl);
+  // #3784 빈 자리 우클릭 — 다시 확인
+  bindCtxSurface(wrapEl, () => [{ label: '다시 확인하기', icon: 'refresh', run: () => pokeLivStatus() }]);
 
-
-/**
- * 자격 입력칸 — **이 화면에서 끝내기 위한 장치**.
- *
- * 실측 2회 모두 리브는 시크릿을 채팅에 붙여넣으라고 했고(대화 기록에 남는다), 화면으로 돌릴 때는
- * 없는 메뉴 경로를 지어냈다. 안내를 다듬어 고칠 문제가 아니라 **여기서 받을 자리가 없던 것**이 원인이다.
- *
- * 계약: 넣을 자리는 서버가 저장해 둔 요청에서만 온다(브라우저가 대상을 못 바꾼다). 값은 전송 즉시
- * 암호화 저장되고 화면에서도 지운다. 저장되면 리브에게 **사람 대신 한 마디 건네** 대화가 이어진다.
- */
-function livSecretCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
-  const input = el('input', {
-    class: 'liv-ask-input', type: 'password', autocomplete: 'off', spellcheck: 'false',
-    placeholder: ask.hint || '여기에 붙여넣어 주세요', 'aria-label': ask.label,
-  }) as HTMLInputElement;
-  const msg = el('div', { class: 'liv-ask-msg' });
-  const save = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '저장' }) as HTMLButtonElement;
-
-  const submit = async (): Promise<void> => {
-    const value = input.value;
-    if (!value.trim()) { input.focus(); return; }
-    save.disabled = true; input.disabled = true; save.textContent = '저장 중…';
+  /**
+   * 카드가 리브에게 건네는 한 마디 — 리브 세션이 있으면 그 세션에 넣는다. 없으면(로컬 AI 를 쓰는 사람) 그 AI 에 전할 말을 알려 준다.
+   *  ⚠ 세션이 없을 때 이 말로 리브 세션을 **새로 열지 않는다** — «자격 저장했어요» 같은 맞장구가 첫 지시가 되면 리브가 엉뚱한 일을 시작한다.
+   *  못 넣었으면(멈춘 세션 — delivered:false) 그 세션 화면으로 간다 — 입력칸에 그 말이 돌아와 있고, 보내면 되살리며 넣는다.
+   */
+  const say = async (text: string): Promise<void> => {
+    if (!sessionId) { livToast(`쓰시는 AI 에 «${text}» 라고 전해 주세요.`); return; }
     try {
-      await api('/api/ui/me/liv-secret', { method: 'POST', body: JSON.stringify({ value }) });
-      input.value = '';  // 화면에서도 즉시 지운다
-      // ⚠ 확인은 **카드 밖**(토스트)에 띄운다 — 카드 안에 쓰면 바로 뒤의 갱신이 카드째 지워서
-      //  사람은 아무 일도 안 일어난 것처럼 본다(실측: 저장은 됐는데 화면엔 흔적이 없었다).
-      livToast('저장했습니다. 리브가 이어서 확인합니다.');
-      // 사람이 다시 타이핑하지 않아도 대화가 이어지게 한마디 건넨다 — 값은 절대 안 보낸다.
-      livChatAsk('자격 저장했어요. 확인해 주세요.');
-      setTimeout(() => refreshLiv(), 600);
-    } catch (e) {
-      save.disabled = false; input.disabled = false; save.textContent = '저장';
-      msg.replaceChildren(el('span', { class: 'liv-ask-err', text: String((e as Error)?.message ?? e) }));
-      input.focus();
-    }
+      const r = await openLiv({ text, onlyExisting: true });
+      if (!r.ai) { if (r.reason === 'no-session') { sessionId = null; paintDoor(); livToast(`쓰시는 AI 에 «${text}» 라고 전해 주세요.`); } return; }
+      sessionId = r.sessionId;
+      if (r.delivered) { livToast('리브 대화에 전했어요.'); return; }
+      livToast('리브 세션이 멈춰 있어요 — 대화 입력칸에 담아 뒀으니 보내 주세요.');
+      location.hash = r.href;
+    } catch (e) { toast('리브에게 전하지 못했어요 — ' + ((e as Error)?.message ?? e), true); }
   };
-  save.onclick = () => void submit();
-  input.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Enter') { ev.preventDefault(); void submit(); } };
+  /** 담기만(보내지 않는다) — 리브 세션 입력칸에 돌려 두고 그 대화로 간다. 세션이 없으면 쓰는 AI 에 전할 말로 알려 준다. */
+  const fill = (text: string): void => {
+    if (!sessionId) { livToast(`쓰시는 AI 에 «${text}» 라고 말해 보세요.`); return; }
+    //  그 세션 화면이 어느 탭에든 떠 있으면 지금 그 입력칸에(열린 화면은 다시 그려지지 않아 남겨 둔 글을 안 읽는다), 아니면 다음에 열 때 돌아오게.
+    if (!putIntoSession([sessionId], text)) rememberUnsentDraft(sessionId, text);
+    location.hash = '#/s/' + encodeURIComponent(sessionId);
+  };
+  const hooks: LivHooks = { say: (t) => { void say(t); }, fill, refresh: () => pokeLivStatus(), workingSub: '끝나면 리브 대화에서 이어서 말씀드릴게요.' };
 
-  return el('div', { class: 'liv-card liv-ask' },
-    el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })),
-    ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
-    el('div', { class: 'liv-ask-row' }, input, save, livDismissBtn()),
-    el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }),
-    msg);
-}
-
-
-// 카드에서 맡긴 일은 **대화로 이어진다** — 무엇을 시켰는지 사람이 보고, 리브의 진행도 같은 자리에서 본다.
-function livDelegate(btn: HTMLButtonElement, f: LivFinding): void {
-  // 카드에서 맡긴 일은 **대화로 이어진다** — 무엇을 시켰는지 사람이 보고, 진행도 같은 자리에서 본다.
-  //  종전엔 터미널 세션에 프롬프트를 주입했다. 표면이 바뀌었으니 들어가는 문도 대화창 하나다.
-  livChatAsk(f.prompt as string);
-  btn.disabled = true;
-  btn.textContent = '맡겼습니다';
-  btn.closest('.liv-card')?.classList.add('liv-card-done');
-}
-
-function livToast(msg: string): void {
-  const t = el('div', { class: 'liv-toast', text: msg });
-  document.body.append(t);
-  setTimeout(() => t.remove(), 4000);
+  watchLivStatus((st) => {
+    if (!wrapEl.isConnected || !st) return;
+    if (!livAskTyping(askHost)) {
+      const card = livAskCard(st.secretAsk, hooks);
+      askHost.replaceChildren(...(card ? [card] : []));
+    }
+    letter.replaceChildren(livLetterBox(st, hooks, letter));
+  }, () => wrapEl.isConnected && document.body.dataset.route === 'liv', () => wrapEl.isConnected);
+  void fillConnectApps(apps);
 }

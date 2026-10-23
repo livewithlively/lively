@@ -2,7 +2,8 @@
 //
 //  계기: 매니지드에서 리브 탭 [보내기](POST /api/ui/me/liv/turn)가 전부 500 이었다. 헤드리스 턴(spawnTaskSession)이 게이트웨이가 도는
 //  기계의 tmux 를 직접 불러, 판이 sudo 에서 즉사하고 다음 `tmux set-option` 이 «no server running» 으로 던졌다(게이트웨이 로그 6건).
-//  이제 리브 탭은 그 사람의 리브 세션 하나를 찾아(없으면 첫 말로 연다) 세션 대화창을 붙인다.
+//  이제 리브는 그 사람의 리브 세션 하나다. (#4970 «리브 = 세션 하나») 레일 [리브] · [연결할게요] · [연결 도와줘]가 같은 세션으로 가고
+//   그 세션은 보통 세션 화면(대화 보기 · 입력칸 위 물음 · 곁칸 «리브»)에서 산다 — 리브 탭의 대화 칸(liv-chat.ts)은 걷었다.
 //
 //  사양·엣지 표: 표 A(지금의 리브 세션) · 표 B(좌표 읽기) · 표 C(첫 말 경계) · 표 D(한 줄로 선 확보) — 행마다 한 단언.
 //   표 E(리브 폴더의 신뢰 대화상자)는 판정 행 E1~E9 가 terminal/session-create-guards.test 에, 배선 E10 이 여기 있다.
@@ -12,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { LIV_CHAT_LABEL, LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, serialByKey, storedLivSession, type LivSessionFacts } from "./session.js";
+import { LIV_PROMPT_MAX, LIV_SUBPATH, pickLivSession, serialByKey, storedLivSession, type LivSessionFacts } from "./session.js";
 import { BY_WORKSPACE, WORKSPACE_SCOPED_KEYS, mergeForWorkspace, viewForWorkspace } from "../store/members.js";
 import { livChatCapabilities, livFirstWords } from "../../capabilities/delivery/liv-chat.js";
 import { HttpError } from "../../http-error.js";
@@ -111,19 +112,21 @@ test("★★ 리브 좌표는 워크스페이스 층이다 — 다른 워크스�
   assert.ok((b as Record<string, Record<string, unknown>>)[BY_WORKSPACE]["ws-A"], "워크스페이스 칸이 없다");
 });
 
-// ── 창구 — 두 문만, 둘 다 화면 전용 ─────────────────────────────────────────────────────
-test("★★ 창구 — 리브 세션 찾기(GET)·첫 말(POST) 두 문과 물음 접기뿐, 전부 화면 전용(mcp:false)", () => {
+// ── 창구 — 찾기·맡기기 두 문과 물음 접기, 전부 화면 전용 ─────────────────────────────────────
+//  (#4970 «리브 = 세션 하나») 리브 탭의 «첫 말» 문(me_liv_session_open)은 «리브에게 일 맡기기»(me_liv_open) 하나로 합쳤다 —
+//   레일 [리브] · [연결할게요] · [연결 도와줘] · 리브 칸이 같은 문을 탄다(행위 시험은 capabilities/delivery/liv-open.test).
+test("★★ 창구 — 리브 세션 찾기(GET)·리브에게 일 맡기기(POST) 두 문과 물음 접기뿐, 전부 화면 전용(mcp:false)", () => {
   const byName = new Map(livChatCapabilities.map((c) => [c.name, c]));
-  assert.deepEqual([...byName.keys()].sort(), ["me_liv_ask_dismiss", "me_liv_session", "me_liv_session_open"],
-    "★ 헤드리스 턴 문(me_liv_turn·log·stop·chat·chat-reset)이 남아 있거나 문이 빠졌다");
+  assert.deepEqual([...byName.keys()].sort(), ["me_liv_ask_dismiss", "me_liv_open", "me_liv_session"],
+    "★ 헤드리스 턴 문(me_liv_turn·log·stop·chat·chat-reset)·옛 첫 말 문(me_liv_session_open)이 남아 있거나 문이 빠졌다");
   const rest = (n: string): string[] => (byName.get(n)?.expose.rest || []).flatMap((r) => r.paths.map((p) => `${r.method} ${p}`));
   assert.deepEqual(rest("me_liv_session"), ["GET /api/ui/me/liv/session"]);
-  assert.deepEqual(rest("me_liv_session_open"), ["POST /api/ui/me/liv/session"]);
+  assert.deepEqual(rest("me_liv_open"), ["POST /api/ui/me/liv/open"]);
   for (const c of livChatCapabilities) assert.equal(c.expose.mcp, false, `${c.name} 이 MCP 로 열렸다(리브가 자기를 다시 부르면 세션이 겹친다)`);
 });
 
-test("★★ 창구 — 인증 없는 호출은 401, 빈 첫 말은 세션을 열기 전에 400", async () => {
-  const open = livChatCapabilities.find((c) => c.name === "me_liv_session_open")!;
+test("★★ 창구 — 인증 없는 호출은 401, 빈 말·모르는 일은 세션을 열기 전에 400", async () => {
+  const open = livChatCapabilities.find((c) => c.name === "me_liv_open")!;
   const find = livChatCapabilities.find((c) => c.name === "me_liv_session")!;
   const statusOf = async (p: Promise<unknown>): Promise<number | "ok"> => {
     try { await p; return "ok"; } catch (e) { return e instanceof HttpError ? e.status : -1; }
@@ -131,13 +134,13 @@ test("★★ 창구 — 인증 없는 호출은 401, 빈 첫 말은 세션을 �
   assert.equal(await statusOf(Promise.resolve().then(() => find.handler({}, {} as never))), 401);
   assert.equal(await statusOf(Promise.resolve().then(() => open.handler({ text: "안녕" }, {} as never))), 401);
   assert.equal(await statusOf(Promise.resolve().then(() => open.handler({ text: "  " }, { userId: ME } as never))), 400);
+  assert.equal(await statusOf(Promise.resolve().then(() => open.handler({ job: "nope" }, { userId: ME } as never))), 400);
 });
 
 // ── 배선 — 헤드리스 리브 턴이 사라지고, 리브 탭이 세션 대화창을 붙인다 ────────────────────
 const CAP = code(readFileSync("src/capabilities/delivery/liv-chat.ts", "utf8"));
 const SESSION = code(readFileSync("src/org/liv/session.ts", "utf8"));
 const MEMBERS = code(readFileSync("src/org/store/members.ts", "utf8"));
-const WEB_LIV = code(readFileSync("web/liv-chat.ts", "utf8"));
 const WEB_LIV_PAGE = code(readFileSync("web/liv.ts", "utf8"));
 const WEB_MAIN = code(readFileSync("web/v2/main.ts", "utf8"));
 const WEB_CLASSIC = code(readFileSync("web/main.ts", "utf8"));
@@ -150,13 +153,16 @@ test("★★ 헤드리스 리브 턴이 없다 — 모듈·프로필 필드·화
   assert.equal(existsSync("src/org/liv/chat-turn.ts"), false, "★ 헤드리스 리브 턴 모듈(chat-turn.ts)이 남아 있다");
   assert.doesNotMatch(CAP, /spawnTaskSession|\/api\/ui\/me\/liv\/turn/, "★ 창구에 헤드리스 리브 턴이 남아 있다(매니지드 500)");
   assert.doesNotMatch(MEMBERS, /LivChat\b|LivTurnRef|appendLivTurn|setLivChat/, "프로필에 헤드리스 대화 기록 필드가 남아 있다");
-  assert.doesNotMatch(WEB_LIV, /\/api\/ui\/me\/liv\/turn|\/api\/ui\/me\/liv\/chat\b/, "★ 화면이 아직 헤드리스 턴을 부른다");
-  assert.doesNotMatch(WEB_LIV_PAGE, /liv:auto|livAuto|AutoKind/, "숨김 턴(헤드리스 킥오프) 화면 배선이 남아 있다");
+  //  (#4970) 리브 탭의 대화 칸(web/liv-chat.ts)도 없다 — 대화는 리브 세션 화면(보통 세션 화면)이 한다.
+  assert.equal(existsSync("web/liv-chat.ts"), false, "★ 리브 탭 대화 칸(liv-chat.ts)이 남아 있다 — 대화는 리브 세션 화면이 한다(#4970)");
+  assert.doesNotMatch(WEB_LIV_PAGE, /\/api\/ui\/me\/liv\/turn|\/api\/ui\/me\/liv\/chat\b/, "★ 화면이 아직 헤드리스 턴을 부른다");
+  assert.doesNotMatch(WEB_LIV_PAGE, /liv:auto|livAuto|AutoKind|mountLivChat|renderSession\(/, "리브 화면에 대화 칸·숨김 턴 배선이 남아 있다");
 });
 
 test("★★ 세션을 못 열면 원인을 말하는 503 — 500 «internal_error» 로 뭉개지지 않는다(#4032 의 본체)", () => {
-  assert.match(CAP, /try \{\s*return await ensureLivSession\(user, text\);\s*\} catch \(e\) \{\s*if \(e instanceof HttpError\) throw e;[\s\S]*?throw new HttpError\(503, `리브를 열지 못했습니다 — \$\{\(e as Error\)\?\.message \?\? e\}`, \{ cause: e \}\);/,
-    "★ 세션을 못 연 이유가 500 으로 뭉개진다");
+  //  행위(일반 Error → 503 · HttpError 는 그대로)는 liv-open.test E14·E15 가 잰다. 여기는 실제 문이 그 판정을 탄다는 배선만.
+  assert.match(CAP, /async \(input: Record<string, unknown>, user: LivelyUser\) => openLiv\(user, input, realDeps\),/, "★ 맡기기 문이 판정(openLiv)을 안 탄다");
+  assert.match(CAP, /ensure: \(user, text, harness\) => ensureLivSession\(user, text, \{ harness \}\),/, "맡기기 문이 리브 세션 확보(한 줄로 선)를 안 탄다");
   assert.match(CAP, /return \{ session_id: await currentLivSessionId\(userId, \{ heal: false \}\) \};/, "찾기가 복원 이정표를 따라간 id 를 안 준다");
 });
 
@@ -188,45 +194,33 @@ test("★★ 표 E10 — 서버가 연 리브 세션은 신뢰 대화상자를 �
     "노드 세션 생성이 신뢰 판정에 루트 키·종류를 안 넘긴다");
 });
 
-test("★★ 화면 — 리브 탭은 리브 세션 대화창을 대화 보기로 붙이고, 복원되면 그 칸만 갈아 붙인다", () => {
-  assert.match(WEB_LIV, /await api\('\/api\/ui\/me\/liv\/session'\)/, "리브 탭이 리브 세션을 안 찾는다");
-  assert.match(WEB_LIV, /await api\('\/api\/ui\/me\/liv\/session', \{ method: 'POST', body: JSON\.stringify\(\{ text \}\) \}\)/, "첫 말이 리브 세션을 안 연다");
-  assert.match(WEB_LIV, /h = await mount\(host, id, \{ onResumed: \(nid\) => \{ void show\(nid\); \}, isVisible \}\);/, "★ 복원되면 리브 칸이 새 세션으로 안 옮겨 간다(전역 주소가 끌려간다)");
-  assert.match(WEB_LIV, /chatHome: true, isVisible: o\.isVisible, onResumed: o\.onResumed,/, "클래식 셸 경로가 대화 보기를 본자리로 안 연다");
-  assert.match(WEB_MAIN, /mountSession: async \(h, sid, o\) => \{[\s\S]*?const handle = renderSession\(h, data, sid, \{\s*chatHome: true,/, "★ v2 셸이 리브 세션 대화창을 대화 보기로 안 붙인다");
-  assert.match(WEB_MAIN, /const livTab = routeKey\(t\.route\) === 'liv';/, "20초 갱신이 리브 탭의 대화창에 상태를 안 흘린다");
+test("★★ 화면 — #/liv 는 리브 세션이 있으면 그 세션 화면으로 · 리브 세션은 이름이 아니라 좌표로 알아본다(#4970)", () => {
+  //  레일 [리브] · 리브 알림이 #/liv 로 온다. 리브 세션이 있으면 보통 세션 화면(대화 보기 · 입력칸 위 물음 · 곁칸 «리브»)으로 간다.
+  assert.match(WEB_MAIN, /const livId = await livSessionId\(\{ fresh: true \}\);/, "리브 라우트가 지금의 리브 세션을 안 묻는다(기억한 값으로 옛 세션에 간다)");
+  assert.match(WEB_MAIN, /if \(livRoute\(\{ board, sessionId: livId \}\) === 'session' && livId\) \{/, "★ 리브 세션이 있는데 그 세션 화면으로 안 간다");
+  assert.match(WEB_MAIN, /const board = params\.get\('board'\) === '1';/, "로컬 AI 링크(?board=1)가 세션으로 넘겨진다");
+  //  세션 화면 — 리브 세션이면 대화 보기가 본자리(원준 2026-09-14) · 물음 자리 · 곁칸 맨 앞 «리브».
+  assert.match(WEB_MAIN, /\.\.\.\(isLiv\(sid\) \? \{ chatHome: true, livAsks: true \} : \{\}\),/, "★ 리브 세션이 대화 보기·물음 자리로 안 열린다");
+  assert.match(WEB_MAIN, /livSession: projectId === 0 && isLiv\(sessionId\),/, "곁칸 «리브» 칸이 리브 세션에 안 선다");
+  assert.match(WEB_MAIN, /return isLivSessionId\(\[sid, s\?\.id, s\?\.logId, s\?\.raw\?\.claudeSessionId\], knownLivSessionId\(\) \|\| livId\);/, "리브 세션을 좌표로 안 알아본다");
   assert.match(WEB_CHAT, /chatHome\?: boolean;/, "세션 대화창에 대화 보기 본자리 옵션이 없다");
-  assert.match(WEB_CHAT, /const chatHome = \(\): boolean => [^\n]*!!opts\.chatHome/, "★ 옵션이 보기 판정에 안 들어간다(리브 탭에 터미널이 뜬다)");
-  //  카드의 문은 리브 칸 안의 입력칸만 만진다 — 셸이 탭 DOM 을 살려 두므로 문서 전체를 뒤지면 다른 탭 세션에 말이 간다.
-  assert.doesNotMatch(WEB_LIV, /document\.querySelector\('\.livc-(input|compose)'\)/, "★ 카드가 문서 전체에서 입력칸을 찾는다");
+  assert.match(WEB_CHAT, /livAsks\?: boolean;/, "세션 대화창에 리브 물음 자리 옵션이 없다");
+  assert.match(WEB_CHAT, /const chatHome = \(\): boolean => livKickoff\(\) \|\| !!opts\.chatHome/, "★ 옵션이 보기 판정에 안 들어간다(리브 세션에 터미널이 뜬다)");
+  assert.doesNotMatch(WEB_CHAT, /LIV_CHAT_LABEL|livChat\(\)/, "★ 세션 화면이 아직 이름 글자로 리브 세션을 가른다 — 이름을 바꾸면 리브 세션이 터미널로 열린다");
+  assert.match(WEB_CHAT, /const livDock = opts\.livAsks \? mountLivAskDock\(liveDock, \{/, "★ 리브 물음이 입력칸 바로 위(liveDock)에 안 뜬다");
+  assert.match(WEB_CHAT, /livDock\?\.destroy\(\);/, "세션 화면을 걷을 때 물음 자리를 안 걷는다(되묻기가 남는다)");
 });
 
-test("★★ 리브 칸의 수명 — 떠나면 걷고, 못 붙이면 첫 말을 잃지 않고, 조회는 읽기만 한다(격리 리뷰 반영)", () => {
-  //  세션 대화창의 폴링·message 리스너는 **부숴야만** 멈춘다 — 클래식 셸은 라우트 이동마다 걷는다(안 걷으면 드나들 때마다 쌓인다).
-  assert.match(WEB_LIV, /export function livChatCleanup\(\): void \{/, "리브 칸을 걷는 문이 없다");
-  assert.match(WEB_LIV, /export function mountLivChat\([^)]*\): void \{\s*livChatCleanup\(\);/, "다시 붙일 때 앞 칸을 안 걷는다");
-  assert.match(WEB_LIV, /current = \{\s*destroy: \(\) => \{\s*\+\+gen;[^\n]*\s*if \(ownsHandle\) handle\?\.destroy\(\);\s*handle = null;\s*emptyView\?\.destroy\(\);/, "★ 걷기가 대화창·빈 대화·진행 중인 붙이기를 다 멈추지 않는다");
-  const route = WEB_CLASSIC.slice(WEB_CLASSIC.indexOf("async function route()"));
-  assert.ok(route.indexOf("livChatCleanup();") > 0 && route.indexOf("livChatCleanup();") < route.indexOf("await renderLiv(view);"),
-    "★ 클래식 라우터가 이동마다 리브 칸을 안 걷는다(폴링·리스너 누수)");
-  assert.match(WEB_MAIN, /if \(routeKey\(cur\.route\) === 'liv'\) livChatCleanup\(\);/, "v2 셸이 리브 탭을 떠날 때 안 걷는다");
-  assert.match(WEB_MAIN, /if \(routeKey\(tab\.route\) === 'liv'\) livChatCleanup\(\);/, "v2 셸이 리브 탭을 닫을 때 안 걷는다");
-  //  이미 세션이 있던 첫 말 — 대화창을 못 붙이면 그 말을 입력칸으로 돌려준다(보낸 척하지 않는다). 새로 연 경우엔 이미 갔다고 말한다.
-  assert.match(WEB_LIV, /await show\(r\.session_id, \{ sent: true \}\);/, "새로 연 세션의 첫 말이 «갔다» 로 표시되지 않는다");
-  assert.match(WEB_LIV, /await show\(r\.session_id, \{ draft: text \}\);/, "★ 이미 있던 세션의 첫 말이 못 붙으면 사라진다");
-  assert.match(WEB_LIV, /else if \(o\.draft\) paintEmpty\([^\n]*, o\.draft\);/, "못 간 말을 빈 대화에 안 돌려준다");
-  assert.match(WEB_LIV, /if \(draft\) \{ view\.input\.value = draft;/, "빈 대화가 돌려받은 말을 입력칸에 안 넣는다");
+test("★★ 리브 화면(단독)엔 대화 칸이 없고, 떠나면 되묻기가 멈춘다 · 조회는 읽기만 한다", () => {
+  assert.doesNotMatch(WEB_MAIN + WEB_CLASSIC, /liv-chat\.js|livChatCleanup/, "★ 셸이 아직 리브 탭 대화 칸을 부른다");
+  //  되묻기는 보이는 동안만 · 화면에서 떨어지면 스스로 끊는다(라우터가 화면을 통째로 갈아 끼워 끊을 손잡이가 없다).
+  assert.match(WEB_LIV_PAGE, /\}, \(\) => wrapEl\.isConnected && document\.body\.dataset\.route === 'liv', \(\) => wrapEl\.isConnected\);/, "★ 리브 화면을 떠나도 되묻기가 남는다");
   //  조회(GET)는 읽기만 — 읽기전용 판정은 메서드로 가르므로 GET 이 쓰면 그 판정을 몰래 넘는다.
   assert.match(CAP, /return \{ session_id: await currentLivSessionId\(userId, \{ heal: false \}\) \};/, "★ 조회 창구가 좌표를 고쳐 쓴다(GET 에 쓰기)");
   assert.match(SESSION, /if \(o\.heal !== false && id && id !== prof\?\.liv_session\?\.id\) \{/, "heal:false 가 쓰기를 막지 않는다");
 });
 
-test("★★ 리브 탭에서 연 세션 이름이 서버·화면에서 같다 — 갈리면 사이드바로 연 리브 세션이 터미널로 열린다", () => {
-  const web = WEB_CHAT.match(/const LIV_CHAT_LABEL = '([^']+)';/);
-  assert.ok(web, "세션 화면에 리브 대화 세션 이름이 없다");
-  assert.equal(web![1], LIV_CHAT_LABEL);
-  assert.match(WEB_CHAT, /const chatHome = \(\): boolean => [^\n]*livChat\(\)/, "보기 판정이 리브 대화 세션을 모른다");
-  //  첫 말 숨김은 킥오프에만 — 리브 탭의 첫 말은 사람이 쓴 것이다.
-  assert.match(WEB_CHAT, /if \(livKickoff\(\) && !kickoffOpened\) \{/, "킥오프 첫 지시 숨김이 사라졌다");
-  assert.doesNotMatch(WEB_CHAT, /livChat\(\)[^\n]*&& !kickoffOpened/, "사람이 쓴 첫 말까지 숨긴다");
+test("★★ 옛 킥오프 첫 지시 숨김은 리브 2턴이 남아 있는 동안 그대로 — 리브 세션의 첫 말은 사람에게 보인다", () => {
+  assert.match(WEB_CHAT, /if \(livKickoff\(\) && !kickoffOpened\) \{/, "킥오프 첫 지시 숨김이 사라졌다(진행 중인 2턴 재개 세션에 서버 지시문이 말풍선으로 뜬다)");
+  assert.doesNotMatch(WEB_CHAT, /&& !kickoffOpened[^\n]*livChat|livChat\(\)[^\n]*&& !kickoffOpened/, "사람이 쓴 첫 말까지 숨긴다");
 });

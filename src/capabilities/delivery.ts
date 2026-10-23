@@ -20,9 +20,8 @@ import { classifiersCapabilities } from "./delivery/classifiers.js"; // #1419 T4
 import { managersCapabilities } from "./delivery/managers.js"; // #1419 T5 — 관리기 4종 + 발견 큐
 import { pipelineCapabilities } from "./delivery/pipeline.js"; // #1419 T6 — 파이프라인 현황 한 번에
 import { livCapabilities } from "./delivery/liv.js"; // #1631 — 리브 홈 현황(모드 + 지금 손볼 것)
-import { livChatCapabilities } from "./delivery/liv-chat.js"; // #1631 · #4032 — 리브 탭이 붙는 리브 세션(찾기·첫 말) · 물음 접기
+import { livChatCapabilities } from "./delivery/liv-chat.js"; // #1631 · #4032 · #4970 — 리브 세션 찾기 · 리브에게 일 맡기기(입구 하나 — 레일 [리브] · [연결할게요] · [연결 도와줘]) · 물음 접기
 import { welcomeCapabilities } from "./delivery/welcome.js";       // #1813 — 처음 설정(#/welcome)의 실측·LLM 분석·반영
-import { connectSessionCapabilities } from "./delivery/connect-session.js"; // #4970 — 외부 앱 연결 세션 열기(처음 설정 · [외부 앱 연결])
 import { projectChatCapabilities } from "./delivery/project-chat.js"; // #1757 — 프로젝트 화면의 리브 대화(프로젝트 폴더에서 한 턴)
 import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js";
 import { meAccountDeleteCapabilities } from "./delivery/me-account-delete.js";   // #1876 탈퇴를 앱 안에서
@@ -76,7 +75,6 @@ export const deliveryCapabilities: Capability[] = [
   ...livCapabilities,
   ...livChatCapabilities,
   ...welcomeCapabilities,
-  ...connectSessionCapabilities,
   ...projectChatCapabilities,
   ...connectorMembersCapabilities,
   ...hooksCapabilities,
