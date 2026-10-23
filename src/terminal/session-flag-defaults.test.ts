@@ -8,8 +8,9 @@ import { HARNESSES, sessionFlagDefaults, type Harness } from "./catalog.js";
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
-t("C1 claude — 새 세션 화면과 같은 fable · high", () => {
-  assert.deepEqual(sessionFlagDefaults("claude"), { "--model": "fable", "--effort": "high" });
+//  #4940 — 기본 모델은 opus(상민님 2026-10-23 «기본 모델 opus high로 해. 클로드의 경우.»). 종전 fable · high.
+t("C1 claude — 새 세션 화면과 같은 opus · high", () => {
+  assert.deepEqual(sessionFlagDefaults("claude"), { "--model": "opus", "--effort": "high" });
 });
 
 t("C2 codex — gpt-5.6-sol · medium, 그 모델이 그 강도를 받는다", () => {
