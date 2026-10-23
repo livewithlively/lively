@@ -26,7 +26,8 @@ import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/a
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
 import { harnessInstalled } from "./harness-installed.js";   // #4970 — 설치 여부(게이트웨이 전용 — 노드 번들 밖)
-import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, isReportedSched, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, ensureMemberOsUser, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { prepareMemberSeat, awaitMemberSeat } from "./login-seat-prep.js";   // #4970 — 로그인 전 서버 계정(게이트웨이 전용)
+import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, isReportedSched, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, ensureMemberOsUser, memberOsState, memberProvisioning, clearProvisionFailure, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
@@ -444,14 +445,17 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.json(await onLoginJobEnd(loginJobIdOf(req), loginJobBearer(req), req.body));
   }));
 
-  //  (#4970) 그 사람의 서버 계정(격리 박스의 box_<사람>)을 **로그인 전에** 만든다 — 처음 설정 «AI 연결» 이 장면을 열 때 부른다.
-  //   격리 박스에서 계정이 아직 없으면 로그인이 공용 자리로 가고(resolveMemberOsUser «미프로비저닝 → 공유 폴백»), 첫 세션이 계정을 만든 뒤엔
-  //   그 사람 홈에 자격이 없어 «로그인 안 됨» 이 된다. 만드는 데 1~2분(구성원 몫 claude·codex 설치)이라 기다리지 않고 돌려 둔다 —
-  //   로그인 시작이 같은 일을 기다린다(ensureMemberOsUser 는 같은 사람의 동시 호출을 하나로 묶는다). 격리 박스가 아니면 아무것도 안 한다.
+  //  (#4970) 그 사람의 서버 계정(격리 박스의 box_<사람>)을 **로그인 전에** 갖춘다 — 사연은 login-seat-prep.ts 머리말.
+  //   처음 설정 «AI 연결» 이 장면을 열 때 부르고, 만드는 중(preparing)이면 몇 초마다 다시 물어 다 되면(ready) 목록을 그린다.
+  //   격리 박스가 아니면 «none» — 아무것도 안 한다.
+  const seatDeps = (req: express.Request) => {
+    const u = userOf(req);
+    return { state: () => memberOsState(u), inflight: () => memberProvisioning(u), ensure: () => ensureMemberOsUser(u), clearFailure: () => clearProvisionFailure(u) };
+  };
   app.post("/api/ui/me/ai-login/prepare", auth, wrap(async (req, res) => {
-    void ensureMemberOsUser(userOf(req)).catch((e) => logger.warn({ err: e }, "AI 로그인 준비: 구성원 OS 계정 만들기 실패(로그인 시작이 다시 시도한다)"));
+    const state = await prepareMemberSeat(seatDeps(req), { retry: ((req.body ?? {}) as Record<string, unknown>).retry === true });
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true });
+    res.json({ ok: true, state });
   }));
   app.post("/api/ui/me/ai-login/start", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
@@ -460,8 +464,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       res.json({ ok: true });
       return;
     }
-    //  (#4970) 격리 박스 — 계정부터(위 prepare 머리말). 못 만들었으면 종전처럼 공용 자리로 간다(로그인 자체는 막지 않는다).
-    await ensureMemberOsUser(userOf(req)).catch(() => null);
+    //  (#4970) 격리 박스 — 계정이 **다 만들어질 때까지** 기다린다(만드는 중이면 그 일 끝까지). 끝내 없으면 503 — 공용 자리로 몰래 가지 않는다.
+    await awaitMemberSeat(seatDeps(req));
     const seat = await loginSeat(req);
     //  ⚠ restart 가 필요한 이유(실측 2026-08-28): 사람이 브라우저에서 **막히는** 경우가 있다 — 예컨대 ChatGPT
     //   계정에 «Codex용 장치 코드 인증» 이 꺼져 있으면 그 코드가 거기서 죽는다(#2232 원준님 실측). 그런데 우리

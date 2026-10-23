@@ -329,7 +329,8 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
   격리가 없으면 클로드만 멤버별(위 프로필)이고 나머지는 박스 공용 계정 하나다.
 - 서버 AI 프로그램: 클로드는 설치기가(격리면 구성원마다), 챗GPT 는 격리 구성원마다(install-codex-user) 깐다. 제미나이·그록은
   `sudo bash deploy/install-harness-clis.sh [agy] [grok]` 로 박스 전체(/usr/local/bin)에 깐다(#4970 — 매니지드 세션 이미지와 같은 설치).
-  처음 설정 «AI 연결» 은 이 서버에 깔린 AI 만 보인다.
+  처음 설정 «AI 연결» 은 이 서버에 깔린 AI 만 보인다. 제미나이·그록 갱신은 같은 스크립트를 `FORCE=1` 로 다시 돌린다(업데이트가 갱신하지 않는다).
+  격리 구성원 키트는 넷(claude·codex·antigravity·grok)을 배선한다 — **이미 계정이 있는 구성원**은 `provision-member.sh` 를 다시 돌려야 넷을 받는다(멱등).
 
 ## 디렉토리 구조 (Linux/Mac 패리티가 구조로 드러남 — 주요 파일만)
 

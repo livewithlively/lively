@@ -38,6 +38,15 @@ export const MEMBER_INSTALLERS: Readonly<Record<string, string>> = Object.freeze
   claude: "/opt/lively/libexec/install-claude-user",
   codex: "/opt/lively/libexec/install-codex-user",
 });
+/**
+ * (순수) 구성원 몫 설치 도우미가 «설치됨» 으로 칠 만한가 — 격리 박스이고 그 하네스의 도우미가 있을 때만.
+ *  ⚠ 근사다: 도우미는 best-effort 라 OFFLINE·네트워크 실패에도 0 으로 끝난다 — 그 구성원 홈에 실제로 없을 수 있다. 그때 로그인은
+ *   «<하네스> 없음» 으로 말한다(막다른 길은 아니다). 정확히 재려면 그 사람 자리에서 물어야 하는데, 목록 조회마다 그럴 수는 없다.
+ */
+export function memberInstallerPresent(key: string, infraReady: boolean, exists: (p: string) => boolean): boolean {
+  const helper = MEMBER_INSTALLERS[key];
+  return !!helper && infraReady && exists(helper);
+}
 export const INSTALLED_TTL_MS = 60_000;
 /** 모름(null)을 기억하는 시간 — 답(true/false)보다 짧게. */
 export const INSTALLED_UNKNOWN_TTL_MS = 10_000;
@@ -51,7 +60,7 @@ const realInstalledDeps: InstalledDeps = {
   run: (line) => runAtGatewaySeat(line),
   now: () => Date.now(),
   memo: new Map(),
-  memberInstaller: (key) => !!MEMBER_INSTALLERS[key] && isolationInfraReady() && existsSync(MEMBER_INSTALLERS[key]!),
+  memberInstaller: (key) => memberInstallerPresent(key, isolationInfraReady(), existsSync),
 };
 export async function harnessInstalled(key: string, deps: InstalledDeps = realInstalledDeps): Promise<boolean | null> {
   const h = HARNESSES.find((x) => x.key === key);
