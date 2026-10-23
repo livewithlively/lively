@@ -337,9 +337,11 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
   color: var(--ink); text-decoration: none; font-size: 12.5px; }
 .liv-app:hover { background: var(--bg-sel); }
 .liv-app-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.liv-app-s { flex: none; font-size: 11.5px; color: var(--muted); }
-.liv-app-collecting .liv-app-s, .liv-app-set_scope .liv-app-s { color: var(--mint-deep); }
-.liv-app-ask_admin .liv-app-s, .liv-app-register_app .liv-app-s { color: var(--ink-sub); }
+/* #4970 — 말은 [외부 앱 연결] 목록과 한 벌(lib/connect-routes-view rowView)이라 종전 «next» 말보다 길다 — 줄을 넘기면 오른쪽 정렬로 접는다. */
+.liv-app-s { flex: 0 1 auto; min-width: 0; font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.45; }
+.liv-app-on .liv-app-s { color: var(--mint-deep); }
+.liv-app-half .liv-app-s { color: var(--blue); }
+.liv-app-soon .liv-app-s, .liv-app-err .liv-app-s { color: var(--ink-sub); }
 
 /* 리브 화면(단독) — 대화 칸이 없다. 문(대화 이어 가기 · 시작) · 물음 · 편지 · 외부 앱 연결 */
 .liv-board .liv-body { overflow: auto; }

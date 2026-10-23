@@ -1000,6 +1000,63 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-sum-i.soon b { color: var(--muted-head); }
 .cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }
 
+/* ── #4970 «연결하는 길» — 목록은 앱마다 한 줄(어떻게 연결돼 있나 · 다음 걸음), 상세는 길을 권하는 순서대로 ─────────
+   말은 lib/connect-routes-view.ts 한 벌. 상태는 점 + 말(채운 컬러 알약 없음), 단추는 하나만 진하다(권하는 길의 다음 걸음). */
+.cn-rt-list-wrap { display: flex; flex-direction: column; gap: 22px; }
+.cn-rt-list-wrap > .cn-sum { margin-bottom: -6px; }
+.cn-rt-list { grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 4px 12px; }
+.cn-rt-row .cn-row-main .m.cn-rt-word { white-space: normal; color: var(--ink-sub); line-height: 1.5; }
+.cn-rt-row .cn-row-main .m.cn-rt-blk { white-space: normal; color: var(--muted-2); line-height: 1.5; }
+.cn-rt-row.b-soon .cn-row-main .t, .cn-rt-row.b-err .cn-row-main .t { color: var(--ink-sub); }
+.cn-rt-row.b-soon .svc-tile { opacity: .6; }
+.cn-rt-btn { flex: none; pointer-events: none; }
+.cn-rt-row:hover .cn-rt-btn { border-color: var(--blue); color: var(--blue); }
+.cn-sum-i.half b { color: var(--blue); }
+.cn-rt-other { margin-top: 16px; }
+.cn-rt { margin: 18px 0 4px; max-width: 880px; }
+.cn-rt-card { margin-top: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.cn-rt-card.primary { border-color: var(--line-net-2); }
+.cn-rt-hd { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; }
+.cn-rt-hd b { font-size: 14.5px; font-weight: 800; color: var(--ink); }
+.cn-rt-rec { font-size: 11.5px; font-weight: 700; color: var(--mint-deep); }
+.cn-rt-rec::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--mint-deep); vertical-align: 1px; }
+.cn-rt-st { flex: 1 1 100%; font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-rt-bl { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.cn-rt-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.cn-rt-body:empty { display: none; }
+.cn-rt-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cn-rt-more { margin-top: 10px; }
+.cn-rt-more > summary { cursor: pointer; font-size: 13px; font-weight: 650; color: var(--ink-sub); }
+.cn-rt-more > summary:hover { color: var(--ink); }
+.cn-rt-ask { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-rt-sub { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cn-rt-sub > b { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.cn-rt-people { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; }
+.cn-rt-people b { font-weight: 650; color: var(--ink); }
+.cn-reg { display: flex; flex-direction: column; gap: 12px; }
+.cn-reg-who { margin: 0; font-size: 13px; font-weight: 650; color: var(--ink); }
+.cn-reg-t { font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-reg-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-reg-steps li { padding-left: 2px; }
+.cn-reg-li { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.cn-reg-steps li::marker { font-weight: 700; color: var(--ink); }
+.cn-reg-copy { display: flex; align-items: center; gap: 8px; max-width: 100%; }
+.cn-reg-copy code { min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-tint); font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+.cn-reg-copy.none { font-size: 12px; color: var(--muted); }
+.cn-reg-addr { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; background: var(--bg-tint); }
+.cn-reg-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: var(--bg-tint); }
+.cn-reg-form > b { font-size: 13px; font-weight: 750; color: var(--ink); }
+.cn-reg-f { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 12.5px; }
+.cn-reg-f .k { font-weight: 650; color: var(--ink-sub); }
+.cn-reg-f .cn-scope-in { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
+.cn-reg-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cn-reg-file-n { color: var(--muted); }
+.cn-reg-notes { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.cn-reg-notes b { font-weight: 700; color: var(--ink-sub); }
+.cn-reg-notes ul { margin: 4px 0 0; padding-left: 18px; }
+/* [무엇을 모을지 정하기 ↓] 로 내려온 칸을 잠깐 표시한다 — 어디를 보면 되는지 눈이 따라가게. */
+.cn-flash { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: 10px; }
+
 /* ── #3778 «카드가 두 축을 말한다» — 내 계정으로 직접 사용 / 자료 가져오기 ─────────────────────
    머리말은 «연결이 두 가지» 라고 하는데 카드는 한 축만 봤다. 상세(cn-act)와 **같은 이름·같은 아이콘**으로
    목록에도 두 줄을 세운다 — 두 화면이 한 사실을 다르게 말하면 사람은 화면을 못 믿는다.

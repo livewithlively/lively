@@ -1,20 +1,18 @@
-// v2/connect-board.ts — [외부 앱 연결] 맨 위의 «앱 × 구성원» 현황판(#4213 T13, 상민님 2026-10-15 To-Be §7).
+// v2/connect-board.ts — [외부 앱 연결] 상세의 «Claude 커넥터» 길 칸(#4970 — 종전 #4213 T13 목록 맨 위 «앱 × 구성원» 현황판).
 //
-//  기본 연결은 각 구성원의 Claude 커넥터다(T9). 그래서 이 화면이 가장 먼저 답할 물음은 «누가 어떤 앱을 Claude 로 연결했고,
-//   그 앱에서 어디를 모으고 있나» 다. 줄 = 앱, 칸 = 구성원(«Claude로 연결됨» · 다시 로그인 필요 · «○○님 연결 필요» …),
-//   줄 끝 = 연결 경로(Claude 커넥터 · 라이블리 수집기 · 리브가 연결함)와 모으는 곳(수집 단위) 수. 줄을 펼치면 단위마다
-//   공개범위 · 모으는 사람 · 마지막으로 읽은 때 · 설명이 보인다.
+//  구성원 Claude 커넥터는 앱마다 있는 여러 길 중 하나다(#4970, 상민님 2026-10-23 — 이미 연결된 길 → 라이블리 앱 → Claude 커넥터 → 토큰 …).
+//   그래서 «누가 이 앱을 Claude 로 이어 뒀고 그 길로 어디를 모으나» 는 목록이 아니라 그 앱 상세의 Claude 길 칸에서 답한다.
+//   칸 = 구성원(«Claude로 연결됨» · 다시 로그인 필요 …) · 모으는 곳(수집 단위)마다 공개범위 · 모으는 사람 · 마지막으로 읽은 때 · 설명.
 //  고치는 것은 둘뿐이다 — 공개범위(나만 · 볼 수 있는 사람만 · 모두)와 모을지(모으기 · 빼기). 설명·메타데이터는 리브가 쓴다(사람 편집 화면 없음, 설계 §3).
 //   이 둘은 «수집 전 검토» 자리다(T10 댓글 #451) — 처음 연결 대화에서 리브가 제안한 것을 사람이 여기서 다시 볼 수 있다.
 //  판정은 lib/connect-board.ts(순수 — 시험 있음), 말은 lib/claude-connectors.ts(처음 설정·관리 탭과 한 벌).
 //  ⚠ 서버가 허락의 정본이다 — 버튼을 보일지는 서버 규칙을 따라 미리 가리지만, 실제 거절(403·404·409)은 서버 말 그대로 보여 준다.
-import { api, el, hasScope, loadPeopleAvatars, personFace, relTime, state, toast } from '../core.js';
+import { api, el, hasScope, loadPeopleAvatars, relTime, state, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
-import { svcTile, presetSvcKey } from '../svc-icons.js';
-import { CLAUDE_CONNECTORS_URL, scanErrorText } from '../lib/claude-connectors.js';
+import { scanErrorText } from '../lib/claude-connectors.js';
 import {
-  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, boardPeople, buildBoard, canEditUnit, routeText, unitDisplayName, unitReadText, unitSummaryText, visibilityChoices, widens,
-  type Board, type BoardApp, type BoardCell, type UnitIn, type Visibility,
+  KIND_LABEL, STATE_LABEL, VIS_LABEL, assigneeText, boardPeople, buildBoard, canEditUnit, unitDisplayName, unitReadText, visibilityChoices, widens,
+  type Board, type BoardCell, type UnitIn, type Visibility,
 } from '../lib/connect-board.js';
 
 interface BoardData {
@@ -61,99 +59,60 @@ async function loadBoard(): Promise<BoardData> {
   return { board, hidden: Number(units?.hidden || 0), enforced: units ? units.visibility_enforced !== false : true, me, isAdmin, names, myScan: mine ? mine.scan : null, errors };
 }
 
-/** 칸 하나 — 점 + 말. 채운 컬러 알약을 쓰지 않는다(디자인 시스템 «점 + 말»). */
-function cellNode(c: BoardCell): HTMLElement {
-  return el('td', { class: 'cn-bd-cell cn-bd-' + c.state, title: c.scanError ? scanErrorText(c.scanError) : c.label },
-    c.state === 'off' || c.state === 'blocked' ? null : el('span', { class: 'cn-bd-dot', 'aria-hidden': 'true' }),
-    el('span', { text: c.label }));
+/** 구성원 한 사람 — 점 + 이름 + 말. 채운 컬러 알약을 쓰지 않는다(디자인 시스템 «점 + 말»). */
+function personNode(c: BoardCell, name: string): HTMLElement {
+  return el('span', { class: 'cn-bd-cell cn-bd-' + c.state, title: c.scanError ? scanErrorText(c.scanError) : c.label },
+    el('span', { class: 'cn-bd-dot', 'aria-hidden': 'true' }), el('b', { text: name }), el('span', { text: ' ' + c.label }));
 }
 
-/** 연결 경로 — 이 앱이 어떤 길로 이어져 있나(말은 lib routeText — 시험 있음). */
-function routeLine(a: BoardApp): HTMLElement {
-  return el('div', { class: 'cn-bd-route', text: routeText(a) });
-}
+/** Claude 로 이어 둔 상태 — 연결됨 · 다시 로그인 필요 · 실패 · 연결 중 · 모름. «연결 필요» · «확인 전» · «안 씀» 은 사람 목록에 세우지 않는다(소음). */
+const LINKED_CELLS: ReadonlySet<BoardCell['state']> = new Set<BoardCell['state']>(['connected', 'needs-auth', 'failed', 'pending', 'unknown']);
 
-
-export async function renderConnectBoard(host: HTMLElement, opts: { onChanged?: () => void } = {}): Promise<void> {
-  const open = new Set<string>();     // 펼친 앱 줄 — 다시 그려도 펼친 채로
-  let last: BoardData | null = null;  // 마지막으로 읽은 값 — 펼치기·접기는 이것으로 다시 그린다(서버를 다시 읽지 않는다)
-  const paint = async (reload = true): Promise<void> => {
+/**
+ * (#4970) 상세 «Claude 커넥터» 길 칸 — 이 앱을 Claude 로 이어 둔 구성원과, 이 길로 모으는 곳(공개범위 · 모을지).
+ *  목록 맨 위에 있던 «앱 × 구성원» 표(T13)를 앱마다 그 앱 상세로 옮겼다(상민님 2026-10-23 — 목록은 앱마다 «어떤 길로 연결됐나»,
+ *  구성원 목록은 그 앱의 Claude 길에서). 판정·말은 그대로 lib/connect-board.ts 다.
+ *  aiApp 은 커넥터의 앱 키다(구글 = gmail).
+ */
+export async function renderAppClaude(host: HTMLElement, aiApp: string, opts: { onChanged?: () => void } = {}): Promise<void> {
+  const paint = async (): Promise<void> => {
     let d: BoardData;
-    try { d = reload || !last ? await loadBoard() : last; last = d; }
+    try { d = await loadBoard(); }
     catch (e) {
-      host.replaceChildren(el('p', { class: 'v2-desc', style: 'color:var(--warn-text)', text: `현황판을 불러오지 못했어요 — ${(e as Error)?.message || e}` }));
+      host.replaceChildren(el('p', { class: 'cn-bd-note', style: 'color:var(--warn-text)', text: `구성원 연결을 불러오지 못했어요 — ${(e as Error)?.message || e}` }));
       return;
     }
     const nameOf = (id: string): string => d.names.get(id) || id;
-    const refreshBtn = el('button', {
-      class: 'btn btn-ghost btn-sm', type: 'button', text: '내 Claude 앱 새로 확인',
-      onclick: async () => {
-        refreshBtn.disabled = true; refreshBtn.textContent = '확인하는 중…';
-        try {
-          const r: any = await api('/api/ui/me/ai-connectors/refresh', { method: 'POST', body: '{}' });
-          if (r?.skipped === 'policy-off') toast('이 워크스페이스는 구성원 Claude 커넥터를 쓰지 않아요(관리자 설정).');
-          else if (r?.skipped === 'recent') toast('방금 확인한 값이에요. 잠시 뒤 다시 눌러 주세요.');
-          else if (r?.record?.scan && !r.record.scan.ok) toast(scanErrorText(r.record.scan.error));
-          else toast('새로 확인했어요.');
-        } catch (e) { toast(`확인하지 못했어요 — ${(e as Error)?.message || e}`); }
-        await paint();
-      },
-    }) as HTMLButtonElement;
-    const tools = el('div', { class: 'cn-bd-tools' },
-      el('a', { class: 'btn btn-ghost btn-sm', href: CLAUDE_CONNECTORS_URL, target: '_blank', rel: 'noopener', text: 'Claude에서 연결 ↗',
-        title: 'Claude 웹의 커넥터 설정을 엽니다. 처음 설정에서 로그인한 그 Claude 계정이어야 해요.' }),
-      d.board.policy === 'blocked' ? null : refreshBtn);
-
     const notes: HTMLElement[] = [];
-    if (d.board.policy === 'blocked') notes.push(el('p', { class: 'cn-bd-note', text: '이 워크스페이스는 관리자 설정으로 구성원 Claude 커넥터를 쓰지 않아요. 앱 자료는 아래 «라이블리로 직접 연결» 로 가져옵니다.' }));
-    if (d.board.policy === 'unknown' && !d.errors.length) notes.push(el('p', { class: 'cn-bd-note', text: '구성원 Claude 커넥터 정책을 읽지 못했어요 — 그동안은 쓰지 않는 것으로 봅니다.' }));
     if (!d.enforced) notes.push(el('p', { class: 'cn-bd-note', text: '이 워크스페이스는 자료 공개범위를 쓰지 않아서, 무엇을 골라도 모은 자료가 모두에게 보여요.' }));
-    if (d.errors.length) notes.push(el('p', { class: 'cn-bd-note', style: 'color:var(--warn-text)', text: `${d.errors.join(' · ')} 상태를 불러오지 못했어요 — 그 칸은 지금 정확하지 않을 수 있어요.` }));
+    if (d.errors.length) notes.push(el('p', { class: 'cn-bd-note', style: 'color:var(--warn-text)', text: `${d.errors.join(' · ')} 상태를 불러오지 못했어요 — 아래는 지금 정확하지 않을 수 있어요.` }));
     if (d.myScan && !d.myScan.ok) notes.push(el('p', { class: 'cn-bd-note', text: `내 Claude 앱 마지막 확인: ${scanErrorText(d.myScan.error)}` }));
-
-    if (!d.board.apps.length) {
-      host.replaceChildren(el('section', { class: 'cn-group cn-board' },
-        el('div', { class: 'cn-gh' }, el('b', { text: '앱 × 구성원' }), el('span', { class: 'h', text: '누가 어떤 앱을 Claude 로 연결했는지, 어디를 모으는지 보여 줘요' })),
-        tools, ...notes,
-        el('p', { class: 'v2-empty', text: '아직 연결된 앱이 없어요. Claude 에서 Slack·Notion·Gmail 같은 앱을 연결하면 리브가 그 앱에서 일 자료를 모아요.' })));
-      return;
-    }
-
-    const cols = d.board.members.length + 2;
-    const head = el('tr', {},
-      el('th', { class: 'cn-bd-app', scope: 'col', text: '앱' }),
-      ...d.board.members.map((m) => el('th', { class: 'cn-bd-mem', scope: 'col', title: m.name },
-        personFace(m.id, 'cn-bd-face', m.name), el('span', { class: 'cn-bd-mname', text: m.id === d.me ? `${m.name}(나)` : m.name }))),
-      el('th', { class: 'cn-bd-units', scope: 'col', text: '모으는 곳' }));
-    const body: HTMLElement[] = [];
-    for (const a of d.board.apps) {
-      const isOpen = open.has(a.key);
-      const hasUnits = a.units.list.length > 0;
-      const toggle = hasUnits ? el('button', {
-        class: 'btn-text cn-bd-more', type: 'button', 'aria-expanded': String(isOpen),
-        text: isOpen ? '접기 ▴' : '자세히 ▾',
-        onclick: () => { if (open.has(a.key)) open.delete(a.key); else open.add(a.key); void paint(false); },
-      }) : null;
-      body.push(el('tr', { class: 'cn-bd-row' },
-        el('th', { class: 'cn-bd-app', scope: 'row' },
-          el('div', { class: 'cn-bd-appname' }, svcTile(presetSvcKey(a.key), a.label, a.claudeMembers > 0 || a.collector || a.livDirect), el('b', { text: a.label })),
-          routeLine(a)),
-        ...a.cells.map(cellNode),
-        el('td', { class: 'cn-bd-units' }, el('span', { text: unitSummaryText(a) }), toggle)));
-      if (isOpen && hasUnits) {
-        body.push(el('tr', { class: 'cn-bd-detail' },
-          el('td', { colspan: String(cols) }, el('div', { class: 'cn-bd-unitlist' },
-            ...a.units.list.map((u) => unitNode(u, d, nameOf, paint, opts.onChanged))))));
-      }
-    }
-    const table = el('table', { class: 'cn-bd-tbl' }, el('thead', {}, head), el('tbody', {}, ...body));
-    host.replaceChildren(el('section', { class: 'cn-group cn-board' },
-      el('div', { class: 'cn-gh' }, el('b', { text: '앱 × 구성원' }), el('span', { class: 'h', text: '누가 어떤 앱을 Claude 로 연결했는지, 어디를 모으는지 보여 줘요' })),
-      tools, ...notes,
-      el('div', { class: 'cn-bd-scroll' }, table),
-      d.hidden ? el('p', { class: 'cn-bd-note', text: `다른 구성원만 볼 수 있는 곳 ${d.hidden}곳은 이름을 보여 드리지 않아요.` }) : null));
+    const a = d.board.apps.find((x) => x.key === aiApp);
+    const people = a ? a.cells.filter((c) => LINKED_CELLS.has(c.state)) : [];
+    //  이 길(구성원 Claude 커넥터)로 모으는 곳만 — 라이블리 수집기가 맡은 곳은 아래 «자료 가져오기» 칸의 범위다.
+    const units = a ? a.units.list.filter((u) => u.route === 'member_ai') : [];
+    const count = (st: string): number => units.filter((u) => u.state === st).length;
+    const unitSum = units.length ? [count('active') ? `모으는 중 ${count('active')}` : '', count('candidate') ? `후보 ${count('candidate')}` : '', count('excluded') ? `뺌 ${count('excluded')}` : ''].filter(Boolean).join(' · ') : '';
+    host.replaceChildren(
+      el('div', { class: 'cn-rt-sub' },
+        el('b', { text: 'Claude 로 이어 둔 구성원' }),
+        people.length
+          ? el('div', { class: 'cn-rt-people' }, ...people.map((c) => personNode(c, c.member === d.me ? `${nameOf(c.member)}(나)` : nameOf(c.member))))
+          : el('span', { class: 'cn-bd-note', text: '아직 없어요. Claude 에서 이 앱을 연결하면 여기 보여요.' })),
+      el('div', { class: 'cn-rt-sub' },
+        el('b', { text: '이 길로 모으는 곳' }),
+        unitSum ? el('span', { class: 'cn-bd-note', text: unitSum }) : null,
+        units.length
+          //  다섯 곳이 넘으면 접어 둔다 — 길 칸에서 먼저 보여야 할 것은 «다음 걸음» 이고, 곳마다의 검토는 펼쳐서 한다.
+          ? (units.length > 5
+            ? el('details', { class: 'cn-rt-more' }, el('summary', { text: `모으는 곳 ${units.length}곳 보기 · 공개범위와 모을지 정하기` }),
+              el('div', { class: 'cn-bd-unitlist' }, ...units.map((u) => unitNode(u, d, nameOf, paint, opts.onChanged))))
+            : el('div', { class: 'cn-bd-unitlist' }, ...units.map((u) => unitNode(u, d, nameOf, paint, opts.onChanged))))
+          : el('span', { class: 'cn-bd-note', text: '아직 없어요. 연결한 뒤 [연결 도와줘]로 AI 에게 맡기면 모을 곳을 찾아 제안해요.' })),
+      d.hidden ? el('p', { class: 'cn-bd-note', text: `다른 구성원만 볼 수 있는 곳 ${d.hidden}곳은 이름을 보여 드리지 않아요.` }) : null,
+      ...notes);
   };
-  host.replaceChildren(el('p', { class: 'v2-desc', text: '앱 × 구성원 현황을 불러오는 중이에요…' }));
+  host.replaceChildren(el('p', { class: 'cn-bd-note', text: '구성원 연결을 불러오는 중이에요…' }));
   await paint();
 }
 

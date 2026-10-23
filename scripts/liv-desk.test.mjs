@@ -50,17 +50,10 @@ for (const none of [null, undefined, "", "  "]) check(L.isLivSessionId(["box-a",
 check(L.isLivSessionId([], "box-a") === false, "W2 이름이 없으면 거짓");
 check(L.isLivSessionId([" box-a "], "box-a") === true, "W2 앞뒤 공백은 세지 않는다");
 
-// ── W6 외부 앱 상태 말 ──
-const W6 = [["register_app", "앱 등록이 필요해요"], ["ask_admin", "관리자에게 요청해야 해요"], ["preparing", "준비 중이에요"],
-  ["connect", "연결할 수 있어요"], ["set_scope", "모을 범위를 정하면 돼요"], ["collecting", "모으고 있어요"]];
-for (const [k, want] of W6) eq(L.connectNextText(k), want, `W6 ${k}`);
-for (const odd of [null, undefined, "", "nope", 3]) eq(L.connectNextText(odd), "확인하지 못했어요", `W6 모르는 값(${J(odd)})`);
-//  서버가 내는 next 값과 말 표가 같은 것을 본다 — 한쪽에만 생기면 «확인하지 못했어요» 가 거짓으로 뜬다.
-const NEXT = code(read("src/org/connect-next.ts"));
-const union = (NEXT.match(/export type ConnectNext = ([^;]+);/) || [, ""])[1];
-const serverNexts = [...union.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
-check(serverNexts.length > 0, "W6 서버의 next 값 목록을 읽었다(배선 — 비면 아래 비교가 헛돈다)");
-eq(serverNexts, W6.map(([k]) => k).sort(), "W6 서버의 next 값 = 화면의 말 표");
+// ── W6 외부 앱 상태 말 — (#4970) 곁칸 앱 줄은 [외부 앱 연결] 목록과 같은 말(lib/connect-routes-view rowView)을 쓴다.
+//  말 표와 서버 길·상태의 계약은 scripts/connect-routes-view.test.mjs(K1)가 지킨다. 여기서는 곁칸이 그 한 벌을 부르는지만 본다.
+const CARDS = code(read("web/liv-cards.ts"));
+check(/rowView\(a\)/.test(CARDS) && !/connectNextText/.test(CARDS), "W6 곁칸 앱 줄이 목록과 같은 말(rowView)을 쓴다 — 옛 next 말 표가 아니다");
 
 // ── 배선 ──
 const PANES = code(read("web/v2/panes.ts"));
