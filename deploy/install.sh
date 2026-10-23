@@ -93,7 +93,11 @@ main() {
     run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" || true
 
   # 중앙박스 키트 — 이 호스트의 claude 에 lively(MCP+훅+컨텍스트) 설치 → 웹터미널 세션이 맥락 CRUD 가능.
-  phase "7/7 중앙박스 키트 설치(게이트웨이 유저의 claude 를 lively-aware 로)"
+  #  서버 AI 넷(#4970)을 먼저 갖춘다 — 키트가 게이트웨이 유저의 claude 에 MCP·훅을 단다. 전용 서비스 유저면 그 유저의 claude 는 여기서 생기고,
+  #   run_as_service 가 그 유저의 ~/.local/bin 을 PATH 앞에 두어 키트가 찾는다. 처음 설정 «AI 연결» 이 넷을 다 보인다.
+  #   없는 것만 · 실패는 경고(common.sh ensure_server_ais).
+  phase "7/7 서버 AI 갖추기(클로드·챗GPT·제미나이·그록) + 중앙박스 키트 설치(게이트웨이 유저의 claude 를 lively-aware 로)"
+  ensure_server_ais
   if run_as_service bash "$DIR/install-kit.sh"; then
     ok "중앙박스 키트 설치 완료"
   else
