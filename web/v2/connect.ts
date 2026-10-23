@@ -311,10 +311,6 @@ const SCOPE_NOUN: Record<string, string> = {
 };
 const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈', outlook: '메일' };
 //  #4233: 이 화면의 그림도 lib/icon-paths.ts 한 벌에 있다(이름에 cn- 이 붙는다). 모양은 그대로다.
-/**
- * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
- * 한글이 아니면(영문 앱 이름 등) «를». 순수라 테스트가 표를 돈다.
- */
 /** 받침이 있으면 «은», 없으면 «는» — 한글 끝 글자로(한글이 아니면 «은(는)»). */
 function eunNeun(word: string): string {
   const c = String(word || '').trim().slice(-1).charCodeAt(0);
@@ -322,6 +318,10 @@ function eunNeun(word: string): string {
   return (c - 0xac00) % 28 ? '은' : '는';
 }
 
+/**
+ * 목적격 조사 — 앞 글자 받침으로 «을/를». 화면에 «저장소을(를)» 같은 자리가 남으면 사람이 «기계가 쓴 글»로 읽는다.
+ * 한글이 아니면(영문 앱 이름 등) «를». 순수라 테스트가 표를 돈다.
+ */
 export function eulReul(word: string): string {
   const c = (word || '').charCodeAt((word || '').length - 1);
   if (!(c >= 0xAC00 && c <= 0xD7A3)) return '를';
@@ -485,7 +485,7 @@ function decideRows(label: string, a: AppAxes, skip: Set<string>, key: string, r
     if (on) skip.add(skipKey(key, axis)); else skip.delete(skipKey(key, axis));
     saveSkip(skip);
     toast(on ? `${AXIS_LABEL[axis]}${eunNeun(AXIS_LABEL[axis])} 안 쓰는 것으로 정했어요 — 이 칸은 더 묻지 않아요`
-             : `${AXIS_LABEL[axis]}를 다시 «아직 안 정함»으로 되돌렸어요`);
+             : `${AXIS_LABEL[axis]}${eulReul(AXIS_LABEL[axis])} 다시 «아직 안 정함»으로 되돌렸어요`);
     reload();
   };
   for (const axis of pendingAxes(a)) {
@@ -531,7 +531,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   //  2026-09-12 대표 결정 — 팀 수집·쓰기 도구·아웃바운드는 «워크스페이스를 어떻게 굴릴까»라 구성원이 한다.
   //   (관리자 전용으로 남는 것은 인원 관리와 인프라뿐 — 데이터베이스·게이트웨이 열쇠는 위에서 따로 admin 을 본다.)
   const isAdmin = hasScope('memory') || hasScope('admin');
-  const noun = SCOPE_NOUN[svc.key] || '것';
+  //  표에 없는 앱(관리자가 등록한 앱)은 다루는 것의 이름을 모른다 — 그때는 목적어를 빼고 말한다(«것을» 이라고 쓰지 않는다).
+  const noun = SCOPE_NOUN[svc.key] || '';
+  const nounObj = noun ? `${noun}${eulReul(noun)} ` : '';
 
   //  #2232 — OAuth 릴레이에서 **막 돌아온 탭**이다(main.ts 가 표식을 남긴다). 이 탭은 [허용]을 누르느라 새로 열린 탭이라
   //   사람은 «그래서 이제 뭘 하지?» 상태다(원준님 실측 2026-08-28, Slack). 원래 하던 화면으로 돌아가라고 **글로** 말한다.
@@ -588,7 +590,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   const usedAt = viaToken && cred?.last_used_at ? ` · ${relTime(cred.last_used_at)}에 마지막으로 썼어요`
     : viaToken && cred?.updated_at ? ` · ${relTime(cred.updated_at)}에 연결했어요` : '';
   const readDetail = st === 'on'
-    ? `내가 요청할 때 AI가 내 ${svc.label} 계정으로 들어가 ${noun}${eulReul(noun)} **내 계정 권한 그대로** 다룹니다. 라이블리에는 남지 않아요.`
+    ? `내가 요청할 때 AI가 내 ${svc.label} 계정으로 들어가 ${nounObj}**내 계정 권한 그대로** 다룹니다. 라이블리에는 남지 않아요.`
     : st === 'blocked'
       ? String((svc as any).soon || '라이블리가 이 앱을 준비하고 있어요 — 준비를 마치면 여기서 바로 켤 수 있어요.')
       : account ? `켜면 ${svc.label} 화면에서 «허용»을 한 번 누르는 것으로 끝나요.` : '켜면 토큰을 넣는 창이 열려요.';
@@ -682,7 +684,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
     : st !== 'on' ? quietCollectFace('꺼짐', svc.key === 'github' ? '위 [내 계정으로 직접 사용]을 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위 [내 계정으로 직접 사용]에서 토큰을 저장하면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
   else collect = quietCollectFace('아직 없어요',
-    `${svc.label}는 아직 자료 가져오기가 없어요. 위 [내 계정으로 직접 사용]으로 ${noun}${eulReul(noun)} 그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
+    `${svc.label}에는 아직 자료 가져오기가 없어요. 위 [내 계정으로 직접 사용]으로 ${nounObj}그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
 
   // ── ③ 보는 사람 ──
   const whos = el('div', { class: 'cn-whos' },
