@@ -44,23 +44,24 @@ await t("E14 반영은 리브 세션을 열지 않는다 · 새로 끝내는 사
 const OB_RAW = readFileSync(new URL("../../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const OB = code(OB_RAW);
 
-await t("E15 차례는 인사 → 이름 → 연결 물음 하나뿐(첫 관리자·합류자 같음)", () => {
+await t("E15 차례는 인사 → 이름 → AI 연결 → 연결 물음(첫 관리자·합류자 같음) — (PR4) AI 연결이 외부 앱 앞이다", () => {
   const m = OB.match(/const ORDER = (\[[^\]]*\]);/);
   assert.ok(m, "차례표를 못 찾았다 — 검사가 헛돈다");
-  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "connect-ask"]);
+  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "ai", "connect-ask"]);
   assert.doesNotMatch(OB, /ORDER_JOIN|isJoin\(|JOIN\b/, "합류자 갈래가 남아 있다");
 });
 
-await t("E16 옛 판의 저장된 자리를 알아본다(team→name · 그 뒤의 장면·done→connect-ask · 빈 값→null)", () => {
+await t("E16 옛 판의 저장된 자리를 알아본다(team→name · done→connect-ask · 그 밖의 옛 장면→ai · 빈 값→null)", () => {
   const fn = OB.match(/function fitScene\(scene: unknown\): string \| null \{([\s\S]*?)\n  \}/);
   assert.ok(fn, "fitScene 을 못 찾았다");
   //  타입 표기만 걷어 그대로 돌린다(본문은 화면이 쓰는 그 글자다).
   const body = fn![1]!.replace(/: string \| null/g, "");
   const fitScene = new Function("STEP_OF", "scene", body) as (steps: Record<string, number>, s: unknown) => string | null;
-  const STEP_OF = { intro: 0, name: 1, "connect-ask": 2 };
+  const STEP_OF = { intro: 0, name: 1, ai: 2, "connect-ask": 3 };
   const cases: Array<[unknown, string | null]> = [
-    ["intro", "intro"], ["name", "name"], ["connect-ask", "connect-ask"],
-    ["team", "name"], ["claude", "connect-ask"], ["done", "connect-ask"], ["stage", "connect-ask"], ["app", "connect-ask"],
+    ["intro", "intro"], ["name", "name"], ["ai", "ai"], ["connect-ask", "connect-ask"],
+    //  (PR4) 옛 «AI 연결»(claude)·질문 장면들은 AI 연결부터 — 외부 앱 물음으로 건너뛰면 AI 를 안 잇고 지나간다.
+    ["team", "name"], ["claude", "ai"], ["done", "connect-ask"], ["stage", "ai"], ["app", "ai"],
     ["", null], [null, null],
   ];
   for (const [inp, want] of cases) assert.equal(fitScene(STEP_OF, inp), want, `fitScene(${JSON.stringify(inp)})`);
@@ -96,6 +97,48 @@ await t("E18 리브 진입점 네 자리가 한 스위치를 본다 — (PR3) �
       assert.match(line, /LIV_ENTRY_VISIBLE|livOn/, `${f}: 스위치 밖의 리브 링크 — ${line.trim().slice(0, 80)}`);
     }
   }
+});
+
+// ── F. (PR4 · 상민님 2026-10-23) AI 연결 장면 — 사양·엣지 표: 스크래치패드 spec-ai-step.md §F·§G ─────────────────
+const AI = OB.slice(OB.indexOf("function bindAi("), OB.indexOf("function say("));
+
+await t("F3 이 서버에서 띄울 수 있는(설치된) AI 만 줄로 — 서버 installed 가 false 면 안 보인다 · 순서는 [AI 계정 연결]과 같다", () => {
+  assert.ok(AI.length > 200, "bindAi 를 못 찾았다 — 검사가 헛돈다");
+  assert.match(AI, /api\('\/api\/ui\/me\/ai-accounts'\)/, "목록을 서버에 안 묻는다");
+  assert.match(AI, /AI_ORDER\.map\(\(k\) => byKey\.get\(k\)\)\.filter\(\(a\) => a && a\.installed !== false\)/, "★ 설치 안 된 AI 를 고르게 한다(위시스트는 클로드뿐이다)");
+  assert.match(AI, /OB_COPY\.aiNone/, "띄울 AI 가 하나도 없을 때 할 말이 없다");
+});
+
+await t("F4 [다음]은 연결된 AI 가 하나라도 있을 때만 켜진다", () => {
+  assert.match(AI, /next\.disabled = !rows\.some\(\(a\) => a\.loggedIn === true\);/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
+  assert.match(OB, /<button class="ob-btn ob-btn-pri" id="aiNext" disabled>/, "처음부터 켜져 있다");
+});
+
+await t("F5 «PC에서 쓰는 AI로» — 다음 장면으로 가고, [연결할게요]가 서버 세션 대신 «쓰는 AI 에서 하기» 를 그린다", () => {
+  assert.match(AI, /pc\.onclick = \(\) => \{ S\.viaPc = true; goScene\(nextScene\('ai'\)!\); \};/);
+  assert.match(AI, /next\.onclick = \(\) => \{ S\.viaPc = false; goScene\(nextScene\('ai'\)!\); \};/, "AI 를 이은 사람의 PC 표식을 안 지운다");
+  const yes = OB.slice(OB.indexOf("async function connectYes"), OB.indexOf("function renderScene"));
+  const fin = yes.indexOf("await finishOnboarding()"), pc = yes.indexOf("if (S.viaPc) { showOwnAi(el); return; }"), open = yes.indexOf("await openOrGuide(el)");
+  assert.ok(fin > 0 && pc > fin && open > pc, "반영 뒤 · 세션 열기 전에 PC 길을 가르지 않는다");
+  assert.match(OB, /viaPc: v\.viaPc === true,/, "이어 열기에서 PC 표식을 잃는다");
+});
+
+await t("F6 로그인 칸은 한 벌 — [AI 계정 연결](me-ai)과 처음 설정이 같은 부품(ai-login-panel)을 쓴다", () => {
+  assert.match(OB_RAW, /from '\.\.\/ai-login-panel\.js';/, "처음 설정이 공용 칸을 안 쓴다");
+  assert.match(AI, /aiLoginPanel\(a, /, "줄에 로그인 칸을 안 붙인다");
+  assert.match(AI, /confirmSharedLogin\(a\)/, "서버 공용 계정의 물음을 건너뛴다");
+  const ME = code(readFileSync(new URL("../../../web/me-ai.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
+  assert.match(ME, /from '\.\/ai-login-panel\.js';/, "[AI 계정 연결]이 공용 칸을 안 쓴다");
+  assert.doesNotMatch(ME, /ensureLoginTerminal|const paintCard|const paintTerminal/, "★ 로그인 칸이 두 벌이다 — 실측 처방이 갈린다");
+});
+
+await t("G 계정 목록이 설치 여부(installed)를 싣는다", () => {
+  const R = code(readFileSync(new URL("../../terminal/routes.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
+  const at = R.indexOf('app.get("/api/ui/me/ai-accounts"');
+  const body = R.slice(at, R.indexOf("}));", at));
+  assert.ok(at > 0, "목록 라우트를 못 찾았다");
+  assert.match(body, /harnessInstalled\(a\.key\)/, "설치를 안 묻는다");
+  assert.match(body, /installed: installed\[i\]/, "설치 여부를 안 싣는다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

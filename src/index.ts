@@ -2,6 +2,9 @@
 //  재배선한다. db/client.ts 가 모듈 로드 시점에 env 를 읽어 풀을 만들므로 **그 어떤 import 보다 먼저**여야
 //  한다(ESM 은 import 순서대로 실행). 상태파일이 없으면 아무것도 하지 않는다(단일 워크스페이스 종전 그대로).
 import "./boot/tenancy-env.js";
+//  (#4970) 셀프호스트 — 세션·화면 안 로그인·설치 확인이 그 사용자 몫 프로그램 폴더(~/.local/bin 의 claude 등)를 찾게 PATH 를 잇는다.
+//   tmux 서버가 이 프로세스의 PATH 를 물려받으므로 무엇이든 띄우기 전이어야 한다(boot/user-bin-path.ts 머리말).
+import "./boot/user-bin-path.js";
 import express from "express";
 import { BearerVerifier } from "./auth/bearer.js";
 import { registerLlmProxyRoutes } from "./ai-runs/routes.js";

@@ -9,3 +9,6 @@ export const AI_LOGO: Record<string, string> = {
 
 /** 하네스 키 → 사람이 아는 제공사 이름(처음 설정 화면의 표기). 실제 실행 프로그램 이름(Claude Code 등)은 옆에 작게 적는다. */
 export const AI_BRAND: Record<string, string> = { claude: 'Claude', codex: 'ChatGPT', antigravity: 'Gemini', grok: 'Grok' };
+
+/** 사람에게 보이는 AI 순서 — [AI 계정 연결] 표와 처음 설정 «AI 연결»(#4970)이 같은 순서로 보인다. */
+export const AI_ORDER: readonly string[] = ['claude', 'codex', 'antigravity', 'grok'];

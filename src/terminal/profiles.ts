@@ -438,6 +438,12 @@ async function runAtSeat(at: ExecAt | null, line: string): Promise<boolean | nul
   try { return await Promise.race([run, timer]); } finally { clearTimeout(t); }
 }
 
+/**
+ * (#4970) 게이트웨이 자리에서 `sh -c` 한 줄 — 셀프호스트 설치 확인(harness-installed.ts)이 runAtSeat 의 처방(stdin 닫기·상한·윈도우 모름)을
+ *  그대로 쓰게 내보낸다. 설치 확인 자체는 노드 번들 밖(게이트웨이 전용)에 둔다 — 노드 에이전트는 «DB 없음» 이 계약이라 딸려 오는 모듈을 늘리지 않는다.
+ */
+export function runAtGatewaySeat(line: string): Promise<boolean | null> { return runAtSeat(null, line); }
+
 /** 고른 AI 하나를 판정한다. 뜨거운 경로가 아니다 — 사람이 «로그인했어요» 를 누른 그 순간에만 부른다. */
 export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLoginCheck> {
   const h = HARNESSES.find((x) => x.key === key);
