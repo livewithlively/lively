@@ -39,19 +39,43 @@ fi
 OWN=(); [ "$IS_ROOT" = 1 ] && OWN=(-o root -g root)
 
 WANT=("$@"); [ "${#WANT[@]}" -gt 0 ] || WANT=(agy grok)
+#  권한 없는 계정이 못 들어가는 자리(sudo 를 부른 /root · 0750 홈)에서 시작해도 되게 — 이 스크립트는 절대 경로만 쓴다.
+cd /
 
 # 임시 자리는 끝날 때(실패·중단 포함) 다 치운다.
 TMPS=()
 cleanup() { local d; for d in ${TMPS[@]+"${TMPS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done; }
 trap cleanup EXIT INT TERM
 
+# 임시 폴더 하나 — 실패하면 빈 이름으로 나아가지 않는다(빈 이름이면 HOME="" 설치 · 걷기 대상이 «/» 밑 전부가 된다 — 격리 리뷰).
+fresh_dir() {
+  local d
+  d="$(mktemp -d)" || return 1
+  [ -n "$d" ] && [ -d "$d" ] || { echo "임시 폴더를 만들지 못했습니다" >&2; return 1; }
+  printf '%s' "$d"
+}
+# 권한 없는 계정이 쓸 임시 폴더(설치기 HOME · 버전 확인 HOME). ⚠ 되돌림용 백업 폴더는 이걸 쓰지 않는다 — root 몫으로 둔다
+#  (설치기가 그 계정으로 도니, 그 계정 몫이면 백업을 바꿔 칠 수 있다).
+plain_dir() {
+  local d
+  d="$(fresh_dir)" || return 1
+  if [ "$IS_ROOT" = 1 ]; then chown nobody "$d" || { rm -rf "$d"; return 1; }; fi
+  printf '%s' "$d"
+}
+
 # 권한 없는 계정으로(시험 자리면 지금 계정으로) 명령을 돌린다 — 설치기·«이미 있나» 확인이 쓴다.
 as_plain() {
   if [ "$IS_ROOT" = 1 ]; then runuser -u nobody -- "$@"; else "$@"; fi
 }
 
+# 버전 확인 — 권한 없는 계정 · 버리는 HOME 으로(HOME 이 /root 면 --version 이 설정 폴더를 만들다 죽는 CLI 가 있다).
+PROBE_HOME="$(plain_dir)" || exit 1
+TMPS+=("$PROBE_HOME")
+version_of() { as_plain env HOME="$PROBE_HOME" "$BIN_DIR/$1" --version 2>/dev/null </dev/null | head -1; }
+runs() { as_plain env HOME="$PROBE_HOME" "$BIN_DIR/$1" --version >/dev/null 2>&1 </dev/null; }
+
 # 이미 돌면 스킵 — 설치기를 매번 받지 않는다. root 가 아니라 권한 없는 계정이 돌 수 있어야 «있음» 이다.
-present() { [ "${FORCE:-0}" != 1 ] && [ -x "$BIN_DIR/$1" ] && as_plain "$BIN_DIR/$1" --version >/dev/null 2>&1 </dev/null; }
+present() { [ "${FORCE:-0}" != 1 ] && [ -x "$BIN_DIR/$1" ] && runs "$1"; }
 
 # (안전망) 설치 자리의 이름 하나가 지금 무엇인지 — 링크면 가리키는 곳, 파일이면 내용 지문, 없으면 «-».
 ident() {
@@ -61,19 +85,11 @@ ident() {
   else printf '-'; fi
 }
 
-# 임시 폴더 하나 — 실패하면 빈 이름으로 나아가지 않는다(빈 이름이면 HOME="" 설치 · 걷기 대상이 «/» 밑 전부가 된다 — 격리 리뷰).
-fresh_dir() {
-  local d
-  d="$(mktemp -d)" || return 1
-  [ -n "$d" ] && [ -d "$d" ] || { echo "임시 폴더를 만들지 못했습니다" >&2; return 1; }
-  printf '%s' "$d"
-}
-
 install_one() {
   local name="$1" url="$2" rel="$3"
-  if present "$name"; then echo "  ✓ $name 이미 있음 — $(as_plain "$BIN_DIR/$name" --version 2>/dev/null </dev/null | head -1)"; return 0; fi
+  if present "$name"; then echo "  ✓ $name 이미 있음 — $(version_of "$name")"; return 0; fi
   local H backup n i before=()
-  H="$(fresh_dir)" || return 1; TMPS+=("$H")
+  H="$(plain_dir)" || return 1; TMPS+=("$H")
   backup="$(fresh_dir)" || return 1; TMPS+=("$backup")
   #  안전망 기록: 설치 자리의 grok·agent 가 지금 무엇인지(권한 없는 계정 · 좁힌 PATH 라 원래 못 건드린다).
   for n in grok agent; do
@@ -84,7 +100,8 @@ install_one() {
   curl -fsSL --max-time 120 -o "$H/install.sh" "$url" || { echo "  ✗ $name 설치기를 받지 못했습니다: $url" >&2; return 1; }
   if [ "$IS_ROOT" = 1 ]; then chown -R nobody "$H" || return 1; fi
   #  ⚠ env -i 로 비우지 않는다 — 설치기가 USER·LANG 같은 값을 set -u 로 읽다 죽을 수 있다. 바꾸는 것은 HOME·PATH·TMPDIR 셋.
-  as_plain env HOME="$H" PATH=/usr/bin:/bin TMPDIR="$H" bash "$H/install.sh" >/dev/null || { echo "  ✗ $name 설치기가 실패했습니다" >&2; return 1; }
+  #   그 HOME 안에서 돈다(받은 파일을 지금 폴더에 쓰는 설치기가 있다 — 지금 폴더는 «/» 다).
+  ( cd "$H" && as_plain env HOME="$H" PATH=/usr/bin:/bin TMPDIR="$H" bash "$H/install.sh" >/dev/null ) || { echo "  ✗ $name 설치기가 실패했습니다" >&2; return 1; }
   #  안전망: 설치기가 설치 자리를 건드렸으면 원래대로(없던 것은 걷고, 있던 것은 되돌린다).
   i=0
   for n in grok agent; do
@@ -101,8 +118,8 @@ install_one() {
   [ -n "$real" ] && [ -f "$real" ] && [ -x "$real" ] || { echo "  ✗ $name 설치기가 실행 파일을 남기지 않았습니다($rel)" >&2; return 1; }
   install -m 0755 ${OWN[@]+"${OWN[@]}"} "$real" "$BIN_DIR/.$name.new" || return 1
   mv -f "$BIN_DIR/.$name.new" "$BIN_DIR/$name" || return 1
-  as_plain "$BIN_DIR/$name" --version >/dev/null 2>&1 </dev/null || { echo "  ✗ $name 가 설치 자리에서 돌지 않습니다" >&2; return 1; }
-  echo "  ✓ $name → $BIN_DIR/$name — $(as_plain "$BIN_DIR/$name" --version 2>/dev/null </dev/null | head -1)"
+  runs "$name" || { echo "  ✗ $name 가 설치 자리에서 돌지 않습니다(권한 없는 계정으로)" >&2; return 1; }
+  echo "  ✓ $name → $BIN_DIR/$name — $(version_of "$name")"
 }
 
 for h in "${WANT[@]}"; do

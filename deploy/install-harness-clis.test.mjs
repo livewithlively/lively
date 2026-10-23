@@ -191,7 +191,12 @@ t("H12 root 로 돌 때 설치기와 «이미 있나» 확인은 권한 없는 �
   const code = src.split(/\r?\n/).filter((l) => !l.trimStart().startsWith("#")).join("\n");
   assert.match(code, /if \[ "\$IS_ROOT" = 1 \]; then runuser -u nobody -- "\$@"; else "\$@"; fi/, "권한 없는 계정으로 안 돌린다");
   assert.match(code, /as_plain env HOME="\$H" PATH=\/usr\/bin:\/bin TMPDIR="\$H" bash "\$H\/install\.sh"/, "설치기를 권한 없는 계정 · 좁힌 PATH 로 안 돌린다");
-  assert.match(code, /present\(\) \{[^\n]*as_plain "\$BIN_DIR\/\$1" --version/, "«이미 있나» 를 root 로 잰다(root 만 닿는 링크를 있음으로 친다)");
+  assert.match(code, /present\(\) \{[^\n]*&& runs "\$1"; \}/, "«이미 있나» 가 버전 확인(runs)을 안 거친다");
+  assert.match(code, /runs\(\) \{ as_plain env HOME="\$PROBE_HOME" "\$BIN_DIR\/\$1" --version/, "«이미 있나» 를 root 로 잰다(root 만 닿는 링크를 있음으로 친다) · 또는 HOME 이 /root 다");
+  assert.match(code, /PROBE_HOME="\$\(plain_dir\)" \|\| exit 1/, "버전 확인 HOME 을 권한 없는 계정 몫으로 안 만든다");
+  assert.match(code, /H="\$\(plain_dir\)" \|\| return 1/, "설치기 HOME 을 권한 없는 계정 몫으로 안 만든다");
+  assert.match(code, /backup="\$\(fresh_dir\)" \|\| return 1/, "★ 되돌림 백업이 권한 없는 계정 몫이다 — 설치기가 백업을 바꿔 칠 수 있다");
+  assert.match(code, /\( cd "\$H" && as_plain env HOME=/, "설치기를 지금 폴더(«/»)에서 돌린다 — 받은 파일을 지금 폴더에 쓰는 설치기가 죽는다");
   assert.doesNotMatch(code, /install_one [^\n]*\|\|/, "호출부에 || 가 있다 — 함수 안 set -e 가 꺼진다");
   assert.match(code, /trap cleanup EXIT INT TERM/, "중단돼도 임시 자리를 안 치운다");
 });

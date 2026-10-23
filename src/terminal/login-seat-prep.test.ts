@@ -52,6 +52,28 @@ await t("S3 끝내 못 만들었으면 503 — 공용 자리로 몰래 가지 �
   }
 });
 
+await t("S7 ★ 기다림에 상한이 있다 — 넘으면 409 «준비하는 중»(요청이 1~3분 묶이지 않는다) · 만들기는 뒤에서 계속 돈다", async () => {
+  const s = seat({ state: "preparing", inflight: new Promise(() => { /* 끝나지 않는 만들기 */ }) });
+  const t0 = Date.now();
+  await assert.rejects(awaitMemberSeat(s.deps, { waitMs: 60 }), (e: { status?: number; message?: string }) => e?.status === 409 && /준비하고 있어요/.test(String(e?.message)), "409 «준비하는 중» 이 아니다");
+  assert.ok(Date.now() - t0 < 2000, "상한을 넘겨 기다렸다");
+  assert.equal(s.box.ensures, 0, "만드는 중인데 또 만들었다");
+});
+
+await t("S7b 새로 만드는 경우도 상한 안에서만 기다린다", async () => {
+  const s = seat({ state: "absent", ensure: () => new Promise(() => {}) });
+  await assert.rejects(awaitMemberSeat(s.deps, { waitMs: 60 }), (e: { status?: number }) => e?.status === 409);
+  assert.equal(s.box.ensures, 1);
+});
+
+await t("S8 방금 실패했어도 로그인 시작(사람이 직접 누름)은 다시 만든다", async () => {
+  const s = seat({ state: "failed" });
+  s.deps.ensure = () => { s.box.ensures++; s.box.state = "ready"; return Promise.resolve("box_a"); };
+  await awaitMemberSeat(s.deps);
+  assert.equal(s.box.cleared, 1, "실패 표식을 안 지웠다");
+  assert.equal(s.box.ensures, 1, "★ 다시 만들지 않았다 — 5분 동안 로그인이 503 으로 막힌다");
+});
+
 await t("S4·S5 격리 박스가 아니거나(none) 이미 다 됐으면(ready) 아무것도 안 한다", async () => {
   for (const st of ["none", "ready"] as MemberOsState[]) {
     const s = seat({ state: st });
