@@ -355,6 +355,10 @@ export function sessionFlagDefaults(harnessKey: string, list: readonly Harness[]
     if (f.choices && !f.choices.includes(f.default)) continue;
     out[f.name] = f.default;
   }
+  //  그 모델이 받지 않는 강도는 싣지 않는다 — createSession 이 400 으로 거절하고 리브가 안 열린다(화면 effortChoices 와 같은 판단).
+  //   사람이 고를 틈이 없는 세션이라 «강도 기본» 보다 «열리는 것» 이 먼저다.
+  const allowed = out["--model"] ? h?.effortsByModel?.[out["--model"]] : undefined;
+  if (out["--effort"] && allowed && !allowed.includes(out["--effort"])) delete out["--effort"];
   return out;
 }
 

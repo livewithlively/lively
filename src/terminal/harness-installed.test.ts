@@ -1,11 +1,11 @@
-// 이 배포가 그 AI 를 띄울 수 있나(설치) — 처음 설정 «AI 연결» 이 고를 수 있는 AI 만 보이게(#4970). 사양·엣지 표: spec-ai-step.md §B.
+// 이 배포가 그 AI 를 띄울 수 있나(설치) — 처음 설정 «AI 연결» 이 고를 수 있는 AI 만 보이게(#4970). 설계: 지식 onboarding-single-flow-connect-in-own-ai-4970 §16 · 엣지 표 = 아래 B 행.
 //  실행: npm run build && node dist/terminal/harness-installed.test.js
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { harnessInstalled, installedCheckLine, INSTALLED_TTL_MS, type InstalledDeps } from "./harness-installed.js";
+import { harnessInstalled, installedCheckLine, INSTALLED_TTL_MS, INSTALLED_UNKNOWN_TTL_MS, type InstalledDeps } from "./harness-installed.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -56,7 +56,7 @@ await t("B7 모르는 하네스·실행 파일 없는 하네스(셸)는 모름, 
   assert.equal(d.lines.length, 0);
 });
 
-await t("B8 같은 답은 잠깐 기억한다 — 상한 안 두 번째는 셸 0회 · 상한 뒤엔 다시 · 모름은 기억 안 함", async () => {
+await t("B8 같은 답은 잠깐 기억한다 — 상한 안 두 번째는 셸 0회 · 상한 뒤엔 다시 · 모름은 더 짧게(10초) 기억한다", async () => {
   let now = 1_000;
   const d = deps({ relayed: false, run: true, now: () => now });
   await harnessInstalled("claude", d); await harnessInstalled("claude", d);
@@ -64,9 +64,14 @@ await t("B8 같은 답은 잠깐 기억한다 — 상한 안 두 번째는 셸 0
   now += INSTALLED_TTL_MS;
   await harnessInstalled("claude", d);
   assert.equal(d.lines.length, 2, "상한이 지났는데 옛 답을 썼다");
-  const u = deps({ relayed: false, run: null });
+  let un = 1_000;
+  const u = deps({ relayed: false, run: null, now: () => un });
   await harnessInstalled("claude", u); await harnessInstalled("claude", u);
-  assert.equal(u.lines.length, 2, "모름을 기억해 다시 묻지 않는다");
+  assert.equal(u.lines.length, 1, "모름을 안 기억해 매달리는 박스에서 부를 때마다 셸이 상한까지 돈다");
+  un += INSTALLED_UNKNOWN_TTL_MS;
+  await harnessInstalled("claude", u);
+  assert.equal(u.lines.length, 2, "모름을 너무 오래 기억한다 — 고쳐진 뒤에도 모름으로 남는다");
+  assert.ok(INSTALLED_UNKNOWN_TTL_MS < INSTALLED_TTL_MS, "모름은 답보다 짧게");
 });
 
 await t("B9 셀프호스트 확인 줄 — PATH 에 없어도 홈의 ~/.local/bin 에 있으면 설치로 친다(실제 셸)", async () => {

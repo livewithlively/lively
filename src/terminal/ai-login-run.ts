@@ -22,17 +22,18 @@ import { sessionExecConfigured, sessionSpawnArgv } from "./session-exec.js";
 import { tenantSlug } from "./catalog.js";
 import type { LivelyUser } from "../context.js";
 
-/** 한 사람 · 한 하네스의 로그인 자리. 이름이 짧아야 경로가 길어지지 않는다. 열쇠는 loginSeatKey. */
-function slot(seatKey: string, h: AiLoginHarness): string {
-  return `lvly-login-${h}-${createHash("sha256").update(seatKey).digest("hex").slice(0, 8)}`;
+/** 한 사람 · 한 하네스의 로그인 자리. 이름이 짧아야 경로가 길어지지 않는다. 열쇠는 loginSlotKey. */
+function slot(slotKey: string, h: AiLoginHarness): string {
+  return `lvly-login-${h}-${createHash("sha256").update(slotKey).digest("hex").slice(0, 8)}`;
 }
 
 /**
  * 로그인 자리의 주인 열쇠(#4970) — 격리·중계면 그 OS 사용자, 비격리(셀프호스트: OS 사용자 하나에 여러 사람)면 **그 사람**.
  *  종전엔 비격리에서 모두가 «solo» 한 자리를 썼다 — 두 사람이 함께 로그인하면 서로의 주소·코드·입력 파일을 덮었다.
  *  OS 사용자가 있으면 종전 열쇠 그대로다(슬롯 이름이 바뀌지 않는다).
+ *  ⚠ 읽기·붙여넣기·정리는 사람(user)을 **반드시** 받는다 — 빠뜨리면 비격리에서 옛 공용 자리를 읽어 남의 코드를 본다(격리 리뷰 2026-10-23).
  */
-export function loginSeatKey(osUser: string | null, user?: LivelyUser | null): string {
+export function loginSlotKey(osUser: string | null, user?: LivelyUser | null): string {
   return osUser ?? (user ? `solo:${ownerKey(user)}` : "solo");
 }
 
@@ -54,8 +55,8 @@ export function loginEnvFor(o: {
   return { CLAUDE_CONFIG_DIR: o.profileDir };
 }
 
-/** loginEnvFor 의 실제 입력 — 프로필 폴더는 profiles.ts 가 정본이다(동적 import: 이 러너를 무거운 모듈에 묶지 않는다). */
-async function loginEnvOf(osUser: string | null, h: AiLoginHarness, user: LivelyUser | null): Promise<Record<string, string>> {
+/** 그 사람에 대한 loginEnvFor — 프로필 폴더는 profiles.ts 가 정본이다(동적 import: 이 러너를 무거운 모듈에 묶지 않는다). */
+async function loginEnvForUser(osUser: string | null, h: AiLoginHarness, user: LivelyUser | null): Promise<Record<string, string>> {
   if (osUser || h !== "claude" || !user) return {};
   const { profileConfigDir } = await import("./profiles.js");
   return loginEnvFor({ osUser, harness: h, profileDir: profileConfigDir(user) });
@@ -289,8 +290,8 @@ function ownerKey(user: LivelyUser): string { return String(user.userId || user.
 /** 로그인을 시작한다(멱등 — 이미 돌고 있으면 그대로). */
 export async function startAiLogin(osUser: string | null, h: AiLoginHarness, user?: LivelyUser | null): Promise<void> {
   const home = homeOf(osUser);
-  const env = await loginEnvOf(osUser, h, user ?? null);
-  const out = await spawnAt(user ?? null, osUser, h, loginStartSh({ home, slotName: slot(loginSeatKey(osUser, user), h), argv: aiLoginArgv(h), env }));
+  const env = await loginEnvForUser(osUser, h, user ?? null);
+  const out = await spawnAt(user ?? null, osUser, h, loginStartSh({ home, slotName: slot(loginSlotKey(osUser, user), h), argv: aiLoginArgv(h), env }));
   if (!/started|running/.test(out)) throw new Error(`로그인 명령을 띄우지 못했습니다 — ${out.slice(0, 160)}`);
 }
 
@@ -323,8 +324,8 @@ export async function dropProbeSeat(user: LivelyUser | null, key: string): Promi
 }
 
 /** 지금까지의 출력 원문. 아직 없으면 빈 문자열(=시작 중). */
-export async function readAiLogin(osUser: string | null, h: AiLoginHarness, user?: LivelyUser | null): Promise<string> {
-  const log = logOf(homeOf(osUser), slot(loginSeatKey(osUser, user), h));
+export async function readAiLogin(osUser: string | null, h: AiLoginHarness, user: LivelyUser | null): Promise<string> {
+  const log = logOf(homeOf(osUser), slot(loginSlotKey(osUser, user), h));
   return sh(osUser, `cat ${q(log)} 2>/dev/null || true`).catch(() => "");
 }
 
@@ -332,16 +333,16 @@ export async function readAiLogin(osUser: string | null, h: AiLoginHarness, user
  * 사람이 받아 온 코드를 프로세스에 넣는다(claude).
  *  ⚠ 값 검증은 여기서 한다 — 파일로 넘기지만 그 내용은 결국 CLI 의 stdin 이 된다. 형식 밖 문자는 안 넘긴다.
  */
-export async function pasteAiLogin(osUser: string | null, h: AiLoginHarness, code: string, user?: LivelyUser | null): Promise<void> {
+export async function pasteAiLogin(osUser: string | null, h: AiLoginHarness, code: string, user: LivelyUser | null): Promise<void> {
   const v = String(code).trim();
   if (!/^[A-Za-z0-9._~+/=#?&:%-]{4,512}$/.test(v)) throw new Error("코드 형식이 올바르지 않습니다.");
-  const inp = inOf(homeOf(osUser), slot(loginSeatKey(osUser, user), h));
+  const inp = inOf(homeOf(osUser), slot(loginSlotKey(osUser, user), h));
   await sh(osUser, `printf '%s' ${q(v)} > ${q(inp)}`);
 }
 
 /** 로그인 자리를 정리한다(사람이 그만두거나 끝난 뒤). 자격 파일은 건드리지 않는다. */
-export async function cancelAiLogin(osUser: string | null, h: AiLoginHarness, user?: LivelyUser | null): Promise<void> {
-  const s = slot(loginSeatKey(osUser, user), h);
+export async function cancelAiLogin(osUser: string | null, h: AiLoginHarness, user: LivelyUser | null): Promise<void> {
+  const s = slot(loginSlotKey(osUser, user), h);
   const home = homeOf(osUser);
   const pid = pidOf(home, s);
   //  ⚠ `pkill -f <슬롯>` 이었다 — 이 스크립트를 도는 셸의 명령줄에 슬롯 이름이 있어 **자기를 죽였다.**

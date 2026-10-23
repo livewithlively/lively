@@ -6,7 +6,7 @@
 //  둘 다 «띄웠다» 는 신호는 정상이었다. 그래서 그 두 자리를 계약으로 못박는다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { loginStartSh, ensureHarnessSeat, touchHarnessSeat, SEAT_RECHECK_MS, SEAT_TOUCH_MS, loginSeatKey, loginEnvFor } from "./ai-login-run.js";
+import { loginStartSh, ensureHarnessSeat, touchHarnessSeat, SEAT_RECHECK_MS, SEAT_TOUCH_MS, loginSlotKey, loginEnvFor } from "./ai-login-run.js";
 import { installTenantSlugResolver } from "./catalog.js";
 import type { LivelyUser } from "../context.js";
 import { aiLoginArgv, EXIT_MARK } from "./ai-login-flow.js";
@@ -209,7 +209,7 @@ t("★ 러너가 pid 를 남기고, 끝나면 지운다 — 남으면 영영 «�
   installTenantSlugResolver(() => null);
 }
 
-// ── #4970 비격리 셀프호스트 — 로그인 자리를 사람마다 · claude 는 그 사람 프로필 폴더에 (spec-ai-step.md §E) ─────────────
+// ── #4970 비격리 셀프호스트 — 로그인 자리를 사람마다 · claude 는 그 사람 프로필 폴더에 (설계 지식 onboarding-single-flow-connect-in-own-ai-4970 §16 · 표 = 아래 E 행) ─────────────
 //  실측(위시스트, 2026-10-23): 비격리 박스에서 화면 안 claude 로그인은 게이트웨이 홈의 공용 ~/.claude 에 자격을 떨궜고, 연결 확인은
 //  그 사람 프로필 폴더(~/.lively/profiles/<사람>/claude)를 본다 → 로그인을 끝내도 «확인하는 중» 이 끝나지 않는다. 자리도 모두 «solo» 하나였다.
 {
@@ -217,13 +217,13 @@ t("★ 러너가 pid 를 남기고, 끝나면 지운다 — 남으면 영영 «�
   const base = { harness: "claude" as const, profileDir: "/home/lively/.lively/profiles/a/claude", platform: "linux" };
 
   t("E1 OS 사용자가 있으면 자리 열쇠는 그 사용자 — 종전 슬롯 이름 그대로", () => {
-    assert.equal(loginSeatKey("box_x", who("a")), "box_x");
-    assert.equal(loginSeatKey("box_x", null), "box_x");
+    assert.equal(loginSlotKey("box_x", who("a")), "box_x");
+    assert.equal(loginSlotKey("box_x", null), "box_x");
   });
   t("E2·E3 비격리 — 사람마다 다른 자리 · 사람을 모르면 종전 «solo»", () => {
-    assert.notEqual(loginSeatKey(null, who("a")), loginSeatKey(null, who("b")), "★ 두 사람이 한 자리를 쓴다 — 서로의 코드를 덮는다");
-    assert.equal(loginSeatKey(null, null), "solo");
-    assert.equal(loginSeatKey(null, undefined), "solo");
+    assert.notEqual(loginSlotKey(null, who("a")), loginSlotKey(null, who("b")), "★ 두 사람이 한 자리를 쓴다 — 서로의 코드를 덮는다");
+    assert.equal(loginSlotKey(null, null), "solo");
+    assert.equal(loginSlotKey(null, undefined), "solo");
   });
   t("E4 비격리 · claude · 리눅스 · 멀티프로필 — 그 사람 프로필 폴더를 CLAUDE_CONFIG_DIR 로", () => {
     assert.deepEqual(loginEnvFor({ osUser: null, ...base, multiprofile: undefined }), { CLAUDE_CONFIG_DIR: base.profileDir });
@@ -255,11 +255,19 @@ t("★ 러너가 pid 를 남기고, 끝나면 지운다 — 남으면 영영 «�
     assert.equal(b, a);
     assert.ok(!a.includes("export "), "환경이 없는데 export 를 쓴다");
   });
+  t("E11 읽기·붙여넣기·정리는 사람을 필수로 받는다 — 빠뜨린 호출이 컴파일되면 비격리에서 옛 공용 자리를 읽는다(격리 리뷰 N4)", () => {
+    const src = readFileSync(new URL("./ai-login-run.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+    for (const sig of [
+      /export async function readAiLogin\(osUser: string \| null, h: AiLoginHarness, user: LivelyUser \| null\)/,
+      /export async function pasteAiLogin\(osUser: string \| null, h: AiLoginHarness, code: string, user: LivelyUser \| null\)/,
+      /export async function cancelAiLogin\(osUser: string \| null, h: AiLoginHarness, user: LivelyUser \| null\)/,
+    ]) assert.match(src, sig, `사람이 선택 인자다 — ${sig.source.slice(22, 40)}`);
+  });
   t("E 배선 — 띄우기·읽기·붙여넣기·정리가 같은 자리 열쇠를 쓰고, 띄우기가 환경을 싣고, 라우트가 사람을 넘긴다", () => {
     const src = readFileSync(new URL("./ai-login-run.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
     const code = src.split("\n").filter((l: string) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
-    assert.equal((code.match(/slot\(loginSeatKey\(osUser, user\), h\)/g) || []).length, 4, "네 갈래가 같은 열쇠를 안 쓴다");
-    assert.match(code, /const env = await loginEnvOf\(osUser, h, user \?\? null\);[\s\S]*?loginStartSh\(\{[^}]*env \}\)/, "띄우기가 환경을 안 싣는다");
+    assert.equal((code.match(/slot\(loginSlotKey\(osUser, user\), h\)/g) || []).length, 4, "네 갈래가 같은 열쇠를 안 쓴다");
+    assert.match(code, /const env = await loginEnvForUser\(osUser, h, user \?\? null\);[\s\S]*?loginStartSh\(\{[^}]*env \}\)/, "띄우기가 환경을 안 싣는다");
     const routes = readFileSync(new URL("./routes.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
     assert.match(routes, /readAiLogin\(seat, h, userOf\(req\)\)/, "상태 조회가 사람을 안 넘긴다 — 남의 자리를 읽는다");
     assert.match(routes, /pasteAiLogin\(await loginSeat\(req\), h, code, userOf\(req\)\)/, "붙여넣기가 사람을 안 넘긴다");

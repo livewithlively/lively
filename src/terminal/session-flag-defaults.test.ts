@@ -1,4 +1,4 @@
-// 서버가 대신 여는 세션(리브)의 모델·추론강도 = 새 세션 화면의 기본(#4970). 사양·엣지 표: spec-ai-step.md §C·§D.
+// 서버가 대신 여는 세션(리브)의 모델·추론강도 = 새 세션 화면의 기본(#4970). 설계: 지식 onboarding-single-flow-connect-in-own-ai-4970 §16 · 엣지 표 = 아래 C·D 행.
 //  종전: 리브 세션은 flags 가 비어 그 AI 계정의 CLI 기본으로 떴다 — 무엇으로 도는지 라이블리가 말할 수 없었다.
 //  실행: npm run build && node dist/terminal/session-flag-defaults.test.js
 import assert from "node:assert/strict";
@@ -43,6 +43,20 @@ t("C7 선언값이 choices 밖이면(낡은 모델) 그 플래그를 싣지 않�
     ],
   } as Harness];
   assert.deepEqual(sessionFlagDefaults("x", fake), { "--effort": "low" });
+});
+
+t("C9 기본 강도가 기본 모델의 허용 밖이면 강도를 싣지 않는다 — 세션 생성 400 으로 리브가 안 열리는 것보다 낫다", () => {
+  const fake: Harness[] = [{
+    key: "y", label: "Y", bin: "y", provider: { id: "o", label: "O" },
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "m1"], default: "m1" },
+      { name: "--effort", label: "강도", desc: "", type: "select", choices: ["", "low", "ultra"], default: "ultra" },
+    ],
+    effortsByModel: { m1: ["low"] },
+  } as Harness];
+  assert.deepEqual(sessionFlagDefaults("y", fake), { "--model": "m1" });
+  const ok: Harness[] = [{ ...fake[0]!, effortsByModel: { m1: ["low", "ultra"] } } as Harness];
+  assert.deepEqual(sessionFlagDefaults("y", ok), { "--model": "m1", "--effort": "ultra" }, "허용되는 강도까지 버린다");
 });
 
 t("C8 실제 카탈로그 전부 — 돌려준 값이 세션 생성 검증(choices · 모델별 강도)을 통과한다", () => {

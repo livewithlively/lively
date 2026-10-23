@@ -16,16 +16,19 @@ import { runAtGatewaySeat } from "./profiles.js";     // runAtSeat 의 처방(st
  *    (aiLoginCheck ① 머리말).
  *  · 셀프호스트 — 세션이 뜰 자리(이 박스)에서 본다. PATH 로 찾고, 못 찾으면 그 홈의 사용자 몫 폴더(user-bin-path)를 직접 본다 — 부팅이
  *    PATH 를 잇지만(boot/user-bin-path) 이 확인이 그 하나에 기대지 않게.
- *  같은 답을 잠깐 기억한다(목록 화면이 여러 번 부른다). 모름(null)은 기억하지 않는다.
+ *  같은 답을 잠깐 기억한다(목록 화면이 여러 번 부른다). 모름(null — 셸이 상한까지 매달렸다)은 **더 짧게** 기억한다: 안 기억하면 매달리는
+ *   박스에서 목록 조회가 부를 때마다 상한(25초)만큼 늘어지고, 길게 기억하면 고쳐진 뒤에도 한참 모름으로 남는다(격리 리뷰 2026-10-23).
  */
 export interface InstalledDeps {
   relayed: () => boolean;
   listed: () => readonly string[] | null;
   run: (line: string) => Promise<boolean | null>;
   now: () => number;
-  memo: Map<string, { at: number; v: boolean }>;
+  memo: Map<string, { at: number; v: boolean | null }>;
 }
 export const INSTALLED_TTL_MS = 60_000;
+/** 모름(null)을 기억하는 시간 — 답(true/false)보다 짧게. */
+export const INSTALLED_UNKNOWN_TTL_MS = 10_000;
 /** (순수) 셀프호스트 설치 확인 한 줄 — PATH 해소, 아니면 홈의 사용자 몫 폴더에 실행 파일이 있나. bin 은 카탈로그 상수다(사람 입력 없음). */
 export function installedCheckLine(bin: string): string {
   return [`command -v "${bin}" >/dev/null 2>&1`, ...USER_BIN_DIRS.map((d) => `[ -x "$HOME/${d}/${bin}" ]`)].join(" || ");
@@ -45,8 +48,8 @@ export async function harnessInstalled(key: string, deps: InstalledDeps = realIn
     return listed ? listed.includes(key) : null;
   }
   const hit = deps.memo.get(key);
-  if (hit && deps.now() - hit.at < INSTALLED_TTL_MS) return hit.v;
+  if (hit && deps.now() - hit.at < (hit.v === null ? INSTALLED_UNKNOWN_TTL_MS : INSTALLED_TTL_MS)) return hit.v;
   const v = await deps.run(installedCheckLine(h.bin));
-  if (v !== null) deps.memo.set(key, { at: deps.now(), v });
+  deps.memo.set(key, { at: deps.now(), v });
   return v;
 }

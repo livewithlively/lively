@@ -370,7 +370,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const accounts = await aiAccountStatus(userOf(req));
-    //  (#4970) 설치 여부 — 처음 설정 «AI 연결» 은 이 서버에서 띄울 수 있는 AI 만 보인다(profiles.harnessInstalled). 모르면 null.
+    //  (#4970) 설치 여부 — 처음 설정 «AI 연결» 은 이 서버에서 띄울 수 있는 AI 만 보인다(harness-installed.ts). 모르면 null.
     const installed = await Promise.all(accounts.map((a) => harnessInstalled(a.key).catch(() => null)));
     res.json({ accounts: accounts.map((a, i) => ({ ...a, installed: installed[i] })) });
   }));
