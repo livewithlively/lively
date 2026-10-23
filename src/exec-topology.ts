@@ -220,6 +220,8 @@ export function parseWorkerK(raw: string | undefined): number {
 
 /** registry 모드의 테넌트 전용 소켓 이름 템플릿 — `tmux -L lvly-<slug>`(#1750 S3). */
 const TENANT_SOCKET = "lvly-{slug}";
+/** 그 소켓 이름의 앞머리(`lvly-`) — 소켓 폴더에서 «워크스페이스 전용 서버가 떠 있나» 를 볼 때 쓴다(#4940 tmux-exec localServerAbsentVerdict). */
+export const TENANT_SOCKET_PREFIX = TENANT_SOCKET.slice(0, TENANT_SOCKET.indexOf("{slug}"));
 
 /**
  * (순수) env 한 벌에서 토폴로지를 파생한다. **종전 판정과 바이트 단위로 같아야 한다** — 각 줄이

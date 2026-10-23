@@ -6,8 +6,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
+import { readdir } from "node:fs/promises";
 import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
-import { execTopology, tmuxArgvFor, tmuxServerIsDedicated, type TmuxListScope } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
+import { execTopology, tmuxArgvFor, tmuxServerIsDedicated, TENANT_SOCKET_PREFIX, type TmuxListScope } from "../exec-topology.js";   // #2599 T2 — 「어디서 도나」는 토폴로지 한 곳에만 묻는다
 import { planTmux, runPlan, outcomeToError, tmuxSessionOf } from "./tmux-route.js";                        // #2600 T2 (d) d2 — 코어 직접 경로의 «무엇을 어디로»
 import { muxGenerationsActive, muxTmux, muxGoneOnNode, muxServerAbsent, muxNoSuchSession, TMUX_SERVER_GONE_RE } from "./mux-generations.js";   // #4931 — 노드 tmux 세대(판별 전용 소켓)
 import { makeBrokerClient, type BrokerTransport } from "./broker-client.js";                // #2600 T2 (d) d2 — 그 전송(노드 박스 브로커 소켓 · 허브는 T3-a 로 걷었다)
@@ -355,7 +356,7 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 //  웹터미널이 '세션 종료됨'을 띄우려면 ⓑ여야 한다 — ⓒ를 종료로 오인하면 살아있는 세션을 죽었다고 알리게 되는데,
 //  그게 #687 이 막으려던 바로 그 오인이다(그래서 그때 프론트를 '계속 재연결'로 바꿨고, 이번엔 그 반대급부인
 //  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
-//  (#4940) 예외 하나 — 셀프호스트(기본 소켓 하나뿐)에서 서버가 아예 없다는 답을 두 번 받으면 sessionGoneVerdict 는 끝남으로 본다
+//  (#4940) 예외 하나 — 셀프호스트(기본 소켓 · 다른 워크스페이스 전용 서버 없음)에서 서버가 아예 없다는 답을 두 번 받으면 sessionGoneVerdict 는 끝남으로 본다
 //   (localServerAbsentVerdict). 이 확답 술어(isSessionGoneError)와 그것을 쓰는 아웃박스 판정은 그대로 보수적이다.
 // ── 종전 `tmuxRelayManaged()` 를 두 술어로 가른다 (#2599 T3 · 조사 함정 4) ─────────────────────────
 // 그 이름 하나가 **서로 다른 두 질문**에 답하고 있었다. 답이 갈리는 표면(registry secondary)이 있어서,
@@ -373,7 +374,7 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
  *    같은 논리가 성립한다. T2 까지는 여기가 «판정 불가» 로 접혀 셀프호스트 secondary 가 #1437 이전 증상
  *    (복원이 영영 안 열리고 클라가 무한 재연결)을 그대로 갖고 있었다 — 조사 함정 4 가 지목한 구멍이다.
  *  · 기본 소켓(공용)은 **종전 그대로 거짓** — #835 의 보수적 규약(모르면 종료라 말하지 않는다)을 지킨다.
- *    (#4940) 사람 앞 판정(sessionGoneVerdict)만은 기본 소켓 하나뿐인 셀프호스트에서 «서버 부재 두 번» 을 끝남으로 본다 —
+ *    (#4940) 사람 앞 판정(sessionGoneVerdict)만은 셀프호스트(다른 워크스페이스 전용 서버가 없을 때)에서 «서버 부재 두 번» 을 끝남으로 본다 —
  *    localServerAbsentVerdict. 이 술어 자체는 바뀌지 않는다(아웃박스·kill 판정이 쓴다 — tmuxKill 은 그 답을 따로 더 본다).
  *
  * ⚠ **부팅 상수가 아니라 요청 축이다.** registry 모드로 뜬 게이트웨이도 primary 워크스페이스를
@@ -494,7 +495,7 @@ export async function sessionGone(id: string): Promise<boolean> {
  * ★ 그래서 판정을 바꾸지 않고 **사실을 하나 더 낸다.** 「없다는 확답」과 「모른다」는 다른 사실이고, 후자는
  *  화면이 «상태를 확인할 수 없어요» 라고 말할 수 있어야 하는 자리다. `sessionGone` 의 계약은 그대로다(무회귀) —
  *  이 함수를 **일부러 부르는 자리만** 그 차이를 본다. [[reboot-stale-session-route-restore-3675]] §3 과 같은 자리.
- *  (#4940) 단 셀프호스트(기본 소켓 하나뿐)에서 tmux 서버가 아예 없다는 답을 두 번 받으면 이 함수와 sessionGone 은 끝남(true)이다 —
+ *  (#4940) 단 셀프호스트(기본 소켓 · 다른 워크스페이스 전용 서버 없음)에서 tmux 서버가 아예 없다는 답을 두 번 받으면 이 함수와 sessionGone 은 끝남(true)이다 —
  *   localServerAbsentVerdict 머리말.
  */
 export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
@@ -512,7 +513,7 @@ export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
 }
 
 /**
- * 셀프호스트(기본 소켓 하나뿐)에 tmux 서버가 **아예 없나** — 그러면 그 소켓의 세션은 끝났다(true). 아니면 모른다(null). (#4940)
+ * 셀프호스트(기본 소켓 · 다른 워크스페이스 전용 서버 없음)에 tmux 서버가 **아예 없나** — 그러면 그 소켓의 세션은 끝났다(true). 아니면 모른다(null). (#4940)
  *
  * ── 왜 (실측 2026-10-23, 셀프호스트 테스트 박스) ─────────────────────────────────────────
  *  세션이 하나도 안 남으면 tmux 서버도 함께 내려간다(재부팅 뒤 · 마지막 세션이 끝난 뒤 — 셀프호스트에선 흔한 상태다).
@@ -523,10 +524,12 @@ export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
  *  pane 만 `sudo -u box_<id>` 로 내려 돈다(wrapAsMember) — 그 소켓에 서버가 없으면 거기 살던 세션은 하나도 안 산다.
  *  `has-session` 한 번으로 믿지 않고 `list-sessions` 로 서버 부재를 한 번 더 확인한다(그 사이 서버가 떴으면 종전대로 모름).
  *
- * ⚠ 기본 소켓 **하나뿐인** 배포만이다(`tmux = {kind:"socket", socket:null}`). registry 게이트웨이는 전용 소켓(`-L lvly-<slug>`)을
- *  같이 써서, 테넌트 컨텍스트를 잃은 호출이 기본 소켓으로 새면 «primary 엔 서버가 없다» 를 «그 세션이 끝났다» 로 잘못 읽는다
- *  (격리 리뷰 — 컨텍스트를 잃는 자리가 실재한다: terminal-pty-upgrade 폴백 · 2턴 스윕). 전용 소켓의 서버 부재는 이미
- *  isSessionGoneError 가 확답으로 본다. 중계(매니지드)·노드 세대(#4931)도 여기 오지 않는다.
+ * ⚠ registry 게이트웨이 — **셀프호스트 기본 설치가 이것이다**(부팅이 `tenancy/runtime.json` 을 보고 registry 로 뜬다 —
+ *  boot/tenancy-env, 실측: 테스트 박스·위시스트 둘 다). 워크스페이스마다 전용 소켓(`-L lvly-<slug>`)을 같이 쓰므로, 테넌트
+ *  컨텍스트를 잃은 호출(pty 업그레이드 폴백 · 2턴 스윕 — 격리 리뷰)이 기본 소켓으로 새면 «primary 엔 서버가 없다» 를
+ *  «그 세션이 끝났다» 로 잘못 읽을 수 있다. 그래서 이 호스트에 **전용 서버 소켓(`lvly-*`)이 하나라도 있으면** 종전대로 모름이고,
+ *  하나도 없을 때만(워크스페이스가 primary 하나뿐인 흔한 경우) 끝남이다 — 산 세션은 산 서버를 뜻하고, 산 서버는 소켓을 뜻한다.
+ *  전용 소켓으로 간 호출의 서버 부재는 이미 isSessionGoneError 가 확답으로 본다. 중계(매니지드)·노드 세대(#4931)는 여기 오지 않는다.
  * ⚠ 타임아웃·시그널로 끝난 호출은 답이 아니다(isTmuxServerAbsentError — #687·#835 의 원래 걱정은 그쪽이다).
  * ⓘ 남는 위험(받아들인 선례): 서버는 살아 있는데 소켓 파일만 지워진 경우(/tmp 청소기 · TMUX_TMPDIR 이 재시작 사이에 바뀜)도
  *  끝남이 된다 — 전용 소켓에 대해 tmuxServerAbsenceIsFinal 이 이미 받아들인 것과 같다(그 세션엔 어떤 클라이언트도 다시 못 붙는다).
@@ -534,9 +537,20 @@ export async function sessionGoneVerdict(id: string): Promise<boolean | null> {
  */
 export async function localServerAbsentVerdict(err: unknown): Promise<true | null> {
   const t = execTopology().tmux;
-  if (t.kind !== "socket" || t.socket !== null || muxGenerationsActive() || !isTmuxServerAbsentError(err)) return null;
+  if (t.kind !== "socket" || muxGenerationsActive() || !isTmuxServerAbsentError(err)) return null;
+  if (t.socket !== null && await tenantSocketsPresent()) return null;   // registry · 다른 워크스페이스 서버가 떠 있다 — 모름
   try { await tmux(["list-sessions", "-F", "#{session_name}"]); return null; }   // 서버가 있다(그새 떴다) — 모름은 종전대로
   catch (e) { return isTmuxServerAbsentError(e) ? true : null; }
+}
+
+/** 이 호스트의 tmux 소켓 폴더(`${TMUX_TMPDIR:-/tmp}/tmux-<uid>`)에 워크스페이스 전용 소켓(`lvly-*`)이 있나.
+ *  폴더가 없으면 서버도 없다(false) · 그 밖에 못 읽으면 있다고 본다(보수 — 모름으로 남는다). */
+async function tenantSocketsPresent(): Promise<boolean> {
+  const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+  if (uid < 0) return true;
+  const dir = `${(TMUX_ENV.TMUX_TMPDIR || "/tmp").replace(/\/+$/, "")}/tmux-${uid}`;
+  try { return (await readdir(dir)).some((n) => n.startsWith(TENANT_SOCKET_PREFIX)); }
+  catch (e) { return (e as NodeJS.ErrnoException)?.code !== "ENOENT"; }
 }
 
 /** tmux 가 «이 소켓엔 서버가 없다» 고 답했나 — 스테일 소켓 "no server running" · 소켓 파일 없음 "error connecting … (No such file …)". */
