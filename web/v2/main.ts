@@ -325,8 +325,13 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   if (projectId === 0 && sessionId) {
     const drawnLiv = isLiv(sessionId);
     void livSessionId().then(() => {
-      if (seq !== tab.seq) return;
-      if (isLiv(sessionId) !== drawnLiv) void renderRoute(tab);
+      if (seq !== tab.seq || isLiv(sessionId) === drawnLiv) return;
+      //  그사이 이 탭에서 다른 세션을 골랐으면(좁은 폭 서랍 — seq 를 안 올린다) 그 세션이 지금 화면이다 — 건드리지 않는다.
+      if (routeKey(tab.route) !== 's:' + sessionId) return;
+      //  숨은 탭이면 돌아올 때 다시 그린다(replaceRoute 와 같은 길) — 지금 그리면 renderRoute 의 전역 일(앱 겹창 닫기 · 사이드바 표시)이
+      //   보고 있는 다른 탭을 건드린다(격리 리뷰).
+      if (tabsApi?.current() !== tab) { tab.rendered = false; return; }
+      void renderRoute(tab);
     });
   }
 }

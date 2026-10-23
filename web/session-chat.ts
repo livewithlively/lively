@@ -1304,7 +1304,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return true;
     }
     const cur = view.input.value;
-    view.input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
+    //  같은 글을 거푸 넣으면 한 번만 — 멈춘 리브 세션에 [연결 도와줘]를 두 번 누르면 같은 말이 입력칸에 쌓였다(격리 리뷰). 끝이 같을 때만 건너뛴다.
+    if (!cur.trimEnd().endsWith(text.trim())) view.input.value = cur.trim() ? cur.replace(/\s+$/, '') + '\n\n' + text : text;
     view.input.dispatchEvent(new Event('input'));
     try { view.input.focus(); view.input.setSelectionRange(view.input.value.length, view.input.value.length); } catch { /* 가려진 입력칸 */ }
     return true;

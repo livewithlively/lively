@@ -110,8 +110,14 @@ check(/if \(isLivRoute\(hash\) && !isLivBoard\(hash\)\) \{\s*const was = locatio
 check(/const lid = await livSessionIdWithin\(1500\);[\s\S]{0,260}?if \(location\.hash !== was\) return;/.test(MAIN), "W9 ★ 늦게 온 리브 id 가 그사이 사람이 한 이동을 덮는다");
 check(/if \(location\.hash !== hash\) \{ suppressHash\+\+; location\.replace\(location\.pathname \+ location\.search \+ hash\); \}/.test(MAIN), "W9 같은 주소로 바꿔 끼우며 삼킬 수를 세어 다음 진짜 이동을 삼킨다");
 //  W9 — 1.5초 안에 못 받았으면 늦은 답이 판정을 바꿀 때 한 번 다시 그린다.
-check(/const drawnLiv = isLiv\(sessionId\);\s*void livSessionId\(\)\.then\(\(\) => \{\s*if \(seq !== tab\.seq\) return;\s*if \(isLiv\(sessionId\) !== drawnLiv\) void renderRoute\(tab\);/.test(MAIN),
+const late = MAIN.slice(MAIN.indexOf("const drawnLiv = isLiv(sessionId);"), MAIN.indexOf("const drawnLiv = isLiv(sessionId);") + 900);
+check(/void livSessionId\(\)\.then\(\(\) => \{\s*if \(seq !== tab\.seq \|\| isLiv\(sessionId\) === drawnLiv\) return;/.test(late) && /\n\s*void renderRoute\(tab\);\s*\}\);/.test(late),
   "W9 늦게 온 리브 id 가 판정을 바꿔도 다시 안 그린다(첫 응답이 느린 날 리브 세션이 끝까지 터미널로 남는다)");
+check(/if \(routeKey\(tab\.route\) !== 's:' \+ sessionId\) return;/.test(late), "W9 그사이 서랍에서 다른 세션을 고른 탭을 옛 세션으로 다시 그린다");
+check(/if \(tabsApi\?\.current\(\) !== tab\) \{ tab\.rendered = false; return; \}/.test(late) && late.indexOf("tab.rendered = false") < late.indexOf("void renderRoute(tab);"),
+  "W9 ★ 숨은 탭을 지금 다시 그린다(보고 있는 다른 탭의 앱 겹창이 닫히고 사이드바 표시가 옮겨 간다)");
+//  W9 — 같은 글을 거푸 넣으면 한 번만(멈춘 리브 세션에 [연결 도와줘] 두 번 → 같은 말이 쌓였다).
+check(/if \(!cur\.trimEnd\(\)\.endsWith\(text\.trim\(\)\)\) view\.input\.value = /.test(CHAT), "W9 ★ 같은 글을 거푸 넣으면 입력칸에 같은 말이 쌓인다");
 check(!/routeKey\(hash\) === 'liv'|routeKey\(tab\.route\) === 'liv'/.test(MAIN), "W1 ★ routeKey 를 'liv' 와 비교한다 — 늘 거짓인 판정(리브 주소는 raw:liv)");
 check(MAIN.indexOf("if (isLivRoute(hash)") > 0 && MAIN.indexOf("if (isLivRoute(hash)") < MAIN.indexOf("const other = tabsApi.find(hash);"),
   "W1 갈아 끼우기가 탭 찾기(tabsApi.find)보다 먼저다");
