@@ -111,9 +111,10 @@ export function writeStubBin(dir, name, jsBody) {
 // 아무 일도 안 하고 성공하는 스텁(하네스를 PATH 에서 '가리기'만 할 때).
 export const writeNoopBin = (dir, name) => writeStubBin(dir, name, "process.exit(0);");
 
-// 번들(.tgz)을 만들 tar — 설치기(kit/cli/lively.mjs tarBin)와 같은 System32 tar.exe 를 쓴다.
-//  왜(2026-10-23 실측): windows-latest 이미지 20261018판부터 PATH 의 `tar -czf` 가 0xC0000005(접근 위반)로 죽어
-//   kit 번들 테스트 둘이 push 때마다 깨졌다. 20261007판은 통과 — 테스트만 설치기와 다른 tar 를 집고 있었다.
+// 번들 시험이 묶을 때 쓸 tar — 설치기(kit/cli/lively.mjs tarBin)와 같은 것. gzip 은 시험이 node zlib 으로 한다.
+//  왜(2026-10-23 실측): windows-latest 이미지 20261018판부터 System32 tar.exe 의 `-czf`(gzip 쓰기)가
+//   0xC0000005(접근 위반)로 죽어 kit 번들 시험 둘이 push 마다 깨졌다(20261007판은 통과). 시험이 보려는 건
+//   설치기의 **풀기**라, 만들기에서 그 tar 의 gzip 을 피하고 풀기는 설치기 경로 그대로 둔다.
 export const tarBin = () => {
   if (!WIN) return "tar";
   const abs = join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "tar.exe");

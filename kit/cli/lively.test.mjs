@@ -11,6 +11,7 @@ import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { gzipSync } from "node:zlib";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
@@ -61,7 +62,9 @@ function makeBundle(version, { corrupt = false, mcpServers = [] } = {}) {
   writeFileSync(join(lv, "kit-version"), version + "\n");
   if (corrupt) writeFileSync(join(stage, ".claude", "hooks", "session-preload.mjs"), "export const x = (((;\n");
   const tgz = join(BOX, `bundle-${version}.tgz`);
-  execFileSync(tarBin(), ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
+  // gzip 은 node 로 — windows-latest 20261018판부터 tar.exe 의 `-czf` 가 0xC0000005 로 죽는다(풀기는 설치기 그대로 tar).
+  execFileSync(tarBin(), ["-cf", tgz + ".tar", "-C", stage, "."], { stdio: "ignore" });
+  writeFileSync(tgz, gzipSync(readFileSync(tgz + ".tar")));
   return readFileSync(tgz);
 }
 
