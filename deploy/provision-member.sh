@@ -138,6 +138,11 @@ if [ -n "${LIVELY_TOKEN:-}" ]; then
   rm -rf "$KTMP"
 fi
 
+# >>> 구성원 몫 AI(claude · codex) 설치 — deploy/member-ai-parallel.test.mjs 가 이 구간을 떼어 돌린다(표지를 지우지 말 것).
+# (#4970) 둘을 **동시에** 깐다 — 처음 설정은 이 둘이 다 깔릴 때까지 «개인 계정을 준비하고 있어요» 를 보인다. 차례로 깔면 claude 약 12초 +
+#  codex 약 13초였다(테스트 박스 실측 2026-10-24 · t3.large · 계정 준비 전체 약 27초). 둘은 서로 다른 자리에 쓴다(claude = ~/.local ·
+#  codex = ~/.npm-global · ~/.npmrc). claude 는 뒤에서 돌리고 codex 를 앞에서 돌린 뒤 둘 다 기다린다 — 둘 다 best-effort(실패해도 0)라
+#  여기서도 멈추지 않는다. 끝 줄(«프로비저닝 완료»)은 둘이 다 끝난 뒤에 나간다.
 # 멤버 claude 자동 업데이트(#1023) — root 전역(sudo npm i -g → /usr/lib) 설치는 비-root 멤버가 못 고쳐
 #  자동 업뎃이 no_permissions 로 실패한다. 멤버 700 홈에 **네이티브** claude(self-update)를 깔아 각자
 #  최신 추종(맥미니와 동일). box-spawn PATH 가 ~/.local/bin 을 시스템보다 우선해 멤버 소유 claude 를 쓴다.
@@ -146,8 +151,10 @@ fi
 _SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_HELPER="$_SELFDIR/install-claude-user.sh"
 [ -f "$CLAUDE_HELPER" ] || CLAUDE_HELPER="/opt/lively/libexec/install-claude-user"
+CLAUDE_PID=""
 if [ -f "$CLAUDE_HELPER" ]; then
-  bash "$CLAUDE_HELPER" "$OSUSER" || true
+  bash "$CLAUDE_HELPER" "$OSUSER" &
+  CLAUDE_PID=$!
 else
   echo "  ⚠ install-claude-user 헬퍼 없음 — 멤버 네이티브 claude 스킵(자동 업뎃 원하면 install-isolation.sh 재실행)"
 fi
@@ -169,6 +176,8 @@ if [ -f "$CODEX_HELPER" ]; then
 else
   echo "  ⚠ install-codex-user 헬퍼 없음 — 멤버 홈 codex 스킵(codex 세션이 자동 업뎃 EACCES 로 즉시 종료될 수 있음)"
 fi
+if [ -n "$CLAUDE_PID" ]; then wait "$CLAUDE_PID" || true; fi
+# <<< 구성원 몫 AI 설치
 
 echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box · 키트 · 네이티브 claude · 멤버홈 codex)"
 echo "  로그인(멤버 1회, 자기 세션에서): claude → /login   (자격증명은 $HOME_DIR/.claude 에 격리)"
