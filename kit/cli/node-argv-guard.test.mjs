@@ -91,6 +91,26 @@ t("A13 --id 빈 값 → 오류(경계값)", () => {
   assert.ok(parseNodeArgv(["--id", ""]).error);
 });
 
+// ── 표 A': 앱↔CLI 전역 계약 `--json-events` — 데스크톱 앱은 모든 명령 끝에 이걸 붙인다(desktop/main/cli-runner.mjs) ──
+//  사양: 노드 인자로 치지 않는다(없는 것과 똑같이 해석한다). 그 밖의 모르는 인자는 여전히 거부한다(②).
+t("A13b ★ 앱의 [노드 시작] `node --daemon --json-events` → 상시화(오류 아님)", () => {
+  assert.deepEqual(parseNodeArgv(["--daemon", "--json-events"]), parseNodeArgv(["--daemon"]));
+  assert.deepEqual(parseNodeArgv(["--json-events", "--daemon"]), parseNodeArgv(["--daemon"]), "자리에 따라 갈렸다");
+});
+
+t("A13c 앱의 [노드 정지]·잠자기 토글 — 하위명령 뒤에 붙어도 그 명령 그대로, 넘기는 인자엔 안 섞인다", () => {
+  assert.deepEqual(parseNodeArgv(["stop", "--json-events"]), parseNodeArgv(["stop"]));
+  assert.deepEqual(parseNodeArgv(["keepawake", "off", "--json-events"]), parseNodeArgv(["keepawake", "off"]));
+  assert.deepEqual(parseNodeArgv(["--json-events"]), parseNodeArgv([]), "홀로 와도 인자 없음과 같아야 한다");
+  assert.equal(parseNodeArgv(["--json-events", "--help"]).action, "help", "도움말이 여전히 이겨야 한다");
+});
+
+t("A13d 경계: `--json-events` 를 받아 준다고 엄격함이 풀리지 않는다 — 다른 모르는 옵션·값 없는 --id 는 그대로 오류", () => {
+  const v = parseNodeArgv(["--daemon", "--json-events", "--frobnicate"]);
+  assert.match(v.error || "", /--frobnicate/);
+  assert.match(parseNodeArgv(["--id", "--json-events"]).error || "", /--id/, "`--json-events` 를 노드 이름으로 삼았다");
+});
+
 t("A14 사용법은 네 입구를 다 말한다(사람이 이걸 보고 다음 명령을 친다)", () => {
   const u = nodeUsage();
   for (const s of ["--daemon", "--id", "stop", "keepawake", "lively node stop"]) {
