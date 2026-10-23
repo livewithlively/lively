@@ -14,7 +14,7 @@
 //      안 불려 테스트가 "스텁 호출 0건"만 본다. PATH 구분자도 `:` 가 아니라 `;` 다.
 //
 //  두 관례를 여기 한 곳에 못박아, 다음 테스트가 같은 함정을 다시 열지 않게 한다.
-import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import { writeFileSync, chmodSync, mkdirSync, existsSync } from "node:fs";
 import { join, delimiter } from "node:path";
 
 export const WIN = process.platform === "win32";
@@ -110,3 +110,12 @@ export function writeStubBin(dir, name, jsBody) {
 
 // 아무 일도 안 하고 성공하는 스텁(하네스를 PATH 에서 '가리기'만 할 때).
 export const writeNoopBin = (dir, name) => writeStubBin(dir, name, "process.exit(0);");
+
+// 번들(.tgz)을 만들 tar — 설치기(kit/cli/lively.mjs tarBin)와 같은 System32 tar.exe 를 쓴다.
+//  왜(2026-10-23 실측): windows-latest 이미지 20261018판부터 PATH 의 `tar -czf` 가 0xC0000005(접근 위반)로 죽어
+//   kit 번들 테스트 둘이 push 때마다 깨졌다. 20261007판은 통과 — 테스트만 설치기와 다른 tar 를 집고 있었다.
+export const tarBin = () => {
+  if (!WIN) return "tar";
+  const abs = join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "tar.exe");
+  return existsSync(abs) ? abs : "tar";
+};

@@ -699,7 +699,8 @@ console.log(`\n${pass} passed`);
       const typedBy = async (raw: string, paste: boolean): Promise<{ got: string; oneLine: string }> => {
         fs.rmSync(out, { force: true });
         spawnSync(TMUX, ["-S", sock, "kill-server"]);
-        T(["new-session", "-d", "-s", "sk", "-x", "200", "-y", "10", `bash -c 'IFS= read -r line; printf %s "$line" > ${out}'`]);
+        //  다 쓴 뒤 이름을 바꿔 넣는다 — `> out` 은 파일을 먼저 만들고 내용은 나중에 써서, 아래 존재 확인이 그 틈에 빈 글('')을 읽었다(CI 간헐 실패).
+        T(["new-session", "-d", "-s", "sk", "-x", "200", "-y", "10", `bash -c 'IFS= read -r line; printf %s "$line" > ${out}.tmp && mv ${out}.tmp ${out}'`]);
         const plan = planP("sk", raw, "tmux", { paste });
         const r = await runSendKeysPlan("sk", plan, { tmux: async (argv) => T(argv), sleep: async () => {} });
         assert.ok(r.ok, `치기 실패: ${JSON.stringify(r)}`);
