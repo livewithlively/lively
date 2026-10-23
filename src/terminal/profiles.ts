@@ -806,15 +806,15 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
   return p;
 }
 
-/** (#4970) 만들기가 실패한 시각 — 그 뒤 잠깐은 «실패» 로 답한다(화면이 몇 초마다 묻는데 그때마다 1~2분짜리 만들기를 다시 띄우지 않게). */
+/** (#4970) 만들기가 실패한 시각 — 그 뒤 잠깐은 «실패» 로 답한다(화면이 몇 초마다 묻는데 그때마다 오래 걸리는 만들기를 다시 띄우지 않게). */
 const provisionFailedAt = new Map<string, number>();
 export const PROVISION_RETRY_MS = 5 * 60_000;
 /** 사람이 «다시 해 보기» 를 눌렀다 — 실패 표식을 지운다(다음 state 가 absent 가 되어 다시 만든다). */
 export function clearProvisionFailure(user: LivelyUser): void { const id = ownerId(user); if (id) provisionFailedAt.delete(id); }
 
 /** (#4970) 그 사람의 OS 계정을 **지금** 만드는 중이면 그 일(끝나면 OS 유저 이름 또는 null). 아니면 undefined.
- *  ⚠ ensureMemberOsUser 의 빠른 길은 계정이 «있으면» 곧바로 돌아온다 — 그런데 계정(useradd)은 만들기 초반에 생기고, 1~2분의 대부분은
- *   그 뒤(키트 · 구성원 몫 claude·codex 설치)다. 그래서 «다 만들어질 때까지» 기다려야 하는 쪽(화면 안 로그인 시작)은 이걸 먼저 본다(격리 리뷰). */
+ *  ⚠ ensureMemberOsUser 의 빠른 길은 계정이 «있으면» 곧바로 돌아온다 — 그런데 계정(useradd)은 만들기 초반에 생기고, 걸리는 시간의
+ *   대부분은 그 뒤(키트 · 구성원 몫 claude·codex 설치)다. 그래서 «다 만들어질 때까지» 기다려야 하는 쪽(화면 안 로그인 시작)은 이걸 먼저 본다(격리 리뷰). */
 export function memberProvisioning(user: LivelyUser): Promise<string | null> | undefined {
   const id = ownerId(user);
   return id ? inflightProvision.get(id) : undefined;

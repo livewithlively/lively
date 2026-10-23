@@ -1,6 +1,6 @@
 // 화면 안 로그인 전에 그 사람의 서버 계정을 갖춘다(#4970, login-seat-prep.ts) — 가짜 상태로 «기다림» 의 순서를 단언한다.
 //  설계: 지식 onboarding-single-flow-connect-in-own-ai-4970 §16 · 엣지 표 = 아래 S·P 행.
-//  격리 리뷰(2026-10-23): 계정(useradd)은 만들기 초반에 생기고 1~2분의 대부분은 그 뒤다 — «계정이 있나» 만 보고 넘어가면 아직 깔리는
+//  격리 리뷰(2026-10-23): 계정(useradd)은 만들기 초반에 생기고 걸리는 시간의 대부분은 그 뒤다 — «계정이 있나» 만 보고 넘어가면 아직 깔리는
 //   codex 를 «없음» 으로 만나 로그인이 실패했다. 만드는 중이면 그 일 끝까지 기다려야 한다.
 //  실행: npm run build && node dist/terminal/login-seat-prep.test.js
 import assert from "node:assert/strict";
@@ -98,7 +98,7 @@ await t("S6 기다리는 사이 다른 요청이 새로 시작한 일에도 붙�
 await t("P1 prepare — 없으면 만들기를 **시작만** 하고 곧바로 «preparing»(기다리지 않는다)", async () => {
   const s = seat({ state: "absent", ensure: () => new Promise(() => { /* 끝나지 않는 만들기 */ }) });
   const st = await Promise.race([prepareMemberSeat(s.deps), new Promise((r) => setTimeout(() => r("TIMEOUT"), 200))]);
-  assert.equal(st, "preparing", "★ prepare 가 만들기를 기다린다(1~2분 응답이 묶인다)");
+  assert.equal(st, "preparing", "★ prepare 가 만들기를 기다린다(만드는 동안 응답이 묶인다)");
   assert.equal(s.box.ensures, 1, "배선 — 만들기를 시작하지 않았다");
 });
 
@@ -106,7 +106,7 @@ await t("P2 prepare — 이미 있거나 · 만드는 중이거나 · 필요 없
   for (const st of ["ready", "preparing", "none", "failed"] as MemberOsState[]) {
     const s = seat({ state: st });
     assert.equal(await prepareMemberSeat(s.deps), st);
-    assert.equal(s.box.ensures, 0, `${st}: 만들기를 불렀다(실패 뒤 몇 초마다 1~2분짜리 일을 다시 띄운다)`);
+    assert.equal(s.box.ensures, 0, `${st}: 만들기를 불렀다(실패 뒤 몇 초마다 오래 걸리는 일을 다시 띄운다)`);
   }
 });
 

@@ -339,7 +339,8 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
   `prefix=<that home>/.npm-global` to the gateway user's `~/.npmrc` (an existing prefix is kept) so its self-update writes to that home. If the gateway runs
   as root, ChatGPT is not installed (so root's npm global prefix stays put — install it by hand with `sudo npm i -g @openai/codex` if needed).
   Requires root, `runuser` (util-linux), a `nobody` account, curl, and an executable temp dir (`TMPDIR=/var/tmp` if `/tmp` is noexec). The vendor installers run as the unprivileged account.
-  On isolated boxes, every member who opens first-run «AI 연결» gets a server account (home plus member-scoped claude and codex, a few hundred MB), even if they then pick a PC AI.
+  On isolated boxes, every member who opens first-run setup gets a server account (home plus member-scoped claude and codex, a few hundred MB) — creation starts on the
+  intro scene and runs while they read it and enter a name (also for members who then pick a PC AI or leave the intro with [나중에 할게요]).
   Isolated member kits wire all four (claude, codex, antigravity, grok) — **members provisioned earlier** get the four only after rerunning `provision-member.sh` (idempotent).
 
 ## Directory layout (Linux/Mac parity shows in the structure — main files only)

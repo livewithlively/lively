@@ -338,7 +338,8 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
   유저의 `~/.npmrc` 끝에 주석 한 줄과 `prefix=<그 홈>/.npm-global` 이 더해진다(이미 prefix 가 있으면 그대로 — 챗GPT 자동 업데이트가 그 홈에
   쓰게). 게이트웨이가 root 로 돌면 챗GPT 는 깔지 않는다(root 의 npm 전역 자리를 바꾸지 않으려고 — 필요하면 `sudo npm i -g @openai/codex`).
   요구: root · `runuser`(util-linux) · `nobody` 계정 · curl · 실행 가능한 임시 자리(`/tmp` 가 noexec 면 `TMPDIR=/var/tmp`). 설치기는 권한 없는 계정으로 돈다.
-  격리 박스에서는 처음 설정 «AI 연결» 을 여는 구성원마다 서버 계정(홈 + 구성원 몫 claude·codex, 수백 MB)이 생긴다(PC 의 AI 로 하는 사람도).
+  격리 박스에서는 처음 설정을 여는 구성원마다 서버 계정(홈 + 구성원 몫 claude·codex, 수백 MB)이 생긴다 — 만들기는 인사 장면에서 시작해 인사·이름을
+  보는 동안 돈다(PC 의 AI 로 하는 사람 · 인사에서 [나중에 할게요] 로 나가는 사람도).
   격리 구성원 키트는 넷(claude·codex·antigravity·grok)을 배선한다 — **이미 계정이 있는 구성원**은 `provision-member.sh` 를 다시 돌려야 넷을 받는다(멱등).
 
 ## 디렉토리 구조 (Linux/Mac 패리티가 구조로 드러남 — 주요 파일만)

@@ -397,7 +397,20 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     try { history.pushState({ ob: S.scene, obSeq: ++obSeq }, '', location.href); } catch (_) { /* noop */ }
   }
   addEventListener('popstate', onPop);
+  /* (#4970) 이 서버에서 쓸 개인 계정(격리 박스의 box_<사람>)은 AI 장면보다 **먼저** 만들기 시작한다 — 인사·이름을 보는 동안 끝나게
+   *  (처음 한 번 — 키트 · 구성원 몫 클로드·챗GPT 설치). 서버는 «없으면 시작만» 한다(login-seat-prep prepareMemberSeat — 기다리지 않는다 ·
+   *  매니지드·비격리 박스면 아무것도 안 하고 none). 결과는 AI 장면이 다시 묻는다. AI 장면부터 열면(이어 열기) 그 장면이 묻는다 — 여기서 또 묻지 않는다
+   *  (이어 연 뒤 [이전]으로 인사·이름에 돌아가면 한 번 더 물을 수 있다 — 서버가 멱등이라 무해하다). */
+  let seatAsked = false;
+  const startSeatEarly = (key: string): void => {
+    const step = STEP_OF[key];
+    if (seatAsked || step == null || step >= STEP_OF['ai']!) return;
+    seatAsked = true;
+    void api('/api/ui/me/ai-login/prepare', { method: 'POST', body: JSON.stringify({ retry: false }) })
+      .catch(() => { /* 비치명 — AI 장면이 다시 묻는다 */ });
+  };
   function goScene(key: string, opts?: { back?: boolean }) {
+    startSeatEarly(key);
     if (!(opts && opts.back) && S.scene && S.scene !== key && STEP_OF[key] != null) {
       S.trail.push(S.scene);
       //  주소(해시)는 **바꾸지 않는다** — 바꾸면 셸 라우터가 화면을 새로 그린다. 같은 주소로 state 만 쌓아 popstate 때 우리가 먼저 받는다.
