@@ -977,28 +977,65 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-card-st { font-size: 12px; color: var(--muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-card-bl { margin: 0; flex: 1; font-size: 13px; color: var(--ink-sub); line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cn-card-ft { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.cn-card-h { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cn-card-go { flex: none; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
 .cn-card:hover .cn-card-go { color: var(--blue); }
-/*  준비 중 — «지금은 못 켠다»가 한눈에 보여야 한다(원준 2026-08-31). 점선·틴트만으로는 본문이 그대로 진해
-    다른 카드와 구별이 약했다. 이름·설명을 함께 죽이고 커서도 손모양을 주지 않는다(누를 것이 없다는 뜻).
-    ⚠ 로고는 이미 회색(.svc-tile.off — svcTile 이 st!=='soon' 으로 넘긴다)이고 hover 로도 살아나지 않게 막는다.
-    다만 카드 자체는 여전히 눌러서 상세로 갈 수 있다 — «왜 준비 중인지»를 거기서 읽는다. 그래서 완전 차단이 아니라
-    «지금은 켤 수 없다»만 말하는 정도로 둔다. */
-.cn-card.soon { background: var(--bg-tint); border: 1px dashed var(--line-net-2); cursor: default; }
-.cn-card.soon:hover { background: var(--bg-tint-2); border-color: var(--line-net-2); }
-.cn-card.soon .cn-card-nm { color: var(--muted-head); }
-.cn-card.soon .cn-card-bl, .cn-card.soon .cn-card-st { color: var(--muted-2); }
-.cn-card.soon .svc-tile { opacity: .55; }
-.cn-card.soon:hover .svc-tile.off svg { filter: grayscale(1); opacity: .5; }
-/*  준비 중인데 이미 연결해 둔 것 — 회색으로 죽이되 «살아 있다»는 신호(민트 점)는 남긴다. 완전히 꺼진 것처럼
-    보이면 사용자가 «내 구글이 끊겼나» 하고 오해한다. 실제로는 그대로 돌고 있다. */
-.cn-card.soon-on .svc-tile { opacity: .8; }
-.cn-card.soon-on .cn-card-nm { color: var(--ink-sub); }
-.cn-card.soon-on .cn-card-h { color: var(--mint-deep); font-weight: 600; }
-.cn-pill-soon { flex: none; display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; line-height: 1.6; color: var(--muted-head); background: var(--bg-tint-2); border: 1px dashed var(--line-net-2); white-space: nowrap; }
 .cn-sum-i.soon b { color: var(--muted-head); }
-.cn-soon-note { font-size: 13px; color: var(--ink-sub); line-height: 1.6; max-width: 60ch; }
+
+/* ── #4970 «연결하는 길» — 목록은 앱마다 한 줄(어떻게 연결돼 있나 · 다음 걸음), 상세는 길을 권하는 순서대로 ─────────
+   말은 lib/connect-routes-view.ts 한 벌. 상태는 점 + 말(채운 컬러 알약 없음), 단추는 하나만 진하다(권하는 길의 다음 걸음). */
+.cn-rt-list-wrap { display: flex; flex-direction: column; gap: 22px; }
+.cn-rt-list-wrap > .cn-sum { margin-bottom: -6px; }
+.cn-rt-list { grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 4px 12px; }
+.cn-rt-row .cn-row-main .m.cn-rt-word { white-space: normal; color: var(--ink-sub); line-height: 1.5; }
+.cn-rt-row .cn-row-main .m.cn-rt-blk { white-space: normal; color: var(--muted-2); line-height: 1.5; }
+.cn-rt-row.b-soon .cn-row-main .t, .cn-rt-row.b-err .cn-row-main .t { color: var(--ink-sub); }
+.cn-rt-row.b-soon .svc-tile { opacity: .6; }
+.cn-rt-btn { flex: none; pointer-events: none; }
+.cn-rt-row:hover .cn-rt-btn { border-color: var(--blue); color: var(--blue); }
+.cn-rt-other { margin-top: 16px; }
+.cn-rt { margin: 18px 0 4px; max-width: 880px; }
+.cn-rt-card { margin-top: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
+.cn-rt-card.primary { border-color: var(--line-net-2); }
+.cn-rt-hd { display: flex; align-items: baseline; gap: 4px 10px; flex-wrap: wrap; }
+.cn-rt-hd b { font-size: 14.5px; font-weight: 800; color: var(--ink); }
+.cn-rt-rec { font-size: 11.5px; font-weight: 700; color: var(--mint-deep); }
+.cn-rt-rec::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--mint-deep); vertical-align: 1px; }
+.cn-rt-st { flex: 1 1 100%; font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-rt-bl { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.cn-rt-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.cn-rt-body:empty { display: none; }
+.cn-rt-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cn-rt-more { margin-top: 10px; }
+.cn-rt-more > summary { cursor: pointer; font-size: 13px; font-weight: 650; color: var(--ink-sub); }
+.cn-rt-more > summary:hover { color: var(--ink); }
+.cn-rt-ask { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-rt-sub { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cn-rt-sub > b { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.cn-rt-people { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; }
+.cn-rt-people b { font-weight: 650; color: var(--ink); }
+.cn-reg { display: flex; flex-direction: column; gap: 12px; }
+.cn-reg-who { margin: 0; font-size: 13px; font-weight: 650; color: var(--ink); }
+.cn-reg-t { font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-reg-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; font-size: 13px; color: var(--ink-sub); line-height: 1.6; }
+.cn-reg-steps li { padding-left: 2px; }
+.cn-reg-li { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.cn-reg-steps li::marker { font-weight: 700; color: var(--ink); }
+.cn-reg-copy { display: flex; align-items: center; gap: 8px; max-width: 100%; }
+.cn-reg-copy code { min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-tint); font-size: 12px; color: var(--ink); overflow-wrap: anywhere; }
+.cn-reg-copy.none { font-size: 12px; color: var(--muted); }
+.cn-reg-addr { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 10px; background: var(--bg-tint); }
+.cn-reg-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 10px; background: var(--bg-tint); }
+.cn-reg-form > b { font-size: 13px; font-weight: 750; color: var(--ink); }
+.cn-reg-f { display: flex; flex-direction: column; gap: 4px; max-width: 520px; font-size: 12.5px; }
+.cn-reg-f .k { font-weight: 650; color: var(--ink-sub); }
+.cn-reg-f .cn-scope-in { height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
+.cn-reg-file { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cn-reg-file-n { color: var(--muted); }
+.cn-reg-notes { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.cn-reg-notes b { font-weight: 700; color: var(--ink-sub); }
+.cn-reg-notes ul { margin: 4px 0 0; padding-left: 18px; }
+/* [무엇을 모을지 정하기 ↓] 로 내려온 칸을 잠깐 표시한다 — 어디를 보면 되는지 눈이 따라가게. */
+.cn-flash { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: 10px; }
 
 /* ── #3778 «카드가 두 축을 말한다» — 내 계정으로 직접 사용 / 자료 가져오기 ─────────────────────
    머리말은 «연결이 두 가지» 라고 하는데 카드는 한 축만 봤다. 상세(cn-act)와 **같은 이름·같은 아이콘**으로
@@ -1026,27 +1063,9 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
     만들어 자리를 맞추지 않는다(빈 노드는 나중에 «왜 있지?»가 된다). */
 .cn-card-ft > :only-child { margin-left: auto; }
 
-/* ── #4213 T13 «앱 × 구성원» 현황판 — [외부 앱 연결]의 첫 자리(web/v2/connect-board.ts) ─────────────────────
-   줄 = 앱, 칸 = 구성원. 상태는 점 + 말(채운 컬러 알약 금지) — 연결됨만 민트 채움, 사람이 할 일(다시 로그인·연결 필요)은 경고색 고리,
-   모르는 것(확인 전·확인 못 함)은 흐린 고리, 안 쓰는 칸은 점 없이 흐린 글자. 구성원이 많으면 표만 가로로 밀린다(화면은 안 밀린다). */
-.cn-board { margin-top: 18px; }
-.cn-bd-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 10px; }
+/* ── 상세 «Claude 커넥터» 길 칸의 구성원 · 모으는 곳(web/v2/connect-board.ts renderAppClaude — #4970, 종전 #4213 T13 표) ──────────
+   상태는 점 + 말(채운 컬러 알약 금지) — 연결됨만 민트 채움, 사람이 할 일(다시 로그인)은 경고색 고리, 모르는 것은 흐린 고리. */
 .cn-bd-note { margin: 0 0 8px; font-size: 12.5px; color: var(--muted); line-height: 1.6; max-width: 72ch; }
-.cn-bd-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); }
-.cn-bd-scroll + .cn-bd-note { margin-top: 8px; }
-.cn-bd-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.cn-bd-tbl th, .cn-bd-tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line-row); text-align: left; vertical-align: middle; }
-.cn-bd-tbl thead th { font-size: 12px; font-weight: 700; color: var(--muted-head); background: var(--bg-tint); white-space: nowrap; }
-.cn-bd-tbl tbody tr:last-child > * { border-bottom: 0; }
-.cn-bd-mem { min-width: 92px; }
-.cn-bd-mem .cn-bd-face { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: var(--on-fill); vertical-align: middle; margin-right: 6px; overflow: hidden; }
-.cn-bd-mem .cn-bd-face img { width: 100%; height: 100%; object-fit: cover; }
-.cn-bd-mname { vertical-align: middle; }
-.cn-bd-app { min-width: 180px; }
-.cn-bd-appname { display: flex; align-items: center; gap: 9px; }
-.cn-bd-appname b { font-size: 13.5px; font-weight: 700; color: var(--ink); }
-.cn-bd-appname .svc-tile { width: 28px; height: 28px; border-radius: 8px; }
-.cn-bd-route { margin-top: 4px; font-size: 11.5px; color: var(--muted); }
 .cn-bd-cell { white-space: nowrap; color: var(--ink-sub); font-weight: 600; }
 .cn-bd-cell > span { vertical-align: middle; }
 .cn-bd-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2); }
@@ -1056,9 +1075,6 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-bd-need .cn-bd-dot, .cn-bd-needs-auth .cn-bd-dot, .cn-bd-failed .cn-bd-dot { box-shadow: inset 0 0 0 1.5px var(--warn-text); }
 .cn-bd-unchecked, .cn-bd-scan-failed, .cn-bd-pending, .cn-bd-unknown { color: var(--muted); font-weight: 500; }
 .cn-bd-off, .cn-bd-blocked { color: var(--muted-2); font-weight: 500; }
-.cn-bd-units { min-width: 170px; color: var(--ink-sub); }
-.cn-bd-units .cn-bd-more { margin-left: 8px; font-size: 12px; }
-.cn-bd-detail > td { background: var(--bg-tint); }
 .cn-bd-unitlist { display: flex; flex-direction: column; gap: 8px; }
 .cn-bd-unit { padding: 10px 12px; border: 1px solid var(--line-row); border-radius: 10px; background: var(--bg); }
 .cn-bd-u-excluded { opacity: .72; }
@@ -1072,9 +1088,6 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-bd-vis { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--line-net); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .cn-bd-udesc { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-sub); line-height: 1.6; }
 .cn-bd-uact { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-/*  현황판 아래 «라이블리로 직접 연결» — 종전 카드 묶음의 머리. 현황판과 한 단계 굵은 경계로 가른다(.cn-extra 와 같은 결). */
-.cn-direct { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line-net); }
-.cn-direct .v2-desc { margin-top: 0; }
 
 /* ── #3778 [코드와 데이터] 도 같은 카드다 — 종전엔 얇은 행 두 줄이라 위 진열대와 딴 화면처럼 보였다.
    타일은 앱 로고 자리와 같은 라운드 스퀘어에 **우리 색**(브랜드가 아니므로 틴트가 아니라 punch). */
@@ -1083,17 +1096,9 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 #v2-root .cn-asset-tile .v2-ic { width: 22px; height: 22px; }
 #v2-root .cn-git-ic .v2-ic { width: 19px; height: 19px; color: var(--muted); }
 
-/* ── #3778 중간 상태 «연결 중» — 둘 중 하나만 켜고 나머지를 아직 안 정한 앱 ───────────────────
-   수집기는 흔히 저절로 생기므로 이 상태가 사실상 기본값이다. 「연결됨」 한 칸에 섞어 두면 **덜 끝난 것이
-   끝난 것처럼** 보여서, 카드·요약·묶음 셋이 함께 «아직 하나 남았다»를 말한다. 끝내면(켜거나 «안 쓴다»고
-   정하거나) 그 표시가 사라지고 「연결 완료」로 간다 — 끝냈다는 느낌이 화면에 남는 것이 이 표시의 목적이다.
+/* ── 하나만 더 하면 되는 앱(#3778 «연결 중» → #4970 길 상태 set_scope · reconnect) — 요약의 그 수.
    ⚠ 색은 경고가 아니라 «진행 중»이다 — 잘못된 게 아니라 아직 안 끝났을 뿐이다. */
 .cn-sum-i.half b { color: var(--warn-text); }
-.cn-dot.half { background: var(--warn-text); box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--warn-text) 20%, transparent); }
-.cn-card.half { border-color: var(--warn-line); }
-.cn-card.half:hover { border-color: var(--warn-text); background: var(--warn-bg); }
-.cn-card-pend { color: var(--warn-text); font-weight: 600; }
-.cn-card.half .cn-card-go { color: var(--warn-text); font-weight: 700; }
 /*  «안 쓰기로 했다» — 꺼진 것과 다른 말이라 다른 모양이다. 점은 채우되 조용한 색(정해진 것은 미완이 아니다). */
 .cn-ax-skip .cn-ax-st { color: var(--muted-head); }
 .cn-ax-skip .cn-ax-dot { background: var(--muted-2); box-shadow: none; }

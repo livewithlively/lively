@@ -4725,6 +4725,16 @@
   "input_hash": "8779c8483d0fd640"
  },
  {
+  "name": "org_connect_register",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connect/register"
+  ],
+  "input_hash": "c96fb30225c316e3"
+ },
+ {
   "name": "org_connect_status",
   "scope": "memory",
   "mcp": true,

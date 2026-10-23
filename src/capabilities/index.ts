@@ -76,6 +76,7 @@ import { notionConnectCapabilities } from "./notion-connect.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { googleConnectCapabilities } from "./google-connect.js";
 import { connectStatusCapabilities } from "./connect-status.js";
+import { connectRegisterCapabilities } from "./connect-register.js";
 import { memberCollectAppCapabilities } from "./member-collect-apps.js";
 import { orgAppTools, orgAppToolsSetWrite } from "./app-tools.js";
 import { appInstanceCapabilities } from "./app-instances.js";
@@ -159,7 +160,8 @@ const all: Capability[] = [
   orgAppTools, orgAppToolsSetWrite, // #2243 3차: 앱 상세가 «AI가 내 계정으로 하는 일»을 읽기/쓰기 동사로 보여 주는 창구(org_tool.level=L2 가 쓰기).
   ...memberCollectAppCapabilities, // #2247: 피그마·ClickUp "모아 두기" — org_{figma,clickup}_collect(상태)/set(admin 토글). 켠 사람의 금고 토큰(figma_token·clickup_token)을 token_source=member:<나> 로 가리키는 수집기 인스턴스(lively-member). 피그마는 범위(파일 링크/팀 id) 없이는 needs_scope 로 켜지 않는다.
   ...googleConnectCapabilities, // #1881 G5: 구글 "팀 자료로 모으기" — org_google_collect(상태)/set(토글=동의 시작)/connect(범위 넓히기)/oauth_complete(CP 릴레이). 수집기는 token_source=member:<켠 관리자> 로 그 사람의 연결을 가리킨다(구글엔 봇 개념이 없어 조직 토큰이라는 게 없다). ★Gmail 은 제한범위라 명시적으로 골라야 켜진다 — 안 쓰는 서비스를 끼우면 미검증 100명 한도를 되돌릴 수 없게 태운다.
-  ...connectStatusCapabilities, // #4970: 외부 앱 연결 상태를 한 번에 — org_connect_status. 앱마다 기존 상태 함수를 그대로 부르고 «다음 걸음»은 org/connect-next.ts 한 곳이 정한다. 연결 스킬(liv-connect)의 첫 걸음.
+  ...connectRegisterCapabilities, // #4970: 외부 앱 «앱 등록» 값을 한 곳에서 저장 — org_connect_register. 앱마다 기존 저장(금고·슬랙 창구·GitHub App)을 그대로 부른다.
+  ...connectStatusCapabilities, // #4970: 외부 앱 연결 상태를 한 번에 — org_connect_status. 앱마다 기존 상태 함수를 그대로 부르고 길·상태·권하는 길은 org/connect-routes.ts 한 곳이 정한다(옛 next 는 connect-next.ts). 연결 스킬(liv-connect)과 [외부 앱 연결] 화면의 첫 걸음.
   ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
   ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
   ...linkPreviewCapabilities, // #4769 link_preview — 링크 카드(unfurl) 재료. 앱 토큰도 부른다(permissions.tools 선언).

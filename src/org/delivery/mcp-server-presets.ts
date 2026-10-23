@@ -136,7 +136,7 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     note: "#1881 — 슬랙 도구는 이 서버(mcp.slack.com)가 아니라 Web API 프리셋 'slack'(http_proxy)이 제공한다: 슬랙 공식 MCP 는 마켓플레이스 등록 앱·내부 앱만 허용(unlisted 금지)하고 DCR 도 없다. 이 행은 **OAuth 연결 창구**(auth_kind=slack_oauth 의 [연결] 버튼)로만 쓴다 — 발행 불필요, 켜 두면 A 툴이 등록되므로 B 적용 후 enabled=false 권장. 연결 한 번에 유저 토큰(개인 도구)+봇 토큰(비공개 채널 수집)이 함께 저장된다.",
     guide: {
       url: "https://api.slack.com/apps",
-      intro: "매니지드(app.lvly.io)는 라이블리 Slack 앱이 이미 있어 이 설정이 필요 없습니다. 셀프호스팅은 자기 Slack 앱을 하나 만듭니다 — 아래 링크가 이름·권한·봇·콜백을 전부 채워 줘서 사람이 고를 것은 없습니다.",
+      intro: "매니지드(app.lvly.io)는 라이블리 Slack 앱이 이미 있어 이 설정이 필요 없습니다. 셀프호스팅은 자기 Slack 앱을 하나 만듭니다 — 아래 링크가 이름·권한·봇·콜백을 전부 채워 줘서 사람이 고를 것은 없습니다. [외부 앱 연결 ▸ Slack] 의 «앱 등록» 칸에서 하면 걸음과 입력칸이 한 화면에 있고, 이 서버 항목도 함께 만들어집니다(#4970).",
       steps: [
         "아래 [Slack 앱 만들기 링크 열기] — 채워진 생성 화면이 뜹니다. 워크스페이스를 고르고 [Create] (콜백 {callback} 이 이미 들어 있습니다)",
         "[Basic Information] ▸ App Credentials 의 Client ID·Client Secret 을 아래 [OAuth 클라이언트] 칸에 넣고 저장",

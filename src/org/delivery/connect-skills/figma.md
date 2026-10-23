@@ -1,11 +1,13 @@
 # liv-connect-figma — 피그마 연결
 
-피그마 파일의 **코멘트**를 라이블리 자료함으로 모은다. 앱 등록 없이 **각자의 개인 액세스 토큰**으로 연결한다(라이블리 클라우드·직접 설치 모두 같다). 개인 AI 가 피그마 화면을 직접 읽는 연결은 이것과 별개다.
+피그마 파일의 **코멘트**를 라이블리 자료함으로 모은다. 앱 등록 없이 **각자의 개인 액세스 토큰**으로 연결한다. 개인 AI 가 피그마 화면을 직접 읽는 연결은 이것과 별개다.
 
-## 상태 확인
+## 길 고르기
 
-`org_connect_status` 의 `figma` 줄을 본다. 자세한 상태는 `org_figma_collect` 다(내 연결 `me_connected` · 켜짐 `enabled` · 범위 `scope` · 범위가 비었는지 `needs_scope` · 마지막 실행 `last_run`).
-- `next=connect` → «연결»부터 · `set_scope` → «모을 파일»부터 · `collecting` → «확인»만 하고 범위를 바꿀지 묻는다.
+`org_connect_status` 의 `figma` 줄을 본다. 피그마의 길은 개인 토큰(`token`) 하나다 — 그 길의 `state` 마다:
+- `connect` → «연결»부터 · `set_scope` → «모을 파일»부터 · `collecting` → «확인»만 하고 범위를 바꿀지 묻는다.
+- `ask_admin` → 토큰은 넣었지만 이 사람은 수집을 켤 수 없다 — 관리자에게 «피그마 수집 켜기»를 부탁하게 한다.
+- 상태를 더 자세히 볼 때는 `org_figma_collect` 다(내 연결 `me_connected` · 켜짐 `enabled` · 범위 `scope` · 범위가 비었는지 `needs_scope` · 마지막 실행 `last_run`).
 
 ## 연결 — 개인 액세스 토큰
 

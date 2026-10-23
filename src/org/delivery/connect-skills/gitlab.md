@@ -1,11 +1,13 @@
 # liv-connect-gitlab — 깃랩 연결
 
-깃랩 이슈·MR 대화와 릴리스 노트를 라이블리 자료함으로 모은다. 깃랩은 앱 등록 없이 **각자의 개인 액세스 토큰**으로 연결한다(라이블리 클라우드·직접 설치 모두 같다).
+깃랩 이슈·MR 대화와 릴리스 노트를 라이블리 자료함으로 모은다. 깃랩은 앱 등록 없이 **각자의 개인 액세스 토큰**으로 연결한다.
 
-## 상태 확인
+## 길 고르기
 
-`org_connect_status` 의 `gitlab` 줄을 본다. 자세한 상태는 `org_gitlab_collect` 다(내 연결 `me_connected` · 켜짐 `enabled` · 누구 연결로 도는지 `member` · 범위 `scope` · 마지막 실행 `last_run`).
-- `next=connect` → «연결»부터 · `set_scope` → «모을 프로젝트»부터 · `collecting` → «확인»만 하고 범위를 바꿀지 묻는다.
+`org_connect_status` 의 `gitlab` 줄을 본다. 깃랩의 길은 개인 토큰(`token`) 하나다 — 그 길의 `state` 마다:
+- `connect` → «연결»부터 · `set_scope` → «모을 프로젝트»부터 · `collecting` → «확인»만 하고 범위를 바꿀지 묻는다.
+- `ask_admin` → 토큰은 넣었지만 이 사람은 수집을 켤 수 없다 — 관리자에게 «깃랩 수집 켜기»를 부탁하게 한다.
+- 상태를 더 자세히 볼 때는 `org_gitlab_collect` 다(내 연결 `me_connected` · 켜짐 `enabled` · 누구 연결로 도는지 `member` · 범위 `scope` · 마지막 실행 `last_run`).
 
 ## 연결 — 개인 액세스 토큰
 

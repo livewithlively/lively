@@ -8,11 +8,12 @@
 //   공통 규칙(한 걸음씩·숫자는 도구 값만·시크릿 경고·연결 뒤 보고)은 `_common` 한 곳에만 두고 **내려보낼 때 합친다** —
 //   앱 스킬마다 복사해 두면 공통 하나를 바꿀 때 전부를 고쳐야 해서, 앱별로 떼어 놓은 목적과 반대가 된다.
 //
-//  매니지드 / 셀프호스트: 같은 앱이라도 연결법이 다르다(매니지드는 앱 키를 CP 가 쥐고 동의를 중계한다 — `*_OAUTH_RELAY_URL`.
-//   셀프호스트는 관리자가 각 서비스에 앱을 직접 만들고 키를 등록한다). 판마다 다른 부분은 `<키>.managed.md`/`<키>.selfhost.md`,
-//   두 판이 같은 부분(연결 뒤 범위·확인·함정)은 `<키>.md` 에 두고, 서버는 **자기 배포 방식의 판만** 같은 스킬 이름으로
-//   «판 파일 + 공용 파일 + 공통 규칙» 순으로 합쳐 내려준다. 그래서 매니지드 워크스페이스는 셀프호스트 절차를 아예 못 보고
-//   (반대도 같다), 입구 스킬과 사람의 말(«슬랙 연결»)은 배포 방식을 몰라도 된다. 판 차이가 없는 앱은 `<키>.md` 하나.
+//  매니지드 / 셀프호스트 — 스킬은 배포 방식으로 갈리지 않는다(#4970, 상민님 2026-10-23 «그 분기 조건은 없는게좋으니까»).
+//   종전엔 판마다 `<키>.managed.md`/`<키>.selfhost.md` 를 따로 두고 서버가 자기 판만 내려줬다. 이제 앱마다 원본 하나이고,
+//   갈림은 **길의 상태**다: org_connect_status 가 앱마다 길(라이블리 앱 · Claude 커넥터 · 개인 토큰)과 상태를 주고
+//   (org/connect-routes.ts), 스킬은 그 상태에 맞는 절을 따른다. 배포 차이는 «라이블리 앱을 누가 쥐나» 하나로 서버에서만
+//   길 상태에 들어간다(매니지드 미준비 = 준비 중 · 셀프호스트 미준비 = 앱 등록·관리자에게 요청). 셀프호스트의 앱 등록
+//   안내는 org/connect-registration.ts 한 벌을 조립 때 `{{registration}}` 자리에 끼워 넣는다 — 화면의 앱 등록 칸과 같은 글이다.
 //
 //  잠금(시드 훅 #1836·세션 주입 섹션 #1245 와 같은 처방): 본문은 코드가 유일한 출처다. 조직은 고치지도·끄지도·지우지도
 //   못한다 — 업데이트는 릴리스로만 온다. 기본 스킬의 «손 안 댄 행만 갱신»(seed-content.ts)은 한 번 고친 워크스페이스를
@@ -22,6 +23,7 @@
 //  원본: src/org/delivery/connect-skills/*.md → `node scripts/sync-connect-skills.mjs` 가 connect-skills.sources.ts 로 굳힌다
 //   (connect-skills.test.ts 가 둘의 일치를 강제한다 — sources.ts 를 손으로 고치지 말 것).
 import { CONNECT_SKILL_SOURCES } from "./connect-skills.sources.js";
+import { APP_REGISTRATIONS, registrationMarkdown } from "../connect-registration.js";
 import { managedMode } from "../tenancy/state.js";
 import { assetContentHash } from "../store/harness-assets.js";
 
@@ -30,7 +32,7 @@ export type ConnectVariant = "managed" | "selfhost";
 /** 스킬 하나의 정의 — 본문은 원본 파일(`source` 키)에서, 나머지는 여기서. */
 export interface ConnectSkillSpec {
   id: string;
-  /** 원본 파일 키 — `<source>.md` 또는 `<source>.managed.md`·`<source>.selfhost.md`. */
+  /** 원본 파일 키 — `connect-skills/<source>.md`. */
   source: string;
   label: string;
   /** 사람 화면에 보이는 쉬운 한 줄. */
@@ -39,7 +41,7 @@ export interface ConnectSkillSpec {
   description: string;
 }
 
-// 순서 = 화면·목록 순서(sort). 앱을 더할 때: 여기 한 줄 + connect-skills/<키>.md(또는 두 판) + sync.
+// 순서 = 화면·목록 순서(sort). 앱을 더할 때: 여기 한 줄 + connect-skills/<키>.md + sync (+ 라이블리 앱 길이 있으면 connect-registration.ts).
 export const CONNECT_SKILL_SPECS: readonly ConnectSkillSpec[] = [
   {
     id: "liv-connect", source: "_router", label: "외부 앱 연결",
@@ -109,17 +111,25 @@ export function connectVariant(env: NodeJS.ProcessEnv = process.env): ConnectVar
   return managedMode(env) ? "managed" : "selfhost";
 }
 
-/** 한 키의 원본 조각들 — [그 판 전용 파일, 공용 파일] 중 있는 것(이 순서). 둘 다 없으면 배포 사고라 던진다(테스트가 미리 잡는다). */
-export function connectSourceParts(key: string, variant: ConnectVariant, sources: Record<string, string> = CONNECT_SKILL_SOURCES): string[] {
-  const parts = [sources[`${key}.${variant}`], sources[key]].filter((x): x is string => x !== undefined);
-  if (!parts.length) throw new Error(`연결 스킬 원본 '${key}' 이(가) 없다(${variant}) — connect-skills/${key}.md 또는 ${key}.${variant}.md`);
-  return parts;
+/** 앱 등록 안내가 들어갈 자리 — 앱 스킬 원본에 한 번. */
+export const REGISTRATION_SLOT = "{{registration}}";
+
+/** 한 키의 원본. 없으면 배포 사고라 던진다(테스트가 미리 잡는다). */
+export function connectSource(key: string, sources: Record<string, string> = CONNECT_SKILL_SOURCES): string {
+  const s = sources[key];
+  if (s === undefined) throw new Error(`연결 스킬 원본 '${key}' 이(가) 없다 — connect-skills/${key}.md`);
+  return s;
 }
 
-/** 내려보낼 본문 — 그 스킬의 판 파일 + 공용 파일 + 공통 규칙(있는 것만, 이 순서). */
-export function assembleConnectBody(spec: ConnectSkillSpec, variant: ConnectVariant, sources: Record<string, string> = CONNECT_SKILL_SOURCES): string {
-  const parts = [...connectSourceParts(spec.source, variant, sources), ...connectSourceParts(CONNECT_COMMON_SOURCE, variant, sources)];
-  return parts.map((p) => p.trim()).join("\n\n") + "\n";
+/** 내려보낼 본문 — 그 스킬 원본(앱 등록 자리를 안내로 채워) + 공통 규칙. 자리가 있는데 안내가 없거나, 안내가 있는데 자리가 없으면 던진다. */
+export function assembleConnectBody(spec: ConnectSkillSpec, sources: Record<string, string> = CONNECT_SKILL_SOURCES): string {
+  let own = connectSource(spec.source, sources);
+  const hasSlot = own.includes(REGISTRATION_SLOT);
+  const hasReg = !!APP_REGISTRATIONS[spec.source];
+  if (hasSlot !== hasReg) throw new Error(`연결 스킬 '${spec.id}' 의 앱 등록 자리(${REGISTRATION_SLOT})와 안내(connect-registration.ts)가 맞지 않는다`);
+  //  바꿀 글은 함수로 준다 — 문자열로 주면 «$&» 같은 자리 패턴이 해석된다.
+  if (hasSlot) own = own.replace(REGISTRATION_SLOT, () => registrationMarkdown(spec.source));
+  return [own, connectSource(CONNECT_COMMON_SOURCE, sources)].map((p) => p.trim()).join("\n\n") + "\n";
 }
 
 /** 잠긴 스킬 한 건 — org_harness_asset 행과 같은 모양(시딩·배포·화면이 그대로 쓴다). */
@@ -129,9 +139,9 @@ export interface LockedSkill {
   sort: number; content_hash: string;
 }
 
-export function connectSkills(variant: ConnectVariant, sources: Record<string, string> = CONNECT_SKILL_SOURCES): LockedSkill[] {
+export function connectSkills(sources: Record<string, string> = CONNECT_SKILL_SOURCES): LockedSkill[] {
   return CONNECT_SKILL_SPECS.map((spec, i) => {
-    const body = assembleConnectBody(spec, variant, sources);
+    const body = assembleConnectBody(spec, sources);
     const frontmatter = {};
     return {
       id: spec.id, kind: "skill", label: spec.label, harness: "all", description: spec.description, summary: spec.summary,
@@ -141,13 +151,12 @@ export function connectSkills(variant: ConnectVariant, sources: Record<string, s
   });
 }
 
-// 판별 캐시 — 판은 프로세스 수명 동안 바뀌지 않는다(env 가 부팅 때 정해진다). 테스트는 connectSkills 를 직접 부른다.
-let cached: { variant: ConnectVariant; skills: LockedSkill[] } | null = null;
+// 본문은 프로세스 수명 동안 바뀌지 않는다(원본이 코드에 굳어 있다). 테스트는 connectSkills 를 직접 부른다.
+let cached: LockedSkill[] | null = null;
 /** 지금 이 게이트웨이가 내려주는 잠긴 스킬들. */
 export function lockedSkillsNow(): LockedSkill[] {
-  const variant = connectVariant();
-  if (!cached || cached.variant !== variant) cached = { variant, skills: connectSkills(variant) };
-  return cached.skills;
+  if (!cached) cached = connectSkills();
+  return cached;
 }
 
 const LOCKED_IDS = new Set(CONNECT_SKILL_SPECS.map((s) => s.id));

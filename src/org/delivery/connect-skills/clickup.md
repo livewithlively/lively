@@ -1,11 +1,13 @@
 # liv-connect-clickup — 클릭업 연결
 
-클릭업의 작업·댓글·시간 기록을 라이블리로 가져온다. 클릭업은 자료함이 아니라 **프로젝트 탭**으로 들어온다(작업 = 프로젝트, 리스트·댓글은 그 아래). 앱 등록 없이 **각자의 API 토큰**으로 연결한다(라이블리 클라우드·직접 설치 모두 같다).
+클릭업의 작업·댓글·시간 기록을 라이블리로 가져온다. 클릭업은 자료함이 아니라 **프로젝트 탭**으로 들어온다(작업 = 프로젝트, 리스트·댓글은 그 아래). 앱 등록 없이 **각자의 API 토큰**으로 연결한다.
 
-## 상태 확인
+## 길 고르기
 
-`org_connect_status` 의 `clickup` 줄을 본다. 자세한 상태는 `org_clickup_collect` 다(내 연결 `me_connected` · 켜짐 `enabled` · 누구 연결로 도는지 `member` · 범위 `scope` · 마지막 실행 `last_run`).
-- `next=connect` → «연결»부터 · `set_scope` → «가져올 리스트»부터 · `collecting` → «확인»만 하고 범위를 바꿀지 묻는다.
+`org_connect_status` 의 `clickup` 줄을 본다. 클릭업의 길은 개인 토큰(`token`) 하나다 — 그 길의 `state` 마다:
+- `connect` → «연결»부터 · `set_scope` → «가져올 리스트»부터 · `collecting` → «확인»만 하고 범위를 바꿀지 묻는다.
+- `ask_admin` → 토큰은 넣었지만 이 사람은 수집을 켤 수 없다 — 관리자에게 «클릭업 수집 켜기»를 부탁하게 한다.
+- 상태를 더 자세히 볼 때는 `org_clickup_collect` 다(내 연결 `me_connected` · 켜짐 `enabled` · 누구 연결로 도는지 `member` · 범위 `scope` · 마지막 실행 `last_run`).
 
 ## 연결 — API 토큰
 

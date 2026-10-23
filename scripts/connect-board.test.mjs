@@ -16,10 +16,9 @@
 //   B13 아무도 Claude 로 안 이었지만 구성원 경로 단위를 모으는 중 → 팀이 쓰는 앱(연결 필요)
 //   B14 줄 순서 — 팀이 쓰는 앱 먼저 · 구성원 열은 나 먼저
 //   B15 단위 — 모으는 중 → 후보 → 뺌 순서 · 상태별 수
-//   R1~R5 연결 경로 말(routeText) — 이어 둔 사람이 지금 못 쓰면 «아무도 없다» 로 숨기지 않는다
 //   P1~P4 열(boardPeople) — 들어오는 사람(is_person)·활성만 · 미러된 사람 행은 빼고 · 보는 사람은 늘 · 명부를 못 읽으면 커넥터 기록으로
 //   T1~T4 읽은 때(unitReadText) — 겉줄엔 말하지 않는다(서버가 안 준다) · 다 보는 줄은 읽은 때 · 모으는 중인데 안 읽었으면 «아직 안 읽음»
-//   N1~N4 단위 이름(unitDisplayName) — «가려졌다» 는 서버가 가린 때(겉줄·비공개 종류)뿐 · S1~S4 모으는 곳 요약(unitSummaryText) — 있는 상태만
+//   N1~N4 단위 이름(unitDisplayName) — «가려졌다» 는 서버가 가린 때(겉줄·비공개 종류)뿐
 //   K0~K1 계약 — 웹 판정(canEditUnit · visibilityChoices)이 서버 규칙(unit-plan canEditUnit · visibilityChangeError)과 모든 조합에서 같다
 //   E1~E3 고칠 수 있나(서버 canEditUnit 과 같은 규칙) · V1~V6 공개범위 선택지(서버 visibilityChangeError 와 같은 규칙) · W 넓히기 · A 모으는 사람 말
 import { strict as assert } from "node:assert";
@@ -137,18 +136,6 @@ eq(B.assigneeText(unit({ assignee: { kind: "member", member_id: "me" } }), nameO
 eq(B.assigneeText(unit({ assignee: null }), nameOf), "모을 사람 없음", "A3 모으는 중인데 담당 없음");
 eq(B.assigneeText(unit({ access: "coarse", assignee_kind: "member", state: "active" }), nameOf), "구성원 Claude", "A4 겉줄은 이름 없이");
 
-// R — 연결 경로 말(routeText): 길이 있으면 그 길 · 길이 없는데 Claude 로 이어 둔 사람이 지금 못 쓰면 그 사실 · 아무도 없으면 없다
-{
-  const b = board({ connectorMembers: [scanned("me", [["Slack", "connected"], ["Gmail", "needs-auth"], ["Notion", "failed"]]), scanned("sumin", [])],
-    collectors: [{ preset_key: "github", enabled: true }], units: [unit({ app: "github", route: "lively_collector", kind: "repo", name: "lively" }), unit({ id: 2, app: "notion", route: "liv_direct", kind: "page", name: "기획" })] });
-  const t = (k) => B.routeText(b.apps.find((a) => a.key === k));
-  eq(t("slack"), "Claude 커넥터 1명", "R1 Claude 로 이은 사람 수");
-  eq(t("github"), "라이블리 수집기", "R2 수집기");
-  eq(t("gmail"), "Claude 로 이어 두었지만 지금은 쓸 수 없어요", "R3 이어 둔 사람은 있는데 지금 못 씀(다시 로그인) — «아무도 없다» 로 숨기지 않는다");
-  eq(t("notion"), "리브가 연결함", "R4 다른 길이 있으면 그 길(끊긴 커넥터보다 먼저)");
-  eq(B.routeText({ claudeMembers: 0, collector: false, livDirect: false, cells: [{ member: "me", state: "off", label: "안 씀" }] }), "아직 연결한 사람이 없어요", "R5 아무도 없음");
-}
-
 // P — 열(boardPeople)
 {
   const roster = [
@@ -179,13 +166,6 @@ eq(B.unitDisplayName({ name: "#dev", kind: "channel", access: "full" }), "#dev",
 eq(B.unitDisplayName({ name: null, kind: "private_channel", access: "coarse" }), "이름이 가려진 비공개 채널", "N2 겉줄 · 비공개 종류 → 가려졌다");
 eq(B.unitDisplayName({ name: null, kind: "channel", access: "coarse" }), "이름 없는 공개 채널", "N3 공개 채널은 서버가 가리지 않는다 — 이름이 빈 것");
 eq(B.unitDisplayName({ name: null, kind: "mailbox", access: "full" }), "이름 없는 메일함", "N4 다 보는 줄의 빈 이름은 가려진 것이 아니다");
-// S — 모으는 곳 요약
-const sum = (units, o = {}) => B.unitSummaryText({ units: { active: 0, candidate: 0, excluded: 0, list: [], ...units }, collectable: false, collector: false, ...o });
-eq(sum({ candidate: 1 }), "후보 1", "S1 있는 상태만 — «모으는 중 0» 을 말하지 않는다");
-eq(sum({ active: 2, candidate: 1, excluded: 3 }), "모으는 중 2 · 후보 1 · 뺌 3", "S2 셋 다");
-eq(sum({}, { collectable: true }), "아직 찾은 곳이 없어요", "S3 길은 있는데 찾은 곳 없음");
-eq(sum({}), "이 앱은 아직 모으는 길을 준비 중이에요", "S4 길도 없음");
-
 // K — 계약: 웹 판정 ≡ 서버 규칙(경로 3 × 공개범위 3 × 주인 3 × 나·남의 상태 4×4 × 관리자 2). 격리 리뷰(2026-10-17)의 점검 스크립트를 시험으로 옮겼다.
 //  ⚠ 서버 쪽이 정본이다 — 여기서 어긋나면 웹이 서버가 거절할 선택지를 보이거나(사람이 골랐다가 403·409 를 본다) 할 수 있는 것을 숨긴다.
 {

@@ -12,7 +12,7 @@
 import { api, el, state } from './core.js';
 import { bindCtx } from './v2/ctx-registry.js';   // #3784 리브 카드 우클릭
 import { copyText } from './v2/ctx-menu.js';
-import { connectNextText } from './lib/liv-desk.js';
+import { rowView, type ConnectAppIn } from './lib/connect-routes-view.js';   // #4970 — 앱 한 줄 말은 [외부 앱 연결] 목록과 한 벌
 
 export type LivMode = 'login' | 'liv' | 'dashboard';
 export interface LivFinding {
@@ -415,8 +415,8 @@ export function livToast(msg: string): void {
   setTimeout(() => t.remove(), 4000);
 }
 
-// ── 외부 앱 연결 상태 한 줄씩 — 서버 org_connect_status 그대로(화면이 판정하지 않는다). 상세는 [외부 앱 연결] 현황판 ──
-type ConnectApp = { app: string; label?: string; next?: string | null; error?: string | null };
+// ── 외부 앱 연결 상태 한 줄씩 — 서버 org_connect_status 그대로(화면이 판정하지 않는다). 말은 [외부 앱 연결] 목록과 한 벌 ──
+type ConnectApp = ConnectAppIn;
 
 /** 외부 앱 연결 상태를 host 에 그린다. 못 읽으면 그렇다고 한 줄. */
 export async function fillConnectApps(host: HTMLElement): Promise<void> {
@@ -429,10 +429,10 @@ export async function fillConnectApps(host: HTMLElement): Promise<void> {
   }
 }
 
-/** 앱 한 줄 — 이름 · 지금 상태(사람 말) · 누르면 그 앱의 연결 화면. */
+/** 앱 한 줄 — 이름 · 지금 어떻게 연결돼 있나(사람 말) · 누르면 그 앱의 연결 화면. 말은 [외부 앱 연결] 목록과 같다(lib/connect-routes-view). */
 function connectAppRow(a: ConnectApp): HTMLElement {
-  const next = a.error ? null : a.next;
-  return el('a', { class: 'liv-app liv-app-' + (next || 'unknown'), href: '#/connect/' + encodeURIComponent(a.app) },
+  const v = rowView(a);
+  return el('a', { class: 'liv-app liv-app-' + v.bucket, href: '#/connect/' + encodeURIComponent(a.app) },
     el('span', { class: 'liv-app-n', text: a.label || a.app }),
-    el('span', { class: 'liv-app-s', text: connectNextText(next) }));
+    el('span', { class: 'liv-app-s', text: v.word }));
 }

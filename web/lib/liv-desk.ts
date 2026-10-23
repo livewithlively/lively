@@ -36,18 +36,5 @@ export function isLivSessionId(names: ReadonlyArray<string | null | undefined>, 
   return names.some((n) => String(n ?? '').trim() === want);
 }
 
-/** 외부 앱 하나의 «다음 할 일»(서버 org_connect_status 의 next) → 사람 말. 모르는 값은 «확인하지 못했어요». */
-export function connectNextText(next: unknown): string {
-  switch (next) {
-    case 'register_app': return '앱 등록이 필요해요';
-    case 'ask_admin': return '관리자에게 요청해야 해요';
-    case 'preparing': return '준비 중이에요';
-    case 'connect': return '연결할 수 있어요';
-    case 'set_scope': return '모을 범위를 정하면 돼요';
-    case 'collecting': return '모으고 있어요';
-    default: return '확인하지 못했어요';
-  }
-}
-
 /** 리브 화면의 단독 주소 — 커서 같은 로컬 AI 에게 줄 링크. 리브 세션이 있어도 세션으로 넘기지 않는다. */
 export const LIV_BOARD_HASH = '#/liv?board=1';

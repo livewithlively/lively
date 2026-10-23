@@ -19,7 +19,7 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 
 const IDS = lockedSkillIds();
-const CODE = new Map(connectSkills("selfhost").map((s) => [s.id, s]));   // 테스트 환경엔 테넌트 헤더 비밀이 없다 = selfhost
+const CODE = new Map(connectSkills().map((s) => [s.id, s]));   // 본문은 배포 방식으로 갈리지 않는다(#4970 길)
 const MINE = "__pg_locked_seed_mine__";
 const MEMBER = "__pg_locked_seed_member__";
 const rowsOf = async () => (await itemsPool.query(
