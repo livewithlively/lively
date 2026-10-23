@@ -160,6 +160,9 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     })().finally(() => { running = null; });
     return running;
   };
+  //  격리 박스(셀프호스트)면 그 사람의 서버 계정을 지금 만들기 시작한다 — 1~2분 걸려서, [연결]을 누른 뒤에 시작하면 로그인 주소가 그만큼
+  //   늦다. 서버가 기다리지 않고 돌려 두고, 로그인 시작이 같은 일을 기다린다. 격리 박스가 아니면 서버가 아무것도 안 한다. 실패는 삼킨다.
+  void api('/api/ui/me/ai-login/prepare', { method: 'POST' }).catch(() => { /* 비치명 — 로그인 시작이 다시 시도한다 */ });
   void reload();
   return { reload };
 }

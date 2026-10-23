@@ -325,7 +325,11 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
 - 단독 재설치: `bash deploy/install-kit.sh` (env: `LIVELY_TOKEN`·`LIVELY_GATEWAY`·`KIT_HARNESS=claude,codex`).
 - 웹터미널 세션의 Claude 계정은 멤버별이다: 기본(멀티프로필 #346)은 멤버 전용 `CLAUDE_CONFIG_DIR`(`~/.lively/profiles/<slug>/claude`)로 뜨고,
   멤버가 그 세션에서 한 번 로그인한다(`LIVELY_MULTIPROFILE=0` = 단일 유저 박스용 공유 모드). Linux 는 멤버별 OS 유저 격리도 선택할 수 있다
-  (`sudo bash deploy/linux/install-isolation.sh`, #524).
+  (`sudo bash deploy/linux/install-isolation.sh`, #524). 격리를 켜면 AI 넷(클로드·챗GPT·제미나이·그록)의 로그인이 모두 구성원 홈에 따로 남는다.
+  격리가 없으면 클로드만 멤버별(위 프로필)이고 나머지는 박스 공용 계정 하나다.
+- 서버 AI 프로그램: 클로드는 설치기가(격리면 구성원마다), 챗GPT 는 격리 구성원마다(install-codex-user) 깐다. 제미나이·그록은
+  `sudo bash deploy/install-harness-clis.sh [agy] [grok]` 로 박스 전체(/usr/local/bin)에 깐다(#4970 — 매니지드 세션 이미지와 같은 설치).
+  처음 설정 «AI 연결» 은 이 서버에 깔린 AI 만 보인다.
 
 ## 디렉토리 구조 (Linux/Mac 패리티가 구조로 드러남 — 주요 파일만)
 
@@ -354,6 +358,7 @@ deploy/
     lively-gateway@.service     # blue-green 템플릿 유닛(color 인스턴스)
     lively-loopback.{socket,service} # blue-green :8080 loopback alias
     install-isolation.sh        # 멤버별 OS 유저 격리(opt-in, #524)
+  install-harness-clis.sh       # 제미나이(agy)·그록 CLI 를 박스 전체에(opt-in, #4970)
   mac/                # ── macOS 지원 ──
     provision.sh                          # brew(tmux·node)·docker 확인·claude / launchd 설치
     io.lvly.lively.plist        # launchd plist 템플릿

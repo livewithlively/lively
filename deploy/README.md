@@ -326,7 +326,11 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
 - Standalone reinstall: `bash deploy/install-kit.sh` (env: `LIVELY_TOKEN`·`LIVELY_GATEWAY`·`KIT_HARNESS=claude,codex`).
 - The Claude account for web terminal sessions is per member: by default (multi-profile #346) a session starts with a member-specific `CLAUDE_CONFIG_DIR` (`~/.lively/profiles/<slug>/claude`),
   and the member logs in once in that session (`LIVELY_MULTIPROFILE=0` = shared mode for single-user boxes). On Linux you can also opt into per-member OS user isolation
-  (`sudo bash deploy/linux/install-isolation.sh`, #524).
+  (`sudo bash deploy/linux/install-isolation.sh`, #524). With isolation, logins for all four AIs (Claude, ChatGPT, Gemini, Grok) stay in each
+  member's home; without it only Claude is per member and the rest share one box account.
+- Server AI CLIs: Claude comes with the installer (per member when isolated), ChatGPT per isolated member (install-codex-user). Gemini and Grok:
+  `sudo bash deploy/install-harness-clis.sh [agy] [grok]` installs them box-wide (/usr/local/bin) — same install as the managed session image (#4970).
+  First-run «AI 연결» only lists AIs installed on this server.
 
 ## Directory layout (Linux/Mac parity shows in the structure — main files only)
 
@@ -355,6 +359,7 @@ deploy/
     lively-gateway@.service     # blue-green template unit (color instances)
     lively-loopback.{socket,service} # blue-green :8080 loopback alias
     install-isolation.sh        # per-member OS user isolation (opt-in, #524)
+  install-harness-clis.sh       # Gemini (agy) · Grok CLIs box-wide (opt-in, #4970)
   mac/                # ── macOS support ──
     provision.sh                          # brew (tmux·node)·docker check·claude / launchd install
     io.lvly.lively.plist        # launchd plist template

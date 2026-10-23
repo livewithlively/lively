@@ -173,5 +173,17 @@ await t("G 계정 목록이 설치 여부(installed)를 싣는다", () => {
   assert.match(body, /installed: installed\[i\]/, "설치 여부를 안 싣는다");
 });
 
+await t("F8·G2 격리 박스 — 로그인 전에 그 사람 서버 계정을 만든다(장면을 열 때 미리 · 로그인 시작이 기다린다)", () => {
+  //  안 만들면 첫 세션 전 로그인이 공용 자리로 가고(resolveMemberOsUser «미프로비저닝 → 공유 폴백»), 계정이 생긴 뒤엔 «로그인 안 됨».
+  assert.match(OAI, /api\('\/api\/ui\/me\/ai-login\/prepare', \{ method: 'POST' \}\)/, "장면이 계정 준비를 안 부른다 — [연결] 뒤 1~2분을 기다린다");
+  const R = code(readFileSync(new URL("../../terminal/routes.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
+  const prep = R.slice(R.indexOf('app.post("/api/ui/me/ai-login/prepare"'), R.indexOf('app.post("/api/ui/me/ai-login/start"'));
+  assert.ok(prep.length > 50, "준비 라우트가 없다");
+  assert.match(prep, /void ensureMemberOsUser\(userOf\(req\)\)/, "준비가 기다린다(1~2분 응답이 묶인다) 또는 계정을 안 만든다");
+  const start = R.slice(R.indexOf('app.post("/api/ui/me/ai-login/start"'), R.indexOf('app.get("/api/ui/me/ai-login/state"'));
+  const ens = start.indexOf("await ensureMemberOsUser(userOf(req))"), seat = start.indexOf("const seat = await loginSeat(req);");
+  assert.ok(ens > 0 && seat > ens, "★ 로그인 자리를 정한 뒤에 계정을 만든다 — 첫 로그인이 공용 자리로 간다");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

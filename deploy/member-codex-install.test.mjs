@@ -82,7 +82,10 @@ assert.ok(inCode(refresh, /install-codex-user\.sh" "\$u"/),
 
 // ── ⑥ 키트 배선: codex 도 lively 자산(config.toml·AGENTS.md)을 받아야 한다 ────────
 //  홈 설치만 하면 codex 는 뜨지만 lively MCP·훅이 없어 조직 맥락이 안 붙는다(#524 갭의 codex 판).
-assert.ok(inCode(provision, /user-install\.mjs.*--harness claude,codex/),
+//  (#4970) 배선 목록은 KIT_HARNESSES 한 자리다(기본 넷 — 제미나이·그록 포함, install-harness-clis.test H7). 여기서는 codex 가 그 안에 있는지만 본다.
+const kitDefault = (codeLines(provision).find((l) => /^KIT_HARNESSES="\$\{KIT_HARNESSES:-/.test(l)) || "").match(/:-([^}]*)\}/)?.[1] || "";
+assert.ok(kitDefault.split(",").includes("claude") && kitDefault.split(",").includes("codex"),
   "멤버 키트가 claude 와 codex 를 함께 배선한다(codex 만 빠지면 세션은 뜨나 lively 미연동)");
+assert.ok(inCode(provision, /user-install\.mjs.*--harness "\$KIT_HARNESSES"/), "설치기가 그 목록으로 배선한다");
 
 console.log("member-codex-install.test OK — 헬퍼(prefix+설치·멱등·비파괴) · PATH 우선순위 · libexec · 프로비저닝 · 백필 · 키트 배선");
