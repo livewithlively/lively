@@ -21,10 +21,19 @@ import {
   linearCollectCapabilities, outlookCollectCapabilities,
 } from "./member-collect-apps.js";
 import { githubAppReady } from "../org/credentials/oauth-broker.js";
+import { decideRoutes, type AppRouteFacts, type ConnectRoute } from "../org/connect-routes.js";
+import { registrationView, type RegistrationView } from "../org/connect-registration.js";
+import { memberAiConnectorsPolicy, listMemberAiConnectors } from "../org/store/member-ai-connectors.js";
+import { listMemberSecretsPublic, memberOwner } from "../org/credentials/member-secret-store.js";
+import { GITHUB_TOKEN_KIND } from "../org/credentials/github-token-source.js";
 import { secretsEnabled } from "../org/credentials/secret-box.js";
 import { getOrgProfile } from "../org/store.js";
 
-interface Probe { app_ready: boolean; me_connected: boolean; collecting: boolean; note?: string | null }
+interface Probe {
+  app_ready: boolean; me_connected: boolean; collecting: boolean; note?: string | null;
+  /** (#4970 길) 앱 연결과 개인 토큰이 한 수집기를 함께 쓰는 앱(깃허브) — 내 연결이 어느 쪽인가. */
+  via?: { app: boolean; token: boolean };
+}
 
 interface AppSpec {
   app: string;
@@ -34,6 +43,24 @@ interface AppSpec {
   /** 앱 등록에 필요한 권한 — admin(org_credential_set) | manage(워크스페이스 관리, org_github_app_register). */
   registerBy: "admin" | "manage";
   probe: (user: LivelyUser) => Promise<Probe>;
+  /**
+   * (#4970) 이 앱에 있는 «길» — 우선순위 판정은 org/connect-routes.ts.
+   *  app = 라이블리 앱(OAuth 앱 · 공식 API) · aiApp = 구성원 Claude 커넥터로 모으는 앱 키(수집은 슬랙·지메일·노션만 — web/lib/claude-connectors CLAUDE_COLLECT_APP_KEYS)
+   *  · token = 개인 토큰·API 키.
+   */
+  routes: { app?: true; aiApp?: string; token?: true };
+}
+
+/**
+ * (#4970 길) 깃허브 — 내 연결이 앱 연결인가 개인 토큰인가. 순수.
+ *  같은 금고 칸(github_pat)에 두 형태가 산다: [GitHub 연결]이 저장한 **토큰 묶음**(scope_key "" · meta 에 token_type·expires_at —
+ *  oauth-broker tokenMeta)과 사람이 붙여 넣은 **개인 토큰**(연결 스킬은 scope_key "" 로, 옛 수집기 폼은 호스트로 · meta 는 헤더 모양만).
+ *  그래서 scope_key 로는 못 가르고 meta 로 가른다.
+ */
+export function githubViaOf(rows: ReadonlyArray<{ kind: string; scope_key: string; has_secret: boolean; meta?: Record<string, unknown> | null }>): { app: boolean; token: boolean } {
+  const mine = rows.filter((r) => r.kind === GITHUB_TOKEN_KIND && r.has_secret);
+  const isBundle = (r: (typeof mine)[number]): boolean => r.scope_key === "" && !!r.meta && (r.meta.token_type !== undefined || r.meta.expires_at !== undefined);
+  return { app: mine.some(isBundle), token: mine.some((r) => !isBundle(r)) };
 }
 
 /** makeMemberTokenCollect 가 만든 상태 도구(org_<앱>_collect)를 그대로 부른다 — 상태 계산을 여기서 다시 하지 않는다. */
@@ -54,7 +81,7 @@ function memberCollectProbe(caps: Capability[], system: string): (user: LivelyUs
 // 순서 = 화면·스킬이 보여 줄 순서. 앱 스킬은 liv-connect-<app>(connect-skills.ts 카탈로그와 같은 키).
 export const CONNECT_APPS: readonly AppSpec[] = [
   {
-    app: "slack", label: "슬랙", needsApp: true, registerBy: "admin",
+    app: "slack", label: "슬랙", needsApp: true, registerBy: "admin", routes: { app: true, aiApp: "slack" },
     probe: async (user) => {
       const s = await slackCollectState(user.userId);
       const collecting = s.search.enabled || s.bot.enabled;
@@ -65,34 +92,36 @@ export const CONNECT_APPS: readonly AppSpec[] = [
     },
   },
   {
-    app: "notion", label: "노션", needsApp: true, registerBy: "admin",
+    app: "notion", label: "노션", needsApp: true, registerBy: "admin", routes: { app: true, aiApp: "notion" },
     probe: async () => {
       const s = await notionCollectState();
       // 노션 연결은 사람이 아니라 **노션 워크스페이스** 단위다(동의 화면에서 고른 페이지가 곧 범위) — 연결된 워크스페이스가 있으면 연결됨.
       return { app_ready: s.ready, me_connected: s.workspaces.length > 0, collecting: s.enabled };
     },
   },
-  { app: "linear", label: "리니어", needsApp: true, registerBy: "admin", probe: memberCollectProbe(linearCollectCapabilities, "linear") },
+  { app: "linear", label: "리니어", needsApp: true, registerBy: "admin", routes: { app: true }, probe: memberCollectProbe(linearCollectCapabilities, "linear") },
   {
-    app: "github", label: "깃허브", needsApp: false, registerBy: "manage",
+    app: "github", label: "깃허브", needsApp: false, registerBy: "manage", routes: { app: true, token: true },
     probe: async (user) => {
       const base = await memberCollectProbe(githubCollectCapabilities, "github")(user);
       // GitHub App 이 없어도 개인 토큰으로 연결된다 — 그래서 막지 않고(needsApp=false) 준비 여부만 알린다.
       const ready = await githubAppReady().catch(() => false);
-      return { ...base, app_ready: ready, note: base.note ?? (ready ? null : "GitHub App 이 아직 없어 개인 토큰으로 연결합니다(관리자가 앱을 등록하면 저장소를 골라 연결할 수 있습니다)") };
+      const rows = await listMemberSecretsPublic(memberOwner(user.userId)).catch(() => []);
+      const via = githubViaOf(rows);
+      return { ...base, app_ready: ready, via, note: base.note ?? (ready ? null : "GitHub App 이 아직 없어 개인 토큰으로 연결합니다(관리자가 앱을 등록하면 저장소를 골라 연결할 수 있습니다)") };
     },
   },
-  { app: "gitlab", label: "깃랩", needsApp: false, registerBy: "manage", probe: memberCollectProbe(gitlabCollectCapabilities, "gitlab") },
+  { app: "gitlab", label: "깃랩", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(gitlabCollectCapabilities, "gitlab") },
   {
-    app: "google", label: "구글", needsApp: true, registerBy: "admin",
+    app: "google", label: "구글", needsApp: true, registerBy: "admin", routes: { app: true, aiApp: "gmail" },
     probe: async (user) => {
       const s = await googleCollectState(user.userId);
       return { app_ready: s.ready, me_connected: !!s.connected, collecting: s.collectors.some((c) => c.enabled) };
     },
   },
-  { app: "outlook", label: "아웃룩", needsApp: true, registerBy: "admin", probe: memberCollectProbe(outlookCollectCapabilities, "outlook") },
-  { app: "clickup", label: "클릭업", needsApp: false, registerBy: "manage", probe: memberCollectProbe(clickupCollectCapabilities, "clickup") },
-  { app: "figma", label: "피그마", needsApp: false, registerBy: "manage", probe: memberCollectProbe(figmaCollectCapabilities, "figma") },
+  { app: "outlook", label: "아웃룩", needsApp: true, registerBy: "admin", routes: { app: true }, probe: memberCollectProbe(outlookCollectCapabilities, "outlook") },
+  { app: "clickup", label: "클릭업", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(clickupCollectCapabilities, "clickup") },
+  { app: "figma", label: "피그마", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(figmaCollectCapabilities, "figma") },
 ];
 
 export interface ConnectAppStatus {
@@ -107,17 +136,62 @@ export interface ConnectAppStatus {
   next: ConnectNext | null;
   connect_url: string | null;
   note: string | null;
+  /** (#4970) 이 앱의 길 — 우선순위 순서(app → ai → token, 있는 것만). 화면·스킬은 이것만 읽는다. 조회 실패면 null. */
+  routes: ConnectRoute[] | null;
+  /** 권하는 길(routes 의 자리) · 그보다 앞의 막힌 길들(관리자에게 요청 · 라이블리 준비 중 · 꺼짐). */
+  recommended: number | null;
+  blocked_before: number[] | null;
+  /** 라이블리 앱 길이 «앱 등록»·«관리자에게 요청»(앱 미준비)일 때만 — 등록 안내(화면 앱 등록 칸 · 스킬 앱 등록 절과 같은 데이터). */
+  registration?: RegistrationView | null;
   error?: string;
+}
+
+/** (#4970 길) 마지막 커넥터 확인 → 서버에서 이 사람의 Claude 로그인. 순수. 로그인 사유가 아닌 실패(시간 초과 등)는 모른다(null). */
+export function claudeLoginOf(scan: { ok: boolean; error: string | null } | null | undefined): boolean | null {
+  if (!scan) return null;
+  if (scan.ok) return true;
+  return scan.error === "not-logged-in" || scan.error === "not-claude-ai-login" ? false : null;
+}
+
+/** (#4970) 프로브 결과 → 길 사실. 순수 — 시험이 직접 부른다. */
+export function routeFactsOf(
+  spec: Pick<AppSpec, "routes">, p: Probe,
+  ctx: {
+    heldBy: "lively" | "workspace"; canRegister: boolean; canCollect: boolean;
+    aiPolicy: "allowed" | "blocked" | "unknown"; aiMine: Map<string, string> | null; aiLogin?: boolean | null;
+  },
+): AppRouteFacts {
+  const f: AppRouteFacts = {};
+  //  한 수집기를 앱 연결·개인 토큰이 함께 쓰는 앱(깃허브): 모으는 중이면 어느 길로인가 — 앱이 없으면 토큰, 내가 토큰만 있으면 토큰, 그 밖엔 앱.
+  const shared = !!(spec.routes.app && spec.routes.token);
+  const viaToken = shared ? p.collecting && ((!!p.via?.token && !p.via?.app) || !p.app_ready) : p.collecting;
+  if (spec.routes.app) {
+    f.app = {
+      ready: p.app_ready, heldBy: ctx.heldBy, canRegister: ctx.canRegister, canCollect: ctx.canCollect,
+      meConnected: shared ? !!p.via?.app : p.me_connected,
+      collecting: shared ? p.collecting && !viaToken : p.collecting,
+    };
+  }
+  if (spec.routes.aiApp) {
+    const st = ctx.aiMine?.get(spec.routes.aiApp) ?? null;
+    f.ai = { aiApp: spec.routes.aiApp, policy: ctx.aiPolicy, mine: (st as NonNullable<AppRouteFacts["ai"]>["mine"]) ?? null, login: ctx.aiLogin ?? null };
+  }
+  if (spec.routes.token) {
+    f.token = { canCollect: ctx.canCollect, meConnected: shared ? !!p.via?.token : p.me_connected, collecting: shared ? viaToken : p.collecting };
+  }
+  return f;
 }
 
 const orgConnectStatus: Capability = {
   name: "org_connect_status", title: "외부 앱 연결 상태(한 번에)",
   description:
-    "외부 앱 연결 상태를 앱마다 한 번에 돌려준다 — 연결 스킬(liv-connect)의 첫 걸음. variant(managed=라이블리 클라우드 · selfhost=직접 설치) · " +
+    "외부 앱 연결 상태를 앱마다 한 번에 돌려준다 — 연결 스킬(liv-connect)의 첫 걸음. " +
     "prereq{vault_ready(자격 금고 키 — 없으면 어떤 연결도 저장 못 함)·callback_url(외부 앱에 등록할 콜백 주소, gateway_url 미설정이면 null)} · " +
-    "can_collect(수집 켜기 가능) · apps[]{app·label·skill(넘길 스킬)·can_register(앱 등록 가능)·app_ready·me_connected·collecting·" +
-    "next(register_app|ask_admin|preparing|connect|set_scope|collecting)·connect_url(라이블리 화면 절대 주소)·note}. " +
-    "앱 하나의 조회가 실패해도 나머지는 돌려준다(그 앱만 error).",
+    "can_collect(수집 켜기 가능) · apps[]{app·label·skill(넘길 스킬)·connect_url(라이블리 화면 절대 주소)·note · " +
+    "routes[](연결할 수 있는 길, 우선순위 순: kind app=라이블리 앱 · ai=구성원 Claude 커넥터(ai_app) · token=개인 토큰 / " +
+    "state collecting·set_scope·connected·connect·register·reconnect·ask_admin·preparing·off / needs=claude_login 이면 Claude 로그인부터) · " +
+    "recommended(권하는 길의 자리) · blocked_before(그 앞의 막힌 길) · registration(앱 등록 안내 — 라이블리 앱 길이 register·ask_admin 일 때만)}. " +
+    "옛 칸(variant·next·app_ready·me_connected·collecting·can_register)도 함께 온다. 앱 하나의 조회가 실패해도 나머지는 돌려준다(그 앱만 error · routes=null).",
   scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/connect-status"], parse: () => ({}) }] },
   handler: async (_input, user) => {
@@ -131,6 +205,16 @@ const orgConnectStatus: Capability = {
     const profileUrl = await getOrgProfile().then((p) => p.gateway_url ?? null).catch(() => null);
     let callbackUrl: string | null = null;
     try { callbackUrl = profileUrl ? new URL("/oauth/callback", profileUrl).toString() : null; } catch { callbackUrl = null; }
+    //  (#4970 길) 배포 차이는 «라이블리 앱을 누가 쥐나» 하나로만 길 판정에 들어간다.
+    const heldBy = variant === "managed" ? "lively" as const : "workspace" as const;
+    //  구성원 Claude 커넥터 — 정책(못 읽으면 unknown = 막음) · 내 커넥터 상태(못 읽으면 null = «연결» 로 권한다, R14).
+    //  마지막 확인(scan)으로 서버의 Claude 로그인도 본다 — 로그인이 없으면 Claude 길의 첫 걸음이 «로그인» 이다.
+    const [aiPolicy, aiMe] = await Promise.all([
+      memberAiConnectorsPolicy().catch(() => "unknown" as const),
+      listMemberAiConnectors({ memberId: user.userId }).then((ms) => ms[0] ?? null).catch(() => undefined),
+    ]);
+    const aiMine = aiMe === undefined ? null : new Map<string, string>((aiMe?.connectors ?? []).map((c) => [String(c.app), String(c.status)]));
+    const aiLogin = aiMe === undefined ? null : claudeLoginOf(aiMe?.scan);
     const apps = await Promise.all(CONNECT_APPS.map(async (a): Promise<ConnectAppStatus> => {
       const canRegister = a.registerBy === "admin" ? admin : canCollect;
       const common = {
@@ -143,9 +227,19 @@ const orgConnectStatus: Capability = {
           variant, needsApp: a.needsApp, appReady: p.app_ready,
           canRegister, canCollect, meConnected: p.me_connected, collecting: p.collecting,
         });
-        return { ...common, app_ready: p.app_ready, me_connected: p.me_connected, collecting: p.collecting, next, note: p.note ?? null };
+        const d = decideRoutes(routeFactsOf(a, p, { heldBy, canRegister, canCollect, aiPolicy, aiMine, aiLogin }));
+        const appRoute = d.routes.find((r) => r.kind === "app");
+        const registration = appRoute && !p.app_ready && (appRoute.state === "register" || appRoute.state === "ask_admin")
+          ? registrationView(a.app, { callbackUrl, gatewayUrl: profileUrl }) : null;
+        return {
+          ...common, app_ready: p.app_ready, me_connected: p.me_connected, collecting: p.collecting, next, note: p.note ?? null,
+          routes: d.routes, recommended: d.recommended, blocked_before: d.blocked_before, ...(registration ? { registration } : {}),
+        };
       } catch (e) {
-        return { ...common, app_ready: null, me_connected: null, collecting: null, next: null, note: null, error: (e as Error)?.message?.slice(0, 200) ?? "조회 실패" };
+        return {
+          ...common, app_ready: null, me_connected: null, collecting: null, next: null, note: null,
+          routes: null, recommended: null, blocked_before: null, error: (e as Error)?.message?.slice(0, 200) ?? "조회 실패",
+        };
       }
     }));
     return { variant, prereq: { vault_ready: secretsEnabled(), callback_url: callbackUrl }, can_collect: canCollect, gateway_url: base, apps };

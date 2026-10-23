@@ -1,4 +1,4 @@
-// 외부 앱 연결 스킬(connect-skills.ts) 계약 — 원본 동기화 · 판 선택 · 잠금 · 배포 병합 · 유출 가드(#4970).
+// 외부 앱 연결 스킬(connect-skills.ts) 계약 — 원본 동기화 · 길 상태(판 없음) · 앱 등록 안내 · 잠금 · 배포 병합 · 유출 가드(#4970).
 //  사양: 정책 P1~P11 · 엣지 E1~E18(아래 각 블록 머리에 표기). DB 없이 도는 순수 검증 —
 //  잠금 거절(E11)은 핸들러가 DB 를 건드리기 **전에** 409 를 던지는지로 본다(DB 가 없어 그 뒤로 가면 다른 에러가 난다).
 //  실행: npm run build && node dist/org/delivery/connect-skills.test.js
@@ -8,9 +8,10 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CONNECT_SKILL_SOURCES } from "./connect-skills.sources.js";
 import {
-  CONNECT_COMMON_SOURCE, CONNECT_SKILL_SPECS, assembleConnectBody, connectSkills, connectSourceParts, connectVariant,
+  CONNECT_COMMON_SOURCE, CONNECT_SKILL_SPECS, REGISTRATION_SLOT, assembleConnectBody, connectSkills, connectSource, connectVariant,
   effectiveAsset, isLockedSkill, lockedSkillIds, withLockedAssets,
 } from "./connect-skills.js";
+import { APP_REGISTRATIONS, registrationMarkdown } from "../connect-registration.js";
 import { DEFAULT_SKILLS } from "./default-content.js";
 import { assetContentHash } from "../store/harness-assets.js";
 import { registry } from "../../capabilities/index.js";
@@ -21,8 +22,6 @@ const SRC_DIR = path.join(REPO_ROOT, "src", "org", "delivery", "connect-skills")
 
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
-const VARIANTS = ["managed", "selfhost"] as const;
-const hasSplit = (key: string) => CONNECT_SKILL_SOURCES[`${key}.managed`] !== undefined;
 
 // ── E13 / P9 원본 동기화 — connect-skills.sources.ts == connect-skills/*.md (키·바이트) ──
 {
@@ -46,37 +45,25 @@ const hasSplit = (key: string) => CONNECT_SKILL_SOURCES[`${key}.managed`] !== un
   ok("E14 원본 이름이 CLAUDE.md·AGENTS.md·GEMINI.md 와 겹치지 않음");
 }
 
-// ── P3·P4 카탈로그 — 모든 스킬이 두 판 모두 원본을 갖고, 반쪽 분리·고아 원본이 없다 ──
-//  한 키의 원본 = 판 파일(<키>.managed.md·<키>.selfhost.md — 둘 다 있거나 둘 다 없거나) + 공용 파일(<키>.md, 선택). 적어도 하나는 있어야 한다.
+// ── P3·P4 카탈로그 — 스킬마다 원본 하나 · 판 파일(.managed·.selfhost)이 없다 · 고아 원본 없음 ──
+//  (#4970 길) 스킬은 배포 방식으로 갈리지 않는다 — 갈림은 org_connect_status 의 길 상태다(상민님 2026-10-23).
 {
-  const used = new Set<string>();
   const ids = new Set<string>();
   const keys = [...CONNECT_SKILL_SPECS.map((s) => s.source), CONNECT_COMMON_SOURCE];
   for (const spec of CONNECT_SKILL_SPECS) { assert.ok(!ids.has(spec.id), `스킬 id 중복: ${spec.id}`); ids.add(spec.id); }
-  for (const key of keys) {
-    const hasM = CONNECT_SKILL_SOURCES[`${key}.managed`] !== undefined;
-    const hasS = CONNECT_SKILL_SOURCES[`${key}.selfhost`] !== undefined;
-    const hasShared = CONNECT_SKILL_SOURCES[key] !== undefined;
-    assert.equal(hasM, hasS, `'${key}' 는 managed·selfhost 판을 둘 다 두거나 둘 다 없어야 함(반쪽 분리 금지 — 한 판이 공용 파일만 받게 된다)`);
-    assert.ok(hasM || hasShared, `'${key}' 의 원본(${key}.md 또는 ${key}.<판>.md)이 없음`);
-    if (hasM) { used.add(`${key}.managed`); used.add(`${key}.selfhost`); }
-    if (hasShared) used.add(key);
-  }
-  const orphan = Object.keys(CONNECT_SKILL_SOURCES).filter((k) => !used.has(k));
+  for (const key of keys) assert.ok(CONNECT_SKILL_SOURCES[key] !== undefined, `'${key}' 의 원본(${key}.md)이 없음`);
+  const variants = Object.keys(CONNECT_SKILL_SOURCES).filter((k) => /\.(managed|selfhost)$/.test(k));
+  assert.deepEqual(variants, [], `★ 판 파일이 남아 있다 — 배포 방식으로 가르지 않는다: ${variants.join(", ")}`);
+  const orphan = Object.keys(CONNECT_SKILL_SOURCES).filter((k) => !keys.includes(k));
   assert.deepEqual(orphan, [], `어느 스킬도 쓰지 않는 원본: ${orphan.join(", ")}`);
-  ok(`P3 카탈로그 ${CONNECT_SKILL_SPECS.length}종 — 두 판 원본 존재 · 반쪽 분리 없음 · 고아 원본 없음`);
+  ok(`P3 카탈로그 ${CONNECT_SKILL_SPECS.length}종 — 원본 하나씩 · 판 파일 없음 · 고아 원본 없음`);
 }
 
-// ── E8 원본 해석 — 판 파일 + 공용 파일(이 순서), 없으면 던진다(조용히 빈 본문을 내지 않는다) ──
+// ── E8 원본 해석 — 없으면 던진다(조용히 빈 본문을 내지 않는다) ──
 {
-  assert.throws(() => connectSourceParts("no-such-app", "managed"), /no-such-app/);
-  assert.throws(() => connectSourceParts("no-such-app", "selfhost"), /no-such-app/);
-  const fake = { "a.managed": "M", "a.selfhost": "S", a: "A", b: "B", "c.managed": "CM", "c.selfhost": "CS" };
-  assert.deepEqual(connectSourceParts("a", "managed", fake), ["M", "A"], "판 파일이 먼저, 공용이 뒤");
-  assert.deepEqual(connectSourceParts("a", "selfhost", fake), ["S", "A"]);
-  assert.deepEqual(connectSourceParts("b", "managed", fake), ["B"], "판 파일이 없으면 공용만");
-  assert.deepEqual(connectSourceParts("c", "selfhost", fake), ["CS"], "공용이 없으면 판 파일만");
-  ok("E8 원본 해석 — 판 파일 → 공용 순 · 한쪽만 있어도 됨 · 둘 다 없으면 던짐");
+  assert.throws(() => connectSource("no-such-app"), /no-such-app/);
+  assert.equal(connectSource("a", { a: "A" }), "A");
+  ok("E8 원본 해석 — 있으면 그것 · 없으면 던짐");
 }
 
 // ── E15 / P8 id 규칙 = 캡처 제외 규칙(capture-default-content.mjs isLockedConnectSkillId) · DEFAULT_SKILLS 와 겹치지 않음 ──
@@ -111,42 +98,56 @@ const hasSplit = (key: string) => CONNECT_SKILL_SOURCES[`${key}.managed`] !== un
   ok("E6 판 선택 — 비밀 있음=managed · 없음/공백=selfhost");
 }
 
-// ── E7 / P3·P4 합치기 — 본문 = 원본 + 공통, 제목으로 시작. 판이 갈린 앱은 다르고 서로 섞이지 않는다 ──
+// ── E7 / P3·P4 합치기 — 본문 = 원본(앱 등록 자리를 안내로 채워) + 공통, 제목 하나로 시작 ──
 {
-  let split = 0;
+  let withReg = 0;
   for (const spec of CONNECT_SKILL_SPECS) {
-    for (const v of VARIANTS) {
-      const body = assembleConnectBody(spec, v);
-      assert.ok(body.startsWith("# "), `'${spec.id}'(${v}) 본문은 제목(# )으로 시작해야 함(판 파일이 있으면 판 파일, 없으면 공용 파일 첫 줄)`);
-      const own = connectSourceParts(spec.source, v);
-      assert.ok(body.startsWith(own[0].trim()), `'${spec.id}'(${v}) 본문이 자기 첫 원본으로 시작하지 않음`);
-      for (const part of own) assert.ok(body.includes(part.trim()), `'${spec.id}'(${v}) 본문에 원본 조각이 빠짐`);
-      assert.equal((body.match(/^# /gm) ?? []).length, 1, `'${spec.id}'(${v}) 본문에 제목(# )이 하나여야 함 — 공용 파일이 제목을 또 달았는지 확인`);
-      assert.ok(body.trimEnd().endsWith(connectSourceParts(CONNECT_COMMON_SOURCE, v).map((p) => p.trim()).join("\n\n")), `'${spec.id}'(${v}) 본문 끝에 공통 부분이 없음`);
-    }
-    if (hasSplit(spec.source)) {
-      split++;
-      const m = assembleConnectBody(spec, "managed"), s = assembleConnectBody(spec, "selfhost");
-      assert.notEqual(m, s, `'${spec.id}' 는 판을 나눴는데 본문이 같음`);
-      assert.ok(!m.includes(CONNECT_SKILL_SOURCES[`${spec.source}.selfhost`].trim()), `'${spec.id}' 매니지드 본문에 셀프호스트 원본이 섞임`);
-      assert.ok(!s.includes(CONNECT_SKILL_SOURCES[`${spec.source}.managed`].trim()), `'${spec.id}' 셀프호스트 본문에 매니지드 원본이 섞임`);
-    } else {
-      assert.equal(assembleConnectBody(spec, "managed"), assembleConnectBody(spec, "selfhost"), `'${spec.id}' 는 판을 안 나눴는데 본문이 다름`);
+    const body = assembleConnectBody(spec);
+    assert.ok(body.startsWith("# "), `'${spec.id}' 본문은 제목(# )으로 시작해야 함`);
+    assert.equal((body.match(/^# /gm) ?? []).length, 1, `'${spec.id}' 본문에 제목(# )이 하나여야 함 — 공통 부분·안내가 제목을 또 달았는지 확인`);
+    assert.ok(body.trimEnd().endsWith(connectSource(CONNECT_COMMON_SOURCE).trim()), `'${spec.id}' 본문 끝에 공통 부분이 없음`);
+    assert.ok(!body.includes(REGISTRATION_SLOT), `'${spec.id}' 본문에 앱 등록 자리가 그대로 남았다`);
+    if (APP_REGISTRATIONS[spec.source]) {
+      withReg++;
+      assert.ok(body.includes(registrationMarkdown(spec.source)), `★ '${spec.id}' 본문에 앱 등록 안내(화면과 같은 글)가 없다`);
     }
   }
-  assert.ok(split >= 1, "판을 나눈 앱이 하나도 없다 — 매니지드/셀프호스트 분리가 실제로 쓰이는지 확인");
-  ok(`E7 합치기 — 원본+공통 · 판 분리 앱 ${split}종은 판끼리 다르고 섞이지 않음`);
+  assert.equal(withReg, Object.keys(APP_REGISTRATIONS).length, "앱 등록 안내가 있는 앱마다 그 스킬에 들어갔다");
+  //  자리와 안내가 어긋나면 내려보내기 전에 던진다(조용히 안내 없는 본문을 내지 않는다).
+  const fakeSpec = { ...CONNECT_SKILL_SPECS.find((s) => s.source === "gitlab")! };
+  assert.throws(() => assembleConnectBody(fakeSpec, { gitlab: `# g\n${REGISTRATION_SLOT}`, _common: "c" }), /앱 등록 자리/, "안내 없는 앱에 자리");
+  const slackSpec = CONNECT_SKILL_SPECS.find((s) => s.source === "slack")!;
+  assert.throws(() => assembleConnectBody(slackSpec, { slack: "# s\n자리 없음", _common: "c" }), /앱 등록 자리/, "안내 있는 앱에 자리 없음");
+  ok(`E7 합치기 — 원본+공통 · 앱 등록 안내 ${withReg}종이 자리에 들어감 · 어긋나면 던짐`);
 }
 
-// ── E18 / P11 content_hash — 내려가는 필드의 해시와 같다(두 판 모두) ──
+// ── E19 (#4970 길) 앱 스킬은 길 상태로 고른다 — «길 고르기» · recommended · 옛 next= 갈림 없음 ──
 {
-  for (const v of VARIANTS) {
-    for (const s of connectSkills(v)) {
-      assert.equal(s.content_hash, assetContentHash({ kind: s.kind, harness: s.harness, description: s.description, body: s.body, frontmatter: s.frontmatter }),
-        `'${s.id}'(${v}) content_hash 가 assetContentHash 와 다름 — materializer 변경감지가 어긋난다`);
-    }
+  for (const spec of CONNECT_SKILL_SPECS) {
+    if (!/^liv-connect-/.test(spec.id) || spec.id === "liv-connect-claude") continue;
+    const body = assembleConnectBody(spec);
+    assert.match(body, /^## 길 고르기$/m, `'${spec.id}' 에 «길 고르기» 절이 없다`);
+    assert.ok(body.includes("`routes`") || body.includes("길은 개인 토큰(`token`) 하나"), `'${spec.id}' 가 길 목록을 안 읽는다`);
+    assert.doesNotMatch(body, /`next=/, `★ '${spec.id}' 에 옛 next= 갈림이 남았다`);
+    assert.doesNotMatch(body, /라이블리 클라우드라|회사가 직접 설치한 라이블리라/, `'${spec.id}' 가 배포 방식으로 안내를 가른다`);
   }
-  ok("E18 content_hash == assetContentHash(두 판)");
+  const router = assembleConnectBody(CONNECT_SKILL_SPECS.find((s) => s.id === "liv-connect")!);
+  assert.match(router, /`recommended`/, "입구 스킬이 권하는 길을 읽는다");
+  assert.match(router, /driver:"http"/, "목록에 없는 앱 — 범용 수집기(키로 읽기)");
+  assert.match(router, /driver:"webhook"/, "목록에 없는 앱 — 밀어 넣기(웹훅)");
+  assert.match(router, /\/hooks\/collector\//, "웹훅 받는 주소");
+  const claude = assembleConnectBody(CONNECT_SKILL_SPECS.find((s) => s.id === "liv-connect-claude")!);
+  assert.match(claude, /## 0\. 길 상태/, "Claude 커넥터 스킬이 ai 길 상태로 시작한다");
+  ok("E19 길 상태 — 앱 스킬 «길 고르기» · 옛 next= 없음 · 입구 스킬 범용 HTTP·웹훅 · Claude 커넥터 0절");
+}
+
+// ── E18 / P11 content_hash — 내려가는 필드의 해시와 같다 ──
+{
+  for (const s of connectSkills()) {
+    assert.equal(s.content_hash, assetContentHash({ kind: s.kind, harness: s.harness, description: s.description, body: s.body, frontmatter: s.frontmatter }),
+      `'${s.id}' content_hash 가 assetContentHash 와 다름 — materializer 변경감지가 어긋난다`);
+  }
+  ok("E18 content_hash == assetContentHash");
 }
 
 // ── E17 / P10 유출 가드 — 모든 고객 박스에 배포된다(seed-content.test.ts 의 LEAK·MD_ASSET_LEAK 과 같은 잣대 + 이슈 번호) ──
@@ -162,18 +163,16 @@ const hasSplit = (key: string) => CONNECT_SKILL_SOURCES[`${key}.managed`] !== un
     { re: /src\/org\/delivery/, why: "배포 메커니즘 자기참조(내부 경로)" },
     { re: /#\d{3,5}\b/, why: "내부 이슈 번호" },
   ];
-  for (const v of VARIANTS) {
-    for (const s of connectSkills(v)) {
-      const text = `${s.body}\n${s.description}\n${s.summary}\n${s.label}`;
-      for (const { re, why } of LEAK) assert.ok(!re.test(text), `연결 스킬 '${s.id}'(${v}) 에 ${why} 로 보이는 것이 있음`);
-    }
+  for (const s of connectSkills()) {
+    const text = `${s.body}\n${s.description}\n${s.summary}\n${s.label}`;
+    for (const { re, why } of LEAK) assert.ok(!re.test(text), `연결 스킬 '${s.id}' 에 ${why} 로 보이는 것이 있음`);
   }
-  ok("E17 유출 가드 — 두 판 모두 0건");
+  ok("E17 유출 가드 — 0건");
 }
 
 // ── E1~E5 / P1·P7 배포 병합 — DB 의 잠긴 행은 빼고 코드 판을 항상, 정확히 한 번 싣는다 ──
 {
-  const expectBody = (id: string) => connectSkills(connectVariant()).find((s) => s.id === id)!.body;
+  const expectBody = (id: string) => connectSkills().find((s) => s.id === id)!.body;
   // E1 DB 행 0건(시딩 실패)
   const e1 = withLockedAssets([], {});
   assert.deepEqual(e1.map((a) => a.id).sort(), lockedSkillIds().sort(), "E1 DB 가 비어도 잠긴 스킬 전부");
