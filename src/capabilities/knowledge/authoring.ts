@@ -778,7 +778,7 @@ export const knowledgeSetFields: Capability = {
     assertNoContentSecrets(input);   // #4501 — patch 안쪽 문자열까지 본다
     const capped = applySoftCaps("knowledge_set_fields", input, KFIELDS_CAPS);
     // 이름 정규화 → 공개범위 검사 순서는 set_title 과 같다(정규화한 이름의 행을 고치므로 검사도 그 이름을 본다).
-    input.name = slugify(input.name);
+    input.name = await resolveKnowledgeName(input.name);   // 저장·set_title 과 같은 정규화(대소문자만 다른 실재 이름을 그 행으로)
     await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
     const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
     if (gate.isCreate || !gate.before) {
