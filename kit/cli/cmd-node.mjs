@@ -488,7 +488,10 @@ async function assertNotGatewayBox(tmuxPath) {
  */
 export function parseNodeArgv(rest = []) {
   const out = { action: "run", daemon: false, id: null, rest: [], error: null };
-  const args = (Array.isArray(rest) ? rest : []).map((a) => String(a));
+  // `--json-events` 는 모든 명령이 받는 앱↔CLI 전역 계약이고 main() 이 이미 소비했다 — 여기선 없는 셈 친다.
+  //  모르는 옵션으로 거부하면 데스크톱 앱의 «설치 끝 노드 자동 시작»(`node --daemon --json-events`)과 [노드 정지]가
+  //  늘 실패한다 — v0.1.369(#4006)부터 앱 설치가 «설치 완료» 아래 «실패 · 다시 시도» 로 끝났다(2026-10-23 윈도우 실기기 실측).
+  const args = (Array.isArray(rest) ? rest : []).map((a) => String(a)).filter((a) => a !== "--json-events");
   // 도움말이 가장 세다 — `--daemon --help` 처럼 섞여 와도 **아무것도 기동하지 않는다**(그게 이 가드의 요지다).
   if (args.some((a) => a === "--help" || a === "-h") || args[0] === "help") return { ...out, action: "help" };
   if (args[0] === "stop") return { ...out, action: "stop", rest: args.slice(1) };
