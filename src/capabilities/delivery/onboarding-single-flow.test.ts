@@ -173,5 +173,28 @@ await t("G 계정 목록이 설치 여부(installed)를 싣는다", () => {
   assert.match(body, /installed: installed\[i\]/, "설치 여부를 안 싣는다");
 });
 
+await t("F8·G2 격리 박스 — 로그인 전에 그 사람 서버 계정을 갖춘다(장면이 준비를 묻고 다 되면 그린다 · 로그인 시작이 끝까지 기다린다)", () => {
+  //  안 갖추면 첫 세션 전 로그인이 공용 자리로 가고(resolveMemberOsUser «미프로비저닝 → 공유 폴백»), 계정이 생긴 뒤엔 «로그인 안 됨».
+  //  기다림의 순서 자체는 login-seat-prep.test(S·P 행)가 동작으로 잰다 — 여기는 배선이다.
+  assert.match(OAI, /api\('\/api\/ui\/me\/ai-login\/prepare', \{ method: 'POST', body: JSON\.stringify\(\{ retry \}\) \}\)/, "장면이 계정 준비를 안 묻는다");
+  const prep = OAI.slice(OAI.indexOf("const prepare = async"), OAI.lastIndexOf("void prepare();"));
+  assert.ok(prep.length > 200, "준비 흐름을 못 찾았다 — 검사가 헛돈다");
+  assert.match(prep, /if \(state === 'preparing' \|\| \(!state && sawPreparing\)\) \{[\s\S]*?setTimeout\(\(\) => \{ void prepare\(\); \}, PREP_POLL_MS\);[\s\S]*?return;/, "★ 만드는 중인데 목록을 그린다(«이 서버 공용 계정» 거짓 문구)");
+  assert.ok(prep.indexOf("void reload();") > prep.indexOf("state === 'failed'"), "준비 판정보다 먼저 목록을 그린다");
+  const R = code(readFileSync(new URL("../../terminal/routes.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
+  const pr = R.slice(R.indexOf('app.post("/api/ui/me/ai-login/prepare"'), R.indexOf('app.post("/api/ui/me/ai-login/start"'));
+  assert.match(pr, /const state = await prepareMemberSeat\(seatDeps\(req\)/, "준비 라우트가 계정 준비를 안 부른다");
+  assert.match(pr, /res\.json\(\{ ok: true, state \}\)/, "준비 상태를 안 돌려준다 — 화면이 언제 그릴지 모른다");
+  const start = R.slice(R.indexOf('app.post("/api/ui/me/ai-login/start"'), R.indexOf('app.get("/api/ui/me/ai-login/state"'));
+  const w = start.indexOf("await awaitMemberSeat(seatDeps(req));"), seat = start.indexOf("const seat = await loginSeat(req);");
+  assert.ok(w > 0 && seat > w, "★ 로그인 자리를 정한 뒤에 계정을 기다린다 — 첫 로그인이 공용 자리로 간다");
+  assert.match(R, /const seatDeps = [\s\S]*?inflight: \(\) => memberProvisioning\(u\)/, "진행 중인 만들기를 안 본다 — 계정만 생긴 순간 넘어간다");
+  const hl = R.slice(R.indexOf('app.post("/api/ui/me/headless-login/start"'), R.indexOf('app.get("/api/ui/me/headless-login/state"'));
+  assert.ok(hl.length > 100, "헤드리스 로그인 시작을 못 찾았다 — 검사가 헛돈다");
+  const hw = hl.indexOf("await awaitMemberSeat(seatDeps(req));"), hs = hl.indexOf("const seat = await loginSeat(req);");
+  assert.ok(hw > 0 && hs > hw, "★ 헤드리스 로그인 시작이 계정 준비를 안 기다린다 — 같은 틈");
+  assert.match(prep, /if \(state === 'preparing' \|\| \(!state && sawPreparing\)\) \{\s*sawPreparing = true;/, "★ «준비하는 중» 뒤 한 번 못 물으면 목록을 그린다(거짓 «공용 계정» 이 되살아난다)");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

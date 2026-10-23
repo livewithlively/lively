@@ -793,15 +793,47 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
       try {
         if (!(await getMember(memberId))) return null;    // 에이전트/비-멤버 → 프로비저닝 안 함(비격리)
         await provisionMemberOs(memberId);                // useradd·홈700·그룹·키트(첫 세션만; 수 초)
+        provisionFailedAt.delete(memberId);
         return await resolveMemberOsUser(userSlug(user)); // 이제 box_ 존재 → 격리
       } catch (e) {
         console.warn(`[terminal] 구성원 OS 유저 lazy 프로비저닝 실패(${memberId}) — 비격리 폴백:`, (e as Error)?.message ?? e);
+        provisionFailedAt.set(memberId, Date.now());
         return null;
       } finally { inflightProvision.delete(memberId); }
     })();
     inflightProvision.set(memberId, p);
   }
   return p;
+}
+
+/** (#4970) 만들기가 실패한 시각 — 그 뒤 잠깐은 «실패» 로 답한다(화면이 몇 초마다 묻는데 그때마다 1~2분짜리 만들기를 다시 띄우지 않게). */
+const provisionFailedAt = new Map<string, number>();
+export const PROVISION_RETRY_MS = 5 * 60_000;
+/** 사람이 «다시 해 보기» 를 눌렀다 — 실패 표식을 지운다(다음 state 가 absent 가 되어 다시 만든다). */
+export function clearProvisionFailure(user: LivelyUser): void { const id = ownerId(user); if (id) provisionFailedAt.delete(id); }
+
+/** (#4970) 그 사람의 OS 계정을 **지금** 만드는 중이면 그 일(끝나면 OS 유저 이름 또는 null). 아니면 undefined.
+ *  ⚠ ensureMemberOsUser 의 빠른 길은 계정이 «있으면» 곧바로 돌아온다 — 그런데 계정(useradd)은 만들기 초반에 생기고, 1~2분의 대부분은
+ *   그 뒤(키트 · 구성원 몫 claude·codex 설치)다. 그래서 «다 만들어질 때까지» 기다려야 하는 쪽(화면 안 로그인 시작)은 이걸 먼저 본다(격리 리뷰). */
+export function memberProvisioning(user: LivelyUser): Promise<string | null> | undefined {
+  const id = ownerId(user);
+  return id ? inflightProvision.get(id) : undefined;
+}
+
+/** (#4970) 그 사람의 OS 계정 상태 — 처음 설정 «AI 연결» 이 로그인 전에 묻는다.
+ *  none = 계정이 필요 없다(격리 박스가 아님 · 매니지드 중계 · 구성원이 아님) · absent = 아직 없다 · preparing = 만드는 중 ·
+ *  ready = 있다 · failed = 방금 만들다 실패했다(PROVISION_RETRY_MS 동안). */
+export type MemberOsState = "none" | "absent" | "preparing" | "ready" | "failed";
+export async function memberOsState(user: LivelyUser): Promise<MemberOsState> {
+  if (memberExecConfigured() || !isolationInfraReady()) return "none";
+  const id = ownerId(user);
+  if (!id) return "none";
+  if (inflightProvision.has(id)) return "preparing";
+  if (await resolveMemberOsUser(userSlug(user))) return "ready";
+  if (!(await getMember(id))) return "none";
+  const failed = provisionFailedAt.get(id);
+  if (failed !== undefined && Date.now() - failed < PROVISION_RETRY_MS) return "failed";
+  return "absent";
 }
 
 // 세션 owner 의 OS 계정(#524) — 파일 API 가 격리 홈(멤버 700)의 op 를 그 uid 로 내릴 때 쓴다.

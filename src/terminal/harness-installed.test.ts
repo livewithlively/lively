@@ -5,13 +5,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { harnessInstalled, installedCheckLine, INSTALLED_TTL_MS, INSTALLED_UNKNOWN_TTL_MS, type InstalledDeps } from "./harness-installed.js";
+import { harnessInstalled, installedCheckLine, memberInstallerPresent, INSTALLED_TTL_MS, INSTALLED_UNKNOWN_TTL_MS, type InstalledDeps } from "./harness-installed.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
 
 /** 셸 호출을 세는 가짜 자리 — 배선 단언(불렸나·몇 번)의 근거. */
-function deps(o: { relayed: boolean; listed?: readonly string[] | null; run?: boolean | null; now?: () => number }): InstalledDeps & { lines: string[] } {
+function deps(o: { relayed: boolean; listed?: readonly string[] | null; run?: boolean | null; now?: () => number; memberInstallers?: string[] }): InstalledDeps & { lines: string[] } {
   const lines: string[] = [];
   return {
     lines,
@@ -20,6 +20,7 @@ function deps(o: { relayed: boolean; listed?: readonly string[] | null; run?: bo
     run: async (line) => { lines.push(line); return o.run === undefined ? null : o.run; },
     now: o.now ?? (() => 1_000),
     memo: new Map(),
+    memberInstaller: (k) => (o.memberInstallers ?? []).includes(k),
   };
 }
 const IMAGE = ["claude", "codex", "antigravity", "grok"];
@@ -72,6 +73,24 @@ await t("B8 같은 답은 잠깐 기억한다 — 상한 안 두 번째는 셸 0
   await harnessInstalled("claude", u);
   assert.equal(u.lines.length, 2, "모름을 너무 오래 기억한다 — 고쳐진 뒤에도 모름으로 남는다");
   assert.ok(INSTALLED_UNKNOWN_TTL_MS < INSTALLED_TTL_MS, "모름은 답보다 짧게");
+});
+
+await t("B10 셀프호스트 격리 박스 — 구성원마다 까는 하네스(클로드·챗GPT)는 도우미가 있으면 설치로 친다 · 게이트웨이 자리는 안 묻는다", async () => {
+  const d = deps({ relayed: false, run: false, memberInstallers: ["claude", "codex"] });
+  assert.equal(await harnessInstalled("codex", d), true, "★ 격리 박스에서 챗GPT 가 «없음» 으로 숨는다(게이트웨이 사용자에겐 codex 가 없다)");
+  assert.equal(await harnessInstalled("claude", d), true);
+  assert.equal(d.lines.length, 0, "도우미가 답했는데 셸을 돌렸다");
+  assert.equal(await harnessInstalled("grok", d), false, "도우미가 없는 하네스는 박스 자리 답(설치 스크립트로 /usr/local/bin)");
+  assert.equal(d.lines.length, 1);
+});
+
+await t("B11 구성원 몫 도우미 판정 — 격리 박스이고 그 하네스의 도우미가 있을 때만(격리 꺼짐 · 도우미 없음 · 도우미 없는 하네스는 아님)", async () => {
+  const all = (): boolean => true, none = (): boolean => false;
+  assert.equal(memberInstallerPresent("codex", true, all), true);
+  assert.equal(memberInstallerPresent("codex", false, all), false, "★ 격리가 꺼졌는데 구성원 몫 도우미를 «설치됨» 으로 친다(그 박스엔 구성원 계정이 없다)");
+  assert.equal(memberInstallerPresent("codex", true, none), false, "도우미가 없는데 «설치됨»");
+  assert.equal(memberInstallerPresent("grok", true, all), false, "도우미가 없는 하네스(박스 전체 설치)를 도우미로 친다");
+  assert.equal(memberInstallerPresent("claude", true, (p) => p === "/opt/lively/libexec/install-claude-user"), true, "배선 — 실제 도우미 경로를 본다");
 });
 
 await t("B9 셀프호스트 확인 줄 — PATH 에 없어도 홈의 ~/.local/bin 에 있으면 설치로 친다(실제 셸)", async () => {

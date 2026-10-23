@@ -160,6 +160,32 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     })().finally(() => { running = null; });
     return running;
   };
-  void reload();
+  //  격리 박스(셀프호스트)면 그 사람의 서버 계정부터 갖춘다(서버 login-seat-prep 머리말) — 만드는 중이면 몇 초마다 다시 묻고, 다 되면 그린다.
+  //   ⚠ 다 되기 전에 그리지 않는다 — 계정이 없는 동안 목록은 챗GPT·그록을 «이 서버 공용 계정» 으로 말하고([연결]이 격리 박스에서 거짓
+  //    물음을 띄운다), 공용 홈에 우연히 있던 자격으로 «연결됨» 이 켜질 수 있다(격리 리뷰). 격리 박스가 아니면 서버가 곧바로 none.
+  //   처음에 못 물었으면(옛 서버 404 · 끊김) 그냥 그린다 — 처음 설정이 막히면 안 된다. 단 «준비하는 중» 을 본 뒤에 한 번 못 물은
+  //   것(배포 중 5xx 한 번)은 그리지 않고 다시 묻는다 — 그리면 아직 준비 중인 목록이 «이 서버 공용 계정» 으로 되살아난다(격리 리뷰).
+  const PREP_POLL_MS = 4000;
+  let sawPreparing = false;
+  const prepare = async (retry = false): Promise<void> => {
+    let state = '';
+    try { state = String(((await api('/api/ui/me/ai-login/prepare', { method: 'POST', body: JSON.stringify({ retry }) })) as { state?: unknown } | null)?.state ?? ''); }
+    catch (_) { state = ''; }
+    if (!hooks.alive()) return;
+    if (state === 'preparing' || (!state && sawPreparing)) {
+      sawPreparing = true;
+      list.innerHTML = `<p class="ob-q-help">이 서버에서 쓰실 개인 계정을 준비하고 있어요. 처음 한 번만, 1~2분쯤 걸려요.</p>`;
+      setTimeout(() => { void prepare(); }, PREP_POLL_MS);
+      return;
+    }
+    if (state === 'failed') {
+      list.innerHTML = `<p class="ob-q-help">이 서버에서 쓰실 개인 계정을 만들지 못했어요. 관리자에게 알려 주세요 — 그동안은 아래 «PC에서 쓰는 AI로» 를 쓰실 수 있어요.</p>
+        <button type="button" class="ob-linkbtn ob-ai-retry">다시 해 보기</button>`;
+      list.querySelector<HTMLButtonElement>('.ob-ai-retry')!.onclick = () => { list.innerHTML = ''; void prepare(true); };
+      return;
+    }
+    void reload();
+  };
+  void prepare();
   return { reload };
 }
