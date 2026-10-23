@@ -446,6 +446,9 @@ main() {
     sudo bash "$RELEASE_DIR/deploy/refresh-member-kits.sh" 2>&1 | sed 's/^/  /' \
       || warn "멤버 키트 리프레시 경고 — 수동: sudo bash $RELEASE_DIR/deploy/refresh-member-kits.sh"
   fi
+  # 서버 AI 넷(#4970) — update.sh 와 같은 단계(없는 것만 · 실패는 경고 — common.sh ensure_server_ais). 위 리프레시와 같은 까닭으로
+  #  새 릴리스의 도우미를 쓴다(이 스크립트를 옛 자리에서 돌려도). flip 뒤라 실패해도 배포는 성공으로 둔다.
+  ensure_server_ais "$RELEASE_DIR/deploy"
 
   phase "완료"
   ok "active=$idle  릴리스=$RELEASE_DIR"

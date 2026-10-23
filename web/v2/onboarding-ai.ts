@@ -176,7 +176,7 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     if (!hooks.alive()) return;
     if (state === 'preparing' || (!state && sawPreparing)) {
       sawPreparing = true;
-      list.innerHTML = `<p class="ob-q-help">이 서버에서 쓰실 개인 계정을 준비하고 있어요. 처음 한 번만, 1~2분쯤 걸려요.</p>`;
+      list.innerHTML = `<p class="ob-q-help">이 서버에서 쓰실 개인 계정을 준비하고 있어요. 처음 한 번만 하면 되고, 다 되면 바로 이어져요.</p>`;
       setTimeout(() => { void prepare(); }, PREP_POLL_MS);
       return;
     }

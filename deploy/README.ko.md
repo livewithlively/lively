@@ -117,7 +117,7 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 | 4 빌드 | 소스 배포(git clone·rsync)면 `npm ci && npm run build`. 릴리스 번들(`dist` 동봉·`src` 없음)이면 빌드 생략, `npm ci --omit=dev` 만 |
 | 5 서비스+TLS | (Linux) 메모리 안전장치 — swap 이 없으면 swap 파일 생성 + earlyoom (`LIVELY_SWAP_SIZE`, 기본 8G · `LIVELY_MEM_SAFETY=off` 로 생략) → systemd(Linux) / launchd(Mac) 등록·기동 + `/healthz`(listen) + **`/readyz` `schema=ready` 대기**(스키마 자가 마이그레이션·첫 부팅 자가 재기동까지) + `LIVELY_DOMAIN` 있으면 Caddy 자동 HTTPS |
 | 6 부트스트랩 | 첫 관리자(웹 세션 로그인 계정) · 익명 baseline · 기본 커넥터 시드 — `deploy/bootstrap-*.mjs` (⚠ 준비 대기 뒤에 · 스키마 미준비면 ≤60s 자체 재시도). **하나라도 실패하면 요약에 ✗ 로 나오고 install.sh 가 비-0 으로 끝난다** — 게이트웨이는 떠 있으니 ✗ 항목의 명령만 재실행하면 된다 |
-| 7 중앙박스 키트 | 호스트 claude 에 lively 설치(MCP+훅+컨텍스트) — `deploy/install-kit.sh`. **웹터미널 세션이 맥락 CRUD 가능해짐.** |
+| 7 서버 AI + 중앙박스 키트 | (Linux) 서버에서 띄울 AI 넷(클로드·챗GPT·제미나이·그록) 중 없는 것을 깐다 — 실패는 경고(아래 «서버 AI 프로그램») → 호스트 claude 에 lively 설치(MCP+훅+컨텍스트) — `deploy/install-kit.sh`. **웹터미널 세션이 맥락 CRUD 가능해짐.** |
 
 환경변수: `LIVELY_DOMAIN`(설정 시 자동 HTTPS — 아래 [TLS](#tls-자동-https--caddy)) · `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL`
 · `BOOTSTRAP_ADMIN_PASSWORD`(생략 시 랜덤) · `ORG_DOMAIN` · `WITH_EMBEDDINGS=1`(임베딩 사이드카+provider=http+설치 말미 백필까지 e2e — t4g.large+ 권장) · `FORCE=1`(기존 :8080 감지 무시).
@@ -155,6 +155,7 @@ ssh -i ~/.ssh/<key> ubuntu@<host> 'cd <APP_DIR> && bash deploy/update.sh --kit'
 | | 최초 설치 (`install.sh`) | 업데이트 (`update.sh`) |
 |---|---|---|
 | 의존성(docker·node·tmux·claude) | 설치 | 건드리지 않음 |
+| 서버 AI 넷(클로드·챗GPT·제미나이·그록, Linux) | 없는 것만 설치 | 없는 것만 설치(재시작 뒤) — 있는 것은 새 판으로 올리지 않음 |
 | `.env`·시크릿 | 없으면 생성 | 보존 |
 | store(pgvector) | 생성 | 멱등 반영(이미지/compose 변경만) |
 | 메모리 안전장치(Linux swap·earlyoom) | 설정 | 멱등 재적용(기존 설정 존중) |
@@ -327,11 +328,18 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
   멤버가 그 세션에서 한 번 로그인한다(`LIVELY_MULTIPROFILE=0` = 단일 유저 박스용 공유 모드). Linux 는 멤버별 OS 유저 격리도 선택할 수 있다
   (`sudo bash deploy/linux/install-isolation.sh`, #524). 격리를 켜면 AI 넷(클로드·챗GPT·제미나이·그록)의 로그인이 모두 구성원 홈에 따로 남는다.
   격리가 없으면 클로드만 멤버별(위 프로필)이고 나머지는 박스 공용 계정 하나다.
-- 서버 AI 프로그램: 클로드는 설치기가(격리면 구성원마다), 챗GPT 는 격리 구성원마다(install-codex-user) 깐다. 제미나이·그록은
-  `sudo bash deploy/install-harness-clis.sh [agy] [grok]` 로 박스 전체(/usr/local/bin)에 깐다(#4970 — 매니지드 세션 이미지와 같은 설치).
-  처음 설정 «AI 연결» 은 이 서버에 깔린 AI 만 보인다. 제미나이·그록 갱신은 같은 스크립트를 `FORCE=1` 로 다시 돌린다(업데이트가 갱신하지 않는다).
+- 서버 AI 프로그램(#4970): 설치(`install.sh` 7/7)와 업데이트(`update.sh` · blue-green `deploy-release.sh`)가 넷을 갖춘다 — 없는 것만 깔고, 실패는 경고로 넘어간다(리눅스).
+  하나에 `LIVELY_SERVER_AIS_TIMEOUT` 초(기본 600)까지 기다린다. 처음 받을 때는 수백 MB~1GB 안팎이다(실측 클로드 280MB · 챗GPT 424MB, 그록 165MB,
+  제미나이 따로). 바깥 사이트(claude.ai · npm · x.ai · antigravity.google)에서 실행 파일을 받으면 안 되는 박스는 `LIVELY_SERVER_AIS=off` 로 끈다.
+  게이트웨이 유저 몫으로 클로드(네이티브)·챗GPT(install-codex-user), 박스 전체(/usr/local/bin)에 제미나이·그록(install-harness-clis —
+  매니지드 세션 이미지와 같은 설치). 격리 박스는 구성원마다 클로드·챗GPT 를 따로 깐다(provision-member). 처음 설정 «AI 연결» 은 이 서버에
+  깔린 AI 만 보인다. 손으로 다시 돌리려면 `sudo bash deploy/install-harness-clis.sh [agy] [grok]`. 이미 있는 것은 업데이트가 새 판으로
+  올리지 않는다 — 클로드·챗GPT 는 스스로 올리고, 제미나이·그록은 같은 스크립트를 `FORCE=1` 로 다시 돌린다. 챗GPT 를 깔 때 게이트웨이
+  유저의 `~/.npmrc` 끝에 주석 한 줄과 `prefix=<그 홈>/.npm-global` 이 더해진다(이미 prefix 가 있으면 그대로 — 챗GPT 자동 업데이트가 그 홈에
+  쓰게). 게이트웨이가 root 로 돌면 챗GPT 는 깔지 않는다(root 의 npm 전역 자리를 바꾸지 않으려고 — 필요하면 `sudo npm i -g @openai/codex`).
   요구: root · `runuser`(util-linux) · `nobody` 계정 · curl · 실행 가능한 임시 자리(`/tmp` 가 noexec 면 `TMPDIR=/var/tmp`). 설치기는 권한 없는 계정으로 돈다.
-  격리 박스에서는 처음 설정 «AI 연결» 을 여는 구성원마다 서버 계정(홈 + 구성원 몫 claude·codex, 수백 MB)이 생긴다(PC 의 AI 로 하는 사람도).
+  격리 박스에서는 처음 설정을 여는 구성원마다 서버 계정(홈 + 구성원 몫 claude·codex, 수백 MB)이 생긴다 — 만들기는 인사 장면에서 시작해 인사·이름을
+  보는 동안 돈다(PC 의 AI 로 하는 사람 · 인사에서 [나중에 할게요] 로 나가는 사람도).
   격리 구성원 키트는 넷(claude·codex·antigravity·grok)을 배선한다 — **이미 계정이 있는 구성원**은 `provision-member.sh` 를 다시 돌려야 넷을 받는다(멱등).
 
 ## 디렉토리 구조 (Linux/Mac 패리티가 구조로 드러남 — 주요 파일만)
@@ -361,7 +369,7 @@ deploy/
     lively-gateway@.service     # blue-green 템플릿 유닛(color 인스턴스)
     lively-loopback.{socket,service} # blue-green :8080 loopback alias
     install-isolation.sh        # 멤버별 OS 유저 격리(opt-in, #524)
-  install-harness-clis.sh       # 제미나이(agy)·그록 CLI 를 박스 전체에(opt-in, #4970)
+  install-harness-clis.sh       # 제미나이(agy)·그록 CLI 를 박스 전체에(설치·업데이트가 부른다, #4970)
   mac/                # ── macOS 지원 ──
     provision.sh                          # brew(tmux·node)·docker 확인·claude / launchd 설치
     io.lvly.lively.plist        # launchd plist 템플릿

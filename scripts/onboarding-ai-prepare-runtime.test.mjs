@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 처음 설정 «AI 연결» 장면 — 서버 계정 준비(격리 박스)를 기다리는 흐름 (#4970, 런타임).
 //
-//  왜: 격리 박스에서 그 사람의 서버 계정(box_<사람>)이 다 만들어지기(1~2분) 전에 목록을 그리면 챗GPT·그록이 «이 서버 공용 계정» 으로
+//  왜: 격리 박스에서 그 사람의 서버 계정(box_<사람>)이 다 만들어지기 전에 목록을 그리면 챗GPT·그록이 «이 서버 공용 계정» 으로
 //   보이고([연결]이 거짓 물음을 띄운다) 로그인은 깔리는 중인 codex 를 «없음» 으로 만난다(격리 리뷰 2026-10-23). 장면은 서버에 준비를
 //   묻고(POST /api/ui/me/ai-login/prepare → state), 준비 중이면 안내만 보이며 4초마다 다시 묻고, 다 되면 그린다.
 //
@@ -13,6 +13,9 @@
 //   Q5  failed → 안내 + «다시 해 보기» · 묻기 멈춤 · 누르면 retry:true · 그 뒤 준비 중 → ready 면 그린다
 //   Q6  옛 서버(prepare 404) → 곧바로 그린다(처음 설정이 막히면 안 된다)
 //   Q7  준비 중에 장면을 떠나면(PC 경로) 묻기를 멈춘다 — 이미 걸어 둔 다음 묻기도 나가지 않는다(종전엔 한 번 더 나갔다)
+//   Q0  처음부터 열면(이어 열 자리 없음) 인사 장면에서 이미 준비를 시작한다(retry 아님 · 계정 목록은 안 묻는다) — 인사·이름을 보는 동안 끝나게.
+//       이름 장면은 또 묻지 않는다 · AI 장면은 다시 묻고(그 결과로 그린다) · 이른 물음이 못 물어도(500) 인사 장면은 그대로 · 화면 오류 없음.
+//       (AI 장면부터 이어 열면 그 장면만 묻는다 — Q1~Q7 의 물음 수가 그것을 잠근다.)
 //  fail-first(2026-10-23): `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다 — 88fb373c4(v0.1.379)는 Q7 만
 //   빨갛다(«떠난 뒤에도 1번 더 물었다»), 그 전 판(v0.1.378)은 AI 장면 자체가 없어 장면이 죽는다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import assert from "node:assert/strict";
@@ -128,6 +131,32 @@ async function PAGE_MAIN() {
   await sleep(9000);
   R.q7 = { ...R.q7, ...view(host), asksLater: n() };
 
+  //  Q0 — 처음부터 연다(탭에 남은 자리 없음 · 서버도 없음) → 인사 → 이름 → AI
+  const mountFresh = () => {
+    sessionStorage.removeItem("lively-ob-v2");
+    const old = document.getElementById("root"); const h = document.createElement("div"); h.id = "root"; old.replaceWith(h);
+    OB.renderOnboarding(h, {});
+    return h;
+  };
+  calls.prepare = []; calls.accounts = 0;
+  PREP = []; PREP_DEFAULT = "ready";
+  host = mountFresh();
+  await sleep(600);
+  R.q0a = { intro: !!host.querySelector("#introGo"), asks: n(), retry: calls.prepare[0] ? calls.prepare[0].retry : null, accounts: calls.accounts };
+  host.querySelector("#introGo")?.click();
+  await sleep(300);
+  R.q0b = { name: !!host.querySelector("#nameIn"), asks: n() };
+  const nameIn = host.querySelector("#nameIn");
+  if (nameIn) nameIn.value = "민";
+  host.querySelector("#nameGo")?.click();
+  await sleep(900);
+  R.q0c = { ...view(host), ai: !!host.querySelector("#aiList"), asks: n() };
+  calls.prepare = []; PREP = [500];
+  const errsBefore = R.errors.length;
+  host = mountFresh();
+  await sleep(600);
+  R.q0d = { intro: !!host.querySelector("#introGo"), asks: n(), newErrors: R.errors.length - errsBefore };
+
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
 }
 
@@ -172,7 +201,7 @@ t("Q5 failed → 안내 + 다시 해 보기 · 묻기 멈춤 · 누르면 retry:
   assert.match(R.q5a.text, /만들지 못했어요/, `실패 안내가 없다: ${R.q5a.text}`);
   assert.equal(R.q5a.retry, true, "«다시 해 보기» 가 없다");
   assert.equal(R.q5a.rows, 0);
-  assert.equal(R.q5a.asksLater, R.q5a.asks, "실패인데 계속 묻는다(1~2분짜리 만들기를 몇 초마다 다시 띄운다)");
+  assert.equal(R.q5a.asksLater, R.q5a.asks, "실패인데 계속 묻는다(오래 걸리는 만들기를 몇 초마다 다시 띄운다)");
   assert.equal(R.q5b.asks, R.q5a.asksLater + 1, "«다시 해 보기» 가 묻지 않았다");
   assert.equal(R.q5b.lastRetry, true, "★ «다시 해 보기» 가 retry:true 를 안 보낸다 — 서버가 실패 표식을 안 지운다");
   assert.match(R.q5b.text, PREPARING);
@@ -185,6 +214,20 @@ t("Q7 준비 중에 장면을 떠나면 묻기를 멈춘다 — 걸어 둔 다�
   assert.notEqual(R.q7.scene, "ai", "배선 — 장면을 안 떠났다");
   assert.ok(R.q7.asksAtLeave >= 1, "배선 — 떠나기 전에 한 번도 안 물었다");
   assert.equal(R.q7.asksLater, R.q7.asksAtLeave, `★ 장면을 떠난 뒤에도 ${R.q7.asksLater - R.q7.asksAtLeave}번 더 물었다`);
+});
+t("Q0 처음부터 열면 인사 장면에서 이미 준비를 시작한다 · 이름 장면은 또 묻지 않는다 · AI 장면이 다시 묻고 그린다 · 못 물어도 인사 그대로", () => {
+  assert.equal(R.q0a.intro, true, "배선 — 인사 장면이 아니다");
+  assert.equal(R.q0a.asks, 1, `★ 인사 장면에서 준비를 시작하지 않는다(${R.q0a.asks}) — AI 장면까지 기다리게 된다`);
+  assert.equal(R.q0a.retry, false, "이른 물음이 retry 다 — 실패 뒤 막음을 사람 몰래 푼다");
+  assert.equal(R.q0a.accounts, 0, "인사 장면에서 계정 목록을 물었다");
+  assert.equal(R.q0b.name, true, "배선 — 이름 장면이 아니다");
+  assert.equal(R.q0b.asks, 1, "이름 장면에서 또 물었다");
+  assert.equal(R.q0c.ai, true, "배선 — AI 장면이 아니다");
+  assert.equal(R.q0c.asks, 2, `AI 장면이 다시 묻지 않았다(${R.q0c.asks})`);
+  assert.equal(R.q0c.rows, 4, `ready 인데 넷을 안 그렸다: ${JSON.stringify(R.q0c)}`);
+  assert.equal(R.q0d.intro, true, "이른 물음이 못 물었더니 인사 장면이 깨졌다");
+  assert.equal(R.q0d.asks, 1, "배선 — 이른 물음이 나가지 않았다");
+  assert.equal(R.q0d.newErrors, 0, "이른 물음 실패가 화면 오류를 냈다");
 });
 t("화면 오류 0", () => { assert.deepEqual(R.errors, []); });
 console.log(`onboarding-ai-prepare-runtime.test: ${pass} ok`);
