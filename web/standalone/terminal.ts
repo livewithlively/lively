@@ -2572,7 +2572,9 @@ function arrowSeq(letter) {
 //   첫 누름이 «확정»으로만 쓰여(isComposing) 두 번 눌러야 보내졌다. 끝 글자가 이미 확정이면 한 번에 가서, 같은 손짓이 때마다
 //   달랐다(원준: «어떨 땐 바로 입력까지 되고 어떨 땐 … 보내기까지 눌러야 했고»). 이제 자판의 리턴은 **줄바꿈**이다(카카오톡 기본값).
 //  ② 쓰던 글은 탭 저장소에 둔다 — 화면 복구·재연결로 이 페이지가 다시 뜨면 글 상자가 비어 «내용이 날아갔다».
-//  ③ 선택지 숫자는 **AI 가 번호로 물을 때만** 글쇠 줄 자리에 뜬다(평소엔 자리만 먹는다).
+//  ③ 선택지 숫자는 **AI 가 번호로 물을 때만** 글쇠 줄 맨 앞에 붙는다(평소엔 자리만 먹는다). 글쇠는 그대로 남는다 —
+//   종전엔 번호가 글쇠 줄을 **갈아 끼워** Esc 가 사라졌는데, /permissions 처럼 «❯ 1.» 목록이지만 번호가 안 먹는 화면에선
+//   번호도 안 먹고 Esc 도 없어 빠져나올 길이 없었다(상민 2026-10-25, #4990).
 //  ④ ⇧Tab 은 «모드» 단추다 — 지금 모드 이름을 화면 아래 상태 줄에서 읽어 단추에 적는다.
 let mdockComposing = false;
 let msendEl = null, mkeysEl = null, mpicksEl = null, mmodeT = null;
@@ -2658,8 +2660,10 @@ function scanScreen() {
       const b = mTouchBtn(String(i), i + '번 고르기', () => { userTyped = true; sendInput(TERM_UI.choiceNeedsEnter ? i + '\r' : String(i)); });
       b.classList.add('mpick'); btns.push(b);
     }
-    mpicksEl.replaceChildren(el('span', { class: 'mpicks-t', text: '번호로 고르기' }), ...btns);
-    mpicksEl.hidden = n === 0; mkeysEl.hidden = n > 0;
+    mpicksEl.replaceChildren(...btns);
+    mpicksEl.hidden = n === 0;
+    //  줄을 옆으로 밀어 둔 채였으면 번호가 화면 밖 맨 앞에 붙는다 — 번호가 새로 서면 줄을 처음으로 되돌린다.
+    if (n > 0) mkeysEl.scrollLeft = 0;
   }
   if (mmodeT) { const nm = modeName(detectMode(screenTail(8))) || '고르기'; if (mmodeT.textContent !== nm) mmodeT.textContent = nm; }
 }
@@ -2764,14 +2768,14 @@ export function setupMobileDock(mainEl) {
   modeKey.replaceChildren(el('span', { class: 'mkey-l', text: '모드' }), mmodeT, mIcon('mkey-caret', IC_CARET)); modeKey.classList.add('mkey-mode');
   //  Tab 은 뺐다 — 글은 아래 글 상자에서 쓰므로 터미널 자동 완성(Tab)이 닿을 자리가 없다(원준 «왜 필요해?»).
   //  ^C(Ctrl+C)도 뺐다(원준 2026-09-26 «그냥 필요 없을 듯, 빼 버리자») — AI 를 멈추는 건 Esc 이고, 클로드 코드는 Ctrl+C 를 두 번 받으면 꺼진다.
-  mkeysEl = el('div', { class: 'mkeys' },
+  mpicksEl = el('div', { class: 'mpicks', hidden: '', role: 'group', 'aria-label': '번호로 고르기' });
+  mkeysEl = el('div', { class: 'mkeys' }, mpicksEl,
     key('Esc', '\x1b', 'Esc — AI 가 하던 일 멈추기'), key('⏎', '\r', 'Enter 만 보내기'),
     key('↑', () => arrowSeq('A')), key('↓', () => arrowSeq('B')),
     modeKey,
     key('←', () => arrowSeq('D')), key('→', () => arrowSeq('C')),
     tbtn('복사', '화면 글자 고르기·복사', openCopySheet),
     tbtn('붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
-  mpicksEl = el('div', { class: 'mpicks', hidden: '' });
   mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기',
     autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'enter', 'aria-label': '터미널에 보낼 글' });
   msendEl = tbtn('', '보내기', mobileSend);
@@ -2808,7 +2812,7 @@ export function setupMobileDock(mainEl) {
   });
   //  쓰던 글 되살리기(②).
   try { const d = sessionStorage.getItem(MDRAFT_KEY); if (d) { mcompEl.value = d; } } catch (_) { /* noop */ }
-  mdockEl = el('div', { id: 'mdock' }, mkeysEl, mpicksEl, el('div', { class: 'mrow' }, attachBtn, fileIn, mcompEl, msendEl));
+  mdockEl = el('div', { id: 'mdock' }, mkeysEl, el('div', { class: 'mrow' }, attachBtn, fileIn, mcompEl, msendEl));
   mainEl.append(mdockEl);
   mobileGrow(); paintSend();
   try { term.onRender(scheduleScan); } catch (_) { /* noop */ }
@@ -3214,7 +3218,8 @@ function openHelpMobile() {
       line('글 상자 왼쪽 + 단추를 누르면 사진 보관함, 사진 찍기, 파일 선택이 뜹니다. 고른 파일이 올라가고 그 위치가 글 상자에 들어가요. 무엇을 할지 덧붙여 보내세요.'),
       line('사진 앱에서 복사한 사진은 글 상자에 붙여넣어도 됩니다.')),
     sec(ai + '가 번호로 물을 때',
-      line('번호를 고르는 질문이 뜨면 글쇠 줄이 번호 단추로 바뀝니다. 번호를 누르면 바로 골라져요.')),
+      line('번호를 고르는 질문이 뜨면 글쇠 줄 맨 앞에 번호 단추가 붙습니다. 번호를 누르면 바로 골라져요.'),
+      line('번호를 눌러도 반응이 없는 목록(설정 화면 등)은 ↑ ↓ 로 옮기고 ⏎ 로 고르거나, Esc 로 나오세요.')),
     sec('글쇠 줄',
       keyRow('Esc', ai + '가 하던 일 멈추기'),
       keyRow('⏎', '빈 Enter 보내기'),
