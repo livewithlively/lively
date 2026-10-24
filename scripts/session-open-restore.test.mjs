@@ -92,7 +92,9 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "③-i 멈춘 세션에 보내면 되살리기 경로로 간다");
   //  ⚠ 순서가 계약이다 — 되살리기 → **말 전달** → 라우팅. 옮겨 간 뒤에 보내면 이 컴포넌트는 destroy 된
   //   뒤라 실패해도 아무도 모른다. beforeRoute 훅이 그 순서를 강제한다.
-  ok(/if \(beforeRoute\) await beforeRoute\(nextId\);[\s\S]{0,200}?opts\.onResumed\(nextId\)/.test(chat),
+  //  #4996 — 같은 id 로 되살린 화면(stayIfSame)은 옮겨 가지 않는다 — 그때도 말 전달이 먼저고(beforeRoute(nextId, true)) 그 뒤엔 라우팅이 없다.
+  ok(/if \(beforeRoute\) await beforeRoute\(nextId, false\);[\s\S]{0,200}?opts\.onResumed\(nextId\)/.test(chat)
+    && /if \(hint\?\.stayIfSame && nextId === target\.id && !moved\) \{\s*\n\s*if \(beforeRoute\) await beforeRoute\(nextId, true\);\s*\n\s*return true;/.test(chat),
     "③-j 되살린 세션에 말을 넣는 일이 화면 이동보다 먼저다");
   ok(/rememberFirstPrompt\(newId, text\)/.test(chat) && /export function rememberFirstPrompt/.test(read("web/v2/quick-session.ts")),
     "③-k 방금 친 말이 옮겨 간 화면에서도 보이게 첫 지시로 등록된다");
@@ -328,7 +330,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   // C3 — 복원은 됐는데 말 전달만 실패해도 옮겨 간다. 그 글은 옮겨 간 화면의 입력칸으로.
   //  훅 본문은 **resumeSession 호출이 끝나는 자리**(finally)까지로 자른다 — 첫 `});` 로 자르면 api 호출 줄에서 끊겨
   //   catch 안의 throw 를 못 본다(뮤테이션으로 확인한 공허).
-  const hook = revive.slice(revive.indexOf("async (newId) =>"), revive.indexOf("} finally { reviving = false; }"));
+  const hook = revive.slice(revive.indexOf("async (newId, stay) =>"), revive.indexOf("} finally { reviving = false; }"));
   ok(/try \{\s*\n\s*await api\(`\/api\/ui\/terminal\/sessions\/\$\{encodeURIComponent\(newId\)\}\/prompt`/.test(hook)
     && /takeFirstPrompt\(newId\);/.test(hook) && /rememberUnsentDraft\(newId, text\);/.test(hook) && hook.length > 0 && !/\bthrow\b/.test(hook),
     "⑩-C3a ★ 말 전달 실패가 라우팅을 막지 않는다 — 제자리에 남으면 두 줄·갇힘이 그대로다(글은 새 화면 입력칸으로)");

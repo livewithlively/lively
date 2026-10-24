@@ -38,8 +38,9 @@
 //       대화창에 대기 말풍선으로 **한 번** 보인다(매니지드 실측: 되살린 뒤 6초 동안 그 말이 없었다)
 //   W20b 같은데 기록의 마지막 사람 말이 이미 그 말이다 → 두 번 그리지 않는다(대기 말풍선 없음)
 //   W21 멈춘 세션 대화창에서 말을 보내 되살리는 중(복원 요청이 느리다) 목록 갱신이 «살아 있다» 를 먼저 실어 온다
-//       → 옛 화면은 터미널로 넘기지 않는다(곧 다시 마운트돼 숨겨 붙인다) · 복원이 끝나면 같은 id 로 옮겨 간다
-//       (매니지드 실측: 옛 화면이 빈 터미널로 넘어갔다가 다시 마운트되며 대화창으로 돌아가는 깜빡임)
+//       → 옛 화면은 터미널로 넘기지 않는다(매니지드 실측: 옛 화면이 빈 터미널로 넘어갔다가 다시 마운트되며 대화창으로 돌아가는 깜빡임)
+//       · #4996 같은 id 로 되살아나면 옮겨 가지 않는다(화면을 다시 만들지 않는다 · 알림 없음) — 그 화면이 숨겨 붙였다가 말이 들어간 뒤 넘긴다
+//       · 되살린 직후 «중단됨» 을 실은 늦은 목록 갱신이 붙인 터미널을 걷지 않는다
 //   W22 되살린 화면(매니지드 행 · 기록 있음) · 하네스가 먼저 그리고 말은 2.6초에 들어간다 → 그린 뒤에도 대화창(대기 말풍선 그대로)
 //       · 말이 기록에 나타난 뒤 터미널(읽는 주기 0.7초 안) · 대기 줄은 걷힌다
 //   W23 그렸는데 말이 끝내 안 들어간다(로그인·경고 창) → 그린 뒤 4초에도 대화창 · 그린 때부터 8초 뒤 터미널(그 창을 보게)
@@ -483,23 +484,34 @@ async function PAGE_MAIN() {
       R.w20b = { during: v.snap(), n: v.count("되살리며 보낸 말 W20"), qstate: v.qstate() };
       v.done();
     }
-    // W21 — 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 온다
+    // W21 — 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 온다 · #4996 같은 id 로 되살아나면 그 화면이 그대로 이어 간다
     {
       let routed = null;
       const v = mount("box-w21", "ink=300", { onResumed: (id) => { routed = id; } }, false);
       await sleep(400);
       const inp = v.input();
+      const wrap0 = v.box.querySelector(".sc-wrap");
       R.w21 = { before: v.snap(), hasInput: !!inp };
       inp.value = "되살리며 보낸 말 W21"; inp.dispatchEvent(new Event("input"));
       const form = inp.closest("form");
       if (form && form.requestSubmit) form.requestSubmit(); else inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      echoAt("box-w21", 2600, "되살리며 보낸 말 W21");                  // 하네스가 뜬 뒤 그 말이 기록에 들어간다
       await sleep(300);
       v.h.update(row("box-w21", true));                                 // 복원 응답보다 먼저 온 목록 갱신
       await sleep(200);
       R.w21.duringRevive = v.snap();
-      await sleep(1200);
+      await sleep(900);                                                 // 복원 응답(0.9초) 뒤 — 같은 화면이 «전달 대기» 로 숨겨 붙인다
+      R.w21.afterRestore = v.snap();
+      R.w21.qstate = v.qstate();
+      v.h.update(row("box-w21", false));                                // #4996 — 되살리기 전 사실(«중단됨») 을 실은 늦은 목록 갱신
+      await sleep(200);
+      R.w21.afterStale = v.snap();
+      await sleep(2600);
       R.w21.routed = routed;
+      R.w21.sameWrap = v.box.querySelector(".sc-wrap") === wrap0 && wrap0.isConnected;
       R.w21.after = v.snap();
+      R.w21.n = v.count("되살리며 보낸 말 W21");
+      R.w21.toasts = document.getElementById("toasts").textContent;
       v.done();
     }
     // W22 — 되살린 화면(매니지드 행) · 먼저 그리고 말은 2.6초에 들어간다
@@ -786,8 +798,16 @@ const w20b = R.w20b || {};
 check((w20b.during || {}).warm && w20b.n === 1 && !w20b.qstate, "W20b 기록에 이미 그 말이 있으면 두 번 그리지 않는다(대기 말풍선 없음)", w20b);
 
 const w21 = R.w21 || {};
-check(w21.hasInput && !(w21.duringRevive || {}).term && !(w21.after || {}).term && w21.routed === "box-w21",
-  "W21 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 와도 옛 화면을 빈 터미널로 넘기지 않는다 · 복원 뒤 같은 id 로 옮겨 간다", w21);
+check(w21.hasInput && !(w21.duringRevive || {}).term,
+  "W21 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 와도 옛 화면을 빈 터미널로 넘기지 않는다", w21.duringRevive);
+check(w21.routed === null && w21.sameWrap && !/다시 띄웠|이어받기 세션을 열었/.test(String(w21.toasts || "")),
+  "W21 ★ 같은 id 로 되살아나면 옮겨 가지 않는다(onResumed 없음 · 같은 화면 · 알림 없음) — 종전엔 셸이 탭을 통째로 다시 그렸다(#4996)", { routed: w21.routed, sameWrap: w21.sameWrap, toasts: w21.toasts });
+check((w21.afterRestore || {}).warm && (w21.afterRestore || {}).frame && !(w21.afterRestore || {}).term && /전달 대기 중/.test(String(w21.qstate || "")),
+  "W21 되살린 뒤 같은 화면이 터미널을 숨겨 붙이고 보낸 말은 «전달 대기» 로 남는다(다시 마운트된 화면이 하던 일)", { afterRestore: w21.afterRestore, qstate: w21.qstate });
+check((w21.afterStale || {}).frame && !(w21.afterStale || {}).term,
+  "W21 되살린 직후 «중단됨» 을 실은 늦은 목록 갱신이 방금 붙인 터미널을 걷지 않는다", w21.afterStale);
+check((w21.after || {}).term && !(w21.after || {}).warm && w21.n === 1,
+  "W21 그 말이 들어간 뒤 터미널로 넘어간다 · 보낸 말은 한 번만 보인다", { after: w21.after, n: w21.n });
 
 const w22 = R.w22 || {};
 check(w22.inkAt != null && w22.inkAt < 1200 && (w22.during || {}).warm && !(w22.during || {}).term && (w22.during || {}).chatShown && w22.n === 1 && /전달 대기 중/.test(String(w22.qstate || "")),
