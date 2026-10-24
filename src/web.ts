@@ -13,6 +13,7 @@ import { pruneCallLog } from "./org/policies/call-log-prune.js";
 import { getRuntimeConfig } from "./org/store/runtime-config.js";
 import { backfillSessionStates } from "./sessions/session-state-backfill.js";
 import { reapIdleSessions, reapPressureSessions } from "./sessions/session-reaper.js";
+import { parseTickSkip, tickStepRunner } from "./ops/housekeeping-tick.js"; // #4193 T3 — 정비 틱의 «자동화 단계 빼기»
 import path from "node:path";
 import { readFileSync, statSync } from "node:fs";
 // 자산 세대 계산의 정본 — 서빙(여기)과 굽기(scripts/stamp-assets.mjs)가 같은 것을 쓴다(#2643).
@@ -117,12 +118,13 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  ⚠ 빨리 돌아온다 — 크론 잡 실행은 스케줄러 내부에서 fire-and-forget(중첩은 잡별 락이 막는다).
   //  ⚠ 자가호스팅(고정/단일 테넌트)에서는 부팅 경로가 이미 이 일들을 하므로 이 엔드포인트를 부를
   //   일이 없다 — 있어도 각 단계가 멱등이라 무해하다.
-  app.post("/api/ops/housekeeping/tick", ...mw("admin"), wrap(async (_req, res) => {
+  //  #4193 T3 — 본문 { skip: ["automation"] } 이면 자동화 단계(크론 실행기·리브 2턴)를 빼고 정비만 돈다. CP 가 사람이
+  //   N일 안 들어온 워크스페이스(자동화 휴면)에 이렇게 부른다. 분류·선택 규칙은 ops/housekeeping-tick.ts 머리말.
+  //   응답의 skip 이 적용한 선택이다 — 그 필드가 없는 응답(옛 코어)은 전부 돈 것이다.
+  app.post("/api/ops/housekeeping/tick", ...mw("admin"), wrap(async (req, res) => {
+    const skip = parseTickSkip(req.body);
     const out: Record<string, unknown> = {};
-    const step = async (name: string, fn: () => Promise<unknown>): Promise<void> => {
-      try { out[name] = (await fn()) ?? "ok"; }
-      catch (e) { out[name] = { error: e instanceof Error ? e.message : String(e) }; }
-    };
+    const step = tickStepRunner(skip, out);
     await step("scheduler", async () => { await runSchedulerTickOnce(); return "ticked"; });
     await step("seed-default-content", () => seedDefaultContent());
     await step("call-log-prune", async () => {
@@ -184,7 +186,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     // #4783 — 사유 없이 사라진 판을 확답으로 확인해 «고장(lost)» 으로 적는다(세션 노드·컨테이너 고장). 매니지드만 돈다 —
     //  셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다. 근거는 세션마다의 tmux 확답뿐이다(session-end-lost 머리말).
     await step("session-end-lost", async () => (await import("./sessions/session-end-lost.js")).sweepLostSessions());
-    res.json({ ok: true, steps: out });
+    res.json({ ok: true, steps: out, skip: [...skip] });
   }));
 
   // ── 로컬 로그인/로그아웃/비번변경(P4). 로그인은 미인증 접근(cap 마운트보다 먼저). ──
