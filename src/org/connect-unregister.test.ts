@@ -70,9 +70,16 @@ t("B7 owner 가 접두사만 닮음(membership:x) → 세지 않는다", () => {
 });
 
 // ── C. 끊기는 것 문장 ──
-t("C1 서버 설정 앱 없음 → 지우기 첫 문장: 아무도 새로 연결·다시 연결 못 함", () => {
+t("C1 서버 설정 앱 없음 → 지우기 첫 문장: 라이블리 앱으로는 새로 연결·다시 연결 못 함(다른 길까지 막힌다고 말하지 않는다)", () => {
   const r = registrationImpact("linear", "리니어", L());
-  assert.match(r.remove[0]!, /새로 연결하거나 다시 연결할 수 없어요/);
+  assert.match(r.remove[0]!, /^라이블리 앱으로는 아무도 새로 연결하거나 다시 연결할 수 없어요/);
+});
+t("C14 지운 값은 되살릴 수 없다 — 지우기에만, 서버 설정 앱이 있어도", () => {
+  for (const envFallback of [false, true]) {
+    const r = registrationImpact("google", "구글", L({ envFallback }));
+    assert.ok(has(r.remove, /되살릴 수 없어요/), `envFallback=${envFallback}: ${r.remove.join(" / ")}`);
+    assert.ok(!has(r.replace, /되살릴 수 없어요/), "바꾸기에는 없다");
+  }
 });
 t("C2 서버 설정 앱 있음 → 첫 문장이 서버 설정 값으로 연결 · «아무도 … 없다» 는 없다", () => {
   const r = registrationImpact("google", "구글", L({ envFallback: true, members: { total: 2, expiring: 2 } }));
@@ -115,13 +122,13 @@ t("C8 깃허브 설치 n곳 → 지우기 바로 끊겨요 · 바꾸기 다시 �
   assert.ok(has(r.remove, /설치 2곳.*바로 끊겨요/), r.remove.join(" / "));
   assert.ok(has(r.replace, /설치 2곳.*다시 설치/), r.replace.join(" / "));
 });
-t("C9 모으는 중 + 기한 있는 연결 → 두 쪽 다 «자료 가져오기 … 함께 멈춰요»", () => {
+t("C9 모으는 중 + 기한 있는 연결 → 두 쪽 다 «자료 가져오기 … 멈춰요»", () => {
   const r = registrationImpact("outlook", "아웃룩", L({ collecting: true, members: { total: 1, expiring: 1 } }));
-  assert.ok(has(r.remove, /자료 가져오기.*함께 멈춰요/) && has(r.replace, /자료 가져오기.*함께 멈춰요/));
+  assert.ok(has(r.remove, /자료 가져오기.*멈춰요/) && has(r.replace, /자료 가져오기.*멈춰요/), r.remove.join(" / "));
 });
 t("C9' 모으는 중이어도 기한 있는 연결이 없으면(노션 워크스페이스) «멈춰요» 를 말하지 않는다", () => {
   const r = registrationImpact("notion", "노션", L({ collecting: true, places: [{ id: "w1", name: "위시스트" }] }));
-  assert.ok(!has(r.remove, /함께 멈춰요/) && !has(r.replace, /함께 멈춰요/), r.remove.join(" / "));
+  assert.ok(!has(r.remove, /자료 가져오기.*멈춰요/) && !has(r.replace, /자료 가져오기.*멈춰요/), r.remove.join(" / "));
 });
 t("C10 연결 없음 → 지우기 «아직 없어요» · 바꾸기는 «새 앱으로 연결돼요» 한 줄", () => {
   const r = registrationImpact("linear", "리니어", L());

@@ -103,6 +103,9 @@ function placeNames(places: RegistrationLinks["places"]): string {
   return names.slice(0, 3).join(", ") + (names.length > 3 ? ` 외 ${names.length - 3}곳` : "");
 }
 
+/** 지운 값은 금고에서 사라진다(이력 없음). 비밀 값은 만들 때 한 번만 보여 주는 서비스가 많다(아웃룩 클라이언트 암호 · 깃허브 키 파일). */
+const GONE = "지운 값은 라이블리에서 되살릴 수 없어요 — 다시 등록하려면 그 서비스에서 값을 다시 받아야 하고, 비밀 값은 처음 만들 때만 보여 주는 곳이 많아 새로 만들어야 할 수 있어요.";
+
 /**
  * 바꾸거나 지우면 어떻게 되나 — 사람에게 먼저 할 말. 화면 확인 창과 연결 스킬이 이 문장을 그대로 쓴다.
  *  replace = **다른 앱**으로 바꿀 때(같은 앱의 값만 새로 넣으면 이미 된 연결은 그대로다 — 그 말은 읽는 쪽이 앞에 붙인다).
@@ -117,9 +120,11 @@ export function registrationImpact(app: string, label: string, l: RegistrationLi
   const remove: string[] = [];
   if (l.envFallback) {
     remove.push("서버 설정(환경 변수)에도 이 앱의 값이 있어서, 지운 뒤에는 그 값으로 연결해요 — 여기서 지우는 것은 이 화면에서 넣은 값뿐이에요.");
+    remove.push(GONE);
     if (e) remove.push(`구성원 ${e}명의 연결은 이 화면에서 넣은 앱으로 받은 것이에요 — 서버 설정의 앱이 다른 앱이면 기한이 지나면 끊겨요.`);
   } else {
-    remove.push("아무도 새로 연결하거나 다시 연결할 수 없어요 — 앱을 다시 등록하면 다시 할 수 있어요.");
+    remove.push("라이블리 앱으로는 아무도 새로 연결하거나 다시 연결할 수 없어요 — 앱을 다시 등록하면 다시 할 수 있어요.");
+    remove.push(GONE);
     if (e) remove.push(`구성원 ${e}명의 연결은 기한이 지나면 끊겨요 — 라이블리가 이 앱의 값으로 연결 기한을 늘려 왔는데, 지우면 더 늘릴 수 없어요.`);
     if (k) remove.push(`구성원 ${k}명의 연결은 그대로 쓰여요 — ${label}에서 이 앱을 지우면 그때 끊겨요.`);
   }
@@ -138,7 +143,9 @@ export function registrationImpact(app: string, label: string, l: RegistrationLi
     replace.push(`앱으로 저장소 코드를 가져오는 자격(설치 ${n}곳)이 끊겨요 — 새 앱을 깃허브에 다시 설치해야 해요.`);
   }
   if (l.collecting && e) {
-    const stop = "이 앱의 연결로 모으던 자료 가져오기는 연결이 끊기면 함께 멈춰요 — 이미 모은 자료는 남아요.";
+    //  «곧» — 구글 수집기는 실행마다 조직 앱 값으로 갱신 자격을 다시 채워 다음 실행부터 멈추고(connectors/config.ts
+    //   resolveGoogleTokenSource), 그 밖의 것은 연결 기한이 지날 때 멈춘다. 시점을 하나로 못 박지 않는다.
+    const stop = "이 앱의 연결로 모으던 자료 가져오기도 곧 멈춰요 — 이미 모은 자료는 남아요.";
     if (!l.envFallback) remove.push(stop);
     replace.push(stop);
   }

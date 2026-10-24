@@ -283,7 +283,9 @@ function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: Routes
   const ol = el('ol', { class: 'cn-reg-steps' });
   for (const s of reg.steps) {
     //  번호는 목록이 붙인다(li 는 list-item 그대로) — 칸 배치는 안쪽 상자가 한다. li 를 flex 로 만들면 번호가 사라진다(화면 실측).
-    const li = el('div', { class: 'cn-reg-li' }, el('span', { class: 'cn-reg-t', text: s.text }));
+    //  바꾸기 칸의 단추는 [바꾸기] 다 — 걸음 글의 «[등록] 을 누릅니다» 를 단추 이름에 맞춘다(안내 데이터는 화면·스킬 한 벌이라 여기서만 바꾼다).
+    const text = mode === 'replace' ? s.text.replace('[등록] 을', '[바꾸기] 를') : s.text;
+    const li = el('div', { class: 'cn-reg-li' }, el('span', { class: 'cn-reg-t', text }));
     if (s.link) li.appendChild(stepLink(s.link));
     if (s.copy) {
       li.appendChild(s.copy.value
@@ -471,8 +473,15 @@ function manageBody(a: ConnectAppStatus, g: RegistrationInfo, ctx: RoutesCtx): H
   return out;
 }
 
-/** [등록 지우기] — 끊기는 것을 먼저 보이고(서버 impact.remove), 확인을 받은 뒤 지운다. 지운 뒤 다시 그리면 등록 칸이 다시 선다. */
-async function removeRegistration(a: ConnectAppStatus, g: RegistrationInfo, ctx: RoutesCtx): Promise<void> {
+/**
+ * [등록 지우기] — 끊기는 것을 먼저 보이고(서버 impact.remove), 확인을 받은 뒤 지운다. 지운 뒤 다시 그리면 등록 칸이 다시 선다.
+ *  확인 창 직전에 다시 읽는다 — 칸을 편 채 두는 동안 연결 수가 바뀔 수 있고, 확인 창은 누르는 그때 참인 것만 말해야 한다.
+ *  못 읽으면 칸을 펼 때 읽은 값으로 묻는다. 그새 누가 지웠으면(vault 아님) 묻지 않고 다시 그린다.
+ */
+async function removeRegistration(a: ConnectAppStatus, loaded: RegistrationInfo, ctx: RoutesCtx): Promise<void> {
+  let g = loaded;
+  try { g = await api('/api/ui/org/connect/registration?app=' + encodeURIComponent(a.app)); } catch (_) { g = loaded; }
+  if (g.current.source !== 'vault') { toast('지울 앱 등록이 이미 없어요 — 화면을 다시 그릴게요.'); ctx.reload(); return; }
   const yes = await confirmDialog({
     title: `${a.label} 앱 등록을 지울까요?`, danger: true, confirmText: '등록 지우기',
     message: '라이블리에 넣어 둔 이 앱의 등록 값을 지워요. 이미 된 연결과 모은 자료는 지우지 않아요.',

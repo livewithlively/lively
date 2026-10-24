@@ -178,6 +178,28 @@ t("F6 노션이 아닌 수집기는 token_source 가 org:<ws> 여도 그대로",
   const other = col({ enabled: true, preset_key: "clickup", config: { token_source: "org:ws-1" } });
   assert.deepEqual(stopIds([other], "ws-1"), []);
 });
+const { pinOnStop } = __notionCollectTestables;
+t("F8 안 묶인 «org» 수집기 + 연결이 이 워크스페이스 하나뿐 → 끄면서 그 워크스페이스에 묶는다(다른 워크스페이스가 접수하지 못하게)", () => {
+  const legacy = col({ instance_key: LEGACY_INSTANCE_KEY, config: { token_source: "org" } });
+  assert.equal(pinOnStop(legacy, ["ws-1"], "ws-1", [legacy]), "org:ws-1");
+  const blank = col({ config: { token_source: "org:" } });
+  assert.equal(pinOnStop(blank, ["ws-1"], "ws-1", [blank]), "org:ws-1", "빈 «org:» 도");
+});
+t("F8' 연결이 둘 이상이면 어느 쪽을 모았는지 몰라 묶지 않는다 · 이미 묶인 수집기는 그대로", () => {
+  const legacy = col({ config: { token_source: "org" } });
+  assert.equal(pinOnStop(legacy, ["ws-1", "ws-2"], "ws-1", [legacy]), null);
+  const bound = col({ config: { token_source: "org:ws-1" } });
+  assert.equal(pinOnStop(bound, ["ws-1"], "ws-1", [bound]), null);
+  assert.equal(pinOnStop(legacy, ["ws-2"], "ws-1", [legacy]), null, "목록에 없는 워크스페이스");
+});
+t("F8'' 그 워크스페이스에 이미 묶인 다른 수집기가 있으면 묶지 않는다(한 워크스페이스에 둘이 묶이지 않게)", () => {
+  const legacy = col({ config: { token_source: "org" } });
+  const ca = col({ config: { token_source: "org:ws-1" } });
+  assert.equal(pinOnStop(legacy, ["ws-1"], "ws-1", [legacy, ca]), null);
+  const other = col({ preset_key: "clickup", config: { token_source: "org:ws-1" } });
+  assert.equal(pinOnStop(legacy, ["ws-1"], "ws-1", [legacy, other]), "org:ws-1", "노션이 아닌 수집기는 세지 않는다");
+});
+
 t("F1~F6 섞임 — 끌 것만 고른다", () => {
   const a = col({ enabled: true, config: { token_source: "org:ws-1" } });
   const b = col({ enabled: true, config: { token_source: "org:ws-2" } });

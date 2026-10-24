@@ -24,6 +24,7 @@
 //  G7 릴레이면 단추 없이 안내 한 줄.
 //  G8 조회 실패 → «불러오지 못했어요» + [다시 불러오기] → 다시 조회해 그린다.
 //  G9 이 칸들에 «null»·«undefined» 가 없다.  G10 등록 전 칸은 종전대로 [등록](바꾸기 모드가 새지 않는다).
+//  G11 지운 결과마다 말이 다르다(지울 것 없음 · 서버 설정의 앱이 남음).  G12 확인 창 직전에 다시 읽어 그새 지워졌으면 묻지 않는다.
 //
 // 왜 런타임인가: 결함은 DOM 쪽에서 나왔다(replaceChildren 에 null · li 를 flex 로 만들어 번호가 사라짐). 말 표 시험
 //  (connect-routes-view.test.mjs)은 그것을 못 본다. 실제 화면 모듈(web/v2/connect-routes.ts)을 묶어 진짜 DOM 에서 돌리고,
@@ -108,7 +109,7 @@ const PEM = `${PEM_MARK("BEGIN")}\nZmFrZS1rZXktZm9yLWxpdmVseS1jb25uZWN0LXJ1bnRpb
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</style></head><body>
 <div id="toasts"></div><div id="all"></div><div id="ai"></div><div id="lazy"></div><div id="slack"></div><div id="gh"></div><div id="err"></div><div id="list"></div>
-<div id="mg"></div><div id="mg5"></div><div id="mg6"></div><div id="mg7"></div><div id="mg8"></div><div id="mg10"></div>
+<div id="mg"></div><div id="mg5"></div><div id="mg6"></div><div id="mg7"></div><div id="mg8"></div><div id="mg10"></div><div id="mg11"></div><div id="mg12"></div>
 <pre id="out">PENDING</pre>
 <script>
   window.__calls = []; window.__opened = [];
@@ -122,9 +123,9 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</st
     const u = String(url), method = (opts.method || 'GET').toUpperCase();
     window.__calls.push({ u, method, body: opts.body || null });
     if (u.indexOf('/api/ui/org/slack/app-manifest') >= 0) return json({ create_url: 'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D', redirect_url: 'x' });
-    //  ⚠ «registration» 이 «register» 로 시작한다 — 보기(GET)를 먼저 가른다.
+    //  보기(GET)·지우기를 등록보다 먼저 가른다 — 주소가 모두 /api/ui/org/connect/ 로 시작한다.
     if (u.indexOf('/api/ui/org/connect/registration') >= 0) return window.__regFail ? json({ error: '잠시 읽지 못했어요' }, 500) : json(window.__regInfo[window.__regSource]);
-    if (u.indexOf('/api/ui/org/connect/unregister') >= 0) return json({ ok: true, app: JSON.parse(opts.body).app, deleted: 1, app_ready: false });
+    if (u.indexOf('/api/ui/org/connect/unregister') >= 0) return json({ ok: true, app: JSON.parse(opts.body).app, ...(window.__unregResult || { deleted: 1, app_ready: false }) });
     if (u.indexOf('/api/ui/org/connect/register') >= 0) return json({ ok: true, app: JSON.parse(opts.body).app });
     if (u.indexOf('/api/ui/member-ai-connectors') >= 0) return json({ policy: { state: 'allowed' }, members: [{ member_id: 'me', scan: { ok: true, error: null }, connectors: [{ app: 'Slack', status: 'connected' }] }] });
     if (u.indexOf('/api/ui/collect/units') >= 0) return json({ hidden: 0, visibility_enforced: true, units: [{ id: 1, app: 'slack', kind: 'channel', name: 'general', route: 'member_ai', state: 'active', visibility: 'all', access: 'full', candidates: [] }] });
@@ -285,7 +286,9 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</st
     const items = Array.from(mg.querySelectorAll('.cn-reg-impact li')).map((li) => li.textContent);
     R.g3_impact = items.length === IMP.replace.length && items.every((x, i) => x === IMP.replace[i]);
     const goSwap = btns(mg).find((b) => b.textContent === '바꾸기');
-    R.g3_swap_btn = !!goSwap && !btns(mg).some((b) => b.textContent === '등록');
+    const swapSteps = (mg.querySelector('.cn-reg-swap ol.cn-reg-steps') || {}).textContent || '';
+    R.g3_swap_btn = !!goSwap && !btns(mg).some((b) => b.textContent === '등록')
+      && swapSteps.indexOf('[바꾸기] 를 누릅니다') >= 0 && swapSteps.indexOf('[등록] 을') < 0;
     const sins = Array.from(mg.querySelectorAll('.cn-reg-form input'));
     set(sins[0], ' new-client '); set(sins[1], 'new-secret');
     const before3 = posts().length;
@@ -348,6 +351,41 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${CSS}</st
     const m10 = document.getElementById('mg10');
     m10.appendChild(CR.routesSection(${JSON.stringify(SLACK_REG)}, ctx()));
     R.g10_register = btns(m10).some((b) => b.textContent === '등록') && !btns(m10).some((b) => b.textContent === '바꾸기') && !mgr(m10);
+    // G11 — 지운 결과마다 말이 다르다(지울 것 없음 · 서버 설정의 앱이 남음)
+    const delOnce = async (host, result) => {
+      window.__unregResult = result;
+      const before = unregPosts().length;
+      btns(host).find((b) => b.textContent === '등록 지우기').click();
+      const dlg = await until(() => document.querySelector('.ov-confirm'));
+      if (!dlg) return false;
+      btns(dlg).find((b) => b.textContent === '등록 지우기').click();
+      return !!(await until(() => unregPosts().length > before));
+    };
+    const m11 = document.getElementById('mg11');
+    window.__regSource = 'vault';
+    m11.appendChild(CR.routesSection(EDIT, ctx('g11')));
+    mgr(m11).open = true;
+    await until(() => /notion-client-abc/.test(m11.innerText));
+    const sent0 = await delOnce(m11, { deleted: 0, app_ready: false });
+    const said0 = !!(await until(() => /지울 앱 등록이 없었어요/.test(document.body.innerText)));
+    const sentEnv = await delOnce(m11, { deleted: 1, app_ready: true });
+    //  ⚠ 이 줄은 템플릿 문자열 안이라 정규식의 \( 가 ( 로 풀린다 — 괄호가 든 글은 includes 로 본다.
+    const saidEnv = !!(await until(() => document.body.innerText.includes('서버 설정(환경 변수)의 앱으로 계속 연결해요')));
+    R.g11_toasts = sent0 && said0 && sentEnv && saidEnv;
+    R.g11_parts = [sent0, said0, sentEnv, saidEnv];
+    window.__unregResult = null;
+    // G12 — 칸을 편 뒤 누가 이미 지웠으면(다시 읽으니 vault 아님) 묻지도 보내지도 않고 다시 그린다
+    const m12 = document.getElementById('mg12');
+    m12.appendChild(CR.routesSection(EDIT, ctx('g12')));
+    mgr(m12).open = true;
+    await until(() => /notion-client-abc/.test(m12.innerText));
+    window.__regSource = 'env';
+    const p12 = unregPosts().length, r12 = reloadsOf('g12');
+    btns(m12).find((b) => b.textContent === '등록 지우기').click();
+    const reloaded12 = !!(await until(() => reloadsOf('g12') > r12));
+    await sleep(60);
+    R.g12_stale = reloaded12 && unregPosts().length === p12 && !document.querySelector('.ov-confirm');
+    window.__regSource = 'vault';
   } catch (e) { R.error = String(e && e.stack || e); }
   document.getElementById('out').textContent = JSON.stringify(R) + 'ENDRESULT';
 })();
@@ -387,7 +425,7 @@ check("c10_search", "C10 찾기 칸이 그 밖의 앱에도 먹는다");
 check("g1_closed", "G1 등록한 앱 — «앱 등록 보기 · 바꾸기 · 지우기» 가 접혀 서고, 펴기 전엔 조회하지 않는다");
 check("g2_loaded", "G2 펴면 GET …/registration?app=notion 한 번 · 지금 등록(Client ID)이 보인다");
 check("g3_impact", "G3 [등록 값 바꾸기] — 서버가 준 «다른 앱으로 바꾸면» 문장을 그대로 보인다");
-check("g3_swap_btn", "G3 바꾸기 칸의 단추는 [바꾸기](등록 단추가 아니다)");
+check("g3_swap_btn", "G3 바꾸기 칸의 단추는 [바꾸기](등록 단추가 아니다) · 걸음 글도 «[바꾸기] 를 누릅니다»");
 check("g3_post", "G3 채우면 POST /api/ui/org/connect/register {app, values} — 앞뒤 공백은 뗀다");
 check("g3_reload", "G3 바꾼 뒤 다시 그린다");
 check("g4_lines", "★G4 [등록 지우기] — 확인 창에 서버가 준 «지우면» 문장이 전부 있다");
@@ -400,6 +438,8 @@ check("g7_relay", "G7 릴레이면 단추 없이 안내 한 줄");
 check("g8_retry", "G8 조회 실패 → [다시 불러오기] 로 다시 조회해 그린다");
 check("g9_no_null", "G9 등록한 뒤 칸들에 «null» · «undefined» 가 없다");
 check("g10_register", "G10 등록 전 칸은 종전대로 [등록] · 등록한 뒤 칸이 섞이지 않는다");
-if (fails) console.log(JSON.stringify({ dead: R.c1_dead, heads: R.heads }));
+check("g11_toasts", "G11 지운 결과마다 말이 다르다 — 지울 것이 없었음 · 서버 설정의 앱으로 계속 연결");
+check("g12_stale", "★G12 칸을 편 뒤 그새 지워졌으면(다시 읽으니 등록 없음) 묻지도 보내지도 않고 다시 그린다");
+if (fails) console.log(JSON.stringify({ dead: R.c1_dead, heads: R.heads, g11: R.g11_parts, error: R.error || null }));
 console.log(fails ? `\n${fails}건 실패` : `\n${total}건 통과`);
 process.exit(fails ? 1 : 0);

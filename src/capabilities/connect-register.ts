@@ -88,6 +88,7 @@ const orgConnectRegister: Capability = {
     "셀프호스트에서 외부 앱의 «앱 등록» 값(OAuth 클라이언트 · GitHub App)을 금고에 저장한다 — [외부 앱 연결] ▸ 그 앱 ▸ 앱 등록 칸과 같은 저장. " +
     "app: slack(+ 슬랙 연결 창구도 함께) · notion · google · linear · outlook(관리자) · github(워크스페이스 관리, App ID·Client ID·Client secret·Private key·앱 주소 이름). " +
     "⚠ 비밀 값은 화면에서 넣게 하는 것이 원칙이다 — 대화로 받을 때는 사람에게 먼저 경고한다(연결 스킬 공통 규칙 6). 저장된 값은 다시 볼 수 없다. " +
+    "이미 등록돼 있으면 덮어쓴다(바꾸기) — 그 전에 org_connect_registration 의 impact.replace 를 말한다. 매니지드·릴레이는 409. " +
     "REST 등가: POST /api/ui/org/connect/register {app, values}.",
   scope: "memory", input: registerInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/connect/register"], parse: (req) => req.body ?? {} }] },
@@ -99,6 +100,9 @@ const orgConnectRegister: Capability = {
     const reg = APP_REGISTRATIONS[app];
     if (!save || !reg) throw new HttpError(400, `앱 등록을 받지 않는 앱입니다: ${app}`);
     assertCanRegister(user, save, "앱을 등록할");
+    //  (#4991) 매니지드·릴레이는 라이블리 클라우드가 앱을 쥔다 — 이 서버 금고의 값은 쓰이지 않고(릴레이·플랫폼 값이 먼저다) 사람만 헷갈린다.
+    if (connectVariant() === "managed") throw new HttpError(409, "이 워크스페이스는 라이블리가 앱을 쥐고 있어요 — 앱을 등록할 필요가 없습니다");
+    if (relayHeld(app)) throw new HttpError(409, "이 앱은 라이블리 클라우드로 연결해요 — 이 서버에 앱을 등록할 필요가 없습니다");
     const raw = (i.values && typeof i.values === "object" ? i.values : {}) as Record<string, unknown>;
     const values: Record<string, string> = {};
     for (const f of reg.fields) {
@@ -242,7 +246,8 @@ const orgConnectUnregister: Capability = {
   name: "org_connect_unregister", title: "외부 앱 앱 등록 지우기(관리자)",
   description:
     "셀프호스트에서 등록해 둔 외부 앱 «앱 등록» 값을 금고에서 지운다(그 앱의 준비 판정이 읽는 칸 전부 — 구글 옛 칸 · 깃허브 앱 키 포함). " +
-    "그 뒤로는 아무도 새로 연결하거나 다시 연결할 수 없고, [외부 앱 연결] 의 등록 칸이 다시 열린다. 이미 된 연결·수집기·모은 자료는 지우지 않는다. " +
+    "그 뒤로는 라이블리 앱 길로 새로 연결하거나 다시 연결할 수 없고(다른 길 — Claude 커넥터·개인 토큰 — 은 그대로), [외부 앱 연결] 의 등록 칸이 다시 열린다. " +
+    "이미 된 연결·수집기·모은 자료는 지우지 않는다. 지운 값은 되살릴 수 없다. " +
     "⚠ 부르기 전에 org_connect_registration 의 impact.remove 를 사람에게 그대로 말하고 확인을 받는다. 매니지드는 409. " +
     "응답 deleted(지운 칸 수 — 0 이면 지울 것이 없었다) · app_ready(지운 뒤에도 준비면 서버 설정의 앱이 남았다). REST 등가: POST /api/ui/org/connect/unregister {app}.",
   scope: "memory", input: appInput,

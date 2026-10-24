@@ -69,13 +69,18 @@ const cut = registry.get("org_notion_workspace_disconnect");
       assert.equal(await st(withEnv({ LIVELY_TENANT_HEADER_SECRET: "t" }, () => cap!.handler({ app }, admin))), 409, `D4 ${n}: 매니지드 ${app}`);
     }
   }
+  //  등록 문(덮어쓰기)도 매니지드에선 막는다 — 화면이 숨기는 것만으로 두지 않는다.
+  for (const app of Object.keys(REGISTER_SAVE)) {
+    assert.equal(await st(withEnv({ LIVELY_TENANT_HEADER_SECRET: "t" }, () => reg!.handler({ app, values: {} }, admin))), 409, `D4 등록 문: 매니지드 ${app}`);
+  }
   //  깃허브 + 워크스페이스 관리 권한(memory)은 관문을 지난다 — 매니지드면 409 가 그 증거다(권한에서 막혔다면 403).
   assert.equal(await st(withEnv({ LIVELY_TENANT_HEADER_SECRET: "t" }, () => del!.handler({ app: "github" }, member))), 409, "D3 깃허브는 memory 로 관문을 지난다");
   ok("D1~D4 신원 401 · 모르는 앱/앱 등록 없는 앱 400 · 관리자 앱 403 · 깃허브 관리 권한 · 매니지드 409");
 }
 {
   assert.equal(await st(withEnv({ SLACK_OAUTH_RELAY_URL: "https://app.lvly.io/oauth/slack/start" }, () => del!.handler({ app: "slack" }, admin))), 409, "D5 릴레이 앱은 지울 것이 없다");
-  ok("D5 릴레이 env 가 있는 앱을 지우면 409(DB 전)");
+  assert.equal(await st(withEnv({ NOTION_OAUTH_RELAY_URL: "https://app.lvly.io/oauth/notion/start" }, () => reg!.handler({ app: "notion", values: {} }, admin))), 409, "D5 릴레이 앱은 등록할 것도 없다");
+  ok("D5 릴레이 env 가 있는 앱을 지우거나 등록하면 409(DB 전)");
 }
 {
   //  같은 사용자 → 등록 문과 같은 권한 결과(관문 판정 하나). 등록 문은 빠진 값(400)으로, 보기·지우기는 매니지드(409)로 «권한 통과» 를 드러낸다.

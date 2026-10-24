@@ -327,6 +327,21 @@ function collectorsToStop(all: CollectorView[], workspaceId: string): CollectorV
   });
 }
 
+/**
+ * 끄면서 묶어 둘 워크스페이스 — 안 묶인 «org» 수집기가 지금 이 워크스페이스를 모아 왔다면(연결이 이것 하나뿐) 그 아이디.
+ *  안 묶인 채 꺼 두면 나중에 다른 워크스페이스를 처음 연결할 때 옛 단일 수집기로 접수되고(adoptable · 첫 워크스페이스만),
+ *  그 첫 전체 스윕이 이 수집기 축(external_instance)에 모아 둔 자료를 보관 처리한다 — «이미 가져온 자료는 남아요» 가 거짓이 된다.
+ *  묶어 두면 같은 워크스페이스를 다시 연결할 때만 이 수집기를 다시 쓴다. 연결이 둘 이상이면 어느 쪽을 모았는지 알 수 없어 그대로 둔다.
+ *  그 워크스페이스에 이미 묶인 다른 수집기가 있으면 묶지 않는다 — 한 워크스페이스에 둘이 묶이는 상태는 다른 코드가 가정하지 않는다
+ *  (bindWorkspace·syncCollectors 는 첫 것을, notionCollectState 는 마지막 것을 집는다).
+ */
+function pinOnStop(c: CollectorView, workspaceIds: readonly string[], workspaceId: string, all: readonly CollectorView[]): string | null {
+  if (boundWorkspace(c)) return null;
+  if (workspaceIds.length !== 1 || workspaceIds[0] !== workspaceId) return null;
+  if (notionCollectors([...all]).some((o) => o.id !== c.id && boundWorkspace(o) === workspaceId)) return null;
+  return `org:${workspaceId}`;
+}
+
 const orgNotionWorkspaceDisconnect: Capability = {
   name: "org_notion_workspace_disconnect", title: "노션 워크스페이스 연결 끊기",
   description:
@@ -341,11 +356,17 @@ const orgNotionWorkspaceDisconnect: Capability = {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const wantWs = String((input as { workspace_id?: unknown } | undefined)?.workspace_id ?? "").trim();
     if (!wantWs) throw new HttpError(400, "workspace_id 는 필수입니다");
-    const w = (await orgWorkspaces()).find((x) => x.id === wantWs);
+    const all = await orgWorkspaces();
+    const w = all.find((x) => x.id === wantWs);
     if (!w) throw new HttpError(404, `연결된 노션 워크스페이스가 아닙니다: ${wantWs}`);
     //  수집기를 먼저 끈다 — 칸만 지우고 끄기가 실패하면 수집기가 «연결이 없습니다» 로 도는 채 남는다. 반대 순서의 실패는 무해하다(꺼진 채 연결이 남을 뿐).
-    const stop = collectorsToStop(await listCollectors(), w.id);
-    for (const c of stop) await upsertCollector({ id: c.id, enabled: false }, user.userId, ctx?.source ?? "web");
+    const collectors = await listCollectors();
+    const stop = collectorsToStop(collectors, w.id);
+    const ids = all.map((x) => x.id);
+    for (const c of stop) {
+      const pin = pinOnStop(c, ids, w.id, collectors);
+      await upsertCollector({ id: c.id, enabled: false, ...(pin ? { config: { token_source: pin } } : {}) }, user.userId, ctx?.source ?? "web");
+    }
     const deleted = await deleteMemberSecret(GATEWAY_OWNER, NOTION_PUBLIC_KIND, w.id);
     return { ok: true, workspace_id: w.id, workspace_name: w.name, deleted, stopped: stop.map((c) => c.id), state: await notionCollectState() };
   },
@@ -380,4 +401,4 @@ export function shouldStampInstance(existing: CollectorView | null): boolean {
   return enteringToggle && existing.instance_key !== LEGACY_INSTANCE_KEY;
 }
 
-export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance, collectedView, mirrorInstance, collectorsToStop };
+export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance, collectedView, mirrorInstance, collectorsToStop, pinOnStop };
