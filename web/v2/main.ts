@@ -198,6 +198,27 @@ function seedCreated(id: string): boolean {
   return true;
 }
 
+/**
+ * 세션 주소로 켠 부팅(#4989) — 목록 전량을 기다리지 않고 **그 세션 행 하나**로 화면부터 세운다.
+ *  행은 목록과 같은 모양이다(서버가 같은 길로 만들고 거르는 자리만 앞당긴다 — src/terminal/routes.ts `only`). seedCreated 와 같은 자리
+ *   (data.sessions)에 끼우고, 사이드바는 정본이 올 때까지 종전대로 막대로 둔다(loadedAt 은 0 그대로 — lib/side-boot).
+ *  못 받으면 false(옛 서버 · 기록 uuid 주소 · 목록에 세우지 않는 세션 · 실패) — 부르는 쪽이 종전대로 전량을 기다린다.
+ */
+async function primeBootSession(id: string): Promise<boolean> {
+  if (!id) return false;
+  if (findSess(id)) return true;
+  try {
+    const d: any = await api('/api/ui/terminal/sessions?includeProjects=1&only=' + encodeURIComponent(id));
+    //  옛 서버는 `only` 를 몰라 전량을 준다 — 그래도 그 행만 고른다.
+    const row = (Array.isArray(d?.sessions) ? d.sessions : []).find((r: any) => r && String(r.id) === id);
+    const s = row ? mergeSessions([row], [])[0] : undefined;
+    if (!s || !listsSess(s)) return false;
+    if (findSess(id)) return true;   // 그 사이 전량이 먼저 왔다 — 그 값이 정본이다
+    data.sessions = [s].concat(data.sessions.filter((x) => x.id !== s.id));
+    return true;
+  } catch { return false; }
+}
+
 function adoptSessionLocalState(oldId: string, newId: string): void {
   if (!oldId || !newId || oldId === newId) return;
   movePinnedSession(oldId, newId);
@@ -233,7 +254,9 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   let detail: any = null;
   if (projectId > 0) { try { detail = await api('/api/ui/v6/projects/' + projectId); } catch (_) { detail = null; } }
   if (seq !== tab.seq) return;
-  if (detail && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
+  //  ⚠ 프로젝트 목록을 한 번이라도 받은 뒤에만 «목록에 없다» 로 읽는다(#4989). 세션 행 하나로 먼저 그린 부팅(primeBootSession)은
+  //   목록이 아직 오는 중이라 비어 있다 — 그걸 «없다» 로 읽으면 같은 목록 전량을 한 벌 더 받는다(저속망에서 가장 비싼 요청이다).
+  if (detail && projLoadedAt > 0 && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
   //  #4970 «리브 = 세션 하나» — 이 세션이 리브 세션인가(리브 좌표로 알아본다 — 이름 글자로 가르지 않는다). 리브 세션은 개인 폴더의 liv 에서
   //   프로젝트 없이 열리므로 프로젝트 없는 세션 화면에서만 서버에 묻는다(30초 기억). 리브 세션이면 물음 자리(입력칸 위 · 터미널이면 머리줄 아래) ·
   //   곁칸 맨 앞 «리브» 칸. 보기는 일반 세션과 같다(#4940 — 아래 mountSession 주석).
@@ -623,12 +646,10 @@ export async function bootV2(): Promise<void> {
   onShellPrefsAdopted(reloadShellPrefs);
   const prefsSynced = shellPrefsSync().then((changed) => { if (changed) reloadShellPrefs(); });
   void livSessionId();   // #4970 — 리브 세션 id 를 미리 물어 둔다(세션 화면이 그릴 때 기다리지 않게 — livSessionIdWithin)
-  await loadData();
-  void prefsSynced.then(() => migrateSessionDismissals());   // #3857 — 옛 치움 맵(세션 행)을 서버 정본으로 한 번 옮긴다
-  await repairUnknownSessNames();   // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
-  await repairPinnedSuccessors();   // 이미 끊긴 핀이 있을 때만 — 서버가 아는 이어진 세션으로 따라간다(#2402)
 
   // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
+  //  ⚠ #4989 — 이 판정은 **목록을 받기 전에** 한다. 재료가 주소 · 서버의 처음 설정 판정(state.me) · 되살린 탭뿐이라 데이터와 무관하다 —
+  //   그래서 «어디에 설지» 를 먼저 알고, 세션에 설 거면 목록 전량을 기다리지 않는다(아래 primeBootSession).
   let boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
   // ★ #2171 — 주소에 남은 `#/welcome` 은 **딥링크로 인정하지 않는다.**
   //  처음 설정이 한 번 뜨면 주소창이 #/welcome 으로 바뀌는데(applyTabChrome), 그 뒤 새로고침하면 그게
@@ -656,6 +677,29 @@ export async function bootV2(): Promise<void> {
   if (!boot && !wsSwitched && state.me && state.me.first_run === true && !onboardingDone()) {
     boot = '#/welcome';
     markWelcomeSeen();
+  }
+  //  ★ #4989 — 세션에 서는 부팅은 목록 전량을 기다리지 않는다. 1Mbps 폰 실측(상민님 2026-10-25): 세션 주소로 켜도 세션 화면은 61초 뒤였다 —
+  //   여기서 목록(프로젝트 5.5MB 가 57초)을 다 받은 뒤에야 탭을 켰다. 세션 화면에 필요한 건 그 세션 행 하나다.
+  //   착지는 아래 활성화와 같은 규칙이다 — 주소가 있으면 그 주소, 없으면 전환 부팅은 홈 · 그 밖은 되살린 활성 탭.
+  const landing = routeKey(boot || (wsSwitched ? '#/' : (tabsApi.initial()?.route || '#/')));
+  const loaded = loadData();
+  const early = landing.startsWith('s:') && await primeBootSession(landing.slice(2));
+  //  목록 전량이 있어야 하는 뒷정리. 종전 자리(탭을 켜기 전)를 지키고, 세션을 먼저 켠 판만 목록이 도착한 뒤로 미룬다(아래 bootList).
+  const afterList = async (): Promise<void> => {
+    void prefsSynced.then(() => migrateSessionDismissals());   // #3857 — 옛 치움 맵(세션 행)을 서버 정본으로 한 번 옮긴다
+    await repairUnknownSessNames();   // 이미 이름을 잃은 탭이 있을 때만 — 서버 기록에서 되찾아 온다(위 주석)
+    await repairPinnedSuccessors();   // 이미 끊긴 핀이 있을 때만 — 서버가 아는 이어진 세션으로 따라간다(#2402)
+  };
+  if (early) {
+    //  목록이 도착하면 그 값으로 사이드바 · 탭 · 열린 세션 화면을 맞춘다(다시 받지 않는다). 그때까지 syncShell 은 이 판을 기다린다 —
+    //   8초 틱 · 스트림이 같은 목록을 한 벌 더 띄우면 저속망에서 회선만 나눠 먹는다.
+    bootList = loaded.then(() => { applyShell(); return afterList(); })
+      .then(() => { drawSide(); tabsApi?.paint(); })
+      .catch((e) => { console.warn('[boot] 목록 반영 실패 — 다음 틱이 다시 받는다', e); })
+      .finally(() => { bootList = null; });
+  } else {
+    await loaded;
+    await afterList();
   }
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
   else if (!boot && wsSwitched) {
@@ -755,10 +799,14 @@ export async function bootV2(): Promise<void> {
   //  ⚠ #2041 로 **폴링이 유일한 시계가 아니게 됐다**(아래 startLiveSync) — 그래도 이 틱은 그대로 둔다:
   //   스트림이 끊긴 동안 이어받아야 하고, 스트림이 안 미는 변화(세션 생성·이름·프로젝트·앱 인스턴스)는
   //   여전히 여기서만 보인다.
+  //  #4989 — 앞 틱이 아직 도는 중이면 이번 틱은 건너뛴다. 저속망에선 한 판이 8초를 넘기는데(1Mbps 실측: 한 판 ~1MB · 8초 남짓),
+  //   그 위에 다음 판을 또 띄우면 같은 목록이 겹쳐 받혀 회선이 갱신만으로 찬다. 스트림 · 화면 복귀가 부르는 판은 그대로 둔다.
+  let tickBusy = false;
   setInterval(() => {
-    if (document.hidden || !tabsApi) return;
+    if (document.hidden || !tabsApi || tickBusy) return;
     markViewedSessionSeen();   // #1954 3차 — 보고 있는 동안 열람 도장을 갱신(안 찍으면 초록점이 안 꺼진다)
-    void syncShell();
+    tickBusy = true;
+    void syncShell().finally(() => { tickBusy = false; });
   }, 8000);
   // ★ 배너가 뜨는 그 순간 목록도 그 순간을 본다 (#2041 상민님: "알림 오는 순간 사이드바를 보면 아직
   //  바뀌기 전으로 보인다"). 게이트웨이는 전이가 일어난 자리에서 이미 그 사실을 밀고 있고(#1842),
@@ -784,7 +832,16 @@ export async function bootV2(): Promise<void> {
  */
 async function syncShell(): Promise<void> {
   if (!tabsApi) return;
+  //  세션을 먼저 켠 부팅의 목록이 아직 오는 중이면 그 판을 기다린다 — 도착하면 그 판이 맞춘다(#4989, bootV2 의 bootList).
+  if (bootList) { await bootList; return; }
   await loadData();
+  applyShell();
+}
+/** 세션을 먼저 켠 부팅(#4989)이 받는 중인 첫 목록 — 도착해 반영하면 null 로 돌아간다. */
+let bootList: Promise<void> | null = null;
+/** 받아 둔 data 로 사이드바 · 탭 · 열려 있는 화면을 맞춘다 — syncShell 의 뒷절반. 세션 행 하나로 먼저 그린 부팅(#4989)은
+ *  목록 전량이 도착한 그 순간 이것만 부른다(다시 받지 않는다). */
+function applyShell(): void {
   if (!tabsApi) return;
   drawSide(); tabsApi.paint();
   const at = tabsApi.active();
@@ -971,17 +1028,21 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     //  archived=include(#1851) — 보관한 프로젝트도 받는다: 그 아래 세션이 '프로젝트 없는 세션'으로 떨어지지 않게, 그리고
     //  「아카이브」 화면이 같은 데이터로 그려지게. 사이드바는 archived_at 을 보고 스스로 가른다(side.ts).
-    wantProj ? api('/api/ui/v6/projects?archived=include&trashed=include').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
+    //  slim=1(#4989) — 본문(description)은 빼고 받는다. 셸은 본문을 그리지 않는데(사이드바 · 홈 · 통합검색의 이름 줄), 본문이 응답의 80% 였다
+    //   (1Mbps 폰 실측 2026-10-25: 1,502건 5.5MB 가 57초 — 사이드바도, 세션 주소로 켠 세션 화면도 이것을 기다렸다). 본문이 필요한 화면은
+    //   프로젝트 하나(/:id)를 따로 받는다(보드 #4865 와 같은 선택). 통합검색의 이름 줄 부제는 서버 검색 줄이 채운다(omni rebuild «빈 칸만 채운다»).
+    //  revalidate(#4989) — 같은 답이면 서버가 본문 없이 304 로 답한다(lib/net.ts 머리말).
+    wantProj ? api('/api/ui/v6/projects?archived=include&trashed=include&slim=1', { revalidate: true }).then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
     // #1883 열린 앱의 둘째·셋째 줄 — 프로젝트가 있으면 스페이스 › 리스트 › 프로젝트 계층을 보여 준다.
-    wantProj ? api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || null).catch(() => null) : Promise.resolve(null),
-    wantProj ? api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || null).catch(() => null) : Promise.resolve(null),
+    wantProj ? api('/api/ui/v6/project-lists', { revalidate: true }).then((d) => (d && d.lists) || null).catch(() => null) : Promise.resolve(null),
+    wantProj ? api('/api/ui/v6/project-folders', { revalidate: true }).then((d) => (d && d.folders) || null).catch(() => null) : Promise.resolve(null),
     // #1883 좌측 목록의 정본 — 창(탭)이 아니라 **살아 있는 앱 인스턴스**(#1780 v2.2 §2.2·§2.3).
     //  #2022 — **먼저 도착하는 대로 반영한다**(아래 instsP): 이 축이 세션 이름·소속 폴백의 재료라
     //  느린 축과 함께 기다리면 정작 필요한 판(첫 그림)에 없다.
     instsP,
     // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
-    api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
-    api('/api/ui/v6/sessions?limit=' + (wantDeepLogs ? LOGS_DEEP : LOGS_SHALLOW)).then((d) => { noteTruncated(!!(d && d.truncated)); return (d && d.sessions) || []; }).catch(() => null),
+    api('/api/ui/terminal/sessions?includeProjects=1', { revalidate: true }).then((d) => (d && d.sessions) || []).catch(() => null),
+    api('/api/ui/v6/sessions?limit=' + (wantDeepLogs ? LOGS_DEEP : LOGS_SHALLOW), { revalidate: true }).then((d) => { noteTruncated(!!(d && d.truncated)); return (d && d.sessions) || []; }).catch(() => null),
   ]);
   let projects = data.projects;
   if (Array.isArray(pj)) {
@@ -1021,7 +1082,7 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   //  끝난 로그인 세션은 목록에 세우지 않는다(#4551 — lib/proj-none 머리말). 도는 것은 둔다(지금 로그인 중인 창이다).
   //  앱빌더의 시험 세션(«"이름" 앱 시험» — ③ 세션 위젯으로 보기)도 세우지 않는다 — 앱빌더 안에서만 산다(원준 2026-10-15 «다른 사이드바나 이런 곳에 노출하지는 말고»).
   //  수집 실행 세션(#4213 T11)도 세우지 않는다 — 서버가 러너 한 판을 돌리는 자리라 들어가 볼 것이 없다(lib/proj-none isCollectSessRow).
-  const sessions = merged.filter((s) => !isSpentLoginSess(s.raw, s.live && s.alive) && !isCollectSessRow(s.raw) && !isTrySessionRow(s));
+  const sessions = merged.filter(listsSess);
   //  위탁 워커가 사이드바에서 설 프로젝트를 적는다(#4551) — 소속은 안 건드린다(lib/liv-work sideProjectId 머리말).
   placeLivWork(sessions, new Set(projects.map((p) => Number(p.id))));
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
@@ -1036,6 +1097,11 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   }
 }
 const findSess = (id: string): Sess | undefined => findSessIn(data.sessions, id);
+/** 목록에 세우는 세션인가 — 끝난 로그인 세션 · 수집 실행 · 앱빌더 시험 세션은 뺀다(loadData 의 그 자리 주석).
+ *  세션 행 하나로 먼저 그리는 부팅(primeBootSession, #4989)도 같은 판정을 쓴다 — 목록에 안 서는 세션을 그 판에만 세우지 않게. */
+function listsSess(s: Sess): boolean {
+  return !isSpentLoginSess(s.raw, s.live && s.alive) && !isCollectSessRow(s.raw) && !isTrySessionRow(s);
+}
 
 // ── 세션 이름 기억(원준 2026-08-26 신고: "켤 때마다 `세션 1564e3` 처럼 이름이 안 뜬다") ────────────────
 //  세션의 주소는 **박스(tmux) id** 다(`#/s/box-…`). 그런데 그 id 로 찾는 목록은 오래 안 산다:

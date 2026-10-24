@@ -6,6 +6,8 @@ import "./boot/tenancy-env.js";
 //   tmux 서버가 이 프로세스의 PATH 를 물려받으므로 무엇이든 띄우기 전이어야 한다(boot/user-bin-path.ts 머리말).
 import "./boot/user-bin-path.js";
 import express from "express";
+import compression from "compression";
+import { compressionFilter } from "./http/compress.js";
 import { BearerVerifier } from "./auth/bearer.js";
 import { registerLlmProxyRoutes } from "./ai-runs/routes.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
@@ -147,6 +149,13 @@ app.use(tenantContextMiddleware(process.env, lookupWorkspace, workspaceForSessio
 //  ⚠ 요청을 늦추지 않는다(동기 코드는 Map 조회 하나, DB 작업은 기다리지 않는다) · 테넌트당 5분 디바운스
 //   · 하우스키핑이 도는 배포(자가호스팅·registry)에선 **무동작** — 이중 실행을 막는다.
 app.use(outboxRequestSweepMiddleware());
+
+// 웹 화면이 받는 응답을 압축한다(#4989). 1Mbps 폰 실측(상민님 2026-10-25): 터미널 스트림은 멀쩡한데 사이드바·세션 목록이
+//  한참 걸렸다 — 첫 판에 받는 목록이 압축 없이 수 MB 였고(세션 목록 618KB → gzip 73KB), 화면 코드도 압축 없이 나갔다.
+//  ⚠ 웹 화면의 두 자리(/api/ui · /ui)에만 건다 — MCP · LLM 프록시 · 앱 서버 중계는 자기 규칙으로 흐르는 표면이라 건드리지 않는다.
+//  ⚠ 조금씩 흘려 보내는 응답(SSE · ndjson 대화 흐름)은 압축하지 않는다 — 압축기는 창을 채울 때까지 모아 두므로 실시간이 멈춘다.
+//   그래서 «통째로 한 번에 나가는» 형식만 고른다(compressionFilter). 받는 쪽이 Accept-Encoding 을 안 보내면 원문 그대로다.
+app.use(["/api/ui", "/ui"], compression({ filter: compressionFilter }));
 
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.

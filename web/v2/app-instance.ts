@@ -73,7 +73,8 @@ function remember(instance: AppInstanceRecord): AppInstanceRecord { cache.set(in
 export async function listAppInstances(): Promise<AppInstanceRecord[]> {
   //  #3855·#3857 — 보임 축의 나머지 반쪽(내가 치운 세션 id)을 **같은 왕복**에 받는다. 두 판을 따로 받으면
   //   한쪽만 도착한 틱에 «목록에 둠» 과 «치움» 이 서로 다른 시점의 사실로 섞인다.
-  const out: any = await api('/api/ui/app-instances?dismissed=1');
+  //  revalidate(#4989) — 셸이 8초마다 다시 묻는 목록이다. 같은 답이면 서버가 본문 없이 304 로 답한다(lib/net.ts 머리말).
+  const out: any = await api('/api/ui/app-instances?dismissed=1', { revalidate: true });
   const rows: AppInstanceRecord[] = Array.isArray(out?.instances) ? out.instances : [];
   for (const r of rows) if (r && r.id) remember(r);
   //  치운 세션 id 는 **그 판의 배열에 묶어** 돌려준다(dismissedRefsOf, #3870). 읽기는 겹쳐 뜬다 — 모듈 변수 하나에 두면
