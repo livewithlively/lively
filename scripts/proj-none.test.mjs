@@ -68,10 +68,15 @@ if (lib) {
 // ───────────────────────── W. 배선 ─────────────────────────
 const MAIN = code(read("web/v2/main.ts"));
 //  #4632 같은 거름에 앱빌더 시험 세션(isTrySession)도 붙는다 — 뒤에 덧붙은 조건은 허용한다(아래 W1b 가 따로 본다).
-ok(/const merged = mergeSessions\(lastLive, lastLogs\);\s*const sessions = merged\.filter\(\(s\) => !isSpentLoginSess\(s\.raw, s\.live && s\.alive\)(?: && [^;]*)?\);/.test(MAIN) && /data = \{ projects, sessions, lists,/.test(MAIN),
+//  #4989 — 그 잣대는 한 곳(listsSess)에 산다. 셸 목록과 «세션 행 하나로 먼저 그리는 부팅»(primeBootSession)이 같은 잣대를 쓴다.
+const LISTS_SESS = (/function listsSess\(s: Sess\): boolean \{\s*return ([^;]*);\s*\}/.exec(MAIN) || [])[1] || "";
+ok(/^!isSpentLoginSess\(s\.raw, s\.live && s\.alive\)(?: && [^;]*)?$/.test(LISTS_SESS)
+  && /const merged = mergeSessions\(lastLive, lastLogs\);\s*const sessions = merged\.filter\(listsSess\);/.test(MAIN) && /data = \{ projects, sessions, lists,/.test(MAIN),
   "W1 ★ 셸이 세션 목록을 짤 때 끝난 로그인 세션을 걷는다(사이드바 · 세션 목록 · 카드 접힘이 전부 이 목록을 쓴다)");
-ok(/const sessions = merged\.filter\(\(s\) => [^;]*&& !isTrySessionRow\(s\)\);/.test(MAIN), "W1b #4632 같은 목록에서 앱빌더 시험 세션(«\"이름\" 앱 시험»)도 걷는다");
-ok(/const sessions = merged\.filter\(\(s\) => [^;]*&& !isCollectSessRow\(s\.raw\)[^;]*\);/.test(MAIN), "W1c #4213 같은 목록에서 수집 실행 세션도 걷는다");
+ok(/&& !isTrySessionRow\(s\)/.test(LISTS_SESS), "W1b #4632 같은 목록에서 앱빌더 시험 세션(«\"이름\" 앱 시험»)도 걷는다");
+ok(/&& !isCollectSessRow\(s\.raw\)/.test(LISTS_SESS), "W1c #4213 같은 목록에서 수집 실행 세션도 걷는다");
+ok(/async function primeBootSession\([\s\S]*?if \(!s \|\| !listsSess\(s\)\) return false;/.test(MAIN),
+  "W1d #4989 세션 행 하나로 먼저 그리는 부팅도 같은 잣대를 쓴다(목록에 안 서는 세션을 그 판에만 세우지 않게)");
 ok(/if \(!id\) return NO_PROJECT_NAME;/.test(code(read("web/v2/views.ts"))), "W2 이름 풀이(projName)가 그 이름을 쓴다");
 ok(/name: c\.id \? \(first\.project as \{ name: string \}\)\.name : c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME,/.test(code(read("web/v2/side.ts")))
   && /text: NO_PROJECT_NAME \}\), cnt\(plan\.noneN\)/.test(code(read("web/v2/side.ts"))),

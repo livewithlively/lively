@@ -762,16 +762,23 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const sessionHostOwns = gatewayDefersHere();   // #2600 T2 d6 — 스코프+판정+계수 한 자리(registry)
     const all = sessionHostOwns ? [] : await listSessions(userOf(req));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
-    const remote = nodeSessionsFor(idOf(userOf(req)));
+    const remoteAll = nodeSessionsFor(idOf(userOf(req)));
     // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
     //  #1791 — 노드 세션 행(node_id)도 여기 온다: 노드 스냅샷에 살아 있는 id 는 라이브가 SoT 라 뺀다(local ∪ remote).
     //  #4065 — 갓 만든 세션은 관측(호스트 스냅샷)에 늦게 잡힌다. 그 창에서 «중단됨» 으로 내면 화면이 대화창으로 열린다.
-    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)),
+    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remoteAll].map((s) => s.id)),
       { startingGraceMs: SESSION_STARTING_GRACE_MS });
     const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
-    const local = all.filter(keep);
-    const localRestorable = restorable.filter(keep);
+    // #4989 — `only=<세션 id>` 면 그 세션 행 하나만 낸다. 저속망에서 세션 주소로 켠 셸이 목록 전량(수백 행 · 수백 KB)을 기다리지 않고
+    //  그 행 하나로 화면부터 세운다(web/v2/main.ts primeBootSession). 행 모양 · 장식 · 거르기(은퇴 · 휴지통 · 워크스페이스)는 전량과
+    //  **같은 길**을 그대로 탄다 — 거르는 자리만 앞당긴다(행마다 붙이는 조회도 그 행 하나만 묻는다). 라이브 판정(위 restorable 의 제외 집합)은
+    //  거르기 전 전량으로 한다 — 거른 뒤로 재면 살아 있는 노드 세션이 «복원 가능» 으로 함께 나간다.
+    const only = typeof req.query.only === "string" ? req.query.only.trim() : "";
+    const pick = (s: { id: string }): boolean => !only || s.id === only;
+    const remote = remoteAll.filter(pick);
+    const local = all.filter((s) => keep(s) && pick(s));
+    const localRestorable = restorable.filter((s) => keep(s) && pick(s));
     // #1791 — 복원 가능 노드 세션 행의 노드 이름·온라인 여부(listRestorableSessions 는 id 만 안다). 프론트가 &node= 로 릴레이한다.
     await decorateNodeRows(localRestorable);
     // #1719 — 라이브 행에 대화 uuid(claudeSessionId)를 싣는다. 새 셸의 세션 화면이 이 값으로 로컬 트랜스크립트를 잇고,
