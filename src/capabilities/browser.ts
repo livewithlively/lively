@@ -152,13 +152,18 @@ const browserNavigate: Capability = {
 };
 
 // ── browser_screenshot ─────────────────────────────────────────────────────
-const shotInput = { tab: tabField };
+const shotInput = {
+  region: z.array(z.number()).length(4).optional()
+    .describe("확대해 볼 영역 [x0, y0, x1, y1] — 직전 스크린샷의 좌표. 그 부분만 더 선명하게 찍는다(좌표 체계는 그대로 — 다음 클릭도 전체 스크린샷 좌표로)"),
+  tab: tabField,
+};
 const browserScreenshot: Capability = {
   name: "browser_screenshot",
   title: "브라우저 스크린샷",
   description:
     "이 세션의 브라우저 탭 화면을 찍는다(보이는 영역). 이미지의 좌표(px)가 곧 browser_act 의 x·y 다. " +
-    "글·버튼을 찾는 것은 browser_read 가 더 정확하고 싸다 — 화면 배치·그림·캔버스를 봐야 할 때 쓴다." + RULES,
+    "글·버튼을 찾는 것은 browser_read 가 더 정확하고 싸다 — 화면 배치·그림·캔버스를 봐야 할 때 쓴다. " +
+    "작은 글자·아이콘은 region 으로 그 부분만 확대해 본다." + RULES,
   scope: null,
   mutates: false,
   input: shotInput,
@@ -309,6 +314,31 @@ const browserConsole: Capability = {
     run(user, ctx, "console", args(input), 15_000),
 };
 
+// ── browser_upload ─────────────────────────────────────────────────────────
+const uploadInput = {
+  ref: z.string().max(16).optional().describe("파일 입력칸(input type=file) · 그 단추·라벨 · 끌어 놓는 자리의 ref(browser_read)"),
+  x: z.number().optional().describe("ref 대신 끌어 놓을 자리의 x(스크린샷 좌표) — 문서 편집기·메일처럼 파일을 끌어 놓아 올리는 곳"),
+  y: z.number().optional().describe("ref 대신 끌어 놓을 자리의 y(스크린샷 좌표)"),
+  urls: z.array(z.string().max(4000)).min(1).max(10).describe("올릴 파일의 받기 주소 — file_url(method GET)이 준 서명 주소(/api/files/s/…). 여러 개면 한꺼번에(multiple 입력칸)"),
+  names: z.array(z.string().max(200)).max(10).optional().describe("페이지에 보일 파일 이름(urls 와 같은 순서). 생략하면 주소가 준 이름"),
+  tab: tabField,
+};
+const browserUpload: Capability = {
+  name: "browser_upload",
+  title: "브라우저 파일 올리기",
+  description:
+    "이 세션의 파일을 브라우저 페이지의 파일 입력칸(또는 끌어 놓는 자리)에 넣는다. 먼저 file_url(method GET)로 파일의 받기 주소를 받고, " +
+    "그 주소와 입력칸 ref 를 준다(숨은 입력칸이면 «파일 선택» 단추·라벨의 ref 도 된다). 끌어 놓아 올리는 곳은 ref 대신 x·y. " +
+    "넣은 뒤 그 사이트의 올리기·보내기 단추는 따로 누른다(사람 확인 뒤)." + RULES,
+  scope: null,
+  input: uploadInput,
+  expose: { mcp: true, rest: restOf("upload") },
+  handler: async (input: z.infer<z.ZodObject<typeof uploadInput>>, user: LivelyUser, ctx?: CapabilityCtx) => {
+    if (!input.ref && (input.x === undefined || input.y === undefined)) throw new HttpError(400, "ref 또는 x·y(끌어 놓을 자리)가 필요합니다");
+    return run(user, ctx, "upload", args(input), 90_000);
+  },
+};
+
 // ── browser_handoff ────────────────────────────────────────────────────────
 const handoffInput = {
   message: z.string().min(1).max(500).describe("사람에게 부탁할 일 — 예: «구글 로그인을 해 주세요(2단계 인증 포함). 끝나면 [완료]를 눌러 주세요.»"),
@@ -333,5 +363,5 @@ const browserHandoff: Capability = {
 
 export const browserCapabilities: Capability[] = [
   browserStatus, browserTabs, browserNavigate, browserScreenshot, browserAct,
-  browserRead, browserFill, browserText, browserEval, browserConsole, browserHandoff,
+  browserRead, browserFill, browserUpload, browserText, browserEval, browserConsole, browserHandoff,
 ];

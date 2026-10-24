@@ -83,6 +83,8 @@ test("C3·C4 입력 검증 — 모자란 인자는 화면에 보내기 전에 40
       ["browser_act", { action: "drag", to_x: 5, to_y: 5 }],
       ["browser_act", { action: "type" }],
       ["browser_act", { action: "key" }],
+      ["browser_upload", { urls: ["/api/files/s/t"] }],
+      ["browser_upload", { urls: ["/api/files/s/t"], x: 5 }],
     ];
     for (const [name, input] of bad) {
       await assert.rejects(cap(name).handler(input, alice, {}), (e: unknown) => status(e) === 400, `${name} ${JSON.stringify(input)} 를 받았다`);
@@ -96,6 +98,8 @@ test("C3·C4 입력 검증 — 모자란 인자는 화면에 보내기 전에 40
       ["browser_act", { action: "drag", ref: "e3", to_x: 5, to_y: 5 }],
       ["browser_act", { action: "scroll" }],
       ["browser_act", { action: "wait", ms: 0 }],
+      ["browser_upload", { ref: "e3", urls: ["/api/files/s/t"] }],
+      ["browser_upload", { x: 0, y: 0, urls: ["/api/files/s/t"] }],
     ];
     for (const [name, input] of good) await cap(name).handler(input, alice, {});
     assert.equal(h.got.length, good.length);
@@ -115,6 +119,8 @@ test("C7 명령엔 부른 세션이 실리고 안 준 인자는 빠진다 · 세
     assert.equal(h.got[1].args.wait_seconds, 300, "기다림 기본값이 실리지 않았다");
     await cap("browser_tabs").handler({}, alice, {});
     assert.deepEqual(h.got[2].args, { action: "list" }, "탭 기본 동작이 list 가 아니다");
+    await cap("browser_screenshot").handler({ region: [10, 20, 110, 70] }, alice, {});
+    assert.deepEqual(h.got[3].args, { region: [10, 20, 110, 70] }, "확대 영역이 화면에 실리지 않았다");
   } finally { h.detach(); }
 });
 

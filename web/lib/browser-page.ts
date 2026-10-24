@@ -179,6 +179,11 @@ export function pageRead(opts: ReadOpts): ReadOut {
       const tag = el.tagName.toUpperCase();
       if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE' || tag === 'LINK' || tag === 'META') continue;
       if (!visible(el) && !(el as HTMLElement).shadowRoot) {
+        // 숨은 파일 입력칸은 보여 준다 — 사이트가 흔히 감추고 단추로 대신하는데, 파일 올리기(browser_upload)의 과녁이다
+        if (tag === 'INPUT' && String((el as HTMLInputElement).type).toLowerCase() === 'file') {
+          if (matches(el, 'button')) pushLine(depth, '- file-input ' + JSON.stringify(labelFor(el) || el.getAttribute('name') || '') + ' [' + refOf(el) + '] (hidden)' + ((el as HTMLInputElement).multiple ? ' multiple' : ''));
+          continue;
+        }
         // 숨은 요소는 건너뛴다 — 단 display:contents 류(크기 0)라도 자식은 보일 수 있으니 자식은 본다
         if (getComputedStyle(el).display !== 'contents') continue;
       }
@@ -209,7 +214,12 @@ export function pageRead(opts: ReadOpts): ReadOut {
       if (tag === 'SVG') continue;   // 아이콘 속(path·g)은 요소가 아니다 — svg 자체가 단추면 위에서 이미 읽었다
       const sr = (el as HTMLElement).shadowRoot;
       if (sr) walk(sr, nextDepth, off, inter || insideInteractive);
-      if (inter && ['button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'option', 'menuitem', 'tab', 'switch', 'slider', 'clickable'].includes(role)) continue;   // 단추 안은 이름으로 이미 읽었다
+      if (inter && ['button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'option', 'menuitem', 'tab', 'switch', 'slider', 'clickable'].includes(role)) {
+        // 단추 안은 이름으로 이미 읽었다 — 다만 안에 숨은 파일 입력칸이 있으면 알린다(올리기 browser_upload 는 이 단추 ref 로도 된다)
+        const fi = el.querySelector('input[type=file]') as HTMLInputElement | null;
+        if (fi && matches(el, role)) pushLine(nextDepth, '- file-input [' + refOf(fi) + '] (이 단추 안에 숨음' + (fi.multiple ? ' · 여러 개' : '') + ')');
+        continue;
+      }
       walk(el, nextDepth, off, inter || insideInteractive);
     }
   };
@@ -314,6 +324,64 @@ export function pageFill(ref: string, value: string | boolean | number): { ok: b
     return { ok: true, value: String(el.innerText || '').slice(0, 200) };
   }
   return { ok: false, error: '값을 넣을 수 있는 요소가 아닙니다(' + tag.toLowerCase() + ') — browser_act action=type 을 쓰세요.' };
+}
+
+export interface UploadFile { name: string; type: string; b64: string }
+
+/**
+ * 파일 넣기 — ref 가 파일 입력칸이면 그 칸의 files 를 바꾸고(input·change), 단추·라벨이면 이어진 입력칸을 찾아 넣고,
+ *  둘 다 아니면 그 자리에 끌어 놓기(dragenter·dragover·drop)를 일으킨다. 게스트 안에서 돈다.
+ *  ⚠ 파일 바이트는 base64 로 원문에 실려 온다(바깥 이름을 못 쓰는 규칙 ① 때문) — 크기 상한은 부르는 쪽이 지킨다.
+ */
+export function pageUpload(target: { ref?: string; x?: number; y?: number }, files: UploadFile[]): { ok: boolean; via?: string; target?: string; files?: Array<{ name: string; size: number }>; error?: string } {
+  let el: any = null;
+  if (target.ref) {
+    const st = (window as any).__livelyRefs;
+    const wr = st && st.doc === document ? st.byId.get(target.ref) : null;
+    el = wr ? wr.deref() || null : null;
+    if (!el || !el.isConnected) return { ok: false, error: 'ref ' + target.ref + ' 를 찾지 못했습니다 — browser_read 로 다시 읽으세요.' };
+  } else {
+    el = document.elementFromPoint(Number(target.x), Number(target.y));
+    if (!el) return { ok: false, error: '그 좌표(' + target.x + ',' + target.y + ')에 요소가 없습니다 — 화면 안 좌표인지 확인하세요.' };
+  }
+  const desc = (el.tagName || '').toLowerCase() + (el.id ? '#' + el.id : '') + ((el.getAttribute && el.getAttribute('aria-label')) ? ' «' + el.getAttribute('aria-label') + '»' : '');
+  const list = files.map((f) => {
+    const bin = atob(f.b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return new File([u8], f.name, { type: f.type || 'application/octet-stream' });
+  });
+  const dt = new DataTransfer();
+  for (const f of list) dt.items.add(f);
+  const isFile = (x: any): boolean => !!x && x.tagName === 'INPUT' && String(x.type).toLowerCase() === 'file';
+  // 숨은 입력칸을 단추·라벨로 감싼 흔한 모양 — 라벨의 control · 안쪽(하나뿐일 때) · 같은 감싸개 안(하나뿐일 때)을 차례로 본다.
+  //  ⚠ 감싸개는 두 칸까지, body 는 안 간다 — 넓게 뒤지면 끌어 놓는 자리를 가리켜도 같은 페이지의 **다른 입력칸**에 들어간다
+  //   (실측 2026-10-25: 좌표로 가리킨 끌어 놓기 자리 대신 맨 위 «첨부 파일» 칸에 들어갔다). 좌표(끌어 놓기)는 감싸개를 안 본다.
+  let input: any = isFile(el) ? el : null;
+  if (!input && el.tagName === 'LABEL' && isFile(el.control)) input = el.control;
+  if (!input) { const lb = el.closest ? el.closest('label') : null; if (lb && isFile(lb.control)) input = lb.control; }
+  if (!input && el.querySelectorAll) { const inner = el.querySelectorAll('input[type=file]'); if (inner.length === 1) input = inner[0]; }
+  if (!input && target.ref) {
+    for (let p = el.parentElement, n = 0; !input && p && n < 2 && p !== document.body && p !== document.documentElement; p = p.parentElement, n++) {
+      const xs = p.querySelectorAll('input[type=file]');
+      if (xs.length === 1) input = xs[0];
+      else if (xs.length > 1) break;
+    }
+  }
+  const out = list.map((f) => ({ name: f.name, size: f.size }));
+  if (input) {
+    if (!input.multiple && list.length > 1) return { ok: false, error: '이 입력칸은 파일을 하나만 받습니다(' + list.length + '개를 줬습니다).' };
+    input.files = dt.files;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return { ok: true, via: 'input', target: desc, files: out };
+  }
+  const r = el.getBoundingClientRect();
+  const o = { bubbles: true, cancelable: true, composed: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, dataTransfer: dt };
+  el.dispatchEvent(new DragEvent('dragenter', o));
+  el.dispatchEvent(new DragEvent('dragover', o));
+  el.dispatchEvent(new DragEvent('drop', o));
+  return { ok: true, via: 'drop', target: desc, files: out };
 }
 
 /** 본문 글 — main/article 이 충분히 길면 거기서, 아니면 body 전체. 게스트 안에서 돈다. */

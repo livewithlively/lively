@@ -15,7 +15,7 @@ import {
   type BTab, aiBusy, allTabs, answerHandoff, cancelHandoff, destroyTab, ensureCapturable, ensureTab, getTab, keyOfTab, markAi,
   onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession,
 } from './browser-tabs.js';
-import { callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollState, pageText } from '../lib/browser-page.js';
+import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
 
 /** 게이트웨이와 맞춘 규약 판(src/browser/relay.ts BROWSER_PROTOCOL). */
 const PROTOCOL = 1;
@@ -157,7 +157,7 @@ async function handle(cmd: Cmd): Promise<unknown> {
   switch (cmd.op) {
     case 'tabs': return opTabs(S, a);
     case 'navigate': return opNavigate(S, a);
-    case 'screenshot': return withTab(S, a, false, async (t) => ({ ...summary(t), ...(await shot(t)) }));
+    case 'screenshot': return withTab(S, a, false, async (t) => ({ ...summary(t), ...(await shot(t, Array.isArray(a.region) ? a.region : null)) }));
     case 'act': return opAct(S, a);
     case 'read': return withTab(S, a, false, async (t) => ({ tab: tabNoOfKey(t.key), ...(await exec(t, callSource(pageRead, { filter: a.filter || 'interactive', query: a.query || '', ref: a.ref || '', max: a.max_nodes || 400 }))) }));
     case 'fill': return withTab(S, a, false, async (t) => {
@@ -166,6 +166,7 @@ async function handle(cmd: Cmd): Promise<unknown> {
       return { ...summary(t), ref: a.ref, value: r.value };
     });
     case 'text': return withTab(S, a, false, async (t) => ({ tab: tabNoOfKey(t.key), ...(await exec(t, callSource(pageText, a.max_chars || 40_000))) }));
+    case 'upload': return withTab(S, a, false, (t) => opUpload(t, a));
     case 'eval': return withTab(S, a, false, (t) => opEval(t, String(a.code || '')));
     case 'console': return opConsole(S, a);
     case 'handoff': return opHandoff(S, a);
@@ -361,10 +362,23 @@ async function opNavigate(S: string, a: Record<string, any>): Promise<unknown> {
   });
 }
 
-/** 보이는 영역을 찍어 긴 변 SHOT_MAX 이하 JPEG 로. 좌표 배율을 기억해 다음 클릭 좌표를 페이지 좌표로 되돌린다. */
-async function shot(t: BTab): Promise<{ image: { mime: string; data: string }; width: number; height: number; scale: number }> {
+/**
+ * 보이는 영역을 찍어 긴 변 SHOT_MAX 이하 JPEG 로. 좌표 배율을 기억해 다음 클릭 좌표를 페이지 좌표로 되돌린다.
+ *  region([x0,y0,x1,y1], 직전 스크린샷 좌표)이면 그 부분만 **화면 화소 그대로** 찍는다(확대해 보기) — 좌표 배율은 바꾸지 않는다.
+ */
+async function shot(t: BTab, region?: unknown[] | null): Promise<{ image: { mime: string; data: string }; width: number; height: number; scale: number; region?: number[] }> {
   await ensureCapturable(t);
-  const once = (): Promise<any> => within<any>(t.view.capturePage(), 10_000, '화면을 찍지 못했습니다(10초) — 탭이 가려져 있으면 browser_read 로 읽으세요');
+  const s0 = shotScale.get(t.key) || 1;
+  let rect: { x: number; y: number; width: number; height: number } | null = null;
+  if (region) {
+    const [x0, y0, x1, y1] = region.map((n) => Number(n));
+    if (![x0, y0, x1, y1].every(Number.isFinite)) throw new Error('region 은 [x0, y0, x1, y1] 숫자 넷입니다');
+    rect = {
+      x: Math.max(0, Math.round(Math.min(x0, x1) / s0)), y: Math.max(0, Math.round(Math.min(y0, y1) / s0)),
+      width: Math.max(1, Math.round(Math.abs(x1 - x0) / s0)), height: Math.max(1, Math.round(Math.abs(y1 - y0) / s0)),
+    };
+  }
+  const once = (): Promise<any> => within<any>(rect ? t.view.capturePage(rect) : t.view.capturePage(), 10_000, '화면을 찍지 못했습니다(10초) — 탭이 가려져 있으면 browser_read 로 읽으세요');
   if (document.hidden) {
     // 숨은 창(트레이·최소화)에선 첫 캡처가 **마지막으로 그린 프레임(옛 화면)** 을 준다 — 그 캡처가 새 프레임을 그리게 하므로
     //  한 번 버리고 다시 찍는다. 실측(2026-10-25): 숨긴 창에서 끌기 뒤 첫 캡처는 옛 자리, 둘째는 새 자리에 상자.
@@ -379,12 +393,14 @@ async function shot(t: BTab): Promise<{ image: { mime: string; data: string }; w
     img = await once();
   }
   const size = img.getSize();
+  if (!size.width || !size.height) throw new Error('찍힌 화면이 비었습니다 — region 이 화면 밖이면 고치세요');
   const dpr = window.devicePixelRatio || 1;
-  const cssW = Math.max(1, Math.round(size.width / dpr));
-  const cssH = Math.max(1, Math.round(size.height / dpr));
-  const s = Math.min(1, SHOT_MAX / Math.max(cssW, cssH));
-  const w = Math.max(1, Math.round(cssW * s));
-  const h = Math.max(1, Math.round(cssH * s));
+  //  전체: CSS 화소 기준(좌표 = 페이지 px × s) · 확대: 화면 화소 기준(레티나면 두 배 선명)
+  const baseW = rect ? size.width : Math.max(1, Math.round(size.width / dpr));
+  const baseH = rect ? size.height : Math.max(1, Math.round(size.height / dpr));
+  const s = Math.min(1, SHOT_MAX / Math.max(baseW, baseH));
+  const w = Math.max(1, Math.round(baseW * s));
+  const h = Math.max(1, Math.round(baseH * s));
   const pic = await new Promise<HTMLImageElement>((resolve, reject) => {
     const im = new Image();
     im.onload = () => resolve(im);
@@ -401,8 +417,10 @@ async function shot(t: BTab): Promise<{ image: { mime: string; data: string }; w
   g.fillRect(0, 0, w, h);
   g.drawImage(pic, 0, 0, w, h);
   const url = c.toDataURL('image/jpeg', 0.72);
+  const image = { mime: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) };
+  if (rect) return { image, width: w, height: h, scale: Math.round(s0 * 1000) / 1000, region: (region as unknown[]).map((n) => Number(n)) };
   shotScale.set(t.key, s);
-  return { image: { mime: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) }, width: w, height: h, scale: Math.round(s * 1000) / 1000 };
+  return { image, width: w, height: h, scale: Math.round(s * 1000) / 1000 };
 }
 
 const MOD: Record<string, string> = { cmd: 'meta', command: 'meta', meta: 'meta', super: 'meta', win: 'meta', ctrl: 'control', control: 'control', shift: 'shift', alt: 'alt', option: 'alt', opt: 'alt' };
@@ -579,6 +597,53 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
     if (a.screenshot) lap('shot');
     return { ...summary(t), ...out, timing, ...pic };
   });
+}
+
+/** 올리기 상한(전부 합쳐) — 파일 바이트가 base64 로 페이지 원문에 실린다. 이보다 크면 사이트의 다른 길(드라이브 링크 등)을 쓴다. */
+const UPLOAD_MAX = 15 * 1024 * 1024;
+
+/**
+ * 파일 올리기 — file_url 이 준 받기 주소(같은 게이트웨이의 /api/files/s/…)만 받는다. 이 화면이 사람 PC 에서 아무 주소나 받아
+ *  남의 페이지에 넣는 통로가 되지 않게(사람 PC 의 localhost·사내망 주소를 AI 가 시켜 가져오는 길을 막는다).
+ */
+async function opUpload(t: BTab, a: Record<string, any>): Promise<unknown> {
+  const urls: string[] = Array.isArray(a.urls) ? a.urls.map((u: unknown) => String(u)) : [];
+  const names: string[] = Array.isArray(a.names) ? a.names.map((n: unknown) => String(n)) : [];
+  if (!urls.length) throw new Error('urls 가 필요합니다 — file_url(method GET)이 준 받기 주소');
+  const files: UploadFile[] = [];
+  let total = 0;
+  for (let i = 0; i < urls.length; i++) {
+    let u: URL;
+    try { u = new URL(urls[i], location.href); } catch { throw new Error('주소가 올바르지 않습니다: ' + urls[i]); }
+    if (!/^(\/preview\/[^/]+)?\/api\/files\/s\/[^/]+$/.test(u.pathname)) {
+      throw new Error('file_url 이 준 받기 주소(/api/files/s/…)만 올릴 수 있습니다: ' + urls[i]);
+    }
+    // 주소의 호스트는 믿지 않는다 — 같은 길(경로·쿼리)을 **이 화면이 붙은 게이트웨이**에서 받는다. 공개 주소와 앱이 연 주소가
+    //  다를 수 있고(dev.lvly.io → 테넌트 주소 308 실측), 다른 호스트를 받아 주면 사람 PC 에서 아무 곳이나 긁어 오는 통로가 된다.
+    const src = new URL(u.pathname + u.search, location.origin);
+    const res = await within(fetch(src.href), 30_000, '파일을 받는 데 30초가 넘었습니다');
+    if (!res.ok) throw new Error(`파일을 받지 못했습니다(${res.status}) — 주소가 만료됐으면 file_url 로 다시 받으세요.`);
+    const blob = await res.blob();
+    total += blob.size;
+    if (total > UPLOAD_MAX) throw new Error(`파일이 너무 큽니다(합 ${Math.round(total / 1024 / 1024)}MB > ${UPLOAD_MAX / 1024 / 1024}MB).`);
+    const cd = res.headers.get('content-disposition') || '';
+    const m = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(cd);
+    const fromHeader = m ? decodeURIComponent(m[1] || m[2] || '') : '';
+    const name = (names[i] || fromHeader || 'file').replace(/[\\/]/g, '_').slice(0, 200);
+    const b64 = await new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => { const s = String(fr.result || ''); resolve(s.slice(s.indexOf(',') + 1)); };
+      fr.onerror = () => reject(new Error('파일을 읽지 못했습니다'));
+      fr.readAsDataURL(blob);
+    });
+    files.push({ name, type: blob.type || 'application/octet-stream', b64 });
+  }
+  //  과녁 — ref(입력칸·단추·라벨·자리) 또는 끌어 놓을 자리의 좌표(스크린샷 좌표 → 페이지 px)
+  const s = shotScale.get(t.key) || 1;
+  const target = a.ref ? { ref: String(a.ref) } : { x: Math.round(Number(a.x) / s), y: Math.round(Number(a.y) / s) };
+  const r = await exec(t, callSource(pageUpload, target, files), 60_000);
+  if (!r?.ok) throw new Error(r?.error || '파일을 넣지 못했습니다');
+  return { ...summary(t), ...(a.ref ? { ref: a.ref } : { x: a.x, y: a.y }), via: r.via, ...(r.target ? { target: r.target } : {}), files: r.files };
 }
 
 async function opEval(t: BTab, code: string): Promise<unknown> {

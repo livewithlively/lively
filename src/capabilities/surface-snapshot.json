@@ -5763,7 +5763,7 @@
   "rest": [
    "POST /api/ui/browser/screenshot"
   ],
-  "input_hash": "813f4fa17870a3f9"
+  "input_hash": "622d849060a3a5e9"
  },
  {
   "name": "browser_act",
@@ -5794,6 +5794,16 @@
    "POST /api/ui/browser/fill"
   ],
   "input_hash": "1b7b746fdb2faf82"
+ },
+ {
+  "name": "browser_upload",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/upload"
+  ],
+  "input_hash": "00770c18219417bc"
  },
  {
   "name": "browser_text",
