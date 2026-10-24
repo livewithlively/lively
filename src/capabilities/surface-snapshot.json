@@ -5724,5 +5724,125 @@
    "POST /api/ui/agent-job-limits"
   ],
   "input_hash": "8d77283b0070ed8e"
+ },
+ {
+  "name": "browser_status",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/status"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "browser_tabs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/tabs"
+  ],
+  "input_hash": "700bf471b73c3eca"
+ },
+ {
+  "name": "browser_navigate",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/navigate"
+  ],
+  "input_hash": "a2420e2a002207c4"
+ },
+ {
+  "name": "browser_screenshot",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/screenshot"
+  ],
+  "input_hash": "622d849060a3a5e9"
+ },
+ {
+  "name": "browser_act",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/act"
+  ],
+  "input_hash": "14b476513ae9b356"
+ },
+ {
+  "name": "browser_read",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/read"
+  ],
+  "input_hash": "15f847d84f75c57b"
+ },
+ {
+  "name": "browser_fill",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/fill"
+  ],
+  "input_hash": "1b7b746fdb2faf82"
+ },
+ {
+  "name": "browser_upload",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/upload"
+  ],
+  "input_hash": "00770c18219417bc"
+ },
+ {
+  "name": "browser_text",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/text"
+  ],
+  "input_hash": "02b80680d9c5a09c"
+ },
+ {
+  "name": "browser_eval",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/eval"
+  ],
+  "input_hash": "15e7be99c573e73b"
+ },
+ {
+  "name": "browser_console",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/console"
+  ],
+  "input_hash": "4d0e5231742bb31e"
+ },
+ {
+  "name": "browser_handoff",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/handoff"
+  ],
+  "input_hash": "9eb9ca6bc939c6d4"
  }
 ]

@@ -213,8 +213,12 @@ t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == �
   //  · file_url — 파일 서명 주소를 **준다**(#4673). 주는 것만으로는 스토어가 안 바뀐다 — 받기(GET) 주소는 읽기전용 세션에서도 읽기다.
   //  · link_preview — 남의 페이지를 **읽어** 카드 재료를 준다(#4769). POST 인 것은 주소가 길어서일 뿐, 스토어를 바꾸지 않는다 — 읽기전용 세션에서도 읽기다.
   //    올리기(PUT) 주소는 자료를 만드는 쓰기라 핸들러가 읽기전용이면 403 으로 막는다(files/file-url.ts mintFileUrl · readOnly).
+  //  · browser_status / browser_screenshot / browser_read / browser_text / browser_console — AI 브라우저(#4993)를 **보기만** 한다.
+  //    스토어도 페이지도 바꾸지 않는다(POST 인 것은 세션 문맥을 본문 없이 실어 보내는 툴 표면이라서다). 이동·조작·코드 실행
+  //    (browser_navigate·act·fill·eval·tabs·handoff)은 쓰기로 남아 읽기전용 세션에서 소거된다 — 사람이 열어 둔 탭을 볼 수만 있다.
   assert.deepEqual(notBlockedPost, [
-    "broker_run", "delegate_cancel", "delegate_run", "file_url", "link_preview", "org_distiller_preview", "org_guide_preview",
+    "broker_run", "browser_console", "browser_read", "browser_screenshot", "browser_status", "browser_text",
+    "delegate_cancel", "delegate_run", "file_url", "link_preview", "org_distiller_preview", "org_guide_preview",
     "project_find_by_origin_v6", "recall_route", "repo_check", "repo_discover", "session_project_context_applied",
   ]);
 });

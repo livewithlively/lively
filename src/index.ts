@@ -178,6 +178,13 @@ app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
 app.use("/api/ui/apps/save", express.json({ limit: "4mb" }));
 //  #4488 LLM 프록시(/api/llm/anthropic/*) — 본문을 바이트 그대로 위로 흘린다(앱 · Claude Code 가 보낸 JSON 을 다시 직렬화하지 않는다 · 1MB 를 넘는다).
 app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
+//  #4993 브라우저 답(데스크톱 앱 화면 → 게이트웨이) — 스크린샷(base64 JPEG)이 실린다. 보이는 영역 한 장은 수백 KB 지만
+//   큰 화면·고해상도에서 1MB 를 넘을 수 있어 이 경로만 올린다(전역보다 먼저 — 위 apps/install 과 같은 이유).
+//   ⚠ 인증보다 앞에서 파싱하므로 토큰 머리글이 없는 요청은 **읽기 전에** 돌려보낸다(익명 요청이 큰 본문을 파싱시키지 못하게 — #4993 격리 리뷰).
+//   상한 4MB — 스크린샷 한 장은 긴 변 1568px JPEG 라 수백 KB 다(읽기·본문·JS 결과도 화면 쪽 상한이 그 아래다).
+app.use("/api/ui/browser/host/reply",
+  (req, res, next) => { if (/^Bearer\s+\S/i.test(String(req.headers.authorization || ""))) next(); else res.status(401).json({ error: "토큰 머리글(Authorization: Bearer)로만 답할 수 있습니다" }); },
+  express.json({ limit: "4mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();

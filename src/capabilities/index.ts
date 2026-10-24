@@ -85,6 +85,7 @@ import { linkPreviewCapabilities } from "./link-preview.js";   // #4769 링크 �
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
+import { browserCapabilities } from "./browser.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "../mcp/mcp-surface.js";
@@ -182,6 +183,7 @@ const all: Capability[] = [
   ...aiRunCapabilities, // #4488 앱 AI 실행 — app_ai_run(입구 하나 · 단발+API 키=프록시 · 그 밖=작업 컨테이너) · get/runs/cancel/targets(scope null · 앱 동의) · app_ai_account(_set) · app_ai_limits(_set admin). MCP+REST(/api/ui/ai-runs* · /api/ui/ai-targets · /api/ui/ai-account · /api/ui/ai-run-limits).
   ...appJobCapabilities, // #4486 앱 백그라운드 작업 — app_job_start(앱 서버 라우트를 함수에 비동기로 · 15분) · app_job_get · app_jobs · app_job_cancel(scope null · 앱 동의 — web.server 가 함의). MCP+REST(/api/ui/app-jobs*).
   ...agentJobCapabilities, // #4490 작업 컨테이너 — agent_job_run/get/list/cancel(scope=context, 보낸 사람 본인 구독 · 앱 화면은 다리로) · agent_job_limits(보기)/_set(admin). MCP+REST(/api/ui/agent-jobs*).
+  ...browserCapabilities, // #4993 AI 와 사람이 같이 쓰는 브라우저 — browser_status/tabs/navigate/screenshot/act/read/fill/text/eval/console/handoff(scope=null). 게이트웨이가 데스크톱 앱 화면의 <webview> 로 중계(src/browser/relay.ts). MCP+REST(/api/ui/browser/*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
@@ -295,7 +297,10 @@ export function registerMcpCapabilities(
         //  쓰는 도구는 거절한다 — 공용 컴퓨터에 깔린 로그인으로 남의 세션의 기록이 남던 것(session-identity-guard 머리말).
         //  읽기전용 판정과 같은 집합(isReadOnlyBlocked)이라 «무엇이 쓰기인가» 가 두 벌이 되지 않는다.
         if (session && isReadOnlyBlocked(cap)) await requireSessionWriter(u.userId, session);
-        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra), viewer: viewerOf(u) }));
+        const out = await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra), viewer: viewerOf(u) });
+        // #4993 — 그림(스크린샷)이 든 결과는 조각으로 낸다. 훅이 없거나 null 이면 종전대로 JSON 글 한 덩어리.
+        const parts = cap.mcpContent ? cap.mcpContent(out) : null;
+        return parts && parts.length ? { content: parts } : json(out);
       },
     );
   }

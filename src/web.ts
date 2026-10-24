@@ -21,6 +21,7 @@ import { stateDir } from "./ops/state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import { registerNotifyRoutes } from "./v6/notify-routes.js";
+import { registerBrowserRoutes } from "./browser/routes.js";   // #4993 AI·사람 공용 브라우저 — 화면 쪽 스트림·답
 import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
@@ -461,6 +462,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  #4054 — 받는 자리는 «워크스페이스 + 사람»(notify-scope.ts). 다른 워크스페이스는 `?all=1`(데스크톱 앱)일 때만.
   registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "",
     (req, me, all) => resolveNotifyRoutes(userOf(req), me, all));
+
+  // ── AI 와 사람이 같이 쓰는 브라우저(#4993) — 데스크톱 앱 화면이 명령을 받는 스트림(SSE) + 답·상태 자리. ──
+  //  AI 쪽 표면은 capability(browser_*), 이건 화면 쪽 배관이다(src/browser/routes.ts 머리말).
+  registerBrowserRoutes(app, mw("memory"), (req) => userOf(req));   // #4993 — 툴과 같은 문(memory · 알림 스트림과 같다)
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

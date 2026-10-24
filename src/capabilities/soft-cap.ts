@@ -114,6 +114,8 @@ export const HARD_CAP_OK: Readonly<Record<string, readonly string[]>> = {
   store_sql: ["app_id"],                                                  // #4226 앱 id — 잘리면 다른 앱(또는 없는 앱)을 가리킨다
   agent_job_run: ["model"],                                               // #4490 모델 이름 — 잘린 이름으로 돌면 엉뚱한 모델이거나 하네스가 즉사한다
   app_ai_run: ["model", "job"],                                           // #4488 모델 이름 · 작업 이름(설정 칸의 열쇠) — 잘리면 다른 모델 · 다른 작업의 실행 계정을 가리킨다
+  browser_act: ["ref", "keys", "tab"],                                    // #4993 요소 ref(e12) · 키 조합(cmd+a) · 탭 번호 — 잘리면 다른 요소·다른 키·없는 탭을 누른다
+  browser_eval: ["tab"],                                                  // #4993 탭 번호 — 잘리면 다른 탭에서 코드가 돈다
 };
 
 /**

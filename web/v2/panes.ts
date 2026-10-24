@@ -51,6 +51,7 @@ import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAft
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
+import { onTabEvent, slotOfKey, tabsOfSession } from './browser-tabs.js';   // #4993 AI 가 쓰는 탭 → 그 세션의 웹 칸
 import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -946,6 +947,32 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     bringUp(z, key);
   };
   wrap.addEventListener('pn:open-web', onOpenWeb);
+  // #4993 — AI 가 이 세션의 브라우저 탭을 쓰기 시작했다(또는 사람에게 부탁했다) → 그 웹 칸을 켜서 사람이 보게 한다.
+  //  탭 열쇠의 번호가 곧 웹 칸의 번호다(첫 탭 = 'web', 둘째 = 'web#2' — browser-tabs slotOfKey). 이 세션을 보는 곁칸만 듣는다.
+  const liveBrowser = hasBrowserSurface() && !EMBEDDED;
+  const offReveal = liveBrowser ? onTabEvent((ev) => {
+    if (ev.type !== 'reveal' || dead || (curSession() || '') !== ev.session) return;
+    const slot = ev.slot as TabKey;
+    const z = (['side', 'main', 'bottom'] as Zone[]).find((zz) => lay[zz].includes(slot));
+    if (!z) { addTab('side', slot); return; }
+    bringUp(z, slot);
+  }) : null;
+  /** 이 세션을 보러 왔는데 AI 가 최근(30분)에 쓴 탭이 있다 — 그 웹 칸이 배치에 없으면 **켜지 않고** 탭만 들인다(사람이 보던 칸을 뺏지 않는다). */
+  const seatAiTabs = (sid: string | null): void => {
+    if (!liveBrowser || !sid || dead) return;
+    let changed = false;
+    for (const t of tabsOfSession(sid)) {
+      if (!t.aiAt || Date.now() - t.aiAt > 30 * 60_000) continue;
+      const slot = slotOfKey(t.key) as TabKey;
+      if (allKeys().includes(slot)) continue;
+      lay.side.push(slot);
+      if (!lay.act.side) lay.act.side = slot;
+      changed = true;
+    }
+    if (changed) { saveLayout(); paintAll(); }
+  };
+  sessSubs.add(seatAiTabs);
+  queueMicrotask(() => seatAiTabs(curSession()));
   // 자료 칸에서 파일을 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
   //  ⚠ 이미 뷰어가 있으면 **또 만들지 않고 그 칸을 켠다**(부품은 칸마다 한 벌이라 두 곳에 생기면 둘이 따로 논다).
   //   접혀 있던 칸이면 펴 준다 — 신호를 보냈는데 아무 일도 안 일어난 것처럼 보이면 안 된다.
@@ -1920,6 +1947,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     destroy(): void {
       if (typeof narrowMq.removeEventListener === 'function') narrowMq.removeEventListener('change', onNarrow); else (narrowMq as any).removeListener(onNarrow);
       wrap.removeEventListener('pn:open-web', onOpenWeb);
+      offReveal?.();   // #4993
       wrap.removeEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
       wrap.removeEventListener(VIEWER_EVT, onOpenViewer);
       window.removeEventListener('message', onMsg);

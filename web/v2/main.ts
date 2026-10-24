@@ -24,7 +24,7 @@ import { installedRecentKey } from '../lib/rail-lit.js';   // #4769 설치한 �
 import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { writeLeftAt } from '../lib/console-phase.js';   // #4876 — 세션을 떠난 때(곁칸 «콘솔» 의 «다녀온 사이» 기준)
 import { instanceSideIcon, registerAppIcon } from './glass-icon.js';   // #4233 — 설치한 앱 줄의 그림을 런치패드와 맞춘다 · #4769 선언한 그림
-import { browserSurface } from './browser-surface.js';
+import { browserSurface, hasBrowserSurface } from './browser-surface.js';
 import { openProjPickModal, openProjPickPopover } from './proj-pick.js';   // 세션의 프로젝트 고르기 — 드롭다운·모달 두 그릇, 목록 한 벌
 import { readListFavMsg } from '../lib/list-fav.js';   // #3870 — 액자가 알려 온 리스트 즐겨찾기 변경
 import { HOSTING_GROUP, INVITED_GROUP, invitedRowStands } from '../lib/invited-up.js';   // #3870 — 홈 「초대받은 세션」·「초대한 세션」 층
@@ -86,6 +86,7 @@ import { mountAppRuntimeView } from './app-runtime.js';
 import { activeNavKey } from './shell-surfaces.js';   // #1780 — 최상위 화면 대장(무엇이 앱이고 무엇이 OS 표면인가)
 import { refreshUnread, startNotificationBanners, startUnreadWatch } from './notifications.js';   // #1891 — 배너는 화면과 무관하게 뜬다 · #4180 — 홈 종의 안 읽은 수 시계
 import { startLiveSync } from './live-sync.js';   // #2041 — 배너가 뜨는 그 순간 목록도 그 순간을 본다
+import { startBrowserHost } from './browser-host.js';   // #4993 AI 와 사람이 같이 쓰는 브라우저 — 게이트웨이 명령을 받는 자리
 import { NO_PROJECT_NAME, isSpentLoginSess, isCollectSessRow } from '../lib/proj-none.js';
 import { isLooseLivWork, livWorkName, livWorkNote, placeLivWork, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
@@ -814,6 +815,8 @@ export async function bootV2(): Promise<void> {
   //  그래서 **같은 스트림에 셸도 붙는다**: 시점을 새로 정의하지 않고 이미 있는 시점에 얹는다.
   //  ⚠ 여기서 배너를 만들지는 않는다 — 그건 앱 한 곳의 일이다(v2/live-sync.ts 머리말 §①).
   startLiveSync(() => { refreshSideSoon(); refreshUnread(); });   // #4180 — 세션 전이 직후엔 리브의 답 알림이 남을 수 있다 → 종도 같은 순간을 본다
+  // #4993 AI 와 사람이 같이 쓰는 브라우저 — 데스크톱 앱의 본 창만 명령을 받는다(팝아웃·끼워 넣은 판·브라우저에서 연 웹 UI 는 아니다).
+  if (!SOLO && !EMBEDDED && hasBrowserSurface()) startBrowserHost();
 
   // 방금 클래식에서 올라왔다면(#1898) 같은 성격의 창을 [화면] 자리에 다시 연다 — 왕복이 대칭이어야
   //  사람이 '내가 방금 누른 그 자리로 돌아왔다'고 읽는다. 도장은 1회용(lib/state takeShellSwitch).

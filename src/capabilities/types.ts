@@ -33,6 +33,11 @@ export interface RestMount {
   parse(req: express.Request): Record<string, unknown>;
 }
 
+/** MCP 결과 한 조각 — 글 또는 그림(#4993 브라우저 스크린샷). REST 는 이 모양을 쓰지 않고 handler 의 JSON 그대로다. */
+export type McpContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export interface Capability {
   name: string;
   title: string;
@@ -65,6 +70,10 @@ export interface Capability {
   //  예: { "anthropic/alwaysLoad": true } = Claude Code 가 이 툴을 deferred 안 시키고 상시 로드(v2.1.121+). 관리탭에서 per-tool 토글(#187).
   //  ⚠ anthropic/ 네임스페이스라 Claude 전용 — Codex 는 서버측 _meta deferral 미지원(전부 upfront 주입)이라 무효과.
   meta?: Record<string, unknown>;
+  // MCP 결과를 글 한 덩어리(JSON) 대신 조각으로 낼 때(#4993 — 스크린샷은 그림으로 줘야 모델이 본다).
+  //  handler 결과를 받아 조각 배열을 돌려주면 MCP 어댑터가 그대로 싣고, null 이면 종전대로 JSON 글이다.
+  //  REST 는 이 훅을 타지 않는다 — 같은 handler 결과를 JSON 으로(그림은 base64 필드로) 그대로 낸다(표면 동일성 유지).
+  mcpContent?: (out: unknown) => McpContent[] | null;
   // canonical JSON 반환. 도메인 에러는 plain Error throw —
   // REST 는 wrap() 의 한국어 부분문자열 매핑('없음'→404 등), MCP 는 SDK isError 로 변환된다.
   // 입력은 어댑터 경계에서 검증되므로 레지스트리 차원에선 넓게 받는다(각 op 파일에서 좁혀 캐스팅).

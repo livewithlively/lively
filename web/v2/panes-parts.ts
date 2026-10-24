@@ -18,6 +18,7 @@ import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
+import { type BTab, answerHandoff, dockTab, ensureTab, getTab, onTabEvent, rememberUrl, setPaused } from './browser-tabs.js';   // #4993 AI 와 같이 쓰는 탭(데스크톱)
 import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
@@ -690,6 +691,9 @@ function makeZoom(o: ZoomOpts): Zoom {
 }
 
 function webPart(ctx: PartCtx): Part {
+  //  데스크톱 앱(#1829 브라우저 서피스)이면 AI 와 같이 쓰는 탭으로 그린다(#4993) — webview 는 칸 안이 아니라 브라우저 층에 산다.
+  //   끼워 넣은 판(미리보기 안 라이블리)은 제외한다 — 거기엔 서피스가 없고(preload 가 없다) 탭 대장도 바깥 것이 아니다.
+  if (hasBrowserSurface() && !EMBEDDED) return liveWebPart(ctx);
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
   // 재우기 상태(아래 '안 보이면 재운다') — 주소를 싣는 모든 길(load·adopt·reload)이 이걸 만지므로 맨 위에 둔다.
@@ -941,6 +945,162 @@ function webPart(ctx: PartCtx): Part {
       offSess();
       zoom.destroy();
       window.clearInterval(watch);
+      evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
+      document.removeEventListener('pointerdown', mark, true);
+      document.removeEventListener('focusin', mark, true);
+      window.removeEventListener('keydown', onKey, true);
+    },
+  };
+}
+
+// ══ 웹 — 데스크톱 앱: AI 와 사람이 같이 쓰는 탭 (#4993) ═══════════════════════════
+//  이 칸은 **자리(stage)와 주소줄만** 갖는다. 페이지(webview)는 브라우저 층(browser-tabs.ts)에 살고, 층이 그 webview 를
+//  이 자리 위에 겹쳐 맞춘다 — 사람이 다른 세션을 봐도 AI 는 그 탭에서 스크린샷·클릭을 계속할 수 있어야 하기 때문이다
+//  (칸 안의 webview 는 셸이 탭을 숨기는 순간 스크린샷이 영영 멈춘다 — browser-tabs 머리말의 실측).
+//  탭의 열쇠 = 이 칸의 저장 열쇠(slotKey) — 그래서 이 세션 AI 의 browser_* 툴이 여는 탭이 곧 이 칸이다.
+//  배율은 setZoomFactor 가 아니라 «배치 크기 ÷ 배율 + transform» 이다(층이 매 틀 scale() 을 읽는다).
+function liveWebPart(ctx: PartCtx): Part {
+  const root = el('div', { class: 'pn-part pn-web pn-web-live' });
+  const FIT_BASE = 1280;
+  let key = ctx.slotKey();
+  let release: (() => void) | null = null;
+  /** 이 칸이 자리에 붙여 둔 탭 — 대장의 그 열쇠 탭이 이것과 다르면(없어졌다가 다시 생겼다) 다시 붙인다. */
+  let docked: BTab | null = null;
+  let adopting = false;
+  let curZ = 1;
+  const stage = el('div', { class: 'pn-webstage' });
+  const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' }) as HTMLInputElement;
+  input.onfocus = () => input.select();
+  //  ⚠ 늘 «붙여 둔 탭» 을 쓴다 — 대장에서 탭이 없어졌다 다시 생기면(새 BTab) 그 탭은 자리가 없어 셸 뒤 투명도 1% 로 숨는다.
+  //   그대로 ensureTab 만 부르면 사람이 친 주소가 안 보이는 탭에 실렸다(#4993 격리 리뷰). 다르면 여기서 다시 붙인다.
+  const tab = (): BTab => {
+    if (!docked || getTab(key) !== docked) adopt();
+    return docked!;
+  };
+  const go = (raw?: string): void => {
+    const u = normWebUrl(raw ?? input.value);
+    if (!u) return;
+    if (!EMBEDDED) rememberUrl(key, u);
+    const t = tab();
+    t.url = u;
+    if (t.isReady) { try { t.view.loadURL(u).catch(() => { /* 실패는 did-fail-load 가 적는다 */ }); } catch { t.view.setAttribute('src', u); } }
+    else t.view.setAttribute('src', u);
+    sync();
+  };
+  input.onkeydown = (e: KeyboardEvent) => { if (!e.isComposing && e.key === 'Enter') { e.preventDefault(); go(); } };
+  const reload = (): void => { const t = tab(); try { if (t.isReady) t.view.reload(); else if (t.url) t.view.setAttribute('src', t.url); } catch { /* 아직 안 붙었다 */ } };
+  const backBtn = el('button', { class: 'pn-web-btn ic back', type: 'button', 'aria-label': '뒤로', title: '앞 화면으로 돌아갑니다.',
+    onclick: () => { const t = tab(); try { if (t.view.canGoBack()) t.view.goBack(); } catch { /* noop */ } } }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로', title: '뒤로 오기 전 화면으로 갑니다.',
+    onclick: () => { const t = tab(); try { if (t.view.canGoForward()) t.view.goForward(); } catch { /* noop */ } } }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  const openTab = el('a', { class: 'pn-web-btn ic', target: '_blank', rel: 'noopener', title: '지금 주소를 새 탭(시스템 브라우저)에서 엽니다.', 'aria-label': '새 탭에서 열기', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
+  openTab.onclick = (e: Event) => { const u = tab().url; if (!u) { e.preventDefault(); return; } openTab.href = u; };
+  // AI 표시 — 이 탭을 AI 가 쓰고 있으면(최근 1분) 뜬다. 누르면 이 탭의 AI 조작을 멈추고, 다시 누르면 푼다.
+  const aiChip = el('button', { class: 'pn-web-ai', type: 'button', hidden: true }) as HTMLButtonElement;
+  aiChip.onclick = () => { const t = tab(); setPaused(t, !t.paused); sync(); toast(t.paused ? '이 탭의 AI 조작을 멈췄어요. 다시 누르면 풀립니다.' : 'AI 가 이 탭을 다시 쓸 수 있어요.'); };
+  // 사람에게 넘기기 — AI 가 부탁한 일(로그인·인증 등)을 사람이 끝내고 [완료]를 누른다.
+  const hoText = el('span', { class: 'pn-web-ho-t' });
+  const handoffBar = el('div', { class: 'pn-web-handoff', role: 'status', hidden: true },
+    el('span', { class: 'pn-web-ho-h', text: 'AI 의 부탁' }), hoText,
+    el('span', { class: 'pn-web-ho-acts' },
+      el('button', { class: 'pn-web-btn pri', type: 'button', text: '완료', title: '부탁한 일을 끝냈어요 — AI 가 이어서 합니다.', onclick: () => { const t = getTab(key); if (t) answerHandoff(t, true); sync(); } }),
+      el('button', { class: 'pn-web-btn', type: 'button', text: '못 해요', title: 'AI 에게 못 한다고 알립니다.', onclick: () => { const t = getTab(key); if (t) answerHandoff(t, false); sync(); } })));
+  const empty = el('div', { class: 'pn-web-empty' },
+    el('p', { class: 'pn-web-empty-h', text: '주소를 넣으면 이 칸에서 열립니다.' }),
+    el('p', { class: 'pn-web-empty-p', text: '이 세션의 AI 도 이 탭을 같이 씁니다. 사이트에 로그인해 두면 AI 가 그 로그인으로 일해요.' }));
+  bindCtx(root, () => {
+    const u = tab().url || input.value || '';
+    return {
+      title: u ? (u.length > 40 ? u.slice(0, 40) + '…' : u) : '웹 칸', sub: '웹',
+      rows: [
+        { label: '뒤로', icon: 'chevL', off: backBtn.disabled, run: () => backBtn.click() },
+        { label: '앞으로', icon: 'chevR', off: fwdBtn.disabled, run: () => fwdBtn.click() },
+        { label: '다시 불러오기', icon: 'refresh', hint: '⌘R', off: !u, run: () => reload() },
+        { sep: true, label: '' },
+        { label: '새 창에서 열기', icon: 'open', off: !u, run: () => window.open(u, '_blank', 'noopener') },
+        { label: '주소 복사', icon: 'copy', off: !u, run: () => void copyText(u).then((ok) => { if (ok) toast('주소를 복사했어요'); }) },
+        { label: '주소 입력', icon: 'pen', run: () => { input.focus(); input.select(); } },
+      ],
+    };
+  });
+  root.append(
+    el('div', { class: 'pn-web-bar' },
+      el('span', { class: 'pn-web-navs' }, backBtn, fwdBtn,
+        el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
+      input, aiChip, openTab),
+    handoffBar,
+    stage);
+  const zoom = makeZoom({ stage, keyOf: () => key, baseW: () => FIT_BASE, paint: (z) => { curZ = z; } });
+
+  /** 주소줄·단추·AI 표시·부탁 막대를 탭의 지금 상태에 맞춘다. */
+  function sync(): void {
+    const t = getTab(key);
+    if (!t) return;
+    if (document.activeElement !== input) input.value = t.url || '';
+    try { ctx.setTabTitle?.(t.url ? new URL(t.url).host.replace(/^www\./, '') : null); } catch (_) { ctx.setTabTitle?.(null); }
+    try { backBtn.disabled = !t.view.canGoBack(); fwdBtn.disabled = !t.view.canGoForward(); } catch (_) { backBtn.disabled = true; fwdBtn.disabled = true; }
+    const aiRecent = t.aiBusy > 0 || (t.aiAt > 0 && Date.now() - t.aiAt < 60_000);
+    aiChip.hidden = !aiRecent && !t.paused;
+    aiChip.classList.toggle('busy', t.aiBusy > 0);
+    aiChip.classList.toggle('paused', t.paused);
+    aiChip.textContent = t.paused ? 'AI 멈춤' : (t.aiBusy > 0 ? 'AI 조작 중' : 'AI');
+    aiChip.title = t.paused ? 'AI 조작을 멈춰 두었어요 — 누르면 다시 쓸 수 있게 합니다.' : 'AI 가 이 탭을 쓰고 있어요 — 누르면 AI 조작을 멈춥니다(사람은 계속 쓸 수 있어요).';
+    handoffBar.hidden = !t.handoff;
+    hoText.textContent = t.handoff ? t.handoff.message : '';
+    empty.hidden = !!t.url;
+  }
+  /** 이 칸이 보여 줄 탭을 지금 세션의 것으로 — 자리를 다시 쥐고, 배율 알약·빈 안내를 그 탭의 겹침 판으로 옮긴다. */
+  function adopt(): void {
+    if (adopting) return;   // ensureTab 이 내는 'tabs' 신호가 여기로 되돌아오는 것을 막는다
+    adopting = true;
+    try {
+      key = ctx.slotKey();
+      if (release) { release(); release = null; }
+      const t = ensureTab(key);
+      release = dockTab(key, stage, () => curZ);
+      docked = t;
+      //  알약·안내는 webview 위에 떠야 한다 — 칸 안 요소는 층의 webview 를 이길 수 없어(쌓임 맥락이 다르다) 겹침 판에 싣는다.
+      t.overlay.append(zoom.el, empty);
+      zoom.apply();
+    } finally { adopting = false; }
+    sync();
+  }
+  adopt();
+  const offSess = ctx.onSession(() => adopt());
+  //  탭 목록이 바뀌면(만들기·없애기) 내 탭이 아직 그 탭인지 본다 — 없어졌거나 갈렸으면 다시 붙인다(빈 자리로 남지 않게).
+  const offTabs = onTabEvent((ev) => {
+    if (ev.type === 'tabs') { if (!adopting && getTab(key) !== docked) adopt(); return; }
+    if ('key' in ev && ev.key === key && ev.type !== 'reveal') sync();
+  });
+  const aiTimer = window.setInterval(() => { const t = getTab(key); if (t && t.aiAt) sync(); }, 5_000);   // AI 표시가 1분 뒤 저절로 꺼지게
+  // ⌘R 은 이 칸만 — 마지막으로 만진 칸이 여기일 때(옛 웹 칸과 같은 규칙). webview 안을 누른 뒤의 키는 게스트 몫이라 여기 안 온다.
+  let mine = false;
+  const paneOf = (): HTMLElement => (root.closest('.pn-pane') as HTMLElement | null) || root;
+  const mark = (e: Event): void => { const t = e.target; mine = t instanceof Node && paneOf().contains(t); };
+  const onKey = (e: KeyboardEvent): void => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    if (String(e.key).toLowerCase() !== 'r' && e.code !== 'KeyR') return;
+    if (!mine || root.hidden || !root.offsetParent) return;
+    e.preventDefault();
+    reload();
+  };
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('focusin', mark, true);
+  window.addEventListener('keydown', onKey, true);
+  // 밖에서 부른 주소(미리보기 칸 → 이 칸) — 옛 웹 칸과 같은 신호를 받는다.
+  const onOpen = (e: Event): void => { const u = (e as CustomEvent).detail?.url; if (u) go(String(u)); };
+  const evtHost = ctx.paneRoot();
+  evtHost.addEventListener(WEB_OPEN_EVT, onOpen);
+  return {
+    root,
+    tick: () => sync(),
+    destroy: () => {
+      offSess(); offTabs();
+      window.clearInterval(aiTimer);
+      if (release) { release(); release = null; }
+      zoom.destroy();
+      zoom.el.remove();
+      empty.remove();
       evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
       document.removeEventListener('pointerdown', mark, true);
       document.removeEventListener('focusin', mark, true);

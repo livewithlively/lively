@@ -80,7 +80,8 @@ test("G6 부르는 자리 — MCP 어댑터와 REST 어댑터가 둘 다, 핸들
   };
   const mcp = read("capabilities/index.ts");
   const iGuard = mcp.indexOf("if (session && isReadOnlyBlocked(cap)) await requireSessionWriter(u.userId, session);");
-  const iHandler = mcp.indexOf("return json(await cap.handler(");
+  //  #4993 — 결과를 조각(그림)으로도 낼 수 있게 핸들러 결과를 변수로 받는다(cap.mcpContent). 부르는 자리는 그대로 하나다.
+  const iHandler = mcp.indexOf("const out = await cap.handler(");
   assert.ok(iGuard > 0, "MCP 어댑터에 판정 호출이 없다");
   assert.ok(iHandler > iGuard, "MCP 어댑터: 판정이 핸들러보다 앞이어야 한다");
   const rest = read("web.ts");
