@@ -7,7 +7,7 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
   markViewing, viewersOf, forgetPresence, sweepPresence, presenceSessionCount,
-  leaveViewing, presenceShifted, pushViewers,
+  leaveViewing, presenceShifted, pushViewers, terminalViewersOf,
   PRESENCE_TTL_MS, PRESENCE_STAMP_MS,
 } from "./session-presence.js";
 import { subscribeNotify, type NotifyEvent } from "../v6/notify-bus.js";
@@ -193,4 +193,47 @@ test("E17 ★ 워크스페이스가 다르면 같은 세션 id·같은 아이디
     withTenant(A, () => pushViewers(S, [face("jang")]));
     assert.equal(inB.got.length, 0, "🔴 A 의 얼굴 줄이 B 의 같은 아이디로 밀려 갔다");
   } finally { inB.close(); withTenant(A, () => forgetPresence(S)); }
+});
+
+// ── #4996 «터미널로 보고 있고 손길이 있다» — 나중에 들어온 사람이 대화창으로 비켜 서는 재료 ─────────────────────
+test("T1 ★ 터미널로 보고 손길이 있다고 찍은 사람만 터미널 보는 사람이다", () => {
+  reset();
+  markViewing(S, "yoon", T0, true);
+  markViewing(S, "jang", T0 + 1, false);
+  assert.deepEqual(viewersOf(S, T0 + 2), ["yoon", "jang"], "얼굴 줄은 둘 다");
+  assert.deepEqual(terminalViewersOf(S, T0 + 2), ["yoon"], "🔴 대화창으로 보는 사람까지 터미널을 쥔 것으로 셌다");
+});
+
+test("T2 ★ 손길이 끊겼다고(또는 대화창으로 옮겼다고) 다시 찍으면 그때부터 아니다", () => {
+  reset();
+  markViewing(S, "yoon", T0, true);
+  markViewing(S, "yoon", T0 + PRESENCE_STAMP_MS, false);
+  assert.deepEqual(terminalViewersOf(S, T0 + PRESENCE_STAMP_MS), [], "🔴 안 보는 탭이 남의 터미널을 계속 막는다");
+  assert.deepEqual(viewersOf(S, T0 + PRESENCE_STAMP_MS), ["yoon"], "얼굴은 그대로(보고는 있다)");
+});
+
+test("T3 구 화면 도장(값을 안 실음)은 그 사람의 값을 건드리지 않는다", () => {
+  reset();
+  markViewing(S, "yoon", T0, true);
+  markViewing(S, "yoon", T0 + 1000);
+  assert.deepEqual(terminalViewersOf(S, T0 + 1000), ["yoon"]);
+  markViewing(S2, "jang", T0);
+  assert.deepEqual(terminalViewersOf(S2, T0), [], "처음부터 안 실었으면 아니다");
+});
+
+test("T4 도장이 만료되면 터미널 보는 사람에서도 빠진다", () => {
+  reset();
+  markViewing(S, "yoon", T0, true);
+  assert.deepEqual(terminalViewersOf(S, T0 + PRESENCE_TTL_MS + 1), []);
+});
+
+test("T5 ★ 같은 얼굴 줄이어도 «터미널로 보나» 가 바뀌면 민다", () => {
+  reset();
+  const y = listen("yoon", hereSlug());
+  try {
+    assert.equal(pushViewers(S, [{ id: "yoon", name: "yoon", term: false }]), 1);
+    assert.equal(pushViewers(S, [{ id: "yoon", name: "yoon", term: false }]), 0, "하트비트는 안 민다");
+    assert.equal(pushViewers(S, [{ id: "yoon", name: "yoon", term: true }]), 1, "🔴 터미널로 옮긴 것을 안 밀었다");
+    assert.equal((y.got.at(-1) as { viewers: Array<{ term: boolean }> }).viewers[0].term, true);
+  } finally { y.close(); }
 });

@@ -97,8 +97,8 @@ export interface NotifyAppEvent {
 export interface NotifyPresenceEvent {
   type: "presence";
   session: string;
-  /** 도착 순 — 열람 도장(/seen)의 응답 `viewers` 와 같은 모양. */
-  viewers: Array<{ id: string; name: string }>;
+  /** 도착 순 — 열람 도장(/seen)의 응답 `viewers` 와 같은 모양. term(#4996) = 그 사람이 터미널로 보고 있고 손길이 있다. */
+  viewers: Array<{ id: string; name: string; term?: boolean }>;
   key: string;
   ts: number;
   ws?: NotifyWorkspace;

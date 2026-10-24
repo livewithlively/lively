@@ -42,7 +42,7 @@ import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTaken
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession, nodeSessionHarness } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
-import { markViewing, viewersOf, leaveViewing, pushViewers, sweepPresence } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
+import { markViewing, viewersOf, terminalViewersOf, leaveViewing, pushViewers, sweepPresence } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
 import { listMembers } from "../org/store.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
@@ -99,12 +99,21 @@ async function memberNames(): Promise<Map<string, string>> {
   if (m.size) nameMemo.set(ws, { at: Date.now(), m });   // 빈 결과(조회 실패)는 기억하지 않는다 — 1분 동안 이름을 잃는다
   return m;
 }
-async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name: string }>> {
+async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name: string; term: boolean }>> {
   if (!viewersOf(sessionId).length) return [];
   const names = await memberNames();
   //  ⚠ 줄은 명부를 **기다린 뒤에** 읽는다(#3870) — 이 줄을 곧바로 밀기 때문이다. 기다리기 전에 읽으면 거의 동시에 온
   //   다른 도장·떠남이 새 줄을 민 뒤에 이 요청이 옛 줄을 다시 밀어, 얼굴이 잠깐 빠지거나 자리가 바뀐다.
-  return viewersOf(sessionId).map((id) => ({ id, name: names.get(id) || id }));
+  //  #4996 — term = 터미널로 보고 있고 손길이 있다(session-presence Stamp.term). 들어오는 사람의 화면이 이걸 보고 대화창으로 비켜 선다.
+  const onTerm = new Set(terminalViewersOf(sessionId));
+  return viewersOf(sessionId).map((id) => ({ id, name: names.get(id) || id, term: onTerm.has(id) }));
+}
+
+/** #4996 열람 도장이 실어 온 «터미널로 보나 · 손길이 있나». 안 실어 왔으면(구 화면) undefined — 그 사람의 값을 건드리지 않는다. */
+function termOfStamp(body: unknown): boolean | undefined {
+  const b = (body && typeof body === "object") ? body as Record<string, unknown> : {};
+  if (b.view !== "term" && b.view !== "chat") return undefined;
+  return b.view === "term" && b.active === true;
 }
 
 // 구 화면(Enter|Escape 키 이름)도 받는다 — 하위호환. 뜻은 claude 대화상자 기준(Enter=승인, Esc=중단)이었으므로 그대로 옮긴다.
@@ -250,7 +259,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
       //  ⭐ 얼굴 줄(#2116)은 **게이트웨이가 기록한다** — 보고 있는 사람은 그 노드가 아니라 여기에 붙은 브라우저다.
       //   그래서 구 노드(markSeen 미지원)여도, 노드 왕복이 실패해도 얼굴은 정확하다.
-      markViewing(id, uid);
+      markViewing(id, uid, Date.now(), termOfStamp(req.body));
       const faces = await viewerFaces(id);
       pushViewers(id, faces);   // 노드 왕복보다 먼저 — 얼굴은 게이트웨이의 사실이라 노드가 느려도 늦출 이유가 없다
       if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old", viewers: faces }); return; }
@@ -259,7 +268,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       return;
     }
     if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
-    markViewing(id, uid);
+    markViewing(id, uid, Date.now(), termOfStamp(req.body));
     const faces = await viewerFaces(id);
     pushViewers(id, faces);
     await markSessionSeen(id);
