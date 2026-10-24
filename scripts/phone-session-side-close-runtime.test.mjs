@@ -95,8 +95,8 @@ async function PAGE(inners) {
     R.s0 = t.st();
     await t.click(t.D.querySelector(".sc-side")); R.s1 = t.st();
     await t.click(t.mc.menuBtn); R.s5 = t.st();
-    //  목록을 여는 구역 탭(홈 · 더보기가 아닌 것) 아무거나 — 구역 표(railSections)가 바뀌어도 시험이 따라간다.
-    const b = t.D.querySelector(".v2-mtab[data-sec]:not([data-sec=home])");
+    //  목록을 여는 구역 탭 아무거나 — 구역 표(railSections)가 바뀌어도 시험이 따라간다. 홈 · 확인할 것(stage 판엔 아직 있다)은 화면으로 가는 탭이라 뺀다.
+    const b = t.D.querySelector(".v2-mtab[data-sec]:not([data-sec=home]):not([data-sec=inbox])");
     R.s6tab = !!b;
     if (b) { await t.click(b); R.s6 = t.st(); await t.click(t.mc.menuBtn); R.s6close = t.st(); }
     t.f.remove();
