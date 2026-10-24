@@ -5,6 +5,8 @@
 // fail-first: 고치기 전 산출 모듈(TERMJS_MOD=<origin/main 의 web/standalone 컴파일본>)로 돌리면 M1·M2·M3·M5·M6·M8·M9 와
 //  C·E·S 전부(함수 미노출)가 빨간불이다(실측 3/26). M4·M7·M10 은 종전 동작 보존 행이라 그때도 초록. 새 함수는 변이로도 쟀다:
 //  cursor 요구 빼기 → C2 · 모드 8줄 창 넓히기 → E3 · stuck 멈춤 빼기 → S4 가 빨간불.
+// #4990 M13~M16(번호 단추가 글쇠 줄을 갈아 끼우지 않고 맨 앞에 붙는다): 고치기 전 모듈로 M13·M14·M16 이 빨간불(실측 10/25),
+//  M15(다시 그려지기만 하면 밀어 둔 자리 유지)는 «줄 되돌리기를 매 화면 읽기마다» 변이로 빨간불.
 // 실행: npm run build && node dist/terminal/terminal-client-mdock.test.js
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -27,6 +29,7 @@ class FakeNode {
   selectionStart: number | null = null;
   selectionEnd: number | null = null;
   hidden = false;
+  scrollLeft = 0;
   focused = 0;
   blurred = 0;
   parent: FakeNode | null = null;
@@ -231,6 +234,77 @@ t("M10 부모가 없으면(단독 탭) 알리지 않는다 · 오류 없음", as
   const c = composer(h);
   c.fire("focus"); c.fire("blur");
   assert.equal(h.posted.length, 0);
+});
+
+// ── 번호 단추와 글쇠 줄의 공존(#4990) ──
+//  번호가 글쇠 줄을 갈아 끼우면 /permissions 처럼 번호가 안 먹는 목록에서 Esc 도 없어 못 나온다(상민 2026-10-25).
+//  화면을 갈아 끼울 수 있는 가짜 터미널 — 입력 줄이 onRender 로 화면 읽기(150ms 뒤)를 건다.
+const screenTerm = (rows: string[]) => {
+  const st: { rows: string[]; render: (() => void) | null } = { rows, render: null };
+  const lines = (): string[] => [...Array.from({ length: Math.max(0, 24 - st.rows.length) }, () => ""), ...st.rows];
+  const term = {
+    cols: 80, rows: 24, textarea: new FakeNode("textarea"), modes: {},
+    buffer: { active: { type: "normal", length: 24, baseY: 0, cursorX: 0, cursorY: 0,
+      getLine: (i: number) => { const s = lines()[i]; return s === undefined ? null : { translateToString: () => s }; } } },
+    onRender: (fn: () => void) => { st.render = fn; },
+  };
+  const show = async (next: string[]): Promise<void> => { st.rows = next; st.render?.(); await new Promise((r) => setTimeout(r, 200)); };
+  return { term, show };
+};
+const picksOf = (h: Harness): FakeNode | null => h.main.find((n) => /(^|\s)mpicks(\s|$)/.test(n.className));
+const pickLabels = (h: Harness): string[] => (picksOf(h)?.children || []).map((b: any) => b.textContent);
+const PERMS = ["Permissions:  Allow   Ask   Deny   Workspace", "", "❯ 1. Add a new rule…", "  2. Bash(npm run build:*)", "  3. Read(//tmp/**)"];
+const ASK2 = [" Do you want to proceed?", " ❯ 1. Yes", "   2. No"];
+const PLAIN = ["❯ 고쳐 줘", "", "  ? for shortcuts"];
+const dockWith = async (first: string[]) => {
+  const h = await makeCtx();
+  const s = screenTerm(first);
+  h.mod.__injectRefsForTest({ term: s.term });
+  h.mod.setupMobileDock(h.main);
+  await s.show(first);
+  return { h, show: s.show };
+};
+t("M13 번호로 묻는 화면 — 번호가 글쇠 줄 맨 앞에 붙고 Esc·⏎·↑·↓ 는 그대로 남는다 · 번호도 Esc 도 눌린다", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  await show(PERMS);
+  const row = keyRow(h)!;
+  assert.equal(row.hidden, false, "글쇠 줄을 숨기지 않는다(/permissions 에서 Esc 로 나올 길)");
+  const picks = picksOf(h);
+  assert.ok(picks && !picks.hidden, "번호 단추가 선다");
+  assert.equal(row.children[0], picks, "번호는 글쇠 줄 맨 앞이다(따로 한 줄을 더 먹지 않는다)");
+  assert.deepEqual(pickLabels(h), ["1", "2", "3"]);
+  const labels = keyLabels(h);
+  for (const want of ["Esc", "⏎", "↑", "↓"]) assert.ok(labels.includes(want), `«${want}» 가 남아 있어야 한다: ${JSON.stringify(labels)}`);
+  press(picks!.children[1]);
+  press(keyByLabel(h, "Esc"));
+  assert.deepEqual(h.sent, ["2", "\x1b"]);
+});
+t("M14 줄을 밀어 둔 채 번호가 새로 서면 처음으로 되돌린다 · 선택지가 사라지면 번호만 걷히고 글쇠는 남는다", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  assert.equal(picksOf(h)!.hidden, true, "전제: 평소엔 번호가 없다");
+  keyRow(h)!.scrollLeft = 140;   // 복사·붙여넣기 쪽으로 밀어 둠
+  await show(PERMS);
+  assert.equal(keyRow(h)!.scrollLeft, 0, "번호가 화면 밖에 붙지 않게 줄을 처음으로");
+  await show(PLAIN);
+  assert.equal(picksOf(h)!.hidden, true, "번호는 걷힌다");
+  assert.equal(keyRow(h)!.hidden, false, "글쇠 줄은 그대로");
+  assert.ok(keyLabels(h).includes("Esc"));
+});
+t("M15 같은 선택지가 떠 있는 동안 다시 그려지기만 하면 밀어 둔 자리를 건드리지 않는다(뒤쪽 글쇠에 닿게)", async () => {
+  const { h, show } = await dockWith(PERMS);
+  assert.ok(!picksOf(h)!.hidden, "전제: 번호가 떠 있다");
+  keyRow(h)!.scrollLeft = 140;
+  await show(PERMS);
+  assert.equal(keyRow(h)!.scrollLeft, 140);
+});
+t("M16 경계 — 선택지 둘(최소)이면 번호 둘 · 셋에서 둘로 바뀌면 번호도 둘로", async () => {
+  const { h, show } = await dockWith(ASK2);
+  assert.deepEqual(pickLabels(h), ["1", "2"]);
+  assert.equal(keyRow(h)!.hidden, false);
+  await show(PERMS);
+  assert.deepEqual(pickLabels(h), ["1", "2", "3"]);
+  await show(ASK2);
+  assert.deepEqual(pickLabels(h), ["1", "2"]);
 });
 
 // ── 번호로 고르기 판정 ──
