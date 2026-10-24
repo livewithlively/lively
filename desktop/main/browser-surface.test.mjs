@@ -100,6 +100,8 @@ t("E3 강제 설정이 격리를 실제로 닫는다 + 중첩 서피스를 막�
     assert.equal(WEBVIEW_FORCED_PREFS[k], v, k);
   assert.ok(WEBVIEW_DROPPED_PREFS.includes("preload"), "★ preload 를 지우지 않으면 토큰 주입 preload 가 남의 사이트에서 돈다");
   assert.ok(Object.isFrozen(WEBVIEW_FORCED_PREFS), "얼지 않은 정책은 호출부가 조용히 고칠 수 있다");
+  // #4993 — AI 가 숨은 창에서 쓰는 탭이 1초·1분 단위로 묶이지 않게(격리와 무관한 성능 설정)
+  assert.equal(WEBVIEW_FORCED_PREFS.backgroundThrottling, false, "숨은 창에서 AI 가 쓰는 탭의 타이머가 묶인다");
   assert.match(BROWSER_SURFACE_PARTITION, /^persist:/, "세션이 안 남으면 로그인이 매번 풀린다");
   assert.ok(BROWSER_SURFACE_PARTITION.length > "persist:".length, "빈 파티션은 우리 토큰이 있는 기본 저장소다");
 });

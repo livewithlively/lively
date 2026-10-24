@@ -5724,5 +5724,115 @@
    "POST /api/ui/agent-job-limits"
   ],
   "input_hash": "8d77283b0070ed8e"
+ },
+ {
+  "name": "browser_status",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/status"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "browser_tabs",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/tabs"
+  ],
+  "input_hash": "700bf471b73c3eca"
+ },
+ {
+  "name": "browser_navigate",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/navigate"
+  ],
+  "input_hash": "a2420e2a002207c4"
+ },
+ {
+  "name": "browser_screenshot",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/screenshot"
+  ],
+  "input_hash": "813f4fa17870a3f9"
+ },
+ {
+  "name": "browser_act",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/act"
+  ],
+  "input_hash": "14b476513ae9b356"
+ },
+ {
+  "name": "browser_read",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/read"
+  ],
+  "input_hash": "15f847d84f75c57b"
+ },
+ {
+  "name": "browser_fill",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/fill"
+  ],
+  "input_hash": "1b7b746fdb2faf82"
+ },
+ {
+  "name": "browser_text",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/text"
+  ],
+  "input_hash": "02b80680d9c5a09c"
+ },
+ {
+  "name": "browser_eval",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/eval"
+  ],
+  "input_hash": "15e7be99c573e73b"
+ },
+ {
+  "name": "browser_console",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/console"
+  ],
+  "input_hash": "321e058b372aff45"
+ },
+ {
+  "name": "browser_handoff",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/handoff"
+  ],
+  "input_hash": "48f8133f050c3cb0"
  }
 ]

@@ -832,6 +832,10 @@ function showApp() {
         //  ⚠ 켠다고 페이지가 마음대로 하는 게 아니다 — 붙는 순간 will-attach-webview 가 preload 를 떼고 node·격리·파티션을
         //   강제한다(browser-surface.mjs). 그 훅이 없으면 이 한 줄은 XSS→RCE 승격 통로가 된다.
         webviewTag: true,
+        // #4993 — 이 화면이 AI 의 브라우저 명령을 받아 실행한다(web/v2/browser-host.ts). 창을 닫아 트레이로 보내도 AI 는 일하는데,
+        //  숨은 창의 타이머는 1초 단위로, 5분 뒤엔 1분에 한 번으로 묶인다(Chromium intensive throttling) — 끌기 한 번이 분 단위가 된다.
+        //  화면의 주기 작업(8초 틱·폴링)은 이미 document.hidden 이면 쉬므로 이걸 꺼도 숨은 동안의 일은 늘지 않는다.
+        backgroundThrottling: false,
       },
     });
     // 첫 그림이 준비되면 보인다. 게이트웨이가 느리면 1.5초 뒤엔 빈 창이라도 띄운다(아무것도 안 뜨면 "안 열린다" 로 보인다).

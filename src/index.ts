@@ -178,6 +178,9 @@ app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
 app.use("/api/ui/apps/save", express.json({ limit: "4mb" }));
 //  #4488 LLM 프록시(/api/llm/anthropic/*) — 본문을 바이트 그대로 위로 흘린다(앱 · Claude Code 가 보낸 JSON 을 다시 직렬화하지 않는다 · 1MB 를 넘는다).
 app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
+//  #4993 브라우저 답(데스크톱 앱 화면 → 게이트웨이) — 스크린샷(base64 JPEG)이 실린다. 보이는 영역 한 장은 수백 KB 지만
+//   큰 화면·고해상도에서 1MB 를 넘을 수 있어 이 경로만 올린다(전역보다 먼저 — 위 apps/install 과 같은 이유).
+app.use("/api/ui/browser/host/reply", express.json({ limit: "12mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();

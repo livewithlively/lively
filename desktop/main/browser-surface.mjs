@@ -45,6 +45,9 @@ export const WEBVIEW_FORCED_PREFS = Object.freeze({
   allowRunningInsecureContent: false,
   experimentalFeatures: false,
   webviewTag: false, // 서피스 안에서 또 서피스를 열지 못하게(중첩으로 이 격리를 우회하는 길 차단)
+  // #4993 AI 가 쓰는 탭은 사람이 창을 닫아(트레이) 둔 동안에도 돈다 — 숨은 창의 페이지 타이머는 1초 단위로, 5분 뒤엔
+  //  1분에 한 번으로 묶여(intensive throttling) 사이트의 지연·재시도가 멈춘 것처럼 된다. 격리와 무관한 성능 설정이다.
+  backgroundThrottling: false,
 });
 
 /** assign 이 아니라 **지워야** 하는 것들 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다. */
