@@ -398,6 +398,12 @@
 @media (max-width: 640px) {
   #v2-root.has-topbar:has(.v2-main .sc-wrap) > .v2-topbar { display: none; }
   #v2-root:has(.v2-main .sc-wrap) { --v2-tb-h: 0px; }
+  /* #4998(상민님 2026-10-25 «세션보다가 사이드바 열면 … 다시 닫을 길이 없음») — 사이드바 서랍은 화면 한 장이라 머리줄의 ≡ 를 덮고,
+     닫는 단추(☰)는 걷어 둔 맨 윗줄에 있었다(배경막도 서랍 밑에 깔려 못 누른다). 서랍이 열린 동안만 맨 윗줄을 **위에 띄워** 되살린다 —
+     다른 폰 화면과 같은 자리 · 같은 ☰ 로 닫는다. 띄우는(fixed) 까닭: 흐름에 다시 넣으면 본문이 48px 내려가 터미널 크기가 바뀐다(PTY 다시 그리기).
+     서랍 꼭대기는 그 줄 밑으로 — 변수는 줄과 서랍에만 준다(본문은 0px 그대로). */
+  #v2-root.has-topbar.m-side:has(.v2-main .sc-wrap) > .v2-topbar { --v2-tb-h: 48px; display: flex; position: fixed; top: 0; left: 0; right: 0; z-index: 41; }
+  #v2-root.has-topbar.m-side:has(.v2-main .sc-wrap) > .v2-side { --v2-tb-h: 48px; }
   #v2-root:has(.v2-main .sc-wrap.sc-kb) > .v2-mtabs { display: none; }
   .sc-wrap { position: relative; }
   .sc-wrap > .sc-head { position: absolute; z-index: 6; top: 6px; left: 6px; right: 6px; padding: 0; min-height: 0; border: 0; background: none;
