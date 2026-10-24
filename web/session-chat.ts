@@ -64,7 +64,7 @@ import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js'; 
 // #3778 — 「지금 보고 있는 사람」·[공유] 는 **세션의 머리줄**에 산다. 종전엔 셸 문패(v2/panes.ts)에 있었는데,
 //  그 줄의 왼쪽은 프로젝트 이름이라 한 줄이 두 주체를 번갈아 말했다 — 「공유」가 프로젝트 공유로 읽혔다.
 //  세션은 이미 자기 머리줄을 갖고 있다(여기) — 이름·하네스·⋯ 가 다 여기 있으니 공유도 여기가 집이다.
-import { onViewers, viewersOf } from './v2/presence.js';
+import { onViewers, viewersOf, viewersFresh, noteActivity, SESSION_VIEW_EVENT, type Viewer } from './v2/presence.js';
 import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
 
@@ -101,6 +101,9 @@ export interface SessionChatHandle {
    *  update 를 부르는 쪽이 이 값으로 대상을 확인한다(v2/main.ts). */
   id: string;
   update(t: SessionChatTarget): void;
+  /** #4996 지금 이 화면으로 터미널을 보고 있나 — 열람 도장이 싣는다(다른 사람이 들어올 때 대화창으로 비켜 설지의 재료).
+   *  숨겨 붙인 액자(#4794)·아직 안 붙인 액자는 «대화» 다(사람이 보고 있는 것이 대화창이다). */
+  viewMode(): 'term' | 'chat';
   /** 우패널이 스스로 파일 탐색기를 닫았을 때 상단바 [파일] 불을 맞춘다(#1744 — 토글은 하나여야 한다). */
   setFilesOn(on: boolean): void;
   destroy(): void;
@@ -236,6 +239,9 @@ export interface SessionChatOpts {
   /** 이 세션은 **리브 세션**이다(#4970 «리브 = 세션 하나» — 셸이 리브 좌표로 알아본다). 리브가 던진 물음(자격·객관식·올리기)을
    *  입력칸 바로 위에 띄운다(web/liv-ask-dock.ts) — 터미널을 볼 땐 머리줄 아래(placeLivAsk). 값은 대화로 가지 않는다 — 카드가 금고로 곧바로 보낸다. */
   livAsks?: boolean;
+  /** #4996 — 터미널로 열기 전에 «다른 사람이 이 세션을 터미널로 보고 있나» 를 열람 도장(v2/presence.ts)으로 확인한다.
+   *  도장을 찍는 셸(v2/main.ts markViewedSessionSeen)이 있는 화면만 켠다 — 없는 화면(앱 시험 세션)은 답이 안 와 기다리기만 한다. */
+  awaitViewers?: boolean;
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
@@ -495,7 +501,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   };
   paintFaces();
   //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
-  const offViewers = onViewers((sid) => { if (sid === target.id) paintFaces(); });
+  const offViewers = onViewers((sid) => { if (sid === target.id) { paintFaces(); settleTermHold(); } });   // #4996 — 기다리던 얼굴 줄이면 판정도
 
   //  ★ 연결 상태와 [화면 복구] 는 **한 덩어리**다(원준 2026-09-10) — «지금 어떤가»와 «그걸 고치는 단추»라
   //   서로를 설명한다. 테두리 하나를 같이 쓰므로 손을 얹으면 둘이 함께 뜬다.
@@ -1095,6 +1101,43 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let warmTyped = false;
   //  말을 보내 연 화면인데 아직 숨겨 붙이지 못했다(열 때 목록 행이 한 틱 늦어 터미널이 없었다) — 터미널이 처음 생기면 그때 숨겨 붙인다(update).
   let warmOwed = false;
+  //  ★ #4996 — **다른 사람이 이 세션을 터미널로 보고 있으면 대화창으로 연다**(상민님 2026-10-25: «터미널 화면을 동시에 두 명이 보면
+  //   한 명 화면이 깨진다 — 다른 사람이 이미 보고 있으면 대화창으로 보여 주고, 그 사람이 프롬프트를 보내면 그때는 깨지더라도 터미널로.
+  //   대화 UI 는 답이 끝나기 전 중간 과정을 못 보니까»). tmux 창 크기는 하나뿐이고 window-size latest 라 나중에 붙은 터미널이 창을
+  //   자기 크기로 바꾼다(#252 — 먼저 보던 사람의 화면이 깨진다). 대화창은 tmux 에 안 붙어 다툼이 없다.
+  //   재료는 열람 도장의 얼굴 줄(v2/presence.ts — term = 그 사람이 터미널로 보고 있고 손길이 있다). **사람 단위**다 — 같은 사람의 여러 탭은
+  //   따로 다루지 않는다(상민님: «같은 사람이 동시에 두 개를 보진 않으니까»).
+  //   액자가 붙는 순간 창 크기가 바뀌므로 판정은 **붙이기 전에** 한다 — 그 세션의 얼굴 줄이 막 온 게 아니면 첫 도장 응답을 잠깐
+  //   (VIEWERS_WAIT_MS) 기다린다. 답이 끝내 안 오면 종전대로 터미널을 붙인다(모르면 막지 않는다).
+  //   비켜 선 화면에서 말을 보내면 그때 터미널로 넘긴다 — #4794 숨겨 붙이기(그 말이 들어간 뒤 넘김). 사람이 [터미널로] 를 고르면 곧바로다.
+  const VIEWERS_WAIT_MS = 1200;
+  let termHold: number | null = null;   // 판정을 기다리는 중(타이머) — 그동안 액자를 붙이지 않는다(ensureTermFrame)
+  let yieldTerm = false;               // 다른 사람이 터미널을 쥐고 있어 대화창으로 비켜 섰다 — 말을 보내면 터미널로 넘긴다
+  const termHolder = (): Viewer | null => {
+    const me = String((state.me as any)?.userId || '');
+    return viewersOf(target.id).find((v) => v.term && v.id !== me) || null;
+  };
+  /** #4996 판정 — 기다리던 얼굴 줄이 왔다(또는 기다림이 끝났다). 다른 사람이 터미널을 쥐고 있으면 비켜 서고, 아니면 이제 액자를 붙인다. */
+  function settleTermHold(): void {
+    if (termHold === null) return;
+    clearTimeout(termHold); termHold = null;
+    if (destroyed || mode !== 'term') return;
+    const h = termHolder();
+    if (h && !modeChosen) {
+      yieldTerm = true;
+      setMode('chat');
+      view.setNote(`${h.name}님이 이 세션을 터미널로 보고 있어요 — 그 화면이 깨지지 않게 대화로 보여 드려요. 말을 보내면 터미널로 넘어갑니다.`);
+      return;
+    }
+    ensureTermFrame();
+  }
+  /** #4996 비켜 서 있던 화면에서 말을 보냈다 — 이제 터미널로(그 말이 들어간 뒤 — #4794). 먼저 보던 사람의 화면은 이때 깨질 수 있다(상민님 결정). */
+  function takeTermAfterSend(pd: Pending): void {
+    yieldTerm = false;
+    view.setNote('');
+    warmPrompt = pd; warmTyped = false;
+    startTermWarm();
+  }
   /** pane 이 셸인 세션에서만 «여기 친 말은 AI 에게 안 갑니다» 줄을 띄운다(#4135). 그 밖엔 늘 숨는다. */
   function paintShellBar(): void {
     //  pane 이 셸인 두 갈래: codex app-server(chatFirst) · 하네스 무관 대화 런타임(runtimeMode='chat').
@@ -1114,9 +1157,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   function ensureTermFrame(): void {
     const src0 = termUrl();
-    if (termFrame || !src0) return;
+    if (termFrame || !src0 || termHold !== null) return;   // #4996 — 다른 사람이 터미널을 쥐고 있나 판정하기 전엔 안 붙인다
     termFrame = el('iframe', { class: 'sc-term-frame', src: src0, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
-    termHost.append(termFrame);
+    //  #4996 — 액자 안의 손길(치기·누르기·휠)은 부모 창에 안 올라온다 — 같은 출처라 여기서 받아 «보고 있다» 의 재료로 알린다(v2/presence.ts activeNow).
+    const fr = termFrame;
+    fr.addEventListener('load', () => {
+      try {
+        const w = fr.contentWindow;
+        if (w) for (const t of ['keydown', 'pointerdown', 'wheel', 'touchstart']) w.addEventListener(t, noteActivity, { capture: true, passive: true });
+      } catch { /* 다른 출처면 못 받는다 — 초점(hasFocus)이 대신 말한다 */ }
+    });
+    termHost.append(fr);
   }
   /** #4794 숨은 액자의 자리를 대화창 자리에 맞춘다 — 넘길 때 액자 크기가 그대로여야 하네스가 다시 그리지 않는다. */
   function placeWarmTerm(): void {
@@ -1217,9 +1268,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   function setMode(m: 'term' | 'chat'): void {
     //  #4794 — 화면을 누가 정했다(사람 · 다른 갈래) — 숨겨 붙이던 판은 여기서 끝난다.
+    const prevView = viewNow();
     const wasWarm = !!termWarm;
     if (wasWarm) endTermWarm(false);
     if (m === 'term' && !hasTerm()) m = 'chat';
+    //  #4996 — 터미널로 가면 비켜 선 판은 끝난다(사람이 골랐거나 보낸 말이 들어갔다). 대화로 가면 판정을 기다릴 일이 없다.
+    if (m === 'term' && yieldTerm) { yieldTerm = false; view.setNote(''); }
+    if (m === 'chat' && termHold !== null) { clearTimeout(termHold); termHold = null; }
     if (m === 'term') warmOwed = false;
     //  #3847 — 터미널을 **여는 쪽으로** 갈 때는 프레임 걸쇠를 푼다. 여기까지 온 것은 «지금 이 세션의 터미널을
     //   보겠다» 는 뜻이고(자동 되돌리기는 아래 termGoneOnce 가 따로 막는다), 그 뒤에도 박스가 없으면 프레임이
@@ -1261,7 +1316,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4794 — 숨어서 붙은 액자는 붙을 때 제 터미널에 초점을 안 줬다(terminal.ts frameHiddenNow). 보이게 되는 지금 준다 —
     //   처음부터 터미널로 연 화면과 같게(그때는 액자가 붙자마자 스스로 잡는다).
     if (m === 'term' && wasWarm) focusTermIfHere();
+    if (viewNow() !== prevView) { try { window.dispatchEvent(new CustomEvent(SESSION_VIEW_EVENT, { detail: { id: target.id } })); } catch { /* noop */ } }
   }
+  /** #4996 사람이 지금 보는 것 — 터미널 모드이고 액자가 붙어 있어야(숨겨 붙인 판이 아니고) «터미널» 이다(handle.viewMode 머리말). */
+  function viewNow(): 'term' | 'chat' { return mode === 'term' && !!termFrame && !termWarm ? 'term' : 'chat'; }
 
   /**
    * 대화를 **터미널로 넘긴다** (#2055 · 고침 #4135).
@@ -2636,6 +2694,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (src) schedule();
       void syncOutbox();
       onSent?.();
+      //  #4996 — 다른 사람이 터미널을 쥐고 있어 대화창으로 비켜 서 있었다 — 말을 보냈으니 이제 터미널로(중간 과정은 터미널에서만 보인다).
+      if (yieldTerm && !modeChosen) takeTermAfterSend(pd);
     } catch (e: any) {
       //  #4850 — 도는 턴 뒤에서 기다리던 말이면 그 턴은 계속 돈다(도는 표시를 끄지 않는다). 말풍선은 붙듦을 놓고 그 자리에 실패를 남긴다.
       const behind = waitingBehind(pd);
@@ -3071,12 +3131,17 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   터미널은 숨긴 채 먼저 붙인다(termWarm 머리말). 그 밖은 종전 그대로다.
   const chatFirstView = chatHome() || target.raw?.observed === false || draftBack;
   const warmFirst = !chatFirstView && !!firstPrompt;
+  //  #4996 — 터미널로 열 화면이면 액자를 붙이기 전에 «다른 사람이 터미널로 보나» 를 본다(yieldTerm 머리말). 얼굴 줄이 막 왔으면 아래에서 곧바로.
+  const holdForViewers = !!opts.awaitViewers && !chatFirstView && !warmFirst && hasTerm();
+  if (holdForViewers) termHold = window.setTimeout(settleTermHold, VIEWERS_WAIT_MS);
   setMode(chatFirstView || warmFirst ? 'chat' : 'term');
   if (warmFirst) { warmOwed = true; startTermWarm(); }   // 터미널이 아직 없으면 그냥 돌아온다 — update() 가 생길 때 건다
 
   void open();
   //  open() 은 시작하자마자 안내를 비운다 — 그 뒤에 적어야 남는다.
   if (draftBack) view.setNote('보내지 못한 말을 입력칸에 돌려 두었어요 — 보내면 이 세션에 들어갑니다.');
+  //  비켜 선다는 안내도 open() 이 안내를 비운 뒤에 적어야 남는다 — 그래서 막 온 얼굴 줄의 판정은 여기서 한다.
+  if (holdForViewers && viewersFresh(target.id)) settleTermHold();
 
   /** 목록이 실어 온 행을 이 화면에 반영한다(셸의 update) — #4996 같은 id 로 되살린 화면도 이 길로 «살아 있음» 을 받는다(reviveInPlace). */
   function applyRow(t: SessionChatTarget): void {
@@ -3124,7 +3189,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (warmOwed && !modeChosen && mode === 'chat' && !chatHome() && hasTerm()) startTermWarm();
     //   말로 되살리는 중(reviving)에도 넘기지 않는다 — 곧 새 화면(같은 id 로 다시 마운트)이 숨겨 붙였다가 그린 순간 넘긴다. 그 사이 목록이 «살아 있다» 를
     //   먼저 실어 오면 종전엔 이 줄이 옛 화면을 빈 터미널로 넘겼고, 다시 마운트되며 대화창으로 돌아갔다가 또 터미널로 갔다(매니지드 실측 2026-10-16).
-    if (!termWarm && !reviving && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
+    if (!termWarm && !reviving && !yieldTerm && !modeChosen && termGoneN < 2 && mode === 'chat' && !chatHome() && String(target.raw?.chatMode || '') === 'tmux' && hasTerm()) setMode('term');
     // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
     //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
     const ls = logSrc();
@@ -3143,7 +3208,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     id: first.id,
     setFilesOn(on) { filesBtn.classList.toggle('sc-act-on', !!on); },
     update(t) { applyRow(trustRevived(t)); },
-    destroy() { destroyed = true; endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    viewMode() { return viewNow(); },
+    destroy() { destroyed = true; if (termHold !== null) { clearTimeout(termHold); termHold = null; } endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

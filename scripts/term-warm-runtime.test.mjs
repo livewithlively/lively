@@ -57,6 +57,9 @@
 //   W29b 매니지드 행(노드 칸 = 세션 호스트)인데 대화 id 를 모르고 기록 파일도 아직 없다 → 세션 호스트는 «그 컴퓨터» 가 아니라(#4904)
 //       박스 기록을 지켜본다 → W27 처럼 그 말이 기록에 나타날 때까지 대화창 · 나타난 뒤 터미널
 //       (#4904 전엔 세션 호스트 좌표를 멤버 PC 로 읽어 src 가 없었고, 그래서 이 장면이 W29 였다)
+//   W35 #4996 다른 사람이 터미널로 보고 있다(얼굴 줄 term) → 대화창으로 연다(액자 없음 · 안내) · 말을 보내면 숨겨 붙였다가 들어간 뒤 터미널
+//   W36 다른 사람이 대화창으로 보고 있다 → 종전대로 터미널 · W37 얼굴 줄을 아직 모른다 → 액자 없이 기다렸다가 답으로 판정
+//   W38 답이 끝내 안 온다 → 1.2초 뒤 터미널 · W39 도장 안 찍는 화면(awaitViewers 없음) → 종전 그대로
 //   W30 되살린 화면 · 그린 뒤 서버가 «다 쳤다»(outbox.typed — 세션 상태 통로) → 기록 에코를 기다리지 않고 그 자리에서 터미널
 //       (에코는 Claude Code 가 제출 훅을 다 돈 뒤 적어 몇 초 늦다 — 매니지드 실측. 이 장면엔 에코가 아예 없다)
 //   W31 «다 쳤다» 가 다른 말(다른 탭에서 보낸 것)의 것 → 넘기지 않는다
@@ -90,7 +93,7 @@ const CSS = ["01-base.css", "03-components.css", "36-chat.css", "38-chat-tui.css
 const XTERM = ["xterm.min.js", "xterm.min.css"].map((f) => path.join(ROOT, "public/vendor/xterm", f));
 for (const f of XTERM) if (!existsSync(f)) { console.error(`FAIL  vendored xterm 없음: ${f}`); process.exit(1); }
 const sc = buildSync({
-  stdin: { contents: "export { mountSessionChat } from './web/session-chat.ts';", resolveDir: ROOT, loader: "ts" },
+  stdin: { contents: "export { mountSessionChat } from './web/session-chat.ts'; export { setViewers } from './web/v2/presence.ts';", resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "SC", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 const tm = buildSync({
@@ -514,6 +517,60 @@ async function PAGE_MAIN() {
       R.w21.toasts = document.getElementById("toasts").textContent;
       v.done();
     }
+    // W35~W39 — #4996 다른 사람이 터미널로 보고 있으면 대화창으로 연다 · 말을 보내면 터미널로
+    {
+      SC.setViewers("box-w35", [{ id: "jang", name: "장원준", term: true }]);   // 막 들은 얼굴 줄 — 장원준이 터미널로 보고 있다
+      const v = mount("box-w35", "ink=300", { awaitViewers: true });
+      await sleep(1500);
+      R.w35 = { before: v.snap(), note: v.box.textContent.includes("장원준님이 이 세션을 터미널로 보고 있어요") };
+      v.h.update(row("box-w35", true));                                  // 목록 갱신(20초 주기)이 비켜 선 화면을 터미널로 되돌리지 않는다
+      await sleep(200);
+      R.w35.beforeUpdate = v.snap();
+      const inp = v.input();
+      inp.value = "비켜 선 화면에서 보낸 말 W35"; inp.dispatchEvent(new Event("input"));
+      const form = inp.closest("form");
+      if (form && form.requestSubmit) form.requestSubmit(); else inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      echoAt("box-w35", 1200, "비켜 선 화면에서 보낸 말 W35");
+      await sleep(400);
+      R.w35.afterSend = v.snap();
+      await sleep(2600);
+      R.w35.after = v.snap(); R.w35.noteAfter = v.box.textContent.includes("터미널로 보고 있어요");
+      v.h.update(row("box-w35", true));                                  // 그 뒤 목록 갱신 — 터미널 그대로
+      await sleep(200);
+      R.w35.afterUpdate = v.snap();
+      v.done();
+    }
+    {
+      SC.setViewers("box-w36", [{ id: "jang", name: "장원준", term: false }]);  // 대화창으로 보고 있다 — 창 크기 다툼이 없다
+      const v = mount("box-w36", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      R.w36 = { at300: v.snap() };
+      v.done();
+    }
+    {
+      const v = mount("box-w37", "ink=300", { awaitViewers: true });     // 얼굴 줄을 아직 못 들었다 — 첫 도장 응답을 기다린다
+      await sleep(300);
+      R.w37 = { waiting: v.snap() };
+      SC.setViewers("box-w37", [{ id: "jang", name: "장원준", term: true }]);
+      await sleep(100);
+      R.w37.after = v.snap();
+      v.done();
+    }
+    {
+      const v = mount("box-w38", "ink=300", { awaitViewers: true });     // 답이 끝내 안 온다 — 기다림(1.2초) 뒤 종전대로 터미널
+      await sleep(600);
+      R.w38 = { waiting: v.snap() };
+      await sleep(1000);
+      R.w38.after = v.snap();
+      v.done();
+    }
+    {
+      SC.setViewers("box-w39", [{ id: "jang", name: "장원준", term: true }]);
+      const v = mount("box-w39", "ink=300", {});                        // 도장을 안 찍는 화면(awaitViewers 없음) — 종전 그대로
+      await sleep(200);
+      R.w39 = { at200: v.snap() };
+      v.done();
+    }
     // W22 — 되살린 화면(매니지드 행) · 먼저 그리고 말은 2.6초에 들어간다
     {
       const v = mount("box-w22", "ink=600", { firstPrompt: "되살리며 보낸 말 W22" }, true, null, false, { node: "sesshost-test" });
@@ -809,6 +866,23 @@ check((w21.afterStale || {}).frame && !(w21.afterStale || {}).term,
 check((w21.after || {}).term && !(w21.after || {}).warm && w21.n === 1,
   "W21 그 말이 들어간 뒤 터미널로 넘어간다 · 보낸 말은 한 번만 보인다", { after: w21.after, n: w21.n });
 
+const w35 = R.w35 || {};
+check(!(w35.before || {}).term && !(w35.before || {}).frame && (w35.before || {}).chatShown && w35.note,
+  "W35 ★ 다른 사람이 터미널로 보고 있으면 대화창으로 연다 — 액자를 아예 안 붙인다(붙는 순간 그 사람 창 크기가 바뀐다) · 안내가 보인다", { before: w35.before, note: w35.note });
+check(!(w35.beforeUpdate || {}).term && !(w35.beforeUpdate || {}).frame,
+  "W35 비켜 선 동안 목록 갱신이 터미널로 되돌리지 않는다", w35.beforeUpdate);
+check((w35.afterSend || {}).frame && !(w35.afterSend || {}).term,
+  "W35 비켜 선 화면에서 말을 보내면 터미널을 숨겨 붙인다(그 말이 들어갈 때까지는 대화창)", w35.afterSend);
+check((w35.after || {}).term && !(w35.after || {}).warm && !w35.noteAfter && (w35.afterUpdate || {}).term,
+  "W35 ★ 그 말이 들어간 뒤 터미널로 넘어간다 · 안내는 걷힌다 · 다음 목록 갱신도 그대로", { after: w35.after, noteAfter: w35.noteAfter, afterUpdate: w35.afterUpdate });
+check((R.w36 || {}).at300 && R.w36.at300.term && R.w36.at300.frame,
+  "W36 다른 사람이 대화창으로 보고 있으면(창 크기 다툼 없음) 종전대로 터미널", R.w36);
+check(!(R.w37 && R.w37.waiting || {}).frame && (R.w37 && R.w37.after || {}).chatShown && !(R.w37 && R.w37.after || {}).frame,
+  "W37 얼굴 줄을 아직 못 들었으면 액자를 붙이지 않고 기다린다 · 답이 오면 그때 판정(터미널로 보는 사람 → 대화창)", R.w37);
+check(!(R.w38 && R.w38.waiting || {}).frame && (R.w38 && R.w38.after || {}).term && (R.w38 && R.w38.after || {}).frame,
+  "W38 답이 끝내 안 오면 1.2초 뒤 종전대로 터미널(모르면 막지 않는다)", R.w38);
+check((R.w39 || {}).at200 && R.w39.at200.term && R.w39.at200.frame,
+  "W39 도장을 안 찍는 화면(awaitViewers 없음)은 종전 그대로 곧바로 터미널", R.w39);
 const w22 = R.w22 || {};
 check(w22.inkAt != null && w22.inkAt < 1200 && (w22.during || {}).warm && !(w22.during || {}).term && (w22.during || {}).chatShown && w22.n === 1 && /전달 대기 중/.test(String(w22.qstate || "")),
   "W22 하네스가 그렸어도 보낸 말이 아직 안 들어갔으면 대화창에 머문다(대기 말풍선 그대로)", w22);
