@@ -761,6 +761,7 @@ export function __injectRefsForTest(refs: Record<string, any>): void {
   if ('statusEl' in refs) statusEl = refs.statusEl;
   if ('panesEl' in refs) panesEl = refs.panesEl;
   if ('explorerEl' in refs) explorerEl = refs.explorerEl;
+  if ('echoWaitMs' in refs) ECHO_WAIT_MS = refs.echoWaitMs;
 }
 let curDir = '';
 let sessionProjectId = 0; // 프로젝트 세션이면 그 id(loadSessionMeta 가 채움) — 업로드 위치를 뭐라 부를지 가른다(#1235)
@@ -1629,7 +1630,11 @@ export function setupOscClipboard() {
   } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
-function sendInput(d) { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
+let pendingEnter: { timer: any } | null = null;   // 폰 보내기가 화면 확인을 기다리며 미뤄 둔 Enter(enterAfterEcho)
+function sendInput(d) {
+  if (pendingEnter) fireEnter('before next input');   // 폰 보내기가 Enter 를 미뤄 둔 사이의 입력 — Enter 가 먼저다(#4990)
+  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+}
 // 붙여넣기 위생(#1117 버그B) — 클립보드가 어디서 왔든(타 터미널 화면·웹페이지·앱) '보이는 텍스트'만 넣는다.
 //  · CR/CRLF/유니코드 줄구분자(U+2028/29) → \n 정규화 — 터미널에서 \r 은 Enter 로 해석돼 의도치 않은 '제출'이 된다.
 //  · ESC 시퀀스(CSI/OSC/DCS/…)·C0 제어문자(탭·개행 제외)·C1 제거 — ① 화면캡처 유래 제어 바이트(커서이동·삭제·색)가
@@ -2583,14 +2588,57 @@ function saveDraft() {
   try { const v = mcompEl ? String(mcompEl.value || '') : ''; if (v) sessionStorage.setItem(MDRAFT_KEY, v); else sessionStorage.removeItem(MDRAFT_KEY); } catch (_) { /* 저장소가 막혀 있으면 보관만 못 한다 */ }
 }
 function paintSend() { if (msendEl && mcompEl) msendEl.classList.toggle('on', !!String(mcompEl.value || '').trim()); }
+//  ⑤ 긴 한 줄 글의 Enter 는 **화면에 그 글이 뜬 뒤에** 보낸다(#4990, 상민 2026-10-25 «어쩔 때는 바로 가고 어쩔 때는 엔터를 눌러야»).
+//   글과 Enter 를 연달아 보내면 앱이 둘을 한 번에 읽는다. Claude Code 는 한 번에 읽은 입력이 64자 이상이면 그 안의 CR 을
+//   키로 떼지 않고 줄바꿈 글자로 넣고, 다음 Enter 는 그 «보이지 않는 글자»를 지우는 데 쓴다(#4818 — 2.1.310 에서 다시 잼:
+//   59자는 한 번에 제출 · 64자부터 입력칸에 남고 Enter 두 번 더). 그래서 글 길이에 따라 «어쩔 때는» 이 갈렸다.
+//   글 꼬리가 화면에 **새로** 보이면 앱이 글을 이미 읽은 것이라 뒤따르는 Enter 는 혼자 읽혀 제출이 된다(앱이 1.2초 멈춘 판도 실측 통과).
+//   짧은 글은 종전대로 곧바로 Enter — 한 덩어리여도 제출되고, 기다리면 왕복 한 번만큼 늦을 뿐이다.
+//   끝내 못 보면(입력을 그리지 않는 화면) ECHO_WAIT_MS 뒤 그냥 보낸다(= 종전 동작). 기다리는 동안 다른 입력이 오면 Enter 를
+//   먼저 보낸다(sendInput) — 누른 순서가 «글 · Enter · 그 입력» 그대로다.
+//   여러 줄 글은 붙여넣기 표지로 감싸 보내므로 한 덩어리로 읽혀도 첫 Enter 에 제출된다(#4818 실측) — 종전대로 곧바로 Enter.
+export const ECHO_WAIT_MIN = 40;   // 이 길이(UTF-16) 이상만 기다린다 — 64자 경계보다 낮게: 앞서 못 읽힌 입력이 같은 덩어리에 섞일 여유
+let ECHO_WAIT_MS = 3000;
+const ECHO_POLL_MS = 40;
+const ECHO_PROBE = 16;             // 화면에서 찾을 글 꼬리(공백 뺀 글자 수)
+const PASTED_MARK = '[Pastedtext#';   // 800자 넘게 한 번에 읽히면 Claude Code 가 입력칸을 이 표시로 접는다(공백 뺀 꼴)
+const squashWs = (s) => String(s || '').replace(/\s+/g, '');
+const countOf = (hay, needle) => { let n = 0; if (!needle) return 0; for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) n++; return n; };
+function screenSquashed() { return squashWs(screenTail((term && term.rows) || 24).join('')); }
+function fireEnter(why) {
+  const p = pendingEnter; if (!p) return;
+  pendingEnter = null; clearTimeout(p.timer);
+  dlog('mdock', 'enter ' + why);
+  sendInput('\r');
+}
+function enterAfterEcho(text) {
+  const probe = squashWs(text).slice(-ECHO_PROBE);
+  const s0 = screenSquashed();
+  const tail0 = countOf(s0, probe), mark0 = countOf(s0, PASTED_MARK);
+  const started = Date.now();
+  const p = { timer: null };
+  pendingEnter = p;
+  const check = () => {
+    if (pendingEnter !== p) return;
+    const s = screenSquashed();
+    if (countOf(s, probe) > tail0 || (TERM_UI.pastePlaceholder && countOf(s, PASTED_MARK) > mark0)) fireEnter('after echo ' + (Date.now() - started) + 'ms');
+    else if (Date.now() - started >= ECHO_WAIT_MS) fireEnter('by timeout');
+    else p.timer = setTimeout(check, ECHO_POLL_MS);
+  };
+  p.timer = setTimeout(check, ECHO_POLL_MS);
+}
 function mobileSend() {
   if (!mcompEl) return;
   const t = String(mcompEl.value || '');
   if (!t.trim()) { try { mcompEl.focus(); } catch (_) { /* noop */ } return; }   // 빈 글은 안 보낸다 — 빈 Enter 는 글쇠 줄의 ⏎
   userTyped = true;
   // 여러 줄은 bracketed paste 로 감싸 앱이 '한 덩어리'로 받게(줄바꿈이 Enter 로 오해되지 않게), 한 줄은 그대로.
-  if (/\n/.test(t)) pasteText(t); else sendInput(sanitizePasteText(t));
-  sendInput('\r');
+  if (/\n/.test(t)) { pasteText(t); sendInput('\r'); }
+  else {
+    const line = sanitizePasteText(t);
+    sendInput(line);
+    if (line.length >= ECHO_WAIT_MIN) enterAfterEcho(line); else sendInput('\r');
+  }
   mcompEl.value = ''; mobileGrow(); saveDraft(); paintSend();
   //  조합 중이던 글자가 비운 뒤에 되살아나지 않게 IME 를 끊는다(같은 손짓 안이라 자판은 그대로 남는다).
   if (mdockComposing) { try { mcompEl.blur(); mcompEl.focus(); } catch (_) { /* noop */ } mdockComposing = false; }
