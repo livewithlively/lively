@@ -146,4 +146,44 @@ t("S9 다른 수집기의 성공 실행으로 끝났다고 하지 않는다", ()
   assert.deepEqual(collectedView(c, counts({}), new Set([c.id + 1000])), { instance: "ws-1", pages: 0, first_sync_done: false });
 });
 
+// ── (#4991) 워크스페이스 연결 끊기 — 멈출 수집기(사양 F1~F6) ──
+const { collectorsToStop } = __notionCollectTestables;
+const stopIds = (all: CollectorView[], ws: string): number[] => collectorsToStop(all, ws).map((c) => c.id);
+
+t("F1 그 워크스페이스에 묶인 켜진 수집기는 끈다", () => {
+  const a = col({ enabled: true, config: { token_source: "org:ws-1" } });
+  assert.deepEqual(stopIds([a], "ws-1"), [a.id]);
+});
+t("F2 다른 워크스페이스에 묶인 수집기는 그대로", () => {
+  const b = col({ enabled: true, config: { token_source: "org:ws-2" } });
+  assert.deepEqual(stopIds([b], "ws-1"), []);
+});
+t("F3 안 묶인 «org» 수집기(켜짐)는 끈다 — 남은 워크스페이스를 잡으러 간다", () => {
+  const legacy = col({ enabled: true, instance_key: LEGACY_INSTANCE_KEY, config: { token_source: "org" } });
+  assert.deepEqual(stopIds([legacy], "ws-1"), [legacy.id]);
+});
+t("F3' 아이디가 빈 «org:» 도 «org» 와 같이 끈다", () => {
+  const blank = col({ enabled: true, config: { token_source: "org: " } });
+  assert.deepEqual(stopIds([blank], "ws-1"), [blank.id]);
+});
+t("F4 토큰을 직접 넣은 수집기(token_source 없음)는 그대로", () => {
+  const pasted = col({ enabled: true, config: {}, secretsSet: { token: true } });
+  assert.deepEqual(stopIds([pasted], "ws-1"), []);
+});
+t("F5 이미 꺼진 수집기는 대상이 아니다", () => {
+  const off = col({ enabled: false, config: { token_source: "org:ws-1" } });
+  assert.deepEqual(stopIds([off], "ws-1"), []);
+});
+t("F6 노션이 아닌 수집기는 token_source 가 org:<ws> 여도 그대로", () => {
+  const other = col({ enabled: true, preset_key: "clickup", config: { token_source: "org:ws-1" } });
+  assert.deepEqual(stopIds([other], "ws-1"), []);
+});
+t("F1~F6 섞임 — 끌 것만 고른다", () => {
+  const a = col({ enabled: true, config: { token_source: "org:ws-1" } });
+  const b = col({ enabled: true, config: { token_source: "org:ws-2" } });
+  const o = col({ enabled: true, config: { token_source: "org" } });
+  const p = col({ enabled: true, config: {} });
+  assert.deepEqual(stopIds([a, b, o, p], "ws-1").sort(), [a.id, o.id].sort());
+});
+
 console.log(`\n${pass} passed`);
