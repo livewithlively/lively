@@ -13,7 +13,7 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { getMemberSecret, listSecretsByKindPublic, memberOwner, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
-import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl } from "../org/credentials/slack-oauth.js";
+import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl, slackManifestProblems } from "../org/credentials/slack-oauth.js";
 import { getOrgProfile } from "../org/store.js";
 import { completeSlackInstall, slackAppReady } from "../org/credentials/oauth-broker.js";
 import { COLLECT_INTERVALS, normalizeInterval } from "./member-collect.js";
@@ -169,7 +169,10 @@ const orgSlackAppManifest: Capability = {
     const p = await getOrgProfile();
     if (!p.gateway_url) throw new HttpError(400, "게이트웨이 URL(org_profile.gateway_url)이 없어 콜백을 만들 수 없습니다 — 관리탭 ▸ 조직 정보에서 먼저 설정하세요.");
     const redirect = new URL("/oauth/callback", p.gateway_url).toString();
-    const manifest = buildSlackAppManifest([redirect], { name: p.display_name ? `Lively (${p.display_name})` : "Lively" });
+    const manifest = buildSlackAppManifest([redirect]);
+    //  손으로 고칠 수 없는 링크라(슬랙이 막는다) 규칙을 어긴 매니페스트는 링크로 내주지 않는다 — 깨진 링크보다 실패가 낫다.
+    const problems = slackManifestProblems(manifest);
+    if (problems.length) throw new HttpError(500, `Slack 앱 매니페스트가 슬랙 규칙에 맞지 않습니다: ${problems.join(" · ")}`);
     return { redirect_url: redirect, manifest, create_url: slackAppCreateUrl(manifest) };
   },
 };

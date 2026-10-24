@@ -118,13 +118,54 @@ await t("C11 매니페스트 — redirect·스코프가 인가 URL 과 같은 �
   assert.deepEqual(m.oauth_config.redirect_urls, ["https://gw.example/oauth/callback"], "중복 redirect 는 접힌다");
   assert.deepEqual(m.oauth_config.scopes.bot, [...SLACK_BOT_SCOPES]);
   assert.deepEqual(m.oauth_config.scopes.user, [...SLACK_USER_SCOPES]);
-  assert.equal(m.features.bot_user.display_name, "Lively");
+  assert.equal(m.features.bot_user.display_name, "lively", "봇 이름은 슬랙 규칙(a-z0-9-_.)대로 소문자");
   assert.equal(m.settings.token_rotation_enabled, false);
   assert.ok(!("is_mcp_enabled" in m.settings));
   const u = new URL(slackAppCreateUrl(m));
   assert.equal(u.hostname, "api.slack.com");
   assert.equal(u.searchParams.get("new_app"), "1");
   assert.deepEqual(JSON.parse(u.searchParams.get("manifest_json") ?? "{}"), m, "링크 안의 매니페스트가 원본과 같다(인코딩 왕복)");
+});
+
+await t("C13 출고 매니페스트는 손대지 않고도 슬랙 규칙을 통과한다 — 길이는 UTF-8 바이트(#4940: 링크를 화면에서 고치면 생성이 막힌다)", async () => {
+  const { buildSlackAppManifest, slackManifestProblems } = await import("./slack-oauth.js");
+  const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
+  // E1 — 검사기와 따로, 출고값을 직접 잰다(검사기가 틀려도 이 줄이 잡는다)
+  const m = buildSlackAppManifest(["https://lively.snipit.im/oauth/callback"]) as {
+    display_information: { name: string; description: string }; features: { bot_user: { display_name: string } };
+  };
+  assert.ok(m.display_information.name && bytes(m.display_information.name) <= 35, `이름 ${bytes(m.display_information.name)}바이트`);
+  assert.ok(bytes(m.display_information.description) <= 140, `설명 ${bytes(m.display_information.description)}바이트`);
+  assert.match(m.features.bot_user.display_name, /^[a-z0-9._-]{1,80}$/);
+  assert.deepEqual(slackManifestProblems(m), [], "검사기도 출고값을 통과로 본다");
+
+  const mk = (name: unknown, description: unknown, bot?: unknown): Record<string, unknown> => ({
+    display_information: { name, description }, ...(bot === undefined ? {} : { features: { bot_user: { display_name: bot } } }),
+  });
+  const bad = (x: Record<string, unknown>): boolean => slackManifestProblems(x).length > 0;
+  const ko46 = "가".repeat(46);                       // 138바이트
+  // E2·E3 — 140 경계(바이트)
+  assert.equal(bytes(ko46 + "ab"), 140);
+  assert.equal(bad(mk("Lively", ko46 + "ab")), false, "정확히 140바이트는 통과");
+  assert.equal(bad(mk("Lively", ko46 + "abc")), true, "141바이트는 위반");
+  // E4 — 옛 설명: 67자라 글자로 재면 통과하지만 158바이트라 위반(위시스트 대표님이 막힌 값)
+  const old = "내 일을 아는 AI — 슬랙 대화를 라이블리 워크스페이스의 맥락으로 모으고, AI가 내 계정으로 슬랙을 검색·발송합니다.";
+  assert.ok(old.length <= 140 && bytes(old) > 140);
+  assert.equal(bad(mk("Lively", old)), true, "글자 수가 아니라 바이트로 잰다");
+  // E5·E6 — 이름 35 경계 · 빈 이름
+  assert.equal(bad(mk("a".repeat(35), "")), false, "이름 35바이트 통과");
+  assert.equal(bad(mk("a".repeat(36), "")), true, "이름 36바이트 위반");
+  assert.equal(bytes("Lively (위시스트 주식회사 본사)"), 41);
+  assert.equal(bad(mk("Lively (위시스트 주식회사 본사)", "")), true, "한글 이름은 19자여도 41바이트라 위반");
+  assert.equal(bad(mk("", "")), true, "빈 이름 위반");
+  // E7·E8·E9 — 봇 이름 글자·길이
+  for (const b of ["Lively", "Lively (위시스트)", "my bot", ""]) assert.equal(bad(mk("Lively", "", b)), true, `봇 이름 «${b}» 은 위반`);
+  for (const b of ["lively", "a.b-c_9"]) assert.equal(bad(mk("Lively", "", b)), false, `봇 이름 «${b}» 은 통과`);
+  assert.equal(bad(mk("Lively", "", "a".repeat(80))), false, "봇 이름 80자 통과");
+  assert.equal(bad(mk("Lively", "", "a".repeat(81))), true, "봇 이름 81자 위반");
+  // E10 — 칸이 통째로 없어도 예외 없이 «이름 없음» 으로 말한다
+  assert.doesNotThrow(() => slackManifestProblems({}));
+  assert.equal(slackManifestProblems({}).length, 1);
 });
 
 await t("C12 릴레이 시작 URL — state·gw 가 쿼리로 실리고 기존 쿼리는 보존된다", async () => {
