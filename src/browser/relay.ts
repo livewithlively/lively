@@ -66,6 +66,9 @@ export interface BrowserCmd {
   /** 명령을 낸 세션(x-lively-session) — 화면이 그 세션의 탭을 고른다. 세션 밖 호출이면 null. */
   session: string | null;
   args: Record<string, unknown>;
+  /** 이 명령의 시간 한도(ms) — 화면은 받은 때부터 이만큼 지난 명령을 **실행하지 않는다**(AI 는 이미 시간 초과로 들었다 —
+   *  늦게 실행하면 AI 가 다시 보낸 것과 겹쳐 두 번 누른다). 절대 시각이 아니라 길이라 두 기계의 시계가 달라도 된다. */
+  ttl_ms: number;
 }
 
 /** 화면이 돌려준 답. */
@@ -95,6 +98,13 @@ interface Pending {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/** 사람의 브라우저를 물 수 없는 주체 — 앱 토큰 · 앱 서버(그 사람의 로그인으로 남의 사이트를 부리는 통로가 된다). 라우트(routes.ts)와
+ *  툴(capabilities/browser.ts)이 **같은 판정 · 같은 문구**를 쓴다(두 벌이면 한쪽만 고쳐져 갈라진다 — #4993 격리 리뷰). */
+export const APP_PRINCIPAL_REFUSAL = "앱 토큰으로는 사람의 브라우저를 부릴 수 없습니다";
+export function isAppPrincipal(u: { appId?: unknown; appServer?: unknown } | null | undefined): boolean {
+  return !!(u && (u.appId || u.appServer));
 }
 
 /** 사람이 읽을 오류 — 무엇이 안 됐고 무엇을 하면 되는지까지 말한다(이 문구가 곧 AI 의 다음 행동이다). */
@@ -191,10 +201,13 @@ export class BrowserRelay {
    *  ② 지금 앞에 있는 창 ③ 사람이 가장 최근에 만진 화면 ④ 가장 최근에 붙은 화면.
    */
   pick(key: string, session: string | null): HostSummary | null {
-    const hs = this.keyHosts(key);
-    if (!hs.length) return null;
-    const best = hs.sort((a, b) => this.rank(b, session) - this.rank(a, session))[0];
-    return this.hostsFor(key).find((s) => s.id === best.id) ?? null;
+    const best = this.ranked(key, session)[0];
+    return best ? this.hostsFor(key).find((s) => s.id === best.id) ?? null : null;
+  }
+
+  /** 그 사람의 화면들을 고를 순서대로(pick 과 call 이 같은 순서를 쓴다). */
+  private ranked(key: string, session: string | null): Host[] {
+    return this.keyHosts(key).sort((a, b) => this.rank(b, session) - this.rank(a, session));
   }
 
   /**
@@ -209,26 +222,28 @@ export class BrowserRelay {
     if (mine >= MAX_PENDING_PER_KEY) {
       return Promise.reject(new BrowserRelayError("busy", `브라우저 명령이 ${mine}건 밀려 있습니다 — 앞의 명령이 끝난 뒤 다시 시도하세요.`));
     }
-    const host = hs.sort((a, b) => this.rank(b, cmd.session) - this.rank(a, cmd.session))[0];
+    const order = this.ranked(key, cmd.session);
     const id = this.newId();
-    const frame: BrowserCmd = { id, op: cmd.op, session: cmd.session, args: cmd.args ?? {} };
+    const ms = Math.max(1_000, Math.min(Number(timeoutMs) || 30_000, 15 * 60_000));
+    const frame: BrowserCmd = { id, op: cmd.op, session: cmd.session, args: cmd.args ?? {}, ttl_ms: ms };
     return new Promise<unknown>((resolve, reject) => {
-      const ms = Math.max(1_000, Math.min(Number(timeoutMs) || 30_000, 15 * 60_000));
       const timer = setTimeout(() => {
         if (!this.pending.delete(id)) return;
         reject(new BrowserRelayError("timeout",
           `브라우저가 ${Math.round(ms / 1000)}초 안에 답하지 않았습니다(${cmd.op}) — 페이지가 응답하지 않거나 데스크톱 앱이 멈췄습니다. 상태를 browser_screenshot 으로 확인하세요.`));
       }, ms);
       // unref 하지 않는다 — 기다리는 명령이 있는 동안은 그 기다림이 곧 할 일이다(끝나면 위 콜백·reply·detach 가 지운다).
-      this.pending.set(id, { host: host.id, key, op: cmd.op, resolve, reject, timer });
-      let ok = false;
-      try { ok = host.push("cmd", frame); } catch { ok = false; }
-      if (!ok) {
-        clearTimeout(timer);
+      //  밀기가 실패한 화면은 끊긴 것이다 — 떼어 내고 **다음 순서의 화면**에 민다(같은 사람의 다른 화면이 살아 있으면 첫 시도가 헛되지 않게).
+      for (const host of order) {
+        this.pending.set(id, { host: host.id, key, op: cmd.op, resolve, reject, timer });
+        let ok = false;
+        try { ok = host.push("cmd", frame); } catch { ok = false; }
+        if (ok) return;
         this.pending.delete(id);
         this.detach(host.id, "closed");
-        reject(new BrowserRelayError("disconnected", "브라우저 연결이 방금 끊겼습니다 — 잠시 뒤 다시 시도하세요."));
       }
+      clearTimeout(timer);
+      reject(new BrowserRelayError("disconnected", "브라우저 연결이 방금 끊겼습니다 — 잠시 뒤 다시 시도하세요."));
     });
   }
 

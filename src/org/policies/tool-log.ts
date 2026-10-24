@@ -185,7 +185,36 @@ export const SECRET_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
   org_oauth_client_upsert: ["clientSecret"],
   workspace_link_set: ["token"],
   workspace_activate: ["app_dsn"],   // 앱 role 비밀번호가 든 Postgres 접속 문자열
+  //  #4993 AI 브라우저 — 사람 대신 남의 사이트에 치는 글(인증 코드 · 개인정보) · 페이지에서 돌린 코드 · 올릴 파일의 받기 주소(짧은 수명 자격).
+  //   설명문이 «비밀은 직접 치지 말라» 고 해도 강제가 아니다 — 기록이 그 약속에 기대면 안 된다(#4993 격리 리뷰).
+  browser_act: ["text"],
+  browser_fill: ["value"],
+  browser_eval: ["code"],
+  browser_upload: ["urls"],
 };
+
+/**
+ * 주소 칸 — 어느 사이트에 갔는지(출처)만 남기고 경로 · 쿼리 · 조각은 남기지 않는다(#4993 격리 리뷰). 매직 링크 · 비밀번호 재설정 ·
+ *  OAuth `code` 는 주소 자체가 자격이다. 주소가 아닌 값(검색어)은 사람이 친 글이라 길이만 남긴다.
+ */
+export const ORIGIN_ONLY_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  browser_navigate: ["url"],
+  browser_tabs: ["url"],
+};
+
+function originOnly(v: unknown): string {
+  if (typeof v !== "string") return hiddenValue(v);
+  const raw = v.trim();
+  //  'github.com/x' 처럼 스킴 없이 온 주소도 사이트는 남긴다(브라우저 툴이 https 로 읽는 모양과 같게).
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(raw) ? "https://" + raw : "");
+  if (withScheme) {
+    try {
+      const u = new URL(withScheme);
+      if (u.protocol === "http:" || u.protocol === "https:") return `${u.origin} (경로·쿼리 기록하지 않음)`;
+    } catch { /* 주소가 아니다 */ }
+  }
+  return hiddenValue(v);
+}
 
 function hiddenValue(v: unknown): string {
   if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -203,6 +232,7 @@ function hiddenValue(v: unknown): string {
  *  · db_query → SQL 리터럴 스크럽(#705) 후 통상 가공. redactDeep(시크릿)만으론 PII 미포착이라 별도 처리.
  *  · agent_job_run → 지시(prompt) 값을 남기지 않고 길이만(#4490) — 작업 지시는 보낸 사람 것이다(관리자 API 도 남의 지시를 열지 않는다).
  *  · 비밀을 받는 툴(SECRET_ARG_FIELDS) → 그 칸은 칸 이름·크기만(#4970).
+ *  · 주소 칸(ORIGIN_ONLY_ARG_FIELDS) → 사이트(출처)만(#4993).
  *  · 그 외(빌트인) → 현행 그대로(시크릿 마스킹 + 절단 + 총량 캡).
  */
 export function argsForLog(tool: string, raw: unknown): unknown {
@@ -212,6 +242,12 @@ export function argsForLog(tool: string, raw: unknown): unknown {
   if (hide && args && typeof args === "object" && !Array.isArray(args)) {
     const o: Record<string, unknown> = { ...(args as Record<string, unknown>) };
     for (const k of hide) if (o[k] !== undefined && o[k] !== null) o[k] = hiddenValue(o[k]);
+    args = o;
+  }
+  const originKeys = ORIGIN_ONLY_ARG_FIELDS[tool];
+  if (originKeys && args && typeof args === "object" && !Array.isArray(args)) {
+    const o: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+    for (const k of originKeys) if (o[k] !== undefined && o[k] !== null) o[k] = originOnly(o[k]);
     args = o;
   }
   if (tool === "agent_job_run" && args && typeof args === "object" && !Array.isArray(args)

@@ -12,8 +12,8 @@ import { currentWorkspace } from '../lib/net.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
 import { normWebUrl } from './web-url.js';
 import {
-  type BTab, aiBusy, allTabs, answerHandoff, cancelHandoff, destroyTab, ensureCapturable, ensureTab, getTab, keyOfTab, markAi,
-  onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession,
+  type BTab, aiBusy, allTabs, blankTab, cancelHandoff, destroyTab, ensureCapturable, ensureTab, getTab, keyOfTab, markAi,
+  onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession, wakeTab,
 } from './browser-tabs.js';
 import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
 
@@ -23,7 +23,10 @@ const PROTOCOL = 1;
 const SHOT_MAX = 1568;
 const SESSIONLESS = 'mcp';
 
-interface Cmd { id: string; op: string; session: string | null; args: Record<string, any> }
+interface Cmd { id: string; op: string; session: string | null; args: Record<string, any>; ttl_ms?: number }
+
+/** 사람이 [AI 멈춤]을 눌러 둔 탭 — 그 탭에서는 보기·닫기·고르기·콘솔 읽기를 포함해 AI 명령을 거절한다. */
+const PAUSED_MSG = '사람이 이 탭에서 AI 조작을 멈춰 두었습니다 — 사람에게 [AI 멈춤]을 풀어 달라고 하세요.';
 
 let started = false;
 let hostId = '';
@@ -142,7 +145,18 @@ const queues = new Map<string, Promise<unknown>>();
 async function run(cmd: Cmd): Promise<void> {
   const qk = cmd.session || SESSIONLESS;
   const prev = cmd.op === 'handoff' ? Promise.resolve() : (queues.get(qk) || Promise.resolve());
-  const job = prev.catch(() => null).then(() => handle(cmd));
+  //  시간 한도(ttl_ms — 게이트웨이가 이 명령을 기다리는 길이)를 **받은 때부터** 잰다(두 기계의 시계를 맞출 필요가 없다).
+  //   ① 앞 명령 때문에 한도를 넘긴 명령은 실행하지 않는다 — AI 는 이미 시간 초과로 들었고 다시 보냈을 수 있어, 늦게 실행하면 두 번 누른다.
+  //   ② 한도를 넘겨도 안 끝나는 일은 줄에서 놓아준다 — 페이지가 멈춰 한 명령이 안 끝나면 그 세션의 뒤 명령이 영영 막혔다(#4993 격리 리뷰).
+  //   한도가 없는 명령(옛 게이트웨이)은 종전대로 끝까지 기다린다.
+  const ttl = Number(cmd.ttl_ms) > 0 ? Number(cmd.ttl_ms) : 0;
+  const deadline = performance.now() + ttl - 250;
+  const job = prev.catch(() => null).then(() => {
+    if (!ttl) return handle(cmd);
+    const left = deadline - performance.now();
+    if (left <= 0) throw new Error('앞 명령이 오래 걸려 시간 한도가 지났습니다 — 이 명령은 실행하지 않았습니다. 상태를 확인하고 다시 시도하세요.');
+    return within(handle(cmd), left, '시간 한도를 넘겼습니다 — 페이지가 아직 처리 중일 수 있습니다. 같은 동작을 다시 보내기 전에 화면을 확인하세요.');
+  });
   if (cmd.op !== 'handoff') queues.set(qk, job);
   try { await reply(cmd.id, true, await job); }
   catch (e) { await reply(cmd.id, false, (e as Error)?.message || String(e)); }
@@ -200,12 +214,14 @@ function pickTab(S: string, tabArg: unknown, create: boolean): BTab {
 /** 탭을 골라 AI 표시를 켠 채 일을 시킨다. 사람이 [AI 멈춤]을 눌러 둔 탭이면 거절한다. */
 async function withTab<T>(S: string, a: Record<string, any>, create: boolean, fn: (t: BTab) => Promise<T>): Promise<T> {
   const t = pickTab(S, a.tab, create);
-  if (t.paused) throw new Error('사람이 이 탭에서 AI 조작을 멈춰 두었습니다 — 사람에게 [AI 멈춤]을 풀어 달라고 하세요.');
+  if (t.paused) throw new Error(PAUSED_MSG);
   markAi(t);
   revealOnce(t);
   aiBusy(t, 1);
   try {
     await within(t.ready, 15_000, '탭이 준비되지 않았습니다(15초)');
+    //  사람의 칸에서 오래 안 보여 재운 탭 — 재우기 전 주소를 다시 싣고 다 실릴 때까지(최대 15초) 기다린 뒤 일한다.
+    if (t.asleep) await loadAndWait(t, () => wakeTab(t), 15_000);
     return await fn(t);
   } finally { aiBusy(t, -1); }
 }
@@ -236,15 +252,26 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * 잠깐 기다리기 — 창이 보이면 타이머, **숨어 있으면 게스트와의 빈 왕복**으로 잰다.
  *  ⚠ 숨은 화면(트레이로 닫은 창·최소화)의 타이머는 Chromium 이 1초 단위로 묶고, 숨은 지 5분이 지나면 연달아 거는 타이머를
  *   **1분에 한 번**으로 묶는다(intensive throttling). 실측(2026-10-25): 숨긴 창에서 16ms 쉬기가 0.9초 → 끌기 한 번 11초.
- *   IPC 왕복(executeJavaScript)은 묶이지 않는다. 데스크톱 앱이 backgroundThrottling 을 끄는 판(desktop/main)부터는 이 길을 안 탄다.
+ *   IPC 왕복(executeJavaScript)은 묶이지 않는다.
+ *  ⚠ 데스크톱 앱 쪽에서 backgroundThrottling 을 끄는 길은 쓰지 않는다 — Electron 문서상 끄면 창을 숨겨도 visibilityState 가 visible 로
+ *   남아, 앱 곳곳의 «document.hidden 이면 쉰다»(폴링·스트림)가 트레이에서도 계속 돈다(#4993 격리 리뷰). 그래서 이 화면이 스스로 잰다.
  */
 async function nap(t: BTab, ms: number): Promise<void> {
   if (ms <= 0) return;
   if (!document.hidden) { await sleep(ms); return; }
   const end = performance.now() + ms;
   while (performance.now() < end) {
-    try { await t.view.executeJavaScript('0'); } catch { return; }
+    if (!(await ping(t))) return;
   }
+}
+
+/** 게스트와의 빈 왕복 한 번 — 2초 안에 끝나면 true. 페이지가 바쁜 고리에 빠지면 executeJavaScript 가 끝나지 않으므로 한도를 둔다. */
+async function ping(t: BTab): Promise<boolean> {
+  const r = await Promise.race([
+    Promise.resolve().then(() => t.view.executeJavaScript('0')).then(() => 'ok', () => 'err'),
+    sleep(2_000).then(() => 'slow'),
+  ]);
+  return r === 'ok';
 }
 
 async function exec(t: BTab, src: string, ms = 20_000): Promise<any> {
@@ -301,24 +328,35 @@ async function opTabs(S: string, a: Record<string, any>): Promise<unknown> {
     let n = 1;
     while (nos.has(n)) n++;
     const key = keyOfTab(S, n);
+    //  주소를 먼저 검사한다 — 정규화는 지금 http(s) 아니면 검색어로 바꾸지만, 그 불변식을 여기서도 못 박는다(file: · javascript: 를 싣지 않게).
+    const u = a.url ? normWebUrl(String(a.url)) : '';
+    if (a.url && !/^https?:\/\//i.test(u)) throw new Error('http(s) 주소만 열 수 있습니다: ' + a.url);
     const t = ensureTab(key, 'about:blank');
     current.set(S, key);
     markAi(t);
     requestReveal(t);
     revealedAt.set(key, Date.now());
-    if (a.url) {
+    if (u) {
       await within(t.ready, 15_000, '새 탭이 준비되지 않았습니다(15초)');
-      const u = normWebUrl(String(a.url));
       await loadAndWait(t, () => t.view.loadURL(u), 30_000);
     }
   } else if (action === 'close') {
     const key = a.tab ? keyOfTab(S, String(a.tab)) : current.get(S);
     if (!key || (!getTab(key) && !storedUrls()[key])) throw new Error('닫을 탭이 없습니다 — browser_tabs 로 탭 번호를 확인하세요.');
-    destroyTab(key, true);
+    const t = getTab(key);
+    if (t?.paused) throw new Error(PAUSED_MSG);
+    let note = '';
+    if (t && t.anchor) {
+      //  사람의 칸이 쥔 탭 — 없애면 칸에 빈 자리만 남고, 같은 번호로 다시 연 탭이 칸에 안 붙어 사람에게 안 보인다(#4993 격리 리뷰).
+      blankTab(t);
+      note = '사람의 화면에 열려 있던 탭이라 닫지 않고 비웠습니다(빈 페이지).';
+    } else destroyTab(key, true);
     if (current.get(S) === key) current.delete(S);
+    return note ? { ...listTabs(S), note } : listTabs(S);
   } else if (action === 'select') {
     if (!a.tab) throw new Error('select 에는 tab 이 필요합니다');
     const t = pickTab(S, a.tab, false);
+    if (t.paused) throw new Error(PAUSED_MSG);
     current.set(S, t.key);
     markAi(t);
   }
@@ -332,7 +370,7 @@ function listTabs(S: string): Record<string, unknown> {
   const dormant = Object.keys(stored).filter((k) => stored[k] && sessionOfKey(k) === S && !keys.has(k));
   const cur = current.get(S) || '';
   const rows = [
-    ...live.map((t) => ({ tab: tabNoOfKey(t.key), url: t.url, title: t.title, current: t.key === cur, open: true, visible_to_human: tabVisible(t), loading: t.loading, ...(t.paused ? { paused: true } : {}) })),
+    ...live.map((t) => ({ tab: tabNoOfKey(t.key), url: t.url, title: t.title, current: t.key === cur, open: true, visible_to_human: tabVisible(t), loading: t.loading, ...(t.paused ? { paused: true } : {}), ...(t.asleep ? { asleep: true } : {}) })),
     ...dormant.map((k) => ({ tab: tabNoOfKey(k), url: stored[k], title: '', current: k === cur, open: false, visible_to_human: false, loading: false })),
   ].sort((x, y) => Number(x.tab) - Number(y.tab));
   return {
@@ -383,7 +421,7 @@ async function shot(t: BTab, region?: unknown[] | null): Promise<{ image: { mime
     // 숨은 창(트레이·최소화)에선 첫 캡처가 **마지막으로 그린 프레임(옛 화면)** 을 준다 — 그 캡처가 새 프레임을 그리게 하므로
     //  한 번 버리고 다시 찍는다. 실측(2026-10-25): 숨긴 창에서 끌기 뒤 첫 캡처는 옛 자리, 둘째는 새 자리에 상자.
     try { await once(); } catch { /* 아직 그린 적 없는 탭 — 아래에서 다시 */ }
-    try { await t.view.executeJavaScript('0'); } catch { /* noop */ }
+    await ping(t);
   }
   let img: any;
   try { img = await once(); }
@@ -505,7 +543,9 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
       await v.insertText(String(a.text ?? ''));
       settle = 150;
     } else if (act === 'key') {
-      for (const combo of String(a.keys || '').trim().split(/\s+/).filter(Boolean)) {
+      //  한도 — 키 글은 툴 입력에서도 100자로 막지만 화면이 한 번 더 자른다(긴 글 하나가 그 세션의 명령 줄을 몇 분 붙잡지 않게).
+      const skipped: string[] = [];
+      for (const combo of String(a.keys || '').slice(0, 200).trim().split(/\s+/).filter(Boolean).slice(0, 50)) {
         const parts = combo.split('+').filter((x, i, arr) => x !== '' || i === arr.length - 1);
         const raw = parts.pop() || '';
         const mods = [...new Set(parts.map((m) => MOD[m.toLowerCase()]).filter(Boolean))];
@@ -514,9 +554,10 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
         // 편집 단축키는 webview 의 편집 명령으로 — 맥에서는 ⌘A·⌘C 같은 키가 앱 메뉴를 거쳐야 먹는데, 합성 키는 메뉴를 안 지난다.
         if (cmdLike && !mods.includes('alt')) {
           if (k === 'a') { v.selectAll(); continue; }
-          if (k === 'c') { v.copy(); continue; }
-          if (k === 'v') { v.paste(); continue; }
-          if (k === 'x') { v.cut(); continue; }
+          //  ⌘C·⌘V·⌘X 는 **사람의 운영체제 클립보드**를 건드린다 — 붙여넣기는 사람이 복사해 둔 것(비밀번호 · 계좌번호)을 페이지에 넣고
+          //   (페이지 지시에 속은 AI 가 그걸 보내거나 다시 읽을 수 있다), 복사·잘라내기는 사람의 클립보드를 덮어쓴다(#4993 격리 리뷰).
+          //   AI 는 쓰지 않는다 — 글은 action=type, 고른 글 읽기는 browser_eval(window.getSelection()).
+          if (k === 'c' || k === 'v' || k === 'x') { skipped.push(combo); continue; }
           if (k === 'z') { if (mods.includes('shift')) v.redo(); else v.undo(); continue; }
         }
         const code = KEY[k] || (raw.length === 1 ? raw.toUpperCase() : raw);
@@ -528,10 +569,12 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
         await send({ type: 'keyUp', keyCode: code, modifiers: mods });
         await nap(t, 40);
       }
+      if (skipped.length) out.note = `클립보드 단축키(${skipped.join(' ')})는 누르지 않았습니다 — 사람의 클립보드를 건드립니다. 글은 action=type, 고른 글은 browser_eval 로 읽으세요.`;
     } else if (act === 'scroll') {
       const p = a.ref ? await point(a.ref, 0, 0)
         : (a.x !== undefined && a.y !== undefined ? { x: Math.round(Number(a.x) / s), y: Math.round(Number(a.y) / s) } : { x: Math.round(t.layoutW / 2), y: Math.round(t.layoutH / 2) });
-      const n = Math.max(1, Number(a.amount) || 600);
+      //  상한 20,000px — JSON 의 1e999 는 Infinity 라 상한이 없으면 끝없이 굴렀다(#4993 격리 리뷰). 툴 입력에서도 같은 상한이다.
+      const n = Math.max(1, Math.min(20_000, Math.floor(Number(a.amount)) || 600));
       const dir = String(a.direction || 'down');
       // Electron 의 휠 부호: deltaY 가 음수면 내용이 위로 올라간다(= 아래로 굴림). 실측(2026-10-25): -500 → scrollY 500.
       //  한 번에 크게 보내면 부드러운 스크롤이 도는 중에 재서 덜 간 것으로 보인다(실측: 1500 을 보내고 450ms 뒤 436).
@@ -647,29 +690,70 @@ async function opUpload(t: BTab, a: Record<string, any>): Promise<unknown> {
 }
 
 async function opEval(t: BTab, code: string): Promise<unknown> {
-  let r: any;
-  const mark = t.console.length;
-  try { r = await exec(t, evalSource(code, true), 30_000); }
-  catch {
-    // 식으로 감싼 원문이 문법 오류다(문장 여러 개·return 등) — 본문으로 다시. 원문의 문법 오류는 Electron 이 사유 없이
-    //  거절하므로(«Script failed to execute») 그 사유는 페이지 콘솔에 남은 줄에서 읽는다.
-    try { r = await exec(t, evalSource(code, false), 30_000); }
-    catch {
-      const why = t.console.slice(mark).reverse().find((l) => l.level >= 3)?.message || '';
-      throw new Error('코드를 실행하지 못했습니다' + (why ? ' — ' + why : ' — 문법을 확인하세요(마지막 값을 돌려받으려면 식 하나로, 문장이 여럿이면 return 으로)'));
-    }
+  type Try = { value?: any; kind?: 'compile' | 'timeout' | 'nav' | 'other'; msg?: string; mark: number };
+  /**
+   * 한 번 실행 — 결과 · 문법 오류(곧바로 오는 «Script failed to execute») · 시간 초과 · **페이지 이동**(코드가 다른 페이지로 보냄)을 가른다.
+   *  ⚠ 이동하면 그 문서의 실행은 끝나지 않는다(답이 영영 안 온다) — 이동 시작을 함께 기다려 곧바로 돌려준다(실측: 30초를 기다렸다).
+   */
+  const once = async (expr: boolean): Promise<Try> => {
+    const mark = t.console.length;
+    const url0 = t.url;
+    const t0 = performance.now();
+    let offNav = (): void => { /* noop */ };
+    const nav = new Promise<'nav'>((res) => {
+      const f = (): void => res('nav');
+      t.view.addEventListener('did-start-loading', f);
+      offNav = () => t.view.removeEventListener('did-start-loading', f);
+    });
+    const run = exec(t, evalSource(code, expr), 30_000);
+    run.catch(() => { /* 이동으로 버린 실행의 늦은 실패 — 아래 race 가 이미 끝났다 */ });
+    try {
+      const out = await Promise.race([run, nav]);
+      return out === 'nav' ? { kind: 'nav', mark } : { value: out, mark };
+    } catch (e) {
+      const msg = String((e as Error)?.message || e);
+      if (/Script failed to execute/i.test(msg) && performance.now() - t0 < 2_000 && t.url === url0) return { kind: 'compile', msg, mark };
+      return { kind: /답하지 않았습니다/.test(msg) ? 'timeout' : 'other', msg, mark };
+    } finally { offNav(); }
+  };
+  //  식으로 감싼 원문이 문법 오류면(문장 여러 개·return 등) 본문으로 **한 번만** 다시 — 문법 오류는 실행 전에 거절되므로 두 번 돌 일이 없다.
+  //   그 밖의 실패(시간 초과 · 이동)에 다시 돌리면 같은 코드가 **두 번** 돈다(클릭 두 번 · 새 문서에서 또 실행) — 다시 돌리지 않는다(#4993 격리 리뷰).
+  let r = await once(true);
+  if (r.kind === 'compile') r = await once(false);
+  if (r.kind === 'nav') return { ...summary(t), navigated: true, note: '코드가 페이지를 이동시켜 결과를 받지 못했습니다(코드는 실행됐습니다) — 지금 페이지를 확인하세요.' };
+  if (r.kind === 'timeout') throw new Error('코드가 30초 안에 끝나지 않았습니다 — 페이지에서 아직 돌고 있을 수 있습니다(같은 코드를 다시 보내기 전에 상태를 확인하세요).');
+  if (r.kind === 'compile') {
+    //  원문의 문법 오류 사유는 Electron 이 주지 않는다 — **이번 시도** 뒤 페이지 콘솔에 남은 줄에서 읽는다(앞 시도의 줄이 섞이지 않게).
+    const why = t.console.slice(r.mark).reverse().find((l) => l.level >= 3)?.message || '';
+    throw new Error('코드를 실행하지 못했습니다' + (why ? ' — ' + why : ' — 문법을 확인하세요(마지막 값을 돌려받으려면 식 하나로, 문장이 여럿이면 return 으로)'));
   }
-  if (!r || r.ok !== true) throw new Error(String(r?.error || '코드가 오류를 냈습니다'));
-  return { ...summary(t), value: r.value };
+  if (r.kind === 'other') throw new Error('코드를 실행하지 못했습니다 — ' + r.msg);
+  const v = r.value;
+  if (!v || v.ok !== true) throw new Error(String(v?.error || '코드가 오류를 냈습니다'));
+  return { ...summary(t), value: v.value };
 }
 
 function opConsole(S: string, a: Record<string, any>): Record<string, unknown> {
   const t = pickTab(S, a.tab, false);
+  if (t.paused) throw new Error(PAUSED_MSG);
   const min = a.level === 'error' ? 3 : a.level === 'warning' ? 2 : 0;
-  let re: RegExp | null = null;
-  if (a.pattern) { try { re = new RegExp(String(a.pattern), 'i'); } catch { throw new Error('pattern 이 올바른 정규식이 아닙니다'); } }
+  //  pattern — 기본은 «이 글이 든 줄»(대소문자 무시). 정규식은 /…/ 로 감쌌을 때만: 정규식은 이 화면(사람이 쓰는 앱의 화면 스레드)에서
+  //   돌고, 페이지가 남긴 줄에 되돌이가 폭발하는 식이 걸리면 앱 전체가 멈춘다(#4993 격리 리뷰) — 그래서 명시했을 때만, 줄은 2,000자까지.
+  const pat = String(a.pattern || '').slice(0, 200);
+  let match: (m: string) => boolean = () => true;
+  if (pat) {
+    const rx = /^\/(.+)\/([a-z]*)$/i.exec(pat);
+    if (rx) {
+      let re: RegExp;
+      try { re = new RegExp(rx[1], rx[2].replace(/[gy]/g, '')); } catch { throw new Error('pattern 의 정규식(/…/)이 올바르지 않습니다'); }
+      match = (m) => re.test(m.slice(0, 2_000));
+    } else {
+      const needle = pat.toLowerCase();
+      match = (m) => m.toLowerCase().includes(needle);
+    }
+  }
   const name = (l: number) => (l >= 3 ? 'error' : l === 2 ? 'warning' : l === 1 ? 'info' : 'log');
-  const lines = t.console.filter((l) => l.level >= min && (!re || re.test(l.message)));
+  const lines = t.console.filter((l) => l.level >= min && match(l.message));
   const limit = Math.max(1, Math.min(500, Number(a.limit) || 100));
   const out = lines.slice(-limit).map((l) => ({ level: name(l.level), message: l.message, at: new Date(l.at).toISOString(), ...(l.source ? { source: l.source.slice(0, 200) + (l.line ? ':' + l.line : '') } : {}) }));
   if (a.clear) t.console.length = 0;
@@ -677,13 +761,15 @@ function opConsole(S: string, a: Record<string, any>): Record<string, unknown> {
 }
 
 async function opHandoff(S: string, a: Record<string, any>): Promise<unknown> {
+  //  세션 밖 호출의 탭('mcp')은 어느 칸에도 안 붙는다 — 사람은 그 탭을 볼 수도 [완료]를 누를 수도 없다(툴도 같은 판정으로 막는다).
+  if (S === SESSIONLESS) throw new Error('browser_handoff 는 세션 안에서만 부를 수 있습니다 — 사람이 [완료]를 누를 자리가 그 세션 화면입니다.');
   const t = pickTab(S, a.tab, true);
   markAi(t);
   requestReveal(t);
   revealedAt.set(t.key, Date.now());
   const msg = String(a.message || '').slice(0, 500);
   notifyHuman(S, msg);
-  const wait = Math.max(0, Math.min(900, Number(a.wait_seconds) || 0));
+  const wait = Math.max(0, Math.min(880, Number(a.wait_seconds) || 0));   // 게이트웨이 한도(15분)가 기다림+20초를 품게
   const p = requestHandoff(t, msg);
   if (!wait) return { ...summary(t), done: false, waiting: true, note: '사람에게 알렸습니다 — 그 탭에 부탁 글과 [완료] 단추가 떠 있습니다.' };
   let timer = 0;
@@ -709,5 +795,3 @@ function notifyHuman(S: string, msg: string): void {
 
 /** 시험·진단 — 이 화면의 호스트 id(없으면 ''). */
 export function browserHostId(): string { return hostId; }
-/** 사람이 [완료]·[못 해요]를 누르는 자리(웹 칸)가 부른다. */
-export function answerHandoffFor(key: string, done: boolean): void { const t = getTab(key); if (t) answerHandoff(t, done); }

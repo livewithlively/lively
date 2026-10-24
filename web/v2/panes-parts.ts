@@ -964,11 +964,19 @@ function liveWebPart(ctx: PartCtx): Part {
   const FIT_BASE = 1280;
   let key = ctx.slotKey();
   let release: (() => void) | null = null;
+  /** 이 칸이 자리에 붙여 둔 탭 — 대장의 그 열쇠 탭이 이것과 다르면(없어졌다가 다시 생겼다) 다시 붙인다. */
+  let docked: BTab | null = null;
+  let adopting = false;
   let curZ = 1;
   const stage = el('div', { class: 'pn-webstage' });
   const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' }) as HTMLInputElement;
   input.onfocus = () => input.select();
-  const tab = (): BTab => ensureTab(key);
+  //  ⚠ 늘 «붙여 둔 탭» 을 쓴다 — 대장에서 탭이 없어졌다 다시 생기면(새 BTab) 그 탭은 자리가 없어 셸 뒤 투명도 1% 로 숨는다.
+  //   그대로 ensureTab 만 부르면 사람이 친 주소가 안 보이는 탭에 실렸다(#4993 격리 리뷰). 다르면 여기서 다시 붙인다.
+  const tab = (): BTab => {
+    if (!docked || getTab(key) !== docked) adopt();
+    return docked!;
+  };
   const go = (raw?: string): void => {
     const u = normWebUrl(raw ?? input.value);
     if (!u) return;
@@ -1043,18 +1051,27 @@ function liveWebPart(ctx: PartCtx): Part {
   }
   /** 이 칸이 보여 줄 탭을 지금 세션의 것으로 — 자리를 다시 쥐고, 배율 알약·빈 안내를 그 탭의 겹침 판으로 옮긴다. */
   function adopt(): void {
-    key = ctx.slotKey();
-    if (release) { release(); release = null; }
-    const t = ensureTab(key);
-    release = dockTab(key, stage, () => curZ);
-    //  알약·안내는 webview 위에 떠야 한다 — 칸 안 요소는 층의 webview 를 이길 수 없어(쌓임 맥락이 다르다) 겹침 판에 싣는다.
-    t.overlay.append(zoom.el, empty);
-    zoom.apply();
+    if (adopting) return;   // ensureTab 이 내는 'tabs' 신호가 여기로 되돌아오는 것을 막는다
+    adopting = true;
+    try {
+      key = ctx.slotKey();
+      if (release) { release(); release = null; }
+      const t = ensureTab(key);
+      release = dockTab(key, stage, () => curZ);
+      docked = t;
+      //  알약·안내는 webview 위에 떠야 한다 — 칸 안 요소는 층의 webview 를 이길 수 없어(쌓임 맥락이 다르다) 겹침 판에 싣는다.
+      t.overlay.append(zoom.el, empty);
+      zoom.apply();
+    } finally { adopting = false; }
     sync();
   }
   adopt();
   const offSess = ctx.onSession(() => adopt());
-  const offTabs = onTabEvent((ev) => { if ('key' in ev && ev.key === key && ev.type !== 'reveal') sync(); });
+  //  탭 목록이 바뀌면(만들기·없애기) 내 탭이 아직 그 탭인지 본다 — 없어졌거나 갈렸으면 다시 붙인다(빈 자리로 남지 않게).
+  const offTabs = onTabEvent((ev) => {
+    if (ev.type === 'tabs') { if (!adopting && getTab(key) !== docked) adopt(); return; }
+    if ('key' in ev && ev.key === key && ev.type !== 'reveal') sync();
+  });
   const aiTimer = window.setInterval(() => { const t = getTab(key); if (t && t.aiAt) sync(); }, 5_000);   // AI 표시가 1분 뒤 저절로 꺼지게
   // ⌘R 은 이 칸만 — 마지막으로 만진 칸이 여기일 때(옛 웹 칸과 같은 규칙). webview 안을 누른 뒤의 키는 게스트 몫이라 여기 안 온다.
   let mine = false;

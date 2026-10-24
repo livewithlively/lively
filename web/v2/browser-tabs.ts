@@ -38,6 +38,9 @@ export const DESTROY_AFTER_MS = 10 * 60_000;
 export const AI_KEEP_MS = 30 * 60_000;
 /** 웹 칸이 주소를 기억하는 열쇠(panes-parts WEB_URL_KEY 와 같은 값) — 아직 안 연 탭(dormant)의 주소를 여기서 읽는다. */
 export const WEB_URL_KEY = 'pn_web_url';
+/** 사람의 칸에 붙은 탭이 이만큼 안 보이면 재운다(about:blank — 다시 보이면 그 주소로). 옛 웹 칸의 규칙 그대로(#1819 — 띄워 둔 페이지가
+ *  안 보이는 동안에도 타이머·폴링·영상이 돌아 화면 전체가 느려졌다). AI 가 AI_KEEP_MS 안에 쓴 탭은 재우지 않는다(이어 쓴다). */
+export const SLEEP_AFTER_MS = 30_000;
 const CONSOLE_MAX = 500;
 
 export type TabMode = 'docked' | 'warm' | 'cold';
@@ -71,6 +74,10 @@ export interface BTab {
   /** 마지막으로 입힌 인라인 스타일 — 매 틀 같은 값을 다시 쓰지 않게(읽은 cssText 는 브라우저가 정규화해 내 문자열과 늘 다르다). */
   lastCss: string;
   lastOverlayCss: string;
+  /** 재우기 전에 보던 주소('' = 깨어 있음) — 자는 동안 webview 는 about:blank 다. */
+  asleep: string;
+  /** 사람의 칸에서 안 보이기 시작한 시각(0 = 보이는 중이거나 칸이 없다). */
+  hiddenAt: number;
 }
 
 export type TabEvent =
@@ -179,7 +186,7 @@ export function ensureTab(key: string, url?: string): BTab {
     mode: 'cold', anchor: null, anchorId: 0, scale: () => 1,
     layoutW: DEFAULT_W, layoutH: DEFAULT_H, dockZ: 6,
     createdAt: Date.now(), touchedAt: Date.now(), aiAt: 0, aiBusy: 0, paused: false,
-    console: [], lastError: '', handoff: null, lastCss: '', lastOverlayCss: '',
+    console: [], lastError: '', handoff: null, lastCss: '', lastOverlayCss: '', asleep: '', hiddenAt: 0,
   };
   const syncUrl = (): void => {
     try {
@@ -193,7 +200,8 @@ export function ensureTab(key: string, url?: string): BTab {
   view.addEventListener('dom-ready', () => {
     zoomOne();
     if (!t.isReady) { t.isReady = true; markReady(); }
-    if (t.aiAt) void sameTab(t);
+    //  «새 창 → 같은 탭» 고리는 AI 가 최근(AI_WARM_MS)에 쓴 탭의 새 페이지에만 — 사람만 둘러보는 페이지는 사이트 그대로 둔다.
+    if (t.aiAt && Date.now() - t.aiAt < AI_WARM_MS) void sameTab(t);
     syncUrl();
   });
   view.addEventListener('did-start-loading', () => { t.loading = true; t.lastError = ''; emit({ type: 'nav', key }); });
@@ -237,6 +245,23 @@ export function destroyTab(key: string, forget = false): void {
 }
 
 /**
+ * 탭을 비운다(빈 페이지 · 주소 잊기) — AI 가 «닫은» 탭을 사람의 칸이 쥐고 있을 때 없애지 않고 이렇게 남긴다. 없애면 칸에는 빈 자리만
+ *  남고 같은 번호로 다시 연 탭이 칸에 안 붙어 사람에게 안 보인다(#4993 격리 리뷰). 걸려 있던 부탁은 거절로 끝낸다.
+ */
+export function blankTab(t: BTab): void {
+  if (t.handoff) { const h = t.handoff; t.handoff = null; h.resolve({ done: false, declined: true }); }
+  try { const m = storedUrls(); delete m[t.key]; localStorage.setItem(WEB_URL_KEY, JSON.stringify(m)); } catch { /* noop */ }
+  t.url = '';
+  t.title = '';
+  t.asleep = '';
+  t.lastError = '';
+  t.console.length = 0;
+  try { if (t.isReady) void t.view.loadURL('about:blank').catch(() => { /* noop */ }); else t.view.setAttribute('src', 'about:blank'); }
+  catch { /* noop */ }
+  emit({ type: 'nav', key: t.key });
+}
+
+/**
  * 탭을 자리(anchor)에 겹쳐 맞춘다. 같은 탭을 다른 자리가 이미 쥐고 있으면 **나중 자리가 이긴다**(앞 자리는 release 가 noop 이 된다).
  * @param scale 지금 배율(맞춤·고정) — 매 틀마다 읽는다(칸 폭이 바뀌면 맞춤 배율도 바뀐다)
  * @returns 자리를 놓는 함수(웹 칸이 세션을 갈아 끼우거나 사라질 때)
@@ -257,14 +282,32 @@ export function dockTab(key: string, anchor: HTMLElement, scale: () => number): 
   };
 }
 
-/** AI 가 이 탭을 쓴다 — 시각을 적고, 안 보이는 탭이면 따뜻하게 세운다(스크린샷이 되게). */
+/** AI 가 이 탭을 쓴다 — 시각을 적고, 안 보이는 탭이면 따뜻하게 세운다(스크린샷이 되게). 같은 탭 고리의 «AI 쓰는 중» 시한도 늘린다. */
 export function markAi(t: BTab): void {
-  const first = !t.aiAt;
   t.aiAt = Date.now();
   t.touchedAt = t.aiAt;
   if (t.mode === 'cold') applyMode(t, 'warm');
-  if (first && t.isReady) void sameTab(t);
+  if (t.isReady) void sameTab(t);
   emit({ type: 'ai', key: t.key });
+}
+
+/** 재운 탭을 깨운다(재우기 전 주소를 다시 싣는다) — 깨웠으면 true. 부른 쪽이 다 실릴 때까지 기다린다. */
+export function wakeTab(t: BTab): boolean {
+  const u = t.asleep;
+  if (!u) return false;
+  t.asleep = '';
+  try { if (t.isReady) void t.view.loadURL(u).catch(() => { /* 실패는 did-fail-load 가 적는다 */ }); else t.view.setAttribute('src', u); }
+  catch { t.view.setAttribute('src', u); }
+  return true;
+}
+
+/** 탭을 재운다 — 안쪽 페이지를 통째로 내린다(타이머·폴링·소켓·영상이 함께 멈춘다). 주소(t.url)·웹 칸 저장값은 그대로 남는다. */
+function sleepTab(t: BTab): void {
+  const u = t.url;
+  if (!u || t.asleep) return;
+  t.asleep = u;
+  try { if (t.isReady) void t.view.loadURL('about:blank').catch(() => { /* noop */ }); else t.view.setAttribute('src', 'about:blank'); }
+  catch { /* 이미 내려간 webview */ }
 }
 export function aiBusy(t: BTab, d: 1 | -1): void {
   t.aiBusy = Math.max(0, t.aiBusy + d);
@@ -305,7 +348,11 @@ export async function ensureCapturable(t: BTab): Promise<void> {
   // 한 박자 — 숨은 창에선 타이머가 1초로 묶이므로 게스트와의 빈 왕복으로 잰다(browser-host nap 과 같은 이유).
   if (!document.hidden) { await new Promise((r) => setTimeout(r, 350)); return; }
   const end = performance.now() + 350;
-  while (performance.now() < end) { try { await t.view.executeJavaScript('0'); } catch { return; } }
+  //  왕복 한 번에 한도(2초)를 둔다 — 페이지가 바쁜 고리에 빠져 있으면 executeJavaScript 가 끝나지 않아 그 세션의 명령 줄 전체가 멈춘다.
+  while (performance.now() < end) {
+    const r = await Promise.race([t.view.executeJavaScript('0').then(() => 'ok', () => 'err'), new Promise((res) => setTimeout(() => res('slow'), 2_000))]);
+    if (r !== 'ok') return;
+  }
 }
 
 // ── 자리 맞추기 ─────────────────────────────────────────────────────────────
@@ -390,20 +437,37 @@ function frame(): void {
   for (const t of tabs.values()) {
     if (!t.anchor) continue;
     any = true;
-    if (anchorShown(t.anchor)) place(t);
-    else if (t.mode === 'docked') { park(t); t.dockZ = 6; }
+    if (anchorShown(t.anchor)) {
+      if (t.asleep) wakeTab(t);          // 다시 보인다 — 재우기 전 주소로
+      t.hiddenAt = 0;
+      place(t);
+    } else {
+      if (t.mode === 'docked') { park(t); t.dockZ = 6; }
+      if (!t.hiddenAt) t.hiddenAt = Date.now();
+    }
   }
   if (any) raf = requestAnimationFrame(frame);
 }
 function kick(): void { if (!raf) raf = requestAnimationFrame(frame); }
 
-/** 5초마다 — 따뜻한 대기의 식히기 · 오래 안 본 탭 내리기. (창이 숨어 rAF 가 멈춰도 이건 돈다.) */
+/**
+ * 5초마다 — 따뜻한 대기의 식히기 · 오래 안 본 탭 내리기 · 사람의 칸에 붙은 채 안 보이는 탭 재우기. (창이 숨어 rAF 가 멈춰도 이건 돈다.)
+ *  ⚠ 사람의 칸에 붙은 탭(anchor)도 식히고 재운다 — 셸은 안 보는 세션 화면을 숨긴 채 살려 두므로 칸이 사라지지 않는다. 종전엔
+ *   붙은 탭을 통째로 건너뛰어 AI 가 쓴 직후 숨은 칸의 탭이 투명도 1% 로 영영 그려지고, 숨은 페이지가 끝없이 돌았다(#4993 격리 리뷰).
+ */
 function sweep(): void {
   const now = Date.now();
   for (const t of [...tabs.values()]) {
-    if (t.mode === 'docked' || t.anchor) continue;
+    if (t.mode === 'docked') continue;
     if (t.aiBusy > 0 || t.handoff) continue;
     if (t.mode === 'warm' && !(t.aiAt && now - t.aiAt < AI_WARM_MS)) applyMode(t, 'cold');
+    if (t.anchor) {
+      //  사람의 칸 — 내리지 않는다(칸이 그 탭을 쥐고 있다). 오래 안 보이면 재우고, 다시 보이면 frame() 이 깨운다.
+      if (!t.hiddenAt) t.hiddenAt = now;
+      const aiRecent = t.aiAt > 0 && now - t.aiAt < AI_KEEP_MS;
+      if (!t.asleep && !aiRecent && !t.paused && now - t.hiddenAt >= SLEEP_AFTER_MS) sleepTab(t);
+      continue;
+    }
     const keep = t.aiAt ? Math.max(DESTROY_AFTER_MS, AI_KEEP_MS - (now - t.aiAt)) : DESTROY_AFTER_MS;
     if (now - t.touchedAt > keep) destroyTab(t.key);
   }
@@ -412,6 +476,7 @@ function sweep(): void {
 
 /** AI 가 쓰는 탭에만 거는 «새 창 → 같은 탭» 고리(browser-page pageSameTab). 데스크톱 앱은 새 창을 시스템 브라우저로 보낸다. */
 async function sameTab(t: BTab): Promise<void> {
-  try { await t.view.executeJavaScript(callSource(pageSameTab)); }
+  //  시한 = AI 가 마지막으로 쓴 때 + AI_WARM_MS — 그 뒤엔 고리가 아무것도 바꾸지 않는다(사람이 둘러볼 땐 사이트 그대로).
+  try { await t.view.executeJavaScript(callSource(pageSameTab, (t.aiAt || Date.now()) + AI_WARM_MS)); }
   catch { /* 페이지가 막 바뀌는 중 — 다음 dom-ready 에서 다시 건다 */ }
 }

@@ -39,6 +39,7 @@ test("E2 명령이 cmd 로 밀리고 그 화면의 ok 답이 호출을 푼다", 
   assert.equal(h.pushed[0].data.op, "navigate");
   assert.equal(h.pushed[0].data.session, "box-s-12345678");
   assert.deepEqual(h.pushed[0].data.args, { url: "https://example.com" });
+  assert.equal(h.pushed[0].data.ttl_ms, 5_000, "명령에 시간 한도가 실리지 않았다(화면이 늦은 명령을 버릴 근거)");
   assert.equal(relay.pendingCount(), 1);
   assert.equal(relay.reply(K, "host-aaaa1", { id: h.pushed[0].data.id, ok: true, result: { url: "https://example.com/" } }), true);
   assert.deepEqual(await p, { url: "https://example.com/" });
@@ -97,6 +98,7 @@ test("E6b·E6c 시간 한도 경계 — 1ms 는 1초로 올리고, 0 은 기본�
   assert.ok(took >= 950, `1ms 한도가 1초로 올라가지 않았다(${took}ms)`);
   await new Promise((r) => setTimeout(r, 400));   // 한도 0 이 하한(1초)으로 떨어졌다면 지금쯤 끝나 있다
   assert.equal(relay.pendingCount(), 1, "한도 0 인 명령이 기본값(30초)이 아니라 곧 끝났다");
+  assert.deepEqual([h.pushed[0].data.ttl_ms, h.pushed[1].data.ttl_ms], [1_000, 30_000], "화면에 실린 한도가 실제 한도와 다르다");
   relay.reply(K, "host-aaaa1", { id: h.pushed[1].data.id, ok: true, result: 0 });
   assert.equal(await zero, 0);
 });
@@ -209,6 +211,21 @@ test("E13 화면에 밀기가 실패하면 그 화면을 떼고 disconnected", a
   assert.equal(relay.pendingCount(), 0);
 });
 
+test("E13b 밀기가 실패한 화면은 떼고 같은 사람의 다음 화면에 민다 — 그 화면의 답이 호출을 푼다", async () => {
+  const relay = new BrowserRelay();
+  const back = fakeHost(relay, "host-back1", K);
+  const front = fakeHost(relay, "host-front1", K);
+  relay.setState(K, "host-front1", { focused: true });
+  front.fail();
+  const p = relay.call(K, { op: "read", session: null }, 5_000);
+  await tick();
+  assert.deepEqual([front.pushed.length, back.pushed.length], [0, 1], "다음 화면으로 넘어가지 않았다");
+  assert.deepEqual(relay.hostsFor(K).map((h) => h.id), ["host-back1"], "실패한 화면을 떼지 않았다");
+  assert.equal(relay.reply(K, "host-back1", { id: back.pushed[0].data.id, ok: true, result: 7 }), true);
+  assert.equal(await p, 7);
+  assert.equal(relay.pendingCount(), 0);
+});
+
 test("E14 화면 상한을 넘으면 가장 오래 붙은 화면을 끊는다", () => {
   let now = 1;
   const relay = new BrowserRelay({ now: () => now });
@@ -271,7 +288,7 @@ async function until(pred: () => boolean, ms = 2_000): Promise<void> {
   const end = Date.now() + ms;
   while (!pred()) { if (Date.now() > end) throw new Error("기다린 상태가 오지 않았다"); await new Promise((r) => setTimeout(r, 5)); }
 }
-function openStream(url: string) {
+function openStream(url: string, bearer = true) {
   const ctl = new AbortController();
   const frames: { event: string; data: any }[] = [];
   let status = 0;
@@ -279,7 +296,7 @@ function openStream(url: string) {
   let ended = false;
   const done = (async () => {
     try {
-      const res = await fetch(url, { signal: ctl.signal });
+      const res = await fetch(url, { signal: ctl.signal, headers: bearer ? { authorization: "Bearer test-token" } : {} });
       status = res.status;
       type = res.headers.get("content-type") || "";
       if (!res.ok || !res.body) return;
@@ -302,8 +319,9 @@ function openStream(url: string) {
   })();
   return { frames, ctl, done, get status() { return status; }, get type() { return type; }, get ended() { return ended; } };
 }
-const post = (base: string, path: string, body: unknown) =>
-  fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const post = (base: string, path: string, body: unknown, bearer = true) =>
+  fetch(base + path, { method: "POST", headers: { "content-type": "application/json", ...(bearer ? { authorization: "Bearer test-token" } : {}) }, body: JSON.stringify(body) });
+const getStream = (url: string, bearer = true) => fetch(url, { headers: bearer ? { authorization: "Bearer test-token" } : {} });
 
 test("R4~R7 스트림 — hello · 상태 반영 · cmd 받고 reply 로 답 · 늦은 답 taken:false · 끊으면 화면이 빠진다", async () => {
   const relay = new BrowserRelay();
@@ -341,18 +359,31 @@ test("R1~R3 신원 없음 401 · 앱 토큰/앱 서버 403 · 형식 불량 400 
   const s = await server(() => who, relay);
   try {
     for (const path of ["/api/ui/browser/host/reply", "/api/ui/browser/host/state"]) assert.equal((await post(s.base, path, { host: "host-aaaa1", id: "x" })).status, 401, path);
-    assert.equal((await fetch(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`)).status, 401);
+    assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`)).status, 401);
     for (const u of [{ userId: "alice", appId: "app-x" }, { userId: "alice", appServer: true }]) {
       who = u;
-      assert.equal((await fetch(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`)).status, 403);
+      assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`)).status, 403);
       assert.equal((await post(s.base, "/api/ui/browser/host/reply", { host: "host-aaaa1", id: "x" })).status, 403);
       assert.equal((await post(s.base, "/api/ui/browser/host/state", { host: "host-aaaa1" })).status, 403);
     }
     who = { userId: "alice" };
-    assert.equal((await fetch(`${s.base}/api/ui/browser/host/stream?host=${encodeURIComponent("bad id!")}`)).status, 400);
-    assert.equal((await fetch(`${s.base}/api/ui/browser/host/stream`)).status, 400);
+    assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=${encodeURIComponent("bad id!")}`)).status, 400);
+    assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream`)).status, 400);
     assert.equal((await post(s.base, "/api/ui/browser/host/reply", { host: "host-aaaa1" })).status, 400);
     assert.equal((await post(s.base, "/api/ui/browser/host/state", { host: "short" })).status, 400);
+    assert.equal(relay.hostCount(), 0);
+  } finally { await s.close(); }
+});
+
+test("R9 토큰 머리글(Authorization) 없이 온 요청은 신원이 있어도 401 — 쿠키만으로는 화면을 못 붙인다", async () => {
+  //  쿠키(SameSite=Lax)는 사람이 연 다른 페이지의 최상위 이동에도 실린다 — 그 길로 «답하지 않는 화면» 을 붙여 AI 명령을 삼키게 할 수 있다.
+  //   데스크톱 앱 화면은 늘 토큰 머리글로 붙는다(browser-host headers()).
+  const relay = new BrowserRelay();
+  const s = await server(() => ({ userId: "alice" }), relay);
+  try {
+    assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`, false)).status, 401);
+    assert.equal((await post(s.base, "/api/ui/browser/host/state", { host: "host-aaaa1" }, false)).status, 401);
+    assert.equal((await post(s.base, "/api/ui/browser/host/reply", { host: "host-aaaa1", id: "x" }, false)).status, 401);
     assert.equal(relay.hostCount(), 0);
   } finally { await s.close(); }
 });

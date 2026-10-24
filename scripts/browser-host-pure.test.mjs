@@ -63,6 +63,32 @@ eq(await run("10n", true), { ok: true, value: "10n" }, "V9 bigint 는 'Nn' 글�
 }
 eq((await run("Array.from({length: 201}, (_, i) => i)", true)).value.length, 200, "V11 배열은 200개까지");
 {
+  //  V12 — 순환은 끊고(지나온 길의 객체를 또 만나면 '[순환]'), 순환이 아닌 공유 참조는 그대로 펼친다.
+  const r = (await run("(() => { const a = { x: 1 }; a.self = a; a.list = [a]; return a; })()", true)).value;
+  eq([r.x, r.self, r.list[0]], [1, "[순환]", "[순환]"], "V12 자기 참조 객체 — '[순환]' 으로 끊는다");
+  const sh = (await run("(() => { const s = { n: 1 }; return { a: s, b: s }; })()", true)).value;
+  eq([sh.a.n, sh.b.n], [1, 1], "V12b 순환이 아닌 공유 참조는 둘 다 펼친다");
+}
+{
+  //  V13 — 평범하지 않은 객체(브라우저의 window · document — node 에선 globalThis)는 펼치지 않고 종류 이름만. 곧바로 끝난다.
+  const t0 = Date.now();
+  const r = await run("globalThis", true);
+  eq(r, { ok: true, value: Object.prototype.toString.call(globalThis) }, "V13 전역 객체는 종류 이름만");
+  ok(Date.now() - t0 < 1000, "V13 전역 객체 직렬화가 1초 안에 끝난다");
+}
+{
+  //  V14 — 칸 수 예산: 100키 × 200칸(2만 칸)은 5,000칸에서 '[생략…]' 으로 끊긴다.
+  const v = (await run("Object.fromEntries(Array.from({ length: 100 }, (_, i) => ['k' + i, Array.from({ length: 200 }, (_, j) => j)]))", true)).value;
+  const flat = JSON.stringify(v);
+  ok(flat.includes("[생략"), "V14 칸 수 예산을 넘으면 '[생략]' 표지가 남는다");
+  ok((flat.match(/\d+/g) || []).length <= 5_100, "V14 펼친 칸이 예산(5,000) 근처에서 멈춘다");
+}
+{
+  //  V15 — Map 은 [키, 값] 쌍으로, 날짜는 ISO 글로.
+  eq((await run("new Map([['a', 1]])", true)).value, { __map: [["a", 1]] }, "V15 Map → [키, 값] 쌍");
+  eq((await run("new Date(0)", true)).value, "1970-01-01T00:00:00.000Z", "V15 Date → ISO");
+}
+{
   const src = callSource((a, b, c) => ({ a, b, c }), "a", { b: 1 }, undefined);
   eq((0, eval)(src), { a: "a", b: { b: 1 }, c: null }, "C1 callSource — 인자는 JSON 으로만(undefined → null)");
   ok(!/\bimport\b|\brequire\(/.test(src), "C1 원문에 바깥 이름(import·require)이 끼지 않는다");

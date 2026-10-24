@@ -465,7 +465,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
 
   // ── AI 와 사람이 같이 쓰는 브라우저(#4993) — 데스크톱 앱 화면이 명령을 받는 스트림(SSE) + 답·상태 자리. ──
   //  AI 쪽 표면은 capability(browser_*), 이건 화면 쪽 배관이다(src/browser/routes.ts 머리말).
-  registerBrowserRoutes(app, mw(null), (req) => userOf(req));
+  registerBrowserRoutes(app, mw("memory"), (req) => userOf(req));   // #4993 — 툴과 같은 문(memory · 알림 스트림과 같다)
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

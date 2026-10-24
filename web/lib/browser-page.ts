@@ -418,19 +418,30 @@ export function pageHasText(text: string): boolean {
 
 /** 새 창으로 여는 링크·window.open 을 **같은 탭**으로 — AI 가 쓰는 탭에만 건다. 데스크톱 앱은 새 창을 시스템 브라우저로 보내
  *  (desktop main 의 setWindowOpenHandler) AI 가 그 페이지를 놓친다. 멱등이다(두 번 걸어도 한 번). 게스트 안에서 돈다. */
-export function pageSameTab(): boolean {
+export function pageSameTab(until: number): boolean {
   const W = window as any;
+  //  «AI 가 쓰는 동안» 만 — 이 시각(같은 기계의 Date.now)이 지나면 고리는 아무것도 바꾸지 않는다. 사람이 나중에 이 탭에서
+  //   둘러볼 때 새 창 · 팝업이 제자리 이동으로 바뀌면 사이트가 기대한 팝업(결제 · 미리보기)이 깨진다(#4993 격리 리뷰).
+  try { Object.defineProperty(W, '__livelyAiUntil', { value: Number(until) || 0, writable: true, configurable: true, enumerable: false }); } catch { W.__livelyAiUntil = Number(until) || 0; }
   if (W.__livelySameTab) return false;
   try { Object.defineProperty(W, '__livelySameTab', { value: true, enumerable: false }); } catch { W.__livelySameTab = true; }
+  const aiNow = (): boolean => Date.now() < (Number(W.__livelyAiUntil) || 0);
   document.addEventListener('click', (e) => {
+    if (!aiNow()) return;
     const t = e.target as Element | null;
     const a = t && typeof t.closest === 'function' ? t.closest('a[target]') as HTMLAnchorElement | null : null;
     if (a && a.target && a.target !== '_self' && a.target !== '_top' && a.target !== '_parent' && /^https?:/.test(a.href)) a.target = '_self';
   }, true);
   const orig = window.open;
   window.open = function (this: Window, url?: string | URL, target?: string, features?: string): Window | null {
-    if (url && (!target || target === '_blank')) {
-      try { location.href = new URL(String(url), location.href).href; return window; } catch { /* 이상한 주소 — 원래대로 */ }
+    if (aiNow() && (!target || target === '_blank')) {
+      //  빈 창(about:blank)을 먼저 열고 나중에 주소를 넣는 흔한 모양 — 제자리로 옮기면 이 페이지가 비워진다. 막힌 팝업처럼 null 을 준다.
+      const raw = url === undefined || url === null ? '' : String(url).trim();
+      if (!raw || /^(about:|javascript:)/i.test(raw)) return null;
+      try {
+        const u = new URL(raw, location.href);
+        if (/^(https?|blob|data):$/.test(u.protocol)) { location.href = u.href; return window; }
+      } catch { /* 이상한 주소 — 원래대로 */ }
     }
     return orig.call(window, url as string, target, features);
   } as typeof window.open;
@@ -452,17 +463,35 @@ export function callSource(fn: (...a: any[]) => unknown, ...args: unknown[]): st
 export function evalSource(code: string, expr: boolean): string {
   const body = expr ? 'return (\n' + code + '\n);' : code;
   return `(async () => {
+  //  결과 직렬화 — 페이지 객체는 끝없이 이어진다(window.self · document.defaultView · 리액트 fiber). 세 겹으로 막는다:
+  //   ① 지나온 길에 있던 객체를 또 만나면 '[순환]' ② 칸 수 예산(5,000) ③ 글자 예산(150만 자) — 넘으면 '[생략]'.
+  //   window · document · storage 같은 «평범하지 않은» 객체는 펼치지 않고 그 종류 이름만 준다(#4993 격리 리뷰: window 한 번에 페이지가 멈췄다).
+  let __nodes = 0, __chars = 0;
+  const __path = new Set();
   const __ser = (v, d) => {
+    if (++__nodes > 5000 || __chars > 1500000) return '[생략 — 결과가 너무 큽니다]';
     if (v === undefined) return { __undefined: true };
-    if (v === null || typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return typeof v === 'string' && v.length > 50000 ? v.slice(0, 50000) + '…' : v;
+    if (typeof v === 'string') { const cut = Math.min(50000, Math.max(0, 1500000 - __chars)); __chars += Math.min(v.length, cut); return v.length > cut ? v.slice(0, cut) + '…' : v; }
+    if (v === null || typeof v === 'number' || typeof v === 'boolean') return v;
     if (typeof v === 'bigint') return String(v) + 'n';
+    if (typeof v === 'symbol') return String(v);
     if (typeof v === 'function') return '[function ' + (v.name || '익명') + ']';
     if (v instanceof Error) return { error: v.name + ': ' + v.message };
     if (typeof Element !== 'undefined' && v instanceof Element) return { element: v.tagName.toLowerCase(), id: v.id || undefined, text: String(v.innerText || v.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 200) };
+    if (v instanceof Date) return isNaN(v.getTime()) ? 'Invalid Date' : v.toISOString();
+    const tag = Object.prototype.toString.call(v);
+    const plain = tag === '[object Object]' || tag === '[object Array]' || tag === '[object Map]' || tag === '[object Set]' || tag === '[object NodeList]' || tag === '[object HTMLCollection]' || tag === '[object Arguments]';
+    if (!plain) return tag;
+    if (__path.has(v)) return '[순환]';
     if (d > 6) return '[깊이 초과]';
-    if (Array.isArray(v) || (typeof NodeList !== 'undefined' && v instanceof NodeList)) return Array.from(v).slice(0, 200).map((x) => __ser(x, d + 1));
-    if (typeof v === 'object') { const o = {}; let n = 0; for (const k in v) { if (n++ >= 200) { o['…'] = '키가 더 있다'; break; } try { o[k] = __ser(v[k], d + 1); } catch (e) { o[k] = '[읽기 실패]'; } } return o; }
-    return String(v);
+    __path.add(v);
+    try {
+      if (tag === '[object Map]') return { __map: Array.from(v.entries()).slice(0, 200).map(([k, x]) => [__ser(k, d + 1), __ser(x, d + 1)]) };
+      if (tag !== '[object Object]') return Array.from(v).slice(0, 200).map((x) => __ser(x, d + 1));
+      const o = {}; let n = 0;
+      for (const k in v) { if (n++ >= 200) { o['…'] = '키가 더 있다'; break; } try { o[k] = __ser(v[k], d + 1); } catch (e) { o[k] = '[읽기 실패]'; } }
+      return o;
+    } finally { __path.delete(v); }
   };
   try {
     const __v = await (async () => {
