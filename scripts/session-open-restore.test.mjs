@@ -331,7 +331,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   //  훅 본문은 **resumeSession 호출이 끝나는 자리**(finally)까지로 자른다 — 첫 `});` 로 자르면 api 호출 줄에서 끊겨
   //   catch 안의 throw 를 못 본다(뮤테이션으로 확인한 공허).
   const hook = revive.slice(revive.indexOf("async (newId, stay) =>"), revive.indexOf("} finally { reviving = false; }"));
-  ok(/try \{\s*\n\s*await api\(`\/api\/ui\/terminal\/sessions\/\$\{encodeURIComponent\(newId\)\}\/prompt`/.test(hook)
+  ok(/try \{\s*\n\s*(?:const r = )?await api\(`\/api\/ui\/terminal\/sessions\/\$\{encodeURIComponent\(newId\)\}\/prompt`/.test(hook)
     && /takeFirstPrompt\(newId\);/.test(hook) && /rememberUnsentDraft\(newId, text\);/.test(hook) && hook.length > 0 && !/\bthrow\b/.test(hook),
     "⑩-C3a ★ 말 전달 실패가 라우팅을 막지 않는다 — 제자리에 남으면 두 줄·갇힘이 그대로다(글은 새 화면 입력칸으로)");
   ok(/draft: takeUnsentDraft\(s\.id\)/.test(read("web/v2/views.ts")) && /if \(opts\.draft && !view\.input\.value\) \{\s*\n\s*view\.input\.value = opts\.draft;/.test(chat),

@@ -172,7 +172,11 @@ async function PAGE_MAIN() {
   //  세션 상태 통로(/events) — 이 장면들만 진짜 스트림으로 연다(나머지는 종전처럼 404). pushEv 로 서버 알림을 흘린다.
   const EV = {}, EV_ON = new Set(["box-w30", "box-w31", "box-w32"]);
   const pushEv = (sid, o) => { const c = EV[sid]; if (c) c.enqueue(new TextEncoder().encode("data: " + JSON.stringify(o) + "\n\n")); };
-  const FETCHES = [];                                                  // 기록 읽기마다 { sid, start, end } — W23 주기 · W26 겹침
+  const FETCHES = [];
+  const OUTBOX = {};                                                   // 세션별 큐 묻기 횟수
+  const PROMPTED = {};                                                 // 세션별 «말을 큐에 넣었다»
+  let VIEW_EVS = 0;                                                    // #4996 보는 것이 바뀌었다는 알림(셸이 곧바로 도장을 찍는다)
+  window.addEventListener("lively:session-view", () => { VIEW_EVS++; });                                                  // 기록 읽기마다 { sid, start, end } — W23 주기 · W26 겹침
   window.fetch = async (url) => {
     const u = new URL(String(url), location.href);
     if (/\/transcript$/.test(u.pathname)) {
@@ -198,13 +202,23 @@ async function PAGE_MAIN() {
     if (/\/log$/.test(u.pathname)) {                                  // W24 — 중앙 기록(턴이 끝나야 자란다 — 그사이엔 빈 채)
       return new Response("", { status: 200, headers: { "content-type": "text/plain", "X-Log-Bytes": "0", "X-Log-From": "0", "X-Log-To": "0" } });
     }
-    if (/\/outbox$/.test(u.pathname)) return J({ items: [] });
+    if (/\/outbox$/.test(u.pathname)) {                               // W21 — 그 자리에서 되살린 화면도 큐를 묻나(#4996 리뷰)
+      const sid = decodeURIComponent((/\/sessions\/([^/]+)\/outbox$/.exec(u.pathname) || [])[1] || "");
+      OUTBOX[sid] = (OUTBOX[sid] || 0) + 1;
+      //  W21 — 진짜 서버처럼 들어가기 전까지는 그 말의 큐 행(대기)이 있다. 들어가면(에코) 행이 빠진다.
+      const e = ECHO[sid];
+      if (sid === "box-w21" && PROMPTED[sid] && !(e && Date.now() >= e.at)) return J({ items: [{ id: 7, text: "되살리며 보낸 말 W21", status: "queued" }] });
+      return J({ items: [] });
+    }
     if (/\/restore$/.test(u.pathname)) {                              // W21 — 느린 복원(같은 id 로 다시 띄웠다)
       const sid = decodeURIComponent((/\/sessions\/([^/]+)\/restore$/.exec(u.pathname) || [])[1] || "");
       await sleep(900);
       return J({ session: { id: sid } });
     }
-    if (/\/prompt$/.test(u.pathname)) return J({ outbox_id: 7 });
+    if (/\/prompt$/.test(u.pathname)) {                               // 큐에 넣었다 — 그 뒤부터 큐 행이 선다(W21)
+      PROMPTED[decodeURIComponent((/\/sessions\/([^/]+)\/prompt$/.exec(u.pathname) || [])[1] || "")] = true;
+      return J({ outbox_id: 7 });
+    }
     if (/\/api\/ui\/me\/liv$/.test(u.pathname)) return J({ mode: "ok", reason: "", findings: [], total: 0,   // W33 — 리브가 던진 물음 하나(객관식)
       secretAsk: { kind: "choice", allow_other: true, key: "w33", question: "W33 자료를 어디에 쌓아 두셨어요?", options: [{ id: "a", label: "슬랙" }, { id: "b", label: "노션" }] } });
     return J({ error: "no" }, 404);
@@ -503,8 +517,10 @@ async function PAGE_MAIN() {
       v.h.update(row("box-w21", true));                                 // 복원 응답보다 먼저 온 목록 갱신
       await sleep(200);
       R.w21.duringRevive = v.snap();
+      const ob0 = OUTBOX["box-w21"] || 0;
       await sleep(900);                                                 // 복원 응답(0.9초) 뒤 — 같은 화면이 «전달 대기» 로 숨겨 붙인다
       R.w21.afterRestore = v.snap();
+      R.w21.outboxAsked = (OUTBOX["box-w21"] || 0) - ob0;
       R.w21.qstate = v.qstate();
       v.h.update(row("box-w21", false));                                // #4996 — 되살리기 전 사실(«중단됨») 을 실은 늦은 목록 갱신
       await sleep(200);
@@ -557,11 +573,22 @@ async function PAGE_MAIN() {
       v.done();
     }
     {
+      const ev0 = VIEW_EVS;
       const v = mount("box-w38", "ink=300", { awaitViewers: true });     // 답이 끝내 안 온다 — 기다림(1.2초) 뒤 종전대로 터미널
       await sleep(600);
-      R.w38 = { waiting: v.snap() };
+      R.w38 = { waiting: v.snap(), evWaiting: VIEW_EVS - ev0 };
       await sleep(1000);
-      R.w38.after = v.snap();
+      R.w38.after = v.snap(); R.w38.evAfter = VIEW_EVS - ev0; R.w38.viewMode = v.h.viewMode();
+      v.done();
+    }
+    {
+      SC.setViewers("box-w35b", [{ id: "jang", name: "장원준", term: true }]);   // 비켜 섰다가 쥐고 있던 사람이 나간다
+      const v = mount("box-w35b", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      R.w35b = { yielded: v.snap(), note: v.box.textContent.includes("터미널로 보고 있어요") };
+      SC.setViewers("box-w35b", [{ id: "jang", name: "장원준", term: false }]);
+      await sleep(300);
+      R.w35b.after = v.snap(); R.w35b.noteAfter = v.box.textContent.includes("터미널로 보고 있어요");
       v.done();
     }
     {
@@ -859,8 +886,8 @@ check(w21.hasInput && !(w21.duringRevive || {}).term,
   "W21 말로 되살리는 중 목록이 «살아 있다» 를 먼저 실어 와도 옛 화면을 빈 터미널로 넘기지 않는다", w21.duringRevive);
 check(w21.routed === null && w21.sameWrap && !/다시 띄웠|이어받기 세션을 열었/.test(String(w21.toasts || "")),
   "W21 ★ 같은 id 로 되살아나면 옮겨 가지 않는다(onResumed 없음 · 같은 화면 · 알림 없음) — 종전엔 셸이 탭을 통째로 다시 그렸다(#4996)", { routed: w21.routed, sameWrap: w21.sameWrap, toasts: w21.toasts });
-check((w21.afterRestore || {}).warm && (w21.afterRestore || {}).frame && !(w21.afterRestore || {}).term && /전달 대기 중/.test(String(w21.qstate || "")),
-  "W21 되살린 뒤 같은 화면이 터미널을 숨겨 붙이고 보낸 말은 «전달 대기» 로 남는다(다시 마운트된 화면이 하던 일)", { afterRestore: w21.afterRestore, qstate: w21.qstate });
+check((w21.afterRestore || {}).warm && (w21.afterRestore || {}).frame && !(w21.afterRestore || {}).term && /전달 대기 중/.test(String(w21.qstate || "")) && w21.outboxAsked >= 1,
+  "W21 되살린 뒤 같은 화면이 터미널을 숨겨 붙이고 보낸 말은 «전달 대기» 로 남는다 · 서버 큐를 묻는다(다시 마운트된 화면이 하던 일)", { afterRestore: w21.afterRestore, qstate: w21.qstate, outboxAsked: w21.outboxAsked });
 check((w21.afterStale || {}).frame && !(w21.afterStale || {}).term,
   "W21 되살린 직후 «중단됨» 을 실은 늦은 목록 갱신이 방금 붙인 터미널을 걷지 않는다", w21.afterStale);
 check((w21.after || {}).term && !(w21.after || {}).warm && w21.n === 1,
@@ -881,6 +908,11 @@ check(!(R.w37 && R.w37.waiting || {}).frame && (R.w37 && R.w37.after || {}).chat
   "W37 얼굴 줄을 아직 못 들었으면 액자를 붙이지 않고 기다린다 · 답이 오면 그때 판정(터미널로 보는 사람 → 대화창)", R.w37);
 check(!(R.w38 && R.w38.waiting || {}).frame && (R.w38 && R.w38.after || {}).term && (R.w38 && R.w38.after || {}).frame,
   "W38 답이 끝내 안 오면 1.2초 뒤 종전대로 터미널(모르면 막지 않는다)", R.w38);
+check(R.w38 && R.w38.evWaiting === 0 && R.w38.evAfter === 1 && R.w38.viewMode === "term",
+  "W38 ★ 기다리던 액자가 붙는 순간 «터미널로 본다» 를 한 번 알린다(셸이 곧바로 도장 — 다음에 오는 사람이 16초 동안 못 보지 않게)", R.w38);
+const w35b = R.w35b || {};
+check(!(w35b.yielded || {}).frame && w35b.note && (w35b.after || {}).term && (w35b.after || {}).frame && !w35b.noteAfter,
+  "W35b 터미널을 쥐고 있던 사람이 나가거나 대화로 옮기면 비켜 선 판을 풀고 터미널로 돌아간다 · 안내는 걷힌다", w35b);
 check((R.w39 || {}).at200 && R.w39.at200.term && R.w39.at200.frame,
   "W39 도장을 안 찍는 화면(awaitViewers 없음)은 종전 그대로 곧바로 터미널", R.w39);
 const w22 = R.w22 || {};

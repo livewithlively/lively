@@ -32,6 +32,9 @@ export function setViewers(sid: string, list: Viewer[] | null | undefined): void
   for (const fn of [...subs]) { try { fn(sid); } catch (_) { /* 한 구독자가 넘어져도 나머지는 간다 */ } }
 }
 
+/** #4996 이 세션 화면을 떠났다 — 그 뒤엔 밀어 주는 줄을 못 받으므로 들은 줄이 곧 낡는다. 다시 오면 첫 도장 응답을 기다리게 한다. */
+export function forgetHeard(sid: string | null | undefined): void { if (sid) heardAt.delete(sid); }
+
 /** #4996 이 세션의 얼굴 줄을 방금(FRESH_MS 안) 들었나. */
 export function viewersFresh(sid: string | null | undefined): boolean {
   return !!sid && Date.now() - (heardAt.get(sid) || 0) <= FRESH_MS;

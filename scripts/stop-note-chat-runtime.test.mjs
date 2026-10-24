@@ -190,8 +190,8 @@ check(!!R.k2 && R.k2.value === "", "K2 사람이 비운 뒤 다시 열어도 같
 const k3 = R.k3 || {};
 check(k3.card && /가장 좋아하는 색은\?/.test(k3.text) && Js(k3.btns) === Js(["빨강", "파랑"]), "K3 질문 카드 — 질문 글 · 선택지 단추(직접 쓰기·메타 없음)", { card: k3.card, btns: k3.btns });
 const p3 = prompts(k3.calls);
-check(k3.clicked && restores(k3.calls) === 1 && p3.length === 1 && p3[0].startsWith("앞서 물은 ‹가장 좋아하는 색은?›에 대한 답: ‹파랑›") && !k3.cardAfter && k3.routed === "box-k3",
-  "K3 누르면 되살리고(/restore 1) 답 문장을 보내고(/prompt 1) 카드가 걷힌다 · 같은 id 로 옮겨 간다", { calls: k3.calls, cardAfter: k3.cardAfter, routed: k3.routed });
+check(k3.clicked && restores(k3.calls) === 1 && p3.length === 1 && p3[0].startsWith("앞서 물은 ‹가장 좋아하는 색은?›에 대한 답: ‹파랑›") && !k3.cardAfter && k3.routed === null,
+  "K3 누르면 되살리고(/restore 1) 답 문장을 보내고(/prompt 1) 카드가 걷힌다 · 같은 id 라 옮겨 가지 않고 그 화면에서 이어 간다(#4996 — 다시 그리지 않는다)", { calls: k3.calls, cardAfter: k3.cardAfter, routed: k3.routed });
 const k4 = R.k4 || {};
 const p4 = prompts(k4.calls);
 check(Js(k4.btns) === Js(["빨강", "파랑", "사과", "배", "답 보내기"]) && k4.beforeSend === 0, "K4 여럿이면 골라 두기만 한다(보내기 전 요청 0) · [답 보내기]", { btns: k4.btns, before: k4.beforeSend });

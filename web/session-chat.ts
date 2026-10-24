@@ -501,7 +501,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   };
   paintFaces();
   //  얼굴 줄이 바뀌면 **이 세션 것일 때만** 다시 그린다(presence 가 '바뀐 것'만 알려준다).
-  const offViewers = onViewers((sid) => { if (sid === target.id) { paintFaces(); settleTermHold(); } });   // #4996 — 기다리던 얼굴 줄이면 판정도
+  const offViewers = onViewers((sid) => { if (sid === target.id) { paintFaces(); settleTermHold(); releaseYield(); } });   // #4996 — 기다리던 얼굴 줄이면 판정도
 
   //  ★ 연결 상태와 [화면 복구] 는 **한 덩어리**다(원준 2026-09-10) — «지금 어떤가»와 «그걸 고치는 단추»라
   //   서로를 설명한다. 테두리 하나를 같이 쓰므로 손을 얹으면 둘이 함께 뜬다.
@@ -1130,6 +1130,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
     ensureTermFrame();
+    emitView();   // 판정을 기다리던 액자가 지금 붙었다 — 이때 «터미널로 본다» 가 된다(setMode 는 이미 지나갔다)
+  }
+  /** #4996 터미널을 쥐고 있던 사람이 나갔다(또는 대화로 옮겼다) — 비켜 선 판을 푼다. 쓰는 중이 아니면 본자리(터미널)로 돌아간다. */
+  function releaseYield(): void {
+    if (!yieldTerm || destroyed || termHolder()) return;
+    yieldTerm = false;
+    view.setNote('');
+    const composing = document.activeElement === view.input && !!view.input.value.trim();
+    if (!modeChosen && !composing && mode === 'chat' && hasTerm()) setMode('term');
   }
   /** #4996 비켜 서 있던 화면에서 말을 보냈다 — 이제 터미널로(그 말이 들어간 뒤 — #4794). 먼저 보던 사람의 화면은 이때 깨질 수 있다(상민님 결정). */
   function takeTermAfterSend(pd: Pending): void {
@@ -1268,7 +1277,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
 
   function setMode(m: 'term' | 'chat'): void {
     //  #4794 — 화면을 누가 정했다(사람 · 다른 갈래) — 숨겨 붙이던 판은 여기서 끝난다.
-    const prevView = viewNow();
     const wasWarm = !!termWarm;
     if (wasWarm) endTermWarm(false);
     if (m === 'term' && !hasTerm()) m = 'chat';
@@ -1316,10 +1324,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4794 — 숨어서 붙은 액자는 붙을 때 제 터미널에 초점을 안 줬다(terminal.ts frameHiddenNow). 보이게 되는 지금 준다 —
     //   처음부터 터미널로 연 화면과 같게(그때는 액자가 붙자마자 스스로 잡는다).
     if (m === 'term' && wasWarm) focusTermIfHere();
-    if (viewNow() !== prevView) { try { window.dispatchEvent(new CustomEvent(SESSION_VIEW_EVENT, { detail: { id: target.id } })); } catch { /* noop */ } }
+    emitView();
   }
   /** #4996 사람이 지금 보는 것 — 터미널 모드이고 액자가 붙어 있어야(숨겨 붙인 판이 아니고) «터미널» 이다(handle.viewMode 머리말). */
   function viewNow(): 'term' | 'chat' { return mode === 'term' && !!termFrame && !termWarm ? 'term' : 'chat'; }
+  /** #4996 보는 것이 바뀌었으면 셸에 알린다(곧바로 열람 도장 — 다른 사람이 옛 값으로 판정하지 않게). 바뀌는 자리가 여럿이다 —
+   *  모드를 바꿀 때(setMode)뿐 아니라 판정을 기다리다 액자를 붙인 때(settleTermHold)·액자를 걷은 때(dropTermFrame · 되살리기)도. */
+  let reportedView: 'term' | 'chat' = 'chat';
+  function emitView(): void {
+    const v = viewNow();
+    if (v === reportedView) return;
+    reportedView = v;
+    try { window.dispatchEvent(new CustomEvent(SESSION_VIEW_EVENT, { detail: { id: target.id } })); } catch { /* noop */ }
+  }
 
   /**
    * 대화를 **터미널로 넘긴다** (#2055 · 고침 #4135).
@@ -1370,6 +1387,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const phrase = endedSessPhrase(end ? sessLikeOfFacts(end) : null) || endedSessPhrase(target.raw);
     const name = phrase || '멈춰 있는 세션';
     view.setNote(canRevive() ? `${name}이에요 — 아래에 말을 걸면 이어서 열립니다.` : `${name}이에요 — 대화 기록만 남아 있어요.`);
+    emitView();   // #4996 — setMode('chat') 은 액자를 걷기 전에 불렸다(위) — 걷은 지금 다시 잰다
   }
 
   // ── 곁칸 → 이 세션 입력칸(#4135 «프로젝트» 앱의 [본문 넣기]) — **넣기만 하고 보내지 않는다**(사람이 읽고 보낸다).
@@ -2684,7 +2702,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (!caps().read) {   // 큐엔 들어갔지만(배달자가 전달) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
         dropPending(pd);
         pd.state.textContent = ''; running = false; view.settle(pd.t); view.busy(false);
-        view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); onSent?.(); return;
+        view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); onSent?.();
+        //  #4996 — 비켜 서 있었으면 답을 볼 곳은 터미널뿐이다 — 기다릴 말(에코)이 없으니 곧바로 넘긴다.
+        if (yieldTerm && !modeChosen) setMode('term');
+        return;
       }
       // ⚠ 이 말은 **정말 다른 컴퓨터일 때만** 맞다. app-server 세션은 여기서 도는데 게이트웨이 박스가 노드로도
       //  등록돼 있으면 노드 좌표가 붙어(같은 함정) 방금 보낸 말이 "그 컴퓨터로 전달했어요"로 덮였다(실측).
@@ -2774,7 +2795,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     revivedAt = Date.now();
     goneByFrame = false; goneCanRestore = false; termGoneN = 0; deadFooterOn = false;
     //  죽은 박스에 붙어 있던 액자는 걷는다 — 되살린 박스엔 새 액자가 붙는다(다시 마운트된 화면과 같다).
-    if (termFrame) { termFrame.remove(); termFrame = null; termReady = false; termQueue = []; }
+    if (termFrame) { termFrame.remove(); termFrame = null; termReady = false; termQueue = []; emitView(); }
     modeChosen = false;   // 말을 보냈다 = 하네스가 뜨면 터미널로(다시 마운트된 화면은 늘 이 값으로 섰다)
     view.setNote('');
     pd.state.textContent = QSTATE_TEXT.queued;
@@ -2813,7 +2834,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         //  #4996 — 같은 id 로 되살아났으면 이 화면이 그대로 이어 간다(reviveInPlace) — 옮겨 갈 화면에 첫 지시를 맡기지 않는다.
         if (stay) reviveInPlace(pd); else rememberFirstPrompt(newId, text);
         try {
-          await api(`/api/ui/terminal/sessions/${encodeURIComponent(newId)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+          const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(newId)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) }) as { outbox_id?: number };
+          //  #4996 — 그 자리에서 이어 가는 화면은 이 말을 서버 큐 행에 잇고(대기·실패·다시 보내기 줄) 지켜볼 곳을 정해 읽기를 건다 —
+          //   보통 보내기(sendPrompt)와 같다. 다시 마운트되던 시절엔 새 화면의 open() 이 syncOutbox 로 이 일을 했다.
+          if (stay && !destroyed) {
+            if (r?.outbox_id) pd.obId = Number(r.outbox_id);
+            if (!src) src = remoteNode() ? logSrc() : { kind: 'box', id: target.id };
+            if (src) schedule();
+            void syncOutbox();
+          }
         } catch (e: any) {
           if (stay) { undeliveredInPlace(pd, text); return; }
           takeFirstPrompt(newId);              // 안 간 말을 간 것처럼 그리지 않는다
@@ -2882,6 +2911,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   기록을 처음부터 다시 읽고(이전 대화 불러오기가 또 돈다) 같은 대화창으로 다시 섰다. 말로 되살린 화면(stayIfSame)은
       //   그 자리에서 이어 간다 — 부른 쪽이 행을 «살아 있음» 으로 바꾸고 터미널을 숨겨 붙인다(reviveInPlace). 알림도 안 띄운다 —
       //   방금 보낸 말풍선이 이미 «준비 중 → 전달 대기» 로 같은 말을 한다.
+      //   서버가 «아직 살아 있다(already)» 고 답한 판도 같은 길이다 — 그 행은 살아 있는 것이 맞고 말은 그대로 큐로 간다.
       if (hint?.stayIfSame && nextId === target.id && !moved) {
         if (beforeRoute) await beforeRoute(nextId, true);
         return true;
@@ -3209,7 +3239,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     setFilesOn(on) { filesBtn.classList.toggle('sc-act-on', !!on); },
     update(t) { applyRow(trustRevived(t)); },
     viewMode() { return viewNow(); },
-    destroy() { destroyed = true; if (termHold !== null) { clearTimeout(termHold); termHold = null; } endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

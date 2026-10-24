@@ -48,7 +48,7 @@ import { EMPTY_BOOK, closeSlot, closeTabGuests, openGuest, shownSlot, type Guest
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { refreshDocks } from './pane-dock.js';   // #4443 — 곁칸 독의 설정·고정도 사람이 고른 것(서버 정본)이다
-import { setViewers, activeNow, noteActivity, SESSION_VIEW_EVENT } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
+import { setViewers, activeNow, noteActivity, forgetHeard, SESSION_VIEW_EVENT } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 창의 타임라인도 세션 전체(대화 사슬)를 본다
@@ -2269,6 +2269,7 @@ function viewedSessionId(): string {
 let viewingSid = '';
 /** 이 세션 화면을 떠났다 — 서버가 남은 사람들에게 새 얼굴 줄을 민다. 실패는 삼킨다(TTL 이 늦게라도 걷는다). */
 function leaveViewed(sid: string, keepalive = false): void {
+  forgetHeard(sid);   // #4996 — 떠난 뒤엔 밀어 주는 얼굴 줄을 못 받는다 — 다시 올 땐 첫 도장 응답으로 판정한다
   seenSentAt.delete(sid);   // 곧 돌아오면 15초를 기다리지 않고 바로 다시 도장을 찍는다(돌아온 것도 곧바로 보이게)
   //  #4876 — 떠난 때를 이 브라우저에 적어 둔다. 곁칸 «콘솔» 이 «다녀온 사이» 의 기준으로 읽는다(서버엔 사람별 열람 시각이 없다 — #4783).
   try { writeLeftAt(localStorage, sid, Date.now()); } catch { /* 저장이 막힌 브라우저 */ }
