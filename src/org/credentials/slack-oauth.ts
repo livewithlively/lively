@@ -107,21 +107,46 @@ export async function exchangeSlackCode(p: {
  *  뜬다(docs.slack.dev/app-manifests). 셀프호스팅 관리자가 하는 일은 [Create] 와 Client ID/Secret 복사뿐이다.
  *  `is_mcp_enabled` 는 넣지 않는다 — 도구 면은 Web API(B)라 슬랙 MCP 서버를 안 쓰고, 마켓플레이스 미등록 앱은 어차피 거부된다.
  *  토큰 회전은 끈다(비가역·갱신에 client_secret 필요 → 매니지드에선 CP 왕복).
+ *
+ *  ⚠ 링크로 받은 매니페스트는 슬랙 화면에서 손으로 고치면 [Create and Install] 이 꺼진다(#4940 실측 — 설명을 "test" 로
+ *   바꿔도 꺼졌다). 받는 사람이 고쳐서 통과시킬 길이 없으므로 **출고값이 그대로 슬랙 규칙을 통과해야 한다**.
+ *   그래서 이름·봇 이름에 조직 이름을 붙이지 않는다 — 한글·괄호는 봇 이름 규칙(a-z0-9-_.)에 걸리고, 길이는 바이트로 잰다
+ *   (설명 67자=158바이트가 140 한도에 걸린 것이 위시스트 대표님이 막힌 원인이었다).
  */
-export function buildSlackAppManifest(redirectUrls: string[], opts: { name?: string; description?: string } = {}): Record<string, unknown> {
+export function buildSlackAppManifest(redirectUrls: string[]): Record<string, unknown> {
   return {
     display_information: {
-      name: opts.name ?? "Lively",
-      description: opts.description ?? "내 일을 아는 AI — 슬랙 대화를 라이블리 워크스페이스의 맥락으로 모으고, AI가 내 계정으로 슬랙을 검색·발송합니다.",
+      name: "Lively",
+      description: "라이블리 AI가 내 계정으로 슬랙을 읽고 검색합니다.",
       background_color: "#1f2937",
     },
-    features: { bot_user: { display_name: opts.name ?? "Lively", always_online: false } },
+    features: { bot_user: { display_name: "lively", always_online: false } },
     oauth_config: {
       redirect_urls: [...new Set(redirectUrls)],
       scopes: { bot: [...SLACK_BOT_SCOPES], user: [...SLACK_USER_SCOPES] },
     },
     settings: { org_deploy_enabled: false, socket_mode_enabled: false, token_rotation_enabled: false },
   };
+}
+/**
+ * 슬랙이 매니페스트에 거는 규칙 중 우리가 채우는 칸의 것(docs.slack.dev/reference/app-manifest). 길이는 **UTF-8 바이트**로 잰다 —
+ *  문서는 «characters» 라 적지만 실측은 바이트였다(한글 한 글자 = 3). 어긴 칸마다 한 줄, 없으면 빈 배열.
+ */
+export function slackManifestProblems(manifest: Record<string, unknown>): string[] {
+  const m = manifest as { display_information?: { name?: unknown; description?: unknown }; features?: { bot_user?: { display_name?: unknown } } };
+  const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
+  const out: string[] = [];
+  const name = typeof m.display_information?.name === "string" ? m.display_information.name : "";
+  if (!name) out.push("앱 이름이 비었습니다");
+  else if (bytes(name) > 35) out.push(`앱 이름이 ${bytes(name)}바이트 — 슬랙은 35바이트까지 받습니다`);
+  const desc = m.display_information?.description;
+  if (typeof desc === "string" && bytes(desc) > 140) out.push(`앱 설명이 ${bytes(desc)}바이트 — 슬랙은 140바이트까지 받습니다`);
+  const bot = m.features?.bot_user;
+  if (bot) {
+    const dn = typeof bot.display_name === "string" ? bot.display_name : "";
+    if (!/^[a-z0-9._-]{1,80}$/.test(dn)) out.push(`봇 이름 «${dn}» — 슬랙은 영문 소문자·숫자·- _ . 로 1~80자만 받습니다`);
+  }
+  return out;
 }
 export function slackAppCreateUrl(manifest: Record<string, unknown>): string {
   return "https://api.slack.com/apps?new_app=1&manifest_json=" + encodeURIComponent(JSON.stringify(manifest));
