@@ -2353,7 +2353,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintBanner();
     // ⚠ 타임라인 범위는 이제 이 창과 무관하다(#1819) — 얇은 판으로 **세션 전체**를 따로 붓는다(loadThinTrail).
     if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; olderAuto.watch(null); return; }
-    //  표지는 «불러오는 중» 한 가지 얼굴이다 — 이게 화면에 보인다는 건 곧 부르고 있다는 뜻이다(보이기 두 장 전에 이미 불렀다).
+    //  표지는 «불러오는 중» 한 가지 얼굴이다 — 사람이 위로 올리는 중이면 보이기 한 장 전에 이미 불렀다(#4996 — 올리기 전엔 안 부른다).
+    //   글자는 0.6초 넘게 머물 때만 드러난다(36-chat.css) — 대개는 보이기 전에 붙고 걷힌다.
     const bar = el('div', { class: 'sc-older', role: 'status' }, ...olderBusyKids()) as HTMLElement;
     olderEl = bar;
     view.list.prepend(bar);
@@ -2364,7 +2365,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const bar = olderEl;
     if (!bar) return;
     const retry = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '다시 시도' }) as HTMLButtonElement;
-    retry.addEventListener('click', () => { replaceKids(bar, ...olderBusyKids()); olderAuto.retry(); });
+    retry.addEventListener('click', () => { bar.classList.remove('sc-older-fail'); replaceKids(bar, ...olderBusyKids()); olderAuto.retry(); });
+    bar.classList.add('sc-older-fail');   // #4996 — 불러오는 중은 늦게 드러나지만(36-chat.css) 실패는 곧바로 보인다
     replaceKids(bar, el('span', { class: 'sc-older-t', text: '이전 대화를 불러오지 못했어요.', title: why }), retry);
   }
   async function loadOlder(): Promise<boolean> {
