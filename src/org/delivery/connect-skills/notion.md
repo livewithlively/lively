@@ -41,6 +41,7 @@
 - **다른 노션 워크스페이스**를 고르면 그 워크스페이스가 하나 더 연결된다.
 - 특정 페이지를 빼려면 `org_collectors` 에서 그 워크스페이스의 노션 수집기(key `notion-…`)를 찾아 `org_collector_upsert { id, config:{ exclude_pages:"<페이지 id 또는 링크, 쉼표 구분>" } }`. 수집기의 `instance` 설정은 바꾸지 않는다(바꾸면 처음부터 다시 모은다).
 - 끄기: `org_notion_collect_set { enabled:false, workspace_id? }` — 지우는 게 아니라 멈추는 것이다.
+- 워크스페이스 하나의 연결을 걷기(끄기와 달리 연결 자체를 지운다): 먼저 «이미 가져온 자료는 남아요 · 같은 워크스페이스를 다시 연결하고 켜면 멈춘 자리부터 이어서 가져와요 · 노션 쪽에 남은 통합은 노션에서 지울 수 있어요» 를 말하고, 사람이 확인하면 `org_notion_workspace_disconnect { workspace_id }`(`org_notion_collect` 의 `workspaces[].id`). 화면은 «자료 가져오기» ▸ 어디서 ▸ [연결 끊기]다.
 
 ### 확인
 

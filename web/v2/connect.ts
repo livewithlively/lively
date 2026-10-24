@@ -1230,22 +1230,45 @@ function notionTeamCollectCard(onState: CollectState): CollectFace {
     //  (#4970) 셀프호스트의 노션 통합 등록은 위 «연결하는 길» 의 앱 등록 칸 한 곳에서 한다(종전 이 자리의 «통합 값 저장» 칸을 그리로 모았다).
     else notes.push('노션 연결 준비가 아직 안 됐어요 — 위 «연결하는 길» 을 봐 주세요.');
     const extra: HTMLElement[] = [];
-    if (wsAll.length > 1) {
-      // 워크스페이스마다 한 줄 — 하나가 실패해도 나머지는 돈다(수집기가 워크스페이스당 하나, #1881 N7).
+    //  (#4991) 워크스페이스 하나의 연결을 걷는다 — 조직 칸을 지우고 그 수집을 멈춘다. 끄기(토글)와 달리 연결 자체가 사라진다.
+    const disconnectWs = async (w: any): Promise<void> => {
+      if (!await confirmDialog({
+        title: `'${wsName(w)}' 연결을 끊을까요?`, danger: true, confirmText: '연결 끊기',
+        message: '라이블리에 저장된 이 노션 워크스페이스의 연결을 지우고, 이 워크스페이스에서 가져오던 것을 멈춰요.',
+        lines: [
+          '이미 가져온 자료는 자료함에 남아요.',
+          '같은 워크스페이스를 다시 연결하고 켜면 멈춘 자리부터 이어서 가져와요.',
+          '노션 쪽에 남은 이 연결(통합)은 노션에서 지울 수 있어요.',
+        ],
+      })) return;
+      try {
+        await api('/api/ui/org/notion/workspace/disconnect', { method: 'POST', body: JSON.stringify({ workspace_id: w.id }) });
+        toast(`'${wsName(w)}' 연결을 끊었어요 — 이미 가져온 자료는 남아 있어요`);
+      } catch (e: any) { toast((e && e.message) || '연결을 끊지 못했습니다', true); }
+      await paint();
+    };
+    if (wsAll.length) {
+      // 워크스페이스마다 한 줄 — 둘 이상이면 따로 켜고 끈다(하나가 실패해도 나머지는 돈다 — 수집기가 워크스페이스당 하나, #1881 N7).
+      //  (#4991) 줄마다 [연결 끊기] — 하나뿐이어도 선다(켜고 끄기는 위 대표 토글이 한다).
       extra.push(el('div', { class: 'cn-ws-list' }, ...wsAll.map((w: any) => {
-        const c = el('input', { type: 'checkbox' }) as HTMLInputElement;
-        c.checked = !!w.enabled;
-        c.onchange = async () => {
-          c.disabled = true;
-          try {
-            await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: c.checked, workspace_id: w.id }) });
-            toast(c.checked ? `'${wsName(w)}' 모으기를 켰어요` : `'${wsName(w)}' 모으기를 껐어요`);
-          } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
-          await paint();
-        };
         //  #1968 — 첫 수집이 끝난 워크스페이스는 모은 페이지 수를 이름 옆에 붙인다(어느 곳에서 빠졌는지 보이게).
         const counted = w.first_sync_done && typeof w.pages === 'number' ? ` · 페이지 ${w.pages.toLocaleString('ko-KR')}개` : '';
-        return el('label', { class: 'cn-toggle' }, c, el('span', { text: ' ' + wsName(w) + counted }));
+        let lead: HTMLElement;
+        if (wsAll.length > 1) {
+          const c = el('input', { type: 'checkbox' }) as HTMLInputElement;
+          c.checked = !!w.enabled;
+          c.onchange = async () => {
+            c.disabled = true;
+            try {
+              await api('/api/ui/org/notion/collect', { method: 'POST', body: JSON.stringify({ enabled: c.checked, workspace_id: w.id }) });
+              toast(c.checked ? `'${wsName(w)}' 모으기를 켰어요` : `'${wsName(w)}' 모으기를 껐어요`);
+            } catch (e: any) { toast((e && e.message) || '바꾸지 못했습니다', true); }
+            await paint();
+          };
+          lead = el('label', { class: 'cn-toggle' }, c, el('span', { text: ' ' + wsName(w) + counted }));
+        } else lead = el('span', { class: 'cn-toggle', text: wsName(w) + counted });
+        return el('div', { class: 'cn-ws-row' }, lead,
+          el('button', { class: 'btn btn-ghost btn-sm cn-dz-btn', type: 'button', text: '연결 끊기', 'aria-label': `'${wsName(w)}' 연결 끊기`, onclick: () => void disconnectWs(w) }));
       })));
     }
     if (wsAll.length) {

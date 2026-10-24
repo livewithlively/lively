@@ -76,6 +76,15 @@ export async function listSecretsByKindPublic(kind: string): Promise<MemberSecre
   return (r.rows as Row[]).map(toPublic);
 }
 
+// 칸 하나의 공개 정보(시크릿 없음) — 목록이 숨기는 예약 칸(oauth:client)도 owner·kind·scope_key 로 콕 집으면 읽힌다.
+//  [외부 앱 연결]의 «앱 등록 보기» 가 등록한 때를 보이려고 쓴다(#4991). 관리자 판정은 호출자.
+export async function getMemberSecretPublic(owner: string, kindRaw: unknown, scopeKeyRaw: unknown): Promise<MemberSecretPublic | null> {
+  const r = await itemsPool.query("SELECT * FROM member_secret WHERE owner=$1 AND kind=$2 AND scope_key=$3",
+    [owner, normalizeKind(kindRaw), normalizeScopeKey(scopeKeyRaw)]);
+  const row = r.rows[0] as Row | undefined;
+  return row ? toPublic(row) : null;
+}
+
 // upsert — secret 은 봉투 암호화(있을 때만; 없으면 기존 유지). meta 는 병합 아니라 교체(명시적). owner 검증은 호출자.
 export async function setMemberSecret(
   owner: string, kindRaw: unknown, scopeKeyRaw: unknown,
