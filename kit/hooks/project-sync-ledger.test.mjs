@@ -673,7 +673,10 @@ try {
     const lockOf = (dir) => path.join(dir, ".lively", "pull-bg.json");
     const copiesLeft = () => fs.readdirSync(bgTmp).filter((n) => n.startsWith("lively-pull-bg-"));
     const filesOf = (n, body) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`d${String(i).padStart(2, "0")}.md`, { body: `${body}${i}`, mtime: 9_000_000 + i }]));
-    const deadPid = await new Promise((r) => { const c = spawn(process.execPath, ["-e", ""]); c.on("exit", () => r(c.pid)); });
+    // 죽은 pid 는 «방금 끝난 자식» 으로 만들지 않는다 — 윈도우는 pid 를 금방 되써서 그 사이 다른 프로세스가 받으면
+    //  잠금이 살아 보인다(2026-10-23 PR #1499 test-windows 1회차의 E6 실패). 2³¹−1 은 어느 OS 에서도 쓰이지 않는다
+    //  (리눅스 pid_max ≤ 2²², 맥 ≤ 99999, 윈도우 pid 는 4의 배수).
+    const deadPid = 2 ** 31 - 1;
 
     // E1 — 많고 느리다: 훅은 창 안에 끝내고 안내를 남기며, 뒤 판이 전부 받아 수렴한다(동시 받기라 순차보다 훨씬 빨리)
     await scenario("[project-pull] #4959 E1 많고 느림 → 수 초 만에 세션 놓아줌 · 뒤에서 전량 수렴", async () => {
