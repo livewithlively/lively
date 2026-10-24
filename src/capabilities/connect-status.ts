@@ -25,6 +25,7 @@ import {
 import { githubAppReady } from "../org/credentials/oauth-broker.js";
 import { decideRoutes, type AppRouteFacts, type ConnectRoute } from "../org/connect-routes.js";
 import { registrationView, type RegistrationView } from "../org/connect-registration.js";
+import { registrationEditable } from "../org/connect-unregister.js";
 import { memberAiConnectorsPolicy, listMemberAiConnectors, type AiConnectorStatus } from "../org/store/member-ai-connectors.js";
 import { connectorOfApp } from "../org/collect/connector-names.js";
 import { listMemberSecretsPublic, memberOwner } from "../org/credentials/member-secret-store.js";
@@ -163,6 +164,11 @@ export interface ConnectAppStatus {
   blocked_before: number[] | null;
   /** 라이블리 앱 길이 «앱 등록»·«관리자에게 요청»(앱 미준비)일 때만 — 등록 안내(화면 앱 등록 칸 · 스킬 앱 등록 절과 같은 데이터). */
   registration?: RegistrationView | null;
+  /**
+   * (#4991) 등록한 뒤의 «앱 등록 보기 · 바꾸기 · 지우기» 를 이 사람에게 보이나 — 셀프호스트(회사가 앱을 쥔다) · 등록할 수 있는 사람 ·
+   *  앱이 준비됨 · 이 서버가 그 앱을 쥠(릴레이 아님). 매니지드는 라이블리 클라우드가 앱을 쥐어 늘 false 다.
+   */
+  can_edit_registration: boolean;
   error?: string;
 }
 
@@ -227,7 +233,8 @@ const orgConnectStatus: Capability = {
     "routes[](연결할 수 있는 길, 우선순위 순: kind app=라이블리 앱 · ai=구성원 Claude 커넥터(ai_app) · token=개인 토큰 / " +
     "state collecting·set_scope·connected·connect·register·reconnect·ask_admin·preparing·off / needs=claude_login 이면 Claude 로그인부터 / " +
     "off 면 off_reason=blocked(관리자가 끔)·unknown(설정을 못 읽음 — 관리자가 껐다고 말하지 않는다)) · " +
-    "recommended(권하는 길의 자리) · blocked_before(그 앞의 막힌 길) · registration(앱 등록 안내 — 라이블리 앱 길이 register·ask_admin 일 때만)}. " +
+    "recommended(권하는 길의 자리) · blocked_before(그 앞의 막힌 길) · registration(앱 등록 안내 — 라이블리 앱 길이 register·ask_admin 일 때만) · " +
+    "can_edit_registration(셀프호스트에서 등록한 앱을 이 사람이 보고 바꾸고 지울 수 있나 — org_connect_registration · org_connect_unregister)}. " +
     "옛 칸(variant·next·app_ready·me_connected·collecting·can_register)도 함께 온다. 앱 하나의 조회가 실패해도 나머지는 돌려준다(그 앱만 error · routes=null).",
   scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/connect-status"], parse: () => ({}) }] },
@@ -268,14 +275,16 @@ const orgConnectStatus: Capability = {
         const appRoute = d.routes.find((r) => r.kind === "app");
         const registration = appRoute && !p.app_ready && (appRoute.state === "register" || appRoute.state === "ask_admin")
           ? registrationView(a.app, { callbackUrl, gatewayUrl: profileUrl }) : null;
+        const canEditRegistration = registrationEditable({ app: a.app, heldBy, canRegister, appReady: p.app_ready });
         return {
           ...common, app_ready: p.app_ready, me_connected: p.me_connected, collecting: p.collecting, next, note: p.note ?? null,
           routes: d.routes, recommended: d.recommended, blocked_before: d.blocked_before, ...(registration ? { registration } : {}),
+          can_edit_registration: canEditRegistration,
         };
       } catch (e) {
         return {
           ...common, app_ready: null, me_connected: null, collecting: null, next: null, note: null,
-          routes: null, recommended: null, blocked_before: null, error: (e as Error)?.message?.slice(0, 200) ?? "조회 실패",
+          routes: null, recommended: null, blocked_before: null, can_edit_registration: false, error: (e as Error)?.message?.slice(0, 200) ?? "조회 실패",
         };
       }
     }));

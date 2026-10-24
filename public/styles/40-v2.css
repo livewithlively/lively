@@ -1034,6 +1034,16 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 .cn-reg-notes { font-size: 12px; color: var(--muted); line-height: 1.6; }
 .cn-reg-notes b { font-weight: 700; color: var(--ink-sub); }
 .cn-reg-notes ul { margin: 4px 0 0; padding-left: 18px; }
+/* (#4991) 등록한 뒤의 «앱 등록 보기 · 바꾸기 · 지우기» — 지금 등록 한 줄 · 다른 앱으로 바꾸면 끊기는 것 · 바꿀 값 칸. */
+.cn-reg-man { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.cn-reg-cur { margin: 0; font-size: 13px; color: var(--ink); line-height: 1.6; overflow-wrap: anywhere; }
+.cn-reg-cur > b { font-size: 13px; font-weight: 700; color: var(--ink); }
+.cn-reg-cur dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 4px 0 0; font-size: 12.5px; }
+.cn-reg-cur dt { color: var(--ink-sub); }
+.cn-reg-cur dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.cn-reg-swap { display: flex; flex-direction: column; gap: 10px; }
+.cn-reg-swap[hidden] { display: none; }
+.cn-reg-impact { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--ink-sub); line-height: 1.6; }
 /* [무엇을 모을지 정하기 ↓] 로 내려온 칸을 잠깐 표시한다 — 어디를 보면 되는지 눈이 따라가게. */
 .cn-flash { outline: 2px solid var(--blue); outline-offset: 4px; border-radius: 10px; }
 
@@ -1202,6 +1212,8 @@ input.v2-dest-in { height: auto; border: 0; outline: 0; background: transparent;
 
 /* 노션 워크스페이스가 둘 이상일 때 — 대표 토글 아래에 워크스페이스별 줄(#1881 N7). 들여쓰기로 종속을 보인다. */
 .cn-ws-list { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 2px 20px; }
+/* (#4991) 워크스페이스 줄 — 이름(과 토글) 오른쪽에 [연결 끊기]. 좁으면 아래로 내린다. */
+.cn-ws-row { display: flex; align-items: center; justify-content: space-between; gap: 4px 10px; flex-wrap: wrap; }
 /* 슬랙 대화 정책은 관리탭 카드 문법으로 만들어졌다 — 셸 안에서는 테두리 한 겹만 두르고 그대로 싣는다. */
 .cn-slack { padding: 16px; border: 1px solid var(--line-net); border-radius: 12px; }
 .cn-slack .card { border: 0; padding: 0; background: none; box-shadow: none; }

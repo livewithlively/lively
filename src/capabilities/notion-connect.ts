@@ -15,12 +15,15 @@
 //
 //  범위는 노션 쪽 페이지 선택이 정하므로 root_pages 를 두지 않는다(search 스윕이 공유된 범위만 돌려준다).
 //  끄면 enabled=false 로 남긴다(삭제 아님 — 커서·자료가 남고 다시 켜면 이어받는다).
+//  (#4991) 워크스페이스 하나의 «연결 끊기» — 조직 칸(notion_public/<workspace_id>)을 지우고 그 워크스페이스를 모으던 수집기를 끈다.
+//   종전엔 켜기·끄기만 있어 연결 자체를 걷을 길이 서버에도 없었다. 수집기는 지우지 않는다 — 커서·스탬프(external_instance)가
+//   남아 같은 워크스페이스를 다시 연결하고 켜면 이어서 모은다(bindWorkspace 가 그 수집기를 다시 찾는다).
 import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { itemsPool } from "../db/client.js";
-import { listSecretsByKindPublic, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
+import { listSecretsByKindPublic, deleteMemberSecret, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
 import { NOTION_PUBLIC_KIND } from "../org/credentials/notion-oauth.js";
 import { startNotionPublicConsent, completeNotionInstall, notionPublicReady, onNotionInstalled } from "../org/credentials/oauth-broker.js";
 
@@ -309,6 +312,66 @@ const orgNotionCollectConnect: Capability = {
   },
 };
 
+/**
+ * 워크스페이스 연결을 끊을 때 멈출 수집기 — 그 워크스페이스에 묶인 것과, 아직 아무 워크스페이스에도 안 묶인 «org» 수집기.
+ *  «org» 는 연결이 하나뿐일 때 그것을 잡는다(notion-token-source) — 끊고 나면 **남은 다른 워크스페이스**를 잡으러 가서
+ *  자기 축(external_instance)에 남의 문서를 모은다. 그래서 함께 끈다. 아이디가 빈 «org:» 도 토큰 해소에서 «org» 와 같다.
+ *  토큰을 직접 넣은 수집기(token_source 없음)는 건드리지 않는다.
+ */
+function collectorsToStop(all: CollectorView[], workspaceId: string): CollectorView[] {
+  return notionCollectors(all).filter((c) => {
+    if (!c.enabled) return false;
+    const src = String(c.config?.token_source ?? "").trim();
+    const unboundOrg = src === "org" || (src.startsWith("org:") && !src.slice(4).trim());
+    return boundWorkspace(c) === workspaceId || unboundOrg;
+  });
+}
+
+/**
+ * 끄면서 묶어 둘 워크스페이스 — 안 묶인 «org» 수집기가 지금 이 워크스페이스를 모아 왔다면(연결이 이것 하나뿐) 그 아이디.
+ *  안 묶인 채 꺼 두면 나중에 다른 워크스페이스를 처음 연결할 때 옛 단일 수집기로 접수되고(adoptable · 첫 워크스페이스만),
+ *  그 첫 전체 스윕이 이 수집기 축(external_instance)에 모아 둔 자료를 보관 처리한다 — «이미 가져온 자료는 남아요» 가 거짓이 된다.
+ *  묶어 두면 같은 워크스페이스를 다시 연결할 때만 이 수집기를 다시 쓴다. 연결이 둘 이상이면 어느 쪽을 모았는지 알 수 없어 그대로 둔다.
+ *  그 워크스페이스에 이미 묶인 다른 수집기가 있으면 묶지 않는다 — 한 워크스페이스에 둘이 묶이는 상태는 다른 코드가 가정하지 않는다
+ *  (bindWorkspace·syncCollectors 는 첫 것을, notionCollectState 는 마지막 것을 집는다).
+ */
+function pinOnStop(c: CollectorView, workspaceIds: readonly string[], workspaceId: string, all: readonly CollectorView[]): string | null {
+  if (boundWorkspace(c)) return null;
+  if (workspaceIds.length !== 1 || workspaceIds[0] !== workspaceId) return null;
+  if (notionCollectors([...all]).some((o) => o.id !== c.id && boundWorkspace(o) === workspaceId)) return null;
+  return `org:${workspaceId}`;
+}
+
+const orgNotionWorkspaceDisconnect: Capability = {
+  name: "org_notion_workspace_disconnect", title: "노션 워크스페이스 연결 끊기",
+  description:
+    "라이블리 앱(공개 통합)으로 붙은 노션 워크스페이스 하나의 연결을 끊는다(구성원) — 조직 칸(notion_public/<workspace_id>)을 지우고 " +
+    "그 워크스페이스를 모으던 수집기를 끈다. 이미 모은 자료와 수집기 기록(커서)은 남는다 — 같은 워크스페이스를 다시 연결하고 켜면 이어서 모은다. " +
+    "노션 쪽에 남은 통합은 노션에서 지운다. ⚠ 사람이 확인한 뒤에 부른다. workspace_id 는 org_notion_collect 의 workspaces[].id. " +
+    "REST 등가: POST /api/ui/org/notion/workspace/disconnect {workspace_id}.",
+  scope: "memory",
+  input: { workspace_id: z.string().describe("끊을 노션 워크스페이스 id(org_notion_collect 의 workspaces[].id)") },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/org/notion/workspace/disconnect"], parse: (req) => req.body ?? {} }] },
+  handler: async (input, user, ctx) => {
+    if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+    const wantWs = String((input as { workspace_id?: unknown } | undefined)?.workspace_id ?? "").trim();
+    if (!wantWs) throw new HttpError(400, "workspace_id 는 필수입니다");
+    const all = await orgWorkspaces();
+    const w = all.find((x) => x.id === wantWs);
+    if (!w) throw new HttpError(404, `연결된 노션 워크스페이스가 아닙니다: ${wantWs}`);
+    //  수집기를 먼저 끈다 — 칸만 지우고 끄기가 실패하면 수집기가 «연결이 없습니다» 로 도는 채 남는다. 반대 순서의 실패는 무해하다(꺼진 채 연결이 남을 뿐).
+    const collectors = await listCollectors();
+    const stop = collectorsToStop(collectors, w.id);
+    const ids = all.map((x) => x.id);
+    for (const c of stop) {
+      const pin = pinOnStop(c, ids, w.id, collectors);
+      await upsertCollector({ id: c.id, enabled: false, ...(pin ? { config: { token_source: pin } } : {}) }, user.userId, ctx?.source ?? "web");
+    }
+    const deleted = await deleteMemberSecret(GATEWAY_OWNER, NOTION_PUBLIC_KIND, w.id);
+    return { ok: true, workspace_id: w.id, workspace_name: w.name, deleted, stopped: stop.map((c) => c.id), state: await notionCollectState() };
+  },
+};
+
 // 매니지드 릴레이 완료(#1881 N4) — CP 가 admin 토큰으로 부른다. state 검증·저장은 브로커(completeNotionInstall). 응답에 토큰 없음.
 const orgNotionOauthComplete: Capability = {
   name: "org_notion_oauth_complete", title: "노션 OAuth 릴레이 완료(CP 전용)",
@@ -328,7 +391,7 @@ const orgNotionOauthComplete: Capability = {
   },
 };
 
-export const notionConnectCapabilities: Capability[] = [orgNotionCollect, orgNotionCollectSet, orgNotionCollectConnect, orgNotionOauthComplete];
+export const notionConnectCapabilities: Capability[] = [orgNotionCollect, orgNotionCollectSet, orgNotionCollectConnect, orgNotionWorkspaceDisconnect, orgNotionOauthComplete];
 
 /** 테스트 훅 — 순수 판정(워크스페이스 결속·접수 대상·키 생성). 프로덕션 코드에서 사용 금지. */
 /** 스탬프를 새로 박아야 하는가 — bindWorkspace 와 **같은 식**을 테스트가 직접 돌린다(분기 재현 금지). */
@@ -338,4 +401,4 @@ export function shouldStampInstance(existing: CollectorView | null): boolean {
   return enteringToggle && existing.instance_key !== LEGACY_INSTANCE_KEY;
 }
 
-export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance, collectedView, mirrorInstance };
+export const __notionCollectTestables = { boundWorkspace, adoptable, keyForWorkspace, shouldStampInstance, collectedView, mirrorInstance, collectorsToStop, pinOnStop };

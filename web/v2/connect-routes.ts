@@ -6,7 +6,11 @@
 //   말은 lib/connect-routes-view.ts(순수 — 시험 있음)가 정한다. 같은 판정을 화면이 다시 하면 AI(연결 스킬)와 화면이 서로 다른 길을 권한다.
 //  비밀 값은 이 화면에서만 받는다 — 금고로 바로 가고 다시 보이지 않는다. 칸은 type=password 가 아니다(#1250 — 브라우저가 이 사이트
 //   로그인 비밀번호로 저장하려 든다). 레포 도우미 secretInput · secretRow(가림 · 비밀번호 관리자 막기 · [보기])를 쓴다.
+//  (#4991) 등록한 뒤에도 같은 칸에서 «앱 등록 보기 · 바꾸기 · 지우기» 를 한다 — 종전엔 등록 칸이 등록 전에만 보여 Client ID 를
+//   다른 앱으로 바꾸거나 지울 길이 화면에 없었다(위시스트 2026-10-25). 보일지는 서버가 정하고(can_edit_registration — 매니지드는
+//   라이블리가 앱을 쥐어 늘 false), 바꾸거나 지우면 무엇이 끊기는지도 서버가 말한다(org_connect_registration impact — 스킬과 같은 문장).
 import { api, el, toast } from '../core.js';
+import { confirmDialog } from '../ui-primitives.js';
 import { svcTile } from '../svc-icons.js';
 import { CLAUDE_CONNECTORS_URL, scanErrorText } from '../lib/claude-connectors.js';
 import {
@@ -19,6 +23,8 @@ import { renderAppClaude } from './connect-board.js';
 
 export interface ConnectAppStatus extends ConnectAppIn {
   can_register: boolean;
+  /** (#4991) 등록한 앱을 이 사람이 보고 바꾸고 지울 수 있나 — 셀프호스트 · 등록 권한 · 앱 준비됨. 옛 서버는 이 칸이 없다(= 안 보인다). */
+  can_edit_registration?: boolean;
   connect_url: string | null;
   skill: string;
   note: string | null;
@@ -206,6 +212,12 @@ function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: 
     if (r.state === 'set_scope') acts.appendChild(btn('무엇을 모을지 정하기 ↓', ctx.toCollect, true));
     if (r.state === 'collecting') acts.appendChild(btn('모으는 범위 보기 ↓', ctx.toCollect));
     if (r.state === 'ask_admin') body.appendChild(adminAsk(a, '수집을 켜는 건 관리자가 해요. 관리자에게 이 화면 주소를 보내 주세요.'));
+    if (a.can_edit_registration) {
+      //  등록한 뒤의 칸은 접어 둔다 — 늘 쓰는 일이 아니고, 펼 때 불러온다(구성원 연결 수를 세는 조회를 아무도 안 보는 칸 때문에 매번 부르지 않게).
+      if (acts.childNodes.length) body.appendChild(acts);
+      body.appendChild(registrationManage(a, ctx));
+      return null;
+    }
   } else if (r.kind === 'ai') {
     if (r.state === 'off') return null;
     if (r.needs === 'claude_login') acts.appendChild(btn('Claude 로그인하기', () => openMeModal({ tab: 'aiacct' }), true));
@@ -260,15 +272,20 @@ async function copyText(text: string, done: string): Promise<void> {
 
 // ══ 앱 등록 칸 ═══════════════════════════════════════════════════════════════════════
 
-/** 앱 등록 — 누가 · 몇 분 → (공개 주소가 없으면 그것부터) → 걸음(링크 · 붙여 넣을 값) → 넣을 칸 → [등록]. editable=false 면 읽기만(관리자가 할 일 보기). */
-function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx, editable: boolean): HTMLElement {
+/**
+ * 앱 등록 — 누가 · 몇 분 → (공개 주소가 없으면 그것부터) → 걸음(링크 · 붙여 넣을 값) → 넣을 칸 → [등록]. editable=false 면 읽기만(관리자가 할 일 보기).
+ *  mode='replace'(#4991) 는 등록한 뒤 값을 바꿀 때 — 같은 앱의 값만 새로 넣는 일이 많아 걸음은 접어 두고, 단추는 [바꾸기].
+ */
+function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx, editable: boolean, mode: 'register' | 'replace' = 'register'): HTMLElement {
   const wrap = el('div', { class: 'cn-reg' });
-  wrap.appendChild(el('p', { class: 'cn-reg-who', text: `만들 것: ${reg.what} · 할 수 있는 사람: ${reg.who} · 약 ${reg.minutes}분` }));
+  if (mode === 'register') wrap.appendChild(el('p', { class: 'cn-reg-who', text: `만들 것: ${reg.what} · 할 수 있는 사람: ${reg.who} · 약 ${reg.minutes}분` }));
   if (reg.missing.length) wrap.appendChild(addressFirst(ctx));
   const ol = el('ol', { class: 'cn-reg-steps' });
   for (const s of reg.steps) {
     //  번호는 목록이 붙인다(li 는 list-item 그대로) — 칸 배치는 안쪽 상자가 한다. li 를 flex 로 만들면 번호가 사라진다(화면 실측).
-    const li = el('div', { class: 'cn-reg-li' }, el('span', { class: 'cn-reg-t', text: s.text }));
+    //  바꾸기 칸의 단추는 [바꾸기] 다 — 걸음 글의 «[등록] 을 누릅니다» 를 단추 이름에 맞춘다(안내 데이터는 화면·스킬 한 벌이라 여기서만 바꾼다).
+    const text = mode === 'replace' ? s.text.replace('[등록] 을', '[바꾸기] 를') : s.text;
+    const li = el('div', { class: 'cn-reg-li' }, el('span', { class: 'cn-reg-t', text }));
     if (s.link) li.appendChild(stepLink(s.link));
     if (s.copy) {
       li.appendChild(s.copy.value
@@ -277,8 +294,10 @@ function registrationPanel(a: ConnectAppStatus, reg: RegistrationIn, ctx: Routes
     }
     ol.appendChild(el('li', {}, li));
   }
-  wrap.appendChild(ol);
-  if (editable) wrap.appendChild(regForm(a, reg, ctx));
+  wrap.appendChild(mode === 'replace'
+    ? el('details', { class: 'cn-rt-more' }, el('summary', { text: `새 앱을 만드는 걸음 보기 — ${reg.who} · 약 ${reg.minutes}분` }), ol)
+    : ol);
+  if (editable) wrap.appendChild(regForm(a, reg, ctx, mode));
   if (reg.notes.length) wrap.appendChild(el('div', { class: 'cn-reg-notes' }, el('b', { text: '알아 둘 것' }), el('ul', {}, ...reg.notes.map((n) => el('li', { text: n })))));
   return wrap;
 }
@@ -332,8 +351,9 @@ function addressFirst(ctx: RoutesCtx): HTMLElement {
     el('div', { class: 'cn-scope-row' }, inp, save), warn);
 }
 
-/** 넣을 칸 + [등록] — 값은 금고로 바로 가고 다시 보이지 않는다. 빠진 칸은 서버에 보내기 전에 말한다. */
-function regForm(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx): HTMLElement {
+/** 넣을 칸 + [등록] — 값은 금고로 바로 가고 다시 보이지 않는다. 빠진 칸은 서버에 보내기 전에 말한다. replace 는 같은 문으로 덮어쓴다(#4991). */
+function regForm(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx, mode: 'register' | 'replace' = 'register'): HTMLElement {
+  const verb = mode === 'replace' ? '바꾸기' : '등록';
   const vals: Record<string, string> = {};
   const rows = reg.fields.map((f) => {
     if (f.file) {
@@ -357,22 +377,122 @@ function regForm(a: ConnectAppStatus, reg: RegistrationIn, ctx: RoutesCtx): HTML
     inp.addEventListener('input', () => { vals[f.key] = String(inp.value || ''); });
     return el('label', { class: 'cn-reg-f' }, el('span', { class: 'k', text: f.label }), f.secret ? secretRow(inp) : inp);
   });
-  const go = btn('등록', async () => {
+  const go = btn(verb, async () => {
     const v = regValues(reg.fields, vals);
     if (!v.ok) { toast(`«${v.missing}» 칸을 채워 주세요`, true); return; }
-    go.disabled = true; go.textContent = '등록하는 중…';
+    go.disabled = true; go.textContent = mode === 'replace' ? '바꾸는 중…' : '등록하는 중…';
     try {
       await api('/api/ui/org/connect/register', { method: 'POST', body: JSON.stringify({ app: a.app, values: v.values }) });
       for (const k of Object.keys(vals)) vals[k] = '';
-      toast(`${a.label} 앱을 등록했어요 — 위 «연결하는 길» 의 다음 단추를 누르면 돼요.`);
+      toast(mode === 'replace' ? `${a.label} 앱 등록 값을 바꿨어요.` : `${a.label} 앱을 등록했어요 — 위 «연결하는 길» 의 다음 단추를 누르면 돼요.`);
       ctx.reload();
     } catch (e: any) {
-      toast((e && e.message) || '등록하지 못했어요', true);
-      go.disabled = false; go.textContent = '등록';
+      toast((e && e.message) || (mode === 'replace' ? '바꾸지 못했어요' : '등록하지 못했어요'), true);
+      go.disabled = false; go.textContent = verb;
     }
   }, true);
   return el('div', { class: 'cn-reg-form' },
     el('b', { text: '라이블리에 넣기' }),
     el('span', { class: 'cn-reg-t', text: '여기 넣은 값은 금고로 바로 저장되고 다시 보이지 않아요. 대화에 붙여 넣지 마세요.' }),
     ...rows, el('div', { class: 'cn-rt-acts' }, go));
+}
+
+// ══ 앱 등록 보기 · 바꾸기 · 지우기 (#4991) ═════════════════════════════════════════════════════════
+
+/** org_connect_registration 응답 — 비밀 값은 오지 않는다. */
+export interface RegistrationInfo {
+  current: { source: 'vault' | 'env' | 'relay' | null; client_id: string | null; app_id?: string | null; app_slug?: string | null; private_key?: boolean; updated_at: string | null };
+  impact: { replace: string[]; remove: string[] };
+  registration: RegistrationIn | null;
+}
+
+/** 등록한 뒤의 칸 — 접어 두고 펼 때 불러온다. 못 읽으면 그 사실과 [다시 불러오기]. */
+function registrationManage(a: ConnectAppStatus, ctx: RoutesCtx): HTMLElement {
+  const box = el('div', { class: 'cn-reg-man' });
+  const det = el('details', { class: 'cn-rt-more cn-reg-mgr' }, el('summary', { text: '앱 등록 보기 · 바꾸기 · 지우기' }), box) as HTMLDetailsElement;
+  let loaded = false;
+  const paint = async (): Promise<void> => {
+    box.replaceChildren(el('p', { class: 'cn-reg-t', text: '앱 등록을 불러오는 중이에요…' }));
+    let g: RegistrationInfo;
+    try { g = await api('/api/ui/org/connect/registration?app=' + encodeURIComponent(a.app)); }
+    catch (e: any) {
+      box.replaceChildren(
+        el('p', { class: 'cn-reg-t', style: 'color:var(--warn-text)', text: `앱 등록을 불러오지 못했어요 — ${(e && e.message) || e}` }),
+        el('div', { class: 'cn-rt-acts' }, btn('다시 불러오기', () => { void paint(); })));
+      return;
+    }
+    box.replaceChildren(...manageBody(a, g, ctx));
+  };
+  det.addEventListener('toggle', () => { if (det.open && !loaded) { loaded = true; void paint(); } });
+  return det;
+}
+
+/** 지금 등록 — 무엇이 등록돼 있는지 이름표와 값으로(Client ID 는 연결 화면 주소에 늘 실리는 공개 값이다). 비밀 값은 오지 않는다. */
+function currentBlock(c: RegistrationInfo['current']): HTMLElement {
+  if (c.source === 'relay') return el('p', { class: 'cn-reg-cur', text: '이 앱은 라이블리 클라우드로 연결해요 — 이 서버에는 바꾸거나 지울 앱 등록이 없어요.' });
+  if (c.source === 'env') return el('p', { class: 'cn-reg-cur', text: '지금은 서버 설정(환경 변수)에 있는 앱으로 연결해요. 여기서 값을 넣으면 그 값이 먼저 쓰여요.' });
+  if (c.source !== 'vault') return el('p', { class: 'cn-reg-cur', text: '등록된 앱 값을 찾지 못했어요.' });
+  const rows: Array<[string, string]> = [];
+  if (c.app_id) rows.push(['App ID', c.app_id]);
+  rows.push(['Client ID', c.client_id || '읽지 못했어요']);
+  if (c.app_slug) rows.push(['앱 주소 이름', c.app_slug]);
+  if (c.private_key !== undefined) rows.push(['키 파일', c.private_key ? '들어 있어요' : '아직 없어요']);
+  const when = c.updated_at ? new Date(c.updated_at) : null;
+  if (when && !isNaN(when.getTime())) rows.push(['넣은 날', when.toLocaleDateString('ko-KR')]);
+  return el('div', { class: 'cn-reg-cur' }, el('b', { text: '지금 등록된 앱' }),
+    el('dl', {}, ...rows.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])));
+}
+
+function manageBody(a: ConnectAppStatus, g: RegistrationInfo, ctx: RoutesCtx): HTMLElement[] {
+  const out: HTMLElement[] = [currentBlock(g.current)];
+  if (g.current.source === 'relay') return out;
+  const swap = el('div', { class: 'cn-reg-swap' });
+  swap.hidden = true;
+  let filled = false;
+  const acts = el('div', { class: 'cn-rt-acts' });
+  if (g.registration) {
+    const reg = g.registration;
+    acts.appendChild(btn(g.current.source === 'vault' ? '등록 값 바꾸기' : '등록 값 넣기', () => {
+      if (!filled) {
+        filled = true;
+        swap.append(
+          el('p', { class: 'cn-reg-t', text: '같은 앱의 값만 새로 받은 거라면(Client ID 가 같으면) 이미 된 연결은 그대로예요. 다른 앱으로 바꾸면 이렇게 돼요.' }),
+          el('ul', { class: 'cn-reg-impact' }, ...g.impact.replace.map((t) => el('li', { text: t }))),
+          registrationPanel(a, reg, ctx, true, 'replace'));
+      }
+      swap.hidden = !swap.hidden;
+    }));
+  }
+  if (g.current.source === 'vault') {
+    const del = btn('등록 지우기', () => { void removeRegistration(a, g, ctx); });
+    del.classList.add('cn-dz-btn');
+    acts.appendChild(del);
+  }
+  if (acts.childNodes.length) out.push(acts);
+  out.push(swap);
+  return out;
+}
+
+/**
+ * [등록 지우기] — 끊기는 것을 먼저 보이고(서버 impact.remove), 확인을 받은 뒤 지운다. 지운 뒤 다시 그리면 등록 칸이 다시 선다.
+ *  확인 창 직전에 다시 읽는다 — 칸을 편 채 두는 동안 연결 수가 바뀔 수 있고, 확인 창은 누르는 그때 참인 것만 말해야 한다.
+ *  못 읽으면 칸을 펼 때 읽은 값으로 묻는다. 그새 누가 지웠으면(vault 아님) 묻지 않고 다시 그린다.
+ */
+async function removeRegistration(a: ConnectAppStatus, loaded: RegistrationInfo, ctx: RoutesCtx): Promise<void> {
+  let g = loaded;
+  try { g = await api('/api/ui/org/connect/registration?app=' + encodeURIComponent(a.app)); } catch (_) { g = loaded; }
+  if (g.current.source !== 'vault') { toast('지울 앱 등록이 이미 없어요 — 화면을 다시 그릴게요.'); ctx.reload(); return; }
+  const yes = await confirmDialog({
+    title: `${a.label} 앱 등록을 지울까요?`, danger: true, confirmText: '등록 지우기',
+    message: '라이블리에 넣어 둔 이 앱의 등록 값을 지워요. 이미 된 연결과 모은 자료는 지우지 않아요.',
+    lines: g.impact.remove,
+  });
+  if (!yes) return;
+  try {
+    const r: any = await api('/api/ui/org/connect/unregister', { method: 'POST', body: JSON.stringify({ app: a.app }) });
+    if (!r?.deleted) toast('지울 앱 등록이 없었어요.');
+    else if (r.app_ready) toast(`${a.label} 앱 등록을 지웠어요 — 서버 설정(환경 변수)의 앱으로 계속 연결해요.`);
+    else toast(`${a.label} 앱 등록을 지웠어요 — 위 «연결하는 길» 에서 다시 등록할 수 있어요.`);
+  } catch (e: any) { toast((e && e.message) || '지우지 못했어요', true); }
+  ctx.reload();
 }

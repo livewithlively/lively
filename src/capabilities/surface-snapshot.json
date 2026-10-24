@@ -4435,6 +4435,16 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "org_notion_workspace_disconnect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/workspace/disconnect"
+  ],
+  "input_hash": "ac08975fc5b65daf"
+ },
+ {
   "name": "org_notion_oauth_complete",
   "scope": "admin",
   "mcp": false,
@@ -4733,6 +4743,26 @@
    "POST /api/ui/org/connect/register"
   ],
   "input_hash": "c96fb30225c316e3"
+ },
+ {
+  "name": "org_connect_registration",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connect/registration"
+  ],
+  "input_hash": "e300553752455696"
+ },
+ {
+  "name": "org_connect_unregister",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connect/unregister"
+  ],
+  "input_hash": "e300553752455696"
  },
  {
   "name": "org_connect_status",

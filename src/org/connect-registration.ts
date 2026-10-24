@@ -195,5 +195,13 @@ export function registrationMarkdown(app: string): string {
     `넣을 값: ${r.fields.map((f) => `«${f.label}»${f.file ? "(파일)" : ""}`).join(" · ")}.`);
   lines.push(`- 사람이 굳이 대화로 하겠다고 하면 공통 규칙 6의 경고를 먼저 하고: \`org_connect_register { app:"${r.app}", values:{ ${r.fields.map((f) => f.key + ":…").join(", ")} } }\`. 받은 값은 다시 출력하지 않는다.`);
   lines.push(`- 끝나면 \`org_connect_status\` 를 다시 불러 \`${r.app}\` 의 라이블리 앱 길이 \`connect\` 가 됐는지 확인하고 «연결» 로 간다.`);
+  //  (#4991) 등록한 뒤 — 바꾸기·지우기. 화면은 같은 칸(«연결하는 길» ▸ «앱 등록 보기 · 바꾸기 · 지우기»)이고, 끊기는 것은 서버가 말한다.
+  lines.push("");
+  lines.push("### 앱 등록 바꾸기 · 지우기 (등록한 뒤)");
+  lines.push("");
+  lines.push(`사람이 등록한 앱을 다른 앱으로 바꾸거나 지우려 할 때 — \`org_connect_status\` 의 \`${r.app}\` 줄 \`can_edit_registration\` 이 true 인 사람만 할 수 있다(셀프호스트 · 등록 권한).`);
+  lines.push(`1. \`org_connect_registration { app:"${r.app}" }\` 로 지금 등록(\`current\`)과 끊기는 것(\`impact\`)을 본다.`);
+  lines.push("2. 바꾸기 — 먼저 «같은 앱의 값만 새로 넣으면 이미 된 연결은 그대로예요» 라고 말하고, 다른 앱으로 바꿀 때 끊기는 것(`impact.replace`)을 그대로 말한다. 값은 위 «값 넣기» 와 같다 — 화면 `connect_url` ▸ «연결하는 길» ▸ «앱 등록 보기 · 바꾸기 · 지우기» ▸ [등록 값 바꾸기]. 등록 문(`org_connect_register`)이 덮어쓴다.");
+  lines.push(`3. 지우기 — \`impact.remove\` 를 그대로 말하고, 사람이 확인하면 \`org_connect_unregister { app:"${r.app}" }\`. 이미 된 연결·모은 자료는 지우지 않는다. 응답 \`app_ready\` 가 false 면 등록 칸이 다시 열린 것이다(true 면 서버 설정의 앱이 남았다).`);
   return lines.join("\n");
 }
