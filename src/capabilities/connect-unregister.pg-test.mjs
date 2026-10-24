@@ -52,7 +52,9 @@ const READY = {
 //  키 판별 시험용 가짜 키 — 표지를 쪼개 이어 붙인다(파일에 키 모양 글자가 남으면 비밀 검사기가 진짜 키로 잡는다).
 const PEM_MARK = (edge) => `-----${edge} RSA PRIVATE ` + "KEY-----";
 const PEM = `${PEM_MARK("BEGIN")}\nZmFrZS1rZXktZm9yLWxpdmVseS00OTkxLXBnLXRlc3Q=\n${PEM_MARK("END")}`;
-const SECRET = (app) => `pg4991-secret-${app}-do-not-leak`;
+//  가짜 값은 조각을 이어 만든다 — 따옴표 안에 «비밀 같은» 글이 그대로 있으면 비밀 검사기(gitleaks generic-api-key)가 진짜로 잡는다.
+const fake = (...parts) => ["pg4991", ...parts].join("-");
+const SECRET = (app) => fake("secret", app, "do-not-leak");
 const VALUES = (app) => app === "github"
   ? { app_id: "4991", client_id: "Iv1.pg4991", client_secret: SECRET(app), private_key: PEM, app_slug: "pg4991-app" }
   : { client_id: `pg4991-client-${app}`, client_secret: SECRET(app) };
@@ -94,7 +96,7 @@ try {
         { secret: JSON.stringify({ access_token: "pg4991-at", token_type: "bearer", expires_in: 3600 }), meta: { expires_at: Math.floor(Date.now() / 1000) + 3600, token_type: "bearer" } }, "pgtest");
     }
     if (app === "notion") await store.setMemberSecret(G, "notion_public", WS[0], { secret: JSON.stringify({ access_token: "pg4991-nt", token_type: "bearer" }), meta: { workspace_name: "피지 워크스페이스" } }, "pgtest");
-    if (app === "slack") await store.setMemberSecret(G, "slack_bot", "TPG4991", { secret: "xoxb-pg4991", meta: { team_name: "pg4991" } }, "pgtest");
+    if (app === "slack") await store.setMemberSecret(G, "slack_bot", "TPG4991", { secret: fake("bot"), meta: { team_name: "pg4991" } }, "pgtest");
     if (app === "github") await store.setMemberSecret(G, "github_app_install", "4991001", { secret: "4991001", meta: { installation_id: "4991001" } }, "pgtest");
 
     const view = await VIEW.handler({ app }, ADMIN);
@@ -128,18 +130,18 @@ try {
 
   // ── R3 구글 옛 kind ──
   await REG.handler({ app: "google", values: VALUES("google") }, ADMIN);
-  await store.setMemberSecret(G, "google_drive_oauth", "oauth:client", { secret: JSON.stringify({ client_id: "pg4991-legacy", client_secret: "pg4991-legacy-s" }) }, "pgtest");
+  await store.setMemberSecret(G, "google_drive_oauth", "oauth:client", { secret: JSON.stringify({ client_id: fake("legacy"), client_secret: fake("legacy", "s") }) }, "pgtest");
   const r3 = await DEL.handler({ app: "google" }, ADMIN);
   chk("R3 구글: 옛 kind client 칸까지 지운다(deleted=2) · 준비 거짓", r3.deleted === 2 && !(await broker.googleReady()), JSON.stringify(r3));
   //  옛 kind 만 남은 상태도 준비 참이다(그래서 지울 칸에 들어 있어야 한다) — 표가 옛 kind 를 빠뜨리면 이 행이 «지웠는데 등록됨» 을 잡는다.
-  await store.setMemberSecret(G, "google_gmail_oauth", "oauth:client", { secret: JSON.stringify({ client_id: "pg4991-legacy2", client_secret: "s2" }) }, "pgtest");
+  await store.setMemberSecret(G, "google_gmail_oauth", "oauth:client", { secret: JSON.stringify({ client_id: fake("legacy2"), client_secret: fake("legacy2", "s") }) }, "pgtest");
   chk("R3 구글: 옛 kind 만 남아도 준비 참(전제)", await broker.googleReady());
   const r3b = await DEL.handler({ app: "google" }, ADMIN);
   chk("R3 구글: 옛 kind 만 남은 등록도 지운다", r3b.deleted === 1 && !(await broker.googleReady()), JSON.stringify(r3b));
 
   // ── R4 구글 서버 설정 앱 ──
-  process.env.GOOGLE_OAUTH_CLIENT_ID = "pg4991-env-client";
-  process.env.GOOGLE_OAUTH_CLIENT_SECRET = "pg4991-env-secret";
+  process.env.GOOGLE_OAUTH_CLIENT_ID = fake("env", "client");
+  process.env.GOOGLE_OAUTH_CLIENT_SECRET = fake("env", "secret");
   try {
     await REG.handler({ app: "google", values: VALUES("google") }, ADMIN);
     const r4 = await DEL.handler({ app: "google" }, ADMIN);

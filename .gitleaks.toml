@@ -35,6 +35,11 @@ regexes = [
   #  private-key 룰이 커밋 401066b07 의 그 픽스처를 잡았다. 시험은 이제 표지를 쪼개 키 모양 글자를 남기지 않지만, 스캔은
   #  PR 범위·히스토리 전수라 그 커밋이 남아 있는 동안 빨갛다 → 그 본문 한 줄만 정확히 뺀다(파일 단위 제외 아님).
   '''MIIBOgIBAAJBAKj34GkxFhD90vcNLYLInFEX6Ppy1tPf9Cnzj4p4WGeKLs1Pt8Qu''',
+  # 앱 등록 지우기 PG 시험(#4991)의 가짜 client secret 두 개 — 이름에 시험 번호가 박힌 더미다(실값 아님).
+  #  generic-api-key 가 커밋 afa5dc07e 의 `client_secret: "…"` · `GOOGLE_OAUTH_CLIENT_SECRET = "…"` 를 잡았다. 시험은 이제 값을
+  #  조각으로 이어 만들어 리터럴을 남기지 않지만, 스캔은 PR 범위·히스토리 전수라 그 커밋이 남아 있는 동안 빨갛다 → 그 두 리터럴만 정확히 뺀다.
+  '''pg4991-legacy-s''',
+  '''pg4991-env-secret''',
 ]
 
 # ── 벤더링한 서드파티 번들의 압축 코드 (#3537) ────────────────────────────────
