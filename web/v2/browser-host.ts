@@ -15,7 +15,8 @@ import {
   type BTab, aiBusy, allTabs, blankTab, cancelHandoff, destroyTab, ensureCapturable, ensureTab, getTab, keyOfTab, markAi,
   onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession, wakeTab,
 } from './browser-tabs.js';
-import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
+import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollBy, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
+import { captureFrame, loadAndWait, scrollRemainder } from './browser-host-kit.js';
 
 /** 게이트웨이와 맞춘 규약 판(src/browser/relay.ts BROWSER_PROTOCOL). */
 const PROTOCOL = 1;
@@ -221,7 +222,7 @@ async function withTab<T>(S: string, a: Record<string, any>, create: boolean, fn
   try {
     await within(t.ready, 15_000, '탭이 준비되지 않았습니다(15초)');
     //  사람의 칸에서 오래 안 보여 재운 탭 — 재우기 전 주소를 다시 싣고 다 실릴 때까지(최대 15초) 기다린 뒤 일한다.
-    if (t.asleep) await loadAndWait(t, () => wakeTab(t), 15_000);
+    if (t.asleep) await loadAndWait(t.view, () => wakeTab(t), 15_000);
     return await fn(t);
   } finally { aiBusy(t, -1); }
 }
@@ -278,48 +279,6 @@ async function exec(t: BTab, src: string, ms = 20_000): Promise<any> {
   return within(t.view.executeJavaScript(src, false), ms, `페이지가 ${Math.round(ms / 1000)}초 안에 답하지 않았습니다`);
 }
 
-/** 이동을 걸고 다 열릴 때까지(또는 한도까지) 기다린다. 한도를 넘으면 오류가 아니라 loading:true 로 돌아간다(느린 사이트). */
-function loadAndWait(t: BTab, kick: () => unknown, ms: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const v = t.view;
-    let fin = false;
-    let failed = '';
-    let started = false;
-    const done = (err?: Error): void => {
-      if (fin) return;
-      fin = true;
-      clearTimeout(timer);
-      v.removeEventListener('did-start-loading', onStart);
-      v.removeEventListener('did-stop-loading', onStop);
-      v.removeEventListener('did-fail-load', onFail);
-      v.removeEventListener('did-navigate-in-page', onInPage);
-      if (err) reject(err); else resolve();
-    };
-    const onStart = (): void => { started = true; };
-    //  멈춘 뒤 곧바로 끝낸다 — 실패(did-fail-load)는 멈춤보다 먼저 온다. 여기 타이머를 두면 숨은 창에서 1초가 된다.
-    const onStop = (): void => { queueMicrotask(() => done(failed ? new Error(failed) : undefined)); };
-    const onInPage = (): void => { if (!started) setTimeout(() => { if (!started) done(); }, 400); };
-    const onFail = (e: any): void => {
-      if (!e || e.isMainFrame === false || e.errorCode === -3) return;
-      failed = `페이지를 열지 못했습니다 — ${e.errorDescription || '오류'}(${e.errorCode}) ${e.validatedURL || ''}`;
-    };
-    v.addEventListener('did-start-loading', onStart);
-    v.addEventListener('did-stop-loading', onStop);
-    v.addEventListener('did-fail-load', onFail);
-    v.addEventListener('did-navigate-in-page', onInPage);
-    const timer = window.setTimeout(() => done(), ms);
-    try {
-      const r: any = kick();
-      if (r && typeof r.catch === 'function') r.catch((e: any) => {
-        const m = String(e?.message || e);
-        if (/ERR_ABORTED|\(-3\)/.test(m)) return;            // 리다이렉트·덮어쓴 적재 — 오류가 아니다
-        failed = failed || ('페이지를 열지 못했습니다 — ' + m);
-        if (!started) done(new Error(failed));
-      });
-    } catch (e) { done(e as Error); }
-  });
-}
-
 async function opTabs(S: string, a: Record<string, any>): Promise<unknown> {
   const action = String(a.action || 'list');
   if (action === 'new') {
@@ -338,7 +297,7 @@ async function opTabs(S: string, a: Record<string, any>): Promise<unknown> {
     revealedAt.set(key, Date.now());
     if (u) {
       await within(t.ready, 15_000, '새 탭이 준비되지 않았습니다(15초)');
-      await loadAndWait(t, () => t.view.loadURL(u), 30_000);
+      await loadAndWait(t.view, () => t.view.loadURL(u), 30_000);
     }
   } else if (action === 'close') {
     const key = a.tab ? keyOfTab(S, String(a.tab)) : current.get(S);
@@ -386,15 +345,15 @@ async function opNavigate(S: string, a: Record<string, any>): Promise<unknown> {
     if (a.url) {
       const u = normWebUrl(String(a.url));
       if (!/^https?:\/\//i.test(u)) throw new Error('http(s) 주소만 열 수 있습니다: ' + a.url);
-      await loadAndWait(t, () => t.view.loadURL(u), ms);
+      await loadAndWait(t.view, () => t.view.loadURL(u), ms);
     } else if (a.action === 'back') {
       if (!t.view.canGoBack()) throw new Error('뒤로 갈 곳이 없습니다');
-      await loadAndWait(t, () => t.view.goBack(), ms);
+      await loadAndWait(t.view, () => t.view.goBack(), ms);
     } else if (a.action === 'forward') {
       if (!t.view.canGoForward()) throw new Error('앞으로 갈 곳이 없습니다');
-      await loadAndWait(t, () => t.view.goForward(), ms);
+      await loadAndWait(t.view, () => t.view.goForward(), ms);
     } else if (a.action === 'reload') {
-      await loadAndWait(t, () => t.view.reload(), ms);
+      await loadAndWait(t.view, () => t.view.reload(), ms);
     }
     return summary(t);
   });
@@ -416,20 +375,12 @@ async function shot(t: BTab, region?: unknown[] | null): Promise<{ image: { mime
       width: Math.max(1, Math.round(Math.abs(x1 - x0) / s0)), height: Math.max(1, Math.round(Math.abs(y1 - y0) / s0)),
     };
   }
-  const once = (): Promise<any> => within<any>(rect ? t.view.capturePage(rect) : t.view.capturePage(), 10_000, '화면을 찍지 못했습니다(10초) — 탭이 가려져 있으면 browser_read 로 읽으세요');
-  if (document.hidden) {
-    // 숨은 창(트레이·최소화)에선 첫 캡처가 **마지막으로 그린 프레임(옛 화면)** 을 준다 — 그 캡처가 새 프레임을 그리게 하므로
-    //  한 번 버리고 다시 찍는다. 실측(2026-10-25): 숨긴 창에서 끌기 뒤 첫 캡처는 옛 자리, 둘째는 새 자리에 상자.
-    try { await once(); } catch { /* 아직 그린 적 없는 탭 — 아래에서 다시 */ }
-    await ping(t);
-  }
-  let img: any;
-  try { img = await once(); }
-  catch {
-    // UnknownVizError — 숨은 창에서 막 다시 실린 탭처럼 그린 프레임이 아직 없다. 방금의 시도가 프레임을 청했으니 한 번만 다시.
-    await nap(t, 250);
-    img = await once();
-  }
+  // 숨은 창(트레이·최소화)에선 첫 캡처가 **마지막으로 그린 프레임(옛 화면)** 을 준다 — 한 번 버리고 다시 찍는다
+  //  (실측 2026-10-25: 숨긴 창에서 끌기 뒤 첫 캡처는 옛 자리, 둘째는 새 자리에 상자). 창이 다른 데스크톱 공간에 있으면
+  //  찍기가 영영 안 끝나므로 시간 예산(첫 3초 · 본 5초) 안에서만 — 넘으면 다시 기다리지 않고 안내로 실패한다(browser-host-kit).
+  const img: any = await captureFrame(() => (rect ? t.view.capturePage(rect) : t.view.capturePage()), {
+    hidden: document.hidden, firstMs: 3_000, mainMs: 5_000, ping: () => ping(t), nap: (ms) => nap(t, ms),
+  });
   const size = img.getSize();
   if (!size.width || !size.height) throw new Error('찍힌 화면이 비었습니다 — region 이 화면 밖이면 고치세요');
   const dpr = window.devicePixelRatio || 1;
@@ -600,6 +551,18 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
         last = cur;
       }
       try { out.scroll = last ? JSON.parse(last) : undefined; } catch { /* noop */ }
+      //  휠이 움직이기 시작했다가 절반도 못 가고 섰으면 남은 거리를 그 칸에서 바로 굴린다 — 창이 화면에 그려지지 않으면
+      //   부드러운 스크롤이 첫 박자에서 선다(실측 2026-10-25 상민님 앱: 1200 을 굴려 24). 안 움직였으면(끝 · 휠을 가로채는 페이지) 그대로.
+      let b0: any = null;
+      try { b0 = before ? JSON.parse(before) : null; } catch { /* noop */ }
+      const rest = scrollRemainder(b0, out.scroll as any, n, dir);
+      if (rest) {
+        try {
+          await exec(t, callSource(pageScrollBy, p.x, p.y, rest.dx, rest.dy), 3_000);
+          out.scroll = await exec(t, callSource(pageScrollState, p.x, p.y), 3_000);
+          out.note = '휠 스크롤이 도중에 멈춰(창이 화면에 그려지지 않으면 부드러운 스크롤이 진행되지 않습니다) 남은 거리를 페이지에서 바로 굴렸습니다.';
+        } catch { /* 이동 중 — 휠로 간 데까지만 */ }
+      }
       settle = 0;
     } else if (act === 'wait') {
       const ms = Math.max(0, Math.min(30_000, Number(a.ms) || (a.text ? 10_000 : 1_000)));
@@ -636,8 +599,12 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
       while (t.loading && Date.now() < end) await nap(t, 150);
       lap('load');
     }
-    const pic = a.screenshot ? await shot(t) : {};
-    if (a.screenshot) lap('shot');
+    //  찍기가 안 돼도 동작은 이미 했다 — 동작을 실패로 돌려주면 AI 가 같은 클릭·입력을 다시 한다. 결과에 이유만 싣는다.
+    let pic: Record<string, unknown> = {};
+    if (a.screenshot) {
+      try { pic = await shot(t); } catch (e) { out.screenshot_error = String((e as Error)?.message || e); }
+      lap('shot');
+    }
     return { ...summary(t), ...out, timing, ...pic };
   });
 }
