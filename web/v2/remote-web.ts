@@ -244,8 +244,10 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     sink.value = '';
     queueText(v);
   });
-  sink.addEventListener('compositionend', (e: CompositionEvent) => {
-    const v = e.data || sink.value;
+  //  조합 끝 — 사건이 실어 온 글(e.data)이 아니라 **입력칸에 남은 글**을 보낸다. 사파리는 조합이 끝날 때 «조합 아님» 으로 표시된
+  //   input 을 compositionend 보다 먼저 내기도 한다 — 그 input 이 이미 보내고 비웠으면 여기서 또 보내지 않는다(같은 글 두 번 방지).
+  sink.addEventListener('compositionend', () => {
+    const v = sink.value;
     sink.value = '';
     queueText(v);
   });
