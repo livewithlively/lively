@@ -193,7 +193,9 @@ function pickTab(S: string, tabArg: unknown, create: boolean, makeNumbered = fal
     let t = getTab(key) || (storedUrls()[key] ? ensureTab(key) : null);
     //  이동(navigate)만 그 번호의 탭이 없으면 만든다 — 웹 판 원격 화면이 칸의 탭 번호로 처음 주소를 열 때(#4993 (A)).
     //   보기 · 누르기 · 사람에게 넘기기는 만들지 않는다(없는 탭을 «본» 결과가 빈 페이지면 그게 거짓이고, 넘기기는 빈 탭에 부탁을 건다).
-    if (!t && makeNumbered) { t = ensureTab(key, 'about:blank'); current.set(S, key); }
+    //   번호를 짚어 만든 탭은 AI 의 기본 탭(current)으로 삼지 않는다 — 있는 탭을 번호로 짚을 때와 같다(사람이 웹 판에서 연 탭이
+    //   AI 의 «지금 쓰는 탭» 이 되지 않게 — 격리 리뷰).
+    if (!t && makeNumbered) t = ensureTab(key, 'about:blank');
     if (!t) throw new Error(missingTabMsg(tabArg));
     return t;
   }

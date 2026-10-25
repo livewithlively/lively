@@ -351,6 +351,12 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
   const numbered = calls.filter((c) => (c.callee === "withTab" && c.args[4] === "true") || (c.callee === "pickTab" && c.args[3] === "true")).map((c) => c.fn);
   const passThrough = calls.filter((c) => c.callee === "pickTab" && c.args.length >= 4 && c.args[3] !== "true").map((c) => `${c.fn}:${c.args[3]}`);
   eq([calls.length > 8, numbered, passThrough], [true, ["opNavigate"], ["withTab:makeNumbered"]], "T2' 없는 번호의 탭은 이동(opNavigate)만 만든다 — 넘기기 · 보기 · 누르기는 안 만든다");
+  //  T2'' 번호를 짚어 만든 탭은 AI 의 기본 탭(current)으로 삼지 않는다 — 있는 탭을 번호로 짚을 때와 같다(사람이 웹 판에서 연 탭이
+  //   AI 의 «지금 쓰는 탭» 이 되지 않게). pickTab 안 «!t && makeNumbered» 갈래에 current.set 이 없어야 한다.
+  const ifs = [];
+  const findIf = (n) => { if (ts.isIfStatement(n) && n.expression.getText(sf).replace(/\s+/g, " ") === "!t && makeNumbered") ifs.push(n.thenStatement.getText(sf)); ts.forEachChild(n, findIf); };
+  findIf(sf);
+  eq([ifs.length, ifs.some((x) => /current\.set/.test(x))], [1, false], "T2'' 번호를 짚어 만든 탭은 AI 기본 탭(current)이 아니다");
 }
 
 console.log(`\n${pass} 통과`);

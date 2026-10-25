@@ -24,6 +24,18 @@ const REPROBE_MS = 30_000;
 /** 두 번 누름을 가르는 시간 — OS 더블클릭 간격(맥 기본 약 0.5초)에 맞춘다. 220ms 는 짧아 느린 두 번 누름이
  *  «한 번 + 두 번»(원격에서 세 번)이 됐다(격리 리뷰 실측: 250 · 400ms 간격). 그 사이 글 · 키가 오면 기다리지 않고 먼저 보낸다. */
 const DBL_MS = 400;
+/** 원격 요청 하나의 상한 — 답 없는 요청 하나가 줄 전체를 막지 않게(게이트웨이는 40초 안에 답한다 — 망이 멈출 때를 위한 것). */
+const CALL_MS = 60_000;
+/** (세션, 탭)마다 원격 일의 줄 하나 — 화면마다 따로 두면, 세션을 A→B→A 로 오갈 때 닫히며 남은 입력을 보내는 옛 A 화면과
+ *  새 A 화면이 같은 탭에 따로 보내 순서가 뒤집혔다(격리 리뷰 실측: click · world · hello). 줄의 꼬리를 탭 하나에 하나로 둔다. */
+const QUEUES = new Map<string, Promise<void>>();
+function chain(qKey: string, job: () => Promise<void>): void {
+  const run = (): Promise<void> => job().catch(() => { /* 일 안에서 이미 다룬다 — 줄은 끊기지 않는다 */ });
+  const next = (QUEUES.get(qKey) || Promise.resolve()).then(run);
+  QUEUES.set(qKey, next);
+  void next.then(() => { if (QUEUES.get(qKey) === next) QUEUES.delete(qKey); });
+}
+const sleep = (ms: number): Promise<void> => new Promise((r) => { window.setTimeout(r, ms); });
 
 type State = 'connecting' | 'live' | 'empty' | 'paused' | 'stuck' | 'error';
 
@@ -64,6 +76,7 @@ export function remoteWebPart(ctx: PartCtx, frame: () => Part): Part {
   };
   const useRemote = (): void => {
     if (dead || remote) return;
+    if (!sess()) { useFrame(); return; }   // 세션 없는 자리(새 세션 자리)엔 묶을 세션이 없다 — 늦게 온 «연결됨» 이 여기 닿아도
     clearTimeout(probeTimer);
     inner?.destroy?.(); inner = null;
     //  lost 는 **자기 자신일 때만** — 세션을 바꿔 이미 갈아 끼운 옛 원격 화면의 늦은 409 가 새 화면을 iframe 칸으로 돌리지 않게.
@@ -72,22 +85,33 @@ export function remoteWebPart(ctx: PartCtx, frame: () => Part): Part {
     root.replaceChildren(me.root);
     me.start();
   };
+  let probeSeq = 0;
   async function probe(): Promise<void> {
     if (dead) return;
+    const my = ++probeSeq;
     const s = sess();
-    if (s && (await desktopConnected(s))) useRemote(); else useFrame();
+    const ok = !!s && (await desktopConnected(s));
+    //  묻는 사이 더 새로 물었으면 이 답은 버린다(늦게 온 «없음» 이 방금 선 원격 화면을 iframe 칸으로 돌리지 않게),
+    //   세션이 바뀌었으면 그 답은 옛 자리의 것이다 — 다시 묻는다(격리 리뷰: 세션 없는 자리에 원격 화면이 묶였다).
+    if (dead || my !== probeSeq) return;
+    if (sess() !== s) { void probe(); return; }
+    if (ok) useRemote(); else useFrame();
   }
   root.append(placeholder());
   void probe();
   const offSess = ctx.onSession(() => {
+    const wasRemote = !!remote;
     if (remote) {
       //  원격 화면은 한 (세션, 탭)에 묶여 있다 — 닫고(남은 입력은 옛 세션으로 마저 간다) 칸에서 곧바로 떼어
-      //   늦게 오는 옛 화면이 새 칸에 그려지지 않게 한 뒤, 새 세션으로 다시 묻는다.
+      //   늦게 오는 옛 화면이 새 칸에 그려지지 않게 한다.
       remote.destroy(); remote = null;
       root.replaceChildren(placeholder());
     }
     if (!sess()) { useFrame(); return; }
-    if (!inner) void probe();             // iframe 칸은 스스로 세션을 따라간다 — 30초 다시 묻기가 원격으로 바꿔 준다
+    //  원격 화면이었으면 데스크톱이 연결돼 있는 걸 이미 안다 — 다시 묻지 않고 새 세션의 원격 화면을 곧바로 세운다
+    //   (상태 묻기는 데스크톱 탭 목록 왕복이라 바쁘면 몇 초 걸린다 — 끊겼으면 첫 요청의 409 가 iframe 칸으로 돌린다).
+    //   iframe 칸이었으면 곧바로 묻는다(30초 다시 묻기를 기다리면 새 세션을 열고도 30초 동안 iframe 칸이었다 — 격리 리뷰).
+    if (wasRemote) useRemote(); else void probe();
   });
   return {
     root,
@@ -137,11 +161,18 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   let lastData = '';
   let shotW = 0, shotH = 0, shotScale = 1;
   let curUrl = '';
-  let queue: Promise<void> = Promise.resolve();
-  let queued = 0;                                  // 줄에 선 원격 동작 수 — 스크린샷은 줄의 마지막 것만 받는다
+  const qKey = sessId + '#' + tabNo;               // 원격 일의 줄 — 이 탭의 것(QUEUES)
+  let queued = 0;                                  // 이 화면이 줄에 세운 원격 동작 수 — 스크린샷은 줄의 마지막 것만 받는다
+  let lastShotAt = 0;                              // 마지막으로 그림을 받은 때 — 줄이 길어도 1초마다는 받는다
+  let wx = 0, wy = 0, wTimer = 0;                  // 모아 둔 휠(보이는 px)
+  let wPoint: { x: number; y: number } | null = null;
 
-  const call = (op: string, body: Record<string, unknown>): Promise<any> =>
-    api('/api/ui/browser/' + op, { method: 'POST', headers: { 'x-lively-session': sessId }, body: JSON.stringify({ ...body, tab: tabNo }) });
+  const call = async (op: string, body: Record<string, unknown>): Promise<any> => {
+    const ac = new AbortController();
+    const t = window.setTimeout(() => ac.abort(), CALL_MS);
+    try { return await api('/api/ui/browser/' + op, { method: 'POST', headers: { 'x-lively-session': sessId }, body: JSON.stringify({ ...body, tab: tabNo }), signal: ac.signal }); }
+    finally { clearTimeout(t); }
+  };
   const visible = (): boolean => !dead && root.isConnected && root.getClientRects().length > 0 && document.visibilityState === 'visible';
 
   function setState(s: State, text = ''): void {
@@ -173,6 +204,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     syncAddr(r);
     const d = r?.image?.data;
     if (!d) return false;
+    lastShotAt = Date.now();
     shotW = Number(r.width) || shotW;
     shotH = Number(r.height) || shotH;
     shotScale = Number(r.scale) || 1;
@@ -183,9 +215,15 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   async function onError(e: any): Promise<void> {
     if (dead) return;
     errors++;
-    //  409 는 «데스크톱 없음» 만이 아니다(세션 주인 불일치도 409 — 쓰기 도구에만 걸린다, 격리 리뷰). 한 번 더 물어 정말 없을 때만 iframe 칸으로.
-    if (e?.status === 409 && !(await desktopConnected(sessId))) { lost(); return; }
-    const m = String(e?.message || e || '');
+    //  409 는 «데스크톱 없음» 만이 아니다 — 세션 주인 불일치도 409(쓰기 도구에만 걸린다), 데스크톱이 몇 초 끊겼다 붙는 것도 있다(격리 리뷰).
+    //   그래서 물어 보아 연결돼 있으면 그 문구를 보이고, «없음» 이면 2.5초 뒤 한 번 더 물어 그때도 없을 때만 iframe 칸으로.
+    if (e?.status === 409 && !(await desktopConnected(sessId))) {
+      await sleep(2_500);
+      if (dead) return;
+      if (!(await desktopConnected(sessId))) { if (!dead) lost(); return; }
+    }
+    if (dead) return;
+    const m = e?.name === 'AbortError' ? `데스크톱 앱이 ${CALL_MS / 1000}초 동안 답하지 않았습니다 — 잠시 뒤 다시 시도합니다.` : String(e?.message || e || '');
     const kind = hostErrorKind(m);
     if (kind === 'empty') setState('empty');
     else if (kind === 'paused') setState('paused');
@@ -201,7 +239,9 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   async function frameOnce(): Promise<void> {
     if (inflight || dead) return;
     if (!visible()) return;                        // 다시 보이면 visibilitychange · IntersectionObserver · tick() 이 깨운다
-    if (queued > 0) { schedule(300); return; }      // 원격 동작이 줄에 있으면 그 결과 그림을 기다린다
+    //  원격 동작이 줄에 있으면 그 결과 그림을 기다린다 — 다만 1초 넘게 그림이 안 왔으면 받는다(줄이 길 때 화면이 멈춘 채
+    //   사람이 묵은 그림을 누르지 않게 — 격리 리뷰). 중계는 열쇠마다 24건까지 받는다(동작 하나 + 화면 하나는 넉넉하다).
+    if (queued > 0 && Date.now() - lastShotAt < 1_000) { schedule(300); return; }
     inflight = true;
     let changed = false;
     try {
@@ -218,23 +258,28 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   function enqueue(run: (last: boolean) => Promise<void>, after: number): void {
     lastInput = Date.now();
     queued++;
-    queue = queue.then(async () => {
-      const last = queued === 1 && !pending.length;
+    chain(qKey, async () => {
+      const last = queued === 1 && !pending.length && !wx && !wy;
       try { await run(last); errors = 0; }
       catch (e) { await onError(e); }
       finally { queued--; }
       if (dead) return;
+      if (queued === 0 && (wx || wy)) { flushWheel(); return; }
       if (queued === 0 && pending.length) { pumpInput(); return; }
       schedule(last ? after : undefined);
     });
   }
   function act(body: Record<string, unknown>): void {
-    enqueue(async (last) => { paint(await call('act', last ? { ...body, screenshot: true } : body)); if (!dead) setState('live'); }, 150);
+    //  닫힌 화면이 남은 입력을 마저 보낼 땐 그림을 안 받는다 — 그릴 칸이 없다.
+    enqueue(async (last) => { paint(await call('act', last && !dead ? { ...body, screenshot: true } : body)); if (!dead) setState('live'); }, 150);
   }
   function nav(body: Record<string, unknown>): void {
-    flushClick(); flushInput();
+    flushPending();
     enqueue(async () => { syncAddr(await call('navigate', body)); }, 0);
   }
+  /** 아직 안 보낸 휠 · 누르기 · 글을 지금 줄에 세운다 — 그 뒤에 와야 하는 일(이동 · 복사 · 닫기)이 있을 때.
+   *  셋 중 하나만 모여 있을 수 있다(휠은 누르기 · 글을, 누르기와 글은 휠 · 서로를 먼저 내보내고 모인다). */
+  function flushPending(): void { flushWheel(); flushClick(); flushInput(); }
 
   // ── 누르기(두 번 누름 가르기) ────────────────────────────────────────────
   let clickTimer = 0;
@@ -263,6 +308,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   function pumpInput(): void { if (queued === 0) flushInput(); }
   function queueInput(it: InputItem): void {
     if (it.kind === 'text' && !it.text) return;
+    flushWheel();                                   // 굴린 다음 친 글이 굴리기보다 먼저 가지 않게
     flushClick();                                   // 누른 다음 친 글이 누르기보다 먼저 가지 않게
     pending = pushInput(pending, it);
     if (!inputTimer) inputTimer = window.setTimeout(() => { inputTimer = 0; pumpInput(); }, 60);
@@ -303,17 +349,19 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   /** 원격에서 고른 글을 이 브라우저 클립보드로. 사파리는 왕복 뒤의 writeText 를 제스처 밖이라 거절한다 — ClipboardItem 에
    *  «곧 올 글»(Promise)을 넘겨 키 사건 안에서 시작한다. 고른 글이 없으면 조용히, 막히면 알린다. */
   function copySelection(): void {
-    flushClick(); flushInput();                     // 고르는 두 번 누름 · 친 글이 먼저 가야 그 고른 글을 읽는다
+    //  https 가 아닌 주소(셀프호스트 http)엔 클립보드 API 자체가 없다 — 원격 글을 읽으러 가지도 않고 알린다(격리 리뷰: 예전엔 조용히 던졌다).
+    if (!navigator.clipboard) { toast('복사하지 못했습니다 — 이 주소(https 아님)에선 브라우저가 클립보드를 열어 주지 않아요.', true); return; }
+    flushPending();                                 // 고르는 두 번 누름 · 친 글이 먼저 가야 그 고른 글을 읽는다
     let got: (t: string) => void = () => { /* 아래 Promise 가 채운다 */ };
     const text = new Promise<string>((res) => { got = res; });
     //  줄에 세우되 enqueue 는 안 쓴다 — 이 읽기는 화면을 바꾸지 않아 결과 그림 · 다음 받기 간격을 건드릴 일이 없다.
-    queue = queue.then(async () => {
+    chain(qKey, async () => {
       try { const r: any = await call('eval', { code: 'String(getSelection ? getSelection() : "")' }); got(String(r?.value ?? '')); }
       catch { got(''); }
     });
     const ok = (): void => { toast('원격 화면에서 고른 글을 복사했어요'); };
-    const blocked = (): void => { toast('복사하지 못했습니다 — 브라우저가 클립보드 쓰기를 막았어요.'); };
-    const viaWriteText = (): void => { void text.then((t) => { if (t) navigator.clipboard.writeText(t).then(ok, blocked); }); };
+    const blocked = (): void => { toast('복사하지 못했습니다 — 브라우저가 클립보드 쓰기를 막았어요.', true); };
+    const viaWriteText = (): void => { void text.then((t) => (t ? navigator.clipboard.writeText(t).then(ok) : undefined)).catch(blocked); };
     const CI = (window as any).ClipboardItem;
     if (!CI || !navigator.clipboard?.write) { viaWriteText(); return; }
     let empty = false;                              // 고른 글이 없었다 — 막힌 게 아니니 알리지 않는다
@@ -332,7 +380,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     const p = pointOf(e);
     sink.focus({ preventScroll: true });
     if (!p || e.detail >= 3) return;               // 세 번째 누름 — 두 번 누름을 이미 보냈다
-    flushInput();
+    flushWheel(); flushInput();                     // 굴리고 · 친 다음 누른 것이 앞지르지 않게
     if (e.detail === 2) { clearTimeout(clickTimer); pendingClick = null; act({ action: 'double_click', x: p.x, y: p.y }); return; }
     flushClick();
     pendingClick = p;
@@ -342,28 +390,30 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     e.preventDefault();
     const p = pointOf(e);
     if (!p) return;
-    flushClick(); flushInput();
+    flushPending();
     act({ action: 'right_click', x: p.x, y: p.y });
   });
-  //  휠 — 그림이 무대에 통째로 맞춰 들어가 무대 자체는 구르지 않는다(CSS) → 휠은 전부 원격으로. 쌓아 두었다 120ms 마다 흘려 보낸다
-  //   (끝날 때 한 번에 몰아 보내면 원격이 가만히 있다가 점프한다 — 격리 리뷰 실측).
-  let wx = 0, wy = 0, wTimer = 0;
-  let wPoint: { x: number; y: number } | null = null;
+  //  휠 — 그림이 무대에 통째로 맞춰 들어가 무대 자체는 구르지 않는다(CSS) → 휠은 전부 원격으로. 모아 두었다가 줄이 비었을 때
+  //   한 번에 보낸다(입력과 같은 규칙). 120ms 마다 흘려 보내면 줄에 스크롤이 쌓여 다 굴린 뒤에도 몇 초 더 굴러갔고(격리 리뷰 실측:
+  //   트랙패드 2초 → act 16개 · 7.7초 더), 그동안 보이는 그림을 누르면 이미 굴러간 페이지의 다른 곳이 눌렸다.
+  /** 모아 둔 휠을 지금 줄에 세운다(합계는 wheelToScroll 이 상한 20,000 으로 자른다). */
   function flushWheel(): void {
-    wTimer = 0;
+    clearTimeout(wTimer); wTimer = 0;
+    if (!wx && !wy) return;
     const s = wheelToScroll(wx, wy, img.getBoundingClientRect().width, shotW, shotScale);
     wx = 0; wy = 0;
-    if (!s) return;
-    flushClick(); flushInput();
-    act({ action: 'scroll', direction: s.direction, amount: s.amount, ...(wPoint ? { x: wPoint.x, y: wPoint.y } : {}) });
+    if (s) act({ action: 'scroll', direction: s.direction, amount: s.amount, ...(wPoint ? { x: wPoint.x, y: wPoint.y } : {}) });
   }
+  /** 줄이 비어 있을 때만 보낸다 — 아니면 줄의 마지막 일이 끝날 때 enqueue 가 다시 부른다. */
+  function pumpWheel(): void { wTimer = 0; if (queued === 0) flushWheel(); }
   stage.addEventListener('wheel', (e: WheelEvent) => {
     if (!shotW) return;
     e.preventDefault();
+    flushClick(); flushInput();                     // 누르고 · 친 다음 굴린 것 — 그것들이 먼저
     const f = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (img.clientHeight || 600) : 1;
     wx += e.deltaX * f; wy += e.deltaY * f;
     wPoint = pointOf(e);
-    if (!wTimer) wTimer = window.setTimeout(flushWheel, 120);
+    if (!wTimer) wTimer = window.setTimeout(pumpWheel, 120);
   }, { passive: false });
 
   // ── 주소줄 · 밖에서 여는 주소(미리보기 행 · 터미널 링크) ─────────────────────
@@ -404,6 +454,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   //  다시 보이면 곧바로 — 셸의 tick 은 8초 간격이라 그동안 묵은 그림 위에서 누르게 된다(격리 리뷰 실측).
   const onVis = (): void => { if (visible() && !inflight) schedule(0); };
   document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('focus', onVis);          // 창에 초점이 없을 땐 5초 간격 — 돌아오면 기다리지 않는다
   const io = typeof IntersectionObserver === 'function' ? new IntersectionObserver(onVis) : null;
   io?.observe(root);
 
@@ -413,8 +464,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     tick: () => { if (visible() && !inflight) schedule(0); },
     destroy: () => {
       //  남은 입력은 이 화면의 (세션, 탭)으로 마저 보낸다 — 사람이 거기서 친 · 누른 것이다(머리말 ★).
-      flushClick(); flushInput();
-      if (wTimer) { clearTimeout(wTimer); flushWheel(); }
+      flushPending();
       dead = true;
       //  닫힌 화면엔 타이머가 남지 않는다 — 남은 입력은 위에서 이미 줄에 세웠다(타이머에 기대면 정리 한 줄에 입력이 사라진다).
       clearTimeout(timer); clearTimeout(clickTimer); clearTimeout(inputTimer);
@@ -423,6 +473,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
       document.removeEventListener('focusin', mark, true);
       window.removeEventListener('keydown', onKey, true);
       document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', onVis);
       io?.disconnect();
     },
   };
