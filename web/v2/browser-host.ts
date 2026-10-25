@@ -12,7 +12,7 @@ import { currentWorkspace } from '../lib/net.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
 import { normWebUrl } from './web-url.js';
 import {
-  type BTab, aiBusy, allTabs, blankTab, cancelHandoff, destroyTab, ensureCapturable, ensureTab, getTab, keyOfTab, markAi,
+  type BTab, aiBusy, allTabs, blankTab, cancelHandoff, destroyTab, dockScale, ensureCapturable, ensureTab, getTab, keyOfTab, markAi,
   onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession, wakeTab,
 } from './browser-tabs.js';
 import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollBy, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
@@ -526,7 +526,7 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
         : (a.x !== undefined && a.y !== undefined ? { x: Math.round(Number(a.x) / s), y: Math.round(Number(a.y) / s) } : { x: Math.round(t.layoutW / 2), y: Math.round(t.layoutH / 2) });
       //  보이는 창은 진짜 휠(300px 씩), 숨은 창은 페이지에서 바로 굴린다 — 숨은 창의 휠은 뒤늦게 처리돼 잰 값이 틀린다(scrollPlan 머리말).
       //  거리 상한 20,000px 도 거기서 건다(JSON 의 1e999 는 Infinity — #4993 격리 리뷰).
-      const plan = scrollPlan(document.hidden, Number(a.amount), String(a.direction || 'down'));
+      const plan = scrollPlan(document.hidden, Number(a.amount), String(a.direction || 'down'), dockScale(t));
       if ('page' in plan) {
         await exec(t, callSource(pageScrollBy, p.x, p.y, plan.page.dx, plan.page.dy), 3_000);
         try { out.scroll = await exec(t, callSource(pageScrollState, p.x, p.y), 3_000); } catch { /* 이동 중 */ }

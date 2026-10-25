@@ -17,7 +17,7 @@ let pass = 0;
 const eq = (got, want, name) => { assert.deepEqual(got, want, `${name}: ${JSON.stringify(want)} 여야 하는데 ${JSON.stringify(got)}`); pass++; console.log(`ok  ${name}`); };
 const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${name}`); };
 
-const { sessionOfKey, tabNoOfKey, keyOfTab, slotOfKey } = await import(join(root, "public/app/v2/browser-tabs.js"));
+const { sessionOfKey, tabNoOfKey, keyOfTab, slotOfKey, dockScale } = await import(join(root, "public/app/v2/browser-tabs.js"));
 const { evalSource, callSource } = await import(join(root, "public/app/lib/browser-page.js"));
 const { loadAndWait, captureFrame, scrollPlan } = await import(join(root, "public/app/v2/browser-host-kit.js"));
 
@@ -297,6 +297,26 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
   eq([scrollPlan(false, 300, "down").wheel.length, scrollPlan(false, 301, "down").wheel], [1, [W(0, -300), W(0, -1)]], "P7 경계 — 300 은 한 번 · 301 은 두 번(-300, -1)");
   eq([20000, 20001, Infinity, NaN, 0].map((n) => scrollPlan(true, n, "down").page.dy), [20000, 20000, 20000, 600, 600], "P8 경계 — 상한 20,000 · 무한·숫자 아님·0 은 기본 600");
   eq([scrollPlan(true, 100, ""), scrollPlan(true, 100, "x")], [{ page: { dx: 0, dy: 100 } }, { page: { dx: 0, dy: 100 } }], "P9 방향이 없거나 모르면 아래");
+}
+{
+  //  P' — 칸 배율. 사람 칸에 겹친 탭은 휠 거리가 배율의 역수만큼 커져 들어간다(실앱 0.755 에서 1200→1590) → 휠에 배율을 곱해 보낸다.
+  const W = (dx, dy) => ({ deltaX: dx, deltaY: dy });
+  const sum = (plan) => plan.wheel.reduce((a, w) => a + w.deltaY + w.deltaX, 0);
+  eq(scrollPlan(false, 1200, "down", 0.755), { wheel: [W(0, -227), W(0, -226), W(0, -227), W(0, -226)] }, "P10 배율 0.755 · 아래 1200 → -227 · -226 · -227 · -226");
+  eq(sum(scrollPlan(false, 1200, "down", 0.755)), -906, "P10 합 = 1200 × 0.755(누적 경계 반올림이라 어긋나지 않는다)");
+  eq(scrollPlan(false, 600, "up", 0.5), { wheel: [W(0, 150), W(0, 150)] }, "P11 배율 0.5 · 위 600 → +150 · +150");
+  eq(scrollPlan(true, 1200, "down", 0.5), { page: { dx: 0, dy: 1200 } }, "P12 숨은 창의 페이지 굴리기는 배율과 무관");
+  const plain = scrollPlan(false, 1200, "down");
+  eq([undefined, NaN, 0, -1].map((z) => scrollPlan(false, 1200, "down", z)), [plain, plain, plain, plain], "P13 배율이 없거나 이상하면 1");
+  eq(scrollPlan(false, 4, "down", 0.1), { wheel: [W(0, -1)] }, "P14 경계 — 반올림이 0 이어도 -1 하나는 보낸다(안 굴러가지 않게)");
+  eq(scrollPlan(false, 300, "down", 4), { wheel: [W(0, -1200)] }, "P15 경계 — 배율 4 · 300 → -1200 하나");
+}
+{
+  //  D — 지금 탭의 배율. 칸에 겹쳤을 때만 칸 배율(0.1~4), 대기·차가움은 transform 이 없어 1.
+  const tab = (mode, z) => ({ mode, scale: () => z });
+  eq(dockScale(tab("docked", 0.755)), 0.755, "D1 칸에 붙은 탭은 칸 배율");
+  eq([dockScale(tab("warm", 0.5)), dockScale(tab("cold", 0.5))], [1, 1], "D2 대기·차가움은 1");
+  eq([10, 0.01, NaN].map((z) => dockScale(tab("docked", z))), [4, 0.1, 1], "D3 경계 — 4 로 · 0.1 로 · 못 읽으면 1");
 }
 
 console.log(`\n${pass} 통과`);
