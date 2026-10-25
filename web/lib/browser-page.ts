@@ -411,6 +411,24 @@ export function pageScrollState(x: number, y: number): { x: number; y: number; p
   return out;
 }
 
+/**
+ * 그 자리의 스크롤 칸(pageScrollState 와 같은 칸 — 없으면 문서)을 dx·dy 만큼 **바로** 굴린다(부드러운 스크롤 없이). 게스트 안에서 돈다.
+ *  창이 화면에 그려지지 않으면 휠의 부드러운 스크롤이 첫 박자에서 멈춘다 — 그때 남은 거리를 이걸로 마저 간다(browser-host-kit scrollRemainder).
+ */
+export function pageScrollBy(x: number, y: number, dx: number, dy: number): void {
+  const opt = { left: dx, top: dy, behavior: 'instant' as ScrollBehavior };
+  let n: Element | null = document.elementFromPoint(x, y);
+  while (n && n !== document.body && n !== document.documentElement) {
+    const cs = getComputedStyle(n);
+    if ((/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 1) || (/(auto|scroll)/.test(cs.overflowX) && n.scrollWidth > n.clientWidth + 1)) {
+      n.scrollBy(opt);
+      return;
+    }
+    n = n.parentElement;
+  }
+  window.scrollBy(opt);
+}
+
 /** 이 글이 페이지에 있나(wait text). 게스트 안에서 돈다. */
 export function pageHasText(text: string): boolean {
   return String((document.body && document.body.innerText) || '').includes(text);
