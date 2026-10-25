@@ -482,6 +482,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
   const termSrc = (t: SessionChatTarget): string | null => (t.live && t.alive ? terminalUrl(t.id, t.label, t.node, { embed: true }) : null);
   return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
+    awaitViewers: true,   // #4996 — 셸이 열람 도장을 찍는 화면이다 — 다른 사람이 터미널로 보고 있으면 대화창으로 비켜 선다(session-chat.ts yieldTerm)
     // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.
     openHref: vopts.solo ? location.pathname + '#/s/' + encodeURIComponent(s.id) : soloSessionUrl(s.id),
     // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).

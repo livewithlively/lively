@@ -7,6 +7,12 @@
 //   · 맨 위 표지(session-chat 의 .sc-older)가 **화면에 닿기 전에**(화면 높이 OLDER_AHEAD 만큼 앞에서) 불러오기 시작한다.
 //     사람이 꼭대기에 닿을 즈음엔 그 위가 이미 붙어 있다.
 //   · 붙인 뒤에도 표지가 아직 그 거리 안이면(불러온 창이 화면을 못 채웠다) 이어서 또 부른다 — 찰 때까지.
+//   · ★ #4996 — **사람이 위로 올리기 전엔 부르지 않는다**(상민님 2026-10-25: «대화가 길면 이전 대화 불러오기가 엄청 뜨고 다 불러올
+//     때까지 여러 번 반복된다 — 스크롤 업해서 불러온 대화가 끝나 갈 때쯤 이전 것을 로드하면 되는 거 아니냐»). 종전엔 표지가
+//     거리 안이기만 하면 불렀는데, 도구 결과가 큰 세션은 1.5MB 창 하나가 화면에선 한 줄(~55px)로 접혀 열자마자 표지가 늘 거리
+//     안이었다 — 그래서 **열기만 해도** 머리까지 수십 번 이어 불렀다(#3778 실측: 34MB 세션 28번). 이제 부르는 때는 둘뿐이다:
+//     사람이 위로 올렸다(스크롤이 위로 움직였거나 위로 휠 — 꼭대기에서 더 올려도 휠은 온다) · 목록이 아직 스크롤도 안 될 만큼 짧다
+//     (그러면 사람이 올릴 수가 없다 — 스크롤이 생길 만큼만 채운다).
 //   · 한 번에 하나만 돈다. 실패하면 **멈춘다**(되묻기 폭주 금지). 사람이 그 자리를 떠났다가 돌아오거나 [다시 시도] 를 누르면 다시.
 //   · 목록이 가려져 있으면(터미널 보기 — display:none) 관찰자가 «안 보임» 으로 알려 주므로 숨은 화면에서는 부르지 않는다.
 //
@@ -16,8 +22,9 @@
 /** 서버가 한 번에 내주는 상한 — src/sessions/transcript-range.ts TRANSCRIPT_MAX_CHUNK 와 같은 값(서버는 이보다 긴 창을 잘라 낸다). */
 export const OLDER_MAX_SPAN = 4 * 1024 * 1024;
 
-/** 표지가 화면 위로 이만큼(목록 높이 기준) 떨어져 있을 때부터 부른다 — 관찰자 rootMargin 의 윗변. */
-export const OLDER_AHEAD = '200%';
+/** 표지가 화면 위로 이만큼(목록 높이 기준) 떨어져 있을 때부터 부른다 — 관찰자 rootMargin 의 윗변.
+ *  #4996 — 두 장(200%) → 한 장. 사람이 올리는 동안에만 부르므로 «읽던 것이 끝나 갈 때쯤» 이면 된다(읽는 속도에선 #3778 실측 0ms 대기). */
+export const OLDER_AHEAD = '100%';
 
 /**
  * 다음에 청할 원문 구간 [from, to). loadedFrom = 화면 맨 위 창의 시작(서버가 줄 경계로 맞춰 준 값).
@@ -63,16 +70,22 @@ export interface OlderLoader {
 }
 
 /**
- * scroller 안의 표지가 «화면 + ahead» 안에 들어오면 load 를 부른다.
+ * scroller 안의 표지가 «화면 + ahead» 안에 들어오면 load 를 부른다 — 단 사람이 위로 올린 뒤에만(또는 목록이 스크롤도 안 될 만큼 짧을 때만).
  *  load 는 성공이면 true(붙였다 — 표지를 새로 그렸어도 된다), 실패면 false(표지에 실패를 적었다 — 여기서는 멈춘다).
  */
 export function olderLoader(scroller: HTMLElement, load: () => Promise<boolean>, ahead: string = OLDER_AHEAD): OlderLoader {
   let target: HTMLElement | null = null;
+  //  #4996 — 사람이 위로 올렸나. 한 번 올리면 이 목록에선 계속 참이다(다시 바닥에 머물면 표지가 멀어 어차피 안 부른다).
+  //   «위로» 는 scrollTop 이 줄었다는 것 — 우리가 움직이는 스크롤(바닥으로 · 끼운 만큼 내리기)은 늘 늘리는 쪽이라 섞이지 않는다.
+  let armed = false;
+  let lastTop = scroller.scrollTop;
+  //  스크롤이 안 생길 만큼 짧다 — 사람이 올릴 수 없으니 생길 때까지는 채운다. 가려진 목록(0 · 0)은 관찰자가 «안 보임» 이라 여기 안 온다.
+  const unfilled = (): boolean => scroller.scrollHeight <= scroller.clientHeight + 1;
   let near = false;      // 표지가 그 거리 안에 있나 — 관찰자가 알려 준 마지막 값
   let busy = false;      // 한 번에 하나
   let dead = false;
   const run = (): void => {
-    if (busy || !near || !target) return;
+    if (busy || !near || !target || !(armed || unfilled())) return;
     const t = target;
     busy = true;
     load().then((ok) => ok, () => false).then((ok) => {
@@ -91,14 +104,29 @@ export function olderLoader(scroller: HTMLElement, load: () => Promise<boolean>,
     for (const e of ents) if (e.target === target) near = e.isIntersecting;
     run();
   }, { root: scroller, rootMargin: `${ahead} 0px 0px 0px` });
+  const arm = (): void => { if (armed || dead) return; armed = true; run(); };
+  //  ⚠ 바닥에 붙은 채 줄었으면 «올림» 이 아니다 — 아래 내용이 줄어(접힘·제자리 갱신) 브라우저가 scrollTop 을 끌어내린 것이다(#1635 클램프).
+  const onScroll = (): void => {
+    const t = scroller.scrollTop;
+    if (t < lastTop - 1 && t < scroller.scrollHeight - scroller.clientHeight - 1) arm();
+    lastTop = t;
+  };
+  const onWheel = (e: WheelEvent): void => { if (e.deltaY < 0) arm(); };
+  scroller.addEventListener('scroll', onScroll, { passive: true });
+  scroller.addEventListener('wheel', onWheel, { passive: true });
   return {
     watch(bar) {
       if (dead || bar === target) return;
       if (target) io.unobserve(target);
       target = bar; near = false;
+      //  목록을 비웠다(다른 대화로 바뀜)·처음에 닿았다 — 새 목록은 사람이 다시 올릴 때부터. 비우며 꼭대기로 튄 스크롤은 «올림» 이 아니다.
+      if (!bar) { armed = false; lastTop = scroller.scrollTop; }
       if (bar) io.observe(bar);
     },
-    retry() { run(); },
-    destroy() { dead = true; io.disconnect(); target = null; },
+    retry() { armed = true; run(); },
+    destroy() {
+      dead = true; io.disconnect(); target = null;
+      scroller.removeEventListener('scroll', onScroll); scroller.removeEventListener('wheel', onWheel);
+    },
   };
 }

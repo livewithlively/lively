@@ -48,7 +48,7 @@ import { EMPTY_BOOK, closeSlot, closeTabGuests, openGuest, shownSlot, type Guest
 import { renderConnect, renderConnectApp, renderConnectData } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { refreshDocks } from './pane-dock.js';   // #4443 — 곁칸 독의 설정·고정도 사람이 고른 것(서버 정본)이다
-import { setViewers } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
+import { setViewers, activeNow, noteActivity, forgetHeard, SESSION_VIEW_EVENT } from './presence.js';   // #2116 — 열람 도장의 응답에 실려 오는 '지금 보고 있는 사람'
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 창의 타임라인도 세션 전체(대화 사슬)를 본다
@@ -738,6 +738,9 @@ export async function bootV2(): Promise<void> {
   window.addEventListener('hashchange', () => { setTimeout(markViewedSessionSeen, 0); });
   //  창을 닫는다 — 떠남을 끝까지 보낸다(keepalive). 새로고침도 여기로 오지만, 다시 뜬 화면이 곧바로 도장을 찍는다.
   window.addEventListener('pagehide', () => { if (viewingSid) { leaveViewed(viewingSid, true); viewingSid = ''; } });
+  //  #4996 — 세션 화면이 터미널 ↔ 대화로 보기를 바꿨다 → 곧바로 도장(그 값을 싣는다). 손길은 창 전체에서 센다(v2/presence.ts activeNow).
+  window.addEventListener(SESSION_VIEW_EVENT, () => { setTimeout(() => markViewedSessionSeen(true), 0); });
+  for (const t of ['keydown', 'pointerdown', 'wheel', 'touchstart']) window.addEventListener(t, noteActivity, { capture: true, passive: true });
   histStamp();     // 첫 화면도 히스토리의 한 칸이다 — 안 찍어 두면 되돌아왔을 때 '새로 감'으로 오인한다
   bindAltOpen();
   // #3784 — 우클릭 메뉴. 뿌리 하나가 듣고 표(data-ctx / data-ctx-surface)를 위로 찾는다. 셸 자체가 맨 바깥 표면.
@@ -2269,13 +2272,14 @@ function viewedSessionId(): string {
 let viewingSid = '';
 /** 이 세션 화면을 떠났다 — 서버가 남은 사람들에게 새 얼굴 줄을 민다. 실패는 삼킨다(TTL 이 늦게라도 걷는다). */
 function leaveViewed(sid: string, keepalive = false): void {
+  forgetHeard(sid);   // #4996 — 떠난 뒤엔 밀어 주는 얼굴 줄을 못 받는다 — 다시 올 땐 첫 도장 응답으로 판정한다
   seenSentAt.delete(sid);   // 곧 돌아오면 15초를 기다리지 않고 바로 다시 도장을 찍는다(돌아온 것도 곧바로 보이게)
   //  #4876 — 떠난 때를 이 브라우저에 적어 둔다. 곁칸 «콘솔» 이 «다녀온 사이» 의 기준으로 읽는다(서버엔 사람별 열람 시각이 없다 — #4783).
   try { writeLeftAt(localStorage, sid, Date.now()); } catch { /* 저장이 막힌 브라우저 */ }
   void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/leave`, Object.assign({ method: 'POST', body: '{}' }, keepalive ? { keepalive: true } : {}))
     .catch(() => { /* 비치명 */ });
 }
-function markViewedSessionSeen(): void {
+function markViewedSessionSeen(force = false): void {
   //  ⚠ 창이 숨은 것은 떠난 것이 아니다(다른 앱을 잠깐 본다) — 도장만 멎고 자리는 서버 TTL 이 늦게 걷는다.
   if (document.hidden) return;
   const sid = viewedSessionId();
@@ -2283,10 +2287,16 @@ function markViewedSessionSeen(): void {
   viewingSid = sid;
   if (!sid) return;
   const now = Date.now();
-  if (now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;
+  //  force(#4996) — 터미널 ↔ 대화로 보기가 바뀌었다. 다음 도장(≤15초)까지 남이 옛 값으로 판정하지 않게 곧바로 찍는다.
+  if (!force && now - (seenSentAt.get(sid) || 0) < SEEN_EVERY_MS) return;
   seenSentAt.set(sid, now);
   // #2116 — 도장의 응답이 곧 '지금 이 세션을 보고 있는 사람'이다. presence 를 위한 폴링을 따로 두지 않는다.
-  void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/seen`, { method: 'POST', body: '{}' })
+  //  #4996 — 이 화면으로 터미널을 보고 있나 · 손길이 있나를 싣는다(다음에 들어오는 사람이 대화창으로 비켜 설지의 재료 — session-chat.ts yieldTerm).
+  //   붙은 화면이 아직 다른 세션 것이면(주소가 막 바뀌었다) 싣지 않는다 — 서버는 그 사람의 값을 그대로 둔다.
+  const tab = tabsApi?.current();
+  const chat = tab && tab.chat && tab.chat.id === sid ? tab.chat : null;
+  const body = chat && chat.viewMode ? { view: chat.viewMode(), active: activeNow() } : {};
+  void api(`/api/ui/terminal/sessions/${encodeURIComponent(sid)}/seen`, { method: 'POST', body: JSON.stringify(body) })
     .then((r: any) => setViewers(sid, r && r.viewers))
     .catch(() => { seenSentAt.delete(sid); });   // 못 찍었으면 다음 틱에 다시 시도한다
 }

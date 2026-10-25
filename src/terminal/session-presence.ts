@@ -21,7 +21,10 @@ import { currentTenant } from "../org/tenant-context.js";
 const TTL_MS = 45_000;
 const STAMP_MS = 15_000;   // 화면의 도장 주기(참고값 — TTL 근거)
 
-interface Stamp { first: number; last: number }
+//  term — 이 사람이 **터미널로 보고 있고 손길이 있다**고 마지막으로 알려 온 시각(0 = 아니다·모름). #4996 — 터미널 화면은 tmux 창 크기가
+//   하나뿐이라 둘이 동시에 터미널로 보면 한 사람 화면이 깨진다. 나중에 온 사람은 이 값을 보고 대화창으로 비켜 선다(web/session-chat.ts yieldTerm).
+//   «손길» 은 화면이 판정한다(창에 초점이 있거나 2분 안에 누르기·치기·휠) — 열어만 두고 안 보는 탭이 남의 터미널을 막지 않게.
+interface Stamp { first: number; last: number; term: number }
 /** 자리 키(워크스페이스 + 세션 id) → (멤버 id → 도착·최근 도장). */
 const stamps = new Map<string, Map<string, Stamp>>();
 
@@ -77,8 +80,9 @@ const keyOf = (sessionId: string): string => (currentTenant()?.id ?? "") + "\u00
 
 const fresh = (s: Stamp, now: number): boolean => now - s.last <= TTL_MS;   // 경계(정확히 TTL)는 아직 보고 있는 것
 
-/** 이 사람이 지금 이 세션을 보고 있다. 멱등 — 이미 있으면 자리는 두고 시각만 연장한다. */
-export function markViewing(sessionId: string, memberId: string, now = Date.now()): void {
+/** 이 사람이 지금 이 세션을 보고 있다. 멱등 — 이미 있으면 자리는 두고 시각만 연장한다.
+ *  onTerm(#4996) — 터미널로 보고 있고 손길이 있나. 안 실어 온 도장(구 화면)은 그 값을 건드리지 않는다. */
+export function markViewing(sessionId: string, memberId: string, now = Date.now(), onTerm?: boolean): void {
   if (!sessionId || !memberId) return;
   const k = keyOf(sessionId);
   let m = stamps.get(k);
@@ -86,9 +90,9 @@ export function markViewing(sessionId: string, memberId: string, now = Date.now(
   const cur = m.get(memberId);
   lastStampAt.set(k, now);   // #4695 — 자리를 비워도 남는 «마지막 도장»(끝난 시각의 재료)
   // 살아 있는 도장은 **연장만** 한다 — first 를 그대로 두는 것이 곧 '자리 유지'다.
-  if (cur && fresh(cur, now)) { cur.last = now; return; }
+  if (cur && fresh(cur, now)) { cur.last = now; if (onTerm !== undefined) cur.term = onTerm ? now : 0; return; }
   // 처음 왔거나, 만료된 뒤 돌아왔다 — 그 사이 실제로 자리를 비웠으므로 새 도착으로 친다(first 를 지금으로).
-  m.set(memberId, { first: now, last: now });
+  m.set(memberId, { first: now, last: now, term: onTerm ? now : 0 });
 }
 
 /** 지금 이 세션을 보고 있는 멤버 id — 도착 순. 늙은 도장은 여기서 함께 버린다. */
@@ -101,6 +105,13 @@ function viewersAt(k: string, now: number): string[] {
   for (const [uid, s] of m) if (!fresh(s, now)) m.delete(uid);
   if (!m.size) { stamps.delete(k); return []; }
   return [...m.entries()].sort((a, b) => a[1].first - b[1].first).map(([uid]) => uid);
+}
+
+/** #4996 지금 이 세션을 **터미널로** 보고 있고 손길이 있는 멤버 id(도착 순) — 그 알림도 도장과 같은 TTL 안이어야 한다. */
+export function terminalViewersOf(sessionId: string, now = Date.now()): string[] {
+  const k = keyOf(sessionId);
+  const m = stamps.get(k);
+  return viewersAt(k, now).filter((uid) => { const s = m?.get(uid); return !!s && s.term > 0 && now - s.term <= TTL_MS; });
 }
 
 /**
@@ -138,11 +149,12 @@ export function presenceShifted(sessionId: string, ids: readonly string[]): bool
  *  워크스페이스는 이 요청의 것(hereSlug) — 매니지드 공유 게이트웨이에서 같은 아이디의 다른 워크스페이스로 새지 않는다(#4054).
  * @returns 민 스트림 수(안 바뀌었으면 0)
  */
-export function pushViewers(sessionId: string, faces: ReadonlyArray<{ id: string; name: string }>): number {
-  if (!presenceShifted(sessionId, faces.map((f) => f.id))) return 0;
+export function pushViewers(sessionId: string, faces: ReadonlyArray<{ id: string; name: string; term?: boolean }>): number {
+  //  #4996 — «터미널로 보나» 가 바뀐 것도 바뀐 것이다(같은 얼굴 줄이어도 민다 — 다음에 들어오는 사람의 판정 재료라 화면도 같은 값을 들고 있어야 한다).
+  if (!presenceShifted(sessionId, faces.map((f) => f.id + (f.term ? "\u0001t" : "")))) return 0;
   const ts = Date.now();
   const ws = hereSlug();
-  const viewers = faces.map((f) => ({ id: f.id, name: f.name }));
+  const viewers = faces.map((f) => ({ id: f.id, name: f.name, term: !!f.term }));
   let n = 0;
   for (const f of faces) n += publishNotify({ ws, member: f.id }, { type: "presence", session: sessionId, viewers, key: `p:${sessionId}:${ts}`, ts });
   return n;
