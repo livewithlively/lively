@@ -11,6 +11,8 @@
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
@@ -19,7 +21,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
 
 const { sessionOfKey, tabNoOfKey, keyOfTab, slotOfKey, dockScale } = await import(join(root, "public/app/v2/browser-tabs.js"));
 const { evalSource, callSource } = await import(join(root, "public/app/lib/browser-page.js"));
-const { loadAndWait, captureFrame, scrollPlan } = await import(join(root, "public/app/v2/browser-host-kit.js"));
+const { loadAndWait, captureFrame, scrollPlan, hostErrorKind, PAUSED_MSG, NO_TAB_MSG, missingTabMsg, shotStuckMessage } = await import(join(root, "public/app/v2/browser-host-kit.js"));
 
 // panes-kit 의 저장 열쇠 규칙(같은 규칙을 글로 옮긴 것 — panes-kit 은 DOM 을 끌어와 node 에서 못 부른다).
 //  ⚠ panes-kit.ts slotStoreKey 가 바뀌면 이 줄도 같이 바꿔야 한다(그때 이 표가 왕복을 다시 잰다).
@@ -317,6 +319,44 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
   eq(dockScale(tab("docked", 0.755)), 0.755, "D1 칸에 붙은 탭은 칸 배율");
   eq([dockScale(tab("warm", 0.5)), dockScale(tab("cold", 0.5))], [1, 1], "D2 대기·차가움은 1");
   eq([10, 0.01, NaN].map((z) => dockScale(tab("docked", z))), [4, 0.1, 1], "D3 경계 — 4 로 · 0.1 로 · 못 읽으면 1");
+}
+
+// ── E. 데스크톱 오류 문구 → 원격 화면 상태(hostErrorKind) — 문구는 kit 상수에서만 만든다(웹 판 원격 화면이 이 판정을 쓴다) ──
+{
+  const E = hostErrorKind;
+  eq(E(PAUSED_MSG), "paused", "E1 [AI 멈춤] 문구 → paused");
+  eq([E(NO_TAB_MSG), E(missingTabMsg("3")), E(missingTabMsg(12))], ["empty", "empty", "empty"], "E2 탭 없음 · 그 번호의 탭 없음 → empty");
+  eq(E(shotStuckMessage(5000)), "stuck", "E3 화면을 찍지 못함 → stuck");
+  eq([E("Error: " + PAUSED_MSG), E("앞말 " + missingTabMsg("2") + " 뒷말"), E("x " + shotStuckMessage(3000))], ["paused", "empty", "stuck"], "E4 앞뒤에 무엇이 붙어도 들어 있으면 같은 상태");
+  eq([E("브라우저 연결이 방금 끊겼습니다"), E(""), E(undefined), E(null)], ["other", "other", "other", "other"], "E5 그 밖 · 빈 값 → other");
+  eq(missingTabMsg("9"), "탭 9 이 없습니다 — browser_tabs 로 이 세션의 탭을 확인하세요.", "E6 그 번호의 탭이 없을 때 데스크톱이 내는 문구(AI 가 읽는 문장 — 고치면 이 행도 고친다)");
+}
+
+// ── T2' — 없는 번호의 탭을 만드는 것은 이동(navigate)뿐 (#4993 (A) 격리 리뷰) ─────────────────────
+//  웹 판 원격 화면이 칸 번호로 처음 주소를 열 때 그 탭이 있어야 한다 — 그래서 이동은 만든다. 사람에게 넘기기 · 보기 · 누르기는
+//  종전대로 «탭 n 이 없습니다» 다(넘기기가 빈 탭을 만들어 사람에게 부탁을 걸면, 오타 난 번호 하나로 빈 탭이 쌓인다).
+//  화면 층(webview)을 세워야 하는 모듈이라 값으로 못 돌린다 — 부르는 자리를 구문 나무(TS AST)로 센다(문자열 정규식이 아니라).
+{
+  const HOST = readFileSync(join(root, "web/v2/browser-host.ts"), "utf8");
+  const sf = ts.createSourceFile("browser-host.ts", HOST, ts.ScriptTarget.Latest, true);
+  const calls = [];
+  const visit = (n, fn) => {
+    if (ts.isFunctionDeclaration(n) && n.name) fn = n.name.text;
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && (n.expression.text === "withTab" || n.expression.text === "pickTab")) {
+      calls.push({ callee: n.expression.text, fn, args: n.arguments.map((a) => a.getText(sf)) });
+    }
+    ts.forEachChild(n, (c) => visit(c, fn));
+  };
+  visit(sf, null);
+  const numbered = calls.filter((c) => (c.callee === "withTab" && c.args[4] === "true") || (c.callee === "pickTab" && c.args[3] === "true")).map((c) => c.fn);
+  const passThrough = calls.filter((c) => c.callee === "pickTab" && c.args.length >= 4 && c.args[3] !== "true").map((c) => `${c.fn}:${c.args[3]}`);
+  eq([calls.length > 8, numbered, passThrough], [true, ["opNavigate"], ["withTab:makeNumbered"]], "T2' 없는 번호의 탭은 이동(opNavigate)만 만든다 — 넘기기 · 보기 · 누르기는 안 만든다");
+  //  T2'' 번호를 짚어 만든 탭은 AI 의 기본 탭(current)으로 삼지 않는다 — 있는 탭을 번호로 짚을 때와 같다(사람이 웹 판에서 연 탭이
+  //   AI 의 «지금 쓰는 탭» 이 되지 않게). pickTab 안 «!t && makeNumbered» 갈래에 current.set 이 없어야 한다.
+  const ifs = [];
+  const findIf = (n) => { if (ts.isIfStatement(n) && n.expression.getText(sf).replace(/\s+/g, " ") === "!t && makeNumbered") ifs.push(n.thenStatement.getText(sf)); ts.forEachChild(n, findIf); };
+  findIf(sf);
+  eq([ifs.length, ifs.some((x) => /current\.set/.test(x))], [1, false], "T2'' 번호를 짚어 만든 탭은 AI 기본 탭(current)이 아니다");
 }
 
 console.log(`\n${pass} 통과`);

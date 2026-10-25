@@ -16,7 +16,7 @@ import {
   onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession, wakeTab,
 } from './browser-tabs.js';
 import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollBy, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
-import { captureFrame, loadAndWait, scrollPlan } from './browser-host-kit.js';
+import { NO_TAB_MSG, PAUSED_MSG, captureFrame, loadAndWait, missingTabMsg, scrollPlan } from './browser-host-kit.js';
 
 /** 게이트웨이와 맞춘 규약 판(src/browser/relay.ts BROWSER_PROTOCOL). */
 const PROTOCOL = 1;
@@ -25,9 +25,6 @@ const SHOT_MAX = 1568;
 const SESSIONLESS = 'mcp';
 
 interface Cmd { id: string; op: string; session: string | null; args: Record<string, any>; ttl_ms?: number }
-
-/** 사람이 [AI 멈춤]을 눌러 둔 탭 — 그 탭에서는 보기·닫기·고르기·콘솔 읽기를 포함해 AI 명령을 거절한다. */
-const PAUSED_MSG = '사람이 이 탭에서 AI 조작을 멈춰 두었습니다 — 사람에게 [AI 멈춤]을 풀어 달라고 하세요.';
 
 let started = false;
 let hostId = '';
@@ -190,11 +187,16 @@ async function handle(cmd: Cmd): Promise<unknown> {
 }
 
 /** 이 세션의 탭을 고른다 — tab 을 주면 그 번호, 아니면 AI 가 지금 쓰는 탭 → 사람에게 보이는 탭 → 아무 탭 → 저장된 주소(dormant). */
-function pickTab(S: string, tabArg: unknown, create: boolean): BTab {
+function pickTab(S: string, tabArg: unknown, create: boolean, makeNumbered = false): BTab {
   if (tabArg !== undefined && tabArg !== null && String(tabArg) !== '') {
     const key = keyOfTab(S, String(tabArg));
-    const t = getTab(key) || (storedUrls()[key] ? ensureTab(key) : null);
-    if (!t) throw new Error(`탭 ${tabArg} 이 없습니다 — browser_tabs 로 이 세션의 탭을 확인하세요.`);
+    let t = getTab(key) || (storedUrls()[key] ? ensureTab(key) : null);
+    //  이동(navigate)만 그 번호의 탭이 없으면 만든다 — 웹 판 원격 화면이 칸의 탭 번호로 처음 주소를 열 때(#4993 (A)).
+    //   보기 · 누르기 · 사람에게 넘기기는 만들지 않는다(없는 탭을 «본» 결과가 빈 페이지면 그게 거짓이고, 넘기기는 빈 탭에 부탁을 건다).
+    //   번호를 짚어 만든 탭은 AI 의 기본 탭(current)으로 삼지 않는다 — 있는 탭을 번호로 짚을 때와 같다(사람이 웹 판에서 연 탭이
+    //   AI 의 «지금 쓰는 탭» 이 되지 않게 — 격리 리뷰).
+    if (!t && makeNumbered) t = ensureTab(key, 'about:blank');
+    if (!t) throw new Error(missingTabMsg(tabArg));
     return t;
   }
   const cur = current.get(S);
@@ -206,15 +208,15 @@ function pickTab(S: string, tabArg: unknown, create: boolean): BTab {
   const stored = Object.entries(storedUrls()).filter(([k, u]) => u && sessionOfKey(k) === S).map(([k]) => k)
     .sort((x, y) => Number(tabNoOfKey(x)) - Number(tabNoOfKey(y)))[0];
   if (stored) { const t = ensureTab(stored); current.set(S, t.key); return t; }
-  if (!create) throw new Error('이 세션에 열린 브라우저 탭이 없습니다 — browser_navigate 로 주소를 먼저 여세요.');
+  if (!create) throw new Error(NO_TAB_MSG);
   const t = ensureTab(S, 'about:blank');
   current.set(S, t.key);
   return t;
 }
 
 /** 탭을 골라 AI 표시를 켠 채 일을 시킨다. 사람이 [AI 멈춤]을 눌러 둔 탭이면 거절한다. */
-async function withTab<T>(S: string, a: Record<string, any>, create: boolean, fn: (t: BTab) => Promise<T>): Promise<T> {
-  const t = pickTab(S, a.tab, create);
+async function withTab<T>(S: string, a: Record<string, any>, create: boolean, fn: (t: BTab) => Promise<T>, makeNumbered = false): Promise<T> {
+  const t = pickTab(S, a.tab, create, makeNumbered);
   if (t.paused) throw new Error(PAUSED_MSG);
   markAi(t);
   revealOnce(t);
@@ -356,7 +358,7 @@ async function opNavigate(S: string, a: Record<string, any>): Promise<unknown> {
       await loadAndWait(t.view, () => t.view.reload(), ms);
     }
     return summary(t);
-  });
+  }, true);   // 이동만 그 번호의 탭이 없으면 만든다(pickTab makeNumbered)
 }
 
 /**

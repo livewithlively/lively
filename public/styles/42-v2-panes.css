@@ -792,6 +792,22 @@ body.v2-splitting-x .bt-view, body.v2-splitting-y .bt-view, body.cm-dragging .bt
 .pn-web-ho-t { flex: 1; min-width: 160px; word-break: keep-all; }
 .pn-web-ho-acts { flex: none; display: inline-flex; gap: 6px; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+/* ── 웹 판 원격 화면(#4993 (A)) — 데스크톱 앱 탭의 스크린샷을 그리고, 누르고 쓰는 것을 그 탭으로 보낸다(web/v2/remote-web.ts) ──
+   그림은 무대 안에 통째로 맞춰 넣는다(가로 · 세로 중 먼저 닿는 쪽, 가운데) — 무대가 구르지 않아야 휠이 전부 원격 페이지로 간다
+   (무대가 구르는데 휠을 막으면 세로로 긴 그림 아래에 영영 못 닿는다 — 격리 리뷰). 좌표는 그림 상자로 재므로 맞춤과 무관하다.
+   글은 숨긴 입력칸(sink)이 받는다 — 칸은 편집 칸이 아니라 한글 조합이 안 일어난다. 16px — 아이폰은 16px 미만 입력칸에
+   초점이 가면 화면을 확대한다(50-mobile.css 머리말). */
+.pn-remote-stage { overflow: hidden; }
+.pn-remote-img { position: absolute; inset: 0; margin: auto; display: block; max-width: 100%; max-height: 100%; width: auto; height: auto;
+  user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+.pn-remote-sink { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; margin: 0; resize: none; overflow: hidden; pointer-events: none; font-size: 16px; }
+.pn-remote-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
+  text-align: center; font-size: 13px; line-height: 1.6; color: var(--muted); background: var(--surface); word-break: keep-all; }
+.pn-remote-msg[hidden] { display: none; }
+/* 아래 줄은 두 줄까지 — 긴 안내가 여러 줄로 서면 그림 칸이 줄어 같은 휠이 더 멀리 갔다(전문은 title). */
+.pn-remote-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 화면이 굴리기를 따라오는 중 — 누르면 안 간다(«그림이 멈춘 뒤 다시»). 커서로 미리 알린다. */
+.pn-web-remote[data-behind] .pn-remote-img { cursor: progress; }
 /* ⚠ position: relative — 배율 알약이 이 칸의 오른쪽 아래에 선다(무대 안에 두면 내용과 함께 굴러간다). */
 .pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
 /* ── 뷰어 무대 — 펴 놓은 것이 서는 자리 (#762) ─────────────────────────────────

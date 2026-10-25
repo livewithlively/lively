@@ -16,6 +16,7 @@ import { authDownload, upDropZone, upFromInput, upSend, upToast, type UpItem } f
 import { confirmDialog } from '../ui-primitives.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { remoteWebPart } from './remote-web.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { type BTab, answerHandoff, dockTab, ensureTab, getTab, onTabEvent, rememberUrl, setPaused } from './browser-tabs.js';   // #4993 AI 와 같이 쓰는 탭(데스크톱)
@@ -23,7 +24,7 @@ import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
 import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, WEB_OPEN_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
 import { htmlFrame, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
@@ -569,9 +570,6 @@ function archivePart(ctx: PartCtx): Part {
 //   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
 /** 웹 칸에 실린 주소의 저장 열쇠 — 세션마다 따로다(webPart 와 같은 규칙을 써야 서로 어긋나지 않는다). */
 const WEB_URL_KEY = 'pn_web_url';
-/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다.
- *  ⚠ 이 신호는 **곁칸 한 벌 안에서만** 돈다(ctx.paneRoot). 문서 전체로 뿌리면 다른 세션 탭까지 물든다. */
-const WEB_OPEN_EVT = 'pn:open-web';
 /** 밖(다른 부품)에서 웹 칸에 주소를 싣는 유일한 통로.
  *  ⚠ 저장을 **먼저** 한 다음 알린다 — 칸이 아직 없으면 셸이 그때 만드는데, 새로 만들어진 웹 칸은
  *   이벤트를 이미 놓친 뒤라 저장된 값에서 주소를 읽는다(둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다).
@@ -690,10 +688,13 @@ function makeZoom(o: ZoomOpts): Zoom {
   };
 }
 
-function webPart(ctx: PartCtx): Part {
+function webPart(ctx: PartCtx, frameOnly = false): Part {
   //  데스크톱 앱(#1829 브라우저 서피스)이면 AI 와 같이 쓰는 탭으로 그린다(#4993) — webview 는 칸 안이 아니라 브라우저 층에 산다.
   //   끼워 넣은 판(미리보기 안 라이블리)은 제외한다 — 거기엔 서피스가 없고(preload 가 없다) 탭 대장도 바깥 것이 아니다.
   if (hasBrowserSurface() && !EMBEDDED) return liveWebPart(ctx);
+  //  웹 브라우저로 연 라이블리 — 그 사람의 데스크톱 앱이 켜져 있으면 그 앱 탭의 원격 화면(#4993 (A)), 아니면 아래 iframe 칸
+  //   (frameOnly = 원격 화면이 «데스크톱 없음» 일 때 이 칸을 그대로 쓰려고 부른 것).
+  if (!EMBEDDED && !frameOnly) return remoteWebPart(ctx, () => webPart(ctx, true));
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
   // 재우기 상태(아래 '안 보이면 재운다') — 주소를 싣는 모든 길(load·adopt·reload)이 이걸 만지므로 맨 위에 둔다.

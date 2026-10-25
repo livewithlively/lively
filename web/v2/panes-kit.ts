@@ -204,6 +204,9 @@ export const VIEWER_EVT = 'pn-viewer-open';
 /** **배달** — 셸이 «어느 뷰어에 펼지» 정한 뒤 그 탭 앞으로 보내는 신호(#762). 요청(VIEWER_EVT)과 이름이
  *  달라야 한다: 같으면 셸이 자기 신호를 되받아 무한고리가 된다. 뷰어는 이 신호만 듣는다. */
 export const VIEWER_TO_EVT = 'pn-viewer-to';
+/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다. 세 웹 칸(iframe · 데스크톱 탭 · 웹 판 원격 화면)이 다 듣는다.
+ *  ⚠ 이 신호는 **곁칸 한 벌 안에서만** 돈다(ctx.paneRoot). 문서 전체로 뿌리면 다른 세션 탭까지 물든다. */
+export const WEB_OPEN_EVT = 'pn:open-web';
 /** 어떤 파일을 펴 두었나 — 세션마다 따로(곁칸 부품은 그 세션의 것). */
 export const ED_PATH_KEY = 'pn_ed_path';
 /** 그 부품 인스턴스의 저장 열쇠 — 첫 탭은 세션 열쇠 **그대로**(옛 기억을 그대로 물려받는다),
