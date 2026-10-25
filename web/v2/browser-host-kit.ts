@@ -111,9 +111,12 @@ export interface WheelStep { deltaX: number; deltaY: number }
  *  · 보이는 창은 휠 — 페이지가 받는 것이 진짜 입력이어야 휠을 듣는 페이지(지도·캐러셀)가 사람과 같게 움직인다.
  *    한 번에 크게 보내면 부드러운 스크롤 도중에 재서 덜 간 것으로 보인다(실측: 1500 을 보내고 450ms 뒤 436) → 300px 씩.
  *  · Electron 휠 부호: deltaY 가 음수면 내용이 위로 올라간다(= 아래로 굴림). 실측 -500 → scrollY 500. 페이지 좌표는 그 반대.
+ *  · scale = 사람 칸에 겹친 탭의 배율(browser-tabs dockScale). 휠 거리는 그 역수만큼 커져 들어가므로(실측: 칸 배율 ≈0.755 에서
+ *    1200→1590) 휠에 배율을 곱해 보낸다. 휠은 정수라 조각마다 반올림하되 **누적 경계로** 나눠 합이 거리×배율과 같게 한다.
+ *    배율을 모르거나 이상하면 1. 숨은 창의 페이지 굴리기는 페이지 좌표라 배율과 무관하다.
  *  거리는 1~20,000px 로 자른다(JSON 의 1e999 는 Infinity — 상한이 없으면 끝없이 굴렀다, #4993 격리 리뷰). 방향을 모르면 아래.
  */
-export function scrollPlan(hidden: boolean, amount: number, dir: string): { page: { dx: number; dy: number } } | { wheel: WheelStep[] } {
+export function scrollPlan(hidden: boolean, amount: number, dir: string, scale = 1): { page: { dx: number; dy: number } } | { wheel: WheelStep[] } {
   const n = Math.max(1, Math.min(20_000, Math.floor(amount) || 600));
   const vertical = dir !== 'left' && dir !== 'right';
   const forward = dir !== 'up' && dir !== 'left';
@@ -121,10 +124,16 @@ export function scrollPlan(hidden: boolean, amount: number, dir: string): { page
     const d = forward ? n : -n;
     return { page: vertical ? { dx: 0, dy: d } : { dx: d, dy: 0 } };
   }
+  const z = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const total = Math.max(1, Math.round(n * z));
   const wheel: WheelStep[] = [];
-  for (let left = n; left > 0; left -= 300) {
-    const d = (forward ? -1 : 1) * Math.min(300, left);
-    wheel.push(vertical ? { deltaX: 0, deltaY: d } : { deltaX: d, deltaY: 0 });
+  let sent = 0;
+  for (let done = 0; done < n;) {
+    done = Math.min(n, done + 300);
+    const upto = done === n ? total : Math.round(done * z);
+    const d = (forward ? -1 : 1) * (upto - sent);
+    sent = upto;
+    if (d !== 0) wheel.push(vertical ? { deltaX: 0, deltaY: d } : { deltaX: d, deltaY: 0 });
   }
   return { wheel };
 }

@@ -404,10 +404,24 @@ function applyMode(t: BTab, mode: TabMode): void {
   }
 }
 
+/** 칸이 준 배율을 겹쳐 맞추기에 쓸 값으로 — 0.1~4 로 자르고, 못 읽으면 1. */
+export function clampScale(v: unknown): number {
+  return Math.max(0.1, Math.min(4, Number(v) || 1));
+}
+
+/**
+ * 지금 이 탭에 걸린 배율 — 사람 칸에 겹쳐 있으면(docked) 칸 배율, 아니면 1(대기는 transform 이 없다).
+ *  휠 거리는 이 배율의 역수만큼 커져 들어간다(실측 2026-10-25 상민님 앱: 칸 배율 ≈0.755 에서 1200→1590 · 600→795) —
+ *  browser-host 가 휠에 이 값을 곱해 보낸다(browser-host-kit scrollPlan).
+ */
+export function dockScale(t: Pick<BTab, 'mode' | 'scale'>): number {
+  return t.mode === 'docked' ? clampScale(t.scale()) : 1;
+}
+
 function place(t: BTab): void {
   const a = t.anchor!;
   const r = a.getBoundingClientRect();
-  const z = Math.max(0.1, Math.min(4, Number(t.scale()) || 1));
+  const z = clampScale(t.scale());
   const lw = Math.max(50, Math.round(r.width / z));
   const lh = Math.max(50, Math.round(r.height / z));
   if (t.mode !== 'docked') t.dockZ = dockZOf(a);
