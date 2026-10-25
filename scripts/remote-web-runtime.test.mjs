@@ -25,9 +25,11 @@
 //  R12b 누르고 0.1초 뒤 친 글 — 누르기가 먼저, 글이 뒤(두 번 누름을 기다리는 누르기를 글이 앞지르지 않는다)
 //  R7c 데스크톱이 한 번 «없음» 이었다가 2.5초 안에 돌아온다 — iframe 칸으로 안 바뀐다(두 번 물어 둘 다 없을 때만)
 //  R13 트랙패드처럼 2초 굴림(16ms 간격) — scroll act 6번 이하 · 굴린 만큼 다 간다 · 끝난 뒤 2초 안에 다 굴렀다 · 굴리는 동안에도 그림이 온다
-//  R13b 1초 굴리고 0.1초 뒤 누름 — 누르기는 1.6초 안에 나가고, 그 앞에 굴린 것이 다 먼저 간다(누른 뒤 스크롤 없음)
-//  R13c 아주 느린 원격(동작 2초)에서 0.3초 굴리고 0.1초 뒤 누름 — 누르기 전에 굴린 것이 다 먼저 간다(누르기 뒤 스크롤 없음) · 굴린 만큼 다
+//  R13b 1초 굴리고 0.1초 뒤 누름 — 화면이 굴리기를 따라오는 중이라 누르기를 안 보내고 알린다(보이는 그림의 그 자리는 원격에선
+//       이미 굴러간 다른 곳이다) · 2.5초 안에 따라오고, 그 뒤 누르면 간다(굴리기 다음)
+//  R13c 아주 느린 원격(동작 2초)에서 0.3초 굴리고 0.1초 뒤 누름 — 따라오는 동안엔 안 가고, 다 따라온 뒤 누르면 굴리기 다음에 간다 · 굴린 만큼 다
 //  R13d 같은데 누르지 않는다 — 굴리기가 끝날 때 원격이 바빠도, 줄이 비면 남은 휠이 간다(굴린 만큼 다)
+//  R13e 짧게 굴리고 0.3초 뒤 누름 — 굴리기는 나갔지만 그 결과 그림이 아직 안 왔다 → 따라오는 중이라 안 보낸다(그림 번호로 가른다)
 //  R14 iframe 칸에서 세션을 바꾸면 곧바로 묻는다 — 3초 안에 원격 화면(30초를 기다리지 않는다)
 //  R14b 원격 화면에서 세션을 바꾸면 상태를 다시 묻지 않고 곧바로 새 세션 화면을 받는다(상태 묻기가 3초 걸려도 1초 안에)
 //  R15 묻는 사이 세션 없는 자리로 가면 원격 화면이 서지 않는다 · 그 자리 열쇠로 화면을 받지 않는다
@@ -36,6 +38,12 @@
 //  R17 클립보드 API 가 없는 자리(https 아님)에서 ⌘C — 알림이 뜨고 원격 글을 읽으러 가지 않는다 · 페이지 오류 0
 //  R18 같은 세션을 두고 늦게 온 옛 «없음» 답(첫 묻기)이 그 사이 선 원격 화면을 iframe 칸으로 되돌리지 않는다(더 새로 물은 답이 이긴다)
 //  R19 데스크톱이 동작 하나에 끝내 답하지 않는다 — 그동안에도 화면은 받고, 60초 뒤 끊고 뒤에 친 글을 보낸다
+//  R21 섞어 친다(시드 고정 6번 × 40 — 글 · 키 · 누르기 · 두 번 누름 · 휠 · 오른쪽 누름 · 이동 · ⌘R · ⌘C, 동작 0.15~1.45초) —
+//       데스크톱이 받은 차례가 사람이 한 차례와 같다(인접한 같은 종류는 합쳐 본다 · 굴린 양도 같다)
+//  R22 늦게 온 옛 그림(먼저 보냈지만 1.5초 걸린 화면 받기)이 그 사이 온 새 그림을 덮지 않는다
+//  R23 느린 이동(4초) 중 받은 화면이 주소줄 · 칸 탭 이름을 옛 주소로 되돌리지 않는다
+//  R24 창에 초점이 돌아오면 다음 받기 간격(2초 넘게)을 기다리지 않고 곧바로(0.3초 안) 받는다
+//  R26 409 뒤 상태 묻기가 끝내 안 오면 15초 상한으로 끊고 iframe 칸으로(45초 안) — 묻기 하나가 줄 · 화면 받기를 묶지 않는다
 //  P  페이지 오류 0
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -63,19 +71,24 @@ async function PAGE_MAIN() {
 
   // 세션마다 다른 그림(색) — 칸에 그려진 그림이 어느 세션 것인지 src 로 가른다.
   const IMG = {};
-  const COLORS = ["#c00", "#0a0", "#00c", "#880", "#088", "#808"];
+  const colorOf = (i) => `hsl(${(i * 47) % 360} 70% ${35 + (i % 3) * 15}%)`;
   const imgOf = (s) => {
     if (!IMG[s]) {
       const c = document.createElement("canvas"); c.width = 400; c.height = 300;
-      const g = c.getContext("2d"); g.fillStyle = COLORS[Object.keys(IMG).length % COLORS.length]; g.fillRect(0, 0, 400, 300);
+      const g = c.getContext("2d"); g.fillStyle = colorOf(Object.keys(IMG).length); g.fillRect(0, 0, 400, 300);
       IMG[s] = c.toDataURL("image/png").split(",")[1];
     }
     return IMG[s];
   };
   const srcOf = (s) => "data:image/png;base64," + imgOf(s);
+  const keyOfSrc = (src) => Object.keys(IMG).find((k) => "data:image/png;base64," + IMG[k] === src) || null;
 
   // 가짜 데스크톱(중계 너머) — 부른 것을 다 적는다: op · 세션 머리글 · 본문 · 시작/끝 시각.
-  const F = { connected: true, statusConnected: null, statusScript: [], statusDelayScript: [], hangNext: 0, actStatus: 200, actError: "", delay: { act: 600, screenshot: 300, navigate: 300, eval: 100, status: 20 }, calls: [] };
+  //  versioned — 동작마다 페이지 판이 오르고 그림이 그 판의 것이 된다(늦게 온 옛 그림을 가른다) · trackUrl — 이동이 끝나면 그 주소가
+  //   그 세션의 주소가 된다(느린 이동 중 받은 화면은 옛 주소) · statusHang — 상태 묻기가 끝내 안 온다(끊을 때만 끝난다).
+  const F = { connected: true, statusConnected: null, statusScript: [], statusDelayScript: [], shotDelayScript: [], hangNext: 0, statusHang: false, versioned: false, ver: {}, trackUrl: false, urlOf: {},
+    actStatus: 200, actError: "", delay: { act: 600, screenshot: 300, navigate: 300, eval: 100, status: 20 }, calls: [] };
+  const hang = (init) => new Promise((_, rej) => { init.signal?.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))); });
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
   window.fetch = async (url, init = {}) => {
     const u = new URL(url, "http://x/");
@@ -86,21 +99,26 @@ async function PAGE_MAIN() {
     const body = init.body ? JSON.parse(init.body) : {};
     const rec = { op, sess, body, t0: performance.now(), t1: null };
     F.calls.push(rec);
-    if (op === "act" && F.hangNext > 0) {
-      F.hangNext--;
-      //  끝내 안 온다 — 부르는 쪽이 끊을 때만(AbortSignal) 끝난다.
-      await new Promise((_, rej) => { init.signal?.addEventListener("abort", () => rej(new DOMException("aborted", "AbortError"))); });
-    }
+    //  끝내 안 온다 — 부르는 쪽이 끊을 때만(AbortSignal) 끝난다. 끊긴 요청도 끝난 것으로 적는다(아래 settle 이 영영 기다리지 않게).
+    const hung = async () => { try { await hang(init); } catch (e) { rec.t1 = performance.now(); rec.aborted = true; throw e; } };
+    if (op === "act" && F.hangNext > 0) { F.hangNext--; await hung(); }
+    if (op === "status" && F.statusHang) await hung();
+    if (op === "act" && F.versioned) F.ver[sess] = (F.ver[sess] || 0) + 1;   // 동작이 페이지를 바꾼다
+    const verAt = F.ver[sess] || 0;
     //  상태 묻기의 답과 걸리는 시간은 **묻는 순간** 대본에서 꺼낸다(늦게 묻고 빨리 끝난 것이 앞 대본을 가로채지 않게).
     const ans = op === "status" && F.statusScript.length ? F.statusScript.shift() : null;
-    const ms = op === "status" && F.statusDelayScript.length ? F.statusDelayScript.shift() : (F.delay[op] ?? 50);
+    const ms = op === "status" && F.statusDelayScript.length ? F.statusDelayScript.shift()
+      : op === "screenshot" && F.shotDelayScript.length ? F.shotDelayScript.shift()
+      : typeof F.delay[op] === "function" ? F.delay[op]() : (F.delay[op] ?? 50);
+    rec.ms = ms;
     await sleep(ms);
+    if (op === "navigate" && F.trackUrl && body.url) F.urlOf[sess] = body.url;
     rec.t1 = performance.now();
     if (op === "status") return J({ connected: ans ?? (F.statusConnected ?? F.connected) });
     if (!F.connected) return J({ error: "데스크톱 앱이 연결돼 있지 않습니다" }, 409);
     if (op === "act" && F.actStatus !== 200) return J({ error: F.actError }, F.actStatus);
-    const res = { url: `https://site-${sess}.test/p`, title: String(sess) };
-    if (op === "screenshot" || (op === "act" && body.screenshot)) Object.assign(res, { width: 400, height: 300, scale: 1, image: { mime: "image/png", data: imgOf(sess) } });
+    const res = { url: (F.trackUrl && F.urlOf[sess]) || `https://site-${sess}.test/p`, title: String(sess) };
+    if (op === "screenshot" || (op === "act" && body.screenshot)) Object.assign(res, { width: 400, height: 300, scale: 1, image: { mime: "image/png", data: imgOf(F.versioned ? `${sess}@${verAt}` : sess) } });
     if (op === "eval") res.value = "";
     return J(res);
   };
@@ -140,6 +158,9 @@ async function PAGE_MAIN() {
   const frameShown = () => !!$(".FRAME", cur.paneRoot);
   const live = () => remoteRoot()?.dataset.state === "live" && (img()?.naturalWidth || 0) > 0 && img().getBoundingClientRect().width > 0;
   const clickImg = (detail = 1) => { const i = img(); const r = i.getBoundingClientRect(); i.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, detail })); };
+  const clickAt = (detail, fx, fy) => { const i = img(); const r = i.getBoundingClientRect(); i.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: r.left + r.width * (0.05 + 0.9 * fx), clientY: r.top + r.height * (0.05 + 0.9 * fy), detail })); };
+  const ctxMenu = () => { const i = img(); const r = i.getBoundingClientRect(); i.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 60, clientY: r.top + 60 })); };
+  const isBehind = () => remoteRoot()?.dataset.behind === "1";
   const typeText = (t) => { const s = sink(); s.focus(); s.value = t; s.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: t })); };
   const keyDown = (key, o = {}) => sink().dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...o }));
   const wheel = (dy) => { const st = $(".pn-remote-stage", cur.paneRoot); const r = img().getBoundingClientRect(); st.dispatchEvent(new WheelEvent("wheel", { deltaY: dy, deltaMode: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); };
@@ -376,22 +397,30 @@ async function PAGE_MAIN() {
     const sc = since(t, (c) => c.op === "act" && c.body.action === "scroll");
     const kNow = 400 / img().getBoundingClientRect().width;    // 그림 px / 보이는 px(찍기 배율 1)
     const imgsDuring = F.calls.filter((c) => c.t1 !== null && c.t1 >= t && c.t1 <= tEnd && (c.op === "screenshot" || (c.op === "act" && c.body.screenshot))).length;
-    R.r13 = { ok, n, acts: sc.length, total: sc.reduce((a, c) => a + Number(c.body.amount || 0), 0), want: Math.round(n * 10 * kNow), afterEnd: Math.round(Math.max(0, ...sc.map((c) => c.t1)) - tEnd), imgsDuring };
+    const withPoint = sc.length > 0 && sc.every((c) => Number.isFinite(c.body.x) && Number.isFinite(c.body.y) && c.body.x >= 0 && c.body.x < 400 && c.body.y >= 0 && c.body.y < 300);
+    R.r13 = { ok, n, acts: sc.length, total: sc.reduce((a, c) => a + Number(c.body.amount || 0), 0), want: Math.round(n * 10 * kNow), afterEnd: Math.round(Math.max(0, ...sc.map((c) => c.t1)) - tEnd), imgsDuring, withPoint };
   } catch (e) { R.errR13 = String(e && e.stack || e); }
 
-  // ── R13b · 1초 굴리고 0.1초 뒤 누른다 ───────────────────────────────────────
+  // ── R13b · 1초 굴리고 0.1초 뒤 누른다 — 화면이 따라오는 중이면 안 보낸다 ──────────────────
   try {
     mount("sA");
     const ok = await waitFor(live, 10000);
     const t = performance.now();
     while (performance.now() - t < 1000) { wheel(10); await sleep(16); }
     await sleep(100);
-    const tc = performance.now();
+    const behindAt = isBehind();
+    clickImg(1);
+    const said = /따라오는 중/.test($(".pn-remote-note", cur.paneRoot)?.textContent || "");
+    const caught = await waitFor(() => !isBehind(), 5000);
+    const caughtAfter = Math.round(performance.now() - t - 1100);
+    //  «안 보냈다» 는 줄이 다 빈 뒤에 센다 — 보내는 판이라면 그 누르기는 굴리기 뒤에 줄을 서 늦게 나간다(일찍 세면 못 본다).
+    await settle(1500, 30000);
+    const refused = since(t, (c) => c.op === "act" && /click/.test(c.body.action)).length === 0;
     clickImg(1);
     await settle(1500, 30000);
     const acts = since(t, (c) => c.op === "act");
     const ci = acts.findIndex((c) => c.body.action === "click");
-    R.r13b = { ok, wait: ci >= 0 ? Math.round(acts[ci].t0 - tc) : null, order: acts.map((c) => c.body.action), scrollsAfterClick: ci >= 0 ? acts.slice(ci + 1).filter((c) => c.body.action === "scroll").length : null };
+    R.r13b = { ok, behindAt, said, caught, caughtAfter, refused, clickAfter: ci >= 0, scrollsAfterClick: ci >= 0 ? acts.slice(ci + 1).filter((c) => c.body.action === "scroll").length : null };
   } catch (e) { R.errR13b = String(e && e.stack || e); }
 
   // ── R13c · R13d · 아주 느린 원격(동작 2초)에서 0.3초 굴린다 — 누르거나(c) 그냥 둔다(d) ─────────────
@@ -404,16 +433,37 @@ async function PAGE_MAIN() {
       let n = 0;
       while (performance.now() - t < 300) { wheel(10); n++; await sleep(16); }
       await sleep(100);
-      if (press) clickImg(1);
+      let refused = null;
+      if (press) {
+        clickImg(1);                                   // 따라오는 중 — 안 간다
+        await waitFor(() => !isBehind(), 20000);
+        await settle(2500, 30000);                     // 보내는 판이라면 굴리기 뒤에 줄을 서 늦게 나간다 — 줄이 빈 뒤에 센다
+        refused = since(t, (c) => c.op === "act" && /click/.test(c.body.action)).length === 0;
+        clickImg(1);                                   // 다 따라온 뒤 — 간다
+      }
       await settle(2500, 30000);
       F.delay.act = 600;
       const acts = since(t, (c) => c.op === "act");
       const ci = acts.findIndex((c) => c.body.action === "click");
       const kNow = 400 / img().getBoundingClientRect().width;
-      R[press ? "r13c" : "r13d"] = { ok, n, total: acts.filter((c) => c.body.action === "scroll").reduce((a, c) => a + Number(c.body.amount || 0), 0), want: Math.round(n * 10 * kNow),
+      R[press ? "r13c" : "r13d"] = { ok, n, refused, total: acts.filter((c) => c.body.action === "scroll").reduce((a, c) => a + Number(c.body.amount || 0), 0), want: Math.round(n * 10 * kNow),
         order: acts.map((c) => c.body.action), scrollsAfterClick: ci >= 0 ? acts.slice(ci + 1).filter((c) => c.body.action === "scroll").length : null };
     } catch (e) { R[press ? "errR13c" : "errR13d"] = String(e && e.stack || e); F.delay.act = 600; }
   }
+
+  // ── R13e · 짧게 한 번 굴리고(휠 3번) 0.3초 뒤 누른다 — 굴리기는 이미 나갔지만 그 결과 그림이 아직 안 왔다 ──────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    const t = performance.now();
+    for (let i = 0; i < 3; i++) { wheel(20); await sleep(16); }
+    await sleep(300);                                  // 0.12초 뒤 굴리기가 나가 0.6초 걸린다 — 지금은 나갔고 그림은 아직
+    const sentNoImg = since(t, (c) => c.op === "act" && c.body.action === "scroll").length === 1 && !F.calls.some((c) => c.t0 >= t && c.op === "act" && c.body.action === "scroll" && c.t1 !== null);
+    const behindAt = isBehind();
+    clickImg(1);
+    await settle(1500, 15000);
+    R.r13e = { ok, sentNoImg, behindAt, refused: since(t, (c) => c.op === "act" && /click/.test(c.body.action)).length === 0 };
+  } catch (e) { R.errR13e = String(e && e.stack || e); }
 
   // ── R7c · 데스크톱이 잠깐(한 번) «없음» 이었다가 돌아온다 ──────────────────────
   try {
@@ -546,6 +596,139 @@ async function PAGE_MAIN() {
     R.r19 = { ok, shotsWhileHung, typeSent: ty.length === 1 && ty[0].body.text === "x", typeAfter: ty.length ? Math.round(ty[0].t0 - t) : null };
   } catch (e) { R.errR19 = String(e && e.stack || e); F.hangNext = 0; }
 
+  // ── R21 · 섞어 친다(시드 고정 6번 × 40) — 데스크톱이 받은 차례 = 사람이 한 차례(인접한 같은 종류는 합쳐 본다) ─────
+  //  격리 리뷰의 무작위 순서 점검을 옮겼다 — «휠 · 누르기 · 글 중 하나만 모인다» 를 부르는 자리마다 지키던 판에선 한 자리만
+  //   빠뜨려도 이 비교가 8시드 중 5~8개에서 어긋났다. 누르기는 화면이 따라온 뒤에 누른다(따라오는 중엔 안 가는 것이 사양 — R13b).
+  try {
+    const mulberry = (a) => () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+    const WORDS = ["a", "bc", "def", "hello ", "x y", "한글", "zz"];
+    const KEYS = ["Backspace", "Enter", "Tab", "ArrowDown", "Escape"];
+    const GAPS = [0, 0, 5, 20, 60, 130, 300, 450, 700];
+    const out = [];
+    for (let seed = 1; seed <= 6; seed++) {
+      const rnd = mulberry(seed * 7919);
+      const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+      mount("sA");
+      const ok = await waitFor(live, 10000);
+      F.delay.act = () => 150 + Math.floor(rnd() * 1300);
+      const t = performance.now();
+      const user = [];
+      const caught = () => waitFor(() => !isBehind(), 15000);
+      for (let i = 0; i < 40; i++) {
+        const r = rnd();
+        if (r < 0.28) { const w = pick(WORDS); typeText(w); user.push({ t: "text", s: w }); }
+        else if (r < 0.42) { const k = pick(KEYS); keyDown(k); user.push({ t: "key", ks: [k] }); }
+        else if (r < 0.55) { await caught(); clickAt(1, rnd(), rnd()); user.push({ t: "click", n: "click" }); }
+        else if (r < 0.62) { await caught(); clickAt(1, 0.3, 0.3); await sleep(pick([20, 100, 250])); clickAt(2, 0.3, 0.3); user.push({ t: "click", n: "double_click" }); }
+        else if (r < 0.80) {
+          const sign = rnd() < 0.5 ? 1 : -1; const cnt = 1 + Math.floor(rnd() * 8); let sum = 0;
+          for (let j = 0; j < cnt; j++) { const d = sign * (10 + Math.floor(rnd() * 30)); wheel(d); sum += d; await sleep(pick([0, 5, 16, 16, 40])); }
+          user.push({ t: "scroll", v: sum });
+        }
+        else if (r < 0.85) { await caught(); ctxMenu(); user.push({ t: "click", n: "right_click" }); }
+        else if (r < 0.90) { const a = $(".pn-web-in", cur.paneRoot); a.value = "example.com/p" + i; a.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); user.push({ t: "nav" }); }
+        else if (r < 0.94) { keyDown("r", { metaKey: true, ctrlKey: true }); user.push({ t: "nav" }); }
+        else { keyDown("c", { metaKey: true, ctrlKey: true }); user.push({ t: "eval" }); }
+        await sleep(pick(GAPS));
+      }
+      const settled = await settle(3000, 180000);
+      F.delay.act = 600;
+      const host = [];
+      for (const c of F.calls) {
+        if (c.t0 < t) continue;
+        if (c.op === "act") {
+          const a = c.body.action;
+          if (a === "type") host.push({ t: "text", s: c.body.text });
+          else if (a === "key") host.push({ t: "key", ks: String(c.body.keys).split(" ") });
+          else if (a === "scroll") host.push({ t: "scroll", v: (c.body.direction === "down" ? 1 : -1) * Number(c.body.amount) });
+          else if (/click/.test(a)) host.push({ t: "click", n: a });
+        } else if (c.op === "navigate") host.push({ t: "nav" });
+        else if (c.op === "eval") host.push({ t: "eval" });
+      }
+      const k = 400 / img().getBoundingClientRect().width;
+      const collapse = (xs, kk) => {
+        const o = [];
+        for (const e of xs) {
+          const l = o[o.length - 1];
+          if (l && l.t === "text" && e.t === "text") l.s += e.s;
+          else if (l && l.t === "key" && e.t === "key") l.ks = l.ks.concat(e.ks);
+          else if (l && l.t === "scroll" && e.t === "scroll") l.v += e.v * kk;
+          else o.push({ ...e, v: e.t === "scroll" ? e.v * kk : undefined, ks: e.ks ? e.ks.slice() : undefined });
+        }
+        return o.filter((e) => !(e.t === "scroll" && Math.abs(e.v) < 1));
+      };
+      const A = collapse(user, k), B = collapse(host, 1);
+      const norm = (xs) => xs.map((e) => e.t === "text" ? "T:" + e.s : e.t === "key" ? "K:" + e.ks.join(",") : e.t === "scroll" ? "S" + (e.v >= 0 ? "+" : "-") : e.t === "click" ? "C:" + e.n : e.t === "nav" ? "N" : "E");
+      const na = norm(A), nb = norm(B);
+      const same = JSON.stringify(na) === JSON.stringify(nb);
+      const scrollOk = same && A.every((e, i) => e.t !== "scroll" || Math.abs(e.v - B[i].v) <= 2);
+      out.push({ seed, ok, settled, n: user.length, same, scrollOk, ...(same ? {} : { a: na.slice(0, 30), b: nb.slice(0, 30) }) });
+    }
+    R.r21 = out;
+  } catch (e) { R.errR21 = String(e && e.stack || e); F.delay.act = 600; }
+
+  // ── R22 · 늦게 온 옛 그림이 새 그림을 덮지 않는다 ─────────────────────────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    F.versioned = true; F.ver.sA = 0;
+    const t22 = performance.now();
+    F.shotDelayScript = [1500];                        // 다음 화면 받기 하나만 1.5초(옛 판을 찍은 채 늦게 온다)
+    const slowOf = () => F.calls.find((c) => c.t0 >= t22 && c.op === "screenshot" && c.ms === 1500);   // 이 장면의 것만(앞 장면에도 1.5초 받기가 있었다)
+    const slow = await waitFor(() => !!slowOf() && slowOf().t1 === null, 15000);
+    const slowRec = slowOf();
+    clickImg(1);                                       // 0.4초 뒤 누르기(0.6초) — 그 결과 그림(새 판)이 느린 화면(옛 판)보다 먼저 온다
+    await waitFor(() => slowRec && slowRec.t1 !== null, 5000);
+    await sleep(30);                                   // 늦은 응답이 그려질 틈
+    const src = img().getAttribute("src");
+    R.r22 = { ok, slow, newest: src === srcOf("sA@1"), stale: src === srcOf("sA@0"), shown: keyOfSrc(src),
+      calls: F.calls.filter((c) => c.t0 >= slowRec.t0 - 1).slice(0, 8).map((c) => `${c.op}${c.body.screenshot ? "+shot" : ""}:${c.ms}:${Math.round(c.t0 - slowRec.t0)}-${c.t1 === null ? "…" : Math.round(c.t1 - slowRec.t0)}`) };
+    F.versioned = false; F.shotDelayScript = [];
+  } catch (e) { R.errR22 = String(e && e.stack || e); F.versioned = false; F.shotDelayScript = []; }
+
+  // ── R23 · 느린 이동(4초) 중에도 주소줄이 옛 주소로 돌아가지 않는다 ─────────────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    F.trackUrl = true; F.urlOf.sA = ""; F.delay.navigate = 4000;
+    const a = $(".pn-web-in", cur.paneRoot);
+    a.focus(); a.value = "new.example/page";
+    a.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    const vals = [], titles0 = cur.st.titles.length;
+    for (let i = 0; i < 35; i++) { await sleep(100); vals.push(a.value); }
+    await settle(1500, 15000);
+    F.delay.navigate = 300;
+    const polled = F.calls.some((c) => c.op === "screenshot" && c.t1 !== null && c.t1 < performance.now() - 1000);
+    R.r23 = { ok, polled, reverted: vals.some((v) => /site-sa/i.test(v)), titleReverted: cur.st.titles.slice(titles0).some((x) => /site-sa/i.test(x)), last: a.value };
+    F.trackUrl = false;
+  } catch (e) { R.errR23 = String(e && e.stack || e); F.trackUrl = false; F.delay.navigate = 300; }
+
+  // ── R24 · 창에 초점이 돌아오면 곧바로 받는다 ────────────────────────────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    await sleep(12000);                                // 입력 없이 10초 넘게 — 화면 받기가 2초(초점 없으면 5초) 간격
+    const n0 = F.calls.length;
+    await waitFor(() => F.calls.slice(n0).some((c) => c.op === "screenshot" && c.t1 !== null), 8000);   // 방금 하나 받았다 — 다음은 2초 넘게 뒤
+    await sleep(20);
+    const t = performance.now();
+    window.dispatchEvent(new Event("focus"));
+    const quick = await waitFor(() => since(t, (c) => c.op === "screenshot").length > 0, 300);
+    R.r24 = { ok, quick };
+  } catch (e) { R.errR24 = String(e && e.stack || e); }
+
+  // ── R26 · 409 뒤 상태 묻기가 끝내 안 온다 — 15초 상한으로 끊고 iframe 칸으로 ──────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    F.actStatus = 409; F.actError = "데스크톱 앱이 연결돼 있지 않습니다"; F.statusHang = true;
+    const t = performance.now();
+    clickImg(1);
+    const fr = await waitFor(frameShown, 45000);
+    R.r26 = { ok, fr, after: Math.round(performance.now() - t) };
+    F.actStatus = 200; F.actError = ""; F.statusHang = false;
+  } catch (e) { R.errR26 = String(e && e.stack || e); F.actStatus = 200; F.actError = ""; F.statusHang = false; }
+
   try { cur.part.destroy(); } catch (_) { /* 이미 */ }
   R.pageErrors = pageErrors;
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
@@ -556,7 +739,7 @@ ${CSS.map((f) => `<link rel="stylesheet" href="${path.basename(f)}">`).join("")}
 <style>html,body{margin:0}</style><div id="toasts"></div><pre id="out" style="position:fixed;left:-9999px">PENDING</pre>
 <script type="text/plain" id="pfsrc">${bundle.replace(/<\/script/gi, "<\\/script")}</script>
 <script>(${PAGE_MAIN.toString()})().catch(function (e) { document.getElementById('out').textContent = JSON.stringify({ fatal: String(e && e.stack || e) }) + 'ENDRESULT'; });</script>`;
-const dom = await dumpDom(chrome, { html: PAGE, copy: CSS, prefix: "remote-web-", virtualTimeBudget: 600000, timeoutMs: 120000, args: ["--window-size=1000,800"] });
+const dom = await dumpDom(chrome, { html: PAGE, copy: CSS, prefix: "remote-web-", virtualTimeBudget: 3000000, timeoutMs: 240000, args: ["--window-size=1000,800"] });
 const res = readOut(dom);
 if (res.text === null) { console.error(`FAIL  페이지가 결과를 안 냈다(out=${JSON.stringify(res.out)})\n` + dom.slice(0, 1500)); process.exit(1); }
 const R = JSON.parse(res.text);
@@ -594,11 +777,14 @@ const r7c = R.r7c || {}, r13 = R.r13 || {}, r13b = R.r13b || {}, r14 = R.r14 || 
 check([r7c, r13, r13b, r14b, r16, r17, r19].every((x) => x.ok === true) && r14.fr === true && r15.fr === true, "(배선) 2판 장면들도 원격 화면(또는 iframe 칸)에서 시작했다",
   { r7c: r7c.ok, r13: r13.ok, r13b: r13b.ok, r14: r14.fr, r14b: r14b.ok, r15: r15.fr, r16: r16.ok, r17: r17.ok, r19: r19.ok });
 check(r7c.remote === true && r7c.frame === false && r7c.statusAsked === 2, "R7c 한 번 «없음» 이었다가 돌아오면 iframe 칸으로 안 바뀐다(두 번 물었다)", r7c);
-check(r13.n > 100 && r13.acts >= 1 && r13.acts <= 6 && r13.total === r13.want && r13.afterEnd <= 2000 && r13.imgsDuring >= 2, "R13 트랙패드 2초 — scroll act 6번 이하 · 굴린 만큼 다 · 끝난 뒤 2초 안 · 굴리는 동안에도 그림", r13);
-check(r13b.wait !== null && r13b.wait <= 1600 && r13b.scrollsAfterClick === 0 && (r13b.order || []).filter((a) => a === "scroll").length >= 1, "R13b 굴리고 곧바로 누르면 누르기는 1.6초 안에 · 굴린 것이 다 먼저", r13b);
+check(r13.n > 100 && r13.acts >= 1 && r13.acts <= 6 && r13.total === r13.want && r13.afterEnd <= 2000 && r13.imgsDuring >= 2 && r13.withPoint === true, "R13 트랙패드 2초 — scroll act 6번 이하 · 굴린 만큼 다 · 끝난 뒤 2초 안 · 굴리는 동안에도 그림 · 굴린 자리(x, y)를 싣는다", r13);
+check(r13b.behindAt === true && r13b.said === true && r13b.refused === true && r13b.caught === true && r13b.caughtAfter <= 2500 && r13b.clickAfter === true && r13b.scrollsAfterClick === 0,
+  "R13b 굴리고 곧바로 누르면(화면이 따라오는 중) 안 보내고 알린다 · 2.5초 안에 따라오고 · 그 뒤 누르면 간다(굴리기 뒤에)", r13b);
 const r13c = R.r13c || {}, r13d = R.r13d || {};
-check(r13c.ok === true && r13c.total === r13c.want && r13c.scrollsAfterClick === 0 && (r13c.order || []).at(-1) === "click", "R13c 아주 느린 원격에서 굴리고 누르면 굴린 것이 다 먼저 · 굴린 만큼 다", r13c);
+check(r13c.ok === true && r13c.refused === true && r13c.total === r13c.want && r13c.scrollsAfterClick === 0 && (r13c.order || []).at(-1) === "click", "R13c 아주 느린 원격 — 따라오는 동안 누르기는 안 가고, 다 따라온 뒤 누르면 굴리기 다음에 간다 · 굴린 만큼 다", r13c);
 check(r13d.ok === true && r13d.n > 10 && r13d.total === r13d.want, "R13d 굴리기가 끝날 때 원격이 바빠도 줄이 비면 남은 휠이 간다", r13d);
+const r13e = R.r13e || {};
+check(r13e.ok === true && r13e.sentNoImg === true && r13e.behindAt === true && r13e.refused === true, "R13e 굴리기는 나갔고 그 그림이 아직이면 누르기를 안 보낸다", r13e);
 check(r14.back === true && r14.after <= 3000, "R14 iframe 칸에서 세션을 바꾸면 곧바로 물어 3초 안에 원격 화면", r14);
 check(r14b.shotB === true && r14b.statusAsked === 0, "R14b 원격 화면에서 세션을 바꾸면 상태를 다시 묻지 않고 1초 안에 새 세션 화면", r14b);
 check(r15.remote === false && r15.frame === true && J(r15.shots) === "[]", "R15 묻는 사이 세션 없는 자리로 가면 원격 화면이 서지 않는다 · 화면도 안 받는다", r15);
@@ -609,6 +795,12 @@ check(r17.toast === true && r17.evals === 0 && J(r17.errs) === "[]", "R17 클립
 const r18 = R.r18 || {};
 check(r18.early === true && r18.remote === true && r18.frame === false && J(r18.sess) === J(["sA"]), "R18 늦게 온 옛 «없음» 답은 방금 선 원격 화면을 되돌리지 않는다", r18);
 check(r19.shotsWhileHung >= 2 && r19.typeSent === true && r19.typeAfter >= 59000 && r19.typeAfter <= 66000, "R19 답 없는 동작 — 그동안에도 화면을 받고, 60초 뒤 끊고 뒤의 글을 보낸다", r19);
+const r21 = R.r21 || [], r22 = R.r22 || {}, r23 = R.r23 || {}, r24 = R.r24 || {}, r26 = R.r26 || {};
+check(r21.length === 6 && r21.every((x) => x.ok === true && x.settled === true && x.n === 40 && x.same === true && x.scrollOk === true), "R21 섞어 친 6시드 모두 — 데스크톱이 받은 차례 · 굴린 양 = 사람이 한 것", r21.filter((x) => !(x.ok && x.settled && x.same && x.scrollOk)));
+check(r22.ok === true && r22.slow === true && r22.newest === true && r22.stale === false, "R22 늦게 온 옛 그림은 새 그림을 덮지 않는다", r22);
+check(r23.ok === true && r23.polled === true && r23.reverted === false && r23.titleReverted === false && /new\.example\/page/.test(r23.last || ""), "R23 느린 이동 중에도 주소줄 · 칸 탭 이름이 옛 주소로 안 돌아간다 · 끝나면 새 주소", r23);
+check(r24.ok === true && r24.quick === true, "R24 창에 초점이 돌아오면 곧바로 받는다", r24);
+check(r26.ok === true && r26.fr === true && r26.after <= 40000, "R26 409 뒤 상태 묻기가 멈춰도 15초 상한으로 끊고 iframe 칸으로", r26);
 check(Array.isArray(R.pageErrors) && R.pageErrors.length === 0, "P 페이지 오류 0", R.pageErrors);
 
 console.log(`\n${pass} 통과 · ${fail} 실패`);

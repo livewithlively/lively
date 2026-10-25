@@ -804,6 +804,10 @@ body.v2-splitting-x .bt-view, body.v2-splitting-y .bt-view, body.cm-dragging .bt
 .pn-remote-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
   text-align: center; font-size: 13px; line-height: 1.6; color: var(--muted); background: var(--surface); word-break: keep-all; }
 .pn-remote-msg[hidden] { display: none; }
+/* 아래 줄은 두 줄까지 — 긴 안내가 여러 줄로 서면 그림 칸이 줄어 같은 휠이 더 멀리 갔다(전문은 title). */
+.pn-remote-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 화면이 굴리기를 따라오는 중 — 누르면 안 간다(«그림이 멈춘 뒤 다시»). 커서로 미리 알린다. */
+.pn-web-remote[data-behind] .pn-remote-img { cursor: progress; }
 /* ⚠ position: relative — 배율 알약이 이 칸의 오른쪽 아래에 선다(무대 안에 두면 내용과 함께 굴러간다). */
 .pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
 /* ── 뷰어 무대 — 펴 놓은 것이 서는 자리 (#762) ─────────────────────────────────

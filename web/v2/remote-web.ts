@@ -30,7 +30,8 @@ const CALL_MS = 60_000;
  *  새 A 화면이 같은 탭에 따로 보내 순서가 뒤집혔다(격리 리뷰 실측: click · world · hello). 줄의 꼬리를 탭 하나에 하나로 둔다. */
 const QUEUES = new Map<string, Promise<void>>();
 function chain(qKey: string, job: () => Promise<void>): void {
-  const run = (): Promise<void> => job().catch(() => { /* 일 안에서 이미 다룬다 — 줄은 끊기지 않는다 */ });
+  //  일은 제 오류를 스스로 다룬다 — 여기까지 새어 온 것은 고장(버그)이다. 줄은 끊지 않되 콘솔엔 남긴다.
+  const run = (): Promise<void> => job().catch((e) => { console.warn('[remote-web] 원격 일에서 처리되지 않은 오류', e); });
   const next = (QUEUES.get(qKey) || Promise.resolve()).then(run);
   QUEUES.set(qKey, next);
   void next.then(() => { if (QUEUES.get(qKey) === next) QUEUES.delete(qKey); });
@@ -39,11 +40,15 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => { window.setTime
 
 type State = 'connecting' | 'live' | 'empty' | 'paused' | 'stuck' | 'error';
 
+/** 그 사람의 데스크톱 앱이 연결돼 있나 — 15초 안에 답이 없으면 «없음»(이 묻기가 멈추면 409 뒤 재확인이 줄 · 화면 받기를 함께 묶는다). */
 async function desktopConnected(sessId: string): Promise<boolean> {
+  const ac = new AbortController();
+  const t = window.setTimeout(() => ac.abort(), 15_000);
   try {
-    const r: any = await api('/api/ui/browser/status', { method: 'POST', headers: { 'x-lively-session': sessId }, body: '{}' });
+    const r: any = await api('/api/ui/browser/status', { method: 'POST', headers: { 'x-lively-session': sessId }, body: '{}', signal: ac.signal });
     return !!(r && r.connected);
   } catch { return false; }
+  finally { clearTimeout(t); }
 }
 
 /**
@@ -164,8 +169,12 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   const qKey = sessId + '#' + tabNo;               // 원격 일의 줄 — 이 탭의 것(QUEUES)
   let queued = 0;                                  // 이 화면이 줄에 세운 원격 동작 수 — 스크린샷은 줄의 마지막 것만 받는다
   let lastShotAt = 0;                              // 마지막으로 그림을 받은 때 — 줄이 길어도 1초마다는 받는다
-  let wx = 0, wy = 0, wTimer = 0;                  // 모아 둔 휠(보이는 px)
-  let wPoint: { x: number; y: number } | null = null;
+  //  요청 번호 — 보낸 차례. 데스크톱은 한 줄로 처리하지만 오가는 길은 동시라 응답이 뒤바뀌어 올 수 있다 — 그때 늦게 온 옛 응답의
+  //   그림 · 주소가 새것을 덮었다(격리 리뷰). 이미 반영한 것보다 앞 번호의 응답은 버린다.
+  let sentSeq = 0, appliedSeq = 0, imgSeq = 0;
+  //  화면이 굴리기를 따라오는 중인가 — 보낸 굴리기가 아직 그림에 안 보이면, 보이는 그림의 그 자리가 원격에선 이미 다른 곳이다.
+  let scrollsWaiting = 0, lastScrollSeq = 0;
+  let navPending = 0;                              // 줄에 선 이동 — 그 사이 받은 화면의 주소는 옛 주소다(주소줄을 되돌리지 않는다)
 
   const call = async (op: string, body: Record<string, unknown>): Promise<any> => {
     const ac = new AbortController();
@@ -182,34 +191,40 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
       live: '',
       empty: '데스크톱 앱에 이 칸의 탭이 아직 없습니다 — 위 주소칸에 주소를 넣으면 데스크톱 앱 이 세션의 [웹]에 열리고 여기에 보입니다.',
       paused: '데스크톱 앱에서 이 탭에 [AI 멈춤]이 켜져 있어 원격 화면도 멈췄습니다 — 데스크톱 앱 그 칸에서 풀어 주세요.',
-      stuck: text,
+      //  데스크톱이 내는 문구는 AI 에게 쓴 것이다(«사람에게 창을 띄워 달라고 하세요») — 사람에겐 사람 말로.
+      stuck: '데스크톱 앱 화면을 찍지 못했습니다 — 데스크톱 앱 창이 지금 그려지지 않는 것 같습니다(화면이 꺼졌거나 잠자기). 잠시 뒤 다시 시도합니다.',
       error: text || '데스크톱 앱 화면을 받지 못했습니다 — 잠시 뒤 다시 시도합니다.',
     };
     msg.textContent = say[s];
     //  빈 탭 · 멈춤은 그림 위에 덮어 알린다. 불러오는 중 · 오류는 받아 둔 그림이 없을 때만 덮는다(있으면 그림을 두고 아래 줄에 적는다).
     msg.hidden = !(s === 'empty' || s === 'paused' || ((s === 'connecting' || s === 'stuck' || s === 'error') && !lastData));
-    note.textContent = s === 'stuck' || s === 'error' ? say[s] : NOTE;
+    sayNote(s === 'stuck' || s === 'error' ? say[s] : NOTE);
   }
+  /** 아래 줄 — 두 줄까지만 보인다(CSS). 길면 그림 칸이 줄어 같은 휠이 더 멀리 갔다 — 전문은 title 로. */
+  function sayNote(t: string): void { note.textContent = t; note.title = t; }
+  /** 주소줄 · 칸 탭 이름 — paint 만 부른다(닫힌 뒤 · 늦게 온 응답은 거기서 이미 걸렀다: 칸 탭 이름은 이제 다른 화면의 것이다). */
   function syncAddr(r: any): void {
-    if (dead) return;                              // 닫힌 뒤 늦게 온 응답 — 칸 탭 이름은 이제 다른 화면(세션)의 것이다
     const u = String(r?.url || '');
     if (!u) return;
     curUrl = u;
     if (document.activeElement !== input) input.value = u;
     try { ctx.setTabTitle?.(new URL(u).host.replace(/^www\./, '')); } catch { /* noop */ }
   }
-  /** 받은 결과에 그림이 있으면 화면을 갈아 끼운다 — 그대로면 다시 그리지 않는다. 바뀌었는지를 돌려준다. */
-  function paint(r: any): boolean {
-    if (dead) return false;                        // 닫힌 뒤 늦게 온 응답 — 이 화면은 이미 칸에서 떨어졌다
-    syncAddr(r);
+  /** 받은 응답을 반영한다 — 앞 번호(늦게 온 옛 응답)는 버리고, 그림이 있으면 화면을 갈아 끼운다. 바뀌었는지를 돌려준다. */
+  function paint(r: any, seq: number): boolean {
+    if (dead || seq < appliedSeq) return false;    // 닫힌 뒤 · 더 새 응답을 이미 반영한 뒤에 온 옛 응답
+    appliedSeq = seq;
+    if (!navPending) syncAddr(r);                  // 이동이 줄에 있는 동안 받은 주소는 옛 주소다(격리 리뷰: 주소줄이 되돌아갔다)
     const d = r?.image?.data;
     if (!d) return false;
     lastShotAt = Date.now();
+    imgSeq = seq;
     shotW = Number(r.width) || shotW;
     shotH = Number(r.height) || shotH;
     shotScale = Number(r.scale) || 1;
     const changed = d !== lastData;
     if (changed) { lastData = d; img.src = `data:${r.image.mime || 'image/jpeg'};base64,${d}`; }
+    showBehind();
     return changed;
   }
   async function onError(e: any): Promise<void> {
@@ -227,7 +242,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     const kind = hostErrorKind(m);
     if (kind === 'empty') setState('empty');
     else if (kind === 'paused') setState('paused');
-    else if (kind === 'stuck') setState('stuck', m);
+    else if (kind === 'stuck') setState('stuck');
     else setState('error', m.length > 160 ? m.slice(0, 160) + '…' : m);
   }
   function schedule(ms?: number | null): void {
@@ -238,90 +253,121 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   }
   async function frameOnce(): Promise<void> {
     if (inflight || dead) return;
-    if (!visible()) return;                        // 다시 보이면 visibilitychange · IntersectionObserver · tick() 이 깨운다
+    if (!visible()) return;                        // 다시 보이면 visibilitychange · IntersectionObserver · 창 초점 · tick() 이 깨운다
     //  원격 동작이 줄에 있으면 그 결과 그림을 기다린다 — 다만 1초 넘게 그림이 안 왔으면 받는다(줄이 길 때 화면이 멈춘 채
     //   사람이 묵은 그림을 누르지 않게 — 격리 리뷰). 중계는 열쇠마다 24건까지 받는다(동작 하나 + 화면 하나는 넉넉하다).
     if (queued > 0 && Date.now() - lastShotAt < 1_000) { schedule(300); return; }
     inflight = true;
     let changed = false;
     try {
+      const my = ++sentSeq;
       const r = await call('screenshot', {});
-      changed = paint(r);
+      changed = paint(r, my);
       errors = 0;
       if (!dead) setState('live');
     } catch (e) { await onError(e); }
     finally { inflight = false; }
     schedule(nextDelay({ visible: visible(), sinceInputMs: Date.now() - lastInput, changed, errors, focused: document.hasFocus() }));
   }
-  /** 원격 일 하나를 줄에 세운다 — 차례대로(글 다음 Enter 가 뒤바뀌지 않게). 줄이 비는 순간 그동안 모인 입력을 한 번에 보낸다.
-   *  last = 이 일 뒤로 줄도 모인 입력도 없다 — 그 일만 결과 그림을 같이 받고, after ms 뒤 다음 화면을 받는다. */
+  /** 원격 일 하나를 줄에 세운다 — 차례대로(글 다음 Enter 가 뒤바뀌지 않게). 줄이 비는 순간 모아 둔 휠 · 글을 한 번에 보낸다.
+   *  last = 이 일 뒤로 줄도 모아 둔 것도 없다 — 그 일만 결과 그림을 같이 받고, after ms 뒤 다음 화면을 받는다. */
   function enqueue(run: (last: boolean) => Promise<void>, after: number): void {
     lastInput = Date.now();
     queued++;
     chain(qKey, async () => {
-      const last = queued === 1 && !pending.length && !wx && !wy;
+      const last = queued === 1 && !held;
       try { await run(last); errors = 0; }
       catch (e) { await onError(e); }
       finally { queued--; }
       if (dead) return;
-      if (queued === 0 && (wx || wy)) { flushWheel(); return; }
-      if (queued === 0 && pending.length) { pumpInput(); return; }
+      if (queued === 0 && held && held.kind !== 'click') { release(); return; }
       schedule(last ? after : undefined);
     });
   }
   function act(body: Record<string, unknown>): void {
-    //  닫힌 화면이 남은 입력을 마저 보낼 땐 그림을 안 받는다 — 그릴 칸이 없다.
-    enqueue(async (last) => { paint(await call('act', last && !dead ? { ...body, screenshot: true } : body)); if (!dead) setState('live'); }, 150);
+    const scroll = body.action === 'scroll';
+    if (scroll) scrollsWaiting++;
+    enqueue(async (last) => {
+      const my = ++sentSeq;
+      if (scroll) { scrollsWaiting--; lastScrollSeq = my; }
+      //  닫힌 화면이 남은 입력을 마저 보낼 땐 그림을 안 받는다 — 그릴 칸이 없다.
+      const r = await call('act', last && !dead ? { ...body, screenshot: true } : body);
+      paint(r, my);
+      if (!dead) setState('live');
+    }, 150);
+    showBehind();
   }
   function nav(body: Record<string, unknown>): void {
-    flushPending();
-    enqueue(async () => { syncAddr(await call('navigate', body)); }, 0);
-  }
-  /** 아직 안 보낸 휠 · 누르기 · 글을 지금 줄에 세운다 — 그 뒤에 와야 하는 일(이동 · 복사 · 닫기)이 있을 때.
-   *  셋 중 하나만 모여 있을 수 있다(휠은 누르기 · 글을, 누르기와 글은 휠 · 서로를 먼저 내보내고 모인다). */
-  function flushPending(): void { flushWheel(); flushClick(); flushInput(); }
-
-  // ── 누르기(두 번 누름 가르기) ────────────────────────────────────────────
-  let clickTimer = 0;
-  let pendingClick: { x: number; y: number } | null = null;
-  function flushClick(): void {
-    clearTimeout(clickTimer);
-    if (!pendingClick) return;
-    const p = pendingClick;
-    pendingClick = null;
-    act({ action: 'click', x: p.x, y: p.y });
+    release();
+    navPending++;
+    enqueue(async () => {
+      const my = ++sentSeq;
+      const r = await call('navigate', body).finally(() => { navPending--; });
+      paint(r, my);
+    }, 0);
   }
 
-  // ── 글 · 키 — 모아서 차례대로(같은 종류는 합친다: remote-web-kit pushInput) ──────────
-  //  원격 동작 한 번이 0.5~1초라 칠 때마다 줄에 세우면 다 친 뒤에도 몇십 초 더 쳐졌다(격리 리뷰 실측). 그래서 줄에 일이 있는
-  //  동안은 모아 두기만 하고(같은 종류는 하나로 합쳐진다), 줄이 비는 순간 모인 것을 한 번에 보낸다(enqueue → pumpInput).
-  let pending: InputItem[] = [];
-  let inputTimer = 0;
-  /** 모인 입력을 지금 줄에 세운다 — 누르기 · 이동 · 복사 · 닫기처럼 그 뒤에 와야 하는 일이 있을 때. */
-  function flushInput(): void {
-    clearTimeout(inputTimer); inputTimer = 0;
-    const items = pending;
-    pending = [];
-    for (const it of items) act(it.kind === 'text' ? { action: 'type', text: it.text } : { action: 'key', keys: it.keys.join(' ') });
+  // ── 모아 두기 — 휠 · 누르기 · 글 중 **하나만** 모인다 ─────────────────────────
+  //  원격 동작 한 번이 0.5~1초라 칠 · 굴릴 때마다 줄에 세우면 다 한 뒤에도 몇 초 · 몇십 초 더 따라갔다(격리 리뷰 실측: 키 40번 →
+  //  22.7초 · 트랙패드 2초 → 7.7초). 그래서 줄에 일이 있는 동안 휠 · 글은 모아 두기만 하고 줄이 비면 한 번에 보낸다(같은 종류는
+  //  합친다 — 글은 이어 붙이고 키는 한 번에, remote-web-kit pushInput). 누르기는 두 번 누름을 가르느라 잠깐(DBL_MS) 모인다.
+  //  종류마다 따로 모았더니 순서가 «부르는 자리마다 다른 것을 먼저 내보내기» 규약에 기대어, 한 자리만 빠뜨려도 조용히 뒤집혔다
+  //  (격리 리뷰: 8곳 중 6곳이 시험 밖) — 그래서 칸을 하나만 둔다. 다른 종류가 오면 모여 있던 것을 먼저 내보낸다(hold).
+  type Held =
+    | { kind: 'wheel'; dx: number; dy: number; at: { x: number; y: number } | null }
+    | { kind: 'click'; at: { x: number; y: number } }
+    | { kind: 'input'; items: InputItem[] };
+  let held: Held | null = null;
+  let heldTimer = 0;
+  /** 모아 둔 것을 지금 줄에 세운다 — 다른 종류 · 이동 · 복사 · 닫기처럼 그 뒤에 와야 하는 일이 있을 때. */
+  function release(): void {
+    clearTimeout(heldTimer); heldTimer = 0;
+    const h = held;
+    held = null;
+    if (!h) return;
+    if (h.kind === 'click') { act({ action: 'click', x: h.at.x, y: h.at.y }); return; }
+    if (h.kind === 'input') { for (const it of h.items) act(it.kind === 'text' ? { action: 'type', text: it.text } : { action: 'key', keys: it.keys.join(' ') }); return; }
+    //  휠 — 합계는 wheelToScroll 이 상한 20,000 으로 자른다. 보이는 너비는 지금 것으로 잰다(그림을 무대에 맞춰 그린다).
+    const s = wheelToScroll(h.dx, h.dy, img.getBoundingClientRect().width, shotW, shotScale);
+    if (s) act({ action: 'scroll', direction: s.direction, amount: s.amount, ...(h.at ? { x: h.at.x, y: h.at.y } : {}) });
+    showBehind();
   }
-  /** 줄이 비어 있을 때만 보낸다 — 아니면 줄의 마지막 일이 끝날 때 enqueue 가 다시 부른다. */
-  function pumpInput(): void { if (queued === 0) flushInput(); }
+  /** kind 로 모은다 — 다른 종류가 모여 있으면 먼저 내보내고, 같은 종류가 모여 있으면 그것에 이어 모은다. */
+  function hold<K extends Held['kind']>(kind: K, fresh: () => Extract<Held, { kind: K }>): Extract<Held, { kind: K }> {
+    if (held && held.kind !== kind) release();
+    if (!held) held = fresh();
+    return held as Extract<Held, { kind: K }>;
+  }
+  /** 휠 · 글 — 줄이 비었을 때만 내보낸다. 아니면 줄의 마지막 일이 끝날 때 enqueue 가 내보낸다. */
+  function pump(): void { heldTimer = 0; if (queued === 0) release(); }
+  /** 화면이 굴리기를 따라오는 중 — 모아 둔 휠 · 줄에 선 굴리기 · 아직 그림에 안 보인 굴리기가 있다. */
+  const behind = (): boolean => held?.kind === 'wheel' || scrollsWaiting > 0 || imgSeq < lastScrollSeq;
+  function showBehind(): void { if (behind()) root.dataset.behind = '1'; else delete root.dataset.behind; }
+  /** 누르기 전 — 화면이 굴리기를 따라오는 중이면 보내지 않고 알린다. 보이는 그림의 그 자리가 원격에선 이미 굴러간 다른 곳이다
+   *  (격리 리뷰 실측: 1초 굴리고 곧바로 누르면 아직 안 보인 굴리기 1,700px 뒤에 눌렸다). 그림이 따라오면 곧 다시 누를 수 있다. */
+  function refuseWhileBehind(): boolean {
+    if (!behind()) return false;
+    sayNote('화면이 아직 굴리기를 따라오는 중이에요 — 그림이 멈춘 뒤 다시 눌러 주세요.');
+    if (!inflight && queued === 0 && held?.kind !== 'wheel') schedule(0);
+    return true;
+  }
+
+  // ── 글 · 키 ─────────────────────────────────────────────────────────────
   function queueInput(it: InputItem): void {
     if (it.kind === 'text' && !it.text) return;
-    flushWheel();                                   // 굴린 다음 친 글이 굴리기보다 먼저 가지 않게
-    flushClick();                                   // 누른 다음 친 글이 누르기보다 먼저 가지 않게
-    pending = pushInput(pending, it);
-    if (!inputTimer) inputTimer = window.setTimeout(() => { inputTimer = 0; pumpInput(); }, 60);
+    const h = hold('input', () => ({ kind: 'input', items: [] as InputItem[] }));
+    h.items = pushInput(h.items, it);
+    if (!heldTimer) heldTimer = window.setTimeout(pump, 60);
   }
   /** 아직 안 보낸 키 수 — 꾹 누른 반복을 어디서 끊을지. */
-  const pendingKeys = (): number => pending.reduce((n, it) => n + (it.kind === 'key' ? it.keys.length : 0), 0);
+  const heldKeys = (): number => (held?.kind === 'input' ? held.items.reduce((n, x) => n + (x.kind === 'key' ? x.keys.length : 0), 0) : 0);
   sink.addEventListener('keydown', (e: KeyboardEvent) => {
     const a = remoteKeyAction({ key: e.key, keyCode: e.keyCode, isComposing: e.isComposing, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey, altGraph: e.getModifierState?.('AltGraph') }, MAC);
     if (!a || a.kind === 'text' || a.kind === 'skip') return;     // 글은 input/composition 사건이 보낸다
     e.preventDefault();
     if (a.kind === 'key') {
       //  꾹 누른 반복은 밀린 키가 30개면 버린다 — 화면이 늦게 따라오는 만큼, 놓은 뒤에도 한참 더 지워지지 않게.
-      if (e.repeat && pendingKeys() >= 30) return;
+      if (e.repeat && heldKeys() >= 30) return;
       queueInput({ kind: 'key', keys: [a.keys] });
       return;
     }
@@ -344,14 +390,14 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
   sink.addEventListener('paste', (e: ClipboardEvent) => {
     e.preventDefault();
     const t = e.clipboardData?.getData('text/plain') || '';
-    if (t) { queueInput({ kind: 'text', text: t }); flushInput(); }
+    if (t) { queueInput({ kind: 'text', text: t }); release(); }
   });
   /** 원격에서 고른 글을 이 브라우저 클립보드로. 사파리는 왕복 뒤의 writeText 를 제스처 밖이라 거절한다 — ClipboardItem 에
    *  «곧 올 글»(Promise)을 넘겨 키 사건 안에서 시작한다. 고른 글이 없으면 조용히, 막히면 알린다. */
   function copySelection(): void {
     //  https 가 아닌 주소(셀프호스트 http)엔 클립보드 API 자체가 없다 — 원격 글을 읽으러 가지도 않고 알린다(격리 리뷰: 예전엔 조용히 던졌다).
     if (!navigator.clipboard) { toast('복사하지 못했습니다 — 이 주소(https 아님)에선 브라우저가 클립보드를 열어 주지 않아요.', true); return; }
-    flushPending();                                 // 고르는 두 번 누름 · 친 글이 먼저 가야 그 고른 글을 읽는다
+    release();                                      // 고르는 두 번 누름 · 친 글이 먼저 가야 그 고른 글을 읽는다
     let got: (t: string) => void = () => { /* 아래 Promise 가 채운다 */ };
     const text = new Promise<string>((res) => { got = res; });
     //  줄에 세우되 enqueue 는 안 쓴다 — 이 읽기는 화면을 바꾸지 않아 결과 그림 · 다음 받기 간격을 건드릴 일이 없다.
@@ -380,40 +426,34 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     const p = pointOf(e);
     sink.focus({ preventScroll: true });
     if (!p || e.detail >= 3) return;               // 세 번째 누름 — 두 번 누름을 이미 보냈다
-    flushWheel(); flushInput();                     // 굴리고 · 친 다음 누른 것이 앞지르지 않게
-    if (e.detail === 2) { clearTimeout(clickTimer); pendingClick = null; act({ action: 'double_click', x: p.x, y: p.y }); return; }
-    flushClick();
-    pendingClick = p;
-    clickTimer = window.setTimeout(flushClick, DBL_MS);
+    if (refuseWhileBehind()) return;
+    if (e.detail === 2) {
+      //  두 번 누름 — 모여 있던 첫 누르기는 이 두 번 누름의 앞쪽이다(따로 보내지 않는다). 다른 것이 모여 있으면 그것이 먼저.
+      if (held?.kind === 'click') { clearTimeout(heldTimer); heldTimer = 0; held = null; } else release();
+      act({ action: 'double_click', x: p.x, y: p.y });
+      return;
+    }
+    release();                                      // 모여 있던 것(글 · 앞 누르기)이 먼저
+    held = { kind: 'click', at: p };
+    heldTimer = window.setTimeout(release, DBL_MS);
   });
   img.addEventListener('contextmenu', (e: MouseEvent) => {
     e.preventDefault();
     const p = pointOf(e);
-    if (!p) return;
-    flushPending();
+    if (!p || refuseWhileBehind()) return;
+    release();
     act({ action: 'right_click', x: p.x, y: p.y });
   });
-  //  휠 — 그림이 무대에 통째로 맞춰 들어가 무대 자체는 구르지 않는다(CSS) → 휠은 전부 원격으로. 모아 두었다가 줄이 비었을 때
-  //   한 번에 보낸다(입력과 같은 규칙). 120ms 마다 흘려 보내면 줄에 스크롤이 쌓여 다 굴린 뒤에도 몇 초 더 굴러갔고(격리 리뷰 실측:
-  //   트랙패드 2초 → act 16개 · 7.7초 더), 그동안 보이는 그림을 누르면 이미 굴러간 페이지의 다른 곳이 눌렸다.
-  /** 모아 둔 휠을 지금 줄에 세운다(합계는 wheelToScroll 이 상한 20,000 으로 자른다). */
-  function flushWheel(): void {
-    clearTimeout(wTimer); wTimer = 0;
-    if (!wx && !wy) return;
-    const s = wheelToScroll(wx, wy, img.getBoundingClientRect().width, shotW, shotScale);
-    wx = 0; wy = 0;
-    if (s) act({ action: 'scroll', direction: s.direction, amount: s.amount, ...(wPoint ? { x: wPoint.x, y: wPoint.y } : {}) });
-  }
-  /** 줄이 비어 있을 때만 보낸다 — 아니면 줄의 마지막 일이 끝날 때 enqueue 가 다시 부른다. */
-  function pumpWheel(): void { wTimer = 0; if (queued === 0) flushWheel(); }
+  //  휠 — 그림이 무대에 통째로 맞춰 들어가 무대 자체는 구르지 않는다(CSS) → 휠은 전부 원격으로, 모아서(위 «모아 두기»).
   stage.addEventListener('wheel', (e: WheelEvent) => {
     if (!shotW) return;
     e.preventDefault();
-    flushClick(); flushInput();                     // 누르고 · 친 다음 굴린 것 — 그것들이 먼저
     const f = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (img.clientHeight || 600) : 1;
-    wx += e.deltaX * f; wy += e.deltaY * f;
-    wPoint = pointOf(e);
-    if (!wTimer) wTimer = window.setTimeout(pumpWheel, 120);
+    const h = hold('wheel', () => ({ kind: 'wheel', dx: 0, dy: 0, at: null }));
+    h.dx += e.deltaX * f; h.dy += e.deltaY * f;
+    h.at = pointOf(e);
+    if (!heldTimer) heldTimer = window.setTimeout(pump, 120);
+    showBehind();
   }, { passive: false });
 
   // ── 주소줄 · 밖에서 여는 주소(미리보기 행 · 터미널 링크) ─────────────────────
@@ -464,10 +504,10 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     tick: () => { if (visible() && !inflight) schedule(0); },
     destroy: () => {
       //  남은 입력은 이 화면의 (세션, 탭)으로 마저 보낸다 — 사람이 거기서 친 · 누른 것이다(머리말 ★).
-      flushPending();
+      release();
       dead = true;
       //  닫힌 화면엔 타이머가 남지 않는다 — 남은 입력은 위에서 이미 줄에 세웠다(타이머에 기대면 정리 한 줄에 입력이 사라진다).
-      clearTimeout(timer); clearTimeout(clickTimer); clearTimeout(inputTimer);
+      clearTimeout(timer); clearTimeout(heldTimer);
       evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
       document.removeEventListener('pointerdown', mark, true);
       document.removeEventListener('focusin', mark, true);
