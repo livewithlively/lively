@@ -60,9 +60,30 @@ export function loadAndWait(v: LoadView, kick: () => unknown, ms: number): Promi
   });
 }
 
+/** 사람이 [AI 멈춤]을 눌러 둔 탭 — 그 탭에서는 보기·닫기·고르기·콘솔 읽기를 포함해 명령을 거절한다. */
+export const PAUSED_MSG = '사람이 이 탭에서 AI 조작을 멈춰 두었습니다 — 사람에게 [AI 멈춤]을 풀어 달라고 하세요.';
+/** 이 세션에 탭이 하나도 없다(보기·누르기는 탭을 만들지 않는다). */
+export const NO_TAB_MSG = '이 세션에 열린 브라우저 탭이 없습니다 — browser_navigate 로 주소를 먼저 여세요.';
+/** 그 번호의 탭이 없다. */
+export function missingTabMsg(n: unknown): string { return `탭 ${n} 이 없습니다 — browser_tabs 로 이 세션의 탭을 확인하세요.`; }
+const STUCK_HEAD = '화면을 찍지 못했습니다(';
+
+/**
+ * 데스크톱 쪽 오류 문구 → 원격 화면(웹 판)이 그릴 상태. 문구는 이 모듈의 상수에서만 만들어지므로 한쪽만 다듬어 어긋나지 않는다
+ *  (격리 리뷰: 원격 화면이 한국어 문구 정규식에 따로 묶여 있으면 문구 하나만 고쳐도 조용히 «오류»로 떨어진다).
+ */
+export function hostErrorKind(message: unknown): 'paused' | 'empty' | 'stuck' | 'other' {
+  //  들어 있기만 하면 된다 — 지금은 중계 · 서버가 문구를 그대로 넘기지만(src/capabilities/browser.ts run), 앞에 무엇이 붙어도 갈리게.
+  const m = String(message ?? '');
+  if (m.includes(PAUSED_MSG)) return 'paused';
+  if (m.includes(NO_TAB_MSG) || /탭 \S+ 이 없습니다 — browser_tabs 로 이 세션의 탭을 확인하세요\./.test(m)) return 'empty';
+  if (m.includes(STUCK_HEAD)) return 'stuck';
+  return 'other';
+}
+
 /** 찍기가 시간 안에 안 끝났을 때의 안내 — 다시 기다리지 않고 이걸로 실패한다. */
 export function shotStuckMessage(ms: number): string {
-  return `화면을 찍지 못했습니다(${Math.round(ms / 1000)}초) — 데스크톱 앱 창이 지금 화면에 그려지지 않는 것 같습니다`
+  return `${STUCK_HEAD}${Math.round(ms / 1000)}초) — 데스크톱 앱 창이 지금 화면에 그려지지 않는 것 같습니다`
     + '(다른 데스크톱 공간 · 전체 화면 앱 뒤에 있거나 화면이 꺼짐). 그래도 browser_read · browser_text · browser_act 는 됩니다.'
     + ' 화면이 꼭 필요하면 사람에게 Lively 창을 화면에 띄워 달라고 하세요.';
 }

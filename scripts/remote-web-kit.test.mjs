@@ -1,8 +1,9 @@
 // #4993 (A) — 웹 판 원격 화면의 **순수** 판정 표(v2/remote-web-kit.js).
 //
 //  웹 브라우저로 연 라이블리의 [웹] 칸이 그 사람 데스크톱 앱 탭을 원격으로 쓴다(화면 = 스크린샷, 입력 = 원격 동작).
-//  ① 키 → 원격 동작(K) · ② 보이는 그림 위의 점 → 스크린샷 좌표(P) · ③ 휠 → 원격 스크롤(W) · ④ 다음 화면 받기까지(D).
-//  DOM 배선(숨긴 입력칸 · 두 번 누름 가르기 · 상태 문구)은 실제 브라우저 끝단 확인으로 잰다.
+//  ① 키 → 원격 동작(K) · ② 보이는 그림 위의 점 → 스크린샷 좌표(P) · ③ 휠 → 원격 스크롤(W) · ④ 다음 화면 받기까지(D)
+//  · ⑤ 보낼 입력 모으기(I — 격리 리뷰: 키 반복 · 느린 원격에서 입력이 줄에 쌓이던 것).
+//  DOM 배선(세션 묶기 · 모아 보내기 · 409 · 열기 신호 · ⌘R · 다시 보일 때)은 remote-web-runtime.test.mjs 가 실제 크롬에서 잰다.
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -11,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0;
 const eq = (got, want, name) => { assert.deepEqual(got, want, `${name}: ${JSON.stringify(want)} 여야 하는데 ${JSON.stringify(got)}`); pass++; console.log(`ok  ${name}`); };
 
-const { remoteKeyAction, toShotPoint, wheelToScroll, nextDelay } = await import(join(root, "public/app/v2/remote-web-kit.js"));
+const { remoteKeyAction, toShotPoint, wheelToScroll, nextDelay, pushInput } = await import(join(root, "public/app/v2/remote-web-kit.js"));
 const K = (key, mods = {}) => ({ key, ...mods });
 const mac = (e) => remoteKeyAction(e, true);
 const win = (e) => remoteKeyAction(e, false);
@@ -58,5 +59,31 @@ eq(D({ changed: true }), 500, "D3 화면이 바뀌는 중이면 500ms");
 eq([D({ sinceInputMs: 10_001 }), D({ sinceInputMs: 10_000 })], [2_000, 800], "D4 입력 없이 10초 넘으면 2초(경계 10초는 800)");
 eq([D({ sinceInputMs: 1_500 }), D({ sinceInputMs: 5_000 })], [800, 800], "D5 그 사이는 800ms(경계 1.5초부터)");
 eq([1, 2, 3, 4, 5, 50].map((n) => D({ errors: n })), [1_000, 2_000, 4_000, 8_000, 10_000, 10_000], "D6 오류가 이어지면 1·2·4·8초 · 상한 10초");
+
+// ── 2판(격리 리뷰) — K12~K14 · I · D7 ─────────────────────────────────────────
+eq([mac(K("Enter", { keyCode: 229 })), win(K("a", { keyCode: 229 }))], [{ kind: "skip" }, { kind: "skip" }], "K12 keyCode 229 는 조합 키 — isComposing 이 꺼져 있어도 건너뜀(사파리 조합 확정 Enter)");
+eq([mac(K("Enter", { keyCode: 13 })), mac(K("a", { keyCode: 65 }))], [{ kind: "key", keys: "Enter" }, { kind: "text", text: "a" }], "K12 경계 — 보통 keyCode 는 종전대로");
+eq([win(K("@", { ctrlKey: true, altKey: true, altGraph: true })), win(K("€", { ctrlKey: true, altKey: true })), win(K("{", { ctrlKey: true, altKey: true }))],
+  [{ kind: "text", text: "@" }, { kind: "text", text: "€" }, { kind: "text", text: "{" }], "K13 AltGr 글자는 글 — 깃발이 있거나(맥 아님) ctrl+alt+기호");
+eq([mac(K("ą", { altGraph: true, ctrlKey: true, altKey: true }))], [{ kind: "text", text: "ą" }], "K13 깃발이 있으면 맥이어도 글");
+eq([win(K("m", { ctrlKey: true, altKey: true })), win(K("1", { ctrlKey: true, altKey: true })), mac(K("@", { ctrlKey: true, altKey: true })), win(K("Enter", { ctrlKey: true, altKey: true })), win(K("@", { ctrlKey: true, altKey: true, metaKey: true }))],
+  [{ kind: "key", keys: "ctrl+alt+m" }, { kind: "key", keys: "ctrl+alt+1" }, { kind: "key", keys: "ctrl+alt+@" }, { kind: "key", keys: "ctrl+alt+Enter" }, { kind: "key", keys: "cmd+ctrl+alt+@" }],
+  "K13b 경계 — 깃발 없는 ctrl+alt+영문자/숫자 · 맥의 ctrl+alt · 특수 키 · meta 섞임은 명령 조합(단축키를 지킨다)");
+eq([mac(K("Insert")), win(K("Insert", { shiftKey: true })), win(K("Insert", { ctrlKey: true })), mac(K("Insert", { metaKey: true }))], [null, null, null, null], "K14 Insert 는 어떤 수식과도 원격으로 안 보낸다(shift+Insert · ctrl+Insert = 붙여넣기 · 복사 길)");
+
+const T = (text) => ({ kind: "text", text });
+const KK = (...keys) => ({ kind: "key", keys });
+eq(pushInput([T("ab")], T("c")), [T("abc")], "I1 글 + 글은 이어 붙인다");
+eq(pushInput([KK("Backspace")], KK("Backspace")), [KK("Backspace", "Backspace")], "I2 키 + 키는 한 묶음");
+eq([pushInput([T("a")], KK("Enter")), pushInput([KK("Enter")], T("a"))], [[T("a"), KK("Enter")], [KK("Enter"), T("a")]], "I3 글과 키는 따로 — 순서 그대로");
+eq(pushInput([KK("a".repeat(49))], KK("b".repeat(50))), [KK("a".repeat(49), "b".repeat(50))], "I4 경계 — 공백으로 이어 정확히 100자면 합친다");
+eq(pushInput([KK("a".repeat(49))], KK("b".repeat(51))), [KK("a".repeat(49)), KK("b".repeat(51))], "I4 101자면 새 묶음");
+eq(pushInput([], T("x")), [T("x")], "I5 빈 줄에 더하면 그 하나");
+{ const src = [T("a")]; const out = pushInput(src, T("b")); eq([src, out !== src], [[T("a")], true], "I6 원본 줄은 바꾸지 않는다(새 배열)"); }
+
+eq([D({ focused: false, sinceInputMs: 1_500 }), D({ focused: false, sinceInputMs: 20_000 })], [5_000, 5_000], "D7 창에 초점이 없으면(입력 1.5초 지남) 5초");
+eq(D({ focused: false, sinceInputMs: 1_499 }), 150, "D7b 경계 — 초점이 없어도 조작 직후(1.5초 안)는 150ms");
+eq([D({ sinceInputMs: 20_000 }), D({ focused: true, sinceInputMs: 20_000 })], [2_000, 2_000], "D7c focused 를 안 주거나 true 면 종전 그대로");
+eq(D({ focused: false, errors: 2 }), 2_000, "D7d 오류 중엔 오류 물러남이 먼저");
 
 console.log(`\n${pass} 통과`);
