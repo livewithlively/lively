@@ -193,7 +193,10 @@ async function handle(cmd: Cmd): Promise<unknown> {
 function pickTab(S: string, tabArg: unknown, create: boolean): BTab {
   if (tabArg !== undefined && tabArg !== null && String(tabArg) !== '') {
     const key = keyOfTab(S, String(tabArg));
-    const t = getTab(key) || (storedUrls()[key] ? ensureTab(key) : null);
+    let t = getTab(key) || (storedUrls()[key] ? ensureTab(key) : null);
+    //  이동(create)은 그 번호의 탭이 없으면 만든다 — 웹 판 원격 화면이 칸의 탭 번호로 처음 주소를 열 때(#4993 (A)).
+    //   보기 · 누르기는 만들지 않는다(없는 탭을 «본» 결과가 빈 페이지면 그게 거짓이다).
+    if (!t && create) { t = ensureTab(key, 'about:blank'); current.set(S, key); }
     if (!t) throw new Error(`탭 ${tabArg} 이 없습니다 — browser_tabs 로 이 세션의 탭을 확인하세요.`);
     return t;
   }

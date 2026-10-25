@@ -16,6 +16,7 @@ import { authDownload, upDropZone, upFromInput, upSend, upToast, type UpItem } f
 import { confirmDialog } from '../ui-primitives.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { remoteWebPart } from './remote-web.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
 import { type BTab, answerHandoff, dockTab, ensureTab, getTab, onTabEvent, rememberUrl, setPaused } from './browser-tabs.js';   // #4993 AI 와 같이 쓰는 탭(데스크톱)
@@ -690,10 +691,13 @@ function makeZoom(o: ZoomOpts): Zoom {
   };
 }
 
-function webPart(ctx: PartCtx): Part {
+function webPart(ctx: PartCtx, frameOnly = false): Part {
   //  데스크톱 앱(#1829 브라우저 서피스)이면 AI 와 같이 쓰는 탭으로 그린다(#4993) — webview 는 칸 안이 아니라 브라우저 층에 산다.
   //   끼워 넣은 판(미리보기 안 라이블리)은 제외한다 — 거기엔 서피스가 없고(preload 가 없다) 탭 대장도 바깥 것이 아니다.
   if (hasBrowserSurface() && !EMBEDDED) return liveWebPart(ctx);
+  //  웹 브라우저로 연 라이블리 — 그 사람의 데스크톱 앱이 켜져 있으면 그 앱 탭의 원격 화면(#4993 (A)), 아니면 아래 iframe 칸
+  //   (frameOnly = 원격 화면이 «데스크톱 없음» 일 때 이 칸을 그대로 쓰려고 부른 것).
+  if (!EMBEDDED && !frameOnly) return remoteWebPart(ctx, () => webPart(ctx, true));
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
   // 재우기 상태(아래 '안 보이면 재운다') — 주소를 싣는 모든 길(load·adopt·reload)이 이걸 만지므로 맨 위에 둔다.
