@@ -1,4 +1,4 @@
-// browser-host-kit.ts — AI 브라우저 호스트(browser-host)의 판정 셋: 이동 기다림 · 화면 찍기 시간 예산 · 스크롤 마저 굴리기 (#4993).
+// browser-host-kit.ts — AI 브라우저 호스트(browser-host)의 판정 셋: 이동 기다림 · 화면 찍기 시간 예산 · 스크롤 보내는 법 (#4993).
 //  DOM 을 만지지 않는다(webview 는 사건 표적으로만, 찍기·쉬기는 넘겨받는다) — node 시험이 가짜 사건 순서·가짜 찍기로 재현한다
 //  (scripts/browser-host-pure.test.mjs). 셋 다 실앱 끝단 확인(상민님 앱, 2026-10-25)에서 나온 고장이다.
 
@@ -100,22 +100,31 @@ export async function captureFrame<T>(capture: () => Promise<T>, o: {
   throw r.err instanceof Error ? r.err : new Error(String(r.err));
 }
 
-/** pageScrollState 의 꼴(필요한 칸만). */
-export interface ScrollState { x: number; y: number; inner?: { tag: string; top: number; left: number } }
+/** 휠 한 번(Electron mouseWheel 의 부호 — 아래 머리말). */
+export interface WheelStep { deltaX: number; deltaY: number }
 
 /**
- * 휠로 굴린 뒤 남은 거리 — 휠이 같은 칸을 움직이기 시작했는데 요청의 절반도 못 가고 멈췄으면 남은 거리(dx·dy, 페이지 좌표 부호)를,
- *  아니면 null. 창이 화면에 그려지지 않으면 부드러운 스크롤이 첫 박자에서 멈춘다(실측 2026-10-25 상민님 앱: 1200 을 굴려 24).
- *  안 움직였으면(끝이거나 페이지가 휠을 가로챔 — 지도·캐러셀) 손대지 않는다. 앞뒤 칸이 다르면 짐작하지 않는다.
+ * 스크롤을 어떻게 보낼지 — 창이 보이면 진짜 휠(300px 씩), 숨었으면 페이지에서 바로(instant) 굴릴 거리(페이지 좌표 부호).
+ *  · 숨은 창(트레이 · 최소화 · 가려져 숨김으로 쳐진 창)의 휠은 화면 박자에 묶여 **뒤늦게** 처리된다 — 그 자리에서 재면 덜 갔고,
+ *    남은 거리를 페이지에서 마저 굴리면 뒤늦은 휠이 그 위에 더해진다(실측 2026-10-25 상민님 앱: 1200 을 굴려 그 자리 24 →
+ *    마저 굴려 1200 → 몇 초 뒤 2332). 그래서 숨었을 때는 휠을 아예 보내지 않는다.
+ *  · 보이는 창은 휠 — 페이지가 받는 것이 진짜 입력이어야 휠을 듣는 페이지(지도·캐러셀)가 사람과 같게 움직인다.
+ *    한 번에 크게 보내면 부드러운 스크롤 도중에 재서 덜 간 것으로 보인다(실측: 1500 을 보내고 450ms 뒤 436) → 300px 씩.
+ *  · Electron 휠 부호: deltaY 가 음수면 내용이 위로 올라간다(= 아래로 굴림). 실측 -500 → scrollY 500. 페이지 좌표는 그 반대.
+ *  거리는 1~20,000px 로 자른다(JSON 의 1e999 는 Infinity — 상한이 없으면 끝없이 굴렀다, #4993 격리 리뷰). 방향을 모르면 아래.
  */
-export function scrollRemainder(before: ScrollState | null | undefined, after: ScrollState | null | undefined, amount: number, dir: string): { dx: number; dy: number } | null {
-  if (!before || !after || !(amount > 0)) return null;
-  if ((before.inner?.tag ?? '') !== (after.inner?.tag ?? '')) return null;
-  const vertical = dir === 'down' || dir === 'up';
-  const pos = (s: ScrollState): number => (s.inner ? (vertical ? s.inner.top : s.inner.left) : (vertical ? s.y : s.x));
-  const moved = Math.abs(pos(after) - pos(before));
-  if (!(moved > 0) || moved >= amount / 2) return null;
-  const left = Math.round(amount - moved);
-  const sign = dir === 'down' || dir === 'right' ? 1 : -1;
-  return vertical ? { dx: 0, dy: sign * left } : { dx: sign * left, dy: 0 };
+export function scrollPlan(hidden: boolean, amount: number, dir: string): { page: { dx: number; dy: number } } | { wheel: WheelStep[] } {
+  const n = Math.max(1, Math.min(20_000, Math.floor(amount) || 600));
+  const vertical = dir !== 'left' && dir !== 'right';
+  const forward = dir !== 'up' && dir !== 'left';
+  if (hidden) {
+    const d = forward ? n : -n;
+    return { page: vertical ? { dx: 0, dy: d } : { dx: d, dy: 0 } };
+  }
+  const wheel: WheelStep[] = [];
+  for (let left = n; left > 0; left -= 300) {
+    const d = (forward ? -1 : 1) * Math.min(300, left);
+    wheel.push(vertical ? { deltaX: 0, deltaY: d } : { deltaX: d, deltaY: 0 });
+  }
+  return { wheel };
 }

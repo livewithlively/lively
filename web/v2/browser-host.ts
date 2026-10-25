@@ -16,7 +16,7 @@ import {
   onTabEvent, requestHandoff, requestReveal, sessionOfKey, storedUrls, tabNoOfKey, tabVisible, tabsOfSession, wakeTab,
 } from './browser-tabs.js';
 import { type UploadFile, callSource, evalSource, pageCaretEnd, pageFill, pageHasText, pageRead, pageRefPoint, pageScrollBy, pageScrollState, pageText, pageUpload } from '../lib/browser-page.js';
-import { captureFrame, loadAndWait, scrollRemainder } from './browser-host-kit.js';
+import { captureFrame, loadAndWait, scrollPlan } from './browser-host-kit.js';
 
 /** 게이트웨이와 맞춘 규약 판(src/browser/relay.ts BROWSER_PROTOCOL). */
 const PROTOCOL = 1;
@@ -524,44 +524,32 @@ async function opAct(S: string, a: Record<string, any>): Promise<unknown> {
     } else if (act === 'scroll') {
       const p = a.ref ? await point(a.ref, 0, 0)
         : (a.x !== undefined && a.y !== undefined ? { x: Math.round(Number(a.x) / s), y: Math.round(Number(a.y) / s) } : { x: Math.round(t.layoutW / 2), y: Math.round(t.layoutH / 2) });
-      //  상한 20,000px — JSON 의 1e999 는 Infinity 라 상한이 없으면 끝없이 굴렀다(#4993 격리 리뷰). 툴 입력에서도 같은 상한이다.
-      const n = Math.max(1, Math.min(20_000, Math.floor(Number(a.amount)) || 600));
-      const dir = String(a.direction || 'down');
-      // Electron 의 휠 부호: deltaY 가 음수면 내용이 위로 올라간다(= 아래로 굴림). 실측(2026-10-25): -500 → scrollY 500.
-      //  한 번에 크게 보내면 부드러운 스크롤이 도는 중에 재서 덜 간 것으로 보인다(실측: 1500 을 보내고 450ms 뒤 436).
-      //  그래서 300px 씩 나눠 보내고, 위치가 멈출 때까지(최대 2초) 기다린 뒤 잰다.
-      const sign = dir === 'down' || dir === 'right' ? -1 : 1;
-      const vertical = dir === 'down' || dir === 'up';
-      let before = '';
-      try { before = JSON.stringify(await exec(t, callSource(pageScrollState, p.x, p.y), 3_000)); } catch { /* noop */ }
-      for (let left = n; left > 0; left -= 300) {
-        const d = sign * Math.min(300, left);
-        await send({ type: 'mouseWheel', x: p.x, y: p.y, deltaX: vertical ? 0 : d, deltaY: vertical ? d : 0, canScroll: true });
-        await nap(t, 16);
-      }
-      //  «멈췄다» = 두 번 연달아 같고, 시작 위치에서 이미 움직였거나(굴렀다) 0.45초가 지났다(끝에 닿아 못 구른다).
-      //   시작 전 두 번이 같다고 멈춘 것으로 보면 덜 간 값을 보고한다(실측: 위로 500 이 그대로 1500).
-      let last = '';
-      const t0 = Date.now();
-      while (Date.now() - t0 < 2_000) {
-        await nap(t, 100);
-        let cur = '';
-        try { cur = JSON.stringify(await exec(t, callSource(pageScrollState, p.x, p.y), 3_000)); } catch { break; }
-        if (cur === last && (cur !== before || Date.now() - t0 > 450)) break;
-        last = cur;
-      }
-      try { out.scroll = last ? JSON.parse(last) : undefined; } catch { /* noop */ }
-      //  휠이 움직이기 시작했다가 절반도 못 가고 섰으면 남은 거리를 그 칸에서 바로 굴린다 — 창이 화면에 그려지지 않으면
-      //   부드러운 스크롤이 첫 박자에서 선다(실측 2026-10-25 상민님 앱: 1200 을 굴려 24). 안 움직였으면(끝 · 휠을 가로채는 페이지) 그대로.
-      let b0: any = null;
-      try { b0 = before ? JSON.parse(before) : null; } catch { /* noop */ }
-      const rest = scrollRemainder(b0, out.scroll as any, n, dir);
-      if (rest) {
-        try {
-          await exec(t, callSource(pageScrollBy, p.x, p.y, rest.dx, rest.dy), 3_000);
-          out.scroll = await exec(t, callSource(pageScrollState, p.x, p.y), 3_000);
-          out.note = '휠 스크롤이 도중에 멈춰(창이 화면에 그려지지 않으면 부드러운 스크롤이 진행되지 않습니다) 남은 거리를 페이지에서 바로 굴렸습니다.';
-        } catch { /* 이동 중 — 휠로 간 데까지만 */ }
+      //  보이는 창은 진짜 휠(300px 씩), 숨은 창은 페이지에서 바로 굴린다 — 숨은 창의 휠은 뒤늦게 처리돼 잰 값이 틀린다(scrollPlan 머리말).
+      //  거리 상한 20,000px 도 거기서 건다(JSON 의 1e999 는 Infinity — #4993 격리 리뷰).
+      const plan = scrollPlan(document.hidden, Number(a.amount), String(a.direction || 'down'));
+      if ('page' in plan) {
+        await exec(t, callSource(pageScrollBy, p.x, p.y, plan.page.dx, plan.page.dy), 3_000);
+        try { out.scroll = await exec(t, callSource(pageScrollState, p.x, p.y), 3_000); } catch { /* 이동 중 */ }
+        out.note = '창이 화면에 그려지지 않는 동안이라 휠 대신 페이지에서 바로 굴렸습니다(휠을 가로채는 페이지 — 지도·캐러셀 — 는 휠과 다르게 움직일 수 있습니다).';
+      } else {
+        let before = '';
+        try { before = JSON.stringify(await exec(t, callSource(pageScrollState, p.x, p.y), 3_000)); } catch { /* noop */ }
+        for (const w of plan.wheel) {
+          await send({ type: 'mouseWheel', x: p.x, y: p.y, deltaX: w.deltaX, deltaY: w.deltaY, canScroll: true });
+          await nap(t, 16);
+        }
+        //  «멈췄다» = 두 번 연달아 같고, 시작 위치에서 이미 움직였거나(굴렀다) 0.45초가 지났다(끝에 닿아 못 구른다).
+        //   시작 전 두 번이 같다고 멈춘 것으로 보면 덜 간 값을 보고한다(실측: 위로 500 이 그대로 1500).
+        let last = '';
+        const t0 = Date.now();
+        while (Date.now() - t0 < 2_000) {
+          await nap(t, 100);
+          let cur = '';
+          try { cur = JSON.stringify(await exec(t, callSource(pageScrollState, p.x, p.y), 3_000)); } catch { break; }
+          if (cur === last && (cur !== before || Date.now() - t0 > 450)) break;
+          last = cur;
+        }
+        try { out.scroll = last ? JSON.parse(last) : undefined; } catch { /* noop */ }
       }
       settle = 0;
     } else if (act === 'wait') {
