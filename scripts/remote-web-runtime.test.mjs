@@ -30,6 +30,11 @@
 //  R13c 아주 느린 원격(동작 2초)에서 0.3초 굴리고 0.1초 뒤 누름 — 따라오는 동안엔 안 가고, 다 따라온 뒤 누르면 굴리기 다음에 간다 · 굴린 만큼 다
 //  R13d 같은데 누르지 않는다 — 굴리기가 끝날 때 원격이 바빠도, 줄이 비면 남은 휠이 간다(굴린 만큼 다)
 //  R13e 짧게 굴리고 0.3초 뒤 누름 — 굴리기는 나갔지만 그 결과 그림이 아직 안 왔다 → 따라오는 중이라 안 보낸다(그림 번호로 가른다)
+//  R13f 굴리기가 실패해(오류) 그림이 아직일 때 누름 — 거절하되 «멈춘 뒤 다시» 가 아니라 «화면이 아직 안 와서» 라고 말한다
+//  R13h 한 번 거절한 뒤 3.5초 지나 다시 굴림(누르지 않음) — 거절 알림이 다시 뜨지 않는다(알림을 남기는 것은 거절한 뒤 3초까지)
+//  R13g PageDown 으로 굴리고 곧바로 누름 — 그것도 따라오는 중이라 안 보낸다(화살표 · Home · End 는 입력칸 키라 넣지 않는다)
+//  R27 거절된 뒤 다시 누름(브라우저는 detail=2 «두 번 누름» 으로 센다) — 한 번 누름 하나만 간다(두 번 누름으로 보내면 버튼이 두 번 눌린다)
+//  R27b 거절된 뒤 연달아 누름(detail 2 · 3 · 4 · 5, 0.15초 간격) — 따라온 뒤 누른 넷이 다 한 번 누름으로 간다(«세 번째» 로 소리 없이 버리지 않는다)
 //  R14 iframe 칸에서 세션을 바꾸면 곧바로 묻는다 — 3초 안에 원격 화면(30초를 기다리지 않는다)
 //  R14b 원격 화면에서 세션을 바꾸면 상태를 다시 묻지 않고 곧바로 새 세션 화면을 받는다(상태 묻기가 3초 걸려도 1초 안에)
 //  R15 묻는 사이 세션 없는 자리로 가면 원격 화면이 서지 않는다 · 그 자리 열쇠로 화면을 받지 않는다
@@ -411,6 +416,8 @@ async function PAGE_MAIN() {
     const behindAt = isBehind();
     clickImg(1);
     const said = /따라오는 중/.test($(".pn-remote-note", cur.paneRoot)?.textContent || "");
+    await sleep(600);
+    const stillSaid = isBehind() && /따라오는 중/.test($(".pn-remote-note", cur.paneRoot)?.textContent || "");   // 다음 응답이 기본 안내로 덮지 않았다
     const caught = await waitFor(() => !isBehind(), 5000);
     const caughtAfter = Math.round(performance.now() - t - 1100);
     //  «안 보냈다» 는 줄이 다 빈 뒤에 센다 — 보내는 판이라면 그 누르기는 굴리기 뒤에 줄을 서 늦게 나간다(일찍 세면 못 본다).
@@ -420,7 +427,7 @@ async function PAGE_MAIN() {
     await settle(1500, 30000);
     const acts = since(t, (c) => c.op === "act");
     const ci = acts.findIndex((c) => c.body.action === "click");
-    R.r13b = { ok, behindAt, said, caught, caughtAfter, refused, clickAfter: ci >= 0, scrollsAfterClick: ci >= 0 ? acts.slice(ci + 1).filter((c) => c.body.action === "scroll").length : null };
+    R.r13b = { ok, behindAt, said, stillSaid, caught, caughtAfter, refused, clickAfter: ci >= 0, scrollsAfterClick: ci >= 0 ? acts.slice(ci + 1).filter((c) => c.body.action === "scroll").length : null };
   } catch (e) { R.errR13b = String(e && e.stack || e); }
 
   // ── R13c · R13d · 아주 느린 원격(동작 2초)에서 0.3초 굴린다 — 누르거나(c) 그냥 둔다(d) ─────────────
@@ -464,6 +471,81 @@ async function PAGE_MAIN() {
     await settle(1500, 15000);
     R.r13e = { ok, sentNoImg, behindAt, refused: since(t, (c) => c.op === "act" && /click/.test(c.body.action)).length === 0 };
   } catch (e) { R.errR13e = String(e && e.stack || e); }
+
+  // ── R27 · R27b · 거절 뒤 다시 누르기 — 브라우저가 센 누른 수(detail)에 끌려가지 않는다 ──────────────
+  //  동작을 빠르게(0.1초) 해 두 번째 누름 때는 따라온 뒤다. d1 은 거절, 그 뒤 d2(브라우저는 «두 번 누름» 으로 센다) · d3 … 이 온다.
+  for (const burst of [false, true]) {
+    try {
+      mount("sA");
+      const ok = await waitFor(live, 10000);
+      F.delay.act = 100;
+      const t = performance.now();
+      for (let i = 0; i < 3; i++) { wheel(20); await sleep(16); }
+      await sleep(90);                                 // 굴리기가 나가(0.12초) 그림이 아직 — 따라오는 중
+      const behindAt = isBehind();
+      clickAt(1, 0.5, 0.5);                            // 거절
+      const caught = await waitFor(() => !isBehind(), 3000);
+      const details = burst ? [2, 3, 4, 5] : [2];
+      for (const d of details) { clickAt(d, 0.5, 0.5); await sleep(150); }
+      await settle(1500, 15000);
+      F.delay.act = 600;
+      R[burst ? "r27b" : "r27"] = { ok, behindAt, caught, acts: since(t, (c) => c.op === "act" && /click/.test(c.body.action)).map((c) => c.body.action) };
+    } catch (e) { R[burst ? "errR27b" : "errR27"] = String(e && e.stack || e); F.delay.act = 600; }
+  }
+
+  // ── R13f · 굴리기가 실패해 그림이 아직일 때 누르면 — «멈춘 뒤» 가 아니라 «화면이 아직 안 와서» 라고 말한다 ───────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    F.actStatus = 500; F.actError = "굴리기 실패 — 시험";
+    for (let i = 0; i < 3; i++) { wheel(20); await sleep(16); }
+    const failed = await waitFor(() => remoteRoot().dataset.state === "error", 3000);
+    const behindAt = isBehind();
+    clickImg(1);
+    const text = $(".pn-remote-note", cur.paneRoot)?.textContent || "";
+    F.actStatus = 200; F.actError = "";
+    await settle(1500, 15000);
+    R.r13f = { ok, failed, behindAt, honest: /화면이 아직 오지 않아/.test(text), notCatching: !/따라오는 중/.test(text) };
+  } catch (e) { R.errR13f = String(e && e.stack || e); F.actStatus = 200; F.actError = ""; }
+
+  // ── R13h · 한 번 거절한 뒤 한참(3.5초) 지나 다시 굴리면 — 누르지 않았으니 거절 알림은 다시 안 뜬다 ─────────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    for (let i = 0; i < 3; i++) { wheel(20); await sleep(16); }
+    await sleep(200);
+    const behind1 = isBehind();
+    clickImg(1);                                       // 거절
+    await waitFor(() => !isBehind(), 5000);
+    await sleep(3500);
+    //  느린 화면 받기(0.8초)가 날아가는 중에, 느린 원격(동작 2초)에서 다시 굴린다 — 그 화면은 굴리기 전에 찍은 것이라
+    //   따라오는 중인 채로 상태가 «live» 로 갱신된다. 그 순간 아래 줄이 옛 거절 알림을 다시 꺼내면 안 된다.
+    F.delay.act = 2000; F.shotDelayScript = [800];
+    const tS = performance.now();
+    const slowOf = () => F.calls.find((c) => c.t0 >= tS && c.op === "screenshot" && c.ms === 800);
+    await waitFor(() => !!slowOf() && slowOf().t1 === null, 6000);
+    for (let i = 0; i < 3; i++) { wheel(20); await sleep(16); }
+    await waitFor(() => slowOf().t1 !== null, 3000);
+    await sleep(30);
+    const behind2 = isBehind();
+    const text = $(".pn-remote-note", cur.paneRoot)?.textContent || "";
+    await settle(1500, 15000);
+    F.delay.act = 600; F.shotDelayScript = [];
+    R.r13h = { ok, behind1, behind2, quiet: !/따라오는 중|오지 않아/.test(text), text: text.slice(0, 40) };
+  } catch (e) { R.errR13h = String(e && e.stack || e); }
+
+  // ── R13g · PageDown 으로 굴리고 곧바로 누르면 — 그것도 따라오는 중이다 ─────────────────────
+  try {
+    mount("sA");
+    const ok = await waitFor(live, 10000);
+    const t = performance.now();
+    keyDown("PageDown");
+    await sleep(120);                                  // 키가 나가(0.06초) 0.6초 걸린다 — 그림은 아직
+    const behindAt = isBehind();
+    clickImg(1);
+    await settle(1500, 15000);
+    R.r13g = { ok, sent: since(t, (c) => c.op === "act" && c.body.action === "key" && /PageDown/.test(c.body.keys)).length === 1, behindAt, refused: since(t, (c) => c.op === "act" && /click/.test(c.body.action)).length === 0 };
+  } catch (e) { R.errR13g = String(e && e.stack || e); }
 
   // ── R7c · 데스크톱이 잠깐(한 번) «없음» 이었다가 돌아온다 ──────────────────────
   try {
@@ -778,13 +860,20 @@ check([r7c, r13, r13b, r14b, r16, r17, r19].every((x) => x.ok === true) && r14.f
   { r7c: r7c.ok, r13: r13.ok, r13b: r13b.ok, r14: r14.fr, r14b: r14b.ok, r15: r15.fr, r16: r16.ok, r17: r17.ok, r19: r19.ok });
 check(r7c.remote === true && r7c.frame === false && r7c.statusAsked === 2, "R7c 한 번 «없음» 이었다가 돌아오면 iframe 칸으로 안 바뀐다(두 번 물었다)", r7c);
 check(r13.n > 100 && r13.acts >= 1 && r13.acts <= 6 && r13.total === r13.want && r13.afterEnd <= 2000 && r13.imgsDuring >= 2 && r13.withPoint === true, "R13 트랙패드 2초 — scroll act 6번 이하 · 굴린 만큼 다 · 끝난 뒤 2초 안 · 굴리는 동안에도 그림 · 굴린 자리(x, y)를 싣는다", r13);
-check(r13b.behindAt === true && r13b.said === true && r13b.refused === true && r13b.caught === true && r13b.caughtAfter <= 2500 && r13b.clickAfter === true && r13b.scrollsAfterClick === 0,
-  "R13b 굴리고 곧바로 누르면(화면이 따라오는 중) 안 보내고 알린다 · 2.5초 안에 따라오고 · 그 뒤 누르면 간다(굴리기 뒤에)", r13b);
+check(r13b.behindAt === true && r13b.said === true && r13b.stillSaid === true && r13b.refused === true && r13b.caught === true && r13b.caughtAfter <= 2500 && r13b.clickAfter === true && r13b.scrollsAfterClick === 0,
+  "R13b 굴리고 곧바로 누르면(화면이 따라오는 중) 안 보내고 알린다(0.6초 뒤에도 알림이 남는다) · 2.5초 안에 따라오고 · 그 뒤 누르면 간다(굴리기 뒤에)", r13b);
 const r13c = R.r13c || {}, r13d = R.r13d || {};
 check(r13c.ok === true && r13c.refused === true && r13c.total === r13c.want && r13c.scrollsAfterClick === 0 && (r13c.order || []).at(-1) === "click", "R13c 아주 느린 원격 — 따라오는 동안 누르기는 안 가고, 다 따라온 뒤 누르면 굴리기 다음에 간다 · 굴린 만큼 다", r13c);
 check(r13d.ok === true && r13d.n > 10 && r13d.total === r13d.want, "R13d 굴리기가 끝날 때 원격이 바빠도 줄이 비면 남은 휠이 간다", r13d);
 const r13e = R.r13e || {};
 check(r13e.ok === true && r13e.sentNoImg === true && r13e.behindAt === true && r13e.refused === true, "R13e 굴리기는 나갔고 그 그림이 아직이면 누르기를 안 보낸다", r13e);
+const r13f = R.r13f || {}, r13g = R.r13g || {}, r27 = R.r27 || {}, r27b = R.r27b || {};
+check(r13f.ok === true && r13f.failed === true && r13f.behindAt === true && r13f.honest === true && r13f.notCatching === true, "R13f 그림이 안 오는 중의 거절은 그 사정대로 말한다", r13f);
+const r13h = R.r13h || {};
+check(r13h.ok === true && r13h.behind1 === true && r13h.behind2 === true && r13h.quiet === true, "R13h 한참 전에 거절했어도 누르지 않은 굴리기엔 거절 알림이 안 뜬다", r13h);
+check(r13g.ok === true && r13g.sent === true && r13g.behindAt === true && r13g.refused === true, "R13g PageDown 으로 굴리고 곧바로 누르면 안 보낸다", r13g);
+check(r27.ok === true && r27.behindAt === true && r27.caught === true && J(r27.acts) === J(["click"]), "R27 거절 뒤 다시 누르면(detail=2) 한 번 누름 하나만", r27);
+check(r27b.ok === true && r27b.behindAt === true && r27b.caught === true && J(r27b.acts) === J(["click", "click", "click", "click"]), "R27b 거절 뒤 연달아 누르면 따라온 뒤 누른 넷이 다 간다(«세 번째» 로 버리지 않는다) · 두 번 누름은 없다", r27b);
 check(r14.back === true && r14.after <= 3000, "R14 iframe 칸에서 세션을 바꾸면 곧바로 물어 3초 안에 원격 화면", r14);
 check(r14b.shotB === true && r14b.statusAsked === 0, "R14b 원격 화면에서 세션을 바꾸면 상태를 다시 묻지 않고 1초 안에 새 세션 화면", r14b);
 check(r15.remote === false && r15.frame === true && J(r15.shots) === "[]", "R15 묻는 사이 세션 없는 자리로 가면 원격 화면이 서지 않는다 · 화면도 안 받는다", r15);

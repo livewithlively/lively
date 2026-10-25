@@ -24,6 +24,9 @@ const REPROBE_MS = 30_000;
 /** 두 번 누름을 가르는 시간 — OS 더블클릭 간격(맥 기본 약 0.5초)에 맞춘다. 220ms 는 짧아 느린 두 번 누름이
  *  «한 번 + 두 번»(원격에서 세 번)이 됐다(격리 리뷰 실측: 250 · 400ms 간격). 그 사이 글 · 키가 오면 기다리지 않고 먼저 보낸다. */
 const DBL_MS = 400;
+/** 페이지를 굴리는 키 — 그 뒤 보이는 그림도 굴리기를 따라오는 중이다. 화살표 · Home · End 는 입력칸에서 글자 사이를 옮기는 키라 넣지 않는다
+ *  (넣으면 글을 고치다 누를 때마다 막힌다). 띄어쓰기는 글(insertText)로 가 페이지를 굴리지 않는다. */
+const SCROLL_KEYS = /(^|[\s+])Page(Up|Down)(?=$|\s)/;
 /** 원격 요청 하나의 상한 — 답 없는 요청 하나가 줄 전체를 막지 않게(게이트웨이는 40초 안에 답한다 — 망이 멈출 때를 위한 것). */
 const CALL_MS = 60_000;
 /** (세션, 탭)마다 원격 일의 줄 하나 — 화면마다 따로 두면, 세션을 A→B→A 로 오갈 때 닫히며 남은 입력을 보내는 옛 A 화면과
@@ -192,13 +195,14 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
       empty: '데스크톱 앱에 이 칸의 탭이 아직 없습니다 — 위 주소칸에 주소를 넣으면 데스크톱 앱 이 세션의 [웹]에 열리고 여기에 보입니다.',
       paused: '데스크톱 앱에서 이 탭에 [AI 멈춤]이 켜져 있어 원격 화면도 멈췄습니다 — 데스크톱 앱 그 칸에서 풀어 주세요.',
       //  데스크톱이 내는 문구는 AI 에게 쓴 것이다(«사람에게 창을 띄워 달라고 하세요») — 사람에겐 사람 말로.
-      stuck: '데스크톱 앱 화면을 찍지 못했습니다 — 데스크톱 앱 창이 지금 그려지지 않는 것 같습니다(화면이 꺼졌거나 잠자기). 잠시 뒤 다시 시도합니다.',
+      stuck: '데스크톱 앱 화면을 찍지 못했습니다 — 데스크톱 앱 창이 지금 그려지지 않는 것 같습니다(다른 데스크톱 공간에 있거나 화면이 꺼졌거나 잠자기). 잠시 뒤 다시 시도합니다.',
       error: text || '데스크톱 앱 화면을 받지 못했습니다 — 잠시 뒤 다시 시도합니다.',
     };
     msg.textContent = say[s];
     //  빈 탭 · 멈춤은 그림 위에 덮어 알린다. 불러오는 중 · 오류는 받아 둔 그림이 없을 때만 덮는다(있으면 그림을 두고 아래 줄에 적는다).
     msg.hidden = !(s === 'empty' || s === 'paused' || ((s === 'connecting' || s === 'stuck' || s === 'error') && !lastData));
-    sayNote(s === 'stuck' || s === 'error' ? say[s] : NOTE);
+    //  거절 알림은 따라오는 동안(3초까지) 남긴다 — 다음 그림 · 동작 응답이 곧바로 기본 안내로 덮어 0.1~0.5초만 보였다(격리 리뷰 4차).
+    sayNote(s === 'stuck' || s === 'error' ? say[s] : refusing() ? refuseText() : NOTE);
   }
   /** 아래 줄 — 두 줄까지만 보인다(CSS). 길면 그림 칸이 줄어 같은 휠이 더 멀리 갔다 — 전문은 title 로. */
   function sayNote(t: string): void { note.textContent = t; note.title = t; }
@@ -285,7 +289,7 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     });
   }
   function act(body: Record<string, unknown>): void {
-    const scroll = body.action === 'scroll';
+    const scroll = body.action === 'scroll' || (body.action === 'key' && SCROLL_KEYS.test(String(body.keys || '')));
     if (scroll) scrollsWaiting++;
     enqueue(async (last) => {
       const my = ++sentSeq;
@@ -347,10 +351,18 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
    *  (격리 리뷰 실측: 1초 굴리고 곧바로 누르면 아직 안 보인 굴리기 1,700px 뒤에 눌렸다). 그림이 따라오면 곧 다시 누를 수 있다. */
   function refuseWhileBehind(): boolean {
     if (!behind()) return false;
-    sayNote('화면이 아직 굴리기를 따라오는 중이에요 — 그림이 멈춘 뒤 다시 눌러 주세요.');
+    refusedAt = Date.now();
+    sayNote(refuseText());
     if (!inflight && queued === 0 && held?.kind !== 'wheel') schedule(0);
     return true;
   }
+  let refusedAt = 0;
+  /** 방금(3초 안) 거절했고 아직 따라오는 중 — 아래 줄에 거절 알림을 남겨 둘 때. */
+  const refusing = (): boolean => refusedAt > 0 && Date.now() - refusedAt < 3_000 && behind();
+  /** 거절 알림 — 그림이 안 오는 중(찍기 실패 · 오류)이면 «멈춘 뒤» 가 거짓 안내라 그 사정대로 말한다. */
+  const refuseText = (): string => (root.dataset.state === 'stuck' || root.dataset.state === 'error'
+    ? '화면이 아직 오지 않아 누르기를 보내지 않았어요 — 화면이 다시 오면 눌러 주세요.'
+    : '화면이 아직 굴리기를 따라오는 중이에요 — 그림이 멈춘 뒤 다시 눌러 주세요.');
 
   // ── 글 · 키 ─────────────────────────────────────────────────────────────
   function queueInput(it: InputItem): void {
@@ -422,14 +434,20 @@ function makeRemote(ctx: PartCtx, lost: () => void): Remote {
     const r = img.getBoundingClientRect();
     return toShotPoint(e.clientX - r.left, e.clientY - r.top, r.width, r.height, shotW, shotH);
   };
+  let lastDoubleAt = 0;
   img.addEventListener('click', (e: MouseEvent) => {
     const p = pointOf(e);
     sink.focus({ preventScroll: true });
-    if (!p || e.detail >= 3) return;               // 세 번째 누름 — 두 번 누름을 이미 보냈다
+    if (!p) return;
+    //  브라우저가 센 누른 수(detail)는 우리가 안 보낸 누르기도 센다 — 그대로 믿으면 따라오는 중이라 거절한 누르기 뒤의 재시도가
+    //   두 번 누름이 되어 버튼이 두 번 눌리고, 연달아 누른 것은 «세 번째» 로 소리 없이 다 버려졌다(격리 리뷰 4차). 그래서
+    //   세 번째 버림은 우리가 방금 두 번 누름을 보냈을 때만, 두 번 누름은 모여 있는 첫 누르기가 있을 때만이다.
+    if (e.detail >= 3 && Date.now() - lastDoubleAt < DBL_MS) return;
     if (refuseWhileBehind()) return;
-    if (e.detail === 2) {
-      //  두 번 누름 — 모여 있던 첫 누르기는 이 두 번 누름의 앞쪽이다(따로 보내지 않는다). 다른 것이 모여 있으면 그것이 먼저.
-      if (held?.kind === 'click') { clearTimeout(heldTimer); heldTimer = 0; held = null; } else release();
+    if (e.detail === 2 && held?.kind === 'click') {
+      //  두 번 누름 — 모여 있던 첫 누르기는 이 두 번 누름의 앞쪽이다(따로 보내지 않는다).
+      clearTimeout(heldTimer); heldTimer = 0; held = null;
+      lastDoubleAt = Date.now();
       act({ action: 'double_click', x: p.x, y: p.y });
       return;
     }
