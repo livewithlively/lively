@@ -413,7 +413,7 @@ export function pageScrollState(x: number, y: number): { x: number; y: number; p
 
 /**
  * 그 자리의 스크롤 칸(pageScrollState 와 같은 칸 — 없으면 문서)을 dx·dy 만큼 **바로** 굴린다(부드러운 스크롤 없이). 게스트 안에서 돈다.
- *  창이 화면에 그려지지 않으면 휠의 부드러운 스크롤이 첫 박자에서 멈춘다 — 그때 남은 거리를 이걸로 마저 간다(browser-host-kit scrollRemainder).
+ *  숨은 창에서는 휠이 뒤늦게 처리돼 잰 값이 틀리므로 휠 대신 이걸로 굴린다(browser-host-kit scrollPlan).
  */
 export function pageScrollBy(x: number, y: number, dx: number, dy: number): void {
   const opt = { left: dx, top: dy, behavior: 'instant' as ScrollBehavior };

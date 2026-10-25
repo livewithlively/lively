@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS,
+  BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH,
   DRM_HANDOFF_HOSTS, hostMatches, surfaceNavTarget, cleanUserAgent, webviewAttachDecision,
   SURFACE_ALLOWED_PERMISSIONS, surfacePermissionAllowed,
 } from "./browser-surface.mjs";
@@ -180,6 +180,20 @@ t("F7 ★ 세션 곁칸 '웹' 도 능력이 있으면 서피스로 그린다 —
   // ★ #1819 가 들여온 reload() 는 iframe 전용이다 — webview 엔 contentWindow 가 없어 `?.` 가 조용히 빠지고
   //  그대로 return 된다. 즉 '다시 불러오기'가 **아무 일도 안 한다**(무동작은 오동작보다 찾기 어렵다).
   assert.match(seg, /if \(live\) \{ try \{ \(frame as any\)\.reload\(\); return; \}/, "★ reload 에 webview 분기가 없다");
+});
+
+// ── G. 가려진 창(다른 데스크톱 공간 · 전체 화면 앱 뒤)도 숨김으로 치지 않는다 — AI 가 그동안 연 페이지가 그려지고 찍히게(#4993) ──
+t("G1 스위치 이름은 Chromium 의 그것 그대로", () => {
+  assert.equal(OCCLUDED_WINDOW_SWITCH, "disable-backgrounding-occluded-windows");
+});
+
+t("G2 ★ 앱이 준비되기 전에 건다 — whenReady 뒤에 걸면 안 먹는다(Chromium 이 이미 떴다)", () => {
+  const at = MAIN.indexOf("app.commandLine.appendSwitch(OCCLUDED_WINDOW_SWITCH)");
+  assert.ok(at >= 0, "★ 스위치를 안 건다 — 사람이 다른 공간에 있는 동안 새로 연 페이지가 안 그려져 화면 찍기가 끝나지 않는다");
+  const lock = MAIN.indexOf("app.requestSingleInstanceLock()");
+  const ready = MAIN.indexOf("app.whenReady()");
+  assert.ok(lock >= 0 && ready >= 0, "수명 블록(단일 인스턴스 · whenReady)이 사라졌다");
+  assert.ok(at < lock && at < ready, "★ 스위치가 준비 이후에 걸린다 — 안 먹는다");
 });
 
 console.log(`\n${pass} passed`);

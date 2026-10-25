@@ -5,7 +5,7 @@
 //  ② JS 실행 원문(lib/browser-page.js evalSource · callSource) — 사용자 코드는 문자열 평가(eval) 없이 원문에 끼운다.
 //     많은 사이트가 CSP 로 unsafe-eval 을 막아(github 실측) 페이지 안에서 new Function 을 부르는 순간 막히기 때문이다.
 //  ③ 호스트 판정(v2/browser-host-kit.js) — 실앱 끝단 확인(상민님 앱, 2026-10-25)에서 나온 셋:
-//     이동 기다림(L — 늦게 온 앞 적재의 멈춤으로 끝나지 않는다) · 화면 찍기 시간 예산(C) · 스크롤 마저 굴리기(S).
+//     이동 기다림(L — 늦게 온 앞 적재의 멈춤으로 끝나지 않는다) · 화면 찍기 시간 예산(C) · 스크롤 보내는 법(P — 숨은 창은 휠 대신 바로).
 //     webview 는 가짜 사건 표적, 찍기·쉬기는 가짜 함수로 — 사건 순서와 시간만 재현한다.
 //  DOM 이 있어야 하는 것(요소 읽기 · ref 좌표 · 양식 · 스크롤)은 Electron 실측 하네스로 검증했다(지식 lively-browser-ai-control-design-4993).
 import assert from "node:assert/strict";
@@ -19,7 +19,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
 
 const { sessionOfKey, tabNoOfKey, keyOfTab, slotOfKey } = await import(join(root, "public/app/v2/browser-tabs.js"));
 const { evalSource, callSource } = await import(join(root, "public/app/lib/browser-page.js"));
-const { loadAndWait, captureFrame, scrollRemainder } = await import(join(root, "public/app/v2/browser-host-kit.js"));
+const { loadAndWait, captureFrame, scrollPlan } = await import(join(root, "public/app/v2/browser-host-kit.js"));
 
 // panes-kit 의 저장 열쇠 규칙(같은 규칙을 글로 옮긴 것 — panes-kit 은 DOM 을 끌어와 node 에서 못 부른다).
 //  ⚠ panes-kit.ts slotStoreKey 가 바뀌면 이 줄도 같이 바꿔야 한다(그때 이 표가 왕복을 다시 잰다).
@@ -286,20 +286,17 @@ const settle = async (p) => { const t0 = Date.now(); try { return { v: await p, 
 }
 
 {
-  const at = (x, y, inner) => (inner ? { x, y, inner } : { x, y });
-  eq(scrollRemainder(at(0, 0), at(0, 24), 1200, "down"), { dx: 0, dy: 1176 }, "S1 아래로 1200 중 24 에서 섰다 → 남은 1176");
-  eq(scrollRemainder(at(0, 0), at(0, 1200), 1200, "down"), null, "S2 다 갔으면 없음");
-  eq(scrollRemainder(at(0, 0), at(0, 0), 1200, "down"), null, "S3 안 움직였으면 없음(끝 · 휠을 가로채는 페이지)");
-  eq(scrollRemainder(at(0, 1500), at(0, 1470), 600, "up"), { dx: 0, dy: -570 }, "S4 위로 600 중 30 → 남은 570 위로");
-  eq(scrollRemainder(at(0, 0), at(24, 0), 900, "right"), { dx: 876, dy: 0 }, "S5 오른쪽 900 중 24 → 남은 876");
-  eq(scrollRemainder(at(900, 0), at(880, 0), 900, "left"), { dx: -880, dy: 0 }, "S5 왼쪽 900 중 20 → 남은 880 왼쪽");
-  const m = (top) => ({ tag: "main#m", top, left: 0 });
-  eq(scrollRemainder(at(0, 0, m(0)), at(0, 0, m(30)), 1000, "down"), { dx: 0, dy: 970 }, "S6 안쪽 칸은 그 칸의 자리로 잰다");
-  eq(scrollRemainder(at(0, 0), at(0, 30, m(30)), 1000, "down"), null, "S7 앞뒤 칸이 다르면(없음→안쪽) 짐작하지 않는다");
-  eq(scrollRemainder(at(0, 0, m(0)), at(0, 0, { tag: "div#x", top: 30, left: 0 }), 1000, "down"), null, "S7 다른 안쪽 칸이면 없음");
-  eq(scrollRemainder(at(0, 0), at(0, 500), 1000, "down"), null, "S8 경계 — 정확히 절반 갔으면 없음");
-  eq(scrollRemainder(at(0, 0), at(0, 499), 1000, "down"), { dx: 0, dy: 501 }, "S8 경계 — 절반에 하나 못 미치면 남은 501");
-  eq([scrollRemainder(null, at(0, 24), 1200, "down"), scrollRemainder(at(0, 0), undefined, 1200, "down"), scrollRemainder(at(0, 0), at(0, 24), 0, "down")], [null, null, null], "S9 앞·뒤 상태가 없거나 거리가 0 이면 없음");
+  //  P — 스크롤 보내는 법. 숨은 창은 페이지에서 바로(페이지 부호), 보이는 창은 휠 300px 씩(Electron 휠 부호 = 페이지 부호의 반대).
+  const W = (dx, dy) => ({ deltaX: dx, deltaY: dy });
+  eq(scrollPlan(true, 1200, "down"), { page: { dx: 0, dy: 1200 } }, "P1 숨은 창 · 아래 1200 → 페이지에서 바로 +1200(휠 없음)");
+  eq(scrollPlan(true, 500, "up"), { page: { dx: 0, dy: -500 } }, "P2 숨은 창 · 위 500 → -500");
+  eq([scrollPlan(true, 700, "right"), scrollPlan(true, 50, "left")], [{ page: { dx: 700, dy: 0 } }, { page: { dx: -50, dy: 0 } }], "P3 숨은 창 · 오른쪽 +700 · 왼쪽 -50");
+  eq(scrollPlan(false, 1200, "down"), { wheel: [W(0, -300), W(0, -300), W(0, -300), W(0, -300)] }, "P4 보이는 창 · 아래 1200 → 휠 -300 네 번");
+  eq(scrollPlan(false, 650, "up"), { wheel: [W(0, 300), W(0, 300), W(0, 50)] }, "P5 보이는 창 · 위 650 → 휠 +300 · +300 · +50");
+  eq([scrollPlan(false, 300, "right"), scrollPlan(false, 900, "left")], [{ wheel: [W(-300, 0)] }, { wheel: [W(300, 0), W(300, 0), W(300, 0)] }], "P6 보이는 창 · 오른쪽 -300 한 번 · 왼쪽 +300 세 번");
+  eq([scrollPlan(false, 300, "down").wheel.length, scrollPlan(false, 301, "down").wheel], [1, [W(0, -300), W(0, -1)]], "P7 경계 — 300 은 한 번 · 301 은 두 번(-300, -1)");
+  eq([20000, 20001, Infinity, NaN, 0].map((n) => scrollPlan(true, n, "down").page.dy), [20000, 20000, 20000, 600, 600], "P8 경계 — 상한 20,000 · 무한·숫자 아님·0 은 기본 600");
+  eq([scrollPlan(true, 100, ""), scrollPlan(true, 100, "x")], [{ page: { dx: 0, dy: 100 } }, { page: { dx: 0, dy: 100 } }], "P9 방향이 없거나 모르면 아래");
 }
 
 console.log(`\n${pass} 통과`);

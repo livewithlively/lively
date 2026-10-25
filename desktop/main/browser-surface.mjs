@@ -51,6 +51,16 @@ export const WEBVIEW_FORCED_PREFS = Object.freeze({
 export const WEBVIEW_DROPPED_PREFS = Object.freeze(["preload", "preloadURL"]);
 
 /**
+ * 앱이 준비되기 **전에** 거는 Chromium 스위치 — 창이 가려지거나 다른 데스크톱 공간에 있어도 «숨김»으로 치지 않는다(#4993).
+ *  왜: AI 가 쓰는 웹 칸은 사람이 다른 공간에서 일할 때(전체 화면 게임 등) 돈다. 그 사이 새로 연 페이지는 창이 숨김으로 쳐져
+ *  한 번도 그려지지 않아 화면 찍기가 끝나지 않았다(실측 2026-10-25 상민님 앱). 같은 조건 13차 실측(Electron 43.3.0):
+ *  스위치 없이는 렌더러 capturePage · 메인 capturePage(stayHidden 포함) · CDP · 창/게스트 backgroundThrottling 끄기 **8가지 모두 실패**,
+ *  스위치를 걸면 8가지 모두 새 페이지가 22~461ms 에 찍혔다.
+ *  ⚠ 대가: 가려진 창도 «보임»이라 그동안 웹 UI 의 숨김 절전(document.hidden)이 안 걸린다. 트레이로 닫거나 최소화한 창은 그대로 숨김이다.
+ */
+export const OCCLUDED_WINDOW_SWITCH = "disable-backgrounding-occluded-windows";
+
+/**
  * 앱 안에서 열지 않고 **시스템 브라우저로 넘길** 서비스 — Widevine DRM 이 필요한 유료 스트리밍.
  *  실측: 순정 Electron 은 `com.widevine.alpha` 만 NotSupportedError 다(EME 자체와 H.264 는 멀쩡하고 CDM 만 없다).
  *  유튜브는 EME 를 아예 안 쓰므로 여기 없다 — 실측으로 그냥 재생된다(readyState 4, 재생 진행 확인).
