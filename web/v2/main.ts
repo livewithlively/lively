@@ -542,7 +542,7 @@ export async function bootV2(): Promise<void> {
         window.setTimeout(() => { if (tabsApi && tabsApi.tabs.includes(left) && tabsApi.current() !== left && isFullRoute(left.route)) tabsApi.close(left); }, 0);
       }
       if (fresh) void renderRoute(tab);
-      else markActive(routeKey(tab.route));
+      else { markActive(routeKey(tab.route)); tab.chat?.reshown?.(); }   // #4996 — 다시 켠 세션 탭은 아래 도장 전에 «남이 터미널을 쥐었나» 를 다시 잰다
       drawSide();
       markViewedSessionSeen();   // #3870 — 창을 갈아 끼우면 보던 세션의 얼굴 줄에서 곧바로 빠지고, 새 세션엔 곧바로 선다
     },

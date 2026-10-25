@@ -60,6 +60,8 @@
 //   W35 #4996 다른 사람이 터미널로 보고 있다(얼굴 줄 term) → 대화창으로 연다(액자 없음 · 안내) · 말을 보내면 숨겨 붙였다가 들어간 뒤 터미널
 //   W36 다른 사람이 대화창으로 보고 있다 → 종전대로 터미널 · W37 얼굴 줄을 아직 모른다 → 액자 없이 기다렸다가 답으로 판정
 //   W38 답이 끝내 안 온다 → 1.2초 뒤 터미널 · W39 도장 안 찍는 화면(awaitViewers 없음) → 종전 그대로
+//   W40 다시 켠 탭(셸 reshown) — 떠나 있는 동안 다른 사람이 터미널을 쥐었으면 처음 열 때처럼 비켜 선다(판정까지 «대화» 로 알림 · 비키면 액자를 걷음)
+//   W40e 그렇게 비켜 선 탭에서 말을 보내면 처음 열 때(W35)처럼 그 말이 들어간 뒤 터미널로
 //   W30 되살린 화면 · 그린 뒤 서버가 «다 쳤다»(outbox.typed — 세션 상태 통로) → 기록 에코를 기다리지 않고 그 자리에서 터미널
 //       (에코는 Claude Code 가 제출 훅을 다 돈 뒤 적어 몇 초 늦다 — 매니지드 실측. 이 장면엔 에코가 아예 없다)
 //   W31 «다 쳤다» 가 다른 말(다른 탭에서 보낸 것)의 것 → 넘기지 않는다
@@ -93,7 +95,7 @@ const CSS = ["01-base.css", "03-components.css", "36-chat.css", "38-chat-tui.css
 const XTERM = ["xterm.min.js", "xterm.min.css"].map((f) => path.join(ROOT, "public/vendor/xterm", f));
 for (const f of XTERM) if (!existsSync(f)) { console.error(`FAIL  vendored xterm 없음: ${f}`); process.exit(1); }
 const sc = buildSync({
-  stdin: { contents: "export { mountSessionChat } from './web/session-chat.ts'; export { setViewers } from './web/v2/presence.ts';", resolveDir: ROOT, loader: "ts" },
+  stdin: { contents: "export { mountSessionChat } from './web/session-chat.ts'; export { setViewers, forgetHeard } from './web/v2/presence.ts';", resolveDir: ROOT, loader: "ts" },
   bundle: true, format: "iife", globalName: "SC", write: false, platform: "browser", target: "es2020", logLevel: "silent",
 }).outputFiles[0].text;
 const tm = buildSync({
@@ -598,6 +600,88 @@ async function PAGE_MAIN() {
       R.w39 = { at200: v.snap() };
       v.done();
     }
+    // W40 — #4996 다시 켠 탭: 터미널로 보던 화면을 뒤에 두었다가 다시 켰는데 그새 다른 사람이 터미널을 쥐었다
+    {
+      SC.setViewers("box-w40", []);                                      // 처음엔 아무도 없다 — 곧바로 터미널
+      const v = mount("box-w40", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      R.w40 = { open: v.snap() };
+      SC.setViewers("box-w40", [{ id: "jang", name: "장원준", term: true }]);   // 보는 중에 남이 터미널로 들어왔다 — 먼저 보던 쪽은 비켜 서지 않는다
+      await sleep(150);
+      R.w40.stay = v.snap();
+      const ev0 = VIEW_EVS;
+      SC.forgetHeard("box-w40");                                         // 셸이 떠날 때 하는 일(leaveViewed) — 떠난 뒤엔 밀어 주는 줄을 못 받는다
+      v.h.reshown();                                                     // 셸이 이 탭을 다시 켰다(떠나 있던 사이 장원준이 쥐었다)
+      R.w40.right = { s: v.snap(), view: v.h.viewMode(), evs: VIEW_EVS - ev0 };
+      SC.setViewers("box-w40", [{ id: "jang", name: "장원준", term: true }]);   // 다시 켜며 찍은 도장의 응답
+      await sleep(150);
+      R.w40.after = v.snap(); R.w40.note = v.box.textContent.includes("장원준님이 이 세션을 터미널로 보고 있어요"); R.w40.viewAfter = v.h.viewMode();
+      v.h.reshown();                                                     // 비켜 선 화면을 다시 켜도 그대로
+      await sleep(100);
+      R.w40.again = v.snap();
+      v.done();
+    }
+    {
+      SC.setViewers("box-w40b", []);
+      const v = mount("box-w40b", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      SC.forgetHeard("box-w40b");
+      v.h.reshown();
+      R.w40b = { right: v.snap(), view: v.h.viewMode() };
+      SC.setViewers("box-w40b", []);                                     // 아무도 안 쥐었다 — 가린 액자를 다시 보인다
+      await sleep(150);
+      R.w40b.after = v.snap(); R.w40b.view2 = v.h.viewMode();
+      v.done();
+    }
+    {
+      SC.setViewers("box-w40c", []);
+      const v = mount("box-w40c", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      SC.forgetHeard("box-w40c");
+      v.h.reshown();                                                     // 도장 응답이 끝내 안 온다 — 1.2초 뒤 종전대로 터미널
+      await sleep(1400);
+      R.w40c = { after: v.snap(), view: v.h.viewMode() };
+      v.done();
+    }
+    {
+      SC.setViewers("box-w40e", []);                                     // W40e — 다시 켜며 비켜 선 탭에서 말을 보낸다
+      const v = mount("box-w40e", "ink=300", { awaitViewers: true });
+      await sleep(1500);                                                 // 액자가 붙고 «그렸다» 까지 지나간 뒤
+      SC.forgetHeard("box-w40e");
+      v.h.reshown();
+      SC.setViewers("box-w40e", [{ id: "jang", name: "장원준", term: true }]);
+      await sleep(150);
+      R.w40e = { yielded: v.snap() };
+      const inp = v.input();
+      inp.value = "다시 켜고 비켜 선 탭에서 보낸 말 W40e"; inp.dispatchEvent(new Event("input"));
+      inp.closest("form").requestSubmit();
+      echoAt("box-w40e", 1200, "다시 켜고 비켜 선 탭에서 보낸 말 W40e");
+      await sleep(3000);
+      R.w40e.after = v.snap(); R.w40e.view = v.h.viewMode();
+      v.done();
+    }
+    {
+      SC.setViewers("box-w40f", []);                                     // W40f — 떠나기 전에 들은 줄엔 장원준이 쥐고 있었다 · 돌아와 찍은 도장은 답이 없다
+      const v = mount("box-w40f", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      SC.setViewers("box-w40f", [{ id: "jang", name: "장원준", term: true }]);
+      await sleep(100);
+      SC.forgetHeard("box-w40f");
+      v.h.reshown();
+      await sleep(1400);
+      R.w40f = { after: v.snap(), view: v.h.viewMode() };
+      v.done();
+    }
+    {
+      SC.setViewers("box-w40d", []);
+      const v = mount("box-w40d", "ink=300", { awaitViewers: true });
+      await sleep(300);
+      SC.setViewers("box-w40d", [{ id: "jang", name: "장원준", term: true }]);   // 떠나지 않은 채(곁칸 등) 밀려 온 줄 — 막 들었다
+      await sleep(100);
+      v.h.reshown();
+      R.w40d = { right: v.snap(), note: v.box.textContent.includes("장원준님이 이 세션을 터미널로 보고 있어요") };
+      v.done();
+    }
     // W22 — 되살린 화면(매니지드 행) · 먼저 그리고 말은 2.6초에 들어간다
     {
       const v = mount("box-w22", "ink=600", { firstPrompt: "되살리며 보낸 말 W22" }, true, null, false, { node: "sesshost-test" });
@@ -915,6 +999,28 @@ check(!(w35b.yielded || {}).frame && w35b.note && (w35b.after || {}).term && (w3
   "W35b 터미널을 쥐고 있던 사람이 나가거나 대화로 옮기면 비켜 선 판을 풀고 터미널로 돌아간다 · 안내는 걷힌다", w35b);
 check((R.w39 || {}).at200 && R.w39.at200.term && R.w39.at200.frame,
   "W39 도장을 안 찍는 화면(awaitViewers 없음)은 종전 그대로 곧바로 터미널", R.w39);
+const w40 = R.w40 || {};
+check((w40.open || {}).term && (w40.stay || {}).term && (w40.stay || {}).vis === "visible",
+  "W40 먼저 터미널로 보던 사람은 남이 들어와도 비켜 서지 않는다(나중에 온 쪽이 비킨다)", { open: w40.open, stay: w40.stay });
+check(w40.right && w40.right.view === "chat" && w40.right.evs === 1 && w40.right.s.vis === "visible" && w40.right.s.frame,
+  "W40 ★ 다시 켠 탭은 판정이 날 때까지 «대화로 본다» 고 곧바로 알린다(셸 도장이 «터미널» 로 나가지 않게) · 액자는 가리지 않는다", w40.right);
+check((w40.after || {}).chatShown && !(w40.after || {}).term && !(w40.after || {}).frame && w40.note && w40.viewAfter === "chat" && (w40.again || {}).chatShown,
+  "W40 ★ 떠나 있는 사이 다른 사람이 터미널을 쥐었으면 다시 켠 탭이 대화창으로 비켜 선다 · 붙어 있던 액자는 걷는다 · 안내", { after: w40.after, note: w40.note, again: w40.again });
+const w40b = R.w40b || {};
+check(w40b.right && w40b.view === "chat" && (w40b.after || {}).term && (w40b.after || {}).frame && w40b.view2 === "term",
+  "W40b 아무도 안 쥐었으면 터미널 그대로 · «터미널» 로 다시 알림", w40b);
+const w40f = R.w40f || {};
+check((w40f.after || {}).term && (w40f.after || {}).frame && w40f.view === "term",
+  "W40f 답이 시한 안에 안 오면 떠나기 전의 낡은 줄로 비켜 서지 않는다(그 사람은 이미 나갔을 수 있다 — 모르면 막지 않는다)", w40f);
+const w40e = R.w40e || {};
+check((w40e.yielded || {}).chatShown && !(w40e.yielded || {}).frame && (w40e.after || {}).term && !(w40e.after || {}).warm && w40e.view === "term",
+  "W40e ★ 다시 켜며 비켜 선 탭에서 말을 보내면 그 말이 들어간 뒤 터미널로(25초 시한까지 밀리지 않는다 — 격리 리뷰)", w40e);
+const w40c = R.w40c || {};
+check((w40c.after || {}).term && (w40c.after || {}).vis === "visible" && w40c.view === "term",
+  "W40c 다시 켠 뒤 도장 응답이 안 오면 1.2초 뒤 종전대로 터미널(모르면 막지 않는다)", w40c);
+const w40d = R.w40d || {};
+check((w40d.right || {}).chatShown && !(w40d.right || {}).term && w40d.note,
+  "W40d 얼굴 줄을 막 들었으면 다시 켜는 즉시 판정한다(기다리지 않음)", w40d);
 const w22 = R.w22 || {};
 check(w22.inkAt != null && w22.inkAt < 1200 && (w22.during || {}).warm && !(w22.during || {}).term && (w22.during || {}).chatShown && w22.n === 1 && /전달 대기 중/.test(String(w22.qstate || "")),
   "W22 하네스가 그렸어도 보낸 말이 아직 안 들어갔으면 대화창에 머문다(대기 말풍선 그대로)", w22);
