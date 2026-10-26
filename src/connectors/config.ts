@@ -124,6 +124,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "exclude_pages", env: "NOTION_EXCLUDE_PAGES", secret: false, label: "제외 페이지", picker: "notion_pages", hint: "여기 지정한 페이지·DB 와 그 하위 전체를 싱크에서 제외(쉼표구분). 루트 안의 특정 서브트리를 빼거나 전체 공유 중 일부만 뺄 때. 이미 싱크된 항목은 다음 전체 싱크에서 자동 보관 처리(제외 해제 시 복원)" },
       { key: "comments", env: "NOTION_COMMENTS", secret: false, label: "댓글 수집", hint: "page(기본: 페이지 단위) | all(블록 단위, 고비용) | off" },
       { key: "asset_dir", env: "NOTION_ASSET_DIR", secret: false, label: "첨부 파일 저장 경로", hint: "이미지/파일 다운로드 디렉터리 (기본 ./data/notion-assets)" },
+      // #5012 — 셀프호스트 디스크 보호. 동영상 몇 개가 첨부 용량의 대부분을 차지한다(위시스트 실측 0.5% 파일 = 74% 용량).
+      { key: "asset_max_mb", env: "NOTION_ASSET_MAX_MB", secret: false, label: "첨부 크기 상한(MB)", hint: "이보다 큰 첨부는 받아 두지 않고 원본 링크 안내만 남깁니다(기본 50). 디스크 여유가 전체의 15%(최소 5GB) 아래로 내려가도 받지 않습니다" },
       { key: "api_version", env: "NOTION_API_VERSION", secret: false, label: "API 버전", hint: "기본 2025-09-03 (data_source 분리)" },
     ],
   },
@@ -212,6 +214,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "token", env: "LINEAR_TOKEN", secret: true, label: "토큰", hint: "lin_api_… 개인 API 키도 됩니다 — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
       { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [자료 가져오기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
       { key: "teams", env: "LINEAR_TEAMS", secret: false, label: "팀", hint: "팀 키(예 ENG PRD) — 공백·쉼표로 여러 개. 비우면 워크스페이스 전체" },
+      { key: "asset_max_mb", env: "LINEAR_ASSET_MAX_MB", secret: false, label: "첨부 크기 상한(MB)", hint: "이보다 큰 첨부(이미지·영상)는 받아 두지 않고 원래 링크를 남깁니다(기본 50). 디스크 여유가 전체의 15%(최소 5GB) 아래로 내려가도 받지 않습니다" },
       { key: "include_documents", env: "LINEAR_INCLUDE_DOCUMENTS", secret: false, label: "문서 포함", hint: "on(기본) | off — Linear Documents" },
       //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
       //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).

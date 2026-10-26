@@ -24,6 +24,7 @@ import type { NotionUser } from "../notion-types.js";
 import type { NotionLedger } from "../../v6/connector-mirror.js"; // type-only — 런타임 의존 없음(원장은 run-sync 가 주입)
 import { loadConfig, notionFetch, reqCount, resetReqCount } from "./client.js";
 import { downloadAsset, findUrlByPath, refreshAssetUrl } from "./assets.js";
+import { AssetSkip } from "../asset-limits.js";
 import { dbNode, pageNode } from "./state.js";
 import { startProgressTicker } from "./ticker.js";
 import type { DbNode, NotionRunStats, PageNode, Traversal } from "./state.js";
@@ -135,6 +136,7 @@ async function* backfill(opts?: BackfillOpts, onStats?: (s: NotionRunStats) => v
   //  assetFailures + failures(커서 동결 → 다음 run 재시도). 디렉토리 선검사: 권한 문제(EACCES)는 파일마다 반복
   //  실패시키지 말고 한 번에 명확한 처방으로 알린다.
   const assetsDone = new Set<string>();
+  let diskFloorHit = false;
   let assetDirOk: boolean | null = null;
   const downloadPendingAssets = async (): Promise<void> => {
     const jobs = [...t.assetJobs.values()].filter((j) => !assetsDone.has(j.file));
@@ -154,10 +156,17 @@ async function* backfill(opts?: BackfillOpts, onStats?: (s: NotionRunStats) => v
         if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
         continue;
       }
+      if (diskFloorHit) { t.stats.assetSkipped = (t.stats.assetSkipped ?? 0) + 1; continue; } // 이번 실행은 더 받지 않는다 — 다음 실행이 공간을 보고 다시
       try {
-        await downloadAsset(t, job, cfg.assetDir);
+        await downloadAsset(t, job, cfg.assetDir, { maxBytes: cfg.assetMaxBytes });
         t.stats.assets++;
       } catch (err) {
+        if (err instanceof AssetSkip) {
+          // 실패가 아니다 — 커서를 묶지 않는다. 크기 상한은 표시를 남겼고(다시 안 긁는다), 디스크 하한은 표시 없이 다음 실행에 다시 본다.
+          t.stats.assetSkipped = (t.stats.assetSkipped ?? 0) + 1;
+          if (err.reason === "disk_floor") { diskFloorHit = true; console.error(`[notion] ${err.message} — 이번 실행의 남은 첨부는 받지 않는다(공간이 생기면 다음 실행이 다시 받는다)`); }
+          continue;
+        }
         t.stats.assetFailures++;
         t.stats.failures++;
         if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
@@ -229,7 +238,7 @@ async function* backfill(opts?: BackfillOpts, onStats?: (s: NotionRunStats) => v
   await downloadPendingAssets(); // DB 방출이 남긴 첨부(커버·아이콘)까지
 
   t.stats.requests = reqCount;
-  console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 첨부 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);
+  console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 첨부 ${t.stats.assets}(실패 ${t.stats.assetFailures} · 상한·디스크로 건너뜀 ${t.stats.assetSkipped ?? 0}) · 요청 ${t.stats.requests}`);
 
   } finally {
     clearInterval(ticker); // 소비자 조기 종료(return/throw) 포함 — 티커 누수 방지

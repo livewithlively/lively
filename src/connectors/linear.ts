@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { stateDir } from "../ops/state-dir.js";
+import { assetMaxBytes, diskRoom, type StatFs } from "./asset-limits.js";
 
 const PAGE = 100;
 export const MAX_PAGES = 100;
@@ -109,7 +110,8 @@ export function documentItem(instance: string, d: LDocument): RawItem {
 //  파일명 = 업로드 경로 해시 + 확장자 — 같은 업로드는 다시 받지 않는다(재수집·full 스윕에도 결정적).
 //  실패·상한 초과는 **원래 링크를 그대로 둔다**(본문을 잃지 않는다 — 다음 full 스윕이 원문에서 다시 시도한다).
 export const LINEAR_ASSET_ROUTE = "/api/ui/linear-assets/";
-export const MAX_ASSET_BYTES = 50 * 1024 * 1024;
+/** 기본 첨부 크기 상한 — 수집기 설정 «첨부 크기 상한(MB)» 이 비었을 때(#5012 asset-limits). */
+export const MAX_ASSET_BYTES = assetMaxBytes(undefined);
 const UPLOAD_RE = /(!?\[([^\]]*)\])\((https:\/\/uploads\.linear\.app\/[^)\s]+)\)/g;
 const EXT_BY_TYPE: Readonly<Record<string, string>> = {
   "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/bmp": "bmp",
@@ -145,24 +147,30 @@ export function rewriteLinearUploads(md: string, files: ReadonlyMap<string, stri
   });
 }
 
-export interface AssetStats { fetched: number; existing: number; failed: number; tooLarge: number }
+export interface AssetStats { fetched: number; existing: number; failed: number; tooLarge: number; diskFloor: number }
 export interface AssetCtx {
   token: string; dir: string;
   /** 업로드 키 → 저장된 파일명(시작 때 폴더를 한 번 읽어 채운다 — 이미 받은 것은 요청하지 않는다). */
   known: Map<string, string>;
   stats: AssetStats;
   fetchImpl?: typeof fetch;
+  /** 파일당 상한(바이트) — 수집기 설정, 기본 MAX_ASSET_BYTES. */
+  maxBytes: number;
+  /** 디스크 재기(테스트가 가짜를 넣는다). */
+  statfs?: StatFs;
   /** 새로 받거나 못 받은 첨부가 ASSET_PROGRESS_EVERY 개 쌓일 때마다 부른다 — 수집 추적기는 15분 무출력이면 run 을 죽인다
    *  (첫 판에서 위시스트 첨부 2,227개를 받다 16분째 «정체 감지» 로 끊겼다). 이미 있는 파일은 요청이 없어 세지 않는다. */
   onProgress?: (s: AssetStats) => void;
 }
 export const ASSET_PROGRESS_EVERY = 25;
 
-export function assetCtx(token: string, dir: string, fetchImpl?: typeof fetch, onProgress?: (s: AssetStats) => void): AssetCtx {
+export function assetCtx(token: string, dir: string, fetchImpl?: typeof fetch, onProgress?: (s: AssetStats) => void,
+  limits: { maxBytes?: number; statfs?: StatFs } = {}): AssetCtx {
   fs.mkdirSync(dir, { recursive: true });
   const known = new Map<string, string>();
   for (const f of fs.readdirSync(dir)) { const m = f.match(/^([0-9a-f]{24})\.[a-z0-9]{1,8}$/); if (m) known.set(m[1], f); }
-  return { token, dir, known, stats: { fetched: 0, existing: 0, failed: 0, tooLarge: 0 }, fetchImpl, onProgress };
+  return { token, dir, known, stats: { fetched: 0, existing: 0, failed: 0, tooLarge: 0, diskFloor: 0 }, fetchImpl, onProgress,
+    maxBytes: limits.maxBytes ?? MAX_ASSET_BYTES, statfs: limits.statfs };
 }
 
 async function fetchAsset(ctx: AssetCtx, url: string, text: string): Promise<string | null> {
@@ -171,7 +179,7 @@ async function fetchAsset(ctx: AssetCtx, url: string, text: string): Promise<str
   if (have) { ctx.stats.existing++; return have; }
   const file = await downloadAsset(ctx, key, url, text);
   const s = ctx.stats;
-  if ((s.fetched + s.failed + s.tooLarge) % ASSET_PROGRESS_EVERY === 0) ctx.onProgress?.(s);
+  if ((s.fetched + s.failed + s.tooLarge + s.diskFloor) % ASSET_PROGRESS_EVERY === 0) ctx.onProgress?.(s);
   return file;
 }
 
@@ -187,11 +195,16 @@ async function downloadAsset(ctx: AssetCtx, key: string, url: string, text: stri
       continue;
     }
     if (!res.ok) { await res.arrayBuffer().catch(() => null); ctx.stats.failed++; return null; }
-    if (Number(res.headers.get("content-length") ?? 0) > MAX_ASSET_BYTES) {
+    const len = Number(res.headers.get("content-length") ?? 0);
+    if (len > ctx.maxBytes) {
       await res.body?.cancel().catch(() => undefined); ctx.stats.tooLarge++; return null;
     }
+    // #5012 디스크 하한 — 받은 뒤 남을 공간이 하한 아래면 받지 않는다(원래 링크로 남고, 다음 full 이 공간을 보고 다시 시도).
+    if (!diskRoom(ctx.dir, len || ctx.maxBytes, ctx.statfs).ok) {
+      await res.body?.cancel().catch(() => undefined); ctx.stats.diskFloor++; return null;
+    }
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > MAX_ASSET_BYTES) { ctx.stats.tooLarge++; return null; }
+    if (buf.length > ctx.maxBytes) { ctx.stats.tooLarge++; return null; }
     const file = `${key}.${linearAssetExt(text, res.headers.get("content-type"))}`;
     const tmp = path.join(ctx.dir, `.${file}.${process.pid}.tmp`);
     fs.writeFileSync(tmp, buf);
@@ -277,7 +290,8 @@ export const linearConnector: Connector = {
     const instance = viewer.viewer?.organization?.urlKey || viewer.viewer?.organization?.id || "linear";
 
     const assets = assetCtx(token, stateDir("linear-assets"), undefined, (a) =>
-      console.error(`[linear] 첨부 받는 중 — 새로 받음 ${a.fetched} · 이미 있음 ${a.existing} · 실패 ${a.failed} · 상한 초과 ${a.tooLarge}`));
+      console.error(`[linear] 첨부 받는 중 — 새로 받음 ${a.fetched} · 이미 있음 ${a.existing} · 실패 ${a.failed} · 상한 초과 ${a.tooLarge} · 디스크 하한 ${a.diskFloor}`),
+      { maxBytes: assetMaxBytes(cfg.asset_max_mb) });
     const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
     const filter = issueFilter(sinceIso, teams);
     let after: string | null = null;
@@ -309,8 +323,8 @@ export const linearConnector: Connector = {
       }
     }
     const a = assets.stats;
-    if (a.fetched + a.existing + a.failed + a.tooLarge) {
-      console.error(`[linear] 첨부 — 새로 받음 ${a.fetched} · 이미 있음 ${a.existing} · 실패 ${a.failed} · 상한(${MAX_ASSET_BYTES / 1048576}MB) 초과 ${a.tooLarge} — 실패·초과는 원래 링크로 남는다`);
+    if (a.fetched + a.existing + a.failed + a.tooLarge + a.diskFloor) {
+      console.error(`[linear] 첨부 — 새로 받음 ${a.fetched} · 이미 있음 ${a.existing} · 실패 ${a.failed} · 상한(${Math.round(assets.maxBytes / 1048576)}MB) 초과 ${a.tooLarge} · 디스크 하한 ${a.diskFloor} — 받지 않은 것은 원래 링크로 남는다`);
     }
   },
   // 첨부를 게이트웨이 디스크(data/linear-assets)에 둔다 — 매니지드의 판(일시 유닛)은 그 디스크를 못 본다(노션과 같다).

@@ -1,8 +1,6 @@
 // Notion BFS 수집 계층(#1313 R22 분할 — 구 notion.ts 45-46·400-825).
 //  발견(루트/자식)과 무거운 수집(블록 트리·속성 페이지네이션·사용자·댓글)을 담당. 수집 대상 여부 판정은
 //  scope.ts, 방출(RawItem 변환)은 emit.ts.
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeNotionId } from "../notion-md.js";
 import type {
   NotionBlock, NotionComment, NotionDatabase, NotionDataSource, NotionPage, NotionUser,
@@ -13,6 +11,7 @@ import { dbNode, dsOwnerDb, isChanged, pageNode } from "./state.js";
 import type { DbNode, PageNode, Traversal } from "./state.js";
 import { underExcluded } from "./scope.js";
 import { isInvalidCredential, allScopedRootsFailed } from "../failure-class.js";
+import { assetSettled } from "../asset-limits.js";
 
 const MAX_BLOCK_DEPTH = 64; // 순환 방지 가드(정상 문서는 도달 불가 — 구버전의 '깊이 5 절단'과 달리 손실 아님)
 const PAGE_FETCH_RETRY = 2; // 페이지 단위 재시도(블록 트리 등) — 그 후 실패는 failures 로 집계(미방출)
@@ -228,7 +227,7 @@ export async function processPage(t: Traversal, node: PageNode): Promise<void> {
           : p?.type === "data_source_id" && p.data_source_id ? dsOwnerDb(t, normalizeNotionId(p.data_source_id)) ?? null
           : null);
       const assetsOk = !led?.assets?.length
-        || led.assets.every((f) => { try { return fs.existsSync(path.join(t.cfg.assetDir, f)); } catch { return false; } });
+        || led.assets.every((f) => assetSettled(t.cfg.assetDir, f)); // #5012 상한으로 일부러 안 받은 첨부도 «있는 셈»
       if (led && led.lifecycle === "active" && led.lastEdited === live && settled
           && (curParent == null || led.parentExt == null || curParent === led.parentExt) && assetsOk) {
         node.changed = false;

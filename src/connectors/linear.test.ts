@@ -56,6 +56,8 @@ function fakeFetch(replies: Record<string, Reply[]>): { fn: typeof fetch; calls:
   }) as unknown as typeof fetch;
   return { fn, calls };
 }
+// #5012 — 시험 기계의 실제 디스크와 무관하게 하한에 안 걸리는 가짜 디스크(하한 자체는 L1 이 잰다).
+const ROOMY = () => ({ bsize: 1, blocks: 1e15, bavail: 1e15 });
 const tmpDir = (): string => fs.mkdtempSync(path.join(os.tmpdir(), "linear-assets-"));
 const filesIn = (d: string): string[] => fs.readdirSync(d).filter((f) => !f.startsWith(".")).sort();
 
@@ -63,7 +65,7 @@ await (async () => {
   // 1 · 2 이미지 하나가 두 번 — Bearer 로 한 번 받고 두 곳 다 바꾼다
   {
     const d = tmpDir(); const f = fakeFetch({ [UP("a")]: [{ status: 200, type: "image/png" }] });
-    const ctx = assetCtx("tok", d, f.fn);
+    const ctx = assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY });
     const out = await localizeLinearUploads(`앞 ![image.png](${UP("a")}) 중간 ![image.png](${UP("a")})`, ctx);
     assert.deepEqual(f.calls, [{ url: UP("a"), auth: "Bearer tok" }], "한 번만 · 연결 토큰으로");
     const [file] = filesIn(d);
@@ -71,7 +73,7 @@ await (async () => {
     assert.equal(fs.readFileSync(path.join(d, file), "utf8"), "PNGDATA");
     assert.equal(out, `앞 ![image.png](${LINEAR_ASSET_ROUTE}${file}) 중간 ![image.png](${LINEAR_ASSET_ROUTE}${file})`);
     // 3 다음 실행 — 폴더에 이미 있으면 요청하지 않는다
-    const f2 = fakeFetch({}); const again = await localizeLinearUploads(`![image.png](${UP("a")})`, assetCtx("tok", d, f2.fn));
+    const f2 = fakeFetch({}); const again = await localizeLinearUploads(`![image.png](${UP("a")})`, assetCtx("tok", d, f2.fn, undefined, { statfs: ROOMY }));
     assert.equal(f2.calls.length, 0, "이미 받은 첨부를 다시 요청했다");
     assert.equal(again, `![image.png](${LINEAR_ASSET_ROUTE}${file})`);
   }
@@ -79,7 +81,7 @@ await (async () => {
   {
     const d = tmpDir();
     const f = fakeFetch({ [UP("v")]: [{ status: 200, type: "application/octet-stream" }], [UP("p")]: [{ status: 200, type: "image/jpeg" }], [UP("z")]: [{ status: 200, type: "application/x-odd" }] });
-    const out = String(await localizeLinearUploads(`[clip.mp4](${UP("v")}) ![](${UP("p")}) [첨부](${UP("z")})`, assetCtx("tok", d, f.fn)));
+    const out = String(await localizeLinearUploads(`[clip.mp4](${UP("v")}) ![](${UP("p")}) [첨부](${UP("z")})`, assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY })));
     const exts = filesIn(d).map((x) => x.split(".")[1]).sort();
     assert.deepEqual(exts, ["bin", "jpg", "mp4"]);
     assert.ok(!out.includes("uploads.linear.app"), out);
@@ -88,7 +90,7 @@ await (async () => {
   // 6 401·500 — 파일 없음 · 원래 링크 그대로
   {
     const d = tmpDir(); const f = fakeFetch({ [UP("x")]: [{ status: 401 }], [UP("y")]: [{ status: 500 }] });
-    const ctx = assetCtx("tok", d, f.fn);
+    const ctx = assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY });
     const src = `![a.png](${UP("x")}) ![b.png](${UP("y")})`;
     assert.equal(await localizeLinearUploads(src, ctx), src);
     assert.deepEqual(filesIn(d), []);
@@ -98,7 +100,7 @@ await (async () => {
   {
     const d = tmpDir();
     const f = fakeFetch({ [UP("big")]: [{ status: 200, type: "video/mp4", len: MAX_ASSET_BYTES + 1 }], [UP("edge")]: [{ status: 200, type: "image/png", len: MAX_ASSET_BYTES }] });
-    const ctx = assetCtx("tok", d, f.fn);
+    const ctx = assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY });
     const out = String(await localizeLinearUploads(`[big.mp4](${UP("big")}) ![e.png](${UP("edge")})`, ctx));
     assert.ok(out.includes(`[big.mp4](${UP("big")})`), "상한 초과는 원래 링크로 남아야 한다");
     assert.deepEqual(filesIn(d).map((x) => x.split(".")[1]), ["png"], "경계값(정확히 상한)은 받아야 한다");
@@ -106,7 +108,7 @@ await (async () => {
   }
   // 8 리니어 업로드가 아닌 링크 · 9 빈 본문 — 요청 0회 · 그대로
   {
-    const d = tmpDir(); const f = fakeFetch({}); const ctx = assetCtx("tok", d, f.fn);
+    const d = tmpDir(); const f = fakeFetch({}); const ctx = assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY });
     const other = "![x](https://example.com/a.png) [링크](https://linear.app/snipit/issue/DEV-1)";
     assert.equal(await localizeLinearUploads(other, ctx), other);
     assert.equal(await localizeLinearUploads(null, ctx), null);
@@ -116,7 +118,7 @@ await (async () => {
   // 10 429 다음 200 — 한 번 더 시도해 받는다
   {
     const d = tmpDir(); const f = fakeFetch({ [UP("r")]: [{ status: 429, retryAfter: "0" }, { status: 200, type: "image/png" }] });
-    const out = String(await localizeLinearUploads(`![r.png](${UP("r")})`, assetCtx("tok", d, f.fn)));
+    const out = String(await localizeLinearUploads(`![r.png](${UP("r")})`, assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY })));
     assert.equal(f.calls.length, 2); assert.equal(filesIn(d).length, 1); assert.ok(out.includes(LINEAR_ASSET_ROUTE));
   }
   // 11 진행 신호 — 추적기는 15분 무출력이면 run 을 죽인다. 새로 받거나 못 받은 것이 25개 쌓일 때마다 한 번(경계 24 → 0 · 25 → 1),
@@ -127,7 +129,7 @@ await (async () => {
     const run = async (us: string[], status: number, dir = tmpDir()): Promise<number[]> => {
       const seen: number[] = [];
       const f = fakeFetch(Object.fromEntries(us.map((u) => [u, [{ status, type: "image/png" }]])));
-      await localizeLinearUploads(body(us), assetCtx("tok", dir, f.fn, (s) => seen.push(s.fetched + s.failed + s.tooLarge)));
+      await localizeLinearUploads(body(us), assetCtx("tok", dir, f.fn, (s) => seen.push(s.fetched + s.failed + s.tooLarge), { statfs: ROOMY }));
       return seen;
     };
     assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY - 1, "a"), 200), [], "24개에서 신호를 냈다");
@@ -136,7 +138,24 @@ await (async () => {
     assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY, "c"), 500), [ASSET_PROGRESS_EVERY], "실패도 진행이다 — 실패만 이어져도 침묵하면 안 된다");
     assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY * 2, "b"), 200, d), [], "이미 받은 파일은 세지 않는다");
   }
-  console.log("ok  #5012 업로드 첨부 — 받기·재사용·실패·상한·429·진행 신호");
+  // L1 디스크 하한 — 받지 않고 원래 링크 · 파일 없음 · 하한 카운트
+  {
+    const d = tmpDir(); const f = fakeFetch({ [UP("df")]: [{ status: 200, type: "image/png", len: 7 }] });
+    const ctx = assetCtx("tok", d, f.fn, undefined, { statfs: () => ({ bsize: 1, blocks: 100 * 1024 ** 3, bavail: 1024 ** 3 }) });
+    const src = `![d.png](${UP("df")})`;
+    assert.equal(await localizeLinearUploads(src, ctx), src);
+    assert.deepEqual(filesIn(d), []);
+    assert.equal(ctx.stats.diskFloor, 1);
+  }
+  // L2 수집기 상한(1KB) — 2KB 파일은 받지 않는다
+  {
+    const d = tmpDir(); const f = fakeFetch({ [UP("kb")]: [{ status: 200, type: "image/png", len: 2048 }] });
+    const ctx = assetCtx("tok", d, f.fn, undefined, { statfs: ROOMY, maxBytes: 1024 });
+    const src = `![k.png](${UP("kb")})`;
+    assert.equal(await localizeLinearUploads(src, ctx), src);
+    assert.equal(ctx.stats.tooLarge, 1);
+  }
+  console.log("ok  #5012 업로드 첨부 — 받기·재사용·실패·상한·429·진행 신호·디스크 하한·수집기 상한");
 })();
 
 t("#5012 댓글 작성자 — 사람 › 외부 작성자(봇 아님) › 연동(봇) › 없음", () => {
