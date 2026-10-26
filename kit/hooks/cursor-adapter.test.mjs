@@ -315,12 +315,21 @@ try {
   {
     const hang = `setInterval(() => {}, 1000);\n`;
     for (const f of RUNNERS) writeFileSync(join(HOOKS, f), hang);
-    const t0 = Date.now();
-    const results = CURSOR_HOOK_EVENTS.map(([e]) => [e, runAdapter(e, { ...BASE, status: "completed", tool_name: "Shell", tool_input: {} }, { LIVELY_TEST_CURSOR_TIMEBOX_MS: "300" })]);
-    const took = Date.now() - t0;
+    const times = [];
+    const results = CURSOR_HOOK_EVENTS.map(([e]) => {
+      const t0 = Date.now();
+      const r = runAdapter(e, { ...BASE, status: "completed", tool_name: "Shell", tool_input: {} }, { LIVELY_TEST_CURSOR_TIMEBOX_MS: "300" });
+      times.push(Date.now() - t0);
+      return [e, r];
+    });
     eq("R29[A29] 러너 hang → 배선 이벤트 전부 유효 JSON 한 줄", results.filter(([, r]) => !isOneObject(r)).map(([e]) => e), []);
     eq("R29b[A29] hang 중 beforeSubmitPrompt 는 continue:true", outOf(results.find(([e]) => e === "beforeSubmitPrompt")[1]), { continue: true });
-    took < 20000 ? ok(`R29c[A29] 타임박스대로 끝남(${took}ms, 이벤트 ${results.length}개)`) : bad("R29c[A29] 타임박스대로 끝남", `${took}ms`);
+    //  «제때» 는 이벤트 하나씩 잰다 — 시험 타임박스(300ms)를 안 따르면 그 이벤트는 제품 타임박스(15초)까지 붙잡힌다.
+    //   종전엔 전부의 합을 20초로 잘랐는데, node 를 이벤트마다 띄우는 비용이 느린 자리(중앙 박스 gVisor, 2코어)에선
+    //   합만으로 20초를 넘겨 타임박스를 지켰는데도 빨갰다(#5029 실측 24.6초). 한 이벤트가 10초를 넘으면 그때가 결함이다.
+    const slowest = Math.max(...times);
+    slowest < 10000 ? ok(`R29c[A29] 타임박스대로 끝남(가장 느린 이벤트 ${slowest}ms · 합 ${times.reduce((a, b) => a + b, 0)}ms, 이벤트 ${results.length}개)`)
+      : bad("R29c[A29] 타임박스대로 끝남", `가장 느린 이벤트 ${slowest}ms`);
     for (const f of RUNNERS) stub(f);
   }
 

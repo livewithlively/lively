@@ -196,11 +196,20 @@ try {
 
   // [E0] 실기기 로더가 우리 배선을 읽나 — inspect --json 의 hooks/mcpServers 로 단언(파일 존재 ≠ 로드, 런북 ⑫).
   {
+    //  대조군 — 전역 훅 파일 하나를 더 두고 inspect 가 그것을 보이는지부터 본다. grok 1.0.67(alpha)은 전역 훅이 실제로 발화하는데도
+    //   inspect 의 hooks 를 빈 목록으로 낸다(#5029 중앙 박스 실측 — 같은 판에서 E2a·E3·E4 는 통과). 대조군도 안 보이면 이 판에선
+    //   inspect 로 로드를 잴 수 없다는 뜻이라 E0a 를 건너뛰고, 발화 단언(E2a·E3·E4·E5)이 배선을 대신 증명한다.
+    //   대조군이 보이는데 우리 것이 빠지면 그때가 결함이다. 대조군은 잰 뒤 바로 지운다(뒤 세션에 끼지 않게).
+    const PROBE = join(GROKHOME, "hooks", "zz-lively-e0-probe.json");
+    writeFileSync(PROBE, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "true lively-e0-probe", timeout: 5 }] }] } }));
     const r = runGrok(["inspect", "--json"]);
+    rmSync(PROBE, { force: true });
     let d = {}; try { d = JSON.parse(r.stdout); } catch { /* */ }
+    const probeSeen = (d.hooks || []).some((h) => JSON.stringify(h).includes("lively-e0-probe"));
     const ours = (d.hooks || []).filter((h) => String(h.target || "").includes("grok-adapter.mjs"));
     const events = [...new Set(ours.map((h) => h.event))].sort();
-    eq("E0a 우리 훅 10이벤트 로드", events, ["notification", "post_tool_use", "pre_compact", "pre_tool_use", "post_compact", "session_end", "session_start", "stop", "subagent_stop", "user_prompt_submit"].sort());
+    if (!probeSeen && !ours.length) console.log(`skip E0a 우리 훅 10이벤트 로드 — 이 grok 판(${d.grokVersion || "?"})의 inspect 는 전역 훅을 목록에 안 낸다(대조군도 안 보임) · 로드는 E2a 이후 발화로 본다`);
+    else eq("E0a 우리 훅 10이벤트 로드", events, ["notification", "post_tool_use", "pre_compact", "pre_tool_use", "post_compact", "session_end", "session_start", "stop", "subagent_stop", "user_prompt_submit"].sort());
     const mcp = (d.mcpServers || []).find((m) => m.name === "lively");
     eq("E0b MCP lively 등재(configToml 출처)", [!!mcp, mcp?.source?.type], [true, "configToml"]);
   }

@@ -14,9 +14,9 @@
 //      안 불려 테스트가 "스텁 호출 0건"만 본다. PATH 구분자도 `:` 가 아니라 `;` 다.
 //
 //  두 관례를 여기 한 곳에 못박아, 다음 테스트가 같은 함정을 다시 열지 않게 한다.
-import { writeFileSync, readFileSync, readdirSync, chmodSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, readdirSync, chmodSync, mkdirSync, symlinkSync, existsSync } from "node:fs";
 import { gzipSync } from "node:zlib";
-import { join, delimiter } from "node:path";
+import { join, delimiter, dirname } from "node:path";
 
 export const WIN = process.platform === "win32";
 
@@ -72,6 +72,18 @@ export function closedPath(dir) {
   if (!WIN) return [dir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(delimiter);
   const root = process.env.SystemRoot || "C:\\Windows";
   return [dir, join(root, "System32"), root, join(root, "System32", "Wbem")].join(delimiter);
+}
+
+// node 하나만 든 폴더 — closedPath() 의 첫 칸에 쓴다. `dirname(process.execPath)` 를 그 칸에 넣으면 **그 폴더의 다른
+//  실행 파일도 함께 잡힌다.** 중앙 박스(매니지드 세션 컨테이너)는 /usr/local/bin 에 node 와 claude·codex·grok·agy 를 함께 깔아,
+//  «하네스 없는 기계» 를 만들려던 닫힌 PATH 가 거기선 하네스 넷을 다 보여 줬다(self-update 가 «새 하네스» 를 보고 재설치했다, #5029).
+//  POSIX 는 링크 하나만 둔다. 윈도우는 링크에 권한이 필요하고 node 설치 폴더에 하네스가 같이 깔리지 않으므로 종전 그대로 둔다.
+export function nodeOnlyDir(root) {
+  if (WIN) return dirname(process.execPath);
+  const dir = join(root, "node-only-bin");
+  mkdirSync(dir, { recursive: true });
+  if (!existsSync(join(dir, "node"))) symlinkSync(process.execPath, join(dir, "node"));
+  return dir;
 }
 
 // 실 브라우저를 못 열게 하는 env 조각 — **lively CLI 를 프로세스로 띄우는 테스트는 반드시 얹는다.**

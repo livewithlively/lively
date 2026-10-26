@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
-import { sandboxEnv, WIN, writeTgz, closedPath } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
+import { sandboxEnv, WIN, writeTgz, closedPath, nodeOnlyDir } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
@@ -29,6 +29,9 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 
 const BOX = mkdtempSync(join(tmpdir(), "selfupd-"));
 const cleanup = () => { try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ } };
+//  «하네스 없는 기계» 의 닫힌 PATH — node 만 든 폴더를 쓴다. dirname(process.execPath) 는 중앙 박스에서 하네스 넷이 함께 든
+//   /usr/local/bin 이라, 그 PATH 로는 «새 하네스가 없다» 가 성립하지 않았다(#5029 — ②·⑮f·⑯e·⑯f·⑯h 가 재설치를 봤다).
+const NODE_ONLY = nodeOnlyDir(BOX);
 
 // 키트 조립은 결정적이다(⑫ 가 그걸 단언한다) — 번들마다 다시 조립할 이유가 없어 원본 하나를 복사해 쓴다.
 //  번들마다 조립하면 조립 비용이 번들 수만큼 쌓이는데, 복사는 그보다 훨씬 싸다.
@@ -157,7 +160,7 @@ try {
   {
     const before = serving.installHits;
     const home = freshHome("v-aaa");
-    await runUpdater(home, { PATH: closedPath(dirname(process.execPath)) });
+    await runUpdater(home, { PATH: closedPath(NODE_ONLY) });
     (serving.installHits === before && !existsSync(lv(home, "update-notice")))
       ? ok("② 최신이면 무동작(다운로드 0회)") : bad("② 최신 무동작", `installHits +${serving.installHits - before}`);
   }
@@ -313,7 +316,7 @@ try {
     installUpdaterFixture(home);
     const ctrl = freshHome("v-old");
     installUpdaterFixture(ctrl);
-    const sealed = { PATH: closedPath(dirname(process.execPath)) };
+    const sealed = { PATH: closedPath(NODE_ONLY) };
     await Promise.all([runPreload(home, sealed), runPreload(ctrl, sealed)]);
     const ctrlDone = await waitFor(() => readIf(lv(ctrl, "kit-version")) === "v-ddd");
     //  스탬프 뒤에도 대조군 업데이터는 MCP 재조정·알림·잠금 해제를 이어 간다 — 다음 케이스가 serving 을 바꾸기 전에 끝까지 기다린다.
@@ -536,7 +539,7 @@ try {
       writeFileSync(join(h4, ".claude.json"), JSON.stringify({
         mcpServers: { lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } } },
       }, null, 2) + "\n");
-      const sealed4 = { PATH: closedPath(dirname(process.execPath)) };   // 새 하네스 없음(②와 같은 밀폐 — #4927)
+      const sealed4 = { PATH: closedPath(NODE_ONLY) };   // 새 하네스 없음(②와 같은 밀폐 — #4927)
       await runUpdater(h4, sealed4);
       const e4 = (JSON.parse(readFileSync(join(h4, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
       // 설치는 일어나지 않아야 한다(최신이므로) — 훅 파일이 안 깔린 것으로 확인.
@@ -655,7 +658,7 @@ try {
     //  PATH 는 밀폐한다 — 이 머신 PATH 의 진짜 하네스가 «새 하네스» 로 섞이면 행의 뜻이 흐려진다.
     {
       serving.body = makeBundle("v-fresh"); serving.version = "v-fresh";
-      const sealed = { PATH: closedPath(dirname(process.execPath)) };
+      const sealed = { PATH: closedPath(NODE_ONLY) };
       const cursorHome = (state) => {
         const h = freshHome("v-fresh");                                   // 스탬프 = 서빙 버전 → «최신»
         mkdirSync(join(h, ".cursor", "extensions"), { recursive: true });  // Cursor IDE 를 나중에 깔았다(배선 없음)
