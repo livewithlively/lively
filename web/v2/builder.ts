@@ -9,6 +9,7 @@
 //  「만들던 앱」 은 이 브라우저의 기록(app-studio STUDIO_KEY) · 서버가 아는 내 만들기(#4667 나만 보는 앱의 build_session) · **내** 앱빌딩 세션(이름 꼴 · 앱빌더 프로젝트)으로 모은다 —
 //   내가 다른 컴퓨터에서 만들던 것도 세션으로는 보이고, 누르면 세션 이름 · 앱으로 되살려 이어 간다. 남이 만들던 것은 안 보인다(원준: «다른 사람이 만들고 있는 앱을
 //   내가 들어가서 멋대로 이어서 만들면 안 되잖아»). 만들던 앱 카드를 누르면 오른쪽에서 이어서 · 목록에서 빼기 · **지우기**(앱 + 세션 + 기록 전부).
+//   지우기는 카드에도 있다(원준 2026-10-26 «클릭해서 우측 사이드바로 옮기지 않아도 삭제할 수 있는 버튼을 그 카드에도») — 같은 일 · 두 번 눌러야 지운다.
 import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
@@ -32,6 +33,20 @@ const when = (ms: number): string => {
 
 interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number }
 const views = new WeakMap<HTMLElement, View>();
+/** 두 번 눌러 지우는 단추 — 첫 번은 묻기만(4초 안에 한 번 더). 지우지 못하면(go 가 false) 다시 누를 수 있게 돌아온다. */
+const ARM_MS = 4000;
+function armedDelete(cls: string, label: string, armed: string, title: string, go: () => Promise<boolean>): HTMLButtonElement {
+  const b = el('button', { class: cls + ' v2-bld-danger', type: 'button', text: label, title: title || null }) as HTMLButtonElement;
+  let timer = 0;
+  const disarm = (): void => { window.clearTimeout(timer); delete b.dataset.arm; b.textContent = label; };
+  b.onclick = async () => {
+    if (!b.dataset.arm) { b.dataset.arm = '1'; b.textContent = armed; timer = window.setTimeout(disarm, ARM_MS); return; }
+    disarm(); b.disabled = true;
+    let done = false;
+    try { done = await go(); } finally { if (!done) b.disabled = false; }
+  };
+  return b;
+}
 //  같은 창 안의 이동(#/builder ↔ #/builder/new …)은 셸이 다시 그리지 않는다(routeKey 가 같다 — tabs.ts) — 가이드 · 자료 · 분류체계처럼 여기서 hashchange 를 듣는다.
 let mounted: { host: HTMLElement; env: BuilderEnv } | null = null;
 let lastDrawn = '';
@@ -204,11 +219,13 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
       el('div', { class: 'hd' }, appGlassIcon('builder'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done), when(d.at), d.local ? '' : '다른 컴퓨터에서'].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-acts' },
         el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
-        el('button', { class: 'btn btn-ghost', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요. 세션과 앱은 그대로예요.', onclick: () => { dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, ''); refresh(); } })));
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요. 세션과 앱은 그대로예요.', onclick: () => { dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, ''); refresh(); } }),
+        el('span', { class: 'v2-studio-sp' }),
+        armedDelete('btn btn-ghost', '지우기', '한 번 더 누르면 지워져요', '앱, 앱빌딩 세션, 기록을 모두 지워요. 되돌릴 수 없어요.', () => deleteDraft(d))));
     return card;
   };
-  //  지우기 — 앱(있으면 · 판 이력째) → 앱빌딩 세션(멈추고 휴지통으로) → 이 브라우저의 기록. 진짜로 없어진다(원준: «기능적으로도 싹 삭제»).
-  const deleteDraft = async (d: Draft): Promise<void> => {
+  //  지우기 — 앱(있으면 · 판 이력째) → 앱빌딩 세션(멈추고 휴지통으로) → 이 브라우저의 기록. 진짜로 없어진다(원준: «기능적으로도 싹 삭제»). 지웠으면 true.
+  const deleteDraft = async (d: Draft): Promise<boolean> => {
     const why = (e: any): string => (e && e.message ? e.message : String(e));
     //  #4667 만들던 앱 = 나만 보는 앱(예약만 된 빈 앱 포함) — 책임자가 지운다(/discard). 공개한 앱(「원본을 고치기」 로 연 만들던 앱 포함)은
     //   여기서 지우지 않는다 — 모두가 쓰는 앱이다(격리 리뷰 NB-12). 앱빌딩 세션과 이 브라우저의 기록만 걷고, 내 초안은 판 이력에 남는다.
@@ -216,7 +233,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     const shared = !!appId && apps.some((x) => x.id === appId && x.visibility === 'all');
     if (appId && !shared) {
       try { await api('/api/ui/apps/' + encodeURIComponent(appId) + '/discard', { method: 'POST', body: JSON.stringify({}) }); }
-      catch (e: any) { if (e?.status !== 404) { toast('앱을 지우지 못했어요. ' + why(e), true); return; } }
+      catch (e: any) { if (e?.status !== 404) { toast('앱을 지우지 못했어요. ' + why(e), true); return false; } }
     }
     try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(d.sid) + '?reclaim=1' + (d.node ? '&node=' + encodeURIComponent(d.node) : ''), { method: 'DELETE' }); }
     catch (e: any) { if (e?.status !== 404) toast('앱과 기록은 지웠지만 세션을 멈추지 못했어요. (' + why(e) + ')', true); }
@@ -226,6 +243,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, '');
     toast(shared ? '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요. 공개한 앱은 그대로 있고, 비공개 버전은 버전 이력에 남아요.' : d.appId ? '「' + d.title + '」 앱과 앱빌딩 세션, 기록을 모두 지웠어요.' : '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요.');
     refresh();
+    return true;
   };
 
   const sec = (title: string, sub: string, kids: HTMLElement[], empty: string): HTMLElement => el('section', { class: 'v2-bld-sec' },
@@ -252,12 +270,8 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
 }
 
 // ── 만들던 앱 하나 — 이어서 · 목록에서 빼기 · 지우기(전부) ──
-function paintDraftPanel(v: View, d: Draft, del: (d: Draft) => Promise<void>): void {
-  const delBtn = el('button', { class: 'btn btn-ghost btn-sm v2-bld-danger', type: 'button', text: '모두 지우기 (앱, 세션, 기록)' }) as HTMLButtonElement;
-  delBtn.onclick = () => {
-    if (delBtn.dataset.arm) { delBtn.disabled = true; void del(d); return; }
-    delBtn.dataset.arm = '1'; delBtn.textContent = '한 번 더 누르면 지워져요. 되돌릴 수 없어요.'; window.setTimeout(() => { delete delBtn.dataset.arm; delBtn.textContent = '모두 지우기 (앱, 세션, 기록)'; }, 4000);
-  };
+function paintDraftPanel(v: View, d: Draft, del: (d: Draft) => Promise<boolean>): void {
+  const delBtn = armedDelete('btn btn-ghost btn-sm', '모두 지우기 (앱, 세션, 기록)', '한 번 더 누르면 지워져요. 되돌릴 수 없어요.', '', () => del(d));
   v.panel.replaceChildren(
     el('h3', { text: '만들던 앱 「' + d.title + '」' }),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '어디까지' }), el('small', { text: draftStageText(d.stage, !!d.appId, d.done) + (d.at ? ' · ' + when(d.at) : '') + (d.local ? '' : ' · 다른 컴퓨터에서 만들던 것') })),
