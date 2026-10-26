@@ -822,6 +822,15 @@ export function liveAttachCount(): number {
   return liveTerms.size + (workerTallyProvider ? workerTallyProvider() : 0);
 }
 
+/**
+ * #5043 — 우리 웹터미널 attach 클라이언트의 **부모**로 인정할 pid(이 프로세스 + attach 워커). 원격 PC 하네스 종료 규칙이 «그 PC 터미널에서
+ *  사람이 직접 붙은 클라이언트» 를 가르는 근거다(node/stop-step.ts). 실측(2026-10-27 맥미니 노드): 웹 화면이 붙인 tmux 클라이언트는 전부
+ *  ppid = 노드 에이전트 pid 였다. ⚠ 프로세스 시그니처(ATTACH_SIG)로는 못 가른다 — 사람이 친 `tmux attach -t box-…` 도 같은 모양이다.
+ */
+export function attachOwnerPids(): number[] {
+  return [process.pid, ...(ownedPidsProvider ? ownedPidsProvider() : [])];
+}
+
 // 우리 웹터미널 attach 클라이언트의 프로세스 시그니처 — 스캔하는 쪽(관측)과 죽이는 쪽(회수)이 **같은 판정**을
 //  써야 한다. 어긋나면 "안 세는 걸 0 으로 보여주거나(관측 사각지대)", "안 죽일 걸 죽인다(오탐 kill)".
 const ATTACH_SIG = /tmux\b.*\battach\b.*\s-t\s+box-[a-z0-9-]+/;

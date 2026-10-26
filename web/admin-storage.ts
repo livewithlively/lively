@@ -265,6 +265,26 @@ function storageEditor(detail, data) {
         toast('저장됨 — 1분 안에 적용됩니다.'); load();
       } catch (e: any) { toast(e.message, true); stopBtn.disabled = false; }
     });
+    // #5043 원격 PC 하네스 종료 규칙 — 구성원이 연결한 컴퓨터(노드)의 세션에도 같은 규칙. 여기는 워크스페이스 기본값이고, 컴퓨터마다
+    //  [내 컴퓨터]에서 따로 정할 수 있다(비운 칸은 이 값을 따른다). 기본값은 서버와 같다(꺼짐 · 30 · 180 · 1440).
+    const nodeStopChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    nodeStopChk.checked = !!srp.node_stop_enabled; nodeStopChk.disabled = !canEdit;
+    const nodeDoneIn = numIn(srp.node_stop_done_minutes ?? 30, 0, 43200);
+    const nodeAskingIn = numIn(srp.node_stop_asking_minutes ?? 180, 0, 43200);
+    const nodeUnknownIn = numIn(srp.node_stop_unknown_minutes ?? 1440, 0, 43200);
+    const nodeStopBtn = el('button', { class: 'btn btn-primary btn-sm', text: '원격 PC 규칙 저장' }); nodeStopBtn.disabled = !canEdit;
+    nodeStopBtn.addEventListener('click', async () => {
+      nodeStopBtn.disabled = true;
+      try {
+        await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: {
+          node_stop_enabled: nodeStopChk.checked,
+          node_stop_done_minutes: Number(nodeDoneIn.value),
+          node_stop_asking_minutes: Number(nodeAskingIn.value),
+          node_stop_unknown_minutes: Number(nodeUnknownIn.value),
+        } }) });
+        toast('저장됨 — 1분 안에 적용됩니다.'); load();
+      } catch (e: any) { toast(e.message, true); nodeStopBtn.disabled = false; }
+    });
     const idleTtlIn = numIn(srp.idle_ttl_minutes ?? 0, 0, 43200);
     // #2148 attach 전용 TTL — attached 를 무기한 존중하면 '탭이 붙어 있다'는 신호가 거짓일 때 회수가 영영 멈춘다
     //  (원격 tmux 재연결 잔재가 그 신호를 영구 참으로 만든 실측이 있다). 테넌트 축엔 이미 같은 노브가 있다(#1445).
@@ -422,6 +442,18 @@ function storageEditor(detail, data) {
         //  #4697 T7 — 옛 회수 시계와의 경계(session-stop-rule.ts sessionsUnderStopRule 머리말)를 관리자가 화면에서 알 수 있게.
         el('p', { class: 'admin-hint' }, ...uiText('grok·opencode·셸 세션, 이어서 열 대화를 아직 모르는 세션, 위탁·앱 세션처럼 이 규칙이 판정하지 않는 세션은 아래 “idle 세션 자동 회수”가 맡습니다. 두 값을 모두 0으로 두면 모든 세션을 그 회수가 다시 맡습니다(그 회수의 idle 임계가 0이면 아무 세션도 회수되지 않습니다).')),
         el('div', { class: 'storage-actions' }, stopBtn)),
+      el('div', { class: 'storage-block' },
+        el('strong', { text: '원격 PC 하네스 종료 규칙' }),
+        el('label', { class: 'storage-toggle' }, nodeStopChk,
+          el('span', { text: ' 구성원이 연결한 컴퓨터에도 기본으로 적용' })),
+        el('div', { class: 'storage-fields' },
+          el('label', {}, el('span', { text: '작업이 끝난 뒤 끄기(분, 0=끔)' }), nodeDoneIn),
+          el('label', {}, el('span', { text: '답을 기다린 뒤 끄기(분, 0=끔)' }), nodeAskingIn),
+          el('label', {}, el('span', { text: '상태를 모를 때 끄기(분, 0=끔)' }), nodeUnknownIn)),
+        el('p', { class: 'storage-calc', text: '구성원이 연결한 컴퓨터(노드)에서 도는 세션의 AI(하네스)를 위 규칙과 같은 방식으로 끕니다. 대화는 그대로 남아, 그 세션을 열거나 말을 걸면 이어집니다. 컴퓨터는 매니지드보다 세션이 며칠씩 쌓이는 것이 문제라 시간을 넉넉히 잡았습니다.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('누군가 웹에서 보고 있거나 그 컴퓨터의 터미널에서 직접 붙어 있는 세션, 작업 중이거나 백그라운드 작업·예약된 다시 깨우기·사용량 한도 자동 이어감을 기다리는 세션은 끄지 않습니다. 그 컴퓨터에서 직접 띄워 라이블리가 다시 열 수 없는 세션도 끄지 않습니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('“상태를 모를 때”는 AI 가 작업을 마쳤는지 알리지 않은 세션(옛 버전에서 시작했거나 마지막 알림이 작업 중에서 멈춘 세션)에 걸리는 안전망입니다. 컴퓨터마다 켜고 끄거나 시간을 따로 정하려면 [내 설정 ▸ 내 컴퓨터]에서 그 컴퓨터의 “하네스 자동 종료”를 누르세요 — 비워 둔 칸은 여기 값을 따릅니다. 기본값은 꺼짐 · 작업이 끝난 뒤 30분 · 답을 기다린 뒤 180분 · 상태를 모를 때 1440분(24시간)입니다.')),
+        el('div', { class: 'storage-actions' }, nodeStopBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: 'idle 세션 자동 회수' }),
         ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []),

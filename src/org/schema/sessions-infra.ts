@@ -460,6 +460,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     --  그래서 #2592 의 겹침 판정(셀프 노드)에서 **면제**된다 — 사고로 생긴 셀프 노드와 갈리는 유일한 근거가
     --  이 선언이다. 그러므로 **관리자만** 켠다(routes 의 admin 게이트). 기본은 false = 종전 그대로.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS session_host BOOLEAN NOT NULL DEFAULT false;
+    -- #5043 — 이 컴퓨터의 하네스 종료 규칙 값({enabled, done_minutes, asking_minutes, unknown_minutes}). NULL·빈 칸 = 워크스페이스 기본값
+    --  (session_reclaim_policy.node_stop_*)을 따른다. 판정은 sessions/node-stop-rule-policy.ts 한 곳이다.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS stop_rule JSONB;
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로

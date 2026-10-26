@@ -125,7 +125,9 @@ test("B10 /active 는 idle 의 bg 만 받아 넘기고, 호스트 op 는 그걸 
   assert.match(routes, /reportSessionActivity\(id, phase, \{\}, bg, sched\)/, "박스 세션 경로");
   //  #4695 — 예약(wake·cron)은 idle 에서, 둘이 함께 올 때만 받는다.
   assert.match(routes, /const sched = phase === "idle" && isReportedSched\(schedIn\) \? schedIn : null;/);
-  assert.match(routes, /nodeRpc\(ns\.node\.id, "markActive", bg === null \? \{ id, state: phase \} : \{ id, state: phase, bg \}\)/, "노드 세션 경로");
+  //  #5043 — 멤버 PC 노드 경로도 예약(sched)을 넘긴다(없으면 키가 없다 — 옛 노드 무회귀). 빠지면 원격 PC 하네스 종료 규칙이 claude 세션을 전부
+  //   «예약 모름» 으로 읽는다(실측 2026-10-27 맥미니 @box_state `idle <at> bg=0` — 예약 칸이 영영 없었다).
+  assert.match(routes, /nodeRpc\(ns\.node\.id, "markActive", \{ id, state: phase, \.\.\.\(bg === null \? \{\} : \{ bg \}\), \.\.\.\(sched \? \{ sched \} : \{\}\) \}\)/, "노드 세션 경로");
   const ops = readFileSync(`${here}session-ops.ts`, "utf8");
   assert.match(ops, /markSessionActive\(String\(args\.id\), isReportedPhase\(st\) \? st : undefined, undefined, isBgCount\(args\.bg\) \? args\.bg : null, sched\)/);
   assert.match(ops, /const sched = isReportedSched\(args\.sched\) \? args\.sched : null;/, "구 게이트웨이(예약 칸 없음)는 «모른다» 로 새긴다");

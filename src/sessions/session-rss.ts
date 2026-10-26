@@ -306,6 +306,25 @@ export function sessionJobDetails(table: Map<number, ProcEntry>, panePids: Map<s
 /** 세션당 남길 증거 수. 로그 한 줄을 부풀리지 않으면서 «무엇이었나»를 말하기에 충분한 양. */
 const JOB_EVIDENCE_MAX = 3;
 
+/**
+ * #5043 — 이 프로세스가 보는 tmux·프로세스 표**만으로** 내린 ⑥ 판정(작업 있음 · 판정 불가). session-reaper.ts `resolveJobVerdicts` 의 **첫 단계와 같다**
+ *  (판별자 sessionJobDetails · «판정할 수 있었나» = 그 세션의 pane pid 가 표에 있나). 둘째 단계(세션 컨테이너 프로브)는 매니지드 전용이라 여기엔 없다 —
+ *  원격 PC 노드는 자기 tmux·자기 ps 로 판정이 끝나고(node/stop-step.ts), 거기서 못 가른 세션은 그대로 «판정 불가» 다(종료 규칙은 그 세션을 안 끈다).
+ *  여기 둔 이유: session-reaper 는 장부(DB)를 끌고 와 노드 번들에 못 싣는다(번들 가드 — «노드엔 DB 가 없다»).
+ */
+export function localJobVerdicts(
+  ids: ReadonlySet<string>,
+  view: { ok: boolean; panes: Map<string, number[]> },
+  table: Map<number, ProcEntry>,
+): { jobs: Set<string>; unknown: Set<string> } {
+  if (!ids.size) return { jobs: new Set(), unknown: new Set() };
+  if (!view.ok || !table.size) return { jobs: new Set(), unknown: new Set(ids) };   // 못 봤다 ≠ 작업 없다
+  const mine = new Map([...view.panes].filter(([sid]) => ids.has(sid)));
+  const detail = sessionJobDetails(table, mine);
+  const judged = (sid: string): boolean => (view.panes.get(sid) ?? []).some((pid) => table.has(pid));
+  return { jobs: new Set(detail.keys()), unknown: new Set([...ids].filter((sid) => !detail.has(sid) && !judged(sid))) };
+}
+
 /** comm/argv → 실행파일 basename. `"/usr/bin/claude bg-pty-host"` → `"claude"` (첫 토큰의 마지막 경로 조각). */
 function exeOf(name: string): string {
   const head = (name || "").trim().split(/\s+/)[0] ?? "";

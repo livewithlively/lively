@@ -94,6 +94,81 @@ function selfLine(n) {
     "게이트웨이가 도는 바로 그 컴퓨터입니다 — 세션은 '중앙 컴퓨터(기본)'로 여세요.");
 }
 
+// #5043 — 분을 사람이 읽는 말로(0 = 그 상태는 끄지 않음 · 60의 배수는 시간).
+const fmtStopMin = (m) => (m === 0 ? '끄지 않음' : m % 60 === 0 ? (m / 60) + '시간' : m + '분');
+
+// #5043 — 이 컴퓨터의 하네스 자동 종료(실제로 적용되는 값). 서버가 값을 안 주면(옛 서버·정책을 못 읽음) 줄을 안 그린다 — 모르는 것을 말하지 않는다.
+function stopRuleLine(n) {
+  const e = n.stop_rule_effective;
+  if (!e) return null;
+  //  켰어도 이 컴퓨터를 판정하지 않으면(윈도우 · 옛 연결 프로그램 · 중앙 자리) «켬» 이라 하지 않고 그 까닭을 말한다 — 서버가 준 말 그대로.
+  const text = !e.enabled ? '꺼짐'
+    : n.stop_rule_note ? '켰지만 이 컴퓨터엔 적용 안 됨 — ' + n.stop_rule_note
+    : '켬 · 끝난 뒤 ' + fmtStopMin(e.doneMin) + ' · 답 대기 ' + fmtStopMin(e.askingMin) + ' · 상태 모름 ' + fmtStopMin(e.unknownMin);
+  const allWorkspace = e.source && Object.values(e.source).every((s) => s === 'workspace');
+  return el('span', { class: 'wikicat-should', title: '아무도 보지 않는 세션의 AI 를 이 시간이 지나면 끕니다. 대화는 남아 다시 열면 이어집니다.' },
+    el('span', { class: 'wikicat-should-label', text: '자동 종료' }), text + (allWorkspace ? ' (워크스페이스 기본값)' : ''));
+}
+
+// #5043 — 이 컴퓨터의 하네스 자동 종료 설정 창. 칸을 비우면 워크스페이스 기본값을 따른다(자리표시에 그 값을 보여 준다).
+//  주인과 관리자만 바꿀 수 있다(서버가 같은 문으로 막는다 — «연결 차단» 과 같다).
+function openStopRuleForm(n, reload) {
+  const ws = n.stop_rule_workspace || {};
+  const own = n.stop_rule || {};
+  const onSel = el('select', { style: psInputStyle });
+  for (const [v, label] of [
+    ['', '워크스페이스 기본값 따름 (지금: ' + (ws.enabled ? '켬' : '꺼짐') + ')'],
+    ['on', '켜기'],
+    ['off', '끄기'],
+  ]) onSel.append(el('option', { value: v, text: label }));
+  onSel.value = own.enabled === true ? 'on' : own.enabled === false ? 'off' : '';
+  const minIn = (val, base) => {
+    const i = el('input', { type: 'number', min: '0', max: '43200', step: '1', style: psInputStyle,
+      placeholder: base === undefined ? '' : '비우면 ' + base + ' (' + fmtStopMin(base) + ')' });
+    i.value = typeof val === 'number' ? String(val) : '';
+    return i;
+  };
+  const doneIn = minIn(own.done_minutes, ws.doneMin);
+  const askingIn = minIn(own.asking_minutes, ws.askingMin);
+  const unknownIn = minIn(own.unknown_minutes, ws.unknownMin);
+  const msg = el('p', { class: 'admin-hint' });
+  const save = el('button', { class: 'btn btn-primary', text: '저장' });
+  const body = el('div', {},
+    el('p', { class: 'admin-hint' },
+      '이 컴퓨터에서 아무도 보지 않는 세션의 AI(하네스)를 시간이 지나면 끕니다. 대화는 남아, 그 세션을 열거나 말을 걸면 이어집니다. '
+      + '웹에서 보고 있거나 이 컴퓨터의 터미널에서 직접 붙어 있는 세션, 작업 중이거나 다시 깨우기·사용량 한도 자동 이어감을 기다리는 세션은 끄지 않습니다.'),
+    n.stop_rule_note ? el('p', { class: 'admin-hint storage-warn', text: '⚠ ' + n.stop_rule_note }) : null,
+    field('사용', onSel),
+    field('작업이 끝난 뒤 끄기 (분)', doneIn),
+    field('답을 기다린 뒤 끄기 (분)', askingIn),
+    field('상태를 모를 때 끄기 (분)', unknownIn),
+    el('p', { class: 'admin-hint', style: 'margin:-8px 0 12px' },
+      '칸을 비우면 워크스페이스 기본값을 따릅니다. 0 이면 그 상태의 세션은 끄지 않습니다. “상태를 모를 때”는 AI 가 작업을 마쳤는지 알리지 않은 세션에 걸리는 안전망입니다.'),
+    msg,
+    el('div', { class: 'admin-actions' }, save));
+  const back = overlay('하네스 자동 종료 — ' + (n.name || n.id), body);
+  const minOf = (i) => {
+    const raw = i.value.trim();
+    if (raw === '') return null;
+    const v = Number(raw);
+    return Number.isInteger(v) && v >= 0 && v <= 43200 ? v : NaN;
+  };
+  save.onclick = async () => {
+    const mins = { done_minutes: minOf(doneIn), asking_minutes: minOf(askingIn), unknown_minutes: minOf(unknownIn) };
+    if (Object.values(mins).some((v) => Number.isNaN(v))) { msg.textContent = '분은 0~43200 사이의 정수로 적거나 비워 두세요.'; return; }
+    save.disabled = true;
+    try {
+      const r = await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/stop-rule', { method: 'POST', body: JSON.stringify({
+        enabled: onSel.value === '' ? null : onSel.value === 'on', ...mins,
+      }) });
+      back.remove();
+      toast(r && r.stop_rule_note ? '저장했습니다 — 단, ' + r.stop_rule_note : '저장했습니다 — 1분 안에 적용됩니다');
+      reload();
+    } catch (e) { save.disabled = false; msg.textContent = '저장 실패 — ' + e.message; }
+  };
+  return back;
+}
+
 // 노드 한 행. acts 는 호출부가 정한다 — 같은 노드라도 '내 화면'과 '관리자 화면'에서 할 수 있는 일이 다르다.
 function nodeRow(n, ownerLabel, acts) {
   const main = el('div', { class: 'wikicat-row-main' },
@@ -106,6 +181,7 @@ function nodeRow(n, ownerLabel, acts) {
     selfLine(n),
     staleLine(n),
     keepAwakeLine(n),
+    stopRuleLine(n),
     // #1849 — 좁은 열이라 **한 줄 요약**만 싣는다(전문은 배지 툴팁). 실측: 전문을 넣었더니 세로로 흘렀다.
     n.link_note_short ? el('span', { class: 'wikicat-should', title: n.link_note || '' },
       el('span', { class: 'wikicat-should-label', text: '잠자기' }), n.link_note_short) : null,
@@ -169,6 +245,8 @@ function nodeActions(reload) {
         reload();
       } catch (e) { toast('변경 실패 — ' + e.message, true); }
     },
+    // #5043 — 하네스 자동 종료 설정 창(주인·관리자). 저장하면 목록을 다시 그린다.
+    stopRule(n) { return openStopRuleForm(n, reload); },
     async setEnabled(n, on) {
       try {
         await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/enable', { method: 'POST', body: JSON.stringify({ enabled: on }) });
@@ -217,6 +295,9 @@ const ownerActs = (act, n) => el('div', { class: 'wikicat-row-acts' },
       ? '공유를 거두고 나만 쓰도록 되돌립니다.'
       : '구성원 누구나 이 컴퓨터를 쓸 수 있게 합니다. 아이디가 그대로라 열려 있던 세션은 끊기지 않습니다.',
     onclick: () => (n.shared ? act.unshare(n) : act.share(n)) }),
+  el('button', { class: 'btn btn-ghost btn-sm', text: '하네스 자동 종료',
+    title: '아무도 보지 않는 세션의 AI 를 이 컴퓨터에서 언제 끌지 정합니다.',
+    onclick: () => act.stopRule(n) }),
   el('button', { class: 'btn btn-ghost btn-sm', text: '접속 열쇠 재발급', onclick: () => act.rotate(n) }),
   el('button', { class: 'btn btn-ghost btn-sm', text: '지우기', onclick: () => act.remove(n) }));
 
@@ -341,6 +422,9 @@ export async function orgNodesPanel(detail, data) {
     el('button', { class: 'btn btn-ghost btn-sm', text: n.enabled === false ? '연결 허용' : '연결 차단',
       title: n.enabled === false ? '이 컴퓨터가 다시 연결되도록 허용합니다.' : '이 컴퓨터의 연결을 막습니다(작업은 못 들어오고, 등록은 남습니다).',
       onclick: () => act.setEnabled(n, n.enabled === false) }),
+    el('button', { class: 'btn btn-ghost btn-sm', text: '하네스 자동 종료',
+      title: '아무도 보지 않는 세션의 AI 를 이 컴퓨터에서 언제 끌지 정합니다.',
+      onclick: () => act.stopRule(n) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '접속 열쇠 재발급', onclick: () => act.rotate(n) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '공유 해제',
       title: '공유를 거두고 등록한 사람 전용으로 되돌립니다. 그 사람이 [내 설정 ▸ 내 컴퓨터]에서 다시 켤 수 있습니다.',
