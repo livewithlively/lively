@@ -3,7 +3,7 @@ import type pg from "pg";
 import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
-import { auditConnector } from "./mirror-common.js";
+import { auditConnector, pgDeep, pgText } from "./mirror-common.js";
 import { stampSourceAudience, stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
@@ -32,22 +32,23 @@ export function sourceKindOf(system: string): string {
 export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   const kind = sourceKindOf(system);
-  const title = it.title == null ? null : redactString(String(it.title));
-  const body = redactString(String(it.body ?? ""));
-  const raw = it.raw == null ? null : redactDeep(it.raw);
+  //  pgText·pgDeep — Postgres 가 못 받는 글자(NUL·외톨이 서로게이트)를 걷는다(#5040, mirror-common).
+  const title = it.title == null ? null : pgText(redactString(String(it.title)));
+  const body = pgText(redactString(String(it.body ?? "")));
+  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
   const author = `connector:${system}`;
 
   // #735 구조화 메타 보존 — 예전엔 message→source 미러가 it.fields·container_ref·actor 를 통째로 버려
   //  (knowledge 미러는 fields 를 보존하는데 source 미러만 누락) 채널명·작성자·스레드 같은 지식화 핵심 맥락이
   //  유실됐다. 여기서 커넥터가 채운 구조화 값을 source.fields(JSONB)에 접어 저장한다 — slack 특화가 아니라
   //  전 커넥터(gmail·notion·discord 등) 공통. body/title(raw 원문)은 건드리지 않는다.
-  const baseFields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {}) as Record<string, unknown>;
+  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
   const fields: Record<string, unknown> = { ...baseFields, _item_type: it.type };
   if (it.container_ref) fields.container_ref = it.container_ref;
-  if (it.container_name) fields.container_name = redactString(String(it.container_name));
+  if (it.container_name) fields.container_name = pgText(redactString(String(it.container_name)));
   if (it.actor?.external_id) fields.author_external_id = it.actor.external_id;
-  if (it.actor?.display_name) fields.author_name = redactString(String(it.actor.display_name));
-  if (it.actor?.email) fields.author_email = redactString(String(it.actor.email));
+  if (it.actor?.display_name) fields.author_name = pgText(redactString(String(it.actor.display_name)));
+  if (it.actor?.email) fields.author_email = pgText(redactString(String(it.actor.email)));
   if (it.actor?.is_bot != null) fields.author_is_bot = it.actor.is_bot;
 
   // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. no-op 재싱크(last_synced_at-only)는 audit 생략. ──
