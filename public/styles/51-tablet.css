@@ -1,0 +1,56 @@
+/* ══════════════════════════════════════════════════════════════════════════════
+   51-tablet.css — 태블릿(아이패드·갤럭시 탭·서피스, 641~1180px) 정비 (#4678, 원준 2026-10-26 "모바일 말고 태블릿에서도 대응되게")
+   ─────────────────────────────────────────────────────────────────────────────
+   폰(≤640)은 50-mobile.css 가, 데스크톱(≥1181)은 본 파일들이 맡는다. 이 파일은 **그 사이** 만 건드린다.
+     · 641~900  (태블릿 세로)  — 서랍 셸(40-v2.css 모바일 블록) + 아이콘 레일 56px. 여기선 레일 글자가 잘리고 손가락이 닿기 어려운 단추가 있었다.
+     · 901~1180 (태블릿 가로 · 작은 노트북) — 데스크톱 그리드. 여기선 사이드바가 316px 그대로라 가운데가 600px 대로 쪼그라들었다(1024 실측).
+   ⚠ 실측으로 찾은 뿌리: 40-v2.css 의 `@media (max-width: 1100px)` 는 레일이 없던 시절의 5열 규칙이다. 레일 모드(#v2-root.rail-mode, 47-v2-rail.css)는
+     6열 + 더 구체적인 선택자라 그 규칙이 **레일 모드에선 한 번도 안 먹었다** — 아래 ②가 그 몫을 레일 모드 열 구조로 다시 쓴다.
+   ⚠ 캐스케이드: 50-mobile 바로 뒤. 같은 선택자는 이 파일이 이기고, 폰 블록(≤640)은 건드리지 않는다.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ① 높이 — iPad 사파리는 주소창·도구줄이 있어 100vh 가 보이는 높이보다 크다(아래 입력줄이 잘린다). 폰 블록(≤900)은 이미 100dvh 다 — 넓은 폭도 같은 값을 쓴다. */
+@supports (height: 100dvh) {
+  @media (min-width: 901px) {
+    body[data-ui="v2"], body[data-ui="v2"] #app { height: 100dvh; }
+    #v2-root:not(.v2-relay-landing) { height: 100dvh; }
+  }
+}
+
+/* ② 태블릿 가로(901~1180) — 레일 모드의 사이드바·우패널을 좁힌다.
+   손잡이(.v2-split)가 폭을 인라인 변수로 쥐므로 변수를 덮지 않고 min() 으로 **상한만** 건다(더 좁히는 건 여전히 된다). */
+@media (min-width: 901px) and (max-width: 1180px) {
+  #v2-root.rail-mode { grid-template-columns: var(--v2-rail-w) min(var(--v2-side-w), 248px) 6px minmax(0, 1fr) 6px min(var(--v2-aside-w), 300px); }
+  #v2-root.rail-mode.no-aside { grid-template-columns: var(--v2-rail-w) min(var(--v2-side-w), 248px) 6px minmax(0, 1fr) 0 0; }
+  /* 사이드바를 접은 상태·맥락 관리 앱(사이드바 열 0) — 우패널 폭만 상한. */
+  #v2-root.rail-mode.app-ctx, #v2-root.rail-mode.side-closed { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 6px min(var(--v2-aside-w), 300px); }
+  #v2-root.rail-mode.app-ctx.no-aside, #v2-root.rail-mode.side-closed.no-aside { grid-template-columns: var(--v2-rail-w) 0 0 minmax(0, 1fr) 0 0; }
+  /* 세션·프로젝트 화면의 곁칸 — 대화가 최소 440px 은 서도록(데스크톱은 360px). 곁칸이 그만큼 먼저 줄어든다. */
+  .pn-body { --pn-side-fit: min(var(--pn-side-w), max(220px, calc(100% - 446px))); }
+}
+
+/* ③ 태블릿 세로(641~900) — 레일이 56px 칸이라 글자가 «세션 …» «프로…» 로 잘렸다(두 줄로 접으면 «프로/젝트» 로 낱말이 쪼개진다).
+   폭을 64px 로 넓혀 낱말이 한 줄에 들어오게 하고, 긴 이름(«수집 · 증류»)만 띄어쓰기 자리에서 두 줄로 접는다.
+   56px 은 47-v2-rail.css 의 ≤900 블록이 레일 폭 · 본문 왼쪽 여백 · 서랍 위치 · 워크스페이스 팝오버 위치에 나눠 적어 두었다 — 넷을 같이 옮긴다. */
+@media (min-width: 641px) and (max-width: 900px) {
+  #v2-root.rail-mode, #v2-root.rail-mode.no-aside { padding-left: 64px; }
+  .v2-rail { width: 64px; }
+  #v2-root.rail-mode .v2-side { left: 64px; }
+  .v2-wspop { left: 72px !important; width: min(316px, calc(100vw - 80px)); }
+  .v2-rail-t { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.15; word-break: keep-all; overflow-wrap: normal; }
+  .v2-rail-it { padding-top: 7px; padding-bottom: 6px; }
+}
+
+/* ④ 손가락(굵은 포인터) — 폰이 아닌 터치 화면. 폰(≤640)은 50-mobile.css 가 44px 로 맡는다.
+   누르는 면을 **눈에 보이는 크기를 거의 안 바꾸고** 키운다: 아이콘 단추는 36px 바닥, 사이드바 줄 끝의 ×·핀은 32px.
+   (붙어 있는 휴지통·× 가 22px 이어서 오탭 → 삭제 위험이 있었다.) */
+@media (pointer: coarse) and (min-width: 641px) {
+  .v2-navb, .v2-sa-more, .v2-app-new, .v2-axisbtn, .v2-sa-tb { min-width: 36px; min-height: 36px; box-sizing: border-box; }
+  /* 행 오른쪽 끝의 ×·압정·휴지통 — 절대위치 22px → 32px, 줄 가운데에 앉힌다. 선택자를 일부러 길게 쓴다: 한 줄 행(.v2-app-inst--1)·홈 카드 행의 `top` 덮어쓰기와 같은 힘으로 겨뤄야 한다. */
+  .v2-app-inst :is(.v2-app-inst-close, .v2-app-inst-trash, .v2-app-inst-pin:not(.on)),
+  .v2-home-cards .v2-pg--rows .v2-app-inst :is(.v2-app-inst-close, .v2-app-inst-trash, .v2-app-inst-pin:not(.on)) { width: 32px; height: 32px; top: 50%; margin-top: -16px; }
+  .v2-app-inst :is(.v2-app-inst-close, .v2-app-inst-trash) { right: 3px; }
+  .v2-app-inst .v2-app-inst-pin:not(.on) { right: 36px; }
+  .v2-pg-row .v2-pinb { width: 28px; height: 28px; margin-top: -14px; }
+  .pn-tab-x { width: 26px; height: 26px; margin-top: -13px; left: 4px; }
+}
