@@ -59,7 +59,8 @@ const ticker = startProgressTicker(t, 20, (l) => lines.push(l));
 try {
   await sleep(150);
   assert.equal(lines.length, 1, `처음 한 줄 뒤엔 움직임이 없으니 침묵해야 한다: ${lines.length}줄`);
-  await downloadAsset(t, { url, file: "a.bin" }, dir);
+  // #5012 — 실제 디스크와 무관하게(맥미니는 94% 찼다) 디스크 하한에 안 걸리게 넉넉한 가짜 디스크를 준다.
+  await downloadAsset(t, { url, file: "a.bin" }, dir, { statfs: () => ({ bsize: 1, blocks: 1e15, bavail: 1e15 }) });
   assert.equal(fs.readFileSync(path.join(dir, "a.bin"), "utf8"), "hello", "배선 시험의 다운로드가 실제로 일어나지 않았다");
   await sleep(150);
   assert.equal(lines.length, 2, `요청 없이 받은 바이트만 늘었는데 티커가 알리지 않았다: ${lines.length}줄`);
