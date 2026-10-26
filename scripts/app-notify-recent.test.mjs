@@ -51,9 +51,10 @@ check(/installedRailEligible\(/.test(fnBody(apps, "primeInstalledApps")) && /ins
   "W3d 목록을 받을 때도 · 방금 연 앱을 올릴 때도 같은 잣대(installedRailEligible)로 거른다");
 
 const rail = read("web/v2/rail.ts");
-check(/\.\.\.installedAppDefs\(\)\]/.test(fnBody(rail, "recentForRail")), "W4a ★ 레일 최근 칸(recentForRail)이 설치 앱 목록을 합친다");
-check(/if \(!inst\) wireDrag\(it, a\.key, kind\)/.test(rail), "W4b 설치 앱 칸은 끌기(독 고정)를 걸지 않는다 — 순서 저장이 앱 표 키만 믿는다");
-check(/isInstalledRecentKey\(a\.key\)\) \{ ctxMenu\(x, y, \[\{ label: '열기'/.test(fnBody(rail, "dockMenu")), "W4c 설치 앱의 우클릭은 「열기」 만");
+check(/\.\.\.installedAppDefs\(\)/.test(fnBody(rail, "recentForRail")), "W4a ★ 레일 최근 칸(recentForRail)이 설치 앱 목록을 합친다(#5011 — 고정한 것은 거른 채)");
+//  #5011(원준 2026-10-26 «왜 팀 채널은 안 끌어지지») — 설치 앱도 끌어 고정 · 순서 · 빼기가 된다. 상세는 rail-installed-pin.test.mjs.
+check(/^\s*wireDrag\(it, a\.key, kind\);/m.test(fnBody(rail, "drawRail")) && !/if \(!inst\) wireDrag/.test(rail), "W4b ★ 설치 앱 칸도 끌기를 건다(#5011 — 종전엔 걸지 않았다)");
+check(!/isInstalledRecentKey\(a\.key\)/.test(fnBody(rail, "dockMenu")), "W4c 설치 앱의 우클릭도 「독에 고정 · 빼기」 를 낸다(#5011)");
 check(/primeInstalledApps\(\)\.then\(\(\) => drawRail\(\)\)/.test(fnBody(rail, "mountRail")), "W4d 레일을 달 때 설치 앱 목록을 받아 다시 그린다");
 
 const main = read("web/v2/main.ts");
