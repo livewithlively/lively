@@ -104,7 +104,7 @@ export const hooksCapabilities: Capability[] = [
       note: z.string().optional().describe("메모"),
       summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
-      sort: z.number().optional().describe("실행 순서 — 러너는 sort 오름차순으로 돈다. 조직이 동시 실행(runtime_config.hooks.concurrent)을 켜면 sort 가 같은 훅끼리는 동시에 돈다. 다른 훅이 끝난 뒤에 돌아야 하면 더 큰 값을 준다"),
+      sort: z.number().optional().describe("실행 순서 — 러너는 sort 오름차순으로 돈다. 제품 기본(시드) 훅끼리는 sort 가 같으면 동시에 돌고, 직접 만든 훅은 조직이 동시 실행(runtime_config.hooks.concurrent)을 켜야 같은 sort 끼리 동시에 돈다. 다른 훅이 끝난 뒤에 돌아야 하면 더 큰 값을 준다"),
     }),
   restRuntime("org_hook_remove", "커스텀 훅 제거",
     "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
@@ -158,7 +158,8 @@ export const hooksCapabilities: Capability[] = [
         seed: isSeedHook(h.id),
         // concurrent — 조직 설정(runtime_config.hooks.concurrent, 기본 false). 켜면 직접 만든 훅도 같은 sort 끼리 겹친다.
       })), relay_decisions: relay, concurrent: rc.hooks.concurrent === true,
-      // runtime — 훅 실행 방식(#5034, 기본 worker = 러너 안의 스레드). process 면 러너가 종전처럼 훅마다 프로세스를 띄운다(되돌리기).
+      // runtime — 훅 실행 방식(#5034). 기본 worker = 시드 훅은 러너 안의 스레드(직접 만든 훅은 본문 표식이 있을 때만) ·
+      //  process = 전부 종전처럼 훅마다 프로세스(되돌리기).
       runtime: rc.hooks.runtime };
     },
     false, { harness: z.string().optional(), event: z.string().optional() }),   // #1403 — types.ts input 규약

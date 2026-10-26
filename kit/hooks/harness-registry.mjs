@@ -201,6 +201,10 @@ export const HARNESS = {
     mcp: { style: "claude-cli" },          // `claude mcp add --transport stdio …`
     autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
+    // 러너(run-custom)를 하네스가 끊는 상한(ms) — run-custom 의 맥락 이벤트 예산이 이보다 앞서 끝낸다(#5034).
+    //  UserPromptSubmit 30초는 실측(hook_cancelled timeoutMs 30000) · SessionStart 는 timeout 을 안 준 항목의 하네스 기본 60초
+    //  (user-install runnerHooksBlock). 모르는 이벤트는 예산이 없다.
+    runnerCapMs: { UserPromptSubmit: 30000, SessionStart: 60000 },
     reloadAssets: true,                    // reloadSkills:true 로 같은 세션 반영
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"],
   },
@@ -270,6 +274,8 @@ export const HARNESS = {
     mcp: { style: "toml-table", commandShape: "string+args" },
     autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
     contextEnvelope: "json",               // SessionStart 는 JSON 봉투 필수(raw 는 무시된다)
+    // 러너 상한 — user-install CODEX_RUNNER_EVENTS 의 timeout 과 같은 값이다(그쪽을 바꾸면 여기도, #5034).
+    runnerCapMs: { UserPromptSubmit: 15000, SessionStart: 10000 },
     reloadAssets: false,                   // 재시작해야 반영
     // #1884 실측(0.149.1 스텁모델 E2E): 편집이 모델 계열에 따라 두 얼굴이다 — gpt-5.4 는 apply_patch **툴**로,
     //  gpt-5.6(현 기본)·미상 모델은 셸 명령 `apply_patch <<'EOF' …` 로 온다(tool_name=Bash). 툴명 목록(edit)만 보면
@@ -332,6 +338,7 @@ export const HARNESS = {
     autoApprove: { kind: "config-permission", key: (server, tool) => `${server}_${tool}` },
     // 정적 컨텍스트는 AGENTS.md/instructions 로 싣는다 — system.transform 은 **매 요청** 돌아 토큰이 반복된다.
     contextEnvelope: "file",
+    runnerCapMs: 15000,                    // 러너 상한 — opencode-plugin.js 의 runner timeout(SIGKILL)과 같은 값(#5034)
     contextFile: (home) => j(home, "AGENTS.md"),
     reloadAssets: false,                   // 기동 시 1회 로드, hot-reload 없음
     headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
@@ -405,6 +412,7 @@ export const HARNESS = {
     // 정적 컨텍스트는 플러그인 rules/AGENTS.md 로 싣는다(네이티브 로드·경로 dedup — opencode 의 file 봉투와 동형).
     //  PreInvocation injectSteps 는 **매 모델 호출마다** 발화라 org-context 를 싣기에 부적합(#1689 실측).
     contextEnvelope: "file",
+    runnerCapMs: 15000,                    // 러너 상한 — antigravity-adapter.mjs 의 runner timeout(SIGKILL)과 같은 값(#5034)
     contextFile: (home) => j(home, "config", "plugins", "lively", "rules", "AGENTS.md"),
     reloadAssets: false,                   // hot-reload 미확인(#1689) — 보수적으로 false
     headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
@@ -477,6 +485,7 @@ export const HARNESS = {
     // SessionStart·UserPromptSubmit stdout 은 **무시**된다(관측 전용 — 실측) — 훅 stdout 주입 채널이 없다.
     //  정적 컨텍스트는 <home>/rules/*.md 가 전 프로젝트 글로벌로 항상 스캔되는 걸 쓴다(세션 시스템 프롬프트 1회).
     contextEnvelope: "file",
+    runnerCapMs: 15000,                    // 러너 상한 — grok-adapter.mjs 의 runner timeout(SIGKILL)과 같은 값(#5034)
     contextFile: (home) => j(home, "rules", "lively.md"),
     reloadAssets: true,                    // 스킬 핫리로드 실측·문서 확인(수 초 내 반영 — 에이전트·커맨드는 미확인)
     headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
@@ -544,6 +553,7 @@ export const HARNESS = {
     // 컨텍스트는 훅 출력이다 — 러너는 JSON 봉투(hookSpecificOutput.additionalContext)로 내고 어댑터가 additional_context 로 옮긴다.
     //  sessionStart 는 첫 턴이 기다리고 상한이 없다(정본 자리) · beforeSubmitPrompt·postToolUse 는 1만 자 초과 시 통째 버림(어댑터가 자른다).
     contextEnvelope: "json",
+    runnerCapMs: 15000,                    // 러너 상한 — cursor-adapter.mjs 의 T.runner 와 같은 값(#5034)
     reloadAssets: false,                   // CLI 는 스킬 감시자가 없다(번들 실측 — 새 세션부터)
     // 러너 배선 대상. Notification·PermissionRequest 등가물이 없다(승인 대기 «확인 필요» 보고 불가 — agy·grok 과 같은 갭).
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "PreCompact"],

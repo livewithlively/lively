@@ -49,7 +49,8 @@ import {
 } from "../../sessions/session-memory-policy.js";
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
-/** 커스텀 훅 실행 방식(#5034) — worker: 러너 안의 스레드(기본) · process: 훅마다 node 프로세스(종전, 되돌리기용). */
+/** 커스텀 훅 실행 방식(#5034) — worker(기본): 제품 시드 훅은 러너 안의 스레드, 직접 만든 훅은 본문 표식이 있을 때만 ·
+ *  process: 전부 훅마다 node 프로세스(종전, 되돌리기용). */
 export type HookRuntime = "worker" | "process";
 export interface OrgRuntimeConfig {
   // self_update(#858): 멤버 키트(훅 코드·배선) 자동 업데이트. 끄면 멤버는 수동 업데이트 명령이 유일한 경로.

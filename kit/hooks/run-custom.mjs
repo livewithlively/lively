@@ -15,14 +15,17 @@
 //   훅들 사이에서 하는 일을 러너가 대신). 상세는 runbooks/hooks.md §1.5, 테스트는 run-custom.test.mjs.
 //
 //  비용(#5034) — 이 러너는 프롬프트마다·툴 호출마다 돈다. 그래서 세 가지를 아낀다.
-//   ① 훅은 기본으로 이 러너 안의 **워커 스레드**에서 돈다(훅마다 node 프로세스를 새로 띄우지 않는다 — 맥미니 실측
-//      훅 하나 CPU 50~64ms → 14~20ms. gVisor 세션 노드에선 프로세스 기동이 그보다 훨씬 비싸다). 훅 본문은 그대로다 —
+//   ① 제품 시드 훅은 기본으로 이 러너 안의 **워커 스레드**에서 돈다(훅마다 node 프로세스를 새로 띄우지 않는다 — 맥미니
+//      실측 훅 하나 CPU 50~64ms → 14~20ms. gVisor 세션 노드에선 프로세스 기동이 그보다 훨씬 비싸다). 훅 본문은 그대로다 —
 //      stdin·stdout·stderr·process.exit·exitCode 가 프로세스 때와 같게 동작한다. 스레드로는 같게 못 도는 훅은 소스를
-//      보고 종전처럼 프로세스로 돈다(runtimeOf). 되돌리기: 조직 runtime_config.hooks.runtime="process" ·
-//      이 머신만 LIVELY_HOOK_RUNTIME=process · 훅 하나만 본문에 `lively-hook-runtime: process` 주석.
+//      보고 종전처럼 프로세스로 돈다(runtimeOf). 직접 만든 훅은 기본으로 종전처럼 프로세스다 — 스레드는 네이티브 호출에
+//      묶이면 끊을 수 없어서(execWorker), 우리가 시험하는 코드만 기본으로 넣는다. 본문에 `lively-hook-runtime: worker` 를
+//      넣으면 스레드로 간다. 되돌리기: 조직 runtime_config.hooks.runtime="process" · 이 머신만 LIVELY_HOOK_RUNTIME=process ·
+//      훅 하나만 본문에 `lively-hook-runtime: process`.
 //   ② 훅 목록을 LIST_TTL_MS 동안 다시 묻지 않는다(세션별 캐시). 관리자의 끄기·고치기는 그 시간 안에 반영된다.
-//   ③ 맥락 이벤트(UserPromptSubmit·SessionStart)는 시간 예산 안에서 끝낸다 — 하네스가 러너를 통째로 취소하면
-//      그때까지 모은 맥락도 전부 버려지므로(실측 hook_cancelled timeoutMs 30000), 남은 묶음을 건너뛰고 모은 것을 싣는다.
+//   ③ 맥락 이벤트(UserPromptSubmit·SessionStart)는 하네스가 러너를 끊는 상한보다 앞서 끝낸다 — 상한에 걸리면 하네스가
+//      러너를 통째로 취소해 그때까지 모은 맥락도 전부 버리므로(실측 hook_cancelled timeoutMs 30000), 남은 훅을 건너뛰고
+//      모은 것을 싣는다. 상한은 하네스마다 다르다(harness-registry 의 runnerCapMs).
 import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -108,11 +111,16 @@ const envMs = (name, dflt) => {
 const LIST_TTL_MS = envMs("LIVELY_HOOK_LIST_TTL_MS", 60_000);
 const LIST_CACHE_DIR = join(LIVELY, "hook-list-cache");
 const LIST_CACHE_KEEP_MS = 60 * 60 * 1000;   // 이보다 오래된 세션별 캐시 파일은 저장할 때 걷는다(끝난 세션의 흔적)
-// ③ 이벤트 시간 예산(#5034). 하네스의 UserPromptSubmit 상한은 30초다(실측) — 그 전에 끝내고 남은 여유로 출력·보고를 한다.
-//  SessionStart 도 같은 이유로 둔다. 결정 이벤트(PreToolUse)에는 두지 않는다 — 막는 훅을 예산 때문에 건너뛰지 않는다.
-const EVENT_BUDGET_MS = EVENT === "UserPromptSubmit" || EVENT === "SessionStart"
-  ? envMs("LIVELY_HOOK_EVENT_BUDGET_MS", 20_000) : 0;
+// ③ 이벤트 시간 예산(#5034) = 하네스가 러너를 끊는 상한 − 여유(5초, 상한이 짧으면 그 1/3). 상한보다 앞서 끝내야 의미가
+//  있고, 상한보다 짧게 잡으면 원래 상한까지 돌던 훅을 일찍 자른다(SessionStart 의 project-pull 은 timeout_sec 120).
+//  상한을 모르는 하네스·이벤트는 예산이 없다. 결정 이벤트(PreToolUse)엔 두지 않는다 — 막는 훅을 예산 때문에 건너뛰지 않는다.
+//  LIVELY_HOOK_EVENT_BUDGET_MS 로 이 머신만 바꾼다(0 = 끔).
+const BUDGETED = EVENT === "UserPromptSubmit" || EVENT === "SessionStart";
+const capOf = (h, ev) => { const c = h && h.runnerCapMs; return typeof c === "number" ? c : (c && typeof c[ev] === "number" ? c[ev] : 0); };
+const CAP_MS = BUDGETED ? capOf(harness(HARNESS), EVENT) : 0;
+const EVENT_BUDGET_MS = BUDGETED ? envMs("LIVELY_HOOK_EVENT_BUDGET_MS", CAP_MS > 0 ? CAP_MS - Math.min(5000, Math.floor(CAP_MS / 3)) : 0) : 0;
 const MIN_WAVE_MS = 300;   // 남은 예산이 이보다 적으면 다음 묶음을 시작하지 않는다
+const MIN_SPAWN_MS = 100;  // 훅 하나를 띄우는 그 순간 남은 예산이 이보다 적으면 띄우지 않는다(묶음 안에서 줄 선 훅·재시도)
 
 const readLocal = (rel) => { try { return readFileSync(join(LIVELY, rel), "utf8").trim() || null; } catch { return null; } };
 // 자격·주소 — 사람이 연 셸이면 파일이, 라이블리가 띄운 pane(LIVELY_SESSION_ID)이면 env 가 이긴다(#959).
@@ -295,8 +303,7 @@ function matches(hook, toolName) {
 //     ESM 전용 문법이 없는 파일이면 애초에 .cjs 로도 잘 돈다.
 //   · .mjs 로 잘못 가면 → 종전(항상 .mjs)과 **똑같이** 동작한다. 더 나빠질 수 없다.
 //   즉 어느 방향으로 틀려도 '부작용 중복'이나 '조용한 무력화'로는 번지지 않는다.
-//  keepStrings — 주석만 지우고 문자열은 그대로 둔다(runtimeOf 가 문자열 속 `/dev/stdout` 같은 것도 봐야 해서).
-function stripNonCode(src, { keepStrings = false } = {}) {
+function stripNonCode(src) {
   const s = String(src || "");
   let out = "", i = 0;
   while (i < s.length) {
@@ -304,49 +311,59 @@ function stripNonCode(src, { keepStrings = false } = {}) {
     if (c === "/" && d === "/") { while (i < s.length && s[i] !== "\n") i++; continue; }
     if (c === "/" && d === "*") { i += 2; while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) i++; i += 2; continue; }
     if (c === '"' || c === "'" || c === "`") {
-      const q = c, start = i; i++;
+      const q = c; i++;
       while (i < s.length && s[i] !== q) { if (s[i] === "\\") i++; i++; }
-      i++; out += keepStrings ? s.slice(start, i) : q + q; continue; // 빈 리터럴로 대체 — 위치는 보존하되 내용은 분류에서 뺀다
+      i++; out += q + q; continue; // 빈 리터럴로 대체 — 위치는 보존하되 내용은 분류에서 뺀다
     }
     out += c; i++;
   }
   return out;
 }
 
-// 훅 하나를 어디서 돌리나(#5034) — 기본은 러너 안의 워커 스레드, 스레드에선 프로세스 때와 다르게 동작하는 훅만 프로세스.
+// 훅 하나를 어디서 돌리나(#5034) — 스레드 기본은 **제품 시드 훅만**(hooks[].seed — 우리가 시험하는 코드다). 직접 만든 훅은
+//  본문에 `lively-hook-runtime: worker` 가 있거나 이 머신이 LIVELY_HOOK_RUNTIME=worker 일 때만 스레드로 간다.
+//  왜 고객 코드는 기본 프로세스인가: 스레드는 네이티브 호출(FIFO·멈춘 네트워크 파일시스템의 동기 읽기 등)에 묶이면 끊을 수 없고
+//   러너가 끝날 때 그 스레드를 기다린다 — 프로세스면 상한에서 SIGKILL 로 끊고 러너는 제 갈 길을 간다(리뷰 실측: FIFO 를
+//   동기로 읽는 스레드 → terminate → 러너가 끝나지 않음). 아래 표는 정적 검사라 변수로 넘긴 fd 같은 것은 못 잡는다.
+//  그리고 스레드여도 프로세스 때와 다르게 동작하는 훅은 프로세스로 보낸다:
 //  · 자식 프로세스(child_process 전부): 스레드에서 띄운 자식은 **러너의** fd 를 물려받는다 — stdio:"inherit" 자식이
 //    하네스로 가는 러너 stdout 을 쥐고 살아 있으면 하네스가 그 자식이 끝날 때까지 기다린다(W6b·W6c 가 8초를 잡았다).
 //    동기 자식 실행(execFileSync 등)은 더 나쁘다 — 스레드가 그 호출에 묶이면 terminate 가 안 먹고, 러너가 끝날 때 그
 //    스레드를 기다린다(실측: execFileSync("sleep", ["10"]) 을 1초에 끊어도 러너 종료까지 10.2초). 프로세스면 상한에서 끊긴다.
-//  · fd 0~2 직접 읽기·쓰기(writeSync(1, …)·/dev/stdout 등): 스레드는 러너와 fd 를 같이 쓴다 — 훅 출력이 러너의 수집·병합을
-//    건너뛰고 하네스로 바로 나간다(project-pull 의 백그라운드 안내가 이 모양이다).
+//  · fd 0~2 를 숫자로 직접 쓰는 호출·경로(writeSync(1, …)·writeFileSync(1, …)·/dev/stdout·/proc/self/fd/1 등): 스레드는
+//    러너와 fd 를 같이 쓴다 — 훅 출력이 러너의 수집·병합·전파 정책을 건너뛰고 하네스로 바로 나간다(결정 JSON 이 둘로
+//    겹치면 하네스가 둘 다 버린다 — #892 와 같은 조용한 무력화). project-pull 의 백그라운드 안내가 이 모양이다.
 //  · chdir·umask(값)·setuid 계열·abort·process.kill(process.pid): 스레드에선 막히거나 러너 전체에 걸린다.
 //  · «직접 실행일 때만» 관용구(require.main === module 등): 스레드에선 훅을 import 로 불러오므로 그 조건이 거짓이 되어
 //    본문이 한 줄도 안 돈다(R14).
-//  주석은 지우고 문자열은 남긴 채 본다 — 문자열에만 있어도 프로세스로 간다(틀리면 느려질 뿐, 깨지지 않는 쪽).
+//  주석 **줄**만 지우고 본다(codeLines) — 줄 안의 주석·문자열·정규식은 그대로 두므로 틀리면 «프로세스로» 쪽(느려질 뿐)이다.
+//   stripNonCode 는 정규식 리터럴 안의 «/*»(예: /\/*$/)를 주석 시작으로 읽어 그 뒤 코드를 통째로 놓친다(리뷰 실측).
 const PROCESS_ONLY = [
   /\bchild_process\b/,
   /["'](?:node:)?cluster["']/,
   /\b(?:execFileSync|execSync|spawnSync)\s*\(/,
-  /\b(?:writeSync|readSync|write|read)\s*\(\s*[0-2]\s*[,)]/,
+  /\b(?:write|read|append|close|fsync|fdatasync|ftruncate)\w*\s*\(\s*[0-2]\s*[,)]/,
+  /\b(?:Write|Read)Stream\s*\(\s*[0-2]\s*[,)]/,
   /\bfd\s*:\s*[0-2]\b/,
-  /\/dev\/(?:stdin|stdout|stderr|fd\/[0-2])\b/,
+  /\/(?:dev|proc\/[^/\s'"`]+)\/(?:stdin|stdout|stderr|fd\/[0-2])\b/,
   /\bprocess\s*\.\s*std(?:in|out|err)\s*\.\s*fd\b/,
-  /\breadFileSync\s*\(\s*0\b/,
   /\bprocess\s*\.\s*(?:chdir|abort|setuid|setgid|seteuid|setegid|setgroups|initgroups)\s*\(/,
   /\bprocess\s*\.\s*umask\s*\(\s*[^)\s]/,
   /\bprocess\s*\.\s*kill\s*\(\s*process\s*\.\s*pid\b/,
   /\brequire\s*\.\s*main\b|\bprocess\s*\.\s*mainModule\b|\bimport\s*\.\s*meta\s*\.\s*main\b/,
 ];
-const RUNTIME_PRAGMA = /lively-hook-runtime\s*:\s*process\b/;
+const codeLines = (src) => String(src || "").split("\n").filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).join("\n");
+const RUNTIME_PRAGMA = /lively-hook-runtime\s*:\s*(process|worker)\b/;
 const RUNTIMES = new Set(["worker", "process"]);
 function runtimeOf(hook, orgRuntime) {
-  if (String(process.env.LIVELY_HOOK_RUNTIME || "").trim().toLowerCase() === "process") return "process";   // 이 머신만 되돌리기
-  if (orgRuntime === "process") return "process";                                                          // 조직이 되돌림
+  const machine = String(process.env.LIVELY_HOOK_RUNTIME || "").trim().toLowerCase();
+  if (machine === "process") return "process";                       // 이 머신만 되돌리기
+  if (orgRuntime === "process") return "process";                    // 조직이 되돌림
   const src = String(hook.source_code || "");
-  if (RUNTIME_PRAGMA.test(src)) return "process";                                                          // 훅이 스스로 원함
-  const code = stripNonCode(src, { keepStrings: true });
-  return PROCESS_ONLY.some((re) => re.test(code)) ? "process" : "worker";
+  const pragma = (RUNTIME_PRAGMA.exec(src) || [])[1];
+  if (pragma === "process") return "process";                        // 훅이 스스로 원함
+  if (PROCESS_ONLY.some((re) => re.test(codeLines(src)))) return "process";
+  return hook.seed === true || pragma === "worker" || machine === "worker" ? "worker" : "process";
 }
 
 // 훅 소스의 모듈 타입 — 임시파일 확장자가 곧 Node 의 모듈 해석이다. CJS 소스(`require`)를 .mjs 로 쓰면
@@ -389,19 +406,25 @@ function parsesUnder(file, expectHash) {
   catch { return true; }                  // 파일을 못 읽는다(훅이 지웠나) → 판정 불가 → 재시도 안 함
   if (actual !== expectHash) return true; // 우리가 쓴 그 파일이 아니다(훅이 덮어씀) → 판정 불가 → 재시도 안 함
   try {
-    execFileSync("node", ["--check", file], { stdio: "ignore", timeout: CHECK_MS, killSignal: "SIGKILL" });
+    // 러너 자신의 node 로 본다 — PATH 에 node 가 없어도(번들 node 로 띄운 러너) 판정이 선다.
+    execFileSync(process.execPath, ["--check", file], { stdio: "ignore", timeout: CHECK_MS, killSignal: "SIGKILL" });
     return true;
-  } catch { return false; } // 우리가 쓴 그 소스가 이 확장자로 파싱 안 됨 = 확장자를 잘못 골랐다(또는 훅 자체가 깨졌다)
+  } catch (e) {
+    // «안 된다» 는 `--check` 가 실제로 돌아 1 로 끝났을 때뿐이다(이 확장자로 파싱 안 됨 = 확장자를 잘못 골랐다, 또는 훅
+    //  자체가 깨졌다). 못 띄웠거나(ENOENT·EAGAIN) 시간 안에 못 끝냈으면(ETIMEDOUT) 판정 불가 → 재시도 안 함 —
+    //  판정 불가를 «안 됨» 으로 읽으면 이미 돈 훅을 한 번 더 돌린다(부작용 중복, #5034 리뷰).
+    return !(e && e.status === 1 && !e.signal);
+  }
 }
 
 // 훅 1개 실행 → { out, fail }. fail 은 관측용(#892 결함 C) — 종전엔 크래시를 통째로 삼켜(catch → "")
 //  '훅이 죽음'과 '훅이 출력 없음'이 구분 불가였고, 그래서 죽은 훅이 내내 발견되지 않았다.
-//  opts.orgRuntime — 조직 실행 방식(runtimeOf) · opts.capMs — 이벤트 예산이 남긴 시간(이보다 오래 기다리지 않는다).
+//  opts.orgRuntime — 조직 실행 방식(runtimeOf) · opts.deadline — 이벤트 예산의 마감 시각(spawnHook 이 띄우는 순간 남은 시간을 잰다).
 async function runHook(hook, stdin, opts = {}) {
   // content_hash 무결성 — 해시가 없거나(변조 캐시) source 와 불일치면 실행 안 함(fail-CLOSED hard-gate).
   const h = crypto.createHash("sha256").update(hook.source_code || "").digest("hex");
   if (!hook.content_hash || hook.content_hash !== h) return { out: "", fail: { reason: "hash_mismatch" } };
-  const run = { runtime: runtimeOf(hook, opts.orgRuntime), capMs: opts.capMs };
+  const run = { runtime: runtimeOf(hook, opts.orgRuntime), deadline: opts.deadline };
   const first = moduleExt(hook.source_code);
   const r = await spawnHook(hook, stdin, first, h, run);
   // 실패했고 **그 확장자로는 파일이 파싱조차 안 되면** 확장자를 잘못 고른 것 → 반대로 딱 한 번 다시.
@@ -425,7 +448,9 @@ const PIPE_GRACE_MS = 200;
 function execNode(file, { input, timeout, env }) {
   return new Promise((resolve) => {
     let child;
-    try { child = spawn("node", [file], { env, stdio: ["pipe", "pipe", "pipe"] }); }
+    // 러너 자신의 node 로 띄운다 — PATH 에 node 가 없는 기계(번들 node 로 러너를 띄운 설치)에선 "node" 가 ENOENT 로
+    //  모든 훅을 죽였다(health 의 «spawn node ENOENT»). 스레드로 도는 훅과 같은 판의 node 이기도 하다.
+    try { child = spawn(process.execPath, [file], { env, stdio: ["pipe", "pipe", "pipe"] }); }
     catch (e) { resolve({ stdout: "", stderr: String((e && e.message) || ""), status: null, signal: null }); return; }
     const out = []; const err = []; let outLen = 0; let errLen = 0; let settled = false; let killed = false; let overflow = false;
     const exited = () => child.exitCode !== null || child.signalCode !== null;
@@ -486,7 +511,8 @@ const WORKER_BOOT = [
 
 // execNode 와 같은 결과 모양으로 훅을 워커 스레드에서 돌린다(#5034). 다른 점만 적는다:
 //  · 상한·출력 초과에선 스레드를 끊고(terminate) 끝나기를 기다리지 않는다 — 네이티브 호출에 묶인 스레드엔 terminate 가
-//    그 호출이 돌아온 뒤에야 먹힌다(그런 훅은 runtimeOf 가 애초에 프로세스로 보낸다).
+//    그 호출이 돌아온 뒤에야 먹히고, 러너도 끝날 때 그 스레드를 기다린다(FIFO 동기 읽기면 영영). 그래서 스레드 기본은 우리가
+//    시험하는 시드 훅만이고, 아는 모양(동기 자식 실행 등)은 runtimeOf 가 시드여도 프로세스로 보낸다.
 //  · 잡히지 않은 오류는 'error' 이벤트로 온다 — 프로세스라면 stderr 에 찍혔을 덤프를 같은 자리에 둔다(errorHeadline 이 그대로 읽는다).
 //  · HostEffects 가 deny(격리 안 된 테스트)면 프로세스 경로처럼 띄우지 않는다 — 두 경로의 차단 의미를 맞춘다.
 function execWorker(file, { input, timeout, env }) {
@@ -529,12 +555,15 @@ function execWorker(file, { input, timeout, env }) {
 }
 
 async function spawnHook(hook, stdin, ext, expectHash, run = {}) {
+  // 이벤트 예산이 남긴 시간보다 오래 기다리지 않는다 — 그 값이 곧 LIVELY_HOOK_TIMEOUT_MS 라 훅도 그 전에 스스로 멈춘다.
+  //  띄우는 **이 순간** 잰다: 묶음에서 줄 서 기다린 훅·확장자 재시도도 같은 마감을 지킨다.
+  const left = Number.isFinite(run.deadline) ? run.deadline - Date.now() : Infinity;
+  if (left < MIN_SPAWN_MS) return { out: "", fail: { reason: "budget" }, parses: true };
   const tmp = join(tmpdir(), `lively-hook-${crypto.randomBytes(8).toString("hex")}.${ext}`);
   try {
     writeFileSync(tmp, hook.source_code || "", { mode: 0o600 });
     const limit = Math.min(Math.max(Number(hook.timeout_sec) || 10, 1), 120) * 1000;
-    // 이벤트 예산이 남긴 시간보다 오래 기다리지 않는다 — 그 값이 곧 LIVELY_HOOK_TIMEOUT_MS 라 훅도 그 전에 스스로 멈춘다.
-    const timeout = Number.isFinite(run.capMs) ? Math.max(1, Math.min(limit, Math.floor(run.capMs))) : limit;
+    const timeout = Math.max(1, Math.min(limit, Math.floor(left)));
     // SIGKILL 로 끊는다 — 훅이 SIGTERM 핸들러/동기 busy-loop 로 타임아웃을 살아남아 세션을 막는 것 방지(no-block 불변식).
     // LIVELY_HOOK_TIMEOUT_MS — 훅에게 **자기가 죽는 시각**을 알려준다(#905 C3). SIGKILL 은 정리 코드조차 못 돌게
     //  하므로, I/O 하는 훅은 그 전에 스스로 멈춰 결과를 남겨야 한다(project-push 의 충돌 기록이 그 예). 이 값이
@@ -556,7 +585,8 @@ async function spawnHook(hook, stdin, ext, expectHash, run = {}) {
     if (r.status === 0 && !r.signal) return { out: r.stdout, fail: null, parses: true };
     // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
     const fail = {
-      reason: r.signal === "SIGKILL" ? "timeout" : "crash",
+      // 예산이 상한을 줄였고 그 상한에 끊겼으면 훅 탓이 아니라 예산 탓이다(«budget» — 게이트웨이에 훅 실패로 보고하지 않는다).
+      reason: r.signal === "SIGKILL" ? (timeout < limit ? "budget" : "timeout") : "crash",
       exit_code: r.status,
       signal: r.signal,
       // 꼬리를 남긴다 — 훅이 자기 로그를 뱉고 나서 죽으면 정작 치명오류 덤프가 맨 뒤에 오기 때문.
@@ -564,7 +594,8 @@ async function spawnHook(hook, stdin, ext, expectHash, run = {}) {
       stderr: r.stderr.slice(-STDERR_KEEP),
     };
     // 실패했을 때만 파서에게 묻는다(느린 경로) — tmp 가 아직 살아 있는 이 안에서 불러야 한다(finally 가 지운다).
-    return { out: r.stdout, fail, parses: parsesUnder(tmp, expectHash) };
+    //  상한에 끊긴 훅은 묻지 않는다: 돌고 있었다 = 파싱됐다. `--check` 는 동기(최대 CHECK_MS)라 그동안 러너의 다른 훅도 멈춘다.
+    return { out: r.stdout, fail, parses: r.signal === "SIGKILL" ? true : parsesUnder(tmp, expectHash) };
   } catch (e) { return { out: "", fail: { reason: "spawn_error", stderr: String((e && e.message) || "").slice(-STDERR_KEEP) }, parses: true }; }
   finally { try { rmSync(tmp, { force: true }); } catch { /* */ } }
 }
@@ -622,7 +653,7 @@ async function runAll(hooks, stdin, cfg, deadline = Infinity) {
       for (const hk of waves.slice(i).flat()) results.push({ hk, out: "", fail: { reason: "budget" } });
       break;
     }
-    const rs = await runWave(waves[i], stdin, { orgRuntime: cfg.runtime, capMs: Number.isFinite(deadline) ? left : undefined });
+    const rs = await runWave(waves[i], stdin, { orgRuntime: cfg.runtime, deadline });
     waves[i].forEach((hk, j) => results.push({ hk, ...rs[j] }));
   }
   return results;
@@ -762,7 +793,12 @@ async function main() {
   }
   // 게이트웨이 보고와 사용자 알림엔 스로틀을 건다 — 러너는 툴콜마다 도므로, 없으면 고장난 훅 하나가
   //  매 툴콜에 왕복 1회 + 배너 1개를 붙여 세션을 시끄럽고 느리게 만든다.
-  const notable = fails.length ? throttleFailures(fails) : [];
+  //  · «budget»(예산 때문에 건너뛰었거나 줄인 상한에 끊김)은 보고하지 않는다 — 훅 탓이 아니라 앞 훅들이 오래 걸린 탓이라,
+  //    올리면 그 훅의 진짜 실패 기록(health)을 덮고 엉뚱한 훅을 탓한다. 진단은 위 stderr 줄에 남는다.
+  //  · 보고할 시간이 없으면 스로틀 도장도 찍지 않는다 — 찍고 안 보내면 진짜 크래시가 10분간 묻힌다(다음 실행이 보낸다).
+  const reportable = fails.filter((f) => f.reason !== "budget");
+  const roomToReport = !Number.isFinite(deadline) || deadline - Date.now() > 100;
+  const notable = reportable.length && roomToReport ? throttleFailures(reportable) : [];
   if (notable.length) await reportFailures(notable, input, deadline);
 
   // PreToolUse 는 결정 이벤트 — 파싱·병합해 단일 결정 JSON 으로 전파(exit 0 + JSON stdout = 하네스 계약).

@@ -670,7 +670,7 @@ export const runtimeConfigCapabilities: Capability[] = [
     }, {
       hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean(),
         concurrent: z.boolean().describe("직접 만든 커스텀 훅도 sort 가 같으면 러너가 동시에 돌린다(기본 꺼짐 = 하나씩 · 제품 시드 훅끼리는 이 값과 무관하게 겹친다). 같은 sort 의 훅끼리 같은 파일을 쓰거나 서로의 결과에 기대면 켜기 전에 sort 를 나눠라"),
-        runtime: z.enum(["worker", "process"]).describe("커스텀 훅 실행 방식 — worker(기본: 러너 안의 스레드, 훅마다 프로세스를 새로 띄우지 않는다) | process(종전처럼 훅마다 node 프로세스 — 스레드에서 문제가 생긴 조직의 되돌리기용)") })
+        runtime: z.enum(["worker", "process"]).describe("커스텀 훅 실행 방식 — worker(기본: 제품 기본 훅을 러너 안의 스레드로 실행해 훅마다 프로세스를 새로 띄우지 않는다. 직접 만든 훅은 본문에 lively-hook-runtime: worker 가 있을 때만 스레드) | process(전부 종전처럼 훅마다 node 프로세스 — 스레드에서 문제가 생긴 조직의 되돌리기용)") })
         .partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트 · concurrent=직접 만든 훅의 같은 sort 동시 실행 · runtime=훅 실행 방식)"),
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
       // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──

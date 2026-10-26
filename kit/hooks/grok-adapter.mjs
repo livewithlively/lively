@@ -106,6 +106,7 @@ const payload = (event, input, extra) => JSON.stringify({
   ...extra,
 });
 
+// 15000 = harness-registry 의 runnerCapMs — 러너가 이보다 앞서 끝내도록 예산을 잡는다(#5034). 바꾸면 함께 바꾼다.
 const runner = (event, input, extra, timeout = 15000) =>
   runScript("run-custom.mjs", [event, "--harness", HARNESS], payload(event, input, extra), timeout);
 const workFlag = (event, input, extra) =>

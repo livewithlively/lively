@@ -580,6 +580,8 @@ const cdxHook = (event, command, timeout, matcher) => [
 //  그래서 여기 9개 = 'codex 가 지원' ∩ '조직 훅으로 등록 가능' 의 전부다. 특히 **PreToolUse 가 핵심** —
 //  이게 없던 동안 코덱스엔 조직 거버넌스(쓰기게이트·승인차단)가 통째로 없었다(claude 만 적용, 불변식 ② 위반).
 //  실측 장치: kit/setup/codex-e2e.test.mjs(실 codex 바이너리 + 로컬 스텁 모델 — 계정 불요).
+// ⚠ SessionStart·UserPromptSubmit 의 timeout 은 harness-registry codex.runnerCapMs 와 같아야 한다 — 러너의 맥락 이벤트 예산이
+//  그 값보다 앞서 끝내도록 잡히기 때문이다(#5034). 바꾸면 함께 바꾼다.
 const CODEX_RUNNER_EVENTS = [
   ["SessionStart", "startup|resume|clear", 10],
   ["SessionEnd", null, 3],

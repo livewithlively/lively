@@ -79,6 +79,7 @@ const argsOf = (ti) => asObj(ti) || asObj(typeof ti === "string" ? tryJson(ti) :
 // handle() 은 동기(spawnSync)라 타이머가 돌 수 없다 — 이 어댑터의 상한은 러너마다 건 SIGKILL 타임박스의 **합**이다.
 //  이벤트별 합(BUDGET_MS) + stdin 이 hooks.json timeout(user-install CURSOR_HOOK_EVENTS)보다 작아야 Cursor 가 우리를 죽이기
 //  전에 유효 출력으로 끝난다 — cursor-adapter 시험(P5)이 `node cursor-adapter.mjs --budget` 으로 읽어 그 표와 대조한다.
+// T.runner = harness-registry cursor.runnerCapMs — 러너가 이보다 앞서 끝내도록 예산을 잡는다(#5034). 바꾸면 함께 바꾼다.
 const T = { preload: 20000, sync: 20000, runner: 15000, runnerEnd: 10000, gate: 10000, workFlag: 5000, stdin: 2000 };
 const BUDGET_MS = {
   sessionStart: T.preload + T.sync + T.runner + T.workFlag,
