@@ -251,5 +251,29 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   }
 }
 
+// ══ S 기다리던 AI 일이 멈췄나(원준 2026-10-26 «초안을 만들고 있어요(시작하는 중)에서 진전이 안 된다» — 세션이 돌던 노트북이 잠들어 턴이 끝났다) ══
+{
+  const RS = F.runStall || (() => "없음"), RB = F.resumeBrief || (() => "");
+  const T = [
+    [null, "ended", "S1 세션 줄이 없다 → 세션이 꺼짐"],
+    [{ agentState: "offline", node: { online: false } }, "offline", "S2 세션이 돌던 컴퓨터가 꺼짐(잠듦)"],
+    [{ agentState: "busy", working: true, node: { online: false } }, "offline", "S2 컴퓨터가 꺼졌으면 옛 «도는 중» 신호보다 먼저"],
+    [{ restorable: true, agentState: "offline" }, "ended", "S3 되살릴 수 있는 줄 → 세션이 꺼짐"],
+    [{ agentState: "waiting", awaiting: true }, "ask", "S4 확인을 기다림"],
+    [{ agentState: "idle", awaiting: true }, "ask", "S4 awaiting 만 있어도"],
+    [{ agentState: "offline", working: true }, null, "S5 도는 중(working) — 아무도 안 봐서 offline 이어도"],
+    [{ agentState: "idle", background: true }, null, "S5 백그라운드 작업이 남음"],
+    [{ agentState: "busy" }, null, "S5 agentState busy"],
+    [{ agentState: "idle" }, "idle", "S6 턴이 끝났는데 결과가 없음"],
+    [{ agentState: "offline", node: { online: true } }, "idle", "S6 탭에 안 열린 채 끝남"],
+    [{ agentState: "offline", observed: false }, null, "S7 지어낸 줄 — 모르면 멈췄다 하지 않는다"],
+  ];
+  for (const [row, want, what] of T) check(RS(row) === want, what, { row, got: RS(row) });
+  check(F.STALL_MS === 30000, "S8 멈춤이 30초 이어져야 말한다", F.STALL_MS);
+  const d = RB("draft"), fx = RB("fix"), pl = RB("plan"), ck = RB("check");
+  check(/이어서/.test(d) && /\[\[걸음 n\/4\]\]/.test(d) && /app_save/.test(d), "S9 초안 이어서 — 걸음 표식 · app_save 를 다시 일러 준다", d);
+  check(/새 버전/.test(fx) && /app_save/.test(fx) && /기획 카드/.test(pl) && /\[\[대조\]\]/.test(ck), "S9 고침 · 기획 · 대조 이어서 — 저마다 화면이 읽는 꼴을 다시 일러 준다", [fx, pl, ck]);
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);
