@@ -337,7 +337,18 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     const full = path.resolve(assetDir, file);
     if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
     const fsMod = await import("node:fs");
-    if (!fsMod.existsSync(full)) { res.status(404).json({ error: "첨부 파일 없음" }); return; }
+    if (!fsMod.existsSync(full)) {
+      // #5012 — 크기 상한으로 일부러 안 받은 첨부면 이유와 원본 위치를 글로 답한다(본문은 이미 이 주소를 가리킨다).
+      const { readSkipMarker, skipNotice } = await import("./connectors/asset-limits.js");
+      const skipped = readSkipMarker(assetDir, file);
+      if (skipped) {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "private, no-store");
+        res.status(200).type("text/plain; charset=utf-8").send(skipNotice(skipped));
+        return;
+      }
+      res.status(404).json({ error: "첨부 파일 없음" }); return;
+    }
     const ext = (file.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? "").toLowerCase();
     const inlineType = ASSET_INLINE_TYPES[ext];
     res.setHeader("X-Content-Type-Options", "nosniff");
