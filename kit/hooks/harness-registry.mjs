@@ -489,8 +489,8 @@ export const HARNESS = {
     id: "cursor",
     label: "Cursor",
     // 바이너리는 cursor-agent 다(#4927). 공식 설치기가 `agent` 별칭도 걸지만 그 이름은 너무 일반적이라(grok 도 ~/.grok/bin/agent)
-    //  감지·실행에 쓰지 않는다. ⚠ IDE 만 쓰는 사람은 PATH 에 이게 없다 — 감지는 디스크(~/.cursor)로도 한다
-    //  (kit/cli/lively.mjs detectHarnesses · kit/hooks/self-update.mjs installedHarnesses).
+    //  감지·실행에 쓰지 않는다. ⚠ IDE 만 쓰는 사람은 PATH 에 이게 없다 — 감지는 디스크(~/.cursor · 윈도우 Cursor 가 WSL 로
+    //  붙는 홈이면 ~/.cursor-server, #5041)로도 한다(kit/cli/lively.mjs detectHarnesses · kit/hooks/self-update.mjs harnessState).
     bin: "cursor-agent",
     // 설치(#2255 축, 2026-10-20 스크립트 본문 실측): POSIX 는 ~/.local/share/cursor-agent/versions/<v> 에 풀고 ~/.local/bin 에
     //  심링크만 건다 — rc 는 **안 건드린다**(안내문만 찍는다) → wiresPath:false 라 우리가 심는다. 윈도우는

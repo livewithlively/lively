@@ -204,6 +204,11 @@ const CURSOR_HOOKS_JSON = join(CURSOR_DIR, "hooks.json");
 const CURSOR_MCP_JSON = join(CURSOR_DIR, "mcp.json");
 const CURSOR_ADAPTER_RE = /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/;   // 설치기·제거기와 같은 판정(cursor-wiring C19)
 const cursorWired = () => { try { return CURSOR_ADAPTER_RE.test(readFileSync(CURSOR_HOOKS_JSON, "utf8")); } catch { return false; } };
+// Cursor 를 이 홈에서 쓰는가 — ~/.cursor(IDE·CLI 가 첫 실행에 만든다) 또는 ~/.cursor-server(#5041: 윈도우 Cursor 가 WSL 로 이
+//  리눅스에 붙을 때 까는 원격 서버 — 그때 Cursor 는 이 홈의 ~/.cursor/mcp.json 을 읽는다(포럼 직원 답변). SSH 원격도 같은 자리에
+//  서버를 깔지만 SSH 에서 이 홈 설정을 읽는지는 확인하지 않았다 — 읽지 않아도 배선은 무해하다. ~/.cursor 는 첫 에이전트 대화 전엔
+//  없을 수 있다). self-update.mjs harnessState 와 **같은 판정**이어야 한다(두 판정이 갈리면 그게 결함).
+const cursorPresent = () => existsSync(CURSOR_DIR) || existsSync(join(HOME, ".cursor-server"));
 // 자산 충족 판정 — status 색상·조치 힌트·doctor 체크가 **한 산식**을 공유한다(표면끼리 어긋나면 그게 이 판정의 결함).
 //  collision = 같은 이름의 멤버 자산이 이겨서 조직 사본을 안 깐 것(정상). null = 판정 불가 → 보수적으로 결손 취급하고
 //  불확실성은 문구로 밝힌다(아는 척 초록불로 덮지 않는다).
@@ -677,9 +682,9 @@ function detectHarnesses() {
   if (has("grok")) out.add("grok");
   try { if (existsSync(GROK_HOOKS_JSON)) out.add("grok"); } catch { /* */ }
   // cursor(#4927): CLI 바이너리는 cursor-agent(`agent` 별칭은 너무 일반적이라 안 본다). ⚠ IDE 만 쓰는 사람은 PATH 에 그게 없다 —
-  //  ~/.cursor(IDE·CLI 가 첫 실행에 만든다)가 있으면 쓰는 하네스로 본다. 배선 신호는 hooks.json 속 우리 어댑터 엔트리.
+  //  ~/.cursor 나 ~/.cursor-server(cursorPresent)가 있으면 쓰는 하네스로 본다. 배선 신호는 hooks.json 속 우리 어댑터 엔트리.
   if (has("cursor-agent")) out.add("cursor");
-  try { if (existsSync(CURSOR_DIR) || cursorWired()) out.add("cursor"); } catch { /* */ }
+  try { if (cursorPresent() || cursorWired()) out.add("cursor"); } catch { /* */ }
   return [...out];
 }
 
@@ -1155,6 +1160,46 @@ export function launchNames(harnesses = []) {
   return names.length ? names : ["claude"];
 }
 
+// ── WSL 안내(#5041) — 윈도우에 깐 라이블리는 WSL 안의 AI 가 쓰지 않는다 ─────────────────────────
+//  WSL 의 Cursor·Claude Code 는 리눅스 홈(~/.cursor·~/.claude)을 읽는다. 윈도우의 Cursor 로 WSL 폴더를 열어도 Cursor 는
+//  WSL 쪽 ~/.cursor/mcp.json 을 읽고 MCP 를 WSL 안에서 띄운다(Cursor 포럼 직원 답변 2026-05-08, 3.3.12 편집기 창). 고객 PC 가
+//  바로 그 모양이었다(윈도우 쪽 Cursor 로 켜면 붙고 WSL 에서 켜면 안 붙음). 그래서 윈도우 설치 끝·status 에서 WSL 배포판이
+//  보이면 WSL 터미널에서 리눅스 설치 한 줄을 한 번 더 치라고 알린다.
+//  배포판 목록은 레지스트리(HKCU\…\Lxss)에서 읽는다 — `wsl.exe` 를 부르면 WSL 서비스·VM 이 깨어난다(부작용 없는 쪽을 고른다).
+//  도구가 만드는 배포판(docker-desktop · rancher-desktop · podman-machine)은 사람이 AI 를 켜는 자리가 아니라 뺀다.
+const WSL_TOOL_DISTRO = /^(docker-desktop|rancher-desktop|podman-machine)/i;
+/** (순수) `reg query …\Lxss /s /v DistributionName` 출력 → 사람이 쓰는 배포판 이름(등장 순, 중복 없음). */
+export function parseWslDistros(regOut) {
+  const names = [];
+  for (const line of String(regOut || "").split(/\r?\n/)) {
+    const m = line.match(/^\s*DistributionName\s+REG_\w+\s+(.+?)\s*$/);
+    if (m && !WSL_TOOL_DISTRO.test(m[1]) && !names.includes(m[1])) names.push(m[1]);
+  }
+  return names;
+}
+export function wslDistros() {
+  if (!WIN) return [];
+  try {
+    // reg.exe 는 절대경로로 — 맨 이름이면 PATH(그리고 윈도우는 현재 폴더부터)를 뒤진다(cmd-node.mjs 의 schtasks 와 같은 규약).
+    const reg = join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+    const r = spawnSync(reg, ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss", "/s", "/v", "DistributionName"],
+      { encoding: "utf8", windowsHide: true, timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    return r.status === 0 ? parseWslDistros(r.stdout) : [];   // 키가 없으면(WSL 미설치) exit 1 → 빈 목록
+  } catch { return []; }
+}
+/** (순수) WSL 안내 — 배포판이 없거나 주소를 모르면 null. cmd 는 WSL 터미널에 붙여 넣을 리눅스 설치 한 줄. */
+export function wslHint(gw, distros) {
+  if (!gw || !Array.isArray(distros) || !distros.length) return null;
+  return {
+    distros,
+    cmd: `curl -fsSL ${String(gw).replace(/\/+$/, "")}/cli | sh`,
+    lines: [
+      `이 PC 에 WSL 배포판(${distros.join(", ")})이 있습니다. WSL 안에서 켠 Cursor·Claude Code 는 이 설치를 쓰지 않습니다.`,
+      "윈도우의 Cursor 로 WSL 폴더를 열어 쓸 때도 그렇습니다. WSL 터미널에서 아래 한 줄을 한 번 더 실행하세요.",
+    ],
+  };
+}
+
 async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
   //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
   //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
@@ -1318,6 +1363,15 @@ async function syncKit({ label, offerHarness, want = "" }) {
     say(`  이제 아무 폴더에서든 ${launchNames(harnesses).map(bold).join(" · ")} 를 켜면 회사 맥락이 따라옵니다.`);
     say(dim("  (훅은 세션 시작에 스냅샷됩니다 — 이미 켜 둔 세션이 있으면 껐다 켜세요.)"));
     say(dim("  상태 확인: ") + bold("lively status") + dim("    문제 진단: ") + bold("lively doctor"));
+    // WSL(#5041) — 윈도우에서 install·setup 할 때만(자동·수동 update 마다 되풀이하지 않는다 — status 가 흐린 한 줄로 늘 보여 준다).
+    //  warn·evNotice 로 내야 데스크톱 앱(--json-events)으로 설치한 사람에게도 notice 로 간다. 명령은 복사하기 좋게 따로 한 줄.
+    const wsl = offerHarness ? wslHint(gateway(), wslDistros()) : null;
+    if (wsl) {
+      say("");
+      warn(wsl.lines.join(" "));
+      say("      " + bold(wsl.cmd));
+      evNotice("info", wsl.cmd);
+    }
     return version;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1338,19 +1392,53 @@ const s256 = (verifier) => crypto.createHash("sha256").update(verifier).digest("
 //  안 열려도 로그인은 막히지 않는다 — URL·코드는 호출부가 화면에 **먼저** 찍고, 승인은 어느 브라우저에서 해도 된다.
 //  빈 문자열은 '안 켬'으로 본다(테스트가 LIVELY_TOKEN:"" 로 끄는 관례와 같다).
 const NO_BROWSER = !!(process.env.LIVELY_NO_BROWSER || process.env.CI);
+
+// WSL 판정(#5041) — kit/cli/bootstrap.sh is_wsl 과 같은 순서: LIVELY_WSL(1|0 — 시험·사람이 강제) > 리눅스가 아니면 아님 >
+//  WSL 이 프로세스마다 거는 WSL_DISTRO_NAME > 커널 이름의 microsoft(`su -` 처럼 env 를 지운 셸). 커널 이름은 WSL2 커널 위의
+//  컨테이너(도커 데스크톱·dev container)도 같으니 컨테이너 표식이 있으면 그 갈래는 WSL 로 치지 않는다(is-wsl 패키지와 같은 판단).
+//  순수 — 시험이 env·플랫폼·커널 이름·컨테이너 여부를 넣는다.
+export function isWsl({
+  env = process.env, platform = process.platform,
+  osrelease = () => readFileSync("/proc/sys/kernel/osrelease", "utf8"),
+  inContainer = () => existsSync("/.dockerenv") || existsSync("/run/.containerenv"),
+} = {}) {
+  const forced = String(env.LIVELY_WSL ?? "").trim();
+  if (forced === "1") return true;
+  if (forced === "0") return false;
+  if (platform !== "linux") return false;
+  if (env.WSL_DISTRO_NAME) return true;
+  try { return !inContainer() && /microsoft/i.test(osrelease()); } catch { return false; }
+}
+
+// 승인 주소를 열 명령(순수) — null 이면 안 연다(주소·코드는 호출부가 이미 화면에 찍었다).
+//  WSL(#5041): 리눅스 쪽엔 보통 브라우저가 없다(xdg-open 이 없거나, 있어도 열 것이 없다) → **윈도우 기본 브라우저**로 연다.
+//   윈도우의 주소 처리기 `rundll32.exe url.dll,FileProtocolHandler <주소>` 를 WSL 상호운용으로 부른다(기본 브라우저로 넘긴다).
+//   explorer.exe 는 쓰지 않는다 — `=` 가 든 주소를 브라우저가 아니라 문서 폴더로 연다는 보고가 있고 그 보고가 고친 길이 이
+//   rundll32 다(xdg-utils 이슈 242). 승인 주소가 바로 `…/activate?code=…` 다. cmd.exe start 는 상호운용이 인자를 다시 이을 때
+//   `&` 를 명령 구분자로 읽는다.
+//   DISPLAY 를 보지 않는다 — WSLg 가 없어도 윈도우 브라우저는 열린다. 다만 윈도우 경로를 PATH 에 안 붙였거나(appendWindowsPath
+//   =false) 상호운용을 끈 WSL 이면 rundll32.exe 가 없다 — 그때 WSLg(DISPLAY·WAYLAND_DISPLAY)가 있으면 xdg-open 으로 물러선다(fallback).
+//  주소는 http(s) 만 연다 — 주소는 게이트웨이 응답에서 오고, 여는 명령들은 파일·다른 프로토콜도 연다(격리 리뷰 #5041).
+export function browserCommand(url, { platform = process.platform, env = process.env, wsl = isWsl({ env, platform }) } = {}) {
+  if (!/^https?:\/\//i.test(String(url || ""))) return null;
+  const linuxGui = !!(env.DISPLAY || env.WAYLAND_DISPLAY);
+  if (wsl) return { cmd: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url], fallback: linuxGui ? { cmd: "xdg-open", args: [url] } : null };
+  if (platform === "darwin") return { cmd: "open", args: [url] };
+  if (platform === "win32") return { cmd: "cmd", args: ["/c", "start", "", url] };
+  if (!linuxGui) return null; // 헤드리스 — URL 만 표시(위에서 이미 출력)
+  return { cmd: "xdg-open", args: [url] };
+}
 function openBrowser(url) {
   if (NO_BROWSER) return;
-  try {
-    let cmd, args;
-    if (process.platform === "darwin") { cmd = "open"; args = [url]; }
-    else if (WIN) { cmd = "cmd"; args = ["/c", "start", "", url]; }
-    else {
-      if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return; // 헤드리스 — URL 만 표시(위에서 이미 출력)
-      cmd = "xdg-open"; args = [url];
-    }
-    const c = spawn(cmd, args, { detached: true, stdio: "ignore" });
-    c.on("error", () => { /* 브라우저 없음 등 — 무시 */ });
+  const launch = (bc, onFail) => {
+    const c = spawn(bc.cmd, bc.args, { detached: true, stdio: "ignore" });
+    c.on("error", () => { try { onFail?.(); } catch { /* 브라우저 없음 등 — 무시 */ } });
     c.unref();
+  };
+  try {
+    const bc = browserCommand(url);
+    if (!bc) return;
+    launch(bc, bc.fallback ? () => launch(bc.fallback) : null);
   } catch { /* best-effort */ }
 }
 
@@ -1903,9 +1991,10 @@ async function gatherStatus() {
       // grok(#1701) — configOk = 우리 훅 배선 파일(lively-grok.json)이 JSON 으로 파싱되는가. grok 은 깨진 훅
       //  파일을 **조용히 건너뛰므로**(fail-open) 깨짐 = 우리 훅이 통째로 소리 없이 빠진 상태 — 그걸 여기서 드러낸다.
       grok: { installed: has("grok"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
-      // cursor(#4927) — 설치 = CLI(cursor-agent) **또는** ~/.cursor(IDE 만 쓰는 사람은 PATH 에 CLI 가 없다). configOk = Cursor 가
-      //  ~/.cursor/hooks.json 을 받아 주는 형태인가 — 한 군데만 어긋나도 **사용자 훅까지 파일 전체**를 버린다(번들 실측).
-      cursor: { installed: has("cursor-agent") || existsSync(CURSOR_DIR), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // cursor(#4927) — 설치 = CLI(cursor-agent) **또는** ~/.cursor·~/.cursor-server(cursorPresent — IDE 만 쓰는 사람은 PATH 에
+      //  CLI 가 없다). configOk = Cursor 가 ~/.cursor/hooks.json 을 받아 주는 형태인가 — 한 군데만 어긋나도 **사용자 훅까지 파일
+      //  전체**를 버린다(번들 실측).
+      cursor: { installed: has("cursor-agent") || cursorPresent(), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
     // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
@@ -2306,6 +2395,11 @@ async function cmdStatus(opts) {
     const cuMcp = cu.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(cu.mcp)} MCP 등록${cu.mcp && cu.transport ? dim(`(${cu.transport})`) : ""}`;
     say(`  cursor        ${mark(cu.installed)} 설치   ${cuWired}${cuMcp}${connOf(cu)}${assetsOf(cu)}`);
   }
+  // WSL(#5041) — 윈도우에서만. 사람용 출력에만 둔다(--json 은 앱이 폴링하니 reg 를 매번 부르지 않는다).
+  //  흐린 정보 한 줄이다 — 윈도우에선 WSL 안에 이미 깔았는지 알 수 없고(알려면 VM 을 깨워야 한다), 배포판을 도커용으로만 쓰는
+  //  사람에겐 할 일이 없다. 경고색으로 매번 재촉하지 않는다(격리 리뷰 #5041).
+  const wsl = wslHint(gateway(), wslDistros());
+  if (wsl) say(dim(`  WSL           ${wsl.distros.join(", ")}   WSL 안의 AI 는 이 설치를 쓰지 않습니다 — WSL 에서도 쓰려면 WSL 터미널에서: ${wsl.cmd}`));
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
   if (st.node?.registered) {

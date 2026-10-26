@@ -1508,7 +1508,7 @@ Drive 문서, 캘린더 일정, Gmail 메일을 따로 고릅니다. 캘린더 �
 | 데이터베이스 | 세션이 조회할 데이터베이스를 등록합니다. 관리자에게만 보입니다. |
 ` },
 
-  { slug: 'nodes', title: '내 컴퓨터 연결', group: '연결', keys: '노드 데스크톱 앱 설치 CLI lively login node daemon 공유 컴퓨터 중앙 컴퓨터 업데이트 내 PC',
+  { slug: 'nodes', title: '내 컴퓨터 연결', group: '연결', keys: '노드 데스크톱 앱 설치 CLI lively login node daemon 공유 컴퓨터 중앙 컴퓨터 업데이트 내 PC WSL 리눅스 Ubuntu Cursor',
     lead: '내 PC를 연결하면 세션을 그 PC에서 실행하고, 내 PC의 터미널에서 켠 AI도 워크스페이스의 맥락을 받습니다. 브라우저만 쓸 때는 연결하지 않아도 됩니다.',
     md: `# 내 컴퓨터 연결
 
@@ -1581,6 +1581,18 @@ lively node --daemon
 \`\`\`
 lively status
 \`\`\`
+
+## Windows 의 WSL 에서 AI를 쓸 때 {#wsl}
+
+Windows 에 한 설치는 WSL(Ubuntu 같은 리눅스 배포판) 안에서 쓰이지 않습니다. WSL 안의 AI는 리눅스 쪽 설정 폴더를 읽습니다. Windows 의 Cursor 로 WSL 폴더를 열어 쓸 때도 Cursor 는 WSL 쪽 설정을 읽습니다.
+
+WSL 안에서 Cursor 나 Claude Code 를 쓰면 WSL 터미널에서 아래 명령을 한 번 더 실행합니다.
+
+\`\`\`
+curl -fsSL {{origin}}/cli | sh
+\`\`\`
+
+설치가 끝나면 Cursor 를 완전히 닫았다가 다시 엽니다. 새 대화에서 워크스페이스의 맥락이 들어오면 연결된 것입니다.
 
 ## 연결된 컴퓨터를 확인합니다 {#check}
 

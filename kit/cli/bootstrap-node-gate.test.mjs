@@ -16,7 +16,7 @@
 
 import {
   mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, readlinkSync,
-  existsSync, statSync, chmodSync, symlinkSync, rmSync,
+  existsSync, statSync, lstatSync, chmodSync, symlinkSync, rmSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -88,7 +88,12 @@ function grepTree(root, needle) {
 
 // ── 시나리오 실행기 ──────────────────────────────────────────────────────────
 // systemNode: OLD|NEW|null (PATH 에 놓을 시스템 node) / runtime: NEW|null (이미 설치된 전용 런타임)
-function runScenario(label, { systemNode = null, runtime = null }) {
+// wslEnv: WSL 판정 env(#5041). 기본은 `LIVELY_WSL=0` — 이 시험을 WSL 안에서 돌려도(윈도우 개발자는 POSIX 시험을 WSL 에서
+//  돌린다) 엣지①~④가 «WSL 이 아닌 박스» 를 재게 한다. WSL 시나리오는 WSL_DISTRO_NAME(실제 WSL 이 거는 값)이나 LIVELY_WSL=1.
+// os: null(실제 uname) | "Linux" | "Darwin" — uname 스텁. WSL 판정은 리눅스에서만 성립하므로(#5041) WSL 시나리오는 맥에서
+//  돌려도 «리눅스» 로 보이게 한다. tarball: null(받기 실패 — 종전) | "junk"(200 으로 HTML 을 받음 — 프록시 페이지)
+//  | "unrunnable"(풀리지만 이 기계에서 안 도는 node — musl·낡은 glibc) | "sigint"(받는 중 사람이 Ctrl-C).
+function runScenario(label, { systemNode = null, runtime = null, wslEnv = { LIVELY_WSL: "0" }, os = null, tarball = null }) {
   const box = mkdtempSync(join(tmpdir(), `bootstrap-gate-${label}-`));
   const home = join(box, "home");
   const bin = join(box, "stub-bin");
@@ -102,9 +107,21 @@ function runScenario(label, { systemNode = null, runtime = null }) {
   const ownLog = join(box, "own-node.log");// 전용 런타임 node 호출 인자
 
   // 네트워크 스텁 — URL 만 적고 실패(7=couldn't connect). 실제 다운로드는 절대 일어나지 않는다.
+  //  tarball 을 고르면 node 배포 아카이브(.tar.gz) 주소에서만 그 흉내를 낸다(-o 자리에 쓰고 0 · 또는 부모 셸에 SIGINT).
+  const fakeTarball = !tarball ? "" : tarball === "sigint" ? `kill -INT "$PPID"; exit 130`
+    : tarball === "junk" ? `printf '<html>proxy login</html>' > "$out"; exit 0`
+      : [`b=$(basename "$url" .tar.gz); d=$(mktemp -d); mkdir -p "$d/$b/bin"`,
+        `printf '#!/bin/sh\\nexit 1\\n' > "$d/$b/bin/node"; chmod 755 "$d/$b/bin/node"`,
+        `tar -czf "$out" -C "$d" "$b"; rm -rf "$d"; exit 0`].join("\n");
   for (const t of ["curl", "wget"]) {
-    stub(join(bin, t), `for a in "$@"; do case "$a" in http://*|https://*) printf '%s\\n' "$a" >> ${q(netLog)} ;; esac; done\nexit 7`);
+    stub(join(bin, t), [
+      `url=""; out=""`,
+      `while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; http://*|https://*) url="$1"; printf '%s\\n' "$1" >> ${q(netLog)}; shift ;; *) shift ;; esac; done`,
+      fakeTarball ? `case "$url" in *.tar.gz)\n${fakeTarball}\n;; esac` : "",
+      `exit 7`,
+    ].join("\n"));
   }
+  if (os) stub(join(bin, "uname"), `case "$1" in -m) echo x86_64 ;; *) echo ${q(os)} ;; esac`);
   // 시스템 변경 도구 스텁 — 불리면 로그만 남기고 실패. (R3: 시스템 Node 를 깔거나 올리려 들면 여기 찍힌다)
   for (const t of ["sudo", "brew", "apt-get", "apt", "yum", "dnf", "pacman", "port", "nvm", "n", "volta", "fnm", "asdf"]) {
     stub(join(bin, t), `printf '%s %s\\n' ${q(t)} "$*" >> ${q(pkgLog)}\nexit 1`);
@@ -138,6 +155,7 @@ function runScenario(label, { systemNode = null, runtime = null }) {
       USER: process.env.USER || "tester",
       LOGNAME: process.env.LOGNAME || "tester",
       NO_COLOR: "1",
+      ...wslEnv,
     },
     input: "",            // stdin 즉시 EOF — 프롬프트가 있어도 매달리지 않는다
     encoding: "utf8",
@@ -153,7 +171,7 @@ function runScenario(label, { systemNode = null, runtime = null }) {
 
   const urls = lines(netLog);
   return {
-    label, box, home, bin, rtDir, r,
+    label, box, home, bin, rtDir, tmp, r,
     err: r.stderr || "", out: r.stdout || "",
     urls,
     origins: [...new Set(urls.map((u) => (u.match(/^[a-z]+:\/\/[^/]+/i) || [u])[0]))],
@@ -180,7 +198,30 @@ const B = runScenario("B", { systemNode: OLD, runtime: NEW });   // 엣지②: �
 const C = runScenario("C", { systemNode: NEW, runtime: null });  // 엣지③: 최소 이상 · 전용 런타임 없음
 const D = runScenario("D", { systemNode: null, runtime: null }); // 엣지④: Node 없음 · 전용 런타임 없음
 const E = runScenario("E", { systemNode: EXACT, runtime: null }); // 엣지③ 경계: 정확히 최소(20)
-const ALL = [A, B, C, D, E];
+// WSL(#5041) — Cursor 가 셸 설정 없이 띄우는 훅·MCP 가 nvm 류 node 를 못 찾는다(실측). 그래서 WSL 이면 시스템 node 가
+//  최소 이상이어도 전용 런타임(절대경로)을 쓴다 — 받지 못하면 시스템 node 로 물러선다(설치를 막지 않는다).
+const WSL = { WSL_DISTRO_NAME: "Ubuntu" };                          // 실제 WSL 이 프로세스마다 거는 값
+const W1 = runScenario("W1", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Linux" });      // WSL · 시스템 v22 · 전용 없음
+const W2 = runScenario("W2", { systemNode: NEW, runtime: NEW, wslEnv: WSL, os: "Linux" });       // WSL · 시스템 v22 · 전용 있음
+const W3 = runScenario("W3", { systemNode: null, runtime: null, wslEnv: WSL, os: "Linux" });     // WSL · Node 없음
+const W4 = runScenario("W4", { systemNode: NEW, runtime: null, wslEnv: { LIVELY_WSL: "1" } });                    // 강제 켬
+const W5 = runScenario("W5", { systemNode: NEW, runtime: null, wslEnv: { ...WSL, LIVELY_WSL: "0" } });            // 강제 끔
+const W6 = runScenario("W6", { systemNode: OLD, runtime: null, wslEnv: WSL, os: "Linux" });      // WSL · 시스템 v16(못 씀) · 전용 없음
+const W7 = runScenario("W7", { systemNode: EXACT, runtime: null, wslEnv: WSL, os: "Linux" });    // WSL · 시스템 v20(정확히 최소) · 전용 없음
+// 격리 리뷰(#5041) — 받기 «실패» 가 curl 종료코드만이 아니다 · Ctrl-C 는 실패가 아니라 중단이다 · 맥에 떠도는 WSL 변수 · 깨진 current
+const W8 = runScenario("W8", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Linux", tarball: "sigint" });      // 받는 중 Ctrl-C
+const W9 = runScenario("W9", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Linux", tarball: "junk" });        // 200 으로 HTML(프록시)
+const W9b = runScenario("W9b", { systemNode: null, runtime: null, os: "Linux", tarball: "junk" });                  // WSL 아님 · node 없음 · HTML
+const W10 = runScenario("W10", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Linux", tarball: "unrunnable" }); // 풀리지만 안 도는 node
+const W11 = runScenario("W11", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Darwin" });                     // 맥에 떠도는 WSL_DISTRO_NAME
+const W12 = runScenario("W12", { systemNode: NEW, runtime: OLD, wslEnv: WSL, os: "Linux" });                       // current 가 못 쓰는 node(v16)
+const ALL = [A, B, C, D, E, W1, W2, W3, W4, W5, W6, W7, W8, W9, W9b, W10, W11, W12];
+// current 링크 자체가 남아 있나(가리키는 곳이 없어도 링크면 남은 것) · 전용 런타임 자리에 받다 만 node-* 폴더가 남았나
+const hasCurrentLink = (s) => { try { lstatSync(join(s.rtDir, "current")); return true; } catch { return false; } };
+const leftoverRuntimes = (s) => (existsSync(s.rtDir) ? readdirSync(s.rtDir).filter((n) => /^node-v/.test(n)) : []);
+// 「Node 고르기를 지나 다음 단계(게이트웨이에서 CLI 받기)로 갔다」 — 닫힌 포트라 거기서 끝나지만, 그 주소로 나간 것 자체가
+//  «Node 단계에서 멈추지 않았다» 는 관찰이다(엣지④는 여기까지 못 간다).
+const reachedCli = (s) => s.urls.some((u) => u.startsWith(`${GATEWAY}/cli/`));
 
 try {
   // ── 배선 자기검증 — 이게 깨지면 아래 통과는 전부 무의미(vacuous)하다 ──────────
@@ -279,6 +320,61 @@ try {
     `Node 가 아예 없는 박스에서만 설치가 중단된다는 뜻이다`);
   check("엣지④ R3 — 시스템에 Node 를 깔려 들지 않는다(sudo/brew/apt/nvm… 미호출)",
     D.pkgCalls.length === 0, JSON.stringify(D.pkgCalls.slice(0, 5)));
+
+  // ── WSL(#5041) — 시스템 node 가 멀쩡해도 전용 런타임 · 못 받으면 시스템 node 로 계속 ─────────────
+  check("배선 WSL 대조 — 같은 v22 라도 WSL 이 아니면(엣지③) 게이트웨이 CLI 단계까지 간다(관찰 reachedCli 가 살아 있다)",
+    reachedCli(C) && !reachedCli(D),
+    `C=${reachedCli(C)} D=${reachedCli(D)} — 둘이 갈리지 않으면 아래 «물러섬» 판정이 공허하다`);
+  check("W1 ★ WSL 이면 시스템 v22 가 있어도 전용 런타임을 받으러 간다",
+    W1.runtimeFetch.length > 0,
+    `런타임 취득 시도가 없다 — 시스템 node 를 그대로 채택했다(urls=${JSON.stringify(W1.origins)})`);
+  check("W1 ★ 받지 못하면 시스템 node 로 계속한다(설치를 막지 않는다 — 다음 단계로 간다)",
+    reachedCli(W1),
+    `게이트웨이 CLI 단계로 가지 않았다(exit=${W1.r.status}) — 내려받기 실패를 설치 중단으로 끝냈다`);
+  // 버전은 «WSL 에서는 시스템 node(v…) 대신» 줄에도 나온다 — 물러섬 고지 줄이 따로 있어야 두 번이다(격리 리뷰: 한 번이면 고지를 지워도 통과).
+  check("W1 — 어느 node 로 계속하는지 물러설 때 다시 알린다(stderr 에 시스템 node 버전이 두 번)",
+    W1.err.split(NEW.ver).length - 1 >= 2, `stderr(${W1.err.length}자)에 ${NEW.ver} 가 ${W1.err.split(NEW.ver).length - 1}번`);
+  check("W1 R3 — 시스템 node 무변경 + 시스템 변경 도구 미호출",
+    W1.before.sysNode === W1.after.sysNode && W1.pkgCalls.length === 0,
+    `지문 ${W1.before.sysNode}→${W1.after.sysNode} pkg=${JSON.stringify(W1.pkgCalls.slice(0, 5))}`);
+  check("W2 ★ WSL · 전용 런타임이 이미 있으면 시스템 v22 대신 그걸 쓴다(재다운로드 없음)",
+    W2.runtimeFetch.length === 0 && W2.ownCalls.length > 0 && W2.sysRuns.length === 0,
+    `취득시도=${JSON.stringify(W2.origins)} ownNode호출=${W2.ownCalls.length} sysRuns=${JSON.stringify(W2.sysRuns.slice(0, 3))}`);
+  check("W3 — WSL · Node 가 아예 없으면 받으러 가고, 못 받으면 멈춘다(물러설 node 가 없다)",
+    W3.runtimeFetch.length > 0 && !reachedCli(W3) && W3.r.status !== 0,
+    `취득시도=${W3.runtimeFetch.length} reachedCli=${reachedCli(W3)} exit=${W3.r.status}`);
+  check("W4 — LIVELY_WSL=1 은 WSL_DISTRO_NAME 없이도 WSL 로 친다",
+    W4.runtimeFetch.length > 0, `취득시도 없음(urls=${JSON.stringify(W4.origins)})`);
+  check("W5 — LIVELY_WSL=0 은 WSL_DISTRO_NAME 이 있어도 WSL 이 아닌 것으로 친다(엣지③과 같다)",
+    W5.runtimeFetch.length === 0 && W5.sysCalls.length > 0 && reachedCli(W5),
+    `취득시도=${JSON.stringify(W5.origins)} sysNode호출=${W5.sysCalls.length} reachedCli=${reachedCli(W5)}`);
+  check("W6 — WSL · 시스템 v16 은 물러설 자리가 아니다: 받으러 가고, 못 받으면 멈춘다",
+    W6.runtimeFetch.length > 0 && !reachedCli(W6) && W6.sysRuns.length === 0,
+    `취득시도=${W6.runtimeFetch.length} reachedCli=${reachedCli(W6)} sysRuns=${JSON.stringify(W6.sysRuns.slice(0, 3))}`);
+  check("W6 R5 — 구버전이라 못 쓴다는 고지(16·최소 20)가 남는다",
+    (/(^|[^\d.])v?16([^\d]|$)/.test(W6.err) || W6.err.includes(OLD.ver)) && new RegExp(`(^|[^\\d.])${MIN_MAJOR}([^\\d]|$)`).test(W6.err),
+    `stderr(${W6.err.length}자)`);
+  check(`W7 — 경계값: 시스템 v${MIN_MAJOR}(정확히 최소)는 물러설 수 있는 node 다`,
+    W7.runtimeFetch.length > 0 && reachedCli(W7),
+    `취득시도=${W7.runtimeFetch.length} reachedCli=${reachedCli(W7)} exit=${W7.r.status}`);
+  check("W8 ★ 받는 중 Ctrl-C 는 «실패» 가 아니라 중단이다 — 130 으로 끝나고 다음 단계로 가지 않는다 · 임시 폴더는 치운다",
+    W8.r.status === 130 && !reachedCli(W8) && readdirSync(W8.tmp).length === 0,
+    `exit=${W8.r.status} reachedCli=${reachedCli(W8)} tmp=${JSON.stringify(readdirSync(W8.tmp))}`);
+  check("W9 ★ WSL · 받은 것이 HTML(프록시 페이지)이면 풀기 실패 — 시스템 node 로 물러선다 · 받다 만 런타임은 남기지 않는다",
+    W9.runtimeFetch.length > 0 && reachedCli(W9) && !hasCurrentLink(W9) && leftoverRuntimes(W9).length === 0,
+    `reachedCli=${reachedCli(W9)} current=${hasCurrentLink(W9)} 남은 런타임=${JSON.stringify(leftoverRuntimes(W9))} exit=${W9.r.status}`);
+  check(`W9b — WSL 이 아니고 물러설 node 도 없으면 멈추고, 직접 설치(Node ${MIN_MAJOR} 이상) 길을 알린다`,
+    !reachedCli(W9b) && W9b.r.status !== 0 && new RegExp(`(^|[^\\d.])${MIN_MAJOR}([^\\d]|$)`).test(W9b.err) && !hasCurrentLink(W9b),
+    `reachedCli=${reachedCli(W9b)} exit=${W9b.r.status} current=${hasCurrentLink(W9b)} stderr(${W9b.err.length}자)`);
+  check("W10 ★ WSL · 풀리지만 이 기계에서 안 도는 node 면 current 를 걸지 않고 시스템 node 로 물러선다",
+    W10.runtimeFetch.length > 0 && reachedCli(W10) && !hasCurrentLink(W10) && leftoverRuntimes(W10).length === 0,
+    `reachedCli=${reachedCli(W10)} current=${hasCurrentLink(W10)} 남은 런타임=${JSON.stringify(leftoverRuntimes(W10))} exit=${W10.r.status}`);
+  check("W11 — 리눅스가 아니면 WSL_DISTRO_NAME 이 떠 있어도 WSL 이 아니다(엣지③과 같다)",
+    W11.runtimeFetch.length === 0 && W11.sysCalls.length > 0 && reachedCli(W11),
+    `취득시도=${JSON.stringify(W11.origins)} sysNode호출=${W11.sysCalls.length} reachedCli=${reachedCli(W11)}`);
+  check("W12 — current 가 못 쓰는 node(v16)를 가리키면 그 링크를 걷는다(받지 못해도 깨진 링크를 남기지 않는다)",
+    reachedCli(W12) && !hasCurrentLink(W12) && W12.ownCalls.every((l) => !/\.(m|c)?js(\s|$)/.test(l)),
+    `reachedCli=${reachedCli(W12)} current=${hasCurrentLink(W12)} ownRuns=${JSON.stringify(W12.ownCalls.slice(0, 3))}`);
 
   // ── R6 최소 버전 값이 여러 설치 표면에서 일치하는가 ─────────────────────────
   // 구현을 읽지 않고도 검증되도록 관용적인 두 형태만 뽑는다:

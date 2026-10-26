@@ -70,7 +70,7 @@ function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 2
       // PATH: 닫힌 PATH — 사람의 로컬 하네스 설치·MCP 설정에 결과와 시간이 의존하지 않게(#1431).
       // DISPLAY 는 **일부러 세운다** — linux 의 헤드리스 no-op 에 가려지면 "억제가 먹어서 0건"인지
       //  "$DISPLAY 가 없어서 0건"인지 구분이 안 돼 D8 이 공허해진다(darwin·win 은 무시하는 값).
-      env: { ...process.env, PATH: closedPath(BIN), LIVELY_HOME: home || join(BOX, "h"), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1", DISPLAY: ":0", ...(allowBrowser ? { LIVELY_NO_BROWSER: "", CI: "" } : noBrowserEnv()) },
+      env: { ...process.env, PATH: closedPath(BIN), LIVELY_HOME: home || join(BOX, "h"), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1", DISPLAY: ":0", ...(allowBrowser ? { LIVELY_NO_BROWSER: "", CI: "", LIVELY_WSL: "0" } : noBrowserEnv()) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "", err = "", buf = "", killed = false;
@@ -113,7 +113,9 @@ function runPluginLogin(home, { noBrowser }) {
       env: {
         ...process.env, ...sandboxEnv({ home }), PATH: closedPath(BIN), NO_COLOR: "1", DISPLAY: ":0",
         CLAUDE_PLUGIN_OPTION_GATEWAY_URL: "",
-        ...(noBrowser ? noBrowserEnv() : { LIVELY_NO_BROWSER: "", CI: "" }),   // 대조군은 러너·CI 의 억제를 명시적으로 지운다
+        // LIVELY_WSL=0 — WSL 개발 기기에선 CLI 가 윈도우 브라우저(rundll32.exe)로 연다. 그건 이 PATH 스텁이 가로채지 못해 억제가
+        //  깨지면 실제 윈도우 탭이 뜬다(#5041 격리 리뷰) — 대조군도 «리눅스» 로 고정한다.
+        ...(noBrowser ? noBrowserEnv() : { LIVELY_NO_BROWSER: "", CI: "", LIVELY_WSL: "0" }),   // 대조군은 러너·CI 의 억제를 명시적으로 지운다
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
