@@ -142,3 +142,19 @@ export function childHeartbeatMs(staleMs: number): number {
   //   판정된다(이 변경이 막으려던 바로 그 사고를 하한 상수가 다시 만든다). 그래서 하한도 half 를 넘지 않는다.
   return Math.max(1_000, Math.min(30_000, half));
 }
+
+/**
+ * 실행 로그에서 요약(stats)을 꺼낸다 — 마지막 «싱크 완료» pino JSON 줄. 없으면 null(로그가 원본이다).
+ *  run-tracker(부모가 끝을 적을 때)와 orphan-guard(부모를 잃은 자식이 스스로 적을 때)가 같은 규칙을 쓴다(#5012).
+ */
+export function runStatsFromLog(log: string): Record<string, unknown> | null {
+  for (const line of String(log ?? "").split("\n").reverse()) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    try {
+      const j = JSON.parse(t) as Record<string, unknown>;
+      if (j.msg && String(j.msg).includes("싱크 완료")) return { msg: j.msg, ...j, time: undefined, pid: undefined, hostname: undefined, level: undefined };
+    } catch { /* JSON 아닌 줄 */ }
+  }
+  return null;
+}

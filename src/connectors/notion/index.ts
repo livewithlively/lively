@@ -26,12 +26,13 @@ import { loadConfig, notionFetch, reqCount, resetReqCount } from "./client.js";
 import { downloadAsset, findUrlByPath, refreshAssetUrl } from "./assets.js";
 import { dbNode, pageNode } from "./state.js";
 import { startProgressTicker } from "./ticker.js";
-import type { NotionRunStats, PageNode, Traversal } from "./state.js";
+import type { DbNode, NotionRunStats, PageNode, Traversal } from "./state.js";
 import { discoverSeeds, hydrateUsers, processDb, processPage } from "./traverse.js";
 import {
   dbDeltaShouldCollect, dbParentExternalId, discoverDelta, parentExternalIdOf, underExcluded,
 } from "./scope.js";
 import { emitDb, emitPage } from "./emit.js";
+import { processInChunks } from "./chunks.js";
 import { notionPostSync, prepareNotionSync } from "./sync.js";
 
 // 배럴 — 구 notion.ts 의 export 집합을 그대로 재수출(소비자 import 무수정).
@@ -39,7 +40,9 @@ export { loadNotionConfig, notionCreateDatabase, notionCreatePage, notionRetriev
 export type { NotionConfig } from "./client.js";
 export type { NotionRunStats } from "./state.js";
 
-const PAGE_CONCURRENCY = 4;  // 페이지 수집 병렬도 — 슬롯이 전역이라 총 rps 는 불변, 응답 지연만 숨긴다(#586)
+const PAGE_CONCURRENCY = 4;
+// #5012 묶음 방출 크기 — 이만큼 처리할 때마다 미러로 내보낸다(약 10분 분량 · run-sync 는 200건마다 적재).
+export const EMIT_CHUNK = 100;  // 페이지 수집 병렬도 — 슬롯이 전역이라 총 rps 는 불변, 응답 지연만 숨긴다(#586)
 
 // ── 백필: collect(BFS) → hydrate users → 방출 → 자산 다운로드 ─────────────────
 //  onStats: 이 run 의 통계를 커넥터 인스턴스에 게시(#1313 R44 — 구 모듈 전역 lastRunStats 대체).
@@ -102,43 +105,114 @@ async function* backfill(opts?: BackfillOpts, onStats?: (s: NotionRunStats) => v
   if (retrySeeds.length) console.error(`[notion] 재시도 시딩 — 이전 run 실패 ${retrySeeds.length}건`);
 
   // BFS — 맵이 자라는 동안 반복(새 발견 노드 처리). 처리 표식으로 순환 없이 수렴.
+  //  #5012 — 끝에 한꺼번에가 아니라 **묶음마다** 방출한다(chunks.ts 머리말). DB 는 그 라운드에 처리한 것을 바로,
+  //   페이지는 EMIT_CHUNK 개씩 처리 → 사용자 해소 → 방출 → 첨부 다운로드. 끊겨도 받은 만큼은 미러에 남는다.
   const donePages = new Set<string>();
   const doneDbs = new Set<string>();
   console.error(`[notion] 발견 — 페이지 ${t.pages.size} · DB ${t.dbs.size} (트래버스로 추가 발견될 수 있음)`);
-  // 페이지는 서로 독립이라 라운드별 워커 풀로 병렬 수집(전역 rate 슬롯이 총 rps 를 지배 — 응답 지연만 숨김).
+  // 페이지는 서로 독립이라 묶음별 워커 풀로 병렬 수집(전역 rate 슬롯이 총 rps 를 지배 — 응답 지연만 숨김).
   //  DB 는 행 순서 결정성(생성순 나열)을 위해 직렬 유지. 맵 확장(BFS 발견)은 라운드 재스캔으로 수렴.
+  // 진행 로그는 **완료 수** 기준(#586 박스 실배포 교훈) — 묶음 시작에 done 마킹을 하므로 donePages.size 로 세면
+  //  큰 묶음이 통째로 침묵해 정체 감지(15분 무출력=킬)가 멀쩡한 run 을 죽인다. 그래서 처리한 수를 따로 센다.
+  let pagesProcessed = 0;
   const pagePool = async (nodes: PageNode[]): Promise<void> => {
     const iter = nodes[Symbol.iterator]();
-    // 진행 로그는 **완료 수** 기준(#586 박스 실배포 교훈): 라운드 시작에 done 마킹을 일괄로 하므로
-    //  donePages.size 는 라운드 중 불변 — 그걸 기준 삼으면 큰 라운드(수백 페이지·수십 분)가 통째로 침묵해
-    //  정체 감지(15분 무출력=킬)가 멀쩡한 run 을 죽인다.
-    const already = donePages.size - nodes.length;
-    let processed = 0;
     const worker = async (): Promise<void> => {
       for (;;) {
         const nx = iter.next();
         if (nx.done) return;
         await processPage(t, nx.value);
-        processed++;
-        if (processed % 20 === 0 || processed === nodes.length) {
-          console.error(`[notion] 진행 — 페이지 ${already + processed}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
+        pagesProcessed++;
+        if (pagesProcessed % 20 === 0) {
+          console.error(`[notion] 진행 — 페이지 ${pagesProcessed}/${t.pages.size} 수집 · 실패 ${t.stats.failures} · 요청 ${reqCount}`);
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(PAGE_CONCURRENCY, nodes.length) }, worker));
   };
+
+  // 첨부 다운로드 — 묶음 방출 뒤마다(노션 파일 URL 은 1시간 만료라 끝에 몰아 받는 것보다 낫다). 실패는
+  //  assetFailures + failures(커서 동결 → 다음 run 재시도). 디렉토리 선검사: 권한 문제(EACCES)는 파일마다 반복
+  //  실패시키지 말고 한 번에 명확한 처방으로 알린다.
+  const assetsDone = new Set<string>();
+  let assetDirOk: boolean | null = null;
+  const downloadPendingAssets = async (): Promise<void> => {
+    const jobs = [...t.assetJobs.values()].filter((j) => !assetsDone.has(j.file));
+    if (!jobs.length) return;
+    if (assetDirOk === null) {
+      try { fs.mkdirSync(cfg.assetDir, { recursive: true }); assetDirOk = true; }
+      catch (err) {
+        assetDirOk = false;
+        console.error(`[notion] 첨부 파일 디렉토리 생성 불가 ${cfg.assetDir}: ${(err as Error)?.message ?? err}`
+          + ` — 앱 디렉토리에서 'sudo chown -R $(whoami) data' 로 소유권을 서비스 유저로 바꾸면 다음 run 이 재수집합니다(커서 동결로 유실 없음)`);
+      }
+    }
+    for (const job of jobs) {
+      assetsDone.add(job.file);
+      if (!assetDirOk) {
+        t.stats.assetFailures++; t.stats.failures++;
+        if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
+        continue;
+      }
+      try {
+        await downloadAsset(t, job, cfg.assetDir);
+        t.stats.assets++;
+      } catch (err) {
+        t.stats.assetFailures++;
+        t.stats.failures++;
+        if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
+        console.error(`[notion] 첨부 파일 다운로드 실패 ${job.file}:`, (err as Error)?.message ?? err);
+      }
+    }
+  };
+
+  // 방출 — 사용자 해소(변경된 노드의 원본 JSON 에서 user 참조 수집: 멘션·people·created_by·댓글) 뒤 방출.
+  async function* emitDbs(nodes: DbNode[]): AsyncGenerator<RawItem> {
+    await hydrateUsers(t, nodes.filter((n) => !n.failed).map((n) => n.db));
+    for (const node of nodes) {
+      if (node.failed || !node.db) continue;
+      const parentExtId = node.parentOverride ?? (await dbParentExternalId(t, node.db));
+      try { yield emitDb(t, node, parentExtId); }
+      catch (err) {
+        node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id); t.stats.retryIds.push(node.id);
+        console.error(`[notion] DB 방출 실패 ${node.id}:`, (err as Error)?.message ?? err);
+      }
+    }
+  }
+  async function* emitPages(nodes: PageNode[]): AsyncGenerator<RawItem> {
+    const roots: unknown[] = [];
+    for (const n of nodes) if (n.changed && !n.failed) roots.push(n.page, n.blocks, n.comments);
+    await hydrateUsers(t, roots);
+    const before = t.stats.emitted;
+    for (const node of nodes) {
+      if (node.failed || !node.changed || !node.page) continue;
+      try {
+        const parentExtId = await parentExternalIdOf(t, node);
+        yield emitPage(t, node, parentExtId);
+      } catch (err) {
+        node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id); t.stats.retryIds.push(node.id);
+        console.error(`[notion] 페이지 방출 실패 ${node.id}:`, (err as Error)?.message ?? err);
+      }
+    }
+    await downloadPendingAssets();
+    if (t.stats.emitted > before) console.error(`[notion] 저장 — 이번 묶음 ${t.stats.emitted - before}개 방출 · 누적 ${t.stats.emitted}`);
+  }
+
   let progressed = true;
   while (progressed) {
     progressed = false;
+    const roundDbs: DbNode[] = [];
     for (const [id, node] of [...t.dbs]) {
       if (doneDbs.has(id)) continue;
       doneDbs.add(id);
       progressed = true;
       await processDb(t, node);
+      roundDbs.push(node);
       if (doneDbs.size % 10 === 0 || doneDbs.size === t.dbs.size) {
         console.error(`[notion] 진행 — DB ${doneDbs.size}/${t.dbs.size} 수집`);
       }
     }
+    yield* emitDbs(roundDbs);
     const pending: PageNode[] = [];
     for (const [id, node] of [...t.pages]) {
       if (donePages.has(id)) continue;
@@ -147,64 +221,12 @@ async function* backfill(opts?: BackfillOpts, onStats?: (s: NotionRunStats) => v
     }
     if (pending.length) {
       progressed = true;
-      await pagePool(pending);
+      yield* processInChunks(pending, EMIT_CHUNK, pagePool, emitPages);
     }
   }
   t.stats.pages = t.pages.size;
   t.stats.databases = t.dbs.size;
-
-  // 사용자 해소 — 변경된 페이지/DB 의 원본 JSON 에서 user 참조 수집(멘션·people·created_by·댓글).
-  const userRoots: unknown[] = [];
-  for (const n of t.pages.values()) if (n.changed && !n.failed) userRoots.push(n.page, n.blocks, n.comments);
-  for (const n of t.dbs.values()) if (!n.failed) userRoots.push(n.db);
-  await hydrateUsers(t, userRoots);
-
-  // 방출 — DB 노드 먼저(부모 dangling 최소화; 미러는 소프트참조라 순서 무해하지만 로그 가독성), 그 다음 변경 페이지.
-  for (const node of t.dbs.values()) {
-    if (node.failed || !node.db) continue;
-    const parentExtId = node.parentOverride ?? (await dbParentExternalId(t, node.db));
-    try { yield emitDb(t, node, parentExtId); }
-    catch (err) {
-      node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id); t.stats.retryIds.push(node.id);
-      console.error(`[notion] DB 방출 실패 ${node.id}:`, (err as Error)?.message ?? err);
-    }
-  }
-  for (const node of t.pages.values()) {
-    if (node.failed || !node.changed || !node.page) continue;
-    try {
-      const parentExtId = await parentExternalIdOf(t, node);
-      yield emitPage(t, node, parentExtId);
-    } catch (err) {
-      node.failed = true; t.stats.failures++; t.stats.failedIds.push(node.id); t.stats.retryIds.push(node.id);
-      console.error(`[notion] 페이지 방출 실패 ${node.id}:`, (err as Error)?.message ?? err);
-    }
-  }
-
-  // 자산 다운로드 — 방출 후 일괄(중복 제거됨). 실패는 assetFailures + failures(커서 동결 → 다음 run 재시도).
-  //  디렉토리 선검사: 권한 문제(EACCES)는 파일마다 반복 실패시키지 말고 한 번에 명확한 처방으로 알린다.
-  if (t.assetJobs.size) {
-    try {
-      fs.mkdirSync(cfg.assetDir, { recursive: true });
-    } catch (err) {
-      t.stats.assetFailures += t.assetJobs.size;
-      t.stats.failures += t.assetJobs.size;
-      for (const j of t.assetJobs.values()) { if (j.pageId) t.stats.retryIds.push(j.pageId); else t.stats.unattributed++; }
-      console.error(`[notion] 첨부 파일 디렉토리 생성 불가 ${cfg.assetDir}: ${(err as Error)?.message ?? err}`
-        + ` — 앱 디렉토리에서 'sudo chown -R $(whoami) data' 로 소유권을 서비스 유저로 바꾸면 다음 run 이 재수집합니다(커서 동결로 유실 없음)`);
-      t.assetJobs.clear();
-    }
-  }
-  for (const job of t.assetJobs.values()) {
-    try {
-      await downloadAsset(t, job, cfg.assetDir);
-      t.stats.assets++;
-    } catch (err) {
-      t.stats.assetFailures++;
-      t.stats.failures++;
-      if (job.pageId) t.stats.retryIds.push(job.pageId); else t.stats.unattributed++;
-      console.error(`[notion] 첨부 파일 다운로드 실패 ${job.file}:`, (err as Error)?.message ?? err);
-    }
-  }
+  await downloadPendingAssets(); // DB 방출이 남긴 첨부(커버·아이콘)까지
 
   t.stats.requests = reqCount;
   console.error(`[notion] 수집 완료 — 페이지 ${t.stats.pages} · DB ${t.stats.databases} · 방출 ${t.stats.emitted} · 실패 ${t.stats.failures} · 접근불가 ${t.stats.inaccessible} · 첨부 ${t.stats.assets}(실패 ${t.stats.assetFailures}) · 요청 ${t.stats.requests}`);

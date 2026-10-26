@@ -28,6 +28,7 @@ import { runClickupSync } from "./clickup/sync.js";
 import { CURSOR_EPSILON_MS, planCursorWrite } from "./sync-cursor.js";
 import { bindCollector, collectorClaimKey, collectorInstanceKey } from "./config.js";
 import { logger } from "../log.js";
+import { installOrphanGuard, type OrphanGuard } from "./orphan-guard.js";
 
 const name = process.argv[2];
 const fullFlag = process.argv.includes("--full");
@@ -40,6 +41,9 @@ const collectorId = collectorArgIdx >= 0 ? Number(process.argv[collectorArgIdx +
 //  번호를 못 받으면(옛 부모·수동 실행) 자기기록을 건너뛴다 — 종전 동작 그대로.
 const runArgIdx = process.argv.indexOf("--run");
 const runRowId = runArgIdx >= 0 ? Number(process.argv[runArgIdx + 1]) : 0;
+// 부모(게이트웨이)를 잃었을 때의 뒷일(#5012) — 파이프 오류를 삼키고, 그 뒤 로그·끝 기록을 run 행에 직접 남긴다.
+//  부모가 살아 있는 동안은 아무것도 하지 않는다. 상세 orphan-guard.ts 머리말.
+let orphan: OrphanGuard | null = null;
 
 // 이름 검증은 **수집기 바인딩 뒤로** 미룬다(#1419 T2) — 커스텀 프리셋(http/rss/webhook)은 코드 레지스트리에
 //  없는 이름이라 여기서 거르면 범용 수집기가 영영 못 뜬다. 프리셋 카탈로그를 봐야 판정할 수 있고,
@@ -74,6 +78,8 @@ if (Number.isFinite(runRowId) && runRowId > 0) {
       .catch(() => { /* 비치명 — 다음 주기에 다시 */ });
   }, childHeartbeatMs(HEARTBEAT_STALE_MS));
   beat.unref();
+  const { LOG_CAP } = await import("./run-tracker.js");
+  orphan = installOrphanGuard({ runId: runRowId, write: (q, p) => itemsPool.query(q, p), logCap: LOG_CAP });
 }
 
 // ── 수집기 바인딩(#1419 T1) — **첫 설정 해소보다 먼저.** 이 뒤로 모든 resolveConnectorConfig 는 이 인스턴스의
@@ -128,6 +134,7 @@ if (name !== "clickup" && !activeConnector) {
 //  lossless_full_done)과 전진 조건(fetch 실패 집계·full 승격)이 generic 시간커서와 달라 훅으로 흡수하지 않았다.
 //  구현은 커넥터 모듈(clickup/sync.ts)에 있으므로 '커넥터 추가=모듈 1개'는 성립 — 여기 남은 건 이 진입 한 줄뿐이다.
 const failed = name === "clickup" ? await runClickupSync({ fullFlag }) : await runGenericSync(name, activeConnector);
+await orphan?.finish(failed ? 1 : 0);
 process.exit(failed ? 1 : 0);
 
 // ── generic 증분 — clickup 외 모든 커넥터(slack/discord/notion/…). 커넥터 SPI backfill({since}) 를 커서로 몰아 증분화. ──
@@ -184,6 +191,7 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
     //   마지막 묶음(<200건)이 버려지면, 그 실패가 이어지는 동안 멀쩡한 쪽도 영영 덜 들어온다. 적재는 멱등이고 커서는 그대로 묶인다.
     await flush().catch(() => {});
     logger.error({ err: (err as Error)?.message ?? String(err), system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
+    orphan?.note(JSON.stringify({ level: 50, err: (err as Error)?.message ?? String(err), system, msg: "generic 싱크 실패 — 커서 동결(다음 run 재수집)" }));
     return true;
   }
 
@@ -196,10 +204,12 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
   const plan = planCursorWrite({ prevIso, prevMs, maxMs, mirrorFailures, prevRetry, post });
   if (plan.freeze) return true; // 훅이 요구한 동결 — 커서 미기록 + run 실패(적재분은 멱등 보존)
   if (plan.write) await setConnectorState(system, instance, plan.write);
-  logger.info({
+  const summary = {
     system, mode: incremental ? "incremental" : "full",
     ingested, mirrorFailures, cursorIso: plan.advance ? new Date(maxMs).toISOString() : (typeof prevIso === "string" ? prevIso : null),
     cursorAdvanced: plan.advance, retryPending: post?.retryIds?.length ?? 0,
-  }, "generic 싱크 완료");
+  };
+  logger.info(summary, "generic 싱크 완료");
+  orphan?.note(JSON.stringify({ level: 30, ...summary, msg: "generic 싱크 완료" })); // 부모를 잃었으면 pino 줄은 사라진다 — 요약은 여기로
   return mirrorFailures > 0;
 }
