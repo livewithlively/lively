@@ -23,6 +23,8 @@
 - **병렬이 기본** — 기본 `-j min(코어수, 8)`. 이 계층이 병렬 안전한 근거: 파일 하나 = 프로세스 하나 · 실 DB 무사용 · temp 는 전부 `mkdtemp` · 포트는 `listen(0)` · HOME 은 샌드박스(가드: `src/ops/state-dir.test.ts`, `kit/cli/bootstrap-node-gate.test.mjs`).
 - **빌드도 러너가 돈다** — `npm test` = `node scripts/run-tests.mjs --build`. 종전 `npm run build && …` 는 `&&` 라서 웹 tsc 타입오류 하나가 노드 테스트 160건을 통째로 가렸다. 이제 빌드 실패를 기억해두고 돌 수 있는 테스트는 돌린 뒤 둘 다 보고한다(종료코드엔 반영).
 - 빌드 산출물 누락도 같은 원칙 — 누락분만 실패로 기록하고 나머지는 돌린다(조용히 건너뛰지 않는다).
+- **돌린 자리의 세션을 물려주지 않는다**(#5029) — 러너는 시험 자식 env 에서 세션 신원을 지운다: `LIVELY_*` · `LVLY_*` · `TMUX` · `TMUX_PANE` · `TMUX_TMPDIR` · `CLAUDECODE` · `CLAUDE_CODE_*` · 하네스 세션 id(`CLAUDE_SESSION_ID` · `CODEX_THREAD_ID` · `CODEX_SESSION_ID` · `GROK_HOOK_EVENT` · `CURSOR_PROJECT_DIR` · `CURSOR_VERSION`) · 하네스 설정 자리(`CLAUDE_CONFIG_DIR` · `CODEX_HOME` · `GROK_HOME` · `CURSOR_CONFIG_DIR`). CI 에는 없는 값이라, 라이블리 세션(중앙 박스 · 맥 노드) 안에서 돌려도 CI 와 같은 env 로 돈다. 도구 위치(`TMUX_BIN` · `*_E2E_BIN`)는 그대로 둔다. 정본은 [test-runner-env.mjs](./test-runner-env.mjs).
+- **벽시계 마감 시험은 혼자 돈다**(#5029) — 머리(앞 4KB)에 `// @lively-test exclusive` 줄이 있는 파일은 병렬 묶음이 끝난 뒤 하나씩 돈다. 단언한 상한이 **제품의 마감 자체**일 때만 쓴다(1.2초에 포기하는 훅 · 예산의 70% 에서 멈추는 받기) — 상한을 늘리면 사양이 바뀌고, 2코어 박스에선 CPU 를 나눠 쓰는 순간 빨갰다. 그 밖에는 상한을 부하 내성 있게 고친다. 정본은 [test-runner-schedule.mjs](./test-runner-schedule.mjs).
 
 | 옵션 | 뜻 |
 |---|---|

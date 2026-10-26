@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @lively-test exclusive — SIGKILL 시각(3초) 전에 스스로 멈추고 기록을 남기는지 벽시계로 잰다(혼자 돈다, scripts/test-runner-env.mjs).
+// @lively-test exclusive — SIGKILL 시각(3초) 전에 스스로 멈추고 기록을 남기는지 벽시계로 잰다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // project-push up-sync 훅 (#905 C3) — 가짜 게이트웨이 + 진짜 훅 프로세스 e2e.
 //  실행: node kit/hooks/project-push.test.mjs   (npm test 체인)
 //

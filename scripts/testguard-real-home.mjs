@@ -46,7 +46,6 @@ const MAX_RESTORE_BYTES = 8 * 1024 * 1024;
  */
 export function watchedTargets(env = process.env, home = homedir()) {
   const xdg = String(env.XDG_CONFIG_HOME || "").trim() || join(home, ".config");
-  const grok = String(env.GROK_HOME || "").trim() || join(home, ".grok");
   // claude 설정 JSON 이 표적으로 삼는 키 — 세 사고가 전부 이 둘이었다.
   //  mcpServers: MCP 등록(#1593·2026-08-20) · hooks: 훅 배선(#1786) · permissions: 자동승인 규칙.
   const CLAUDE_JSON_KEYS = ["mcpServers"];
@@ -62,7 +61,7 @@ export function watchedTargets(env = process.env, home = homedir()) {
     { path: join(home, ".gemini", "config", "hooks.json") },
     { path: join(home, ".gemini", "config", "plugins", "lively", "mcp_config.json") },
     { path: join(home, ".gemini", "antigravity-cli", "settings.json") },
-    { path: join(grok, "config.toml") },
+    { path: join(home, ".grok", "config.toml") },
     // cursor(#4927) — hooks.json·mcp.json 은 ~/.cursor 고정(사용자와 공유 — 우리가 쓰는 키만 본다). cli-config.json 은
     //  CLI 가 스스로 다시 쓰므로(기본값 채움·모르는 키 제거 — 실측) permissions 만 본다(아래 env 변형 자리도 같이).
     { path: join(home, ".cursor", "hooks.json"), keys: ["hooks"] },
@@ -79,6 +78,10 @@ export function watchedTargets(env = process.env, home = homedir()) {
     { path: join(ccd, ".claude.json"), keys: CLAUDE_JSON_KEYS },
     { path: join(ccd, "settings.json"), keys: CLAUDE_SETTINGS_KEYS },
   );
+  // grok — GROK_HOME 이 있으면 그 자리도 본다(기본 자리는 위에서 늘 본다). 러너는 시험 자식에게 GROK_HOME 을 물려주지 않으므로
+  //  (test-runner-env.mjs, #5029) 새는 시험은 ~/.grok 에 쓴다 — 종전처럼 env 자리 하나만 보면 그 경우를 놓친다(CCD 와 같은 꼴).
+  const grokHome = String(env.GROK_HOME || "").trim();
+  if (grokHome) t.push({ path: join(grokHome, "config.toml") });
   // cursor(#4927) — cli-config.json 만 CURSOR_CONFIG_DIR > $XDG_CONFIG_HOME/cursor 로 옮겨 간다(번들 실측 — 플랫폼 무관).
   const ccfg = String(env.CURSOR_CONFIG_DIR || "").trim();
   if (ccfg) t.push({ path: join(ccfg, "cli-config.json"), keys: ["permissions"] });

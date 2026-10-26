@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @lively-test exclusive — 훅의 보고 요청은 1.2초에 끊긴다 · 가짜 게이트웨이가 그 안에 받아야 한다(혼자 돈다, scripts/test-runner-env.mjs).
+// @lively-test exclusive — 훅의 보고 요청은 1.2초에 끊긴다 · 가짜 게이트웨이가 그 안에 받아야 한다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // work-flag 세션 라이프사이클 보고 유닛테스트 (#1059) — 훅을 실제 프로세스로 띄우고, 스텁 게이트웨이가 받은
 //  HTTP POST(부작용)로 단언한다. 로그 문자열이 아니라 **무엇이 어디로 나갔나**를 본다.
 //   - SessionEnd(reason=prompt_input_exit·logout) → POST …/exited (정상종료 표시 → 복원목록 '종료됨' 구분)

@@ -41,13 +41,14 @@
 //       node scripts/run-tests.mjs --scope=kit,desktop 지정 디렉터리의 *.test.mjs 만 수집(src→dist 매핑 생략)
 //                                                     — 빌드 산출물이 없는 면(윈도우 CI)이 이 러너를 그대로 쓰게 한다
 //       node scripts/run-tests.mjs --budget=45         유닛 파일당 상한(초). 넘으면 통과해도 실패로 본다(#2457)
-import { readdirSync, existsSync, openSync, readSync, closeSync } from "node:fs";
+import { readdirSync, existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
-import { testChildEnv, isSoloTest, soloLast, mayStart } from "./test-runner-env.mjs";
+import { testChildEnv } from "./test-runner-env.mjs";
+import { readHead, isSoloTest, soloLast, mayStart } from "./test-runner-schedule.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
@@ -146,17 +147,16 @@ if (opts.itest) {
   files = [...srcTests, ...mjsTests];
 }
 if (filters.length) files = files.filter((f) => filters.some((s) => f.includes(s)));
-// 혼자 도는 시험(`// @lively-test exclusive`, 근거는 test-runner-env.mjs) — 맨 뒤로 모아 병렬 묶음이 끝난 뒤 하나씩 돌린다.
-//  표식은 머리에만 본다 — 파일 1천여 개를 통째로 읽으면 9p 공유 폴더(중앙 박스)에서 그것만으로 느려진다.
-const headOf = (f) => {
-  const fd = openSync(path.join(ROOT, f), "r");
-  try { const buf = Buffer.alloc(4096); return buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)); } finally { closeSync(fd); }
-};
-const SOLO = new Set(files.filter((f) => { try { return isSoloTest(headOf(f)); } catch { return false; } }));
+// 혼자 도는 시험(`// @lively-test exclusive`, 근거는 test-runner-schedule.mjs) — 맨 뒤로 모아 병렬 묶음이 끝난 뒤 하나씩 돌린다.
+const SOLO = new Set(files.filter((f) => { try { return isSoloTest(readHead(path.join(ROOT, f))); } catch { return false; } }));
 files = soloLast(files, SOLO);
 
 if (opts.list) {
-  for (const f of files) console.log(f);
+  //  한 번에 쓰고 다 비운 뒤 끝낸다 — 줄마다 찍고 곧바로 process.exit 하면 파이프로 받는 쪽이 늦을 때 꼬리가 버려진다(리눅스 실측:
+  //   파이프 용량을 넘는 몫은 비동기로 남고 exit 이 그것을 버린다. 사용자의 파이프 총량이 한도를 넘은 기계에선 새 파이프가 4KB 라
+  //   39KB 목록도 잘린다 — 맨 뒤에 모인 혼자 도는 파일이 통째로 빠졌다, #5029 PR #1537 첫 판의 CI).
+  const listing = files.map((f) => `${f}\n`).join("");
+  await new Promise((done) => process.stdout.write(listing, done));
   process.exit(0);
 }
 if (!files.length) {
