@@ -77,7 +77,10 @@ export async function storeVersionBundle(prep: PreparedBundle, kind: BlobStoreKi
 /** 저장소에 둔 묶음으로 판 행을 하나 더 적는다. 반환 = 판 번호. 호출부가 설치 락 안에서 부른다(번호 경쟁 없음). */
 export async function insertVersion(appId: string, meta: VersionMetaWrite, sb: StoredBundle): Promise<number> {
   const compat = await compatCopy(sb.prep);
-  return store.insertAppVersion(appId, { ...meta, files: compat ?? [], bundle: sb.prep.bundle, bundle_store: sb.kind, bundle_bytes: bundleBytes(sb.prep.bundle) });
+  const no = await store.insertAppVersion(appId, { ...meta, files: compat ?? [], bundle: sb.prep.bundle, bundle_store: sb.kind, bundle_bytes: bundleBytes(sb.prep.bundle) });
+  //  #4632 「개발 정보」 — 판이 생기는 길은 모두 여기를 지난다(app_save · 설치 · 되돌리기 전 떠 두기). 구성원 판이면 잠시 뒤 그 앱 설명을 다시 쓴다.
+  if (meta.origin === "member") void import("./app-spec-run.js").then((m) => m.scheduleAppSpec(appId)).catch(() => { /* 설명은 「개발 정보」 를 열 때도 쓴다 */ });
+  return no;
 }
 
 /** 판을 하나 더 적는다 — 파일을 저장소에 둔 뒤 판 행(둘을 한 번에). 반환 = 판 번호. */
