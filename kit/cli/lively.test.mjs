@@ -86,6 +86,12 @@ const server = createServer((req, res) => {
       .end(JSON.stringify({ id: "tester", display_name: "테스터", email: "t@example.com" }));
   } else if (path === "/api/ui/org/preview") {
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ context: "# 테스트 컨텍스트\n" }));
+  } else if (path === "/api/ui/org/runner/assets") {
+    // #5013 — 설치가 대화 시작 훅을 기다리지 않고 조직 스킬을 미리 받는지(③)를 보려고 스킬 하나를 내준다.
+    serving.assetHits = (serving.assetHits || 0) + 1;
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ assets: [
+      { id: "org-preload-skill", kind: "skill", description: "설치 직후 미리 받는 스킬", body: "# 미리 받기\n", content_hash: "h-preload-1", frontmatter: {} },
+    ] }));
   } else if (path === "/api/ui/me/local-mode") {
     serving.localModeQueries.push(req.url || "");
     if (serving.localModeStatus !== 200) { res.writeHead(serving.localModeStatus).end(); return; }
@@ -221,6 +227,12 @@ try {
     check("③ 설치 — 훅 · CLI · 심 · 버전 스탬프",
       stamped === "v-aaa" && hooks && cli && shim,
       `stamp=${stamped} hooks=${hooks} cli=${cli} shim=${shim}\n${r.err.slice(-400)}`);
+    // #5013 — 대화를 한 번도 안 열었는데 조직 스킬이 이미 하네스 자리에 있어야 한다(스킬 목록을 대화 시작 때 한 번만
+    //  읽는 하네스는 그래야 첫 대화에 보인다). 이 테스트에선 어떤 훅도 돌지 않으므로 파일이 있으면 설치가 받은 것이다.
+    const preloaded = existsSync(join(H.home, ".claude", "skills", "org-preload-skill", "SKILL.md"));
+    check("③ 설치 — 조직 스킬 미리 받기(대화 시작 전)",
+      (serving.assetHits || 0) >= 1 && preloaded,
+      `assetHits=${serving.assetHits || 0} preloaded=${preloaded}\n${r.err.slice(-400)}`);
   }
 
   // ④ **MCP 등록 인자** — 이 CLI(registerClaudeMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
