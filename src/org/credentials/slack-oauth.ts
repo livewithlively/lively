@@ -1,7 +1,7 @@
 // 슬랙 OAuth v2 직결(#1881) — 라이블리(또는 셀프호스팅 고객)가 소유한 Slack 앱으로 구성원이 [Slack 연결] 한 번에 붙는다.
 //
 //  왜 MCP SDK 의 auth() 를 안 쓰나: 슬랙 공식 MCP(mcp.slack.com)의 OAuth 는 **유저 토큰만** 준다(oauth.v2.user.access)
-//  — 그런데 우리는 한 번의 동의로 **유저 토큰(개인 AI 도구·공개채널 검색 수집) + 봇 토큰(비공개 채널 수집)** 둘을
+//  — 그런데 우리는 한 번의 동의로 **유저 토큰(개인 AI 도구·공개채널 수집) + 봇 토큰(비공개 채널 수집)** 둘을
 //  받아야 "버튼 하나" 가 성립한다. 그건 슬랙 표준 설치 플로우 `oauth/v2/authorize`(scope=봇 + user_scope=유저) →
 //  `oauth.v2.access` 만 준다(응답의 access_token=봇, authed_user.access_token=유저 — docs.slack.dev/authentication/installing-with-oauth).
 //  이 엔드포인트는 RFC 토큰 엔드포인트 모양이 아니라(유저 토큰이 authed_user 안에 있다) SDK 가 못 읽는다.
@@ -15,7 +15,7 @@
 export const SLACK_AUTHORIZE_URL = "https://slack.com/oauth/v2/authorize";
 export const SLACK_ACCESS_URL = "https://slack.com/api/oauth.v2.access";
 
-/** 개인 AI 도구·검색 수집이 쓰는 유저 토큰 스코프 — 슬랙 MCP 프리셋(#746 L2 컨펌 read/search+send)을 클래식 스코프로 옮긴 것.
+/** 개인 AI 도구·공개채널 수집이 쓰는 유저 토큰 스코프 — 슬랙 MCP 프리셋(#746 L2 컨펌 read/search+send)을 클래식 스코프로 옮긴 것.
  *  users:read.email(PII)은 유저 토큰에서 뺀다 — 구성원 매핑은 조직 기능이라 봇 토큰이 맡는다. */
 export const SLACK_USER_SCOPES = [
   // ⚠ 검색은 legacy `search:read` 가 아니다 — 새(granular) 앱의 authorize 는 그 스코프를 invalid_permissions 로 거부한다

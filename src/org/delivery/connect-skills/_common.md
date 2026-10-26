@@ -21,6 +21,7 @@
 2. **다음 연결을 제안한다.** 모은 자료에 다른 서비스 링크가 많이 보이면 그 앱부터 제안한다 — 아직 연결 안 된 앱의 도메인마다 `source_list { group:"collected", q:"<도메인>", limit:1 }` 의 `total` 을 센다(notion.so · figma.com · docs.google.com · github.com · linear.app · app.clickup.com · zotero.org · atlassian.net …). 많은 것부터 1~3개만, 예: «슬랙 대화에 노션 링크가 12번 나와요. 노션도 연결할까요?»
 3. **정리 규칙을 묻는다.** 이 워크스페이스에 정리 규칙(증류기)이 아직 없거나 이번 앱을 맡은 규칙이 없으면(`org_distiller_list`), «모은 자료를 지식으로 정리하는 규칙도 이어서 정할까요?»라고 묻는다. 원하면 `liv-distill` 스킬로 넘어간다.
 4. **남긴다.** 무엇을 연결했고 무엇을 왜 뺐는지 `me_liv_profile_set { decision:{ what, why } }` 로 한 줄 남긴다 — 다음에 이어 받는 AI 가 안다.
+5. **멈춘 수집을 «모으는 중» 이라 하지 않는다.** `org_connect_status` 에서 그 앱의 길이 `collecting` 이어도 `stalled:true` 면 같은 실패가 이어져 자동 수집이 꺼진 것이다. 앱의 `stalled_collectors[].note` 의 이유를 그대로 전하고, 원인(다시 연결 · 범위 · 초대 등 앱 절차의 «확인» 단계)을 먼저 푼 뒤 `org_collector_upsert { id:<그 id>, enabled:true }` 로 다시 켠다 — 원인이 그대로면 다섯 번 더 실패한 뒤 다시 멈춘다.
 
 ### 하지 말 것
 

@@ -184,14 +184,21 @@ export interface StalledCollector { id: number; label: string; note: string }
 /** 앱 → 그 앱의 수집기 프리셋(멈춤 판정용). 구글만 둘이다(드라이브·지메일 — google-connect.ts). */
 const PRESETS_OF_APP: Readonly<Record<string, readonly string[]>> = { google: ["gdrive", "gmail"] };
 
-/** (#5040) 그 앱의 수집기 중 켜져 있는데 자동 수집이 멈춘 것. 순수 — 시험이 직접 부른다. */
+/**
+ * (#5040) 그 앱의 수집기 중 켜져 있는데 자동 수집이 멈춘 것. 순수 — 시험이 직접 부른다.
+ *  사람마다 하나인 수집기(perMember — instance_key `<instance>:<구성원 id>`, member-collect.ts memberInstanceKey)는
+ *  부른 사람의 것만 본다 — 남의 멈춘 수집기를 내 앱 상태로 말하면 남의 이름이 보이고, [다시 켜기]가 남의 수집기를 켠다.
+ */
 export function stalledOf(
-  app: string, collectors: ReadonlyArray<Pick<CollectorView, "id" | "preset_key" | "label" | "enabled" | "sync_job" | "last_run">>,
+  app: string,
+  collectors: ReadonlyArray<Pick<CollectorView, "id" | "preset_key" | "instance_key" | "label" | "enabled" | "sync_job" | "last_run">>,
+  memberId: string,
 ): StalledCollector[] {
   const presets = PRESETS_OF_APP[app] ?? [app];
   const out: StalledCollector[] = [];
   for (const c of collectors) {
     if (!presets.includes(c.preset_key)) continue;
+    if (c.instance_key.includes(":") && !c.instance_key.endsWith(`:${memberId}`)) continue;
     const note = collectorStallNote(c);
     if (note) out.push({ id: c.id, label: c.label, note });
   }
@@ -312,7 +319,7 @@ const orgConnectStatus: Capability = {
         const registration = appRoute && !p.app_ready && (appRoute.state === "register" || appRoute.state === "ask_admin")
           ? registrationView(a.app, { callbackUrl, gatewayUrl: profileUrl }) : null;
         const canEditRegistration = registrationEditable({ app: a.app, heldBy, canRegister, appReady: p.app_ready });
-        const stalled = p.collecting ? stalledOf(a.app, collectors) : [];
+        const stalled = p.collecting ? stalledOf(a.app, collectors, user.userId) : [];
         const note = [...stalled.map((s) => s.note), p.note].filter(Boolean).join(" ") || null;
         return {
           ...common, app_ready: p.app_ready, me_connected: p.me_connected, collecting: p.collecting, next, note,

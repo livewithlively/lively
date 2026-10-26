@@ -242,18 +242,23 @@ const f = (variant: ConnectFacts["variant"], needsApp: boolean, appReady: boolea
 {
   const stalledJob = { enabled: false, interval_sec: 1800, fail_streak: 6, auto_disabled_at: "2026-10-26 08:31:22+00", auto_disabled_reason: "연속 실패 6회" };
   const liveJob = { enabled: true, interval_sec: 600, fail_streak: 0, auto_disabled_at: null, auto_disabled_reason: null };
-  const col = (id: number, preset_key: string, label: string, sync_job: typeof stalledJob | typeof liveJob, enabled = true) =>
-    ({ id, preset_key, label, enabled, sync_job, last_run: { id: id * 10, status: "error", mode: "incremental", started_at: "x", finished_at: "y", error: "봇이 초대된 채널 0개" } });
+  const col = (id: number, preset_key: string, label: string, sync_job: typeof stalledJob | typeof liveJob, enabled = true, instance_key = "lively-member") =>
+    ({ id, preset_key, instance_key, label, enabled, sync_job, last_run: { id: id * 10, status: "error", mode: "incremental", started_at: "x", finished_at: "y", error: "봇이 초대된 채널 0개" } });
   const COLS = [
     col(2, "slack", "Slack — 팀 공개 채널", stalledJob), col(3, "slack", "Slack — Lively 봇이 초대된 채널", liveJob),
     col(1, "linear", "Linear — 워크스페이스 이슈·문서", stalledJob), col(7, "gmail", "Gmail — 팀 메일", stalledJob),
     col(8, "gdrive", "Google Drive — 팀 문서", stalledJob, false),
   ];
-  const sl = stalledOf("slack", COLS);
+  const sl = stalledOf("slack", COLS, "m1");
   assert.deepEqual(sl.map((s) => s.id), [2], "F1 슬랙은 멈춘 검색 수집기만(돌고 있는 봇 수집기·다른 앱 제외)");
   assert.match(sl[0]!.note, /«Slack — 팀 공개 채널»/, "F1 안내가 그 수집기 이름을 말한다");
-  assert.deepEqual(stalledOf("google", COLS).map((s) => s.id), [7], "F1 구글은 지메일·드라이브 둘 다 본다(꺼진 드라이브는 멈춤이 아니다)");
-  assert.deepEqual(stalledOf("notion", COLS), [], "F1 수집기가 없는 앱은 빈 배열");
+  assert.deepEqual(stalledOf("google", COLS, "m1").map((s) => s.id), [7], "F1 구글은 지메일·드라이브 둘 다 본다(꺼진 드라이브는 멈춤이 아니다)");
+  assert.deepEqual(stalledOf("notion", COLS, "m1"), [], "F1 수집기가 없는 앱은 빈 배열");
+  //  F4 사람마다 하나인 수집기(zotero — instance `<instance>:<구성원 id>`) — 부른 사람의 것만. 남의 멈춤을 내 상태로 말하지 않는다.
+  const Z = [col(21, "zotero", "Zotero (alice)", stalledJob, true, "lively-member:alice"), col(22, "zotero", "Zotero (bob)", liveJob, true, "lively-member:bob")];
+  assert.deepEqual(stalledOf("zotero", Z, "bob"), [], "F4 내 수집기는 멀쩡한데 남의 멈춤이 보인다 — [다시 켜기]가 남의 수집기를 켠다");
+  assert.deepEqual(stalledOf("zotero", Z, "alice").map((s) => s.id), [21], "F4 내 멈춘 수집기는 보인다");
+  assert.deepEqual(stalledOf("zotero", Z, "ali").map((s) => s.id), [], "F4 접두가 같은 다른 사람과 섞이지 않는다");
   ok("F1 앱별 멈춘 수집기 — 그 앱 프리셋만 · 구글 둘 · 꺼진 수집기 제외");
 
   const routes = decideRoutes(routeFactsOf(CONNECT_APPS.find((a) => a.app === "slack")!,

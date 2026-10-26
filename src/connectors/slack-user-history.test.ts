@@ -54,9 +54,18 @@ await t("B3 받을 수 있는 권한(channels:history)은 다시 연결을 권�
   assert.ok(h.includes(RECONNECT), h);
   assert.match(h, /channels:history 권한이 필요합니다/);
 });
-await t("B4 needed 가 없으면 메서드 표의 권한", () =>
-  assert.match(scopeHint("conversations.list", "missing_scope"), /channels:read · groups:read 권한이 필요합니다/));
+await t("B4 needed 가 없으면 메서드 표의 권한 — 둘이면 «중 하나»", () =>
+  assert.match(scopeHint("conversations.list", "missing_scope"), /channels:read · groups:read 중 하나의 권한이 필요합니다/));
 await t("B5 권한 오류가 아니면 아무 말도 안 붙인다", () => assert.equal(scopeHint("conversations.history", "channel_not_found"), ""));
+await t("B6 표에 없는 메서드 · needed 없음 — 권한을 지어내지 않는다", () => {
+  const h = scopeHint("reactions.get", "missing_scope");
+  assert.doesNotMatch(h, /필요합니다/, h);
+  assert.ok(h.includes(RECONNECT), "갈 길은 준다");
+});
+await t("B7 슬랙이 권한 여럿을 늘어놓으면 «그중 하나» — 비공개·DM 권한까지 켜라는 말로 읽히지 않게", () => {
+  const h = scopeHint("conversations.history", "missing_scope", "channels:history,groups:history,mpim:history,im:history");
+  assert.match(h, /channels:history · groups:history · mpim:history · im:history 중 하나의 권한이 필요합니다/, h);
+});
 
 // ── C 대상 채널 ──
 const ch = (id: string, name: string, extra: Partial<SlackConversation> = {}): SlackConversation => ({ id, name, ...extra });
@@ -74,7 +83,11 @@ await t("C3 이름·id·# 접두 모두 맞는다 · 제외가 이긴다", () =>
 
 // ── D·E 가짜 슬랙 ──
 interface Call { method: string; params: URLSearchParams }
-function fakeSlack(opts: { scopes?: string | null; listError?: string; channels?: SlackConversation[] }): { calls: Call[]; fetchImpl: typeof fetch } {
+function fakeSlack(opts: {
+  scopes?: string | null; listError?: string; channels?: SlackConversation[];
+  /** 채널별 conversations.history 오류(채널 id → 슬랙 error) · 봇이 가입한 채널(users.conversations) */
+  historyError?: Record<string, string>; memberChannels?: SlackConversation[];
+}): { calls: Call[]; fetchImpl: typeof fetch } {
   const calls: Call[] = [];
   const json = (body: unknown, headers: Record<string, string> = {}): Response =>
     new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json", ...headers } });
@@ -91,8 +104,12 @@ function fakeSlack(opts: { scopes?: string | null; listError?: string; channels?
       case "conversations.list":
         if (opts.listError) return json({ ok: false, error: opts.listError, needed: "channels:read" });
         return json({ ok: true, channels: opts.channels ?? [] });
+      case "users.conversations":
+        return json({ ok: true, channels: opts.memberChannels ?? [] });
       case "conversations.history": {
         const c = u.searchParams.get("channel");
+        const herr = c ? opts.historyError?.[c] : undefined;
+        if (herr) return json({ ok: false, error: herr, ...(herr === "missing_scope" ? { needed: "groups:history" } : {}) });
         if (c === "C2") {
           return json({ ok: true, messages: [{ type: "message", ts: "1790000100.000100", user: "U1", text: "배포 원인 정리",
             reply_count: 2, latest_reply: "1790000300.000100", thread_ts: "1790000100.000100" }] });
@@ -114,6 +131,8 @@ function fakeSlack(opts: { scopes?: string | null; listError?: string; channels?
           { id: "F_PRIV", name: "b.png", filetype: "png", groups: ["G1"], created: 1790000000 },
           { id: "F_DM", name: "c.png", filetype: "png", ims: ["D1"], created: 1790000000 },
           { id: "F_OTHER", name: "d.png", filetype: "png", channels: ["C9"], created: 1790000000 },
+          { id: "F_MIX", name: "e.png", filetype: "png", channels: ["C1"], groups: ["G1"], ims: ["D1"], created: 1790000000,
+            shares: { public: { C1: [{ ts: "1790000000.000200" }] }, private: { G1: [{ ts: "1790000000.000300", reply_count: 3 }], D1: [{ ts: "1" }] } } },
         ] });
       default:
         return json({ ok: true });
@@ -156,6 +175,13 @@ await t("D1 공개채널 모드 — 검색·가입 채널 목록을 안 부르�
   assert.ok(!ext.includes("C1:1790000001.000100"), "채널 참여 시스템 메시지가 들어왔다");
   assert.ok(ext.includes("file:F_PUB"), "대상 공개 채널 파일이 빠졌다");
   for (const bad of ["file:F_PRIV", "file:F_DM", "file:F_OTHER"]) assert.ok(!ext.includes(bad), `${bad} 가 들어왔다 — 토큰 주인의 비공개·DM 또는 대상 밖 파일`);
+  //  D3 공개 채널과 비공개 채널·DM 에 함께 공유된 파일 — 파일은 들어오되 비공개 쪽 흔적(대화 id·공유 시각)은 남기지 않는다.
+  const mix = items.find((i) => i.provenance.external_id === "file:F_MIX");
+  assert.ok(mix, "공개 채널에도 공유된 파일이 빠졌다");
+  const raw = JSON.stringify(mix!.raw);
+  assert.ok(raw.includes("C1"), "배선: 공개 공유분은 남는다");
+  for (const leak of ["G1", "D1", "\"groups\"", "\"ims\"", "\"private\""]) assert.ok(!raw.includes(leak), `원본에 비공개 흔적 ${leak}: ${raw}`);
+  assert.deepEqual((mix!.fields as Record<string, unknown>).channels, ["C1"]);
 });
 
 await t("D2 대상이 공개 채널에 하나도 없으면(비공개만 적음) 원인을 말하고 실패한다", async () => {
@@ -166,6 +192,32 @@ await t("D2 대상이 공개 채널에 하나도 없으면(비공개만 적음) 
     await assert.rejects(collect(historyBackfill("xoxp-test", { channels: "임원방" }, undefined, "user", d)), /공개 채널에서 찾지 못했습니다/);
   });
   assert.ok(!f.calls.some((c) => c.method === "conversations.history"), "대상이 없는데 기록을 읽었다");
+});
+
+await t("D4 공개채널 모드의 권한 부족은 토큰 전체 문제 — 첫 채널에서 멈추고 다음 채널·파일을 부르지 않는다", async () => {
+  const f = fakeSlack({ scopes: "channels:read", channels: WORKSPACE, historyError: { C1: "missing_scope" } });
+  await withFetch(f.fetchImpl, async () => {
+    const d = await decideUserSweep("xoxp-test");
+    if (d.sweep !== "history") throw new Error("history 여야 한다");
+    await assert.rejects(collect(historyBackfill("xoxp-test", { channels: "1_공지 8_개발" }, undefined, "user", d)), /missing_scope/);
+  });
+  assert.deepEqual(f.calls.filter((c) => c.method === "conversations.history").map((c) => c.params.get("channel")), ["C1"], "같은 실패를 채널마다 되풀이했다");
+  assert.ok(!f.calls.some((c) => c.method === "files.list"), "토큰이 막혔는데 파일까지 불렀다");
+});
+
+await t("D5 봇 모드 — 비공개 채널 권한만 빠지면 공개 채널은 계속 읽고, 끝에 실패로 알린다 · 인증 오류는 바로 멈춘다", async () => {
+  const BOT = [ch("G1", "임원방", { is_private: true }), ch("C1", "1_공지")];
+  const f = fakeSlack({ memberChannels: BOT, historyError: { G1: "missing_scope" } });
+  const items: RawItem[] = [];
+  await withFetch(f.fetchImpl, async () => {
+    await assert.rejects((async () => { for await (const x of historyBackfill("xoxb-test", {}, undefined, "bot")) items.push(x); })(), /채널 1개 수집 실패/);
+  });
+  assert.deepEqual(f.calls.filter((c) => c.method === "conversations.history").map((c) => c.params.get("channel")), ["G1", "C1"], "봇 모드에서 공개 채널까지 접었다");
+  assert.ok(items.some((i) => i.provenance.external_id === "C1:1790000000.000100"), "공개 채널 자료가 빠졌다");
+  assert.ok(f.calls.some((c) => c.method === "users.conversations") && !f.calls.some((c) => c.method === "conversations.list"), "봇은 가입 채널 목록으로 본다");
+  const g = fakeSlack({ memberChannels: BOT, historyError: { G1: "invalid_auth" } });
+  await withFetch(g.fetchImpl, () => assert.rejects(collect(historyBackfill("xoxb-test", {}, undefined, "bot")), /invalid_auth/));
+  assert.equal(g.calls.filter((c) => c.method === "conversations.history").length, 1, "인증 오류인데 다음 채널을 불렀다");
 });
 
 await t("E1 권한을 모른 채(헤더 없음) 채널 목록이 missing_scope → 옛 검색 스윕", async () => {
