@@ -50,14 +50,14 @@ if (!CODEX_BIN) {
 const CODEX_REAL = (() => { try { return realpathSync(CODEX_BIN); } catch { return CODEX_BIN; } })();
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
-// realpath — macOS 의 tmpdir 은 /var → /private/var 심링크라 seatbelt(workspace-write) 경로 판정이 어긋날 수 있다.
+// realpath — macOS 의 tmpdir 은 /var → /private/var 심링크다. 실툴은 샌드박스 없이 돌지만(runCodex 머리말) 마커·cwd 경로를 한 표기로 맞춰 둔다.
 const SB = realpathSync(mkdtempSync(join(tmpdir(), "codex-e2e-")));
 const HOME = join(SB, "home");
 const CODEXHOME = join(HOME, ".codex");
 const PROJ = join(SB, "proj");
 const CAP = join(SB, "captures");
 const REQLOG = join(SB, "reqlog");
-const MARKER = join(PROJ, "RAN");               // 실툴이 실제로 돌았는지의 물증(cwd 안 = workspace-write 쓰기 가능)
+const MARKER = join(PROJ, "RAN");               // 실툴이 실제로 돌았는지의 물증(cwd 안)
 const CMD = `echo E2E_OK > ${MARKER}`;
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -191,8 +191,11 @@ function codexEnv() {
   const PATH = [dirname(process.execPath), dirname(CODEX_REAL), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
   return { HOME, CODEX_HOME: CODEXHOME, LIVELY_HOME: HOME, PATH, STUB_API_KEY: "dummy", TERM: "xterm", NO_COLOR: "1" };
 }
+//  샌드박스는 danger-full-access — 이 시험의 대상은 훅·MCP·맥락 배선이지 codex 의 OS 샌드박스가 아니다. workspace-write 는 리눅스에서
+//   bubblewrap 을 띄우는데 gVisor(중앙 박스 세션 컨테이너)는 그걸 못 띄워(`bwrap: loopback: Failed RTM_NEWADDR`) 실툴이 한 번도
+//   안 돌았다 — E3d·E4d 가 그 자리에서만 빨갰다(#5029). 스텁 모델이 시키는 명령은 이 시험이 정한 마커 쓰기 하나뿐이다.
 function runCodex(prompt, { timeout = 90000 } = {}) {
-  const args = ["exec", "-C", PROJ, "--dangerously-bypass-hook-trust", "--skip-git-repo-check", "-s", "workspace-write", "-m", "stub-1", prompt];
+  const args = ["exec", "-C", PROJ, "--dangerously-bypass-hook-trust", "--skip-git-repo-check", "-s", "danger-full-access", "-m", "stub-1", prompt];
   const r = spawnSync(CODEX_BIN, args, { cwd: PROJ, encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"], env: codexEnv() });
   return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "", timedOut: !!r.error };
 }
@@ -304,7 +307,10 @@ try {
   bad("E2E 수행", e?.stack || e?.message || String(e));
 } finally {
   try { serverProc.kill(); } catch { /* */ }
-  rmSync(SB, { recursive: true, force: true });
+  //  codex 는 끝난 뒤에도 뒤에서 플러그인 저장소를 받고 있을 수 있다(.codex/.tmp/plugins-clone-*). 지우는 사이에 파일이 생기면
+  //   ENOTEMPTY 로 던져 결과 요약도 못 찍고 죽었다(#5029 중앙 박스). 몇 번 다시 해 보고, 그래도 남으면 시험 결과와 무관하게 둔다.
+  try { rmSync(SB, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); }
+  catch (e) { console.log(`· 임시 폴더 정리 실패(시험 결과와 무관): ${e.message}`); }
 }
 
 console.log(`\n${fail ? "✗" : "✓"} codex-e2e: ${pass} passed, ${fail} failed`);

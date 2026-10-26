@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @lively-test exclusive — 훅 제한 시간(1.5초)의 70% 창 · 늦게 시작한 받기 판정을 벽시계로 잰다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // pull 훅의 싱크 원장 + 로컬 보호 e2e (#905 C3) — 가짜 게이트웨이 + 진짜 훅 프로세스.
 //  실행: node kit/hooks/project-sync-ledger.test.mjs   (npm test 체인)
 //

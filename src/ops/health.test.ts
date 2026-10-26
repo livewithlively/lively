@@ -61,8 +61,9 @@ const hangPool = (): QueryablePool => ({ query: () => new Promise(() => { /* 영
   assert.ok(d.usedPct >= 0 && d.usedPct <= 100, `사용률이 0~100 범위여야: ${d.usedPct}`);
   assert.equal(d.level, levelFor(d.usedPct, undefined, d.availBytes), "판정은 남은 양까지 넣어 한다(#4780 바닥)");
 
-  // 임계치를 0 에 가깝게 주면 무조건 critical — 주입한 임계치가 실제 판정에 쓰인다는 증거.
-  const strict = await checkDisk(os.tmpdir(), { warnPct: 1, criticalPct: 2 });
+  // 임계치를 0 으로 주면 무조건 critical — 주입한 임계치가 실제 판정에 쓰인다는 증거.
+  //  ⚠ 1·2% 로 주면 «거의 빈 디스크» 에서 ok 가 된다 — gVisor 컨테이너(중앙 박스)의 /tmp 는 8.0E 중 수백 KB 라 0.0% 다(#5029).
+  const strict = await checkDisk(os.tmpdir(), { warnPct: 0, criticalPct: 0 });
   assert.equal(strict?.level, "critical", "주입 임계치가 무시되면 안 된다");
 
   // 없는 경로는 에러가 아니라 null — 세션 루트가 아직 없는 신규 박스에서 헬스체크가 죽으면 안 된다.

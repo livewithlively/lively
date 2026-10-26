@@ -2,9 +2,10 @@
 // Windows User PATH host-effect 경계 단위테스트. 실제 PowerShell/HKCU는 절대 호출하지 않고 순수 포트+fake executor만 쓴다.
 import {
   addWindowsUserPath, createHostEffects, entrypointHostEffects, hostEffectsAllowed,
-  mutateWindowsUserPath, removeWindowsUserPath,
+  mutateWindowsUserPath, removeWindowsUserPath, sandboxPortLowerBound, sandboxPortMin,
 } from "./host-effects.mjs";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -106,6 +107,38 @@ eq("P-W1 테스트 env deny → entrypoint도 승격 안 됨",
   entrypointHostEffects({ env: { LIVELY_HOST_EFFECTS: "deny" } }).mode, "deny");
 eq("P-W2 제품 entrypoint → native capability 명시",
   entrypointHostEffects({ env: {} }).mode, "native");
+// P-W1p sandbox loopback 하한(#5029) — 그 기계의 임시 포트 범위 시작을 따르되 10000 아래로는 안 내린다.
+//  행은 실측한 자리들: Linux 기본(CI) · gVisor(중앙 박스) · 범위를 못 읽는 macOS·Windows(빈 글) · 넓힌 범위 · 경계.
+//  같은 표로 부트스트랩의 인라인 사본도 돌린다(P-W3).
+const PORT_RANGE_ROWS = [
+  ["범위를 못 읽음(macOS·Windows) → 종전 32768", "", 32768],
+  ["Linux 기본 32768–60999(CI) → 32768", "32768\t60999\n", 32768],
+  ["gVisor 16000–65535(중앙 박스) → 16000", "16000\t65535\n", 16000],
+  ["경계 32767 → 32767", "32767 60999", 32767],
+  ["범위 시작이 더 높음 49152 → 32768(종전보다 좁히지 않는다)", "49152 65535", 32768],
+  ["1024 부터로 넓힘 → 바닥 10000(8080·5432 는 계속 닫힌다)", "1024 65535", 10000],
+  ["바닥 경계 9999 → 10000", "9999 65535", 10000],
+  ["바닥 경계 10000 → 10000", "10000 65535", 10000],
+  ["알아볼 수 없는 글 → 32768", "abc", 32768],
+  ["앞 공백·줄바꿈 → 숫자부터", "\n 16000 65535", 16000],
+  ["0 → 바닥 10000", "0 65535", 10000],
+];
+for (const [label, text, want] of PORT_RANGE_ROWS) eq(`P-W1p ${label}`, sandboxPortLowerBound(text), want);
+// P-W1q 이 기계에서 정말 그 범위를 읽었나 — 시험 고정물이 실제로 받는 포트(listen(0))가 하나도 막히지 않아야 한다.
+//  위 표는 순수 함수만 잰다. /proc 경로가 틀리거나 읽기를 빠뜨리면 하한이 조용히 32768 로 돌아가고(종전 결함) 표는 초록인 채
+//  gVisor 에서 키트 시험 20여 개가 다시 확률적으로 빨개진다(격리 리뷰 실측: 경로 한 글자를 틀리자 24개 중 7개가 32768 아래).
+//  CI·macOS·Windows 는 임시 포트가 32768 이상이라 종전과 같다.
+{
+  const servers = await Promise.all(Array.from({ length: 24 }, () => new Promise((res, rej) => {
+    const srv = createServer();
+    srv.once("error", rej);
+    srv.listen(0, "127.0.0.1", () => res(srv));
+  })));
+  const ports = servers.map((srv) => srv.address().port);
+  await Promise.all(servers.map((srv) => new Promise((r) => srv.close(r))));
+  const below = ports.filter((p) => p < sandboxPortMin());
+  eq(`P-W1q 고정물이 받은 포트 24개가 전부 하한(${sandboxPortMin()}) 이상 — 가장 낮은 것 ${Math.min(...ports)}`, below, []);
+}
 {
   const calls = [];
   const sandbox = entrypointHostEffects({
@@ -114,8 +147,8 @@ eq("P-W2 제품 entrypoint → native capability 명시",
     execFile: (...a) => { calls.push(a); return "node"; },
     spawnSync: (...a) => { calls.push(a); return "scheduler"; },
   });
-  eq("P-W1a sandbox → Linux 하한 포함 동적 고포트 loopback mock 허용",
-    { mode: sandbox.mode, result: await sandbox.fetch("http://127.0.0.1:32768/mock"), calls: calls.length },
+  eq(`P-W1a sandbox → 이 기계의 임시 포트 하한(${sandboxPortMin()}) 포함 loopback mock 허용`,
+    { mode: sandbox.mode, result: await sandbox.fetch(`http://127.0.0.1:${sandboxPortMin()}/mock`), calls: calls.length },
     { mode: "sandbox", result: "mock", calls: 1 });
   eq("P-W1b sandbox → 현재 Node helper 허용",
     { result: sandbox.execFileSync(process.execPath, []), calls: calls.length },
@@ -123,8 +156,8 @@ eq("P-W2 제품 entrypoint → native capability 명시",
   eq("P-W1c sandbox → 기본 로컬 서비스 포트 차단",
     { error: await denied(() => sandbox.fetch("http://127.0.0.1:8080/api")), calls: calls.length },
     { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "network" }, calls: 2 });
-  eq("P-W1c2 sandbox → 동적 고포트 바로 아래 경계 차단",
-    { error: await denied(() => sandbox.fetch("http://127.0.0.1:32767/api")), calls: calls.length },
+  eq(`P-W1c2 sandbox → 임시 포트 하한 바로 아래(${sandboxPortMin() - 1}) 경계 차단`,
+    { error: await denied(() => sandbox.fetch(`http://127.0.0.1:${sandboxPortMin() - 1}/api`)), calls: calls.length },
     { error: { code: "LIVELY_HOST_EFFECT_DENIED", kind: "network" }, calls: 2 });
   eq("P-W1d sandbox → 작업 스케줄러 차단",
     { error: await denied(() => sandbox.schedulerSync("schtasks", ["/Create"])), calls: calls.length },
@@ -238,9 +271,22 @@ eq("E2 adapter allow → changed 상태",
   eq("E9b 생산 설치·업데이트 진입점이 capability를 명시",
     sources.map((src) => src.includes("--allow-host-effects")), [true, true, true, true, true]);
   const bootstrap = sources[0];
+  //  포트 하한은 글자 비교가 아니라 **실제로 돌려 본다** — 인라인 함수를 떼어 같은 표(PORT_RANGE_ROWS)로 돌려 공용 함수와 대조한다.
+  //   글자 비교는 «: 32768» 같은 조각이 다른 자리에도 있어 한쪽 대체값만 바뀌어도 초록이었다(격리 리뷰 실측). 읽는 자리(/proc 경로)와
+  //   판정이 그 값을 쓰는지도 함께 본다.
+  const inline = /const inlineSandboxPortLowerBound = (\(rangeText\) => \{[\s\S]*?\n\});/.exec(bootstrap);
+  let inlineFn = null;
+  try { inlineFn = inline && new Function(`return (${inline[1]});`)(); } catch { inlineFn = null; }
+  const shared = readFileSync(join(setup, "host-effects.mjs"), "utf8");
+  const PROC = "/proc/sys/net/ipv4/ip_local_port_range";
   eq("P-W3 부트스트랩 인라인 경계가 공용 sandbox 포트·스케줄러 정책과 패리티",
-    { ephemeral: bootstrap.includes("port >= 32768"), schedulerStub: bootstrap.includes('kind === "scheduler" && inlineSandboxProcessAllowed') },
-    { ephemeral: true, schedulerStub: true });
+    {
+      lowerBound: inlineFn ? PORT_RANGE_ROWS.map(([, text]) => inlineFn(text)) : "인라인 함수를 못 떼어 냈다",
+      reads: bootstrap.includes(`readFileSync("${PROC}"`) && shared.includes(`readFileSync("${PROC}"`),
+      gate: bootstrap.includes("port >= inlineSandboxPortMin()"),
+      schedulerStub: bootstrap.includes('kind === "scheduler" && inlineSandboxProcessAllowed'),
+    },
+    { lowerBound: PORT_RANGE_ROWS.map(([, text]) => sandboxPortLowerBound(text)), reads: true, gate: true, schedulerStub: true });
 }
 
 console.log(`host-effects tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
