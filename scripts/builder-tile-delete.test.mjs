@@ -5,7 +5,7 @@
 //  카드의 「지우기」 는 오른쪽 「모두 지우기」 와 같은 일(앱 · 앱빌딩 세션 · 기록)이고, 되돌릴 수 없으니 두 번 눌러야 지운다. 누른다고 카드가 골라지지 않는다.
 //
 // 엣지 표(스크래치패드 spec-tile-delete.md):
-//  T1 만들던 앱 카드 — 「이어서 만들기」 「목록에서 빼기」 옆에 「지우기」
+//  T1 만들던 앱 카드 — 「이어서 만들기」 와 「지우기」 만(「목록에서 빼기」 는 없앴다 · 원준 2026-10-26 «안 보이게 하려면 삭제»)
 //  T2 한 번 — 요청 0건 · «한 번 더 누르면 지워져요» · 카드가 골라지지 않는다(오른쪽 패널 · 주소 그대로)
 //  T3 한 번 누르고 4초 지남(경계) — 「지우기」 로 돌아오고 요청 0건 · 그 뒤 한 번 더 눌러도 다시 묻기만
 //  T4 두 번(나만 보는 앱 있음) — /discard 1건 + 세션 DELETE(reclaim) 1건 · 카드 사라짐
@@ -125,7 +125,7 @@ async function PAGE_MAIN() {
   await sleep(900);
   const pb = () => [...host.querySelectorAll("button")].find((b) => /모두 지우기|한 번 더 누르면 지워져요\. 되돌릴/.test(txt(b)));
   mark = window.__calls.length;
-  R.t8 = { panel: !!pb() };
+  R.t8 = { panel: !!pb(), hide: [...host.querySelectorAll("button")].filter((b) => /목록에서 빼기/.test(txt(b))).length, mini: [...host.querySelectorAll(".v2-bld-mini")].map(txt).join(" | ") };
   if (pb()) pb().click();
   await sleep(150);
   R.t8.armed = txt(pb());
@@ -174,11 +174,12 @@ if (R.crash) { console.error("FAIL  페이지가 도중에 넘어졌다 — " + 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL  ${n} — ${why}`); };
+const check = (cond, n, why) => (cond ? ok(n) : bad(n, JSON.stringify(why)));
 const same = (got, want, n) => { const a = JSON.stringify(got), b = JSON.stringify(want); return a === b ? ok(n) : bad(n, `기대 ${b} · 실제 ${a}`); };
 const DEL = (sid) => "DELETE /api/ui/terminal/sessions/" + sid + "?reclaim=1";
 const DISCARD = (id) => "POST /api/ui/apps/" + id + "/discard";
 
-same(R.t1, ["이어서 만들기", "목록에서 빼기", "지우기"], "T1 만들던 앱 카드에 「지우기」 가 있다");
+same(R.t1, ["이어서 만들기", "지우기"], "T1 만들던 앱 카드 — 「이어서 만들기」 와 「지우기」 만(「목록에서 빼기」 없음)");
 same(R.t2 && [R.t2.has, R.t2.text, R.t2.writes, R.t2.on, R.t2.panelSame, R.t2.hash], [true, "한 번 더 누르면 지워져요", [], false, true, true],
   "T2 한 번 누르면 묻기만 — 요청 0건 · 카드가 골라지지 않는다(오른쪽 · 주소 그대로)");
 same(R.t3 && [R.t3.text, R.t3.writes, R.t3.again.text, R.t3.again.writes], ["지우기", [], "한 번 더 누르면 지워져요", []], "T3 4초가 지나면 「지우기」 로 돌아온다 · 그 뒤 한 번은 다시 묻기만");
@@ -186,6 +187,7 @@ same(R.t4 && [R.t4.writes, R.t4.gone], [[DISCARD("notes"), DEL("box-a")], true],
 same(R.t5 && [R.t5.writes, R.t5.gone], [[DEL("box-b")], true], "T5 앱이 없는 만들던 앱 — 세션만 지운다");
 same(R.t6 && [R.t6.writes, R.t6.gone], [[DEL("box-c")], true], "T6 공개한 앱을 고치던 것 — 모두가 쓰는 앱은 지우지 않고 세션만");
 same(R.t7 && [R.t7.writes, R.t7.gone, R.t7.btn], [[DISCARD("mine2")], false, { text: "지우기", disabled: false }], "T7 앱을 못 지우면 — 카드 남음 · 세션 그대로 · 다시 누를 수 있다");
+check(R.t8 && R.t8.hide === 0 && !/목록에서 빼기/.test(R.t8.mini || "") && /늘 보여요/.test(R.t8.mini || ""), "T8 오른쪽 패널에도 「목록에서 빼기」 가 없다 · 지우기 전까지 늘 보인다고 말한다", R.t8);
 same(R.t8 && [R.t8.panel, R.t8.armed, R.t8.writes, R.t8.gone], [true, "한 번 더 누르면 지워져요. 되돌릴 수 없어요.", [DISCARD("mine2"), DEL("box-d")], true], "T8 오른쪽 「모두 지우기」 도 그대로 두 번 눌러 지운다");
 same(R.t9 && [R.t9.again, R.t9.writes, R.t9.gone], [true, [DISCARD("mine3"), DEL("box-e")], true], "T9 지우는 사이 다시 그려진 카드로 또 눌러도 한 번만 지운다");
 same([R.listed > 0, R.toasts > 0, R.errors], [true, true, []], "W  앱 목록 요청이 실제로 나갔다 · 알림이 섰다 · 페이지 예외 없음");

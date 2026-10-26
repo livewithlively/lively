@@ -8,7 +8,8 @@
 //     쓰는 자리(매니페스트 studio.place) · 켜 둠(/apps/:id/enabled) · 앱 찾기에 보이기(pad-hidden) · 판 되돌리기 · 지우기 · 만든 사람 · 책임자.
 //  「만들던 앱」 은 이 브라우저의 기록(app-studio STUDIO_KEY) · 서버가 아는 내 만들기(#4667 나만 보는 앱의 build_session) · **내** 앱빌딩 세션(이름 꼴 · 앱빌더 프로젝트)으로 모은다 —
 //   내가 다른 컴퓨터에서 만들던 것도 세션으로는 보이고, 누르면 세션 이름 · 앱으로 되살려 이어 간다. 남이 만들던 것은 안 보인다(원준: «다른 사람이 만들고 있는 앱을
-//   내가 들어가서 멋대로 이어서 만들면 안 되잖아»). 만들던 앱 카드를 누르면 오른쪽에서 이어서 · 목록에서 빼기 · **지우기**(앱 + 세션 + 기록 전부).
+//   내가 들어가서 멋대로 이어서 만들면 안 되잖아»). 만들던 앱 카드를 누르면 오른쪽에서 이어서 · **지우기**(앱 + 세션 + 기록 전부).
+//   「목록에서 빼기」 는 없앴다(원준 2026-10-26 «만들다가 만게 있으면 그 목록이랑 사이드바에는 항상 전부 보여야 · 안 보이게 하려면 삭제») — 안 보이게 하는 길은 지우기 하나.
 //   지우기는 카드에도 있다(원준 2026-10-26 «클릭해서 우측 사이드바로 옮기지 않아도 삭제할 수 있는 버튼을 그 카드에도») — 같은 일 · 두 번 눌러야 지운다.
 import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
@@ -214,16 +215,15 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
         own ? null : el('button', { class: 'btn btn-ghost', type: 'button', text: '사본', title: '원본은 그대로 두고 내 사본을 고쳐요', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } })));
     return card;
   };
-  //  만들던 앱 — 단계는 아래 줄에 한 번만(원준 2026-10-14 «세부 기획 정하기가 두 번이네 · 뱃지 빼버려»). 카드를 누르면 오른쪽에 이어서 · 빼기 · 지우기.
+  //  만들던 앱 — 단계는 아래 줄에 한 번만(원준 2026-10-14 «세부 기획 정하기가 두 번이네 · 뱃지 빼버려»). 카드를 누르면 오른쪽에 이어서 · 지우기.
   const draftKey = (d: Draft): string => 'draft:' + d.sid;
   const draftCard = (d: Draft): HTMLElement => {
-    const card = el('div', { class: 'v2-bld-card v2-bld-card--sel' + (v.sel === draftKey(d) ? ' on' : ''), role: 'listitem', tabindex: '0', title: '누르면 오른쪽에 이어서 만들기, 목록에서 빼기, 지우기가 나와요',
+    const card = el('div', { class: 'v2-bld-card v2-bld-card--sel' + (v.sel === draftKey(d) ? ' on' : ''), role: 'listitem', tabindex: '0', title: '누르면 오른쪽에 이어서 만들기와 지우기가 나와요',
       onclick: (e: MouseEvent) => { if ((e.target as HTMLElement).closest('button')) return; pick(draftKey(d)); },
       onkeydown: (e: KeyboardEvent) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === card) { e.preventDefault(); pick(draftKey(d)); } } },
       el('div', { class: 'hd' }, appGlassIcon('builder'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done), when(d.at), d.local ? '' : '다른 컴퓨터에서'].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-acts' },
         el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
-        el('button', { class: 'btn btn-ghost', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요. 세션과 앱은 그대로예요.', onclick: () => { dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, ''); refresh(); } }),
         el('span', { class: 'v2-studio-sp' }),
         armedDelete('btn btn-ghost', '지우기', '한 번 더 누르면 지워져요', '앱, 앱빌딩 세션, 기록을 모두 지워요. 되돌릴 수 없어요.', () => deleteDraft(d))));
     return card;
@@ -278,7 +278,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   paintPanel(v, selApp, m, hidden, refresh);
 }
 
-// ── 만들던 앱 하나 — 이어서 · 목록에서 빼기 · 지우기(전부) ──
+// ── 만들던 앱 하나 — 이어서 · 지우기(전부) ──
 function paintDraftPanel(v: View, d: Draft, del: (d: Draft) => Promise<boolean>): void {
   const delBtn = armedDelete('btn btn-ghost btn-sm', '모두 지우기 (앱, 세션, 기록)', '한 번 더 누르면 지워져요. 되돌릴 수 없어요.', '', () => del(d));
   v.panel.replaceChildren(
@@ -286,9 +286,8 @@ function paintDraftPanel(v: View, d: Draft, del: (d: Draft) => Promise<boolean>)
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '어디까지' }), el('small', { text: draftStageText(d.stage, !!d.appId, d.done) + (d.at ? ' · ' + when(d.at) : '') + (d.local ? '' : ' · 다른 컴퓨터에서 만들던 것') })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '앱' }), el('small', { text: d.appId ? '초안이 있어요(' + d.appId + '). 지우면 버전 이력도 함께 없어져요.' : '아직 앱이 없어요(기획 단계)' })),
     el('div', { class: 'v2-bld-acts' },
-      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '목록에서 빼기', title: '만들던 기록만 지워요. 세션과 앱은 그대로예요.', onclick: () => { dropStudioRec(d.sid); v.sel = ''; location.hash = builderRoute('list'); if (mounted) builderOnHash(location.hash); } })),
-    el('p', { class: 'v2-bld-mini', text: '「목록에서 빼기」는 이 브라우저의 기록만 지워요. 앱빌딩 세션이 남아 있으면 다시 보여요. 「모두 지우기」는 앱, 앱빌딩 세션, 기록을 모두 지우고 세션은 휴지통으로 옮겨요.' }),
+      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } })),
+    el('p', { class: 'v2-bld-mini', text: '만들던 앱은 지우기 전까지 이 목록과 사이드바에 늘 보여요. 「모두 지우기」는 앱, 앱빌딩 세션, 기록을 모두 지우고 세션은 휴지통으로 옮겨요.' }),
     el('div', { class: 'v2-bld-acts' }, el('span', { class: 'v2-studio-sp' }), delBtn));
 }
 
