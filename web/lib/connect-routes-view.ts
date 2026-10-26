@@ -13,7 +13,8 @@ export type RouteState =
   | 'collecting' | 'set_scope' | 'connect' | 'register' | 'ask_admin' | 'preparing'
   | 'connected' | 'reconnect' | 'off';
 
-export interface RouteIn { kind: RouteKind; state: RouteState; ai_app?: string; needs?: 'claude_login'; off_reason?: 'blocked' | 'unknown' }
+/** stalled — (#5040) collecting 인데 자동 수집이 연속 실패로 멈췄다(서버 org/connect-routes.ts). «모으는 중» 이라 말하지 않는다. */
+export interface RouteIn { kind: RouteKind; state: RouteState; ai_app?: string; needs?: 'claude_login'; off_reason?: 'blocked' | 'unknown'; stalled?: true }
 
 export interface RegistrationIn {
   who: string; minutes: number; what: string;
@@ -77,6 +78,8 @@ export function rowView(a: ConnectAppIn): RowView {
   const name = ROUTE_NAME[r.kind];
   switch (r.state) {
     case 'collecting':
+      //  (#5040) 수집기는 켜져 있는데 자동 수집이 멈췄으면 «모으는 중» 이 거짓이다 — 위시스트에서 이틀 동안 그렇게 보였다.
+      if (r.stalled) return { blockedNote, word: '자동 수집이 멈췄어요 — 원인을 보고 다시 켜 주세요', button: '원인 보기', bucket: 'half' };
       return { blockedNote, word: `${name}${r.kind === 'ai' ? '로' : '으로'} 모으는 중`, button: null, bucket: 'on' };
     case 'connected':
       return { blockedNote, word: `${name}로 연결됨`, button: null, bucket: 'on' };
@@ -113,7 +116,7 @@ export function routeBlurb(r: RouteIn, label: string): string {
 export function routeStateText(r: RouteIn, a: Pick<ConnectAppIn, 'label' | 'app_ready' | 'registration'>): string {
   const L = a.label;
   switch (r.state) {
-    case 'collecting': return '모으고 있어요.';
+    case 'collecting': return r.stalled ? '자동 수집이 멈췄어요 — 같은 실패가 이어져 자동으로 껐어요.' : '모으고 있어요.';
     case 'connected': return `Claude 에 ${aiName(r, L)} 커넥터가 연결돼 있어요.`;
     case 'set_scope': return '연결됐어요. 무엇을 모을지 정하면 시작해요.';
     case 'reconnect': return r.kind === 'ai' ? `Claude 에서 ${aiName(r, L)} 커넥터에 다시 로그인해야 해요.` : '다시 로그인해야 해요.';

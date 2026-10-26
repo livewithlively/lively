@@ -32,6 +32,12 @@ export interface ConnectRoute {
   needs?: "claude_login";
   /** off 일 때 왜 — blocked = 관리자가 이 길을 껐다 · unknown = 설정을 지금 못 읽었다(막음으로 읽는다, fail-closed). 사람에게 하는 말이 다르다. */
   off_reason?: "blocked" | "unknown";
+  /**
+   * (#5040) collecting 인데 자동 수집이 멈췄다 — 수집기는 켜져 있지만 그 주기 잡이 연속 실패로 자동 정지됐다.
+   *  상태는 collecting 그대로 둔다(길 순위·권하는 길은 바뀌지 않는다). 화면과 스킬은 이걸 보고 «모으는 중» 대신 멈춤과
+   *  다시 켜기를 말한다 — 앱의 stalled_collectors 가 무엇이 왜 멈췄는지 싣는다.
+   */
+  stalled?: true;
 }
 
 export interface AppRouteFacts {

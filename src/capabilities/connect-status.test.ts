@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { decideConnectNext, type ConnectFacts } from "../org/connect-next.js";
 import { registry } from "./index.js";
-import { CONNECT_APPS, routeFactsOf, githubViaOf, githubSlotKindOf, claudeLoginOf, aiStatusByName } from "./connect-status.js";
+import { CONNECT_APPS, routeFactsOf, githubViaOf, githubSlotKindOf, claudeLoginOf, aiStatusByName, stalledOf, markStalled } from "./connect-status.js";
 import { tokenMeta } from "../org/credentials/oauth-broker.js";
 import { decideRoutes, appRouteState } from "../org/connect-routes.js";
 import { APP_REGISTRATIONS, registrationView, registrationMarkdown } from "../org/connect-registration.js";
@@ -236,6 +236,39 @@ const f = (variant: ConnectFacts["variant"], needsApp: boolean, appReady: boolea
   assert.equal(slackServerUsable({ mode: "proxy", auth_mode: "oauth", auth_kind: "slack_oauth", enabled: false } as never), true, "★ 꺼 둔 행이라도 모양이 맞으면 덮지 않는다");
   assert.equal(slackServerUsable({ mode: "client", auth_mode: "oauth", auth_kind: "slack_oauth" } as never), false, "모양이 틀리면 만든다");
   ok("G5 앱 등록 저장 문 — 모르는 앱 400 · 슬랙 관리자만 · 깃허브 관리 권한 · 빠진 값 400 · 신원 없음 401 · 권한 세 벌 일치 · 슬랙 창구 모양");
+}
+
+// ── (#5040) 자동 수집 멈춤 — 수집기는 켜져 있는데 주기 잡이 연속 실패로 꺼졌다. 위시스트에서 이틀 동안 «수집 중» 으로 보였다. ──
+{
+  const stalledJob = { enabled: false, interval_sec: 1800, fail_streak: 6, auto_disabled_at: "2026-10-26 08:31:22+00", auto_disabled_reason: "연속 실패 6회" };
+  const liveJob = { enabled: true, interval_sec: 600, fail_streak: 0, auto_disabled_at: null, auto_disabled_reason: null };
+  const col = (id: number, preset_key: string, label: string, sync_job: typeof stalledJob | typeof liveJob, enabled = true) =>
+    ({ id, preset_key, label, enabled, sync_job, last_run: { id: id * 10, status: "error", mode: "incremental", started_at: "x", finished_at: "y", error: "봇이 초대된 채널 0개" } });
+  const COLS = [
+    col(2, "slack", "Slack — 팀 공개 채널", stalledJob), col(3, "slack", "Slack — Lively 봇이 초대된 채널", liveJob),
+    col(1, "linear", "Linear — 워크스페이스 이슈·문서", stalledJob), col(7, "gmail", "Gmail — 팀 메일", stalledJob),
+    col(8, "gdrive", "Google Drive — 팀 문서", stalledJob, false),
+  ];
+  const sl = stalledOf("slack", COLS);
+  assert.deepEqual(sl.map((s) => s.id), [2], "F1 슬랙은 멈춘 검색 수집기만(돌고 있는 봇 수집기·다른 앱 제외)");
+  assert.match(sl[0]!.note, /«Slack — 팀 공개 채널»/, "F1 안내가 그 수집기 이름을 말한다");
+  assert.deepEqual(stalledOf("google", COLS).map((s) => s.id), [7], "F1 구글은 지메일·드라이브 둘 다 본다(꺼진 드라이브는 멈춤이 아니다)");
+  assert.deepEqual(stalledOf("notion", COLS), [], "F1 수집기가 없는 앱은 빈 배열");
+  ok("F1 앱별 멈춘 수집기 — 그 앱 프리셋만 · 구글 둘 · 꺼진 수집기 제외");
+
+  const routes = decideRoutes(routeFactsOf(CONNECT_APPS.find((a) => a.app === "slack")!,
+    { app_ready: true, me_connected: true, collecting: true },
+    { heldBy: "workspace", canRegister: true, canCollect: true, aiPolicy: "allowed", aiMine: null, aiLogin: null })).routes;
+  assert.ok(routes.some((r) => r.kind === "app" && r.state === "collecting") && routes.some((r) => r.kind === "ai"), "배선: 앱 길(모으는 중)과 Claude 길이 있다");
+  const marked = markStalled(routes, sl);
+  assert.deepEqual(marked.map((r) => [r.kind, r.state]), routes.map((r) => [r.kind, r.state]), "F2 상태·순서는 그대로");
+  assert.equal(marked.find((r) => r.kind === "app")!.stalled, true, "F2 모으는 앱 길에 멈춤 표시");
+  assert.equal(marked.find((r) => r.kind === "ai")!.stalled, undefined, "F2 Claude 길(조직 수집기가 아님)엔 표시하지 않는다");
+  //  계약 — 지금 판정은 Claude 길을 collecting 으로 내지 않지만, 낸다 해도 그건 조직 수집기가 아니다(멈춤은 조직 수집기 사정).
+  const synthetic = markStalled([{ kind: "ai", state: "collecting", ai_app: "slack" }, { kind: "token", state: "collecting" }, { kind: "app", state: "connect" }], sl);
+  assert.deepEqual(synthetic.map((r) => r.stalled ?? null), [null, true, null], "F2 Claude 길·모으지 않는 길엔 표시하지 않고 개인 토큰 길엔 표시");
+  assert.equal(markStalled(routes, []), routes, "F3 멈춤이 없으면 길을 건드리지 않는다");
+  ok("F2·F3 길 표시 — 모으는 app·token 길만 stalled · 상태·순서 그대로 · 멈춤 없으면 그대로");
 }
 
 console.log(`\n${pass} passed`);

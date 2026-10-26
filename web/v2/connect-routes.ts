@@ -28,6 +28,8 @@ export interface ConnectAppStatus extends ConnectAppIn {
   connect_url: string | null;
   skill: string;
   note: string | null;
+  /** (#5040) 켜져 있는데 자동 수집이 멈춘 수집기 — 연속 실패로 자동 정지. 옛 서버는 이 칸이 없다(= 멈춤 표시 없음). */
+  stalled_collectors?: Array<{ id: number; label: string; note: string }>;
 }
 export interface ConnectStatus {
   prereq: { vault_ready: boolean; callback_url: string | null };
@@ -210,6 +212,7 @@ function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: 
     }
     if (r.state === 'connect') acts.appendChild(ctx.startAppConnect ? btn('연결', ctx.startAppConnect, true) : btn('아래 «자료 가져오기» 에서 켜기 ↓', ctx.toCollect, true));
     if (r.state === 'set_scope') acts.appendChild(btn('무엇을 모을지 정하기 ↓', ctx.toCollect, true));
+    if (r.state === 'collecting' && r.stalled) body.appendChild(stallPanel(a, ctx));
     if (r.state === 'collecting') acts.appendChild(btn('모으는 범위 보기 ↓', ctx.toCollect));
     if (r.state === 'ask_admin') body.appendChild(adminAsk(a, '수집을 켜는 건 관리자가 해요. 관리자에게 이 화면 주소를 보내 주세요.'));
     if (a.can_edit_registration) {
@@ -234,11 +237,37 @@ function fillRouteBody(body: HTMLElement, r: RouteIn, a: ConnectAppStatus, ctx: 
   } else {
     if (r.state === 'connect' && ctx.openToken) acts.appendChild(btn('토큰 넣기', ctx.openToken, true));
     if (r.state === 'set_scope') acts.appendChild(btn('무엇을 모을지 정하기 ↓', ctx.toCollect, true));
+    if (r.state === 'collecting' && r.stalled) body.appendChild(stallPanel(a, ctx));
     if (r.state === 'collecting') acts.appendChild(btn('모으는 범위 보기 ↓', ctx.toCollect));
     if (r.state === 'ask_admin') body.appendChild(adminAsk(a, '수집을 켜는 건 관리자가 해요. 관리자에게 이 화면 주소를 보내 주세요.'));
   }
   if (acts.childNodes.length) body.appendChild(acts);
   return null;
+}
+
+/**
+ * (#5040) 멈춘 자동 수집 — 무엇이 왜 멈췄나(서버가 쓴 문장 그대로) + [다시 켜기](관리 권한).
+ *  다시 켜기는 수집기 켜기 저장이다 — 서버가 그 주기 잡을 켜며 연속 실패 횟수와 자동 정지 표시를 함께 푼다(collectors.ts syncCollectorJob).
+ *  원인이 그대로면 다섯 번 실패한 뒤 다시 멈춘다 — 그래서 이유를 먼저 보여 준다.
+ */
+function stallPanel(a: ConnectAppStatus, ctx: RoutesCtx): HTMLElement {
+  const list = Array.isArray(a.stalled_collectors) ? a.stalled_collectors : [];
+  const box = el('div', { class: 'cn-rt-stall' },
+    ...list.map((s) => el('p', { class: 'cn-rt-bl', style: 'color:var(--warn-text)', text: s.note })));
+  if (ctx.canManage && list.length) {
+    const b = btn('다시 켜기', async () => {
+      b.disabled = true; b.textContent = '켜는 중…';
+      try {
+        for (const s of list) await api('/api/ui/org/collectors', { method: 'POST', body: JSON.stringify({ id: s.id, enabled: true }) });
+        toast('자동 수집을 다시 켰어요. 다음 주기에 이어서 모아요.');
+      } catch (e: any) { toast(`다시 켜지 못했어요 — ${(e && e.message) || e}`, true); }
+      ctx.reload();
+    }, true);
+    box.appendChild(el('div', { class: 'cn-rt-acts' }, b));
+  } else if (list.length) {
+    box.appendChild(el('p', { class: 'cn-rt-bl', text: '다시 켜는 건 관리자가 해요. 관리자에게 이 화면 주소를 보내 주세요.' }));
+  }
+  return box;
 }
 
 /** [내 Claude 앱 새로 확인] — 서버가 내 Claude 커넥터를 다시 본다(15초 안에 다시 누르면 방금 값). */
