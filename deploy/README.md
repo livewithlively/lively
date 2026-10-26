@@ -326,8 +326,14 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
   + a user-scope MCP registration (`mcpServers` in `~/.claude.json` — the same result as `claude mcp add --scope user`). Verify: `claude mcp list | grep lively` → `✔ Connected`.
 - Standalone reinstall: `bash deploy/install-kit.sh` (env: `LIVELY_TOKEN`·`LIVELY_GATEWAY`·`KIT_HARNESS=claude,codex`).
 - The Claude account for web terminal sessions is per member: by default (multi-profile #346) a session starts with a member-specific `CLAUDE_CONFIG_DIR` (`~/.lively/profiles/<slug>/claude`),
-  and the member logs in once in that session (`LIVELY_MULTIPROFILE=0` = shared mode for single-user boxes). On Linux you can also opt into per-member OS user isolation
-  (`sudo bash deploy/linux/install-isolation.sh`, #524). With isolation, logins for all four AIs (Claude, ChatGPT, Gemini, Grok) stay in each
+  and the member logs in once in that session (`LIVELY_MULTIPROFILE=0` = shared mode for single-user boxes). On Linux, per-member OS user isolation (#524) is
+  **on by default for new installs** (#5031 — `install.sh` runs `install-isolation.sh` and restarts the gateway; opt out with `LIVELY_MEMBER_ISOLATION=off`).
+  It is not turned on by default for `OFFLINE=1` / `LIVELY_SERVER_AIS=off` boxes or when re-running over an existing install (`FORCE=1`); use `LIVELY_MEMBER_ISOLATION=on` there.
+  A member's OS account and their own Claude/ChatGPT (about 700MB) are created the first time they open a session or job on this server — a web session, a server AI
+  [Connect] in first setup, a project chat, an agent job, and so on. No cost for people who only use AI on their PC.
+  Existing boxes keep their mode on update — to turn it on, run `sudo GATEWAY_USER=<gateway user> bash deploy/linux/install-isolation.sh` and restart the gateway (members log in to their AIs again).
+  To turn it off on an isolated box, set `LIVELY_MEMBER_ISOLATION=off` in `.env` and restart the gateway.
+  With isolation, logins for all four AIs (Claude, ChatGPT, Gemini, Grok) stay in each
   member's home; without it only Claude is per member and the rest share one box account.
 - Server AI CLIs (#4970): install (`install.sh` 7/7) and update (`update.sh` · blue-green `deploy-release.sh`) set up all four — only the missing ones, and a failure is a warning (Linux).
   Each one gets `LIVELY_SERVER_AIS_TIMEOUT` seconds (default 600). The first download is a few hundred MB up to about 1GB (measured: Claude 280MB · ChatGPT 424MB; Grok 165MB;
@@ -369,7 +375,7 @@ deploy/
     lively-gateway.service      # systemd unit template
     lively-gateway@.service     # blue-green template unit (color instances)
     lively-loopback.{socket,service} # blue-green :8080 loopback alias
-    install-isolation.sh        # per-member OS user isolation (opt-in, #524)
+    install-isolation.sh        # per-member OS user isolation (#524 · default for new installs #5031)
   install-harness-clis.sh       # Gemini (agy) · Grok CLIs box-wide (called by install and update, #4970)
   mac/                # ── macOS support ──
     provision.sh                          # brew (tmux·node)·docker check·claude / launchd install

@@ -176,9 +176,11 @@ await t("G 계정 목록이 설치 여부(installed)를 싣는다", () => {
 await t("F8·G2 격리 박스 — 로그인 전에 그 사람 서버 계정을 갖춘다(장면이 준비를 묻고 다 되면 그린다 · 로그인 시작이 끝까지 기다린다)", () => {
   //  안 갖추면 첫 세션 전 로그인이 공용 자리로 가고(resolveMemberOsUser «미프로비저닝 → 공유 폴백»), 계정이 생긴 뒤엔 «로그인 안 됨».
   //  기다림의 순서 자체는 login-seat-prep.test(S·P 행)가 동작으로 잰다 — 여기는 배선이다.
-  assert.match(OAI, /api\('\/api\/ui\/me\/ai-login\/prepare', \{ method: 'POST', body: JSON\.stringify\(\{ retry \}\) \}\)/, "장면이 계정 준비를 안 묻는다");
+  assert.match(OAI, /api\('\/api\/ui\/me\/ai-login\/prepare', \{ method: 'POST', body: JSON\.stringify\(\{ retry: !!o\.retry, start: !!o\.start \}\) \}\)/, "장면이 계정 준비를 안 묻는다(또는 start 를 안 싣는다)");
   const prep = OAI.slice(OAI.indexOf("const prepare = async"), OAI.lastIndexOf("void prepare();"));
   assert.ok(prep.length > 200, "준비 흐름을 못 찾았다 — 검사가 헛돈다");
+  //  (#5031) 장면은 열 때 **묻기만** 한다 — 만들기는 사람이 [연결]을 누를 때(seatThenOpen). 동작은 화면 시험 Q0·Q8~Q11 이 잰다.
+  assert.match(prep, /await askSeat\(\{ retry, start: retry \}\)/, "★ 장면을 열자마자 계정을 만든다 — PC 길을 고를 사람도 치른다");
   assert.match(prep, /if \(state === 'preparing' \|\| \(!state && sawPreparing\)\) \{[\s\S]*?setTimeout\(\(\) => \{ void prepare\(\); \}, PREP_POLL_MS\);[\s\S]*?return;/, "★ 만드는 중인데 목록을 그린다(«이 서버 공용 계정» 거짓 문구)");
   assert.ok(prep.indexOf("void reload();") > prep.indexOf("state === 'failed'"), "준비 판정보다 먼저 목록을 그린다");
   const R = code(readFileSync(new URL("../../terminal/routes.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));

@@ -4,7 +4,8 @@
 //   뒤엔 그 사람 홈에 자격이 없어 «로그인 안 됨» 이 된다. 계정 만들기는 시간이 걸리는 일이고(키트 · 구성원 몫 claude·codex 설치 — 위시스트
 //   실측 2026-10-23 claude 17초 · codex 8초, 계정·키트는 안 쟀다), 계정(useradd) 자체는 그 초반에 생긴다 — 그래서 «계정이 있나» 만 보고
 //   넘어가면 아직 깔리는 중인 codex 를 «없음» 으로 만나 로그인이 실패했다(격리 리뷰).
-//  · prepare(처음 설정 인사·이름 장면에서 한 번 · AI 장면을 열 때 다시) — 상태만 답하고, 아직 없으면 만들기를 **시작만** 한다(기다리지 않는다).
+//  · prepare — 상태만 답하고, 아직 없으면 만들기를 **시작만** 한다(기다리지 않는다). 처음 설정 AI 장면은 열 때 start:false 로 묻기만 하고,
+//    사람이 서버 AI 의 [연결]을 누를 때 시작한다(#5031 — 종전엔 인사·이름 장면에서 미리 시작해 PC 길을 고를 사람도 만들었다).
 //  · start(로그인 시작) — 만드는 중이면 **끝까지** 기다리고, 없으면 만들고(방금 실패했어도 — 사람이 직접 누른 것이다), 그래도 없으면(격리
 //    박스에서) 503 — 공용 자리로 몰래 가지 않는다. 기다림은 SEAT_WAIT_MS 까지 — 넘으면 409 «준비하는 중» (만들기는 뒤에서 계속 돈다).
 //    상한이 없으면 요청이 만들기 상한(provisionMemberOs 180초)까지 묶이고 화면엔 신호가 없다 — 앞단 프록시가 먼저 끊기도 한다(격리 리뷰).
@@ -23,11 +24,15 @@ export interface SeatPrepDeps {
 }
 
 /** prepare — 상태를 돌려준다. 아직 없으면 만들기를 시작하고(기다리지 않는다) «preparing».
- *  retry — 사람이 «다시 해 보기» 를 눌렀다: 방금 실패했어도 다시 만든다(그 밖엔 실패 뒤 잠깐은 다시 띄우지 않는다 — 몇 초마다 묻는 화면이 오래 걸리는 일을 거듭 띄우지 않게). */
-export async function prepareMemberSeat(d: SeatPrepDeps, o: { retry?: boolean } = {}): Promise<MemberOsState> {
+ *  retry — 사람이 «다시 해 보기» 를 눌렀다: 방금 실패했어도 다시 만든다(그 밖엔 실패 뒤 잠깐은 다시 띄우지 않는다 — 몇 초마다 묻는 화면이 오래 걸리는 일을 거듭 띄우지 않게).
+ *  start:false — 묻기만 한다(없으면 «absent» 그대로). (#5031) 처음 설정은 사람이 서버 AI 의 [연결]을 누를 때만 만든다 — «PC에서 쓰는 AI로»
+ *   를 고를 사람까지 계정·구성원 몫 클로드·챗GPT 설치(≈700MB · 20초 남짓)를 치르지 않게. retry 는 사람이 직접 누른 것이라 start 와 상관없이 만든다.
+ *   생략하면 만든다(종전 화면 호환). */
+export async function prepareMemberSeat(d: SeatPrepDeps, o: { retry?: boolean; start?: boolean } = {}): Promise<MemberOsState> {
   let st = await d.state();
   if (st === "failed" && o.retry && d.clearFailure) { d.clearFailure(); st = await d.state(); }
   if (st !== "absent") return st;
+  if (o.start === false && !o.retry) return "absent";
   void d.ensure().catch(() => { /* 실패는 다음 state 가 failed 로 말한다 */ });
   return "preparing";
 }
