@@ -239,6 +239,8 @@ t("★ 라이브러리 하나가 실패하면 나머지는 받되 run 은 실패
 t("주인을 모르는 수집기(키를 직접 붙인 것)는 개인 라이브러리를 건너뛴다 — 잠글 사람을 모르면 열지 않는다", async () => {
   const r = await run(library(), { token_source: undefined, token: "KEY" });
   assert.deepEqual(ids(r.out), ["groups/9:G1"]);
+  const only = await run(library(), { token_source: undefined, token: "KEY", libraries: "users/7" });
+  assert.match(String(only.error?.message), /주인/, "모을 것이 개인 라이브러리뿐인데 0건 성공으로 끝났다");
 });
 
 t("라이브러리를 고르면 그것만 · 노트를 끄면 독립 노트가 빠지고 논문 본문에 노트 머리가 없다", async () => {

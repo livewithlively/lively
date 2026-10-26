@@ -575,6 +575,7 @@ export async function* zoteroItems(
   //   그래서 다른 라이브러리는 끝까지 받되 실패를 모아 마지막에 던진다(커서 동결 → 다음 run 이 같은 창을 다시 읽는다).
   const failures: string[] = [];
   let collectionHits = 0;
+  let ownerSkipped = 0;
 
   for (const lib of libs) {
     const lp = libraryPath(lib);
@@ -583,6 +584,7 @@ export async function* zoteroItems(
     //   토글(token_source=member:<id>)로 만든 수집기는 늘 주인이 있다. 관리탭에서 키를 직접 붙여 만든 수집기만 여기 걸린다.
     if (lib.kind === "users" && !owner) {
       console.warn(`zotero: ${lp} — 이 수집기는 키 주인(구성원)을 몰라 개인 라이브러리를 건너뜁니다. '키 출처'를 member:<구성원 id> 로 지정하세요.`);
+      ownerSkipped++;
       continue;
     }
     try {
@@ -686,6 +688,10 @@ export async function* zoteroItems(
       console.warn(`zotero: ${lp}(${libraryName}) 수집 실패 — ${(e as Error).message}`);
       failures.push(`${libraryName}(${lp}): ${(e as Error).message}`);
     }
+  }
+  //  모을 라이브러리가 그 하나(개인)뿐이었는데 주인을 몰라 건너뛰었다 — 0건 «성공» 으로 끝내면 아무도 모른다.
+  if (ownerSkipped && ownerSkipped === libs.length) {
+    throw new Error("이 수집기는 키 주인(구성원)을 몰라 개인 라이브러리를 모으지 않았습니다 — [외부 앱 연결 ▸ Zotero]에서 켜거나 '키 출처'를 member:<구성원 id> 로 지정하세요.");
   }
   if (pickedCollections.length && !collectionHits) {
     throw new Error(`고른 컬렉션(${pickedCollections.join(", ")})을 어느 라이브러리에서도 찾지 못했습니다 — 컬렉션 key 를 다시 확인하세요(웹 라이브러리 주소의 collections/ 뒤 8자).`);
