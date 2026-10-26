@@ -336,13 +336,13 @@ function stripNonCode(src) {
 //  · chdir·umask(값)·setuid 계열·abort·process.kill(process.pid): 스레드에선 막히거나 러너 전체에 걸린다.
 //  · «직접 실행일 때만» 관용구(require.main === module 등): 스레드에선 훅을 import 로 불러오므로 그 조건이 거짓이 되어
 //    본문이 한 줄도 안 돈다(R14).
-//  주석 **줄**만 지우고 본다(codeLines) — 줄 안의 주석·문자열·정규식은 그대로 두므로 틀리면 «프로세스로» 쪽(느려질 뿐)이다.
+//  줄 머리의 주석만 지우고 본다(codeLines) — 줄 안의 주석·문자열·정규식은 그대로 두므로 틀리면 «프로세스로» 쪽(느려질 뿐)이다.
 //   stripNonCode 는 정규식 리터럴 안의 «/*»(예: /\/*$/)를 주석 시작으로 읽어 그 뒤 코드를 통째로 놓친다(리뷰 실측).
 const PROCESS_ONLY = [
   /\bchild_process\b/,
   /["'](?:node:)?cluster["']/,
   /\b(?:execFileSync|execSync|spawnSync)\s*\(/,
-  /\b(?:write|read|append|close|fsync|fdatasync|ftruncate)\w*\s*\(\s*[0-2]\s*[,)]/,
+  /\b(?:(?:write|read)(?:v|File)?|appendFile|close|fsync|fdatasync|ftruncate)(?:Sync)?\s*\(\s*[0-2]\s*[,)]/,
   /\b(?:Write|Read)Stream\s*\(\s*[0-2]\s*[,)]/,
   /\bfd\s*:\s*[0-2]\b/,
   /\/(?:dev|proc\/[^/\s'"`]+)\/(?:stdin|stdout|stderr|fd\/[0-2])\b/,
@@ -352,7 +352,10 @@ const PROCESS_ONLY = [
   /\bprocess\s*\.\s*kill\s*\(\s*process\s*\.\s*pid\b/,
   /\brequire\s*\.\s*main\b|\bprocess\s*\.\s*mainModule\b|\bimport\s*\.\s*meta\s*\.\s*main\b/,
 ];
-const codeLines = (src) => String(src || "").split("\n").filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).join("\n");
+// 줄 머리의 주석만 걷는다 — `// …` 는 줄 끝까지, `/* … */`·` * …`·` */` 는 닫는 `*/` 까지만(그 뒤 코드는 남긴다), 닫힘이 없으면 줄 끝까지.
+//  (`/* eslint-disable */ require("child_process")` 같은 줄의 코드를 놓치지 않는다 — 재리뷰 실측.)
+const codeLines = (src) => String(src || "").split("\n")
+  .map((l) => l.replace(/^\s*(?:\/\/.*|\*\/|(?:\/\*|\*)(?:(?!\*\/).)*(?:\*\/|$))/, "")).join("\n");
 const RUNTIME_PRAGMA = /lively-hook-runtime\s*:\s*(process|worker)\b/;
 const RUNTIMES = new Set(["worker", "process"]);
 function runtimeOf(hook, orgRuntime) {
@@ -362,7 +365,8 @@ function runtimeOf(hook, orgRuntime) {
   const src = String(hook.source_code || "");
   const pragma = (RUNTIME_PRAGMA.exec(src) || [])[1];
   if (pragma === "process") return "process";                        // 훅이 스스로 원함
-  if (PROCESS_ONLY.some((re) => re.test(codeLines(src)))) return "process";
+  const code = codeLines(src);
+  if (PROCESS_ONLY.some((re) => re.test(code))) return "process";
   return hook.seed === true || pragma === "worker" || machine === "worker" ? "worker" : "process";
 }
 
@@ -419,12 +423,13 @@ function parsesUnder(file, expectHash) {
 
 // 훅 1개 실행 → { out, fail }. fail 은 관측용(#892 결함 C) — 종전엔 크래시를 통째로 삼켜(catch → "")
 //  '훅이 죽음'과 '훅이 출력 없음'이 구분 불가였고, 그래서 죽은 훅이 내내 발견되지 않았다.
-//  opts.orgRuntime — 조직 실행 방식(runtimeOf) · opts.deadline — 이벤트 예산의 마감 시각(spawnHook 이 띄우는 순간 남은 시간을 잰다).
+//  opts.orgRuntime — 조직 실행 방식(runtimeOf) · opts.deadline — 이벤트 예산의 마감 시각(spawnHook 이 띄우는 순간 남은 시간을 잰다) ·
+//  opts.firstWave — 첫 묶음인가(줄인 상한에 끊긴 이유를 가른다 — spawnHook 의 reason).
 async function runHook(hook, stdin, opts = {}) {
   // content_hash 무결성 — 해시가 없거나(변조 캐시) source 와 불일치면 실행 안 함(fail-CLOSED hard-gate).
   const h = crypto.createHash("sha256").update(hook.source_code || "").digest("hex");
   if (!hook.content_hash || hook.content_hash !== h) return { out: "", fail: { reason: "hash_mismatch" } };
-  const run = { runtime: runtimeOf(hook, opts.orgRuntime), deadline: opts.deadline };
+  const run = { runtime: runtimeOf(hook, opts.orgRuntime), deadline: opts.deadline, firstWave: opts.firstWave === true };
   const first = moduleExt(hook.source_code);
   const r = await spawnHook(hook, stdin, first, h, run);
   // 실패했고 **그 확장자로는 파일이 파싱조차 안 되면** 확장자를 잘못 고른 것 → 반대로 딱 한 번 다시.
@@ -585,8 +590,10 @@ async function spawnHook(hook, stdin, ext, expectHash, run = {}) {
     if (r.status === 0 && !r.signal) return { out: r.stdout, fail: null, parses: true };
     // 타임아웃/비정상 종료여도 세션을 막지 않는다(fail-open) — 부분 stdout 만 회수하고 실패는 따로 보고한다.
     const fail = {
-      // 예산이 상한을 줄였고 그 상한에 끊겼으면 훅 탓이 아니라 예산 탓이다(«budget» — 게이트웨이에 훅 실패로 보고하지 않는다).
-      reason: r.signal === "SIGKILL" ? (timeout < limit ? "budget" : "timeout") : "crash",
+      // 예산이 상한을 줄였고 그 상한에 끊겼는데 **앞 묶음이 예산을 먹었으면** 훅 탓이 아니라 예산 탓이다(«budget» — 게이트웨이에
+      //  훅 실패로 보고하지 않는다). 첫 묶음이면 그 훅이 혼자 예산을 다 쓴 것이라 훅 탓(timeout)이다 — 상한이 짧은 하네스
+      //  (코덱스 10초)에서 혼자 멈춘 훅이 «budget» 으로 숨으면 관리탭이 영영 못 본다(재리뷰 재현).
+      reason: r.signal === "SIGKILL" ? (timeout < limit && !run.firstWave ? "budget" : "timeout") : "crash",
       exit_code: r.status,
       signal: r.signal,
       // 꼬리를 남긴다 — 훅이 자기 로그를 뱉고 나서 죽으면 정작 치명오류 덤프가 맨 뒤에 오기 때문.
@@ -653,7 +660,7 @@ async function runAll(hooks, stdin, cfg, deadline = Infinity) {
       for (const hk of waves.slice(i).flat()) results.push({ hk, out: "", fail: { reason: "budget" } });
       break;
     }
-    const rs = await runWave(waves[i], stdin, { orgRuntime: cfg.runtime, deadline });
+    const rs = await runWave(waves[i], stdin, { orgRuntime: cfg.runtime, deadline, firstWave: i === 0 });
     waves[i].forEach((hk, j) => results.push({ hk, ...rs[j] }));
   }
   return results;
@@ -793,7 +800,7 @@ async function main() {
   }
   // 게이트웨이 보고와 사용자 알림엔 스로틀을 건다 — 러너는 툴콜마다 도므로, 없으면 고장난 훅 하나가
   //  매 툴콜에 왕복 1회 + 배너 1개를 붙여 세션을 시끄럽고 느리게 만든다.
-  //  · «budget»(예산 때문에 건너뛰었거나 줄인 상한에 끊김)은 보고하지 않는다 — 훅 탓이 아니라 앞 훅들이 오래 걸린 탓이라,
+  //  · «budget»(예산 때문에 건너뛰었거나, 앞 묶음이 예산을 먹어 줄어든 상한에 끊김)은 보고하지 않는다 — 훅 탓이 아니라 앞 훅들이 오래 걸린 탓이라,
   //    올리면 그 훅의 진짜 실패 기록(health)을 덮고 엉뚱한 훅을 탓한다. 진단은 위 stderr 줄에 남는다.
   //  · 보고할 시간이 없으면 스로틀 도장도 찍지 않는다 — 찍고 안 보내면 진짜 크래시가 10분간 묻힌다(다음 실행이 보낸다).
   const reportable = fails.filter((f) => f.reason !== "budget");

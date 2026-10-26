@@ -202,8 +202,9 @@ export const HARNESS = {
     autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
     // 러너(run-custom)를 하네스가 끊는 상한(ms) — run-custom 의 맥락 이벤트 예산이 이보다 앞서 끝낸다(#5034).
-    //  UserPromptSubmit 30초는 실측(hook_cancelled timeoutMs 30000) · SessionStart 는 timeout 을 안 준 항목의 하네스 기본 60초
-    //  (user-install runnerHooksBlock). 모르는 이벤트는 예산이 없다.
+    //  둘 다 runnerHooksBlock 이 timeout 을 안 주는 항목이라 하네스가 정한 값이다(미지정 기본값은 이벤트마다 다르다):
+    //  UserPromptSubmit 30초는 실측(hook_cancelled timeoutMs 30000, #5034) · SessionStart 는 38초 넘게 «1분씩» 돌고도 안
+    //  끊긴 실측(#4959 «running SessionStart hooks… 38s»)이 있어 하네스 기본 60초로 본다. 모르는 이벤트는 예산이 없다.
     runnerCapMs: { UserPromptSubmit: 30000, SessionStart: 60000 },
     reloadAssets: true,                    // reloadSkills:true 로 같은 세션 반영
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"],

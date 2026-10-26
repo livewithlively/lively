@@ -69,17 +69,22 @@ const noBudget = { LIVELY_HOOK_EVENT_BUDGET_MS: "0" };
     mmd: 'if (false) void process.mainModule;',
     cls: 'if (false) require("node:cluster");',
     efs: 'const execFileSync = () => 0; if (false) execFileSync("x");',
+    // 줄 머리 주석이 닫힌 뒤의 코드는 본다.
+    cmc: '/* eslint-disable */ if (false) require("node:fs").writeSync(1, "x");',
+    jsd: '/** @type {any} */ const cp2 = require("node:child_process"); void cp2;',
     // 정규식 리터럴의 «/*» 뒤에 자식 프로세스 사용 — 이 훅은 모듈 종류 판정(moduleExt)도 그 «/*» 에 속아 .mjs 로 도니
-    //  require 대신 CJS·ESM 어디서나 되는 process.getBuiltinModule 로 쓴다(그쪽은 이 시험의 대상이 아니다).
-    rgx: 'const b = "u/".replace(/\\/*$/, ""); void b;\nconst cp = process.getBuiltinModule("node:child_process"); void cp;\n'
-      + 'process.stdout.write("R16rgx:" + process.getBuiltinModule("node:worker_threads").isMainThread + " ");',
+    //  require 대신 CJS·ESM 어디서나 되는 동적 import 로 쓴다(그쪽은 이 시험의 대상이 아니다).
+    rgx: 'const b = "u/".replace(/\\/*$/, ""); void b;\nconst name = "node:child_process"; void name;\n'
+      + 'import("node:worker_threads").then((w) => process.stdout.write("R16rgx:" + w.isMainThread + " "));',
   };
   const WORK = {
     cmt: '// fs.writeFileSync(1, x) · /dev/stdout · process.chdir( · require.main · child_process\n/* execFileSync(\n * spawnSync(\n */',
     fd10: 'const write = (a) => a; write(10);',
+    // fs 가 아닌 같은 낱말 — 버퍼·큐의 숫자 인자는 fd 가 아니다(프로세스로 끌어내리지 않는다).
+    buf: 'const bb = Buffer.alloc(4); bb.writeUInt32LE(0, 0); void bb.readUInt8(0); const q = { append: () => 0 }; q.append(1);',
   };
   const hooks = [...Object.entries(PROC), ...Object.entries(WORK)].map(([k, pre]) => ({ id: `r16-${k}`, seed: true, src: k === "rgx" ? pre + "\n" : whereHook(`R16${k}`, pre + "\n") }));
-  const r = run("UserPromptSubmit", hooks, { payload: UPS, timeoutMs: 60000 });
+  const r = run("UserPromptSubmit", hooks, { payload: UPS, timeoutMs: 60000, env: noBudget });
   const miss = [...Object.keys(PROC).filter((k) => !r.stdout.includes(`R16${k}:true`)), ...Object.keys(WORK).filter((k) => !r.stdout.includes(`R16${k}:false`))];
   r.status === 0 && !miss.length
     ? ok(`R16 스레드에서 다르게 도는 모양 ${Object.keys(PROC).length}종은 프로세스로, 주석 줄·0~2 밖 fd 는 스레드로 간다`)
@@ -270,8 +275,17 @@ if (process.platform !== "win32") {
     : bad("Z1b 건너뜀 드러내기", dbg(r));
   // 예산이 줄인 상한에 끊긴 훅(z1-b, 제 상한은 10초)은 훅 탓(timeout)이 아니라 예산 탓(budget)이다 — 게이트웨이에 훅 실패로 안 올린다.
   r.stderr.includes("[lively] hook 'z1-b' budget") && !r.stderr.includes("[lively] hook 'z1-b' timeout")
-    ? ok("Z1c 예산이 줄인 상한에 끊긴 훅은 timeout 이 아니라 budget 으로 드러난다")
+    ? ok("Z1c 앞 묶음이 예산을 먹어 줄어든 상한에 끊긴 훅은 timeout 이 아니라 budget 으로 드러난다")
     : bad("Z1c 줄인 상한의 사유", dbg(r));
+}
+// Z1d: 첫 묶음 훅이 줄인 상한에 끊기면 그 훅이 혼자 예산을 다 쓴 것이다 — 훅 탓(timeout)으로 드러나 관리탭에 보고된다.
+//  (상한이 짧은 하네스 — 코덱스 10초 — 에서 혼자 멈춘 훅이 «budget» 으로 숨으면 영영 안 보인다.)
+{
+  const r = run("UserPromptSubmit", [{ id: "z1d-hang", sort: 1, timeout_sec: 10, src: sleepSrc(8000) }],
+    { payload: UPS, env: { LIVELY_HOOK_EVENT_BUDGET_MS: "1500" } });
+  r.status === 0 && r.stderr.includes("[lively] hook 'z1d-hang' timeout")
+    ? ok("Z1d 첫 묶음 훅이 줄인 상한에 끊기면 그 훅 탓(timeout)으로 드러난다")
+    : bad("Z1d 첫 묶음의 사유", dbg(r));
 }
 // Z2: 예산 아래에서 도는 훅의 상한은 남은 예산으로 준다 — 훅이 보는 LIVELY_HOOK_TIMEOUT_MS 도 그 값이다.
 {
@@ -322,7 +336,7 @@ if (process.platform !== "win32") {
 //  훅을, 하네스라면 60초까지 기다려 줬을 것을 일찍 자른다.
 {
   const src = 'process.stdout.write("Z7:" + process.env.LIVELY_HOOK_TIMEOUT_MS + " ");\n';
-  const r = run("SessionStart", [{ id: "z7-start", timeout_sec: 120, src }], { payload: { session_id: "s1", source: "startup" } });
+  const r = run("SessionStart", [{ id: "z7-start", timeout_sec: 120, src }], { payload: { session_id: "s1", source: "startup" }, env: { LIVELY_HARNESS: "claude" } });
   const v = Number((/Z7:(\d+)/.exec(r.stdout) || [])[1]);
   r.status === 0 && v > 50000 && v <= 55000 ? ok(`Z7 클로드 SessionStart 예산은 하네스 상한 60초에 맞춘다(훅 상한 ${v}ms)`) : bad("Z7 SessionStart 예산", dbg(r));
 }
@@ -417,15 +431,15 @@ async function twice(extraA, extraB, between = 0, gwOpts = {}) {
 }
 
 // T8: 보고할 시간이 없던 실패는 스로틀 도장을 찍지 않는다 — 다음 실행이 그 크래시를 보고한다. 예산 탓(«budget»)은 보고하지 않는다.
-//  첫 실행: 예산 1.5초 — 크래시 훅은 곧 죽고, 느린 훅이 예산 끝까지 잡아먹어 보고할 시간이 없다. 둘째 실행(같은 세션 · 받아 둔
+//  첫 실행: 예산 3초 — 크래시 훅은 곧 죽고, 느린 훅이 예산 끝까지 잡아먹어 보고할 시간이 없다. 둘째 실행(같은 세션 · 받아 둔
 //  목록 · 예산 기본): 크래시가 다시 나고 이번엔 보고된다. 도장을 먼저 찍었다면 둘째 보고가 스로틀(10분)에 막혀 0건이다.
 {
   rmSync(join(HOME, ".lively", "hook-report-sent.json"), { force: true });
   const hooks = [
     { id: "t8-crash", sort: 1, seed: true, src: 'throw new Error("t8-boom");\n' },
-    { id: "t8-slow", sort: 2, seed: true, timeout_sec: 10, src: sleepSrc(3000) },
+    { id: "t8-slow", sort: 2, seed: true, timeout_sec: 10, src: sleepSrc(5000) },
   ];
-  const { a, reports } = await twice({ LIVELY_HOOK_EVENT_BUDGET_MS: "1500" }, {}, 0, { hooks });
+  const { a, reports } = await twice({ LIVELY_HOOK_EVENT_BUDGET_MS: "3000" }, {}, 0, { hooks });
   const crashReports = reports.filter((b) => b.includes("t8-crash") && b.includes("crash"));
   a.stderr.includes("[lively] hook 't8-crash' crash") && crashReports.length === 1 && !reports.some((b) => b.includes("budget"))
     ? ok("T8 보고할 시간이 없던 크래시는 다음 실행이 보고한다(도장 없음) · «budget» 은 보고하지 않는다")

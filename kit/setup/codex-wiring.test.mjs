@@ -181,6 +181,15 @@ let toml = install();
   const se = hookEntries(toml).filter((e) => e.event === "SessionEnd");
   const seOk = se.length >= 2 && se.every((e) => Number(e.timeout) <= 3);
   seOk ? ok(`⑨b SessionEnd 배선(work-flag+러너, timeout≤3s) — ${se.length}개`) : bad("⑨b SessionEnd 배선", JSON.stringify(se));
+  // #5034 — 러너의 맥락 이벤트 예산은 harness-registry codex.runnerCapMs 로 «하네스 상한보다 앞서» 잡힌다. 실제 배선한 timeout 과
+  //  어긋나면 예산이 상한을 넘어 코덱스가 러너를 통째로 끊는다(모은 맥락 유실) — 둘이 같은지 여기서 고정한다.
+  const { harness } = await import(pathToFileURL(join(KIT, "hooks", "harness-registry.mjs")).href);
+  const caps = harness("codex").runnerCapMs || {};
+  const runnerT = (ev) => (hookEntries(toml).find((e) => runnerEventOf(e) === ev) || {}).timeout;
+  const capMiss = ["UserPromptSubmit", "SessionStart"].filter((ev) => Number(runnerT(ev)) * 1000 !== caps[ev]);
+  capMiss.length === 0
+    ? ok(`⑨e 러너 상한(UserPromptSubmit ${runnerT("UserPromptSubmit")}s · SessionStart ${runnerT("SessionStart")}s) = harness-registry codex.runnerCapMs`)
+    : bad("⑨e 러너 상한 ↔ runnerCapMs", `어긋남=${capMiss.join(",")} toml=${JSON.stringify(capMiss.map(runnerT))} caps=${JSON.stringify(caps)}`);
   // #1884 — lively-local(로컬 조작 MCP) 도 codex 에 심는다(stdio 경로일 때 — 이 번들은 CLI 동봉이라 stdio).
   /\[mcp_servers\.lively-local\]\s*\ncommand = "[^"]+"\s*\nargs = \["mcp-local"\]/.test(toml)
     ? ok("⑨c lively-local stdio MCP 등록") : bad("⑨c lively-local", "config.toml 에 [mcp_servers.lively-local] 없음");

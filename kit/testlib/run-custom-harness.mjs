@@ -21,7 +21,11 @@ mkdirSync(join(HOME, ".lively"), { recursive: true });
 mkdirSync(TMP, { recursive: true });
 
 // 게이트웨이에 닿을 수 없는 구성원 머신을 재현한다 — 토큰/URL 이 없어야 러너가 로컬 캐시(우리가 심은 훅)로 폴백한다.
-export const ENV = { ...process.env, ...offlineLivelyEnv(), HOME, LIVELY_HOME: HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" };
+export const ENV = { ...process.env, ...offlineLivelyEnv(), HOME, LIVELY_HOME: HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "",
+  // 러너 조정 env 는 시험이 정한 값만 — 라이블리 세션 안에서 돌리면 그 세션의 LIVELY_HARNESS(예: codex)가 상속돼 예산이 바뀐다(#5034
+  //  재리뷰). 실행 방식만은 RUN_CUSTOM_TEST_HOOK_RUNTIME 으로 시험 묶음 전체를 돌릴 수 있다(run-custom-worker-parity 가 worker 로).
+  LIVELY_HARNESS: "", LIVELY_HOOK_EVENT_BUDGET_MS: "", LIVELY_HOOK_LIST_TTL_MS: "",
+  LIVELY_HOOK_RUNTIME: process.env.RUN_CUSTOM_TEST_HOOK_RUNTIME || "" };
 delete ENV.LIVELY_TOKEN;
 delete ENV.LIVELY_GATEWAY_URL;
 
@@ -53,7 +57,7 @@ export function run(event, hooks, { relay, concurrent, runtime, payload, timeout
   if (relay !== undefined) cache.relay = relay;
   // concurrent — 조직의 동시 실행 설정(게이트웨이 응답과 함께 캐시된다). 생략 = 구 캐시·꺼짐(종전처럼 하나씩, §W0).
   if (concurrent !== undefined) cache.concurrent = concurrent;
-  // runtime — 조직의 실행 방식(run-custom-cost §R). 생략 = 구 캐시 = 기본(스레드).
+  // runtime — 조직의 실행 방식(run-custom-cost §R). 생략 = 구 캐시 = 기본(시드 훅은 스레드 · 직접 만든 훅은 프로세스).
   if (runtime !== undefined) cache.runtime = runtime;
   writeFileSync(join(HOME, ".lively", `custom-hooks-${event.replace(/[^A-Za-z]/g, "")}.json`), JSON.stringify(cache));
   // hook_grace_ms(#1008) — graceMs 를 주면 hooks-config.json 에 심어 캐시 유효기간을 정하고, 안 주면 파일을 지워

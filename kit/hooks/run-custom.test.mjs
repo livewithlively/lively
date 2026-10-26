@@ -18,6 +18,17 @@ import {
   UPS, wDir, sleepSrc, sayHook, meet, logHook, readLog, before,
 } from "../testlib/run-custom-harness.mjs";
 
+// ── §P 실행 경로 배선(#5034) — 이 묶음은 프로세스 경로로(기본), run-custom-worker-parity 는 스레드 경로로 돈다 ──
+//  여기 훅은 직접 만든 훅이라 기본이 프로세스다. RUN_CUSTOM_TEST_HOOK_RUNTIME=worker 면 이 머신 env 로 스레드에 넣는다 —
+//  그 경로를 실제로 탔는지부터 본다(아니면 아래 시험이 통과해도 다른 경로를 본 것이다).
+{
+  const want = process.env.RUN_CUSTOM_TEST_HOOK_RUNTIME === "worker" ? "false" : "true";
+  const r = run("UserPromptSubmit", [{ id: "p0-where", src: 'process.stdout.write("P0:" + require("node:worker_threads").isMainThread);\n' }], { payload: { session_id: "s1", prompt: "p0" } });
+  r.status === 0 && r.stdout.includes(`P0:${want}`)
+    ? ok(`P0 이 묶음은 ${want === "false" ? "스레드" : "프로세스"} 경로로 돈다`)
+    : bad("P0 실행 경로 배선", dbg(r));
+}
+
 // ── §A 훅 언어 중립성 ──
 // 관리자는 CJS 로도 ESM 으로도 훅을 쓴다. 한쪽이 실행조차 안 되면 "활성이라 믿는데 아무 일도 안 일어나는" 상태가 된다
 // — 게이트가 없는 것보다 나쁘다(있다고 믿으니까). 아래 두 훅은 require/import 결과를 사유에 박아 실행을 증명한다.

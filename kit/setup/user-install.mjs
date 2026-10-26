@@ -161,7 +161,9 @@ function userLevelHooksBlock() {
 function runnerHooksBlock() {
   const entry = (event, matcher, timeout) => {
     const hook = { type: "command", command: hookCmdRunner(event) };
-    if (timeout) hook.timeout = timeout;   // 초 단위(하네스 계약). 대부분 이벤트는 미지정=하네스 기본(60s)이면 충분.
+    if (timeout) hook.timeout = timeout;   // 초 단위(하네스 계약). 대부분 이벤트는 미지정=하네스 기본이면 충분 — 단 기본값은 이벤트마다
+    //  다르다: UserPromptSubmit 은 미지정이어도 30초에 끊긴다(실측 #5034), SessionStart 는 60초(#4959). 러너의 맥락 이벤트 예산이
+    //  이 상한보다 앞서 끝내도록 harness-registry claude.runnerCapMs 에 같은 값을 둔다 — 여기 timeout 을 주면 거기도 바꾼다.
     return matcher ? { matcher, hooks: [hook] } : { hooks: [hook] };
   };
   return {
