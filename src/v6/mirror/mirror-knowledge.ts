@@ -8,7 +8,7 @@ import { classifyIngest } from "../../org/ingest/ingest-classify.js";
 import type { RawItem } from "../../items/store.js";
 import { resolveIngestPolicy } from "../../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../../org/ingest/ingest-policy-load.js";
-import { auditConnector, auditLifecycleSweep, claimSyncStateSql } from "./mirror-common.js";
+import { auditConnector, auditLifecycleSweep, claimSyncStateSql, pgDeep, pgText } from "./mirror-common.js";
 import { boundCollector } from "../../connectors/config.js";
 
 /**
@@ -40,12 +40,12 @@ export async function mirrorKnowledgeV6(
 ): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹.
-  const title = it.title == null ? null : redactString(String(it.title));
-  const body = redactString(String(it.body ?? ""));
-  const baseFields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {}) as Record<string, unknown>;
+  const title = it.title == null ? null : pgText(redactString(String(it.title)));
+  const body = pgText(redactString(String(it.body ?? "")));
+  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
   // 구 미러처럼 원 item.type 을 fields._item_type 에 가산 보존(type 필터 무손실 복원용 — v6 에 kind 없음).
   const fields = { ...baseFields, _item_type: it.type };
-  const raw = it.raw == null ? null : redactDeep(it.raw);
+  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
   const author = `connector:${system}`;
   // #551 아카이브 전파 — 원본이 아카이브/휴지통이면 lifecycle='archived'(기본 목록에서 숨고 보존). 신규 lifecycle 은 아래 정책으로.
   const isArchived = baseFields.archived === true || baseFields.in_trash === true;
@@ -154,11 +154,11 @@ export async function mirrorKnowledgeV6(
 export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   const name = externalId;                                   // 슬러그 = name = external_id
-  const title = it.title == null ? null : redactString(String(it.title));
-  const body = redactString(String(it.body ?? ""));
-  const baseFields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {}) as Record<string, unknown>;
+  const title = it.title == null ? null : pgText(redactString(String(it.title)));
+  const body = pgText(redactString(String(it.body ?? "")));
+  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
   const fields = { ...baseFields, _item_type: it.type };
-  const raw = it.raw == null ? null : redactDeep(it.raw);
+  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
   const author = `connector:${system}`;
   const sort = typeof it.sort === "number" && Number.isFinite(it.sort) ? Math.trunc(it.sort) : null;
 
