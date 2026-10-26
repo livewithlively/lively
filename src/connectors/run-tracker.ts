@@ -18,7 +18,7 @@ import { HttpError } from "../http-error.js";
 import { initConnectorRunSchema } from "./run-schema.js";
 import type { JobRoute } from "./run-unit.js";   // 타입만 — run-unit 은 동적으로 부른다(아래 unitMod)
 
-const LOG_CAP = 400_000;          // connector_run.log tail 캡(문자)
+export const LOG_CAP = 400_000;   // connector_run.log tail 캡(문자)
 const FLUSH_MS = 1500;            // 로그 flush 주기(하트비트 겸용)
 const FLUSH_BYTES = 16_384;       // 즉시 flush 임계
 // 하트비트 liveness(#586 실배포 교훈): 게이트웨이(부모)가 재시작되면 로그 스트리밍·종료 기록을 하던 추적이
@@ -436,15 +436,8 @@ export function trackRunChild(runId: number, child: ChildProcess, o: TrackOpts):
         let stats: unknown = null;
         try {
           const r = await itemsPool.query(`SELECT log FROM connector_run WHERE id=$1`, [runId]);
-          const log = String((r.rows[0] as { log: string } | undefined)?.log ?? "");
-          for (const line of log.split("\n").reverse()) {
-            const t = line.trim();
-            if (!t.startsWith("{")) continue;
-            try {
-              const j = JSON.parse(t) as Record<string, unknown>;
-              if (j.msg && String(j.msg).includes("싱크 완료")) { stats = { msg: j.msg, ...j, time: undefined, pid: undefined, hostname: undefined, level: undefined }; break; }
-            } catch { /* JSON 아닌 줄 */ }
-          }
+          const { runStatsFromLog } = await import("./sync-outcome.js");
+          stats = runStatsFromLog(String((r.rows[0] as { log: string } | undefined)?.log ?? ""));
         } catch { /* 조회 실패 무시 */ }
         const ok = code === 0;
         // 정상 완주(exit 0)는 취소 플래그보다 우선 — kill 직전에 이미 끝난 run 을 canceled 로 오기록하지 않게(리뷰 지적).
