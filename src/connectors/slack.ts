@@ -2,35 +2,40 @@
 //
 // ── 두 모드(#1531) ──────────────────────────────────────────────────────────
 //  어느 토큰이 설정됐는지가 곧 모드다. 둘은 경쟁이 아니라 **상보**다 — 서로가 못 보는 것을 본다.
-//   · 유저 토큰(xoxp-) = **검색 스윕**(search.messages) — 봇 초대 없이 전 공개채널. 비공개는 원리적으로 불가.
-//   · 봇 토큰(xoxb-)   = **멤버십 스윕**(conversations.*) — 봇이 초대된 채널만, 대신 **비공개 채널이 들어온다**.
+//   · 유저 토큰(xoxp-) = **공개채널 기록 스윕**(conversations.list + conversations.history, #5040) — 봇 초대 없이
+//     전 공개채널. 비공개·DM 은 토큰 주인이 볼 수 있어도 가져오지 않는다(그 사람 개인 대화 유입 방지).
+//   · 봇 토큰(xoxb-)   = **멤버십 스윕**(같은 conversations.*) — 봇이 초대된 채널만, 대신 **비공개 채널이 들어온다**.
 //  둘 다 필요하면 수집기 인스턴스를 두 개 만든다(#1419) — 커서가 인스턴스별로 갈려 서로의 진행을 밀지 않는다.
 //  한 수집기에 둘 다 들어 있으면 **유저 토큰이 이긴다**(기존 배포가 env SLACK_BOT_TOKEN 을 갖고 있어도 모드가
 //  조용히 바뀌지 않게 하는 안전장치 — 모드 전환은 언제나 명시적 선택이어야 한다).
 //
-// 왜 search.messages(유저 토큰) 인가:
-//   봇 토큰(xoxb-)의 conversations.history 는 **봇이 가입한 채널만** 읽힌다(미가입 공개채널은 not_in_channel).
-//   유저 토큰(xoxp-)이어도 conversations.history 는 여전히 멤버십을 요구한다. 반면 워크스페이스 멤버는
-//   **가입하지 않은 공개채널의 메시지도 검색으로 볼 수 있어**, search.messages 는 봇/사람 누구도 채널에 조인하지
-//   않고 전 공개채널을 훑는다(조인 시스템 메시지·권한 재설치 불필요). 이것이 CTO wiki-sync 가 택한 sweep 경로다.
-//   ⚠ search.messages 는 봇 토큰을 거부한다(not_allowed_token_type) — **반드시 유저 토큰(xoxp-)**.
+// 왜 유저 토큰도 conversations.history 인가(#5040 — 종전엔 search.messages):
+//   유저 토큰은 conversations.history 로 «가입한 비공개 대화와 **모든 공개 대화**» 를 읽는다 — 미가입 공개채널을
+//   읽을 수 있는 건 유저 토큰뿐이다(docs.slack.dev conversations.history, not_in_channel 항목). 종전 주석은
+//   «유저 토큰도 멤버십을 요구한다» 고 적고 그 이유로 검색 스윕을 택했는데, 그 전제가 틀렸다.
+//   검색 스윕은 legacy `search:read` 를 요구한다. 라이블리 슬랙 앱(새 앱)은 분할형 `search:read.*` 만 받을 수 있어
+//   (slack-oauth.ts) 연결해 둔 토큰으로는 매번 missing_scope 였다 — 다시 연결해도 같은 권한이 와서 풀리지 않았다
+//   (셀프호스트 실측 2026-10-26). 분할형 권한의 assistant.search.context 는 열거가 아니라 랭킹이라 수집에 못 쓴다(#1959).
+//   검색 스윕은 **옛 토큰 호환으로만** 남는다 — 토큰에 channels:history·channels:read 가 없고 search:read 만 있을 때.
 //
-// 인증/스코프(유저 토큰): search:read(검색) · channels:read(채널 메타) · users:read(+users:read.email 작성자 해소).
-//   (스레드 재구성은 permalink 의 thread_ts 로 하므로 groups:history 등은 불필요.)
+// 인증/스코프(유저 토큰): channels:history·channels:read(공개채널 기록·목록) · users:read(+users:read.email 작성자 해소)
+//   · files:read(파일). 옛 호환 검색 스윕은 search:read.
 // 인증/스코프(봇 토큰): groups:history·groups:read(비공개) · channels:history·channels:read(공개) · users:read
 //   (+첨부 본문까지 받으려면 files:read). 봇을 대상 채널에 /invite 해야 읽힌다.
 //
-// 수집 범위(유저 토큰): 공개채널만 — search match 의 channel 플래그로 DM/비공개/mpim 을 제외(토큰 소유자 개인 대화 유입 방지).
+// 수집 범위(유저 토큰): 공개채널만 — 채널 목록을 public_channel 로만 받고 비공개 표시가 붙은 것은 한 번 더 거른다.
 // 수집 범위(봇 토큰): 봇이 초대된 공개·**비공개** 채널(보관 채널 포함). '대상 채널' 설정으로 더 좁힐 수 있고,
 //   DM/그룹DM 은 어느 설정에서도 들어오지 않는다. 스레드 답글은 history 가 주지 않으므로 replies 로 따로 받는다.
 //
 // 최초 마이그레이션 vs 증분:
-//   · search.messages 의 after:/before: 는 **일 단위·exclusive** → 하루 넉넉히 잡고 ts 로 재필터. count 100/page,
-//     page 는 최대 100 → **쿼리당 최신 10,000건 상한**. 이를 넘기면 창을 이분(bisect)해 완결성 보전(무손실 불변식).
-//   · backfill({since}) — since 있으면 [since, now] 만(증분). 없으면(최초) now 에서 30일 창을 과거로 밀며
-//     활동이 끊길 때까지(DRY_STOP 연속 빈 창) 또는 backfill_since 하한까지 스윕. run-sync 가 max(occurred_at)로 커서 전진.
-//   · 편집(edited)은 게시일 기준 search 라 증분 창 밖이면 못 잡지만, 일일 full 스윕(store.ts 가 자동 등록하는
-//     sync-slack-full)이 전 이력을 재수집(멱등 upsert)해 치유한다 — notion full 스윕과 동일 패턴.
+//   · conversations.history 는 채널마다 커서를 끝까지 따라간다 — 랭킹·일 단위 필터가 없다. 단 채널 하나에 한 run 이
+//     HISTORY_PAGE_MAX 페이지(10만 건)를 넘기면 그보다 오래된 부분은 읽지 않는다(아래 상수 주석 — 경고를 남긴다).
+//   · backfill({since}) — since 있으면 그 뒤만(증분, 스레드는 THREAD_LOOKBACK 만큼 거슬러 새 답글 확인).
+//     없으면 backfill_since(설정) 또는 채널 개설일부터. run-sync 가 max(occurred_at)로 커서 전진.
+//   · THREAD_LOOKBACK 보다 오래된 스레드의 새 답글·편집은 증분이 못 본다 — 셀프호스트는 주 1회 full 스윕
+//     (collectors.ts 가 등록하는 collector-<id>-full)이 전 이력을 재수집(멱등 upsert)해 치유한다.
+//   · (옛 호환 검색 스윕) search.messages 의 after:/before: 는 **일 단위·exclusive** → 하루 넉넉히 잡고 ts 로 재필터.
+//     count 100/page, page 최대 100 → **쿼리당 최신 10,000건 상한**. 넘기면 창을 이분(bisect)해 완결성 보전.
 //
 // 참고: 엔드포인트 https://slack.com/api/<method>, 응답 { ok, error?, ... }. 429 는 Retry-After 존중(slackCall).
 //   external_id = `${channel}:${ts}`(system+instance 내 안정·고유). 스레드 답글 = permalink 의 thread_ts 로 부모 링크.
@@ -62,14 +67,16 @@ const CHANNEL_LIST_LIMIT = 200; // users.conversations 페이지 크기.
 //  왜 필요한가: conversations.history 는 스레드 답글을 돌려주지 않고(부모만), oldest 필터는 **부모의 ts** 로
 //  건다. 그래서 커서 이후만 훑으면 "3개월 전 스레드에 오늘 달린 답글"이 영영 안 잡힌다. 부모를 이 창만큼
 //  거슬러 훑고 그중 latest_reply 가 커서 이후인 것만 replies 를 호출한다(호출 수는 변경된 스레드 수에 비례).
-//  이 창보다 오래된 스레드의 새 답글은 일일 full 스윕(collector-<id>-full)이 치유한다 — search 모드가
+//  이 창보다 오래된 스레드의 새 답글은 full 스윕(collector-<id>-full — 셀프호스트 주 1회, collectors.ts fullSweepOf)이 치유한다 — search 모드가
 //  편집(edited)을 치유하는 것과 같은 구조.
 const THREAD_LOOKBACK_MS = 30 * DAY_MS;
 // 채널 하나에서 history 페이지를 무한히 넘기지 않기 위한 백스톱(200 * 500 = 10만 건).
+//  ⚠ history 는 최신부터 거꾸로 읽고 커서는 관측 최대시각으로 전진하므로, 여기서 멈춘 채널의 **더 오래된 부분은 다음 run 도
+//   읽지 않는다**(채널별 이어 읽기 커서가 없다). 그런 채널은 backfill_since 로 범위를 좁히거나 제외 채널에 넣는다.
 const HISTORY_PAGE_MAX = 500;
 // 파일 수집(files.list) 파라미터.
 const FILE_INCR_LOOKBACK_MS = 2 * DAY_MS; // 증분 시 파일 ts_from 을 커서보다 넉넉히 당김 — 단일 커서가 메시지에
-//  끌려 앞서갈 때 그 사이 업로드된 파일 스트래글러 유실 방지(멱등 upsert 라 재수집 무해). 일일 full 스윕이 최종 백스톱.
+//  끌려 앞서갈 때 그 사이 업로드된 파일 스트래글러 유실 방지(멱등 upsert 라 재수집 무해). full 스윕(셀프호스트 주 1회)이 최종 백스톱.
 const FILE_BODY_MAX = 100_000; // 텍스트 파일 본문 상한(byte) — 과대 파일 방어.
 const FILE_PAGE_MAX = 200; // files.list 페이지 백스톱.
 // 텍스트로 간주해 본문을 다운로드할 filetype(그 외 + 바이너리는 메타+링크만).
@@ -253,10 +260,24 @@ const SCOPE_BY_METHOD: Record<string, string> = {
   "conversations.replies": "channels:history · groups:history",
   "users.list": "users:read · users:read.email",
 };
-function scopeHint(method: string, err: unknown): string {
+// 다시 연결해도 받을 수 없는 권한(#5040) — 라이블리 슬랙 앱(새 앱)은 legacy `search:read` 를 요청조차 못 한다
+//  (slack-oauth.ts). 이게 모자랄 때 «다시 연결하라» 고 하면 사람을 막다른 길로 보낸다 — 셀프호스트 고객이
+//  그 안내를 보고 물어 왔고, 실제로 다시 연결해도 같은 권한이 왔다(2026-10-26).
+const UNOBTAINABLE_SCOPES = new Set(["search:read"]);
+/** needed = 슬랙이 missing_scope 응답에 실어 주는 «모자란 권한»(있으면 표보다 정확하다). */
+export function scopeHint(method: string, err: unknown, needed?: string): string {
   if (!/missing_scope|not_allowed_token_type|invalid_scope/i.test(String(err ?? ""))) return "";
-  const need = SCOPE_BY_METHOD[method];
-  const what = need ? ` 이 수집에는 ${need} 권한이 필요합니다.` : "";
+  const need = needed?.trim() || SCOPE_BY_METHOD[method];
+  //  여러 권한이 오면 «그중 하나» 다 — 슬랙의 needed 는 그 메서드가 받는 권한을 쉼표로 늘어놓는다(공개채널만 모으는
+  //   수집기에 비공개·DM 권한까지 켜라는 말로 읽히면 안 된다).
+  const many = !!need && /[,·]/.test(need);
+  const what = !need ? "" : many
+    ? ` 이 수집에는 ${need.split(/\s*[,·]\s*/).filter(Boolean).join(" · ")} 중 하나의 권한이 필요합니다.`
+    : ` 이 수집에는 ${need} 권한이 필요합니다.`;
+  const missing = needed?.trim() ? needed.split(/[\s,]+/) : method === "search.messages" ? ["search:read"] : [];
+  if (missing.some((s) => UNOBTAINABLE_SCOPES.has(s))) {
+    return `${what} 라이블리 슬랙 앱은 이 옛 권한을 받을 수 없어 다시 연결해도 풀리지 않습니다 — 공개 채널은 channels:history·channels:read 권한으로 모으니 그 권한이 있는 연결을 쓰세요.`;
+  }
   return `${what} [외부 앱 연결 ▸ Slack]에서 다시 연결하면 권한을 새로 받습니다 — 권한이 그대로면 다음 실행도 같은 자리에서 멈춥니다.`;
 }
 
@@ -265,6 +286,7 @@ async function slackCall<T extends SlackEnvelope>(
   token: string,
   params: Record<string, string | number | boolean | undefined>,
   maxRetries = 5,
+  onHeaders?: (headers: Headers) => void,
 ): Promise<T> {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
@@ -299,7 +321,8 @@ async function slackCall<T extends SlackEnvelope>(
       throw new Error(`slack ${method} HTTP ${res.status}: ${text.slice(0, 200)}`);
     }
 
-    const json = (await res.json()) as T;
+    onHeaders?.(res.headers);
+    const json = (await res.json()) as T & { needed?: string };
     if (!json.ok) {
       // ok:false 도 본문에 ratelimited 로 올 수 있음 → 동일하게 대기 후 재시도.
       if (json.error === "ratelimited" && attempt < maxRetries) {
@@ -312,7 +335,7 @@ async function slackCall<T extends SlackEnvelope>(
       //   종전엔 `slack search.messages error: missing_scope` 만 남아서, 화면엔 «실패» 라고만 뜨고
       //   무엇이 없는지도, 어디서 고치는지도 없었다(실측: 슬랙 공개채널 수집이 매 주기 같은 자리에서 실패).
       //   메서드마다 필요한 스코프가 다르므로 **그 메서드의 것**을 말한다 — 뭉뚱그리면 엉뚱한 걸 켜게 한다.
-      throw new Error(`slack ${method} error: ${json.error ?? "unknown"}` + scopeHint(method, json.error));
+      throw new Error(`slack ${method} error: ${json.error ?? "unknown"}` + scopeHint(method, json.error, json.needed));
     }
     return json;
   }
@@ -400,12 +423,22 @@ async function loadUserMap(token: string): Promise<Map<string, SlackUser>> {
   }
 }
 
+export interface WorkspaceMeta {
+  instance: string;
+  teamDomain?: string;
+  /** 토큰이 가진 권한(응답 헤더 x-oauth-scopes) — 헤더가 없으면 null(모름). 유저 토큰의 스윕 방식을 고른다. */
+  scopes: string[] | null;
+}
+
 // auth.test 로 team 식별자/딥링크 도메인 확보. instance = team_id 우선.
-async function loadWorkspaceMeta(
-  token: string,
-): Promise<{ instance: string; teamDomain?: string }> {
+async function loadWorkspaceMeta(token: string): Promise<WorkspaceMeta> {
+  let scopes: string[] | null = null;
+  const readScopes = (h: Headers): void => {
+    const raw = h.get("x-oauth-scopes");
+    scopes = raw === null ? null : raw.split(",").map((s) => s.trim()).filter(Boolean);
+  };
   try {
-    const r = await slackCall<AuthTestResp>("auth.test", token, {});
+    const r = await slackCall<AuthTestResp>("auth.test", token, {}, undefined, readScopes);
     const instance = r.team_id ?? r.team ?? "unknown";
     // url 예: https://acme.slack.com/ → teamDomain = "acme".
     let teamDomain: string | undefined;
@@ -413,11 +446,25 @@ async function loadWorkspaceMeta(
       const m = /^https?:\/\/([^.]+)\.slack\.com/.exec(r.url);
       if (m) teamDomain = m[1];
     }
-    return { instance, teamDomain };
+    return { instance, teamDomain, scopes };
   } catch (err) {
     console.warn(`slack auth.test 실패(instance=unknown 으로 진행): ${(err as Error).message}`);
-    return { instance: "unknown" };
+    return { instance: "unknown", scopes };
   }
+}
+
+/**
+ * 유저 토큰을 어느 스윕으로 돌릴까(#5040, 순수 함수).
+ *  · 공개채널 기록 권한(channels:history + channels:read)이 있으면 history — 기본이자 정답이다.
+ *  · 그게 없고 legacy search:read 만 있으면 search — 그 권한을 받던 옛 토큰(붙여 넣은 클래식 앱 토큰) 호환.
+ *  · 권한을 모르면(헤더 없음) history — 모자란 권한은 그 메서드의 missing_scope 안내가 정확히 말한다.
+ *  · 둘 다 없어도 history — 다시 연결하면 받을 수 있는 권한(channels:*)을 안내하는 쪽이 맞다(search:read 는 못 받는다).
+ */
+export function pickUserTokenSweep(scopes: readonly string[] | null): "history" | "search" {
+  if (scopes === null) return "history";
+  const has = (s: string): boolean => scopes.includes(s);
+  if (has("channels:history") && has("channels:read")) return "history";
+  return has("search:read") ? "search" : "history";
 }
 
 // ── search sweep 계층 ────────────────────────────────────────────────────────
@@ -552,7 +599,7 @@ async function* sweepRange(
 //  훑는다(CTO wiki-sync files-since 와 동형). 텍스트 파일은 본문을 내려받아 자료(source)로 적재해 distill 이 지식화,
 //  바이너리(PDF/이미지 등)는 본문 추출 불가라 메타+permalink 만 기록(존재·링크 보존 — 사람/후속이 원본 열람).
 //  파일도 메시지처럼 type='note'(→source→distill). 공개채널 공유분만(비공개 groups/DM ims 전용 파일 제외).
-interface SlackFile {
+export interface SlackFile {
   id?: string;
   created?: number; // epoch seconds
   name?: string;
@@ -688,8 +735,19 @@ async function fileToRawItem(
       extracted, // true=본문 추출됨(텍스트/OOXML), false=[BINARY] 스텁(on-demand 대상)
       channels: publicChannels,
     },
-    raw: f,
+    raw: opts?.includePrivate ? f : publicFileRaw(f),
   };
+}
+
+/**
+ * 공개 공유분만 받는 모드의 원본(raw) — 비공개 채널·DM 공유 흔적(groups · ims · shares.private)을 지운다(#5040).
+ *  파일이 공개 채널과 토큰 주인의 비공개 채널·DM 에 함께 공유됐으면 파일은 들어오지만, 그쪽 대화 id·공유 시각·답글 수까지
+ *  자료에 남길 이유는 없다. 본문·제목은 공개 공유분에서 이미 보이는 것이라 그대로 둔다.
+ */
+export function publicFileRaw(f: SlackFile): SlackFile {
+  const { groups: _groups, ims: _ims, ...rest } = f as SlackFile & { shares?: { public?: unknown; private?: unknown } };
+  const shares = (rest as { shares?: { public?: unknown } }).shares;
+  return { ...rest, ...(shares ? { shares: { public: shares.public } } : {}) } as SlackFile;
 }
 
 // files.list 페이지네이션 — ts_from(epoch초, inclusive) 하한부터 끝까지. search 와 달리 일 granular/10k 상한 이슈
@@ -722,7 +780,7 @@ async function* sweepFiles(
 //  search 모드가 못 보는 것 하나를 위해 존재한다 — **비공개 채널**. 봇이 초대된 채널만 읽히므로 범위는
 //  좁지만, 그 대신 초대된 곳은 공개·비공개를 가리지 않고 전량(개설일부터)을 읽을 수 있다.
 
-interface SlackConversation {
+export interface SlackConversation {
   id: string;
   name?: string;
   is_private?: boolean;
@@ -783,6 +841,18 @@ export function selectBotChannels(
 }
 
 /**
+ * 유저 토큰(개인 연결)의 대상 채널 선별(#5040, 순수 함수) — 공개 채널만 남긴 뒤 selectBotChannels 와 같은 규칙.
+ *  목록은 public_channel 로만 받지만 비공개 표시가 붙은 것은 한 번 더 거른다 — 토큰 주인이 들어가 있는
+ *  비공개 채널이 이 수집기로 흘러들면 그 사람만 보던 대화가 조직 자료가 된다.
+ *  allow 가 비면 공개 채널 전체다(종전 검색 스윕과 같은 범위).
+ */
+export function selectPublicChannels(
+  all: SlackConversation[], allow: string[], noise: string[],
+): SlackConversation[] {
+  return selectBotChannels(all.filter((c) => !c.is_private), allow, noise);
+}
+
+/**
  * 이 스레드의 답글을 (다시) 받아와야 하는가(순수 함수).
  *  전량 수집이면 답글이 있는 모든 스레드가 대상이고, 증분이면 **커서 이후에 새 답글이 달린 스레드만**이다
  *  — 이 판정이 증분 비용을 스레드 수가 아니라 '변경된 스레드 수'로 묶는다.
@@ -815,6 +885,18 @@ async function fetchBotChannels(token: string): Promise<SlackConversation[]> {
   for await (const c of paginate<ConversationsListResp, "channels">(
     "users.conversations", token, "channels",
     { types: "public_channel,private_channel", exclude_archived: false, limit: CHANNEL_LIST_LIMIT },
+  )) {
+    if (c?.id) out.push(c);
+  }
+  return out;
+}
+
+/** 워크스페이스의 공개 채널 전부(#5040) — 유저 토큰은 가입하지 않은 공개 채널도 읽는다. 보관 채널 포함. */
+async function fetchPublicChannels(token: string): Promise<SlackConversation[]> {
+  const out: SlackConversation[] = [];
+  for await (const c of paginate<ConversationsListResp, "channels">(
+    "conversations.list", token, "channels",
+    { types: "public_channel", exclude_archived: false, limit: CHANNEL_LIST_LIMIT },
   )) {
     if (c?.id) out.push(c);
   }
@@ -878,20 +960,22 @@ async function* sweepChannel(
     console.log(`slack #${label}: ${++page}페이지 완료 (메시지 ${msgs}건, 스레드 ${threads}개)${cursor ? "" : " — 채널 끝"}`);
     if (!cursor || page >= HISTORY_PAGE_MAX) {
       if (cursor) {
-        console.warn(`slack history 페이지 백스톱: #${label} 가 ${HISTORY_PAGE_MAX} 페이지 초과 — 남은 구간은 다음 run 이 이어받습니다`);
+        console.warn(`slack history 페이지 백스톱: #${label} 가 ${HISTORY_PAGE_MAX} 페이지(${HISTORY_PAGE_MAX * HISTORY_LIMIT}건)를 넘었습니다 — 그보다 오래된 메시지는 읽지 않았습니다(다음 run 도 이어 읽지 않음). 이 채널은 '최초 수집 시작일' 로 범위를 좁히거나 '제외 채널' 에 넣으세요`);
       }
       break;
     }
   }
 }
 
-// 봇 모드 파일 수집 — files.list 는 봇이 볼 수 있는 파일만 돌려주므로 채널 필터는 대상 채널 집합으로 건다.
-//  유저 모드와 달리 **비공개 채널 공유분(groups)** 을 포함한다(그게 이 모드의 존재 이유다).
-async function* sweepBotFiles(
+// 기록 스윕의 파일 수집 — files.list 는 토큰이 볼 수 있는 파일을 다 돌려주므로 채널 필터는 대상 채널 집합으로 건다.
+//  봇 모드만 **비공개 채널 공유분(groups)** 을 포함한다(그게 그 모드의 존재 이유다). 개인 연결(유저 토큰)은
+//  공개 채널 공유분만 — 토큰 주인의 비공개 채널·DM 파일도 files.list 에 섞여 오기 때문이다(#5040).
+async function* sweepHistoryFiles(
   token: string,
   base: SweepBase,
   sinceMs: number,
   channelIds: Set<string>,
+  includePrivate: boolean,
 ): AsyncGenerator<RawItem> {
   const tsFrom = Number.isFinite(sinceMs) ? Math.max(0, Math.floor(sinceMs / 1000)) : 0;
   let page = 1;
@@ -900,7 +984,7 @@ async function* sweepBotFiles(
       ts_from: tsFrom, count: 100, page, show_files_hidden_by_limit: true,
     });
     for (const f of r.files ?? []) {
-      const it = await fileToRawItem(f, base, token, { includePrivate: true, channelIds });
+      const it = await fileToRawItem(f, base, token, { includePrivate, channelIds });
       if (it) yield it;
     }
     const pages = Math.min(r.paging?.pages ?? 1, FILE_PAGE_MAX);
@@ -909,16 +993,23 @@ async function* sweepBotFiles(
   }
 }
 
-// 봇 모드 백필 — 채널을 나열하고 채널별로 스윕한다. 채널 하나의 실패가 나머지를 막지 않게 채널 단위로 격리한다
-//  (권한 누락·보관 채널 등 개별 사유는 흔하고, 하나 때문에 run 전체를 접으면 그날 수집이 통째로 멈춘다).
+// 기록 스윕 백필(봇·개인 연결 공용) — 채널을 나열하고 채널별로 스윕한다. 채널 하나의 실패가 나머지를 막지 않게
+//  채널 단위로 격리한다(권한 누락·보관 채널 등 개별 사유는 흔하고, 하나 때문에 run 전체를 접으면 그날 수집이 통째로 멈춘다).
 //  ⚠ 단, 실패를 삼키기만 하면 '조용한 유실'이 된다 — 실패한 채널이 하나라도 있으면 마지막에 throw 해
 //   run 을 실패로 만들고, 커서를 동결시켜 다음 run 이 같은 구간을 다시 읽게 한다(유실 없음 불변식).
-async function* botBackfill(
+//  kind 가 가르는 것은 «어느 채널을 보나» 뿐이다 — bot = 봇이 초대된 채널(비공개 포함) · user = 워크스페이스의
+//  공개 채널 전부(#5040). 스레드·커서·하한 규칙은 같다.
+// 토큰 자체가 막힌 오류 — 어느 채널을 읽어도 같다(채널별 사유와 가른다).
+const TOKEN_WIDE_ERROR = /\b(invalid_auth|not_authed|token_revoked|token_expired|account_inactive)\b/;
+
+export async function* historyBackfill(
   token: string,
   cfg: Record<string, string | undefined>,
   sinceMs: number | undefined,
+  kind: "bot" | "user",
+  prefetched?: { meta: WorkspaceMeta; channels: SlackConversation[] },
 ): AsyncGenerator<RawItem> {
-  const { instance, teamDomain } = await loadWorkspaceMeta(token);
+  const { instance, teamDomain } = prefetched?.meta ?? await loadWorkspaceMeta(token);
   const userMap = await loadUserMap(token);
   const base: SweepBase = { instance, teamDomain, userMap };
 
@@ -932,35 +1023,45 @@ async function* botBackfill(
   //   전량 수집 결과만 보고 범위가 지켜진다고 믿게 된다(#1531 어니스트 실측: 7/28 설정에 7/5 자료가 들어왔다).
   const floorMs = backfillSinceMs;
 
-  const all = await fetchBotChannels(token);
-  const targets = selectBotChannels(all, parseNoise(cfg.channels), parseNoise(cfg.noise_exclude));
-  console.log(
-    `slack 봇 모드: 초대된 ${all.length}개 중 ${targets.length}개 채널 수집` +
-      `(비공개 ${targets.filter((c) => c.is_private).length}개) — ${sinceMs !== undefined ? `증분 since=${new Date(sinceMs).toISOString()}` : `전량 from=${floorMs ? new Date(floorMs).toISOString().slice(0, 10) : "채널 개설일"}`}`,
-  );
-  if (targets.length === 0 && parseNoise(cfg.channels).length > 0) {
-    throw new Error(
-      `'대상 채널' 에 적은 채널 중 봇이 초대된 것이 하나도 없습니다 — 채널명 오타이거나 /invite 가 안 된 상태입니다(봇이 보는 채널: ${all.length}개)`,
-    );
+  const all = prefetched?.channels ?? (kind === "bot" ? await fetchBotChannels(token) : await fetchPublicChannels(token));
+  const allow = parseNoise(cfg.channels);
+  const noise = parseNoise(cfg.noise_exclude);
+  const targets = kind === "bot" ? selectBotChannels(all, allow, noise) : selectPublicChannels(all, allow, noise);
+  const mode = kind === "bot" ? "봇 모드" : "공개채널 모드";
+  const range = sinceMs !== undefined
+    ? `증분 since=${new Date(sinceMs).toISOString()}`
+    : `전량 from=${floorMs ? new Date(floorMs).toISOString().slice(0, 10) : "채널 개설일"}`;
+  console.log(kind === "bot"
+    ? `slack 봇 모드: 초대된 ${all.length}개 중 ${targets.length}개 채널 수집(비공개 ${targets.filter((c) => c.is_private).length}개) — ${range}`
+    : `slack 공개채널 모드: 공개 채널 ${all.length}개 중 ${targets.length}개 채널 수집 — ${range}`);
+  if (targets.length === 0 && allow.length > 0) {
+    throw new Error(kind === "bot"
+      ? `'대상 채널' 에 적은 채널 중 봇이 초대된 것이 하나도 없습니다 — 채널명 오타이거나 /invite 가 안 된 상태입니다(봇이 보는 채널: ${all.length}개)`
+      : `'대상 채널' 에 적은 채널을 공개 채널에서 찾지 못했습니다 — 채널명 오타이거나 비공개 채널입니다(비공개 채널은 봇을 /invite 해 봇 수집기로 모읍니다 · 공개 채널: ${all.length}개)`);
   }
 
   const failures: string[] = [];
   let done = 0;
   for (const ch of targets) {
     const label = ch.name ?? ch.id;
-    console.log(`slack 봇 모드: [${++done}/${targets.length}] #${label} 시작${ch.is_private ? " (비공개)" : ""}`);
+    console.log(`slack ${mode}: [${++done}/${targets.length}] #${label} 시작${ch.is_private ? " (비공개)" : ""}`);
     try {
       yield* sweepChannel(token, ch, base, sinceMs, floorMs);
     } catch (err) {
-      failures.push(`${label}(${(err as Error).message})`);
-      console.warn(`slack 채널 수집 실패 — 계속 진행: #${label}: ${(err as Error).message}`);
+      const msg = (err as Error).message;
+      //  토큰 전체가 막힌 오류는 채널마다 되풀이하지 않는다 — 같은 실패를 채널 수만큼 부르고 안내도 그만큼 쌓인다(#5040).
+      //   인증 오류는 두 모드 다, missing_scope 는 공개채널 모드만(공개 채널만 읽으니 권한 부족이 곧 전체 부족이다 —
+      //   봇 모드는 비공개 권한만 빠져 공개 채널은 읽히는 설치가 있다).
+      if (TOKEN_WIDE_ERROR.test(msg) || (kind === "user" && /\bmissing_scope\b/.test(msg))) throw err;
+      failures.push(`${label}(${msg})`);
+      console.warn(`slack 채널 수집 실패 — 계속 진행: #${label}: ${msg}`);
     }
   }
 
   // 파일 — 메시지 스윕 후 1회. files:read 스코프가 없는 설치가 흔해 실패는 경고로 흘린다(메시지는 이미 수집됨).
   const fileSinceMs = sinceMs !== undefined ? Math.max(0, sinceMs - FILE_INCR_LOOKBACK_MS) : floorMs;
   try {
-    yield* sweepBotFiles(token, base, fileSinceMs, new Set(targets.map((c) => c.id)));
+    yield* sweepHistoryFiles(token, base, fileSinceMs, new Set(targets.map((c) => c.id)), kind === "bot");
   } catch (err) {
     console.warn(
       `slack files.list 수집 skip(files:read 스코프 누락 등 — 메시지는 정상 수집됨): ${(err as Error).message}`,
@@ -971,6 +1072,25 @@ async function* botBackfill(
     throw new Error(
       `슬랙 채널 ${failures.length}개 수집 실패(커서 동결 — 다음 run 이 재수집): ${failures.slice(0, 5).join(", ")}`,
     );
+  }
+}
+
+/**
+ * 유저 토큰의 스윕 결정(#5040) — 권한 헤더로 고르고(pickUserTokenSweep), history 면 공개 채널 목록까지 받아 둔다.
+ *  권한을 몰랐던(헤더가 없던) 토큰이 채널 목록에서 missing_scope 면 — 그 권한 없이 돌던 옛 검색 스윕으로 간다.
+ *  권한을 알고 고른 history 의 실패는 그대로 던진다(안내가 모자란 권한을 정확히 말한다).
+ */
+export async function decideUserSweep(token: string): Promise<
+  { sweep: "history"; meta: WorkspaceMeta; channels: SlackConversation[] } | { sweep: "search"; meta: WorkspaceMeta }
+> {
+  const meta = await loadWorkspaceMeta(token);
+  if (pickUserTokenSweep(meta.scopes) === "search") return { sweep: "search", meta };
+  try {
+    return { sweep: "history", meta, channels: await fetchPublicChannels(token) };
+  } catch (err) {
+    if (meta.scopes !== null || !/missing_scope/i.test((err as Error).message)) throw err;
+    console.warn(`slack: 채널 목록 권한이 없어 옛 검색 스윕으로 갑니다 — ${(err as Error).message}`);
+    return { sweep: "search", meta };
   }
 }
 
@@ -1057,13 +1177,13 @@ export const slackConnector: Connector = {
     const sinceMs =
       opts?.since && Number.isFinite(Date.parse(opts.since)) ? Date.parse(opts.since) : undefined;
 
-    // ── 모드 선택(#1531) — 유저 토큰이 있으면 검색 스윕, 없고 봇 토큰만 있으면 멤버십 스윕. ──
+    // ── 모드 선택(#1531) — 유저 토큰이 있으면 공개채널 스윕, 없고 봇 토큰만 있으면 멤버십 스윕. ──
     //  유저 토큰 우선인 이유는 파일 상단 참조(기존 배포의 env 봇 토큰으로 모드가 조용히 바뀌지 않게).
     if (!token) {
       const botToken = cfg.bot_token;
       if (!botToken) {
         throw new Error(
-          "Slack 토큰이 없습니다 — 관리탭 ▸ 외부 자료 수집 ▸ Slack 에 User Token(xoxp-… 전 공개채널 검색 수집) 또는 Bot Token(xoxb-… 봇이 초대된 채널·비공개 포함)을 저장하세요.",
+          "Slack 토큰이 없습니다 — 관리탭 ▸ 외부 자료 수집 ▸ Slack 에 User Token(xoxp-… 초대 없이 전 공개채널) 또는 Bot Token(xoxb-… 봇이 초대된 채널·비공개 포함)을 저장하세요.",
         );
       }
       // 접두 검사 — 토큰 회전을 켠 앱은 `xoxe.xoxb-…` 를 준다(#1881: 라이블리 앱은 v1 에서 회전 OFF 지만 형식은 미리 받아 둔다).
@@ -1072,17 +1192,24 @@ export const slackConnector: Connector = {
           "Bot Token 이 봇 토큰(xoxb-) 형식이 아닙니다 — OAuth & Permissions 의 'Bot User OAuth Token' 을 저장하세요(유저 토큰 xoxp- 는 위 User Token 칸입니다).",
         );
       }
-      yield* botBackfill(botToken, cfg, sinceMs);
+      yield* historyBackfill(botToken, cfg, sinceMs, "bot");
       return;
     }
     if (!isSlackUserToken(token)) {
       throw new Error(
-        "Slack 토큰이 유저 토큰(xoxp-)이 아닙니다 — search.messages 는 봇 토큰(xoxb-)을 거부합니다(not_allowed_token_type). 봇 토큰으로 비공개 채널을 수집하려면 User Token 칸을 비우고 Bot Token 칸에 저장하세요.",
+        "User Token 칸의 값이 유저 토큰(xoxp-)이 아닙니다 — 봇 토큰(xoxb-)이면 User Token 칸을 비우고 Bot Token 칸에 저장하세요(봇 토큰은 초대된 채널을 비공개까지 읽습니다).",
       );
     }
 
-    // 워크스페이스 메타 + 작성자 맵 선적재(스윕 전 1회).
-    const { instance, teamDomain } = await loadWorkspaceMeta(token);
+    // ── 유저 토큰: 공개채널 기록 스윕이 기본이다(#5040). 검색 스윕은 그 권한만 가진 옛 토큰 호환으로 남는다. ──
+    const decided = await decideUserSweep(token);
+    if (decided.sweep === "history") {
+      yield* historyBackfill(token, cfg, sinceMs, "user", decided);
+      return;
+    }
+
+    // ── (옛 호환) 검색 스윕 — 워크스페이스 메타는 위에서 받았다. 작성자 맵 선적재(스윕 전 1회). ──
+    const { instance, teamDomain } = decided.meta;
     const userMap = await loadUserMap(token);
     const base: SweepBase = { instance, teamDomain, userMap };
     const noise = parseNoise(cfg.noise_exclude);

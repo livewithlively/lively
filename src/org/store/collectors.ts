@@ -12,6 +12,7 @@ import { CONNECTOR_SPECS, type ConnectorField } from "../../connectors/config.js
 import { encryptSecret, secretsEnabled } from "../credentials/secret-box.js";
 import { collectorPresetCatalog, type ResolvedPreset } from "./collector-presets.js";
 import { audit } from "./audit.js";
+import { managedMode } from "../tenancy/state.js";
 
 /** 관리탭용 수집기 뷰 — 시크릿 '값'은 절대 담기지 않는다(설정 여부만). */
 export interface CollectorView {
@@ -35,8 +36,11 @@ export interface CollectorView {
   guide?: { intro?: string; steps: string[]; url?: string };
   /** 마스터키(CONNECTOR_SECRET_KEY) 설정 여부 — 관리탭 안내용. */
   secrets_enabled: boolean;
-  /** 자동 싱크 잡 상태(org_cron). */
-  sync_job: { enabled: boolean; interval_sec: number } | null;
+  /** 자동 싱크 잡 상태(org_cron). auto_disabled_at — 연속 실패로 서킷 브레이커가 끈 시각(사람이 끈 것과 가른다). */
+  sync_job: {
+    enabled: boolean; interval_sec: number;
+    fail_streak: number; auto_disabled_at: string | null; auto_disabled_reason: string | null;
+  } | null;
   /** 최근 실행(connector_run) 요약 — 목록에서 '도는지'가 바로 보이게. */
   /** error — 실패했을 때 사람이 읽을 사정 한 줄(#4135 · 목록의 둘째 줄이 원인을 바로 말한다). 성공이면 null. */
   last_run: { id: number; status: string; mode: string; started_at: string; finished_at: string | null; error?: string | null } | null;
@@ -45,6 +49,24 @@ export interface CollectorView {
 /** 수집기의 자동 싱크 크론 잡 id — 인스턴스마다 하나. 구 `sync-<system>` 과 네임스페이스가 갈린다. */
 export function collectorJobId(id: number): string {
   return `collector-${id}`;
+}
+
+/**
+ * 자동 수집이 멈춰 있나(#5040, 순수 함수) — 수집기는 켜져 있는데 그 주기 잡을 서킷 브레이커가 끈 상태.
+ *  연결 화면·연결 상태는 수집기의 enabled 만 보고 «모으는 중» 이라 말해 왔다(셀프호스트 실측 2026-10-26:
+ *  슬랙 두 수집기와 리니어가 자동 정지된 채 «수집 중» 이었고 자료는 0건·이틀째 정지).
+ *  잡이 켜져 있는데 auto_disabled_at 만 남은 행은 멈춘 게 아니다(예전 다시 켜기가 흔적을 안 지웠다) — 잡의 enabled 도 본다.
+ */
+export function collectorStalled(c: Pick<CollectorView, "enabled" | "sync_job">): boolean {
+  return c.enabled && !!c.sync_job && !c.sync_job.enabled && !!c.sync_job.auto_disabled_at;
+}
+
+/** 멈춘 수집기를 사람에게 한 줄로(순수 함수) — 무엇이 몇 번 실패했고 마지막에 왜였는지, 그리고 다시 켜는 길. */
+export function collectorStallNote(c: Pick<CollectorView, "enabled" | "sync_job" | "label" | "last_run">): string | null {
+  if (!collectorStalled(c)) return null;
+  const n = c.sync_job?.fail_streak ?? 0;
+  const why = c.last_run?.status === "error" && c.last_run.error ? ` 마지막 오류: ${c.last_run.error}` : "";
+  return `«${c.label}» 자동 수집이 멈췄습니다 — ${n > 0 ? `연속 ${n}회 ` : ""}실패해서 자동으로 껐습니다.${why} 원인을 고친 뒤 수집을 다시 켜면 이어서 모읍니다.`;
 }
 
 /**
@@ -63,11 +85,18 @@ export async function listCollectors(): Promise<CollectorView[]> {
        FROM org_collector ORDER BY sort, id`);
 
   // 자동 싱크 잡 — 수집기 켬 = 싱크 돎이 화면에서 검증되게 함께 준다(#586 계승).
-  const jobs = new Map<string, { enabled: boolean; interval_sec: number }>();
+  const jobs = new Map<string, NonNullable<CollectorView["sync_job"]>>();
   try {
-    const jr = await itemsPool.query(`SELECT id, enabled, interval_sec FROM org_cron WHERE id LIKE 'collector-%'`);
-    for (const row of jr.rows as Array<{ id: string; enabled: boolean; interval_sec: number }>) {
-      jobs.set(row.id, { enabled: row.enabled, interval_sec: row.interval_sec });
+    const jr = await itemsPool.query(
+      `SELECT id, enabled, interval_sec, fail_streak, auto_disabled_at, auto_disabled_reason
+         FROM org_cron WHERE id LIKE 'collector-%'`);
+    for (const row of jr.rows as Array<Record<string, unknown>>) {
+      jobs.set(String(row.id), {
+        enabled: Boolean(row.enabled), interval_sec: Number(row.interval_sec),
+        fail_streak: Number(row.fail_streak ?? 0),
+        auto_disabled_at: row.auto_disabled_at ? String(row.auto_disabled_at) : null,
+        auto_disabled_reason: (row.auto_disabled_reason as string | null) ?? null,
+      });
     }
   } catch { /* org_cron 미생성 — 무시 */ }
 
@@ -252,6 +281,21 @@ async function kickFirstSync(id: number, presetKey: string, actor?: string): Pro
 }
 
 /**
+ * 주기 full 스윕을 둘 프리셋과 그 주기(순수 함수).
+ *  · notion 매일 — 댓글 단독 변경·아카이브 전파·search 인덱싱 장기 지연(#586).
+ *  · slack 매주, 셀프호스트만(#5040) — 기록 스윕의 증분은 THREAD_LOOKBACK(30일) 안의 스레드만 다시 보므로, 그보다
+ *    오래된 스레드의 새 답글과 편집은 full 이 메운다. 매일이 아닌 이유: full 은 답글 달린 스레드마다 replies 를
+ *    한 번씩 부른다(첫 수집과 같은 비용). 매니지드엔 두지 않는다 — 라이블리 앱은 여러 워크스페이스에 설치되는
+ *    배포 앱이라 슬랙 기록 API 제한(분당 1회·15건, 2025-05-29~ 신규 설치)을 받고, 그 속도로는 full 이 일주일
+ *    안에 끝나지 않는다. 그동안 같은 수집기의 증분이 중복 가드에 막힌다.
+ */
+export function fullSweepOf(presetKey: string, managed: boolean): { intervalSec: number; label: string } | null {
+  if (presetKey === "notion") return { intervalSec: 86_400, label: "일일 전체 스윕(아카이브·완결성)" };
+  if (presetKey === "slack" && !managed) return { intervalSec: 604_800, label: "주간 전체 스윕(오래된 스레드의 새 답글·편집)" };
+  return null;
+}
+
+/**
  * 자동 싱크 잡 동기 — 수집기 활성화 = 싱크가 그냥 돈다(#586 계승, 인스턴스별로).
  *  이미 있으면 enabled·주기만 갱신하고 나머지(관리자가 조정한 파라미터)는 보존. 실패는 비치명(저장은 성공).
  */
@@ -261,11 +305,15 @@ async function syncCollectorJob(
   const jobId = collectorJobId(id);
   try {
     if (spec.enabled) {
+      //  ⚠ 켤 때 서킷 브레이커도 함께 푼다(#5040 — cron-store upsertCronJob·updateCronJob 과 같은 규칙).
+      //   종전엔 enabled 만 true 로 돌려 fail_streak 이 임계 위에 남았다 → 저장 직후 한 번만 실패해도 곧바로
+      //   다시 자동 정지됐다(셀프호스트 실측 2026-10-26: 관리자가 슬랙 수집기를 저장 → 20초 뒤 6번째 실패로 재정지).
       const up = await itemsPool.query(
         `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
            VALUES($1,$2,'connector_sync',$3::jsonb,$4,true,$5)
          ON CONFLICT (tenant_id, id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params,
-           interval_sec=EXCLUDED.interval_sec, enabled=true
+           interval_sec=EXCLUDED.interval_sec, enabled=true,
+           fail_streak=0, auto_disabled_at=NULL, auto_disabled_reason=NULL
          RETURNING last_run_at`,
         [jobId, `${spec.label} 자동 수집`, JSON.stringify({ collector_id: id }), spec.interval, actor ?? null]);
       //  ★ 첫 수집은 **켠 그 자리에서** 시작한다(원준님 2026-08-31).
@@ -278,15 +326,16 @@ async function syncCollectorJob(
       //    (마지막 실행이 오래됐으면 그쪽이 다음 틱에 due 로 읽는다).
       //   ⚠ 실패는 비치명이다 — 켜기 자체는 이미 성공했다. 못 밀어도 스케줄러가 결국 돌린다.
       if (!up.rows[0]?.last_run_at) void kickFirstSync(id, spec.presetKey, actor);
-      // 일일 full 스윕(notion) — 증분 델타가 구조적으로 못 보는 것들(댓글 단독 변경·아카이브 전파·
-      //  search 인덱싱 장기 지연)의 수렴 경로(#586). 인스턴스마다 따로 돈다.
-      if (spec.presetKey === "notion") {
+      // 주기 full 스윕 — 증분 델타가 구조적으로 못 보는 것들의 수렴 경로(#586). 인스턴스마다 따로 돈다.
+      const full = fullSweepOf(spec.presetKey, managedMode());
+      if (full) {
         await itemsPool.query(
           `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
-             VALUES($1,$2,'connector_sync',$3::jsonb,86400,true,$4)
-           ON CONFLICT (tenant_id, id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params, enabled=true`,
-          [`${jobId}-full`, `${spec.label} 일일 전체 스윕(아카이브·완결성)`,
-           JSON.stringify({ collector_id: id, full: true }), actor ?? null]);
+             VALUES($1,$2,'connector_sync',$3::jsonb,$4,true,$5)
+           ON CONFLICT (tenant_id, id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params, enabled=true,
+             fail_streak=0, auto_disabled_at=NULL, auto_disabled_reason=NULL`,
+          [`${jobId}-full`, `${spec.label} ${full.label}`,
+           JSON.stringify({ collector_id: id, full: true }), full.intervalSec, actor ?? null]);
       }
     } else {
       await itemsPool.query(`UPDATE org_cron SET enabled=false WHERE id = ANY($1::text[])`, [[jobId, `${jobId}-full`]]);

@@ -5,7 +5,7 @@
 //  관리탭 ▸ 외부 자료 수집 에 가서 xoxp 를 붙여 넣는 단계가 사라진다(컴맹 페르소나의 탈락 지점이 그 단계였다).
 //
 //  인스턴스는 둘이다(#1531 상보 규약 — 커서가 갈려 서로 안 민다):
-//   · `lively-search` — 켠 관리자의 유저 토큰으로 전 공개채널 검색 스윕(token_source=member:<id>)
+//   · `lively-search` — 켠 관리자의 유저 토큰으로 전 공개채널 기록 스윕(token_source=member:<id>, #5040)
 //   · `lively-bot`    — 라이블리 앱 봇 토큰으로 봇 초대 채널(비공개 포함) 스윕(token_source=bot). 봇 토큰이 있을 때만 켠다.
 //  끄면 enabled=false 로 남긴다(삭제 아님 — 커서·자료가 남고 다시 켜면 이어받는다).
 import { z } from "zod";
@@ -82,7 +82,7 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
 
 const orgSlackCollect: Capability = {
   name: "org_slack_collect", title: "슬랙 자료 가져오기 상태",
-  description: "\"자료 가져오기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부, 슬랙 앱 준비 여부(app_ready). 토글은 org_slack_collect_set.",
+  description: "\"자료 가져오기\" 상태 — 공개채널 수집기(켠 관리자의 연결로 돈다 — 초대 불필요)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부, 슬랙 앱 준비 여부(app_ready). 토글은 org_slack_collect_set.",
   scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
@@ -94,7 +94,7 @@ const orgSlackCollect: Capability = {
 const orgSlackCollectSet: Capability = {
   name: "org_slack_collect_set", title: "슬랙 자료 가져오기 켜기/끄기",
   description:
-    "\"자료 가져오기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 검색 수집기를 만들거나 켜고(token_source=member:<나>), " +
+    "\"자료 가져오기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 수집기를 만들거나 켜고(token_source=member:<나>), " +
     "봇 토큰이 있으면 봇 수집기도 함께 켠다(비공개 채널은 그 채널에서 /invite @Lively 한 것만). 토큰을 복사하지 않는다. " +
     "false 면 둘 다 끈다(삭제 아님 — 커서·자료 보존). 켜려면 호출자가 먼저 me_oauth_connect 로 Slack 을 연결해야 한다.",
   scope: "memory",
@@ -136,7 +136,7 @@ const orgSlackCollectSet: Capability = {
       id: search?.id, preset_key: "slack", instance_key: SEARCH_INSTANCE,
       label: search?.label ?? "Slack — 팀 공개 채널", enabled: true,
       config: { ...(search?.config ?? {}), token_source: `member:${actor}`, ...(channels === undefined ? {} : { channels }), ...(backfill === undefined ? {} : { backfill_since: backfill }) },
-      note: search?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — 켠 사람의 연결로 전 공개채널을 검색 수집합니다(#1881). 토큰 칸은 비워 두세요.",
+      note: search?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — 켠 사람의 연결로 전 공개채널을 수집합니다(#1881 · #5040 초대 불필요). 토큰 칸은 비워 두세요.",
       ...(interval ? { sync_interval_sec: interval } : {}),
     }, actor, source);
     changed.push(SEARCH_INSTANCE);

@@ -6,7 +6,7 @@
 
 `org_connect_status` 를 부른다. 앱마다 `routes` 에 **연결할 수 있는 길**이 우선순위 순서로 들어 있다:
 - `app` 라이블리 앱(그 서비스의 공식 연결 — 워크스페이스 전체를 모은다) → `ai` 구성원 Claude 커넥터(이 사람이 Claude 에 연결해 둔 앱 — 그 사람이 볼 수 있는 것만) → `token` 개인 토큰.
-- 길마다 `state` 가 있다: `collecting` 모으는 중 · `set_scope` 연결됨(모을 범위만 남음) · `connected` 연결됨 · `connect` 지금 연결할 수 있음 · `register` 앱 등록부터(이 사람이 할 수 있음) · `reconnect` 다시 로그인 · `ask_admin` 관리자가 먼저(`app_ready=false` 면 앱 등록 · 아니면 수집 켜기) · `preparing` 라이블리가 준비 중 · `off` 안 씀(`off_reason` 이 `blocked` 면 관리자 설정 · `unknown` 이면 설정을 지금 못 읽었다).
+- 길마다 `state` 가 있다: `collecting` 모으는 중(단 `stalled:true` 면 자동 수집이 연속 실패로 멈췄다 — 앱의 `stalled_collectors[].note` 가 이유) · `set_scope` 연결됨(모을 범위만 남음) · `connected` 연결됨 · `connect` 지금 연결할 수 있음 · `register` 앱 등록부터(이 사람이 할 수 있음) · `reconnect` 다시 로그인 · `ask_admin` 관리자가 먼저(`app_ready=false` 면 앱 등록 · 아니면 수집 켜기) · `preparing` 라이블리가 준비 중 · `off` 안 씀(`off_reason` 이 `blocked` 면 관리자 설정 · `unknown` 이면 설정을 지금 못 읽었다).
 - `recommended` 가 그 앱에서 **이 사람이 지금 할 수 있는 가장 좋은 길**이고, `blocked_before` 는 그보다 앞에 있는데 막힌 길이다(관리자가 먼저 · 라이블리 준비 중).
 - `ai` 길에 `needs:"claude_login"` 이 있으면 서버에서 이 사람의 Claude 로그인이 확인되지 않은 것이다 — 그 길은 «Claude 로그인부터»다.
 - 그 밖의 칸: `skill`(넘길 스킬) · `connect_url`(그 앱의 라이블리 화면 절대 주소) · `note`(그 앱에만 있는 사정) · `registration`(앱 등록 안내 — 앱 등록이 필요할 때만) · `can_collect`(이 사람이 수집을 켜고 범위를 정할 수 있나). `error` 가 있는 앱은 상태를 못 읽은 것이다(`routes` 가 null) — 그 앱 스킬에서 다시 확인한다.
@@ -17,7 +17,7 @@
 - `callback_url=null` → **공개 주소 넣기**: 이 워크스페이스의 공개 주소(gateway_url)가 비어 있어 로그인 연결과 앱 등록을 시작할 수 없다. 사람에게 라이블리를 여는 주소(브라우저 주소창의 `https://…` 앞부분)를 확인받고 `org_update_profile { gateway_url }` 로 넣은 뒤 다시 1을 한다. 토큰으로 연결하는 앱(깃랩·클릭업·피그마·Zotero)은 이 주소 없이도 된다.
 
 사람에게는 세 줄로 짧게 보여 준다(표를 그리지 않는다):
-- 이미 모으고 있는 앱 — 권하는 길이 `collecting`.
+- 이미 모으고 있는 앱 — 권하는 길이 `collecting`(`stalled:true` 가 아닌 것). 멈춘 앱(`stalled:true`)은 «모으는 중»이 아니라 «멈춤 — 이유 한 줄»로 따로 말하고, 그 앱 스킬로 넘겨 다시 켠다.
 - 지금 연결할 수 있는 앱 — 권하는 길이 `connect`·`register`·`connected`·`set_scope`·`reconnect`. 앱마다 그 길을 사람 말 한 마디로(«[허용] 한 번» · «관리자 한 번 앱 등록(걸리는 시간은 `registration.minutes`)» · «Claude 에서 연결» · «개인 토큰»).
 - 먼저 준비가 필요한 앱 — 권하는 길까지 막힌 앱(`ask_admin`·`preparing`). 누가 무엇을 해야 하는지 한 마디로.
 

@@ -60,7 +60,7 @@ export const APP_REGISTRATIONS: Readonly<Record<string, AppRegistration>> = Obje
     fields: ID_SECRET("Client ID", "Client Secret"),
     notes: [
       "봇은 초대받은 채널의 메시지·파일과 구성원 이름·이메일(사람을 맞추는 데)만 읽어요.",
-      "사용자 권한은 각자 연결한 사람의 AI 가 그 사람 계정으로 슬랙을 찾거나 보낼 때 쓰고, 그 사람이 수집을 켜면 공개 채널 검색 수집에도 쓰여요.",
+      "사용자 권한은 각자 연결한 사람의 AI 가 그 사람 계정으로 슬랙을 찾거나 보낼 때 쓰고, 그 사람이 수집을 켜면 공개 채널 수집에도 쓰여요.",
     ],
   },
   notion: {

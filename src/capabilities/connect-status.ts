@@ -32,6 +32,7 @@ import { listMemberSecretsPublic, memberOwner } from "../org/credentials/member-
 import { GITHUB_TOKEN_KIND, isGithubAppToken, pickGithubSlot } from "../org/credentials/github-token-source.js";
 import { secretsEnabled } from "../org/credentials/secret-box.js";
 import { getOrgProfile } from "../org/store.js";
+import { collectorStallNote, listCollectors, type CollectorView } from "../org/store/collectors.js";
 
 interface Probe {
   app_ready: boolean; me_connected: boolean; collecting: boolean; note?: string | null;
@@ -170,7 +171,44 @@ export interface ConnectAppStatus {
    *  앱이 준비됨 · 이 서버가 그 앱을 쥠(릴레이 아님). 매니지드는 라이블리 클라우드가 앱을 쥐어 늘 false 다.
    */
   can_edit_registration: boolean;
+  /**
+   * (#5040) 켜져 있는데 자동 수집이 멈춘 수집기 — 연속 실패로 서킷 브레이커가 그 주기 잡을 껐다. 비어 있으면 멈춘 것이 없다.
+   *  note 는 사람에게 할 말(무엇이 몇 번 실패 · 마지막 오류 · 다시 켜는 길). 다시 켜기 = org_collector_upsert {id, enabled:true}.
+   */
+  stalled_collectors: StalledCollector[];
   error?: string;
+}
+
+export interface StalledCollector { id: number; label: string; note: string }
+
+/** 앱 → 그 앱의 수집기 프리셋(멈춤 판정용). 구글만 둘이다(드라이브·지메일 — google-connect.ts). */
+const PRESETS_OF_APP: Readonly<Record<string, readonly string[]>> = { google: ["gdrive", "gmail"] };
+
+/**
+ * (#5040) 그 앱의 수집기 중 켜져 있는데 자동 수집이 멈춘 것. 순수 — 시험이 직접 부른다.
+ *  사람마다 하나인 수집기(perMember — instance_key `<instance>:<구성원 id>`, member-collect.ts memberInstanceKey)는
+ *  부른 사람의 것만 본다 — 남의 멈춘 수집기를 내 앱 상태로 말하면 남의 이름이 보이고, [다시 켜기]가 남의 수집기를 켠다.
+ */
+export function stalledOf(
+  app: string,
+  collectors: ReadonlyArray<Pick<CollectorView, "id" | "preset_key" | "instance_key" | "label" | "enabled" | "sync_job" | "last_run">>,
+  memberId: string,
+): StalledCollector[] {
+  const presets = PRESETS_OF_APP[app] ?? [app];
+  const out: StalledCollector[] = [];
+  for (const c of collectors) {
+    if (!presets.includes(c.preset_key)) continue;
+    if (c.instance_key.includes(":") && !c.instance_key.endsWith(`:${memberId}`)) continue;
+    const note = collectorStallNote(c);
+    if (note) out.push({ id: c.id, label: c.label, note });
+  }
+  return out;
+}
+
+/** (#5040) 멈춘 수집기가 있으면 모으는 길(app·token)에 표시한다 — 상태·순위는 그대로. 순수. */
+export function markStalled(routes: ConnectRoute[], stalled: ReadonlyArray<StalledCollector>): ConnectRoute[] {
+  if (!stalled.length) return routes;
+  return routes.map((r) => r.state === "collecting" && r.kind !== "ai" ? { ...r, stalled: true as const } : r);
 }
 
 /**
@@ -233,7 +271,9 @@ const orgConnectStatus: Capability = {
     "can_collect(수집 켜기 가능) · apps[]{app·label·skill(넘길 스킬)·connect_url(라이블리 화면 절대 주소)·note · " +
     "routes[](연결할 수 있는 길, 우선순위 순: kind app=라이블리 앱 · ai=구성원 Claude 커넥터(ai_app) · token=개인 토큰 / " +
     "state collecting·set_scope·connected·connect·register·reconnect·ask_admin·preparing·off / needs=claude_login 이면 Claude 로그인부터 / " +
-    "off 면 off_reason=blocked(관리자가 끔)·unknown(설정을 못 읽음 — 관리자가 껐다고 말하지 않는다)) · " +
+    "off 면 off_reason=blocked(관리자가 끔)·unknown(설정을 못 읽음 — 관리자가 껐다고 말하지 않는다) / " +
+    "collecting 인데 stalled=true 면 자동 수집이 멈췄다(연속 실패로 자동 정지 — «모으는 중» 이라 말하지 않는다)) · " +
+    "stalled_collectors[]{id·label·note}(멈춘 수집기와 그 이유 — 원인을 고친 뒤 org_collector_upsert {id, enabled:true} 로 다시 켠다) · " +
     "recommended(권하는 길의 자리) · blocked_before(그 앞의 막힌 길) · registration(앱 등록 안내 — 라이블리 앱 길이 register·ask_admin 일 때만) · " +
     "can_edit_registration(셀프호스트에서 등록한 앱을 이 사람이 보고 바꾸고 지울 수 있나 — org_connect_registration · org_connect_unregister)}. " +
     "옛 칸(variant·next·app_ready·me_connected·collecting·can_register)도 함께 온다. 앱 하나의 조회가 실패해도 나머지는 돌려준다(그 앱만 error · routes=null).",
@@ -260,6 +300,8 @@ const orgConnectStatus: Capability = {
     ]);
     const aiMine = aiMe === undefined ? null : aiStatusByName(aiMe?.connectors ?? []);
     const aiLogin = aiMe === undefined ? null : claudeLoginOf(aiMe?.scan);
+    //  (#5040) 자동 수집 멈춤 — 수집기 목록을 한 번 읽어 앱마다 가른다. 못 읽으면 멈춤 표시 없이 종전대로(fail-open).
+    const collectors = await listCollectors().catch(() => [] as CollectorView[]);
     const apps = await Promise.all(CONNECT_APPS.map(async (a): Promise<ConnectAppStatus> => {
       const canRegister = a.registerBy === "admin" ? admin : canCollect;
       const common = {
@@ -277,15 +319,18 @@ const orgConnectStatus: Capability = {
         const registration = appRoute && !p.app_ready && (appRoute.state === "register" || appRoute.state === "ask_admin")
           ? registrationView(a.app, { callbackUrl, gatewayUrl: profileUrl }) : null;
         const canEditRegistration = registrationEditable({ app: a.app, heldBy, canRegister, appReady: p.app_ready });
+        const stalled = p.collecting ? stalledOf(a.app, collectors, user.userId) : [];
+        const note = [...stalled.map((s) => s.note), p.note].filter(Boolean).join(" ") || null;
         return {
-          ...common, app_ready: p.app_ready, me_connected: p.me_connected, collecting: p.collecting, next, note: p.note ?? null,
-          routes: d.routes, recommended: d.recommended, blocked_before: d.blocked_before, ...(registration ? { registration } : {}),
-          can_edit_registration: canEditRegistration,
+          ...common, app_ready: p.app_ready, me_connected: p.me_connected, collecting: p.collecting, next, note,
+          routes: markStalled(d.routes, stalled), recommended: d.recommended, blocked_before: d.blocked_before, ...(registration ? { registration } : {}),
+          can_edit_registration: canEditRegistration, stalled_collectors: stalled,
         };
       } catch (e) {
         return {
           ...common, app_ready: null, me_connected: null, collecting: null, next: null, note: null,
-          routes: null, recommended: null, blocked_before: null, can_edit_registration: false, error: (e as Error)?.message?.slice(0, 200) ?? "조회 실패",
+          routes: null, recommended: null, blocked_before: null, can_edit_registration: false, stalled_collectors: [],
+          error: (e as Error)?.message?.slice(0, 200) ?? "조회 실패",
         };
       }
     }));
