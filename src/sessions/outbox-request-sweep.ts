@@ -60,6 +60,8 @@ export const SIX_HOURS_MS = 6 * 60 * 60_000;
 export const CONV_INDEX_SWEEP_MS = 60_000;
 /** 하네스 종료 규칙(#4695 T5) 판정 주기. 시계가 분 단위(N 기본 3분)라 «N분 ± 이 주기» 가 실제 끄는 시각이 된다 — 대기 알림과 같은 30초. */
 export const STOP_RULE_SWEEP_MS = 30_000;
+/** 원격 PC 하네스 종료 규칙(#5043) 판정 주기 — 정본은 node-stop-rule.ts(NODE_STOP_RULE_SWEEP_MS). 이 표가 그 모듈을 정적으로 끌어오지 않게 값만 같게 둔다. */
+export const NODE_STOP_RULE_SWEEP_MS = 60_000;
 
 export const SWEEP_JOBS: readonly SweepJob[] = [
   // 아웃박스 — 좀비 회수 + 끝난 행 청소 + 대기 세션 재-kick. RLS 가 이 테넌트로 스코프한다.
@@ -182,6 +184,13 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 세션 목록·장부·얼굴 줄 전부 그 워크스페이스 것이다.
   { key: "session-stop-rule", intervalMs: STOP_RULE_SWEEP_MS,
     run: () => import("./session-stop-rule.js").then((m) => m.sweepSessionStopRule()) },
+  // 원격 PC 하네스 종료 규칙(#5043) — 위 규칙을 구성원이 연결한 컴퓨터(노드)의 세션에도. 컴퓨터마다 켜고(기본 꺼짐) 분을 정한다(org_node.stop_rule).
+  //  ⚠ 위와 같은 파괴적 예외의 같은 판단(그 규칙의 주인 #4690 의 후속 #5043 — 상민님 2026-10-27 «원격 PC 도 매니지드처럼»). 판정은 «모르면 안 끈다» 로
+  //   닫혀 있다(그 PC 터미널 클라이언트를 못 가르면 그 컴퓨터를 통째로 건너뜀 · 다시 열 수 없는 세션 제외 — node-stop-rule.ts 머리말).
+  //  ⓘ 컴퓨터마다 RPC 를 묻는 판이라 1분 — 시계(기본 30분)엔 넉넉하다. 마감 깨움은 그 모듈이 스스로 건다.
+  //  ⚠ 테넌트 스코프 — 노드 스냅샷·장부·정책 전부 그 워크스페이스 것이다.
+  { key: "node-stop-rule", intervalMs: NODE_STOP_RULE_SWEEP_MS,
+    run: () => import("./node-stop-rule.js").then((m) => m.sweepNodeStopRule()) },
   // 앱 폴더 주기 재조정(#4786) — 사건(붙이기 · 떼기 · 앱 끄기 · 동의 회수 …)으로 맞추다 실패한 세션(브로커 무응답 · 시간초과 · 노드 재기동)을
   //  다시 맞춘다. 대상 고르기 · 동시 수 · 고친 횟수는 apps/session-app-folders.ts 의 «주기 재조정» 절. 요약(대상 · 고침 · 실패 …)이 이 로그에 찍힌다.
   //  ⚠ 테넌트 스코프 — 세션 · 붙은 앱 · 맞춘 기록 전부 그 워크스페이스 것이고(RLS), 브로커 중계도 tenantSlug() 로 그 워크스페이스에 간다.

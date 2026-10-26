@@ -312,6 +312,24 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.stop_asking_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=질의 중인 세션을 끄지 않음)`);
           patchIn.stop_asking_minutes = Math.floor(n);
         }
+        //  #5043 — 원격 PC(멤버 노드) 규칙의 워크스페이스 기본값. 컴퓨터별 값은 /api/ui/nodes/:id/stop-rule 이 따로 받는다.
+        //   ⚠ 위 축들과 같은 함정: 여기와 아래 zod **둘 다**에 있어야 값이 산다.
+        if (s.node_stop_enabled !== undefined) patchIn.node_stop_enabled = Boolean(s.node_stop_enabled);
+        if (s.node_stop_done_minutes !== undefined) {
+          const n = Number(s.node_stop_done_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_done_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=완료 세션을 끄지 않음)`);
+          patchIn.node_stop_done_minutes = Math.floor(n);
+        }
+        if (s.node_stop_asking_minutes !== undefined) {
+          const n = Number(s.node_stop_asking_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_asking_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=질의 중인 세션을 끄지 않음)`);
+          patchIn.node_stop_asking_minutes = Math.floor(n);
+        }
+        if (s.node_stop_unknown_minutes !== undefined) {
+          const n = Number(s.node_stop_unknown_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_unknown_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=상태를 모르는 세션을 끄지 않음)`);
+          patchIn.node_stop_unknown_minutes = Math.floor(n);
+        }
         patch.session_reclaim_policy = patchIn;
       }
       // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
@@ -738,6 +756,10 @@ export const runtimeConfigCapabilities: Capability[] = [
         restore_same_id: z.boolean().optional().describe("복원을 같은 세션 id 로 한다(#4694) — 세션 컨테이너 배포(매니지드)에서만 본다. 기본 켬. 같은 id 면 주소·장부 행·이름·핀·소속·미전달 지시가 그대로 이어진다. false 면 종전(새 id + 옛 행 이정표). ⚠ 브로커의 «자리 이름»(#4693)을 전제한다 — 브로커를 그 이전으로 되돌릴 때는 끈다(같은 id 의 옛 컨테이너가 철거와 겹친다). 셀프호스트는 이 값과 무관하게 늘 같은 id 다"),
         stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("하네스 종료 규칙(#4695) — 턴이 끝나고(질의 아님 · 백그라운드 작업·예약 깨움 없음) 아무도 안 보는 채 이 분이 지나면 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 3. 세션 컨테이너 배포(매니지드)에서만 돈다"),
         stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("하네스 종료 규칙(#4695) — 하네스가 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다. 끄기 전에 그 질문·선택지를 남겨 다시 열 때 대화창에 보여 준다. 0=끔. 기본 60"),
+        node_stop_enabled: z.boolean().optional().describe("원격 PC 하네스 종료 규칙(#5043) — 구성원이 연결한 컴퓨터(노드)의 세션에도 위 규칙을 적용할지의 워크스페이스 기본값. 기본 끔. 컴퓨터마다 따로 켜고 끌 수 있다(/api/ui/nodes/:id/stop-rule — 비운 칸은 이 값을 따른다)"),
+        node_stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 턴이 끝나고 아무도 안 보는 채 이 분이 지나면 그 컴퓨터의 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 30"),
+        node_stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다(질문은 남겨 다시 열 때 보여 준다). 0=끔. 기본 180"),
+        node_stop_unknown_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 상태를 모르는 세션(턴 끝 보고에 예약 셈이 없음 · 마지막 보고가 작업 중에서 멈춤)의 안전망. 마지막 활동·안 보기 시작 뒤 이 분이 지나면 끈다(살아 있는 셸 작업·도는 턴·질문은 집행 직전에 다시 재서 지킨다). 0=끔. 기본 1440"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택). ⚠ 두 축은 스코프가 다르다(#2509): 유휴는 워크스페이스별로, 압박은 박스 전역으로 한 번 돈다 — pressure_* 를 켠다는 것은 «박스가 벼랑에 서면 이 워크스페이스 세션도 걷어도 좋다»는 동의다"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),

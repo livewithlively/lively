@@ -155,6 +155,25 @@ export interface SessionReclaimPolicy {
    *  (T2 «승인 대기 상한 1시간» 결정 — 대기의 절반은 3분 안에 답이 나고 24% 가 1시간을 넘는다).
    */
   stop_asking_minutes: number;
+  /**
+   * #5043 **원격 PC(멤버 노드) 하네스 종료 규칙 — 켜기**. 위 N·M 규칙을 구성원이 연결한 컴퓨터의 세션에도 적용한다(sessions/node-stop-rule.ts).
+   *  워크스페이스 기본값이고, 컴퓨터마다 따로 정할 수 있다(org_node.stop_rule — 비운 칸은 이 값을 따른다).
+   *  기본 꺼짐 — 처음엔 컴퓨터별로 켜서 실측하고 넓힌다(상민님 2026-10-27 «이 맥미니 먼저 켜고 실측 → 다른 원격 PC 로»).
+   */
+  node_stop_enabled: boolean;
+  /**
+   * #5043 원격 PC — 완료 뒤 끄기(분). 매니지드(3)보다 넉넉하다: 매니지드의 3분은 세션마다 컨테이너 메모리 1GB 를 잡아 두는 비용 때문이고,
+   *  원격 PC 는 «며칠씩 쌓이는 것» 이 문제다(실측 2026-10-27 맥미니: 이틀 넘게 논 세션 23개 · 스왑 20/21GB). 0 = 끔. 기본 30.
+   */
+  node_stop_done_minutes: number;
+  /** #5043 원격 PC — 질의(승인·선택 대기) 뒤 끄기(분). 자리를 비운 사이 질문이 오래 남는 일이 PC 에서 더 흔하다. 0 = 끔. 기본 180. */
+  node_stop_asking_minutes: number;
+  /**
+   * #5043 원격 PC — **상태 모름 안전망**(분). claude 의 턴 끝 보고에 예약 셈이 없거나(옛 훅) 마지막 보고가 «작업 중» 에서 멈춘 세션은 위 두 값으로는
+   *  영영 안 꺼진다 — 매니지드는 그런 세션을 옛 회수 시계가 맡지만 원격 PC 엔 그 시계가 없다. 마지막 활동·안 보기 시작 뒤 이만큼 지나면 끈다
+   *  (살아 있는 셸 작업·도는 턴·질문은 집행 직전에 다시 재서 지킨다). 0 = 끔. 기본 1440(24시간).
+   */
+  node_stop_unknown_minutes: number;
 }
 
 export type SessionReclaimPolicyPatch = Partial<SessionReclaimPolicy>;
@@ -176,6 +195,10 @@ export const DEFAULT_SESSION_RECLAIM_POLICY: SessionReclaimPolicy = {
   restore_same_id: true,     // #4694 — 기본 켬(T3 자리 이름 전 테넌트 롤아웃 뒤 · 2026-10-15). 셀프호스트는 이 값과 무관하게 늘 같은 id
   stop_done_minutes: 3,      // #4695 T5 — 완료+안 봄 3분 뒤 하네스를 끈다(매니지드만 — 셀프호스트는 규칙 자체가 안 돈다)
   stop_asking_minutes: 60,   // #4695 T5 — 질의+안 봄 60분 뒤(T2 승인 대기 상한 1시간)
+  node_stop_enabled: false,  // #5043 — 원격 PC 규칙은 기본 꺼짐(컴퓨터별로 켜서 실측 → 넓힘)
+  node_stop_done_minutes: 30,      // #5043 — 원격 PC 완료+안 봄 30분
+  node_stop_asking_minutes: 180,   // #5043 — 원격 PC 질의+안 봄 3시간
+  node_stop_unknown_minutes: 1440, // #5043 — 원격 PC 상태 모름 안전망 24시간
 };
 
 // 관리탭·검증 노출 상수 — 0(끔) ~ 43200분(30일; 그 이상은 사실상 안 켠 것).
@@ -264,6 +287,11 @@ const policy = definePolicy<SessionReclaimPolicy>({
     // #4695 T5 — 신규 노브라 loose 금지(0='끔'이 의미 있는 선택). env 시드는 게이트웨이 전체 기본값의 자리, 관리탭은 워크스페이스별.
     stop_done_minutes: { env: "LIVELY_SESSION_STOP_DONE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
     stop_asking_minutes: { env: "LIVELY_SESSION_STOP_ASKING_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    // #5043 — 원격 PC 규칙. 같은 규약(신규 노브라 loose 금지). env 는 게이트웨이 전체 기본값, 관리탭은 워크스페이스별, 컴퓨터별 값은 org_node.stop_rule.
+    node_stop_enabled: { kind: "bool", env: "LIVELY_NODE_STOP_ENABLED" },
+    node_stop_done_minutes: { env: "LIVELY_NODE_STOP_DONE_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    node_stop_asking_minutes: { env: "LIVELY_NODE_STOP_ASKING_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
+    node_stop_unknown_minutes: { env: "LIVELY_NODE_STOP_UNKNOWN_MIN", min: RECLAIM_TTL_MIN_MIN, max: RECLAIM_TTL_MIN_MAX },
   },
 });
 

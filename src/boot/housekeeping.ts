@@ -419,6 +419,12 @@ function startBackgroundSweeps(): void {
       .then(() => reapPressureSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
+  // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 셀프호스트에도 구성원 컴퓨터가 붙는다 — 매니지드의 요청 정비표와 같은 1분.
+  //  컴퓨터마다 켜야 돈다(기본 꺼짐 · org_node.stop_rule). 노드가 없으면 곧바로 돌아간다(DB 무접촉).
+  //  ⚠ 부팅 직후엔 돌리지 않는다 — 노드가 다시 붙어 스냅샷을 올리기 전(그리고 보는 중 판정이 «모름» 인 45초)엔 판정할 재료가 없다.
+  setInterval(() => {
+    void perTenant("node-stop-rule", () => import("../sessions/node-stop-rule.js").then(({ sweepNodeStopRule }) => sweepNodeStopRule()));
+  }, 60_000).unref();
   // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.

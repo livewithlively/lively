@@ -12,7 +12,10 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, revokeNodeToken, rotateNodeToken, setNodeEnabled, setNodeShared, loadRecentLinkEvents, type OrgNode } from "./store.js";
+import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, revokeNodeToken, rotateNodeToken, setNodeEnabled, setNodeShared, setNodeStopRule, loadRecentLinkEvents, type OrgNode } from "./store.js";
+import { effectiveNodeStopRule, mergeNodeStopRuleOverride, parseNodeStopRuleOverride, type NodeStopRuleEffective } from "../sessions/node-stop-rule-policy.js";   // #5043
+import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "../sessions/session-reclaim-policy.js";
+import { getRuntimeConfig } from "../org/store.js";
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
 import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo, shareChangeVerdict } from "./node-access.js";
@@ -81,14 +84,27 @@ interface NodeView extends Omit<OrgNode, "token_hash"> {
    *  아니면 null. 실측에서 이 상태가 며칠간 무신호로 지속돼 하네스 검출이 통째로 실패했다 — 그 침묵을 메우는 자리다.
    */
   stale_note: string | null;
+  /** #5043 — 이 컴퓨터에 직접 정한 하네스 종료 규칙 값(거른 것 — 칸이 없으면 워크스페이스 기본값을 따른다). */
+  stop_rule: ReturnType<typeof parseNodeStopRuleOverride>;
+  /** #5043 — 실제로 적용되는 값과 출처. 워크스페이스 정책을 못 읽은 응답(토큰 회전 등)에선 null. */
+  stop_rule_effective: NodeStopRuleEffective | null;
+  /** #5043 — 워크스페이스 기본값(비운 칸이 따르는 값 — 화면이 입력칸 자리표시로 보여 준다). 못 읽었으면 null. */
+  stop_rule_workspace: NodeStopRuleEffective | null;
+}
+/** #5043 — 워크스페이스의 하네스 종료 규칙 기본값(정비와 같은 캐시로 읽는다 — 화면과 실제가 갈리지 않게). 못 읽으면 null(화면은 값을 비운다). */
+async function loadNodeStopPolicy(): Promise<SessionReclaimPolicy | null> {
+  return effectiveSessionReclaimPolicy(async () => normalizeSessionReclaimPolicy((await getRuntimeConfig()).session_reclaim_policy))
+    .catch(() => null);
 }
 function toView(
   n: OrgNode,
   live: Map<string, { online: boolean; sessions: number }>,
   linkEvents?: Map<string, LinkEvent[]>,
   now: number = Date.now(),
+  stopPolicy: SessionReclaimPolicy | null = null,
 ): NodeView {
-  const { token_hash: _hash, ...rest } = n; // 토큰 해시는 응답에 싣지 않는다(상관추적은 토큰탭에서)
+  const { token_hash: _hash, stop_rule: stopRaw, ...rest } = n; // 토큰 해시는 응답에 싣지 않는다(상관추적은 토큰탭에서)
+  const stopRule = parseNodeStopRuleOverride(stopRaw);
   const lv = live.get(n.id);
   const served = servedAgentVersion();
   const diag = diagnoseLink(linkEvents?.get(n.id) ?? [], now);   // #1849
@@ -115,6 +131,9 @@ function toView(
     self_note: isSelfNode(n.id)
       ? `${selfNodeMessage()} 그래서 이 노드의 연결은 거부되고 있습니다(세션은 '중앙 컴퓨터(기본)' 로 정상 동작합니다).`
       : null,
+    stop_rule: stopRule,
+    stop_rule_effective: stopPolicy ? effectiveNodeStopRule(stopPolicy, stopRule) : null,
+    stop_rule_workspace: stopPolicy ? effectiveNodeStopRule(stopPolicy, null) : null,
   };
 }
 
@@ -140,8 +159,9 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const rows = (await listNodes()).filter((n) => usable
       ? (n.enabled && nodeOpenTo(n, me))
       : (isAdmin(u) || n.owner_member === me));
+    const stopPolicy = await loadNodeStopPolicy();   // #5043 — 컴퓨터마다 실제로 적용되는 하네스 종료 규칙 값
     res.setHeader("Cache-Control", "no-store");
-    res.json({ nodes: rows.map((n) => toView(n, live, linkEvents)) });
+    res.json({ nodes: rows.map((n) => toView(n, live, linkEvents, Date.now(), stopPolicy)) });
   }));
 
   // 등록 — member=본인, worker=admin. 평문 토큰은 이 응답 1회.
@@ -238,6 +258,24 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     await setNodeShared(n.id, verdict.shared);
     logger.info({ node: n.id, by: me, shared: verdict.shared }, verdict.shared ? "노드 공유 지정" : "노드 공유 해제");
     res.json({ ok: true, id: n.id, shared: verdict.shared });
+  }));
+
+  // #5043 — 이 컴퓨터의 하네스 종료 규칙 값(켜기 · 완료 뒤 · 질의 뒤 · 상태 모름 안전망 — 분). 본문의 칸만 바뀌고(null = 워크스페이스
+  //  기본값으로 되돌림) 안 보낸 칸은 그대로다. 주인 또는 관리자 — «연결 차단» 과 같은 문(requireOwn): 그 컴퓨터의 자원을 어떻게 쓸지는
+  //  그 컴퓨터 주인이 정한다. 저장 뒤 실제 적용값을 돌려준다(화면이 그대로 그린다 — 다음 정비 판(1분 안)부터 적용된다).
+  app.post("/api/ui/nodes/:id/stop-rule", auth, wrap(async (req, res) => {
+    const n = await requireOwn(req);
+    const merged = mergeNodeStopRuleOverride(parseNodeStopRuleOverride(n.stop_rule), req.body ?? {});
+    if (!merged.ok) throw new HttpError(400, merged.message);
+    await setNodeStopRule(n.id, merged.value ? { ...merged.value } : null);
+    const policy = await loadNodeStopPolicy();
+    logger.info({ node: n.id, by: idOf(userOf(req)), stop_rule: merged.value }, "노드 하네스 종료 규칙 변경");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true, id: n.id, stop_rule: merged.value,
+      stop_rule_effective: policy ? effectiveNodeStopRule(policy, merged.value) : null,
+      stop_rule_workspace: policy ? effectiveNodeStopRule(policy, null) : null,
+    });
   }));
 
   app.delete("/api/ui/nodes/:id", auth, wrap(async (req, res) => {

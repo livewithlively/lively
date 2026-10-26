@@ -177,6 +177,14 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       rule.logStopRuleTick(r);
       return r;
     });
+    // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 주로는 요청에 얹은 정비(1분)와 마감 깨움이 돌리고, 이 틱(5분)은 받침이다.
+    //  노드가 없는 워크스페이스는 곧바로 «no-nodes» 를 돌려준다(DB 무접촉). 판은 워크스페이스당 한 줄(컴퓨터별 건너뛴 이유 · 판정 분포)을 남긴다.
+    await step("node-stop-rule", async () => {
+      const rule = await import("./sessions/node-stop-rule.js");
+      const r = await rule.sweepNodeStopRule();
+      rule.logNodeStopRuleTick(r);
+      return r;
+    });
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —

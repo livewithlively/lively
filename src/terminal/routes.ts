@@ -2218,8 +2218,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!ns?.node) throw new HttpError(404, "세션 상태 기록이 없습니다");   // #2592 — 좌표 없는 행 = 이 박스 세션(릴레이 대상 아님)
     if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
+    //  #5043 — 턴 끝의 예약 셈(sched — 다음 깨움·반복 예약)도 넘긴다. 종전엔 이 갈래만 bg 까지 넘기고 sched 를 버려, 노드 세션의 보고에
+    //   예약 칸이 영영 없었다(실측 2026-10-27 맥미니 `idle 1792861612 bg=0`) — 원격 PC 하네스 종료 규칙이 claude 세션을 전부 «예약 모름» 으로
+    //   읽는다. 노드는 이미 받는다(session-ops markActive — 모르는 옛 노드는 그 칸을 버린다).
     if (nodeSupports(ns.node.id, "markActive")) {
-      const relay = await nodeRpc(ns.node.id, "markActive", bg === null ? { id, state: phase } : { id, state: phase, bg })
+      const relay = await nodeRpc(ns.node.id, "markActive", { id, state: phase, ...(bg === null ? {} : { bg }), ...(sched ? { sched } : {}) })
         .catch((e) => { logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"); return null; });
       // #1842 — 노드가 돌려준 전이를 그대로 민다. 구 노드는 change 를 안 보내므로 undefined → 폴링이 커버한다(무회귀).
       const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;

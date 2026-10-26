@@ -86,19 +86,30 @@ export interface StopFacts {
 }
 
 export type StopState = "done" | "asking" | "exited";
+/**
+ * `net-clock` — #5043 상태 모름 안전망의 시계가 가는 중(StopMinutes.unknownMin). 매니지드는 그 값을 안 주므로 이 이유가 안 나온다.
+ */
 export type KeepWhy =
   | "unobserved" | "managed" | "no-state" | "kind" | "harness" | "runtime" | "no-conv"
-  | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock";
+  | "viewing" | "view-unknown" | "working" | "background" | "scheduled" | "sched-unknown" | "off" | "no-clock" | "clock" | "net-clock";
 /** 판정은 끄라는데 집행이 멈춘 이유(stopOne · 집행 상한 · 작업 판별 · 한도 자동 이어감 대기). */
 export type HoldWhy =
   | "jobs" | "jobs-unknown" | "turn-now" | "answered" | "asking-now" | "viewing-now" | "capped" | "failed" | "busy-sweep"
   | "limit-wait" | "limit-unknown";
+/** stop 의 `net` = #5043 상태 모름 안전망이 끈다(StopMinutes.unknownMin) — 그 밖의 끄기에는 이 칸이 아예 없다. */
 export type StopVerdict =
   | { act: "keep"; why: KeepWhy; state?: StopState; dueAt?: number }
-  | { act: "stop"; state: StopState; since: number; dueAt: number };
+  | { act: "stop"; state: StopState; since: number; dueAt: number; net?: true };
 
-/** 끄는 시각 — 분. 0 이면 그 상태는 끄지 않는다. */
-export interface StopMinutes { doneMin: number; askingMin: number }
+/**
+ * 끄는 시각 — 분. 0 이면 그 상태는 끄지 않는다.
+ *  unknownMin(#5043 · 원격 PC 전용) — claude 가 턴 끝 보고에 예약 셈을 안 실은 세션(옛 훅 · 마지막 보고가 «작업 중» 에서 멈춘 세션)은
+ *   종전대로면 상한 없이 «예약 모름» 으로 남는다. 매니지드는 그런 세션을 옛 회수 시계가 맡지만(sessionsUnderStopRule 머리말) 원격 PC 엔
+ *   그 시계가 없어(session-reaper.ts «범위 = 중앙 세션만») 영영 안 꺼진다. 이 값을 주면 마지막 활동·안 보기 시작 뒤 이만큼 지난 그 세션을
+ *   «완료» 로 보고 끈다 — 집행 직전 화면 재확인(도는 턴 · 질문)과 작업 판정(살아 있는 셸 작업)은 그대로 지킨다.
+ *   없거나 0 이면 종전과 같다(매니지드는 주지 않는다 — 무회귀).
+ */
+export interface StopMinutes { doneMin: number; askingMin: number; unknownMin?: number }
 
 /**
  * (순수) 이 세션을 지금 끄나 — 사양 엣지 표 V1~V27(session-stop-rule.test.ts). 위에서부터 먼저 걸리는 것이 답이다.
@@ -131,20 +142,33 @@ export function stopVerdict(f: StopFacts, view: Pick<ViewState, "viewing" | "unk
     }
     //  claude 는 예약(루프·반복 예약)을 갖는다 — 턴 끝 보고가 그걸 셌을 때만 «완료» 다. 옛 훅·옛 세션 호스트가 낸 보고엔 wake 칸이 없다.
     //  codex·agy 는 예약 도구가 없다 — 화면이 대기(idle)면 완료다(살아 있는 셸 작업은 집행 직전 프로세스 판정이 지킨다).
-    if (f.harness === "claude" && !(r?.phase === "idle" && r.wake !== undefined)) return { act: "keep", why: "sched-unknown" };
+    //  #5043 — 상태 모름 안전망(unknownMin)이 있으면 그 시계로 «완료» 처럼 판정한다(StopMinutes 머리말). 없으면 종전대로 남긴다.
+    if (f.harness === "claude" && !(r?.phase === "idle" && r.wake !== undefined)) {
+      const net = p.unknownMin ?? 0;
+      return net > 0 ? stopClock(f, view, "done", net, nowSec, true) : { act: "keep", why: "sched-unknown" };
+    }
     state = "done";
   }
-  // ④ 시계 — 시작 = 마지막 활동(없으면 마지막 보고 → 만든 시각)과 «안 보기 시작» 중 나중. «안 보기 시작» 은 이 게이트웨이가 본 끝과
-  //    tmux 에 새겨진 마지막 열람(+ 도장 TTL) 중 나중이다(게이트웨이를 다시 띄워도 끝난 시각을 안다).
   const min = state === "asking" ? p.askingMin : p.doneMin;
   if (!(min > 0)) return { act: "keep", why: "off", state };
-  const base = f.lastActive || (r?.at ?? 0) || f.created || 0;
+  return stopClock(f, view, state, min, nowSec, false);
+}
+
+/**
+ * ④ 시계 — 시작 = 마지막 활동(없으면 마지막 보고 → 만든 시각)과 «안 보기 시작» 중 나중. «안 보기 시작» 은 이 게이트웨이가 본 끝과
+ *  tmux 에 새겨진 마지막 열람(+ 도장 TTL) 중 나중이다(게이트웨이를 다시 띄워도 끝난 시각을 안다).
+ *  상태 모름 안전망(net)도 **같은 시계**를 쓴다 — 다른 것은 분과 이유 이름뿐이다(#5043).
+ */
+function stopClock(
+  f: StopFacts, view: Pick<ViewState, "endedAtMs">, state: StopState, min: number, nowSec: number, net: boolean,
+): StopVerdict {
+  const base = f.lastActive || (f.lastReport?.at ?? 0) || f.created || 0;
   const viewEnd = Math.max(Math.floor((view.endedAtMs || 0) / 1000), f.lastViewed > 0 ? f.lastViewed + SEEN_TTL_SEC : 0);
   const since = Math.max(base, viewEnd);
   if (!(since > 0)) return { act: "keep", why: "no-clock", state };
   const dueAt = since + min * 60;
-  if (nowSec < dueAt) return { act: "keep", why: "clock", state, dueAt };
-  return { act: "stop", state, since, dueAt };
+  if (nowSec < dueAt) return { act: "keep", why: net ? "net-clock" : "clock", state, dueAt };
+  return net ? { act: "stop", state, since, dueAt, net: true } : { act: "stop", state, since, dueAt };
 }
 
 // ── 옛 회수 시계와의 경계 (#4697 T7) ─────────────────────────────────────────────────────────────────────────────────
@@ -266,6 +290,15 @@ export interface StopRuleDeps {
   now: () => number;
   /** 다음 마감에 이 테넌트를 다시 판정하도록 깨움을 건다(시험은 끈다) */
   arm: (dueAtSec: number) => void;
+  /**
+   * #5043 — 한 판의 자리 이름(겹침 막기 · 작업/한도 대기 보호의 열쇠). 기본은 테넌트. 원격 PC 판은 «테넌트 + 그 컴퓨터» 로 준다 —
+   *  같은 테넌트의 매니지드 판과 컴퓨터 판들이 서로를 «이미 도는 중» 으로 막지 않게.
+   */
+  scopeKey?: () => string;
+  /** #5043 — 정책에서 분을 읽는 법. 기본은 stopMinutesOf(매니지드 N·M). 원격 PC 판은 그 컴퓨터의 유효값(상태 모름 안전망 포함)을 준다. */
+  minutesOf?: (policy: Partial<SessionReclaimPolicy>) => StopMinutes;
+  /** #5043 — 끈 판 로그에 함께 남길 칸(원격 PC 판은 그 컴퓨터 id). */
+  logCtx?: Record<string, unknown>;
 }
 
 /** 한 판의 결과 — CP 하우스키핑 틱·요청 정비 로그가 이 모양을 그대로 찍는다. */
@@ -274,8 +307,11 @@ export interface StopRuleResult {
   why?: string;
   doneMin?: number;
   askingMin?: number;
+  /** #5043 — 상태 모름 안전망(분). 원격 PC 판에만 있다. */
+  unknownMin?: number;
   scanned: number;
-  stopped: Array<{ id: string; state: StopState; idleSec: number; draft: boolean; question: StopQuestion["kind"] | null }>;
+  /** net = #5043 상태 모름 안전망이 끈 세션(그 밖엔 칸이 없다). */
+  stopped: Array<{ id: string; state: StopState; idleSec: number; draft: boolean; question: StopQuestion["kind"] | null; net?: true }>;
   /** 남겨 둔 이유별 수 */
   kept: Partial<Record<KeepWhy | HoldWhy, number>>;
   /**
@@ -371,7 +407,7 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     if (!o || idleSec > o.idleSec) oldest[k] = { id, idleSec: Math.max(0, Math.round(idleSec)) };
   };
   if (!d.enabled()) return { enabled: false, why: "self-hosted", scanned: 0, stopped: [], kept };
-  const key = tenantKey();
+  const key = d.scopeKey ? d.scopeKey() : tenantKey();
   if (inFlight.has(key)) { count("busy-sweep"); return { enabled: true, why: "in-flight", scanned: 0, stopped: [], kept }; }
   inFlight.add(key);
   try {
@@ -379,13 +415,13 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     const policy = over.loadPolicy
       ? normalizeSessionReclaimPolicy(await over.loadPolicy())
       : await effectiveSessionReclaimPolicy(async () => normalizeSessionReclaimPolicy(await d.loadPolicy()));
-    const mins = stopMinutesOf(policy);
-    if (!(mins.doneMin > 0) && !(mins.askingMin > 0)) return { enabled: false, why: "policy-off", ...mins, scanned: 0, stopped: [], kept };
+    const mins = d.minutesOf ? d.minutesOf(policy) : stopMinutesOf(policy);
+    if (!(mins.doneMin > 0) && !(mins.askingMin > 0) && !((mins.unknownMin ?? 0) > 0)) return { enabled: false, why: "policy-off", ...mins, scanned: 0, stopped: [], kept };
     const [live, states, managed] = await Promise.all([d.listLive(), d.listStates(), d.listManaged()]);
     const byId = new Map(states.map((s) => [s.id, s]));
     const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
     const nowSec = Math.floor(d.now() / 1000);
-    const due: Array<{ s: SessionInfo; state: StopState; since: number }> = [];
+    const due: Array<{ s: SessionInfo; state: StopState; since: number; net: boolean }> = [];
     let nextDue = Infinity;
     //  #4783 후속 — 관측한 실행 상태가 바뀌었으면 적는다(세션이 어떤 길로 꺼져도 이 값이 남는다). run 이 그대로면 안 쓴다(매 틱 전수 UPDATE 를 피한다).
     const runWrites: Array<Promise<unknown>> = [];
@@ -398,10 +434,10 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
       if (v.act === "keep") {
         count(v.why);
         noteOldest(v.why, s.id, nowSec - (f.lastActive || (f.lastReport?.at ?? 0) || f.created || nowSec));
-        if (v.why === "clock" && v.dueAt) nextDue = Math.min(nextDue, v.dueAt);
+        if ((v.why === "clock" || v.why === "net-clock") && v.dueAt) nextDue = Math.min(nextDue, v.dueAt);
         continue;
       }
-      due.push({ s, state: v.state, since: v.since });
+      due.push({ s, state: v.state, since: v.since, net: v.net === true });
     }
     if (runWrites.length) await Promise.allSettled(runWrites);   // best-effort — 실행 상태 기록이 집행을 막지 않는다
     //  ⑥ 하네스가 띄운 작업(셸·빌드)이 살아 있으면 끄지 않는다 — 회수기와 같은 판별자(#2652). 판정 자체가 실패하면 **이번 판은 아무것도 안 끈다**
@@ -427,13 +463,13 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     if (toJudge.length) {
       try { verdicts = await d.jobVerdicts(new Set(toJudge.map((x) => x.s.id))); }
       catch (e) {
-        logger.warn({ err: e, candidates: toJudge.length }, "하네스 종료 규칙: 작업 판정 실패 — 이번 판은 끄지 않는다");
+        logger.warn({ err: e, candidates: toJudge.length, ...(d.logCtx ?? {}) }, "하네스 종료 규칙: 작업 판정 실패 — 이번 판은 끄지 않는다");
         for (const x of toJudge) { count("jobs-unknown"); noteOldest("jobs-unknown", x.s.id, nowSec - x.since); }
         toJudge.length = 0;
       }
     }
     const stopped: StopRuleResult["stopped"] = [];
-    for (const { s, state, since } of toJudge) {
+    for (const { s, state, since, net } of toJudge) {
       if (verdicts.jobs.has(s.id)) { count("jobs"); noteOldest("jobs", s.id, nowSec - since); jobHold.set(holdKey(s.id), nowMs + JOB_HOLD_MS); continue; }
       if (verdicts.unknown.has(s.id)) { count("jobs-unknown"); noteOldest("jobs-unknown", s.id, nowSec - since); continue; }
       if (stopped.length >= MAX_STOPS_PER_SWEEP) { count("capped"); noteOldest("capped", s.id, nowSec - since); capped = true; continue; }
@@ -446,11 +482,11 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
           if (out.skip === "limit-unknown") limitHold.set(holdKey(s.id), { until: nowMs + QUOTA_UNKNOWN_RETRY_MS, why: "limit-unknown" });
           continue;
         }
-        stopped.push({ id: s.id, state, idleSec: Math.max(0, nowSec - since), draft: !!out.note.draft, question: out.note.question?.kind ?? null });
+        stopped.push({ id: s.id, state, idleSec: Math.max(0, nowSec - since), draft: !!out.note.draft, question: out.note.question?.kind ?? null, ...(net ? { net: true as const } : {}) });
       } catch (e) {
         count("failed");
         noteOldest("failed", s.id, nowSec - since);
-        logger.warn({ err: e, id: s.id, state }, "하네스 종료 규칙: 끄기 실패(다음 판에 다시)");
+        logger.warn({ err: e, id: s.id, state, ...(d.logCtx ?? {}) }, "하네스 종료 규칙: 끄기 실패(다음 판에 다시)");
       }
     }
     //  상한에 걸려 남긴 세션은 곧바로 다음 판이 잇는다(깨움 하한 5초).
@@ -464,7 +500,7 @@ export async function sweepSessionStopRule(over: Partial<StopRuleDeps> = {}): Pr
     };
     //  끈 판은 무엇을 왜 껐는지 남긴다(#2652 교훈 — 개수만 남긴 로그는 사후에 아무것도 못 판다). 아무것도 안 끈 판은 조용히(30초마다 돈다).
     //  #4697 — 어느 워크스페이스의 판인지 싣는다(7일 측정이 워크스페이스별로 센다). 결과 모양(CP 가 읽는다)은 그대로 둔다.
-    if (stopped.length) logger.info({ tenant: currentTenant()?.slug ?? null, ...result }, "하네스 종료 규칙: 하네스를 껐다(쪽지를 남기고 tmux 종료 — 행 보존 · 다시 열면 이어진다)");
+    if (stopped.length) logger.info({ tenant: currentTenant()?.slug ?? null, ...(d.logCtx ?? {}), ...result }, "하네스 종료 규칙: 하네스를 껐다(쪽지를 남기고 tmux 종료 — 행 보존 · 다시 열면 이어진다)");
     return result;
   } finally {
     inFlight.delete(key);

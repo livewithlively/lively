@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { withTenant } from "../org/tenant-context.js";
 import { JOB_SESSION_ID_RE } from "../agent-jobs/plan.js";
 import { outboxRequestSweepMiddleware, resetSweepDebounce, shouldSweep, jobIntervalMs, sweptKeys, sweptAt,
-  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS, META_HEAL_SWEEP_MS, CONV_INDEX_SWEEP_MS, STOP_RULE_SWEEP_MS,
+  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS, META_HEAL_SWEEP_MS, CONV_INDEX_SWEEP_MS, STOP_RULE_SWEEP_MS, NODE_STOP_RULE_SWEEP_MS,
   type SweepJob } from "./outbox-request-sweep.js";
 
 let pass = 0;
@@ -223,8 +223,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //  #4486 — 앱 백그라운드 작업 감시(app-job-sweep)와 그 기록 보존(app-job-prune)이 테넌트 정비로 둘 늘었다. 작업 행 · 동시 상한이 그
   //   워크스페이스 것이라(RLS) 그 컨텍스트 안에서만 돌고, 사람이 없을 때 기다린 작업을 부르고 끊긴 작업을 끝내는 길이 요청(CP 60초 · 검사 층의
   //   박동)에 얹는 것뿐이다. DB 행과 함수 비동기 부르기만 한다(함수 안에서 도는 작업을 멈추지 않는다 — 파괴적 동작 없음).
-  assert.equal(perTenant.length, 21, "테넌트 정비 스물하나(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존)");
-  assert.equal(SWEEP_JOBS.length, 22, "전역 하나(task-dispatch)가 더 있다");
+  //  #5043 — 원격 PC 하네스 종료 규칙(node-stop-rule)이 테넌트 정비로 하나 늘었다. 노드 스냅샷·장부·정책이 그 워크스페이스 것이고,
+  //   시계가 분 단위(완료 기본 30분)라 CP 틱(5분)만으로는 거칠다 — 위 하네스 종료 규칙과 같은 파괴적 예외의 같은 판단([G4b]).
+  assert.equal(perTenant.length, 22, "테넌트 정비 스물둘(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존)");
+  assert.equal(SWEEP_JOBS.length, 23, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -248,6 +250,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "conv-index": CONV_INDEX_SWEEP_MS,               // #4517 — 새 정비. 밀린 대화 색인을 1분마다 한 판(판마다 상한)
     "session-card": CONV_INDEX_SWEEP_MS,             // #4530 — 새 정비. 대화 색인과 같은 박자로 그 뒤를 따라간다(판마다 30개 · 6초)
     "session-stop-rule": STOP_RULE_SWEEP_MS,         // #4695 T5 — 새 정비. 대기 알림과 같은 30초(시계가 분 단위 — «N분 ± 이 주기»)
+    "node-stop-rule": NODE_STOP_RULE_SWEEP_MS,       // #5043 — 새 정비. 컴퓨터마다 RPC 를 묻는 판이라 1분(완료 기본 30분 시계엔 넉넉하다)
     "agent-job-sweep": STOP_RULE_SWEEP_MS,           // #4490 — 새 정비. 판 무응답 상한(90초)보다 짧아야 끊긴 작업이 제때 끝난다
     "app-folders": SWEEP_MIN_INTERVAL_MS,            // #4786 — 새 정비. 사건 경로가 놓친 앱 폴더 맞추기를 아웃박스 회수와 같은 5분마다 다시 본다
     "ai-run-sweep": STOP_RULE_SWEEP_MS,              // #4488 — 새 정비. 작업 감시와 같은 박자로 그 뒤를 따라간다(작업이 끝난 뒤 실행 행을 맞춘다)
@@ -280,15 +283,18 @@ t("[G4] 파괴적 정비(reapIdleSessions)는 표에 없다 — tmux 를 죽이�
   //  ⚠ 그 짝인 백필은 **있어야** 한다 — 없으면 그 세션들이 회수 면역이면서 복원도 안 된다.
   assert.ok(SWEEP_JOBS.some((j) => j.key === "session-state-backfill"), "회수 전 백필은 올려야 한다");
 });
-t("[G4b] 컨테이너를 끄는 정비는 둘 — 하네스 종료 규칙(#4690 · 사람 세션) · 작업 컨테이너 감시(#4490 · `job-` 만). 셋째가 생기면 새 판단이다", () => {
+t("[G4b] 하네스·컨테이너를 끄는 정비는 셋 — 하네스 종료 규칙(#4690 · 사람 세션) · 원격 PC 하네스 종료 규칙(#5043 · 그 후속) · 작업 컨테이너 감시(#4490 · `job-` 만). 넷째가 생기면 새 판단이다", () => {
   const src = readFileSync(SRC, "utf8");
   const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
   assert.ok(SWEEP_JOBS.some((j) => j.key === "session-stop-rule" && (j.scope ?? "tenant") === "tenant"), "테넌트 정비로 올라가 있어야 한다");
   assert.match(table, /#4690/, "예외의 근거(그 판단의 주인)를 표 주석에 남긴다");
+  //  #5043 — 원격 PC 판도 같은 판단의 후속이다(상민님 2026-10-27 «원격 PC 도 매니지드처럼»). 근거를 표 주석에 남긴다.
+  assert.ok(SWEEP_JOBS.some((j) => j.key === "node-stop-rule" && (j.scope ?? "tenant") === "tenant"), "원격 PC 판도 테넌트 정비다");
+  assert.match(table, /#5043/, "원격 PC 판의 근거를 표 주석에 남긴다");
   //  끄는 정비가 셋이 되면 그건 새 판단이다 — 이 시험이 먼저 빨개져야 한다. 매처는 두 꼴(stop·reap·kill · agent-job)을 다 잡는다
   //   (종전 매처는 `agent-job-sweep` 을 못 잡아 «하나» 가 둘이 된 뒤에도 참이었다 — 격리 리뷰).
   const killers = SWEEP_JOBS.filter((j) => /stop|reap-idle|idle-reap|kill|agent-job/.test(j.key)).map((j) => j.key).sort();
-  assert.deepEqual(killers, ["agent-job-sweep", "session-stop-rule"]);
+  assert.deepEqual(killers, ["agent-job-sweep", "node-stop-rule", "session-stop-rule"]);
 });
 t("[G4c] 작업 컨테이너 감시(#4490)는 테넌트 정비다 — 걷는 것은 자기가 띄운 `job-` 컨테이너뿐(행동은 agent-jobs service.test R3 · launch.test K1)", () => {
   const src = readFileSync(SRC, "utf8");
