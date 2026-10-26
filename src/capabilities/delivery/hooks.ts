@@ -153,8 +153,13 @@ export const hooksCapabilities: Capability[] = [
         content_hash: h.content_hash, timeout_sec: h.timeout_sec,
         // 동시 실행이 켜졌으면 러너가 sort 가 같은 훅을 한 묶음으로 동시에 돌린다. 구 러너는 이 필드를 무시하고 종전처럼 차례로 돈다.
         sort: h.sort,
-        // concurrent — 조직 설정(runtime_config.hooks.concurrent, 기본 false). 러너는 true 일 때만 겹친다.
-      })), relay_decisions: relay, concurrent: rc.hooks.concurrent === true };
+        // seed — 제품이 배포하는 시드 훅인가(#5034). 러너는 시드 훅끼리는 조직 설정 없이도 같은 sort 를 겹쳐 돌린다(제품 코드라
+        //  서로의 결과에 기대지 않음을 우리가 보장한다). 구 러너는 무시한다.
+        seed: isSeedHook(h.id),
+        // concurrent — 조직 설정(runtime_config.hooks.concurrent, 기본 false). 켜면 직접 만든 훅도 같은 sort 끼리 겹친다.
+      })), relay_decisions: relay, concurrent: rc.hooks.concurrent === true,
+      // runtime — 훅 실행 방식(#5034, 기본 worker = 러너 안의 스레드). process 면 러너가 종전처럼 훅마다 프로세스를 띄운다(되돌리기).
+      runtime: rc.hooks.runtime };
     },
     false, { harness: z.string().optional(), event: z.string().optional() }),   // #1403 — types.ts input 규약
 

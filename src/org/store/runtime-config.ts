@@ -49,10 +49,14 @@ import {
 } from "../../sessions/session-memory-policy.js";
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
+/** 커스텀 훅 실행 방식(#5034) — worker: 러너 안의 스레드(기본) · process: 훅마다 node 프로세스(종전, 되돌리기용). */
+export type HookRuntime = "worker" | "process";
 export interface OrgRuntimeConfig {
   // self_update(#858): 멤버 키트(훅 코드·배선) 자동 업데이트. 끄면 멤버는 수동 업데이트 명령이 유일한 경로.
-  // concurrent — 커스텀 훅 러너(run-custom)가 sort 가 같은 훅을 동시에 돌려도 되는가. 기본 꺼짐(종전처럼 하나씩).
-  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean; concurrent: boolean };
+  // concurrent — 커스텀 훅 러너(run-custom)가 직접 만든 훅도 sort 가 같으면 동시에 돌려도 되는가. 기본 꺼짐(하나씩).
+  //  제품 시드 훅끼리는 이 값과 무관하게 같은 sort 를 겹쳐 돈다(#5034).
+  // runtime — 커스텀 훅 실행 방식(HookRuntime). 기본 worker.
+  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean; concurrent: boolean; runtime: HookRuntime };
   writeback_notice: string | null;
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
@@ -165,6 +169,9 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
       self_update: hooksRaw.self_update !== false,
       // 이건 반대로 **명시적 true 만** 켠다 — 기존 행엔 키가 없고, 없으면 꺼짐(종전 동작)이어야 한다.
       concurrent: hooksRaw.concurrent === true,
+      // #5034 — 훅 실행 방식. **명시적 "process" 만** 종전 방식(훅마다 프로세스)으로 되돌린다 — 없거나 잡값이면 스레드(새 기본).
+      //  기존 행엔 키가 없으므로 마이그레이션 없이 모든 조직이 새 기본을 받는다(고객 전부 — 사람 결정 2026-10-27).
+      runtime: hooksRaw.runtime === "process" ? "process" : "worker",
     },
     writeback_notice: (row?.writeback_notice as string) ?? null,
     work_roots: strArrSafe(row?.work_roots),

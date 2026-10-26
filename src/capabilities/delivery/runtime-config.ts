@@ -25,7 +25,7 @@ import {
 import { kitVersion } from "../../org/delivery/publish.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../../org/delivery/hook-defaults.js";
 import {
-  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision,
+  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision, type OrgRuntimeConfig,
   type UiNavConfig, type UiAnnouncement, type UiProfile, // #1454 S2~S5 — 매니지드 표면 노브
 } from "../../org/store.js";
 import { listAutoApproveToolIds } from "../../org/delivery/auto-approve.js";
@@ -117,7 +117,7 @@ export const runtimeConfigCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/runtime-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const patch: {
-        hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
+        hooks?: Partial<OrgRuntimeConfig["hooks"]>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
         allowed_internal_hosts?: string[];
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
@@ -360,9 +360,18 @@ export const runtimeConfigCapabilities: Capability[] = [
       if (input.hooks !== undefined) {
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
-        patch.hooks = {};
+        const next: Partial<OrgRuntimeConfig["hooks"]> = {};
+        const nextFlags = next as Record<string, unknown>;
         for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update", "concurrent"]) {
-          if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
+          if (k in (h as Record<string, unknown>)) nextFlags[k] = Boolean((h as Record<string, unknown>)[k]);
+        }
+        patch.hooks = next;
+        // #5034 — 실행 방식은 boolean 이 아니라 두 값 중 하나다. 모르는 값을 조용히 기본으로 접지 않고 거부한다(되돌리기 스위치라
+        //  «process 로 바꿨다» 고 믿었는데 오타로 안 바뀌어 있으면 그게 사고다).
+        if ("runtime" in (h as Record<string, unknown>)) {
+          const v = (h as Record<string, unknown>).runtime;
+          if (v !== "worker" && v !== "process") throw new HttpError(400, `hooks.runtime 은 "worker" 또는 "process" 여야 합니다`);
+          next.runtime = v;
         }
       }
       // (#1245) 온톨로지 가이드(제품 소유 섹션) 주입 토글 — 본문은 코드 단일 출처(편집 불가), org 는 이것만 정한다.
@@ -660,8 +669,9 @@ export const runtimeConfigCapabilities: Capability[] = [
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
       hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean(),
-        concurrent: z.boolean().describe("커스텀 훅 러너가 sort 가 같은 훅을 동시에 돌린다(기본 꺼짐 = 하나씩). 같은 sort 의 훅끼리 같은 파일을 쓰거나 서로의 결과에 기대면 켜기 전에 sort 를 나눠라") })
-        .partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트 · concurrent=같은 sort 훅 동시 실행)"),
+        concurrent: z.boolean().describe("직접 만든 커스텀 훅도 sort 가 같으면 러너가 동시에 돌린다(기본 꺼짐 = 하나씩 · 제품 시드 훅끼리는 이 값과 무관하게 겹친다). 같은 sort 의 훅끼리 같은 파일을 쓰거나 서로의 결과에 기대면 켜기 전에 sort 를 나눠라"),
+        runtime: z.enum(["worker", "process"]).describe("커스텀 훅 실행 방식 — worker(기본: 러너 안의 스레드, 훅마다 프로세스를 새로 띄우지 않는다) | process(종전처럼 훅마다 node 프로세스 — 스레드에서 문제가 생긴 조직의 되돌리기용)") })
+        .partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트 · concurrent=직접 만든 훅의 같은 sort 동시 실행 · runtime=훅 실행 방식)"),
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
       // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──
       ui_nav: z.object({ tabs: z.record(z.boolean()).optional().describe("탭 슬러그(data-tab) → 노출 여부. **명시적 false 만** 숨김") })
@@ -827,7 +837,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if ("self_update" in hr && Boolean(hr.self_update) !== (cur.hooks?.self_update !== false)) {
           throw new HttpError(403, "키트 자동 업데이트(self_update)는 구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다");
         }
-        const merged: Record<string, boolean> = { ...(cur.hooks || {}) } as Record<string, boolean>;
+        const merged: Record<string, unknown> = { ...(cur.hooks || {}) };
         for (const k of MEMBER_HOOK_KEYS) if (k in hr) merged[k] = Boolean(hr[k]);
         out.hooks = merged;
       }
@@ -853,7 +863,8 @@ export function injectionView(c: Awaited<ReturnType<typeof getRuntimeConfig>>): 
   hooks: Record<string, boolean>; inject_ontology_guide: boolean; writeback_notice: string | null; write_tools: string[]; pull_tools: string[];
 } {
   return {
-    hooks: { ...(c.hooks || {}) } as Record<string, boolean>,
+    // on/off 스위치만 싣는다 — runtime(#5034 실행 방식)은 값이 문자열인 관리자 설정이라 구성원 주입 화면의 몫이 아니다.
+    hooks: Object.fromEntries(Object.entries(c.hooks || {}).filter(([, v]) => typeof v === "boolean")) as Record<string, boolean>,
     inject_ontology_guide: c.inject_ontology_guide !== false,
     writeback_notice: c.writeback_notice ?? null,
     write_tools: c.write_tools || [],
