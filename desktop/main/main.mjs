@@ -25,7 +25,7 @@ import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
-import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, surfaceOpenGate, surfacePopupTitle, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
+import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, createOpenLedger, surfacePopupTitle, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
@@ -995,8 +995,8 @@ function isSurfaceContents(wc) {
 
 // 서피스 팝업 창 — **우리가 지은 것만** 센다(상한 판정). 페이지가 정할 수 있는 값(show 등)으로 세면 숨은 창으로 상한을 피한다.
 const surfacePopups = new Set();
-// 탭(새 창을 연 webContents)마다 최근에 새 창을 연 시각 — surfaceOpenGate 의 빈도 판정 기록.
-const surfaceOpens = new WeakMap();
+// 새 창 문의 기록 장부 — 탭 가족(웹 칸 탭 + 거기서 이어 열린 팝업) 단위. 팝업마다 따로 세면 팝업이 또 여는 사슬이 상한을 피한다.
+const surfaceLedger = createOpenLedger();
 
 // 서피스 webContents 의 주인 창 — 게스트면 그 게스트를 품은 앱 창, 팝업이면 그 팝업 창 자신.
 function surfaceOwnerWindow(wc) {
@@ -1006,6 +1006,12 @@ function surfaceOwnerWindow(wc) {
   } catch { return null; }
 }
 
+// 사람이 그 앱 창을 쓰고 있나 — 새 창 문의 첫 조건(뒤에 깔린 창·AI 혼자 도는 탭이 사람 화면에 창을 띄우지 않게).
+function surfaceHostFocused(wc) {
+  const owner = surfaceOwnerWindow(wc);
+  return !!owner && owner.isFocused();
+}
+
 // 서피스가 연 팝업 창을 **우리가** 짓는다(setWindowOpenHandler 의 createWindow). 페이지의 기능 문자열은 크기 말고는 버린다 —
 //  frame·modal·show·alwaysOnTop 같은 값을 그대로 받으면 남의 페이지가 «닫기 없는 모달 창» · «숨은 창» 을 만든다(surfacePopupWindowSpec).
 //  주인 창 위에 떠서 사람이 로그인 창을 뒤로 잃지 않는다. 제목 앞엔 실제 호스트 — 주소줄이 없는 창이라 어디인지 보이게.
@@ -1013,15 +1019,26 @@ function createSurfacePopup(opener, url, options) {
   const owner = surfaceOwnerWindow(opener);
   const area = (owner ? screen.getDisplayMatching(owner.getBounds()) : screen.getPrimaryDisplay()).workArea;
   const guest = options && options.webContents;
+  //  webPreferences 는 guest 가 있어도 다시 준다 — 기존 webContents 로 창을 지으면 Electron 이 이 값으로 설정을 **새로 덮는다**
+  //  (v43.3.0 CreateFromWebPreferences → SetFromDictionary: 비우고 다시 채움). 빼면 격리가 Electron 기본값으로 돌아간다.
   const win = new BrowserWindow({
     ...surfacePopupWindowSpec(options, area),
     ...(owner ? { parent: owner } : {}),
-    ...(guest ? { webContents: guest } : { webPreferences: surfacePopupWebPreferences() }),
+    webPreferences: surfacePopupWebPreferences(),
+    ...(guest ? { webContents: guest } : {}),
   });
   surfacePopups.add(win);
+  surfaceLedger.adopt(win.webContents, opener);   // 이 팝업이 또 여는 창도 같은 가족의 빈도로 센다
   win.on("closed", () => surfacePopups.delete(win));
-  win.on("page-title-updated", (e, title) => { e.preventDefault(); win.setTitle(surfacePopupTitle(win.webContents.getURL(), title)); });
-  win.webContents.on("did-navigate", (_e, navUrl) => { if (!win.isDestroyed()) win.setTitle(surfacePopupTitle(navUrl, win.webContents.getTitle())); });
+  // 지은 뒤에도 페이지는 창을 못 옮기고·못 키우고(moveTo·resizeTo → content-bounds-updated) 닫기를 못 막는다(beforeunload).
+  win.webContents.on("content-bounds-updated", (e) => e.preventDefault());
+  win.webContents.on("will-prevent-unload", (e) => e.preventDefault());
+  let openerUrl = "";
+  try { openerUrl = opener.getURL(); } catch { /* opener 가 이미 없다 — 빈 창이면 «빈 창» 으로 */ }
+  const retitle = (u, t) => { if (!win.isDestroyed()) win.setTitle(surfacePopupTitle(u, t, openerUrl)); };
+  retitle(url, "");   // 첫 제목 전부터 출처를 보인다(빈 창에 쓴 거짓 제목 대비)
+  win.on("page-title-updated", (e, title) => { e.preventDefault(); retitle(win.webContents.getURL(), title); });
+  win.webContents.on("did-navigate", (_e, navUrl) => retitle(navUrl, win.webContents.getTitle()));
   if (!guest) void win.loadURL(url).catch(() => { /* 못 연 주소 — 빈 창이 남고 사람이 닫는다 */ });
   return win.webContents;
 }
@@ -1190,11 +1207,8 @@ app.on("web-contents-created", (_e, wc) => {
       //  그 밖(target=_blank 링크 · Shift+클릭 · 기능 없는 window.open)은 시스템 브라우저로. 판정 표는 surfaceWindowOpenTarget.
       const t = surfaceWindowOpenTarget({ url, disposition, features, openPopups: surfacePopups.size });
       if (t === "deny") return { action: "deny" };
-      // 크롬의 팝업 차단기 대신 — 사람이 그 앱 창을 쓰고 있을 때만, 그 탭에서 1초에 한 번·1분에 6번까지(surfaceOpenGate).
-      const owner = surfaceOwnerWindow(wc);
-      const gate = surfaceOpenGate({ hostFocused: !!owner && owner.isFocused(), recent: surfaceOpens.get(wc), now: Date.now() });
-      surfaceOpens.set(wc, gate.recent);
-      if (!gate.ok) return { action: "deny" };
+      // 크롬의 팝업 차단기 대신 — 사람이 그 앱 창을 쓰고 있을 때만, 그 탭 가족에서 10초에 3번·1분에 12번까지(surfaceOpenGate).
+      if (!surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) return { action: "deny" };
       if (t === "popup") {
         return {
           action: "allow",
@@ -1210,7 +1224,8 @@ app.on("web-contents-created", (_e, wc) => {
       const t = surfaceNavTarget(url);
       if (t === "allow") return;
       e.preventDefault();
-      if (t === "external") shell.openExternal(url);
+      // 밖으로 넘기는 것(mailto·DRM)도 같은 문 — location 을 돌려 대며 시스템 앱·브라우저를 쏟지 못하게.
+      if (t === "external" && surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) shell.openExternal(url);
     });
     return;
   }

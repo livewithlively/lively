@@ -14,8 +14,8 @@ import {
   BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH,
   DRM_HANDOFF_HOSTS, hostMatches, surfaceNavTarget, cleanUserAgent, webviewAttachDecision,
   SURFACE_ALLOWED_PERMISSIONS, surfacePermissionAllowed,
-  SURFACE_POPUP_LIMIT, SURFACE_POPUP_MIN_SIZE, SURFACE_OPEN_MIN_GAP_MS, SURFACE_OPEN_PER_MINUTE,
-  surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, surfaceOpenGate, surfacePopupTitle,
+  SURFACE_POPUP_LIMIT, SURFACE_POPUP_MIN_SIZE, SURFACE_OPEN_BURST, SURFACE_OPEN_BURST_MS, SURFACE_OPEN_PER_MINUTE,
+  surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, surfaceOpenGate, createOpenLedger, surfacePopupTitle,
 } from "./browser-surface.mjs";
 
 let pass = 0;
@@ -230,15 +230,14 @@ t("F9 ★ 서피스의 새 창 처리기 — 판정 표 → 팝업 차단 대신
   assert.match(branch, /surfaceWindowOpenTarget\(\{ url, disposition, features, openPopups: surfacePopups\.size \}\)/,
     "★ 판정 표를 안 쓰거나 **우리가 지은** 팝업 수를 안 넘긴다(상한 무력)");
   const deny = branch.indexOf('if (t === "deny") return { action: "deny" };');
-  const gate = branch.indexOf("surfaceOpenGate({ hostFocused: !!owner && owner.isFocused(), recent: surfaceOpens.get(wc), now: Date.now() })");
-  const save = branch.indexOf("surfaceOpens.set(wc, gate.recent);");
-  const blocked = branch.indexOf('if (!gate.ok) return { action: "deny" };');
+  const gate = branch.indexOf('if (!surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) return { action: "deny" };');
   const popup = branch.indexOf('if (t === "popup")');
-  const ext = branch.indexOf("shell.openExternal(url);");
-  assert.ok(gate >= 0, "★ 문(주인 창 포커스·빈도)이 없다 — 광고 페이지가 창·시스템 브라우저 탭을 쏟는다");
-  assert.ok(save > gate && blocked > save, "★ 빈도 기록을 안 남기거나 문이 막아도 연다");
+  const ext = branch.indexOf("shell.openExternal(url);\n      return");
+  assert.ok(gate >= 0, "★ 문(주인 창 포커스·빈도 — 탭 가족 장부)이 없다 — 광고 페이지가 창·시스템 브라우저 탭을 쏟는다");
   assert.ok(deny >= 0 && deny < gate, "거부할 것까지 빈도 기록을 먹는다");
-  assert.ok(popup > blocked && ext > blocked, "★ 문보다 먼저 연다 — 문이 아무것도 안 막는다");
+  assert.ok(popup > gate && ext > gate, "★ 문보다 먼저 연다 — 문이 아무것도 안 막는다");
+  assert.match(fnBody("surfaceHostFocused"), /return !!owner && owner\.isFocused\(\);/, "★ 주인 창 포커스를 안 본다");
+  assert.match(MAIN, /\nconst surfaceLedger = createOpenLedger\(\);\n/, "장부가 하나가 아니다 — 가족 기록이 갈린다");
   const ret = branch.slice(popup, ext);
   assert.match(ret, /action: "allow"/, "★ 팝업을 앱 안 창으로 안 연다 — opener 가 끊겨 팝업 로그인이 결과를 못 돌려받는다");
   assert.match(ret, /overrideBrowserWindowOptions: \{ webPreferences: surfacePopupWebPreferences\(\) \}/,
@@ -247,22 +246,41 @@ t("F9 ★ 서피스의 새 창 처리기 — 판정 표 → 팝업 차단 대신
     "★ 창을 Electron 기본(페이지 기능 문자열 섞기)으로 짓는다 — 닫기 없는 모달·숨은 창이 가능하다");
 });
 
-t("F10 ★ 팝업 창은 우리가 짓는다 — 설정은 spec·주인·webContents 셋뿐 · 우리 집합에 등록 · 제목에 실제 호스트", () => {
+t("F10 ★ 팝업 창은 우리가 짓는다 — spec·주인·격리·webContents 만 · 가족 입양 · 지은 뒤 이동·닫기 거부 막기 · 출처 제목", () => {
   const body = fnBody("createSurfacePopup");
-  // new BrowserWindow 에 들어가는 건 정확히 셋 — 그 사이에 다른 키(modal·alwaysOnTop…)를 끼우면 빨간불
-  assert.match(body, /new BrowserWindow\(\{\n    \.\.\.surfacePopupWindowSpec\(options, area\),\n    \.\.\.\(owner \? \{ parent: owner \} : \{\}\),\n    \.\.\.\(guest \? \{ webContents: guest \} : \{ webPreferences: surfacePopupWebPreferences\(\) \}\),\n  \}\);/,
-    "★ 창 설정이 spec·주인·webContents 말고 다른 것을 받는다(또는 순서가 바뀌어 spec 이 덮인다)");
+  // new BrowserWindow 에 들어가는 건 정확히 넷 — 그 사이에 다른 키(modal·alwaysOnTop…)를 끼우면 빨간불
+  assert.match(body, /new BrowserWindow\(\{\n    \.\.\.surfacePopupWindowSpec\(options, area\),\n    \.\.\.\(owner \? \{ parent: owner \} : \{\}\),\n    webPreferences: surfacePopupWebPreferences\(\),\n    \.\.\.\(guest \? \{ webContents: guest \} : \{\}\),\n  \}\);/,
+    "★ 창 설정이 spec·주인·격리·webContents 말고 다른 것을 받는다 · 또는 guest 가 있을 때 webPreferences 를 빼서 격리가 Electron 기본값으로 덮인다");
   assert.match(body, /const owner = surfaceOwnerWindow\(opener\)/, "주인 창을 안 찾는다");
   assert.match(body, /screen\.getDisplayMatching\(owner\.getBounds\(\)\)/, "주인 창이 있는 화면의 작업 영역을 안 쓴다");
   assert.match(body, /surfacePopups\.add\(win\)/, "★ 지은 창을 안 센다 — 상한이 무력");
   assert.match(body, /win\.on\("closed", \(\) => surfacePopups\.delete\(win\)\)/, "★ 닫힌 창을 안 뺀다 — 상한이 영영 찬다");
-  assert.match(body, /win\.on\("page-title-updated", \(e, title\) => \{ e\.preventDefault\(\); win\.setTitle\(surfacePopupTitle\(win\.webContents\.getURL\(\), title\)\); \}\)/,
-    "★ 제목에 실제 호스트를 안 붙인다 — 주소줄 없는 창에서 남의 페이지가 어디인지 안 보인다");
-  assert.match(body, /did-navigate/, "다른 호스트로 넘어가도 제목이 옛 호스트를 말한다");
+  assert.match(body, /surfaceLedger\.adopt\(win\.webContents, opener\)/, "★ 팝업을 opener 가족으로 안 넣는다 — 팝업 사슬이 빈도 상한을 피한다");
+  assert.match(body, /win\.webContents\.on\("content-bounds-updated", \(e\) => e\.preventDefault\(\)\)/,
+    "★ 지은 뒤 페이지가 창을 옮기고 키운다(moveTo·resizeTo) — 화면 밖·1×1 창");
+  assert.match(body, /win\.webContents\.on\("will-prevent-unload", \(e\) => e\.preventDefault\(\)\)/,
+    "★ 페이지가 beforeunload 로 닫기를 막는다 — 닫히지 않는 창 · 앱 종료·업데이트까지 막힌다");
+  assert.match(body, /retitle\(url, ""\);/, "만들자마자 출처를 안 보인다 — 첫 제목 전엔 앱 이름만 보인다");
+  assert.match(body, /win\.setTitle\(surfacePopupTitle\(u, t, openerUrl\)\)/, "★ 빈 창 제목에 opener 출처를 안 준다");
+  assert.match(body, /win\.on\("page-title-updated", \(e, title\) => \{ e\.preventDefault\(\); retitle\(win\.webContents\.getURL\(\), title\); \}\)/,
+    "★ 제목에 실제 출처를 안 붙인다 — 주소줄 없는 창에서 남의 페이지가 어디인지 안 보인다");
+  assert.match(body, /win\.webContents\.on\("did-navigate", \(_e, navUrl\) => retitle\(navUrl, win\.webContents\.getTitle\(\)\)\)/,
+    "다른 호스트로 넘어가도 제목이 옛 호스트를 말한다");
   assert.match(body, /if \(!guest\) void win\.loadURL\(url\)/, "opener 없이 지은 창이 빈 창으로 남는다(또는 opener 창을 다시 싣는다)");
   assert.match(body, /return win\.webContents;/, "Electron 이 넘긴 webContents 를 안 돌려준다");
   const owner = fnBody("surfaceOwnerWindow");
   assert.match(owner, /BrowserWindow\.fromWebContents\(wc\.hostWebContents \|\| wc\)/, "게스트의 앱 창에서 주인을 안 찾는다");
+});
+
+t("F12 ★ 서피스 이동의 «밖으로 넘기기»(mailto·DRM)도 같은 장부 문을 지난다", () => {
+  const hook = MAIN.indexOf('app.on("web-contents-created"');
+  const seg = MAIN.slice(hook);
+  const at = seg.indexOf("if (isSurfaceContents(wc))");
+  const branch = seg.slice(at, seg.indexOf("\n  }\n", at) + 5);
+  const nav = branch.slice(branch.indexOf('wc.on("will-navigate"'));
+  assert.match(nav, /if \(t === "external" && surfaceLedger\.check\(wc, \{ hostFocused: surfaceHostFocused\(wc\), now: Date\.now\(\) \}\)\) shell\.openExternal\(url\);/,
+    "★ location 을 돌려 대는 페이지가 시스템 앱·브라우저를 쏟는다(문 없는 밖으로 넘기기)");
+  assert.match(nav, /e\.preventDefault\(\);/, "밖으로 넘기지 않을 때도 이동을 막아야 한다");
 });
 
 t("F11 팝업 수 = 우리가 지은 창의 집합 — 페이지가 정하는 값(show 등)으로 세지 않는다", () => {
@@ -425,7 +443,7 @@ t("W1 팝업 격리 = 웹 칸과 같음 · 서피스 파티션 · preload 키 �
   assert.ok(!("preload" in surfacePopupWebPreferences()), "앞서 고친 값이 다음 호출에 샜다");
 });
 
-// ── I. 새 창 문 — 크롬의 팝업 차단기 대신(주인 창 포커스 + 빈도) ─────────────────────────────
+// ── I. 새 창 문 — 크롬의 팝업 차단기 대신(주인 창 포커스 + 빈도: 10초 안 3번 · 1분 12번) ─────────────
 const T0 = 1_800_000_000_000;
 t("I1·I2 주인 창 포커스가 없으면 안 연다(기록도 안 늘림) · 첫 번째는 연다", () => {
   assert.deepEqual(surfaceOpenGate({ hostFocused: false, recent: [], now: T0 }), { ok: false, recent: [] });   // I1
@@ -434,24 +452,27 @@ t("I1·I2 주인 창 포커스가 없으면 안 연다(기록도 안 늘림) · 
   assert.deepEqual(g.recent, [T0]);
 });
 
-t("I3 ★ 간격 경계 — 999ms 는 막고 정확히 1000ms 는 연다", () => {
-  assert.equal(SURFACE_OPEN_MIN_GAP_MS, 1000, "간격 정책값이 바뀌었다 — 사양과 같이 고칠 것");
-  assert.equal(surfaceOpenGate({ hostFocused: true, recent: [T0], now: T0 + 999 }).ok, false);
-  assert.equal(surfaceOpenGate({ hostFocused: true, recent: [T0], now: T0 + 1000 }).ok, true);
+t("I3 ★ 몰아 열기 — 10초 안 3번까지(연타 통과), 4번째는 막는다 · 정확히 10000ms 전 기록은 안 센다(경계)", () => {
+  let recent = [];
+  const at = (ms) => { const g = surfaceOpenGate({ hostFocused: true, recent, now: T0 + ms }); recent = g.recent; return g.ok; };
+  assert.equal(at(0), true);
+  assert.equal(at(100), true, "두 번 누름(100ms)을 막았다 — 구글 버튼 연타가 실패로 보인다");
+  assert.equal(at(200), true);
+  assert.equal(at(9_999), false, "10초 안 4번째를 열었다");
+  assert.equal(at(10_000), true, "정확히 10초 지난 첫 기록을 아직 센다(경계)");
 });
 
-t("I4 ★ 1분 상한 — 간격을 지켜도 6번째까지만", () => {
-  assert.equal(SURFACE_OPEN_PER_MINUTE, 6, "분당 상한 정책값이 바뀌었다 — 사양과 같이 고칠 것");
+t("I4 ★ 1분 상한 — 4초 간격(몰아 열기에 안 걸림)으로 계속 열어도 첫 60초 안엔 정확히 12번", () => {
   let recent = [], opened = 0;
-  for (let i = 0; i < 10; i++) {
-    const g = surfaceOpenGate({ hostFocused: true, recent, now: T0 + i * 2000 });
+  for (let ms = 0; ms < 60_000; ms += 4_000) {
+    const g = surfaceOpenGate({ hostFocused: true, recent, now: T0 + ms });
     recent = g.recent; if (g.ok) opened++;
   }
   assert.equal(opened, SURFACE_OPEN_PER_MINUTE);
 });
 
 t("I5 1분 지난 기록은 버린다 — 정확히 60000ms 전 기록도 버린다(경계)", () => {
-  const full = Array.from({ length: 6 }, (_, i) => T0 + i * 1000);
+  const full = Array.from({ length: 12 }, (_, i) => T0 + i * 4_000);   // 0~44초
   assert.equal(surfaceOpenGate({ hostFocused: true, recent: full, now: T0 + 59_999 }).ok, false, "1분 안인데 열었다");
   const g = surfaceOpenGate({ hostFocused: true, recent: full, now: T0 + 60_000 });
   assert.equal(g.ok, true, "1분 지난 첫 기록을 안 버렸다");
@@ -465,16 +486,78 @@ t("I6·I7 기록 부재·쓰레기·미래 시각은 버린다 — 죽지 않는
     assert.deepEqual(g.recent, [T0], JSON.stringify(recent));
   }
   assert.equal(surfaceOpenGate().ok, false, "인자 없이 열었다");
+  assert.equal(surfaceOpenGate({ hostFocused: true, recent: [], now: NaN }).ok, false, "시각 없이 열었다");
 });
 
-// ── T. 팝업 제목 — 주소줄이 없으니 실제 호스트를 앞에 ───────────────────────────────────────
-t("T1~T5 제목 = 실제 호스트 — 제목 없으면 호스트만 · http(s) 아니면 제목 그대로", () => {
+t("I8 정책값 — 10초 안 3번 · 1분 12번 (바꾸면 사양과 같이)", () => {
+  assert.equal(SURFACE_OPEN_BURST, 3);
+  assert.equal(SURFACE_OPEN_BURST_MS, 10_000);
+  assert.equal(SURFACE_OPEN_PER_MINUTE, 12);
+});
+
+// ── L. 장부 — 탭 가족 단위(팝업이 또 여는 사슬이 기록을 새로 시작하지 못하게) ─────────────────────
+t("L1 같은 webContents 는 문과 같다", () => {
+  const led = createOpenLedger(), tab = {};
+  const r = [0, 1, 2, 3].map((i) => led.check(tab, { hostFocused: true, now: T0 + i * 10 }));
+  assert.deepEqual(r, [true, true, true, false]);
+  assert.equal(createOpenLedger().check({}, { hostFocused: false, now: T0 }), false, "포커스 없이 열었다");
+});
+
+t("L2·L5 ★ 입양한 팝업(과 그 자식)은 opener 가족의 기록을 같이 쓴다", () => {
+  const led = createOpenLedger(), tab = {}, child = {}, grand = {};
+  for (let i = 0; i < 3; i++) assert.equal(led.check(tab, { hostFocused: true, now: T0 + i }), true);
+  led.adopt(child, tab);
+  assert.equal(led.check(child, { hostFocused: true, now: T0 + 10 }), false, "★ 새 팝업이 빈 기록으로 시작했다 — 사슬이 상한을 피한다");
+  led.adopt(grand, child);
+  assert.equal(led.check(grand, { hostFocused: true, now: T0 + 20 }), false, "★ 손자가 가족 밖이다");
+  assert.equal(led.check(grand, { hostFocused: true, now: T0 + 10_000 }), true, "가족 기록이 풀린 뒤엔 열려야 한다");
+});
+
+t("L3 ★ 자기복제 팝업 나무 — 새 팝업마다 곧바로 열고 자식을 낳아도 60초에 12번을 못 넘는다", () => {
+  const led = createOpenLedger(), root = {};
+  let live = [root], allowed = 0;
+  for (let ms = 0; ms < 60_000; ms += 200) {
+    const next = [];
+    for (const wc of live) {
+      if (led.check(wc, { hostFocused: true, now: T0 + ms })) {
+        allowed++;
+        const kid = {}; led.adopt(kid, wc); next.push(kid);   // 열린 팝업은 다음 틱에 또 연다
+      }
+    }
+    live = live.concat(next).slice(-50);
+  }
+  assert.ok(allowed <= SURFACE_OPEN_PER_MINUTE, `★ 사슬이 60초에 ${allowed}번 열었다 — 가족 상한이 무력`);
+});
+
+t("L4 입양 안 한 두 탭은 따로 센다(서로의 상한을 먹지 않는다)", () => {
+  const led = createOpenLedger(), a = {}, b = {};
+  for (let i = 0; i < 3; i++) led.check(a, { hostFocused: true, now: T0 + i });
+  assert.equal(led.check(b, { hostFocused: true, now: T0 + 5 }), true);
+});
+
+t("L6 webContents 가 아니면 열지 않는다(실패 닫힘) · adopt 는 죽지 않는다", () => {
+  const led = createOpenLedger();
+  for (const bad of [null, undefined, "wc", 42]) {
+    assert.equal(led.check(bad, { hostFocused: true, now: T0 }), false, String(bad));
+    led.adopt(bad, {}); led.adopt({}, bad);
+  }
+});
+
+// ── T. 팝업 제목 — 주소줄이 없으니 실제 출처를 앞에 ───────────────────────────────────────────
+t("T1~T6 제목 = 실제 출처 — 빈 창은 opener 출처 · 그것도 없으면 «빈 창»", () => {
   assert.equal(surfacePopupTitle("https://accounts.google.com/x", "로그인 - Google 계정"), "accounts.google.com — 로그인 - Google 계정"); // T1
   assert.equal(surfacePopupTitle("https://accounts.google.com/x", "  "), "accounts.google.com");                         // T2
   assert.equal(surfacePopupTitle("https://accounts.google.com/x", undefined), "accounts.google.com");
-  for (const u of ["about:blank", "javascript:1", "::bad", "", null]) assert.equal(surfacePopupTitle(u, "제목"), "제목", String(u)); // T3
+  // T3 ★ 스크립트가 빈 창에 쓴 거짓 제목 — opener 의 실제 출처가 앞에 선다
+  assert.equal(surfacePopupTitle("about:blank", "Lively — 다시 로그인하세요", "https://www.linkedin.com/login"),
+    "www.linkedin.com — Lively — 다시 로그인하세요");
+  assert.equal(surfacePopupTitle("about:blank", "제목"), "빈 창 — 제목");                                                 // T3b
+  assert.equal(surfacePopupTitle("about:blank", ""), "빈 창");
   assert.equal(surfacePopupTitle("https://a.com/", "a.com"), "a.com");                                                     // T4
   assert.equal(surfacePopupTitle("http://localhost:3000/cb", "콜백"), "localhost:3000 — 콜백");                              // T5
+  for (const [u, o] of [["::bad", "::bad"], ["", null], [null, "javascript:1"]])                                          // T6
+    assert.equal(surfacePopupTitle(u, "제목", o), "빈 창 — 제목", `${u} / ${o}`);
+  assert.equal(surfacePopupTitle("https://evil.com/", "x", "https://www.linkedin.com/"), "evil.com — x", "★ http(s) 창은 자기 출처를 쓴다(opener 출처로 속이지 않는다)");
 });
 
 console.log(`\n${pass} passed`);

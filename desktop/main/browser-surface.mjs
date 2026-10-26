@@ -200,41 +200,75 @@ export function surfacePopupWebPreferences() {
   return { ...WEBVIEW_FORCED_PREFS, partition: BROWSER_SURFACE_PARTITION };
 }
 
-/** 한 탭(opener)에서 새 창을 여는 최소 간격과 1분 상한 — surfaceOpenGate. */
-export const SURFACE_OPEN_MIN_GAP_MS = 1000;
-export const SURFACE_OPEN_PER_MINUTE = 6;
+/** 새 창 문(surfaceOpenGate)의 정책값 — 10초 안 3번(구글 버튼 연타·두 번 누름은 통과) · 1분에 12번. */
+export const SURFACE_OPEN_BURST = 3;
+export const SURFACE_OPEN_BURST_MS = 10_000;
+export const SURFACE_OPEN_PER_MINUTE = 12;
 
 /**
  * 새 창(앱 안 팝업이든 시스템 브라우저든)을 지금 열어도 되는가 (#5025).
  *  Electron 엔 크롬의 팝업 차단기가 없고, 처리기엔 «사람이 눌렀나» 가 오지 않는다(HandlerDetails 에 없다 · input-event 는
  *  주 프레임만 봐서 구글 버튼 같은 다른 출처 iframe 클릭을 못 센다). 그래서 그 대신 둘을 본다 —
  *   ① 사람이 그 앱 창을 쓰고 있다(주인 창 포커스): 뒤에 깔린 창·AI 혼자 도는 탭이 사람 화면에 창을 띄우지 않는다.
- *   ② 빈도: 그 탭에서 1초에 한 번, 1분에 6번까지 — 막 열어 대는 페이지가 시스템 브라우저에 탭을 쏟지 못한다.
- * @param {{hostFocused: boolean, recent?: number[], now: number}} p recent = 그 탭이 최근 연 시각들(앞 판정의 반환값)
+ *   ② 빈도: 10초 안 3번 · 1분에 12번까지 — 막 열어 대는 페이지가 창·시스템 브라우저 탭을 쏟지 못한다.
+ *  기록은 탭 가족 단위로 둔다(createOpenLedger) — 팝업마다 따로 세면 팝업이 또 여는 사슬이 상한을 피한다.
+ * @param {{hostFocused: boolean, recent?: number[], now: number}} p recent = 그 가족이 최근 연 시각들(앞 판정의 반환값)
  * @returns {{ok: boolean, recent: number[]}} recent 는 1분 안의 기록만 남기고, 열었으면 now 를 더한다
  */
 export function surfaceOpenGate({ hostFocused, recent, now } = {}) {
   const t = Number(now);
   const kept = (Array.isArray(recent) ? recent : []).filter((v) => typeof v === "number" && Number.isFinite(v) && v <= t && t - v < 60_000);
   if (!hostFocused || !Number.isFinite(t)) return { ok: false, recent: kept };
-  const last = kept.length ? Math.max(...kept) : -Infinity;
-  if (t - last < SURFACE_OPEN_MIN_GAP_MS || kept.length >= SURFACE_OPEN_PER_MINUTE) return { ok: false, recent: kept };
+  const burst = kept.filter((v) => t - v < SURFACE_OPEN_BURST_MS).length;
+  if (burst >= SURFACE_OPEN_BURST || kept.length >= SURFACE_OPEN_PER_MINUTE) return { ok: false, recent: kept };
   return { ok: true, recent: [...kept, t] };
 }
 
 /**
- * 팝업 창 제목 — 앞에 **실제 호스트**를 붙인다. 팝업엔 주소줄이 없어서, 남의 페이지가 그럴듯한 로그인 화면을 띄워도
- *  어디인지 보이게 한다(크롬도 팝업엔 출처를 보인다). http(s) 가 아니면 페이지 제목 그대로.
+ * 새 창 문의 기록 장부 — **탭 가족**(처음 연 웹 칸 탭 + 거기서 이어 열린 팝업들) 단위로 센다 (#5025 격리 리뷰).
+ *  팝업마다 따로 세면 팝업이 또 팝업을 여는 사슬이 매번 빈 기록으로 시작해 상한이 무력해진다(리뷰 모델: 60초에 80번).
+ *  열쇠는 webContents 객체(WeakMap) — 닫힌 창의 기록은 저절로 사라진다. webContents 가 아니면 열지 않는다(실패 닫힘).
  */
-export function surfacePopupTitle(url, title) {
-  let host = "";
-  try {
-    const u = new URL(String(url || ""));
-    if (u.protocol === "http:" || u.protocol === "https:") host = u.host;
-  } catch { /* 깨진 주소 — 호스트 없음 */ }
+export function createOpenLedger() {
+  const familyOf = new WeakMap();
+  const history = new WeakMap();
+  const isKey = (wc) => !!wc && (typeof wc === "object" || typeof wc === "function");
+  const family = (wc) => {
+    let f = familyOf.get(wc);
+    if (!f) { f = {}; familyOf.set(wc, f); }
+    return f;
+  };
+  return {
+    /** child(팝업 webContents)를 parent(그 팝업을 연 webContents)의 가족으로 넣는다. */
+    adopt(child, parent) {
+      if (isKey(child) && isKey(parent)) familyOf.set(child, family(parent));
+    },
+    /** 지금 열어도 되는가 — 되면 그 가족의 기록에 남긴다. */
+    check(wc, { hostFocused, now } = {}) {
+      if (!isKey(wc)) return false;
+      const f = family(wc);
+      const g = surfaceOpenGate({ hostFocused, recent: history.get(f), now });
+      history.set(f, g.recent);
+      return g.ok;
+    },
+  };
+}
+
+/**
+ * 팝업 창 제목 — 앞에 **실제 출처(호스트)** 를 붙인다. 팝업엔 주소줄이 없어서, 남의 페이지가 그럴듯한 로그인 화면을 띄워도
+ *  어디인지 보이게 한다(크롬도 팝업엔 출처를 보인다). 빈 창(about:blank)은 opener 의 출처를 이어받으므로 opener 의 호스트를,
+ *  그것도 없으면 «빈 창» 을 붙인다 — 스크립트가 빈 창에 쓴 거짓 제목이 출처 없이 서지 않게.
+ */
+export function surfacePopupTitle(url, title, openerUrl) {
+  const hostOf = (u) => {
+    try {
+      const x = new URL(String(u || ""));
+      return x.protocol === "http:" || x.protocol === "https:" ? x.host : "";
+    } catch { return ""; }
+  };
+  const label = hostOf(url) || hostOf(openerUrl) || "빈 창";
   const t = String(title || "").trim();
-  if (!host) return t;
-  return t && t !== host ? `${host} — ${t}` : host;
+  return t && t !== label ? `${label} — ${t}` : label;
 }
 
 /**
