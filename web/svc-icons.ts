@@ -25,6 +25,7 @@ const SVC_BRAND: Record<string, string> = {
   gitlab: '#FC6D26',
   clickup: '#7B68EE',
   figma: '#F24E1E',
+  zotero: '#CC2936',
   prometheus: '#E6522C',
   'claude-headless': '#D97757',
 };

@@ -46,6 +46,7 @@ const HOST_APPS: ReadonlyArray<[RegExp, string]> = [
   [/(^|\.)jandi\.com$/, "jandi"], [/(^|\.)dooray\.com$/, "dooray"], [/(^|\.)worksmobile\.com$/, "naverworks"], [/^works\.naver\.com$/, "naverworks"],
   [/(^|\.)channel\.io$/, "channeltalk"], [/(^|\.)flex\.team$/, "flex"], [/(^|\.)zendesk\.com$/, "zendesk"], [/(^|\.)hubspot\.com$/, "hubspot"],
   [/(^|\.)intercom\.com$/, "intercom"], [/(^|\.)sentry\.io$/, "sentry"], [/(^|\.)canva\.com$/, "canva"], [/(^|\.)webflow\.com$/, "webflow"],
+  [/(^|\.)zotero\.org$/, "zotero"],
 ];
 
 /** 노션 페이지 id(32자리 → 대시 붙인 소문자 uuid). */

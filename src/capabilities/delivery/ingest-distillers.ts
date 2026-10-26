@@ -20,6 +20,7 @@ import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distil
 import { assertLaneFields } from "../../org/distill/lanes.js";
 import { listClassifiers, getClassifier, classifierCoverage } from "../../org/store/classifiers.js";
 import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/distill/figma-preset.js";   // #1881 L3
+import { ensureZoteroPapersDistiller, ZOTERO_DISTILLER_KEY } from "../../org/distill/zotero-preset.js";
 
 /**
  * 자료 레인 op 에 **카테고리 붙이기 레인을 가리키는** id·key 가 왔나(#4194 적대검증) — 왔으면 이유와 맞는 도구를 대며 막는다.
@@ -345,6 +346,25 @@ export const ingestDistillersCapabilities: Capability[] = [
         requester: typeof input.requester === "string" && input.requester.trim() ? input.requester.trim() : null, source: "web",
       });
       return { key: FIGMA_DISTILLER_KEY, created: r.created, enabled: r.enabled, job: r.job, distiller: { ...r.distiller, scope_text: describeScope(r.distiller as unknown as Parameters<typeof describeScope>[0]) } };
+    }, {
+      enable: z.boolean().optional().describe("true=켜고 잡 등록(승인). 미지정=없을 때만 꺼진 채로 만든다."),
+      requester: z.string().optional().describe("헤드리스 실행 신원(멤버 id/이메일) — 켤 때만. 없으면 호출자."),
+    }),
+  // Zotero 논문 증류기 — 피그마와 같은 규약: 첫 수집기를 켤 때 꺼진 채로 준비하고, 사람이 표본을 보고 켠다.
+  //  왜 별도 증류기인가: 자료 한 건이 이미 논문 한 편이고(스레드가 없다), 연구자의 생각은 주석·노트에만 있다 —
+  //  서지만 있는 논문은 사전필터(«하이라이트·코멘트»·«노트» 머리)가 비용 0 으로 거른다.
+  restWork("org_distiller_zotero_ensure", "Zotero 논문 증류기 준비",
+    "Zotero 논문(자료 kind=zotero_item — 서지 + 주석 + 노트)을 지식으로 만드는 증류기 'zotero-papers' 를 준비한다 — 없으면 프리셋으로 만든다(기본은 **꺼진 채**). " +
+    "enable=true 면 켜고(의뢰자=requester, 없으면 호출자) 전용 헤드리스 잡(distill-zotero-papers, 30분)까지 등록한다. " +
+    "이미 켜져 있으면 no-op. 기준·형식은 org_distiller_upsert 로 언제든 손볼 수 있다(여긴 건드리지 않는다). " +
+    "사전필터는 주석·노트가 있는 논문만 지나게 해 둔다(서지만 있는 논문은 검색용 자료로 남는다).",
+    [{ method: "POST", paths: ["/api/ui/org/distillers/zotero"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const r = await ensureZoteroPapersDistiller({
+        actor: actorOf(user), enable: !!input.enable,
+        requester: typeof input.requester === "string" && input.requester.trim() ? input.requester.trim() : null, source: "web",
+      });
+      return { key: ZOTERO_DISTILLER_KEY, created: r.created, enabled: r.enabled, job: r.job, distiller: { ...r.distiller, scope_text: describeScope(r.distiller as unknown as Parameters<typeof describeScope>[0]) } };
     }, {
       enable: z.boolean().optional().describe("true=켜고 잡 등록(승인). 미지정=없을 때만 꺼진 채로 만든다."),
       requester: z.string().optional().describe("헤드리스 실행 신원(멤버 id/이메일) — 켤 때만. 없으면 호출자."),

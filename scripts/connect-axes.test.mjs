@@ -58,6 +58,14 @@ ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 
   eq(collectTally(null).size, 0, "A7 못 읽었으면 빈 표다(화면이 안 깨진다)");
   eq(tallyOf({ preset_key: "slack" }).get("slack"), { on: 0, off: 1 }, "A8 enabled 가 없으면 꺼진 것으로 센다");
   eq(tallyOf({ preset_key: "" }, {}).size, 0, "A9 preset 이 빈 행은 센 표에 들어가지 않는다");
+  //  사람마다 수집기가 하나인 앱(Zotero) — 남의 것이 켜져 있어도 내 라이브러리는 안 모인다. 내 것만 센다.
+  {
+    const z = (who, enabled = true) => ({ preset_key: "zotero", enabled, config: { token_source: `member:${who}` } });
+    eq(collectTally([z("kim"), z("lee")], "lee").get("zotero"), { on: 1, off: 0 }, "A10 Zotero 는 내 수집기만 센다(남의 것으로 «켜짐» 금지)");
+    eq(collectTally([z("kim")], "lee").get("zotero"), undefined, "A10b 남의 것만 있으면 내 칸은 없다");
+    eq(collectTally([z("kim")]).get("zotero"), undefined, "A10c 나를 모르면 켜졌다고 말하지 않는다");
+    eq(collectTally([on("slack"), on("slack")], "lee").get("slack"), { on: 2, off: 0 }, "A10d 워크스페이스에 하나인 앱은 종전 그대로");
+  }
 }
 
 // ── B. 두 축 판정 (appAxes) ────────────────────────────────────────────────

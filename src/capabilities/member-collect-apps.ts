@@ -3,7 +3,8 @@
 import { makeMemberTokenCollect } from "./member-collect.js";
 import { ensureFigmaCommentsDistiller } from "../org/distill/figma-preset.js";
 import { FIGMA_TOKEN_KIND } from "../org/credentials/figma-token-source.js";
-import { CLICKUP_TOKEN_KIND } from "../org/credentials/plain-token-source.js";
+import { CLICKUP_TOKEN_KIND, ZOTERO_TOKEN_KIND } from "../org/credentials/plain-token-source.js";
+import { ensureZoteroPapersDistiller } from "../org/distill/zotero-preset.js";
 import { GITHUB_TOKEN_KIND } from "../org/credentials/github-token-source.js";
 import { ensureGithubIssuesDistiller } from "../org/distill/github-preset.js";
 import { GITLAB_TOKEN_KIND, pickGitlabSlot } from "../org/credentials/gitlab-token-source.js";
@@ -42,6 +43,22 @@ export const clickupCollectCapabilities = makeMemberTokenCollect({
   // ClickUp 은 구조 엔티티(스페이스·리스트·작업)라 자료함이 아니라 **프로젝트 탭의 미러**로 들어온다 — 문구가 그것을 말해야 한다.
   scopeKeys: ["include_list_ids", "exclude_list_ids"],
   outcome: "작업·댓글·시간기록이 프로젝트 탭의 미러로 들어온다(자료함이 아니다 — 구조 엔티티는 output_mode 로 못 바꾼다).",
+});
+
+//  Zotero — 수집기가 **사람마다 하나**다(perMember). 모으는 것이 그 사람의 라이브러리라, 워크스페이스에 하나만 두면
+//   둘째 연구자가 켜는 순간 첫째의 수집이 멈춘다(불변식 ①의 «갈아끼우기»가 여기선 틀린 동작이다).
+//   종류 옵션은 커넥터 기본값과 짝이다 — 주석·노트 on, 전문 색인·자동 태그 off(화면은 저장값이 없으면 이 기본값을 보인다).
+export const zoteroCollectCapabilities = makeMemberTokenCollect({
+  system: "zotero", preset: "zotero", instance: MEMBER_INSTANCE, perMember: true, credKind: ZOTERO_TOKEN_KIND, appLabel: "Zotero",
+  label: "Zotero — 내 라이브러리",
+  note: "[Zotero 자료 가져오기] 토글로 만들어진 가져오기 — 켠 사람의 Zotero API 키로 그 사람의 라이브러리(개인·그룹)에서 논문마다 서지·주석·노트를 모읍니다. 사람마다 하나씩 생깁니다. 키 칸은 비워 두세요.",
+  connectHint: "[외부 앱 연결 ▸ Zotero]에서 API 키를 저장하세요",
+  //  비면 전체 — 이 키가 읽을 수 있는 라이브러리 전부(키가 울타리다). 좁히기는 라이브러리·컬렉션으로.
+  scopeKeys: ["libraries", "collections"],
+  optionKeys: ["include_annotations", "include_notes", "include_fulltext", "include_auto_tags"],
+  scopeHint: "비워 두면 이 키가 읽을 수 있는 라이브러리 전부(내 라이브러리 + 키에 열린 그룹)를 가져옵니다 — 좁히려면 users/<id>·groups/<id> 나 컬렉션 key 를 넣으세요.",
+  outcome: "논문마다 서지·초록·주석(하이라이트·코멘트)·노트를 한 자료로 묶어 자료함에 넣고, 논문 증류기가 꺼진 채로 함께 준비된다. 개인 라이브러리 자료는 자료 공개범위가 켜진 워크스페이스에서 그 사람만 본다.",
+  onEnabled: async ({ actor, source }) => { await ensureZoteroPapersDistiller({ actor, source: `collect-toggle:${source}` }); },
 });
 
 export const githubCollectCapabilities = makeMemberTokenCollect({
@@ -219,12 +236,12 @@ const orgCollectScopeOptions: Capability = {
   name: "org_collect_scope_options", title: "가져올 자료 범위 선택지 조회",
   description:
     "그 앱에서 «고를 수 있는 것»(저장소·프로젝트·팀·파일·리스트·채널)을 **호출자 본인의 연결**로 조회한다 — 화면이 토글 목록으로 그린다. " +
-    "지원: github(저장소) · gitlab(프로젝트) · linear(팀) · figma(파일, 팀 id 를 넣은 경우) · clickup(리스트) · slack(공개 채널). " +
+    "지원: github(저장소) · gitlab(프로젝트) · linear(팀) · figma(파일, 팀 id 를 넣은 경우) · clickup(리스트) · slack(공개 채널) · zotero(라이브러리). " +
     "읽기 전용이고 권한을 넓히지 않는다. 목록을 못 만들면 에러가 아니라 freeform=true + note 로 답한다(화면은 텍스트 입력으로 떨어진다).",
   scope: "memory",
   //  #923 — REST 는 :system 경로 파라미터로 싣지만, 스키마에 안 적으면 zod 가 strip 해 MCP 로는 부를 수 없다.
   input: {
-    system: z.enum(["github", "gitlab", "linear", "figma", "clickup", "slack"]).describe("어느 앱의 «고를 수 있는 것»을 볼지"),
+    system: z.enum(["github", "gitlab", "linear", "figma", "clickup", "slack", "zotero"]).describe("어느 앱의 «고를 수 있는 것»을 볼지"),
     //  #2232 — 피그마 전용: 팀 주소를 저장하기 «전에» 그 팀의 파일 목록을 미리 보려면 팀 id 를 실어 보낸다.
     team_id: z.string().optional().describe("figma 전용 — 이 팀의 파일을 나열(저장 전 미리보기)"),
   },
@@ -242,4 +259,4 @@ const orgCollectScopeOptions: Capability = {
 };
 
 export const memberCollectAppCapabilities = [...figmaCollectCapabilities, ...clickupCollectCapabilities, ...githubCollectCapabilities, ...gitlabCollectCapabilities, ...linearCollectCapabilities, orgLinearCollectConnect, orgLinearOauthComplete, orgCollectScopeOptions,
-  ...outlookCollectCapabilities, orgOutlookConnect, orgOutlookAdminConsent, orgOutlookOauthComplete];
+  ...outlookCollectCapabilities, orgOutlookConnect, orgOutlookAdminConsent, orgOutlookOauthComplete, ...zoteroCollectCapabilities];

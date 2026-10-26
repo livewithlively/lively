@@ -122,7 +122,7 @@ const GROUPS: Array<{ kind: Kind; label: string }> = [
 ];
 /** 자료의 출처를 사람 말로 — 목록 둘째 줄(종전엔 github_issue · local_file 같은 내부 이름이 그대로 보였다). */
 const SRC_SYS: Record<string, string> = { slack: 'Slack', github: 'GitHub', gitlab: 'GitLab', notion: 'Notion', google: 'Google', gdrive: 'Google Drive', gmail: 'Gmail',
-  linear: 'Linear', clickup: 'ClickUp', figma: 'Figma', outlook: 'Outlook', local: '올린 파일', local_file: '올린 파일' };
+  linear: 'Linear', clickup: 'ClickUp', figma: 'Figma', outlook: 'Outlook', zotero: 'Zotero', local: '올린 파일', local_file: '올린 파일' };
 const KIND_LABEL: Record<Kind, string> = { proj: '프로젝트', know: '지식', src: '자료', sess: '세션', app: '화면' };
 /** 문턱 밖의 결과를 세우는 묶음 — 날짜 묶음 아래, 바로 가기 위. */
 const WEAK_LABEL = '덜 맞는 결과';

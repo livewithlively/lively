@@ -18,7 +18,7 @@
 ### 연결 뒤
 
 1. **첫 수집을 확인한다.** 앱 절차의 «확인» 단계대로 실제로 들어온 것을 보고, 세 줄로 보고한다: 찾은 것 · 모은 것 · 뺀 것(뺀 이유와 함께). 아직 도는 중이면 그렇게 말하고, 다 끝났다고 하지 않는다.
-2. **다음 연결을 제안한다.** 모은 자료에 다른 서비스 링크가 많이 보이면 그 앱부터 제안한다 — 아직 연결 안 된 앱의 도메인마다 `source_list { group:"collected", q:"<도메인>", limit:1 }` 의 `total` 을 센다(notion.so · figma.com · docs.google.com · github.com · linear.app · app.clickup.com · atlassian.net …). 많은 것부터 1~3개만, 예: «슬랙 대화에 노션 링크가 12번 나와요. 노션도 연결할까요?»
+2. **다음 연결을 제안한다.** 모은 자료에 다른 서비스 링크가 많이 보이면 그 앱부터 제안한다 — 아직 연결 안 된 앱의 도메인마다 `source_list { group:"collected", q:"<도메인>", limit:1 }` 의 `total` 을 센다(notion.so · figma.com · docs.google.com · github.com · linear.app · app.clickup.com · zotero.org · atlassian.net …). 많은 것부터 1~3개만, 예: «슬랙 대화에 노션 링크가 12번 나와요. 노션도 연결할까요?»
 3. **정리 규칙을 묻는다.** 이 워크스페이스에 정리 규칙(증류기)이 아직 없거나 이번 앱을 맡은 규칙이 없으면(`org_distiller_list`), «모은 자료를 지식으로 정리하는 규칙도 이어서 정할까요?»라고 묻는다. 원하면 `liv-distill` 스킬로 넘어간다.
 4. **남긴다.** 무엇을 연결했고 무엇을 왜 뺐는지 `me_liv_profile_set { decision:{ what, why } }` 로 한 줄 남긴다 — 다음에 이어 받는 AI 가 안다.
 

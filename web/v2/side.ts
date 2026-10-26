@@ -1323,7 +1323,7 @@ function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string,
 const srcMore = new Set<string>();
 const SRC_APP_IC: Record<string, string> = {
   slack: 'chat', discord: 'chat', github: 'code', gitlab: 'code', linear: 'check', clickup: 'check', figma: 'pen',
-  notion: 'doc', gdrive: 'doc', 'domain-wiki': 'doc', gmail: 'mailopen', outlook: 'mailopen',
+  notion: 'doc', gdrive: 'doc', 'domain-wiki': 'doc', gmail: 'mailopen', outlook: 'mailopen', zotero: 'doc',
 };
 function renderSourcesSection(): void {
   if (!last) return;

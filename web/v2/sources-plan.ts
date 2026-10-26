@@ -25,18 +25,18 @@ export interface SourcesSidePlan {
 /** 출처 이름: external_system 은 기계 이름이라 그대로 보여 주지 않는다. */
 export const SYS_LABEL: Record<string, string> = {
   slack: '슬랙', discord: '디스코드', github: '깃허브', gitlab: '깃랩', linear: '리니어', figma: '피그마',
-  notion: '노션', clickup: '클릭업', gdrive: '구글드라이브', gmail: '지메일', outlook: '아웃룩', local: '파일',
+  notion: '노션', clickup: '클릭업', gdrive: '구글드라이브', gmail: '지메일', outlook: '아웃룩', zotero: 'Zotero', local: '파일',
   'domain-wiki': '도메인 위키', authored: '직접 적은 글',
 };
 export const KIND_LABEL: Record<string, string> = {
   transcript: '전사록', minutes: '회의록', email: '이메일', slack: '슬랙', discord: '디스코드',
   notion_doc: '노션', clickup_doc: '클릭업', drive_file: '구글드라이브', local_file: '파일',
-  figma_comment: '피그마 코멘트', github_issue: '깃허브', gitlab_issue: '깃랩', linear_issue: '리니어', other: '기타',
+  figma_comment: '피그마 코멘트', github_issue: '깃허브', gitlab_issue: '깃랩', linear_issue: '리니어', zotero_item: 'Zotero 논문', other: '기타',
 };
 export const sysLabel = (s: string): string => SYS_LABEL[s] || s;
 export const kindLabel = (k: string): string => KIND_LABEL[k] || k;
 /** 수집한 자료 안 앱의 차례: 대화가 위, 기록계가 아래. 모르는 앱은 끝(같으면 수 많은 순). */
-export const SYS_ORDER = ['slack', 'discord', 'github', 'gitlab', 'linear', 'figma', 'notion', 'gdrive', 'gmail', 'outlook', 'clickup', 'domain-wiki'];
+export const SYS_ORDER = ['slack', 'discord', 'github', 'gitlab', 'linear', 'figma', 'notion', 'gdrive', 'gmail', 'outlook', 'clickup', 'zotero', 'domain-wiki'];
 const sysRank = (s: string): number => { const i = SYS_ORDER.indexOf(s); return i < 0 ? SYS_ORDER.length : i; };
 export const isChatSys = (s: string): boolean => s === 'slack' || s === 'discord';
 

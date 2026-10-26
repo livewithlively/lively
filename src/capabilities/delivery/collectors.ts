@@ -22,6 +22,7 @@ import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 import { itemsPool } from "../../db/client.js";
 import { ensureWikiRepoCollector } from "../../org/wiki-repo.js";
 import { ensureFigmaCommentsDistiller } from "../../org/distill/figma-preset.js";
+import { ensureZoteroPapersDistiller } from "../../org/distill/zotero-preset.js";
 import { logger } from "../../log.js";
 import { actorOf, restRead, restWork, str } from "./shared.js";
 
@@ -96,11 +97,15 @@ export const collectorsCapabilities: Capability[] = [
         try { await ensureFigmaCommentsDistiller({ actor: actorOf(user), source: "collector-upsert" }); }
         catch (e) { logger.warn({ err: e }, "피그마 증류기 준비 실패(무시) — org_distiller_figma_ensure 로 다시 시도할 수 있다"); }
       }
+      if (String((collector as { preset_key?: unknown }).preset_key ?? "") === "zotero") {
+        try { await ensureZoteroPapersDistiller({ actor: actorOf(user), source: "collector-upsert" }); }
+        catch (e) { logger.warn({ err: e }, "Zotero 증류기 준비 실패(무시) — org_distiller_zotero_ensure 로 다시 시도할 수 있다"); }
+      }
       return { collector };
     }, {
       id: z.number().int().positive().optional().describe("수정할 수집기 id(없으면 생성)"),
       key: z.string().optional().describe("식별 슬러그(a-z0-9._-) — 비우면 자동 생성"),
-      preset_key: z.string().optional().describe("프리셋: slack|notion|clickup|gmail|gdrive|discord|figma|domain-wiki (생성 시 필수)"),
+      preset_key: z.string().optional().describe("프리셋: slack|notion|clickup|gmail|gdrive|discord|figma|zotero|domain-wiki (생성 시 필수)"),
       instance_key: z.string().optional().describe("커서 네임스페이스 — 생성 시에만. 비우면 key(첫 인스턴스는 '_')"),
       label: z.string().nullable().optional(),
       enabled: z.boolean().optional(),
