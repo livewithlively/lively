@@ -12,7 +12,7 @@
 //  그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다(카드는 web/liv-cards.ts 한 벌).
 import { api, el, toast } from './core.js';
 import { bindCtxSurface } from './v2/ctx-registry.js';   // #3784 리브 화면 우클릭
-import { fillConnectApps, livAskCard, livAskTyping, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
+import { fillConnectApps, livAskCard, livAskKeep, livLetterBox, livToast, pokeLivStatus, watchLivStatus, type LivHooks } from './liv-cards.js';
 import { openLiv } from './v2/liv-open.js';
 import { rememberUnsentDraft } from './v2/quick-session.js';
 import { putIntoSession } from './v2/sess-input.js';
@@ -122,7 +122,7 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
 
   watchLivStatus((st) => {
     if (!wrapEl.isConnected || !st) return;
-    if (!livAskTyping(askHost)) {
+    if (!livAskKeep(askHost, st.secretAsk)) {
       const card = livAskCard(st.secretAsk, hooks);
       askHost.replaceChildren(...(card ? [card] : []));
     }

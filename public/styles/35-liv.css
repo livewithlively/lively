@@ -110,7 +110,9 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 /* ── 자격 입력칸(#1631) — **사람을 다른 탭으로 보내지 않기 위한 자리** ─────────────────
    리브가 "무엇이 필요한지"만 말하면 여기 칸이 뜬다. 값은 곧바로 금고로 가고 대화에는 안 남는다.
    레일에서 유일하게 **테두리를 강조하는 카드**다 — 이게 떠 있는 동안 리브는 이걸 기다리며 멈춰 있다. */
-.liv-ask { border-color: var(--mint-deep); border-width: 1px; }
+/* ⚠ 틀(테두리·여백·바탕)을 여기서 직접 진다 — 종전엔 .liv-card 를 빌려 썼는데, 그 틀은 #260 통합 때 빠졌고 이름은
+   «리브가 세팅한 것» 표시(03-components.css · 초록 띠 + 옅은 바탕, 여백 없음)가 가져갔다. 빌려 쓰면 카드가 띠에 붙어 깨진다. */
+.liv-ask { border: 1px solid var(--mint-deep); border-radius: 8px; padding: 10px 12px; background: var(--bg); }
 .liv-ask-head { font-size: 13px; line-height: 1.45; }
 .liv-ask-why { color: var(--ink-sub); font-size: 12px; margin-top: 4px; line-height: 1.5; }
 /* 좁은 레일이라 칸과 버튼이 줄바꿈된다 — 칸이 먼저 한 줄을 다 쓰고 버튼이 아래로 흐른다. */
