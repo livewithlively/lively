@@ -1210,7 +1210,6 @@ async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = nul
 }
 
 // ── 8. 설치/업데이트의 단일 코드 경로 ───────────────────────────────────────
-//  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
 // 설치 직후 조직 자산 미리 받기(#5013) — 스킬·서브에이전트·커맨드는 원래 **대화 시작 훅**(sync-harness-assets)만 내려받는다.
 //  그런데 codex·cursor·opencode·antigravity 는 스킬 목록을 대화 시작 때 한 번만 읽어서(harness-registry reloadAssets:false)
 //  그 훅이 받은 것이 **다음 대화부터** 보인다 → 설치 직후 첫 대화(= 처음 설정의 «외부 앱 연결 도와줘»)엔 라이블리 스킬이 없었다
@@ -1226,8 +1225,10 @@ export async function preloadHarnessAssets(harnesses, { timeoutMs = 15000 } = {}
   for (const h of harnesses) {
     const outcome = await new Promise((done) => {
       let p;
-      // 토큰은 CLI 정본을 명시 주입한다 — user-install 호출과 같은 이유(셸의 스테일 LIVELY_TOKEN 이 이기지 않게, #916 계열).
-      try { p = spawn(process.execPath, [script, "--harness", h], { env: { ...process.env, LIVELY_TOKEN: token() }, stdio: "ignore", windowsHide: true }); }
+      // 토큰·주소는 CLI 정본을 **짝으로** 명시 주입한다 — 라이블리가 띄운 창(LIVELY_SESSION_ID)에선 스크립트가 env 를 먼저 보므로,
+      //  안 넘기면 셸의 스테일 값이 이긴다(#916 계열). 토큰만 넘기면 새 토큰이 옛 주소로 나간다.
+      //  stdio 는 ignore 여야 한다 — claude 몫은 stdout 에 재로드 JSON 을 내는데, 물려주면 앱의 NDJSON 이벤트 줄에 섞인다.
+      try { p = spawn(process.execPath, [script, "--harness", h], { env: { ...process.env, LIVELY_TOKEN: token(), LIVELY_GATEWAY_URL: gateway() }, stdio: "ignore", windowsHide: true }); }
       catch { done({ code: -1 }); return; }
       const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* 이미 끝남 */ } done({ code: -1, timedOut: true }); }, timeoutMs);
       p.on("error", () => { clearTimeout(timer); done({ code: -1 }); });
@@ -1240,6 +1241,7 @@ export async function preloadHarnessAssets(harnesses, { timeoutMs = 15000 } = {}
   return results.map((r) => ({ ...r, skills: Object.values(man[r.harness] || {}).filter((e) => e?.kind === "skill").length }));
 }
 
+//  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
 async function syncKit({ label, offerHarness, want = "" }) {
   if (!gateway()) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
   if (!token()) die("로그인이 필요합니다 — 먼저 `lively login` 을 실행하세요.");
@@ -1278,6 +1280,8 @@ async function syncKit({ label, offerHarness, want = "" }) {
     run(process.execPath, [join(root, "setup", "user-install.mjs"), "--allow-host-effects", "--clone-root", root, "--harness", harnesses.join(",")],
       { env: { LIVELY_TOKEN: token() } });
     // 조직 자산 미리 받기(#5013) — 설치 직후 첫 대화에도 라이블리 스킬이 보이게(preloadHarnessAssets 머리말).
+    //  하네스당 몇 초(게이트웨이가 느리면 스크립트가 ~5초에 스스로 끊는다)라 시작을 먼저 알린다.
+    say(dim("  조직 스킬 받는 중…"));
     const pre = await preloadHarnessAssets(harnesses);
     if (pre.length) {
       say(dim(`  조직 스킬: ${pre.map((x) => `${x.harness} ${x.skills}개`).join(" · ")}`

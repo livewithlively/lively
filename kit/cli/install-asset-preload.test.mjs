@@ -4,8 +4,9 @@
 //  → 설치 직후 첫 대화에 라이블리 스킬이 없었다. 설치가 그 훅을 미리 한 번 돌리는지를 디스크·스텁 요청으로 본다.
 //  샌드박스 HOME(LIVELY_HOME) + 127.0.0.1 스텁 게이트웨이 — 실 홈·네트워크 무접촉.
 //  실행: node scripts/run-tests.mjs install-asset-preload
-//  엣지 표(E1~E7, 사양 문서): ①두 하네스 모두 받음 ②받은 목록에 두 몫이 다 남음 ③게이트웨이 500 ④받기 스크립트 부재
-//   ⑤빈 하네스 목록 ⑥셸의 옛 토큰보다 파일 토큰 ⑦끝나지 않는 스크립트는 상한에서 끊음. (E8 설치 흐름 배선은 lively.test.mjs ③.)
+//  엣지 표(#5013 프로젝트 본문): ①두 하네스 모두 받음 ②받은 목록에 두 몫이 다 남음 ③게이트웨이 500 ④받기 스크립트 부재
+//   ⑤빈 하네스 목록 ⑥셸의 옛 토큰·옛 주소보다 파일 정본 ⑦끝나지 않는 스크립트는 상한에서 끊음.
+//   (E8 설치 흐름 배선·stdout 오염 없음은 lively.test.mjs ③.)
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -60,6 +61,11 @@ const server = createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const GW = `http://127.0.0.1:${server.address().port}`;
+// E6 의 «옛 게이트웨이» — 여기로 요청이 오면 셸의 스테일 주소가 이긴 것이다.
+const staleHits = [];
+const stale = createServer((req, res) => { staleHits.push(req.url); res.writeHead(200, { "content-type": "application/json" }).end("{}"); });
+await new Promise((r) => stale.listen(0, "127.0.0.1", r));
+const STALE_GW = `http://127.0.0.1:${stale.address().port}`;
 
 // 설치기가 놓는 그대로 — 훅은 ~/.lively/hooks 에 평평하게, host-effects 는 ~/.lively/lib(kit-manifest LIB_FILES).
 function freshHome() {
@@ -120,16 +126,19 @@ try {
     const r = await preloadHarnessAssets([]);
     eq("E5 빈 목록 → 빈 결과 · 요청 0", [r, assetHits().length], [[], 0]);
   }
-  // E6 — 셸에 남은 옛 토큰이 아니라 파일 토큰으로 받는다. 라이블리가 띄운 창(LIVELY_SESSION_ID)이면 받기 스크립트가
-  //  env 를 먼저 보므로, 설치가 토큰을 명시로 넘기지 않으면 옛 토큰이 나간다 — 그 조합을 세운다.
+  // E6 — 셸에 남은 옛 토큰·옛 주소가 아니라 파일 정본으로 받는다. 라이블리가 띄운 창(LIVELY_SESSION_ID)이면 받기 스크립트가
+  //  env 를 먼저 보므로, 설치가 둘을 명시로 넘기지 않으면 옛 값이 나간다 — 그 조합을 세운다.
   {
     freshHome();
-    const saved = { t: process.env.LIVELY_TOKEN, s: process.env.LIVELY_SESSION_ID };
+    staleHits.length = 0;
+    const saved = { t: process.env.LIVELY_TOKEN, s: process.env.LIVELY_SESSION_ID, g: process.env.LIVELY_GATEWAY_URL };
     process.env.LIVELY_TOKEN = "stale-env-token";
     process.env.LIVELY_SESSION_ID = "sess-preload-test";
+    process.env.LIVELY_GATEWAY_URL = STALE_GW;
     try { await preloadHarnessAssets(["cursor"]); }
-    finally { process.env.LIVELY_TOKEN = saved.t ?? ""; process.env.LIVELY_SESSION_ID = saved.s ?? ""; }
+    finally { process.env.LIVELY_TOKEN = saved.t ?? ""; process.env.LIVELY_SESSION_ID = saved.s ?? ""; process.env.LIVELY_GATEWAY_URL = saved.g ?? ""; }
     eq("E6 Bearer = 파일 토큰", assetHits().map((x) => x.auth), ["Bearer file-token"]);
+    eq("E6 옛 게이트웨이로는 요청 0", staleHits.length, 0);
   }
   // E7 — 끝나지 않는 스크립트는 상한에서 끊고 다음 하네스로 넘어간다(설치를 붙잡지 않는다).
   {
@@ -143,6 +152,7 @@ try {
   }
 } finally {
   server.close();
+  stale.close();
   rmSync(SANDBOX, { recursive: true, force: true });
 }
 

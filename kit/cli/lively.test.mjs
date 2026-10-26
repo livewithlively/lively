@@ -233,6 +233,8 @@ try {
     check("③ 설치 — 조직 스킬 미리 받기(대화 시작 전)",
       (serving.assetHits || 0) >= 1 && preloaded,
       `assetHits=${serving.assetHits || 0} preloaded=${preloaded}\n${r.err.slice(-400)}`);
+    // 받기 스크립트는 claude 몫에서 stdout 에 재로드 JSON 을 낸다 — 설치의 stdout(앱 모드에선 NDJSON 이벤트 줄)에 새면 안 된다.
+    check("③ 설치 — 미리 받기 출력이 CLI stdout 에 안 샘", !r.out.includes("reloadSkills"), r.out.slice(-300));
   }
 
   // ④ **MCP 등록 인자** — 이 CLI(registerClaudeMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
