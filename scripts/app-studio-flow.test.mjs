@@ -78,6 +78,15 @@ check(/^\[\[기획카드\]\]\n앱 이름: 회의 안건\n/.test(txt) && /주요 
   check(!!r5 && r5.items.length === 0 && r5.links.length === 0, "R5 빈 글 — 아무것도 없음", r5);
   const r6 = RV("나쁜 것 [눌러](javascript:alert(1)) [그림](data:text/html,x)");
   check(!!r6 && r6.links.length === 0, "R6 javascript: · data: 는 링크로 만들지 않는다", r6);
+  //  격리 리뷰 — 괄호가 든 주소 · 대괄호가 든 이름 · 문장 부호로 끝나는 맨 주소 · 다 걷고 남은 게 없을 때
+  const r8 = RV("위키: 회의록 정의 ; 출처: [Wikipedia](https://en.wikipedia.org/wiki/Minutes_(document)), [B](https://b.com)");
+  check(!!r8 && r8.links.length === 2 && r8.links[0].url === "https://en.wikipedia.org/wiki/Minutes_(document)" && JSON.stringify(r8.items) === JSON.stringify([{ name: "위키", text: "회의록 정의" }]), "R8 괄호가 든 주소가 잘리지 않고 남는 괄호 조각도 없다", r8);
+  const r9 = RV("노트: 정리 ; 출처: [Foo [1]](https://a.com/x)");
+  check(!!r9 && r9.links.length === 1 && r9.links[0].label === "Foo [1]" && r9.items.length === 1 && !/\[|\]/.test(r9.items[0].text), "R9 대괄호가 든 이름도 링크 하나로", r9);
+  const r10 = RV("자세한 건 https://otter.ai/blog. 그리고 (https://a.com/b_(c)) 참고");
+  check(!!r10 && r10.links.map((l) => l.url).join(" ") === "https://otter.ai/blog https://a.com/b_(c)", "R10 맨 주소 끝 마침표는 주소가 아니다 · 괄호 한 겹 주소는 통째로", r10 && r10.links);
+  const r11 = RV("참고했습니다");
+  check(!!r11 && JSON.stringify(r11.items) === JSON.stringify([{ name: "", text: "참고했습니다" }]), "R11 다 걷고 남은 게 없으면 원문 그대로(빈 칸 아님)", r11);
   check(/서비스 이름: 가져온 것/.test(F.planBrief("회의록 정리", "both", "회의록")) && /출처: \[이름\]\(주소\)/.test(F.planBrief("회의록 정리", "both", "회의록")), "R7 planBrief — 참고한 서비스를 «이름: 것 ; … ; 출처: [이름](주소)» 꼴로 청한다");
 }
 

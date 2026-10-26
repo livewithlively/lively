@@ -435,6 +435,13 @@ function helpMenu(btn: HTMLElement, onIntro: () => void, onTour: () => void): vo
   const off = (e: Event): void => { if (!m.contains(e.target as Node)) { m.remove(); document.removeEventListener('pointerdown', off, true); } };
   setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
 }
+//  누른 채인가 — 「참고한 서비스」 가 보기로 돌아갈 때를 늦춘다(cardView).
+let pointerHeld = false;
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+  document.addEventListener('pointerup', () => { pointerHeld = false; }, true);
+  document.addEventListener('pointercancel', () => { pointerHeld = false; }, true);
+}
 /** 「참고한 서비스」 보기 — 서비스마다 한 줄(이름 굵게) · 맨 아래 「출처」 뒤 이름만 보이는 링크(새 탭). 주소 글자는 링크의 title 에만. */
 function refNode(raw: string): HTMLElement {
   const r = refView(raw);
@@ -454,17 +461,28 @@ function cardView(c: StudioCard, onEdit: ((c: StudioCard) => void) | null): HTML
     const isRef = r.k === 'ref';
     let raw = val;
     const editing = (): boolean => v.getAttribute('contenteditable') === 'true';
-    const view = (): void => { if (!isRef || !raw) return; v.removeAttribute('contenteditable'); v.classList.add('ref'); v.replaceChildren(refNode(raw)); };
+    const view = (): void => {
+      if (!isRef || !raw) return;
+      v.removeAttribute('contenteditable'); v.classList.add('ref'); v.replaceChildren(refNode(raw));
+      if (onEdit) { v.setAttribute('role', 'button'); v.setAttribute('aria-label', r.label + ', 누르면 고칠 수 있어요'); }
+    };
     if (onEdit) {
       v.setAttribute('contenteditable', 'true'); v.setAttribute('data-placeholder', r.hint); v.setAttribute('aria-label', r.label);
       v.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
-        if (editing()) { e.preventDefault(); v.blur(); }
-        else if (e.target === v) { e.preventDefault(); editRaw(); }
+        if (e.isComposing || e.keyCode === 229) return;
+        if (e.key === 'Enter' && editing()) { e.preventDefault(); v.blur(); }
+        else if ((e.key === 'Enter' || e.key === ' ') && !editing() && e.target === v) { e.preventDefault(); editRaw(); }   // 보기 상태 — 단추처럼
       });
       //  보기 상태에서 지나가기만 한 것(탭 · 링크 누름)은 고친 게 아니다 — 보기 글로 기록을 덮지 않는다.
-      v.addEventListener('blur', () => { if (!editing()) return; const t = String(v.textContent || '').trim(); raw = t; if (r.k === 'can') c.can = splitList(t); else c[r.k] = t; onEdit(c); view(); });
-      const editRaw = (): void => { v.classList.remove('ref'); v.textContent = raw; v.setAttribute('contenteditable', 'true'); v.focus(); const sel = window.getSelection(); if (sel) { sel.selectAllChildren(v); sel.collapseToEnd(); } };
+      //  보기로 돌아가면 줄이 짧아져 아래가 올라온다 — 다른 단추를 누르는 중(누른 채)이면 뗀 뒤에 바꾼다(그 누름이 빈 데로 새지 않게 · 격리 리뷰).
+      v.addEventListener('blur', () => {
+        if (!editing()) return;
+        const t = String(v.textContent || '').trim(); raw = t; if (r.k === 'can') c.can = splitList(t); else c[r.k] = t; onEdit(c);
+        if (!pointerHeld) { view(); return; }
+        //  뗀 뒤 — 그사이 다시 눌러 고치는 중이면 그대로 둔다.
+        document.addEventListener('pointerup', () => { window.setTimeout(() => { if (document.activeElement !== v) view(); }, 0); }, { once: true, capture: true });
+      });
+      const editRaw = (): void => { v.classList.remove('ref'); v.removeAttribute('role'); v.setAttribute('aria-label', r.label); v.textContent = raw; v.setAttribute('contenteditable', 'true'); v.focus(); const sel = window.getSelection(); if (sel) { sel.selectAllChildren(v); sel.collapseToEnd(); } };
       if (isRef) {
         v.tabIndex = 0;
         v.addEventListener('click', (e: MouseEvent) => { if ((e.target as HTMLElement).closest('a') || editing()) return; editRaw(); });

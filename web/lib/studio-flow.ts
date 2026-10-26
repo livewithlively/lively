@@ -119,8 +119,11 @@ export function parseCard(text: string): StudioCard | null {
 //   («A에서는 …을, B에서는 …을 가져왔습니다(출처: [..](..), …)») — 둘 다 서비스마다 한 항목 · 링크 목록으로 푼다. 화면은 이것만 그리고, 고칠 땐 원문 그대로.
 export interface RefLink { label: string; url: string }
 export interface RefView { items: Array<{ name: string; text: string }>; links: RefLink[] }
-const MD_LINK = /\[([^\]\n]{1,120})\]\(\s*([^\s)]+)\s*\)/g;
-const BARE_URL = /https?:\/\/[^\s)\]<>"',，]+/g;
+//  이름 칸은 대괄호 한 겹까지(«[Foo [1]]»), 주소 칸은 괄호 한 겹까지(위키백과 «Foo_(bar)») — 격리 리뷰: 괄호에서 주소가 잘려 엉뚱한 곳으로 가던 것.
+const MD_LINK = /\[((?:[^\[\]\n]|\[[^\[\]\n]*\]){1,120})\]\(\s*((?:[^\s()]|\([^\s()]*\))+)\s*\)/g;
+const BARE_URL = /https?:\/\/(?:[^\s()<>"'\[\]，]|\([^\s()<>"']*\))+/g;
+/** 맨 주소 끝에 붙은 문장 부호(. , ; : ! ?)는 주소가 아니다. */
+const trimUrlTail = (u: string): string => u.replace(/[.,;:!?。、]+$/, '');
 /** http(s) 주소만 링크로 — javascript: · data: 같은 것은 링크가 아니다. */
 const safeUrl = (u: string): string => (/^https?:\/\/[^\s]+$/i.test(u) ? u : '');
 const hostOf = (u: string): string => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return u; } };
@@ -128,7 +131,7 @@ export function refView(text: string): RefView {
   const links: RefLink[] = [];
   let s = String(text || '');
   s = s.replace(MD_LINK, (_, label: string, url: string) => { const u = safeUrl(url); if (u) links.push({ label: label.trim(), url: u }); return u ? ' ' : label; });
-  s = s.replace(BARE_URL, (u: string) => { links.push({ label: hostOf(u), url: u }); return ' '; });
+  s = s.replace(BARE_URL, (m: string) => { const u = trimUrlTail(m); links.push({ label: hostOf(u), url: u }); return ' ' + m.slice(u.length); });
   //  링크를 걷고 남은 «(출처: , , )» · «; 출처: , ,» 꼬리
   s = s.replace(/[(（]\s*(출처|참고)\s*[:：][\s,·、]*[)）]/g, ' ').replace(/(^|;)\s*(출처|참고 링크)\s*[:：][\s,·、]*(?=;|$)/g, '$1');
   const tidy = (t: string): string => t.replace(/\s*·\s*/g, ', ').replace(/\s+/g, ' ').replace(/\s+([,.])/g, '$1').replace(/^[,;.\s]+|[,;\s]+$/g, '').trim();
@@ -139,6 +142,8 @@ export function refView(text: string): RefView {
     parts = s.split(/,\s*(?=[^,]{1,30}?에서는\s)/).map((p) => { const m = /^\s*(.{1,30}?)에서는\s+([\s\S]+)$/.exec(p); return m ? { name: m[1].trim(), text: m[2] } : { name: '', text: p }; });
   }
   const items = parts.map((x) => ({ name: x.name, text: tidy(x.text.replace(/\s*(을|를)?\s*(가져왔|참고했)[^,;]*$/, '').replace(/(을|를)\s*$/, '')) })).filter((x) => x.text || x.name);
+  //  다 걷고 아무것도 안 남았는데 원문이 있으면(«참고했습니다» · «;») — 빈 칸 대신 원문 그대로.
+  if (!items.length && !links.length && String(text || '').trim()) items.push({ name: '', text: String(text).trim() });
   return { items, links };
 }
 export function cardText(c: StudioCard): string {

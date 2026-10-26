@@ -20,6 +20,7 @@
 //  V1 「참고한 서비스」 보기 — 서비스마다 한 줄(이름 굵게) · 출처는 새 탭 링크(이름만) · 보이는 글에 주소 없음
 //  V4 링크를 누르면 고치기로 바뀌지 않는다   V5 보기 상태로 들렀다 나가기만 하면 기록이 그대로(보기 글로 안 덮인다)
 //  V2 글을 누르면 원문 그대로 고치기 · 커서   V3 고치고 나가면 기록에 남고 다시 보기
+//  V6 보기 상태는 단추처럼(role=button · 이름) · Space 로도 고치기   V7 다른 단추를 누른 채 나가면 뗀 뒤에 보기로(누름이 빈 데로 새지 않게)
 //  W  페이지 예외 없음 · 카드가 실제로 그려졌다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 C1 · C3 · L5 · E1~E3 이 빨갛다).
@@ -153,6 +154,20 @@ async function PAGE_MAIN() {
   window.__step = "V3";
   if (rv && R.v2 && R.v2.editing) { rv.textContent = window.__REF + " 노션 캘린더 보기"; rv.blur(); await sleep(150); }
   rv = refV(); R.v3 = { saved: stored() === window.__REF + " 노션 캘린더 보기", view: !!rv && rv.classList.contains("ref") && rv.getAttribute("contenteditable") !== "true" };
+  window.__step = "V6";
+  rv = refV(); R.v6 = { role: rv && rv.getAttribute("role"), label: rv && /누르면 고칠 수 있어요/.test(rv.getAttribute("aria-label") || "") };
+  if (rv) { rv.focus(); rv.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true })); await sleep(80); }
+  rv = refV(); R.v6.space = !!rv && rv.getAttribute("contenteditable") === "true" && !rv.hasAttribute("role");
+  window.__step = "V7";
+  //  고치는 중에 아래 「+ 항목 더하기」 를 누른 채(pointerdown) — 그 사이 나감(blur) — 아직 고치기 모양 그대로 · 뗀(pointerup) 뒤에 보기
+  const addB = vh.querySelector(".v2-studio-card-add");
+  if (rv && addB) {
+    addB.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    rv.blur(); await sleep(50);
+    const held = refV().classList.contains("ref");
+    addB.dispatchEvent(new PointerEvent("pointerup", { bubbles: true })); await sleep(50);
+    R.v7 = { duringHold: held, afterUp: refV().classList.contains("ref") };
+  }
   R.errors = errors;
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
 }
@@ -201,6 +216,8 @@ same(R.v4, { view: true, editing: false }, "V4 링크를 누르면 고치기로 
 same(R.v5, { same: true, view: true }, "V5 보기로 들렀다 나가기만 하면 기록 그대로");
 same(R.v2, { editing: true, focused: true, raw: true }, "V2 글을 누르면 원문 그대로 고치기 · 커서");
 same(R.v3, { saved: true, view: true }, "V3 고치고 나가면 기록에 남고 다시 보기");
+same(R.v6, { role: "button", label: true, space: true }, "V6 보기 상태는 단추처럼(role · 이름) · Space 로도 고치기");
+same(R.v7, { duringHold: false, afterUp: true }, "V7 다른 단추를 누른 채 나가면 뗀 뒤에 보기로 바뀐다");
 same(R.errors, [], "W  페이지 예외 없음");
 
 console.log(`\n#4632 기획 카드(잘림 · 줄 이름 · 더한 항목): ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
