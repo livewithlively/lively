@@ -17,7 +17,7 @@ import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js"
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
-import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
+import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC, ZOTERO_TOKEN_KIND, ZOTERO_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
 import { resolveGithubTokenSource, githubVaultDeps } from "../org/credentials/github-token-source.js";
 import { resolveGitlabTokenSource, gitlabVaultDeps } from "../org/credentials/gitlab-token-source.js";
 import { resolveLinearTokenSource, linearVaultDeps } from "../org/credentials/linear-token-source.js";
@@ -331,6 +331,32 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "exclude_files", env: "FIGMA_EXCLUDE_FILES", secret: false, label: "제외 파일", hint: "이름에 이 조각이 들어간 파일은 건너뜁니다(예: archive 백업) — 공백·쉼표 구분" },
     ],
   },
+  // Zotero — 수집 단위는 **논문 한 편**(서지 + 그 논문에 단 주석·노트)이다. 연구자의 생각은 서지가 아니라 주석·노트에 있다
+  //  (connectors/zotero.ts 머리말). 범위는 라이브러리(개인·그룹)와 컬렉션, 종류는 주석·노트·전문 색인·자동 태그를 켜고 끈다.
+  zotero: {
+    system: "zotero",
+    label: "Zotero",
+    guide: {
+      intro: "Zotero 는 연구자가 논문을 모으고 PDF 에 하이라이트·코멘트를 다는 곳입니다. 라이블리는 논문마다 서지·초록과 그 논문에 단 주석·노트를 한 자료로 묶어 가져옵니다. 키는 zotero.org 에서 만드는 개인 API 키를 씁니다.",
+      steps: [
+        "zotero.org/settings/keys 를 엽니다(로그인 필요) ▸ [Create new private key] — 설정 메뉴 이름은 계정마다 «Feeds/API»·«Security» 로 다르게 보여 주소로 가는 편이 확실합니다",
+        "Personal Library 의 «Allow library access» 와 «Allow notes access» 를 켭니다 — 노트 권한이 없으면 노트가 빠집니다. 연구실 그룹도 모으려면 Default Group Permissions 를 «Read Only» 로 둡니다",
+        "[Save Key] 를 누르면 나오는 키를 아래 'API 키' 칸에 저장합니다. (이미 [외부 앱 연결 ▸ Zotero]에 저장해 뒀다면 키 칸을 비우고 '키 출처'에 member:<내 구성원 id> 를 적으세요)",
+        "모을 라이브러리를 정합니다 — 비우면 이 키가 읽을 수 있는 라이브러리 전부(개인 + 그룹)입니다. 좁히려면 users/<id> · groups/<id> 를 적고, 컬렉션만 모으려면 컬렉션 key 를 적습니다(컬렉션을 적으면 그 컬렉션만 — 다른 라이브러리를 통째로 함께 모으려면 라이브러리 칸에도 적습니다). 개인 라이브러리는 '키 출처'가 member:<구성원 id> 일 때만 모읍니다(주인에게 잠그기 위해)",
+      ],
+      url: "https://www.zotero.org/settings/keys/new",
+    },
+    fields: [
+      { key: "token", env: "ZOTERO_API_KEY", secret: true, label: "API 키", hint: "zotero.org/settings/keys 에서 만든 개인 키. 아래 '키 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "ZOTERO_TOKEN_SOURCE", secret: false, label: "키 출처", hint: "org = 관리탭 자격 금고의 조직 공용 zotero_token · member:<구성원 id> = 그 사람이 [외부 앱 연결 ▸ Zotero]에 저장한 키 · 비우면 위 키 칸을 씁니다" },
+      { key: "libraries", env: "ZOTERO_LIBRARIES", secret: false, label: "라이브러리", hint: "users/<id> · groups/<id> (공백 구분, 그룹 주소 그대로도 됩니다). 비우면 이 키가 읽을 수 있는 라이브러리 전부" },
+      { key: "collections", env: "ZOTERO_COLLECTIONS", secret: false, label: "컬렉션", hint: "컬렉션 key(8자) — 넣으면 그 컬렉션(하위 포함)만 모읍니다. 다른 라이브러리를 통째로 함께 모으려면 위 라이브러리 칸에도 적으세요. 비우면 라이브러리 전체" },
+      { key: "include_annotations", env: "ZOTERO_INCLUDE_ANNOTATIONS", secret: false, label: "주석", hint: "PDF 하이라이트·코멘트 — on/off (기본 on)" },
+      { key: "include_notes", env: "ZOTERO_INCLUDE_NOTES", secret: false, label: "노트", hint: "논문 노트·독립 노트 — on/off (기본 on)" },
+      { key: "include_fulltext", env: "ZOTERO_INCLUDE_FULLTEXT", secret: false, label: "전문 색인", hint: "Zotero 가 색인한 본문 텍스트 — on/off (기본 off · 논문당 3만 자까지)" },
+      { key: "include_auto_tags", env: "ZOTERO_INCLUDE_AUTO_TAGS", secret: false, label: "자동 태그", hint: "DB 에서 가져올 때 붙은 주제어 — on/off (기본 off · 손으로 단 태그는 늘 모읍니다)" },
+    ],
+  },
 };
 
 // ════════ 다중 수집기 인스턴스 해소 (#1419 T1) ════════
@@ -545,6 +571,14 @@ async function loadConnectorConfig(
     if (r) {
       if (r.warning) console.warn(`clickup token_source: ${r.warning}`);
       out.api_token = r.token;
+    }
+  }
+  // ── Zotero 키 출처 — 같은 규약(출처를 명시했으면 그 출처만). 개인 API 키 평문.
+  if (system === "zotero" && out.token_source) {
+    const r = await resolvePlainTokenSource(out.token_source, plainVaultReader(ZOTERO_TOKEN_KIND), ZOTERO_TOKEN_SPEC);
+    if (r) {
+      if (r.warning) console.warn(`zotero token_source: ${r.warning}`);
+      out.token = r.token;
     }
   }
   // ── GitHub 토큰 출처(#2247) — 같은 규약. 묶음/정적·만료 갱신은 http_proxy 와 같은 부품(github-token-source.ts).

@@ -20,7 +20,7 @@ import { notionCollectState } from "./notion-connect.js";
 import { googleCollectState } from "./google-connect.js";
 import {
   clickupCollectCapabilities, figmaCollectCapabilities, githubCollectCapabilities, gitlabCollectCapabilities,
-  linearCollectCapabilities, outlookCollectCapabilities,
+  linearCollectCapabilities, outlookCollectCapabilities, zoteroCollectCapabilities,
 } from "./member-collect-apps.js";
 import { githubAppReady } from "../org/credentials/oauth-broker.js";
 import { decideRoutes, type AppRouteFacts, type ConnectRoute } from "../org/connect-routes.js";
@@ -143,6 +143,7 @@ export const CONNECT_APPS: readonly AppSpec[] = [
   { app: "outlook", label: "아웃룩", needsApp: true, registerBy: "admin", routes: { app: true }, probe: memberCollectProbe(outlookCollectCapabilities, "outlook") },
   { app: "clickup", label: "클릭업", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(clickupCollectCapabilities, "clickup") },
   { app: "figma", label: "피그마", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(figmaCollectCapabilities, "figma") },
+  { app: "zotero", label: "조테로", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(zoteroCollectCapabilities, "zotero") },
 ];
 
 export interface ConnectAppStatus {

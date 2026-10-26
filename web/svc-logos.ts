@@ -5,7 +5,8 @@
 //
 //  출처 · 라이선스
 //   · 11종: SVG Logos(@iconify-json/logos · gilbarbara/logos) — CC0-1.0. 원래의 여러 색까지 그대로인 마크.
-//   · ClickUp 1종: simple-icons — CC0-1.0(단색). 위 세트에 없어서 공식 경로에 브랜드색을 입혔다.
+//   · ClickUp·Zotero 2종: simple-icons — CC0-1.0(단색). 위 세트에 없어서 공식 경로에 브랜드색을 입혔다
+//     (Zotero 는 simple-icons@13.21.0 의 zotero.svg · 색 #CC2936 — 그 데이터가 출처로 zotero.org/support/brand 를 든다).
 //   · Outlook 1종(#4211): vscode-icons `file-type-outlook` — MIT(Copyright (c) 2016 Roberto Huertas). 위 두 세트엔 없다
 //     (simple-icons 는 Microsoft 마크를 내렸다). 원본 경로·색 그대로.
 //   · 로고의 상표권은 각 회사에 있다. 여기 쓰임은 '그 서비스를 가리키는' 지시적 사용이다.
@@ -95,6 +96,9 @@ const SVC_LOGO: Record<string, Logo> = {
   ] },
   'clickup': { vb: '0 0 24 24', p: [
     { 'd': "M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z", 'fill': "#7B68EE" },
+  ] },
+  'zotero': { vb: '0 0 24 24', p: [
+    { 'd': "M21.231 2.462 7.18 20.923h14.564V24H2.256v-2.462L16.308 3.076H2.975V0h18.256v2.462z", 'fill': "#CC2936" },
   ] },
 };
 

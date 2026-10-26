@@ -138,6 +138,17 @@ const CRED_KINDS: Array<{ kind: string; label: string; secretLabel: string; secr
       { name: 'current_user:read', why: '연결된 계정 확인' },
       { name: 'folders:read', why: '팀 전체를 한 번에 모을 때 — 파일 링크만 넣을 거면 없어도 됩니다' },
     ] },
+  //  Zotero — 개인 API 키. 키 화면의 칸은 «허용범위» 이름이 아니라 체크박스 문구라 scopes 칩 대신 그 문구 그대로를 순서에 적는다.
+  //   설정 메뉴 이름은 계정마다 «Feeds/API»·«Security» 로 달라 보여(2025 포럼 실측) 메뉴 대신 주소로 보낸다.
+  { kind: 'zotero_token', label: 'Zotero API 키', secretLabel: 'Zotero API 키', secretPh: '24자 영숫자', meta: { auth_header: 'Zotero-API-Key', token_prefix: '' },
+    help: '논문마다 서지와 내가 단 하이라이트·코멘트·노트를 읽습니다. 아래 순서대로 하시면 2분입니다.',
+    docUrl: 'https://www.zotero.org/settings/keys/new',
+    steps: [
+      '위 [발급 페이지 열기]로 **zotero.org 키 만들기** 화면을 엽니다(로그인 필요)',
+      'Personal Library 에서 **Allow library access** 와 **Allow notes access** 를 켭니다 — 노트 권한은 따로라, 빠뜨리면 노트가 안 옵니다',
+      '연구실 그룹도 모으려면 Default Group Permissions 를 **Read Only** 로 — 쓰기 권한은 켜지 않습니다(라이블리는 읽기만 합니다)',
+      '[Save Key] 를 누르면 나오는 키를 복사해 아래 칸에 붙여넣고 [저장] — 키는 이때 한 번만 보입니다',
+    ] },
   // #4488 앱 v2-9 — 앱 AI 실행(/_lively/ai/runs)의 워크스페이스 기본 실행 계정. owner=gateway(조직 통합)로만 저장한다 — 코어 ai-runs/live.ts 의 ANTHROPIC_KEY_KIND.
   //  구성원 개인 오버라이드 자리는 없다(앱 AI 실행은 «워크스페이스 API 키 또는 본인 구독» 둘뿐 · 설계 §12 ④).
   { kind: 'anthropic_api_key', label: 'Anthropic API 키(앱 AI 실행)', secretLabel: 'API 키', secretPh: 'sk-ant-…',

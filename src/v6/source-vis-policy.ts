@@ -107,6 +107,22 @@ export async function stampSourceVisibility(
   await applyVisibility(client, sourceId, picked.members);
 }
 
+/**
+ * 커넥터가 «이 자료는 이 사람 것»이라고 말한 자료(RawItem.audience — Zotero 개인 라이브러리)를 그 사람만 보게 잠근다.
+ *  INSERT 직후 stampSourceVisibility **다음에** 부른다 — 조직 정책의 결과를 **주인으로 바꿔 쓴다**(개인 라이브러리는 정책의
+ *  대상이 아니라 그 사람의 것이다. 정책이 «관리자만» 이어도 주인이 못 보면 안 된다).
+ *  ⚠ stampSourceVisibility 와 달리 **축이 꺼져 있어도 심는다.** 그쪽이 축 꺼짐을 지키는 이유는 «켜는 순간 예상 못 한 잠금이
+ *   쏟아지는 것»인데, 개인 라이브러리는 켜는 순간 주인에게 잠기는 것이 **예상한 결과**다. 꺼져 있는 동안엔 술어(sourceVisWhere)가
+ *   보지 않으니 아무것도 달라지지 않고, 켜면 그때까지 모인 것도 함께 잠긴다(소급 백필이 필요 없다 — 정책 백필은 이 주인을 모른다).
+ */
+export async function stampSourceAudience(
+  client: Pick<pg.PoolClient, "query">, sourceId: number, memberIds: string[],
+): Promise<void> {
+  const ids = [...new Set(memberIds.map((m) => String(m ?? "").trim()).filter(Boolean))];
+  if (!ids.length) return;
+  await applyVisibility(client, sourceId, ids.map((member_id) => ({ subject_kind: "member" as const, member_id })));
+}
+
 /** 자료 1건에 공개범위를 적용(잠그고 대상 교체). 스탬핑·백필이 같은 함수를 쓴다 — 규칙을 두 번 적지 않는다. */
 export async function applyVisibility(
   client: Pick<pg.PoolClient, "query">, sourceId: number,

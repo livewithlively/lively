@@ -1094,7 +1094,7 @@
   "rest": [
    "POST /api/ui/org/collectors"
   ],
-  "input_hash": "fc0bef7cbe17e238"
+  "input_hash": "ac5204e4f6c7dd9d"
  },
  {
   "name": "org_collector_sync_run",
@@ -1274,6 +1274,16 @@
   "mutates": true,
   "rest": [
    "POST /api/ui/org/distillers/figma"
+  ],
+  "input_hash": "331ca51692372057"
+ },
+ {
+  "name": "org_distiller_zotero_ensure",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/zotero"
   ],
   "input_hash": "331ca51692372057"
  },
@@ -1754,7 +1764,7 @@
   "rest": [
    "POST /api/ui/org/http-tool-presets/apply"
   ],
-  "input_hash": "b4742b7345b7ff77"
+  "input_hash": "0d4b254b1969fa87"
  },
  {
   "name": "org_tool_remove",
@@ -2714,7 +2724,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "ec3a078cc89fd5e2"
+  "input_hash": "34cf48d0d28accb9"
  },
  {
   "name": "source_undistilled",
@@ -2754,7 +2764,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "f077d64e6b609430"
+  "input_hash": "b5ecf673c69ba65b"
  },
  {
   "name": "source_link_knowledge",
@@ -4272,7 +4282,7 @@
   "rest": [
    "POST /api/ui/me/credential"
   ],
-  "input_hash": "1c7a8ba26d261e7f"
+  "input_hash": "45e4d93896affcc4"
  },
  {
   "name": "me_credential_verify",
@@ -4282,7 +4292,7 @@
   "rest": [
    "POST /api/ui/me/credential/verify"
   ],
-  "input_hash": "622aa3b0790ea9e7"
+  "input_hash": "e7c70bc43b6e4859"
  },
  {
   "name": "me_credential_delete",
@@ -4292,7 +4302,7 @@
   "rest": [
    "POST /api/ui/me/credential/delete"
   ],
-  "input_hash": "55b7bc8dbf9bc33d"
+  "input_hash": "4b3642de33789657"
  },
  {
   "name": "org_credentials",
@@ -4312,7 +4322,7 @@
   "rest": [
    "POST /api/ui/org/credential"
   ],
-  "input_hash": "60a213310cbae503"
+  "input_hash": "7bd6eea84e53543a"
  },
  {
   "name": "org_credential_delete",
@@ -4322,7 +4332,7 @@
   "rest": [
    "POST /api/ui/org/credential/delete"
   ],
-  "input_hash": "76273c5cb7da0d13"
+  "input_hash": "dc622876b0852fd0"
  },
  {
   "name": "me_aws_credentials",
@@ -4642,7 +4652,7 @@
   "rest": [
    "GET /api/ui/org/:system/collect/options"
   ],
-  "input_hash": "80d71c4c25c45131"
+  "input_hash": "0c7b764a449536f1"
  },
  {
   "name": "org_outlook_collect",
@@ -4693,6 +4703,26 @@
    "POST /api/ui/org/outlook/oauth-complete"
   ],
   "input_hash": "3d5e4b275497c027"
+ },
+ {
+  "name": "org_zotero_collect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/zotero/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_zotero_collect_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/zotero/collect"
+  ],
+  "input_hash": "30d98aa6625ada69"
  },
  {
   "name": "org_google_collect",

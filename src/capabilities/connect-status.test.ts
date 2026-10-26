@@ -79,7 +79,7 @@ const f = (variant: ConnectFacts["variant"], needsApp: boolean, appReady: boolea
 {
   const want: Record<string, string[]> = {
     slack: ["app", "ai"], notion: ["app", "ai"], google: ["app", "ai"], linear: ["app"], outlook: ["app"],
-    github: ["app", "token"], gitlab: ["token"], clickup: ["token"], figma: ["token"],
+    github: ["app", "token"], gitlab: ["token"], clickup: ["token"], figma: ["token"], zotero: ["token"],
   };
   const p = { app_ready: true, me_connected: false, collecting: false };
   const ctx = { heldBy: "workspace" as const, canRegister: false, canCollect: true, aiPolicy: "allowed" as const, aiMine: null };

@@ -13,6 +13,9 @@
 import assert from "node:assert/strict";
 import { localFilesDistillerDraft } from "./local-preset.js";
 import { figmaCommentsDistillerDraft } from "./figma-preset.js";
+import { zoteroPapersDistillerDraft, ZOTERO_PREFILTER_RULES } from "./zotero-preset.js";
+import { ANNOTATION_HEAD, NOTE_HEAD, buildPaperDoc } from "../../connectors/zotero.js";
+import { prefilterThresholds } from "./distiller.js";
 import type { DistillerUpsertInput } from "../store/ingest.js";
 
 let pass = 0;
@@ -21,6 +24,7 @@ const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`o
 const PRESETS: Array<[string, DistillerUpsertInput]> = [
   ["local-files", localFilesDistillerDraft()],
   ["figma-comments", figmaCommentsDistillerDraft()],
+  ["zotero-papers", zoteroPapersDistillerDraft()],
 ];
 
 // ── 배선(엣지 표 17행) — 이게 없으면 아래 순회가 전부 vacuous 다 ──────────────────────────
@@ -120,6 +124,38 @@ t("★ F4 resolved 를 신호로 쓰고 미해결을 결정으로 굳히지 않�
 
 t("F5 파일명(채널)을 맥락으로 남긴다 — 코멘트는 '여기·이거'로 말해 본문만으론 화면을 모른다", () => {
   assert.match(String(figma.criteria_md), /container_name/);
+});
+
+// ── Zotero 전용 — 논문 자료가 스레드가 아니라 «한 편» 이고, 생각은 주석·노트에만 있다 ──────────────────
+const zotero = zoteroPapersDistillerDraft();
+
+t("Z1 스코프가 kind 전용이다(zotero_item) — 다른 커넥터 자료를 집어가지 않는다", () => {
+  assert.deepEqual(zotero.match_kinds, ["zotero_item"]);
+  assert.equal(zotero.match_system, "zotero");
+  assert.equal(zotero.thread_aware, false, "한 건이 이미 논문 한 편 — 묶을 스레드가 없다");
+});
+
+t("★ Z2 사전필터 표지가 커넥터가 다는 머리와 같다 — 어긋나면 주석 달린 논문까지 전부 걸러진다", () => {
+  const th = prefilterThresholds(zotero.prefilter_level ?? 0, zotero.prefilter_rules as Record<string, unknown>);
+  assert.equal(th.min_decisive, 1);
+  assert.deepEqual(th.keywords, [ANNOTATION_HEAD, NOTE_HEAD]);
+  assert.deepEqual(zotero.prefilter_rules, ZOTERO_PREFILTER_RULES);
+  // 실제 본문으로 확인한다 — 주석 있는 논문은 표지가 있고, 서지만 있는 논문은 없다.
+  const paper = { key: "P1", data: { key: "P1", itemType: "journalArticle", title: "T", abstractNote: "초록 — 노트라는 말이 있어도 머리가 아니다" } };
+  const ann = { key: "A1", data: { key: "A1", itemType: "annotation", annotationType: "highlight", annotationText: "핵심 문장", parentItem: "F1" } };
+  const pdf = { key: "F1", data: { key: "F1", itemType: "attachment", contentType: "application/pdf", parentItem: "P1" } };
+  const opts = { includeAnnotations: true, includeNotes: true, includeAutoTags: false };
+  const ctx = { libraryName: "내 라이브러리", collectionNames: [], group: false };
+  const hit = (body: string): boolean => th.keywords.some((k) => body.includes(k));   // prefilterSql 의 정규식은 같은 낱말의 «하나라도» 다
+  assert.ok(hit(buildPaperDoc(paper, { notes: [], attachments: [{ item: pdf, annotations: [ann] }] }, opts, ctx).body));
+  assert.ok(!hit(buildPaperDoc(paper, { notes: [], attachments: [] }, opts, ctx).body), "서지만 있는 논문이 사전필터를 지난다");
+});
+
+t("Z3 서지만 있는 논문을 지식으로 만들지 않는다 · 색으로 뜻을 단정하지 않는다", () => {
+  const c = String(zotero.criteria_md);
+  assert.match(c, /has_thinking: false/);
+  assert.match(c, /색으로 뜻을 단정하지 않는다/);
+  assert.match(c, /논문 한 편 = 지식 하나/);
 });
 
 console.log(`\ndistiller presets tests: ${pass} passed`);

@@ -15,7 +15,7 @@ import type { Capability } from "./types.js";
 const PREFIX: Record<string, string[]> = {
   github: ["github_"], gitlab: ["gitlab_"], slack: ["slack_"], figma: ["figma_"],
   notion: ["notion_"], google: ["google_"], linear: ["ext__linear__", "linear_"],
-  clickup: ["clickup_"], prometheus: ["prom_", "prometheus_"],
+  clickup: ["clickup_"], prometheus: ["prom_", "prometheus_"], zotero: ["zotero_"],
 };
 
 export interface AppTool { name: string; title: string; write: boolean; enabled: boolean }

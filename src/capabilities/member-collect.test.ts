@@ -2,7 +2,7 @@
 //   실행: npm run build && node dist/capabilities/member-collect.test.js
 //  겨누는 고장: ① 자격 없이 켜져 «켜짐인데 0건» ② 범위 없이 켜져 크론이 매 주기 실패 ③ 끄기가 자격 유무에 막힘.
 import assert from "node:assert/strict";
-import { memberCollectPlan, scopeSatisfied, normalizeScopeInput } from "./member-collect.js";
+import { memberCollectPlan, scopeSatisfied, normalizeScopeInput, memberInstanceKey } from "./member-collect.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -29,5 +29,10 @@ t("normalizeScopeInput — 표에 있는 키만, 배열은 공백으로 합친�
   const r = normalizeScopeInput({ scopeKeys: ["file_keys", "team_ids"] }, { file_keys: ["https://figma.com/file/a", " https://figma.com/file/b "], team_ids: " 9 ", token_source: "member:evil" });
   assert.deepEqual(r, { file_keys: "https://figma.com/file/a https://figma.com/file/b", team_ids: "9" });
   assert.deepEqual(normalizeScopeInput({ scopeKeys: ["x"] }, "nope"), {});
+});
+t("memberInstanceKey — 사람마다 하나인 앱은 사람마다 다른 커서 자리, 아니면 하나(종전 그대로)", () => {
+  assert.equal(memberInstanceKey({ instance: "lively-member", perMember: true }, "kim"), "lively-member:kim");
+  assert.notEqual(memberInstanceKey({ instance: "lively-member", perMember: true }, "kim"), memberInstanceKey({ instance: "lively-member", perMember: true }, "lee"));
+  assert.equal(memberInstanceKey({ instance: "lively-member" }, "kim"), "lively-member", "워크스페이스에 하나인 앱의 커서를 옮기면 전량 재수집이 난다");
 });
 console.log(`\n${pass} passed`);

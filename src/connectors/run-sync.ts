@@ -180,6 +180,9 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
     await flush();
     await flushProjectEmbeds(itemsPool).catch(() => {}); // #624 이름/설명 바뀐 미러 프로젝트만 재임베딩(배치 후·best-effort)
   } catch (err) {
+    //  실패 전에 받은 것은 적재한다 — 커넥터가 «멀쩡한 부분은 다 주고 끝에 실패를 알리는» 경우(Zotero: 라이브러리 하나만 막힘)
+    //   마지막 묶음(<200건)이 버려지면, 그 실패가 이어지는 동안 멀쩡한 쪽도 영영 덜 들어온다. 적재는 멱등이고 커서는 그대로 묶인다.
+    await flush().catch(() => {});
     logger.error({ err: (err as Error)?.message ?? String(err), system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
     return true;
   }

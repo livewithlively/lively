@@ -56,6 +56,7 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
   { key: 'gitlab', label: 'GitLab', icon: '🦊', short: '이슈·MR·파이프라인·위키를 다룹니다.', oauth: 'gitlab', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정으로 이슈·MR·파이프라인·위키를 다룹니다. [연결]은 AI 도구용 권한만 받습니다 — 저장소를 작업용으로 붙이는 것은 GitLab 정책상 별도 설정이 필요합니다.' },
   { key: 'clickup', label: 'ClickUp', icon: '🗂️', short: '작업을 확인합니다.', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
   { key: 'figma', label: 'Figma', icon: '🎨', short: '디자인 파일과 코멘트를 읽습니다.', token: 'figma_token', blurb: 'AI가 내 Figma 계정으로 디자인 파일과 코멘트를 직접 읽을 수 있습니다 — 디자인 결정·피드백은 대개 코멘트에 쌓입니다.' },
+  { key: 'zotero', label: 'Zotero', icon: '📚', short: '논문과 내가 단 하이라이트·노트를 읽습니다.', token: 'zotero_token', blurb: 'AI가 내 Zotero 라이브러리에서 논문을 찾고, 그 논문에 단 하이라이트·코멘트·노트를 직접 읽을 수 있습니다. 쓰거나 지우지는 않아요.' },
   { key: 'prometheus', label: 'Prometheus', icon: '📊', short: '지표를 조회합니다.', token: 'prometheus_bearer', hidden: '일반 사용자에게 내밀 앱이 아니다 — 목록에서 내려 둠(#2243)', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
   { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', short: '헤드리스 분류·크론이 내 Claude 계정으로 실행됩니다.', token: 'claude_setup_token', hidden: '운영자용 자격이라 외부 앱 목록에 내밀지 않는다(#2243)', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];

@@ -58,7 +58,7 @@ async function load(): Promise<{ v: SvcView }> {
 async function loadCollect(): Promise<{ tally: Map<string, CollectTally>; ok: boolean }> {
   try {
     const r: any = await api('/api/ui/org/collectors');
-    return { tally: collectTally(r?.collectors), ok: true };
+    return { tally: collectTally(r?.collectors, state.me?.userId ?? null), ok: true };   // 사람마다 하나인 앱(Zotero)은 내 것만 센다
   } catch (_) { return { tally: new Map(), ok: false }; }
 }
 
@@ -309,9 +309,9 @@ export async function renderConnectData(host: HTMLElement, page: string): Promis
 type CollectState = (text: string, on: boolean) => void;
 const SCOPE_NOUN: Record<string, string> = {
   notion: '페이지', linear: '이슈', slack: '대화', google: 'Drive 파일과 캘린더 일정', github: '저장소', gitlab: '프로젝트',
-  clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행', outlook: '메일과 일정',
+  clickup: '작업', figma: '파일', prometheus: '지표', 'claude-headless': '분류·크론 실행', outlook: '메일과 일정', zotero: '라이브러리',
 };
-const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈', outlook: '메일' };
+const COLLECT_UNIT: Record<string, string> = { slack: '대화', notion: '페이지', google: '문서', figma: '파일의 코멘트', clickup: '작업', github: '저장소의 이슈·PR 대화', gitlab: '프로젝트의 이슈·MR 대화', linear: '이슈', outlook: '메일', zotero: '논문의 주석·노트' };
 //  #4233: 이 화면의 그림도 lib/icon-paths.ts 한 벌에 있다(이름에 cn- 이 붙는다). 모양은 그대로다.
 /** 받침이 있으면 «은», 없으면 «는» — 한글 끝 글자로(한글이 아니면 «은(는)»). */
 function eunNeun(word: string): string {
@@ -685,6 +685,11 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('권한 필요', `이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}${eulReul(unit) === '을' ? '이' : '가'} 함께 보는 자료함으로 들어옵니다.`, onCollect)
     : st !== 'on' ? quietCollectFace('꺼짐', svc.key === 'github' ? '위 [내 계정으로 직접 사용]을 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위 [내 계정으로 직접 사용]에서 토큰을 저장하면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
+  //  Zotero — 수집기가 사람마다 하나다(내 라이브러리). 켤 수 있는 사람은 다른 토큰 앱과 같다(서버 org_zotero_collect_set 의 scope).
+  else if (svc.key === 'zotero') collect = !isAdmin ? quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 내 라이브러리의 논문과 주석·노트가 자료함으로 들어옵니다.', onCollect)
+    : st !== 'on'
+    ? quietCollectFace('꺼짐', '위 [내 계정으로 직접 사용]에서 API 키를 저장하면 여기서 켤 수 있어요 — 내 키로 내 라이브러리를 읽어 와요.', onCollect)
+    : memberTokenCollectCard(svc.key, onCollect);
   else collect = quietCollectFace('아직 없어요',
     `${svc.label}에는 아직 자료 가져오기가 없어요. 위 [내 계정으로 직접 사용]으로 ${nounObj}그때그때 읽어요 — 준비되면 여기서 켤 수 있어요.`, onCollect);
 
@@ -891,6 +896,10 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
     on: '내 메일을 가져오고 있어요.', off: '켜면 Microsoft 화면이 열려요. «허용» 한 번이면 연결과 가져오기가 함께 켜집니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
   gitlab: { desc: '내가 고른 프로젝트의 이슈·MR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 프로젝트의 이슈·MR 대화를 가져오고 있어요.', off: '켜면 내 GitLab 개인 토큰으로 고른 프로젝트의 이슈·MR 대화를 읽어 옵니다.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
+  //  Zotero — 수집기가 사람마다 하나다. 개인 라이브러리는 «자료 공개범위» 가 켜진 워크스페이스에서만 나만 본다(꺼져 있으면 함께) — 사실 그대로 말한다.
+  zotero: { desc: '내 라이브러리의 논문마다 서지·초록과 내가 단 하이라이트·코멘트·노트를 한 자료로 묶어 자료함으로 가져와요. 주석·노트가 있는 논문만 지식으로 정리돼요.',
+    on: '논문과 주석·노트를 가져오고 있어요.', off: '켜면 내 Zotero 키로 내 라이브러리(개인·그룹)를 읽어 옵니다. 내 수집기라 다른 사람의 수집은 그대로예요.',
+    where: '그룹 라이브러리는 함께 · 개인 라이브러리는 자료 공개범위를 켜면 나만 봐요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 저장소의 이슈·PR 대화를 가져오고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
 };
@@ -907,9 +916,21 @@ const SCOPE_FIELD: Record<string, { ph: string; keys: string[]; parse: (t: strin
     missing: '', note: '' },
   gitlab: { ph: 'group/project — 여러 개면 공백으로. GitLab 주소를 그대로 붙여넣어도 돼요', keys: ['projects'], parse: (t): Record<string, string> => (t.trim() ? { projects: t.trim() } : {}),
     missing: '프로젝트 경로를 하나는 넣어 주세요(group/project)', note: '아직 범위가 없어요 — 아래에 프로젝트 경로(group/project)를 넣고 켜 주세요.' },
+  zotero: { ph: 'users/<id> · groups/<id> 또는 컬렉션 key(8자) — 비우면 이 키가 읽는 라이브러리 전부', keys: ['libraries', 'collections'], parse: (t) => zoteroScopeOf(t) as Record<string, string>,
+    missing: '', note: '' },
   github: { ph: 'owner/repo — 여러 개면 공백으로. GitHub 주소를 그대로 붙여넣어도 돼요', keys: ['repos'], parse: (t): Record<string, string> => (t.trim() ? { repos: t.trim() } : {}),
     missing: '저장소를 하나는 넣어 주세요(owner/repo)', note: '아직 범위가 없어요 — 아래에 저장소(owner/repo)를 넣고 켜 주세요. [계정으로 연결]에서 저장소를 골랐다면 켤 때 그게 기본값이 됩니다.' },
 };
+/** Zotero 범위 입력 → 서버 scope. 8자 영숫자(또는 collections/<8자> 주소)는 컬렉션, 나머지는 라이브러리(users/<id> · groups/<id> · 그룹 주소). */
+export function zoteroScopeOf(text: string): { libraries?: string; collections?: string } {
+  const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
+  const isCol = (x: string): boolean => /collections\/[A-Z0-9]{8}/i.test(x) || /^[A-Z0-9]{8}$/i.test(x);
+  const cols = toks.filter(isCol), libs = toks.filter((x) => !isCol(x));
+  const out: { libraries?: string; collections?: string } = {};
+  if (libs.length) out.libraries = libs.join(' ');
+  if (cols.length) out.collections = cols.join(' ');
+  return out;
+}
 /** 피그마 범위 입력 → 서버 scope. 숫자만인 토막은 팀 id, 나머지는 파일 링크(키). */
 export function figmaScopeOf(text: string): { file_keys?: string; team_ids?: string } {
   const toks = String(text || '').split(/\s+/).map((x) => x.trim()).filter(Boolean);
@@ -1001,17 +1022,21 @@ function scopeChooser(app: string, cur: Record<string, string>, enabled: boolean
 //  멤버 창구뿐이라 이번에 뚫었다. 종류(include_*)·언제부터(backfill_since)도 커넥터가 이미 읽는 config 키다.
 
 /** 앱이 «무엇을» 고르게 하는 종류 — 값은 config 키. 없는 앱은 그 줄을 «전부» 한 줄로 대신한다. */
-const COLLECT_KINDS: Record<string, { always: string; opts: Array<{ id: string; label: string }> }> = {
+//  dflt — 저장값이 없을 때 화면이 보일 값(커넥터 기본값과 짝). 비면 'on'. Zotero 의 전문 색인·자동 태그는 기본 꺼짐이다.
+const COLLECT_KINDS: Record<string, { always: string; opts: Array<{ id: string; label: string; dflt?: 'on' | 'off' }> }> = {
   github: { always: '이슈 대화', opts: [{ id: 'include_prs', label: 'PR 리뷰 대화' }, { id: 'include_releases', label: '릴리스 노트' }] },
   gitlab: { always: '이슈 대화', opts: [{ id: 'include_mrs', label: 'MR 리뷰 대화' }, { id: 'include_releases', label: '릴리스 노트' }] },
   linear: { always: '이슈·댓글', opts: [{ id: 'include_documents', label: 'Linear 문서' }] },
+  zotero: { always: '서지·초록·손으로 단 태그', opts: [
+    { id: 'include_annotations', label: '하이라이트·코멘트' }, { id: 'include_notes', label: '노트' },
+    { id: 'include_fulltext', label: '본문 색인', dflt: 'off' }, { id: 'include_auto_tags', label: '자동 태그', dflt: 'off' }] },
 };
 /** «언제부터» 를 지원하는 앱(커넥터가 backfill_since 를 since 하한으로 쓴다). */
 const HAS_BACKFILL = new Set(['github', 'gitlab', 'linear', 'slack', 'outlook']);
 /** 자료함에 들어가는 kind — src/v6/mirror/mirror-source.ts 의 sourceKindOf 와 같은 표. ClickUp 은 프로젝트 미러라 없다. */
 export const COLLECT_KIND_OF: Record<string, string> = {
   github: 'github_issue', gitlab: 'gitlab_issue', linear: 'linear_issue', figma: 'figma_comment', slack: 'slack', notion: 'notion_doc',
-  outlook: 'email',
+  outlook: 'email', zotero: 'zotero_item',
 };
 /** kind 를 다른 앱과 나눠 쓰는 앱의 system(#4211 — email 은 Gmail·Outlook 이 같이 쓴다). 자료 수를 셀 때 좁힌다. */
 const COLLECT_SYSTEM_OF: Record<string, string> = { outlook: 'outlook' };
@@ -1054,7 +1079,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
   // ① 무엇을
   const K = COLLECT_KINDS[c.key];
   if (K) {
-    const cur = new Set(K.opts.filter((o) => String(c.s.scope?.[o.id] ?? 'on') !== 'off').map((o) => o.id));
+    const cur = new Set(K.opts.filter((o) => String(c.s.scope?.[o.id] ?? o.dflt ?? 'on') !== 'off').map((o) => o.id));
     rows.push(setRow('무엇을', '고른 종류만 가져옵니다', [
       el('div', { class: 'cn-chips' },
         el('span', { class: 'cn-chip on', style: 'cursor:default; opacity:.75' }, el('span', { text: K.always + ' (늘 모음)' })),
@@ -1091,6 +1116,14 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
           catch (e: any) { toast((e && e.message) || '시작하지 못했습니다', true); b2.disabled = false; }
         } }))] : []),
     ], '이미 모은 것은 그대로 둡니다. 범위를 넓혔으면 [지금 전부 다시 읽기]를 눌러야 과거가 들어와요.'));
+  } else if (c.key === 'zotero' && c.s.collector_id) {
+    //  Zotero 는 바뀐 논문만 따라간다 — 종류·라이브러리·컬렉션을 바꿔도 이미 모은 논문은 그대로라, 다시 읽기를 여기 둔다.
+    rows.push(setRow('다시 읽기', '바꾼 설정을 이미 모은 논문에도', [
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '지금 전부 다시 읽기', onclick: async (ev: Event) => {
+        const b2 = ev.currentTarget as HTMLButtonElement; b2.disabled = true;
+        try { await api(`/api/ui/org/collectors/${c.s.collector_id}/sync`, { method: 'POST', body: JSON.stringify({ full: true }) }); toast('처음부터 다시 읽기 시작했어요'); }
+        catch (e: any) { toast((e && e.message) || '시작하지 못했습니다', true); b2.disabled = false; }
+      } })], '내 라이브러리 전체를 처음부터 훑고, 그 뒤로는 바뀐 논문만 따라갑니다. 무엇을·어디서를 바꿨으면 눌러 주세요.'));
   } else {
     rows.push(setRow('언제부터', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
       text: '이 앱은 내가 볼 수 있는 것 전체를 훑고, 그 뒤로는 바뀐 것만 따라갑니다 — 시작 시점을 정할 수 없어요.' })]));
@@ -1098,6 +1131,16 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
 
   // ④ 어디서
   rows.push(c.scopeNode);
+  //  Zotero — 라이브러리 안에서 컬렉션으로 한 번 더 좁힌다(개인 라이브러리엔 연구와 무관한 자료가 섞이기 쉽다). 목록 고르기와 별개 칸이다.
+  if (c.key === 'zotero') {
+    const inp = el('input', { type: 'text', class: 'cn-scope-in', value: String(c.s.scope?.collections ?? ''),
+      placeholder: '컬렉션 key(8자) — 웹 라이브러리에서 컬렉션을 열면 주소의 collections/ 뒤' }) as HTMLInputElement;
+    const btn = el('button', { class: 'btn btn-sm', type: 'button', text: '저장', onclick: () => {
+      void c.save({ scope: { collections: zoteroScopeOf(inp.value).collections ?? '' } });
+    } });
+    rows.push(setRow('컬렉션', '이 컬렉션만(하위 포함)', [el('div', { class: 'cn-scope-row' }, inp, btn)],
+      '컬렉션을 넣으면 그 컬렉션만 가져와요. 다른 라이브러리를 통째로 함께 가져오려면 위에서 그 라이브러리를 고르세요.'));
+  }
   return rows;
 }
 
