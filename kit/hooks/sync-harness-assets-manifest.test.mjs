@@ -3,9 +3,10 @@
 //  로컬 스텁 게이트웨이 + 샌드박스 HOME(LIVELY_HOME), 러너를 **실제로 돌려** 목록·디스크를 본다(네트워크·실 홈 미접촉).
 //  실행: node scripts/run-tests.mjs sync-harness-assets-manifest
 //  엣지 표(#5019 프로젝트 본문): F1 두 하네스 동시 받기 → 두 몫 유지 · F2 남의 몫 보존 · F3 표식 있는 고아 사본 다시 맡기 ·
-//   F4 표식 없는 멤버 파일 보존 · F5 죽은 잠금 치우기 · F6 살아 있는 잠금은 짧게 기다린 뒤 그래도 저장 · F7 잠금·임시 파일 안 남김.
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, utimesSync } from "node:fs";
-import { tmpdir } from "node:os";
+//   F4 표식 없는 멤버 파일 보존(본문에 표식 문장을 인용만 한 것 포함) · F5 죽은 잠금 치우기 · F6 살아 있는 잠금은 짧게 기다린 뒤
+//   그래도 저장 · F7 잠금·임시 파일 안 남김 · F8 rename 이 실패해도 임시 파일을 안 남기고 조용히 끝남.
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, utimesSync, statSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -20,6 +21,27 @@ const LV = join(HOME, ".lively");
 const MANIFEST = join(LV, "managed-harness-assets.json");
 const LOCK = MANIFEST + ".lock";
 const MARK = "라이블리가 materialize 한 사본입니다";
+
+// ⓪ 실 홈 무접촉 — 러너가 쓰는 자리(스킬·에이전트 폴더, 받은 목록·잠금)의 경로·크기·시각 지문.
+const REAL = homedir();
+const fingerprint = () => {
+  const out = [];
+  const walk = (d) => {
+    let ents = [];
+    try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else { try { const st = statSync(p); out.push(`${p}:${st.size}:${st.mtimeMs}`); } catch { out.push(`${p}:?`); } }
+    }
+  };
+  for (const d of [join(REAL, ".cursor", "skills"), join(REAL, ".codex", "skills"), join(REAL, ".codex", "agents")]) walk(d);
+  for (const f of ["managed-harness-assets.json", "managed-harness-assets.json.lock"]) {
+    try { const st = statSync(join(REAL, ".lively", f)); out.push(`${f}:${st.size}:${st.mtimeMs}`); } catch { out.push(`${f}:-`); }
+  }
+  return createHash("sha256").update(out.sort().join("\n")).digest("hex") + `/${out.length}`;
+};
+const REAL_BEFORE = fingerprint();
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -107,6 +129,17 @@ try {
     eq("F3 새 내용으로 다시 씀", [text.includes("새 본문"), text.includes("옛 본문")], [true, false]);
     eq("F3 목록에 오름 · 충돌 경고 없음", [Object.keys((manifest() || {}).cursor || {}), /배포 생략/.test(r.stderr)], [["liv-cursor"], false]);
   }
+  // F3b — TOML 사본(codex 서브에이전트, 표식이 `# …` 줄)도 같은 규칙으로 되찾는다.
+  {
+    freshHome();
+    ASSETS = (h) => (h === "codex" ? [{ ...skill("liv-agent", "새 지시"), kind: "subagent" }] : []);
+    const toml = join(HOME, ".codex", "agents", "liv-agent.toml");
+    mkdirSync(dirname(toml), { recursive: true });
+    writeFileSync(toml, `# ${MARK}. 편집은 …\nname = "liv-agent"\ndescription = "옛"\ndeveloper_instructions = "옛 지시"\n`);
+    await sync("codex");
+    const text = readFileSync(toml, "utf8");
+    eq("F3b TOML 사본 되찾음", [text.includes("새 지시"), Object.keys((manifest() || {}).codex || {})], [true, ["liv-agent"]]);
+  }
   // F4 — 표식 없는 같은 이름의 파일은 멤버 것이다. 건드리지 않는다.
   {
     freshHome();
@@ -116,6 +149,15 @@ try {
     const r = await sync("cursor");
     eq("F4 멤버 파일 그대로", readFileSync(cursorSkill("liv-cursor"), "utf8"), mine);
     eq("F4 목록에 없음 · 충돌 경고", [Object.keys((manifest() || {}).cursor || {}), /배포 생략/.test(r.stderr)], [[], true]);
+  }
+  // F4b — 본문에 표식 문장을 **인용만** 한 멤버 파일(줄 머리 표식 아님)도 멤버 것이다.
+  {
+    freshHome();
+    const quoting = `---\nname: liv-cursor\n---\n\n# 메모\n라이블리 사본엔 «${MARK}.» 라는 주석이 붙는다.\n`;
+    mkdirSync(dirname(cursorSkill("liv-cursor")), { recursive: true });
+    writeFileSync(cursorSkill("liv-cursor"), quoting);
+    await sync("cursor");
+    eq("F4b 인용만 한 멤버 파일 그대로", readFileSync(cursorSkill("liv-cursor"), "utf8"), quoting);
   }
   // F5 — 죽은 잠금(60초 전)은 치우고 저장한다. 끝나면 잠금이 없다.
   {
@@ -134,7 +176,8 @@ try {
     await sync("cursor");
     const ms = Date.now() - t0;
     eq("F6 그래도 저장 · 남의 잠금 그대로", [Object.keys((manifest() || {}).cursor || {}), existsSync(LOCK)], [["liv-cursor"], true]);
-    ms < 4000 ? ok(`F6 상한 안에서 끝남 (${ms}ms)`) : bad("F6 소요", `${ms}ms — 잠금 대기 상한(1.5초)을 크게 넘김`);
+    // 상한은 넉넉히 — 병렬 실행·윈도우 CI 의 기동 지연을 흡수한다. 변이(상한 제거)는 10초를 넘겨 여전히 걸린다.
+    ms < 6000 ? ok(`F6 상한 안에서 끝남 (${ms}ms)`) : bad("F6 소요", `${ms}ms — 잠금 대기 상한(1.5초)을 크게 넘김`);
   }
   // F7 — 정상 실행 뒤 잠금·임시 파일이 남지 않고 목록은 온전한 JSON 이다.
   {
@@ -143,6 +186,15 @@ try {
     const leftovers = readdirSync(LV).filter((n) => n.endsWith(".tmp") || n.endsWith(".lock"));
     eq("F7 잠금·임시 파일 없음 · 목록 JSON", [leftovers, manifest() !== null], [[], true]);
   }
+  // F8 — 목록 자리가 파일이 아니라 비어 있지 않은 디렉터리면 rename·직접 쓰기가 모두 실패한다. 조용히 끝나고 임시 파일을 안 남긴다.
+  {
+    freshHome();
+    mkdirSync(join(MANIFEST, "x"), { recursive: true });
+    const r = await sync("cursor");
+    const leftovers = readdirSync(LV).filter((n) => n.endsWith(".tmp") || n.endsWith(".lock"));
+    eq("F8 실패해도 exit 0 · 임시 파일·잠금 없음", [r.status, leftovers], [0, []]);
+  }
+  REAL_BEFORE === fingerprint() ? ok("⓪ 실 홈(스킬 폴더·받은 목록) 무접촉") : bad("⓪ 실 홈", "러너가 실 홈의 자산 자리를 건드렸다");
 } finally {
   server.close();
   rmSync(SANDBOX, { recursive: true, force: true });
