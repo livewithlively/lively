@@ -1,6 +1,6 @@
 // #5040 슬랙 개인 연결(유저 토큰)의 공개채널 수집 — 검색(search.messages) 대신 채널 기록(conversations.*)으로.
 //
-//  사양(위시스트 실측 2026-10-26에서): 라이블리 슬랙 앱(새 앱) 유저 토큰은 분할형 search:read.* 만 갖고 legacy
+//  사양(셀프호스트 실측 2026-10-26에서): 라이블리 슬랙 앱(새 앱) 유저 토큰은 분할형 search:read.* 만 갖고 legacy
 //   search:read 가 없어 검색 스윕이 매번 missing_scope 였다 — 다시 연결해도 같은 권한이 와서 풀리지 않았다.
 //   유저 토큰은 conversations.history 로 가입하지 않은 공개 채널도 읽는다(docs.slack.dev conversations.history).
 //   A  권한 → 스윕: channels:history+channels:read 면 history · 그게 없고 search:read 면 search(옛 토큰) · 모르면 history.
@@ -20,14 +20,14 @@ import type { RawItem } from "./types.js";
 let pass = 0;
 const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
 
-// 위시스트 대표님 토큰의 실제 권한(금고 meta.scope, 2026-10-27 읽음) — legacy search:read 가 없다.
-const WESSIST_SCOPES = ("channels:history,groups:history,im:history,mpim:history,channels:read,emoji:read,files:read,groups:read," +
+// 새 앱 유저 토큰의 권한 — 라이블리 앱이 요청하는 유저 권한(slack-oauth.ts)과 같은 모양이고 legacy search:read 가 없다.
+const NEW_APP_SCOPES = ("channels:history,groups:history,im:history,mpim:history,channels:read,emoji:read,files:read,groups:read," +
   "im:read,mpim:read,reactions:read,users:read,chat:write,search:read.public,search:read.private,search:read.mpim,search:read.im," +
   "search:read.files,search:read.users").split(",");
 
 // ── A 권한 → 스윕 ──
 await t("A1 권한을 모르면(헤더 없음) history", () => assert.equal(pickUserTokenSweep(null), "history"));
-await t("A2 위시스트 토큰(분할형 search:read.* + channels:*) → history", () => assert.equal(pickUserTokenSweep(WESSIST_SCOPES), "history"));
+await t("A2 새 앱 토큰(분할형 search:read.* + channels:*) → history", () => assert.equal(pickUserTokenSweep(NEW_APP_SCOPES), "history"));
 await t("A3 옛 클래식 토큰(search:read 만) → search", () => assert.equal(pickUserTokenSweep(["search:read", "users:read"]), "search"));
 await t("A4 둘 다 있으면 history — 열거가 잘림 없이 완결하다", () =>
   assert.equal(pickUserTokenSweep(["search:read", "channels:history", "channels:read"]), "history"));
@@ -84,10 +84,10 @@ function fakeSlack(opts: { scopes?: string | null; listError?: string; channels?
     calls.push({ method, params: u.searchParams });
     switch (method) {
       case "auth.test":
-        return json({ ok: true, team_id: "T1", url: "https://wessist.slack.com/" },
+        return json({ ok: true, team_id: "T1", url: "https://acme.slack.com/" },
           typeof opts.scopes === "string" ? { "x-oauth-scopes": opts.scopes } : {});
       case "users.list":
-        return json({ ok: true, members: [{ id: "U1", name: "hongjun", profile: { display_name: "홍준" } }] });
+        return json({ ok: true, members: [{ id: "U1", name: "alice", profile: { display_name: "앨리스" } }] });
       case "conversations.list":
         if (opts.listError) return json({ ok: false, error: opts.listError, needed: "channels:read" });
         return json({ ok: true, channels: opts.channels ?? [] });
@@ -134,7 +134,7 @@ async function withFetch<T>(f: typeof fetch, fn: () => Promise<T>): Promise<T> {
 const WORKSPACE: SlackConversation[] = [ch("C1", "1_공지"), ch("C2", "8_개발"), ch("G1", "임원방", { is_private: true }), ch("C9", "random")];
 
 await t("D1 공개채널 모드 — 검색·가입 채널 목록을 안 부르고, 공개 채널 목록에서 대상만 기록·답글·파일까지 읽는다", async () => {
-  const f = fakeSlack({ scopes: WESSIST_SCOPES.join(","), channels: WORKSPACE });
+  const f = fakeSlack({ scopes: NEW_APP_SCOPES.join(","), channels: WORKSPACE });
   const items = await withFetch(f.fetchImpl, async () => {
     const d = await decideUserSweep("xoxp-test");
     assert.equal(d.sweep, "history");
@@ -159,7 +159,7 @@ await t("D1 공개채널 모드 — 검색·가입 채널 목록을 안 부르�
 });
 
 await t("D2 대상이 공개 채널에 하나도 없으면(비공개만 적음) 원인을 말하고 실패한다", async () => {
-  const f = fakeSlack({ scopes: WESSIST_SCOPES.join(","), channels: WORKSPACE });
+  const f = fakeSlack({ scopes: NEW_APP_SCOPES.join(","), channels: WORKSPACE });
   await withFetch(f.fetchImpl, async () => {
     const d = await decideUserSweep("xoxp-test");
     if (d.sweep !== "history") throw new Error("history 여야 한다");

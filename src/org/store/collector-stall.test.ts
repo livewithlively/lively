@@ -1,7 +1,7 @@
-// 수집기 자동 정지 — «모으는 중» 이 거짓이던 자리 (#5040, 위시스트 실측 2026-10-26)
+// 수집기 자동 정지 — «모으는 중» 이 거짓이던 자리 (#5040, 셀프호스트 실측 2026-10-26)
 //
-//  신고: 위시스트에서 슬랙 두 수집기와 리니어 수집기의 주기 잡이 «연속 실패 5회 — 자동 정지» 로 꺼져 있었는데,
-//   연결 화면은 «수집 중» 이었다(수집기 enabled 만 봤다). 대표님이 슬랙 수집기를 저장하자 잡은 켜졌지만
+//  신고: 셀프호스트 박스에서 슬랙 두 수집기와 리니어 수집기의 주기 잡이 «연속 실패 5회 — 자동 정지» 로 꺼져 있었는데,
+//   연결 화면은 «수집 중» 이었다(수집기 enabled 만 봤다). 관리자가 슬랙 수집기를 저장하자 잡은 켜졌지만
 //   fail_streak 이 임계 위에 남아 20초 뒤 한 번 실패로 곧바로 다시 꺼졌다.
 //  사양:
 //   S1 멈춤 = 수집기 켜짐 ∧ 잡 꺼짐 ∧ 자동 정지 표시. 사람이 끈 잡·꺼진 수집기·흔적만 남은 켜진 잡·잡 없음은 멈춤이 아니다.
@@ -25,7 +25,7 @@ const c = (o: Partial<C> = {}): C =>
   ({ enabled: true, label: "Slack — 팀 공개 채널", sync_job: job(), last_run: run("slack search.messages error: missing_scope"), ...o });
 
 test("S1 멈춤 판정 — 켜진 수집기의 잡이 자동 정지로 꺼졌을 때만", () => {
-  assert.equal(collectorStalled(c()), true, "위시스트 슬랙 검색 수집기 모양");
+  assert.equal(collectorStalled(c()), true, "실측한 슬랙 검색 수집기 모양");
   assert.equal(collectorStalled(c({ sync_job: job({ enabled: true }) })), false, "잡이 다시 켜졌는데 흔적만 남은 행");
   assert.equal(collectorStalled(c({ enabled: false })), false, "사람이 수집기를 껐다");
   assert.equal(collectorStalled(c({ sync_job: job({ auto_disabled_at: null, auto_disabled_reason: null }) })), false, "사람이 잡만 껐다");

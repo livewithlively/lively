@@ -15,7 +15,7 @@
 //   «유저 토큰도 멤버십을 요구한다» 고 적고 그 이유로 검색 스윕을 택했는데, 그 전제가 틀렸다.
 //   검색 스윕은 legacy `search:read` 를 요구한다. 라이블리 슬랙 앱(새 앱)은 분할형 `search:read.*` 만 받을 수 있어
 //   (slack-oauth.ts) 연결해 둔 토큰으로는 매번 missing_scope 였다 — 다시 연결해도 같은 권한이 와서 풀리지 않았다
-//   (위시스트 실측 2026-10-26). 분할형 권한의 assistant.search.context 는 열거가 아니라 랭킹이라 수집에 못 쓴다(#1959).
+//   (셀프호스트 실측 2026-10-26). 분할형 권한의 assistant.search.context 는 열거가 아니라 랭킹이라 수집에 못 쓴다(#1959).
 //   검색 스윕은 **옛 토큰 호환으로만** 남는다 — 토큰에 channels:history·channels:read 가 없고 search:read 만 있을 때.
 //
 // 인증/스코프(유저 토큰): channels:history·channels:read(공개채널 기록·목록) · users:read(+users:read.email 작성자 해소)
@@ -258,7 +258,7 @@ const SCOPE_BY_METHOD: Record<string, string> = {
   "users.list": "users:read · users:read.email",
 };
 // 다시 연결해도 받을 수 없는 권한(#5040) — 라이블리 슬랙 앱(새 앱)은 legacy `search:read` 를 요청조차 못 한다
-//  (slack-oauth.ts). 이게 모자랄 때 «다시 연결하라» 고 하면 사람을 막다른 길로 보낸다 — 위시스트 대표님이
+//  (slack-oauth.ts). 이게 모자랄 때 «다시 연결하라» 고 하면 사람을 막다른 길로 보낸다 — 셀프호스트 고객이
 //  그 안내를 보고 물어 왔고, 실제로 다시 연결해도 같은 권한이 왔다(2026-10-26).
 const UNOBTAINABLE_SCOPES = new Set(["search:read"]);
 /** needed = 슬랙이 missing_scope 응답에 실어 주는 «모자란 권한»(있으면 표보다 정확하다). */

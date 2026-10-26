@@ -238,7 +238,7 @@ const f = (variant: ConnectFacts["variant"], needsApp: boolean, appReady: boolea
   ok("G5 앱 등록 저장 문 — 모르는 앱 400 · 슬랙 관리자만 · 깃허브 관리 권한 · 빠진 값 400 · 신원 없음 401 · 권한 세 벌 일치 · 슬랙 창구 모양");
 }
 
-// ── (#5040) 자동 수집 멈춤 — 수집기는 켜져 있는데 주기 잡이 연속 실패로 꺼졌다. 위시스트에서 이틀 동안 «수집 중» 으로 보였다. ──
+// ── (#5040) 자동 수집 멈춤 — 수집기는 켜져 있는데 주기 잡이 연속 실패로 꺼졌다. 셀프호스트에서 이틀 동안 «수집 중» 으로 보였다. ──
 {
   const stalledJob = { enabled: false, interval_sec: 1800, fail_streak: 6, auto_disabled_at: "2026-10-26 08:31:22+00", auto_disabled_reason: "연속 실패 6회" };
   const liveJob = { enabled: true, interval_sec: 600, fail_streak: 0, auto_disabled_at: null, auto_disabled_reason: null };

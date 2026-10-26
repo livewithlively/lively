@@ -100,7 +100,7 @@ ok(/Claude 에서 Slack 커넥터를 연결하면/.test(V.routeStateText({ kind:
 ok(/Gmail 커넥터/.test(V.routeStateText({ kind: "ai", state: "connect", ai_app: "gmail" }, { label: "구글", app_ready: true })) && !/구글을/.test(V.routeStateText({ kind: "ai", state: "connect", ai_app: "gmail" }, { label: "구글", app_ready: true })), "★V21 구글의 Claude 길은 «Gmail» 커넥터라고 말한다(드라이브를 연결한 사람이 헛걸음하지 않게)");
 ok(/Gmail 커넥터로 모아요/.test(V.routeBlurb({ kind: "ai", state: "connect", ai_app: "gmail" }, "구글")), "V21 길 설명도 커넥터 이름 · «구글으로» 같은 조사 없음");
 
-// V22 (#5040) 자동 수집 멈춤 — 수집기는 켜져 있는데 주기 잡이 연속 실패로 꺼졌다. «모으는 중» 이라 말하면 거짓이다(위시스트 이틀).
+// V22 (#5040) 자동 수집 멈춤 — 수집기는 켜져 있는데 주기 잡이 연속 실패로 꺼졌다. «모으는 중» 이라 말하면 거짓이다(셀프호스트 이틀).
 {
   const stalled = V.rowView(app({ routes: [{ kind: "app", state: "collecting", stalled: true }], recommended: 0 }));
   eq([stalled.bucket, !!stalled.button], ["half", true], "V22 멈춤 — 할 일이 남은 묶음 · 단추가 있다");

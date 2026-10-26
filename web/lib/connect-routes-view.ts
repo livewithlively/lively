@@ -78,7 +78,7 @@ export function rowView(a: ConnectAppIn): RowView {
   const name = ROUTE_NAME[r.kind];
   switch (r.state) {
     case 'collecting':
-      //  (#5040) 수집기는 켜져 있는데 자동 수집이 멈췄으면 «모으는 중» 이 거짓이다 — 위시스트에서 이틀 동안 그렇게 보였다.
+      //  (#5040) 수집기는 켜져 있는데 자동 수집이 멈췄으면 «모으는 중» 이 거짓이다 — 셀프호스트에서 이틀 동안 그렇게 보였다.
       if (r.stalled) return { blockedNote, word: '자동 수집이 멈췄어요 — 원인을 보고 다시 켜 주세요', button: '원인 보기', bucket: 'half' };
       return { blockedNote, word: `${name}${r.kind === 'ai' ? '로' : '으로'} 모으는 중`, button: null, bucket: 'on' };
     case 'connected':

@@ -53,7 +53,7 @@ export function collectorJobId(id: number): string {
 
 /**
  * 자동 수집이 멈춰 있나(#5040, 순수 함수) — 수집기는 켜져 있는데 그 주기 잡을 서킷 브레이커가 끈 상태.
- *  연결 화면·연결 상태는 수집기의 enabled 만 보고 «모으는 중» 이라 말해 왔다(위시스트 실측 2026-10-26:
+ *  연결 화면·연결 상태는 수집기의 enabled 만 보고 «모으는 중» 이라 말해 왔다(셀프호스트 실측 2026-10-26:
  *  슬랙 두 수집기와 리니어가 자동 정지된 채 «수집 중» 이었고 자료는 0건·이틀째 정지).
  *  잡이 켜져 있는데 auto_disabled_at 만 남은 행은 멈춘 게 아니다(예전 다시 켜기가 흔적을 안 지웠다) — 잡의 enabled 도 본다.
  */
@@ -307,7 +307,7 @@ async function syncCollectorJob(
     if (spec.enabled) {
       //  ⚠ 켤 때 서킷 브레이커도 함께 푼다(#5040 — cron-store upsertCronJob·updateCronJob 과 같은 규칙).
       //   종전엔 enabled 만 true 로 돌려 fail_streak 이 임계 위에 남았다 → 저장 직후 한 번만 실패해도 곧바로
-      //   다시 자동 정지됐다(위시스트 실측 2026-10-26: 대표님이 슬랙 수집기를 저장 → 20초 뒤 6번째 실패로 재정지).
+      //   다시 자동 정지됐다(셀프호스트 실측 2026-10-26: 관리자가 슬랙 수집기를 저장 → 20초 뒤 6번째 실패로 재정지).
       const up = await itemsPool.query(
         `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
            VALUES($1,$2,'connector_sync',$3::jsonb,$4,true,$5)
