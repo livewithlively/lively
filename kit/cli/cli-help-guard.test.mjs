@@ -99,7 +99,9 @@ for (let i = 0; ; i++) {
 }
 const GW = `http://127.0.0.1:${server.address().port}`;
 const env = { ...process.env, ...sandboxEnv({ home: HOME }), LIVELY_HOME: HOME, LIVELY_GATEWAY_URL: GW, LIVELY_TOKEN: "lvk_test_help_guard",
-  LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", PATH: pathWith(BIN) };
+  LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox", PATH: pathWith(BIN),
+  // 대조군이 하네스 스텁을 실제로 띄운다 — 실 claude 프로필 경로가 상속되지 않게 비운다(test-isolation R2).
+  CLAUDE_CONFIG_DIR: "" };
 
 async function lively(args, cli = CLI) {
   try {
@@ -168,7 +170,7 @@ try {
     `code=${s.code}\n${s.err.slice(0, 200)}`);
 
   // 대조군 — 관측 장치가 살아 있다(하네스 스텁이 실제로 불리면 흔적이 남는다).
-  //  ⚠ onboarding 이 아니라 run 으로 잰다: onboarding 은 셸 없이 spawnSync("claude") 라 윈도우에선 .cmd 스텁이 애초에
+  //  ⚠ onboarding 이 아니라 run 으로 잰다: onboarding 은 셸 없이 하네스를 띄워서 윈도우에선 .cmd 스텁이 애초에
   //   안 뜬다(그래서 윈도우 CI 에서 이 대조군이 빨갛게 나왔다). run 은 윈도우에서 셸을 거쳐 띄우므로 두 플랫폼 모두에서 뜬다.
   const rc = await lively(["run"]);
   check("C 대조: run(도움말 없이) → 하네스 스텁 기동 흔적", existsSync(CLAUDE_TRACE), `code=${rc.code}\n${rc.err.slice(0, 300)}`);
