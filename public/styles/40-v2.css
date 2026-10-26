@@ -2163,7 +2163,8 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-spec-div { margin-top: 10px; padding-top: 14px; border-top: 1px dashed var(--line); align-items: center; }
 .v2-spec-lead { margin: 0; font-size: 14px; line-height: 1.65; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
 .v2-spec-cards, .v2-spec-tables { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); }
-.v2-spec-card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; min-width: 0; font-size: 13px; line-height: 1.55; }
+.v2-spec-card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; align-content: start; min-width: 0; font-size: 13px; line-height: 1.55; }
+.v2-spec-body > p, .v2-spec-sec > p { margin: 0; }
 .v2-spec-card > b { font-size: 13.5px; }
 .v2-spec-card p { margin: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
 .v2-spec-card p:not(:has(.k)) { display: block; }

@@ -47,9 +47,9 @@ export function renderAppSpec(host: HTMLElement, appId: string, back: () => void
     const doc = r.spec && r.spec.doc ? r.spec.doc : null;
     const f = r.facts;
     const line = specStateLine(r);
-    head.replaceChildren(backBtn, el('h1', {}, el('span', { text: '「' + (r.title || r.app_id) + '」 개발 정보' })),
+    head.replaceChildren(...kids([backBtn, el('h1', {}, el('span', { text: '「' + (r.title || r.app_id) + '」 개발 정보' })),
       el('span', { class: 'v2-studio-sp' }),
-      r.spec_state === 'failed' ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '다시 만들기', onclick: () => { polls = 0; toast('설명을 다시 쓰기 시작했어요'); void load('POST'); } }) : null);
+      r.spec_state === 'failed' ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '다시 만들기', onclick: () => { polls = 0; toast('설명을 다시 쓰기 시작했어요'); void load('POST'); } }) : null]));
     const state = el('div', { class: 'v2-spec-state ' + line.tone }, r.spec_state === 'writing' || r.spec_state === 'stale' ? el('span', { class: 'v2-spec-spin', 'aria-hidden': 'true' }) : null, el('span', { text: line.text }));
     const tables = mergeTables(f.tables, doc);
     const aiOnly = (t: string): HTMLElement => el('p', { class: 'v2-bld-mini', text: t });

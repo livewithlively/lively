@@ -111,6 +111,7 @@ async function PAGE_MAIN() {
   if (infoBtn("회의록")) { infoBtn("회의록").click(); await sleep(700); }
   R.u1.hash = location.hash; R.u1.listHidden = !host.querySelector(".v2-bld-list") || host.querySelector(".v2-bld-list").offsetParent === null;
   R.u1.page = !!specRoot(); R.u1.title = txt(specRoot() && specRoot().querySelector(".v2-spec-top h1")); R.u1.gets = specGets("notes");
+  R.u1.head = txt(specRoot() && specRoot().querySelector(".v2-spec-top"));
 
   // U2 ok
   const ext = secOf("바깥 서비스와 API");
@@ -206,6 +207,7 @@ same(R.u1 && [R.u1.mine, R.u1.team, R.u1.hash, R.u1.listHidden, R.u1.page, R.u1.
 same(R.u2 && [R.u2.summary, R.u2.changes, R.u2.ext, R.u2.tableNames, R.u2.cols, R.u2.where, R.u2.spinner],
   ["회의 음성을 올리면 받아쓰고 정리해요.", ["정리 형식 고르기가 생겼어요"], "음성 받아쓰기", ["meetings"], [["title", "text", "회의 제목"], ["run_id", "int", ""]], "ui/index.html 363, 364줄 외 5곳", false],
   "U2 ok — 요약 · 달라진 점 · 바깥 서비스 · 표는 코드 칸에 설명의 뜻(설명에만 있는 표 · 칸 없음) · 호출 자리");
+check(R.u1 && R.u1.head === "‹ 앱빌더「회의록」 개발 정보", "U1 머리줄엔 돌아가기와 이름만(빈 자리가 글로 새지 않는다)", R.u1 && R.u1.head);
 check(R.u2 && /V3 코드 기준/.test(R.u2.state || "") && R.u2.getsAfter === 1, "U2 ok 면 «V3 코드 기준» 이라 말하고 다시 묻지 않는다", R.u2 && [R.u2.state, R.u2.getsAfter]);
 check(R.u3 && R.u3.spinner && /쓰는 중/.test(R.u3.state || "") && R.u3.gets0 === 1 && R.u3.gets1 >= 3 && R.u3.summary === "회의 음성을 올리면 받아쓰고 정리해요." && R.u3.gets2 === R.u3.gets1,
   "U3 쓰는 중 — 도는 표시 · 다시 묻다가 ok 가 오면 설명을 그리고 멈춘다", R.u3);
