@@ -41,8 +41,7 @@ export type NodeSkipWhy =
   | "unregistered" | "disabled" | "off" | "self" | "session-host" | "offline" | "stale" | "platform" | "no-cap"
   | "no-sessions" | "viewers-unknown";
 
-/** 정비 주기 — 시계가 분 단위(완료 기본 30분)라 «N분 ± 1분» 이면 충분하다. 컴퓨터마다 묻는 RPC 가 있어 매니지드(30초)보다 느슨하게 둔다. */
-export const NODE_STOP_RULE_SWEEP_MS = 60_000;
+//  ⓘ 정비 주기(1분)의 정본은 outbox-request-sweep.ts NODE_STOP_RULE_SWEEP_MS 다 — 요청 정비표가 이 모듈을 정적으로 끌어오지 않게 그쪽에 둔다.
 const ID_RE = /^box-[A-Za-z0-9._-]{1,120}$/;
 const VIEWING: ViewState = { viewing: true, unknown: false, endedAtMs: 0 };
 
@@ -147,9 +146,25 @@ function defaultDeps(): NodeStopDeps {
 const inFlight = new Set<string>();
 const tenantKey = (): string => String(currentTenant()?.id ?? "");
 
+/** 한 번에 묻는 세션 수 — 노드 걸음의 상한(node/stop-step.ts STOP_STEP_IDS_MAX)과 같다. 더 많으면 나눠 묻는다(무거운 컴퓨터일수록 빠지면 안 된다). */
+const VIEWERS_CHUNK = 200;
+
+/**
+ * 이 세션들 중 그 PC 터미널에서 사람이 **지금** 직접 붙어 있는 것. 한 조각이라도 못 물으면 던진다(부르는 쪽이 «모름» 으로 다룬다 — 안 끈다).
+ */
+async function localViewersNow(d: NodeStopDeps, nodeId: string, ids: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (let i = 0; i < ids.length; i += VIEWERS_CHUNK) {
+    const part = ids.slice(i, i + VIEWERS_CHUNK);
+    for (const id of localViewersOf(await d.step(nodeId, { step: "viewers", ids: part }), new Set(part))) out.add(id);
+  }
+  return out;
+}
+
 /**
  * 이 테넌트의 원격 PC 를 한 판 판정·집행한다. **테넌트 컨텍스트 안에서** 부른다(요청 정비 · CP 하우스키핑 틱 · 셀프호스트 타이머 · 마감 깨움).
- *  실패는 던지지 않고 결과에 남긴다 — 한 컴퓨터의 실패가 다른 컴퓨터를 막지 않는다.
+ *  컴퓨터 하나에서 난 실패(걸음 실패 · 끄기 실패)는 그 컴퓨터·그 세션에서 멈추고 다른 컴퓨터를 막지 않는다. 판 전체의 재료(정책 · 등록 · 장부)를
+ *  못 읽으면 던진다 — 그 판은 아무것도 안 끈다(모르면 안 끈다).
  */
 export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promise<NodeStopResult> {
   const d: NodeStopDeps = { ...defaultDeps(), ...over };
@@ -165,7 +180,10 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
     const out: NodeStopResult = { enabled: false, nodes: [] };
     let nextDue = Infinity;
     let shared: { states: SessionState[]; managed: Array<{ session_id: string | null }> } | null = null;
-    for (const snap of snaps) {
+    for (const first of snaps) {
+      //  앞 컴퓨터들의 판이 몇 초씩 걸린다 — 이 컴퓨터는 **지금의** 스냅샷으로 판정한다(판 시작에 읽은 것은 그만큼 낡았다 · 격리 리뷰).
+      //   그새 목록에서 사라졌으면(지워짐) 끊긴 것으로 본다 — 옛 사진으로 걸음을 보내지 않는다.
+      const snap = d.snapshots().find((x) => x.nodeId === first.nodeId) ?? { ...first, online: false };
       const row = rowById.get(snap.nodeId);
       const rule = effectiveNodeStopRule(policy, parseNodeStopRuleOverride(row?.stop_rule));
       if (rule.enabled && row?.enabled) out.enabled = true;
@@ -174,21 +192,28 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
       const mins = { doneMin: rule.doneMin, askingMin: rule.askingMin, unknownMin: rule.unknownMin };
       const sessions = snap.sessions.filter((s) => ID_RE.test(s.id));
       if (!sessions.length) { out.nodes.push({ id: snap.nodeId, skip: "no-sessions", rule: mins }); continue; }
+      const nodeId = snap.nodeId;
       //  ⓐ 그 PC 터미널에서 직접 붙은 클라이언트 — 못 가르면 이 컴퓨터는 이번 판에 아무것도 안 끈다(보는 중을 끄는 것이 첫째 금지).
-      const asked = new Set(sessions.map((s) => s.id));
       let local: Set<string>;
-      try { local = localViewersOf(await d.step(snap.nodeId, { step: "viewers", ids: [...asked] }), asked); }
+      try { local = await localViewersNow(d, nodeId, sessions.map((s) => s.id)); }
       catch (e) {
-        logger.warn({ err: e, node: snap.nodeId }, "원격 PC 하네스 종료 규칙: 직접 붙은 클라이언트를 못 가렸다 — 이 컴퓨터는 이번 판에 안 끈다");
-        out.nodes.push({ id: snap.nodeId, skip: "viewers-unknown", rule: mins });
+        logger.warn({ err: e, node: nodeId }, "원격 PC 하네스 종료 규칙: 직접 붙은 클라이언트를 못 가렸다 — 이 컴퓨터는 이번 판에 안 끈다");
+        out.nodes.push({ id: nodeId, skip: "viewers-unknown", rule: mins });
         continue;
       }
+      //  ⓑ 끄기(·질문 탭 넘기기) **직전에** 그 세션만 다시 묻는다 — ⓐ는 판 시작의 사진이라, 판이 도는 몇 초 사이 그 PC 터미널로 붙은 사람을 못 본다
+      //   (session-stop-rule 의 마지막 확인은 웹 도장만 다시 읽는다 · 격리 리뷰 재현). 붙어 있거나 못 물으면 던진다 — 키는 안 보내고, 끄기는 «실패» 로
+      //   세어 다음 판이 다시 본다.
+      const stillAlone = async (id: string): Promise<void> => {
+        if ((await localViewersNow(d, nodeId, [id])).has(id)) throw new Error("그 PC 터미널에서 방금 붙었다 — 끄지 않는다");
+      };
       const sh = shared ??= { states: await d.listStates(), managed: await d.listManaged() };
-      //  다시 열 수 있는 행만 판정 재료로 준다(머리말 «범위») — 나머지는 «장부 행 없음» 으로 남는다.
-      const states = sh.states.filter((st) => st.node_id === snap.nodeId && !st.discovered);
+      //  다시 열 수 있는 행만 판정 재료로 준다(머리말 «범위») — 나머지는 «장부 행 없음» 으로 남는다. 끄기는 장부의 주인 이름으로 보내므로
+      //   주인을 모르거나 그 컴퓨터가 보고한 주인과 장부가 어긋난 행도 뺀다(쪽지를 적고 매 판 끄기에 실패하지 않게 — 판정 단계에서 남긴다).
+      const snapOwner = new Map(sessions.map((s) => [s.id, s.owner || ""]));
+      const states = sh.states.filter((st) => st.node_id === nodeId && !st.discovered && !!st.owner
+        && (!snapOwner.get(st.id) || snapOwner.get(st.id) === st.owner));
       const stateById = new Map(states.map((st) => [st.id, st]));
-      const ownerOf = new Map(sessions.map((s) => [s.id, s.owner || stateById.get(s.id)?.owner || ""]));
-      const nodeId = snap.nodeId;
       const result = await d.sweep({
         enabled: () => true,
         scopeKey: () => `${key}\u0000node:${nodeId}`,
@@ -204,13 +229,18 @@ export async function sweepNodeStopRule(over: Partial<NodeStopDeps> = {}): Promi
           if (typeof v !== "string") throw new Error("capture 답이 글이 아니다");
           return v;
         },
-        quotaWait: async (s: SessionInfo, nowMs: number) => quotaWaitOf(await d.step(nodeId, {
-          step: "quota", id: s.id, threadId: stateById.get(s.id)?.claude_session_id || "", launchedAtMs: launchedAtMsOf(s), nowMs,
-        })),
-        keys: async (id, k) => { await d.step(nodeId, { step: "keys", id, key: k }); },
+        //  대화 파일은 훅이 보고한 경로를 먼저 본다(게이트웨이 resolveTranscript 와 같은 순서 — 규약 경로만 보면 심링크·긴 경로에서 놓쳐 «대기 없음» 이 된다).
+        quotaWait: async (s: SessionInfo, nowMs: number) => {
+          const st = stateById.get(s.id);
+          return quotaWaitOf(await d.step(nodeId, {
+            step: "quota", id: s.id, threadId: st?.claude_session_id || "", reportedPath: st?.transcript_path || "", launchedAtMs: launchedAtMsOf(s), nowMs,
+          }));
+        },
+        keys: async (id, k) => { await stillAlone(id); await d.step(nodeId, { step: "keys", id, key: k }); },
         reap: async (id) => {
-          const owner = ownerOf.get(id) || "";
-          if (!owner) throw new Error("세션 주인을 모른다 — 그 컴퓨터에 끄기를 보낼 수 없다");
+          const owner = stateById.get(id)?.owner;
+          if (!owner) throw new Error("세션 주인을 모른다 — 그 컴퓨터에 끄기를 보낼 수 없다");   // 위 거르기 뒤라 오지 않는다(방어)
+          await stillAlone(id);
           await d.reap(nodeId, id, owner);
         },
         arm: (dueAtSec) => { nextDue = Math.min(nextDue, dueAtSec); },
@@ -289,7 +319,8 @@ function defaultReapDeps(): NodeReapDeps {
 
 /**
  * 원격 PC 세션을 **보관**으로 끈다 — 그 컴퓨터의 tmux 만 내리고 장부 행(좌표·대화 id)은 남긴다(다시 열면 같은 대화로 이어진다).
- *  사람이 누르는 보관(DELETE …?reclaim=1 의 노드 갈래, terminal/routes.ts)과 같은 순서이고, 사유는 시스템 끄기(reclaim — sessions.ts reapCentralSession)다:
+ *  순서와 사유는 시스템 끄기의 공용 문(sessions.ts reapCentralSession · #4783 — 끄기 **전에** 사유를 적고, 끄기가 실패하면 되돌린다)을 따른다.
+ *  (사람이 누르는 보관 — DELETE …?reclaim=1 의 노드 갈래, terminal/routes.ts — 은 끈 뒤에 적는다. 여기는 그 순서가 아니다.)
  *   ① 사유를 먼저 적는다(안 본 결과가 남았는지 함께) → ② 그 컴퓨터에 «그 세션 있나» 를 묻고 있으면 kill 을 릴레이한다(kill 이 실패하면 한 번 더 물어
  *   정말 없을 때만 성공으로 친다 — 모르는 것을 성공으로 접지 않는다) → 실패면 ①을 되돌린다 → ③ 실어 준 훅·MCP 자격을 거둔다(복원은 새로 굽는다).
  */

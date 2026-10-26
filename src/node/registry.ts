@@ -385,6 +385,12 @@ export interface NodeSnapshotFacts {
  *  ⚠ 정비 전용이다(사람에게 보여 줄 목록에 쓰지 마라 — 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다).
  *  ⚠ 거르지 않는다 — 오프라인·낡음·세션 호스트·셀프 노드를 가르는 일은 부르는 쪽 판정(sessions/node-stop-rule.ts)이 사유와 함께 한다.
  */
+/** #5043 — 이 노드가 마지막 스냅샷에서 «중앙 세션 호스트» 를 선언했나(모르면 false). 화면의 «적용 안 됨» 까닭에 쓴다 — 세션은 싣지 않는다. */
+export function nodeDeclaresSessionHost(id: string): boolean {
+  const st = states.get(keyOf(id));
+  return !!st && declaredSessionHost({ session_host: st.sessionHost });
+}
+
 export function nodeSnapshotsInScope(now: number = Date.now()): NodeSnapshotFacts[] {
   const out: NodeSnapshotFacts[] = [];
   for (const [id, st] of inScope(states)) {

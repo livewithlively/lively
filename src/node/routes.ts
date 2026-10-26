@@ -13,13 +13,13 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { authNodeTokenDetailed, createNode, deleteNode, getNode, listNodes, revokeNodeToken, rotateNodeToken, setNodeEnabled, setNodeShared, setNodeStopRule, loadRecentLinkEvents, type OrgNode } from "./store.js";
-import { effectiveNodeStopRule, mergeNodeStopRuleOverride, parseNodeStopRuleOverride, type NodeStopRuleEffective } from "../sessions/node-stop-rule-policy.js";   // #5043
+import { effectiveNodeStopRule, mergeNodeStopRuleOverride, nodeStopRuleNote, parseNodeStopRuleOverride, type NodeStopRuleEffective, type NodeStopRuleOverride } from "../sessions/node-stop-rule-policy.js";   // #5043
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "../sessions/session-reclaim-policy.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { diagnoseLink, type LinkDiagnosis, type LinkEvent } from "./sleep-pattern.js";   // #1849 — 링크 이력으로 원인 추정
 import { linkDiagMessage, linkDiagSummary, keepAwakeLine, staleAgentNote } from "./link-advice.js";     // #1849 — 그 판정을 사람의 말로 · #2127 낡은 인스턴스
 import { nodeOpenTo, shareChangeVerdict } from "./node-access.js";
-import { liveNodes, isSelfNode, logNodeAuthDenial, looksLikeGatewayBox, forgetNode } from "./registry.js";
+import { liveNodes, isSelfNode, logNodeAuthDenial, looksLikeGatewayBox, forgetNode, nodeOnline, nodeSupports, nodeDeclaresSessionHost } from "./registry.js";
 import { selfNodeMessage } from "./self-node.js";   // #2592 — «이 노드는 게이트웨이 자신» 을 말하는 문장의 단일 출처
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
 import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
@@ -90,11 +90,28 @@ interface NodeView extends Omit<OrgNode, "token_hash"> {
   stop_rule_effective: NodeStopRuleEffective | null;
   /** #5043 — 워크스페이스 기본값(비운 칸이 따르는 값 — 화면이 입력칸 자리표시로 보여 준다). 못 읽었으면 null. */
   stop_rule_workspace: NodeStopRuleEffective | null;
+  /** #5043 — 규칙이 켜졌는데 이 컴퓨터는 판정하지 않는 까닭(윈도우 · 옛 연결 프로그램 · 중앙 자리). 화면이 «켬» 대신 보여 준다. 없으면 null. */
+  stop_rule_note: string | null;
 }
 /** #5043 — 워크스페이스의 하네스 종료 규칙 기본값(정비와 같은 캐시로 읽는다 — 화면과 실제가 갈리지 않게). 못 읽으면 null(화면은 값을 비운다). */
 async function loadNodeStopPolicy(): Promise<SessionReclaimPolicy | null> {
   return effectiveSessionReclaimPolicy(async () => normalizeSessionReclaimPolicy((await getRuntimeConfig()).session_reclaim_policy))
     .catch(() => null);
+}
+/** #5043 — 이 컴퓨터의 하네스 종료 규칙 칸 셋(직접 정한 값 · 실제 값 · 기본값)과 «적용 안 됨» 까닭. 정책을 못 읽었으면 값 칸은 null. */
+function stopRuleView(n: OrgNode, own: NodeStopRuleOverride | null, policy: SessionReclaimPolicy | null): Pick<NodeView,
+  "stop_rule" | "stop_rule_effective" | "stop_rule_workspace" | "stop_rule_note"> {
+  const effective = policy ? effectiveNodeStopRule(policy, own) : null;
+  return {
+    stop_rule: own,
+    stop_rule_effective: effective,
+    stop_rule_workspace: policy ? effectiveNodeStopRule(policy, null) : null,
+    stop_rule_note: nodeStopRuleNote({
+      ruleEnabled: !!effective?.enabled && n.enabled, platform: n.platform, self: isSelfNode(n.id),
+      sessionHost: nodeDeclaresSessionHost(n.id),
+      online: nodeOnline(n.id), supportsStep: nodeSupports(n.id, "stopStep"),
+    }),
+  };
 }
 function toView(
   n: OrgNode,
@@ -131,9 +148,7 @@ function toView(
     self_note: isSelfNode(n.id)
       ? `${selfNodeMessage()} 그래서 이 노드의 연결은 거부되고 있습니다(세션은 '중앙 컴퓨터(기본)' 로 정상 동작합니다).`
       : null,
-    stop_rule: stopRule,
-    stop_rule_effective: stopPolicy ? effectiveNodeStopRule(stopPolicy, stopRule) : null,
-    stop_rule_workspace: stopPolicy ? effectiveNodeStopRule(stopPolicy, null) : null,
+    ...stopRuleView(n, stopRule, stopPolicy),
   };
 }
 
@@ -271,11 +286,7 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const policy = await loadNodeStopPolicy();
     logger.info({ node: n.id, by: idOf(userOf(req)), stop_rule: merged.value }, "노드 하네스 종료 규칙 변경");
     res.setHeader("Cache-Control", "no-store");
-    res.json({
-      ok: true, id: n.id, stop_rule: merged.value,
-      stop_rule_effective: policy ? effectiveNodeStopRule(policy, merged.value) : null,
-      stop_rule_workspace: policy ? effectiveNodeStopRule(policy, null) : null,
-    });
+    res.json({ ok: true, id: n.id, ...stopRuleView(n, merged.value, policy) });
   }));
 
   app.delete("/api/ui/nodes/:id", auth, wrap(async (req, res) => {

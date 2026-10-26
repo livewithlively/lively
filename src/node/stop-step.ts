@@ -46,23 +46,30 @@ function idsOf(v: unknown): string[] {
   return [...new Set(v.map(idOf))];
 }
 
+/** (순수) 클라이언트 목록 한 줄 → [클라이언트 pid, 세션]. 물은 세션이 아니거나 깨진 줄이면 null. */
+function clientOf(line: string, ids: ReadonlySet<string>): [number, string] | null {
+  const [pidRaw, sid] = line.trim().split("\t");
+  if (!sid || !ids.has(sid)) return null;
+  const pid = Number(pidRaw);
+  return Number.isInteger(pid) && pid > 0 ? [pid, sid] : null;
+}
+
 /**
  * (순수) tmux 클라이언트 목록(`#{client_pid}\t#{session_name}`) → 세션별 **직접 붙은** 클라이언트 수.
  *  우리 웹 화면이 붙인 클라이언트는 부모가 이 프로세스(또는 attach 워커)다 — 그 밖의 부모를 가진 클라이언트가 사람이 직접 붙은 것이다.
- *  부모를 모르는 클라이언트(표에 없음 — 그새 끝났다)는 세지 않는다. 표를 아예 못 읽었으면 부르는 쪽이 이 함수를 부르지 않는다(던진다).
+ *  부모를 모르는 클라이언트(표에 없음 — 그새 끝났거나 표가 그 pid 를 못 봤다)도 **센다**: 끝난 클라이언트를 센 것은 다음 판(1분)에 저절로 풀리지만,
+ *  사람을 놓친 것은 되돌릴 수 없다(격리 리뷰 — 리눅스 표는 pid 별 읽기 실패를 삼키고 hidepid 는 남의 pid 를 숨긴다). 표를 아예 못 읽었으면 부르는 쪽이 던진다.
  */
 export function localViewerCounts(
   clientsRaw: string, ppidOf: (pid: number) => number | undefined, owned: ReadonlySet<number>, ids: ReadonlySet<string>,
 ): Record<string, number> {
   const out: Record<string, number> = {};
   for (const line of clientsRaw.split("\n")) {
-    const [pidRaw, sid] = line.trim().split("\t");
-    if (!sid || !ids.has(sid)) continue;
-    const pid = Number(pidRaw);
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    const ppid = ppidOf(pid);
-    if (ppid === undefined || owned.has(ppid)) continue;
-    out[sid] = (out[sid] ?? 0) + 1;
+    const c = clientOf(line, ids);
+    if (!c) continue;
+    const ppid = ppidOf(c[0]);
+    if (ppid !== undefined && owned.has(ppid)) continue;
+    out[c[1]] = (out[c[1]] ?? 0) + 1;
   }
   return out;
 }
@@ -73,8 +80,11 @@ export interface StopStepDeps {
   procTable: () => Promise<Map<number, { ppid: number }>>;
   owned: () => number[];
   markSeen: (id: string) => Promise<void>;
-  quota: (args: { id: string; threadId: string; launchedAtMs: number; nowMs: number }) => Promise<QuotaWait | null>;
+  quota: (args: LocalQuotaArgs) => Promise<QuotaWait | null>;
 }
+
+/** 한도 대기 걸음의 인자 — 대화 id 와 훅이 보고한 대화 파일 경로는 게이트웨이 장부의 것이다(이 PC 엔 장부가 없다). */
+export interface LocalQuotaArgs { id: string; threadId: string; reportedPath: string; launchedAtMs: number; nowMs: number }
 
 const defaultDeps = (): StopStepDeps => ({
   tmux: (args) => tmux(args),
@@ -106,9 +116,11 @@ export async function runStopStep(args: Record<string, unknown>, d: StopStepDeps
       const ids = new Set(idsOf(args.ids));
       if (!ids.size) return { local: {} };
       const raw = await d.tmux(["list-clients", "-F", "#{client_pid}\t#{session_name}"]);
+      //  물은 세션에 붙은 클라이언트가 없으면 프로세스 표를 안 읽는다(리눅스는 /proc 를 다 걷는다 — 컴퓨터마다 1분에 한 번).
+      if (!raw.split("\n").some((line) => clientOf(line, ids))) return { local: {} };
       const table = await d.procTable();
       //  ps 를 못 읽으면(빈 표) 웹 화면 클라이언트와 사람 클라이언트를 못 가른다 — 모르는 채 «없다» 고 답하지 않는다.
-      if (raw.trim() && !table.size) throw new Error("프로세스 표를 못 읽어 직접 붙은 클라이언트를 가를 수 없다");
+      if (!table.size) throw new Error("프로세스 표를 못 읽어 직접 붙은 클라이언트를 가를 수 없다");
       const local = localViewerCounts(raw, (pid) => table.get(pid)?.ppid, new Set(d.owned()), ids);
       for (const id of Object.keys(local)) await d.markSeen(id).catch(() => undefined);   // 새기기 실패는 판정을 막지 않는다
       return { local };
@@ -116,31 +128,43 @@ export async function runStopStep(args: Record<string, unknown>, d: StopStepDeps
     case "quota": {
       const id = idOf(args.id);
       const threadId = String(args.threadId ?? "");
+      const reportedPath = typeof args.reportedPath === "string" ? args.reportedPath : "";
       const launchedAtMs = Number(args.launchedAtMs) || 0;
       const nowMs = Number(args.nowMs) || Date.now();
-      return d.quota({ id, threadId, launchedAtMs, nowMs });
+      return d.quota({ id, threadId, reportedPath, launchedAtMs, nowMs });
     }
     case "seen": return lastResultSeenFrom(await d.tmux(["display-message", "-p", "-t", idOf(args.id), LAST_RESULT_SEEN_FMT])) ?? null;
     default: throw new Error(`모르는 걸음: ${step}`);
   }
 }
 
+/** localQuotaWait 의 재료 — 시험이 이 PC 의 세션 목록·파일 찾기·판정을 바꿔 끼운다. */
+export interface LocalQuotaDeps {
+  sessions: () => Promise<Array<{ id: string; harness: string; dir: string; owner: string }>>;
+  locate: typeof locateTranscript;
+  read: typeof readQuotaWaitFrom;
+}
+
 /**
- * 이 PC 의 대화 기록으로 한도 자동 이어감 대기를 판정한다 — 판정 규칙은 게이트웨이와 **같은 함수**(readQuotaWait)이고, 파일 찾기만 이 PC 의 것으로
- *  바꿔 끼운다(노드엔 DB 가 없어 세션의 작업 폴더·주인·하네스는 이 PC 의 tmux 행에서, 대화 id 는 게이트웨이가 실어 준 것으로).
+ * 이 PC 의 대화 기록으로 한도 자동 이어감 대기를 판정한다 — 판정 규칙은 게이트웨이와 **같은 함수**(readQuotaWait 의 몸통)이고, 파일 찾기만 이 PC 의 것으로
+ *  바꿔 끼운다(노드엔 DB 가 없어 세션의 작업 폴더·주인·하네스는 이 PC 의 tmux 행에서, 대화 id·보고된 파일 경로는 게이트웨이가 실어 준 것으로).
+ *  파일은 훅이 보고한 경로를 먼저 본다(게이트웨이 resolveTranscript 와 같은 순서 — 그 경로가 주인의 하네스 폴더 밖이면 locateTranscript 가 버린다).
  *  대화 id 가 없거나 파일을 못 찾으면 null(대기 재료 없음 — 매니지드와 같은 뜻), 세션이 이 PC 에 없으면 던진다(판정 불가).
  */
-export async function localQuotaWait(a: { id: string; threadId: string; launchedAtMs: number; nowMs: number }): Promise<QuotaWait | null> {
-  const session = (await listSessionsRaw({ strict: true })).find((s) => s.id === a.id);
+export async function localQuotaWait(a: LocalQuotaArgs, over: Partial<LocalQuotaDeps> = {}): Promise<QuotaWait | null> {
+  const d: LocalQuotaDeps = { sessions: () => listSessionsRaw({ strict: true }), locate: locateTranscript, read: readQuotaWaitFrom, ...over };
+  const session = (await d.sessions()).find((s) => s.id === a.id);
   if (!session) throw new Error("이 PC 에 그 세션이 없다");
   const resolve = async (): Promise<TranscriptTarget> => {
     if (!a.threadId) return { ok: false, why: "no-uuid" };
     const io = harnessIo(session.harness);
     if (!io?.parse) return { ok: false, why: "unreadable", label: io?.label || session.harness || "이 하네스" };
     const readable = io as ReadableAdapter;
-    const found = await locateTranscript(readable, { cwd: session.dir, convId: a.threadId, owner: session.owner }, localTranscriptFs.stat);
+    const found = await d.locate(readable, {
+      cwd: session.dir, convId: a.threadId, owner: session.owner, ...(a.reportedPath ? { reportedPath: a.reportedPath } : {}),
+    }, localTranscriptFs.stat);
     if (!found) return { ok: false, why: "not-found" };
     return { ok: true, uuid: a.threadId, mapped: a.threadId, io: readable, cwd: session.dir, tfs: localTranscriptFs, found };
   };
-  return readQuotaWaitFrom(a.id, { launchedAtMs: a.launchedAtMs, nowMs: a.nowMs }, resolve);
+  return d.read(a.id, { launchedAtMs: a.launchedAtMs, nowMs: a.nowMs }, resolve);
 }

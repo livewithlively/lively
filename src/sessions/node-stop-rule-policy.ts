@@ -90,3 +90,19 @@ export function effectiveNodeStopRule(ws: WorkspaceNodeStop, o: NodeStopRuleOver
   const [unknownMin, sUnknown] = pick(o?.unknown_minutes, ws.node_stop_unknown_minutes);
   return { enabled, doneMin, askingMin, unknownMin, source: { enabled: sEnabled, done: sDone, asking: sAsking, unknown: sUnknown } };
 }
+
+/**
+ * (순수) 규칙이 켜졌는데 이 컴퓨터는 판정하지 않는 까닭 — 화면에 «켬» 대신 보여 줄 사람의 말. 판정 대상이거나 규칙이 꺼졌으면 null.
+ *  정비의 건너뛰기(node-stop-rule.ts nodeStopEligibility) 중 **오래가는** 이유만 말한다 — 오프라인·낡은 스냅샷 같은 잠깐의 상태는 말하지 않는다
+ *  (다시 붙으면 돈다). 옛 연결 프로그램(걸음 미선언)은 붙어 있을 때만 안다 — 끊긴 컴퓨터의 선언은 모른다.
+ */
+export function nodeStopRuleNote(i: {
+  ruleEnabled: boolean; platform: string | null; self: boolean; sessionHost: boolean; online: boolean; supportsStep: boolean;
+}): string | null {
+  if (!i.ruleEnabled) return null;
+  if (i.self) return "중앙 컴퓨터 자신과 같은 자리라 적용하지 않습니다 — 그 세션은 중앙 컴퓨터의 규칙을 따릅니다.";
+  if (i.sessionHost) return "중앙 세션을 맡은 컴퓨터라 적용하지 않습니다 — 그 세션은 중앙 컴퓨터의 규칙을 따릅니다.";
+  if (i.platform === "win32") return "윈도우 컴퓨터는 아직 지원하지 않아 세션을 끄지 않습니다.";
+  if (i.online && !i.supportsStep) return "이 컴퓨터의 라이블리 연결 프로그램이 옛 버전이라 아직 적용되지 않습니다 — 다시 연결되면 새 버전을 받아 적용됩니다.";
+  return null;
+}

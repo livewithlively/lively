@@ -2,7 +2,7 @@
 //  틀리면: 화면에 적힌 분과 실제로 끄는 분이 갈리거나(두 벌), 깨진 DB 값이 «0분 = 즉시» 로 읽혀 막 끝난 세션이 꺼진다.
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { effectiveNodeStopRule, mergeNodeStopRuleOverride, parseNodeStopRuleOverride } from "./node-stop-rule-policy.js";
+import { effectiveNodeStopRule, mergeNodeStopRuleOverride, nodeStopRuleNote, parseNodeStopRuleOverride } from "./node-stop-rule-policy.js";
 import { DEFAULT_SESSION_RECLAIM_POLICY } from "./session-reclaim-policy.js";
 
 const WS = { node_stop_enabled: true, node_stop_done_minutes: 30, node_stop_asking_minutes: 180, node_stop_unknown_minutes: 1440 };
@@ -61,4 +61,17 @@ test("C7 코드 기본값 — 꺼짐(컴퓨터별로 켜서 실측) · 완료 30
   assert.deepEqual([p.node_stop_enabled, p.node_stop_done_minutes, p.node_stop_asking_minutes, p.node_stop_unknown_minutes], [false, 30, 180, 1440]);
   //  매니지드 값은 그대로(무회귀)
   assert.deepEqual([p.stop_done_minutes, p.stop_asking_minutes], [3, 60]);
+});
+test("C8 «적용 안 됨» 까닭 — 규칙이 꺼졌으면 없음 · 셀프 → 세션 호스트 → 윈도우 → (붙어 있는) 옛 번들 순 · 끊긴 컴퓨터·대상 컴퓨터는 없음", () => {
+  const base = { ruleEnabled: true, platform: "darwin", self: false, sessionHost: false, online: true, supportsStep: true };
+  const why = (o: Partial<typeof base>) => nodeStopRuleNote({ ...base, ...o });
+  const self = why({ self: true }), host = why({ sessionHost: true }), win = why({ platform: "win32" }), old = why({ supportsStep: false });
+  for (const v of [self, host, win, old]) assert.equal(typeof v, "string");
+  assert.equal(new Set([self, host, win, old]).size, 4, "까닭마다 다른 말");
+  assert.equal(why({}), null, "대상 컴퓨터");
+  assert.equal(why({ ruleEnabled: false, self: true, platform: "win32", supportsStep: false }), null, "규칙이 꺼졌으면 «꺼짐» 이라고만 한다");
+  assert.equal(why({ self: true, sessionHost: true, platform: "win32", supportsStep: false }), self, "셀프가 먼저");
+  assert.equal(why({ sessionHost: true, platform: "win32", supportsStep: false }), host);
+  assert.equal(why({ platform: "win32", supportsStep: false }), win);
+  assert.equal(why({ online: false, supportsStep: false }), null, "끊긴 컴퓨터의 선언은 모른다 — 옛 번들이라 단정하지 않는다");
 });

@@ -385,13 +385,14 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const ok = answer(String(args.id ?? ""), String(args.askId ?? ""), args.value);
       return { ok, stale: !ok };
     }
-    // 실제 답은 이 노드의 하네스 대화 파일에 남는다. 게이트웨이가 보관한 threadId만 받고, session id를
-    // 이 노드의 tmux 메타와 다시 결합해 제한 청크를 돌려준다 — 사용자 입력 경로나 셸은 이 표면에 없다(#3982·#3870).
     // #5043 — 원격 PC 하네스 종료 규칙의 한 걸음(화면·키·작업 판정·직접 붙은 클라이언트·한도 대기·안 본 결과). 판정은 게이트웨이가 한다.
+    //  하네스에 넣는 키는 질문 탭 넘기기(→) 하나뿐이다(stop-step.ts STOP_STEP_KEYS) — 그 밖의 입력·셸은 이 걸음에 없다.
     case "stopStep": {
       const { runStopStep } = await import("./stop-step.js");
       return runStopStep(args);
     }
+    // 실제 답은 이 노드의 하네스 대화 파일에 남는다. 게이트웨이가 보관한 threadId만 받고, session id를
+    // 이 노드의 tmux 메타와 다시 결합해 제한 청크를 돌려준다 — 사용자 입력 경로나 셸은 이 표면에 없다(#3982·#3870).
     case "chatTranscript": {
       const id = String(args.id ?? "");
       const session = (await listSessionsRaw({ strict: true })).find((s) => s.id === id);

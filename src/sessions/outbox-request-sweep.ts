@@ -60,7 +60,10 @@ export const SIX_HOURS_MS = 6 * 60 * 60_000;
 export const CONV_INDEX_SWEEP_MS = 60_000;
 /** 하네스 종료 규칙(#4695 T5) 판정 주기. 시계가 분 단위(N 기본 3분)라 «N분 ± 이 주기» 가 실제 끄는 시각이 된다 — 대기 알림과 같은 30초. */
 export const STOP_RULE_SWEEP_MS = 30_000;
-/** 원격 PC 하네스 종료 규칙(#5043) 판정 주기 — 정본은 node-stop-rule.ts(NODE_STOP_RULE_SWEEP_MS). 이 표가 그 모듈을 정적으로 끌어오지 않게 값만 같게 둔다. */
+/**
+ * 원격 PC 하네스 종료 규칙(#5043) 판정 주기(정본 — 셀프호스트 boot/housekeeping.ts 의 타이머도 같은 값). 시계가 분 단위(완료 기본 30분)라
+ *  «N분 ± 1분» 이면 충분하고, 컴퓨터마다 RPC 를 묻는 판이라 매니지드(30초)보다 느슨하게 둔다.
+ */
 export const NODE_STOP_RULE_SWEEP_MS = 60_000;
 
 export const SWEEP_JOBS: readonly SweepJob[] = [

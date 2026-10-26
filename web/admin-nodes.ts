@@ -101,9 +101,10 @@ const fmtStopMin = (m) => (m === 0 ? '끄지 않음' : m % 60 === 0 ? (m / 60) +
 function stopRuleLine(n) {
   const e = n.stop_rule_effective;
   if (!e) return null;
-  const text = e.enabled
-    ? '켬 · 끝난 뒤 ' + fmtStopMin(e.doneMin) + ' · 답 대기 ' + fmtStopMin(e.askingMin) + ' · 상태 모름 ' + fmtStopMin(e.unknownMin)
-    : '꺼짐';
+  //  켰어도 이 컴퓨터를 판정하지 않으면(윈도우 · 옛 연결 프로그램 · 중앙 자리) «켬» 이라 하지 않고 그 까닭을 말한다 — 서버가 준 말 그대로.
+  const text = !e.enabled ? '꺼짐'
+    : n.stop_rule_note ? '켰지만 이 컴퓨터엔 적용 안 됨 — ' + n.stop_rule_note
+    : '켬 · 끝난 뒤 ' + fmtStopMin(e.doneMin) + ' · 답 대기 ' + fmtStopMin(e.askingMin) + ' · 상태 모름 ' + fmtStopMin(e.unknownMin);
   const allWorkspace = e.source && Object.values(e.source).every((s) => s === 'workspace');
   return el('span', { class: 'wikicat-should', title: '아무도 보지 않는 세션의 AI 를 이 시간이 지나면 끕니다. 대화는 남아 다시 열면 이어집니다.' },
     el('span', { class: 'wikicat-should-label', text: '자동 종료' }), text + (allWorkspace ? ' (워크스페이스 기본값)' : ''));
@@ -136,6 +137,7 @@ function openStopRuleForm(n, reload) {
     el('p', { class: 'admin-hint' },
       '이 컴퓨터에서 아무도 보지 않는 세션의 AI(하네스)를 시간이 지나면 끕니다. 대화는 남아, 그 세션을 열거나 말을 걸면 이어집니다. '
       + '웹에서 보고 있거나 이 컴퓨터의 터미널에서 직접 붙어 있는 세션, 작업 중이거나 다시 깨우기·사용량 한도 자동 이어감을 기다리는 세션은 끄지 않습니다.'),
+    n.stop_rule_note ? el('p', { class: 'admin-hint storage-warn', text: '⚠ ' + n.stop_rule_note }) : null,
     field('사용', onSel),
     field('작업이 끝난 뒤 끄기 (분)', doneIn),
     field('답을 기다린 뒤 끄기 (분)', askingIn),
@@ -156,11 +158,11 @@ function openStopRuleForm(n, reload) {
     if (Object.values(mins).some((v) => Number.isNaN(v))) { msg.textContent = '분은 0~43200 사이의 정수로 적거나 비워 두세요.'; return; }
     save.disabled = true;
     try {
-      await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/stop-rule', { method: 'POST', body: JSON.stringify({
+      const r = await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/stop-rule', { method: 'POST', body: JSON.stringify({
         enabled: onSel.value === '' ? null : onSel.value === 'on', ...mins,
       }) });
       back.remove();
-      toast('저장했습니다 — 1분 안에 적용됩니다');
+      toast(r && r.stop_rule_note ? '저장했습니다 — 단, ' + r.stop_rule_note : '저장했습니다 — 1분 안에 적용됩니다');
       reload();
     } catch (e) { save.disabled = false; msg.textContent = '저장 실패 — ' + e.message; }
   };

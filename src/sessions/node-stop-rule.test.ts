@@ -37,6 +37,8 @@ interface Rig {
   steps: Array<[string, string, Record<string, unknown>]>;
   reaped: Array<[string, string, string]>;
   armed: number[];
+  /** 끄기 전 쪽지를 적은 세션(판정에서 뺀 세션엔 안 적어야 한다). */
+  noteIds: string[];
   deps: Partial<NodeStopDeps>;
 }
 /** 원격 PC 판의 리그 — 판정·집행은 **진짜** sweepSessionStopRule 이 한다(쪽지·실행 상태 기록만 메모리로). */
@@ -52,6 +54,7 @@ function rig(snaps: NodeSnapshotFacts[], o: {
   const steps: Rig["steps"] = [];
   const reaped: Rig["reaped"] = [];
   const armed: number[] = [];
+  const noteIds: string[] = [];
   const rows = o.rows ?? snaps.map((s) => ({ id: s.nodeId, enabled: true, platform: "darwin" }));
   const states = o.states ?? snaps.flatMap((s) => s.sessions.map((x) => stOf(x.id, s.nodeId)));
   const deps: Partial<NodeStopDeps> = {
@@ -74,12 +77,12 @@ function rig(snaps: NodeSnapshotFacts[], o: {
     listManaged: async () => [],
     view: o.view ?? (() => NOT_VIEWING),
     reap: async (nodeId, id, owner) => { reaped.push([nodeId, id, owner]); },
-    sweep: (over: Partial<StopRuleDeps>) => sweepSessionStopRule({ ...over, saveNote: async () => {}, markLastRun: async () => {}, sleep: async () => {}, now: () => NOW * 1000 }),
+    sweep: (over: Partial<StopRuleDeps>) => sweepSessionStopRule({ ...over, saveNote: async (id) => { noteIds.push(id); }, markLastRun: async () => {}, sleep: async () => {}, now: () => NOW * 1000 }),
     now: () => NOW * 1000,
     arm: (at) => { armed.push(at); },
     staleMs: STALE,
   };
-  return { steps, reaped, armed, deps };
+  return { steps, reaped, armed, noteIds, deps };
 }
 const stepsTo = (r: Rig, nodeId: string): string[] => r.steps.filter(([n]) => n === nodeId).map(([, s]) => s);
 
@@ -145,13 +148,21 @@ test("D6 다시 열 수 없는 행은 끄지 않는다 — 그 PC 에서 띄워 
   assert.deepEqual(r.reaped, [["n-a", "box-ok", "kim"]]);
   assert.equal(out.nodes[0]?.result?.kept["no-state"], 3);
 });
-test("D7 끌 때는 그 컴퓨터 · 그 세션 · 세션 주인 이름으로 보낸다 — 주인을 모르면 보내지 않는다(실패로 센다)", async () => {
-  const r = rig([snap("n-a", [sess("box-lee", { owner: "lee" }), sess("box-anon", { owner: "" })])], {
-    states: [stOf("box-lee", "n-a", { owner: "lee" }), stOf("box-anon", "n-a", { owner: "" })],
+test("D7 끌 때는 그 컴퓨터 · 그 세션 · 장부의 주인 이름으로 보낸다 — 장부에 주인이 없거나 컴퓨터가 보고한 주인과 다르면 판정에서 뺀다(쪽지·실패가 매 판 쌓이지 않게)", async () => {
+  const r = rig([snap("n-a", [
+    sess("box-lee", { owner: "lee" }), sess("box-anon", { owner: "" }), sess("box-swap", { owner: "park" }), sess("box-quiet", { owner: "" }),
+  ])], {
+    states: [
+      stOf("box-lee", "n-a", { owner: "lee" }), stOf("box-anon", "n-a", { owner: "" }),
+      stOf("box-swap", "n-a", { owner: "kim" }), stOf("box-quiet", "n-a", { owner: "choi" }),   // 컴퓨터가 주인을 안 보고하면 장부 주인
+    ],
   });
   const out = await sweepNodeStopRule(r.deps);
-  assert.deepEqual(r.reaped, [["n-a", "box-lee", "lee"]]);
-  assert.equal(out.nodes[0]?.result?.kept.failed, 1);
+  assert.deepEqual([...r.reaped].sort(), [["n-a", "box-lee", "lee"], ["n-a", "box-quiet", "choi"]]);
+  assert.equal(out.nodes[0]?.result?.kept["no-state"], 2);
+  assert.equal(out.nodes[0]?.result?.kept.failed, undefined, "끄기를 보냈다가 실패하는 길이 아니다");
+  assert.deepEqual(r.noteIds.filter((id) => id === "box-anon" || id === "box-swap"), [], "판정에서 뺀 세션엔 쪽지를 안 적는다");
+  assert.ok(r.noteIds.includes("box-lee"), "배선 — 끈 세션엔 쪽지를 적는다(관측 장치가 살아 있다)");
 });
 test("D8 한도 대기 걸음에는 장부 행의 대화 id 와 띄운 시각(created×1000)을 싣는다", async () => {
   const r = rig([snap("n-a", [sess("box-q", { created: NOW - 5000 })])]);
@@ -233,6 +244,97 @@ test("D15 세션이 없는 컴퓨터엔 걸음을 안 보낸다", async () => {
   const out = await sweepNodeStopRule(r.deps);
   assert.equal(out.nodes[0]?.skip, "no-sessions");
   assert.deepEqual(r.steps, []);
+});
+
+test("D17 ★ 판 시작엔 아무도 없었는데 판이 도는 사이 그 PC 터미널로 붙으면 끄지 않는다 — 끄기 직전에 그 세션만 다시 묻는다(격리 리뷰 재현)", async () => {
+  const recent = sess("box-new", { lastActive: NOW - 60, lastReport: { phase: "idle", at: NOW - 60, bg: 0, wake: 0, cron: 0 } });
+  let attached = false;
+  const r = rig([snap("n-a", [sess("box-1"), recent])], {
+    answer: (_n, a) => {
+      if (a.step === "capture") attached = true;   // 화면을 읽는 사이 사람이 `tmux attach -t box-1`
+      if (a.step === "viewers") return { local: attached ? { "box-1": 1 } : {} };
+      return undefined;
+    },
+  });
+  const out = await sweepNodeStopRule(r.deps);
+  assert.deepEqual(r.reaped, []);
+  assert.equal(out.nodes[0]?.result?.kept.failed, 1, "끄기 실패로 센다 — 다음 판이 다시 본다");
+  assert.deepEqual(r.steps.filter(([, s]) => s === "viewers").map(([, , a]) => a.ids), [["box-1", "box-new"], ["box-1"]],
+    "판 시작에 컴퓨터 전체 한 번 · 끄기 직전에 그 세션만 한 번 더");
+});
+test("D17b 다시 묻기가 실패해도 끄지 않는다 · 아무도 없으면 끈다(배선)", async () => {
+  let calls = 0;
+  const failing = rig([snap("n-a", [sess("box-1")])], {
+    answer: (_n, a) => { if (a.step === "viewers" && ++calls > 1) throw new Error("rpc 실패"); return undefined; },
+  });
+  const out = await sweepNodeStopRule(failing.deps);
+  assert.deepEqual(failing.reaped, []);
+  assert.equal(out.nodes[0]?.result?.kept.failed, 1);
+  resetStopRule(); resetNodeStopRule();
+  const alone = rig([snap("n-a", [sess("box-1")])]);
+  await sweepNodeStopRule(alone.deps);
+  assert.deepEqual(alone.reaped, [["n-a", "box-1", "kim"]]);
+});
+test("D17c 질문 탭 넘기기(→)도 보내기 직전에 다시 묻는다 — 붙어 있거나 못 물으면 키를 안 보낸다", async () => {
+  let over: Partial<StopRuleDeps> | undefined;
+  let viewers: () => unknown = () => ({ local: {} });
+  const r = rig([snap("n-a", [sess("box-1")])], { answer: (_n, a) => (a.step === "viewers" ? viewers() : undefined) });
+  await sweepNodeStopRule({ ...r.deps, sweep: async (o) => { over = o; return { enabled: true, scanned: 0, stopped: [], kept: {} }; } });
+  assert.ok(over?.keys, "배선 — 노드 판이 키 보내기를 끼웠다");
+  viewers = () => ({ local: { "box-1": 1 } });
+  await assert.rejects(over.keys("box-1", "Right"));
+  viewers = () => { throw new Error("rpc 실패"); };
+  await assert.rejects(over.keys("box-1", "Right"));
+  viewers = () => ({ local: {} });
+  await over.keys("box-1", "Right");
+  assert.deepEqual(r.steps.filter(([, s]) => s === "keys").map(([, , a]) => [a.id, a.key]), [["box-1", "Right"]], "아무도 없을 때만 키가 간다");
+});
+test("D18 세션이 200개 넘는 컴퓨터 — 직접 붙은 클라이언트를 200개씩 나눠 묻는다 · 한 조각이라도 실패하면 그 컴퓨터를 통째로 건너뛴다", async () => {
+  const many = (idle: number) => Array.from({ length: 450 }, (_, i) =>
+    sess(`box-m${i}`, { lastActive: NOW - idle, lastReport: { phase: "idle", at: NOW - idle, bg: 0, wake: 0, cron: 0 } }));
+  const ok = rig([snap("n-a", many(60))]);
+  const o1 = await sweepNodeStopRule(ok.deps);
+  assert.equal(o1.nodes[0]?.skip, undefined, "건너뛰지 않는다(종전: 상한 200 에 걸려 영영 viewers-unknown)");
+  assert.deepEqual(ok.steps.filter(([, s]) => s === "viewers").map(([, , a]) => (a.ids as string[]).length), [200, 200, 50]);
+  resetStopRule(); resetNodeStopRule();
+  let n = 0;
+  const bad = rig([snap("n-a", many(3600))], { answer: (_n, a) => { if (a.step === "viewers" && ++n === 2) throw new Error("조각 실패"); return undefined; } });
+  const o2 = await sweepNodeStopRule(bad.deps);
+  assert.equal(o2.nodes[0]?.skip, "viewers-unknown");
+  assert.deepEqual(bad.reaped, []);
+  assert.deepEqual(stepsTo(bad, "n-a"), ["viewers", "viewers"], "실패한 조각 뒤로는 아무 걸음도 안 보낸다");
+});
+test("D19 앞 컴퓨터의 판이 도는 사이 다음 컴퓨터가 끊기거나 사라지면 — 그 컴퓨터는 지금의 스냅샷으로 판정한다(걸음 0)", async () => {
+  const a = snap("n-a", [sess("box-a")]);
+  const b = snap("n-b", [sess("box-b")]);
+  const c = snap("n-c", [sess("box-c")]);
+  let reads = 0;
+  const r = rig([a, b, c]);
+  const out = await sweepNodeStopRule({ ...r.deps, snapshots: () => (++reads === 1 ? [a, b, c] : [a, { ...b, online: false }]) });
+  assert.equal(out.nodes.find((x) => x.id === "n-b")?.skip, "offline");
+  assert.equal(out.nodes.find((x) => x.id === "n-c")?.skip, "offline", "목록에서 사라진 컴퓨터(지워짐)도 끊긴 것으로 본다");
+  assert.deepEqual([...stepsTo(r, "n-b"), ...stepsTo(r, "n-c")], []);
+  assert.deepEqual(r.reaped, [["n-a", "box-a", "kim"]]);
+});
+test("D20 한도 대기 걸음엔 훅이 보고한 대화 파일 경로(장부 transcript_path)도 싣는다 — 없으면 빈 글", async () => {
+  const path = "/Users/kim/.claude/projects/-w/conv-box-p.jsonl";
+  const r = rig([snap("n-a", [sess("box-p"), sess("box-n")])], {
+    states: [stOf("box-p", "n-a", { transcript_path: path }), stOf("box-n", "n-a", { transcript_path: null })],
+  });
+  await sweepNodeStopRule(r.deps);
+  const q = new Map(r.steps.filter(([, s]) => s === "quota").map(([, , a]) => [a.id, a.reportedPath]));
+  assert.equal(q.get("box-p"), path);
+  assert.equal(q.get("box-n"), "");
+});
+test("D21 웹 화면에서 보는 중이거나 보는지 모르면 원격 PC 세션도 안 끈다", async () => {
+  const r = rig([snap("n-a", [sess("box-web"), sess("box-unk"), sess("box-idle")])], {
+    view: (id) => (id === "box-web" ? { viewing: true, unknown: false, endedAtMs: 0 }
+      : id === "box-unk" ? { viewing: false, unknown: true, endedAtMs: 0 } : NOT_VIEWING),
+  });
+  const out = await sweepNodeStopRule(r.deps);
+  assert.deepEqual(r.reaped, [["n-a", "box-idle", "kim"]]);
+  assert.equal(out.nodes[0]?.result?.kept.viewing, 1);
+  assert.equal(out.nodes[0]?.result?.kept["view-unknown"], 1);
 });
 
 // ── D 의 답 해석(순수) ───────────────────────────────────────────────────────────────────────────
