@@ -35,7 +35,8 @@ import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNod
 import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, refView, splitList, stageIndex, stageTabs, type CardExtra, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { restorePath } from '../lib/restore-force.js';
+import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -64,6 +65,8 @@ export interface StudioRec {
   check?: { have: string[]; missing: string[]; ver: number; card: string };
   /** ①로 돌아와 고치던 것(아직 「이 내용으로 다시 기획」 전) — 단계를 옮겨 다녀도 날아가지 않게(원준 2026-10-14 «입력했던 내용은 절대 안 날아가게»). */
   whatEdit?: { name: string; what: string; place: StudioPlace };
+  /** ③ 첫 판 전 AI 가 알린 걸음(1~4 · [[걸음 n/4]]) — 새로 열어도 «시작하는 중» 으로 돌아가지 않게(원준 2026-10-26). 초안을 다시 청하면 0. */
+  step?: number;
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
@@ -693,8 +696,10 @@ async function build(rec: StudioRec): Promise<void> {
   if (!root) return;
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
-    pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null };
+    pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: rec.step || 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
+    waiting: false, waitT0: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
+    stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0,
+    quietTill: Date.now() - rec.at < 120000 ? rec.at + 120000 : 0 };   // 막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다
   const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 버전으로', hidden: true }) as HTMLButtonElement;
@@ -780,6 +785,15 @@ async function build(rec: StudioRec): Promise<void> {
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
     } else if (rec.stage === 'check') { text = '아래 네 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
+    const kind = runKind();
+    if (S.stall && kind) {   // 기다리던 AI 일이 멈췄다 — «만들고 있어요» 대신 까닭과 할 일(원준 2026-10-26)
+      kids.length = 0;
+      const go = kind === 'fix' ? '이어서 수정하기' : '이어서 만들기';
+      if (S.stall === 'ask') { text = 'AI가 확인을 기다리고 있어요. 「AI 세션 보기」를 눌러 답해주세요.'; kids.push(nowBtn('AI 세션 보기', true, () => { S.chatMode = 'float'; applyPlace(); })); }
+      else if (S.stall === 'offline') { text = '세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있거나 잠들어 있어서 AI가 멈췄어요. 그 컴퓨터를 켜면 이어서 할 수 있어요.'; kids.push(nowBtn(go, true, () => { void resumeRun(); }, true)); }
+      else if (S.stall === 'ended') { text = '세션이 꺼져서 AI가 멈췄어요. 「' + go + '」를 누르면 세션을 다시 켜고 멈춘 곳부터 해요.'; kids.push(nowBtn(go, true, () => { void resumeRun(); })); }
+      else { text = 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 멈춘 곳부터 다시 해요.'; kids.push(nowBtn(go, true, () => { void resumeRun(); })); }
+    }
     const prev = prevOf();
     const next = nextBtnFor(stageIndex(rec.stage), reachedOf(rec), rec.mode, (k) => { void goTo(k); }, S.waiting);
     now.replaceChildren(...(prev ? [el('button', { class: 'btn btn-ghost btn-sm v2-studio-back', type: 'button', text: '← 이전', title: '이전 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => { void goTo(prev); } })] : []),
@@ -842,8 +856,8 @@ async function build(rec: StudioRec): Promise<void> {
     chatBtn.textContent = S.chatMode === 'off' ? 'AI 세션 보기' : 'AI 세션 닫기';
   };
   const appHost = (): HTMLElement => { const h0 = appBox.querySelector('.v2-studio-app-body') as HTMLElement | null; if (h0) return h0; const h = el('div', { class: 'v2-studio-app-body' }); appBox.replaceChildren(h); return h; };
-  const waiting = (title: string, sub: string, steps?: HTMLElement): void => {
-    appHost().replaceChildren(el('div', { class: 'v2-studio-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: title }), ...(steps ? [steps] : []), ...sub.split('\n').map((t) => el('p', { text: t }))));
+  const waiting = (title: string, sub: string, steps?: HTMLElement, still = false): void => {
+    appHost().replaceChildren(el('div', { class: 'v2-studio-wait' + (still ? ' v2-studio-wait--still' : '') }, ...(still ? [] : [el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' })]), el('b', { text: title }), ...(steps ? [steps] : []), ...sub.split('\n').map((t) => el('p', { text: t }))));
   };
 
   // ── ③ 실제 화면으로 — 코멘트 층과 함께 시험 세션(세션 위젯) · 앱 화면(#/i)으로 ──
@@ -1016,7 +1030,7 @@ async function build(rec: StudioRec): Promise<void> {
       //  ①에서 이름을 비웠으면 기획 카드의 이름으로 세션 이름을 한 번 짓는다 — «"회의 안건" 앱 제작».
       //   그 이름이 곧 이 앱의 이름이다 — 머리줄 · 앱빌더 카드 · 세션 이름이 같은 글을 쓴다(원준 2026-10-15).
       if (!rec.named && !rec.title && c.name) { rec.named = true; rec.title = c.name; S.title = c.name; name.textContent = c.name; saveRec(rec); void relabel(rec.sid, c.name, 'new'); } } }
-    else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; paintSteps(); paintNow(); } }
+    else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; rec.step = n; saveRec(rec); paintSteps(); paintNow(); } }
     else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; if (S.checkFor && S.checkFor.ver > 0) { rec.check = { ...ck, ...S.checkFor }; saveRec(rec); } paintCheck(); paintNow(); } }
   };
   const pump = async (): Promise<void> => {
@@ -1040,7 +1054,7 @@ async function build(rec: StudioRec): Promise<void> {
     const doAsk = async (): Promise<void> => {
       const t = ask.value.trim(); if (!t || !rec.card || askGo.disabled) return;
       askGo.disabled = true;
-      if (await sendPrompt(rec, '기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이 · 정해진 줄 뒤에 내가 더한 줄도 그대로 남겨): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
+      if (await send('기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이 · 정해진 줄 뒤에 내가 더한 줄도 그대로 남겨): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
       askGo.disabled = false;
     };
     askGo.onclick = () => { void doAsk(); };
@@ -1057,7 +1071,69 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const stepsEl = el('div', { class: 'v2-studio-steps' });
   const paintSteps = (): void => { stepsEl.replaceChildren(...DRAFT_STEPS.map((s, i) => el('span', { class: i < S.step ? 'done' : i === S.step ? 'on' : '', text: s }))); };
-  const paintDraft = (): void => { paintSteps(); waiting('AI가 초안을 만들고 있어요', '몇 분 걸려요. 다 되면 여기서 바로 써 볼 수 있어요. 창을 닫아도 계속 만들어지고, 앱빌더의 「만들던 앱」에서 다시 열 수 있어요.', stepsEl); void findApp(); };
+  const paintDraftView = (): void => {
+    paintSteps();
+    if (S.stall) waiting('AI가 초안을 만들다 멈췄어요', '만든 데까지는 그대로 남아 있어요. 위 막대에서 까닭을 보고 이어서 만들 수 있어요.', stepsEl, true);
+    else waiting('AI가 초안을 만들고 있어요', '몇 분 걸려요. 다 되면 여기서 바로 써 볼 수 있어요. 창을 닫아도 계속 만들어지고, 앱빌더의 「만들던 앱」에서 다시 열 수 있어요.', stepsEl);
+  };
+  const paintDraft = (): void => { paintDraftView(); void findApp(); };
+  /** 지금 AI 의 답을 기다리는 일 — 없으면 null(멈춤을 볼 까닭이 없다). */
+  const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | null => {
+    if (rec.stage === 'plan' && !rec.card) return 'plan';
+    if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) return 'draft';
+    if (S.waiting) return 'fix';   // S.waiting 은 기록에 없다 — 고침을 기다리다 새로 열면 여기선 못 본다(그때는 종전처럼 «수정하고 있어요»)
+    if (rec.stage === 'check' && S.checkWait) return 'check';
+    return null;
+  };
+  const setStall = (k: RunStall | null, node = S.stallNode): void => {
+    if (k === S.stall && node === S.stallNode) return;
+    S.stall = k; S.stallNode = node;
+    if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) paintDraftView();   // 앱 찾기(findApp)는 이미 돌고 있다 — 다시 걸지 않는다
+    paintNow();
+  };
+  /** 새로 AI 에게 일을 맡겼다 — 지난 멈춤을 걷고 60초 동안은 멈췄다 하지 않는다(말이 막 닿는 틈). */
+  const armRun = (): void => { S.stallT0 = 0; S.quietTill = Date.now() + 60000; setStall(null); };
+  //  이 화면에서 AI 에게 보내는 글은 모두 여기로 — 보내면 멈춤 판정을 처음부터.
+  const send = async (text: string): Promise<boolean> => { const ok = await sendPrompt(rec, text); if (ok) armRun(); return ok; };
+  //  AI 일을 기다리는 동안 10초마다 그 세션 한 줄을 본다 — 멈춤이 STALL_MS 넘게 이어지면 막대가 까닭과 「이어서 만들기」 를 낸다.
+  //   만들기 세션이 돌던 노트북이 잠들어 턴이 끝났는데 화면은 몇 시간째 «만들고 있어요» 였다(원준 2026-10-26).
+  const watchRun = async (): Promise<void> => {
+    if (S.dead) return;
+    if (!runKind()) { S.stallT0 = 0; setStall(null); }
+    else {
+      let row: any = undefined;
+      try { const d: any = await api('/api/ui/terminal/sessions?only=' + encodeURIComponent(rec.sid) + '&includeProjects=1'); row = Array.isArray(d?.sessions) ? (d.sessions[0] || null) : undefined; }
+      catch (_) { /* 못 읽으면 그대로 둔다 */ }
+      if (S.dead) return;
+      if (row !== undefined) {
+        const k = runStall(row); const now = Date.now();
+        const node = row && row.node && row.node.name ? String(row.node.name).replace(/\.local$/, '') : '';
+        if (!k) { S.stallT0 = 0; setStall(null, node); }
+        else if (now >= S.quietTill) { if (!S.stallT0) S.stallT0 = now; if (now - S.stallT0 >= STALL_MS) setStall(k, node); }
+      }
+    }
+    if (!S.dead) S.runT = window.setTimeout(() => { void watchRun(); }, 10000);
+  };
+  let resuming = false;   // 두 번 눌러도 되살리기 · 글은 한 번
+  const resumeRun = async (): Promise<void> => {
+    const kind = runKind(); if (!kind || !S.stall || resuming) return;
+    resuming = true;
+    try {
+      const restored = S.stall === 'ended';
+      if (restored) {
+        try { await api(restorePath(rec.sid), { method: 'POST', body: '{}' }); }
+        catch (e: any) { toast('세션을 다시 켜지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); return; }
+        S.stall = 'idle';   // 세션은 켜졌다 — 글이 못 가도 다음 누름은 되살리지 않고 글만
+      }
+      //  막 되살린 세션은 글을 받을 준비가 늦을 수 있다 — 3초 간격으로 세 번까지(마지막 실패만 알린다).
+      let ok = false;
+      for (let i = 0; i < (restored ? 3 : 1) && !ok && !S.dead; i++) {
+        if (i) await new Promise((r) => window.setTimeout(r, 3000));
+        ok = await send(resumeBrief(kind));
+      }
+      if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');
+    } finally { resuming = false; }
+  };
   const nameIn = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '40', 'aria-label': '앱 이름' }) as HTMLInputElement;
   //  ④ 누가 쓰나(#4632 기본 「나만」 · #4667) — 「워크스페이스 모두」 면 「이대로 넣기」 가 공개한다. 「나만」 이면 공개하지 않는다: 새 앱은 나만 보는 앱으로,
   //   이미 공개한 앱을 고친 것이면 내 초안으로 남고 다른 사람은 공개 판을 계속 쓴다(공개를 거두는 일은 앱빌더 배포 설정에서).
@@ -1117,7 +1193,7 @@ async function build(rec: StudioRec): Promise<void> {
     line.value = (meCache && meCache.name ? meCache.name + ' 님이 ' : '') + '「' + title + '」 앱을 만들었어요.\n' + (c ? '주요 기능: ' + c.can.join(', ') : firstLine(rec.what)) + '\n쓰는 자리: ' + placeName + '\n앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」에서 열 수 있어요.';
     const slack = el('input', { class: 'v2-studio-name-in', type: 'text', placeholder: '슬랙 채널 (선택, 예: #product)', maxlength: '60' }) as HTMLInputElement;
     const tellBtn = el('button', { class: 'v2-studio-go sm', type: 'button', text: rec.notified ? '알렸어요' : '팀에 알리기' }) as HTMLButtonElement; tellBtn.disabled = !!rec.notified;
-    tellBtn.onclick = async () => { tellBtn.disabled = true; if (await sendPrompt(rec, notifyBrief(title, line.value.trim(), slack.value))) { rec.notified = true; saveRec(rec); tellBtn.textContent = '알렸어요'; toast('AI가 팀에 알리고 있어요. 결과는 AI 세션에서 볼 수 있어요.'); } else tellBtn.disabled = false; };
+    tellBtn.onclick = async () => { tellBtn.disabled = true; if (await send(notifyBrief(title, line.value.trim(), slack.value))) { rec.notified = true; saveRec(rec); tellBtn.textContent = '알렸어요'; toast('AI가 팀에 알리고 있어요. 결과는 AI 세션에서 볼 수 있어요.'); } else tellBtn.disabled = false; };
     const tryBtn = el('button', { class: 'v2-studio-go', type: 'button', text: '지금 써 보기' }) as HTMLButtonElement;
     tryBtn.onclick = async () => {
       tryBtn.disabled = true;
@@ -1165,17 +1241,17 @@ async function build(rec: StudioRec): Promise<void> {
       const same = !!rec.check && S.curVer > 0 && rec.check.ver === S.curVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
       S.check = same && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; paintCheck();
       //  청한 때의 버전 · 카드로 결과에 도장을 찍는다(답이 올 때의 것이 아니라 — 그 사이 바뀌었으면 다음에 다시 묻는다).
-      if (!same && rec.card && rec.appId) { S.checkWait = true; S.checkFor = { ver: S.curVer, card: cardText(rec.card) }; void sendPrompt(rec, checkBrief(rec.card, rec.appId)); }
+      if (!same && rec.card && rec.appId) { S.checkWait = true; S.checkFor = { ver: S.curVer, card: cardText(rec.card) }; void send(checkBrief(rec.card, rec.appId)); }
     }
     applyPlace(); paintBar(); paintNow(); paintTray();
   };
-  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await sendPrompt(rec, draftBrief(rec.card, rec.place, rec.draftId || ''))) { rec.cardSent = cardText(rec.card); saveRec(rec); S.step = 0; await setStage('draft'); } };
+  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await send(draftBrief(rec.card, rec.place, rec.draftId || ''))) { rec.cardSent = cardText(rec.card); rec.step = 0; saveRec(rec); S.step = 0; await setStage('draft'); } };
   //  ② 에서 기획 카드를 고친 뒤 「바꾼 기획대로 다시 만들기」 — 앱이 있으면 고침 한 번(바뀐 카드 전문을 앱 전체 코멘트로 · 새 버전), 첫 판 전이면 초안을 다시 청한다.
   const remake = async (): Promise<void> => {
     if (!rec.card || S.waiting) return;
     if (!rec.appId) { await toDraft(); return; }
     const say = '기획 카드를 이렇게 바꿨어요. 바뀐 카드대로 앱을 고쳐주세요.\n' + cardText(rec.card);
-    if (await sendPrompt(rec, fixBrief(rec.round + 1, [], say, rec.place, rec.appId))) {
+    if (await send(fixBrief(rec.round + 1, [], say, rec.place, rec.appId))) {
       rec.cardSent = cardText(rec.card); saveRec(rec);
       S.waiting = true; S.waitT0 = Date.now(); tickWait();
       await setStage('fix');
@@ -1184,7 +1260,7 @@ async function build(rec: StudioRec): Promise<void> {
   const sendFix = async (): Promise<void> => {
     if (S.waiting) return;
     const pins = S.pins.filter((p) => p.note.trim()); if (!pins.length && !S.general.trim()) return;
-    if (await sendPrompt(rec, fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) { S.waiting = true; S.waitT0 = Date.now(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); if (S.review) S.review.update({ waiting: true }); }
+    if (await send(fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) { S.waiting = true; S.waitT0 = Date.now(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); if (S.review) S.review.update({ waiting: true }); }
   };
   //  #4732 「이대로 넣기」 는 연타를 막지 않는 단추라 — 미리 보기 · 저장 · 공개가 두 번 나가지 않게 하나씩만.
   let putting = false;
@@ -1227,7 +1303,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
-    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
@@ -1242,6 +1318,7 @@ async function build(rec: StudioRec): Promise<void> {
   if (!rec.from) rec.from = await logEnd(rec.sid);
   await setStage(rec.stage);
   void pump();
+  void watchRun();
   //  새로고침 전에 실제 화면(시험 세션 · 앱 화면)을 보던 중이었으면 그 화면과 막대를 다시 연다(원준 2026-10-16 «새로고침하니까 밑에 떠 있는 창 사라짐»).
   { const m = readReviewOpen();
     if (m && m.sid === rec.sid && m.appId === rec.appId && rec.stage === 'fix' && rec.appId && !S.dead) void openReal(m.view);

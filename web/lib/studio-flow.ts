@@ -186,6 +186,33 @@ export function parseStep(text: string): number {
   return n;
 }
 
+/** 기다리던 AI 일이 멈춘 까닭 — ask 확인을 기다림 · offline 세션이 돌던 컴퓨터가 꺼짐(잠듦) · ended 세션이 꺼짐 · idle 턴이 끝났는데 결과가 없음. */
+export type RunStall = 'ask' | 'offline' | 'ended' | 'idle';
+/** 멈춤이 이만큼 이어져야 화면이 멈췄다고 말한다 — 말을 막 보낸 틈 · 저장 직후 앱을 찾는 틈에 잘못 말하지 않게. */
+export const STALL_MS = 30000;
+export interface RunRow { agentState?: string; working?: boolean; awaiting?: boolean; background?: boolean; restorable?: boolean; observed?: boolean; node?: { online?: boolean } | null }
+/**
+ * 세션 한 줄(GET /api/ui/terminal/sessions?only=<sid>)로 기다리던 AI 일이 멈췄는지 본다. 도는 중이거나 모르면 null.
+ *  원준 2026-10-26 — 만들기 세션이 돌던 노트북이 잠들어 턴이 끝났는데 화면은 몇 시간째 «만들고 있어요» 였다.
+ */
+export function runStall(row: RunRow | null | undefined): RunStall | null {
+  if (!row) return 'ended';
+  if (row.observed === false) return null;   // 게이트웨이가 못 본 틱에 지어낸 줄 — 모르면 멈췄다 하지 않는다
+  if (row.node && row.node.online === false) return 'offline';
+  if (row.restorable) return 'ended';
+  if (row.awaiting || row.agentState === 'waiting') return 'ask';
+  if (row.working || row.background || row.agentState === 'busy') return null;
+  return 'idle';
+}
+/** 멈춘 일을 이어서 하라는 글 — 처음 일러 둔 표식 · 저장 방법을 다시 적는다(이어 쓴 답도 화면이 읽게). */
+export function resumeBrief(kind: 'plan' | 'draft' | 'fix' | 'check'): string {
+  const head = '하던 일이 중간에 끊겼어요(세션이 돌던 컴퓨터가 잠들었거나 세션이 멈췄어요). 이미 만든 것은 그대로 두고 멈춘 곳부터 이어서 끝내 줘.';
+  if (kind === 'plan') return head + ' 기획 카드는 처음 말한 꼴 그대로 보내 줘.';
+  if (kind === 'check') return head + ' [[대조]] 줄은 처음 말한 꼴 그대로 보내 줘.';
+  if (kind === 'fix') return head + ' 끝나면 처음 말한 대로 새 버전으로 저장해 줘(app_save).';
+  return head + ' 단계를 지날 때마다 [[걸음 n/4]] 표식을 먼저 보내고, 끝나면 처음 말한 대로 app_save 로 저장해 줘.';
+}
+
 /** [[대조]] 있음: a · b | 빠짐: 없음 */
 export function parseCheck(text: string): { have: string[]; missing: string[] } | null {
   const re = /\[\[대조\]\]\s*([^\n]*)/g; let m: RegExpExecArray | null; let line = '';
