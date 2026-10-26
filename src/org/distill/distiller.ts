@@ -944,6 +944,28 @@ export const DIGEST_TOTAL_BYTES = 64_000;       // 전체(바이트) — 상한�
 
 const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 
+// #5012 — 이슈 트래커 자료(리니어·깃허브·깃랩)의 판정 재료를 머리줄에 싣는다: 이슈 키(댓글이면 어느 이슈의 댓글인지)·
+//  프로젝트·마일스톤·상태·라벨. 종전엔 본문만 실려, «프로젝트 1 = 지식 1» 같은 개체 레인이 매핑표를 쓰려면 자료마다
+//  source_get 을 다시 불러야 했다(위시스트 리니어 4,351건 실측 — 배치당 호출이 자료 수만큼 늘어난다).
+//  값이 있는 칸만 붙으므로 슬랙·문서 자료의 머리줄은 그대로다.
+function issueMeta(r: Record<string, unknown>, f: Record<string, unknown>): string[] {
+  const str = (v: unknown): string => (typeof v === "string" || typeof v === "number" ? String(v).trim() : "");
+  const kind = str(f.kind);
+  const comment = /comment|note/.test(kind);
+  const num = str(f.number);
+  const ref = comment ? str(r.parent_external_id) : /^\d+$/.test(num) ? `#${num}` : num;
+  const project = str(f.project) !== str(f.container_name) ? str(f.project) : ""; // 깃랩은 project 가 곧 채널(저장소)이다
+  const states = [...new Set([str(f.state), str(f.state_type)].filter(Boolean))];
+  const labels = Array.isArray(f.labels) ? f.labels.map(str).filter(Boolean) : [];
+  return [
+    ref && (comment ? `댓글→${ref}` : ref),
+    project && `프로젝트 ${project}`,
+    str(f.milestone) && `마일스톤 ${str(f.milestone)}`,
+    !comment && states.length ? `상태 ${states.join("/")}` : "",
+    labels.length ? `라벨 ${labels.join("·")}` : "",
+  ];
+}
+
 function digestLine(r: Record<string, unknown>): { head: string; body: string; truncated: boolean } {
   const f = (r.fields ?? {}) as Record<string, unknown>;
   const s = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
@@ -956,7 +978,7 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
   //  #1881 의 «개인 폴더(올린 사람만 봄)» 는 #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 사실이 아니어서 자리만 남긴다.
   const lock = s(r.visibility) === "members" ? "잠김(볼 수 있는 사람만 봄)" : "";
   const priv = s(f.root) === "personal" ? "개인 폴더" : "";
-  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`].filter(Boolean).join(" · ");
+  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`, ...issueMeta(r, f)].filter(Boolean).join(" · ");
   const raw = s(r.body_md);
   const truncated = raw.length > DIGEST_PER_SOURCE;
   return {
