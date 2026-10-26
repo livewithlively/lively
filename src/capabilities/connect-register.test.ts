@@ -6,7 +6,8 @@
 import assert from "node:assert/strict";
 import { registry } from "./index.js";
 import { REGISTER_SAVE } from "./connect-register.js";
-import { REGISTRATION_SLOTS } from "../org/connect-unregister.js";
+import { REGISTRATION_SLOTS, RELAY_ENV } from "../org/connect-unregister.js";
+import { githubAppReady, googleReady, linearAppReady, microsoftReady, notionPublicReady, slackAppReady } from "../org/credentials/oauth-broker.js";
 import { APP_REGISTRATIONS, registrationMarkdown } from "../org/connect-registration.js";
 import { CONNECT_SKILL_SPECS, assembleConnectBody } from "../org/delivery/connect-skills.js";
 
@@ -92,6 +93,20 @@ const cut = registry.get("org_notion_workspace_disconnect");
     }
   }
   ok("D6 등록 · 보기 · 지우기의 권한 판정이 같다");
+}
+
+// ── X 릴레이 환경변수 이름 — 지울 칸 표(RELAY_ENV)가 앱마다 준비 판정이 실제로 읽는 이름이어야 관문(릴레이 409 · 화면에 보일지)이 맞는다 ──
+{
+  //  X1 — 노션·구글·리니어·아웃룩·깃허브의 준비 판정은 첫 줄에서 릴레이 env 를 본다: 그 이름으로 켜면 DB 없이 참이다(이름이 틀리면 DB 로 가서 거짓·실패).
+  const ready: Record<string, () => Promise<boolean>> = { notion: notionPublicReady, google: googleReady, linear: linearAppReady, outlook: microsoftReady, github: githubAppReady };
+  for (const [app, fn] of Object.entries(ready)) {
+    const name = RELAY_ENV[app]!;
+    const got = await withEnv({ [name]: "https://relay.example.invalid/oauth/start" }, () => fn().catch(() => false));
+    assert.equal(got, true, `X1 ${app}: RELAY_ENV(${name}) 로 켰는데 준비 판정이 참이 아니다 — 판정이 읽는 이름과 어긋났다`);
+  }
+  //  X2 — 슬랙은 연결 창구(MCP 행)를 먼저 읽어 DB 없이는 못 잰다 → 판정 함수 본문이 그 이름을 읽는지로 대신 본다.
+  assert.ok(String(slackAppReady).includes(`process.env.${RELAY_ENV.slack}`), `X2 slack: 준비 판정이 RELAY_ENV.slack(${RELAY_ENV.slack}) 을 읽지 않는다`);
+  ok("X1·X2 릴레이 환경변수 이름이 앱마다 준비 판정이 읽는 이름과 같다");
 }
 
 // ── E7 앱 조회가 실패한 앱은 보이지 않는다 ──
