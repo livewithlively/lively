@@ -35,7 +35,7 @@ import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNod
 import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, splitList, stageIndex, stageTabs, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, splitList, stageIndex, stageTabs, type CardExtra, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -448,6 +448,28 @@ function cardView(c: StudioCard, onEdit: ((c: StudioCard) => void) | null): HTML
     }
     box.append(el('div', { class: 'row' }, el('span', { class: 'k', text: r.label }), v));
   });
+  //  더한 항목(원준 2026-10-26 «섹션 제목과 본문도 원한다면 더 추가해서») — 정해진 줄 뒤에. 고치기 카드에서만 더하고 빼고 고친다.
+  const extraRow = (x: CardExtra): HTMLElement => {
+    const k = el('span', { class: 'k', text: x.title }), v = el('span', { class: 'v', text: x.body });
+    const row = el('div', { class: 'row x' }, k, v);
+    if (!onEdit) return row;
+    const editable = (n: HTMLElement, hint: string, label: string, save: (t: string) => void, onEnter: () => void): void => {
+      n.setAttribute('contenteditable', 'true'); n.setAttribute('data-placeholder', hint); n.setAttribute('aria-label', label);
+      n.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); onEnter(); } });
+      n.addEventListener('blur', () => { save(String(n.textContent || '').trim()); onEdit(c); });
+    };
+    editable(k, '항목 이름', '더한 항목 이름', (t) => { x.title = t; }, () => v.focus());
+    editable(v, '내용', '더한 항목 내용', (t) => { x.body = t; }, () => v.blur());
+    row.append(el('button', { class: 'v2-studio-card-rm', type: 'button', text: '×', title: '이 항목을 빼요', 'aria-label': '항목 빼기',
+      onclick: () => { c.extra = (c.extra || []).filter((y) => y !== x); row.remove(); onEdit(c); } }));
+    return row;
+  };
+  (c.extra || []).forEach((x) => box.append(extraRow(x)));
+  if (onEdit) {
+    const add = el('button', { class: 'v2-studio-card-add', type: 'button', text: '+ 항목 더하기', title: '제목과 내용을 직접 적어 기획에 더해요',
+      onclick: () => { const x: CardExtra = { title: '', body: '' }; c.extra = [...(c.extra || []), x]; const row = extraRow(x); box.insertBefore(row, add); (row.querySelector('.k') as HTMLElement).focus(); } });
+    box.append(add);
+  }
   return box;
 }
 
@@ -975,7 +997,7 @@ async function build(rec: StudioRec): Promise<void> {
     const doAsk = async (): Promise<void> => {
       const t = ask.value.trim(); if (!t || !rec.card || askGo.disabled) return;
       askGo.disabled = true;
-      if (await sendPrompt(rec, '기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
+      if (await sendPrompt(rec, '기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이 · 정해진 줄 뒤에 내가 더한 줄도 그대로 남겨): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
       askGo.disabled = false;
     };
     askGo.onclick = () => { void doAsk(); };
@@ -988,7 +1010,7 @@ async function build(rec: StudioRec): Promise<void> {
       paintNow();   // 카드를 고쳤다 — 이미 시안을 청한 기획이면 「바꾼 기획대로 다시 만들기」 가 선다
     };
     h.replaceChildren(cardView(rec.card, onCard), el('div', { class: 'v2-studio-ask' }, ask, askGo));   // 안내문은 걷었다(원준 2026-10-14) — 줄 누르기 · 아래 한마디 칸이 스스로 말한다
-    coach('plan', h.querySelector('.v2-studio-card'), '틀린 줄을 누르면 바로 고칠 수 있어요. 다 맞으면 「완료 · 다음 단계로」를 눌러주세요.', '「무엇을 적나」에 「담당자」를 더하면 앱에 그 칸이 생겨요');
+    coach('plan', h.querySelector('.v2-studio-card'), '틀린 줄을 누르면 바로 고칠 수 있어요. 다 맞으면 「완료 · 다음 단계로」를 눌러주세요.', '「저장하는 정보」에 「담당자」를 더하면 앱에 그 칸이 생겨요');
   };
   const stepsEl = el('div', { class: 'v2-studio-steps' });
   const paintSteps = (): void => { stepsEl.replaceChildren(...DRAFT_STEPS.map((s, i) => el('span', { class: i < S.step ? 'done' : i === S.step ? 'on' : '', text: s }))); };
@@ -1025,7 +1047,7 @@ async function build(rec: StudioRec): Promise<void> {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
     const steps: HTMLElement[] = [
       el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : '이렇게 부탁했어요' }), el('p', { text: rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + rec.origin.by + ' 님이 만듦)' : '') + '의 사본 · ' + placeName : '「' + firstLine(rec.what) + '」 · ' + placeName })),
-      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 적는 것: ' + c.items + ' · 할 수 있는 것: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI가 세션에서 만들었어요' }), el('p', { text: '수정할 때마다 버전이 하나씩 올라가요(초안 → V2 → V3).' })),
+      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 저장하는 정보: ' + c.items + ' · 주요 기능: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI가 세션에서 만들었어요' }), el('p', { text: '수정할 때마다 버전이 하나씩 올라가요(초안 → V2 → V3).' })),
     ];
     const list = el('div', { class: 'v2-studio-steps-list' }, ...steps);
     fetchAppVersions(rec.appId).then((vs) => {
@@ -1049,7 +1071,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (shared) how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기의 ⋯ 메뉴에서 「내 사본 떠서 고치기」로 사본을 만들어 바꿔 쓰거나, 「원본을 고치기」로 새 버전을 만들어 공개할 수 있어요.' })));
     // ⑦ 팀에 알리기 — 글은 기획 카드에서 미리 적는다. 지식 「앱 소개」 + 슬랙(적으면).
     const line = el('textarea', { class: 'ta', rows: '4' }) as HTMLTextAreaElement;
-    line.value = (meCache && meCache.name ? meCache.name + ' 님이 ' : '') + '「' + title + '」 앱을 만들었어요.\n' + (c ? '할 수 있는 것: ' + c.can.join(', ') : firstLine(rec.what)) + '\n쓰는 자리: ' + placeName + '\n앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」에서 열 수 있어요.';
+    line.value = (meCache && meCache.name ? meCache.name + ' 님이 ' : '') + '「' + title + '」 앱을 만들었어요.\n' + (c ? '주요 기능: ' + c.can.join(', ') : firstLine(rec.what)) + '\n쓰는 자리: ' + placeName + '\n앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」에서 열 수 있어요.';
     const slack = el('input', { class: 'v2-studio-name-in', type: 'text', placeholder: '슬랙 채널 (선택, 예: #product)', maxlength: '60' }) as HTMLInputElement;
     const tellBtn = el('button', { class: 'v2-studio-go sm', type: 'button', text: rec.notified ? '알렸어요' : '팀에 알리기' }) as HTMLButtonElement; tellBtn.disabled = !!rec.notified;
     tellBtn.onclick = async () => { tellBtn.disabled = true; if (await sendPrompt(rec, notifyBrief(title, line.value.trim(), slack.value))) { rec.notified = true; saveRec(rec); tellBtn.textContent = '알렸어요'; toast('AI가 팀에 알리고 있어요. 결과는 AI 세션에서 볼 수 있어요.'); } else tellBtn.disabled = false; };

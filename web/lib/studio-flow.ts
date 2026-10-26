@@ -1,7 +1,7 @@
 // lib/studio-flow.ts — 앱 만들기 흐름의 **순수** 부분(#4592, 원준 2026-10-11 «기획 → 시안 → 의견 왕복 → 확인 → 넣기, 그리고 팀과»).
 //  화면(web/v2/app-studio.ts)은 여기 함수로 AI 답을 읽고(기획 카드 · 걸음 · 점검) 단계마다 보낼 글을 만든다.
 //  AI 와의 약속(지식 app-build-quickstart 에도 같은 꼴이 적혀 있다):
-//   · 기획 카드  [[기획카드]] … [[/기획카드]]   줄마다 「이름: …」
+//   · 기획 카드  [[기획카드]] … [[/기획카드]]   줄마다 「줄 이름: 값」(CARD_ROWS · 더한 항목은 그 뒤)
 //   · 걸음      [[걸음 n/4]]                   1 기획 읽음 · 2 화면 짬 · 3 자료 표 · 4 저장
 //   · 점검      [[대조]] 있음: a · b | 빠짐: 없음
 //  시험: scripts/app-studio-flow.test.mjs
@@ -54,21 +54,46 @@ export const PLACE: Record<StudioPlace, { title: string; sub: string; say: strin
 
 //  ref(참고한 것) — 원준 2026-10-15 «초안 만들 때 비슷한 다른 앱이나 서비스 있으면 구조나 기능 같은 거 벤치마크해서 참고해서». 옛 카드엔 없다(빈 글로 읽는다).
 //  notify(알림) — 원준 2026-10-17 «알림에 대한 것도 앱 빌딩할 때 전반적으로 설정해야 하는 중요한 체계 … 기획 카드나 이런 데에도 다 넣어야». 옛 카드엔 없다(빈 글).
-export interface StudioCard { name: string; who: string; items: string; can: string[]; not: string; first: string; ref?: string; notify?: string }
-export const CARD_ROWS: Array<{ k: keyof StudioCard; label: string; hint: string }> = [
-  { k: 'name', label: '이름', hint: '짧은 한글 이름' },
-  { k: 'who', label: '누가 쓰나', hint: '예: 회의를 준비하는 사람과 참석자' },
-  { k: 'items', label: '무엇을 적나', hint: '예: 안건 제목, 날짜, 끝남 표시' },
-  { k: 'can', label: '할 수 있는 것', hint: '세 가지. 예: 더하기, 회의별 보기, 끝난 것 접기' },
-  { k: 'not', label: '안 하는 것', hint: '예: 회의록 쓰기, 알림 보내기' },
+//  extra(더한 항목) — 원준 2026-10-26 «원하면 그냥 섹션 제목(첫 화면, 알림에 이어서)과 본문도 원한다면 더 추가해서 넣을 수 있게». 정해진 줄 뒤에 제목 · 본문 한 쌍씩.
+//   카드 글(cardText)에 「제목: 본문」 줄로 실려 AI 가 초안 · 고침 · 대조에서 같이 읽는다. 옛 카드엔 없다.
+export interface CardExtra { title: string; body: string }
+export interface StudioCard { name: string; who: string; items: string; can: string[]; not: string; first: string; ref?: string; notify?: string; extra?: CardExtra[] }
+//  줄 이름(원준 2026-10-26 «무엇을 적나 이런거 좀 이상한데, 좀 명확하게 이해되는 표현으로») — 화면 · AI 에게 보내는 카드 글 · ④ 대조가 같은 이름을 쓴다.
+//   옛 이름(누가 쓰나 · 무엇을 적나 · 할 수 있는 것 · 안 하는 것 · 참고한 것)도 KEY_OF 가 그대로 읽는다 — 옛 대화 · 옛 카드 · 옛 이름으로 답한 AI.
+/** 정해진 줄의 칸 — 더한 항목(extra)은 줄이 아니다. */
+export type CardRowKey = Exclude<keyof StudioCard, 'extra'>;
+export const CARD_ROWS: Array<{ k: CardRowKey; label: string; hint: string }> = [
+  { k: 'name', label: '앱 이름', hint: '짧은 한글 이름' },
+  { k: 'who', label: '쓰는 사람', hint: '예: 회의를 준비하는 사람과 참석자' },
+  { k: 'items', label: '저장하는 정보', hint: '예: 안건 제목, 날짜, 끝남 표시' },
+  { k: 'can', label: '주요 기능', hint: '세 가지. 예: 더하기, 회의별 보기, 끝난 것 접기' },
+  { k: 'not', label: '넣지 않는 기능', hint: '예: 회의록 쓰기, 알림 보내기' },
   { k: 'first', label: '첫 화면', hint: '예: 이번 회의 안건 목록(안 끝난 것 먼저)' },
   { k: 'notify', label: '알림', hint: '언제 누구에게 알리나. 예: 나를 언급하면 · 새 안건마다 담당자에게 · 없음' },
-  { k: 'ref', label: '참고한 것', hint: '비슷한 서비스에서 가져온 구조나 기능. 예: Otter의 회의 목록과 정리본 탭' },
+  { k: 'ref', label: '참고한 서비스', hint: '비슷한 서비스에서 가져온 구조나 기능. 예: Otter의 회의 목록과 정리본 탭' },
 ];
-const KEY_OF: Array<[RegExp, keyof StudioCard]> = [
-  [/^이름$/, 'name'], [/^누가/, 'who'], [/^(무엇을적나|적는것|무엇을|적는칸|칸)$/, 'items'],
-  [/^할수있는것|^기능/, 'can'], [/^안하는것|^하지않는것/, 'not'], [/^첫화면|^처음화면/, 'first'], [/^알림/, 'notify'], [/^참고/, 'ref'],
+/** 줄 이름(띄어쓰기를 뗀 꼴) → 칸. 지금 이름과 옛 이름을 함께 받는다. */
+const KEY_OF: Array<[RegExp, CardRowKey]> = [
+  [/^(앱)?이름$/, 'name'], [/^누가|^쓰는사람/, 'who'], [/^(무엇을적나|적는것|무엇을|적는칸|칸|저장하는정보|저장하는것)$/, 'items'],
+  [/^할수있는것|^기능|^주요기능/, 'can'], [/^안하는것|^하지않는것|^넣지않는/, 'not'], [/^첫화면|^처음화면/, 'first'], [/^알림/, 'notify'], [/^참고/, 'ref'],
 ];
+/** 이 줄 이름이 정해진 줄의 것인가 — 더한 항목의 제목이 정해진 줄로 읽히지 않게(extraLine). */
+const fixedKeyOf = (label: string): CardRowKey | null => { const key = label.replace(/\s+/g, ''); const k = KEY_OF.find(([r]) => r.test(key)); return k ? k[1] : null; };
+/** 더한 항목의 제목으로 읽을 수 있는 꼴 — 글자 · 숫자 · 띄어쓰기 · 가운뎃점만(링크 주소가 이어진 줄 «Skills](https» 같은 조각은 아니다).
+ *  쓰는 쪽(extraLine)도 제목을 이 꼴로만 쓴다 — 쓴 것이 다시 읽히게. */
+const EXTRA_TITLE = /^[\p{L}\p{N} ·]{1,20}$/u;
+const EXTRA_TITLE_OFF = /[^\p{L}\p{N} ·]+/gu;
+/** 링크 한 줄(«https://…» — 제목 자리에 주소의 머리가 온 것)은 더한 항목이 아니다. */
+const URL_HEAD = /^(https?|ftp|mailto|file)$/i;
+/** 더한 항목 한 쌍 → 카드 글 한 줄. 비었으면 빈 글. 제목이 정해진 줄 이름과 겹치면 「추가 」 를 붙여 따로 읽히게. */
+function extraLine(x: CardExtra): string {
+  const t = String(x.title || '').replace(EXTRA_TITLE_OFF, ' ').replace(/\s+/g, ' ').trim().slice(0, 20).trim();
+  const b = String(x.body || '').replace(/\s*\n\s*/g, ' ').trim();
+  if (!t && !b) return '';
+  const title = !t ? '추가 내용' : fixedKeyOf(t) ? ('추가 ' + t).slice(0, 20) : t;
+  return title + ': ' + b;
+}
+const LABEL = Object.fromEntries(CARD_ROWS.map((r) => [r.k, r.label])) as Record<CardRowKey, string>;
 export function splitList(s: string): string[] { return String(s || '').split(/\s*[·•,|]\s*|\s+\/\s+|\n/).map((x) => x.trim()).filter(Boolean); }
 export function emptyCard(): StudioCard { return { name: '', who: '', items: '', can: [], not: '', first: '', ref: '', notify: '' }; }
 
@@ -79,16 +104,19 @@ export function parseCard(text: string): StudioCard | null {
   if (!body) return null;
   const c = emptyCard(); let hit = false;
   body.split('\n').forEach((line) => {
-    const mm = /^\s*(?:[-*•]|\d+[.)])?\s*([^:：]{1,20})[:：]\s*(.*)$/.exec(line); if (!mm) return;
-    const key = mm[1].replace(/\s+/g, ''), val = mm[2].trim();
-    const k = KEY_OF.find(([r]) => r.test(key)); if (!k) return;
+    const mm = /^\s*([-*•]|\d+[.)])?\s*([^:：]{1,20})[:：]\s*(.*)$/.exec(line); if (!mm) return;
+    const key = mm[2].replace(/\s+/g, ''), val = mm[3].trim();
+    const k = KEY_OF.find(([r]) => r.test(key));
+    //  모르는 이름의 줄 = 더한 항목. 단 줄머리(- · 1.)가 붙은 줄은 위 줄의 하위 목록이고(«- 올리기: 음성 업로드»), 링크 한 줄도 아니다.
+    if (!k) { const t = mm[2].trim(); if (!mm[1] && val && EXTRA_TITLE.test(t) && !URL_HEAD.test(t) && !val.startsWith('//')) (c.extra = c.extra || []).push({ title: t, body: val }); return; }
     hit = true;
     if (k[1] === 'can') c.can = splitList(val); else c[k[1]] = val;
   });
   return hit && c.name ? c : null;
 }
 export function cardText(c: StudioCard): string {
-  return '[[기획카드]]\n' + CARD_ROWS.map((r) => r.label + ': ' + (r.k === 'can' ? (c.can || []).join(' · ') : String(c[r.k] || ''))).join('\n') + '\n[[/기획카드]]';
+  const extra = (Array.isArray(c.extra) ? c.extra : []).map(extraLine).filter(Boolean);
+  return '[[기획카드]]\n' + [...CARD_ROWS.map((r) => r.label + ': ' + (r.k === 'can' ? (c.can || []).join(' · ') : String(c[r.k] || ''))), ...extra].join('\n') + '\n[[/기획카드]]';
 }
 
 // ── 버전 이름(원준 2026-10-15 «판 이라는 워딩 전면 금지 · 첫 판 = 초안 · 두 번째부터는 「두 번째 버전이 나왔어요」 · 2판 · 3판 → V2 · V3 ·
@@ -169,7 +197,7 @@ const RULE = '만드는 법은 지식 app-build-quickstart 에 있어(knowledge_
 //  벤치마크(원준 2026-10-15) — 기획 카드를 쓰기 전에 비슷한 앱 · 서비스의 구조 · 기능을 견준다. 라이블리 지식을 뒤지라는 말이 아니다(RULE 과 어긋나지 않게).
 const BENCH = '먼저 비슷한 앱 · 서비스(같은 일을 하며 오래 널리 쓰여 온 회사 제품 두셋)를 조사해 화면 구조 · 기능을 견줘 보고 좋은 점을 기획에 담아 줘(웹 검색을 쓸 수 있으면 찾아봐도 돼 · 라이블리 지식은 더 찾지 말고).';
 //  초안을 짤 때 맨 먼저 할 일(원준 2026-10-16 «처음에 시안 짤 때 비슷한 기능 하는 레거시 회사들이나 UI 조사도 해서 그거랑 비슷하게 만드는 걸 높은 우선순위로»).
-const LEGACY = '★ 우선순위 높음 — 짜기 전에 이 앱과 같은 일을 하는 기존 서비스(오래 쓰여 온 회사 제품 두셋)의 화면 구성 · 기능 · UI 를 조사하고(웹 검색을 쓸 수 있으면 찾아봐), 그 익숙한 꼴과 비슷하게 짜 줘 — 처음 보는 사람도 바로 쓸 줄 아는 화면이 목표야. 카드의 「참고한 것」 이 그 출발점이야.';
+const LEGACY = '★ 우선순위 높음 — 짜기 전에 이 앱과 같은 일을 하는 기존 서비스(오래 쓰여 온 회사 제품 두셋)의 화면 구성 · 기능 · UI 를 조사하고(웹 검색을 쓸 수 있으면 찾아봐), 그 익숙한 꼴과 비슷하게 짜 줘 — 처음 보는 사람도 바로 쓸 줄 아는 화면이 목표야. 카드의 「' + LABEL.ref + '」가 그 출발점이야.';
 /** 화면 흐름 와이어프레임(원준 2026-10-15 «초안 만든 뒤 와이어프레임 볼 수 있게 · 클로드 아티팩트처럼 버튼 누르면») — 앱 패키지의 이 파일을 앱빌더 ③ 「와이어프레임 보기」 가 띄운다. */
 export const WIREFRAME_PATH = 'studio/wireframe.html';
 //  알림 체계(#4769, 원준 2026-10-17) — 기획 카드의 「알림」 줄이 앱의 알림 권한 · 보내는 순간 · 앱 안 설정으로 이어진다. 앱 전체 on/off 는 라이블리 [나 ▸ 알림] 의 몫.
@@ -179,10 +207,10 @@ const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 �
 export function planBrief(what: string, place: StudioPlace, name = ''): string {
   const desc = String(what || '').trim(), nm = String(name || '').trim();
   const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
-  return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 이름 줄에 그대로). ` : ''}${PLACE[place].say}\n`
+  return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 ${LABEL.name} 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + `아직 만들지 말고, ${BENCH} `
-    + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · 할 수 있는 것은 셋을 · 로 · 알림은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · 참고한 것은 어디서 무엇을 가져왔는지):\n'
-    + '[[기획카드]]\n이름: \n누가 쓰나: \n무엇을 적나: \n할 수 있는 것: \n안 하는 것: \n첫 화면: \n알림: \n참고한 것: \n[[/기획카드]]';
+    + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · ' + LABEL.can + '은 셋을 · 로 · ' + LABEL.notify + '은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · ' + LABEL.ref + '는 어디서 무엇을 가져왔는지):\n'
+    + cardText(emptyCard());
 }
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
 export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
@@ -222,7 +250,7 @@ export function wireframeBrief(appId: string): string {
     + `화면마다 회색 상자로 그린 그림과, 무엇을 누르면 어느 화면(또는 어느 칸)으로 가는지 화살표 · 짧은 설명을 그린 한 장짜리 HTML(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림). 끝나면 「그렸어요」 한 줄만.`;
 }
 export function checkBrief(card: StudioCard, appId: string): string {
-  return `기획 카드와 지금 버전(app_pull ${appId})을 대조해서 이 한 줄로만 답해 줘:\n[[대조]] 있음: (들어간 「할 수 있는 것」을 · 로) | 빠짐: (안 들어간 것 · 없으면 없음)\n${cardText(card)}`;
+  return `기획 카드와 지금 버전(app_pull ${appId})을 대조해서 이 한 줄로만 답해 줘:\n[[대조]] 있음: (들어간 「${LABEL.can}」을 · 로) | 빠짐: (안 들어간 것 · 없으면 없음)\n${cardText(card)}`;
 }
 export function notifyBrief(name: string, line: string, slack: string): string {
   return `이 앱을 팀에 알려 줘. 지식에 제목 「앱 소개 · ${name}」 으로 아래 글을 저장하고(knowledge_save · 분류는 「세션 작업환경」)`
