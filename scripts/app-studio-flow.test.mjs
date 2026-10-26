@@ -22,7 +22,33 @@ check(F.parseCard("이름: 없음 블록 없음") === null && F.parseCard("[[기
 const two = F.parseCard("[[기획카드]]\n이름: 첫째\n[[/기획카드]] 고쳤어요 [[기획카드]]\n이름: 둘째\n할 수 있는 것: a, b\n[[/기획카드]]");
 check(two && two.name === "둘째" && two.can.join("|") === "a|b", "C3 블록이 여럿이면 마지막 · 쉼표로 나눈 목록도", two);
 const txt = F.cardText(card);
-check(/^\[\[기획카드\]\]\n이름: 회의 안건\n/.test(txt) && /할 수 있는 것: 더하기 · 회의별 보기 · 끝난 것 접기\n/.test(txt) && /\[\[\/기획카드\]\]$/.test(txt) && F.parseCard(txt).can.length === 3, "C4 카드 → 글 → 카드가 같다", txt);
+check(/^\[\[기획카드\]\]\n앱 이름: 회의 안건\n/.test(txt) && /주요 기능: 더하기 · 회의별 보기 · 끝난 것 접기\n/.test(txt) && /\[\[\/기획카드\]\]$/.test(txt) && F.parseCard(txt).can.length === 3, "C4 카드 → 글 → 카드가 같다", txt);
+
+// ══ L 줄 이름 · X 더한 항목(원준 2026-10-26 «무엇을 적나 이런거 좀 이상한데 … 명확하게» · «섹션 제목과 본문도 원한다면 더 추가해서») ══
+{
+  const NEW = ["앱 이름", "쓰는 사람", "저장하는 정보", "주요 기능", "넣지 않는 기능", "첫 화면", "알림", "참고한 서비스"];
+  const OLD = /(^|\n)(이름|누가 쓰나|무엇을 적나|할 수 있는 것|안 하는 것|참고한 것):/;
+  const t = F.cardText(card);
+  check(JSON.stringify(t.split("\n").slice(1, -1).map((l) => l.split(":")[0])) === JSON.stringify(NEW) && !OLD.test(t), "L1 카드 글의 줄 이름 = 새 이름 여덟 · 옛 이름 없음", t);
+  const nw = F.parseCard("[[기획카드]]\n앱 이름: 출장비\n쓰는 사람: 출장 다녀온 사람\n저장하는 정보: 날짜 · 금액\n주요 기능: 올리기 · 모아 보기 · 승인\n넣지 않는 기능: 송금\n첫 화면: 이번 달 목록\n알림: 승인되면 올린 사람에게\n참고한 서비스: 비즈플레이\n[[/기획카드]]");
+  check(nw && nw.name === "출장비" && nw.who === "출장 다녀온 사람" && nw.items === "날짜 · 금액" && nw.can.length === 3 && nw.not === "송금" && nw.first === "이번 달 목록" && nw.notify === "승인되면 올린 사람에게" && nw.ref === "비즈플레이" && !nw.extra, "L2 새 이름으로 답한 카드를 읽는다(더한 항목으로 새지 않는다)", nw);
+  check(card && card.who && card.items && card.not && !card.extra, "L3 옛 이름(누가 쓰나 · 무엇을 적나 · 할 수 있는 것 · 안 하는 것)도 그대로 읽는다", card);
+  //  아래는 읽기(L2)와 따로 — 손으로 지은 같은 카드로(옛 트리에서 L2 가 못 읽어도 줄마다 따로 빨갛게).
+  const NWC = { name: "출장비", who: "출장 다녀온 사람", items: "날짜 · 금액", can: ["올리기", "모아 보기", "승인"], not: "송금", first: "이번 달 목록", notify: "승인되면 올린 사람에게", ref: "비즈플레이" };
+  const pb = F.planBrief("출장비 정리", "both", "출장비"), cb = F.checkBrief(NWC, "trip");
+  check(NEW.every((n) => pb.includes("\n" + n + ": ")) && !OLD.test(pb) && !/할 수 있는 것|참고한 것/.test(pb) && /「주요 기능」을/.test(cb) && !/할 수 있는 것/.test(cb), "L4 planBrief 틀 · checkBrief 가 새 이름만", [pb.slice(-260), cb.split("\n")[1]]);
+  const withX = { ...NWC, extra: [{ title: "결재 순서", body: "팀장 다음 재무" }, { title: "보관 기간", body: "5년" }] };
+  const xt = F.cardText(withX), back = F.parseCard(xt);
+  check(/\n참고한 서비스: 비즈플레이\n결재 순서: 팀장 다음 재무\n보관 기간: 5년\n\[\[\/기획카드\]\]$/.test(xt) && !!back && JSON.stringify(back.extra) === JSON.stringify(withX.extra) && back.ref === "비즈플레이", "X1 더한 항목 → 정해진 줄 뒤에 「제목: 본문」 · 다시 읽으면 순서 · 글 그대로", xt);
+  const x2 = F.cardText({ ...NWC, extra: [{ title: "", body: "" }, { title: "", body: "영수증 사진 필수" }, { title: "메모", body: "" }, { title: "  ", body: " \n " }] });
+  check(/\n추가 내용: 영수증 사진 필수\n메모: \n\[\[\/기획카드\]\]$/.test(x2), "X2 빈 쌍은 안 싣는다 · 본문만이면 「추가 내용」 · 제목만이면 「제목: 」", x2);
+  const x3 = F.cardText({ ...NWC, extra: [{ title: "알림", body: "매주 월요일 요약" }] }), b3 = F.parseCard(x3);
+  check(/\n추가 알림: 매주 월요일 요약\n\[\[/.test(x3) && !!b3 && b3.notify === "승인되면 올린 사람에게" && b3.extra && b3.extra[0].title === "추가 알림", "X3 정해진 줄 이름과 같은 제목은 「추가 …」 로 — 정해진 「알림」 을 덮지 않는다", x3);
+  const b4 = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n참고한 서비스: [Otter 블로그](https://otter.ai/blog), [Fireflies\nSkills](https://fireflies.ai/blog/), 앱스토어\n결재 순서: 팀장\n[[/기획카드]]");
+  check(b4 && JSON.stringify(b4.extra) === JSON.stringify([{ title: "결재 순서", body: "팀장" }]), "X4 링크가 이어진 조각 줄은 더한 항목이 아니다(제목 꼴만)", b4 && b4.extra);
+  const x5 = F.cardText({ name: "옛 앱", who: "", items: "", can: [], not: "", first: "" });
+  check(/\n참고한 서비스: \n\[\[\/기획카드\]\]$/.test(x5) && !/undefined/.test(x5) && x5.split("\n").length === 10, "X5 옛 카드(더한 항목 없음) — 덧줄 · undefined 없음", x5);
+}
 
 // 걸음 · 점검
 check(F.parseStep("[[걸음 1/4]] 기획 읽음 … [[걸음 3/4]] 자료 표") === 3 && F.parseStep("아직") === 0 && F.parseStep("[[걸음 4/4]] 저장 [[걸음 2/4]]") === 4 && F.parseStep("[[걸음 9/4]]") === 4, "S1 걸음은 가장 큰 n(1~4)");
@@ -76,11 +102,11 @@ check(F.verArrived(11) === "열한 번째 버전이 나왔어요" && F.verArrive
 const refCard = F.parseCard("[[기획카드]]\n이름: 회의록\n할 수 있는 것: 올리기 · 정리 · 넣기\n참고한 것: Otter 의 회의 목록 + 정리본 탭\n[[/기획카드]]");
 check(refCard && refCard.ref === "Otter 의 회의 목록 + 정리본 탭", "H1 카드의 「참고한 것」 줄을 읽는다", refCard);
 const oldCard = { name: "회의 안건", who: "준비하는 사람", items: "제목", can: ["더하기"], not: "", first: "목록" };   // 기록 · 매니페스트에 남은 옛 카드(ref 칸이 아예 없다)
-check(card && !card.ref && !/undefined/.test(F.cardText(oldCard)) && /\n참고한 것: \n\[\[\/기획카드\]\]/.test(F.cardText(oldCard)), "H2 옛 카드(참고 줄 없음)도 읽히고 cardText 에 undefined 가 없다", F.cardText(oldCard));
+check(card && !card.ref && !/undefined/.test(F.cardText(oldCard)) && /\n참고한 서비스: \n\[\[\/기획카드\]\]/.test(F.cardText(oldCard)), "H2 옛 카드(참고 줄 없음)도 읽히고 cardText 에 undefined 가 없다", F.cardText(oldCard));
 const pb2 = F.planBrief("회의록 정리", "both", "회의록");
-check(/비슷한 앱 · 서비스/.test(pb2) && /\n참고한 것: \n\[\[\/기획카드\]\]/.test(pb2), "H3 planBrief — 비슷한 앱 · 서비스를 견주고 카드에 「참고한 것」 줄", pb2);
+check(/비슷한 앱 · 서비스/.test(pb2) && /\n참고한 서비스: \n\[\[\/기획카드\]\]/.test(pb2), "H3 planBrief — 비슷한 앱 · 서비스를 견주고 카드에 「참고한 서비스」 줄", pb2);
 const db2 = F.draftBrief(refCard, "both", "meeting-notes");
-check(/초안을 만들어/.test(db2) && db2.includes(F.WIREFRAME_PATH) && F.WIREFRAME_PATH === "studio/wireframe.html" && !/첫 판/.test(db2) && !/판/.test(db2.replace(/참고한 것[^\n]*/g, "")), "H4 draftBrief — 초안 · 와이어프레임 파일을 함께 저장 · 「판」 없음", db2);
+check(/초안을 만들어/.test(db2) && db2.includes(F.WIREFRAME_PATH) && F.WIREFRAME_PATH === "studio/wireframe.html" && !/첫 판/.test(db2) && !/판/.test(db2.replace(/참고한 서비스[^\n]*/g, "")), "H4 draftBrief — 초안 · 와이어프레임 파일을 함께 저장 · 「판」 없음", db2);
 const fb2 = F.fixBrief(2, [{ x: 0.1, y: 0.2, where: "", note: "크게", kind: "pin" }], "", "both", "meeting-notes");
 check(/새 버전으로 저장/.test(fb2) && fb2.includes(F.WIREFRAME_PATH) && !/판/.test(fb2), "H5 fixBrief — 새 버전 · 와이어프레임도 맞춰 · 「판」 없음", fb2);
 const wb2 = F.wireframeBrief("meeting-notes");
@@ -157,9 +183,9 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   const nc = F.parseCard("[[기획카드]]\n이름: 팀 채널\n할 수 있는 것: 올리기 · 답하기 · 찾기\n알림: 나를 언급하면 · 내 스레드에 답이 달리면\n참고한 것: 슬랙\n[[/기획카드]]");
   check(nc && nc.notify === "나를 언급하면 · 내 스레드에 답이 달리면" && nc.ref === "슬랙", "S1 카드의 「알림」 줄을 읽는다(참고한 것과 섞이지 않는다)", nc);
   const pb = F.planBrief("팀 대화", "side");
-  check(/\n첫 화면: \n알림: \n참고한 것: \n\[\[\/기획카드\]\]/.test(pb) && /알림은 언제 누구에게/.test(pb), "S2 planBrief 틀에 「알림: 」 줄 — 첫 화면 뒤 · 참고한 것 앞", pb);
+  check(/\n첫 화면: \n알림: \n참고한 서비스: \n\[\[\/기획카드\]\]/.test(pb) && /알림은 언제 누구에게/.test(pb), "S2 planBrief 틀에 「알림: 」 줄 — 첫 화면 뒤 · 참고한 것 앞", pb);
   const old = F.parseCard("[[기획카드]]\n이름: 옛 앱\n[[/기획카드]]");
-  check(old && !old.notify && /\n알림: \n참고한 것: \n\[\[\/기획카드\]\]$/.test(F.cardText(old)) && !/undefined/.test(F.cardText(old)), "S3 옛 카드(알림 줄 없음)도 읽히고 cardText 에 빈 알림 줄 · undefined 없음", F.cardText(old));
+  check(old && !old.notify && /\n알림: \n참고한 서비스: \n\[\[\/기획카드\]\]$/.test(F.cardText(old)) && !/undefined/.test(F.cardText(old)), "S3 옛 카드(알림 줄 없음)도 읽히고 cardText 에 빈 알림 줄 · undefined 없음", F.cardText(old));
   check(F.CARD_ROWS.some((r) => r.k === "notify" && r.label === "알림") && F.emptyCard().notify === "", "S4 CARD_ROWS 에 알림 줄 · 빈 카드에도 칸");
   const db = F.draftBrief(nc, "side", "talk");
   check(/permissions\.notifications: true/.test(db) && /app_notify/.test(db) && /\[나 ▸ 알림\]/.test(db) && /#\/open\//.test(db), "S5 draftBrief 가 알림 규칙(권한 선언 · app_notify · 앱 안 설정 · 전체 on/off 는 라이블리)을 싣는다", db);
