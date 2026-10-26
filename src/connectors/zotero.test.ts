@@ -48,6 +48,7 @@ t("colorName·noteHtmlToText·creatorsLine·yearOf", () => {
   assert.equal(yearOf("2023-05-01"), "2023");
   assert.equal(yearOf("Spring 1998"), "1998");
   assert.equal(yearOf(""), "");
+  assert.equal(noteHtmlToText("a &#99999999; b &#xD800; c"), "a &#99999999; b &#xD800; c", "범위 밖 엔티티가 던지면 노트 하나가 수집 전체를 세운다");
 });
 
 const ann = (key: string, parent: string, d: Partial<ZItem["data"]>, who?: string): ZItem =>
@@ -84,6 +85,7 @@ t("buildPaperDoc: 생각이 있을 때만 머리가 붙고, 자동 태그는 빠
   assert.ok(!bare.body.includes(ANNOTATION_HEAD) && !bare.body.includes(NOTE_HEAD), "서지만 있는 논문에 머리가 붙었다 — 사전필터를 지난다");
   const off = buildPaperDoc(paper, { notes: [note], attachments: [{ item: pdf, annotations: [a1] }] }, { ...opts, includeAnnotations: false, includeNotes: false }, ctx);
   assert.ok(!off.body.includes(ANNOTATION_HEAD) && !off.body.includes(NOTE_HEAD), "끈 종류가 본문에 남았다");
+  assert.equal(off.updatedAt, "2026-03-01T00:00:00.000Z", "꺼 둔 주석이 바뀌어도 수정 시각이 따라와야 커서가 멈추지 않는다");
 });
 
 t("paperToItem: 자료로 간다 · kind=zotero_item · 개인만 주인에게 잠긴다 · instance 없이 같은 외부 좌표", () => {
@@ -112,7 +114,7 @@ t("자격 확인: 403 은 키 거부 · 노트 권한이 꺼지면 알려 준다
 
 // ── 가짜 Zotero 로 full·증분 묶기 ────────────────────────────────────────────────
 interface Lib { items: ZItem[]; collections: Array<{ key: string; data: { name: string; parentCollection?: string | false } }> }
-function fakeZotero(libs: Record<string, Lib>, key: { userID: number; username: string; access: unknown }, opts: { deny?: boolean } = {}) {
+function fakeZotero(libs: Record<string, Lib>, key: { userID: number; username: string; access: unknown }, opts: { deny?: boolean; groupStatus?: number } = {}) {
   const calls: string[] = [];
   const json = (body: unknown, total?: number): Response => new Response(JSON.stringify(body),
     { status: 200, headers: total != null ? { "Total-Results": String(total) } : {} });
@@ -126,6 +128,7 @@ function fakeZotero(libs: Record<string, Lib>, key: { userID: number; username: 
     if (opts.deny) return new Response("Forbidden", { status: 403 });
     if (u.pathname === "/keys/current") return json(key);
     if (u.pathname === "/users/7/groups") return page([{ id: 9, data: { name: "Lab" } }], u);
+    if (opts.groupStatus && u.pathname.startsWith("/groups/9/")) return new Response("down", { status: opts.groupStatus });
     const m = u.pathname.match(/^\/(users|groups)\/(\d+)\/(.*)$/);
     const lib = m ? libs[`${m[1]}/${m[2]}`] : undefined;
     if (!m || !lib) return new Response("Not found", { status: 404 });
@@ -184,14 +187,17 @@ function library(): Record<string, Lib> {
 }
 const KEY = { userID: 7, username: "u7", access: { user: { library: true, notes: true }, groups: { all: { library: true } } } };
 
-async function run(libs: Record<string, Lib>, cfg: Record<string, string | undefined>, since?: string, o: { deny?: boolean } = {}) {
+//  토글이 만든 수집기는 늘 token_source=member:<켠 사람> 이다 — 기본으로 그렇게 두고, 주인 없는 경우만 따로 본다.
+async function run(libs: Record<string, Lib>, cfg: Record<string, string | undefined>, since?: string, o: { deny?: boolean; groupStatus?: number } = {}) {
   const fz = fakeZotero(libs, KEY, o);
   const orig = globalThis.fetch;
   globalThis.fetch = fz.fetchImpl as typeof fetch;
+  const out: RawItem[] = [];
   try {
-    const out: RawItem[] = [];
-    for await (const it of zoteroItems("KEY", cfg, since)) out.push(it);
-    return { out, calls: fz.calls };
+    for await (const it of zoteroItems("KEY", { token_source: "member:m1", ...cfg }, since)) out.push(it);
+    return { out, calls: fz.calls, error: null as Error | null };
+  } catch (e) {
+    return { out, calls: fz.calls, error: e as Error };
   } finally { globalThis.fetch = orig; }
 }
 const ids = (xs: RawItem[]): string[] => xs.map((x) => x.provenance.external_id).sort();
@@ -211,9 +217,28 @@ t("★ full: 논문마다 주석(첨부 아래)·노트가 묶이고, 독립 노
   assert.equal(g1.container_name, "Lab");
 });
 
-t("컬렉션으로 좁히면 그 컬렉션(하위 포함)이 있는 라이브러리만 좁혀진다", async () => {
-  const { out } = await run(library(), { collections: "C1AAAAAA" });
-  assert.deepEqual(ids(out), ["groups/9:G1", "users/7:P1", "users/7:P3"]);
+t("★ 컬렉션을 고르면 그 컬렉션(하위 포함)만 — 컬렉션이 없는 라이브러리는 라이브러리 칸에 적었을 때만 통째로", async () => {
+  assert.deepEqual(ids((await run(library(), { collections: "C1AAAAAA" })).out), ["users/7:P1", "users/7:P3"]);
+  assert.deepEqual(ids((await run(library(), { collections: "C1AAAAAA", libraries: "users/7 groups/9" })).out), ["groups/9:G1", "users/7:P1", "users/7:P3"]);
+});
+
+t("★ 고른 컬렉션을 어디서도 못 찾으면(오타·지운 컬렉션) 개인 라이브러리를 통째로 열지 않고 실패한다", async () => {
+  const r = await run(library(), { collections: "ZZZZZZZZ" });
+  assert.deepEqual(ids(r.out), [], "오타 하나로 라이브러리 전체가 들어왔다");
+  assert.match(String(r.error?.message), /찾지 못했습니다/);
+});
+
+t("★ 라이브러리 하나가 실패하면 나머지는 받되 run 은 실패한다(커서 동결) · 그룹이 사라진 것(404)은 건너뛴다", async () => {
+  const bad = await run(library(), {}, undefined, { groupStatus: 500 });
+  assert.ok(ids(bad.out).includes("users/7:P1"), "멀쩡한 라이브러리까지 멈췄다");
+  assert.match(String(bad.error?.message), /다 읽지 못했습니다/, "실패를 삼켜 커서가 전진한다");
+  const gone = await run(library(), {}, undefined, { groupStatus: 404 });
+  assert.equal(gone.error, null, "나간 그룹이 매 run 실패를 만든다");
+});
+
+t("주인을 모르는 수집기(키를 직접 붙인 것)는 개인 라이브러리를 건너뛴다 — 잠글 사람을 모르면 열지 않는다", async () => {
+  const r = await run(library(), { token_source: undefined, token: "KEY" });
+  assert.deepEqual(ids(r.out), ["groups/9:G1"]);
 });
 
 t("라이브러리를 고르면 그것만 · 노트를 끄면 독립 노트가 빠지고 논문 본문에 노트 머리가 없다", async () => {
@@ -230,10 +255,19 @@ t("★ 증분: 주석 하나가 바뀌면 그 논문 한 편만 다시 묶여 �
   a1.data.dateModified = LATER;
   a1.data.annotationComment = "새 코멘트";
   const { out, calls } = await run(libs, {}, "2026-02-01T00:00:00Z");
-  assert.deepEqual(ids(out), ["users/7:P1"]);
+  assert.deepEqual(ids(out), ["users/7:P1"]);   // T0(1/1)은 창(2/1 − 3일) 밖이라 다시 안 온다
   assert.equal(out[0].updated_at, new Date(LATER).toISOString());
   assert.ok(out[0].body!.includes("새 코멘트") && out[0].body!.includes("내 판단"), "다시 묶을 때 논문의 나머지(노트)가 빠졌다");
   assert.ok(!calls.some((c) => /\/items\?limit=/.test(c) && !c.includes("sort=")), "증분인데 라이브러리를 통째로 받았다");
+});
+
+t("증분 창은 3일 뒤로 넓다(오프라인 편집이 늦게 동기화돼도 잡는다) · 미래 시각은 커서에 지금으로 깎인다", async () => {
+  const libs = library();
+  libs["users/7"].items.find((i) => i.key === "P2")!.data.dateModified = "2026-01-30T00:00:00Z";   // 커서(2/1)보다 이틀 앞
+  libs["users/7"].items.find((i) => i.key === "P3")!.data.dateModified = "2099-01-01T00:00:00Z";   // 시계가 틀린 클라이언트
+  const { out } = await run(libs, {}, "2026-02-01T00:00:00Z");
+  assert.deepEqual(ids(out), ["users/7:P2", "users/7:P3"]);
+  assert.ok(Date.parse(String(out.find((x) => x.provenance.external_id === "users/7:P3")!.updated_at)) <= Date.now(), "미래 시각이 커서를 밀었다");
 });
 
 t("전문은 켤 때만 — 기본은 받지 않는다", async () => {
@@ -244,7 +278,7 @@ t("전문은 켤 때만 — 기본은 받지 않는다", async () => {
 });
 
 t("키가 거부되면(403) 사람 말로 멈춘다 — 0건으로 조용히 끝나지 않는다", async () => {
-  await assert.rejects(run(library(), {}, undefined, { deny: true }), /API 키를 거부/);
+  assert.match(String((await run(library(), {}, undefined, { deny: true })).error?.message), /API 키를 거부/);
 });
 
 for (const [name, fn] of tests) { await fn(); pass++; console.log(`ok  ${name}`); }

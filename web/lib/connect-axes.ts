@@ -45,7 +45,12 @@ export const COLLECT_PRESET_APP: Record<string, string> = {
  */
 export const COLLECT_APPS: readonly string[] = ['slack', 'notion', 'google', 'linear', 'gitlab', 'figma', 'clickup', 'github', 'outlook', 'zotero'];
 
-export interface CollectorLike { preset_key?: string | null; enabled?: boolean | null }
+export interface CollectorLike { preset_key?: string | null; enabled?: boolean | null; config?: Record<string, unknown> | null }
+/**
+ * 수집기가 **사람마다 하나**인 앱(서버 member-collect perMember — Zotero: 모으는 것이 그 사람의 라이브러리).
+ *  이런 앱은 남의 수집기가 켜져 있어도 내 것은 안 모인다 — 목록이 «켜짐» 이라 말하면 거짓 초록이다. 그래서 내 것만 센다.
+ */
+export const PER_MEMBER_COLLECT: ReadonlySet<string> = new Set(['zotero']);
 /** 앱 하나에 걸린 수집기 셈 — 켜진 것 · 만들어는 뒀지만 꺼진 것. */
 export interface CollectTally { on: number; off: number }
 
@@ -54,12 +59,14 @@ export interface CollectTally { on: number; off: number }
  *  ⚠ 앱마다 `/api/ui/org/<app>/collect` 를 부르면 목록 한 장에 여덟 번 왕복이다 — 목록은 한 번만 묻는다.
  *   (그 창구들은 상세가 쓴다: 상세는 한 앱만 그리고 토글·범위까지 다뤄야 해서 그 앱의 전체 상태가 필요하다.)
  */
-export function collectTally(rows: readonly CollectorLike[] | null | undefined): Map<string, CollectTally> {
+export function collectTally(rows: readonly CollectorLike[] | null | undefined, me?: string | null): Map<string, CollectTally> {
   const out = new Map<string, CollectTally>();
   for (const r of rows ?? []) {
     const raw = String(r?.preset_key ?? '').trim();
     if (!raw) continue;
     const app = COLLECT_PRESET_APP[raw] ?? raw;
+    //  사람마다 하나인 앱은 내 연결로 도는 것만(token_source=member:<나>). 나를 모르면 세지 않는다(켜졌다고 말하지 않는 쪽).
+    if (PER_MEMBER_COLLECT.has(app) && String(r?.config?.token_source ?? '') !== `member:${me ?? ''}`) continue;
     const cur = out.get(app) ?? { on: 0, off: 0 };
     if (r?.enabled) cur.on += 1; else cur.off += 1;
     out.set(app, cur);

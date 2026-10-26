@@ -40,8 +40,14 @@ import { resolveConnectorConfig } from "./config.js";
 
 const API = "https://api.zotero.org";
 const PAGE = 100;
-/** 라이브러리 하나를 한 run 에 훑는 상한(100건 × 600쪽 = 6만 항목) — 넘으면 경고하고 다음 run 이 이어 간다. */
-const MAX_PAGES = 600;
+/** 라이브러리 하나를 한 run 에 훑는 상한(100건 × 2000쪽 = 20만 항목 — 주석·첨부 포함). 넘으면 run 을 실패시킨다:
+ *  조용히 멈추면 커서가 전진해 꼬리가 영영 빠진다(full 쪽은 정렬이 없어 «다음 run 이 이어 가기»가 성립하지 않는다). */
+const MAX_PAGES = 2000;
+/** 증분 창을 이만큼 뒤로 넓힌다 — dateModified 는 서버가 아니라 **편집한 클라이언트의 시계**라, 오프라인에서 고친 것이
+ *  늦게 동기화되면 커서보다 과거 시각으로 들어온다. 다시 받는 것은 멱등 upsert 라 무해하다(본문이 같으면 갱신도 없다). */
+const LOOKBACK_MS = 3 * 86_400_000;
+/** 요청 하나의 상한 — 걸린 소켓이 run 을 «살아 있는 채» 붙잡지 않게. */
+const REQUEST_TIMEOUT_MS = 60_000;
 /** 증분에서 다시 묶을 논문이 이만큼을 넘으면 라이브러리를 통째로 받는 편이 요청 수가 적다(논문마다 children 왕복 2회 이상). */
 const FULL_FALLBACK = 300;
 /** 전문 색인을 본문에 실을 때 논문당 상한 — 넘는 부분은 잘라 내고 그 사실을 적는다. */
@@ -131,7 +137,8 @@ export function noteHtmlToText(html: string | undefined): string {
   s = s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
     if (e[0] === "#") {
       const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-      return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+      //  범위 밖(&#99999999;)·서로게이트는 fromCodePoint 가 던진다 — 노트 하나가 라이브러리 수집 전체를 세우지 않게 그대로 둔다.
+      return Number.isInteger(n) && n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : m;
     }
     return ENTITIES[e.toLowerCase()] ?? m;
   });
@@ -255,17 +262,19 @@ export function buildPaperDoc(
   if (d.abstractNote?.trim()) lines.push("", "## 초록", d.abstractNote.trim());
 
   let annotationCount = 0;
+  //  수정 시각은 **종류를 껐어도** 모든 자식에서 잰다 — 꺼 둔 주석이 바뀌어 다시 묶여 올 때 updated_at 이 그대로면
+  //   커서가 그 자리에 멈춰 같은 논문을 매 run 다시 받는다.
   let latest = Date.parse(String(d.dateModified ?? "")) || 0;
   const bump = (it: ZItem) => { const t = Date.parse(String(it.data.dateModified ?? "")); if (t > latest) latest = t; };
+  for (const n of bundle.notes) bump(n);
+  for (const a of bundle.attachments) { bump(a.item); for (const x of a.annotations) bump(x); }
 
   if (opts.includeAnnotations) {
     const blocks: string[] = [];
     let skipped = 0;
     for (const a of bundle.attachments) {
-      bump(a.item);
       const rows: string[] = [];
       for (const ann of [...a.annotations].sort((x, y) => annSortKey(x).localeCompare(annSortKey(y)))) {
-        bump(ann);
         const ln = annotationLine(ann, ctx.group);
         if (ln) { rows.push(ln); annotationCount++; } else skipped++;
       }
@@ -286,7 +295,6 @@ export function buildPaperDoc(
   if (opts.includeNotes) {
     const blocks: string[] = [];
     for (const n of [...bundle.notes].sort((x, y) => String(x.data.dateAdded ?? "").localeCompare(String(y.data.dateAdded ?? "")))) {
-      bump(n);
       const text = noteHtmlToText(n.data.note);
       if (!text) continue;
       noteCount++;
@@ -366,6 +374,8 @@ export function paperToItem(paper: ZItem, bundle: PaperBundle, opts: PaperOpts, 
       // 연구자의 생각(주석·노트)이 담겼나 — 증류는 이것이 참인 논문만 지식으로 만든다(서지만 있는 논문은 검색용 자료로 남는다).
       has_thinking: doc.annotationCount + doc.noteCount > 0,
       added_by: who?.name || who?.username || null,
+      // 개인 라이브러리의 주인 — 잠금은 태어날 때 한 번(audience)이라, 공개범위 축을 나중에 켠 조직이 소급할 근거로 남긴다.
+      owner_member: ctx.owner ?? null,
     },
     raw: { key: paper.key, version: paper.version, itemType: d.itemType, library: libraryPath(ctx.lib) },
   };
@@ -391,7 +401,9 @@ const on = (v: string | undefined, dflt: boolean): boolean => { const s = String
 /** 한 번에 하나씩 부른다. Backoff 는 다음 요청 전에 쉬고, 429·503 은 Retry-After 만큼 쉬고 다시 한다(최대 4번). */
 export async function zoteroGet<T>(token: string, path: string): Promise<{ data: T; total: number | null }> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(`${API}${path}`, { headers: { "Zotero-API-Version": "3", "Zotero-API-Key": token } });
+    const res = await fetch(`${API}${path}`, {
+      headers: { "Zotero-API-Version": "3", "Zotero-API-Key": token }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     const backoff = Number(res.headers.get("backoff") ?? 0);
     if (res.status === 429 || res.status === 503) {
       const wait = Number(res.headers.get("retry-after") ?? 0) || backoff || 5 * (attempt + 1);
@@ -450,8 +462,8 @@ async function* pagedItems(token: string, path: string, label: string): AsyncGen
     const page = Array.isArray(r.data) ? r.data : [];
     yield page;
     if (page.length < PAGE || (r.total != null && start + PAGE >= r.total)) return;
-    if (n === MAX_PAGES - 1) console.warn(`zotero: ${label} — 쪽 상한(${MAX_PAGES}) 도달, 나머지는 다음 run 이 이어 갑니다`);
   }
+  throw new Error(`zotero: ${label} — 쪽 상한(${MAX_PAGES}쪽 · ${MAX_PAGES * PAGE}건)을 넘었습니다. 컬렉션으로 좁히거나 라이블리에 알려 주세요(조용히 자르면 나머지를 영영 놓친다).`);
 }
 
 /** 논문 아래 묶음 — 증분에서 논문 하나씩 다시 묶을 때 쓴다(통째로 받는 full 경로는 메모리에서 묶는다). */
@@ -552,11 +564,27 @@ export async function* zoteroItems(
   }
   const owner = String(cfg.token_source ?? "").startsWith("member:") ? String(cfg.token_source).slice("member:".length) : undefined;
   const pickedCollections = parseCollectionKeys(cfg.collections);
-  const sinceMs = since && Number.isFinite(Date.parse(since)) ? Date.parse(since) : undefined;
+  const sinceMs = since && Number.isFinite(Date.parse(since)) ? Date.parse(since) - LOOKBACK_MS : undefined;
+  const nowMs = Date.now();
+  /** 커서는 yield 한 updated_at 의 최대다 — 시계가 앞선 클라이언트의 미래 시각 하나가 커서를 미래로 밀면 그때까지 아무것도 못 받는다. */
+  const capped = (it: RawItem): RawItem => {
+    const t = Date.parse(String(it.updated_at ?? ""));
+    return Number.isFinite(t) && t > nowMs ? { ...it, updated_at: new Date(nowMs).toISOString() } : it;
+  };
+  //  라이브러리 하나의 실패를 삼키면 run 이 성공으로 끝나 공용 커서가 전진하고, 그 라이브러리의 그 창은 영영 다시 안 읽힌다.
+  //   그래서 다른 라이브러리는 끝까지 받되 실패를 모아 마지막에 던진다(커서 동결 → 다음 run 이 같은 창을 다시 읽는다).
+  const failures: string[] = [];
+  let collectionHits = 0;
 
   for (const lib of libs) {
     const lp = libraryPath(lib);
     const libraryName = lib.name || (lib.kind === "users" ? "내 라이브러리" : `그룹 ${lib.id}`);
+    //  주인을 모르는 개인 라이브러리는 모으지 않는다(닫는 쪽) — 누구 것인지 모르면 그 사람에게만 보이게 잠글 수도 없다.
+    //   토글(token_source=member:<id>)로 만든 수집기는 늘 주인이 있다. 관리탭에서 키를 직접 붙여 만든 수집기만 여기 걸린다.
+    if (lib.kind === "users" && !owner) {
+      console.warn(`zotero: ${lp} — 이 수집기는 키 주인(구성원)을 몰라 개인 라이브러리를 건너뜁니다. '키 출처'를 member:<구성원 id> 로 지정하세요.`);
+      continue;
+    }
     try {
       // ① 컬렉션 이름표(본문의 «컬렉션:» 줄)와 좁히기
       const cols: Array<{ key: string; parentCollection?: string | false; name?: string }> = [];
@@ -566,7 +594,13 @@ export async function* zoteroItems(
         }
       }
       const colName = new Map(cols.map((c) => [c.key, c.name || c.key]));
+      //  컬렉션을 골랐으면 **그 컬렉션만** 모은다(닫는 쪽). 고른 컬렉션이 없는 라이브러리는 라이브러리 칸에 직접 적은 것만
+      //   통째로 받는다 — 오타·지운 컬렉션 하나로 개인 라이브러리 전체가 열리지 않게.
       const allowed = pickedCollections.length ? expandCollections(pickedCollections, cols) : new Set<string>();
+      if (pickedCollections.length) {
+        if (allowed.size) collectionHits++;
+        else if (!parsed.libs.some((l) => l.kind === lib.kind && l.id === lib.id)) continue;
+      }
       const inScope = (it: ZItem): boolean => !allowed.size || (it.data.collections ?? []).some((k) => allowed.has(k));
       const ctxOf = (it: ZItem): ItemCtx => ({
         lib, libraryName, username: info.username,
@@ -629,26 +663,42 @@ export async function* zoteroItems(
           if (!inScope(paper)) continue;
           if (paper.data.itemType === "note" && !opt.includeNotes) continue;
           if (wantFulltext) for (const a of bundle.attachments) if (isReadable(a.item)) a.fulltext = await fetchFulltext(token, lp, a.item.key);
-          const item = paperToItem(paper, bundle, opt, ctxOf(paper));
-          if (item.body) yield item;
+          const item = safeItem(paper, bundle, opt, ctxOf(paper));
+          if (item?.body) yield capped(item);
         }
       } else {
         for (const key of affected) {
           const paper = byKey.get(key) ?? (await fetchByKeys(token, lp, [key]))[0];
           if (!paper || !inScope(paper)) continue;
           if (paper.data.itemType === "note" && !opt.includeNotes) continue;
-          const item = paperToItem(paper, await bundleOf(token, lp, paper, wantFulltext), opt, ctxOf(paper));
-          if (item.body) yield item;
+          const item = safeItem(paper, await bundleOf(token, lp, paper, wantFulltext), opt, ctxOf(paper));
+          if (item?.body) yield capped(item);
         }
       }
     } catch (e) {
-      // 라이브러리 하나가 막혀도(그룹에서 빠졌다 · 권한이 줄었다) 나머지는 계속 — 단 키 자체가 죽은 것은 전체를 세운다.
       const st = statusOf(e);
       if (st === 401) throw new Error(`Zotero 가 API 키를 거부했습니다(401) — 키를 다시 만들어 저장하세요. 원문: ${(e as Error).message}`);
+      //  그룹에서 빠졌거나 키에서 그 그룹이 닫힌 것(403·404)은 «사라진 라이브러리» 다 — 기다려도 돌아오지 않으니 커서를 붙잡지 않는다.
+      if (lib.kind === "groups" && (st === 403 || st === 404)) {
+        console.warn(`zotero: ${lp}(${libraryName}) 를 더는 읽을 수 없습니다(${st}) — 그룹에서 빠졌거나 키에서 닫혔습니다. 건너뜁니다.`);
+        continue;
+      }
       console.warn(`zotero: ${lp}(${libraryName}) 수집 실패 — ${(e as Error).message}`);
-      if (libs.length === 1) throw e;
+      failures.push(`${libraryName}(${lp}): ${(e as Error).message}`);
     }
   }
+  if (pickedCollections.length && !collectionHits) {
+    throw new Error(`고른 컬렉션(${pickedCollections.join(", ")})을 어느 라이브러리에서도 찾지 못했습니다 — 컬렉션 key 를 다시 확인하세요(웹 라이브러리 주소의 collections/ 뒤 8자).`);
+  }
+  if (failures.length) {
+    throw new Error(`Zotero 라이브러리 ${failures.length}곳을 다 읽지 못했습니다 — 다음 수집이 같은 범위를 다시 읽습니다. ${failures.join(" · ").slice(0, 600)}`);
+  }
+}
+
+/** 논문 하나를 묶다 실패하면(깨진 노트 등) 그 논문만 건너뛴다 — 한 건이 라이브러리 수집 전체를 매번 세우는 독약이 되지 않게. */
+function safeItem(paper: ZItem, bundle: PaperBundle, opt: PaperOpts, ctx: ItemCtx): RawItem | null {
+  try { return paperToItem(paper, bundle, opt, ctx); }
+  catch (e) { console.warn(`zotero: ${libraryPath(ctx.lib)}:${paper.key} 를 묶지 못해 건너뜁니다 — ${(e as Error).message}`); return null; }
 }
 
 /** 맨 위 항목 하나의 묶음 — 독립 노트는 빈 묶음, 부모 없는 첨부는 그 자신에 달린 주석, 논문은 노트·첨부·주석. */

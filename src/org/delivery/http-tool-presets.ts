@@ -814,7 +814,10 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
   // ── Zotero — Web API v3. 원격 MCP 가 없어(공식 서버 없음 · 커뮤니티 서버는 로컬 설치형) 게이트웨이가 쓸 수 있는 유일한 면이다. ──
   //  인증: 개인 API 키를 Zotero-API-Key 헤더로 — CRED_KINDS.zotero_token 의 meta(auth_header/token_prefix:"")가 그 형식을 정한다.
   //  API 판은 지정하지 않아도 v3 이다(2026-10-26 실측: 헤더 없이 받은 항목이 v3 모양 key·version·library·links·meta·data).
-  //  라이브러리는 경로의 두 토막이다 — libraryType(users|groups) + libraryId. 개인 라이브러리 id 는 zotero_get_key 의 userID.
+  //  라이브러리는 경로의 두 토막이다 — libraryType(users|groups) + libraryId. 개인 라이브러리 id 는 키를 저장할 때 금고 meta 에
+  //   남긴 user_id 다(me_credentials 의 zotero_token 줄 — capabilities/member-secret.ts).
+  //  ⚠ `/keys/current` 를 도구로 내지 않는다 — 응답에 **키 원문(key)** 이 실린다(zotero/dataserver Key::toJSON). 도구로 내면
+  //   키가 AI 문맥·세션 기록·도구 로그로 새고, pii_scrub 은 API 키를 모른다.
   //  ⚠ 주석은 논문이 아니라 **PDF 첨부에** 달린다 — 논문의 children 으로 첨부 key 를 얻고, 그 첨부의 children 을 다시 부른다.
   //  전부 읽기(L0)다. 키에 쓰기 권한을 켜지 말라고 안내한다(connect-skills/zotero.md).
   {
@@ -822,21 +825,12 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
     hosts: ["api.zotero.org"], scope: "items", level: "L0",
     tools: [
       {
-        name: "zotero_get_key",
-        title: "Zotero 내 키와 라이브러리",
-        description:
-          "연결된 Zotero 키의 주인(userID·username)과 읽을 수 있는 범위(개인 라이브러리·노트·그룹)를 본다. " +
-          "개인 라이브러리 id 는 여기의 userID 다 — 다른 Zotero 도구의 libraryType=users · libraryId=<userID> 로 쓴다. 연결이 살아 있는지도 이걸로 확인한다.",
-        url: `${ZOT}/keys/current`,
-        input_schema: obj({}),
-        pii_scrub: true,
-      },
-      {
         name: "zotero_list_groups",
         title: "Zotero 내 그룹 목록",
-        description: "내가 속한 Zotero 그룹 라이브러리 목록(id·이름). 그룹 라이브러리는 libraryType=groups · libraryId=<그룹 id> 로 읽는다.",
+        description: "내가 속한 Zotero 그룹 라이브러리 목록(id·이름). 그룹 라이브러리는 libraryType=groups · libraryId=<그룹 id> 로 읽는다. " +
+          "userId 는 내 Zotero userID 다 — me_credentials 의 zotero_token 줄 meta.user_id(키를 저장할 때 라이블리가 적어 둔다).",
         url: `${ZOT}/users/{userId}/groups?limit=50`,
-        input_schema: obj({ userId: S("내 Zotero userID — zotero_get_key 결과"), start: I("건너뛸 개수(다음 쪽)") }, ["userId"]),
+        input_schema: obj({ userId: S("내 Zotero userID — me_credentials 의 zotero_token meta.user_id"), start: I("건너뛸 개수(다음 쪽)") }, ["userId"]),
         pii_scrub: true,
       },
       {
@@ -849,7 +843,7 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
         url: `${ZOT}/{libraryType}/{libraryId}/items/top?limit=25`,
         input_schema: obj({
           libraryType: S("users(개인) 또는 groups(그룹)"),
-          libraryId: S("라이브러리 id — 개인은 userID, 그룹은 그룹 id"),
+          libraryId: S("라이브러리 id — 개인은 내 userID(me_credentials 의 zotero_token meta.user_id), 그룹은 그룹 id(zotero_list_groups)"),
           q: S("검색어 — 제목·저자·연도(qmode=everything 이면 본문까지)"),
           qmode: S("titleCreatorYear(기본) 또는 everything"),
           tag: S("태그로 거르기(예: 읽을것)"),

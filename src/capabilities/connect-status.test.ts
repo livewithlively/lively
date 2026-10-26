@@ -90,12 +90,6 @@ const f = (variant: ConnectFacts["variant"], needsApp: boolean, appReady: boolea
   //  구글의 Claude 길은 지메일만 모은다 — 커넥터 앱 키가 gmail 이어야 «내 지메일 커넥터» 를 본다.
   assert.equal(CONNECT_APPS.find((a) => a.app === "google")!.routes.aiApp, "gmail");
   ok("G1 앱마다 길 구성(app · ai · token) — 사양 표와 같다 · 구글 Claude 길 = 지메일");
-  //  Zotero 는 수집기가 사람마다 하나 — 관리자가 아니어도 자기 것을 켠다(selfCollect). 다른 토큰 앱은 그대로 관리 권한을 묻는다.
-  assert.deepEqual(CONNECT_APPS.filter((a) => a.selfCollect).map((a) => a.app), ["zotero"]);
-  const z = CONNECT_APPS.find((a) => a.app === "zotero")!;
-  const asked = decideRoutes(routeFactsOf(z, { app_ready: true, me_connected: true, collecting: false }, { ...ctx, canCollect: false })).routes[0].state;
-  assert.equal(asked, "ask_admin", "canCollect=false 를 그대로 주면 관리자에게 묻는다 — 그래서 handler 가 selfCollect 로 true 를 넘긴다");
-  ok("G1b Zotero 만 selfCollect — 핸들러가 수집 켜기를 관리자에게 묻지 않게 하는 표식");
 }
 
 // ── (#4970 길) 깃허브 — 한 수집기를 앱 연결·개인 토큰이 함께 쓴다: 모으는 중이면 어느 길인가 ──

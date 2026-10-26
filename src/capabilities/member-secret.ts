@@ -23,6 +23,16 @@ const KNOWN_KINDS = [
 ];
 const KIND_DESC = `자격 종류(예: ${KNOWN_KINDS.join(", ")} — 신규 커넥터가 확장 가능)`;
 
+/** Zotero 키의 주인(userID·username) — 키 원문은 돌려받아도 버린다. 실패는 null(저장은 그대로 성공이다). */
+async function zoteroKeyOwner(key: string): Promise<{ user_id: string; username: string } | null> {
+  const res = await fetch("https://api.zotero.org/keys/current", {
+    headers: { "Zotero-API-Key": key, "Zotero-API-Version": "3" }, signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return null;
+  const b = (await res.json().catch(() => null)) as { userID?: unknown; username?: unknown } | null;
+  return b?.userID != null ? { user_id: String(b.userID), username: typeof b.username === "string" ? b.username : "" } : null;
+}
+
 function s(v: unknown, max = 4096): string {
   if (v === undefined || v === null) return "";
   const t = String(v);
@@ -110,6 +120,14 @@ const meCredentialSet: Capability = {
     if (s(i.kind).toLowerCase() === "zotero_token" && secret) {
       try { await ensureHttpToolPresetGroup("zotero", { actor: user.userId, source: "zotero-key" }); }
       catch (e) { logger.warn({ err: (e as Error)?.message }, "Zotero 도구 묶음 준비 실패(무시) — org_http_tool_preset_apply {key:'zotero'} 로 다시 심을 수 있다"); }
+      //  Zotero 도구는 개인 라이브러리를 userID 로 부른다(users/<id>/…). 그 id 를 아는 길은 `/keys/current` 뿐인데 그 응답엔
+      //   키 원문이 실려 도구로 낼 수 없다 — 그래서 저장하는 이 자리에서 한 번 물어 비밀 아닌 meta 에 id·이름만 남긴다.
+      const who = await zoteroKeyOwner(secret).catch(() => null);
+      if (who) {
+        const again = await setMemberSecret(memberOwner(user.userId), i.kind, i.scope_key,
+          { secret, meta: { ...metaOf(i.meta), user_id: who.user_id, username: who.username }, label: s(i.label, 200) || null }, user.userId);
+        return { credential: again };
+      }
     }
     return { credential: cred };
   },

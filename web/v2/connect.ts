@@ -58,7 +58,7 @@ async function load(): Promise<{ v: SvcView }> {
 async function loadCollect(): Promise<{ tally: Map<string, CollectTally>; ok: boolean }> {
   try {
     const r: any = await api('/api/ui/org/collectors');
-    return { tally: collectTally(r?.collectors), ok: true };
+    return { tally: collectTally(r?.collectors, state.me?.userId ?? null), ok: true };   // 사람마다 하나인 앱(Zotero)은 내 것만 센다
   } catch (_) { return { tally: new Map(), ok: false }; }
 }
 
@@ -685,8 +685,9 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
   else if (svc.key === 'figma' || svc.key === 'clickup' || svc.key === 'github') collect = !isAdmin ? quietCollectFace('권한 필요', `이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 ${svc.label}의 ${unit}${eulReul(unit) === '을' ? '이' : '가'} 함께 보는 자료함으로 들어옵니다.`, onCollect)
     : st !== 'on' ? quietCollectFace('꺼짐', svc.key === 'github' ? '위 [내 계정으로 직접 사용]을 먼저 켜면 여기서 켤 수 있어요 — 연결 화면에서 고른 저장소가 범위가 돼요.' : '위 [내 계정으로 직접 사용]에서 토큰을 저장하면 여기서 켤 수 있어요 — 내 토큰으로 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
-  //  Zotero — 수집기가 사람마다 하나라(내 라이브러리) 관리자에게 묻지 않는다(connect-status AppSpec.selfCollect 와 같은 판단).
-  else if (svc.key === 'zotero') collect = st !== 'on'
+  //  Zotero — 수집기가 사람마다 하나다(내 라이브러리). 켤 수 있는 사람은 다른 토큰 앱과 같다(서버 org_zotero_collect_set 의 scope).
+  else if (svc.key === 'zotero') collect = !isAdmin ? quietCollectFace('권한 필요', '이 워크스페이스의 구성원이 켤 수 있어요 — 켜면 내 라이브러리의 논문과 주석·노트가 자료함으로 들어옵니다.', onCollect)
+    : st !== 'on'
     ? quietCollectFace('꺼짐', '위 [내 계정으로 직접 사용]에서 API 키를 저장하면 여기서 켤 수 있어요 — 내 키로 내 라이브러리를 읽어 와요.', onCollect)
     : memberTokenCollectCard(svc.key, onCollect);
   else collect = quietCollectFace('아직 없어요',
@@ -898,7 +899,7 @@ const MEMBER_COLLECT_TEXT: Record<string, { desc: string; on: string; off: strin
   //  Zotero — 수집기가 사람마다 하나다. 개인 라이브러리는 «자료 공개범위» 가 켜진 워크스페이스에서만 나만 본다(꺼져 있으면 함께) — 사실 그대로 말한다.
   zotero: { desc: '내 라이브러리의 논문마다 서지·초록과 내가 단 하이라이트·코멘트·노트를 한 자료로 묶어 자료함으로 가져와요. 주석·노트가 있는 논문만 지식으로 정리돼요.',
     on: '논문과 주석·노트를 가져오고 있어요.', off: '켜면 내 Zotero 키로 내 라이브러리(개인·그룹)를 읽어 옵니다. 내 수집기라 다른 사람의 수집은 그대로예요.',
-    where: '그룹 라이브러리는 함께 · 개인 라이브러리는 자료 공개범위가 켜져 있으면 나만 봐요' },
+    where: '그룹 라이브러리는 함께 · 개인 라이브러리는 자료 공개범위를 켜면 나만 봐요' },
   github: { desc: '내가 고른 저장소의 이슈·PR 대화와 릴리스 노트만 라이블리가 미리 읽어 자료함으로 가져와요. 워크스페이스가 함께 봐요.',
     on: '고른 저장소의 이슈·PR 대화를 가져오고 있어요.', off: '켜면 내 GitHub 연결로 고른 저장소의 이슈·PR 대화를 읽어 옵니다. 연결 화면에서 고른 저장소가 기본 범위예요.', where: '워크스페이스 함께 — 가져온 자료는 함께 검색해요' },
 };
@@ -1115,6 +1116,14 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
           catch (e: any) { toast((e && e.message) || '시작하지 못했습니다', true); b2.disabled = false; }
         } }))] : []),
     ], '이미 모은 것은 그대로 둡니다. 범위를 넓혔으면 [지금 전부 다시 읽기]를 눌러야 과거가 들어와요.'));
+  } else if (c.key === 'zotero' && c.s.collector_id) {
+    //  Zotero 는 바뀐 논문만 따라간다 — 종류·라이브러리·컬렉션을 바꿔도 이미 모은 논문은 그대로라, 다시 읽기를 여기 둔다.
+    rows.push(setRow('다시 읽기', '바꾼 설정을 이미 모은 논문에도', [
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '지금 전부 다시 읽기', onclick: async (ev: Event) => {
+        const b2 = ev.currentTarget as HTMLButtonElement; b2.disabled = true;
+        try { await api(`/api/ui/org/collectors/${c.s.collector_id}/sync`, { method: 'POST', body: JSON.stringify({ full: true }) }); toast('처음부터 다시 읽기 시작했어요'); }
+        catch (e: any) { toast((e && e.message) || '시작하지 못했습니다', true); b2.disabled = false; }
+      } })], '내 라이브러리 전체를 처음부터 훑고, 그 뒤로는 바뀐 논문만 따라갑니다. 무엇을·어디서를 바꿨으면 눌러 주세요.'));
   } else {
     rows.push(setRow('언제부터', '', [el('span', { class: 'cn-set-hint', style: 'margin-top:0',
       text: '이 앱은 내가 볼 수 있는 것 전체를 훑고, 그 뒤로는 바뀐 것만 따라갑니다 — 시작 시점을 정할 수 없어요.' })]));
@@ -1130,7 +1139,7 @@ function collectSettings(c: SettingsCtx): HTMLElement[] {
       void c.save({ scope: { collections: zoteroScopeOf(inp.value).collections ?? '' } });
     } });
     rows.push(setRow('컬렉션', '이 컬렉션만(하위 포함)', [el('div', { class: 'cn-scope-row' }, inp, btn)],
-      '그 컬렉션이 있는 라이브러리만 좁혀지고, 다른 라이브러리는 그대로예요. 비우면 고른 라이브러리 전체입니다.'));
+      '컬렉션을 넣으면 그 컬렉션만 가져와요. 다른 라이브러리를 통째로 함께 가져오려면 위에서 그 라이브러리를 고르세요.'));
   }
   return rows;
 }

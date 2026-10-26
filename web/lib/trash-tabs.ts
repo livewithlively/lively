@@ -46,7 +46,7 @@ export function bucketOf(iso: string, now: number): string {
 // ── 자료 ─────────────────────────────────────────────────────────────────────────────────────────
 const KIND_LABEL: Record<string, string> = {
   slack: '슬랙 대화', discord: '디스코드 대화', transcript: '전사록', minutes: '회의록', email: '메일',
-  github_issue: '깃허브 이슈', linear_issue: '리니어 이슈', figma_comment: '피그마 댓글', local_file: '파일', other: '자료',
+  github_issue: '깃허브 이슈', linear_issue: '리니어 이슈', figma_comment: '피그마 댓글', zotero_item: 'Zotero 논문', local_file: '파일', other: '자료',
 };
 /** 자료 종류의 사람 말 — 모르는 종류는 '자료'(종류 키를 그대로 내보이지 않는다). */
 export const kindLabel = (kind: string | null | undefined): string => KIND_LABEL[String(kind || '')] || '자료';

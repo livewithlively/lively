@@ -219,8 +219,13 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       });
 
       if (plan === "disable") {
-        if (inst?.enabled || (interval && inst)) {
-          await upsertCollector({ id: inst!.id, enabled: false, ...(interval ? { sync_interval_sec: interval } : {}) }, actor, source);
+        //  꺼진 채로 범위·종류를 바꾸는 것도 저장한다 — 화면은 «켜기와 무관하게 저장된다»고 말하고 «저장했어요»를 띄운다.
+        //   종전엔 끈 상태의 scope 를 버려, 그 말이 거짓이었다(리뷰 지적). 수집기가 아직 없으면 저장할 자리가 없다(켤 때 만든다).
+        const hasScope = Object.keys(scopeIn).length > 0;
+        if (inst?.enabled || (interval && inst) || (hasScope && inst)) {
+          await upsertCollector({
+            id: inst!.id, enabled: false, ...(interval ? { sync_interval_sec: interval } : {}), ...(hasScope ? { config: scopeIn } : {}),
+          }, actor, source);
           resetConnectorConfigCache();
         }
         return { ok: true, enabled: false, state: await stateOf(actor) };
