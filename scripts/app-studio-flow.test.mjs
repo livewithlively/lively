@@ -60,6 +60,27 @@ check(/^\[\[기획카드\]\]\n앱 이름: 회의 안건\n/.test(txt) && /주요 
   check(/\n참고한 서비스: \n\[\[\/기획카드\]\]$/.test(x5) && !/undefined/.test(x5) && x5.split("\n").length === 10, "X5 옛 카드(더한 항목 없음) — 덧줄 · undefined 없음", x5);
 }
 
+// ══ R 「참고한 서비스」 보기(원준 2026-10-26 «주소 그냥 하이퍼링크로 … 줄바꿈 … 이쁘게» · «주소 일일이 복붙해야하더라») ══
+{
+  const prose = "Otter.ai에서는 회의 종류별 템플릿·제목과 참석자 규칙으로 템플릿을 저절로 고르는 방식·요약/전사/AI 채팅 탭 구성을, Fireflies.ai에서는 프롬프트로 만드는 맞춤 정리 형식, 전사문 옆 AI 패널을, 네이버 클로바노트에서는 요약·주요 주제·다음 할 일 정리와 그 결과를 고칠 수 있게 한 점, 말한 사람 구분, 검색을 가져왔습니다(출처: [Otter 블로그](https://otter.ai/blog/otter-meeting-types), [Otter 리뷰](https://kripeshadwani.com/otter-ai-review/), [Fireflies AI Skills](https://fireflies.ai/blog/fireflies-ai-apps/), [Fireflies Notepad 가이드](https://guide.fireflies.ai/articles/6653885315), [클로바노트 앱스토어](https://apps.apple.com/kr/app/%ED%81%B4/id1530010245)).";
+  const RV = F.refView || (() => null);   // 옛 트리엔 없다 — 줄마다 따로 빨갛게
+  const r1 = RV(prose);
+  const names = r1 && r1.items.map((x) => x.name), texts = r1 ? r1.items.map((x) => x.text).join("|") : "";
+  check(!!r1 && JSON.stringify(names) === JSON.stringify(["Otter.ai", "Fireflies.ai", "네이버 클로바노트"]) && !/가져왔|출처|https?:|\]\(|\(\s*,/.test(texts) && /검색$/.test(r1.items[2].text) && /탭 구성$/.test(r1.items[0].text), "R1 원준 화면의 산문 — 서비스 셋 · 끝말 · 출처 꼬리 · 주소 없음", r1);
+  check(!!r1 && r1.links.length === 5 && r1.links[0].label === "Otter 블로그" && r1.links[4].url.startsWith("https://apps.apple.com/") && r1.links.every((l) => /^https:\/\//.test(l.url)), "R1 출처 링크 다섯(이름 · 주소)", r1 && r1.links);
+  const r2 = RV("Otter: 회의 목록, 정리본 탭 ; 클로바노트: 말한 사람 구분 ; 출처: [Otter 블로그](https://otter.ai/blog), [앱스토어](https://apps.apple.com/x)");
+  check(!!r2 && JSON.stringify(r2.items) === JSON.stringify([{ name: "Otter", text: "회의 목록, 정리본 탭" }, { name: "클로바노트", text: "말한 사람 구분" }]) && r2.links.length === 2, "R2 새 꼴(이름: 것 ; … ; 출처: 링크)", r2);
+  const r3 = RV("노션 캘린더 보기 참고 https://www.notion.so/calendar");
+  check(!!r3 && r3.links.length === 1 && r3.links[0].label === "notion.so" && r3.items.length === 1 && !/https/.test(r3.items[0].text), "R3 맨 주소는 호스트 이름 링크로", r3);
+  const r4 = RV("애플 메모");
+  check(!!r4 && JSON.stringify(r4) === JSON.stringify({ items: [{ name: "", text: "애플 메모" }], links: [] }), "R4 링크 없는 짧은 글 — 한 항목", r4);
+  const r5 = RV("");
+  check(!!r5 && r5.items.length === 0 && r5.links.length === 0, "R5 빈 글 — 아무것도 없음", r5);
+  const r6 = RV("나쁜 것 [눌러](javascript:alert(1)) [그림](data:text/html,x)");
+  check(!!r6 && r6.links.length === 0, "R6 javascript: · data: 는 링크로 만들지 않는다", r6);
+  check(/서비스 이름: 가져온 것/.test(F.planBrief("회의록 정리", "both", "회의록")) && /출처: \[이름\]\(주소\)/.test(F.planBrief("회의록 정리", "both", "회의록")), "R7 planBrief — 참고한 서비스를 «이름: 것 ; … ; 출처: [이름](주소)» 꼴로 청한다");
+}
+
 // 걸음 · 점검
 check(F.parseStep("[[걸음 1/4]] 기획 읽음 … [[걸음 3/4]] 자료 표") === 3 && F.parseStep("아직") === 0 && F.parseStep("[[걸음 4/4]] 저장 [[걸음 2/4]]") === 4 && F.parseStep("[[걸음 9/4]]") === 4, "S1 걸음은 가장 큰 n(1~4)");
 const ck = F.parseCheck("봤어요.\n[[대조]] 있음: 더하기 · 회의별 보기 | 빠짐: 끝난 것 접기");

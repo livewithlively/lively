@@ -17,6 +17,9 @@
 //  E1 「+ 항목 더하기」 — 새 줄 · 제목 칸에 커서 · 적고 나가면 기록(card.extra)에 남는다
 //  E2 × — 줄과 기록에서 빠진다
 //  E3 다시 열기 — 더한 항목이 정해진 줄 뒤에 그대로
+//  V1 「참고한 서비스」 보기 — 서비스마다 한 줄(이름 굵게) · 출처는 새 탭 링크(이름만) · 보이는 글에 주소 없음
+//  V4 링크를 누르면 고치기로 바뀌지 않는다   V5 보기 상태로 들렀다 나가기만 하면 기록이 그대로(보기 글로 안 덮인다)
+//  V2 글을 누르면 원문 그대로 고치기 · 커서   V3 고치고 나가면 기록에 남고 다시 보기
 //  W  페이지 예외 없음 · 카드가 실제로 그려졌다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 C1 · C3 · L5 · E1~E3 이 빨갛다).
@@ -51,6 +54,8 @@ const LONG = {
 };
 //  끊을 자리가 아예 없는 낱말(공유 링크의 토큰 같은 것) — 브라우저는 «/» «%» 에서는 스스로 끊어 주지만 이건 못 끊는다.
 LONG.items += " · 첨부 토큰 " + "Q".repeat(180);
+//  원준 화면(2026-10-26)의 「참고한 것」 원문 — 산문 + «(출처: [이름](주소), …)».
+const REF_PROSE = "Otter.ai에서는 회의 종류별 템플릿·제목과 참석자 규칙으로 템플릿을 저절로 고르는 방식·사용자 질문을 요약에 넣는 기능·요약/전사/AI 채팅 탭 구성을, Fireflies.ai에서는 프롬프트로 만드는 맞춤 정리 형식과 미리 만든 형식에 섹션을 덧붙이는 드롭다운, 전사문 옆 AI 패널을, 네이버 클로바노트에서는 요약·주요 주제·다음 할 일 정리와 그 결과를 고칠 수 있게 한 점, 말한 사람 구분, 검색을 가져왔습니다(출처: [Otter 블로그](https://otter.ai/blog/otter-meeting-types-get-smarter-tailored-summaries-for-every-meeting), [Otter 리뷰](https://kripeshadwani.com/otter-ai-review/), [Fireflies AI Skills](https://fireflies.ai/blog/fireflies-ai-apps/), [Fireflies Notepad 가이드](https://guide.fireflies.ai/articles/6653885315-learn-about-the-fireflies-notepad), [클로바노트 앱스토어](https://apps.apple.com/kr/app/%ED%81%B4%EB%A1%9C%EB%B0%94%EB%85%B8%ED%8A%B8-ai-%EC%9D%8C%EC%84%B1-%EA%B8%B0%EB%A1%9D/id1530010245)).";
 const SHORT = { name: "메모", who: "나", items: "글", can: ["쓰기", "찾기", "지우기"], not: "공유", first: "목록", notify: "없음", ref: "애플 메모" };
 const FETCH = `<script>
 window.fetch = async (u, init) => {
@@ -126,6 +131,28 @@ async function PAGE_MAIN() {
   const re = await open(1100, "box-p4", { ...JSON.parse(JSON.stringify(window.__SHORT)), extra: [{ title: "결재 순서", body: "팀장 다음 재무" }, { title: "보관 기간", body: "5년" }] });
   const m3 = measure(re);
   R.e3 = m3 && m3.rows.map((r) => r.k);
+  // V — 「참고한 서비스」 보기 · 고치기
+  window.__step = "V1";
+  document.addEventListener("click", (e) => { if (e.target.closest && e.target.closest("a")) e.preventDefault(); }, true);   // 링크가 실제로 새 창을 열지 않게(누름 자체는 그대로 흐른다)
+  const vh = await open(1100, "box-p5", { ...JSON.parse(JSON.stringify(window.__LONG)), ref: window.__REF });
+  const refV = () => [...vh.querySelectorAll(".v2-studio-card .row")].find((r) => txt(r.querySelector(".k")) === "참고한 서비스")?.querySelector(".v");
+  const stored = () => (recs().find((r) => r.sid === "box-p5") || {}).card?.ref;
+  let rv = refV();
+  R.v1 = rv && { view: rv.classList.contains("ref") && rv.getAttribute("contenteditable") !== "true", names: [...rv.querySelectorAll("li b")].map(txt),
+    links: [...rv.querySelectorAll("a")].map((a) => ({ t: txt(a), https: /^https:\/\//.test(a.getAttribute("href")), blank: a.target === "_blank", rel: /noopener/.test(a.rel) })), shown: rv.innerText };
+  window.__step = "V4";
+  if (rv && rv.querySelector("a")) { rv.querySelector("a").click(); await sleep(100); }
+  rv = refV(); R.v4 = rv && { view: rv.classList.contains("ref"), editing: rv.getAttribute("contenteditable") === "true" };
+  window.__step = "V5";
+  if (rv) { rv.focus(); await sleep(50); rv.blur(); await sleep(150); }
+  R.v5 = { same: stored() === window.__REF, view: !!refV() && refV().classList.contains("ref") };
+  window.__step = "V2";
+  rv = refV(); const li = rv && rv.querySelector("li span");
+  if (li) { li.click(); await sleep(100); }
+  rv = refV(); R.v2 = rv && { editing: rv.getAttribute("contenteditable") === "true", focused: document.activeElement === rv, raw: rv.textContent === window.__REF };
+  window.__step = "V3";
+  if (rv && R.v2 && R.v2.editing) { rv.textContent = window.__REF + " 노션 캘린더 보기"; rv.blur(); await sleep(150); }
+  rv = refV(); R.v3 = { saved: stored() === window.__REF + " 노션 캘린더 보기", view: !!rv && rv.classList.contains("ref") && rv.getAttribute("contenteditable") !== "true" };
   R.errors = errors;
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
 }
@@ -135,7 +162,7 @@ const PAGE = `<!doctype html><html data-theme="light" lang="ko"><meta charset="u
 <div id="toasts"></div>
 <pre id="out">PENDING</pre>
 ${FETCH}
-<script>window.__LONG = ${JSON.stringify(LONG)}; window.__SHORT = ${JSON.stringify(SHORT)};</script>
+<script>window.__LONG = ${JSON.stringify(LONG)}; window.__SHORT = ${JSON.stringify(SHORT)}; window.__REF = ${JSON.stringify(REF_PROSE)};</script>
 <script>${bundle}</script>
 <script>(${PAGE_MAIN.toString()})().catch((e) => { document.getElementById("out").textContent = "RESULT" + JSON.stringify({ crash: (window.__step || "") + " " + String((e && e.stack) || e).slice(0, 900) }) + "ENDRESULT"; });</script>`;
 
@@ -161,12 +188,19 @@ check(!!refRow && refRow.vh > 40 && !!canRow && canRow.vh > 40, "C2 긴 줄은 �
 check(inside(R.narrow), "C3 좁은 창(380px)에서도 카드 안", worst(R.narrow));
 const sh = R.short && R.short.rows;
 check(!!sh && sh.every((r) => r.over <= 1 && r.vh < 30) && new Set(sh.map((r) => r.kw)).size === 1, "C4 짧은 값만 — 값 한 줄 · 이름표 칸 폭이 모두 같다", JSON.stringify(sh));
-check(!!sh && sh.every((r) => r.edit), "C5 고치기 카드 — 값 칸을 눌러 고칠 수 있다", JSON.stringify(sh && sh.map((r) => r.edit)));
+check(!!sh && sh.filter((r) => r.k !== "참고한 서비스").every((r) => r.edit), "C5 고치기 카드 — 값 칸을 눌러 고칠 수 있다(참고한 서비스는 V2 — 보기에서 누르면 고치기)", JSON.stringify(sh && sh.map((r) => r.edit)));
 same(sh && sh.map((r) => r.k), NEW, "L5 이름표가 새 이름 여덟");
 check(!!sh && sh.every((r) => r.kh < 26), "L5 가장 긴 「넣지 않는 기능」 도 이름표 칸 안에 한 줄", JSON.stringify(sh && sh.map((r) => r.k + " " + r.kh)));
 same(R.e1 && [R.e1.add, R.e1.focused, R.e1.last, R.e1.saved], [true, true, true, [{ title: "결재 순서", body: "팀장 다음 재무" }]], "E1 「+ 항목 더하기」 — 맨 아래 새 줄 · 제목 칸에 커서 · 적고 나가면 기록에 남는다");
 same(R.e2 && [R.e2.rows, R.e2.saved], [0, []], "E2 × — 줄과 기록에서 빠진다");
 same(R.e3, [...NEW, "결재 순서", "보관 기간"], "E3 다시 열면 더한 항목이 정해진 줄 뒤에 그대로");
+same(R.v1 && [R.v1.view, R.v1.names, R.v1.links.length, R.v1.links.every((l) => l.https && l.blank && l.rel), R.v1.links[0] && R.v1.links[0].t], [true, ["Otter.ai", "Fireflies.ai", "네이버 클로바노트"], 5, true, "Otter 블로그"],
+  "V1 「참고한 서비스」 보기 — 서비스마다 한 줄 · 출처는 새 탭 링크 다섯(이름만)");
+check(!!R.v1 && !/https?:\/\/|\]\(|가져왔습니다|\(출처/.test(R.v1.shown), "V1 보이는 글에 주소 · 괄호 꼬리 · «가져왔습니다» 없음", R.v1 && R.v1.shown);
+same(R.v4, { view: true, editing: false }, "V4 링크를 누르면 고치기로 바뀌지 않는다");
+same(R.v5, { same: true, view: true }, "V5 보기로 들렀다 나가기만 하면 기록 그대로");
+same(R.v2, { editing: true, focused: true, raw: true }, "V2 글을 누르면 원문 그대로 고치기 · 커서");
+same(R.v3, { saved: true, view: true }, "V3 고치고 나가면 기록에 남고 다시 보기");
 same(R.errors, [], "W  페이지 예외 없음");
 
 console.log(`\n#4632 기획 카드(잘림 · 줄 이름 · 더한 항목): ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

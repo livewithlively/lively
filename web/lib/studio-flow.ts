@@ -114,6 +114,33 @@ export function parseCard(text: string): StudioCard | null {
   });
   return hit && c.name ? c : null;
 }
+// ── 「참고한 서비스」 보기(원준 2026-10-26 «주소 그냥 하이퍼링크로 … 뭘 참고했는지도 줄바꿈 … 텍스트 박스 안에서 이쁘게» · «주소 일일이 복붙해야하더라») ──
+//  카드 글은 한 줄이라 AI 는 «이름: 것 ; 이름: 것 ; 출처: [이름](주소)» 로 쓴다(planBrief). 그 전 카드는 산문
+//   («A에서는 …을, B에서는 …을 가져왔습니다(출처: [..](..), …)») — 둘 다 서비스마다 한 항목 · 링크 목록으로 푼다. 화면은 이것만 그리고, 고칠 땐 원문 그대로.
+export interface RefLink { label: string; url: string }
+export interface RefView { items: Array<{ name: string; text: string }>; links: RefLink[] }
+const MD_LINK = /\[([^\]\n]{1,120})\]\(\s*([^\s)]+)\s*\)/g;
+const BARE_URL = /https?:\/\/[^\s)\]<>"',，]+/g;
+/** http(s) 주소만 링크로 — javascript: · data: 같은 것은 링크가 아니다. */
+const safeUrl = (u: string): string => (/^https?:\/\/[^\s]+$/i.test(u) ? u : '');
+const hostOf = (u: string): string => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (_) { return u; } };
+export function refView(text: string): RefView {
+  const links: RefLink[] = [];
+  let s = String(text || '');
+  s = s.replace(MD_LINK, (_, label: string, url: string) => { const u = safeUrl(url); if (u) links.push({ label: label.trim(), url: u }); return u ? ' ' : label; });
+  s = s.replace(BARE_URL, (u: string) => { links.push({ label: hostOf(u), url: u }); return ' '; });
+  //  링크를 걷고 남은 «(출처: , , )» · «; 출처: , ,» 꼬리
+  s = s.replace(/[(（]\s*(출처|참고)\s*[:：][\s,·、]*[)）]/g, ' ').replace(/(^|;)\s*(출처|참고 링크)\s*[:：][\s,·、]*(?=;|$)/g, '$1');
+  const tidy = (t: string): string => t.replace(/\s*·\s*/g, ', ').replace(/\s+/g, ' ').replace(/\s+([,.])/g, '$1').replace(/^[,;.\s]+|[,;\s]+$/g, '').trim();
+  let parts: Array<{ name: string; text: string }>;
+  if (s.includes(';')) {
+    parts = s.split(/\s*;\s*/).map((p) => { const m = /^([^:：]{1,30})[:：]\s*(.+)$/.exec(p.trim()); return m ? { name: m[1].trim(), text: m[2] } : { name: '', text: p }; });
+  } else {
+    parts = s.split(/,\s*(?=[^,]{1,30}?에서는\s)/).map((p) => { const m = /^\s*(.{1,30}?)에서는\s+([\s\S]+)$/.exec(p); return m ? { name: m[1].trim(), text: m[2] } : { name: '', text: p }; });
+  }
+  const items = parts.map((x) => ({ name: x.name, text: tidy(x.text.replace(/\s*(을|를)?\s*(가져왔|참고했)[^,;]*$/, '').replace(/(을|를)\s*$/, '')) })).filter((x) => x.text || x.name);
+  return { items, links };
+}
 export function cardText(c: StudioCard): string {
   const extra = (Array.isArray(c.extra) ? c.extra : []).map(extraLine).filter(Boolean);
   return '[[기획카드]]\n' + [...CARD_ROWS.map((r) => r.label + ': ' + (r.k === 'can' ? (c.can || []).join(' · ') : String(c[r.k] || ''))), ...extra].join('\n') + '\n[[/기획카드]]';
@@ -209,7 +236,7 @@ export function planBrief(what: string, place: StudioPlace, name = ''): string {
   const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
   return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 ${LABEL.name} 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + `아직 만들지 말고, ${BENCH} `
-    + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · ' + LABEL.can + '은 셋을 · 로 · ' + LABEL.notify + '은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · ' + LABEL.ref + '는 어디서 무엇을 가져왔는지):\n'
+    + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · ' + LABEL.can + '은 셋을 · 로 · ' + LABEL.notify + '은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · ' + LABEL.ref + '는 서비스마다 「서비스 이름: 가져온 것」을 ; 로 나누고 맨 끝에 「출처: [이름](주소), [이름](주소)」 · 주소는 이 꼴로만):\n'
     + cardText(emptyCard());
 }
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */

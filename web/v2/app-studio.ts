@@ -35,7 +35,7 @@ import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNod
 import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, splitList, stageIndex, stageTabs, type CardExtra, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, refView, splitList, stageIndex, stageTabs, type CardExtra, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -435,17 +435,42 @@ function helpMenu(btn: HTMLElement, onIntro: () => void, onTour: () => void): vo
   const off = (e: Event): void => { if (!m.contains(e.target as Node)) { m.remove(); document.removeEventListener('pointerdown', off, true); } };
   setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
 }
+/** 「참고한 서비스」 보기 — 서비스마다 한 줄(이름 굵게) · 맨 아래 「출처」 뒤 이름만 보이는 링크(새 탭). 주소 글자는 링크의 title 에만. */
+function refNode(raw: string): HTMLElement {
+  const r = refView(raw);
+  return el('div', { class: 'v2-studio-ref' },
+    r.items.length ? el('ul', {}, ...r.items.map((x) => el('li', {}, x.name ? el('b', { text: x.name }) : null, el('span', { text: x.text })))) : null,
+    r.links.length ? el('p', { class: 'src' }, el('span', { class: 'src-k', text: '출처' }),
+      ...r.links.map((l) => el('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer', text: l.label, title: l.url }))) : null);
+}
 /** 기획 카드 보기 · 고치기 — onEdit 을 주면 줄을 눌러 그 자리에서 고친다. */
 function cardView(c: StudioCard, onEdit: ((c: StudioCard) => void) | null): HTMLElement {
   const box = el('div', { class: 'v2-studio-card' + (onEdit ? ' edit' : '') }, el('b', { class: 'v2-studio-card-h', text: '기획 카드' + (c.name ? ' · ' + c.name : '') }));
   CARD_ROWS.forEach((r) => {
     const val = r.k === 'can' ? (c.can || []).join(' · ') : String(c[r.k] || '');
-    const v = el('span', { class: 'v', text: val || '' });
+    const v = el('span', { class: 'v', text: val || '' }) as HTMLElement;
+    //  「참고한 서비스」 는 보기와 고치기가 다르다(원준 2026-10-26 «주소 그냥 하이퍼링크로 … 텍스트 박스 안에서 이쁘게» · «주소 일일이 복붙해야하더라») —
+    //   보기는 서비스마다 한 줄 · 출처는 누르면 새 탭으로 여는 링크(refNode). 링크 말고 글을 누르면 원문 그대로 고치고, 나가면 다시 보기.
+    const isRef = r.k === 'ref';
+    let raw = val;
+    const editing = (): boolean => v.getAttribute('contenteditable') === 'true';
+    const view = (): void => { if (!isRef || !raw) return; v.removeAttribute('contenteditable'); v.classList.add('ref'); v.replaceChildren(refNode(raw)); };
     if (onEdit) {
       v.setAttribute('contenteditable', 'true'); v.setAttribute('data-placeholder', r.hint); v.setAttribute('aria-label', r.label);
-      v.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); (v as HTMLElement).blur(); } });
-      v.addEventListener('blur', () => { const t = String(v.textContent || '').trim(); if (r.k === 'can') c.can = splitList(t); else c[r.k] = t; onEdit(c); });
+      v.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+        if (editing()) { e.preventDefault(); v.blur(); }
+        else if (e.target === v) { e.preventDefault(); editRaw(); }
+      });
+      //  보기 상태에서 지나가기만 한 것(탭 · 링크 누름)은 고친 게 아니다 — 보기 글로 기록을 덮지 않는다.
+      v.addEventListener('blur', () => { if (!editing()) return; const t = String(v.textContent || '').trim(); raw = t; if (r.k === 'can') c.can = splitList(t); else c[r.k] = t; onEdit(c); view(); });
+      const editRaw = (): void => { v.classList.remove('ref'); v.textContent = raw; v.setAttribute('contenteditable', 'true'); v.focus(); const sel = window.getSelection(); if (sel) { sel.selectAllChildren(v); sel.collapseToEnd(); } };
+      if (isRef) {
+        v.tabIndex = 0;
+        v.addEventListener('click', (e: MouseEvent) => { if ((e.target as HTMLElement).closest('a') || editing()) return; editRaw(); });
+      }
     }
+    view();
     box.append(el('div', { class: 'row' }, el('span', { class: 'k', text: r.label }), v));
   });
   //  더한 항목(원준 2026-10-26 «섹션 제목과 본문도 원한다면 더 추가해서») — 정해진 줄 뒤에. 고치기 카드에서만 더하고 빼고 고친다.

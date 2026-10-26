@@ -1867,6 +1867,17 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-card-rm:hover, .v2-studio-card-rm:focus-visible { color: #B0323F; background: rgba(176, 50, 63, .08); }
 .v2-studio-card-add { justify-self: start; margin-top: 4px; border: 1px dashed var(--line); background: none; color: var(--muted); border-radius: 8px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
 .v2-studio-card-add:hover, .v2-studio-card-add:focus-visible { color: var(--purple, #7B61E0); border-color: var(--purple, #7B61E0); }
+/* 「참고한 서비스」 보기 — 서비스마다 한 줄 · 출처는 이름만 보이는 링크. 고치기 카드에선 글을 누르면 원문 고치기(링크는 그대로 새 탭). */
+.v2-studio-card .v.ref { cursor: text; }
+.v2-studio-card .v.ref:focus-visible { outline: 2px solid var(--purple, #7B61E0); outline-offset: 2px; border-radius: 4px; }
+.v2-studio-ref ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.v2-studio-ref li { display: grid; gap: 1px; }
+.v2-studio-ref li b { font-weight: 700; }
+.v2-studio-ref li span { color: var(--ink, inherit); }
+.v2-studio-ref .src { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 12.5px; }
+.v2-studio-ref .src-k { color: var(--muted); font-weight: 700; }
+.v2-studio-ref .src a { color: var(--purple, #7B61E0); text-decoration: none; overflow-wrap: anywhere; }
+.v2-studio-ref .src a:hover, .v2-studio-ref .src a:focus-visible { text-decoration: underline; }
 .v2-studio-card.edit .v { cursor: text; border-radius: 4px; }
 .v2-studio-card.edit .v:focus { outline: none; background: rgba(123, 97, 224, .08); border-bottom-color: var(--purple, #7B61E0); }
 .v2-studio-card.edit .v:empty::before { content: attr(data-placeholder); color: var(--muted); }
