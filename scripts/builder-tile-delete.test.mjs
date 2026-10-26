@@ -13,6 +13,7 @@
 //  T6 두 번(공개한 앱의 만들던 것) — discard 0건(모두가 쓰는 앱) · 세션 DELETE 1건
 //  T7 두 번인데 discard 가 500 — 카드 남음 · 세션 DELETE 0건 · 단추가 다시 눌리는 「지우기」 로
 //  T8 오른쪽 패널 「모두 지우기」(기존) — 그대로 두 번 눌러 지운다
+//  T9 지우는 사이 목록이 다시 그려져 새 카드로 또 두 번 — 앱 지우기 · 세션 지우기는 한 번씩만(격리 리뷰)
 //  W  페이지 예외 없음 · 앱 목록 요청이 실제로 나갔다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(카드에 지우기가 없던 origin/main 에서 T1~T7 이 빨갛다).
@@ -36,19 +37,20 @@ const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-nam
 const css = (...fs) => fs.map((f) => readFileSync(path.join(STYLES, f), "utf8")).join("\n").replace(/<\/style/gi, "<\\/style");
 
 //  가짜 서버 — 요청을 window.__calls 에 적는다. 지운 앱은 다음 목록에서 빠진다. window.__failDiscard 면 discard 가 500.
-const FETCH = `<script>window.__calls = []; window.__gone = new Set(); window.__failDiscard = false;
+const FETCH = `<script>window.__calls = []; window.__gone = new Set(); window.__failDiscard = false; window.__slow = 0;
 window.fetch = async (u, init) => {
   const url = String(u && u.url ? u.url : u), method = (init && init.method) || "GET";
   const p = url.replace(/^.*?(\\/api\\/)/, "/api/");
   window.__calls.push(method + " " + p);
   const j = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "Content-Type": "application/json" } });
   const m = /^\\/api\\/ui\\/apps\\/([^/?]+)\\/discard$/.exec(p);
+  if (m && method === "POST" && window.__slow) await new Promise((r) => setTimeout(r, window.__slow));
   if (m && method === "POST") { if (window.__failDiscard) return j({ error: "서버가 바빠요" }, 500); window.__gone.add(m[1]); return j({ ok: true }); }
   if (p.startsWith("/api/ui/terminal/sessions/") && method === "DELETE") return j({ ok: true });
   if (p.startsWith("/api/ui/me/whoami")) return j({ member_id: "wonjoon-jang", display_name: "원준" });
   if (p.startsWith("/api/ui/apps?")) {
     const app = (id, title, visibility) => ({ id, title, status: "active", visibility, installed_by: "wonjoon-jang", is_owner: true, current_version_no: 1, manifest: { ui: { pages: [{}] } } });
-    return j({ apps: [app("notes", "회의록", "me"), app("shared1", "주간 안건", "all"), app("mine2", "출장비", "me")].filter((a) => !window.__gone.has(a.id)) });
+    return j({ apps: [app("notes", "회의록", "me"), app("shared1", "주간 안건", "all"), app("mine2", "출장비", "me"), app("mine3", "명함", "me")].filter((a) => !window.__gone.has(a.id)) });
   }
   return j({});
 };</script>`;
@@ -67,6 +69,7 @@ async function PAGE_MAIN() {
     rec("box-b", "여행 계획", "", "plan", 2),         // 아직 앱 없음(기획 단계)
     rec("box-c", "주간 안건", "shared1", "fix", 3),   // 공개한 앱을 고치던 것
     rec("box-d", "출장비", "mine2", "fix", 4),        // discard 가 실패할 것
+    rec("box-e", "명함", "mine3", "fix", 5),          // 지우는 사이 다시 그려질 것
   ]));
   const env = { projects: () => [], sessions: () => [], redrawSide: () => {}, setRoute: () => {} };
   history.replaceState(null, "", "#/builder");
@@ -130,6 +133,22 @@ async function PAGE_MAIN() {
   await sleep(900);
   R.t8.writes = writes(mark); R.t8.gone = !cardOf("출장비");
 
+  // T9 — 앱 지우기가 느린 사이 목록을 다시 그리고 새 카드로 또 두 번
+  window.__slow = 1200;
+  mark = window.__calls.length;
+  if (delOf(cardOf("명함"))) delOf(cardOf("명함")).click();
+  await sleep(100);
+  if (delOf(cardOf("명함"))) delOf(cardOf("명함")).click();
+  await sleep(200);
+  B.renderBuilderApp(host, ["builder"], new URLSearchParams(""), env);
+  await sleep(300);
+  R.t9 = { again: !!cardOf("명함") };
+  if (delOf(cardOf("명함"))) delOf(cardOf("명함")).click();
+  await sleep(100);
+  if (delOf(cardOf("명함"))) delOf(cardOf("명함")).click();
+  await sleep(2500);
+  R.t9.writes = writes(mark); R.t9.gone = !cardOf("명함");
+  window.__slow = 0;
   R.toasts = [...document.querySelectorAll("#toasts .toast")].length;
   R.listed = window.__calls.filter((c) => c.startsWith("GET /api/ui/apps?")).length;
   R.errors = errors;
@@ -168,6 +187,7 @@ same(R.t5 && [R.t5.writes, R.t5.gone], [[DEL("box-b")], true], "T5 앱이 없는
 same(R.t6 && [R.t6.writes, R.t6.gone], [[DEL("box-c")], true], "T6 공개한 앱을 고치던 것 — 모두가 쓰는 앱은 지우지 않고 세션만");
 same(R.t7 && [R.t7.writes, R.t7.gone, R.t7.btn], [[DISCARD("mine2")], false, { text: "지우기", disabled: false }], "T7 앱을 못 지우면 — 카드 남음 · 세션 그대로 · 다시 누를 수 있다");
 same(R.t8 && [R.t8.panel, R.t8.armed, R.t8.writes, R.t8.gone], [true, "한 번 더 누르면 지워져요. 되돌릴 수 없어요.", [DISCARD("mine2"), DEL("box-d")], true], "T8 오른쪽 「모두 지우기」 도 그대로 두 번 눌러 지운다");
+same(R.t9 && [R.t9.again, R.t9.writes, R.t9.gone], [true, [DISCARD("mine3"), DEL("box-e")], true], "T9 지우는 사이 다시 그려진 카드로 또 눌러도 한 번만 지운다");
 same([R.listed > 0, R.toasts > 0, R.errors], [true, true, []], "W  앱 목록 요청이 실제로 나갔다 · 알림이 섰다 · 페이지 예외 없음");
 
 console.log(`\n#4632 앱빌더 카드 지우기: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

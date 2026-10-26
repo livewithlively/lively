@@ -33,7 +33,9 @@ const when = (ms: number): string => {
 
 interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number }
 const views = new WeakMap<HTMLElement, View>();
-/** 두 번 눌러 지우는 단추 — 첫 번은 묻기만(4초 안에 한 번 더). 지우지 못하면(go 가 false) 다시 누를 수 있게 돌아온다. */
+//  지우는 중인 만들던 앱 — 지우는 사이 목록이 다시 그려져 새 카드의 단추로 한 번 더 지우지 않게(격리 리뷰).
+const deleting = new Set<string>();
+/** 두 번 눌러 지우는 단추 — 첫 번은 묻기만(4초 안에 한 번 더). 지우지 못하면(go 가 false 거나 던지면) 다시 누를 수 있게 돌아온다. */
 const ARM_MS = 4000;
 function armedDelete(cls: string, label: string, armed: string, title: string, go: () => Promise<boolean>): HTMLButtonElement {
   const b = el('button', { class: cls + ' v2-bld-danger', type: 'button', text: label, title: title || null }) as HTMLButtonElement;
@@ -43,7 +45,9 @@ function armedDelete(cls: string, label: string, armed: string, title: string, g
     if (!b.dataset.arm) { b.dataset.arm = '1'; b.textContent = armed; timer = window.setTimeout(disarm, ARM_MS); return; }
     disarm(); b.disabled = true;
     let done = false;
-    try { done = await go(); } finally { if (!done) b.disabled = false; }
+    try { done = await go(); }
+    catch (e: any) { toast('지우지 못했어요. ' + (e && e.message ? e.message : e), true); }
+    finally { if (!done) b.disabled = false; }
   };
   return b;
 }
@@ -226,6 +230,11 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   };
   //  지우기 — 앱(있으면 · 판 이력째) → 앱빌딩 세션(멈추고 휴지통으로) → 이 브라우저의 기록. 진짜로 없어진다(원준: «기능적으로도 싹 삭제»). 지웠으면 true.
   const deleteDraft = async (d: Draft): Promise<boolean> => {
+    if (deleting.has(d.sid)) return false;
+    deleting.add(d.sid);
+    try { return await deleteDraftNow(d); } finally { deleting.delete(d.sid); }
+  };
+  const deleteDraftNow = async (d: Draft): Promise<boolean> => {
     const why = (e: any): string => (e && e.message ? e.message : String(e));
     //  #4667 만들던 앱 = 나만 보는 앱(예약만 된 빈 앱 포함) — 책임자가 지운다(/discard). 공개한 앱(「원본을 고치기」 로 연 만들던 앱 포함)은
     //   여기서 지우지 않는다 — 모두가 쓰는 앱이다(격리 리뷰 NB-12). 앱빌딩 세션과 이 브라우저의 기록만 걷고, 내 초안은 판 이력에 남는다.
