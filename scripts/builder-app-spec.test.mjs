@@ -15,6 +15,8 @@
 //  U7 「‹ 앱빌더」 — #/builder?sel=<앱> 목록으로 · 떠난 뒤엔 다시 묻지 않는다(쓰는 중이던 앱이어도)
 //  U8 오른쪽 배포 설정에 「개발 정보 보기」 — 누르면 같은 화면
 //  U9 볼 수 없는 앱(404) — 찾을 수 없다고 말한다
+//  U5b 실패인데 앞 버전 설명이 보이면 그 버전을 말하고 «달라진 점» 은 감춘다(격리 리뷰) · U4 도 감춘다
+//  U10 오늘 몫을 다 씀(limit) — 말하고 다시 묻지 않는다
 //  W  페이지 예외 없음
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(개발 정보가 없던 origin/main 에서 U1~U9 가 빨갛다).
@@ -64,6 +66,8 @@ window.__spec = {
   fail: (n, post) => (post ? res("writing", { id: "fail", title: "실패 앱", doc: false }) : res("failed", { id: "fail", title: "실패 앱", doc: false, err: "AI 답을 읽지 못했어요" })),
   nokey: () => res("unavailable", { id: "nokey", title: "키 없음 앱", doc: false }),
   left: () => res("writing", { id: "left", title: "떠날 앱", doc: false }),
+  limit: () => res("limit", { id: "limit", title: "몫 다 쓴 앱", doc: false }),
+  failold: () => res("failed", { id: "failold", title: "실패했지만 앞 설명 있는 앱", docV: 2, err: "시간 안에 끝나지 않았어요" }),
 };
 const seen = {};
 window.fetch = async (u, init) => {
@@ -142,6 +146,8 @@ async function PAGE_MAIN() {
   await go("#/builder/spec/stale");
   R.u4 = { state: txt(specRoot() && specRoot().querySelector(".v2-spec-state")), summary: txt(secOf("한눈에") && secOf("한눈에").querySelector(".v2-spec-lead")) };
 
+  R.u4.changes = !!secOf("이번 버전에서 달라진 점");
+
   // U5 실패 → 다시 만들기
   await go("#/builder/spec/fail");
   const again = specRoot() && [...specRoot().querySelectorAll(".v2-spec-top button")].find((b) => txt(b) === "다시 만들기");
@@ -149,6 +155,16 @@ async function PAGE_MAIN() {
   if (again) { again.click(); await sleep(600); }
   R.u5.posts = window.__calls.filter((c) => c.startsWith("POST /api/ui/apps/fail/spec"));
   R.u5.after = txt(specRoot() && specRoot().querySelector(".v2-spec-state"));
+
+  // U5b 실패인데 앞 버전 설명이 보일 때 — 그 버전을 말한다 · 달라진 점은 감춘다
+  await go("#/builder/spec/failold");
+  R.u5b = { state: txt(specRoot() && specRoot().querySelector(".v2-spec-state")), changes: !!secOf("이번 버전에서 달라진 점"), summary: !!(secOf("한눈에") && secOf("한눈에").querySelector(".v2-spec-lead")) };
+
+  // U10 오늘 몫을 다 씀 — 말하고 다시 묻지 않는다
+  await go("#/builder/spec/limit");
+  R.u10 = { state: txt(specRoot() && specRoot().querySelector(".v2-spec-state")), spin: !!(specRoot() && specRoot().querySelector(".v2-spec-spin")), gets0: specGets("limit") };
+  await sleep(13000);
+  R.u10.gets1 = specGets("limit");
 
   // U6 키 없음
   await go("#/builder/spec/nokey");
@@ -212,6 +228,9 @@ check(R.u2 && /V3 코드 기준/.test(R.u2.state || "") && R.u2.getsAfter === 1,
 check(R.u3 && R.u3.spinner && /쓰는 중/.test(R.u3.state || "") && R.u3.gets0 === 1 && R.u3.gets1 >= 3 && R.u3.summary === "회의 음성을 올리면 받아쓰고 정리해요." && R.u3.gets2 === R.u3.gets1,
   "U3 쓰는 중 — 도는 표시 · 다시 묻다가 ok 가 오면 설명을 그리고 멈춘다", R.u3);
 check(R.u4 && /초안 기준 설명/.test(R.u4.state || "") && /V3 코드로 다시 쓰는 중/.test(R.u4.state || "") && R.u4.summary === "회의 음성을 올리면 받아쓰고 정리해요.", "U4 예전 버전 설명을 그 버전 기준이라고 보이며 다시 쓰는 중", R.u4);
+check(R.u4 && R.u4.changes === false, "U4 앞 버전 설명이면 «이번 버전에서 달라진 점» 을 감춘다", R.u4);
+check(R.u5b && /V2 기준이에요/.test(R.u5b.state || "") && /시간 안에 끝나지 않았어요/.test(R.u5b.state || "") && R.u5b.summary && !R.u5b.changes, "U5b 실패 + 앞 버전 설명 — 그 버전을 말하고 달라진 점은 감춘다", R.u5b);
+check(R.u10 && /횟수를 다 썼어요/.test(R.u10.state || "") && !R.u10.spin && R.u10.gets0 === 1 && R.u10.gets1 === 1, "U10 오늘 몫을 다 씀 — 말하고 다시 묻지 않는다", R.u10);
 check(R.u5 && R.u5.again && /AI 답을 읽지 못했어요/.test(R.u5.state || "") && JSON.stringify(R.u5.posts) === JSON.stringify(['POST /api/ui/apps/fail/spec {"regenerate":true}']) && /쓰는 중/.test(R.u5.after || ""),
   "U5 실패 — 까닭 + 「다시 만들기」 → regenerate 한 번 → 쓰는 중", R.u5);
 check(R.u6 && /API 키/.test(R.u6.state || "") && R.u6.calls && R.u6.files === 2 && R.u6.gets0 === 1 && R.u6.gets1 === 1, "U6 키 없음 — 안내 · 코드에서 읽은 것은 그대로 · 다시 묻지 않는다", R.u6);

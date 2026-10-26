@@ -7,6 +7,13 @@ import { SPEC_SYSTEM, parseSpecOutput, specFacts, specInput, specKeyOf, specProm
 
 export const SPEC_QUIET_MS = 30_000;
 export const SPEC_MODEL_DEFAULT = "claude-sonnet-5-5";
+//  돈 상한(격리 리뷰 #4632) — 저장마다 한 번씩 사면 고치기 왕복 · 스크립트가 앱 백 개를 건드리는 일에 끝이 없다.
+//   · 한 앱의 저절로 다시 쓰기는 SPEC_MIN_GAP_MS 에 한 번(그 사이 저장은 그 뒤 한 번으로 모인다)
+//   · 이 게이트웨이에서 동시에 SPEC_CONCURRENT 개까지(넘으면 저절로 쓰기는 잠시 뒤로 · 열어서 쓰기는 다음 물음에)
+//   · 워크스페이스 하루 SPEC_DAILY_MAX 번(LIVELY_APP_SPEC_DAILY_MAX) — 넘으면 화면이 «오늘 몫을 다 썼어요» 라고 말한다
+export const SPEC_MIN_GAP_MS = 3 * 60_000;
+export const SPEC_CONCURRENT = 3;
+export const specDailyMax = (): number => { const n = Number(process.env.LIVELY_APP_SPEC_DAILY_MAX); return Number.isInteger(n) && n >= 0 ? n : 200; };
 const SPEC_TIMEOUT_MS = 4 * 60_000;
 const SPEC_MAX_TOKENS = 16_000;
 
@@ -15,22 +22,24 @@ const SPEC_MAX_TOKENS = 16_000;
  *  시험이 시계를 바꿔 끼운다.
  */
 export function makeSpecScheduler(d: {
-  quietMs: number; run: (appId: string) => Promise<unknown>;
+  /** 돌린 뒤 숫자를 돌려주면 그만큼 뒤에 다시 돈다(앱의 최소 간격 · 동시 상한) — 그 사이 새 저장이 오면 그 예약으로 모인다. */
+  quietMs: number; run: (appId: string) => Promise<number | void | unknown>;
   tenantKey: () => string; wrap: (fn: () => Promise<unknown>) => () => Promise<unknown>;
   setTimer: (fn: () => void, ms: number) => unknown; clearTimer: (t: unknown) => void;
 }): { schedule(appId: string): void; pending(): number } {
   const timers = new Map<string, unknown>();
+  const arm = (k: string, appId: string, go: () => Promise<unknown>, ms: number): void => {
+    const prev = timers.get(k);
+    if (prev !== undefined) d.clearTimer(prev);
+    timers.set(k, d.setTimer(() => {
+      timers.delete(k);
+      void Promise.resolve().then(go)
+        .then((again) => { if (typeof again === "number" && again > 0 && !timers.has(k)) arm(k, appId, go, again); })
+        .catch((e) => logger.warn({ app: appId, err: (e as Error)?.message ?? String(e) }, "[app-spec] 설명 쓰기 실패"));
+    }, ms));
+  };
   return {
-    schedule(appId: string): void {
-      const k = d.tenantKey() + "\u0000" + appId;
-      const prev = timers.get(k);
-      if (prev !== undefined) d.clearTimer(prev);
-      const go = d.wrap(() => d.run(appId));
-      timers.set(k, d.setTimer(() => {
-        timers.delete(k);
-        void Promise.resolve().then(go).catch((e) => logger.warn({ app: appId, err: (e as Error)?.message ?? String(e) }, "[app-spec] 설명 쓰기 실패"));
-      }, d.quietMs));
-    },
+    schedule(appId: string): void { arm(d.tenantKey() + "\u0000" + appId, appId, d.wrap(() => d.run(appId)), d.quietMs); },
     pending: () => timers.size,
   };
 }
@@ -41,7 +50,7 @@ async function liveScheduler(): Promise<ReturnType<typeof makeSpecScheduler>> {
   const { currentTenant, withTenant } = await import("../org/tenant-context.js");
   live = makeSpecScheduler({
     quietMs: SPEC_QUIET_MS,
-    run: (appId) => writeAppSpec(appId, null, { force: false }),
+    run: async (appId) => { const r = await writeAppSpec(appId, null, { force: false }); return typeof r === "object" ? r.later : undefined; },
     tenantKey: () => currentTenant()?.id ?? "",
     //  예약한 요청의 워크스페이스로 돈다 — 타이머 안에서는 요청 컨텍스트가 없다(org/tenant-context 머리말).
     wrap: (fn) => { const t = currentTenant(); return () => (t ? withTenant(t, fn) : fn()); },
@@ -73,6 +82,12 @@ export async function factsCache(appId: string, key: string, make: () => Promise
   return v;
 }
 
+/** 오늘 몫이 남았나(워크스페이스 하루 상한). */
+export async function specBudgetOk(): Promise<boolean> {
+  return (await (await import("./app-spec-store.js")).specsStartedToday()) < specDailyMax();
+}
+let inflight = 0;
+
 /** 설명을 쓸 수 있나 — 워크스페이스 API 키가 있나. */
 export async function specAvailable(): Promise<boolean> {
   const { workspaceApiKey } = await import("../ai-runs/live.js");
@@ -83,9 +98,10 @@ export interface SpecTarget { versionNo: number | null; contentHash: string | nu
 
 /**
  * 설명 하나를 쓴다. target 이 없으면 그 앱의 최신 판. 결과:
- *  'done' 썼다 · 'busy' 이미 있거나 누가 쓰는 중 · 'unavailable' 키 없음 · 'gone' 앱이나 판이 없다 · 'failed' 못 썼다(행에 까닭).
+ *  'done' 썼다 · 'busy' 이미 있거나 누가 쓰는 중(또는 동시 상한 — 열어서 쓰기는 다음 물음에 다시) · 'unavailable' 키 없음 · 'limit' 오늘 몫을 다 씀 ·
+ *  'gone' 앱이나 판이 없다 · 'failed' 못 썼다(행에 까닭) · {later} 저절로 쓰기를 그만큼 뒤로(앱의 최소 간격 · 동시 상한).
  */
-export async function writeAppSpec(appId: string, target: SpecTarget | null, opts: { force: boolean }): Promise<"done" | "busy" | "unavailable" | "gone" | "failed"> {
+export async function writeAppSpec(appId: string, target: SpecTarget | null, opts: { force: boolean }): Promise<"done" | "busy" | "unavailable" | "gone" | "failed" | "limit" | { later: number }> {
   const store = await import("../org/store/apps.js");
   const specStore = await import("./app-spec-store.js");
   const { workspaceApiKey, workspaceAnthropicWorkspaceId } = await import("../ai-runs/live.js");
@@ -102,14 +118,24 @@ export async function writeAppSpec(appId: string, target: SpecTarget | null, opt
   }
   const apiKey = await workspaceApiKey().catch(() => null);
   if (!apiKey) return "unavailable";
+  if (!(await specBudgetOk())) return "limit";
+  const scheduled = target === null;
+  if (scheduled) {
+    const last = await specStore.lastSpecStart(appId);
+    const wait = last == null ? 0 : last + SPEC_MIN_GAP_MS - Date.now();
+    if (wait > 0) return { later: wait + 1000 };
+  }
+  if (inflight >= SPEC_CONCURRENT) return scheduled ? { later: SPEC_QUIET_MS } : "busy";
   const key = specKeyOf(t.contentHash, t.versionNo);
-  if (!(await specStore.claimAppSpec(appId, key, t.versionNo, opts.force))) return "busy";
+  const claim = await specStore.claimAppSpec(appId, key, t.versionNo, opts.force);
+  if (!claim) return "busy";
+  inflight++;
   const model = (process.env.LIVELY_APP_SPEC_MODEL || "").trim() || SPEC_MODEL_DEFAULT;
   try {
     const facts = specFacts(t.manifest, t.files);
     const input = specInput(t.files);
-    const prev = await specStore.lastOkSpec(appId, key);
-    const prompt = specPrompt({ title: app.title || appId, appId, versionNo: t.versionNo, facts, input, prev: prev && prev.spec ? { versionNo: prev.version_no, doc: prev.spec } : null });
+    const prev = await specStore.prevOkSpec(appId, t.versionNo);
+    const prompt = specPrompt({ title: app.title || appId, appId, versionNo: t.versionNo, facts, input, prev });
     const { singleShot } = await import("../ai-runs/anthropic.js");
     const workspaceId = await workspaceAnthropicWorkspaceId().catch(() => null);
     const ask = (messages?: Array<{ role: "user" | "assistant"; content: string }>) =>
@@ -125,16 +151,18 @@ export async function writeAppSpec(appId: string, target: SpecTarget | null, opt
     }
     if (!doc) {
       const why = !out.ok ? "AI 호출이 실패했어요(" + (out.error || "HTTP " + out.status) + ")" : out.stopReason === "max_tokens" ? "설명이 너무 길어 끝맺지 못했어요" : "AI 답을 읽지 못했어요";
-      await specStore.finishAppSpec(appId, key, { ok: false, error: why, model: out.model ?? model });
+      await specStore.finishAppSpec(appId, key, claim, { ok: false, error: why, model: out.model ?? model });
       logger.warn({ app: appId, key, why }, "[app-spec] 설명을 쓰지 못했다");
       return "failed";
     }
-    await specStore.finishAppSpec(appId, key, { ok: true, spec: doc, model: out.model ?? model, inputTokens: used.i, outputTokens: used.o });
+    await specStore.finishAppSpec(appId, key, claim, { ok: true, spec: doc, model: out.model ?? model, inputTokens: used.i, outputTokens: used.o });
     logger.info({ app: appId, version: t.versionNo, input_tokens: used.i, output_tokens: used.o }, "[app-spec] 설명을 썼다");
     return "done";
   } catch (e) {
     const msg = (e as Error)?.name === "TimeoutError" ? "시간 안에 끝나지 않았어요" : "설명을 쓰다 멈췄어요(" + ((e as Error)?.message ?? String(e)).slice(0, 200) + ")";
-    await specStore.finishAppSpec(appId, key, { ok: false, error: msg, model }).catch(() => {});
+    await specStore.finishAppSpec(appId, key, claim, { ok: false, error: msg, model }).catch(() => {});
     return "failed";
+  } finally {
+    inflight--;
   }
 }

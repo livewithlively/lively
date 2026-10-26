@@ -249,24 +249,31 @@ export function specKeyOf(contentHash: string | null | undefined, versionNo: num
 
 export interface SpecRow {
   content_hash: string; version_no: number | null; status: "running" | "ok" | "failed";
-  spec: AppSpecDoc | null; error: string | null; started_at: number; made_at: number | null; model: string | null;
+  /** 설명이 있나 — 목록은 설명 본문 없이 읽는다(화면이 6초마다 묻는다). 보일 한 줄만 본문을 따로 읽는다(app-spec-store.getAppSpecDoc). */
+  has_spec: boolean; error: string | null; started_at: number; made_at: number | null; model: string | null;
 }
 export const SPEC_RUNNING_STALE_MS = 10 * 60_000;
 
 /**
  * (순수) 보는 판의 명세를 어떻게 보일까. rows = 이 앱의 명세 행(아무 순서).
- *  show = 보일 설명(보는 판 것이 없으면 가장 최근에 쓴 다른 판 것 · stale) · kick = 지금 새로 쓰기 시작할까 · writing = 쓰는 중 · failed = 보는 판의 실패 까닭.
- *  실패는 저절로 다시 쓰지 않는다(열 때마다 돈이 나가지 않게) — 사람이 「다시 만들기」 를 누른다. 쓰는 중이 10분을 넘으면 죽은 것으로 보고 다시 쓴다.
+ *  show = 보일 설명 · stale = 보는 판 것이 아니라 그 앞 판의 것 · kick = 지금 새로 쓰기 시작할까 · writing = 쓰는 중 · failed = 보는 판의 실패 까닭.
+ *  보는 판 것이 없을 때 대신 보이는 설명은 **보는 사람이 볼 수 있는 판(visible)이고 보는 판보다 앞선 판**의 것만이다 — 남의 공개 전 판(isOthersPendingVersion ·
+ *   격리 리뷰 NB-6)을 읽고 쓴 설명이 새지 않게(격리 리뷰 #4632). 실패는 저절로 다시 쓰지 않는다(열 때마다 돈이 나가지 않게) — 사람이 「다시 만들기」 를 누른다.
+ *  쓰는 중이 10분을 넘으면 죽은 것으로 보고 다시 쓴다. 오늘 쓸 수 있는 몫을 다 썼으면(o.budget false) 새로 쓰지 않는다(limit).
  */
-export function decideSpec(key: string, rows: ReadonlyArray<SpecRow>, o: { now: number; available: boolean }): {
-  show: SpecRow | null; stale: boolean; kick: boolean; writing: boolean; failed: string | null; unavailable: boolean;
+export function decideSpec(key: string, versionNo: number | null, rows: ReadonlyArray<SpecRow>, o: { now: number; available: boolean; visible: ReadonlySet<number>; budget: boolean }): {
+  show: SpecRow | null; stale: boolean; kick: boolean; writing: boolean; failed: string | null; unavailable: boolean; limit: boolean;
 } {
   const mine = rows.find((r) => r.content_hash === key) || null;
-  const lastOk = rows.filter((r) => r.status === "ok" && r.spec && r.content_hash !== key).sort((a, b) => (b.made_at ?? 0) - (a.made_at ?? 0))[0] || null;
-  if (mine && mine.status === "ok" && mine.spec) return { show: mine, stale: false, kick: false, writing: false, failed: null, unavailable: false };
-  if (!o.available) return { show: lastOk, stale: !!lastOk, kick: false, writing: false, failed: null, unavailable: true };
+  const before = (r: SpecRow): boolean => r.version_no != null && o.visible.has(r.version_no) && (versionNo == null || r.version_no < versionNo);
+  const lastOk = rows.filter((r) => r.status === "ok" && r.has_spec && r.content_hash !== key && before(r)).sort((a, b) => (b.version_no ?? 0) - (a.version_no ?? 0))[0] || null;
+  const none = { stale: !!lastOk, kick: false, writing: false, failed: null, unavailable: false, limit: false };
+  if (mine && mine.status === "ok" && mine.has_spec) return { ...none, show: mine, stale: false };
+  if (!o.available) return { ...none, show: lastOk, unavailable: true };
   const deadRun = !!mine && mine.status === "running" && o.now - mine.started_at > SPEC_RUNNING_STALE_MS;
-  const writing = !!mine && mine.status === "running" && !deadRun;
   const failed = mine && mine.status === "failed" ? (mine.error || "설명을 쓰지 못했어요") : null;
-  return { show: lastOk, stale: !!lastOk, kick: !mine || deadRun, writing: writing || (!mine || deadRun), failed, unavailable: false };
+  if (failed) return { ...none, show: lastOk, failed };
+  const kick = !mine || deadRun;
+  if (kick && !o.budget) return { ...none, show: lastOk, limit: true };
+  return { ...none, show: lastOk, kick, writing: true };
 }

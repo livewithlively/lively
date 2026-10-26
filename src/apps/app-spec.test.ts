@@ -140,44 +140,67 @@ test("K1 열쇠 — 지문이 있으면 지문, 없으면 판 번호", () => {
 });
 
 const NOW = 10_000_000;
-const row = (k: string, status: SpecRow["status"], o: Partial<SpecRow> = {}): SpecRow => ({ content_hash: k, version_no: 1, status, spec: status === "ok" ? DOC : null, error: null, started_at: NOW - 1000, made_at: status === "running" ? null : NOW - 500, model: null, ...o });
+const row = (k: string, status: SpecRow["status"], o: Partial<SpecRow> = {}): SpecRow => ({ content_hash: k, version_no: 1, status, has_spec: status === "ok", error: null, started_at: NOW - 1000, made_at: status === "running" ? null : NOW - 500, model: null, ...o });
+const ALL = new Set([1, 2, 3, 4, 5]);
+const O = (o: Partial<{ available: boolean; visible: ReadonlySet<number>; budget: boolean }> = {}) => ({ now: NOW, available: true, visible: ALL, budget: true, ...o });
 
 test("D1 보는 판 설명이 있으면 그것 · 새로 쓰지 않는다", () => {
-  const d = decideSpec("h2", [row("h2", "ok"), row("h1", "ok")], { now: NOW, available: true });
+  const d = decideSpec("h2", 2, [row("h2", "ok", { version_no: 2 }), row("h1", "ok")], O());
   assert.equal(d.show!.content_hash, "h2");
-  assert.deepEqual([d.stale, d.kick, d.writing, d.failed, d.unavailable], [false, false, false, null, false]);
+  assert.deepEqual([d.stale, d.kick, d.writing, d.failed, d.unavailable, d.limit], [false, false, false, null, false, false]);
 });
 
-test("D2 보는 판 설명이 없고 예전 것이 있으면 예전 것(stale) + 새로 쓴다", () => {
-  const d = decideSpec("h3", [row("h1", "ok", { made_at: NOW - 900 }), row("h2", "ok", { made_at: NOW - 100 })], { now: NOW, available: true });
+test("D2 보는 판 설명이 없으면 가장 가까운 앞 판 설명(stale) + 새로 쓴다", () => {
+  const d = decideSpec("h3", 3, [row("h1", "ok", { version_no: 1, made_at: NOW - 100 }), row("h2", "ok", { version_no: 2, made_at: NOW - 900 })], O());
   assert.equal(d.show!.content_hash, "h2");
   assert.deepEqual([d.stale, d.kick, d.writing], [true, true, true]);
 });
 
 test("D3 아무것도 없으면 보일 것 없음 + 새로 쓴다", () => {
-  const d = decideSpec("h1", [], { now: NOW, available: true });
+  const d = decideSpec("h1", 1, [], O());
   assert.deepEqual([d.show, d.stale, d.kick, d.writing], [null, false, true, true]);
 });
 
 test("D4 쓰는 중(10분 안) 이면 다시 쓰지 않는다 · 10분 지나면 죽은 것으로 보고 다시", () => {
-  const live = decideSpec("h1", [row("h1", "running", { started_at: NOW - SPEC_RUNNING_STALE_MS + 1000 })], { now: NOW, available: true });
+  const live = decideSpec("h1", 1, [row("h1", "running", { started_at: NOW - SPEC_RUNNING_STALE_MS + 1000 })], O());
   assert.deepEqual([live.kick, live.writing], [false, true]);
-  const dead = decideSpec("h1", [row("h1", "running", { started_at: NOW - SPEC_RUNNING_STALE_MS - 1 })], { now: NOW, available: true });
+  const dead = decideSpec("h1", 1, [row("h1", "running", { started_at: NOW - SPEC_RUNNING_STALE_MS - 1 })], O());
   assert.deepEqual([dead.kick, dead.writing], [true, true]);
 });
 
-test("D5 실패는 저절로 다시 쓰지 않는다 · 예전 설명과 까닭을 보인다", () => {
-  const d = decideSpec("h2", [row("h2", "failed", { error: "AI 답을 읽지 못했어요" }), row("h1", "ok")], { now: NOW, available: true });
+test("D5 실패는 저절로 다시 쓰지 않는다 · 앞 판 설명과 까닭을 보인다", () => {
+  const d = decideSpec("h2", 2, [row("h2", "failed", { version_no: 2, error: "AI 답을 읽지 못했어요" }), row("h1", "ok")], O());
   assert.equal(d.kick, false);
   assert.equal(d.failed, "AI 답을 읽지 못했어요");
   assert.equal(d.show!.content_hash, "h1");
   assert.equal(d.writing, false);
 });
 
-test("D6 키가 없으면 쓰지 않는다 · 있는 예전 설명은 보인다", () => {
-  const d = decideSpec("h2", [row("h1", "ok")], { now: NOW, available: false });
+test("D6 키가 없으면 쓰지 않는다 · 있는 앞 판 설명은 보인다", () => {
+  const d = decideSpec("h2", 2, [row("h1", "ok")], O({ available: false }));
   assert.deepEqual([d.kick, d.unavailable, d.stale], [false, true, true]);
-  assert.deepEqual(decideSpec("h1", [], { now: NOW, available: false }).show, null);
+  assert.deepEqual(decideSpec("h1", 1, [], O({ available: false })).show, null);
+});
+
+test("D7 남의 공개 전 판(볼 수 없는 판)의 설명은 대신 보이지 않는다(격리 리뷰)", () => {
+  //  공개 판 V3 · 그 뒤 다른 사람이 V4 · V5 를 저장(공개 전 · 이 사람에겐 안 보임) · 이 사람이 자기 초안 V6 을 본다 — 앞 판이어도 V4 · V5 설명은 안 된다
+  const rows = [row("h5", "ok", { version_no: 5, made_at: NOW }), row("h4", "ok", { version_no: 4 }), row("h3", "ok", { version_no: 3, made_at: NOW - 900 })];
+  const d = decideSpec("h6", 6, rows, O({ visible: new Set([1, 2, 3, 6]) }));
+  assert.equal(d.show!.content_hash, "h3");
+  //  볼 수 있는 앞 판 설명이 없으면 아무것도 대신 보이지 않는다
+  assert.equal(decideSpec("h6", 6, [row("h5", "ok", { version_no: 5 })], O({ visible: new Set([6]) })).show, null);
+});
+
+test("D8 뒤 판(번호가 큰 판) 설명은 볼 수 있어도 대신 보이지 않는다 · 판 번호 없는 행도", () => {
+  const d = decideSpec("h2", 2, [row("h5", "ok", { version_no: 5 }), row("hx", "ok", { version_no: null })], O());
+  assert.equal(d.show, null);
+});
+
+test("D9 오늘 몫을 다 썼으면 새로 쓰지 않고 limit · 이미 있는 설명은 그대로", () => {
+  const d = decideSpec("h2", 2, [row("h1", "ok")], O({ budget: false }));
+  assert.deepEqual([d.kick, d.limit, d.writing, d.show && d.show.content_hash], [false, true, false, "h1"]);
+  assert.equal(decideSpec("h2", 2, [row("h2", "ok", { version_no: 2 })], O({ budget: false })).limit, false);
+  assert.equal(decideSpec("h2", 2, [row("h2", "running", { version_no: 2 })], O({ budget: false })).writing, true);
 });
 
 // ── 예약기 — 연달아 저장해도 한 번 ──
@@ -209,4 +232,18 @@ test("S2 워크스페이스가 다르면 같은 앱 id 도 따로 · 예약한 �
   s.schedule("a"); tenant = "t2"; s.schedule("a"); tenant = "zz";
   await c.advance(30);
   assert.deepEqual(ran.sort(), ["t1:a", "t2:a"]);
+});
+
+test("S3 돌린 뒤 숫자를 돌려주면 그만큼 뒤 다시 돈다 · 그 사이 새 저장이 오면 그 예약으로 모인다", async () => {
+  const c = fakeClock(); const ran: number[] = []; let n = 0;
+  const s = makeSpecScheduler({ quietMs: 30, run: async () => { n++; ran.push(n); return n === 1 ? 100 : undefined; }, tenantKey: () => "", wrap: (fn) => fn, setTimer: c.setTimer, clearTimer: c.clearTimer });
+  s.schedule("a");
+  await c.advance(30);
+  assert.deepEqual(ran, [1]);
+  assert.equal(s.pending(), 1);
+  await c.advance(99);
+  assert.deepEqual(ran, [1]);
+  await c.advance(1);
+  assert.deepEqual(ran, [1, 2]);
+  assert.equal(s.pending(), 0);
 });

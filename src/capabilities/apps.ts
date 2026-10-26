@@ -992,7 +992,7 @@ const appSpec: Capability = {
   title: "앱 개발 정보(코드 기준 명세)",
   description: "앱의 「개발 정보」 — 지금 보는 판의 코드를 기준으로 한 명세. facts(코드에서 바로 읽은 것: 화면 · 표와 칸 · 권한 · 바깥 호출과 그 자리 파일:줄 · 파일 목록)와 " +
     "spec(AI 가 코드를 읽고 쓴 쉬운 말 설명: 요약 · 화면 · 저장하는 정보 · 기능 · 바깥 서비스와 API · 권한 · 한계 · 이번 버전에서 달라진 점). " +
-    "설명은 새 판이 저장되면 저절로 다시 쓰인다. spec_state: ok(이 판 기준) · stale(예전 판 설명 · 새로 쓰는 중) · writing · failed · unavailable(워크스페이스 API 키 없음). " +
+    "설명은 새 판이 저장되면 저절로 다시 쓰인다. spec_state: ok(이 판 기준) · stale(앞 판 설명 · 새로 쓰는 중) · writing · failed · unavailable(워크스페이스 API 키 없음) · limit(오늘 쓸 몫을 다 씀). " +
     "regenerate:true 면 이 판 설명을 다시 쓴다(실패했을 때). 구성원 누구나(볼 수 있는 앱만).",
   scope: null,
   input: { app_id: z.string(), regenerate: z.boolean().optional() },
@@ -1026,21 +1026,27 @@ const appSpec: Capability = {
       files: row ? await versionFiles(row) : (await currentPackageFiles(installed)).files,
     };
     const available = await run.specAvailable();
-    let rows = await specStore.listAppSpecs(id);
-    if (input.regenerate === true && available) {
-      const t = await loadTarget();
-      void run.writeAppSpec(id, t, { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
-      rows = rows.filter((r) => r.content_hash !== key);   // 지금 보는 판은 «쓰는 중» 으로 답한다
+    const rows = await specStore.listAppSpecs(id);
+    //  대신 보일 앞 판 설명은 이 사람이 볼 수 있는 판의 것만 — app_versions 와 같은 판정(남의 공개 전 판 빼기 · 격리 리뷰 NB-6 · #4632 격리 리뷰).
+    const since = publishedAtMs(installed);
+    const visible = new Set((await store.listAppVersions(id)).filter((v) => !isOthersPendingVersion(installed, v, who, since)).map((v) => v.version_no));
+    const budget = await run.specBudgetOk();
+    let d = decideSpec(key, versionNo, rows, { now: Date.now(), available, visible, budget });
+    //  「다시 만들기」 는 실패한 이 판에만 — 다 쓴 · 쓰는 중인 설명은 그대로 둔다(누를 때마다 돈이 나가지 않게).
+    if (input.regenerate === true && d.failed && available && budget) {
+      void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
+      d = { ...d, failed: null, writing: true };
+    } else if (d.kick) {
+      void run.writeAppSpec(id, await loadTarget(), { force: false }).catch(() => { /* 행에 까닭이 남는다 */ });
     }
-    const d = decideSpec(key, rows, { now: Date.now(), available });
-    if (d.kick && input.regenerate !== true) { const t = await loadTarget(); void run.writeAppSpec(id, t, { force: false }).catch(() => { /* 행에 까닭이 남는다 */ }); }
-    const state = d.unavailable ? "unavailable" : d.show && !d.stale ? "ok" : d.failed && input.regenerate !== true ? "failed" : d.stale ? "stale" : "writing";
+    const state = d.unavailable ? "unavailable" : d.show && !d.stale ? "ok" : d.failed ? "failed" : d.limit ? "limit" : d.stale ? "stale" : "writing";
     const facts = await run.factsCache(id, key, async () => { const t = await loadTarget(); return specFacts(t.manifest, t.files); });
+    const doc = d.show ? await specStore.getAppSpecDoc(id, d.show.content_hash) : null;
     return {
       app_id: id, title: installed.title, version_no: versionNo, content_hash: contentHash, view: pub ? "published" : "installed",
       facts,
       spec_state: state, spec_error: state === "failed" ? d.failed : null,
-      spec: d.show ? { version_no: d.show.version_no, made_at: d.show.made_at ? new Date(d.show.made_at).toISOString() : null, model: d.show.model, doc: d.show.spec } : null,
+      spec: d.show && doc ? { version_no: d.show.version_no, made_at: d.show.made_at ? new Date(d.show.made_at).toISOString() : null, model: d.show.model, doc } : null,
     };
   },
 };

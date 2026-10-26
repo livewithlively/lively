@@ -3,7 +3,7 @@
 //  설명이 예전 판 것이면(stale) 그렇다고 말하고, 표 · 칸은 늘 facts 가 정본이다(설명에만 있는 표는 «코드에 없음» 으로 보이지 않는다).
 import { verName } from './studio-flow.js';
 
-export type SpecState = 'ok' | 'stale' | 'writing' | 'failed' | 'unavailable';
+export type SpecState = 'ok' | 'stale' | 'writing' | 'failed' | 'unavailable' | 'limit';
 export interface SpecCallView { kind: 'lively' | 'sdk' | 'tool' | 'host' | 'model'; name: string; label: string; count: number; where: Array<{ file: string; line: number }> }
 export interface SpecFactsView {
   pages: Array<{ key: string; title: string; entry: string; places: string[] }>;
@@ -37,14 +37,20 @@ const ver = (n: number | null | undefined): string => (n == null ? '' : verName(
 export function specStateLine(r: Pick<SpecResponse, 'spec_state' | 'version_no' | 'spec' | 'spec_error'>): { tone: 'ok' | 'wait' | 'warn'; text: string } {
   const now = ver(r.version_no);
   const was = ver(r.spec ? r.spec.version_no : null);
+  //  지금 버전 설명이 아닌데 앞 버전 설명을 보여 줄 때는 늘 그 버전을 말한다(격리 리뷰 #4632 — V2 설명이 V5 화면에 말없이 서지 않게).
+  const older = r.spec && !isCurrentSpec(r) ? ' 아래 설명은 ' + (was || '예전 버전') + ' 기준이에요.' : '';
   switch (r.spec_state) {
     case 'ok': return { tone: 'ok', text: (now ? now + ' 코드 기준으로 쓴 설명이에요.' : '지금 코드 기준으로 쓴 설명이에요.') + ' 코드가 바뀌면 저절로 다시 써요.' };
     case 'stale': return { tone: 'wait', text: (was ? was + ' 기준 설명을 보여 드리고 있어요. ' : '예전 버전 설명을 보여 드리고 있어요. ') + (now ? now + ' 코드로 다시 쓰는 중이에요.' : '지금 코드로 다시 쓰는 중이에요.') };
     case 'writing': return { tone: 'wait', text: 'AI가 코드를 읽고 설명을 쓰는 중이에요. 1~2분 걸려요. 아래 「코드에서 바로 읽은 것」은 지금도 정확해요.' };
-    case 'failed': return { tone: 'warn', text: '설명을 쓰지 못했어요. ' + (r.spec_error ? r.spec_error.replace(/[.。]?$/, '.') + ' ' : '') + '「다시 만들기」를 눌러 주세요.' };
-    case 'unavailable': return { tone: 'warn', text: 'AI 설명은 워크스페이스 API 키가 있어야 만들어져요. 관리자가 키를 등록하면 저절로 써요. 아래 「코드에서 바로 읽은 것」은 지금도 볼 수 있어요.' };
+    case 'failed': return { tone: 'warn', text: '설명을 쓰지 못했어요. ' + (r.spec_error ? r.spec_error.replace(/[.。]?$/, '.') + ' ' : '') + '「다시 만들기」를 눌러 주세요.' + older };
+    case 'unavailable': return { tone: 'warn', text: 'AI 설명은 워크스페이스 API 키가 있어야 만들어져요. 관리자가 키를 등록하면 저절로 써요. 아래 「코드에서 바로 읽은 것」은 지금도 볼 수 있어요.' + older };
+    case 'limit': return { tone: 'warn', text: '오늘 이 워크스페이스에서 설명을 쓸 수 있는 횟수를 다 썼어요. 내일 다시 열면 써요. 아래 「코드에서 바로 읽은 것」은 지금도 정확해요.' + older };
   }
 }
+
+/** 보이는 설명이 지금 버전 것인가(ok 일 때만). 아니면 «달라진 점» 은 그 버전 이야기라 감춘다. */
+export const isCurrentSpec = (r: Pick<SpecResponse, 'spec_state'>): boolean => r.spec_state === 'ok';
 
 /** 다시 물어볼까 — 쓰는 중이면(쓰는 중 · 예전 판 설명) 계속 본다. */
 export const specShouldPoll = (s: SpecState): boolean => s === 'writing' || s === 'stale';
