@@ -29,7 +29,7 @@ export function logRoot(): string {
 //  새 런타임 하위 디렉이 생기면 여기에 등록한다(= '경로 쓰기 가능성'을 보장하는 단일 지점).
 //  ⚠ 정적 가드레일(state-dir.test.ts)이 놓친 오구성(예: STATE_DIR 이 타 uid 소유)을 부팅 때 **시끄럽게** 드러내는 방어선 —
 //   조용한 EACCES(#606 스캐너처럼 매 tick 실패하고 아무도 모름)를 방지. 비치명(부팅은 계속)이되 root 실패는 error 로그.
-const KNOWN_SUBDIRS = ["repos", "notion-assets"];
+const KNOWN_SUBDIRS = ["repos", "notion-assets", "linear-assets"];
 export async function ensureStateDirs(): Promise<void> {
   const root = stateRoot();
   try {
