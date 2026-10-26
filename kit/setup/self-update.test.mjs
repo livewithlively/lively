@@ -667,7 +667,7 @@ try {
         ? ok("⑯c IDE 만 쓰는 사람도 kit 홈이면 cursor 배선 (#4927)")
         : bad("⑯c IDE 감지", `~/.cursor/hooks.json 에 우리 엔트리가 없다 — hooks=${JSON.stringify(hooks.slice(0, 120))}`);
     }
-    // ⑯c′ #5041 — 윈도우 Cursor 가 WSL·SSH 로 붙는 리눅스 홈: Cursor 가 깐 원격 서버(~/.cursor-server)만 있고 ~/.cursor 는
+    // ⑯c′ #5041 — 윈도우 Cursor 가 WSL 로 붙는 리눅스 홈: Cursor 가 깐 원격 서버(~/.cursor-server)만 있고 ~/.cursor 는
     //  아직 없다(첫 에이전트 대화 전). 그래도 Cursor 는 이 홈의 ~/.cursor/mcp.json 을 읽으니 cursor 를 배선한다(CLI 와 같은 판정).
     {
       const hr = freshHome(null);
@@ -675,7 +675,7 @@ try {
       await runUpdater(hr);
       const hooks = (() => { try { return readFileSync(join(hr, ".cursor", "hooks.json"), "utf8"); } catch { return ""; } })();
       /cursor-adapter\.mjs/.test(hooks)
-        ? ok("⑯c′ Cursor 원격 서버(~/.cursor-server)만 있는 WSL·SSH 홈도 cursor 배선 (#5041)")
+        ? ok("⑯c′ Cursor 원격 서버(~/.cursor-server)만 있는 WSL 홈도 cursor 배선 (#5041)")
         : bad("⑯c′ 원격 감지", `~/.cursor/hooks.json 에 우리 엔트리가 없다 — hooks=${JSON.stringify(hooks.slice(0, 120))}`);
     }
 

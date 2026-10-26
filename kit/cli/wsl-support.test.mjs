@@ -33,8 +33,8 @@ try {
     ["1 강제 켬은 플랫폼과 무관", { platform: "darwin", env: { LIVELY_WSL: "1" }, osrelease: noProc }, true],
     ["2 강제 끔이 WSL_DISTRO_NAME·커널보다 앞선다", { platform: "linux", env: { LIVELY_WSL: "0", WSL_DISTRO_NAME: "Ubuntu" }, osrelease: kernel(WSL2) }, false],
     ["3 WSL_DISTRO_NAME", { platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" }, osrelease: kernel(PLAIN) }, true],
-    ["4 커널 이름 WSL2", { platform: "linux", env: {}, osrelease: kernel(WSL2) }, true],
-    ["5 커널 이름 WSL1(대문자 Microsoft)", { platform: "linux", env: {}, osrelease: kernel(WSL1) }, true],
+    ["4 커널 이름 WSL2", { platform: "linux", env: {}, osrelease: kernel(WSL2), inContainer: () => false }, true],
+    ["5 커널 이름 WSL1(대문자 Microsoft)", { platform: "linux", env: {}, osrelease: kernel(WSL1), inContainer: () => false }, true],
     ["6 일반 리눅스", { platform: "linux", env: {}, osrelease: kernel(PLAIN) }, false],
     ["7 커널 이름을 못 읽음", { platform: "linux", env: {}, osrelease: noProc }, false],
     ["8 맥에 떠도는 WSL_DISTRO_NAME", { platform: "darwin", env: { WSL_DISTRO_NAME: "Ubuntu" }, osrelease: kernel(WSL2) }, false],
@@ -42,6 +42,10 @@ try {
     ["10 빈 강제값은 자동 판정", { platform: "linux", env: { LIVELY_WSL: "", WSL_DISTRO_NAME: "Ubuntu" }, osrelease: kernel(PLAIN) }, true],
     ["11 모르는 강제값은 자동 판정", { platform: "linux", env: { LIVELY_WSL: "yes" }, osrelease: kernel(PLAIN) }, false],
     ["12 빈 WSL_DISTRO_NAME 은 없는 것", { platform: "linux", env: { WSL_DISTRO_NAME: "" }, osrelease: kernel(PLAIN) }, false],
+    // WSL2 커널 위의 컨테이너(도커 데스크톱·dev container)는 커널 이름이 같다 — 커널 갈래만 막는다(격리 리뷰 #5041).
+    ["13 컨테이너 안의 WSL2 커널 이름은 WSL 이 아니다", { platform: "linux", env: {}, osrelease: kernel(WSL2), inContainer: () => true }, false],
+    ["14 컨테이너여도 WSL_DISTRO_NAME 은 WSL 이다", { platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" }, osrelease: kernel(PLAIN), inContainer: () => true }, true],
+    ["15 컨테이너가 아니면 커널 이름으로 WSL", { platform: "linux", env: {}, osrelease: kernel(WSL2), inContainer: () => false }, true],
   ];
   for (const [name, input, want] of S1) {
     const got = isWsl(input);
@@ -51,11 +55,12 @@ try {
   // ── S2. 승인 주소 열기 ───────────────────────────────────────────────────────
   //  실제 승인 주소 모양(`…/ui/#/activate?code=…`) + & 를 함께 넣는다 — explorer.exe 가 `=` 든 주소를 폴더로 연 보고가 있는 자리.
   const URL_ = "https://lively.example.com/ui/#/activate?code=WXYZ-8899&x=1";
-  const WIN_URL = { cmd: "rundll32.exe", args: ["url.dll,FileProtocolHandler", URL_] };   // 윈도우 주소 처리기
+  // 윈도우 주소 처리기. rundll32 가 없을 때(appendWindowsPath=false·상호운용 끔) WSLg 가 있으면 xdg-open 으로 물러선다.
+  const WIN_URL = (gui) => ({ cmd: "rundll32.exe", args: ["url.dll,FileProtocolHandler", URL_], fallback: gui ? { cmd: "xdg-open", args: [URL_] } : null });
   const S2 = [
-    ["1 WSL · DISPLAY 있음 → 윈도우 주소 처리기", { wsl: true, platform: "linux", env: { DISPLAY: ":0" } }, WIN_URL],
-    ["2 WSL · WSLg(DISPLAY·WAYLAND)가 있어도 리눅스 쪽으로 새지 않는다", { wsl: true, platform: "linux", env: { DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" } }, WIN_URL],
-    ["3 WSL · DISPLAY 없어도 연다", { wsl: true, platform: "linux", env: {} }, WIN_URL],
+    ["1 WSL · DISPLAY 있음 → 윈도우 주소 처리기(못 열면 xdg-open)", { wsl: true, platform: "linux", env: { DISPLAY: ":0" } }, WIN_URL(true)],
+    ["2 WSL · WSLg(DISPLAY·WAYLAND)가 있어도 먼저 윈도우 쪽(리눅스 쪽은 물러설 때만)", { wsl: true, platform: "linux", env: { DISPLAY: ":0", WAYLAND_DISPLAY: "wayland-0" } }, WIN_URL(true)],
+    ["3 WSL · DISPLAY 없어도 연다(물러설 자리 없음)", { wsl: true, platform: "linux", env: {} }, WIN_URL(false)],
     ["4 리눅스 · DISPLAY", { wsl: false, platform: "linux", env: { DISPLAY: ":0" } }, { cmd: "xdg-open", args: [URL_] }],
     ["5 리눅스 · WAYLAND_DISPLAY 만", { wsl: false, platform: "linux", env: { WAYLAND_DISPLAY: "wayland-0" } }, { cmd: "xdg-open", args: [URL_] }],
     ["6 리눅스 · 헤드리스", { wsl: false, platform: "linux", env: {} }, null],
@@ -70,6 +75,17 @@ try {
   {
     const got = browserCommand(URL_, { wsl: true, platform: "linux", env: {} });
     check("S2-9 주소(& ? = #)는 그대로 마지막 인자 하나", !!got && got.args[got.args.length - 1] === URL_ && got.args.filter((a) => a.includes(URL_)).length === 1, JSON.stringify(got));
+  }
+  // 10 — http(s) 가 아닌 주소는 어느 플랫폼에서도 열지 않는다(주소는 게이트웨이 응답에서 온다 — 여는 명령들은 파일·다른 프로토콜도 연다).
+  {
+    const bad = ["file:///etc/passwd", "javascript:alert(1)", "C:\\Windows\\System32\\calc.exe", "", null];
+    const opened = [];
+    for (const u of bad) for (const [platform, wsl, env] of [["linux", true, { DISPLAY: ":0" }], ["linux", false, { DISPLAY: ":0" }], ["darwin", false, {}], ["win32", false, {}]]) {
+      const got = browserCommand(u, { platform, wsl, env });
+      if (got !== null) opened.push(`${platform}${wsl ? "+wsl" : ""} ${JSON.stringify(u)}`);
+    }
+    check("S2-10 http(s) 가 아닌 주소는 열지 않는다", opened.length === 0, opened.join(" · "));
+    check("S2-10 대조 — 대문자 HTTPS 도 연다", browserCommand("HTTPS://x.example.com/a", { platform: "darwin", wsl: false, env: {} })?.cmd === "open");
   }
   // 배선 — WSL 판정을 넘기지 않으면 env·플랫폼으로 isWsl 을 불러 정한다(두 함수가 실제로 이어져 있다).
   {
@@ -93,7 +109,7 @@ try {
     ["6b null", null, []],
     ["6c undefined", undefined, []],
     ["7 오류 문구", "ERROR: The system was unable to find the specified registry key or value.\r\n", []],
-    ["8 다른 값 줄은 무시", [`${KEY}\\{a1}`, "    BasePath    REG_SZ    C:\\Users\\HJ\\AppData\\Local\\Packages\\Ubuntu", "    DistributionName    REG_SZ    Ubuntu", `${KEY}`, "    DefaultDistribution    REG_SZ    {a1}"].join("\r\n"), ["Ubuntu"]],
+    ["8 다른 값 줄은 무시", [`${KEY}\\{a1}`, "    BasePath    REG_SZ    C:\\Users\\tester\\AppData\\Local\\Packages\\Ubuntu", "    DistributionName    REG_SZ    Ubuntu", `${KEY}`, "    DefaultDistribution    REG_SZ    {a1}"].join("\r\n"), ["Ubuntu"]],
   ];
   for (const [name, input, want] of S3) {
     const got = parseWslDistros(input);
@@ -146,7 +162,7 @@ try {
     JSON.stringify({ remote, none, ide }));
   check("S5-3 ~/.cursor 만 있는 홈은 감지(종전 — 대조군)", ide.detected?.includes("cursor") && ide.installed === true, JSON.stringify(ide));
   check("S5-2 아무것도 없는 홈은 감지 안 함", Array.isArray(none.detected) && !none.detected.includes("cursor") && none.installed === false, JSON.stringify(none));
-  check("S5-1 ★ ~/.cursor-server 만 있는 홈(WSL·SSH 원격)도 감지 — 설치 대상과 status 가 같은 판정",
+  check("S5-1 ★ ~/.cursor-server 만 있는 홈(윈도우 Cursor 가 WSL 로 붙는 홈)도 감지 — 설치 대상과 status 가 같은 판정",
     remote.detected?.includes("cursor") && remote.installed === true, JSON.stringify(remote));
 } finally {
   try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ }

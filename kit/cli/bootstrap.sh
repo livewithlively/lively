@@ -76,12 +76,16 @@ say_old_sys_node() {
 #  Cursor 는 WSL 안의 훅·MCP 를 셸 설정(.bashrc) 없이 띄울 수 있다. 그러면 nvm 같은 도구로 깐 node 가 PATH 에 없어
 #  훅은 `node: not found`, MCP 심은 «Node 를 찾을 수 없습니다» 로 죽는다(실측: 같은 설치가 nvm PATH 가 있으면 도구 460개 ·
 #  맥락 7,010자, 없으면 0 · 0). 전용 런타임은 절대경로라 심과 훅(user-install.mjs NODEBIN)이 PATH 와 무관해진다.
-#  내려받기에 실패하면 시스템 node 로 계속한다 — 설치를 막지 않는다(종전 동작으로 물러선다).
-#  판정: LIVELY_WSL(1|0 — 시험·사람이 강제) > WSL 이 프로세스마다 거는 WSL_DISTRO_NAME > 커널 이름의 microsoft
-#  (`su -` 처럼 env 를 지운 셸). CLI 의 isWsl(lively.mjs)과 같은 판정이다.
+#  전용 런타임을 받거나 풀거나 돌리지 못하면 시스템 node 로 계속한다 — 설치를 막지 않는다(종전 동작으로 물러선다).
+#  판정: LIVELY_WSL(1|0 — 시험·사람이 강제) > 리눅스가 아니면 아님 > WSL 이 프로세스마다 거는 WSL_DISTRO_NAME >
+#  커널 이름의 microsoft(`su -` 처럼 env 를 지운 셸). 커널 이름은 WSL2 커널 위의 컨테이너(도커 데스크톱·dev container)도
+#  같으니 컨테이너 표식이 있으면 그 갈래는 WSL 로 치지 않는다(is-wsl 패키지와 같은 판단). CLI 의 isWsl(lively.mjs)과 같은 판정이다.
 is_wsl() {
   case "${LIVELY_WSL:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  [ "$(uname -s 2>/dev/null)" = Linux ] || return 1
   [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
+  [ -f /.dockerenv ] && return 1
+  [ -f /run/.containerenv ] && return 1
   grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null
 }
 PREFER_OWN=0
@@ -123,9 +127,17 @@ else
   NMAJ="$(printf '%s' "${NVER#v}" | cut -d. -f1)"
   if ! { [ -n "$NMAJ" ] && [ "$NMAJ" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; }; then NVER="$NODE_FALLBACK"; fi
   BASE="node-${NVER}-${NOS}-${NARCH}"
+  # 여기 왔으면 current 가 가리키는 node 는 못 쓰는 것이다(위에서 node_usable 이 거절) — 깨진 링크를 걷는다. 남겨 두면 심(-x)과
+  #  설치기(existsSync)가 그 node 를 계속 고른다(#5041 격리 리뷰). 새로 받으면 다시 건다.
+  if [ -L "$NODE_DIR/current" ]; then rm -f "$NODE_DIR/current"; fi
   TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT INT TERM
+  # Ctrl-C·종료 신호는 설치를 **멈춘다**. 종전 트랩(`rm` 만 하고 계속)은 셸을 되살려서, 끊긴 내려받기를 WSL 에선 «실패» 로
+  #  읽고 시스템 node 로 계속 갔다(#5041 격리 리뷰 실측). 임시 폴더는 EXIT 가 치운다.
+  trap 'rm -rf "$TMP"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   info "Node ${NVER} (${NARCH}) 내려받는 중… (~30MB · 관리자 권한 불필요)"
+  RT_FAIL=""
   if curl -fsSL --max-time 300 "https://nodejs.org/dist/${NVER}/${BASE}.tar.gz" -o "$TMP/node.tgz"; then
     # 무결성 검증(공급망 위생): SHASUMS256 을 받으면 **불일치 시 중단**. 못 받으면 TLS 다운로드로 진행(경고).
     #  ⚠ 불일치는 WSL 이어도 시스템 node 로 물러서지 않는다 — 내려받기 실패와 달리 변조 신호다.
@@ -143,19 +155,28 @@ else
     fi
     mkdir -p "$NODE_DIR"
     rm -rf "${NODE_DIR:?}/$BASE"
-    tar -xzf "$TMP/node.tgz" -C "$NODE_DIR" || die "Node 압축 해제 실패."
-    ln -sfn "$NODE_DIR/$BASE" "$NODE_DIR/current"   # 버전 무관 안정 경로(심·훅·uninstall 이 참조)
-    NODE="$NODE_DIR/current/bin/node"
-    [ -x "$NODE" ] || die "Node 설치 확인 실패."
-    rm -rf "$TMP"; trap - EXIT INT TERM
-    ok "Node 설치 완료: ~/.lively/runtime/$BASE ($("$NODE" -v))"
-  elif [ "$PREFER_OWN" = 1 ] && node_usable "$SYS_NODE"; then
-    # WSL 인데 내려받지 못했다 — 시스템 node 로 계속한다(종전 동작). 훅·MCP 가 PATH 에 기대게 되니 다시 하라고 남긴다.
-    rm -rf "$TMP"; trap - EXIT INT TERM
-    NODE="$SYS_NODE"
-    info "Node 다운로드 실패 — 시스템 node($("$NODE" -v))로 계속합니다. Cursor 에서 라이블리가 붙지 않으면 네트워크를 확인하고 이 명령을 다시 실행하세요."
+    # 풀고 **이 기계에서 실제로 도는지 본 뒤에만** current 를 건다. 받은 것이 프록시가 돌려준 HTML 이거나 여기서 못 도는
+    #  바이너리(musl·낡은 glibc)면 current 가 깨진 node 를 가리키고, 심·훅이 전부 그 node 를 쓰게 된다(#5041 격리 리뷰).
+    if tar -xzf "$TMP/node.tgz" -C "$NODE_DIR" 2>/dev/null && node_usable "$NODE_DIR/$BASE/bin/node"; then
+      ln -sfn "$NODE_DIR/$BASE" "$NODE_DIR/current"   # 버전 무관 안정 경로(심·훅·uninstall 이 참조)
+      NODE="$NODE_DIR/current/bin/node"
+      ok "Node 설치 완료: ~/.lively/runtime/$BASE ($("$NODE" -v))"
+    else
+      rm -rf "${NODE_DIR:?}/$BASE"
+      RT_FAIL="내려받은 Node 를 풀거나 실행하지 못했습니다"
+    fi
   else
-    die "Node 다운로드 실패 — 네트워크를 확인하고 다시 실행하세요."
+    RT_FAIL="Node 다운로드 실패"
+  fi
+  rm -rf "$TMP"; trap - EXIT INT TERM
+  if [ -n "$RT_FAIL" ]; then
+    if [ "$PREFER_OWN" = 1 ] && node_usable "$SYS_NODE"; then
+      # WSL 인데 전용 런타임을 못 깔았다 — 시스템 node 로 계속한다(종전 동작). 훅·MCP 가 PATH 에 기대게 되니 다시 하라고 남긴다.
+      NODE="$SYS_NODE"
+      info "$RT_FAIL — 시스템 node($("$NODE" -v))로 계속합니다. Cursor 에서 라이블리가 붙지 않으면 네트워크를 확인하고 이 명령을 다시 실행하세요."
+    else
+      die "$RT_FAIL — 네트워크를 확인하고 다시 실행하세요. 계속 안 되면 Node ${NODE_MIN_MAJOR} 이상을 직접 설치한 뒤(https://nodejs.org) 다시 실행하세요."
+    fi
   fi
 fi
 

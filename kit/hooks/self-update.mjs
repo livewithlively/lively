@@ -204,7 +204,7 @@ async function harnessState() {
     }
   }
   // cursor IDE(#4927) — IDE 만 쓰는 사람은 PATH 에 cursor-agent 가 없어 위 PATH 감지가 못 잡는다. ~/.cursor(IDE·CLI 가 첫 실행에
-  //  만든다)나 ~/.cursor-server(#5041 — 윈도우 Cursor 가 WSL·SSH 로 이 홈에 붙을 때 까는 원격 서버)가 있으면 쓰는 하네스로 본다
+  //  만든다)나 ~/.cursor-server(#5041 — 윈도우 Cursor 가 WSL 로 이 홈에 붙을 때 까는 원격 서버 · SSH 원격도 같은 자리)가 있으면 쓰는 하네스로 본다
   //  — CLI detectHarnesses(cursorPresent)와 **같은 판정**(두 판정이 갈리면 그게 결함 — 머리말 데드락 실측).
   //  ⚠ PATH 보탬과 같은 게이트: kit 이 설치된 홈에서만(«엉뚱한 머신» 계약 — self-update.test ⑧).
   if (existsSync(join(LIVELY, "hooks")) && !out.includes("cursor")
