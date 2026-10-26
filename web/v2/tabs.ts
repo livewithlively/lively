@@ -32,7 +32,7 @@ export interface ShellTab {
   aside: HTMLElement;          // v2-aside 안의 이 탭 우패널
   rendered: boolean;           // 게으른 렌더 — 처음 활성화될 때 그린다
   noAside: boolean;            // 앱 프레임 탭은 우패널이 없다
-  chat: { id: string; destroy(): void; update(t: any): void; setFilesOn(on: boolean): void; viewMode?(): 'term' | 'chat'; reshown?(): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
+  chat: { id: string; destroy(): void; update(t: any): void; setFilesOn(on: boolean): void; viewMode?(): 'term' | 'chat'; reshown?(): void; revivedHere?(): boolean } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
   appInstanceId: string | null; // 이 탭이 연 AppInstance — 탭:인스턴스 = 1:1. legacy 화면은 null.
   appId: string | null;
   appView: { destroy(): void } | null; // generic 앱 iframe 등 탭별 정리 핸들

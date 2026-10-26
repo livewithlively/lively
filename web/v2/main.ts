@@ -2267,6 +2267,9 @@ function viewedSessionId(): string {
   //  #4783 — 꺼진 세션이라도 **안 본 결과가 남은 채 꺼졌으면**(작업 완료 점) 보고 있다는 도장을 찍는다 — 서버가 그 표시를 걷는다(/seen).
   //   안 찍으면 그 세션을 열어 봐도 초록점이 영영 안 꺼진다. 그 밖의 꺼진 세션은 종전대로 안 찍는다(tmux 옵션을 건드릴 일이 없다).
   if (s && s.live && !s.alive && s.stopDot === 'done') return s.id;
+  //  #4996 — 이 탭이 방금 같은 id 로 되살렸으면 목록이 아직 «중단됨» 이어도 산 세션이다(session-chat revivedHere). 목록을 기다리면
+  //   8~16초 도장이 안 나가, 그새 들어온 사람이 «아무도 안 본다» 로 판정해 같은 터미널에 붙는다(매니지드 실측).
+  if (s && s.live && !s.alive && cur.chat && cur.chat.id === s.id && cur.chat.revivedHere?.()) return s.id;
   return s && s.live && s.alive ? s.id : '';
 }
 //  #3870 — 얼굴 줄에 **내 자리를 둔 세션**. 다른 화면으로 옮기면 그 자리를 곧바로 걷는다(아래 leaveViewed).

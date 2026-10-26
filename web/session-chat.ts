@@ -106,6 +106,9 @@ export interface SessionChatHandle {
   viewMode(): 'term' | 'chat';
   /** #4996 셸이 뒤에 두었던 이 탭을 다시 켰다(새로 그리지 않고) — 그새 다른 사람이 터미널을 쥐었을 수 있어 처음 열 때의 판정을 다시 한다. */
   reshown(): void;
+  /** #4996 이 화면이 방금 같은 id 로 되살렸다(reviveInPlace) — 목록은 아직 «중단됨» 이어도(최대 8초 늦다) 박스는 산다.
+   *  셸의 열람 도장이 목록 대신 이 값을 본다. 안 보면 되살린 사람이 그동안 «아무도 안 본다» 로 남아 나중 사람이 터미널을 뺏는다. */
+  revivedHere(): boolean;
   /** 우패널이 스스로 파일 탐색기를 닫았을 때 상단바 [파일] 불을 맞춘다(#1744 — 토글은 하나여야 한다). */
   setFilesOn(on: boolean): void;
   destroy(): void;
@@ -3258,6 +3261,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     update(t) { applyRow(trustRevived(t)); },
     viewMode() { return viewNow(); },
     reshown() { reshown(); },
+    revivedHere() { return !destroyed && revivedAt > 0 && Date.now() - revivedAt < REVIVE_TRUST_MS && !goneByFrame; },
     destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
