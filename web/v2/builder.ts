@@ -21,7 +21,8 @@ import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppS
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, verJ, verName, type StudioPlace } from '../lib/studio-flow.js';
-import { builderRoute, builderSeeRoute, builderSessionName, builderSessionWhat, draftStageText, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { builderRoute, builderSeeRoute, builderTabTitle, builderSessionName, builderSessionWhat, draftStageText, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { renderAppSpec } from './app-spec-page.js';   // #4632 앱 「개발 정보」
 import { FOLDER_LIMIT_MAX_GB, folderLine, folderSavedText, parseFolderInput } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
 
 export type { BuilderEnv } from './builder-model.js';
@@ -32,7 +33,7 @@ const when = (ms: number): string => {
   return d.toDateString() === now.toDateString() ? '오늘 ' + hm : (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
 };
 
-interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number }
+interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; spec: HTMLElement; specKey: string; specStop: (() => void) | null; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number }
 const views = new WeakMap<HTMLElement, View>();
 //  지우는 중인 만들던 앱 — 지우는 사이 목록이 다시 그려져 새 카드의 단추로 한 번 더 지우지 않게(격리 리뷰).
 const deleting = new Set<string>();
@@ -85,8 +86,7 @@ function setSel(v: View, key: string): void {
 }
 
 export function builderTabTitleFor(segs: readonly string[], params: { get(k: string): string | null }): string {
-  const w = parseBuilderRoute(segs, params);
-  return w.view === 'new' ? '앱빌더 · 새 앱' : w.view === 'resume' ? '앱빌더 · 이어서' : w.view === 'app' ? (w.how === 'copy' ? '앱빌더 · 사본' : '앱빌더 · 고치기') : '앱빌더';
+  return builderTabTitle(parseBuilderRoute(segs, params));
 }
 
 /** 앱빌더를 그린다 — 주소가 정본. 목록이면 목록을 다시 읽고, 만들기 주소면 그 자리에 앱 만들기 화면을 세운다. */
@@ -100,17 +100,30 @@ export function renderBuilderApp(host: HTMLElement, segs: readonly string[], par
     const vv = v;
     vv.watch = window.setInterval(() => { if (!vv.root.isConnected) { window.clearInterval(vv.watch); if (vv.studioKey) { vv.studioKey = ''; closeAppStudio(); } } }, 2000);
   }
-  if (where.view === 'list') {
+  if (where.view === 'spec') {
+    //  개발 정보 — 「‹ 앱빌더」 는 그 앱 카드를 고른 목록으로 돌아간다. 같은 앱을 다시 그리는 것(해시 재적용)이면 그대로 둔다.
+    if (v.studioKey) { v.studioKey = ''; closeAppStudio(); }
+    v.top.hidden = true; v.body.hidden = true; v.stage.hidden = true; v.spec.hidden = false;
+    v.sel = where.id;
+    if (v.specKey !== where.id) { closeSpec(v); v.spec.hidden = false; v.specKey = where.id; v.specStop = renderAppSpec(v.spec, where.id, () => { location.hash = builderRoute('list', where.id); }); }
+  } else if (where.view === 'list') {
+    closeSpec(v);
     if (v.studioKey) { v.studioKey = ''; closeAppStudio(); }
     v.stage.hidden = true; v.top.hidden = false; v.body.hidden = false;
     v.sel = where.id;   // 고른 카드도 주소가 정본이다(#/builder?sel=<앱> — 사이드바의 앱 줄이 이 주소로 온다)
     void paintList(v, env);
   } else {
+    closeSpec(v);
     v.top.hidden = true; v.body.hidden = true; v.stage.hidden = false;
     openStudio(v, where, env);
   }
   //  앱빌더 안의 이동은 셸이 다시 그리지 않는다 — 사이드바의 켜진 줄은 여기서 맞춘다.
   env.redrawSide?.();
+}
+
+/** 개발 정보 화면을 걷는다(다시 묻기를 멈추고 비운다). */
+function closeSpec(v: View): void {
+  v.specStop?.(); v.specStop = null; v.specKey = ''; v.spec.hidden = true; v.spec.replaceChildren();
 }
 
 function build(env: BuilderEnv): View {
@@ -119,8 +132,10 @@ function build(env: BuilderEnv): View {
   const panel = el('div', { class: 'v2-bld-panel' });
   const body = el('div', { class: 'v2-bld-body' }, list, panel);
   const stage = el('div', { class: 'v2-bld-stage', hidden: true });
-  const root = el('div', { class: 'v2-bld' }, top, body, stage);
-  const v: View = { root, top, body, list, panel, stage, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0 };
+  //  #4632 「개발 정보」(코드 기준 명세 · v2/app-spec-page.ts)는 만들기 화면과 다른 자리에 선다 — 오가도 만들던 화면을 건드리지 않게.
+  const spec = el('div', { class: 'v2-bld-stage', hidden: true });
+  const root = el('div', { class: 'v2-bld' }, top, body, stage, spec);
+  const v: View = { root, top, body, list, panel, stage, spec, specKey: '', specStop: null, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0 };
   void env;
   return v;
 }
@@ -212,7 +227,9 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
         own || a.canEdit
           ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '고치기', title: '말과 코멘트로 이 앱을 고쳐 다음 버전을 만들어요', onclick: () => { location.hash = builderRoute('app', a.id, 'edit'); } })
           : el('button', { class: 'v2-bld-pri sm', type: 'button', text: '내 사본 떠서 고치기', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
-        own ? null : el('button', { class: 'btn btn-ghost', type: 'button', text: '사본', title: '원본은 그대로 두고 내 사본을 고쳐요', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } })));
+        own ? null : el('button', { class: 'btn btn-ghost', type: 'button', text: '사본', title: '원본은 그대로 두고 내 사본을 고쳐요', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
+        //  #4632 코드 기준 명세(원준 2026-10-26 «(i) 같은거나 … 개발 정보? 뭐 이런 느낌이 드는 버튼»)
+        el('button', { class: 'btn btn-ghost v2-bld-info', type: 'button', title: '이 앱이 코드로 어떻게 돌아가는지 쉬운 말로 봐요', onclick: () => { location.hash = builderRoute('spec', a.id); } }, icon('info', 'v2-ic'), el('span', { text: '개발 정보' }))));
     return card;
   };
   //  만들던 앱 — 단계는 아래 줄에 한 번만(원준 2026-10-14 «세부 기획 정하기가 두 번이네 · 뱃지 빼버려»). 카드를 누르면 오른쪽에 이어서 · 지우기.
@@ -376,6 +393,8 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     }, !a.canEdit), el('small', { text: pl ? PLACE[pl].sub : '아직 정하지 않았어요. 고르면 다음 수정부터 그 자리에 맞춰요.' })),
     tog(a.enabled, a.enabled ? '켜 둠: 앱 찾기와 세션 위젯 목록에 보여요' : '꺼 둠: 아무도 열 수 없어요', () => { void post('/enabled', { enabled: !a.enabled }, a.enabled ? '껐어요' : '켰어요'); }),
     tog(!hidden.has(padTileId('installed', a.id)), '앱 찾기에 보이기 (끄면 내 앱 찾기에서만 숨겨요)', () => { togglePadHidden(padTileId('installed', a.id)); refresh(); }),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '개발 정보' }), el('small', { text: '코드를 기준으로 쓴 이 앱의 명세예요. 쓰는 API, 저장하는 정보, 기능이 어떻게 돌아가는지 보여 줘요. 코드가 바뀌면 저절로 다시 써요.' }),
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '개발 정보 보기', onclick: () => { location.hash = builderRoute('spec', a.id); } })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: 'AI 지침' }), el('small', { text: a.hasInstructions ? '세션에 붙으면 AI가 이 앱의 지침을 함께 읽어요' : '이 앱에는 AI가 읽을 지침이 없어요. 「고치기」에서 「AI 지침」을 부탁하면 생겨요.' })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '버전' }), vers),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '만든 사람 · 세션' }), el('small', {}, el('span', { text: (by === m.id ? '나' : by || '모름') + (sid ? ' · 앱빌딩 세션 ' : '') }),

@@ -109,6 +109,7 @@ export async function removeInstalledApp(app: NonNullable<Awaited<ReturnType<typ
   const wasAttached = await pruneSessionApps(id);   // #4225 세션에 붙어 있던 기록도 — 같은 규칙(FK 없음).
   await store.pruneMemberPrefs(id);        // #4601 구성원별 개인 설정도 — 같은 규칙(FK 없음).
   await pruneAppFolderUsage(id);           // #4785 앱 폴더 사용량 행도 — 같은 규칙(FK 없음). 폴더와 그 쿼터는 CP 정비가 다룬다.
+  await (await import("./app-spec-store.js")).pruneAppSpecs(id);   // #4632 「개발 정보」 설명도 — 같은 규칙(FK 없음).
   await store.deleteApp(id, ctx);
   //  #4684 — 그 세션들에 붙어 있던 앱 폴더를 뗀다(기록이 지워졌으니 맞추면 빠진다). 기다리지 않는다 — 제거는 이미 끝났다.
   if (wasAttached.length) void resyncSessions(wasAttached, "앱 제거");

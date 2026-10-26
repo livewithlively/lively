@@ -82,7 +82,7 @@ export function builderSessionWhat(label: string | null | undefined): string {
   return (p ? l.slice(p.length) : l).trim();
 }
 
-export type BuilderView = 'list' | 'new' | 'resume' | 'app';
+export type BuilderView = 'list' | 'new' | 'resume' | 'app' | 'spec';
 export interface BuilderWhere { view: BuilderView; id: string; how: 'edit' | 'copy' }
 /** 주소 뒤 칸을 읽는다 — 모르는 꼴은 목록. 목록의 id 는 고른 카드(?sel= — 앱 id, 만들던 앱이면 «draft:<세션>»). */
 export function parseBuilderRoute(segs: readonly string[], params?: { get(k: string): string | null } | null): BuilderWhere {
@@ -93,6 +93,7 @@ export function parseBuilderRoute(segs: readonly string[], params?: { get(k: str
   if (s1 === 'new') return { view: 'new', id: '', how };
   if (s1 === 's' && s2) return { view: 'resume', id: s2, how };
   if (s1 === 'app' && s2) return { view: 'app', id: s2, how };
+  if (s1 === 'spec' && s2) return { view: 'spec', id: s2, how };   // #4632 앱 「개발 정보」(코드 기준 명세)
   return { view: 'list', id: s1 ? '' : String((params && params.get('sel')) || '').trim(), how };
 }
 /** 주소 한 줄(#/builder/…?…)을 읽는다 — 앱빌더 주소가 아니면 null. 사이드바가 지금 탭의 주소로 켜진 줄을 정할 때 쓴다. */
@@ -108,6 +109,7 @@ export function builderRoute(view: BuilderView, id = '', how: 'edit' | 'copy' = 
   if (view === 'new') return '#/builder/new';
   if (view === 'resume') return '#/builder/s/' + encodeURIComponent(id);
   if (view === 'app') return '#/builder/app/' + encodeURIComponent(id) + (how === 'copy' ? '?how=copy' : '');
+  if (view === 'spec') return '#/builder/spec/' + encodeURIComponent(id);
   return id ? '#/builder?sel=' + encodeURIComponent(id) : '#/builder';
 }
 /** ③ 「세션 위젯으로 보기」 · 「앱 화면으로 보기」 — 만들고 있는 앱을 **실제 화면**으로 써 보는 중(#4632).
@@ -129,7 +131,7 @@ export function builderSeeing(hash: string | null | undefined): BuilderSee | '' 
 export function builderSideKey(where: BuilderWhere): string {
   if (where.view === 'new') return 'new';
   if (where.view === 'resume') return 'draft:' + where.id;
-  if (where.view === 'app') return 'app:' + where.id;
+  if (where.view === 'app' || where.view === 'spec') return 'app:' + where.id;
   if (!where.id) return 'all';
   return where.id.startsWith('draft:') ? where.id : 'app:' + where.id;
 }
@@ -138,6 +140,7 @@ export function builderTabTitle(where: BuilderWhere): string {
   if (where.view === 'new') return '앱빌더 · 새 앱';
   if (where.view === 'resume') return '앱빌더 · 이어서';
   if (where.view === 'app') return where.how === 'copy' ? '앱빌더 · 사본' : '앱빌더 · 고치기';
+  if (where.view === 'spec') return '앱빌더 · 개발 정보';
   return '앱빌더';
 }
 /** 만들던 앱 한 줄의 상태 글 — 앱이 아직 없으면 ② 카드(첫 판을 만드는 중이면 ③ 만드는 중), 있으면 그 단계. 다섯 단계(studio-flow STAGES). */

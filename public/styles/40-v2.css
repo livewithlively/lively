@@ -2143,6 +2143,48 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-bld-danger { color: #B0323F !important; }
 .v2-bld-folder { display: inline-flex; align-items: center; gap: 6px; width: max-content; }
 .v2-bld-num { width: 84px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg); color: var(--ink); }
+.v2-bld-info .v2-ic { width: 14px; height: 14px; }
+.v2-bld-acts .v2-bld-info { display: inline-flex; align-items: center; gap: 4px; }
+/* 앱 「개발 정보」(#4632 · v2/app-spec-page.ts) — 코드 기준 명세. 위는 AI 가 쓴 쉬운 말, 아래 「코드에서 바로 읽은 것」 */
+.v2-spec { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--gray-bg-2, #F6F8FB); }
+.v2-spec-top { flex: none; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 20px; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.v2-spec-top h1 { margin: 0; font-size: 16px; font-weight: 800; min-width: 0; overflow-wrap: anywhere; }
+.v2-spec-scroll { flex: 1; min-height: 0; overflow: auto; }
+.v2-spec-body { max-width: 920px; margin: 0 auto; padding: 18px 20px 40px; display: grid; gap: 14px; min-width: 0; }
+.v2-spec-state { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; border: 1px solid var(--line); background: var(--bg); }
+.v2-spec-state.ok { border-color: rgba(76, 187, 108, .45); }
+.v2-spec-state.wait { border-color: rgba(123, 97, 224, .35); background: rgba(123, 97, 224, .06); }
+.v2-spec-state.warn { border-color: rgba(242, 184, 75, .6); background: rgba(242, 184, 75, .10); }
+.v2-spec-spin { flex: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(123, 97, 224, .25); border-top-color: var(--purple, #7B61E0); animation: v2-spec-spin 1s linear infinite; }
+@keyframes v2-spec-spin { to { transform: rotate(360deg); } }
+.v2-spec-sec { display: grid; gap: 8px; min-width: 0; }
+.v2-spec-sec h2, .v2-spec-div { margin: 0; font-size: 15px; font-weight: 800; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.v2-spec-sec h2 small, .v2-spec-div small { font-size: 12px; font-weight: 600; color: var(--muted); }
+.v2-spec-div { margin-top: 10px; padding-top: 14px; border-top: 1px dashed var(--line); align-items: center; }
+.v2-spec-lead { margin: 0; font-size: 14px; line-height: 1.65; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.v2-spec-cards, .v2-spec-tables { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); }
+.v2-spec-card { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; align-content: start; min-width: 0; font-size: 13px; line-height: 1.55; }
+.v2-spec-body > p, .v2-spec-sec > p { margin: 0; }
+.v2-spec-card > b { font-size: 13.5px; }
+.v2-spec-card p { margin: 0; display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
+.v2-spec-card p:not(:has(.k)) { display: block; }
+.v2-spec-card .k { font-size: 12px; font-weight: 800; color: var(--muted); }
+.v2-spec-card small { color: var(--muted); font-size: 12px; }
+.v2-spec-ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.v2-spec-code { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--gray-bg-2, #F1F5FC); border-radius: 5px; padding: 1px 5px; overflow-wrap: anywhere; color: var(--ink); }
+.v2-spec-tw { overflow-x: auto; min-width: 0; }
+.v2-spec-t { border-collapse: collapse; width: 100%; font-size: 12.5px; background: var(--bg); }
+.v2-spec-t th, .v2-spec-t td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.v2-spec-t th { font-size: 11.5px; color: var(--muted); font-weight: 800; white-space: nowrap; }
+.v2-spec-t td.w { color: var(--muted); font-size: 12px; }
+.v2-spec-sec > .v2-spec-tw { border: 1px solid var(--line); border-radius: 12px; }
+.v2-spec-files { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.v2-spec-files li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; min-width: 0; }
+.v2-spec-files small { color: var(--muted); }
+@media (max-width: 600px) {
+  .v2-spec-top, .v2-spec-body { padding-left: 16px; padding-right: 16px; }
+  .v2-spec-card p { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
 @media (max-width: 900px) {
   .v2-bld-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .v2-bld-panel { border-left: 0; border-top: 1px solid var(--line); max-height: 46%; }
