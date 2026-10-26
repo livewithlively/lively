@@ -33,6 +33,8 @@ export async function getAppSpecDoc(appId: string, key: string): Promise<AppSpec
 /**
  * 직전 설명(프롬프트에 실을 것) — 쓰는 판보다 **앞선 판**의 다 쓴 설명 중 가장 가까운 것. 판 번호가 없으면 없음.
  *  최근에 쓴 아무 판이 아니라 앞선 판만 — 남의 공개 전 판(뒤 번호)의 내용이 공개 판 설명의 «달라진 점» 으로 새지 않게(격리 리뷰 #4632).
+ *  쓰는 판이 공개 전 초안이면 앞선 판에 다른 사람의 공개 전 판이 있을 수 있다 — 그 초안의 설명은 초안을 볼 수 있는 사람에게만 서고
+ *   초안 코드가 이미 그 앞 판을 품고 있으니 새는 것이 아니다(격리 리뷰 N4).
  */
 export async function prevOkSpec(appId: string, versionNo: number | null): Promise<{ versionNo: number | null; doc: AppSpecDoc } | null> {
   if (versionNo == null) return null;

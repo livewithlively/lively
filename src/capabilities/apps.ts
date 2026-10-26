@@ -1033,7 +1033,8 @@ const appSpec: Capability = {
     const budget = await run.specBudgetOk();
     let d = decideSpec(key, versionNo, rows, { now: Date.now(), available, visible, budget });
     //  「다시 만들기」 는 실패한 이 판에만 — 다 쓴 · 쓰는 중인 설명은 그대로 둔다(누를 때마다 돈이 나가지 않게).
-    if (input.regenerate === true && d.failed && available && budget) {
+    if (input.regenerate === true && d.failed && available && !budget) d = { ...d, failed: null, limit: true };   // 다시 쓸 몫이 없다고 말한다(격리 리뷰 N2)
+    else if (input.regenerate === true && d.failed && available) {
       void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
       d = { ...d, failed: null, writing: true };
     } else if (d.kick) {

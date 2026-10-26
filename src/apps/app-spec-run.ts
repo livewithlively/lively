@@ -12,6 +12,7 @@ export const SPEC_MODEL_DEFAULT = "claude-sonnet-5-5";
 //   · 이 게이트웨이에서 동시에 SPEC_CONCURRENT 개까지(넘으면 저절로 쓰기는 잠시 뒤로 · 열어서 쓰기는 다음 물음에)
 //   · 워크스페이스 하루 SPEC_DAILY_MAX 번(LIVELY_APP_SPEC_DAILY_MAX) — 넘으면 화면이 «오늘 몫을 다 썼어요» 라고 말한다
 export const SPEC_MIN_GAP_MS = 3 * 60_000;
+export const SPEC_FORCE_GAP_MS = 60_000;
 export const SPEC_CONCURRENT = 3;
 export const specDailyMax = (): number => { const n = Number(process.env.LIVELY_APP_SPEC_DAILY_MAX); return Number.isInteger(n) && n >= 0 ? n : 200; };
 const SPEC_TIMEOUT_MS = 4 * 60_000;
@@ -120,16 +121,17 @@ export async function writeAppSpec(appId: string, target: SpecTarget | null, opt
   if (!apiKey) return "unavailable";
   if (!(await specBudgetOk())) return "limit";
   const scheduled = target === null;
-  if (scheduled) {
+  //  한 앱의 쓰기 간격 — 저절로 쓰기는 3분, 「다시 만들기」(force)는 1분(계속 실패하는 판을 연달아 눌러도 돈이 쏟아지지 않게 · 격리 리뷰 N1).
+  if (scheduled || opts.force) {
     const last = await specStore.lastSpecStart(appId);
-    const wait = last == null ? 0 : last + SPEC_MIN_GAP_MS - Date.now();
-    if (wait > 0) return { later: wait + 1000 };
+    const wait = last == null ? 0 : last + (scheduled ? SPEC_MIN_GAP_MS : SPEC_FORCE_GAP_MS) - Date.now();
+    if (wait > 0) return scheduled ? { later: wait + 1000 } : "busy";
   }
   if (inflight >= SPEC_CONCURRENT) return scheduled ? { later: SPEC_QUIET_MS } : "busy";
+  inflight++;   // 잡기(await) 전에 센다 — 몰려와도 상한을 넘지 않게(격리 리뷰 N3)
   const key = specKeyOf(t.contentHash, t.versionNo);
-  const claim = await specStore.claimAppSpec(appId, key, t.versionNo, opts.force);
-  if (!claim) return "busy";
-  inflight++;
+  const claim = await specStore.claimAppSpec(appId, key, t.versionNo, opts.force).catch((e) => { inflight--; throw e; });
+  if (!claim) { inflight--; return "busy"; }
   const model = (process.env.LIVELY_APP_SPEC_MODEL || "").trim() || SPEC_MODEL_DEFAULT;
   try {
     const facts = specFacts(t.manifest, t.files);
