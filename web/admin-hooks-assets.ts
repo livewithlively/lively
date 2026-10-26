@@ -37,7 +37,8 @@ function customHookEditor(detail, data) {
     el('p', { class: 'admin-hint' }, ...uiText('구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다. 「제품 기본」 표시가 붙은 훅은 라이블리가 배포하는 것이라 본문은 볼 수만 있고, 조직은 켜고 끄는 것과 대상 구성원만 정합니다.')),
     relayPolicyCard(data, detail),
     gracePolicyCard(data, detail),
-    concurrencyPolicyCard(data, detail));
+    concurrencyPolicyCard(data, detail),
+    runtimePolicyCard(data, detail));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -118,9 +119,10 @@ function gracePolicyCard(data, detail) {
     el('div', { class: 'admin-actions' }, save));
 }
 
-// 같은 sort 훅 동시 실행(#1470) — 러너가 sort 가 같은 커스텀 훅을 한꺼번에 돌린다(기본 꺼짐 = 종전처럼 하나씩).
+// 같은 sort 훅 동시 실행(#1470) — 러너가 sort 가 같은 커스텀 훅을 한꺼번에 돌린다(기본 꺼짐 = 직접 만든 훅은 하나씩).
 //  켜면 프롬프트마다 기다리는 시간이 훅 소요의 합에서 묶음별 최댓값의 합으로 준다. 조직 훅은 기본 sort 0 이라 시드 훅과
 //  한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅의 결과에 기대는 훅은 켜기 전에 sort 를 나눠야 한다 — 그래서 조직이 켠다.
+//  #5034 — 제품 기본 훅끼리는 이 스위치와 무관하게 이미 겹쳐 돈다(제품이 보장). 이 스위치는 «직접 만든 훅도» 를 켠다.
 function concurrencyPolicyCard(data, detail) {
   const rc = data.runtimeConfig;
   if (!rc) return el('span', {}); // 비-admin 은 runtimeConfig 를 못 받는다 → 카드 숨김
@@ -136,9 +138,32 @@ function concurrencyPolicyCard(data, detail) {
     } catch (e: any) { toast(e.message, true); chk.checked = on; chk.disabled = false; }
   });
   return el('div', { class: 'admin-subcard' },
-    el('h4', { text: '같은 순서(sort)의 훅 동시 실행' }),
-    el('p', { class: 'admin-hint' }, ...uiText('켜면 구성원 컴퓨터의 러너가 sort 값이 같은 커스텀 훅을 한꺼번에 실행하고, sort 가 다른 묶음은 작은 값부터 차례로 실행합니다(한 묶음에서 동시에 도는 훅은 8개까지). 끄면 지금처럼 하나씩 실행합니다. 직접 만든 훅은 sort 가 0 이면 제품 기본 훅과 한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅이 끝난 뒤에 돌아야 하는 훅은 켜기 전에 sort 를 더 큰 값으로 바꾸세요.')),
-    el('label', { class: 'admin-check' }, chk, ' 같은 sort 의 훅을 동시에 실행'));
+    el('h4', { text: '같은 순서(sort)의 훅 동시 실행 — 직접 만든 훅' }),
+    el('p', { class: 'admin-hint' }, ...uiText('「제품 기본」 훅끼리는 이 설정과 무관하게 sort 값이 같으면 한꺼번에 실행됩니다. 이 설정을 켜면 직접 만든 훅도 sort 값이 같은 훅과 한꺼번에 실행하고, sort 가 다른 묶음은 작은 값부터 차례로 실행합니다(한 묶음에서 동시에 도는 훅은 8개까지). 끄면 직접 만든 훅은 하나씩 실행합니다. 직접 만든 훅은 sort 가 0 이면 제품 기본 훅과 한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅이 끝난 뒤에 돌아야 하는 훅은 켜기 전에 sort 를 더 큰 값으로 바꾸세요.')),
+    el('label', { class: 'admin-check' }, chk, ' 직접 만든 훅도 같은 sort 끼리 동시에 실행'));
+}
+
+// 훅 실행 방식(#5034) — 기본은 제품 기본(시드) 훅을 구성원 컴퓨터의 러너 안에서 스레드로 실행한다(훅마다 프로세스를 새로 띄우지
+//  않아 프롬프트·툴 호출마다 붙던 기동 비용이 준다). 직접 만든 훅은 본문 표식(lively-hook-runtime: worker)이 있을 때만 스레드다 —
+//  스레드는 네이티브 호출에 묶이면 끊을 수 없어 우리가 시험하는 코드만 기본으로 넣는다. 스레드에서 다르게 동작하는 훅(자식
+//  프로세스·fd 직접 쓰기 등)은 러너가 알아서 프로세스로 돌린다. 이 스위치는 조직의 되돌리기다 — 끄면 전부 종전처럼 훅마다 프로세스.
+function runtimePolicyCard(data, detail) {
+  const rc = data.runtimeConfig;
+  if (!rc) return el('span', {});
+  const worker = !(rc.hooks && rc.hooks.runtime === 'process');
+  const chk = el('input', { type: 'checkbox' }) as any;
+  chk.checked = worker;
+  chk.addEventListener('change', async () => {
+    chk.disabled = true;
+    try {
+      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks: { ...(rc.hooks || {}), runtime: chk.checked ? 'worker' : 'process' } }) });
+      await loadAdmin(true); toast('저장됨 — 구성원 다음 실행부터'); rerenderPanel(detail, 'custom-hooks', state.admin.data);
+    } catch (e: any) { toast(e.message, true); chk.checked = worker; chk.disabled = false; }
+  });
+  return el('div', { class: 'admin-subcard' },
+    el('h4', { text: '훅 실행 방식' }),
+    el('p', { class: 'admin-hint' }, ...uiText('켜 두면(기본) 「제품 기본」 훅을 구성원 컴퓨터의 러너 안에서 가볍게 실행합니다 — 훅마다 프로그램을 새로 띄우지 않아 프롬프트와 툴 호출마다 기다리는 시간과 CPU 가 줄어듭니다. 자식 프로세스를 쓰거나 표준 입출력을 직접 다루는 훅은 러너가 알아서 따로 띄웁니다. 직접 만든 훅은 기본으로 예전처럼 따로 띄우고, 본문에 «lively-hook-runtime: worker» 주석을 넣으면 가볍게 실행합니다(외부 명령·느린 디스크를 기다리는 훅에는 넣지 마세요 — 가볍게 실행 중에는 시간 초과로 끊을 수 없습니다). 이 방식에서 훅이 이상하게 동작하면 끄세요 — 모든 훅을 예전처럼 하나씩 따로 띄웁니다. 훅 하나만 따로 띄우려면 본문에 «lively-hook-runtime: process» 주석을 넣습니다.')),
+    el('label', { class: 'admin-check' }, chk, ' 훅을 러너 안에서 가볍게 실행(권장)'));
 }
 
 function hookForm(root, h, data, detail, isNew, locked) {

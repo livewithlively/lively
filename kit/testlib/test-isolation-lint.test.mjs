@@ -85,8 +85,11 @@ for (const [name, src, want] of R6_CASES) eq(`R6 ${name}`, violatesR6(src), want
 
 
 // ── ② 실제 kit 트리 ────────────────────────────────────────────────────────────
+// testlib/ 의 보조 모듈(os-sandbox·run-custom 하네스)은 **시험 코드**다 — 시험 파일이 자식 env·실행을 거기 맡기므로
+//  시험 규칙(R1~R6)을 같이 받는다. 사용자 머신에서 도는 제품 코드가 아니라서 아래 R5 제품 스캔에서는 뺀다(#5034).
+const isTestlibHelper = (p) => p.startsWith(`testlib${sep}`) && p.endsWith(".mjs");
 const files = readdirSync(KIT, { recursive: true })
-  .filter((p) => /\.test\.mjs$/.test(p) && !SELF.has(p))
+  .filter((p) => (/\.test\.mjs$/.test(p) || isTestlibHelper(p)) && !SELF.has(p))
   .sort()
   .map((p) => ({ rel: p, src: readFileSync(join(KIT, p), "utf8") }));
 
@@ -122,7 +125,8 @@ registryBads.length === 0
 const effectProducts = readdirSync(KIT, { recursive: true })
   .filter((p) => /\.(?:mjs|js)$/.test(p)
     && !/\.(?:test|itest|ci)\.(?:mjs|js)$/.test(p)
-    && !p.startsWith(`hooks${sep}examples${sep}`))
+    && !p.startsWith(`hooks${sep}examples${sep}`)
+    && !isTestlibHelper(p))
   .sort()
   .map((p) => ({ rel: p, src: readFileSync(join(KIT, p), "utf8") }));
 effectProducts.length >= 25

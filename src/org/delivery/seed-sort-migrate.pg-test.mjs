@@ -1,4 +1,4 @@
-// 시드 훅 기본 sort 이행(seed-content.ts LEGACY_SEED_SORT) + 러너 응답(org_runner_hooks)의 sort·concurrent — 실제 Postgres 필요.
+// 시드 훅 기본 sort 이행(seed-content.ts LEGACY_SEED_SORT) + 러너 응답(org_runner_hooks)의 sort·concurrent·seed·runtime — 실제 Postgres 필요.
 //  CI 의 pg-test 잡에서, 또는 로컬에서 수동 실행:
 //    npm run build && ITEMS_DATABASE_URL=postgres://… node src/org/delivery/seed-sort-migrate.pg-test.mjs
 //  seedDefaultContent 는 기본 훅·스킬·지식을 통째로 심는다 — 받은 DB(다른 시험과 함께 쓰는 DB)를 더럽히지 않게
@@ -13,6 +13,8 @@
 //   M2 사람이 끈 훅(enabled=false · updated_by=사람 · sort 0)은 sort 만 옮겨지고, 다음 부팅들에도 꺼진 채 · updated_by 그대로
 //   M3 조직이 바꾼 sort(옛 기본값이 아님)는 건드리지 않는다
 //   M4 org_runner_hooks 응답 — 훅마다 숫자 sort 를 (sort, id) 순으로 싣고, concurrent 는 기본 false · 조직 설정을 켜면 true
+//   M5 org_runner_hooks 응답(#5034) — 훅마다 seed(시드 훅이면 true · 직접 만든 훅이면 false) · runtime 은 기본 "worker" ·
+//      조직이 "process" 로 바꾸면 "process" · 모르는 값으로는 바꿀 수 없다(되돌리기 스위치가 오타로 조용히 안 바뀌지 않게)
 import pg from "pg";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
@@ -37,7 +39,9 @@ try {
   const { seedDefaultContent } = await import(`${DIST}/org/delivery/seed-content.js`);
   const { DEFAULT_HOOKS } = await import(`${DIST}/org/delivery/default-content.js`);
   const { hooksCapabilities } = await import(`${DIST}/capabilities/delivery/hooks.js`);
+  const { runtimeConfigCapabilities } = await import(`${DIST}/capabilities/delivery/runtime-config.js`);
   const { updateRuntimeConfig } = await import(`${DIST}/org/store/runtime-config.js`);
+  const { upsertOrgHook } = await import(`${DIST}/org/store/hooks.js`);
 
   await initAllSchemas();
   await seedDefaultContent();
@@ -91,6 +95,30 @@ try {
     await updateRuntimeConfig({ hooks: { concurrent: true } }, "seed-sort-migrate-pg-test", "test");
     const on = await cap.handler({ event: "UserPromptSubmit" }, { userId: null });
     chk("M4c 조직 설정을 켜면 concurrent=true", on?.concurrent === true, JSON.stringify({ concurrent: on?.concurrent }));
+  }
+  {
+    // M5 — 시드 여부·실행 방식. 직접 만든 훅을 하나 심어 «시드가 아닌 것» 도 응답에 있게 한다(없으면 seed:false 단언이 빈 단언이 된다).
+    const custom = "m5-custom-hook";
+    const csrc = "process.stdout.write('m5');\n";
+    await upsertOrgHook({ id: custom, event: "UserPromptSubmit", harness: "all", matcher: null, source_code: csrc, timeout_sec: 5, enabled: true, sort: 0 },
+      { actor: "pg-test" });
+    const cap = hooksCapabilities.find((c) => c.name === "org_runner_hooks");
+    const res = await cap.handler({ event: "UserPromptSubmit" }, { userId: null });
+    const hs = res?.hooks ?? [];
+    const mine = hs.find((h) => h.id === custom);
+    const seeds = hs.filter((h) => IDS.includes(h.id));
+    chk("M5a 시드 훅은 seed:true · 직접 만든 훅은 seed:false", !!mine && mine.seed === false && seeds.length > 0 && seeds.every((h) => h.seed === true),
+      JSON.stringify(hs.map((h) => [h.id, h.seed])));
+    chk("M5b runtime 은 기본 worker", res?.runtime === "worker", JSON.stringify({ runtime: res?.runtime }));
+    await updateRuntimeConfig({ hooks: { runtime: "process" } }, "seed-sort-migrate-pg-test", "test");
+    const back = await cap.handler({ event: "UserPromptSubmit" }, { userId: null });
+    chk("M5c 조직이 process 로 바꾸면 runtime=process", back?.runtime === "process", JSON.stringify({ runtime: back?.runtime }));
+    const upd = runtimeConfigCapabilities.find((c) => c.name === "org_runtime_update");
+    let rejected = false;
+    try { await upd.handler({ hooks: { runtime: "procss" } }, { userId: "pg-test", scopes: ["admin", "runtime"] }, { source: "test" }); }
+    catch (e) { rejected = e?.status === 400; }
+    const still = await cap.handler({ event: "UserPromptSubmit" }, { userId: null });
+    chk("M5d 모르는 runtime 값은 거부되고 설정은 그대로", rejected && still?.runtime === "process", JSON.stringify({ rejected, runtime: still?.runtime }));
   }
 } catch (e) {
   bad("예외", e?.stack || String(e));
