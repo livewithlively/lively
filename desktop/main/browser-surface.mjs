@@ -45,6 +45,10 @@ export const WEBVIEW_FORCED_PREFS = Object.freeze({
   allowRunningInsecureContent: false,
   experimentalFeatures: false,
   webviewTag: false, // 서피스 안에서 또 서피스를 열지 못하게(중첩으로 이 격리를 우회하는 길 차단)
+  // 새 창은 페이지(webview 의 allowpopups 속성)가 아니라 **메인의 setWindowOpenHandler** 가 정한다(#5025).
+  //  속성이 없으면 Electron 이 window.open 을 처리기에 넘기기도 전에 null 로 끝낸다(v43.3.0 electron_browser_client.cc
+  //  CanCreateWindow — disablePopups). 구글 «팝업 로그인» 이 눌러도 반응 없던 원인이다. 열지 말지는 surfaceWindowOpenTarget.
+  disablePopups: false,
 });
 
 /** assign 이 아니라 **지워야** 하는 것들 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다. */
@@ -106,6 +110,52 @@ export function surfaceNavTarget(url) {
   if (u.protocol === "mailto:" || u.protocol === "tel:") return "external";
   if (u.protocol !== "http:" && u.protocol !== "https:") return "deny";
   return hostMatches(u.hostname, DRM_HANDOFF_HOSTS) ? "external" : "allow";
+}
+
+/**
+ * 웹 칸이 동시에 띄울 수 있는 팝업 창 수. Electron 엔 크롬의 팝업 차단기(사람이 누르지 않은 팝업 거르기)가 없어서,
+ *  상한이 없으면 광고 페이지가 창을 끝없이 쏟을 수 있다. 로그인 팝업은 한 번에 하나라 넉넉하다.
+ */
+export const SURFACE_POPUP_LIMIT = 4;
+
+/**
+ * 웹 칸 안에서 **새 창**(window.open · target=_blank)을 어디서 열지 (#5025).
+ *   - "popup"    앱 안의 작은 창으로 연다 — **opener 관계가 산다**. 구글·애플·마이크로소프트의 «팝업 로그인» 은 그 창이
+ *                로그인 결과를 opener 로 돌려준다(postMessage). 시스템 브라우저로 넘기면 결과가 돌아올 길이 없다.
+ *   - "external" 시스템 브라우저로 넘긴다
+ *   - "deny"     열지 않는다
+ *
+ * 앱 안으로 들이는 건 **팝업 성격**(disposition "new-window" — 크기 같은 창 기능을 준 window.open · Shift+클릭)뿐이다.
+ *  탭 성격(target=_blank 링크 · 기능 없는 window.open = "foreground-tab"/"background-tab")은 종전대로 시스템 브라우저로 —
+ *  사람이 보는 웹 칸엔 탭 줄이 없어서 앱 안에 열면 링크마다 창이 하나씩 쌓인다(웹 칸의 새 탭으로 받는 건 별건, #4993).
+ *  disposition 문자열은 Electron 이 준다(v43.3.0 electron_api_web_contents.cc — NEW_POPUP·NEW_WINDOW → "new-window").
+ *  빈 주소(about:blank)는 «창을 먼저 열고 주소는 나중에 넣는» 흔한 모양이라 팝업으로는 받고, 시스템 브라우저로는 안 보낸다.
+ */
+export function surfaceWindowOpenTarget({ url, disposition, openPopups = 0 } = {}) {
+  const raw = String(url || "").trim();
+  const blank = !raw || /^about:blank(?:[?#]|$)/i.test(raw);
+  if (disposition === "new-window") {
+    const t = blank ? "allow" : surfaceNavTarget(raw);
+    if (t !== "allow") return t;
+    return openPopups >= SURFACE_POPUP_LIMIT ? "deny" : "popup";
+  }
+  return surfaceNavTarget(raw) === "deny" ? "deny" : "external";
+}
+
+/**
+ * 웹 칸이 연 팝업 창의 설정 — 부를 때마다 **새 객체**다(Electron 이 넘겨받은 옵션에 값을 써 넣을 수 있어 얼린 상수를 그대로 주지 않는다).
+ *  · 격리는 웹 칸과 같다(WEBVIEW_FORCED_PREFS). setWindowOpenHandler 가 주는 webPreferences 는 페이지가 못 바꾸는 쪽이다.
+ *  · 파티션도 웹 칸 것 — window.open 으로 연 창은 원래 opener 의 저장소에서 태어나지만, 링크(Shift+클릭)로 연 창은 Electron 이
+ *    새로 만든다. 이 값이 없으면 그 창엔 **기본 파티션(우리 토큰이 든 저장소)** 에 남의 사이트가 뜬다.
+ *  · preload 키는 아예 두지 않는다 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다(WEBVIEW_DROPPED_PREFS).
+ *  · 창 테두리는 OS 기본 — 남의 사이트는 우리 타이틀바를 그리지 않아서, 테두리를 걷으면 닫을 자리가 없다.
+ */
+export function surfacePopupWindowOptions() {
+  return {
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+    webPreferences: { ...WEBVIEW_FORCED_PREFS, partition: BROWSER_SURFACE_PARTITION },
+  };
 }
 
 /**

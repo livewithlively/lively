@@ -25,7 +25,7 @@ import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
-import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
+import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowOptions, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
@@ -983,6 +983,34 @@ function browserSurfaceSession() {
   return s;
 }
 
+// 서피스 안의 webContents 인가 — `<webview>` 게스트, 그리고 **그 게스트가 연 팝업 창**(#5025).
+//  ⚠ 팝업 창은 getType() 이 "window" 라 webview 판정만 하면 웹 UI 규칙(openTargetFor)에 걸린다 — 게이트웨이 밖 이동을
+//   전부 시스템 브라우저로 던져서 구글 로그인 창이 첫 이동에서 죽는다. 그래서 **세션**으로 가른다: window.open 으로 연 창은
+//   opener 의 저장소에서 태어나고(opener 가 살려면 같은 브라우징 인스턴스여야 한다), 링크로 연 창엔 surfacePopupWindowOptions 가
+//   파티션을 준다. 세션이 아직 없으면 게스트도 팝업도 있을 수 없다 — 웹 UI 창마다 서피스 세션을 깨우지 않는다.
+function isSurfaceContents(wc) {
+  if (wc.getType() === "webview") return true;
+  return surfaceSessionReady && wc.session === browserSurfaceSession();
+}
+
+// 지금 떠 있는 서피스 팝업 창 수(상한 판정용). 숨은 창(확장 룰셋을 켜는 창)은 세지 않는다.
+function openSurfacePopups() {
+  if (!surfaceSessionReady) return 0;
+  const s = browserSurfaceSession();
+  return BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.isVisible() && w.webContents.session === s).length;
+}
+
+// 서피스 팝업 창 설정 + 주인 창 — 앱 창 위에 떠서 사람이 로그인 창을 뒤로 잃어버리지 않는다.
+//  주인은 게스트면 그 게스트를 품은 앱 창, 팝업이 또 연 창이면 그 팝업이다.
+function surfacePopupOptionsFor(wc) {
+  const opts = surfacePopupWindowOptions();
+  try {
+    const owner = BrowserWindow.fromWebContents(wc.hostWebContents || wc);
+    if (owner && !owner.isDestroyed()) opts.parent = owner;
+  } catch { /* 주인을 못 찾으면 떠 있는 창으로 — 로그인엔 지장 없다 */ }
+  return opts;
+}
+
 // ── 브라우저 확장(애드온) (#1829) ────────────────────────────────────────────
 // 확장은 **서피스 세션에만** 건다. 게이트웨이 UI 세션(우리 토큰이 있는 곳)에 걸면 남의 확장 코드가 그 문맥에서 돈다.
 //  실측: 순정 loadExtension 으로 MV3 content script·service worker·declarativeNetRequest 차단이 다 된다.
@@ -1124,8 +1152,8 @@ async function reloadInstalledExtensions(sess) {
 // 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — **두 규칙이 산다**:
 //  · 웹 UI(우리 페이지·자식 창): web-shell.openTargetFor — 같은 출처는 앱 안의 새 창으로(토큰이 같은 localStorage 라
 //    그대로 로그인 상태), 바깥은 시스템 브라우저로, 그 외(javascript: 등)는 열지 않는다. 자식 창에도 같은 preload·격리를 준다.
-//  · 브라우저 서피스 게스트(#1829): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
-//  그래서 게스트를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
+//  · 브라우저 서피스 게스트(#1829)와 그 팝업 창(#5025): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
+//  그래서 서피스를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
 app.on("web-contents-created", (_e, wc) => {
   // ── 우클릭 메뉴(#1870) — 모든 webContents 공통(웹 UI·자식 창·서피스 게스트). 앱은 브라우저와 달리
   //  기본 우클릭 메뉴가 없어 링크 주소를 복사할 길이 없었다. 항목 판정은 context-menu.mjs(순수 모델)가 한다.
@@ -1137,15 +1165,17 @@ app.on("web-contents-created", (_e, wc) => {
       : { label: m.label, click: () => runContextMenuAction(m.id, params, wc, clipboard) }))).popup();
   });
 
-  // ── 브라우저 서피스 안(=`<webview>` 게스트)은 규칙이 정반대다 ───────────────────────────────────────
+  // ── 브라우저 서피스 안(=`<webview>` 게스트와 그 팝업 창)은 규칙이 정반대다 ───────────────────────────
   //  아래 웹 UI 규칙(openTargetFor)은 "남의 사이트를 앱에 들이지 않는다" 라 **게이트웨이 밖 이동을 전부 밖으로 던진다**.
   //  그걸 서피스에도 걸면 남의 사이트를 보려고 만든 화면이 첫 이동에서 통째로 시스템 브라우저로 튄다 — 기능이 죽는다.
-  //  게스트는 `getType() === "webview"` 로 갈린다(Electron 이 주는 신호라 우리가 표시를 붙일 필요가 없다).
-  if (wc.getType() === "webview") {
-    wc.setWindowOpenHandler(({ url }) => {
-      // 서피스 안에서 새 창(`target=_blank`·window.open)은 띄우지 않는다 — 서피스는 창이 아니라 화면 한 칸이라
-      //  떠도 사람이 닫을 크롬이 없다. 볼 수 있는 주소면 시스템 브라우저로 넘긴다(눌렀는데 아무 일도 없는 것보다 낫다).
-      if (surfaceNavTarget(url) !== "deny") shell.openExternal(url);
+  //  판정은 isSurfaceContents — 게스트는 `getType() === "webview"`, 팝업 창은 서피스 세션으로 갈린다.
+  if (isSurfaceContents(wc)) {
+    wc.setWindowOpenHandler(({ url, disposition }) => {
+      // 팝업 성격(window.open + 창 기능)은 앱 안의 작은 창으로 — opener 가 살아 팝업 로그인(구글·애플·MS)이 결과를 돌려받는다.
+      //  탭 성격(target=_blank 링크 등)은 종전대로 시스템 브라우저로(웹 칸엔 탭 줄이 없다). 판정 표는 surfaceWindowOpenTarget.
+      const t = surfaceWindowOpenTarget({ url, disposition, openPopups: openSurfacePopups() });
+      if (t === "popup") return { action: "allow", overrideBrowserWindowOptions: surfacePopupOptionsFor(wc) };
+      if (t === "external") shell.openExternal(url);
       return { action: "deny" };
     });
     wc.on("will-navigate", (e, url) => {
@@ -1173,7 +1203,9 @@ app.on("web-contents-created", (_e, wc) => {
     //  (게스트 session !== 우리 세션, UA·권한 핸들러 전부 미적용 = **격리가 통째로 무력**). `webPreferences` 로
     //  넣어야 붙는다. 값이 반영된 것처럼 보여서 코드만 읽으면 절대 안 보이는 함정이다 — 바꾸기 전에 실기기로 재라.
     webPreferences.partition = BROWSER_SURFACE_PARTITION;
-    params.allowpopups = false;   // 팝업의 실질 차단은 게스트의 setWindowOpenHandler 다(이건 겹겹이)
+    //  새 창도 같은 함정이다 — `params.allowpopups` 는 Electron 이 이 훅 **전에** webPreferences.disablePopups 로 바꿔 둔다
+    //  (v43.3.0 guest-view-manager.ts makeWebPreferences). 그래서 params 에 적어도 아무 일이 없다. 팝업은
+    //  WEBVIEW_FORCED_PREFS.disablePopups(=false)로 게스트의 setWindowOpenHandler 까지 오게 하고, 거기서 정한다(#5025).
   });
 
   wc.setWindowOpenHandler(({ url }) => {
