@@ -347,9 +347,10 @@ export function connectHint(harness = "claude", { plugin = false } = {}) {
   return "`lively work-root add`";
 }
 
-// 안내문에 그대로 넣어도 되는 폴더 이름인가 — 따옴표·백틱·달러·역슬래시·제어문자가 든 이름은 AI 가 읽는 지시문과
+// 안내문에 그대로 넣어도 되는 폴더 이름인가 — 따옴표·백틱·달러·제어문자가 든 이름은 AI 가 읽는 지시문과
 //  셸 명령을 흐트러뜨릴 수 있어(압축을 푼 폴더처럼 이름을 남이 정한 경우) 넣지 않는다.
-const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$\\]+$/.test(d) && d.length <= MAX_ROOT_LEN;
+//  역슬래시는 받는다(윈도 경로 구분자) — 명령은 작은따옴표로 감싸 bash·Git Bash·PowerShell 이 글자 그대로 받는다.
+const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$]+$/.test(d) && d.length <= MAX_ROOT_LEN;
 
 /** 범위 밖 세션 시작 알림 — 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). */
 export function outsideNotice({ dir = "", harness = "claude", plugin = false } = {}) {
@@ -358,7 +359,7 @@ export function outsideNotice({ dir = "", harness = "claude", plugin = false } =
   const where = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)는` : "이 세션을 연 폴더는";
   const how = plugin
     ? `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 컴퓨터의 작업 폴더에 등록하라고 안내하라 — 다음 세션부터 연결된다.`
-    : `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${safeDir(dir) ? `\`lively work-root add "${dir}"\`` : "이 폴더에서 `lively work-root add`"} 를 실행하라 — 이 폴더가 작업 폴더로 등록되고 이 세션도 다음 메시지부터 연결된다.`;
+    : `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${safeDir(dir) ? `\`lively work-root add '${dir}'\`` : "이 폴더에서 `lively work-root add`"} 를 실행하라 — 이 폴더가 작업 폴더로 등록되고 이 세션도 다음 메시지부터 연결된다.`;
   const ai = [
     "## 라이블리 꺼짐 — 작업 폴더 밖 (#5016)",
     `${where} 이 컴퓨터의 라이블리 작업 폴더가 아니어서 라이블리가 꺼져 있다 — 회사 맥락 주입·기록·대화 업로드·라이블리 도구가 이 세션엔 없다.`,

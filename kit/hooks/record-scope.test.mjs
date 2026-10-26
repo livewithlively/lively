@@ -254,6 +254,27 @@ check("N3 그 밖의 하네스는 CLI(lively work-root add)", rs.outsideNotice({
   const p = rs.outsideNotice({ dir: "/w/p", harness: "claude", plugin: true });
   check("N8 플러그인만 깐 컴퓨터는 웹 화면을 가리킨다(/lively-connect 없음)", !p.user.includes("/lively-connect") && p.user.includes("내 컴퓨터별 연결"));
 }
+{
+  // 윈도 경로는 역슬래시가 구분자다 — 이름을 넣고, 등록 명령은 작은따옴표로 감싸 셸이 글자 그대로 받게 한다.
+  const win = "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\my proj";
+  const w = rs.outsideNotice({ dir: win, harness: "claude" });
+  check("N9 윈도 경로도 AI 안내에 그 폴더를 짚고, 등록 명령은 작은따옴표로 감싼다", w.ai.includes(`\`${win}\``) && w.ai.includes(`lively work-root add '${win}'`), w.ai.slice(0, 300));
+  const unc = "\\\\srv\\share\\proj";
+  check("N10 UNC 경로도 글자 그대로 넣는다", rs.outsideNotice({ dir: unc, harness: "codex" }).ai.includes(`lively work-root add '${unc}'`));
+  const q = "/home/me/it's";
+  const nq = rs.outsideNotice({ dir: q, harness: "claude" });
+  check("N11 작은따옴표가 든 폴더 이름은 넣지 않는다(명령의 감싸개라서)", !nq.ai.includes(q) && nq.ai.includes("이 폴더에서 `lively work-root add`"));
+}
+if (process.platform !== "win32") {
+  // 안내 속 명령을 실제 셸에 넣으면 인자가 그 폴더 글자 그대로 와야 한다 — 공백·역슬래시·끝 역슬래시(드라이브 루트 꼴)까지.
+  const dirs = ["C:\\Users\\RUNNER~1\\my proj", "\\\\srv\\share\\p", "C:\\", "/home/me/a b\\c"];
+  const got = dirs.map((d) => {
+    const m = rs.outsideNotice({ dir: d, harness: "claude" }).ai.match(/`lively work-root add (.+?)`/);
+    if (!m) return null;
+    try { return execFileSync("sh", ["-c", `printf %s ${m[1]}`], { encoding: "utf8" }); } catch { return null; }
+  });
+  check("N12 등록 명령을 셸에 넣으면 인자가 그 폴더 글자 그대로다", got.every((g, i) => g === dirs[i]), JSON.stringify(got));
+}
 
 // ══ 가짜 게이트웨이(127.0.0.1) — 받은 요청을 센다 ══════════════════════════════
 async function withGateway(fn) {
