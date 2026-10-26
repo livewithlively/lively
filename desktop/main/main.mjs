@@ -25,7 +25,7 @@ import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
-import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
+import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
@@ -974,7 +974,8 @@ function browserSurfaceSession() {
   const s = session.fromPartition(BROWSER_SURFACE_PARTITION);
   if (!surfaceSessionReady) {
     surfaceSessionReady = true;
-    try { s.setUserAgent(cleanUserAgent(s.getUserAgent(), app.getName())); } catch { /* 비치명 — 표식이 남을 뿐이다 */ }
+    // UA 는 스톡 Electron UA 그대로 둔다(고쳐 쓰지 않는다) — #5023. UA 문자열을 재작성하면 Cloudflare Turnstile 이
+    //  600010 으로 막는다(UA 와 클라이언트 힌트가 어긋나 위장으로 읽힘). 상세·근거는 browser-surface.mjs 「UA」 머리말.
     // 요구를 조용히 삼키지 않고 거부한다. 사람이 허용하는 흐름이 생기면 surfacePermissionAllowed 를 그때 넓힌다.
     try { s.setPermissionRequestHandler((_wc, permission, cb) => cb(surfacePermissionAllowed(permission))); } catch { /* 비치명 */ }
     try { s.setPermissionCheckHandler((_wc, permission) => surfacePermissionAllowed(permission)); } catch { /* 비치명 */ }
