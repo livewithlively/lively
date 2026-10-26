@@ -31,7 +31,8 @@ not the server's self-name 'context-ontology'.
 ### Gate decision table (stop-writeback-gate — deterministic, exactly once per session)
 1. `LIVELY_OFF=1` · read-only session (`LIVELY_MODE=readonly`) · disabled in the admin tab (`hooks.stop_writeback_gate=false`) → pass
 2. `stop_hook_active === true` → pass (mandatory loop guard; a second guard independent of the hard 8-block cap)
-3. Not a lively work session (cwd is outside the registered work-roots and there is no `<sid>.lively`) → pass (self-gating — never nudge in personal/other repos)
+2b. Outside the record scope (#5016 — the computer is «work folders only» and the session folder is not a work folder; `kit/hooks/record-scope.mjs`) → pass. Every Lively hook takes the same exit; outside the scope a session is incognito-equivalent.
+3. Not a lively work session (cwd is outside the work roots — registered work-roots ∪ this computer's record-scope folders — and there is no `<sid>.lively`) → pass (self-gating — never nudge in personal/other repos)
 4. `<sid>.writeback` exists (already recorded) → pass
 5. `<sid>.worked` absent (no meaningful work) → pass
 6. `<sid>.blocked` exists (already nudged once) → pass

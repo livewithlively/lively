@@ -72,7 +72,8 @@ function freshHome() {
   rmSync(HOME, { recursive: true, force: true });
   mkdirSync(join(LV, "hooks"), { recursive: true });
   mkdirSync(join(LV, "lib"), { recursive: true });
-  for (const f of ["sync-harness-assets.mjs", "harness-registry.mjs", "host-effects-port.mjs"]) copyFileSync(join(KIT, "hooks", f), join(LV, "hooks", f));
+  //  record-scope.mjs — 받기 스크립트가 import 하는 기록 범위 판정(#5016). 빠지면 스크립트가 import 에서 죽어 요청이 0이 된다.
+  for (const f of ["sync-harness-assets.mjs", "harness-registry.mjs", "host-effects-port.mjs", "record-scope.mjs"]) copyFileSync(join(KIT, "hooks", f), join(LV, "hooks", f));
   copyFileSync(join(KIT, "setup", "host-effects.mjs"), join(LV, "lib", "host-effects.mjs"));
   writeFileSync(join(LV, "token"), "file-token\n");
   writeFileSync(join(LV, "gateway-url"), GW + "\n");

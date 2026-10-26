@@ -30,6 +30,8 @@ export {
   getHarnessMachineAlias, setHarnessMachineAlias,
   getHarnessLocalPref, setHarnessLocalPref,
   getLocalModePreferences, setLocalModePreference,
+  getLocalScopePreferences, getLocalScopePreference, updateLocalScopePreference, applyLocalScopeChange,
+  DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN,
   getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivSession,
   setLivWelcomeProgress, listLivSecondTurnCandidates,
   memberIdByEmail, upsertMember, removeMember,
@@ -38,6 +40,7 @@ export type {
   MemberIdentity, OrgMember, ReportedStep,
   HarnessSnapshotAsset, HarnessSnapshot, HarnessSnapshots, HarnessMachineAlias, HarnessLocalPref,
   LocalSessionMode, LocalModePreference, LocalModePreferences,
+  RecordScope, LocalScopePreference, LocalScopePreferences, LocalScopeChange,
   LivWork, LivDecision, LivDeclined, LivProfile, LivSessionRef, LivWelcome, LivWelcomeProgress,
   MemberInput,
 } from "./store/members.js";

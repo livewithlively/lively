@@ -31,6 +31,7 @@ import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isF
 import { hostEffects } from "./host-effects-port.mjs";
 import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
 import { openWork } from "./bg-jobs.mjs";
+import { inScopeNow } from "./record-scope.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -167,6 +168,8 @@ try {
   const raw = await readStdin();
   let input;
   try { input = JSON.parse(raw); } catch { process.exit(0); }
+  // 기록 범위(#5016) — 작업 폴더 밖이면 인코그니토와 같다(기록 표식·넛지·세션 보고 전부 없음). 판정은 record-scope.mjs 하나.
+  if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: HARNESS, lively: join(homedir(), ".lively") }).inScope) process.exit(0);
   const sid = String(input?.session_id ?? "");
   const event = String(input?.hook_event_name ?? "");
 

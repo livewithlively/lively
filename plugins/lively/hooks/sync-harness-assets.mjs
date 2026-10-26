@@ -29,6 +29,7 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
 import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, isForeignCursorInvocation, claudeConfigDir, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
+import { inScopeNow } from "./record-scope.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -561,6 +562,11 @@ async function applyLocalPref() {
 async function main() {
   if (hookDisabled()) return;
   if (!TOKEN) return;
+  // 기록 범위(#5016) — 작업 폴더 밖 세션은 인코그니토와 같다(자산 받기·인벤토리 보고 없음). 이미 깔린 스킬 파일은 그대로다 —
+  //  하네스가 시작할 때 사용자 폴더에서 읽는 것이라 훅으로는 숨길 수 없다. 판정은 record-scope.mjs 하나.
+  //  ⚠ 설치·업데이트가 «다음 세션 몫» 을 미리 받으려고 부를 때(--preload, lively.mjs preloadHarnessAssets)는 세션이 아니다 — 판정하지
+  //   않는다. 그 cwd 는 설치 명령을 친 자리일 뿐이라, 판정하면 작업 폴더 밖에서 설치한 컴퓨터는 미리 받기가 조용히 0이 된다.
+  if (!process.argv.includes("--preload") && !inScopeNow({ env: process.env, cwd: process.cwd(), harness: HARNESS, lively: LIVELY }).inScope) return;
   const assets = await Promise.race([fetchAssets(), new Promise((r) => setTimeout(() => r(null), HARD_MS))]);
   if (assets === null) return; // fetch 실패/타임아웃 → fail-OPEN(현상 유지, prune 안 함)
 

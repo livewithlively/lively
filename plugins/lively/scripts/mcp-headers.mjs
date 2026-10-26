@@ -20,4 +20,7 @@ import { join } from "node:path";
 const token = ((process.env.LIVELY_TOKEN || "").trim())
   || (() => { try { return readFileSync(join(homedir(), ".lively", "token"), "utf8").trim(); } catch { return ""; } })();
 
+// 기록 범위(#5016)는 여기서 판정하지 않는다 — 이 헬퍼는 세션 폴더를 모른다(Claude Code 2.1.310 실측: CLAUDE_PROJECT_DIR 가
+//  안 실린다). 짐작(PWD 등)으로 판정하면 작업 폴더에서도 도구가 사라질 수 있어, 플러그인은 맥락 주입·기록을 훅(record-scope.mjs)이
+//  막고 MCP 도구는 종전대로 둔다.
 process.stdout.write(JSON.stringify(token ? { Authorization: `Bearer ${token}` } : {}));

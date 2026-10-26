@@ -21,6 +21,7 @@ import crypto from "node:crypto";
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
+import { inScopeNow, startedOutside, clearStartedOutside } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -500,18 +501,38 @@ function mergePreToolUse(outputs, relay) {
   return out;
 }
 
+// 세션 중간 연결(#5016) — 작업 폴더 밖으로 시작한 세션(시작 훅이 표식을 남김)에서 이 폴더가 방금 등록됐으면,
+//  시작 때 빠진 회사 맥락을 이번 지시에 한 번 넣는다. 표식은 먼저 걷는다 — 못 받아 와도 지시마다 다시 왕복하지 않게.
+async function lateOrgContext(input) {
+  const sid = String(input.session_id || input.sessionId || "");
+  if (!TOKEN || !startedOutside(sid)) return "";
+  clearStartedOutside(sid);
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), FETCH_MS);
+  try {
+    const res = await fetch(`${GW}/api/ui/org/preview`, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...scopeHeaders(input) } });
+    const ctx = res.ok ? String((await res.json())?.context || "").trim() : "";
+    return ctx ? `## [라이블리] 이 폴더가 방금 작업 폴더로 등록돼 이 세션도 연결됐습니다 — 세션 시작 때 빠진 회사 맥락을 지금 넣습니다\n\n${ctx}` : "";
+  } catch { return ""; }
+  finally { clearTimeout(t); }
+}
+
 async function main() {
   if (!EVENT) return;
   const stdin = await readStdin(SESSIONEND ? STDIN_MS_SESSIONEND : undefined);
   let input = {}, toolName = "";
   try { input = JSON.parse(stdin || "{}"); toolName = input.tool_name || input.toolName || ""; } catch { /* */ }
+  // 기록 범위(#5016) — 작업 폴더 밖에서 켠 세션이면 인코그니토와 같다: 게이트웨이 조회도 커스텀 훅 실행도 없이 끝낸다.
+  //  (대화 업로드·첫 지시 프로젝트·지식 회수 같은 조직 훅이 전부 이 러너 뒤에 있다.) 판정 규칙은 record-scope.mjs 하나.
+  if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: HARNESS, lively: LIVELY }).inScope) return;
+  const late = EVENT === "UserPromptSubmit" ? await lateOrgContext(input) : "";
 
   const fetched = await fetchHooks(input);
   const cfg = fetched === null ? (loadCache() || { hooks: [], relay: DEFAULT_RELAY, concurrent: false }) : fetched; // 미도달 → grace 캐시
   if (fetched !== null) saveCache(fetched.hooks, fetched.relay, fetched.concurrent);                                // 성공 → 캐시 갱신
   const relay = cfg.relay.filter((d) => RANK[d]); // 잡값 방어
   const hooks = cfg.hooks.filter((hk) => hk && (hk.event === EVENT) && matches(hk, toolName));
-  if (!hooks.length) return;
+  if (!hooks.length) { if (late) emitContext(late); return; }
 
   const outputs = []; const fails = [];
   for (const { hk, out, fail } of await runAll(hooks, stdin, cfg.concurrent)) {
@@ -557,7 +578,7 @@ async function main() {
   //  PostToolUse 도 주입(#637 Stage2): 코드파일 Read 즉시 leaf 주입(domain-recall-action). emitContext 가 이벤트별 포맷
   //   (PostToolUse 는 hookSpecificOutput.additionalContext JSON — Claude Code 계약, 담당자 검증). 실행결과 없으면 no-op.
   //  나머지 이벤트(Stop·SessionEnd 등)는 여전히 부수효과만(stdout 미전파).
-  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && outputs.length) emitContext(outputs.map((o) => unwrapContext(o).trim()).filter(Boolean).join("\n\n"));
+  if ((EVENT === "SessionStart" || EVENT === "UserPromptSubmit" || EVENT === "PostToolUse") && (outputs.length || late)) emitContext([late, ...outputs.map((o) => unwrapContext(o).trim())].filter(Boolean).join("\n\n"));
 }
 
 main().then(() => process.exit(0)).catch(() => process.exit(0));

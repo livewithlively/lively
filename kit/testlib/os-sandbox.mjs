@@ -35,6 +35,9 @@ export const offlineLivelyEnv = () => ({
   //  통째로 성립하지 않는다. 실측: 라이블리 세션 안에서 돌리면 LIVELY_SESSION_KIND=human 이 상속돼
   //  «위탁 세션엔 주입하지 않는다» 단언 2건이 그 기계에서만 빨간불이었다(CI 는 이 값이 없어 초록).
   LIVELY_SESSION_KIND: "",
+  // #5016 — `lively run` 표식(LIVELY_RUN)과 어댑터가 싣는 세션 폴더(LIVELY_SESSION_DIR)도 기록 범위 판정을 바꾸는 신원이다.
+  //  `lively run` 으로 띄운 세션 안에서 테스트를 돌리면 상속돼 «범위 밖» 시나리오가 통째로 «라이블리가 띄운 세션» 이 된다.
+  LIVELY_RUN: "", LIVELY_SESSION_DIR: "",
   // 하네스의 비대화형 표식도 같은 부류다 — `claude -p`·SDK 안에서 테스트를 돌리면 sdk-cli 가 상속돼
   //  사람 세션 시나리오가 통째로 기계로 판정된다(project-auto-bind.org-hook.mjs 의 isWorkSessionEnv 첫 줄).
   CLAUDE_CODE_ENTRYPOINT: "",

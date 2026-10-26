@@ -96,11 +96,15 @@ const TEST_TIMEBOX_MS = Number(process.env.LIVELY_TEST_CURSOR_TIMEBOX_MS) || 0;
 
 // 러너 1회 실행 → stdout(문자열). 어떤 실패든 "" 로 삼킨다(fail-open).
 //  killSignal SIGKILL: 러너가 타임아웃을 살아남아 세션을 막는 일이 없게(no-block 불변식, 타 어댑터와 동형).
+// 세션 폴더(#5016) — 훅은 이 값으로 기록 범위를 판정한다(record-scope.mjs sessionDirOf). 어댑터가 띄운 훅 프로세스의 cwd 는
+//  세션 작업 위치가 아니라서(hooks.json 자리·workspace root·~/.cursor) 시작 훅(session-preload — 빈 입력으로 부른다)이 엉뚱한 폴더를
+//  보지 않게 env 로 함께 넘긴다. main 이 입력을 읽자마자 채운다.
+let SESSION_DIR = "";
 function runScript(script, args, stdin, timeout) {
   try {
     const r = spawnSync(NODE, [join(HOOKS, script), ...args], {
       input: stdin, encoding: "utf8", timeout: TEST_TIMEBOX_MS ? Math.min(timeout, TEST_TIMEBOX_MS) : timeout, killSignal: "SIGKILL",
-      env: { ...process.env, LIVELY_HARNESS: HARNESS },
+      env: { ...process.env, LIVELY_HARNESS: HARNESS, ...(SESSION_DIR ? { LIVELY_SESSION_DIR: SESSION_DIR } : {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     return (r && typeof r.stdout === "string") ? r.stdout : "";
@@ -335,6 +339,8 @@ async function main() {
   try {
     let input = {};
     try { input = JSON.parse((await readStdin()) || "{}"); } catch { /* 비JSON — 빈 입력으로 진행 */ }
+    //  범위 판정은 «세션을 연 자리» 여야 흔들리지 않는다 — 이벤트마다 바뀔 수 있는 cwd 보다 작업 공간 첫 폴더를 먼저 본다.
+    SESSION_DIR = (Array.isArray(input?.workspace_roots) && typeof input.workspace_roots[0] === "string" && input.workspace_roots[0]) || (typeof input?.cwd === "string" && input.cwd) || process.env.CURSOR_PROJECT_DIR || "";
     out = handle(asObj(input) || {}) || out;
   } catch { /* 어떤 실패도 아래 유효 출력 한 번으로 수렴 */ }
   emitAndExit(out);

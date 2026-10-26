@@ -88,6 +88,69 @@ async function myAssetsSection(detail) {
         el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap' },
           el('b', { style: 'font-size:13px; margin-right:auto', text: '라이블리 연결' }), seg), hint);
     };
+    // #5016 기록 범위 — 이 컴퓨터에서 «작업 폴더에서만(기본)» 연결할지 «어디서나» 연결할지 + 작업 폴더 목록.
+    //  그 컴퓨터의 세션 시작 훅이 다음 세션에 받아 간다. 목록 밖에서 연 AI 는 라이블리가 꺼진다(인코그니토와 같다).
+    const scopeControl = (m: any) => {
+      const pref = m.scope_pref || {};
+      let current: string = pref.scope || 'work_folders';
+      let roots: string[] = Array.isArray(pref.work_roots) ? [...pref.work_roots] : [];
+      const scopes = [
+        ['work_folders', '작업 폴더에서만', '아래 작업 폴더와 라이블리 프로젝트 폴더에서 연 AI만 라이블리에 연결합니다. 그 밖에서 연 AI는 라이블리가 꺼집니다.'],
+        ['anywhere', '어디서나', '어느 폴더에서 연 AI든 라이블리에 연결합니다.'],
+      ];
+      const seg = el('div', { class: 'tm-seg', role: 'group', 'aria-label': '기록 범위' });
+      const hint = el('div', { class: 'tm-hint' });
+      const list = el('div', { style: 'display:flex; flex-direction:column; gap:4px; margin-top:6px' });
+      let paint = () => {};
+      const save = async (body: any, msg: string) => {
+        try {
+          const r: any = await api('/api/ui/me/local-scope', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, ...body }) });
+          current = r?.preference?.scope || current;
+          roots = Array.isArray(r?.preference?.work_roots) ? r.preference.work_roots : roots;
+          paint();
+          toast(msg);
+          return true;
+        } catch (e: any) { toast((e && e.message) || '실패', true); return false; }
+      };
+      paint = () => {
+        for (const b of seg.children as any) {
+          const on = b.dataset.scope === current;
+          b.classList.toggle('on', on);
+          b.setAttribute('aria-pressed', String(on));
+        }
+        const found: any = scopes.find(([s]) => s === current) || scopes[0];
+        hint.replaceChildren(...uiText(found[2] + ' 다음에 여는 AI부터 적용됩니다.'));
+        list.replaceChildren(...(roots.length ? roots.map((r) => {
+          const rm = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '빼기', 'aria-label': `${r} 빼기` });
+          rm.addEventListener('click', () => { void save({ remove: [r] }, '작업 폴더에서 뺐습니다. 그 컴퓨터에서 다음에 여는 AI부터 적용됩니다.'); });
+          return el('div', { style: 'display:flex; align-items:center; gap:8px' }, el('code', { style: 'font-size:12px; overflow-wrap:anywhere; flex:1; min-width:0', text: r }), rm);
+        }) : [el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('등록한 작업 폴더가 없습니다. 그 컴퓨터의 AI에서 /lively-connect를 입력하거나 아래에 경로를 넣으면 등록됩니다.'))]));
+        // «어디서나» 면 목록은 판정에 쓰이지 않는다 — 지우지 않고 흐리게만 둔다(다시 «작업 폴더에서만» 으로 오면 그대로 쓴다).
+        list.style.opacity = current === 'anywhere' ? '0.55' : '1';
+      };
+      for (const [scope, label] of scopes) {
+        const b = el('button', { type: 'button', class: 'tm-seg-btn', text: label, 'aria-pressed': 'false' });
+        b.dataset.scope = scope;
+        b.addEventListener('click', () => { if (scope !== current) void save({ scope }, '기록 범위를 바꿨습니다. 그 컴퓨터에서 다음에 여는 AI부터 적용됩니다.'); });
+        seg.append(b);
+      }
+      const input = el('input', { type: 'text', class: 'aud-inp', style: 'flex:1; min-width:0', placeholder: '예: /Users/me/work 또는 ~/work', 'aria-label': '추가할 작업 폴더 경로' }) as HTMLInputElement;
+      const add = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '추가' });
+      const submit = async () => {
+        const v = input.value.trim();
+        if (!v) return;
+        if (await save({ add: [v] }, '작업 폴더를 추가했습니다. 그 컴퓨터에서 다음에 여는 AI부터 적용됩니다.')) input.value = '';
+      };
+      add.addEventListener('click', () => { void submit(); });
+      input.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); void submit(); } });
+      paint();
+      return el('div', { class: 'tm-policy', style: 'margin:0 0 12px' },
+        el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap' },
+          el('b', { style: 'font-size:13px; margin-right:auto', text: '기록 범위' }), seg), hint,
+        el('div', { style: 'margin-top:8px' },
+          el('b', { style: 'font-size:12px', text: '작업 폴더' }), list,
+          el('div', { style: 'display:flex; gap:6px; margin-top:6px' }, input, add)));
+    };
     // 라이블리가 준 것 1건이 각 PC 에 어떻게 있는지 칩으로. 훅=중앙 디스패치(배선된 PC 전부 실행), 스킬=파일 설치 대조.
     const pcChips = (it: any, kind: string): { row: any; missing: boolean } => {
       let missing = false;
@@ -242,6 +305,7 @@ async function myAssetsSection(detail) {
         head.append(del);
         myLayer.append(head);
         myLayer.append(modeControl(m));
+        myLayer.append(scopeControl(m));
         const own = (m.assets || []).filter((a: any) => a.overlap === 'local-only');
         if (!own.length) { myLayer.append(el('p', { class: 'admin-hint' }, ...uiText('이 컴퓨터에 직접 만든 스킬·훅은 없습니다(라이블리 배포분만 있습니다).'))); continue; }
         const byKind: Record<string, any[]> = {};

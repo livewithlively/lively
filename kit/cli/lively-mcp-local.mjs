@@ -385,6 +385,30 @@ function armPeerGuards() {
   }
 }
 
+// ── 기록 범위(#5016) ──────────────────────────────────────────────────────────
+//  lively mcp(lively-mcp-gateway.mjs)와 같은 규칙 — 작업 폴더 밖에서 켠 세션이면 이 로컬 도구도 0개다(라이블리가 꺼진 세션).
+//  판정은 훅과 같은 파일(~/.lively/hooks/record-scope.mjs). 못 찾으면 종전 동작(켬). 폴더를 등록하면 주기 검사가 목록을 다시 받게 한다.
+const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
+const OUTSIDE_TOOL_TEXT = "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
+  + "여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 셸의 `lively work-root add` 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.";
+let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
+async function loadScopeModule() {
+  if (scopeMod !== undefined) return scopeMod;
+  try { scopeMod = await import(new URL("../hooks/record-scope.mjs", import.meta.url).href); }
+  catch { scopeMod = null; try { process.stderr.write("[lively-local] 기록 범위 판정 모듈을 못 찾아 판정하지 않습니다 — lively update\n"); } catch { /* */ } }
+  return scopeMod;
+}
+// lively mcp 와 같은 규칙 — 세션 폴더 근거가 있는 하네스(클로드·코덱스 · LIVELY_SESSION_DIR 를 실은 경우)만 판정한다.
+const scopeKnowsFolder = (env = process.env) => {
+  const h = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase().replace(/-code$/, "");
+  return !!String(env.LIVELY_SESSION_DIR || "").trim() || h === "claude" || h === "codex" || (h === "cursor" && !!String(env.CURSOR_PROJECT_DIR || "").trim());
+};
+function scopeInNow() {
+  if (!scopeMod || !scopeKnowsFolder()) return true;
+  try { return scopeMod.inScopeNow({ env: process.env, cwd: process.cwd(), lively: LIVELY }).inScope; }
+  catch { return true; }
+}
+
 export function serveMcpLocal({ input = process.stdin, output = process.stdout } = {}) {
   const realStdio = input === process.stdin && output === process.stdout;
   if (realStdio) armPeerGuards();
@@ -396,6 +420,21 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
   };
   const okr = (id, result) => send({ jsonrpc: "2.0", id, result });
   const errr = (id, code, message) => send({ jsonrpc: "2.0", id, error: { code, message } });
+  const scopeReady = loadScopeModule();
+  let inScope = null;        // 마지막으로 하네스에 보여 준 판정(null = 아직)
+  let scopeWatch = null;
+  const scopeIn = () => (inScope = scopeInNow());
+  function ensureScopeWatch() {
+    if (scopeWatch || !(SCOPE_WATCH_MS > 0)) return;
+    scopeWatch = setInterval(() => {
+      if (scopeMod === undefined || inScope === null) return;
+      const now = scopeInNow();
+      if (now === inScope) return;
+      inScope = now;
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    }, SCOPE_WATCH_MS);
+    if (typeof scopeWatch.unref === "function") scopeWatch.unref();
+  }
   const rl = createInterface({ input });
   rl.on("line", async (line) => {
     line = line.trim();
@@ -404,10 +443,11 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
     try { msg = JSON.parse(line); } catch { return; }
     const { id, method, params } = msg;
     try {
+      if (method === "tools/list" || method === "tools/call") await scopeReady;   // 기록 범위 판정 모듈(#5016)
       if (method === "initialize") {
         okr(id, {
           protocolVersion: (params && params.protocolVersion) || PROTOCOL,
-          capabilities: { tools: { listChanged: false } },
+          capabilities: { tools: { listChanged: true } },   // 기록 범위가 바뀌면(#5016) 목록을 다시 받게 한다
           serverInfo: { name: "lively-local", version: readLively("kit-version") || "0.1.0" },
           // instructions 는 tool search 가 켜진 하네스에서 '언제 이 툴들을 찾아야 하는지'를 알려주는 자리다
           //  (deferred 툴은 이름만 실리므로 — pin 계열이 여기에 기댄다). repo_list·repo_worktree 는 _meta.alwaysLoad 로
@@ -417,10 +457,13 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
             + "lively_local_repo_worktree 로 워크트리를 떠서 그 위에서 작업하라(공유 base 직접작업 금지). "
             + "고치지 않고 읽기만 할 거면 lively_local_repo_pin 으로 SHA 고정 핀을 떠서 인용하라.",
         });
+        ensureScopeWatch();
       } else if (method === "notifications/initialized" || method === "notifications/cancelled") {
         // 알림 — 응답 없음
       } else if (method === "tools/list") {
-        okr(id, { tools: TOOLS.map(toolSpec) });
+        okr(id, { tools: scopeIn() ? TOOLS.map(toolSpec) : [] });
+      } else if (method === "tools/call" && !scopeIn()) {
+        okr(id, { content: [{ type: "text", text: OUTSIDE_TOOL_TEXT }], isError: true });   // 기록 범위 밖(#5016)
       } else if (method === "tools/call") {
         try {
           okr(id, await handleCall(params && params.name, params && params.arguments));
@@ -437,7 +480,7 @@ export function serveMcpLocal({ input = process.stdin, output = process.stdout }
       if (id !== undefined) errr(id, -32603, String((e && e.message) || e));
     }
   });
-  return new Promise((resolve) => rl.on("close", resolve));
+  return new Promise((resolve) => rl.on("close", () => { if (scopeWatch) { clearInterval(scopeWatch); scopeWatch = null; } resolve(); }));
 }
 
 // direct run — `node lively-mcp-local.mjs` (테스트/디버그) 일 때만. lively.mjs 가 import 하면 안 돈다.
