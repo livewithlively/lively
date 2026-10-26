@@ -1033,9 +1033,7 @@ function createSurfacePopup(opener, url, options) {
   // 지은 뒤에도 페이지는 창을 못 옮기고·못 키우고(moveTo·resizeTo → content-bounds-updated) 닫기를 못 막는다(beforeunload).
   win.webContents.on("content-bounds-updated", (e) => e.preventDefault());
   win.webContents.on("will-prevent-unload", (e) => e.preventDefault());
-  let openerUrl = "";
-  try { openerUrl = opener.getURL(); } catch { /* opener 가 이미 없다 — 빈 창이면 «빈 창» 으로 */ }
-  const retitle = (u, t) => { if (!win.isDestroyed()) win.setTitle(surfacePopupTitle(u, t, openerUrl)); };
+  const retitle = (u, t) => { if (!win.isDestroyed()) win.setTitle(surfacePopupTitle(u, t)); };
   retitle(url, "");   // 첫 제목 전부터 출처를 보인다(빈 창에 쓴 거짓 제목 대비)
   win.on("page-title-updated", (e, title) => { e.preventDefault(); retitle(win.webContents.getURL(), title); });
   win.webContents.on("did-navigate", (_e, navUrl) => retitle(navUrl, win.webContents.getTitle()));

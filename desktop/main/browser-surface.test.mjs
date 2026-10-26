@@ -261,7 +261,8 @@ t("F10 ★ 팝업 창은 우리가 짓는다 — spec·주인·격리·webConten
   assert.match(body, /win\.webContents\.on\("will-prevent-unload", \(e\) => e\.preventDefault\(\)\)/,
     "★ 페이지가 beforeunload 로 닫기를 막는다 — 닫히지 않는 창 · 앱 종료·업데이트까지 막힌다");
   assert.match(body, /retitle\(url, ""\);/, "만들자마자 출처를 안 보인다 — 첫 제목 전엔 앱 이름만 보인다");
-  assert.match(body, /win\.setTitle\(surfacePopupTitle\(u, t, openerUrl\)\)/, "★ 빈 창 제목에 opener 출처를 안 준다");
+  assert.match(body, /win\.setTitle\(surfacePopupTitle\(u, t\)\)/, "제목을 출처 판정(surfacePopupTitle)으로 안 짓는다");
+  assert.ok(!/opener\.getURL\(\)/.test(body), "★ 빈 창 제목에 opener(최상위 페이지) 출처를 빌린다 — 남의 iframe 이 연 빈 창이 그 페이지 이름을 단다");
   assert.match(body, /win\.on\("page-title-updated", \(e, title\) => \{ e\.preventDefault\(\); retitle\(win\.webContents\.getURL\(\), title\); \}\)/,
     "★ 제목에 실제 출처를 안 붙인다 — 주소줄 없는 창에서 남의 페이지가 어디인지 안 보인다");
   assert.match(body, /win\.webContents\.on\("did-navigate", \(_e, navUrl\) => retitle\(navUrl, win\.webContents\.getTitle\(\)\)\)/,
@@ -544,13 +545,13 @@ t("L6 webContents 가 아니면 열지 않는다(실패 닫힘) · adopt 는 죽
 });
 
 // ── T. 팝업 제목 — 주소줄이 없으니 실제 출처를 앞에 ───────────────────────────────────────────
-t("T1~T6 제목 = 실제 출처 — 빈 창은 opener 출처 · 그것도 없으면 «빈 창»", () => {
+t("T1~T6 제목 = 실제 출처 — 빈 창은 «빈 창»(누가 썼는지 제목만으론 모른다)", () => {
   assert.equal(surfacePopupTitle("https://accounts.google.com/x", "로그인 - Google 계정"), "accounts.google.com — 로그인 - Google 계정"); // T1
   assert.equal(surfacePopupTitle("https://accounts.google.com/x", "  "), "accounts.google.com");                         // T2
   assert.equal(surfacePopupTitle("https://accounts.google.com/x", undefined), "accounts.google.com");
-  // T3 ★ 스크립트가 빈 창에 쓴 거짓 제목 — opener 의 실제 출처가 앞에 선다
+  // T3 ★ 스크립트가 빈 창에 쓴 거짓 제목 — «빈 창» 이 앞에 선다(opener 출처를 빌리지 않는다 — 셋째 인자는 무시)
   assert.equal(surfacePopupTitle("about:blank", "Lively — 다시 로그인하세요", "https://www.linkedin.com/login"),
-    "www.linkedin.com — Lively — 다시 로그인하세요");
+    "빈 창 — Lively — 다시 로그인하세요");
   assert.equal(surfacePopupTitle("about:blank", "제목"), "빈 창 — 제목");                                                 // T3b
   assert.equal(surfacePopupTitle("about:blank", ""), "빈 창");
   assert.equal(surfacePopupTitle("https://a.com/", "a.com"), "a.com");                                                     // T4

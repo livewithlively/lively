@@ -256,17 +256,17 @@ export function createOpenLedger() {
 
 /**
  * 팝업 창 제목 — 앞에 **실제 출처(호스트)** 를 붙인다. 팝업엔 주소줄이 없어서, 남의 페이지가 그럴듯한 로그인 화면을 띄워도
- *  어디인지 보이게 한다(크롬도 팝업엔 출처를 보인다). 빈 창(about:blank)은 opener 의 출처를 이어받으므로 opener 의 호스트를,
- *  그것도 없으면 «빈 창» 을 붙인다 — 스크립트가 빈 창에 쓴 거짓 제목이 출처 없이 서지 않게.
+ *  어디인지 보이게 한다(크롬도 팝업엔 출처를 보인다). 빈 창(about:blank)은 «빈 창» 이라고만 붙인다 — 그 창을 누가 썼는지는
+ *  제목만으론 알 수 없다. opener(최상위 페이지)의 호스트를 빌리면, 믿을 만한 페이지 안의 남의 iframe 이 연 빈 창이 그 페이지
+ *  이름을 달고 선다(격리 리뷰 3차). 스크립트가 빈 창에 쓴 거짓 제목도 «빈 창 — …» 으로 서서 출처 없이 서지 않는다.
  */
-export function surfacePopupTitle(url, title, openerUrl) {
-  const hostOf = (u) => {
-    try {
-      const x = new URL(String(u || ""));
-      return x.protocol === "http:" || x.protocol === "https:" ? x.host : "";
-    } catch { return ""; }
-  };
-  const label = hostOf(url) || hostOf(openerUrl) || "빈 창";
+export function surfacePopupTitle(url, title) {
+  let host = "";
+  try {
+    const x = new URL(String(url || ""));
+    if (x.protocol === "http:" || x.protocol === "https:") host = x.host;
+  } catch { /* 깨진 주소 — 호스트 없음 */ }
+  const label = host || "빈 창";
   const t = String(title || "").trim();
   return t && t !== label ? `${label} — ${t}` : label;
 }
