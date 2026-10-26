@@ -88,7 +88,9 @@ function grepTree(root, needle) {
 
 // ── 시나리오 실행기 ──────────────────────────────────────────────────────────
 // systemNode: OLD|NEW|null (PATH 에 놓을 시스템 node) / runtime: NEW|null (이미 설치된 전용 런타임)
-function runScenario(label, { systemNode = null, runtime = null }) {
+// wslEnv: WSL 판정 env(#5041). 기본은 `LIVELY_WSL=0` — 이 시험을 WSL 안에서 돌려도(윈도우 개발자는 POSIX 시험을 WSL 에서
+//  돌린다) 엣지①~④가 «WSL 이 아닌 박스» 를 재게 한다. WSL 시나리오는 WSL_DISTRO_NAME(실제 WSL 이 거는 값)이나 LIVELY_WSL=1.
+function runScenario(label, { systemNode = null, runtime = null, wslEnv = { LIVELY_WSL: "0" } }) {
   const box = mkdtempSync(join(tmpdir(), `bootstrap-gate-${label}-`));
   const home = join(box, "home");
   const bin = join(box, "stub-bin");
@@ -138,6 +140,7 @@ function runScenario(label, { systemNode = null, runtime = null }) {
       USER: process.env.USER || "tester",
       LOGNAME: process.env.LOGNAME || "tester",
       NO_COLOR: "1",
+      ...wslEnv,
     },
     input: "",            // stdin 즉시 EOF — 프롬프트가 있어도 매달리지 않는다
     encoding: "utf8",
@@ -180,7 +183,20 @@ const B = runScenario("B", { systemNode: OLD, runtime: NEW });   // 엣지②: �
 const C = runScenario("C", { systemNode: NEW, runtime: null });  // 엣지③: 최소 이상 · 전용 런타임 없음
 const D = runScenario("D", { systemNode: null, runtime: null }); // 엣지④: Node 없음 · 전용 런타임 없음
 const E = runScenario("E", { systemNode: EXACT, runtime: null }); // 엣지③ 경계: 정확히 최소(20)
-const ALL = [A, B, C, D, E];
+// WSL(#5041) — Cursor 가 셸 설정 없이 띄우는 훅·MCP 가 nvm 류 node 를 못 찾는다(실측). 그래서 WSL 이면 시스템 node 가
+//  최소 이상이어도 전용 런타임(절대경로)을 쓴다 — 받지 못하면 시스템 node 로 물러선다(설치를 막지 않는다).
+const WSL = { WSL_DISTRO_NAME: "Ubuntu" };                          // 실제 WSL 이 프로세스마다 거는 값
+const W1 = runScenario("W1", { systemNode: NEW, runtime: null, wslEnv: WSL });      // WSL · 시스템 v22 · 전용 없음
+const W2 = runScenario("W2", { systemNode: NEW, runtime: NEW, wslEnv: WSL });       // WSL · 시스템 v22 · 전용 있음
+const W3 = runScenario("W3", { systemNode: null, runtime: null, wslEnv: WSL });     // WSL · Node 없음
+const W4 = runScenario("W4", { systemNode: NEW, runtime: null, wslEnv: { LIVELY_WSL: "1" } });                    // 강제 켬
+const W5 = runScenario("W5", { systemNode: NEW, runtime: null, wslEnv: { ...WSL, LIVELY_WSL: "0" } });            // 강제 끔
+const W6 = runScenario("W6", { systemNode: OLD, runtime: null, wslEnv: WSL });      // WSL · 시스템 v16(못 씀) · 전용 없음
+const W7 = runScenario("W7", { systemNode: EXACT, runtime: null, wslEnv: WSL });    // WSL · 시스템 v20(정확히 최소) · 전용 없음
+const ALL = [A, B, C, D, E, W1, W2, W3, W4, W5, W6, W7];
+// 「Node 고르기를 지나 다음 단계(게이트웨이에서 CLI 받기)로 갔다」 — 닫힌 포트라 거기서 끝나지만, 그 주소로 나간 것 자체가
+//  «Node 단계에서 멈추지 않았다» 는 관찰이다(엣지④는 여기까지 못 간다).
+const reachedCli = (s) => s.urls.some((u) => u.startsWith(`${GATEWAY}/cli/`));
 
 try {
   // ── 배선 자기검증 — 이게 깨지면 아래 통과는 전부 무의미(vacuous)하다 ──────────
@@ -279,6 +295,42 @@ try {
     `Node 가 아예 없는 박스에서만 설치가 중단된다는 뜻이다`);
   check("엣지④ R3 — 시스템에 Node 를 깔려 들지 않는다(sudo/brew/apt/nvm… 미호출)",
     D.pkgCalls.length === 0, JSON.stringify(D.pkgCalls.slice(0, 5)));
+
+  // ── WSL(#5041) — 시스템 node 가 멀쩡해도 전용 런타임 · 못 받으면 시스템 node 로 계속 ─────────────
+  check("배선 WSL 대조 — 같은 v22 라도 WSL 이 아니면(엣지③) 게이트웨이 CLI 단계까지 간다(관찰 reachedCli 가 살아 있다)",
+    reachedCli(C) && !reachedCli(D),
+    `C=${reachedCli(C)} D=${reachedCli(D)} — 둘이 갈리지 않으면 아래 «물러섬» 판정이 공허하다`);
+  check("W1 ★ WSL 이면 시스템 v22 가 있어도 전용 런타임을 받으러 간다",
+    W1.runtimeFetch.length > 0,
+    `런타임 취득 시도가 없다 — 시스템 node 를 그대로 채택했다(urls=${JSON.stringify(W1.origins)})`);
+  check("W1 ★ 받지 못하면 시스템 node 로 계속한다(설치를 막지 않는다 — 다음 단계로 간다)",
+    reachedCli(W1),
+    `게이트웨이 CLI 단계로 가지 않았다(exit=${W1.r.status}) — 내려받기 실패를 설치 중단으로 끝냈다`);
+  check("W1 — 어느 node 로 계속하는지 사람 눈에 보인다(stderr 에 시스템 node 버전)",
+    W1.err.includes(NEW.ver), `stderr(${W1.err.length}자)에 ${NEW.ver} 언급 없음`);
+  check("W1 R3 — 시스템 node 무변경 + 시스템 변경 도구 미호출",
+    W1.before.sysNode === W1.after.sysNode && W1.pkgCalls.length === 0,
+    `지문 ${W1.before.sysNode}→${W1.after.sysNode} pkg=${JSON.stringify(W1.pkgCalls.slice(0, 5))}`);
+  check("W2 ★ WSL · 전용 런타임이 이미 있으면 시스템 v22 대신 그걸 쓴다(재다운로드 없음)",
+    W2.runtimeFetch.length === 0 && W2.ownCalls.length > 0 && W2.sysRuns.length === 0,
+    `취득시도=${JSON.stringify(W2.origins)} ownNode호출=${W2.ownCalls.length} sysRuns=${JSON.stringify(W2.sysRuns.slice(0, 3))}`);
+  check("W3 — WSL · Node 가 아예 없으면 받으러 가고, 못 받으면 멈춘다(물러설 node 가 없다)",
+    W3.runtimeFetch.length > 0 && !reachedCli(W3) && W3.r.status !== 0,
+    `취득시도=${W3.runtimeFetch.length} reachedCli=${reachedCli(W3)} exit=${W3.r.status}`);
+  check("W4 — LIVELY_WSL=1 은 WSL_DISTRO_NAME 없이도 WSL 로 친다",
+    W4.runtimeFetch.length > 0, `취득시도 없음(urls=${JSON.stringify(W4.origins)})`);
+  check("W5 — LIVELY_WSL=0 은 WSL_DISTRO_NAME 이 있어도 WSL 이 아닌 것으로 친다(엣지③과 같다)",
+    W5.runtimeFetch.length === 0 && W5.sysCalls.length > 0 && reachedCli(W5),
+    `취득시도=${JSON.stringify(W5.origins)} sysNode호출=${W5.sysCalls.length} reachedCli=${reachedCli(W5)}`);
+  check("W6 — WSL · 시스템 v16 은 물러설 자리가 아니다: 받으러 가고, 못 받으면 멈춘다",
+    W6.runtimeFetch.length > 0 && !reachedCli(W6) && W6.sysRuns.length === 0,
+    `취득시도=${W6.runtimeFetch.length} reachedCli=${reachedCli(W6)} sysRuns=${JSON.stringify(W6.sysRuns.slice(0, 3))}`);
+  check("W6 R5 — 구버전이라 못 쓴다는 고지(16·최소 20)가 남는다",
+    (/(^|[^\d.])v?16([^\d]|$)/.test(W6.err) || W6.err.includes(OLD.ver)) && new RegExp(`(^|[^\\d.])${MIN_MAJOR}([^\\d]|$)`).test(W6.err),
+    `stderr(${W6.err.length}자)`);
+  check(`W7 — 경계값: 시스템 v${MIN_MAJOR}(정확히 최소)는 물러설 수 있는 node 다`,
+    W7.runtimeFetch.length > 0 && reachedCli(W7),
+    `취득시도=${W7.runtimeFetch.length} reachedCli=${reachedCli(W7)} exit=${W7.r.status}`);
 
   // ── R6 최소 버전 값이 여러 설치 표면에서 일치하는가 ─────────────────────────
   // 구현을 읽지 않고도 검증되도록 관용적인 두 형태만 뽑는다:

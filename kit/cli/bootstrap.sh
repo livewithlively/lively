@@ -72,16 +72,40 @@ say_old_sys_node() {
   [ -n "$SYS_NODE" ] && info "시스템 node($("$SYS_NODE" -v 2>/dev/null || echo '버전 확인 실패')) 는 Node ${NODE_MIN_MAJOR} 미만 — $1"
   return 0
 }
+# WSL(#5041) — 시스템 node 가 쓸 만해도 **전용 런타임을 먼저** 쓴다.
+#  Cursor 는 WSL 안의 훅·MCP 를 셸 설정(.bashrc) 없이 띄울 수 있다. 그러면 nvm 같은 도구로 깐 node 가 PATH 에 없어
+#  훅은 `node: not found`, MCP 심은 «Node 를 찾을 수 없습니다» 로 죽는다(실측: 같은 설치가 nvm PATH 가 있으면 도구 460개 ·
+#  맥락 7,010자, 없으면 0 · 0). 전용 런타임은 절대경로라 심과 훅(user-install.mjs NODEBIN)이 PATH 와 무관해진다.
+#  내려받기에 실패하면 시스템 node 로 계속한다 — 설치를 막지 않는다(종전 동작으로 물러선다).
+#  판정: LIVELY_WSL(1|0 — 시험·사람이 강제) > WSL 이 프로세스마다 거는 WSL_DISTRO_NAME > 커널 이름의 microsoft
+#  (`su -` 처럼 env 를 지운 셸). CLI 의 isWsl(lively.mjs)과 같은 판정이다.
+is_wsl() {
+  case "${LIVELY_WSL:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  [ -n "${WSL_DISTRO_NAME:-}" ] && return 0
+  grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null
+}
+PREFER_OWN=0
+if is_wsl; then PREFER_OWN=1; fi
+# 전용 런타임을 고른 이유를 남긴다 — WSL 이면서 시스템 node 가 멀쩡하면 «구버전» 이 아니라 WSL 때문이다.
+#  (say_old_sys_node 와 같은 이유로 `return 0` 으로 끝낸다.)
+say_why_own_node() {
+  if [ "$PREFER_OWN" = 1 ] && node_usable "$SYS_NODE"; then
+    info "WSL 에서는 시스템 node($("$SYS_NODE" -v 2>/dev/null || echo '버전 확인 실패')) 대신 $1 Cursor 가 셸 설정 없이 띄우는 훅·MCP 도 node 를 찾게 하려는 것입니다."
+  else
+    say_old_sys_node "$1"
+  fi
+  return 0
+}
 NODE=""
-if node_usable "$SYS_NODE"; then
+if [ "$PREFER_OWN" = 0 ] && node_usable "$SYS_NODE"; then
   NODE="$SYS_NODE"
   ok "Node: 시스템 설치 사용 ($("$NODE" -v))"
 elif node_usable "$BUNDLED_NODE"; then
   NODE="$BUNDLED_NODE"
-  say_old_sys_node "라이블리 전용 런타임을 씁니다(시스템 node 는 그대로 둡니다)."
+  say_why_own_node "라이블리 전용 런타임을 씁니다(시스템 node 는 그대로 둡니다)."
   ok "Node: 번들 런타임 재사용 ($("$NODE" -v))"
 else
-  say_old_sys_node "라이블리 전용 런타임을 설치합니다(시스템 node 는 그대로 둡니다)."
+  say_why_own_node "라이블리 전용 런타임을 설치합니다(시스템 node 는 그대로 둡니다)."
   case "$(uname -s)" in
     Darwin) NOS="darwin" ;;
     Linux)  NOS="linux" ;;
@@ -102,29 +126,37 @@ else
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT INT TERM
   info "Node ${NVER} (${NARCH}) 내려받는 중… (~30MB · 관리자 권한 불필요)"
-  curl -fsSL --max-time 300 "https://nodejs.org/dist/${NVER}/${BASE}.tar.gz" -o "$TMP/node.tgz" \
-    || die "Node 다운로드 실패 — 네트워크를 확인하고 다시 실행하세요."
-  # 무결성 검증(공급망 위생): SHASUMS256 을 받으면 **불일치 시 중단**. 못 받으면 TLS 다운로드로 진행(경고).
-  if curl -fsSL --max-time 30 "https://nodejs.org/dist/${NVER}/SHASUMS256.txt" -o "$TMP/sums" 2>/dev/null; then
-    if command -v shasum >/dev/null 2>&1; then GOT="$(shasum -a 256 "$TMP/node.tgz" | awk '{print $1}')"
-    elif command -v sha256sum >/dev/null 2>&1; then GOT="$(sha256sum "$TMP/node.tgz" | awk '{print $1}')"
-    else GOT=""; fi
-    WANT="$(awk -v f="${BASE}.tar.gz" '$2==f{print $1}' "$TMP/sums")"
-    if [ -n "$GOT" ] && [ -n "$WANT" ] && [ "$GOT" != "$WANT" ]; then
-      die "Node 체크섬 불일치 — 설치를 중단합니다(무결성 실패)."
+  if curl -fsSL --max-time 300 "https://nodejs.org/dist/${NVER}/${BASE}.tar.gz" -o "$TMP/node.tgz"; then
+    # 무결성 검증(공급망 위생): SHASUMS256 을 받으면 **불일치 시 중단**. 못 받으면 TLS 다운로드로 진행(경고).
+    #  ⚠ 불일치는 WSL 이어도 시스템 node 로 물러서지 않는다 — 내려받기 실패와 달리 변조 신호다.
+    if curl -fsSL --max-time 30 "https://nodejs.org/dist/${NVER}/SHASUMS256.txt" -o "$TMP/sums" 2>/dev/null; then
+      if command -v shasum >/dev/null 2>&1; then GOT="$(shasum -a 256 "$TMP/node.tgz" | awk '{print $1}')"
+      elif command -v sha256sum >/dev/null 2>&1; then GOT="$(sha256sum "$TMP/node.tgz" | awk '{print $1}')"
+      else GOT=""; fi
+      WANT="$(awk -v f="${BASE}.tar.gz" '$2==f{print $1}' "$TMP/sums")"
+      if [ -n "$GOT" ] && [ -n "$WANT" ] && [ "$GOT" != "$WANT" ]; then
+        die "Node 체크섬 불일치 — 설치를 중단합니다(무결성 실패)."
+      fi
+      [ -n "$WANT" ] && [ -n "$GOT" ] && info "체크섬 검증 통과"
+    else
+      info "SHASUMS256 확보 실패 — 체크섬 생략(TLS 다운로드로 진행)"
     fi
-    [ -n "$WANT" ] && [ -n "$GOT" ] && info "체크섬 검증 통과"
+    mkdir -p "$NODE_DIR"
+    rm -rf "${NODE_DIR:?}/$BASE"
+    tar -xzf "$TMP/node.tgz" -C "$NODE_DIR" || die "Node 압축 해제 실패."
+    ln -sfn "$NODE_DIR/$BASE" "$NODE_DIR/current"   # 버전 무관 안정 경로(심·훅·uninstall 이 참조)
+    NODE="$NODE_DIR/current/bin/node"
+    [ -x "$NODE" ] || die "Node 설치 확인 실패."
+    rm -rf "$TMP"; trap - EXIT INT TERM
+    ok "Node 설치 완료: ~/.lively/runtime/$BASE ($("$NODE" -v))"
+  elif [ "$PREFER_OWN" = 1 ] && node_usable "$SYS_NODE"; then
+    # WSL 인데 내려받지 못했다 — 시스템 node 로 계속한다(종전 동작). 훅·MCP 가 PATH 에 기대게 되니 다시 하라고 남긴다.
+    rm -rf "$TMP"; trap - EXIT INT TERM
+    NODE="$SYS_NODE"
+    info "Node 다운로드 실패 — 시스템 node($("$NODE" -v))로 계속합니다. Cursor 에서 라이블리가 붙지 않으면 네트워크를 확인하고 이 명령을 다시 실행하세요."
   else
-    info "SHASUMS256 확보 실패 — 체크섬 생략(TLS 다운로드로 진행)"
+    die "Node 다운로드 실패 — 네트워크를 확인하고 다시 실행하세요."
   fi
-  mkdir -p "$NODE_DIR"
-  rm -rf "${NODE_DIR:?}/$BASE"
-  tar -xzf "$TMP/node.tgz" -C "$NODE_DIR" || die "Node 압축 해제 실패."
-  ln -sfn "$NODE_DIR/$BASE" "$NODE_DIR/current"   # 버전 무관 안정 경로(심·훅·uninstall 이 참조)
-  NODE="$NODE_DIR/current/bin/node"
-  [ -x "$NODE" ] || die "Node 설치 확인 실패."
-  rm -rf "$TMP"; trap - EXIT INT TERM
-  ok "Node 설치 완료: ~/.lively/runtime/$BASE ($("$NODE" -v))"
 fi
 
 # ── [2] lively CLI ────────────────────────────────────────────────────────────

@@ -204,9 +204,11 @@ async function harnessState() {
     }
   }
   // cursor IDE(#4927) — IDE 만 쓰는 사람은 PATH 에 cursor-agent 가 없어 위 PATH 감지가 못 잡는다. ~/.cursor(IDE·CLI 가 첫 실행에
-  //  만든다)가 있으면 쓰는 하네스로 본다 — CLI detectHarnesses 와 **같은 판정**(두 판정이 갈리면 그게 결함 — 머리말 데드락 실측).
+  //  만든다)나 ~/.cursor-server(#5041 — 윈도우 Cursor 가 WSL·SSH 로 이 홈에 붙을 때 까는 원격 서버)가 있으면 쓰는 하네스로 본다
+  //  — CLI detectHarnesses(cursorPresent)와 **같은 판정**(두 판정이 갈리면 그게 결함 — 머리말 데드락 실측).
   //  ⚠ PATH 보탬과 같은 게이트: kit 이 설치된 홈에서만(«엉뚱한 머신» 계약 — self-update.test ⑧).
-  if (existsSync(join(LIVELY, "hooks")) && !out.includes("cursor") && existsSync(join(HOME, ".cursor"))) out.push("cursor");
+  if (existsSync(join(LIVELY, "hooks")) && !out.includes("cursor")
+    && (existsSync(join(HOME, ".cursor")) || existsSync(join(HOME, ".cursor-server")))) out.push("cursor");
   // 세션 하네스 힌트 — '지금 그 하네스 안에서 불려왔다'는 **가장 강한 신호**라 합집합으로 넣는다(폴백 아님).
   //  ⚠ 종전엔 `!out.length` 가드 안이었다: 배선 신호가 하나도 없을 때만 발동. 위 PATH 감지가 out 을 먼저
   //   채우게 된 뒤로는 그 가드가 곧 **선점**이 된다 — detached PATH 에 자기 바이너리는 없고 남의 하네스만

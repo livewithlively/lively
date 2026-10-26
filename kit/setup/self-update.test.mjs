@@ -264,6 +264,22 @@ try {
       : bad("⑧b 미배선 + PATH", `installHits +${serving.installHits - before} — PATH 만 보고 lively 를 쓴 적 없는 홈에 설치했다`);
   }
 
+  // ⑧c #5041 — Cursor 원격 서버(~/.cursor-server)가 있어도 kit 이 없는 홈이면 무동작 — 새 감지 신호도 «엉뚱한 머신» 게이트 안에
+  //  있어야 한다(SSH 로 붙는 공용 리눅스 박스에 lively 를 쓴 적 없는 사람의 홈이 그 모양이다).
+  {
+    serving.body = makeBundle("v-bare-cs"); serving.version = "v-bare-cs";
+    const before = serving.installHits;
+    const home = mkdtempSync(join(BOX, "bare-cursor-server-"));
+    mkdirSync(join(home, ".lively"), { recursive: true });   // ⚠ hooks/ 는 만들지 않는다 = kit 미설치
+    mkdirSync(join(home, ".cursor-server", "bin"), { recursive: true });
+    writeFileSync(lv(home, "token"), "test-token");
+    writeFileSync(lv(home, "gateway-url"), GW);
+    await runUpdater(home, {}, ["--to", "v-bare-cs"]).catch(() => {});
+    (serving.installHits === before && !existsSync(join(home, ".cursor", "hooks.json")))
+      ? ok("⑧c Cursor 원격 서버가 있어도 kit 없는 홈이면 무동작 (#5041)")
+      : bad("⑧c 미배선 + ~/.cursor-server", `installHits +${serving.installHits - before} hooks.json=${existsSync(join(home, ".cursor", "hooks.json"))}`);
+  }
+
   // ══ 프로덕션 경로 통합 — session-preload(훅) → detached 업데이터 → 설치 ══
   //  여기까지 붙어야 "멤버가 세션을 켜기만 하면 갱신된다"가 증명된다. 위 케이스들은 업데이터 단독 실행이었다.
   const PRELOAD = join(HERE, "..", "hooks", "session-preload.mjs");
@@ -650,6 +666,17 @@ try {
       /cursor-adapter\.mjs/.test(hooks)
         ? ok("⑯c IDE 만 쓰는 사람도 kit 홈이면 cursor 배선 (#4927)")
         : bad("⑯c IDE 감지", `~/.cursor/hooks.json 에 우리 엔트리가 없다 — hooks=${JSON.stringify(hooks.slice(0, 120))}`);
+    }
+    // ⑯c′ #5041 — 윈도우 Cursor 가 WSL·SSH 로 붙는 리눅스 홈: Cursor 가 깐 원격 서버(~/.cursor-server)만 있고 ~/.cursor 는
+    //  아직 없다(첫 에이전트 대화 전). 그래도 Cursor 는 이 홈의 ~/.cursor/mcp.json 을 읽으니 cursor 를 배선한다(CLI 와 같은 판정).
+    {
+      const hr = freshHome(null);
+      mkdirSync(join(hr, ".cursor-server", "bin"), { recursive: true });   // 원격 서버 자리 흉내(~/.cursor 없음)
+      await runUpdater(hr);
+      const hooks = (() => { try { return readFileSync(join(hr, ".cursor", "hooks.json"), "utf8"); } catch { return ""; } })();
+      /cursor-adapter\.mjs/.test(hooks)
+        ? ok("⑯c′ Cursor 원격 서버(~/.cursor-server)만 있는 WSL·SSH 홈도 cursor 배선 (#5041)")
+        : bad("⑯c′ 원격 감지", `~/.cursor/hooks.json 에 우리 엔트리가 없다 — hooks=${JSON.stringify(hooks.slice(0, 120))}`);
     }
 
     // ⑯d~⑯j #4927 — **버전이 같아도 «새 하네스» 는 한 번 배선한다**(사양 spec.md §G). 실측(2026-10-22 상민님 윈도우 PC):
