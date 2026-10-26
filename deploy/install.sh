@@ -14,7 +14,8 @@ set -euo pipefail
 #     BOOTSTRAP_ADMIN_PASSWORD=…             첫 관리자 초기 비번(생략 시 랜덤 — 요약에 출력)
 #     ORG_DOMAIN=org.com                     에이전트 토큰 이메일 도메인
 #     WITH_EMBEDDINGS=1                      임베딩 사이드카 동반(t4g.large+ 권장)
-#     LIVELY_MEMBER_ISOLATION=off            구성원 격리(리눅스 기본 켬 — 구성원마다 OS 계정)를 깔지 않는다(1인용·디스크 작은 박스)
+#     LIVELY_MEMBER_ISOLATION=off|on         구성원 격리(리눅스 새 설치 기본 켬 — 구성원마다 OS 계정). off=깔지 않음(1인용·디스크 작은 박스) ·
+#                                            on=기존 설치 위 · OFFLINE · LIVELY_SERVER_AIS=off 박스에서도 켬(그때는 기본으로 안 켠다)
 #     FORCE=1                                기존 게이트웨이 감지해도 강행
 # ─────────────────────────────────────────────────────────────────────────────
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # deploy/
@@ -34,6 +35,15 @@ export OFFLINE="${OFFLINE:-0}"
 if [ "${FORCE:-0}" != "1" ] && curl -fsS --max-time 2 "http://localhost:${PORT}/healthz" >/dev/null 2>&1; then
   die "이미 :${PORT} 에 게이트웨이가 떠 있습니다 — 기존 설치 보호. 새 호스트에서 실행하거나 FORCE=1 로 강행하세요."
 fi
+
+# 기존 설치 위에 다시 돌리는가(FORCE=1 · 게이트웨이 정지 중) — 그때는 구성원 격리 모드를 바꾸지 않는다(common.sh ensure_member_isolation).
+#  신호는 «게이트웨이가 응답한다» 또는 «서비스 유닛이 이미 있다» 다(.env 는 운영자가 미리 준비해 둘 수 있어 신호로 쓰지 않는다).
+LIVELY_PRIOR_INSTALL=0
+if curl -fsS --max-time 2 "http://localhost:${PORT}/healthz" >/dev/null 2>&1 \
+   || [ -f /etc/systemd/system/lively-gateway.service ] || [ -f /etc/systemd/system/lively-gateway@.service ]; then
+  LIVELY_PRIOR_INSTALL=1
+fi
+export LIVELY_PRIOR_INSTALL
 
 require_cmd curl; require_cmd openssl
 

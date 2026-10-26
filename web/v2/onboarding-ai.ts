@@ -49,6 +49,9 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
   const probed = new Map<string, boolean>();
   const note = document.createElement('p');
   note.className = 'ob-q-help ob-ai-note';
+  //  계정 만들기 안내·실패가 여기 뜬다 — 누른 [연결]이 막히면서 포커스가 사라지니 화면낭독기가 읽게 한다(#5031 격리 리뷰).
+  note.setAttribute('role', 'status');
+  note.setAttribute('aria-live', 'polite');
   note.hidden = true;
 
   const actHtml = (a: AiAccountRow): string => a.loggedIn === true
@@ -82,24 +85,35 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
   const setGoDisabled = (off: boolean): void => {
     for (const it of items.values()) { const go = it.act.querySelector<HTMLButtonElement>('.ob-ai-go'); if (go) go.disabled = off; }
   };
-  const seatThenOpen = (key: string, retry = false): void => {
+  //  못 시작한 채 기다리지 않는다(격리 리뷰 — 첫 요청이 502 한 번이면 묻기만 되풀이하며 «만들고 있어요» 에 갇혔다): 서버가 «만드는 중» 이라고
+  //   답할 때까지는 시작 요청을 다시 보내고, 그래도 연속 SEAT_MISS_MAX 번 못 시작하면(끊김 · absent) 실패처럼 «다시 해 보기» 를 보인다.
+  //   첫 요청은 retry — 사람이 직접 누른 것이라 방금 실패 뒤의 5분 막음도 푼다(로그인 시작 awaitMemberSeat 와 같은 정책).
+  const SEAT_MISS_MAX = 5;
+  const seatFail = (key: string, msg: string): void => {
+    note.innerHTML = `${msg} 관리자에게 알려 주세요 — 그동안은 아래 «PC에서 쓰는 AI로» 를 쓰실 수 있어요. <button type="button" class="ob-linkbtn ob-ai-seat-retry">다시 해 보기</button>`;
+    const again = note.querySelector<HTMLButtonElement>('.ob-ai-seat-retry')!;
+    again.onclick = () => { seatThenOpen(key); };
+    again.focus();
+  };
+  const seatThenOpen = (key: string): void => {
     if (seating) return;
-    note.innerHTML = '이 서버에서 쓰실 개인 계정을 만들고 있어요 — 처음 한 번만, 20초쯤 걸려요. 다 되면 바로 이어서 로그인을 열어 드릴게요.';
+    note.innerHTML = '이 서버에서 쓰실 개인 계정을 만들고 있어요 — 처음 한 번만, 보통 20초쯤(느리면 1~2분) 걸려요. 다 되면 바로 이어서 로그인을 열어 드릴게요.';
     note.hidden = false;
     seating = (async () => {
-      let start = true;
+      let ask: { start?: boolean; retry?: boolean } = { start: true, retry: true };
+      let misses = 0;
       for (;;) {
         if (!hooks.alive()) return;
-        const st = await askSeat({ start, retry });
-        start = false; retry = false;
+        const st = await askSeat(ask);
         if (!hooks.alive()) return;
         if (st === 'ready' || st === 'none') break;
-        if (st === 'failed') {
-          note.innerHTML = '이 서버에서 쓰실 개인 계정을 만들지 못했어요. 관리자에게 알려 주세요 — 그동안은 아래 «PC에서 쓰는 AI로» 를 쓰실 수 있어요. <button type="button" class="ob-linkbtn ob-ai-seat-retry">다시 해 보기</button>';
-          note.querySelector<HTMLButtonElement>('.ob-ai-seat-retry')!.onclick = () => { seatThenOpen(key, true); };
-          return;
+        if (st === 'failed') { seatFail(key, '이 서버에서 쓰실 개인 계정을 만들지 못했어요.'); return; }
+        if (st === 'preparing') { ask = {}; misses = 0; }          // 서버가 만들고 있다 — 이제 묻기만
+        else {                                                      // 못 물었거나(끊김) · 아직 시작이 안 됐다(absent) — 다시 시작을 부탁한다
+          ask = { start: true };
+          if (++misses >= SEAT_MISS_MAX) { seatFail(key, '이 서버에서 쓰실 개인 계정 만들기를 시작하지 못했어요.'); return; }
         }
-        await new Promise((z) => setTimeout(z, PREP_POLL_MS));   // 만드는 중(또는 한 번 못 물음) — 조금 뒤 다시 묻는다
+        await new Promise((z) => setTimeout(z, PREP_POLL_MS));
       }
       await reload();
       const it = items.get(key);

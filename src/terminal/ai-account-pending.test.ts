@@ -3,12 +3,14 @@
 //   처음 설정은 계정이 다 만들어질 때까지 목록을 숨겨야 했고, 계정을 미리(인사 장면에서) 만들었다. 이제 계정은 [연결] 때 만든다 —
 //   그 전에 그리는 목록이 정직해야 한다(계정이 없으면 어느 AI 에도 로그인돼 있을 수 없다).
 //  실제 함수를 샌드박스 HOME 으로 부른다 — 공용 홈에 세 AI 자격 파일을 놓아 두고 무엇이 «연결됨» 으로 나오는지 본다.
-//  엣지 표(스크래치패드 spec-5031 §서버 A):
+//  엣지 표:
 //   A1 격리 장치 · 계정 없음 · 공용 홈에 자격 있음 → 모든 줄 isolated · loggedIn false · pending · 로그아웃 잠금
 //   A2 격리 장치 · 계정 있음 → 종전(그 사람 홈에서 잰 값 · pending 없음)
 //   A3 격리 장치 없음 → 종전(공용 홈을 본다 — 이 시험의 배선 확인이기도 하다: 공용 자격이 실제로 보인다)
 //   A4 중계 배포(매니지드) · 계정 없음 → 종전(중계로 잰 값 · pending 없음)
 //   A5 사람 id 가 없는 토큰 → pending 아님(계정을 만들 수 없는 주체 — memberOsState 의 none 과 같은 축)
+//   A6 구성원이 아닌 주체(에이전트 토큰 등 — getMember 없음) → pending 아님 · 종전(공용) 판정 그대로
+//   A7 홈만 남은 계정(orphanHome) → pending 이되 로그인은 «모름»(null) — 다시 만들면 그 홈의 자격을 이어받을 수 있다
 //  실행: npm run build && node dist/terminal/ai-account-pending.test.js
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -34,6 +36,7 @@ let pass = 0;
 const t = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
 const person = { userId: "mem-a", email: "a@example.com", scopes: [], projects: [] } as unknown as LivelyUser;
 const os = (o: Partial<MemberOsStatus>) => ({ ready: true, provisioned: false, osUser: "box_mem-a", loggedInHarnesses: [], ...o }) as unknown as MemberOsStatus;
+const MEMBER = { isMember: async () => true };
 const byKey = (rows: Awaited<ReturnType<typeof aiAccountStatus>>) => Object.fromEntries(rows.map((r) => [r.key, r]));
 const FILE_KEYS = ["claude", "codex", "grok"];
 // 맥의 claude 는 공용 분기에서 키체인을 본다(이 기계 상태) — 공용 분기를 재는 A3 에서는 빼고 본다.
@@ -50,7 +53,7 @@ try {
   });
 
   await t("A1 ★ 격리 장치 · 계정 없음 → 공용 자격이 새지 않는다 · 모든 줄 «연결 전»(pending) · 로그아웃 잠금", async () => {
-    const rows = await aiAccountStatus(person, os({ ready: true, provisioned: false }));
+    const rows = await aiAccountStatus(person, os({ ready: true, provisioned: false }), MEMBER);
     const r = byKey(rows);
     for (const k of FILE_KEYS) {
       assert.ok(r[k], `${k}: 줄이 없다`);
@@ -80,8 +83,26 @@ try {
 
   await t("A5 사람 id 가 없는 토큰 → pending 아님(계정을 만들 수 없는 주체)", async () => {
     const nobody = { userId: "", email: "", scopes: [], projects: [] } as unknown as LivelyUser;
-    const rows = await aiAccountStatus(nobody, os({ ready: true, provisioned: false }));
+    const rows = await aiAccountStatus(nobody, os({ ready: true, provisioned: false }), MEMBER);
     for (const row of rows) assert.equal(row.pending, undefined, `${row.key}: 사람 id 없이 pending 이 됐다`);
+  });
+
+  await t("A6 구성원이 아닌 주체 → pending 아님 · 종전(공용) 판정 그대로", async () => {
+    let asked = "";
+    const r = byKey(await aiAccountStatus(person, os({ ready: true, provisioned: false }), { isMember: async (id) => { asked = id; return false; } }));
+    assert.equal(asked, "mem-a", "배선 — 구성원인지 묻지 않았다");
+    for (const k of SHARED_KEYS) {
+      assert.equal(r[k].pending, undefined, `${k}: 구성원이 아닌데 pending 이 됐다(계정이 만들어지지 않는 주체다)`);
+      assert.equal(r[k].scope, "shared", `${k}: 공용으로 도는 주체의 판정이 바뀌었다`);
+    }
+  });
+
+  await t("A7 홈만 남은 계정 → pending · 로그인은 «모름»(null)", async () => {
+    const r = byKey(await aiAccountStatus(person, os({ ready: true, provisioned: false, orphanHome: true }), MEMBER));
+    for (const k of FILE_KEYS) {
+      assert.equal(r[k].pending, true, `${k}: pending 이 아니다`);
+      assert.equal(r[k].loggedIn, null, `${k}: 홈만 남은 계정을 «미로그인» 으로 접었다(모르면 false 로 접지 않는다)`);
+    }
   });
 } finally {
   rmSync(HOME, { recursive: true, force: true });

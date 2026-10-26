@@ -446,8 +446,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   }));
 
   //  (#4970) 그 사람의 서버 계정(격리 박스의 box_<사람>)을 **로그인 전에** 갖춘다 — 사연은 login-seat-prep.ts 머리말.
-  //   처음 설정이 인사·이름 장면에서 한 번(만들기를 시작만) 부르고, «AI 연결» 장면을 열 때 다시 불러 만드는 중(preparing)이면 몇 초마다
-  //   다시 물어 다 되면(ready) 목록을 그린다.
+  //   처음 설정 «AI 연결» 장면이 열 때 묻기만(start:false) 하고 — 만드는 중(preparing)이면 몇 초마다 다시 물어 다 되면(ready) 그린다 —
+  //   사람이 서버 AI 의 [연결]을 누를 때 만들기를 시작한다(#5031 — 종전엔 인사·이름 장면에서 미리 시작했다).
   //   격리 박스가 아니면 «none» — 아무것도 안 한다.
   const seatDeps = (req: express.Request) => {
     const u = userOf(req);

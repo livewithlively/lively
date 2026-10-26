@@ -118,7 +118,7 @@ await t("P3 prepare retry — 사람이 «다시 해 보기» 를 누르면 실�
 });
 
 //  (#5031) start:false — 처음 설정 AI 장면이 열 때 «묻기만» 한다. 계정은 사람이 서버 AI 의 [연결]을 누를 때 만든다
-//   («PC에서 쓰는 AI로» 를 고를 사람이 계정 · 그 사람 몫 클로드·챗GPT 설치를 치르지 않게). 엣지 표 = 스크래치패드 spec-5031 §서버 P1~P4.
+//   («PC에서 쓰는 AI로» 를 고를 사람이 계정 · 그 사람 몫 클로드·챗GPT 설치를 치르지 않게). 행 = 아래 P4~P7.
 await t("P4 ★ start:false · 없음 → «absent» 그대로 · 만들기를 부르지 않는다", async () => {
   const s = seat({ state: "absent" });
   assert.equal(await prepareMemberSeat(s.deps, { start: false }), "absent");

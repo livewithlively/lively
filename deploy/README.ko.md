@@ -327,8 +327,11 @@ CRUD 하려면, 멤버 로컬 PC 처럼 **호스트의 claude 에도 lively 키�
 - 웹터미널 세션의 Claude 계정은 멤버별이다: 기본(멀티프로필 #346)은 멤버 전용 `CLAUDE_CONFIG_DIR`(`~/.lively/profiles/<slug>/claude`)로 뜨고,
   멤버가 그 세션에서 한 번 로그인한다(`LIVELY_MULTIPROFILE=0` = 단일 유저 박스용 공유 모드). Linux 는 멤버별 OS 유저 격리(#524)를
   **새 설치에서 기본으로 켠다**(#5031 — `install.sh` 가 `install-isolation.sh` 를 돌리고 게이트웨이를 다시 띄운다 · 끄려면 `LIVELY_MEMBER_ISOLATION=off`).
-  구성원 OS 계정과 그 사람 몫 클로드·챗GPT 는 그 사람이 이 서버에서 AI 를 처음 쓸 때 만든다(PC 의 AI 만 쓰는 사람은 비용 0).
+  `OFFLINE=1`·`LIVELY_SERVER_AIS=off` 박스와 기존 설치 위에 다시 돌린 경우(`FORCE=1`)는 기본으로 켜지 않는다(`LIVELY_MEMBER_ISOLATION=on` 으로 켬).
+  구성원 OS 계정과 그 사람 몫 클로드·챗GPT(약 700MB)는 그 사람이 이 서버에서 세션·작업을 처음 열 때 만든다 — 웹 세션 · 처음 설정의 서버 AI [연결] ·
+  프로젝트 대화 · 에이전트 작업 등. PC 의 AI 만 쓰는 사람은 비용 0.
   기존 박스는 업데이트해도 모드가 그대로다 — 켜려면 `sudo GATEWAY_USER=<게이트웨이 유저> bash deploy/linux/install-isolation.sh` 뒤 게이트웨이 재시작(구성원은 AI 에 다시 로그인).
+  켜진 박스에서 끄려면 `.env` 에 `LIVELY_MEMBER_ISOLATION=off` 뒤 게이트웨이 재시작.
   격리를 켜면 AI 넷(클로드·챗GPT·제미나이·그록)의 로그인이 모두 구성원 홈에 따로 남는다.
   격리가 없으면 클로드만 멤버별(위 프로필)이고 나머지는 박스 공용 계정 하나다.
 - 서버 AI 프로그램(#4970): 설치(`install.sh` 7/7)와 업데이트(`update.sh` · blue-green `deploy-release.sh`)가 넷을 갖춘다 — 없는 것만 깔고, 실패는 경고로 넘어간다(리눅스).

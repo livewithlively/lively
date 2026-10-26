@@ -22,6 +22,9 @@
 //   Q10 [연결] → failed → 실패 안내 + «다시 해 보기» · 로그인 시작 0 · 누르면 retry:true → ready → 그 AI 로그인 시작
 //   Q11 계정 없음에서 «PC에서 쓰는 AI로» → 만들기 물음(start:true) 0
 //   Q12 옛 서버(줄에 pending 없음) → [연결]이 곧바로 로그인 시작(만들기 물음 없음)
+//   Q13 ★ [연결]의 첫 요청이 못 물으면(500 — 배포 중) 시작을 다시 부탁한다(start:true) → preparing → ready → 그 AI 로그인 (격리 리뷰: 종전엔
+//       묻기만 되풀이하며 «만들고 있어요» 에 갇혔다)
+//   Q14 서버가 계속 «absent»(시작이 안 됨)면 갇히지 않는다 — 몇 번 뒤 «시작하지 못했어요» + 다시 해 보기 · 로그인 0 · [연결] 다시 살아남
 //  fail-first(2026-10-23): `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다 — 88fb373c4(v0.1.379)는 Q7 만
 //   빨갛다(«떠난 뒤에도 1번 더 물었다»), 그 전 판(v0.1.378)은 AI 장면 자체가 없어 장면이 죽는다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import assert from "node:assert/strict";
@@ -213,6 +216,28 @@ async function PAGE_MAIN() {
   await sleep(1500);
   R.q11 = { asks: n(), starts: starts(), scene: host.dataset.scene || "" };
 
+  //  Q13 — [연결]의 첫 요청이 500 → 다시 시작 부탁 → preparing → ready → 그 AI 로그인
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; PREP_DEFAULT = "preparing"; ACC_PENDING = true;
+  host = mount();
+  await sleep(600);
+  PREP = [500, "preparing", "ready"];
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(13000);
+  R.q13 = { flags: calls.prepare.map((c) => c.start), login: calls.login.slice() };
+
+  //  Q14 — 서버가 계속 absent → 몇 번 뒤 실패 안내 · 갇히지 않는다
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; PREP_DEFAULT = "absent"; ACC_PENDING = true;
+  host = mount();
+  await sleep(600);
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(24000);
+  R.q14 = { note: noteText(host), retry: !!host.querySelector(".ob-ai-seat-retry"), login: calls.login.slice(),
+    goOn: goBtns(host).filter((b) => !b.disabled).length, asks: n() };
+  await sleep(9000);
+  R.q14.asksLater = n();
+
   //  Q12 — 옛 서버(줄에 pending 없음) → [연결]이 곧바로 로그인
   calls.prepare = []; calls.accounts = 0; calls.login = [];
   PREP = ["none"]; PREP_DEFAULT = "none"; ACC_PENDING = false;
@@ -323,6 +348,18 @@ t("Q11 ★ 계정 없음 → PC 길 → 계정 만들기 0", () => {
   assert.notEqual(R.q11.scene, "ai", "배선 — 장면을 안 떠났다");
   assert.ok(R.q11.asks >= 1, "배선 — AI 장면이 묻지 않았다");
   assert.equal(R.q11.starts, 0, "★ PC 길을 골랐는데 계정 만들기를 시작했다");
+});
+t("Q13 ★ 첫 요청이 못 물어도(500) 시작을 다시 부탁한다 → ready → 그 AI 로그인", () => {
+  assert.equal(R.q13.flags[1], true, `배선 — [연결]의 첫 요청이 시작이 아니다: ${JSON.stringify(R.q13.flags)}`);
+  assert.equal(R.q13.flags[2], true, `★ 첫 요청이 500 이었는데 시작을 다시 부탁하지 않았다(묻기만 되풀이하며 갇힌다): ${JSON.stringify(R.q13.flags)}`);
+  assert.deepEqual(R.q13.login, ["codex"], `다 된 뒤 그 AI 로그인을 잇지 않았다: ${JSON.stringify(R.q13.login)}`);
+});
+t("Q14 서버가 계속 absent → 갇히지 않는다 · «시작하지 못했어요» + 다시 해 보기 · [연결] 살아남 · 더 안 묻는다", () => {
+  assert.match(R.q14.note, /시작하지 못했어요/, `★ 끝없이 «만들고 있어요» 에 갇혔다: ${R.q14.note}`);
+  assert.equal(R.q14.retry, true, "«다시 해 보기» 가 없다");
+  assert.deepEqual(R.q14.login, [], "계정이 없는데 로그인을 시작했다");
+  assert.ok(R.q14.goOn >= 1, "[연결]이 막힌 채 남았다");
+  assert.equal(R.q14.asksLater, R.q14.asks, "실패 안내 뒤에도 계속 묻는다");
 });
 t("Q12 옛 서버(줄에 pending 없음) → [연결]이 곧바로 로그인", () => {
   assert.equal(R.q12.starts, 0, "계정 개념이 없는데 만들기를 물었다");
