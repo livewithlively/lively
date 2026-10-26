@@ -96,11 +96,20 @@ const inlineSandboxProcessAllowed = ({ command, args = [], options = {} }) => {
   }
   return false;
 };
+// loopback 하한 = 그 기계의 임시 포트 범위 시작(gVisor 16000) · 10000 아래로는 안 내림 · 못 읽으면 32768 — 공용 경계
+//  (kit/setup/host-effects.mjs sandboxPortLowerBound)의 사본이다. 근거는 그쪽 머리말(#5029).
+const inlineSandboxPortMin = (() => {
+  let text = "";
+  try { text = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8"); } catch { /* macOS·Windows */ }
+  const m = /^\s*(\d+)/.exec(text);
+  const lo = m ? Number(m[1]) : 32768;
+  return lo < 32768 ? Math.max(lo, 10000) : 32768;
+})();
 const inlineSandboxNetworkAllowed = (input) => {
   try {
     const u = new URL(typeof input === "string" ? input : input?.url);
     const port = Number(u.port);
-    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= 32768 && port <= 65535;
+    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= inlineSandboxPortMin && port <= 65535;
   } catch { return false; }
 };
 const hostEffectGuard = (kind, operation, detail) => {
