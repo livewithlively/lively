@@ -168,8 +168,10 @@ try {
     `code=${s.code}\n${s.err.slice(0, 200)}`);
 
   // 대조군 — 관측 장치가 살아 있다(하네스 스텁이 실제로 불리면 흔적이 남는다).
-  await lively(["onboarding"]);
-  check("C 대조: onboarding(도움말 없이) → 하네스 스텁 기동 흔적", existsSync(CLAUDE_TRACE));
+  //  ⚠ onboarding 이 아니라 run 으로 잰다: onboarding 은 셸 없이 spawnSync("claude") 라 윈도우에선 .cmd 스텁이 애초에
+  //   안 뜬다(그래서 윈도우 CI 에서 이 대조군이 빨갛게 나왔다). run 은 윈도우에서 셸을 거쳐 띄우므로 두 플랫폼 모두에서 뜬다.
+  const rc = await lively(["run"]);
+  check("C 대조: run(도움말 없이) → 하네스 스텁 기동 흔적", existsSync(CLAUDE_TRACE), `code=${rc.code}\n${rc.err.slice(0, 300)}`);
 
   // 대조군 — 네트워크 관측이 살아 있고, 가드가 정상 위탁을 막지 않는다(`--` 뒤의 --help 는 지시의 일부).
   const d = await lively(["delegate", "--detach", "--", "--help 옵션 설명해"]);
