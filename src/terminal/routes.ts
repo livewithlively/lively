@@ -454,7 +454,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     return { state: () => memberOsState(u), inflight: () => memberProvisioning(u), ensure: () => ensureMemberOsUser(u), clearFailure: () => clearProvisionFailure(u) };
   };
   app.post("/api/ui/me/ai-login/prepare", auth, wrap(async (req, res) => {
-    const state = await prepareMemberSeat(seatDeps(req), { retry: ((req.body ?? {}) as Record<string, unknown>).retry === true });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    //  start:false = 묻기만(#5031 — 처음 설정 AI 장면이 열 때). 생략은 종전대로 «없으면 시작».
+    const state = await prepareMemberSeat(seatDeps(req), { retry: body.retry === true, start: body.start !== false });
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, state });
   }));

@@ -14,6 +14,7 @@ set -euo pipefail
 #     BOOTSTRAP_ADMIN_PASSWORD=…             첫 관리자 초기 비번(생략 시 랜덤 — 요약에 출력)
 #     ORG_DOMAIN=org.com                     에이전트 토큰 이메일 도메인
 #     WITH_EMBEDDINGS=1                      임베딩 사이드카 동반(t4g.large+ 권장)
+#     LIVELY_MEMBER_ISOLATION=off            구성원 격리(리눅스 기본 켬 — 구성원마다 OS 계정)를 깔지 않는다(1인용·디스크 작은 박스)
 #     FORCE=1                                기존 게이트웨이 감지해도 강행
 # ─────────────────────────────────────────────────────────────────────────────
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # deploy/
@@ -74,6 +75,8 @@ main() {
   wait_healthz
   wait_ready
   proxy_up   # LIVELY_DOMAIN 설정 시 Caddy 자동 HTTPS(미설정 시 no-op)
+  # 구성원 격리(#524)는 새 설치의 기본(#5031) — 게이트웨이 유저가 정해지고 서비스가 뜬 뒤(그룹 반영 재시작 포함), 부트스트랩·키트보다 앞.
+  ensure_member_isolation
 
   phase "6/7 부트스트랩 — 첫 관리자 + 익명 baseline(페르소나·규칙) + 기본 커넥터"
   # P4(#524): 게이트웨이 유저(lively)로 실행 — 키트가 그 유저 홈(~/.claude)에 써야 하고, 부트스트랩도 같은 유저로 통일.

@@ -17,6 +17,8 @@ export interface AiAccountRow extends AiLoginAccount {
   how?: string;
   /** 이 서버에서 띄울 수 있나. 없으면(옛 서버) 모름 — 보인다. */
   installed?: boolean | null;
+  /** (#5031) 이 사람의 서버 개인 계정이 아직 없다 — [연결]이 계정부터 만든다. 없으면(옛 서버 · 계정 있음) 곧바로 로그인 칸. */
+  pending?: boolean;
 }
 
 export interface AiListHooks {
@@ -57,14 +59,53 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     const go = it.act.querySelector<HTMLButtonElement>('.ob-ai-go');
     if (!go) return;
     if (it.panel) { go.hidden = true; return; }   // 로그인 중 — 다시 시도는 칸 안의 [다시 시도]가 한다
-    go.onclick = () => {
-      if (!confirmSharedLogin(it.a)) return;
-      asked.add(it.a.key);
-      it.panel = aiLoginPanel(it.a, () => { asked.add(it.a.key); return reload(); });
-      it.wrap.append(it.panel.panel);   // 칸은 이 줄에 한 번 붙이고 다시 옮기지 않는다(액자가 새로 뜨지 않게)
-      go.hidden = true;
-      it.panel.run(true);   // 사람이 눌렀다 = 지금 새로(지난 시도의 코드는 이미 죽었다 — #2232)
-    };
+    go.disabled = !!seating;
+    go.onclick = () => { if (it.a.pending) seatThenOpen(it.a.key); else openLogin(it); };
+  };
+  /** 그 줄의 로그인 칸을 연다. */
+  const openLogin = (it: Item): void => {
+    const go = it.act.querySelector<HTMLButtonElement>('.ob-ai-go');
+    if (it.panel || !go) return;
+    if (!confirmSharedLogin(it.a)) return;
+    asked.add(it.a.key);
+    it.panel = aiLoginPanel(it.a, () => { asked.add(it.a.key); return reload(); });
+    it.wrap.append(it.panel.panel);   // 칸은 이 줄에 한 번 붙이고 다시 옮기지 않는다(액자가 새로 뜨지 않게)
+    go.hidden = true;
+    it.panel.run(true);   // 사람이 눌렀다 = 지금 새로(지난 시도의 코드는 이미 죽었다 — #2232)
+  };
+
+  //  (#5031) 계정이 없는 줄의 [연결] — 서버 개인 계정을 만들고(그동안 안내 · 다른 [연결]은 막는다) 다 되면 목록을 다시 읽어 **누른 그 AI** 의
+  //   로그인을 이어서 연다. 계정은 여기서만 만든다(사람이 서버 AI 를 고른 순간) — «PC에서 쓰는 AI로» 를 고를 사람은 아무것도 치르지 않는다.
+  //   만들기는 20초 남짓이라 로그인 시작 요청 하나에 기다리게 두면 서버 상한(25초)에 걸려 «다시 눌러 주세요» 가 되기 쉽다 — 그래서 여기서 묻고 기다린다.
+  const PREP_POLL_MS = 4000;
+  let seating: Promise<void> | null = null;
+  const setGoDisabled = (off: boolean): void => {
+    for (const it of items.values()) { const go = it.act.querySelector<HTMLButtonElement>('.ob-ai-go'); if (go) go.disabled = off; }
+  };
+  const seatThenOpen = (key: string, retry = false): void => {
+    if (seating) return;
+    note.innerHTML = '이 서버에서 쓰실 개인 계정을 만들고 있어요 — 처음 한 번만, 20초쯤 걸려요. 다 되면 바로 이어서 로그인을 열어 드릴게요.';
+    note.hidden = false;
+    seating = (async () => {
+      let start = true;
+      for (;;) {
+        if (!hooks.alive()) return;
+        const st = await askSeat({ start, retry });
+        start = false; retry = false;
+        if (!hooks.alive()) return;
+        if (st === 'ready' || st === 'none') break;
+        if (st === 'failed') {
+          note.innerHTML = '이 서버에서 쓰실 개인 계정을 만들지 못했어요. 관리자에게 알려 주세요 — 그동안은 아래 «PC에서 쓰는 AI로» 를 쓰실 수 있어요. <button type="button" class="ob-linkbtn ob-ai-seat-retry">다시 해 보기</button>';
+          note.querySelector<HTMLButtonElement>('.ob-ai-seat-retry')!.onclick = () => { seatThenOpen(key, true); };
+          return;
+        }
+        await new Promise((z) => setTimeout(z, PREP_POLL_MS));   // 만드는 중(또는 한 번 못 물음) — 조금 뒤 다시 묻는다
+      }
+      await reload();
+      const it = items.get(key);
+      if (it && hooks.alive() && it.a.loggedIn !== true) openLogin(it);
+    })().finally(() => { seating = null; if (hooks.alive()) setGoDisabled(false); });
+    setGoDisabled(true);
   };
 
   const make = (a: AiAccountRow): Item => {
@@ -160,19 +201,23 @@ export function mountAiList(list: HTMLElement, hooks: AiListHooks): { reload(): 
     })().finally(() => { running = null; });
     return running;
   };
-  //  격리 박스(셀프호스트)면 그 사람의 서버 계정부터 갖춘다(서버 login-seat-prep 머리말) — 만드는 중이면 몇 초마다 다시 묻고, 다 되면 그린다.
-  //   ⚠ 다 되기 전에 그리지 않는다 — 계정이 없는 동안 목록은 챗GPT·그록을 «이 서버 공용 계정» 으로 말하고([연결]이 격리 박스에서 거짓
-  //    물음을 띄운다), 공용 홈에 우연히 있던 자격으로 «연결됨» 이 켜질 수 있다(격리 리뷰). 격리 박스가 아니면 서버가 곧바로 none.
+  //  격리 박스(셀프호스트)에서 그 사람의 서버 계정을 **만드는 중**이면 몇 초마다 다시 묻고, 다 되면 그린다(서버 login-seat-prep 머리말).
+  //   ⚠ 만드는 중엔 그리지 않는다 — 계정(useradd)은 만들기 초반에 생기고 구성원 몫 claude·codex 는 그 뒤에 깔려, 그 사이 목록·로그인이
+  //    반쯤 된 홈을 본다(격리 리뷰). 격리 박스가 아니면 서버가 곧바로 none.
   //   처음에 못 물었으면(옛 서버 404 · 끊김) 그냥 그린다 — 처음 설정이 막히면 안 된다. 단 «준비하는 중» 을 본 뒤에 한 번 못 물은
   //   것(배포 중 5xx 한 번)은 그리지 않고 다시 묻는다 — 그리면 아직 준비 중인 목록이 «이 서버 공용 계정» 으로 되살아난다(격리 리뷰).
-  const PREP_POLL_MS = 4000;
+  //  (#5031) 장면을 열 때는 **묻기만** 한다(start:false) — 계정은 사람이 서버 AI 의 [연결]을 누를 때 만든다(seatThenOpen). 계정이 없으면(absent)
+  //   목록을 곧바로 그린다 — 서버가 그 줄들을 «연결 전»(pending)으로 준다(공용 자격을 그 사람 것처럼 보이지 않는다). 누가 이미 만드는 중이면
+  //   (웹 세션을 먼저 열었다 등) 종전처럼 다 될 때까지 기다린다. «다시 해 보기»(retry)는 사람이 누른 것이라 만든다.
+  const askSeat = async (o: { start?: boolean; retry?: boolean } = {}): Promise<string> => {
+    try { return String(((await api('/api/ui/me/ai-login/prepare', { method: 'POST', body: JSON.stringify({ retry: !!o.retry, start: !!o.start }) })) as { state?: unknown } | null)?.state ?? ''); }
+    catch (_) { return ''; }
+  };
   let sawPreparing = false;
   const prepare = async (retry = false): Promise<void> => {
     //  묻기 **전에도** 본다 — 장면을 떠난 뒤 이미 걸어 둔 다음 묻기(4초)가 한 번 더 나가지 않게(화면 시험 Q7).
     if (!hooks.alive()) return;
-    let state = '';
-    try { state = String(((await api('/api/ui/me/ai-login/prepare', { method: 'POST', body: JSON.stringify({ retry }) })) as { state?: unknown } | null)?.state ?? ''); }
-    catch (_) { state = ''; }
+    const state = await askSeat({ retry, start: retry });
     if (!hooks.alive()) return;
     if (state === 'preparing' || (!state && sawPreparing)) {
       sawPreparing = true;

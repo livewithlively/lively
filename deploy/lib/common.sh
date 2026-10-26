@@ -387,6 +387,37 @@ ensure_server_ais() {
   return 0
 }
 
+# 구성원 격리(#524)를 새 설치의 기본으로 켠다(#5031). 종전엔 손으로 `sudo bash deploy/linux/install-isolation.sh` 를 돌려야 켜져,
+#  기본 설치 박스는 구성원 세션이 게이트웨이 유저 하나로 돌았다 — 서로의 AI 로그인 정보가 보이고, 클로드 밖의 AI 는 박스 공용 계정이며,
+#  조직 스킬 받은 목록을 같이 써 남의 스킬 파일을 지울 수 있었다(#5019 남은 한계). 비용(구성원마다 OS 계정 · 그 사람 몫 클로드·챗GPT)은
+#  그 사람이 서버에서 AI 를 처음 쓸 때만 든다(PC 의 AI 만 쓰는 사람은 0 — web/v2/onboarding-ai.ts · src/terminal/profiles.ts ensureMemberOsUser).
+#  · 리눅스만 — 격리는 OS 계정 경계다(맥엔 없다). LIVELY_MEMBER_ISOLATION=off 면 깔지 않는다(1인용·디스크 작은 박스. 게이트웨이도 같은 값을
+#    하드 킬로 읽는다 — terminal-isolation.ts isolationEnabled).
+#  · 깐 뒤 게이트웨이를 다시 띄운다 — install-isolation 이 게이트웨이 유저를 lively-shared·lively-broker 그룹에 넣는데, 그룹은 프로세스가 뜰 때 붙는다.
+#  · 실패는 경고 — 격리 없는 박스로 돈다. 다시 띄운 게이트웨이가 안 돌아오면 그건 die(wait_healthz·wait_ready)다.
+#  업데이트(update.sh · deploy-release.sh)는 이걸 부르지 않는다 — 이미 격리 박스면 그쪽이 리프레시하고, 아니면 모드를 그대로 둔다
+#   (기존 박스에서 켜면 구성원 세션이 새 OS 계정으로 옮겨 다들 AI 에 다시 로그인해야 한다 — 사람이 정할 일).
+#  인자 = install-isolation.sh 가 있는 deploy 폴더(기본은 이 파일의 것).
+ensure_member_isolation() {
+  local d="${1:-$DEPLOY_DIR}" os u
+  if [ "${LIVELY_MEMBER_ISOLATION:-on}" = "off" ]; then
+    log "구성원 격리: LIVELY_MEMBER_ISOLATION=off — 깔지 않습니다(구성원 세션이 게이트웨이 유저 하나로 돕니다)"; return 0
+  fi
+  os="$(detect_os)"
+  if [ "$os" != linux ]; then log "구성원 격리: 이 OS($os)는 지원하지 않습니다(리눅스 전용) — 건너뜀"; return 0; fi
+  u="${SERVICE_USER:-$(id -un)}"
+  log "구성원 격리 켜기 — 구성원마다 OS 계정(box_<사람>)으로 세션을 돌립니다 · 계정은 그 사람이 이 서버에서 AI 를 처음 쓸 때 만듭니다"
+  if ! sudo GATEWAY_USER="$u" bash "$d/linux/install-isolation.sh"; then
+    warn "구성원 격리 설치 실패 — 격리 없이 돕니다. 나중에: sudo GATEWAY_USER=$u bash deploy/linux/install-isolation.sh 뒤 게이트웨이 재시작"
+    return 0
+  fi
+  restart_gateway
+  wait_healthz
+  wait_ready
+  ok "구성원 격리 켜짐(끄려면 다음 설치부터 LIVELY_MEMBER_ISOLATION=off)"
+  return 0
+}
+
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "필요한 명령 없음: $1"; }
 
 # 시크릿 생성(hex — URL/compose/.env 어디서도 이스케이프 불필요).
