@@ -25,6 +25,8 @@
 //  · `--itest` 는 실 DB 를 공유하니 직렬 고정(명시적 -j 로만 덮어씀).
 //  ⚠ 병렬은 경과시간을 단정하는 테스트(예: project-provision-async 의 `elapsed < 500`)를 부하로 흔들 수 있다.
 //   그런 flake 가 보이면 -j 를 낮추지 말고 해당 테스트의 상한을 부하 내성 있게 고치는 쪽이 맞다.
+//   다만 그 상한이 **제품의 마감 동작 자체**(훅이 1.2초에 끊는다 · 예산의 70% 에서 멈춘다)라 늘리면 사양이 바뀌는 시험은
+//   머리에 `// @lively-test exclusive` 를 달아 병렬 묶음이 끝난 뒤 혼자 돌린다(#5029 — 2코어 중앙 박스에서 넷이 그랬다).
 //
 // 사용: node scripts/run-tests.mjs                    전체 실행(병렬 · 끝까지)
 //       node scripts/run-tests.mjs <부분문자열>…       경로 부분일치만(여러 개면 OR)
@@ -39,13 +41,13 @@
 //       node scripts/run-tests.mjs --scope=kit,desktop 지정 디렉터리의 *.test.mjs 만 수집(src→dist 매핑 생략)
 //                                                     — 빌드 산출물이 없는 면(윈도우 CI)이 이 러너를 그대로 쓰게 한다
 //       node scripts/run-tests.mjs --budget=45         유닛 파일당 상한(초). 넘으면 통과해도 실패로 본다(#2457)
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
-import { testChildEnv } from "./test-runner-env.mjs";
+import { testChildEnv, isSoloTest, soloLast, mayStart } from "./test-runner-env.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
@@ -144,6 +146,14 @@ if (opts.itest) {
   files = [...srcTests, ...mjsTests];
 }
 if (filters.length) files = files.filter((f) => filters.some((s) => f.includes(s)));
+// 혼자 도는 시험(`// @lively-test exclusive`, 근거는 test-runner-env.mjs) — 맨 뒤로 모아 병렬 묶음이 끝난 뒤 하나씩 돌린다.
+//  표식은 머리에만 본다 — 파일 1천여 개를 통째로 읽으면 9p 공유 폴더(중앙 박스)에서 그것만으로 느려진다.
+const headOf = (f) => {
+  const fd = openSync(path.join(ROOT, f), "r");
+  try { const buf = Buffer.alloc(4096); return buf.toString("utf8", 0, readSync(fd, buf, 0, buf.length, 0)); } finally { closeSync(fd); }
+};
+const SOLO = new Set(files.filter((f) => { try { return isSoloTest(headOf(f)); } catch { return false; } }));
+files = soloLast(files, SOLO);
 
 if (opts.list) {
   for (const f of files) console.log(f);
@@ -249,10 +259,15 @@ if (jobs === 1) {
   };
 
   let next = 0;
+  let soloAnnounced = false;
   await new Promise((resolve) => {
     const pump = () => {
-      while (!interrupted && !(opts.failFast && failed) && live.size < jobs && next < files.length) {
+      while (!interrupted && !(opts.failFast && failed) && next < files.length && mayStart(SOLO.has(files[next]), live.size, jobs)) {
         const idx = next++;
+        if (SOLO.has(files[idx]) && !soloAnnounced) {
+          soloAnnounced = true;
+          console.log(`— 혼자 도는 시험 ${files.length - idx}건(벽시계 마감 단언 · @lively-test exclusive) — 하나씩 돌린다`);
+        }
         const f = files[idx];
         if (missing.has(f)) {
           record(idx, { f, ms: 0, status: 1, signal: null, missing: true });
