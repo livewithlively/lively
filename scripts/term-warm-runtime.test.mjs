@@ -41,6 +41,7 @@
 //       → 옛 화면은 터미널로 넘기지 않는다(매니지드 실측: 옛 화면이 빈 터미널로 넘어갔다가 다시 마운트되며 대화창으로 돌아가는 깜빡임)
 //       · #4996 같은 id 로 되살아나면 옮겨 가지 않는다(화면을 다시 만들지 않는다 · 알림 없음) — 그 화면이 숨겨 붙였다가 말이 들어간 뒤 넘긴다
 //       · 되살린 직후 «중단됨» 을 실은 늦은 목록 갱신이 붙인 터미널을 걷지 않는다
+//   W21 은 «방금 되살렸다»(revivedHere) 도 잰다 — 셸의 열람 도장이 늦은 목록을 기다리지 않게
 //   W22 되살린 화면(매니지드 행 · 기록 있음) · 하네스가 먼저 그리고 말은 2.6초에 들어간다 → 그린 뒤에도 대화창(대기 말풍선 그대로)
 //       · 말이 기록에 나타난 뒤 터미널(읽는 주기 0.7초 안) · 대기 줄은 걷힌다
 //   W23 그렸는데 말이 끝내 안 들어간다(로그인·경고 창) → 그린 뒤 4초에도 대화창 · 그린 때부터 8초 뒤 터미널(그 창을 보게)
@@ -510,7 +511,7 @@ async function PAGE_MAIN() {
       await sleep(400);
       const inp = v.input();
       const wrap0 = v.box.querySelector(".sc-wrap");
-      R.w21 = { before: v.snap(), hasInput: !!inp };
+      R.w21 = { before: v.snap(), hasInput: !!inp, revivedBefore: v.h.revivedHere() };
       inp.value = "되살리며 보낸 말 W21"; inp.dispatchEvent(new Event("input"));
       const form = inp.closest("form");
       if (form && form.requestSubmit) form.requestSubmit(); else inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -527,6 +528,7 @@ async function PAGE_MAIN() {
       v.h.update(row("box-w21", false));                                // #4996 — 되살리기 전 사실(«중단됨») 을 실은 늦은 목록 갱신
       await sleep(200);
       R.w21.afterStale = v.snap();
+      R.w21.revivedAfter = v.h.revivedHere();                           // #4996 — 셸의 열람 도장이 목록 대신 이 값을 본다
       await sleep(2600);
       R.w21.routed = routed;
       R.w21.sameWrap = v.box.querySelector(".sc-wrap") === wrap0 && wrap0.isConnected;
@@ -974,6 +976,8 @@ check((w21.afterRestore || {}).warm && (w21.afterRestore || {}).frame && !(w21.a
   "W21 되살린 뒤 같은 화면이 터미널을 숨겨 붙이고 보낸 말은 «전달 대기» 로 남는다 · 서버 큐를 묻는다(다시 마운트된 화면이 하던 일)", { afterRestore: w21.afterRestore, qstate: w21.qstate, outboxAsked: w21.outboxAsked });
 check((w21.afterStale || {}).frame && !(w21.afterStale || {}).term,
   "W21 되살린 직후 «중단됨» 을 실은 늦은 목록 갱신이 방금 붙인 터미널을 걷지 않는다", w21.afterStale);
+check(w21.revivedBefore === false && w21.revivedAfter === true,
+  "W21 ★ 같은 id 로 되살린 화면은 목록이 «중단됨» 이어도 «방금 되살렸다» 를 셸에 알린다 — 열람 도장이 목록을 기다리지 않게(#4996)", { before: w21.revivedBefore, after: w21.revivedAfter });
 check((w21.after || {}).term && !(w21.after || {}).warm && w21.n === 1,
   "W21 그 말이 들어간 뒤 터미널로 넘어간다 · 보낸 말은 한 번만 보인다", { after: w21.after, n: w21.n });
 
