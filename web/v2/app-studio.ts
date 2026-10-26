@@ -30,8 +30,9 @@ import { markReviewOpen, readReviewOpen } from './review-resume.js';   // ③ �
 import { ensureTrySession, mountTrySession, type TrySession } from './app-try-session.js';   // ③ 세션 위젯 = 시험 세션(앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다)
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
 import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
-import { effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
-import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults } from './run-prefs.js';
+import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
+import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNode } from './run-prefs.js';
+import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, splitList, stageIndex, stageTabs, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
@@ -72,8 +73,50 @@ const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안�
 // ① 설명칸 — 예시는 칸 안 안내글 하나로만(원준 2026-10-14 «예시로 채우기 · 적어 두면 좋은 것 다 빼»).
 const DESC_PH = '예: 회의록을 음성 파일로 주면 이를 음성 파일을 전사하고 내용을 요약해서 정리해주면 좋겠어요. 회의록을 정리하는 형식을 사용자가 개인화 할 수 있으면 좋겠어요. 앱 화면에서는 이전의 회의록이 날짜별로 정리되어있으면 좋겠고, 해당 날짜의 회의록을 누르면 정리본이 나오면 좋겠어요. AI 세션의 사이드바에서는 기존의 회의록을 찾고 그 회의록 정리본을 제가 참고하거나, AI 세션에 한 번에 집어넣을 수 있도록 하고 싶어요.';
 const firstLine = (s: string): string => String(s || '').split('\n')[0].trim();
-// 앱 만들기 세션의 모델 · 생각 깊이 — 사람이 고르지 않고 여기서 정한다(원준 2026-10-14). 카탈로그에 없는 값이면 그 축은 안 넘긴다(AI 설정 그대로).
-const STUDIO_FLAGS: Record<string, string> = { '--model': 'opus', '--effort': 'high' };
+// 앱 만들기 세션의 AI · 모델 · 생각 깊이 — 사람이 고르지 않고 여기서 정한다(원준 2026-10-14). 하네스마다의 값과 고르는 순서는 lib/studio-ai 가 정본이다(#4632 2026-10-26 —
+//  Codex 나 다른 AI 하나만 연결한 사람도 그 AI 의 «claude opus · 높음» 급으로 연다). 카탈로그에 없는 값이면 그 축은 안 넘긴다(AI 설정 그대로).
+interface StudioAi { harness: string; flags: Record<string, string>; chip: string }
+/** 시간 안에 안 오면 null — 이 답들은 «만들기 시작» 앞에 서 있다. 늦으면 모름으로 치고 간다(→ 종전처럼 claude). */
+const within = <T,>(p: Promise<T>, ms: number): Promise<T | null> => Promise.race([p, new Promise<null>((r) => setTimeout(() => r(null), ms))]);
+/** 자격이 파일로 안 남는 AI(Antigravity)를 따로 물은 답 — 이 화면을 연 동안 한 번만 묻는다(CLI 에게 묻는 데 몇 초 걸린다). */
+const probed = new Map<string, Promise<boolean | null>>();
+/**
+ * 내 AI 로그인(lib/studio-ai StudioLogins). 못 받으면 빈 목록(→ 종전처럼 claude).
+ *  ① 화면은 칩을 그리며 두세 번 연달아 묻는다 — 잠깐(30초) 같은 답을 쓰고, 앱빌더를 새로 열 때 비운다(forgetAiLogins).
+ *  확인된 AI 가 하나도 없을 때만 목록이 «모름» 으로 준 AI 를 따로 묻는다 — 그래야 Antigravity 하나만 연결한 사람도 그걸로 열린다.
+ */
+let loginsMemo: { at: number; p: Promise<StudioLogins> } | null = null;
+function forgetAiLogins(): void { loginsMemo = null; probed.clear(); }
+function aiLogins(): Promise<StudioLogins> {
+  if (loginsMemo && Date.now() - loginsMemo.at < 30_000) return loginsMemo.p;
+  const p = (async (): Promise<StudioLogins> => {
+    const d: any = await within(api('/api/ui/me/ai-accounts').catch(() => null), 4000);
+    if (!d) { loginsMemo = null; return { yes: [], absent: [] }; }   // 못 받은 답은 기억하지 않는다
+    const as: any[] = Array.isArray(d.accounts) ? d.accounts : [];
+    const yes = as.filter((a) => a.loggedIn === true).map((a) => String(a.key));
+    const absent = as.filter((a) => a.installed === false).map((a) => String(a.key));
+    if (!yes.length) {
+      for (const a of as.filter((x) => x.how === 'probe' && x.loggedIn == null && x.installed !== false)) {
+        const k = String(a.key);
+        if (!probed.has(k)) probed.set(k, within(api('/api/ui/me/ai-accounts/check', { method: 'POST', body: JSON.stringify({ harness: k }) }).then((r: any) => (typeof r?.loggedIn === 'boolean' ? r.loggedIn : null)).catch(() => null), 8000));
+        if ((await probed.get(k)) === true) yes.push(k);
+      }
+    }
+    return { yes, absent };
+  })();
+  loginsMemo = { at: Date.now(), p };
+  return p;
+}
+/** 이 컴퓨터(nodeId — '' 는 중앙)에서 앱 만들기를 무엇으로 열까. 고르는 규칙은 lib/studio-ai(studioAiInputs · pickStudioAi). */
+async function studioAi(nodes: RunNode[], nodeId: string): Promise<StudioAi> {
+  const [hs, lg] = await Promise.all([runCatalog().catch(() => []), aiLogins()]);
+  const harness = pickStudioAi(studioAiInputs(hs.map((h) => h.key), nodes, nodeId, lg));
+  const h = findHarness(hs, harness);
+  const flags = studioAiFlags(harness, flagChoices(h, '--model'), (m) => effortChoices(h, m));
+  const name = harness === 'claude' ? 'Claude' : (h?.label || harness);
+  const model = flags['--model'] ? name + ' ' + prettyModel(flags['--model']).replace(/^Gpt\b/, 'GPT') : name + ' · 모델은 AI 설정 그대로';
+  return { harness, flags, chip: model + (flags['--effort'] ? ' · 생각 깊이 ' + effortKo(flags['--effort']) : '') };
+}
 
 // ── 기록(이 브라우저) ─────────────────────────────────────────────────────────────────────
 function readRecs(): StudioRec[] {
@@ -290,7 +333,10 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     const known = (await listApps()).map((a) => String(a.id));
     const pid = await studioProject();
     const brief = how === 'copy' ? copyBrief(target.id, target.title, app.title, app.by, place) : editBrief(app.id, app.title, place);
-    const s = await spawnSession(brief, { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), label: builderSessionLabel(target.title, how) });
+    //  고치기 · 사본도 새로 만들기와 같은 AI · 모델 · 생각 깊이로 연다(종전엔 run 없이 직전 세션 설정으로 열렸다). 컴퓨터는 종전대로 중앙.
+    forgetAiLogins(); const ai = await studioAi([], '');
+    const run: RunPick = { harness: ai.harness, flags: ai.flags, node: '', mode: 'normal', autoApprove: sessionDefaults().autoApprove, writeVis: '' };
+    const s = await spawnSession(brief, { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run, label: builderSessionLabel(target.title, how) });
     if (!s) { toast('세션을 열지 못했어요', true); closeAppStudio(); return; }
     //  #4667 이 세션이 이 앱의 만들기 세션 — 내가 책임자인 앱(내 사본 · 내가 만든 앱)이면 서버가 잇고, 남의 원본이면 그대로 둔다.
     void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, app_id: target.id }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
@@ -434,6 +480,7 @@ function writeDraft(d: { name: string; what: string; place: StudioPlace } | null
  *  적은 것을 바꿨을 때만 「이 내용으로 다시 기획」 이 눌린다(그 세션에 기획을 다시 청한다). 바꾸던 것은 기록에 남는다(whatEdit). */
 function start(prefill?: StudioRec | null): void {
   if (!root) return;
+  forgetAiLogins();   // ① 을 새로 열 때마다 내 AI 로그인을 다시 읽는다(방금 연결한 AI 가 바로 잡히게)
   const orig = prefill ? { name: prefill.title || '', what: prefill.what, place: prefill.place } : null;
   const draft = prefill ? (prefill.whatEdit || orig!) : readDraft();
   let place: StudioPlace = draft.place;
@@ -461,7 +508,7 @@ function start(prefill?: StudioRec | null): void {
   // 누가 어디서 만드나 — 실행 컴퓨터는 사람이 고르고, 모델 · 생각 깊이는 여기서 정해 둔다.
   const nodeSel = el('select', { class: 'v2-studio-node', 'aria-label': '어디서 실행할까요' }) as HTMLSelectElement;
   const nodeNote = el('small', { class: 'v2-studio-ai-note', text: '' });
-  const modelChip = el('span', { class: 'v2-studio-ai-fix', text: 'Claude ' + prettyModel(STUDIO_FLAGS['--model']) + ' · 생각 깊이 ' + effortKo(STUDIO_FLAGS['--effort']) });
+  const modelChip = el('span', { class: 'v2-studio-ai-fix', text: '확인하는 중…' });   // 내 AI 로그인 · 컴퓨터를 읽고 paintAi 가 채운다(연결 안 한 AI 를 먼저 보여 주지 않게)
   let nodes: Awaited<ReturnType<typeof runNodes>> = [];
   const paintNodes = (): void => {
     const pref = nodeSel.value || sessionDefaults().nodeDefault;
@@ -470,23 +517,23 @@ function start(prefill?: StudioRec | null): void {
     nodeSel.value = opts.some((o) => o.v === pref && !o.off) ? pref : '';
     nodeNote.textContent = nodeWhere(nodes, nodeSel.value);
   };
-  nodeSel.onchange = () => { nodeNote.textContent = nodeWhere(nodes, nodeSel.value); };
-  void runNodes().then((ns) => { nodes = ns; if (root && nodeSel.isConnected) paintNodes(); }).catch(() => { /* 노드 목록이 없으면 자동(중앙)으로 */ });
-  paintNodes();
-  void runCatalog().then((hs) => {
-    const h = findHarness(hs, 'claude'); if (!h) return;
-    const m = flagChoices(h, '--model').includes(STUDIO_FLAGS['--model']), e = flagChoices(h, '--effort').includes(STUDIO_FLAGS['--effort']);
-    if (!m || !e) modelChip.textContent = (m ? 'Claude ' + prettyModel(STUDIO_FLAGS['--model']) : 'AI 설정 그대로') + (e ? ' · 생각 깊이 ' + effortKo(STUDIO_FLAGS['--effort']) : '');
-  }).catch(() => { /* 카탈로그를 못 받아도 시작은 된다 */ });
+  //  컴퓨터를 바꾸면 그 컴퓨터가 띄울 수 있는 AI 로 칩도 바뀐다 — 늦게 온 답이 나중 고름을 덮지 않게 차례를 센다.
+  let aiTurn = 0;
+  const paintAi = (): void => {
+    const my = ++aiTurn;
+    void studioAi(nodes, resolveNodeChoice(nodes, nodeSel.value).id).then((ai) => { if (my === aiTurn && modelChip.isConnected) modelChip.textContent = ai.chip; })
+      .catch(() => { if (my === aiTurn) modelChip.textContent = 'AI 설정 그대로'; });   // 칩은 못 그려도 시작은 된다 — «확인하는 중» 에 멈춰 두지 않는다
+  };
+  nodeSel.onchange = () => { nodeNote.textContent = nodeWhere(nodes, nodeSel.value); paintAi(); };
+  void runNodes().then((ns) => { nodes = ns; if (root && nodeSel.isConnected) { paintNodes(); paintAi(); } }).catch(() => { /* 노드 목록이 없으면 자동(중앙)으로 */ });
+  paintNodes(); paintAi();
   const studioRun = async (): Promise<RunPick> => {
     const ns = await refreshNodes(0).catch(() => nodes);
     const ch = resolveNodeChoice(ns, nodeSel.value);
     if (ch.fellBack) toast(nodeWhere(ns, nodeSel.value));
-    const hs = await runCatalog().catch(() => []); const h = findHarness(hs, 'claude');
-    const flags: Record<string, string> = {};
-    Object.entries(STUDIO_FLAGS).forEach(([k, v]) => { if (!h || flagChoices(h, k).includes(v)) flags[k] = v; });
+    const ai = await studioAi(ns, ch.id);
     const d = sessionDefaults();
-    return { harness: 'claude', flags, node: ch.id, mode: 'normal', autoApprove: d.autoApprove, writeVis: '' };
+    return { harness: ai.harness, flags: ai.flags, node: ch.id, mode: 'normal', autoApprove: d.autoApprove, writeVis: '' };
   };
   const begin = async (): Promise<void> => {
     const what = input.value.trim(), nm = nameIn.value.trim(); if (!what || go.disabled) return;
