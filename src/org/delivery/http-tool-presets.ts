@@ -82,6 +82,7 @@ const CAL = "https://www.googleapis.com/calendar/v3";
 const SLACK = "https://slack.com/api";
 const GH = "https://api.github.com";
 const GL = "https://gitlab.com/api/v4";
+const ZOT = "https://api.zotero.org";
 const FIGMA = "https://api.figma.com/v1";
 const FIGMA_V2 = "https://api.figma.com/v2";   // 열거(folders)는 v2 — v1 projects 는 구 스코프를 요구한다(아래 주석)
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -807,6 +808,113 @@ export const HTTP_TOOL_PRESETS: HttpToolPresetGroup[] = [
         }, ["folderId"]),
         pii_scrub: false,
         no_paging: "피그마 folder files API 에 페이지 파라미터가 없다 — 파일당 몇 필드뿐이라 폴더가 커도 작다. branch_data 를 켜면 커지므로 기본은 끈 채로 둔다.",
+      },
+    ],
+  },
+  // ── Zotero — Web API v3. 원격 MCP 가 없어(공식 서버 없음 · 커뮤니티 서버는 로컬 설치형) 게이트웨이가 쓸 수 있는 유일한 면이다. ──
+  //  인증: 개인 API 키를 Zotero-API-Key 헤더로 — CRED_KINDS.zotero_token 의 meta(auth_header/token_prefix:"")가 그 형식을 정한다.
+  //  API 판은 지정하지 않아도 v3 이다(2026-10-26 실측: 헤더 없이 받은 항목이 v3 모양 key·version·library·links·meta·data).
+  //  라이브러리는 경로의 두 토막이다 — libraryType(users|groups) + libraryId. 개인 라이브러리 id 는 zotero_get_key 의 userID.
+  //  ⚠ 주석은 논문이 아니라 **PDF 첨부에** 달린다 — 논문의 children 으로 첨부 key 를 얻고, 그 첨부의 children 을 다시 부른다.
+  //  전부 읽기(L0)다. 키에 쓰기 권한을 켜지 말라고 안내한다(connect-skills/zotero.md).
+  {
+    key: "zotero", label: "Zotero (Web API)", auth_kind: "zotero_token",
+    hosts: ["api.zotero.org"], scope: "items", level: "L0",
+    tools: [
+      {
+        name: "zotero_get_key",
+        title: "Zotero 내 키와 라이브러리",
+        description:
+          "연결된 Zotero 키의 주인(userID·username)과 읽을 수 있는 범위(개인 라이브러리·노트·그룹)를 본다. " +
+          "개인 라이브러리 id 는 여기의 userID 다 — 다른 Zotero 도구의 libraryType=users · libraryId=<userID> 로 쓴다. 연결이 살아 있는지도 이걸로 확인한다.",
+        url: `${ZOT}/keys/current`,
+        input_schema: obj({}),
+        pii_scrub: true,
+      },
+      {
+        name: "zotero_list_groups",
+        title: "Zotero 내 그룹 목록",
+        description: "내가 속한 Zotero 그룹 라이브러리 목록(id·이름). 그룹 라이브러리는 libraryType=groups · libraryId=<그룹 id> 로 읽는다.",
+        url: `${ZOT}/users/{userId}/groups?limit=50`,
+        input_schema: obj({ userId: S("내 Zotero userID — zotero_get_key 결과"), start: I("건너뛸 개수(다음 쪽)") }, ["userId"]),
+        pii_scrub: true,
+      },
+      {
+        name: "zotero_search_items",
+        title: "Zotero 논문 찾기",
+        description:
+          "라이브러리에서 논문(맨 위 항목)을 찾는다 — 제목·저자·연도로 찾고(qmode 기본), qmode=everything 이면 본문 색인까지 찾는다. " +
+          "tag 로 태그를, itemType 으로 종류(journalArticle · book · -attachment)를 거를 수 있다. 결과 data 에 서지·초록·태그·컬렉션이 있고, " +
+          "그 논문의 노트·첨부는 zotero_get_item_children 으로, 하이라이트·코멘트는 그 첨부의 children 으로 읽는다. 최대 25건, 더 보려면 start.",
+        url: `${ZOT}/{libraryType}/{libraryId}/items/top?limit=25`,
+        input_schema: obj({
+          libraryType: S("users(개인) 또는 groups(그룹)"),
+          libraryId: S("라이브러리 id — 개인은 userID, 그룹은 그룹 id"),
+          q: S("검색어 — 제목·저자·연도(qmode=everything 이면 본문까지)"),
+          qmode: S("titleCreatorYear(기본) 또는 everything"),
+          tag: S("태그로 거르기(예: 읽을것)"),
+          itemType: S("종류로 거르기(예: journalArticle · -attachment)"),
+          sort: S("정렬 — dateModified · dateAdded · title · date"),
+          direction: S("asc 또는 desc"),
+          start: I("건너뛸 개수(다음 쪽)"),
+        }, ["libraryType", "libraryId"]),
+        pii_scrub: false,
+      },
+      {
+        name: "zotero_get_item",
+        title: "Zotero 항목 하나",
+        description: "논문·노트·첨부·주석 하나를 key 로 읽는다(서지 전부, 노트 본문 HTML, 주석의 원문·코멘트·색·페이지).",
+        url: `${ZOT}/{libraryType}/{libraryId}/items/{itemKey}`,
+        input_schema: obj({
+          libraryType: S("users 또는 groups"), libraryId: S("라이브러리 id"), itemKey: S("항목 key(8자)"),
+        }, ["libraryType", "libraryId", "itemKey"]),
+        pii_scrub: false,
+      },
+      {
+        name: "zotero_get_item_children",
+        title: "Zotero 노트·첨부·주석",
+        description:
+          "항목 아래에 달린 것을 읽는다. 논문 key 를 주면 그 논문의 노트(본문 HTML)와 첨부(PDF 등)가, " +
+          "PDF 첨부 key 를 주면 그 PDF 에 단 하이라이트·코멘트(annotationText·annotationComment·annotationColor·annotationPageLabel)가 온다. 최대 100건.",
+        url: `${ZOT}/{libraryType}/{libraryId}/items/{itemKey}/children?limit=100`,
+        input_schema: obj({
+          libraryType: S("users 또는 groups"), libraryId: S("라이브러리 id"), itemKey: S("논문 또는 첨부 key"),
+          start: I("건너뛸 개수(다음 쪽)"),
+        }, ["libraryType", "libraryId", "itemKey"]),
+        pii_scrub: false,
+      },
+      {
+        name: "zotero_list_collections",
+        title: "Zotero 컬렉션 목록",
+        description: "라이브러리의 컬렉션(폴더) 목록 — key·이름·상위 컬렉션. 컬렉션 안의 논문은 zotero_list_collection_items 로 읽는다.",
+        url: `${ZOT}/{libraryType}/{libraryId}/collections?limit=100`,
+        input_schema: obj({
+          libraryType: S("users 또는 groups"), libraryId: S("라이브러리 id"), start: I("건너뛸 개수(다음 쪽)"),
+        }, ["libraryType", "libraryId"]),
+        pii_scrub: false,
+      },
+      {
+        name: "zotero_list_collection_items",
+        title: "Zotero 컬렉션의 논문",
+        description: "컬렉션 하나에 든 논문(맨 위 항목) 목록. 최대 25건, 더 보려면 start. q 로 그 안에서 찾을 수 있다.",
+        url: `${ZOT}/{libraryType}/{libraryId}/collections/{collectionKey}/items/top?limit=25`,
+        input_schema: obj({
+          libraryType: S("users 또는 groups"), libraryId: S("라이브러리 id"), collectionKey: S("컬렉션 key(8자)"),
+          q: S("검색어"), start: I("건너뛸 개수(다음 쪽)"),
+        }, ["libraryType", "libraryId", "collectionKey"]),
+        pii_scrub: false,
+      },
+      {
+        name: "zotero_get_fulltext",
+        title: "Zotero 첨부의 본문 색인",
+        description:
+          "PDF 첨부에서 Zotero 가 뽑아 둔 본문 텍스트(content · 색인한 쪽 수). 첨부 key 를 준다(논문 key 가 아니다). " +
+          "색인이 없으면 404 다(스캔 PDF·동기화 꺼짐). ⚠ 논문 본문은 길다 — 응답 상한(256KiB)에서 잘릴 수 있다.",
+        url: `${ZOT}/{libraryType}/{libraryId}/items/{itemKey}/fulltext`,
+        input_schema: obj({
+          libraryType: S("users 또는 groups"), libraryId: S("라이브러리 id"), itemKey: S("PDF 첨부 key"),
+        }, ["libraryType", "libraryId", "itemKey"]),
+        pii_scrub: false,
       },
     ],
   },

@@ -13,6 +13,7 @@ import { githubConnector } from "./github.js";
 import { gitlabConnector } from "./gitlab.js";
 import { linearConnector } from "./linear.js";
 import { outlookConnector } from "./outlook.js";
+import { zoteroConnector } from "./zotero.js";
 
 export const connectors: Record<string, Connector> = {
   slack: slackConnector,
@@ -28,4 +29,5 @@ export const connectors: Record<string, Connector> = {
   gitlab: gitlabConnector,   // 이슈·MR 대화·릴리스 → source (#2247) — 개인 토큰(read_api)만, 호스트 축(self-managed)
   linear: linearConnector,   // 이슈·댓글·문서 → source (#2247) — 라이블리 Linear 앱 토큰(linear_app), GraphQL
   outlook: outlookConnector, // 메일 → source(email) (#4211) — [Outlook 연결](microsoft_oauth) 토큰, Graph v1.0
+  zotero: zoteroConnector,   // 논문(서지 + 주석 + 노트) → source(zotero_item) — 개인 API 키(zotero_token), Web API v3
 };

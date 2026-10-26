@@ -20,8 +20,14 @@ export interface MemberCollectSpec {
   system: string;
   /** org_collector.preset_key. */
   preset: string;
-  /** org_collector.instance_key — 커서 네임스페이스. 토글이 만드는 인스턴스 하나. */
+  /** org_collector.instance_key — 커서 네임스페이스. 토글이 만드는 인스턴스 하나(perMember 면 사람마다 `<instance>:<구성원 id>`). */
   instance: string;
+  /**
+   * true 면 수집기가 **사람마다 하나**다 — 모으는 것이 그 사람 것일 때(Zotero 개인 라이브러리). 워크스페이스에 하나인 앱은
+   *  켠 사람의 연결로 갈아끼우지만(불변식 ①), 이런 앱은 갈아끼우면 앞사람의 라이브러리 수집이 멈춘다. 상태·켜기·끄기는
+   *  모두 **부른 사람의 수집기**를 본다. 같은 그룹 라이브러리를 둘이 모아도 자료는 외부 좌표로 한 건이 된다(커넥터 몫).
+   */
+  perMember?: boolean;
   /** 켠 사람의 금고에서 찾을 자격 kind(예 figma_token). scope_key 는 ''(단일 대상 kind). */
   credKind: string;
   /** true 면 scope_key 를 가리지 않고 그 kind 슬롯이 하나라도 있으면 연결로 본다(github_pat: 호스트 키 PAT 또는 '' 키 OAuth 묶음). */
@@ -131,9 +137,14 @@ export function normalizeScopeInput(spec: Pick<MemberCollectSpec, "scopeKeys" | 
   return out;
 }
 
+/** 그 사람의 수집기 인스턴스 키 — perMember 면 사람마다, 아니면 하나. 순수. */
+export function memberInstanceKey(spec: Pick<MemberCollectSpec, "instance" | "perMember">, memberId: string): string {
+  return spec.perMember ? `${spec.instance}:${memberId}` : spec.instance;
+}
+
 export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
-  const find = (all: CollectorView[]): CollectorView | undefined =>
-    all.find((c) => c.preset_key === spec.preset && c.instance_key === spec.instance);
+  const find = (all: CollectorView[], memberId: string): CollectorView | undefined =>
+    all.find((c) => c.preset_key === spec.preset && c.instance_key === memberInstanceKey(spec, memberId));
   const connected = async (memberId: string): Promise<boolean> => {
     if (spec.credAnyScope) {
       const rows = await listMemberSecretsPublic(memberOwner(memberId)).catch(() => []);
@@ -143,7 +154,7 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
     return !!r?.secret;
   };
   const stateOf = async (callerId: string): Promise<MemberCollectState & Record<string, unknown>> => {
-    const inst = find(await listCollectors());
+    const inst = find(await listCollectors(), callerId);
     const member = tokenSourceMember(inst);
     const scope = pickScope(spec, inst?.config);
     const extra = spec.extraState ? await spec.extraState().catch(() => ({})) : {};
@@ -195,7 +206,7 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       const interval = i.sync_interval_sec === undefined ? undefined : (normalizeInterval(i.sync_interval_sec) ?? undefined);
       const actor = user.userId;
       const source = ctx?.source ?? "web";
-      const inst = find(await listCollectors());
+      const inst = find(await listCollectors(), actor);
       let scopeIn = normalizeScopeInput(spec, i.scope);
       let merged: Record<string, unknown> = { ...(inst?.config ?? {}), ...scopeIn };
       // 범위가 비면 앱이 아는 기본값(예 [GitHub 연결]에서 고른 저장소)으로 채운다 — 그 선택이 곧 범위라 사람이 두 번 고르지 않는다.
@@ -231,8 +242,8 @@ export function makeMemberTokenCollect(spec: MemberCollectSpec): Capability[] {
       // enable — 항상 호출자의 자격으로. 범위 입력은 프리셋 필드에 있는 키만 저장된다(upsertCollector 계약).
       const extra = spec.extraConfig ? await spec.extraConfig(actor).catch(() => ({})) : {};
       await upsertCollector({
-        id: inst?.id, preset_key: spec.preset, instance_key: spec.instance,
-        label: inst?.label ?? spec.label, enabled: true,
+        id: inst?.id, preset_key: spec.preset, instance_key: memberInstanceKey(spec, actor),
+        label: inst?.label ?? (spec.perMember ? `${spec.label} (${actor})` : spec.label), enabled: true,
         config: { ...extra, ...scopeIn, token_source: `member:${actor}` },
         note: inst?.note ?? spec.note,
         ...(interval ? { sync_interval_sec: interval } : {}),

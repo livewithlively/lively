@@ -12,11 +12,13 @@ import {
 import { verifyCredential, verifierExists } from "../org/credentials/credential-verify.js";
 import { CODEX_AUTH_KIND, CREDENTIAL_SECRET_MAX, parseCodexAuth } from "../org/credentials/codex-auth.js";
 import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 ③ 자격 건강 상태
+import { ensureHttpToolPresetGroup } from "../org/delivery/http-tool-preset-apply.js";
+import { logger } from "../log.js";
 
 // 알려진 kind — 표면 문서/검증용(스토어는 형식만 검증하므로 신규 커넥터가 kind 를 늘려도 되지만, 오타 방지 힌트).
 const KNOWN_KINDS = [
   "gitlab_pat", "github_pat", "slack_user_token", "google_oauth_refresh", "clickup_token",
-  "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token", "claude_setup_token", CODEX_AUTH_KIND,
+  "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token", "zotero_token", "claude_setup_token", CODEX_AUTH_KIND,
   "anthropic_api_key",   // #4488 워크스페이스 LLM 키(owner=gateway · org_credential_set) — 앱 AI 실행의 기본 실행 계정 · LLM 프록시
 ];
 const KIND_DESC = `자격 종류(예: ${KNOWN_KINDS.join(", ")} — 신규 커넥터가 확장 가능)`;
@@ -102,6 +104,13 @@ const meCredentialSet: Capability = {
       { secret, meta: metaOf(i.meta), label: s(i.label, 200) || null },
       user.userId,
     );
+    //  키를 저장한 순간 그 키를 쓰는 AI 도구가 있게 한다 — Zotero 는 원격 MCP 가 없어 이 REST 묶음이 «내 계정으로 직접 사용»의 전부다.
+    //   없으면 키 칸은 수집에만 쓰이는 반쪽 표면이 된다(피그마 #1881 이 한 번 겪은 «토큰 칸은 있는데 도구 0개»).
+    //   Outlook 이 연결 직후 묶음을 심는 것(#4211)과 같은 함수 — 관리자가 꺼 둔 도구는 되살리지 않는다. best-effort.
+    if (s(i.kind).toLowerCase() === "zotero_token" && secret) {
+      try { await ensureHttpToolPresetGroup("zotero", { actor: user.userId, source: "zotero-key" }); }
+      catch (e) { logger.warn({ err: (e as Error)?.message }, "Zotero 도구 묶음 준비 실패(무시) — org_http_tool_preset_apply {key:'zotero'} 로 다시 심을 수 있다"); }
+    }
     return { credential: cred };
   },
 };

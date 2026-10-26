@@ -20,7 +20,7 @@ import { notionCollectState } from "./notion-connect.js";
 import { googleCollectState } from "./google-connect.js";
 import {
   clickupCollectCapabilities, figmaCollectCapabilities, githubCollectCapabilities, gitlabCollectCapabilities,
-  linearCollectCapabilities, outlookCollectCapabilities,
+  linearCollectCapabilities, outlookCollectCapabilities, zoteroCollectCapabilities,
 } from "./member-collect-apps.js";
 import { githubAppReady } from "../org/credentials/oauth-broker.js";
 import { decideRoutes, type AppRouteFacts, type ConnectRoute } from "../org/connect-routes.js";
@@ -58,6 +58,11 @@ interface AppSpec {
    *  · token = 개인 토큰·API 키.
    */
   routes: { app?: true; aiApp?: string; token?: true };
+  /**
+   * 수집기가 사람마다 하나인 앱(Zotero — 모으는 것이 그 사람의 라이브러리) — 수집 켜기를 워크스페이스 관리자에게 묻지 않는다.
+   *  워크스페이스에 하나인 수집기는 켜는 사람이 모두의 자료 흐름을 바꾸지만, 이런 앱은 자기 것만 켠다.
+   */
+  selfCollect?: true;
 }
 
 /**
@@ -143,6 +148,7 @@ export const CONNECT_APPS: readonly AppSpec[] = [
   { app: "outlook", label: "아웃룩", needsApp: true, registerBy: "admin", routes: { app: true }, probe: memberCollectProbe(outlookCollectCapabilities, "outlook") },
   { app: "clickup", label: "클릭업", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(clickupCollectCapabilities, "clickup") },
   { app: "figma", label: "피그마", needsApp: false, registerBy: "manage", routes: { token: true }, probe: memberCollectProbe(figmaCollectCapabilities, "figma") },
+  { app: "zotero", label: "조테로", needsApp: false, registerBy: "manage", routes: { token: true }, selfCollect: true, probe: memberCollectProbe(zoteroCollectCapabilities, "zotero") },
 ];
 
 export interface ConnectAppStatus {
@@ -261,6 +267,8 @@ const orgConnectStatus: Capability = {
     const aiLogin = aiMe === undefined ? null : claudeLoginOf(aiMe?.scan);
     const apps = await Promise.all(CONNECT_APPS.map(async (a): Promise<ConnectAppStatus> => {
       const canRegister = a.registerBy === "admin" ? admin : canCollect;
+      //  사람마다 수집기가 하나인 앱은 자기 것을 켠다 — 관리자에게 묻지 않는다(AppSpec.selfCollect).
+      const canCollectApp = a.selfCollect ? true : canCollect;
       const common = {
         app: a.app, label: a.label, skill: `liv-connect-${a.app}`, can_register: canRegister,
         connect_url: base ? `${base.replace(/\/+$/, "")}/ui/#/connect/${a.app}` : null,
@@ -269,9 +277,9 @@ const orgConnectStatus: Capability = {
         const p = await a.probe(user);
         const next = decideConnectNext({
           variant, needsApp: a.needsApp, appReady: p.app_ready,
-          canRegister, canCollect, meConnected: p.me_connected, collecting: p.collecting,
+          canRegister, canCollect: canCollectApp, meConnected: p.me_connected, collecting: p.collecting,
         });
-        const d = decideRoutes(routeFactsOf(a, p, { heldBy, canRegister, canCollect, aiPolicy, aiMine, aiLogin }));
+        const d = decideRoutes(routeFactsOf(a, p, { heldBy, canRegister, canCollect: canCollectApp, aiPolicy, aiMine, aiLogin }));
         const appRoute = d.routes.find((r) => r.kind === "app");
         const registration = appRoute && !p.app_ready && (appRoute.state === "register" || appRoute.state === "ask_admin")
           ? registrationView(a.app, { callbackUrl, gatewayUrl: profileUrl }) : null;

@@ -4,7 +4,7 @@ import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
 import { auditConnector } from "./mirror-common.js";
-import { stampSourceVisibility } from "../source-vis-policy.js";
+import { stampSourceAudience, stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
 export function sourceKindOf(system: string): string {
@@ -21,6 +21,7 @@ export function sourceKindOf(system: string): string {
     case "github": return "github_issue"; // #2247 이슈·PR 대화·릴리스 — 닫힘·머지가 결론 신호라 증류 기준이 따로 있다
     case "gitlab": return "gitlab_issue"; // #2247 이슈·MR 대화·릴리스 — GitHub 과 같은 증류기(issue-threads)가 잡는다
     case "linear": return "linear_issue"; // #2247 이슈·댓글·문서 — 같은 증류기(issue-threads)
+    case "zotero": return "zotero_item";  // Zotero 논문 한 편(서지 + 주석 + 노트) · 독립 노트 — 증류 기준이 논문 단위라 따로 둔다
     default: return "other";
   }
 }
@@ -93,6 +94,8 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
   if (isInsert) {
     await stampSourceVisibility(client, id, system,
       [it.container_ref, it.container_name, fields.container_ref as string, fields.container_name as string]);
+    //  커넥터가 주인을 아는 자료(Zotero 개인 라이브러리)는 그 사람만 보게 — 정책보다 좁은 쪽이 이긴다.
+    if (it.audience?.length) await stampSourceAudience(client, id, it.audience);
   }
 
   if (contentChanged) {

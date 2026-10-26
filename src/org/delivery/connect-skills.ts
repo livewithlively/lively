@@ -94,6 +94,11 @@ export const CONNECT_SKILL_SPECS: readonly ConnectSkillSpec[] = [
     summary: "피그마 토큰을 저장하고 코멘트를 모을 파일을 정합니다.",
     description: "피그마를 라이블리에 연결한다 — 개인 액세스 토큰 저장, 코멘트를 모을 파일 정하기, 첫 수집. 트리거 «피그마 연결» / «Figma 연결».",
   },
+  {
+    id: "liv-connect-zotero", source: "zotero", label: "Zotero 연결",
+    summary: "Zotero API 키를 저장하고 논문의 주석·노트를 모을 라이브러리를 정합니다.",
+    description: "Zotero 를 라이블리에 연결한다 — 개인 API 키 저장, 모을 라이브러리·컬렉션과 종류(주석·노트·전문) 정하기, 첫 수집. 트리거 «조테로 연결» / «Zotero 연결» / «논문 주석 모아 줘».",
+  },
   // 앱이 아니라 «길» — 구성원 Claude 커넥터로 슬랙·지메일·노션을 모은다(기본 길은 위 앱 스킬). 원본 파일 이름을 claude.md 로
   //  두지 않는다: 대소문자를 가리지 않는 파일시스템(macOS)에서 CLAUDE.md 로 읽혀 이 폴더를 만지는 AI 세션에 지시문으로 주입된다.
   {

@@ -161,7 +161,7 @@ function categoryNames(catRes: any): (key: string | null | undefined) => string 
 }
 
 /** 리브가 만든 증류기인가 — 온보딩이 카테고리마다 세운 레인(`liv-` 접두)과 제품이 준비해 두는 프리셋 셋. */
-const PRESET_DISTILLERS = new Set(['local-files', 'figma-comments', 'issue-threads']);
+const PRESET_DISTILLERS = new Set(['local-files', 'figma-comments', 'issue-threads', 'zotero-papers']);
 function isLivMadeDistiller(d): boolean {
   return String(d.key || '').startsWith('liv-') || PRESET_DISTILLERS.has(String(d.key || ''));
 }
@@ -170,11 +170,11 @@ function isLivMadeDistiller(d): boolean {
 const KIND_LABEL: Record<string, string> = {
   slack: '슬랙', discord: '디스코드', email: '메일', transcript: '회의 전사록', minutes: '회의록', notion_doc: '노션 문서',
   clickup_doc: '클릭업 문서', drive_file: '드라이브 파일', local_file: '올린 파일', figma_comment: '피그마 코멘트',
-  github_issue: '깃허브 이슈', gitlab_issue: '깃랩 이슈', linear_issue: '리니어 이슈', other: '그 밖',
+  github_issue: '깃허브 이슈', gitlab_issue: '깃랩 이슈', linear_issue: '리니어 이슈', zotero_item: 'Zotero 논문', other: '그 밖',
 };
 const KIND_SVC: Record<string, string> = {
   slack: 'slack', notion_doc: 'notion', clickup_doc: 'clickup', drive_file: 'google-drive', figma_comment: 'figma',
-  github_issue: 'github', gitlab_issue: 'gitlab', linear_issue: 'linear', email: 'google-gmail',
+  github_issue: 'github', gitlab_issue: 'gitlab', linear_issue: 'linear', email: 'google-gmail', zotero_item: 'zotero',
 };
 export function kindFace(kind: string, cls = ''): HTMLElement {
   const svc = KIND_SVC[kind];

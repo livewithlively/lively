@@ -19,7 +19,7 @@ const all: Array<[HttpToolPresetGroup, HttpToolPreset]> = HTTP_TOOL_PRESETS.flat
 
 t("프리셋이 비어 있지 않다(배선 단언 — 비면 아래 순회가 통째로 vacuous)", () => {
   assert.ok(all.length >= 8, `도구가 너무 적다(${all.length})`);
-  assert.deepEqual(HTTP_TOOL_PRESETS.map((g) => g.key).sort(), ["figma", "github", "gitlab", "google-calendar", "google-drive", "google-gmail", "outlook", "slack"]);
+  assert.deepEqual(HTTP_TOOL_PRESETS.map((g) => g.key).sort(), ["figma", "github", "gitlab", "google-calendar", "google-drive", "google-gmail", "outlook", "slack", "zotero"]);
 });
 
 t("전 프리셋이 자기검증을 통과한다(스키마 위생·scope·https·호스트·경로 인자)", () => {
@@ -43,7 +43,8 @@ t("금고 슬롯이 A 어댑터와 같다 — 이미 연결한 멤버는 재로�
   //  저장하면 oauth-proxy-auth 가 묶음/정적을 알아서 가른다.
   // figma 는 OAuth 가 아니라 PAT 슬롯(figma_token)이다 — A 어댑터에 대응 서버가 없으므로(레인 C) 승계할 연결도 없다.
   // microsoft_oauth(#4211) 는 A 어댑터가 없다 — 승계할 옛 연결이 없고 [Outlook 연결] 직결 슬롯 그대로다.
-  assert.deepEqual(kinds, ["figma_token", "github_pat", "gitlab_pat", "google_calendar_oauth", "google_drive_oauth", "google_gmail_oauth", "microsoft_oauth", "slack_oauth"]);
+  // zotero_token 은 개인 API 키 슬롯이다 — Zotero 엔 원격 MCP 가 없어(A 어댑터 없음) 승계할 연결이 없다.
+  assert.deepEqual(kinds, ["figma_token", "github_pat", "gitlab_pat", "google_calendar_oauth", "google_drive_oauth", "google_gmail_oauth", "microsoft_oauth", "slack_oauth", "zotero_token"]);
   for (const [g] of all) assert.equal(httpToolPresetToInput(g, g.tools[0]).auth_scope_key, "", "scope_key 가 다르면 다른 금고 행을 본다");
 });
 
@@ -135,7 +136,7 @@ t("URL 기본값은 인자가 덮어쓴다 — 안 주면 기본값이 산다", 
 t("허용 호스트 목록 — 이게 url_allowlist 에 들어가야 도구가 동작한다", () => {
   //  ⚠ 이 목록이 늘면 **매니지드 신규 테넌트의 url_allowlist 에도 함께 들어가야 한다** — 도구를 심어도 allowlist 가
   //   비어 있으면 전부 차단된다(슬랙 T10 #1993 이 잡은 함정). 여기 배열이 그 사실을 눈에 띄게 만드는 자리다.
-  assert.deepEqual(httpToolPresetHosts(), ["api.figma.com", "api.github.com", "gitlab.com", "gmail.googleapis.com", "graph.microsoft.com", "slack.com", "www.googleapis.com"]);
+  assert.deepEqual(httpToolPresetHosts(), ["api.figma.com", "api.github.com", "api.zotero.org", "gitlab.com", "gmail.googleapis.com", "graph.microsoft.com", "slack.com", "www.googleapis.com"]);
 });
 
 t("자기검증이 실제로 잡는다 — 경로 인자가 required 가 아니면 거부", () => {
