@@ -512,6 +512,8 @@ export async function bootV2(): Promise<void> {
       counts: railCounts,
       activeKey: () => activeKey(),
       sideOwner: () => sideOwnerOfRoute(tabsApi?.current()?.route || location.hash),   // #4632 앱 화면에선 구역 칸을 켜지 않는다
+      //  #5011 설치한 앱 화면(#/i/…)이면 그 앱 — 레일의 그 앱 칸(팀 채널 …)이 켜진다. 세션 화면도 appId 를 들고 있어 주소로 가른다.
+      installedAppId: () => { const t = tabsApi?.current(); return t && /^#\/i\//.test(t.route) ? t.appId : null; },
       onSection: (sec, o) => {
         drawSide();
         if (o.navigate) location.hash = sectionRoute(sec);

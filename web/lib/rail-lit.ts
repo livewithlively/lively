@@ -54,3 +54,23 @@ export const isInstalledRecentKey = (key: string): boolean => typeof key === 'st
 export function installedRailEligible(apps: ReadonlyArray<{ id: string; hasUi: boolean; systemRoute?: string | null }>): string[] {
   return apps.filter((a) => !!a.id && a.hasUi && !a.systemRoute).map((a) => installedRecentKey(a.id));
 }
+
+// ── 메인 줄을 끌어 놓은 뒤의 새 순서(#5011, 원준 2026-10-26 «다른건 독에서 끌어당기면서 하는게 되는데 왜 팀 채널은 안되는거지») ──
+//  끌어 놓은 결과는 **화면에 선 칸의 순서**다. 그런데 저장된 순서에는 화면에 안 선 것도 있다 — 설치 앱 목록이 아직 안 온 고정 앱,
+//  지금 꺼진 앱. 종전엔 화면 순서를 그대로 저장해서 끌기 한 번에 그 고정이 지워졌다(«안 보이는 것» 은 «사람이 뺀 것» 이 아니다 — lib/pane-dock dockPins 와 같은 원칙).
+/**
+ * @param prev    저장돼 있던 순서(화면에 안 선 것 포함)
+ * @param visible 끌어 놓은 뒤 화면에 선 칸의 순서
+ * @returns visible 순서에, 화면에 없던 키를 저장 순서에서 바로 앞에 있던 이웃 뒤에 다시 끼운 것(앞 이웃이 없으면 맨 앞).
+ */
+export function mergeRailOrder(prev: readonly string[], visible: readonly string[]): string[] {
+  const out = [...visible];
+  const shown = new Set(visible);
+  let at = 0;   // 숨은 키를 끼울 자리 — 저장 순서에서 바로 앞에 있던 «화면에 선» 키 뒤(숨은 키가 이어지면 그 뒤)
+  for (const k of prev) {
+    if (shown.has(k)) { at = out.indexOf(k) + 1; continue; }
+    if (out.includes(k)) continue;
+    out.splice(at, 0, k); at += 1;
+  }
+  return out;
+}
