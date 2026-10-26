@@ -14,7 +14,8 @@ import {
   BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH,
   DRM_HANDOFF_HOSTS, hostMatches, surfaceNavTarget, cleanUserAgent, webviewAttachDecision,
   SURFACE_ALLOWED_PERMISSIONS, surfacePermissionAllowed,
-  SURFACE_POPUP_LIMIT, surfaceWindowOpenTarget, surfacePopupWindowOptions,
+  SURFACE_POPUP_LIMIT, SURFACE_POPUP_MIN_SIZE, SURFACE_OPEN_MIN_GAP_MS, SURFACE_OPEN_PER_MINUTE,
+  surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, surfaceOpenGate, surfacePopupTitle,
 } from "./browser-surface.mjs";
 
 let pass = 0;
@@ -131,7 +132,11 @@ t("F3·F4 ★ webviewTag 를 켠 자리마다 부착 훅이 격리를 강제한�
   assert.match(MAIN, /webviewTag: true/, "앱 창에 webviewTag 를 안 켰다 — 서피스를 만들 수 없다");
   const at = MAIN.indexOf('wc.on("will-attach-webview"');
   assert.ok(at >= 0, "★ F3 부착 훅이 없다 — webviewTag:true 한 줄이 XSS→RCE 승격 통로가 된다");
-  const seg = MAIN.slice(at, at + 1600);
+  // ⚠ 고정 길이로 자르지 않는다 — 훅이 자라면 뒤쪽 단언(특히 «없어야 한다» 단언)이 조용히 공허해진다(F7 의 교훈).
+  //  훅 리스너가 닫히는 줄(`  });` — 훅과 같은 들여쓰기)까지 자른다.
+  const close = MAIN.indexOf("\n  });\n", at);
+  assert.ok(close > at, "부착 훅의 끝을 못 찾는다");
+  const seg = MAIN.slice(at, close + 6);
   assert.match(seg, /webviewAttachDecision\(params\)/, "부착 허용 판정을 안 쓴다");
   assert.match(seg, /e\.preventDefault\(\)/, "거부해도 실제로 막지 않는다");
   assert.match(seg, /for \(const k of WEBVIEW_DROPPED_PREFS\) delete webPreferences\[k\]/, "★ F4 preload 를 지우지 않는다");
@@ -145,6 +150,10 @@ t("F3·F4 ★ webviewTag 를 켠 자리마다 부착 훅이 격리를 강제한�
   //  (v43.3.0 guest-view-manager.ts makeWebPreferences). params 에 적는 줄은 막는 것처럼 보이지만 아무것도 안 한다.
   //  새 창은 WEBVIEW_FORCED_PREFS.disablePopups(=false · E3)로 처리기까지 오게 하고, 처리기(F9)가 정한다.
   assert.ok(!/params\.allowpopups\s*=/.test(seg), "★ params.allowpopups 는 Electron 이 무시한다 — 막은 줄 알고 안 된다");
+  assert.ok(!/webPreferences\.disablePopups\s*=/.test(seg),
+    "★ 강제 설정 뒤에 disablePopups 를 다시 덮어쓴다 — 새 창이 처리기에 안 와 팝업 로그인이 다시 죽는다");
+  assert.ok(seg.indexOf("Object.assign(webPreferences, WEBVIEW_FORCED_PREFS)") > seg.indexOf("delete webPreferences[k]"),
+    "강제 설정이 지우기보다 먼저다 — 지우기가 강제값을 지울 수 있다");
   assert.match(MAIN, /setPermissionRequestHandler\(\(_wc, permission, cb\) => cb\(surfacePermissionAllowed\(permission\)\)\)/, "권한 요청을 서피스 정책에 안 건다");
   assert.match(MAIN, /setPermissionCheckHandler\(\(_wc, permission\) => surfacePermissionAllowed\(permission\)\)/, "권한 조회를 서피스 정책에 안 건다");
   assert.match(MAIN, /setUserAgent\(cleanUserAgent\(s\.getUserAgent\(\), app\.getName\(\)\)\)/, "서피스 세션 UA 를 안 정리한다");
@@ -211,32 +220,55 @@ t("F8 ★ 팝업 창도 서피스로 친다 — 세션으로 가른다(팝업은
   assert.match(body, /surfaceSessionReady && wc\.session === browserSurfaceSession\(\)/, "★ 웹 UI 창마다 서피스 세션을 깨운다");
 });
 
-t("F9 ★ 서피스의 새 창 처리기 — 판정은 surfaceWindowOpenTarget, popup 이면 앱 안 창(opener 유지)", () => {
+t("F9 ★ 서피스의 새 창 처리기 — 판정 표 → 팝업 차단 대신 문(포커스·빈도) → popup 이면 우리가 짓는 창(opener 유지)", () => {
   const hook = MAIN.indexOf('app.on("web-contents-created"');
   const seg = MAIN.slice(hook);
   const at = seg.indexOf("if (isSurfaceContents(wc))");
   const branch = seg.slice(at, seg.indexOf("\n  }\n", at) + 5);   // 분기 블록만(F2 와 같은 자르기)
-  assert.match(branch, /setWindowOpenHandler\(\(\{ url, disposition \}\) =>/, "★ disposition 을 안 받는다 — 팝업과 탭을 못 가른다");
-  assert.match(branch, /surfaceWindowOpenTarget\(\{ url, disposition, openPopups: openSurfacePopups\(\) \}\)/,
-    "★ 판정 표(surfaceWindowOpenTarget)를 안 쓰거나 열린 팝업 수를 안 넘긴다(상한 무력)");
-  assert.match(branch, /if \(t === "popup"\) return \{ action: "allow", overrideBrowserWindowOptions: surfacePopupOptionsFor\(wc\) \}/,
-    "★ 팝업을 앱 안 창으로 안 연다 — opener 가 끊겨 팝업 로그인이 결과를 못 돌려받는다");
-  assert.match(branch, /if \(t === "external"\) shell\.openExternal\(url\)/, "탭 성격을 시스템 브라우저로 안 넘긴다");
-  assert.match(branch, /return \{ action: "deny" \};/, "그 밖을 막지 않는다");
+  assert.match(branch, /setWindowOpenHandler\(\(\{ url, disposition, features \}\) =>/,
+    "★ disposition·features 를 안 받는다 — 스크립트 팝업과 Shift+클릭·탭을 못 가른다");
+  assert.match(branch, /surfaceWindowOpenTarget\(\{ url, disposition, features, openPopups: surfacePopups\.size \}\)/,
+    "★ 판정 표를 안 쓰거나 **우리가 지은** 팝업 수를 안 넘긴다(상한 무력)");
+  const deny = branch.indexOf('if (t === "deny") return { action: "deny" };');
+  const gate = branch.indexOf("surfaceOpenGate({ hostFocused: !!owner && owner.isFocused(), recent: surfaceOpens.get(wc), now: Date.now() })");
+  const save = branch.indexOf("surfaceOpens.set(wc, gate.recent);");
+  const blocked = branch.indexOf('if (!gate.ok) return { action: "deny" };');
+  const popup = branch.indexOf('if (t === "popup")');
+  const ext = branch.indexOf("shell.openExternal(url);");
+  assert.ok(gate >= 0, "★ 문(주인 창 포커스·빈도)이 없다 — 광고 페이지가 창·시스템 브라우저 탭을 쏟는다");
+  assert.ok(save > gate && blocked > save, "★ 빈도 기록을 안 남기거나 문이 막아도 연다");
+  assert.ok(deny >= 0 && deny < gate, "거부할 것까지 빈도 기록을 먹는다");
+  assert.ok(popup > blocked && ext > blocked, "★ 문보다 먼저 연다 — 문이 아무것도 안 막는다");
+  const ret = branch.slice(popup, ext);
+  assert.match(ret, /action: "allow"/, "★ 팝업을 앱 안 창으로 안 연다 — opener 가 끊겨 팝업 로그인이 결과를 못 돌려받는다");
+  assert.match(ret, /overrideBrowserWindowOptions: \{ webPreferences: surfacePopupWebPreferences\(\) \}/,
+    "★ 팝업 webContents 격리를 메인이 안 정한다 — 페이지 기능 문자열이 정하게 된다");
+  assert.match(ret, /createWindow: \(options\) => createSurfacePopup\(wc, url, options\)/,
+    "★ 창을 Electron 기본(페이지 기능 문자열 섞기)으로 짓는다 — 닫기 없는 모달·숨은 창이 가능하다");
 });
 
-t("F10 팝업 창 설정 = 순수 정책 + 주인 창(앱 창 위에 떠서 로그인 창을 잃지 않는다)", () => {
-  const body = fnBody("surfacePopupOptionsFor");
-  assert.match(body, /const opts = surfacePopupWindowOptions\(\)/, "★ 정책 설정(파티션·격리)을 안 쓴다 — 링크로 연 창이 기본 파티션에 뜬다");
-  assert.match(body, /BrowserWindow\.fromWebContents\(wc\.hostWebContents \|\| wc\)/, "주인 창을 게스트의 앱 창에서 안 찾는다");
-  assert.match(body, /opts\.parent = owner/, "주인 창을 안 건다");
+t("F10 ★ 팝업 창은 우리가 짓는다 — 설정은 spec·주인·webContents 셋뿐 · 우리 집합에 등록 · 제목에 실제 호스트", () => {
+  const body = fnBody("createSurfacePopup");
+  // new BrowserWindow 에 들어가는 건 정확히 셋 — 그 사이에 다른 키(modal·alwaysOnTop…)를 끼우면 빨간불
+  assert.match(body, /new BrowserWindow\(\{\n    \.\.\.surfacePopupWindowSpec\(options, area\),\n    \.\.\.\(owner \? \{ parent: owner \} : \{\}\),\n    \.\.\.\(guest \? \{ webContents: guest \} : \{ webPreferences: surfacePopupWebPreferences\(\) \}\),\n  \}\);/,
+    "★ 창 설정이 spec·주인·webContents 말고 다른 것을 받는다(또는 순서가 바뀌어 spec 이 덮인다)");
+  assert.match(body, /const owner = surfaceOwnerWindow\(opener\)/, "주인 창을 안 찾는다");
+  assert.match(body, /screen\.getDisplayMatching\(owner\.getBounds\(\)\)/, "주인 창이 있는 화면의 작업 영역을 안 쓴다");
+  assert.match(body, /surfacePopups\.add\(win\)/, "★ 지은 창을 안 센다 — 상한이 무력");
+  assert.match(body, /win\.on\("closed", \(\) => surfacePopups\.delete\(win\)\)/, "★ 닫힌 창을 안 뺀다 — 상한이 영영 찬다");
+  assert.match(body, /win\.on\("page-title-updated", \(e, title\) => \{ e\.preventDefault\(\); win\.setTitle\(surfacePopupTitle\(win\.webContents\.getURL\(\), title\)\); \}\)/,
+    "★ 제목에 실제 호스트를 안 붙인다 — 주소줄 없는 창에서 남의 페이지가 어디인지 안 보인다");
+  assert.match(body, /did-navigate/, "다른 호스트로 넘어가도 제목이 옛 호스트를 말한다");
+  assert.match(body, /if \(!guest\) void win\.loadURL\(url\)/, "opener 없이 지은 창이 빈 창으로 남는다(또는 opener 창을 다시 싣는다)");
+  assert.match(body, /return win\.webContents;/, "Electron 이 넘긴 webContents 를 안 돌려준다");
+  const owner = fnBody("surfaceOwnerWindow");
+  assert.match(owner, /BrowserWindow\.fromWebContents\(wc\.hostWebContents \|\| wc\)/, "게스트의 앱 창에서 주인을 안 찾는다");
 });
 
-t("F11 열린 팝업 수 = 보이는 서피스 창만 — 숨은 룰셋 창은 안 센다 · 세션 미준비면 0", () => {
-  const body = fnBody("openSurfacePopups");
-  assert.match(body, /if \(!surfaceSessionReady\) return 0;/, "세션이 없을 때 서피스 세션을 깨운다");
-  assert.match(body, /w\.isVisible\(\)/, "★ 숨은 창(확장 룰셋 창)까지 세면 상한이 거짓으로 찬다");
-  assert.match(body, /w\.webContents\.session === s/, "★ 세션을 안 보면 웹 UI 창까지 센다");
+t("F11 팝업 수 = 우리가 지은 창의 집합 — 페이지가 정하는 값(show 등)으로 세지 않는다", () => {
+  assert.match(MAIN, /\nconst surfacePopups = new Set\(\);\n/, "지은 창 집합이 없다");
+  assert.ok(!/isVisible\(\)/.test(fnBody("createSurfacePopup")) && !/function openSurfacePopups/.test(MAIN),
+    "★ 보임 여부로 센다 — show=no 로 연 숨은 창이 상한을 피한다");
 });
 
 // ── G. 가려진 창(다른 데스크톱 공간 · 전체 화면 앱 뒤)도 숨김으로 치지 않는다 — AI 가 그동안 연 페이지가 그려지고 찍히게(#4993) ──
@@ -253,74 +285,196 @@ t("G2 ★ 앱이 준비되기 전에 건다 — whenReady 뒤에 걸면 안 먹�
   assert.ok(at < lock && at < ready, "★ 스위치가 준비 이후에 걸린다 — 안 먹는다");
 });
 
-// ── H. 새 창 판정 (#5025) — 팝업 성격만 앱 안 창으로(opener 유지 → 팝업 로그인), 탭 성격은 종전대로 밖으로 ─────────
+// ── H. 새 창 판정 (#5025) — 스크립트 팝업만 앱 안 창으로(opener 유지 → 팝업 로그인), 그 밖은 밖으로 ─────────
 const POP = "new-window";
+const FEAT = "width=500,height=600,left=100,top=100";
 const GSI = "https://accounts.google.com/gsi/select?client_id=x&ux_mode=popup";
+const open = (o) => surfaceWindowOpenTarget({ disposition: POP, features: FEAT, ...o });
 
-t("H1·H2 팝업 성격 http(s) 는 앱 안 창 — 구글 팝업 로그인 · 사내·로컬 콜백", () => {
-  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP }), "popup");                          // H1
-  assert.equal(surfaceWindowOpenTarget({ url: "http://localhost:3000/cb", disposition: POP }), "popup");   // H2
+t("H1·H2 스크립트 팝업 http(s) 는 앱 안 창 — 구글 팝업 로그인 · 사내·로컬 콜백", () => {
+  assert.equal(open({ url: GSI }), "popup");                                                         // H1
+  assert.equal(open({ url: "http://localhost:3000/cb", features: "popup" }), "popup");               // H2
 });
 
 t("H3 ★ 빈 창 먼저 열고 주소는 나중에 — 팝업으로 받는다(막으면 그 모양의 로그인이 죽는다)", () => {
   for (const url of ["about:blank", "about:blank#x", "about:blank?x", "ABOUT:BLANK", "", "  ", null, undefined])
-    assert.equal(surfaceWindowOpenTarget({ url, disposition: POP }), "popup", String(url));
+    assert.equal(open({ url }), "popup", String(url));
 });
 
 t("H4·H5 팝업이어도 DRM 은 밖으로 · mailto/tel 은 OS 로", () => {
-  assert.equal(surfaceWindowOpenTarget({ url: "https://www.netflix.com/", disposition: POP }), "external"); // H4
-  assert.equal(surfaceWindowOpenTarget({ url: "mailto:a@b.c", disposition: POP }), "external");            // H5
-  assert.equal(surfaceWindowOpenTarget({ url: "tel:+8210", disposition: POP }), "external");
+  assert.equal(open({ url: "https://www.netflix.com/" }), "external");                              // H4
+  assert.equal(open({ url: "mailto:a@b.c" }), "external");                                          // H5
+  assert.equal(open({ url: "tel:+8210" }), "external");
 });
 
 t("H6 ★ 팝업이어도 열 수 없는 스킴은 거부 — 빈 창만 예외다(about: 전체가 아니다)", () => {
   for (const url of ["javascript:alert(1)", "data:text/html,x", "file:///etc/passwd", "chrome://settings",
     "blob:https://x.com/uuid", "about:srcdoc", "about:blankx"])
-    assert.equal(surfaceWindowOpenTarget({ url, disposition: POP }), "deny", url);
+    assert.equal(open({ url }), "deny", url);
 });
 
-t("H7 ★ 열린 팝업 상한 — 상한 바로 아래는 열고 상한부터는 막는다(크롬의 팝업 차단기가 없다)", () => {
-  assert.ok(Number.isInteger(SURFACE_POPUP_LIMIT) && SURFACE_POPUP_LIMIT >= 1, "상한이 없다");
-  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP, openPopups: SURFACE_POPUP_LIMIT - 1 }), "popup");
-  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP, openPopups: SURFACE_POPUP_LIMIT }), "deny");
-  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP, openPopups: SURFACE_POPUP_LIMIT + 3 }), "deny");
-  assert.equal(surfaceWindowOpenTarget({ url: "about:blank", disposition: POP, openPopups: SURFACE_POPUP_LIMIT }), "deny", "H7b 빈 창도 상한");
+t("H7·H21 ★ 열린 팝업 상한 — 정책값 4 · 바로 아래는 열고 상한부터는 막는다", () => {
+  assert.equal(SURFACE_POPUP_LIMIT, 4, "H21 상한 정책값이 바뀌었다 — 사양(spec-5025)과 같이 고칠 것");
+  assert.equal(open({ url: GSI, openPopups: SURFACE_POPUP_LIMIT - 1 }), "popup");
+  assert.equal(open({ url: GSI, openPopups: SURFACE_POPUP_LIMIT }), "deny");
+  assert.equal(open({ url: GSI, openPopups: SURFACE_POPUP_LIMIT + 3 }), "deny");
+  assert.equal(open({ url: "about:blank", openPopups: SURFACE_POPUP_LIMIT }), "deny", "빈 창도 상한");
 });
 
-t("H8~H10 탭 성격은 종전대로 — 볼 수 있으면 시스템 브라우저, 빈 창·열 수 없는 건 거부", () => {
+t("H8~H10 탭 성격은 시스템 브라우저 — 빈 창·열 수 없는 건 거부", () => {
   for (const d of ["foreground-tab", "background-tab"])
-    assert.equal(surfaceWindowOpenTarget({ url: "https://github.com/", disposition: d }), "external", d);   // H8
+    assert.equal(surfaceWindowOpenTarget({ url: "https://github.com/", disposition: d, features: "" }), "external", d); // H8
   for (const url of ["about:blank", "", null])
-    assert.equal(surfaceWindowOpenTarget({ url, disposition: "foreground-tab" }), "deny", String(url));     // H9
-  assert.equal(surfaceWindowOpenTarget({ url: "mailto:a@b.c", disposition: "foreground-tab" }), "external"); // H10
+    assert.equal(surfaceWindowOpenTarget({ url, disposition: "foreground-tab" }), "deny", String(url));                  // H9
+  assert.equal(surfaceWindowOpenTarget({ url: "mailto:a@b.c", disposition: "foreground-tab" }), "external");              // H10
   assert.equal(surfaceWindowOpenTarget({ url: "javascript:1", disposition: "foreground-tab" }), "deny");
+  // 탭 성격은 기능 문자열이 있어도 앱 안으로 안 들인다 — 앱 안은 «팝업» 일 때만
+  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: "foreground-tab", features: FEAT }), "external");
 });
 
-t("H11 ★ 앱 안으로는 명시적 팝업만 — disposition 이 없거나 낯설면 탭 성격으로 친다", () => {
+t("H11 ★ 앱 안으로는 명시적 팝업만 — disposition 이 없거나 낯설면 밖으로", () => {
   for (const d of [undefined, null, "", "other", "default", "save-to-disk", "NEW-WINDOW", "new_window"])
-    assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: d }), "external", String(d));
+    assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: d, features: FEAT }), "external", String(d));
 });
 
 t("H12·H13 인자 부재 — 죽지 않고 거부 / 열린 수 부재·NaN 은 0 으로", () => {
-  assert.equal(surfaceWindowOpenTarget(), "deny");                                                         // H12
+  assert.equal(surfaceWindowOpenTarget(), "deny");                                                  // H12
   assert.equal(surfaceWindowOpenTarget({}), "deny");
-  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP, openPopups: undefined }), "popup");   // H13
-  assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP, openPopups: NaN }), "popup");
+  assert.equal(open({ url: GSI, openPopups: undefined }), "popup");                                 // H13
+  assert.equal(open({ url: GSI, openPopups: NaN }), "popup");
 });
 
-t("H14~H19 팝업 창 설정 — 새 객체 · 웹 칸 파티션 · 같은 격리 · preload 없음 · OS 테두리", () => {
-  const a = surfacePopupWindowOptions(), b = surfacePopupWindowOptions();
-  assert.notEqual(a, b, "H14 같은 객체를 돌려 쓴다");                                                       // H14
-  assert.notEqual(a.webPreferences, b.webPreferences, "H14 webPreferences 를 돌려 쓴다");
-  assert.ok(!Object.isFrozen(a) && !Object.isFrozen(a.webPreferences), "H14 Electron 이 쓸 수 있어야 한다");
-  assert.equal(a.webPreferences.partition, BROWSER_SURFACE_PARTITION,                                       // H15
-    "★ 파티션이 없으면 링크로 연 창이 기본 파티션(우리 토큰 저장소)에 남의 사이트를 띄운다");
-  for (const [k, v] of Object.entries(WEBVIEW_FORCED_PREFS)) assert.equal(a.webPreferences[k], v, `H16 ${k}`); // H16
-  for (const k of WEBVIEW_DROPPED_PREFS) assert.ok(!(k in a.webPreferences), `★ H17 ${k} 키가 있다`);      // H17
-  for (const k of ["frame", "titleBarStyle", "titleBarOverlay"]) assert.ok(!(k in a), `H18 ${k} — 남의 사이트엔 닫을 자리가 없어진다`); // H18
-  a.webPreferences.nodeIntegration = true; a.webPreferences.preload = "/evil.js";                           // H19
-  assert.equal(WEBVIEW_FORCED_PREFS.nodeIntegration, false, "H19 반환값을 고치니 상수가 바뀌었다");
-  assert.ok(!("preload" in surfacePopupWindowOptions().webPreferences), "H19 앞서 고친 값이 다음 호출에 샜다");
+t("H20 ★ Shift+클릭(«new-window» 인데 기능 문자열 없음 — opener 없음)은 앱 안 창이 아니라 밖으로", () => {
+  for (const features of ["", "  ", null, undefined]) {
+    assert.equal(surfaceWindowOpenTarget({ url: GSI, disposition: POP, features }), "external", String(features));
+    assert.equal(surfaceWindowOpenTarget({ url: "javascript:1", disposition: POP, features }), "deny", String(features));
+    assert.equal(surfaceWindowOpenTarget({ url: "about:blank", disposition: POP, features }), "deny", String(features));
+  }
+});
+
+// ── S. 팝업 창은 우리가 짓는다 — 페이지의 기능 문자열은 크기 말고 버린다 ─────────────────────────────
+const AREA = { x: 100, y: 50, width: 1600, height: 900 };
+// Electron 이 실제로 섞는 모양 그대로(v43.3.0 guest-window-manager.ts:49-55 · parse-features-string.ts) — 적대 페이지의 기능 문자열
+const HOSTILE = { frame: false, modal: true, show: false, alwaysOnTop: true, skipTaskbar: true, closable: false, focusable: false,
+  movable: false, minimizable: false, maximizable: false, fullscreenable: false, transparent: true, opacity: 0, hasShadow: false,
+  enableLargerThanScreen: true, hiddenInMissionControl: true, thickFrame: false, titleBarStyle: "hidden", vibrancy: "hud",
+  title: "Lively — 다시 로그인하세요", center: false, x: -32000, y: -32000, width: 100000, height: 100000, minWidth: 99999,
+  tabbingIdentifier: "x", backgroundMaterial: "acrylic", roundedCorners: false, acceptFirstMouse: true };
+const electronMerged = (parsed, override) => ({ show: true, width: 800, height: 600, ...parsed, ...override });
+const SPEC_KEYS = new Set(["width", "height", "x", "y", "show", "frame", "thickFrame", "modal", "alwaysOnTop", "skipTaskbar",
+  "closable", "movable", "resizable", "focusable", "minimizable", "maximizable", "fullscreenable", "transparent", "opacity",
+  "hasShadow", "enableLargerThanScreen", "hiddenInMissionControl", "autoHideMenuBar", "backgroundColor"]);
+
+t("S1 ★ 적대 기능 문자열을 섞어도 — 테두리·닫기·보임·비모달·맨 위 아님·작업표시줄·불투명", () => {
+  const spec = surfacePopupWindowSpec(electronMerged(HOSTILE, { webPreferences: surfacePopupWebPreferences() }), AREA);
+  for (const [k, v] of [["show", true], ["frame", true], ["thickFrame", true], ["modal", false], ["alwaysOnTop", false],
+    ["skipTaskbar", false], ["closable", true], ["focusable", true], ["movable", true], ["resizable", true],
+    ["minimizable", true], ["maximizable", true], ["transparent", false], ["opacity", 1], ["enableLargerThanScreen", false],
+    ["hiddenInMissionControl", false]])
+    assert.equal(spec[k], v, `★ ${k} 를 페이지가 정했다`);
+  assert.ok(spec.x >= AREA.x && spec.y >= AREA.y && spec.x + spec.width <= AREA.x + AREA.width && spec.y + spec.height <= AREA.y + AREA.height,
+    "★ 창이 작업 영역 밖으로 나간다(화면 밖·화면보다 큰 창)");
+});
+
+t("S2 ★ 기본 거부 — 결과 키는 고정 집합뿐(페이지의 titleBarStyle·vibrancy·title·center… 가 하나도 안 샌다)", () => {
+  const spec = surfacePopupWindowSpec(electronMerged(HOSTILE, {}), AREA);
+  for (const k of Object.keys(spec)) assert.ok(SPEC_KEYS.has(k), `★ 모르는 키 ${k} 가 창 설정에 실렸다`);
+  assert.ok(!("webPreferences" in spec) && !("webContents" in spec) && !("parent" in spec), "spec 이 webContents·주인까지 정한다");
+});
+
+t("S3·S4 크기 — 작업 영역으로 줄이고 최소 크기로 키운다 · 경계 그대로", () => {
+  const s1 = surfacePopupWindowSpec({ width: 100000, height: 5 }, AREA);
+  assert.equal(s1.width, AREA.width);                                                               // S3
+  assert.equal(s1.height, SURFACE_POPUP_MIN_SIZE.height);
+  const s2 = surfacePopupWindowSpec({ width: "500", height: NaN }, AREA);
+  assert.equal(s2.width, 800, "문자열 크기를 숫자로 믿었다");
+  assert.equal(s2.height, 600, "NaN 크기를 믿었다");
+  assert.equal(surfacePopupWindowSpec({ width: AREA.width, height: AREA.height }, AREA).width, AREA.width);          // S4 경계
+  assert.equal(surfacePopupWindowSpec({ width: SURFACE_POPUP_MIN_SIZE.width - 1, height: 400 }, AREA).width, SURFACE_POPUP_MIN_SIZE.width);
+  assert.equal(surfacePopupWindowSpec({ width: 500, height: 600 }, AREA).width, 500, "구글 팝업 크기를 바꿨다");
+});
+
+t("S5 위치 — 페이지 x·y 는 무시하고 작업 영역 가운데", () => {
+  const s = surfacePopupWindowSpec({ width: 500, height: 600, x: 0, y: 0 }, AREA);
+  assert.equal(s.x, AREA.x + (AREA.width - 500) / 2);
+  assert.equal(s.y, AREA.y + (AREA.height - 600) / 2);
+});
+
+t("S6·S7 부재 — 영역 없거나 0 폭이면 기본 영역 · 요청 없으면 기본 크기 · 부를 때마다 새 객체", () => {
+  for (const area of [undefined, null, { x: 0, y: 0, width: 0, height: 0 }]) {
+    const s = surfacePopupWindowSpec({ width: 500, height: 600 }, area);
+    assert.ok(s.width === 500 && s.height === 600 && Number.isFinite(s.x) && Number.isFinite(s.y), JSON.stringify(area));
+  }
+  const d = surfacePopupWindowSpec(null, AREA);
+  assert.equal(d.width, 800);
+  assert.equal(d.height, 600);
+  assert.notEqual(surfacePopupWindowSpec({}, AREA), surfacePopupWindowSpec({}, AREA), "S7 같은 객체를 돌려 쓴다");
+});
+
+// ── W. 팝업 webContents 의 격리 ──────────────────────────────────────────────────────────
+t("W1 팝업 격리 = 웹 칸과 같음 · 서피스 파티션 · preload 키 없음 · 새 객체 · 고쳐도 상수 그대로", () => {
+  const a = surfacePopupWebPreferences(), b = surfacePopupWebPreferences();
+  assert.notEqual(a, b, "같은 객체를 돌려 쓴다");
+  assert.ok(!Object.isFrozen(a), "Electron 이 쓸 수 있어야 한다");
+  assert.equal(a.partition, BROWSER_SURFACE_PARTITION,
+    "★ 파티션이 없으면 opener 없이 지은 창이 기본 파티션(우리 토큰 저장소)에 남의 사이트를 띄운다");
+  for (const [k, v] of Object.entries(WEBVIEW_FORCED_PREFS)) assert.equal(a[k], v, k);
+  for (const k of WEBVIEW_DROPPED_PREFS) assert.ok(!(k in a), `★ ${k} 키가 있다`);
+  a.nodeIntegration = true; a.preload = "/evil.js";
+  assert.equal(WEBVIEW_FORCED_PREFS.nodeIntegration, false, "반환값을 고치니 상수가 바뀌었다");
+  assert.ok(!("preload" in surfacePopupWebPreferences()), "앞서 고친 값이 다음 호출에 샜다");
+});
+
+// ── I. 새 창 문 — 크롬의 팝업 차단기 대신(주인 창 포커스 + 빈도) ─────────────────────────────
+const T0 = 1_800_000_000_000;
+t("I1·I2 주인 창 포커스가 없으면 안 연다(기록도 안 늘림) · 첫 번째는 연다", () => {
+  assert.deepEqual(surfaceOpenGate({ hostFocused: false, recent: [], now: T0 }), { ok: false, recent: [] });   // I1
+  const g = surfaceOpenGate({ hostFocused: true, recent: [], now: T0 });                                         // I2
+  assert.equal(g.ok, true);
+  assert.deepEqual(g.recent, [T0]);
+});
+
+t("I3 ★ 간격 경계 — 999ms 는 막고 정확히 1000ms 는 연다", () => {
+  assert.equal(SURFACE_OPEN_MIN_GAP_MS, 1000, "간격 정책값이 바뀌었다 — 사양과 같이 고칠 것");
+  assert.equal(surfaceOpenGate({ hostFocused: true, recent: [T0], now: T0 + 999 }).ok, false);
+  assert.equal(surfaceOpenGate({ hostFocused: true, recent: [T0], now: T0 + 1000 }).ok, true);
+});
+
+t("I4 ★ 1분 상한 — 간격을 지켜도 6번째까지만", () => {
+  assert.equal(SURFACE_OPEN_PER_MINUTE, 6, "분당 상한 정책값이 바뀌었다 — 사양과 같이 고칠 것");
+  let recent = [], opened = 0;
+  for (let i = 0; i < 10; i++) {
+    const g = surfaceOpenGate({ hostFocused: true, recent, now: T0 + i * 2000 });
+    recent = g.recent; if (g.ok) opened++;
+  }
+  assert.equal(opened, SURFACE_OPEN_PER_MINUTE);
+});
+
+t("I5 1분 지난 기록은 버린다 — 정확히 60000ms 전 기록도 버린다(경계)", () => {
+  const full = Array.from({ length: 6 }, (_, i) => T0 + i * 1000);
+  assert.equal(surfaceOpenGate({ hostFocused: true, recent: full, now: T0 + 59_999 }).ok, false, "1분 안인데 열었다");
+  const g = surfaceOpenGate({ hostFocused: true, recent: full, now: T0 + 60_000 });
+  assert.equal(g.ok, true, "1분 지난 첫 기록을 안 버렸다");
+  assert.ok(!g.recent.includes(T0), "버린 기록이 남았다");
+});
+
+t("I6·I7 기록 부재·쓰레기·미래 시각은 버린다 — 죽지 않는다", () => {
+  for (const recent of [undefined, null, "x", [null, "x", NaN, T0 + 5000]]) {
+    const g = surfaceOpenGate({ hostFocused: true, recent, now: T0 });
+    assert.equal(g.ok, true, JSON.stringify(recent));
+    assert.deepEqual(g.recent, [T0], JSON.stringify(recent));
+  }
+  assert.equal(surfaceOpenGate().ok, false, "인자 없이 열었다");
+});
+
+// ── T. 팝업 제목 — 주소줄이 없으니 실제 호스트를 앞에 ───────────────────────────────────────
+t("T1~T5 제목 = 실제 호스트 — 제목 없으면 호스트만 · http(s) 아니면 제목 그대로", () => {
+  assert.equal(surfacePopupTitle("https://accounts.google.com/x", "로그인 - Google 계정"), "accounts.google.com — 로그인 - Google 계정"); // T1
+  assert.equal(surfacePopupTitle("https://accounts.google.com/x", "  "), "accounts.google.com");                         // T2
+  assert.equal(surfacePopupTitle("https://accounts.google.com/x", undefined), "accounts.google.com");
+  for (const u of ["about:blank", "javascript:1", "::bad", "", null]) assert.equal(surfacePopupTitle(u, "제목"), "제목", String(u)); // T3
+  assert.equal(surfacePopupTitle("https://a.com/", "a.com"), "a.com");                                                     // T4
+  assert.equal(surfacePopupTitle("http://localhost:3000/cb", "콜백"), "localhost:3000 — 콜백");                              // T5
 });
 
 console.log(`\n${pass} passed`);

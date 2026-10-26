@@ -125,16 +125,17 @@ export const SURFACE_POPUP_LIMIT = 4;
  *   - "external" 시스템 브라우저로 넘긴다
  *   - "deny"     열지 않는다
  *
- * 앱 안으로 들이는 건 **팝업 성격**(disposition "new-window" — 크기 같은 창 기능을 준 window.open · Shift+클릭)뿐이다.
- *  탭 성격(target=_blank 링크 · 기능 없는 window.open = "foreground-tab"/"background-tab")은 종전대로 시스템 브라우저로 —
- *  사람이 보는 웹 칸엔 탭 줄이 없어서 앱 안에 열면 링크마다 창이 하나씩 쌓인다(웹 칸의 새 탭으로 받는 건 별건, #4993).
+ * 앱 안으로 들이는 건 **스크립트가 창 기능을 주고 연 팝업**뿐이다 — disposition "new-window" 에 기능 문자열이 있을 때.
+ *  Shift+클릭도 "new-window" 지만 기능이 비어 있고 opener 도 없어서(OpenURLFromTab) 앱 안에 열면 주소줄 없는 창만 남는다.
+ *  탭 성격(target=_blank 링크 · 기능 없는 window.open = "foreground-tab"/"background-tab")과 함께 시스템 브라우저로 보낸다
+ *  (웹 칸엔 탭 줄이 없다 — 웹 칸의 새 탭으로 받는 건 별건, #4993). 열지 말지의 빈도·포커스 판정은 surfaceOpenGate.
  *  disposition 문자열은 Electron 이 준다(v43.3.0 electron_api_web_contents.cc — NEW_POPUP·NEW_WINDOW → "new-window").
  *  빈 주소(about:blank)는 «창을 먼저 열고 주소는 나중에 넣는» 흔한 모양이라 팝업으로는 받고, 시스템 브라우저로는 안 보낸다.
  */
-export function surfaceWindowOpenTarget({ url, disposition, openPopups = 0 } = {}) {
+export function surfaceWindowOpenTarget({ url, disposition, features, openPopups = 0 } = {}) {
   const raw = String(url || "").trim();
   const blank = !raw || /^about:blank(?:[?#]|$)/i.test(raw);
-  if (disposition === "new-window") {
+  if (disposition === "new-window" && String(features || "").trim()) {
     const t = blank ? "allow" : surfaceNavTarget(raw);
     if (t !== "allow") return t;
     return openPopups >= SURFACE_POPUP_LIMIT ? "deny" : "popup";
@@ -142,20 +143,98 @@ export function surfaceWindowOpenTarget({ url, disposition, openPopups = 0 } = {
   return surfaceNavTarget(raw) === "deny" ? "deny" : "external";
 }
 
+/** 팝업 창의 최소 크기 — 이보다 작으면 사람이 못 보고 못 닫는다(1×1 창 같은 속임수). */
+export const SURFACE_POPUP_MIN_SIZE = Object.freeze({ width: 320, height: 240 });
+
 /**
- * 웹 칸이 연 팝업 창의 설정 — 부를 때마다 **새 객체**다(Electron 이 넘겨받은 옵션에 값을 써 넣을 수 있어 얼린 상수를 그대로 주지 않는다).
- *  · 격리는 웹 칸과 같다(WEBVIEW_FORCED_PREFS). setWindowOpenHandler 가 주는 webPreferences 는 페이지가 못 바꾸는 쪽이다.
- *  · 파티션도 웹 칸 것 — window.open 으로 연 창은 원래 opener 의 저장소에서 태어나지만, 링크(Shift+클릭)로 연 창은 Electron 이
- *    새로 만든다. 이 값이 없으면 그 창엔 **기본 파티션(우리 토큰이 든 저장소)** 에 남의 사이트가 뜬다.
- *  · preload 키는 아예 두지 않는다 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다(WEBVIEW_DROPPED_PREFS).
- *  · 창 테두리는 OS 기본 — 남의 사이트는 우리 타이틀바를 그리지 않아서, 테두리를 걷으면 닫을 자리가 없다.
+ * 팝업 창의 BrowserWindow 설정을 **우리가** 짓는다 (#5025). Electron 은 window.open 의 기능 문자열에서 frame·modal·show·
+ *  alwaysOnTop·skipTaskbar·closable·focusable·transparent·opacity·x·y·width·height·titleBarStyle 등을 읽어 창 설정에 섞는다
+ *  (v43.3.0 parse-features-string.ts allowedWindowOptions → guest-window-manager.ts). 그대로 쓰면 남의 페이지가 «닫기 없는
+ *  모달 창(주인 창이 막힌다)» · «보이지 않는 창» · «화면 밖·화면보다 큰 창» 을 만든다.
+ *  그래서 **기본 거부**다 — 받는 건 크기뿐이고 그것도 작업 영역 안으로 줄인다. 위치는 작업 영역 가운데. 나머지는 전부 고정값.
+ * @param {object} requested Electron 이 섞은 설정(페이지의 기능 문자열 포함)
+ * @param {{x:number,y:number,width:number,height:number}} area 주인 창이 있는 화면의 작업 영역
  */
-export function surfacePopupWindowOptions() {
+export function surfacePopupWindowSpec(requested, area) {
+  const r = requested || {};
+  const a = area && area.width > 0 && area.height > 0 ? area : { x: 0, y: 0, width: 1280, height: 800 };
+  const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const width = Math.round(Math.min(Math.max(num(r.width, 800), SURFACE_POPUP_MIN_SIZE.width), a.width));
+  const height = Math.round(Math.min(Math.max(num(r.height, 600), SURFACE_POPUP_MIN_SIZE.height), a.height));
   return {
+    width,
+    height,
+    x: Math.round(a.x + (a.width - width) / 2),
+    y: Math.round(a.y + (a.height - height) / 2),
+    show: true,
+    frame: true,          // 남의 사이트는 우리 타이틀바를 그리지 않는다 — 테두리를 걷으면 닫을 자리가 없다
+    thickFrame: true,
+    modal: false,         // parent 와 같이 오면 주인(라이블리) 창이 막힌다
+    alwaysOnTop: false,
+    skipTaskbar: false,
+    closable: true,
+    movable: true,
+    resizable: true,
+    focusable: true,
+    minimizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    transparent: false,
+    opacity: 1,
+    hasShadow: true,
+    enableLargerThanScreen: false,
+    hiddenInMissionControl: false,
     autoHideMenuBar: true,
     backgroundColor: "#ffffff",
-    webPreferences: { ...WEBVIEW_FORCED_PREFS, partition: BROWSER_SURFACE_PARTITION },
   };
+}
+
+/**
+ * 팝업 창 webContents 의 격리 — 웹 칸과 같다. 부를 때마다 **새 객체**다(Electron 이 넘겨받은 값에 써 넣을 수 있다).
+ *  · setWindowOpenHandler 의 overrideBrowserWindowOptions.webPreferences 는 페이지가 못 바꾸는 쪽이다(기능 문자열 < 부모 < 이것).
+ *  · 파티션도 웹 칸 것 — window.open 으로 연 창은 opener 저장소에서 태어나지만, opener 없이 새로 만드는 창은 이 값이 없으면
+ *    **기본 파티션(우리 토큰이 든 저장소)** 에 남의 사이트가 뜬다.
+ *  · preload 키는 아예 두지 않는다 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다(WEBVIEW_DROPPED_PREFS).
+ */
+export function surfacePopupWebPreferences() {
+  return { ...WEBVIEW_FORCED_PREFS, partition: BROWSER_SURFACE_PARTITION };
+}
+
+/** 한 탭(opener)에서 새 창을 여는 최소 간격과 1분 상한 — surfaceOpenGate. */
+export const SURFACE_OPEN_MIN_GAP_MS = 1000;
+export const SURFACE_OPEN_PER_MINUTE = 6;
+
+/**
+ * 새 창(앱 안 팝업이든 시스템 브라우저든)을 지금 열어도 되는가 (#5025).
+ *  Electron 엔 크롬의 팝업 차단기가 없고, 처리기엔 «사람이 눌렀나» 가 오지 않는다(HandlerDetails 에 없다 · input-event 는
+ *  주 프레임만 봐서 구글 버튼 같은 다른 출처 iframe 클릭을 못 센다). 그래서 그 대신 둘을 본다 —
+ *   ① 사람이 그 앱 창을 쓰고 있다(주인 창 포커스): 뒤에 깔린 창·AI 혼자 도는 탭이 사람 화면에 창을 띄우지 않는다.
+ *   ② 빈도: 그 탭에서 1초에 한 번, 1분에 6번까지 — 막 열어 대는 페이지가 시스템 브라우저에 탭을 쏟지 못한다.
+ * @param {{hostFocused: boolean, recent?: number[], now: number}} p recent = 그 탭이 최근 연 시각들(앞 판정의 반환값)
+ * @returns {{ok: boolean, recent: number[]}} recent 는 1분 안의 기록만 남기고, 열었으면 now 를 더한다
+ */
+export function surfaceOpenGate({ hostFocused, recent, now } = {}) {
+  const t = Number(now);
+  const kept = (Array.isArray(recent) ? recent : []).filter((v) => typeof v === "number" && Number.isFinite(v) && v <= t && t - v < 60_000);
+  if (!hostFocused || !Number.isFinite(t)) return { ok: false, recent: kept };
+  const last = kept.length ? Math.max(...kept) : -Infinity;
+  if (t - last < SURFACE_OPEN_MIN_GAP_MS || kept.length >= SURFACE_OPEN_PER_MINUTE) return { ok: false, recent: kept };
+  return { ok: true, recent: [...kept, t] };
+}
+
+/**
+ * 팝업 창 제목 — 앞에 **실제 호스트**를 붙인다. 팝업엔 주소줄이 없어서, 남의 페이지가 그럴듯한 로그인 화면을 띄워도
+ *  어디인지 보이게 한다(크롬도 팝업엔 출처를 보인다). http(s) 가 아니면 페이지 제목 그대로.
+ */
+export function surfacePopupTitle(url, title) {
+  let host = "";
+  try {
+    const u = new URL(String(url || ""));
+    if (u.protocol === "http:" || u.protocol === "https:") host = u.host;
+  } catch { /* 깨진 주소 — 호스트 없음 */ }
+  const t = String(title || "").trim();
+  if (!host) return t;
+  return t && t !== host ? `${host} — ${t}` : host;
 }
 
 /**
