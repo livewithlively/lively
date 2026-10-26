@@ -37,6 +37,12 @@ To get a newer version: `/plugin marketplace update lively`, then `/reload-plugi
 
 If **organization-specific skills** are registered on the gateway, they're added automatically after the first session — separately from this bundle.
 
+## Record scope — work folders only (#5016)
+
+Each computer chooses «work folders only (default) | anywhere». With «work folders only», a session started outside a work folder gets no company context from the hooks, and no records, transcript upload or first-prompt project; a one-line notice says so at session start.
+Work folders are Lively project folders (`.lively/project.json`) and folders registered on the web under **My skills · hooks ▸ per-computer connection**. The plugin ships no `/lively-connect` command and no `lively` CLI, so register on the web.
+⚠ The plugin's MCP tools are not gated — the MCP headers helper does not learn the session folder (measured on Claude Code 2.1.310). The kit install gates the tools too.
+
 ## ⚠ Don't use it together with the kit
 
 There are two install paths, and you use **only one**.

@@ -374,6 +374,30 @@ function uninstallHarnessAssets(harness) {
   log(`  ✓ ${harness} 하네스 자산 ${removed}개 제거`);
 }
 
+// «여기 연결» 커맨드(#5016) — 설치기의 writeConnectCommands 가 깐 파일만 지운다(표식 줄로 우리 것인지 확인).
+//  같은 이름이어도 표식이 없으면 사용자 파일이라 보존한다. 클로드 폴더는 설치기와 같은 계산(CLAUDE_CONFIG_DIR 우선, 샌드박스 밖이면 무시).
+const CONNECT_MARK = "lively-managed: record-scope(#5016)";   // user-install.mjs CONNECT_MARK 와 같은 리터럴(설치↔제거 대칭)
+const claudeDirForRemove = () => {
+  const ccd = String(process.env.CLAUDE_CONFIG_DIR || "").trim();
+  if (!ccd) return join(HOME, ".claude");
+  if (!process.env.LIVELY_HOME) return ccd;
+  const norm = (p) => { const x = String(p || "").replace(/[\\/]+/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? x.toLowerCase() : x; };
+  const c = norm(ccd), r = norm(process.env.LIVELY_HOME);
+  return (c === r || c.startsWith(r + "/")) ? ccd : join(HOME, ".claude");
+};
+export function removeConnectCommands(dir, label) {
+  let removed = 0;
+  for (const id of ["lively-connect", "lively-disconnect"]) {
+    const f = join(dir, `${id}.md`);
+    let cur = "";
+    try { cur = readFileSync(f, "utf8"); } catch { continue; }
+    if (!cur.includes(CONNECT_MARK)) continue;
+    if (DRY) { log(`  [dry-run] ${label} ${id}.md 제거 예정`); continue; }
+    try { rmSync(f, { force: true }); removed++; } catch { /* fail-soft */ }
+  }
+  if (removed) log(`  ✓ ${label} «여기 연결» 커맨드 ${removed}개 제거`);
+}
+
 // (4.5) 서버 하네스 관측에서 이 머신 제거(#893) — ~/.lively 삭제 **전에**. 삭제 후엔 machine-id·토큰이 사라져
 //  못 부른다. 재설치 시 새 machine-id 가 생겨 서버에 같은 host 가 중복으로 남는 걸 막는다(haruui 사례). 비치명.
 async function syncServerHarnessRemove() {
@@ -653,12 +677,12 @@ async function main() {
   // 하네스 제거 표 — 감지·제거·라벨을 한 줄로(#1689). 종전엔 claude/codex 가 want/if/문구 네 곳에 하드코딩돼
   //  opencode 가 이 경로(실제 `lively uninstall` 이 타는 경로)에서 통째로 빠져 있었다.
   const HARNESS_REMOVE = {
-    claude: () => { uninstallClaudeSettings(); uninstallAutoApprove(); cleanupEmptyClaudeSettings(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); },
-    codex: () => { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); },
-    opencode: () => { uninstallOpencodeWiring(); uninstallHarnessAssets("opencode"); },
-    antigravity: () => { uninstallAntigravityWiring(); uninstallHarnessAssets("antigravity"); },
-    grok: () => { uninstallGrokWiring(); uninstallHarnessAssets("grok"); },
-    cursor: () => { uninstallCursorWiring(); uninstallHarnessAssets("cursor"); },
+    claude: () => { uninstallClaudeSettings(); uninstallAutoApprove(); cleanupEmptyClaudeSettings(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); removeConnectCommands(join(claudeDirForRemove(), "commands"), "Claude"); },
+    codex: () => { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); removeConnectCommands(join(CODEX, "prompts"), "Codex"); },
+    opencode: () => { uninstallOpencodeWiring(); uninstallHarnessAssets("opencode"); removeConnectCommands(join(OPENCODE, "command"), "OpenCode"); },
+    antigravity: () => { uninstallAntigravityWiring(); uninstallHarnessAssets("antigravity"); removeConnectCommands(join(GEMINI, "config", "workflows"), "Antigravity"); },
+    grok: () => { uninstallGrokWiring(); uninstallHarnessAssets("grok"); removeConnectCommands(join(GROK, "commands"), "Grok"); },
+    cursor: () => { uninstallCursorWiring(); uninstallHarnessAssets("cursor"); removeConnectCommands(join(CURSOR, "commands"), "Cursor"); },
   };
   const ALL = Object.keys(HARNESS_REMOVE);
   const want = harnessArg === "all" ? ALL : [harnessArg];

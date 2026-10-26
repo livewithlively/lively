@@ -64,11 +64,15 @@ function toolOf(input) {
 
 // 러너 1회 실행 → stdout(문자열). 어떤 실패든 "" 로 삼킨다(fail-open).
 //  killSignal SIGKILL: 러너가 타임아웃을 살아남아 세션을 막는 일이 없게(no-block 불변식, 타 어댑터와 동형).
+// 세션 폴더(#5016) — 훅은 이 값으로 기록 범위를 판정한다(record-scope.mjs sessionDirOf). 어댑터가 띄운 훅 프로세스의 cwd 는
+//  세션 작업 위치가 아니라서(hooks.json 자리·workspace root·~/.cursor) 시작 훅(session-preload — 빈 입력으로 부른다)이 엉뚱한 폴더를
+//  보지 않게 env 로 함께 넘긴다. main 이 입력을 읽자마자 채운다.
+let SESSION_DIR = "";
 function runScript(script, args, stdin, timeout) {
   try {
     const r = spawnSync(NODE, [join(HOOKS, script), ...args], {
       input: stdin, encoding: "utf8", timeout, killSignal: "SIGKILL",
-      env: { ...process.env, LIVELY_HARNESS: HARNESS },
+      env: { ...process.env, LIVELY_HARNESS: HARNESS, ...(SESSION_DIR ? { LIVELY_SESSION_DIR: SESSION_DIR } : {}) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     return (r && typeof r.stdout === "string") ? r.stdout : "";
@@ -209,6 +213,7 @@ async function main() {
   try {
     let input = {};
     try { input = JSON.parse((await readStdin()) || "{}"); } catch { /* 비JSON — 빈 입력으로 진행 */ }
+    SESSION_DIR = (typeof input?.cwd === "string" && input.cwd) || "";
     out = handle(input);
   } catch { out = null; }   // 어떤 실패도 무출력(fail-open) — grok 은 무출력을 통과로 다룬다
   if (out) process.stdout.write(JSON.stringify(out) + "\n");

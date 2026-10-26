@@ -60,6 +60,44 @@ const PROBE_TIMEOUT_MS = Number(process.env.LIVELY_MCP_PROBE_TIMEOUT_MS || 4_000
 // 상류 복구 감시 주기 — 상류가 죽어 있을 때만 돈다. 테스트가 짧게 줄여 쓴다.
 const WATCH_INTERVAL_MS = Number(process.env.LIVELY_MCP_WATCH_MS || 20_000);
 
+// ── 기록 범위(#5016) ──────────────────────────────────────────────────────────
+//  작업 폴더 밖에서 켠 세션이면 라이블리 도구를 0개로 세운다 — 상류(게이트웨이)에 아무것도 묻지 않는다(인코그니토와 같다).
+//  판정은 훅과 **같은 파일**(~/.lively/hooks/record-scope.mjs)로 한다 — 갈리면 «훅은 꺼졌는데 도구는 있는» 반쪽 세션이 된다.
+//  이 프로세스는 클로드가 세션 폴더에서 띄우고 CLAUDE_PROJECT_DIR 도 싣는다(2.1.310 실측) — 그래서 폴더를 안다.
+//  그 파일을 못 찾으면(부트스트랩만 된 CLI·구 설치) 종전 동작(켬)이다 — 그런 설치엔 판정하는 훅도 없다.
+//  세션 중간에 폴더를 등록하면(/lively-connect) 주기 검사가 바뀐 판정을 보고 tools/list_changed 로 목록을 다시 받게 한다.
+const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
+export const OUTSIDE_TOOL_TEXT = "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
+  + "여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 셸의 `lively work-root add` 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.";
+let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
+async function loadScopeModule() {
+  if (scopeMod !== undefined) return scopeMod;
+  try { scopeMod = await import(new URL("../hooks/record-scope.mjs", import.meta.url).href); }
+  catch { scopeMod = null; log("기록 범위 판정 모듈(../hooks/record-scope.mjs)을 못 찾아 판정하지 않습니다 — 키트를 다시 받으세요(lively update)."); }
+  return scopeMod;
+}
+// 이 프로세스가 세션 폴더를 믿을 만하게 아는가 — 클로드는 CLAUDE_PROJECT_DIR 를 싣고(2.1.310 실측) 코덱스는 세션 폴더에서 띄운다.
+//  그 밖의 하네스는 MCP 프로세스의 cwd 가 세션 자리라는 근거가 없다(어댑터 주석: 훅 프로세스 cwd 도 세션 자리가 아니었다).
+//  그런 데서 판정하면 작업 폴더에서도 도구가 사라지는 회귀가 되므로 판정하지 않는다 — 맥락 주입·기록은 훅이 따로 막는다.
+//  어댑터·설정이 LIVELY_SESSION_DIR(커서는 CURSOR_PROJECT_DIR)를 실어 주면 그때는 판정한다.
+export function scopeKnowsFolder(env = process.env) {
+  const h = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase().replace(/-code$/, "");
+  if (String(env.LIVELY_SESSION_DIR || "").trim()) return true;
+  if (h === "claude" || h === "codex") return true;
+  return h === "cursor" && !!String(env.CURSOR_PROJECT_DIR || "").trim();
+}
+let foldLogged = false;
+/** 지금 이 세션이 기록 범위 안인가 — 판정이 터지면 종전 동작(켬). */
+function scopeInNow() {
+  if (!scopeMod) return true;
+  if (!scopeKnowsFolder()) {
+    if (!foldLogged) { foldLogged = true; log(`이 하네스(${process.env.LIVELY_HARNESS || "?"})에선 세션 폴더를 알 수 없어 MCP 도구의 기록 범위를 판정하지 않습니다(훅은 판정합니다).`); }
+    return true;
+  }
+  try { return scopeMod.inScopeNow({ env: process.env, cwd: process.cwd(), lively: LIVELY }).inScope; }
+  catch { return true; }
+}
+
 const readLively = (n) => { try { return readFileSync(join(LIVELY, n), "utf8").trim(); } catch { return ""; } };
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
 // ⚠ **파일이 env 를 이긴다(#916 의 런타임 판).** 설치기가 codex 용으로 rc 에
@@ -308,6 +346,24 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   let lastTools = null;      // 하네스에 마지막으로 보여준 툴 목록(= list_changed 판정 기준)
   let upstreamDown = false;  // 마지막 상류 접촉이 실패했나 — 워처는 이때만 폴링한다
   let watcher = null;
+  const scopeReady = loadScopeModule();
+  let inScope = null;        // 마지막으로 하네스에 보여 준 기록 범위 판정(null = 아직 안 보여 줌)
+  let scopeWatch = null;
+  const scopeIn = () => (inScope = scopeInNow());
+  // 기록 범위 검사(#5016) — 판정이 바뀌면 목록을 다시 받게 한다. 로컬 파일만 본다(네트워크 0)라 주기를 짧게 둔다.
+  function ensureScopeWatch() {
+    if (scopeWatch || !(SCOPE_WATCH_MS > 0)) return;
+    scopeWatch = setInterval(() => {
+      if (scopeMod === undefined || inScope === null) return;   // 아직 목록을 안 보여 줬다 — 그때 판정한다
+      const now = scopeInNow();
+      if (now === inScope) return;
+      inScope = now;
+      lastTools = now ? null : [];
+      log(now ? "기록 범위 안으로 — 이 폴더가 작업 폴더로 등록됨. tools/list_changed 발신" : "기록 범위 밖으로 — 라이블리 도구를 내림. tools/list_changed 발신");
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    }, SCOPE_WATCH_MS);
+    if (typeof scopeWatch.unref === "function") scopeWatch.unref();
+  }
 
   // 상류가 살아나면(또는 툴이 바뀌면) 하네스에 목록 재조회를 요청한다.
   //  ⚠ 폴링은 **상류가 죽어 있을 때만** 돈다 — 정상 세션에 배경 트래픽을 만들지 않는다.
@@ -315,7 +371,7 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   function ensureWatcher() {
     if (watcher) return;
     watcher = setInterval(async () => {
-      if (!upstreamDown || probing) return;
+      if (!upstreamDown || probing || inScope === false) return;   // 기록 범위 밖이면 상류를 찾지도 않는다(#5016)
       probing = true;
       try { await probeOnce(); } finally { probing = false; }
     }, WATCH_INTERVAL_MS);
@@ -353,10 +409,20 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
           serverInfo: { name: "lively", version: readLively("kit-version") || "0.1.0" },
         });
         ensureWatcher();
+        ensureScopeWatch();
         return;
       }
       if (method && method.startsWith("notifications/")) return; // 알림 — 응답 없음
       if (method === "ping") { okr(id, {}); return; }
+
+      // 기록 범위 밖(#5016) — 상류에 묻지 않고 여기서 끝낸다: 목록은 0개, 부르면 왜 꺼졌는지와 켜는 법을 돌려준다.
+      await scopeReady;
+      if (!scopeIn()) {
+        if (method === "tools/list") { lastTools = []; okr(id, { tools: [] }); return; }
+        if (method === "tools/call") { okr(id, { content: [{ type: "text", text: OUTSIDE_TOOL_TEXT }], isError: true }); return; }
+        if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32603, message: OUTSIDE_TOOL_TEXT } });
+        return;
+      }
 
       if (method === "tools/list") {
         const gw = gateway();
@@ -411,7 +477,11 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   });
   // stdin 이 닫히면(하네스 종료) 감시도 멈춘다 — 실제 프로세스는 곧 끝나지만, 한 프로세스가
   //  여러 서버를 띄우는 경우(테스트)에 죽은 인스턴스의 워처가 계속 도는 것을 막는다.
-  return new Promise((resolve) => rl.on("close", () => { if (watcher) { clearInterval(watcher); watcher = null; } resolve(); }));
+  return new Promise((resolve) => rl.on("close", () => {
+    if (watcher) { clearInterval(watcher); watcher = null; }
+    if (scopeWatch) { clearInterval(scopeWatch); scopeWatch = null; }
+    resolve();
+  }));
 }
 
 // 최상위 안전망 — 어떤 예외도 이 프로세스를 죽이지 못하게(stdio MCP 는 재시작이 없다).

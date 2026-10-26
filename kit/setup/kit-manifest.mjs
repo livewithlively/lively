@@ -37,6 +37,7 @@ export const HOOK_SCRIPTS = [
   "host-effects-port.mjs",
   "record-nudge.mjs",          // work-flag 가 import 하는 모듈(#4219 기록 넛지)
   "bg-jobs.mjs",               // work-flag 가 import 하는 모듈(#4588 열린 백그라운드 작업 수)
+  "record-scope.mjs",          // 기록 범위 판정(#5016) — 훅들과 MCP 프록시(../hooks/ 로 찾아온다)·CLI 가 함께 쓰는 단 한 곳
   "opencode-plugin.js",
   "antigravity-adapter.mjs",
   "grok-adapter.mjs",

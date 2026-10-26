@@ -84,6 +84,7 @@ node generator/build-context.mjs --org ../<org>-org --install-hooks <dir> [<dir>
 - **리플렉스**: work-flag(작업·기록 신호 + 세션 실행 단계 보고 — PostToolUse·UserPromptSubmit·Notification·Stop 등) + stop-writeback-gate(Stop, 라이트백 1회 게이트) + **run-custom**(런너 — 웹 관리에서 정의한 커스텀 훅 `org_hook` 을 매 세션 게이트웨이 fetch·실행, enabled=false/제거 시 다음 세션 즉시 무효=kill-switch).
 - **incognito**: `LIVELY_OFF=1` (구 `LIVELY_HOOKS_OFF` alias) → 훅 전부(런너·자산 동기화·자가 업데이트 포함) no-op(클린룸).
 - **자가 게이팅**: writeback 게이트는 'lively work' 세션에서만 — cwd 가 `~/.lively/work-roots` prefix 아래 OR 그 세션에서 lively MCP 툴 사용 시.
+- **기록 범위(#5016)**: 컴퓨터마다 «작업 폴더에서만(기본) | 어디서나». «작업 폴더에서만» 이면 작업 폴더 밖에서 켠 AI 세션은 인코그니토와 같다 — 훅은 게이트웨이를 건드리지 않고 끝나고(맥락 주입·기록·대화 업로드·첫 지시 프로젝트 없음 · 세션 시작 훅만 이 컴퓨터 설정을 받아 온다 — 세션 id·폴더·대화는 안 싣는다) MCP 프록시(`lively mcp`·`lively mcp-local`)는 도구 0개. 작업 폴더 = 라이블리가 띄운 세션(웹·노드 · `lively run`) · 위로 `.lively/project.json` 이 있는 폴더 · 등록한 폴더(`lively work-root add` · `/lively-connect` · 웹 «내 컴퓨터별 연결», `~/.lively/work-roots` 파일 줄·env `LIVELY_WORK_ROOTS` 도 포함) 아래. 판정은 `hooks/record-scope.mjs` 한 곳, 설정 정본은 서버(컴퓨터별), 로컬 사본 `~/.lively/record-scope.json` 을 세션 시작 훅이 매번 맞춘다(사본이 아직 없으면 종전 동작). 범위 밖 세션 시작 때 사람에게 한 줄(`systemMessage`)로 `/lively-connect` 를 알리고, 그 자리에서 등록하면 그 세션도 다음 지시부터 연결된다.
 
 ## 멀티하네스 (설계문서 D5)
 
