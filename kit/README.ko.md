@@ -80,7 +80,7 @@ node generator/build-context.mjs --org ../<org>-org --install-hooks <dir> [<dir>
 설치기(`setup/user-install.mjs` — 보통 `lively install` 이 부른다)가 **user-level**(`~/.lively/` + 하네스별 설정: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode·Antigravity·Grok·Cursor 설정)에 설치 → 멤버는 어느 폴더에서 켜든 컨텍스트+리플렉스를 받는다. 실행 디렉토리는 무의미.
 
 - **컨텍스트**: `session-preload`(SessionStart)가 게이트웨이에서 조직 맥락(`/api/ui/org/preview`)과 라이브 현황을 받아 주입. 받은 맥락은 `~/.lively/context.md` 에 캐시해 게이트웨이에 못 닿는 세션의 폴백으로 쓴다(설치 시 1회 시드).
-- **조직 자산**: `sync-harness-assets`(SessionStart)가 게이트웨이에 등록된 스킬·서브에이전트·커맨드를 하네스별 자리에 내려받는다(멤버 본인 자산은 불가침).
+- **조직 자산**: `sync-harness-assets`(SessionStart)가 게이트웨이에 등록된 스킬·서브에이전트·커맨드를 하네스별 자리에 내려받는다(멤버 본인 자산은 불가침). `lively install`·`setup`·`update` 도 배선 직후 하네스마다 한 번 돌린다 — 스킬 목록을 대화 시작 때 한 번만 읽는 하네스(codex·cursor 등)도 첫 대화부터 스킬이 보이게(#5013).
 - **리플렉스**: work-flag(작업·기록 신호 + 세션 실행 단계 보고 — PostToolUse·UserPromptSubmit·Notification·Stop 등) + stop-writeback-gate(Stop, 라이트백 1회 게이트) + **run-custom**(런너 — 웹 관리에서 정의한 커스텀 훅 `org_hook` 을 매 세션 게이트웨이 fetch·실행, enabled=false/제거 시 다음 세션 즉시 무효=kill-switch).
 - **incognito**: `LIVELY_OFF=1` (구 `LIVELY_HOOKS_OFF` alias) → 훅 전부(런너·자산 동기화·자가 업데이트 포함) no-op(클린룸).
 - **자가 게이팅**: writeback 게이트는 'lively work' 세션에서만 — cwd 가 `~/.lively/work-roots` prefix 아래 OR 그 세션에서 lively MCP 툴 사용 시.
