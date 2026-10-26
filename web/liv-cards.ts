@@ -103,17 +103,30 @@ export interface LivHooks {
 }
 
 /** 사람이 물음 칸에 치는 중인가 — 다시 그리면 타이핑하던 값이 사라진다. */
-export function livAskTyping(askHost: ParentNode): boolean {
+function livAskTyping(askHost: ParentNode): boolean {
   const typing = askHost.querySelector('.liv-ask-input') as HTMLInputElement | null;
   return !!typing && (typing.value !== '' || document.activeElement === typing);
+}
+
+/**
+ * 물음 자리를 다시 그리지 말아야 하나 — 치는 중이거나, **지금 떠 있는 카드가 받은 물음과 같으면** 그대로 둔다.
+ *  ⚠ 같은 물음이어도 다시 그리면 사람이 눌러 둔 선택(복수 선택의 고른 것)·올리던 파일 칸이 6초마다 지워진다(실측 2026-10-26:
+ *   노션·슬랙을 고르고 몇 초 뒤 다 풀렸다). 물음이 바뀌었거나 없어졌을 때만 갈아 끼운다.
+ */
+export function livAskKeep(askHost: ParentNode, ask: LivSecretAsk | null | undefined): boolean {
+  if (livAskTyping(askHost)) return true;
+  const cur = askHost.querySelector('.liv-ask') as HTMLElement | null;
+  return !!cur && !!ask && cur.dataset.ask === JSON.stringify(ask);
 }
 
 /** 리브가 기다리는 물음 카드 — 없으면 null. 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다. */
 export function livAskCard(ask: LivSecretAsk | null | undefined, hooks: LivHooks): HTMLElement | null {
   if (!ask) return null;
-  return ask.kind === 'choice' ? livChoiceCard(ask, hooks)
+  const card = ask.kind === 'choice' ? livChoiceCard(ask, hooks)
     : ask.kind === 'upload' ? livUploadCard(ask, hooks)
       : livSecretCard(ask, hooks);
+  card.dataset.ask = JSON.stringify(ask);   // livAskKeep 이 «같은 물음» 을 가르는 표
+  return card;
 }
 
 /** 편지 칸 — 지금 손볼 것이 있으면 편지, 리브가 일하는 중이면 그 한 줄, 아니면 조용한 날. */
@@ -274,7 +287,7 @@ function livChoiceCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
   };
 
   for (const o of ask.options ?? []) {
-    const b = el('button', { class: 'btn btn-sm liv-opt', type: 'button' },
+    const b = el('button', { class: 'btn btn-sm btn-ghost liv-opt', type: 'button' },
       el('b', { text: o.label }), o.hint ? el('span', { class: 'liv-opt-hint', text: o.hint }) : null) as HTMLButtonElement;
     b.onclick = () => {
       if (ask.multi) {
@@ -295,7 +308,7 @@ function livChoiceCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
   send.onclick = () => void submit();
   sync();
 
-  return el('div', { class: 'liv-card liv-ask' },
+  return el('div', { class: 'liv-ask' },
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.question ?? '' })),
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
     opts,
@@ -345,7 +358,7 @@ function livUploadCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
     }
   };
 
-  return el('div', { class: 'liv-card liv-ask' },
+  return el('div', { class: 'liv-ask' },
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })),
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
     el('div', { class: 'liv-ask-row' }, input),
@@ -393,7 +406,7 @@ function livSecretCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
   save.onclick = () => void submit();
   input.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Enter') { ev.preventDefault(); void submit(); } };
 
-  return el('div', { class: 'liv-card liv-ask' },
+  return el('div', { class: 'liv-ask' },
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })),
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
     el('div', { class: 'liv-ask-row' }, input, save, livDismissBtn(hooks)),

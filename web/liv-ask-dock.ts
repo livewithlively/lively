@@ -6,7 +6,7 @@
 //   «입력칸 위에서 기다린다» 한 줄만 쓴다(web/v2/panes-liv.ts).
 //  값은 대화로 가지 않는다 — 카드가 서버(화면 전용 문)로 곧바로 보내 금고에 넣고, 리브에게는 «저장했어요» 한 마디만 건넨다.
 import { el } from './core.js';
-import { livAskCard, livAskTyping, pokeLivStatus, watchLivStatus } from './liv-cards.js';
+import { livAskCard, livAskKeep, pokeLivStatus, watchLivStatus } from './liv-cards.js';
 
 /** el = 카드를 담는 자리 그 자체 — 대화창을 숨기고 터미널을 볼 때 세션 화면이 이 자리를 터미널 위로 옮긴다(#4940 session-chat.ts placeLivAsk). */
 export interface LivAskDock { el: HTMLElement; destroy(): void }
@@ -18,8 +18,8 @@ export function mountLivAskDock(dock: HTMLElement, o: { say: (text: string) => v
   const hooks = { say: o.say, refresh: () => pokeLivStatus() };
   const off = watchLivStatus((st) => {
     if (!host.isConnected) return;
-    if (livAskTyping(host)) return;           // 사람이 치는 중이면 손대지 않는다 — 다시 그리면 값이 사라진다
     if (!st) return;                          // 못 읽었으면 그대로 둔다(다음 판에 다시)
+    if (livAskKeep(host, st.secretAsk)) return;   // 치는 중이거나 같은 물음이면 손대지 않는다 — 다시 그리면 고른 것·친 값이 사라진다
     const card = livAskCard(st.secretAsk, hooks);
     host.replaceChildren(...(card ? [card] : []));
   }, () => host.isConnected && o.isVisible());

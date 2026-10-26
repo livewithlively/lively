@@ -77,7 +77,16 @@ check(/if \(type === 'livdesk'\) return livDeskPart\(ctx\);/.test(PARTS), "W2 li
 
 check(/const livDock = opts\.livAsks \? mountLivAskDock\(liveDock, \{/.test(CHAT), "W3 ★ 물음이 입력칸 바로 위(liveDock)에 안 뜬다");
 check(/dock\.append\(host\);/.test(DOCK) && /livAskCard\(st\.secretAsk, hooks\)/.test(DOCK), "W3 물음 자리가 그 칸에 물음 카드를 그린다");
-check(/if \(livAskTyping\(host\)\) return;/.test(DOCK), "W3 사람이 치는 중이면 다시 그리지 않는다(값이 사라진다)");
+check(/if \(livAskKeep\(host, st\.secretAsk\)\) return;/.test(DOCK), "W3 사람이 치는 중이거나 같은 물음이면 다시 그리지 않는다(값이 사라진다)");
+check(/if \(!livAskKeep\(askHost, st\.secretAsk\)\) \{/.test(BOARD), "W3 리브 화면(단독)도 같은 물음이면 다시 그리지 않는다");
+// W3′(2026-10-26 실측) — 6초 되묻기마다 카드를 갈아 끼워 복수 선택(노션·슬랙)이 몇 초 뒤 풀렸다. 같은 물음 판정은 카드에 찍은 표로 한다.
+check(/card\.dataset\.ask = JSON\.stringify\(ask\);/.test(CARDS) && /cur\.dataset\.ask === JSON\.stringify\(ask\)/.test(CARDS),
+  "W3′ ★ 같은 물음이면 카드를 그대로 둔다 — 갈아 끼우면 고른 선택지가 6초마다 풀린다");
+// W3″(2026-10-26 실측) — 물음 카드가 .liv-card(«리브가 세팅한 것» 띠 · 여백 없음)를 빌려 써서 터미널 위에서 깨졌다. 틀은 .liv-ask 가 진다.
+const LIV_CSS = read("public/styles/35-liv.css");
+check(!/class: 'liv-card liv-ask'/.test(CARDS) && /\n\.liv-ask \{[^}]*border: 1px solid[^}]*padding:[^}]*\}/.test(LIV_CSS),
+  "W3″ ★ 물음 카드는 .liv-card 를 빌리지 않고 제 틀(테두리·여백)을 진다");
+check(/class: 'btn btn-sm btn-ghost liv-opt'/.test(CARDS), "W3″ 선택지는 바탕이 있는 버튼(btn-ghost) — 없으면 브라우저 기본 회색 버튼이 된다");
 check(!/livAskCard/.test(DESK), "W3 ★ 오른쪽 «리브» 칸이 물음 카드를 또 그린다 — 입력칸이 두 자리에 서면 어디에 넣을지 헷갈린다");
 check(/askLine\.hidden = !st\.secretAsk;/.test(DESK), "W3 오른쪽 칸은 «입력칸 위에서 기다린다» 한 줄만");
 check(/livAskCard\(st\.secretAsk, hooks\)/.test(BOARD), "W3 리브 화면(단독)은 물음 카드를 그린다(로컬 AI 링크로 온 사람이 넣는 자리)");
