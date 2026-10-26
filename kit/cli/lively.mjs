@@ -3109,7 +3109,7 @@ ${bold("작업")}
       --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
   run [<프로젝트번호>]    프로젝트 열기 / ${bold("인자 없으면 하네스 바로 실행")}  ${dim("예: lively run 864  ·  lively run --readonly")}
       --readonly         이 세션만 읽기전용(라이블리 읽기 O · 쓰기 X) ${dim("· --incognito(주입·읽기·쓰기 all off) · --normal · --mode <m>")}
-      --harness <name>   무인자 실행 때 하네스 선택 ${dim("(기본 claude)")}
+      --harness <name>   무인자 실행 때 하네스 선택 ${dim("(기본 claude) · -h/--help 는 이 도움말이다(하네스 자체 도움말은 claude --help 로)")}
       ${dim("레포를 못 가져와도(자격·네트워크 등) 세션은 그대로 시작하고, 무엇이 왜 실패했는지 사람·AI 에게 함께 알립니다.")}
       --require-repo     ${dim("반대로 레포 준비 실패 시 실행을 중단(자동화·프로비저닝 스크립트용)")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
@@ -3141,10 +3141,87 @@ ${bold("옵션")}
   --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
                          ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
   -v, --version          버전
-  -h, --help             이 도움말
+  -h, --help             이 도움말 ${dim("· `lively <명령> --help` · `lively help <명령>` = 그 명령의 도움말(명령은 실행하지 않음)")}
 
 ${dim("업데이트는 보통 자동입니다 — 세션을 켜면 키트가 알아서 최신이 됩니다.")}
 ${dim("`lively update` 는 지금 당장 맞추거나, 관리자가 MCP 서버를 추가했을 때 씁니다.")}`;
+
+// ── 도움말 가드(#5028) ────────────────────────────────────────────────────────
+//  종전엔 `-h/--help` 가 **명령이 없을 때만** 도움말이었다. `lively delegate --help` 는 «--help» 라는 지시의
+//  실제 위탁을 만들고 배치를 기다렸고(AI 세션들이 사용법을 보려다 반복해서 밟았다), `uninstall --help` 는 제거를,
+//  `logout --help` 는 로그아웃을, `onboarding --help` 는 «--help» 프롬프트로 claude 를 띄웠다.
+//  원칙(일반적인 CLI 관례): `--` 앞 어디에든 `-h`/`--help` 가 있으면 **어떤 명령도 실행하지 않고** 그 명령의 도움말만 낸다.
+//   · `lively help <명령>` 도 같은 자리로 온다. 하위 명령이 있는 명령은 `lively <명령> help` 도 받는다.
+//   · `--` 뒤는 명령의 몫이다(예: `lively delegate -- "--help 옵션 설명해"` 는 그대로 위탁).
+const CMD_ALIASES = { upgrade: "update", remove: "uninstall" };
+// 첫 인자가 하위 명령 자리인 명령 — 여기선 `help` 낱말을 하위 명령으로 읽는다(`lively repo help`).
+//  run·onboarding 은 아니다: 그 뒤는 하네스·프롬프트로 넘기는 자리라 `help` 가 정당한 값일 수 있다.
+const HELP_WORD_COMMANDS = new Set(["delegate", "repo", "workspace", "file", "node", "mode"]);
+
+/** argv 가 도움말 요청이면 `{ topic }`(topic=명령 이름 · 없으면 null = 전체 도움말), 아니면 null. 순수 — 테스트 seam. */
+function helpRequest(argv) {
+  const args = argv.map(String);
+  const dd = args.indexOf("--");
+  const head = dd < 0 ? args : args.slice(0, dd);
+  const pos = parse(head)._;
+  const cmd = pos[0] || null;
+  if (cmd === "help") return { topic: pos[1] || null };
+  if (head.some((a) => a === "-h" || a === "--help")) return { topic: cmd };
+  if (cmd && HELP_WORD_COMMANDS.has(cmd) && pos[1] === "help") return { topic: cmd };
+  return null;
+}
+
+/**
+ * 한 명령의 도움말 텍스트(없는 명령이면 null).
+ *  delegate·node 는 각자 모듈의 상세 사용법을, 나머지는 전체 HELP 에서 그 명령 줄(+ 들여 쓴 이어지는 줄)을 잘라 쓴다 —
+ *  HELP 가 정본이라 명령별 문구를 따로 두면 생기는 드리프트가 없다.
+ */
+async function commandHelp(topic) {
+  const cmd = CMD_ALIASES[topic] || topic;
+  // 형제 모듈은 부트스트랩 직후엔 없을 수 있다(lively.mjs 한 파일만 내려받는 단계) — 없으면 HELP 절로 폴백한다.
+  const fromModule = { delegate: ["./cmd-delegate.mjs", "delegateUsage"], node: ["./cmd-node.mjs", "nodeUsage"] }[cmd];
+  if (fromModule) {
+    try { return (await import(new URL(fromModule[0], import.meta.url)))[fromModule[1]](); } catch { /* 폴백 */ }
+  }
+  const lines = HELP.split("\n");
+  const picked = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^  (\S+)/.exec(stripAnsi(lines[i]));
+    if (!m || m[1] !== cmd) continue;
+    picked.push(lines[i]);
+    while (i + 1 < lines.length && /^ {4,}\S/.test(stripAnsi(lines[i + 1]))) picked.push(lines[++i]);
+  }
+  if (!picked.length) {
+    // 하네스가 띄우는 stdio 서버 — 사람이 칠 일이 없어 HELP 에 없다. 그래도 «알 수 없는 명령» 이라고 하면 거짓이다.
+    if (cmd === "mcp" || cmd === "mcp-local") return `사용법: lively ${cmd}   ${dim(`(${cmd === "mcp" ? "게이트웨이 MCP 의 로컬 stdio 프록시" : "로컬 조작 stdio MCP 서버"} — 하네스가 세션마다 띄웁니다. 직접 실행할 일 없음)`)}`;
+    if (cmd === "version") return `사용법: lively version   ${dim("(= lively -v · --version)")}`;
+    if (cmd === "help") return `사용법: lively help [<명령>]   ${dim("(= lively <명령> --help)")}`;
+    return null;
+  }
+  return `${bold("사용법")}: lively ${cmd} …\n\n${picked.join("\n")}\n\n${dim("전체 명령: lively --help")}`;
+}
+
+// 부른 도움말은 stdout 으로(관례 — `lively delegate --help | head` 가 되게). 이벤트 모드에선 stdout 이 NDJSON 이라 stderr 로.
+//  잘못 쳐서 나오는 사용법(모르는 명령·옵션)은 종전대로 stderr 다.
+//  색은 stderr 기준으로 정해지므로 stdout 이 터미널이 아니면(파이프) 걷어 낸다.
+const helpOut = (s) => { if (EV) say(s); else process.stdout.write((process.stdout.isTTY ? s : stripAnsi(s)) + "\n"); };
+async function cmdHelp(topic) {
+  if (!topic) { helpOut(HELP); return; }
+  const text = await commandHelp(topic);
+  if (text) { helpOut(text); return; }
+  say(red(`알 수 없는 명령: ${topic}\n`));
+  say(HELP);
+  process.exit(2);
+}
+
+// 공통 파서(parse)의 옵션만 받는 명령 — 여기에 모르는 `-x`/`--xyz` 가 오면 실행하지 않는다.
+//  종전엔 조용히 버려져 `lively uninstall --dryrun`(오타) 이 **실제 제거**가 됐다. 나머지 명령은 인자 원형을
+//  각자 해석한다(delegate·node·run 등 — 그쪽 규칙은 그 모듈에).
+const PARSE_ONLY_COMMANDS = new Set(["setup", "login", "logout", "install", "update", "upgrade", "uninstall", "remove", "status", "doctor", "selfcheck", "version"]);
+function unknownFlags(cmd, o) {
+  if (!PARSE_ONLY_COMMANDS.has(cmd)) return [];
+  return o._.slice(1).filter((t) => /^--?[A-Za-z]/.test(t));
+}
 
 function parse(argv) {
   const o = { _: [] };
@@ -3290,7 +3367,9 @@ function endEvents(okFlag, code) {
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
-  const cmd = o._[0] || (o.version ? "version" : o.help ? "help" : "status");
+  // 도움말 요청이 **모든 명령보다 세다**(#5028) — 아무것도 실행하지 않고 도움말만 낸다.
+  const helpReq = helpRequest(argv);
+  const cmd = helpReq ? "help" : (o._[0] || (o.version ? "version" : "status"));
   if (!o.jsonEvents) return dispatch(cmd, o, argv);
   startEvents(cmd);
   // end 는 **모든 경로**에서 정확히 한 번 나가야 한다(앱이 그 한 줄로 성공·실패를 판정한다):
@@ -3307,6 +3386,12 @@ async function main() {
 }
 
 async function dispatch(cmd, o, argv) {
+  const bad = unknownFlags(cmd, o);
+  if (bad.length) {
+    say(red(`알 수 없는 옵션: ${bad.join(" ")} — 아무것도 실행하지 않았습니다.\n`));
+    say((await commandHelp(cmd)) || HELP);
+    process.exit(2);
+  }
   switch (cmd) {
     case "setup": return cmdSetup(o);
     case "login": { await cmdLogin(o); return; }
@@ -3348,7 +3433,7 @@ async function dispatch(cmd, o, argv) {
     // file — 파일 주소(#4673): 세션 안 경로 ↔ 주소 · 서명 주소. 나머지 인자 원형 보존(빈칸 든 경로).
     case "file": return cmdFile(argv.slice(argv.indexOf("file") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
-    case "help": say(HELP); return;
+    case "help": return cmdHelp(helpRequest(argv)?.topic ?? null);
     default:
       say(red(`알 수 없는 명령: ${cmd}\n`));
       say(HELP);
@@ -3364,5 +3449,5 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, helpRequest, commandHelp, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, hasExplicitMode, modeEnv, defaultMode, syncDefaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용
