@@ -83,8 +83,10 @@ export function parseDelegateArgv(rest = []) {
     return { ...out, action: sub, id, json: args.includes("--json") };
   }
   if (sub === "list") return { ...out, action: "list" };
-  const NUM = { "--ram": "need_ram_mb", "--cpu": "need_cpu", "--disk": "need_disk_mb", "--timeout": "timeout_sec" };
-  const STR = { "--node": "node", "--repo": "repo", "--ref": "ref" };
+  //  프로토타입 없는 표 — `constructor`·`toString` 같은 낱말이 들어간 지시가 Object.prototype 을 옵션으로 읽혀
+  //   «양수가 필요합니다» 로 거절되지 않게 한다(자기 키만 옵션이다).
+  const NUM = { __proto__: null, "--ram": "need_ram_mb", "--cpu": "need_cpu", "--disk": "need_disk_mb", "--timeout": "timeout_sec" };
+  const STR = { __proto__: null, "--node": "node", "--repo": "repo", "--ref": "ref" };
   const parts = [];
   for (let i = 0; i < args.length; i++) {
     let t = args[i];

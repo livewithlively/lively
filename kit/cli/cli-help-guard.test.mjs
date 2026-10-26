@@ -64,6 +64,12 @@ check("A20 --ram= (빈 값) → 오류", /값이 필요/.test(D(["x", "--ram="])
 check("A21 모르는 --foo=bar → 오류(지시에 붙지 않음)", /알 수 없는 옵션: --foo=bar/.test(D(["x", "--foo=bar"]).error || ""));
 check("A22 옵션 뒤 하위 명령(--json logs 3) → 위탁 아님 · 오류", /맨 앞에/.test(D(["--json", "logs", "3"]).error || ""));
 check("A23 따옴표로 묶은 «logs 3 정리해» 는 지시", D(["logs 3 정리해"]).prompt === "logs 3 정리해" && !D(["logs 3 정리해"]).error);
+{
+  //  옵션 표가 Object.prototype 을 물려받으면 `constructor`·`toString`·`__proto__` 같은 낱말이 옵션으로 읽혀 지시가 거절된다.
+  const proto = ["constructor", "toString", "__proto__", "hasOwnProperty"].map((w) => [w, D([w, "고쳐"]), D(["고쳐", w])]);
+  check("A24 Object 프로토타입 이름은 옵션이 아니라 지시의 일부", proto.every(([w, a, b]) => !a.error && a.prompt === `${w} 고쳐` && !b.error && b.prompt === `고쳐 ${w}`),
+    JSON.stringify(proto));
+}
 check("A18 사용법이 «실제 위탁이 생성» 경고를 담는다", /실제 위탁이 생성/.test(delegateUsage()));
 
 // ── B. 순수 해석 — 전역 helpRequest ──────────────────────────────────────────
