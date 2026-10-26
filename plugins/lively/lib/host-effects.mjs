@@ -110,7 +110,9 @@ const sandboxProcessAllowed = ({ command, args = [], options = {} }, env) => {
  *  빨갰고, 받는 포트가 실행마다 달라 목록이 매번 바뀌었다(#4673 · #5029). 그래서 그 기계의 범위 시작이 더 낮으면 그것을 따른다.
  *  ⚠ SANDBOX_PORT_FLOOR 아래로는 내리지 않는다 — 범위를 1024 부터로 넓힌 기계에서도 게이트웨이(8080)·Postgres(5432) 같은
  *   기본 로컬 서비스 포트는 계속 닫혀 있어야 한다. 범위를 못 읽으면(macOS·Windows) 종전 그대로 32768.
- *  ⚠ kit/cli/lively.mjs 의 인라인 경계(inlineSandboxPortMin)가 같은 규칙의 사본이다 — 둘을 함께 고친다(P-W3 패리티).
+ *  ⚠ 범위 시작이 10000 보다 낮은 기계(예: «1024 65535»)에선 고정물이 1024–9999 를 받으면 여전히 막힌다 — 서비스 포트를 지키는 값이다.
+ *  ⚠ kit/cli/lively.mjs 의 인라인 경계(inlineSandboxPortLowerBound · inlineSandboxPortMin)가 같은 규칙의 사본이다 — 둘을 함께 고친다
+ *   (P-W3 이 두 함수를 같은 표로 실제로 돌려 맞춰 본다).
  */
 const SANDBOX_PORT_FLOOR = 10000;
 export const sandboxPortLowerBound = (rangeText) => {
@@ -119,13 +121,19 @@ export const sandboxPortLowerBound = (rangeText) => {
   return lo < 32768 ? Math.max(lo, SANDBOX_PORT_FLOOR) : 32768;
 };
 const readPortRange = () => { try { return readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8"); } catch { return ""; } };
-export const SANDBOX_PORT_MIN = sandboxPortLowerBound(readPortRange());
+// 이 기계의 하한 — 처음 물을 때 한 번 읽고 기억한다. 모듈을 불러올 때 읽으면 native 로 도는 훅·CLI 가 뜰 때마다 /proc 를 읽는다
+//  (macOS·Windows 에선 그때마다 ENOENT 예외) — sandbox 의 네트워크 판정만 이 값을 쓴다.
+let sandboxPortMinMemo = null;
+export const sandboxPortMin = () => {
+  if (sandboxPortMinMemo === null) sandboxPortMinMemo = sandboxPortLowerBound(readPortRange());
+  return sandboxPortMinMemo;
+};
 const sandboxNetworkAllowed = (input) => {
   try {
     const u = new URL(typeof input === "string" ? input : input?.url);
     const loopback = u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "[::1]";
     const port = Number(u.port);
-    return loopback && Number.isInteger(port) && port >= SANDBOX_PORT_MIN && port <= 65535;
+    return loopback && Number.isInteger(port) && port >= sandboxPortMin() && port <= 65535;
   } catch { return false; }
 };
 

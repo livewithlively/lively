@@ -28,13 +28,9 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify(r.body));
   });
 });
-//  키트 시험 샌드박스는 루프백 32768 이상만 연다(LIVELY_HOST_EFFECTS_TEST_MODE=sandbox). 임시 포트 범위가 더 아래에서 시작하는
-//   호스트(gVisor 16000~)에선 listen(0) 이 그 아래를 받아 «HostEffects denied network» 로 흔들린다 — 범위 안을 받을 때까지 다시 연다.
-for (let i = 0; ; i++) {
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  if (server.address().port >= 32768 || i >= 50) break;
-  await new Promise((r) => server.close(r));
-}
+//  키트 시험 샌드박스(LIVELY_HOST_EFFECTS_TEST_MODE=sandbox)는 그 기계의 임시 포트 범위를 연다(host-effects sandboxPortMin, #5029) —
+//   listen(0) 이 받는 포트는 그대로 닿는다. 종전엔 하한이 32768 고정이라 gVisor(16000~)에서 다시 열기를 되풀이했다.
+await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "lively-file-cmd-"));
 const STUB_BIN = path.join(root, "stub-bin");
