@@ -319,18 +319,13 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
     pdf: "application/pdf",
   };
-  app.get("/api/ui/notion-assets/:file", ...mw(null), wrap(async (req, res) => {
+  //  #5012 — 리니어 첨부(data/linear-assets)도 같은 규칙으로 내보낸다. 폴더를 정하는 법만 다르다.
+  const serveAsset = (assetDirOf: () => Promise<string>) => wrap(async (req, res) => {
     const file = String(req.params.file ?? "");
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(file) || file.includes("..")) {
       res.status(400).json({ error: "잘못된 첨부 파일 이름" }); return;
     }
-    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
-    let dir = process.env.NOTION_ASSET_DIR || "";
-    try {
-      const { resolveConnectorConfig } = await import("./connectors/config.js");
-      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
-    } catch { /* config 계층 실패 → env/기본 폴백 */ }
-    const assetDir = dir || stateDir("notion-assets");
+    const assetDir = await assetDirOf();
     const full = path.resolve(assetDir, file);
     if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
     const fsMod = await import("node:fs");
@@ -342,7 +337,17 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Content-Type", inlineType ?? "application/octet-stream");
     res.setHeader("Content-Disposition", inlineType ? "inline" : `attachment; filename="${file}"`);
     fsMod.createReadStream(full).on("error", () => { if (!res.headersSent) res.status(404).json({ error: "첨부 파일 없음" }); }).pipe(res);
+  });
+  app.get("/api/ui/notion-assets/:file", ...mw(null), serveAsset(async () => {
+    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
+    let dir = process.env.NOTION_ASSET_DIR || "";
+    try {
+      const { resolveConnectorConfig } = await import("./connectors/config.js");
+      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
+    } catch { /* config 계층 실패 → env/기본 폴백 */ }
+    return dir || stateDir("notion-assets");
   }));
+  app.get("/api/ui/linear-assets/:file", ...mw(null), serveAsset(async () => stateDir("linear-assets")));
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {

@@ -983,6 +983,75 @@ const appVersions: Capability = {
   },
 };
 
+// ── 앱 「개발 정보」(#4632, 원준 2026-10-26 «코드를 SSOT로 해서 코드 내용을 자연어로 번역해준 … 앱에 대한 명세») ──
+//  보는 사람이 지금 쓰는 판(app_pull 과 같은 판 — 공개 판 또는 내 초안)의 코드로 두 층을 준다:
+//   facts = 코드에서 바로 읽은 것(apps/app-spec.specFacts — 열 때마다 계산 · 늘 코드와 같다) · spec = AI 가 쓴 쉬운 말 설명(판의 코드 지문마다 · apps/app-spec-run).
+//  그 판의 설명이 아직 없으면 이 자리가 쓰기 시작한다(새 판 저장 뒤의 예약을 놓쳤거나 되돌린 판). 실패한 설명은 저절로 다시 쓰지 않는다 — regenerate 로.
+const appSpec: Capability = {
+  name: "app_spec",
+  title: "앱 개발 정보(코드 기준 명세)",
+  description: "앱의 「개발 정보」 — 지금 보는 판의 코드를 기준으로 한 명세. facts(코드에서 바로 읽은 것: 화면 · 표와 칸 · 권한 · 바깥 호출과 그 자리 파일:줄 · 파일 목록)와 " +
+    "spec(AI 가 코드를 읽고 쓴 쉬운 말 설명: 요약 · 화면 · 저장하는 정보 · 기능 · 바깥 서비스와 API · 권한 · 한계 · 이번 버전에서 달라진 점). " +
+    "설명은 새 판이 저장되면 저절로 다시 쓰인다. spec_state: ok(이 판 기준) · stale(앞 판 설명 · 새로 쓰는 중) · writing · failed · unavailable(워크스페이스 API 키 없음) · limit(오늘 쓸 몫을 다 씀). " +
+    "regenerate:true 면 이 판 설명을 다시 쓴다(실패했을 때). 구성원 누구나(볼 수 있는 앱만).",
+  scope: null,
+  input: { app_id: z.string(), regenerate: z.boolean().optional() },
+  expose: {
+    mcp: true,
+    rest: [
+      { method: "GET", paths: ["/api/ui/apps/:id/spec"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) },
+      { method: "POST", paths: ["/api/ui/apps/:id/spec"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, regenerate: (req.body as Record<string, unknown> | undefined)?.regenerate === true }) },
+    ],
+  },
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+    const id = appId(input.app_id);
+    const who = viewerOf(user);
+    const installed = await requireVisibleApp(id, who);
+    if (isEmptyDraftApp(installed)) throw new HttpError(404, `앱 '${id}' 은(는) 아직 첫 판이 없습니다 — 먼저 app_save 로 저장하세요`);
+    //  보는 판 — app_pull 과 같은 판정(#4667 공개 판 · 초안을 만든 사람은 설치된 상태).
+    const view = appViewFor(installed, who);
+    const pub = view === "published" ? await store.getAppVersion(id, installed.published_version_no as number) : null;
+    const cur = !pub && installed.current_version_no != null ? await store.getAppVersion(id, installed.current_version_no) : null;
+    const row = pub ?? (cur && cur.content_hash != null && cur.content_hash === installed.content_hash ? cur : null);
+    const versionNo = row ? row.version_no : (pub ? installed.published_version_no : installed.current_version_no) ?? null;
+    const contentHash = row ? row.content_hash : installed.content_hash ?? null;
+    const { specFacts, specKeyOf, decideSpec } = await import("../apps/app-spec.js");
+    const specStore = await import("../apps/app-spec-store.js");
+    const run = await import("../apps/app-spec-run.js");
+    const key = specKeyOf(contentHash, versionNo);
+    //  판의 파일은 설명을 쓰기 시작할 때와 사실을 처음 읽을 때만 꺼낸다 — 화면은 쓰는 동안 6초마다 다시 묻는다(사실은 지문마다 run.factsCache).
+    let target: import("../apps/app-spec-run.js").SpecTarget | null = null;
+    const loadTarget = async (): Promise<import("../apps/app-spec-run.js").SpecTarget> => target ??= {
+      versionNo, contentHash, manifest: row ? row.manifest : installed.manifest,
+      files: row ? await versionFiles(row) : (await currentPackageFiles(installed)).files,
+    };
+    const available = await run.specAvailable();
+    const rows = await specStore.listAppSpecs(id);
+    //  대신 보일 앞 판 설명은 이 사람이 볼 수 있는 판의 것만 — app_versions 와 같은 판정(남의 공개 전 판 빼기 · 격리 리뷰 NB-6 · #4632 격리 리뷰).
+    const since = publishedAtMs(installed);
+    const visible = new Set((await store.listAppVersions(id)).filter((v) => !isOthersPendingVersion(installed, v, who, since)).map((v) => v.version_no));
+    const budget = await run.specBudgetOk();
+    let d = decideSpec(key, versionNo, rows, { now: Date.now(), available, visible, budget });
+    //  「다시 만들기」 는 실패한 이 판에만 — 다 쓴 · 쓰는 중인 설명은 그대로 둔다(누를 때마다 돈이 나가지 않게).
+    if (input.regenerate === true && d.failed && available && !budget) d = { ...d, failed: null, limit: true };   // 다시 쓸 몫이 없다고 말한다(격리 리뷰 N2)
+    else if (input.regenerate === true && d.failed && available) {
+      void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
+      d = { ...d, failed: null, writing: true };
+    } else if (d.kick) {
+      void run.writeAppSpec(id, await loadTarget(), { force: false }).catch(() => { /* 행에 까닭이 남는다 */ });
+    }
+    const state = d.unavailable ? "unavailable" : d.show && !d.stale ? "ok" : d.failed ? "failed" : d.limit ? "limit" : d.stale ? "stale" : "writing";
+    const facts = await run.factsCache(id, key, async () => { const t = await loadTarget(); return specFacts(t.manifest, t.files); });
+    const doc = d.show ? await specStore.getAppSpecDoc(id, d.show.content_hash) : null;
+    return {
+      app_id: id, title: installed.title, version_no: versionNo, content_hash: contentHash, view: pub ? "published" : "installed",
+      facts,
+      spec_state: state, spec_error: state === "failed" ? d.failed : null,
+      spec: d.show && doc ? { version_no: d.show.version_no, made_at: d.show.made_at ? new Date(d.show.made_at).toISOString() : null, model: d.show.model, doc } : null,
+    };
+  },
+};
+
 // ── 앱 되돌리기(#4600) — 어느 판으로든, 원본(릴리스)으로도 ──
 //  권한은 app_save 와 같다(editDenial). 되돌리기 직전의 지금 상태도 판으로 떠 둔다(되돌리기도 되돌릴 수 있게) — 다만 지금 상태가
 //  이미 어떤 판 그대로면(current_version_no 의 content_hash 일치) 같은 것을 두 번 적지 않는다.
@@ -1679,6 +1748,6 @@ const appFolderOrphansArchive: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appRevert,
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appSave, appPull, appVersions, appSpec, appRevert,
   appEditPolicySet, appVisibilitySet, appPublishPreview, appBuildStart, appOwnerSet, appDraftRemove, appRemove, appActivityCap, appUi, appDataSnapshots, appDataRestore,
   appArchivesList, appArchiveClear, appFolderArchivesList, appFolderArchiveClear, appFolderRestore, appFolderOrphansArchive];

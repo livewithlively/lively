@@ -614,6 +614,27 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
     );
   `);
 
+  // ── org_app_spec — 앱 「개발 정보」 의 쉬운 말 설명(#4632, 원준 2026-10-26 «코드를 SSOT로 해서 자연어로 번역해준 시트 … 자동으로 바뀌도록») ──
+  //  판의 코드 지문(content_hash — 옛 판은 'v<판 번호>')마다 한 줄. AI 가 코드를 읽고 쓴 설명(spec JSONB · apps/app-spec.ts AppSpecDoc)과 그 상태
+  //   (running 쓰는 중 · ok · failed). 새 판이 저장되면 apps/app-spec-run.ts 가 뒤에서 쓴다. 같은 지문은 다시 쓰지 않는다(되돌리기로 같은 코드가 와도).
+  //  앱마다 최근 30줄만 남긴다. v2.1 K 규칙대로 FK 없음 — 앱 제거(remove-run)가 명시로 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_spec(
+      app_id TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      version_no INT,
+      status TEXT NOT NULL CHECK (status IN ('running','ok','failed')),
+      spec JSONB,
+      model TEXT,
+      error TEXT,
+      input_tokens INT,
+      output_tokens INT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      made_at TIMESTAMPTZ,
+      PRIMARY KEY (app_id, content_hash)
+    );
+  `);
+
   // ── app_launch_code — 앱 주소 로그인의 일회용 코드(#4480 v2-1) ──
   //  라이블리 화면(로그인한 구성원)이 받아 앱 주소(<앱>-<워크스페이스>.lvly.app)에 붙이고, 앱 주소 앞단(CP 라우터)이 앱 주소 전용
   //   쿠키로 바꾼다. 평문 코드는 저장하지 않고 sha256 만(code_hash) · TTL 60초 · used_at 으로 1회. host = 그 코드가 열 수 있는

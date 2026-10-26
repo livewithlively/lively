@@ -62,6 +62,14 @@ check(F.parseBuilderRoute(["builder", "new"], q({ sel: "x" })).id === "" && F.pa
 const K = (view, id = "", how = "edit") => F.builderSideKey({ view, id, how });
 check(K("new") === "new" && K("resume", "box-1") === "draft:box-1" && K("app", "memo") === "app:memo" && K("app", "memo", "copy") === "app:memo", "R8 켜질 줄 — 새 앱 · 이어서 = 그 만들던 앱 · 고치기 · 사본 = 그 앱");
 check(K("list") === "all" && K("list", "memo") === "app:memo" && K("list", "draft:box-1") === "draft:box-1", "R9 목록 — 고른 것 없으면 「모든 앱」 · 고른 앱 · 고른 만들던 앱");
+// ── 앱 「개발 정보」(#4632 원준 2026-10-26 «(i) 같은거나 … 개발 정보? 뭐 이런 느낌이 드는 버튼») — #/builder/spec/<앱> ──
+{
+  const back = (r) => { const [path, qs] = r.replace(/^#\//, "").split("?"); return F.parseBuilderRoute(path.split("/"), q(qs ? Object.fromEntries(new URLSearchParams(qs)) : {})); };
+  check(JSON.stringify(F.parseBuilderRoute(["builder", "spec", "app-2csk6w"])) === JSON.stringify({ view: "spec", id: "app-2csk6w", how: "edit" })
+    && F.parseBuilderRoute(["builder", "spec", "a%20b"]).id === "a b" && F.parseBuilderRoute(["builder", "spec"]).view === "list", "R14 개발 정보 주소 읽기 — 앱 id(디코드) · id 없으면 목록");
+  check(F.builderRoute("spec", "a b") === "#/builder/spec/a%20b" && JSON.stringify(back(F.builderRoute("spec", "memo"))) === JSON.stringify({ view: "spec", id: "memo", how: "edit" }), "R15 개발 정보 주소 짓기 ↔ 읽기 왕복");
+  check(K("spec", "memo") === "app:memo" && T("spec") === "앱빌더 · 개발 정보", "R16 개발 정보 화면 — 사이드바는 그 앱 줄이 켜지고 탭 이름은 「앱빌더 · 개발 정보」");
+}
 const H = (h) => F.parseBuilderHash(h);
 check(H("#/sources") === null && H("") === null && H(null) === null && H("#/") === null, "R10 앱빌더 주소가 아니면 null");
 check(JSON.stringify(H("#/builder/s/box%201")) === JSON.stringify({ view: "resume", id: "box 1", how: "edit" }) && H("#builder").view === "list"

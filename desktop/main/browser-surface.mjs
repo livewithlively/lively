@@ -271,28 +271,16 @@ export function surfacePopupTitle(url, title) {
   return t && t !== label ? `${label} — ${t}` : label;
 }
 
-/**
- * UA 에서 **임베디드 표식**을 뗀다 — `Electron/43.4.1` 과 앱 이름 토큰(`Lively/0.1.0`). 남는 건 순정 Chrome UA 다.
- *  서피스 세션에만 건다(게이트웨이 세션은 그대로 — 우리 서버는 UA 로 판정하지 않는다).
- *
- *  ⚠ 이건 **보험이지 지금 고장난 것을 고치는 게 아니다.** 실측상 구글 로그인은 기본 UA(Electron 토큰 포함) 그대로도
- *   막히지 않았다 — accounts.google.com 정상 렌더, 실제 OAuth 동의 플로우도 통과, `disallowed_useragent` 는 한 번도
- *   안 나왔다. 그래도 떼는 이유: 판정은 구글 쪽 사정이라 언제든 바뀔 수 있고 떼는 비용이 0 이다.
- *   토큰 단위로만 지운다(정규식으로 문자열을 훑지 않는다 — UA 는 공백으로 갈리는 토큰열이라 이게 더 정확하다).
- */
-export function cleanUserAgent(ua, appName) {
-  const name = String(appName || "").trim().toLowerCase();
-  const drop = (tok) => {
-    const low = tok.toLowerCase();
-    if (low.startsWith("electron/")) return true;
-    if (name && low.startsWith(name + "/")) return true;
-    return false;
-  };
-  return String(ua || "")
-    .split(" ")
-    .filter((tok) => tok && !drop(tok))
-    .join(" ");
-}
+// ── UA — 스톡 Electron UA 를 그대로 둔다(고쳐 쓰지 않는다) ─────────────────────────────────
+//  #5023: 서피스 세션의 UA 문자열을 재작성하면(Electron·앱 토큰 제거) Cloudflare Turnstile 이 600010
+//   («Security check failed. Please try refreshing or using a different browser.») 으로 막는다 —
+//   UA 문자열과 클라이언트 힌트(sec-ch-ua)가 어긋나 위장으로 읽히기 때문이다. 네이티브 UA 그대로면 통과한다.
+//   외부 최소재현 2건이 같은 결론: akriaueno/electron-turnstile-repro("the UA string ... alone flips the
+//   outcome · native UA passes, any rewrite fails") · stablyai/orca#18749("Keep the stock Electron UA").
+//   같은 조사에서 window.chrome·navigator.webdriver 위장은 **그 자체가 봇 signature** 라 하지 않는다.
+//  그래서 예전 cleanUserAgent(보험용 토큰 제거)를 폐지하고 main.mjs 의 setUserAgent 호출을 뗐다.
+//  ⚠ 앞으로도 UA 를 바꾸지 말 것. 꼭 신원을 숨겨야 하면 UA 문자열만 바꾸지 말고 CDP(Network.setUserAgentOverride)로
+//   userAgentMetadata(sec-ch-ua)까지 함께 맞춰야 한다 — 안 그러면 Turnstile 이 다시 깨진다(orca#19927 가 그 역전으로 재발을 자인).
 
 /**
  * `<webview>` 를 붙여도 되는가 (will-attach-webview). src 가 열 수 없는 스킴이면 **붙이지 않는다** —

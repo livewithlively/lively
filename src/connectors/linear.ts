@@ -9,6 +9,10 @@ import type { Connector, RawItem, BackfillOpts } from "./types.js";
 import { resolveConnectorConfig } from "./config.js";
 import { LINEAR_GRAPHQL_URL } from "../org/credentials/linear-oauth.js";
 import { sinceFloor } from "./sync-cursor.js";
+import fs from "node:fs";
+import path from "node:path";
+import crypto from "node:crypto";
+import { stateDir } from "../ops/state-dir.js";
 
 const PAGE = 100;
 export const MAX_PAGES = 100;
@@ -21,7 +25,13 @@ export interface LIssue {
   assignee?: LUser | null; creator?: LUser | null; labels?: { nodes?: Array<{ name?: string }> } | null;
   comments?: { nodes?: LComment[] } | null;
 }
-export interface LComment { id: string; body?: string | null; createdAt?: string; updatedAt?: string; user?: LUser | null; url?: string }
+export interface LComment {
+  id: string; body?: string | null; createdAt?: string; updatedAt?: string; user?: LUser | null; url?: string;
+  // 연동이 단 댓글(#5012 실측) — 슬랙 연동이 슬랙 스레드를 옮겨 오면 user 는 비고 botActor(=Slack) · externalUser(=그 슬랙 작성자)가 찬다.
+  //  externalUser 는 사람일 수도 봇(Sentry 등)일 수도 있어 «연동 = 봇» 으로 접지 않는다.
+  botActor?: { name?: string | null; type?: string | null; subType?: string | null } | null;
+  externalUser?: { name?: string | null } | null;
+}
 export interface LDocument { id: string; title?: string; content?: string | null; url?: string; createdAt?: string; updatedAt?: string; creator?: LUser | null; project?: { name?: string } | null }
 
 /** 팀 키 목록(공백·쉼표 구분, 대문자화). */
@@ -54,17 +64,27 @@ export function issueItem(instance: string, i: LIssue): RawItem {
   };
 }
 
+/** 댓글 작성자 — 사람(user) → 연동이 옮겨 온 외부 작성자(externalUser) → 연동 자체(botActor). 봇 표시는 사람도 외부 작성자도
+ *  없는 **순수 연동 댓글**에만 단다(외부 작성자는 사람일 수 있다 — 슬랙 스레드의 사람 답글). */
+export function commentActor(c: LComment): RawItem["actor"] {
+  if (c.user && (c.user.id || c.user.name)) return actorOf(c.user);
+  const ext = c.externalUser?.name?.trim();
+  if (ext) return { display_name: ext };
+  const bot = c.botActor?.name?.trim();
+  return bot ? { display_name: bot, is_bot: true } : undefined;
+}
+
 export function commentItem(instance: string, issue: LIssue, c: LComment): RawItem {
   const team = issue.team?.key ?? issue.identifier.split("-")[0];
   return {
     type: "message",
     provenance: { category: "collab_tool", system: "linear", instance, external_id: `${issue.identifier}:c${c.id}`, external_url: c.url ?? issue.url },
-    actor: actorOf(c.user),
+    actor: commentActor(c),
     container_ref: team, container_name: issue.team?.name ? `${issue.team.name} (${team})` : team,
     parent_external_id: issue.identifier,
     body: c.body ?? "",
     occurred_at: c.createdAt, updated_at: c.updatedAt ?? c.createdAt,
-    fields: { kind: "comment", number: issue.identifier, comment_id: c.id, team },
+    fields: { kind: "comment", number: issue.identifier, comment_id: c.id, team, ...(c.botActor ? { via: c.botActor.subType || c.botActor.name || "integration" } : {}) },
     raw: c,
   };
 }
@@ -82,6 +102,106 @@ export function documentItem(instance: string, d: LDocument): RawItem {
   };
 }
 
+// ── 업로드 첨부(#5012) ───────────────────────────────────────────────────────
+//  리니어 본문의 이미지·파일은 `uploads.linear.app` 에 있고 **인증 없이는 401** 이다(위시스트 실측: 리니어 자료 4,351건 중
+//  1,493건 · 링크 2,227개). 링크만 저장하면 화면엔 대체 텍스트(«image.png»)만 보이고 증류도 캡처를 못 본다.
+//  수집 때 연결 토큰(Bearer — 실측 200)으로 받아 게이트웨이 디스크에 두고, 본문 링크를 `/api/ui/linear-assets/<파일>` 로 바꾼다.
+//  파일명 = 업로드 경로 해시 + 확장자 — 같은 업로드는 다시 받지 않는다(재수집·full 스윕에도 결정적).
+//  실패·상한 초과는 **원래 링크를 그대로 둔다**(본문을 잃지 않는다 — 다음 full 스윕이 원문에서 다시 시도한다).
+export const LINEAR_ASSET_ROUTE = "/api/ui/linear-assets/";
+export const MAX_ASSET_BYTES = 50 * 1024 * 1024;
+const UPLOAD_RE = /(!?\[([^\]]*)\])\((https:\/\/uploads\.linear\.app\/[^)\s]+)\)/g;
+const EXT_BY_TYPE: Readonly<Record<string, string>> = {
+  "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp", "image/avif": "avif", "image/bmp": "bmp",
+  "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov", "audio/mpeg": "mp3", "application/pdf": "pdf",
+};
+
+/** 본문에 든 리니어 업로드 링크(중복 제거, 등장 순). */
+export function linearUploadLinks(md: string | null | undefined): Array<{ url: string; text: string }> {
+  const out = new Map<string, string>();
+  for (const m of String(md ?? "").matchAll(UPLOAD_RE)) if (!out.has(m[3])) out.set(m[3], m[2]);
+  return [...out].map(([url, text]) => ({ url, text }));
+}
+
+/** 파일 키(확장자 없이) — 업로드 경로만 본다(쿼리·서명은 버린다). */
+export function linearAssetKey(url: string): string {
+  let p = url;
+  try { p = new URL(url).pathname; } catch { /* 그대로 */ }
+  return crypto.createHash("sha1").update(p).digest("hex").slice(0, 24);
+}
+
+/** 확장자 — 링크 글자(«image.png»·«영상.mp4»)가 먼저, 없으면 응답 타입. 모르면 bin(화면은 내려받기로만 준다). */
+export function linearAssetExt(text: string, contentType: string | null | undefined): string {
+  const fromText = text.match(/\.([A-Za-z0-9]{1,8})$/)?.[1]?.toLowerCase();
+  if (fromText) return fromText === "jpeg" ? "jpg" : fromText;
+  return EXT_BY_TYPE[String(contentType ?? "").split(";")[0].trim().toLowerCase()] ?? "bin";
+}
+
+/** 본문의 업로드 링크를 받은 파일 경로로 바꾼다(순수). 표에 없는 링크는 그대로. */
+export function rewriteLinearUploads(md: string, files: ReadonlyMap<string, string>): string {
+  return md.replace(UPLOAD_RE, (all, label: string, _text: string, url: string) => {
+    const f = files.get(url);
+    return f ? `${label}(${LINEAR_ASSET_ROUTE}${f})` : all;
+  });
+}
+
+export interface AssetStats { fetched: number; existing: number; failed: number; tooLarge: number }
+export interface AssetCtx {
+  token: string; dir: string;
+  /** 업로드 키 → 저장된 파일명(시작 때 폴더를 한 번 읽어 채운다 — 이미 받은 것은 요청하지 않는다). */
+  known: Map<string, string>;
+  stats: AssetStats;
+  fetchImpl?: typeof fetch;
+}
+
+export function assetCtx(token: string, dir: string, fetchImpl?: typeof fetch): AssetCtx {
+  fs.mkdirSync(dir, { recursive: true });
+  const known = new Map<string, string>();
+  for (const f of fs.readdirSync(dir)) { const m = f.match(/^([0-9a-f]{24})\.[a-z0-9]{1,8}$/); if (m) known.set(m[1], f); }
+  return { token, dir, known, stats: { fetched: 0, existing: 0, failed: 0, tooLarge: 0 }, fetchImpl };
+}
+
+async function fetchAsset(ctx: AssetCtx, url: string, text: string): Promise<string | null> {
+  const key = linearAssetKey(url);
+  const have = ctx.known.get(key);
+  if (have) { ctx.stats.existing++; return have; }
+  const f = ctx.fetchImpl ?? fetch;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let res: Response;
+    try { res = await f(url, { headers: { Authorization: `Bearer ${ctx.token}` }, redirect: "follow" }); }
+    catch { ctx.stats.failed++; return null; }
+    if (res.status === 429 && attempt === 0) {
+      await res.arrayBuffer().catch(() => null);
+      await new Promise((r) => setTimeout(r, Math.min(Number(res.headers.get("retry-after") ?? 5) * 1000, 30_000)));
+      continue;
+    }
+    if (!res.ok) { await res.arrayBuffer().catch(() => null); ctx.stats.failed++; return null; }
+    if (Number(res.headers.get("content-length") ?? 0) > MAX_ASSET_BYTES) {
+      await res.body?.cancel().catch(() => undefined); ctx.stats.tooLarge++; return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > MAX_ASSET_BYTES) { ctx.stats.tooLarge++; return null; }
+    const file = `${key}.${linearAssetExt(text, res.headers.get("content-type"))}`;
+    const tmp = path.join(ctx.dir, `.${file}.${process.pid}.tmp`);
+    fs.writeFileSync(tmp, buf);
+    fs.renameSync(tmp, path.join(ctx.dir, file));
+    ctx.known.set(key, file);
+    ctx.stats.fetched++;
+    return file;
+  }
+  ctx.stats.failed++;
+  return null;
+}
+
+/** 본문의 업로드를 받아 두고 링크를 바꾼 본문을 돌려준다. 업로드가 없으면 원문 그대로. */
+export async function localizeLinearUploads(md: string | null | undefined, ctx: AssetCtx): Promise<string | null | undefined> {
+  const links = linearUploadLinks(md);
+  if (!links.length) return md;
+  const files = new Map<string, string>();
+  for (const l of links) { const f = await fetchAsset(ctx, l.url, l.text); if (f) files.set(l.url, f); }
+  return rewriteLinearUploads(String(md), files);
+}
+
 export const ISSUES_QUERY = `query Issues($first: Int!, $after: String, $filter: IssueFilter) {
   issues(first: $first, after: $after, filter: $filter, orderBy: updatedAt, includeArchived: true) {
     nodes {
@@ -89,7 +209,7 @@ export const ISSUES_QUERY = `query Issues($first: Int!, $after: String, $filter:
       state { name type } team { key name } project { name }
       assignee { id name displayName email } creator { id name displayName email }
       labels { nodes { name } }
-      comments(first: 100) { nodes { id body createdAt updatedAt url user { id name displayName email } } }
+      comments(first: 100) { nodes { id body createdAt updatedAt url user { id name displayName email } botActor { name type subType } externalUser { name } } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -145,6 +265,7 @@ export const linearConnector: Connector = {
     const viewer = await gql<{ viewer?: { organization?: { urlKey?: string; id?: string } } }>(token, VIEWER_QUERY, {});
     const instance = viewer.viewer?.organization?.urlKey || viewer.viewer?.organization?.id || "linear";
 
+    const assets = assetCtx(token, stateDir("linear-assets"));
     const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
     const filter = issueFilter(sinceIso, teams);
     let after: string | null = null;
@@ -156,8 +277,9 @@ export const linearConnector: Connector = {
       const d: { issues: { nodes: LIssue[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await gql(
         token, ISSUES_QUERY, { first: PAGE, after, filter });
       for (const i of d.issues.nodes) {
-        yield issueItem(instance, i);
-        for (const c of i.comments?.nodes ?? []) yield commentItem(instance, i, c);
+        const issue = { ...i, description: await localizeLinearUploads(i.description, assets) };
+        yield issueItem(instance, issue);
+        for (const c of i.comments?.nodes ?? []) yield commentItem(instance, issue, { ...c, body: await localizeLinearUploads(c.body, assets) });
       }
       if (!d.issues.pageInfo.hasNextPage) break;
       after = d.issues.pageInfo.endCursor;
@@ -169,10 +291,16 @@ export const linearConnector: Connector = {
       for (let n = 0; n < MAX_PAGES; n++) {
         const d: { documents: { nodes: LDocument[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await gql(
           token, DOCUMENTS_QUERY, { first: PAGE, after: dafter, filter: dfilter });
-        for (const doc of d.documents.nodes) yield documentItem(instance, doc);
+        for (const doc of d.documents.nodes) yield documentItem(instance, { ...doc, content: await localizeLinearUploads(doc.content, assets) });
         if (!d.documents.pageInfo.hasNextPage) break;
         dafter = d.documents.pageInfo.endCursor;
       }
     }
+    const a = assets.stats;
+    if (a.fetched + a.existing + a.failed + a.tooLarge) {
+      console.error(`[linear] 첨부 — 새로 받음 ${a.fetched} · 이미 있음 ${a.existing} · 실패 ${a.failed} · 상한(${MAX_ASSET_BYTES / 1048576}MB) 초과 ${a.tooLarge} — 실패·초과는 원래 링크로 남는다`);
+    }
   },
+  // 첨부를 게이트웨이 디스크(data/linear-assets)에 둔다 — 매니지드의 판(일시 유닛)은 그 디스크를 못 본다(노션과 같다).
+  needsGatewayDisk: true,
 };

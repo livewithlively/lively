@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH,
-  DRM_HANDOFF_HOSTS, hostMatches, surfaceNavTarget, cleanUserAgent, webviewAttachDecision,
+  DRM_HANDOFF_HOSTS, hostMatches, surfaceNavTarget, webviewAttachDecision,
   SURFACE_ALLOWED_PERMISSIONS, surfacePermissionAllowed,
   SURFACE_POPUP_LIMIT, SURFACE_POPUP_MIN_SIZE, SURFACE_OPEN_BURST, SURFACE_OPEN_BURST_MS, SURFACE_OPEN_PER_MINUTE,
   surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, surfaceOpenGate, createOpenLedger, surfacePopupTitle,
@@ -62,23 +62,9 @@ t("B1~B7 호스트 매칭이 **도메인 경계**를 지킨다", () => {
   assert.equal(hostMatches(null, ["a.com"]), false);
 });
 
-// ── C. UA — 보험이지 지금 고장난 것을 고치는 게 아니다 ────────────────────────────────────
-t("C1~C6 UA 는 Electron·앱이름 토큰만 뗀다 — 나머지는 한 글자도 안 건드린다", () => {
-  const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Lively/0.1.0 Chrome/150.0.7871.224 Electron/43.4.1 Safari/537.36";
-  const out = cleanUserAgent(ua, "Lively");                                    // C1
-  assert.equal(out, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.7871.224 Safari/537.36");
-  assert.ok(!/Electron/i.test(out) && !/Lively/i.test(out));
-  assert.match(out, /Chrome\/150\.0\.7871\.224/);                              // C2 ★ 과삭제 금지
-  assert.match(out, /AppleWebKit\/537\.36 \(KHTML, like Gecko\)/, "괄호 안 토큰까지 건드렸다");
-  assert.equal(cleanUserAgent("A/1 Electron/2 B/3", ""), "A/1 B/3");           // C3 ★ 이름 부재
-  assert.equal(cleanUserAgent("A/1 Electron/2 B/3", null), "A/1 B/3");         // C4 ★ 이름 부재
-  assert.equal(cleanUserAgent("Live/9 Lively/0.1.0 X/1", "Lively"), "Live/9 X/1"); // C5 ★ 이름이 다른 토큰의 접두
-  assert.equal(cleanUserAgent("", "Lively"), "");                              // C6
-  // C7 ★ 매칭은 **토큰 머리에 고정**돼야 한다. 부분일치면 이름을 품은 남의 토큰까지 지운다 —
-  //  UA 는 사이트가 브라우저·OS 를 판정하는 근거라 한 토큰만 잘못 지워도 엉뚱한 페이지가 나간다.
-  assert.equal(cleanUserAgent("SuperLively/9 Lively/0.1.0 X/1", "Lively"), "SuperLively/9 X/1");
-  assert.equal(cleanUserAgent("MyElectronShell/2 Electron/43.4.1 X/1", ""), "MyElectronShell/2 X/1");
-});
+// ── C. UA — 스톡 Electron UA 를 그대로 둔다(#5023) ──────────────────────────────────────
+//  UA 재작성이 Cloudflare Turnstile 600010 을 유발해 cleanUserAgent 를 폐지했다(browser-surface.mjs 「UA」 머리말).
+//  «UA 를 고쳐 쓰지 않는다» 배선은 아래 F4 가 못박는다(setUserAgent 호출 부재).
 
 // ── D. 부착 판정 ─────────────────────────────────────────────────────────────────────
 t("D1~D4 열 수 없는 주소는 **붙이기 전에** 막는다 — 붙은 뒤 막으면 이유 없는 빈 화면이 남는다", () => {
@@ -156,7 +142,7 @@ t("F3·F4 ★ webviewTag 를 켠 자리마다 부착 훅이 격리를 강제한�
     "강제 설정이 지우기보다 먼저다 — 지우기가 강제값을 지울 수 있다");
   assert.match(MAIN, /setPermissionRequestHandler\(\(_wc, permission, cb\) => cb\(surfacePermissionAllowed\(permission\)\)\)/, "권한 요청을 서피스 정책에 안 건다");
   assert.match(MAIN, /setPermissionCheckHandler\(\(_wc, permission\) => surfacePermissionAllowed\(permission\)\)/, "권한 조회를 서피스 정책에 안 건다");
-  assert.match(MAIN, /setUserAgent\(cleanUserAgent\(s\.getUserAgent\(\), app\.getName\(\)\)\)/, "서피스 세션 UA 를 안 정리한다");
+  assert.ok(!/setUserAgent/.test(MAIN), "★ 서피스 세션은 스톡 Electron UA 를 그대로 둔다 — UA 재작성은 Cloudflare Turnstile 600010 을 유발한다 (#5023)");
 });
 
 t("F5 ★ 능력은 preload 가 자칭하지 않는다 — 메인이 출처를 보고 준 값을 그대로 전한다", () => {

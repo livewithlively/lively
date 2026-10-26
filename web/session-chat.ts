@@ -104,6 +104,8 @@ export interface SessionChatHandle {
   /** #4996 지금 이 화면으로 터미널을 보고 있나 — 열람 도장이 싣는다(다른 사람이 들어올 때 대화창으로 비켜 설지의 재료).
    *  숨겨 붙인 액자(#4794)·아직 안 붙인 액자는 «대화» 다(사람이 보고 있는 것이 대화창이다). */
   viewMode(): 'term' | 'chat';
+  /** #4996 셸이 뒤에 두었던 이 탭을 다시 켰다(새로 그리지 않고) — 그새 다른 사람이 터미널을 쥐었을 수 있어 처음 열 때의 판정을 다시 한다. */
+  reshown(): void;
   /** 우패널이 스스로 파일 탐색기를 닫았을 때 상단바 [파일] 불을 맞춘다(#1744 — 토글은 하나여야 한다). */
   setFilesOn(on: boolean): void;
   destroy(): void;
@@ -1122,15 +1124,31 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (termHold === null) return;
     clearTimeout(termHold); termHold = null;
     if (destroyed || mode !== 'term') return;
-    const h = termHolder();
+    //  답이 시한 안에 안 왔으면 떠나기 전에 들은 낡은 줄로 판정하지 않는다(그 사람은 이미 나갔을 수 있다) — 모르면 막지 않는다.
+    const h = viewersFresh(target.id) ? termHolder() : null;
     if (h && !modeChosen) {
       yieldTerm = true;
+      //  다시 켠 탭(reshown)은 액자가 이미 붙어 있다 — 걷어서 처음 열 때 비켜 선 판과 같게 한다. 남겨 두면 tmux 에 붙은 채이고,
+      //   이미 한 번 그려 «그렸다»(lively-term-painted)를 다시 알리지 않아 말을 보낸 뒤 넘김이 25초 시한까지 밀린다(격리 리뷰 재현).
+      if (termFrame) { termFrame.remove(); termFrame = null; termReady = false; termQueue = []; termStatusEl.textContent = ''; termStatusEl.hidden = true; }
       setMode('chat');
       view.setNote(`${h.name}님이 이 세션을 터미널로 보고 있어요 — 그 화면이 깨지지 않게 대화로 보여 드려요. 말을 보내면 터미널로 넘어갑니다.`);
       return;
     }
     ensureTermFrame();
     emitView();   // 판정을 기다리던 액자가 지금 붙었다 — 이때 «터미널로 본다» 가 된다(setMode 는 이미 지나갔다)
+  }
+  /** #4996 셸이 뒤에 두었던 이 탭을 다시 켰다 — 떠나 있는 동안 다른 사람이 터미널을 쥐었을 수 있다. 그러면 지금은 그 사람이 먼저다
+   *  (먼저 보던 사람의 화면이 깨지지 않게 — 끝단 실측: 처음 열 때만 판정해 돌아온 사람이 곧바로 터미널을 다시 잡았다).
+   *  처음 열 때와 같은 판정을 하되, 판정이 날 때까지 «대화로 본다» 고 알린다(viewNow — termHold 중엔 chat) — 셸이 곧이어 찍는 도장이
+   *  «터미널» 로 나가 상대가 이 사람을 쥔 사람으로 읽지 않게. 액자는 그대로 보인다 — 가려도 tmux 크기 다툼은 못 막고(액자는 가려져도
+   *  맞춰 그린다), 아무도 없는 흔한 판에 탭을 켤 때마다 터미널이 한 박자 비어 보인다. 비켜 서면 그때 걷는다(settleTermHold).
+   *  사람이 고른 화면(modeChosen)은 건드리지 않는다. */
+  function reshown(): void {
+    if (destroyed || !opts.awaitViewers || modeChosen || yieldTerm || termWarm || termHold !== null || mode !== 'term' || !termFrame) return;
+    termHold = window.setTimeout(settleTermHold, VIEWERS_WAIT_MS);
+    emitView();
+    if (viewersFresh(target.id)) settleTermHold();   // 얼굴 줄을 막 들었다(떠나지 않은 채 밀려 왔다) — 기다릴 것 없이 지금 판정
   }
   /** #4996 터미널을 쥐고 있던 사람이 나갔다(또는 대화로 옮겼다) — 비켜 선 판을 푼다. 쓰는 중이 아니면 본자리(터미널)로 돌아간다. */
   function releaseYield(): void {
@@ -1327,7 +1345,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     emitView();
   }
   /** #4996 사람이 지금 보는 것 — 터미널 모드이고 액자가 붙어 있어야(숨겨 붙인 판이 아니고) «터미널» 이다(handle.viewMode 머리말). */
-  function viewNow(): 'term' | 'chat' { return mode === 'term' && !!termFrame && !termWarm ? 'term' : 'chat'; }
+  function viewNow(): 'term' | 'chat' { return mode === 'term' && !!termFrame && !termWarm && termHold === null ? 'term' : 'chat'; }
   /** #4996 보는 것이 바뀌었으면 셸에 알린다(곧바로 열람 도장 — 다른 사람이 옛 값으로 판정하지 않게). 바뀌는 자리가 여럿이다 —
    *  모드를 바꿀 때(setMode)뿐 아니라 판정을 기다리다 액자를 붙인 때(settleTermHold)·액자를 걷은 때(dropTermFrame · 되살리기)도. */
   let reportedView: 'term' | 'chat' = 'chat';
@@ -3239,6 +3257,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     setFilesOn(on) { filesBtn.classList.toggle('sc-act-on', !!on); },
     update(t) { applyRow(trustRevived(t)); },
     viewMode() { return viewNow(); },
+    reshown() { reshown(); },
     destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }

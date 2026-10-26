@@ -648,6 +648,11 @@ export interface AiAccountStatus {
    *   `POST /api/ui/me/ai-accounts/check` 로 그 행만 따로 묻는다.
    */
   how: "file" | "probe";
+  /**
+   * (#5031) 이 사람의 서버 개인 계정(격리 박스의 box_<사람>)이 **아직 없다** — 그래서 어느 AI 에도 로그인돼 있을 수 없다(false 가 사실이다).
+   *  처음 설정은 이 줄의 [연결]을 누를 때 계정을 만든다(login-seat-prep). 격리 박스가 아니거나 계정이 있으면 없다(생략).
+   */
+  pending?: boolean;
 }
 // macOS 키체인의 Claude 자격 존재 확인 — Claude Code 는 **맥에서 자격을 파일이 아니라 키체인**
 //  ("Claude Code-credentials")에 넣는다. 그래서 `.credentials.json` 부재를 '미로그인'으로 읽으면 거짓말이 된다
@@ -663,7 +668,9 @@ async function macClaudeKeychainHas(): Promise<boolean> {
   } catch { return false; }
 }
 //  osSt — 호출자가 방금 잰 OS 격리 상태를 넘기면 다시 재지 않는다(drop-priv 확인을 아낀다 — memberLoggedInHarnessesAny).
-export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): Promise<AiAccountStatus[]> {
+//  isMember — 계정을 만들 수 있는 사람인가(memberOsState 의 getMember 와 같은 축). 시험이 DB 없이 갈아 끼운다.
+export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus,
+  deps: { isMember?: (id: string) => Promise<boolean> } = {}): Promise<AiAccountStatus[]> {
   osSt ??= await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
   //  #2232 — 매니지드(중앙 게이트웨이 + 노드의 세션 컨테이너, LIVELY_MEMBER_EXEC 중계)에선 게이트웨이에 멤버 OS 유저가 없어
@@ -672,6 +679,16 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
   //   실측 2026-08-28(원준님): 로그인 창에서 /login 을 끝냈는데도 «아직 로그인이 안 보여요». 자격 파일은
   //   homes/box_<id>/.claude/.credentials.json 에 멀쩡히 있었다. 중계 배포도 멤버 축으로 본다.
   const relayed = !isolated && memberExecConfigured();
+  //  (#5031) 격리 박스인데 이 사람 계정이 아직 없다 — 종전엔 아래 프로필/공유 분기로 떨어져 **게이트웨이 공용 홈**의 자격을 그 사람 것처럼
+  //   «연결됨» 으로 보였다(그래서 처음 설정은 계정이 다 만들어질 때까지 목록을 숨겨야 했다). 계정이 없으면 그 사람 자격은 어디에도 없다 —
+  //   공용을 재지 않고 «연결 전» 으로 답한다. 계정은 [연결] 때 만든다. 판정은 memberOsState 의 absent 와 같은 축(격리 장치 · 사람 id ·
+  //   구성원) — 구성원이 아닌 주체(에이전트 토큰 등)는 계정이 만들어지지 않고 공용으로 돌므로 종전 판정 그대로다.
+  //   홈만 남은 계정(orphanHome — OS 유저는 지워졌는데 홈이 남음)은 다시 만들면 그 홈의 자격을 이어받을 수 있어 «모름»(null)이다.
+  const ownId = ownerId(user);
+  const isMember = deps.isMember ?? (async (id: string) => !!(await getMember(id)));
+  const pending = !isolated && !relayed && osSt.ready && !!ownId && await isMember(ownId).catch(() => false);
+  const pendingWhere = `내 격리 계정(${osSt.osUser}) — 아직 없어요. 이 서버에서 AI 를 연결할 때 만들어요`;
+  const pendingLogin: boolean | null = osSt.orphanHome ? null : false;
   const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
   for (const h of HARNESSES) {
@@ -684,6 +701,7 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
       //    «모름(null)» 으로 내보내고, 그 행이 궁금한 화면이 check 로 따로 묻는다. 모르는 것을 false 로
       //    접지 않는 것이 이 파일의 교리다(모르면서 «미로그인» 이라 하면 로그인한 사람을 막는다).
       if (!h.bin || !harnessLoginProbe(h.key)) continue;   // 셸 등 — 로그인 개념도 잴 방법도 없다
+      if (pending) { out.push({ key: h.key, label: h.label, scope: "isolated", where: pendingWhere, loggedIn: pendingLogin, canLogout: false, how: "probe", pending: true }); continue; }
       out.push({
         key: h.key, label: h.label,
         scope: isolated || relayed ? "isolated" : "shared",
@@ -695,6 +713,10 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
     }
     let scope: AiAccountStatus["scope"]; let where: string;
     let loggedIn: boolean | null;
+    if (pending) {
+      out.push({ key: h.key, label: h.label, scope: "isolated", where: pendingWhere, loggedIn: pendingLogin, canLogout: false, how: "file", pending: true });
+      continue;
+    }
     if (isolated || relayed) {
       scope = "isolated"; where = relayed ? `내 세션 홈(${osSt.osUser})의 ${rel}` : `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
       loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv/중계 확인했다

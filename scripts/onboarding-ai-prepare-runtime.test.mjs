@@ -13,9 +13,18 @@
 //   Q5  failed → 안내 + «다시 해 보기» · 묻기 멈춤 · 누르면 retry:true · 그 뒤 준비 중 → ready 면 그린다
 //   Q6  옛 서버(prepare 404) → 곧바로 그린다(처음 설정이 막히면 안 된다)
 //   Q7  준비 중에 장면을 떠나면(PC 경로) 묻기를 멈춘다 — 이미 걸어 둔 다음 묻기도 나가지 않는다(종전엔 한 번 더 나갔다)
-//   Q0  처음부터 열면(이어 열 자리 없음) 인사 장면에서 이미 준비를 시작한다(retry 아님 · 계정 목록은 안 묻는다) — 인사·이름을 보는 동안 끝나게.
-//       이름 장면은 또 묻지 않는다 · AI 장면은 다시 묻고(그 결과로 그린다) · 이른 물음이 못 물어도(500) 인사 장면은 그대로 · 화면 오류 없음.
-//       (AI 장면부터 이어 열면 그 장면만 묻는다 — Q1~Q7 의 물음 수가 그것을 잠근다.)
+//   Q0  (#5031) 처음부터 열어도 인사·이름 장면은 계정 준비를 묻지 않는다(종전 #4970 은 인사 장면에서 미리 만들어 PC 길을 고를 사람도 치렀다) ·
+//       AI 장면이 한 번 묻는다 — **묻기만**(start:false).
+//   Q1~Q7 의 장면 물음도 전부 start:false(묻기만) — 만들기는 사람이 [연결]을 누를 때다.
+//   Q8  계정 없음(absent · 줄 pending) → 곧바로 넷 · 줄마다 [연결] · «공용» 문구 없음 · [다음] 꺼짐 · 만들기 물음(start:true) 0
+//   Q9  Q8 에서 한 줄 [연결] → start:true 1회 · «만들고 있어요» 안내 · 다른 [연결] 막힘 · 묻기(start:false)로 기다림 → ready → 목록 다시 읽음 →
+//       **그 AI** 의 로그인 시작(ai-login/start harness=그 줄)
+//   Q10 [연결] → failed → 실패 안내 + «다시 해 보기» · 로그인 시작 0 · 누르면 retry:true → ready → 그 AI 로그인 시작
+//   Q11 계정 없음에서 «PC에서 쓰는 AI로» → 만들기 물음(start:true) 0
+//   Q12 옛 서버(줄에 pending 없음) → [연결]이 곧바로 로그인 시작(만들기 물음 없음)
+//   Q13 ★ [연결]의 첫 요청이 못 물으면(500 — 배포 중) 시작을 다시 부탁한다(start:true) → preparing → ready → 그 AI 로그인 (격리 리뷰: 종전엔
+//       묻기만 되풀이하며 «만들고 있어요» 에 갇혔다)
+//   Q14 서버가 계속 «absent»(시작이 안 됨)면 갇히지 않는다 — 몇 번 뒤 «시작하지 못했어요» + 다시 해 보기 · 로그인 0 · [연결] 다시 살아남
 //  fail-first(2026-10-23): `SRC_ROOT=<옛 트리>`(web/ · public/styles 가 있는 곳)로 옛 코드를 물린다 — 88fb373c4(v0.1.379)는 Q7 만
 //   빨갛다(«떠난 뒤에도 1번 더 물었다»), 그 전 판(v0.1.378)은 AI 장면 자체가 없어 장면이 죽는다. 크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import assert from "node:assert/strict";
@@ -40,7 +49,8 @@ async function PAGE_MAIN() {
   window.addEventListener("unhandledrejection", (e) => R.errors.push("rej: " + String(e.reason && e.reason.message || e.reason)));
   const sleep = (ms) => new Promise((z) => setTimeout(z, ms));
   const J = (o, st = 200) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
-  const calls = { prepare: [], accounts: 0 };
+  const calls = { prepare: [], accounts: 0, login: [] };
+  let ACC_PENDING = false;   // true 면 계정 없는 사람의 목록(#5031 — 줄마다 pending · isolated · 연결 전)
   let PREP = [];             // 차례로 돌려줄 prepare 응답: 'preparing' | 'ready' | 'failed' | 500 | 404
   let PREP_DEFAULT = "ready";
   const ACC = [
@@ -54,13 +64,25 @@ async function PAGE_MAIN() {
     const method = String((init && init.method) || "GET").toUpperCase();
     if (u.pathname === "/api/ui/me/ai-login/prepare" && method === "POST") {
       let body = {}; try { body = JSON.parse(String((init && init.body) || "{}")); } catch (_) { /* 빈 몸 */ }
-      calls.prepare.push({ retry: body.retry === true });
+      //  서버와 같은 뜻으로 적는다 — start 를 안 보내면 서버는 «없으면 만든다»(옛 화면 호환, login-seat-prep prepareMemberSeat).
+      calls.prepare.push({ retry: body.retry === true, start: body.start !== false || body.retry === true });
       const nx = PREP.length ? PREP.shift() : PREP_DEFAULT;
+      if (nx === "ready") ACC_PENDING = false;   // 계정이 다 됐다 — 이제 목록은 그 사람 홈에서 잰 값이다
       if (nx === 500) return J({ error: "boom" }, 500);
       if (nx === 404) return J({ error: "not found" }, 404);
       return J({ ok: true, state: nx });
     }
-    if (u.pathname === "/api/ui/me/ai-accounts" && method === "GET") { calls.accounts++; return J({ accounts: JSON.parse(JSON.stringify(ACC)) }); }
+    if (u.pathname === "/api/ui/me/ai-accounts" && method === "GET") {
+      calls.accounts++;
+      const rows = JSON.parse(JSON.stringify(ACC));
+      return J({ accounts: ACC_PENDING ? rows.map((r) => ({ ...r, scope: "isolated", loggedIn: false, pending: true })) : rows });
+    }
+    if (u.pathname === "/api/ui/me/ai-login/start" && method === "POST") {
+      let body = {}; try { body = JSON.parse(String((init && init.body) || "{}")); } catch (_) { /* 빈 몸 */ }
+      calls.login.push(String(body.harness || ""));
+      return J({ ok: true });
+    }
+    if (u.pathname === "/api/ui/me/ai-login/state") return J({ ok: true, state: "starting" });
     if (u.pathname === "/api/ui/me/ai-accounts/check") return J({ loggedIn: null });
     if (u.pathname === "/api/ui/me/welcome") return J({ progress: null });
     return J({ ok: true });
@@ -83,12 +105,16 @@ async function PAGE_MAIN() {
     scene: host.dataset.scene || "",
   });
   const n = () => calls.prepare.length;
+  const starts = () => calls.prepare.filter((c) => c.start).length;
+  const goBtns = (host) => [...host.querySelectorAll("#aiList .ob-ai-go")];
+  const rowGo = (host, re) => { const w = [...host.querySelectorAll(".ob-ai-item")].find((x) => re.test(x.innerText || "")); return w ? w.querySelector(".ob-ai-go") : null; };
+  const noteText = (host) => ((host.querySelector(".ob-ai-note") && !host.querySelector(".ob-ai-note").hidden) ? host.querySelector(".ob-ai-note").innerText : "").replace(/\s+/g, " ");
 
   //  Q1~Q4 — 준비 중 → (4초 뒤) 준비 중 → 한 번 못 물음(500) → ready
   PREP = ["preparing", "preparing", 500, "ready"];
   let host = mount();
   await sleep(500);
-  R.q1 = { ...view(host), accounts: calls.accounts, firstRetry: calls.prepare[0] ? calls.prepare[0].retry : null, asks: n() };
+  R.q1 = { ...view(host), accounts: calls.accounts, firstRetry: calls.prepare[0] ? calls.prepare[0].retry : null, asks: n(), starts: starts() };
   await sleep(4300);
   R.q2 = { ...view(host), asks: n() };
   await sleep(4300);
@@ -97,6 +123,7 @@ async function PAGE_MAIN() {
   R.q4 = { ...view(host), asks: n(), accounts: calls.accounts };
   await sleep(4500);
   R.q4.asksLater = n();
+  R.q4.starts = starts();
 
   //  Q5 — failed → «다시 해 보기» → retry:true → 준비 중 → ready
   calls.prepare = []; calls.accounts = 0;
@@ -142,7 +169,7 @@ async function PAGE_MAIN() {
   PREP = []; PREP_DEFAULT = "ready";
   host = mountFresh();
   await sleep(600);
-  R.q0a = { intro: !!host.querySelector("#introGo"), asks: n(), retry: calls.prepare[0] ? calls.prepare[0].retry : null, accounts: calls.accounts };
+  R.q0a = { intro: !!host.querySelector("#introGo"), asks: n(), accounts: calls.accounts };
   host.querySelector("#introGo")?.click();
   await sleep(300);
   R.q0b = { name: !!host.querySelector("#nameIn"), asks: n() };
@@ -150,12 +177,75 @@ async function PAGE_MAIN() {
   if (nameIn) nameIn.value = "민";
   host.querySelector("#nameGo")?.click();
   await sleep(900);
-  R.q0c = { ...view(host), ai: !!host.querySelector("#aiList"), asks: n() };
-  calls.prepare = []; PREP = [500];
-  const errsBefore = R.errors.length;
-  host = mountFresh();
+  R.q0c = { ...view(host), ai: !!host.querySelector("#aiList"), asks: n(), starts: starts() };
+
+  //  Q8·Q9 — 계정 없음 → 곧바로 그림 → 한 줄 [연결] → 만들기 → 기다림 → ready → 그 AI 로그인
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; PREP_DEFAULT = "preparing"; ACC_PENDING = true;
+  host = mount();
   await sleep(600);
-  R.q0d = { intro: !!host.querySelector("#introGo"), asks: n(), newErrors: R.errors.length - errsBefore };
+  R.q8 = { ...view(host), asks: n(), starts: starts(), go: goBtns(host).length, goOn: goBtns(host).filter((b) => !b.disabled && !b.hidden).length,
+    shared: /공용/.test(host.querySelector("#aiList")?.innerText || "") };
+  PREP = ["preparing", "preparing", "ready"];
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(400);
+  R.q9a = { starts: starts(), lastStart: calls.prepare.length ? calls.prepare[calls.prepare.length - 1].start : null, note: noteText(host),
+    goOff: goBtns(host).filter((b) => b.disabled).length, go: goBtns(host).length, login: calls.login.slice() };
+  await sleep(9500);
+  R.q9b = { asks: n(), starts: starts(), accounts: calls.accounts, login: calls.login.slice(), note: noteText(host) };
+
+  //  Q10 — [연결] → failed → 다시 해 보기 → ready → 그 AI 로그인
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; ACC_PENDING = true;
+  host = mount();
+  await sleep(600);
+  PREP = ["failed", "ready"];
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(600);
+  R.q10a = { note: noteText(host), retry: !!host.querySelector(".ob-ai-seat-retry"), login: calls.login.slice(), goOn: goBtns(host).filter((b) => !b.disabled).length };
+  host.querySelector(".ob-ai-seat-retry")?.click();
+  await sleep(1200);
+  R.q10b = { lastRetry: calls.prepare.length ? calls.prepare[calls.prepare.length - 1].retry : null, login: calls.login.slice() };
+
+  //  Q11 — 계정 없음 → PC 길
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; ACC_PENDING = true;
+  host = mount();
+  await sleep(600);
+  host.querySelector("#aiPc")?.click();
+  await sleep(1500);
+  R.q11 = { asks: n(), starts: starts(), scene: host.dataset.scene || "" };
+
+  //  Q13 — [연결]의 첫 요청이 500 → 다시 시작 부탁 → preparing → ready → 그 AI 로그인
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; PREP_DEFAULT = "preparing"; ACC_PENDING = true;
+  host = mount();
+  await sleep(600);
+  PREP = [500, "preparing", "ready"];
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(13000);
+  R.q13 = { flags: calls.prepare.map((c) => c.start), login: calls.login.slice() };
+
+  //  Q14 — 서버가 계속 absent → 몇 번 뒤 실패 안내 · 갇히지 않는다
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["absent"]; PREP_DEFAULT = "absent"; ACC_PENDING = true;
+  host = mount();
+  await sleep(600);
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(24000);
+  R.q14 = { note: noteText(host), retry: !!host.querySelector(".ob-ai-seat-retry"), login: calls.login.slice(),
+    goOn: goBtns(host).filter((b) => !b.disabled).length, asks: n() };
+  await sleep(9000);
+  R.q14.asksLater = n();
+
+  //  Q12 — 옛 서버(줄에 pending 없음) → [연결]이 곧바로 로그인
+  calls.prepare = []; calls.accounts = 0; calls.login = [];
+  PREP = ["none"]; PREP_DEFAULT = "none"; ACC_PENDING = false;
+  host = mount();
+  await sleep(600);
+  rowGo(host, /Codex|ChatGPT|챗GPT/)?.click();
+  await sleep(600);
+  R.q12 = { starts: starts(), login: calls.login.slice() };
 
   document.getElementById("out").textContent = JSON.stringify(R) + "ENDRESULT";
 }
@@ -182,6 +272,7 @@ t("Q1 준비 중 → 안내만 · 목록·계정 목록 안 묻기 · [다음] �
   assert.equal(R.q1.next, true, "[다음] 이 켜져 있다");
   assert.equal(R.q1.pc, true, "«PC에서 쓰는 AI로» 가 없다 — 준비 중에도 다른 길이 있어야 한다");
   assert.equal(R.q1.firstRetry, false, "첫 물음이 retry 다 — 실패 뒤 5분 막음을 사람 몰래 푼다");
+  assert.equal(R.q1.starts, 0, "★ 장면을 열자마자 계정 만들기를 시작했다(start:true) — PC 길을 고를 사람도 치른다");
 });
 t("Q2 4초 뒤 다시 묻는다 · 아직 준비 중이면 그대로", () => {
   assert.ok(R.q2.asks >= 2, `다시 묻지 않았다(${R.q2.asks})`);
@@ -196,6 +287,7 @@ t("Q4 ready → 넷을 그린다 · 그 뒤엔 더 묻지 않는다", () => {
   assert.equal(R.q4.rows, 4, `ready 인데 넷을 안 그렸다: ${JSON.stringify(R.q4)}`);
   assert.ok(R.q4.accounts >= 1, "계정 목록을 안 물었다");
   assert.equal(R.q4.asksLater, R.q4.asks, "ready 뒤에도 계속 묻는다");
+  assert.equal(R.q4.starts, 0, "기다리는 동안 만들기를 시작했다 — 묻기만 해야 한다");
 });
 t("Q5 failed → 안내 + 다시 해 보기 · 묻기 멈춤 · 누르면 retry:true · 그 뒤 ready 면 그린다", () => {
   assert.match(R.q5a.text, /만들지 못했어요/, `실패 안내가 없다: ${R.q5a.text}`);
@@ -215,19 +307,63 @@ t("Q7 준비 중에 장면을 떠나면 묻기를 멈춘다 — 걸어 둔 다�
   assert.ok(R.q7.asksAtLeave >= 1, "배선 — 떠나기 전에 한 번도 안 물었다");
   assert.equal(R.q7.asksLater, R.q7.asksAtLeave, `★ 장면을 떠난 뒤에도 ${R.q7.asksLater - R.q7.asksAtLeave}번 더 물었다`);
 });
-t("Q0 처음부터 열면 인사 장면에서 이미 준비를 시작한다 · 이름 장면은 또 묻지 않는다 · AI 장면이 다시 묻고 그린다 · 못 물어도 인사 그대로", () => {
+t("Q0 ★ 처음부터 열어도 인사·이름 장면은 계정 준비를 묻지 않는다 · AI 장면이 한 번 묻는다(묻기만) · 그린다", () => {
   assert.equal(R.q0a.intro, true, "배선 — 인사 장면이 아니다");
-  assert.equal(R.q0a.asks, 1, `★ 인사 장면에서 준비를 시작하지 않는다(${R.q0a.asks}) — AI 장면까지 기다리게 된다`);
-  assert.equal(R.q0a.retry, false, "이른 물음이 retry 다 — 실패 뒤 막음을 사람 몰래 푼다");
+  assert.equal(R.q0a.asks, 0, `★ 인사 장면에서 계정 준비를 물었다(${R.q0a.asks}) — PC 길을 고를 사람도 계정을 치른다`);
   assert.equal(R.q0a.accounts, 0, "인사 장면에서 계정 목록을 물었다");
   assert.equal(R.q0b.name, true, "배선 — 이름 장면이 아니다");
-  assert.equal(R.q0b.asks, 1, "이름 장면에서 또 물었다");
+  assert.equal(R.q0b.asks, 0, "이름 장면에서 계정 준비를 물었다");
   assert.equal(R.q0c.ai, true, "배선 — AI 장면이 아니다");
-  assert.equal(R.q0c.asks, 2, `AI 장면이 다시 묻지 않았다(${R.q0c.asks})`);
+  assert.equal(R.q0c.asks, 1, `AI 장면이 묻지 않았다(${R.q0c.asks})`);
+  assert.equal(R.q0c.starts, 0, "AI 장면이 열자마자 만들기를 시작했다");
   assert.equal(R.q0c.rows, 4, `ready 인데 넷을 안 그렸다: ${JSON.stringify(R.q0c)}`);
-  assert.equal(R.q0d.intro, true, "이른 물음이 못 물었더니 인사 장면이 깨졌다");
-  assert.equal(R.q0d.asks, 1, "배선 — 이른 물음이 나가지 않았다");
-  assert.equal(R.q0d.newErrors, 0, "이른 물음 실패가 화면 오류를 냈다");
+});
+t("Q8 ★ 계정 없음 → 곧바로 넷 · 줄마다 [연결] · «공용» 문구 없음 · [다음] 꺼짐 · 만들기 0", () => {
+  assert.equal(R.q8.rows, 4, `★ 계정이 없다고 목록을 안 그렸다(준비를 기다린다): ${JSON.stringify(R.q8)}`);
+  assert.equal(R.q8.goOn, 4, "줄의 [연결]이 다 살아 있지 않다");
+  assert.equal(R.q8.shared, false, "«이 서버 공용 계정» 문구가 보인다");
+  assert.equal(R.q8.next, true, "[다음] 이 켜져 있다");
+  assert.equal(R.q8.starts, 0, "★ 아무것도 안 눌렀는데 계정 만들기를 시작했다");
+});
+t("Q9 ★ 한 줄 [연결] → 만들기 1회 · 안내 · 다른 [연결] 막힘 → ready → 그 AI 로그인 시작", () => {
+  assert.equal(R.q9a.starts, 1, `[연결]이 계정 만들기를 시작하지 않았다(${R.q9a.starts})`);
+  assert.equal(R.q9a.lastStart, true);
+  assert.match(R.q9a.note, /개인 계정을 만들고 있어요/, `만드는 중 안내가 없다: ${R.q9a.note}`);
+  assert.equal(R.q9a.goOff, R.q9a.go, "만드는 동안 다른 [연결]이 살아 있다(두 번 만든다)");
+  assert.deepEqual(R.q9a.login, [], "계정이 다 되기 전에 로그인을 시작했다");
+  assert.equal(R.q9b.starts, 1, `기다리는 동안 만들기를 또 시작했다(${R.q9b.starts})`);
+  assert.ok(R.q9b.asks >= 3, `배선 — 기다리며 묻지 않았다(${R.q9b.asks})`);
+  assert.ok(R.q9b.accounts >= 2, "다 된 뒤 목록을 다시 읽지 않았다");
+  assert.deepEqual(R.q9b.login, ["codex"], `★ 다 된 뒤 누른 그 AI 의 로그인을 잇지 않았다: ${JSON.stringify(R.q9b.login)}`);
+});
+t("Q10 [연결] → failed → 실패 안내 + 다시 해 보기 · 로그인 0 · 누르면 retry → 그 AI 로그인", () => {
+  assert.match(R.q10a.note, /만들지 못했어요/, `실패 안내가 없다: ${R.q10a.note}`);
+  assert.equal(R.q10a.retry, true, "«다시 해 보기» 가 없다");
+  assert.deepEqual(R.q10a.login, [], "실패했는데 로그인을 시작했다");
+  assert.ok(R.q10a.goOn >= 1, "실패 뒤 [연결]이 막힌 채 남았다");
+  assert.equal(R.q10b.lastRetry, true, "★ «다시 해 보기» 가 retry:true 를 안 보낸다");
+  assert.deepEqual(R.q10b.login, ["codex"], `다시 해 본 뒤 그 AI 로그인을 잇지 않았다: ${JSON.stringify(R.q10b.login)}`);
+});
+t("Q11 ★ 계정 없음 → PC 길 → 계정 만들기 0", () => {
+  assert.notEqual(R.q11.scene, "ai", "배선 — 장면을 안 떠났다");
+  assert.ok(R.q11.asks >= 1, "배선 — AI 장면이 묻지 않았다");
+  assert.equal(R.q11.starts, 0, "★ PC 길을 골랐는데 계정 만들기를 시작했다");
+});
+t("Q13 ★ 첫 요청이 못 물어도(500) 시작을 다시 부탁한다 → ready → 그 AI 로그인", () => {
+  assert.equal(R.q13.flags[1], true, `배선 — [연결]의 첫 요청이 시작이 아니다: ${JSON.stringify(R.q13.flags)}`);
+  assert.equal(R.q13.flags[2], true, `★ 첫 요청이 500 이었는데 시작을 다시 부탁하지 않았다(묻기만 되풀이하며 갇힌다): ${JSON.stringify(R.q13.flags)}`);
+  assert.deepEqual(R.q13.login, ["codex"], `다 된 뒤 그 AI 로그인을 잇지 않았다: ${JSON.stringify(R.q13.login)}`);
+});
+t("Q14 서버가 계속 absent → 갇히지 않는다 · «시작하지 못했어요» + 다시 해 보기 · [연결] 살아남 · 더 안 묻는다", () => {
+  assert.match(R.q14.note, /시작하지 못했어요/, `★ 끝없이 «만들고 있어요» 에 갇혔다: ${R.q14.note}`);
+  assert.equal(R.q14.retry, true, "«다시 해 보기» 가 없다");
+  assert.deepEqual(R.q14.login, [], "계정이 없는데 로그인을 시작했다");
+  assert.ok(R.q14.goOn >= 1, "[연결]이 막힌 채 남았다");
+  assert.equal(R.q14.asksLater, R.q14.asks, "실패 안내 뒤에도 계속 묻는다");
+});
+t("Q12 옛 서버(줄에 pending 없음) → [연결]이 곧바로 로그인", () => {
+  assert.equal(R.q12.starts, 0, "계정 개념이 없는데 만들기를 물었다");
+  assert.deepEqual(R.q12.login, ["codex"], `곧바로 로그인을 시작하지 않았다: ${JSON.stringify(R.q12.login)}`);
 });
 t("화면 오류 0", () => { assert.deepEqual(R.errors, []); });
 console.log(`onboarding-ai-prepare-runtime.test: ${pass} ok`);
