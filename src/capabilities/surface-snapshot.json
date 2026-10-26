@@ -5055,6 +5055,17 @@
   "input_hash": "eeaa30c0ba805f7f"
  },
  {
+  "name": "app_spec",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "GET /api/ui/apps/:id/spec",
+   "POST /api/ui/apps/:id/spec"
+  ],
+  "input_hash": "10e05b2a41ccbc58"
+ },
+ {
   "name": "app_revert",
   "scope": null,
   "mcp": true,
