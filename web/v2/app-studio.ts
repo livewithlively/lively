@@ -950,7 +950,7 @@ async function build(rec: StudioRec): Promise<void> {
     const doAsk = async (): Promise<void> => {
       const t = ask.value.trim(); if (!t || !rec.card || askGo.disabled) return;
       askGo.disabled = true;
-      if (await sendPrompt(rec, '기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
+      if (await sendPrompt(rec, '기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이 · 정해진 줄 뒤에 내가 더한 줄도 그대로 남겨): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
       askGo.disabled = false;
     };
     askGo.onclick = () => { void doAsk(); };

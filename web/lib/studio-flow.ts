@@ -1,7 +1,7 @@
 // lib/studio-flow.ts — 앱 만들기 흐름의 **순수** 부분(#4592, 원준 2026-10-11 «기획 → 시안 → 의견 왕복 → 확인 → 넣기, 그리고 팀과»).
 //  화면(web/v2/app-studio.ts)은 여기 함수로 AI 답을 읽고(기획 카드 · 걸음 · 점검) 단계마다 보낼 글을 만든다.
 //  AI 와의 약속(지식 app-build-quickstart 에도 같은 꼴이 적혀 있다):
-//   · 기획 카드  [[기획카드]] … [[/기획카드]]   줄마다 「이름: …」
+//   · 기획 카드  [[기획카드]] … [[/기획카드]]   줄마다 「줄 이름: 값」(CARD_ROWS · 더한 항목은 그 뒤)
 //   · 걸음      [[걸음 n/4]]                   1 기획 읽음 · 2 화면 짬 · 3 자료 표 · 4 저장
 //   · 점검      [[대조]] 있음: a · b | 빠짐: 없음
 //  시험: scripts/app-studio-flow.test.mjs
@@ -79,11 +79,15 @@ const KEY_OF: Array<[RegExp, CardRowKey]> = [
 ];
 /** 이 줄 이름이 정해진 줄의 것인가 — 더한 항목의 제목이 정해진 줄로 읽히지 않게(extraLine). */
 const fixedKeyOf = (label: string): CardRowKey | null => { const key = label.replace(/\s+/g, ''); const k = KEY_OF.find(([r]) => r.test(key)); return k ? k[1] : null; };
-/** 더한 항목의 제목으로 읽을 수 있는 꼴 — 글자 · 숫자 · 띄어쓰기 · 가운뎃점만(링크 주소가 이어진 줄 «Skills](https» 같은 조각은 아니다). */
+/** 더한 항목의 제목으로 읽을 수 있는 꼴 — 글자 · 숫자 · 띄어쓰기 · 가운뎃점만(링크 주소가 이어진 줄 «Skills](https» 같은 조각은 아니다).
+ *  쓰는 쪽(extraLine)도 제목을 이 꼴로만 쓴다 — 쓴 것이 다시 읽히게. */
 const EXTRA_TITLE = /^[\p{L}\p{N} ·]{1,20}$/u;
+const EXTRA_TITLE_OFF = /[^\p{L}\p{N} ·]+/gu;
+/** 링크 한 줄(«https://…» — 제목 자리에 주소의 머리가 온 것)은 더한 항목이 아니다. */
+const URL_HEAD = /^(https?|ftp|mailto|file)$/i;
 /** 더한 항목 한 쌍 → 카드 글 한 줄. 비었으면 빈 글. 제목이 정해진 줄 이름과 겹치면 「추가 」 를 붙여 따로 읽히게. */
 function extraLine(x: CardExtra): string {
-  const t = String(x.title || '').replace(/[:：\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20).trim();
+  const t = String(x.title || '').replace(EXTRA_TITLE_OFF, ' ').replace(/\s+/g, ' ').trim().slice(0, 20).trim();
   const b = String(x.body || '').replace(/\s*\n\s*/g, ' ').trim();
   if (!t && !b) return '';
   const title = !t ? '추가 내용' : fixedKeyOf(t) ? ('추가 ' + t).slice(0, 20) : t;
@@ -100,10 +104,11 @@ export function parseCard(text: string): StudioCard | null {
   if (!body) return null;
   const c = emptyCard(); let hit = false;
   body.split('\n').forEach((line) => {
-    const mm = /^\s*(?:[-*•]|\d+[.)])?\s*([^:：]{1,20})[:：]\s*(.*)$/.exec(line); if (!mm) return;
-    const key = mm[1].replace(/\s+/g, ''), val = mm[2].trim();
+    const mm = /^\s*([-*•]|\d+[.)])?\s*([^:：]{1,20})[:：]\s*(.*)$/.exec(line); if (!mm) return;
+    const key = mm[2].replace(/\s+/g, ''), val = mm[3].trim();
     const k = KEY_OF.find(([r]) => r.test(key));
-    if (!k) { const t = mm[1].trim(); if (val && EXTRA_TITLE.test(t)) (c.extra = c.extra || []).push({ title: t, body: val }); return; }
+    //  모르는 이름의 줄 = 더한 항목. 단 줄머리(- · 1.)가 붙은 줄은 위 줄의 하위 목록이고(«- 올리기: 음성 업로드»), 링크 한 줄도 아니다.
+    if (!k) { const t = mm[2].trim(); if (!mm[1] && val && EXTRA_TITLE.test(t) && !URL_HEAD.test(t) && !val.startsWith('//')) (c.extra = c.extra || []).push({ title: t, body: val }); return; }
     hit = true;
     if (k[1] === 'can') c.can = splitList(val); else c[k[1]] = val;
   });
@@ -202,7 +207,7 @@ const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 �
 export function planBrief(what: string, place: StudioPlace, name = ''): string {
   const desc = String(what || '').trim(), nm = String(name || '').trim();
   const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
-  return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 이름 줄에 그대로). ` : ''}${PLACE[place].say}\n`
+  return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 ${LABEL.name} 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + `아직 만들지 말고, ${BENCH} `
     + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · ' + LABEL.can + '은 셋을 · 로 · ' + LABEL.notify + '은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · ' + LABEL.ref + '는 어디서 무엇을 가져왔는지):\n'
     + cardText(emptyCard());

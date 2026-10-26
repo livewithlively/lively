@@ -46,6 +46,16 @@ check(/^\[\[기획카드\]\]\n앱 이름: 회의 안건\n/.test(txt) && /주요 
   check(/\n추가 알림: 매주 월요일 요약\n\[\[/.test(x3) && !!b3 && b3.notify === "승인되면 올린 사람에게" && b3.extra && b3.extra[0].title === "추가 알림", "X3 정해진 줄 이름과 같은 제목은 「추가 …」 로 — 정해진 「알림」 을 덮지 않는다", x3);
   const b4 = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n참고한 서비스: [Otter 블로그](https://otter.ai/blog), [Fireflies\nSkills](https://fireflies.ai/blog/), 앱스토어\n결재 순서: 팀장\n[[/기획카드]]");
   check(b4 && JSON.stringify(b4.extra) === JSON.stringify([{ title: "결재 순서", body: "팀장" }]), "X4 링크가 이어진 조각 줄은 더한 항목이 아니다(제목 꼴만)", b4 && b4.extra);
+  //  격리 리뷰 — 한 줄에 주소만 둔 참고 목록(«https://…» · «- https://…»)이 «https» 항목으로 새던 것
+  const b4b = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n참고한 서비스: Otter\nhttps://otter.ai/blog\n- https://fireflies.ai/x\nHTTP://a.b/c\n[[/기획카드]]");
+  check(b4b && b4b.ref === "Otter" && !b4b.extra, "X4 주소만 둔 줄(https://…)도 더한 항목이 아니다", b4b && b4b.extra);
+  //  줄머리(- · 1.)가 붙은 «이름: 값» 은 위 줄의 하위 목록이다 — 더한 항목이 아니다(정해진 이름이면 종전대로 그 줄).
+  const b6 = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n주요 기능: 올리기 · 찾기 · 넣기\n- 올리기: 음성 업로드\n1. 찾기: 날짜와 낱말\n- 첫 화면: 목록\n결재 순서: 팀장\n[[/기획카드]]");
+  check(b6 && b6.first === "목록" && b6.can.length === 3 && JSON.stringify(b6.extra) === JSON.stringify([{ title: "결재 순서", body: "팀장" }]), "X6 줄머리가 붙은 하위 목록은 더한 항목이 아니다 · 줄머리 붙은 정해진 줄은 종전대로", b6);
+  //  쓴 제목은 다시 읽힌다 — 읽을 수 없는 글자(& / ( ) -)는 띄어쓰기로 바꿔 쓴다.
+  const x7 = F.cardText({ ...NWC, extra: [{ title: "Q&A", body: "자주 묻는 것" }, { title: "결재(팀장)", body: "먼저" }, { title: "2단계-승인", body: "재무" }] }), b7 = F.parseCard(x7);
+  check(!!b7 && JSON.stringify((b7.extra || []).map((x) => x.title)) === JSON.stringify(["Q A", "결재 팀장", "2단계 승인"]) && (b7.extra || []).length === 3, "X7 기호가 든 제목도 쓰고 다시 읽으면 남는다(기호는 띄어쓰기로)", x7);
+  check(/기획 카드 앱 이름 줄에 그대로/.test(F.planBrief("출장비 정리", "both", "출장비")), "L4 planBrief 의 이름 줄도 새 이름(앱 이름)");
   const x5 = F.cardText({ name: "옛 앱", who: "", items: "", can: [], not: "", first: "" });
   check(/\n참고한 서비스: \n\[\[\/기획카드\]\]$/.test(x5) && !/undefined/.test(x5) && x5.split("\n").length === 10, "X5 옛 카드(더한 항목 없음) — 덧줄 · undefined 없음", x5);
 }
