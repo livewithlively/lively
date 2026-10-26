@@ -606,18 +606,21 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   //  실측에선 테스트가 돈 뒤 `__warm__` 보조 서버 프로세스까지 남아 있었다).
   //  · version: `tmux -V` 가 0 으로 끝났으면 그 출력, 아니면 null(tmux 없음)
   //  · probe:   전용 소켓으로 `list-sessions` 가 0 으로 끝났으면 그 출력, 아니면 null(= "no server running" — 격리된 새 소켓의 정상 응답)
-  //  · fgVisible: 대조군 — 런처 없이 가장 단순한 꼴(`sh -c 'set -m; sleep …; exit'`)로 띄운 자식을 tmux 가 전면으로 보나.
-  //     이것조차 'sh' 로 보이면 런처가 아니라 **커널**이 터미널의 전면 프로세스 그룹을 tmux 에 안 보여 주는 것이다 — gVisor
+  //  · fgSeen: 대조군 — 런처 없이 가장 단순한 꼴(`sh -c 'set -m; sleep …; exit'`)로 띄운 자식을 tmux 가 **무엇으로** 보나(관측값).
+  //     이것조차 셸로 보이면 런처가 아니라 **커널**이 터미널의 전면 프로세스 그룹을 tmux 에 안 보여 주는 것이다 — gVisor
   //     (중앙 박스 세션 컨테이너)는 set -m 으로 자식이 제 그룹을 갖는데도 tpgid 를 0 으로 보고한다(#5029 실측). 그 자리에선
   //     E12 의 관측 자체가 성립하지 않는다(중앙 박스의 실제 세션은 box-spawn 컨테이너 너머라 이 판정에 기대지도 않는다).
-  function e12SkipReason(platform: NodeJS.Platform, version: () => string | null, probe: () => string | null, fgVisible: () => boolean): string | null {
+  //     ⚠ 셸 이름을 **봤을 때만** 건너뛴다 — 빈 값(tmux 가 안 떴다 · 죽었다)까지 커널 탓으로 돌리면 런처 회귀 시험(#1535)이
+  //      엉뚱한 이유를 달고 꺼진다. 그땐 E12 를 그대로 돌려 빨간불로 드러낸다.
+  function e12SkipReason(platform: NodeJS.Platform, version: () => string | null, probe: () => string | null, fgSeen: () => string): string | null {
     if (platform === "win32") return "윈도우 — 네이티브 mux(psmux)는 -S 소켓 격리가 없어 kill-server 가 PC 의 모든 세션을 죽인다";
     const v = version();
     if (v === null) return "tmux 없음(최소 컨테이너)";
     if (/psmux/i.test(v)) return "psmux — -S 소켓 격리를 무시한다(kill-server = 전 세션 종료)";
     const seen = probe();
     if (seen !== null && seen.trim() !== "") return "전용 소켓에서 이미 세션이 보인다 — 소켓 격리가 안 되는 mux 라 kill-server 를 칠 수 없다";
-    if (!fgVisible()) return "이 커널은 터미널의 전면 프로세스 그룹을 tmux 에 보여 주지 않는다(대조군 set -m 자식도 셸로 보인다 — gVisor)";
+    const seenFg = fgSeen();
+    if (SHELL_CMDS.has(seenFg)) return `이 커널은 터미널의 전면 프로세스 그룹을 tmux 에 보여 주지 않는다(대조군 set -m 자식이 '${seenFg}' 로 보인다 — gVisor)`;
     return null;
   }
   // 판정 픽스처 — 이 표가 틀리면 아래 실행이 개발자 PC 의 세션을 죽인다. 실행 여부와 무관하게 늘 검사한다.
@@ -625,17 +628,18 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     let spawned = 0;
     const V_TMUX = "tmux 3.4";
     const V_PSMUX = "tmux 3.3.7\npsmux 3.3.7 (05cc5d4 2026-07-20)";   // 실측(hammurabi)
-    const FG = () => true;
-    ok2(e12SkipReason("win32", () => { spawned++; return V_PSMUX; }, () => { spawned++; return "box-yoon-1: 1 windows"; }, () => { spawned++; return true; }) !== null, "E12g 윈도우는 무조건 건너뛴다");
+    const FG = () => "sleep";
+    ok2(e12SkipReason("win32", () => { spawned++; return V_PSMUX; }, () => { spawned++; return "box-yoon-1: 1 windows"; }, () => { spawned++; return "sleep"; }) !== null, "E12g 윈도우는 무조건 건너뛴다");
     ok2(spawned === 0, "E12g 윈도우 판정은 tmux 를 spawn 하지 않는다(실 mux 에 부작용 0)");
     ok2(e12SkipReason("linux", () => null, () => null, FG) !== null, "E12g tmux 가 없으면 건너뛴다");
     ok2(e12SkipReason("darwin", () => V_PSMUX, () => null, FG) !== null, "E12g -V 가 psmux 를 밝히면 플랫폼과 무관하게 건너뛴다");
     let fgAsked = 0;
-    ok2(e12SkipReason("linux", () => V_TMUX, () => "box-yoon-1: 1 windows (created …)", () => { fgAsked++; return true; }) !== null, "E12g 전용 소켓 ls 에 실 세션이 보이면 격리 실패 — 건너뛴다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => "box-yoon-1: 1 windows (created …)", () => { fgAsked++; return "sleep"; }) !== null, "E12g 전용 소켓 ls 에 실 세션이 보이면 격리 실패 — 건너뛴다");
     ok2(fgAsked === 0, "E12g 격리가 안 되는 mux 에선 대조군 세션도 띄우지 않는다");
     ok2(e12SkipReason("linux", () => V_TMUX, () => null, FG) === null, "E12g 진짜 tmux + 새 소켓('no server running') 이면 돈다");
     ok2(e12SkipReason("linux", () => V_TMUX, () => "", FG) === null, "E12g 전용 소켓이 비어 있으면(0 세션) 돈다");
-    ok2(e12SkipReason("linux", () => V_TMUX, () => null, () => false) !== null, "E12g 대조군 set -m 자식도 셸로 보이면(gVisor) 건너뛴다 — 런처 탓이 아니다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => null, () => "sh") !== null, "E12g 대조군 set -m 자식도 셸로 보이면(gVisor) 건너뛴다 — 런처 탓이 아니다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => null, () => "") === null, "E12g 대조군을 못 봤으면(tmux 가 안 떴다) 건너뛰지 않는다 — 커널 탓으로 돌려 런처 시험을 끄지 않는다");
   }
   // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
   //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼
@@ -663,13 +667,14 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     }, () => {
       //  끝에 명령을 하나 더 둬야 sh 가 sleep 을 exec 로 바꿔치지 않고 자식으로 띄운다(그래야 전면이 옮겨 가는지를 본다).
       const t = (...a: string[]): string => (spawnSync("tmux", ["-S", E12_SOCK, ...a], { encoding: "utf8" }).stdout || "").trim();
+      let seen = "";
       try {
         t("new-session", "-d", "-s", "e12ctl", "-x", "80", "-y", "24", "sh", "-c", "set -m; sleep 30; exit $?");
-        for (let i = 0; i < 50; i++) {
-          if (t("display-message", "-p", "-t", "e12ctl", "#{pane_current_command}") === "sleep") return true;
-          spawnSync("sleep", ["0.1"]);
+        for (let i = 0; i < 50 && seen !== "sleep"; i++) {
+          seen = t("display-message", "-p", "-t", "e12ctl", "#{pane_current_command}");
+          if (seen !== "sleep") spawnSync("sleep", ["0.1"]);
         }
-        return false;
+        return seen;
       } finally { t("kill-server"); }
     });
     if (skip) console.log(`skip E12 (${skip})`);

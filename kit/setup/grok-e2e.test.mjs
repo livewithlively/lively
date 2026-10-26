@@ -208,8 +208,17 @@ try {
     const probeSeen = (d.hooks || []).some((h) => JSON.stringify(h).includes("lively-e0-probe"));
     const ours = (d.hooks || []).filter((h) => String(h.target || "").includes("grok-adapter.mjs"));
     const events = [...new Set(ours.map((h) => h.event))].sort();
-    if (!probeSeen && !ours.length) console.log(`skip E0a 우리 훅 10이벤트 로드 — 이 grok 판(${d.grokVersion || "?"})의 inspect 는 전역 훅을 목록에 안 낸다(대조군도 안 보임) · 로드는 E2a 이후 발화로 본다`);
-    else eq("E0a 우리 훅 10이벤트 로드", events, ["notification", "post_tool_use", "pre_compact", "pre_tool_use", "post_compact", "session_end", "session_start", "stop", "subagent_stop", "user_prompt_submit"].sort());
+    const WANT = ["notification", "post_tool_use", "pre_compact", "pre_tool_use", "post_compact", "session_end", "session_start", "stop", "subagent_stop", "user_prompt_submit"].sort();
+    if (!probeSeen && !ours.length) {
+      //  로드를 못 재는 판 — 설치기가 쓴 훅 파일이 열 이벤트를 다 선언했는지는 정적으로라도 본다. 그중 발화로 증명되는 것은
+      //   E2a 의 여섯뿐이라(스텁 세션이 압축·알림·서브에이전트를 안 일으킨다) 나머지 넷은 «선언만 확인» 으로 남는다고 밝힌다.
+      let declared = [];
+      try { declared = Object.keys(JSON.parse(readFileSync(join(GROKHOME, "hooks", "lively-grok.json"), "utf8")).hooks || {}); } catch { /* 없음 */ }
+      const snake = declared.map((e) => e.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase()).sort();
+      eq("E0a′ 우리 훅 파일이 열 이벤트를 선언(정적 — 이 판의 inspect 는 전역 훅을 안 보인다)", snake, WANT);
+      console.log(`skip E0a 우리 훅 10이벤트 로드 — 이 grok 판(${d.grokVersion || "?"})의 inspect 는 전역 훅을 목록에 안 낸다(대조군도 안 보임) · `
+        + "로드는 E2a 이후 발화로 본다 — 발화로 안 재는 넷(notification · pre_compact · post_compact · subagent_stop)은 선언만 확인했다");
+    } else eq("E0a 우리 훅 10이벤트 로드", events, WANT);
     const mcp = (d.mcpServers || []).find((m) => m.name === "lively");
     eq("E0b MCP lively 등재(configToml 출처)", [!!mcp, mcp?.source?.type], [true, "configToml"]);
   }

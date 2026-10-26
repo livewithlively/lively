@@ -50,7 +50,7 @@ if (!CODEX_BIN) {
 const CODEX_REAL = (() => { try { return realpathSync(CODEX_BIN); } catch { return CODEX_BIN; } })();
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
-// realpath — macOS 의 tmpdir 은 /var → /private/var 심링크라 seatbelt(workspace-write) 경로 판정이 어긋날 수 있다.
+// realpath — macOS 의 tmpdir 은 /var → /private/var 심링크다. 실툴은 샌드박스 없이 돌지만(runCodex 머리말) 마커·cwd 경로를 한 표기로 맞춰 둔다.
 const SB = realpathSync(mkdtempSync(join(tmpdir(), "codex-e2e-")));
 const HOME = join(SB, "home");
 const CODEXHOME = join(HOME, ".codex");
