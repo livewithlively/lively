@@ -10,7 +10,8 @@
 //  T3 세션이 돈다 — 40초가 지나도 멈췄다 하지 않는다   T4 턴이 끝남(idle) — 29초엔 아직 · 31초엔 막대 · 가운데 판이 멈춤으로
 //  T5 「이어서 만들기」 — 이어서 하라는 글(걸음 표식 · app_save) 1건 · 멈춤 표시를 걷는다 · 60초 동안 다시 말하지 않는다
 //  T6 컴퓨터가 꺼짐 — 컴퓨터 이름 · 단추 잠김   T7 세션이 꺼짐(줄 없음) — 되살리기 뒤 글   T8 확인을 기다림 — 「AI 세션 보기」
-//  T9 지어낸 줄(observed:false) — 멈췄다 하지 않는다   T10 상태를 못 읽음 — 멈췄다 하지 않는다   W 페이지 예외 없음
+//  T9 지어낸 줄(observed:false) — 멈췄다 하지 않는다   T10 상태를 못 읽음 — 멈췄다 하지 않는다
+//  T11 막 연 만들기 — 2분 동안은 말하지 않는다   T12 ② 카드 기다림 · 다시 돌면 걷힌다   T13 닫으면 더 묻지 않는다   W 페이지 예외 없음
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 T1 · T4~T8 이 빨갛다).
 import { execFileSync } from "node:child_process";
@@ -64,7 +65,7 @@ async function PAGE_MAIN() {
   const host = document.getElementById("host");
   const $ = (s) => host.querySelector(s), $$ = (s) => [...host.querySelectorAll(s)];
   localStorage.setItem("lively_v2_app_studio_seen", JSON.stringify({ intro: 1, coach: { plan: 1, draft: 1, check: 1, put: 1 } }));
-  const base = { sid: "box-s1", pid: 0, what: "회의 녹음 정리", place: "both", appId: "", draftId: "mn", known: [], at: Date.now(), stage: "draft", card: window.__CARD, round: 0, from: 5, mode: "new", title: "회의록", named: true, reached: 2 };
+  const base = { sid: "box-s1", pid: 0, what: "회의 녹음 정리", place: "both", appId: "", draftId: "mn", known: [], at: Date.now() - 3600000, stage: "draft", card: window.__CARD, round: 0, from: 5, mode: "new", title: "회의록", named: true, reached: 2 };
   const view = () => ({ now: txt($(".v2-studio-now-t")), btns: $$(".v2-studio-now button").map((b) => [txt(b), b.disabled]), wait: txt($(".v2-studio-wait b")), spin: !!$(".v2-studio-wait .v2-studio-spin"),
     steps: $$(".v2-studio-steps span").map((n) => (n.classList.contains("done") ? "done" : n.classList.contains("on") ? "on" : "todo")) });
   const mount = async (rec, row) => {
@@ -112,12 +113,31 @@ async function PAGE_MAIN() {
   window.__step = "T9";
   await mount({ ...base }, { agentState: "offline", observed: false });
   await sleep(32000);
-  R.t9 = view();
+  R.t9 = { ...view(), rows: window.__calls.filter((c) => c === "row").length };
   window.__step = "T10";
   await mount({ ...base }, "fail");
   await sleep(32000);
   R.t10 = { ...view(), rows: window.__calls.filter((c) => c === "row").length };
-  St.closeAppStudio();
+  window.__step = "T11";
+  //  막 연 만들기(세션이 뜨는 중) — 턴이 안 돌아도 2분 동안은 멈췄다 하지 않는다 · 그 뒤엔 말한다
+  await mount({ ...base, at: Date.now() }, { agentState: "idle" });
+  await sleep(110000);
+  R.t11 = { early: view() };
+  await sleep(80000);   // 2분 뒤부터 30초 이어지면(열고 ~170초)
+  R.t11.late = view();
+  window.__step = "T12";
+  //  멈춤이 뜬 뒤 다른 길로 새 일을 맡겼다(기획 카드 고쳐 달라기) — 지난 멈춤이 곧바로 걷힌다
+  await mount({ ...base, stage: "plan", card: null }, { agentState: "idle" });
+  await sleep(32000);
+  R.t12 = { before: view() };
+  window.__row = { agentState: "busy", working: true };
+  await sleep(10500);
+  R.t12.cleared = view();
+  window.__step = "T13";
+  //  닫으면 세션 상태를 더 묻지 않는다
+  St.closeAppStudio(); window.__calls.length = 0;
+  await sleep(30000);
+  R.t13 = window.__calls.filter((c) => c === "row").length;
   R.errors = errors;
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
 }
@@ -160,8 +180,11 @@ check(R.t6 && /LVLYui-MacBookAir\)가 꺼져 있거나 잠들어/.test(R.t6.now 
 check(R.t7 && /세션이 꺼져서/.test(R.t7.v.now || "") && R.t7.pressed, "T7 세션이 꺼짐(줄 없음) — 까닭과 「이어서 만들기」", R.t7 && R.t7.v);
 same(R.t7 && R.t7.calls, ["restore", "prompt"], "T7 「이어서 만들기」 — 세션을 되살린 뒤 글을 보낸다");
 check(R.t8 && /확인을 기다리고 있어요/.test(R.t8.now || "") && R.t8.btns.some(([t]) => t === "AI 세션 보기"), "T8 AI 가 확인을 기다림 — 「AI 세션 보기」", R.t8);
-check(R.t9 && !stalled(R.t9) && R.t9.spin, "T9 지어낸 줄(observed:false) — 모르면 멈췄다 하지 않는다", R.t9);
+check(R.t9 && !stalled(R.t9) && R.t9.spin && R.t9.rows >= 3, "T9 지어낸 줄(observed:false) — 모르면 멈췄다 하지 않는다", R.t9);
 check(R.t10 && !stalled(R.t10) && R.t10.spin && R.t10.rows >= 3, "T10 상태를 못 읽으면 멈췄다 하지 않는다", R.t10);
+check(R.t11 && !stalled(R.t11.early) && /끝내지 못하고 멈췄어요/.test(R.t11.late.now || ""), "T11 막 연 만들기는 2분 동안 멈췄다 하지 않는다(세션이 뜨는 틈) · 그 뒤엔 말한다", R.t11);
+check(R.t12 && /끝내지 못하고 멈췄어요/.test(R.t12.before.now || "") && !stalled(R.t12.cleared), "T12 ② 카드 기다림도 멈춤을 말하고 · 다시 돌면 걷힌다", R.t12);
+same(R.t13, 0, "T13 닫으면 세션 상태를 더 묻지 않는다");
 same(R.errors, [], "W  페이지 예외 없음");
 
 console.log(`\n#4632 앱빌더 멈춤 알아보기: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
