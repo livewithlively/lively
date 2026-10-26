@@ -152,19 +152,30 @@ export interface AssetCtx {
   known: Map<string, string>;
   stats: AssetStats;
   fetchImpl?: typeof fetch;
+  /** 새로 받거나 못 받은 첨부가 ASSET_PROGRESS_EVERY 개 쌓일 때마다 부른다 — 수집 추적기는 15분 무출력이면 run 을 죽인다
+   *  (첫 판에서 위시스트 첨부 2,227개를 받다 16분째 «정체 감지» 로 끊겼다). 이미 있는 파일은 요청이 없어 세지 않는다. */
+  onProgress?: (s: AssetStats) => void;
 }
+export const ASSET_PROGRESS_EVERY = 25;
 
-export function assetCtx(token: string, dir: string, fetchImpl?: typeof fetch): AssetCtx {
+export function assetCtx(token: string, dir: string, fetchImpl?: typeof fetch, onProgress?: (s: AssetStats) => void): AssetCtx {
   fs.mkdirSync(dir, { recursive: true });
   const known = new Map<string, string>();
   for (const f of fs.readdirSync(dir)) { const m = f.match(/^([0-9a-f]{24})\.[a-z0-9]{1,8}$/); if (m) known.set(m[1], f); }
-  return { token, dir, known, stats: { fetched: 0, existing: 0, failed: 0, tooLarge: 0 }, fetchImpl };
+  return { token, dir, known, stats: { fetched: 0, existing: 0, failed: 0, tooLarge: 0 }, fetchImpl, onProgress };
 }
 
 async function fetchAsset(ctx: AssetCtx, url: string, text: string): Promise<string | null> {
   const key = linearAssetKey(url);
   const have = ctx.known.get(key);
   if (have) { ctx.stats.existing++; return have; }
+  const file = await downloadAsset(ctx, key, url, text);
+  const s = ctx.stats;
+  if ((s.fetched + s.failed + s.tooLarge) % ASSET_PROGRESS_EVERY === 0) ctx.onProgress?.(s);
+  return file;
+}
+
+async function downloadAsset(ctx: AssetCtx, key: string, url: string, text: string): Promise<string | null> {
   const f = ctx.fetchImpl ?? fetch;
   for (let attempt = 0; attempt < 2; attempt++) {
     let res: Response;
@@ -265,7 +276,8 @@ export const linearConnector: Connector = {
     const viewer = await gql<{ viewer?: { organization?: { urlKey?: string; id?: string } } }>(token, VIEWER_QUERY, {});
     const instance = viewer.viewer?.organization?.urlKey || viewer.viewer?.organization?.id || "linear";
 
-    const assets = assetCtx(token, stateDir("linear-assets"));
+    const assets = assetCtx(token, stateDir("linear-assets"), undefined, (a) =>
+      console.error(`[linear] 첨부 받는 중 — 새로 받음 ${a.fetched} · 이미 있음 ${a.existing} · 실패 ${a.failed} · 상한 초과 ${a.tooLarge}`));
     const sinceIso = sinceFloor(opts?.since, cfg.backfill_since);
     const filter = issueFilter(sinceIso, teams);
     let after: string | null = null;

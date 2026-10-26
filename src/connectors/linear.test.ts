@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseTeamKeys, issueFilter, issueItem, commentItem, documentItem, commentActor, assetCtx, localizeLinearUploads, LINEAR_ASSET_ROUTE, MAX_ASSET_BYTES } from "./linear.js";
+import { parseTeamKeys, issueFilter, issueItem, commentItem, documentItem, commentActor, assetCtx, localizeLinearUploads, LINEAR_ASSET_ROUTE, MAX_ASSET_BYTES, ASSET_PROGRESS_EVERY } from "./linear.js";
 import { parseLinearTokenResponse, buildLinearAuthorizeUrl } from "../org/credentials/linear-oauth.js";
 import { routeIngestV6 } from "../org/ingest/ingest-classify.js";
 import { sourceKindOf } from "../v6/mirror/mirror-source.js";
@@ -119,7 +119,24 @@ await (async () => {
     const out = String(await localizeLinearUploads(`![r.png](${UP("r")})`, assetCtx("tok", d, f.fn)));
     assert.equal(f.calls.length, 2); assert.equal(filesIn(d).length, 1); assert.ok(out.includes(LINEAR_ASSET_ROUTE));
   }
-  console.log("ok  #5012 업로드 첨부 — 받기·재사용·실패·상한·429");
+  // 11 진행 신호 — 추적기는 15분 무출력이면 run 을 죽인다. 새로 받거나 못 받은 것이 25개 쌓일 때마다 한 번(경계 24 → 0 · 25 → 1),
+  //  이미 있는 파일(요청 없음)은 세지 않는다.
+  {
+    const urls = (n: number, p: string): string[] => Array.from({ length: n }, (_, k) => UP(`${p}${k}`));
+    const body = (us: string[]): string => us.map((u) => `![i.png](${u})`).join(" ");
+    const run = async (us: string[], status: number, dir = tmpDir()): Promise<number[]> => {
+      const seen: number[] = [];
+      const f = fakeFetch(Object.fromEntries(us.map((u) => [u, [{ status, type: "image/png" }]])));
+      await localizeLinearUploads(body(us), assetCtx("tok", dir, f.fn, (s) => seen.push(s.fetched + s.failed + s.tooLarge)));
+      return seen;
+    };
+    assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY - 1, "a"), 200), [], "24개에서 신호를 냈다");
+    const d = tmpDir();
+    assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY * 2, "b"), 200, d), [ASSET_PROGRESS_EVERY, ASSET_PROGRESS_EVERY * 2]);
+    assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY, "c"), 500), [ASSET_PROGRESS_EVERY], "실패도 진행이다 — 실패만 이어져도 침묵하면 안 된다");
+    assert.deepEqual(await run(urls(ASSET_PROGRESS_EVERY * 2, "b"), 200, d), [], "이미 받은 파일은 세지 않는다");
+  }
+  console.log("ok  #5012 업로드 첨부 — 받기·재사용·실패·상한·429·진행 신호");
 })();
 
 t("#5012 댓글 작성자 — 사람 › 외부 작성자(봇 아님) › 연동(봇) › 없음", () => {
