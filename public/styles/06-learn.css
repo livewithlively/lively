@@ -341,7 +341,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .aiacct-login { flex: 0 0 100%; margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg-tint); }
 .aiacct-addrrow { display: flex; gap: 8px; align-items: center; min-width: 0; padding: 11px 12px; }
 .aiacct-addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: var(--line-row); border-radius: 8px; padding: 9px 11px; font-size: 11.5px; color: var(--ink-sub); font-family: ui-monospace, Menlo, monospace; }
-.aiacct-code { display: block; margin: 0 12px 11px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); font-family: ui-monospace, Menlo, monospace; font-size: 16px; font-weight: 700; letter-spacing: 2px; color: var(--ink); cursor: pointer; }
+/* #5058 코드 + [복사] — 코드를 누르면 복사된다는 걸 사람이 예측 못 해, 이름 붙은 버튼을 곁에 둔다 */
+.aiacct-coderow { display: flex; gap: 8px; align-items: stretch; margin: 0 12px 11px; }
+.aiacct-coderow .aiacct-copy { flex: none; }
+.aiacct-code { display: block; flex: 1; min-width: 0; text-align: left; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); font-family: ui-monospace, Menlo, monospace; font-size: 16px; font-weight: 700; letter-spacing: 2px; color: var(--ink); cursor: pointer; }
 .aiacct-paste { display: flex; gap: 8px; margin: 0 12px 11px; }
 .aiacct-paste .input { flex: 1; min-width: 0; }
 .aiacct-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }

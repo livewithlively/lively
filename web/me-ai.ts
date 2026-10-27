@@ -14,7 +14,7 @@ import { qmark } from './lib/qmark.js';
 //  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다(처음 설정과 공유). 여기선 그리기만 한다.
 import { isInlineCardHarness, startInlineAiLogin, HEADLESS_INLINE, type InlineLoginHandle } from './lib/ai-login-inline.js';
 //  (#4970) 행 아래 펼쳐지는 로그인 칸은 한 벌이다 — 처음 설정 «AI 연결» 과 같은 부품을 쓴다.
-import { aiLoginPanel, confirmSharedLogin } from './ai-login-panel.js';
+import { aiLoginPanel, aiLoginCodeRow, confirmSharedLogin } from './ai-login-panel.js';
 
 // ── [내 설정 ▸ 내 AI 계정] 박스 — 내 AI 계정(#1085). ──
 //  '내 AI 에게 무엇을 알려줄까'(개인 규칙, 내 프로필 창)와 달리 이 박스는 '내 AI 가 **무엇으로, 누구 계정으로** 도는가'다.
@@ -157,8 +157,7 @@ function headlessParts(h: any, reload: () => void) {
   const paint = () => {
     const addr = el('code', { class: 'aiacct-addr', text: '주소를 받는 중이에요…' });
     const open = el('a', { class: 'btn btn-primary btn-sm', target: '_blank', rel: 'noopener', text: '열기 ↗', hidden: true });
-    const code = el('button', { type: 'button', class: 'aiacct-code', hidden: true, title: '눌러서 복사' });
-    code.onclick = () => { void navigator.clipboard?.writeText(code.textContent || '').then(() => toast('복사했어요')); };
+    const code = aiLoginCodeRow();
     const pasteRow = el('div', { class: 'aiacct-paste', hidden: true });
     const inp = el('input', { class: 'input', type: 'text', placeholder: '브라우저에서 받은 코드', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
     const put = el('button', { class: 'btn btn-primary btn-sm', text: '넣기' }) as HTMLButtonElement;
@@ -176,14 +175,14 @@ function headlessParts(h: any, reload: () => void) {
     pasteRow.append(inp, put);
     panel.replaceChildren(
       el('div', { class: 'aiacct-addrrow' }, addr, open),
-      hint, code, pasteRow,
+      hint, code.row, pasteRow,
       el('div', { class: 'aiacct-foot' },
         el('button', { type: 'button', class: 'ob-linkbtn', text: '다시 시도', onclick: () => { handle?.stop(); run(true); } }),
         el('button', { type: 'button', class: 'ob-linkbtn', text: '토큰을 직접 넣기', onclick: () => pasteToken() }),
         noteEl));
     return {
       url: (u: string) => { addr.textContent = u.replace(/^https?:\/\//, ''); open.setAttribute('href', u); open.hidden = false; },
-      code: (c: string) => { code.textContent = c; code.hidden = false; },
+      code: (c: string) => code.set(c),
       needsPaste: () => { pasteRow.hidden = false; setTimeout(() => inp.focus(), 100); },
       done: () => {
         panel.replaceChildren(el('div', { class: 'aiacct-ok', text: '✓ 연결했어요. 이제 사람 없이 도는 작업이 이 계정으로 실행됩니다.' }));

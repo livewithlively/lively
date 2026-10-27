@@ -36,6 +36,26 @@ export function confirmSharedLogin(a: AiLoginAccount): boolean {
   return confirm(a.label + ' 에 로그인할까요?\n\n이 서버는 구성원별 계정 격리가 없어, 여기서 로그인하면 이 서버의 ' + a.label + ' 계정이 통째로 바뀝니다 — 다른 구성원의 세션도 그 계정을 쓰게 됩니다.');
 }
 
+/**
+ * 일회용 코드 한 줄 — 코드와 [복사] 버튼(#5058). 종전엔 코드 자체가 «눌러서 복사» 버튼이었는데, 그렇게 될 줄
+ *  사람이 예측하지 못했다 → 복사는 이름 붙은 버튼이 맡고, 코드를 눌러도 여전히 복사된다(익숙해진 사람용).
+ *  [나] 창 [AI 계정 연결](me-ai.ts)의 자동 작업용 카드도 이 한 벌을 쓴다.
+ */
+export function aiLoginCodeRow(): { row: HTMLElement; set(c: string): void } {
+  const code = el('button', { type: 'button', class: 'aiacct-code', title: '눌러서 복사' });
+  const btn = el('button', { type: 'button', class: 'btn btn-sm aiacct-copy', text: '복사' }) as HTMLButtonElement;
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const copy = () => {
+    void navigator.clipboard?.writeText(code.textContent || '').then(() => {
+      btn.textContent = '복사됨 ✓'; clearTimeout(t); t = setTimeout(() => { btn.textContent = '복사'; }, 1800);
+      toast('코드를 복사했어요 — 열린 창에 붙여넣으세요');
+    }, () => toast('복사하지 못했어요 — 코드를 직접 입력해 주세요', true));
+  };
+  code.onclick = copy; btn.onclick = copy;
+  const row = el('div', { class: 'aiacct-coderow', hidden: true }, code, btn);
+  return { row, set: (c) => { code.textContent = c; row.hidden = false; } };
+}
+
 export interface AiLoginPanel {
   /** 펼쳐지는 칸 — 부른 쪽이 화면에 붙인다(머리말 ⚠). */
   panel: HTMLElement;
@@ -94,8 +114,7 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
   const paintCard = () => {
     const addr = el('code', { class: 'aiacct-addr', text: '주소를 받는 중이에요…' });
     const open = el('a', { class: 'btn btn-primary btn-sm', target: '_blank', rel: 'noopener', text: '열기 ↗', hidden: true });
-    const code = el('button', { type: 'button', class: 'aiacct-code', hidden: true, title: '눌러서 복사' });
-    code.onclick = () => { void navigator.clipboard?.writeText(code.textContent || '').then(() => toast('복사했어요')); };
+    const code = aiLoginCodeRow();
     const pasteRow = el('div', { class: 'aiacct-paste', hidden: true });
     const inp = el('input', { class: 'input', type: 'text', placeholder: '브라우저에서 받은 코드' }) as HTMLInputElement;
     const put = el('button', { class: 'btn btn-primary btn-sm', text: '넣기' }) as HTMLButtonElement;
@@ -111,14 +130,14 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
     noteEl = el('span', { class: 'aiacct-note' });
     panel.replaceChildren(
       el('div', { class: 'aiacct-addrrow' }, addr, open),
-      code, pasteRow,
+      code.row, pasteRow,
       el('div', { class: 'aiacct-foot' },
         el('button', { type: 'button', class: 'ob-linkbtn', text: '다시 시도', onclick: () => { handle?.stop(); run(true); } }),
         noteEl,
         el('button', { type: 'button', class: 'ob-linkbtn aiacct-dev', text: '터미널에서 직접 로그인 (개발자용) ↗', onclick: () => openWindow() })));
     return {
       url: (u) => { addr.textContent = u.replace(/^https?:\/\//, ''); open.setAttribute('href', u); open.hidden = false; },
-      code: (c) => { code.textContent = c; code.hidden = false; },
+      code: (c) => code.set(c),
       needsPaste: () => { pasteRow.hidden = false; setTimeout(() => inp.focus(), 100); },
       done: () => { note(''); panel.replaceChildren(el('div', { class: 'aiacct-ok', text: '✓ 로그인이 끝났어요' })); setTimeout(() => void reload(), 800); },
       //  ⚠ **시작 자체가 실패하면 터미널로 떨어진다**(막다른 카드 금지의 실물).
