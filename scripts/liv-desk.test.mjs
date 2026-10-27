@@ -86,7 +86,10 @@ check(/card\.dataset\.ask = JSON\.stringify\(ask\);/.test(CARDS) && /cur\.datase
 const LIV_CSS = read("public/styles/35-liv.css");
 check(!/class: 'liv-card liv-ask'/.test(CARDS) && /\n\.liv-ask \{[^}]*border: 1px solid[^}]*padding:[^}]*\}/.test(LIV_CSS),
   "W3″ ★ 물음 카드는 .liv-card 를 빌리지 않고 제 틀(테두리·여백)을 진다");
-check(/class: 'btn btn-sm btn-ghost liv-opt'/.test(CARDS), "W3″ 선택지는 바탕이 있는 버튼(btn-ghost) — 없으면 브라우저 기본 회색 버튼이 된다");
+// #5059 — 선택지는 btn-ghost 대신 제 카드(.liv-pick)가 바탕·테두리를 진다. 어느 쪽이든 «브라우저 기본 회색 단추» 가 되면 안 된다.
+check(/class: 'liv-pick', type: 'button'/.test(CARDS) && /\n\.liv-pick \{[^}]*border: 1px solid[^}]*background: var\(--bg\)[^}]*\}/.test(LIV_CSS),
+  "W3″ 선택지는 바탕·테두리가 있는 카드(.liv-pick) — 없으면 브라우저 기본 회색 버튼이 된다");
+check(/svcTile\(svc, o\.label, true\)/.test(CARDS), "#5059 앱 선택지는 [외부 앱 연결]과 같은 공식 로고 타일을 단다");
 check(!/livAskCard/.test(DESK), "W3 ★ 오른쪽 «리브» 칸이 물음 카드를 또 그린다 — 입력칸이 두 자리에 서면 어디에 넣을지 헷갈린다");
 check(/askLine\.hidden = !st\.secretAsk;/.test(DESK), "W3 오른쪽 칸은 «입력칸 위에서 기다린다» 한 줄만");
 check(/livAskCard\(st\.secretAsk, hooks\)/.test(BOARD), "W3 리브 화면(단독)은 물음 카드를 그린다(로컬 AI 링크로 온 사람이 넣는 자리)");
