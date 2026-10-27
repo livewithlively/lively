@@ -8,14 +8,16 @@
 //
 // 셀프호스팅(CP 주소 없음)·CP 가 같은 호스트(showGate 의 루프 방지 규칙과 동일)·깨진 주소 → null = 종전 게이트.
 // ⚠ 서브패스 CP(프리뷰 등)의 접두사를 보존한다 — pathname 을 덮어쓰면 다른 게이트웨이의 문을 두드린다(#1541 계열).
-export function logoutRedirectTarget(loginRedirectUrl: string | null | undefined, here: string): string | null {
+// returnTo=null 이면 돌아올 자리를 싣지 않는다(#5009) — 탈퇴로 워크스페이스가 지워진 뒤엔 돌아올 자리가 없다.
+//  to 가 없으면 CP 는 첫 화면(초대받은 이메일로 시작·대기자 등록)으로 보낸다(lvly-cloud returnto.ts logoutLanding).
+export function logoutRedirectTarget(loginRedirectUrl: string | null | undefined, here: string, returnTo: string | null = here): string | null {
   if (!loginRedirectUrl) return null;
   let cp: URL; let me: URL;
   try { cp = new URL(loginRedirectUrl, here); me = new URL(here); } catch { return null; }
   if (cp.host === me.host) return null;
   const base = cp.pathname.replace(/\/+$/, '');
   const door = new URL(`${cp.origin}${base}/auth/logout`);
-  door.searchParams.set('to', here);
+  if (returnTo) door.searchParams.set('to', returnTo);
   return door.toString();
 }
 

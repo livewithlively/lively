@@ -794,7 +794,7 @@ function accountDeleteModal(): void {
       }
       // 계정이 사라졌으므로 이 화면에 더 머물 이유가 없다 — 곧바로 내보낸다.
       bodyEl.replaceChildren(el('p', { class: 'admin-hint', text: '탈퇴했습니다. 로그아웃합니다.' }));
-      setTimeout(() => logout(), 1200);
+      setTimeout(() => logout(undefined, { accountGone: true }), 1200);
     });
     bodyEl.replaceChildren(form);
   })();
