@@ -24,9 +24,9 @@ import { aiLoginPanel, confirmSharedLogin } from './ai-login-panel.js';
 //   그러면 사람은 «어디로 돌아오지» 를 만나고 맥락이 끊긴다. 이제:
 //    · codex·claude·grok — 서버가 로그인 명령을 대신 돌리고 **주소·코드만** 이 행 아래 펼쳐 보여 준다.
 //    · agy·그 밖        — 주소·코드로 안 끝나므로 **터미널을 이 행 아래 액자로** 띄운다(?embed=1, #1744).
-//   그 통로의 정본은 lib/ai-login-inline.ts 이고, 칸(주소·코드 카드 · 터미널 액자 · «창으로 열기»)은 ai-login-panel.ts 한 벌을
+//   그 통로의 정본은 lib/ai-login-inline.ts 이고, 칸(주소·코드 카드 · 터미널 액자 · «터미널에서 직접 로그인»)은 ai-login-panel.ts 한 벌을
 //   처음 설정(v2/onboarding.ts «AI 연결»)과 함께 쓴다 — 화면 하나에서만 되는 것은 «된다» 가 아니고, 두 벌로 두면 실측으로 얻은 처방이 갈린다.
-//  ⚠ codex 는 하네스 세션을 열어선 안 된다(#1516) — 그 사연과 «창으로 열기» 의 규칙은 ai-login-panel.ts 머리말에 있다.
+//  ⚠ codex 는 하네스 세션을 열어선 안 된다(#1516) — 그 사연과 «터미널에서 직접 로그인» 의 규칙은 ai-login-panel.ts 머리말에 있다.
 //   device-auth 인 이유: 웹터미널은 원격이라 기본 플로우의 `http://localhost:1455`(서버의 localhost)에
 //   사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라 어느 브라우저에서든 된다(실측).
 function aiAccountParts(a, mySessions, reload, opts: { grid?: boolean } = {}) {

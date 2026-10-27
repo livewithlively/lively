@@ -57,7 +57,9 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
   const note = (t: string) => { if (noteEl) noteEl.textContent = t || ''; };
 
   /**
-   * 종전 «창으로 열기» — 어떤 갈래에서도 갇히지 않게 늘 곁에 둔다. 이미 만든 세션이 있으면 **그것**을 연다.
+   * «터미널에서 직접 로그인 (개발자용)» — 어떤 갈래에서도 갇히지 않게 늘 곁에 둔다. 이미 만든 세션이 있으면 **그것**을 연다.
+   *  (#5058) 종전 이름 «창으로 열기» 는 비개발자가 «로그인 창이 열리나» 하고 눌렀다가 터미널을 만났다 — 무엇이 열리는지
+   *   이름에 밝히고 회색 잔글씨로 낮춰, 주소·코드 카드로 끝낼 사람은 누를 일이 없게 한다.
    *
    *  ⚠ 창은 **사람이 누른 그 순간** 연다. `await` 뒤의 `window.open` 은 그 제스처와 끊겨 **팝업차단에
    *   조용히 막힌다**(#2055 에서 실제로 밟았다 — 오류도 안 난다). 그래서 빈 탭을 먼저 열어 두고,
@@ -112,8 +114,8 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
       code, pasteRow,
       el('div', { class: 'aiacct-foot' },
         el('button', { type: 'button', class: 'ob-linkbtn', text: '다시 시도', onclick: () => { handle?.stop(); run(true); } }),
-        el('button', { type: 'button', class: 'ob-linkbtn', text: '창으로 열기 ↗', onclick: () => openWindow() }),
-        noteEl));
+        noteEl,
+        el('button', { type: 'button', class: 'ob-linkbtn aiacct-dev', text: '터미널에서 직접 로그인 (개발자용) ↗', onclick: () => openWindow() })));
     return {
       url: (u) => { addr.textContent = u.replace(/^https?:\/\//, ''); open.setAttribute('href', u); open.hidden = false; },
       code: (c) => { code.textContent = c; code.hidden = false; },
@@ -131,9 +133,9 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
           void paintTerminal();
           return;
         }
-        note(m + ' — 창으로 여시거나 [다시 시도] 를 눌러 보세요.');
+        note(m + ' — [다시 시도] 를 눌러 보세요.');
       },
-      stalled: () => note('주소가 늦네요 — 조금 더 기다리거나 창으로 여셔도 됩니다.'),
+      stalled: () => note('주소가 늦네요 — 조금 더 기다리시거나 [다시 시도] 를 눌러 보세요.'),
     };
   };
 
@@ -156,7 +158,7 @@ export function aiLoginPanel(a: AiLoginAccount, reload: () => void | Promise<voi
     } catch (e: any) {
       //  막다른 액자를 만들지 않는다 — 여기서 못 띄웠으면 그렇게 말하고 **사람이 누르는** 탈출로를 준다.
       st.textContent = '이 자리에 못 띄웠어요 — ' + ((e && e.message) || e);
-      out.textContent = '창으로 열기 ↗'; out.hidden = false;
+      out.textContent = '새 탭에서 열기 ↗'; out.hidden = false;
       out.onclick = (ev) => { ev.preventDefault(); openWindow(); };
     }
   };

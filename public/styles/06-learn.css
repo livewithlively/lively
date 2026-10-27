@@ -345,6 +345,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .aiacct-paste { display: flex; gap: 8px; margin: 0 12px 11px; }
 .aiacct-paste .input { flex: 1; min-width: 0; }
 .aiacct-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+/* #5058 터미널 탈출로는 개발자용 — 파란 링크로 부르지 않고 회색 잔글씨로 오른쪽에 둔다 */
+.aiacct-foot .aiacct-dev { color: var(--muted); font-size: 11.5px; margin-left: auto; }
+.aiacct-foot .aiacct-dev:hover { color: var(--ink); text-decoration: underline; }
 .aiacct-note { color: var(--muted); font-size: 11.5px; }
 .aiacct-ok { padding: 13px; font-weight: 700; color: var(--ob-mint-ic, var(--mint-deep)); }
 /*  액자 높이: agy 는 «로그인 방법 → 인증 → 색 테마 → 동의 → 폴더 신뢰» 가 차례로 뜬다. 낮으면 사람이
