@@ -45,20 +45,22 @@ export function livDeskPart(ctx: PartCtx): Part {
    * 리브에게 한 마디 — 리브 세션 대화창이 떠 있고 입력칸이 비어 있으면 거기로 보낸다(사람이 보낸 말과 같은 길). 아니면 서버가 그 세션에 넣는다.
    *  서버가 못 넣었으면(멈춘 세션 — delivered:false) 그 말을 **지금 보이는** 입력칸에 담아 두고 알린다 — 보내면 대화창이 세션을 되살리며 넣는다.
    */
-  async function say(text: string): Promise<void> {
+  /** 넣었으면 true — 실패는 이 안에서 사람에게 말한다(부른 쪽이 «전했어요» 를 겹쳐 말하지 않게). */
+  async function say(text: string): Promise<boolean> {
     const id = livId();
-    if (id && sendIntoSession([id], text)) return;
+    if (id && sendIntoSession([id], text)) return true;
     try {
       //  있는 리브 세션에만 — 세션이 사라진 사이 이 말이 새 리브 세션의 첫 지시가 되지 않게(격리 리뷰).
       const r = await openLiv({ text, onlyExisting: true });
       if (!r.ai) {
         toast(r.reason === 'no-session' ? '리브 세션이 없어요 — 레일의 [리브]를 눌러 다시 시작해 주세요.' : '로그인된 AI 가 없어 리브에게 전하지 못했어요 — [AI 계정 연결]에서 로그인해 주세요.', true);
-        return;
+        return false;
       }
       //  못 넣었으면 openLiv 가 그 세션 입력칸에 담아 두었다(떠 있으면 지금 · 아니면 다음에 열 때).
       if (!r.delivered) toast('리브 세션이 멈춰 있어 입력칸에 담아 뒀어요 — 보내면 이어집니다.');
       if (location.hash !== r.href) location.hash = r.href;
-    } catch (e) { toast('리브에게 전하지 못했어요 — ' + ((e as Error)?.message ?? e), true); }
+      return !!r.delivered;
+    } catch (e) { toast('리브에게 전하지 못했어요 — ' + ((e as Error)?.message ?? e), true); return false; }
   }
   const hooks: LivHooks = {
     say: (t) => { void say(t); },
@@ -95,8 +97,7 @@ export function livDeskPart(ctx: PartCtx): Part {
     //   상세 화면이 필요하면 머리의 [현황판 →] 이 그 문이다.
     await fillConnectApps(appsList, (p) => {
       const text = p.bucket === 'on' ? `${p.label} 연결 상태를 보고, 손볼 게 있으면 알려 주세요.` : `${p.label} 연결 도와주세요.`;
-      void say(text);
-      toast(`리브에게 «${text}» 를 전했어요.`);
+      void say(text).then((ok) => { if (ok) toast(`리브에게 «${text}» 를 전했어요.`); });
     });
   }
   void loadApps(true);

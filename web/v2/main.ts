@@ -103,7 +103,8 @@ function setObGhost(on: boolean): void {
   if (!root) return;
   on = on || !!obLockSid();   // #5058 — 처음 설정이 리브 대화에서 이어지는 동안은 누가 풀어 달라고 해도(처음 설정 화면이 걷히며) 잠근 채 둔다
   root.classList.toggle('ob-ghost', on);
-  const parts: (Element | null)[] = [sideEl, railEl, root.querySelector(':scope > .v2-topbar'), ...Array.from(root.querySelectorAll(':scope > .v2-split-x'))];
+  //  #5058 — 폰의 아래 탭 막대(.v2-mtabs)도 잠근다. 안 잠그면 누를 수는 있는데 잠금이 그 대화로 되돌려 «눌러도 안 된다» 가 된다.
+  const parts: (Element | null)[] = [sideEl, railEl, root.querySelector(':scope > .v2-topbar'), root.querySelector(':scope > .v2-mtabs'), ...Array.from(root.querySelectorAll(':scope > .v2-split-x'))];
   for (const p of parts) if (p) p.toggleAttribute('inert', on);
 }
 /* ── #5058 처음 설정 잠금 — [연결할게요] 뒤 리브와 앱을 잇는 대화까지가 한 처음 설정이다(원준님 2026-10-27) ─────────────
@@ -125,7 +126,7 @@ function obLockSid(): string | null {
 /** 이 주소가 잠긴 동안 갈 수 있는 자리인가 — 그 리브 세션(두 철자 모두) · 외부 앱 연결 화면. */
 function obLockAllows(route: string, sid: string): boolean {
   const k = routeKey(route);
-  if (k.startsWith('raw:connect')) return true;
+  if (k === 'raw:connect' || k.startsWith('raw:connect/') || k.startsWith('raw:connect?')) return true;
   if (!k.startsWith('s:')) return false;
   const id = k.slice(2);
   if (id === sid) return true;

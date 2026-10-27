@@ -567,7 +567,10 @@ export const welcomeCapabilities: Capability[] = [
       const { carryWelcomeProgress } = await import("../../org/liv/welcome-marks.js");
       const keep = carryWelcomeProgress(priorWelcome);
       const profile = await appendLivProfile(userId, {
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...keep },
+        //  (#5058) connect_at — [연결할게요]로 끝냈다는 표식. 셸은 이 표식이 있고 리브가 처음 수집 끝을 찍기 전까지 그 대화를 지킨다
+        //   (first-run.ts onboardingLockSession). [나중에 할게요]로 끝내면 적지 않는다 — 그 사람은 잠기지 않는다.
+        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...keep,
+          connect_at: input.connect === true ? new Date().toISOString() : null },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
@@ -587,6 +590,7 @@ export const welcomeCapabilities: Capability[] = [
       share: z.string().optional().describe("me|team|dept|ext — 자료를 보는 범위"),
       nowline: z.string().optional().describe("시간을 가장 많이 쓰는 일"),
       first_order: z.string().optional().describe("첫 지시로 고른 문장"),
+      connect: z.boolean().optional().describe("(#5058) [연결할게요]로 끝냈다 — 이어지는 리브 대화(앱 연결)까지가 처음 설정이다"),
     }),
 ];
 

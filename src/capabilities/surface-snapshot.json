@@ -1633,7 +1633,7 @@
   "rest": [
    "POST /api/ui/me/welcome"
   ],
-  "input_hash": "71c432d82ed7faa9"
+  "input_hash": "7aaf9d3fc6eb2fcd"
  },
  {
   "name": "project_chat_turn",

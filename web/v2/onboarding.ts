@@ -307,10 +307,11 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
    * 처음 설정 반영 — **여기가 실제로 워크스페이스를 바꾸는 자리다**(이름·완료 표식). 실패하면 끝났다고 말하지 않는다(표식도 안 남긴다).
    *  (#4970) 서랍·용도·직무는 더 묻지 않는다 — 없는 채로 보낸다(지어내지 않는다). 팀 구조는 서버가 관리 권한으로 가른다.
    */
-  async function finishOnboarding(): Promise<boolean> {
+  async function finishOnboarding(connect = false): Promise<boolean> {
     S.scene = 'done'; save();
     try {
-      await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({ name: S.nameSet ? S.name : null }) });
+      //  (#5058) connect — [연결할게요]로 끝낸다는 표식. 서버가 이어지는 리브 대화를 처음 설정의 일부로 지킨다(me.onboarding_session).
+      await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({ name: S.nameSet ? S.name : null, connect: connect || undefined }) });
     } catch (e: any) {
       toast(`정리하다 막혔어요. ${(e && e.message) || '알 수 없는 오류'} — 잠시 뒤 다시 눌러 주세요.`);
       S.scene = 'connect-ask'; save();
@@ -327,7 +328,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /** [연결할게요] — 반영 → 연결 세션 열기. AI 가 있으면 그 세션으로 가고, 없으면 이 자리에 «쓰는 AI 에서 하기» 를 그린다. */
   async function connectYes(el: HTMLElement, yes: HTMLButtonElement, later: HTMLButtonElement) {
     yes.disabled = true; later.disabled = true; yes.textContent = '확인하고 있어요…';
-    if (!(await finishOnboarding())) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
+    if (!(await finishOnboarding(!S.viaPc))) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
     //  (#4970) AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다 — 서버 세션을 열지 않고 그 AI 에서 하는 세 걸음을 바로 그린다.
     if (S.viaPc) { showOwnAi(el); return; }
     await openOrGuide(el);
