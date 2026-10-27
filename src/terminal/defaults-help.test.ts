@@ -32,6 +32,8 @@ test("M2 읽기전용은 쓰기 도구만 뺀다 — 읽기는 남는다", () =>
 });
 test("A1 자동 승인은 그 AI 의 승인 건너뛰기 플래그를 넣는다", () => {
   assert.match(code(readSrc("terminal/sessions.ts")), /if \(input\.autoApprove && harness\.autoApproveFlag\) cmd\.push\(harness\.autoApproveFlag\)/);
+  //  #5058 — 오토모드 표식(@auto_mode)은 자동 승인보다 약하다: 자동 승인이 없을 때만, 그 하네스의 autoModeArgv(없으면 자동 승인 플래그)를 붙이고 표식을 남긴다.
+  assert.match(code(readSrc("terminal/sessions.ts")), /else if \(String\(input\.flags\?\.\[AUTO_MODE_FLAG\] \?\? ""\) === "1"\) \{\s*if \(harness\.autoModeArgv\) cmd\.push\(\.\.\.harness\.autoModeArgv\);\s*else if \(harness\.autoApproveFlag\) cmd\.push\(harness\.autoApproveFlag\);\s*appliedFlags\[AUTO_MODE_FLAG\] = "1";/);
 });
 test("V1 기록 범위를 실제로 강제하는 곳은 작업 기록 한 곳뿐이다", () => {
   //  소비자가 늘면(지식·자료 등) 이 테스트가 빨갛게 되고, 그때 (?) 문구의 «작업 기록에만» 도 같이 고쳐야 한다.
