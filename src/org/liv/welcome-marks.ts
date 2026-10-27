@@ -17,6 +17,8 @@ export function carryWelcomeProgress(prior: LivWelcome | null | undefined): Part
   return {
     flow: prior.flow ?? undefined,
     collect_done_at: prior.collect_done_at ?? null,
+    upload_started_at: prior.upload_started_at ?? null,
+    upload_done_at: prior.upload_done_at ?? null,
     distill_at: prior.distill_at ?? null,
     distill_gave_up_at: prior.distill_gave_up_at ?? null,
     distill_note: prior.distill_note ?? null,

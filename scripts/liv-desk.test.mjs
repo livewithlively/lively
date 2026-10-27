@@ -91,7 +91,7 @@ check(!/livAskCard/.test(DESK), "W3 ★ 오른쪽 «리브» 칸이 물음 카�
 check(/askLine\.hidden = !st\.secretAsk;/.test(DESK), "W3 오른쪽 칸은 «입력칸 위에서 기다린다» 한 줄만");
 check(/livAskCard\(st\.secretAsk, hooks\)/.test(BOARD), "W3 리브 화면(단독)은 물음 카드를 그린다(로컬 AI 링크로 온 사람이 넣는 자리)");
 
-check(/const r = await openLiv\(\{ job: 'connect' \}\);/.test(OWN), "W4 ★ 연결 문이 리브에게 맡기지 않는다");
+check(/const r = await openLiv\(\{ job: 'connect', fromWelcome: !!o\.fromWelcome \}\);/.test(OWN), "W4 ★ 연결 문이 리브에게 맡기지 않는다");
 check(/if \(r\.created\) \{\s*rememberCreated\(r\.session\);\s*if \(r\.initialPrompt\) rememberFirstPrompt\(id, String\(r\.initialPrompt\)\);/.test(OPEN), "W4 새로 열었으면 첫 지시를 먼저 그린다");
 check(/\} else if \(r\.delivered === false && r\.text\) \{\s*if \(!putIntoSession\(\[id\], String\(r\.text\)\)\) rememberUnsentDraft\(id, String\(r\.text\)\);/.test(OPEN), "W4 ★ 못 넣은 말을 입력칸에 안 돌려 둔다(누른 일이 사라진다)");
 check(/rememberLivSessionId\(id\);/.test(OPEN), "W4 맡긴 세션을 리브 세션으로 기억한다(곧바로 그 화면을 리브 세션으로 그린다)");

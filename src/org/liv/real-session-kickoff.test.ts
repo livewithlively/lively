@@ -39,11 +39,12 @@ test("★★ (#4970) 처음 설정 반영은 리브 세션을 열지 않는다 �
 
 test("★★ 2턴 스윕은 세션(deliverPrompt) 길만 — 대화 턴(viaChat) 배선이 없다", () => {
   assert.doesNotMatch(SWEEP, /viaChat|startLivChatTurn|livTurnDone|chatTurnState|liv-chat-busy/, "★ 스윕에 대화 킥오프 배선이 남아 있다");
-  assert.match(SWEEP, /const kickSid = String\(c\.welcome\.session_id\);/, "후보 세션 id 를 session_id 에서 안 읽는다");
+  //  (#5060) 파일 갈래는 킥오프 세션 없이 온다 — 있으면 session_id, 없으면 null(그때는 판정이 새로 열기를 낸다).
+  assert.match(SWEEP, /const kickSid = c\.welcome\.session_id \? String\(c\.welcome\.session_id\) : null;/, "후보 세션 id 를 session_id 에서 안 읽는다");
   //  #4032 — 2턴은 **지금의 리브 세션**(복원 이정표를 따라간 id)에 넣는다. 옛 킥오프 id 만 보면 되살린 대화를 두고 새 세션을 또 연다.
   assert.match(SWEEP, /const sid = \(await withTenant\(tenant, \(\) => currentLivSessionId\(c\.id\)\)\.catch\(\(\) => null\)\) \?\? kickSid;/, "★ 2턴이 지금의 리브 세션을 안 본다");
   assert.match(SWEEP, /await withTenant\(tenant, \(\) => deliverPrompt\(sid, prompt, \{ owner: c\.id \}\)\);/, "증류 지시를 세션에 deliverPrompt 로 안 넣는다");
-  assert.match(STORE, /WHERE welcome->>'session_id' IS NOT NULL/, "후보 SQL 이 세션만 보지 않는다");
+  assert.match(STORE, /WHERE \(welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'\)/, "후보 SQL 이 세션(+ #5060 파일 갈래)만 보지 않는다");
   assert.doesNotMatch(STORE, /liv_turn_id|liv_chat_id/, "LivWelcome 에 대화 턴 좌표가 남아 있다");
 });
 

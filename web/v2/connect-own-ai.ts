@@ -66,8 +66,8 @@ export type ConnectOpen = { ai: true; href: string } | { ai: false };
 
 /** 외부 앱 연결을 리브에게 맡긴다(서버 me_liv_open job:connect). 첫 지시 그리기·못 넣은 말 돌려 두기는 openLiv 가 남긴다.
  *  실패는 던진다 — 부르는 쪽이 사람에게 이유를 말한다. */
-export async function openConnectSession(): Promise<ConnectOpen> {
-  const r = await openLiv({ job: 'connect' });
+export async function openConnectSession(o: { fromWelcome?: boolean } = {}): Promise<ConnectOpen> {
+  const r = await openLiv({ job: 'connect', fromWelcome: !!o.fromWelcome });
   return r.ai ? { ai: true, href: r.href } : { ai: false };
 }
 

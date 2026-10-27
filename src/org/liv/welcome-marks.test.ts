@@ -10,7 +10,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { carryWelcomeProgress } from "./welcome-marks.js";
-import { withCollectDone } from "../store/members.js";
+import { withCollectDone, withUploadDone } from "../store/members.js";
 
 const W = (o: Record<string, unknown> = {}) => ({ done_at: "2026-10-17T00:00:00.000Z", ...o }) as never;
 
@@ -23,7 +23,22 @@ test("K1 앞선 welcome 없음 · 세션 없음 — 옮길 것 없음", () => {
 test("K2 같은 세션을 다시 쓴다 — 진행 표식 다섯과 갈래를 옮긴다", () => {
   const prior = W({ session_id: "s1", flow: "connect", collect_done_at: "c", distill_at: "d", distill_gave_up_at: null, distill_note: "n", distill_reopened_at: "r", stage: "company" });
   assert.deepEqual(carryWelcomeProgress(prior),
-    { flow: "connect", collect_done_at: "c", distill_at: "d", distill_gave_up_at: null, distill_note: "n", distill_reopened_at: "r" });
+    { flow: "connect", collect_done_at: "c", upload_started_at: null, upload_done_at: null, distill_at: "d", distill_gave_up_at: null, distill_note: "n", distill_reopened_at: "r" });
+});
+
+test("K4 (#5060) 같은 세션을 다시 쓰면 올리기 표식도 옮긴다 — 안 옮기면 2턴이 끝난 올리기를 다시 기다린다", () => {
+  const c = carryWelcomeProgress(W({ session_id: "s1", upload_started_at: "a", upload_done_at: "b" }));
+  assert.equal(c.upload_started_at, "a"); assert.equal(c.upload_done_at, "b");
+});
+
+test("E1~E3 (#5060) 올리기 끝 — 시작한 적 없으면 안 찍고 · 처음 시각만", () => {
+  const at = new Date("2026-10-27T03:00:00.000Z");
+  assert.equal(withUploadDone(null, at), null, "E1 칸 없음");
+  const never = W();
+  assert.equal(withUploadDone(never, at), never, "E2 시작한 적 없는 올리기는 끝낼 것도 없다");
+  assert.equal(withUploadDone(W({ upload_started_at: "s" }), at)?.upload_done_at, "2026-10-27T03:00:00.000Z", "E3 처음 찍음");
+  const first = W({ upload_started_at: "s", upload_done_at: "2026-10-27T01:00:00.000Z" });
+  assert.equal(withUploadDone(first, at), first, "E3′ 이미 찍힌 표식은 그대로");
 });
 
 test("K3 갈래가 없던 사람이 다시 반영해도 «처음 연결» 로 바뀌지 않는다", () => {

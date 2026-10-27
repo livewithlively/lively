@@ -154,7 +154,8 @@ export const livCapabilities: Capability[] = [
       // #2232 — [나중에 할게요] 미룸. **세 값**이다: true=미룸 · false=미룸 해제(화면을 다시 열었다) · 미지정=건드리지 않음.
       const welcomeDeferred = typeof input.welcome_deferred === "boolean" ? input.welcome_deferred : undefined;
       const collectDone = input.collect_done === true;   // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호)
-      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done 중 하나는 있어야 합니다");
+      const uploadDone = input.upload_done === true;     // #5060 — 화면의 백그라운드 올리기가 다 비었다(2턴이 기다리던 신호)
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone && !uploadDone) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done · upload_done 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -168,6 +169,7 @@ export const livCapabilities: Capability[] = [
           welcomeSeen,
           welcomeDeferred,
           collectDone,
+          uploadDone,
         }),
       };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
@@ -192,6 +194,9 @@ export const livCapabilities: Capability[] = [
       collect_done: z.boolean().optional()
         .describe("(리브) 처음 연결·처음 수집을 끝냈다는 표식(#4213 T13 — liv-connect 마지막 걸음). 찍히면 서랍(카테고리)·정리 규칙을 세우는 " +
           "증류 지시(2턴)가 이 대화에 이어서 온다. 첫 보고·다음 연결 제안·초대 제안까지 마친 뒤에 찍는다. 처음 찍힌 시각을 지킨다."),
+      upload_done: z.boolean().optional()
+        .describe("(화면) 처음 설정에서 시작한 파일 올리기가 끝났다는 표식(#5060). 리브(AI)가 찍는 값이 아니다 — 화면의 백그라운드 올리기가 " +
+          "다 비면 찍는다. 처음 설정에서 올리기를 시작한 칸에만 남고, 처음 찍힌 시각을 지킨다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────

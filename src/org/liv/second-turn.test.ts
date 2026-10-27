@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS, UPLOAD_MAX_WAIT_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
 import { readFileSync } from "node:fs";
@@ -401,4 +401,59 @@ test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시
   //  (T12 #4744 와 맞물림) 활동량·주기는 서버가 글 빈도로 잰다 — 2턴이 interval_sec·activity 를 쓰라고 하면 자동 주기가 멈춘다.
   assert.doesNotMatch(p, /`interval_sec` 를 맞춘다|activity: 하루 평균/, "2턴이 서버가 재는 주기·활동량을 손으로 쓰게 한다");
   assert.match(p, /`description`\(이 단위에서 오가는 일/);
+});
+
+// ── #5060 처음 설정에서 올린 파일 → 정리 지시(2턴) ─────────────────────────────────
+//  엣지 표:
+//   U1 갈래 없음 · 세션 없음                         → skip no-kickoff(무회귀)
+//   U2 files · 세션 없음 · 올리기 끝                  → reopen files(새로 연다)
+//   U3 files · 올리기 중 · 상한 전                    → wait uploading
+//   U4 files · 올리기 중 · 상한 지남                  → reopen files(있는 것으로 시작)
+//   U5 connect · 연결 끝 찍힘 · 올리기 중             → wait uploading(반쯤 올라온 표본으로 짜지 않는다)
+//   U6 connect · 연결 끝 · 올리기 끝                  → fire
+//   U7 files · 이미 한 번 열었다 · 세션 없음          → giveup session-gone-again(무한 재생성 금지)
+//   U8 files · 2시간 넘음 · 세션 없음                 → giveup stale
+//   U9 files · 세션 id 없음 · 그 사람 리브 세션이 살아 있다 → fire(새로 열지 않고 그 세션에)
+//   U10 상한 순서 — 올리기 대기 상한 < 1턴 배달 상한(그 뒤엔 새로 여는 길이 닫힌다)
+//   P1 지시문 — 올린 파일이 있으면 local-files 를 켜서 끝내라 · 올리는 중이면 지금 있는 것으로 · 둘 다 없으면 그 줄 없음
+const FW = (o: Record<string, unknown> = {}) => ({ done_at: new Date(DONE).toISOString(), ...o }) as never;
+test("U1 갈래 없음 · 세션 없음 — 종전대로 skip", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW(), session: null })), { action: "skip", reason: "no-kickoff" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "connect" }), session: null })), { action: "skip", reason: "no-kickoff" },
+    "connect 갈래는 세션 id 가 적혀야 후보다(연결 대화를 못 열었으면 정리 지시도 없다)");
+});
+test("U2 files · 세션 없음 · 올리기 끝 — 새로 연다", () => {
+  const w = FW({ flow: "files", upload_started_at: "a", upload_done_at: "b" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null })), { action: "reopen", reason: "files" });
+});
+test("U3·U4 files · 올리기 중 — 상한 전엔 기다리고, 상한이 지나면 연다", () => {
+  const w = FW({ flow: "files", upload_started_at: "a" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + UPLOAD_MAX_WAIT_MS - 1 })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + UPLOAD_MAX_WAIT_MS })), { action: "reopen", reason: "files" });
+});
+test("U5·U6 connect · 연결 끝 — 올리기가 끝나야 쏜다", () => {
+  const base = { flow: "connect", session_id: "box-a-1", collect_done_at: "c", upload_started_at: "a" };
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW(base) })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ ...base, upload_done_at: "b" }) })), { action: "fire", partial: false, waitedMin: 1 });
+});
+test("U7·U8 files — 한 번 연 뒤 또 없거나 2시간이 넘으면 포기", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files", distill_reopened_at: "r" }), session: null })), { action: "giveup", reason: "session-gone-again" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files" }), session: null, now: DONE + TURN1_DELIVERY_TTL_MS + 1 })), { action: "giveup", reason: "stale" });
+});
+test("U9 files · 그 사람 리브 세션이 살아 있으면 — 새로 열지 않고 그 세션에 쏜다", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files" }) })), { action: "fire", partial: false, waitedMin: 1 });
+});
+test("U10 올리기 대기 상한은 1턴 배달 상한보다 짧다", () => {
+  assert.ok(UPLOAD_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "같거나 길면 상한에서 새로 열 길이 이미 닫혀 있다(올린 파일이 영영 정리되지 않는다)");
+});
+test("P1 지시문 — 올린 파일 · 올리는 중 줄", () => {
+  const base: SecondTurnInput = { displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 3 };
+  const none = buildSecondTurnPrompt(base);
+  assert.ok(!none.includes("local-files"), "올린 파일이 없으면 그 줄을 싣지 않는다");
+  const up = buildSecondTurnPrompt({ ...base, uploaded: true });
+  assert.ok(up.includes("`local-files`") && up.includes("켜서 끝낸다"), "올린 파일이 있으면 로컬 증류기를 켜서 끝내라고 못박는다");
+  assert.ok(!up.includes("아직 다 올라오지 않았다"));
+  const ing = buildSecondTurnPrompt({ ...base, uploaded: true, uploading: true });
+  assert.ok(ing.includes("아직 다 올라오지 않았다") && ing.includes("지금 있는 것으로 시작"));
 });
