@@ -18,32 +18,35 @@ let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
 // ── 표 1~3행 — «미지정» 의 여러 모양은 전부 같은 뜻이다(기본값으로 채운다) ─────────────
-t("1. claude — 아무것도 안 주면 opus/low(계정 기본 fable 로 떨어지지 않는다)", () => {
-  assert.deepEqual(automationFlags("claude", {}), { flags: { "--model": "opus", "--effort": "low" }, dropped: [] });
+t("1. claude — 아무것도 안 주면 sonnet/high(계정 기본 fable 로 떨어지지 않는다 · 2026-10-28)", () => {
+  assert.deepEqual(automationFlags("claude", {}), { flags: { "--model": "sonnet", "--effort": "high" }, dropped: [] });
 });
 
 t("2. null 과 빈 문자열도 미지정이다", () => {
   assert.deepEqual(automationFlags("claude", { model: null, effort: "" }),
-    { flags: { "--model": "opus", "--effort": "low" }, dropped: [] });
+    { flags: { "--model": "sonnet", "--effort": "high" }, dropped: [] });
 });
 
 t("3. 공백만 있는 값도 미지정이다 — «갈아탐»으로 보고하지 않는다(경계)", () => {
   assert.deepEqual(automationFlags("claude", { model: "   " }),
-    { flags: { "--model": "opus", "--effort": "low" }, dropped: [] });
+    { flags: { "--model": "sonnet", "--effort": "high" }, dropped: [] });
 });
 
 // ── 표 4~5행 — 유효한 설정은 기본값을 이긴다. 축은 서로 독립이다 ────────────────────
 t("4. 그 하네스가 아는 값이면 그대로 나간다", () => {
-  assert.deepEqual(automationFlags("claude", { model: "sonnet", effort: "xhigh" }),
-    { flags: { "--model": "sonnet", "--effort": "xhigh" }, dropped: [] });
+  // 기본값(sonnet/high)과 다른 값이어야 «존중했다» 와 «기본값으로 채웠다» 가 갈린다.
+  assert.deepEqual(automationFlags("claude", { model: "haiku", effort: "xhigh" }),
+    { flags: { "--model": "haiku", "--effort": "xhigh" }, dropped: [] });
 });
 
 t("5. 한 축만 지정하면 그 축만 존중하고 나머지 축을 기본값으로 채운다", () => {
   assert.deepEqual(automationFlags("claude", { model: "haiku" }),
-    { flags: { "--model": "haiku", "--effort": "low" }, dropped: [] });
+    { flags: { "--model": "haiku", "--effort": "high" }, dropped: [] });
+  assert.deepEqual(automationFlags("claude", { effort: "low" }),
+    { flags: { "--model": "sonnet", "--effort": "low" }, dropped: [] });
 });
 
-// ── 표 6~8행 — 하네스별 자동화 기본값(원준님 2026-09-16 지정) ─────────────────────
+// ── 표 6~8행 — 하네스별 자동화 기본값(2026-09-16 #4008 지시) ─────────────────────
 t("6. codex — 미지정은 gpt-5.6-sol/medium", () => {
   assert.deepEqual(automationFlags("codex", {}),
     { flags: { "--model": "gpt-5.6-sol", "--effort": "medium" }, dropped: [] });

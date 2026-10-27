@@ -390,8 +390,9 @@ export function sessionFlagDefaults(harnessKey: string, list: readonly Harness[]
 //  CLI 기본은 우리가 정하는 값이 아니라 **하네스가 올려 버리는 값**이라(claude 는 fable 로 올라갔다),
 //  라이블리는 «비워 두면 싼 모델» 을 약속한 적이 없는데 사용자는 그렇게 읽는다. 그 어긋남을 여기서 닫는다.
 //
-// 값의 근거(원준님 2026-09-16 지정 · 각 CLI 실측 목록과 대조):
-//  · claude      opus/low          — 별칭 `opus` = 최신 Opus(=Opus 5). 무인 배치는 강도를 낮춰 토큰을 아낀다.
+// 값의 근거(codex·antigravity 는 2026-09-16 #4008 · claude 는 2026-10-28 · 각 CLI 실측 목록과 대조):
+//  · claude      sonnet/high       — 2026-10-28 결정. #2467(8/31) 의 «증류는 소넷 고정 · effort high» 로 되돌렸다(#4008 에서 opus/low 였다).
+//                                    별칭 `sonnet` = 최신 Sonnet.
 //  · codex       gpt-5.6-sol/medium
 //  · antigravity gemini-3.8-flash-high — 이 하네스는 모델 이름에 강도가 박혀 있고(`-high`) --effort 도 따로 받는다.
 //  · grok        grok-4.6/medium   — 지정 없음. `grok models` 에 모델이 하나뿐이라 그것 + 중간 강도로 둔다.
@@ -401,7 +402,7 @@ export function sessionFlagDefaults(harnessKey: string, list: readonly Harness[]
 //  떨어진다 — 고치기 전과 똑같은 결말이다. 그래서 적용점은 enqueueHeadlessTask 안(하네스 해소 직후)이다.
 export interface AutomationRun { model: string; effort: string }
 export const AUTOMATION_DEFAULTS: Record<string, AutomationRun> = {
-  claude: { model: "opus", effort: "low" },
+  claude: { model: "sonnet", effort: "high" },
   codex: { model: "gpt-5.6-sol", effort: "medium" },
   antigravity: { model: "gemini-3.8-flash-high", effort: "high" },
   grok: { model: "grok-4.6", effort: "medium" },
