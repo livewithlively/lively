@@ -1473,7 +1473,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "0f2e7a5859c28a7f"
+  "input_hash": "75d0fb6f7be1ff82"
  },
  {
   "name": "me_liv_profile_get",
