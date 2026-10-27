@@ -83,6 +83,7 @@ import { projectIdForSessionCoord } from "../project/folder-bind.js";   // #4551
 import { isWorkSession } from "../sessions/session-kind.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { cleanLastPrompt } from "./last-prompt.js";
+import { modeFromHeaders, captureMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토는 친 말을 저장하지 않는다
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
@@ -2245,6 +2246,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const st = await getSessionState(id);
     if (!st) throw new HttpError(404, "세션 상태 기록이 없습니다");
     if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+    //  #5048 — 읽기전용·인코그니토 세션의 말은 저장하지 않는다(훅도 안 보내지만, env 가 빠진 경로의 둘째 겹). 판정은 대화 기록과 한 벌.
+    if (captureMode(modeFromHeaders(req.headers), st) !== "normal") throw new HttpError(403, "읽기전용·인코그니토 세션은 지시를 기록하지 않습니다");
     await setLastPrompt(id, prompt, me);
     res.json({ ok: true });
   }));
