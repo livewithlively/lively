@@ -13,6 +13,8 @@
 //   ③ **transcript_path 직수령**(Stop 이벤트 stdin). slug 재유도 안 함(설계 §5 — 경로 재계산은 취약).
 //   ④ 캡처 단위 = 이 슬라이스는 **주 트랜스크립트만**(scope=main). 서브에이전트 트리(scope=tree)는 후속.
 //   ⑤ 저장 형태 slim(서명·툴결과·토큰통계 제거)은 후속 슬라이스 — 지금은 원본 바이트를 보낸다(서버가 그대로 저장).
+//   ⑥ **읽기전용·인코그니토 세션은 올리지 않는다**(#5048). 대화 전문 저장은 조직 저장소에 쓰는 일이다 — 종전엔 이 훅만
+//      모드를 안 봐서 «읽기전용인데 대화가 다 남는다» 가 됐다. 서버도 그 세션의 저장된 모드(org_session_state)로 한 번 더 거부한다.
 // ───────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -27,6 +29,9 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
 
 (async () => {
   const startedAt = Date.now();
+  // 0) 읽기전용·인코그니토(⑥) — 네트워크를 한 번도 타지 않고 끝낸다. 구 boolean env 도 본다(전이기 dual-env, #1007+).
+  const mode = String(process.env.LIVELY_MODE || "").trim().toLowerCase();
+  if (mode === "readonly" || mode === "incognito" || process.env.LIVELY_READONLY === "1" || process.env.LIVELY_INCOGNITO === "1") return;
   // 1) Stop 이벤트 stdin — session_id·transcript_path·cwd.
   const stdinData = await new Promise((resolve) => {
     let d = "", done = false; const fin = () => { if (!done) { done = true; resolve(d); } };

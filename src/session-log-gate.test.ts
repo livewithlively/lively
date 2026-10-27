@@ -2,11 +2,11 @@
 //  실행: npm run build && node dist/session-log-gate.test.js
 //  계약(프라이버시 안전): enabled 꺼짐·정책밖 하네스·비소유자·잘못된 오프셋·신원부재 = 거부. 정상만 통과.
 import assert from "node:assert/strict";
-import { checkAppendGate, checkViewGate, checkPurgeGate } from "./sessions/session-log-routes.js";
+import { checkAppendGate, checkViewGate, checkPurgeGate, captureMode, requestCaptureMode } from "./sessions/session-log-routes.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
-const base = { enabled: true, harnesses: ["claude"], requester: "alice", harness: "claude", owner: null, atOffset: 0 };
+const base = { enabled: true, harnesses: ["claude"], requester: "alice", harness: "claude", owner: null, atOffset: 0, mode: "normal" as const };
 
 // ── 정상 → 통과(null) ──
 {
@@ -57,7 +57,7 @@ const base = { enabled: true, harnesses: ["claude"], requester: "alice", harness
 
 // ── 게이트 우선순위: 신원부재는 다른 무엇보다 먼저(잘못된 오프셋+꺼짐이어도 신원부터) ──
 {
-  const d = checkAppendGate({ enabled: false, harnesses: [], requester: "", harness: "x", owner: "y", atOffset: -1 });
+  const d = checkAppendGate({ enabled: false, harnesses: [], requester: "", harness: "x", owner: "y", atOffset: -1, mode: "normal" });
   assert.equal(d?.status, 403, "신원부재가 최우선(403)");
   assert.match(d!.message, /신원/);
   ok("우선순위 — 신원 부재가 최우선 판정");
@@ -128,6 +128,68 @@ const v = { requester: "alice", owner: null as string | null, viewPolicy: "attac
   // 기록이 없으면 404 — "지웠다"고 거짓 성공을 돌려주지 않는다(#1582: 확인창·결과는 실제로 일어난 일만).
   assert.equal(checkPurgeGate({ requester: "alice", owner: null })?.status, 404, "중앙 기록 없음 → 404");
   ok("삭제 — 기록 없으면 404(거짓 성공 금지)");
+}
+
+// ── 🔴 읽기전용·인코그니토 세션의 대화는 받지 않는다(#5048) ──
+{
+  //  정상 조건(조직 수집 켬·소유자 본인·offset 0)이어도 막아야 한다 — 그게 «읽기전용인데 대화가 남는다» 의 정확한 모양이었다.
+  assert.equal(checkAppendGate({ ...base, owner: "alice", mode: "readonly" })?.status, 403, "🔴 읽기전용 → 403");
+  assert.match(checkAppendGate({ ...base, mode: "readonly" })!.message, /읽기전용/);
+  assert.equal(checkAppendGate({ ...base, owner: "alice", mode: "incognito" })?.status, 403, "🔴 인코그니토 → 403");
+  assert.match(checkAppendGate({ ...base, mode: "incognito" })!.message, /인코그니토/);
+  assert.equal(checkAppendGate({ ...base, mode: "normal" }), null, "normal 은 종전대로 통과");
+  ok("🔴 append — 읽기전용·인코그니토 → 403 · normal 통과");
+}
+{
+  //  우선순위: 묘비(410)가 먼저, 그다음 모드 — 모드는 조직 스위치보다 앞(조직이 꺼 뒀어도 이유는 «읽기전용» 으로 말한다).
+  assert.equal(checkAppendGate({ ...base, purged: true, mode: "readonly" })?.status, 410, "묘비가 모드보다 먼저");
+  assert.match(checkAppendGate({ ...base, enabled: false, mode: "readonly" })!.message, /읽기전용/, "모드가 조직 스위치보다 먼저");
+  ok("append — 묘비 > 모드 > 조직 스위치");
+}
+{
+  //  모드 판정 = 헤더와 세션 상태 중 **더 닫힌 쪽**. 핵심 행은 «헤더 normal + 상태 read_only» — env 가 경로 중간에서
+  //  빠져도(노드 relay·sudo) 서버가 적어 둔 모드로 막는다. 헤더만 믿으면 그때 조용히 전부 올라간다.
+  const rows: Array<[Parameters<typeof captureMode>[0], Parameters<typeof captureMode>[1], string]> = [
+    ["normal", undefined, "normal"],
+    ["normal", null, "normal"],
+    ["normal", { read_only: false, incognito: false }, "normal"],
+    ["readonly", undefined, "readonly"],
+    ["incognito", undefined, "incognito"],
+    ["normal", { read_only: true, incognito: false }, "readonly"],
+    ["normal", { read_only: false, incognito: true }, "incognito"],
+    ["readonly", { read_only: false, incognito: true }, "incognito"],
+    ["incognito", { read_only: true, incognito: false }, "incognito"],
+    ["readonly", { read_only: false, incognito: false }, "readonly"],
+  ];
+  for (const [h, st, want] of rows) assert.equal(captureMode(h, st), want, `header=${h} state=${JSON.stringify(st)} → ${want}`);
+  ok("🔴 captureMode — 헤더·세션 상태 중 더 닫힌 쪽(env 유실에도 상태로 막음)");
+}
+{
+  //  라우트가 실제로 쓰는 판정 — 헤더 이름(x-lively-session·x-lively-mode)·실행 id 꼴·await·실패 처리를 못박는다.
+  //  순수 captureMode 만으로는 «헤더 이름 오타 · 조회를 안 기다림 · 실패를 normal 로 삼킴» 이 전부 초록으로 지나간다.
+  const SID = "box-alice-5f274e42";
+  const seen: string[] = [];
+  const lookup = (st: { read_only: boolean; incognito: boolean } | undefined) => async (id: string) => { seen.push(id); return st; };
+  const req = (h: Record<string, string>) => ({ headers: h });
+
+  seen.length = 0;
+  assert.equal(await requestCaptureMode(req({ "x-lively-session": SID }), lookup({ read_only: true, incognito: false })), "readonly",
+    "🔴 헤더 모드 없이도 세션 상태가 read_only 면 readonly(env 유실 방어)");
+  assert.deepEqual(seen, [SID], "x-lively-session 의 실행 id 로 조회");
+  assert.equal(await requestCaptureMode(req({ "x-lively-session": SID }), lookup({ read_only: false, incognito: true })), "incognito");
+  assert.equal(await requestCaptureMode(req({ "x-lively-session": SID }), lookup(undefined)), "normal", "상태 행 없음 → normal");
+  assert.equal(await requestCaptureMode(req({ "x-lively-session": SID, "x-lively-mode": "readonly" }), lookup(undefined)), "readonly",
+    "상태 행이 없어도 헤더가 readonly 면 readonly");
+
+  seen.length = 0;
+  assert.equal(await requestCaptureMode(req({}), lookup({ read_only: true, incognito: false })), "normal", "세션 헤더 없음 → 조회 안 함");
+  assert.equal(await requestCaptureMode(req({ "x-lively-session": "../etc" }), lookup({ read_only: true, incognito: false })), "normal",
+    "실행 id 꼴이 아니면 조회 안 함");
+  assert.deepEqual(seen, [], "세션 헤더가 없거나 꼴이 틀리면 DB 를 부르지 않는다");
+
+  await assert.rejects(requestCaptureMode(req({ "x-lively-session": SID }), async () => { throw new Error("db down"); }),
+    /db down/, "🔴 조회 실패는 삼키지 않는다(fail-closed) — normal 로 받으면 읽기전용 대화가 저장된다");
+  ok("🔴 requestCaptureMode — 세션 헤더로 상태 조회 · 헤더 모드 병합 · 조회 실패는 fail-closed");
 }
 
 console.log(`\n${pass} passed`);
