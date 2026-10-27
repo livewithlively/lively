@@ -130,9 +130,8 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
    #5059(원준 2026-10-27 «짜치다») — [외부 앱 연결](40-v2.css .cn-row)과 같은 형태 언어로 다시 그렸다:
    공식 로고 타일(.svc-tile) + 굵은 이름 + 한 줄 설명. 카드 전체가 누르는 자리이고, 손을 올리면 떠오른다.
    고른 것은 색이 아니라 **테두리와 체크**로도 보인다 — 색만으로는 색각 이상에서 사라진다. */
-.liv-pick-card { border-color: var(--line-net); border-radius: 14px; padding: 16px 16px 14px;
-  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); }
-.liv-askdock .liv-ask.liv-pick-card { border-color: var(--line-net); }
+/* 테두리는 민트 그대로 — «리브가 이 답을 기다리며 멈춰 있다» 는 신호다(.liv-ask). 모양만 [외부 앱 연결] 카드처럼 둥글게. */
+.liv-pick-card { border-radius: 14px; padding: 16px 16px 14px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); }
 .liv-pick-head { display: flex; flex-direction: column; gap: 4px; }
 .liv-pick-q { font-size: 15px; font-weight: 750; line-height: 1.45; color: var(--ink); }
 .liv-pick-why { font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); }
@@ -193,8 +192,10 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-pick-inrow { display: flex; }
 .liv-pick-in { font-size: 13px; padding: 9px 11px; border-radius: 10px; }
 
-/* 아래 줄 — 으뜸 행동 · 고른 수 · (오른쪽 끝) 나중에 */
-.liv-pick-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-top: 14px; }
+/* 아래 줄 — 으뜸 행동 · 고른 수 · (오른쪽 끝) 나중에.
+   물음 자리(.liv-askdock)는 높이가 46vh 로 잘려 안에서 스크롤된다 — 카드가 길어져도 [이걸로]가 화면 밖으로 밀리지 않게 바닥에 붙인다. */
+.liv-pick-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 14px -16px -14px; padding: 10px 16px 14px;
+  position: sticky; bottom: 0; background: var(--bg); border-radius: 0 0 14px 14px; }
 .liv-pick-send { min-width: 96px; }
 .liv-pick-count { font-size: 12px; color: var(--muted); }
 .liv-pick-count:empty { display: none; }
