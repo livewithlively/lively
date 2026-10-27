@@ -25,8 +25,10 @@ const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 let SERVER = {};        // sessionId → { bytes, chunks: [{at, body}] }
 let CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" };
 let appends = [];
+let requests = [];      // 모든 요청(GET watermark 포함) — 읽기전용은 «한 번도 안 부른다» 를 재기 위해
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, "http://x");
+  requests.push({ method: req.method, path: u.pathname });
   const m = u.pathname.match(/^\/api\/ui\/v6\/sessions\/([^/]+)\/log(\/watermark)?$/);
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -60,7 +62,8 @@ async function runHook(ev, { harness = "claude", env = {} } = {}) {
   await fsp.writeFile(path.join(home, ".lively", "gateway-url"), BASE + "\n");
   const c = spawn(process.execPath, [HOOK], {
     cwd: root, env: { ...process.env, ...offlineLivelyEnv(), LIVELY_HOME: home, LIVELY_HARNESS: harness, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t",
-      LIVELY_SESSION_ID: "box-log-e2e", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "", ...env }, stdio: ["pipe", "pipe", "pipe"],
+      LIVELY_SESSION_ID: "box-log-e2e", CODEX_THREAD_ID: "", CODEX_SESSION_ID: "", CLAUDE_SESSION_ID: "",
+      LIVELY_MODE: "", LIVELY_READONLY: "", LIVELY_INCOGNITO: "", ...env }, stdio: ["pipe", "pipe", "pipe"],
   });
   c.stdin.end(JSON.stringify(ev));
   const code = await new Promise((r) => c.on("exit", r));
@@ -71,7 +74,7 @@ async function mkTranscript(name, content) {
   await fsp.writeFile(p, content);
   return p;
 }
-const reset = () => { SERVER = {}; appends = []; CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" }; };
+const reset = () => { SERVER = {}; appends = []; requests = []; CAPTURE = { enabled: true, harnesses: ["claude"], scope: "main", store: "raw" }; };
 
 try {
   // ── 🔴 조직 스위치 꺼짐 → 아무것도 안 보냄 ──
@@ -146,6 +149,31 @@ try {
     await runHook({ session_id: "s6", transcript_path: path.join(root, "nope.jsonl") }); // 파일 없음
     assert.equal(appends.length, 0, "필수정보 없거나 파일 없으면 no-op");
     ok("session_id·transcript_path 부재/파일 없음 → no-op");
+  }
+
+  // ── 🔴 읽기전용·인코그니토(#5048) → 게이트웨이를 한 번도 부르지 않는다(워터마크 GET 도 없음) ──
+  //  조직이 수집을 켰고(CAPTURE.enabled) 트랜스크립트가 있어도. 구 boolean env(전이기 dual-env)도 같은 뜻이다.
+  {
+    for (const env of [{ LIVELY_MODE: "readonly" }, { LIVELY_MODE: "incognito" }, { LIVELY_MODE: " ReadOnly " },
+      { LIVELY_READONLY: "1" }, { LIVELY_INCOGNITO: "1" }]) {
+      reset();
+      const tp = await mkTranscript("t7.jsonl", '{"type":"user","message":{"content":"기밀"}}\n');
+      await runHook({ session_id: "s7", transcript_path: tp }, { env });
+      assert.equal(appends.length, 0, `🔴 ${JSON.stringify(env)} 인데 대화를 올렸다`);
+      assert.equal(requests.length, 0, `🔴 ${JSON.stringify(env)} 인데 게이트웨이를 불렀다(${requests.map((r) => r.method + " " + r.path).join(", ")})`);
+    }
+    ok("🔴 읽기전용·인코그니토(신·구 env) → 요청 0건");
+  }
+
+  // ── 대조군: 모드가 normal·미확장 리터럴·빈 값이면 종전대로 올린다(opt-in fail-safe — 실수로 끄지 않는다) ──
+  {
+    for (const env of [{ LIVELY_MODE: "normal" }, { LIVELY_MODE: "${LIVELY_MODE:-}" }, { LIVELY_MODE: "" }]) {
+      reset();
+      const tp = await mkTranscript("t8.jsonl", "ok\n");
+      await runHook({ session_id: "s8", transcript_path: tp }, { env });
+      assert.equal(appends.length, 1, `${JSON.stringify(env)} 는 normal — 올려야 한다`);
+    }
+    ok("대조군 — normal·미확장·빈 모드 → 종전대로 전송");
   }
 
   console.log(`\n${pass} passed`);

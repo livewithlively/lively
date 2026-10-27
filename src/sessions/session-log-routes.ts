@@ -35,6 +35,7 @@ import { parseJournalRange } from "../v6/session-journal.js";
 import { parseConvSort, parseSessionIds, SESSION_ID_RE } from "../v6/conv-search.js";
 import { logSearch, searchLogSummary } from "../v6/search-log-store.js";   // #4530 검색 품질 — 무엇을 쳤고 무엇을 열었나
 import { isAdmin } from "../capabilities/principal.js";
+import { modeFromHeaders, sessionFromHeaders, type SessionMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토 대화는 받지 않는다
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
 export function sessionLogProjectClaim(
@@ -63,6 +64,7 @@ export interface AppendGateInput {
   enabled: boolean; harnesses: string[];
   requester: string; harness: string | null; owner: string | null; atOffset: number;
   purged?: boolean;   // 이 좌표가 완전 삭제된 적 있나(#1850) — 있으면 다시 받지 않는다.
+  mode: SessionMode;  // 보낸 실행 세션의 모드(#5048, requestCaptureMode) — normal 이 아니면 받지 않는다. 필수: 빠뜨린 호출자가 게이트를 조용히 잃지 않게.
 }
 export function checkAppendGate(g: AppendGateInput): { status: number; message: string } | null {
   if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
@@ -71,10 +73,37 @@ export function checkAppendGate(g: AppendGateInput): { status: number; message: 
   //  된 자리에 캡처 훅이 다음 턴에 전문을 처음부터 다시 올려 **지운 것이 부활한다**(세션이 아직 살아 있을 때).
   //  enabled 검사보다 앞에 둔다 — 조직 스위치와 무관하게 개인의 삭제 결정이 우선한다.
   if (g.purged) return { status: 410, message: "완전 삭제된 세션입니다 — 이 기록은 다시 수집하지 않습니다" };
+  // 모드 게이트(#5048) — 읽기전용·인코그니토 세션의 대화는 받지 않는다. 묘비와 같은 자리(조직 스위치보다 앞)다:
+  //  세션을 연 사람이 «남기지 않는다» 를 고른 것이라 조직이 수집을 켰어도 그 선택이 우선한다.
+  if (g.mode !== "normal") return { status: 403, message: `${g.mode === "incognito" ? "인코그니토" : "읽기전용"} 세션은 대화 기록을 남기지 않습니다` };
   if (!g.enabled) return { status: 403, message: "세션 공유가 꺼져 있습니다(관리탭 ▸ 세션 공유에서 켜세요)" };
   if (g.harness && !g.harnesses.includes(g.harness)) return { status: 403, message: `하네스 '${g.harness}' 는 수집 대상이 아닙니다` };
   if (g.owner && g.owner !== g.requester) return { status: 403, message: "이 세션 로그의 소유자가 아닙니다" };
   return null;
+}
+
+/**
+ * 대화 기록을 보낸 실행 세션의 모드(순수, #5048). 두 신호 중 **더 닫힌 쪽**을 고른다.
+ *  · 세션 상태(`org_session_state.read_only·incognito`) — 웹·노드에서 연 세션을 만들 때 서버가 적어 둔 값. 캡처 훅은
+ *    읽기전용이면 스스로 안 보내므로(env 판정), 이건 그 env 가 경로 중간(sudo 경계·노드 relay)에서 빠졌을 때의 둘째 겹이다.
+ *    ⚠ 바닥일 뿐 정본은 아니다 — 노드 발견 행·백필 행은 read_only=false 로 적히고(node-session-state.ts · session-state-backfill.ts),
+ *    상태 행이 없는 세션(매니지드 상시 세션 · 로컬 `claude`)은 이 겹이 없다.
+ *  · 헤더(`x-lively-mode`) — 캡처 훅은 싣지 않는다(읽기전용이면 그 전에 끝나므로). 같은 엔드포인트를 부르는 다른 클라이언트용.
+ */
+export function captureMode(headerMode: SessionMode, state: { read_only: boolean; incognito: boolean } | null | undefined): SessionMode {
+  if (headerMode === "incognito" || state?.incognito) return "incognito";
+  if (headerMode === "readonly" || state?.read_only) return "readonly";
+  return "normal";
+}
+//  조회 실패는 삼키지 않는다(fail-closed) — 프라이버시 게이트라 «모르겠으니 normal» 로 받으면 안 된다. 500 이면 훅이
+//   다음 턴에 다시 보내고 offset-CAS 가 이어 준다. lookup 은 테스트 주입용(기본 getSessionState).
+export async function requestCaptureMode(
+  req: Pick<express.Request, "headers">,
+  lookup: (id: string) => Promise<{ read_only: boolean; incognito: boolean } | undefined> = getSessionState,
+): Promise<SessionMode> {
+  const execution = sessionFromHeaders(req.headers);
+  const state = execution ? await lookup(execution) : undefined;
+  return captureMode(modeFromHeaders(req.headers), state);
 }
 
 /**
@@ -381,7 +410,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const cfg = (await getRuntimeConfig()).session_share;
     const owner = await sessionOwner(nodeId, sessionId);
     const purged = await isSessionPurged(nodeId, sessionId);
-    const denied = checkAppendGate({ enabled: cfg.enabled, harnesses: cfg.harnesses, requester, harness, owner, atOffset, purged });
+    const mode = await requestCaptureMode(req);
+    const denied = checkAppendGate({ enabled: cfg.enabled, harnesses: cfg.harnesses, requester, harness, owner, atOffset, purged, mode });
     if (denied) throw new HttpError(denied.status, denied.message);
 
     const data = await readRawBody(req, MAX_DELTA);
@@ -444,7 +474,8 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     // 묘비(#1850) — 완전 삭제된 좌표는 **capture.enabled=false** 로 답한다. 훅은 이 한 번의 GET 으로 "보낼지"를
     //  정하므로(`if (cap.enabled !== true) return`), 여기서 끄면 델타를 아예 만들지 않는다 — POST 로 와서
     //  410 을 맞는 것보다 조용하고 싸다. append 쪽 묘비 게이트는 그대로 둔다(구 훅·직접 호출 방어).
-    if (await isSessionPurged(nodeId, sessionId)) {
+    //  읽기전용·인코그니토(#5048)도 같은 답이다 — 훅이 델타를 만들지 않게. append 쪽 모드 게이트가 둘째 겹.
+    if (await isSessionPurged(nodeId, sessionId) || await requestCaptureMode(req) !== "normal") {
       res.setHeader("Cache-Control", "no-store");
       res.json({ bytes: 0, capture: { enabled: false, harnesses: [], scope: "main", store: "slim" } });
       return;
