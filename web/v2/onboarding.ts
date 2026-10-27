@@ -355,6 +355,10 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     }
     if (r.ai) {
       say(el, '연결을 도와드릴 대화를 열었어요. 그 자리로 모시겠습니다.');
+      //  #5058 — 처음 설정은 그 대화까지가 한 덩어리다. 서버도 같은 판정을 하지만(me.onboarding_session) 다음 부팅까지 기다리지 않고
+      //   지금 셸에 알려, 그 대화로 넘어가는 순간부터 사이드바를 잠그고 다른 화면으로 새지 않게 한다(main.ts obLock).
+      const sid = (/^#\/s\/([^/?]+)/.exec(r.href) || [])[1];
+      if (sid && state.me) (state.me as { onboarding_session?: string | null }).onboarding_session = decodeURIComponent(sid);
       await sleep(900);
       location.hash = r.href;
       return;

@@ -90,7 +90,14 @@ export function livDeskPart(ctx: PartCtx): Part {
     if (ctx.dead()) return;
     if (!force && Date.now() - lastApps < CONNECT_EVERY_MS) return;
     lastApps = Date.now();
-    await fillConnectApps(appsList);
+    //  #5058 — 앱 한 줄을 누르면 연결 화면으로 **보내지 않고** 그 일을 이 리브 대화에 넣는다(원준님 2026-10-27 «외부앱 연결 페이지로
+    //   보낼게 아니고, 필요한 내용을 그 온보딩 세션에 넣는 방식»). 종전엔 #/connect/<앱> 로 떠나 대화로 돌아올 길을 잃었다.
+    //   상세 화면이 필요하면 머리의 [현황판 →] 이 그 문이다.
+    await fillConnectApps(appsList, (p) => {
+      const text = p.bucket === 'on' ? `${p.label} 연결 상태를 보고, 손볼 게 있으면 알려 주세요.` : `${p.label} 연결 도와주세요.`;
+      void say(text);
+      toast(`리브에게 «${text}» 를 전했어요.`);
+    });
   }
   void loadApps(true);
 

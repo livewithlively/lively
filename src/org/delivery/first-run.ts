@@ -50,6 +50,8 @@ export interface FirstRunFacts {
   everCalledMcp: boolean;
   /** 이 사람 소유의 터미널 세션이 하나라도 있었나. */
   everHadSession: boolean;
+  /** 지금 시각(ms) — 주면 «방금 보낸» 처음 설정(ONBOARDING_LOCK_MS 안)은 다시 연다(#5058). 안 주면 종전대로 한 번만. */
+  now?: number;
 }
 
 /** 사실 → **자동 진입** 판정. **순수 함수**(DB·시각 무접촉). */
@@ -57,7 +59,13 @@ export function isFirstRun(f: FirstRunFacts): boolean {
   if (f.onboardedAt) return false;                          // 끝냈다
   if (f.deferredAt) return false;                           // 사람이 스스로 미뤘다 — 끌고 가지 않는다(#2232)
   if (f.welcomeInProgress) return true;                     // ★ 하다 만 자리가 있다 = 그 장면부터 다시 연다(#2207·#2232)
-  if (f.shownAt) return false;                              // 답 없이 보기만 했으면 두 번은 끌고 가지 않는다(#2171)
+  //  답 없이 보기만 했으면 두 번은 끌고 가지 않는다(#2171) — 단 **방금** 보냈으면(새로고침 · 창을 강제로 닫음 · 앱을 껐다 켬) 그 화면으로
+  //   돌아간다(#5058 원준님 2026-10-27). 처음 설정 동안 셸은 잠겨 있어 나가는 문은 [나중에 할게요](deferredAt) 뿐이고, 그건 위에서 걸렀다.
+  //   상한을 두는 이유: 잠금 전(#2232 이전)에 사이드바로 빠져나간 사람을 다음 접속마다 끌고 오지 않게.
+  if (f.shownAt) {
+    const at = Date.parse(f.shownAt);
+    return f.now !== undefined && Number.isFinite(at) && f.now - at <= ONBOARDING_LOCK_MS;
+  }
   return !f.everCalledMcp && !f.everHadSession;
 }
 
@@ -72,14 +80,49 @@ export function isWelcomePending(f: FirstRunFacts): boolean {
   return !!f.shownAt || !!f.welcomeInProgress || !!f.deferredAt;   // ⚠ 전부 접는다 — 이 축을 안 주는 옛 호출부에선 undefined 가 샌다
 }
 
+/** 처음 설정 «앱 연결» 단계가 이 사람을 붙잡아 두는 최대 시간(#5058) — 리브가 끝 표식을 못 찍어도 사람이 영영 갇히지 않게. */
+export const ONBOARDING_LOCK_MS = 24 * 60 * 60 * 1000;
+
+/** 판정 재료 — liv_profile 에서 쓰는 칸만(표로 테스트한다). */
+export interface OnboardingLockFacts {
+  onboarded_at?: string | null;
+  welcome?: { done_at?: string | null; session_id?: string | null; collect_done_at?: string | null } | null;
+  liv_session?: { id?: string | null } | null;
+  welcome_deferred_at?: string | null;
+}
+
+/**
+ * 처음 설정이 **아직 리브 대화 안에서 이어지는 중**인가 — 그렇다면 그 리브 세션 id(#5058, 원준님 2026-10-27).
+ *
+ *  화면의 처음 설정(#/welcome)은 [연결할게요]에서 끝나고(onboarded_at) 리브 세션으로 넘어가는데, 사람에게는 거기까지가 한 처음 설정이다.
+ *  종전엔 그 대화 도중 새로고침·창 닫기만으로 흐린 사이드바가 풀려 «이전으로 돌아갈 길» 을 잃었다. 이 값이 있으면 화면은 부팅마다
+ *  그 세션으로 데려가고, 사이드바를 잠그고, 외부 앱 연결 화면만 오갈 수 있게 한다(web/v2/main.ts obLock).
+ *  끝나는 조건 — 리브가 «처음 연결·처음 수집 끝» 을 찍었다(welcome.collect_done_at) · 사람이 [앱 연결은 나중에 할게요]를 눌렀다
+ *   (welcome_deferred_at 이 처음 설정을 끝낸 뒤) · 처음 설정을 끝낸 지 ONBOARDING_LOCK_MS 가 지났다.
+ *  **순수 함수**(DB·시계 무접촉 — now 를 받는다).
+ */
+export function onboardingLockSession(p: OnboardingLockFacts | null | undefined, now: number): string | null {
+  if (!p || !p.onboarded_at || !p.welcome) return null;
+  const w = p.welcome;
+  if (w.collect_done_at) return null;
+  const clean = (v: unknown): string => String(v ?? "").trim();
+  const sid = clean(p.liv_session?.id) || clean(w.session_id);
+  if (!sid) return null;
+  const base = Date.parse(String(w.done_at || p.onboarded_at));
+  if (!Number.isFinite(base) || now - base > ONBOARDING_LOCK_MS) return null;
+  const deferred = p.welcome_deferred_at ? Date.parse(p.welcome_deferred_at) : NaN;
+  if (Number.isFinite(deferred) && deferred >= base) return null;
+  return sid;
+}
+
 async function used(sql: string, params: unknown[]): Promise<boolean> {
   try { const r = await itemsPool.query(sql, params); return (r.rowCount ?? 0) > 0; }
   catch { return true; } // 모르면 '이미 쓰던 사람' — 위 ⚠ 참조(장애 때 홈이 사라지지 않게)
 }
 
 /** 지금 이 사람의 처음 설정 상태. 실패는 전부 '보여주지 않음'으로 접는다. */
-export async function memberWelcomeState(memberId: string): Promise<{ firstRun: boolean; pending: boolean }> {
-  if (!memberId) return { firstRun: false, pending: false };
+export async function memberWelcomeState(memberId: string): Promise<{ firstRun: boolean; pending: boolean; lockSession: string | null }> {
+  if (!memberId) return { firstRun: false, pending: false, lockSession: null };
   const [profile, everCalledMcp, everHadSession] = await Promise.all([
     getLivProfile(memberId).catch(() => ({} as { onboarded_at?: string | null; welcome_shown_at?: string | null; welcome_deferred_at?: string | null; welcome_progress?: unknown })),
     used("SELECT 1 FROM mcp_call_log WHERE actor=$1 AND ok LIMIT 1", [memberId]),
@@ -91,8 +134,9 @@ export async function memberWelcomeState(memberId: string): Promise<{ firstRun: 
     welcomeInProgress: !!profile?.welcome_progress,
     deferredAt: profile?.welcome_deferred_at ?? null,
     everCalledMcp, everHadSession,
+    now: Date.now(),
   };
-  return { firstRun: isFirstRun(facts), pending: isWelcomePending(facts) };
+  return { firstRun: isFirstRun(facts), pending: isWelcomePending(facts), lockSession: onboardingLockSession(profile as OnboardingLockFacts, Date.now()) };
 }
 
 /** 지금 이 사람에게 처음 설정을 보여줄까. 실패는 전부 '아니오'로 접는다. */
