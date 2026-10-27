@@ -15,7 +15,7 @@
 //   · 끊긴 뒤 같은 파일·폴더를 다시 고르면 **이미 올린 것은 건너뛴다** — 올린 파일의 표지(경로·크기·수정 시각)를 이 브라우저에 남긴다.
 //     서버도 같은 경로를 덮어쓰고 자료는 좌표로 갱신하므로(mirrorSourceV6) 다시 올려도 중복은 안 생긴다 — 표지는 시간을 아끼는 것뿐이다.
 //   · 실패한 것은 따로 쥐고 [다시 시도]로 다시 줄 세운다.
-import { TOKEN_KEY, apiUrl, currentWorkspace, wsKey } from '../lib/net.js';
+import { TOKEN_KEY, apiUrl, wsKey } from '../lib/net.js';
 
 export interface BgUploadItem { file: File; rel: string }
 export interface BgUploadState {
@@ -122,7 +122,7 @@ function pump(): void {
   }
 }
 
-/** PUT 한 번. 워크스페이스 머리글도 싣는다 — 공용 업로더(authUploadProgress)는 토큰만 실어 셀프호스트 다중 워크스페이스에서 primary 로 간다. */
+/** PUT 한 번. 워크스페이스는 apiUrl 이 주소에 싣는다(lvly_ws — 셀프호스트 다중 워크스페이스). */
 function send(job: Job): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -130,8 +130,6 @@ function send(job: Job): Promise<void> {
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     const token = localStorage.getItem(TOKEN_KEY);
     if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
-    const ws = currentWorkspace();
-    if (ws && ws !== 'primary') xhr.setRequestHeader('x-lively-workspace', ws);
     xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(String(xhr.status))));
     xhr.onerror = () => reject(new Error('네트워크 오류'));
     xhr.onabort = () => reject(new Error('취소'));

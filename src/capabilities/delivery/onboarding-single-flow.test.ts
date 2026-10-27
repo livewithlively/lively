@@ -155,7 +155,7 @@ await t("F6 로그인 칸은 한 벌 — [AI 계정 연결](me-ai)과 처음 설
 //  G2 반영에 올리기(running|done)와 다음 걸음(connect|later)을 싣는다 · PC 의 AI 를 고른 사람은 next 를 안 싣는다
 //  G3 «리브가 정리해 둘게요» 는 서버가 files 갈래를 세웠을 때만
 //  G4 올리기 끝을 서버에 알린다(upload_done) — 반영이 «running» 으로 나갔으면 끝난 뒤 한 번 더
-//  G5 대기열 — 워크스페이스 머리글 · 탭 닫기 경고(도는 동안만) · 올린 것 건너뛰기 표지는 워크스페이스마다
+//  G5 대기열 — 주소는 apiUrl(워크스페이스를 싣는다) · 탭 닫기 경고(도는 동안만) · 올린 것 건너뛰기 표지는 워크스페이스마다(동작은 scripts/bg-upload-runtime.test B1~B7)
 const UP = OB.slice(OB.indexOf("function bindUpload("), OB.indexOf("function say("));
 const BG = code(readFileSync(new URL("../../../web/v2/bg-upload.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
 await t("G1 고른 파일은 대기열로 — 장면은 기다리지 않는다", () => {
@@ -177,8 +177,8 @@ await t("G4 올리기 끝을 서버에 알린다", () => {
   assert.match(OB, /body: JSON\.stringify\(\{ upload_done: true \}\)/, "올리기 끝(upload_done)을 안 보낸다 — 2턴이 상한(90분)까지 기다린다");
   assert.match(OB, /if \(upload === 'running'\) bgUploadWhenIdle\(markUploadDone\);/, "반영 직전에 끝난 올리기의 알림이 버려진다");
 });
-await t("G5 대기열 — 워크스페이스 머리글 · 탭 닫기 경고 · 표지는 워크스페이스마다", () => {
-  assert.match(BG, /setRequestHeader\('x-lively-workspace', ws\)/, "★ 셀프호스트 다중 워크스페이스에서 primary 로 올라간다");
+await t("G5 대기열 — 주소는 apiUrl · 탭 닫기 경고 · 표지는 워크스페이스마다", () => {
+  assert.match(BG, /xhr\.open\('PUT', apiUrl\(/, "★ 주소를 apiUrl 로 안 만든다 — 셀프호스트 다중 워크스페이스에서 primary 로 올라간다");
   assert.match(BG, /addEventListener\('beforeunload', onBeforeUnload\)/, "탭을 닫아도 묻지 않는다");
   assert.match(BG, /removeEventListener\('beforeunload', onBeforeUnload\)/, "다 끝난 뒤에도 탭 닫기를 막는다");
   assert.match(BG, /const DONE_KEY = wsKey\(/, "건너뛰기 표지가 워크스페이스를 모른다 — 다른 워크스페이스에 올린 것을 «이미 올렸다» 로 건너뛴다");
