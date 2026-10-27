@@ -137,3 +137,17 @@ export function readOnlyFromHeaders(headers: Headers): boolean { return modeFrom
 export function incognitoFromHeaders(headers: Headers): boolean { return modeFromHeaders(headers) === "incognito"; }
 export function readOnlyFromExtra(extra: unknown): boolean { return modeFromExtra(extra) === "readonly"; }
 export function incognitoFromExtra(extra: unknown): boolean { return modeFromExtra(extra) === "incognito"; }
+
+/**
+ * 기록(대화 전문·친 말)을 보낸 실행 세션의 모드(순수, #5048). 두 신호 중 **더 닫힌 쪽**을 고른다.
+ *  · 세션 상태(`org_session_state.read_only·incognito`) — 웹·노드에서 연 세션을 만들 때 서버가 적어 둔 값. 캡처 훅은
+ *    읽기전용이면 스스로 안 보내므로(env 판정), 이건 그 env 가 경로 중간(sudo 경계·노드 relay)에서 빠졌을 때의 둘째 겹이다.
+ *    ⚠ 바닥일 뿐 정본은 아니다 — 노드 발견 행·백필 행은 read_only=false 로 적히고(node-session-state.ts · session-state-backfill.ts),
+ *    상태 행이 없는 세션(매니지드 상시 세션 · 로컬 `claude`)은 이 겹이 없다.
+ *  · 헤더(`x-lively-mode`) — 캡처 훅은 싣지 않는다(읽기전용이면 그 전에 끝나므로). 같은 엔드포인트를 부르는 다른 클라이언트용.
+ */
+export function captureMode(headerMode: SessionMode, state: { read_only: boolean; incognito: boolean } | null | undefined): SessionMode {
+  if (headerMode === "incognito" || state?.incognito) return "incognito";
+  if (headerMode === "readonly" || state?.read_only) return "readonly";
+  return "normal";
+}

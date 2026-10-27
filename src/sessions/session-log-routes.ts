@@ -35,7 +35,8 @@ import { parseJournalRange } from "../v6/session-journal.js";
 import { parseConvSort, parseSessionIds, SESSION_ID_RE } from "../v6/conv-search.js";
 import { logSearch, searchLogSummary } from "../v6/search-log-store.js";   // #4530 검색 품질 — 무엇을 쳤고 무엇을 열었나
 import { isAdmin } from "../capabilities/principal.js";
-import { modeFromHeaders, sessionFromHeaders, type SessionMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토 대화는 받지 않는다
+import { modeFromHeaders, sessionFromHeaders, captureMode, type SessionMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토 대화는 받지 않는다
+export { captureMode };
 
 /** 실행 바인딩이 있으면 detach(null)까지 그 값이 권위다. legacy query는 실행 행 자체가 없을 때만 쓴다. */
 export function sessionLogProjectClaim(
@@ -82,19 +83,6 @@ export function checkAppendGate(g: AppendGateInput): { status: number; message: 
   return null;
 }
 
-/**
- * 대화 기록을 보낸 실행 세션의 모드(순수, #5048). 두 신호 중 **더 닫힌 쪽**을 고른다.
- *  · 세션 상태(`org_session_state.read_only·incognito`) — 웹·노드에서 연 세션을 만들 때 서버가 적어 둔 값. 캡처 훅은
- *    읽기전용이면 스스로 안 보내므로(env 판정), 이건 그 env 가 경로 중간(sudo 경계·노드 relay)에서 빠졌을 때의 둘째 겹이다.
- *    ⚠ 바닥일 뿐 정본은 아니다 — 노드 발견 행·백필 행은 read_only=false 로 적히고(node-session-state.ts · session-state-backfill.ts),
- *    상태 행이 없는 세션(매니지드 상시 세션 · 로컬 `claude`)은 이 겹이 없다.
- *  · 헤더(`x-lively-mode`) — 캡처 훅은 싣지 않는다(읽기전용이면 그 전에 끝나므로). 같은 엔드포인트를 부르는 다른 클라이언트용.
- */
-export function captureMode(headerMode: SessionMode, state: { read_only: boolean; incognito: boolean } | null | undefined): SessionMode {
-  if (headerMode === "incognito" || state?.incognito) return "incognito";
-  if (headerMode === "readonly" || state?.read_only) return "readonly";
-  return "normal";
-}
 //  조회 실패는 삼키지 않는다(fail-closed) — 프라이버시 게이트라 «모르겠으니 normal» 로 받으면 안 된다. 500 이면 훅이
 //   다음 턴에 다시 보내고 offset-CAS 가 이어 준다. lookup 은 테스트 주입용(기본 getSessionState).
 export async function requestCaptureMode(

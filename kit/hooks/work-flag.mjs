@@ -364,7 +364,11 @@ try {
     //  노드 세션은 기록이 턴 끝에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다). 스로틀 없음 — 사람 손 속도다.
     //  페이로드 이름: claude 원조 `prompt` · 어댑터/구버전 `prompt_text`. 서버가 다시 다듬으므로(300자) 여긴 상한만 건다.
     //  /active 와 **나란히** 보낸다 — 이 훅은 프롬프트 처리 앞에서 도는 핫패스라 왕복을 직렬로 쌓지 않는다.
-    if (token && event === "UserPromptSubmit") {
+    //  #5048 — 읽기전용·인코그니토는 보내지 않는다. 이 줄은 org_session_state.last_prompt 에 **저장**된다(지시 앞 300자) —
+    //   «읽기전용은 기록하지 않음» 의 대상이다. /active(단계·시각)는 내용이 없어 그대로 보낸다. 서버도 그 세션의 모드로 거부한다.
+    const mode = String(process.env.LIVELY_MODE || "").trim().toLowerCase();
+    const quiet = mode === "readonly" || mode === "incognito" || process.env.LIVELY_READONLY === "1" || process.env.LIVELY_INCOGNITO === "1";
+    if (token && event === "UserPromptSubmit" && !quiet) {
       const p = String(input?.prompt ?? input?.prompt_text ?? "").replace(/\s+/g, " ").trim();
       if (p) jobs.push(post("/last-prompt", { prompt: Array.from(p).slice(0, 600).join("") }));
     }
