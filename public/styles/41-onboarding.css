@@ -192,6 +192,21 @@
   filter: blur(2.5px); opacity: .45; pointer-events: none; user-select: none; -webkit-user-select: none; }
 @media (prefers-reduced-motion: no-preference) {
   .v2-side, #v2-root > .v2-rail, #v2-root > .v2-topbar { transition: filter .28s ease, opacity .28s ease; } }
+/* #5058 처음 설정 잠금 띠 — 리브 대화(앱 연결)까지가 처음 설정이다. 흐린 맨윗줄 위에 떠서 «왜 잠겼나 · 어떻게 나가나» 를 말한다.
+   ⚠ #v2-root 의 직속 자식이라 유령 잠금(inert)에 걸리지 않는다. z-index 는 유령 셸·처음 설정 본문(35)보다 위, 셸의 창(60~)보다 아래. */
+.ob-lockbar { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 10px;
+  max-width: calc(100vw - 32px); box-sizing: border-box; padding: 6px 8px 6px 14px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); box-shadow: 0 6px 22px -10px rgba(0,0,0,.28); font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+.ob-lockbar-t { overflow: hidden; text-overflow: ellipsis; }
+.ob-lockbar-later { flex: none; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-tint); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 4px 11px; cursor: pointer; }
+.ob-lockbar-later:hover { background: var(--bg-sel); }
+.ob-lockbar-later:disabled { opacity: .6; cursor: default; }
+.ob-lockbar-back { flex: none; color: var(--blue); font-weight: 600; text-decoration: none; padding-right: 2px; }
+.ob-lockbar-back:hover { text-decoration: underline; }
+/* 폰 — 윗줄(.v2-mbar: ☰ · 곁칸 단추) 바로 아래. 아래쪽은 대화 입력칸과 탭 막대(.v2-mtabs z 42 · 불투명)가 있어 띠가 가려지거나 입력칸을 덮는다(격리 리뷰). */
+@media (max-width: 900px) { .ob-lockbar { top: calc(var(--v2-tb-h, 48px) + env(safe-area-inset-top, 0px) + 6px); z-index: 43; white-space: normal; border-radius: 14px; width: calc(100vw - 32px); justify-content: space-between; }
+  #v2-root.ob-ghost > .v2-mtabs { filter: blur(2.5px); opacity: .45; pointer-events: none; } }
 /* ★ 막2·3 의 본문은 **창 전체의 가운데**에 선다(원준님 2026-09-13). 종전엔 셸의 가운데 열(레일·사이드바 오른쪽)
    안에서만 가운데였다 — 유령 셸이 왼쪽 398px(레일 76 + 사이드바 316 + 손잡이 6)을 먹은 채라 질문 기둥이 오른쪽으로
    치우쳐 보였다(실측 1440px 창: 기둥 중심 919px / 창 중심 720px). 유령을 흐려 두고 그 위에 얹는 구조이므로 기둥은

@@ -117,6 +117,10 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-ask-why { color: var(--ink-sub); font-size: 12px; margin-top: 4px; line-height: 1.5; }
 /* 좁은 레일이라 칸과 버튼이 줄바꿈된다 — 칸이 먼저 한 줄을 다 쓰고 버튼이 아래로 흐른다. */
 .liv-ask-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+/* #5058 버튼 줄 — 물러서기([나중에])는 왼쪽, 확정([선택 완료]·[저장])은 오른쪽 끝. 흔한 대화상자 배치라 사람이 손을 오른쪽으로 뻗는다. */
+.liv-ask-acts { align-items: center; }
+.liv-ask-acts .liv-ask-later { margin-left: 0; }   /* 아래 «접어두기» 규칙(margin-left:auto)이 [나중에]를 오른쪽 끝으로 밀어 확정 단추와 자리가 뒤바뀌던 것 */
+.liv-ask-acts .liv-ask-go { margin-left: auto; }
 .liv-ask-input { flex: 1 1 100%; min-width: 0; font-family: inherit; font-size: 12px;
   padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .liv-ask-input:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 1px; }
@@ -338,6 +342,9 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-app { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 8px;
   color: var(--ink); text-decoration: none; font-size: 12.5px; }
 .liv-app:hover { background: var(--bg-sel); }
+/* #5058 리브 칸의 줄은 단추다(누르면 그 일을 리브 대화에 넣는다) — 링크와 같은 얼굴로 맞춘다. */
+button.liv-app { width: 100%; border: 0; background: none; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+button.liv-app:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 1px; }
 .liv-app-n { flex: none; max-width: 45%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }   /* #4970 — 이름은 줄이지 않고 상태 말이 접힌다 */
 /* #4970 — 말은 [외부 앱 연결] 목록과 한 벌(lib/connect-routes-view rowView)이라 종전 «next» 말보다 길다 — 줄을 넘기면 오른쪽 정렬로 접는다. */
 .liv-app-s { flex: 0 1 auto; min-width: 0; font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.45; }

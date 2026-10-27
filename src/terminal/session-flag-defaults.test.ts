@@ -78,7 +78,8 @@ const SESSION = code(readFileSync(new URL("../org/liv/session.js", import.meta.u
 t("D 리브 세션은 고른 하네스의 새 세션 기본을 싣는다(빈 flags 로 열지 않는다)", () => {
   const open = SESSION.slice(SESSION.indexOf("export async function openLivSession"), SESSION.indexOf("export function serialByKey"));
   assert.ok(open.length > 100, "openLivSession 을 못 찾았다 — 검사가 헛돈다");
-  assert.match(open, /harness, flags: sessionFlagDefaults\(harness\), autoApprove: false,/, "★ 리브 세션이 모델·추론강도를 지정하지 않는다");
+  //  #5058 — 모델·추론강도 기본 위에 오토모드 표식을 얹는다(자동 승인은 끈 채 — 오토모드는 catalog autoModeArgv).
+  assert.match(open, /harness, flags: \{ \.\.\.sessionFlagDefaults\(harness\), \[AUTO_MODE_FLAG\]: "1" \}, autoApprove: false,/, "★ 리브 세션이 모델·추론강도를 지정하지 않는다");
   assert.doesNotMatch(open, /flags: \{\}/, "빈 flags 로 연다");
 });
 

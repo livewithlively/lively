@@ -159,8 +159,19 @@ export interface FlagDef { name: string; label: string; desc: string; type: "sel
 //  제미나이=안티그래비티 · xAI=그록 빌드 · 그 밖=오픈코드). 매핑을 화면에 두지 않고 여기 표에 두는 이유는 소비자가
 //  셋이기 때문이다(홈 입력창 · 프로젝트 '클로드로 실행' · 세션 대화창) — 세 곳에 같은 if 를 쓰면 한쪽만 고쳐진다.
 export interface HarnessProvider { id: string; label: string }
+/**
+ * (#5058) 세션 플래그 묶음에 싣는 «오토모드» 표식 — 값 "1". 화면의 선택지(FlagDef)가 아니라 **세션이 어떤 권한으로 떴나**를 적는 칸이라
+ *  flags 와 같은 자리(@box_flags)에 남는다 — 그래서 복원·복제·다른 AI 로 넘기기가 따로 배선 없이 같은 권한으로 다시 뜬다.
+ *  createSession 이 이걸 보고 그 하네스의 autoModeArgv 를(없으면 autoApproveFlag 를) 붙인다.
+ */
+export const AUTO_MODE_FLAG = "@auto_mode";
 export interface Harness {
   key: string; label: string; bin: string; provider: HarnessProvider; autoApproveFlag?: string; flags: FlagDef[];
+  /**
+   * (#5058) 그 하네스의 **오토모드** — 승인을 하네스가 스스로 검토해 넘기되 샌드박스·안전장치는 남는 자리. autoApproveFlag(전부 건너뜀)보다 한 칸 아래다.
+   *  없으면 오토모드를 청한 세션은 autoApproveFlag 로 뜬다(«오토모드 이상»). 실측 근거는 각 행 주석.
+   */
+  autoModeArgv?: string[];
   /** 모델마다 허용 추론강도가 다를 때 UI가 잘못된 조합을 만들지 않게 하는 표. 미지정 모델은 --effort 전체 선택지를 쓴다. */
   effortsByModel?: Record<string, string[]>;
   // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
@@ -217,6 +228,7 @@ export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude", provider: { id: "anthropic", label: "Anthropic" },
     autoApproveFlag: "--dangerously-skip-permissions",
+    autoModeArgv: ["--permission-mode", "auto"],   // 실측(claude --help): --permission-mode choices acceptEdits·auto·bypassPermissions·manual·dontAsk·plan
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
       // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
@@ -250,6 +262,9 @@ export const HARNESSES: Harness[] = [
     // Codex CLI 0.154.0 --help 실측: 종전 --yolo 는 더 이상 인식하지 않는다.
     // 이 플래그는 승인과 샌드박스를 함께 끄므로, 홈의 「자동 승인」을 켠 세션에만 붙인다.
     autoApproveFlag: "--dangerously-bypass-approvals-and-sandbox",
+    //  실측(codex-cli 0.164.0 --help): «Route approval requests through automatic review using the workspace-write sandbox».
+    //   TUI 의 Shift+Tab 은 이게 아니다 — 기본 ↔ 계획(Plan) 모드 전환이다(권한은 /permissions).
+    autoModeArgv: ["--approve-for-me"],
     // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
     // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
     // default 의 뜻(#3778 개정) — 새 세션 화면이 **이 값을 골라 둔다**(그리고 그대로 넘긴다). 종전엔 표기용이라
