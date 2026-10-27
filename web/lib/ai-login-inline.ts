@@ -83,7 +83,7 @@ const TICK_MS = 2_000;
  *   더 기다리므로, 설정을 켜고 다시 눌러도 start 는 «이미 돌고 있다» 며 **죽은 코드를 그대로 다시 보여 준다.**
  *   다시 시도는 반드시 새로 띄워야 한다.
  *  ⚠ 시작에 실패해도 **던지지 않는다.** 화면이 «막다른 카드» 가 되면 안 되므로 view.failed 로 알리고,
- *   화면은 종전 «창으로 열기» 탈출로를 그대로 두면 된다.
+ *   화면은 «터미널에서 직접 로그인» 탈출로를 그대로 두면 된다.
  */
 export function startInlineAiLogin(
   harness: string, view: InlineLoginView,

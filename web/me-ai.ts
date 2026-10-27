@@ -14,7 +14,7 @@ import { qmark } from './lib/qmark.js';
 //  ★ #2477 — «화면에서 끝나는 로그인» 의 프로토콜은 한 벌이다(처음 설정과 공유). 여기선 그리기만 한다.
 import { isInlineCardHarness, startInlineAiLogin, HEADLESS_INLINE, type InlineLoginHandle } from './lib/ai-login-inline.js';
 //  (#4970) 행 아래 펼쳐지는 로그인 칸은 한 벌이다 — 처음 설정 «AI 연결» 과 같은 부품을 쓴다.
-import { aiLoginPanel, confirmSharedLogin } from './ai-login-panel.js';
+import { aiLoginPanel, aiLoginCodeRow, confirmSharedLogin } from './ai-login-panel.js';
 
 // ── [내 설정 ▸ 내 AI 계정] 박스 — 내 AI 계정(#1085). ──
 //  '내 AI 에게 무엇을 알려줄까'(개인 규칙, 내 프로필 창)와 달리 이 박스는 '내 AI 가 **무엇으로, 누구 계정으로** 도는가'다.
@@ -24,9 +24,9 @@ import { aiLoginPanel, confirmSharedLogin } from './ai-login-panel.js';
 //   그러면 사람은 «어디로 돌아오지» 를 만나고 맥락이 끊긴다. 이제:
 //    · codex·claude·grok — 서버가 로그인 명령을 대신 돌리고 **주소·코드만** 이 행 아래 펼쳐 보여 준다.
 //    · agy·그 밖        — 주소·코드로 안 끝나므로 **터미널을 이 행 아래 액자로** 띄운다(?embed=1, #1744).
-//   그 통로의 정본은 lib/ai-login-inline.ts 이고, 칸(주소·코드 카드 · 터미널 액자 · «창으로 열기»)은 ai-login-panel.ts 한 벌을
+//   그 통로의 정본은 lib/ai-login-inline.ts 이고, 칸(주소·코드 카드 · 터미널 액자 · «터미널에서 직접 로그인»)은 ai-login-panel.ts 한 벌을
 //   처음 설정(v2/onboarding.ts «AI 연결»)과 함께 쓴다 — 화면 하나에서만 되는 것은 «된다» 가 아니고, 두 벌로 두면 실측으로 얻은 처방이 갈린다.
-//  ⚠ codex 는 하네스 세션을 열어선 안 된다(#1516) — 그 사연과 «창으로 열기» 의 규칙은 ai-login-panel.ts 머리말에 있다.
+//  ⚠ codex 는 하네스 세션을 열어선 안 된다(#1516) — 그 사연과 «터미널에서 직접 로그인» 의 규칙은 ai-login-panel.ts 머리말에 있다.
 //   device-auth 인 이유: 웹터미널은 원격이라 기본 플로우의 `http://localhost:1455`(서버의 localhost)에
 //   사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라 어느 브라우저에서든 된다(실측).
 function aiAccountParts(a, mySessions, reload, opts: { grid?: boolean } = {}) {
@@ -157,8 +157,7 @@ function headlessParts(h: any, reload: () => void) {
   const paint = () => {
     const addr = el('code', { class: 'aiacct-addr', text: '주소를 받는 중이에요…' });
     const open = el('a', { class: 'btn btn-primary btn-sm', target: '_blank', rel: 'noopener', text: '열기 ↗', hidden: true });
-    const code = el('button', { type: 'button', class: 'aiacct-code', hidden: true, title: '눌러서 복사' });
-    code.onclick = () => { void navigator.clipboard?.writeText(code.textContent || '').then(() => toast('복사했어요')); };
+    const code = aiLoginCodeRow();
     const pasteRow = el('div', { class: 'aiacct-paste', hidden: true });
     const inp = el('input', { class: 'input', type: 'text', placeholder: '브라우저에서 받은 코드', autocomplete: 'off', spellcheck: 'false' }) as HTMLInputElement;
     const put = el('button', { class: 'btn btn-primary btn-sm', text: '넣기' }) as HTMLButtonElement;
@@ -176,14 +175,14 @@ function headlessParts(h: any, reload: () => void) {
     pasteRow.append(inp, put);
     panel.replaceChildren(
       el('div', { class: 'aiacct-addrrow' }, addr, open),
-      hint, code, pasteRow,
+      hint, code.row, pasteRow,
       el('div', { class: 'aiacct-foot' },
         el('button', { type: 'button', class: 'ob-linkbtn', text: '다시 시도', onclick: () => { handle?.stop(); run(true); } }),
         el('button', { type: 'button', class: 'ob-linkbtn', text: '토큰을 직접 넣기', onclick: () => pasteToken() }),
         noteEl));
     return {
       url: (u: string) => { addr.textContent = u.replace(/^https?:\/\//, ''); open.setAttribute('href', u); open.hidden = false; },
-      code: (c: string) => { code.textContent = c; code.hidden = false; },
+      code: (c: string) => code.set(c),
       needsPaste: () => { pasteRow.hidden = false; setTimeout(() => inp.focus(), 100); },
       done: () => {
         panel.replaceChildren(el('div', { class: 'aiacct-ok', text: '✓ 연결했어요. 이제 사람 없이 도는 작업이 이 계정으로 실행됩니다.' }));
