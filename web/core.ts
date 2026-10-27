@@ -37,6 +37,10 @@ function loginRedirectUrl(): Promise<string | null> {
   }
   return loginRedirectP;
 }
+// 페이지가 뜰 때 한 번 미리 물어 둔다(#5009). 로그아웃 순간에야 물으면, 탈퇴가 이 워크스페이스를 지운 직후라
+//  그 물음이 404 를 받고 null → 매니지드인데 셀프호스팅 게이트(«로그아웃되었습니다»)가 죽은 주소 위에 남는다.
+//  그 화면엔 들어갈 길도 가입할 길도 없다 — CP 로그인 화면이 그 둘을 갖고 있다.
+void loginRedirectUrl();
 
 // 로그아웃이 CP 로그아웃 문으로 떠나기로 정했다 — 그 뒤 게이트는 자기 리다이렉트(로그인 문)를 걸지 않는다.
 //  로그아웃 직후 배경 폴링이 401 을 받아 showGate 를 부르면, 같은 auth-config 약속에 매달린 두 continuation 중
@@ -75,7 +79,8 @@ function hideGate() {
 }
 
 // ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
-async function logout(message?: any) {
+// opts.accountGone(#5009) — 탈퇴 직후: 돌아올 자리(지워진 워크스페이스)를 CP 에 들려 보내지 않는다.
+async function logout(message?: any, opts?: { accountGone?: boolean }) {
   // 데스크톱 앱 안(#1541 web-shell)이면 이 PC 의 로그인(CLI 토큰)도 함께 끝낸다 — 앱은 창을 열 때마다 그 토큰을 넣어 주므로,
   //  여기서 localStorage 만 지우면 다음 창 열기에서 도로 로그인돼 '로그아웃이 안 된다' 로 보인다. 브라우저에선 없는 다리라 그대로 지나간다.
   const desk = (window as any).livelyDesktop;
@@ -88,7 +93,7 @@ async function logout(message?: any) {
   // 매니지드(#2536): 여기서 게이트를 띄우면 게이트가 CP 로 튕기고, CP 는 살아 있는 자기 세션으로 곧장 재입장시킨다 —
   //  «로그인 창 1~2초 뒤 자동 재로그인». 로그아웃은 CP 의 로그아웃 문으로 **최상위 이동**해 CP 세션까지 끝낸다
   //  (돌아올 자리 to 동봉 — 재로그인하면 같은 자리). 셀프호스팅·CP 없음·조회 실패면 종전 게이트.
-  const door = logoutRedirectTarget(await cpP, location.href);
+  const door = logoutRedirectTarget(await cpP, location.href, opts?.accountGone ? null : location.href);
   if (door) { leavingToLogout = true; location.replace(door); return; }
   showGate(message || '로그아웃되었습니다.');
 }
