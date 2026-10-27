@@ -564,7 +564,7 @@ export const welcomeCapabilities: Capability[] = [
       //  같은 리브 세션을 다시 쓰는 반영(처음 설정을 다시 눌렀다)이면 그 세션에 이미 찍힌 진행 표식과 갈래를 지킨다 — welcome 은 통째로
       //   덮이는 칸이라 안 실으면 사라지고, 사라지면 2턴이 같은 세션에 또 나간다(처음 수집 끝·증류 지시·포기). 판정은 org/liv/welcome-marks.ts.
       //  (#4970) 새로 끝내는 사람에게는 리브 세션이 없다 — 갈래(flow)를 적지 않는다(리브 2턴 후보가 되지 않는다).
-      const { carryWelcomeProgress } = await import("../../org/liv/welcome-marks.js");
+      const { carryWelcomeProgress, composeWelcomeMarks } = await import("../../org/liv/welcome-marks.js");
       const keep = carryWelcomeProgress(priorWelcome);
       //  (#5060) 올린 파일이 지식이 되는 길 — 처음 설정에서 파일을 올렸으면 2턴(증류 지시)이 그 파일로 카테고리·정리 규칙을 세운다.
       //   갈래(flow)는 화면이 고른 다음 걸음(next)으로 정한다: [연결할게요] = connect(연결 대화가 끝나면 같은 세션에 2턴 — 세션 id 는
@@ -582,8 +582,8 @@ export const welcomeCapabilities: Capability[] = [
         : false;
       const fresh = welcomeFlowMarks({ admin, next: input.next, upload: input.upload, serverAi, now: nowIso });
       const profile = await appendLivProfile(userId, {
-        //  carried(keep)가 이긴다 — 같은 세션을 다시 쓰는 반영이면 그 세션의 갈래·표식이 그대로여야 한다(welcome-marks.ts 머리말).
-        welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...fresh, ...keep },
+        //  갈래·2턴 표식은 옮겨 실은 것(keep)이 이기고, 이번에 새로 올린 파일의 표식은 fresh 가 이긴다(composeWelcomeMarks).
+        welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...composeWelcomeMarks(fresh, keep) },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.

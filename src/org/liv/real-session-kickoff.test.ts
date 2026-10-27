@@ -44,7 +44,8 @@ test("★★ 2턴 스윕은 세션(deliverPrompt) 길만 — 대화 턴(viaChat)
   //  #4032 — 2턴은 **지금의 리브 세션**(복원 이정표를 따라간 id)에 넣는다. 옛 킥오프 id 만 보면 되살린 대화를 두고 새 세션을 또 연다.
   assert.match(SWEEP, /const sid = \(await withTenant\(tenant, \(\) => currentLivSessionId\(c\.id\)\)\.catch\(\(\) => null\)\) \?\? kickSid;/, "★ 2턴이 지금의 리브 세션을 안 본다");
   assert.match(SWEEP, /await withTenant\(tenant, \(\) => deliverPrompt\(sid, prompt, \{ owner: c\.id \}\)\);/, "증류 지시를 세션에 deliverPrompt 로 안 넣는다");
-  assert.match(STORE, /WHERE \(welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'\)/, "후보 SQL 이 세션(+ #5060 파일 갈래)만 보지 않는다");
+  assert.match(STORE, /WHERE \(welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'\s+OR \(welcome->>'flow' = 'connect' AND welcome->>'upload_started_at' IS NOT NULL\)\)/,
+    "후보 SQL 이 세션(+ #5060 세션 없이 새로 여는 갈래 — second-turn opensFreshSession 과 같은 조건)만 보지 않는다");
   assert.doesNotMatch(STORE, /liv_turn_id|liv_chat_id/, "LivWelcome 에 대화 턴 좌표가 남아 있다");
 });
 

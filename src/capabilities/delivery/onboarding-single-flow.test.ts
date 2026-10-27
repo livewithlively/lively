@@ -127,7 +127,7 @@ await t("F3 이 서버에서 띄울 수 있는(설치된) AI 만 줄로 — inst
 });
 
 await t("F4 [다음]은 연결된 AI 가 하나라도 있을 때만 켜진다", () => {
-  assert.match(AI, /onRows: \(anyConnected\) => \{ next\.hidden = false; next\.disabled = !anyConnected; \}/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
+  assert.match(AI, /onRows: \(anyConnected\) => \{ next\.hidden = false; next\.disabled = !anyConnected; S\.serverAi = anyConnected; save\(\); \}/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
   assert.match(OAI, /hooks\.onRows\(\[\.\.\.items\.values\(\)\]\.some\(\(it\) => it\.a\.loggedIn === true\)\)/, "«연결됨» 판정이 loggedIn === true 가 아니다(모름을 연결로 접는다)");
   assert.match(OB, /<button class="ob-btn ob-btn-pri" id="aiNext" disabled>/, "처음부터 켜져 있다");
 });
@@ -152,9 +152,9 @@ await t("F6 로그인 칸은 한 벌 — [AI 계정 연결](me-ai)과 처음 설
 
 // ── G. (#5060 원준님 2026-10-27) 파일 올리기 — AI 연결 앞 · 기다리지 않는다 · 정리는 세션(리브 2턴)이 ──────────────────
 //  G1 고른 파일은 백그라운드 대기열로 — 장면은 올라가길 기다리지 않는다([다음]이 올리기 완료에 묶이지 않는다)
-//  G2 반영에 올리기(running|done)와 다음 걸음(connect|later)을 싣는다 · PC 의 AI 를 고른 사람은 next 를 안 싣는다
+//  G2 반영에 올리기(running|done — uploadVerdict)와 다음 걸음(connect|later)을 싣는다 · PC 의 AI 를 고른 사람은 늘 later(서버가 연결 대화를 안 연다)
 //  G3 «리브가 정리해 둘게요» 는 서버가 files 갈래를 세웠을 때만
-//  G4 올리기 끝을 서버에 알린다(upload_done) — 반영이 «running» 으로 나갔으면 끝난 뒤 한 번 더
+//  G4 올리기 끝(upload_done)은 판정(uploadVerdict)이 done 일 때만 · 바뀔 때마다 다시 잰다([다시 시도] 뒤에도) · 반영·연결 대화 묶기 뒤 한 번 더
 //  G5 대기열 — 주소는 apiUrl(워크스페이스를 싣는다) · 탭 닫기 경고(도는 동안만) · 올린 것 건너뛰기 표지는 워크스페이스마다(동작은 scripts/bg-upload-runtime.test B1~B7)
 const UP = OB.slice(OB.indexOf("function bindUpload("), OB.indexOf("function say("));
 const BG = code(readFileSync(new URL("../../../web/v2/bg-upload.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
@@ -166,22 +166,25 @@ await t("G1 고른 파일은 대기열로 — 장면은 기다리지 않는다",
 });
 await t("G2 반영에 올리기·다음 걸음을 싣는다", () => {
   const FIN = OB.slice(OB.indexOf("async function finishOnboarding"), OB.indexOf("async function connectYes"));
-  assert.match(FIN, /bgUploadState\(\)\.running \? 'running' : 'done'/, "올리기 상태를 안 싣는다 — 2턴이 올리기를 기다릴 근거가 없다");
-  assert.match(FIN, /\.\.\.\(S\.viaPc \? \{\} : \{ next \}\)/, "PC 의 AI 를 고른 사람에게도 서버 갈래를 세운다");
+  assert.match(FIN, /const upload = S\.uploaded \? uploadVerdict\(bgUploadState\(\), S\.uploaded\) : undefined;/, "올리기 상태를 판정 없이 싣는다 — 실패만 남아도 «다 올렸다» 가 나간다");
+  assert.match(FIN, /next: S\.viaPc \? 'later' : next,/, "PC 의 AI 를 고른 사람의 [연결할게요]가 서버 연결 대화를 기다리는 갈래가 된다");
   assert.match(OB, /finishOnboarding\('later'\)/, "[나중에 할게요]가 다음 걸음을 안 싣는다");
 });
 await t("G3 «정리해 둘게요» 는 서버가 세운 갈래를 따른다", () => {
   assert.match(OB, /appliedFlow === 'files' \? OB_COPY\.uploadLater/, "★ 서버가 갈래를 안 세웠는데 정리해 두겠다고 약속한다");
 });
 await t("G4 올리기 끝을 서버에 알린다", () => {
-  assert.match(OB, /body: JSON\.stringify\(\{ upload_done: true \}\)/, "올리기 끝(upload_done)을 안 보낸다 — 2턴이 상한(90분)까지 기다린다");
-  assert.match(OB, /if \(upload === 'running'\) bgUploadWhenIdle\(markUploadDone\);/, "반영 직전에 끝난 올리기의 알림이 버려진다");
+  const POST = OB.slice(OB.indexOf("function postUploadDoneIfSettled("), OB.indexOf("function watchWelcomeUploads("));
+  assert.match(POST, /if \(uploadVerdict\(s, welcomeUploadExpected\) !== 'done'/, "★ 판정 없이 «올리기 끝» 을 보낸다(실패만 남아도 2턴이 풀린다)");
+  assert.match(POST, /body: JSON\.stringify\(\{ upload_done: true \}\)/, "올리기 끝(upload_done)을 안 보낸다 — 2턴이 상한(90분)까지 기다린다");
+  assert.match(OB, /bgUploadOnChange\(\(\) => postUploadDoneIfSettled\(\)\)/, "바뀔 때마다 다시 재지 않는다 — [다시 시도]로 풀린 뒤 알림이 안 간다");
+  assert.match(OB, /if \(upload === 'running'\) \{ welcomeUploadExpected = S\.uploaded; welcomeUploadSentAt = -1; postUploadDoneIfSettled\(\); \}/, "반영 직전에 끝난 올리기의 알림이 버려진다");
 });
 await t("G5 대기열 — 주소는 apiUrl · 탭 닫기 경고 · 표지는 워크스페이스마다", () => {
   assert.match(BG, /xhr\.open\('PUT', apiUrl\(/, "★ 주소를 apiUrl 로 안 만든다 — 셀프호스트 다중 워크스페이스에서 primary 로 올라간다");
   assert.match(BG, /addEventListener\('beforeunload', onBeforeUnload\)/, "탭을 닫아도 묻지 않는다");
   assert.match(BG, /removeEventListener\('beforeunload', onBeforeUnload\)/, "다 끝난 뒤에도 탭 닫기를 막는다");
-  assert.match(BG, /const DONE_KEY = wsKey\(/, "건너뛰기 표지가 워크스페이스를 모른다 — 다른 워크스페이스에 올린 것을 «이미 올렸다» 로 건너뛴다");
+  assert.match(BG, /const doneKeyName = \(\): string => wsKey\(/, "건너뛰기 표지가 워크스페이스를 모른다 — 다른 워크스페이스에 올린 것을 «이미 올렸다» 로 건너뛴다");
 });
 
 await t("F7 다시 읽어도 줄을 갈아 끼우지 않는다 — 로그인 중인 칸(터미널 액자·받은 코드)이 옮겨지거나 지워지지 않는다(격리 리뷰 N1·N3)", () => {

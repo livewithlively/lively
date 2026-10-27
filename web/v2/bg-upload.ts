@@ -14,8 +14,12 @@
 //   · 탭을 닫으면 브라우저가 묻는다(beforeunload — 도는 동안만).
 //   · 끊긴 뒤 같은 파일·폴더를 다시 고르면 **이미 올린 것은 건너뛴다** — 올린 파일의 표지(경로·크기·수정 시각)를 이 브라우저에 남긴다.
 //     서버도 같은 경로를 덮어쓰고 자료는 좌표로 갱신하므로(mirrorSourceV6) 다시 올려도 중복은 안 생긴다 — 표지는 시간을 아끼는 것뿐이다.
-//   · 실패한 것은 따로 쥐고 [다시 시도]로 다시 줄 세운다.
+//   · 일시 오류(네트워크·5xx·시간 초과)는 두 번까지 스스로 다시 보낸다. 그래도 안 되면 따로 쥐고 [다시 시도]로 다시 줄 세운다.
+//  ── «다 올렸다» 의 뜻 ──
+//   대기열이 빈 것(running=false)은 «다 올렸다» 가 아니다 — 실패만 남아도 빈다. 처음 설정이 서버에 «올리기 끝» 을 알릴 때는
+//   uploadVerdict 로 «실패 0 · 고른 것이 전부 올라갔다(또는 이미 올린 것)» 를 잰다(격리 리뷰 2026-10-27).
 import { TOKEN_KEY, apiUrl, wsKey } from '../lib/net.js';
+import { state } from '../lib/state.js';
 
 export interface BgUploadItem { file: File; rel: string }
 export interface BgUploadState {
@@ -30,27 +34,35 @@ export interface BgUploadState {
 
 /** 동시에 보내는 수. 하나씩이면 작은 파일 수천 개가 왕복 시간에 묶이고, 많이 열면 큰 파일끼리 회선을 나눠 서로 늦어진다. */
 const CONCURRENCY = 3;
-/** 올린 파일 표지를 남기는 자리 — 워크스페이스마다 따로(다른 워크스페이스에 올린 것을 «이미 올렸다» 로 읽지 않게). */
-const DONE_KEY = wsKey('lively-bgup-done');
+/** 올린 파일 표지를 남기는 자리 — 워크스페이스·사람마다 따로(다른 워크스페이스나 같은 브라우저의 다른 계정이 올린 것을 «이미 올렸다» 로 읽지 않게).
+ *  사람은 부를 때 읽는다 — 모듈이 뜰 때는 아직 로그인 전일 수 있다. */
+const doneKeyName = (): string => wsKey('lively-bgup-done') + ':' + String((state.me && state.me.userId) || '');
+/** 일시 오류를 스스로 다시 보내는 횟수 · 한 요청의 시간 제한(걸린 연결 하나가 세 칸 중 하나를 영영 쥐지 않게). */
+const AUTO_RETRY = 2;
+const SEND_TIMEOUT_MS = 15 * 60_000;
 /** 표지 상한 — 넘으면 오래된 것부터 버린다(다시 올려도 해가 없다 — 위 머리말). */
 const DONE_CAP = 20_000;
 /** 다 끝난 띠를 걷는 시간. 실패가 있으면 걷지 않는다(사람이 봐야 한다). */
 const HIDE_MS = 8_000;
 
-type Job = { file: File; rel: string; key: string };
+type Job = { file: File; rel: string; key: string; tries: number };
 const queue: Job[] = [];
 const failedJobs: Job[] = [];
-let total = 0, done = 0, skipped = 0, active = 0;
+/** waiting — 다시 보내려고 잠깐 쉬는 중인 수(그동안도 «도는 중» 이다). */
+let total = 0, done = 0, skipped = 0, active = 0, waiting = 0;
 const listeners = new Set<(s: BgUploadState) => void>();
 let idleWaiters: Array<() => void> = [];
 let doneKeys: string[] | null = null;
 let doneSet: Set<string> | null = null;
+let doneFor = '';
 
 const jobKey = (f: File, rel: string): string => `${rel}|${f.size}|${f.lastModified}`;
 
 function loadDone(): Set<string> {
-  if (doneSet) return doneSet;
-  try { const v = JSON.parse(localStorage.getItem(DONE_KEY) || '[]'); doneKeys = Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
+  const name = doneKeyName();
+  if (doneSet && doneFor === name) return doneSet;
+  doneFor = name;
+  try { const v = JSON.parse(localStorage.getItem(name) || '[]'); doneKeys = Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []; }
   catch (_) { doneKeys = []; }
   doneSet = new Set(doneKeys);
   return doneSet;
@@ -62,11 +74,19 @@ function markDone(key: string): void {
   set.add(key); doneKeys!.push(key);
   if (doneKeys!.length > DONE_CAP) { for (const k of doneKeys!.splice(0, doneKeys!.length - DONE_CAP)) set.delete(k); }
   //  파일마다 쓰면 수천 번 직렬화한다 — 잠깐 모았다가 한 번에 쓴다(창을 닫는 순간의 몇 건은 잃어도 다시 올리면 그만이다).
-  if (!saveT) saveT = setTimeout(() => { saveT = null; try { localStorage.setItem(DONE_KEY, JSON.stringify(doneKeys)); } catch (_) { /* 꽉 참·프라이빗 */ } }, 1500);
+  if (!saveT) saveT = setTimeout(() => { saveT = null; try { localStorage.setItem(doneFor, JSON.stringify(doneKeys)); } catch (_) { /* 꽉 참·프라이빗 */ } }, 1500);
 }
 
 export function bgUploadState(): BgUploadState {
-  return { total, done, failed: failedJobs.length, skipped, running: active > 0 || queue.length > 0 };
+  return { total, done, failed: failedJobs.length, skipped, running: active > 0 || queue.length > 0 || waiting > 0 };
+}
+/**
+ * (순수) «고른 것이 다 올라갔나» — expected 는 부르는 쪽이 고른 수(새로 줄 선 것 + 이미 올려 건너뛴 것).
+ *  done: 실패 0 · 더 보낼 것 없음 · 이번 페이지에서 그만큼 올라갔다(건너뜀 포함). running: 그 밖 전부 — 아직 도는 중, 실패가 남았다,
+ *  또는 새로고침으로 대기열이 사라져 고른 수만큼 이 페이지가 모른다(서버는 상한 뒤 있는 것으로 시작한다).
+ */
+export function uploadVerdict(s: BgUploadState, expected: number): 'done' | 'running' {
+  return !s.running && s.failed === 0 && expected > 0 && s.done + s.skipped >= expected ? 'done' : 'running';
 }
 export function bgUploadOnChange(fn: (s: BgUploadState) => void): () => void { listeners.add(fn); return () => { listeners.delete(fn); }; }
 /** 대기열이 다 비면(실패 포함 — 더 보낼 게 없으면) 한 번 부른다. 지금 비어 있으면 곧바로 부른다. */
@@ -92,7 +112,7 @@ export function bgUploadAdd(items: BgUploadItem[]): { added: number; skipped: nu
   for (const it of items) {
     const key = jobKey(it.file, it.rel);
     if (set.has(key)) { skip++; continue; }
-    queue.push({ file: it.file, rel: it.rel, key }); added++;
+    queue.push({ file: it.file, rel: it.rel, key, tries: 0 }); added++;
   }
   total += added; skipped += skip;
   if (added) { guardUnload(true); pump(); }
@@ -103,7 +123,7 @@ export function bgUploadAdd(items: BgUploadItem[]): { added: number; skipped: nu
 /** 실패한 것을 다시 줄 세운다. */
 export function bgUploadRetry(): void {
   if (!failedJobs.length) return;
-  queue.push(...failedJobs.splice(0));
+  for (const j of failedJobs.splice(0)) { j.tries = 0; queue.push(j); }
   guardUnload(true); pump(); emit();
 }
 
@@ -113,16 +133,24 @@ function pump(): void {
     active++;
     void send(job).then(
       () => { done++; markDone(job.key); },
-      () => { failedJobs.push(job); },
+      (e: SendError) => {
+        //  일시 오류면 잠깐 쉬었다 뒤에 다시 세운다(두 번까지). 4xx(권한·크기·경로)는 다시 보내도 같다 — 곧바로 실패로 쥔다.
+        if (e && e.transient && job.tries < AUTO_RETRY) {
+          job.tries++; waiting++;
+          setTimeout(() => { waiting--; queue.push(job); pump(); emit(); }, 1500 * job.tries);
+        } else failedJobs.push(job);
+      },
     ).finally(() => {
       active--;
-      if (!queue.length && !active) guardUnload(false);
+      if (!bgUploadState().running) guardUnload(false);
       pump(); emit();
     });
   }
 }
 
 /** PUT 한 번. 워크스페이스는 apiUrl 이 주소에 싣는다(lvly_ws — 셀프호스트 다중 워크스페이스). */
+type SendError = Error & { transient?: boolean };
+const sendErr = (msg: string, transient: boolean): SendError => Object.assign(new Error(msg), { transient });
 function send(job: Job): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -130,9 +158,11 @@ function send(job: Job): Promise<void> {
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     const token = localStorage.getItem(TOKEN_KEY);
     if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
-    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(String(xhr.status))));
-    xhr.onerror = () => reject(new Error('네트워크 오류'));
-    xhr.onabort = () => reject(new Error('취소'));
+    xhr.timeout = SEND_TIMEOUT_MS;
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(sendErr(String(xhr.status), xhr.status >= 500 || xhr.status === 429)));
+    xhr.onerror = () => reject(sendErr('네트워크 오류', true));
+    xhr.ontimeout = () => reject(sendErr('시간 초과', true));
+    xhr.onabort = () => reject(sendErr('취소', false));
     xhr.send(job.file);
   });
 }

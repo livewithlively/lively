@@ -242,11 +242,22 @@ export const CONNECT_FLOW_MAX_WAIT_MS = 90 * 60_000;
  *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 파일 갈래는 기다린 뒤 세션을 **새로 여는데**, 그 길(reopen)이 2h 뒤엔 닫힌다.
  */
 export const UPLOAD_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) [연결할게요]를 눌렀는데 연결 대화가 아직 안 묶인 사이(me_liv_open from:"welcome" 이 몇 초 뒤 session_id 를 적는다)를 기다리는 유예.
+ *  이 안에서 새로 열면 곧 묶일 대화를 두고 세션이 하나 더 선다. 이 뒤에도 안 묶였으면(서버가 대화를 못 열었다 · 사람이 탭을 닫았다)
+ *  올린 파일이 있을 때 파일 갈래처럼 새로 연다 — 아니면 올린 파일이 영영 정리되지 않는다(격리 리뷰 2026-10-27).
+ */
+export const CONNECT_BIND_GRACE_MS = 10 * 60_000;
+
+/** (순수) 세션 없이 후보가 되는 갈래 — 파일 갈래, 그리고 대화가 끝내 안 묶인 «처음 연결» 갈래 중 파일을 올린 것. */
+export function opensFreshSession(w: { session_id?: string | null; flow?: string | null; upload_started_at?: string | null } | null | undefined): boolean {
+  return !!w && !w.session_id && (w.flow === "files" || (w.flow === "connect" && !!w.upload_started_at));
+}
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
   //  (#5060) 파일 갈래는 세션 없이 온다 — 처음 설정을 끝냈으면 후보다(아래에서 기다렸다가 새로 연다).
-  if (!w?.done_at || (!w.session_id && w.flow !== "files")) return { action: "skip", reason: "no-kickoff" };
+  if (!w?.done_at || (!w.session_id && !opensFreshSession(w))) return { action: "skip", reason: "no-kickoff" };
   //  (#4213 T13) 합류자의 리브는 «빠진 앱 연결» 대화뿐이다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다.
   if (w.flow === "join") return { action: "skip", reason: "join" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
@@ -255,12 +266,14 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const waited = s.now - done;
   //  (#4213 T13) 설치자의 «처음 연결» 대화 — 리브가 커넥터 확인·목록·범위 확인·처음 수집·첫 보고를 하는 동안엔 쏘지 않는다.
   //   사람에게 물어 놓고 답을 기다리는 사이(세션은 쉬는 중)에 증류 지시가 끼어들면 대화가 엉킨다. 신호는 리브가 찍는 collect_done_at.
-  if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
+  //  (#5060) 연결 대화가 아직 안 묶였다 — 곧 묶인다(유예). 유예 뒤엔 묶일 대화가 없으니 «처음 수집 끝» 도 오지 않는다(기다리지 않는다).
+  if (w.flow === "connect" && !w.session_id) { if (waited < CONNECT_BIND_GRACE_MS) return { action: "wait", reason: "connecting" }; }
+  else if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
   //  (#5060) 처음 설정에서 올리기를 시작했으면 다 올라오길 기다린다 — 반쯤 올라온 표본으로 카테고리를 짜면 나머지가 안 맞는다.
   if (w.upload_started_at && !w.upload_done_at && waited < UPLOAD_MAX_WAIT_MS) return { action: "wait", reason: "uploading" };
   if (!s.session) {
-    //  (#5060) 파일 갈래 — 처음부터 열린 세션이 없다. «사라졌다» 가 아니라 «아직 안 열었다» 다. 같은 길(새로 열기)로 간다 — 딱 한 번.
-    if (w.flow === "files" && !w.session_id) {
+    //  (#5060) 파일 갈래(또는 끝내 안 묶인 연결 갈래) — 처음부터 열린 세션이 없다. «사라졌다» 가 아니라 «아직 안 열었다» 다. 같은 길(새로 열기)로 — 딱 한 번.
+    if (opensFreshSession(w)) {
       if (w.distill_reopened_at) return { action: "giveup", reason: "session-gone-again" };
       if (waited > TURN1_DELIVERY_TTL_MS) return { action: "giveup", reason: "stale" };
       return { action: "reopen", reason: "files" };

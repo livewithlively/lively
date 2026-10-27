@@ -3,6 +3,8 @@
 //
 //  · 후보 = org_member.liv_profile.welcome 에 session_id 는 있고 distill_at·distill_gave_up_at 이 없는 사람.
 //    (#5060) 파일 갈래(flow='files')는 세션 없이도 후보다 — 판정이 reopen(새로 열기)을 내면 리브 세션을 열고 2턴을 첫 지시로 넣는다.
+//    ⓘ 그 사이에 사람이 리브를 열어 리브 세션이 이미 있으면(currentLivSessionId) 새로 열지 않고 **그 세션에** 넣는다 — 리브는 세션 하나다
+//     (#4970 «리브 = 세션 하나»). 일하는 중이면 판정이 기다린다(turn1-running). 쉬는 대화에 정리 지시가 한 턴 들어오는 것은 의도다.
 //    ⚠ 매니지드에선 그 표가 워크스페이스마다 갈려 있다(행 수준 격리) — 틱이 보는 후보는 그 틱 워크스페이스의 사람이다(#4851 실측).
 //  · 일하는 워크스페이스는 secondTurnTenant(second-turn.ts)가 고른다 — 세션 등록부(workspaceForSession) → welcome 이 사는 칸(by_workspace 키) →
 //    배포 규칙의 기본값(매니지드 = 지금 틱의 워크스페이스 · 자체호스팅 = primary). 수집기·잡·세션·아웃박스 조회와 표식이 모두 그 안에서 돈다.

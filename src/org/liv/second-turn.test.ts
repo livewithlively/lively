@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS, UPLOAD_MAX_WAIT_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS, UPLOAD_MAX_WAIT_MS, CONNECT_BIND_GRACE_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
 import { readFileSync } from "node:fs";
@@ -456,4 +456,18 @@ test("P1 지시문 — 올린 파일 · 올리는 중 줄", () => {
   assert.ok(!up.includes("아직 다 올라오지 않았다"));
   const ing = buildSecondTurnPrompt({ ...base, uploaded: true, uploading: true });
   assert.ok(ing.includes("아직 다 올라오지 않았다") && ing.includes("지금 있는 것으로 시작"));
+});
+
+//  (#5060 격리 리뷰) 연결 대화가 끝내 안 묶인 «처음 연결» 갈래
+//   C1 연결 갈래 · 세션 없음 · 올린 파일 · 유예 안 → wait connecting(곧 묶인다 — 세션을 하나 더 세우지 않는다)
+//   C2 같은데 유예 지남 → reopen files(올린 파일이 영영 정리되지 않는 길을 막는다)
+//   C3 연결 갈래 · 세션 없음 · 올린 파일 없음 · 유예 지남 → skip no-kickoff(정리할 것도, 이어 갈 대화도 없다)
+//   C4 C2 인데 그 사람 리브 세션이 살아 있다 → fire(그 세션에)
+test("C1~C4 연결 대화가 안 묶인 처음 연결 갈래", () => {
+  const w = FW({ flow: "connect", upload_started_at: "a", upload_done_at: "b" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + CONNECT_BIND_GRACE_MS - 1 })), { action: "wait", reason: "connecting" }, "C1");
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "reopen", reason: "files" }, "C2");
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "connect" }), session: null, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "skip", reason: "no-kickoff" }, "C3");
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "fire", partial: false, waitedMin: 10 }, "C4");
+  assert.ok(CONNECT_BIND_GRACE_MS < UPLOAD_MAX_WAIT_MS && UPLOAD_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "유예 < 올리기 상한 < 1턴 배달 상한");
 });

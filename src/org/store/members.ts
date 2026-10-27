@@ -230,6 +230,7 @@ export interface LivWelcome {
  *  (#4213 T13) 합류자의 리브 세션(welcome.flow='join')은 2턴이 없다 — 후보에서 뺀다. 판정(decideSecondTurn)도 건너뛰지만,
  *   여기서 안 빼면 영영 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지해 뒤에 온 진짜 후보가 밀려난다.
  *  (#5060) 파일 갈래(welcome.flow='files')는 세션이 아직 없어도 후보다 — 올리기가 끝나면 스윕이 리브 세션을 새로 연다.
+ *   파일을 올린 «처음 연결» 갈래도 — 연결 대화가 끝내 안 묶이면(유예 뒤) 같은 길로 간다(second-turn.ts opensFreshSession).
  */
 export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome; workspace_id: string | null }>> {
   const r = await itemsPool.query(
@@ -243,7 +244,8 @@ export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string;
         WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
      )
      SELECT id, display_name, ws, welcome FROM cand
-      WHERE (welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files')
+      WHERE (welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'
+             OR (welcome->>'flow' = 'connect' AND welcome->>'upload_started_at' IS NOT NULL))
         AND welcome->>'distill_at' IS NULL
         AND welcome->>'distill_gave_up_at' IS NULL
         AND COALESCE(welcome->>'flow', '') <> 'join'

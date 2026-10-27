@@ -506,8 +506,6 @@ t("W7 화면을 떠날 때·창을 닫을 때 마지막 한 걸음을 남긴다"
   assert.match(OB, /removeEventListener\('pagehide', onPageHide\)/, "떠난 화면의 리스너가 남는다(누수)");
   assert.match(OB, /void flushProgress\(\);\s*\/\/ 화면을 떠나는 것도/, "destroy 에서 안 밀면 debounce 대기 중이던 마지막 답이 사라진다");
 });
-
-console.log(`\n${pass} passed, ${fail} failed`);
 // ── (#5060) 처음 설정의 마지막 고름 → 정리 지시(2턴) 갈래 ─────────────────────────
 //  F1 관리 권한 없음 → 갈래 없음(팀 카테고리를 세우지 않는다) · 올리기 표식은 남긴다
 //  F2 [연결할게요] → connect(올린 파일과 무관)
@@ -535,4 +533,6 @@ t("F6 모르는 값은 없는 것으로 친다", () => {
     { flow: null, upload_started_at: null, upload_done_at: null });
 });
 
+
+console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
