@@ -583,7 +583,10 @@ export const welcomeCapabilities: Capability[] = [
       const fresh = welcomeFlowMarks({ admin, next: input.next, upload: input.upload, serverAi, now: nowIso });
       const profile = await appendLivProfile(userId, {
         //  갈래·2턴 표식은 옮겨 실은 것(keep)이 이기고, 이번에 새로 올린 파일의 표식은 fresh 가 이긴다(composeWelcomeMarks).
-        welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...composeWelcomeMarks(fresh, keep) },
+        //  (#5058) connect_at — [연결할게요]로 끝냈다는 표식. 셸은 이 표식이 있고 리브가 처음 수집 끝을 찍기 전까지 그 대화를 지킨다
+        //   (first-run.ts onboardingLockSession). [나중에 할게요]로 끝내면 적지 않는다 — 그 사람은 잠기지 않는다.
+        welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...composeWelcomeMarks(fresh, keep),
+          connect_at: input.connect === true ? nowIso : null },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
@@ -608,6 +611,7 @@ export const welcomeCapabilities: Capability[] = [
         .describe("(#5060) 처음 설정에서 파일 올리기를 시작했나 — running = 아직 올라가는 중(끝나면 me_liv_profile_set upload_done) · done = 다 올렸다"),
       next: z.enum(["connect", "later"]).optional()
         .describe("(#5060) 처음 설정의 마지막 고름 — connect = 외부 앱 연결 대화로 간다 · later = 나중에(올린 파일이 있으면 정리 세션이 따로 열린다)"),
+      connect: z.boolean().optional().describe("(#5058) [연결할게요]로 끝냈다 — 이어지는 리브 대화(앱 연결)까지가 처음 설정이다"),
     }),
 ];
 

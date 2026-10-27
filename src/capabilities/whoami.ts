@@ -41,9 +41,9 @@ const me: Capability = {
           getOrgProfile().catch(() => null),     // 상단 워드마크 태그라인('for <조직명>') — 미설정이면 태그라인 자체를 숨긴다
           getUiSurface(),                        // #1454 S2~S5 — 매니지드 표면 노브 4종(자체 fail-open: 실패=기본값)
           // #2039·#2171 — 아래 first_run·welcome_pending. 모르면 홈(둘 다 false)
-          memberWelcomeState(memberId).catch(() => ({ firstRun: false, pending: false })),
+          memberWelcomeState(memberId).catch(() => ({ firstRun: false, pending: false, lockSession: null })),
         ])
-      : [[], null, null, null, { firstRun: false, pending: false }];
+      : [[], null, null, null, { firstRun: false, pending: false, lockSession: null }];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
       display_name: member?.display_name ?? null,
@@ -76,6 +76,8 @@ const me: Capability = {
       first_run: !!(welcome as { firstRun?: boolean }).firstRun,
       // #2171 — 보여는 줬는데 아직 안 끝냈나. 홈(web/v2/views.ts)이 «처음 설정 이어서 하기» 줄을 그린다.
       welcome_pending: !!(welcome as { pending?: boolean }).pending,
+      // #5058 — 처음 설정이 아직 리브 대화 안에서 이어지는 중이면 그 세션 id. 화면이 그 세션으로 데려가고 사이드바를 잠근다(first-run.ts onboardingLockSession).
+      onboarding_session: (welcome as { lockSession?: string | null }).lockSession ?? null,
       // #1750 — 이 워크스페이스의 종류(personal|team)와 계정 허브 URL. 좌상단 스위처(web/v2/switcher.ts)가 배지·동선을 정한다.
       //  기본 team·null = 기존 셀프호스트 박스(무설정) — 스위처는 '이 팀 워크스페이스 + 연결한 팀' 만 보인다.
       workspace: { kind: ui?.workspace_kind ?? "team", hub_url: ui?.workspace_hub_url ?? null },

@@ -101,10 +101,88 @@ let sideEl: HTMLElement | null = null;
  *  «아무것도 안 눌린다» 가 참이다(pointer-events 만으론 키보드로 들어간다). 나가는 문은 화면 안의 [나중에 할게요] 뿐. */
 function setObGhost(on: boolean): void {
   if (!root) return;
+  on = on || !!obLockSid();   // #5058 — 처음 설정이 리브 대화에서 이어지는 동안은 누가 풀어 달라고 해도(처음 설정 화면이 걷히며) 잠근 채 둔다
   root.classList.toggle('ob-ghost', on);
-  const parts: (Element | null)[] = [sideEl, railEl, root.querySelector(':scope > .v2-topbar'), ...Array.from(root.querySelectorAll(':scope > .v2-split-x'))];
+  //  #5058 — 폰의 아래 탭 막대(.v2-mtabs)도 잠근다. 안 잠그면 누를 수는 있는데 잠금이 그 대화로 되돌려 «눌러도 안 된다» 가 된다.
+  const parts: (Element | null)[] = [sideEl, railEl, root.querySelector(':scope > .v2-topbar'), root.querySelector(':scope > .v2-mtabs'), ...Array.from(root.querySelectorAll(':scope > .v2-split-x'))];
   for (const p of parts) if (p) p.toggleAttribute('inert', on);
 }
+/* ── #5058 처음 설정 잠금 — [연결할게요] 뒤 리브와 앱을 잇는 대화까지가 한 처음 설정이다(원준님 2026-10-27) ─────────────
+ *  종전엔 화면의 처음 설정(#/welcome)이 [연결할게요]에서 끝나, 그 뒤 리브 대화 도중 새로고침·창 닫기·오른쪽 칸의 앱 한 줄만으로
+ *  흐린 사이드바가 풀리고 사람은 «이전으로 돌아갈 길» 을 잃었다. 서버가 «아직 그 대화 중» 이라고 하면(me.onboarding_session —
+ *  src/org/delivery/first-run.ts onboardingLockSession) 셸은:
+ *   · 부팅마다 그 세션으로 데려간다(새로고침 · 창을 강제로 닫거나 앱을 껐다 켜도 하던 자리)
+ *   · 사이드바·레일·맨윗줄을 유령으로 잠근다(setObGhost 가 이 값을 본다)
+ *   · 그 세션과 외부 앱 연결 화면만 오가게 한다 — 연결 스킬이 비밀 값을 넣으라고 #/connect/<앱> 으로 보낸다(connect-skills «화면에서 받는다»)
+ *   · 위에 띠 하나 — 세션에선 [앱 연결은 나중에 할게요](유일한 나가는 문), 연결 화면에선 [← 리브 대화로 돌아가기]
+ *  풀리는 때: 리브가 처음 수집 끝을 찍거나 · 사람이 나중에 하기로 하거나 · 서버 상한(24시간). 셸은 잠긴 동안 서버에 다시 묻는다. */
+const OB_LOCK_POLL_MS = 15_000;
+let obLockBar: HTMLElement | null = null;
+let obLockTimer: ReturnType<typeof setInterval> | null = null;
+function obLockSid(): string | null {
+  const v = (state.me as { onboarding_session?: unknown } | null | undefined)?.onboarding_session;
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+/** 이 주소가 잠긴 동안 갈 수 있는 자리인가 — 그 리브 세션(두 철자 모두) · 외부 앱 연결 화면. */
+function obLockAllows(route: string, sid: string): boolean {
+  const k = routeKey(route);
+  if (k === 'raw:connect' || k.startsWith('raw:connect/') || k.startsWith('raw:connect?')) return true;
+  if (!k.startsWith('s:')) return false;
+  const id = k.slice(2);
+  if (id === sid) return true;
+  const a = findSess(id), b = findSess(sid);
+  return !!(a && b && a.id === b.id);
+}
+function obLockHash(sid: string): string { return '#/s/' + encodeURIComponent(findSess(sid)?.id || sid); }
+/** 띠를 지금 화면에 맞춘다 — applyTabChrome 이 화면이 바뀔 때마다 부른다. */
+function paintObLock(tab: ShellTab | null): void {
+  const sid = obLockSid();
+  if (!sid || !root) { obLockBar?.remove(); obLockBar = null; return; }
+  setObGhost(true);
+  if (!obLockTimer) obLockTimer = setInterval(() => { void recheckObLock(); }, OB_LOCK_POLL_MS);
+  const onConnect = !!tab && routeKey(tab.route).startsWith('raw:connect');
+  const bar = el('div', { class: 'ob-lockbar', role: 'status' },
+    onConnect
+      ? el('a', { class: 'ob-lockbar-back', href: obLockHash(sid), text: '← 리브 대화로 돌아가기' })
+      : null,
+    el('span', { class: 'ob-lockbar-t', text: onConnect
+      ? '처음 설정 중이에요. 여기서 할 일을 마치면 리브 대화로 돌아가 주세요.'
+      : '처음 설정 중이에요. 리브와 앱 연결을 마치면 전체 화면이 열려요.' }),
+    onConnect ? null : el('button', { type: 'button', class: 'ob-lockbar-later', text: '앱 연결은 나중에 할게요',
+      title: '처음 설정을 여기서 마칩니다. 앱 연결은 나중에 [외부 앱 연결]이나 리브 대화에서 이어 하실 수 있어요.',
+      onclick: (ev: Event) => { void deferObLock(ev.currentTarget as HTMLButtonElement); } }));
+  if (obLockBar) obLockBar.replaceWith(bar); else root.append(bar);
+  obLockBar = bar;
+}
+function releaseObLock(msg?: string): void {
+  if (state.me) (state.me as { onboarding_session?: string | null }).onboarding_session = null;
+  if (obLockTimer) { clearInterval(obLockTimer); obLockTimer = null; }
+  obLockBar?.remove(); obLockBar = null;
+  //  처음 설정 화면이 떠 있으면 그 화면이 제 유령을 다룬다 — 그 밖에서만 푼다.
+  const cur = tabsApi?.current();
+  if (!(cur && (cur as any).ob)) setObGhost(false);
+  if (msg) toast(msg);
+}
+/** 잠긴 동안 서버에 다시 묻는다 — 리브가 끝 표식을 찍었으면 그 자리에서 푼다. 못 물었으면 그대로(다음 판에 다시). */
+async function recheckObLock(): Promise<void> {
+  if (!obLockSid() || document.visibilityState === 'hidden') return;
+  try {
+    const me: any = await api('/api/ui/me');
+    const v = me && typeof me.onboarding_session === 'string' && me.onboarding_session.trim() ? me.onboarding_session.trim() : null;
+    if (!v) releaseObLock('처음 설정을 마쳤어요. 이제 라이블리 전체를 쓰실 수 있어요.');
+  } catch (_) { /* 비치명 */ }
+}
+async function deferObLock(b: HTMLButtonElement): Promise<void> {
+  b.disabled = true; b.textContent = '마치는 중…';
+  try {
+    await api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ welcome_deferred: true }) });
+    releaseObLock('처음 설정을 마쳤어요. 앱 연결은 리브 대화나 [외부 앱 연결]에서 언제든 이어 하실 수 있어요.');
+  } catch (e) {
+    b.disabled = false; b.textContent = '앱 연결은 나중에 할게요';
+    toast('지금은 마치지 못했어요 — ' + ((e as Error)?.message ?? e), true);
+  }
+}
+
 let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
 let tabsApi: TabsApi | null = null;
@@ -702,6 +780,8 @@ export async function bootV2(): Promise<void> {
     boot = '#/welcome';
     markWelcomeSeen();
   }
+  //  #5058 — 처음 설정이 리브 대화에서 이어지는 중이면 그 대화가 시작 자리다(주소에 다른 화면이 있어도 — 외부 앱 연결 화면만 예외).
+  { const lockSid = obLockSid(); if (lockSid && !(boot && obLockAllows(boot, lockSid))) boot = '#/s/' + encodeURIComponent(lockSid); }
   //  ★ #4989 — 세션에 서는 부팅은 목록 전량을 기다리지 않는다. 1Mbps 폰 실측(상민님 2026-10-25): 세션 주소로 켜도 세션 화면은 61초 뒤였다 —
   //   여기서 목록(프로젝트 5.5MB 가 57초)을 다 받은 뒤에야 탭을 켰다. 세션 화면에 필요한 건 그 세션 행 하나다.
   //   착지는 아래 활성화와 같은 규칙이다 — 주소가 있으면 그 주소, 없으면 전환 부팅은 홈 · 그 밖은 되살린 활성 탭.
@@ -1385,6 +1465,7 @@ function applyTabChrome(tab: ShellTab): void {
   if (mobile) { mobile.setAsideKind(paneSide ? 'panes' : 'timeline'); mobile.setAsideTarget(paneSide); }
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
+  paintObLock(tab);   // #5058 처음 설정 잠금 띠 — 화면마다 문구가 다르다
 }
 
 /** 주소가 바뀌었다(링크 클릭·뒤로가기) — 활성 탭이 그 화면으로 이동한다. 이미 다른 탭에 있으면 그 탭으로 간다. */
@@ -1416,6 +1497,9 @@ async function onHash(): Promise<void> {
   //  열면 박스 id 라 routeKey 가 갈려 '한 세션 = 한 탭'이 깨졌다. 탭을 고르기 전에 **박스 id 로 통일**한다.
   const canon = canonSessionHash(hash);
   if (canon !== hash) { hash = canon; suppressHash++; location.replace(location.pathname + location.search + hash); }
+  //  #5058 — 처음 설정이 리브 대화에서 이어지는 동안은 그 대화와 외부 앱 연결 화면만 오간다. 그 밖으로 가는 주소는 그 대화로 돌린다.
+  { const lockSid = obLockSid();
+    if (lockSid && !obLockAllows(hash, lockSid)) { hash = obLockHash(lockSid); suppressHash++; location.replace(location.pathname + location.search + hash); } }
   const pk0 = routeKey(hash);
   // ⚠ ?new=1 은 **새 세션 자리를 달라**는 뜻이라 이 갈아끼우기를 건너뛴다(사이드바 프로젝트 줄의 [＋]·문패 [＋ 세션]).
   //  routeKey 는 쿼리를 버리므로 여기서 원래 주소의 쿼리를 따로 본다 — 안 그러면 [＋]를 눌러도 맨 위 세션이 열린다(실측 2026-08-20).

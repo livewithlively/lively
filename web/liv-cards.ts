@@ -261,9 +261,16 @@ function livDismissBtn(hooks: LivHooks): HTMLElement {
 function livChoiceCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
   const picked = new Set<string>();
   const opts = el('div', { class: 'liv-ask-opts' });
-  const send = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이걸로' }) as HTMLButtonElement;
+  //  (#5058) 종전 이름 «이걸로» 는 무엇을 하는 버튼인지 말하지 않았고, [나중에] 오른쪽이 아니라 왼쪽에 있어
+  //   사람이 다 고른 뒤 오른쪽의 [나중에]를 «확인» 으로 알고 눌렀다(원준님 2026-10-27). 확정은 **오른쪽 끝**, 이름은 «선택 완료»,
+  //   몇 개 골랐는지 함께 보여 준다.
+  const SEND = '선택 완료';
+  const send = el('button', { class: 'btn btn-sm btn-primary liv-ask-go', type: 'button', text: SEND }) as HTMLButtonElement;
   // 복수 선택이면 고른 게 있어야 보낼 수 있다. 단일 선택은 누르는 즉시 보낸다(한 번 덜 누르게).
-  const sync = (): void => { send.disabled = picked.size === 0 && !otherIn.value.trim(); };
+  const sync = (): void => {
+    send.disabled = picked.size === 0 && !otherIn.value.trim();
+    if (!send.textContent?.endsWith('…')) send.textContent = ask.multi && picked.size > 0 ? `${SEND} (${picked.size})` : SEND;
+  };
 
   const submit = async (): Promise<void> => {
     send.disabled = true; const was = send.textContent; send.textContent = '보내는 중…';
@@ -281,7 +288,7 @@ function livChoiceCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
       if (said) hooks.say(said);
       setTimeout(() => hooks.refresh(), 600);
     } catch (e) {
-      send.disabled = false; send.textContent = was ?? '이걸로';
+      send.disabled = false; send.textContent = was ?? SEND;
       livToast(String((e as Error)?.message ?? e));
     }
   };
@@ -314,7 +321,7 @@ function livChoiceCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
     opts,
     // '그 외'는 탈출구다 — 여기 적히는 것이 곧 다음에 만들 커넥터 후보라 버리지 않고 쌓는다.
     ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null,
-    el('div', { class: 'liv-ask-row' }, (ask.multi || ask.allow_other) ? send : null, livDismissBtn(hooks)),
+    el('div', { class: 'liv-ask-row liv-ask-acts' }, livDismissBtn(hooks), (ask.multi || ask.allow_other) ? send : null),
     ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
 }
 
@@ -382,7 +389,7 @@ function livSecretCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
     placeholder: ask.hint || '여기에 붙여넣어 주세요', 'aria-label': ask.label,
   }) as HTMLInputElement;
   const msg = el('div', { class: 'liv-ask-msg' });
-  const save = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '저장' }) as HTMLButtonElement;
+  const save = el('button', { class: 'btn btn-sm btn-primary liv-ask-go', type: 'button', text: '저장' }) as HTMLButtonElement;
 
   const submit = async (): Promise<void> => {
     const value = input.value;
@@ -409,7 +416,8 @@ function livSecretCard(ask: LivSecretAsk, hooks: LivHooks): HTMLElement {
   return el('div', { class: 'liv-ask' },
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })),
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
-    el('div', { class: 'liv-ask-row' }, input, save, livDismissBtn(hooks)),
+    el('div', { class: 'liv-ask-row' }, input),
+    el('div', { class: 'liv-ask-row liv-ask-acts' }, livDismissBtn(hooks), save),
     el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }),
     msg);
 }
@@ -432,20 +440,24 @@ export function livToast(msg: string): void {
 type ConnectApp = ConnectAppIn;
 
 /** 외부 앱 연결 상태를 host 에 그린다. 못 읽으면 그렇다고 한 줄. */
-export async function fillConnectApps(host: HTMLElement): Promise<void> {
+/** onPick — 주면 줄이 링크가 아니라 단추다: 누르면 그 앱의 일을 부른 쪽(리브 세션의 «리브» 칸)에 넘긴다(#5058). */
+export async function fillConnectApps(host: HTMLElement, onPick?: (app: { app: string; label: string; bucket: string }) => void): Promise<void> {
   try {
     const r: any = await api('/api/ui/org/connect-status');
     const apps: ConnectApp[] = Array.isArray(r?.apps) ? r.apps : [];
-    host.replaceChildren(...(apps.length ? apps.map((a) => connectAppRow(a)) : [el('p', { class: 'pn-fine', text: '연결할 수 있는 앱이 없어요.' })]));
+    host.replaceChildren(...(apps.length ? apps.map((a) => connectAppRow(a, onPick)) : [el('p', { class: 'pn-fine', text: '연결할 수 있는 앱이 없어요.' })]));
   } catch (_) {
     host.replaceChildren(el('p', { class: 'pn-fine', text: '연결 상태를 읽지 못했어요.' }));
   }
 }
 
 /** 앱 한 줄 — 이름 · 지금 어떻게 연결돼 있나(사람 말) · 누르면 그 앱의 연결 화면. 말은 [외부 앱 연결] 목록과 같다(lib/connect-routes-view). */
-function connectAppRow(a: ConnectApp): HTMLElement {
+function connectAppRow(a: ConnectApp, onPick?: (app: { app: string; label: string; bucket: string }) => void): HTMLElement {
   const v = rowView(a);
-  return el('a', { class: 'liv-app liv-app-' + v.bucket, href: '#/connect/' + encodeURIComponent(a.app) },
-    el('span', { class: 'liv-app-n', text: a.label || a.app }),
-    el('span', { class: 'liv-app-s', text: v.word }));
+  const kids = [el('span', { class: 'liv-app-n', text: a.label || a.app }), el('span', { class: 'liv-app-s', text: v.word })];
+  if (onPick) {
+    return el('button', { type: 'button', class: 'liv-app liv-app-' + v.bucket,
+      onclick: () => onPick({ app: a.app, label: a.label || a.app, bucket: v.bucket }) }, ...kids);
+  }
+  return el('a', { class: 'liv-app liv-app-' + v.bucket, href: '#/connect/' + encodeURIComponent(a.app) }, ...kids);
 }

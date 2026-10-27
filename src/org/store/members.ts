@@ -218,6 +218,8 @@ export interface LivWelcome {
   upload_started_at?: string | null;
   /** (#5060) 그 올리기가 끝난 시각 — 화면의 백그라운드 올리기가 다 비면 찍는다(me_liv_profile_set upload_done). */
   upload_done_at?: string | null;
+  /** (#5058) 처음 설정을 [연결할게요]로 끝낸 시각 — 이어지는 리브 대화를 처음 설정의 일부로 지키는 근거(first-run.ts onboardingLockSession). */
+  connect_at?: string | null;
 }
 
 /**
