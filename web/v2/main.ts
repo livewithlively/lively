@@ -365,19 +365,41 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
 
-/** OAuth 릴레이에서 돌아온 탭 한 장(#2232) — 셸 없이, 코어 /oauth/callback 페이지와 **같은 생김새**(원준님: "이거 참고하면 될듯").
- *  결과 한 줄 + «이 창을 닫고 원래 탭으로» 한 마디뿐이다. 원래 탭은 신호(BroadcastChannel)로 이미 «연결됨» 으로 바뀌고 있다. */
+/** OAuth 릴레이에서 돌아온 탭 한 장(#2232) — 셸 없이 결과 카드 하나.
+ *  원래 탭은 신호(BroadcastChannel)로 이미 «연결됨» 으로 바뀌고 있다 — 이 탭에서 할 일은 **닫는 것** 하나라 그걸 버튼으로 준다.
+ *  (#5058) 종전엔 글 두 줄뿐이라 «그래서 뭘 하지?» 였다(원준님 2026-10-27 «디자인 너무 개구림 · 버튼 눌러 창 닫는 흐름도»).
+ *  ⚠ window.close() 는 스크립트가 연 탭에서만 먹는다 — [허용]을 누르러 연 새 탭이면 닫히고, 사람이 주소를 직접 열었으면
+ *   브라우저가 조용히 무시한다(오류도 안 난다). 그래서 잠시 뒤 아직 열려 있으면 직접 닫는 법을 말하고, 이 탭에서 이어 갈 길을 준다. */
 function renderRelayLanding(root: HTMLElement, l: { app: string; label: string; ok: boolean; err: string; admin?: boolean }): void {
   root.className = 'v2-relay-landing';
-  root.replaceChildren(el('div', { class: 'v2-relay-page', role: 'status' },
-    el('h2', { text: 'Lively 커넥터' }),
-    el('p', { text: l.ok ? `연결이 완료되었습니다 — ${l.label}. 이 창을 닫아도 됩니다.` : `연결에 실패했습니다: ${l.err}` }),
-    //  #4211 — 회사 계정이 관리자 허용에 막혔다. «다시 시도»로는 영영 안 풀린다 — 관리자에게 보낼 링크가 곧 다음 한 걸음이다.
-    ...(l.admin && l.app === 'outlook' ? [outlookAdminConsentBox(null, { strong: true })] : []),
-    el('p', { class: 'v2-relay-sub', text: l.ok
-      ? '처음 설정이나 «외부 앱 연결» 화면에서 시작하셨다면 이 창을 닫고 원래 탭으로 돌아가세요. 거기 화면이 «연결됨» 으로 저절로 바뀝니다.'
-      : l.admin ? '관리자가 허용한 뒤 원래 탭의 «외부 앱 연결»에서 [Outlook 연결]을 한 번 더 누르세요.'
-      : '원래 탭으로 돌아가 «외부 앱 연결»에서 다시 시도해 주세요.' })));
+  const back = location.pathname + '#/connect/' + encodeURIComponent(l.app);
+  const blocked = el('p', { class: 'v2-relay-blocked', hidden: true,
+    text: '브라우저가 이 창을 자동으로 닫지 못했어요. 탭의 ✕ 를 누르거나 ⌘W(윈도우는 Ctrl+W)로 닫아 주세요.' });
+  const closeBtn = el('button', { type: 'button', class: 'btn btn-primary v2-relay-close', text: '이 창 닫기' }) as HTMLButtonElement;
+  closeBtn.onclick = () => {
+    window.close();
+    setTimeout(() => { if (!window.closed) blocked.hidden = false; }, 300);
+  };
+  //  표식 원 — 성공은 체크, 실패는 느낌표. 글자 대신 그림이라 화면 읽기 프로그램엔 숨기고 제목이 결과를 말한다.
+  const mark = el('div', { class: 'v2-relay-mark' + (l.ok ? '' : ' is-err'), 'aria-hidden': 'true' });
+  mark.innerHTML = l.ok
+    ? '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.2 4.2L19 7"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 6.5v7"/><path d="M12 17.5v.01"/></svg>';
+  root.replaceChildren(el('div', { class: 'v2-relay-page' },
+    el('div', { class: 'v2-relay-card', role: 'status' },
+      mark,
+      el('h1', { class: 'v2-relay-title', text: l.ok ? `${l.label} 연결을 마쳤어요` : `${l.label} 연결을 마치지 못했어요` }),
+      el('p', { class: 'v2-relay-sub', text: l.ok
+        ? '라이블리를 보던 원래 탭이 «연결됨» 으로 저절로 바뀌었어요. 이 창은 닫으셔도 됩니다.'
+        : l.admin ? '회사 계정이라 관리자의 허용이 먼저 필요해요. 관리자가 허용한 뒤 원래 탭의 «외부 앱 연결»에서 [Outlook 연결]을 한 번 더 누르세요.'
+        : '원래 탭으로 돌아가 «외부 앱 연결»에서 다시 시도해 주세요.' }),
+      ...(l.ok ? [] : [el('p', { class: 'v2-relay-err', text: l.err })]),
+      //  #4211 — 회사 계정이 관리자 허용에 막혔다. «다시 시도»로는 영영 안 풀린다 — 관리자에게 보낼 링크가 곧 다음 한 걸음이다.
+      ...(l.admin && l.app === 'outlook' ? [outlookAdminConsentBox(null, { strong: true })] : []),
+      closeBtn,
+      blocked,
+      el('a', { class: 'v2-relay-alt', href: back, text: l.ok ? '원래 탭이 없나요? 이 창에서 라이블리 계속하기' : '이 창에서 다시 시도하기' }))));
+  setTimeout(() => closeBtn.focus(), 50);
 }
 
 export async function bootV2(): Promise<void> {
