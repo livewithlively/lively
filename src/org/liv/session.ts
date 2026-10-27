@@ -121,11 +121,15 @@ export async function openLivSession(user: LivelyUser, o: { prompt: string; labe
   //  (#4970) 모델·추론강도는 새 세션 화면의 기본과 같게 지정한다(catalog.sessionFlagDefaults) — 비우면 그 계정의 CLI 기본으로 떠서
   //   무엇으로 도는지 라이블리가 말할 수 없었다. 사람이 보면서 하는 대화라 무인 자동화 기본(AUTOMATION_DEFAULTS)이 아니다.
   const { sessionFlagDefaults } = await import("../../terminal/catalog.js");
+  //  (#5058 원준님 2026-10-27 «오토모드 이상으로») 리브 세션은 **자동 승인**으로 연다(그 하네스의 autoApproveFlag — catalog.ts).
+  //   리브는 처음 설정·앱 연결을 대신 하는 담당자라 도구를 연달아 부른다. 승인 대기로 열면 Codex 는 도구마다 멈추고, 그 물음은
+  //   대화 칸에 안 뜬다 — 사람은 «진척이 안 된다» 만 본다. Shift+Tab 은 Claude Code 의 모드 전환이라 다른 하네스에선 풀 길도 없다.
+  //   사람이 만든 세션의 기본(자동 승인 끔)은 그대로다 — 이건 리브 세션 한 자리의 결정이다.
   const session = await launchSession(user, {
     kind: "task",
     label: o.label,
     rootKey: "personal", subpath: LIV_SUBPATH,
-    harness, flags: sessionFlagDefaults(harness), autoApprove: false,
+    harness, flags: sessionFlagDefaults(harness), autoApprove: true,
     initialPrompt: prompt,
   }, { nodeId: "", invites: [] });
   const { setLivSession } = await import("../store.js");

@@ -168,7 +168,7 @@ test("★★ 세션을 못 열면 원인을 말하는 503 — 500 «internal_err
 });
 
 test("★★ 리브 세션 = 보통 세션 — 생성 관문(launchSession) · task 종류 · liv 폴더 · 도구 제한 없음 · 좌표 기록 · 한 줄로 선 확보", () => {
-  assert.match(SESSION, /const session = await launchSession\(user, \{\s*kind: "task",\s*label: o\.label,\s*rootKey: "personal", subpath: LIV_SUBPATH,\s*harness, flags: sessionFlagDefaults\(harness\), autoApprove: false,\s*initialPrompt: prompt,\s*\}, \{ nodeId: "", invites: \[\] \}\);/,
+  assert.match(SESSION, /const session = await launchSession\(user, \{\s*kind: "task",\s*label: o\.label,\s*rootKey: "personal", subpath: LIV_SUBPATH,\s*harness, flags: sessionFlagDefaults\(harness\), autoApprove: true,\s*initialPrompt: prompt,\s*\}, \{ nodeId: "", invites: \[\] \}\);/,
     "★ 리브 세션이 생성 관문(launchSession)을 안 탄다");
   assert.doesNotMatch(SESSION, /disallowedTools|livTurnArgs|spawnTaskSession|bypassPermissions/, "리브 세션에 헤드리스 도구 제한이 남아 있다(결정: 두지 않는다)");
   assert.match(SESSION, /await setLivSession\(userId, \{ id: session\.id, at: new Date\(\)\.toISOString\(\) \}\)/, "연 세션을 리브 좌표로 안 적는다");
