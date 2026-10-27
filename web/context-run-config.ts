@@ -17,7 +17,7 @@ import { api, el } from './core.js';
 /** 하네스별 자동화 기본값 — 서버 catalog.ts AUTOMATION_DEFAULTS 와 **같은 값**을 사람 말로 적는다.
  *  ⚠ 여기는 표시 전용이다(전송되는 값이 아니다). 서버가 정본이고, 화면은 «비우면 무엇이 되는지»만 말한다. */
 const AUTO_LABEL: Record<string, { model: string; effort: string }> = {
-  claude: { model: 'opus', effort: 'low' },
+  claude: { model: 'sonnet', effort: 'high' },
   codex: { model: 'gpt-5.6-sol', effort: 'medium' },
   antigravity: { model: 'gemini-3.8-flash-high', effort: 'high' },
   grok: { model: 'grok-4.6', effort: 'medium' },
