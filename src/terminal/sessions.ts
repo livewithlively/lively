@@ -49,7 +49,7 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, AUTO_MODE_FLAG, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
 import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, localServerAbsentVerdict, tmuxViaRelay, isNoTmuxServer, tmuxCliEnv, TMUX_LOCAL_TIMEOUT_MS } from "./tmux-exec.js";
@@ -747,7 +747,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (!SAFE_VALUE_RE.test(v) || v.length > 64) throw new HttpError(400, `${def.label} 값 형식이 잘못되었습니다`);
       cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
+    //  (#5058) 자동 승인(전부 건너뜀)이 오토모드보다 세다 — 둘 다 청했으면 자동 승인. 오토모드는 그 하네스의 autoModeArgv, 없으면 자동 승인으로 뜬다.
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+    else if (String(input.flags?.[AUTO_MODE_FLAG] ?? "") === "1") {
+      if (harness.autoModeArgv) cmd.push(...harness.autoModeArgv);
+      else if (harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+      appliedFlags[AUTO_MODE_FLAG] = "1";
+    }
     // 화면 테마(#1683 후속) + 상시세션 사용량 statusLine — claude 는 둘을 한 --settings 로 합쳐 얹는다(managed 만
     //  statusLine 주입 — 사람 세션 footer 불변). 사람 설정 파일은 건드리지 않는다(harnessSettingsArgv 주석).
     //  지원 안 하는 하네스면 빈 배열이라 종전 그대로다.

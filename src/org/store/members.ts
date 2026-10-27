@@ -212,6 +212,8 @@ export interface LivWelcome {
   flow?: "connect" | "join" | null;
   /** 리브가 «처음 연결·처음 수집을 끝냈다» 를 찍은 시각(me_liv_profile_set collect_done) — connect 갈래의 2턴 신호. */
   collect_done_at?: string | null;
+  /** (#5058) 처음 설정을 [연결할게요]로 끝낸 시각 — 이어지는 리브 대화를 처음 설정의 일부로 지키는 근거(first-run.ts onboardingLockSession). */
+  connect_at?: string | null;
 }
 
 /**

@@ -567,6 +567,9 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     ok2((agy?.flags.find((f) => f.name === "--effort")?.choices || []).join(",") === ",low,medium,high",
       "E13d agy 의 추론강도는 3단계 — 다른 하네스의 목록을 복사해 두면 고른 값이 거부된다");
     ok2(HARNESSES.find((h) => h.key === "opencode")?.autoApproveFlag === "--auto", "E13e opencode 자동승인은 --auto");
+    //  #5058 오토모드 — 승인을 하네스가 스스로 검토하되 샌드박스는 남는 자리(리브 세션이 쓴다). 실측: claude --help · codex-cli 0.164.0 --help.
+    ok2((HARNESSES.find((h) => h.key === "claude")?.autoModeArgv || []).join(" ") === "--permission-mode auto", "E13g Claude 오토모드는 --permission-mode auto");
+    ok2((codex?.autoModeArgv || []).join(" ") === "--approve-for-me", "E13h Codex 오토모드는 --approve-for-me(샌드박스 workspace-write 유지)");
     ok2(HARNESSES.every((h) => h.key === "shell" || !!h.bin), "E13f 셸 말고는 실행 파일이 반드시 있다");
     // 어느 하네스든 '하네스 기본'을 고를 수 있어야 낡은 모델 문자열에 사용자가 묶이지 않는다.
     const modelFlags = HARNESSES.flatMap((h) => h.flags.filter((f) => f.name === "--model"));
