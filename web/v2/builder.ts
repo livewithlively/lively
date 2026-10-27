@@ -206,6 +206,11 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   const refresh = (): void => { void paintList(v, env); };
   //  카드를 고르면 주소에도 적는다(setSel) — 사이드바가 같은 줄을 켠다.
   const pick = (key: string): void => { setSel(v, key); refresh(); };
+  //  개발 정보(#4632)는 첫 버전이 있으면 만들던 앱에도 선다(원준 2026-10-27 «개발 정보 페이지 이건 어디있는걸까?» — 회의록은 아직 만들던 앱이다).
+  //   거기서 「‹ 앱빌더」 로 돌아오면 주소는 그 앱(#/builder?sel=<앱>)이라, 그 앱을 만들던 카드를 고른다.
+  const specApp = (d: Draft): string => (d.appId && apps.some((x) => x.id === d.appId && !x.empty) ? d.appId : '');
+  if (v.sel && !v.sel.startsWith('draft:')) { const d = drafts.find((x) => specApp(x) === v.sel); if (d) setSel(v, 'draft:' + d.sid); }
+  const specBtn = (id: string): HTMLElement => el('button', { class: 'btn btn-ghost v2-bld-info', type: 'button', title: '이 앱이 코드로 어떻게 돌아가는지 쉬운 말로 봐요', onclick: () => { location.hash = builderRoute('spec', id); } }, icon('info', 'v2-ic'), el('span', { text: '개발 정보' }));
 
   const appCard = (a: BApp, own: boolean): HTMLElement => {
     const pl = placeOf(a.studio);
@@ -229,7 +234,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
           : el('button', { class: 'v2-bld-pri sm', type: 'button', text: '내 사본 떠서 고치기', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
         own ? null : el('button', { class: 'btn btn-ghost', type: 'button', text: '사본', title: '원본은 그대로 두고 내 사본을 고쳐요', onclick: () => { location.hash = builderRoute('app', a.id, 'copy'); } }),
         //  #4632 코드 기준 명세(원준 2026-10-26 «(i) 같은거나 … 개발 정보? 뭐 이런 느낌이 드는 버튼»)
-        el('button', { class: 'btn btn-ghost v2-bld-info', type: 'button', title: '이 앱이 코드로 어떻게 돌아가는지 쉬운 말로 봐요', onclick: () => { location.hash = builderRoute('spec', a.id); } }, icon('info', 'v2-ic'), el('span', { text: '개발 정보' }))));
+        specBtn(a.id)));
     return card;
   };
   //  만들던 앱 — 단계는 아래 줄에 한 번만(원준 2026-10-14 «세부 기획 정하기가 두 번이네 · 뱃지 빼버려»). 카드를 누르면 오른쪽에 이어서 · 지우기.
@@ -241,6 +246,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
       el('div', { class: 'hd' }, appGlassIcon('builder'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done), when(d.at), d.local ? '' : '다른 컴퓨터에서'].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-acts' },
         el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
+        specApp(d) ? specBtn(specApp(d)) : null,
         el('span', { class: 'v2-studio-sp' }),
         armedDelete('btn btn-ghost', '지우기', '한 번 더 누르면 지워져요', '앱, 앱빌딩 세션, 기록을 모두 지워요. 되돌릴 수 없어요.', () => deleteDraft(d))));
     return card;
@@ -290,20 +296,21 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   //  사이드바에서 골라 왔으면 그 카드가 보이게 — 목록이 길면 아래에 있다.
   v.list.querySelector('.v2-bld-card.on')?.scrollIntoView({ block: 'nearest' });
   const selDraft = drafts.find((d) => draftKey(d) === v.sel) || null;
-  if (selDraft) { paintDraftPanel(v, selDraft, deleteDraft); return; }
+  if (selDraft) { paintDraftPanel(v, selDraft, specApp(selDraft), deleteDraft); return; }
   const selApp = apps.find((a) => a.id === v.sel) || null;
   paintPanel(v, selApp, m, hidden, refresh);
 }
 
 // ── 만들던 앱 하나 — 이어서 · 지우기(전부) ──
-function paintDraftPanel(v: View, d: Draft, del: (d: Draft) => Promise<boolean>): void {
+function paintDraftPanel(v: View, d: Draft, specId: string, del: (d: Draft) => Promise<boolean>): void {
   const delBtn = armedDelete('btn btn-ghost btn-sm', '모두 지우기 (앱, 세션, 기록)', '한 번 더 누르면 지워져요. 되돌릴 수 없어요.', '', () => del(d));
   v.panel.replaceChildren(
     el('h3', { text: '만들던 앱 「' + d.title + '」' }),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '어디까지' }), el('small', { text: draftStageText(d.stage, !!d.appId, d.done) + (d.at ? ' · ' + when(d.at) : '') + (d.local ? '' : ' · 다른 컴퓨터에서 만들던 것') })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '앱' }), el('small', { text: d.appId ? '초안이 있어요(' + d.appId + '). 지우면 버전 이력도 함께 없어져요.' : '아직 앱이 없어요(기획 단계)' })),
     el('div', { class: 'v2-bld-acts' },
-      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } })),
+      el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
+      specId ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '개발 정보 보기', title: '지금 버전의 코드를 기준으로 쓴 이 앱의 명세예요', onclick: () => { location.hash = builderRoute('spec', specId); } }) : null),
     el('p', { class: 'v2-bld-mini', text: '만들던 앱은 지우기 전까지 이 목록과 사이드바에 늘 보여요. 「모두 지우기」는 앱, 앱빌딩 세션, 기록을 모두 지우고 세션은 휴지통으로 옮겨요.' }),
     el('div', { class: 'v2-bld-acts' }, el('span', { class: 'v2-studio-sp' }), delBtn));
 }

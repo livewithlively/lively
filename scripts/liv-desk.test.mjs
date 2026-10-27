@@ -142,7 +142,7 @@ check(/return e\.send \? e\.send\(text\) : false;/.test(SESSIN), "W3 보내기 �
 check(/if \(destroyed \|\| mode !== 'chat' \|\| view\.input\.disabled \|\| view\.input\.value\.trim\(\) \|\| attachments\.busy\(\) \|\| attachments\.tail\(\)\) return false;/.test(CHAT),
   "W3 ★ 터미널 쪽이거나 사람이 쓰던 글이 있어도 보낸다(쓰던 글이 사라진다 · 사람이 고칠 틈 없이 Enter)");
 check(/if \(destroyed \|\| sendHere\(text\)\) return;[\s\S]{0,200}?void openLiv\(\{ text, onlyExisting: true \}\)/.test(CHAT), "W9 물음 카드의 한 마디 — 보낼 수 없으면 입력칸을 건드리지 않고 서버로(있는 리브 세션에만) 넣는다");
-check(/if \(id && sendIntoSession\(\[id\], text\)\) return;[\s\S]*?const r = await openLiv\(\{ text, onlyExisting: true \}\);/.test(DESK), "W3 오른쪽 칸의 말 — 대화창이 있으면 거기로, 없으면 서버가 리브 세션에 넣는다");
+check(/if \(id && sendIntoSession\(\[id\], text\)\) return true;[\s\S]*?const r = await openLiv\(\{ text, onlyExisting: true \}\);/.test(DESK), "W3 오른쪽 칸의 말 — 대화창이 있으면 거기로, 없으면 서버가 리브 세션에 넣는다");
 check(/const r = await openLiv\(\{ text, onlyExisting: true \}\);/.test(DESK), "W9 ★ 곁칸 카드의 맞장구가 리브 세션이 사라진 사이 새 리브 세션의 첫 지시가 된다");
 check(!/takeUnsentDraft/.test(DESK), "W9 곁칸이 남겨 둔 글을 직접 걷는다(넣기 성공 전에 걷으면 말이 사라진다 — 담기는 openLiv 한 곳에서)");
 check(/const r = await openLiv\(\{ text, onlyExisting: true \}\);/.test(BOARD), "W9 ★ 리브 화면 카드의 맞장구가 새 리브 세션의 첫 지시가 된다");

@@ -97,3 +97,30 @@ test("C3 core.ts 의 logout 은 서버가 준 IdP 문으로 CP 문보다 먼저 
   assert.match(fn, /if \(ssoDoor && !desk\) \{ location\.replace\(ssoDoor\); return; \}/,
     "데스크톱 앱 창은 다른 출처 이동을 시스템 브라우저로 넘긴다 — 앱 창에선 IdP 문으로 가지 않는다");
 });
+
+// ── 탈퇴 뒤 로그아웃(#5009) — 워크스페이스가 지워진 뒤에도 CP 로그인·가입 화면으로 나가야 한다 ──
+//  증상(원준 2026-10-27): 탈퇴 → «Lively 회사 계정으로 로그인하세요. 로그아웃되었습니다.» 게이트가 지워진 주소 위에 남음.
+//   로그아웃 순간에 CP 주소를 물으니 이미 지워진 워크스페이스가 404 → null → 셀프호스팅 게이트.
+//  T6 returnTo=null → CP 문에 to 를 싣지 않는다(CP 는 첫 화면으로) · 기본값은 종전대로 to=here
+//  C4 core.ts 는 CP 주소를 페이지가 뜰 때 미리 묻는다(로그아웃 순간이 아니라)
+//  C5 탈퇴 완료는 logout 에 accountGone 을 넘기고, logout 은 그때 돌아올 자리를 비운다
+test("T6 돌아올 자리 없음 — CP 문에 to 를 싣지 않는다", async () => {
+  const { logoutRedirectTarget } = await loadPure<{ logoutRedirectTarget: (u: string, here: string, to?: string | null) => string | null }>("lib/logout-target.ts");
+  const here = "https://acme.app.lvly.io/ui/#/s/box-a-1";
+  const gone = new URL(logoutRedirectTarget("https://app.lvly.io", here, null)!);
+  assert.equal(gone.origin + gone.pathname, "https://app.lvly.io/auth/logout");
+  assert.equal(gone.searchParams.get("to"), null, "🔴 지워진 워크스페이스로 돌려보내면 «워크스페이스를 찾을 수 없습니다» 로 떨어진다");
+  assert.equal(new URL(logoutRedirectTarget("https://app.lvly.io", here)!).searchParams.get("to"), here, "기본값은 종전대로");
+});
+
+test("C4 core.ts 는 CP 주소를 페이지가 뜰 때 미리 묻는다", () => {
+  const core = readWeb("core.ts");
+  assert.match(core, /^void loginRedirectUrl\(\);$/m, "🔴 로그아웃 순간에만 물으면 탈퇴로 지워진 워크스페이스가 404 를 주고 죽은 게이트가 남는다");
+});
+
+test("C5 탈퇴 완료 → logout(accountGone) → 돌아올 자리 없이 CP 로", () => {
+  const modal = readWeb("v2/me-modal.ts");
+  assert.match(modal, /logout\(undefined, \{ accountGone: true \}\)/, "🔴 탈퇴 뒤 로그아웃이 지워진 자리를 to 로 들고 간다");
+  const fn = readWeb("core.ts").slice(readWeb("core.ts").indexOf("async function logout("));
+  assert.match(fn, /location\.href, opts\?\.accountGone \? null : location\.href\)/);
+});

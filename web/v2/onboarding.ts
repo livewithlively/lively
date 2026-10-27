@@ -64,8 +64,10 @@ export const OB_COPY = {
   aiTitle: '라이블리에서 쓸 AI를 연결해 주세요',
   aiHelp: '외부 앱 연결과 자료 정리를 이 AI가 대신 합니다. 쓰시는 AI 하나면 돼요.',
   aiNext: '다음',
-  aiPc: 'PC에서 쓰는 AI로 할게요 (커서·클로드 코드 등)',
-  aiNone: '이 서버에는 아직 연결할 수 있는 AI가 없어요. PC에서 쓰시는 AI로 하시면 됩니다.',
+  //  (#5058) 종전 «PC에서 쓰는 AI로 할게요 (커서·클로드 코드 등)» — 처음 온 비개발자에겐 «PC에서 쓰는 AI» 가 브라우저의 ChatGPT 와
+  //   구분되지 않았다. 이 길은 **컴퓨터에 프로그램으로 깔아 쓰는 AI**(커서·클로드 코드) 쪽이라 그렇게 말한다.
+  aiPc: '컴퓨터에 설치해 쓰는 AI 프로그램으로 할게요 (Cursor·Claude Code 등)',
+  aiNone: '이 서버에는 아직 연결할 수 있는 AI가 없어요. 컴퓨터에 설치해 쓰시는 AI 프로그램(Cursor·Claude Code 등)으로 하시면 됩니다.',
   connectTitle: '외부 앱을 연결하시겠어요?',
   connectHelp: '슬랙·노션·깃허브 같은 곳의 자료를 라이블리로 모읍니다.',
   connectYes: '연결할게요',
@@ -305,10 +307,11 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
    * 처음 설정 반영 — **여기가 실제로 워크스페이스를 바꾸는 자리다**(이름·완료 표식). 실패하면 끝났다고 말하지 않는다(표식도 안 남긴다).
    *  (#4970) 서랍·용도·직무는 더 묻지 않는다 — 없는 채로 보낸다(지어내지 않는다). 팀 구조는 서버가 관리 권한으로 가른다.
    */
-  async function finishOnboarding(): Promise<boolean> {
+  async function finishOnboarding(connect = false): Promise<boolean> {
     S.scene = 'done'; save();
     try {
-      await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({ name: S.nameSet ? S.name : null }) });
+      //  (#5058) connect — [연결할게요]로 끝낸다는 표식. 서버가 이어지는 리브 대화를 처음 설정의 일부로 지킨다(me.onboarding_session).
+      await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({ name: S.nameSet ? S.name : null, connect: connect || undefined }) });
     } catch (e: any) {
       toast(`정리하다 막혔어요. ${(e && e.message) || '알 수 없는 오류'} — 잠시 뒤 다시 눌러 주세요.`);
       S.scene = 'connect-ask'; save();
@@ -325,7 +328,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /** [연결할게요] — 반영 → 연결 세션 열기. AI 가 있으면 그 세션으로 가고, 없으면 이 자리에 «쓰는 AI 에서 하기» 를 그린다. */
   async function connectYes(el: HTMLElement, yes: HTMLButtonElement, later: HTMLButtonElement) {
     yes.disabled = true; later.disabled = true; yes.textContent = '확인하고 있어요…';
-    if (!(await finishOnboarding())) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
+    if (!(await finishOnboarding(!S.viaPc))) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
     //  (#4970) AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다 — 서버 세션을 열지 않고 그 AI 에서 하는 세 걸음을 바로 그린다.
     if (S.viaPc) { showOwnAi(el); return; }
     await openOrGuide(el);
@@ -353,6 +356,10 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     }
     if (r.ai) {
       say(el, '연결을 도와드릴 대화를 열었어요. 그 자리로 모시겠습니다.');
+      //  #5058 — 처음 설정은 그 대화까지가 한 덩어리다. 서버도 같은 판정을 하지만(me.onboarding_session) 다음 부팅까지 기다리지 않고
+      //   지금 셸에 알려, 그 대화로 넘어가는 순간부터 사이드바를 잠그고 다른 화면으로 새지 않게 한다(main.ts obLock).
+      const sid = (/^#\/s\/([^/?]+)/.exec(r.href) || [])[1];
+      if (sid && state.me) (state.me as { onboarding_session?: string | null }).onboarding_session = decodeURIComponent(sid);
       await sleep(900);
       location.hash = r.href;
       return;

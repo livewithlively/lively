@@ -17,6 +17,8 @@
 //  U9 볼 수 없는 앱(404) — 찾을 수 없다고 말한다
 //  U5b 실패인데 앞 버전 설명이 보이면 그 버전을 말하고 «달라진 점» 은 감춘다(격리 리뷰) · U4 도 감춘다
 //  U10 오늘 몫을 다 씀(limit) — 말하고 다시 묻지 않는다
+//  U11 만들던 앱도 첫 버전이 있으면 카드에 「개발 정보」(원준 2026-10-27 «개발 정보 페이지 이건 어디있는걸까?» — 회의록은 아직 만들던 앱) · 첫 버전 전(빈 예약)엔 없다
+//  U12 만들던 앱의 개발 정보에서 「‹ 앱빌더」 — 그 만들던 앱 카드가 골라지고 오른쪽에 「개발 정보 보기」
 //  W  페이지 예외 없음
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(개발 정보가 없던 origin/main 에서 U1~U9 가 빨갛다).
@@ -68,6 +70,7 @@ window.__spec = {
   left: () => res("writing", { id: "left", title: "떠날 앱", doc: false }),
   limit: () => res("limit", { id: "limit", title: "몫 다 쓴 앱", doc: false }),
   failold: () => res("failed", { id: "failold", title: "실패했지만 앞 설명 있는 앱", docV: 2, err: "시간 안에 끝나지 않았어요" }),
+  draft1: () => res("ok", { id: "draft1", title: "만드는 중 회의록", v: 2, docV: 2 }),
 };
 const seen = {};
 window.fetch = async (u, init) => {
@@ -85,7 +88,10 @@ window.fetch = async (u, init) => {
   if (p.startsWith("/api/ui/me/whoami")) return j({ member_id: "wonjoon-jang", display_name: "원준" });
   if (p.startsWith("/api/ui/apps?")) {
     const app = (id, title, by) => ({ id, title, status: "active", visibility: "all", installed_by: by, owner_member: by, is_owner: by === "wonjoon-jang", can_edit: by === "wonjoon-jang", current_version_no: 3, manifest: { ui: { pages: [{}] } } });
-    return j({ apps: [app("notes", "회의록", "wonjoon-jang"), app("team1", "팀 채널", "sangmin-yoon")] });
+    //  만들던 앱 둘 — 첫 버전이 있는 것(나만 · 만들기 세션 «"…" 앱 제작») · 아직 첫 버전 전의 빈 예약
+    const building = (id, title, sid, empty) => ({ ...app(id, title, "wonjoon-jang"), visibility: "me", made_by: "wonjoon-jang", build_session: sid, empty, current_version_no: empty ? 0 : 2 });
+    return j({ apps: [app("notes", "회의록", "wonjoon-jang"), app("team1", "팀 채널", "sangmin-yoon"),
+      building("draft1", "만드는 중 회의록", "box-w-d1", false), building("resv1", "빈 예약 앱", "box-w-r1", true)] });
   }
   return j({});
 };</script>`;
@@ -97,7 +103,8 @@ async function PAGE_MAIN() {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const txt = (n) => (n ? n.textContent.replace(/\s+/g, " ").trim() : null);
   const host = document.getElementById("host");
-  const env = { projects: () => [], sessions: () => [], redrawSide: () => {}, setRoute: () => {} };
+  const SESS = [{ id: "box-w-d1", label: '"만드는 중 회의록" 앱 제작', projectId: null }, { id: "box-w-r1", label: '"빈 예약 앱" 앱 제작', projectId: null }];
+  const env = { projects: () => [], sessions: () => SESS, redrawSide: () => {}, setRoute: () => {} };
   history.replaceState(null, "", "#/builder");
   B.renderBuilderApp(host, ["builder"], new URLSearchParams(""), env);
   await sleep(800);
@@ -188,6 +195,21 @@ async function PAGE_MAIN() {
   if (panelBtn) { panelBtn.click(); await sleep(700); }
   R.u8.hash = location.hash; R.u8.page = !!specRoot();
 
+  // U11 만들던 앱 카드
+  await go("#/builder", 900);
+  const draftSec = [...host.querySelectorAll(".v2-bld-sec")].find((x) => (txt(x.querySelector("h3")) || "").startsWith("만들던 앱")) || null;
+  const inSec = (sec, title) => sec ? [...sec.querySelectorAll(".v2-bld-card")].find((c) => txt(c.querySelector(".hd b")) === title) || null : null;
+  const btnIn = (c, t) => c ? [...c.querySelectorAll("button")].find((b) => txt(b) === t) || null : null;
+  R.u11 = { d: !!inSec(draftSec, "만드는 중 회의록"), r: !!inSec(draftSec, "빈 예약 앱"), dBtn: !!btnIn(inSec(draftSec, "만드는 중 회의록"), "개발 정보"), rBtn: !!btnIn(inSec(draftSec, "빈 예약 앱"), "개발 정보") };
+  if (R.u11.dBtn) { btnIn(inSec(draftSec, "만드는 중 회의록"), "개발 정보").click(); await sleep(700); }
+  R.u11.hash = location.hash; R.u11.page = !!specRoot(); R.u11.gets = specGets("draft1");
+  // U12 돌아오기
+  const back2 = specRoot() && [...specRoot().querySelectorAll(".v2-spec-top button")].find((b) => /앱빌더/.test(txt(b) || ""));
+  if (back2) { back2.click(); await sleep(900); }
+  const onCard = host.querySelector(".v2-bld-card.on");
+  R.u12 = { back: !!back2, hash: decodeURIComponent(location.hash), on: txt(onCard && onCard.querySelector(".hd b")), panel: txt(host.querySelector(".v2-bld-panel h3")),
+    panelBtn: !![...host.querySelectorAll(".v2-bld-panel button")].find((b) => txt(b) === "개발 정보 보기") };
+
   // U9 404
   await go("#/builder/spec/nope");
   R.u9 = txt(specRoot() && specRoot().querySelector(".v2-spec-body"));
@@ -237,6 +259,10 @@ check(R.u6 && /API 키/.test(R.u6.state || "") && R.u6.calls && R.u6.files === 2
 check(R.u7 && R.u7.back && R.u7.hash === "#/builder?sel=left" && R.u7.list && !R.u7.page && R.u7.gets1 === R.u7.gets0, "U7 「‹ 앱빌더」 — 그 앱을 고른 목록으로 · 떠나면 다시 묻지 않는다", R.u7);
 same(R.u8 && [R.u8.has, R.u8.hash, R.u8.page], [true, "#/builder/spec/notes", true], "U8 오른쪽 배포 설정의 「개발 정보 보기」");
 check(/찾을 수 없어요/.test(R.u9 || ""), "U9 볼 수 없는 앱은 찾을 수 없다고 말한다", R.u9);
+same(R.u11 && [R.u11.d, R.u11.r, R.u11.dBtn, R.u11.rBtn, R.u11.hash, R.u11.page, R.u11.gets], [true, true, true, false, "#/builder/spec/draft1", true, 1],
+  "U11 만들던 앱도 첫 버전이 있으면 카드에 「개발 정보」 · 빈 예약엔 없다");
+same(R.u12 && [R.u12.back, R.u12.hash, R.u12.on, R.u12.panel, R.u12.panelBtn], [true, "#/builder?sel=draft:box-w-d1", "만드는 중 회의록", "만들던 앱 「만드는 중 회의록」", true],
+  "U12 만들던 앱의 개발 정보에서 돌아오면 그 만들던 앱 카드 · 오른쪽에 「개발 정보 보기」");
 same(R.errors, [], "W  페이지 예외 없음");
 
 console.log(`\n#4632 앱 개발 정보: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

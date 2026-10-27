@@ -30,7 +30,7 @@ type CategoryListInput = z.infer<z.ZodObject<typeof categoryListInput>>;
 const categoryList: Capability = {
   name: "category_list",
   title: "카테고리 목록",
-  description: "분류축(카테고리) 전체 조회 — 이 워크스페이스의 지식이 어느 서랍들로 갈라져 있는지. "
+  description: "분류축(카테고리) 전체 조회 — 이 워크스페이스의 지식이 어느 카테고리들로 갈라져 있는지. "
     + `항목마다 속한 묶음(group)이 함께 온다 — ${GROUP_NOTE}`,
   scope: "context",
   input: categoryListInput,

@@ -69,10 +69,10 @@ await t("E16 옛 판의 저장된 자리를 알아본다(team→name · done→c
 
 await t("E17 [연결할게요] — 반영 성공 뒤에만 연결 세션 문 · ai:false 면 세 걸음 · ai:true 면 그 주소", () => {
   const yes = OB.slice(OB.indexOf("async function connectYes"), OB.indexOf("function renderScene"));
-  const applyAt = yes.indexOf("await finishOnboarding()");
+  const applyAt = yes.indexOf("await finishOnboarding(!S.viaPc)");   // #5058 — [연결할게요] 표식(PC 의 AI 로 가는 사람은 리브 대화가 없어 빼고)
   const openAt = yes.indexOf("openConnectSession()");
   assert.ok(applyAt > 0 && openAt > applyAt, "반영보다 먼저 연결 세션을 연다 — 반영이 실패해도 세션이 열린다");
-  assert.match(yes, /if \(!\(await finishOnboarding\(\)\)\) \{[^}]*return;/, "반영이 실패해도 계속 간다");
+  assert.match(yes, /if \(!\(await finishOnboarding\(!S\.viaPc\)\)\) \{[^}]*return;/, "반영이 실패해도 계속 간다");
   assert.match(yes, /if \(r\.ai\) \{[\s\S]*?location\.hash = r\.href;/, "AI 있음인데 그 세션으로 안 간다");
   assert.match(yes, /ownAiStepsHtml\(\)/, "AI 없음인데 «쓰는 AI 에서 하기» 를 안 그린다");
   const FIN = OB.slice(OB.indexOf("async function finishOnboarding"), OB.indexOf("async function connectYes"));
@@ -133,7 +133,7 @@ await t("F5 «PC에서 쓰는 AI로» — 다음 장면으로 가고, [연결할
   assert.match(AI, /pc\.onclick = \(\) => \{ S\.viaPc = true; goScene\(nextScene\('ai'\)!\); \};/);
   assert.match(AI, /next\.onclick = \(\) => \{ S\.viaPc = false; goScene\(nextScene\('ai'\)!\); \};/, "AI 를 이은 사람의 PC 표식을 안 지운다");
   const yes = OB.slice(OB.indexOf("async function connectYes"), OB.indexOf("function renderScene"));
-  const fin = yes.indexOf("await finishOnboarding()"), pc = yes.indexOf("if (S.viaPc) { showOwnAi(el); return; }"), open = yes.indexOf("await openOrGuide(el)");
+  const fin = yes.indexOf("await finishOnboarding(!S.viaPc)"), pc = yes.indexOf("if (S.viaPc) { showOwnAi(el); return; }"), open = yes.indexOf("await openOrGuide(el)");
   assert.ok(fin > 0 && pc > fin && open > pc, "반영 뒤 · 세션 열기 전에 PC 길을 가르지 않는다");
   assert.match(OB, /viaPc: v\.viaPc === true,/, "이어 열기에서 PC 표식을 잃는다");
 });

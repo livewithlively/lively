@@ -229,8 +229,25 @@ test("㉖′ 경계 — 빈 문자열도 «없음» 이다(빈 따옴표를 싣�
 });
 test("㉙ 서랍이 이미 있는 사람에게도 카테고리 단계는 똑같이 나온다 — 조건부 단계가 아니다", () => {
   const p = buildSecondTurnPrompt(pin({ drawers: ["산출물", "기록"] }));
-  assert.match(p, /서랍 산출물 · 기록/);
+  assert.match(p, /카테고리 후보 산출물 · 기록/);
   assert.match(p, /카테고리를 만든다 — 이 단계는 건너뛰지 않는다/);
+});
+//  #5062 — 리브가 «첫 서랍 '운영·인프라'를 이 정의로 만들까요? … 첫 자동 정리 배치를 다시 실행» 이라고 물었다.
+//   지시문·스킬이 «서랍»·«레인»·«배치» 를 내부 낱말로 쓰니 리브가 그 말을 그대로 사람에게 옮겼다. 원준: «처음 보는 사람은 이해가 되겠니?»
+test("㉛ 지시문은 «서랍» 을 내부 낱말로도 쓰지 않고, 묻는 문장이 처음 보는 사람에게 읽히게 하라고 못박는다", () => {
+  const p = buildSecondTurnPrompt(pin({ drawers: ["산출물"] }));
+  const leaks = p.split("\n").filter((l) => l.includes("서랍") && !l.includes("«서랍»이라고 하지 않는다"));
+  assert.deepEqual(leaks, [], "«서랍» 이 사람에게 쓰지 말라는 줄 밖에서 나온다");
+  assert.match(p, /처음 보는 사람도 알아들어야 한다/);
+  assert.match(p, /고르면 각각 무슨 일이 생기는지/);
+});
+test("㉜ 시드 liv-distill 도 «서랍» 을 쓰지 않는다 — 스킬의 예문이 리브의 입버릇이 된다", async () => {
+  const { DEFAULT_SKILLS } = await import("../delivery/default-content.js");
+  const skill = DEFAULT_SKILLS.find((s) => s.id === "liv-distill")!;
+  const leaks = [skill.body, skill.description, skill.label ?? ""].join("\n").split("\n")
+    .filter((l) => l.includes("서랍") && !l.includes("«서랍»") && !l.startsWith("- 나쁜 예"));
+  assert.deepEqual(leaks, []);
+  assert.match(skill.body, /처음 보는 사람도 알아들어야 한다/);
 });
 test("㉚ 시드 liv-distill 의 절차 번호가 1~12 로 이어지고, «N단계» 참조가 실제 단계를 가리킨다", async () => {
   const { DEFAULT_SKILLS } = await import("../delivery/default-content.js");

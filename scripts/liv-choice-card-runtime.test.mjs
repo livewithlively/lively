@@ -15,6 +15,7 @@
 //   C7  다른 앱 알약 — 준비가 필요한 앱(길 없음)은 «연결할 수 있는 다른 앱» 에 안 선다 · 목록에 이미 있는 앱도 안 선다
 //   C8  앱 선택지는 공식 로고 타일(.svc-tile[data-svc]) · 앱 질문이 아니면 타일이 없다
 //   C9  알약을 고른 채 [+ 다른 앱]을 다시 눌러도 접히지 않는다(접힌 채 보내지면 무엇이 갔는지 못 본다)
+//   C10 (#5058) 하단 — [나중에]는 왼쪽 끝 · 확정은 오른쪽 끝 · 이름은 «선택 완료», 복수면 고른 수가 붙는다(«선택 완료 (2)»)
 //  fail-first: `SRC_ROOT=<옛 트리>`(e312d42d1 — 리뷰 반영 전)로 물리면 C1 · C2 · C3 · C5 · C6 · C7 · C9 가 빨갛다(실측).
 //   크롬이 없는 면에서는 조용히 건너뛴다(종료코드 0).
 import { existsSync } from "node:fs";
@@ -81,6 +82,11 @@ async function PAGE_MAIN() {
   { posts = []; const c = await mount(true); c.opt("Notion").click(); c.opt("슬랙").click(); c.openMore(); c.chip("Zotero").click(); c.type("카카오톡");
     c.q(".liv-pick-send").click(); await sleep(30);
     R.c4 = { n: posts.length, body: last() }; c.host.remove(); }
+  { const c = await mount(true); const foot = c.q(".liv-pick-foot"); const kids = [...foot.children].filter((x) => getComputedStyle(x).display !== "none");
+    const idle = c.q(".liv-pick-send").textContent; c.opt("Notion").click(); c.opt("슬랙").click();
+    const sr = c.q(".liv-pick-send").getBoundingClientRect(), lr = c.q(".liv-ask-later").getBoundingClientRect(), fr = foot.getBoundingClientRect();
+    R.c10 = { first: kids[0]?.className, last: kids[kids.length - 1]?.className, idle, two: c.q(".liv-pick-send").textContent,
+      laterLeft: Math.round(lr.left - fr.left), sendRightGap: Math.round(fr.right - sr.right) }; c.host.remove(); }
   { posts = []; answerDelay = 200; const c = await mount(false); c.opt("Notion").click(); await sleep(10); c.opt("슬랙").click(); await sleep(260);
     R.c5 = { n: posts.length }; answerDelay = 0; c.host.remove(); }
   { const c = await mount(true);
@@ -118,6 +124,8 @@ check(R.c1?.n === 1 && same(R.c1.body?.choices, ["notion"]) && !R.c1.body?.other
 check(R.c2?.n === 1 && same(R.c2.body?.choices, ["notion"]) && !R.c2.body?.other, "C2 ★ 단일 — 이름을 적어 둔 채 선택지를 누르면 선택지만 간다", R.c2);
 check(R.c3?.n === 1 && same(R.c3.body?.choices, []) && R.c3.body?.other === "카카오톡" && R.c3.chipOn === false, "C3 단일 — 알약 뒤에 이름을 적으면 적은 이름 하나만(알약은 꺼진다)", R.c3);
 check(R.c4?.n === 1 && same(R.c4.body?.choices, ["notion", "slack"]) && R.c4.body?.other === "Zotero, 카카오톡", "C4 복수 — 선택지 둘 + 알약 + 적은 이름이 모두 간다", R.c4);
+check(/liv-ask-later/.test(R.c10?.first || "") && /liv-pick-send/.test(R.c10?.last || "") && R.c10.idle === "선택 완료" && R.c10.two === "선택 완료 (2)"
+  && R.c10.laterLeft < 40 && R.c10.sendRightGap < 40, "C10 (#5058) [나중에]는 왼쪽 · [선택 완료 (N)]는 오른쪽 끝", R.c10);
 check(R.c5?.n === 1, "C5 ★ 단일 — 보내는 중의 두 번째 클릭은 두 번째 답이 되지 않는다", R.c5);
 check(R.c6?.gmail === "연결됨" && R.c6?.drive === "연결됨" && R.c6?.notion === "", "C6 «연결됨» — 같은 앱(Google)의 두 카드 모두 · 안 된 앱엔 없음", R.c6);
 check(same(R.c7?.chips, ["Zotero"]), "C7 다른 앱 알약 — 준비 필요(Figma)·이미 목록에 있는 앱(Notion·Slack·Google)은 빠지고 Zotero 만", R.c7);
