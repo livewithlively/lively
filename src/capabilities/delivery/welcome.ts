@@ -564,13 +564,29 @@ export const welcomeCapabilities: Capability[] = [
       //  같은 리브 세션을 다시 쓰는 반영(처음 설정을 다시 눌렀다)이면 그 세션에 이미 찍힌 진행 표식과 갈래를 지킨다 — welcome 은 통째로
       //   덮이는 칸이라 안 실으면 사라지고, 사라지면 2턴이 같은 세션에 또 나간다(처음 수집 끝·증류 지시·포기). 판정은 org/liv/welcome-marks.ts.
       //  (#4970) 새로 끝내는 사람에게는 리브 세션이 없다 — 갈래(flow)를 적지 않는다(리브 2턴 후보가 되지 않는다).
-      const { carryWelcomeProgress } = await import("../../org/liv/welcome-marks.js");
+      const { carryWelcomeProgress, composeWelcomeMarks } = await import("../../org/liv/welcome-marks.js");
       const keep = carryWelcomeProgress(priorWelcome);
+      //  (#5060) 올린 파일이 지식이 되는 길 — 처음 설정에서 파일을 올렸으면 2턴(증류 지시)이 그 파일로 카테고리·정리 규칙을 세운다.
+      //   갈래(flow)는 화면이 고른 다음 걸음(next)으로 정한다: [연결할게요] = connect(연결 대화가 끝나면 같은 세션에 2턴 — 세션 id 는
+      //   me_liv_open from:"welcome" 이 적는다) · [나중에 할게요] + 올린 파일 = files(올리기가 끝나면 스윕이 리브 세션을 새로 열어 2턴).
+      //   ⚠ 관리 권한이 있는 사람만 — 2턴은 팀의 카테고리를 만든다(위 #4970 «팀의 구조»와 같은 선).
+      //   ⚠ files 는 서버에서 띄울 AI 가 있을 때만 — 없으면 새로 열 세션이 없어 스윕이 한 번 실패하고 포기할 뿐이다(싼 판정: 자격 파일).
+      const nowIso = new Date().toISOString();
+      //  서버 AI 는 files 갈래 후보일 때만 잰다(자격 파일 — 싼 판정).
+      const serverAi = admin && input.next === "later" && (input.upload === "running" || input.upload === "done")
+        ? await (async () => {
+          const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
+          const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+          return (await memberLoggedInHarnessesAny(userId).catch(() => [] as string[])).some((k) => HEADLESS_KEYS.includes(k));
+        })()
+        : false;
+      const fresh = welcomeFlowMarks({ admin, next: input.next, upload: input.upload, serverAi, now: nowIso });
       const profile = await appendLivProfile(userId, {
+        //  갈래·2턴 표식은 옮겨 실은 것(keep)이 이기고, 이번에 새로 올린 파일의 표식은 fresh 가 이긴다(composeWelcomeMarks).
         //  (#5058) connect_at — [연결할게요]로 끝냈다는 표식. 셸은 이 표식이 있고 리브가 처음 수집 끝을 찍기 전까지 그 대화를 지킨다
         //   (first-run.ts onboardingLockSession). [나중에 할게요]로 끝내면 적지 않는다 — 그 사람은 잠기지 않는다.
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...keep,
-          connect_at: input.connect === true ? new Date().toISOString() : null },
+        welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...composeWelcomeMarks(fresh, keep),
+          connect_at: input.connect === true ? nowIso : null },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
@@ -579,7 +595,8 @@ export const welcomeCapabilities: Capability[] = [
       await setLivWelcomeProgress(userId, null).catch(() => { /* 비치명 */ });
       //  (#4970) 리브 킥오프는 없다 — 처음 설정이 끝나며 리브 세션을 저절로 열던 길(#1631 → #4213 T13)을 걷었다.
       //   외부 앱 연결은 사람이 [연결할게요]를 눌렀을 때 me_liv_open 이 리브 세션에 맡긴다(없으면 로그인한 AI 로 연다 — #4970 «리브 = 세션 하나»).
-      return { ok: true, created, skipped, welcome: profile.welcome ?? null };
+      //  flow(#5060) — 정리 지시(리브 2턴)가 어느 갈래로 오는가. 화면은 이 값으로만 «리브가 정리해 둘게요» 를 말한다(약속을 지어내지 않게).
+      return { ok: true, created, skipped, welcome: profile.welcome ?? null, flow: profile.welcome?.flow ?? null };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
       stage: z.string().optional().describe("company|solo|study (옛 academy|student 도 받는다)"),
@@ -590,9 +607,29 @@ export const welcomeCapabilities: Capability[] = [
       share: z.string().optional().describe("me|team|dept|ext — 자료를 보는 범위"),
       nowline: z.string().optional().describe("시간을 가장 많이 쓰는 일"),
       first_order: z.string().optional().describe("첫 지시로 고른 문장"),
+      upload: z.enum(["running", "done"]).optional()
+        .describe("(#5060) 처음 설정에서 파일 올리기를 시작했나 — running = 아직 올라가는 중(끝나면 me_liv_profile_set upload_done) · done = 다 올렸다"),
+      next: z.enum(["connect", "later"]).optional()
+        .describe("(#5060) 처음 설정의 마지막 고름 — connect = 외부 앱 연결 대화로 간다 · later = 나중에(올린 파일이 있으면 정리 세션이 따로 열린다)"),
       connect: z.boolean().optional().describe("(#5058) [연결할게요]로 끝냈다 — 이어지는 리브 대화(앱 연결)까지가 처음 설정이다"),
     }),
 ];
+
+/**
+ * (순수, #5060) 처음 설정 반영이 welcome 에 찍을 갈래·올리기 표식. 화면이 보낸 값(next·upload)은 **모양만** 믿는다 — 모르는 값은 없는 것.
+ *  · connect — 관리 권한 + [연결할게요]. 세션 id 는 연결 대화를 연 뒤 me_liv_open(from:"welcome")이 적는다.
+ *  · files   — 관리 권한 + [나중에 할게요] + 올린 파일 + 서버에서 띄울 AI. 올리기가 끝나면 스윕이 리브 세션을 새로 연다.
+ *  · 그 밖   — null(정리 지시 없음). 올리기 표식은 갈래와 무관하게 남긴다(2턴이 기다릴 근거).
+ */
+export function welcomeFlowMarks(i: { admin: boolean; next: unknown; upload: unknown; serverAi: boolean; now: string }):
+  { flow: "connect" | "files" | null; upload_started_at: string | null; upload_done_at: string | null } {
+  const upload = i.upload === "running" || i.upload === "done" ? i.upload : null;
+  const flow = !i.admin ? null
+    : i.next === "connect" ? "connect"
+    : i.next === "later" && upload && i.serverAi ? "files"
+    : null;
+  return { flow, upload_started_at: upload ? i.now : null, upload_done_at: upload === "done" ? i.now : null };
+}
 
 //  ⚠ 1단 답은 **두 곳**으로 간다 — 사람 말(STAGE_LABEL)은 work.asis(계정 층: "이 사람이 하는 일"), 답 그대로의 key 는
 //   welcome.stage(워크스페이스 층: "이 자리가 담는 것"). 한 칸에 합치면 #2265 가 고친 덮어쓰기가 그대로 되살아난다.

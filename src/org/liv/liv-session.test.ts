@@ -162,7 +162,7 @@ test("★★ 헤드리스 리브 턴이 없다 — 모듈·프로필 필드·화
 
 test("★★ 세션을 못 열면 원인을 말하는 503 — 500 «internal_error» 로 뭉개지지 않는다(#4032 의 본체)", () => {
   //  행위(일반 Error → 503 · HttpError 는 그대로)는 liv-open.test E14·E15 가 잰다. 여기는 실제 문이 그 판정을 탄다는 배선만.
-  assert.match(CAP, /async \(input: Record<string, unknown>, user: LivelyUser\) => openLiv\(user, input, realDeps\),/, "★ 맡기기 문이 판정(openLiv)을 안 탄다");
+  assert.match(CAP, /async \(input: Record<string, unknown>, user: LivelyUser\) => \{\s*const r = await openLiv\(user, input, realDeps\);/, "★ 맡기기 문이 판정(openLiv)을 안 탄다");
   assert.match(CAP, /ensure: \(user, text, harness\) => ensureLivSession\(user, text, \{ harness \}\),/, "맡기기 문이 리브 세션 확보(한 줄로 선)를 안 탄다");
   assert.match(CAP, /return \{ session_id: await currentLivSessionId\(userId, \{ heal: false \}\) \};/, "찾기가 복원 이정표를 따라간 id 를 안 준다");
 });

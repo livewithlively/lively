@@ -1,4 +1,9 @@
-// v2/onboarding.ts — 처음 설정(#/welcome). (#4970) 인사 → 이름 → AI 연결 → «외부 앱을 연결하시겠어요?» 네 장면이 전부다.
+// v2/onboarding.ts — 처음 설정(#/welcome). (#4970) 인사 → 이름 → (#5060) 파일 올리기 → AI 연결 → «외부 앱을 연결하시겠어요?» 다섯 장면이 전부다.
+//
+//  ★ #5060(원준님 2026-10-27) — 파일 올리기를 **AI 연결 앞에** 둔다. 올린 파일이 지식이 되는 길이 처음 설정에 없었다(#4970 이 서랍·파일 장면을
+//   걷은 뒤 로컬 증류기를 켜는 자리가 사라졌다). 고른 파일은 백그라운드로 올라가고(bg-upload.ts) 사람은 기다리지 않고 다음으로 간다.
+//   지식으로 바꾸는 일은 세션이 한다 — [연결할게요]면 연결 대화가 끝난 뒤 같은 대화에, [나중에 할게요]면 올리기가 끝난 뒤 새로 연 리브 대화에
+//   서버가 정리 지시(리브 2턴)를 넣는다. 화면은 그 갈림을 반영(me_welcome_apply next·upload)에 실어 보낼 뿐이다.
 //
 //  ★ #4970(상민님 결정 2026-10-22 — 지식 onboarding-single-flow-connect-in-own-ai-4970) — 처음 설정을 하나로 줄였다.
 //   종전(#4213 T13)엔 끝이 «Claude 계정 연결 + 리브 대화» 하나라, 서버에 로그인된 AI 가 없거나 Claude 가 아닌 사람(커서만 쓰는 사람)은
@@ -22,6 +27,9 @@ import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 
 import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';
 //  (#4970) AI 연결 장면의 줄·로그인 칸 — [AI 계정 연결]과 같은 칸 · 같은 로고·이름·순서(onboarding-ai.ts).
 import { mountAiList } from './onboarding-ai.js';
+//  (#5060) 처음 설정에서 고른 파일 — 다른 화면으로 옮겨 가도 계속 올라간다.
+import { bgUploadAdd, bgUploadOnChange, bgUploadState, uploadVerdict } from './bg-upload.js';
+import { upDirSupported, upDropZone, upFromInput, type UpItem } from '../projects/files-upload.js';
 
 export const OB_DONE_KEY = 'lively_ob_done';
 /** 빠른 로컬 캐시 — 첫 그림에서 화면이 깜빡이지 않게 쓴다. **정본은 서버**(아래 fetchOnboardingDone). */
@@ -68,6 +76,14 @@ export const OB_COPY = {
   //   구분되지 않았다. 이 길은 **컴퓨터에 프로그램으로 깔아 쓰는 AI**(커서·클로드 코드) 쪽이라 그렇게 말한다.
   aiPc: '컴퓨터에 설치해 쓰는 AI 프로그램으로 할게요 (Cursor·Claude Code 등)',
   aiNone: '이 서버에는 아직 연결할 수 있는 AI가 없어요. 컴퓨터에 설치해 쓰시는 AI 프로그램(Cursor·Claude Code 등)으로 하시면 됩니다.',
+  uploadTitle: '일하실 때 쓰는 파일이 있으면 올려 주세요',
+  uploadHelp: '올린 파일은 AI가 읽고 지식으로 정리해요. 올라가는 동안 다음 설정을 계속하실 수 있어요.',
+  uploadDrop: '파일이나 폴더를 여기로 끌어다 놓으세요',
+  uploadSkip: '올릴 파일이 없어요',
+  //  (#5060) 서버에 AI 가 없으면 지식으로 바꿀 자리가 없다 — 올린 파일은 자료로만 남는다. 사실대로 말한다.
+  uploadNoServerAi: '올리신 파일을 지식으로 정리하는 일은 라이블리 서버에 연결된 AI가 해요. 지금은 연결된 AI가 없어 파일은 자료로 보관돼요 — 나중에 [내 설정 ▸ AI 계정 연결]에서 연결하시면 정리를 시작할 수 있어요.',
+  uploadLater: '올리신 파일은 다 올라가면 리브가 읽고 카테고리와 정리 규칙을 세워 둘게요.',
+  uploadKept: '올리신 파일은 [자료]에 보관돼요.',
   connectTitle: '외부 앱을 연결하시겠어요?',
   connectHelp: '슬랙·노션·깃허브 같은 곳의 자료를 라이블리로 모읍니다.',
   connectYes: '연결할게요',
@@ -75,9 +91,29 @@ export const OB_COPY = {
   //  «쓰는 AI 에서 하기» 세 걸음과 그 AI 에 할 한 마디는 connect-own-ai.ts 에 있다([외부 앱 연결] 화면과 한 벌).
 };
 
+/* ── (#5060) 처음 설정에서 고른 파일의 «올리기 끝» — 화면(이 장면)보다 오래 산다(페이지 수명) ──
+ *  보낼 때: 실패 0 · 고른 것이 전부 올라갔다(uploadVerdict). 대기열이 빈 것만으로는 보내지 않는다 — 실패만 남아도 빈다(격리 리뷰).
+ *  [다시 시도]로 실패가 풀려도 다시 재야 하므로 한 번 쓰고 버리는 «비면 부르기» 가 아니라 바뀔 때마다 듣는다. 서버는 처음 시각을 지킨다(멱등). */
+let welcomeUploadExpected = 0;
+let welcomeUploadWatching = false;
+let welcomeUploadSentAt = -1;
+function postUploadDoneIfSettled(): void {
+  const s = bgUploadState();
+  if (uploadVerdict(s, welcomeUploadExpected) !== 'done' || welcomeUploadSentAt === s.done) return;
+  welcomeUploadSentAt = s.done;
+  void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ upload_done: true }) }).catch(() => { welcomeUploadSentAt = -1; });
+}
+function watchWelcomeUploads(): void {
+  if (welcomeUploadWatching) return;
+  welcomeUploadWatching = true;
+  bgUploadOnChange(() => postUploadDoneIfSettled());
+}
+
 type Ctx = { onBare?: (bare: boolean) => void; onGhost?: (on: boolean) => void; onDone?: () => void };
 /** viaPc — AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다(#4970). 그러면 [연결할게요]가 서버 세션을 열지 않는다. */
-interface ObState { scene: string; name: string; nameSet: boolean; trail: string[]; viaPc: boolean }
+/** uploaded — (#5060) 이 처음 설정에서 고른 파일 수(새로 줄 선 것 + 이미 올려 건너뛴 것). 0 이면 올린 것이 없다(반영에 upload 를 싣지 않는다).
+ *  serverAi — AI 연결 장면에서 서버 AI 가 하나라도 연결돼 있었나(안내 문구를 사실대로 가른다). */
+interface ObState { scene: string; name: string; nameSet: boolean; trail: string[]; viaPc: boolean; uploaded: number; serverAi: boolean }
 
 export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy(): void } {
   host.className = 'ob-root';
@@ -118,7 +154,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   const RESUME_WAIT_MS = 2500;
   /** 기다리는 말을 띄우기 전에 조용히 기다리는 시간 — 금방 답이 오면 그 말은 아예 안 보인다(#1631). */
   const RESUME_HINT_MS = 600;
-  const fresh = (): ObState => ({ scene: 'intro', name: '', nameSet: false, trail: [], viaPc: false });
+  const fresh = (): ObState => ({ scene: 'intro', name: '', nameSet: false, trail: [], viaPc: false, uploaded: 0, serverAi: false });
   let S: ObState = fresh();
   /** 아직 **아무것도 답하지 않은** 장면 — 인사(intro)·이름(name). 여기 머문 것은 «하다 만 것» 이 아니다(이름을 적었으면 nameSet 이 말한다).
    *  ⚠ 마운트하는 동안 읽힌다 — 그래서 여기(hadLocal 보다 앞)에 둔다(뒤에 두면 선언 전 참조로 화면이 통째로 죽는다). */
@@ -138,6 +174,8 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       nameSet: !!v.nameSet,
       trail: Array.isArray(v.trail) ? v.trail.filter((x: unknown) => typeof x === 'string') : [],
       viaPc: v.viaPc === true,
+      uploaded: typeof v.uploaded === 'number' && v.uploaded > 0 ? Math.floor(v.uploaded) : 0,
+      serverAi: v.serverAi === true,
     };
   }
 
@@ -178,7 +216,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /* 막1(인사·이름)은 민낯(셸 숨김), 연결 물음은 유령 셸(#2232) — 사이드바를 누르면 처음 설정에서 빠져나가 버리던 자리다. */
   const setStage = (s: string) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); ctx.onGhost && ctx.onGhost(s !== 'stage-name'); };
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['intro', 'name', 'ai', 'connect-ask'];
+  const ORDER = ['intro', 'name', 'upload', 'ai', 'connect-ask'];
   const STEP_OF: Record<string, number> = Object.fromEntries(ORDER.map((k, i) => [k, i]));
   /** 지금 차례표에서 이 장면 **다음**. 끝이면 null. */
   const nextScene = (cur: string): string | null => { const i = ORDER.indexOf(cur); return i >= 0 && i + 1 < ORDER.length ? ORDER[i + 1]! : null; };
@@ -247,6 +285,22 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
         inp.focus();
       },
     },
+    /* (#5060) 파일 올리기 — AI 연결보다 먼저. 고르면 곧바로 백그라운드로 올라가고 [다음]이 켜진다(기다리지 않는다). 안 올려도 된다. */
+    upload: {
+      html: () => qHead(S.nameSet && S.name ? `${esc(S.name)}님, 먼저 자료부터 받아 둘게요.` : '먼저 자료부터 받아 둘게요.',
+        esc(OB_COPY.uploadTitle), esc(OB_COPY.uploadHelp))
+        + `<div class="ob-up-drop" id="upDrop">
+             <p class="ob-up-hint">${esc(OB_COPY.uploadDrop)}</p>
+             <div class="ob-up-btns">
+               <button type="button" class="ob-btn ob-btn-sub ob-btn-inline" id="upFiles">파일 고르기</button>
+               ${upDirSupported() ? '<button type="button" class="ob-btn ob-btn-sub ob-btn-inline" id="upDir">폴더 고르기</button>' : ''}
+             </div>
+           </div>
+           <p class="ob-q-help ob-up-stat" id="upStat" aria-live="polite"></p>
+           <button class="ob-btn ob-btn-pri" id="upNext" hidden>다음</button>
+           <button class="ob-q-skip" id="upSkip">${esc(OB_COPY.uploadSkip)}</button>`,
+      bind: (el) => bindUpload(el),
+    },
     /* (#4970 상민님 2026-10-23) AI 연결 — 외부 앱보다 먼저. 이 서버에서 띄울 수 있는 AI 만 줄로 보이고(서버 installed), [연결]은 그 줄 아래에서
      *  로그인한다([AI 계정 연결]과 같은 칸). 하나라도 연결되면 [다음]. PC 의 AI 를 쓰는 사람은 아래 길로 간다. 묻지 않고 넘기는 길은 없다 —
      *  머리의 [나중에 할게요](홈)가 그 자리다. */
@@ -272,7 +326,12 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
         yes.onclick = () => void connectYes(el, yes, later);
         later.onclick = async () => {
           yes.disabled = true; later.disabled = true;
-          if (await finishOnboarding()) { say(el, '준비됐어요. 외부 앱은 왼쪽 [외부 앱 연결]에서 언제든 연결하실 수 있어요.'); await sleep(1400); location.hash = '#/'; }
+          if (await finishOnboarding('later')) {
+            //  (#5060) 올린 파일이 있으면 그 파일이 어떻게 되는지까지 말한다 — 서버 AI 가 없으면(PC 의 AI 를 고름) 정리할 자리가 없다는 것도.
+            const filesLine = S.uploaded ? ' ' + filesFate() : '';
+            say(el, esc('준비됐어요. 외부 앱은 왼쪽 [외부 앱 연결]에서 언제든 연결하실 수 있어요.' + filesLine));
+            await sleep(S.uploaded ? 3200 : 1400); location.hash = '#/';
+          }
           else { yes.disabled = false; later.disabled = false; }
         };
       },
@@ -292,9 +351,53 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     mountAiList(list, {
       esc, noneText: OB_COPY.aiNone,
       alive: () => !destroyed && list.isConnected,
-      onRows: (anyConnected) => { next.hidden = false; next.disabled = !anyConnected; },
+      onRows: (anyConnected) => { next.hidden = false; next.disabled = !anyConnected; S.serverAi = anyConnected; save(); },
       onEmpty: () => { next.hidden = true; pc.className = 'ob-btn ob-btn-pri'; },   // 남은 길이 이것뿐이다 — 조용한 링크로 두지 않는다
     });
+  }
+
+  /**
+   * 파일 올리기 장면을 잇는다(#5060) — 고른 파일은 bg-upload 대기열로 가고, 이 장면은 몇 개를 줄 세웠는지만 말한다.
+   *  올리기가 끝나면 서버에 «올리기 끝» 을 알린다(리브 2턴이 그것을 기다린다 — second-turn.ts). 이 장면이 걷혀도 그 알림은 간다(모듈이 쥔다).
+   */
+  function bindUpload(el: HTMLElement) {
+    const stat = $('#upStat', el)!;
+    const next = $<HTMLButtonElement>('#upNext', el)!;
+    const skip = $<HTMLButtonElement>('#upSkip', el)!;
+    const paint = () => {
+      if (!S.uploaded) return;
+      const st = bgUploadState();
+      stat.textContent = st.running
+        ? `${S.uploaded.toLocaleString('ko-KR')}개를 올리고 있어요. 다음으로 넘어가셔도 계속 올라가요.`
+        : `${S.uploaded.toLocaleString('ko-KR')}개를 받아 두었어요.`;
+      next.hidden = false; skip.hidden = true;
+    };
+    const take = (items: UpItem[]) => {
+      if (!items.length) { toast('올릴 파일을 찾지 못했어요.'); return; }
+      const r = bgUploadAdd(items.map((u) => ({ file: u.file as File, rel: u.rel })));
+      S.uploaded += r.added + r.skipped; save();
+      welcomeUploadExpected = S.uploaded; watchWelcomeUploads();
+      paint();
+    };
+    const pick = (dir: boolean) => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.multiple = true; inp.hidden = true;
+      if (dir) inp.setAttribute('webkitdirectory', '');
+      inp.addEventListener('change', () => { take(upFromInput(inp)); inp.remove(); });
+      document.body.append(inp); inp.click();
+    };
+    $<HTMLButtonElement>('#upFiles', el)!.onclick = () => pick(false);
+    const dirBtn = $<HTMLButtonElement>('#upDir', el); if (dirBtn) dirBtn.onclick = () => pick(true);
+    const drop = $('#upDrop', el)!;
+    upDropZone(drop, drop, (items) => take(items));
+    const off = bgUploadOnChange(() => { if (!stat.isConnected) { off(); return; } paint(); });
+    next.onclick = () => { off(); goScene(nextScene('upload')!); };
+    skip.onclick = () => { off(); goScene(nextScene('upload')!); };
+    paint();
+  }
+  /** 올린 파일이 어떻게 되는지 한 줄(#5060) — «정리해 둘게요» 는 서버가 그 갈래(files)를 실제로 세웠을 때만. 관리 권한이 없거나 띄울 AI 가 없으면 세우지 않는다. */
+  function filesFate(): string {
+    return appliedFlow === 'files' ? OB_COPY.uploadLater : !S.serverAi ? OB_COPY.uploadNoServerAi : OB_COPY.uploadKept;
   }
 
   /** 장면 안에 한 줄 말한다(그 장면의 본문 자리를 갈아끼운다). */
@@ -307,11 +410,27 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
    * 처음 설정 반영 — **여기가 실제로 워크스페이스를 바꾸는 자리다**(이름·완료 표식). 실패하면 끝났다고 말하지 않는다(표식도 안 남긴다).
    *  (#4970) 서랍·용도·직무는 더 묻지 않는다 — 없는 채로 보낸다(지어내지 않는다). 팀 구조는 서버가 관리 권한으로 가른다.
    */
-  async function finishOnboarding(connect = false): Promise<boolean> {
+  /** 반영이 돌려준 정리 지시의 갈래(#5060 — connect · files · null). */
+  let appliedFlow: string | null = null;
+  async function finishOnboarding(next: 'connect' | 'later'): Promise<boolean> {
     S.scene = 'done'; save();
+    //  (#5060) 올린 파일과 다음 걸음 — 서버가 이것으로 정리 지시(리브 2턴)의 갈래를 정한다.
+    //   upload: 고른 것이 실패 없이 전부 올라갔을 때만 'done'(uploadVerdict) — 실패가 남았거나 새로고침으로 대기열을 잃었으면 'running'
+    //   (서버가 상한 뒤 있는 것으로 시작한다). next: PC 의 AI 를 고른 사람은 서버에서 연결 대화를 열지 않으므로 늘 later
+    //   (서버 AI 가 있으면 올린 파일 정리는 서버 리브 세션이 맡는다 — files 갈래).
+    const upload = S.uploaded ? uploadVerdict(bgUploadState(), S.uploaded) : undefined;
     try {
-      //  (#5058) connect — [연결할게요]로 끝낸다는 표식. 서버가 이어지는 리브 대화를 처음 설정의 일부로 지킨다(me.onboarding_session).
-      await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({ name: S.nameSet ? S.name : null, connect: connect || undefined }) });
+      const applied: any = await api('/api/ui/me/welcome', { method: 'POST', body: JSON.stringify({
+        name: S.nameSet ? S.name : null,
+        //  (#5058) connect — [연결할게요]로 끝낸다는 표식. 서버가 이어지는 리브 대화를 처음 설정의 일부로 지킨다(me.onboarding_session).
+        //   PC 의 AI 로 가는 사람은 서버에 리브 대화가 없어 빼고.
+        connect: (next === 'connect' && !S.viaPc) || undefined,
+        ...(upload ? { upload } : {}),
+        next: S.viaPc ? 'later' : next,
+      }) });
+      appliedFlow = applied && typeof applied.flow === 'string' ? applied.flow : null;
+      //  반영이 «아직 올라가는 중» 으로 나간 사이에 올리기가 끝났으면, 그 «끝» 알림은 찍을 자리(반영 전)가 없어 버려졌다 — 한 번 더 잰다(멱등).
+      if (upload === 'running') { welcomeUploadExpected = S.uploaded; welcomeUploadSentAt = -1; postUploadDoneIfSettled(); }
     } catch (e: any) {
       toast(`정리하다 막혔어요. ${(e && e.message) || '알 수 없는 오류'} — 잠시 뒤 다시 눌러 주세요.`);
       S.scene = 'connect-ask'; save();
@@ -328,7 +447,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /** [연결할게요] — 반영 → 연결 세션 열기. AI 가 있으면 그 세션으로 가고, 없으면 이 자리에 «쓰는 AI 에서 하기» 를 그린다. */
   async function connectYes(el: HTMLElement, yes: HTMLButtonElement, later: HTMLButtonElement) {
     yes.disabled = true; later.disabled = true; yes.textContent = '확인하고 있어요…';
-    if (!(await finishOnboarding(!S.viaPc))) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
+    if (!(await finishOnboarding('connect'))) { yes.disabled = false; later.disabled = false; yes.textContent = OB_COPY.connectYes; return; }
     //  (#4970) AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다 — 서버 세션을 열지 않고 그 AI 에서 하는 세 걸음을 바로 그린다.
     if (S.viaPc) { showOwnAi(el); return; }
     await openOrGuide(el);
@@ -336,7 +455,9 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /** «쓰는 AI 에서 하기» 세 걸음 — 처음 설정은 이미 끝났다(돌아와도 막다른 길에 다시 갇히지 않게). */
   function showOwnAi(el: HTMLElement) {
     const body = $('#cxBody', el); if (!body) return;
+    //  (#5060) 파일을 올렸는데 서버에 AI 가 없다 — 그 파일이 지금은 자료로만 남는다는 것을 숨기지 않는다.
     body.innerHTML = `${ownAiStepsHtml()}
+      ${S.uploaded ? `<p class="ob-q-help">${esc(filesFate())}</p>` : ''}
       <button class="ob-q-skip" id="cxHome">홈으로 갈게요</button>`;
     wireOwnAiSteps(body);
     $<HTMLButtonElement>('#cxHome', body)!.onclick = () => { location.hash = '#/'; };
@@ -345,7 +466,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   async function openOrGuide(el: HTMLElement) {
     const body = $('#cxBody', el); if (!body) return;
     let r: Awaited<ReturnType<typeof openConnectSession>>;
-    try { r = await openConnectSession(); }
+    try { r = await openConnectSession({ fromWelcome: true }); }
     catch (e: any) {
       body.innerHTML = `<p class="ob-q-help">연결을 도와드릴 대화를 열지 못했어요. ${esc((e && e.message) || '')}</p>
         <button class="ob-btn ob-btn-pri" id="cxRetry">다시 시도할게요</button>
@@ -354,6 +475,9 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       $<HTMLButtonElement>('#cxHome', body)!.onclick = () => { location.hash = '#/'; };
       return;
     }
+    //  (#5060) 연결 대화를 묶는 쓰기(서버 markWelcomeSession)가 welcome 을 통째로 다시 쓴다 — 그 사이에 «올리기 끝» 이 찍혔으면 지워질 수 있다.
+    //   한 번 더 잰다(서버가 처음 시각을 지킨다 — 멱등). 격리 리뷰 2026-10-27.
+    welcomeUploadSentAt = -1; postUploadDoneIfSettled();
     if (r.ai) {
       say(el, '연결을 도와드릴 대화를 열었어요. 그 자리로 모시겠습니다.');
       //  #5058 — 처음 설정은 그 대화까지가 한 덩어리다. 서버도 같은 판정을 하지만(me.onboarding_session) 다음 부팅까지 기다리지 않고

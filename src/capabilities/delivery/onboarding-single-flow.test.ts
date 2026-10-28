@@ -35,19 +35,22 @@ await t("E13 용도는 관리 권한이면 입력값, 아니면 지금의 용도
   assert.match(APPLY, /const stage = admin\s*\?\s*s\(input\.stage, 40\)\s*:\s*await workspacePurposeStage\(/, "권한 없는 사람의 답이 워크스페이스 용도가 된다");
 });
 
-await t("E14 반영은 리브 세션을 열지 않는다 · 새로 끝내는 사람에게 flow 를 적지 않는다", () => {
+//  (#5060 원준님 2026-10-27) 갈래(flow)는 다시 적는다 — 올린 파일이 지식이 되는 길(리브 2턴)이 그 갈래로 온다. 단 정해진 판정 한 자리
+//   (welcomeFlowMarks — 관리 권한 아래 · 화면이 보낸 모양만)에서만 나온다. 판정의 행은 welcome.test F1~F6 이 잰다.
+await t("E14 반영은 리브 세션을 열지 않는다 · 갈래는 welcomeFlowMarks 한 자리에서만 나온다(#5060)", () => {
   assert.doesNotMatch(WELCOME, /kickoffLivAfterWelcome|livKickoff\(|buildFirstTurnPrompt|planLivKickoff/, "★ 리브 킥오프가 남아 있다");
-  assert.doesNotMatch(APPLY, /welcome: \{[^}]*\bflow\b/, "★ flow 를 적는다 — 리브 2턴 후보가 된다");
+  assert.doesNotMatch(APPLY, /welcome: \{[^}]*\bflow\s*:/, "★ 판정을 거치지 않은 flow 를 손으로 적는다");
+  assert.match(APPLY, /const fresh = welcomeFlowMarks\(\{ admin, /, "★ 갈래를 관리 권한 판정 없이 정한다");
 });
 
 // ── C. 처음 설정 화면 ────────────────────────────────────────────────────────
 const OB_RAW = readFileSync(new URL("../../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const OB = code(OB_RAW);
 
-await t("E15 차례는 인사 → 이름 → AI 연결 → 연결 물음(첫 관리자·합류자 같음) — (PR4) AI 연결이 외부 앱 앞이다", () => {
+await t("E15 차례는 인사 → 이름 → 파일 올리기 → AI 연결 → 연결 물음(첫 관리자·합류자 같음) — (PR4) AI 연결이 외부 앱 앞 · (#5060) 파일 올리기가 AI 연결 앞", () => {
   const m = OB.match(/const ORDER = (\[[^\]]*\]);/);
   assert.ok(m, "차례표를 못 찾았다 — 검사가 헛돈다");
-  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "ai", "connect-ask"]);
+  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "upload", "ai", "connect-ask"]);
   assert.doesNotMatch(OB, /ORDER_JOIN|isJoin\(|JOIN\b/, "합류자 갈래가 남아 있다");
 });
 
@@ -57,9 +60,9 @@ await t("E16 옛 판의 저장된 자리를 알아본다(team→name · done→c
   //  타입 표기만 걷어 그대로 돌린다(본문은 화면이 쓰는 그 글자다).
   const body = fn![1]!.replace(/: string \| null/g, "");
   const fitScene = new Function("STEP_OF", "scene", body) as (steps: Record<string, number>, s: unknown) => string | null;
-  const STEP_OF = { intro: 0, name: 1, ai: 2, "connect-ask": 3 };
+  const STEP_OF = { intro: 0, name: 1, upload: 2, ai: 3, "connect-ask": 4 };
   const cases: Array<[unknown, string | null]> = [
-    ["intro", "intro"], ["name", "name"], ["ai", "ai"], ["connect-ask", "connect-ask"],
+    ["intro", "intro"], ["name", "name"], ["upload", "upload"], ["ai", "ai"], ["connect-ask", "connect-ask"],
     //  (PR4) 옛 «AI 연결»(claude)·질문 장면들은 AI 연결부터 — 외부 앱 물음으로 건너뛰면 AI 를 안 잇고 지나간다.
     ["team", "name"], ["claude", "ai"], ["done", "connect-ask"], ["stage", "ai"], ["app", "ai"],
     ["", null], [null, null],
@@ -69,10 +72,10 @@ await t("E16 옛 판의 저장된 자리를 알아본다(team→name · done→c
 
 await t("E17 [연결할게요] — 반영 성공 뒤에만 연결 세션 문 · ai:false 면 세 걸음 · ai:true 면 그 주소", () => {
   const yes = OB.slice(OB.indexOf("async function connectYes"), OB.indexOf("function renderScene"));
-  const applyAt = yes.indexOf("await finishOnboarding(!S.viaPc)");   // #5058 — [연결할게요] 표식(PC 의 AI 로 가는 사람은 리브 대화가 없어 빼고)
-  const openAt = yes.indexOf("openConnectSession()");
+  const applyAt = yes.indexOf("await finishOnboarding('connect')");
+  const openAt = yes.indexOf("openConnectSession({ fromWelcome: true })");
   assert.ok(applyAt > 0 && openAt > applyAt, "반영보다 먼저 연결 세션을 연다 — 반영이 실패해도 세션이 열린다");
-  assert.match(yes, /if \(!\(await finishOnboarding\(!S\.viaPc\)\)\) \{[^}]*return;/, "반영이 실패해도 계속 간다");
+  assert.match(yes, /if \(!\(await finishOnboarding\('connect'\)\)\) \{[^}]*return;/, "반영이 실패해도 계속 간다");
   assert.match(yes, /if \(r\.ai\) \{[\s\S]*?location\.hash = r\.href;/, "AI 있음인데 그 세션으로 안 간다");
   assert.match(yes, /ownAiStepsHtml\(\)/, "AI 없음인데 «쓰는 AI 에서 하기» 를 안 그린다");
   const FIN = OB.slice(OB.indexOf("async function finishOnboarding"), OB.indexOf("async function connectYes"));
@@ -81,7 +84,7 @@ await t("E17 [연결할게요] — 반영 성공 뒤에만 연결 세션 문 · 
   assert.doesNotMatch(FIN, /drawers|stage:|job:/, "묻지 않은 서랍·용도·직무를 반영에 싣는다");
   //  (PR3) 연결은 리브에게 맡긴다 — 리브 세션이 있으면 그 세션, 없으면 연결 말로 연다(me_liv_open job:connect).
   const OWN = code(readFileSync(new URL("../../../web/v2/connect-own-ai.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
-  assert.match(OWN, /const r = await openLiv\(\{ job: 'connect' \}\);/, "★ [연결할게요]가 리브에게 맡기지 않는다(연결이 리브와 다른 세션으로 갈린다)");
+  assert.match(OWN, /const r = await openLiv\(\{ job: 'connect', fromWelcome: !!o\.fromWelcome \}\);/, "★ [연결할게요]가 리브에게 맡기지 않는다(연결이 리브와 다른 세션으로 갈린다)");
   const OPEN = code(readFileSync(new URL("../../../web/v2/liv-open.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
   assert.match(OPEN, /api\('\/api\/ui\/me\/liv\/open', \{ method: 'POST'/, "리브에게 일 맡기기 문을 안 부른다");
 });
@@ -124,7 +127,7 @@ await t("F3 이 서버에서 띄울 수 있는(설치된) AI 만 줄로 — inst
 });
 
 await t("F4 [다음]은 연결된 AI 가 하나라도 있을 때만 켜진다", () => {
-  assert.match(AI, /onRows: \(anyConnected\) => \{ next\.hidden = false; next\.disabled = !anyConnected; \}/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
+  assert.match(AI, /onRows: \(anyConnected\) => \{ next\.hidden = false; next\.disabled = !anyConnected; S\.serverAi = anyConnected; save\(\); \}/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
   assert.match(OAI, /hooks\.onRows\(\[\.\.\.items\.values\(\)\]\.some\(\(it\) => it\.a\.loggedIn === true\)\)/, "«연결됨» 판정이 loggedIn === true 가 아니다(모름을 연결로 접는다)");
   assert.match(OB, /<button class="ob-btn ob-btn-pri" id="aiNext" disabled>/, "처음부터 켜져 있다");
 });
@@ -133,7 +136,7 @@ await t("F5 «PC에서 쓰는 AI로» — 다음 장면으로 가고, [연결할
   assert.match(AI, /pc\.onclick = \(\) => \{ S\.viaPc = true; goScene\(nextScene\('ai'\)!\); \};/);
   assert.match(AI, /next\.onclick = \(\) => \{ S\.viaPc = false; goScene\(nextScene\('ai'\)!\); \};/, "AI 를 이은 사람의 PC 표식을 안 지운다");
   const yes = OB.slice(OB.indexOf("async function connectYes"), OB.indexOf("function renderScene"));
-  const fin = yes.indexOf("await finishOnboarding(!S.viaPc)"), pc = yes.indexOf("if (S.viaPc) { showOwnAi(el); return; }"), open = yes.indexOf("await openOrGuide(el)");
+  const fin = yes.indexOf("await finishOnboarding('connect')"), pc = yes.indexOf("if (S.viaPc) { showOwnAi(el); return; }"), open = yes.indexOf("await openOrGuide(el)");
   assert.ok(fin > 0 && pc > fin && open > pc, "반영 뒤 · 세션 열기 전에 PC 길을 가르지 않는다");
   assert.match(OB, /viaPc: v\.viaPc === true,/, "이어 열기에서 PC 표식을 잃는다");
 });
@@ -145,6 +148,43 @@ await t("F6 로그인 칸은 한 벌 — [AI 계정 연결](me-ai)과 처음 설
   const ME = code(readFileSync(new URL("../../../web/me-ai.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
   assert.match(ME, /from '\.\/ai-login-panel\.js';/, "[AI 계정 연결]이 공용 칸을 안 쓴다");
   assert.doesNotMatch(ME + OAI, /ensureLoginTerminal|const paintCard|const paintTerminal/, "★ 로그인 칸이 두 벌이다 — 실측 처방이 갈린다");
+});
+
+// ── G. (#5060 원준님 2026-10-27) 파일 올리기 — AI 연결 앞 · 기다리지 않는다 · 정리는 세션(리브 2턴)이 ──────────────────
+//  G1 고른 파일은 백그라운드 대기열로 — 장면은 올라가길 기다리지 않는다([다음]이 올리기 완료에 묶이지 않는다)
+//  G2 반영에 올리기(running|done — uploadVerdict)와 다음 걸음(connect|later)을 싣는다 · PC 의 AI 를 고른 사람은 늘 later(서버가 연결 대화를 안 연다)
+//  G3 «리브가 정리해 둘게요» 는 서버가 files 갈래를 세웠을 때만
+//  G4 올리기 끝(upload_done)은 판정(uploadVerdict)이 done 일 때만 · 바뀔 때마다 다시 잰다([다시 시도] 뒤에도) · 반영·연결 대화 묶기 뒤 한 번 더
+//  G5 대기열 — 주소는 apiUrl(워크스페이스를 싣는다) · 탭 닫기 경고(도는 동안만) · 올린 것 건너뛰기 표지는 워크스페이스마다(동작은 scripts/bg-upload-runtime.test B1~B7)
+const UP = OB.slice(OB.indexOf("function bindUpload("), OB.indexOf("function say("));
+const BG = code(readFileSync(new URL("../../../web/v2/bg-upload.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
+await t("G1 고른 파일은 대기열로 — 장면은 기다리지 않는다", () => {
+  assert.ok(UP.length > 300 && BG.length > 1000, "bindUpload·bg-upload 를 못 찾았다 — 검사가 헛돈다");
+  assert.match(UP, /bgUploadAdd\(/, "고른 파일을 대기열에 안 넣는다");
+  assert.match(UP, /next\.onclick = \(\) => \{ off\(\); goScene\(nextScene\('upload'\)!\); \};/, "[다음]이 바로 다음 장면으로 가지 않는다");
+  assert.doesNotMatch(UP, /await\s+bgUpload|await\s+send|whenIdle\([^)]*goScene/, "★ 다 올라갈 때까지 사람을 세운다");
+});
+await t("G2 반영에 올리기·다음 걸음을 싣는다", () => {
+  const FIN = OB.slice(OB.indexOf("async function finishOnboarding"), OB.indexOf("async function connectYes"));
+  assert.match(FIN, /const upload = S\.uploaded \? uploadVerdict\(bgUploadState\(\), S\.uploaded\) : undefined;/, "올리기 상태를 판정 없이 싣는다 — 실패만 남아도 «다 올렸다» 가 나간다");
+  assert.match(FIN, /next: S\.viaPc \? 'later' : next,/, "PC 의 AI 를 고른 사람의 [연결할게요]가 서버 연결 대화를 기다리는 갈래가 된다");
+  assert.match(OB, /finishOnboarding\('later'\)/, "[나중에 할게요]가 다음 걸음을 안 싣는다");
+});
+await t("G3 «정리해 둘게요» 는 서버가 세운 갈래를 따른다", () => {
+  assert.match(OB, /appliedFlow === 'files' \? OB_COPY\.uploadLater/, "★ 서버가 갈래를 안 세웠는데 정리해 두겠다고 약속한다");
+});
+await t("G4 올리기 끝을 서버에 알린다", () => {
+  const POST = OB.slice(OB.indexOf("function postUploadDoneIfSettled("), OB.indexOf("function watchWelcomeUploads("));
+  assert.match(POST, /if \(uploadVerdict\(s, welcomeUploadExpected\) !== 'done'/, "★ 판정 없이 «올리기 끝» 을 보낸다(실패만 남아도 2턴이 풀린다)");
+  assert.match(POST, /body: JSON\.stringify\(\{ upload_done: true \}\)/, "올리기 끝(upload_done)을 안 보낸다 — 2턴이 상한(90분)까지 기다린다");
+  assert.match(OB, /bgUploadOnChange\(\(\) => postUploadDoneIfSettled\(\)\)/, "바뀔 때마다 다시 재지 않는다 — [다시 시도]로 풀린 뒤 알림이 안 간다");
+  assert.match(OB, /if \(upload === 'running'\) \{ welcomeUploadExpected = S\.uploaded; welcomeUploadSentAt = -1; postUploadDoneIfSettled\(\); \}/, "반영 직전에 끝난 올리기의 알림이 버려진다");
+});
+await t("G5 대기열 — 주소는 apiUrl · 탭 닫기 경고 · 표지는 워크스페이스마다", () => {
+  assert.match(BG, /xhr\.open\('PUT', apiUrl\(/, "★ 주소를 apiUrl 로 안 만든다 — 셀프호스트 다중 워크스페이스에서 primary 로 올라간다");
+  assert.match(BG, /addEventListener\('beforeunload', onBeforeUnload\)/, "탭을 닫아도 묻지 않는다");
+  assert.match(BG, /removeEventListener\('beforeunload', onBeforeUnload\)/, "다 끝난 뒤에도 탭 닫기를 막는다");
+  assert.match(BG, /const doneKeyName = \(\): string => wsKey\(/, "건너뛰기 표지가 워크스페이스를 모른다 — 다른 워크스페이스에 올린 것을 «이미 올렸다» 로 건너뛴다");
 });
 
 await t("F7 다시 읽어도 줄을 갈아 끼우지 않는다 — 로그인 중인 칸(터미널 액자·받은 코드)이 옮겨지거나 지워지지 않는다(격리 리뷰 N1·N3)", () => {

@@ -22,8 +22,9 @@ export type LivOpen = { ai: true; href: string; sessionId: string; created: bool
  *   안 떠 있으면 다음에 열 때 입력칸으로 돌아오게 남긴다. 보내면 대화창이 세션을 되살리며 넣는다(격리 리뷰 — 열린 화면은 다시 그려지지 않아
  *   남겨 둔 글을 안 읽는다).
  */
-export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string; onlyExisting?: boolean }): Promise<LivOpen> {
-  const payload = { job: body.job, text: body.text, ...(body.onlyExisting ? { only_existing: true } : {}) };
+export async function openLiv(body: { job?: 'liv' | 'connect'; text?: string; onlyExisting?: boolean; fromWelcome?: boolean }): Promise<LivOpen> {
+  //  fromWelcome(#5060) — 처음 설정의 [연결할게요]. 서버가 이 세션을 «연결을 마치면 정리 지시(2턴)를 받을 대화» 로 묶는다.
+  const payload = { job: body.job, text: body.text, ...(body.onlyExisting ? { only_existing: true } : {}), ...(body.fromWelcome ? { from: 'welcome' } : {}) };
   const r: any = await api('/api/ui/me/liv/open', { method: 'POST', body: JSON.stringify(payload) });
   if (!(r && r.ai === true && r.session_id)) return { ai: false, reason: r && r.reason ? String(r.reason) : undefined };
   const id = String(r.session_id);

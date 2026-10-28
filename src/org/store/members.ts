@@ -208,10 +208,16 @@ export interface LivWelcome {
    *  · connect — 설치자의 «처음 연결» 대화(Claude 커넥터로 목록·처음 수집). 2턴은 리브가 처음 수집 끝을 찍거나(collect_done_at)
    *    상한이 지난 뒤에 나간다 — 대화 도중에 증류 지시가 끼어들지 않게(second-turn.ts).
    *  · join — 합류자의 «빠진 앱 연결» 대화. 2턴이 없다(팀의 서랍·정리 규칙을 합류자가 바꾸지 않는다).
+   *  · files — (#5060) 처음 설정에서 파일을 올리고 외부 앱 연결은 [나중에 할게요] 한 사람. 열린 리브 세션이 없으므로(session_id 없음)
+   *    올리기가 끝나면 2턴 스윕이 리브 세션을 **새로 열어** 증류 지시를 첫 지시로 넣는다(second-turn.ts decideSecondTurn).
    */
-  flow?: "connect" | "join" | null;
+  flow?: "connect" | "join" | "files" | null;
   /** 리브가 «처음 연결·처음 수집을 끝냈다» 를 찍은 시각(me_liv_profile_set collect_done) — connect 갈래의 2턴 신호. */
   collect_done_at?: string | null;
+  /** (#5060) 처음 설정에서 파일 올리기를 시작한 시각. 있고 upload_done_at 이 없으면 2턴은 올리기가 끝나길 기다린다(상한까지). */
+  upload_started_at?: string | null;
+  /** (#5060) 그 올리기가 끝난 시각 — 화면의 백그라운드 올리기가 다 비면 찍는다(me_liv_profile_set upload_done). */
+  upload_done_at?: string | null;
   /** (#5058) 처음 설정을 [연결할게요]로 끝낸 시각 — 이어지는 리브 대화를 처음 설정의 일부로 지키는 근거(first-run.ts onboardingLockSession). */
   connect_at?: string | null;
 }
@@ -225,6 +231,8 @@ export interface LivWelcome {
  *  돌려주는 `workspace_id` 는 호출부가 **그 테넌트 컨텍스트 안에서** 표식을 찍는 데 쓴다(안 그러면 멱등이 깨져 반복 발사).
  *  (#4213 T13) 합류자의 리브 세션(welcome.flow='join')은 2턴이 없다 — 후보에서 뺀다. 판정(decideSecondTurn)도 건너뛰지만,
  *   여기서 안 빼면 영영 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지해 뒤에 온 진짜 후보가 밀려난다.
+ *  (#5060) 파일 갈래(welcome.flow='files')는 세션이 아직 없어도 후보다 — 올리기가 끝나면 스윕이 리브 세션을 새로 연다.
+ *   파일을 올린 «처음 연결» 갈래도 — 연결 대화가 끝내 안 묶이면(유예 뒤) 같은 길로 간다(second-turn.ts opensFreshSession).
  */
 export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome; workspace_id: string | null }>> {
   const r = await itemsPool.query(
@@ -238,7 +246,8 @@ export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string;
         WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
      )
      SELECT id, display_name, ws, welcome FROM cand
-      WHERE welcome->>'session_id' IS NOT NULL
+      WHERE (welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'
+             OR (welcome->>'flow' = 'connect' AND welcome->>'upload_started_at' IS NOT NULL))
         AND welcome->>'distill_at' IS NULL
         AND welcome->>'distill_gave_up_at' IS NULL
         AND COALESCE(welcome->>'flow', '') <> 'join'
@@ -656,8 +665,18 @@ export function withCollectDone(welcome: LivWelcome | null | undefined, at: Date
   return { ...welcome, collect_done_at: at.toISOString() };
 }
 
+/**
+ * (순수, #5060) 처음 설정의 «올리기 끝» 표식 — 처음 찍힌 시각을 지킨다. 올리기를 시작한 적이 없는 칸(upload_started_at 없음)에는 찍지 않는다
+ *  (끝낼 올리기가 없다). withCollectDone 과 같은 이유로 이 파일 안에 둔다(노드 에이전트 번들 경계).
+ */
+export function withUploadDone(welcome: LivWelcome | null | undefined, at: Date): LivWelcome | null {
+  if (!welcome) return welcome ?? null;
+  if (!welcome.upload_started_at || welcome.upload_done_at) return welcome;
+  return { ...welcome, upload_done_at: at.toISOString() };
+}
+
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean; uploadDone?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -666,6 +685,8 @@ export async function appendLivProfile(
   // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호). 처음 설정을 끝낸 칸(welcome)이 있을 때만,
   //  처음 찍힌 시각을 지킨다(같은 표식을 두 번 찍어도 2턴 판정의 근거가 밀리지 않게). welcome 이 없으면 찍을 자리가 없다(무시).
   if (patch.collectDone && next.welcome) next.welcome = withCollectDone(next.welcome, new Date()) ?? next.welcome;
+  // #5060 — 처음 설정에서 시작한 백그라운드 올리기가 끝났다(2턴이 기다리던 신호). 시작 표식이 있는 칸에만, 처음 시각을 지킨다.
+  if (patch.uploadDone && next.welcome) next.welcome = withUploadDone(next.welcome, new Date()) ?? next.welcome;
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).

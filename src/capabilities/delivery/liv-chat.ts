@@ -14,6 +14,9 @@
 //    알리고 화면이 그 말을 입력칸에 돌려 둔다 — 사람이 보내면 대화창이 세션을 되살리며 넣는다.
 //  · ⚠ 좌표를 welcome.session_id 에 넣지 않는다 — 거기 있으면 리브 2턴(증류 지시) 후보가 돼 대화 한복판에 서버 지시가 끼어든다.
 //    좌표는 리브 세션 모듈이 liv_profile.liv_session 에 적는다.
+//    (#5060) 예외 하나 — 처음 설정의 [연결할게요](from:"welcome")가 연 연결 대화. 처음 설정 반영이 갈래를 connect 로 찍어 두었으면
+//    그 세션을 welcome.session_id 에 적는다. connect 갈래의 2턴은 리브가 연결을 마쳤다고 찍을 때(collect_done)까지 기다리므로 대화
+//    한복판에 끼어들지 않고, 연결이 끝나면 올린 파일·모은 자료로 카테고리·정리 규칙을 세우는 지시가 같은 대화에 이어서 온다.
 //
 //  ── mcp:false ──
 //  이 문들은 **화면이 리브를 여는 자리**다. 리브가 자기를 다시 부르면 세션이 겹쳐 선다.
@@ -150,6 +153,22 @@ export function livRecentMemo(now: () => number = Date.now, ttl: number = LIV_RE
 }
 const recentDeliveries = livRecentMemo();
 
+/**
+ * (#5060) 처음 설정의 연결 대화를 2턴 대상으로 묶는다 — 반영(me_welcome_apply)이 갈래를 connect 로 찍었고 아직 세션이 없을 때만.
+ *  그 밖(갈래가 다르다 · 이미 묶였다 · 2턴이 이미 나갔다)은 건드리지 않는다. 실패해도 연결은 연 것이다(비치명 — 로그만).
+ */
+async function markWelcomeSession(userId: string, sessionId: string): Promise<void> {
+  if (!userId || !sessionId) return;
+  try {
+    const { getLivProfile, appendLivProfile } = await import("../../org/store.js");
+    const w = (await getLivProfile(userId))?.welcome;
+    if (!w || w.flow !== "connect" || w.session_id || w.distill_at) return;
+    await appendLivProfile(userId, { welcome: { ...w, session_id: sessionId } });
+  } catch (err) {
+    logger.warn({ err, member: userId, session: sessionId }, "처음 설정 연결 대화를 2턴 대상으로 묶지 못함(비치명)");
+  }
+}
+
 const realDeps: LivOpenDeps = {
   current: (userId) => currentLivSessionId(userId),
   ensure: (user, text, harness) => ensureLivSession(user, text, { harness }),
@@ -202,13 +221,18 @@ export const livChatCapabilities: Capability[] = [
     "로그인한 AI 가 없고 리브 세션도 없으면 열지 않고 ai:false — 그때 화면은 «쓰는 AI 에서 하기» 를 안내한다. " +
     "사람이 레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘] · 리브 칸에서 누르는 문이다.",
     [{ method: "POST", paths: ["/api/ui/me/liv/open"], parse: (req) => req.body ?? {} }],
-    async (input: Record<string, unknown>, user: LivelyUser) => openLiv(user, input, realDeps),
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const r = await openLiv(user, input, realDeps);
+      if (input?.from === "welcome" && r.ai) await markWelcomeSession(String(user?.userId ?? ""), r.session_id);
+      return r;
+    },
     false,
     {
       job: z.enum(["liv", "connect"]).optional().describe("맡길 일(text 가 없을 때) — liv = 워크스페이스 점검(기본) · connect = 외부 앱 연결"),
       // ⚠ text 에 zod .max() 를 두지 않는다 — 상한 초과는 핸들러가 "몇 자 넘었는지"를 말해 주는 게 낫다(#1442).
       text: z.string().optional().describe("리브에게 할 말(주면 job 대신 이 말)"),
       only_existing: z.boolean().optional().describe("true 면 있는 리브 세션에만 넣는다(새로 열지 않는다 — 없으면 ai:false · reason no-session)"),
+      from: z.enum(["welcome"]).optional().describe("(#5060) 처음 설정의 [연결할게요]가 부를 때 — 이 세션이 연결을 마친 뒤 증류 지시(2턴)를 받는다"),
     }),
 
   restRead("me_liv_ask_dismiss", "물음 접어두기",
