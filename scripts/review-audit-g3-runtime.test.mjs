@@ -36,12 +36,15 @@ const css = (...fs) => fs.map((f) => readFileSync(path.join(STYLES, f), "utf8"))
 
 //  가짜 서버 — 앱 화면(긴 문서)만. 그 밖은 빈 답.
 const FETCH = `<script>window.__uiGets = 0;
-const APP_HTML = '<!doctype html><html><body style="margin:0"><h1 style="margin:0;height:60px">회의 제목</h1><div style="height:3000px;background:linear-gradient(#fff,#eee)"></div><button style="position:absolute;top:1500px;left:20px">아래 단추</button></body></html>';
+const APP_HTML = '<!doctype html><html><body style="margin:0"><h1 style="margin:0;height:60px">회의 제목</h1><div style="height:3000px;background:linear-gradient(#fff,#eee)"></div><button style="position:absolute;top:1500px;left:20px">아래 단추</button><div id="list" style="position:absolute;top:350px;left:100px;width:300px;height:200px;overflow:auto"><div style="height:2000px">목록</div></div></body></html>';
+//  본문이 스크롤 칸인 앱(html 은 안 넘친다) — 휠이 본문을 내려야 한다
+const BODY_HTML = '<!doctype html><html style="height:100%;overflow:hidden"><body style="margin:0;height:100%;overflow:auto"><div style="height:3000px">본문 스크롤</div></body></html>';
 window.fetch = async (u, init) => {
   const url = String(u && u.url ? u.url : u);
   const p = url.replace(/^.*?(\\/api\\/)/, "/api/");
   const j = (o, s) => new Response(JSON.stringify(o), { status: s || 200, headers: { "Content-Type": "application/json" } });
   if (/^\\/api\\/ui\\/apps\\/mn\\/ui/.test(p)) { window.__uiGets++; return j({ html: APP_HTML, title: "회의록", page_key: "main", csp: {} }); }
+  if (/^\\/api\\/ui\\/apps\\/mb\\/ui/.test(p)) return j({ html: BODY_HTML, title: "본문", page_key: "main", csp: {} });
   return j({});
 };</script>`;
 
@@ -63,6 +66,9 @@ async function PAGE_MAIN() {
   document.body.append(fr.root);
   await sleep(600);
   R.p1 = { before: fr.root.dataset.probe || "", scrollsBefore: scrolls.length };
+  //  P3 같은 앱의 다른 화면(막대가 따라가지 않는 것 — 숨은 탭) — 다시 띄우면 거기 쓰던 상태를 잃는다
+  const fr2 = await Rv.Ui.mountAppUiFrame("mn", { title: "회의록" }); fr2.root.style.display = "none"; document.body.append(fr2.root); await sleep(300);
+  const fr2doc = fr2.root.srcdoc;
   const chat = document.getElementById("chat"), sent = [];
   const pinA = { kind: "pin", x: 0.1, y: 0.1, where: "", note: "앞에 보낸 것", sent: true };
   const pinB = { kind: "pin", x: 0.5, y: 0.5, where: "", note: "가운데" };
@@ -72,7 +78,8 @@ async function PAGE_MAIN() {
   location.hash = host.route;
   let api = Rv.openReview(host);
   await sleep(900);
-  R.p1.after = fr.root.dataset.probe || ""; R.p1.scrollsAfter = scrolls.length; R.p1.again = Rv.Ui.ensureReviewProbe ? Rv.Ui.ensureReviewProbe("mn") : -1;
+  R.p1.after = fr.root.dataset.probe || ""; R.p1.scrollsAfter = scrolls.length; R.p1.again = Rv.Ui.ensureReviewProbe ? Rv.Ui.ensureReviewProbe("mn", fr.root) : -1;
+  R.p3 = { probe: fr2.root.dataset.probe || "", same: fr2.root.srcdoc === fr2doc };
 
   window.__step = "F";
   const layer = () => $(".v2-review-layer"), hint = () => ($(".v2-review-hint") || {}).textContent || "";
@@ -112,6 +119,26 @@ async function PAGE_MAIN() {
   //  S4 새 문서(새 판) — 스크롤은 다시 맨 위
   Rv.Ui.reloadAppFrames("mn"); await sleep(1200);
   R.s.topB3 = markTop(2); R.s.lastScroll2 = scrolls[scrolls.length - 1];
+  //  N1 앱 안쪽 목록이 스크롤된다 — 문서 스크롤은 그대로라 번호를 옮길 수 없다. 숨기고 막대가 말한다 · 되돌리면 다시 보인다
+  { const r = ov().getBoundingClientRect(); ov().dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 300, clientX: r.left + 250, clientY: r.top + 450 })); }
+  await sleep(600);
+  R.n1 = { topB: markTop(2), hint: hint(), docScroll: scrolls[scrolls.length - 1] };
+  { const r = ov().getBoundingClientRect(); ov().dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -5000, clientX: r.left + 250, clientY: r.top + 450 })); }
+  await sleep(600);
+  R.n1.back = markTop(2); R.n1.hintBack = hint();
+  //  W4 ⌘/Ctrl + 휠은 확대 — 막지 않고 앱으로도 넘기지 않는다
+  { const n0 = scrolls.length; const r = ov().getBoundingClientRect(); const ev = new WheelEvent("wheel", { bubbles: true, cancelable: true, ctrlKey: true, deltaY: 300, clientX: r.left + 300, clientY: r.top + 300 }); ov().dispatchEvent(ev); await sleep(400);
+    R.w4 = { prevented: ev.defaultPrevented, newScrolls: scrolls.slice(n0).filter((v) => v !== 0).length }; }
+  //  D4 영역 — 끌기 시작한 화면 기준(끄는 사이 스크롤돼도)
+  [...document.querySelectorAll(".v2-review-tools button")].find((b) => /영역/.test(b.textContent)).click(); await sleep(50);
+  { const r = ov().getBoundingClientRect(); const n0 = host.pins.length;
+    ov().dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, clientX: r.left + 600, clientY: r.top + 100 }));
+    ov().dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 200, clientX: r.left + 700, clientY: r.top + 150 })); await sleep(500);
+    ov().dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: r.left + 800, clientY: r.top + 250 }));
+    ov().dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, clientX: r.left + 800, clientY: r.top + 250 })); await sleep(1000);
+    const bx = host.pins[n0]; R.d4 = { made: !!bx, sy: bx && bx.sy, scrolledTo: scrolls[scrolls.length - 1] };
+    const pp = $(".v2-studio-pop"); if (pp) [...pp.querySelectorAll("button")].find((b) => b.textContent === "취소").click(); await sleep(100);
+    { const r2 = ov().getBoundingClientRect(); ov().dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -5000, clientX: r2.left + 700, clientY: r2.top + 150 })); await sleep(500); } }
 
   window.__step = "T1";
   [...document.querySelectorAll(".v2-review-tools button")].find((b) => /써 보기/.test(b.textContent)).click(); await sleep(100);
@@ -150,9 +177,22 @@ async function PAGE_MAIN() {
   { const b = $(".v2-review-bar > .v2-studio-now-pri"); R.a1 = { hint: hint(), text: b && b.textContent, dis: b && b.disabled }; if (b) b.click(); await sleep(300); R.a1.talk = !!$(".v2-review-talk.on"); }
   api.close(); await sleep(100);
 
+  window.__step = "W3";
+  //  W3 본문이 스크롤 칸인 앱 — 휠이 본문을 내리고 그 스크롤을 문서 스크롤로 알린다
+  { const fb = await Rv.Ui.mountAppUiFrame("mb", { title: "본문" });
+    Object.assign(fb.root.style, { position: "fixed", left: "0px", top: "40px", width: "1400px", height: "600px", border: "0" }); document.body.append(fb.root);
+    fr.root.style.display = "none"; await sleep(400);
+    const hb = { ...host, appId: "mb", title: "본문", pins: [], waiting: false, waitSince: undefined, stall: null, route: "#/i/y" };
+    location.hash = hb.route; api = Rv.openReview(hb); await sleep(1200);
+    const n0 = scrolls.length;
+    { const r = $(".v2-review-ov").getBoundingClientRect(); $(".v2-review-ov").dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 300, clientX: r.left + 300, clientY: r.top + 300 })); }
+    await sleep(600);
+    R.w3 = { got: scrolls.slice(n0) };
+    api.close(); await sleep(100); fb.destroy(); }
+
   window.__step = "M1";
   const rh = Rv.Flow.readHitRes;
-  R.m1 = rh ? { bad: rh({ __studio: "hitres", id: 3, tag: "<img onerror>", text: "가".repeat(200), rect: { l: "x", t: null, w: 0.5, h: Infinity }, sy: "12" }), notHit: rh({ __studio: "scroll", id: 1 }), noId: rh({ __studio: "hitres" }) } : null;
+  R.m1 = rh ? { bad: rh({ __studio: "hitres", id: 3, tag: "<img onerror>", text: "가".repeat(200), rect: { l: "x", t: null, w: 0.5, h: Infinity }, sy: "12" }), notHit: rh({ __studio: "scroll", id: 1 }), noId: rh({ __studio: "hitres" }), clamp: rh({ __studio: "hitres", id: 4, tag: "p", sx: -5, sy: 1e9, ix: "7", iy: NaN }) } : null;
 
   window.__step = "B";
   //  B1 · B2 그림이 있는 보드 — 셋 중 둘째 칸을 연 채 앞의 것이 빠진다
@@ -223,6 +263,7 @@ const near = (a, b, d) => typeof a === "number" && typeof b === "number" && Math
 check(R.p1.before === "" && R.p1.scrollsBefore === 0, "P1 배선 — 검토 전에 띄운 앱 화면엔 탐침이 없다(표시 없음 · 스크롤 알림 0)", R.p1);
 check(R.p1.after === "1" && R.p1.scrollsAfter > 0, "P1 막대를 열면 그 프레임을 탐침과 함께 다시 띄운다(표시 · 탐침이 실제로 돈다)", R.p1);
 check(R.p1.again === 0, "P1 이미 탐침이 든 프레임은 다시 띄우지 않는다", R.p1);
+check(R.p3.probe === "" && R.p3.same, "P3 막대가 따라가지 않는 같은 앱의 다른 화면은 다시 띄우지 않는다(쓰던 상태 그대로)", R.p3);
 check(R.p2.probe === "", "P2 막대를 닫은 뒤 다시 띄우면 탐침 표시가 빠진다", R.p2);
 check(R.f0.shown, "F 배선 — 막대가 아래면 앱 위 층이 선다", R.f0);
 check(R.f1.shown && !/안 보여요/.test(R.f1.hint) && R.f1.barTop < 100, "F1 막대를 위로 옮겨 앱 위쪽을 덮어도 앱이 보인다(층 · 안내 그대로)", R.f1);
@@ -234,6 +275,11 @@ check(R.s.topB2 === null, "S2 화면 밖으로 나간 번호는 그리지 않는
 check(R.s.pinD && R.s.pinD.sy === 300, "S3 짚을 때의 스크롤이 핀에 남는다", R.s.pinD);
 check(/\[핀 4\][^\n]*아래로 300px 내린 화면/.test(R.s.brief) && !/\[핀 2\][^\n]*내린 화면/.test(R.s.brief), "S3 AI 글이 그 핀에만 «아래로 300px 내린 화면» 을 말한다", R.s.brief);
 check(R.s.lastScroll2 === 0 && near(R.s.topB3, R.s.topB0, 0.5), "S4 새 문서면 스크롤은 0 — 번호가 제자리로", R.s);
+check(R.n1.topB === null && /숨겼어요/.test(R.n1.hint) && R.n1.docScroll === 0, "N1 앱 안쪽 목록이 스크롤되면 번호를 숨기고 막대가 말한다(문서 스크롤은 그대로)", R.n1);
+check(R.n1.back !== null && !/숨겼어요/.test(R.n1.hintBack), "N1 목록을 되돌리면 번호가 다시 보인다", R.n1);
+check(R.w4.prevented === false && R.w4.newScrolls === 0, "W4 ⌘/Ctrl + 휠은 막지 않고 앱을 스크롤하지 않는다(브라우저 확대 몫)", R.w4);
+check(R.d4.made && R.d4.sy === 0 && R.d4.scrolledTo === 200, "D4 영역은 끌기 시작한 때의 스크롤로 적는다(끄는 사이 200 내려가도 0)", R.d4);
+check(R.w3.got.includes(300), "W3 본문이 스크롤 칸인 앱도 휠로 내려가고 그 자리를 알린다", R.w3);
 check(R.t1.has && R.t1.op < 0.6 && R.t1.pe === "none", "T1 써 보기면 번호가 흐리고 눌리지 않는다", R.t1);
 check(R.q.opened && R.q.q1.pop && R.q.q1.n === "1" && R.q.q1.focus && R.q.q1.caret === 2 && R.q.q1.note === "가운데 고침", "Q1 앞 코멘트가 빠진 새 목록에도 쓰던 칸 그대로 · 새 번호 · 초점 · 커서", R.q);
 check(R.q.q3.pop, "Q3 기다림이 시작돼도 칸을 닫지 않는다", R.q);
@@ -243,6 +289,7 @@ check(/AI 수정 중 1:2\d/.test(R.k1.send || ""), "K1 고치는 중에 열면 �
 check(/「AI에게 말하기」를 눌러 답해/.test(R.a1.hint) && !/AI 세션 보기/.test(R.a1.hint) && R.a1.dis === false && R.a1.talk, "A1 AI 가 확인을 기다리면 「AI에게 말하기」로 답하라 · 단추가 대화 칸을 연다", R.a1);
 check(R.m1 && R.m1.bad && R.m1.bad.tag === "div" && R.m1.bad.text.length === 80 && R.m1.bad.rect.l === 0 && R.m1.bad.rect.t === 0 && R.m1.bad.rect.w === 0.5 && R.m1.bad.rect.h === 0 && R.m1.bad.sy === 12 && R.m1.notHit === null && R.m1.noId === null,
   "M1 위치 답 거르기 — 태그 div · 글 80자 · 수 아닌 좌표 0 · hitres 아니면 null", R.m1);
+check(R.m1 && R.m1.clamp && R.m1.clamp.sx === 0 && R.m1.clamp.sy === 1e6 && R.m1.clamp.ix === 7 && R.m1.clamp.iy === 0, "M1 스크롤 값은 0 ~ 1e6 으로 자른다", R.m1 && R.m1.clamp);
 check(R.b.opened && R.b.head && /^1 /.test(R.b.head), "B1 앞 코멘트가 빠지면 보드 칸의 번호가 새 목록을 따른다", R.b);
 check(JSON.stringify(R.b.b1) === JSON.stringify(["셋째"]), "B1 보드 칸의 「취소」 는 그 코멘트만 지운다", R.b.b1);
 check(R.b.b2.had && !R.b.b2.pop && R.b.b2.marks === 0, "B2 칸의 코멘트가 밖에서 없어지면 칸을 닫고 번호를 새로 그린다", R.b.b2);

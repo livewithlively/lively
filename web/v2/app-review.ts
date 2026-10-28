@@ -15,7 +15,7 @@
 import { el } from '../core.js';
 import { ensureReviewProbe, markReviewProbe } from './app-ui.js';
 import { fitGrow, growText } from './grow-text.js';
-import { readHitRes, unsent, verName, whereText, type HitRes, type StudioPin } from '../lib/studio-flow.js';
+import { readHitRes, scrollPx, unsent, verName, whereText, type HitRes, type StudioPin } from '../lib/studio-flow.js';
 
 export type ReviewTool = 'try' | 'pick' | 'pin' | 'box';
 export interface ReviewHost {
@@ -77,9 +77,9 @@ export function openReview(host: ReviewHost): ReviewApi {
   const routeBase = host.route.split('?')[0];
   const S = { tool: 'pick' as ReviewTool, active: -1, hoverAt: 0, hitSeq: 1, hitWaits: {} as Record<number, (h: HitRes | null) => void>, frame: null as HTMLIFrameElement | null, dead: false, tick: 0, noteT: 0,
     waitT0: host.waitSince || Date.now(), waitTick: 0, top: false, talkBusy: false,
-    sx: 0, sy: 0 };   // 앱 문서의 지금 스크롤(px · 탐침이 알린다) — 번호는 짚을 때의 스크롤(p.sx · p.sy)과의 차이만큼 옮겨 그린다(점검 3-3)
+    sx: 0, sy: 0, ix: 0, iy: 0, innerHid: 0 };   // 앱 문서의 지금 스크롤(px · 탐침이 알린다) — 번호는 짚을 때의 스크롤(p.sx · p.sy)과의 차이만큼 옮겨 그린다(점검 3-3).
+  //   ix · iy = 안쪽 스크롤 칸들의 합 — 짚은 뒤 달라졌으면 그 번호가 어느 칸 것인지 몰라 숨긴다(innerHid = 숨긴 수)
   markReviewProbe(host.appId, true);
-  ensureReviewProbe(host.appId);   // 검토하지 않는 동안 새 판으로 다시 뜬 프레임에는 탐침이 없다 — 그것만 다시 띄운다(점검 3-1)
 
   // ── 막대 ──
   const bar = el('div', { class: 'v2-review-bar', role: 'toolbar', 'aria-label': '시안 코멘트' });
@@ -128,6 +128,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
     hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
+    if (S.frame && S.innerHid && !host.stall) hint.textContent = '앱 안의 목록이 스크롤돼서 번호 ' + S.innerHid + '개를 숨겼어요. 목록을 짚었던 자리로 되돌리면 다시 보여요.';
     if (host.waiting && host.stall) {   // 멈췄다 — «AI 수정 중 m:ss» 를 세지 않고 앱빌더 막대와 같은 말 · 같은 단추
       send.textContent = '이어서 수정하기'; send.disabled = !host.stall.resume || !host.onResume; hint.textContent = host.stall.text;
       //  AI 가 확인을 기다린다 — 이 막대엔 「AI 세션 보기」 가 없다. 답할 곳은 「AI에게 말하기」(그 대화 칸에 그 AI 세션이 선다 · 점검 3-7).
@@ -172,8 +173,9 @@ export function openReview(host: ReviewHost): ReviewApi {
     if (!location.hash.startsWith(routeBase)) { api.close(); return; }   // 다른 데로 갔다 — 층을 걷는다(적은 것은 이미 부르는 쪽에 있다)
     const f = findFrame();
     if (f !== S.frame) {
-      S.frame = f; S.sx = 0; S.sy = 0;   // 다른 문서 — 스크롤은 그 탐침이 알릴 때까지 맨 위로 본다
-      if (f && f.getAttribute('data-probe') !== '1') ensureReviewProbe(host.appId);   // 막대를 연 뒤에 나타난 옛 프레임(탐침 없이 뜬 것)
+      S.frame = f; S.sx = 0; S.sy = 0; S.ix = 0; S.iy = 0;   // 다른 문서 — 스크롤은 그 탐침이 알릴 때까지 맨 위로 본다
+      //  검토하지 않는 동안 새 판으로 다시 뜬 프레임에는 탐침이 없다 — 막대가 따라가는 **이 프레임만** 다시 띄운다(점검 3-1 · 다른 화면의 쓰던 상태는 건드리지 않는다)
+      if (f && f.getAttribute('data-probe') !== '1') ensureReviewProbe(host.appId, f);
       closePop(); paintBar(); paintMarks();
     }
     if (f) { const r = f.getBoundingClientRect(); layer.style.left = r.left + 'px'; layer.style.top = r.top + 'px'; layer.style.width = r.width + 'px'; layer.style.height = r.height + 'px'; }
@@ -195,7 +197,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   //  코멘트 목록이 열려 있으면 그 끝에 한 줄을 더해 그 칸에 바로 쓴다(목록은 닫지 않는다 — 원준 2026-10-28 «여러 개 코멘트 넘기기도 어렵고»).
   //   닫혀 있으면 짚은 곳 옆에 그 자리 칸이 뜬다. 도구는 그대로라 이어서 다음 곳을 짚는다.
   const addItem = (p: StudioPin): void => { host.pins.push(p); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); changed(); paintMarks(); if (tray) openTray(host.pins.length - 1); else openPop(host.pins.length - 1); };
-  let drag: { x: number; y: number; box: HTMLElement } | null = null; let skip = false;
+  let drag: { x: number; y: number; box: HTMLElement; at: { sx: number; sy: number; ix: number; iy: number } } | null = null; let skip = false;
   ov.addEventListener('pointermove', (e: PointerEvent) => {
     if (S.tool === 'pick' && Date.now() - S.hoverAt > 70) { S.hoverAt = Date.now(); const w = frameWin(); const q = ratio(e); if (w) w.postMessage({ __studio: 'hit', id: 0, x: q.x, y: q.y }, '*'); }
     if (S.tool === 'box' && drag) {
@@ -207,10 +209,11 @@ export function openReview(host: ReviewHost): ReviewApi {
   ov.addEventListener('pointerdown', (e: PointerEvent) => {
     if (pop) { closePop(); skip = true; return; }   // 열린 의견 칸 밖을 누르면 먼저 닫기만 한다
     if (S.tool !== 'box') return;
-    const q = ratio(e); const box = el('div', { class: 'v2-studio-mk v2-studio-mk-box draft' }); layer.append(box); drag = { x: q.x, y: q.y, box }; ov.setPointerCapture(e.pointerId);
+    const q = ratio(e); const box = el('div', { class: 'v2-studio-mk v2-studio-mk-box draft' }); layer.append(box); drag = { x: q.x, y: q.y, box, at: scrollAt(null) };   // 상자는 그리기 시작한 화면 기준
+    try { ov.setPointerCapture(e.pointerId); } catch (_) { /* 이미 끝난 누름 — 잡지 않아도 끌기는 된다 */ }
   });
   //  짚은 곳에는 그때의 스크롤을 남긴다 — 번호가 문서 자리를 따라가고(paintMarks) AI 에게도 그 화면 기준이라고 말한다(fixBrief · 점검 3-3).
-  const scrollAt = (hit: HitRes | null): { sx: number; sy: number } => (hit ? { sx: hit.sx, sy: hit.sy } : { sx: S.sx, sy: S.sy });
+  const scrollAt = (hit: HitRes | null): { sx: number; sy: number; ix: number; iy: number } => (hit ? { sx: hit.sx, sy: hit.sy, ix: hit.ix, iy: hit.iy } : { sx: S.sx, sy: S.sy, ix: S.ix, iy: S.iy });
   ov.addEventListener('click', async (e: MouseEvent) => {
     if (skip) { skip = false; return; }
     if (S.tool !== 'pick' && S.tool !== 'pin') return;
@@ -223,13 +226,12 @@ export function openReview(host: ReviewHost): ReviewApi {
     const q = ratio(e); const d = drag; drag = null; d.box.remove();
     const l = Math.min(q.x, d.x), t = Math.min(q.y, d.y), w = Math.abs(q.x - d.x), hh = Math.abs(q.y - d.y);
     if (w < 0.02 || hh < 0.02) return;   // 너무 작은 상자는 실수로 본다
-    const s0 = { sx: S.sx, sy: S.sy };   // 상자는 그린 화면 기준 — 답을 기다리는 사이 스크롤돼도 그린 때의 것
     const hit = await askHit(l + w / 2, t + hh / 2);
-    addItem({ kind: 'box', x: l, y: t, w, h: hh, where: whereText(hit), note: '', ...s0 });
+    addItem({ kind: 'box', x: l, y: t, w, h: hh, where: whereText(hit), note: '', ...d.at });
   });
   //  도구를 쓰는 중에도 휠은 앱으로 — 덮개가 받아 탐침에게 넘기고, 탐침이 그 자리의 스크롤되는 칸(없으면 문서)을 내린다(점검 3-3).
   ov.addEventListener('wheel', (e: WheelEvent) => {
-    const w = frameWin(); if (!w) return;
+    const w = frameWin(); if (!w || e.ctrlKey || e.metaKey) return;   // ⌘/Ctrl + 휠(확대)은 브라우저 몫
     e.preventDefault();
     const q = ratio(e), r = layer.getBoundingClientRect();
     const f = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? Math.max(1, r.height) : 1;
@@ -240,8 +242,8 @@ export function openReview(host: ReviewHost): ReviewApi {
     if (!ev.source || ev.source !== frameWin()) return;
     const m: any = ev.data;
     if (m && typeof m === 'object' && m.__studio === 'scroll') {
-      const sx = Number(m.sx), sy = Number(m.sy);
-      if (Number.isFinite(sx) && Number.isFinite(sy) && (sx !== S.sx || sy !== S.sy)) { S.sx = sx; S.sy = sy; paintMarks(); placePop(); }
+      const sx = scrollPx(m.sx), sy = scrollPx(m.sy), ix = scrollPx(m.ix), iy = scrollPx(m.iy);   // 앱이 준 값 — 0 ~ 1e6 으로 자른다
+      if (sx !== S.sx || sy !== S.sy || ix !== S.ix || iy !== S.iy) { S.sx = sx; S.sy = sy; S.ix = ix; S.iy = iy; paintMarks(); placePop(); }
       return;
     }
     const h = readHitRes(m); if (!h) return;
@@ -255,11 +257,13 @@ export function openReview(host: ReviewHost): ReviewApi {
   };
   const paintMarks = (): void => {
     layer.querySelectorAll('.v2-studio-mk').forEach((n) => n.remove());
+    const hid0 = S.innerHid; S.innerHid = 0;
     host.pins.forEach((p, i) => {
       if (p.on === 'wire') return;   // 와이어프레임 보드에서 짚은 곳 — 앱 화면 위엔 그리지 않는다(번호는 그대로 i + 1)
       const hot = i === S.active;
       const q = shown(p);
       if (q.y + (p.h || 0) < 0 || q.y > 1 || q.x + (p.w || 0) < 0 || q.x > 1) return;   // 스크롤로 화면 밖에 나갔다 — 앱 밖에 그리지 않는다
+      if ((p.ix || 0) !== S.ix || (p.iy || 0) !== S.iy) { S.innerHid++; return; }   // 안쪽 칸이 스크롤됐다 — 어느 칸의 것인지 몰라 숨긴다(막대가 그렇다고 말한다)
       if (p.kind === 'pick' || p.kind === 'box') {
         const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') + (p.sent ? ' sent' : '') });
         Object.assign(b.style, { left: q.x * 100 + '%', top: q.y * 100 + '%', width: (p.w || 0) * 100 + '%', height: (p.h || 0) * 100 + '%' });
@@ -272,6 +276,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       n.style.left = q.x * 100 + '%'; n.style.top = q.y * 100 + '%';
       layer.append(n);
     });
+    if (hid0 !== S.innerHid) paintBar();   // 숨긴 번호가 생기거나 없어졌다 — 막대 안내를 바꾼다
   };
   // 그 자리의 의견 칸 — 짚은 곳 옆에 뜬다. 칸은 번호가 아니라 **그 코멘트(객체)** 를 든다 — 새 판이 와 앞의 보낸 코멘트가 빠지면 번호가 당겨지는데,
   //  번호를 들고 있으면 칸이 닫히거나(점검 3-4) 「취소」 가 다른 코멘트를 지웠다.

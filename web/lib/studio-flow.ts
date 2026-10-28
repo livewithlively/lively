@@ -362,6 +362,8 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
 export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number; on?: 'wire';
   /** 짚을 때 앱 문서가 스크롤돼 있던 자리(px) — x · y 는 그때 보이던 화면의 비율이라, 번호가 스크롤을 따라가고 AI 에게도 «내린 화면» 을 말한다. */
   sx?: number; sy?: number;
+  /** 짚을 때 앱 안쪽 스크롤 칸들의 스크롤 합(px) — 그 뒤 안쪽 칸이 움직이면 번호가 어느 칸 것인지 몰라 숨긴다(격리 리뷰 #1585). */
+  ix?: number; iy?: number;
   /** 와이어프레임 그림이 없어 보드에 **앱 화면을 대신 놓았을 때** 그 카드(side = 세션 위젯 꼴 · full = 앱 화면 꼴) — x · y 는 그 카드 안의 비율이다. */
   screen?: 'side' | 'full';
   /** 「수정하기」로 이미 보내 AI 가 반영하고 있는 코멘트 — 고치는 동안에도 다음 코멘트를 남기게(원준 2026-10-28) 목록엔 두되 세지 않고 고칠 수 없다.
@@ -422,29 +424,34 @@ export function editBrief(appId: string, title: string, place: StudioPlace): str
 }
 
 /** 앱 틀 안에 넣는 탐침 — 「찍어서 의견」: 호스트가 비율 좌표를 주면 그 자리의 요소(태그 · 글)를 알려 주고 테두리를 그린다.
- *  스크롤도 맡는다(점검 3-3) — 코멘트 도구의 덮개가 휠을 넘기면(wheel) 그 자리의 스크롤되는 칸(없으면 문서)을 내리고,
- *  문서가 스크롤되면(처음 한 번 · 그 뒤 50ms 에 한 번) 그 자리를 알린다(scroll) — 번호가 문서 자리를 따라간다. 답(hitres)에도 그때의 스크롤을 싣는다. */
+ *  스크롤도 맡는다(점검 3-3) — 코멘트 도구의 덮개가 휠을 넘기면(wheel) 그 자리의 스크롤되는 칸(본문 포함 · 없으면 문서)을 내리고,
+ *  무엇이든 스크롤되면(처음 한 번 · 그 뒤 50ms 에 한 번 · 안쪽 칸도 잡는다) 자리를 알린다(scroll): 문서 스크롤 sx · sy(본문이 스크롤 칸이면 본문 것) +
+ *  안쪽 칸들의 스크롤 합 ix · iy — 번호는 문서 스크롤을 따라가고, 안쪽 칸이 움직였으면 어느 칸 것인지 몰라 숨긴다. 답(hitres)에도 그때의 값을 싣는다. */
 export const PROBE_JS = "(function(){var box=null;function mark(r){if(!box){box=document.createElement('div');box.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #7B61E0;border-radius:4px;background:rgba(123,97,224,.12);box-shadow:0 0 0 2px #fff';document.documentElement.appendChild(box);}box.style.left=r.left+'px';box.style.top=r.top+'px';box.style.width=r.width+'px';box.style.height=r.height+'px';box.style.display='';}"
-  + "function tell(){parent.postMessage({__studio:'scroll',sx:Math.round(scrollX||0),sy:Math.round(scrollY||0)},'*');}var pend=0;tell();"
-  + "addEventListener('scroll',function(){if(pend)return;pend=1;setTimeout(function(){pend=0;if(box)box.style.display='none';tell();},50);},{passive:true});"
+  + "var seen=[];function at(){var b=document.body,o={sx:Math.round(Math.max(scrollX||0,b?b.scrollLeft:0)),sy:Math.round(Math.max(scrollY||0,b?b.scrollTop:0)),ix:0,iy:0};for(var i=0;i<seen.length;i++){o.ix+=Math.round(seen[i].scrollLeft);o.iy+=Math.round(seen[i].scrollTop);}return o;}"
+  + "function tell(){var o=at();o.__studio='scroll';parent.postMessage(o,'*');}var pend=0;tell();"
+  + "document.addEventListener('scroll',function(ev){var t=ev.target;if(t&&t.nodeType===1&&t!==document.documentElement&&t!==document.body&&seen.indexOf(t)<0)seen.push(t);if(pend)return;pend=1;setTimeout(function(){pend=0;if(box)box.style.display='none';tell();},50);},{capture:true,passive:true});"
   + "function can(e,dx,dy){var cs=getComputedStyle(e);if(dy&&/(auto|scroll)/.test(cs.overflowY)&&(dy>0?e.scrollTop+e.clientHeight<e.scrollHeight-1:e.scrollTop>0))return true;if(dx&&/(auto|scroll)/.test(cs.overflowX)&&(dx>0?e.scrollLeft+e.clientWidth<e.scrollWidth-1:e.scrollLeft>0))return true;return false;}"
   + "window.addEventListener('message',function(ev){var m=ev.data;if(!m||typeof m!=='object')return;if(m.__studio==='clear'){if(box)box.style.display='none';return;}"
-  + "if(m.__studio==='wheel'){var dx=+m.dx||0,dy=+m.dy||0,q=document.elementFromPoint((+m.x||0)*(innerWidth||1),(+m.y||0)*(innerHeight||1));while(q&&q!==document.body&&q!==document.documentElement){if(can(q,dx,dy)){q.scrollBy(dx,dy);return;}q=q.parentElement;}scrollBy(dx,dy);setTimeout(tell,0);return;}"
+  + "if(m.__studio==='wheel'){var dx=+m.dx||0,dy=+m.dy||0,q=document.elementFromPoint((+m.x||0)*(innerWidth||1),(+m.y||0)*(innerHeight||1));while(q&&q!==document.documentElement){if(can(q,dx,dy)){if(q!==document.body&&seen.indexOf(q)<0)seen.push(q);q.scrollBy(dx,dy);setTimeout(tell,0);return;}q=q.parentElement;}scrollBy(dx,dy);setTimeout(tell,0);return;}"
   + "if(m.__studio!=='hit')return;"
-  + "var W=innerWidth||1,H=innerHeight||1,e=document.elementFromPoint(m.x*W,m.y*H)||document.body;var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);var r=e.getBoundingClientRect();mark(r);"
-  + "parent.postMessage({__studio:'hitres',id:m.id,tag:e.tagName.toLowerCase(),text:t,rect:{l:r.left/W,t:r.top/H,w:r.width/W,h:r.height/H},sx:Math.round(scrollX||0),sy:Math.round(scrollY||0)},'*');});})();";
+  + "var W=innerWidth||1,H=innerHeight||1,e=document.elementFromPoint(m.x*W,m.y*H)||document.body;var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);var r=e.getBoundingClientRect();mark(r);var o=at();"
+  + "parent.postMessage({__studio:'hitres',id:m.id,tag:e.tagName.toLowerCase(),text:t,rect:{l:r.left/W,t:r.top/H,w:r.width/W,h:r.height/H},sx:o.sx,sy:o.sy,ix:o.ix,iy:o.iy},'*');});})();";
 
 /** 탐침의 답(hitres) 거르기 — 실제 화면 막대(app-review)와 와이어프레임 보드(wire-board)가 같이 쓴다(점검 3-13).
  *  앱(또는 AI 가 쓴 그림)이 돌려준 값이라 그대로 믿지 않는다 — 태그는 짧은 영문만(아니면 div) · 글은 80자 · 좌표와 스크롤은 유한한 수만(아니면 0).
  *  AI 에게 가는 고침 글에 실린다. hitres 가 아니거나 번호가 없으면 null. */
-export interface HitRes { id: number; tag: string; text: string; rect: { l: number; t: number; w: number; h: number } | null; sx: number; sy: number }
+export interface HitRes { id: number; tag: string; text: string; rect: { l: number; t: number; w: number; h: number } | null; sx: number; sy: number; ix: number; iy: number }
+/** 탐침이 알린 스크롤(px) — 앱이 준 값이라 0 ~ 1e6 으로 자른다(격리 리뷰 #1585). */
+export const scrollPx = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? Math.min(1e6, Math.max(0, Math.round(n))) : 0; };
 export function readHitRes(m: unknown): HitRes | null {
   const o = m as any;
   if (!o || typeof o !== 'object' || o.__studio !== 'hitres' || typeof o.id !== 'number' || !Number.isFinite(o.id)) return null;
   const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
   const tag = String(o.tag || '');
   return { id: o.id, tag: /^[a-z][a-z0-9-]{0,23}$/.test(tag) ? tag : 'div', text: String(o.text || '').slice(0, 80),
-    rect: o.rect && typeof o.rect === 'object' ? { l: num(o.rect.l), t: num(o.rect.t), w: num(o.rect.w), h: num(o.rect.h) } : null, sx: num(o.sx), sy: num(o.sy) };
+    rect: o.rect && typeof o.rect === 'object' ? { l: num(o.rect.l), t: num(o.rect.t), w: num(o.rect.w), h: num(o.rect.h) } : null,
+    sx: scrollPx(o.sx), sy: scrollPx(o.sy), ix: scrollPx(o.ix), iy: scrollPx(o.iy) };
 }
 
 /** 찍은 자리를 AI 에게 말할 때의 글 — 「<h1 「이번 회의 안건」>」. */
