@@ -509,6 +509,17 @@ try {
     chk("J5 보존 일수(keep_days)를 고친다 — 기본 90 · 0(무기한)은 받고 3651 은 400",
       r4.policy.keep_days === 90 && r5.policy.keep_days === 0 && r5.workspace_setting.keep_days === 0 && tooLong?.status === 400,
       JSON.stringify({ before: r4.policy.keep_days, after: r5.workspace_setting, status: tooLong?.status }));
+    //  J6 #5081 — 공용 시트 칸이 생기기 전에 동시 1 로 적어 둔 워크스페이스. 다른 칸을 고쳐도 «공용 시트 기본 2 > 동시 1» 로 거절하지 않고,
+    //   읽을 때 동시 1 로 접는다. 공용 시트 칸을 직접 2 로 적으면 그때는 거절한다.
+    await set.handler({ reset: true }, admin, ctx);
+    await itemsPool.query(`UPDATE org_runtime_config SET agent_job_policy=$1::jsonb WHERE id=1`, [JSON.stringify({ max_running: 1, max_running_per_member: 1 })]);
+    let j6err = null, r6 = null;
+    try { r6 = await set.handler({ keep_days: 30 }, admin, ctx); } catch (e) { j6err = e; }
+    let j6seat = null;
+    try { await set.handler({ max_running_per_service_seat: 2 }, admin, ctx); } catch (e) { j6seat = e; }
+    chk("J6 옛 설정(동시 1)에서 다른 칸 고치기는 된다 · 공용 시트 상한은 읽을 때 1 · 직접 2 로 적으면 400",
+      j6err === null && r6?.workspace_setting.keep_days === 30 && r6?.policy.max_running_per_service_seat === 1 && j6seat?.status === 400,
+      JSON.stringify({ err: j6err?.message, setting: r6?.workspace_setting, seat: r6?.policy.max_running_per_service_seat, status: j6seat?.status }));
   }
 } catch (e) {
   bad("예외", String((e && e.stack) || e));

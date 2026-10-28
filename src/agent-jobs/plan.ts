@@ -102,6 +102,37 @@ export function homelessJobRefusal(job: { homeless?: boolean; account_kind: stri
   return null;
 }
 
+/** #5081 공용 시트 작업을 아직 돌려도 되나의 사실 — live 가 설정 · 구성원 표에서 모은다(보낸 사람이 그 앱을 쓸 수 있나는 따로 잰다). */
+export interface SharedSeatJobFacts {
+  /** 시트 지정(관리자 승인 + 본인 동의)이 그대로인가. */
+  consented: boolean;
+  /** 시트 계정 — 이 워크스페이스의 활성 사람 구성원인가 · 기본 권한 밖의 권한이 있나(ai-runs/plan.seatElevated). */
+  seat: { active: boolean; elevated: boolean };
+  /** 보낸 사람이 이 워크스페이스의 활성 사람 구성원인가. */
+  requesterActive: boolean;
+}
+
+/**
+ * (순수) 공용 시트 작업을 아직 돌려도 되나(#5081) — 접수 때(ai-runs/service.submitRun)와 같은 자로 다시 잰다: 모양(구독 · 앱 작업 · 프로젝트 없음 ·
+ *  작업 폴더가 그 앱 폴더) · 시트 지정 · 시트 계정(활성 · 기본 권한뿐 — ai-runs/plan.seatShared) · 보낸 사람(활성). 어기면 사유, 맞으면 null.
+ *  배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다(live.assertJobAllowed).
+ */
+export function sharedSeatJobRefusal(
+  job: { account_kind: string; account_member: string | null; requester: string; app_id: string | null; project_id: number | null; cwd: string },
+  f: SharedSeatJobFacts,
+): string | null {
+  const seat = job.account_member ?? "?";
+  if (job.account_kind !== "subscription" || !job.account_member) return "공용 시트 작업은 구독 실행만 됩니다";
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "공용 시트 작업은 앱 작업이어야 합니다";
+  if (job.project_id != null) return "공용 시트 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "공용 시트 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  if (!f.consented) return `공용 시트(${seat}) 지정이 풀렸습니다`;
+  if (!f.seat.active) return `공용 시트 계정(${seat})이 활성 사람 구성원이 아닙니다`;
+  if (f.seat.elevated) return `공용 시트 계정(${seat})이 높은 권한(관리자 · 실행 · DB · 코드)을 가져 공용으로 쓰지 않습니다`;
+  if (!f.requesterActive) return `보낸 사람(${job.requester})이 이 워크스페이스의 활성 구성원이 아닙니다`;
+  return null;
+}
+
 /** (순수) 요청한 실행 시간(분) → 초. 없으면 기본, 넘으면 최대로 접는다(거절하지 않는다 — 앱이 상한을 몰라도 돈다). */
 export function timeoutSecOf(requestedMin: unknown, p: Pick<AgentJobPolicy, "default_timeout_min" | "max_timeout_min">): number {
   const n = typeof requestedMin === "number" && Number.isFinite(requestedMin) ? Math.floor(requestedMin) : NaN;

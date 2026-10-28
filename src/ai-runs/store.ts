@@ -1,6 +1,8 @@
 // 앱 AI 실행 행(org_app_ai_run) · 프록시 계측(org_app_llm_call) · 워크스페이스 설정 칸 — 읽고 쓰기만 한다 (#4488 앱 v2-9).
 //  ⚠ 모든 조회는 요청 컨텍스트(RLS)의 테넌트로 좁혀진다. 상태를 바꾸는 쓰기는 «지금 상태가 이것일 때만» 조건을 단다(청/녹 두 슬롯 · 정비가 겹쳐도 한 번만).
+import type pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
+import { SHARED_SEAT_COL } from "../agent-jobs/store.js";
 import type { AiRunStatus, Executor, RunKind } from "./plan.js";
 
 export interface AiRunRow {
@@ -135,18 +137,30 @@ export async function openRunCountOf(requester: string): Promise<number> {
 }
 
 export interface AiRunListFilter { appId: string | null; requester: string | null; status: string | null; limit: number }
-export type AiRunSummaryRow = Omit<AiRunRow, "prompt" | "result" | "schema" | "system_prompt" | "proxy_token_hash"> & { prompt_preview: string; has_result: boolean };
+/** shared_seat = 공용 시트로 돈 실행인가(#5081 — 그 작업의 표시). 내 실행 판정(service.isOwnRun)이 쓴다. */
+export type AiRunSummaryRow = Omit<AiRunRow, "prompt" | "result" | "schema" | "system_prompt" | "proxy_token_hash"> & { prompt_preview: string; has_result: boolean; shared_seat: boolean };
+/**
+ * 실행 목록 — requester 를 주면 «내 실행»(보낸 것 + 내 구독으로 도는 것 · 공용 시트로 돈 실행은 빼고 — service.isOwnRun 과 한 뜻).
+ *  #5081 공용 시트 표시는 작업 행(org_agent_job.shared_seat)에 있다. 그 칸이 아직 없으면(롤 창 — agent-jobs/store.SHARED_SEAT_COL 머리말) 표시 없이
+ *  다시 읽는다 — 칸이 없으면 그 칸을 단 작업도 없다.
+ */
 export async function listAiRuns(f: AiRunListFilter): Promise<AiRunSummaryRow[]> {
-  const r = await itemsPool.query(
-    `SELECT id, status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, job_id, model, label,
-            left(regexp_replace(prompt, '\\s+', ' ', 'g'), 200) AS prompt_preview, (result IS NOT NULL) AS has_result, error, session_note, retries,
-            input_tokens, output_tokens, created_at, started_at, ended_at, updated_at
-       FROM org_app_ai_run
-      WHERE ($1::text IS NULL OR app_id=$1)
-        AND ($2::text IS NULL OR requester=$2 OR (account_kind='subscription' AND account_member=$2))  -- 내 실행 = 보낸 것 + 내 구독으로 도는 것(service.isOwnRun 과 한 뜻)
-        AND ($3::text IS NULL OR status=$3)
-      ORDER BY id DESC LIMIT $4`, [f.appId, f.requester, f.status, f.limit]);
-  return r.rows.map((x) => ({ ...x, id: Number(x.id), job_id: x.job_id == null ? null : Number(x.job_id) } as unknown as AiRunSummaryRow));
+  const sql = (seat: string): string =>
+    `SELECT * FROM (
+       SELECT r.id, r.status, r.app_id, r.requester, r.requester_kind, r.source, r.job_name, r.kind, r.account_kind, r.account_member, r.executor, r.job_id, r.model,
+              r.label, left(regexp_replace(r.prompt, '\\s+', ' ', 'g'), 200) AS prompt_preview, (r.result IS NOT NULL) AS has_result, r.error, r.session_note, r.retries,
+              r.input_tokens, r.output_tokens, r.created_at, r.started_at, r.ended_at, r.updated_at, ${seat} AS shared_seat
+         FROM org_app_ai_run r
+        WHERE ($1::text IS NULL OR r.app_id=$1) AND ($3::text IS NULL OR r.status=$3)
+     ) x
+      WHERE ($2::text IS NULL OR requester=$2 OR (account_kind='subscription' AND account_member=$2 AND NOT shared_seat))
+      ORDER BY id DESC LIMIT $4`;
+  const args = [f.appId, f.requester, f.status, f.limit];
+  const r = await itemsPool.query(sql(`EXISTS (SELECT 1 FROM org_agent_job j WHERE j.id = r.job_id AND j.${SHARED_SEAT_COL})`), args).catch((e) => {
+    if ((e as { code?: string })?.code === "42703") return itemsPool.query(sql("false"), args);   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  });
+  return r.rows.map((x) => ({ ...x, id: Number(x.id), job_id: x.job_id == null ? null : Number(x.job_id), shared_seat: x.shared_seat === true } as unknown as AiRunSummaryRow));
 }
 
 /** 이 앱이 만든 대화(이어받기용) — 끝난 작업 실행 중 대화 id 가 남은 것(작업 행 join). */
@@ -192,19 +206,23 @@ export async function aiAccountRow(): Promise<unknown> {
   const r = await itemsPool.query(`SELECT app_ai_account FROM org_runtime_config WHERE id=1`);
   return r.rows[0]?.app_ai_account ?? {};
 }
+/** 시험 준비용 — 칸을 통째로 덮는다. 제품 코드는 updateAiAccountRow 로 고친다(읽고 → 쓰기 사이를 잠근다). */
 export async function writeAiAccountRow(next: unknown): Promise<void> {
   await itemsPool.query(`UPDATE org_runtime_config SET app_ai_account=$1::jsonb WHERE id=1`, [JSON.stringify(next ?? {})]);
 }
 /**
  * 설정 칸을 읽고 고쳐 쓴다 — 한 트랜잭션 · 행 잠금(FOR UPDATE)으로(#5081). 실행 계정 설정과 공용 시트 지정(관리자 승인 · 본인 동의)은 다른 사람이
- *  같은 칸을 거의 같이 고친다 — 읽고 → 쓰기 사이가 열려 있으면 한쪽 동의가 조용히 사라진다. fn 은 읽은 값을 받아 쓸 값을 돌려준다(던지면 아무것도 안 쓴다).
- *  돌려주는 것: fn 이 돌려준 값.
+ *  같은 칸을 거의 같이 고친다 — 읽고 → 쓰기 사이가 열려 있으면 한쪽 동의가 조용히 사라진다.
+ *  fn 은 읽은 값과 그 트랜잭션(c — 감사를 audit(…, c) 로 같은 트랜잭션에 넣는다)을 받아 쓸 값을 돌려준다. next 가 null 이면 쓰지 않는다(바뀐 것 없음).
+ *  던지면 아무것도 안 쓴다(감사도). 돌려주는 것: fn 이 돌려준 out.
  */
-export async function updateAiAccountRow<T>(fn: (cur: unknown) => { next: unknown; out: T } | Promise<{ next: unknown; out: T }>): Promise<T> {
+export async function updateAiAccountRow<T>(
+  fn: (cur: unknown, c: pg.PoolClient) => { next: unknown | null; out: T } | Promise<{ next: unknown | null; out: T }>,
+): Promise<T> {
   return withTx(async (c) => {
     const r = await c.query(`SELECT app_ai_account FROM org_runtime_config WHERE id=1 FOR UPDATE`);
-    const { next, out } = await fn(r.rows[0]?.app_ai_account ?? {});
-    await c.query(`UPDATE org_runtime_config SET app_ai_account=$1::jsonb WHERE id=1`, [JSON.stringify(next ?? {})]);
+    const { next, out } = await fn(r.rows[0]?.app_ai_account ?? {}, c);
+    if (next !== null) await c.query(`UPDATE org_runtime_config SET app_ai_account=$1::jsonb WHERE id=1`, [JSON.stringify(next ?? {})]);
     return out;
   });
 }

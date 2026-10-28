@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, HOMELESS_OS_USER, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX,
-  type RunnerReport, type SweepFacts,
+  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, sharedSeatJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE,
+  TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
 import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
@@ -40,7 +40,7 @@ t("C6 실행 계정 없음(null) 은 사람당 상한과 무관 — 워크스페
   assert.deepEqual(planClaims([q(9, null)], [q(1, null), q(2, null), q(3, null)], { max_running: 3, max_running_per_member: 1, max_running_per_service_seat: 20 }), [1, 2]);
 });
 
-// ── #5081 공용 시트 — 보낸 사람당 + 시트 전체(엣지 표 D1~D7 · 스크래치 spec.md) ──
+// ── #5081 공용 시트 — 보낸 사람당 + 시트 전체(엣지 표 D1~D7 · E · G — 지식 app-service-seat-asbuilt-5081 §9) ──
 //  sub(id, 보낸 사람, 구독 주인) · key(id, 보낸 사람) — 시트 묶음(SEAT)에 든 주인의 구독 작업이 공용 시트 작업이다.
 const sub = (id: number, requester: string, owner: string) => ({ id, requester, account_kind: "subscription", account_member: owner });
 const key = (id: number, requester: string) => ({ id, requester, account_kind: "api_key", account_member: null });
@@ -85,6 +85,28 @@ t("E2 토큰 옵션 — 공용 시트 · 홈 없음은 앱 서버 급 · 둘 다
   assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900, true), { ttlSec: 900, appServerPrincipal: true });
   assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900, false), { ttlSec: 900, appServerPrincipal: true });
   assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900, false), { ttlSec: 900 });
+});
+t("G1 공용 시트 작업을 아직 돌려도 되나 — 모양(구독 · 앱 · 프로젝트 없음 · 그 앱 폴더) · 지정 · 시트(활성 · 기본 권한뿐) · 보낸 사람(활성)", () => {
+  type J = Parameters<typeof sharedSeatJobRefusal>[0];
+  const job: J = { account_kind: "subscription", account_member: "seat", requester: "alice", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  const f: SharedSeatJobFacts = { consented: true, seat: { active: true, elevated: false }, requesterActive: true };
+  assert.equal(sharedSeatJobRefusal(job, f), null);
+  const rows: Array<[Partial<J>, Partial<SharedSeatJobFacts>, RegExp]> = [
+    [{ account_kind: "api_key", account_member: null }, {}, /구독 실행만/],
+    [{ account_member: null }, {}, /구독 실행만/],
+    [{ app_id: null }, {}, /앱 작업이어야/],
+    [{ app_id: "Bad_Id" }, {}, /앱 작업이어야/],
+    [{ project_id: 3, cwd: "/work/shared/project/3" }, {}, /프로젝트 폴더/],
+    [{ cwd: "/work/apps/other" }, {}, /그 앱 폴더/],
+    [{ cwd: "/work/apps/crm/sub" }, {}, /그 앱 폴더/],
+    [{}, { consented: false }, /지정이 풀렸습니다/],
+    [{}, { seat: { active: false, elevated: false } }, /활성 사람 구성원이 아닙니다/],
+    [{}, { seat: { active: true, elevated: true } }, /높은 권한/],
+    [{}, { requesterActive: false }, /보낸 사람\(alice\)/],
+  ];
+  for (const [o, fo, re] of rows) assert.match(sharedSeatJobRefusal({ ...job, ...o }, { ...f, ...fo }) ?? "", re, JSON.stringify([o, fo]));
+  //  모양이 먼저다 — 사실을 몰라도(다 «아님») 모양 거절 문장이 나온다(사실 조회가 실패해도 모양이 틀린 작업은 같은 까닭으로 끝난다).
+  assert.match(sharedSeatJobRefusal({ ...job, project_id: 3 }, { consented: false, seat: { active: false, elevated: true }, requesterActive: false }) ?? "", /프로젝트 폴더/);
 });
 
 // ── 감시 ─────────────────────────────────────────────────────────────────────

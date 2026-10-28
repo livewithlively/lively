@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   accountSetRefusal, executorFor, extractJson, judgeOutput, overDailyBudget, parseAccountSettings, resolveAccount, runKindOf, runStatusOfJob, schemaInputError,
-  schemaInstruction, seatShared, serviceSeatChange, serviceSeatConsented, subscriptionRefusal, validateJsonSchema, waitSecOf, WAIT_MAX_SEC,
+  schemaInstruction, seatElevated, seatShared, seatState, serviceSeatChange, serviceSeatConsented, subscriptionRefusal, validateJsonSchema, waitSecOf, WAIT_MAX_SEC,
   type AiAccountSettings, type ServiceSeat,
 } from "./plan.js";
 
@@ -88,11 +88,11 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("P8 설정 권한 — 남의 구독 금지 · 워크스페이스 기본값은 관리자 · 앱은 관리자/책임자");
 }
 
-// ── P15 공용 시트(#5081 · 상민 2026-10-28) — 엣지 표 A1~A9 · B · C · H1(스크래치 spec.md) ──
+// ── P15 공용 시트(#5081 · 상민 2026-10-28) — 엣지 표 A1~A10 · B · C · H1 · E(지식 app-service-seat-asbuilt-5081 §9) ──
 {
   const NOW = "2026-10-28T00:00:00.000Z";
   const root = { member: "root", admin: true }, x = { member: "x", admin: false }, bob = { member: "bob", admin: false };
-  const tx = { member: "x", exists: true, active: true, human: true, admin: false };
+  const tx = { member: "x", exists: true, active: true, human: true, elevated: false };
   const next = (r: ReturnType<typeof serviceSeatChange>): ServiceSeat | null => { assert.ok("next" in r, JSON.stringify(r)); return r.next; };
   const refused = (r: ReturnType<typeof serviceSeatChange>, status: number, re: RegExp): void => {
     assert.ok("refusal" in r, JSON.stringify(r)); assert.equal(r.status, status); assert.match(r.refusal, re);
@@ -111,8 +111,8 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   //  A4 관리자 아닌 남 — 켜기도 끄기도 403
   refused(serviceSeatChange(a2!, bob, tx, true, NOW), 403, /관리자와 그 계정 본인만/);
   refused(serviceSeatChange(a2!, bob, tx, false, NOW), 403, /관리자와 그 계정 본인만/);
-  //  A5 대상이 관리자 권한 · A6 비활성 · 사람 아님 · 없음
-  refused(serviceSeatChange(undefined, root, { ...tx, admin: true }, true, NOW), 409, /관리자 권한/);
+  //  A5 대상이 높은 권한(관리자 · 실행 · DB · 코드 — seatElevated) · A6 비활성 · 사람 아님 · 없음
+  refused(serviceSeatChange(undefined, root, { ...tx, elevated: true }, true, NOW), 409, /높은 권한/);
   refused(serviceSeatChange(undefined, root, { ...tx, active: false }, true, NOW), 409, /활성 사람 구성원/);
   refused(serviceSeatChange(undefined, root, { ...tx, human: false }, true, NOW), 409, /활성 사람 구성원/);
   refused(serviceSeatChange(undefined, root, { ...tx, exists: false }, true, NOW), 404, /구성원 없음/);
@@ -121,8 +121,12 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(next(serviceSeatChange(a2!, x, tx, false, NOW)), null);
   //  A8 본인 동의만 → 꺼짐
   assert.equal(serviceSeatConsented(settingsOf(next(serviceSeatChange(undefined, x, tx, true, NOW))), "x"), false, "A8 본인 동의만으로는 꺼짐");
-  //  A9 관리자가 제 계정을 — 관리자 권한이라 지정 자체가 안 된다(혼자 켜는 길 없음)
-  refused(serviceSeatChange(undefined, root, { member: "root", exists: true, active: true, human: true, admin: true }, true, NOW), 409, /관리자 권한/);
+  //  A9 관리자가 제 계정을 — 높은 권한이라 지정 자체가 안 된다(혼자 켜는 길 없음)
+  refused(serviceSeatChange(undefined, root, { member: "root", exists: true, active: true, human: true, elevated: true }, true, NOW), 409, /높은 권한/);
+  //  A10 구성원 표에서 지워진 계정 — 남은 줄은 관리자가 지운다(끄기는 없는 계정도 된다) · 남은 «없음» 을 묻지 못한다(403 이 먼저)
+  assert.equal(next(serviceSeatChange(a2!, root, { ...tx, exists: false, active: false, human: false }, false, NOW)), null, "A10 지워진 계정의 줄 지우기");
+  refused(serviceSeatChange(undefined, bob, { ...tx, exists: false }, true, NOW), 403, /관리자와 그 계정 본인만/);
+  refused(serviceSeatChange(a2!, bob, { ...tx, exists: false }, false, NOW), 403, /관리자와 그 계정 본인만/);
 
   //  H1 설정 해석 — 깨진 조각 · 빈 이름은 버리고, 한쪽만 있는 줄은 남긴다(대기 상태를 잃지 않게)
   const parsed = parseAccountSettings({ service_seats: {
@@ -137,13 +141,13 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
 
   //  B — 구독 선 + 공용 시트(seatShared · subscriptionRefusal)
   const sub = { kind: "subscription" as const, member: "seat" };
-  const on = { consented: true, active: true, admin: false };
+  const on = { consented: true, active: true, elevated: false };
   const terms = (requesterActive: boolean, facts = on) => ({ facts, requesterActive });
   const alice = { member: "alice", kind: "member" as const }, srv = { member: "alice", kind: "app_server" as const };
   assert.equal(seatShared(on), true);
   assert.equal(seatShared({ ...on, consented: false }), false);
   assert.equal(seatShared({ ...on, active: false }), false);
-  assert.equal(seatShared({ ...on, admin: true }), false, "관리자 계정은 공용으로 쓰지 않는다");
+  assert.equal(seatShared({ ...on, elevated: true }), false, "높은 권한 계정은 공용으로 쓰지 않는다");
   assert.equal(seatShared(null), false);
   assert.match(subscriptionRefusal(sub, alice, null, null)!, /초대받은 사람/, "B1 지정 없음 — 남의 요청은 종전대로 403");
   assert.equal(subscriptionRefusal(sub, alice, null, terms(true)), null, "B2 켜짐 · 활성 구성원 · 세션 없음 → 받는다");
@@ -154,12 +158,12 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.match(subscriptionRefusal(sub, srv, null, null)!, /앱 서버/, "B6 지정 없음 · 앱 서버 → 종전대로 403");
   assert.match(subscriptionRefusal(sub, alice, { owner: "alice", participant: true, human: false }, terms(true))!, /사람이 보는 세션/, "B7 기계 세션");
   assert.match(subscriptionRefusal(sub, alice, { owner: null, participant: false, human: false }, terms(true))!, /사람이 보는 세션/, "B7 모르는 세션");
-  const adminSeat = terms(true, { ...on, admin: true });
-  assert.match(subscriptionRefusal(sub, alice, null, adminSeat)!, /관리자 권한이 있어 공용으로 쓰지 않습니다/, "B9 시트가 관리자 — 까닭을 붙인다");
-  assert.match(subscriptionRefusal(sub, srv, null, adminSeat)!, /관리자 권한이 있어/, "B9 앱 서버 쪽 문장에도");
+  const adminSeat = terms(true, { ...on, elevated: true });
+  assert.match(subscriptionRefusal(sub, alice, null, adminSeat)!, /높은 권한\(관리자 · 실행 · DB · 코드\)이 있어 공용으로 쓰지 않습니다/, "B9 시트가 높은 권한 — 까닭을 붙인다");
+  assert.match(subscriptionRefusal(sub, srv, null, adminSeat)!, /높은 권한/, "B9 앱 서버 쪽 문장에도");
   assert.equal(subscriptionRefusal(sub, { member: "seat", kind: "member" }, null, adminSeat), null, "B9 시트 계정 본인은 종전대로 본인");
   assert.match(subscriptionRefusal(sub, alice, null, terms(true, { ...on, active: false }))!, /초대받은 사람/, "B10 시트 비활성 → 공용 아님 · 종전 거절");
-  assert.doesNotMatch(subscriptionRefusal(sub, alice, null, terms(true, { ...on, active: false }))!, /관리자 권한/);
+  assert.doesNotMatch(subscriptionRefusal(sub, alice, null, terms(true, { ...on, active: false }))!, /높은 권한/);
   assert.equal(subscriptionRefusal({ kind: "api_key" }, srv, null, terms(false)), null, "API 키는 공용 시트 판정과 무관");
 
   //  C — 실행 계정으로 공용 시트를 거는 사람(관리자는 어느 자리든 · 앱 책임자는 못 건다)
@@ -171,7 +175,26 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.match(accountSetRefusal(seatAcct, { member: "alice", admin: false }, mine, true)!, /관리자만/, "C3 앱 책임자는 공용 시트를 못 건다");
   assert.equal(accountSetRefusal({ kind: "subscription", member: "alice" }, { member: "alice", admin: false }, mine, false), null, "C4 제 구독을 제 앱에(종전)");
   assert.equal(accountSetRefusal(seatAcct, { member: "seat", admin: false }, { appId: "crm", appOwner: true }, true), null, "시트 본인은 제 앱에 제 구독(종전)");
-  ok("P15 공용 시트 — 두 동의(순서 무관 · 한쪽 거두면 둘 다) · 관리자 계정 불가 · 구성원 누구나(앱 서버 사람 대리 포함) · 남는 거절 · 거는 사람은 관리자");
+
+  //  E — 시트 계정의 권한(기본 권한 items · context · memory 만 공용으로 쓴다) · 한 줄의 상태(화면과 실행이 같은 «켜짐»)
+  const elevated: Array<[readonly string[] | null, boolean]> = [
+    [[], false], [["items", "context", "memory"], false], [null, false], [["admin"], true], [["runtime"], true], [["db"], true],
+    [["db:crm"], true], [["code"], true], [["items", "code"], true],
+  ];
+  for (const [scopes, want] of elevated) assert.equal(seatElevated(scopes), want, `E1 seatElevated(${JSON.stringify(scopes)})`);
+  const both: ServiceSeat = { admin: { by: "root", at: NOW }, member: { at: NOW } };
+  const states: Array<[ServiceSeat, { active: boolean; elevated: boolean } | null, string]> = [
+    [both, null, "unknown"], [both, { active: true, elevated: false }, "on"], [both, { active: false, elevated: false }, "inactive"],
+    [both, { active: true, elevated: true }, "elevated"], [{ member: { at: NOW } }, { active: true, elevated: false }, "admin_pending"],
+    [{ admin: { by: "root", at: NOW } }, { active: true, elevated: false }, "member_pending"],
+    [{ member: { at: NOW } }, { active: false, elevated: true }, "inactive"], [{ admin: { by: "root", at: NOW } }, { active: true, elevated: true }, "elevated"],
+  ];
+  for (const [seat, f, want] of states) {
+    assert.equal(seatState(seat, f), want, `E2 seatState(${JSON.stringify(seat)}, ${JSON.stringify(f)})`);
+    //  «켜짐» 은 실행 판정과 같은 정의다 — 화면이 켜졌다는데 실행이 거절하는 어긋남이 없게
+    if (f) assert.equal(seatState(seat, f) === "on", seatShared({ consented: !!seat.admin && !!seat.member, ...f }), `E2 on ⇔ seatShared ${JSON.stringify([seat, f])}`);
+  }
+  ok("P15 공용 시트 — 두 동의(순서 무관 · 한쪽 거두면 둘 다) · 높은 권한 계정 불가 · 지워진 계정의 줄 지우기 · 구성원 누구나(앱 서버 사람 대리 포함) · 남는 거절 · 거는 사람은 관리자 · 상태");
 }
 
 // ── P9~P11 JSON 꺼내기 · 스키마 검사 · 판정 · 스키마 입력 ──

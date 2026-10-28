@@ -5664,7 +5664,7 @@
   "rest": [
    "POST /api/ui/ai-account"
   ],
-  "input_hash": "19d0e0ec491b4108"
+  "input_hash": "0c4ef413a14b82bf"
  },
  {
   "name": "app_ai_service_seat_set",
@@ -5674,7 +5674,7 @@
   "rest": [
    "POST /api/ui/ai-service-seats"
   ],
-  "input_hash": "22eb112d59a8f7b2"
+  "input_hash": "093f7fdc9bffc181"
  },
  {
   "name": "app_ai_limits",

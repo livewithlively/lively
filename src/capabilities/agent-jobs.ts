@@ -111,7 +111,8 @@ async function limitsSnapshot(): Promise<Record<string, unknown>> {
 const agentJobLimits: Capability = {
   name: "agent_job_limits",
   title: "에이전트 작업 상한 보기",
-  description: "작업 컨테이너의 워크스페이스 상한 — max_running(동시) · max_running_per_member(실행 계정당 동시) · max_queued(대기열) · queue_wait_min(대기 상한) · " +
+  description: "작업 컨테이너의 워크스페이스 상한 — max_running(동시) · max_running_per_member(실행 계정당 동시 — 공용 시트 작업은 보낸 사람당) · " +
+    "max_running_per_service_seat(공용 시트 하나로 동시 — #5081 · 안 적으면 기본값을 max_running 으로 접는다) · max_queued(대기열) · queue_wait_min(대기 상한) · " +
     "default_timeout_min · max_timeout_min(실행 시간) · silent_sec(판 무응답) · start_timeout_sec(시작 상한) · keep_days(끝난 작업 기록 보존 일수 — 지나면 행째 지움 · 0 = 무기한 · 앱 AI 실행 기록은 따로 남음). " +
     "고치기는 관리자 agent_job_limits_set. 구성원 누구나.",
   scope: null,

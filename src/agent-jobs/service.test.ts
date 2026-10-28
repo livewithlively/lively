@@ -77,6 +77,7 @@ const tokHash = (id: number): string => hashJobSecret(`tok-${id}`);
 
 function world(): World {
   const rows = new Map<number, AgentJobRow>();
+  const sharedIds = new Set<number>();            // shared_seat 표시(#5081 — COLS 밖 칸이라 행 모양에 없다)
   const requeuedAt = new Map<number, number>();   // 되돌린 시각(SQL 의 updated_at 자리)
   let seq = 0, now = 1_000_000_000_000, hex = 0;
   const w = {} as World;
@@ -98,8 +99,10 @@ function world(): World {
         last_tick_at: null, ended_at: null, reaped: false,
       };
       rows.set(id, row);
+      if (j.sharedSeat === true) sharedIds.add(id);
       return { row: { ...row } };
     },
+    async agentJobSharedSeat(id) { return sharedIds.has(id); },
     async claimAgentJobs(p, mint, o = {}) {
       w.claims++;
       const gapMs = (o.retryGapSec ?? 0) * 1000;
@@ -1169,6 +1172,33 @@ await t("SS1 공용 시트(#5081) — 배차가 시트 묶음을 자리 주기�
   h.usable.add("alice:memo");
   await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), h.deps, UI);
   assert.equal(h.inserted.at(-1)!.sharedSeat, false);
+});
+
+await t("SS2 공용 시트(#5081) 작업 보기 — 시트 계정(구독 주인)은 남의 작업을 못 보고 못 끊는다 · 보낸 사람은 본다 · 공용 시트가 아닌 구독 주인은 종전대로", async () => {
+  const w = world();
+  const r = await w.deps.store.insertAgentJob({
+    requester: "alice", accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
+    model: null, label: null, prompt: "앨리스의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true,
+  }, w.policy);
+  assert.ok("row" in r);
+  const id = r.row.id;
+  await assert.rejects(getAgentJobFor(id, human("seat"), w.deps), httpErr(404), "시트 계정은 공용 시트 작업을 못 본다");
+  await assert.rejects(cancelAgentJobFor(id, human("seat"), w.deps), httpErr(404), "시트 계정은 공용 시트 작업을 못 끊는다");
+  assert.equal(w.rows.get(id)!.cancel_requested, false);
+  assert.equal((await getAgentJobFor(id, human("alice"), w.deps)).prompt, "앨리스의 질문", "보낸 사람은 본다");
+  const admin = await getAgentJobFor(id, human("root", ["context", "admin"]), w.deps);
+  assert.ok(!("prompt" in admin), "관리자는 상태 · 오류만(종전)");
+  assert.equal(canSeeJob(w.rows.get(id)!, human("seat"), true), false);
+  assert.equal(canSeeJob(w.rows.get(id)!, human("seat"), false), true, "표시가 없으면 구독 주인 가지(종전 #4488)");
+  //  공용 시트가 아닌 구독(초대받은 사람이 주인 세션에서 보냄)은 주인이 여전히 보고 끊는다.
+  const inv = await w.deps.store.insertAgentJob({
+    requester: "bob", accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
+    model: null, label: null, prompt: "밥의 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false,
+  }, { ...w.policy, max_queued: 50 });
+  assert.ok("row" in inv);
+  assert.equal((await getAgentJobFor(inv.row.id, human("seat"), w.deps)).status, "queued", "공용 시트가 아닌 구독 주인은 본다");
+  await cancelAgentJobFor(inv.row.id, human("seat"), w.deps);
+  assert.equal(w.rows.get(inv.row.id)!.status, "canceled", "공용 시트가 아닌 구독 주인은 끊는다");
 });
 
 console.log(`# ${pass} pass`);

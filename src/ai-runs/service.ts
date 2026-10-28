@@ -94,10 +94,10 @@ export interface AiRunDeps {
   /** 이 토큰이 작업 컨테이너의 작업 토큰인가(agent-jobs store.isAgentJobToken) — 작업이 작업을 낳지 않게(#4490 규칙과 같다). */
   isJobToken(tokenHashPrefix: string): Promise<boolean>;
   /**
-   * #5081 구성원의 사실 — 이 워크스페이스의 활성 사람 구성원인가(구성원 표 state · kind + 워크스페이스 소속) · 관리자 권한을 가졌나.
-   *  없는 사람(앱 서버 id 포함)은 { active: false, admin: false }. 공용 시트 판정(시트 계정 · 보낸 사람)이 쓴다.
+   * #5081 구성원의 사실 — 이 워크스페이스의 활성 사람 구성원인가(구성원 표 state · kind + 워크스페이스 소속) · 기본 권한 밖의 권한이 있나(plan.seatElevated).
+   *  없는 사람(앱 서버 id 포함)은 { active: false, elevated: false }. 공용 시트 판정(시트 계정 · 보낸 사람)이 쓴다.
    */
-  memberFacts(member: string): Promise<{ active: boolean; admin: boolean }>;
+  memberFacts(member: string): Promise<{ active: boolean; elevated: boolean }>;
   /** 이 작업이 공용 시트로 도는 작업인가(agent-jobs store.agentJobSharedSeat) — 형식 재시도가 원래 작업의 자리를 그대로 탄다. */
   jobSharedSeat(jobId: number): Promise<boolean>;
 }
@@ -181,7 +181,7 @@ export async function seatTermsOf(settings: AiAccountSettings, account: AiAccoun
   if (!account || account.kind !== "subscription" || !serviceSeatConsented(settings, account.member)) return null;
   const seat = await d.memberFacts(account.member);
   const requester = who.member === account.member ? seat : await d.memberFacts(who.member);
-  return { facts: { consented: true, active: seat.active, admin: seat.admin }, requesterActive: requester.active };
+  return { facts: { consented: true, active: seat.active, elevated: seat.elevated }, requesterActive: requester.active };
 }
 
 /**
@@ -497,23 +497,34 @@ export async function bootEnvForJob(job: Pick<AgentJobRow, "id" | "account_kind"
 }
 
 // ── 조회 · 취소 · 대상 ──
-/** 내 실행인가 — 보낸 사람, 또는 (구독 실행이면) 그 구독의 주인(초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 실행 — 격리 리뷰 non-blocking 3). */
-export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser): boolean {
+/**
+ * 내 실행인가 — 보낸 사람, 또는 (구독 실행이면) 그 구독의 주인(초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 실행 — 격리 리뷰 non-blocking 3).
+ *  #5081 공용 시트로 돈 실행(sharedSeat — 그 작업의 shared_seat 표시)은 구독 주인의 것이 아니다 — 시트 계정은 구성원 누구의 지시든 받는 자리일 뿐이고
+ *   지시 · 답은 물은 사람 것이다(시트 계정으로 로그인한 사람이 남의 질문 · 답을 읽거나 끊지 않게). 지정을 거둔 뒤에도 그 실행은 그대로 남의 것이다.
+ */
+export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser, sharedSeat = false): boolean {
   const me = memberOf(user);
-  return r.requester === me || (r.account_kind === "subscription" && r.account_member === me);
+  return r.requester === me || (!sharedSeat && r.account_kind === "subscription" && r.account_member === me);
 }
-export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps): boolean {
+export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps, sharedSeat = false): boolean {
   if (d.isAdmin(user) && !user.appId) return true;
-  if (!isOwnRun(r, user)) return false;
+  if (!isOwnRun(r, user, sharedSeat)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;
+}
+/** 이 실행이 공용 시트로 돌았나(#5081) — 구독 주인 가지만이 판정을 가를 때만 작업 표시를 읽는다(그 밖엔 답이 같다 — 읽지 않는다). */
+async function sharedSeatRunFor(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member" | "job_id">, user: LivelyUser, d: Pick<AiRunDeps, "jobSharedSeat">): Promise<boolean> {
+  const me = memberOf(user);
+  if (r.requester === me || r.account_kind !== "subscription" || r.account_member !== me || r.job_id == null) return false;
+  return d.jobSharedSeat(r.job_id);
 }
 
 export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   let row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
-  if (!row || !canSeeRun(row, user, d)) throw new HttpError(404, "없는 실행입니다");
+  const shared = row ? await sharedSeatRunFor(row, user, d) : false;
+  if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: isOwnRun(row, user), withPrompt: true });
+  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -522,15 +533,16 @@ export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit
   const admin = d.isAdmin(user) && !user.appId;
   const appId = user.appId ? user.appId : (typeof f.app_id === "string" && f.app_id ? f.app_id : null);
   const me = memberOf(user);
-  //  requester 필터는 «내 실행»(보낸 것 + 내 구독으로 도는 것)이다 — store.listAiRuns 의 SQL 조건과 isOwnRun 이 한 뜻.
+  //  requester 필터는 «내 실행»(보낸 것 + 공용 시트가 아닌 내 구독으로 도는 것)이다 — store.listAiRuns 의 SQL 조건과 isOwnRun 이 한 뜻.
   const rows = await d.store.listAiRuns({ appId, requester: admin ? null : me, status, limit });
-  return { runs: rows.map((r) => publicRunSummary(r, { own: isOwnRun(r, user) })), limit };
+  return { runs: rows.map((r) => publicRunSummary(r, { own: isOwnRun(r, user, r.shared_seat === true) })), limit };
 }
 
 export async function cancelRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
-  if (!row || !canSeeRun(row, user, d)) throw new HttpError(404, "없는 실행입니다");
-  const own = isOwnRun(row, user);
+  const shared = row ? await sharedSeatRunFor(row, user, d) : false;
+  if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
+  const own = isOwnRun(row, user, shared);
   if (isEndedRun(row.status)) return publicRun(row, { own });
   if (row.executor === "job" && row.job_id != null) {
     await d.cancelJob(row.job_id, user);

@@ -3,7 +3,7 @@
 //
 // 왜 이 계층인가: 이 설계의 약속 — 한 번만 끝남 · 프록시 토큰은 열린 실행에만 · 사람당 동시 셈은 열린 실행만 · 하루 토큰은 오늘 · 그 앱 · 네 종류 합 ·
 //  재시도는 열린 실행만 — 이 전부 **SQL 한 문장의 조건**이다. 가짜 저장소(service.test)는 그 조건을 흉내 낼 뿐이라 조건을 지워도 초록이다.
-//  T1~T11.
+//  T1~T11 · #5081 T12~T14(설정 칸 잠금 · 감사는 같은 트랜잭션 · 공용 시트로 돈 실행은 시트 계정의 «내 실행» 이 아님 · 공용 시트 지정 도구).
 const DIST = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 if (!process.env.ITEMS_DATABASE_URL) { console.error("ITEMS_DATABASE_URL 이 필요하다(실 Postgres)"); process.exit(2); }
 const { itemsPool } = await import(`${DIST}/db/client.js`);
@@ -21,7 +21,11 @@ const cleanup = async () => {
   await itemsPool.query(`DELETE FROM org_app_llm_call WHERE app_id LIKE $1`, [`${APP}%`]);
   await itemsPool.query(`DELETE FROM org_app_ai_run WHERE app_id LIKE $1`, [`${APP}%`]);
   await itemsPool.query(`DELETE FROM org_agent_job WHERE requester LIKE $1`, [`${REQ}%`]);
+  await itemsPool.query(`DELETE FROM org_content_audit WHERE entity='org_runtime_config' AND actor LIKE $1`, [`${REQ}%`]);
+  await itemsPool.query(`DELETE FROM org_member WHERE id LIKE $1`, [`${REQ}%`]);
 };
+const audits = async (op) => Number((await itemsPool.query(
+  `SELECT count(*)::int AS n FROM org_content_audit WHERE entity='org_runtime_config' AND op=$1 AND actor LIKE $2`, [op, `${REQ}%`])).rows[0].n);
 const row = async (id) => (await itemsPool.query(`SELECT * FROM org_app_ai_run WHERE id=$1`, [id])).rows[0];
 const base = (extra = {}) => ({
   appId: APP, requester: `${REQ}a`, requesterKind: "member", source: "app-ui", jobName: null, kind: "single", accountKind: "api_key", accountMember: null,
@@ -147,6 +151,89 @@ try {
   try { await st.updateAiAccountRow(() => { throw Object.assign(new Error("거절"), { status: 409 }); }); } catch (e) { threw = e; }
   const after = (await st.aiAccountRow()).service_seats?.seat ?? {};
   chk("T12b fn 이 던지면 쓰지 않는다(그 오류가 그대로 나온다)", threw?.status === 409 && !!after.admin && !!after.member, JSON.stringify({ status: threw?.status, after }));
+  //  T12c next 가 null 이면 쓰지 않는다 — fn 이 돌려준 out 만 나온다(바뀐 것 없음).
+  const bumpTo = { service_seats: { seat: { admin: { by: "root", at: "t" } } } };
+  const nullOut = await st.updateAiAccountRow(() => ({ next: null, out: "그대로" }));
+  const still = (await st.aiAccountRow()).service_seats?.seat ?? {};
+  chk("T12c next null → 쓰지 않는다", nullOut === "그대로" && !!still.admin && !!still.member, JSON.stringify({ nullOut, still }));
+  //  T12d 감사는 같은 트랜잭션 — fn 안에서 audit(…, c) 뒤 던지면 감사도 없다 · 끝까지 가면 감사와 쓰기가 함께 남는다.
+  const { audit } = await import(`${DIST}/org/store/audit.js`);
+  const OP = "__pg5081_probe__";
+  try {
+    await st.updateAiAccountRow(async (cur, c) => { await audit("org_runtime_config", "1", OP, cur, bumpTo, `${REQ}adm`, "pg-test", c); throw Object.assign(new Error("거절"), { status: 409 }); });
+  } catch { /* 위에서 409 */ }
+  const afterThrow = await audits(OP);
+  await st.updateAiAccountRow(async (cur, c) => { await audit("org_runtime_config", "1", OP, cur, bumpTo, `${REQ}adm`, "pg-test", c); return { next: bumpTo, out: null }; });
+  const afterOk = await audits(OP);
+  const wrote = (await st.aiAccountRow()).service_seats?.seat ?? {};
+  chk("T12d 감사는 쓰기와 한 트랜잭션 — 던지면 감사 0 · 끝까지 가면 감사 1 + 쓰기", afterThrow === 0 && afterOk === 1 && !!wrote.admin && !wrote.member,
+    JSON.stringify({ afterThrow, afterOk, wrote }));
+
+  // ── T13 실행 목록(#5081) — 공용 시트로 돈 실행은 시트 계정(구독 주인)의 «내 실행» 이 아니다 · 보낸 사람에겐 표시와 함께 · 관리자 목록엔 표시 ──
+  await cleanup();   // 앞 시험(T1~T10)이 같은 보낸 사람으로 넣은 실행이 목록에 섞이지 않게
+  const SEAT = `${REQ}seat`;
+  const JOBP = { max_queued: 500, max_running: 20 };
+  const newJob = async (requester, sharedSeat) => (await jobs.insertAgentJob({
+    requester, accountKind: "subscription", accountMember: SEAT, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude", model: null, label: null,
+    prompt: "pg", resumeConversation: null, resumeJobId: null, timeoutSec: 600, bare: true, homeless: false, sharedSeat,
+  }, JOBP)).row;
+  const sharedJob = await newJob(`${REQ}a`, true);
+  const plainJob = await newJob(`${REQ}b`, false);
+  const sharedRun = await st.insertAiRun(base({ executor: "job", status: "queued", accountKind: "subscription", accountMember: SEAT, requester: `${REQ}a`, prompt: "앨리스 질문" }));
+  const plainRun = await st.insertAiRun(base({ executor: "job", status: "queued", accountKind: "subscription", accountMember: SEAT, requester: `${REQ}b`, prompt: "밥 일" }));
+  await st.setAiRunJob(sharedRun.id, sharedJob.id);
+  await st.setAiRunJob(plainRun.id, plainJob.id);
+  const ids = (rows) => rows.map((r) => r.id).sort((x, y) => x - y);
+  const seatList = await st.listAiRuns({ appId: APP, requester: SEAT, status: null, limit: 50 });
+  const aList = await st.listAiRuns({ appId: APP, requester: `${REQ}a`, status: null, limit: 50 });
+  const allList = await st.listAiRuns({ appId: APP, requester: null, status: null, limit: 50 });
+  const flag = (rows, id) => rows.find((r) => r.id === id)?.shared_seat;
+  chk("T13 시트 계정의 목록 — 공용 시트가 아닌 내 구독 실행만 · 보낸 사람은 제 공용 시트 실행을 표시와 함께 · 관리자 목록은 둘 다 표시대로",
+    JSON.stringify(ids(seatList)) === JSON.stringify([plainRun.id]) && JSON.stringify(ids(aList)) === JSON.stringify([sharedRun.id]) && flag(aList, sharedRun.id) === true
+      && flag(allList, sharedRun.id) === true && flag(allList, plainRun.id) === false,
+    JSON.stringify({ seat: ids(seatList), a: ids(aList), all: allList.map((r) => [r.id, r.shared_seat]) }));
+  //  T13b 칸이 아직 없을 때(롤 창) — 목록은 깨지지 않고 표시 없이 읽는다(그 칸이 없으면 공용 시트 작업도 없다). 끝나면 칸을 되돌린다.
+  await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS shared_seat`);
+  let rollList = null, rollErr = null;
+  try { rollList = await st.listAiRuns({ appId: APP, requester: SEAT, status: null, limit: 50 }); } catch (e) { rollErr = e; }
+  finally { await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`); }
+  chk("T13b shared_seat 칸이 없을 때 — 목록은 돈다(표시 false · 종전 «내 구독» 가지)",
+    rollErr === null && JSON.stringify(ids(rollList ?? [])) === JSON.stringify([sharedRun.id, plainRun.id].sort((x, y) => x - y)) && (rollList ?? []).every((r) => r.shared_seat === false),
+    JSON.stringify({ err: rollErr?.message, rows: (rollList ?? []).map((r) => [r.id, r.shared_seat]) }));
+
+  // ── T14 공용 시트 지정 도구(app_ai_service_seat_set) — 실제 구성원 표 · 설정 칸 · 감사 ──
+  const { upsertMember } = await import(`${DIST}/org/store/members.js`);
+  const people = [["adm", ["items", "context", "memory", "admin"]], ["seat", ["items", "context", "memory"]], ["ali", ["items", "context", "memory"]], ["dev", ["items", "context", "memory", "code"]]];
+  for (const [id, scopes] of people) await upsertMember({ id: `${REQ}${id}`, display_name: id, kind: "human", state: "active", email: `${id}@example.invalid`, scopes }, "pg-test", "migration");
+  const caps = (await import(`${DIST}/capabilities/ai-runs.js`)).aiRunCapabilities;
+  const seatSet = caps.find((c) => c.name === "app_ai_service_seat_set");
+  const who = (id, scopes) => ({ userId: `${REQ}${id}`, email: "", scopes, projects: ["*"] });
+  const ADM = who("adm", ["items", "context", "memory", "admin"]), ALI = who("ali", ["items", "context", "memory"]), SEATU = who("seat", ["items", "context", "memory"]);
+  const ctx = { source: "pg-test" };
+  const tryIt = async (input, user) => { try { return { r: await seatSet.handler(input, user, ctx) }; } catch (e) { return { status: e?.status, msg: String(e?.message ?? e) }; } };
+  await st.writeAiAccountRow({});
+  const before0 = await audits("app_ai_service_seat");
+  const a1 = await tryIt({ member: SEAT, on: true }, ADM);
+  const s1 = a1.r?.seats?.find((x) => x.member === SEAT);
+  const a2 = await tryIt({ member: SEAT, on: false }, ALI);
+  const a3 = await tryIt({ member: `${REQ}dev`, on: true }, ADM);
+  const a4 = await tryIt({ member: SEAT, on: true }, SEATU);
+  const s4 = a4.r?.seats?.find((x) => x.member === SEAT);
+  const afterOn = await audits("app_ai_service_seat");
+  chk("T14 승인(대기) → 남 403 → 높은 권한(code) 409 → 본인 동의로 켜짐 · 감사 두 줄(거절은 안 남음)",
+    s1?.state === "member_pending" && a2.status === 403 && a3.status === 409 && /높은 권한/.test(a3.msg ?? "") && s4?.state === "on" && s4?.on === true && afterOn - before0 === 2,
+    JSON.stringify({ s1: s1?.state, a2: a2.status, a3: [a3.status, a3.msg], s4: s4?.state, audits: afterOn - before0 }));
+  const n1 = await tryIt({ member: `${REQ}ali`, on: false }, ADM);   // 없는 줄 끄기 — 바뀐 것 없음
+  const afterNoop = await audits("app_ai_service_seat");
+  await st.updateAiAccountRow((cur) => ({ next: { ...cur, service_seats: { ...(cur.service_seats ?? {}), [`${REQ}gone`]: { admin: { by: `${REQ}adm`, at: "t" } } } }, out: null }));
+  const g1 = await tryIt({ member: `${REQ}gone`, on: false }, ADM);   // 구성원 표에 없는 계정의 남은 줄
+  const g2 = await tryIt({ member: `${REQ}gone`, on: true }, ADM);
+  const off = await tryIt({ member: SEAT, on: false }, SEATU);
+  const left = (await st.aiAccountRow()).service_seats ?? null;
+  const afterAll = await audits("app_ai_service_seat");
+  chk("T14b 없는 줄 끄기는 쓰지도 남기지도 않음 · 지워진 계정의 줄은 관리자가 지운다(켜기는 404) · 본인 끄기 → 줄째 지움 · 감사는 실제로 바뀐 것만",
+    !!n1.r && afterNoop === afterOn && !!g1.r && g2.status === 404 && !!off.r && left === null && afterAll - afterNoop === 2,
+    JSON.stringify({ noop: [!!n1.r, afterNoop - afterOn], g1: !!g1.r, g2: g2.status, off: !!off.r, left, audits: afterAll - afterNoop }));
 } catch (e) {
   bad("예외", String((e && e.stack) || e));
 } finally {

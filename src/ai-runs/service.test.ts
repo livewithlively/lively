@@ -22,8 +22,8 @@ interface World {
   runs: Map<number, AiRunRow>; calls: NewLlmCall[]; jobs: Map<number, AgentJobRow>; submitted: SubmitJobInput[]; llm: SingleShotInput[]; canceled: number[];
   settings: AiAccountSettings; key: string | null; policy: AiRunPolicy; llmReply: (i: SingleShotInput, n: number) => SingleShotOutput; submitThrows?: HttpError;
   usedToday: number; inflightCount: number;
-  /** #5081 구성원 표(가짜) — 없는 이름은 활성 · 관리자 아님(앱 서버 id 는 늘 아님). 작업마다 공용 시트 표시. */
-  members: Record<string, { active: boolean; admin: boolean }>; jobShared: Map<number, boolean>;
+  /** #5081 구성원 표(가짜) — 없는 이름은 활성 · 기본 권한뿐(앱 서버 id 는 늘 아님). 작업마다 공용 시트 표시. */
+  members: Record<string, { active: boolean; elevated: boolean }>; jobShared: Map<number, boolean>;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -59,7 +59,12 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async openJobRuns() { return [...w.runs.values()].filter((r) => !ended(r.status) && r.executor === "job"); },
       async staleProxyRuns() { return []; },
       async openRunCountOf(req) { return [...w.runs.values()].filter((r) => r.requester === req && !ended(r.status)).length; },
-      async listAiRuns(f) { return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester))).map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null } as unknown as AiRunSummaryRow)); },
+      //  SQL(store.listAiRuns)과 같은 뜻 — 내 실행 = 보낸 것 + 공용 시트가 아닌 내 구독으로 도는 것(#5081 · 실 Postgres 는 store.pg-test T13).
+      async listAiRuns(f) {
+        const shared = (r: AiRunRow): boolean => r.job_id != null && w.jobShared.get(r.job_id) === true;
+        return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester && !shared(r))))
+          .map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null, shared_seat: shared(r) } as unknown as AiRunSummaryRow));
+      },
       async appConversations() { return []; },
       async insertLlmCall(c) { w.calls.push(c); },
       async tokensUsedTodayByApp() { return w.usedToday; },
@@ -85,7 +90,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     sessionTie: async (sid, member) => { const s = w.sessions[sid]; return s ? { owner: s.owner, participant: s.owner === member || s.members.includes(member), human: s.human !== false } : { owner: null, participant: false, human: false }; },
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
-    memberFacts: async (m) => (m.startsWith("app-server:") ? { active: false, admin: false } : w.members[m] ?? { active: true, admin: false }),
+    memberFacts: async (m) => (m.startsWith("app-server:") ? { active: false, elevated: false } : w.members[m] ?? { active: true, elevated: false }),
     jobSharedSeat: async (id) => w.jobShared.get(id) === true,
   };
   return { w, d };
@@ -323,7 +328,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   ok("S5c 작업 접수 → 작업 행이 홈 없는 표시 · 공용 시트 표시를 그대로 옮긴다");
 }
 
-// ── S26 공용 시트(#5081) — 엣지 표 B2~B16(스크래치 spec.md): 켜진 시트는 구성원 누구나 · 앱 서버 사람 대리도 · 시트 홈 · 앱 폴더만 ──
+// ── S26 공용 시트(#5081) — 엣지 표 B2~B17(지식 app-service-seat-asbuilt-5081 §9): 켜진 시트는 구성원 누구나 · 앱 서버 사람 대리도 · 시트 홈 · 앱 폴더만 ──
 {
   const NOW = "2026-10-28T00:00:00.000Z";
   const seatOn = { default: { kind: "subscription" as const, member: "seat" }, service_seats: { seat: { admin: { by: "root", at: NOW }, member: { at: NOW } } } };
@@ -345,7 +350,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await submitRun({ prompt: "x" }, appUser("seat", "crm"), { source: "app-ui" }, on.d);
   assert.equal(on.w.submitted.at(-1)!.sharedSeat, true);
   //  B3 보낸 사람이 활성 구성원이 아님(비활성 · 다른 워크스페이스 — memberFacts 가 같은 «아님») · B5 사람 신원 없는 앱 서버(앱 서버 id)
-  const off = world({ settings: seatOn, key: null, members: { carol: { active: false, admin: false } } });
+  const off = world({ settings: seatOn, key: null, members: { carol: { active: false, elevated: false } } });
   await fails(submitRun({ prompt: "x" }, appUser("carol", "crm"), { source: "app-front" }, off.d), 403, /활성 구성원이 보낸 요청에만/, "account_unavailable");
   await fails(submitRun({ prompt: "x" }, srvUser("carol"), { source: "web" }, off.d), 403, /활성 구성원이 보낸 요청에만/, "account_unavailable");
   await fails(submitRun({ prompt: "x" }, { ...appUser("app-server:t:crm", "crm"), appServer: true } as LivelyUser, { source: "web" }, off.d), 403, /활성 구성원이 보낸 요청에만/, "account_unavailable");
@@ -359,11 +364,11 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await fails(submitRun({ prompt: "x", files: ["a.md"], project_id: 12 }, appUser("alice", "crm"), { source: "app-ui" }, proj.d), 400, /앱 폴더에서만/);
   await fails(submitRun({ prompt: "x", files: ["a.md"], project_id: 12 }, srvUser("alice"), { source: "web" }, proj.d), 400, /앱 폴더에서만/);
   assert.equal(proj.w.runs.size, 0); assert.equal(proj.w.submitted.length, 0);
-  //  B9 지정됐지만 시트가 관리자 → 공용 아님(앱 서버 · 남 모두 403 + 까닭) / B10 시트 비활성 → 공용 아님
-  const adm = world({ settings: seatOn, key: null, members: { seat: { active: true, admin: true } } });
-  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, adm.d), 403, /관리자 권한이 있어 공용으로 쓰지 않습니다/, "account_unavailable");
-  await fails(submitRun({ prompt: "x" }, srvUser("alice"), { source: "web" }, adm.d), 403, /관리자 권한이 있어/, "account_unavailable");
-  const ina = world({ settings: seatOn, key: null, members: { seat: { active: false, admin: false } } });
+  //  B9 지정됐지만 시트가 높은 권한 → 공용 아님(앱 서버 · 남 모두 403 + 까닭) / B10 시트 비활성 → 공용 아님
+  const adm = world({ settings: seatOn, key: null, members: { seat: { active: true, elevated: true } } });
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, adm.d), 403, /높은 권한\(관리자 · 실행 · DB · 코드\)이 있어 공용으로 쓰지 않습니다/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, srvUser("alice"), { source: "web" }, adm.d), 403, /높은 권한/, "account_unavailable");
+  const ina = world({ settings: seatOn, key: null, members: { seat: { active: false, elevated: false } } });
   await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, ina.d), 403, /초대받은 사람/, "account_unavailable");
   //  B11 작업 토큰은 공용 시트라도 403(작업이 작업을 낳지 않는다)
   await fails(submitRun({ prompt: "x" }, { ...appUser("alice", "crm"), tokenHashPrefix: "jobtok" }, { source: "mcp" }, on.d), 403, /작업 안에서는/);
@@ -389,7 +394,28 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   assert.equal((tg.account as { available: boolean }).available, true); assert.equal((tg.account as { shared_seat: boolean }).shared_seat, true);
   const tgOff = await targetsFor(appUser("carol", "crm"), {}, off.d, {});
   assert.equal((tgOff.account as { available: boolean }).available, false); assert.match(String((tgOff.account as { reason: string }).reason), /활성 구성원/);
-  ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 관리자/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets");
+  //  B17 보기 — 공용 시트로 돈 실행은 시트 계정(구독 주인)의 것이 아니다: 하나 보기 · 목록 · 취소 모두 남(404 · 안 뜸) · 물은 사람은 지시까지 본다.
+  //   지정을 거둔 뒤에도 그대로다(표시는 작업마다 — 지금 지정 상태로 가르지 않는다).
+  const view = world({ settings: seatOn, key: null });
+  const vr = await submitRun({ prompt: "앨리스의 비밀 질문" }, appUser("alice", "crm"), { source: "app-front" }, view.d);
+  await fails(getRunFor(Number(vr.id), member("seat"), view.d), 404);
+  await fails(cancelRunFor(Number(vr.id), member("seat"), view.d), 404);
+  assert.equal(view.w.canceled.length, 0, "시트 계정의 취소는 작업에 닿지 않는다");
+  assert.deepEqual((await listRunsFor({ app_id: "crm" }, member("seat"), view.d)).runs, [], "시트 계정의 «내 실행» 에 남의 공용 시트 실행이 안 뜬다");
+  assert.equal((await getRunFor(Number(vr.id), member("alice"), view.d)).prompt, "앨리스의 비밀 질문", "물은 사람은 본다");
+  const mineList = (await listRunsFor({ app_id: "crm" }, member("alice"), view.d)).runs as Array<{ prompt_preview: string | null }>;
+  assert.equal(mineList.length, 1); assert.equal(mineList[0]!.prompt_preview, "앨리스의 비밀 질문", "물은 사람의 목록엔 지시 앞머리까지");
+  view.w.settings = { default: seatOn.default };   // 지정을 거둠
+  await fails(getRunFor(Number(vr.id), member("seat"), view.d), 404, undefined, undefined);
+  const seatOwn = await submitRun({ prompt: "시트 본인 질문" }, appUser("seat", "crm"), { source: "app-ui" }, view.d);
+  assert.equal((await getRunFor(Number(seatOwn.id), member("seat"), view.d)).prompt, "시트 본인 질문", "시트 계정이 보낸 것은 제 것");
+  //  시트 계정이 뒤에 관리자가 돼도 — 관리자 목록 · 하나 보기에 남의 공용 시트 실행은 «내 것» 이 아니다(상태만 · 지시 없음).
+  const seatAdmin = admin("seat");
+  const adminRows = (await listRunsFor({ app_id: "crm" }, seatAdmin, view.d)).runs as Array<{ id: number; prompt_preview: string | null }>;
+  assert.equal(adminRows.find((r) => r.id === vr.id)?.prompt_preview, null, "관리자가 된 시트 계정의 목록에 남의 지시 앞머리가 없다");
+  assert.equal(adminRows.find((r) => r.id === seatOwn.id)?.prompt_preview, "시트 본인 질문");
+  assert.ok(!("prompt" in (await getRunFor(Number(vr.id), seatAdmin, view.d))), "하나 보기도 상태만(관리자 규칙)");
+  ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 높은 권한/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets · 시트 계정은 남의 실행을 못 봄");
 }
 
 // ── S15~S19 동기화 — 작업 상태를 따라간다 · 형식 판정 · 재시도 1회 ──

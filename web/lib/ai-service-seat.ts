@@ -1,7 +1,7 @@
 // ai-service-seat.ts — 앱 AI 공용 시트(#5081) 화면 두 조각. 판정 · 저장은 서버(ai-runs/plan.serviceSeatChange · app_ai_service_seat_set)가 한다.
 //  · 관리자 카드(serviceSeatAdminCard) — [관리 ▸ 서비스 로그인] 에 둔다: 지정 상태 · 승인 · 빼기 · 어느 자리(워크스페이스 기본 · 앱 · 작업)가 쓰나 · 거는 일.
 //  · 본인 안내(myServiceSeatNotice) — [내 AI 계정] 에 둔다: 내 계정이 지정됐을 때만 보이고, 동의 · 거두기를 받는다.
-//  두 쪽 다 /api/ui/ai-account(service_seats · settings)를 읽고, 바꾸는 것은 /api/ui/ai-service-seats · /api/ui/ai-account 뿐이다.
+//  두 쪽 다 /api/ui/ai-account(seats · settings)를 읽고, 바꾸는 것은 /api/ui/ai-service-seats · /api/ui/ai-account 뿐이다.
 //  ★ 켜는 데는 두 사람이 필요하다(관리자 승인 + 그 계정 본인 동의) — 한쪽만으로는 켜지지 않는다. 그래서 화면도 «기다리는 쪽» 을 말한다.
 //  lib/ 는 페이지 층(core · ui-primitives)을 모른다(scripts/check-imports R28/R29) — 원 출처에서 직접 받는다.
 import { api } from './net.js';
@@ -21,12 +21,12 @@ interface SeatRow {
   admin_approved: { by: string; at: string } | null; member_consented: { at: string } | null;
 }
 
-/** 상태 → 한 줄(어미까지). 서버 capabilities/ai-runs.seatState 의 값과 짝이다. */
+/** 상태 → 한 줄(어미까지). 서버 ai-runs/plan.seatState 의 값과 짝이다. */
 export const SEAT_STATE_TEXT: Record<string, string> = {
   on: '켜져 있습니다',
   admin_pending: '관리자 승인을 기다립니다',
   member_pending: '그 계정 본인의 동의를 기다립니다',
-  admin: '관리자 권한이 있는 계정이라 공용으로 쓰지 않습니다',
+  elevated: '높은 권한(관리자 · 실행 · DB · 코드)이 있는 계정이라 공용으로 쓰지 않습니다',
   inactive: '활성 구성원이 아니라 쓰지 않습니다',
   unknown: '상태를 확인하지 못했습니다',
 };
@@ -45,9 +45,17 @@ export function seatPlaces(settings: any, member: string): string[] {
 
 const WARNINGS = [
   '한 구독으로 여러 사람의 요청을 처리하는 것은 Anthropic 약관상 Team · Enterprise 플랜에서 회색이고, Pro · Max 개인 구독에서는 금지 쪽입니다. 전용 팀플랜 시트에만 쓰세요.',
-  '공용 시트로 도는 작업은 누구의 지시든 그 계정의 홈(Claude 로그인)에서 돕니다. 그래서 관리자 권한이 없는 전용 계정만 지정할 수 있고, 그 계정으로 사람 세션을 열지 않아야 합니다(열면 그 홈에 그 계정의 라이블리 토큰이 심깁니다).',
+  '공용 시트로 도는 작업은 누구의 지시든 그 계정의 홈(Claude 로그인)에서 돕니다. 그래서 기본 권한(items · context · memory)만 가진 전용 계정만 지정할 수 있고, 그 계정으로 사람 세션을 열지 않아야 합니다(열면 그 홈에 그 계정의 라이블리 토큰이 심깁니다).',
+  '에이전트 작업의 AI 는 그 홈의 Claude 로그인 자격 파일도 읽을 수 있습니다. 구성원 누구든 지시 한 줄로 그 구독의 로그인을 빼낼 수 있다는 뜻이니, 믿는 구성원만 있는 워크스페이스에서 쓰세요.',
   '공용 시트 실행은 앱 폴더에서만 돌고, 작업 AI 는 물은 사람의 라이블리 권한으로 움직입니다. 다만 앞 작업의 대화 기록이 같은 홈에 남으므로, 구성원마다 보이는 자료가 다른 앱에는 쓰지 마세요.',
 ];
+
+/** 실행 계정 한 줄의 말 — 확인 문구에 지금 값을 보여 준다. */
+function accountText(a: any): string {
+  if (a && a.kind === 'subscription' && a.member) return `${a.member} 구독`;
+  if (a && a.kind === 'api_key') return '워크스페이스 API 키';
+  return '정하지 않음(API 키가 등록돼 있으면 API 키)';
+}
 
 async function postSeat(member: string, on: boolean): Promise<void> {
   await api('/api/ui/ai-service-seats', { method: 'POST', body: JSON.stringify({ member, on }) });
@@ -65,7 +73,7 @@ export function serviceSeatAdminCard(): HTMLElement {
     let snap: any;
     try { snap = await api('/api/ui/ai-account'); }
     catch (e) { body.replaceChildren(errorNote(e, '공용 시트 상태를 불러오지 못했습니다')); return; }
-    const seats: SeatRow[] = (snap && snap.service_seats) || [];
+    const seats: SeatRow[] = (snap && snap.seats) || [];
     const rows: HTMLElement[] = seats.map((s) => seatAdminRow(s, snap.settings || {}, load));
     if (!seats.length) rows.push(el('p', { class: 'admin-hint' }, ...uiText('지정한 공용 시트가 없습니다.')));
     const who = memberCombo({ placeholder: '공용 시트로 쓸 전용 계정을 이름으로 찾아 고르기' });
@@ -106,10 +114,12 @@ function seatAdminRow(s: SeatRow, settings: any, reload: () => Promise<void>): H
   if (s.state === 'admin_pending') acts.push(act('승인하기', () => postSeat(s.member, true), '승인했습니다', false));
   if (s.on && !places.includes('워크스페이스 기본')) {
     acts.push(act('워크스페이스 기본 실행 계정으로 걸기', () => api('/api/ui/ai-account', { method: 'POST', body: JSON.stringify({ kind: 'subscription', member: s.member }) }),
-      '워크스페이스 기본 실행 계정으로 걸었습니다'));
+      '워크스페이스 기본 실행 계정으로 걸었습니다', true,
+      `지금 워크스페이스 기본 실행 계정은 «${accountText(settings && settings.default)}» 입니다. ${s.member} 공용 시트로 바꿀까요? 실행 계정을 따로 정하지 않은 모든 앱의 AI 요청이 이 시트의 구독으로 돕니다.`));
   }
   acts.push(act('공용 시트에서 빼기', () => postSeat(s.member, false), '공용 시트에서 뺐습니다', true,
-    `${s.member} 계정을 공용 시트에서 뺄까요? 관리자 승인과 본인 동의가 둘 다 지워지고, 돌고 있는 공용 시트 작업은 곧 멈춥니다.`));
+    `${s.member} 계정을 공용 시트에서 뺄까요? 관리자 승인과 본인 동의가 둘 다 지워지고, 돌고 있는 공용 시트 작업은 곧 멈춥니다.`
+      + (places.length ? ` 이 시트를 실행 계정으로 건 자리(${places.join(' · ')})로 오는 남의 요청은 그 뒤 거절됩니다 — 다른 실행 계정으로 바꿔 두세요.` : '')));
   //  앱 하나에 걸기 — 실행 계정 화면이 따로 없어 여기서 받는다(도구 app_ai_account_set 과 같은 길).
   let appRow: HTMLElement | null = null;
   if (s.on) {
@@ -141,7 +151,7 @@ export async function myServiceSeatNotice(meId: string, reload: () => void): Pro
   if (!meId) return null;
   let snap: any;
   try { snap = await api('/api/ui/ai-account'); } catch { return null; }
-  const s: SeatRow | undefined = ((snap && snap.service_seats) || []).find((x: SeatRow) => x.member === meId);
+  const s: SeatRow | undefined = ((snap && snap.seats) || []).find((x: SeatRow) => x.member === meId);
   if (!s) return null;
   const btn = (label: string, on: boolean, ok: string, primary = false): HTMLElement => {
     const b = el('button', { class: primary ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm', text: label }) as HTMLButtonElement;
@@ -172,6 +182,6 @@ export async function myServiceSeatNotice(meId: string, reload: () => void): Pro
   return el('div', { class: 'card', style: 'padding:10px 12px; margin-top:10px;' },
     el('div', { class: 'field-label', style: 'margin-bottom:6px', text: '앱 AI 공용 시트' }),
     el('p', { class: 'admin-hint', style: 'margin:0 0 6px' }, ...uiText(text)),
-    el('p', { class: 'admin-hint', style: 'margin:0 0 8px' }, ...uiText('⚠ ' + WARNINGS[0])),
-    el('div', { class: 'admin-actions' }, ...acts));
+    ...WARNINGS.slice(0, 3).map((w) => el('p', { class: 'admin-hint', style: 'margin:0 0 6px' }, ...uiText('⚠ ' + w))),
+    el('div', { class: 'admin-actions', style: 'margin-top:8px' }, ...acts));
 }

@@ -109,6 +109,11 @@ t("Q9 공용 시트 상한(#5081) — 기본 2 · 범위 1~20 · ≤ 워크스�
   assert.match(agentJobPolicyPatchError({ max_running_per_service_seat: 3 }) ?? "", /max_running_per_service_seat\(3\).*max_running\(2\)/, "기본 동시 2 보다 크면 거절");
   assert.equal(agentJobPolicyPatchError({ max_running: 4, max_running_per_service_seat: 4 }), null, "같으면 된다(경계)");
   assert.match(agentJobPolicyPatchError({ max_running: 4, max_running_per_service_seat: 5 }) ?? "", /이하/, "하나 넘으면 거절(경계)");
+  //  이 칸이 생기기 전에 동시 1 로 적어 둔 워크스페이스 — 다른 칸을 고쳐도 «기본 2 > 1» 로 거절하지 않는다(안 적었으면 읽을 때 접는다)
+  assert.equal(agentJobPolicyPatchError({ max_running: 1, max_running_per_member: 1 }), null, "공용 시트 칸을 안 적었으면 견주지 않는다");
+  assert.equal(agentJobPolicyPatchError({ max_running: 1, max_running_per_member: 1, keep_days: 30 }), null, "다른 칸 고치기");
+  assert.equal(resolveAgentJobPolicy({ max_running: 1, max_running_per_member: 1 }).max_running_per_service_seat, 1, "읽을 때 동시 1 로 접는다");
+  assert.match(agentJobPolicyPatchError({ max_running: 1, max_running_per_member: 1, max_running_per_service_seat: 2 }) ?? "", /max_running_per_service_seat\(2\)/, "적었으면 견준다");
   withEnv({ LIVELY_AGENT_JOB_MAX_RUNNING_PER_SERVICE_SEAT: "6", LIVELY_AGENT_JOB_MAX_RUNNING: "8" }, () => assert.equal(resolveAgentJobPolicy({}).max_running_per_service_seat, 6, "env 시드"));
 }));
 

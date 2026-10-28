@@ -150,15 +150,17 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
 }
 
 /**
- * #5081 구성원의 사실 — 이 워크스페이스의 활성 사람 구성원인가 · 관리자 권한. 앱 서버 id(`app-server:…`)처럼 구성원 표에 없는 이름은 «아님».
- *  공용 시트의 시트 계정과 보낸 사람(앱 서버가 실은 사람 신원이면 그 사람)을 같은 자로 본다 — agent-jobs/live.assertJobAllowed 도 이것을 쓴다.
+ * #5081 구성원의 사실 — 이 워크스페이스의 활성 사람 구성원인가 · 기본 권한 밖의 권한이 있나(plan.seatElevated). 앱 서버 id(`app-server:…`)처럼
+ *  구성원 표에 없는 이름은 «아님». 공용 시트의 시트 계정과 보낸 사람(앱 서버가 실은 사람 신원이면 그 사람)을 같은 자로 본다 — agent-jobs/live 의
+ *  배차 직전 · 감시 재판정도 이것을 쓴다.
  */
-export async function memberFactsOf(member: string): Promise<{ active: boolean; admin: boolean }> {
+export async function memberFactsOf(member: string): Promise<{ active: boolean; elevated: boolean }> {
   const { getMember } = await import("../org/store/members.js");
   const { workspaceAccessAllowed } = await import("../org/tenancy/gate.js");
+  const { seatElevated } = await import("./plan.js");
   const m = member ? await getMember(member) : null;
-  if (!m || m.state !== "active" || m.kind !== "human" || !(await workspaceAccessAllowed(m.id))) return { active: false, admin: false };
-  return { active: true, admin: Array.isArray(m.scopes) && m.scopes.includes("admin") };
+  if (!m || m.state !== "active" || m.kind !== "human" || !(await workspaceAccessAllowed(m.id))) return { active: false, elevated: false };
+  return { active: true, elevated: seatElevated(Array.isArray(m.scopes) ? m.scopes : []) };
 }
 
 /** 로그인 판정은 비싸다(원격 실행 2번) — 60초 기억(설계 §12 ④ «짧게 기억»). 모름(null)도 기억한다. */

@@ -10,14 +10,14 @@
 //   코드라, 사람 이름으로 세션을 열거나(홈이 붙는다) 파일 · 계정 길을 쓰는 것을 토큰 층에서도 막는다(격리 리뷰 — 마운트 층만으로는 모자랐다).
 //  #5081 공용 시트 작업은 또 다르다: 자리는 시트 계정의 홈(Claude 로그인이 거기 있다 — 상민 2026-10-28), 작업 AI 의 토큰은 **보낸 사람** ∩ 앱 동의
 //   (앱 서버 급 — plan.jobIdentityMember · jobAppTokenOpts). 시트 홈에 키트(라이블리 토큰 · 훅)와 git 자격을 새로 심지 않는다(launch.ts) — 그 홈은
-//   구성원 누구의 지시든 닿는 자리다. 시트 계정이 사람 세션을 열어 둔 적이 있으면 그 홈엔 이미 시트의 토큰이 있다 — 그래서 시트는 관리자 권한이
-//   없는 전용 계정이어야 한다(ai-runs/plan.seatShared).
+//   구성원 누구의 지시든 닿는 자리다. 시트 계정이 사람 세션을 열어 둔 적이 있으면 그 홈엔 이미 시트의 토큰이 있다 — 그래서 시트는 기본 권한
+//   (items · context · memory)만 가진 전용 계정이어야 한다(ai-runs/plan.seatShared).
 import crypto from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { MCP_TOKEN_SLACK_SEC, type AgentJobDeps } from "./service.js";
-import { jobAppTokenOpts, jobIdentityMember, jobSeatMember } from "./plan.js";
+import { jobAppTokenOpts, jobIdentityMember, jobSeatMember, sharedSeatJobRefusal } from "./plan.js";
 import type { AgentJobRow } from "./store.js";
 
 /** 이 작업이 공용 시트로 도는 작업인가(#5081) — 구독 작업만 표시를 읽는다(API 키 작업은 그 표시가 생기지 않는다). */
@@ -27,24 +27,23 @@ async function sharedSeatJob(job: Pick<AgentJobRow, "id" | "account_kind">): Pro
 }
 
 /**
- * #5081 공용 시트 작업을 아직 돌려도 되나 — 시트 지정(두 동의)이 그대로고 · 시트 계정이 활성이며 관리자가 아니고 · 보낸 사람이 이 워크스페이스의
- *  활성 구성원이고 · 그 사람이 그 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의). 접수 때(ai-runs/service.submitRun)와 같은 자로 다시 잰다.
+ * #5081 공용 시트 작업을 아직 돌려도 되나 — 사실(시트 지정 · 시트 계정 · 보낸 사람)을 모아 plan.sharedSeatJobRefusal 로 재고, 통과하면 보낸 사람이
+ *  그 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의)를 본다. 접수 때(ai-runs/service.submitRun)와 같은 자다.
  *  «안 된다» 는 HttpError(409 · 403 · 404) — 배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다.
  */
-async function assertSharedSeatJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "requester">): Promise<void> {
+async function assertSharedSeatJobAllowed(job: Pick<AgentJobRow, "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">): Promise<void> {
   const { memberFactsOf } = await import("../ai-runs/live.js");
   const { parseAccountSettings, serviceSeatConsented } = await import("../ai-runs/plan.js");
   const { aiAccountRow } = await import("../ai-runs/store.js");
   const seat = job.account_member ?? "";
-  if (!serviceSeatConsented(parseAccountSettings(await aiAccountRow()), seat)) throw new HttpError(409, `공용 시트(${seat}) 지정이 풀렸습니다`);
-  const sf = await memberFactsOf(seat);
-  if (!sf.active) throw new HttpError(409, `공용 시트 계정(${seat})이 활성 사람 구성원이 아닙니다`);
-  if (sf.admin) throw new HttpError(409, `공용 시트 계정(${seat})이 관리자 권한을 가져 공용으로 쓰지 않습니다`);
-  if (!(await memberFactsOf(job.requester)).active) throw new HttpError(409, `보낸 사람(${job.requester})이 이 워크스페이스의 활성 구성원이 아닙니다`);
-  if (!job.app_id) throw new HttpError(409, "공용 시트 작업은 앱 작업이어야 합니다");
+  const [settings, seatFacts, requesterFacts] = await Promise.all([aiAccountRow(), memberFactsOf(seat), memberFactsOf(job.requester)]);
+  const why = sharedSeatJobRefusal(job, {
+    consented: serviceSeatConsented(parseAccountSettings(settings), seat), seat: seatFacts, requesterActive: requesterFacts.active,
+  });
+  if (why) throw new HttpError(409, why);
   const { getMember } = await import("../org/store/members.js");
   const r = await getMember(job.requester);
-  await assertAppUsableFor({ userId: job.requester, scopes: Array.isArray(r?.scopes) ? r!.scopes : [] } as LivelyUser, job.app_id);
+  await assertAppUsableFor({ userId: job.requester, scopes: Array.isArray(r?.scopes) ? r!.scopes : [] } as LivelyUser, job.app_id!);
 }
 
 let cached: AgentJobDeps | null = null;
@@ -84,7 +83,7 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
       if (await sharedSeatJob(job)) return assertSharedSeatJobAllowed(job);
       if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
     },
-    //  #5081 — 자리 주기가 공용 시트의 작업을 보낸 사람당 · 시트 전체로 센다. 지정(두 동의)만 본다 — 시트 계정이 관리자가 됐으면 띄우기 직전에 멈춘다.
+    //  #5081 — 자리 주기가 공용 시트의 작업을 보낸 사람당 · 시트 전체로 센다. 지정(두 동의)만 본다 — 시트 계정이 높은 권한을 얻었으면 띄우기 직전에 멈춘다.
     sharedSeats: async () => {
       const { parseAccountSettings, serviceSeatConsented } = await import("../ai-runs/plan.js");
       const { aiAccountRow } = await import("../ai-runs/store.js");

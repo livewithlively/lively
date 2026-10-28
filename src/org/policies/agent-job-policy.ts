@@ -18,8 +18,9 @@ export interface AgentJobPolicy {
   /** 이 워크스페이스에서 동시에 도는(띄우는 중 포함) 작업 컨테이너 수. 넘는 작업은 대기열에서 기다린다. */
   max_running: number;
   /**
-   * 같은 실행 계정(구독 주인 멤버)으로 동시에 도는 작업 수. 워크스페이스 상한보다 클 수 없다(불변식).
+   * 같은 실행 계정(구독 주인 멤버 · API 키면 보낸 사람)으로 동시에 도는 작업 수. 워크스페이스 상한보다 클 수 없다(불변식).
    *  한 사람 구독의 한도(분당 토큰)를 작업 여럿이 한꺼번에 먹지 않게 — 설계 §12 ④ «사람당 동시».
+   *  #5081 공용 시트의 작업은 **보낸 사람**으로 센다(시트 전체는 max_running_per_service_seat — agent-jobs/plan.claimAxes).
    */
   max_running_per_member: number;
   /**
@@ -116,13 +117,15 @@ export function resolveAgentJobPolicy(dbRaw: unknown): AgentJobPolicy {
  *  next = 이번에 적을 값(이미 저장된 값 + 이번 입력). 안 적은 칸은 지금 쓰는 값(env 시드 · 기본값)으로 견준다.
  *  ⚠ 조용히 접지 않는다 — 접으면(사람당 5 → 2) 그 값이 저장돼, 나중에 동시 상한을 올려도 되살아나지 않는다(격리 리뷰).
  *   읽을 때의 불변식(invariant)은 env 시드가 바뀌는 경우의 안전망으로 남는다.
+ *  공용 시트 상한(#5081)은 **적었을 때만** 견준다 — 이 칸이 생기기 전에 동시 상한을 1 로 적어 둔 워크스페이스가 다른 칸(보존 일수 등)을
+ *   고칠 때마다 «기본값 2 > 1» 로 거절되지 않게. 안 적었으면 읽을 때 불변식이 동시 상한으로 접는다(저장하지 않으니 되살아남 문제가 없다).
  */
 export function agentJobPolicyPatchError(next: Partial<AgentJobPolicy>): string | null {
   const want = { ...resolveAgentJobPolicy({}), ...next };
   if (want.max_running_per_member > want.max_running) {
     return `max_running_per_member(${want.max_running_per_member})는 max_running(${want.max_running}) 이하여야 합니다 — 둘을 함께 주세요`;
   }
-  if (want.max_running_per_service_seat > want.max_running) {
+  if (next.max_running_per_service_seat !== undefined && want.max_running_per_service_seat > want.max_running) {
     return `max_running_per_service_seat(${want.max_running_per_service_seat})는 max_running(${want.max_running}) 이하여야 합니다 — 둘을 함께 주세요`;
   }
   if (want.default_timeout_min > want.max_timeout_min) {

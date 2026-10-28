@@ -95,23 +95,48 @@ export function serviceSeatConsented(s: AiAccountSettings, member: string): bool
   return !!seat?.admin && !!seat?.member;
 }
 
+/**
+ * 공용 시트 계정이 가져도 되는 권한 — 구성원 기본값(org/store/members.upsertMember)과 같다. 그 밖(admin · runtime · db · db:<소스> · code)이
+ *  하나라도 있으면 «높은 권한» 이다(seatElevated).
+ */
+export const SEAT_BASIC_SCOPES: ReadonlySet<string> = new Set(["items", "context", "memory"]);
+/** (순수) 기본 권한 밖의 권한이 있나 — 공용 시트로 쓰지 않는 계정. */
+export function seatElevated(scopes: readonly string[] | null | undefined): boolean {
+  return (scopes ?? []).some((s) => !SEAT_BASIC_SCOPES.has(s));
+}
+
 /** 공용 시트 판정에 쓰는 그 계정의 사실 — service 가 설정과 구성원 표에서 모은다. */
 export interface SeatFacts {
   /** 관리자 승인 + 본인 동의가 다 있나. */
   consented: boolean;
   /** 이 워크스페이스의 활성 사람 구성원인가. */
   active: boolean;
-  /** 관리자 권한을 가졌나. */
-  admin: boolean;
+  /** 기본 권한(SEAT_BASIC_SCOPES) 밖의 권한이 있나(seatElevated). */
+  elevated: boolean;
 }
 
 /**
- * (순수) 이 구독을 지금 공용으로 쓰나 — 두 동의 · 활성 사람 구성원 · **관리자 권한 없음**.
- *  관리자 계정은 공용으로 쓰지 않는다: 공용 시트 실행은 구성원 누구의 지시든 그 계정의 홈(Claude 로그인 · 그 계정이 사람 세션을 열면
- *  심기는 라이블리 토큰 · git 자격)에서 돈다. 관리자 계정이면 지시 한 줄로 누구나 관리자 토큰에 닿는다(같은 uid — 운영체제 경계가 없다).
+ * (순수) 이 구독을 지금 공용으로 쓰나 — 두 동의 · 활성 사람 구성원 · **기본 권한뿐**(관리자 · 실행 · DB · 코드 권한 없음).
+ *  높은 권한 계정은 공용으로 쓰지 않는다: 공용 시트 실행은 구성원 누구의 지시든 그 계정의 홈(Claude 로그인 · 그 계정이 사람 세션을 열면
+ *  심기는 라이블리 토큰 · git 자격)에서 돈다. 같은 uid 라 운영체제 경계가 없어, 높은 권한 계정이면 지시 한 줄로 누구나 그 권한의 토큰에 닿는다.
  */
 export function seatShared(f: SeatFacts | null | undefined): boolean {
-  return !!f && f.consented && f.active && !f.admin;
+  return !!f && f.consented && f.active && !f.elevated;
+}
+
+/** 공용 시트 한 줄의 상태 — 화면(관리탭 · 내 AI 계정)과 도구(app_ai_account)가 같은 말을 쓴다. */
+export type SeatState = "on" | "admin_pending" | "member_pending" | "elevated" | "inactive" | "unknown";
+/**
+ * (순수) 공용 시트 한 줄의 상태 — «켜짐» 은 seatShared 와 같은 정의다(화면이 켜졌다는데 실행이 거절하는 어긋남이 없게).
+ *  f = 그 계정의 사실(못 읽었으면 null → unknown).
+ */
+export function seatState(seat: ServiceSeat, f: { active: boolean; elevated: boolean } | null): SeatState {
+  if (!f) return "unknown";
+  const consented = !!seat.admin && !!seat.member;
+  if (seatShared({ consented, active: f.active, elevated: f.elevated })) return "on";
+  if (!f.active) return "inactive";
+  if (f.elevated) return "elevated";
+  return !seat.admin ? "admin_pending" : "member_pending";
 }
 
 /** 공용 시트 판정의 입력 — 그 계정의 사실 + 보낸 사람이 이 워크스페이스의 활성 사람 구성원인가(앱 서버가 실은 사람 신원이면 그 사람). */
@@ -163,6 +188,8 @@ export function executorFor(kind: RunKind, account: AiAccount): Executor {
  *  활성 사람 구성원인가(seat.requesterActive) · 기계 세션에 매이지 않았나(tie). **앱 서버가 사람 신원을 실어 보낸 요청**(서명 신원 · 작업 돌기 신원 ·
  *  앱 선언 도구의 server 실행기)도 받는다 — 보낸 사람은 그 신원의 사람이다. 사람 신원이 없는 앱 서버 자체 호출 · 자동화(#4491)는 보낸 사람이
  *  구성원이 아니라(앱 서버 id) requesterActive 에서 걸린다. 작업 AI 자신의 토큰은 부르는 쪽(service.submitRun)이 그 전에 거절한다.
+ *  ⚠ #4491 이 자동화를 «만든 사람 id + 앱 서버» 꼴로 열면 이 판정을 그대로 통과한다 — 그때 자동화 주체를 가르는 표지를 LivelyUser 에 두고
+ *   여기서 거절해야 한다(«자동화는 계속 거절» · 상민 2026-10-28).
  */
 /** 요청이 매인 세션(ctx.session)의 사실 — 주인 · 보낸 사람이 들어갈 수 있나 · 사람 세션인가(kind human — 위탁·상시·앱·로그인 세션이 아니다). */
 export interface SessionTie { owner: string | null; participant: boolean; human: boolean }
@@ -176,9 +203,9 @@ export function subscriptionRefusal(
     if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;
     return null;
   }
-  //  지정은 됐는데 관리자 권한 때문에 공용으로 안 쓰는 계정 — 거절 문장에 까닭을 붙인다(그대로 두면 «초대받은 사람만» 으로 읽혀 무엇을 고칠지 모른다).
-  const adminSeat = seat?.facts.consented && seat.facts.active && seat.facts.admin
-    ? ` ${account.member}님 계정은 공용 시트로 지정됐지만 관리자 권한이 있어 공용으로 쓰지 않습니다 — 관리자 권한이 없는 전용 계정을 공용 시트로 지정하세요.` : "";
+  //  지정은 됐는데 높은 권한 때문에 공용으로 안 쓰는 계정 — 거절 문장에 까닭을 붙인다(그대로 두면 «초대받은 사람만» 으로 읽혀 무엇을 고칠지 모른다).
+  const adminSeat = seat?.facts.consented && seat.facts.active && seat.facts.elevated
+    ? ` ${account.member}님 계정은 공용 시트로 지정됐지만 높은 권한(관리자 · 실행 · DB · 코드)이 있어 공용으로 쓰지 않습니다 — 기본 권한(items · context · memory)만 가진 전용 계정을 공용 시트로 지정하세요.` : "";
   if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 앱 서버가 사람 신원을 실어 보낸 요청도 받습니다).${adminSeat}`;
   //  세션에 매인 요청인데 그 세션을 모르거나(fail-closed) 사람 세션이 아니면(위탁·크론 헤드리스 task · 상시 managed · 앱 · 로그인) 구독 주인 본인의 토큰이라도 거절 —
   //  사람 없이 구독이 도는 모양(#4423 · 격리 리뷰 blocking 1). 세션 헤더가 없는 본인 토큰은 가릴 길이 없어 본인으로 통과한다(머리말 한계 ③).
@@ -209,27 +236,28 @@ export function accountSetRefusal(next: AiAccount | null, actor: { member: strin
   return null;
 }
 
-/** 공용 시트로 지정하려는 계정의 사실(구성원 표에서). */
-export interface SeatTarget { member: string; exists: boolean; active: boolean; human: boolean; admin: boolean }
+/** 공용 시트로 지정하려는 계정의 사실(구성원 표에서) — elevated = 기본 권한 밖의 권한이 있나(seatElevated). */
+export interface SeatTarget { member: string; exists: boolean; active: boolean; human: boolean; elevated: boolean }
 
 /**
  * (순수) 공용 시트 지정 바꾸기(#5081) — 관리자는 승인을, 그 계정 본인은 동의를 적는다. 둘 다 있어야 켜진다(serviceSeatConsented).
  *  · 켜기: 관리자가 남을 → 승인 줄 · 본인이 → 동의 줄(먼저 해도 된다 — 순서는 상관없다). 그 밖의 사람은 거절.
- *    대상은 활성 사람 구성원이어야 하고 **관리자 권한이 없어야** 한다(seatShared 머리말 — 구성원 누구의 지시든 그 홈에서 돈다).
+ *    대상은 활성 사람 구성원이어야 하고 **기본 권한뿐이어야** 한다(seatShared 머리말 — 구성원 누구의 지시든 그 홈에서 돈다).
  *    그래서 관리자가 자기 계정을 혼자 지정하는 길은 없다 — 승인과 동의는 늘 다른 두 사람이다.
- *  · 끄기: 관리자나 본인 누구든 → 줄째 지운다(두 동의가 다 사라진다 · 다시 켜려면 둘 다 새로).
+ *  · 끄기: 관리자나 본인 누구든 → 줄째 지운다(두 동의가 다 사라진다 · 다시 켜려면 둘 다 새로). 구성원 표에서 지워진 계정의 줄도 지운다 —
+ *    구성원을 지우면(org/store/members.removeMember — 행째) 지정 줄은 설정에 남는다.
  *  돌려주는 것: 적을 다음 줄(null = 지운다) 또는 거절(HTTP 상태 + 문장).
  */
 export function serviceSeatChange(
   cur: ServiceSeat | undefined, actor: { member: string; admin: boolean }, target: SeatTarget, on: boolean, nowIso: string,
 ): { next: ServiceSeat | null } | { status: number; refusal: string } {
-  if (!target.exists) return { status: 404, refusal: `구성원 없음: ${target.member}` };
   const self = actor.member === target.member;
   if (!self && !actor.admin) return { status: 403, refusal: "공용 시트 지정은 관리자와 그 계정 본인만 바꿀 수 있습니다" };
   if (!on) return { next: null };
+  if (!target.exists) return { status: 404, refusal: `구성원 없음: ${target.member}` };
   if (!target.active || !target.human) return { status: 409, refusal: `${target.member} 은(는) 활성 사람 구성원이 아닙니다 — 공용 시트는 활성 사람 구성원 계정만 될 수 있습니다` };
-  if (target.admin) {
-    return { status: 409, refusal: `${target.member} 계정은 관리자 권한이 있어 공용 시트로 지정할 수 없습니다 — 공용 시트로 도는 작업은 구성원 누구의 지시든 그 계정의 홈(로그인 · 토큰)에서 돌아, 관리자 계정이면 누구나 관리자 권한에 닿습니다. 관리자 권한이 없는 전용 계정을 지정하세요` };
+  if (target.elevated) {
+    return { status: 409, refusal: `${target.member} 계정은 높은 권한(관리자 · 실행 · DB · 코드)이 있어 공용 시트로 지정할 수 없습니다 — 공용 시트로 도는 작업은 구성원 누구의 지시든 그 계정의 홈(로그인 · 토큰)에서 돌아, 누구나 그 권한에 닿습니다. 기본 권한(items · context · memory)만 가진 전용 계정을 지정하세요` };
   }
   return { next: self ? { ...cur, member: { at: nowIso } } : { ...cur, admin: { by: actor.member, at: nowIso } } };
 }
