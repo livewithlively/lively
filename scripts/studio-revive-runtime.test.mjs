@@ -12,6 +12,9 @@
 //  V4 상태를 못 읽음 — 되살리지 않고 보낸다(모르면 막지 않는다)
 //  V5 세션이 꺼져 멈춤 막대 → 「이어서 만들기」 — 되살리기 한 번 · 이어 하라는 글은 새 세션으로
 //  V6 되살리기가 실패 — 보내지 않고 까닭을 알린다(꺼진 세션에 그냥 보내지 않는다)
+//  V7 같은 id 로 되살아남(박스 세션의 흔한 길) — 되살리기 한 번 · 그 세션에 보낸다 · 기록 · 주소는 그대로
+//  V8 세션이 돌던 노트북이 잠듦(되살릴 수 없음) — 되살리지 않고 보낸다(멈춤 막대에 맡긴다)
+//  V9 새 세션으로 옮기면 만들던 앱의 «만들기 세션» 도 잇는다(build-start {session_id: 새 id, app_id})
 //  W  페이지 예외 없음
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 V1 · V2 · V5 · V6 이 빨갛다).
@@ -44,6 +47,7 @@ window.fetch = async (u, init) => {
   const j = (o, s) => new Response(JSON.stringify(o), { status: s || 200, headers: { "Content-Type": "application/json" } });
   const sidOf = (re) => { const m = re.exec(p); return m ? decodeURIComponent(m[1]) : ""; };
   if (/\\/prompt$/.test(p) && method === "POST") { window.__log.push(["prompt", sidOf(/sessions\\/([^/]+)\\/prompt/)]); return j({ ok: true, queued: true, outbox_id: 1, seq: 1 }); }
+  if (p.startsWith("/api/ui/apps/build-start") && method === "POST") { let b = {}; try { b = JSON.parse(init.body); } catch (_) {} window.__log.push(["build-start", b.session_id + ":" + (b.app_id || "")]); return j({ ok: true }); }
   if (/\\/restore$/.test(p) && method === "POST") { window.__log.push(["restore", sidOf(/sessions\\/([^/]+)\\/restore/)]); return window.__restore ? j(window.__restore) : j({ error: "막힘" }, 500); }
   if (p.includes("/transcript")) { window.__log.push(["transcript", sidOf(/sessions\\/([^/]+)\\/transcript/)]); return new Response("", { status: 200, headers: { "X-Log-To": "5" } }); }
   if (p.startsWith("/api/ui/notify/stream")) return new Response(new ReadableStream({ start() {} }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
@@ -92,7 +96,8 @@ async function PAGE_MAIN() {
   await mount({ ...base }, { "box-s1": { agentState: "offline", restorable: true }, "box-s2": { agentState: "idle" } },
     { ok: true, resumed: "conversation", session: { id: "box-s2", label: "\"회의록\" 앱 제작" } });
   R.v1 = { asked: await ask("담당자 칸 추가") };
-  R.v1.calls = not("row").filter((x) => x[0] !== "transcript"); R.v1.recs = recs(); R.v1.sessions = sessions.slice();
+  R.v1.calls = not("row").filter((x) => x[0] !== "transcript" && x[0] !== "build-start"); R.v1.recs = recs(); R.v1.sessions = sessions.slice();
+  R.v9 = window.__log.filter((x) => x[0] === "build-start");
   window.__step = "V2";
   window.__log.length = 0;
   await sleep(12000);   // 답 읽기(2.5초마다) — 새 세션 기록에서
@@ -110,7 +115,7 @@ async function PAGE_MAIN() {
     { ok: true, resumed: "conversation", session: { id: "box-s2" } });
   await sleep(32000);
   R.v5 = { now: txt($(".v2-studio-now-t")), pressed: await press(/이어서 만들기/) };
-  R.v5.calls = not("row").filter((x) => x[0] !== "transcript"); R.v5.recs = recs();
+  R.v5.calls = not("row").filter((x) => x[0] !== "transcript" && x[0] !== "build-start"); R.v5.recs = recs();
   window.__log.length = 0;
   await sleep(11000);
   R.v5.rowsAfter = [...new Set(window.__log.filter((x) => x[0] === "row").map((x) => x[1]))];
@@ -119,6 +124,14 @@ async function PAGE_MAIN() {
   R.v6 = { asked: await ask("담당자 칸 추가") };
   R.v6.calls = not("row").filter((x) => x[0] !== "transcript"); R.v6.recs = recs();
   R.v6.toast = txt(document.getElementById("toasts"));
+  window.__step = "V7";
+  await mount({ ...base }, { "box-s1": { agentState: "offline", restorable: true } }, { ok: true, resumed: "conversation", session: { id: "box-s1" } });
+  R.v7 = { asked: await ask("담당자 칸 추가") };
+  R.v7.calls = not("row").filter((x) => x[0] !== "transcript"); R.v7.recs = recs(); R.v7.sessions = sessions.slice();
+  window.__step = "V8";
+  await mount({ ...base }, { "box-s1": { agentState: "offline", restorable: true, node: { id: "mac", name: "Mac.local", online: false } } }, { ok: true, session: { id: "box-s2" } });
+  R.v8 = { asked: await ask("담당자 칸 추가") };
+  R.v8.calls = not("row").filter((x) => x[0] !== "transcript");
   St.closeAppStudio();
   R.errors = errors;
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
@@ -161,6 +174,10 @@ same(R.v5 && R.v5.rowsAfter, ["box-s2"], "V5 그 뒤 세션 상태도 새 세션
 same(R.v6 && R.v6.calls, [["restore", "box-s1"]], "V6 되살리기 실패 — 꺼진 세션에 그냥 보내지 않는다");
 check(R.v6 && /다시 켜지 못해/.test(R.v6.toast || ""), "V6 까닭을 알린다", R.v6);
 same(R.v6 && R.v6.recs, ["box-s1"], "V6 기록은 그대로");
+same(R.v7 && R.v7.calls, [["restore", "box-s1"], ["prompt", "box-s1"]], "V7 같은 id 로 되살아남 — 되살리기 한 번 · 그 세션에 보낸다");
+same(R.v7 && [R.v7.recs, R.v7.sessions], [["box-s1"], []], "V7 기록 · 주소는 그대로");
+same(R.v8 && R.v8.calls, [["prompt", "box-s1"]], "V8 노트북이 잠듦 — 되살리지 않고 보낸다");
+same(R.v9, [["build-start", "box-s2:mn"]], "V9 새 세션으로 옮기면 만들던 앱의 «만들기 세션» 도 잇는다");
 same(R.errors, [], "W  페이지 예외 없음");
 
 console.log(`\n#4632 앱빌더 꺼진 세션 되살려 보내기: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

@@ -201,6 +201,16 @@ async function reviveSession(sid: string): Promise<{ id: string; row: any | null
   const row = out && out.session && out.session.id ? out.session : null;
   return { id: String((row && row.id) || (out && (out.movedTo || out.id)) || sid), row };
 }
+/** 되살려야 할 세션 줄인가 — «되살릴 수 있다» 고 확답한 내 세션 · 휴지통 아님 · 잠든 노트북 아님. 모르면(줄 없음 · 못 읽음) false — 종전대로 보낸다. */
+function needsRevive(row: any | null | undefined): boolean {
+  return !!row && row.restorable === true && row.owned !== false && !row.trashed && !(row.node && row.node.online === false);
+}
+/** 만들던 앱의 «만들기 세션» 기록(서버 build_session)을 지금 세션으로 잇는다 — 되살려 세션 id 가 바뀌면 옛 세션에 묶여 남는다.
+ *  안 이으면 다른 브라우저에서 이 만들기를 다시 열 때 앱을 못 찾고(apps?session=) · 새 세션의 AI 가 예약 id 를 지키라는 서버 안내도 못 받는다. 실패해도 만들기는 간다. */
+function rebindBuild(rec: StudioRec): void {
+  const app = rec.appId || rec.draftId || '';
+  if (app) void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: rec.sid, app_id: app }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
+}
 /** 앱빌딩 세션 이름을 못 박는다(사람이 지은 이름 — 에이전트의 session_rename 이 덮지 못한다). 실패해도 만들기는 간다. */
 async function relabel(sid: string, name: string | undefined, mode: 'new' | 'copy' | 'edit'): Promise<void> {
   try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid), { method: 'POST', body: JSON.stringify({ label: builderSessionLabel(name, mode) }) }); } catch (_) { /* 이름은 못 바꿔도 된다 */ }
@@ -643,10 +653,13 @@ function start(prefill?: StudioRec | null): void {
       const rec = prefill;
       //  꺼진 세션이면 먼저 되살려 새 세션으로 옮긴다(build 의 ensureLive 와 같은 까닭 — 꺼진 세션에 보낸 글은 AI 에게 닿지 않는다).
       const row = await sessionRow(rec.sid);
-      if (row && row.restorable === true && !(row.node && row.node.online === false)) {
+      if (needsRevive(row)) {
         try {
           const r = await reviveSession(rec.sid);
-          if (r.id !== rec.sid) { writeRecs(readRecs().filter((x) => x.sid !== rec.sid)); rec.sid = r.id; rec.from = 0; saveRec(rec); if (mountOpts.onSession) mountOpts.onSession(r.id); }
+          if (r.id !== rec.sid) {
+            writeRecs(readRecs().filter((x) => x.sid !== rec.sid)); rec.sid = r.id; rec.from = 0; saveRec(rec); if (mountOpts.onSession) mountOpts.onSession(r.id);
+            rebindBuild(rec);
+          }
         } catch (e: any) { toast('AI 세션을 다시 켜지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); go.disabled = false; go.textContent = '이 내용으로 다시 기획'; return; }
       }
       //  먼저 보낸다 — 못 보냈으면 기록을 그대로 둔다(고치던 것은 whatEdit 에 남아 있다 · 격리 리뷰).
@@ -1185,7 +1198,9 @@ async function build(rec: StudioRec): Promise<void> {
   //  drain — 쌓인 답을 지금 한 번 읽는다. 새 글을 보내기 전에도 부른다(보내면 워터마크가 기록 끝으로 가서, 아직 안 읽은 답 · 예: ④ 대조를 건너뛴다).
   const drain = async (): Promise<void> => {
     if (S.dead) return;
-    const r = await rawLog(rec.sid, 'from=' + rec.from);
+    const sid = rec.sid;
+    const r = await rawLog(sid, 'from=' + rec.from);
+    if (sid !== rec.sid) return;   // 그 사이 새 세션으로 옮겼다(adoptSid) — 옛 세션의 읽기 위치를 새 세션에 쓰지 않는다
     if (!S.dead && r && r.to > rec.from) { const texts = assistantTexts(r.text); rec.from = r.to; saveRec(rec); texts.forEach(onText); }
   };
   const pump = async (): Promise<void> => {
@@ -1252,6 +1267,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   /** 새로 AI 에게 일을 맡겼다 — 지난 멈춤을 걷고 60초 동안은 멈췄다 하지 않는다(말이 막 닿는 틈). */
   const armRun = (): void => { S.stallT0 = 0; S.quietTill = Date.now() + 60000; S.limit = ''; setStall(null); };
+  let reviving: Promise<boolean> | null = null, revivedAt = 0;   // 되살리는 중(보내기 둘이 겹쳐도 한 번) · 마지막으로 되살린 때(목록이 늦게 따라온다)
   /** AI 세션 화면을 끼운다(리브와 같은 방식: 목록을 한 번 읽어 그 세션 한 장으로) — 기본 터미널 보기(chatHome 아님).
    *  extra — 막 되살린 세션 줄(목록이 아직 못 따라왔을 수 있다 · 최대 8초 늦다). 세션 화면이 스스로 이어받으면(onResumed) 그 세션으로 옮긴다. */
   const mountChat = async (extra: any | null): Promise<void> => {
@@ -1264,6 +1280,8 @@ async function build(rec: StudioRec): Promise<void> {
       ]);
       if (S.dead || sid !== rec.sid) return;
       const { mergeSessions, renderSession } = await import('./views.js');   // 정적으로 들여오면 views → apps → app-studio → views 순환(check-imports)
+      if (S.dead || sid !== rec.sid) return;
+      { const prev = S.chat as SessionChatHandle | null; if (prev) { prev.destroy(); S.chat = null; } }   // 겹친 끼우기 — 기다리는 사이 먼저 선 화면을 걷는다
       const made = takeCreated(sid);
       let rows = made ? [made, ...(live as any[])] : (live as any[]);
       if (extra && extra.id === sid && !rows.some((x: any) => x && x.id === sid)) rows = [extra, ...rows];
@@ -1273,7 +1291,7 @@ async function build(rec: StudioRec): Promise<void> {
       if (row && nm && String(row.label || '').trim() !== builderSessionLabel(nm, rec.mode)) void relabel(sid, nm, rec.mode);
       chatHost.replaceChildren();
       S.chat = renderSession(chatHost, { projects: [], sessions: mergeSessions(rows, logs as any[]), loadedAt: Date.now() } as any, sid,
-        { solo: true, isVisible: () => !!root && chatHost.isConnected, onResumed: (nid: string) => { void adoptSid(nid); } });
+        { solo: true, isVisible: () => !!root && chatHost.isConnected, onResumed: (nid: string) => { revivedAt = Date.now(); void adoptSid(nid); } });
     } catch (e: any) {
       chatHost.replaceChildren(el('p', { class: 'v2-muted', text: 'AI 세션을 열지 못했어요. ' + (e && e.message ? e.message : e) }));
     }
@@ -1284,10 +1302,15 @@ async function build(rec: StudioRec): Promise<void> {
    */
   const adoptSid = async (nid: string, row?: any | null): Promise<void> => {
     const old = rec.sid;
-    if (!nid || nid === old || S.dead) return;
+    if (!nid || S.dead) return;
+    //  같은 id 로 되살아났다(#4694 — 박스 세션은 대개 이 길) — 옮길 것은 없고, 꺼진 세션을 그리던 세션 화면만 다시 끼운다(세션 화면 onResumed 계약).
+    if (nid === old) { void mountChat(row || null); return; }
+    const from = await logEnd(nid);   // 기록 끝을 먼저 잰다 — sid 를 바꾼 뒤 기다리면 그 틈에 옛 세션의 읽기 위치가 새 세션에 쓰인다
+    if (S.dead || rec.sid !== old) return;
     writeRecs(readRecs().filter((x) => x.sid !== old));
-    rec.sid = nid; rec.from = await logEnd(nid); saveRec(rec);
-    if (S.dead) return;
+    rec.sid = nid; rec.from = from; saveRec(rec);
+    rebindBuild(rec);
+    { const m = readReviewOpen(); if (S.review && m && m.sid === old) markReviewOpen({ sid: nid, appId: m.appId, view: m.view, route: m.route }); }   // 실제 화면을 보던 중 — 새로고침해도 새 세션으로 다시 연다
     //  주소 · 앱빌더의 열린 자리를 새 세션으로(onSession — 세션이 처음 생길 때와 같은 길 · hashchange 없음). 실제 화면을 보던 중이면 그 표시도 잇는다.
     if (mountOpts.onSession) mountOpts.onSession(nid);
     if (S.tryS && mountOpts.onSee) mountOpts.onSee(nid, 'widget');
@@ -1302,14 +1325,12 @@ async function build(rec: StudioRec): Promise<void> {
    *  «되살릴 수 있다(restorable)» 고 확답한 줄일 때만 되살린다 — 모르거나(목록을 못 읽음) 줄이 없으면 종전대로 보내고 멈춤 막대에 맡긴다.
    *  막 되살린 뒤 20초는 다시 보지 않는다(목록이 최대 8초 늦어 방금 되살린 세션을 아직 «꺼짐» 으로 줄 수 있다).
    */
-  let reviving: Promise<boolean> | null = null, revivedAt = 0;
   const ensureLive = (): Promise<boolean> => {
     if (reviving) return reviving;
     if (Date.now() - revivedAt < 20000) return Promise.resolve(true);
     reviving = (async (): Promise<boolean> => {
       const row = await sessionRow(rec.sid);
-      if (!row || row.restorable !== true) return true;
-      if (row.node && row.node.online === false) return true;   // 노트북이 잠듦 — 되살릴 수 없다(멈춤 막대가 까닭을 말한다)
+      if (!needsRevive(row)) return true;   // 살아 있음 · 모름 · 잠든 노트북(되살릴 수 없다 — 멈춤 막대가 까닭을 말한다)
       toast('꺼져 있던 AI 세션을 다시 켜고 보낼게요.');
       try { const r = await reviveSession(rec.sid); revivedAt = Date.now(); await adoptSid(r.id, r.row); return !S.dead; }
       catch (e: any) { toast('AI 세션을 다시 켜지 못해 보내지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); return false; }
