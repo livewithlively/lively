@@ -96,7 +96,7 @@ async function PAGE_MAIN() {
   await sleep(1800);
   R.p1 = { rows: $$(".v2-studio-chk").map((r) => txt(r.querySelector("b"))), now: txt($(".v2-studio-now")) };
   R.p2 = { spots: spots(), d: sideD(), tile: !!$(".v2-studio-ico-pad svg.v2-gi"), sub: sub() };
-  if (window.__SHOT) { const t = btn(/^아이콘 바꾸기$/); if (t) t.click(); await sleep(300); document.getElementById("out").textContent = "RESULT{}ENDRESULT"; return; }
+  if (window.__SHOT) { const t = btn(/^아이콘 바꾸기$/); if (t) t.click(); await sleep(300); const ab = btn(/AI에게 그려 달라기/); if (ab) ab.click(); await sleep(2300); const ir = icoRow(); if (ir) ir.scrollIntoView({ block: "start" }); document.getElementById("out").textContent = "RESULT{}ENDRESULT"; return; }
   // P3 — 앱 화면만
   const full = $$(".v2-studio-chk-places button").find((b) => txt(b) === "앱 화면"); if (full) full.click();
   await sleep(200);
@@ -122,17 +122,66 @@ async function PAGE_MAIN() {
   const rs = btn(/^처음대로$/); if (rs) rs.click();
   await sleep(200);
   R.p7 = { icon: recNow().icon || null, d: sideD(), firstOn: picks()[0] ? picks()[0].classList.contains("on") : null };
+  // Q — 「다른 색」 팔레트(원준 2026-10-28 «9개 냅두고 · 원하면 다른 색을 훨씬 더 다양하게 · 연속적 컬러팔레트»)
+  const moreB = () => $(".v2-studio-ico-more");
+  R.q1 = { more: !!moreB(), text: txt(moreB()), sw: $$(".v2-studio-ico-sw").length, afterSw: moreB() ? moreB().previousElementSibling && moreB().previousElementSibling.classList.contains("v2-studio-ico-sw") : null, exp: moreB() ? moreB().getAttribute("aria-expanded") : null, picker: !!$(".v2-studio-cpick") };
+  if (moreB()) moreB().click();
+  await sleep(200);
+  const hexI = () => $(".v2-studio-cpick-hex"), note = () => txt($(".v2-studio-cpick-note"));
+  R.q2 = { picker: !!$(".v2-studio-cpick"), sv: !!$(".v2-studio-cpick-sv"), hue: !!$(".v2-studio-cpick-hue"), hex: hexI() ? hexI().value : null, exp: moreB() ? moreB().getAttribute("aria-expanded") : null, saves: window.__saves.length - s0 };
+  const typeHex = async (v) => { const i = hexI(); if (!i) return; i.focus(); i.value = v; i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(200); };
+  await typeHex("#3a7bd5");
+  R.q3 = { icon: recNow().icon || null, open: !!$(".v2-studio-cpick"), moreOn: moreB() ? moreB().classList.contains("on") : null, swOn: $$(".v2-studio-ico-sw.on").length, d: sideD(), focus: document.activeElement === hexI(), hex: hexI() ? hexI().value : null };
+  await typeHex("zz");
+  R.q4 = { color: (recNow().icon || {}).color || null, note: note() };
+  const hue = $(".v2-studio-cpick-hue");
+  if (hue) { hue.value = "120"; hue.dispatchEvent(new Event("input", { bubbles: true })); await sleep(50); R.q5live = { color: (recNow().icon || {}).color || null }; hue.dispatchEvent(new Event("change", { bubbles: true })); await sleep(200); }
+  R.q5 = { color: (recNow().icon || {}).color || null, hex: hexI() ? hexI().value : null };
+  //  색 면을 끌어 오른쪽 위(채도 · 밝기 가장 큼)에서 놓는다 — 띠가 120 이니 진한 초록.
+  const svEl = $(".v2-studio-cpick-sv");
+  if (svEl) { const r = svEl.getBoundingClientRect(); const ev = (t, x, y) => svEl.dispatchEvent(new PointerEvent(t, { bubbles: true, clientX: x, clientY: y, pointerId: 1, button: 0, isPrimary: true }));
+    ev("pointerdown", r.left + r.width / 2, r.top + r.height / 2); ev("pointermove", r.right + 30, r.top - 30); await sleep(50); R.q6live = (recNow().icon || {}).color || null; ev("pointerup", r.right + 30, r.top - 30); await sleep(200); }
+  R.q6 = { color: (recNow().icon || {}).color || null };
+  await typeHex("#FFF8E0");
+  R.q7 = { note: note(), warn: $(".v2-studio-cpick-note") ? $(".v2-studio-cpick-note").classList.contains("warn") : null };
+  //  Q10 — 칸을 떠나며(change) 고르면 ④ 를 다시 그리지 않는다(그 순간 누르던 색 칸이 빠지지 않게)
+  const swBefore = $$(".v2-studio-ico-sw")[1];
+  if (hexI()) { hexI().focus(); hexI().value = " #8a3fd1 "; hexI().dispatchEvent(new Event("change", { bubbles: true })); await sleep(150); }
+  R.q10 = { color: (recNow().icon || {}).color || null, same: !!swBefore && swBefore.isConnected, live: (() => { const pth = $(".v2-studio-ico-side svg"); return pth ? pth.style.color : null; })() };
+  //  Q11 — 오른쪽 단추로 누르면 끌지 않는다
+  const sv2 = $(".v2-studio-cpick-sv");
+  if (sv2) { const r = sv2.getBoundingClientRect(); sv2.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 2, clientX: r.left + 5, clientY: r.bottom - 5, pointerId: 2, isPrimary: true })); sv2.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: r.left + 5, clientY: r.bottom - 5, pointerId: 2 })); sv2.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 2, clientX: r.left + 5, clientY: r.bottom - 5, pointerId: 2 })); await sleep(150); }
+  R.q11 = { color: (recNow().icon || {}).color || null, knob: $(".v2-studio-cpick-knob") ? $(".v2-studio-cpick-knob").style.left : null };
+  //  Q12 — 방향키를 몰아 누르면 칠하기만 하고 손을 뗀 뒤 한 번 고른다
+  const sv3 = $(".v2-studio-cpick-sv"); const c12 = (recNow().icon || {}).color || null;
+  if (sv3) { sv3.focus(); for (let i = 0; i < 5; i++) sv3.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); }
+  await sleep(50);
+  R.q12 = { mid: (recNow().icon || {}).color || null, before: c12 };
+  await sleep(500);
+  R.q12.after = (recNow().icon || {}).color || null; R.q12.focusK = document.activeElement ? document.activeElement.getAttribute("data-ico-k") : null;
+  //  Q8 — 틀린 코드를 적어 둔 채 9색을 고르면 손잡이 · 코드가 그 색으로 · 틀렸다는 안내도 걷힌다
+  if (hexI()) { hexI().focus(); hexI().value = "zz"; hexI().dispatchEvent(new Event("change", { bubbles: true })); hexI().blur(); await sleep(150); }
+  const badNote = note();
+  const sw0 = $$(".v2-studio-ico-sw")[0]; if (sw0) sw0.click();
+  await sleep(200);
+  R.q8 = { color: (recNow().icon || {}).color || null, hex: hexI() ? hexI().value : null, moreOn: moreB() ? moreB().classList.contains("on") : null, badNote, note: note() };
+  if (moreB()) moreB().click();
+  await sleep(150);
+  R.q9 = { picker: !!$(".v2-studio-cpick") };
+  const rs2 = btn(/^처음대로$/); if (rs2) rs2.click();
+  await sleep(200);
   // P8 — AI 에게 부탁
   const ask = $(".v2-studio-ico-ask input"); if (ask) { ask.value = "마이크와 메모지"; ask.dispatchEvent(new Event("input", { bubbles: true })); }
   const go = btn(/AI에게 그려 달라기/); if (go) go.click();
   await sleep(600);
   const last = window.__prompts.slice(-1)[0] || "";
   R.p8 = { sent: window.__prompts.length - p0, iconLine: /\[\[아이콘\]\] path:/.test(last), ask: last.includes("마이크와 메모지"), app: last.includes("notes"), noSave: /app_save 하지 마/.test(last),
-    locked: btn(/AI에게 그려 달라기/) ? btn(/AI에게 그려 달라기/).disabled : null, status: txt($(".v2-studio-ico-ed > small")) };
+    locked: btn(/AI에게 그려 달라기/) ? btn(/AI에게 그려 달라기/).disabled : null, status: txt($(".v2-studio-ico-ed > [role=status]")), clock: txt($(".v2-studio-ico-waitclock")), stop: !!btn(/^그만 기다리기$/) };
+  await sleep(1300); R.p8.clock2 = txt($(".v2-studio-ico-waitclock"));
   // P9 — 틀린 답 · 맞는 답
   (window.__log["box-s1"] = window.__log["box-s1"] || []).push("[[아이콘]] path: <svg/> | color: blue | dark: #000000");
   await sleep(3200);
-  R.p9 = { badIcon: recNow().icon || null, status: txt($(".v2-studio-ico-ed > small")) };
+  R.p9 = { badIcon: recNow().icon || null, status: txt($(".v2-studio-ico-ed > [role=status]")) };
   const NEW = { path: "M8 3v10 M5 10a3 3 0 0 0 6 0 M14 6h6 M14 10h6 M14 14h4", color: "#D5541F", dark: "#E7845B" };
   window.__log["box-s1"].push("그렸어요.\n[[아이콘]] path: " + NEW.path + " | color: " + NEW.color + " | dark: " + NEW.dark);
   await sleep(3200);
@@ -146,6 +195,18 @@ async function PAGE_MAIN() {
   const sv = window.__saves.slice(-1)[0];
   const mf = sv && Array.isArray(sv.files) ? sv.files.find((f) => f.path === "lively-app.json") : null;
   R.p10 = { saves: window.__saves.length - s0, icon: mf ? JSON.parse(mf.content).icon : null, recIcon: recNow().icon || null, stage: recNow().stage };
+  // P15 — 「그만 기다리기」 → 기다림이 걷히고 다시 부탁할 수 있다 · 늦게 온 답도 그림 목록에 더한다
+  localStorage.setItem("lively_v2_app_studio", JSON.stringify([{ ...base, sid: "box-s6", appId: "notes", title: "회의록" }]));
+  St.openAppStudio({ sid: "box-s6" }, opts);
+  await sleep(1500);
+  { const o = btn(/^아이콘 바꾸기$/); if (o) o.click(); await sleep(200);
+    const g = btn(/AI에게 그려 달라기/); if (g) g.click(); await sleep(500);
+    const sb = btn(/^그만 기다리기$/); if (sb) sb.click(); await sleep(200);
+    R.p15 = { waited: !!sb, stopped: !$(".v2-studio-ico-wait"), unlocked: btn(/AI에게 그려 달라기/) ? !btn(/AI에게 그려 달라기/).disabled : null };
+    const LATE = "M4 4h16v16H4z M8 12h8";
+    window.__log["box-s6"] = ["[[아이콘]] path: " + LATE + " | color: #0D88A7 | dark: #10ACD3"];
+    await sleep(3200);
+    R.p15.late = (recNow("box-s6").iconAi || [])[0] ? recNow("box-s6").iconAi[0].path === LATE : false; }
   // P11 — 아이콘 없는 앱
   const rec2 = { ...base, sid: "box-s2", appId: "bare", title: "안건" };
   localStorage.setItem("lively_v2_app_studio", JSON.stringify([rec2]));
@@ -202,15 +263,16 @@ const bad = (n, why) => { fail++; console.error(`FAIL  ${n} — ${why}`); };
 const same = (got, want, n) => { const a = JSON.stringify(got), b = JSON.stringify(want); return a === b ? ok(n) : bad(n, `기대 ${b} · 실제 ${a}`); };
 
 same(R.p1 && [R.p1.rows, /다섯 가지/.test(R.p1.now || "")], [["원하던 것이 다 있나요?", "이름", "쓰는 자리", "누가 쓰나", "아이콘"], true], "P1 ④ 줄이 다섯 · 마지막 「아이콘」 · 지금 줄 「다섯 가지」");
-same(R.p2 && [R.p2.spots, R.p2.d, R.p2.tile, /AI가 앱을 만들 때 그린/.test(R.p2.sub || "")], [["사이드바", "세션 위젯", "앱 찾기"], ICON.path, true, true], "P2 둘 다 — 세 자리에 매니페스트 그림 · AI 가 그렸다고 말한다");
-same(R.p3 && R.p3.spots, ["사이드바", "앱 찾기"], "P3 앱 화면만 — 세션 위젯 자리가 없다");
+same(R.p2 && [R.p2.spots, R.p2.d, R.p2.tile, /AI가 앱을 만들 때 그린/.test(R.p2.sub || "")], [["왼쪽 사이드바", "세션 위젯 탭", "앱 찾기"], ICON.path, true, true], "P2 둘 다 — 세 자리에 매니페스트 그림 · AI 가 그렸다고 말한다");
+same(R.p3 && R.p3.spots, ["왼쪽 사이드바", "앱 찾기"], "P3 앱 화면만 — 세션 위젯 자리가 없다");
 same(R.p4 && [R.p4.open, R.p4.tiles, R.p4.first, R.p4.firstOn, R.p4.sw], [true, 19, "AI가 처음 그린 그림", true, 9], "P4 펼치면 — 처음 그림(골라져 있음) + 기본 그림 18 · 색 9");
 same(R.p5 && [R.p5.icon && R.p5.icon.path === R.p5.presetD, R.p5.icon && R.p5.icon.color, R.p5.icon && R.p5.icon.color_dark, R.p5.d === R.p5.presetD, R.p5.on, /완료 · 다음 단계로/.test(R.p5.sub || ""), R.p5.reset, R.p5.prompts, R.p5.saves],
   [true, ICON.color, ICON.color_dark, true, true, true, true, 0, 0], "P5 기본 그림 — 고른 것만 기록(색 그대로) · 미리보기 바뀜 · 저장 · AI 글 0건");
 same(R.p6 && [R.p6.icon && R.p6.icon.path === R.p5.presetD, R.p6.icon && R.p6.icon.color, R.p6.swOn], [true, "#B0323F", true], "P6 색 — 그림 그대로 색만");
 same(R.p7 && [R.p7.icon, R.p7.d, R.p7.firstOn], [null, ICON.path, true], "P7 「처음대로」 — 고른 것을 걷고 처음 그림으로");
-same(R.p8 && [R.p8.sent, R.p8.iconLine, R.p8.ask, R.p8.app, R.p8.noSave, R.p8.locked, /그리는 중/.test(R.p8.status || "")], [1, true, true, true, true, true, true], "P8 AI 에게 부탁 — 글 1건 · 잠김 · 그리는 중");
-same(R.p9 && [R.p9.badIcon, /그리는 중/.test(R.p9.status || ""), R.p9.icon && R.p9.icon.path, R.p9.ai, R.p9.first && R.p9.first[0], R.p9.first && R.p9.first[1], R.p9.d, R.p9.unlocked],
+same(R.p8 && [R.p8.sent, R.p8.iconLine, R.p8.ask, R.p8.app, R.p8.noSave, R.p8.locked, /그리고 있어요/.test(R.p8.status || ""), /1분 안에/.test(R.p8.status || ""), R.p8.stop], [1, true, true, true, true, true, true, true, true], "P8 AI 에게 부탁 — 글 1건 · 잠김 · 그리고 있어요 · 보통 걸리는 때 · 그만 기다리기");
+same(R.p8 && [/^0:0\d$/.test(R.p8.clock || ""), R.p8.clock2 !== R.p8.clock], [true, true], "P8b 흐른 시간이 1초마다 간다", [R.p8 && R.p8.clock, R.p8 && R.p8.clock2]);
+same(R.p9 && [R.p9.badIcon, /그리고 있어요/.test(R.p9.status || ""), R.p9.icon && R.p9.icon.path, R.p9.ai, R.p9.first && R.p9.first[0], R.p9.first && R.p9.first[1], R.p9.d, R.p9.unlocked],
   [null, true, R.p9 && R.p9.newD, 1, "AI가 방금 그린 그림", true, R.p9 && R.p9.newD, true], "P9 틀린 답은 버리고 기다린다 · 맞는 답은 그림 목록 맨 앞에 골라져 선다");
 same(R.p10 && [R.p10.saves, R.p10.icon, R.p10.recIcon, R.p10.stage], [1, { path: R.p9 && R.p9.newD, color: "#D5541F", color_dark: "#E7845B" }, null, "put"], "P10 「완료 · 다음 단계로」 — 마무리 저장에 아이콘이 실린다 · 기록에서 걷힌다");
 same(R.p11 && [/아직 아이콘이 없어/.test(R.p11.sub || ""), R.p11.d === R.p11.liv], [true, true], "P11 아이콘 없는 앱 — 기본 그림이라고 말한다");
@@ -219,6 +281,21 @@ same(R.p6 && R.p6.pressed, ["false", "false", "false", "true", "false", "false",
 same(R.p12, { icon: null, d: ICON.path }, "P12 고른 뒤 저장된 아이콘이 바뀌었으면 고른 것을 걷는다(새 아이콘을 덮지 않는다)");
 same(R.p13, { icon: "M1 1h3", d: "M1 1h3" }, "P13 저장된 아이콘이 그대로면 고른 것을 지킨다");
 same(R.p14 && /불러오지 못했어요/.test(R.p14.sub || ""), true, "P14 지금 아이콘을 못 읽으면 「없다」 고 하지 않는다");
+same(R.q1 && [R.q1.more, R.q1.text, R.q1.sw, R.q1.afterSw, R.q1.exp, R.q1.picker], [true, "다른 색", 9, true, "false", false], "Q1 9색은 그대로 · 그 뒤에 「다른 색」 · 접혀 있다");
+same(R.q2 && [R.q2.picker, R.q2.sv, R.q2.hue, R.q2.hex, R.q2.exp, R.q2.saves], [true, true, true, ICON.color, "true", 0], "Q2 펼치면 색 면 · 색상 띠 · 색 코드(지금 색) · 저장 0건");
+same(R.q3 && [R.q3.icon && R.q3.icon.color, R.q3.icon && R.q3.icon.path, R.q3.icon && R.q3.icon.color_dark, R.q3.open, R.q3.moreOn, R.q3.swOn, R.q3.d, R.q3.focus, R.q3.hex],
+  ["#3A7BD5", ICON.path, R.q3 && R.q3.icon && R.q3.icon.color_dark && /^#[0-9A-F]{6}$/.test(R.q3.icon.color_dark) && R.q3.icon.color_dark !== "#3A7BD5" ? R.q3.icon.color_dark : "어두운 짝 없음", true, true, 0, ICON.path, true, "#3A7BD5"],
+  "Q3 색 코드 — 그 색으로 고른다(그림 그대로 · 어두운 짝을 만든다) · 팔레트는 열린 채 · 「다른 색」 이 골라진 표시 · 칸에 손이 남는다");
+same(R.q4 && [R.q4.color, /여섯 자리/.test(R.q4.note || "")], ["#3A7BD5", true], "Q4 틀린 색 코드 — 고른 것은 그대로 · 고쳐 적으라고 말한다");
+same([R.q5live && R.q5live.color, R.q5 && R.q5.color && R.q5.color !== "#3A7BD5", R.q5 && R.q5.hex === R.q5.color], ["#3A7BD5", true, true], "Q5 색상 띠 — 끄는 동안은 고르지 않고 놓으면 고른다");
+same([R.q6live, R.q6 && R.q6.color], [R.q5 && R.q5.color, "#00FF00"], "Q6 색 면 — 끄는 동안은 고르지 않고 · 오른쪽 위에서 놓으면 그 띠의 가장 진한 색");
+same(R.q7 && [/흐리게/.test(R.q7.note || ""), R.q7.warn], [true, true], "Q7 밝은 화면에서 흐린 색이면 알린다");
+same(R.q8 && [R.q8.color, R.q8.hex, R.q8.moreOn, /여섯 자리/.test(R.q8.badNote || ""), /여섯 자리/.test(R.q8.note || "")], ["#118E6E", "#118E6E", false, true, false], "Q8 9색을 고르면 팔레트 손잡이도 그 색으로 · 「다른 색」 표시 · 틀린 코드 안내가 걷힌다");
+same(R.q10 && [R.q10.color, R.q10.same, !!R.q10.live], ["#8A3FD1", true, true], "Q10 칸을 떠나며 고르면 ④ 를 다시 그리지 않는다(앞뒤 공백도 받는다) · 미리보기는 칠한다");
+same(R.q11 && R.q11.color, R.q10 && R.q10.color, "Q11 오른쪽 단추로 누르면 끌지 않는다");
+same(R.q12 && [R.q12.mid, R.q12.after !== R.q12.before && /^#[0-9A-F]{6}$/.test(R.q12.after || ""), R.q12.focusK], [R.q12 && R.q12.before, true, "sv"], "Q12 방향키 몰아 누르기 — 누르는 동안은 고르지 않고 뗀 뒤 한 번 · 손은 색 면에");
+same(R.q9 && R.q9.picker, false, "Q9 「다른 색」 을 다시 누르면 접힌다");
+same(R.p15, { waited: true, stopped: true, unlocked: true, late: true }, "P15 「그만 기다리기」 — 기다림을 걷고 다시 부탁할 수 있다 · 늦은 답도 그림 목록에 더한다");
 same(R.errors, [], "W 페이지 예외 없음");
 
 console.log(`studio-icon-runtime: ${pass} passed · ${fail} failed`);
