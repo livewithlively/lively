@@ -377,13 +377,15 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
       const m = await me();
       const rows = await listApps();
       const ids = new Set(rows.map((x) => String(x.id)));
-      const have = rows.some((x) => String(x.id) === copyId(app.id, m.id) && (!x.status || x.status === 'active')) ? copyId(app.id, m.id) : '';
+      const row = rows.find((x) => String(x.id) === copyId(app.id, m.id) && (!x.status || x.status === 'active')) || null;
+      const have = row ? String(row.id) : '';
       if (have) {
-        if (!root) return;
-        const pick = await askCopy(r, app.title + ' · ' + (m.name || '내 것'));
-        if (!root) return;
+        if (root !== r) return;
+        const haveTitle = String(row.title || have);
+        const pick = await askCopy(r, haveTitle);
+        if (root !== r) return;   // 묻는 사이 닫았거나 다른 화면을 열었다
         if (!pick) { closeAppStudio(); return; }
-        if (pick === 'edit') { void openAppStudioFor({ id: have, title: app.title + ' · ' + (m.name || '내 것'), by: m.id, place }, 'edit', opts); return; }
+        if (pick === 'edit') { void openAppStudioFor({ id: have, title: haveTitle, by: m.id, place }, 'edit', opts); return; }
         fresh = nextCopyId(have, ids);
       }
     }

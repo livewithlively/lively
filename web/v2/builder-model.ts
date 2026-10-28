@@ -148,6 +148,7 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
 // ── 사람 이름 ──
 //  카드 · 배포 설정 · 사이드바는 계정 아이디(sangmin-yoon)가 아니라 표시 이름(윤상민)을 쓴다(감사 6-5). 명부는 앱 목록과 함께 받고, 못 받으면 아이디 그대로.
 let names: Map<string, string> | null = null;
+let namesAt = 0;   // 마지막으로 물은 때 — 못 받았으면 5분 뒤에 다시(명부를 못 읽는 사람에게 30초마다 묻지 않게)
 async function fetchNames(): Promise<void> {
   try {
     const d: any = await api('/api/ui/org/members');
@@ -181,7 +182,7 @@ export function builderModelFailed(): boolean { return !got && failed; }
 export function refreshBuilderModel(force = false): Promise<void> {
   if (!force && got && Date.now() - got.at < FRESH_MS) return Promise.resolve();
   if (inflight) return force ? inflight.then(() => refreshBuilderModel(true)) : inflight;
-  inflight = Promise.all([fetchApps(), studioMe(), names ? Promise.resolve() : fetchNames()]).then(([apps, me]) => {
+  inflight = Promise.all([fetchApps(), studioMe(), names || Date.now() - namesAt < 300_000 ? Promise.resolve() : (namesAt = Date.now(), fetchNames())]).then(([apps, me]) => {
     //  나를 못 받았으면(빈 id) 받기 실패로 친다 — 그 답으로 묶으면 내 앱이 전부 「팀원이 만든 앱」 으로 간다(감사 6-6). 다음 그리기에서 다시 묻는다.
     if (!apps || !me.id) { failed = true; if (got) return; }
     else { failed = false; got = { apps, me, at: Date.now() }; }
