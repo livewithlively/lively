@@ -42,6 +42,8 @@ export interface OrgApp {
   made_by: string | null;
   owner_member: string | null;
   build_session: string | null;
+  /** #5089 예전에 이 앱을 만들거나 고친 세션들(build_session 이 옮겨 가기 전 것 · 최근 100개). 선택 칸 — 옛 행 · 시험 리터럴엔 없다. */
+  past_build_sessions?: string[];
   origin_app_id: string | null;
   /** #4785 앱 폴더 상한(GiB) — null = 무제한(기본). 거는 것은 CP 의 쿼터 정비다(apps/app-folder-quota.ts 머리말). 선택 칸 — 옛 행 · 시험 리터럴엔 없다. */
   folder_limit_gb?: number | null;
@@ -76,6 +78,7 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
     made_by: r.made_by == null ? null : String(r.made_by),
     owner_member: r.owner_member == null ? null : String(r.owner_member),
     build_session: r.build_session == null ? null : String(r.build_session),
+    past_build_sessions: Array.isArray(r.past_build_sessions) ? (r.past_build_sessions as unknown[]).map(String) : [],
     origin_app_id: r.origin_app_id == null ? null : String(r.origin_app_id),
     folder_limit_gb: r.folder_limit_gb == null ? null : Number(r.folder_limit_gb),
   };
@@ -561,15 +564,27 @@ export async function dropStaleEmptyDrafts(owner: string, days = 3): Promise<str
   return r.rows.map((x) => String(x.id));
 }
 
-/** 이 세션이 만드는 앱들(최근 것 먼저) — 세션 → 앱 역조회. 판정(볼 수 있나)은 호출부. */
+/** 이 세션이 만드는 앱들(최근 것 먼저) — 세션 → 앱 역조회. 지금 만들기 세션인 앱이 먼저, 예전에 만들거나 고친 앱(past_build_sessions)이 뒤. 판정(볼 수 있나)은 호출부. */
 export async function findAppsByBuildSession(sessionId: string): Promise<OrgApp[]> {
-  const r = await itemsPool.query(`SELECT * FROM org_app WHERE build_session=$1 ORDER BY updated_at DESC, id`, [sessionId]);
+  const r = await itemsPool.query(
+    `SELECT * FROM org_app WHERE build_session=$1 OR $1 = ANY(past_build_sessions)
+      ORDER BY (build_session IS NOT DISTINCT FROM $1) DESC, updated_at DESC, id`, [sessionId]);
   return r.rows.map(rowToApp);
 }
 
-/** 이 앱을 만드는(고치는) 세션을 바꾼다 — 책임자가 새 만들기 세션을 열었을 때(앱빌더 「고치기」). */
+/** 이 앱을 만드는(고치는) 세션을 바꾼다 — 책임자가 새 만들기 세션을 열었을 때(앱빌더 「고치기」).
+ *  앞의 세션은 past_build_sessions 로 옮긴다(#5089 — 그 세션이 이 앱의 것이었다는 걸 잊지 않게 · 최근 100개 · 새 세션은 거기서 뺀다). */
 export async function setAppBuildSession(appId: string, sessionId: string | null): Promise<void> {
-  await itemsPool.query(`UPDATE org_app SET build_session=$2 WHERE id=$1`, [appId, sessionId]);
+  await itemsPool.query(
+    `UPDATE org_app SET past_build_sessions = (
+        SELECT COALESCE(array_agg(s ORDER BY i), '{}') FROM (
+          SELECT s, i FROM unnest(array_remove(
+                   CASE WHEN build_session IS NULL OR build_session IS NOT DISTINCT FROM $2 THEN COALESCE(past_build_sessions, '{}')
+                        ELSE array_append(array_remove(COALESCE(past_build_sessions, '{}'), build_session), build_session) END,
+                   $2::text)) WITH ORDINALITY AS u(s, i)
+           ORDER BY i DESC LIMIT 100) k),
+        build_session = $2
+      WHERE id = $1`, [appId, sessionId]);
 }
 
 /** 관리자 설치(org_app_install)로 새로 생긴 앱 — 만든 사람·책임자가 비었으면 설치한 사람으로(빈 칸만 채운다). */

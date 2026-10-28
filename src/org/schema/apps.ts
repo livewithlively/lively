@@ -339,6 +339,22 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS build_session TEXT;`);
   await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS origin_app_id TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_build_session_idx ON org_app(build_session) WHERE build_session IS NOT NULL;`);
+  //  #5089 past_build_sessions = 예전에 이 앱을 만들거나 고친 세션들(build_session 이 새 세션으로 옮겨 갈 때 앞의 것이 여기 쌓인다 · 최근 100개).
+  //   build_session 은 지금 세션 하나뿐이라, 「고치기」 를 다시 누를 때마다 앞의 고치기 세션이 어느 앱의 것인지 잊혀
+  //   앱빌더가 그 세션을 이름만 보고 「만들던 앱」 으로 하나 더 세웠다(원준 2026-10-28 «회의록 어플이 두 개가 됐어»). 세션 → 앱은 이 둘로 본다.
+  //   NULL = 아직 안 채운 옛 줄 — 감사 기록(org_content_audit 의 앞뒤 줄)에 남은 build_session 으로 한 번 채운다. 채운 뒤엔 '{}' 이상이라 다시 돌지 않는다.
+  await pool.query(`ALTER TABLE org_app ADD COLUMN IF NOT EXISTS past_build_sessions TEXT[];`);
+  const auditTenant = await pool.query(`SELECT table_name FROM information_schema.columns
+                                         WHERE table_schema = current_schema() AND column_name = 'tenant_id' AND table_name IN ('org_app','org_content_audit')`);
+  const auditSameTenant = auditTenant.rows.length === 2 ? "AND au.tenant_id = a.tenant_id" : "";
+  await pool.query(`UPDATE org_app a SET past_build_sessions = COALESCE((
+                       SELECT array_agg(s ORDER BY s) FROM (
+                         SELECT DISTINCT x.s FROM org_content_audit au
+                           CROSS JOIN LATERAL (VALUES (au.before->>'build_session'), (au.after->>'build_session')) AS x(s)
+                          WHERE au.entity = 'org_app' AND au.entity_key = a.id ${auditSameTenant}
+                            AND x.s IS NOT NULL AND x.s <> '' AND x.s IS DISTINCT FROM a.build_session) t), '{}')
+                     WHERE a.past_build_sessions IS NULL;`);
+  await pool.query(`ALTER TABLE org_app ALTER COLUMN past_build_sessions SET DEFAULT '{}';`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_owner_idx ON org_app(owner_member) WHERE owner_member IS NOT NULL;`);
   //  옛 앱 채우기(멱등) — 워크스페이스가 만든 앱의 «만든 사람» 은 처음 설치한 사람이다(installed_by 는 upsertApp 이 처음 한 번만 쓴다).
   //   made_by 가 빈 줄만 채우므로 한 번 채운 뒤엔 다시 돌지 않는다 — 떠난 사람의 책임자를 관리자로 넘긴 줄(owner NULL · made_by 있음)을 되돌리지 않는다.
