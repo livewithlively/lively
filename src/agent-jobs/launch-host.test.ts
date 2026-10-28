@@ -7,7 +7,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { hostJobDir, hostPaneArgv, hostPaneView, launchHostJob, killHostJob, jobMemoryLimit, cgspawnCheck, resetHostProbesForTest, PANE_PRELUDE, type CgroupCheck, type HostLaunchDeps } from "./launch-host.js";
+import { hostJobDir, hostPaneArgv, hostPaneView, launchHostJob, killHostJob, jobMemoryLimit, cgspawnCheck, hostMemoryCapStatus, sudoListProbe, resetHostProbesForTest, PANE_PRELUDE, type CgroupCheck, type HostLaunchDeps } from "./launch-host.js";
 import { describeJobSurface, jobSurfaceKind, jobsUnavailableMessage, resetJobSurfaceForTest } from "./surface.js";
 import { JobLaunchError, killJobContainer, launchJobContainer } from "./launch.js";
 import { BOOT_SOURCE } from "./runner.js";
@@ -133,7 +133,7 @@ await t("C4 워크스페이스가 있으면 판 env(LVLY_TENANT_SLUG)와 판 머
 // ── C. 띄우기 흐름(바꿔 끼운 의존) ────────────────────────────────────────────────
 
 interface Rec { calls: string[]; tmux: string[][]; secrets: Array<{ osUser: string | null; secret: string }>; removed: string[]; mkdirs: Array<[string | null, string]>; wraps: Array<CgroupLimit | undefined> }
-function fakeDeps(o: { osUser?: string | null; isolationReady?: boolean; cap?: number; cgroup?: CgroupCheck | Error; tmuxFails?: Error; inactive?: boolean; profileDir?: string | null; slug?: string | null; port?: number } = {}): { d: HostLaunchDeps; rec: Rec } {
+function fakeDeps(o: { osUser?: string | null; isolationReady?: boolean; cap?: number; memoryLimitFails?: Error; cgroup?: CgroupCheck | Error; tmuxFails?: Error; inactive?: boolean; profileDir?: string | null; slug?: string | null; port?: number } = {}): { d: HostLaunchDeps; rec: Rec } {
   const rec: Rec = { calls: [], tmux: [], secrets: [], removed: [], mkdirs: [], wraps: [] };
   const osUser = o.osUser === undefined ? "box_alice" : o.osUser;
   const d: HostLaunchDeps = {
@@ -148,7 +148,7 @@ function fakeDeps(o: { osUser?: string | null; isolationReady?: boolean; cap?: n
     mkdir: async (os, abs) => { rec.calls.push("mkdir"); rec.mkdirs.push([os, abs]); },
     prepareHome: async () => { rec.calls.push("home"); },
     profileDir: async () => { rec.calls.push("profile"); return o.profileDir === undefined ? "/home/gw/.lively/profiles/alice/claude" : o.profileDir; },
-    memoryLimit: async () => jobMemoryLimit(o.cap ?? 3072),
+    memoryLimit: async () => { if (o.memoryLimitFails) throw o.memoryLimitFails; return jobMemoryLimit(o.cap ?? 3072); },
     cgroupCheck: async () => { rec.calls.push("cgroup"); if (o.cgroup instanceof Error) throw o.cgroup; return o.cgroup ?? { ok: true }; },
     writeSecret: async (os, s) => { rec.calls.push("secret"); rec.secrets.push({ osUser: os, secret: s }); return "/tmp/lvly-job.Q1w2E3r4/boot"; },
     removeSecret: async (_os, f) => { rec.removed.push(f); },
@@ -201,6 +201,14 @@ await t("M3 격리 판 · 정책 상한 · 묻다 끊겼다(일시 답 · 던짐
     const { d, rec } = fakeDeps({ cap: 3072, cgroup });
     await assert.rejects(launchHostJob(job(), SECRET, d), (e: unknown) => e instanceof JobLaunchError && e.transient === true && /메모리 상한/.test(e.message));
     assert.ok(!["mkdir", "home", "secret", "tmux"].some((c) => rec.calls.includes(c)), JSON.stringify(rec.calls));
+  }
+});
+
+await t("M3b 작업 정책의 상한을 못 읽었다 — 상한 없이 띄우지 않고 일시(memory) 실패 · 폴더 · 비밀 · 판 없음", async () => {
+  for (const o of [{}, { osUser: null, isolationReady: false }]) {
+    const { d, rec } = fakeDeps({ ...o, memoryLimitFails: new Error("정책을 읽지 못함(가짜)") });
+    await assert.rejects(launchHostJob(job(), SECRET, d), (e: unknown) => e instanceof JobLaunchError && e.transient === true && /메모리 상한/.test(e.message), JSON.stringify(o));
+    assert.ok(!["cgroup", "mkdir", "home", "secret", "tmux"].some((c) => rec.calls.includes(c)), JSON.stringify(rec.calls));
   }
 });
 
@@ -315,8 +323,8 @@ await t("P1 래퍼 파일이 없다 — 확답 «없다»(일시 아님) · sudo
   assert.deepEqual(s.asked, []);
 });
 
-await t("P2·P3·P5 끝 0 = 된다 · 끝 1 = 못 쓴다(확답) — 10분 기억하고 지나면 다시 묻는다", async () => {
-  for (const [code, ok] of [[0, true], [1, false]] as const) {
+await t("P2·P3·P5 끝 0 = 된다(10분 기억) · 끝 1 = 못 쓴다(확답 · 30초만 기억 — 고치면 곧 따라온다) · 지나면 다시 묻는다", async () => {
+  for (const [code, ok, keepMs] of [[0, true, 10 * 60_000], [1, false, 30_000]] as const) {
     resetHostProbesForTest();
     const s = probeSpy([code, code]);
     let now = 1_000;
@@ -324,13 +332,98 @@ await t("P2·P3·P5 끝 0 = 된다 · 끝 1 = 못 쓴다(확답) — 10분 기�
     const first = await cgspawnCheck(o);
     assert.equal(first.ok, ok);
     if (!first.ok) assert.equal(first.transient, false, "확답이다");
-    now += 10 * 60_000 - 1;
-    assert.deepEqual(await cgspawnCheck(o), first, "10분 안엔 기억한 답");
+    now += keepMs - 1;
+    assert.deepEqual(await cgspawnCheck(o), first, `${keepMs}ms 안엔 기억한 답`);
     assert.deepEqual(s.asked, ["/opt/x/box-cgspawn"], "한 번만 물었다");
     now += 2;
     await cgspawnCheck(o);
-    assert.equal(s.asked.length, 2, "10분이 지나면 다시 묻는다");
+    assert.equal(s.asked.length, 2, "지나면 다시 묻는다");
   }
+  resetHostProbesForTest();
+});
+
+await t("P6 같은 때 여러 번 물어도 sudo 는 한 번 — 묻는 중인 답을 함께 받는다(끊긴 답도) · 끝나면 다음엔 다시 묻는다", async () => {
+  for (const code of [0, null]) {
+    resetHostProbesForTest();
+    let release: (v: { code: number | null; error?: string }) => void = () => undefined;
+    let asked = 0;
+    const probe = (_cmd: string) => { asked++; return new Promise<{ code: number | null; error?: string }>((r) => { release = r; }); };
+    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe, now: () => 7 };
+    const all = Promise.all([cgspawnCheck(o), cgspawnCheck(o), cgspawnCheck(o)]);
+    await new Promise((r) => setImmediate(r));
+    release(code === null ? { code, error: "끊김" } : { code });
+    const [a, b, c] = await all;
+    assert.equal(asked, 1, `한 번만 물었다(${code})`);
+    assert.deepEqual(a, b); assert.deepEqual(b, c);
+    if (code === null) {
+      const next = cgspawnCheck(o);
+      await new Promise((r) => setImmediate(r));
+      release({ code: 0 });
+      assert.deepEqual(await next, { ok: true });
+      assert.equal(asked, 2, "끊긴 답은 기억하지 않아 다음엔 다시 묻는다");
+    }
+  }
+  resetHostProbesForTest();
+});
+
+await t("P7 진짜 프로세스로 sudo 끝을 옮긴다(가짜 sudo) — 0 · 1 · 2 그대로 · 시간 초과 = 모른다 · 없는 sudo = 못 쓴다", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvj-sudo-"));
+  try {
+    const fake = path.join(dir, "sudo");
+    fs.writeFileSync(fake, '#!/bin/sh\n[ "$1 $2" = "-n -l" ] || exit 9\ncase "$3" in */ok) exit 0;; */no) exit 1;; */odd) exit 2;; */slow) sleep 5;; esac\nexit 7\n', { mode: 0o755 });
+    assert.deepEqual(await sudoListProbe("/opt/x/ok", { bin: fake }), { code: 0 });
+    assert.deepEqual(await sudoListProbe("/opt/x/no", { bin: fake }), { code: 1 });
+    assert.deepEqual(await sudoListProbe("/opt/x/odd", { bin: fake }), { code: 2 });
+    const slow = await sudoListProbe("/opt/x/slow", { bin: fake, timeoutMs: 300 });
+    assert.equal(slow.code, null);
+    assert.match(String(slow.error), /시간 안에 답하지 않았습니다/);
+    assert.deepEqual(await sudoListProbe("/opt/x/ok", { bin: path.join(dir, "없는-sudo") }), { code: 1 }, "sudo 가 없으면 못 쓴다(확답)");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── K. 관리자 보기와 띄우기가 같은 판정(머리말 ⑤) ──────────────────────────────────────
+
+await t("K1 메모리 상한 보기 — 0 · 비격리 · 된다 · 끊김 · 못 씀 다섯 가지와 띄우기 결과가 같은 판정", async () => {
+  const member = async () => "member" as const, gateway = async () => "gateway" as const;
+  assert.deepEqual(await hostMemoryCapStatus(0, { runsAs: member, check: async () => { throw new Error("묻지 않아야 한다"); } }), { enforced: false, note: "memory_max_mb 가 0 이라 작업 메모리 상한 없이 돕니다" });
+  const gw = await hostMemoryCapStatus(3072, { runsAs: gateway, check: async () => { throw new Error("묻지 않아야 한다"); } });
+  assert.equal(gw.enforced, false); assert.match(gw.note, /격리/);
+  for (const check of [{ ok: true }, { ok: false, transient: true, why: "끊김(가짜)" }, { ok: false, transient: false, why: "허용 없음(가짜)" }] as CgroupCheck[]) {
+    const view = await hostMemoryCapStatus(3072, { runsAs: member, check: async () => check });
+    const { d, rec } = fakeDeps({ cap: 3072, cgroup: check });
+    const launched = await launchHostJob(job(), SECRET, d).then(() => null, (e: unknown) => e);
+    if (check.ok) {
+      assert.equal(view.enforced, true);
+      assert.equal(launched, null, "보기가 «건다» 면 띄우기는 상한을 걸고 뜬다");
+      assert.ok(rec.tmux[0]!.includes(BOX_CGSPAWN));
+    } else {
+      assert.equal(view.enforced, false);
+      assert.ok(view.note.includes(check.why), "보기가 그 까닭을 싣는다");
+      assert.ok(launched instanceof JobLaunchError && launched.transient === check.transient, `띄우기도 같은 판정(${check.why})`);
+      if (!check.transient) { assert.match(view.note, /띄우지 않습니다/); assert.match(view.note, /memory_max_mb 를 0/); }
+      else assert.match(view.note, /다시 시도/);
+    }
+  }
+});
+
+await t("R2 관리자 보기 — 스위치를 켠 프로세스(host)는 host · 띄울 수 있다 · 계정은 이 박스의 격리 판정 그대로 · 상한 보기를 싣는다", async () => {
+  const { isolationInfraReady } = await import("../terminal/terminal-isolation.js");
+  const env: NodeJS.ProcessEnv = { ...process.env, LIVELY_AGENT_JOBS: "host" };
+  for (const k of ["LIVELY_SESSION_ENSURE", "LIVELY_SESSION_SPAWN", "LIVELY_TMUX_EXEC", "LIVELY_NODE_TOKEN", "LIVELY_SESSION_EXEC", "TMUX", "TMUX_PANE"]) delete env[k];
+  const code = `import(${JSON.stringify(new URL("./surface.js", import.meta.url).href)}).then((m) => m.describeJobSurface(3072)).then((v) => process.stdout.write(JSON.stringify(v), () => process.exit(0)))`;
+  const out = await new Promise<string>((resolve, reject) => {
+    const p = spawn(process.execPath, ["--input-type=module", "-e", code], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let o = "", e = "";
+    p.stdout.on("data", (x) => { o += x; }); p.stderr.on("data", (x) => { e += x; });
+    p.on("close", (c) => (c === 0 ? resolve(o) : reject(new Error(`자식 프로세스 ${c}: ${e.slice(0, 300)}`))));
+  });
+  const v = JSON.parse(out);
+  assert.equal(v.kind, "host");
+  assert.equal(v.available, true);
+  assert.equal(v.unavailable, null);
+  assert.equal(v.runs_as, isolationInfraReady() ? "member" : "gateway");
+  assert.equal(v.memory_cap.mb, 3072);
+  if (v.runs_as === "gateway") { assert.equal(v.memory_cap.enforced, false); assert.match(v.memory_cap.note, /격리/); }
 });
 
 await t("P4 묻다 끊겼다(시간 초과) · 알 수 없는 끝(2) — 일시 · 기억하지 않는다(다음 판에 다시 묻는다)", async () => {

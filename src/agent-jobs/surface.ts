@@ -5,10 +5,11 @@
 //   · broker — 매니지드. 세션 컨테이너 확보 훅(브로커)이 job- 컨테이너를 확보하고 그 안 tmux 에 판을 띄운다(launch.ts #4490 — 종전 그대로).
 //   · host   — 브로커가 없는 박스(셀프호스트). 이 박스의 tmux 에 판을 띄운다 — 사람 세션과 같은 OS 계정 · 홈 규칙(launch-host.ts).
 //   · none   — 띄우지 않는다(접수 501). 셀프호스트는 관리자가 게이트웨이 env 에 LIVELY_AGENT_JOBS=host 를 넣고 다시 띄워 켠다.
-//  실행면이 바꾸는 것은 넷이다: 띄울 수 있나(available) · 띄우기(launch = OS 계정 · 작업 폴더 · 홈 · 판) · 걷기(kill) · 판이 보는 자리(paneView —
-//   작업 폴더 · MCP 주소). 매니지드 판정은 그대로다 — 확보 훅이 있는 배포는 스위치와 무관하게 늘 broker 다(박스 위로 새지 않는다).
+//  실행면이 바꾸는 것은 다섯이다: 띄울 수 있나(available) · 못 띄울 때의 까닭(unavailableMessage — 접수 501) · 띄우기(launch = OS 계정 ·
+//   메모리 상한 · 작업 폴더 · 홈 · 판) · 걷기(kill) · 판이 보는 자리(paneView — 작업 폴더 · 게이트웨이 주소 · 실을 워크스페이스).
+//   매니지드 판정은 그대로다 — 확보 훅이 있는 배포는 스위치와 무관하게 늘 broker 다(박스 위로 새지 않는다).
 import type { ExecTopology } from "../exec-topology.js";
-import { RUNNER_GATEWAY } from "./runner.js";
+import { RUNNER_GATEWAY_URL } from "./runner.js";
 import type { AgentJobRow } from "./store.js";
 
 export type JobSurfaceKind = "broker" | "host" | "none";
@@ -58,7 +59,7 @@ export interface JobSurface {
 }
 
 /** 매니지드 판의 게이트웨이 주소 — 컨테이너 안 세션 루프백(runner.RUNNER_GATEWAY). MCP(/mcp)는 종전 service.onBoot 가 박아 두던 값 그대로다. */
-export const BROKER_GATEWAY = `http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}`;
+export const BROKER_GATEWAY = RUNNER_GATEWAY_URL;
 
 /** (순수) 못 띄우는 배포에서 접수가 돌려줄 문장(501) — 사람(관리자)이 무엇을 켜면 되는지, 켤 수 없으면 왜인지 말한다. */
 export function jobsUnavailableMessage(kind: JobSurfaceKind, t?: SurfaceTopology): string {

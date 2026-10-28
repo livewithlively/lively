@@ -230,20 +230,25 @@ async function jobPolicy(): Promise<{ memory_max_mb: number }> {
   return pol.effectiveAgentJobPolicy(async () => pol.resolveAgentJobPolicy(await store.agentJobPolicyRow()));
 }
 
-/** 래퍼 판정을 이만큼 기억한다 — 판마다 sudo 를 두드리지 않게. 설치를 고치면 10분 안에 따라온다. 확답(된다 · 안 된다)만 기억한다. */
-const CGSPAWN_PROBE_MS = 10 * 60_000;
+/** 래퍼 판정을 기억하는 동안 — 된다는 10분(판마다 sudo 를 두드리지 않게), 못 쓴다는 30초(관리자가 sudoers 를 고치면 곧 따라오게 — 그동안
+ *  작업이 «다시 해도 안 된다» 로 끝나므로 오래 두지 않는다). 끊긴 답은 기억하지 않는다. */
+const CGSPAWN_OK_MS = 10 * 60_000;
+const CGSPAWN_NO_MS = 30_000;
 let cgProbe: { at: number; result: CgroupCheck } | null = null;
+/** 묻고 있는 중인 판정 — 같은 때 여러 배차 · 관리자 보기가 물어도 sudo 는 한 번만 띄운다(sudo 가 멎었을 때 프로세스가 쌓이지 않게). */
+let cgInflight: Promise<CgroupCheck> | null = null;
 
 /** `sudo -n -l <명령>` 의 끝 — 0 = 허용(NOPASSWD) · 1 = 허용 없음 · 비밀번호가 필요 · sudo 없음, null = 모른다(시간 초과 · 못 띄움). */
 export type SudoListProbe = (cmd: string) => Promise<{ code: number | null; error?: string }>;
 
-const sudoListProbe: SudoListProbe = async (cmd) => {
+/** `sudo -n -l <명령>` 을 부르고 끝을 옮긴다. o 는 시험이 바꿔 끼운다(가짜 sudo · 짧은 시간). */
+export const sudoListProbe = async (cmd: string, o: { bin?: string; timeoutMs?: number } = {}): Promise<{ code: number | null; error?: string }> => {
   const { execFile } = await import("node:child_process");
   return new Promise((resolve) => {
-    execFile("sudo", ["-n", "-l", cmd], { timeout: 5000 }, (err) => {
+    execFile(o.bin ?? "sudo", ["-n", "-l", cmd], { timeout: o.timeoutMs ?? 5000 }, (err) => {
       if (!err) return resolve({ code: 0 });
       const e = err as NodeJS.ErrnoException & { killed?: boolean };
-      if (e.killed) return resolve({ code: null, error: "sudo 가 5초 안에 답하지 않았습니다" });
+      if (e.killed) return resolve({ code: null, error: "sudo 가 시간 안에 답하지 않았습니다" });
       if (typeof e.code === "number") return resolve({ code: e.code });
       if (e.code === "ENOENT") return resolve({ code: 1 });
       resolve({ code: null, error: String(e.message ?? e) });
@@ -255,24 +260,29 @@ const sudoListProbe: SudoListProbe = async (cmd) => {
  * box-cgspawn 을 지금 쓸 수 있나 — 래퍼가 있고(terminal-isolation.cgroupInfraReady — 격리 켜짐 · 리눅스 · 설치), 게이트웨이 계정이 그것을
  *  비밀번호 없이 sudo 로 부를 수 있다. 래퍼 파일만 보고 고르면 sudoers 줄이 빠진 박스에서 판이 «비밀번호가 필요하다» 로 곧바로 죽는다 — 그 작업은
  *  시작 상한(180초)에 이유 없이 끝난다. `sudo -n -l <래퍼>` 는 무엇도 실행하지 않는다. 끝이 0 · 1 이 아니면(시간 초과 등) 모른다 — 기억하지
- *  않고 일시 실패로 돌려 다음 띄우기에 다시 묻는다(격리 리뷰 — 한 번 끊긴 것을 10분 동안 «못 쓴다» 로 두지 않게). o 는 시험이 바꿔 끼운다.
+ *  않고 일시 실패로 돌려 다음 띄우기에 다시 묻는다(격리 리뷰 — 한 번 끊긴 것을 오래 «못 쓴다» 로 두지 않게). o 는 시험이 바꿔 끼운다.
  */
 export async function cgspawnCheck(o: { infraReady?: () => boolean; wrapper?: string; probe?: SudoListProbe; now?: () => number } = {}): Promise<CgroupCheck> {
   const iso = await import("../terminal/terminal-isolation.js");
   const wrapper = o.wrapper ?? iso.BOX_CGSPAWN;
   if (!(o.infraReady ?? iso.cgroupInfraReady)()) return { ok: false, transient: false, why: `cgroup 래퍼(${wrapper})가 이 박스에 없습니다` };
   const now = (o.now ?? Date.now)();
-  if (cgProbe && now - cgProbe.at < CGSPAWN_PROBE_MS) return cgProbe.result;
-  const r = await (o.probe ?? sudoListProbe)(wrapper);
-  if (r.code !== 0 && r.code !== 1) return { ok: false, transient: true, why: r.error ?? `sudo 가 알 수 없는 끝(${r.code})을 냈습니다` };
-  const result: CgroupCheck = r.code === 0 ? { ok: true }
-    : { ok: false, transient: false, why: `게이트웨이 계정이 cgroup 래퍼(${wrapper})를 비밀번호 없이 sudo 로 쓸 수 없습니다` };
-  cgProbe = { at: now, result };
-  return result;
+  if (cgProbe && now - cgProbe.at < (cgProbe.result.ok ? CGSPAWN_OK_MS : CGSPAWN_NO_MS)) return cgProbe.result;
+  if (cgInflight) return cgInflight;
+  cgInflight = (async (): Promise<CgroupCheck> => {
+    const r = await (o.probe ?? sudoListProbe)(wrapper);
+    if (r.code !== 0 && r.code !== 1) return { ok: false, transient: true, why: r.error ?? `sudo 가 알 수 없는 끝(${r.code})을 냈습니다` };
+    const result: CgroupCheck = r.code === 0 ? { ok: true }
+      : { ok: false, transient: false, why: `게이트웨이 계정이 cgroup 래퍼(${wrapper})를 비밀번호 없이 sudo 로 쓸 수 없습니다` };
+    cgProbe = { at: now, result };
+    return result;
+  })().catch((e): CgroupCheck => ({ ok: false, transient: true, why: String((e as Error)?.message ?? e) }))
+    .finally(() => { cgInflight = null; });
+  return cgInflight;
 }
 
 /** 시험 전용 — 기억한 래퍼 판정 · 게이트웨이 계정 경고를 잊는다. */
-export function resetHostProbesForTest(): void { cgProbe = null; warnedGatewayAccount = false; }
+export function resetHostProbesForTest(): void { cgProbe = null; cgInflight = null; warnedGatewayAccount = false; }
 
 /** 박스 위 판이 어느 계정으로 도나 — 격리 박스면 구성원 OS 계정(못 만들면 띄우지 않는다), 아니면 게이트웨이 계정(사람 세션과 같은 판정). */
 export async function hostRunsAs(): Promise<"member" | "gateway"> {
@@ -280,13 +290,13 @@ export async function hostRunsAs(): Promise<"member" | "gateway"> {
   return iso.isolationInfraReady() ? "member" : "gateway";
 }
 
-/** 관리자에게 보일 박스 위 메모리 상한 상태 — 걸리나와 그 이유(agent_job_limits surface.memory_cap). 띄우기와 같은 판정(머리말 ⑤). */
-export async function hostMemoryCapStatus(memoryMaxMb: number): Promise<{ enforced: boolean; note: string }> {
+/** 관리자에게 보일 박스 위 메모리 상한 상태 — 걸리나와 그 이유(agent_job_limits surface.memory_cap). 띄우기와 같은 판정(머리말 ⑤). o 는 시험이 바꿔 끼운다. */
+export async function hostMemoryCapStatus(memoryMaxMb: number, o: { runsAs?: () => Promise<"member" | "gateway">; check?: () => Promise<CgroupCheck> } = {}): Promise<{ enforced: boolean; note: string }> {
   if (!jobMemoryLimit(memoryMaxMb)) return { enforced: false, note: "memory_max_mb 가 0 이라 작업 메모리 상한 없이 돕니다" };
-  if ((await hostRunsAs()) === "gateway") {
+  if ((await (o.runsAs ?? hostRunsAs)()) === "gateway") {
     return { enforced: false, note: "이 박스는 구성원 격리(OS 계정)가 꺼져 있어 작업이 게이트웨이 계정으로 돌고 상한을 걸 자리가 없습니다(사람 세션도 같다)" };
   }
-  const c = await cgspawnCheck();
+  const c = await (o.check ?? cgspawnCheck)();
   if (c.ok) return { enforced: true, note: "구성원 OS 계정 판마다 cgroup MemoryMax 로 겁니다(넘으면 그 판 안에서 하네스가 먼저 끊깁니다)" };
   return { enforced: false, note: c.transient
     ? `상한을 걸 수 있는지 지금 확인하지 못했습니다(${c.why}) — 그동안 작업은 일시 실패로 다시 시도합니다`

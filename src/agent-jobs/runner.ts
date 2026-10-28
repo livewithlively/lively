@@ -20,6 +20,8 @@
 
 /** 컨테이너 안에서 게이트웨이에 닿는 주소(세션 루프백 — tenant-image/session-loopback.cjs 가 127.0.0.1·::1 둘 다 듣는다). */
 export const RUNNER_GATEWAY = { host: "127.0.0.1", port: 8080 } as const;
+/** 같은 자리의 주소 — MCP(/mcp) · LLM 프록시(/api/llm/anthropic)가 이 아래다(#5082 — 박스 위 판은 launch-host.hostGateway 의 그 박스 포트). */
+export const RUNNER_GATEWAY_URL = `http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}`;
 /** 하네스 인자 안에서 «판이 만든 MCP 설정 파일 경로» 로 바꿔 넣을 자리표. */
 export const MCP_CONFIG_PLACEHOLDER = "{{LVLY_MCP_CONFIG}}";
 /** env 값 자리표 — 판이 이 작업만의 빈 설정 폴더를 만들어 바꿔 넣는다(#4488 API 키 실행 · ai-runs/service.CONFIG_DIR_PLACEHOLDER 와 같은 글자). */

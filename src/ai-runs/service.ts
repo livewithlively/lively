@@ -16,7 +16,7 @@ import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
-import { RUNNER_GATEWAY } from "../agent-jobs/runner.js";
+import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
@@ -92,7 +92,7 @@ export const PROXY_TOKEN_PREFIX = "lvai_";
 /** 판이 보는 게이트웨이 아래 우리 프록시 주소 — Claude Code 의 ANTHROPIC_BASE_URL(routes.LLM_PROXY_PREFIX 와 같은 자리). */
 export const proxyBaseAt = (gateway: string): string => `${gateway}/api/llm/anthropic`;
 /** 작업 컨테이너 안에서 우리 프록시로 가는 주소(세션 루프백 → 게이트웨이 · runner.RUNNER_GATEWAY 와 한 자리). */
-export const PROXY_BASE_IN_CONTAINER = proxyBaseAt(`http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}`);
+export const PROXY_BASE_IN_CONTAINER = proxyBaseAt(RUNNER_GATEWAY_URL);
 /** 판이 빈 설정 폴더를 만들어 바꿔 넣는 자리표(agent-jobs/runner.ts) — 멤버 홈의 Claude 로그인을 읽지 않게. */
 export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
 const memberOf = (u: LivelyUser | undefined): string => String(u?.userId || "");
@@ -453,7 +453,7 @@ export async function sweepAiRuns(d: AiRunDeps): Promise<{ synced: number; stale
  */
 export async function bootEnvForJob(
   job: Pick<AgentJobRow, "id" | "account_kind">, d: AiRunDeps,
-  at: { gateway: string; workspace: string | null } = { gateway: `http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}`, workspace: null },
+  at: { gateway: string; workspace: string | null } = { gateway: RUNNER_GATEWAY_URL, workspace: null },
 ): Promise<Record<string, string>> {
   if (job.account_kind !== "api_key") return {};
   const run = await d.store.getAiRunByJob(job.id);

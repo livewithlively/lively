@@ -487,6 +487,7 @@ function startBackgroundSweeps(): void {
   //  정의와 주기는 그 표의 것을 그대로 쓴다(두 벌이면 한쪽만 고쳐진다 · 주기 조정 env LIVELY_SWEEP_MS_<KEY> 도 같다). 작업을 안 띄우는 박스에선
   //  열린 행이 없어 조회 한 번이다. 주기가 1분보다 길면(보존 정리 6시간) 부팅 2분 반 뒤 1회를 따로 둔다 — 재기동이 주기보다 잦은 박스에서도 돌게(위 아웃박스와 같은 까닭).
   //  ⓘ 앱 백그라운드 작업(app-job-*)은 Lambda 함수 전용이라 싣지 않는다(셀프호스트 앱 서버 #4487 의 몫).
+  //  ⚠ 동적 import 다 — 그 모듈이 이 파일의 requestScopedTenancy 를 가져다 쓴다(정적으로 바꾸면 순환이 된다).
   void import("../sessions/outbox-request-sweep.js").then((m) => {
     for (const job of m.SWEEP_JOBS.filter((j) => j.housekeeping)) {
       const run = () => perTenant(job.key, job.run);
