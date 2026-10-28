@@ -1,7 +1,7 @@
 // 멤버 비활성 전이 → 앱 발자국 회수(#1780 v2 §7-1) — 사양 H5. deps 주입으로 부작용을 관측한다(무엇이 실제로 불렸나).
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { reclaimMemberAppFootprint, type ReclaimDeps, type ReclaimSessionRow } from "./member-deactivation.js";
+import { defaultReclaimDeps, reclaimMemberAppFootprint, type ReclaimDeps, type ReclaimSessionRow } from "./member-deactivation.js";
 
 function fakes(rows: ReclaimSessionRow[], opts?: { failCentral?: string[] }) {
   const calls = { revoke: [] as string[], workers: [] as string[], central: [] as string[], node: [] as string[], deleted: [] as string[], list: [] as string[] };
@@ -55,6 +55,8 @@ test("#5081 공용 시트 지정도 지운다 · 지운 줄이 있으면 결과�
   assert.deepEqual(failing.calls.revoke, ["seat"]);
   assert.ok(!("service_seat_dropped" in rf));
   assert.deepEqual(calls.central, ["s-app", "s-app"], "지정을 지운 회수 · 지울 줄이 없던 회수 모두 앱 세션을 걷는다");
+  //  배선 — 부팅이 거는 기본 묶음(defaultReclaimDeps)에 지정 지우기가 걸려 있다(빠지면 비활성 · 삭제 뒤에도 두 동의가 남아 다시 활성화 때 되살아난다).
+  assert.equal(typeof defaultReclaimDeps().dropServiceSeat, "function", "기본 묶음에 dropServiceSeat");
 });
 
 test("앱 세션 0 → grant 만 회수, kill 0회(경계)", async () => {

@@ -273,7 +273,12 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     model: model ?? (executor === "proxy" ? settings.default_model ?? DEFAULT_MODEL : null), label, prompt, systemPrompt: system, schema,
     status: executor === "proxy" ? "running" : "queued", sharedSeat,
   };
-  const row = await d.store.insertAiRun(n);
+  const row = await d.store.insertAiRun(n).catch((e) => {
+    //  #5081 롤 창 — 새 게이트웨이가 공용 DB 마이그레이션보다 먼저 받는 몇 분 동안 공용 시트 실행은 «없는 칸»(42703)으로 실패한다
+    //   (store.RUN_SHARED_SEAT_COL 머리말). 막힌 게 아니라 아직 준비 중이니 다시 보내라고 말한다.
+    if (sharedSeat && (e as { code?: string })?.code === "42703") throw new HttpError(503, "공용 시트 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요");
+    throw e;
+  });
   logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor }, "[ai-run] 접수");
 
   if (executor === "proxy") {

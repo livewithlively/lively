@@ -398,7 +398,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   const tgOff = await targetsFor(appUser("carol", "crm"), {}, off.d, {});
   assert.equal((tgOff.account as { available: boolean }).available, false); assert.match(String((tgOff.account as { reason: string }).reason), /활성 구성원/);
   //  B17 보기 — 공용 시트로 돈 실행은 시트 계정(구독 주인)의 것이 아니다: 하나 보기 · 목록 · 취소 모두 남(404 · 안 뜸) · 물은 사람은 지시까지 본다.
-  //   지정을 거둔 뒤에도 그대로다(표시는 작업마다 — 지금 지정 상태로 가르지 않는다).
+  //   지정을 거둔 뒤에도 그대로다(표시는 실행마다 — 실행 행의 shared_seat · 지금 지정 상태로 가르지 않는다).
   const view = world({ settings: seatOn, key: null });
   const vr = await submitRun({ prompt: "앨리스의 비밀 질문" }, appUser("alice", "crm"), { source: "app-front" }, view.d);
   await fails(getRunFor(Number(vr.id), member("seat"), view.d), 404);
@@ -418,6 +418,9 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   assert.equal(adminRows.find((r) => r.id === vr.id)?.prompt_preview, null, "관리자가 된 시트 계정의 목록에 남의 지시 앞머리가 없다");
   assert.equal(adminRows.find((r) => r.id === seatOwn.id)?.prompt_preview, "시트 본인 질문");
   assert.ok(!("prompt" in (await getRunFor(Number(vr.id), seatAdmin, view.d))), "하나 보기도 상태만(관리자 규칙)");
+  //  취소는 관리자 규칙(app_ai_run_cancel — 보낸 사람과 관리자)대로 된다 — 공용 시트였던 계정도 관리자가 되면 관리자다(지시 · 답은 여전히 안 보인다).
+  await cancelRunFor(Number(vr.id), seatAdmin, view.d);
+  assert.ok(view.w.canceled.includes(Number(vr.job_id)), "관리자는 누구의 실행이든 끊는다");
   //  표시는 실행 행에 있다 — 작업 행이 없는 실행(접수 중 대기열이 차 실패)도, 작업 행이 지워진 실행(보존 정리)도 시트 계정의 것이 아니다(격리 리뷰).
   const full = world({ settings: seatOn, key: null, submitThrows: new HttpError(429, "작업 대기열이 찼습니다") });
   await fails(submitRun({ prompt: "앨리스의 질문(대기열 참)" }, appUser("alice", "crm"), { source: "app-front" }, full.d), 429);
@@ -432,8 +435,14 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   pruned.w.jobs.clear(); pruned.w.jobShared.clear();   // 보존 정리가 작업 행을 지웠다
   await fails(getRunFor(Number(pr.id), member("seat"), pruned.d), 404);
   assert.deepEqual((await listRunsFor({ app_id: "crm" }, member("seat"), pruned.d)).runs, [], "작업 행이 지워진 공용 시트 실행도 시트 계정의 목록에 없다");
-  //  공용 시트가 아닌 구독(초대받은 사람이 주인 세션에서 보냄)의 실행 표시는 false — 주인 가지(종전 #4488)가 그대로다(S9b 등).
-  assert.equal(view.w.runShared.get(Number(seatOwn.id)), false, "시트 본인 실행 · 지정 거둔 뒤 실행은 표시 없음");
+  //  지정을 거둔 뒤 시트 계정이 제 구독으로 보낸 실행은 표시가 없다 — 보통 구독 실행이다(초대받은 사람 · 구독 주인 가지는 위 구독 선 시험이 잰다).
+  assert.equal(view.w.runShared.get(Number(seatOwn.id)), false, "지정 거둔 뒤 시트 본인 실행은 표시 없음");
+  //  롤 창 — 새 게이트웨이가 마이그레이션보다 먼저 받는 몇 분 동안 공용 시트 실행 접수는 «없는 칸»(42703)으로 실패한다 → 503(잠시 뒤 다시).
+  const roll = world({ settings: seatOn, key: null });
+  const realInsert = roll.d.store.insertAiRun;
+  roll.d.store.insertAiRun = async (n) => { if (n.sharedSeat) throw Object.assign(new Error('column "shared_seat" of relation "org_app_ai_run" does not exist'), { code: "42703" }); return realInsert(n); };
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, roll.d), 503, /잠시 뒤 다시/);
+  assert.equal(roll.w.submitted.length, 0, "작업을 보내지 않는다");
   ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 높은 권한/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets · 시트 계정은 남의 실행을 못 봄");
 }
 

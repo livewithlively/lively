@@ -298,19 +298,43 @@ try {
     !!k1.r && !!k2.r && acct1 - acct0 === 1 && notOn.status === 403 && !!k3.r && byMember.status === 403 && acct2 - acct1 === 1 && dflt?.member === SEAT,
     JSON.stringify({ k: [!!k1.r, !!k2.r], audits: [acct1 - acct0, acct2 - acct1], notOn: notOn.status, k3: k3.msg, byMember: byMember.status, dflt }));
 
+  //  T15b 잠금 안 재확인 — 처리기가 잠금 밖에서 «켜진 공용 시트» 로 본 뒤, 잠금을 기다리는 사이 본인 동의가 풀리면 걸지 않는다(409 · 설정 그대로).
+  //   다른 연결이 행을 쥐고 있는 동안 처리기를 시작하고(잠금 밖 판정은 지나간다), 그 연결이 동의를 지운 채 커밋하면 처리기가 이어진다.
+  await tryAcct({ kind: "api_key" }, ADM);   // 기본 실행 계정을 시트가 아닌 것으로 되돌려 둔다
+  const holder = await itemsPool.connect();
+  let raced = null;
+  try {
+    await holder.query("BEGIN");
+    const held = (await holder.query(`SELECT app_ai_account FROM org_runtime_config WHERE id=1 FOR UPDATE`)).rows[0].app_ai_account;
+    const pending = tryAcct({ kind: "subscription", member: SEAT }, ADM);
+    await sleepMs(700);
+    const withdrawn = { ...held, service_seats: { ...(held.service_seats ?? {}) } };
+    delete withdrawn.service_seats[SEAT];
+    await holder.query(`UPDATE org_runtime_config SET app_ai_account=$1::jsonb WHERE id=1`, [JSON.stringify(withdrawn)]);
+    await holder.query("COMMIT");
+    raced = await pending;
+  } catch (e) { await holder.query("ROLLBACK").catch(() => {}); throw e; } finally { holder.release(); }
+  const afterRace = await st.aiAccountRow();
+  chk("T15b 잠금을 기다리는 사이 지정이 풀리면 — 409 · 기본 실행 계정은 그대로(API 키)",
+    raced?.status === 409 && /그 사이 풀렸습니다/.test(raced?.msg ?? "") && afterRace.default?.kind === "api_key",
+    JSON.stringify({ status: raced?.status, msg: raced?.msg, dflt: afterRace.default }));
+  await tryIt({ member: SEAT, on: true }, ADM); await tryIt({ member: SEAT, on: true }, SEATU);   // T16 이 쓸 켜진 지정을 되돌린다
+
   // ── T16 처리기 단위 원자성 — 설정 칸 쓰기가 실패하면 처리기가 남긴 감사도 없다(감사를 따로 남기면 여기서 늘어난다) ──
   //  쓰기를 일부러 막는다(검사 제약 — 이 시험 동안만). 지정 도구 · 실행 계정 설정 도구 둘 다.
   const seatAuditT16 = await audits("app_ai_service_seat"), acctAuditT16 = await audits("app_ai_account");
   const settingsT16 = JSON.stringify(await st.aiAccountRow());
   await itemsPool.query(`ALTER TABLE org_runtime_config ADD CONSTRAINT t5081_block CHECK (false) NOT VALID`);
-  let b1 = null, b2 = null;
+  let b1 = null, b2 = null, b3 = null;
   try {
     b1 = await tryIt({ member: SEAT, on: false }, ADM);
-    b2 = await tryAcct({ kind: "api_key" }, ADM);
+    b2 = await tryAcct({ kind: "none" }, ADM);   // 기본 실행 계정 지우기 — 지금 값(API 키)과 다르다(바뀐 것 없는 호출은 쓰지 않아 이 시험이 못 잰다)
+    try { await live.dropServiceSeatOf(SEAT); b3 = { ok: true }; } catch (e) { b3 = { msg: String(e?.message ?? e) }; }   // 비활성 회수도 같은 규칙
   } finally { await itemsPool.query(`ALTER TABLE org_runtime_config DROP CONSTRAINT IF EXISTS t5081_block`); }
-  chk("T16 쓰기가 막히면 — 두 처리기 모두 실패 · 감사 0 · 설정 그대로",
-    !b1?.r && !b2?.r && (await audits("app_ai_service_seat")) === seatAuditT16 && (await audits("app_ai_account")) === acctAuditT16 && JSON.stringify(await st.aiAccountRow()) === settingsT16,
-    JSON.stringify({ b1: b1?.msg, b2: b2?.msg, seat: (await audits("app_ai_service_seat")) - seatAuditT16, acct: (await audits("app_ai_account")) - acctAuditT16 }));
+  chk("T16 쓰기가 막히면 — 두 처리기 · 비활성 회수 모두 실패 · 감사 0 · 설정 그대로(지정 줄도 남음)",
+    !b1?.r && !b2?.r && !b3?.ok && (await audits("app_ai_service_seat")) === seatAuditT16 && (await audits("app_ai_account")) === acctAuditT16
+      && JSON.stringify(await st.aiAccountRow()) === settingsT16 && !!(await st.aiAccountRow()).service_seats?.[SEAT],
+    JSON.stringify({ b1: b1?.msg, b2: b2?.msg, b3: b3?.msg, seat: (await audits("app_ai_service_seat")) - seatAuditT16, acct: (await audits("app_ai_account")) - acctAuditT16 }));
 } catch (e) {
   bad("예외", String((e && e.stack) || e));
 } finally {
