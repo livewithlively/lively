@@ -14,6 +14,9 @@
 //     (종전엔 공개한 앱을 고치던 것이 만들던 앱 카드로 서서, 두 번 눌러 세션만 지웠다)
 //  T16 만든 앱의 이름을 단 옛 만들기 세션(«"주간 안건" 앱 제작» — 만들기 세션 기록이 다른 세션으로 옮겨 간 것) · 고치기 세션(«"메모" 앱 고치기») 은 카드가 안 선다
 //      — 「고치기」 를 다시 누를 때마다 앞의 세션이 같은 이름의 만들던 앱으로 하나 더 섰다(원준 2026-10-28 «회의록 어플이 두 개가 됐어»)
+//  T19 서버가 그 앱의 예전 만들기 · 고치기 세션으로 아는 세션(past_build_sessions) — 이름이 달라도(앱 이름을 바꿈) 카드가 안 선다(#5089 세션 → 앱은 서버 기록)
+//  T20 만드는 중인 앱 하나에 카드 하나 — 그 앱의 지금 세션 · 예전 세션이 둘 다 «"견적서" 앱 제작» 이어도
+//  T21 같은 앱을 옛 세션에서 만들던 이 브라우저의 기록이 있어도 하나(지금 세션 것)
 //  T7 두 번인데 discard 가 500 — 카드 남음 · 세션 완전 삭제 0건 · 단추가 다시 눌리는 「지우기」 로
 //  T8 오른쪽 패널 「모두 지우기」(기존) — 그대로 두 번 눌러 지운다
 //  T9 지우는 사이 목록이 다시 그려져 새 카드로 또 두 번 — 앱 지우기 · 세션 지우기는 한 번씩만(격리 리뷰)
@@ -72,6 +75,8 @@ window.fetch = async (u, init) => {
     return j({ apps: [app("notes", "회의록", "me"), app("shared1", "주간 안건", "all"), app("mine2", "출장비", "me"), app("mine3", "명함", "me"),
       { ...app("mine4", "출장 정산", "me"), manifest: { ui: { pages: [{}] }, studio: { put: true } } },   // T17 나만 보는 앱인데 ⑤ 넣기를 지났다(마무리 표시)
       { ...app("other1", "출근부", "all"), installed_by: "sangmin-yoon", made_by: "sangmin-yoon", is_owner: false },   // T18 남이 만든 공개 앱
+      { ...app("mine5", "회의 기록", "all"), manifest: { ui: { pages: [{}] }, studio: { put: true } }, build_session: "box-n", past_build_sessions: ["box-o"] },   // T19 이름을 바꾼 만든 앱 · 예전 만들기 세션 box-o
+      { ...app("mine6", "견적서", "me"), build_session: "box-p", past_build_sessions: ["box-q"] },   // T20 · T21 만드는 중인 앱 · 지금 세션 box-p · 예전 세션 box-q
     ].filter((a) => !window.__gone.has(a.id)) });
   }
   return j({});
@@ -97,13 +102,16 @@ async function PAGE_MAIN() {
     rec("box-g", "없는 세션", "", "plan", 8),         // 서버에 그 세션이 이미 없다
     { ...rec("box-old", "사파리에 남은 기록", "notes", "fix", 0), at: NOW - 10 * 60_000 },   // 다른 브라우저에서 지워 서버에 세션이 없다
     { ...rec("box-y", "출장 정산", "mine4", "fix", 9), mode: "edit" },   // T17 ⑤ 를 지난(마무리 표시) 나만 보는 앱을 고치던 기록
+    rec("box-r", "견적서", "mine6", "fix", 10),   // T21 같은 앱을 옛 세션에서 만들던 이 브라우저의 기록
   ]));
   //  셸의 세션 목록 — 서버처럼 휴지통에 넣은 세션엔 trashedAt 이 실린다(sess-merge). 지난 세션(restorable)은 그대로 실린다.
   const row = (id, label, i, trashedAt = null) => ({ id, label, projectId: null, owned: true, lastSeen: NOW - (20 + i) * 1000, restorable: true, trashedAt, logId: "uuid-" + id, logNode: "", raw: { claudeSessionId: "uuid-" + id } });
   const SESS = [row("box-s", '"메모" 앱 제작', 1), row("box-u", '"할 일" 앱 제작', 2, "2026-10-28T00:00:00Z"), row("box-t", '"다른 데서 지운 것" 앱 제작', 3, "2026-10-28T00:00:00Z"),
     row("box-v", '"주간 안건" 앱 제작', 4),   // T16 만든(공개한) 앱의 이름을 단 옛 만들기 세션
     row("box-w", '"메모" 앱 고치기', 5),       // T16 고치기 세션
-    row("box-x", '"출근부" 앱 제작', 6)];      // T18 남이 만든 공개 앱과 같은 이름의 내 새 만들기 — 선다
+    row("box-x", '"출근부" 앱 제작', 6),       // T18 남이 만든 공개 앱과 같은 이름의 내 새 만들기 — 선다
+    row("box-o", '"회의 메모" 앱 제작', 7),    // T19 이름을 바꾸기 전의 만들기 세션(서버가 예전 세션으로 안다)
+    row("box-p", '"견적서" 앱 제작', 8), row("box-q", '"견적서" 앱 제작', 9)];   // T20 같은 앱의 지금 세션 · 예전 세션
   //  완전 삭제한 세션은 서버 목록에서 빠진다(session-trash purged).
   const env = { projects: () => [], sessions: () => SESS.filter((s) => !window.__purged.has(s.id)), sessionsReady: () => true, redrawSide: () => {}, setRoute: () => {} };
   history.replaceState(null, "", "#/builder");
@@ -158,6 +166,8 @@ async function PAGE_MAIN() {
   R.t16 = { stale: count("주간 안건"), edit: count("메모") };
   R.t17 = { draft: count("출장 정산"), mine: cards(mineSec).includes("출장 정산") };
   R.t18 = count("출근부");
+  R.t19 = { stale: count("회의 메모"), mine: cards(mineSec).includes("회의 기록") };
+  R.t20 = count("견적서");
   // T7 — discard 가 실패
   window.__failDiscard = true;
   R.t7 = await twice("출장비");
@@ -253,6 +263,8 @@ same(R.t6, { draft: 0, mine: true }, "T6 공개한(만든) 앱의 기록은 만�
 same(R.t16, { stale: 0, edit: 1 }, "T16 만든 앱 이름의 옛 만들기 세션 · 고치기 세션은 카드가 안 선다(메모는 멈춘 제작 세션 하나만)");
 same(R.t17, { draft: 0, mine: true }, "T17 나만 보는 앱이라도 ⑤ 를 지났으면(마무리 표시) 고치던 기록은 카드가 아니다 — 「내가 만든 앱」 에");
 same(R.t18, 1, "T18 남이 만든 공개 앱과 같은 이름의 내 새 만들기 세션은 선다(만든 앱 판정은 내 앱만)");
+same(R.t19, { stale: 0, mine: true }, "T19 서버가 그 앱의 예전 세션으로 아는 세션은 이름이 달라도(앱 이름을 바꿈) 카드가 안 선다 — 그 앱은 「내가 만든 앱」 에");
+same(R.t20, 1, "T20 · T21 만드는 중인 앱 하나에 카드 하나 — 지금 세션 · 예전 세션 · 옛 세션의 이 브라우저 기록이 있어도");
 same(R.t7 && [R.t7.writes, R.t7.gone, R.t7.btn], [[DISCARD("mine2")], false, { text: "지우기", disabled: false }], "T7 앱을 못 지우면 — 카드 남음 · 세션 그대로 · 다시 누를 수 있다");
 check(R.t8 && R.t8.hide === 0 && !/목록에서 빼기/.test(R.t8.mini || "") && /늘 보여요/.test(R.t8.mini || "") && /완전히 지워요/.test(R.t8.mini || "") && !/휴지통으로 옮겨요/.test(R.t8.mini || ""), "T8 오른쪽 패널에도 「목록에서 빼기」 가 없다 · 지우기 전까지 늘 보인다고 말한다", R.t8);
 same(R.t8 && [R.t8.panel, R.t8.armed, R.t8.writes, R.t8.gone], [true, "한 번 더 누르면 지워져요. 되돌릴 수 없어요.", [DISCARD("mine2"), DEL("box-d")], true], "T8 오른쪽 「모두 지우기」 도 그대로 두 번 눌러 지운다");

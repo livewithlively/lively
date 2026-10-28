@@ -15,7 +15,7 @@ import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
 import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
-import { builderModelFailed, builderModelNow, deletedSids, listAllApps, refreshBuilderModel, type BApp, type BuilderEnv, type Draft } from './builder-model.js';   // 목록 재료 — 앱빌더 사이드바와 같은 한 벌
+import { appOfSession, builderModelFailed, builderModelNow, deletedSids, listAllApps, refreshBuilderModel, type BApp, type BuilderEnv, type Draft } from './builder-model.js';   // 목록 재료 — 앱빌더 사이드바와 같은 한 벌
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
 import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioRecs, studioUiOnly } from './app-studio.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
@@ -173,7 +173,7 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
     void listAllApps().then((apps) => {
       if (v.studioKey !== key) return;
       //  #4667 그 세션이 만드는 앱은 서버 기록(build_session)으로 — 예약만 된 빈 앱이면 앱 없이(②부터) 연다.
-      const a = apps.find((x) => x.buildSession === where.id) || null;
+      const a = appOfSession(apps, where.id);   // #5089 예전에 그 앱을 고친 세션이어도 그 앱으로
       const what = s ? builderSessionWhat(s.label) : '';
       if (!what && !a) { toast('그 세션의 기록을 찾을 수 없어 새로 만들어요'); location.hash = builderRoute('new'); return; }
       //  이름은 사람이 정한 것 — 세션 이름 «"이름" 앱 제작» 에 박혀 있다(다른 브라우저에서 이어도 같은 이름 · 원준 2026-10-15). 없으면 첫 판의 앱 이름.

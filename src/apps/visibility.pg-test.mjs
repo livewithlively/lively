@@ -25,6 +25,7 @@
 //      그 밖의 구성원 403 · 못 보는 앱 404 · 빈 앱 409 · 빈 행이면 막힘 · 다른 연결이 표를 쥐면 짧게 기다리고 «다 못 봄» · 미리 보기 == 실제 공개 ·
 //      전후 카탈로그 · 데이터 · 앱 행 같음 · 판 번호(되돌려 공개) · 없는 판 · 남의 공개 전 판 404 · 전체 시간 상한(E9c) · 설치 락이 바쁘면 짧게(E17) ·
 //      정리할 표 세기도 짧게(E18) · 선언에서만 뺀 칸은 «알아 둘 것» 만(E15b) · 되돌려 공개의 실제 결과 == 미리 본 것(E16)
+//  B26 #5089 세션 → 앱 — 「고치기」 로 만들기 세션이 옮겨 가도 앞의 세션은 그 앱의 것(past_build_sessions · 역조회 · 예전 세션 다시 시작 = 같은 앱 · 최근 100개 · 옛 줄 채우기)
 //  B24 #4482 /_lively/* 는 주소의 판 — 초안 주인도 공개 주소면 공개 판의 표 · 초안 주소면 초안의 표 · 다리는 사람의 판 · 남의 초안 주소 404 ·
 //      동의 없음 code consent_required · 빈도는 사람마다
 //  B25 #4744 다리 · 앱 주소로 부른 도구는 **그 사람의 공개범위**로 읽고 쓴다 — 잠긴 지식은 그 지식의 사람만(단건 · grep · 저장) · 관리자도 같다 ·
@@ -55,6 +56,7 @@ const { appStoreCapabilities } = await import(`${D}/capabilities/app-store.js`);
 const { appToolCallCapabilities } = await import(`${D}/capabilities/app-tool-call.js`);
 const { reclaimMemberAppFootprint, defaultReclaimDeps } = await import(`${D}/apps/member-deactivation.js`);
 const { itemsPool } = await import(`${D}/db/client.js`);
+const store = await import(`${D}/org/store/apps.js`);   // B26 만들기 세션 옮기기
 const all = [...appCapabilities, ...sessionAppsCapabilities, ...appStoreCapabilities, ...appToolCallCapabilities];
 const cap = (n) => { const c = all.find((x) => x.name === n); if (!c) throw new Error(`능력 없음: ${n}`); return c; };
 const call = (n, input, user, ctx = { source: "mcp" }) => cap(n).handler(input, user, ctx);
@@ -959,6 +961,52 @@ try {
     chk("B25 쓰기 — 잠긴 지식에 밥이 저장하면 다리 «없음» · 앱 주소 404 · 본문 그대로 · 그 지식의 사람(앨리스)의 저장은 된다",
       w.bobBridge.includes(NOT_FOUND) && w.bobAddr === 404 && w.afterBob === before && w.alice === "OK" && w.afterAlice === `${TOK} b25 alice`,
       JSON.stringify({ before, ...w }));
+  }
+
+  // ── B26 #5089 세션 → 앱 — build_session 이 새 세션으로 옮겨 가도 앞의 세션은 그 앱의 것(past_build_sessions) ──
+  {
+    for (const sid of ["box-alice-26a", "box-alice-26b"]) await q(`INSERT INTO org_session_state(id, owner, label) VALUES($1,'pgt-alice',$1)`, [sid]);
+    const A = (await call("app_build_start", { session_id: "box-alice-26a", title: "회의록" }, alice)).app_id;
+    const a0 = await row(A);
+    chk("B26a 예약 — 예전 세션 없음(빈 목록)", Array.isArray(a0.past_build_sessions) && a0.past_build_sessions.length === 0, JSON.stringify(a0.past_build_sessions));
+    await call("app_build_start", { session_id: "box-alice-26b", app_id: A }, alice);
+    const a1 = await row(A);
+    const byOld = await listed(alice, { session: "box-alice-26a", include_empty: true });
+    const inList = (await listed(alice, { include_empty: true })).find((x) => x.id === A);
+    chk("B26b 「고치기」 로 새 세션에 이으면 앞의 세션이 예전 세션으로 — 역조회 · 목록(책임자) 에 실린다 · 남의 역조회엔 없다",
+      a1.build_session === "box-alice-26b" && a1.past_build_sessions.join() === "box-alice-26a"
+        && byOld.length === 1 && byOld[0].id === A && inList?.past_build_sessions?.join() === "box-alice-26a"
+        && (await listed(bob, { session: "box-alice-26a" })).length === 0,
+      JSON.stringify({ a1: [a1.build_session, a1.past_build_sessions], byOld: byOld.map((x) => x.id), inList: inList?.past_build_sessions }));
+    const mineBefore = (await q(`SELECT count(*)::int n FROM org_app WHERE owner_member='pgt-alice'`))[0].n;
+    const back = await call("app_build_start", { session_id: "box-alice-26a" }, alice);
+    const a2 = await row(A);
+    const mineAfter = (await q(`SELECT count(*)::int n FROM org_app WHERE owner_member='pgt-alice'`))[0].n;
+    chk("B26c 예전 세션이 다시 시작하면 같은 앱 — 새 빈 앱을 예약하지 않고 그 세션을 다시 만들기 세션으로(앞의 것은 예전 세션으로 · 겹치지 않게)",
+      back.app_id === A && back.created === false && mineAfter === mineBefore && a2.build_session === "box-alice-26a" && a2.past_build_sessions.join() === "box-alice-26b",
+      JSON.stringify({ back, mineBefore, mineAfter, a2: [a2.build_session, a2.past_build_sessions] }));
+    await call("app_build_start", { session_id: "box-alice-26a", app_id: A }, alice);
+    const a3 = await row(A);
+    chk("B26d 같은 세션으로 다시 이으면 그대로", a3.build_session === "box-alice-26a" && a3.past_build_sessions.join() === "box-alice-26b", JSON.stringify(a3.past_build_sessions));
+    for (let i = 0; i < 105; i++) await store.setAppBuildSession(A, `box-alice-x${i}`);
+    const a4 = await row(A);
+    chk("B26e 예전 세션은 최근 100개만 — 가장 오래된 것부터 빠지고 차례는 옛것 → 새것",
+      a4.build_session === "box-alice-x104" && a4.past_build_sessions.length === 100
+        && a4.past_build_sessions[0] === "box-alice-x4" && a4.past_build_sessions[99] === "box-alice-x103" && !a4.past_build_sessions.includes("box-alice-26b"),
+      JSON.stringify({ n: a4.past_build_sessions.length, first: a4.past_build_sessions[0], last: a4.past_build_sessions[99] }));
+    //  옛 줄 채우기 — 칸이 생기기 전의 앱(NULL)은 감사 기록의 앞뒤 줄에 남은 build_session 으로 한 번 채운다(지금 세션은 빼고) · 다시 돌려도 그대로.
+    await q(`UPDATE org_app SET past_build_sessions = NULL WHERE id=$1`, [A]);
+    await q(`INSERT INTO org_content_audit(entity, entity_key, op, before, after) VALUES('org_app',$1,'update',$2::jsonb,$3::jsonb)`,
+      [A, JSON.stringify({ id: A, build_session: "box-alice-old1" }), JSON.stringify({ id: A, build_session: "box-alice-old2" })]);
+    await q(`INSERT INTO org_content_audit(entity, entity_key, op, before, after) VALUES('org_app','pgt-other-app','update',$1::jsonb,NULL)`, [JSON.stringify({ build_session: "box-alice-elsewhere" })]);
+    await initAllSchemas({ quiet: true });
+    const a5 = await row(A);
+    const want = ["box-alice-26a", "box-alice-old1", "box-alice-old2"].sort().join();   // 26a = 예약 때 감사 줄 · x104 = 지금 세션이라 빠진다
+    await initAllSchemas({ quiet: true });
+    const a6 = await row(A);
+    chk("B26f 옛 줄 채우기 — 감사 기록의 앞뒤 build_session(다른 앱 것 · 지금 세션 제외) · 다시 돌려도 그대로",
+      a5.past_build_sessions?.join() === want && a6.past_build_sessions?.join() === want,
+      JSON.stringify({ a5: a5.past_build_sessions, a6: a6.past_build_sessions, want }));
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e?.stack ?? e);

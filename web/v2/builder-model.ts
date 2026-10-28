@@ -29,6 +29,7 @@ export interface BApp {
   visibility: 'all' | 'me'; madeBy: string; ownerMember: string | null; origin: { id: string; title: string; madeBy: string } | null;
   view: 'installed' | 'published'; draft: { by: string; versionNo: number } | null; buildSession: string; isOwner: boolean; canPublish: boolean; canUnpublish: boolean;
   empty: boolean;   // 「만들기 시작」 이 예약만 하고 아직 첫 판이 없는 앱
+  pastSessions: string[];   // #5089 예전에 이 앱을 만들거나 고친 세션들(서버 past_build_sessions) — 그 세션은 이 앱의 것이다
   //  #4785 앱 폴더 — 원하는 상한 · 매니지드 쿼터 정비가 잰 쓰는 양과 그때 걸려 있던 상한 · 단계 · 바꿀 수 있나 · 거나(lib/app-folder-text).
   folder: FolderView;
 }
@@ -47,7 +48,7 @@ async function fetchApps(): Promise<BApp[] | null> {
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
       icon: appIconSpecOf(a.manifest),   // #4769
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
-      ...appStateOf(a), empty: a.empty === true,
+      ...appStateOf(a), empty: a.empty === true, pastSessions: Array.isArray(a.past_build_sessions) ? a.past_build_sessions.map(String) : [],
       folder: folderView(a.folder),
     }));
   } catch (_) { return null; }
@@ -85,9 +86,11 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   //   그 앱의 기록 · 고치기 세션은 「만들던 앱」 카드가 되지 않는다 — 종전엔 앱의 지금 만들기 세션(build_session) 하나만 끝난 것으로 봐서, 「고치기」 를
   //   다시 누를 때마다 앞의 고치기 세션이 「만들던 앱」 에 같은 이름의 앱으로 하나 더 섰다(원준 2026-10-28 «회의록 어플이 두 개가 됐어»).
   const doneApp = (id: string): boolean => { const a = id ? apps.find((x) => x.id === id) : null; return !!a && isDone(a); };
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r) && !doneApp(r.appId || r.draftId || '')).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
+  //  ★ 세션 → 앱은 서버 기록으로 본다(#5089): 지금 만들기 세션(build_session)이거나 예전에 그 앱을 만들거나 고친 세션(past_build_sessions)이면 그 앱의 것이다.
+  //   종전엔 지금 세션 하나만 알아서, 「고치기」 로 만들기 세션이 옮겨 간 앞의 세션을 이름만 보고 따로 세웠다.
+  const recApp = (r: { sid: string; appId: string; draftId?: string }): string => r.appId || r.draftId || appOfSession(apps, r.sid)?.id || '';
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r) && !doneApp(recApp(r))).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(recApp(r)), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: recApp(r) }));
   const seen = new Set(drafts.map((d) => d.sid));
-  const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  내가 만든 앱의 이름을 단 세션(«"회의록" 앱 제작») — 만들기 세션 기록이 다른 세션으로 옮겨 간 옛 세션이다. 그 앱은 이미 「내가 만든 앱」 에 있다.
   const doneTitles = new Set(apps.filter((a) => isDone(a) && (a.madeBy === m.id || a.ownerMember === m.id)).map((a) => a.title.trim()));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
@@ -105,18 +108,34 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   //  내 세션만(owned 는 서버 판정 — 없으면 옛 목록, 그때는 보인다). 남이 만들던 앱은 남의 것이다.
   //   휴지통에 버린 세션(홈 사이드바)은 만들던 앱이 아니다 — 지난 세션(멈춘 것)은 이어서 만들 수 있으니 그대로 선다. 앱빌더 「지우기」 는 완전 삭제라 목록에서 아예 빠진다.
   env.sessions().filter((s) => !s.task && !s.trashedAt && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
-    if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 다 만들어졌다 — 「내가 만든 앱」 에 선다
+    if (appOfSession(apps, s.id)) return;   // 어느 앱의 만들기 · 고치기 세션이다 — 카드는 그 앱이 정한다(다 만들었으면 「내가 만든 앱」 · 아니면 위 서버 묶음)
     if (!isBuildingSession(s.label, projName(s.projectId))) return;   // 고치기 세션(«"이름" 앱 고치기»)은 만든 앱을 고치는 것 — 만들던 앱이 아니다
     if (doneTitles.has(builderSessionName(s.label).trim())) return;   // 그 이름의 앱을 이미 다 만들었다(기록이 다른 세션으로 옮겨 간 옛 세션)
     const a = apps.find((x) => x.buildSession === s.id);
     drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
   });
+  //  앱 하나에 카드 하나 — 같은 앱을 가리키는 줄이 둘이면(옛 기기의 기록 + 지금 만들기 세션) 지금 만들기 세션 것, 그다음 최근 것만 남긴다.
+  const one = new Map<string, Draft>();
+  const cur = (d: Draft): number => { const a = apps.find((x) => x.id === d.serverApp); return a && a.buildSession === d.sid ? 1 : 0; };
+  for (const d of drafts) {
+    const k = d.serverApp || d.appId; if (!k) continue;
+    const had = one.get(k);
+    if (!had || cur(d) > cur(had) || (cur(d) === cur(had) && d.at > had.at)) one.set(k, d);
+  }
+  const keep = drafts.filter((d) => { const k = d.serverApp || d.appId; return !k || one.get(k) === d; });
+  drafts.length = 0; drafts.push(...keep);
   drafts.sort((a, b) => b.at - a.at);
   const draftAppIds = new Set(drafts.flatMap((d) => [d.appId, d.serverApp || '']).filter(Boolean));
   const ws = apps.filter((a) => !a.builtin && !a.empty);
   const mine = ws.filter((a) => !draftAppIds.has(a.id) && (a.madeBy === m.id || a.ownerMember === m.id));
   const team = ws.filter((a) => !mine.includes(a) && !draftAppIds.has(a.id));
   return { apps, me: m, drafts, mine, team, goneRecs };
+}
+
+/** 이 세션이 만들거나 고친 앱(#5089) — 지금 만들기 세션인 앱이 먼저, 없으면 예전에 그 세션이 만들거나 고친 앱. 없으면 null. */
+export function appOfSession(apps: ReadonlyArray<BApp>, sid: string): BApp | null {
+  if (!sid) return null;
+  return apps.find((a) => a.buildSession === sid) || apps.find((a) => (a.pastSessions || []).includes(sid)) || null;
 }
 
 // ── 받아 둔 것 ──

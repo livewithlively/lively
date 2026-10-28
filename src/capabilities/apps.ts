@@ -99,6 +99,8 @@ function stateFields(app: store.OrgApp, who: Viewer, view: AppView, origin: stor
     is_owner: owner,
     draft: draftPending && (app.draft_by === who.userId || owner || admin) ? { by: app.draft_by, version_no: app.current_version_no } : null,
     build_session: owner || admin ? app.build_session : null,
+    //  #5089 예전에 이 앱을 만들거나 고친 세션들 — 앱빌더가 그 세션을 「만들던 앱」 으로 따로 세우지 않게(세션 → 앱). 만들기 세션과 같은 사람에게만.
+    past_build_sessions: owner || admin ? (app.past_build_sessions ?? []) : [],
     empty: isEmptyDraftApp(app),
     can_publish: !isEmptyDraftApp(app) && (app.visibility === "me" || draftPending) && publishDenial(app, who, edit) === null,
     can_unpublish: app.visibility === "all" && !isBuiltinSource(app.source) && unpublishDenial(app, who) === null,
@@ -107,7 +109,7 @@ function stateFields(app: store.OrgApp, who: Viewer, view: AppView, origin: stor
 
 /** 응답에 실을 앱 한 줄 — 보는 판으로 갈아 끼우되 초안 표식·만들기 세션 같은 칸은 stateFields 가 정한 만큼만. */
 function appRow(installed: store.OrgApp, shown: store.OrgApp, who: Viewer, view: AppView, origin: store.OrgApp | null): Record<string, unknown> {
-  const { draft_by: _d, build_session: _b, ...rest } = shown;
+  const { draft_by: _d, build_session: _b, past_build_sessions: _p, ...rest } = shown;
   const edit = editDenial(installed, who, safeManifest(installed));
   return { ...rest, can_edit: edit === null, ...stateFields(installed, who, view, origin, edit) };
 }
@@ -118,8 +120,8 @@ const appsIndex: Capability = {
   title: "설치된 앱 목록",
   description: "이 워크스페이스의 앱 목록(id·제목·버전·상태·활성) — 보는 사람에게 보이는 판으로. 공개 앱은 모두에게, 나만 보는 앱(visibility 'me' — 공개 전)은 " +
     "책임자에게만 선다. 공개 앱에 다른 사람의 초안이 있으면 공개 판의 제목·매니페스트가 실린다(view 'published'). 칸: visibility · made_by(만든 사람) · " +
-    "owner_member(책임자 — null = 관리자) · origin(사본이면 원본) · published_version_no · draft(내 초안이면 그 판) · build_session(책임자에게만) · can_edit · can_publish. " +
-    "session 을 주면 그 세션이 만드는 앱만(세션 → 앱 역조회 — 다른 기기에서 이어 만들기). include_empty 면 아직 첫 판이 없는 예약 앱도. 런치패드·앱빌더·앱 관리 화면이 소비.",
+    "owner_member(책임자 — null = 관리자) · origin(사본이면 원본) · published_version_no · draft(내 초안이면 그 판) · build_session(책임자에게만) · past_build_sessions(예전 만들기 · 고치기 세션 — 책임자에게만) · can_edit · can_publish. " +
+    "session 을 주면 그 세션이 만들거나 고친 앱만(세션 → 앱 역조회 — 다른 기기에서 이어 만들기). include_empty 면 아직 첫 판이 없는 예약 앱도. 런치패드·앱빌더·앱 관리 화면이 소비.",
   scope: null,
   input: {
     session: z.string().max(128).optional().describe("이 세션이 만드는(만들기 세션으로 이어진) 앱만 — 세션 → 앱 역조회"),
@@ -139,7 +141,7 @@ const appsIndex: Capability = {
     const byId = new Map(all.map((a) => [a.id, a]));
     const session = input.session == null ? "" : String(input.session).trim();
     let rows = all.filter((a) => listsAppFor(a, who));
-    if (session) rows = rows.filter((a) => a.build_session === session && (isAppOwner(a, who) || isAdminViewer(who)));
+    if (session) rows = rows.filter((a) => (a.build_session === session || (a.past_build_sessions ?? []).includes(session)) && (isAppOwner(a, who) || isAdminViewer(who)));
     else if (input.include_empty !== true) rows = rows.filter((a) => !isEmptyDraftApp(a));
     //  공개 판을 볼 사람의 앱만 판 머리를 한 번에 읽는다 — 초안이 없는 앱(거의 전부)은 추가 조회가 없다.
     const heads = await store.listPublishedHeads(rows.filter((a) => appViewFor(a, who) === "published").map((a) => a.id));
@@ -1330,6 +1332,8 @@ const appBuildStart: Capability = {
       return { app_id: app.id, created: false, bound, build_session: bound ? sid : app.build_session && isAdminViewer(who) ? app.build_session : null, visibility: app.visibility };
     }
     const mine = (await store.findAppsByBuildSession(sid)).find((a) => isAppOwner(a, who));
+    //  #5089 예전에 이 앱을 고친 세션이 다시 시작하면 그 세션이 다시 이 앱의 만들기 세션이다 — 새 빈 앱을 또 예약하지 않는다.
+    if (mine && mine.build_session !== sid) await store.setAppBuildSession(mine.id, sid);
     if (mine) return { app_id: mine.id, created: false, bound: true, build_session: sid, visibility: mine.visibility, empty: isEmptyDraftApp(mine) };
     //  그만둔 만들기가 남긴 빈 예약(첫 판 없이 사흘 지난 내 것)은 새로 시작할 때 거둔다 — 따로 도는 청소 잡을 두지 않는다.
     await dropStaleDrafts(who.userId).catch((err) => logger.warn({ err, member: who.userId }, "오래된 빈 예약 앱 정리 실패(비치명)"));
