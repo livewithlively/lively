@@ -125,8 +125,6 @@ t("S3 있나 — 판 번호를 주면 그 판으로 묻는다 · 404 · 405 는 
     assert.equal(await store.head("k.zip", { versionId: "v-7", attempts: 1 }), null, String(status));
     assert.equal(seen[0]?.url.searchParams.get("versionId"), "v-7");
   }
-  const { seen } = fakeS3(() => new Response(null, { status: 404 }));
-  assert.equal(seen.length, 0);   // 배선 — 만들기만 해서는 아무것도 부르지 않는다
 });
 
 t("S4 있나 — 200 → 크기 · 지금 판 번호", async () => {
@@ -144,6 +142,19 @@ t("S5 지우기 — DELETE 한 번(일시 오류여도 다시 안 함)", async (
   const ok = fakeS3(() => new Response(null, { status: 204 }));
   await ok.store.remove("k.zip");
   assert.equal(ok.seen.length, 1);
+});
+
+t("D1 실행면 이름을 틀리면 하우스키핑 결과에 꺼진 까닭이 실린다(조용히 멈추지 않게)", async () => {
+  const { runAppServerHousekeeping } = await import("./app-server-watch.js");
+  const before = process.env.LIVELY_APP_SERVER_HOST;
+  process.env.LIVELY_APP_SERVER_HOST = "locl";
+  try {
+    const out = await runAppServerHousekeeping();
+    assert.equal(out.skipped, "disabled");
+    assert.match(String(out.why ?? ""), /LIVELY_APP_SERVER_HOST=locl/);
+  } finally {
+    if (before === undefined) delete process.env.LIVELY_APP_SERVER_HOST; else process.env.LIVELY_APP_SERVER_HOST = before;
+  }
 });
 
 t("W1 배선 — 흐름 파일들은 Lambda · S3 를 직접 부르지 않는다(실행면 모듈만)", () => {

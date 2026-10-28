@@ -23,7 +23,8 @@ import { appServerEnv, serverDeclOf } from "./app-server-config.js";
 import { appServerApi, appServerZipStore } from "./app-server-host.js";
 import { autoStopReason, codeBytesOf, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { codeErrorOf, deployBuildToAliases, isServerChangedError, isServerLockedError, publicError, withDeps, type LambdaApi } from "./app-server-deploy.js";
+import { appServerUnavailable, codeErrorOf, deployBuildToAliases, isServerChangedError, isServerLockedError, publicError, withDeps } from "./app-server-deploy.js";
+import type { LambdaApi } from "./app-server-host.js";
 import { usableBuild } from "./app-server-build.js";
 import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
 import { AwsError } from "../net/aws/aws-json.js";
@@ -457,7 +458,8 @@ export async function checkServerHealth(policy: AppServerPolicy, deps: WatchDeps
 
 /** 하우스키핑 한 번 — 매니지드 테넌트 틱(web.ts step "app-servers")이 부른다. 앱 서버가 꺼진 배포면 아무것도 안 한다. */
 export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Record<string, unknown>> {
-  if (!appServerEnv()) return { skipped: "disabled" };
+  //  #4487 꺼진 까닭을 함께 — 실행면 이름(LIVELY_APP_SERVER_HOST)을 틀리면 감시 · 상태 점검까지 조용히 멈추므로 틱 결과에서 보이게(격리 리뷰).
+  if (!appServerEnv()) { const why = appServerUnavailable(); return { skipped: "disabled", ...(why ? { why } : {}) }; }
   const out: Record<string, unknown> = {};
   out.stale_builds = await st.failStaleServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   const policy = await st.appServerPolicy();

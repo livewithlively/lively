@@ -16,8 +16,6 @@ import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
 import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerHostKind, appServerHostUnavailable, type AppServerHostKind } from "./app-server-config.js";
 
-export { appServerHostKind, appServerHostUnavailable, type AppServerHostKind };
-
 /**
  * 함수 실행면 — Lambda API 와 같은 꼴. 시험이 갈아 끼운다(setServerDepsForTest api). 실행면마다 구현이 하나씩이다(lambda = lambda-lite).
  *  흐름이 기대는 것: 만든 함수는 판을 고정할 때까지 $LATEST · 판은 바뀌지 않는다 · 별칭은 판을 가리킨다 · 동시 실행 0 이면 부르기가 곧바로 거절된다 ·
