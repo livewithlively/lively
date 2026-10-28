@@ -374,5 +374,33 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(bad && bad.appId === "", "S7 깨진 매니페스트 · 이상한 id · 깨진 줄은 건너뛴다", bad);
 }
 
+// ══ G7 문구 규칙(#4632 원준 2026-10-29 «싹 다 고쳐» — 점검 7-1 · 7-2 · 7-3 · 6-13 후속) ══
+{
+  const J = typeof F.josa === "function" ? F.josa : () => null;
+  const got = [J("「회의록」", "을"), J("「메모」", "을"), J("세션 위젯", "이"), J("둘 다", "이"), J("앱 화면", "으로"), J("「팀 채널」", "으로"), J("메모", "은"), J("V3", "을"), J("V2", "을"), J("V3", "으로"), J("V13", "으로"), J("V7", "으로"), J("R", "으로")];
+  check(JSON.stringify(got) === JSON.stringify(["「회의록」을", "「메모」를", "세션 위젯이", "둘 다가", "앱 화면으로", "「팀 채널」로", "메모는", "V3을", "V2를", "V3으로", "V13으로", "V7로", "R로"]),
+    "J1 josa — 끝 글자(닫는 「」 넘김) 받침으로 을/를 · 이/가 · 으로/로(ㄹ 은 로) · 은/는 · 숫자는 읽는 소리로", got);
+  const VN = typeof F.versionNote === "function" ? F.versionNote : () => null;
+  const P = "\uD310";
+  const vn = [VN("20" + P + ": 알림을 눌러 들어온 자리로 — 목록이 바로 열려요"), VN("19" + P + " · 글자 크기 키움"), VN("  "), VN(null), VN("되돌림 → 3" + P), VN("마감일 칸 더함")];
+  check(JSON.stringify(vn) === JSON.stringify(["알림을 눌러 들어온 자리로. 목록이 바로 열려요", "글자 크기 키움", "", "", "V3 로 되돌렸어요", "마감일 칸 더함"]),
+    "V1 versionNote — 머리의 «n판:» · «n판 ·» 는 걷고(줄 앞에 버전 이름이 선다) «—» 는 마침표로 · 빈 글은 빈 글 · 사람 글은 그대로", vn);
+  //  C1 — 앱빌더 · 앱 찾기 · 실행할 곳 화면 글에 «—» 와 합니다체가 없다. 주석을 걷은 소스의 따옴표 글(한글이 든 것)만 본다.
+  //   AI 에게 가는 글(lib/studio-flow 의 brief)은 화면 글이 아니라 뺐다.
+  const { readFileSync } = await import("node:fs");
+  const files = ["web/v2/builder.ts", "web/v2/builder-model.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/wire-board.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts",
+    "web/v2/app-spec-page.ts", "web/v2/publish-preview.ts", "web/v2/app-instance.ts", "web/v2/run-prefs.ts", "web/v2/mobile.ts", "web/v2/notify-bell.ts", "web/v2/quick-session.ts", "web/lib/app-menu.ts",
+    "web/v2/app-runtime.ts", "web/v2/app-session.ts"];
+  const left = [];
+  for (const f of files) {
+    const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");
+    for (const m of src.matchAll(/'([^'\n]*)'|`([^`]*)`|"([^"\n]*)"/g)) {
+      const t = m[1] ?? m[2] ?? m[3] ?? "";
+      if (/[가-힣]/.test(t) && (/—/.test(t) || /(습니다|합니다|입니다|됩니다|뜹니다|봅니다|줍니다|엽니다|돕니다)/.test(t))) left.push(f + ": " + t.slice(0, 60));
+    }
+  }
+  check(left.length === 0, "C1 앱빌더 화면 글에 «—» · 합니다체가 없다", left);
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

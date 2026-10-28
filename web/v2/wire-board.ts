@@ -69,7 +69,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const count = el('button', { class: 'btn btn-ghost btn-sm v2-wb-count', type: 'button', title: '이 그림에 단 코멘트' }) as HTMLButtonElement;
   const head = el('div', { class: 'v2-wb-head' },
     el('div', { class: 'v2-wb-name' }, el('b', { text: '「' + o.title + '」 와이어프레임' }), el('span', { class: 'v2-wb-ver', text: o.version }),
-      el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여줍니다.' })),
+      el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여 줘요.' })),
     el('span', { class: 'v2-studio-sp' }), tools, el('span', { class: 'v2-studio-sp' }),
     el('span', { class: 'v2-wb-zoom' },
       el('button', { type: 'button', text: '−', title: '작게(⌘ −)', 'aria-label': '작게', onclick: () => zoomBy(1 / 1.25) }), pct,
@@ -184,7 +184,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const changed = (): void => { o.onPins(all()); paintCount(); paintMarks(); if (!list.hidden) paintList(); };
   const paintCount = (): void => {
     const mine = all().filter((p) => p.on === 'wire' && !p.sent); const n = mine.filter((p) => p.note.trim()).length;   // 보내서 반영 중인 것은 세지 않는다
-    count.textContent = '코멘트 ' + n + '건' + (mine.length > n ? ' · 빈 코멘트 ' + (mine.length - n) : '');
+    count.textContent = '코멘트 ' + n + '건' + (mine.length > n ? ' · 빈 코멘트 ' + (mine.length - n) + '건' : '');
   };
   const paintMarks = (): void => {
     marks.replaceChildren();
@@ -200,7 +200,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
       //  번호는 화면 크기 그대로(확대해도 같은 크기) — 보드 배율의 역수로 되돌린다.
       //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 실제 화면 막대(app-review)와 같은 규칙.
       const n = el('button', { type: 'button', class: 'v2-wb-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
-        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
+        title: p.sent ? 'AI가 반영하고 있어요. ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트, 반영 중' : '번 코멘트 열기'),
         onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent) openPop(i); } }, el('span', { text: String(i + 1) }));
       Object.assign(n.style, { left: r.x + 'px', top: r.y + 'px', transform: `translate(-50%, -50%) scale(${1 / S.k})` });
       marks.append(n);

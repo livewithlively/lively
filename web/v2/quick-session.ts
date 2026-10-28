@@ -114,7 +114,7 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
       }),
     });
     const id = out && out.session && out.session.id ? String(out.session.id) : '';
-    if (!id) throw new Error('세션 id 를 받지 못했습니다');
+    if (!id) throw new Error('세션 번호를 받지 못했어요.');
     rememberCreated(out.session);   // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
     //  #4906 — 기억할 첫 지시는 **서버가 넣을 글**(응답 initialPrompt — src/terminal/session-launch.ts launchReply)이다. 태스크에서 연 세션은
     //   친 글이 비고(서버가 태스크로 채운다), 태스크 여러 개 · 첨부를 옮긴 홈 첫 지시는 서버가 글을 다시 짓는다. 친 글로 기억하면 세션 화면의
@@ -124,7 +124,7 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
     await linkPredecessor(out.session, pid, opts && opts.predecessorId);
     return { id, session: out.session };
   } catch (e: any) {
-    toast('세션을 열지 못했습니다 — ' + (e && e.message ? e.message : e), true);
+    toast('세션을 열지 못했어요. ' + (e && e.message ? e.message : e), true);   // 해요체 · «—» 없이(점검 7-1) — 부르는 쪽은 null 만 보고 다시 알리지 않는다
     return null;
   } finally { creating = false; }
 }
@@ -144,7 +144,7 @@ async function linkPredecessor(session: any, pickedPid: number, pre?: number | n
   const made = Number(session && session.projectId) || 0;
   if (!to || pickedPid > 0 || !made || made === to) return;
   try { await api(`/api/ui/v6/projects/${made}/link`, { method: 'POST', body: JSON.stringify({ to, relation: 'follow_up' }) }); }
-  catch (e: any) { toast('선행 프로젝트는 못 걸었어요 — 프로젝트 상세에서 다시 걸 수 있어요. ' + (e && e.message ? e.message : ''), true); }
+  catch (e: any) { toast('선행 프로젝트는 못 걸었어요. 프로젝트 상세에서 다시 걸 수 있어요. ' + (e && e.message ? e.message : ''), true); }
 }
 
 export async function openQuickSession(text: string, opts?: SpawnOpts): Promise<boolean> {

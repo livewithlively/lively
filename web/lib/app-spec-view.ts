@@ -66,6 +66,8 @@ export function specStateLine(r: Pick<SpecResponse, 'spec_state' | 'version_no' 
     case 'unavailable': return { tone: 'warn', text: 'AI 설명은 워크스페이스 API 키가 있어야 만들어져요. 관리자가 키를 등록하면 저절로 써요. 아래 「코드에서 바로 읽은 것」은 지금도 볼 수 있어요.' + older };
     case 'limit': return { tone: 'warn', text: '오늘 이 워크스페이스에서 설명을 쓸 수 있는 횟수를 다 썼어요. 내일 다시 열면 써요. 아래 「코드에서 바로 읽은 것」은 지금도 정확해요.' + older };
   }
+  //  모르는 상태(빈 답 · 새 서버의 새 상태) — undefined 를 돌려주면 화면이 넘어졌다. 기다리는 말로 둔다.
+  return { tone: 'wait', text: '설명 상태를 확인하고 있어요.' + older };
 }
 
 /** 보이는 설명이 지금 버전 것인가(ok 일 때만). 아니면 «달라진 점» 은 그 버전 이야기라 감춘다. */

@@ -64,7 +64,7 @@ function toolIcon(k: ReviewTool): HTMLElement {
 }
 const TOOLS: Array<{ k: ReviewTool; t: string; help: string }> = [
   { k: 'try', t: '써 보기', help: '직접 써 보면서 앱의 실제 동작을 확인해요.' },
-  { k: 'pick', t: '선택', help: '앱 안의 버튼 · 칸 · 글을 선택해요' },
+  { k: 'pick', t: '선택', help: '앱 안의 버튼, 칸, 글을 선택해요.' },
   { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 코멘트를 적어요.' },
   { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 코멘트를 적어요.' },
 ];
@@ -88,7 +88,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const tools = el('span', { class: 'v2-studio-tools v2-review-tools', role: 'tablist', 'aria-label': '코멘트 다는 도구' });
   const count = el('button', { class: 'btn btn-ghost btn-sm v2-review-count', type: 'button' }) as HTMLButtonElement;
   const send = el('button', { class: 'v2-studio-now-pri', type: 'button' }) as HTMLButtonElement;
-  const like = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
+  const like = el('button', { class: 'btn btn-ghost btn-sm v2-review-like', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
   const hint = el('small', { class: 'v2-review-hint' });
   //  지금 보는 화면이 어느 꼴인지(원준 2026-10-16 «지금 보고 있는 창이 앱 전체 창인지 위젯 창인지만 구분해서 알려 주고») — 막대가 문패 줄에 얹혔으면 시험 세션의 세션 위젯.
   const mode = el('span', { class: 'v2-review-mode' + (host.dock ? ' widget' : ' app'), text: host.dock ? '세션 위젯으로 보는 중' : '앱 화면으로 보는 중',
@@ -96,15 +96,36 @@ export function openReview(host: ReviewHost): ReviewApi {
   //  「AI에게 말하기」(원준 2026-10-28 «앱 전체에 코멘트하는 텍스트박스를 누르면 아래에서 위로 올라오게 · AI와 대화하면서 물어보고 지정하고 수정»).
   //   옛 «앱 전체 코멘트» 칸(원준 2026-10-16 «바로바로 텍스트 쳐서»)의 자리다 — 묶어 보내는 앱 전체 코멘트는 「코멘트 n건」 칸의 「앱 전체」 줄에 그대로 있다.
   //   글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 보내기 · Shift+Enter 줄바꿈.
-  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요 · Shift+Enter 줄바꿈', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
+  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 (예: 글자 조금 크게)', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요. 줄을 바꾸려면 Shift+Enter를 눌러요.', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
     onEnter: () => { void say(); }, onEscape: () => { closeTalk(); gen.blur(); } });
   gen.addEventListener('focus', () => openTalk());
   const note = el('span', { class: 'v2-review-note', hidden: true });
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위나 아래로 옮겨요', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
+  //  좁은 화면(40-v2.css ≤760px)의 「⋯」 — 「완료 · 다음 단계로」 · 막대 자리 바꾸기를 접어 둔다(점검 5-6 · 막대가 여러 줄로 앱을 덮었다).
+  //   누르면 원래 단추를 누른 것과 같다(할 일은 한 벌) · 잠긴 단추는 여기서도 잠겨 있다.
+  const more = el('button', { class: 'btn btn-ghost btn-sm v2-review-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement;
+  let menu: HTMLElement | null = null;
+  const closeMenu = (): void => { if (menu) { menu.remove(); menu = null; document.removeEventListener('pointerdown', offMenu, true); document.removeEventListener('keydown', keyMenu, true); more.setAttribute('aria-expanded', 'false'); } };
+  const offMenu = (e: Event): void => { if (menu && !menu.contains(e.target as Node) && !more.contains(e.target as Node)) closeMenu(); };
+  const keyMenu = (e: KeyboardEvent): void => { if (e.key === 'Escape' && menu) { e.preventDefault(); e.stopPropagation(); closeMenu(); more.focus(); } };
+  more.onclick = () => {
+    if (menu) { closeMenu(); return; }
+    const items = [like, flip].filter((b) => !b.hidden);
+    const m = el('div', { class: 'v2-studio-help v2-review-menu', role: 'menu' }, ...items.map((b) => {
+      const x = el('button', { type: 'button', role: 'menuitem', text: b === flip ? (S.top ? '막대를 아래로 옮기기' : '막대를 위로 옮기기') : (b.textContent || ''), onclick: () => { closeMenu(); b.click(); } }) as HTMLButtonElement;
+      x.disabled = b.disabled;
+      return x;
+    }));
+    const r = more.getBoundingClientRect();
+    m.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - 216))) + 'px';   // 메뉴 폭(최소 200) 만큼 화면 안에
+    if (S.top || r.top < window.innerHeight / 2) m.style.top = Math.round(r.bottom + 6) + 'px'; else m.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
+    document.body.append(m); menu = m; more.setAttribute('aria-expanded', 'true');
+    setTimeout(() => { if (menu === m) { document.addEventListener('pointerdown', offMenu, true); document.addEventListener('keydown', keyMenu, true); } }, 0);
+  };
   bar.append(
     el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요. 적은 코멘트는 그대로 남아요.', onclick: () => host.onBack() }),
     el('span', { class: 'v2-review-name' }, name, ver), mode, el('i', { class: 'v2-review-sep' }),
-    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
+    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip, more,
     hint);
   // ── 층 — 프레임 자리를 따라간다 ──
   const layer = el('div', { class: 'v2-review-layer', hidden: true });
@@ -120,7 +141,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     const n = cmCount();
     tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; return b; }));   // 고치는 중에도 짚는다 — 다음 「수정하기」 몫(원준 2026-10-28)
     const blank = host.pins.filter((p) => !p.note.trim()).length;
-    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank : '');
+    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank + '건' : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 수정 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
@@ -271,7 +292,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       }
       //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 고칠 수 없다(이미 AI 에게 갔다).
       const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
-        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
+        title: p.sent ? 'AI가 반영하고 있어요. ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트, 반영 중' : '번 코멘트 열기'),
         onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent && S.tool !== 'try') openPop(host.pins.indexOf(p)); } }, el('span', { text: String(i + 1) }));
       n.style.left = q.x * 100 + '%'; n.style.top = q.y * 100 + '%';
       layer.append(n);
@@ -348,7 +369,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       row.addEventListener('pointerenter', () => mark(host.pins.indexOf(p)));
       return row;
     });
-    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: host.general,
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 (예: 글자 조금 크게)', label: '앱 전체 코멘트', value: host.general,
       onInput: (v) => { host.general = v; changed(); }, onEnter: () => g.blur(), onEscape: () => closeTray() });
     taOf.set(g, 'all');
     trayHead = el('b');
@@ -360,7 +381,7 @@ export function openReview(host: ReviewHost): ReviewApi {
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '접기', onclick: () => closeTray() })),
       //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
       list,
-      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료, Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
     //  이미 열려 있으면 그 상자를 그대로 두고 속만 간다 — 세션 위젯 꼴의 고정 자리(--fixed · 위치)가 남는다.
     if (tray) tray.replaceChildren(...kids);
     else {
@@ -472,7 +493,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       closeTray(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*');
       //  AI 세션 화면은 부르는 쪽의 것이다 — 옮겨 왔으면 제자리로(막대와 함께 버리지 않는다).
       if (chatHome && host.chat.parentNode === talkBody) chatHome.parent.insertBefore(host.chat, chatHome.next && chatHome.next.parentNode === chatHome.parent ? chatHome.next : null);
-      talk.remove(); layer.remove(); bar.remove(); markReviewProbe(host.appId, false);
+      closeMenu(); talk.remove(); layer.remove(); bar.remove(); markReviewProbe(host.appId, false);
       if (host.onClose) host.onClose();
     },
     isOpen: () => !S.dead,
