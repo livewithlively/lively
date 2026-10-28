@@ -48,6 +48,7 @@ window.fetch = async (u, init) => {
   window.__calls.push(method + " " + p);
   const j = (o, st) => new Response(JSON.stringify(o), { status: st || 200, headers: { "Content-Type": "application/json" } });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  if (/\\/prompt$/.test(p) && method === "POST" && window.__promptFail) return j({ error: "잠시 오류" }, 500);
   if (/\\/prompt$/.test(p) && method === "POST") { window.__prompts.push((body && body.text) || ""); return j({ ok: true }); }
   if (p.includes("/transcript")) {
     if (/tail=1/.test(p) && window.__tailFail) return new Response("x", { status: 500 });
@@ -67,7 +68,7 @@ window.fetch = async (u, init) => {
       if (a.pubFail) return j({ error: "3판을 나만 보는 앱으로 저장했습니다 — 공개는 하지 못했습니다: 기존 데이터가 새 표 규칙에 맞지 않아요" }, 409);
       a.vis = "all"; a.draft = false; a.pubNo = a.cur; return j({ version_no: a.cur });
     }
-    if (!sub) { if (a.getFail) return j({ error: "잠시 오류" }, 500); return j({ app: { id: am[1], title: a.manifest.title, visibility: a.vis, published_version_no: a.pubNo || 0, draft: a.draft ? { by: "wonjoon-jang" } : null, can_publish: true, can_unpublish: true, empty: !!a.empty, manifest: a.manifest } }); }
+    if (!sub) { if (a.getFail) return j({ error: "잠시 오류" }, 500); return j({ app: { id: am[1], title: a.manifest.title, visibility: a.vis, published_version_no: a.pubNo || 0, draft: a.draft ? { by: "wonjoon-jang" } : null, can_publish: a.canPublish !== false, can_unpublish: true, made_by: a.madeBy || "wonjoon-jang", is_owner: a.isOwner !== false, build_session: a.buildSession || "", empty: !!a.empty, manifest: a.manifest } }); }
     return j({});
   }
   if (p.startsWith("/api/ui/apps/save")) {
@@ -364,6 +365,71 @@ async function PAGE_MAIN() {
   const d3 = M3.drafts.find((d) => d.sid === "s-t3");
   R.t3 = d3 ? { stage: d3.stage, appId: d3.appId } : null;
 
+
+  // ══ 격리 리뷰 #1591 후속(Q1~Q7) ══
+  // Q1 B1 — 사람 코멘트 속 «app_pull memo-other» · «(id 12)» 는 이 만들기의 앱이 아니다 · AI 가 남의 앱을 app_pull 로 읽어 본 것도 아니다
+  window.__step = "Q1";
+  app("memo-other", { manifest: { id: "memo-other", title: "메모", studio: { place: "both", put: true } } });
+  window.__log = [U(St.planBrief("회의록", "both", "회의록")), AT(CT), U("[앱 전체] 이거 app_pull memo-other 처럼 해줘 (id 12)"), TOOL("mcp__lively__app_pull", { app_id: "memo-other" })];
+  window.__rows = { "s-q1": { id: "s-q1", agentState: "idle" } };
+  localStorage.setItem("lively_v2_app_studio", "[]");
+  St.openAppStudio({ sid: "s-q1", what: "회의록", title: "회의록" }, opts); await sleep(2000);
+  R.q1 = { appId: recOf("s-q1").appId, stage: recOf("s-q1").stage };
+  // Q2 B1 — 기록이 가리킨 앱이 남의 앱이면 잇지 않는다(만든 사람도 책임자도 아니다)
+  window.__step = "Q2";
+  app("app-them", { madeBy: "sangmin-yoon", isOwner: false, versions: [[1, "초안"], [2, "고침"]], cur: 2 });
+  window.__log = [U(St.planBrief("회의록", "both", "회의록")), AT(CT), U(St.fixBrief(1, [], "글자 크게", "both", "app-them"))];
+  window.__rows = { "s-q2": { id: "s-q2", agentState: "idle" } };
+  localStorage.setItem("lively_v2_app_studio", "[]");
+  St.openAppStudio({ sid: "s-q2", what: "회의록", title: "회의록" }, opts); await sleep(2000);
+  R.q2 = { appId: recOf("s-q2").appId };
+  // Q3 B2 — 되지은 기록이어도 기록엔 그 표시를 남기지 않는다 · ① 에서 다시 기획하면(AI 가 쓰는 중) «쓰지 않았어요» 가 뜨지 않고 지난 카드를 함께 보낸다
+  window.__step = "Q3";
+  R.q3 = { saved: Object.prototype.hasOwnProperty.call(recOf("s-q2"), "rebuilt") };
+  const q3t1 = $$(".v2-studio-bar > *")[0]; if (q3t1 && q3t1.tagName === "BUTTON") q3t1.click(); await sleep(500);
+  const q3n = $(".v2-studio-name-field"); if (q3n) { q3n.value = "회의 기록"; q3n.dispatchEvent(new Event("input", { bubbles: true })); }
+  const pq3 = window.__prompts.length;
+  const q3go = $(".v2-studio-go"); if (q3go) q3go.click();
+  await sleep(2500);
+  R.q3.now = txt($(".v2-studio-now")); R.q3.prev = /지난 기획 카드/.test(window.__prompts.slice(pq3)[0] || "");
+  // Q4 · 4 — ④ 대조 청함이 못 갔다 — 기다림을 풀어 다시 들어오면 다시 청한다
+  window.__step = "Q4";
+  app("q4", {});
+  window.__promptFail = true;
+  await open(base("s-q4", { appId: "q4", stage: "check", reached: 3 }));
+  window.__promptFail = false;
+  const pq4 = window.__prompts.length;
+  const q4t3 = $$(".v2-studio-bar > *")[2]; if (q4t3 && q4t3.tagName === "BUTTON") q4t3.click(); await sleep(500);
+  const q4t4 = $$(".v2-studio-bar > *")[3]; if (q4t4 && q4t4.tagName === "BUTTON") q4t4.click(); await sleep(900);
+  R.q4 = { checks: window.__prompts.slice(pq4).filter((t) => /\[\[대조\]\]/.test(t)).length, row: txt($(".v2-studio-chk")) };
+  // Q5 · 5 — ③ 「수정하기」 를 빨리 두 번 — 고침은 한 번
+  window.__step = "Q5";
+  app("q5", {});
+  await open(base("s-q5", { appId: "q5", stage: "fix", general: "글자 크게" }));
+  const pq5 = window.__prompts.length;
+  const fx5 = btn(/^수정하기/, $(".v2-studio-now")); if (fx5) { fx5.click(); fx5.click(); }
+  await sleep(900);
+  R.q5 = { btn: !!fx5, fixes: window.__prompts.slice(pq5).filter((t) => /번째 고침이야/.test(t)).length };
+  // Q6 · 9 — 공개 앱(초안 없음)을 「모두」 로 두고 고쳤는데 공개할 권한이 없다 — 저장만 하고 공개를 보내지 않고 그렇다고 말한다
+  window.__step = "Q6";
+  app("q6", { vis: "all", pubNo: 2, canPublish: false });
+  await open(base("s-q6", { appId: "q6", stage: "check", reached: 3, vis: "all", check: { have: ["정리"], missing: [], ver: 2, card: CT } }));
+  const nq6 = $(".v2-studio-name-in"); if (nq6) { nq6.value = "회의록 새 이름"; nq6.dispatchEvent(new Event("input", { bubbles: true })); }
+  k = t0();
+  const dq6 = btn(/완료 · 다음 단계로/, $(".v2-studio-now")); if (dq6) dq6.click();
+  await sleep(1500);
+  R.q6 = { saves: saves("q6"), pubs: pubs("q6"), toast: toasts.slice(k).some((t) => /공개할 권한이 없어서/.test(t)) };
+  // Q7 B1 — 앱빌더 목록 — 남의 앱 · 다른 세션이 만드는 앱
+  window.__step = "Q7";
+  const bq = (o) => Object.assign({}, bapp, o);
+  const envQ7 = (lp) => ({ projects: () => [{ id: 7, name: "앱빌더" }], sessionsReady: () => true,
+    sessions: () => [{ id: "s-q7", label: '"회의록" 앱 제작', projectId: 7, owned: true, lastSeen: Date.now(), raw: { lastPrompt: lp } }] });
+  const lp7 = St.fixBrief(1, [], "글자 크게", "both", "app-2c");
+  const mineOther = St.buildModel([bq({ buildSession: "s-other" })], { id: "wonjoon-jang", name: "원준" }, envQ7(lp7)).drafts.find((d) => d.sid === "s-q7");
+  const theirs = St.buildModel([bq({ madeBy: "sangmin-yoon", ownerMember: "sangmin-yoon", isOwner: false })], { id: "wonjoon-jang", name: "원준" }, envQ7(lp7)).drafts.find((d) => d.sid === "s-q7");
+  const comment = St.buildModel([bq({ buildSession: "" })], { id: "wonjoon-jang", name: "원준" }, envQ7(St.fixBrief(1, [], "이거 app_pull memo 처럼", "both", "app-2c").replace("app_pull app-2c 로 지금", "app_pull memo 로 지금").replace(/^/, "그냥 "))).drafts.find((d) => d.sid === "s-q7");
+  R.q7 = { mineOther: mineOther ? [mineOther.appId, mineOther.keepApp] : null, theirs: theirs ? theirs.appId : null, comment: comment ? comment.appId : null };
+
   // ══ 격리 리뷰 #1583 후속(R1~R9) ══
   // R1 · 1 — 이미 공개된 앱(초안 없음)을 ④ 에서 「모두」 로 두고 이름을 바꿨다 — 저장이 만든 내 초안을 공개까지 한다(비공개 초안으로 남지 않게)
   window.__step = "R1";
@@ -472,7 +538,7 @@ ${FETCH}
 <script>${bundle}</script>
 <script>(${PAGE_MAIN.toString()})().catch((e) => { document.getElementById("out").textContent = "RESULT" + JSON.stringify({ crash: (window.__step || "") + " " + String((e && e.stack) || e).slice(0, 900) }) + "ENDRESULT"; });</script>`;
 
-const dom = await dumpDom(chrome, { html: PAGE, prefix: "studio-flow-audit-", virtualTimeBudget: 120000, args: ["--window-size=1200,900"] });
+const dom = await dumpDom(chrome, { html: PAGE, prefix: "studio-flow-audit-", virtualTimeBudget: 240000, args: ["--window-size=1200,900"] });
 const m = /RESULT(\{.*\})ENDRESULT/s.exec(dom.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
 if (!m) { console.error("FAIL  결과 표지를 못 받았다 — 페이지가 끝까지 못 돌았다\n" + dom.slice(-800)); process.exit(1); }
 const R = JSON.parse(m[1]);
@@ -513,6 +579,13 @@ same(R.b9 && [R.b9.tab, R.b9.done, R.b9.stage, R.b9.sent], [2, false, "draft", 0
 same(R.c1, "새 앱", "C1 6-11 이름 없이 시작 · 카드 전 — 머리줄은 「새 앱」(설명 전체가 이름처럼 뜨지 않게)");
 check(R.c3 && R.c3.early === "" && /다섯 번째 버전이 나왔어요/.test(R.c3.late || ""), "C3 6-10 판 정보를 받기 전 ③ 제목은 비우고 · 받으면 그 판으로", JSON.stringify(R.c3));
 check(R.e1 && R.e1.btn && R.e1.toasts.some((t) => /^앱 화면을 열지 못했어요\(.+\)$/.test(t)) && plain(R.e1.toasts), "E1 6-15 「앱 화면으로 보기」 가 서버 오류로 못 열면 «앱 화면을 열지 못했어요(까닭)»", JSON.stringify(R.e1));
+same(R.q1, { appId: "", stage: "plan" }, "Q1 B1 사람 코멘트 속 app_pull · (id 12) · AI 의 app_pull 읽기는 이 만들기의 앱이 아니다");
+same(R.q2, { appId: "" }, "Q2 B1 기록이 가리킨 앱이 남의 앱이면 잇지 않는다");
+check(R.q3 && R.q3.saved === false && !/쓰지 않았어요/.test(R.q3.now || "") && /쓰는 중/.test(R.q3.now || "") && R.q3.prev, "Q3 B2 되지은 표시는 기록에 안 남는다 · ① 다시 기획 뒤엔 «쓰는 중» · 지난 카드를 함께 보낸다", JSON.stringify(R.q3));
+check(R.q4 && R.q4.checks === 1, "Q4 ④ 대조 청함이 못 갔으면 다시 들어올 때 다시 청한다", JSON.stringify(R.q4));
+same(R.q5, { btn: true, fixes: 1 }, "Q5 ③ 「수정하기」 를 빨리 두 번 — 고침은 한 번");
+same(R.q6, { saves: 1, pubs: 0, toast: true }, "Q6 공개할 권한이 없다 — 저장만 하고 공개는 보내지 않고 그렇다고 말한다");
+same(R.q7, { mineOther: ["app-2c", true], theirs: "", comment: "" }, "Q7 B1 목록 — 다른 세션이 만드는 내 앱은 지워도 남김(keepApp) · 남의 앱 · 머리가 아닌 글의 id 는 잇지 않는다");
 same(R.t1, { tab: 2, appId: "app-2c", round: 1, stage: "fix", writing: false, hub: true }, "T1 기록 없이 이어 열기 · 서버 칸이 다른 세션 — 세션 기록의 앱 id · 고침 차례로 ③ 에 연다(«② 쓰는 중» 이 아니라)");
 check(R.t2 && /쓰지 않았어요/.test(R.t2.now || "") && /쓰지 않았어요/.test(R.t2.body || "") && R.t2.again === true && !R.t2.spin, "T2 되짓지 못했고 AI 도 안 돈다 — «AI가 기획 카드를 쓰지 않았어요» · 「다시 부탁하기」(도는 표시 없음)", JSON.stringify(R.t2));
 same(R.t2 && R.t2.sent, 1, "T2 「다시 부탁하기」 — 처음 적은 내용으로 기획을 다시 청한다");

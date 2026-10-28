@@ -364,7 +364,8 @@ async function paintList(v: View, env: BuilderEnv, soft = false, fetch = !soft):
     const target = appId ? apps.find((x) => x.id === appId) || null : null;
     const rec = studioRecs().find((r) => r.sid === d.sid) || null;
     const row = env.sessions().find((x) => x.id === d.sid) || null;
-    const madeHere = !!target && (target.empty || (rec ? rec.mode === 'new' || rec.mode === 'copy'
+    //   그 앱의 만들기 세션이 다른 세션이면(서버 build_session) 이 만들기가 만든 앱이 아니다 — 기록에서 되지은 카드가 남이 만드는 앱을 지우지 않게(격리 리뷰 #1591 B1).
+    const madeHere = !!target && (!target.buildSession || target.buildSession === d.sid) && (target.empty || (rec ? rec.mode === 'new' || rec.mode === 'copy'
       : d.mode === 'new' && ((!!row && isBuildingSession(row.label, projNameOf(env, row.projectId))) || studioRecBuildingFor(target.id))));
     const discard = !!appId && !keep && madeHere;
     if (discard) {

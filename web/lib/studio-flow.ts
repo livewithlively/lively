@@ -372,48 +372,79 @@ export const DRAFT_ASK_HEAD = '이 기획 카드대로 초안을 만들어 저�
 export function draftAsked(ndjson: string): boolean { return userTexts(ndjson).some((t) => t.trim().startsWith(DRAFT_ASK_HEAD)); }
 
 // ── 기록 없이 이어 열기 — 세션 기록에서 만들기 상태를 되짓는다(원준 2026-10-29 실제 화면: 이미 앱을 만들어 ③ 에서 고치던 세션인데 서버의 만들기 세션 칸이
-//   다른 세션을 가리켜, 기록 없는 브라우저에선 «② 세부 기획 · AI가 기획 카드를 쓰는 중» 이 끝없이 돌았다). 우리 글(app_pull <id> · 「이 앱의 id 는 <id>」 ·
-//   「N번째 고침이야」)과 AI 의 도구 부름(app_pull · app_save 의 app_id · lively-app.json 의 id)에서 앱 id 를 읽는다.
+//   다른 세션을 가리켜, 기록 없는 브라우저에선 «② 세부 기획 · AI가 기획 카드를 쓰는 중» 이 끝없이 돌았다).
+//   앱 id 는 **우리 글의 머리(앞에 붙는 꼴 그대로)** 에서만 읽는다 — 사람이 적은 코멘트 · 카드 글은 머리 뒤에 붙으니(「[앱 전체] app_pull memo 처럼」 ·
+//   「(id 12)」) 거기 적힌 id 를 앱으로 잡지 않는다(격리 리뷰 #1591 B1). AI 의 도구 부름은 app_save(그 앱을 저장했다)만 — app_pull 은 남의 앱을 읽어 볼 수도 있다.
 const APP_ID = '([a-z0-9][a-z0-9-]{1,63})';
-const APP_ID_RES = [new RegExp('app_pull\\s+' + APP_ID, 'g'), new RegExp('이 앱의 id 는 ' + APP_ID + ' 로', 'g'), new RegExp('\\(id ' + APP_ID + '\\)', 'g')];
-/** 우리가 보낸 글 하나에 적힌 앱 id — 여럿이면 가장 뒤의 것 · 없으면 ''. */
+const ID_OK = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** 우리 글의 머리 — 각 꼴의 맨 앞에서만 맞춘다(lib 의 brief 들과 같은 글). */
+const BRIEF_HEADS: RegExp[] = [
+  new RegExp('^\\s*\\d+번째 고침이야\\. 아래를 반영해 새 버전으로 저장해 줘\\(app_pull ' + APP_ID + ' 로 지금 버전을'),   // fixBrief
+  new RegExp('^지금부터 시안 화면을 보면서 대화로 고칠게\\.[^\\n]*? 정해지면 app_pull ' + APP_ID + ' 로 받아 고치고'),   // talkBrief(첫 말)
+  new RegExp('^워크스페이스 앱 「[^\\n]*?」\\(id ' + APP_ID + '\\) 을 고치려고 해\\. app_pull \\1 로 받아 둬\\.'),   // editBrief
+  new RegExp('^워크스페이스 앱 「[^\\n]*? 의 내 사본 「[^\\n]*?」\\(id ' + APP_ID + '\\) 이 방금 저장돼 있어\\. app_pull \\1 로 받아 둬\\.'),   // copyBrief
+  new RegExp('^이 앱의 화면 흐름 와이어프레임을 그려 줘\\. app_pull ' + APP_ID + ' 로'),   // wireframeBrief
+  new RegExp('^기획 카드와 지금 버전\\(app_pull ' + APP_ID + '\\)을 대조해서'),   // checkBrief
+];
+/** draftBrief 의 예약 id 줄 — 카드 글 뒤에 붙는다. 카드 안에 같은 꼴이 끼어 있어도 맨 뒤(진짜 줄)를 쓴다. */
+const DRAFT_ID_LINE = new RegExp('\\n이 앱의 id 는 ' + APP_ID + ' 로 미리 잡아 뒀어 — lively-app\\.json 의 id 를 꼭 \\1 로 해 줘\\.', 'g');
+/** 우리가 보낸 글 하나가 가리키는 이 만들기의 앱 id — 우리 글의 머리에서만 · 없으면 ''. */
 export function promptAppId(text: string | null | undefined): string {
-  const t = String(text || ''); let at = -1, id = '';
-  for (const re of APP_ID_RES) { re.lastIndex = 0; let m: RegExpExecArray | null; while ((m = re.exec(t))) if (m.index > at) { at = m.index; id = m[1]; } }
-  return id;
+  const t = String(text || '');
+  for (const re of BRIEF_HEADS) { const m = re.exec(t); if (m) return m[1]; }
+  if (t.trim().startsWith(DRAFT_ASK_HEAD)) { DRAFT_ID_LINE.lastIndex = 0; let m: RegExpExecArray | null; let id = ''; while ((m = DRAFT_ID_LINE.exec(t))) id = m[1]; return id; }
+  return '';
 }
 /** 「N번째 고침이야」 의 N — 없으면 0. */
 export function fixRoundOf(text: string | null | undefined): number { const m = /^\s*(\d+)번째 고침이야/.exec(String(text || '')); return m ? Number(m[1]) || 0 : 0; }
-/** AI 의 도구 부름(app_pull · app_save)이 가리킨 앱 id — 없으면 ''. */
+/** AI 가 저장한 앱(app_save 의 lively-app.json id) — 없으면 ''. app_pull(읽기만)은 세지 않는다. */
 function toolAppId(block: any): string {
-  if (!block || block.type !== 'tool_use' || !/app_(pull|save)$/.test(String(block.name || ''))) return '';
+  if (!block || block.type !== 'tool_use' || !/app_save$/.test(String(block.name || ''))) return '';
   const inp = block.input || {};
-  if (typeof inp.app_id === 'string' && /^[a-z0-9][a-z0-9-]{1,63}$/.test(inp.app_id)) return inp.app_id;
   const mf = Array.isArray(inp.files) ? inp.files.find((f: any) => f && f.path === 'lively-app.json') : null;
-  try { const id = mf ? String(JSON.parse(String(mf.content)).id || '') : ''; return /^[a-z0-9][a-z0-9-]{1,63}$/.test(id) ? id : ''; } catch (_) { return ''; }
+  try { const id = mf ? String(JSON.parse(String(mf.content)).id || '') : ''; return ID_OK.test(id) ? id : ''; } catch (_) { return ''; }
 }
+/** planBrief 의 표 — 사람 설명 뒤에 붙는 고정 글. 다시 기획을 청했으면 그 전의 «초안을 청했다» 는 낡았다. */
+const PLAN_MARK = '\n아직 만들지 말고, ';
 export interface SessionTrace { card: StudioCard | null; asked: boolean; appId: string; round: number }
+const traceStart = (): SessionTrace => ({ card: null, asked: false, appId: '', round: 0 });
+const LINE_KIND = /"type"\s*:\s*"(user|assistant)"/;
+function traceLine(out: SessionTrace, line: string): void {
+  const s = line.trim(); if (!s) return;
+  //  JSON 을 풀기 전에 글로 먼저 거른다 — 긴 세션은 도구 결과 줄이 대부분이다(격리 리뷰 #1591 · 7).
+  const k = LINE_KIND.exec(s); if (!k) return;
+  if (k[1] === 'user' && s.includes('"tool_result"')) return;
+  if (k[1] === 'assistant' && !s.includes('기획카드') && !s.includes('app_save')) return;
+  let o: any; try { o = JSON.parse(s); } catch (_) { return; }
+  const c = o && o.message && o.message.content;
+  const blocks: any[] = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
+  if (o.type === 'user') {
+    const t = blocks.filter((b) => b && b.type === 'text').map((b) => String(b.text || '')).join('\n');
+    if (!t.trim()) return;
+    if (t.includes(PLAN_MARK) && /앱을 만들고 싶어/.test(t)) out.asked = false;   // 다시 기획 — 그 전의 초안 청함은 낡았다(리뷰 6)
+    if (t.trim().startsWith(DRAFT_ASK_HEAD)) out.asked = true;
+    out.round = Math.max(out.round, fixRoundOf(t));
+    const id = promptAppId(t); if (id) out.appId = id;
+  } else if (o.type === 'assistant') {
+    blocks.forEach((b) => {
+      if (b && b.type === 'text') { const cd = parseCard(String(b.text || '')); if (cd) out.card = cd; }
+      const id = toolAppId(b); if (id) out.appId = id;
+    });
+  }
+}
 /** 세션 기록 전체(처음부터)에서 — 마지막 기획 카드 · 초안을 청했나 · 이 만들기의 앱(마지막으로 가리킨 id) · 보낸 고침 차례(가장 큰 N). */
 export function sessionTrace(ndjson: string): SessionTrace {
-  const out: SessionTrace = { card: null, asked: false, appId: '', round: 0 };
-  String(ndjson || '').split('\n').forEach((line) => {
-    const s = line.trim(); if (!s) return;
-    let o: any; try { o = JSON.parse(s); } catch (_) { return; }
-    const c = o && o.message && o.message.content;
-    const blocks: any[] = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
-    if (o.type === 'user') {
-      const t = blocks.filter((b) => b && b.type === 'text').map((b) => String(b.text || '')).join('\n');
-      if (!t.trim()) return;
-      if (t.trim().startsWith(DRAFT_ASK_HEAD)) out.asked = true;
-      out.round = Math.max(out.round, fixRoundOf(t));
-      const id = promptAppId(t); if (id) out.appId = id;
-    } else if (o.type === 'assistant') {
-      blocks.forEach((b) => {
-        if (b && b.type === 'text') { const cd = parseCard(String(b.text || '')); if (cd) out.card = cd; }
-        const id = toolAppId(b); if (id) out.appId = id;
-      });
-    }
-  });
+  const out = traceStart();
+  String(ndjson || '').split('\n').forEach((line) => traceLine(out, line));
+  return out;
+}
+/** sessionTrace 와 같은 것을 조금씩 — 긴 기록을 읽는 동안 화면이 멈추지 않게 chunk 줄마다 한 번 쉰다. */
+export async function sessionTraceChunked(ndjson: string, chunk = 1500): Promise<SessionTrace> {
+  const out = traceStart(); const lines = String(ndjson || '').split('\n');
+  for (let i = 0; i < lines.length; i += chunk) {
+    if (i) await new Promise((r) => setTimeout(r, 0));
+    for (const line of lines.slice(i, i + chunk)) traceLine(out, line);
+  }
   return out;
 }
 
