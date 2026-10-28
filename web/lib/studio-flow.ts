@@ -187,8 +187,9 @@ export function parseStep(text: string): number {
   return n;
 }
 
-/** 기다리던 AI 일이 멈춘 까닭 — ask 확인을 기다림 · offline 세션이 돌던 컴퓨터가 꺼짐(잠듦) · ended 세션이 꺼짐 · idle 턴이 끝났는데 결과가 없음. */
-export type RunStall = 'ask' | 'offline' | 'ended' | 'idle';
+/** 기다리던 AI 일이 멈춘 까닭 — ask 확인을 기다림 · offline 세션이 돌던 컴퓨터가 꺼짐(잠듦) · ended 세션이 꺼짐 · idle 턴이 끝났는데 결과가 없음
+ *  · limit AI 사용 한도에 걸려 턴이 끝남(세션 줄로는 idle 과 같다 — 답 글로 안다 · parseLimit). */
+export type RunStall = 'ask' | 'offline' | 'ended' | 'idle' | 'limit';
 /** 멈춤이 이만큼 이어져야 화면이 멈췄다고 말한다 — 말을 막 보낸 틈 · 저장 직후 앱을 찾는 틈에 잘못 말하지 않게. */
 export const STALL_MS = 30000;
 export interface RunRow { agentState?: string; working?: boolean; awaiting?: boolean; background?: boolean; restorable?: boolean; observed?: boolean; node?: { online?: boolean } | null }
@@ -204,6 +205,26 @@ export function runStall(row: RunRow | null | undefined): RunStall | null {
   if (row.awaiting || row.agentState === 'waiting') return 'ask';
   if (row.working || row.background || row.agentState === 'busy') return null;
   return 'idle';
+}
+/**
+ * AI 답 글이 «사용 한도에 걸렸다» 는 하네스의 알림인지 — 맞으면 화면에 쓸 한 줄(풀리는 때 포함), 아니면 null.
+ *  원준 2026-10-28 — 만들기 세션이 고침을 받자마자 «You've hit your weekly limit · resets 9am» 으로 끝났는데 화면은 «멈췄어요» 만 말하고 시계는 계속 갔다.
+ *  하네스가 지어 넣는 짧은 줄만 본다(AI 가 코드 이야기를 하다 «rate limit» 을 쓴 긴 답을 한도로 읽지 않게).
+ */
+export function parseLimit(text: string): string | null {
+  const t = String(text || '').trim();
+  if (!t || t.length > 300) return null;
+  if (!/^(you[’']ve|you have) hit your\b[^\n]*\blimit\b|^(claude ai )?usage limit reached\b|^5-hour limit reached\b/i.test(t)) return null;
+  const week = /\bweekly\b/i.test(t);
+  let when = '';
+  const m = /\bresets?\s+(?:(?:on\s+)?([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.exec(t);
+  if (m) {
+    const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const mi = m[1] ? MON.indexOf(m[1].slice(0, 3).toLowerCase()) : -1;
+    const h = Number(m[3]) % 12, pm = m[5].toLowerCase() === 'pm';
+    when = (mi >= 0 ? (mi + 1) + '월 ' + Number(m[2]) + '일 ' : '') + (pm ? '오후 ' : '오전 ') + (h === 0 ? 12 : h) + '시' + (m[4] && m[4] !== '00' ? ' ' + Number(m[4]) + '분' : '');
+  }
+  return (week ? '이번 주 ' : '') + 'AI 사용 한도에 걸려 멈췄어요.' + (when ? ' ' + when + '에 풀려요.' : '');
 }
 /** 멈춘 일을 이어서 하라는 글 — 처음 일러 둔 표식 · 저장 방법을 다시 적는다(이어 쓴 답도 화면이 읽게). */
 export function resumeBrief(kind: 'plan' | 'draft' | 'fix' | 'check'): string {

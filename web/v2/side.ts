@@ -1873,7 +1873,7 @@ function renderBuilderSection(): void {
   if (!bldBound) { bldBound = true; onBuilderModel(() => { if (last && ownerNow() === 'builder') redraw(); }); }
   void refreshBuilderModel().catch(() => { /* 다음 그리기에서 다시 받는다 */ });
   //  #3870 — 세션 목록을 받기 전엔 만들던 앱이 덜 서므로 숫자도 «없어요» 도 말하지 않는다(M = null).
-  const M = sideTruthReady(data) ? builderModelNow({ projects: () => data.projects, sessions: () => data.sessions }) : null;
+  const M = sideTruthReady(data) ? builderModelNow({ projects: () => data.projects, sessions: () => data.sessions, sessionsReady: () => true }) : null;
   const at = builderSideKey(parseBuilderHash(location.hash) || { view: 'list', id: '', how: 'edit' });
   const fix = (href: string, ic: string, label: string, n: number | null, key: string, tip: string, cls = ''): HTMLElement =>
     el('a', { class: 'v2-wcat v2-ptl v2-kview' + cls + (at === key ? ' on' : ''), href, title: tip, ...(at === key ? { 'aria-current': 'true' } : {}) },

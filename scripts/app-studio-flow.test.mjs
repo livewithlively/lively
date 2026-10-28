@@ -300,5 +300,20 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(/"icon": \{"path"/.test(db) && /"color"/.test(db) && /"color_dark"/.test(db), "I13 첫 판을 청하는 글이 아이콘도 그리라고 한다", db.slice(-400));
 }
 
+// ══ L 답 글이 «사용 한도에 걸렸다» 는 하네스 알림인가(원준 2026-10-28 — 고침을 받자마자 한도로 끝났는데 화면은 «멈췄어요» 만 말했다) ══
+{
+  const PL = F.parseLimit || (() => "없음");
+  const T = [
+    ["You've hit your weekly limit · resets 9am (Asia/Seoul)", "이번 주 AI 사용 한도에 걸려 멈췄어요. 오전 9시에 풀려요.", "L1 주간 한도 · 풀리는 때"],
+    ["You\u2019ve hit your limit · resets 2:30pm (Asia/Seoul)", "AI 사용 한도에 걸려 멈췄어요. 오후 2시 30분에 풀려요.", "L2 굽은 따옴표 · 분까지"],
+    ["You've hit your weekly limit · resets Nov 3, 12am (Asia/Seoul)", "이번 주 AI 사용 한도에 걸려 멈췄어요. 11월 3일 오전 12시에 풀려요.", "L3 날짜가 붙은 때"],
+    ["Claude AI usage limit reached|1761613200", "AI 사용 한도에 걸려 멈췄어요.", "L4 옛 꼴 — 때를 못 읽으면 까닭만"],
+    ["API 에 rate limit 이 걸리면 백오프하도록 고쳤어요. You've hit your limit 같은 글은 화면에 안 보여요.", null, "L5 AI 가 한도 이야기를 하는 보통 답은 아니다"],
+    ["x".repeat(400) + " You've hit your weekly limit", null, "L6 긴 답 속 낱말은 아니다"],
+    ["", null, "L7 빈 글"],
+  ];
+  for (const [t, want, what] of T) check(PL(t) === want, what, { got: PL(t) });
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);
