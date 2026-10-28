@@ -13,11 +13,12 @@ import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
 import { tenantSlug } from "../terminal/catalog.js";
 import { gatewayUrl } from "../gateway-url.js";
-import { appBundleS3Config, blobTenant } from "./app-blob-store.js";
+import { blobTenant } from "./app-blob-store.js";
 import {
-  ENV_ROTATING, LAMBDA_HANDLER, appServerApiUrl, appServerEnv, codeAt, functionCodeFor, functionNameFor, functionSizingFor, lambdaEnvFor, logGroupFor, logGroupTagBundleFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
+  ENV_ROTATING, LAMBDA_HANDLER, appServerApiUrl, appServerEnv, appServerHostUnavailable, codeAt, functionCodeFor, functionNameFor, functionSizingFor, lambdaEnvFor, logGroupFor, logGroupTagBundleFor, serverDeclOf, smokeEvent, smokeFailure, tailText,
   type AppServerDecl, type AppServerEnv,
 } from "./app-server-config.js";
+import { appServerApi, appServerZipStore, type LambdaApi } from "./app-server-host.js";
 import { GUARD_HEADER, GUARD_READY_PATH, GUARD_VERSION } from "./app-server-guard.js";
 import { openJobPins } from "./app-jobs-store.js";
 import { ensureGuardLayer } from "./app-server-layer.js";
@@ -29,59 +30,15 @@ import { codeBytesAfterDeploy, codeBytesOf, functionsCapDenial, type AppServerPo
 import { buildKeyFor, ensureServerBuild, usableBuild, type BuildDeps, type BuildSeat } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import { versionBundle } from "./app-version-files.js";
-import * as lam from "../net/aws/lambda-lite.js";
+import type * as lam from "../net/aws/lambda-lite.js";
 import { AwsError } from "../net/aws/aws-json.js";
-import { S3Error, s3Head } from "../net/aws/s3-lite.js";
+import { S3Error } from "../net/aws/s3-lite.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { getApp, getAppVersionBundle } from "../org/store/apps.js";
 
-/** 시험이 갈아 끼우는 AWS 면(기본 = lambda-lite 를 그 지역으로). */
-export interface LambdaApi {
-  /** qualifier — 그 판의 설정 · 코드 자리(#4801 재사용 판정). 없으면 $LATEST. */
-  getFunction(name: string, qualifier?: string): Promise<lam.FnGet | null>;
-  getFunctionConfiguration(name: string, qualifier?: string): Promise<lam.FnConfiguration | null>;
-  createFunction(input: lam.CreateFunctionInput): Promise<lam.FnConfiguration>;
-  updateFunctionCode(name: string, code: lam.FnCode): Promise<lam.FnConfiguration>;
-  updateFunctionConfiguration(name: string, input: lam.UpdateConfigInput): Promise<lam.FnConfiguration>;
-  publishVersion(name: string, input: { CodeSha256?: string; Description?: string }): Promise<lam.FnConfiguration>;
-  listVersions(name: string): Promise<lam.FnConfiguration[]>;
-  putAlias(name: string, alias: string, version: string, description: string): Promise<lam.FnAlias>;
-  /** #4485 흘려 받기 — 시험 호출 · 앱 주소 요청이 쓴다(함수가 응답 흘려 보내기 모드라 보통 부르기로는 틀이 섞여 온다). */
-  invokeStream(name: string, qualifier: string, payloadJson: string, opts: { timeoutMs: number; logTail?: boolean; signal?: AbortSignal }): Promise<lam.StreamInvokeOut>;
-  /** #4486 비동기로 부르기(백그라운드 작업) — 202 면 Lambda 가 받아 두었다. */
-  invokeAsync(name: string, qualifier: string, payload: unknown): Promise<{ status: number; requestId: string | null }>;
-  listLayerVersions(layer: string): Promise<lam.LayerVersion[]>;
-  publishLayerVersion(layer: string, input: { zip: Buffer; description: string; architectures: string[] }): Promise<lam.LayerVersion>;
-  deleteFunction(name: string, qualifier?: string): Promise<void>;
-  putConcurrency(name: string, n: number): Promise<void>;
-  deleteConcurrency(name: string): Promise<void>;
-  /** tag — 로그 그룹 태그 묶음(#4790 · 없으면 태그 없이). */
-  ensureLogGroup(group: string, retentionDays: number, tag?: lam.LogGroupTag | null): Promise<void>;
-  deleteLogGroup(group: string): Promise<void>;
-}
-
-export function realLambdaApi(region: string): LambdaApi {
-  const c = { region };
-  return {
-    getFunction: (n, q) => lam.getFunction(c, n, q),
-    getFunctionConfiguration: (n, q) => lam.getFunctionConfiguration(c, n, q),
-    createFunction: (i) => lam.createFunction(c, i),
-    updateFunctionCode: (n, code) => lam.updateFunctionCode(c, n, code),
-    updateFunctionConfiguration: (n, i) => lam.updateFunctionConfiguration(c, n, i),
-    publishVersion: (n, i) => lam.publishVersion(c, n, i),
-    listVersions: (n) => lam.listVersions(c, n),
-    putAlias: (n, a, v, d) => lam.putAlias(c, n, a, v, d),
-    invokeStream: (n, q, p, o) => lam.invokeStream(c, n, q, p, o),
-    invokeAsync: (n, q, p) => lam.invokeAsync(c, n, q, p),
-    listLayerVersions: (l) => lam.listLayerVersions(c, l),
-    publishLayerVersion: (l, i) => lam.publishLayerVersion(c, l, i),
-    deleteFunction: (n, q) => lam.deleteFunction(c, n, q),
-    putConcurrency: (n, k) => lam.putConcurrency(c, n, k),
-    deleteConcurrency: (n) => lam.deleteConcurrency(c, n),
-    ensureLogGroup: (g, d, tag) => lam.ensureLogGroup(c, g, d, tag),
-    deleteLogGroup: (g) => lam.deleteLogGroup(c, g),
-  };
-}
+//  함수 실행면(Lambda API 꼴) · zip 저장소는 실행면마다 하나씩이다(#4487 app-server-host) — 이 파일 · lifecycle · watch · app-front-server · app-jobs 는
+//   그 겉면으로만 부른다. 시험은 아래 ServerDeps(api · bucket · headZip · deleteZip · presignPut)로 갈아 끼운다.
+export { realLambdaApi, type LambdaApi } from "./app-server-host.js";
 
 export interface ServerDeps extends BuildDeps {
   api?: LambdaApi;
@@ -106,8 +63,11 @@ export const withDeps = (d: ServerDeps = {}): ServerDeps => ({ ...testDeps, ...d
 
 /** 이 배포가 앱 서버를 돌리나 — 아니면 까닭(사람에게 그대로). */
 export function appServerUnavailable(env: NodeJS.ProcessEnv = process.env): string | null {
+  //  #4487 실행면 이름이 틀렸거나 이 판에 없는 실행면이면 그 까닭이 먼저다(아래 «켜져 있지 않음» 보다 고칠 자리가 또렷하다).
+  const host = appServerHostUnavailable(env);
+  if (host) return `${host} — 화면(web.root)은 그대로 됩니다`;
   if (!appServerEnv(env)) return "이 워크스페이스는 앱 서버 실행이 아직 켜져 있지 않습니다(자가호스팅 박스는 v2-8 에서) — 화면(web.root)은 그대로 됩니다";
-  if (!appBundleS3Config(env) && !testDeps.bucket) return "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 앱 서버를 올릴 수 없습니다";
+  if (!appServerZipStore(env) && !testDeps.bucket) return "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 앱 서버를 올릴 수 없습니다";
   return null;
 }
 
@@ -209,10 +169,10 @@ async function waitReady(api: LambdaApi, fn: string, deps: ServerDeps, opts: { b
  *  usableBuild 와 같은 쪽이다(못 본 채 막으면 S3 가 흔들릴 때 모든 배포가 멈춘다 · 그 길은 Lambda 가 다시 드러낸다).
  */
 async function zipProblem(zipKey: string, zipVersion: string | null, deps: ServerDeps): Promise<string | null> {
-  const s3 = appBundleS3Config();
-  if (!deps.headZip && !s3) return null;
+  const store = appServerZipStore();
+  if (!deps.headZip && !store) return null;
   let head: { size: number; versionId?: string | null } | null;
-  try { head = deps.headZip ? await deps.headZip(zipKey) : await s3Head(s3!, zipKey, { attempts: 1, timeoutMs: 5_000 }); }
+  try { head = deps.headZip ? await deps.headZip(zipKey) : await store!.head(zipKey, { attempts: 1, timeoutMs: 5_000 }); }
   catch (e) { logger.warn({ err: e, zipKey }, "잠금 안에서 zip 을 다시 보지 못했다 — 있다고 보고 진행(#4801)"); return null; }
   if (!head) return "빌드 결과(zip)가 방금 저장소에서 지워졌습니다 — 다시 하면 새로 빌드합니다";
   if (zipVersion && head.versionId && head.versionId !== zipVersion) return "빌드 결과(zip)가 다른 판으로 바뀌었습니다 — 다시 하면 새로 빌드합니다";
@@ -295,8 +255,8 @@ export async function deployBuildToAliases(i: {
   const deps = withDeps(deps0);
   const env = deps.env ?? appServerEnv();
   if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
-  const api = deps.api ?? realLambdaApi(env.region);
-  const bucket = deps.bucket ?? appBundleS3Config()?.bucket;
+  const api = deps.api ?? appServerApi(env);
+  const bucket = deps.bucket ?? appServerZipStore()?.bucket;
   if (!bucket) throw new HttpError(503, "판 묶음 버킷이 없습니다");
   const slug = tenantSlug() ?? "local";
   const fn = await functionNameOf(i.app.id, env);

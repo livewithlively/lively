@@ -3,17 +3,16 @@
 //  파괴적인 길(멈추기 · 지우기)은 먼저 함수 주인(태그 lvly:tenant)을 본다 — 이름이 겹쳐도 남의 워크스페이스 함수에 닿지 않게(격리 리뷰).
 import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
-import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv, logGroupFor, serverDeclOf } from "./app-server-config.js";
+import { appServerApi, appServerZipStore } from "./app-server-host.js";
 import { mbOf } from "./app-server-policy.js";
 import { buildKeyFor, liveBuildProgress } from "./app-server-build.js";
 import * as st from "./app-server-store.js";
 import { revokeStaleFunctionTokens } from "./app-server-auth.js";
 import {
-  appServerUnavailable, foreignMsg, functionOwnership, installedTarget, publicError, realLambdaApi, sleepDefault, withDeps, type ServerDeps,
+  appServerUnavailable, foreignMsg, functionOwnership, installedTarget, publicError, sleepDefault, withDeps, type ServerDeps,
 } from "./app-server-deploy.js";
 import { AwsError } from "../net/aws/aws-json.js";
-import { s3Delete } from "../net/aws/s3-lite.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { endJobsForApp } from "./app-jobs.js";
 
@@ -28,7 +27,7 @@ export async function stopServer(appId: string, by: string, kind: "auto" | "manu
   const row = await st.getServerRow(appId);
   if (!row) throw new HttpError(404, `이 앱은 서버 함수가 없습니다: ${appId}`);
   if (row.stopped_at) return { row, changed: false };
-  const api = deps.api ?? realLambdaApi(env.region);
+  const api = deps.api ?? appServerApi(env);
   try {
     const own = await functionOwnership(api, row.function_name);
     if (own === "foreign") throw new HttpError(409, foreignMsg(row.function_name));
@@ -47,7 +46,7 @@ export async function resumeServer(appId: string, deps0: ServerDeps = {}): Promi
   if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
   const row = await st.getServerRow(appId);
   if (!row) throw new HttpError(404, `이 앱은 서버 함수가 없습니다: ${appId}`);
-  const api = deps.api ?? realLambdaApi(env.region);
+  const api = deps.api ?? appServerApi(env);
   try {
     const own = await functionOwnership(api, row.function_name);
     if (own === "foreign") throw new HttpError(409, foreignMsg(row.function_name));
@@ -77,7 +76,7 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   await endJobsForApp(appId, "앱(서버)을 지워 작업을 끝냈습니다").catch((e) => errors.push(`작업: ${publicError(e)}`));
   if (row && !env) pending = true;   // 이 배포가 앱 서버를 끈 채다 — 켜진 배포의 하우스키핑이 지우게 줄을 남긴다
   if (env && row) {
-    const api = deps.api ?? realLambdaApi(env.region);
+    const api = deps.api ?? appServerApi(env);
     const sleep = deps.sleep ?? sleepDefault;
     //  배포가 도는 중이면 지운 뒤 그 배포가 함수를 다시 만들 수 있다 — 잠금을 잡고 지운다(못 잡으면 하우스키핑에 미룬다).
     let locked = false;
@@ -101,7 +100,7 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
     }
   }
   if (pending) return { removed: false, errors, pending };   // 함수가 남았다 — 그 함수가 읽는 zip · 기록은 함수를 지운 뒤에(#4801)
-  const s3 = appBundleS3Config();
+  const store = appServerZipStore();
   const { zipKeys } = await st.deleteServerBuildRows(appId).catch((e) => { errors.push(`기록: ${publicError(e)}`); return { zipKeys: [] as string[] }; });
   if (row) await st.deleteServerRow(appId).catch((e) => errors.push(`기록: ${publicError(e)}`));
   //  #4486 함수를 지우는 몇 초 사이에 들어온 작업도 끝낸다 — 줄이 사라진 뒤엔 새 작업이 들어오지 못한다(서버 없음 409 · 격리 리뷰).
@@ -111,7 +110,7 @@ export async function removeServer(appId: string, deps0: ServerDeps = {}): Promi
   await (deps.revokeFunctionTokens ?? revokeStaleFunctionTokens)(appId, [], "app-server-remove", { jobPins: false }).catch((e) => errors.push(`토큰: ${publicError(e)}`));
   for (const k of zipKeys) {
     if (deps.deleteZip) await deps.deleteZip(k).catch((e) => errors.push(`zip: ${publicError(e)}`));
-    else if (s3) await s3Delete(s3, k, { attempts: 1, timeoutMs: 10_000 }).catch((e) => errors.push(`zip: ${publicError(e)}`));
+    else if (store) await store.remove(k).catch((e) => errors.push(`zip: ${publicError(e)}`));
   }
   return { removed: !!row, errors, pending: false };
 }
@@ -137,7 +136,7 @@ export async function retireServer(appId: string, recheck: () => Promise<boolean
     if (!(await recheck())) return { retired: false, skipped: "in-use", errors };
     //  #4486 서버 선언을 뺀 지 오래된 앱의 함수를 걷는다 — 남은 백그라운드 작업도 끝낸다(그 함수가 곧 사라진다).
     await endJobsForApp(appId, "앱이 서버 선언(web.server)을 뺀 채 오래되어 서버를 걷으며 작업을 끝냈습니다").catch((e) => errors.push(`작업: ${publicError(e)}`));
-    const api = deps.api ?? realLambdaApi(env.region);
+    const api = deps.api ?? appServerApi(env);
     const own = await functionOwnership(api, row.function_name);
     if (own === "foreign") errors.push(`함수: ${foreignMsg(row.function_name)} — 지우지 않았습니다`);
     else if (own === "own") {

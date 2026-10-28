@@ -95,7 +95,7 @@ t("B6 배포 설정 — 실행 역할 없음 · 모양 틀림이면 null(앱 서
 
 t("B7 배포 설정 — 지역 순서 · 레이어 · 접두 · 런타임 기본", () => {
   const e = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE })!;
-  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" });
+  assert.deepEqual(e, { host: "lambda", region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" });
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1" })!.region, "us-east-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1", LIVELY_APP_BUNDLE_REGION: "ap-northeast-1" })!.region, "ap-northeast-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_BUNDLE_REGION: "ap-northeast-1", LIVELY_APP_SERVER_REGION: "eu-west-1" })!.region, "eu-west-1");

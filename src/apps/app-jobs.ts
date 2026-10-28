@@ -19,7 +19,7 @@ import { AwsError } from "../net/aws/aws-json.js";
 import { addressVariantFor, addressViewFor, canSeeApp, isAdminViewer } from "./visibility.js";
 import { appDomain, appHost } from "./app-address.js";
 import { appServerEnv, type AppServerEnv } from "./app-server-config.js";
-import { realLambdaApi } from "./app-server-deploy.js";
+import { appServerApi } from "./app-server-host.js";
 import { parseAppServerUserId } from "./app-server-id.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import * as st from "./app-server-store.js";
@@ -44,7 +44,7 @@ export function liveAppJobDeps(): AppJobDeps {
   return {
     policy: () => st.appServerPolicy(),
     env: () => appServerEnv(),
-    invokeAsync: async (env, fn, q, payload) => { await realLambdaApi(env.region).invokeAsync(fn, q, payload); },
+    invokeAsync: async (env, fn, q, payload) => { await appServerApi(env).invokeAsync(fn, q, payload); },
     domain: () => appDomain(),
     slug: () => tenantSlug(),
     now: () => Date.now(),
