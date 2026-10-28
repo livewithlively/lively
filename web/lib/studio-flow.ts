@@ -351,6 +351,52 @@ export function userTexts(ndjson: string): string[] {
 export const DRAFT_ASK_HEAD = '이 기획 카드대로 초안을 만들어 저장해 줘.';
 export function draftAsked(ndjson: string): boolean { return userTexts(ndjson).some((t) => t.trim().startsWith(DRAFT_ASK_HEAD)); }
 
+// ── 기록 없이 이어 열기 — 세션 기록에서 만들기 상태를 되짓는다(원준 2026-10-29 실제 화면: 이미 앱을 만들어 ③ 에서 고치던 세션인데 서버의 만들기 세션 칸이
+//   다른 세션을 가리켜, 기록 없는 브라우저에선 «② 세부 기획 · AI가 기획 카드를 쓰는 중» 이 끝없이 돌았다). 우리 글(app_pull <id> · 「이 앱의 id 는 <id>」 ·
+//   「N번째 고침이야」)과 AI 의 도구 부름(app_pull · app_save 의 app_id · lively-app.json 의 id)에서 앱 id 를 읽는다.
+const APP_ID = '([a-z0-9][a-z0-9-]{1,63})';
+const APP_ID_RES = [new RegExp('app_pull\\s+' + APP_ID, 'g'), new RegExp('이 앱의 id 는 ' + APP_ID + ' 로', 'g'), new RegExp('\\(id ' + APP_ID + '\\)', 'g')];
+/** 우리가 보낸 글 하나에 적힌 앱 id — 여럿이면 가장 뒤의 것 · 없으면 ''. */
+export function promptAppId(text: string | null | undefined): string {
+  const t = String(text || ''); let at = -1, id = '';
+  for (const re of APP_ID_RES) { re.lastIndex = 0; let m: RegExpExecArray | null; while ((m = re.exec(t))) if (m.index > at) { at = m.index; id = m[1]; } }
+  return id;
+}
+/** 「N번째 고침이야」 의 N — 없으면 0. */
+export function fixRoundOf(text: string | null | undefined): number { const m = /^\s*(\d+)번째 고침이야/.exec(String(text || '')); return m ? Number(m[1]) || 0 : 0; }
+/** AI 의 도구 부름(app_pull · app_save)이 가리킨 앱 id — 없으면 ''. */
+function toolAppId(block: any): string {
+  if (!block || block.type !== 'tool_use' || !/app_(pull|save)$/.test(String(block.name || ''))) return '';
+  const inp = block.input || {};
+  if (typeof inp.app_id === 'string' && /^[a-z0-9][a-z0-9-]{1,63}$/.test(inp.app_id)) return inp.app_id;
+  const mf = Array.isArray(inp.files) ? inp.files.find((f: any) => f && f.path === 'lively-app.json') : null;
+  try { const id = mf ? String(JSON.parse(String(mf.content)).id || '') : ''; return /^[a-z0-9][a-z0-9-]{1,63}$/.test(id) ? id : ''; } catch (_) { return ''; }
+}
+export interface SessionTrace { card: StudioCard | null; asked: boolean; appId: string; round: number }
+/** 세션 기록 전체(처음부터)에서 — 마지막 기획 카드 · 초안을 청했나 · 이 만들기의 앱(마지막으로 가리킨 id) · 보낸 고침 차례(가장 큰 N). */
+export function sessionTrace(ndjson: string): SessionTrace {
+  const out: SessionTrace = { card: null, asked: false, appId: '', round: 0 };
+  String(ndjson || '').split('\n').forEach((line) => {
+    const s = line.trim(); if (!s) return;
+    let o: any; try { o = JSON.parse(s); } catch (_) { return; }
+    const c = o && o.message && o.message.content;
+    const blocks: any[] = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
+    if (o.type === 'user') {
+      const t = blocks.filter((b) => b && b.type === 'text').map((b) => String(b.text || '')).join('\n');
+      if (!t.trim()) return;
+      if (t.trim().startsWith(DRAFT_ASK_HEAD)) out.asked = true;
+      out.round = Math.max(out.round, fixRoundOf(t));
+      const id = promptAppId(t); if (id) out.appId = id;
+    } else if (o.type === 'assistant') {
+      blocks.forEach((b) => {
+        if (b && b.type === 'text') { const cd = parseCard(String(b.text || '')); if (cd) out.card = cd; }
+        const id = toolAppId(b); if (id) out.appId = id;
+      });
+    }
+  });
+  return out;
+}
+
 export function freshApps(known: string[], apps: Array<{ id: string; status?: string }>): string[] {
   return apps.filter((a) => a && (a.status == null || a.status === 'active') && !known.includes(String(a.id))).map((a) => String(a.id));
 }

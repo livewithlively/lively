@@ -352,5 +352,27 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(!/지난 기획 카드/.test(b2), "B2 지난 카드가 없으면 그 말도 없다");
 }
 
+
+// ══ 기록 없이 이어 열기 — 세션 기록에서 되짓기(원준 2026-10-29 실제 화면) · S 행 ══
+{
+  const PA = F.promptAppId || (() => "없음"), FR = F.fixRoundOf || (() => -1), ST = F.sessionTrace || (() => null);
+  check(PA(F.fixBrief(3, [], "글자 크게", "both", "app-2csk6w")) === "app-2csk6w" && PA(F.draftBrief(card, "both", "res-9")) === "res-9" && PA(F.editBrief("memo", "메모", "both")) === "memo", "S1 우리 글에서 앱 id — 고침 · 초안(예약 id) · 고치기", [PA(F.fixBrief(3, [], "x", "both", "app-2csk6w")), PA(F.draftBrief(card, "both", "res-9"))]);
+  check(PA("회의록 앱을 만들고 싶어") === "" && PA("") === "" && PA(null) === "", "S2 앱 id 가 없는 글 · 빈 글 — 빈 id");
+  check(FR(F.fixBrief(4, [], "x", "both", "a1")) === 4 && FR("그냥 고쳐 줘") === 0 && FR(null) === 0, "S3 「N번째 고침이야」 의 N · 없으면 0");
+  const U = (t) => JSON.stringify({ type: "user", message: { content: t } });
+  const A = (t) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+  const T = (name, input) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  const full = [U(F.planBrief("회의록", "both")), A(F.cardText(card)), U(F.draftBrief(card, "both", "res-1")),
+    T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: JSON.stringify({ id: "app-2c" }) }] }), U(F.fixBrief(1, [], "x", "both", "app-2c")), U(F.fixBrief(2, [], "y", "both", "app-2c"))].join("\n");
+  const tr = ST(full);
+  check(tr && tr.card && tr.card.name === card.name && tr.asked === true && tr.appId === "app-2c" && tr.round === 2, "S4 카드 · 초안 청함 · 마지막으로 가리킨 앱(도구 부름 · 고침 글) · 가장 큰 고침 차례", tr);
+  const tool = ST([U(F.planBrief("회의록", "both")), T("mcp__lively__app_pull", { app_id: "memo-1" })].join("\n"));
+  check(tool && tool.appId === "memo-1" && tool.card === null && tool.asked === false && tool.round === 0, "S5 도구 부름의 app_id 만 있어도", tool);
+  const none = ST("");
+  check(none && none.card === null && none.asked === false && none.appId === "" && none.round === 0, "S6 빈 기록 — 아무것도 없다", none);
+  const bad = ST([T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: "{깨짐" }] }), T("mcp__lively__app_pull", { app_id: "../etc" }), "깨진 줄"].join("\n"));
+  check(bad && bad.appId === "", "S7 깨진 매니페스트 · 이상한 id · 깨진 줄은 건너뛴다", bad);
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

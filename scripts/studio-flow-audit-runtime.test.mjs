@@ -33,7 +33,7 @@ const chrome = findChrome();
 if (!chrome) { console.log("skip  크롬을 못 찾아 건너뜁니다(CHROME_BIN 으로 지정) — 앱빌더 흐름 점검 런타임 검증 미실행"); process.exit(0); }
 const ESBUILD = path.join(ROOT, "node_modules/.bin/esbuild");
 if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다(node_modules/.bin/esbuild)"); process.exit(1); }
-const ENTRY = "export * from './v2/app-studio.ts'; export { cardText } from './lib/studio-flow.ts'; export { startLiveSync } from './v2/live-sync.ts';";
+const ENTRY = "export * from './v2/app-studio.ts'; export { cardText, planBrief, draftBrief, fixBrief } from './lib/studio-flow.ts'; export { startLiveSync } from './v2/live-sync.ts'; export { buildModel } from './v2/builder-model.ts';";
 const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-name=St", "--platform=browser", "--loader=ts", "--sourcefile=studio-entry.ts",
   "--define:import.meta.url=\"file:///x.js\"", "--log-level=error"], { cwd: WEB, input: ENTRY, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }).replace(/<\/script/gi, "<\\/script");
 const css = (...fs) => fs.map((f) => readFileSync(path.join(STYLES, f), "utf8")).join("\n").replace(/<\/style/gi, "<\\/style");
@@ -88,6 +88,8 @@ window.fetch = async (u, init) => {
   //  앱 목록 — 앱 찾기 목록(listSessionApps)을 쓰는 「앱 화면으로 보기」 시험만 채운다(window.__listApps). 다른 때는 빈 목록(새로 생긴 앱 찾기가 잡지 않게).
   if ((p === "/api/ui/apps" || p.startsWith("/api/ui/apps?")) && window.__appsNull) return j({ apps: [null] });   // 이상한 목록 — 시작 길이 던지게(R9)
   if (p === "/api/ui/apps" || p.startsWith("/api/ui/apps?")) return j({ apps: window.__listApps ? Object.keys(window.__A).map((id) => ({ id, title: window.__A[id].manifest.title, status: "active", enabled: true, visibility: "me", manifest: { title: window.__A[id].manifest.title, ui: { pages: [{ key: "main", title: "앱", entry: "ui/index.html" }] } } })) : [] });
+  //  세션 한 줄(멈춤 보기) — 시험이 window.__rows[sid] 로 정한다(없으면 빈 목록 = 세션 없음).
+  { const om = /sessions\?only=([^&]+)/.exec(p); if (om) { const r = (window.__rows || {})[decodeURIComponent(om[1])]; return j({ sessions: r ? [r] : [] }); } }
   if (p.includes("sessions")) return j({ sessions: [] });
   return j({});
 };</script>`;
@@ -322,6 +324,46 @@ async function PAGE_MAIN() {
   R.a12 = { btn: !!done12, saves: saves("a12"), pubs: pubs("a12") };
 
 
+
+  // ══ 기록 없이 이어 열기 — 세션 기록에서 되짓기(원준 2026-10-29 실제 화면 box-wonjoon-jang-67049116 · T1~T3) ══
+  // T1 — 서버의 만들기 세션 칸이 다른 세션을 가리킨다(역조회 빈 목록) · 이 세션 기록은 카드 → 초안 청함(id) → app_save → 「1번째 고침이야 … app_pull app-2c」
+  window.__step = "T1";
+  app("app-2c", { versions: [[1, "초안"], [2, "고침"]], cur: 2, manifest: { id: "app-2c", title: "회의록", studio: { place: "both", card } } });
+  const U = (t) => JSON.stringify({ type: "user", message: { role: "user", content: t } });
+  const AT = (t) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+  const TOOL = (name, input) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  window.__log = [U(St.planBrief("회의록", "both", "회의록")), AT(CT), U(St.draftBrief(card, "both", "app-2c")),
+    TOOL("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: JSON.stringify({ id: "app-2c", title: "회의록" }) }], note: "초안" }),
+    U(St.fixBrief(1, [], "글자 크게", "both", "app-2c"))];
+  window.__rows = { "s-t1": { id: "s-t1", agentState: "idle" } };
+  localStorage.setItem("lively_v2_app_studio", "[]");
+  St.openAppStudio({ sid: "s-t1", what: "회의록", title: "회의록" }, opts); await sleep(2500);
+  R.t1 = { tab: onTab(), appId: recOf("s-t1").appId, round: recOf("s-t1").round, stage: recOf("s-t1").stage, writing: /쓰는 중/.test(txt(host) || ""), hub: !!$(".v2-studio-hub") };
+
+  // T2 — 아무것도 되짓지 못했다(기획을 청한 글뿐 · 카드 없음) · AI 도 안 돈다 — «쓰는 중» 으로 돌지 않고 «쓰지 않았어요» · 「다시 부탁하기」
+  window.__step = "T2";
+  window.__log = [U(St.planBrief("회의록", "both", "회의록"))];
+  window.__rows = { "s-t2": { id: "s-t2", agentState: "idle" } };
+  localStorage.setItem("lively_v2_app_studio", "[]");
+  St.openAppStudio({ sid: "s-t2", what: "회의록", title: "회의록" }, opts); await sleep(2500);
+  const again = btn(/다시 부탁하기/, $(".v2-studio-now"));
+  R.t2 = { now: txt($(".v2-studio-now")), body: txt($(".v2-studio-app-body")), again: again ? !again.disabled : null, spin: !!$(".v2-studio-app-body .v2-studio-spin") };
+  const pt2 = window.__prompts.length;
+  if (again) again.click();
+  await sleep(800);
+  R.t2.sent = window.__prompts.slice(pt2).filter((t) => /앱을 만들고 싶어/.test(t)).length;
+
+  // T3 — 앱빌더 첫 화면 목록 — 서버 칸이 다른 세션을 가리켜도 세션의 마지막 글(«1번째 고침이야 … app_pull app-2c»)로 그 앱의 ③ 으로 선다(② 라 하지 않는다)
+  window.__step = "T3";
+  const bapp = { id: "app-2c", title: "회의록", version: "1", enabled: true, installedBy: "wonjoon-jang", installedAt: 0, hasUi: true, canEdit: true, builtin: false, versionNo: 2, hasInstructions: false, icon: null,
+    studio: { place: "both", card }, visibility: "me", madeBy: "wonjoon-jang", ownerMember: "wonjoon-jang", origin: null, view: "installed", draft: null, buildSession: "s-other", isOwner: true, canPublish: true, canUnpublish: false, publishedNo: 0, empty: false, folder: null };
+  const envT3 = { projects: () => [{ id: 7, name: "앱빌더" }], sessionsReady: () => true,
+    sessions: () => [{ id: "s-t3", label: '"회의록" 앱 제작', projectId: 7, owned: true, lastSeen: Date.now(), raw: { lastPrompt: St.fixBrief(1, [], "글자 크게", "both", "app-2c") } }] };
+  localStorage.setItem("lively_v2_app_studio", "[]");
+  const M3 = St.buildModel([bapp], { id: "wonjoon-jang", name: "원준" }, envT3);
+  const d3 = M3.drafts.find((d) => d.sid === "s-t3");
+  R.t3 = d3 ? { stage: d3.stage, appId: d3.appId } : null;
+
   // ══ 격리 리뷰 #1583 후속(R1~R9) ══
   // R1 · 1 — 이미 공개된 앱(초안 없음)을 ④ 에서 「모두」 로 두고 이름을 바꿨다 — 저장이 만든 내 초안을 공개까지 한다(비공개 초안으로 남지 않게)
   window.__step = "R1";
@@ -471,6 +513,10 @@ same(R.b9 && [R.b9.tab, R.b9.done, R.b9.stage, R.b9.sent], [2, false, "draft", 0
 same(R.c1, "새 앱", "C1 6-11 이름 없이 시작 · 카드 전 — 머리줄은 「새 앱」(설명 전체가 이름처럼 뜨지 않게)");
 check(R.c3 && R.c3.early === "" && /다섯 번째 버전이 나왔어요/.test(R.c3.late || ""), "C3 6-10 판 정보를 받기 전 ③ 제목은 비우고 · 받으면 그 판으로", JSON.stringify(R.c3));
 check(R.e1 && R.e1.btn && R.e1.toasts.some((t) => /^앱 화면을 열지 못했어요\(.+\)$/.test(t)) && plain(R.e1.toasts), "E1 6-15 「앱 화면으로 보기」 가 서버 오류로 못 열면 «앱 화면을 열지 못했어요(까닭)»", JSON.stringify(R.e1));
+same(R.t1, { tab: 2, appId: "app-2c", round: 1, stage: "fix", writing: false, hub: true }, "T1 기록 없이 이어 열기 · 서버 칸이 다른 세션 — 세션 기록의 앱 id · 고침 차례로 ③ 에 연다(«② 쓰는 중» 이 아니라)");
+check(R.t2 && /쓰지 않았어요/.test(R.t2.now || "") && /쓰지 않았어요/.test(R.t2.body || "") && R.t2.again === true && !R.t2.spin, "T2 되짓지 못했고 AI 도 안 돈다 — «AI가 기획 카드를 쓰지 않았어요» · 「다시 부탁하기」(도는 표시 없음)", JSON.stringify(R.t2));
+same(R.t2 && R.t2.sent, 1, "T2 「다시 부탁하기」 — 처음 적은 내용으로 기획을 다시 청한다");
+same(R.t3, { stage: "fix", appId: "app-2c" }, "T3 앱빌더 목록 — 세션의 마지막 글이 가리킨 앱으로 ③ 에 선다(② 세부 기획이라 하지 않는다)");
 same(R.r1, { saves: 1, pubs: 1, draft: false, fin: true }, "R1 공개 앱(초안 없음)을 「모두」 로 두고 이름을 바꿈 — 저장한 초안을 공개까지(비공개 초안으로 남지 않는다)");
 same(R.r2 && [R.r2.cardFix, R.r2.first, R.r2.wait, R.r2.editable > 0], [false, "주제별 목록", false, true], "R2 카드 고침을 청해 두고 ③ 에 간 사이 온 카드 — 받아 두고 ② 는 풀려 있다");
 same(R.r3, { checks: 1 }, "R3 대조를 청한 뒤 답 전에 ④ 를 다시 들어와도 대조는 한 번");

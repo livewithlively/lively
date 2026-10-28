@@ -38,7 +38,7 @@ import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/
 import type { SessionChatHandle } from '../session-chat.js';
 import type { WireBoard } from './wire-board.js';   // 형만 — 보드는 열 때 늦게 들여온다(openWireframe)
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, draftAsked, parseNotify, plainNote, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, nextCopyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, sessionTrace, parseNotify, plainNote, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, nextCopyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 import { REC_MAX, mergeRec, trimRecs } from '../lib/studio-rec.js';   // 기록 한도 · 두 탭 합치기(감사 1-8 · 1-9)
 import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
 import { icon } from './icons.js';
@@ -88,6 +88,8 @@ export interface StudioRec {
   planAt?: number;
   /** ② 카드 아래 「수정하기」 로 카드 고침을 청한 때 — 고친 카드가 올 때까지 카드 편집 · 「완료」 를 잠근다(점검 4-2). */
   cardFix?: number;
+  /** 이 브라우저에 기록이 없어 세션 기록에서 되지었다(openAppStudio) — 카드를 못 되짓고 AI 가 안 돌면 «쓰는 중» 대신 «카드를 쓰지 않았어요» · 「다시 부탁하기」. */
+  rebuilt?: boolean;
   /** ⑤ 「팀에 알리기」 를 보낸 때 — AI 가 [[알림]] 으로 답하기 전(다시 누를 수 있다 · 점검 2-9). 답이 오면 notified 로 굳는다. */
   notifySent?: number;
 }
@@ -372,21 +374,28 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
       const rows: any[] = await api('/api/ui/apps?session=' + encodeURIComponent(resume.sid)).then((d: any) => (Array.isArray(d?.apps) ? d.apps : [])).catch(() => []);
       const a = rows[0] || null;
       if (!root) return;
-      if (!a && !resume.what && !resume.appId) { start(); return; }
-      const appId = a ? (a.empty ? '' : String(a.id)) : (resume.appId || '');
-      const pl = a && a.manifest && a.manifest.studio ? a.manifest.studio.place : '';
-      const place: StudioPlace = pl === 'side' || pl === 'full' || pl === 'both' ? pl : 'both';
-      let card: StudioCard | null = a && a.manifest && a.manifest.studio && a.manifest.studio.card ? a.manifest.studio.card : null;
-      let from = 0, asked = false;
+      //  세션 기록을 처음부터 읽어 만들기 상태를 되짓는다(lib/studio-flow sessionTrace) — 마지막 기획 카드 · 초안을 청했나 · 이 세션이 받고 저장한 앱 · 보낸 고침 차례.
+      //   서버의 만들기 세션 칸이 다른 세션을 가리키면(위 역조회가 빈다) 이미 앱을 만들어 ③ 에서 고치던 세션도 «② 쓰는 중» 으로 열렸다(원준 2026-10-29 실제 화면).
       const log = await rawLog(resume.sid, 'from=0');
-      if (log) { from = log.to; if (!card) assistantTexts(log.text).forEach((t) => { const c = parseCard(t); if (c) card = c; }); asked = draftAsked(log.text); }
+      const tr = log ? sessionTrace(log.text) : { card: null, asked: false, appId: '', round: 0 };
       if (!root) return;
-      const known = a ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
-      const title = resume.title || (a && !a.empty ? String(a.title || '') : '');
+      //  역조회가 비었고 이어 받을 앱 id 도 없으면 — 기록이 가리킨 앱이 아직 있는지(빈 예약이 아닌지) 서버에 묻는다.
+      let traced: StudioVis | null = null;
+      if (!a && !resume.appId && tr.appId) { traced = await readVis(tr.appId); if (traced && traced.empty) traced = null; if (!root) return; }
+      if (!a && !resume.what && !resume.appId && !traced && !tr.card) { start(); return; }
+      const appId = a ? (a.empty ? '' : String(a.id)) : (resume.appId || (traced ? tr.appId : ''));
+      const pl = a && a.manifest && a.manifest.studio ? a.manifest.studio.place : traced ? traced.place : '';
+      const place: StudioPlace = pl === 'side' || pl === 'full' || pl === 'both' ? pl : 'both';
+      const card: StudioCard | null = (a && a.manifest && a.manifest.studio && a.manifest.studio.card ? a.manifest.studio.card : null) || (traced && traced.card ? traced.card as StudioCard : null) || tr.card;
+      const from = log ? log.to : 0, asked = tr.asked;
+      const known = a || traced ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
+      const title = resume.title || (a && !a.empty ? String(a.title || '') : traced ? traced.title : '');
       const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || title || (a ? String(a.title || '') : ''), place, appId, known, at: Date.now(),
-        stage: appId ? 'fix' : asked && card ? 'draft' : 'plan', card, round: 0, from, mode: resume.mode || 'new', ...(resume.origin ? { origin: resume.origin, named: true } : {}), ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}),
+        stage: appId ? 'fix' : asked && card ? 'draft' : 'plan', card, round: appId ? tr.round : 0, from, mode: resume.mode || 'new', ...(resume.origin ? { origin: resume.origin, named: true } : {}), ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}),
         //  첫 판 전인데 그 세션에 초안을 이미 청했다(다른 브라우저에서 시작) — ② 의 「완료」 로 또 청하지 않게 초안 기다림으로 연다(점검 4-10).
-        ...(!appId && asked && card ? { cardSent: cardText(card), reached: 2 } : {}) };
+        ...(!appId && asked && card ? { cardSent: cardText(card), reached: 2 } : {}),
+        //  기록에서 되지은 만들기 — 아무것도 못 되짓고(카드 없음) AI 도 안 돌고 있으면 «쓰는 중» 으로 기다리게 하지 않는다(rebuilt · stallInfo).
+        rebuilt: true };
       saveRec(r2); void build(r2);
     })();
     return;
@@ -836,7 +845,8 @@ async function build(rec: StudioRec): Promise<void> {
     iconT0: 0, iconTick: 0, iconLast: '',   // ④ AI 에게 그려 달라고 보낸 때 · 흐른 시간 시계 · 보낸 글(멈췄을 때 그대로 다시 보낸다)
     colorOpen: false, cpick: null as Hsv | null, hexBad: false,   // ④ 「다른 색」 — 팔레트가 펼쳐졌나 · 손잡이 자리(다시 그려도 그대로) · 적은 색 코드가 틀렸나
     //  막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다 · 막 보낸 고침도 보낸 때부터 60초(armRun 과 같은 틈)
-    quietTill: Math.max(Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
+    //   기록에서 되지은 만들기(rebuilt)는 막 연 것이 아니다 — 세션은 이미 오래 있었다(그 2분을 기다리지 않는다).
+    quietTill: Math.max(!rec.rebuilt && Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
   const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 버전으로', hidden: true }) as HTMLButtonElement;
@@ -971,6 +981,10 @@ async function build(rec: StudioRec): Promise<void> {
    *  원준 2026-10-28 «중간에 안됐는데 수정중 하면서 시간 세고있으면 어떡해» — 막대만 멈췄다 하고 띠는 «AI 수정 중 11:06» 을 세고 있었다. */
   const stallInfo = (): { text: string; short: string; go: string; resume: boolean } | null => {
     const kind = runKind(); if (!S.stall || !kind) return null;
+    //  기록에서 되지었는데 카드도 없고 AI 도 안 돈다 — 카드를 청한 적이 없거나 쓰다 끝났다. «쓰는 중» 대신 그렇다고 말하고 처음 적은 내용으로 다시 부탁하게 한다.
+    if (cardNeverCame() && S.stall !== 'ask') return S.stall === 'offline'
+      ? { text: 'AI가 기획 카드를 쓰지 않았어요. 세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있어요. 그 컴퓨터를 켜면 다시 부탁할 수 있어요.', short: 'AI가 카드를 쓰지 않았어요', go: '다시 부탁하기', resume: false }
+      : { text: 'AI가 기획 카드를 쓰지 않았어요. 「다시 부탁하기」를 누르면 처음 적은 내용으로 다시 부탁해요.', short: 'AI가 카드를 쓰지 않았어요', go: '다시 부탁하기', resume: true };
     const go = kind === 'fix' ? '이어서 수정하기' : kind === 'icon' ? '다시 부탁하기' : '이어서 만들기';
     if (S.stall === 'ask') return { text: 'AI가 확인을 기다리고 있어요. 「AI 세션 보기」를 눌러 답해주세요.', short: 'AI가 확인을 기다려요', go, resume: false };
     if (S.stall === 'offline') return { text: '세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있거나 잠들어 있어서 AI가 멈췄어요. 그 컴퓨터를 켜면 이어서 할 수 있어요.', short: 'AI가 멈췄어요', go, resume: false };
@@ -979,6 +993,8 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.stall === 'limit') return { text: (S.limit || 'AI 사용 한도에 걸려 멈췄어요.') + ' 풀린 뒤 「' + go + '」를 누르면 ' + from + '.', short: 'AI 사용 한도로 멈췄어요', go, resume: true };
     return { text: 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 ' + (kind === 'icon' ? '다시 그려요' : '멈춘 곳부터 다시 해요') + '.', short: 'AI가 멈췄어요', go, resume: true };
   };
+  /** 기록에서 되지은 ② 인데 카드가 없다(그리고 AI 가 고치는 카드도 아니다) — 멈추면 «쓰는 중» 대신 «카드를 쓰지 않았어요». */
+  const cardNeverCame = (): boolean => !!rec.rebuilt && rec.stage === 'plan' && !rec.card && !rec.cardFix;
   const prevOf = (): 'what' | StudioStage | null => {
     if (rec.stage === 'plan') return rec.mode === 'new' ? 'what' : null;
     if (rec.stage === 'draft' || rec.stage === 'fix') return rec.mode === 'new' ? 'plan' : null;
@@ -1387,7 +1403,7 @@ async function build(rec: StudioRec): Promise<void> {
     //  옛 기록(카드 글을 안 적던 판)으로 ② 에 왔다 — 지금 카드를 «청한 카드» 로 잡아 둔다(이 뒤에 고친 것만 «바꾼 기획» 이다).
     if (rec.card && rec.cardSent == null && reachedOf(rec) >= 2) { rec.cardSent = cardText(rec.card); saveRec(rec); }
     if (!rec.card && noCardLeft()) { waiting('남아 있는 기획 카드가 없어요', '이 앱은 기획 카드를 따로 남기지 않았어요.\n「다음 →」을 누르면 지금 시안을 볼 수 있어요.', undefined, true); return; }
-    if (!rec.card) { waiting(S.stall ? 'AI가 기획 카드를 쓰다 멈췄어요' : 'AI가 기획 카드를 쓰는 중이에요', S.stall ? '위 줄에서 까닭을 보고 이어서 쓰게 할 수 있어요.' : '적어 주신 내용을 읽고 AI가 정리해요(1분 안팎).\n카드가 오면 다르게 생각하신 내용이 있는지 확인해주세요.', undefined, !!S.stall); return; }
+    if (!rec.card) { waiting(S.stall ? (cardNeverCame() && S.stall !== 'ask' ? 'AI가 기획 카드를 쓰지 않았어요' : 'AI가 기획 카드를 쓰다 멈췄어요') : 'AI가 기획 카드를 쓰는 중이에요', S.stall ? (cardNeverCame() && S.stall !== 'ask' ? '위 줄의 「다시 부탁하기」로 처음 적은 내용대로 다시 청할 수 있어요.' : '위 줄에서 까닭을 보고 이어서 쓰게 할 수 있어요.') : '적어 주신 내용을 읽고 AI가 정리해요(1분 안팎).\n카드가 오면 다르게 생각하신 내용이 있는지 확인해주세요.', undefined, !!S.stall); return; }
     //  AI 가 카드를 고치는 중 — 카드는 보기만 하고 아래 칸 대신 기다림 줄(점검 4-2). 그사이 손으로 고친 줄은 고친 카드가 오면 덮였고,
     //   그사이 「완료」 를 누르면 고치기 전 카드로 초안이 나갔다. 멈추면 위 줄이 까닭과 「이어서 만들기」 를 말한다.
     if (rec.cardFix) {
@@ -1474,7 +1490,8 @@ async function build(rec: StudioRec): Promise<void> {
         if (k === 'idle' && S.limit) k = 'limit';   // 턴이 끝난 까닭을 답 글이 말했다
         const node = row && row.node && row.node.name ? String(row.node.name).replace(/\.local$/, '') : '';
         if (!k) { S.stallT0 = 0; setStall(null, node); }
-        else if (now >= S.quietTill) { if (!S.stallT0) S.stallT0 = now; if (now - S.stallT0 >= STALL_MS) setStall(k, node); }
+        //  되지은 ② 에 카드가 없으면 기다릴 까닭이 없다 — 세션이 이미 멈춰 있으면 바로 말한다(30초를 «쓰는 중» 으로 돌지 않게).
+        else if (now >= S.quietTill) { if (!S.stallT0) S.stallT0 = now; if (now - S.stallT0 >= (cardNeverCame() ? 0 : STALL_MS)) setStall(k, node); }
       }
     }
     if (!S.dead) S.runT = window.setTimeout(() => { void watchRun(); }, 10000);
@@ -1495,7 +1512,8 @@ async function build(rec: StudioRec): Promise<void> {
       for (let i = 0; i < (restored ? 3 : 1) && !ok && !S.dead; i++) {
         if (i) await new Promise((r) => window.setTimeout(r, 3000));
         //  아이콘은 처음 글을 그대로 다시 — 꺼진 세션으로 간 글은 AI 가 받은 적이 없다(«이어서» 가 아니다).
-        ok = await send(kind === 'icon' && S.iconLast ? S.iconLast : resumeBrief(kind === 'icon' ? 'check' : kind));
+        //  되지은 ② 에 카드가 없다 — «이어서» 가 아니라 처음 적은 내용으로 기획을 다시 청한다.
+        ok = await send(cardNeverCame() ? planBrief(rec.what, rec.place, rec.title || '') : kind === 'icon' && S.iconLast ? S.iconLast : resumeBrief(kind === 'icon' ? 'check' : kind));
       }
       if (ok && kind === 'icon') { armIconWait(); toast('아이콘을 다시 그려 달라고 AI에게 보냈어요.'); if (rec.stage === 'check') paintCheck(); }
       else if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');

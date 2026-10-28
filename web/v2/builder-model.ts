@@ -9,11 +9,12 @@ import { appStateOf } from './app-session.js';
 import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 구성원 앱의 아이콘 선언
 import { folderView, type FolderView } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
+import { promptAppId } from '../lib/studio-flow.js';   // 세션이 마지막으로 받은 글에 적힌 앱 id(기록 없이 이어 열 때와 같은 자)
 import { builderSessionName, draftTitle, isAppInProgress, isBuilderSession, isBuildingSession, isEditSessionLabel } from '../lib/builder-flow.js';
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
-  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null; trashedAt?: string | null; logId?: string | null; logNode?: string | null; raw?: { claudeSessionId?: unknown } | null }>;
+  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null; trashedAt?: string | null; logId?: string | null; logNode?: string | null; raw?: { claudeSessionId?: unknown; lastPrompt?: unknown } | null }>;
   /** 세션 목록(정본)을 한 번이라도 받았나 — 받은 뒤에만 «기록은 있는데 서버에 세션이 없다» 를 «지운 만들기» 로 읽는다. 안 주면 모른다(종전대로 기록을 다 세운다). */
   sessionsReady?: () => boolean;
   /** 앱빌더 사이드바를 다시 그린다 — 앱빌더 안의 이동(셸이 다시 그리지 않는다)과 목록을 새로 받은 뒤. */
@@ -139,7 +140,13 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
     //  고치기 세션이 이어진 앱 — 원본이 있으면 사본(새로 만드는 내 앱), 없으면 내가 쓰던 앱을 「고치기」 로 연 것이다(지워도 앱은 남는다 · 리뷰 B1:
     //   원본 없는 내 앱을 사본으로 치면 「지우기」 가 진짜 앱을 discard 했다). 사본은 늘 원본을 단다(makeCopy origin_app_id).
     const mode: Draft['mode'] = isEditSessionLabel(s.label) ? (a && a.origin ? 'copy' : 'edit') : 'new';
-    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at, local: false, node: String(s.node || ''), serverApp: a ? a.id : '', mode, keepApp: keepFor(mode, a ? a.id : '') });
+    //  서버의 만들기 세션 칸이 이 세션을 가리키지 않아도(다른 세션이 이어졌다) 이 세션이 마지막으로 받은 글이 앱을 가리키면(«1번째 고침이야 … app_pull <id>»)
+    //   이미 그 앱을 만들어 ③ 에서 고치던 세션이다 — «② 세부 기획» 이라 하지 않는다(원준 2026-10-29 실제 화면). 그 앱이 다 됐으면 「내가 만든 앱」 에 선다.
+    const tid = !a && s.raw ? promptAppId(typeof s.raw.lastPrompt === 'string' ? s.raw.lastPrompt : '') : '';
+    const t = tid ? apps.find((x) => x.id === tid && !x.empty) || null : null;
+    if (t && isDone(t)) return;
+    const own = a || t;
+    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: own && !own.empty ? own.title : '' }), stage: own && !own.empty ? 'fix' : 'plan', appId: own && !own.empty ? own.id : '', done: false, at, local: false, node: String(s.node || ''), serverApp: own ? own.id : '', mode, keepApp: keepFor(mode, own ? own.id : '') });
   });
   drafts.sort((a, b) => b.at - a.at);
   //  고치던 앱이 남는 만들기(keepApp)의 앱은 목록에서 빼지 않는다 — 내 앱을 「고치기」 로 열었다 나와도 「내가 만든 앱」 에 그대로(감사 1-1).
