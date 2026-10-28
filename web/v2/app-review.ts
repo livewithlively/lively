@@ -14,7 +14,8 @@
 //  떠나면(다른 주소로 · 「‹ 앱빌더」 · 부르는 쪽이 close) 층과 막대를 걷는다. 한 번에 하나만 뜬다.
 import { el } from '../core.js';
 import { markReviewProbe } from './app-ui.js';
-import { verName, whereText, type StudioPin } from '../lib/studio-flow.js';
+import { fitGrow, growText } from './grow-text.js';
+import { unsent, verName, whereText, type StudioPin } from '../lib/studio-flow.js';
 
 export type ReviewTool = 'try' | 'pick' | 'pin' | 'box';
 export interface ReviewHost {
@@ -87,12 +88,10 @@ export function openReview(host: ReviewHost): ReviewApi {
     title: host.dock ? '시험 세션의 우측 사이드바에 붙은 모습이에요' : '실제 앱의 사용 화면과 동일한 화면이에요' });
   //  「AI에게 말하기」(원준 2026-10-28 «앱 전체에 코멘트하는 텍스트박스를 누르면 아래에서 위로 올라오게 · AI와 대화하면서 물어보고 지정하고 수정»).
   //   옛 «앱 전체 코멘트» 칸(원준 2026-10-16 «바로바로 텍스트 쳐서»)의 자리다 — 묶어 보내는 앱 전체 코멘트는 「코멘트 n건」 칸의 「앱 전체」 줄에 그대로 있다.
-  const gen = el('input', { class: 'v2-review-gen', type: 'text', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', 'aria-label': 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요' }) as HTMLInputElement;
+  //   글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 보내기 · Shift+Enter 줄바꿈.
+  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요 · Shift+Enter 줄바꿈', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
+    onEnter: () => { void say(); }, onEscape: () => { closeTalk(); gen.blur(); } });
   gen.addEventListener('focus', () => openTalk());
-  gen.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); closeTalk(); gen.blur(); return; }
-    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); void say(); }
-  });
   const note = el('span', { class: 'v2-review-note', hidden: true });
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위나 아래로 옮겨요', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
   bar.append(
@@ -108,28 +107,29 @@ export function openReview(host: ReviewHost): ReviewApi {
   if (host.dock) { bar.classList.add('v2-review-bar--dock'); flip.hidden = true; count.after(hint); host.dock.append(bar); document.body.append(layer); }
   else document.body.append(layer, bar);
 
-  const cmCount = (): number => host.pins.filter((p) => p.note.trim()).length + (host.general.trim() ? 1 : 0);
+  const cmCount = (): number => host.pins.filter((p) => unsent(p) && p.note.trim()).length + (host.general.trim() ? 1 : 0);   // 보내서 반영 중인 것은 세지 않는다
   const changed = (): void => { host.onChange({ pins: host.pins, general: host.general }); paintBar(); };
   const paintBar = (): void => {
     const n = cmCount();
-    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
+    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; return b; }));   // 고치는 중에도 짚는다 — 다음 「수정하기」 몫(원준 2026-10-28)
     const blank = host.pins.filter((p) => !p.note.trim()).length;
     count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 수정 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
-    gen.disabled = host.waiting || S.talkBusy;   // 「수정하기」 묶음을 고치는 중엔 말을 받지 않는다(두 지시가 한 세션에 섞이지 않게)
+    gen.disabled = S.talkBusy;   // 고치는 중에도 말한다 — AI 세션이 받아 두었다가 이어서 한다(원준 2026-10-28 «다 적용될 때까지 비활성화 · 해결해야»)
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
-    hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 다음 버전이 나오면 앱이 바뀌어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
+    hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
     if (host.waiting && host.stall) {   // 멈췄다 — «AI 수정 중 m:ss» 를 세지 않고 앱빌더 막대와 같은 말 · 같은 단추
       send.textContent = '이어서 수정하기'; send.disabled = !host.stall.resume || !host.onResume; hint.textContent = host.stall.text;
     }
-    layer.hidden = !S.frame || host.waiting;
+    layer.hidden = !S.frame;   // 고치는 중에도 짚는다(원준 2026-10-28)
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
+    paintTrayBits();   // 열린 코멘트 목록의 머리 · 「수정하기」 도 같은 셈으로
   };
   const setTool = (k: ReviewTool): void => { S.tool = k; closePop(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); paintBar(); paintMarks(); };
-  count.onclick = () => openTray();
+  count.onclick = () => toggleTray();
   send.onclick = () => { if (host.waiting && host.stall) { if (host.stall.resume && host.onResume) host.onResume(); return; } if (cmCount()) host.onSend(); };
 
   // ── 프레임 찾기 · 따라가기 ──
@@ -167,7 +167,9 @@ export function openReview(host: ReviewHost): ReviewApi {
     const r = layer.getBoundingClientRect();
     return { x: Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width))), y: Math.max(0, Math.min(1, (e.clientY - r.top) / Math.max(1, r.height))) };
   };
-  const addItem = (p: StudioPin): void => { host.pins.push(p); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); changed(); paintMarks(); openPop(host.pins.length - 1); };
+  //  코멘트 목록이 열려 있으면 그 끝에 한 줄을 더해 그 칸에 바로 쓴다(목록은 닫지 않는다 — 원준 2026-10-28 «여러 개 코멘트 넘기기도 어렵고»).
+  //   닫혀 있으면 짚은 곳 옆에 그 자리 칸이 뜬다. 도구는 그대로라 이어서 다음 곳을 짚는다.
+  const addItem = (p: StudioPin): void => { host.pins.push(p); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); changed(); paintMarks(); if (tray) openTray(host.pins.length - 1); else openPop(host.pins.length - 1); };
   let drag: { x: number; y: number; box: HTMLElement } | null = null; let skip = false;
   ov.addEventListener('pointermove', (e: PointerEvent) => {
     if (S.tool === 'pick' && Date.now() - S.hoverAt > 70) { S.hoverAt = Date.now(); const w = frameWin(); const q = ratio(e); if (w) w.postMessage({ __studio: 'hit', id: 0, x: q.x, y: q.y }, '*'); }
@@ -205,12 +207,14 @@ export function openReview(host: ReviewHost): ReviewApi {
       if (p.on === 'wire') return;   // 와이어프레임 보드에서 짚은 곳 — 앱 화면 위엔 그리지 않는다(번호는 그대로 i + 1)
       const hot = i === S.active;
       if (p.kind === 'pick' || p.kind === 'box') {
-        const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') });
+        const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') + (p.sent ? ' sent' : '') });
         Object.assign(b.style, { left: p.x * 100 + '%', top: p.y * 100 + '%', width: (p.w || 0) * 100 + '%', height: (p.h || 0) * 100 + '%' });
         layer.append(b);
       }
-      const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : ''), title: p.note || p.where || '', 'aria-label': (i + 1) + '번 코멘트 열기',
-        onclick: (e: MouseEvent) => { e.stopPropagation(); openPop(i); } }, el('span', { text: String(i + 1) }));
+      //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 고칠 수 없다(이미 AI 에게 갔다).
+      const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
+        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
+        onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent) openPop(i); } }, el('span', { text: String(i + 1) }));
       n.style.left = p.x * 100 + '%'; n.style.top = p.y * 100 + '%';
       layer.append(n);
     });
@@ -222,16 +226,17 @@ export function openReview(host: ReviewHost): ReviewApi {
   const openPop = (i: number): void => {
     const p = host.pins[i]; if (!p) return;
     if (pop) pop.remove();
+    closeTray();   // 그 자리 칸과 코멘트 목록은 함께 서지 않는다 — 한쪽에서 고친 것을 다른 쪽이 옛 글로 들고 있게 된다
     S.active = i; paintMarks();
-    const ta = el('textarea', { class: 'ta', rows: '2', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLTextAreaElement; ta.value = p.note;
-    ta.addEventListener('input', () => { p.note = ta.value; changed(); });
-    ta.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); closePop(); } if (e.key === 'Escape') closePop(); });
+    const ta = growText({ class: 'ta', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note, max: 8,
+      onInput: (v) => { p.note = v; changed(); }, onEnter: () => closePop(), onEscape: () => closePop() });
     const kind = p.kind === 'pick' ? '선택한 요소' : p.kind === 'box' ? '영역' : '핀';
     const pp = el('div', { class: 'v2-studio-pop', role: 'dialog', 'aria-label': (i + 1) + '번 코멘트' },
       el('div', { class: 'k' }, el('span', { class: 'n', text: String(i + 1) }), el('b', { text: kind }), el('span', { class: 'w', text: p.where || '' })),
       ta,
       el('div', { class: 'act' },
         el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 코멘트를 지워요', onclick: () => removePin(i) }),
+        el('small', { class: 'v2-studio-pop-key', text: 'Shift+Enter 줄바꿈' }),
         el('span', { class: 'v2-studio-sp' }), el('button', { type: 'button', class: 'v2-studio-now-pri', text: '완료', onclick: () => closePop() })));
     pp.addEventListener('pointerdown', (e) => e.stopPropagation());
     const right = p.x + (p.w || 0);
@@ -241,41 +246,82 @@ export function openReview(host: ReviewHost): ReviewApi {
     const roomR = window.innerWidth - (lr.left + right * lr.width), roomL = lr.left + p.x * lr.width;
     const toRight = roomR >= need ? true : roomL >= need ? false : roomR >= roomL;
     if (toRight) pp.style.left = 'calc(' + right * 100 + '% + 12px)'; else pp.style.right = 'calc(' + (100 - p.x * 100) + '% + 12px)';
-    pop = pp; layer.append(pp); ta.focus();
+    pop = pp; layer.append(pp); fitGrow(ta); ta.focus();
   };
-  // 의견 한눈에 — 막대 위에 뜨는 칸(짚은 곳마다 한 줄 · 앱 전체 한 칸)
+  // 코멘트 목록 — 막대에 맞붙어 열린다(짚은 곳마다 한 장 · 앱 전체 한 칸 · 맨 아래 「수정하기」).
+  //  앱을 짚어도 닫히지 않는다 — 열어 둔 채 이곳저곳 짚으면 짚을 때마다 끝에 한 장이 생기고 그 칸에 바로 쓴다(원준 2026-10-28 «여러 개 코멘트 넘기기도 어렵고 · 쓰기가 너무 불편»).
+  //  닫는 것은 「접기」 · 「코멘트 n건」 · Esc · 「AI에게 말하기」 칸 열기.
   let tray: HTMLElement | null = null;
-  const closeTray = (): void => { if (tray) { tray.remove(); tray = null; if (!bar.classList.contains('v2-review-bar--talk')) bar.classList.remove('v2-review-bar--tray'); document.removeEventListener('pointerdown', onTrayOut, true); } };
-  const onTrayOut = (e: Event): void => { if (tray && !tray.contains(e.target as Node) && e.target !== count) closeTray(); };
-  const openTray = (): void => {
-    if (tray) { closeTray(); return; }
-    closeTalk();
-    const rows = host.pins.map((p, i) => {
-      const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
-      inp.addEventListener('input', () => { p.note = inp.value; changed(); });
-      const wire = p.on === 'wire';
-      return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '그 자리 보기', disabled: wire, onclick: () => { closeTray(); openPop(i); } }),
-        el('span', { class: 'w', text: (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { removePin(i); closeTray(); openTray(); } }));
-    });
-    const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = host.general;
-    g.addEventListener('input', () => { host.general = g.value; changed(); });
-    const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '코멘트' },
-      el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: host.pins.length ? '번호를 누르면 그 자리 코멘트 칸이 열려요' : '막대의 선택 · 핀 · 영역으로 고칠 곳에 코멘트를 남겨주세요' })),
-      //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
-      el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));
-    tray = t;
-    if (host.dock) {
-      //  막대가 화면 맨 위 줄에 들어앉았으면 칸은 막대 **아래로** — 몸(body)에 붙여 앱 위 층(.v2-review-layer)보다 위에 선다(그 층이 사이드바의 앱을 덮고 있다).
-      const br = bar.getBoundingClientRect(), cr = count.getBoundingClientRect(), w = Math.min(560, window.innerWidth - 16);
-      t.classList.add('v2-review-tray--fixed');
-      Object.assign(t.style, { top: Math.round(br.bottom) + 'px', left: Math.round(Math.max(8, Math.min(cr.left, window.innerWidth - w - 8))) + 'px', width: w + 'px' });
-      document.body.append(t);
-    } else bar.append(t);
-    //  막대와 칸은 한 덩어리(원준 2026-10-16 «이거 두 개를 왜 하나로 안 붙이는 거야») — 사이 틈 없이 맞붙고 맞닿은 모서리는 각진다.
-    bar.classList.add('v2-review-bar--tray');
-    setTimeout(() => document.addEventListener('pointerdown', onTrayOut, true), 0);
+  let trayHead: HTMLElement | null = null, traySend: HTMLButtonElement | null = null;
+  const closeTray = (): void => { if (tray) { tray.remove(); tray = null; trayHead = null; traySend = null; if (!bar.classList.contains('v2-review-bar--talk')) bar.classList.remove('v2-review-bar--tray'); if (S.active >= 0) { S.active = -1; paintMarks(); } } };
+  const paintTrayBits = (): void => {
+    if (trayHead) trayHead.textContent = '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '');
+    if (traySend) { traySend.textContent = send.textContent; traySend.disabled = send.disabled; }
   };
+  //  다시 그려도 쓰던 칸을 잃지 않는다 — 칸 ↔ 그 코멘트(같은 객체)를 기억했다가 새 칸에 커서 · 고른 글을 되돌린다(고치는 중 새 버전이 오면 목록을 다시 그린다).
+  const taOf = new WeakMap<HTMLTextAreaElement, StudioPin | 'all'>();
+  const openTray = (focus?: number): void => {
+    closeTalk(); closePop();
+    const prevList = tray ? (tray.querySelector('.v2-studio-tray-list') as HTMLElement | null) : null;
+    const keepScroll = prevList ? prevList.scrollTop : 0;
+    const act = tray && document.activeElement instanceof HTMLTextAreaElement && tray.contains(document.activeElement) ? document.activeElement : null;
+    const keep = act ? { key: taOf.get(act), a: act.selectionStart, b: act.selectionEnd } : null;
+    const mark = (i: number): void => { if (S.active !== i) { S.active = i; paintMarks(); } };
+    const rows = host.pins.map((p, i) => {
+      const wire = p.on === 'wire';
+      const inp = growText({ class: 'v2-studio-tray-in', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note,
+        onInput: (v) => { p.note = v; changed(); }, onEnter: () => inp.blur(), onEscape: () => closeTray() });
+      taOf.set(inp, p);
+      inp.addEventListener('focus', () => mark(host.pins.indexOf(p)));
+      if (p.sent) { inp.disabled = true; inp.title = 'AI가 반영하고 있어요'; }
+      //  ✕ · 번호는 그 코멘트(객체)로 찾는다 — 다른 데서 하나가 지워져도 엉뚱한 것을 지우지 않는다.
+      const row = el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '앱에서 그 자리 보기', disabled: wire, onclick: () => mark(host.pins.indexOf(p)) }),
+        el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
+        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { const j = host.pins.indexOf(p); if (j >= 0) removePin(j); openTray(); } }));
+      row.addEventListener('pointerenter', () => mark(host.pins.indexOf(p)));
+      return row;
+    });
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: host.general,
+      onInput: (v) => { host.general = v; changed(); }, onEnter: () => g.blur(), onEscape: () => closeTray() });
+    taOf.set(g, 'all');
+    trayHead = el('b');
+    traySend = el('button', { class: 'v2-studio-now-pri', type: 'button', onclick: () => send.click() }) as HTMLButtonElement;   // 막대의 단추와 같은 일(멈췄으면 「이어서 수정하기」)
+    const list = el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows);
+    const kids = [
+      el('div', { class: 'v2-studio-tray-h' }, trayHead, el('span', { class: 'v2-studio-sp' }),
+        el('small', { text: host.pins.length ? '열어 둔 채로 앱을 이어서 짚으면 여기에 한 장씩 더해져요' : '선택 · 핀 · 영역으로 앱을 짚으면 여기에 한 장씩 더해져요' }),
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '접기', onclick: () => closeTray() })),
+      //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
+      list,
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
+    //  이미 열려 있으면 그 상자를 그대로 두고 속만 간다 — 세션 위젯 꼴의 고정 자리(--fixed · 위치)가 남는다.
+    if (tray) tray.replaceChildren(...kids);
+    else {
+      const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '코멘트' }, ...kids);
+      tray = t;
+      if (host.dock) {
+        //  막대가 화면 맨 위 줄에 들어앉았으면 칸은 막대 **아래로** — 몸(body)에 붙여 앱 위 층(.v2-review-layer)보다 위에 선다(그 층이 사이드바의 앱을 덮고 있다).
+        const br = bar.getBoundingClientRect(), cr = count.getBoundingClientRect(), w = Math.min(560, window.innerWidth - 16);
+        t.classList.add('v2-review-tray--fixed');
+        Object.assign(t.style, { top: Math.round(br.bottom) + 'px', left: Math.round(Math.max(8, Math.min(cr.left, window.innerWidth - w - 8))) + 'px', width: w + 'px' });
+        document.body.append(t);
+      } else bar.append(t);
+      //  막대와 칸은 한 덩어리(원준 2026-10-16 «이거 두 개를 왜 하나로 안 붙이는 거야») — 사이 틈 없이 맞붙고 맞닿은 모서리는 각진다.
+      bar.classList.add('v2-review-bar--tray');
+    }
+    paintTrayBits();
+    list.querySelectorAll('textarea').forEach((x) => fitGrow(x as HTMLTextAreaElement));
+    list.scrollTop = keepScroll;   // 칸 높이를 맞춘 뒤에 — 한 줄짜리일 때 되돌리면 브라우저가 깎는다
+    let to: HTMLTextAreaElement | undefined;
+    if (focus != null) to = list.querySelectorAll('.v2-studio-tray-row:not(.all) textarea')[focus] as HTMLTextAreaElement | undefined;
+    else if (keep && keep.key) to = [...list.querySelectorAll('textarea')].find((x) => taOf.get(x as HTMLTextAreaElement) === keep.key) as HTMLTextAreaElement | undefined;
+    if (to && !to.disabled) {
+      if (focus != null) to.scrollIntoView({ block: 'nearest' });
+      to.focus();
+      if (keep && focus == null) { try { to.setSelectionRange(keep.a, keep.b); } catch (_) { /* 글이 줄었으면 끝으로 */ } }
+    }
+  };
+  const toggleTray = (): void => { if (tray) closeTray(); else openTray(); };
   // 대화 칸 — 막대에 맞붙어 올라오고(막대가 위면 아래로) 그 안에 만드는 AI 세션 화면이 선다. 처음 열 때 한 번 옮겨 오고(옮기면 터미널이 다시 붙는다),
   //  닫으면 숨기기만 한다 — 다시 열면 그대로다. 층이 걷히면 제자리(앱빌더의 「AI 세션」 칸)로 돌려놓는다.
   const talkBody = el('div', { class: 'v2-review-talk-body' });
@@ -309,7 +355,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     bar.classList.remove('v2-review-bar--talk'); if (!tray) bar.classList.remove('v2-review-bar--tray');
   };
   const say = async (): Promise<void> => {
-    const t = gen.value.trim(); if (!t || S.talkBusy || host.waiting) return;
+    const t = gen.value.trim(); if (!t || S.talkBusy) return;
     openTalk();
     S.talkBusy = true; paintBar();
     const ok = await host.onTalk(t).catch(() => false);
@@ -321,7 +367,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const tickWait = (): void => {
     if (!host.waiting || host.stall || S.dead) return;
     const s = Math.floor((Date.now() - S.waitT0) / 1000);
-    send.textContent = 'AI 수정 중 ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    send.textContent = 'AI 수정 중 ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); paintTrayBits();
     S.waitTick = window.setTimeout(tickWait, 1000);
   };
 
@@ -330,15 +376,17 @@ export function openReview(host: ReviewHost): ReviewApi {
       if (S.dead) return;
       if (p.title != null) { host.title = p.title; name.textContent = '「' + host.title + '」'; }
       if (p.version != null) host.version = p.version;
-      if (p.pins) { host.pins = p.pins; closePop(); closeTray(); }
+      const reTray = !!tray;   // 열린 코멘트 목록은 닫지 않고 새 목록으로 다시 그린다
+      if (p.pins) { host.pins = p.pins; closePop(); }
       if (p.general != null) host.general = p.general;
       if (p.stall !== undefined && (p.stall ? p.stall.text + p.stall.resume : '') !== (host.stall ? host.stall.text + host.stall.resume : '')) {
         const was = !!host.stall; host.stall = p.stall; window.clearTimeout(S.waitTick);
         if (was && !host.stall && host.waiting) S.waitT0 = Date.now();   // 다시 돌면 시계는 그때부터
         tickWait();
       }
-      if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; closePop(); closeTray(); if (p.waiting) { S.waitT0 = Date.now(); S.tool = 'try'; tickWait(); } else { window.clearTimeout(S.waitTick); S.tool = 'pick'; } }
+      if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; closePop(); if (p.waiting) { S.waitT0 = Date.now(); tickWait(); } else window.clearTimeout(S.waitTick); }   // 도구는 그대로 — 고치는 중에도 짚는다
       paintBar(); paintMarks();
+      if (reTray && tray && (p.pins || p.waiting != null)) openTray();
       if (p.note) { note.textContent = (host.version ? verName(host.version) + ' · ' : '') + p.note; note.hidden = false; window.clearTimeout(S.noteT); S.noteT = window.setTimeout(() => { note.hidden = true; }, 8000); }
     },
     close: () => {

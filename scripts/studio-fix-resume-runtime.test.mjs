@@ -100,7 +100,8 @@ async function PAGE_MAIN() {
 
   window.__step = "F4";
   window.__ver = 6;
-  await mount({ ...base, fixing: { at: Date.now() - 300000, ver: 5 } });
+  //  고치는 동안 새로 남긴 앱 전체 코멘트(보낸 것은 보낼 때 비웠다) — 끝맺어도 다음 「수정하기」 몫으로 남는다.
+  await mount({ ...base, general: "버튼 둥글게", fixing: { at: Date.now() - 300000, ver: 5 } });
   const r4 = recNow();
   R.f4 = { ...view(), fixing: r4.fixing || null, round: r4.round, general: r4.general, prompts: window.__prompts.length };
 
@@ -156,14 +157,14 @@ const bad = (n, why) => { fail++; console.error(`FAIL  ${n} — ${why}`); };
 const check = (cond, n, why = "") => (cond ? ok(n) : bad(n, typeof why === "string" ? why : JSON.stringify(why)));
 const same = (got, want, n) => { const a = JSON.stringify(got), b = JSON.stringify(want); return a === b ? ok(n) : bad(n, `기대 ${b} · 실제 ${a}`); };
 //  기다리는 동안 — 허브 · 막대 글 · 띠가 같은 말 · 막대엔 누를 「수정하기」 가 없다(있어도 잠김)
-const fixing = (v) => !!v && /수정하고 있어요/.test(v.h2 || "") && /수정하고 있어요/.test(v.now || "") && v.spin && !v.go && /^AI 수정 중 \d+:\d\d$/.test(v.band || "") && (!v.fix || v.fix[1] === true);
+const fixing = (v) => !!v && /수정하고 있어요/.test(v.h2 || "") && /수정하고 있어요/.test(v.now || "") && v.spin && v.go && /^AI 수정 중 \d+:\d\d$/.test(v.band || "") && (!v.fix || v.fix[1] === true);
 
 check(R.f1 && R.f1.before.fix && R.f1.before.fix[1] === false && R.f1.prompts === 1 && R.f1.fixing && R.f1.fixing.ver === 5 && R.f1.fixing.at > 0 && fixing(R.f1.after), "F1 「수정하기」 — 보낸 때와 그때 가장 뒤 판(5)을 기록에 둔다", R.f1);
 check(fixing(R.f2), "F2 닫고 다시 열어도 허브 · 막대 «AI가 수정하고 있어요» · 도는 표시 · 띠 «AI 수정 중»", R.f2);
-check(R.f2 && R.f2.prompts === 0 && R.f2.hubIn === true && R.f2.general === "앱에서 + 새 회의록 하면 나오는 곳에 여러 파일을 올릴 수 있도록", "F2 다시 연 뒤 눌러도 같은 고침을 또 보내지 않는다(보낸 코멘트는 새 판까지 그대로)", R.f2);
+check(R.f2 && R.f2.prompts === 0 && R.f2.hubIn === true && R.f2.general === "", "F2 다시 연 뒤 눌러도 같은 고침을 또 보내지 않는다(보낸 앱 전체 코멘트는 보낼 때 비웠다 · 원준 2026-10-28 «고치는 중에도 다음 코멘트»)", R.f2);
 check(fixing(R.f3) && /^AI 수정 중 2:[01]\d$/.test(R.f3.band), "F3 시계는 보낸 때부터(2분 지나 열면 2:0x~2:1x)", R.f3);
-check(R.f4 && R.f4.fixing === null && R.f4.round === 5 && R.f4.general === "" && R.f4.prompts === 0, "F4 나가 있던 사이 새 판 — 열자마자 끝맺는다(기다림 · 코멘트를 걷고 몇 번째를 올린다 · 다시 보내지 않는다)", R.f4);
-check(R.f4 && /나왔어요/.test(R.f4.h2 || "") && R.f4.go && /^V6 · 파일 여러 개 올리기$/.test(R.f4.band) && /코멘트를 남겨주세요/.test(R.f4.now || "") && (!R.f4.fix || R.f4.fix[1] === true), "F4 «V6 · 요지» 를 알리고 실제 화면 단추가 다시 선다 · 막대는 새 코멘트를 청한다", R.f4);
+check(R.f4 && R.f4.fixing === null && R.f4.round === 5 && R.f4.general === "버튼 둥글게" && R.f4.prompts === 0, "F4 나가 있던 사이 새 판 — 열자마자 끝맺는다(기다림을 걷고 몇 번째를 올린다 · 다시 보내지 않는다 · 고치는 동안 남긴 코멘트는 그대로)", R.f4);
+check(R.f4 && /나왔어요/.test(R.f4.h2 || "") && R.f4.go && /^V6 · 파일 여러 개 올리기$/.test(R.f4.band) && /코멘트 1건/.test(R.f4.now || "") && R.f4.fix && R.f4.fix[1] === false, "F4 «V6 · 요지» 를 알리고 실제 화면 단추가 선다 · 고치는 동안 남긴 코멘트로 「수정하기」 가 눌린다", R.f4);
 check(R.f5 && /멈췄어요/.test(R.f5.now || "") && R.f5.fix && R.f5.fix[0] === "이어서 수정하기" && !R.f5.spin, "F5 다시 연 뒤에도 멈춤 판정이 돈다(「이어서 수정하기」)", R.f5);
 check(R.f6 && R.f6.before.fixing && fixing(R.f6.before) && !R.f6.after.fixing && /나왔어요/.test(R.f6.after.h2 || ""), "F6 보낼 때 판을 못 읽은 기록 — 보낸 뒤 저장된 판으로 가린다", R.f6);
 same(R.f7, { waiting: "③ 수정 중", done: "③ 시안", none: "③ 시안" }, "F7 만들던 앱 줄 — 기다리면 「③ 수정 중」 · 지금 판이 보낸 판보다 뒤면 이미 끝남 · 기록 없으면 「③ 시안」");

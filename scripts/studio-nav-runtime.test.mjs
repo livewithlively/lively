@@ -140,7 +140,7 @@ async function PAGE_MAIN() {
   St.openAppStudio({ sid: "box-s3" }, opts);
   await sleep(1500);
   const rec3Now = () => (JSON.parse(localStorage.getItem("lively_v2_app_studio") || "[]").find((r) => r.sid === "box-s3") || {});
-  const allIn = $(".v2-studio-tray-row.all input");
+  const allIn = $(".v2-studio-tray-row.all .v2-studio-tray-in");
   if (allIn) { allIn.value = "글자 조금 크게"; allIn.dispatchEvent(new Event("input", { bubbles: true })); }
   p0 = sent();
   const fixBtn = $$(".v2-studio-now button").find((b) => /수정하기/.test(b.textContent));

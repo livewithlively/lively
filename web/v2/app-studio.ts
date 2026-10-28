@@ -21,7 +21,8 @@
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
 import { spawnSession } from './quick-session.js';
 import { takeCreated } from './created-cache.js';
-import { openAppUi, reloadAppFrames } from './app-ui.js';
+import { reloadAppFrames } from './app-ui.js';
+import { growText } from './grow-text.js';   // 코멘트 칸 — 글이 길면 세로로 늘어난다
 import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
@@ -29,14 +30,14 @@ import { attachAppToSession } from './session-app-pane.js';   // ⑤ 「지금 �
 import { markReviewOpen, readReviewOpen } from './review-resume.js';   // ③ 실제 화면을 보던 중 새로고침 → 같은 화면 · 막대로
 import { ensureTrySession, mountTrySession, type TrySession } from './app-try-session.js';   // ③ 세션 위젯 = 시험 세션(앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다)
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
-import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
+import { getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 한 번 연 인스턴스 탭(#/i/<id>)을 다시 쓴다
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
 import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNode } from './run-prefs.js';
 import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, talkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, talkBrief, unsent, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
 import { icon } from './icons.js';
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
@@ -50,8 +51,9 @@ export interface StudioRec {
   view?: 'widget' | 'app';   // ③ 에서 마지막으로 본 실제 화면 — 세션 위젯 · 앱 화면
   /** ③ 세션 위젯의 시험 세션(app-try-session.ts — 앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다). 다시 열면 그 세션으로. */
   trySid?: string;
-  /** ③ 「앱 화면으로 보기」 가 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로. */
-  instId?: string;
+  /** ③ 「앱 화면으로 보기」 가 앱 찾기와 같은 길(apps.openAppById)로 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로.
+   *  옛 칸 instId 는 그 길을 안 거치고 만든 인스턴스라 다시 쓰지 않는다(원준 2026-10-28 «앱 찾기에서 누른 것과 똑같은 게»). */
+  appInst?: string;
   /** ④ 확인에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 'all' 이면 「이대로 넣기」 가 공개한다(app_save publish).
    *  'me' 면 공개하지 않는다 — 새 앱은 나만 보는 앱으로, 이미 공개한 앱을 고친 것이면 내 초안으로 남는다(공개를 거두지 않는다 · #4667). */
   vis?: 'all' | 'me';
@@ -143,7 +145,7 @@ function readRecs(): StudioRec[] {
   } catch (_) { return []; }
 }
 function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(rs.slice(-12))); } catch (_) { /* noop */ } }
-function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r); writeRecs(rs); }
+function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r); writeRecs(rs); }   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
 /** 이 브라우저의 만들던 기록 전부 — 앱빌더 목록이 읽는다. */
 export function studioRecs(): StudioRec[] { return readRecs(); }
 /** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
@@ -876,7 +878,7 @@ async function build(rec: StudioRec): Promise<void> {
     await setStage(k === 'fix' && !rec.appId ? 'draft' : k);
   };
   const nowBtn = (text: string, pri: boolean, run: () => void, disabled = false): HTMLButtonElement => { const b = el('button', { class: pri ? 'v2-studio-now-pri' : 'btn btn-ghost btn-sm', type: 'button', text, onclick: run }) as HTMLButtonElement; b.disabled = disabled; return b; };
-  const cmCount = (): number => S.pins.filter((p) => p.note.trim()).length + (S.general.trim() ? 1 : 0);
+  const cmCount = (): number => S.pins.filter((p) => unsent(p) && p.note.trim()).length + (S.general.trim() ? 1 : 0);   // 보내서 반영 중인 것은 세지 않는다
   const paintNow = (): void => {
     const kids: Array<HTMLElement | null> = []; let text = '';
     const hasCm = cmCount() > 0;
@@ -889,7 +891,7 @@ async function build(rec: StudioRec): Promise<void> {
     }
     else if (rec.stage === 'draft' || rec.stage === 'fix') {
       if (!rec.appId) text = 'AI가 초안을 만들고 있어요(' + (S.step ? DRAFT_STEPS[S.step - 1] : '시작하는 중') + '). 몇 분 걸려요.';
-      else if (S.waiting) text = 'AI가 수정하고 있어요. 다음 버전이 나오면 화면이 바뀌어요.';
+      else if (S.waiting) text = 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.';
       else if (hasCm) { text = '코멘트 ' + cmCount() + '건을 남겼어요. 「수정하기」를 누르면 AI가 반영해 다음 버전을 만들어요.'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
     } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
@@ -913,7 +915,7 @@ async function build(rec: StudioRec): Promise<void> {
     const n = cmCount();
     appBox.querySelectorAll('.v2-studio-fix-in').forEach((b0: Element) => { const b = b0 as HTMLButtonElement;
       b.textContent = '수정하기' + (n ? ' · ' + n + '건' : ''); b.disabled = S.waiting || n === 0;
-      b.title = S.waiting ? 'AI가 수정하고 있어요' : n ? '코멘트 ' + n + '건을 AI에게 보내요' : '코멘트를 남기면 누를 수 있어요';
+      b.title = S.waiting ? (n ? 'AI가 지금 수정을 마치면 보낼 수 있어요' : 'AI가 수정하고 있어요') : n ? '코멘트 ' + n + '건을 AI에게 보내요' : '코멘트를 남기면 누를 수 있어요';
       const j = b.nextElementSibling; if (j && j.classList.contains('v2-studio-fix-j')) j.textContent = n ? '을' : '를';
     });
   };
@@ -982,7 +984,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   let opening = false;   // 앱 화면을 마련하는 동안 두 번 눌러도 한 번만 간다
   const openReal = async (view: 'widget' | 'app'): Promise<void> => {
-    if (!rec.appId || S.waiting || opening) return;
+    if (!rec.appId || opening) return;   // 고치는 중에도 간다 — 그동안 다음 코멘트를 남긴다(원준 2026-10-28)
     opening = true;
     try { await openRealNow(view); } finally { opening = false; }
   };
@@ -1006,12 +1008,19 @@ async function build(rec: StudioRec): Promise<void> {
       S.tryS = mountTrySession(mountOpts.host || document.body, { appId: rec.appId, sid, projectId: pid, onResumed: keep });
     }
     if (view === 'app') {
-      //  앱 화면 = 앱 찾기가 여는 것과 같은 앱 인스턴스 탭(#/i/<인스턴스>, app-instance openInstalledApp 과 같은 길). 한 번 연 것은 다시 쓴다.
-      try {
-        let inst = rec.instId ? await getAppInstance(rec.instId).catch(() => null) : null;
-        if (!inst) { inst = await createAppInstance(rec.appId, { projectId: null, title: S.title }); rec.instId = inst.id; saveRec(rec); }
-        route = '#/i/' + encodeURIComponent(inst.id);
-      } catch (e: any) { toast('앱 화면을 열지 못했어요. ' + (e && e.message ? e.message : e), true); return; }
+      //  앱 화면 = **앱 찾기에서 그 앱을 누른 것과 같은 길**(apps.openAppById → openInstalledApp · 동의 · 실행 자리 · 첫 화면까지 한 벌 — 원준 2026-10-28
+      //   «앱 들어가서 그 회의록 앱 눌렀을 때랑 똑같은 게 실행되게»). 그 길이 준 #/i/<인스턴스> 를 받아 코멘트 층이 그리로 간다. 한 번 연 탭은 다시 쓴다.
+      const inst = rec.appInst ? await getAppInstance(rec.appInst).catch(() => null) : null;
+      if (inst) route = '#/i/' + encodeURIComponent(inst.id);
+      else {
+        let got = '';
+        const { openAppById } = await import('./apps.js');   // 정적으로 들여오면 apps → app-studio → apps 순환(check-imports)
+        const found = await openAppById(rec.appId, (h) => { got = h; });
+        if (!found) { toast('앱 찾기에 「' + S.title + '」 앱이 아직 안 보여요. 잠시 후 다시 시도해주세요.', true); return; }
+        if (!got) return;   // 열지 못했다(동의를 거절했거나 서버 오류 · 그쪽이 이미 말했다)
+        route = got;
+        const m = /^#\/i\/([^?/]+)/.exec(got); if (m) { rec.appInst = decodeURIComponent(m[1]); saveRec(rec); }
+      }
       if (S.dead) return;
     }
     if (root && (S.tryS || !mountOpts.host)) root.hidden = true;   // 시험 세션 화면이 이 자리에 섰거나 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
@@ -1039,17 +1048,20 @@ async function build(rec: StudioRec): Promise<void> {
     if (rec.stage !== 'fix' || !rec.appId) { tray.hidden = true; return; }
     tray.hidden = false;
     const rows = S.pins.map((p, i) => {
-      const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
-      inp.addEventListener('input', () => { p.note = inp.value; paintNow(); if (S.review) S.review.update({}); });
+      //  글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 완료 · Shift+Enter 줄바꿈.
+      const inp = growText({ class: 'v2-studio-tray-in', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note,
+        onInput: (v) => { p.note = v; paintNow(); if (S.review) S.review.update({}); }, onEnter: () => inp.blur() });
       const wire = p.on === 'wire';
-      return el('div', { class: 'v2-studio-tray-row' }, wire ? el('button', { type: 'button', class: 'n', text: String(i + 1), title: '와이어프레임에서 그 자리 보기', onclick: () => { void openWireframe(i); } }) : el('span', { class: 'n', text: String(i + 1) }),
-        el('span', { class: 'w', text: (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
+      if (p.sent) { inp.disabled = true; inp.title = 'AI가 반영하고 있어요'; }
+      return el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, wire ? el('button', { type: 'button', class: 'n', text: String(i + 1), title: '와이어프레임에서 그 자리 보기', onclick: () => { void openWireframe(i); } }) : el('span', { class: 'n', text: String(i + 1) }),
+        el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
+        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
     });
-    const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = S.general;
-    g.addEventListener('input', () => { S.general = g.value; paintNow(); if (S.review) S.review.update({ general: S.general }); });
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: S.general,
+      onInput: (v) => { S.general = v; paintNow(); if (S.review) S.review.update({ general: S.general }); }, onEnter: () => g.blur() });
     tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '실제 화면에서 번호를 누르면 그 자리를 보여줘요.' : '실제 화면에서 선택 · 핀 · 영역으로 코멘트를 남기면 여기 모여요 · 앱 전체에 주는 코멘트는 바로 적어도 돼요' })),
-      el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows));   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
+      el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows),   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' })));
   };
   // ③ 허브 — 판 · 가운데 단추(실제 화면으로) · 보낼 의견
   // ── 와이어프레임(화면 흐름) 보기 — 화면 전체 보드(v2/wire-board.ts · 원준 2026-10-16 «전체화면 · 피그마 보드처럼 · 여기서도 선택 · 핀 · 영역»).
@@ -1086,8 +1098,9 @@ async function build(rec: StudioRec): Promise<void> {
         //   «버튼 제대로 똑같이 구현하고, 저 문구 위에 있는 버튼 눌러도 똑같이 작동하게»). 글 · 눌림은 syncFixIn 이 의견 수에 맞춘다.
         el('p', {}, '진짜 라이블리 화면에서 써 보고, 고칠 곳을 짚어서 적어주세요. 그 화면에서 하나하나 코멘트를 남기거나, 이 화면으로 돌아와 여기에 적어도 돼요. 다음 화면에서 ',
           el('button', { class: 'v2-studio-now-pri v2-studio-fix-in', type: 'button', onclick: () => { void sendFix(); } }), el('span', { class: 'v2-studio-fix-j' }), ' 누르면 AI가 한 번에 고쳐 다음 버전을 내요.')),
-      S.waiting ? (S.stall ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { text: '위 막대에서 까닭을 보고 이어서 수정할 수 있어요.' }))
-        : el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '다음 버전이 나오면 화면이 바뀌어요.' }))) : go,
+      //  고치는 중에도 실제 화면으로 간다(원준 2026-10-28 «하나 치고 나서는 다 적용될 때까지 다른 코멘트를 남기는 게 비활성화») — 기다림(또는 멈춤) 줄은 단추 위에.
+      ...(S.waiting ? [S.stall ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { text: '위 막대에서 까닭을 보고 이어서 수정할 수 있어요.' }))
+        : el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '다음 버전이 나오면 화면이 바뀌어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' }))] : []), go,
       el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여줍니다.' })),
       tray));
     paintTray(); syncFixIn();
@@ -1129,8 +1142,11 @@ async function build(rec: StudioRec): Promise<void> {
     }
     S.pollT = window.setTimeout(() => { void findApp(); }, 4000);
   };
-  //  고침이 끝났다(새 판) — 다음 차례로: 몇 번째를 올리고 보낸 코멘트를 걷는다. 새 판이 나왔으니 ④ 확인 · ⑤ 넣기는 그 판으로 다시(«와 본 곳» 을 ③ 으로).
-  const settleFix = (): void => { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; S.pins = []; S.general = ''; rec.pins = []; rec.general = ''; rec.reached = 2; delete rec.fixing; saveRec(rec); };
+  //  보낸 코멘트를 걷는다 — 같은 배열을 제자리에서 줄인다(실제 화면 막대 · 와이어프레임 보드가 같은 배열을 쥐고 있다 · 새 배열로 갈면 그 사이 짚은 것이 옛 배열로 가 보낸 것이 되살아난다).
+  const dropSent = (): void => { for (let i = S.pins.length - 1; i >= 0; i--) if (S.pins[i].sent) S.pins.splice(i, 1); rec.pins = S.pins; if (S.review) S.review.update({ pins: S.pins }); };
+  //  고침이 끝났다(새 판) — 다음 차례로: 몇 번째를 올리고 보낸 코멘트만 걷는다(고치는 동안 새로 남긴 코멘트는 다음 「수정하기」 몫 · 원준 2026-10-28).
+  //   새 판이 나왔으니 ④ 확인 · ⑤ 넣기는 그 판으로 다시(«와 본 곳» 을 ③ 으로).
+  const settleFix = (): void => { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; dropSent(); rec.reached = 2; delete rec.fixing; saveRec(rec); };
   /** 고침을 보냈다 — 보낸 때와 그때 가장 뒤 판을 기록에 둔다(새로 열어도 기다림을 잇고, 그 뒤 판이 생겼는지로 끝났나를 안다). */
   const markFixing = async (): Promise<void> => {
     S.waiting = true; S.waitT0 = Date.now();
@@ -1145,6 +1161,7 @@ async function build(rec: StudioRec): Promise<void> {
       //   새 버전이 나왔다 — ④ 확인 · ⑤ 넣기는 그 버전으로 다시 해야 하니 «와 본 곳» 을 ③ 으로 당긴다.
       const settled = S.waiting;
       if (S.waiting) settleFix();
+      else if (S.pins.some((p) => p.sent)) dropSent();
       if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); if (settled) { band.hidden = true; paintBar(); paintNow(); } return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
       void showApp(ev.note || '고쳤어요');
     }
@@ -1514,7 +1531,9 @@ async function build(rec: StudioRec): Promise<void> {
       const sid = rec.place !== 'full' ? routeSession() : '';
       if (sid && sid !== rec.sid) { if (await attachAppToSession(sid, rec.appId, title)) { closeAppStudio(); toast('「' + title + '」 앱을 이 세션에 위젯으로 붙였어요. 오른쪽 탭에서 볼 수 있어요.'); return; } }
       closeAppStudio();
-      if (!(await openAppUi(rec.appId, { title }))) toast('앱 찾기(왼쪽 「앱」)에서 「' + title + '」 앱을 열어 보세요.');
+      //  앱 찾기에서 그 앱을 누른 것과 같은 길(원준 2026-10-28) — 옛 「앱 UI」 덮개 창(openAppUi)은 레일 · 사이드바가 빠진 다른 화면이었다.
+      const { openAppById } = await import('./apps.js');
+      if (!(await openAppById(rec.appId))) toast('앱 찾기(왼쪽 「앱」)에서 「' + title + '」 앱을 열어 보세요.');
     };
     h.replaceChildren(el('div', { class: 'v2-studio-fin' },
       el('h2', { text: '「' + title + '」 앱이 만들어졌어요' }),
@@ -1580,8 +1599,14 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const sendFix = async (): Promise<void> => {
     if (S.waiting) return;
-    const pins = S.pins.filter((p) => p.note.trim()); if (!pins.length && !S.general.trim()) return;
-    if (await send(fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) { await markFixing(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); if (S.review) S.review.update({ waiting: true }); }
+    const pins = S.pins.filter((p) => unsent(p) && p.note.trim()); const gSent = S.general; if (!pins.length && !gSent.trim()) return;
+    if (await send(fixBrief(rec.round + 1, S.pins, gSent, rec.place, rec.appId))) {   // 번호가 화면과 같게 전부 넘긴다(fixBrief 가 보낸 것 · 빈 것을 건너뛴다)
+      //  보낸 것은 «반영 중» 으로 남기고(세지 않는다 · 고칠 수 없다) 앱 전체 칸은 비운다 — 고치는 동안 다음 코멘트를 새로 쌓는다(원준 2026-10-28).
+      //   보내는 사이에 앱 전체 칸에 더 쓴 것은 지우지 않는다(보낸 글 그대로일 때만 비운다).
+      pins.forEach((p) => { p.sent = true; }); if (S.general === gSent) { S.general = ''; rec.general = ''; }
+      await markFixing(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); paintTray();
+      if (S.review) S.review.update({ waiting: true, general: S.general });
+    }
   };
   //  #4732 「이대로 넣기」 는 연타를 막지 않는 단추라 — 미리 보기 · 저장 · 공개가 두 번 나가지 않게 하나씩만.
   let putting = false;
