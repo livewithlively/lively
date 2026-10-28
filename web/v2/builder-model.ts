@@ -66,7 +66,9 @@ export interface Draft { sid: string; title: string; stage: string; appId: strin
 export interface BuilderModel { apps: BApp[]; me: { id: string; name: string }; drafts: Draft[]; mine: BApp[]; team: BApp[]; goneRecs: string[];
   /** 세션 목록에 없어 서버에 따로 물어봐야 하는 기록의 세션(감사 1-5 — 목록이 잘렸을 수 있다). 답을 받기 전엔 카드를 세우지도 지우지도 않는다. */
   askRecs: string[] }
-/** 서버에 따로 물어본 «그 기록의 세션이 아직 있나» — 'gone' = 지운 만들기(기록을 걷는다) · 'alive' = 목록이 잘려 못 본 것(그대로 세운다). */
+/** 서버에 따로 물어본 «그 기록의 세션이 아직 있나» — 'gone' = 지운 만들기(기록을 걷는다) · 'alive' = 목록이 잘려 못 본 것(그대로 세운다).
+ *  답은 이 페이지가 떠 있는 동안 기억한다(같은 세션을 그리기마다 다시 묻지 않게). 'gone' 은 기록을 걷을 때 함께 지우고, 'alive' 는 그 사이
+ *  다른 곳에서 지웠어도 이 페이지에선 낡은 채 남는다 — 새로 열면 다시 묻는다(리뷰 N8). */
 export const recVerdict = new Map<string, 'gone' | 'alive'>();
 /** 다 된 앱 — 넣었거나(⑤) 공개했다. 그 앱을 고치던 만들기를 지워도 앱은 남는다. */
 export const isDoneApp = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
@@ -102,7 +104,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !missing(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '',
     mode: r.mode, keepApp: keepFor(r.mode, r.draftId || r.appId || '') }));
   //  이 브라우저에서 다 마친 만들기(⑤ 넣기 · done)의 세션도 세션 목록에서 다시 세우지 않는다 — 남의 앱 원본 고치기는 그 앱에 세션이 이어지지 않아(서버 build_session 은 책임자만)
-  //   아래 세션 줄에서 «② 세부 기획» 으로 다시 섰다(감사 1-3).
+  //   아래 세션 줄에서 «② 세부 기획» 으로 다시 섰다(감사 1-3). ⚠ 최선의 노력일 뿐이다 — 이 브라우저의 기록만 안다. 다른 브라우저 · 기록을 걷은 뒤엔
+  //   아래 세션 줄의 판정(그 앱에 내 초안이 남았나)이 대신 거른다(리뷰 N3).
   const seen = new Set([...drafts.map((d) => d.sid), ...recs.filter((r) => r.done).map((r) => r.sid)]);
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
@@ -133,7 +136,9 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
       drafts.push({ sid: s.id, title: t.title, stage: 'fix', appId: t.id, done: false, at, local: false, node: String(s.node || ''), serverApp: t.id, mode: 'edit', keepApp: true, origin: { id: t.id, title: t.title, by: t.madeBy } });
       return;
     }
-    const mode: Draft['mode'] = isEditSessionLabel(s.label) ? 'copy' : 'new';
+    //  고치기 세션이 이어진 앱 — 원본이 있으면 사본(새로 만드는 내 앱), 없으면 내가 쓰던 앱을 「고치기」 로 연 것이다(지워도 앱은 남는다 · 리뷰 B1:
+    //   원본 없는 내 앱을 사본으로 치면 「지우기」 가 진짜 앱을 discard 했다). 사본은 늘 원본을 단다(makeCopy origin_app_id).
+    const mode: Draft['mode'] = isEditSessionLabel(s.label) ? (a && a.origin ? 'copy' : 'edit') : 'new';
     drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at, local: false, node: String(s.node || ''), serverApp: a ? a.id : '', mode, keepApp: keepFor(mode, a ? a.id : '') });
   });
   drafts.sort((a, b) => b.at - a.at);

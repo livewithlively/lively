@@ -17,11 +17,11 @@ import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { builderModelFailed, builderModelNow, deletedSids, isDoneApp, listAllApps, memberName, recVerdict, refreshBuilderModel, type BApp, type BuilderEnv, type Draft } from './builder-model.js';   // 목록 재료 — 앱빌더 사이드바와 같은 한 벌
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
-import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioRecs, studioUiOnly } from './app-studio.js';
+import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, verJ, verName, type StudioPlace } from '../lib/studio-flow.js';
-import { builderRoute, builderSeeRoute, builderTabTitle, builderSessionName, builderSessionWhat, draftStageText, isBuilderSession, isEditSessionLabel, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
+import { builderRoute, builderSeeRoute, builderTabTitle, builderSessionName, builderSessionWhat, draftStageText, isBuilderSession, isBuildingSession, isEditSessionLabel, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 import { renderAppSpec } from './app-spec-page.js';   // #4632 앱 「개발 정보」
 import { purgeSessionRecord, sessionTrashOp } from '../session-actions.js';   // #4632 앱빌딩 세션은 완전 삭제(지난 세션 · 휴지통에 두면 다시 「만들던 앱」 에 선다)
 import { FOLDER_LIMIT_MAX_GB, folderLine, folderSavedText, parseFolderInput } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
@@ -171,15 +171,27 @@ async function purgeBuildSession(env: BuilderEnv, sid: string): Promise<string> 
   }
   return '';
 }
-/** 기록은 있는데 셸의 세션 목록에 없는 만들기 — 서버에 그 세션 하나를 따로 묻는다(감사 1-5 · 목록이 잘렸을 수 있다). 없으면(404 · 403 · 410) 'gone'.
- *  한 번에 여덟 개까지. 답이 바뀐 것이 있으면 true. 모르는 실패(네트워크 · 5xx)는 답 없음이라 다음 그리기에서 다시 묻는다. */
+/** 기록은 있는데 셸의 세션 목록에 없는 만들기 — 서버에 그 세션 하나를 따로 묻는다(감사 1-5 · 목록이 잘렸을 수 있다). 없다(404 · 410)일 때만 'gone'.
+ *  403 은 «있지만 못 본다» 라 지운 것으로 치지 않는다(기록을 걷지 않는다 · 리뷰 N7). 한 번에 여덟 개까지. 답이 바뀐 것이 있으면 true.
+ *  모르는 실패(네트워크 · 5xx)는 답 없음이라 다음 그리기에서 다시 묻는다. */
 async function askRecSessions(sids: readonly string[]): Promise<boolean> {
   let changed = false;
   await Promise.all(sids.slice(0, 8).map(async (sid) => {
     try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid)); recVerdict.set(sid, 'alive'); changed = true; }
-    catch (e: any) { if (e && (e.status === 404 || e.status === 403 || e.status === 410)) { recVerdict.set(sid, 'gone'); changed = true; } }
+    catch (e: any) {
+      if (e && (e.status === 404 || e.status === 410)) { recVerdict.set(sid, 'gone'); changed = true; }
+      else if (e && e.status === 403) { recVerdict.set(sid, 'alive'); changed = true; }
+    }
   }));
   return changed;
+}
+/** 앱을 지울 때 그 앱의 만들기 세션이 **내 앱빌딩 세션**이면 sid — 셸 목록에 있으면 그 줄로, 목록에서 잘렸으면 서버에 그 세션 하나를 물어 이름 꼴로 가른다(리뷰 N2).
+ *  모르면(못 물음 · 보통 세션 · 남의 세션) 빈 글 — 건드리지 않는다. */
+async function builderSessionOf(env: BuilderEnv, sid: string): Promise<string> {
+  if (!sid) return '';
+  if (env.sessions().some((x) => x.id === sid)) return myBuilderSession(env, sid) ? sid : '';
+  try { const d: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid)); return d && !d.movedTo && isBuilderSession(String(d.label || ''), '') ? sid : ''; }
+  catch (_) { return ''; }
 }
 
 // ── 만들기 — 이 창 안에 앱 만들기 화면을 세운다 ──
@@ -327,8 +339,16 @@ async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> 
     //   있는 앱을 고치던 것 · 이미 다 된 앱(넣었거나 공개)도 앱은 그대로 둔다(keepApp · 감사 1-1 — 「고치기」 로 열었다 나와 지우면 쓰던 앱이 통째로 지워졌다).
     const appId = d.serverApp || d.appId;
     const shared = !!appId && apps.some((x) => x.id === appId && x.visibility === 'all');
+    //   ⚠ 앱을 지우는 것은 **이 만들기가 그 앱을 새로 만든 것이 분명할 때만** — 빈 예약이거나, 이 브라우저의 기록이 새 앱 · 사본이라고 하거나,
+    //   기록이 없으면 그 세션이 앱빌더의 새 앱 세션(«"이름" 앱 제작»)일 때. 판정이 어긋나도 쓰던 앱을 지우지 않게 한 겹 더(리뷰 B1).
     const keep = shared || d.keepApp || (!!appId && apps.some((x) => x.id === appId && isDoneApp(x)));
-    if (appId && !keep) {
+    const target = appId ? apps.find((x) => x.id === appId) || null : null;
+    const rec = studioRecs().find((r) => r.sid === d.sid) || null;
+    const row = env.sessions().find((x) => x.id === d.sid) || null;
+    const madeHere = !!target && (target.empty || (rec ? rec.mode === 'new' || rec.mode === 'copy'
+      : d.mode === 'new' && ((!!row && isBuildingSession(row.label, projNameOf(env, row.projectId))) || studioRecBuildingFor(target.id))));
+    const discard = !!appId && !keep && madeHere;
+    if (discard) {
       try { await api('/api/ui/apps/' + encodeURIComponent(appId) + '/discard', { method: 'POST', body: JSON.stringify({}) }); }
       catch (e: any) { if (e?.status !== 404) { toast('앱을 지우지 못했어요. ' + why(e), true); return false; } }
     }
@@ -337,7 +357,7 @@ async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> 
     try { left = await purge(d.sid); }
     catch (e: any) { left = why(e); }
     if (left) {
-      toast((appId && !keep ? '앱은 지웠지만 ' : '') + '앱빌딩 세션을 지우지 못했어요. ' + left, true);
+      toast((discard ? '앱은 지웠지만 ' : '') + '앱빌딩 세션을 지우지 못했어요. ' + left, true);
       refresh();
       return false;
     }
@@ -346,8 +366,8 @@ async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> 
     if (trySid) { try { await purge(trySid); } catch (_) { /* 이미 없으면 그만 */ } }
     deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, '');
     toast(shared ? '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요. 공개한 앱은 그대로 있고, 비공개 버전은 버전 이력에 남아요.'
-      : keep && appId ? '「' + d.title + '」을 고치던 세션과 기록을 지웠어요. 앱은 그대로 있어요.'
-        : d.appId ? '「' + d.title + '」 앱과 앱빌딩 세션, 기록을 모두 지웠어요.' : '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요.');
+      : appId && !discard ? '「' + d.title + '」을 고치던 세션과 기록을 지웠어요. 앱은 그대로 있어요.'
+        : discard ? '「' + d.title + '」 앱과 앱빌딩 세션, 기록을 모두 지웠어요.' : '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요.');
     refresh();
     return true;
   };
@@ -455,11 +475,14 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     if (del.dataset.arm) {
       delete del.dataset.arm; del.disabled = true;
       void post(a.visibility === 'me' ? '/discard' : '/remove', {}, '「' + a.title + '」 앱을 지웠어요', async () => {
+        //  이 브라우저의 기록에 있는 세션은 앱빌더가 연 세션이라 그대로 지운다(셸 목록에서 잘렸어도 · 리뷰 N2). 앱의 만들기 세션은 앱빌딩 세션일 때만.
         const sids = new Set(studioRecs().filter((r) => r.appId === a.id || r.draftId === a.id).map((r) => r.sid));
-        if (myBuilderSession(env, a.buildSession)) sids.add(a.buildSession);
+        const own = await builderSessionOf(env, a.buildSession);
+        if (own) sids.add(own);
         for (const sid of sids) {
           deletedSids.add(sid); dropStudioRec(sid);
-          if (myBuilderSession(env, sid)) { const w = await purgeBuildSession(env, sid).catch((e) => errText(e)); if (w) toast('앱은 지웠지만 앱빌딩 세션을 지우지 못했어요. ' + w, true); }
+          const w = await purgeBuildSession(env, sid).catch((e) => errText(e));
+          if (w) toast('앱은 지웠지만 앱빌딩 세션을 지우지 못했어요. ' + w, true);
         }
         setSel(v, '');
       }).then((ok) => { if (!ok) { del.disabled = false; del.textContent = '앱 지우기'; } });

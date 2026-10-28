@@ -13,6 +13,8 @@
 //  C1 nextCopyId — «-2» 부터 비어 있는 첫 번호 · 32자를 넘지 않는다
 //  L1 isEditSessionLabel — «"이름" 앱 고치기» · 옛 「앱 고치기 · 」 는 예 · «"이름" 앱 제작» · 「새 앱 제작」 · 보통 이름은 아니오
 //  T1 retryAfterText — 초 · 분 · 0 이하도 1초
+//  M5 (리뷰 N5) skip 의 칸(pins · general)은 다른 탭이 바꿨어도 이 탭 것 그대로 — 같은 배열(화면이 쥔 것)을 바꿔 끼우지 않는다
+//  G1 (리뷰 N10) regenToast — 쓰기 시작(writing · stale)일 때만 «시작했어요» · 간격 · 몫 · 키 없음 · 그대로 실패 · 이미 다 씀은 그렇다고
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ 을 물린다(origin/main 에는 이 함수들이 없어 빨갛다).
 import { execFileSync } from "node:child_process";
@@ -28,7 +30,7 @@ if (!existsSync(ESBUILD)) { console.error("FAIL  esbuild 가 없다"); process.e
 let M;
 try {
   const js = execFileSync(ESBUILD, ["--bundle", "--format=esm", "--platform=neutral", "--loader=ts", "--sourcefile=rec-entry.ts", "--log-level=error"], { cwd: WEB, encoding: "utf8",
-    input: "export { trimRecs, mergeRec, REC_MAX } from './lib/studio-rec.ts'; export { nextCopyId } from './lib/studio-flow.ts'; export { isEditSessionLabel } from './lib/builder-flow.ts'; export { retryAfterText } from './lib/app-spec-view.ts';" });
+    input: "export { trimRecs, mergeRec, REC_MAX } from './lib/studio-rec.ts'; export { nextCopyId } from './lib/studio-flow.ts'; export { isEditSessionLabel } from './lib/builder-flow.ts'; export { retryAfterText, regenToast } from './lib/app-spec-view.ts';" });
   M = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 } catch (e) { console.error("FAIL  묶지 못했다(함수가 없다) — " + String(e.message || e).split("\n")[0]); process.exit(1); }
 
@@ -72,6 +74,14 @@ same([ids(M.trimRecs([r("a"), r("b"), r("c")], 3)), M.REC_MAX, M.trimRecs(Array.
   const c = M.nextCopyId(long, new Set([long]));
   same([a, b, c.id.length <= 32, c.id.endsWith("-2"), c.n], [{ id: "memo-wonjoon-jang-2", n: 2 }, { id: "memo-wonjoon-jang-3", n: 3 }, true, true, 2], "C1 비어 있는 첫 번호 · 32자 안");
 }
+{
+  const pins = [{ n: 1 }];
+  const base = { sid: "s", pins: [], general: "", title: "A" }, stored = { sid: "s", pins: [{ n: 9 }], general: "남의 글", title: "B" }, cur = { sid: "s", pins, general: "", title: "A" };
+  M.mergeRec(cur, base, stored, ["pins", "general"]);
+  same([cur.pins === pins, cur.pins, cur.general, cur.title], [true, [{ n: 1 }], "", "B"], "M5 skip 의 칸은 이 탭 것 그대로(같은 배열) · 다른 칸은 받는다");
+}
+same([["writing"], ["stale"], ["limit"], ["unavailable"], ["failed"], ["ok"], ["failed", 42000]].map(([st, ms]) => { const t = M.regenToast({ spec_state: st, retry_after_ms: ms || null }); return [/시작했어요/.test(t.text) && !/못했어요/.test(t.text), t.warn]; }),
+  [[true, false], [true, false], [false, true], [false, true], [false, true], [false, false], [false, true]], "G1 쓰기 시작했을 때만 «시작했어요»");
 same(['"메모" 앱 고치기', "앱 고치기 · 메모", '"메모" 앱 제작', "새 앱 제작", "회의록 정리해 줘", ""].map(M.isEditSessionLabel), [true, true, false, false, false, false], "L1 고치기 세션 이름만 예");
 same([M.retryAfterText(42000), M.retryAfterText(61000), M.retryAfterText(0)], ["방금 다시 써 봤어요. 42초 뒤에 다시 눌러 주세요.", "방금 다시 써 봤어요. 2분 뒤에 다시 눌러 주세요.", "방금 다시 써 봤어요. 1초 뒤에 다시 눌러 주세요."], "T1 다시 누를 때까지 남은 시간");
 

@@ -23,6 +23,10 @@
 //  S2 (4-11) 「다시 만들기」 가 간격에 막혔다(retry_after_ms) — «42초 뒤에 다시 눌러 주세요»
 //  U1 (6-1) 앱 찾기(#v2-root 밖)의 선 그림 아이콘에 선 색이 있다
 //  U8 (6-14) 펼친 묶음의 › 는 칸 가운데(grid)
+//  B1 (리뷰) 기록 없는 «"가계부" 앱 고치기» 세션이 이어진 내 앱(원본 없음 · 나만 · 넣기 전) — 사본이 아니라 고치기: 「내가 만든 앱」 에도 서고, 지우면 discard 0건
+//  N2 (리뷰) 「앱 지우기」 — 앱빌딩 세션이 셸 목록에서 잘렸어도 지운다(이 브라우저 기록의 세션 · 서버에 물어 앱빌더 이름인 세션)
+//  N7 (리뷰) 목록 밖 기록인데 서버가 403 — 지운 것으로 치지 않는다(기록이 남는다)
+//  S3 (리뷰) 「다시 만들기」 인데 오늘 몫을 다 씀(limit) — «시작했어요» 가 아니라 그렇다고 알린다
 //  W  페이지 예외 없음 · 가짜 서버에 실제로 물었다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(origin/main 에서 빨갛다).
@@ -45,7 +49,7 @@ const bundle = execFileSync(ESBUILD, ["--bundle", "--format=iife", "--global-nam
   .replace(/<\/script/gi, "<\\/script");
 const css = (...fs) => fs.map((f) => readFileSync(path.join(STYLES, f), "utf8")).join("\n").replace(/<\/style/gi, "<\\/style");
 
-const FETCH = `<script>window.__calls = []; window.__gone = new Set(); window.__purged = new Set(); window.__whoFail = 0; window.__alive = new Set(["box-trunc"]); window.__saved = []; window.__spec = []; window.__specPost = null;
+const FETCH = `<script>window.__calls = []; window.__gone = new Set(); window.__purged = new Set(); window.__whoFail = 0; window.__alive = new Set(["box-trunc"]); window.__sessGet = { "box-old2": [200, { id: "box-old2", label: '"명함" 앱 제작' }], "box-far": [200, { id: "box-far", label: '"원격" 앱 제작' }], "box-forbid": [403, { error: "볼 수 없어요" }] }; window.__saved = []; window.__spec = []; window.__specPost = null;
 window.fetch = async (u, init) => {
   const url = String(u && u.url ? u.url : u), method = (init && init.method) || "GET";
   const p = url.replace(/^.*?(\\/api\\/)/, "/api/");
@@ -65,7 +69,7 @@ window.fetch = async (u, init) => {
     const next = window.__spec.length > 1 ? window.__spec.shift() : window.__spec[0];
     return next === "x" ? j({ error: "잠깐 안 돼요" }, 502) : j(next);
   }
-  if (p.startsWith("/api/ui/terminal/sessions/") && method === "GET") { const sid = decodeURIComponent(p.split("/")[5].split("?")[0]); return window.__alive.has(sid) ? j({ id: sid, label: "", projectId: 0 }) : j({ error: "세션을 찾을 수 없어요" }, 404); }
+  if (p.startsWith("/api/ui/terminal/sessions/") && method === "GET") { const sid = decodeURIComponent(p.split("/")[5].split("?")[0]); const g = window.__sessGet[sid]; if (g) return j(g[1], g[0]); return window.__alive.has(sid) ? j({ id: sid, label: "", projectId: 0 }) : j({ error: "세션을 찾을 수 없어요" }, 404); }
   if (/^\\/api\\/ui\\/v6\\/sessions\\/[^/]+\\/purge/.test(p) && method === "POST") return j({ ok: true, log: { bytes: 10 } });
   if (p === "/api/ui/terminal/session-trash" && method === "POST") { body.ids.forEach((id) => window.__purged.add(id)); return j({ ok: true, op: body.op, done: body.ids, skipped: [] }); }
   if (p === "/api/ui/apps" || p.startsWith("/api/ui/apps?")) {
@@ -78,6 +82,9 @@ window.fetch = async (u, init) => {
       app("trip", "출장비", { visibility: "all", made_by: "sangmin-yoon", installed_by: "sangmin-yoon", owner_member: "sangmin-yoon", is_owner: false, published_version_no: 4, current_version_no: 4 }),
       app("gen", "일반앱", { build_session: "box-gen", manifest: put() }),
       app("quote", "견적", { build_session: "box-quote", manifest: put() }),
+      app("own2", "가계부", { build_session: "box-own2" }),                       // B1 — 나만 · 넣기 전 · 원본 없음
+      app("old", "명함", { build_session: "box-old2", manifest: put() }),          // N2 — 세션이 셸 목록 밖 · 이 브라우저 기록에 있다
+      app("far", "원격", { build_session: "box-far", manifest: put() }),           // N2 — 세션이 셸 목록 밖 · 기록도 없다(서버에 물어 앱빌더 세션)
       app("week", "주간", { visibility: "all", owner_member: null, published_version_no: 1, manifest: put() }),
       app("empty1", "새 앱", { empty: true, made_by: "left-user", installed_by: "left-user", owner_member: null, build_session: "box-empty", current_version_no: null }),
       ...(p === "/api/ui/apps" ? [app("memo-wonjoon-jang", "메모 · 원준", { manifest: put("both") })] : []),
@@ -102,10 +109,12 @@ async function PAGE_MAIN() {
     rec("box-trunc", "오래된 기획", "", { stage: "plan", at: NOW - 60 * 86400_000 }),                                     // H5 (목록 밖 · 서버엔 있다)
     rec("box-gone", "지운 기획", "", { stage: "plan", at: NOW - 60 * 86400_000 }),                                        // H5b (서버에도 없다)
     rec("box-copy", "사본 중", "copyx", { mode: "copy" }),                                                                  // U5
+    rec("box-old2", "명함", "old", { done: true, stage: "put", at: NOW - 60 * 86400_000 }),                                // N2
+    rec("box-forbid", "못 보는 기획", "", { stage: "plan", at: NOW - 60 * 86400_000 }),                                    // N7
   ]));
   const row = (id, label, i) => ({ id, label, projectId: null, owned: true, lastSeen: NOW - (20 + i) * 1000, logId: "uuid-" + id, logNode: "", raw: { claudeSessionId: "uuid-" + id } });
   const SESS = [row("box-edit", '"회의록" 앱 고치기', 1), row("box-done", '"출장비" 앱 고치기', 2), row("box-memo", '"메모" 앱 고치기', 3), row("box-agenda", '"안건" 앱 고치기', 4),
-    row("box-gen", "회의록 정리해 줘", 5), row("box-quote", '"견적" 앱 제작', 6), row("box-copy", '"사본 중" 앱 고치기', 7)];
+    row("box-gen", "회의록 정리해 줘", 5), row("box-quote", '"견적" 앱 제작', 6), row("box-copy", '"사본 중" 앱 고치기', 7), row("box-own2", '"가계부" 앱 고치기', 8)];
   const env = { projects: () => [], sessions: () => SESS.filter((s) => !window.__purged.has(s.id)), sessionsReady: () => true, redrawSide: () => {}, setRoute: () => {} };
   const secOf = (re) => [...host.querySelectorAll(".v2-bld-sec")].find((s) => re.test(txt(s.querySelector("h3")) || "")) || null;
   const cardIn = (re, title) => { const s = secOf(re); return s ? [...s.querySelectorAll(".v2-bld-card")].find((c) => txt(c.querySelector(".hd b")) === title) || null : null; };
@@ -131,6 +140,8 @@ async function PAGE_MAIN() {
   R.h5 = { card: !!cardIn(DRAFT, "오래된 기획"), rec: JSON.parse(localStorage.getItem("lively_v2_app_studio") || "[]").some((r) => r.sid === "box-trunc"),
     goneCard: !!cardIn(DRAFT, "지운 기획"), goneRec: JSON.parse(localStorage.getItem("lively_v2_app_studio") || "[]").some((r) => r.sid === "box-gone") };
   R.u5 = B.studioRecBuildingFor("copyx");
+  R.b1 = { draft: !!cardIn(DRAFT, "가계부"), mine: !!cardIn(MINE, "가계부") };
+  R.n7 = JSON.parse(localStorage.getItem("lively_v2_app_studio") || "[]").some((r) => r.sid === "box-forbid");
   // U7 · U3 — 팀원이 만든 앱을 편다
   const teamBtn = btn(host.querySelector(".v2-bld-top"), /팀원이 만든 앱/);
   if (teamBtn) teamBtn.click();
@@ -176,6 +187,7 @@ async function PAGE_MAIN() {
   };
   R.h2b = await delApp("일반앱");
   R.h2 = { writes: await delApp("견적") };
+  R.n2 = { old: await delApp("명함"), far: await delApp("원격") };
   B.renderBuilderApp(host, ["builder"], new URLSearchParams(""), env);
   await sleep(1000);
   R.h2.resurrected = draftTitles().includes("견적");
@@ -185,6 +197,12 @@ async function PAGE_MAIN() {
   if (delDraft()) delDraft().click(); await sleep(150);
   if (delDraft()) delDraft().click(); await sleep(1200);
   R.h1.writes = writes(mark); R.h1.after = { draft: !!cardIn(DRAFT, "회의록"), mine: !!cardIn(MINE, "회의록") };
+  // B1 — 가계부(기록 없는 고치기 세션) 지우기 · 앱은 남는다
+  mark = window.__calls.length;
+  const delB1 = () => { const c = cardIn(DRAFT, "가계부"); return c ? [...c.querySelectorAll("button")].find((b) => /^지우기$|한 번 더 누르면/.test(txt(b))) : null; };
+  if (delB1()) delB1().click(); await sleep(150);
+  if (delB1()) delB1().click(); await sleep(1200);
+  R.b1.writes = writes(mark); R.b1.after = !!cardIn(MINE, "가계부");
   // H4 — 사본이 이미 있다
   mark = window.__calls.length;
   history.replaceState(null, "", "#/builder/app/memo?how=copy");
@@ -216,6 +234,15 @@ async function PAGE_MAIN() {
   const rb = btn(sh2, /^다시 만들기$/); if (rb) rb.click();
   await sleep(600);
   R.s2 = { hadBtn: !!rb, toast: toastLog.join(" | ") };
+  // S3 — 오늘 몫을 다 씀
+  const sh3 = document.getElementById("spec3");
+  window.__specPost = spec("limit");
+  toastLog.length = 0;
+  B.renderAppSpec(sh3, "notes", () => {});
+  await sleep(600);
+  const rb3 = btn(sh3, /^다시 만들기$/); if (rb3) rb3.click();
+  await sleep(600);
+  R.s3 = { hadBtn: !!rb3, toast: toastLog.join(" | ") };
 
   // U1 · U8 — CSS
   const ic = document.querySelector("#padt svg");
@@ -227,9 +254,9 @@ async function PAGE_MAIN() {
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
 }
 const PAGE = `<!doctype html><html data-theme="light" lang="ko"><meta charset="utf-8"><style>${css("01-base.css", "40-v2.css", "47-v2-rail.css")}
-  html,body{margin:0} #host{width:1100px;height:860px;position:relative} #spec,#spec2{width:900px;height:600px;position:relative}
+  html,body{margin:0} #host{width:1100px;height:860px;position:relative} #spec,#spec2,#spec3{width:900px;height:600px;position:relative}
 </style>
-<div id="host"></div><div id="spec"></div><div id="spec2"></div>
+<div id="host"></div><div id="spec"></div><div id="spec2"></div><div id="spec3"></div>
 <div class="v2-pad" id="padt" style="position:static"><button class="v2-pad-item v2-pad-item--new"><span class="v2-pad-ico v2-pad-ico--new"><svg viewBox="0 0 24 24" class="v2-ic"><path d="M12 5v14M5 12h14"/></svg></span></button></div>
 <section class="v2-ksp open" id="kspt"><div class="v2-ksp-h"><button class="v2-ksp-t" type="button"><span class="v2-car">›</span><span class="n">만들던 앱</span></button></div></section>
 <div id="toasts"></div>
@@ -274,6 +301,12 @@ check(R.h4 && /이미 만든 사본/.test(R.h4.ask || "") && R.h4.saved.length =
 check(R.s1 && R.s1.polls >= 3 && !R.s1.reload, "S1 쓰는 중에 다시 묻기가 한 번 실패해도 계속 묻는다", R.s1);
 check(R.s1 && R.s1.after.reload && /확인하지 못했어요/.test(R.s1.after.line || ""), "S1 연달아 다섯 번 실패하면 멈추고 「다시 불러오기」", R.s1 && R.s1.after);
 check(R.s2 && R.s2.hadBtn && /42초 뒤에 다시 눌러 주세요/.test(R.s2.toast) && !/다시 쓰기 시작했어요/.test(R.s2.toast), "S2 다시 만들기가 간격에 막히면 언제 다시 누를지 알린다", R.s2);
+same(R.b1 && [R.b1.draft, R.b1.mine], [true, true], "B1 기록 없는 고치기 세션이 이어진 내 앱(원본 없음)은 고치기 — 「내가 만든 앱」 에도 선다");
+same(R.b1 && [R.b1.writes, R.b1.after], [PURGE("box-own2"), true], "B1 지우면 discard 0건 · 고치던 세션만 완전 삭제 · 앱 그대로");
+same(R.n2, { old: ["POST /api/ui/apps/old/discard", "POST /api/ui/terminal/session-trash purge box-old2"], far: ["POST /api/ui/apps/far/discard", "POST /api/ui/terminal/session-trash purge box-far"] },
+  "N2 앱빌딩 세션이 셸 목록에서 잘렸어도 「앱 지우기」 가 지운다(기록의 세션 · 서버에 물어 앱빌더 이름인 세션)");
+same(R.n7, true, "N7 서버가 403 이면 지운 것으로 치지 않아 기록이 남는다");
+check(R.s3 && R.s3.hadBtn && /횟수를 다 썼어요/.test(R.s3.toast) && !/시작했어요/.test(R.s3.toast), "S3 오늘 몫을 다 쓰면 «시작했어요» 가 아니라 그렇다고 알린다", R.s3);
 check(R.u1 && R.u1 !== "none", "U1 앱 찾기의 선 그림 아이콘에 선 색이 있다", R.u1);
 check(R.u8 === "grid" || R.u8 === "inline-grid", "U8 펼친 묶음의 › 는 칸 가운데(grid)", R.u8);
 same([R.calls > 10, R.errors], [true, []], "W  가짜 서버에 실제로 물었다 · 페이지 예외 없음");
