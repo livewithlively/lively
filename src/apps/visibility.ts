@@ -164,6 +164,15 @@ export function unpublishDenial(app: Pick<AppVisState, "owner_member"> & { title
   return `「${app.title || app.id || "앱"}」 의 공개를 거둘 수 있는 사람은 책임자와 관리자입니다`;
 }
 
+/** 앱을 켜고 끌 수 있나(org_app_set_enabled · POST /api/ui/apps/:id/enabled) — 구성원이 만든 앱은 책임자 · 관리자만(리뷰 N9 · 감사 1-7:
+ *  보이기만 하면 누구나 남의 공개 앱을 워크스페이스 전체에서 끌 수 있었다). 기본 앱(빌트인)은 워크스페이스 운영이라 구성원 누구나(workspace-manage-scope). */
+export function enabledDenial(app: Pick<AppVisState, "owner_member"> & { title?: string; id?: string; source?: unknown }, who: Viewer): string | null {
+  const src = app.source as { kind?: unknown } | null | undefined;
+  if (src && typeof src === "object" && src.kind === "builtin") return null;
+  if (isAppOwner(app, who) || isAdminViewer(who)) return null;
+  return `「${app.title || app.id || "앱"}」 을(를) 켜고 끌 수 있는 사람은 책임자와 관리자입니다`;
+}
+
 // ── 데이터 표 — 초안이 공개 판의 표를 지우지 않게 ─────────────────────────────────
 //  표는 판마다 따로가 아니라 앱에 한 벌이다(app.<앱>__<표>). 초안이 매니페스트에서 표를 빼도 공개 판은 아직 그 표를 쓴다 — 그래서
 //  초안 설치는 공개 판이 선언한 표를 지우지 않고(installLoadedApp keepTables), 「공개하기」 가 옛 공개 판에만 있던 표를 그때 정리한다.

@@ -141,24 +141,32 @@ async function studioAi(nodes: RunNode[], nodeId: string): Promise<StudioAi> {
 
 // ── 기록(이 브라우저) ─────────────────────────────────────────────────────────────────────
 //  읽어 낸 기록 하나하나가 읽을 때 어땠는지 — 저장할 때 «이 탭이 바꾼 칸» 만 골라 합친다(같은 앱을 두 탭에서 열어 둔 때 · 감사 1-9 · lib/studio-rec mergeRec).
+//   읽을 때는 그때 읽은 저장 글 한 벌만 가리켜 둔다(기록마다 깊은 복사를 하지 않는다 · 리뷰 N4). 저장할 때 그 글에서 이 기록의 그때 꼴을 꺼낸다.
+const REC_SRC = new WeakMap<StudioRec, string>();
 const REC_BASE = new WeakMap<StudioRec, Record<string, unknown>>();
+const MERGE_SKIP: readonly string[] = ['pins', 'general'];
+const recDefaults = (r: any): StudioRec => ({ pid: 0, stage: r.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...r });   // 옛 기록(단계 없던 판)도 선다
 function readRecs(): StudioRec[] {
   try {
-    const a = JSON.parse(localStorage.getItem(STUDIO_KEY) || '[]'); if (!Array.isArray(a)) return [];
-    return a.filter((r) => r && r.sid).map((r) => {
-      const x: StudioRec = { pid: 0, stage: r.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...r };   // 옛 기록(단계 없던 판)도 선다
-      REC_BASE.set(x, JSON.parse(JSON.stringify(x)));
-      return x;
-    });
+    const raw = localStorage.getItem(STUDIO_KEY) || '[]';
+    const a = JSON.parse(raw); if (!Array.isArray(a)) return [];
+    return a.filter((r) => r && r.sid).map((r) => { const x = recDefaults(r); REC_SRC.set(x, raw); return x; });
   } catch (_) { return []; }
+}
+/** 이 탭이 이 기록을 읽었을(또는 마지막으로 저장했을) 때의 꼴. 모르면 null. */
+function recBase(r: StudioRec): Record<string, unknown> | null {
+  const b = REC_BASE.get(r); if (b) return b;
+  const raw = REC_SRC.get(r); if (!raw) return null;
+  try { const a = JSON.parse(raw); const x = Array.isArray(a) ? a.find((y: any) => y && y.sid === r.sid) : null; return x ? (recDefaults(x) as unknown as Record<string, unknown>) : null; } catch (_) { return null; }
 }
 function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(trimRecs(rs, REC_MAX))); } catch (_) { /* noop */ } }
 function saveRec(r: StudioRec): void {
   const all = readRecs();
   const stored = all.find((x) => x.sid === r.sid) || null;
   //  다른 탭이 그 사이 바꾼 칸은 받아 들인다 — 이 탭이 안 바꾼 칸만(바꾼 칸은 이 탭 것이 이긴다). 받은 값은 이 탭의 기록에도 들여 다음 저장이 옛 값으로 되돌리지 않게.
-  const base = REC_BASE.get(r);
-  if (base && stored) mergeRec(r as unknown as Record<string, unknown>, base, stored as unknown as Record<string, unknown>);
+  //   코멘트(pins · general)는 이 탭 화면이 쥔 것(S.pins 와 같은 배열)이라 합치지 않는다 — 바꿔 끼우면 화면과 기록이 갈라진다(리뷰 N5).
+  const base = recBase(r);
+  if (base && stored) mergeRec(r as unknown as Record<string, unknown>, base, stored as unknown as Record<string, unknown>, MERGE_SKIP);
   REC_BASE.set(r, JSON.parse(JSON.stringify(r)));
   const rs = all.filter((x) => x.sid !== r.sid);
   rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r);   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
@@ -284,7 +292,8 @@ async function readVis(appId: string): Promise<StudioVis | null> {
 }
 /** ⑧ 내 사본 — 원본 파일을 받아 id · 이름 · studio.origin 만 바꿔 저장한다. 원본은 그대로. */
 async function makeCopy(origin: { id: string; title: string; by: string }, place: StudioPlace, fresh?: { id: string; n: number }): Promise<{ id: string; title: string }> {
-  const m = await me(); const id = fresh ? fresh.id : copyId(origin.id, m.id); const title = origin.title + ' · ' + (m.name || '내 것') + (fresh && fresh.n ? ' ' + fresh.n : '');
+  const m = await me(); if (!m.id) throw new Error('내 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
+  const id = fresh ? fresh.id : copyId(origin.id, m.id); const title = origin.title + ' · ' + (m.name || '내 것') + (fresh && fresh.n ? ' ' + fresh.n : '');
   const pulled: any = await api('/api/ui/apps/' + encodeURIComponent(origin.id) + '/pull');
   const files: any[] = (Array.isArray(pulled?.files) ? pulled.files : []).filter((f: any) => f && typeof f.path === 'string' && !/^bin\//.test(f.path));
   const mf = files.find((f) => f.path === 'lively-app.json'); if (!mf) throw new Error('원본의 설명 파일이 없어요');
@@ -376,6 +385,8 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     let fresh: { id: string; n: number } | undefined;
     if (how === 'copy') {
       const m = await me();
+      //  나를 못 받으면 사본 id 를 지을 수 없다(«-me» 로 지으면 다른 사람의 사본과 부딪친다 · 리뷰 N6) — 멈추고 알린다.
+      if (!m.id) throw new Error('내 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
       const rows = await listApps();
       const ids = new Set(rows.map((x) => String(x.id)));
       const row = rows.find((x) => String(x.id) === copyId(app.id, m.id) && (!x.status || x.status === 'active')) || null;
