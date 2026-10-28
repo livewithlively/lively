@@ -9,7 +9,7 @@ import { appStateOf } from './app-session.js';
 import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 구성원 앱의 아이콘 선언
 import { folderView, type FolderView } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
-import { draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from '../lib/builder-flow.js';
+import { builderSessionName, draftTitle, isAppInProgress, isBuilderSession, isBuildingSession, isEditSessionLabel } from '../lib/builder-flow.js';
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
@@ -28,6 +28,8 @@ export interface BApp {
   //  #4667 서버가 찍은 기록 · 공개 상태(apps/visibility.ts) — app-session.appStateOf 와 같은 자로 읽는다.
   visibility: 'all' | 'me'; madeBy: string; ownerMember: string | null; origin: { id: string; title: string; madeBy: string } | null;
   view: 'installed' | 'published'; draft: { by: string; versionNo: number } | null; buildSession: string; isOwner: boolean; canPublish: boolean; canUnpublish: boolean;
+  /** 모두가 쓰는 판 번호(공개한 앱만 · 아니면 0) — 카드가 «공개 V3 · 내 버전 V5» 로 나눠 적는다(감사 6-9). */
+  publishedNo: number;
   empty: boolean;   // 「만들기 시작」 이 예약만 하고 아직 첫 판이 없는 앱
   //  #4785 앱 폴더 — 원하는 상한 · 매니지드 쿼터 정비가 잰 쓰는 양과 그때 걸려 있던 상한 · 단계 · 바꿀 수 있나 · 거나(lib/app-folder-text).
   folder: FolderView;
@@ -47,15 +49,27 @@ async function fetchApps(): Promise<BApp[] | null> {
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
       icon: appIconSpecOf(a.manifest),   // #4769
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
-      ...appStateOf(a), empty: a.empty === true,
+      ...appStateOf(a), empty: a.empty === true, publishedNo: Number(a.published_version_no) || 0,
       folder: folderView(a.folder),
     }));
   } catch (_) { return null; }
 }
 
 /** 만들던 앱 한 줄. local = 이 브라우저의 기록에서 왔다 · serverApp = 서버가 아는 그 만들기의 앱. */
-export interface Draft { sid: string; title: string; stage: string; appId: string; done: boolean; fixing?: boolean; at: number; local: boolean; node: string; serverApp?: string }
-export interface BuilderModel { apps: BApp[]; me: { id: string; name: string }; drafts: Draft[]; mine: BApp[]; team: BApp[]; goneRecs: string[] }
+export interface Draft { sid: string; title: string; stage: string; appId: string; done: boolean; fixing?: boolean; at: number; local: boolean; node: string; serverApp?: string;
+  /** 무엇을 하던 만들기인가 — 새 앱 · 사본 · 있는 앱 고치기(원본 고치기 · 내 앱 「고치기」). */
+  mode: 'new' | 'copy' | 'edit';
+  /** 지워도 앱은 남는다 — 있는 앱을 고치던 것이거나 그 앱이 이미 다 된 앱(넣었거나 공개)이다. 그 앱은 「내가 만든 앱」 에도 그대로 선다(감사 1-1). */
+  keepApp: boolean;
+  /** 고치기 흐름으로 이을 원본(mode edit · 이 브라우저에 기록이 없을 때) */
+  origin?: { id: string; title: string; by: string } }
+export interface BuilderModel { apps: BApp[]; me: { id: string; name: string }; drafts: Draft[]; mine: BApp[]; team: BApp[]; goneRecs: string[];
+  /** 세션 목록에 없어 서버에 따로 물어봐야 하는 기록의 세션(감사 1-5 — 목록이 잘렸을 수 있다). 답을 받기 전엔 카드를 세우지도 지우지도 않는다. */
+  askRecs: string[] }
+/** 서버에 따로 물어본 «그 기록의 세션이 아직 있나» — 'gone' = 지운 만들기(기록을 걷는다) · 'alive' = 목록이 잘려 못 본 것(그대로 세운다). */
+export const recVerdict = new Map<string, 'gone' | 'alive'>();
+/** 다 된 앱 — 넣었거나(⑤) 공개했다. 그 앱을 고치던 만들기를 지워도 앱은 남는다. */
+export const isDoneApp = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
 /** 막 시작한 만들기는 세션이 목록에 오기 전일 수 있다 — 그동안은 기록만 있어도 세운다. */
 export const REC_GRACE_MS = 2 * 60_000;
 
@@ -69,7 +83,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const recs = studioRecs();
   const sessOf = (sid: string) => env.sessions().find((x) => x.id === sid) || null;
   //  #4667 «다 만든 앱» = 마무리(⑤ 「이대로 넣기」)를 지났거나 공개한 앱. 만들기 세션 · 만든 사람은 서버 기록(build_session · made_by)이다.
-  const isDone = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
+  const isDone = isDoneApp;
+  const keepFor = (mode: Draft['mode'], id: string): boolean => { const a = id ? apps.find((x) => x.id === id) : null; return mode === 'edit' || (!!a && isDone(a)); };
   //  카드 이름 = 사람이 정한 앱 이름(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로») — 기록의 이름 · 기획 카드 · 세션 이름 «"이름" 앱 제작» · 앱 이름 차례(lib/builder-flow draftTitle).
   //  고침을 보내 둔 기록(fixing) — 앱의 지금 판이 보낸 때 판보다 뒤면 이미 끝났다(앱빌더를 열면 끝맺는다 · 그 전에도 줄은 «수정 중» 이라 하지 않는다).
   const fixingOf = (r: { appId: string; fixing?: { ver: number } }): boolean => { const a = r.fixing && r.appId ? apps.find((x) => x.id === r.appId) : null; return !!r.fixing && !(a && r.fixing.ver > 0 && a.versionNo > r.fixing.ver); };
@@ -79,10 +94,16 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   //   (원준 2026-10-28 «사파리 브라우전데 안지워졌어»). 세션 목록을 받기 전 · 막 시작한 만들기(REC_GRACE_MS)는 모르니 세운다.
   //   그 세션을 휴지통에 버렸어도 서지 않는다. 서지 않는 기록은 goneRecs 로 돌려 부르는 쪽(앱빌더 목록)이 지운다.
   const ready = !!env.sessionsReady?.();
-  const goneRec = (r: { sid: string; at?: number }): boolean => ready && !sessOf(r.sid) && Date.now() - (Number(r.at) || 0) > REC_GRACE_MS;
-  const goneRecs = recs.filter(goneRec).map((r) => r.sid);
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
-  const seen = new Set(drafts.map((d) => d.sid));
+  //   ⚠ 목록에 없다고 바로 지운 것으로 치지 않는다 — 셸은 최근 세션만 받아 오래된 만들기는 목록에서 잘린다(감사 1-5). 그런 기록은 서버에 그 세션 하나를
+  //   따로 물어(askRecs → 부르는 쪽) 답(recVerdict)이 «없다» 일 때만 걷는다. 답을 받기 전엔 카드를 세우지 않고 기록도 그대로 둔다.
+  const missing = (r: { sid: string; at?: number }): boolean => ready && !sessOf(r.sid) && Date.now() - (Number(r.at) || 0) > REC_GRACE_MS && recVerdict.get(r.sid) !== 'alive';
+  const goneRecs = recs.filter((r) => missing(r) && recVerdict.get(r.sid) === 'gone').map((r) => r.sid);
+  const askRecs = recs.filter((r) => missing(r) && !recVerdict.has(r.sid) && !deletedSids.has(r.sid)).map((r) => r.sid);
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !missing(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '',
+    mode: r.mode, keepApp: keepFor(r.mode, r.draftId || r.appId || '') }));
+  //  이 브라우저에서 다 마친 만들기(⑤ 넣기 · done)의 세션도 세션 목록에서 다시 세우지 않는다 — 남의 앱 원본 고치기는 그 앱에 세션이 이어지지 않아(서버 build_session 은 책임자만)
+  //   아래 세션 줄에서 «② 세부 기획» 으로 다시 섰다(감사 1-3).
+  const seen = new Set([...drafts.map((d) => d.sid), ...recs.filter((r) => r.done).map((r) => r.sid)]);
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
   //   앱 찾기와 같은 자(lib/builder-flow isAppInProgress) — 앱빌더가 새로 만드는 중인 앱만 여기 서고, 그 앱은 앱 찾기에 앱으로 서지 않는다. 빈 예약(첫 판 전)도 여기.
@@ -92,23 +113,55 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
     const s = sessOf(a.buildSession);
     return !!s && isBuildingSession(s.label, projName(s.projectId));
   };
-  apps.filter((a) => a.isOwner && a.buildSession && (a.empty ? a.visibility === 'me' : isAppInProgress(a, buildingApp(a))) && !seen.has(a.buildSession) && !deletedSids.has(a.buildSession)).forEach((a) => {
+  //   빈 예약은 **내가 시작한 것**만 — 만든 사람이 떠난 앱은 관리자가 책임자로 쳐져(isOwner) 관리자의 「만들던 앱」 에 남의 «새 앱» 이 섰다(감사 6-8).
+  apps.filter((a) => a.isOwner && a.buildSession && (a.empty ? a.visibility === 'me' && a.madeBy === m.id : isAppInProgress(a, buildingApp(a))) && !seen.has(a.buildSession) && !deletedSids.has(a.buildSession)).forEach((a) => {
     seen.add(a.buildSession);
-    drafts.push({ sid: a.buildSession, title: draftTitle({ label: sessOf(a.buildSession)?.label, appTitle: a.empty ? '' : a.title, what: a.empty ? a.title : '' }), stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id });
+    drafts.push({ sid: a.buildSession, title: draftTitle({ label: sessOf(a.buildSession)?.label, appTitle: a.empty ? '' : a.title, what: a.empty ? a.title : '' }), stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id, mode: 'new', keepApp: false });
   });
   //  내 세션만(owned 는 서버 판정 — 없으면 옛 목록, 그때는 보인다). 남이 만들던 앱은 남의 것이다.
   //   휴지통에 버린 세션(홈 사이드바)은 만들던 앱이 아니다 — 지난 세션(멈춘 것)은 이어서 만들 수 있으니 그대로 선다. 앱빌더 「지우기」 는 완전 삭제라 목록에서 아예 빠진다.
   env.sessions().filter((s) => !s.task && !s.trashedAt && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
     if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 다 만들어졌다 — 「내가 만든 앱」 에 선다
     const a = apps.find((x) => x.buildSession === s.id);
-    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
+    const at = s.lastSeen || s.createdAt || 0;
+    if (isEditSessionLabel(s.label) && !a) {
+      //  있는 앱을 고치던 세션(감사 1-3) — 남의 원본이면 앱에 세션이 이어지지 않는다. 이름 «"이름" 앱 고치기» 의 앱에 **내 초안**이 남아 있을 때만
+      //   아직 고치는 중이다(넣거나 공개하면 초안이 걷힌다). 이으면 고치기 흐름으로 연다(새 앱 ②가 아니라).
+      const name = builderSessionName(s.label);
+      const t = name ? apps.find((x) => !x.empty && x.title === name && !!x.draft && x.draft.by === m.id) : null;
+      if (!t) return;
+      drafts.push({ sid: s.id, title: t.title, stage: 'fix', appId: t.id, done: false, at, local: false, node: String(s.node || ''), serverApp: t.id, mode: 'edit', keepApp: true, origin: { id: t.id, title: t.title, by: t.madeBy } });
+      return;
+    }
+    const mode: Draft['mode'] = isEditSessionLabel(s.label) ? 'copy' : 'new';
+    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at, local: false, node: String(s.node || ''), serverApp: a ? a.id : '', mode, keepApp: keepFor(mode, a ? a.id : '') });
   });
   drafts.sort((a, b) => b.at - a.at);
-  const draftAppIds = new Set(drafts.flatMap((d) => [d.appId, d.serverApp || '']).filter(Boolean));
+  //  고치던 앱이 남는 만들기(keepApp)의 앱은 목록에서 빼지 않는다 — 내 앱을 「고치기」 로 열었다 나와도 「내가 만든 앱」 에 그대로(감사 1-1).
+  const draftAppIds = new Set(drafts.filter((d) => !d.keepApp).flatMap((d) => [d.appId, d.serverApp || '']).filter(Boolean));
   const ws = apps.filter((a) => !a.builtin && !a.empty);
   const mine = ws.filter((a) => !draftAppIds.has(a.id) && (a.madeBy === m.id || a.ownerMember === m.id));
   const team = ws.filter((a) => !mine.includes(a) && !draftAppIds.has(a.id));
-  return { apps, me: m, drafts, mine, team, goneRecs };
+  return { apps, me: m, drafts, mine, team, goneRecs, askRecs };
+}
+
+// ── 사람 이름 ──
+//  카드 · 배포 설정 · 사이드바는 계정 아이디(sangmin-yoon)가 아니라 표시 이름(윤상민)을 쓴다(감사 6-5). 명부는 앱 목록과 함께 받고, 못 받으면 아이디 그대로.
+let names: Map<string, string> | null = null;
+let namesAt = 0;   // 마지막으로 물은 때 — 못 받았으면 5분 뒤에 다시(명부를 못 읽는 사람에게 30초마다 묻지 않게)
+async function fetchNames(): Promise<void> {
+  try {
+    const d: any = await api('/api/ui/org/members');
+    const rows: any[] = Array.isArray(d?.members) ? d.members : Array.isArray(d) ? d : [];
+    const m = new Map<string, string>();
+    rows.forEach((x) => { if (x && x.id) m.set(String(x.id), String(x.display_name || x.nickname || x.id)); });
+    if (m.size) names = m;
+  } catch (_) { /* 아이디로 보인다 */ }
+}
+/** 구성원 id → 표시 이름(모르면 id). 빈 id 는 빈 글. */
+export function memberName(id: string | null | undefined): string {
+  const k = String(id || ''); if (!k) return '';
+  return (names && names.get(k)) || k;
 }
 
 // ── 받아 둔 것 ──
@@ -129,8 +182,9 @@ export function builderModelFailed(): boolean { return !got && failed; }
 export function refreshBuilderModel(force = false): Promise<void> {
   if (!force && got && Date.now() - got.at < FRESH_MS) return Promise.resolve();
   if (inflight) return force ? inflight.then(() => refreshBuilderModel(true)) : inflight;
-  inflight = Promise.all([fetchApps(), studioMe()]).then(([apps, me]) => {
-    if (!apps) { failed = true; if (got) return; }
+  inflight = Promise.all([fetchApps(), studioMe(), names || Date.now() - namesAt < 300_000 ? Promise.resolve() : (namesAt = Date.now(), fetchNames())]).then(([apps, me]) => {
+    //  나를 못 받았으면(빈 id) 받기 실패로 친다 — 그 답으로 묶으면 내 앱이 전부 「팀원이 만든 앱」 으로 간다(감사 6-6). 다음 그리기에서 다시 묻는다.
+    if (!apps || !me.id) { failed = true; if (got) return; }
     else { failed = false; got = { apps, me, at: Date.now() }; }
     for (const f of listeners) { try { f(); } catch (_) { /* 한 쪽이 깨져도 다른 쪽은 그린다 */ } }
   }).finally(() => { inflight = null; });
