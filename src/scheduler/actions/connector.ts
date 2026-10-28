@@ -3,6 +3,7 @@ import { itemsPool, q } from "../../db/client.js";
 import { connectorChildEnv, startConnectorRun, RunCapacityError } from "../../connectors/run-tracker.js";
 import { childTail, childDrainSummary, syncBatchStatus } from "../../connectors/sync-outcome.js";
 import { PUSH_CHILD_TIMEOUT_MS } from "../../connectors/push-budget.js";
+import { isNudgeableDistillJob } from "./distill-nudge.js";
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
 //  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
@@ -83,11 +84,12 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
 async function nudgeDistillNow(): Promise<void> {
   try {
     const { q, itemsPool } = await import("../../db/client.js");
-    const rows = await q(itemsPool,
-      `SELECT id FROM org_cron WHERE enabled=true AND action IN ('distill_sources_headless','distill_sources')`);
+    const rows = ((await q(itemsPool,
+      `SELECT id, cron_expr FROM org_cron WHERE enabled=true AND action IN ('distill_sources_headless','distill_sources')`)) as Array<{ id: unknown; cron_expr?: string | null }>)
+      .filter((r) => isNudgeableDistillJob(r));
     if (!rows.length) return;
     const { runCronById } = await import("../engine.js");
-    for (const r of rows) { try { await runCronById(String((r as Record<string, unknown>).id)); } catch { /* 한 잡의 실패가 나머지를 막지 않는다 */ } }
+    for (const r of rows) { try { await runCronById(String(r.id)); } catch { /* 한 잡의 실패가 나머지를 막지 않는다 */ } }
   } catch { /* 비치명 — 증류는 자기 주기에 또 돈다 */ }
 }
 
