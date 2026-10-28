@@ -6,6 +6,7 @@ import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from 
 import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
+import { assertKnowledgeInAppContext } from "./knowledge/shared.js";   // #5100 앱 맥락 범위 밖 이름 거절
 import { listSessions, listRestorableSessions } from "../terminal/terminal-sessions.js";
 import { listSessionsForProject } from "../v6/session-log-store.js";          // #1851 — 프로젝트 휴지통: 기록만 남은 세션까지 묶음으로
 import { bundleTrashedIds } from "../sessions/session-trash.js";
@@ -1191,7 +1192,11 @@ const knowledgeProjectsV6: Capability = {
         return { name };
       } }],
   },
-  handler: async (input: KnowledgeProjectsV6Input) => ({ projects: await projectsForKnowledge(input.name) }),
+  handler: async (input: KnowledgeProjectsV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    //  #5100 — 앱 맥락 범위 밖 지식의 이름으로 연결 프로젝트를 훑지 못하게(공개범위로는 보이는데 범위 밖이면 거절 + 기록 · 그 밖은 종전 그대로).
+    await assertKnowledgeInAppContext(input.name, ctx?.viewer ?? null, user, ctx, "knowledge_projects_v6");
+    return { projects: await projectsForKnowledge(input.name) };
+  },
 };
 
 // ── 작업(task/subtask) — :id 는 프로젝트. parent_task_id 주면 하위작업(subtask). ──

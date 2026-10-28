@@ -255,10 +255,10 @@ const contextSchema = z.object({
     .max(50).default([])
     .describe("이 앱이 읽을 지식의 카테고리 key(category_list 의 key). 적은 카테고리에 든 지식만 읽힌다 — 연결선 · 묶음은 따라가지 않는다"),
   source_kinds: z.array(z.enum(SOURCE_KINDS)).max(SOURCE_KINDS.length).default([])
-    .describe("이 앱이 읽을 자료의 종류. 적지 않으면 자료는 하나도 못 읽는다"),
+    .describe("이 앱이 읽을 자료의 종류. 적지 않으면 자료 도구(source_*)로는 하나도 못 읽는다 — 파일 권한(project_files · workspace_files · 앱 폴더)은 이 범위 밖이다(폴더 범위는 다음 판)"),
   folders: z.unknown().optional().describe("다음 판 — 지금 적으면 저장을 거절한다"),
 }).strict().optional()
-  .describe("이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기가 공개범위 ∩ 이 범위로 좁혀진다. 적지 않으면 실행한 사람이 보는 것 전부");
+  .describe("이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기(검색 · 목록 · 상세 · 링크 · 활동 · 프로젝트의 지식 참조)가 공개범위 ∩ 이 범위로 좁혀지고, 범위 밖을 이름으로 열면 거절된다. 범위를 지킬 수 없는 도구(휴지통 읽기 · self 소스 SQL)는 쓸 수 없다. 적지 않으면 실행한 사람이 보는 것 전부");
 
 // 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
 export const SUPPORTED_MANIFEST_SCHEMA = 1;
@@ -270,11 +270,14 @@ export const SUPPORTED_MANIFEST_SCHEMA = 1;
 //   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
 //   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
 // #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
+//  설명(.describe)은 편집기용 public/lively-app.schema.json 에 그대로 실린다(scripts/gen-app-schema.mjs — 손으로 쓴 설명이 다시 만들 때 사라지지 않게).
 const appIconSchema = z.object({
-  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만"),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB"),
-  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").optional(),
-}).strict().optional();
+  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만")
+    .describe("SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB").describe("라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"),
+  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").optional().describe("다크 테마의 선 색 #RRGGBB(없으면 color)"),
+}).strict().optional()
+  .describe("#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널).");
 
 //  export — scripts/gen-app-schema.mjs 가 이것으로 public/lively-app.schema.json 을 만든다(#4769 이 아이콘 선언을 끼우며 export 가 그쪽에 붙어 있었다).
 export const appManifestSchema = z.object({

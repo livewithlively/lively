@@ -15,7 +15,7 @@ import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 휴지통 목록의 «내 개인 폴더» 판정(#3778)
 import { SOURCE_KINDS } from "../v6/source-kinds.js";
 import { readScopeFor, outsideReadScope } from "../v6/read-scope.js";   // #5100 앱 맥락 범위
-import { appContextDenied } from "../apps/app-context.js";
+import { appContextDeniedError } from "../apps/app-context.js";
 
 // 공개범위(#1291) — 안 보이는 자료는 고칠 수도, 지울 수도, 원본을 받을 수도 없다. 문구는 없는 자료와 동일(존재 은닉).
 //  지식(assertKnowledgeWritable)과 같은 규율: id 를 아는 것만으로 비가시 본문을 덮어쓰거나 파일로 빼내지 못하게.
@@ -31,7 +31,7 @@ async function assertSourceInAppContext(id: number, viewer: Viewer, user: Lively
   if (!scope) return;
   if (await canSeeSource(id, viewer)) return;
   if (!(await outsideReadScope(() => canSeeSource(id, viewer)))) return;   // 범위 없이 보였나만 본다(내용은 읽지 않는다)
-  throw appContextDenied({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `source:${id}`, source: ctx?.source,
+  throw appContextDeniedError({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `source:${id}`, source: ctx?.source,
     message: `자료 #${id} 은(는) 이 앱이 읽을 수 있는 맥락 범위(매니페스트 context.source_kinds) 밖입니다` });
 }
 

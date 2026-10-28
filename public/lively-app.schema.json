@@ -664,22 +664,26 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 2000,
-              "pattern": "^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\\-\\s]+$"
+              "pattern": "^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\\-\\s]+$",
+              "description": "SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"
             },
             "color": {
               "type": "string",
-              "pattern": "^#[0-9a-fA-F]{6}$"
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"
             },
             "color_dark": {
               "type": "string",
-              "pattern": "^#[0-9a-fA-F]{6}$"
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "다크 테마의 선 색 #RRGGBB(없으면 color)"
             }
           },
           "required": [
             "path",
             "color"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널)."
         },
         "ai": {
           "type": "object",
@@ -751,14 +755,14 @@
               },
               "maxItems": 15,
               "default": [],
-              "description": "이 앱이 읽을 자료의 종류. 적지 않으면 자료는 하나도 못 읽는다"
+              "description": "이 앱이 읽을 자료의 종류. 적지 않으면 자료 도구(source_*)로는 하나도 못 읽는다 — 파일 권한(project_files · workspace_files · 앱 폴더)은 이 범위 밖이다(폴더 범위는 다음 판)"
             },
             "folders": {
               "description": "다음 판 — 지금 적으면 저장을 거절한다"
             }
           },
           "additionalProperties": false,
-          "description": "이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기가 공개범위 ∩ 이 범위로 좁혀진다. 적지 않으면 실행한 사람이 보는 것 전부"
+          "description": "이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기(검색 · 목록 · 상세 · 링크 · 활동 · 프로젝트의 지식 참조)가 공개범위 ∩ 이 범위로 좁혀지고, 범위 밖을 이름으로 열면 거절된다. 범위를 지킬 수 없는 도구(휴지통 읽기 · self 소스 SQL)는 쓸 수 없다. 적지 않으면 실행한 사람이 보는 것 전부"
         }
       },
       "required": [

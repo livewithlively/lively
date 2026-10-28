@@ -7,6 +7,7 @@ import { withTx, q, one, itemsPool } from "../db/client.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "../v6/visibility.js";
 import { saneLimit } from "../domainmap/core/types.js";
 import { conflictKey } from "../org/ingest/external-identity.js";
+import { appScopeKnowledgeWhere } from "../v6/knowledge-common.js";   // #5100 앱 맥락 범위 — 지식 참조
 
 const now = () => new Date().toISOString();
 
@@ -281,9 +282,14 @@ export async function listActivities(f: ListActivitiesFilter & { viewer?: Viewer
     projectIds.length
       ? q(itemsPool, `SELECT id, name AS title, level, status FROM project WHERE id = ANY($1)`, [projectIds])
       : Promise.resolve([]),
-    q(itemsPool, `SELECT ak.activity_id, ak.name, ak.relation, k.title
+    //  #5100 — 앱 맥락 범위가 걸린 요청은 범위 밖 지식 참조(이름 · 제목)를 싣지 않는다(공개범위 배선은 별도 — appScopeKnowledgeWhere 머리말).
+    (async () => {
+      const p: unknown[] = [ids];
+      const inScope = await appScopeKnowledgeWhere(f.viewer, p, "k");
+      return q(itemsPool, `SELECT ak.activity_id, ak.name, ak.relation, k.title
                    FROM activity_knowledge ak LEFT JOIN knowledge k ON k.name = ak.name
-                  WHERE ak.activity_id = ANY($1) ORDER BY ak.created_at`, [ids]),
+                  WHERE ak.activity_id = ANY($1) AND ${inScope} ORDER BY ak.created_at`, p);
+    })(),
     q(itemsPool, `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
                   WHERE activity_id = ANY($1) GROUP BY activity_id`, [ids]),
   ]);

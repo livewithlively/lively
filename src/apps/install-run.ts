@@ -15,7 +15,7 @@ import { makeDeployDeps } from "./deploy.js";
 import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
 import { declaredTableNames } from "./visibility.js";   // 매니페스트의 data.tables 이름(모양이 어긋나도 던지지 않는다)
 import { archiveLeftoverAppFolder } from "./app-folder-archive.js";   // #4778 새 앱은 빈 앱 폴더로 시작
-import { assertContextInstallable } from "./app-context.js";   // #5100 맥락 범위의 카테고리 key 확인
+import { assertContextInstallable, clearAppContextCache } from "./app-context.js";   // #5100 맥락 범위의 카테고리 key 확인 · 설치 뒤 기억 비우기
 
 /** 설치가 데이터 테이블에 한 일(#4224) — 워크스페이스가 설치한 앱에서만 채워진다(기본 앱은 코드가 구조의 주인). */
 export type InstallTablesOutcome = AppTableReport & DroppedTablesReport & { schema: string };
@@ -109,6 +109,7 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   }
 
   const components = await runInstall(meta, loaded.items, deps);
+  clearAppContextCache();   // #5100 — 새 판의 맥락 범위가 이 게이트웨이에선 곧바로 걸리게(좁힌 저장이 5초 동안 옛 범위로 읽히지 않게)
 
   // UI entry HTML 보존(PR5) — 설치가 active 로 저널된 뒤. best-effort: 실패해도 앱(하네스·principal)은 유효하고
   //  다음 설치/시드가 재보존한다. seed 의 skip 경로도 같은 헬퍼로 백필한다(마이그레이션 — 기존 설치 앱).

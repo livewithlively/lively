@@ -23,7 +23,7 @@ import { isAdmin } from "../principal.js";
 const knowledgeListInput = {
   categoryId: z.number().int().positive().optional(),
   //  #5100 — 검색 도구(grep · search · similar)와 같은 category 인자(key 또는 id). 세션 안내가 «knowledge_list category=» 로 부르라고 하는데
-  //   종전엔 MCP 입력에 없어 말없이 버려졌다(전체 목록이 나왔다). categoryId 를 함께 주면 categoryId 가 이긴다. REST 는 종전대로 ?category= 가 categoryId 다.
+  //   종전엔 MCP 입력에 없어 말없이 버려졌다(전체 목록이 나왔다). categoryId 와 함께 주면 둘이 같아야 한다(다르면 400). REST 는 종전대로 ?category= 가 categoryId 다.
   category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
   uncategorized: z.boolean().optional().describe("true 면 미분류(rejected 아닌 카테고리 매핑이 0건)인 지식만 — categoryId 와 배타(#1091). 본문 포함 목록이라 인박스 포인터만 필요하면 knowledge_unmapped."),
   light: z.boolean().optional().describe("true 면 본문(body_md)을 뺀 경량 행 — 제목·메타만 필요한 목록/트리용(#1091). 본문이 필요하면 knowledge_get."),
@@ -74,7 +74,11 @@ export const knowledgeList: Capability = {
     // 공개범위(#1291) — 목록과 총계에 **같은 뷰어**를 준다(다르면 has_more 가 영원히 true 인 페이지가 나온다).
     const viewer = ctx?.viewer ?? null;
     const { category, ...rest } = input;
-    const filter = rest.categoryId == null && category ? { ...rest, categoryId: (await categoryArg(category))?.[0] } : rest;
+    const fromArg = category ? (await categoryArg(category))?.[0] : undefined;
+    if (fromArg != null && rest.categoryId != null && rest.categoryId !== fromArg) {
+      throw new HttpError(400, `category('${category}')와 categoryId(${rest.categoryId})가 다른 카테고리를 가리킵니다 — 하나만 주세요`);
+    }
+    const filter = fromArg != null ? { ...rest, categoryId: fromArg } : rest;
     const [entries, total] = await Promise.all([
       listKnowledge({ ...filter, limit, offset }, viewer),
       countKnowledge(filter, viewer),

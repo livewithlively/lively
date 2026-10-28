@@ -14,9 +14,10 @@
 //   E5  범위 앱 · knowledge_similar: 범위 밖 문서를 기준(name)으로 = 403 · text 로 찾으면 범위 밖 0건
 //   E6  범위를 선언하지 않은 앱(범위 없음) = 종전과 같다 — 같은 검색에 범위 밖 문서가 그대로 나오고 knowledge_get 도 열린다
 //   E7  category 인자: grep · search · similar 가 그 카테고리 안에서만 · 없는 key 는 400 · 숫자 id 도 된다 · 범위 ∩ category = 교집합(밖이면 0건)
-//       · 숫자만으로 된 key 는 key 로 찾는다(id 로 먼저 읽지 않는다) · knowledge_list 도 같은 category 인자(categoryId 를 함께 주면 categoryId)
+//       · 숫자만으로 된 key 는 key 로 찾는다(id 로 먼저 읽지 않는다) · knowledge_list 도 같은 category 인자(categoryId 와 다르면 400)
 //   E8  범위 앱 · 없는 이름 = «보인다»(새 지식 저장을 막지 않는다 — 존재 판정은 호출부)
 //   E9  범위 앱 · 링크: 범위 안 문서의 링크 목록에 범위 밖 이웃이 안 실린다(종전 knowledgeVisSql 직결 자리)
+//       · 공개범위 축을 끄면 링크도 다른 표면(목록 · 검색)처럼 잠긴 이웃을 보인다(종전엔 링크만 축을 몰랐다 — 격리 리뷰 N6) · 축을 꺼도 범위는 그대로
 //   E10 범위 앱 · 자료: 선언한 종류만 · 범위 밖 source_get = 403 + 기록 · 종류를 안 적으면 0건(닫힘)
 //   E11 범위 앱 · self 소스 = 거절(이름 · 연결 표가 정책 밖이라) · 범위 없으면 종전
 //   E12 매니페스트 · 저장: 없는 카테고리 key = 400 · folders = 400 · 맞는 key 는 저장된다
@@ -51,6 +52,7 @@ const ks = await import(`${D}/v6/knowledge-search.js`);
 const kst = await import(`${D}/v6/knowledge-store.js`);
 const ss = await import(`${D}/v6/source-store.js`);
 const vis = await import(`${D}/v6/visibility.js`);
+const axes = await import(`${D}/v6/visibility-axes.js`);
 const { __resetQueryEmbedCache } = await import(`${D}/v6/search-util.js`);
 const { readStaticCapabilities, readNamedCapabilities } = await import(`${D}/capabilities/knowledge/read.js`);
 const { sourceCapabilities } = await import(`${D}/capabilities/source.js`).catch(() => ({}));
@@ -217,8 +219,10 @@ try {
     const list = kCap("knowledge_list");
     const lIn = await list.handler({ category: C_IN, q: TAG, limit: 500 }, carol, webCtx);
     chk("E7j knowledge_list category=key: 그 카테고리만 · 총계도", lIn.entries.length >= 2 && outCount(lIn.entries) === 0 && lIn.total === lIn.entries.length, JSON.stringify({ n: lIn.entries.length, total: lIn.total }));
-    const lBoth = await list.handler({ category: C_IN, categoryId: idOut, q: TAG, limit: 500 }, carol, webCtx);
-    chk("E7k knowledge_list: categoryId 를 함께 주면 categoryId 가 이긴다", lBoth.entries.length > 0 && lBoth.entries.every((r) => r.category_key === C_OUT), JSON.stringify(lBoth.entries.slice(0, 2).map((r) => r.category_key)));
+    const lBad = await thrown(() => list.handler({ category: C_IN, categoryId: idOut, q: TAG, limit: 500 }, carol, webCtx));
+    chk("E7k knowledge_list: category 와 categoryId 가 다른 카테고리면 400(말없이 한쪽이 이기지 않는다)", lBad?.status === 400, String(lBad?.status) + " " + lBad?.message);
+    const lSame = await list.handler({ category: C_IN, categoryId: idIn, q: TAG, limit: 500 }, carol, webCtx);
+    chk("E7l knowledge_list: 둘이 같은 카테고리면 그대로", lSame.entries.length === lIn.entries.length, `${lSame.entries.length} vs ${lIn.entries.length}`);
   }
   // ── E8 없는 이름 ──
   {
@@ -235,6 +239,17 @@ try {
     chk("E9 전제: 범위 없으면 링크에 범위 밖 이웃이 실린다", (un?.links?.outgoing ?? []).some((l) => l.name === `${TAG}-out-0`), JSON.stringify(un?.links));
     const sc = await scoped(() => kst.getKnowledge(`${TAG}-in-lex`, VIEWER));
     chk("E9b 범위 앱: 링크에 범위 밖 이웃이 안 실린다", !(sc?.links?.outgoing ?? []).some((l) => l.name === `${TAG}-out-0`), JSON.stringify(sc?.links));
+    await q(`INSERT INTO knowledge_link(from_name, to_name, relation, origin) VALUES($1,$2,'related','user')`, [`${TAG}-in-lex`, `${TAG}-in-locked`]);
+    const has = (k, n) => (k?.links?.outgoing ?? []).some((l) => l.name === n);
+    const on = await kst.getKnowledge(`${TAG}-in-lex`, VIEWER);
+    chk("E9c 축 켜짐: 링크에 잠긴 이웃이 없다", !has(on, `${TAG}-in-locked`), JSON.stringify(on?.links));
+    await axes.setVisAxes({ knowledge: false });
+    try {
+      const off = await kst.getKnowledge(`${TAG}-in-lex`, VIEWER);
+      chk("E9d 축 끔: 링크도 목록 · 검색처럼 잠긴 이웃을 보인다", has(off, `${TAG}-in-locked`), JSON.stringify(off?.links));
+      const offScoped = await scoped(() => kst.getKnowledge(`${TAG}-in-lex`, VIEWER));
+      chk("E9e 축 끔 · 범위 앱: 범위 밖 이웃은 여전히 없다 · 범위 안 이웃은 있다", !has(offScoped, `${TAG}-out-0`) && has(offScoped, `${TAG}-in-locked`), JSON.stringify(offScoped?.links));
+    } finally { await axes.setVisAxes({ knowledge: true }); }
   }
   // ── E10 자료 ──
   {
@@ -282,13 +297,13 @@ try {
   }
   // ── E13 어느 판 ──
   {
-    appCtx._clearAppContextCache();
+    appCtx.clearAppContextCache();
     await aCap("app_visibility_set").handler({ app_id: "ctx-pol", visibility: "all" }, bob, { source: "mcp" });
     //  공개 뒤 bob 이 다시 저장 → bob 의 초안(범위 = design 카테고리) · 공개 판은 policy 카테고리.
     await aCap("app_save").handler({ files: files("ctx-pol", { knowledge_categories: [C_OUT] }, "<p>draft</p>") }, bob, { source: "mcp" });
     const row = (await q(`SELECT draft_by, published_version_no FROM org_app WHERE id='ctx-pol'`))[0];
     chk("E13 전제: 공개 앱에 bob 의 초안이 걸려 있다", row?.draft_by === "pgt-bob" && row?.published_version_no != null, JSON.stringify(row));
-    appCtx._clearAppContextCache();
+    appCtx.clearAppContextCache();
     const sBob = await appCtx.resolveAppReadScope({ appId: "ctx-pol", userId: "pgt-bob", scopes: ["memory"] });
     const sCarol = await appCtx.resolveAppReadScope({ appId: "ctx-pol", userId: VIEWER, scopes: ["memory"] });
     const sPub = await appCtx.resolveAppReadScope({ appId: "ctx-pol", userId: "pgt-bob", scopes: ["memory"], appAddress: "pub" });
@@ -305,7 +320,7 @@ try {
   }
   // ── E14 어댑터 배선(runWithAppReadScope) ──
   {
-    appCtx._clearAppContextCache();
+    appCtx.clearAppContextCache();
     const search = kCap("knowledge_search");
     const appUser = { ...carol, appId: "ctx-pol" };   // carol 은 공개 판(policy) 범위
     __resetQueryEmbedCache();

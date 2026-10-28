@@ -27,7 +27,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 /** 앱 토큰 요청이 읽을 수 있는 범위. 빈 배열 = 그 종류는 하나도 못 읽는다(닫힘). */
 export interface ReadScope {
   appId: string;
-  /** 지식은 이 카테고리 가운데 하나에 (거절이 아닌) 연결이 있어야 읽힌다 — knowledge_list 의 카테고리 필터와 같은 기준(state<>'rejected'). */
+  /**
+   * 지식은 이 카테고리 가운데 하나에 (거절이 아닌) 연결이 있어야 읽힌다 — knowledge_list 의 카테고리 필터와 같은 기준(state<>'rejected').
+   *  «확인됨만» 으로 좁히지 않은 까닭(격리 리뷰 N5): 사람이 저장한 지식 · 미러(target_category)는 처음부터 confirmed 이고, 분류기도 확신 0.8 이상이면
+   *  confirmed 로 넣는다(knowledge-store proposeKnowledgeCategory) — proposed 는 미분류였던 지식에 붙은 낮은 확신의 제안뿐이다. 그것만 빼면
+   *  막는 폭은 작고, 목록 · 사이드바 · 집계와 «그 카테고리에 든 지식» 의 뜻이 갈라진다.
+   */
   knowledgeCategoryIds: readonly number[];
   /** 자료는 종류(source.kind)가 이 가운데 하나여야 읽힌다. */
   sourceKinds: readonly string[];

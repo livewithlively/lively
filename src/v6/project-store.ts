@@ -8,6 +8,7 @@ import { getTaskTags, getTaskTime, getTaskAttachments } from "./task-detail-stor
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
 // 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
+import { appScopeKnowledgeWhere } from "./knowledge-common.js";   // #5100 앱 맥락 범위 — 필요 · 산출 지식
 // 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
 import { enqueueExternalPush, closeNoteOf } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
@@ -382,10 +383,13 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
      WHERE p.id=$1`, [id]);
 
   // 필요/산출 지식(project_knowledge JOIN knowledge) — relation 으로 분리.
+  //  #5100 — 앱 맥락 범위가 걸린 요청은 범위 밖 지식을 싣지 않는다(공개범위 배선은 별도 — appScopeKnowledgeWhere 머리말).
+  const kParams: unknown[] = [id];
+  const kInScope = await appScopeKnowledgeWhere(viewer, kParams, "k");
   const kRows = await q(itemsPool,
     `SELECT pk.name, pk.relation, k.title, k.injection, k.provenance, k.lifecycle
      FROM project_knowledge pk JOIN knowledge k ON k.name=pk.name
-     WHERE pk.project_id=$1 ORDER BY pk.relation, pk.name`, [id]);
+     WHERE pk.project_id=$1 AND ${kInScope} ORDER BY pk.relation, pk.name`, kParams);
   const knowledge = {
     required: kRows.filter((r) => r.relation === "required"),
     produced: kRows.filter((r) => r.relation === "produced"),

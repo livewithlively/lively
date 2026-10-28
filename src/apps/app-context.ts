@@ -10,7 +10,7 @@
 import type { LivelyUser } from "../context.js";
 import { getApp } from "../org/store/apps.js";
 import { viewAppFor } from "./app-view.js";
-import { withReadScope, type ReadScope } from "../v6/read-scope.js";
+import { withReadScope, readScopeFor, type ReadScope } from "../v6/read-scope.js";
 import { itemsPool, q } from "../db/client.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { HttpError } from "../http-error.js";
@@ -45,12 +45,10 @@ async function categoryIdsForKeys(keys: readonly string[]): Promise<number[]> {
 //   (앱 동의의 도구 목록 기억 apps/principal.ts grantCache 와 같은 5초). 키에 워크스페이스를 넣는다 — 한 게이트웨이가 여러 워크스페이스를
 //   받을 때 같은 앱 id · 구성원 id 가 겹쳐도 남의 범위를 쓰지 않게. 판은 사람(초안을 고친 사람인가)과 주소로 갈리니 둘 다 넣는다.
 const CACHE_TTL_MS = 5000;
+const CACHE_MAX = 2000;   // 키는 워크스페이스 × 앱 × 사람 × 주소라 보통 작다 — 넘치면 통째로 비운다(다음 요청이 다시 푼다)
 const cache = new Map<string, { scope: ReadScope | null; at: number }>();
-let nowMs: () => number = () => Date.now();
-/** 테스트 주입 — 기억 수명 검증용. */
-export function setAppContextClock(fn: () => number): void { nowMs = fn; }
-/** 테스트 훅 — 기억 비우기. */
-export function _clearAppContextCache(): void { cache.clear(); }
+/** 기억 비우기 — 앱을 설치 · 저장하면 부른다(install-run · 범위를 좁힌 저장이 이 게이트웨이에선 곧바로 반영되게). 다른 게이트웨이 프로세스는 5초 안에. */
+export function clearAppContextCache(): void { cache.clear(); }
 
 /** 닫힌 범위 — 앱을 못 찾았다(토큰 검증이 보통 먼저 막는다). 아무것도 읽지 못한다. */
 const closed = (appId: string): ReadScope => ({ appId, knowledgeCategoryIds: [], sourceKinds: [] });
@@ -61,9 +59,10 @@ export async function resolveAppReadScope(user: Pick<LivelyUser, "appId" | "user
   if (!appId) return null;
   const key = [currentTenant()?.id ?? "", appId, user.userId ?? "", user.appAddress ?? ""].join("\0");
   const hit = cache.get(key);
-  if (hit && nowMs() - hit.at < CACHE_TTL_MS) return hit.scope;
+  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.scope;
   const scope = await computeScope(appId, user);
-  cache.set(key, { scope, at: nowMs() });
+  if (cache.size >= CACHE_MAX) cache.clear();
+  cache.set(key, { scope, at: Date.now() });
   return scope;
 }
 
@@ -72,6 +71,7 @@ async function computeScope(appId: string, user: Pick<LivelyUser, "userId" | "sc
   if (!app) return closed(appId);
   //  판(결정 ③) — 표 · 도구와 같은 viewAppFor. 'none'(이 토큰의 scope 로는 그 판을 못 본다 — 관리자가 남의 «나만» 앱을 연 경우 등)이면
   //   설치된 판의 선언을 쓴다: 여기는 문을 여는 자리가 아니라(앱을 열 수 있나는 토큰 발급 · 다리가 이미 정했다) 선언을 찾는 자리다.
+  //   앱 주소 길(appAddress 가 있는 요청)은 'none' 이면 app-front-api 가 먼저 404 로 막아 여기까지 오지 않는다(격리 리뷰 N8).
   const seen = await viewAppFor(app, { userId: String(user.userId ?? ""), scopes: user.scopes ?? [], ...(user.appAddress ? { address: user.appAddress } : {}) });
   const decl = appContextDeclOf(seen.view === "none" ? app.manifest : seen.app.manifest);
   if (!decl) return null;
@@ -112,10 +112,22 @@ export const OUT_OF_APP_CONTEXT = "out_of_app_context";
  *  앱 화면 다리(runAppTool)는 실패한 호출을 이미 거기 적으므로, 어댑터가 적지 않는 REST 능력 호출(앱 서버 · 앱 작업)만 여기서 적는다
  *  (두 번 적지 않게). 운영 기록(logger)은 길마다 한 줄 — 어느 앱이 무엇을 열려다 막혔는지.
  */
-export function appContextDenied(d: { appId: string; actor: string | null; tool: string; target: string; source?: string; message: string }): HttpError {
+export function appContextDeniedError(d: { appId: string; actor: string | null; tool: string; target: string; source?: string; message: string }): HttpError {
   logger.warn({ app: d.appId, actor: d.actor, tool: d.tool, target: d.target, source: d.source ?? null }, "[app-context] 앱 맥락 범위 밖 읽기를 거절했다(#5100)");
   if (d.source === "web") {
     logToolCall({ tool: d.tool, harness: "rest", actor: d.actor, app: d.appId, args: { target: d.target }, ok: false, error: d.message, durationMs: 0 });
   }
   return new HttpError(403, d.message, { body: { code: OUT_OF_APP_CONTEXT } });
+}
+
+/**
+ * 범위를 못 지키는 도구(#5100 격리 리뷰 N2) — 맥락 범위를 선언한 앱 토큰이 부르면 거절(403)하고 기록한다.
+ *  휴지통 읽기(deleted_list · content_snapshot)는 지운 행의 스냅샷을 돌려주는데, 지운 지식 · 자료는 카테고리 연결이 사라져 범위 안인지
+ *  가를 근거가 없다(닫는 쪽). 범위를 선언하지 않은 앱 · 앱 토큰이 아닌 요청은 아무것도 안 한다.
+ */
+export async function assertScopeSafeTool(viewer: string | null | undefined, actor: string | null, ctx: { source?: string } | undefined, tool: string, why: string): Promise<void> {
+  const scope = await readScopeFor(viewer);
+  if (!scope) return;
+  throw appContextDeniedError({ appId: scope.appId, actor, tool, target: `tool:${tool}`, source: ctx?.source,
+    message: `'${tool}' 은(는) 맥락 범위(매니페스트 context)를 선언한 앱에서 쓸 수 없습니다 — ${why}` });
 }

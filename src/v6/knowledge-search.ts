@@ -306,22 +306,34 @@ export async function findSimilarKnowledge(
     //  거기에 술어를 얹으면 탐색목록(ef_search) 안에서만 사후 필터돼 결과가 통째로 비는 리콜 붕괴가 난다(#1291 R2-#6).
     //  대신 후보를 넓게 뜬 뒤 바깥에서 거른다. minScore 는 거리와 단조라 후보 안에 남겨도 같은 문제가 없다(순서상 뒤).
     //  cand 가 k.visibility 를 실어야 바깥 술어(knowledgeVisSql, 별칭 k)가 그대로 붙는다.
-    //  #5100 카테고리 제한이 있으면 제한 안 행을 먼저 떠서(MATERIALIZED) 정확히 잰다 — 근사탐색 사후 필터로 결과가 비는 일을 막는다
-    //   (vecChannel 주석). 제한이 없으면 종전 그대로(cand 가 곧 HNSW 근사탐색).
-    const pool = categories ? `kpool AS MATERIALIZED (
-        SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md, k.visibility, k.embedding_vector
-        FROM knowledge k WHERE ${wh.join(" AND ")}
-      ),` : "";
-    const sql = `
-      WITH ${pool} cand AS (
+    //  #5100 카테고리 제한이 있으면 제한 안 행의 이름 · 벡터만 먼저 떠서(MATERIALIZED) 정확히 재고, 가까운 후보에만 본문을 붙인다 —
+    //   근사탐색 사후 필터로 결과가 비는 일을 막는다(vecChannel 주석). 본문까지 떠 두면 범위가 클 때 그만큼 메모리를 쓴다(격리 리뷰 N7).
+    //   제한이 없으면 종전 그대로(cand 가 곧 HNSW 근사탐색).
+    const cand = categories ? `kpool AS MATERIALIZED (
+        SELECT k.name, k.embedding_vector FROM knowledge k WHERE ${wh.join(" AND ")}
+      ),
+      near AS (
+        SELECT p.name, (1 - (p.embedding_vector <=> ${qp}))::float8 AS similarity
+        FROM kpool p
+        WHERE (1 - (p.embedding_vector <=> ${qp})) >= ${minP}
+        ORDER BY p.embedding_vector <=> ${qp}
+        LIMIT ${candP}
+      ),
+      cand AS (
+        SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
+               k.visibility, n.similarity
+        FROM near n JOIN knowledge k ON k.name = n.name
+      )` : `cand AS (
         SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
                k.visibility,
                (1 - (k.embedding_vector <=> ${qp}))::float8 AS similarity
-        FROM ${categories ? "kpool k" : "knowledge k"}
-        WHERE ${categories ? "" : `${wh.join(" AND ")} AND `}(1 - (k.embedding_vector <=> ${qp})) >= ${minP}
+        FROM knowledge k
+        WHERE ${wh.join(" AND ")} AND (1 - (k.embedding_vector <=> ${qp})) >= ${minP}
         ORDER BY k.embedding_vector <=> ${qp}
         LIMIT ${candP}
-      )
+      )`;
+    const sql = `
+      WITH ${cand}
       SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md, k.similarity
       FROM cand k
       WHERE ${vis}

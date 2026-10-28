@@ -16,7 +16,7 @@ import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
 import { anyRestrictedKnowledge } from "../../v6/knowledge-store.js";
 import { slugify } from "../../v6/knowledge-common.js";
 import { readScopeFor, outsideReadScope } from "../../v6/read-scope.js";   // #5100 앱 맥락 범위
-import { appContextDenied } from "../../apps/app-context.js";
+import { appContextDeniedError } from "../../apps/app-context.js";
 import type { LivelyUser } from "../../context.js";
 import type { CapabilityCtx } from "../types.js";
 
@@ -69,7 +69,7 @@ export async function assertKnowledgeInAppContext(name: string, viewer: Viewer, 
   if (await canSeeKnowledge(name, viewer)) return;
   //  범위 없이 보였나만 본다(내용을 읽지 않는다 — read-scope.ts outsideReadScope 의 쓰임 ⓐ).
   if (!(await outsideReadScope(() => canSeeKnowledge(name, viewer)))) return;
-  throw appContextDenied({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `knowledge:${name}`, source: ctx?.source,
+  throw appContextDeniedError({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `knowledge:${name}`, source: ctx?.source,
     message: `지식 '${name}' 은(는) 이 앱이 읽을 수 있는 맥락 범위(매니페스트 context.knowledge_categories) 밖입니다` });
 }
 
@@ -91,7 +91,9 @@ export async function categoryArg(raw: string | undefined): Promise<number[] | n
 export async function filterVisibleByName<T extends { name?: unknown }>(rows: T[], viewer: Viewer): Promise<T[]> {
   if (viewer === null || !rows.length) return rows;
   // 조직에 대상 제한 지식이 하나도 없으면(대부분의 조직) 행마다 판정할 필요가 없다 — 한 번 물어보고 끝낸다.
-  if (!(await anyRestrictedKnowledgeCached())) return rows;
+  //  #5100 — 앱 맥락 범위가 걸린 요청은 이 지름길을 타지 않는다: «잠긴 지식이 없으면 다 보인다» 는 범위가 없을 때만 참이다
+  //   (격리 리뷰 B1 — 잠긴 지식 없는 워크스페이스에서 범위 앱의 knowledge_revisions 에 범위 밖 수정 제안이 그대로 나왔다).
+  if (!(await readScopeFor(viewer)) && !(await anyRestrictedKnowledgeCached())) return rows;
   const out: T[] = [];
   for (const r of rows) {
     if (!r?.name || await canSeeKnowledge(String(r.name), viewer)) out.push(r);
