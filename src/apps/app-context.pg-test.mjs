@@ -23,6 +23,7 @@
 //   E12 매니페스트 · 저장: 없는 카테고리 key = 400 · folders = 400 · 맞는 key 는 저장된다
 //   E13 어느 판(결정 ③): 공개 앱에 초안 — 고친 사람은 초안의 범위 · 다른 사람은 공개 판의 범위 · 공개 주소는 고친 사람에게도 공개 판 · 초안 주소는 초안
 //   E14 어댑터 배선(runWithAppReadScope): 앱 토큰 사용자로 knowledge_search 핸들러를 부르면 그 앱의 범위로 좁혀진다 · 앱 토큰이 아니면 그대로
+//   E15 공개하면 기억이 비워진다(격리 재검토 권고): 다른 사람이 공개 판 범위를 기억한 직후 초안을 공개하면 곧바로 새 공개 판의 범위(5초 기억을 기다리지 않는다)
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로(앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게)
 import pg from "pg";
 import http from "node:http";
@@ -331,6 +332,16 @@ try {
     const noneUser = { ...carol, appId: "ctx-none" };
     const viaNone = await appCtx.runWithAppReadScope(noneUser, () => search.handler({ q: LEX, limit: 20 }, noneUser, webCtx));
     chk("E14c 범위를 선언하지 않은 앱 토큰도 그대로", JSON.stringify(names(viaNone.entries)) === JSON.stringify(names(plain.entries)));
+  }
+  // ── E15 공개하면 기억이 비워진다 ──
+  {
+    const carolKey = { appId: "ctx-pol", userId: VIEWER, scopes: ["memory"] };
+    const before = await appCtx.resolveAppReadScope(carolKey);   // carol 의 «공개 판(policy) 범위» 가 기억에 든다
+    chk("E15 전제: carol 은 공개 판(policy) 범위를 기억했다 · bob 의 초안(design)이 걸려 있다", JSON.stringify(before?.knowledgeCategoryIds) === JSON.stringify([idIn])
+      && (await q(`SELECT draft_by FROM org_app WHERE id='ctx-pol'`))[0]?.draft_by === "pgt-bob", JSON.stringify(before));
+    const pub = await aCap("app_visibility_set").handler({ app_id: "ctx-pol", visibility: "all" }, bob, { source: "mcp" });
+    const after = await appCtx.resolveAppReadScope(carolKey);
+    chk("E15b 공개하면 곧바로 새 공개 판의 범위(design)", pub?.changed === true && JSON.stringify(after?.knowledgeCategoryIds) === JSON.stringify([idOut]), `${JSON.stringify(pub).slice(0, 120)} ${JSON.stringify(after)}`);
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e && e.stack || String(e));

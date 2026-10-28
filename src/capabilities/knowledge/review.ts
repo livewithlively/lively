@@ -13,7 +13,7 @@ import {
   listRevisions, getRevision, approveRevision, rejectRevision, reviewQueueCounts, reviewQueueCountsByCategory,
 } from "../../v6/knowledge-revision-store.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
-import { assertKnowledgeWritable, filterVisibleByName } from "./shared.js";
+import { assertKnowledgeWritable, filterVisibleByName, knowledgeGoneInAppContext } from "./shared.js";
 
 // ════════ #783 수정 검토 큐 — 기존 active 지식을 에이전트가 고친 건을 사람이 diff 로 검토. ════════
 //  신규 지식은 lifecycle='pending' 으로 격리되므로 knowledge_list(lifecycle=pending)가 그 큐다.
@@ -65,7 +65,9 @@ export const knowledgeRevisionGet: Capability = {
     if (!got) throw new HttpError(404, "수정 제안 없음");
     // 리비전에는 **라이브 본문 스냅샷**(base_body_md)이 들어 있다(#1291) — 원본이 안 보이는 사람에게 열어주면
     //  "수정 제안을 하나 만들고 그 diff 를 열어 전문을 읽는" 우회로가 된다. 없는 것과 같은 문구로 답한다.
-    if (!(await canSeeKnowledge(String(got.revision.name), ctx?.viewer ?? null))) {
+    //  #5100 — 지운 문서의 수정 제안(행이 남는다)은 앱 맥락 범위가 걸린 요청엔 없는 것과 같다(범위 안인지 가를 근거가 없다).
+    if (await knowledgeGoneInAppContext(String(got.revision.name), ctx?.viewer ?? null)
+      || !(await canSeeKnowledge(String(got.revision.name), ctx?.viewer ?? null))) {
       throw new HttpError(404, "수정 제안 없음");
     }
     return got;
@@ -94,6 +96,8 @@ export const knowledgeRevisionReview: Capability = {
     //  목록·상세는 이미 걸러지지만 id 를 직접 때리는 경로가 남아 있으면 안 보이는 문서를 그 자리에서 덮을 수 있다.
     const got = await getRevision(Number(input.id));
     if (!got) throw new HttpError(404, "수정 제안 없음");
+    //  #5100 — 지운 문서의 수정 제안을 승인하면 그 문서가 되살아난다. 앱 맥락 범위가 걸린 요청엔 상세와 같이 없는 것으로 답한다.
+    if (await knowledgeGoneInAppContext(String(got.revision.name), ctx?.viewer ?? null)) throw new HttpError(404, "수정 제안 없음");
     await assertKnowledgeWritable(got.revision.name, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return input.decision === "approve"

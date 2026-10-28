@@ -11,6 +11,7 @@ import { resolveGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
+import { clearAppContextCache } from "../apps/app-context.js";   // #5100 공개하면 맥락 범위 기억 비우기
 import { removeInstalledApp, dropEmptyDraft, dropStaleDrafts } from "../apps/remove-run.js";
 import {
   archiveLeftoverAppFolder, listAppFolderArchives, clearAppFolderArchives, restoreAppFolderArchive, archiveOrphanAppFolders,
@@ -355,6 +356,7 @@ async function publishCurrent(appId: string, who: Viewer, w: WriteCtx): Promise<
     throw new HttpError(503, `표는 새 공개 판(${no}판)에 맞췄지만 공개 표시를 하지 못했습니다 — 같은 공개를 다시 하면 이어서 됩니다`
       + `${did.length ? ` (지운 칸: ${did.join(" · ")})` : ""}(${(err as Error)?.message ?? err})`, { cause: err, body: { tables } });
   }
+  clearAppContextCache();   // #5100 — 공개 판이 바뀌면 앱 주소 · 앱 서버의 맥락 범위가 이 게이트웨이에선 곧바로 새 판 것이 되게(다른 게이트웨이는 5초 안에)
   if (old && !isBuiltinSource(app.source)) {
     const gone = tablesGoneAtPublish(old.manifest, app.manifest);
     if (gone.length) await cleanupGoneTables(app, gone, who.userId, "새 공개 판", "publish");

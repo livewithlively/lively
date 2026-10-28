@@ -13,7 +13,6 @@ import { restoreCategory } from "../v6/category-store.js";
 import { visibleListIds, type Viewer } from "../v6/visibility.js";
 import { isAdmin } from "./principal.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 목록(source_trash_list)과 같은 «내 개인 폴더» 판정
-import { assertScopeSafeTool } from "../apps/app-context.js";   // #5100 앱 맥락 범위 — 범위를 못 지키는 도구
 
 const ENTITIES = TRASH_ENTITIES;   // knowledge · project · category · source(#3778) — 목록·복원·미리보기·파기가 같은 집합을 본다
 const entityOf = (raw: unknown, allowed: readonly string[] = ENTITIES): string => {
@@ -59,9 +58,6 @@ async function canRestore(before: Record<string, unknown>, entity: string, viewe
   return true;   // 카테고리 — 조직 공용 분류축
 }
 
-//  #5100 — 지운 지식 · 자료는 카테고리 연결이 사라져 앱 맥락 범위 안인지 가를 근거가 없다. 범위를 선언한 앱 토큰에는 휴지통 읽기를 열지 않는다(닫는 쪽).
-const TRASH_SCOPE_WHY = "지운 지식 · 자료는 범위 안인지 가를 근거(카테고리 연결)가 남지 않습니다";
-
 const deletedList: Capability = {
   name: "deleted_list",
   title: "삭제됨(휴지통)",
@@ -86,7 +82,6 @@ const deletedList: Capability = {
       }) }],
   },
   handler: async (input: any, user: any, ctx: any) => {
-    await assertScopeSafeTool(ctx?.viewer, user?.userId ?? null, ctx, "deleted_list", TRASH_SCOPE_WHY);   // #5100
     const entries = await listDeleted(input.limit, input.offset, (input.entity as TrashEntity | undefined) ?? null, !!input.include_mirrors);
     // 휴지통 항목은 **삭제 시점의 전문 스냅샷**(before)을 그대로 들고 있다(#1291) — 잠긴 리스트의 프로젝트나
     //  대상 제한 지식이 여기로 새면, 지우기만 하면 누구나 읽을 수 있게 된다.
@@ -194,7 +189,6 @@ const contentSnapshot: Capability = {
   handler: async (input: any, _user: any, ctx: any) => {
     //  이중 잠금 — MCP 표면엔 세우지 않지만(mcp:false), 복원·파기와 같은 문을 핸들러에도 건다(한쪽이 풀려도 다른 쪽이 막는다).
     if (ctx?.source === "mcp") throw new HttpError(403, "삭제 항목 미리보기는 사람(웹)만 가능합니다");
-    await assertScopeSafeTool(ctx?.viewer, _user?.userId ?? null, ctx, "content_snapshot", TRASH_SCOPE_WHY);   // #5100
     const before = await getDeleteSnapshot(input.entity, input.key);
     if (!before || !(await canRestore(before, input.entity, ctx?.viewer ?? null)) || !(await isDeletedNow(input.entity, input.key))) {
       throw new HttpError(404, `휴지통에 없는 항목입니다(entity=${input.entity}, key=${input.key})`);

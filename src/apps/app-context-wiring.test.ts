@@ -6,8 +6,12 @@
 //   C2 REST 능력 어댑터 — cap.handler 를 runWithAppReadScope 안에서 부른다
 //   C3 앱 화면 다리(runAppTool) — 앱 주체(appUser)로 감싼다(멤버 토큰이 아니라)
 //   C4 인증 문(appServerGate) — 그대로 보내는 갈래 · 사람 신원으로 바꾼 갈래 모두 범위 안에서 next 한다(맨 라우트가 범위를 물려받는 자리)
+//   C5 범위를 못 지키는 도구의 거절(격리 재검토 B1') — 세 어댑터 모두 앱 도구 판정(requireAppTool) 바로 뒤 · 핸들러 앞에서 assertAppContextSafeTool 을 부른다
+//      (다리는 try 안 — 거절이 기록되게)
+//   C6 그 도구 목록(APP_CONTEXT_UNSAFE_TOOLS)의 이름이 모두 실제 도구다(오타 하나면 그 도구가 조용히 열린다) · 재검토가 짚은 일곱이 다 들어 있다
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { APP_CONTEXT_UNSAFE_TOOLS } from "./app-context.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -48,6 +52,25 @@ t("C4 인증 문 — 두 갈래 모두 범위 안에서 next 한다", () => {
   assert.match(gate, /if \(verdict === "next"\) \{ nextInAppScope\(user, next\); return; \}/);
   assert.match(gate, /\.extra = p;[^\n]*\n\s*nextInAppScope\(p, next\);/);
   assert.doesNotMatch(gate, /\bnext\(\);/, "범위 밖에서 바로 next() 하는 갈래가 남아 있으면 안 된다");
+});
+
+t("C5 세 어댑터 — 앱 도구 판정 바로 뒤, 핸들러 앞에서 범위를 못 지키는 도구를 거절한다", () => {
+  const mcp = between(src("capabilities/index.ts"), "server.registerTool(", "const out = await cap.handler(");
+  assert.match(mcp, /await requireAppTool\(u, cap\.name\);[^\n]*\n\s*await assertAppContextSafeTool\(u, cap\.name, "mcp"\);/);
+  const rest = between(src("web.ts"), "await requireAppTool(user, cap.name);", "cap.handler(input, user, {");
+  assert.match(rest, /await assertAppContextSafeTool\(user, cap\.name, "web"\);/);
+  const bridge = between(src("capabilities/app-tool-call.ts"), "export async function runAppTool(");
+  const tryAt = bridge.indexOf("  try {\n"), guardAt = bridge.indexOf("await assertAppContextSafeTool(appUser, name, opts.source);"), handlerAt = bridge.indexOf("cap.handler(args");
+  assert.ok(tryAt >= 0 && tryAt < guardAt && guardAt < handlerAt, `다리: try(${tryAt}) < 거절(${guardAt}) < 핸들러(${handlerAt})`);
+});
+
+t("C6 범위를 못 지키는 도구 목록 — 모두 실제 도구 · 재검토의 일곱이 다 있다", () => {
+  const known = new Set((JSON.parse(src("capabilities/surface-snapshot.json")) as { name: string }[]).map((c) => c.name));
+  for (const name of APP_CONTEXT_UNSAFE_TOOLS.keys()) assert.ok(known.has(name), `없는 도구 이름: ${name}`);
+  for (const name of ["deleted_list", "content_snapshot", "content_restore", "content_purge", "content_undo", "my_lively_log", "org_distiller_preview"]) {
+    assert.ok(APP_CONTEXT_UNSAFE_TOOLS.has(name), `빠짐: ${name}`);
+    assert.ok((APP_CONTEXT_UNSAFE_TOOLS.get(name) ?? "").length > 0, `거절 까닭이 비었다: ${name}`);
+  }
 });
 
 console.log(`\n${pass} 통과`);

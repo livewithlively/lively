@@ -23,7 +23,7 @@ import { logToolCall } from "../org/policies/tool-log.js";
 import { logger } from "../log.js";
 import type { AppScreenSource } from "../apps/app-screen-sources.js";
 import { CONSENT_REQUIRED } from "../apps/app-consent.js";
-import { runWithAppReadScope } from "../apps/app-context.js";   // #5100 앱 맥락 범위
+import { runWithAppReadScope, assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 앱 맥락 범위
 
 /** 세션 id 꼴(box-<slug>-<8hex> 등) — 형식만. 권한은 소비처(ai-runs 구독 tie)가 본다. */
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -132,6 +132,8 @@ export async function runAppTool(member: LivelyUser, appId: string, name: string
 
   const started = Date.now();
   try {
+    //  #5100 — 범위를 못 지키는 도구는 맥락 범위를 선언한 앱이면 403. try 안에 두어 아래 catch 가 거절을 기록한다(앱 도구 판정 실패와 달리 남긴다).
+    await assertAppContextSafeTool(appUser, name, opts.source);
     //  열람 신원(#1291)은 앱 세션 MCP 경로(capabilities/index.ts)와 같다 — 도구는 그 사람의 공개범위로 읽고 쓴다.
     //  session 은 다리가 확인한 사람 세션(#4488 구독 선) — 없으면 칸을 안 둔다.
     //  #5100 앱 맥락 범위 — 앱 세션 MCP 경로(server.ts instrument)와 같다: 이 앱(이 사람 · 이 주소의 판)의 읽기 범위 안에서 돌린다.

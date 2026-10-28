@@ -8,6 +8,7 @@ import { resolveUser, requireScope } from "../context.js";
 import { viewerOf } from "./principal.js";
 import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
+import { assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 앱 맥락 범위 — 범위를 못 지키는 도구
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { requireSessionWriter } from "../sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
@@ -289,6 +290,7 @@ export function registerMcpCapabilities(
         if (cap.scope) requireScope(u, cap.scope);
         requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
         await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
+        await assertAppContextSafeTool(u, cap.name, "mcp");   // #5100: 맥락 범위를 선언한 앱이면 범위를 못 지키는 도구는 403(기록은 instrument)
         // 작업자(AI) — 게이트웨이가 접속 신원(x-lively-harness 헤더 우선, 없으면 User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.

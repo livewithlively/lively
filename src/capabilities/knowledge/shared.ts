@@ -17,6 +17,7 @@ import { anyRestrictedKnowledge } from "../../v6/knowledge-store.js";
 import { slugify } from "../../v6/knowledge-common.js";
 import { readScopeFor, outsideReadScope } from "../../v6/read-scope.js";   // #5100 앱 맥락 범위
 import { appContextDeniedError } from "../../apps/app-context.js";
+import { itemsPool, q } from "../../db/client.js";
 import type { LivelyUser } from "../../context.js";
 import type { CapabilityCtx } from "../types.js";
 
@@ -73,6 +74,30 @@ export async function assertKnowledgeInAppContext(name: string, viewer: Viewer, 
     message: `지식 '${name}' 은(는) 이 앱이 읽을 수 있는 맥락 범위(매니페스트 context.knowledge_categories) 밖입니다` });
 }
 
+/**
+ * 지운 문서의 남은 행인가(#5100 격리 재검토 B1') — 감사 이력(org_content_audit)과 수정 제안(knowledge_revision — 지식을 지워도 남는다)은
+ *  문서를 지운 뒤에도 옛 본문을 든다. 지운 문서는 카테고리 연결이 사라져 범위 안인지 가를 근거가 없으므로, 앱 맥락 범위가 걸린 요청엔
+ *  «지금 knowledge 행이 없는 이름» 의 남은 행을 내주지 않는다(닫는 쪽). 범위가 없으면 false — 종전(«없는 문서는 보인다, 존재 판정은 호출부»).
+ */
+export async function knowledgeGoneInAppContext(name: string, viewer: Viewer): Promise<boolean> {
+  if (!name || !(await readScopeFor(viewer))) return false;
+  return !(await q(itemsPool, `SELECT 1 FROM knowledge WHERE name = $1`, [name])).length;
+}
+
+/**
+ * 이력 · 되돌리기의 앱 맥락 범위 판정(#5100) — 지운 문서(knowledgeGoneInAppContext)면 거절하고, 있는 문서면 knowledge_get 과 같은 판정
+ *  (assertKnowledgeInAppContext). 지운 문서의 이력이 있든 없든 같은 답이라 존재를 알리지 않는다. 범위가 없으면 아무것도 안 한다.
+ */
+export async function assertKnowledgeHistoryInAppContext(name: string, viewer: Viewer, user: LivelyUser, ctx: CapabilityCtx | undefined, tool: string): Promise<void> {
+  const scope = await readScopeFor(viewer);
+  if (!scope || !name) return;
+  if (await knowledgeGoneInAppContext(name, viewer)) {
+    throw appContextDeniedError({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `knowledge:${name}`, source: ctx?.source,
+      message: `지식 '${name}' 은(는) 지금 없는 문서라 이 앱의 맥락 범위 안인지 가를 수 없습니다 — 맥락 범위를 선언한 앱에서는 지운 문서의 이력을 열 수 없습니다` });
+  }
+  await assertKnowledgeInAppContext(name, viewer, user, ctx, tool);
+}
+
 /** 지식 검색 도구의 category 인자 설명(#5100) — grep · search · similar 가 같은 글을 쓴다. */
 export const CATEGORY_ARG_DESC = "카테고리 key(category_list 의 key — 예: runtime-ops) 또는 숫자 id — 그 카테고리에 든 지식만 찾는다. 없는 카테고리면 오류";
 
@@ -93,9 +118,14 @@ export async function filterVisibleByName<T extends { name?: unknown }>(rows: T[
   // 조직에 대상 제한 지식이 하나도 없으면(대부분의 조직) 행마다 판정할 필요가 없다 — 한 번 물어보고 끝낸다.
   //  #5100 — 앱 맥락 범위가 걸린 요청은 이 지름길을 타지 않는다: «잠긴 지식이 없으면 다 보인다» 는 범위가 없을 때만 참이다
   //   (격리 리뷰 B1 — 잠긴 지식 없는 워크스페이스에서 범위 앱의 knowledge_revisions 에 범위 밖 수정 제안이 그대로 나왔다).
-  if (!(await readScopeFor(viewer)) && !(await anyRestrictedKnowledgeCached())) return rows;
+  const scoped = !!(await readScopeFor(viewer));
+  if (!scoped && !(await anyRestrictedKnowledgeCached())) return rows;
+  //  범위가 걸린 요청은 지금 없는 문서의 행(지운 문서의 수정 제안 등)도 뺀다(knowledgeGoneInAppContext 머리말) — 한 번에 묻는다.
+  const names = [...new Set(rows.map((r) => String(r?.name ?? "")).filter(Boolean))];
+  const live = scoped ? new Set((await q(itemsPool, `SELECT name FROM knowledge WHERE name = ANY($1::text[])`, [names])).map((r) => String(r.name))) : null;
   const out: T[] = [];
   for (const r of rows) {
+    if (r?.name && live && !live.has(String(r.name))) continue;
     if (!r?.name || await canSeeKnowledge(String(r.name), viewer)) out.push(r);
   }
   return out;
