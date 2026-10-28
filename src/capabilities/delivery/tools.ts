@@ -11,6 +11,7 @@ import { getRuntimeConfig, listTools, upsertTool, removeTool, type ToolKind, typ
 import { HTTP_TOOL_PRESETS } from "../../org/delivery/http-tool-presets.js";
 import { applyHttpToolPresetGroup, findHttpToolPresetGroup } from "../../org/delivery/http-tool-preset-apply.js";
 import { restRuntime, str, wctx } from "./shared.js";
+import { takenMcpToolNames } from "../../apps/app-mcp-store.js";
 
 const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
 const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -38,6 +39,10 @@ export const toolsCapabilities: Capability[] = [
       if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(rawName)) throw new HttpError(400, "name 은 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
       if (kind === "http_proxy" && isBuiltinToolName(rawName)) throw new HttpError(400, `name '${rawName}' 는 빌트인 도구와 충돌합니다`);
       if (kind === "builtin" && !isBuiltinToolName(rawName)) throw new HttpError(400, `'${rawName}' 는 빌트인 도구가 아닙니다(kind=builtin 은 빌트인 토글 전용)`);
+      //  #5050 — 앱이 선언한 MCP 도구(mcp_tools)와 같은 이름이면 거절한다. 도구 목록은 이 도구를 먼저 올리므로 그 앱의 도구가 말없이 가려진다(앱 쪽 설치는 반대 방향을 409 로 막는다).
+      if (kind === "http_proxy" && (await takenMcpToolNames([rawName], { orgTools: false })).length) {
+        throw new HttpError(409, `name '${rawName}' 은(는) 이 워크스페이스의 앱이 AI 도구로 선언한 이름(mcp_tools)과 겹칩니다 — 다른 이름을 쓰세요`);
+      }
       const base: OrgToolInput = {
         name: rawName, kind: kind as ToolKind,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),

@@ -11,7 +11,9 @@
 //  E4 동의 → 성공 · 철회 → 다시 거절 · E5 초안에만 있는 도구 · E6 공개 판 · 초안 판 각자 · E7 나만 보는 앱(관리자 토큰 포함) · E8 끄기 · 지우기 ·
 //  E9 기본 앱 · E10 읽기 전용 · E11 인코그니토 · 앱 토큰 · E12 설치 거부(남 앱 이름 · 조직 도구 이름 · 빌트인 이름 · 모르는 실행기 · 자기 재설치 통과) ·
 //  E13 약속 지문(level 바뀜 → tool_changed · 설명만 바뀜 → 실행) · E14 워크스페이스 B(같은 이름 · 동의 · 도구가 A 에 안 샘) · E15 인자 ·
-//  E16 실행기 오류 · E17 결과 상한 · E18 scope 없는 토큰 · E20 이름 겹침(먼저 설치된 앱) · E21 공개 주소 모름
+//  E16 실행기 오류 · E17 결과 상한 · E18 scope 없는 토큰 · E20 이름 겹침(먼저 설치된 앱) · E21 공개 주소 모름 ·
+//  E12b 되돌리기(app_revert)도 이름 검사 · E12c 같은 이름 동시 설치는 하나만 · E12d 조직 도구를 앱 도구 이름으로 못 만든다 · E22 비활성 구성원 ·
+//  E23 비용 — 선언한 앱이 없으면 MCP 요청마다 쿼리 1번 · 실행기가 없으면 0번
 //  G0 · G1 배선 — 정책 · 앱 역할 · 시험 실행기가 실제로 불렸다
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
@@ -87,8 +89,9 @@ try {
   const { mintToken } = await import(`${D}/org/store/tokens.js`);
   const oauth = await import(`${D}/org/store/oauth.js`);
   const { registerAppMcpExecutor } = await import(`${D}/apps/app-mcp-executors.js`);
-  const { appMcpToolsOf, appMcpToolContract } = await import(`${D}/apps/app-mcp-tools.js`);
-  const { callAppDeclaredTool } = await import(`${D}/mcp/app-declared-tools.js`);
+  const { appMcpToolsOf, appMcpToolContract } = await import(`${D}/apps/app-mcp-decl.js`);
+  const { callAppDeclaredTool, registerAppDeclaredTools } = await import(`${D}/mcp/app-declared-tools.js`);
+  const { toolsCapabilities } = await import(`${D}/capabilities/delivery/tools.js`);
   const { HttpError } = await import(`${D}/http-error.js`);
   setToolCandidates(buildToolCandidates());   // 부팅(index.ts)과 같게 — 빌트인 이름 충돌 검사가 실제 표면을 본다
   const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
@@ -116,16 +119,18 @@ try {
 
   // ── 시험 실행기 — 받은 부르기를 그대로 적고, 이름에 따라 오류 · 큰 결과를 낸다 ──
   const calls = [];
-  registerAppMcpExecutor({
+  const probe = {
     kind: "probe",
     call: async (c) => {
       calls.push(c);
-      if (c.tool.name === "boom_http") throw new HttpError(503, "앱이 지금 바쁩니다", { body: { code: "app_server_busy" } });
+      //  글 끝의 짝 없는 대리 글자 — 실행기가 낸 오류 글도 게이트웨이가 온전한 글자로 고쳐 싣는다(U+FFFD).
+      if (c.tool.name === "boom_http") throw new HttpError(503, "앱이 지금 바쁩니다\uD83D", { body: { code: "app_server_busy" } });
       if (c.tool.name === "boom") throw new Error("secret internals 1234");
       if (c.tool.name === "big") return { data: "가".repeat(100_000) };   // 300,000바이트 > 256KiB
       return { data: { rows: [{ tool: c.tool.name, who: c.caller.userId, args: c.args, tag: c.tool.run.tag ?? null }] } };
     },
-  });
+  };
+  let offProbe = registerAppMcpExecutor(probe);
   const callsOf = (name) => calls.filter((c) => c.tool.name === name);
 
   // ── 사람 · 토큰(A) — OAuth 는 진짜 인가 흐름으로 받는다 ──
@@ -185,6 +190,21 @@ try {
   const before = (await a0.list()).map((x) => x.name);
   await a0.close();
   chk("E19 선언한 앱이 없으면 목록은 종전 그대로 — 기본 표면이 서고 앱 도구는 없다", before.length > 50 && !before.includes("lookup"), `n=${before.length}`);
+  //  쿼리 수 — 이 프로세스의 풀은 쿼리마다 테넌트 리졸버를 한 번 부른다(db/client tenantBindingSql). 그 횟수로 센다.
+  //  앞 단계가 기다리지 않고 던진 쿼리(토큰 사용 시각 기록 등)가 끝나기를 잠깐 기다린 뒤 센다 — 그 쿼리가 세는 구간에 끼면 하나 더 센다.
+  const queriesOf = async (fn) => {
+    await new Promise((r) => setTimeout(r, 500));
+    let q = 0; client.installTenantResolver(() => { q++; return CUR; });
+    try { await fn(); } finally { client.installTenantResolver(() => CUR); }
+    return q;
+  };
+  const fakeSrv = () => ({ registerTool: () => undefined });
+  const aliceUser = await userOf(tok.alice);
+  const q1 = await queriesOf(() => registerAppDeclaredTools(fakeSrv(), aliceUser, { readOnly: false }));
+  offProbe();
+  const q0 = await queriesOf(() => registerAppDeclaredTools(fakeSrv(), aliceUser, { readOnly: false }));
+  offProbe = registerAppMcpExecutor(probe);
+  chk("E23 비용 — 선언한 앱이 없는 워크스페이스는 MCP 요청마다 쿼리 1번 · 실행기가 하나도 없는 코어는 0번", q1 === 1 && q0 === 0, J({ q1, q0 }));
 
   await install("crm", "고객 관리", CRM);
   await install("wiki", "정책 위키", [T("shared_q", { description: "공개 설명", run: { kind: "probe", tag: "pub" } })]);
@@ -323,10 +343,40 @@ try {
   await install("crm", "고객 관리", CRM.map((x) => (x.name === "lookup" ? { ...x, level: "L1" } : x)));
   const n13 = calls.length;
   const r13a = await callAppDeclaredTool(oldRef, { q: "x" }, await extraOf(tok.alice));
-  chk("E13a 목록 뒤 level 이 바뀌면(L0 → L1) 옛 목록으로 부른 것은 tool_changed · 실행기 0", r13a.isError && r13a._meta?.["lively/code"] === "tool_changed" && calls.length === n13, J(r13a));
+  chk("E13a 목록 뒤 level 이 바뀌면(L0 → L1) 옛 목록의 ref 로 부른 것(sessioned 모드 — 등록한 서버가 요청을 넘어 산다)은 tool_changed · 실행기 0", r13a.isError && r13a._meta?.["lively/code"] === "tool_changed" && calls.length === n13, J(r13a));
   await install("crm", "고객 관리", CRM.map((x) => (x.name === "lookup" ? { ...x, description: "설명만 바꿈" } : x)));
   const r13b = await callAppDeclaredTool(oldRef, { q: "x" }, await extraOf(tok.alice));
   chk("E13b 설명만 바뀐 것은 같은 약속 — 그대로 실행", !r13b.isError && callsOf("lookup").at(-1)?.tool.description === "설명만 바꿈", J(r13b));
+
+  // ── E12b 되돌리기도 이름 검사를 지난다 ──
+  await save("dana", "rv", "되돌릴 앱", [T("rv_q")]);
+  await save("dana", "rv", "되돌릴 앱", []);
+  await install("rv-taker", "이름을 가져간 앱", [T("rv_q")]);
+  const v1 = (await itemsPool.query(`SELECT version_no FROM org_app_version WHERE app_id='rv' AND manifest->'mcp_tools' @> '[{"name":"rv_q"}]'::jsonb ORDER BY version_no LIMIT 1`)).rows[0]?.version_no;
+  const eRv = await errOf(cap("app_revert").handler({ app_id: "rv", version_no: Number(v1) }, P("dana"), ctx));
+  const rvNow = (await itemsPool.query(`SELECT manifest->'mcp_tools' AS t FROM org_app WHERE id='rv'`)).rows[0]?.t;
+  chk("E12b 그 이름을 다른 앱이 가져간 뒤 옛 판으로 되돌리면 409 · 앱은 그대로(도구 없음)", v1 != null && eRv?.status === 409 && /'rv_q'/.test(eRv.message) && J(rvNow) === "[]", J({ v1, eRv: eRv && [eRv.status, eRv.message], rvNow }));
+
+  // ── E12c 같은 이름 동시 설치 ──
+  const race = await Promise.allSettled([install("race-a", "경주 A", [T("race_q")]), install("race-b", "경주 B", [T("race_q")])]);
+  const won = race.filter((r) => r.status === "fulfilled").length;
+  const lost = race.filter((r) => r.status === "rejected" && r.reason?.status === 409).length;
+  const raceRows = (await itemsPool.query(`SELECT id FROM org_app WHERE id IN ('race-a','race-b') AND manifest->'mcp_tools' @> '[{"name":"race_q"}]'::jsonb`)).rows;
+  chk("E12c 다른 두 앱이 같은 이름으로 동시에 설치하면 하나만 되고 다른 하나는 409(도구 이름 자리 잠금)", won === 1 && lost === 1 && raceRows.length === 1,
+    J({ race: race.map((r) => (r.status === "fulfilled" ? "ok" : `${r.reason?.status} ${r.reason?.message}`)), raceRows }));
+
+  // ── E12d 반대 방향 — 조직 도구(http_proxy)를 앱 도구 이름으로 ──
+  const eTool = await errOf(toolsCapabilities.find((c) => c.name === "org_tool_upsert").handler({ name: "lookup", kind: "http_proxy", url: "https://example.invalid/api" }, P("boss", true), ctx));
+  const eToolOk = await errOf(toolsCapabilities.find((c) => c.name === "org_tool_upsert").handler({ name: "free_proxy_name", kind: "http_proxy", url: "https://example.invalid/api" }, P("boss", true), ctx));
+  chk("E12d 앱이 선언한 이름으로 조직 도구를 만들면 409(앱 도구가 말없이 가려지지 않게) · 겹치지 않는 이름은 된다", eTool?.status === 409 && /'lookup'/.test(eTool.message) && eToolOk === null, J({ eTool: eTool && [eTool.status, eTool.message], eToolOk: eToolOk?.message }));
+
+  // ── E22 비활성 구성원 ──
+  await upsertMember({ id: "ghost", display_name: "떠난 사람", state: "inactive", scopes: MEMBER_SCOPES }, "pgt");
+  await dbc.query(`INSERT INTO org_app_grant(tenant_id, app_id, member_id, scopes, tools) VALUES($1,'crm','ghost','[]'::jsonb,'[]'::jsonb) ON CONFLICT DO NOTHING`, [TA]);
+  const crmNow = appMcpToolsOf((await itemsPool.query(`SELECT manifest FROM org_app WHERE id='crm'`)).rows[0]?.manifest).find((d) => d.name === "lookup");
+  const n22 = calls.length;
+  const r22 = await callAppDeclaredTool(refOf("crm", crmNow), { q: "x" }, { authInfo: { extra: { userId: "ghost", email: "", scopes: MEMBER_SCOPES, projects: ["*"] } } });
+  chk("E22 비활성 구성원(동의 행이 남아 있어도)은 member 로 거절 · 실행기 0", r22._meta?.["lively/code"] === "member" && calls.length === n22, J(r22));
 
   // ── E14 워크스페이스 B ──
   await dbc.query(`INSERT INTO org_member(tenant_id, id, kind, display_name, state, scopes) VALUES($1,'bea','human','베아','active','["items","context","memory","admin"]'::jsonb)`, [TB]);
@@ -348,7 +398,7 @@ try {
     && r15b.isError && r15b._meta?.["lively/code"] === "bad_args" && calls.length === n15, J({ r15a, r15b }));
   const r16a = await A.call("boom_http", {});
   const r16b = await A.call("boom", {});
-  chk("E16 실행기 오류 — HttpError 는 그 글 · code, 그 밖의 예외는 글을 감춘다", r16a.isError && textOf(r16a) === "앱이 지금 바쁩니다" && r16a._meta?.["lively/code"] === "app_server_busy"
+  chk("E16 실행기 오류 — HttpError 는 그 글(깨진 글자는 U+FFFD 로) · code, 그 밖의 예외는 글을 감춘다", r16a.isError && textOf(r16a) === "앱이 지금 바쁩니다\uFFFD" && r16a._meta?.["lively/code"] === "app_server_busy"
     && r16b.isError && !/secret/.test(textOf(r16b)) && r16b._meta?.["lively/code"] === "executor_failed", J({ r16a, r16b }));
   const r17 = await A.call("big", {});
   const t17 = textOf(r17);

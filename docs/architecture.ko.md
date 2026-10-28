@@ -21,7 +21,7 @@
 | 영역 | 파일 | 비고 |
 |---|---|---|
 | 엔트리포인트 | `src/index.ts` · `src/boot/mcp-transport.ts` | Express + Streamable HTTP + bearer 인증 |
-| 서버 조립 | `src/server.ts` · `src/mcp/dynamic-tools.ts` | 능력 계층 등록 — MCP 표면은 `expose.mcp:true` capability 자동등록(단일 SoT — 카운트를 하드코딩하지 않는다. 실제 집합은 `src/capabilities/index.ts` 의 `buildToolCandidates`/`isToolExposed` 가 정한다) + 웹 정의 `org_tool`(http_proxy) `/mcp` **동적 등록**(SSRF 가드)·빌트인 on/off 게이팅 |
+| 서버 조립 | `src/server.ts` · `src/mcp/dynamic-tools.ts` · `src/mcp/app-declared-tools.ts` | 능력 계층 등록 — MCP 표면은 `expose.mcp:true` capability 자동등록(단일 SoT — 카운트를 하드코딩하지 않는다. 실제 집합은 `src/capabilities/index.ts` 의 `buildToolCandidates`/`isToolExposed` 가 정한다) + 웹 정의 `org_tool`(http_proxy) `/mcp` **동적 등록**(SSRF 가드)·빌트인 on/off 게이팅 + 앱 매니페스트 `mcp_tools` 를 **보는 사람의 판으로 요청마다 등록**(동의 전엔 게이트웨이 글만 · 실행은 `src/apps/app-mcp-executors.ts` 실행기 — #5050) |
 | **보안 경계** | `src/context.ts` | `resolveUser → requireScope` — 모든 툴 첫 줄 |
 | 인증 | `src/auth/bearer.ts` | 정적 토큰(`AUTH_TOKENS_JSON`) + **DB 토큰**(`auth_token`, sha256·revoke 즉시·재시작 불요). OAuth 2.1 인가서버(`src/org/auth/oauth-*.ts`, #1473)가 발급한 토큰도 같은 `auth_token` 에 들어가 이 검증기를 탄다 |
 | **능력 계층** | `src/capabilities/*` | op = 스키마·스코프·핸들러 단일 정의 + `expose{mcp,rest}` 선별 노출 — knowledge·categories·projects-v6·task-v6·activity·context·domainmap-curation·**delivery(웹 관리/전달)** |

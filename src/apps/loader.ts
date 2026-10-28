@@ -15,7 +15,7 @@ import path from "node:path";
 import { HttpError } from "../http-error.js";
 import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, type LivelyAppManifest } from "./manifest.js";
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
-import { assertAppMcpToolsInstallable } from "./app-mcp-tools.js";
+import { assertAppMcpToolsInstallable } from "./app-mcp-decl.js";
 import { hashAppPackage } from "./package-hash.js";
 import type { DeployItem } from "./install.js";
 

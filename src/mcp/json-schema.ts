@@ -1,5 +1,5 @@
 // 도구 입력 스키마(JSON Schema) 위생 검사 + zod 셰이프 변환 — 잎 모듈(zod · http-error 만).
-//  소비자: mcp/dynamic-tools.ts(http_proxy 도구 — 저장 · 등록) · apps/app-mcp-tools.ts(#5050 앱이 선언한 MCP 도구 — 설치 검사 · 등록).
+//  소비자: mcp/dynamic-tools.ts(http_proxy 도구 — 저장 · 등록) · apps/app-mcp-decl.ts(#5050 앱이 선언한 MCP 도구 — 설치 검사 · 등록).
 //  본문은 dynamic-tools.ts 에 있던 것 그대로다(#5050 에서 옮김 — 앱 선언 도구의 설치 검사가 프록시 배관(DB · 자격 · SSRF)을 끌어오지 않게).
 //  dynamic-tools.ts 가 같은 이름으로 다시 내보내 기존 import 는 그대로다.
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";

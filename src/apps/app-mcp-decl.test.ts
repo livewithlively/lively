@@ -1,15 +1,18 @@
 // 앱이 선언한 MCP 도구(#5050 앱 v2-40) — 선언 읽기 · 설치 검사 · 약속 지문 · 표시 · 결과 글(순수). DB 쪽(이름 겹침 · 등록 · 부르기)은
 //  mcp/app-declared-tools.pg-test.mjs, 목록 판정(판 · 공개 범위)은 mcp/app-declared-tools.test.ts.
-//  R1~R6 저장된 것 읽기(던지지 않음) · I1~I13 설치 검사(경계 I4b · I7 · I10) · C1~C4 약속 지문 · P1~P2 동의 전 표시 · T1~T4 결과 글 · U1 동의 주소 · M1~M3 매니페스트 칸
+//  R1~R7 저장된 것 읽기(던지지 않음) · I1~I16 설치 검사(경계 I4b · I7 · I10 · I6b · I15) · C1~C4 약속 지문 · P1~P3 동의 전 표시(대리 글자 · 숨은 글자) ·
+//  T1~T5 결과 글 · U1 동의 주소 · M1~M4 매니페스트 칸 · X1 프록시 접두 정본
 import assert from "node:assert/strict";
 import {
   appMcpToolsOf, assertAppMcpToolsInstallable, appMcpToolContract, consentPresentation, appLabel, renderToolResultText, appConsentUrl,
   APP_MCP_TOOLS_MAX, type AppMcpToolDecl,
-} from "./app-mcp-tools.js";
+} from "./app-mcp-decl.js";
 import { registerAppMcpExecutor } from "./app-mcp-executors.js";
 import { setToolCandidates } from "../mcp/mcp-surface.js";
-import { parseAppManifest } from "./manifest.js";
+import { parseAppManifest, appManifestSchema } from "./manifest.js";
 import { HttpError } from "../http-error.js";
+import { EXT_PREFIX } from "../org/policies/tool-log.js";
+import { PROXY_TOOL_PREFIX, INPUT_PROP_DESC_MAX, wellFormedText } from "./app-mcp-decl.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -50,6 +53,21 @@ await t("R3 모양이 틀린 항목만 건너뛴다 — 이름 꼴 · ext__ · L
     { name: "no_run", description: "x" }, tool({ run: { kind: "Echo" } }),
     tool({ input: { $ref: "#/x" } }), tool({ input: { type: "object", properties: { "$search": { type: "string" } } } }),
     tool({ input: { type: "array" } }), "문자열", null,
+  ];
+  assert.deepEqual(appMcpToolsOf(m([...bad, tool({ name: "ok_tool" })])).map((d) => d.name), ["ok_tool"]);
+});
+await t("R7 저장된 것도 — 깨진 글자 · 속성 값 꼴(설명이 글자가 아님 · 값이 객체가 아님) · run 깊이 · run 크기 · 예약 키 · required 꼴이 틀린 항목은 건너뛴다", () => {
+  let deep: Record<string, unknown> = { leaf: 1 };
+  for (let i = 0; i < 8; i++) deep = { d: deep };
+  const bad = [
+    tool({ description: "반쪽 \uD83D 글자" }), tool({ title: "\uDE00" }),
+    tool({ input: { type: "object", properties: { q: { type: "string", description: { a: 1 } } } } }),
+    tool({ input: { type: "object", properties: { q: "x" } } }),
+    tool({ input: { type: "object", properties: { q: { type: 5 } } } }),
+    tool({ input: { type: "object", properties: { q: { type: "string" } }, required: "q" } }),
+    tool({ run: { kind: "echo", deep } }), tool({ run: { kind: "echo", blob: "x".repeat(9000) } }),
+    //  JSON.parse 가 만든 «__proto__» 는 제 칸이다 — 저장된 매니페스트(jsonb)를 읽으면 이 꼴로 온다.
+    tool({ run: JSON.parse('{"kind":"echo","__proto__":{"x":1}}') }),
   ];
   assert.deepEqual(appMcpToolsOf(m([...bad, tool({ name: "ok_tool" })])).map((d) => d.name), ["ok_tool"]);
 });
@@ -99,6 +117,17 @@ await t("I6 입력 스키마 — $ref · 최상위 object 아님 · 속성 이�
   await rejects(assertAppMcpToolsInstallable(m([tool({ input: { type: "string" } })])), /최상위 type 은 object/);
   await rejects(assertAppMcpToolsInstallable(m([tool({ input: { type: "object", properties: { "$top": { type: "number" } } } })])), /'\$top'.*쓸 수 없습니다/);
 });
+await t(`I6b 입력 속성 값 — 객체여야 · type 은 글자 · description 은 ${INPUT_PROP_DESC_MAX}자 이하 글자(경계) · required 는 글자 배열`, async () => {
+  const withProp = (q: unknown, extra: Record<string, unknown> = {}) => m([tool({ input: { type: "object", properties: { q }, ...extra } })]);
+  for (const bad of [{ type: "string", description: { a: 1 } }, { type: "string", description: 5 }, { type: "string", description: [] }]) {
+    await rejects(assertAppMcpToolsInstallable(withProp(bad)), /input\.properties\.q\.description 은 500자 이하의 글자/);
+  }
+  await rejects(assertAppMcpToolsInstallable(withProp("x")), /input\.properties\.q 는 객체/);
+  await rejects(assertAppMcpToolsInstallable(withProp({ type: 5 })), /input\.properties\.q\.type 은 글자/);
+  await rejects(assertAppMcpToolsInstallable(withProp({ type: "string" }, { required: "q" })), /input\.required 는 글자의 배열/);
+  assert.equal((await assertAppMcpToolsInstallable(withProp({ type: "string", description: "가".repeat(INPUT_PROP_DESC_MAX) }))).length, 1);
+  await rejects(assertAppMcpToolsInstallable(withProp({ type: "string", description: "가".repeat(INPUT_PROP_DESC_MAX + 1) })), /500자 이하/);
+});
 await t("I7 설명 — 없으면 거부 · 2000자는 통과 · 2001자는 거부(경계)", async () => {
   await rejects(assertAppMcpToolsInstallable(m([tool({ description: "" })])), /description 이 필요합니다/);
   assert.equal((await assertAppMcpToolsInstallable(m([tool({ description: "가".repeat(2000) })]))).length, 1);
@@ -125,6 +154,25 @@ await t("I12 같은 실행기 이름을 두 번 등록하면 던진다 · 형식
 });
 await t("I13 저장된 것 읽기는 설치 검사가 거부할 칸에도 던지지 않는다(되돌린 코어 · 재파싱 안전)", () => {
   assert.equal(appMcpToolsOf(m([tool({ max_rows: 1 })])).length, 1);
+});
+await t("I14 깨진 글자(짝 없는 대리 글자) — 설명 · 제목 · 입력 설명 · run 어디든 400", async () => {
+  for (const o of [{ description: "a\uD83Db" }, { title: "\uDE00" },
+    { input: { type: "object", properties: { q: { type: "string", description: "x\uD800" } } } }, { run: { kind: "echo", route: "/\uDC00" } }]) {
+    await rejects(assertAppMcpToolsInstallable(m([tool(o)])), /깨진 글자/);
+  }
+  assert.equal((await assertAppMcpToolsInstallable(m([tool({ description: "온전한 이모지 😀 는 된다" })]))).length, 1);
+});
+await t("I15 run 칸 — 객체 6단(run 자신 포함 · 경계)은 통과 · 7단 · 8KiB 넘음 · 예약 키는 400", async () => {
+  const nest = (n: number): Record<string, unknown> => { let v: Record<string, unknown> = { leaf: 1 }; for (let i = 1; i < n; i++) v = { d: v }; return v; };
+  assert.equal((await assertAppMcpToolsInstallable(m([tool({ run: { kind: "echo", x: nest(5) } })]))).length, 1);
+  await rejects(assertAppMcpToolsInstallable(m([tool({ run: { kind: "echo", x: nest(6) } })])), /run 의 중첩이 너무 깊습니다/);
+  await rejects(assertAppMcpToolsInstallable(m([tool({ run: { kind: "echo", blob: "x".repeat(9000) } })])), /run 이 너무 큽니다/);
+  await rejects(assertAppMcpToolsInstallable(m([tool({ run: JSON.parse('{"kind":"echo","__proto__":{"x":1}}') })])), /예약 키/);
+});
+await t("I16 아주 깊은 run 도 약속 지문 · 글자 검사가 넘치지 않는다(깊이를 먼저 막는다)", () => {
+  let v: Record<string, unknown> = { leaf: 1 };
+  for (let i = 0; i < 30000; i++) v = { d: v };
+  assert.deepEqual(appMcpToolsOf(m([tool({ run: { kind: "echo", v } })])), []);
 });
 
 // ── 약속 지문 ──
@@ -164,10 +212,19 @@ await t("P1 동의 전 표시엔 앱이 쓴 설명 · 입력 설명이 없다", 
   assert.equal(p.title, "정책 위키 · policy_lookup (동의 필요)");
 });
 await t("P2 앱 이름표 — 줄바꿈 · 제어 글자 · 줄 구분자를 걷고 40자는 그대로 · 41자는 자른다 · 비면 «앱»", () => {
-  assert.equal(appLabel("가\n나 다\u0007라"), "가 나 다 라");
+  assert.equal(appLabel("가\n나\u2028다\u0007라"), "가 나 다 라");
   assert.equal(appLabel("x".repeat(40)), "x".repeat(40));
   assert.equal(appLabel("x".repeat(41)), `${"x".repeat(40)}…`);
   assert.equal(appLabel("   "), "앱");
+});
+await t("P2b 이름표는 코드포인트로 자른다 — 40번째가 이모지여도 반쪽 글자가 없다", () => {
+  const out = appLabel("a".repeat(39) + "😀" + "bcdefg");
+  assert.equal(out, "a".repeat(39) + "😀…");
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(out), "온전한 글자만");
+});
+await t("P3 보이지 않는 글자 — 폭 없는 글자 · 방향 바꾸기 · 태그 글자 · 변형 선택자 · 짝 없는 대리 글자를 걷는다", () => {
+  assert.equal(appLabel("가\u200B나\u202E다\u{E0041}\u{E0042}라\uFE0F마\uD83D바"), "가 나 다 라 마 바");
+  assert.equal(appLabel("\u{E0063}\u{E0061}\u{E006C}\u{E006C}"), "앱", "태그 글자만으로 된 제목은 빈 이름");
 });
 
 // ── 결과 글 ──
@@ -188,10 +245,17 @@ await t("T3 상한을 넘으면 자르고 잘림 표시 · 전체 바이트", ()
   assert.ok(r.text.startsWith("x".repeat(100) + "\n…(결과가"), r.text);
   assert.match(r.text, /전체 101바이트/);
 });
+await t("T5 짝 없는 대리 글자는 U+FFFD 로 바꿔 싣는다(실행기가 낸 글 · 오류 글)", () => {
+  assert.equal(renderToolResultText("x\uD83Dy").text, "x\uFFFDy");
+  //  객체는 JSON.stringify 가 이미 짝 없는 대리 글자를 \ud83d 표기로 바꿔 온전한 글자가 된다(ES2019) — 그대로 둔다.
+  assert.equal(renderToolResultText({ a: "x\uD83Dy" }).text, '{"a":"x\\ud83dy"}');
+  assert.equal(wellFormedText("\uDE00끝"), "\uFFFD끝");
+  assert.equal(wellFormedText("온전 😀"), "온전 😀");
+});
 await t("T4 여러 바이트 글자를 반쯤 자르지 않는다(깨진 글자 없음)", () => {
   const r = renderToolResultText("가".repeat(10), 7);   // '가' = 3바이트 → 2자(6바이트)만
   assert.ok(r.text.startsWith("가가\n"), JSON.stringify(r.text));
-  assert.ok(!r.text.includes("�"));
+  assert.ok(!r.text.includes("\uFFFD"));
 });
 
 // ── 동의 주소 ──
@@ -213,6 +277,13 @@ await t("M2 선언이 없으면 칸도 생기지 않는다(기본값 없음 — 
 await t("M3 배열이 아니면 매니페스트 오류", () => {
   assert.throws(() => parseAppManifest(m("문자열")), /\[mcp_tools\]/);
 });
+await t("M4 appManifestSchema 는 내보낸다 — scripts/gen-app-schema.mjs 가 이것으로 public/lively-app.schema.json 을 만든다", () => {
+  assert.equal(typeof appManifestSchema?.safeParse, "function");
+  assert.ok(appManifestSchema.safeParse({ id: "probe", title: "시험", version: "0.1.0", mcp_tools: [] }).success);
+});
+await t("X1 프록시 도구 접두는 정본(org/policies/tool-log.ts EXT_PREFIX)과 같은 글자", () => {
+  assert.equal(PROXY_TOOL_PREFIX, EXT_PREFIX);
+});
 
 assert.equal(called, 0, "설치 검사 · 읽기는 실행기를 부르지 않는다");
-console.log(`\napp-mcp-tools tests: ${pass} passed`);
+console.log(`\napp-mcp-decl tests: ${pass} passed`);

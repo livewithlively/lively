@@ -318,7 +318,7 @@ export const appManifestSchema = z.object({
   ai: aiSchema,
   //  #5050 앱이 구성원의 AI 에 **내놓는** 도구(앱 v2-40) — permissions.tools(앱이 쓰는 라이블리 도구) · tools.*(앱이 설치하는 프록시 도구)와 다른 말이다.
   //   최상위 칸이다(tools 는 strict 라 거기 두면 이 칸을 모르는 옛 코어가 매니페스트를 통째로 못 읽는다 — web.root 와 같은 까닭).
-  //   여기서는 «객체의 배열» 만 본다(tools.mcp_servers 와 같은 규약 — 설치가 재검증): 항목의 뜻 검사는 설치 · 판 저장 때 apps/app-mcp-tools.ts
+  //   여기서는 «객체의 배열» 만 본다(tools.mcp_servers 와 같은 규약 — 설치가 재검증): 항목의 뜻 검사는 설치 · 판 저장 때 apps/app-mcp-decl.ts
   //   assertAppMcpToolsInstallable(loader 가 부른다)이, 저장된 것 읽기는 appMcpToolsOf(틀린 항목만 건너뜀)가 한다 — 새 코어가 항목에 칸을 더해도
   //   이 코어의 재파싱(동의 · 표시)이 깨지지 않게. 선언이 없으면 칸도 만들지 않는다(기본값 없음 — 도구 목록의 DB 읽기가 이 칸이 있는 앱만 고른다).
   mcp_tools: z.array(z.record(z.unknown()))

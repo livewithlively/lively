@@ -2,8 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerDbTools } from "./tools/db.js";
 import { registerMcpCapabilities } from "./capabilities/index.js";
 import { resolveUser } from "./context.js";
-import { logToolCall, toolResultFailure } from "./org/policies/tool-log.js";
-import { APP_TOOL_META_KEY } from "./apps/app-mcp-tools.js";
+import { logToolCall, toolResultFailure, TOOL_APP_META_KEY } from "./org/policies/tool-log.js";
 
 // memory_* 폐기(2026-06-24) — knowledge_*(v6)로 통일(ctx_* 가 간 길). org_memory 웹 표면('WIKI 인덱스')은 delivery REST(/api/ui/org/memory) 유지.
 // code_*: 보류 (개발자는 레포 내 네이티브 툴; 필요시 공식 GitHub MCP 래핑)
@@ -76,7 +75,7 @@ export function buildServer(
   const orig = server.registerTool.bind(server);
   server.registerTool = ((name: string, config: unknown, handler: ToolHandler) => {
     if (overrides?.get(name) === false) return undefined;
-    const tag = (config as { _meta?: Record<string, unknown> } | undefined)?._meta?.[APP_TOOL_META_KEY];
+    const tag = (config as { _meta?: Record<string, unknown> } | undefined)?._meta?.[TOOL_APP_META_KEY];
     const cb = typeof handler === "function" ? instrument(name, handler, harness, typeof tag === "string" ? tag : null) : handler;
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);
   }) as typeof server.registerTool;
