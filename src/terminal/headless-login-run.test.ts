@@ -629,7 +629,8 @@ if (process.platform === "win32") {
       await waitFor("종료 줄", () => fs.readFileSync(x.log, "utf8").includes(EXIT_MARK));
       const log = fs.readFileSync(x.log, "utf8");
       assert.ok(log.indexOf(CAPTURED_LINE) >= 0 && log.indexOf(CAPTURED_LINE) < log.indexOf(EXIT_MARK), "잡음 → 종료 순서");
-      assert.ok(!fs.existsSync(cxHome), "CODEX_HOME 임시 폴더를 지웠다");
+      // 러너는 종료 줄을 쓴 **다음에** 임시 폴더를 지운다 — 종료 줄을 보자마자 단언하면 그 틈에 걸린다.
+      await waitFor("CODEX_HOME 임시 폴더를 지웠다", () => !fs.existsSync(cxHome));
       await sleep(700);
       assert.ok(runnerAlive("codex") && exists(x.pid), "안 거둔 자격이 있으니 러너는 기다린다");
       await markHeadlessStored(null, "codex");
@@ -671,11 +672,31 @@ if (process.platform === "win32") {
     });
 
     await t("★ R10 CLI 가 없으면 시작하지 못했다고 말한다", async () => {
+      //  «codex 없음» 은 PATH 에서 폴더를 빼서는 못 만든다 — 중앙 박스는 node 옆(/usr/local/bin)에 codex·claude·grok 이 함께 깔려
+      //   있어 node 폴더를 넣는 순간 codex 도 잡혔다(#5029). 폴더들을 심링크로 통째 비추고 그 이름만 뺀다
+      //   (지식 test-absent-system-binary-via-sysbin-mirror). 비춘 PATH 에서 정말 codex 가 없고 node 는 있는지부터 본다.
+      const mirror = fs.mkdtempSync(path.join(os.tmpdir(), "hl-r10-path-"));
+      const seen = new Set(["codex"]);
+      for (const d of [path.dirname(process.execPath), "/usr/bin", "/bin"]) {
+        let names: string[] = [];
+        try { names = fs.readdirSync(d); } catch { continue; }
+        for (const n of names) {
+          if (seen.has(n)) continue;
+          seen.add(n);
+          try { fs.symlinkSync(path.join(d, n), path.join(mirror, n)); } catch { /* 경합·권한 — 그 이름만 빠진다 */ }
+        }
+      }
+      const probe = (cmd: string): number | null => spawnSync("/bin/sh", ["-c", `command -v ${cmd}`], { env: { PATH: mirror } }).status;
+      assert.notEqual(probe("codex"), 0, "비춘 PATH 에 codex 가 없어야 한다(부재가 진짜인가)");
+      assert.equal(probe("node"), 0, "비춘 PATH 에 node 는 있어야 한다(시스템을 통째로 없애지 않았나)");
       const savedPath = process.env.PATH;
-      process.env.PATH = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
+      process.env.PATH = mirror;
       try {
         await assert.rejects(() => startHeadlessLogin(null, "codex", null), /codex 없음|띄우지 못했습니다/);
-      } finally { process.env.PATH = savedPath; }
+      } finally {
+        process.env.PATH = savedPath;
+        fs.rmSync(mirror, { recursive: true, force: true });
+      }
     });
   } finally {
     for (const h of ["claude", "codex"] as const) await cancelHeadlessLogin(null, h).catch(() => undefined);

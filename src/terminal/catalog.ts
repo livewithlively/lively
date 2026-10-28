@@ -159,8 +159,19 @@ export interface FlagDef { name: string; label: string; desc: string; type: "sel
 //  제미나이=안티그래비티 · xAI=그록 빌드 · 그 밖=오픈코드). 매핑을 화면에 두지 않고 여기 표에 두는 이유는 소비자가
 //  셋이기 때문이다(홈 입력창 · 프로젝트 '클로드로 실행' · 세션 대화창) — 세 곳에 같은 if 를 쓰면 한쪽만 고쳐진다.
 export interface HarnessProvider { id: string; label: string }
+/**
+ * (#5058) 세션 플래그 묶음에 싣는 «오토모드» 표식 — 값 "1". 화면의 선택지(FlagDef)가 아니라 **세션이 어떤 권한으로 떴나**를 적는 칸이라
+ *  flags 와 같은 자리(@box_flags)에 남는다 — 그래서 복원·복제·다른 AI 로 넘기기가 따로 배선 없이 같은 권한으로 다시 뜬다.
+ *  createSession 이 이걸 보고 그 하네스의 autoModeArgv 를(없으면 autoApproveFlag 를) 붙인다.
+ */
+export const AUTO_MODE_FLAG = "@auto_mode";
 export interface Harness {
   key: string; label: string; bin: string; provider: HarnessProvider; autoApproveFlag?: string; flags: FlagDef[];
+  /**
+   * (#5058) 그 하네스의 **오토모드** — 승인을 하네스가 스스로 검토해 넘기되 샌드박스·안전장치는 남는 자리. autoApproveFlag(전부 건너뜀)보다 한 칸 아래다.
+   *  없으면 오토모드를 청한 세션은 autoApproveFlag 로 뜬다(«오토모드 이상»). 실측 근거는 각 행 주석.
+   */
+  autoModeArgv?: string[];
   /** 모델마다 허용 추론강도가 다를 때 UI가 잘못된 조합을 만들지 않게 하는 표. 미지정 모델은 --effort 전체 선택지를 쓴다. */
   effortsByModel?: Record<string, string[]>;
   // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
@@ -217,15 +228,17 @@ export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude", provider: { id: "anthropic", label: "Anthropic" },
     autoApproveFlag: "--dangerously-skip-permissions",
+    autoModeArgv: ["--permission-mode", "auto"],   // 실측(claude --help): --permission-mode choices acceptEdits·auto·bypassPermissions·manual·dontAsk·plan
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
       // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
-      // haiku 는 빠른 기존 별칭으로 유지하고, 기본 표기만 현재 세션 기본인 fable 로 올린다(argv 고정은 하지 않는다).
+      // haiku 는 빠른 기존 별칭으로 유지한다. 새 세션 기본은 opus(상민님 2026-10-23 «기본 모델 opus high로 해. 클로드의 경우.
+      //  지금 fable이야.») — 종전엔 그때의 CLI 기본이던 fable 이었다.
       //  ⚠ 별칭 목록은 CLI 도움말을 실측해 맞춘다 — fable 이 빠져 있었다(원준님 2026-08-21 지적).
       //   실측(claude 2.1.238 `--help`): "Provide an alias for the latest model (e.g. 'fable', 'opus', or
       //   'sonnet') or a model's full name (e.g. 'claude-fable-5')." 목록에 없어도 터미널에서 `/model fable`
       //   로는 바뀌었기 때문에(이 박스 최근 대화 claude-fable-5 5,059줄) 폼만 모르고 있던 상태였다.
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "fable" },
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "fable", "opus", "sonnet", "haiku"], default: "opus" },
       // default(#3778) — 화면이 «AI 기본값» 이라는 알 수 없는 말 대신 **이 값을 골라 둔다**. CLI 자체의 기본은
       //  «auto»(모델에 맞춰 자동)라 사람이 읽을 숫자가 없다(실측 claude 2.1.266: "auto: Use the default effort
       //  level for your model"). 그래서 라이블리가 새 세션의 기본을 하나 정해 **화면에 보이는 그대로** 넘긴다.
@@ -249,6 +262,9 @@ export const HARNESSES: Harness[] = [
     // Codex CLI 0.154.0 --help 실측: 종전 --yolo 는 더 이상 인식하지 않는다.
     // 이 플래그는 승인과 샌드박스를 함께 끄므로, 홈의 「자동 승인」을 켠 세션에만 붙인다.
     autoApproveFlag: "--dangerously-bypass-approvals-and-sandbox",
+    //  실측(codex-cli 0.164.0 --help): «Route approval requests through automatic review using the workspace-write sandbox».
+    //   TUI 의 Shift+Tab 은 이게 아니다 — 기본 ↔ 계획(Plan) 모드 전환이다(권한은 /permissions).
+    autoModeArgv: ["--approve-for-me"],
     // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
     // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
     // default 의 뜻(#3778 개정) — 새 세션 화면이 **이 값을 골라 둔다**(그리고 그대로 넘긴다). 종전엔 표기용이라
@@ -341,9 +357,30 @@ export const HARNESSES: Harness[] = [
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", provider: { id: "none", label: "AI 없음" }, flags: [] },
 ];
 
+/**
+ * (#4970) 사람이 여는 새 세션의 기본 플래그 — 서버가 세션을 대신 열 때(리브 세션) 쓴다. 화면(run-picker flagDefault)이 골라 두는 값과 같다.
+ *  규칙: 고르기(select) 플래그 가운데 default 가 자기 choices 안에 있는 것만. 선언이 없으면 싣지 않는다(그 AI 계정 설정 그대로).
+ *  왜: 서버가 연 리브 세션은 flags 가 비어 그 계정의 CLI 기본으로 떴다 — 무엇으로 도는지 라이블리가 말할 수 없었다(새 세션 화면이 #3778 에서
+ *   닫은 것과 같은 구멍). 사람이 보면서 하는 일이라 무인 자동화 기본(AUTOMATION_DEFAULTS)이 아니라 이 값이다.
+ */
+export function sessionFlagDefaults(harnessKey: string, list: readonly Harness[] = HARNESSES): Record<string, string> {
+  const h = list.find((x) => x.key === harnessKey);
+  const out: Record<string, string> = {};
+  for (const f of h?.flags ?? []) {
+    if (f.type !== "select" || !f.default) continue;
+    if (f.choices && !f.choices.includes(f.default)) continue;
+    out[f.name] = f.default;
+  }
+  //  그 모델이 받지 않는 강도는 싣지 않는다 — createSession 이 400 으로 거절하고 리브가 안 열린다(화면 effortChoices 와 같은 판단).
+  //   사람이 고를 틈이 없는 세션이라 «강도 기본» 보다 «열리는 것» 이 먼저다.
+  const allowed = out["--model"] ? h?.effortsByModel?.[out["--model"]] : undefined;
+  if (out["--effort"] && allowed && !allowed.includes(out["--effort"])) delete out["--effort"];
+  return out;
+}
+
 // ── 무인 자동화의 모델·추론강도 기본값(#4008) ─────────────────────────────────────────────
 //
-// 왜 별도 표인가: 위 `FlagDef.default` 는 **사람이 여는 새 세션 화면**의 기본값이다(claude=fable/high).
+// 왜 별도 표인가: 위 `FlagDef.default` 는 **사람이 여는 새 세션 화면**의 기본값이다(claude=opus/high).
 //  대화형은 사람이 옆에서 보고 있고 한 번에 한 질문이라 비싼 기본이 합리적이지만, 무인 배치는 성격이 정반대다 —
 //  증류·분류·관리는 매 주기 수십 배치를 자동으로 접수하고 아무도 안 본다. 그 자리에 대화형 기본이 그대로
 //  흘러들면서 실제로 사고가 났다(원준님 2026-09-16: «증류가 페이블로 돌아 토큰이 다 빨렸다»).
@@ -353,8 +390,9 @@ export const HARNESSES: Harness[] = [
 //  CLI 기본은 우리가 정하는 값이 아니라 **하네스가 올려 버리는 값**이라(claude 는 fable 로 올라갔다),
 //  라이블리는 «비워 두면 싼 모델» 을 약속한 적이 없는데 사용자는 그렇게 읽는다. 그 어긋남을 여기서 닫는다.
 //
-// 값의 근거(원준님 2026-09-16 지정 · 각 CLI 실측 목록과 대조):
-//  · claude      opus/low          — 별칭 `opus` = 최신 Opus(=Opus 5). 무인 배치는 강도를 낮춰 토큰을 아낀다.
+// 값의 근거(codex·antigravity 는 2026-09-16 #4008 · claude 는 2026-10-28 · 각 CLI 실측 목록과 대조):
+//  · claude      sonnet/high       — 2026-10-28 결정. #2467(8/31) 의 «증류는 소넷 고정 · effort high» 로 되돌렸다(#4008 에서 opus/low 였다).
+//                                    별칭 `sonnet` = 최신 Sonnet.
 //  · codex       gpt-5.6-sol/medium
 //  · antigravity gemini-3.8-flash-high — 이 하네스는 모델 이름에 강도가 박혀 있고(`-high`) --effort 도 따로 받는다.
 //  · grok        grok-4.6/medium   — 지정 없음. `grok models` 에 모델이 하나뿐이라 그것 + 중간 강도로 둔다.
@@ -364,7 +402,7 @@ export const HARNESSES: Harness[] = [
 //  떨어진다 — 고치기 전과 똑같은 결말이다. 그래서 적용점은 enqueueHeadlessTask 안(하네스 해소 직후)이다.
 export interface AutomationRun { model: string; effort: string }
 export const AUTOMATION_DEFAULTS: Record<string, AutomationRun> = {
-  claude: { model: "opus", effort: "low" },
+  claude: { model: "sonnet", effort: "high" },
   codex: { model: "gpt-5.6-sol", effort: "medium" },
   antigravity: { model: "gemini-3.8-flash-high", effort: "high" },
   grok: { model: "grok-4.6", effort: "medium" },

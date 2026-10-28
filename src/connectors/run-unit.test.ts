@@ -63,9 +63,10 @@ test("[E-N] 판 이름·폴더 — op 의 gateway-job 규칙(`-j1`)이고 contex
 });
 
 // ── E-D 디스크 표지 ───────────────────────────────────────────────────────────
-test("[E-D] 게이트웨이 디스크에 기대는 커넥터는 notion·domain-wiki 둘뿐이다(표지 부재 = 안 기댐)", () => {
+// #5012 — linear 는 업로드 첨부를 data/linear-assets 에 받아 둔다(노션 첨부와 같은 이유로 판에서 못 돈다).
+test("[E-D] 게이트웨이 디스크에 기대는 커넥터는 notion·domain-wiki·linear 셋뿐이다(표지 부재 = 안 기댐)", () => {
   const leaning = Object.entries(connectors).filter(([, c]) => c.needsGatewayDisk === true).map(([k]) => k).sort();
-  assert.deepEqual(leaning, ["domain-wiki", "notion"]);
+  assert.deepEqual(leaning, ["domain-wiki", "linear", "notion"]);
   for (const [k, c] of Object.entries(connectors)) {
     assert.ok(c.needsGatewayDisk === undefined || typeof c.needsGatewayDisk === "boolean", `${k} 표지 형식`);
   }

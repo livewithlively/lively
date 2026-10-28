@@ -6,21 +6,22 @@
 //  작업 컨테이너에 붙은 실행은 그 작업 행의 상태를 따라간다(syncRun — 작업이 끝나면 걷기(agent-jobs reapJob)가 알리고, 정비(sweepAiRuns)와 읽기(getRun)도 맞춘다).
 //
 //  누가 보내나: 앱 화면(app-ui · app-front — runAppTool 의 같은 판정) · 앱 서버(앱 서버 토큰 + 사람 신원 — 능력 REST) · 사람(도구 호출 · app_id 지정).
-//   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보낸 것만 — 앱 서버가 보낸 에이전트 작업은
-//   «홈 없는 작업 컨테이너»(후속)가 생길 때까지 501(이 코어의 작업 컨테이너는 실행 계정 구성원의 홈을 붙인다 · launch.ts 머리말).
+//   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보내면 그 사람의 자리(홈)에서,
+//   앱 서버가 보내면 «홈 없는 작업 컨테이너»(#4891 — 전용 계정 · 빈 홈 · 앱 폴더만)에서 돈다 — 앱 서버 코드가 사람의 홈(자격 · 토큰)을 쓰는
+//   작업을 띄우지 못하게(agent-jobs/launch.ts 머리말).
 //  관리자는 남의 실행의 상태·오류만 본다(지시·답은 보낸 사람 것 — 작업 컨테이너와 같은 규칙).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
-import type { AgentJobRow } from "../agent-jobs/store.js";
+import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { RUNNER_GATEWAY } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
   resolveAccount, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction, subscriptionRefusal, waitSecOf,
-  type AiAccount, type AiAccountSettings, type RunKind,
+  type AiAccount, type AiAccountSettings, type RunKind, type SessionTie,
 } from "./plan.js";
 import type { SingleShotInput, SingleShotOutput, Usage } from "./anthropic.js";
 import type { AiRunRow, AiRunSummaryRow, NewAiRun } from "./store.js";
@@ -30,6 +31,23 @@ type Store = typeof import("./store.js");
 export interface SubmitJobInput {
   requester: string; accountKind: "api_key" | "subscription"; accountMember: string | null; appId: string; projectId: number | null;
   model: string | null; label: string | null; prompt: string; timeoutMin: number | null; bare: boolean; resumeJobId: number | null;
+  /**
+   * #4891 사람 홈 없는 작업 컨테이너에서 돌린다(앱 서버가 보낸 에이전트 작업) — 앱 폴더에서만(projectId 는 null).
+   *  필수다 — 접수하는 자리(첫 접수 · 형식 재시도)가 하나라도 빠뜨리면 앱 서버의 에이전트 작업이 사람 홈에서 돈다(격리 리뷰).
+   */
+  homeless: boolean;
+}
+
+/**
+ * (순수) AI 실행의 작업 접수 → 작업 컨테이너 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다).
+ *  작업 폴더 · 이어받을 대화 · 시간 상한은 부르는 쪽(live.submitJob)이 정한다.
+ */
+export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConversation: string | null; timeoutSec: number }): NewAgentJob {
+  return {
+    requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
+    harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless,
+  };
 }
 
 export interface AiRunDeps {
@@ -39,6 +57,8 @@ export interface AiRunDeps {
   accountSettings(): Promise<AiAccountSettings>;
   /** 워크스페이스 Anthropic API 키(org_credential anthropic_api_key) — 없으면 null. 값은 LLM 호출 헤더에만 쓴다. */
   apiKey(): Promise<string | null>;
+  /** 그 키의 Anthropic 워크스페이스 id(자격 meta.workspace_id) — 워크스페이스에 묶이지 않은 키는 이게 있어야 돈다. 없으면 null. */
+  apiWorkspaceId?(): Promise<string | null>;
   getApp(appId: string): Promise<OrgApp | null>;
   /** 이 사람이 이 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 안 되면 던진다. */
   assertAppUsable(user: LivelyUser, appId: string): Promise<void>;
@@ -60,6 +80,8 @@ export interface AiRunDeps {
   attachedSessions(appId: string, member: string): Promise<Array<{ session_id: string; title: string; owner_is_you: boolean }>>;
   /** 구독 실행 계정의 로그인 판정(aiLoginCheck · 짧게 기억) — 모르면 null. */
   subscriptionLoggedIn(member: string): Promise<boolean | null>;
+  /** 요청이 매인 세션(ctx.session — MCP 헤더 · 앱 화면 다리가 서버 쪽에서 붙임)의 주인과, 이 사람이 그 세션에 들어갈 수 있나(apps/session-apps). 세션이 없으면 owner null. */
+  sessionTie(sessionId: string, member: string): Promise<SessionTie>;
   isAdmin(user: LivelyUser): boolean;
   /** 이 토큰이 작업 컨테이너의 작업 토큰인가(agent-jobs store.isAgentJobToken) — 작업이 작업을 낳지 않게(#4490 규칙과 같다). */
   isJobToken(tokenHashPrefix: string): Promise<boolean>;
@@ -126,10 +148,22 @@ export function appDeclaresAiRuns(app: OrgApp | null): boolean {
 }
 
 /**
- * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(501) → 상한(429) → 행 → 띄움.
+ * 요청이 매인 세션의 tie(plan.SessionTie) — 구독 실행일 때만 묻는다(API 키는 누구든 · 사람이 아닌 요청자는 plan 이 먼저 거절).
+ *  세션이 없으면 null(본인은 통과 · 남은 거절). 조회 실패는 «모르는 세션» 으로 — 막는 쪽.
+ */
+async function sessionTieOf(ctx: { session?: string }, who: { member: string; kind: string }, account: AiAccount | null, d: AiRunDeps): Promise<SessionTie | null> {
+  if (!account || account.kind !== "subscription" || who.kind !== "member") return null;
+  const sid = typeof ctx.session === "string" ? ctx.session.trim() : "";
+  if (!sid) return null;
+  return d.sessionTie(sid, who.member).catch(() => ({ owner: null, participant: false, human: false }));
+}
+
+/**
+ * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절)
+ *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 행 → 띄움.
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
-export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
+export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string; session?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
   const who = requesterOf(user);
   //  작업 AI 자신의 토큰은 거절 — 작업이 작업을 낳으면 사람 없이 끝없이 돈다(agent-jobs/service.assertMaySubmit 과 같은 규칙 · 격리 리뷰).
   if (user.tokenHashPrefix && (await d.isJobToken(user.tokenHashPrefix))) throw new HttpError(403, "작업 안에서는 새 AI 실행을 보낼 수 없습니다");
@@ -178,13 +212,15 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       { body: { code: ACCOUNT_UNAVAILABLE } });
   }
   const account = picked.account;
-  const refusal = subscriptionRefusal(account, who, ctx.source);
+  const refusal = subscriptionRefusal(account, who, await sessionTieOf(ctx, who, account, d));
   if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
   if (account.kind === "api_key" && !key) throw new HttpError(409, "이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   const executor = executorFor(kind, account);
-  if (executor === "job" && who.kind === "app_server") {
-    throw new HttpError(501, "앱 서버가 보낸 에이전트 작업(파일 · 도구)은 아직 자리가 없습니다 — 단발(텍스트 · 결과 스키마)만 보내거나, 앱 화면에서 사람이 보내게 하세요");
-  }
+  //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
+  //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 위에서 이미 거절됐다(앱 서버는 사람이 아니다) — 한 겹 더 본다.
+  const homeless = executor === "job" && who.kind === "app_server";
+  if (homeless && account.kind !== "api_key") throw new HttpError(403, "앱 서버가 보낸 에이전트 작업은 워크스페이스 API 키로만 돕니다", { body: { code: ACCOUNT_UNAVAILABLE } });
+  if (homeless && projectId != null) throw new HttpError(400, "앱 서버가 보낸 에이전트 작업은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
 
   // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
   const p = await d.policy();
@@ -217,6 +253,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       const job = await d.submitJob({
         requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model, label: label ?? `AI 실행 #${row.id}`,
         prompt: jobPrompt(row, input.files), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single", resumeJobId: null,
+        homeless,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
@@ -278,10 +315,11 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
   const model = row.model ?? DEFAULT_MODEL;
   const maxTokens = p.max_output_tokens;
   const prompt = row.prompt + (row.schema ? schemaInstruction(row.schema) : "");
+  const workspaceId = (await d.apiWorkspaceId?.()) ?? null;   // 워크스페이스에 묶이지 않은 키의 anthropic-workspace-id
   const call = async (i: SingleShotInput): Promise<SingleShotOutput> => {
     const t0 = d.now();
     let out: SingleShotOutput;
-    try { out = await d.singleShot(key, i, ac.signal); }
+    try { out = await d.singleShot(key, { ...i, workspaceId: i.workspaceId ?? workspaceId }, ac.signal); }
     catch (e) {
       const why = ac.signal.aborted ? `시간 상한(${p.single_timeout_sec}초)을 넘었습니다` : `LLM 호출 실패: ${e instanceof Error ? e.message : String(e)}`;
       out = { ok: false, status: 0, text: "", usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }, model: null, stopReason: null, error: why.slice(0, 400) };
@@ -372,6 +410,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         requester: run.requester, accountKind: run.account_kind, accountMember: run.account_member, appId: run.app_id, projectId: job.project_id,
         model: job.model, label: `${run.label ?? `AI 실행 #${run.id}`} (형식 다시)`, prompt: retryInstruction(judged.errors, run.schema),
         timeoutMin: Math.max(1, Math.round(job.timeout_sec / 60)), bare: run.kind === "single", resumeJobId: job.id,
+        //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
+        homeless: job.homeless === true,
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {
@@ -424,9 +464,14 @@ export async function bootEnvForJob(job: Pick<AgentJobRow, "id" | "account_kind"
 }
 
 // ── 조회 · 취소 · 대상 ──
+/** 내 실행인가 — 보낸 사람, 또는 (구독 실행이면) 그 구독의 주인(초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 실행 — 격리 리뷰 non-blocking 3). */
+export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser): boolean {
+  const me = memberOf(user);
+  return r.requester === me || (r.account_kind === "subscription" && r.account_member === me);
+}
 export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps): boolean {
   if (d.isAdmin(user) && !user.appId) return true;
-  if (r.requester !== memberOf(user)) return false;
+  if (!isOwnRun(r, user)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;
 }
@@ -435,7 +480,7 @@ export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Pro
   let row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
   if (!row || !canSeeRun(row, user, d)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: row.requester === memberOf(user), withPrompt: true });
+  return publicRun(row, { own: isOwnRun(row, user), withPrompt: true });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -444,14 +489,15 @@ export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit
   const admin = d.isAdmin(user) && !user.appId;
   const appId = user.appId ? user.appId : (typeof f.app_id === "string" && f.app_id ? f.app_id : null);
   const me = memberOf(user);
+  //  requester 필터는 «내 실행»(보낸 것 + 내 구독으로 도는 것)이다 — store.listAiRuns 의 SQL 조건과 isOwnRun 이 한 뜻.
   const rows = await d.store.listAiRuns({ appId, requester: admin ? null : me, status, limit });
-  return { runs: rows.map((r) => publicRunSummary(r, { own: r.requester === me })), limit };
+  return { runs: rows.map((r) => publicRunSummary(r, { own: isOwnRun(r, user) })), limit };
 }
 
 export async function cancelRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
   if (!row || !canSeeRun(row, user, d)) throw new HttpError(404, "없는 실행입니다");
-  const own = row.requester === memberOf(user);
+  const own = isOwnRun(row, user);
   if (isEndedRun(row.status)) return publicRun(row, { own });
   if (row.executor === "job" && row.job_id != null) {
     await d.cancelJob(row.job_id, user);
@@ -470,17 +516,20 @@ export async function cancelRunFor(id: number, user: LivelyUser, d: AiRunDeps): 
  *  이 앱이 만든 대화(이어받기) · 선언한 작업과 그 실행 계정. 분기(fork)는 v2-10 — 지금은 false.
  *  구독 로그인 판정은 여기서만 부르고 짧게 기억한다(설계 §12 ④).
  */
-export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, d: AiRunDeps): Promise<Record<string, unknown>> {
+export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, d: AiRunDeps, ctx: { session?: string } = {}): Promise<Record<string, unknown>> {
   const who = requesterOf(user);
   const appId = typeof user.appId === "string" && user.appId ? user.appId : (typeof input.app_id === "string" ? input.app_id.trim() : "");
   if (!appId) throw new HttpError(400, "app_id 가 필요합니다");
   if (!user.appId) await d.assertAppUsable(user, appId);
   const app = await d.getApp(appId);
   const [settings, key] = await Promise.all([d.accountSettings(), d.apiKey()]);
+  //  세션 tie 는 요청마다 한 번만 조회한다(계정 종류가 셋이어도 — 격리 리뷰 nit).
+  let tieP: Promise<SessionTie | null> | null = null;
+  const tieOnce = (a: AiAccount): Promise<SessionTie | null> => (tieP ??= sessionTieOf(ctx, who, a, d));
   const describe = async (a: AiAccount | null, from: string | null): Promise<Record<string, unknown>> => {
     if (!a) return { kind: null, available: false, reason: "실행 계정이 없습니다 — 워크스페이스 API 키 또는 구독을 설정하세요", from };
     if (a.kind === "api_key") return { kind: "api_key", available: !!key, reason: key ? null : "워크스페이스 API 키가 등록되지 않았습니다", from };
-    const refusal = subscriptionRefusal(a, who, "app-ui");
+    const refusal = subscriptionRefusal(a, who, await tieOnce(a));
     const loggedIn = refusal ? null : await d.subscriptionLoggedIn(a.member).catch(() => null);
     return { kind: "subscription", member: a.member, available: !refusal && loggedIn !== false, logged_in: loggedIn, reason: refusal ?? (loggedIn === false ? "AI 연결 필요 — 그 구성원이 Claude 에 로그인해야 합니다" : null), from };
   };

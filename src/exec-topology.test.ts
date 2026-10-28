@@ -36,6 +36,9 @@ import {
   unfreezeExecTopology,
   parseTmuxRoute,
   parseSessionHarnesses,
+  parseMuxPin,
+  MUX_PIN_DEFAULT,
+  nodeMuxGenerationsApply,
   type ExecTopology,
 } from "./exec-topology.js";
 
@@ -693,6 +696,8 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     broker: null,
     //  #4067 — 세션 이미지 하네스 목록. 설정 없음 = 모름(호출부가 실물을 본다).
     sessionHarnesses: null,
+    //  #4931 — 노드 tmux 세대 스위치. 설정 없음 = 기본값 auto(2단계 — MUX_PIN_DEFAULT · 쓰는 자리는 노드뿐).
+    muxPin: "auto",
   });
 });
 
@@ -841,4 +846,39 @@ test("K32 목록은 다른 축을 바꾸지 않는다 — 매니지드 env 에 �
   const b = computeExecTopology(E({ ...managed, LIVELY_SESSION_HARNESSES: "claude,codex" }));
   assert.deepEqual({ ...b, sessionHarnesses: null }, a);
   assert.deepEqual(b.sessionHarnesses, ["claude", "codex"]);
+});
+
+test("K33 LIVELY_MUX_PIN — 정확히 auto·bin·off 만 그 값, 나머지(빈 값·대소문자·오타)는 기본값 auto (#4931 2단계)", () => {
+  assert.equal(MUX_PIN_DEFAULT, "auto", "2단계 — 세대를 아는 번들(1단계)이 되돌림의 바닥으로 깔린 뒤 기본값을 켰다");
+  const table: Array<[string | undefined, string]> = [
+    [undefined, "auto"], ["", "auto"], ["auto", "auto"], [" auto ", "auto"], ["off", "off"], [" off\n", "off"], ["bin", "bin"], ["\tbin\n", "bin"],
+    ["AUTO", "auto"], ["Auto", "auto"], ["on", "auto"], ["true", "auto"], ["1", "auto"], ["BIN", "auto"], ["pinned", "auto"],
+    //  끄는 값도 **정확히** off 만 — 대소문자를 봐주지 않는다(같은 파일의 다른 스위치와 같은 규율 · 키트는 이 셋만 env 파일에 쓴다).
+    ["OFF", "auto"], ["Off", "auto"], ["0", "auto"], ["false", "auto"],
+  ];
+  for (const [raw, want] of table) {
+    assert.equal(parseMuxPin(raw), want, JSON.stringify(raw));
+    assert.equal(computeExecTopology(E({ LIVELY_MUX_PIN: raw })).muxPin, want, `토폴로지: ${JSON.stringify(raw)}`);
+  }
+});
+
+test("K34 LIVELY_MUX_PIN 은 다른 축을 바꾸지 않는다 — 노드 env 에 얹어도 나머지 값이 같다 (#4931)", () => {
+  const node = { LIVELY_NODE_TOKEN: "lvk_x" };
+  const a = computeExecTopology(E(node));
+  const b = computeExecTopology(E({ ...node, LIVELY_MUX_PIN: "off" }));
+  assert.deepEqual({ ...b, muxPin: MUX_PIN_DEFAULT }, a);
+  assert.equal(b.muxPin, "off");
+});
+
+test("K35 노드 tmux 세대를 쓸 수 있는 자리 — 노드 · 기본 소켓 배치 · 비윈도우만 (#4931)", () => {
+  const node = computeExecTopology(E({ LIVELY_NODE_TOKEN: "lvk_x" }));
+  assert.equal(nodeMuxGenerationsApply(node, "darwin"), true, "멤버 PC 노드(맥)");
+  assert.equal(nodeMuxGenerationsApply(node, "linux"), true, "멤버 PC 노드(리눅스)");
+  assert.equal(nodeMuxGenerationsApply(node, "win32"), false, "윈도우(psmux)는 다음 단계");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E()), "darwin"), false, "게이트웨이(셀프호스트)");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E({ LIVELY_TMUX_EXEC: "relay {slug}" })), "linux"), false, "매니지드 게이트웨이(중계)");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E({ LIVELY_NODE_TOKEN: "lvk_x", LIVELY_TMUX_EXEC: "relay {slug}" })), "linux"), false,
+    "세션 호스트(노드 박스) — 노드지만 tmux 가 중계 너머");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E({ LIVELY_NODE_TOKEN: "lvk_x", LIVELY_TENANCY_MODE: "registry" })), "linux"), false,
+    "registry 전용 소켓 배치 — 이미 소켓이 정해진 자리");
 });

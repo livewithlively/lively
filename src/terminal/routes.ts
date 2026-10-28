@@ -25,7 +25,9 @@ import { logger } from "../log.js";
 import { carrySessionDismissals, closeSessionAppInstances } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
 import { accountRoutesActive, publishNotify, sessionEventKey } from "../v6/notify-bus.js";
 import { hereSlug, notifyAccountOf } from "../v6/notify-scope.js";
-import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, isReportedSched, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { harnessInstalled } from "./harness-installed.js";   // #4970 — 설치 여부(게이트웨이 전용 — 노드 번들 밖)
+import { prepareMemberSeat, awaitMemberSeat } from "./login-seat-prep.js";   // #4970 — 로그인 전 서버 계정(게이트웨이 전용)
+import { roots, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, applyValidatedInvites, canAttach, isReportedPhase, isBgCount, isReportedSched, getSessionLabel, getSessionProject, sessionDir, sessionGone, sessionGoneVerdict, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, aiLoginCheck, ensureMemberOsUser, memberOsState, memberProvisioning, clearProvisionFailure, sessionOsUser, harnessHasCredential, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { SESSION_STARTING_GRACE_MS } from "./sessions.js";   // #4065 — 갓 만든 세션을 «중단됨» 으로 내지 않는 창(배럴 비노출 — 모듈에서 직접)
 import { locateTranscript } from "./harness-io/locate.js";              // #1437 ② — 복원 정밀재개의 대화 존재 확인을 소유자 실행환경(중계)에서
 import { sessionPromptsFromTranscript } from "./session-prompts.js";   // #4135 — 💬 질문 목록의 비-claude 갈래
@@ -71,7 +73,7 @@ import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 �
 import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { createShellProject, firstPromptProjectPlan, launchOrDiscardShell, type ShellHandle } from "../project/first-prompt-project.js";
 import { relocateAttachmentsToProject } from "../project/attach-relocate.js";
-import { launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
+import { launchReply, launchSession, sessionInputFromBody, relayNodeOp, requireCreatableNode, registerSessionInstance, reviveSessionInstance, recordSessionTenant, chatFieldsOf, themeOf, prepareRemoteAppSession } from "./session-launch.js";   // #3626 — 세션 생성 관문(홈·프로젝트 공용)
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
@@ -81,6 +83,7 @@ import { projectIdForSessionCoord } from "../project/folder-bind.js";   // #4551
 import { isWorkSession } from "../sessions/session-kind.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { cleanLastPrompt } from "./last-prompt.js";
+import { modeFromHeaders, captureMode } from "../org/auth/agent-identity.js";   // #5048 — 읽기전용·인코그니토는 친 말을 저장하지 않는다
 import { harnessIo, termUiWire, type TermUiWire } from "./harness-io/adapter.js";
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 import { deadSessionMeta, nodeSessionMetaMode, nodeMetaRestorable, unknownStateMeta } from "./session-meta.js";  // #1820 죽은 세션 '복원 가능' 단일 판정 + #2111 생사 갈래 + #2108 확답 게이트
@@ -265,7 +268,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionTrashRoutes(app, auth);  // #1851 — /session-trash (휴지통으로·되돌리기·완전 삭제·비우기)
   registerSessionLedgerRoute(app);        // #2544 — /session-ledger (브로커 회수 판정의 desired 입력 — 경로가 겹치지 않는다)
   registerSessionHostRoute(app);          // #2600 T2 d5 — /node/session-host/ensure (브로커가 세션 호스트 자격을 받아 가는 창구. 장부와 같은 «테넌트 비밀 + 서명» 문)
-  registerAgentJobRoutes(app);            // #4490 — /api/agent-jobs/:id/{boot,tick,result} (작업 컨테이너 판의 콜백 — 사용자 auth 대신 작업별 비밀)
+  registerAgentJobRoutes(app);            // #4490 — /api/agent-jobs/:id/{boot,boot-failed,tick,result} (작업 컨테이너 판의 콜백 — 사용자 auth 대신 작업별 비밀)
   // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);
@@ -368,7 +371,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
   //  없고 principal(userOf) 로만 대상이 정해진다 → 남의 계정을 조회·로그아웃할 표면이 아예 없다(admin 도 마찬가지).
   app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ accounts: await aiAccountStatus(userOf(req)) });
+    const accounts = await aiAccountStatus(userOf(req));
+    //  (#4970) 설치 여부 — 처음 설정 «AI 연결» 은 이 서버에서 띄울 수 있는 AI 만 보인다(harness-installed.ts). 모르면 null.
+    const installed = await Promise.all(accounts.map((a) => harnessInstalled(a.key).catch(() => null)));
+    res.json({ accounts: accounts.map((a, i) => ({ ...a, installed: installed[i] })) });
   }));
   // ── AI 로그인을 **터미널 없이** (#2055 후속, 2026-08-28) ─────────────────────────────────
   //  종전엔 «로그인 전용 세션 + 그 터미널을 새 탭»(웹) / **새 창**(데스크톱 앱)이었다. 사람이 실제로 할 일은
@@ -440,6 +446,21 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.json(await onLoginJobEnd(loginJobIdOf(req), loginJobBearer(req), req.body));
   }));
 
+  //  (#4970) 그 사람의 서버 계정(격리 박스의 box_<사람>)을 **로그인 전에** 갖춘다 — 사연은 login-seat-prep.ts 머리말.
+  //   처음 설정 «AI 연결» 장면이 열 때 묻기만(start:false) 하고 — 만드는 중(preparing)이면 몇 초마다 다시 물어 다 되면(ready) 그린다 —
+  //   사람이 서버 AI 의 [연결]을 누를 때 만들기를 시작한다(#5031 — 종전엔 인사·이름 장면에서 미리 시작했다).
+  //   격리 박스가 아니면 «none» — 아무것도 안 한다.
+  const seatDeps = (req: express.Request) => {
+    const u = userOf(req);
+    return { state: () => memberOsState(u), inflight: () => memberProvisioning(u), ensure: () => ensureMemberOsUser(u), clearFailure: () => clearProvisionFailure(u) };
+  };
+  app.post("/api/ui/me/ai-login/prepare", auth, wrap(async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    //  start:false = 묻기만(#5031 — 처음 설정 AI 장면이 열 때). 생략은 종전대로 «없으면 시작».
+    const state = await prepareMemberSeat(seatDeps(req), { retry: body.retry === true, start: body.start !== false });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, state });
+  }));
   app.post("/api/ui/me/ai-login/start", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
     if (await loginJobStart(req, "login", h)) {
@@ -447,13 +468,15 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       res.json({ ok: true });
       return;
     }
+    //  (#4970) 격리 박스 — 계정이 **다 만들어질 때까지** 기다린다(만드는 중이면 그 일 끝까지). 끝내 없으면 503 — 공용 자리로 몰래 가지 않는다.
+    await awaitMemberSeat(seatDeps(req));
     const seat = await loginSeat(req);
     //  ⚠ restart 가 필요한 이유(실측 2026-08-28): 사람이 브라우저에서 **막히는** 경우가 있다 — 예컨대 ChatGPT
     //   계정에 «Codex용 장치 코드 인증» 이 꺼져 있으면 그 코드가 거기서 죽는다(#2232 원준님 실측). 그런데 우리
     //   쪽 프로세스는 15분을 더 기다리므로, 사람이 설정을 켜고 [다시 시도] 를 눌러도 start 는 «이미 돌고 있다» 며
     //   **죽은 코드를 그대로 다시 보여 준다.** 그러면 몇 번을 눌러도 같은 벽이다. 다시 시도는 새로 띄워야 한다.
     if (((req.body ?? {}) as Record<string, unknown>).restart === true) {
-      await cancelAiLogin(seat, h);
+      await cancelAiLogin(seat, h, userOf(req));
       //  자리도 함께 버린다 — 다시 시도는 **새 컨테이너**에서 시작해야 지난 프로세스가 안 남는다.
       await dropLoginSession(userOf(req), h);
     }
@@ -484,7 +507,7 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     }
     const seat = await loginSeat(req);
     const [raw, check] = await Promise.all([
-      readAiLogin(seat, h),
+      readAiLogin(seat, h, userOf(req)),
       aiLoginCheck(userOf(req), h).catch(() => null),
     ]);
     //  #3894 — 화면이 폴링하는 동안은 사람이 그 자리 앞에 있다. 장치 인증(최대 15분) 도중에 자리가 걷히지 않게 도장을 찍는다.
@@ -498,14 +521,14 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     const h = loginHarnessOf(req);
     const code = String(((req.body ?? {}) as Record<string, unknown>).code ?? "");
     if (await loginJobPaste(req, "login", h, code)) { res.json({ ok: true }); return; }
-    await pasteAiLogin(await loginSeat(req), h, code);
+    await pasteAiLogin(await loginSeat(req), h, code, userOf(req));
     await touchHarnessSeat(userOf(req), h);   // #3894 — 사람의 조작이다(위 state 와 같은 이유)
     res.json({ ok: true });
   }));
   app.post("/api/ui/me/ai-login/cancel", auth, wrap(async (req, res) => {
     const h = loginHarnessOf(req);
     if (await loginJobCancel(req, "login", h)) { res.json({ ok: true }); return; }
-    await cancelAiLogin(await loginSeat(req), h);
+    await cancelAiLogin(await loginSeat(req), h, userOf(req));
     //  로그인 자리(세션 컨테이너)도 치운다 — 안 치우면 로그인마다 컨테이너가 쌓인다.
     await dropLoginSession(userOf(req), h);
     res.json({ ok: true });
@@ -538,6 +561,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     //  저장할 수 없는 배포면 **시작하지 않는다** — 사람이 브라우저에서 승인까지 한 뒤에 «저장 못 함» 을 보면 헛수고다.
     const { secretsEnabled } = await import("../org/credentials/secret-box.js");
     if (!secretsEnabled()) throw new HttpError(400, "이 서버에는 자격을 암호화해 둘 키가 없어 연결할 수 없습니다 — 관리자에게 CONNECTOR_SECRET_KEY 설정을 요청해 주세요.");
+    //  (#4970) 대화형 로그인과 같은 틈 — 격리 박스에서 계정이 아직 없거나 만드는 중이면 그 사람 자리가 아니라 공용 자리로 갔다.
+    await awaitMemberSeat(seatDeps(req));
     const seat = await loginSeat(req);
     //  다시 시작은 **새로** 띄운다 — 대화형 로그인과 같은 이유(지난 시도의 주소·코드는 이미 죽었다, #2232).
     if (((req.body ?? {}) as Record<string, unknown>).restart === true) {
@@ -740,16 +765,23 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const sessionHostOwns = gatewayDefersHere();   // #2600 T2 d6 — 스코프+판정+계수 한 자리(registry)
     const all = sessionHostOwns ? [] : await listSessions(userOf(req));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
-    const remote = nodeSessionsFor(idOf(userOf(req)));
+    const remoteAll = nodeSessionsFor(idOf(userOf(req)));
     // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
     //  #1791 — 노드 세션 행(node_id)도 여기 온다: 노드 스냅샷에 살아 있는 id 는 라이브가 SoT 라 뺀다(local ∪ remote).
     //  #4065 — 갓 만든 세션은 관측(호스트 스냅샷)에 늦게 잡힌다. 그 창에서 «중단됨» 으로 내면 화면이 대화창으로 열린다.
-    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)),
+    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remoteAll].map((s) => s.id)),
       { startingGraceMs: SESSION_STARTING_GRACE_MS });
     const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
-    const local = all.filter(keep);
-    const localRestorable = restorable.filter(keep);
+    // #4989 — `only=<세션 id>` 면 그 세션 행 하나만 낸다. 저속망에서 세션 주소로 켠 셸이 목록 전량(수백 행 · 수백 KB)을 기다리지 않고
+    //  그 행 하나로 화면부터 세운다(web/v2/main.ts primeBootSession). 행 모양 · 장식 · 거르기(은퇴 · 휴지통 · 워크스페이스)는 전량과
+    //  **같은 길**을 그대로 탄다 — 거르는 자리만 앞당긴다(행마다 붙이는 조회도 그 행 하나만 묻는다). 라이브 판정(위 restorable 의 제외 집합)은
+    //  거르기 전 전량으로 한다 — 거른 뒤로 재면 살아 있는 노드 세션이 «복원 가능» 으로 함께 나간다.
+    const only = typeof req.query.only === "string" ? req.query.only.trim() : "";
+    const pick = (s: { id: string }): boolean => !only || s.id === only;
+    const remote = remoteAll.filter(pick);
+    const local = all.filter((s) => keep(s) && pick(s));
+    const localRestorable = restorable.filter((s) => keep(s) && pick(s));
     // #1791 — 복원 가능 노드 세션 행의 노드 이름·온라인 여부(listRestorableSessions 는 id 만 안다). 프론트가 &node= 로 릴레이한다.
     await decorateNodeRows(localRestorable);
     // #1719 — 라이브 행에 대화 uuid(claudeSessionId)를 싣는다. 새 셸의 세션 화면이 이 값으로 로컬 트랜스크립트를 잇고,
@@ -959,6 +991,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  내 세션 219건 중 198건이 이 상태 — 세션을 여는 일의 대부분이 막다른 길이었다).
     //  ⚠ sessionGone 은 tmux 가 "그런 세션 없다"고 **확답**할 때만 true 다(소켓 불통·타임아웃은 false) — 모르면
     //   종전 경로로 흘러 살아 있는 세션을 죽었다고 오판하지 않는다(#835 '확답 only').
+    //   (#4940) 셀프호스트(기본 소켓 · 다른 워크스페이스 전용 서버 없음)에서 tmux 서버가 아예 없다는 두 번의 답도 확답이다(tmux-exec localServerAbsentVerdict).
     //  #3752 ④ — 판정을 **셋**으로 받는다. 종전 `sessionGone` 은 «모른다» 를 «살아 있다» 로 접었고, 매니지드에서
     //   샌드박스가 wedged 되면(브로커 503 LVLY_STATE_UNKNOWN) 그 접기 때문에 사람이 «응답이 없다» 로만 겪었다
     //   (#3688 실측). 자동 경로의 접기는 그대로 두고, 이 자리에서만 «못 봤다» 를 사람에게 말한다.
@@ -1429,7 +1462,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const invites = nodeId ? await validateInvites(b.invites, idOf(userOf(req))) : [];
       return launchSession(userOf(req), input, { nodeId, invites });
     });
-    res.json({ session });
+    //  #4906 — 서버가 넣을 첫 지시(첨부를 프로젝트로 옮기며 좌표를 고친 글 포함)를 함께 답한다(launchReply 머리말).
+    res.json(launchReply(session, input));
   }));
   // 실행 중 세션의 하네스·모델·추론강도를 한 번에 바꾸는 **겉보기 전환**.
   // CLI마다 런타임 설정 수단이 다르고(Codex는 /model 피커, Antigravity는 launch flag),
@@ -2185,8 +2219,11 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!ns?.node) throw new HttpError(404, "세션 상태 기록이 없습니다");   // #2592 — 좌표 없는 행 = 이 박스 세션(릴레이 대상 아님)
     if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
+    //  #5043 — 턴 끝의 예약 셈(sched — 다음 깨움·반복 예약)도 넘긴다. 종전엔 이 갈래만 bg 까지 넘기고 sched 를 버려, 노드 세션의 보고에
+    //   예약 칸이 영영 없었다(실측 2026-10-27 맥미니 `idle 1792861612 bg=0`) — 원격 PC 하네스 종료 규칙이 claude 세션을 전부 «예약 모름» 으로
+    //   읽는다. 노드는 이미 받는다(session-ops markActive — 모르는 옛 노드는 그 칸을 버린다).
     if (nodeSupports(ns.node.id, "markActive")) {
-      const relay = await nodeRpc(ns.node.id, "markActive", bg === null ? { id, state: phase } : { id, state: phase, bg })
+      const relay = await nodeRpc(ns.node.id, "markActive", { id, state: phase, ...(bg === null ? {} : { bg }), ...(sched ? { sched } : {}) })
         .catch((e) => { logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"); return null; });
       // #1842 — 노드가 돌려준 전이를 그대로 민다. 구 노드는 change 를 안 보내므로 undefined → 폴링이 커버한다(무회귀).
       const change = (relay as { change?: { prev: string | null; phase: string; at: number } | null } | null)?.change;
@@ -2209,6 +2246,8 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const st = await getSessionState(id);
     if (!st) throw new HttpError(404, "세션 상태 기록이 없습니다");
     if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+    //  #5048 — 읽기전용·인코그니토 세션의 말은 저장하지 않는다(훅도 안 보내지만, env 가 빠진 경로의 둘째 겹). 판정은 대화 기록과 한 벌.
+    if (captureMode(modeFromHeaders(req.headers), st) !== "normal") throw new HttpError(403, "읽기전용·인코그니토 세션은 지시를 기록하지 않습니다");
     await setLastPrompt(id, prompt, me);
     res.json({ ok: true });
   }));

@@ -15,7 +15,7 @@
 
 // ── 하네스 식별 ────────────────────────────────────────────────────────────
 // 지원 목록. 새 하네스는 여기 + 아래 표에만 추가하면 된다.
-export const HARNESS_IDS = ["claude", "codex", "opencode", "antigravity", "grok"];
+export const HARNESS_IDS = ["claude", "codex", "opencode", "antigravity", "grok", "cursor"];
 
 // 하네스 결정 — argv `--harness <n>` > env LIVELY_HARNESS > 기본 claude.
 //  ⚠ 기본이 claude 인 건 종전 규약이다(미설정 = claude). 바꾸면 구설치가 조용히 다른 하네스로 취급된다.
@@ -40,6 +40,39 @@ export const isKnownHarness = (id) => HARNESS_IDS.includes(id);
 //  사본이므로 조용히 비켜선다. claude·codex·opencode 세션엔 GROK_HOOK_EVENT 가 없어 영향 0.
 export function isForeignGrokInvocation(argv = process.argv.slice(2), env = process.env) {
   return !!env.GROK_HOOK_EVENT && resolveHarness(argv, env) !== "grok";
+}
+
+// ── cursor compat 이중발화 가드 (#4927) ───────────────────────────────────────
+// Cursor 도 ~/.claude/settings.json 의 훅을 **기본으로** 돌린다(IDE 는 설정에서 끌 수 있지만 기본 켬, CLI 는 끄는 수단이
+//  없다 — 번들 실측·Cursor 직원 확인). 그 사본은 Cursor 페이로드(camelCase 이벤트·Shell·`MCP:<툴>`)를 claude 형으로 읽어
+//  «반쯤 되는» 상태가 되고(세션 상태 무음·`claude-<cursor id>` 로 오귀속·맥락 주입 유실), 우리 네이티브 배선(cursor-adapter)
+//  이 있으면 **두 번** 돈다(우리가 stop·beforeSubmitPrompt 를 배선하면 CLI 는 claude 쪽 Stop·UserPromptSubmit 도 돌린다 — 실측).
+//  판정(번들 실측): CURSOR_VERSION·CURSOR_PROJECT_DIR 는 Cursor 가 **훅 프로세스에만** 주는 env 다 — 에이전트의 셸 툴이
+//   띄운 명령엔 CURSOR_AGENT=1 만 있고 이 둘은 없다(그래서 Cursor 안에서 셸로 띄운 claude 는 오탐하지 않는다).
+//   ⚠ CLAUDECODE 가 있으면 비켜서지 않는다 — Claude Code 는 자기 훅·자식에 CLAUDECODE=1 을 준다. Cursor IDE 의 내장 터미널
+//    env 가 미실측이라, 거기서 띄운 claude 세션의 우리 훅을 «Cursor 사본» 으로 오탐해 통째로 죽이는 쪽을 막는다(grok 가드의
+//    «중첩 claude 세션 오탐 금지» 와 같은 경계).
+//   사본의 모양: compat 사본은 claude 형 항목이라 **명령줄에 --harness 가 없다**(settings.json·플러그인 hooks.json 둘 다 — 실측).
+//    명령줄에 하네스를 밝힌 러너(codex config.toml·grok·antigravity 어댑터가 띄운 것)는 Cursor 훅 env 를 물려받았어도 그 하네스의
+//    것이라 비켜서지 않는다(격리 리뷰: 종전엔 Cursor 훅이 띄운 codex 의 러너까지 꺼졌다). 우리 어댑터가 인자 없이 띄우는 러너
+//    (stop-writeback-gate)는 env LIVELY_HARNESS=cursor 로 온다. ⚠ env 만 보고 «선언됨» 으로 치지 않는다 — 부모에게서 물려받은
+//    LIVELY_HARNESS=claude 가 있으면 사본이 그대로 통과한다.
+export function isForeignCursorInvocation(argv = process.argv.slice(2), env = process.env) {
+  if (!env.CURSOR_VERSION || !env.CURSOR_PROJECT_DIR || env.CLAUDECODE) return false;
+  if (Array.isArray(argv) && argv.includes("--harness")) return false;
+  return String(env.LIVELY_HARNESS || "").toLowerCase().trim() !== "cursor";
+}
+
+// Cursor CLI 승인 설정(cli-config.json)이 사는 디렉터리 — 번들 실측(cursor-config/paths.js): CURSOR_CONFIG_DIR >
+//  $XDG_CONFIG_HOME/cursor > <HOME>/.cursor, **플랫폼 조건 없음**(문서는 Linux 만이라 했지만 코드는 macOS 에서도 XDG 를 본다).
+//  ⚠ hooks.json·mcp.json·skills·agents·commands 는 이 계산을 **안 탄다**(homedir()/.cursor 고정) — 그래서 별도 축이다.
+//  ⚠ LIVELY_HOME 격리면 env 를 따르지 않는다(opencode XDG·grok GROK_HOME 과 같은 계약 — 테스트가 실 홈을 오염시키지 않게).
+export function cursorCliConfigDir(HOME, env = process.env) {
+  if (env.LIVELY_HOME) return j(HOME, ".cursor");
+  const ccd = String(env.CURSOR_CONFIG_DIR || "").trim();
+  if (ccd) return ccd;
+  const xdg = String(env.XDG_CONFIG_HOME || "").trim();
+  return xdg ? j(xdg, "cursor") : j(HOME, ".cursor");
 }
 
 // path.join 을 안 쓰고 직접 잇는다(이 모듈은 내장 의존조차 두지 않는다는 계약). 구분자는 호출부 플랫폼을 따른다.
@@ -168,6 +201,11 @@ export const HARNESS = {
     mcp: { style: "claude-cli" },          // `claude mcp add --transport stdio …`
     autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
+    // 러너(run-custom)를 하네스가 끊는 상한(ms) — run-custom 의 맥락 이벤트 예산이 이보다 앞서 끝낸다(#5034).
+    //  둘 다 runnerHooksBlock 이 timeout 을 안 주는 항목이라 하네스가 정한 값이다(미지정 기본값은 이벤트마다 다르다):
+    //  UserPromptSubmit 30초는 실측(hook_cancelled timeoutMs 30000, #5034) · SessionStart 는 38초 넘게 «1분씩» 돌고도 안
+    //  끊긴 실측(#4959 «running SessionStart hooks… 38s»)이 있어 하네스 기본 60초로 본다. 모르는 이벤트는 예산이 없다.
+    runnerCapMs: { UserPromptSubmit: 30000, SessionStart: 60000 },
     reloadAssets: true,                    // reloadSkills:true 로 같은 세션 반영
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"],
   },
@@ -237,6 +275,8 @@ export const HARNESS = {
     mcp: { style: "toml-table", commandShape: "string+args" },
     autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
     contextEnvelope: "json",               // SessionStart 는 JSON 봉투 필수(raw 는 무시된다)
+    // 러너 상한 — user-install CODEX_RUNNER_EVENTS 의 timeout 과 같은 값이다(그쪽을 바꾸면 여기도, #5034).
+    runnerCapMs: { UserPromptSubmit: 15000, SessionStart: 10000 },
     reloadAssets: false,                   // 재시작해야 반영
     // #1884 실측(0.149.1 스텁모델 E2E): 편집이 모델 계열에 따라 두 얼굴이다 — gpt-5.4 는 apply_patch **툴**로,
     //  gpt-5.6(현 기본)·미상 모델은 셸 명령 `apply_patch <<'EOF' …` 로 온다(tool_name=Bash). 툴명 목록(edit)만 보면
@@ -299,6 +339,7 @@ export const HARNESS = {
     autoApprove: { kind: "config-permission", key: (server, tool) => `${server}_${tool}` },
     // 정적 컨텍스트는 AGENTS.md/instructions 로 싣는다 — system.transform 은 **매 요청** 돌아 토큰이 반복된다.
     contextEnvelope: "file",
+    runnerCapMs: 15000,                    // 러너 상한 — opencode-plugin.js 의 runner timeout(SIGKILL)과 같은 값(#5034)
     contextFile: (home) => j(home, "AGENTS.md"),
     reloadAssets: false,                   // 기동 시 1회 로드, hot-reload 없음
     headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
@@ -372,6 +413,7 @@ export const HARNESS = {
     // 정적 컨텍스트는 플러그인 rules/AGENTS.md 로 싣는다(네이티브 로드·경로 dedup — opencode 의 file 봉투와 동형).
     //  PreInvocation injectSteps 는 **매 모델 호출마다** 발화라 org-context 를 싣기에 부적합(#1689 실측).
     contextEnvelope: "file",
+    runnerCapMs: 15000,                    // 러너 상한 — antigravity-adapter.mjs 의 runner timeout(SIGKILL)과 같은 값(#5034)
     contextFile: (home) => j(home, "config", "plugins", "lively", "rules", "AGENTS.md"),
     reloadAssets: false,                   // hot-reload 미확인(#1689) — 보수적으로 false
     headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
@@ -444,12 +486,88 @@ export const HARNESS = {
     // SessionStart·UserPromptSubmit stdout 은 **무시**된다(관측 전용 — 실측) — 훅 stdout 주입 채널이 없다.
     //  정적 컨텍스트는 <home>/rules/*.md 가 전 프로젝트 글로벌로 항상 스캔되는 걸 쓴다(세션 시스템 프롬프트 1회).
     contextEnvelope: "file",
+    runnerCapMs: 15000,                    // 러너 상한 — grok-adapter.mjs 의 runner timeout(SIGKILL)과 같은 값(#5034)
     contextFile: (home) => j(home, "rules", "lively.md"),
     reloadAssets: true,                    // 스킬 핫리로드 실측·문서 확인(수 초 내 반영 — 에이전트·커맨드는 미확인)
     headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
     // grok 은 15이벤트 중 우리 표준 10종이 **claude 와 같은 이름으로 1:1** 존재한다(eventMap 불요).
     //  전부 fail-open(차단은 PreToolUse deny · Stop/SubagentStop block 뿐 — antigravity 의 fail-closed 와 정반대).
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"],
+  },
+
+  cursor: {
+    id: "cursor",
+    label: "Cursor",
+    // 바이너리는 cursor-agent 다(#4927). 공식 설치기가 `agent` 별칭도 걸지만 그 이름은 너무 일반적이라(grok 도 ~/.grok/bin/agent)
+    //  감지·실행에 쓰지 않는다. ⚠ IDE 만 쓰는 사람은 PATH 에 이게 없다 — 감지는 디스크(~/.cursor · 윈도우 Cursor 가 WSL 로
+    //  붙는 홈이면 ~/.cursor-server, #5041)로도 한다(kit/cli/lively.mjs detectHarnesses · kit/hooks/self-update.mjs harnessState).
+    bin: "cursor-agent",
+    // 설치(#2255 축, 2026-10-20 스크립트 본문 실측): POSIX 는 ~/.local/share/cursor-agent/versions/<v> 에 풀고 ~/.local/bin 에
+    //  심링크만 건다 — rc 는 **안 건드린다**(안내문만 찍는다) → wiresPath:false 라 우리가 심는다. 윈도우는
+    //  %LOCALAPPDATA%\cursor-agent 에 깔고 User PATH 를 스스로 잡는다. 양쪽 다 체크섬 검증이 없다(동의 화면이 숨기지 않는다).
+    install: {
+      docs: "https://cursor.com/docs/cli/installation",
+      posix: { cmd: "curl https://cursor.com/install -fsS | bash", shell: "sh", binDir: (HOME) => j(HOME, ".local", "bin"), wiresPath: false, integrity: null },
+      win: { cmd: "irm 'https://cursor.com/install?win32=true' | iex", shell: "powershell", binDir: (HOME, env = process.env) => j(env.LOCALAPPDATA || j(HOME, "AppData", "Local"), "cursor-agent"), wiresPath: true, integrity: null },
+    },
+    // `~/.cursor` 고정 — hooks.json·mcp.json·skills·agents·commands 는 env 오버라이드가 없다(번들 실측: homedir()/.cursor).
+    //  CLI 승인 설정(cli-config.json)만 다른 자리다 → autoApprove.file(cursorCliConfigDir) 축.
+    home: (HOME) => j(HOME, ".cursor"),
+    // 진단·배선 판정 대상 = 사용자 훅 파일. ⚠ 이 파일은 **사용자와 공유**다 — 한 항목만 잘못돼도(version 누락·모르는 이벤트
+    //  이름·문자열 속 `//` 까지 — 주석 제거가 순진하다) Cursor 가 **파일 전체를 버린다**(번들 실측). 설치기는 우리 엔트리만 넣는다.
+    configFile: (home) => j(home, "hooks.json"),
+    configFormat: "json",
+    // 배선 방식 6번째(hooks-json): 공유 훅 파일에 우리 엔트리(command 가 cursor-adapter.mjs 를 가리키는 것)만 비파괴 머지.
+    wiring: "hooks-json",
+    assets: {
+      // 스킬은 오픈표준 = claude 와 같은 파일. 같은 이름이면 ~/.cursor/skills 가 ~/.claude/skills(compat) 사본을 이겨 하나만 보인다
+      //  (번들 실측 — 키가 설정 폴더를 무시한다). 스킬 하나의 frontmatter 결함은 그 스킬만 빠진다(이웃 무해).
+      skill: { root: (h) => j(h, "skills"), dir: true, ext: "", compose: "markdown" },
+      // 서브에이전트 = md frontmatter(name·description·model·tools·readonly·is_background). 이식 최소셋(name·description·본문)만.
+      //  ⚠ CLI 2026.10.19 는 **워크스페이스 .cursor/agents 만** 읽는다(사용자 자리 미지원 — 번들 실측). ~/.cursor/agents 는 IDE 문서의
+      //   사용자 자리라 거기 둔다(CLI 갭은 정직 표기 — 지식 cursor-harness-judgment-4927).
+      subagent: { root: (h) => j(h, "agents"), dir: false, ext: ".md", compose: "cursor-agent" },
+      // 커맨드 = commands/*.md — ⚠ **frontmatter 를 해석하지 않는다**(파일 전문이 프롬프트·첫 줄이 제목 — 번들 실측).
+      //  claude 의 YAML 을 그대로 두면 제목이 `---` 가 되고 YAML 이 프롬프트로 샌다 → 전용 컴포저.
+      command: { root: (h) => j(h, "commands"), dir: false, ext: ".md", compose: "cursor-command" },
+    },
+    tools: {
+      // ⚠ **어댑터가 번역한 뒤의 이름**이다(cursor-adapter.mjs TOOL_MAP — antigravity 의 MCP 정규화와 같은 규약):
+      //  Cursor 의 Write(편집도 전문 쓰기로 온다)·Shell→Bash·Read·Grep 은 입력 모양이 claude 와 같아 claude 이름으로 넘긴다
+      //  → claude 이름으로 쓴 조직 훅이 고치지 않고 걸린다. Cursor 원래 이름은 페이로드 cursor_tool_name 에 남는다.
+      edit: ["Write"],
+      shell: ["Bash"],
+      read: ["Read", "Grep"],
+      skill: [],                           // 전용 Skill 툴 없음(스킬은 슬래시·자동 첨부)
+      fork: [],                            // Task 서브에이전트는 제 컨텍스트로 시작한다 → 기록 fork 대상 아님
+      // MCP 는 훅에 `MCP:<툴>`(서버 없음)로 온다 — 어댑터가 beforeMCPExecution 의 mcp_server_name 으로 claude 형으로 정규화한다.
+      mcp: (server, tool = "") => `mcp__${server}__${tool}`,
+      mcpMatcher: (server) => `mcp__${server}__.*`,
+    },
+    headless: () => true,                  // 판별 수단 미실측(#4219) — 모르면 참. fork 축도 비어 있어 기록 fork 를 권할 일이 없다
+    // MCP 는 ~/.cursor/mcp.json 의 mcpServers — command **문자열** + args 배열 + env(+type "stdio"). ⚠ 한 항목만 틀려도
+    //  (env 값이 숫자 등) **파일의 모든 서버가 사라진다**(번들 실측) — 우리 항목은 문자열만 싣는다.
+    mcp: { style: "cursor-mcp-json", commandShape: "string+args", typeKey: true },
+    // 승인 — CLI 는 cli-config.json permissions.allow 의 `Mcp(<server>:<tool>)`(글롭 `*` 성립, 소문자 비교 — 번들 실측).
+    //  ⚠ IDE 의 승인 허용목록은 파일 표면이 없고, 훅의 permission:"allow" 는 승인 창을 **건너뛰지 않는다**(번들 실측) → IDE 는 ⚠.
+    autoApprove: { kind: "cursor-cli-allow", key: (server, tool) => `Mcp(${server}:${tool || "*"})`, file: (HOME, env = process.env) => j(cursorCliConfigDir(HOME, env), "cli-config.json") },
+    // 컨텍스트는 훅 출력이다 — 러너는 JSON 봉투(hookSpecificOutput.additionalContext)로 내고 어댑터가 additional_context 로 옮긴다.
+    //  sessionStart 는 첫 턴이 기다리고 상한이 없다(정본 자리) · beforeSubmitPrompt·postToolUse 는 1만 자 초과 시 통째 버림(어댑터가 자른다).
+    contextEnvelope: "json",
+    runnerCapMs: 15000,                    // 러너 상한 — cursor-adapter.mjs 의 T.runner 와 같은 값(#5034)
+    reloadAssets: false,                   // CLI 는 스킬 감시자가 없다(번들 실측 — 새 세션부터)
+    // 러너 배선 대상. Notification·PermissionRequest 등가물이 없다(승인 대기 «확인 필요» 보고 불가 — agy·grok 과 같은 갭).
+    events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "PreCompact"],
+    eventMap: {
+      SessionStart: "sessionStart",        // 새 대화에서만 발화(재개 X — 실측)
+      SessionEnd: "sessionEnd",
+      UserPromptSubmit: "beforeSubmitPrompt",
+      PreToolUse: "preToolUse|beforeMCPExecution",   // MCP 는 서버가 실린 beforeMCPExecution 이 org 훅 자리
+      PostToolUse: "postToolUse",
+      Stop: "stop",
+      SubagentStop: "subagentStop",
+      PreCompact: "preCompact",
+    },
   },
 };
 

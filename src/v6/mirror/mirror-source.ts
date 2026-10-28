@@ -3,8 +3,8 @@ import type pg from "pg";
 import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
-import { auditConnector } from "./mirror-common.js";
-import { stampSourceVisibility } from "../source-vis-policy.js";
+import { auditConnector, pgDeep, pgText } from "./mirror-common.js";
+import { stampSourceAudience, stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
 export function sourceKindOf(system: string): string {
@@ -21,6 +21,7 @@ export function sourceKindOf(system: string): string {
     case "github": return "github_issue"; // #2247 이슈·PR 대화·릴리스 — 닫힘·머지가 결론 신호라 증류 기준이 따로 있다
     case "gitlab": return "gitlab_issue"; // #2247 이슈·MR 대화·릴리스 — GitHub 과 같은 증류기(issue-threads)가 잡는다
     case "linear": return "linear_issue"; // #2247 이슈·댓글·문서 — 같은 증류기(issue-threads)
+    case "zotero": return "zotero_item";  // Zotero 논문 한 편(서지 + 주석 + 노트) · 독립 노트 — 증류 기준이 논문 단위라 따로 둔다
     default: return "other";
   }
 }
@@ -31,22 +32,23 @@ export function sourceKindOf(system: string): string {
 export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   const kind = sourceKindOf(system);
-  const title = it.title == null ? null : redactString(String(it.title));
-  const body = redactString(String(it.body ?? ""));
-  const raw = it.raw == null ? null : redactDeep(it.raw);
+  //  pgText·pgDeep — Postgres 가 못 받는 글자(NUL·외톨이 서로게이트)를 걷는다(#5040, mirror-common).
+  const title = it.title == null ? null : pgText(redactString(String(it.title)));
+  const body = pgText(redactString(String(it.body ?? "")));
+  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
   const author = `connector:${system}`;
 
   // #735 구조화 메타 보존 — 예전엔 message→source 미러가 it.fields·container_ref·actor 를 통째로 버려
   //  (knowledge 미러는 fields 를 보존하는데 source 미러만 누락) 채널명·작성자·스레드 같은 지식화 핵심 맥락이
   //  유실됐다. 여기서 커넥터가 채운 구조화 값을 source.fields(JSONB)에 접어 저장한다 — slack 특화가 아니라
   //  전 커넥터(gmail·notion·discord 등) 공통. body/title(raw 원문)은 건드리지 않는다.
-  const baseFields = redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {}) as Record<string, unknown>;
+  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
   const fields: Record<string, unknown> = { ...baseFields, _item_type: it.type };
   if (it.container_ref) fields.container_ref = it.container_ref;
-  if (it.container_name) fields.container_name = redactString(String(it.container_name));
+  if (it.container_name) fields.container_name = pgText(redactString(String(it.container_name)));
   if (it.actor?.external_id) fields.author_external_id = it.actor.external_id;
-  if (it.actor?.display_name) fields.author_name = redactString(String(it.actor.display_name));
-  if (it.actor?.email) fields.author_email = redactString(String(it.actor.email));
+  if (it.actor?.display_name) fields.author_name = pgText(redactString(String(it.actor.display_name)));
+  if (it.actor?.email) fields.author_email = pgText(redactString(String(it.actor.email)));
   if (it.actor?.is_bot != null) fields.author_is_bot = it.actor.is_bot;
 
   // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. no-op 재싱크(last_synced_at-only)는 audit 생략. ──
@@ -93,6 +95,9 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
   if (isInsert) {
     await stampSourceVisibility(client, id, system,
       [it.container_ref, it.container_name, fields.container_ref as string, fields.container_name as string]);
+    //  커넥터가 «이 사람 것»이라고 말한 자료(RawItem.audience)는 그 사람만 보게 — 정책 결과를 주인으로 바꿔 쓴다(stampSourceAudience).
+    //   ⚠ 지금은 이 표시를 내는 커넥터가 없다(Zotero 개인 라이브러리는 #2202 에서 걷었다 — 연결 = 팀과 함께 쓰기).
+    if (it.audience?.length) await stampSourceAudience(client, id, it.audience);
   }
 
   if (contentChanged) {

@@ -27,6 +27,9 @@ export interface OrgNode {
   platform: string | null; agent_ver: string | null; agent_caps: string[] | null; agent_harnesses: string[] | null; host: string | null;
   // #1849 — 노드가 hello 로 보고한 잠자기 억제 상태. NULL = **모름**(구 번들)이지 '안 걸림'이 아니다.
   keep_awake: KeepAwakeStatus | null;
+  // #5043 — 이 컴퓨터의 하네스 종료 규칙 값(sessions/node-stop-rule-policy.ts NodeStopRuleOverride). NULL·빈 칸 = 워크스페이스 기본값을 따른다.
+  //  읽는 쪽은 반드시 parseNodeStopRuleOverride 로 거른다(손으로 넣은 값·깨진 행이 끄는 시각을 흔들지 않게).
+  stop_rule?: unknown;
   last_seen: string | null; created_by: string | null; created_at: string; updated_at: string;
 }
 
@@ -137,6 +140,11 @@ export async function setNodeEnabled(id: string, enabled: boolean): Promise<void
 //  중단시키면 결과를 잃는다). 즉시 끊어야 하면 enabled=false(연결 차단) 또는 태스크 취소를 쓴다.
 export async function setNodeShared(id: string, shared: boolean): Promise<void> {
   await itemsPool.query(`UPDATE org_node SET shared=$2, updated_at=now() WHERE id=$1`, [id, shared]);
+}
+
+/** #5043 — 이 컴퓨터의 하네스 종료 규칙 값. null = 전부 워크스페이스 기본값을 따른다. 합치기·검증은 부르는 쪽(node-stop-rule-policy.ts)이 끝냈다. */
+export async function setNodeStopRule(id: string, rule: Record<string, unknown> | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_node SET stop_rule=$2::jsonb, updated_at=now() WHERE id=$1`, [id, rule === null ? null : JSON.stringify(rule)]);
 }
 
 /**

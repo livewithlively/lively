@@ -72,6 +72,14 @@ function buildProjectDigest(p: any): string {
   L.push(`- 전체/최신 조회: \`project_get_v6(${p.id})\` (lively MCP)`, "");
   L.push(...codeWorkSection(Array.isArray(p.repos) ? p.repos : []));
   if (p.description) L.push("## 개요", String(p.description), "");
+  // 선행 프로젝트(edges.outgoing — 이 프로젝트가 follow_up 하는 대상, #4876) — «이어받는 일» 을 세션이 처음부터 알고 시작한다.
+  //  남긴 지식 전문은 싣지 않는다(드리프트 최소) — 이름·상태만 적고, 산출 지식은 project_get_v6 로 읽게 한다.
+  const prior = ((p.edges && p.edges.outgoing) || []).filter((e: any) => e && (e.relation === "follow_up" || e.relation === "supersedes") && e.project_id);
+  if (prior.length) {
+    L.push("## 선행 프로젝트 (이 프로젝트가 이어받는 일 — 남긴 지식은 `project_get_v6(<id>)` 의 knowledge.produced)");
+    for (const e of prior) L.push(`- #${e.project_id} ${e.project_name || ""}${e.status ? ` (${e.status})` : ""}`);
+    L.push("");
+  }
   // 필요지식(required) — 이 프로젝트를 진행하기 전에 알아야 할 배경. AI 가 처음부터 무엇을 알아야 하는지 보고 시작한다(전문 X·드리프트 최소 → knowledge_get 포인터). 산출(produced)은 결과물이라 넣지 않는다.
   const reqK = ((p.knowledge && p.knowledge.required) || []) as any[];
   if (reqK.length) {

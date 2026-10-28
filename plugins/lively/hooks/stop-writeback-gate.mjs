@@ -23,11 +23,13 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, statSync, readdirSy
 import { tmpdir, homedir } from "node:os";
 import { join, resolve, sep, delimiter } from "node:path";
 // harness-registry 는 훅과 같은 디렉터리로 설치된다(HOOK_SCRIPTS — sync-harness-assets 의 import 와 같은 계약).
-import { isForeignGrokInvocation, isRecordForkLabel, recordPendingPrefix, RECORD_PENDING_TTL_MS } from "./harness-registry.mjs";
+import { isForeignGrokInvocation, isForeignCursorInvocation, isRecordForkLabel, recordPendingPrefix, RECORD_PENDING_TTL_MS } from "./harness-registry.mjs";
+import { inScopeNow, workRootsOf, effectiveSettings } from "./record-scope.mjs";
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 종료 게이트가 camelCase 페이로드를 오파싱해 오판한다).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const FLAG_DIR = join(tmpdir(), "lively-hooks"); // 전 플랫폼 per-user tmp(work-flag.mjs 와 동일) — 공유 /tmp 미사용
@@ -117,6 +119,10 @@ try {
   let input;
   try { input = JSON.parse(raw); } catch { process.exit(0); }
   if (input?.stop_hook_active === true) process.exit(0); // 루프가드(필수)
+  // 기록 범위(#5016) — 작업 폴더 밖 세션엔 «기록하라» 를 말하지 않는다(기록 자체가 꺼져 있다). 판정은 record-scope.mjs 하나.
+  //  아래 자가 게이팅(work-root·lively 툴 사용)은 그대로 둔다 — 범위 안이어도 일을 안 한 세션은 붙잡지 않는다.
+  const harnessArg = process.argv.indexOf("--harness") > -1 ? process.argv[process.argv.indexOf("--harness") + 1] : "";
+  if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: harnessArg, lively: join(homedir(), ".lively") }).inScope) process.exit(0);
   const sid = String(input?.session_id ?? "");
   if (!SID_RE.test(sid)) process.exit(0);
 
@@ -127,7 +133,10 @@ try {
   // cwd 는 stdin JSON 의 cwd 우선(하네스 무관 계약 — Codex R2 가 다른 작업디렉로 spawn 해도 정확).
   //   없으면 process.cwd() 폴백(Claude Code 는 프로젝트 디렉에서 훅 실행).
   const cwd = (typeof input?.cwd === "string" && input.cwd) || process.cwd();
-  const isLivelyWork = cwdUnderRoot(cwd, loadWorkRoots()) || existsSync(flag("lively"));
+  //  작업 폴더 목록은 기록 범위와 같은 것을 쓴다(#5016 — 이 컴퓨터 설정 ∪ work-roots 파일 ∪ env, `~` 펼침). 종전 work-roots 만 보던
+  //   판정은 그 부분집합이라 동작이 넓어질 뿐 좁아지지 않는다.
+  const lively = join(homedir(), ".lively");
+  const isLivelyWork = cwdUnderRoot(cwd, [...loadWorkRoots(), ...workRootsOf(lively, effectiveSettings(lively))]) || existsSync(flag("lively"));
   if (!isLivelyWork) process.exit(0);
 
   if (existsSync(flag("writeback"))) process.exit(0); // 이미 기록함

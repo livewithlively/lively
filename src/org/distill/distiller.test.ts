@@ -1094,6 +1094,39 @@ t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) —
   console.log('ok  #4824 digest: 잠긴 자료 표시');
 }
 
+// #5012 — 이슈 트래커 자료는 머리줄만 보고 «어느 이슈 · 어느 프로젝트 · 상태 · 라벨» 을 알 수 있어야 한다(개체 레인의 매핑표 재료).
+{
+  const head = (row: Record<string, unknown>): string => {
+    const line = buildSourceDigest([row]).split('\n').find((l) => l.startsWith('--- id='));
+    assert.ok(line, '머리줄이 없다'); return line;
+  };
+  // 1 리니어 이슈 — 키·프로젝트·상태(이름/유형)·라벨
+  const issue = head({ id: 3368, title: '무료 체험 정책', body_md: 'x', fields: { kind: 'issue', number: 'PLA-150',
+    container_name: 'Planning (PLA)', project: 'BM 리뉴얼', state: 'Done', state_type: 'completed', labels: ['Planning', '기획'] } });
+  for (const want of ['PLA-150', '프로젝트 BM 리뉴얼', '상태 Done/completed', '라벨 Planning·기획']) assert.ok(issue.includes(want), `${want} 없음: ${issue}`);
+  // 2 리니어 댓글 — 어느 이슈의 댓글인지 · 상태는 없다
+  const comment = head({ id: 2669, body_md: 'y', parent_external_id: 'DEV-725', fields: { kind: 'comment', number: 'DEV-725', container_name: 'Dev (DEV)' } });
+  assert.ok(comment.includes('댓글→DEV-725') && !comment.includes('상태'), comment);
+  // 3 깃랩 노트도 댓글이다
+  assert.ok(head({ id: 5, body_md: 'n', parent_external_id: 'g/r#3', fields: { kind: 'note', number: 3, container_name: 'g/r' } }).includes('댓글→g/r#3'));
+  // 4 깃허브 숫자 번호는 #n
+  assert.ok(head({ id: 1, body_md: 'z', fields: { kind: 'issue', number: 7, state: 'closed', container_name: 'o/r' } }).includes('#7 · 상태 closed'));
+  // 5 깃랩 project 는 채널(저장소)과 같아 다시 적지 않는다
+  assert.ok(!head({ id: 2, body_md: 'z', fields: { kind: 'issue', number: 3, project: 'g/r', container_name: 'g/r' } }).includes('프로젝트'));
+  // 6 마일스톤
+  assert.ok(head({ id: 6, body_md: 'z', fields: { kind: 'issue', number: 9, milestone: 'v2', container_name: 'o/r' } }).includes('마일스톤 v2'));
+  // 7 상태 이름과 유형이 같으면 한 번만
+  assert.ok(head({ id: 7, body_md: 'z', fields: { kind: 'issue', number: 'A-1', state: 'open', state_type: 'open' } }).includes('상태 open') &&
+    !head({ id: 7, body_md: 'z', fields: { kind: 'issue', number: 'A-1', state: 'open', state_type: 'open' } }).includes('open/open'));
+  // 8 라벨이 비었거나 배열이 아니면 라벨 칸이 없다
+  assert.ok(!head({ id: 8, body_md: 'z', fields: { kind: 'issue', number: 'A-2', labels: [] } }).includes('라벨'));
+  assert.ok(!head({ id: 8, body_md: 'z', fields: { kind: 'issue', number: 'A-2', labels: 'bug' } }).includes('라벨'));
+  // 9 슬랙 자료(이슈 칸 없음)는 머리줄이 종전과 글자 그대로
+  const slack = head({ id: 4, title: 't', body_md: 'm', occurred_at: '2026-10-01T00:00:00Z', fields: { container_name: 'general', author_name: 'a', ts: '1.2' } });
+  assert.equal(slack, '--- id=4 · t · 2026-10-01 00:00:00 · @a · #general · thread=1.2');
+  console.log('ok  #5012 digest: 이슈 키·프로젝트·상태·라벨');
+}
+
 // #4824 — 배치 하나 = 볼 수 있는 사람이 같은 자료(첫 행의 묶음). 대상이 다른 자료가 섞이면 derived_from 에서 잠긴 id 를
 //  빠뜨리기만 해도 그 내용이 공개 지식으로 나간다.
 {

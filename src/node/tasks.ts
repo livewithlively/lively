@@ -25,6 +25,7 @@ import { provisionTaskRepo, type RepoProvisionAuth } from "../project/project-pr
 import { grantSharedGroupWrite, SHARED_FILE_MODE } from "../project/project-fs.js";
 import type { NodeResources } from "./protocol.js";
 import { deriveWriteCap } from "../terminal/terminal-sessions.js";
+import { muxGenerationsActive, muxTmux } from "../terminal/mux-generations.js";   // #4931 — 노드 tmux 세대
 import { memAvailableMb } from "../ops/host-mem.js"; // #1059 공용 메모리 지표(백필 게이트와 단일 소스)
 
 const execFileAsync = promisify(execFile);
@@ -39,6 +40,9 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 async function tmux(args: string[]): Promise<string> {
+  //  #4931 — 노드(멤버 PC)면 세대 규칙으로: 새 위탁 세션은 고정판 전용 소켓에, 옛 세션 정리는 그 세션이 사는 서버로.
+  //   게이트웨이(중앙 위탁)에선 거짓이라 종전 그대로다.
+  if (muxGenerationsActive()) return muxTmux(args, { timeoutMs: 8000, env: TMUX_ENV });
   const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 8000, env: TMUX_ENV });
   return stdout;
 }

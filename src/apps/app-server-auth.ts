@@ -9,12 +9,14 @@
 //  ② 사람 신원 토큰 — 앞단이 서명한 X-Lively-Identity(app-identity). 앱 서버가 받은 것을 그대로 다시 싣는다.
 //
 // ── 판정 ─────────────────────────────────────────────────────────────────────────────────
-//  ① 만으로는 아무것도 못 한다(사람 없는 호출 = 앱 자체 주체는 v2-12). ①+② 가 같은 (테넌트, 앱)이고, 그 구성원이 활성이고
+//  ① 만으로는 아무것도 못 한다(사람 없는 호출 = 앱 자체 주체는 v2-12). ②대신 «작업 돌기 신원»(#4486 lvjr1.…)이 오면 그 작업을 시작한 사람으로 같은 판정을 한다.
+//  ①+② 가 같은 (테넌트, 앱)이고, 그 구성원이 활성이고
 //  그 워크스페이스에 들어올 수 있고, 그 앱에 동의(grant)했을 때만 주체가 **그 구성원 ∩ 그 사람의 앱 동의** 가 된다 —
 //  앱 화면에서 사람이 누른 요청과 같은 권한(설계 §6 «사람 대리»). 그 뒤는 기존 앱 도구 게이트(requireAppTool)가 그대로 돈다.
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "../http-error.js";
-import { mintToken } from "../org/store/tokens.js";
+import { mintToken, revokeToken } from "../org/store/tokens.js";
+import { itemsPool } from "../db/client.js";
 import { getApp, getActiveGrant } from "../org/store/apps.js";
 import { canSeeApp } from "./visibility.js";
 import { getMember } from "../org/store/members.js";
@@ -24,6 +26,8 @@ import { isBuiltinSource } from "./store-ddl.js";
 import { appSqlTenantId } from "./app-sql-exec.js";
 import { verifyAppIdentity, type VerifyAppIdentityOpts } from "./app-identity.js";
 import { appServerUserId, parseAppServerUserId } from "./app-server-id.js";
+import { looksLikeJobCredential } from "./app-jobs-plan.js";
+import { openJobPins } from "./app-jobs-store.js";
 
 export { appServerUserId, parseAppServerUserId };
 
@@ -46,6 +50,44 @@ export async function mintAppServerToken(appId: string, actor: string): Promise<
   return { token, expiresAt, userId };
 }
 
+/** 함수 판에 굽는 토큰의 표지(#4485) — 관리자가 app_server_token_mint 로 받는 토큰(`app-server:<앱>` · 바깥 서버용)과 가른다. 회수는 이 표지만. */
+export const FUNCTION_TOKEN_LABEL = (appId: string): string => `app-server-fn:${appId}`;
+
+/**
+ * 함수 판 하나에 구울 앱 서버 토큰(#4485 앱 v2-6) — 판을 새로 고정할 때마다 새로 발급한다. 평문은 그 판의 환경변수(LIVELY_APP_TOKEN)에만 남는다.
+ *  권한은 mintAppServerToken 과 같다(scope 없음 — 사람 신원과 함께일 때만 그 사람 ∩ 동의).
+ */
+export async function mintAppServerFunctionToken(appId: string, actor: string): Promise<{ token: string; tokenHash: string }> {
+  const app = await getApp(appId);
+  if (!app) throw new HttpError(404, `앱 없음: ${appId}`);
+  if (isBuiltinSource(app.source)) throw new HttpError(400, `「${app.title || appId}」 은(는) 라이블리가 싣는 기본 앱이라 앱 서버 토큰을 만들지 않습니다`);
+  if (!app.enabled || app.status !== "active") throw new HttpError(409, `앱 '${appId}' 이 활성 상태가 아닙니다(${app.status})`);
+  const { token, tokenHash } = await mintToken({ userId: appServerUserId(appSqlTenantId(), appId), scopes: [], label: FUNCTION_TOKEN_LABEL(appId), memberId: null, appId }, actor, "app-server");
+  return { token, tokenHash };
+}
+
+/**
+ * 어느 별칭도 안 가리키게 된 함수 판의 토큰을 회수한다(#4485) — keep = 지금 cur · pub 판의 토큰. 회수한 수.
+ *  이 앱의 함수 판 토큰(FUNCTION_TOKEN_LABEL)만 본다 — 관리자가 바깥 서버용으로 받은 토큰은 건드리지 않는다.
+ *  ⚠ 판에서 토큰을 읽어 오지 않는다(AWS 를 다시 부르지 않게) — 별칭을 옮길 때 그 판의 토큰 지문을 org_app_server 에 함께 적는다.
+ *  #4486 열린 백그라운드 작업이 붙잡은 판의 토큰은 늘 남긴다 — 부르는 쪽(배포 성공 · 실패 길)이 빠뜨릴 수 없게 여기서 합친다(격리 리뷰).
+ *   작업을 읽지 못하면 던진다(아무것도 회수하지 않는다 — 다음 배포가 거둔다). 작업을 먼저 끝낸 앱 지우기 · 걷기만 jobPins:false 로 전부 거둔다
+ *   (그사이 새로 들어온 작업이 토큰을 붙잡아 지운 앱의 토큰이 살아남지 않게).
+ */
+export async function revokeStaleFunctionTokens(appId: string, keep: Array<string | null | undefined>, actor = "app-server-deploy", opts: { jobPins?: boolean } = {}): Promise<number> {
+  const pinned = opts.jobPins === false ? [] : (await openJobPins(appId)).tokens;
+  const keepSet = new Set([...keep, ...pinned].filter((x): x is string => !!x));
+  const r = await itemsPool.query(
+    `SELECT token_hash FROM auth_token WHERE user_id=$1 AND label=$2 AND app_id=$3 AND revoked_at IS NULL`,
+    [appServerUserId(appSqlTenantId(), appId), FUNCTION_TOKEN_LABEL(appId), appId]);
+  let n = 0;
+  for (const row of r.rows as Array<{ token_hash: string }>) {
+    if (keepSet.has(row.token_hash)) continue;
+    if ((await revokeToken(row.token_hash, actor, "app-server")) === "revoked") n++;
+  }
+  return n;
+}
+
 export interface ResolveAppServerDeps {
   tenantId?: string;
   identity?: VerifyAppIdentityOpts;
@@ -65,6 +107,8 @@ export async function resolveAppServerPrincipal(user: LivelyUser, header: string
     throw new HttpError(401, "앱 서버 토큰만으로는 아무것도 할 수 없습니다 — 사람 신원(X-Lively-Identity)을 함께 보내세요"
       + "(SDK 는 들어온 요청의 신원을 그대로 넘깁니다). 사람 없는 호출(앱 자체 주체)은 아직 열리지 않았습니다");
   }
+  //  #4486 백그라운드 작업 — 함수 안 검사 층이 넘긴 «돌기 신원» 이면 그 작업을 시작한 사람 ∩ 그 사람의 앱 동의(작업이 도는 동안만 · apps/app-jobs.ts).
+  if (looksLikeJobCredential(raw)) return (await import("./app-jobs.js")).resolveJobRunPrincipal(user, raw);
   const claims = verifyAppIdentity(raw, { ws: tenantId, app: bound.appId }, deps.identity);
   const member = await getMember(claims.sub);
   if (!member || member.state !== "active") throw new HttpError(403, "신원의 구성원이 이 워크스페이스에서 활성 상태가 아닙니다");
@@ -84,5 +128,8 @@ export async function resolveAppServerPrincipal(user: LivelyUser, header: string
     tokenHashPrefix: user.tokenHashPrefix,
     appId: bound.appId,
     appServer: true,
+    //  #4485 주소의 판 — 서버 코드는 주소의 판으로 돈다(공개 주소 = 공개 판의 함수 별칭 pub · app-front-server). 그 코드가 부르는 표 · 도구도
+    //   같은 판의 선언이어야 한다 — 초안을 고친 사람이 공개 주소를 열어도 공개 판의 표(apps/visibility.ts addressViewFor). 앞단이 서명한 신원에서만 온다.
+    appAddress: claims.var,
   };
 }

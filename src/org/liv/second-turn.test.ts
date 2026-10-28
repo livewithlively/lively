@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS, UPLOAD_MAX_WAIT_MS, CONNECT_BIND_GRACE_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
 import { readFileSync } from "node:fs";
@@ -229,8 +229,25 @@ test("㉖′ 경계 — 빈 문자열도 «없음» 이다(빈 따옴표를 싣�
 });
 test("㉙ 서랍이 이미 있는 사람에게도 카테고리 단계는 똑같이 나온다 — 조건부 단계가 아니다", () => {
   const p = buildSecondTurnPrompt(pin({ drawers: ["산출물", "기록"] }));
-  assert.match(p, /서랍 산출물 · 기록/);
+  assert.match(p, /카테고리 후보 산출물 · 기록/);
   assert.match(p, /카테고리를 만든다 — 이 단계는 건너뛰지 않는다/);
+});
+//  #5062 — 리브가 «첫 서랍 '운영·인프라'를 이 정의로 만들까요? … 첫 자동 정리 배치를 다시 실행» 이라고 물었다.
+//   지시문·스킬이 «서랍»·«레인»·«배치» 를 내부 낱말로 쓰니 리브가 그 말을 그대로 사람에게 옮겼다. 원준: «처음 보는 사람은 이해가 되겠니?»
+test("㉛ 지시문은 «서랍» 을 내부 낱말로도 쓰지 않고, 묻는 문장이 처음 보는 사람에게 읽히게 하라고 못박는다", () => {
+  const p = buildSecondTurnPrompt(pin({ drawers: ["산출물"] }));
+  const leaks = p.split("\n").filter((l) => l.includes("서랍") && !l.includes("«서랍»이라고 하지 않는다"));
+  assert.deepEqual(leaks, [], "«서랍» 이 사람에게 쓰지 말라는 줄 밖에서 나온다");
+  assert.match(p, /처음 보는 사람도 알아들어야 한다/);
+  assert.match(p, /고르면 각각 무슨 일이 생기는지/);
+});
+test("㉜ 시드 liv-distill 도 «서랍» 을 쓰지 않는다 — 스킬의 예문이 리브의 입버릇이 된다", async () => {
+  const { DEFAULT_SKILLS } = await import("../delivery/default-content.js");
+  const skill = DEFAULT_SKILLS.find((s) => s.id === "liv-distill")!;
+  const leaks = [skill.body, skill.description, skill.label ?? ""].join("\n").split("\n")
+    .filter((l) => l.includes("서랍") && !l.includes("«서랍»") && !l.startsWith("- 나쁜 예"));
+  assert.deepEqual(leaks, []);
+  assert.match(skill.body, /처음 보는 사람도 알아들어야 한다/);
 });
 test("㉚ 시드 liv-distill 의 절차 번호가 1~12 로 이어지고, «N단계» 참조가 실제 단계를 가리킨다", async () => {
   const { DEFAULT_SKILLS } = await import("../delivery/default-content.js");
@@ -401,4 +418,73 @@ test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시
   //  (T12 #4744 와 맞물림) 활동량·주기는 서버가 글 빈도로 잰다 — 2턴이 interval_sec·activity 를 쓰라고 하면 자동 주기가 멈춘다.
   assert.doesNotMatch(p, /`interval_sec` 를 맞춘다|activity: 하루 평균/, "2턴이 서버가 재는 주기·활동량을 손으로 쓰게 한다");
   assert.match(p, /`description`\(이 단위에서 오가는 일/);
+});
+
+// ── #5060 처음 설정에서 올린 파일 → 정리 지시(2턴) ─────────────────────────────────
+//  엣지 표:
+//   U1 갈래 없음 · 세션 없음                         → skip no-kickoff(무회귀)
+//   U2 files · 세션 없음 · 올리기 끝                  → reopen files(새로 연다)
+//   U3 files · 올리기 중 · 상한 전                    → wait uploading
+//   U4 files · 올리기 중 · 상한 지남                  → reopen files(있는 것으로 시작)
+//   U5 connect · 연결 끝 찍힘 · 올리기 중             → wait uploading(반쯤 올라온 표본으로 짜지 않는다)
+//   U6 connect · 연결 끝 · 올리기 끝                  → fire
+//   U7 files · 이미 한 번 열었다 · 세션 없음          → giveup session-gone-again(무한 재생성 금지)
+//   U8 files · 2시간 넘음 · 세션 없음                 → giveup stale
+//   U9 files · 세션 id 없음 · 그 사람 리브 세션이 살아 있다 → fire(새로 열지 않고 그 세션에)
+//   U10 상한 순서 — 올리기 대기 상한 < 1턴 배달 상한(그 뒤엔 새로 여는 길이 닫힌다)
+//   P1 지시문 — 올린 파일이 있으면 local-files 를 켜서 끝내라 · 올리는 중이면 지금 있는 것으로 · 둘 다 없으면 그 줄 없음
+const FW = (o: Record<string, unknown> = {}) => ({ done_at: new Date(DONE).toISOString(), ...o }) as never;
+test("U1 갈래 없음 · 세션 없음 — 종전대로 skip", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW(), session: null })), { action: "skip", reason: "no-kickoff" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "connect" }), session: null })), { action: "skip", reason: "no-kickoff" },
+    "connect 갈래는 세션 id 가 적혀야 후보다(연결 대화를 못 열었으면 정리 지시도 없다)");
+});
+test("U2 files · 세션 없음 · 올리기 끝 — 새로 연다", () => {
+  const w = FW({ flow: "files", upload_started_at: "a", upload_done_at: "b" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null })), { action: "reopen", reason: "files" });
+});
+test("U3·U4 files · 올리기 중 — 상한 전엔 기다리고, 상한이 지나면 연다", () => {
+  const w = FW({ flow: "files", upload_started_at: "a" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + UPLOAD_MAX_WAIT_MS - 1 })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + UPLOAD_MAX_WAIT_MS })), { action: "reopen", reason: "files" });
+});
+test("U5·U6 connect · 연결 끝 — 올리기가 끝나야 쏜다", () => {
+  const base = { flow: "connect", session_id: "box-a-1", collect_done_at: "c", upload_started_at: "a" };
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW(base) })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ ...base, upload_done_at: "b" }) })), { action: "fire", partial: false, waitedMin: 1 });
+});
+test("U7·U8 files — 한 번 연 뒤 또 없거나 2시간이 넘으면 포기", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files", distill_reopened_at: "r" }), session: null })), { action: "giveup", reason: "session-gone-again" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files" }), session: null, now: DONE + TURN1_DELIVERY_TTL_MS + 1 })), { action: "giveup", reason: "stale" });
+});
+test("U9 files · 그 사람 리브 세션이 살아 있으면 — 새로 열지 않고 그 세션에 쏜다", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files" }) })), { action: "fire", partial: false, waitedMin: 1 });
+});
+test("U10 올리기 대기 상한은 1턴 배달 상한보다 짧다", () => {
+  assert.ok(UPLOAD_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "같거나 길면 상한에서 새로 열 길이 이미 닫혀 있다(올린 파일이 영영 정리되지 않는다)");
+});
+test("P1 지시문 — 올린 파일 · 올리는 중 줄", () => {
+  const base: SecondTurnInput = { displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 3 };
+  const none = buildSecondTurnPrompt(base);
+  assert.ok(!none.includes("local-files"), "올린 파일이 없으면 그 줄을 싣지 않는다");
+  const up = buildSecondTurnPrompt({ ...base, uploaded: true });
+  assert.ok(up.includes("`local-files`") && up.includes("켜서 끝낸다"), "올린 파일이 있으면 로컬 증류기를 켜서 끝내라고 못박는다");
+  assert.ok(!up.includes("아직 다 올라오지 않았다"));
+  const ing = buildSecondTurnPrompt({ ...base, uploaded: true, uploading: true });
+  assert.ok(ing.includes("아직 다 올라오지 않았다") && ing.includes("지금 있는 것으로 시작"));
+});
+
+//  (#5060 격리 리뷰) 연결 대화가 끝내 안 묶인 «처음 연결» 갈래
+//   C1 연결 갈래 · 세션 없음 · 올린 파일 · 유예 안 → wait connecting(곧 묶인다 — 세션을 하나 더 세우지 않는다)
+//   C2 같은데 유예 지남 → reopen files(올린 파일이 영영 정리되지 않는 길을 막는다)
+//   C3 연결 갈래 · 세션 없음 · 올린 파일 없음 · 유예 지남 → skip no-kickoff(정리할 것도, 이어 갈 대화도 없다)
+//   C4 C2 인데 그 사람 리브 세션이 살아 있다 → fire(그 세션에)
+test("C1~C4 연결 대화가 안 묶인 처음 연결 갈래", () => {
+  const w = FW({ flow: "connect", upload_started_at: "a", upload_done_at: "b" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + CONNECT_BIND_GRACE_MS - 1 })), { action: "wait", reason: "connecting" }, "C1");
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "reopen", reason: "files" }, "C2");
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "connect" }), session: null, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "skip", reason: "no-kickoff" }, "C3");
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "fire", partial: false, waitedMin: 10 }, "C4");
+  assert.ok(CONNECT_BIND_GRACE_MS < UPLOAD_MAX_WAIT_MS && UPLOAD_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "유예 < 올리기 상한 < 1턴 배달 상한");
 });

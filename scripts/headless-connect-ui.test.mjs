@@ -1,6 +1,6 @@
 // «사람 없이 도는 작업» 자격을 화면에서 연결하는 자리의 **배선 계약** (#4051) — 소스를 읽어 검사한다.
 //
-//  화면 셋이 같은 사실을 나눠 갖는다: [내 AI 계정](me-ai) · 처음 설정 «AI 잇기»(onboarding) · 알림이 여는 창(v2 main).
+//  화면 둘이 같은 사실을 나눠 갖는다: [내 AI 계정](me-ai) · 알림이 여는 창(v2 main). (#4970) 처음 설정 «AI 잇기»(onboarding)는 걷혔다.
 //  하나라도 어긋나면 조용히 죽는다 — 알림을 눌렀는데 «모르는 화면» 탭이 서거나, 로그인만 확인하고 판 자격은 안 받거나.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -8,7 +8,6 @@ import test from "node:test";
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 const MEAI = read("../web/me-ai.ts");
-const ONB = read("../web/v2/onboarding.ts");
 const MAIN = read("../web/v2/main.ts");
 const CONNECT = read("../src/org/credentials/headless-connect.ts");
 const code = (s) => s.split("\n").filter((l) => {
@@ -17,7 +16,7 @@ const code = (s) => s.split("\n").filter((l) => {
 }).join("\n");
 
 test("배선 · 소스를 실제로 읽었다(vacuous 방지)", () => {
-  for (const s of [MEAI, ONB, MAIN, CONNECT]) assert.ok(s.length > 2000);
+  for (const s of [MEAI, MAIN, CONNECT]) assert.ok(s.length > 2000);
 });
 
 test("★ [내 AI 계정] — 상태를 서버 한 곳에서 읽고, [연결]은 헤드리스 용도로 **새로** 띄운다", () => {
@@ -54,23 +53,6 @@ test("★ M11 실행 멤버 줄 — 연결됐는데 비어 있으면 그 자리�
     "몸통은 빈 객체 — 대상은 서버가 인증된 본인으로 정한다");
   assert.match(body.slice(claim), /runner === 'cleared'/, "비워 두기로 정해진 자리는 «이미 정해져 있다» 와 다르게 말한다");
   assert.match(c, /const line = runnerLine\(st, reload\);/, "칸이 다시 그리기를 넘긴다");
-});
-
-test("★ 처음 설정 — 로그인이 확인된 갈래에서만 묻고, 헤드리스 용도로 띄운다", () => {
-  //  칸의 행동(누르지 않아도 시작 · 이어받기 · 모르면 안 연다)은 scripts/onboarding-headless.test.mjs 가 크롬에서 잰다.
-  //   여기서는 «세 화면이 같은 사실을 나눠 갖는» 배선만 본다.
-  const i = ONB.indexOf("if (aiOn(c.harness)) {");
-  const j = ONB.indexOf("// ── CLI 가 이 자리에 없다", i);
-  assert.ok(i > 0 && j > i, "연결됨 갈래를 찾았다");
-  const connected = ONB.slice(i, j);
-  assert.match(connected, /HEADLESS_INLINE\[c\.harness\] \? `<div class="ob-tok" id="hlBox"/, "칸은 연결됨 갈래에만 있다");
-  assert.equal((ONB.match(/id="hlBox"/g) || []).length, 1, "다른 갈래(로그인 전)에는 칸이 없다 — 로그인도 안 됐는데 묻지 않는다");
-  const c = code(ONB);
-  assert.match(c, /const hb = \$\('#hlBox', el\); if \(hb\) void HL\.paint\(hb, AIC\.harness/, "칸이 있을 때만 채운다");
-  const OFFER = code(read("../web/v2/onboarding-headless.ts"));
-  assert.match(OFFER, /restart, purpose: 'headless', alive: \(\) => box\.isConnected,/, "헤드리스 용도 · 칸이 사라지면 멈춘다");
-  assert.match(OFFER, /if \(!s\) \{ box\.hidden = true; return; \}/, "구 서버(상태 조회 없음)면 칸을 안 연다 — 누를 수 없는 버튼 금지");
-  assert.match(OFFER, /api\('\/api\/ui\/me\/headless'\)/, "칸의 상태도 [내 AI 계정]과 같은 한 곳에서 읽는다");
 });
 
 test("★ 알림이 여는 창 — 서버가 적는 주소를 v2 가 창으로 받는다(탭을 만들지 않는다)", () => {

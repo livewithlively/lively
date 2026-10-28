@@ -477,7 +477,8 @@ export async function listThreadKnowledge(rows: Record<string, unknown>[]): Prom
 }
 
 // 배치에 낸 자료를 '판정함'으로 기록 — 다음 배치에서 빠진다. 배치 접수 직후 호출(스케줄러).
-//  멱등(ON CONFLICT DO NOTHING) — 같은 자료를 두 번 기록해도 안전.
+//  skip 한 자료도 여기서 함께 기록된다 — 프롬프트 ⑤ 가 «다시 올라오지 않는다» 고 말하는 근거가 이 호출이다.
+//  같은 자료를 두 번 기록해도 안전하다(ON CONFLICT 는 판정 시각을 전진시킨다 — 아래 SQL 주석).
 export async function markDistillerSeen(distillerId: number, sourceIds: number[], taskId: number | string | null): Promise<number> {
   const ids = sourceIds.filter((n) => Number.isFinite(n));
   if (!distillerId || !ids.length) return 0;
@@ -943,6 +944,28 @@ export const DIGEST_TOTAL_BYTES = 64_000;       // 전체(바이트) — 상한�
 
 const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 
+// #5012 — 이슈 트래커 자료(리니어·깃허브·깃랩)의 판정 재료를 머리줄에 싣는다: 이슈 키(댓글이면 어느 이슈의 댓글인지)·
+//  프로젝트·마일스톤·상태·라벨. 종전엔 본문만 실려, «프로젝트 1 = 지식 1» 같은 개체 레인이 매핑표를 쓰려면 자료마다
+//  source_get 을 다시 불러야 했다(위시스트 리니어 4,351건 실측 — 배치당 호출이 자료 수만큼 늘어난다).
+//  값이 있는 칸만 붙으므로 슬랙·문서 자료의 머리줄은 그대로다.
+function issueMeta(r: Record<string, unknown>, f: Record<string, unknown>): string[] {
+  const str = (v: unknown): string => (typeof v === "string" || typeof v === "number" ? String(v).trim() : "");
+  const kind = str(f.kind);
+  const comment = /comment|note/.test(kind);
+  const num = str(f.number);
+  const ref = comment ? str(r.parent_external_id) : /^\d+$/.test(num) ? `#${num}` : num;
+  const project = str(f.project) !== str(f.container_name) ? str(f.project) : ""; // 깃랩은 project 가 곧 채널(저장소)이다
+  const states = [...new Set([str(f.state), str(f.state_type)].filter(Boolean))];
+  const labels = Array.isArray(f.labels) ? f.labels.map(str).filter(Boolean) : [];
+  return [
+    ref && (comment ? `댓글→${ref}` : ref),
+    project && `프로젝트 ${project}`,
+    str(f.milestone) && `마일스톤 ${str(f.milestone)}`,
+    !comment && states.length ? `상태 ${states.join("/")}` : "",
+    labels.length ? `라벨 ${labels.join("·")}` : "",
+  ];
+}
+
 function digestLine(r: Record<string, unknown>): { head: string; body: string; truncated: boolean } {
   const f = (r.fields ?? {}) as Record<string, unknown>;
   const s = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
@@ -955,7 +978,7 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
   //  #1881 의 «개인 폴더(올린 사람만 봄)» 는 #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 사실이 아니어서 자리만 남긴다.
   const lock = s(r.visibility) === "members" ? "잠김(볼 수 있는 사람만 봄)" : "";
   const priv = s(f.root) === "personal" ? "개인 폴더" : "";
-  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`].filter(Boolean).join(" · ");
+  const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`, ...issueMeta(r, f)].filter(Boolean).join(" · ");
   const raw = s(r.body_md);
   const truncated = raw.length > DIGEST_PER_SOURCE;
   return {
@@ -1134,7 +1157,7 @@ export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o:
         + "머리줄에 «잠김(볼 수 있는 사람만 봄)» 이 붙은 자료는 그 자료를 볼 수 있는 사람만 보는 지식이 된다 — 그 내용을 잠기지 않은(더 넓게 보이는) 기존 지식에 합치지 말고 새 지식으로 따로 써라(합치려 하면 서버가 409 로 거절한다).",
         `④ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정한다. ${o.policySummary} `
         + "lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리된다(승인 전엔 검색·주입에 안 뜸). drop 이면 저장하지 않는다(skip).",
-        "⑤ 기준에 안 걸리면 skip 한다(저장도 연결도 하지 마 — 다음 배치에 다시 올라온다).",
+        "⑤ 기준에 안 걸리면 skip 한다(저장도 연결도 하지 마). skip 도 판정으로 기록돼 그 자료는 다음 배치에 다시 올라오지 않는다(원문이 고쳐지면 그때 다시 본다).",
       ].join("\n");
   }
 }

@@ -21,6 +21,7 @@ import { addEnterpriseCapabilities } from "../capabilities/index.js";
 import { oidcConfig } from "./auth/oidc.js"; // #1601 SSO — 외부 IdP 웹 로그인
 import { registerOidcRoutes } from "./auth/oidc-routes.js";
 import { oidcLinkStatus, unlinkOidcFromMember } from "./auth/oidc-login.js";
+import { oidcLogoutUrl } from "./auth/oidc-logout.js";
 import { registerAuditExportRoutes } from "./audit/export-routes.js"; // #1601 감사 증빙 반출
 
 export function registerEnterpriseModule(): void {
@@ -46,6 +47,7 @@ export function registerEnterpriseModule(): void {
       registerSsoRoutes: registerOidcRoutes,
       ssoLinkStatus: oidcLinkStatus,
       ssoUnlink: unlinkOidcFromMember,
+      ssoLogoutUrl: (session, postLogoutRedirectUri) => oidcLogoutUrl(session, postLogoutRedirectUri),
     },
     auditExport: { registerAuditExportRoutes },
   });

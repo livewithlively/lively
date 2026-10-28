@@ -460,6 +460,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     --  그래서 #2592 의 겹침 판정(셀프 노드)에서 **면제**된다 — 사고로 생긴 셀프 노드와 갈리는 유일한 근거가
     --  이 선언이다. 그러므로 **관리자만** 켠다(routes 의 admin 게이트). 기본은 false = 종전 그대로.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS session_host BOOLEAN NOT NULL DEFAULT false;
+    -- #5043 — 이 컴퓨터의 하네스 종료 규칙 값({enabled, done_minutes, asking_minutes, unknown_minutes}). NULL·빈 칸 = 워크스페이스 기본값
+    --  (session_reclaim_policy.node_stop_*)을 따른다. 판정은 sessions/node-stop-rule-policy.ts 한 곳이다.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS stop_rule JSONB;
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로
@@ -610,9 +613,17 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS cancel_reason TEXT`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS bare BOOLEAN NOT NULL DEFAULT false`);
+  //  #4829 fail_hash — 판의 시작 실패 보고(boot-failed)를 여는 비밀의 sha256. 부트 비밀과 같은 값이라 자리 줄 때 함께 달고, 부트가 지워도
+  //   남는다 — 첫 말의 응답을 못 받은 판(401)도 실패를 알릴 수 있게. 첫 박동 · 되돌리기 · 끝내기가 지운다(store.failBootAgentJob — 박동한 판은 못 끝낸다).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fail_hash TEXT`);
+  //  #4891 homeless — 사람 홈 없는 작업 컨테이너에서 도는 작업(앱 서버가 보낸 API 키 에이전트 작업). 그 작업 폴더는 앱 폴더뿐이고
+  //   브로커는 멤버 홈을 붙이지 않는다(agent-jobs/launch.ts). 접수 때 정해지고 바뀌지 않는다.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS homeless BOOLEAN NOT NULL DEFAULT false`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_requester_idx ON org_agent_job(requester, id DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_app_idx ON org_agent_job(app_id, id DESC) WHERE app_id IS NOT NULL`);
+  //  #4828 보존 정리가 보는 것 — 걷기를 마친 작업을 끝난 때 순으로(agent-jobs/store.pruneAgentJobs).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_ended_idx ON org_agent_job(ended_at) WHERE reaped = true`);
 }

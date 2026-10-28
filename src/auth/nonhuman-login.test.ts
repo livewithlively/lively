@@ -29,8 +29,8 @@ test("★★ 사람이 아닌 구성원으로 저장되면 로그인 자격(비�
 
 test("★★ 사람이 아닌 구성원의 웹 로그인 세션도 거둔다", () => {
   const body = fnBody(MEMBERS, "export async function upsertMember(");
-  assert.match(body, /kind !== "human"[\s\S]{0,800}UPDATE web_session SET revoked_at=now\(\) WHERE member_id=\$1 AND revoked_at IS NULL/,
-    "종류를 바꿔도 이미 열린 세션이 30일 동안 살아 있다");
+  assert.match(body, /kind !== "human"[\s\S]{0,1000}UPDATE web_session SET revoked_at=now\(\), sso_id_token_enc=NULL WHERE member_id=\$1 AND revoked_at IS NULL/,
+    "종류를 바꿔도 이미 열린 세션이 30일 동안 살아 있거나, 끝난 세션에 IdP 토큰이 남는다");
 });
 
 test("★ 로그인 판정이 사람만 찾는다 — 자격이 어떤 경로로 남아 있어도 system·agent 는 못 들어온다", () => {

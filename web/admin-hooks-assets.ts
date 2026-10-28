@@ -36,7 +36,9 @@ function customHookEditor(detail, data) {
     // origin/main(#968 계열)의 개선된 안내 문구 + #892 의 정책 카드 — 둘 다 유지.
     el('p', { class: 'admin-hint' }, ...uiText('구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다. 「제품 기본」 표시가 붙은 훅은 라이블리가 배포하는 것이라 본문은 볼 수만 있고, 조직은 켜고 끄는 것과 대상 구성원만 정합니다.')),
     relayPolicyCard(data, detail),
-    gracePolicyCard(data, detail));
+    gracePolicyCard(data, detail),
+    concurrencyPolicyCard(data, detail),
+    runtimePolicyCard(data, detail));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -117,12 +119,59 @@ function gracePolicyCard(data, detail) {
     el('div', { class: 'admin-actions' }, save));
 }
 
+// 같은 sort 훅 동시 실행(#1470) — 러너가 sort 가 같은 커스텀 훅을 한꺼번에 돌린다(기본 꺼짐 = 직접 만든 훅은 하나씩).
+//  켜면 프롬프트마다 기다리는 시간이 훅 소요의 합에서 묶음별 최댓값의 합으로 준다. 조직 훅은 기본 sort 0 이라 시드 훅과
+//  한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅의 결과에 기대는 훅은 켜기 전에 sort 를 나눠야 한다 — 그래서 조직이 켠다.
+//  #5034 — 제품 기본 훅끼리는 이 스위치와 무관하게 이미 겹쳐 돈다(제품이 보장). 이 스위치는 «직접 만든 훅도» 를 켠다.
+function concurrencyPolicyCard(data, detail) {
+  const rc = data.runtimeConfig;
+  if (!rc) return el('span', {}); // 비-admin 은 runtimeConfig 를 못 받는다 → 카드 숨김
+  const on = !!(rc.hooks && rc.hooks.concurrent === true);
+  const chk = el('input', { type: 'checkbox' }) as any;
+  chk.checked = on;
+  chk.addEventListener('change', async () => {
+    chk.disabled = true;
+    try {
+      // hooks 는 묶음 저장이라 다른 스위치 값을 함께 보낸다(서버가 키별로 병합하지만 지금 값을 그대로 둔다).
+      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks: { ...(rc.hooks || {}), concurrent: !!chk.checked } }) });
+      await loadAdmin(true); toast('저장됨 — 구성원 다음 실행부터'); rerenderPanel(detail, 'custom-hooks', state.admin.data);
+    } catch (e: any) { toast(e.message, true); chk.checked = on; chk.disabled = false; }
+  });
+  return el('div', { class: 'admin-subcard' },
+    el('h4', { text: '같은 순서(sort)의 훅 동시 실행 — 직접 만든 훅' }),
+    el('p', { class: 'admin-hint' }, ...uiText('「제품 기본」 훅끼리는 이 설정과 무관하게 sort 값이 같으면 한꺼번에 실행됩니다. 이 설정을 켜면 직접 만든 훅도 sort 값이 같은 훅과 한꺼번에 실행하고, sort 가 다른 묶음은 작은 값부터 차례로 실행합니다(한 묶음에서 동시에 도는 훅은 8개까지). 끄면 직접 만든 훅은 하나씩 실행합니다. 직접 만든 훅은 sort 가 0 이면 제품 기본 훅과 한 묶음이 되므로, 같은 파일을 쓰거나 다른 훅이 끝난 뒤에 돌아야 하는 훅은 켜기 전에 sort 를 더 큰 값으로 바꾸세요.')),
+    el('label', { class: 'admin-check' }, chk, ' 직접 만든 훅도 같은 sort 끼리 동시에 실행'));
+}
+
+// 훅 실행 방식(#5034) — 기본은 제품 기본(시드) 훅을 구성원 컴퓨터의 러너 안에서 스레드로 실행한다(훅마다 프로세스를 새로 띄우지
+//  않아 프롬프트·툴 호출마다 붙던 기동 비용이 준다). 직접 만든 훅은 본문 표식(lively-hook-runtime: worker)이 있을 때만 스레드다 —
+//  스레드는 네이티브 호출에 묶이면 끊을 수 없어 우리가 시험하는 코드만 기본으로 넣는다. 스레드에서 다르게 동작하는 훅(자식
+//  프로세스·fd 직접 쓰기 등)은 러너가 알아서 프로세스로 돌린다. 이 스위치는 조직의 되돌리기다 — 끄면 전부 종전처럼 훅마다 프로세스.
+function runtimePolicyCard(data, detail) {
+  const rc = data.runtimeConfig;
+  if (!rc) return el('span', {});
+  const worker = !(rc.hooks && rc.hooks.runtime === 'process');
+  const chk = el('input', { type: 'checkbox' }) as any;
+  chk.checked = worker;
+  chk.addEventListener('change', async () => {
+    chk.disabled = true;
+    try {
+      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hooks: { ...(rc.hooks || {}), runtime: chk.checked ? 'worker' : 'process' } }) });
+      await loadAdmin(true); toast('저장됨 — 구성원 다음 실행부터'); rerenderPanel(detail, 'custom-hooks', state.admin.data);
+    } catch (e: any) { toast(e.message, true); chk.checked = worker; chk.disabled = false; }
+  });
+  return el('div', { class: 'admin-subcard' },
+    el('h4', { text: '훅 실행 방식' }),
+    el('p', { class: 'admin-hint' }, ...uiText('켜 두면(기본) 「제품 기본」 훅을 구성원 컴퓨터의 러너 안에서 가볍게 실행합니다 — 훅마다 프로그램을 새로 띄우지 않아 프롬프트와 툴 호출마다 기다리는 시간과 CPU 가 줄어듭니다. 자식 프로세스를 쓰거나 표준 입출력을 직접 다루는 훅은 러너가 알아서 따로 띄웁니다. 직접 만든 훅은 기본으로 예전처럼 따로 띄우고, 본문에 «lively-hook-runtime: worker» 주석을 넣으면 가볍게 실행합니다(외부 명령·느린 디스크를 기다리는 훅에는 넣지 마세요 — 가볍게 실행 중에는 시간 초과로 끊을 수 없습니다). 이 방식에서 훅이 이상하게 동작하면 끄세요 — 모든 훅을 예전처럼 하나씩 따로 띄웁니다. 훅 하나만 따로 띄우려면 본문에 «lively-hook-runtime: process» 주석을 넣습니다.')),
+    el('label', { class: 'admin-check' }, chk, ' 훅을 러너 안에서 가볍게 실행(권장)'));
+}
+
 function hookForm(root, h, data, detail, isNew, locked) {
   const idIn = el('input', { type: 'text', value: h.id, placeholder: '훅 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
   const labelIn = el('input', { type: 'text', value: h.label || '', placeholder: '표시 이름(선택)' });
   // 구성원 화면([내 스킬·훅])에 보이는 쉬운 한 줄(#1085) — 스킬과 같은 규격.
   const hSumIn = el('input', { type: 'text', value: h.summary || '', placeholder: '예: 세션이 끝날 때 기록을 남겼는지 점검합니다' });
-  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok'].map((x) => el('option', { value: x, text: x })));
+  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok', 'cursor'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = h.harness || 'all';
   const eventSel = el('select', {}, ...['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification'].map((x) => el('option', { value: x, text: x })));
   eventSel.value = h.event || 'PostToolUse';
@@ -212,11 +261,13 @@ function harnessAssetEditor(detail, data) {
   const listCol = el('div', { class: 'admin-sublist' });
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
     onclick: () => { state.admin.assetSel = '__new__'; rerenderPanel(detail, 'harness-assets', data); } }));
+  const lockedIds = data.lockedAssetIds || [];   // #4970 — 라이블리가 배포하는 외부 앱 연결 스킬(코드가 SoT). 조직은 고치지도 끄지도 않는다.
   for (const a of assets) {
     listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
       onclick: () => { state.admin.assetSel = a.id; rerenderPanel(detail, 'harness-assets', data); } },
       el('div', { class: 'mini-title', text: a.id },
-        isDraft(a) ? el('span', { class: 'pill pill-warn', text: '제출 · ' + a.created_by })
+        lockedIds.includes(a.id) ? el('span', { class: 'pill', text: '제품 기본' })
+          : isDraft(a) ? el('span', { class: 'pill pill-warn', text: '제출 · ' + a.created_by })
           : (a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null)),
       el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
         + (a.target_members && a.target_members.length ? ' · 지정 ' + a.target_members.length + '명' : '')
@@ -226,9 +277,26 @@ function harnessAssetEditor(detail, data) {
   const editing = sel === '__new__'
     ? { id: '', kind: 'skill', label: '', harness: 'all', description: '', body: '', frontmatter: {}, target_members: null, paired_hook_id: '', enabled: true }
     : assets.find((a) => a.id === sel);
-  if (editing) assetForm(right, editing, data, detail, sel === '__new__');
+  if (editing && lockedIds.includes(editing.id)) lockedAssetView(right, editing);
+  else if (editing) assetForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint' }, ...uiText('스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 저장하면 구성원 세션 시작 때 디스크에 동기화되며, 스킬·커맨드는 진행 중인 세션에도 즉시 반영됩니다. 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.')));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('스킬 · 서브에이전트 · 커맨드'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+}
+
+// #4970 — 잠긴(제품 기본) 스킬: 숨기지 않고 **보여주되 못 고치게** 한다. 무엇이 배포되는지는 조직이 알아야 하고(감사),
+//  고칠 수 없다는 사실과 그 이유만 분명하면 된다. 훅(#1836)과 달리 켜고 끄기도 없다 — 연결 스킬은 서버 기능과 같다.
+function lockedAssetView(root, a) {
+  const bodyTa = el('textarea', { rows: '16', class: 'admin-ta', disabled: '' });
+  bodyTa.value = a.body || '';
+  root.replaceChildren(
+    el('div', { class: 'admin-subcard' },
+      el('h4', { text: '제품 소유 · 자동 갱신 · 항상 켜짐' }),
+      el('p', { class: 'admin-hint' }, ...uiText('라이블리가 배포하는 외부 앱 연결 스킬입니다. 연결법은 앱마다 바뀌기 때문에 본문은 제품 코드가 단일 출처이고, 업데이트마다 함께 바뀝니다. 그래서 여기서 고치거나 끄거나 지울 수 없고, 모든 구성원에게 늘 배포됩니다. 이 워크스페이스의 배포 방식(매니지드·셀프호스트)에 맞는 판이 내려갑니다. 조직만의 절차를 더하고 싶으면 [+ 추가]로 새 스킬을 만드세요.'))),
+    field('id', el('input', { type: 'text', value: a.id, disabled: '' })),
+    field('표시 이름', el('input', { type: 'text', value: a.label || '', disabled: '' })),
+    field('쉬운 한 줄 (구성원 화면에 보이는 말)', el('input', { type: 'text', value: a.summary || '', disabled: '' })),
+    field('설명(AI가 언제 쓸지 판단 — 상시 노출)', el('input', { type: 'text', value: a.description || '', disabled: '' })),
+    field('본문(마크다운)', bodyTa));
 }
 
 function assetForm(root, a, data, detail, isNew) {
@@ -236,7 +304,7 @@ function assetForm(root, a, data, detail, isNew) {
   const labelIn = el('input', { type: 'text', value: a.label || '', placeholder: '표시 이름(선택)' });
   const kindSel = el('select', {}, ...[['skill', '스킬'], ['subagent', '서브에이전트'], ['command', '슬래시커맨드']].map(([v, t]) => el('option', { value: v, text: t })));
   kindSel.value = a.kind || 'skill';
-  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok'].map((x) => el('option', { value: x, text: x })));
+  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok', 'cursor'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = a.harness || 'all';
   const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이것을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
   // 표시용 한 줄(#1085) — 위 '설명'은 AI 트리거 문장이라 길고 기술적이다. 사람 화면([내 스킬·훅])에는 이걸 보여준다.

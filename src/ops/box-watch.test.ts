@@ -90,6 +90,8 @@ const st = (usedPct: number, level: DiskState["level"]): DiskState =>
 
   const okPool: QueryablePool = { query: async () => ({ rows: [] }) };
   // 실제 디스크(tmpdir)를 쓰되 임계치를 조작해 상태를 만든다.
+  //  ⚠ 경고를 만들 땐 경고 임계를 0% 로 준다 — 실제 사용률에 기대면 «거의 빈 디스크» 에서 ok 가 된다
+  //   (gVisor 컨테이너인 중앙 박스의 /tmp 는 8.0E 중 수백 KB 라 0.0% 다, #5029).
   const deps = (warnPct: number, criticalPct: number, send: (a: BoxAlert) => Promise<boolean>) => ({
     pool: okPool,
     paths: () => [os.tmpdir()],
@@ -98,7 +100,7 @@ const st = (usedPct: number, level: DiskState["level"]): DiskState =>
   });
 
   // ① 경고 상태인데 채널이 거절 → '보냈다'로 기록되면 안 된다.
-  await tickOnce(deps(1, 100, rejectingSend)); // 실제 사용률은 1% 이상이므로 warn
+  await tickOnce(deps(0, 100, rejectingSend)); // 경고 임계 0% — 어떤 디스크든 warn
   assert.ok(sentTitles.some((t) => t === "REJECTED:warn"), "경고 전이는 send 를 호출해야 한다(거절은 채널의 몫)");
 
   // ② 이제 정상으로 전이 → 앞서 **보낸 적이 없으므로** 해제를 보내면 안 된다.
@@ -111,7 +113,7 @@ const st = (usedPct: number, level: DiskState["level"]): DiskState =>
   // ③ 대조군: send 가 **수락**(true)하면 해제도 보낸다.
   const accepted: string[] = [];
   const okSend = async (a: BoxAlert): Promise<boolean> => { accepted.push(a.severity); return true; };
-  await tickOnce(deps(1, 100, okSend));            // → warn 전송됨
+  await tickOnce(deps(0, 100, okSend));            // → warn 전송됨
   assert.deepEqual(accepted, ["warn"]);
   await tickOnce(deps(99, 100, okSend));           // → ok(해제) 전송돼야
   assert.deepEqual(accepted, ["warn", "ok"], "보낸 문제는 해제도 보내야 한다(해제가 안 오면 경보를 못 믿는다)");

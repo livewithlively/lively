@@ -163,7 +163,11 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   같은데 op 를 따로 둔 이유는 하나다: input.fork 를 모르는 옛 번들이 `create` 로 받으면 그 필드를 **조용히 무시하고 빈 새 대화**를
 //   연다 — 사람은 «복제했다» 는 답을 받았는데 아무것도 모르는 세션 앞에 앉는다. op 가 따로면 선언하지 않은 노드엔 아예 안 보낸다
 //   (게이트웨이가 «그 컴퓨터는 아직 복제를 모른다» 고 말한다 — session-fork.ts forkRefusal).
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript", "outboxStep", "sessionTokens", "forkSession"] as const;
+//  stopStep(#5043) = 원격 PC 하네스 종료 규칙의 **한 걸음** — 그 PC 의 tmux·프로세스·대화 파일로만 답할 수 있는 재료를 준다:
+//   화면(색 포함 캡처) · 키 하나(질문 탭 넘기기) · 하네스가 띄운 작업 판정 · 그 PC 터미널에서 직접 붙은 클라이언트 · 한도 자동 이어감 대기 ·
+//   안 본 결과. 판정·정책은 게이트웨이가 하고(sessions/node-stop-rule.ts) 노드는 실행만 한다(F7). 선언하지 않은 옛 번들 노드엔 보내지 않는다 —
+//   그 노드의 세션은 이 규칙에서 빠진다(종전 그대로 아무도 안 끈다).
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript", "outboxStep", "sessionTokens", "forkSession", "stopStep"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @lively-test exclusive — 훅의 보고 요청은 1.2초에 끊긴다 · 가짜 게이트웨이가 그 안에 받아야 한다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // work-flag 세션 라이프사이클 보고 유닛테스트 (#1059) — 훅을 실제 프로세스로 띄우고, 스텁 게이트웨이가 받은
 //  HTTP POST(부작용)로 단언한다. 로그 문자열이 아니라 **무엇이 어디로 나갔나**를 본다.
 //   - SessionEnd(reason=prompt_input_exit·logout) → POST …/exited (정상종료 표시 → 복원목록 '종료됨' 구분)
@@ -52,7 +53,7 @@ function runHook(input, env = {}) {
     const cp = spawn(process.execPath, [HOOK], {
       env: {
         ...process.env, ...sandboxEnv({ home: HOME, tmp: TMP }),
-        LIVELY_OFF: "", LIVELY_HOOKS_OFF: "",
+        LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "", LIVELY_READONLY: "", LIVELY_INCOGNITO: "",
         LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: GW,
         LIVELY_SESSION_ID: BOX,
         ...env,
@@ -244,6 +245,16 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
   fresh();
   const r4 = await runHook({ session_id: `ph${++n}`, hook_event_name: "Stop", prompt: "x" });
   lp(r4).length === 0 ? ok("E13b 다른 이벤트에선 보내지 않는다(UserPromptSubmit 만)") : bad("E13b other-event", `실제=${JSON.stringify(lp(r4))}`);
+  //  #5048 — 읽기전용·인코그니토(신·구 env)는 친 말을 보내지 않는다(서버에 저장되는 줄). 단계 보고(/active)는 내용이 없어 그대로 간다.
+  for (const env of [{ LIVELY_MODE: "readonly" }, { LIVELY_MODE: "incognito" }, { LIVELY_MODE: " ReadOnly " }, { LIVELY_READONLY: "1" }, { LIVELY_INCOGNITO: "1" }]) {
+    fresh();
+    const r = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt: "기밀 지시" }, env);
+    lp(r).length === 0 ? ok(`E13b ${JSON.stringify(env)} → /last-prompt 안 보냄`) : bad("E13b readonly", `${JSON.stringify(env)} 실제=${JSON.stringify(lp(r))}`);
+    states(r).length === 1 ? ok(`E13b ${JSON.stringify(env)} → /active 는 그대로`) : bad("E13b readonly active", `${JSON.stringify(env)} 실제=${JSON.stringify(states(r))}`);
+  }
+  fresh();
+  const r5 = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt: "평소 지시" }, { LIVELY_MODE: "normal" });
+  lp(r5)[0] === "평소 지시" ? ok("E13b 대조 — LIVELY_MODE=normal 은 종전대로 보낸다") : bad("E13b normal", `실제=${JSON.stringify(lp(r5))}`);
 }
 
 // ── E14: 턴 종료(Stop) → idle. **전이는 스로틀에 막히면 안 된다** ─────────────────────

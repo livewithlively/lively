@@ -45,8 +45,8 @@ export const wctx = (u: LivelyUser, ctx?: CapabilityCtx): WriteCtx =>
 // 훅·자산의 타깃 하네스. ⚠ **세 곳이 한 목록을 공유한다** — 여기 · DB CHECK 제약(org/schema/mcp-tools.ts 의
 //  org_hook_harness_chk · org_harness_asset_harness_chk) · kit 의 harness-registry.mjs(HARNESS_IDS).
 //  하나만 늘리면 조용히 어긋난다: enum 만 늘리면 DB 가 400 대신 23514 로 거절하고, DB 만 늘리면 API 가 막는다.
-//  (`all` 은 하네스가 아니라 '전 하네스' 와일드카드라 kit 목록엔 없다.)
-export const HOOK_HARNESSES = new Set(["claude", "codex", "openclaw", "opencode", "antigravity", "grok", "all"]);
+//  (`all` 은 하네스가 아니라 '전 하네스' 와일드카드라 kit 목록엔 없다.) #4927 — cursor(Cursor IDE·CLI) 추가.
+export const HOOK_HARNESSES = new Set(["claude", "codex", "openclaw", "opencode", "antigravity", "grok", "cursor", "all"]);
 // 에러 문구는 목록에서 파생한다 — 종전엔 세 파일에 "claude|codex|openclaw|all" 이 하드코딩돼 있어,
 //  값을 늘려도 사용자는 옛 목록을 안내받았다(무엇이 허용되는지 화면이 거짓말하는 상태).
 export const HOOK_HARNESSES_MSG = `harness 는 ${[...HOOK_HARNESSES].join("|")}`;

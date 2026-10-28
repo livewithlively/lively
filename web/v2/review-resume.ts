@@ -4,7 +4,7 @@
 //  막대(app-review.ts)는 앱빌더 창이 세운다 — 앱 화면(#/i/…)으로 새로고침하면 앱빌더가 없어 막대도 없다. 그래서 어느 화면을 보던 중인지
 //   이 브라우저에 적어 두고(앱빌더가 열 때 적고 · 앱빌더로 돌아오거나 다른 데로 가면 지운다), 새로 뜰 때 그 주소면 앱빌더로 돌려보내
 //   앱빌더가 같은 화면을 다시 연다. 오래된 표시(12시간)는 믿지 않는다. 의존 없는 작은 모듈 — 셸(main.ts)과 앱빌더가 같이 쓴다.
-import { builderRoute } from '../lib/builder-flow.js';
+import { builderSeeRoute } from '../lib/builder-flow.js';
 
 const KEY = 'lively_v2_review_open';
 const MAX_AGE = 12 * 3600 * 1000;
@@ -21,9 +21,10 @@ export function readReviewOpen(): ReviewOpenMark | null {
     return m as ReviewOpenMark;
   } catch (_) { return null; }
 }
-/** 새로 뜬 이 주소가 보던 앱 화면이면 — 돌아갈 앱빌더 주소(거기서 같은 화면을 다시 연다). 아니면 null. */
+/** 새로 뜬 이 주소가 보던 앱 화면이면 — 돌아갈 앱빌더 주소(거기서 같은 화면을 다시 연다). 아니면 null.
+ *  «실제 화면을 보는 중» 주소로 보낸다(lib/builder-flow builderSeeRoute) — 다시 여는 몇 초 동안에도 앱빌더 사이드바가 서지 않게(#4632 원준 2026-10-19). */
 export function reviewResumeTarget(hash: string): string | null {
   const m = readReviewOpen();
   if (!m || m.view !== 'app' || !hash || hash !== m.route) return null;
-  return builderRoute('resume', m.sid);
+  return builderSeeRoute(m.sid, 'app');
 }

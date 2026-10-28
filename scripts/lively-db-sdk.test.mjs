@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { pgTable, bigint, numeric, timestamp, text, integer } from "drizzle-orm/pg-core";
 import { eq, sql } from "drizzle-orm";
 import {
-  createLivelyDb, livelyIdentity, withIdentity, livelyErrorOf, encodeParam, decodeRows, decodeObjects, parsePgArray, generateDrizzleSchema, LivelyDbError,
+  createLivelyDb, livelyIdentity, livelyMember, livelyJobs, withIdentity, livelyErrorOf, encodeParam, decodeRows, decodeObjects, parsePgArray, generateDrizzleSchema, LivelyDbError,
 } from "../public/sdk/lively-db.mjs";
 
 /** 게이트웨이 흉내 — 부른 것(경로·헤더·본문)을 남기고 정해 둔 응답을 돌려준다. */
@@ -203,4 +203,67 @@ test("S10 generateDrizzleSchema — 매니페스트의 타입·제약·외래키
     assert.match(src, /\.references\(\(\) => contacts\.id, \{ onDelete: "cascade" \}\)/);
     assert.match(src, /\.default\(sql`CURRENT_DATE`\)/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("S11 livelyMember — 검사 층이 퍼센트 인코딩해 붙인 사람 머리글을 풀어 준다(한글 id · 이름) · 판 · 없으면 null · 깨진 인코딩은 그대로", () => {
+  const h = (o) => ({ headers: o });
+  assert.deepEqual(livelyMember(h({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" })),
+    { id: "윤상민", name: "윤 상민", variant: "draft", job: null });
+  assert.deepEqual(livelyMember(h({ "x-lively-member": "sangmin-yoon" })), { id: "sangmin-yoon", name: "", variant: "pub", job: null }, "ASCII id · 이름 없음 · 판 기본 pub");
+  assert.deepEqual(livelyMember(h({ "x-lively-member": ["a%20b", "x"], "x-lively-variant": "weird" })), { id: "a b", name: "", variant: "pub", job: null }, "배열은 첫 값 · 모르는 판은 pub");
+  assert.equal(livelyMember(h({ "x-lively-member": "%E0%A4%A" })).id, "%E0%A4%A", "깨진 인코딩은 던지지 않고 그대로");
+  assert.equal(livelyMember(h({})), null);
+  assert.equal(livelyMember(h({ "x-lively-member": "" })), null);
+  assert.equal(livelyMember(undefined), null);
+});
+
+test("S12 livelyMember — Fetch API 의 Headers(Next 앱 라우터 · Hono)도 같은 결과", () => {
+  const headers = new Headers({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" });
+  assert.deepEqual(livelyMember({ headers }), { id: "윤상민", name: "윤 상민", variant: "draft", job: null });
+  assert.equal(livelyMember({ headers: new Headers() }), null);
+  assert.deepEqual(livelyMember(new Request("https://a.example/", { headers: { "x-lively-member": "m-1" } })), { id: "m-1", name: "", variant: "pub", job: null }, "Request 그대로");
+});
+
+test("S13 livelyMember — 백그라운드 작업이면 job(작업 번호 · #4486) · 숫자가 아니거나 0 이하면 null", () => {
+  const h = (o) => ({ headers: o });
+  assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": "42" })).job, 42);
+  assert.equal(livelyMember({ headers: new Headers({ "x-lively-member": "m", "x-lively-job": "7" }) }).job, 7, "Fetch Headers");
+  for (const bad of ["0", "-3", "1.5", "abc", "", "99999999999999999999"]) assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": bad })).job, null, `x-lively-job ${bad}`);
+});
+
+test("S14 livelyJobs — 앱 서버 토큰 + 들어온 신원으로 /api/ui/app-jobs 를 부른다 · 시작 · 보기(wait) · 목록 · 취소 · 기다리기 · 거절은 LivelyDbError", async () => {
+  const calls = [];
+  const replies = [];
+  const fetch = async (url, init) => {
+    calls.push({ url, method: init.method, headers: init.headers, body: init.body ? JSON.parse(init.body) : undefined });
+    const r = replies.shift() ?? { status: 200, body: { id: 1, status: "queued" } };
+    return new Response(JSON.stringify(r.body), { status: r.status });
+  };
+  assert.throws(() => livelyJobs({ token: "t", fetch }), /LIVELY_API_URL/);
+  assert.throws(() => livelyJobs({ url: "https://w.example", fetch }), /LIVELY_APP_TOKEN/);
+  const jobs = livelyJobs({ url: "https://w.example/", token: "tok", fetch, identity: () => "v1.k.p.s" });
+  await jobs.start("/api/jobs/x", { file: "a.mp3" }, { label: "전사", wait: 5 });
+  assert.deepEqual(calls[0], { url: "https://w.example/api/ui/app-jobs", method: "POST",
+    headers: { authorization: "Bearer tok", "x-lively-identity": "v1.k.p.s", "content-type": "application/json" },
+    body: { route: "/api/jobs/x", body: { file: "a.mp3" }, label: "전사", wait: 5 } });
+  await jobs.start("/api/jobs/y");
+  assert.deepEqual(calls[1].body, { route: "/api/jobs/y", body: {} }, "본문 생략 = {}");
+  await jobs.get(3, { wait: 25 });
+  assert.equal(calls[2].url, "https://w.example/api/ui/app-jobs/3?wait=25");
+  assert.equal(calls[2].method, "GET");
+  assert.equal(calls[2].body, undefined);
+  replies.push({ status: 200, body: { jobs: [{ id: 1 }], count: 1 } });
+  assert.deepEqual(await jobs.list({ status: "done" }), [{ id: 1 }]);
+  assert.equal(calls[3].url, "https://w.example/api/ui/app-jobs?status=done");
+  await jobs.cancel(9);
+  assert.equal(calls[4].url, "https://w.example/api/ui/app-jobs/9/cancel");
+  replies.push({ status: 200, body: { id: 9, status: "running" } }, { status: 200, body: { id: 9, status: "done" } });
+  assert.equal((await jobs.wait(9)).status, "done", "끝날 때까지 다시 묻는다");
+  assert.equal(calls.filter((c) => c.url.endsWith("/api/ui/app-jobs/9?wait=25")).length, 2);
+  replies.push({ status: 429, body: { error: "하루 상한" } });
+  await assert.rejects(jobs.start("/x"), (e) => e instanceof LivelyDbError && e.status === 429 && /하루 상한/.test(e.message));
+  //  미들웨어가 실은 신원(livelyIdentity)을 쓴다 — identity 옵션이 없을 때.
+  const j2 = livelyJobs({ url: "https://w.example", token: "tok", fetch });
+  await new Promise((ok) => livelyIdentity()({ headers: { "x-lively-identity": "lvjr1.5.zzzz" } }, {}, () => { j2.get(5).then(ok); }));
+  assert.equal(calls.at(-1).headers["x-lively-identity"], "lvjr1.5.zzzz", "작업 안에서 시작한 작업 · 조회는 돌기 신원을 싣는다");
 });

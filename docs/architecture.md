@@ -2,7 +2,7 @@
 
 *[한국어](architecture.ko.md)*
 
-Lively's **unified context store** — a single in-house **MCP gateway** that every local AI tool (Claude Code · Codex · OpenCode · Antigravity CLI · Grok Build …) connects to.
+Lively's **unified context store** — a single in-house **MCP gateway** that every local AI tool (Claude Code · Codex · OpenCode · Antigravity CLI · Grok Build · Cursor …) connects to.
 It exposes organizational knowledge (WIKI) · taxonomy (category) · projects/tasks · domain context · DB (read-only)
 in one place, governed by **per-user authentication + scopes**. The gateway also runs the web UI · web terminal · collectors · scheduler.
 
@@ -31,6 +31,7 @@ Local CLIs ──(Streamable HTTP /mcp, Bearer)──▶ this gateway ──▶ 
 | Projects/tasks | `src/capabilities/projects-v6.ts` · `src/capabilities/task-*.ts` · `src/capabilities/activity.ts` | `project_*_v6`/`task_*_v6`/`activity_*` |
 | Domain context | `src/capabilities/context.ts` | `context_overview`/`debt_list`/`repo_*`/`domainmap_proxy` — domainmap reads (direct reader functions) + repo management. (`all_domains` · `domain_list`/`domain_get` were **removed** — replaced by v6 `category_*`) |
 | domainmap engine | `src/domainmap/` | Absorbed engine module — `db.ts` (re-export shim for the items DB pool — the real one is `src/db/client.ts`) · `core/` (reconcile · changelog · mappings · debts · domain-debt · refresh · refresh-fs · repos · scan-fs · schema) · `cli.ts` (host CLI) · `webhook.ts` (HMAC push-refresh) · `git-pull.ts` (scheduler polling refresh) (unified DB — `ITEMS_DATABASE_URL`) |
+| **AI browser (#4993)** | `src/browser/relay.ts` · `src/browser/routes.ts` · `src/capabilities/browser.ts` · `web/v2/browser-host.ts` · `web/v2/browser-host-kit.ts` · `web/v2/browser-tabs.ts` · `web/v2/remote-web.ts` | `browser_*` tools (status · tabs · navigate · screenshot · act · read · fill · upload · text · eval · console · handoff) drive a tab in the member's **desktop app** (the session's side-pane [Web]) — the gateway relays each command over SSE to that member's app screen (`GET /api/ui/browser/host/stream`, Bearer only) and takes the result back by POST; relay key = tenant slug + member, scope `memory`, app principals refused. Typed text · eval code · URLs are kept out of `mcp_call_log` (`SECRET_ARG_FIELDS` · `ORIGIN_ONLY_ARG_FIELDS`). Single-process in-memory relay (same premise as the notify bus) |
 | DB | `src/tools/db.ts` | `db_sources` / `db_schema` / `db_query` — multiple data sources (`source` argument · registered in `org_db_source`), firewall · RLS · timeout · audit |
 | DB safeguards | `src/db/firewall.ts` · `src/db/sources.ts` | Single SELECT only + blocks dangerous functions (`set_config`/`current_setting`, etc.) + denies sensitive tables (`auth_token` · `org_*`) · source registry |
 | RLS example | `sql/rls-example.sql` | Read-only role + row policies |

@@ -64,6 +64,14 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
     ["GET", "/ai/runs", undefined, "app_ai_runs", {}],
     ["GET", "/ai/runs/42", undefined, "app_ai_run_get", { id: 42 }],
     ["POST", "/ai/runs/42/cancel", {}, "app_ai_run_cancel", { id: 42 }],
+    //  #4486 백그라운드 작업 — 시작(그 칸만 · 본문의 app_id 는 버림) · 목록(쿼리로 좁힘) · 보기(wait 는 쿼리) · 취소.
+    ["POST", "/jobs", { route: "/api/jobs/t", body: { f: 1 }, label: "전사", timeout_s: 300, type: "function", wait: 3, app_id: "남의앱", bogus: 1 }, "app_job_start",
+      { route: "/api/jobs/t", body: { f: 1 }, label: "전사", timeout_s: 300, type: "function", wait: 3 }],
+    ["GET", "/jobs?status=running&limit=3&app_id=x", undefined, "app_jobs", { status: "running", limit: 3 }],
+    ["GET", "/jobs", undefined, "app_jobs", {}],
+    ["GET", "/jobs/77?wait=20", undefined, "app_job_get", { id: 77, wait: 20 }],
+    ["GET", "/jobs/77", undefined, "app_job_get", { id: 77 }],
+    ["POST", "/jobs/77/cancel", {}, "app_job_cancel", { id: 77 }],
   ];
   for (const [m, p, b, name, args] of cases) {
     const r = await run(d, m, p, b);
@@ -83,13 +91,15 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
 {
   const { d, calls } = deps();
   for (const [m, p] of [["GET", "/nope"], ["POST", "/store/notes/drop"], ["POST", "/store/a-b/query"], ["POST", `/store/${"a".repeat(64)}/query`],
-    ["POST", "/tools/Whoami"], ["POST", "/tools/a.b"], ["POST", "/tools/"], ["GET", "/"], ["POST", "/me"], ["GET", "/ai/runs/0"], ["GET", "/ai/runs/abc"], ["GET", "/ai"]] as const) {
+    ["POST", "/tools/Whoami"], ["POST", "/tools/a.b"], ["POST", "/tools/"], ["GET", "/"], ["POST", "/me"], ["GET", "/ai/runs/0"], ["GET", "/ai/runs/abc"], ["GET", "/ai"],
+    ["GET", "/jobs/0"], ["GET", "/jobs/abc"], ["GET", "/jobs/1/2"], ["POST", "/job"]] as const) {
     const r = await run(d, m, p, {});
     assert.equal(r.status, 404, `${m} ${p}`);
     assert.equal((r.json as { code?: string }).code, "not_found");
   }
   for (const [m, p] of [["GET", "/store/sql"], ["POST", "/store/tables"], ["GET", "/tools/whoami"], ["DELETE", "/prefs"], ["PUT", "/store/notes/query"], ["GET", "/store/sql/batch"],
-    ["PUT", "/ai/runs"], ["POST", "/ai/targets"], ["POST", "/ai/runs/42"], ["GET", "/ai/runs/42/cancel"]] as const) {
+    ["PUT", "/ai/runs"], ["POST", "/ai/targets"], ["POST", "/ai/runs/42"], ["GET", "/ai/runs/42/cancel"],
+    ["PUT", "/jobs"], ["DELETE", "/jobs/1"], ["POST", "/jobs/1"], ["GET", "/jobs/1/cancel"]] as const) {
     assert.equal((await run(d, m, p, {})).status, 405, `${m} ${p}`);
   }
   for (const p of ["//evil", "/a b", "/a\\b", `/${"a".repeat(512)}`, "store/tables", 5, null, undefined]) {
@@ -147,6 +157,15 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
   assert.deepEqual(apiErrorReply(new HttpError(403, "동의 없음", { body: { code: "consent_required" } }), () => "https://x/ui/#/app-grant/a"),
     { status: 403, json: { code: "consent_required", error: "동의 없음", consent_url: "https://x/ui/#/app-grant/a" } });
   ok("C15~C19 동의 자리(공개 · 초안 주소) · 주소 없으면 생략 · 동의 실패에만 · HttpError 그대로 · 스코프 403 · 내부 오류 500 감춤");
+}
+
+// ── C19b 도구가 던진 도메인 글(store 의 plain Error)은 REST(wrap)와 같은 4xx — «없음» 404 · 검증 400. 그 밖은 글을 감춘 500 ──
+{
+  assert.deepEqual(apiErrorReply(new Error("지식 'k' 없음"), () => null), { status: 404, json: { error: "지식 'k' 없음" } }, "C19b «없음» 404 — 안 보이는 것과 없는 것이 같은 답");
+  assert.deepEqual(apiErrorReply(new Error("name 은 필수입니다"), () => null), { status: 400, json: { error: "name 은 필수입니다" } }, "C19b 검증 400");
+  const r = apiErrorReply(new Error("domainmap fetch failed http://10.0.0.5:7000"), () => null);
+  assert.ok(r.status === 500 && !JSON.stringify(r.json).includes("10.0.0.5"), "C19b 내부 서비스 연결 실패는 글을 감춘 500 그대로");
+  ok("C19b 도메인 글 — «없음» 404 · 검증 400 · 내부 연결 실패는 감춘 500");
 }
 
 // ── C20 도구에 넘기는 주체 — 그 사람 · 주소의 판 · 유효 스코프만 ──

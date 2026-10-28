@@ -38,6 +38,8 @@ const TOPOLOGY_ENV = [
   "LIVELY_TMUX_ROUTE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LVLY_TMUX_SOCK_TEMPLATE",
   //  #4067 — 세션 이미지의 하네스 목록(«설치돼 있나» 를 세션 컨테이너 없이 답하는 근거).
   "LIVELY_SESSION_HARNESSES",
+  //  #4931 — 노드 tmux 세대 스위치(새 세션을 고정판 전용 소켓에 띄우나 · 종전 기본 소켓으로 되돌리나).
+  "LIVELY_MUX_PIN",
 ];
 
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.

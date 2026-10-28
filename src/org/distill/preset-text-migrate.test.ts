@@ -4,8 +4,9 @@ import { PRESET_TEXT_MIGRATIONS } from "./preset-text-migrate.js";
 import { LOCAL_CRITERIA_MD, LOCAL_FORMAT_MD } from "./local-preset.js";
 import { GITHUB_CRITERIA_MD, GITHUB_FORMAT_MD } from "./github-preset.js";
 import { FIGMA_CRITERIA_MD, FIGMA_FORMAT_MD } from "./figma-preset.js";
+import { ZOTERO_CRITERIA_MD, ZOTERO_FORMAT_MD } from "./zotero-preset.js";
 
-const PRESETS = { LOCAL_CRITERIA_MD, LOCAL_FORMAT_MD, GITHUB_CRITERIA_MD, GITHUB_FORMAT_MD, FIGMA_CRITERIA_MD, FIGMA_FORMAT_MD };
+const PRESETS = { LOCAL_CRITERIA_MD, LOCAL_FORMAT_MD, GITHUB_CRITERIA_MD, GITHUB_FORMAT_MD, FIGMA_CRITERIA_MD, FIGMA_FORMAT_MD, ZOTERO_CRITERIA_MD, ZOTERO_FORMAT_MD };
 let n = 0;
 const t = (name: string, fn: () => void): void => { fn(); n++; console.log(`ok  ${name}`); };
 

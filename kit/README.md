@@ -25,13 +25,13 @@ kit/
 ├─ generator/build-context.mjs   # Core: org-content input → assemble the published artifact + --init/--check
 ├─ hooks/                         # Shared hooks (harness-agnostic) — 5 wired hooks: session-preload · sync-harness-assets · work-flag · stop-writeback-gate
 │                                 #   · run-custom (custom hook runner: fetches and runs org_hook from the gateway every session, never stored on disk, kill-switch)
-│                                 #   + self-update (background self-updater) · usage-report (statusLine) · harness adapters (opencode-plugin.js · antigravity-adapter · grok-adapter)
+│                                 #   + self-update (background self-updater) · usage-report (statusLine) · harness adapters (opencode-plugin.js · antigravity-adapter · grok-adapter · cursor-adapter)
 │                                 #   + shared modules (harness-registry · host-effects-port) — the canonical install list is setup/kit-manifest.mjs
 │                                 #   + settings-hooks.json (PROJECT-DIR template) · test-hooks.sh · examples/ (example org custom hooks)
 ├─ adapters/
 │  ├─ claude/                     # Per-harness uninstaller (uninstall.mjs) + managed example · wiring doc
 │  ├─ codex/                      # Same (the only canonical installer is setup/user-install.mjs — adapter installers were deleted in #1475)
-│  └─ opencode/ · antigravity/ · grok/   # Per-harness uninstallers (uninstall.mjs)
+│  └─ opencode/ · antigravity/ · grok/ · cursor/   # Per-harness uninstallers (uninstall.mjs)
 ├─ template-org/                  # One-time INIT source for new organization content (generic skeleton, nothing Lively-specific)
 ├─ setup/                         # Install engine (user-install.mjs), uninstallers + guides + vendored register-clients.sh
 ├─ aws/                           # AWS credential_process helper (issues short-lived AWS credentials from the gateway)
@@ -62,7 +62,7 @@ node generator/build-context.mjs --org ../<org>-org --install-hooks <dir> [<dir>
 |---|---|
 | `--org <dir>` | Organization content directory (required for publishing/installing hooks). Checks that `org/` exists. |
 | `--publish <dir>` | Target for the published artifact. Idempotent (preserves .git and members/local.md, then reassembles). |
-| `--harness claude\|codex\|opencode\|antigravity\|grok` | Harness settings to emit into the artifact (default claude). Multiple allowed, e.g. `claude,codex`. Harnesses other than claude have no artifact-specific files and are wired by the bundled user-install.mjs, so publish them together with claude. |
+| `--harness claude\|codex\|opencode\|antigravity\|grok\|cursor` | Harness settings to emit into the artifact (default claude). Multiple allowed, e.g. `claude,codex`. Harnesses other than claude have no artifact-specific files and are wired by the bundled user-install.mjs, so publish them together with claude. |
 | `--org-name <name>` | Override the header display name (if omitted: the `org-name:` frontmatter in `org/org-defaults.md` → the first H1 → the directory name). |
 | `--emit-root` | Also generate CLAUDE.md/AGENTS.md at the `--org` root (optional, dogfooding inside the source repo). |
 | `--install-hooks <dir>…` | Non-destructively merge only the PROJECT-DIR hooks into each directory. |
@@ -77,14 +77,15 @@ Override the canonical location of register-clients.sh with the `GATEWAY_DIR` en
 
 ## Delivery = user-level hooks (design doc D2/D3)
 
-The installer (`setup/user-install.mjs`, usually called by `lively install`) installs at the **user level** (`~/.lively/` + per-harness settings: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode, Antigravity, and Grok settings) → members get context + reflexes whichever folder they start in. The working directory doesn't matter.
+The installer (`setup/user-install.mjs`, usually called by `lively install`) installs at the **user level** (`~/.lively/` + per-harness settings: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode, Antigravity, Grok, and Cursor settings) → members get context + reflexes whichever folder they start in. The working directory doesn't matter.
 
 - **Context**: `session-preload` (SessionStart) fetches organization context (`/api/ui/org/preview`) and live status from the gateway and injects them. The fetched context is cached in `~/.lively/context.md` and used as a fallback in sessions that can't reach the gateway (seeded once at install).
-- **Organization assets**: `sync-harness-assets` (SessionStart) downloads the skills, subagents, and commands registered on the gateway into each harness's location (members' own assets are never touched).
+- **Organization assets**: `sync-harness-assets` (SessionStart) downloads the skills, subagents, and commands registered on the gateway into each harness's location (members' own assets are never touched). `lively install`·`setup`·`update` also run it once per harness right after wiring, so harnesses that read their skill list only at conversation start (codex, cursor, …) see the skills from the very first conversation (#5013).
 - **Reflexes**: work-flag (work/record signals + session phase reporting — PostToolUse, UserPromptSubmit, Notification, Stop, etc.) + stop-writeback-gate (Stop, a one-time write-back gate) + **run-custom** (runner — fetches and runs the custom hooks `org_hook` defined in the web admin from the gateway every session; enabled=false or removal takes effect from the next session = kill-switch).
 - **Incognito**: `LIVELY_OFF=1` (alias of the old `LIVELY_HOOKS_OFF`) → every hook (including the runner, asset sync, and self-update) is a no-op (clean room).
 - **Self-gating**: the write-back gate works only in 'lively work' sessions — when cwd is under a `~/.lively/work-roots` prefix OR the session has used a lively MCP tool.
+- **Record scope (#5016)**: per computer, «work folders only (default) | anywhere». With «work folders only», an AI session started outside a work folder behaves like incognito — hooks exit without touching the gateway (no context injection, no records, no transcript upload, no first-prompt project; the session-start hook alone fetches this computer's setting, carrying no session id, folder or conversation) and the MCP proxies (`lively mcp` · `lively mcp-local`) expose zero tools. Work folders = sessions Lively spawned (web · node · `lively run`) · folders with a `.lively/project.json` above them · registered folders (`lively work-root add` · `/lively-connect` · the web «per-computer connection» screen; `~/.lively/work-roots` lines and env `LIVELY_WORK_ROOTS` count too). The decision lives in `hooks/record-scope.mjs` alone; the server holds the per-computer setting and the session-start hook refreshes the local copy `~/.lively/record-scope.json` every session (no copy yet = previous behavior). An out-of-scope session shows one line (`systemMessage`) pointing to `/lively-connect`; registering there connects that session from the next prompt.
 
 ## Multi-harness (design doc D5)
 
-One shared set of hook scripts; only the settings files are emitted differently per harness. Supports Claude, Codex, OpenCode, Antigravity, and Grok Build (#1475, #1519, #1689, #1701) — per-harness differences are collected in one table, `hooks/harness-registry.mjs`. openclaw/pi are TODO.
+One shared set of hook scripts; only the settings files are emitted differently per harness. Supports Claude, Codex, OpenCode, Antigravity, Grok Build, and Cursor (#1475, #1519, #1689, #1701, #4927) — per-harness differences are collected in one table, `hooks/harness-registry.mjs`. openclaw/pi are TODO.

@@ -82,10 +82,38 @@
 .pn-dock[data-home="float"] .pn-dock-handle i { width: 4px; height: 16px; transition: background .15s, height .15s cubic-bezier(.2, .8, .3, 1); }
 .pn-dock[data-home="float"] .pn-dock-handle:hover i, .pn-dock[data-home="float"].moving .pn-dock-handle i { width: 4px; height: 22px; }
 
-/* ── 구분선 — 고정한 앱 | 떠 있는 앱 | [더보기]. 손잡이이기도 하다(잡고 끌면 독이 옮겨 간다). ── */
-.pn-dock-sep { flex: none; align-self: stretch; background: color-mix(in srgb, var(--ink) 16%, transparent); }
-.pn-dock[data-home="float"] .pn-dock-sep { width: 1px; margin: 5px 2px 9px; }
-.pn-dock[data-home="seam"] .pn-dock-sep { height: 1px; margin: 2px 5px; }
+/* ── 구분선 — 고정한 앱 | 떠 있는 앱 | [더보기]. 잡고 끌면 **크기**가 바뀐다(macOS 독의 구분선 · 원준 10-20 «사이즈 조절»).
+   선은 1px 이고 상자는 5px(종전 선 1 + 양옆 여백 2 — 알약 길이 셈 SEP 9 그대로), 잡는 자리는 ::before 로 간격(4)까지 넓힌다.
+   곁칸 아래는 위아래로(↕), 이음매는 경계선에서 멀어지는 쪽으로(↔) 끈다. 올리면 선이 진해진다. ── */
+.pn-dock-sep { position: relative; flex: none; align-self: stretch; --sl: color-mix(in srgb, var(--ink) 16%, transparent); }
+.pn-dock-sep::before { content: ''; position: absolute; inset: 0; }
+.pn-dock-sep:hover, .pn-dock.sizing .pn-dock-sep { --sl: color-mix(in srgb, var(--ink) 42%, transparent); }
+.pn-dock[data-home="float"] .pn-dock-sep { width: 5px; margin: 5px 0 9px; cursor: ns-resize;
+  background: linear-gradient(to right, transparent 2px, var(--sl) 2px 3px, transparent 3px); }
+.pn-dock[data-home="float"] .pn-dock-sep::before { inset: -5px -4px -9px; }
+.pn-dock[data-home="seam"] .pn-dock-sep { height: 5px; margin: 0 5px; cursor: ew-resize;
+  background: linear-gradient(to bottom, transparent 2px, var(--sl) 2px 3px, transparent 3px); }
+.pn-dock[data-home="seam"] .pn-dock-sep::before { inset: -4px -5px; }
+.pn-dock.narrow .pn-dock-sep { cursor: default; }
+html.pn-dock-sizing, html.pn-dock-sizing * { user-select: none; }
+html.pn-dock-sizing iframe, html.pn-dock-sizing webview { pointer-events: none !important; }
+html.pn-dock-sizing:has(.pn-dock.sizing[data-home="float"]) * { cursor: ns-resize !important; }
+html.pn-dock-sizing:has(.pn-dock.sizing[data-home="seam"]) * { cursor: ew-resize !important; }
+
+/* ── 접힌 독(최소화 — 원준 10-20 «핸들 부분 더블클릭해서 최소화») — 손잡이 하나만 남은 작은 유리 알약.
+   이음매는 경계선 위의 세로 알약(14×44), 곁칸 아래는 바닥의 가로 알약(44×14). 막대는 알약 길이 방향으로 눕는다.
+   누르면 펼치고 끌면 옮긴다(손 모양은 잡는 손). 수치는 lib/pane-dock.ts DOCK_MIN 과 짝. ── */
+.pn-dock.min .pn-dock-shelf { padding: 0; gap: 0; align-items: stretch; justify-content: center; }
+.pn-dock.min[data-home="seam"] .pn-dock-shelf { width: 14px; height: 44px; }
+.pn-dock.min[data-home="float"] .pn-dock-shelf { width: 44px; height: 14px; padding: 0; border-radius: 999px; }
+.pn-dock.min .pn-dock-handle { flex: 1; width: auto; height: auto; padding: 0; margin: 0; border: 0; background: none; color: inherit; font: inherit;
+  border-radius: 999px; cursor: grab; }
+.pn-dock.min .pn-dock-handle:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.pn-dock.min[data-home="seam"] .pn-dock-handle i { width: 4px; height: 20px; }
+.pn-dock.min[data-home="seam"] .pn-dock-handle:hover i { width: 4px; height: 26px; }
+.pn-dock.min[data-home="float"] .pn-dock-handle i { width: 20px; height: 4px; }
+.pn-dock.min[data-home="float"] .pn-dock-handle:hover i { width: 26px; height: 4px; }
+.pn-dock.min.moving .pn-dock-handle i { background: var(--mint); }
 
 /* ── 이름표 — 꼬리 달린 말풍선(macOS 독). 곁칸 아래는 아이콘 위, 이음매는 세션 쪽. --ax = 꼬리를 아이콘에 맞추는 어긋남. ── */
 .pn-dock-tip { position: absolute; z-index: 40; pointer-events: none; padding: 5px 10px; border-radius: 7px;

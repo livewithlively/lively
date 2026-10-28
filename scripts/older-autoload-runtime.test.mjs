@@ -2,8 +2,10 @@
 // 대화창 «위로 더» 자동 불러오기 — **런타임** 테스트 (#3778, 원준 2026-09-19)
 //
 // 사양: 사람이 위로 스크롤하면 단추 없이 이전 대화가 이어 붙는다. 꼭대기에서 멈추거나 누를 일이 없어야 한다.
-//  · 맨 위 표지가 화면 위 두 장(목록 높이 200%) 안에 들어오면 부른다 — 꼭대기에 닿기 **전에**
+//  · 맨 위 표지가 화면 위 한 장(목록 높이 100%) 안에 들어오면 부른다 — 꼭대기에 닿기 **전에**
 //  · 붙인 뒤에도 그 거리 안이면 이어서 부른다 · 처음에 닿으면 멈춘다 · 한 번에 하나
+//  · ★ #4996 — **사람이 위로 올리기 전엔 안 부른다**(열기만 해도 머리까지 수십 번 이어 부르던 것). 예외 하나: 목록이 스크롤도 안 될
+//    만큼 짧으면 스크롤이 생길 때까지만 채운다(사람이 올릴 수가 없으니). «올림» = scrollTop 이 줄었다 · 위로 휠(꼭대기에서도 온다)
 //  · 실패하면 그 자리에서 되묻지 않는다 — 떠났다 돌아오거나 [다시 시도] 로 다시 · 가려진 목록에선 안 부른다
 //  · 위에 끼우는 동안 보던 줄이 화면에서 움직이지 않는다(가운데든 꼭대기 0 이든)
 //
@@ -104,7 +106,7 @@ var T = (function () {
   function topOf(i) { var e = H.sc.querySelector('[data-i="' + i + '"]'); return e ? e.getBoundingClientRect().top - H.sc.getBoundingClientRect().top : null; }
   function snap() {
     return { calls: H.calls, maxInflight: H.maxInflight, callTops: H.callTops.slice(), scrollTop: Math.round(H.sc.scrollTop), scrollH: H.sc.scrollHeight,
-      lowest: H.lowest, bar: !!H.bar, barDist: H.bar ? Math.round(H.sc.scrollTop - barEdge()) : null, first: firstVisible() };
+      lowest: H.lowest, bar: !!H.bar, barDist: H.bar ? Math.round(H.sc.scrollTop - barEdge()) : null, first: firstVisible(), shrunk: !!H.shrunk };
   }
   function ioProbe() {
     return new Promise(function (res) {
@@ -119,6 +121,10 @@ var T = (function () {
     hide: function (b) { H.sc.style.display = b ? 'none' : 'flex'; return snap(); },
     fail: function (b) { H.failing = b; },
     retry: function () { H.loader.retry(); },
+    //  사람이 위로 올렸다 — 위로 휠 한 번(꼭대기·스크롤 안 되는 목록에서도 오는 신호). 자리를 안 바꾸는 «올림» 이라 경계 판정을 흐리지 않는다.
+    //  맨 아래 항목을 줄인다(접힘) — 바닥에 붙어 있었으면 브라우저가 scrollTop 을 끌어내린다(클램프).
+    shrinkLast: function () { var its = H.sc.querySelectorAll('.it'); var t0 = H.sc.scrollTop; its[its.length - 1].style.height = '10px'; H.sc.scrollHeight; H.shrunk = H.sc.scrollTop < t0; return snap(); },
+    arm: function () { H.sc.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true })); return snap(); },
     destroy: function () { H.loader.destroy(); },
     center: function () { var r = H.sc.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; },
   };
@@ -190,12 +196,37 @@ try {
   await ev(`T.mk(${JSON.stringify({ ...BIG, start: "bottom" })})`); await sleep(500);
   let s = await S();
   ok(s.calls === 0, "S2 바닥에서 읽는 중(표지가 멀다)엔 안 부른다", `calls=${s.calls} barDist=${s.barDist}`);
-  await ev(`T.mk(${JSON.stringify({ ...BIG, start: Math.round(SC_H * 1.9), latency: 2000 })})`); await sleep(500);
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: Math.round(SC_H * 0.9), latency: 2000 })})`); await ev("T.arm()"); await sleep(500);
   s = await S();
-  ok(s.calls === 1, "S1b 경계 — 표지가 화면 위 1.9장 거리면 부른다(누르지 않아도)", `calls=${s.calls} barDist=${s.barDist}`);
-  await ev(`T.mk(${JSON.stringify({ ...BIG, start: Math.round(SC_H * 2.1), latency: 2000 })})`); await sleep(500);
+  ok(s.calls === 1, "S1b 경계 — 올리는 중 표지가 화면 위 0.9장 거리면 부른다(누르지 않아도)", `calls=${s.calls} barDist=${s.barDist}`);
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: Math.round(SC_H * 1.1), latency: 2000 })})`); await ev("T.arm()"); await sleep(500);
   s = await S();
-  ok(s.calls === 0, "S2b 경계 — 2.1장 거리면 아직 안 부른다", `calls=${s.calls} barDist=${s.barDist}`);
+  ok(s.calls === 0, "S2b 경계 — 1.1장 거리면 아직 안 부른다", `calls=${s.calls} barDist=${s.barDist}`);
+
+  // ── G — #4996 사람이 올리기 전엔 안 부른다 ──────────────────────────────────
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: Math.round(SC_H * 0.3) })})`); await sleep(600);
+  s = await S();
+  ok(s.calls === 0, "G1 ★ 열기만 해서는(올리지 않았다) 표지가 가까워도 안 부른다 — 종전엔 열자마자 불렀다", `calls=${s.calls} barDist=${s.barDist}`);
+  await ev("T.arm()"); await sleep(400);
+  s = await S();
+  ok(s.calls >= 1, "G1 올리면(위로 휠) 그때 부른다", `calls=${s.calls}`);
+  await ev(`T.mk(${JSON.stringify({ ...TINY, start: "bottom" })})`);
+  s = await settle(600, 6000); const g2a = s.calls; await sleep(500); const g2 = await S();
+  ok(s.calls >= 1 && g2.calls === g2a && s.scrollH > SC_H && s.lowest > 0 && s.bar && s.barDist !== null && s.barDist < SC_H,
+    "G2 ★ 스크롤도 안 될 만큼 짧으면 스크롤이 생길 만큼만 채우고 멈춘다 — 머리까지 이어 부르지 않는다(성긴 세션)", `calls=${s.calls}→${g2.calls} scrollH=${s.scrollH} lowest=${s.lowest} barDist=${s.barDist}`);
+  for (let i = 0; i < 4; i++) { await wheel(-120); await sleep(60); }
+  s = await settle(600, 6000);
+  ok(s.calls > g2.calls && (s.barDist === null || s.barDist >= SC_H - 2), "G3 그 뒤 사람이 올리면 이어서 — 표지가 한 장 밖으로 나갈 때까지", `calls=${g2.calls}→${s.calls} barDist=${s.barDist}`);
+  //  휠 없이 올린다 — 키보드(PageUp)·스크롤바 끌기·터치는 휠 이벤트가 없고 스크롤만 움직인다.
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "bottom" })})`); await sleep(300);
+  await ev("T.scrollTo(300)"); await sleep(500);
+  s = await S();
+  ok(s.calls >= 1, "G4 휠이 아니어도 스크롤이 위로 움직이면(키보드·스크롤바·터치) «올림» 이다", `calls=${s.calls} scrollTop=${s.scrollTop}`);
+  //  바닥에서 아래 내용이 줄었다(접힘) — 브라우저가 scrollTop 을 끌어내리지만 사람이 올린 게 아니다.
+  await ev(`T.mk(${JSON.stringify({ ...TINY, start: "bottom" })})`); s = await settle(600, 6000); const g5a = s.calls;
+  await ev("T.shrinkLast()"); await sleep(600);
+  s = await S();
+  ok(s.calls === g5a && s.shrunk, "G5 바닥에 붙은 채 아래가 줄어 스크롤이 끌려 내려간 것은 «올림» 이 아니다(안 부른다)", `calls=${g5a}→${s.calls} shrunk=${s.shrunk}`);
 
   // ── S1w — 사람의 휠로: 꼭대기에 닿기 전에 불렀고, 이음새를 지나 계속 올라간다 ───────────
   await ev(`T.mk(${JSON.stringify({ ...BIG, start: "bottom", latency: 120 })})`);
@@ -208,19 +239,19 @@ try {
   ok(s.maxInflight === 1, "S5 한 번에 하나만 돈다(휠)", `maxInflight=${s.maxInflight}`);
 
   // ── S3 · S4 — 화면이 찰 때까지 이어서, 처음에 닿으면 멈춤 ────────────────────
-  await ev(`T.mk(${JSON.stringify({ ...TINY, start: "bottom" })})`);
+  await ev(`T.mk(${JSON.stringify({ ...TINY, start: "bottom" })})`); await ev("T.arm()");
   s = await settle(600, 6000);
   const s3a = s.calls; await sleep(400); const s3b = (await S()).calls;
-  ok(s.calls >= 3 && (s.barDist === null || s.barDist >= SC_H * 2 - 2), "S3 붙인 뒤에도 그 거리 안이면 이어서 부른다 — 표지가 두 장 밖으로 나갈 때까지",
+  ok(s.calls >= 3 && (s.barDist === null || s.barDist >= SC_H - 2), "S3 올린 뒤엔 붙인 뒤에도 그 거리 안이면 이어서 부른다 — 표지가 한 장 밖으로 나갈 때까지",
     `calls=${s.calls} barDist=${s.barDist}`);
-  ok(s3a === s3b, "S3 두 장 밖으로 나가면 멈춘다(더 안 부른다)", `${s3a} → ${s3b}`);
+  ok(s3a === s3b, "S3 한 장 밖으로 나가면 멈춘다(더 안 부른다)", `${s3a} → ${s3b}`);
   ok(s.maxInflight === 1, "S5 한 번에 하나만 돈다(연쇄)", `maxInflight=${s.maxInflight}`);
-  await ev(`T.mk(${JSON.stringify({ total: 10, initial: 2, chunk: 3, start: "bottom" })})`);
+  await ev(`T.mk(${JSON.stringify({ total: 10, initial: 2, chunk: 3, start: "bottom" })})`); await ev("T.arm()");
   s = await until((v) => v.lowest === 0, 4000); const s4 = s.calls; await sleep(400);
   ok(s.lowest === 0 && !s.bar && s4 === 3 && (await S()).calls === 3, "S4 처음에 닿으면(표지 없음) 더 안 부른다 — 8줄을 3줄씩 = 정확히 3번", `calls=${s.calls} lowest=${s.lowest} bar=${s.bar}`);
 
   // ── S6 · S7 · S8 — 실패 ─────────────────────────────────────────────────
-  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "top", failing: true })})`); await sleep(700);
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "top", failing: true })})`); await ev("T.arm()"); await sleep(700);
   s = await S();
   ok(s.calls === 1, "S6 실패하면 그 자리에 머물러도 다시 안 부른다(폭주 금지)", `calls=${s.calls}`);
   await ev("T.scrollTo('bottom')"); await sleep(300); await ev("T.scrollTo(0)"); await sleep(500);
@@ -232,7 +263,7 @@ try {
   ok(s.maxInflight === 1, "S5 한 번에 하나만 돈다(실패)", `maxInflight=${s.maxInflight}`);
 
   // ── S9 — 가려진 목록 ─────────────────────────────────────────────────────
-  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "top", hidden: true })})`); await sleep(500);
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "top", hidden: true })})`); await ev("T.arm()"); await sleep(500);
   s = await S();
   ok(s.calls === 0, "S9 목록이 가려져 있으면(터미널 보기) 안 부른다", `calls=${s.calls}`);
   await ev("T.hide(false)"); await ev("T.scrollTo(0)"); await sleep(500);
@@ -241,7 +272,7 @@ try {
 
   // ── S10 — 보던 자리 ─────────────────────────────────────────────────────
   for (const [id, start, desc] of [["S10a", Math.round(SC_H * 0.5), "가운데(표지가 화면 반 장 위)"], ["S10b", "top", "꼭대기(scrollTop 0)"]]) {
-    await ev(`T.mk(${JSON.stringify({ ...BIG, start, latency: 250 })})`);
+    await ev(`T.mk(${JSON.stringify({ ...BIG, start, latency: 250 })})`); await ev("T.arm()");
     const f = await ev("T.firstVisible()"); const before = await ev(`T.topOf(${f})`);
     await sleep(900);
     s = await S(); const after = await ev(`T.topOf(${f})`);
@@ -250,13 +281,13 @@ try {
   }
 
   // ── S11 — 도는 중에 표지가 바뀜 ─────────────────────────────────────────
-  await ev(`T.mk(${JSON.stringify({ ...TINY, start: "bottom", lateMs: 250 })})`);
+  await ev(`T.mk(${JSON.stringify({ ...TINY, start: "bottom", lateMs: 250 })})`); await ev("T.arm()");
   s = await until((v) => v.calls >= 3, 6000);
   ok(s.calls >= 3, "S11 표지를 새로 그린 뒤에도 한참 더 도는 로드 — 끝나면 새 표지로 이어 간다(멈추지 않는다)", `calls=${s.calls} barDist=${s.barDist}`);
   ok(s.maxInflight === 1, "S5 한 번에 하나만 돈다(표지가 도는 중에 바뀜)", `maxInflight=${s.maxInflight}`);
 
   // ── S13 — 서버가 제자리 응답(같은 표지로 성공) ───────────────────────────
-  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "top", stalls: 2 })})`);
+  await ev(`T.mk(${JSON.stringify({ ...BIG, start: "top", stalls: 2 })})`); await ev("T.arm()");
   s = await until((v) => v.calls >= 3 && v.lowest < 340, 4000);
   ok(s.calls >= 3 && s.lowest < 340, "S13 제자리 응답(붙인 것 없이 같은 표지) 뒤에도 다시 묻고 이어 간다 — 두 번 막히고 세 번째에 붙는다", `calls=${s.calls} lowest=${s.lowest}`);
 
@@ -266,7 +297,7 @@ try {
   ok(s.calls === 0, "S12 destroy() 뒤에는 안 부른다", `calls=${s.calls}`);
   //  도는 중에 치웠다(세션 화면을 닫음) — 늦게 끝난 로드가 표지를 새로 그려 watch 를 불러도 다시 걸리지 않는다
   //   (chunk 2 = 120px — 붙인 뒤에도 새 표지가 부르는 거리 안에 남게 해야 «다시 걸렸다면 불렀을» 상황이 된다)
-  await ev(`T.mk(${JSON.stringify({ ...BIG, chunk: 2, start: "top", latency: 300 })})`); await sleep(120); await ev("T.destroy()"); await sleep(900);
+  await ev(`T.mk(${JSON.stringify({ ...BIG, chunk: 2, start: "top", latency: 300 })})`); await ev("T.arm()"); await sleep(120); await ev("T.destroy()"); await sleep(900);
   s = await S();
   ok(s.calls === 1, "S12b 도는 중에 destroy() — 끝난 로드가 새 표지를 걸어도 더 안 부른다", `calls=${s.calls} lowest=${s.lowest}`);
 } catch (e) {

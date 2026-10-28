@@ -154,5 +154,20 @@ const writeJson = (p, o) => { mkdirSync(join(p, ".."), { recursive: true }); wri
     : bad("⑩", `감시 목록에 프로필 경로 없음: ${JSON.stringify(paths)}`);
 }
 
+// ── ⑪ 배선 — GROK_HOME 이 있어도 기본 자리(~/.grok)를 함께 본다(#5029) ──
+//  러너가 시험 자식에게 GROK_HOME 을 물려주지 않으므로, 새는 시험은 env 자리가 아니라 기본 자리에 쓴다.
+{
+  const home = box(), gh = join(home, "elsewhere", "grok");
+  const paths = watchedTargets({ GROK_HOME: gh }, home).map((t) => t.path);
+  const both = [join(gh, "config.toml"), join(home, ".grok", "config.toml")];
+  both.every((p) => paths.includes(p))
+    ? ok("⑪ GROK_HOME 자리와 기본 자리를 둘 다 감시한다")
+    : bad("⑪", `감시 목록에 빠진 자리: ${JSON.stringify(both.filter((p) => !paths.includes(p)))}`);
+  const plain = watchedTargets({}, home).map((t) => t.path);
+  plain.filter((p) => p.endsWith(join(".grok", "config.toml"))).length === 1
+    ? ok("⑪ GROK_HOME 이 없으면 기본 자리 하나만(같은 파일을 두 번 보지 않는다)")
+    : bad("⑪ 중복", JSON.stringify(plain.filter((p) => p.includes(".grok"))));
+}
+
 console.log(`testguard-real-home tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);

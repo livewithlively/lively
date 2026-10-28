@@ -1,4 +1,4 @@
-// 작업 컨테이너 정책(#4490 앱 v2-11) — 값 해석 · 범위 · 축 사이 관계 · env 시드 · 출처 · 고치기 검증. 사양 엣지 표 Q 의 모든 행.
+// 작업 컨테이너 정책(#4490 앱 v2-11 · 보존 #4828) — 값 해석 · 범위 · 축 사이 관계 · env 시드 · 출처 · 고치기 검증. 사양 엣지 표 Q 의 모든 행.
 //
 //  왜 이 파일이 있나: 이 값들이 워크스페이스가 노드 자리를 얼마나 쓰는지 · 한 사람의 구독을 몇 갈래로 먹는지를 정한다.
 //   «사람당 동시 ≤ 워크스페이스 동시» 가 깨지면 사람당 상한이 장식이 되고, 기본 실행 시간이 최대를 넘으면 기본값이 최대를 뚫는다.
@@ -15,7 +15,8 @@ const t = (name: string, fn: () => void): void => {
   pass++;
   console.log(`ok  ${name}`);
 };
-const ENV = ["LIVELY_AGENT_JOB_MAX_RUNNING", "LIVELY_AGENT_JOB_MAX_RUNNING_PER_MEMBER", "LIVELY_AGENT_JOB_MAX_QUEUED", "LIVELY_AGENT_JOB_DEFAULT_TIMEOUT_MIN", "LIVELY_AGENT_JOB_MAX_TIMEOUT_MIN"];
+const ENV = ["LIVELY_AGENT_JOB_MAX_RUNNING", "LIVELY_AGENT_JOB_MAX_RUNNING_PER_MEMBER", "LIVELY_AGENT_JOB_MAX_QUEUED", "LIVELY_AGENT_JOB_DEFAULT_TIMEOUT_MIN", "LIVELY_AGENT_JOB_MAX_TIMEOUT_MIN",
+  "LIVELY_AGENT_JOB_KEEP_DAYS"];
 const withEnv = <T>(vals: Record<string, string>, fn: () => T): T => {
   const old = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
   for (const k of ENV) delete process.env[k];
@@ -23,10 +24,10 @@ const withEnv = <T>(vals: Record<string, string>, fn: () => T): T => {
   try { return fn(); } finally { for (const k of ENV) { if (old[k] === undefined) delete process.env[k]; else process.env[k] = old[k]; } }
 };
 
-t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초", () => withEnv({}, () => {
+t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초 · 보존 90일(2026-10-19 결정)", () => withEnv({}, () => {
   assert.deepEqual(resolveAgentJobPolicy({}), {
     max_running: 2, max_running_per_member: 2, max_queued: 20, queue_wait_min: 30,
-    default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180,
+    default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180, keep_days: 90,
   });
   assert.deepEqual(resolveAgentJobPolicy(null), D);
 }));
@@ -86,6 +87,17 @@ t("Q7 고치기 검증 — 어긋난 조합은 거절한다(조용히 접어 저
   assert.match(agentJobPolicyPatchError({ default_timeout_min: 90 }) ?? "", /default_timeout_min\(90\).*max_timeout_min\(60\)/);
   //  env 시드가 동시 상한을 올려 두었으면 그 값으로 견준다.
   withEnv({ LIVELY_AGENT_JOB_MAX_RUNNING: "8" }, () => assert.equal(agentJobPolicyPatchError({ max_running_per_member: 5 }), null));
+}));
+
+t("Q8 보존 일수(#4828) — 0 은 무기한(유효한 선택) · 범위 0~3650 · env 시드 · 다른 축과 엮이지 않는다", () => withEnv({}, () => {
+  assert.equal(normalizeAgentJobPolicy({ keep_days: 0 }).keep_days, 0, "0 = 지우지 않는다");
+  assert.deepEqual([R.keep_days[0], R.keep_days[1]], [0, 3650]);
+  assert.equal(normalizeAgentJobPolicy({ keep_days: 7 }).keep_days, 7);
+  withEnv({ LIVELY_AGENT_JOB_KEEP_DAYS: "30" }, () => {
+    assert.equal(resolveAgentJobPolicy({}).keep_days, 30, "env 시드");
+    assert.equal(resolveAgentJobPolicy({ keep_days: 0 }).keep_days, 0, "DB 의 0(무기한)이 env 를 이긴다");
+  });
+  assert.equal(agentJobPolicyPatchError({ keep_days: 3650 }), null, "다른 축과 관계가 없다");
 }));
 
 console.log(`# ${pass} pass`);

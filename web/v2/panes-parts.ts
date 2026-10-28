@@ -16,18 +16,23 @@ import { authDownload, upDropZone, upFromInput, upSend, upToast, type UpItem } f
 import { confirmDialog } from '../ui-primitives.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { remoteWebPart } from './remote-web.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
+import { type BTab, answerHandoff, dockTab, ensureTab, getTab, onTabEvent, rememberUrl, setPaused } from './browser-tabs.js';   // #4993 AI 와 같이 쓰는 탭(데스크톱)
 import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
 import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, WEB_OPEN_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
 import { htmlFrame, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
+import { consolePart } from './panes-console.js';   // #4876 곁칸 «콘솔»
+import { livDeskPart } from './panes-liv.js';   // #4970 리브 세션의 오른쪽 «리브» 칸
+import type { TlItem } from '../timeline.js';
 import { composerMention } from './compose-mention.js';
 import { composerTasks } from './compose-tasks.js';   // #4135 [담기]한 태스크 = 글칸의 번호 배지
 import { createRunPicker } from './run-picker.js';
@@ -35,6 +40,7 @@ import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { openInstalledApp } from './app-instance.js';
 import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
@@ -54,7 +60,7 @@ function handIsElsewhere(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
 }
 
-export type PartType = 'sessions' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
+export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'livdesk' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
 
 export interface PartCtx {
   id: number;
@@ -83,6 +89,8 @@ export interface PartCtx {
   /** 지금 세션의 **발자취 위젯이 사는 자리**. 세션 화면(대화)이 트랜스크립트를 읽으며 여기를 채운다 —
    *  타임라인 칸은 이 자리를 자기 몸에 들이기만 한다(셸이 세션마다 새로 만들어 준다). */
   trailHost: () => HTMLElement;
+  /** 지금 세션의 발자취 **항목**(시간순 사본) — 그릇은 한 자리뿐이지만 재료는 여러 칸이 읽는다(#4876 콘솔). 세션이 없으면 빈 배열. */
+  trailItems: () => TlItem[];
   /** 그 세션에만 딸리는 값의 저장 열쇠 — 세션이 있으면 세션, 없으면(새 세션 자리) 프로젝트로 떨어진다. */
   memKey: () => string;
   /** **이 곁칸 한 벌의 뿌리**. 부품끼리의 신호는 여기서만 오간다 — `document` 에 뿌리면 열려 있는 **모든
@@ -134,7 +142,11 @@ export interface PartDef {
  *  지난 세션 = 사이드바 아래 줄의 그것, 앱 = 레일의 앱과 같은 그림을 쓴다. */
 export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
-  { type: 'files', name: '자료', icon: 'folder', multi: true, hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
+  // #4876(원준 2026-10-19) — 첫 탭. 세션을 열고 첫 답 전엔 «알려 줄 것» 점검표, 첫 답 뒤엔 «다녀온 사이 · 남긴 것». 조작(파일 넣기 · 지시 문장 · 멈추기)은 바닥 줄.
+  { type: 'console', name: '콘솔', icon: 'console', hint: '이 세션에 시키는 일을 돕고, 다른 세션에 갔다 돌아왔을 때 그 사이 생긴 것과 남긴 것을 보여 줍니다.' },
+  //  #4882(원준 2026-10-19 «세션 우측의 자료 위젯도 자료 앱에서 나온 위젯인걸로») — 자료 앱(apps.ts APPS 'sources')의 세션 위젯이다.
+  //   그림은 그 앱의 이름(src)을 써서 탭 · 독 · 앱 서랍이 런치패드의 자료 앱과 같은 얼굴(폴더 · 자료 색)로 선다. 칸 머리에 그 앱으로 가는 문이 있다(panes-files).
+  { type: 'files', name: '자료', icon: 'src', multi: true, hint: '자료 앱의 세션 위젯 — 이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   // #4088 후속(2026-09-23) — 세션이 만든 파일이 **프로젝트 폴더 밖**(프로젝트 없는 세션·개인 폴더)에 있으면 여기서 본다. 폰의 «자료로 바로 가기»가 이 칸을 연다.
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
   { type: 'knowledge', name: '지식', icon: 'wiki', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
@@ -143,7 +155,11 @@ export const PART_DEFS: PartDef[] = [
   //   그림은 프로젝트 과녁(#4233, 원준 2026-10-05). 그리는 자리의 크기에 맞춰 glyphAt() 이 13px 이하에선 작은 과녁으로 바꾼다.
   { type: 'tasks', name: '프로젝트', icon: 'proj', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
   { type: 'timeline', name: '타임라인', icon: 'timeline', hint: '이 프로젝트에 남은 활동 기록입니다.' },
-  { type: 'liv', name: '리브', icon: 'liv', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
+  //  #4970 — 이름을 «리브» 에서 «프로젝트 대화» 로(상민님 2026-10-23 «이름만 구분가게»). «리브» 는 워크스페이스 담당자(아래 livdesk ·
+  //   레일 [리브] · 리브 세션)만 가리킨다. 종류 이름(type)은 그대로 둔다 — 저장된 배치가 이 이름으로 탭을 기억한다.
+  { type: 'liv', name: '프로젝트 대화', icon: 'liv', hint: '이 프로젝트를 아는 AI 와 대화합니다.' },
+  //  #4970 «리브 = 세션 하나» — 리브 세션의 오른쪽 칸(지금 손볼 것 · 외부 앱 연결 상태). [+] 로 넣지 않는다 — 리브 세션을 열면 셸이 맨 앞에 세운다.
+  { type: 'livdesk', name: '리브', icon: 'liv', pickable: false, hint: '워크스페이스 담당자 리브 — 지금 손볼 것과 외부 앱 연결 상태를 봅니다. 말은 대화에서 겁니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
   { type: 'archive', name: '지난 세션', icon: 'archive', hint: '박스가 멈춰 지금은 안 도는 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
   { type: 'web', name: '웹', icon: 'web', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
@@ -554,9 +570,6 @@ function archivePart(ctx: PartCtx): Part {
 //   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
 /** 웹 칸에 실린 주소의 저장 열쇠 — 세션마다 따로다(webPart 와 같은 규칙을 써야 서로 어긋나지 않는다). */
 const WEB_URL_KEY = 'pn_web_url';
-/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다.
- *  ⚠ 이 신호는 **곁칸 한 벌 안에서만** 돈다(ctx.paneRoot). 문서 전체로 뿌리면 다른 세션 탭까지 물든다. */
-const WEB_OPEN_EVT = 'pn:open-web';
 /** 밖(다른 부품)에서 웹 칸에 주소를 싣는 유일한 통로.
  *  ⚠ 저장을 **먼저** 한 다음 알린다 — 칸이 아직 없으면 셸이 그때 만드는데, 새로 만들어진 웹 칸은
  *   이벤트를 이미 놓친 뒤라 저장된 값에서 주소를 읽는다(둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다).
@@ -675,7 +688,13 @@ function makeZoom(o: ZoomOpts): Zoom {
   };
 }
 
-function webPart(ctx: PartCtx): Part {
+function webPart(ctx: PartCtx, frameOnly = false): Part {
+  //  데스크톱 앱(#1829 브라우저 서피스)이면 AI 와 같이 쓰는 탭으로 그린다(#4993) — webview 는 칸 안이 아니라 브라우저 층에 산다.
+  //   끼워 넣은 판(미리보기 안 라이블리)은 제외한다 — 거기엔 서피스가 없고(preload 가 없다) 탭 대장도 바깥 것이 아니다.
+  if (hasBrowserSurface() && !EMBEDDED) return liveWebPart(ctx);
+  //  웹 브라우저로 연 라이블리 — 그 사람의 데스크톱 앱이 켜져 있으면 그 앱 탭의 원격 화면(#4993 (A)), 아니면 아래 iframe 칸
+  //   (frameOnly = 원격 화면이 «데스크톱 없음» 일 때 이 칸을 그대로 쓰려고 부른 것).
+  if (!EMBEDDED && !frameOnly) return remoteWebPart(ctx, () => webPart(ctx, true));
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
   // 재우기 상태(아래 '안 보이면 재운다') — 주소를 싣는 모든 길(load·adopt·reload)이 이걸 만지므로 맨 위에 둔다.
@@ -927,6 +946,162 @@ function webPart(ctx: PartCtx): Part {
       offSess();
       zoom.destroy();
       window.clearInterval(watch);
+      evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
+      document.removeEventListener('pointerdown', mark, true);
+      document.removeEventListener('focusin', mark, true);
+      window.removeEventListener('keydown', onKey, true);
+    },
+  };
+}
+
+// ══ 웹 — 데스크톱 앱: AI 와 사람이 같이 쓰는 탭 (#4993) ═══════════════════════════
+//  이 칸은 **자리(stage)와 주소줄만** 갖는다. 페이지(webview)는 브라우저 층(browser-tabs.ts)에 살고, 층이 그 webview 를
+//  이 자리 위에 겹쳐 맞춘다 — 사람이 다른 세션을 봐도 AI 는 그 탭에서 스크린샷·클릭을 계속할 수 있어야 하기 때문이다
+//  (칸 안의 webview 는 셸이 탭을 숨기는 순간 스크린샷이 영영 멈춘다 — browser-tabs 머리말의 실측).
+//  탭의 열쇠 = 이 칸의 저장 열쇠(slotKey) — 그래서 이 세션 AI 의 browser_* 툴이 여는 탭이 곧 이 칸이다.
+//  배율은 setZoomFactor 가 아니라 «배치 크기 ÷ 배율 + transform» 이다(층이 매 틀 scale() 을 읽는다).
+function liveWebPart(ctx: PartCtx): Part {
+  const root = el('div', { class: 'pn-part pn-web pn-web-live' });
+  const FIT_BASE = 1280;
+  let key = ctx.slotKey();
+  let release: (() => void) | null = null;
+  /** 이 칸이 자리에 붙여 둔 탭 — 대장의 그 열쇠 탭이 이것과 다르면(없어졌다가 다시 생겼다) 다시 붙인다. */
+  let docked: BTab | null = null;
+  let adopting = false;
+  let curZ = 1;
+  const stage = el('div', { class: 'pn-webstage' });
+  const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' }) as HTMLInputElement;
+  input.onfocus = () => input.select();
+  //  ⚠ 늘 «붙여 둔 탭» 을 쓴다 — 대장에서 탭이 없어졌다 다시 생기면(새 BTab) 그 탭은 자리가 없어 셸 뒤 투명도 1% 로 숨는다.
+  //   그대로 ensureTab 만 부르면 사람이 친 주소가 안 보이는 탭에 실렸다(#4993 격리 리뷰). 다르면 여기서 다시 붙인다.
+  const tab = (): BTab => {
+    if (!docked || getTab(key) !== docked) adopt();
+    return docked!;
+  };
+  const go = (raw?: string): void => {
+    const u = normWebUrl(raw ?? input.value);
+    if (!u) return;
+    if (!EMBEDDED) rememberUrl(key, u);
+    const t = tab();
+    t.url = u;
+    if (t.isReady) { try { t.view.loadURL(u).catch(() => { /* 실패는 did-fail-load 가 적는다 */ }); } catch { t.view.setAttribute('src', u); } }
+    else t.view.setAttribute('src', u);
+    sync();
+  };
+  input.onkeydown = (e: KeyboardEvent) => { if (!e.isComposing && e.key === 'Enter') { e.preventDefault(); go(); } };
+  const reload = (): void => { const t = tab(); try { if (t.isReady) t.view.reload(); else if (t.url) t.view.setAttribute('src', t.url); } catch { /* 아직 안 붙었다 */ } };
+  const backBtn = el('button', { class: 'pn-web-btn ic back', type: 'button', 'aria-label': '뒤로', title: '앞 화면으로 돌아갑니다.',
+    onclick: () => { const t = tab(); try { if (t.view.canGoBack()) t.view.goBack(); } catch { /* noop */ } } }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로', title: '뒤로 오기 전 화면으로 갑니다.',
+    onclick: () => { const t = tab(); try { if (t.view.canGoForward()) t.view.goForward(); } catch { /* noop */ } } }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  const openTab = el('a', { class: 'pn-web-btn ic', target: '_blank', rel: 'noopener', title: '지금 주소를 새 탭(시스템 브라우저)에서 엽니다.', 'aria-label': '새 탭에서 열기', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
+  openTab.onclick = (e: Event) => { const u = tab().url; if (!u) { e.preventDefault(); return; } openTab.href = u; };
+  // AI 표시 — 이 탭을 AI 가 쓰고 있으면(최근 1분) 뜬다. 누르면 이 탭의 AI 조작을 멈추고, 다시 누르면 푼다.
+  const aiChip = el('button', { class: 'pn-web-ai', type: 'button', hidden: true }) as HTMLButtonElement;
+  aiChip.onclick = () => { const t = tab(); setPaused(t, !t.paused); sync(); toast(t.paused ? '이 탭의 AI 조작을 멈췄어요. 다시 누르면 풀립니다.' : 'AI 가 이 탭을 다시 쓸 수 있어요.'); };
+  // 사람에게 넘기기 — AI 가 부탁한 일(로그인·인증 등)을 사람이 끝내고 [완료]를 누른다.
+  const hoText = el('span', { class: 'pn-web-ho-t' });
+  const handoffBar = el('div', { class: 'pn-web-handoff', role: 'status', hidden: true },
+    el('span', { class: 'pn-web-ho-h', text: 'AI 의 부탁' }), hoText,
+    el('span', { class: 'pn-web-ho-acts' },
+      el('button', { class: 'pn-web-btn pri', type: 'button', text: '완료', title: '부탁한 일을 끝냈어요 — AI 가 이어서 합니다.', onclick: () => { const t = getTab(key); if (t) answerHandoff(t, true); sync(); } }),
+      el('button', { class: 'pn-web-btn', type: 'button', text: '못 해요', title: 'AI 에게 못 한다고 알립니다.', onclick: () => { const t = getTab(key); if (t) answerHandoff(t, false); sync(); } })));
+  const empty = el('div', { class: 'pn-web-empty' },
+    el('p', { class: 'pn-web-empty-h', text: '주소를 넣으면 이 칸에서 열립니다.' }),
+    el('p', { class: 'pn-web-empty-p', text: '이 세션의 AI 도 이 탭을 같이 씁니다. 사이트에 로그인해 두면 AI 가 그 로그인으로 일해요.' }));
+  bindCtx(root, () => {
+    const u = tab().url || input.value || '';
+    return {
+      title: u ? (u.length > 40 ? u.slice(0, 40) + '…' : u) : '웹 칸', sub: '웹',
+      rows: [
+        { label: '뒤로', icon: 'chevL', off: backBtn.disabled, run: () => backBtn.click() },
+        { label: '앞으로', icon: 'chevR', off: fwdBtn.disabled, run: () => fwdBtn.click() },
+        { label: '다시 불러오기', icon: 'refresh', hint: '⌘R', off: !u, run: () => reload() },
+        { sep: true, label: '' },
+        { label: '새 창에서 열기', icon: 'open', off: !u, run: () => window.open(u, '_blank', 'noopener') },
+        { label: '주소 복사', icon: 'copy', off: !u, run: () => void copyText(u).then((ok) => { if (ok) toast('주소를 복사했어요'); }) },
+        { label: '주소 입력', icon: 'pen', run: () => { input.focus(); input.select(); } },
+      ],
+    };
+  });
+  root.append(
+    el('div', { class: 'pn-web-bar' },
+      el('span', { class: 'pn-web-navs' }, backBtn, fwdBtn,
+        el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
+      input, aiChip, openTab),
+    handoffBar,
+    stage);
+  const zoom = makeZoom({ stage, keyOf: () => key, baseW: () => FIT_BASE, paint: (z) => { curZ = z; } });
+
+  /** 주소줄·단추·AI 표시·부탁 막대를 탭의 지금 상태에 맞춘다. */
+  function sync(): void {
+    const t = getTab(key);
+    if (!t) return;
+    if (document.activeElement !== input) input.value = t.url || '';
+    try { ctx.setTabTitle?.(t.url ? new URL(t.url).host.replace(/^www\./, '') : null); } catch (_) { ctx.setTabTitle?.(null); }
+    try { backBtn.disabled = !t.view.canGoBack(); fwdBtn.disabled = !t.view.canGoForward(); } catch (_) { backBtn.disabled = true; fwdBtn.disabled = true; }
+    const aiRecent = t.aiBusy > 0 || (t.aiAt > 0 && Date.now() - t.aiAt < 60_000);
+    aiChip.hidden = !aiRecent && !t.paused;
+    aiChip.classList.toggle('busy', t.aiBusy > 0);
+    aiChip.classList.toggle('paused', t.paused);
+    aiChip.textContent = t.paused ? 'AI 멈춤' : (t.aiBusy > 0 ? 'AI 조작 중' : 'AI');
+    aiChip.title = t.paused ? 'AI 조작을 멈춰 두었어요 — 누르면 다시 쓸 수 있게 합니다.' : 'AI 가 이 탭을 쓰고 있어요 — 누르면 AI 조작을 멈춥니다(사람은 계속 쓸 수 있어요).';
+    handoffBar.hidden = !t.handoff;
+    hoText.textContent = t.handoff ? t.handoff.message : '';
+    empty.hidden = !!t.url;
+  }
+  /** 이 칸이 보여 줄 탭을 지금 세션의 것으로 — 자리를 다시 쥐고, 배율 알약·빈 안내를 그 탭의 겹침 판으로 옮긴다. */
+  function adopt(): void {
+    if (adopting) return;   // ensureTab 이 내는 'tabs' 신호가 여기로 되돌아오는 것을 막는다
+    adopting = true;
+    try {
+      key = ctx.slotKey();
+      if (release) { release(); release = null; }
+      const t = ensureTab(key);
+      release = dockTab(key, stage, () => curZ);
+      docked = t;
+      //  알약·안내는 webview 위에 떠야 한다 — 칸 안 요소는 층의 webview 를 이길 수 없어(쌓임 맥락이 다르다) 겹침 판에 싣는다.
+      t.overlay.append(zoom.el, empty);
+      zoom.apply();
+    } finally { adopting = false; }
+    sync();
+  }
+  adopt();
+  const offSess = ctx.onSession(() => adopt());
+  //  탭 목록이 바뀌면(만들기·없애기) 내 탭이 아직 그 탭인지 본다 — 없어졌거나 갈렸으면 다시 붙인다(빈 자리로 남지 않게).
+  const offTabs = onTabEvent((ev) => {
+    if (ev.type === 'tabs') { if (!adopting && getTab(key) !== docked) adopt(); return; }
+    if ('key' in ev && ev.key === key && ev.type !== 'reveal') sync();
+  });
+  const aiTimer = window.setInterval(() => { const t = getTab(key); if (t && t.aiAt) sync(); }, 5_000);   // AI 표시가 1분 뒤 저절로 꺼지게
+  // ⌘R 은 이 칸만 — 마지막으로 만진 칸이 여기일 때(옛 웹 칸과 같은 규칙). webview 안을 누른 뒤의 키는 게스트 몫이라 여기 안 온다.
+  let mine = false;
+  const paneOf = (): HTMLElement => (root.closest('.pn-pane') as HTMLElement | null) || root;
+  const mark = (e: Event): void => { const t = e.target; mine = t instanceof Node && paneOf().contains(t); };
+  const onKey = (e: KeyboardEvent): void => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    if (String(e.key).toLowerCase() !== 'r' && e.code !== 'KeyR') return;
+    if (!mine || root.hidden || !root.offsetParent) return;
+    e.preventDefault();
+    reload();
+  };
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('focusin', mark, true);
+  window.addEventListener('keydown', onKey, true);
+  // 밖에서 부른 주소(미리보기 칸 → 이 칸) — 옛 웹 칸과 같은 신호를 받는다.
+  const onOpen = (e: Event): void => { const u = (e as CustomEvent).detail?.url; if (u) go(String(u)); };
+  const evtHost = ctx.paneRoot();
+  evtHost.addEventListener(WEB_OPEN_EVT, onOpen);
+  return {
+    root,
+    tick: () => sync(),
+    destroy: () => {
+      offSess(); offTabs();
+      window.clearInterval(aiTimer);
+      if (release) { release(); release = null; }
+      zoom.destroy();
+      zoom.el.remove();
+      empty.remove();
       evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
       document.removeEventListener('pointerdown', mark, true);
       document.removeEventListener('focusin', mark, true);
@@ -1493,10 +1668,10 @@ function appsPart(ctx: PartCtx): Part {
       return;
     }
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
-      const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
+      const hasUi = hasAppScreen(a) || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
       //  붙일 수 있는 앱 = 세션 옆에 둘 화면이 있거나 AI 가 쓸 데이터가 있는 앱. 브라우저 같은 시스템 앱은 제 탭이 정본이다.
-      const attachable = (a.pages.length > 0 || a.tables.length > 0) && !a.system;
+      const attachable = (hasAppScreen(a) || a.tables.length > 0) && !a.system;
       const openTab = (): void => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); };
       const tile = el('button', { class: 'pn-app', type: 'button',
         title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
@@ -1597,6 +1772,7 @@ function previewPart(ctx: PartCtx): Part {
 
 export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'sessions') return sessionsPart(ctx);
+  if (type === 'console') return consolePart(ctx);
   if (type === 'archive') return archivePart(ctx);
   if (type === 'web') return webPart(ctx);
   if (type === 'preview') return previewPart(ctx);
@@ -1608,5 +1784,6 @@ export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'timeline') return timelinePart(ctx);
   if (type === 'apps') return appsPart(ctx);
   if (type === 'sessapp') return sessAppPart(ctx);
+  if (type === 'livdesk') return livDeskPart(ctx);
   return livPart(ctx);
 }

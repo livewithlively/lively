@@ -164,6 +164,8 @@ export interface TimelineHandle {
   /** 머리 바 바로 아래 한 줄(세션 사실 등). null 이면 그 줄 자체가 없다. */
   setMeta(node: HTMLElement | null): void;
   clear(): void;
+  /** 지금 쌓인 항목(시간순 · 사본) — 곁칸 «콘솔»(#4876)이 같은 재료를 제 틀(다녀온 사이 · 종류 칩)로 그린다. 그릇(root)은 한 자리뿐이라 나눠 쓰지 않는다. */
+  items(): TlItem[];
   root: HTMLElement;
 }
 
@@ -650,6 +652,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
     sortByTime() { items.sort((a, b) => tsNum(a.ts) - tsNum(b.ts)); schedule(); },
     setMeta(node) { factsEl.replaceChildren(...(node ? [node] : [])); factsEl.hidden = !node; },
     clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
+    items() { return items.slice(); },
   };
   paint();
   return h;

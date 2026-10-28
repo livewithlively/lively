@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @lively-test exclusive — 훅들의 짧은 요청 마감 안에 가짜 게이트웨이가 받아야 판정이 선다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // 훅의 자격·주소 우선순위 사양테스트 (#959 — #916·#2617 의 훅 판).
 //
 //  규칙(정본 주석: hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위»):

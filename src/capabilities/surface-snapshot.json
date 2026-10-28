@@ -606,6 +606,26 @@
   "input_hash": "47124ddf6bd11a3a"
  },
  {
+  "name": "me_local_scope_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/local-scope"
+  ],
+  "input_hash": "47124ddf6bd11a3a"
+ },
+ {
+  "name": "me_local_scope_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/local-scope"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "me_local_mode_set",
   "scope": null,
   "mcp": false,
@@ -783,7 +803,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "93871e9106df96e6"
+  "input_hash": "fd9e68e691ae3050"
  },
  {
   "name": "org_context_job_runner_fill",
@@ -1094,7 +1114,7 @@
   "rest": [
    "POST /api/ui/org/collectors"
   ],
-  "input_hash": "fc0bef7cbe17e238"
+  "input_hash": "ac5204e4f6c7dd9d"
  },
  {
   "name": "org_collector_sync_run",
@@ -1278,6 +1298,16 @@
   "input_hash": "331ca51692372057"
  },
  {
+  "name": "org_distiller_zotero_ensure",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/zotero"
+  ],
+  "input_hash": "331ca51692372057"
+ },
+ {
   "name": "org_source_channels",
   "scope": "memory",
   "mcp": true,
@@ -1443,7 +1473,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "0f2e7a5859c28a7f"
+  "input_hash": "d0ff19f5f78f9ebd"
  },
  {
   "name": "me_liv_profile_get",
@@ -1536,14 +1566,14 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
-  "name": "me_liv_session_open",
+  "name": "me_liv_open",
   "scope": null,
   "mcp": false,
   "mutates": true,
   "rest": [
-   "POST /api/ui/me/liv/session"
+   "POST /api/ui/me/liv/open"
   ],
-  "input_hash": "42bfce9995a59366"
+  "input_hash": "1964b38072182cb5"
  },
  {
   "name": "me_liv_ask_dismiss",
@@ -1603,7 +1633,7 @@
   "rest": [
    "POST /api/ui/me/welcome"
   ],
-  "input_hash": "71c432d82ed7faa9"
+  "input_hash": "41a40fc0e4ccbca7"
  },
  {
   "name": "project_chat_turn",
@@ -1674,7 +1704,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "d25993d565867490"
+  "input_hash": "b8110143524f95c6"
  },
  {
   "name": "org_hook_remove",
@@ -1754,7 +1784,7 @@
   "rest": [
    "POST /api/ui/org/http-tool-presets/apply"
   ],
-  "input_hash": "b4742b7345b7ff77"
+  "input_hash": "0d4b254b1969fa87"
  },
  {
   "name": "org_tool_remove",
@@ -1814,7 +1844,7 @@
   "rest": [
    "POST /api/ui/org/harness-asset"
   ],
-  "input_hash": "a96bbcc213915060"
+  "input_hash": "3b14d9e5183ab650"
  },
  {
   "name": "org_harness_asset_remove",
@@ -2597,6 +2627,16 @@
   "input_hash": "3f9f3b9278775b20"
  },
  {
+  "name": "knowledge_set_fields",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/fields"
+  ],
+  "input_hash": "4153f82a5d044aaf"
+ },
+ {
   "name": "knowledge_link_category",
   "scope": "memory",
   "mcp": true,
@@ -2704,7 +2744,7 @@
   "rest": [
    "GET /api/ui/sources"
   ],
-  "input_hash": "ec3a078cc89fd5e2"
+  "input_hash": "34cf48d0d28accb9"
  },
  {
   "name": "source_undistilled",
@@ -2744,7 +2784,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "f077d64e6b609430"
+  "input_hash": "b5ecf673c69ba65b"
  },
  {
   "name": "source_link_knowledge",
@@ -4262,7 +4302,7 @@
   "rest": [
    "POST /api/ui/me/credential"
   ],
-  "input_hash": "1c7a8ba26d261e7f"
+  "input_hash": "45e4d93896affcc4"
  },
  {
   "name": "me_credential_verify",
@@ -4272,7 +4312,7 @@
   "rest": [
    "POST /api/ui/me/credential/verify"
   ],
-  "input_hash": "622aa3b0790ea9e7"
+  "input_hash": "e7c70bc43b6e4859"
  },
  {
   "name": "me_credential_delete",
@@ -4282,7 +4322,7 @@
   "rest": [
    "POST /api/ui/me/credential/delete"
   ],
-  "input_hash": "55b7bc8dbf9bc33d"
+  "input_hash": "4b3642de33789657"
  },
  {
   "name": "org_credentials",
@@ -4302,7 +4342,7 @@
   "rest": [
    "POST /api/ui/org/credential"
   ],
-  "input_hash": "60a213310cbae503"
+  "input_hash": "7bd6eea84e53543a"
  },
  {
   "name": "org_credential_delete",
@@ -4312,7 +4352,7 @@
   "rest": [
    "POST /api/ui/org/credential/delete"
   ],
-  "input_hash": "76273c5cb7da0d13"
+  "input_hash": "dc622876b0852fd0"
  },
  {
   "name": "me_aws_credentials",
@@ -4423,6 +4463,16 @@
    "POST /api/ui/org/notion/collect/connect"
   ],
   "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_notion_workspace_disconnect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/notion/workspace/disconnect"
+  ],
+  "input_hash": "ac08975fc5b65daf"
  },
  {
   "name": "org_notion_oauth_complete",
@@ -4622,7 +4672,7 @@
   "rest": [
    "GET /api/ui/org/:system/collect/options"
   ],
-  "input_hash": "80d71c4c25c45131"
+  "input_hash": "0c7b764a449536f1"
  },
  {
   "name": "org_outlook_collect",
@@ -4675,6 +4725,26 @@
   "input_hash": "3d5e4b275497c027"
  },
  {
+  "name": "org_zotero_collect",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/zotero/collect"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_zotero_collect_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/zotero/collect"
+  ],
+  "input_hash": "30d98aa6625ada69"
+ },
+ {
   "name": "org_google_collect",
   "scope": "memory",
   "mcp": true,
@@ -4713,6 +4783,46 @@
    "POST /api/ui/org/google/oauth-complete"
   ],
   "input_hash": "8779c8483d0fd640"
+ },
+ {
+  "name": "org_connect_register",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connect/register"
+  ],
+  "input_hash": "c96fb30225c316e3"
+ },
+ {
+  "name": "org_connect_registration",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connect/registration"
+  ],
+  "input_hash": "e300553752455696"
+ },
+ {
+  "name": "org_connect_unregister",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connect/unregister"
+  ],
+  "input_hash": "e300553752455696"
+ },
+ {
+  "name": "org_connect_status",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connect-status"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "app_instance_list",
@@ -4835,6 +4945,16 @@
   "input_hash": "c0922e821b084a79"
  },
  {
+  "name": "link_preview",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/link-preview"
+  ],
+  "input_hash": "1a5c5e2cd5970e6d"
+ },
+ {
   "name": "me_slack_channels",
   "scope": null,
   "mcp": false,
@@ -4953,6 +5073,17 @@
    "GET /api/ui/apps/:id/versions"
   ],
   "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "app_spec",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "GET /api/ui/apps/:id/spec",
+   "POST /api/ui/apps/:id/spec"
+  ],
+  "input_hash": "10e05b2a41ccbc58"
  },
  {
   "name": "app_revert",
@@ -5143,7 +5274,7 @@
   "rest": [
    "POST /api/ui/apps/:id/tool-call"
   ],
-  "input_hash": "05e07fe981720e97"
+  "input_hash": "04ea7395cbbfc1c0"
  },
  {
   "name": "store_insert",
@@ -5363,7 +5494,7 @@
   "rest": [
    "POST /api/ui/app-server-limits"
   ],
-  "input_hash": "c5c2331807e4d7c4"
+  "input_hash": "0135e126e888b26a"
  },
  {
   "name": "app_folder_limit_set",
@@ -5473,7 +5604,7 @@
   "rest": [
    "POST /api/ui/ai-runs"
   ],
-  "input_hash": "8143941d8f503d5f"
+  "input_hash": "ece2263e4f1c789f"
  },
  {
   "name": "app_ai_run_get",
@@ -5533,7 +5664,7 @@
   "rest": [
    "POST /api/ui/ai-account"
   ],
-  "input_hash": "9d69f75d8e124182"
+  "input_hash": "19d0e0ec491b4108"
  },
  {
   "name": "app_ai_limits",
@@ -5554,6 +5685,46 @@
    "POST /api/ui/ai-run-limits"
   ],
   "input_hash": "8d6eea919f231c8c"
+ },
+ {
+  "name": "app_job_start",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-jobs"
+  ],
+  "input_hash": "1c46338bf43e1d21"
+ },
+ {
+  "name": "app_job_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-jobs/:id"
+  ],
+  "input_hash": "ca68465d3bbdd1a1"
+ },
+ {
+  "name": "app_jobs",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-jobs"
+  ],
+  "input_hash": "29cbb303f1e260ed"
+ },
+ {
+  "name": "app_job_cancel",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/app-jobs/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
  },
  {
   "name": "agent_job_run",
@@ -5613,6 +5784,126 @@
   "rest": [
    "POST /api/ui/agent-job-limits"
   ],
-  "input_hash": "dcb45d30d8b1a5f8"
+  "input_hash": "8d77283b0070ed8e"
+ },
+ {
+  "name": "browser_status",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/status"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "browser_tabs",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/tabs"
+  ],
+  "input_hash": "700bf471b73c3eca"
+ },
+ {
+  "name": "browser_navigate",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/navigate"
+  ],
+  "input_hash": "a2420e2a002207c4"
+ },
+ {
+  "name": "browser_screenshot",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/screenshot"
+  ],
+  "input_hash": "622d849060a3a5e9"
+ },
+ {
+  "name": "browser_act",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/act"
+  ],
+  "input_hash": "14b476513ae9b356"
+ },
+ {
+  "name": "browser_read",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/read"
+  ],
+  "input_hash": "15f847d84f75c57b"
+ },
+ {
+  "name": "browser_fill",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/fill"
+  ],
+  "input_hash": "1b7b746fdb2faf82"
+ },
+ {
+  "name": "browser_upload",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/upload"
+  ],
+  "input_hash": "00770c18219417bc"
+ },
+ {
+  "name": "browser_text",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/text"
+  ],
+  "input_hash": "02b80680d9c5a09c"
+ },
+ {
+  "name": "browser_eval",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/eval"
+  ],
+  "input_hash": "15e7be99c573e73b"
+ },
+ {
+  "name": "browser_console",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/browser/console"
+  ],
+  "input_hash": "4d0e5231742bb31e"
+ },
+ {
+  "name": "browser_handoff",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/browser/handoff"
+  ],
+  "input_hash": "9eb9ca6bc939c6d4"
  }
 ]

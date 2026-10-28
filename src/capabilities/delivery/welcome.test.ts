@@ -4,7 +4,7 @@
 // 실행: npm run build && node dist/capabilities/delivery/welcome.test.js
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt, squeezeExcerpt, normalizeProgress, PROGRESS_MAX_BYTES } from "./welcome.js";
+import { drawerKey, parseDrawers, lastAssistantText, tallySources, repeatedForms, analyzePrompt, squeezeExcerpt, normalizeProgress, PROGRESS_MAX_BYTES, welcomeFlowMarks } from "./welcome.js";
 
 let pass = 0, fail = 0;
 // 실패해도 멈추지 않는다 — 어느 행이 빨간불인지 **전부** 봐야 red 입증이 된다.
@@ -506,6 +506,33 @@ t("W7 화면을 떠날 때·창을 닫을 때 마지막 한 걸음을 남긴다"
   assert.match(OB, /removeEventListener\('pagehide', onPageHide\)/, "떠난 화면의 리스너가 남는다(누수)");
   assert.match(OB, /void flushProgress\(\);\s*\/\/ 화면을 떠나는 것도/, "destroy 에서 안 밀면 debounce 대기 중이던 마지막 답이 사라진다");
 });
+// ── (#5060) 처음 설정의 마지막 고름 → 정리 지시(2턴) 갈래 ─────────────────────────
+//  F1 관리 권한 없음 → 갈래 없음(팀 카테고리를 세우지 않는다) · 올리기 표식은 남긴다
+//  F2 [연결할게요] → connect(올린 파일과 무관)
+//  F3 [나중에] + 올린 파일 + 서버 AI → files
+//  F4 [나중에] + 올린 파일 + 서버 AI 없음 → 갈래 없음(새로 열 세션이 없다)
+//  F5 [나중에] + 올린 파일 없음 → 갈래 없음
+//  F6 모르는 값(next·upload) → 없는 것으로
+const NOW = "2026-10-27T05:00:00.000Z";
+t("F1 관리 권한이 없으면 갈래를 세우지 않는다 — 올리기 표식은 남긴다", () => {
+  assert.deepEqual(welcomeFlowMarks({ admin: false, next: "connect", upload: "running", serverAi: true, now: NOW }),
+    { flow: null, upload_started_at: NOW, upload_done_at: null });
+});
+t("F2 [연결할게요]는 connect", () => {
+  assert.equal(welcomeFlowMarks({ admin: true, next: "connect", upload: undefined, serverAi: false, now: NOW }).flow, "connect");
+  assert.deepEqual(welcomeFlowMarks({ admin: true, next: "connect", upload: "done", serverAi: true, now: NOW }),
+    { flow: "connect", upload_started_at: NOW, upload_done_at: NOW });
+});
+t("F3~F5 [나중에 할게요]는 올린 파일과 서버 AI 가 둘 다 있을 때만 files", () => {
+  assert.equal(welcomeFlowMarks({ admin: true, next: "later", upload: "running", serverAi: true, now: NOW }).flow, "files");
+  assert.equal(welcomeFlowMarks({ admin: true, next: "later", upload: "running", serverAi: false, now: NOW }).flow, null);
+  assert.equal(welcomeFlowMarks({ admin: true, next: "later", upload: undefined, serverAi: true, now: NOW }).flow, null);
+});
+t("F6 모르는 값은 없는 것으로 친다", () => {
+  assert.deepEqual(welcomeFlowMarks({ admin: true, next: "yes", upload: "half", serverAi: true, now: NOW }),
+    { flow: null, upload_started_at: null, upload_done_at: null });
+});
+
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @lively-test exclusive — SIGKILL 시각(3초) 전에 스스로 멈추고 기록을 남기는지 벽시계로 잰다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // project-push up-sync 훅 (#905 C3) — 가짜 게이트웨이 + 진짜 훅 프로세스 e2e.
 //  실행: node kit/hooks/project-push.test.mjs   (npm test 체인)
 //
@@ -294,7 +295,11 @@ try {
     // 로컬 walk 상한(MAX_WALK=5000) 을 넘겨 truncated 를 만든다 — 서버엔 없는 파일들이라 업로드 후보이기도 하다.
     const bulk = path.join(dir, "bulk");
     await fsp.mkdir(bulk, { recursive: true });
-    await Promise.all(Array.from({ length: 5001 }, (_, i) => fsp.writeFile(path.join(bulk, `f${i}.md`), "x")));
+    //  묶음으로 나눠 쓴다 — 5001개를 한꺼번에 열면 열린 파일 수 상한에 걸린다(중앙 박스 gVisor 는 ulimit -n 이 hard 1024 라
+    //   EMFILE 로 빨갰다, #5029. node 가 soft 를 hard 까지 올려도 그 위로는 못 간다).
+    for (let i = 0; i < 5001; i += 200) {
+      await Promise.all(Array.from({ length: Math.min(200, 5001 - i) }, (_, k) => fsp.writeFile(path.join(bulk, `f${i + k}.md`), "x")));
+    }
     await runHook(dir);
     assert.equal(deletes.length, 0, "🔴 로컬 walk 가 잘렸는데 삭제 전파를 했다 — 실재 파일이 '없음'으로 보인 것뿐이다");
     assert.ok(SERVER["원장문서.md"], "서버 문서 보존");

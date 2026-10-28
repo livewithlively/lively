@@ -13,7 +13,8 @@
 //    (피그마 팀 id 미지정처럼 «원래 불가능한» 경우가 실제로 있다).
 //  · 반환 `key` 는 수집기 config 의 스코프 키와 같은 이름이다 — 화면이 그대로 `scope` 로 되돌려 보낸다.
 import { resolveFigmaTokenSource, figmaVaultReader } from "./credentials/figma-token-source.js";
-import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "./credentials/plain-token-source.js";
+import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC, ZOTERO_TOKEN_KIND, ZOTERO_TOKEN_SPEC } from "./credentials/plain-token-source.js";
+import { accessibleLibraries, libraryPath, zoteroGet, type ZoteroKeyInfo } from "../connectors/zotero.js";
 import { resolveGithubTokenSource, githubVaultDeps } from "./credentials/github-token-source.js";
 import { resolveGitlabTokenSource, gitlabVaultDeps } from "./credentials/gitlab-token-source.js";
 import { resolveLinearTokenSource, linearVaultDeps } from "./credentials/linear-token-source.js";
@@ -189,9 +190,22 @@ async function slackOptions(memberId: string): Promise<ScopeOptionsResult> {
   return { key: "channels", unit: "채널", emptyMeansAll: true, freeform: false, options };
 }
 
+// ── Zotero — 그 사람의 키로 읽을 수 있는 라이브러리(내 라이브러리 + 키에 열린 그룹). 비우면 전부다. ──
+async function zoteroOptions(memberId: string): Promise<ScopeOptionsResult> {
+  const r = await resolvePlainTokenSource(MEMBER(memberId), plainVaultReader(ZOTERO_TOKEN_KIND), ZOTERO_TOKEN_SPEC);
+  if (!r?.token) return free("libraries", "라이브러리", r?.warning ?? "Zotero API 키가 없습니다.", true);
+  const info = (await zoteroGet<ZoteroKeyInfo>(r.token, "/keys/current")).data;
+  const libs = await accessibleLibraries(r.token, info);
+  if (!libs.length) return free("libraries", "라이브러리", "이 키로 읽을 수 있는 라이브러리가 없습니다 — 키를 만들 때 «Allow library access» 나 그룹 읽기 권한을 켰는지 확인하세요.", true);
+  return {
+    key: "libraries", unit: "라이브러리", emptyMeansAll: true, freeform: false,
+    options: libs.map((l) => ({ id: libraryPath(l), label: l.name || libraryPath(l), hint: l.kind === "users" ? "개인" : "그룹" })),
+  };
+}
+
 const PROVIDERS: Record<string, (memberId: string, teamId?: string) => Promise<ScopeOptionsResult>> = {
   github: githubOptions, gitlab: gitlabOptions, linear: linearOptions,
-  figma: figmaOptions, clickup: clickupOptions, slack: slackOptions,
+  figma: figmaOptions, clickup: clickupOptions, slack: slackOptions, zotero: zoteroOptions,
 };
 
 /**
@@ -205,6 +219,7 @@ const UNITS: Record<string, { key: string; unit: string; emptyMeansAll: boolean 
   figma: { key: "file_keys", unit: "파일", emptyMeansAll: false },
   clickup: { key: "include_list_ids", unit: "리스트", emptyMeansAll: true },
   slack: { key: "channels", unit: "채널", emptyMeansAll: true },
+  zotero: { key: "libraries", unit: "라이브러리", emptyMeansAll: true },   // 비면 이 키가 읽을 수 있는 라이브러리 전부
 };
 
 export function scopeOptionsSupported(system: string): boolean {

@@ -24,7 +24,7 @@ let pass = 0;
 const ok = (cond, what) => { assert.ok(cond, what); pass++; };
 const eq = (got, want, what) => { assert.deepEqual(got, want, what); pass++; };
 
-const { COLLECT_APPS, COLLECT_PRESET_APP, appAxes, collectTally, listBucket, pendingAxes, skipKey, catalogSoon } =
+const { COLLECT_APPS, COLLECT_PRESET_APP, appAxes, collectTally, pendingAxes, skipKey, catalogSoon } =
   await import(join(root, "public/app/lib/connect-axes.js"));
 
 const on = (preset) => ({ preset_key: preset, enabled: true });
@@ -32,9 +32,9 @@ const off = (preset) => ({ preset_key: preset, enabled: false });
 const tallyOf = (...rows) => collectTally(rows);
 
 // 배선 — 관측 장치가 죽어 있으면 아래 단언은 통과하면서 아무것도 안 본다.
-ok(typeof collectTally === "function" && typeof appAxes === "function" && typeof listBucket === "function"
+ok(typeof collectTally === "function" && typeof appAxes === "function"
   && typeof pendingAxes === "function" && typeof skipKey === "function",
-  "W0 잣대 다섯을 실제로 불러왔다");
+  "W0 잣대 넷을 실제로 불러왔다");
 ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 표 둘이 비어 있지 않다");
 
 // ── A. 수집기 셈 (collectTally) ─────────────────────────────────────────────
@@ -58,6 +58,14 @@ ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 
   eq(collectTally(null).size, 0, "A7 못 읽었으면 빈 표다(화면이 안 깨진다)");
   eq(tallyOf({ preset_key: "slack" }).get("slack"), { on: 0, off: 1 }, "A8 enabled 가 없으면 꺼진 것으로 센다");
   eq(tallyOf({ preset_key: "" }, {}).size, 0, "A9 preset 이 빈 행은 센 표에 들어가지 않는다");
+  //  사람마다 수집기가 하나인 앱(Zotero) — 남의 것이 켜져 있어도 내 라이브러리는 안 모인다. 내 것만 센다.
+  {
+    const z = (who, enabled = true) => ({ preset_key: "zotero", enabled, config: { token_source: `member:${who}` } });
+    eq(collectTally([z("kim"), z("lee")], "lee").get("zotero"), { on: 1, off: 0 }, "A10 Zotero 는 내 수집기만 센다(남의 것으로 «켜짐» 금지)");
+    eq(collectTally([z("kim")], "lee").get("zotero"), undefined, "A10b 남의 것만 있으면 내 칸은 없다");
+    eq(collectTally([z("kim")]).get("zotero"), undefined, "A10c 나를 모르면 켜졌다고 말하지 않는다");
+    eq(collectTally([on("slack"), on("slack")], "lee").get("slack"), { on: 2, off: 0 }, "A10d 워크스페이스에 하나인 앱은 종전 그대로");
+  }
 }
 
 // ── B. 두 축 판정 (appAxes) ────────────────────────────────────────────────
@@ -88,32 +96,12 @@ ok(COLLECT_APPS.length >= 6 && Object.keys(COLLECT_PRESET_APP).length >= 8, "W1 
     "B10 준비 중이라도 이미 연결해 둔 사람에겐 켜진 그대로 보인다");
 }
 
-// ── C. 목록 묶음 (listBucket) — 네 갈래 ────────────────────────────────────
-//  ★ 중간 상태(#3778, 원준 2026-09-20): «수집기는 흔히 저절로 생기니 둘 중 하나만 켜진 상태가 흔하다.
-//   그 상황은 뭔가 덜 완료된 느낌을 줘야 하고, 안에서 나머지를 켜거나 «안 쓴다»고 정하면 밖이 «연결 완료»가 된다.»
+// ── C. 상세의 «안 쓴다» 와 남은 축 (#3778) — 목록 묶음(listBucket)은 #4970 에 서버 길 상태로 바뀌어 걷었다 ──
 {
   const none = tallyOf();
   const skip = (...ks) => new Set(ks);
 
-  eq(listBucket(appAxes("figma", "off", none), false), "off", "C1 둘 다 꺼짐이면 «연결할 수 있는 앱»");
-  eq(listBucket(appAxes("notion", "on", none), false), "half",
-    "★C2 자격만 켜졌고 자료 가져오기를 안 정했으면 «연결 중» — 종전엔 이게 «연결됨»과 한 칸이라 끝난 것처럼 보였다");
-  eq(listBucket(appAxes("notion", "off", tallyOf(on("notion"))), false), "half",
-    "★C3 자료 가져오기만 켜진 흔한 상태도 «연결 중» — 종전엔 «연결할 수 있는 앱» 칸에 섰다(반대말)");
-  eq(listBucket(appAxes("notion", "on", tallyOf(on("notion"))), false), "on", "C4 둘 다 켜면 «연결 완료»");
-  eq(listBucket(appAxes("prometheus", "on", none), false), "on",
-    "★C5 없는 축은 남은 것이 아니다 — 축이 하나뿐인 앱은 그 하나만 켜면 «연결 완료»");
-  eq(listBucket(appAxes("prometheus", "off", none), false), "off", "C6 그 앱도 하나도 안 켜면 «연결할 수 있는 앱»");
-  eq(listBucket(appAxes("google", "on", tallyOf(on("gdrive"))), true), "soon",
-    "C7 준비 중은 묶음에서 연결 여부를 이긴다(#2243) — 그래도 카드의 두 축은 켜짐으로 남는다");
 
-  // ★ «안 쓴다»고 **정하면** 끝난 것이다 — 켠 것과 같은 칸으로 간다.
-  eq(listBucket(appAxes("notion", "on", none, skip(skipKey("notion", "get"))), false), "on",
-    "★C8 «자료 가져오기는 안 쓸래요» 를 누르면 밖이 «연결 완료»가 된다(원준 지시의 핵심)");
-  eq(listBucket(appAxes("notion", "off", tallyOf(on("notion")), skip(skipKey("notion", "use"))), false), "on",
-    "C9 반대쪽을 정해도 같다");
-  eq(listBucket(appAxes("notion", "off", none, skip(skipKey("notion", "use"))), false), "off",
-    "★C10 켠 것이 하나도 없는데 한쪽만 «안 쓴다»면 그건 완료가 아니다 — 여전히 «연결할 수 있는 앱»");
   eq(appAxes("notion", "off", none, skip(skipKey("notion", "use"))).use, "skip",
     "C11 정한 축은 «꺼짐»이 아니라 «안 쓰기로 함»이다(화면이 다른 말을 해야 한다)");
 

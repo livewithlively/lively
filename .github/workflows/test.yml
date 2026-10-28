@@ -120,6 +120,20 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/token-revoke.pg-test.mjs
+      # 웹 세션 회수 — 회수가 지우기 전의 로그인 방식·보관 IdP 토큰을 돌려주는가(CTE), 토큰을 지우는가, 두 번째는 0행인가.
+      # 앱 등록 지우기·노션 끊기(#4991) — 지울 칸 표가 앱마다 준비 판정(*Ready)이 실제로 읽는 칸을 다 덮는가(등록 → 참 → 지우기 → 거짓 —
+      #  하나라도 남기면 «지웠는데 여전히 등록됨»), 구성원 연결·조직 자리는 그대로인가, 노션 끊기가 수집기를 끄고 묶되 지우지 않는가.
+      #  목으로는 못 본다 — 실제 금고 칸·수집기 행으로 잰다(금고 키는 시험이 시험용으로 채운다).
+      - name: 앱 등록 지우기·노션 끊기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/connect-unregister.pg-test.mjs
+      - name: 웹 세션 회수 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/auth/session-revoke.pg-test.mjs
       # ④-c 세션 «보임 축»(#3855·#3857) — 목으로는 못 보는 것: **치움이 실제로 남는가 · 되살리기가 풀지 않는가**.
       #    치움의 정본은 org_app_instance 두 칸(status·closed_reason)이고 판정이 전부 SQL 조건이라, 조건 하나를
       #    지워도 목 풀은 초록이다. 사유로 사람/시스템을 가르는지 · 멱등 · 남의 행 불가 · restore 승계를 read-back 으로 본다.
@@ -128,6 +142,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/app-instance-dismiss.pg-test.mjs
+      # ④-c1b 잠긴 연결 스킬 시딩(#4970) — 외부 앱 연결 스킬은 코드가 정본이라 시딩이 **손 댄 행·꺼 둔 행·좁힌 대상까지** 코드 판으로
+      #    되돌려야 한다. 그 규칙은 전부 ON CONFLICT … DO UPDATE … WHERE 한 문장이라 목 풀은 조건 하나를 지워도 초록이다 — read-back 으로 본다.
+      - name: 잠긴 연결 스킬 시딩 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/delivery/seed-locked-skills.pg-test.mjs
       # ④-c2 아웃박스 결말 SQL(#4697 T7) — 모든 프롬프트 배달이 지나는 UPDATE 에 측정용 RETURNING 을 붙였다. SQL 이 틀리면
       #    배달 루프가 결말마다 던져 사람의 말이 하나도 안 간다 — 목 풀은 SQL 문자열이 무엇이든 초록이라 실 Postgres 로만 판정된다.
       - name: 아웃박스 결말 SQL PG 통합 테스트
@@ -456,6 +477,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/capabilities/knowledge/write-gate-name.pg-test.mjs
+      # ⑤-m3 지식 fields 부분 갱신 — 잠근 행 위에서 병합·버전 대조·감사가 한 트랜잭션에 묶이는가. 목으로는 jsonb 왕복과
+      #    FOR UPDATE 위의 CAS 가 안 보인다(그 파일 머리말의 사양 엣지 표).
+      - name: 지식 fields 갱신 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/capabilities/knowledge/set-fields.pg-test.mjs
       # ⑤-n 개인 해제(break-glass) — 위와 같은 경계의 **예외** 경로다. 해제가 실제로 열리는가보다
       #    «해제가 끝나면 닫히는가 · 남의 것은 안 열리는가» 가 중요한데 그것도 SQL 조건이다.
       - name: 가시성 개인 해제 PG 통합 테스트
@@ -517,6 +545,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-servers.pg-test.mjs
+      # ⑤-m2b 앱 백그라운드 작업(#4486 앱 v2-7) — 받기 · 줄 세우기(앱 · 워크스페이스 동시 상한 · 대기 · 하루 상한) · 가짜 Lambda 비동기 부르기 ·
+      #    검사 층의 claim(한 번 쓰는 비밀 — 재전송 409 · 위조 401) · 박동 · 결과 · 돌기 신원의 사람 주체 · 취소 · 감시(다시 부름 · 박동 없음 ·
+      #    시간 초과) · 배포가 열린 작업의 판 · 토큰을 남기는지 · 앱 지우기 · 보존은 진짜 SQL 조건과 잠금에서만 보인다.
+      - name: 앱 백그라운드 작업(받기 · 부르기 · claim · 박동 · 결과 · 감시) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-jobs.pg-test.mjs
       # ⑤-n3 앱 폴더 보관(#4778) — 앱을 지우는 모든 입구(관리자 제거 · 나만 보는 앱 지우기 · 기본 앱 은퇴 · 빈 예약 거두기)가 앱 폴더를
       #    보관으로 옮기는지, 같은 id 로 새로 만들 때 남은 폴더를 먼저 옮겨 새 앱이 빈 폴더로 시작하는지(옛 파일 서명 주소 404 · 탐색기 빈 목록),
       #    보관 기간이 지나면 지우는지, 관리자 목록 · 비우기 · 되돌리기 · 고아 옮기기가 기록 표와 실제 폴더를 같이 맞추는지는 진짜 DB · 폴더에서만 보인다.
@@ -605,6 +641,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/collect/collect-links.pg-test.mjs
+      # ⑤-w 시드 훅 기본 sort 이행 + 러너 응답(#1470) — 목으로는 못 보는 것: 이행이 updated_by 를 남기나(바꾸면 사람이 끈 훅을
+      #    기본값 승격 블록이 **다음 부팅에** 다시 켠다 — 부팅을 두 번 돌려야 드러난다) · 조직이 바꾼 sort 를 덮지 않나 ·
+      #    러너 응답이 숫자 sort 와 조직의 동시 실행 설정(기본 꺼짐)을 싣나. 시드가 기본 콘텐츠를 통째로 심으므로 임시 DB 에서 돈다.
+      - name: 시드 훅 sort 이행 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/delivery/seed-sort-migrate.pg-test.mjs
       # ⑥ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
       #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
       #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.

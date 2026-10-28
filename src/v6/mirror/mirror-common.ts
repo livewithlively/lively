@@ -2,6 +2,30 @@
 //  knowledge/pm/project/source 미러가 공유한다(교차 의존을 여기 한 곳으로 모아 mirror/* 상호 순환 0 유지).
 import type pg from "pg";
 
+/**
+ * Postgres 가 받지 못하는 글자를 걷는다(순수, #5040) — text·jsonb 둘 다 NUL(U+0000)을 거부하고(«invalid byte sequence
+ *  for encoding "UTF8": 0x00»), jsonb 는 짝 없는 서로게이트(외톨이 \ud83d)도 거부한다. 외부 자료 한 건에 그런 글자가
+ *  섞이면 그 행 적재가 실패해 run 의 커서가 동결되고, 매 run 이 같은 자리에서 실패하다 서킷 브레이커가 수집기를 끈다
+ *  (실측: 슬랙 4.5만 건 중 한 건의 NUL). 글자 하나를 버리는 편이 자료 전체를 못 받는 것보다 낫다 — agent-jobs/plan.ts
+ *  noNul·wellFormed 와 같은 규칙.
+ */
+export function pgText(s: string): string {
+  const t = s.includes("\u0000") ? s.split("\u0000").join("") : s;
+  return t.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+}
+
+/** pgText 를 객체·배열 안의 모든 글(키 포함)에 — jsonb 칸(raw·fields)용. 순수. */
+export function pgDeep<T>(v: T): T {
+  if (typeof v === "string") return pgText(v) as unknown as T;
+  if (Array.isArray(v)) return v.map((x) => pgDeep(x)) as unknown as T;
+  if (v && typeof v === "object") {
+    const o: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) o[pgText(k)] = pgDeep(val);
+    return o as unknown as T;
+  }
+  return v;
+}
+
 // 감사 append — entity 별 actor_kind='connector'/channel='connector' 고정. before/after 스냅샷은 JSON 직렬화.
 //  같은 트랜잭션 client(미러 쓰기와 원자적). FK 없는 append-only 라 대상 행 삭제 후에도 이력 보존.
 export async function auditConnector(

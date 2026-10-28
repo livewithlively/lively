@@ -31,22 +31,21 @@ test("★★ 킥오프는 진짜 세션 — 리브 세션 모듈이 launchSessio
   assert.match(KICKOFF, /export const LIV_HREF = "#\/liv";/, "리브 탭 주소가 #/liv 가 아니다");
 });
 
-test("★★ 처음 설정 반영은 진짜 세션 길만 — 헤드리스 대화 턴(startLivChatTurn)이 없고, 재사용도 리브 탭으로 보낸다", () => {
-  const kick = WELCOME.slice(WELCOME.indexOf("export async function kickoffLivAfterWelcome"));
-  assert.doesNotMatch(kick, /startLivChatTurn/, "★ 킥오프가 아직 헤드리스 대화 턴을 띄운다(매니지드에서 500)");
-  assert.match(kick, /if \(plan\.action === "reuse"\) return \{ session_id: plan\.sessionId, href: LIV_HREF, reused: true \};/, "재사용 갈래가 리브 탭으로 안 보낸다");
-  assert.doesNotMatch(kick, /liv_turn_id|liv_chat_id|priorTurn/, "대화 턴 좌표(liv_turn_id/liv_chat_id/priorTurn)가 남아 있다");
-  assert.match(kick, /await livKickoff\(user, \{ prompt: buildFirstTurnPrompt\(\{ \.\.\.turnInput, harness: plan\.harness, surface: "chat" \}\), harness: plan\.harness \}\);/, "진짜 세션(livKickoff) 생성 자리가 없다");
-  assert.equal(WELCOME.split("kickoffLivAfterWelcome(").length - 1, 2, "킥오프를 부르는 자리가 하나가 아니다(정의+호출 2)");
+test("★★ (#4970) 처음 설정 반영은 리브 세션을 열지 않는다 — 외부 앱 연결은 사람이 [연결할게요]를 누를 때 리브 세션에 맡긴다(me_liv_open)", () => {
+  //  종전(#1631 → #4213 T13)엔 반영의 마지막 걸음이 리브 킥오프였다. 그 길이 AI 미로그인·Claude 아닌 하네스에서 막다른 길이라 걷었다.
+  assert.doesNotMatch(WELCOME, /kickoffLivAfterWelcome|livKickoff\(|buildFirstTurnPrompt|planLivKickoff|startLivChatTurn/, "★ 처음 설정 반영이 아직 리브 세션을 연다");
+  assert.doesNotMatch(WELCOME, /welcome: \{[^}]*\bflow\b/, "★ 새로 끝내는 사람에게 리브 갈래(flow)를 적는다 — 리브 2턴 후보가 된다");
 });
 
 test("★★ 2턴 스윕은 세션(deliverPrompt) 길만 — 대화 턴(viaChat) 배선이 없다", () => {
   assert.doesNotMatch(SWEEP, /viaChat|startLivChatTurn|livTurnDone|chatTurnState|liv-chat-busy/, "★ 스윕에 대화 킥오프 배선이 남아 있다");
-  assert.match(SWEEP, /const kickSid = String\(c\.welcome\.session_id\);/, "후보 세션 id 를 session_id 에서 안 읽는다");
+  //  (#5060) 파일 갈래는 킥오프 세션 없이 온다 — 있으면 session_id, 없으면 null(그때는 판정이 새로 열기를 낸다).
+  assert.match(SWEEP, /const kickSid = c\.welcome\.session_id \? String\(c\.welcome\.session_id\) : null;/, "후보 세션 id 를 session_id 에서 안 읽는다");
   //  #4032 — 2턴은 **지금의 리브 세션**(복원 이정표를 따라간 id)에 넣는다. 옛 킥오프 id 만 보면 되살린 대화를 두고 새 세션을 또 연다.
   assert.match(SWEEP, /const sid = \(await withTenant\(tenant, \(\) => currentLivSessionId\(c\.id\)\)\.catch\(\(\) => null\)\) \?\? kickSid;/, "★ 2턴이 지금의 리브 세션을 안 본다");
   assert.match(SWEEP, /await withTenant\(tenant, \(\) => deliverPrompt\(sid, prompt, \{ owner: c\.id \}\)\);/, "증류 지시를 세션에 deliverPrompt 로 안 넣는다");
-  assert.match(STORE, /WHERE welcome->>'session_id' IS NOT NULL/, "후보 SQL 이 세션만 보지 않는다");
+  assert.match(STORE, /WHERE \(welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'\s+OR \(welcome->>'flow' = 'connect' AND welcome->>'upload_started_at' IS NOT NULL\)\)/,
+    "후보 SQL 이 세션(+ #5060 세션 없이 새로 여는 갈래 — second-turn opensFreshSession 과 같은 조건)만 보지 않는다");
   assert.doesNotMatch(STORE, /liv_turn_id|liv_chat_id/, "LivWelcome 에 대화 턴 좌표가 남아 있다");
 });
 

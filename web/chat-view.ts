@@ -750,24 +750,45 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     class: 'livc-jump', type: 'button', hidden: true, text: jumpText(0),
     onclick: () => { stick = true; toBottom(); },
   }) as HTMLButtonElement;
-  // ⚠ 우리가 바닥으로 내린 직후의 scroll 이벤트는 '사람이 올렸다'가 아니다 — 내용이 연달아 붙는 되그리기 중에는 내린 뒤
-  //  다음 덩이가 먼저 붙어 이벤트가 '바닥이 아님'으로 잡히고, 그 한 번에 stick 이 풀려 [최신 대화로] 가 괜히 뜬다(실측).
-  //  프로그램 스크롤 뒤 120ms 안의 이벤트는 stick 을 풀지 않는다(붙이는 방향은 그대로 반영).
-  let progAt = 0;
+  // ⚠ «사람이 올렸다» 는 scroll 사건이 아니라 **사람의 입력**(휠 · 터치 · 스크롤 막대 누름 · 글쇠)으로 안다.
+  //  종전엔 «우리가 내린 뒤 120ms 안의 사건이 아니면 사람» 으로 쳤는데, 큰 대화를 처음 그릴 때(2,400px tui 글 · 한글 두 칸 감싸기)는
+  //  프레임이 늦어 우리가 내린 스크롤의 사건이 1초 넘게 뒤에 오고, 그 사이 안내 줄·입력칸이 서서 «바닥이 아님» 으로 잡혀 stick 이 풀렸다
+  //  (실측 2026-10-19, 꺼진 세션 box-wonjoon-jang-febbca30: 사건 1.4초 지연 → 마지막 답 54px 숨음 · «Jump to bottom» 만 섬).
+  //  내용이 자라거나 칸이 줄어 생기는 스크롤(브라우저 고정 · 글꼴 도착 · 우리 toBottom)은 사람이 아니다 — stick 을 건드리지 않는다.
+  let userAt = 0;
+  const USER_WINDOW_MS = 1500;
+  const markUser = (): void => { userAt = Date.now(); };
+  for (const ev of ['wheel', 'touchstart', 'touchmove', 'pointerdown'] as const) list.addEventListener(ev, markUser, { passive: true });
+  list.addEventListener('keydown', markUser);
   list.addEventListener('scroll', () => {
     const near = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM;
     if (near) { stick = true; jump.hidden = true; unseen = 0; return; }
+    if (Date.now() - userAt > USER_WINDOW_MS) return;        // 사람이 아닌 스크롤 — 바닥 따라가기는 그대로(다음 크기 변화에서 다시 내린다)
     //  tui — 터미널은 바닥을 떠나는 순간 그 단추를 세운다(새 글이 오기 전에도).
-    if (tui && Date.now() - progAt > 120 && jump.hidden) { jump.textContent = jumpText(unseen); jump.hidden = false; }
-    if (Date.now() - progAt > 120) stick = false;
+    if (tui && jump.hidden) { jump.textContent = jumpText(unseen); jump.hidden = false; }
+    stick = false;
   });
-  const toBottom = (): void => { progAt = Date.now(); list.scrollTop = list.scrollHeight; jump.hidden = true; unseen = 0; };
+  const toBottom = (): void => { list.scrollTop = list.scrollHeight; jump.hidden = true; unseen = 0; };
   const scroll = (): void => {
     if (stick) { toBottom(); return; }
     unseen++;
     jump.textContent = jumpText(unseen);
     jump.hidden = false;
   };
+  //  바닥에 붙어 있는 동안 **크기가 바뀌면** 다시 바닥으로 — 안내 줄·입력칸이 서서 목록 칸이 줄거나, 늦게 그려진 표·그림으로 내용이 자랄 때.
+  //  ⚠ 꺼진 세션 실측(2026-10-19, box-wonjoon-jang-febbca30 · …86a360ca): 처음 열며 바닥으로 내린 **뒤에** «꺼 두었어요» 안내 줄(36px)과
+  //   입력칸(75px)이 서서 목록 칸이 줄고 늦게 그려진 내용이 더 자라, 마지막 답이 90~244px 아래에 숨었다. 폴링이 멈춘 세션이라 scroll() 이
+  //   다시 불리지 않아 영영 그 자리였고, 사람은 마지막으로 보이는 제 질문만 보고 «답을 안 보여 준다» 고 읽었다(원준 2026-10-19).
+  //   브라우저는 칸이 줄어도 scrollTop 을 그대로 두므로 scroll 사건이 없다 — 크기 관찰자가 그 틈을 메운다. 사람이 올려 둔 동안(stick 거짓)엔 손대지 않는다.
+  //   목록 자체(칸 크기)와 끝에 붙는 덩이(턴 · 구분선 · 알림 — 내용 크기)를 함께 본다.
+  let stickRo: ResizeObserver | null = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    stickRo = new ResizeObserver(() => { if (stick) toBottom(); });
+    stickRo.observe(list);
+  }
+  const watchSize = (n: Element): void => { try { stickRo?.observe(n); } catch { /* 관찰자가 없는 브라우저 — 종전대로 scroll() 만 */ } };
+  //  관찰자가 없거나 늦는 틈(안내 줄·입력칸은 레이아웃 뒤 한 틱이면 선다)을 위해 — 바닥에 붙어 있었으면 다음 틱에 한 번 더 내린다.
+  const restickSoon = (): void => { if (!stick) return; setTimeout(() => { if (stick) toBottom(); }, 0); };
 
   //  tui — 위에 붙는 사람 말 머리(Claude Code 전체 화면): 지금 읽는 턴의 사람 말이 화면 위로 지나가면 맨 위에 그 말 한 줄(`❯ …`)이
   //   선다(흐린 글자 · 사람 말 띠 바탕 · 넘치면 «…»). 누르면 그 말로 올라간다.
@@ -1043,6 +1064,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   const appendEnd = (node: HTMLElement): void => {
     const a = firstPinned()?.root;
     if (a && a !== node) list.insertBefore(node, a); else list.append(node);
+    watchSize(node);   // 끝에 붙은 덩이가 늦게 자라도(표·그림) 바닥 따라가기가 풀리지 않게
   };
   /** turnsArr 도 화면 순서와 같게 — 붙들린 첫 턴 앞에 넣는다(없으면 끝). */
   const turnsInsert = (t: ChatTurn): void => {
@@ -1106,7 +1128,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     const t: ChatTurn = { root: root0, work, ask, text: userText ?? '', ts: o?.ts, r: { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() }, live: null, startedAt: Number.isFinite(t0) ? t0 : Date.now() };
     if (o?.at === 'start') { list.prepend(root0); turnsArr.unshift(t); }
     else {
-      if (o?.pinned) { list.append(root0); turnsArr.push(t); pinnedTurns.push(t); }   // 대기 말풍선 — 맨 끝(앞서 붙든 것들 아래)
+      if (o?.pinned) { list.append(root0); turnsArr.push(t); pinnedTurns.push(t); watchSize(root0); }   // 대기 말풍선 — 맨 끝(앞서 붙든 것들 아래)
       else { appendEnd(root0); turnsInsert(t); }
       //  새 턴이 섰다 — 쉬는 동안의 안내는 걷는다(Claude Code 도 턴이 시작되면 걷고, 끝나면 시계를 다시 건다).
       if (tui && idleAt != null) { idleAt = null; paintIdle(); }
@@ -1595,7 +1617,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     root, list, input, form, noteEl: note, style,
     turn, unpin, event, stream, settle, running, busy, scroll,
     scrollToBottom: () => { stick = true; toBottom(); },
-    setNote: (text: string) => { note.textContent = text; },
+    setNote: (text: string) => { note.textContent = text; restickSoon(); },   // 안내 줄이 서면 목록 칸이 준다 — 바닥에 붙어 있었으면 그대로 붙어 있게
     error: (t, text) => {
       //  tui — 빨간 `⎿` 덩이(Claude Code 가 도구·API 오류를 그리는 자리). 그 밖은 종전 오류 줄.
       const n = tui ? el('div', { class: 'livc-err tui-res tui-err' }, ...splitLinesForErr(text).map((l) => rl(l))) : el('div', { class: 'livc-err', text });
@@ -1630,7 +1652,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       paintIdle();
     },
     removeOpening: () => { list.querySelector('.livc-open')?.remove(); },
-    setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; },
+    setFooter: (f) => { footSlot.querySelectorAll(':scope > :not(form)').forEach((n) => n.remove()); if (f) { form.hidden = true; footSlot.append(f); } else form.hidden = false; restickSoon(); },
     turns: () => turnsArr.slice(),
     setFontStep: (step) => {
       const n = parseFontStep(String(Math.round(step)));
@@ -1642,6 +1664,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     destroy: () => {
       document.removeEventListener('keydown', onEsc);
       fitRo?.disconnect();
+      stickRo?.disconnect();
       if (ticker) clearInterval(ticker);
       if (spinTimer) clearInterval(spinTimer);
       try { (document as Document & { fonts?: FontFaceSet }).fonts?.removeEventListener('loadingdone', onFontsDone); } catch { /* 구형 */ }

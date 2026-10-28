@@ -2,7 +2,7 @@
 
 *[English](architecture.md)*
 
-라이블리 **통합 컨텍스트 스토어** — 모든 로컬 AI 도구(클로드코드 · Codex · OpenCode · Antigravity CLI · Grok Build …)가 붙는
+라이블리 **통합 컨텍스트 스토어** — 모든 로컬 AI 도구(클로드코드 · Codex · OpenCode · Antigravity CLI · Grok Build · Cursor …)가 붙는
 사내 **MCP 게이트웨이** 한 대. 조직 지식(WIKI) · 분류축(category) · 프로젝트/과업 · 도메인 맥락 · DB(읽기전용) 를
 한 곳에서 노출하고, **퍼유저 인증 + 스코프**로 통제한다. 웹 UI · 웹 터미널 · 수집기 · 스케줄러도 이 게이트웨이가 맡는다.
 

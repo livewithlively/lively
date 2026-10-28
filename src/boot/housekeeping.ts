@@ -14,6 +14,7 @@ import { autoActivateWorkspaceRegistry } from "../org/tenancy/activate.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
 import { reapOAuth } from "../org/store/oauth.js";
+import { reapEndedSessionTokens } from "../auth/sessions.js";
 import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
@@ -349,6 +350,8 @@ function startBackgroundSweeps(): void {
   setInterval(() => { void perTenant("device-auth-reap", () => reapDeviceAuth()); }, 600_000).unref();
   // #1473 T2 OAuth reaper — 만료된 인가요청·인가코드 정리. 리프레시는 회전 사슬(도난 탐지 근거)이라 더 오래 둔다.
   setInterval(() => { void perTenant("oauth-reap", () => reapOAuth()); }, 600_000).unref();
+  // SSO 로그아웃(#1356) — 만료·회수된 웹 세션에 남은 IdP id_token(암호문)을 지운다. 30일 만료 단위라 1시간 주기로 충분.
+  setInterval(() => { void perTenant("web-session-token-reap", () => reapEndedSessionTokens()); }, 60 * 60_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
   //  ⚠ 설정도 **그 워크스페이스 안에서** 읽어야 한다 — 보존기간은 워크스페이스마다 다르다.
@@ -416,6 +419,12 @@ function startBackgroundSweeps(): void {
       .then(() => reapPressureSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
+  // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 셀프호스트에도 구성원 컴퓨터가 붙는다 — 매니지드의 요청 정비표와 같은 1분.
+  //  컴퓨터마다 켜야 돈다(기본 꺼짐 · org_node.stop_rule). 노드가 없으면 곧바로 돌아간다(DB 무접촉).
+  //  ⚠ 부팅 직후엔 돌리지 않는다 — 노드가 다시 붙어 스냅샷을 올리기 전(그리고 보는 중 판정이 «모름» 인 45초)엔 판정할 재료가 없다.
+  setInterval(() => {
+    void perTenant("node-stop-rule", () => import("../sessions/node-stop-rule.js").then(({ sweepNodeStopRule }) => sweepNodeStopRule()));
+  }, 60_000).unref();
   // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.

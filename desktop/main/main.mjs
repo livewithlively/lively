@@ -18,14 +18,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
-import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
+import { runBootstrap, bootstrapPreview, bootstrapManualHint } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
 import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
-import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
+import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, createOpenLedger, surfacePopupTitle, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
@@ -974,13 +974,72 @@ function browserSurfaceSession() {
   const s = session.fromPartition(BROWSER_SURFACE_PARTITION);
   if (!surfaceSessionReady) {
     surfaceSessionReady = true;
-    try { s.setUserAgent(cleanUserAgent(s.getUserAgent(), app.getName())); } catch { /* 비치명 — 표식이 남을 뿐이다 */ }
+    // UA 는 스톡 Electron UA 그대로 둔다(고쳐 쓰지 않는다) — #5023. UA 문자열을 재작성하면 Cloudflare Turnstile 이
+    //  600010 으로 막는다(UA 와 클라이언트 힌트가 어긋나 위장으로 읽힘). 상세·근거는 browser-surface.mjs 「UA」 머리말.
     // 요구를 조용히 삼키지 않고 거부한다. 사람이 허용하는 흐름이 생기면 surfacePermissionAllowed 를 그때 넓힌다.
     try { s.setPermissionRequestHandler((_wc, permission, cb) => cb(surfacePermissionAllowed(permission))); } catch { /* 비치명 */ }
     try { s.setPermissionCheckHandler((_wc, permission) => surfacePermissionAllowed(permission)); } catch { /* 비치명 */ }
     void reloadInstalledExtensions(s);   // ③ 저장해 둔 확장을 다시 건다 — Electron 은 확장을 기억하지 않는다
   }
   return s;
+}
+
+// 서피스 안의 webContents 인가 — `<webview>` 게스트, 그리고 **그 게스트가 연 팝업 창**(#5025).
+//  ⚠ 팝업 창은 getType() 이 "window" 라 webview 판정만 하면 웹 UI 규칙(openTargetFor)에 걸린다 — 게이트웨이 밖 이동을
+//   전부 시스템 브라우저로 던져서 구글 로그인 창이 첫 이동에서 죽는다. 그래서 **세션**으로 가른다: window.open 으로 연 창은
+//   opener 의 저장소에서 태어나고(opener 가 살려면 같은 브라우징 인스턴스여야 한다), opener 없이 새로 짓는 창엔
+//   surfacePopupWebPreferences 가 파티션을 준다. 세션이 아직 없으면 게스트도 팝업도 있을 수 없다 — 웹 UI 창마다 서피스 세션을 깨우지 않는다.
+function isSurfaceContents(wc) {
+  if (wc.getType() === "webview") return true;
+  return surfaceSessionReady && wc.session === browserSurfaceSession();
+}
+
+// 서피스 팝업 창 — **우리가 지은 것만** 센다(상한 판정). 페이지가 정할 수 있는 값(show 등)으로 세면 숨은 창으로 상한을 피한다.
+const surfacePopups = new Set();
+// 새 창 문의 기록 장부 — 탭 가족(웹 칸 탭 + 거기서 이어 열린 팝업) 단위. 팝업마다 따로 세면 팝업이 또 여는 사슬이 상한을 피한다.
+const surfaceLedger = createOpenLedger();
+
+// 서피스 webContents 의 주인 창 — 게스트면 그 게스트를 품은 앱 창, 팝업이면 그 팝업 창 자신.
+function surfaceOwnerWindow(wc) {
+  try {
+    const w = BrowserWindow.fromWebContents(wc.hostWebContents || wc);
+    return w && !w.isDestroyed() ? w : null;
+  } catch { return null; }
+}
+
+// 사람이 그 앱 창을 쓰고 있나 — 새 창 문의 첫 조건(뒤에 깔린 창·AI 혼자 도는 탭이 사람 화면에 창을 띄우지 않게).
+function surfaceHostFocused(wc) {
+  const owner = surfaceOwnerWindow(wc);
+  return !!owner && owner.isFocused();
+}
+
+// 서피스가 연 팝업 창을 **우리가** 짓는다(setWindowOpenHandler 의 createWindow). 페이지의 기능 문자열은 크기 말고는 버린다 —
+//  frame·modal·show·alwaysOnTop 같은 값을 그대로 받으면 남의 페이지가 «닫기 없는 모달 창» · «숨은 창» 을 만든다(surfacePopupWindowSpec).
+//  주인 창 위에 떠서 사람이 로그인 창을 뒤로 잃지 않는다. 제목 앞엔 실제 호스트 — 주소줄이 없는 창이라 어디인지 보이게.
+function createSurfacePopup(opener, url, options) {
+  const owner = surfaceOwnerWindow(opener);
+  const area = (owner ? screen.getDisplayMatching(owner.getBounds()) : screen.getPrimaryDisplay()).workArea;
+  const guest = options && options.webContents;
+  //  webPreferences 는 guest 가 있어도 다시 준다 — 기존 webContents 로 창을 지으면 Electron 이 이 값으로 설정을 **새로 덮는다**
+  //  (v43.3.0 CreateFromWebPreferences → SetFromDictionary: 비우고 다시 채움). 빼면 격리가 Electron 기본값으로 돌아간다.
+  const win = new BrowserWindow({
+    ...surfacePopupWindowSpec(options, area),
+    ...(owner ? { parent: owner } : {}),
+    webPreferences: surfacePopupWebPreferences(),
+    ...(guest ? { webContents: guest } : {}),
+  });
+  surfacePopups.add(win);
+  surfaceLedger.adopt(win.webContents, opener);   // 이 팝업이 또 여는 창도 같은 가족의 빈도로 센다
+  win.on("closed", () => surfacePopups.delete(win));
+  // 지은 뒤에도 페이지는 창을 못 옮기고·못 키우고(moveTo·resizeTo → content-bounds-updated) 닫기를 못 막는다(beforeunload).
+  win.webContents.on("content-bounds-updated", (e) => e.preventDefault());
+  win.webContents.on("will-prevent-unload", (e) => e.preventDefault());
+  const retitle = (u, t) => { if (!win.isDestroyed()) win.setTitle(surfacePopupTitle(u, t)); };
+  retitle(url, "");   // 첫 제목 전부터 출처를 보인다(빈 창에 쓴 거짓 제목 대비)
+  win.on("page-title-updated", (e, title) => { e.preventDefault(); retitle(win.webContents.getURL(), title); });
+  win.webContents.on("did-navigate", (_e, navUrl) => retitle(navUrl, win.webContents.getTitle()));
+  if (!guest) void win.loadURL(url).catch(() => { /* 못 연 주소 — 빈 창이 남고 사람이 닫는다 */ });
+  return win.webContents;
 }
 
 // ── 브라우저 확장(애드온) (#1829) ────────────────────────────────────────────
@@ -1124,8 +1183,8 @@ async function reloadInstalledExtensions(sess) {
 // 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — **두 규칙이 산다**:
 //  · 웹 UI(우리 페이지·자식 창): web-shell.openTargetFor — 같은 출처는 앱 안의 새 창으로(토큰이 같은 localStorage 라
 //    그대로 로그인 상태), 바깥은 시스템 브라우저로, 그 외(javascript: 등)는 열지 않는다. 자식 창에도 같은 preload·격리를 준다.
-//  · 브라우저 서피스 게스트(#1829): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
-//  그래서 게스트를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
+//  · 브라우저 서피스 게스트(#1829)와 그 팝업 창(#5025): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
+//  그래서 서피스를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
 app.on("web-contents-created", (_e, wc) => {
   // ── 우클릭 메뉴(#1870) — 모든 webContents 공통(웹 UI·자식 창·서피스 게스트). 앱은 브라우저와 달리
   //  기본 우클릭 메뉴가 없어 링크 주소를 복사할 길이 없었다. 항목 판정은 context-menu.mjs(순수 모델)가 한다.
@@ -1137,22 +1196,35 @@ app.on("web-contents-created", (_e, wc) => {
       : { label: m.label, click: () => runContextMenuAction(m.id, params, wc, clipboard) }))).popup();
   });
 
-  // ── 브라우저 서피스 안(=`<webview>` 게스트)은 규칙이 정반대다 ───────────────────────────────────────
+  // ── 브라우저 서피스 안(=`<webview>` 게스트와 그 팝업 창)은 규칙이 정반대다 ───────────────────────────
   //  아래 웹 UI 규칙(openTargetFor)은 "남의 사이트를 앱에 들이지 않는다" 라 **게이트웨이 밖 이동을 전부 밖으로 던진다**.
   //  그걸 서피스에도 걸면 남의 사이트를 보려고 만든 화면이 첫 이동에서 통째로 시스템 브라우저로 튄다 — 기능이 죽는다.
-  //  게스트는 `getType() === "webview"` 로 갈린다(Electron 이 주는 신호라 우리가 표시를 붙일 필요가 없다).
-  if (wc.getType() === "webview") {
-    wc.setWindowOpenHandler(({ url }) => {
-      // 서피스 안에서 새 창(`target=_blank`·window.open)은 띄우지 않는다 — 서피스는 창이 아니라 화면 한 칸이라
-      //  떠도 사람이 닫을 크롬이 없다. 볼 수 있는 주소면 시스템 브라우저로 넘긴다(눌렀는데 아무 일도 없는 것보다 낫다).
-      if (surfaceNavTarget(url) !== "deny") shell.openExternal(url);
+  //  판정은 isSurfaceContents — 게스트는 `getType() === "webview"`, 팝업 창은 서피스 세션으로 갈린다.
+  if (isSurfaceContents(wc)) {
+    wc.setWindowOpenHandler(({ url, disposition, features }) => {
+      // 스크립트가 창 기능을 주고 연 팝업은 앱 안의 작은 창으로 — opener 가 살아 팝업 로그인(구글·애플·MS)이 결과를 돌려받는다.
+      //  그 밖(target=_blank 링크 · Shift+클릭 · 기능 없는 window.open)은 시스템 브라우저로. 판정 표는 surfaceWindowOpenTarget.
+      const t = surfaceWindowOpenTarget({ url, disposition, features, openPopups: surfacePopups.size });
+      if (t === "deny") return { action: "deny" };
+      // 크롬의 팝업 차단기 대신 — 사람이 그 앱 창을 쓰고 있을 때만, 그 탭 가족에서 10초에 3번·1분에 12번까지(surfaceOpenGate).
+      if (!surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) return { action: "deny" };
+      if (t === "popup") {
+        return {
+          action: "allow",
+          // 팝업 webContents 의 격리(페이지 기능 문자열보다 이긴다) + 창은 우리가 짓는다(createSurfacePopup).
+          overrideBrowserWindowOptions: { webPreferences: surfacePopupWebPreferences() },
+          createWindow: (options) => createSurfacePopup(wc, url, options),
+        };
+      }
+      shell.openExternal(url);
       return { action: "deny" };
     });
     wc.on("will-navigate", (e, url) => {
       const t = surfaceNavTarget(url);
       if (t === "allow") return;
       e.preventDefault();
-      if (t === "external") shell.openExternal(url);
+      // 밖으로 넘기는 것(mailto·DRM)도 같은 문 — location 을 돌려 대며 시스템 앱·브라우저를 쏟지 못하게.
+      if (t === "external" && surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) shell.openExternal(url);
     });
     return;
   }
@@ -1173,7 +1245,9 @@ app.on("web-contents-created", (_e, wc) => {
     //  (게스트 session !== 우리 세션, UA·권한 핸들러 전부 미적용 = **격리가 통째로 무력**). `webPreferences` 로
     //  넣어야 붙는다. 값이 반영된 것처럼 보여서 코드만 읽으면 절대 안 보이는 함정이다 — 바꾸기 전에 실기기로 재라.
     webPreferences.partition = BROWSER_SURFACE_PARTITION;
-    params.allowpopups = false;   // 팝업의 실질 차단은 게스트의 setWindowOpenHandler 다(이건 겹겹이)
+    //  새 창도 같은 함정이다 — `params.allowpopups` 는 Electron 이 이 훅 **전에** webPreferences.disablePopups 로 바꿔 둔다
+    //  (v43.3.0 guest-view-manager.ts makeWebPreferences). 그래서 params 에 적어도 아무 일이 없다. 팝업은
+    //  WEBVIEW_FORCED_PREFS.disablePopups(=false)로 게스트의 setWindowOpenHandler 까지 오게 하고, 거기서 정한다(#5025).
   });
 
   wc.setWindowOpenHandler(({ url }) => {
@@ -1304,7 +1378,10 @@ async function ensureCli(src) {
     progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
     progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
     state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
-    return { ok: false, error: b.error || bootstrapFailNote(src, cli) };
+    // CLI 가 아예 안 생겼으면(윈도우) 손으로 하는 한 줄을 붙인다 — 회사 정책·사내 프록시에 막힌 PC 의 출구다(bootstrap.mjs 머리 주석).
+    const note = b.error || bootstrapFailNote(src, cli);
+    const manual = cli ? null : bootstrapManualHint(src.url);
+    return { ok: false, error: manual ? `${note}\n${manual}` : note };
   }
   progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
   send(IPC.PROGRESS, progress);
@@ -1497,6 +1574,9 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
 });
 
 // ── 수명 ────────────────────────────────────────────────────────────────────
+// 가려진 창·다른 데스크톱 공간의 창도 숨김으로 치지 않는다 — 사람이 다른 공간에 있는 동안 AI 가 웹 칸에서 연 페이지가
+//  그려지고 찍히게(browser-surface OCCLUDED_WINDOW_SWITCH 머리말). 스위치는 앱이 준비되기 **전에** 걸어야 먹는다.
+app.commandLine.appendSwitch(OCCLUDED_WINDOW_SWITCH);
 // 두 번째 인스턴스는 창만 띄우고 죽는다 — 트레이 아이콘이 둘, CLI 가 동시에 둘 도는 걸 막는다.
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

@@ -21,6 +21,7 @@ import { stateDir } from "./ops/state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import { registerNotifyRoutes } from "./v6/notify-routes.js";
+import { registerBrowserRoutes } from "./browser/routes.js";   // #4993 AI·사람 공용 브라우저 — 화면 쪽 스트림·답
 import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
@@ -35,11 +36,13 @@ import {
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword, hasCredential } from "./auth/local-accounts.js";
 import { activeProviders } from "./auth/providers.js";
+import { ssoLogoutRedirect } from "./auth/logout-redirect.js";
 import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO)은 Enterprise — 미탑재면 local 만 남는다
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
 import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트(redeem · me · page · #4482 lively)
+import { registerAppJobRoutes } from "./apps/app-jobs-routes.js"; // #4486 v2-7 — 앱 백그라운드 작업의 콜백(함수 안 검사 층 → 시작 확인 · 박동 · 결과)
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -174,6 +177,14 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       rule.logStopRuleTick(r);
       return r;
     });
+    // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 주로는 요청에 얹은 정비(1분)와 마감 깨움이 돌리고, 이 틱(5분)은 받침이다.
+    //  노드가 없는 워크스페이스는 곧바로 «no-nodes» 를 돌려준다(DB 무접촉). 판은 워크스페이스당 한 줄(컴퓨터별 건너뛴 이유 · 판정 분포)을 남긴다.
+    await step("node-stop-rule", async () => {
+      const rule = await import("./sessions/node-stop-rule.js");
+      const r = await rule.sweepNodeStopRule();
+      rule.logNodeStopRuleTick(r);
+      return r;
+    });
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
@@ -239,13 +250,19 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  앱 주소(<앱>-<워크스페이스>.lvly.app)의 앞단(CP 라우터)만 부르고, 그 문은 `x-lvly-app-front` 서명이다(테넌트 헤더만으론 부족 —
   //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
   registerAppFrontRoutes(app);
+  // ── 앱 백그라운드 작업의 콜백(#4486 v2-7) — /api/app-jobs/:id/{claim,tick,result}. 함수 안 검사 층이 부른다(사람 로그인이 아니라
+  //  그 함수의 앱 서버 토큰 + 작업 비밀). 본문은 apps/app-jobs-routes.ts.
+  registerAppJobRoutes(app, verifier);
 
+  // IdP 로 로그인한 세션이면 redirect(IdP 로그아웃 문)를 함께 준다 — 브라우저가 그리로 가야 IdP 세션까지 끝난다.
+  //  그 외 로그인은 종전 응답 {ok:true} 그대로다(auth/logout-redirect.ts).
   app.post("/api/ui/logout", wrap(async (req, res) => {
     const sid = parseSessionCookie(req.headers.cookie);
-    if (sid) await revokeSession(sid);
+    const ended = sid ? await revokeSession(sid) : null;
     res.setHeader("Set-Cookie", clearSessionCookie());
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true });
+    const redirect = await ssoLogoutRedirect(ended, () => gatewayUrlForRequest(req), ee().sso);
+    res.json(redirect ? { ok: true, redirect } : { ok: true });
   }));
 
   // 본인 비번 변경 — 세션/토큰 인증 필요. 현재 비번 확인 후 교체(8자+).
@@ -310,22 +327,28 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
     pdf: "application/pdf",
   };
-  app.get("/api/ui/notion-assets/:file", ...mw(null), wrap(async (req, res) => {
+  //  #5012 — 리니어 첨부(data/linear-assets)도 같은 규칙으로 내보낸다. 폴더를 정하는 법만 다르다.
+  const serveAsset = (assetDirOf: () => Promise<string>) => wrap(async (req, res) => {
     const file = String(req.params.file ?? "");
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(file) || file.includes("..")) {
       res.status(400).json({ error: "잘못된 첨부 파일 이름" }); return;
     }
-    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
-    let dir = process.env.NOTION_ASSET_DIR || "";
-    try {
-      const { resolveConnectorConfig } = await import("./connectors/config.js");
-      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
-    } catch { /* config 계층 실패 → env/기본 폴백 */ }
-    const assetDir = dir || stateDir("notion-assets");
+    const assetDir = await assetDirOf();
     const full = path.resolve(assetDir, file);
     if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
     const fsMod = await import("node:fs");
-    if (!fsMod.existsSync(full)) { res.status(404).json({ error: "첨부 파일 없음" }); return; }
+    if (!fsMod.existsSync(full)) {
+      // #5012 — 크기 상한으로 일부러 안 받은 첨부면 이유와 원본 위치를 글로 답한다(본문은 이미 이 주소를 가리킨다).
+      const { readSkipMarker, skipNotice } = await import("./connectors/asset-limits.js");
+      const skipped = readSkipMarker(assetDir, file);
+      if (skipped) {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "private, no-store");
+        res.status(200).type("text/plain; charset=utf-8").send(skipNotice(skipped));
+        return;
+      }
+      res.status(404).json({ error: "첨부 파일 없음" }); return;
+    }
     const ext = (file.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? "").toLowerCase();
     const inlineType = ASSET_INLINE_TYPES[ext];
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -333,7 +356,17 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Content-Type", inlineType ?? "application/octet-stream");
     res.setHeader("Content-Disposition", inlineType ? "inline" : `attachment; filename="${file}"`);
     fsMod.createReadStream(full).on("error", () => { if (!res.headersSent) res.status(404).json({ error: "첨부 파일 없음" }); }).pipe(res);
+  });
+  app.get("/api/ui/notion-assets/:file", ...mw(null), serveAsset(async () => {
+    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
+    let dir = process.env.NOTION_ASSET_DIR || "";
+    try {
+      const { resolveConnectorConfig } = await import("./connectors/config.js");
+      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
+    } catch { /* config 계층 실패 → env/기본 폴백 */ }
+    return dir || stateDir("notion-assets");
   }));
+  app.get("/api/ui/linear-assets/:file", ...mw(null), serveAsset(async () => stateDir("linear-assets")));
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {
@@ -453,6 +486,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  #4054 — 받는 자리는 «워크스페이스 + 사람»(notify-scope.ts). 다른 워크스페이스는 `?all=1`(데스크톱 앱)일 때만.
   registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "",
     (req, me, all) => resolveNotifyRoutes(userOf(req), me, all));
+
+  // ── AI 와 사람이 같이 쓰는 브라우저(#4993) — 데스크톱 앱 화면이 명령을 받는 스트림(SSE) + 답·상태 자리. ──
+  //  AI 쪽 표면은 capability(browser_*), 이건 화면 쪽 배관이다(src/browser/routes.ts 머리말).
+  registerBrowserRoutes(app, mw("memory"), (req) => userOf(req));   // #4993 — 툴과 같은 문(memory · 알림 스트림과 같다)
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

@@ -123,6 +123,10 @@ export async function initMemberAuth(pool: Pool): Promise<void> {
       ip TEXT,
       user_agent TEXT);
     CREATE INDEX IF NOT EXISTS web_session_member_idx ON web_session(member_id);
+    -- 로그인 방식('oidc' 등, NULL=비밀번호·교환 등 IdP 없는 로그인)과 IdP id_token(secret-box 암호문).
+    --  로그아웃이 IdP 세션까지 끝낼 때 쓴다(end_session_endpoint 의 id_token_hint). 회수 시 토큰은 지운다.
+    ALTER TABLE web_session ADD COLUMN IF NOT EXISTS auth_method TEXT;
+    ALTER TABLE web_session ADD COLUMN IF NOT EXISTS sso_id_token_enc TEXT;
   `);
 
   // ── git_credential — 레포 클론·세션 git 용 자격(#540). 웹UI로 관리(→DB 저장)하되 시크릿(개인키·토큰)은

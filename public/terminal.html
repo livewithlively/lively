@@ -242,12 +242,12 @@
   .mkey-l { font-size: 11.5px; color: var(--fg-dim); }
   .mkey-t { font-size: 13.5px; font-weight: 700; }
   .mkey-caret { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
-  .mkeys[hidden] { display: none; }
-  /*  번호로 고르기 — AI 가 번호로 물을 때만 글쇠 줄 자리에 선다. 생김새는 글쇠 그대로(.mkey)이고 폭만 나눠 쓴다(원준 «디자인 언어가 달라져서»). */
-  .mpicks { display: flex; align-items: center; gap: 6px; }
+  /*  번호로 고르기 — AI 가 번호로 물을 때만 글쇠 줄 **맨 앞에** 붙는다. 글쇠는 그대로 남아 번호가 안 먹는 목록(/permissions)에서도
+       Esc·↑↓·⏎ 로 빠져나온다(#4990). 생김새는 글쇠 그대로(.mkey, 원준 «디자인 언어가 달라져서»)이고 세로선 하나로 글쇠와 가른다.
+       폭은 글쇠와 같은 44px — 번호 셋 + Esc·⏎·↑·↓ 가 375px 폰 한 화면에 든다(나머지는 밀어서). */
+  .mpicks { flex: none; display: flex; align-items: center; gap: 6px; padding-right: 6px; border-right: 1px solid var(--border); }
   .mpicks[hidden] { display: none; }
-  .mpicks-t { flex: none; font-size: 12px; color: var(--fg-dim); margin: 0 2px 0 4px; }
-  .mkey.mpick { flex: 1 1 0; min-width: 0; font-size: 15px; font-weight: 600; }
+  .mkey.mpick { font-size: 15px; font-weight: 600; }
   /*  일하는 방식 고르기(모드 시트) — 줄마다 이름 + 한 줄 설명, 지금 방식에 «지금». */
   .mmode { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border: 0; background: none; color: var(--fg); font: inherit; text-align: left; }
   .mmode + .mmode { border-top: 1px solid var(--border); }

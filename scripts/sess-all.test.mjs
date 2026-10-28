@@ -124,13 +124,15 @@ ok(/onSessProject: showSessAll,/.test(MAIN) && /paintSessAll\(hit\)/.test(show) 
   "S12 프로젝트 줄 → 가운데 목록을 그 값으로 다시(없으면 그리로 · 폰이면 서랍을 닫는다)");
 
 // S13 — 가운데 목록 자신.
-const all = code(cut(BINS, "export function renderSessAll("));
+//  #4865 — 표(열 머리 · 묶음 머리 · 행 · 접기 · 거르개)는 v2/sess-table.ts 로 옮겨 프로젝트 보드 「리스트」 뷰와 같이 쓴다 — 둘을 함께 본다.
+const TABLE = read("web/v2/sess-table.ts");
+const all = code(cut(BINS, "export function renderSessAll(") + "\n" + TABLE);
 ok(/selectAllSess\(items, q\)/.test(all) && /ownerCounts\(items, q\)/.test(all),
   "S13 가운데 목록은 잎 모듈의 잣대로 거른다(프로젝트 · 기간 · 사람)");
 ok(/PAST_PERIODS\.map/.test(all) && /'data-pick': 'period'/.test(all) && /'data-pick': 'owner'/.test(all),
   "S14 ★날짜·사람 고르개가 있다 — 기간은 「지난 세션」과 같은 표(PAST_PERIODS)");
 ok(/owner: isMineSess\(s\) \? 'me'/.test(all), "S15 «나» 의 판정은 views.ts isMineSess 한 벌이다");
-ok(/v === 'dismissed' \? el\('span', \{ class: 'v2-bin-tag', text: '치움'/.test(all) && /v && verdictStands\(v\)/.test(all),
+ok(/hooks\.verdict\(it\.s\) === 'dismissed' \? el\('span', \{ class: 'v2-bin-tag', text: '치움'/.test(all) && /v && verdictStands\(v\)/.test(all),
   "S16 치운 세션은 「치움」 꼬리표로 그대로 서고, 치우기는 홈에 서 있는 줄에만 — 홈 판정(verdictStands)으로 가른다");
 ok(/hooks\.onOpen\(s\)/.test(all) && !/window\.open|openSessionWindow|terminalUrl/.test(all),
   "S17 줄을 누르면 셸의 문(hooks.onOpen)으로만 연다 — 새 터미널 창을 따로 열지 않는다");
@@ -279,8 +281,8 @@ if (lib) {
 }
 {
   //  W1 — 배선: 목록 · 피크 · 셸.
-  const all2 = code(cut(BINS, "export function renderSessAll("));
-  ok(/const sc = sessScope\(\);/.test(all2) && /const mby = mainGroupBy\(sc\);/.test(all2) && /groupAllSess\(vis, mby, now, stateRank\)/.test(all2)
+  const all2 = code(cut(BINS, "export function renderSessAll(") + "\n" + TABLE);
+  ok(/const sc = sessScope\(\);/.test(all2) && /const mby = mainGroupBy\(sc\);/.test(all2) && /sessTable\(\{\s*vis, by: mby,/.test(all2) && /groupAllSess\(vis, by, o\.now, stateRank\)/.test(all2)
     && /group: sc\.group !== null \? \{ by: sc\.by, key: sc\.group \} : null/.test(all2),
     "W1a ★본문은 사이드바가 고른 기준 · 카드로 거르고 묶는다(mainGroupBy)");
   ok(/chip\('waiting', '확인 필요'/.test(all2) && /chip\('busy', '작업 중'/.test(all2) && /state: ui\.state/.test(all2), "W1b 상태 칩이 상태 거르개를 건다");
@@ -292,7 +294,7 @@ if (lib) {
     "W1e ★행을 한 번 누르면 홈에서 그 세션을 연다(hooks.onOpen) — 사이드 피크는 없다");
   ok(!/renderPeek/.test(BINS.slice(BINS.indexOf("export function renderSessAll("))) && !/peek: ''/.test(all2) && !/v2-sa-peek/.test(all2),
     "W1f ★[AI 세션] 목록에 피크 코드가 남아 있지 않다(상태 · 조립 · 보내기 전부)");
-  ok(/ui\.sort = nextSessSort\(ui\.sort, key\)/.test(all2) && /const ordered = \(rs: readonly Item\[\]\): Item\[\] => sortAllSess\(rs, ui\.sort, sortFields\)/.test(all2)
+  ok(/ui\.sort = nextSessSort\(ui\.sort, key\)/.test(all2) && /const ordered = \(rs: readonly T\[\]\): T\[\] => sortAllSess\(rs, ui\.sort, sortFields\)/.test(all2)
     && /const rows = ordered\(g\.rows\);/.test(all2) && !/sortAllSess\(vis/.test(all2),
     "W1g ★열 머리 정렬은 묶음 안에서만 — 묶는 기준(시간별 · 리스트별 …)을 건드리지 않는다");
   const paint2 = code(cut(MAIN, "function paintSessAll(", "\nfunction repaintSessAll"));
@@ -315,9 +317,9 @@ if (lib) {
     "W3a ★묶기 드롭다운은 사이드바 머리에 있다(시간별 · 리스트별 · 사람별 · 상태별, 구분선 아래 묶지 않음)");
   ok(!/SESS_GROUP_BYS\.filter/.test(all2) && !/'data-pick': 'by'/.test(all2) && !/showCtxMenu\([^\n]*title: '묶기'/.test(all2),
     "W3c ★본문 도구줄에는 묶기 단추가 없다(2안 — 기준은 사이드바 한 곳)");
-  const flat = cut(all2, "if (mby === 'none' && vis.length) {", "\n  for (const g of");
-  ok(flat.includes("for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); }") && !/untitled|v2-sa-fold/.test(flat)
-    && /for \(const g of mby === 'none' \? \[\] : groupAllSess\(vis, mby, now, stateRank\)\)/.test(all2),
+  const flat = cut(all2, "if (by === 'none' && vis.length) {", "\n  for (const g of");
+  ok(flat.includes("for (const it of ordered(vis)) { if (budget-- <= 0) break; list.append(rowOf(it)); drawn++; }") && !/untitled|v2-sa-fold/.test(flat)
+    && /const groups = by === 'none' \? \[\] : groupAllSess\(vis, by, o\.now, stateRank\);/.test(all2) && /for \(const g of groups\)/.test(all2),
     "W3b ★묶지 않음이면 묶음 머리 없이 전부 최근 순, 이름 없는 세션도 접지 않는다");
   ok(/el\('span', \{ class: 'crumb k', 'data-by': sc\.by, text: byLabel \}\)/.test(all2) && /crumbs\.length \? crumbs\[crumbs\.length - 1\] : '전체'/.test(all2),
     "W4a 빵부스러기는 «AI 세션 / 기준 / 고른 것», 안 골랐으면 «전체»");

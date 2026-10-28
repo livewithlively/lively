@@ -118,7 +118,7 @@ PUBLIC_URL=http://<host>:8080 BOOTSTRAP_ADMIN_EMAIL=you@org.com ORG_DOMAIN=org.c
 | 4 Build | Source deploy (git clone/rsync): `npm ci && npm run build`. Release bundle (ships `dist`, no `src`): build skipped, only `npm ci --omit=dev` |
 | 5 Service + TLS | (Linux) memory safety — creates a swap file if there's no swap, plus earlyoom (`LIVELY_SWAP_SIZE`, default 8G · skip with `LIVELY_MEM_SAFETY=off`) → register and start systemd (Linux) / launchd (Mac) + `/healthz` (listen) + **wait for `/readyz` `schema=ready`** (through schema self-migration and the first-boot self-restart) + automatic HTTPS via Caddy if `LIVELY_DOMAIN` is set |
 | 6 Bootstrap | Seeds the first admin (web session login account) · anonymous baseline · default connectors — `deploy/bootstrap-*.mjs` (⚠ after the readiness wait · retries itself for ≤60s if the schema isn't ready). **If any of them fails, it shows as ✗ in the summary and install.sh exits non-zero** — the gateway is up, so just rerun the command for the ✗ item |
-| 7 Central-box kit | Installs lively into the host claude (MCP + hooks + context) — `deploy/install-kit.sh`. **Web terminal sessions can then CRUD context.** |
+| 7 Server AIs + central-box kit | (Linux) installs whichever of the four server AIs (Claude, ChatGPT, Gemini, Grok) are missing — failures are warnings (see «Server AI CLIs» below) → installs lively into the host claude (MCP + hooks + context) — `deploy/install-kit.sh`. **Web terminal sessions can then CRUD context.** |
 
 Environment variables: `LIVELY_DOMAIN` (automatic HTTPS when set — see [TLS](#tls-automatic-https--caddy) below) · `PUBLIC_URL` · `BOOTSTRAP_ADMIN_EMAIL`
 · `BOOTSTRAP_ADMIN_PASSWORD` (random if omitted) · `ORG_DOMAIN` · `WITH_EMBEDDINGS=1` (embeddings sidecar + provider=http + backfill at the end of install, end to end — t4g.large+ recommended) · `FORCE=1` (ignore an existing gateway detected on :8080).
@@ -156,6 +156,7 @@ ssh -i ~/.ssh/<key> ubuntu@<host> 'cd <APP_DIR> && bash deploy/update.sh --kit'
 | | First install (`install.sh`) | Update (`update.sh`) |
 |---|---|---|
 | Dependencies (docker·node·tmux·claude) | Installed | Untouched |
+| Server AIs (Claude·ChatGPT·Gemini·Grok, Linux) | Missing ones installed | Missing ones installed (after the restart) — existing ones are not upgraded |
 | `.env`, secrets | Created if missing | Preserved |
 | store (pgvector) | Created | Applied idempotently (image/compose changes only) |
 | Memory safety (Linux swap·earlyoom) | Configured | Reapplied idempotently (existing settings respected) |
@@ -325,8 +326,28 @@ includes `install-kit.sh` (same end state as a member's local install, except ga
   + a user-scope MCP registration (`mcpServers` in `~/.claude.json` — the same result as `claude mcp add --scope user`). Verify: `claude mcp list | grep lively` → `✔ Connected`.
 - Standalone reinstall: `bash deploy/install-kit.sh` (env: `LIVELY_TOKEN`·`LIVELY_GATEWAY`·`KIT_HARNESS=claude,codex`).
 - The Claude account for web terminal sessions is per member: by default (multi-profile #346) a session starts with a member-specific `CLAUDE_CONFIG_DIR` (`~/.lively/profiles/<slug>/claude`),
-  and the member logs in once in that session (`LIVELY_MULTIPROFILE=0` = shared mode for single-user boxes). On Linux you can also opt into per-member OS user isolation
-  (`sudo bash deploy/linux/install-isolation.sh`, #524).
+  and the member logs in once in that session (`LIVELY_MULTIPROFILE=0` = shared mode for single-user boxes). On Linux, per-member OS user isolation (#524) is
+  **on by default for new installs** (#5031 — `install.sh` runs `install-isolation.sh` and restarts the gateway; opt out with `LIVELY_MEMBER_ISOLATION=off`).
+  It is not turned on by default for `OFFLINE=1` / `LIVELY_SERVER_AIS=off` boxes or when re-running over an existing install (`FORCE=1`); use `LIVELY_MEMBER_ISOLATION=on` there.
+  A member's OS account and their own Claude/ChatGPT (about 700MB) are created the first time they open a session or job on this server — a web session, a server AI
+  [Connect] in first setup, a project chat, an agent job, and so on. No cost for people who only use AI on their PC.
+  Existing boxes keep their mode on update — to turn it on, run `sudo GATEWAY_USER=<gateway user> bash deploy/linux/install-isolation.sh` and restart the gateway (members log in to their AIs again).
+  To turn it off on an isolated box, set `LIVELY_MEMBER_ISOLATION=off` in `.env` and restart the gateway.
+  With isolation, logins for all four AIs (Claude, ChatGPT, Gemini, Grok) stay in each
+  member's home; without it only Claude is per member and the rest share one box account.
+- Server AI CLIs (#4970): install (`install.sh` 7/7) and update (`update.sh` · blue-green `deploy-release.sh`) set up all four — only the missing ones, and a failure is a warning (Linux).
+  Each one gets `LIVELY_SERVER_AIS_TIMEOUT` seconds (default 600). The first download is a few hundred MB up to about 1GB (measured: Claude 280MB · ChatGPT 424MB; Grok 165MB;
+  Gemini on top). Boxes that must not fetch executables from outside sites (claude.ai · npm · x.ai · antigravity.google) turn it off with `LIVELY_SERVER_AIS=off`.
+  Claude (native) and ChatGPT (install-codex-user) for the gateway user; Gemini and Grok box-wide (/usr/local/bin, install-harness-clis — same install
+  as the managed session image). Isolated boxes also install Claude and ChatGPT per member (provision-member). First-run «AI 연결» only lists AIs
+  installed on this server. To rerun by hand: `sudo bash deploy/install-harness-clis.sh [agy] [grok]`. Updates do not upgrade what is already there —
+  Claude and ChatGPT update themselves; for Gemini/Grok rerun the script with `FORCE=1`. Installing ChatGPT appends a comment line and
+  `prefix=<that home>/.npm-global` to the gateway user's `~/.npmrc` (an existing prefix is kept) so its self-update writes to that home. If the gateway runs
+  as root, ChatGPT is not installed (so root's npm global prefix stays put — install it by hand with `sudo npm i -g @openai/codex` if needed).
+  Requires root, `runuser` (util-linux), a `nobody` account, curl, and an executable temp dir (`TMPDIR=/var/tmp` if `/tmp` is noexec). The vendor installers run as the unprivileged account.
+  On isolated boxes, every member who opens first-run setup gets a server account (home plus member-scoped claude and codex, a few hundred MB) — creation starts on the
+  intro scene and runs while they read it and enter a name (also for members who then pick a PC AI or leave the intro with [나중에 할게요]).
+  Isolated member kits wire all four (claude, codex, antigravity, grok) — **members provisioned earlier** get the four only after rerunning `provision-member.sh` (idempotent).
 
 ## Directory layout (Linux/Mac parity shows in the structure — main files only)
 
@@ -354,7 +375,8 @@ deploy/
     lively-gateway.service      # systemd unit template
     lively-gateway@.service     # blue-green template unit (color instances)
     lively-loopback.{socket,service} # blue-green :8080 loopback alias
-    install-isolation.sh        # per-member OS user isolation (opt-in, #524)
+    install-isolation.sh        # per-member OS user isolation (#524 · default for new installs #5031)
+  install-harness-clis.sh       # Gemini (agy) · Grok CLIs box-wide (called by install and update, #4970)
   mac/                # ── macOS support ──
     provision.sh                          # brew (tmux·node)·docker check·claude / launchd install
     io.lvly.lively.plist        # launchd plist template

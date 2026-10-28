@@ -113,11 +113,12 @@ test("④ 수집이 끝나면 증류를 지금 민다", () => {
 });
 
 test("⑤ 권한 부족은 사유와 갈 길을 함께 말한다", () => {
-  assert.match(SLACK, /function scopeHint\(method: string, err: unknown\): string/, "권한 안내가 없다");
+  assert.match(SLACK, /function scopeHint\(method: string, err: unknown, needed\?: string\): string/, "권한 안내가 없다");
   assert.match(SLACK, /"search\.messages": "search:read/, "이 신고의 그 메서드가 표에 없다");
   assert.match(SLACK, /\[외부 앱 연결 ▸ Slack\]에서 다시 연결/, "갈 길을 안 준다");
-  //  ⚠ 모르는 메서드에 스코프를 지어내면 엉뚱한 권한을 켜게 한다.
-  assert.match(SLACK, /const need = SCOPE_BY_METHOD\[method\];/, "표에 없는 메서드도 단정한다");
+  //  ⚠ 모르는 메서드에 스코프를 지어내면 엉뚱한 권한을 켜게 한다. 슬랙이 응답에 실어 준 «모자란 권한»(needed)은
+  //   지어낸 것이 아니라 슬랙의 말이라 표보다 먼저 쓴다(#5040) — 둘 다 없으면 아무 권한도 단정하지 않는다.
+  assert.match(SLACK, /const need = needed\?\.trim\(\) \|\| SCOPE_BY_METHOD\[method\];/, "표에 없는 메서드도 단정한다");
 });
 
 test("⑳ 자동 정지 표식 — 사람이 스위치를 바꿀 때만 지우고, 실행 기록은 지우지 않는다", () => {

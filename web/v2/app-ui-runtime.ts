@@ -17,6 +17,7 @@
 //                                                ev = { table, op, source, session }. 돌려주는 함수를 부르면 끊는다.
 //    lively.session                          → 이 화면이 붙은 세션 id(세션 오른쪽 앱 칸에서 열렸을 때). 아니면 null.
 //    await lively.ai.run({prompt, schema?, job?, files?, wait?}) → AI 실행 하나(#4488 — {id,status,result}; wait 초를 주면 끝날 때까지). get(id) · list() · cancel(id) · targets()
+//    await lively.jobs.start(route, body?, {label?, timeout_s?, wait?}) → 이 앱 서버의 라우트를 뒤에서(#4486 — 15분까지 · {id,status,result}). get(id,{wait}) · list() · cancel(id) · wait(id)
 //    await lively.chat.send(text)            → 붙은 세션에 글을 **바로 보낸다**(#4594 — 채우기가 아니다). 붙은 세션이 없으면 -32602,
 //                                                사람이 누른 동작 밖(타이머 등)이면 -32001. { sent, session, transport } ·
 //                                                멈춘 세션이면 { sent:false, draft }(draft=true 면 호스트가 그 세션 입력칸에 넣어 두었다).
@@ -227,6 +228,7 @@ export const APP_RUNTIME_JS = `
     if (m.id == null) {
       if (m.method === 'ui/notifications/data-changed') fire('data', m.params || {});
       else if (m.method === 'ui/notifications/prefs-open') fire('prefs-open', m.params || {});
+      else if (m.method === 'ui/notifications/state') { api.state = (m.params && m.params.state && typeof m.params.state === 'object') ? m.params.state : null; fire('state', m.params || {}); }   // #4769 호스트가 새 state 를 밀었다(알림을 눌러 그 자리로)
       else if (m.method === 'ui/notifications/insets') applyInsets(m.params || {});
       return;
     }
@@ -314,6 +316,7 @@ export const APP_RUNTIME_JS = `
     ui: {
       openExternal: function (url) { return post('ui/openExternal', { url: String(url) }); },
       onPrefsOpen: function (cb) { return subscribe('prefs-open', cb); },
+      onState: function (cb) { return subscribe('state', cb); },   // #4769 lively.state 가 바뀌었다({state}) — 알림을 눌러 들어온 자리로 옮겨 간다
       chrome: function (opts) { return post('ui/chrome', { head: !(opts && opts.head === false) }); },
       openMenu: function (items, at) { return post('ui/menu', { items: items || [], x: at && at.x, y: at && at.y }); },
       expand: function () { return post('ui/expand', {}); },
@@ -335,6 +338,28 @@ export const APP_RUNTIME_JS = `
       list: function (opts) { return api.tools.call('app_ai_runs', opts || {}).then(function (r) { return (r && r.runs) || []; }); },
       cancel: function (id) { return api.tools.call('app_ai_run_cancel', { id: Number(id) }); },
       targets: function () { return api.tools.call('app_ai_targets', {}); }
+    },
+    // 백그라운드 작업(#4486 앱 v2-7) — 이 앱 서버의 라우트를 뒤에서(요청 하나 30초와 달리 15분까지). 서버를 선언한 앱(web.server)만. 작업은 내 이름으로 돈다.
+    //  wait(id) 는 끝날 때까지 25초씩 다시 묻는다(전체 상한 opts.timeout_ms — 기본 17분). 끝 상태: done(라우트가 2xx) · failed · canceled.
+    jobs: {
+      start: function (route, body, opts) {
+        var o = opts || {};
+        return api.tools.call('app_job_start', { route: String(route), body: body === undefined ? {} : body, label: o.label, timeout_s: o.timeout_s, wait: o.wait });
+      },
+      get: function (id, opts) { var o = opts || {}; return api.tools.call('app_job_get', { id: Number(id), wait: o.wait }); },
+      list: function (opts) { return api.tools.call('app_jobs', opts || {}).then(function (r) { return (r && r.jobs) || []; }); },
+      cancel: function (id) { return api.tools.call('app_job_cancel', { id: Number(id) }); },
+      wait: function (id, opts) {
+        var o = opts || {};
+        var until = Date.now() + (Number(o.timeout_ms) || 17 * 60 * 1000);
+        var once = function () {
+          return api.tools.call('app_job_get', { id: Number(id), wait: 25 }).then(function (j) {
+            if (!j || j.status === 'done' || j.status === 'failed' || j.status === 'canceled' || Date.now() >= until) return j;
+            return once();
+          });
+        };
+        return once();
+      }
     },
     prefs: {
       get: function () { return post('prefs/get', {}).then(function (r) { return (r && r.prefs) || {}; }); },

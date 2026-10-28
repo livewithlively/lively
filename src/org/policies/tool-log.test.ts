@@ -270,4 +270,31 @@ t("A9 작업 컨테이너 지시(#4490) — agent_job_run 의 prompt 값은 남�
   assert.ok(stored("agent_job_get", { id: 3 }).includes("3"), "다른 작업 도구는 그대로");
 });
 
+// ── S. 비밀을 받는 툴 — 모양 없는 client secret 도 기록에 남지 않는다(#4970 리뷰) ──
+t("S1 앱 등록 · 금고 저장 · GitHub App · git 토큰 — 값은 안 남고 칸 이름·크기만", () => {
+  resetExternalTools();
+  //  토큰 «모양» 이 없는 비밀들 — redactDeep 가 못 잡는 것이 핵심이다(32자 hex · GOCSPX- · 평범한 글자).
+  const hex = "9f2c4e7a1b3d5f6e8a0c2b4d6f8e1a3c";
+  const goog = "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";
+  const cases: Array<[string, Record<string, unknown>, string[]]> = [
+    ["org_connect_register", { app: "slack", values: { client_id: "123.456", client_secret: hex } }, [hex, "123.456"]],
+    ["org_credential_set", { kind: "google_oauth", scope_key: "oauth:client", secret: JSON.stringify({ client_id: "x.apps", client_secret: goog }) }, [goog]],
+    ["me_credential_set", { kind: "clickup_token", scope_key: "", secret: "plain-team-secret-value" }, ["plain-team-secret-value"]],
+    ["org_github_app_register", { client_id: "Iv1.abc", client_secret: hex, app_id: "123456", app_slug: "lively-acme", private_key: "not-a-pem-but-secret" }, [hex, "not-a-pem-but-secret"]],
+    ["me_git_credential_set", { kind: "https", host: "git.example.com", token: "plain-git-token" }, ["plain-git-token"]],
+  ];
+  for (const [tool, args, secrets] of cases) {
+    const out = stored(tool, args);
+    for (const sec of secrets) assert.ok(!out.includes(sec), `${tool}: 비밀이 기록에 남았다`);
+    assert.match(out, /기록하지 않음/, `${tool}: 값 대신 «기록하지 않음» 이 선다`);
+  }
+  //  무엇을 등록하려 했는지는 남는다 — 앱 · 칸 이름 · 금고 kind.
+  assert.ok(stored("org_connect_register", cases[0]![1]).includes("slack") && stored("org_connect_register", cases[0]![1]).includes("client_secret"), "앱과 칸 이름은 남는다");
+  assert.ok(stored("org_credential_set", cases[1]![1]).includes("google_oauth"), "kind 는 남는다");
+  //  비밀 칸이 없는 호출(meta·label 만 고침)은 그대로.
+  assert.ok(stored("org_credential_set", { kind: "aws_role_arn", meta: { account: "1234" } }).includes("1234"), "비밀 칸이 없으면 그대로");
+  //  다른 툴의 같은 이름 칸은 건드리지 않는다(표에 있는 툴만).
+  assert.ok(stored("org_profile", { secret: "visible" }).includes("visible"), "표에 없는 툴은 그대로");
+});
+
 console.log(`\n${pass} passed`);

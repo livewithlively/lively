@@ -16,6 +16,7 @@ import { getApp, getActiveGrant, getAppVersionHead, type OrgApp } from "../org/s
 import { canSeeApp, isEmptyDraftApp, type Viewer } from "../apps/visibility.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { appIconSpecOf } from "../apps/manifest.js";   // #4769 앱 아이콘 선언
+import { serverDeclOf } from "../apps/app-server-config.js";   // #4485 후속 — 서버가 화면을 만드는 앱도 «화면 있음»
 import { canAttach } from "../terminal/terminal-sessions.js";
 import {
   attachAppRow, detachAppRow, listAttachedApps, publishAppEventToSession, requireSessionParticipant, requireUsableApp,
@@ -64,7 +65,8 @@ export function describeAttached(row: SessionAppRow, app: OrgApp | null, savedBy
     attached_at: row.attached_at,
     attached_by: row.member_id,
     usable: !!app && app.status === "active" && app.enabled,
-    has_ui: pages.length > 0,
+    //  화면 파일이 있거나, 서버가 화면을 만드는 앱(web.server — 화면 파일 없이도 앱 주소로 뜬다 · #4485 후속).
+    has_ui: pages.length > 0 || serverDeclOf(app?.manifest) !== null,
     icon: appIconSpecOf(app?.manifest ?? null),   // #4769 — 앱 탭 · 독 · 머리줄이 그 앱의 그림을 그린다(없으면 기본 그림)
     pages,
     tables,

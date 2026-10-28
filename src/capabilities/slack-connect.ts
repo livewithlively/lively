@@ -5,7 +5,7 @@
 //  관리탭 ▸ 외부 자료 수집 에 가서 xoxp 를 붙여 넣는 단계가 사라진다(컴맹 페르소나의 탈락 지점이 그 단계였다).
 //
 //  인스턴스는 둘이다(#1531 상보 규약 — 커서가 갈려 서로 안 민다):
-//   · `lively-search` — 켠 관리자의 유저 토큰으로 전 공개채널 검색 스윕(token_source=member:<id>)
+//   · `lively-search` — 켠 관리자의 유저 토큰으로 전 공개채널 기록 스윕(token_source=member:<id>, #5040)
 //   · `lively-bot`    — 라이블리 앱 봇 토큰으로 봇 초대 채널(비공개 포함) 스윕(token_source=bot). 봇 토큰이 있을 때만 켠다.
 //  끄면 enabled=false 로 남긴다(삭제 아님 — 커서·자료가 남고 다시 켜면 이어받는다).
 import { z } from "zod";
@@ -13,9 +13,9 @@ import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { listCollectors, upsertCollector, type CollectorView } from "../org/store/collectors.js";
 import { getMemberSecret, listSecretsByKindPublic, memberOwner, GATEWAY_OWNER } from "../org/credentials/member-secret-store.js";
-import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl } from "../org/credentials/slack-oauth.js";
+import { SLACK_BOT_KIND, buildSlackAppManifest, slackAppCreateUrl, slackManifestProblems } from "../org/credentials/slack-oauth.js";
 import { getOrgProfile } from "../org/store.js";
-import { completeSlackInstall } from "../org/credentials/oauth-broker.js";
+import { completeSlackInstall, slackAppReady } from "../org/credentials/oauth-broker.js";
 import { COLLECT_INTERVALS, normalizeInterval } from "./member-collect.js";
 
 export const SEARCH_INSTANCE = "lively-search";
@@ -44,6 +44,8 @@ export interface SlackCollectState {
   backfill_since: string;
   /** 마지막으로 실제 읽은 때. */
   last_run: { status: string; started_at: string; finished_at: string | null } | null;
+  /** 슬랙 앱이 준비됐는가 — 매니지드 = CP 릴레이, 셀프호스트 = 관리자가 등록한 Slack 앱 client(#4970, 다른 앱의 app_ready 와 같은 뜻). */
+  app_ready: boolean;
 }
 
 async function memberConnected(memberId: string): Promise<boolean> {
@@ -74,12 +76,13 @@ export async function slackCollectState(callerId: string): Promise<SlackCollectS
     last_run: search?.last_run
       ? { status: search.last_run.status, started_at: search.last_run.started_at, finished_at: search.last_run.finished_at }
       : null,
+    app_ready: await slackAppReady().catch(() => false),
   };
 }
 
 const orgSlackCollect: Capability = {
   name: "org_slack_collect", title: "슬랙 자료 가져오기 상태",
-  description: "\"자료 가져오기\" 상태 — 검색 수집기(공개채널, 켠 관리자의 연결로 돈다)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부. 토글은 org_slack_collect_set.",
+  description: "\"자료 가져오기\" 상태 — 공개채널 수집기(켠 관리자의 연결로 돈다 — 초대 불필요)와 봇 수집기(초대 채널·비공개)의 켜짐 여부, 봇 토큰 유무, 내 연결 여부, 슬랙 앱 준비 여부(app_ready). 토글은 org_slack_collect_set.",
   scope: "memory", input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/org/slack/collect"], parse: () => ({}) }] },
   handler: async (_input, user) => {
@@ -91,7 +94,7 @@ const orgSlackCollect: Capability = {
 const orgSlackCollectSet: Capability = {
   name: "org_slack_collect_set", title: "슬랙 자료 가져오기 켜기/끄기",
   description:
-    "\"자료 가져오기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 검색 수집기를 만들거나 켜고(token_source=member:<나>), " +
+    "\"자료 가져오기\" 토글(admin). enabled=true 면 호출자의 Slack 연결(금고)로 공개채널 수집기를 만들거나 켜고(token_source=member:<나>), " +
     "봇 토큰이 있으면 봇 수집기도 함께 켠다(비공개 채널은 그 채널에서 /invite @Lively 한 것만). 토큰을 복사하지 않는다. " +
     "false 면 둘 다 끈다(삭제 아님 — 커서·자료 보존). 켜려면 호출자가 먼저 me_oauth_connect 로 Slack 을 연결해야 한다.",
   scope: "memory",
@@ -133,7 +136,7 @@ const orgSlackCollectSet: Capability = {
       id: search?.id, preset_key: "slack", instance_key: SEARCH_INSTANCE,
       label: search?.label ?? "Slack — 팀 공개 채널", enabled: true,
       config: { ...(search?.config ?? {}), token_source: `member:${actor}`, ...(channels === undefined ? {} : { channels }), ...(backfill === undefined ? {} : { backfill_since: backfill }) },
-      note: search?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — 켠 사람의 연결로 전 공개채널을 검색 수집합니다(#1881). 토큰 칸은 비워 두세요.",
+      note: search?.note ?? "[Slack 연결] 토글로 만들어진 수집기 — 켠 사람의 연결로 전 공개채널을 수집합니다(#1881 · #5040 초대 불필요). 토큰 칸은 비워 두세요.",
       ...(interval ? { sync_interval_sec: interval } : {}),
     }, actor, source);
     changed.push(SEARCH_INSTANCE);
@@ -166,7 +169,10 @@ const orgSlackAppManifest: Capability = {
     const p = await getOrgProfile();
     if (!p.gateway_url) throw new HttpError(400, "게이트웨이 URL(org_profile.gateway_url)이 없어 콜백을 만들 수 없습니다 — 관리탭 ▸ 조직 정보에서 먼저 설정하세요.");
     const redirect = new URL("/oauth/callback", p.gateway_url).toString();
-    const manifest = buildSlackAppManifest([redirect], { name: p.display_name ? `Lively (${p.display_name})` : "Lively" });
+    const manifest = buildSlackAppManifest([redirect]);
+    //  손으로 고칠 수 없는 링크라(슬랙이 막는다) 규칙을 어긴 매니페스트는 링크로 내주지 않는다 — 깨진 링크보다 실패가 낫다.
+    const problems = slackManifestProblems(manifest);
+    if (problems.length) throw new HttpError(500, `Slack 앱 매니페스트가 슬랙 규칙에 맞지 않습니다: ${problems.join(" · ")}`);
     return { redirect_url: redirect, manifest, create_url: slackAppCreateUrl(manifest) };
   },
 };

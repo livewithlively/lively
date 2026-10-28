@@ -167,16 +167,89 @@ export function errorForLog(_tool: string, raw: string | null | undefined): stri
 
 // 한 건 적재(비동기, 호출자는 await 하지 않는다). 실패는 warn 로그만 남기고 삼킨다 — 통계 누락 ≠ 호출 실패.
 /**
+ * 비밀 값을 인자로 받는 툴 → 그 칸의 값을 남기지 않는다(#4970 리뷰). redactDeep 는 토큰 «모양»(sk- · ghp_ · xox · JWT · PEM)만
+ *  가려서, 모양이 없는 client secret(32자 hex · GOCSPX-… 같은 것)은 호출 기록에 그대로 남았다 — 관리자가 MCP 호출 통계에서
+ *  읽을 수 있었다. 칸 이름과 크기만 남긴다(무엇을 등록하려 했는지는 남고, 값은 남지 않는다).
+ *  MCP 로 열린 도구의 입력 칸 이름이 비밀처럼 생겼으면 이 표에 있어야 한다 — capabilities/secret-args.test 가 레지스트리를 돌며 지킨다
+ *   (restOnly 도 MCP 로 열린다 — delivery/shared.ts).
+ */
+export const SECRET_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  org_connect_register: ["values"],
+  org_credential_set: ["secret"],
+  me_credential_set: ["secret"],
+  org_github_app_register: ["client_secret", "private_key"],
+  me_git_credential_set: ["token"],
+  org_connector_upsert: ["secrets"],
+  org_collector_upsert: ["secrets"],
+  org_git_credential_set: ["token"],
+  org_oauth_client_upsert: ["clientSecret"],
+  workspace_link_set: ["token"],
+  workspace_activate: ["app_dsn"],   // 앱 role 비밀번호가 든 Postgres 접속 문자열
+  //  #4993 AI 브라우저 — 사람 대신 남의 사이트에 치는 글(인증 코드 · 개인정보) · 페이지에서 돌린 코드 · 올릴 파일의 받기 주소(짧은 수명 자격).
+  //   설명문이 «비밀은 직접 치지 말라» 고 해도 강제가 아니다 — 기록이 그 약속에 기대면 안 된다(#4993 격리 리뷰).
+  browser_act: ["text"],
+  browser_fill: ["value"],
+  browser_eval: ["code"],
+  browser_upload: ["urls"],
+};
+
+/**
+ * 주소 칸 — 어느 사이트에 갔는지(출처)만 남기고 경로 · 쿼리 · 조각은 남기지 않는다(#4993 격리 리뷰). 매직 링크 · 비밀번호 재설정 ·
+ *  OAuth `code` 는 주소 자체가 자격이다. 주소가 아닌 값(검색어)은 사람이 친 글이라 길이만 남긴다.
+ */
+export const ORIGIN_ONLY_ARG_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  browser_navigate: ["url"],
+  browser_tabs: ["url"],
+};
+
+function originOnly(v: unknown): string {
+  if (typeof v !== "string") return hiddenValue(v);
+  const raw = v.trim();
+  //  'github.com/x' 처럼 스킴 없이 온 주소도 사이트는 남긴다(브라우저 툴이 https 로 읽는 모양과 같게).
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(raw) ? "https://" + raw : "");
+  if (withScheme) {
+    try {
+      const u = new URL(withScheme);
+      if (u.protocol === "http:" || u.protocol === "https:") return `${u.origin} (경로·쿼리 기록하지 않음)`;
+    } catch { /* 주소가 아니다 */ }
+  }
+  return hiddenValue(v);
+}
+
+function hiddenValue(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    const keys = Object.keys(v as Record<string, unknown>).slice(0, MAX_KEYS).map((k) => k.slice(0, MAX_KEY_LEN));
+    return `(값 ${keys.length}개 — 기록하지 않음: ${keys.join(", ")})`;
+  }
+  if (typeof v === "string") return `(${v.length}자 — 기록하지 않음)`;
+  return "(기록하지 않음)";
+}
+
+/**
  * 이 툴 호출에 대해 **실제로 저장될 args 값**. 저장 직전 형태라 여기가 정책의 최종 관문이다(테스트 지점).
  *  · 외부 통신 툴 → 값 없는 요약. capArgs(절단·redact)를 태우지 않는 이유는 그 경로가 값을 '보존'하기 때문 —
  *    여기선 애초에 보존할 값이 없다. 남는 건 누가·언제·어떤 툴·성공여부(호출 행 자체)로 충분하다.
  *  · db_query → SQL 리터럴 스크럽(#705) 후 통상 가공. redactDeep(시크릿)만으론 PII 미포착이라 별도 처리.
  *  · agent_job_run → 지시(prompt) 값을 남기지 않고 길이만(#4490) — 작업 지시는 보낸 사람 것이다(관리자 API 도 남의 지시를 열지 않는다).
+ *  · 비밀을 받는 툴(SECRET_ARG_FIELDS) → 그 칸은 칸 이름·크기만(#4970).
+ *  · 주소 칸(ORIGIN_ONLY_ARG_FIELDS) → 사이트(출처)만(#4993).
  *  · 그 외(빌트인) → 현행 그대로(시크릿 마스킹 + 절단 + 총량 캡).
  */
 export function argsForLog(tool: string, raw: unknown): unknown {
   if (externalArgsPolicy(tool) === "omit") return omitArgValues(raw);
   let args = raw;
+  const hide = SECRET_ARG_FIELDS[tool];
+  if (hide && args && typeof args === "object" && !Array.isArray(args)) {
+    const o: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+    for (const k of hide) if (o[k] !== undefined && o[k] !== null) o[k] = hiddenValue(o[k]);
+    args = o;
+  }
+  const originKeys = ORIGIN_ONLY_ARG_FIELDS[tool];
+  if (originKeys && args && typeof args === "object" && !Array.isArray(args)) {
+    const o: Record<string, unknown> = { ...(args as Record<string, unknown>) };
+    for (const k of originKeys) if (o[k] !== undefined && o[k] !== null) o[k] = originOnly(o[k]);
+    args = o;
+  }
   if (tool === "agent_job_run" && args && typeof args === "object" && !Array.isArray(args)
       && typeof (args as Record<string, unknown>).prompt === "string") {
     args = { ...(args as Record<string, unknown>), prompt: `(지시 ${((args as Record<string, unknown>).prompt as string).length}자 — 기록하지 않음)` };

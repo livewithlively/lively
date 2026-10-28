@@ -47,19 +47,22 @@ check(/isInstalledRecentKey\(key\)/.test(note) && /appByKey\(key\)/.test(note),
 check(/installedAppDefs\(\)/.test(fnBody(apps, "recentApps")), "W3b 홈의 최근 줄(recentApps)이 설치 앱 목록을 합친다");
 check(/route: 'open\/' \+ encodeURIComponent\(a\.id\)/.test(apps) && /registerAppIcon\(a\.id, a\.icon\) \|\| builtinAppIcon\(a\.id, a\.hasUi\)/.test(apps),
   "W3c 설치 앱의 문은 #/open/<앱 id> · 그림은 선언한 아이콘 → 기본 그림");
-check(/installedRailEligible\(/.test(fnBody(apps, "primeInstalledApps")) && /installedRailEligible\(\[a\]\)/.test(fnBody(apps, "noteInstalledApp")),
-  "W3d 목록을 받을 때도 · 방금 연 앱을 올릴 때도 같은 잣대(installedRailEligible)로 거른다");
+//  #4878 — 잣대는 installedRecentOk 한 자리(installedRailEligible + 만드는 중 isAppInProgress). 목록(loadInstalled)도 방금 연 앱(noteInstalledAppOpened)도 그 한 자리를 거친다.
+check(/installedRecentEligible\(/.test(fnBody(apps, "installedRecentOk")) && /buildingNow\(a\)/.test(fnBody(apps, "installedRecentOk"))
+    && /filter\(installedRecentOk\)/.test(fnBody(apps, "installedAppDefs")) && /installedRecentOk\(a\)/.test(fnBody(apps, "noteInstalledAppOpened")),
+  "W3d 목록을 받을 때도 · 방금 연 앱을 올릴 때도 같은 잣대(installedRecentOk — installedRailEligible + 만드는 중 제외)로 거른다");
 
 const rail = read("web/v2/rail.ts");
-check(/\.\.\.installedAppDefs\(\)\]/.test(fnBody(rail, "recentForRail")), "W4a ★ 레일 최근 칸(recentForRail)이 설치 앱 목록을 합친다");
-check(/if \(!inst\) wireDrag\(it, a\.key, kind\)/.test(rail), "W4b 설치 앱 칸은 끌기(독 고정)를 걸지 않는다 — 순서 저장이 앱 표 키만 믿는다");
-check(/isInstalledRecentKey\(a\.key\)\) \{ ctxMenu\(x, y, \[\{ label: '열기'/.test(fnBody(rail, "dockMenu")), "W4c 설치 앱의 우클릭은 「열기」 만");
+check(/\.\.\.installedAppDefs\(\)/.test(fnBody(rail, "recentForRail")), "W4a ★ 레일 최근 칸(recentForRail)이 설치 앱 목록을 합친다(#5011 — 고정한 것은 거른 채)");
+//  #5011(원준 2026-10-26 «왜 팀 채널은 안 끌어지지») — 설치 앱도 끌어 고정 · 순서 · 빼기가 된다. 상세는 rail-installed-pin.test.mjs.
+check(/^\s*wireDrag\(it, a\.key, kind\);/m.test(fnBody(rail, "drawRail")) && !/if \(!inst\) wireDrag/.test(rail), "W4b ★ 설치 앱 칸도 끌기를 건다(#5011 — 종전엔 걸지 않았다)");
+check(!/isInstalledRecentKey\(a\.key\)/.test(fnBody(rail, "dockMenu")), "W4c 설치 앱의 우클릭도 「독에 고정 · 빼기」 를 낸다(#5011)");
 check(/primeInstalledApps\(\)\.then\(\(\) => drawRail\(\)\)/.test(fnBody(rail, "mountRail")), "W4d 레일을 달 때 설치 앱 목록을 받아 다시 그린다");
 
 const main = read("web/v2/main.ts");
 check(/page === 'open' && segs\[1\]/.test(main) && /openInstalledApp\(a, null, \{ state: /.test(main), "W5a ★ #/open/<앱 id> 갈래 — 설치 앱을 열며 물음표 뒤 값을 state 로 싣는다");
-check(/noteAppUse\(installedRecentKey\(instance\.app_id\)\)/.test(main) && /noteInstalledApp\(\{ id: instance\.app_id/.test(main),
-  "W5b ★ #/i/<인스턴스> 를 그릴 때 설치 앱을 최근 기록 · 목록에 올린다");
+check(/noteInstalledAppOpened\(instance\.app_id\)/.test(main) && /noteAppUse\(installedRecentKey\(appId\)\)/.test(fnBody(apps, "noteInstalledAppOpened")),
+  "W5b ★ #/i/<인스턴스> 를 그릴 때 설치 앱을 최근 기록 · 목록에 올린다(#4878 — 자를 거친 한 길 noteInstalledAppOpened)");
 check(/if \(p === 'open'\) return \{ title: '앱 여는 중', noAside: true \}/.test(main), "W5c 탭 제목 표에 open");
 check(/\(app-open\|app-grant\|full\|open\)/.test(read("web/v2/tabs.ts")), "W5d ★ #/open 은 지나가는 주소(저장본에서 빠진다)");
 check(/state: \(instance\.state && typeof instance\.state === 'object'\)/.test(main), "W5e #/i 가 앱 프레임에 인스턴스 state 를 넘긴다");
@@ -91,6 +94,16 @@ check(/apps\.filter\(\(a\) => a\.notifications\)/.test(me) && /JSON\.stringify\(
 const who = read("src/capabilities/whoami.ts");
 check(/\.\.\.\(isApp \? \{ avatar: member\?\.avatar \?\? null, avatar_char: member\?\.avatar_char \?\? null, avatar_color: member\?\.avatar_color \?\? null \} : \{\}\)/.test(who),
   "W7 whoami — 앱 principal 에만 얼굴(아바타 · 글자 · 색)을 준다");
+
+const ns = read("src/v6/notify-store.ts");
+check(/n\.kind = 'app'/.test(ns) && /key: "app:" \+ n\.id, kind: "app"/.test(ns) && /if \(it\.kind === "app"\) return \{ title: it\.title/.test(ns),
+  "W8 ★ 데스크톱 배너 피드(/api/ui/notify/feed)가 앱 알림(kind app)을 싣는다 — 종전엔 「확인할 것」 에만 쌓여 배너가 한 번도 안 떴다");
+check(/AND n\.actor IS DISTINCT FROM \$1/.test(ns.slice(ns.indexOf("n.kind = 'app'"))), "W8b 내가 보낸 앱 알림(actor = 나)은 내 배너로 안 온다");
+
+check(/export function pushAppState\(appId: string, state: Record<string, unknown>\)/.test(ui) && /f\.notify\('ui\/notifications\/state', \{ state \}\)/.test(ui), "W9 ★ 호스트가 살아 있는 앱 프레임에 state 를 민다(pushAppState)");
+check(/if \(Object\.keys\(state\)\.length\) pushAppState\(a\.id, state\);/.test(main), "W9b #/open 갈래가 이미 떠 있는 앱에도 새 자리를 민다");
+check(/ui\/notifications\/state/.test(rt) && /onState: function \(cb\) \{ return subscribe\('state', cb\); \}/.test(rt), "W9c SDK — lively.ui.onState 로 받는다 · api.state 갱신");
+check(/\[A-Za-z0-9\/_\.:%\?=&-\]\{1,240\}/.test(read("desktop/main/notify.mjs")), "W9d ★ 데스크톱 알림 링크 검사가 물음표 뒤 값(#/open/<앱>?ch=…)을 통과시킨다 — 종전엔 ? 가 막혀 창만 뜨고 그 자리로 못 갔다");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

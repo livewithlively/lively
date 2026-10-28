@@ -53,14 +53,19 @@ function pjvNormStatusDefs(statuses) {
   }));
 }
 // 상태 템플릿(스페이스 기본 포함) 로드 — 실패해도 조용히(기본=null → 표준 3단계). 레지스트리 세팅/렌더 전에 await.
+//  받은 응답을 그대로 돌려준다(#4865) — 보드가 «지난 판» 보관함에 같이 넣었다가 다음 진입에 pjvApplyStatusTemplates 로 먼저 세운다.
 async function pjvLoadStatusTemplates() {
   try {
     const d = await api('/api/ui/v6/status-templates');
-    pjvStatusTemplatesCache = (d && d.templates) || [];
-    const def = (d && d.default) || pjvStatusTemplatesCache.find((t) => t.is_default) || null;
-    const defs = def ? pjvNormStatusDefs(def.statuses) : [];
-    pjvSpaceDefaultDefs = defs.length ? defs : null;
-  } catch (_) { /* 미설정/실패 → 표준 3단계 폴백 */ }
+    pjvApplyStatusTemplates(d);
+    return d;
+  } catch (_) { return null; /* 미설정/실패 → 표준 3단계 폴백 */ }
+}
+function pjvApplyStatusTemplates(d) {
+  pjvStatusTemplatesCache = (d && d.templates) || [];
+  const def = (d && d.default) || pjvStatusTemplatesCache.find((t) => t.is_default) || null;
+  const defs = def ? pjvNormStatusDefs(def.statuses) : [];
+  pjvSpaceDefaultDefs = defs.length ? defs : null;
 }
 // 리스트의 상태 정의(커스텀이면 그것, 아니면 기본 3단계). 항상 {key,label,color,category,frac} 정규화.
 //  frac = Active 버킷 안 진행도(0=첫 상태=점선 할일 → (n-1)/n=거의 가득). Done/Closed 는 체크라 무관. #499
@@ -241,6 +246,7 @@ export {
   pjvIsOverdue,
   pjvListIsCustomStatus,
   pjvListStatusDefs,
+  pjvApplyStatusTemplates,
   pjvLoadStatusTemplates,
   pjvNativeStatusColor,
   pjvNativeStatusOf,

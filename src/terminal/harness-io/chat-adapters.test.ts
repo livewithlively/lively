@@ -47,6 +47,15 @@ t("[3] ★ 번역기 없는 하네스는 chat 모드가 **안 열린다** — �
   }
 });
 
+//  #4927 — 여섯 번째(cursor)는 대화 기록만 읽고(harness-io/cursor.ts) 런타임은 열지 않는다. 표엔 있되 모든 축이 null 이어야
+//   «말은 거는데 아무도 안 받는» 세션이 안 생긴다.
+t("[3b] cursor — 표에 있지만 런타임은 안 열린다(전송·argv·번역 null, 이유를 note 에)", () => {
+  const c = chatAdapter("cursor")!;
+  assert.deepEqual([c.transport, c.argv, c.translate, c.encode], [null, null, null, null]);
+  assert.equal(canOpenChatRuntime("cursor"), false);
+  assert.equal(harnessSupportsChat("cursor"), false);
+});
+
 t("[4] ★ 모드 판정이 이 표에서 **파생**된다 — 두 곳에 적으면 반드시 갈린다", () => {
   for (const a of CHAT_ADAPTERS) {
     assert.equal(harnessSupportsChat(a.key), canOpenChatRuntime(a.key), `${a.key} 모드↔표 일치`);
@@ -199,7 +208,9 @@ console.log(`\n${pass}건 통과`);
   for (const a of CHAT_ADAPTERS) {
     assert.equal(harnessOpensChatRuntime(a.key), canOpenChatRuntime(a.key), `${a.key}: 두 답이 같다`);
   }
-  assert.equal(CHAT_RUNTIME_KEYS.length, CHAT_ADAPTERS.length, "유령 키가 없다");
+  //  유령 키 — 키 목록에 있는데 표에서 못 여는 하네스. #4927 부터 표엔 런타임을 안 여는 하네스(cursor)도 있어 개수 비교가 아니라
+  //   «키 목록의 모든 키가 표에서 열린다» 로 잰다(못 여는 표 항목이 키 목록에 없다는 쪽은 위 루프가 잰다).
+  for (const k of CHAT_RUNTIME_KEYS) assert.ok(canOpenChatRuntime(k), `유령 키가 없다: ${k}`);
   for (const bad of ["shell", "", "wat"]) {
     assert.equal(harnessOpensChatRuntime(bad), canOpenChatRuntime(bad), `${bad}: 모르는 키도 같다`);
   }

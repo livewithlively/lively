@@ -31,8 +31,8 @@ export interface ProjList { id: number; name: string; folder_id?: number | null;
 export interface ProjFolder { id: number; name: string; parent_id?: number | null; settings?: Record<string, unknown> | null; external_id?: string | null; }
 // 세션 행 모양(Sess)과 그 재료 맞추기(mergeSessions) · '내 세션인가'(isMineSess) · '하던 일'(sessWork)은 v2/sess-merge.ts 한 벌이다 —
 //  셸 밖 화면(프로젝트 보드의 리스트 뷰)도 이 무거운 모듈을 끌지 않고 같은 규칙을 쓰도록 거기로 내렸다. 여기서는 그대로 다시 내보낸다.
-import { isMineSess, sessWork, type Sess } from './sess-merge.js';
-export { isMineSess, sessWork, type Sess };
+import { dotCls, isMineSess, sessWork, type Sess } from './sess-merge.js';
+export { dotCls, isMineSess, sessWork, type Sess };
 export { mergeSessions } from './sess-merge.js';
 export interface V2Data {
   projects: Proj[];
@@ -47,17 +47,6 @@ export interface V2Data {
 }
 
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
-// 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
-//  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
-export function dotCls(stateKey: string): string {
-  if (stateKey === 'busy') return 'busy';
-  if (stateKey === 'waiting') return 'wait';
-  if (stateKey === 'done') return 'done';
-  if (stateKey === 'idle') return 'idle';
-  if (stateKey === 'offline') return 'off';
-  if (stateKey === 'shell') return 'shell';
-  return '';
-}
 //  (세션 시각 서식 `when` 은 #4180 에서 걷었다 — 「확인할 것」이 세션 줄을 세우지 않는다. 알림 행의 시각은 notifications.ts 가 그린다.)
 
 // ── '지금 도는 세션' vs '지난 세션' — 화면 셋이 같은 술어를 쓴다(#1808) ───────────────
@@ -132,7 +121,8 @@ function welcomeResumeRow(): HTMLElement | null {
     el('span', { class: 'v2-home-resume-l', text: 'L' }),
     el('span', { class: 'v2-home-resume-t' },
       el('b', { text: '처음 설정을 이어서 하시겠어요?' }),
-      el('span', { text: '리브가 자료를 읽고 워크스페이스를 대신 세팅해 드립니다. 2~3분이면 됩니다.' })),
+      //  (#4970) 처음 설정은 인사 → 이름 → AI 연결 → «외부 앱을 연결하시겠어요?» 넷이다 — 리브가 자료를 읽는 단계는 없어졌다.
+      el('span', { text: '이름을 정하고, 쓰실 AI를 연결하고, 외부 앱 연결 여부를 고르면 끝나요.' })),
     el('span', { class: 'v2-home-resume-go', text: '이어서 하기' }));
 }
 
@@ -469,8 +459,10 @@ export interface SessionViewOpts {
   isVisible?: () => boolean;
   /** 복원으로 새 세션이 생겼다 — 그 탭만 새 세션으로 옮긴다(전역 주소를 건드리지 않는다). */
   onResumed?: (newId: string) => void;
-  /** 대화 보기가 본자리인 화면(#4032 리브 탭) — session-chat.ts chatHome 주석. */
+  /** 대화 보기가 본자리인 화면 — session-chat.ts chatHome 주석(#4940 부터 리브 세션은 일반 세션 보기라 쓰지 않는다). */
   chatHome?: boolean;
+  /** 리브 세션이다(#4970) — 리브의 물음을 입력칸 바로 위(터미널을 볼 땐 머리줄 아래)에 띄운다(session-chat.ts livAsks 주석). */
+  livAsks?: boolean;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
@@ -490,6 +482,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
   const termSrc = (t: SessionChatTarget): string | null => (t.live && t.alive ? terminalUrl(t.id, t.label, t.node, { embed: true }) : null);
   return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
+    awaitViewers: true,   // #4996 — 셸이 열람 도장을 찍는 화면이다 — 다른 사람이 터미널로 보고 있으면 대화창으로 비켜 선다(session-chat.ts yieldTerm)
     // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.
     openHref: vopts.solo ? location.pathname + '#/s/' + encodeURIComponent(s.id) : soloSessionUrl(s.id),
     // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
@@ -517,6 +510,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     isVisible: vopts.isVisible,
     onResumed: vopts.onResumed,
     chatHome: vopts.chatHome,
+    livAsks: vopts.livAsks,
   });
 }
 

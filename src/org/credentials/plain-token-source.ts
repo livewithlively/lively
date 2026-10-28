@@ -67,3 +67,10 @@ export const CLICKUP_TOKEN_SPEC: PlainTokenKindSpec = {
   kind: CLICKUP_TOKEN_KIND, label: "ClickUp",
   connectHint: "[외부 앱 연결 ▸ ClickUp]에서 API 토큰을 저장하세요",
 };
+
+/** Zotero — 개인 API 키(zotero.org/settings/keys). JSON 묶음이 아니라 평문 키 하나다. */
+export const ZOTERO_TOKEN_KIND = "zotero_token";
+export const ZOTERO_TOKEN_SPEC: PlainTokenKindSpec = {
+  kind: ZOTERO_TOKEN_KIND, label: "Zotero",
+  connectHint: "[외부 앱 연결 ▸ Zotero]에서 API 키를 저장하세요",
+};

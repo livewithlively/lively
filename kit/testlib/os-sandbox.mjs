@@ -14,8 +14,9 @@
 //      안 불려 테스트가 "스텁 호출 0건"만 본다. PATH 구분자도 `:` 가 아니라 `;` 다.
 //
 //  두 관례를 여기 한 곳에 못박아, 다음 테스트가 같은 함정을 다시 열지 않게 한다.
-import { writeFileSync, chmodSync, mkdirSync } from "node:fs";
-import { join, delimiter } from "node:path";
+import { writeFileSync, readFileSync, readdirSync, chmodSync, mkdirSync, symlinkSync, existsSync } from "node:fs";
+import { gzipSync } from "node:zlib";
+import { join, delimiter, dirname } from "node:path";
 
 export const WIN = process.platform === "win32";
 
@@ -34,6 +35,9 @@ export const offlineLivelyEnv = () => ({
   //  통째로 성립하지 않는다. 실측: 라이블리 세션 안에서 돌리면 LIVELY_SESSION_KIND=human 이 상속돼
   //  «위탁 세션엔 주입하지 않는다» 단언 2건이 그 기계에서만 빨간불이었다(CI 는 이 값이 없어 초록).
   LIVELY_SESSION_KIND: "",
+  // #5016 — `lively run` 표식(LIVELY_RUN)과 어댑터가 싣는 세션 폴더(LIVELY_SESSION_DIR)도 기록 범위 판정을 바꾸는 신원이다.
+  //  `lively run` 으로 띄운 세션 안에서 테스트를 돌리면 상속돼 «범위 밖» 시나리오가 통째로 «라이블리가 띄운 세션» 이 된다.
+  LIVELY_RUN: "", LIVELY_SESSION_DIR: "",
   // 하네스의 비대화형 표식도 같은 부류다 — `claude -p`·SDK 안에서 테스트를 돌리면 sdk-cli 가 상속돼
   //  사람 세션 시나리오가 통째로 기계로 판정된다(project-auto-bind.org-hook.mjs 의 isWorkSessionEnv 첫 줄).
   CLAUDE_CODE_ENTRYPOINT: "",
@@ -73,6 +77,18 @@ export function closedPath(dir) {
   return [dir, join(root, "System32"), root, join(root, "System32", "Wbem")].join(delimiter);
 }
 
+// node 하나만 든 폴더 — closedPath() 의 첫 칸에 쓴다. `dirname(process.execPath)` 를 그 칸에 넣으면 **그 폴더의 다른
+//  실행 파일도 함께 잡힌다.** 중앙 박스(매니지드 세션 컨테이너)는 /usr/local/bin 에 node 와 claude·codex·grok·agy 를 함께 깔아,
+//  «하네스 없는 기계» 를 만들려던 닫힌 PATH 가 거기선 하네스 넷을 다 보여 줬다(self-update 가 «새 하네스» 를 보고 재설치했다, #5029).
+//  POSIX 는 링크 하나만 둔다. 윈도우는 링크에 권한이 필요하고 node 설치 폴더에 하네스가 같이 깔리지 않으므로 종전 그대로 둔다.
+export function nodeOnlyDir(root) {
+  if (WIN) return dirname(process.execPath);
+  const dir = join(root, "node-only-bin");
+  mkdirSync(dir, { recursive: true });
+  if (!existsSync(join(dir, "node"))) symlinkSync(process.execPath, join(dir, "node"));
+  return dir;
+}
+
 // 실 브라우저를 못 열게 하는 env 조각 — **lively CLI 를 프로세스로 띄우는 테스트는 반드시 얹는다.**
 //  왜 PATH 로 안 되나: device-code 로그인은 승인 URL 을 `open`(darwin)·`cmd /c start`(win)·`xdg-open`(linux)
 //   으로 띄우는데, 위 closedPath() 는 /usr/bin·System32 를 **일부러 남긴다**(where.exe·cmd.exe 가 거기 있다).
@@ -110,3 +126,35 @@ export function writeStubBin(dir, name, jsBody) {
 
 // 아무 일도 안 하고 성공하는 스텁(하네스를 PATH 에서 '가리기'만 할 때).
 export const writeNoopBin = (dir, name) => writeStubBin(dir, name, "process.exit(0);");
+
+// 번들(.tgz)을 node 로만 만든다(ustar + gzip) — 설치기가 그걸 tar 로 **푸는** 경로는 그대로 시험된다.
+//  왜(2026-10-23 실측): windows-latest 이미지 20261018판부터 System32 tar.exe 가 **묶기**(`-cf`·`-czf`)에서
+//   0xC0000005(접근 위반)로 죽어 kit 번들 시험 둘이 push 마다 깨졌다(20261007판은 통과). PATH 의 tar 도 같다.
+//  윈도우 전용이다 — 맥 tar 는 풀 때 `._이름` 항목을 AppleDouble 메타데이터로 읽어, 시스템 tar 로 묶은 것과 결과가 다르다.
+export function writeTgz(stage, tgz) {
+  const blocks = [];
+  const field = (buf, off, len, str) => { buf.write(str, off, Math.min(Buffer.byteLength(str), len), "utf8"); };
+  const octal = (buf, off, len, n) => field(buf, off, len, n.toString(8).padStart(len - 1, "0") + "\0");
+  const header = (name, size, dir) => {
+    const h = Buffer.alloc(512);
+    let prefix = "";
+    if (Buffer.byteLength(name) > 100) { const cut = name.lastIndexOf("/", 154); prefix = name.slice(0, cut); name = name.slice(cut + 1); }
+    field(h, 0, 100, name); octal(h, 100, 8, dir ? 0o755 : 0o644); octal(h, 108, 8, 0); octal(h, 116, 8, 0);
+    octal(h, 124, 12, size); octal(h, 136, 12, Math.floor(Date.now() / 1000));
+    h.fill(0x20, 148, 156); h[156] = dir ? 0x35 : 0x30; field(h, 257, 6, "ustar\0"); field(h, 263, 2, "00"); field(h, 345, 155, prefix);
+    let sum = 0; for (const b of h) sum += b;
+    field(h, 148, 8, sum.toString(8).padStart(6, "0") + "\0 ");
+    return h;
+  };
+  const walk = (abs, rel) => {
+    for (const e of readdirSync(abs, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const r = rel ? `${rel}/${e.name}` : e.name, a = join(abs, e.name);
+      if (e.isDirectory()) { blocks.push(header(`./${r}/`, 0, true)); walk(a, r); continue; }
+      const body = readFileSync(a);
+      blocks.push(header(`./${r}`, body.length, false), body, Buffer.alloc((512 - (body.length % 512)) % 512));
+    }
+  };
+  walk(stage, "");
+  blocks.push(Buffer.alloc(1024));
+  writeFileSync(tgz, gzipSync(Buffer.concat(blocks)));
+}

@@ -27,7 +27,8 @@ export const APP_TOKEN_TTL_SEC = 12 * 60 * 60;
 export async function mintAppToken(
   memberId: string, appId: string, actor?: string,
   //  #4490 — 작업 컨테이너는 작업 상한만큼만 살 토큰을 받고(ttlSec), 끝날 때 해시로 폐기한다(tokenHash). 생략하면 종전 그대로.
-  opts: { ttlSec?: number } = {},
+  //  #4891 — appServerPrincipal: 주체를 앱 서버 급으로(능력 API · /mcp 에서만 · 무조건 통과 도구 없음 — tokens.mintToken 머리말).
+  opts: { ttlSec?: number; appServerPrincipal?: boolean } = {},
 ): Promise<{ token: string; expiresAt: Date | null; tokenHash: string }> {
   const app = await getApp(appId);
   //  #4667 — 남이 만들고 있는(나만 보는) 앱으로는 세션을 못 연다(없는 앱과 같다).
@@ -39,6 +40,7 @@ export async function mintAppToken(
   const { token, expiresAt, tokenHash } = await mintToken({
     userId: memberId, memberId, scopes: grant.scopes,
     label: `app:${appId}`, appId, expiresInSec: opts.ttlSec && opts.ttlSec > 0 ? Math.min(opts.ttlSec, APP_TOKEN_TTL_SEC) : APP_TOKEN_TTL_SEC,
+    ...(opts.appServerPrincipal === true ? { appServerPrincipal: true } : {}),
   }, actor ?? "app-spawn", "terminal-sessions");
   return { token, expiresAt, tokenHash };
 }

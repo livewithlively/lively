@@ -16,13 +16,35 @@ import { APP_IDENTITY_HEADER } from "../apps/app-identity.js";
 //  멤버 없는 앱 토큰은 **능력 REST 마운트(web.ts mwCap)에서만** 받는다 — 거기서 사람 신원(X-Lively-Identity)을 검증해 «그 구성원 ∩
 //  앱 동의» 주체로 바꾸고, 그 뒤는 앱 도구 게이트(requireAppTool)가 지킨다. 그 밖(web.ts 의 mw 라우트 · 터미널·파일·프로젝트·프리뷰·
 //  노드 경로 · /mcp·/install)은 앱 도구 게이트를 안 타므로 이 토큰을 거부한다(기본값 appServer:false — fail-closed).
+//  #4891 — 앱 서버 급 토큰(auth_token.app_server_principal — 사람 홈 없는 작업 AI 의 토큰)은 검증부터 «그 구성원 ∩ 앱 동의 · appServer»
+//   주체다. 능력 REST 와 /mcp(앱 도구 게이트를 탄다)에서만 받고 그 밖은 거부한다 — 그 AI 를 부린 것은 앱 서버 코드라, 사람 이름으로 세션을
+//   열거나(홈이 붙는다) 파일 · 계정 길을 쓰지 못하게.
 type AuthedReq = express.Request & { auth?: unknown };
-function appServerGate(allow: boolean): (req: express.Request, res: express.Response, next: express.NextFunction) => void {
+/** 앱 주체 문을 어디에 다나 — 능력 REST(앱 서버 토큰을 사람 신원으로 바꾼다) · /mcp · 그 밖(둘 다 거부). */
+export type AppPrincipalGateMode = "cap" | "mcp" | "deny";
+/**
+ * (순수) 이 주체를 이 문에서 어떻게 하나(#4483 · #4891) — next(그대로) · resolve(사람 신원으로 바꾼다) · deny(403).
+ *  · 앱 서버 토큰(멤버 없는 날 토큰): 능력 REST 에서만 resolve, 그 밖은 deny.
+ *  · 앱 서버 급 주체(검증이 appServer 를 켠 토큰): 능력 REST · /mcp 는 next(앱 도구 게이트가 지킨다), 그 밖은 deny.
+ *  · 그 밖(사람 · 일반 앱 토큰 · 세션 쿠키): next.
+ */
+export function appPrincipalGate(user: LivelyUser | undefined, mode: AppPrincipalGateMode): "next" | "resolve" | "deny" {
+  if (isAppServerToken(user)) return mode === "cap" ? "resolve" : "deny";
+  if (user?.appServer === true) return mode === "deny" ? "deny" : "next";
+  return "next";
+}
+function appServerGate(mode: AppPrincipalGateMode): (req: express.Request, res: express.Response, next: express.NextFunction) => void {
   return (req, res, next) => {
     const r = req as AuthedReq;
     const user = (r.auth as { extra?: unknown } | undefined)?.extra as LivelyUser | undefined;
-    if (!isAppServerToken(user)) { next(); return; }
-    if (!allow) { res.status(403).json({ error: "앱 서버 토큰은 앱 데이터·도구 API(/api/ui/…)에서 사람 신원과 함께만 씁니다" }); return; }
+    const verdict = appPrincipalGate(user, mode);
+    if (verdict === "next") { next(); return; }
+    if (verdict === "deny") {
+      res.status(403).json({ error: user?.appServer === true
+        ? "앱 작업 토큰은 앱 도구(능력 API · MCP)에서만 씁니다"
+        : "앱 서버 토큰은 앱 데이터·도구 API(/api/ui/…)에서 사람 신원과 함께만 씁니다" });
+      return;
+    }
     resolveAppServerPrincipal(user!, req.headers[APP_IDENTITY_HEADER]).then((p) => {
       (r.auth as { extra?: unknown }).extra = p;          // bearer 가 막 채운 자리 — 주체만 사람으로 바꾼다
       next();
@@ -43,10 +65,12 @@ function appServerGate(allow: boolean): (req: express.Request, res: express.Resp
  * SDK 의 requireBearerAuth 는 그 URL 을 **생성 시점 상수**로 받는데 우리 공개 주소는 DB(org 프로필)에서 오므로,
  *  해소된 주소별로 미들웨어를 만들어 캐시한다(주소는 사실상 1개 — 캐시가 무한히 자라지 않는다).
  */
-export function bearerWithResourceMetadata(verifier: BearerVerifier): express.RequestHandler {
+export function bearerWithResourceMetadata(verifier: BearerVerifier, mode: AppPrincipalGateMode = "mcp"): express.RequestHandler {
   const cache = new Map<string, express.RequestHandler>();
   const plain = requireBearerAuth({ verifier }); // 공개 주소 미설정 시(= OAuth 비활성) 종전 동작 그대로
-  const gate = appServerGate(false);
+  //  /mcp — 앱 서버 토큰은 거부, 앱 서버 급 주체(#4891 작업 AI)는 받는다(도구는 앱 도구 게이트가 그 앱 동의로 좁힌다).
+  //   /install 은 "deny" 로 단다(앱 도구 게이트 밖 · 요청마다 묶음을 만든다 — 격리 리뷰).
+  const gate = appServerGate(mode);
   return (req, res, next) => {
     const then = (): void => gate(req, res, next);
     resourceIds().then((ids) => {
@@ -62,7 +86,7 @@ export function bearerWithResourceMetadata(verifier: BearerVerifier): express.Re
 /** opts.appServer — 앱 서버 토큰을 사람 신원으로 바꿔 받는가(능력 REST 만 true, 머리말 «앱 서버 토큰»). */
 export function sessionOrBearer(verifier: BearerVerifier, opts: { appServer?: boolean } = {}): express.RequestHandler {
   const plainBearer = requireBearerAuth({ verifier });
-  const gate = appServerGate(opts.appServer === true);
+  const gate = appServerGate(opts.appServer === true ? "cap" : "deny");
   const bearer: express.RequestHandler = (req, res, next) => plainBearer(req, res, () => gate(req, res, next));
   return (req, res, next) => {
     const sid = parseSessionCookie(req.headers.cookie);

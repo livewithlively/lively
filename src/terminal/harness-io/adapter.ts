@@ -27,6 +27,7 @@ import { claudeIo } from "./claude.js";
 import { codexIo } from "./codex.js";
 import { grokIo } from "./grok.js";
 import { antigravityIo } from "./antigravity.js";
+import { cursorIo } from "./cursor.js";
 
 export type ChatAction = "approve" | "deny" | "interrupt";
 export const CHAT_ACTIONS: readonly ChatAction[] = ["approve", "deny", "interrupt"];
@@ -113,7 +114,7 @@ const shellIo: HarnessSessionAdapter = {
   term: TERM_UI_UNKNOWN,
 };
 
-export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, shellIo];
+export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, cursorIo, shellIo];
 
 /** 하네스 key → 어댑터. 모르는 key 는 null(호출자가 '못 읽는 하네스'로 다룬다 — claude 로 추측하지 않는다). */
 export function harnessIo(key: string | null | undefined): HarnessSessionAdapter | null {

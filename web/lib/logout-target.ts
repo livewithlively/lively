@@ -8,13 +8,28 @@
 //
 // 셀프호스팅(CP 주소 없음)·CP 가 같은 호스트(showGate 의 루프 방지 규칙과 동일)·깨진 주소 → null = 종전 게이트.
 // ⚠ 서브패스 CP(프리뷰 등)의 접두사를 보존한다 — pathname 을 덮어쓰면 다른 게이트웨이의 문을 두드린다(#1541 계열).
-export function logoutRedirectTarget(loginRedirectUrl: string | null | undefined, here: string): string | null {
+// returnTo=null 이면 돌아올 자리를 싣지 않는다(#5009) — 탈퇴로 워크스페이스가 지워진 뒤엔 돌아올 자리가 없다.
+//  to 가 없으면 CP 는 첫 화면(초대받은 이메일로 시작·대기자 등록)으로 보낸다(lvly-cloud returnto.ts logoutLanding).
+export function logoutRedirectTarget(loginRedirectUrl: string | null | undefined, here: string, returnTo: string | null = here): string | null {
   if (!loginRedirectUrl) return null;
   let cp: URL; let me: URL;
   try { cp = new URL(loginRedirectUrl, here); me = new URL(here); } catch { return null; }
   if (cp.host === me.host) return null;
   const base = cp.pathname.replace(/\/+$/, '');
   const door = new URL(`${cp.origin}${base}/auth/logout`);
-  door.searchParams.set('to', here);
+  if (returnTo) door.searchParams.set('to', returnTo);
   return door.toString();
+}
+
+// IdP(SSO) 로그아웃 문 — 서버의 로그아웃 응답 {ok:true, redirect?} 에서 갈 곳을 꺼낸다.
+//  IdP 로 로그인한 세션이면 서버가 IdP 의 end_session 주소를 주고, 브라우저가 그리로 가야 IdP 세션까지 끝난다
+//  (안 가면 «SSO 로 로그인» 한 번에 묻지도 않고 같은 계정으로 돌아온다). 없거나 https 절대주소가 아니면 null — 종전 흐름.
+//  https 만 받는 이유: 이 주소의 쿼리에 id_token(개인정보)이 실린다 — 서버도 https 인 로그아웃 문만 쓴다(ee/auth/oidc.ts).
+export function ssoLogoutTarget(body: unknown): string | null {
+  const raw = body && typeof body === 'object' ? (body as { redirect?: unknown }).redirect : null;
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' ? u.toString() : null;
+  } catch { return null; }
 }

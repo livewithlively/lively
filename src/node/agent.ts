@@ -37,8 +37,11 @@ import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, check
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
 import { freezeExecTopology, tmuxNeedsTenantSlug } from "../exec-topology.js";   // #2599 T2 — 부팅 때 한 번 확정
-import { installTenantSlugResolver, tenantSlugIsWellFormed, TENANT_SLUG_SHAPE } from "../terminal/catalog.js";   // #2600 T2 — 매니지드 세션 호스트는 테넌트가 프로세스에 붙는다
+import { installTenantSlugResolver, tenantSlugIsWellFormed, TENANT_SLUG_SHAPE, TMUX_BIN } from "../terminal/catalog.js";   // #2600 T2 — 매니지드 세션 호스트는 테넌트가 프로세스에 붙는다 · #4931 레거시 세대 바이너리
 import { WorkerHost, WorkerBundleStager, type WorkerStartSpec, type WorkerStopReason } from "../apps/worker-host.js";
+import { planNodeMux, ensurePinnedTmux, installedPinnedTmux, muxSocketDir, type MuxInstallDeps } from "./mux-install.js";   // #4931 — tmux 고정판·세대
+import { configureMuxGenerations, liveGenerations, muxUnansweredSessionIds, muxDedicatedSessionsAlive, MUX_GENERATIONS_MARK } from "../terminal/mux-generations.js";
+import { tmuxPinAssetFor } from "../terminal/mux-pin.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
 const TOPOLOGY = freezeExecTopology();   // #2599 T2 — 노드 진입점에서 토폴로지를 확정한다(이 프로세스는 sessionHost="node")
@@ -146,6 +149,15 @@ async function maybeSelfUpdate(latest: string | null | undefined): Promise<void>
       const got = path.join(tmpDir, path.basename(self));
       const ver = crypto.createHash("sha256").update(fs.readFileSync(got)).digest("hex").slice(0, 12);
       if (ver !== latest) { logger.warn({ got: ver, want: latest }, "받은 번들 지문이 다르다 — 교체하지 않는다"); return; }
+      //  #4931 — **tmux 세대를 모르는 번들로는 내려가지 않는다**(전용 세대에 세션이 살아 있을 때). 자가 갱신은 지문만 보므로 게이트웨이를
+      //   되돌리면 노드도 따라 내려간다. 옛 번들은 기본 소켓만 봐서 전용 세대 세션을 «끝났다» 로 답하고, 화면은 그 세션을 자동 복원해
+      //   같은 대화에 하네스가 둘 붙는다. 여기서 멈추면 노드는 지금 번들로 계속 돈다(낡았다는 사실은 agentVer 로 계속 보고된다).
+      if (!fs.readFileSync(got, "utf8").includes(MUX_GENERATIONS_MARK)
+        && await muxDedicatedSessionsAlive({ timeoutMs: 5_000, env: process.env })) {
+        logger.warn({ have: AGENT_VER, want: latest },
+          "받은 번들은 tmux 세대를 모른다 — 전용 세대(tmux -L lively-mux-*)에 세션이 살아 있어 교체하지 않는다(그 세션들이 끝나면 다음 연결에 받는다)");
+        return;
+      }
       fs.renameSync(got, self);   // 같은 파일시스템 → 원자적
       logger.info({ ver }, "노드 프로그램 갱신 완료 — 다시 시작한다(런처가 되살린다)");
       setTimeout(() => { void nodeWorkerHost.shutdown().finally(() => process.exit(0)); }, 300); // worker 회수 뒤 런처가 되살린다
@@ -373,6 +385,12 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       const ok = answer(String(args.id ?? ""), String(args.askId ?? ""), args.value);
       return { ok, stale: !ok };
     }
+    // #5043 — 원격 PC 하네스 종료 규칙의 한 걸음(화면·키·작업 판정·직접 붙은 클라이언트·한도 대기·안 본 결과). 판정은 게이트웨이가 한다.
+    //  하네스에 넣는 키는 질문 탭 넘기기(→) 하나뿐이다(stop-step.ts STOP_STEP_KEYS) — 그 밖의 입력·셸은 이 걸음에 없다.
+    case "stopStep": {
+      const { runStopStep } = await import("./stop-step.js");
+      return runStopStep(args);
+    }
     // 실제 답은 이 노드의 하네스 대화 파일에 남는다. 게이트웨이가 보관한 threadId만 받고, session id를
     // 이 노드의 tmux 메타와 다시 결합해 제한 청크를 돌려준다 — 사용자 입력 경로나 셸은 이 표면에 없다(#3982·#3870).
     case "chatTranscript": {
@@ -502,7 +520,13 @@ function connect(): void {
       const [rawSessions, res] = await Promise.all([listSessionsRaw({ strict: true }), sampleResources(sharedRoot().base)]);
       //  #4135 — 목록 밖의 세션 토큰 파일(~/.lively/session-tokens)은 죽은 세션의 것이다 — 걷는다(best-effort).
       //   ⚠ 빈 목록으로는 걷지 않는다(sweepSessionTokenFiles 머리말 — tmux 가 잠깐 못 받은 판에 전부 지워졌다).
-      void sweepSessionTokenFiles(new Set(rawSessions.map((s) => s.id))).catch(() => { /* 다음 판에 다시 */ });
+      //  #4931 — tmux 세대가 켜진 노드는 목록이 **세대별로** 빠질 수 있다(한 세대가 잠깐 연결을 거부하면 그 세대 세션만 빠지고 목록은
+      //   비지 않는다). 지난 목록에 답하지 못한 세대의 세션은 걷지 않는다. 세대가 꺼져 있으면 그 집합은 비어 종전과 같다.
+      if (rawSessions.length) {
+        const live = new Set(rawSessions.map((s) => s.id));
+        for (const id of muxUnansweredSessionIds()) live.add(id);
+        void sweepSessionTokenFiles(live).catch(() => { /* 다음 판에 다시 */ });
+      }
       //  #4135 — 세션마다 «세션 신원을 갖고 있나» 를 실어 올린다. 게이트웨이는 이 값으로만 «발급은 했는데 거기엔 없다» 를 안다.
       const sessions = await withTokenPresence(rawSessions);
       const sesKey = JSON.stringify(sessions);
@@ -655,7 +679,58 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
 }
 
 logger.info({ gw: GW_URL, node: NODE_ID || "(token-derived)" }, "노드 에이전트 시작");
+
+// ── tmux 세대 (#4931) — «새 세션은 어느 tmux 서버에» 를 정한다. ─────────────────────────────────────
+//  **첫 tmux 호출 전에** 정한다(아래 빈 서버 정리부터 세대 규칙을 탄다). 떠 있는 세션은 그 세션이 사는 서버에서 끝까지 다뤄지고
+//  (기본 소켓 포함), 새 세션만 고정판 전용 소켓에 선다 — 이행하면서 끊기는 세션이 없다(mux-generations 머리말).
+//  ⚠ 부팅은 **이미 깔린 고정판만** 본다 — 내려받기는 연결을 막지 않게 뒤에서 하고, 받으면 현재 세대를 바꾼다. GitHub 가 막힌 망에서
+//   재시작마다 노드가 상한만큼 꺼져 있지 않게(내려받기 자체는 0.3~0.5초 — 맥미니 실측). 못 받으면 30분마다 다시 시도한다.
+const MUX_DOWNLOAD_TIMEOUT_MS = 20_000;
+const MUX_RETRY_MS = 30 * 60 * 1000;
+const muxDeps: MuxInstallDeps = {
+  home: process.env.LIVELY_HOME || os.homedir(),
+  platform: process.platform, arch: process.arch, osRelease: os.release(),
+  fetch: (url, init) => fetch(url, init),
+  downloadTimeoutMs: MUX_DOWNLOAD_TIMEOUT_MS,
+};
+function planMux(pinnedBin: string | null): ReturnType<typeof planNodeMux> {
+  return planNodeMux({
+    topology: TOPOLOGY, platform: process.platform, legacyBin: TMUX_BIN, pinnedBin,
+    pinnedImpossible: "skip" in tmuxPinAssetFor(muxDeps.platform, muxDeps.arch, muxDeps.osRelease),
+    home: muxDeps.home, socketDir: muxSocketDir(process.env, typeof process.getuid === "function" ? process.getuid() : 0),
+  });
+}
+function applyMux(plan: ReturnType<typeof planNodeMux>): void {
+  configureMuxGenerations(plan.setup);
+  if (plan.setup) {
+    logger.info({ current: plan.setup.current, legacy: plan.setup.legacy, generations: liveGenerations().map((g) => g.key) }, `tmux 세대 — ${plan.note}`);
+  } else logger.info({ why: plan.note }, "tmux 세대를 쓰지 않는다(종전 경로)");
+}
+{
+  const plan = planMux(installedPinnedTmux(muxDeps.home));
+  applyMux(plan);
+  if (plan.wantPinned) {
+    const fetchPinned = async (): Promise<boolean> => {
+      const r = await ensurePinnedTmux(muxDeps);
+      if (!r.ok) { logger.warn({ why: r.why }, "tmux 고정판을 아직 못 얻었다 — 새 세션은 기본 소켓에 둔다(30분 뒤 다시 시도)"); return r.permanent; }
+      applyMux(planMux(r.bin));
+      logger.info({ bin: r.bin, fresh: r.fresh }, "tmux 고정판 확보 — 이제부터 새 세션은 고정판 전용 소켓에 선다(떠 있는 세션은 그대로)");
+      return true;
+    };
+    //  ⚠ 여기서 던지면 노드가 죽는다(노드엔 unhandledRejection 처리기가 없다) — 실패는 남기고 다음 시도로 넘긴다.
+    const attempt = (): Promise<boolean> => fetchPinned().catch((e) => {
+      logger.warn({ err: (e as Error)?.message ?? String(e) }, "tmux 고정판 확보 중 예외 — 30분 뒤 다시 시도");
+      return false;
+    });
+    void attempt().then((done) => {
+      if (done) return;
+      const retry = setInterval(() => { void attempt().then((ok) => { if (ok) clearInterval(retry); }); }, MUX_RETRY_MS);
+      retry.unref();
+    });
+  }
+}
 // 부팅 자가치유(#869) — 과거 최소 PATH 로 뜬 stale tmux 서버가 빈 채 남아 있으면 죽인다(세션 0개일 때만 = 무손실).
 //  이래야 첫 new-session 이 이 데몬의 PATH(env 파일에 baked 된 사용자 로그인 PATH)로 새 서버를 띄워 pane 이 claude 등을 찾는다.
+//  #4931 — 세대가 켜져 있으면 전용 세대만 본다(기본 소켓은 사람·다른 게이트웨이의 서버일 수 있다).
 await killEmptyTmuxServer();
 connect();

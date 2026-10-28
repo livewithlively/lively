@@ -27,7 +27,8 @@
 //   같은 레포가 이미 배운 것이다: 원칙을 주석에 적는 것으로는 안 지켜진다(#1471 `memberFileExists` 의 catch 갈래).
 //   그래서 `allowed` 를 **필수 인자**로 둔다 — 판정을 안 거치면 컴파일이 안 된다.
 //  ⚠ 로그인 상태는 **쓰지 않는다**(#2232 에서 보류된 판단 그대로 — 미리 쓰면 로그인 흐름 없이
-//   «Not logged in» 입력칸에 떨어진다). 여기서 없애는 물음은 «폴더 신뢰» 하나뿐이다.
+//   «Not logged in» 입력칸에 떨어진다). 폴더 신뢰 말고 없애는 것은 claude 첫 실행 안내 하나뿐이고, 그것도 **이미 로그인된**
+//   설정에만 넣는다(아래 ensureClaudeOnboarded — #4940).
 //  비치명이어야 한다 — 실패해도 세션은 떠야 한다(같은 부류의 선례: ensureGitSafeDirectory(#522)).
 
 /** claude 의 신뢰 표식 키 — Claude Code 가 `~/.claude.json`(또는 CLAUDE_CONFIG_DIR/.claude.json)에 쓰는 이름. */
@@ -188,5 +189,54 @@ export async function ensureFolderTrusted(io: TrustIo, configFile: string, dir: 
     return true;
   } catch {
     return false;   // 신뢰를 못 심었다고 세션을 막지 않는다 — 그때는 종전대로 프롬프트가 뜬다
+  }
+}
+
+// ── claude 첫 실행 안내 넘기기 (#4940, 2026-10-23) ──────────────────────────────────────────────
+//  화면 안 로그인(#4970 처음 설정 «AI 연결» · [AI 계정 연결] — 서버가 `claude auth login` 을 대신 돈다)은 자격만 남기고
+//   Claude Code 의 첫 실행 순서(글자 스타일 고르기 → …)는 그대로 둔다. 그래서 그 뒤 처음 여는 세션이 그 화면에서 기다리고,
+//   첫 지시는 입력칸이 안 떠서 영영 «전달하는 중…» 이었다(실측 2026-10-23 셀프호스트 테스트 박스, claude 2.1.309 — 리브 연결 세션).
+//  매니지드(중계)는 키트를 심을 때 같은 처방을 이미 한다(member-kit-seed.ts installScript) — 셀프호스트 격리·비격리엔 그 자리가 없었다.
+//  ⚠ **로그인된 설정에만** 쓴다(oauthAccount) — 로그인 전에 첫 실행을 끝난 것으로 적으면 로그인 안내 없이 «Not logged in»
+//   입력칸에 떨어진다(#2232 에서 보류된 판단 그대로). 로그인 전이면 첫 실행 순서가 그 사람을 로그인으로 데려간다.
+//  ⚠ 있는 값은 덮지 않는다 — 표식이 이미 있으면(false 를 적어 둔 것도) 손대지 않고, 사람이 고른 테마도 그대로 둔다.
+//   테마는 세션마다 `--settings` 로 따로 얹히므로(catalog.ts HARNESS_THEME) 여기 적는 값은 비었을 때의 자리채움일 뿐이다.
+
+/** claude 첫 실행을 마쳤다는 표식 — Claude Code 가 `.claude.json` 최상위에 쓰는 이름(member-kit-seed.ts 와 같은 키). */
+export const ONBOARDED_KEY = "hasCompletedOnboarding";
+
+/**
+ * 로그인된 claude 설정에 첫 실행 표식을 넣은 새 파일 내용을 만든다(**순수** — 파일시스템 무접촉).
+ *
+ * 규칙:
+ *  · 파일이 없거나 읽을 수 없으면(빈 것·깨진 JSON·객체 아닌 최상위) `{write:false}` — 새로 만들면 로그인 정보까지 잃는다.
+ *  · 로그인 안 됨(oauthAccount 없음)이면 `{write:false}`.
+ *  · 표식이 이미 있으면(true 든 false 든) `{write:false}` — 멱등.
+ *  · 쓸 때는 표식 true, 테마가 비었으면 dark — 나머지 키는 그대로.
+ */
+export function planClaudeOnboardedPatch(current: string | null): TrustPatch {
+  if (current == null || !current.trim()) return { write: false };
+  let root: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(current);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { write: false };
+    root = parsed as Record<string, unknown>;
+  } catch { return { write: false }; }
+  if (!root.oauthAccount) return { write: false };
+  if (root[ONBOARDED_KEY] !== undefined) return { write: false };
+  const next: Record<string, unknown> = { ...root, [ONBOARDED_KEY]: true };
+  if (next.theme === undefined) next.theme = "dark";
+  return { write: true, text: `${JSON.stringify(next, null, 2)}\n` };
+}
+
+/** 그 세션이 실제로 쓸 claude 설정 파일에 첫 실행 표식을 넣는다. **비치명** — 던지지 않는다(못 넣으면 종전대로 그 화면이 뜰 뿐). */
+export async function ensureClaudeOnboarded(io: TrustIo, configFile: string): Promise<boolean> {
+  try {
+    const patch = planClaudeOnboardedPatch(await io.read(configFile));
+    if (!patch.write) return false;
+    await io.write(configFile, patch.text);
+    return true;
+  } catch {
+    return false;
   }
 }

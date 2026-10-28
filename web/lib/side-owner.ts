@@ -12,9 +12,12 @@
 //   · 'none' — 사이드바가 없는 앱. 사이드바 열을 접고 그 자리까지 앱이 쓴다(레일은 남는다 — 다른 앱 · 구역으로 가는 길).
 //     표에 없는 앱은 여기로 온다: 앱의 기본은 «사이드바 없음» 이다. 앱 안에 제 왼쪽 목록이 있으면(설정) 그것이 그 앱의 사이드바다.
 //  ⚠ 입력은 활성 키다(아래 activeKeyOfRoute — 'home' · 's:<id>' · 'p:<id>' · 'builder' · 'app:<클래식 앱>' · 앱 인스턴스는 'app:').
-//  ⚠ 좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 로 여는 서랍이다. 사이드바가 없는 앱에서 ☰ 를 누르면 그 서랍은 구역 목록을 연다:
-//   레일이 없는 폭에서 ☰ 는 사람이 «다른 데로 가는 길» 을 청한 것이라(넓은 화면의 레일과 같은 자리) 앱 화면을 가리는 남의 사이드바가 아니다.
+//  ⚠ 좁은 폭(≤900)엔 접을 열이 없다 — 사이드바는 ☰ 로 여는 서랍이다. ☰ 도 그 앱의 사이드바만 연다: 사이드바가 없는 앱에선 ☰ 를 걷는다
+//   (원준 2026-10-19 «아니 각자 앱 사이드바로» — 종전엔 구역 목록이 대신 열렸다. mobile.ts setSide). 다른 데로 가는 길은 태블릿은 레일, 폰은 아래 탭 바다.
+//   폰 탭 바로 구역을 고르면 그 구역의 목록이 선다 — 사람이 그 구역(구역도 제 사이드바를 가진 화면이다)을 고른 것이다(main.ts owner 훅 · mobile.ts sheetSection).
+//  ⚠ 발치도 그 앱의 것이다 — 구역 발치 도크(지난 세션 · 휴지통 · 외부 앱 연결)는 구역 목록에만 선다(side.ts secFoot · appFoot).
 import { CLASSIC_PAGES } from './classic-pages.js';
+import { builderSeeing } from './builder-flow.js';
 
 export type SideSec = 'home' | 'sess' | 'proj' | 'wiki';
 export type OwnSide = 'sources' | 'taxonomy' | 'sessions' | 'builder';
@@ -82,5 +85,8 @@ export function activeKeyOfRoute(route: string): string {
 }
 /** 이 주소의 사이드바 주인 — 'none' 이면 셸이 사이드바 열을 접는다(main.ts applyTabChrome), 앱 이름이면 그 앱이 사이드바를 그린다(side.ts). */
 export function sideOwnerOfRoute(route: string): SideOwner {
-  return sideOwnerOf(activeKeyOfRoute(route), routeSegs(route)[0] || '');
+  const own = sideOwnerOf(activeKeyOfRoute(route), routeSegs(route)[0] || '');
+  //  앱빌더 ③ 에서 만들고 있는 앱을 실제 화면으로 써 보는 중 — 그 화면은 만들고 있는 앱의 것이라 앱빌더 사이드바를 접는다(lib/builder-flow builderSeeing).
+  if (own === 'builder' && builderSeeing(route)) return 'none';
+  return own;
 }

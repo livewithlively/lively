@@ -25,13 +25,13 @@ kit/
 ├─ generator/build-context.mjs   # 코어: org-content 입력 → 발행 아티팩트 조립 + --init/--check
 ├─ hooks/                         # 공유 훅(하네스 무관) — 배선 훅 5종: session-preload · sync-harness-assets · work-flag · stop-writeback-gate
 │                                 #   · run-custom(커스텀 훅 런너: org_hook 을 매 세션 게이트웨이 fetch·실행, 디스크 미저장, kill-switch)
-│                                 #   + self-update(백그라운드 자가 업데이터) · usage-report(statusLine) · 하네스 어댑터(opencode-plugin.js · antigravity-adapter · grok-adapter)
+│                                 #   + self-update(백그라운드 자가 업데이터) · usage-report(statusLine) · 하네스 어댑터(opencode-plugin.js · antigravity-adapter · grok-adapter · cursor-adapter)
 │                                 #   + 공유 모듈(harness-registry · host-effects-port) — 설치 목록 정본은 setup/kit-manifest.mjs
 │                                 #   + settings-hooks.json(PROJECT-DIR 템플릿) · test-hooks.sh · examples/(조직 커스텀 훅 예시)
 ├─ adapters/
 │  ├─ claude/                     # 하네스별 제거기(uninstall.mjs) + managed 예시 · 배선 문서
 │  ├─ codex/                      # 〃 (설치 정본은 setup/user-install.mjs 하나 — 어댑터 설치기는 #1475 에서 삭제)
-│  └─ opencode/ · antigravity/ · grok/   # 하네스별 제거기(uninstall.mjs)
+│  └─ opencode/ · antigravity/ · grok/ · cursor/   # 하네스별 제거기(uninstall.mjs)
 ├─ template-org/                  # 새 조직콘텐츠 1회성 INIT 소스(generic 골격, 라이블리 특정 내용 없음)
 ├─ setup/                         # 설치 엔진(user-install.mjs)·제거기 + 가이드 + vendored register-clients.sh
 ├─ aws/                           # AWS credential_process 헬퍼(게이트웨이에서 단기 AWS 자격 발급)
@@ -62,7 +62,7 @@ node generator/build-context.mjs --org ../<org>-org --install-hooks <dir> [<dir>
 |---|---|
 | `--org <dir>` | 조직콘텐츠 디렉토리(발행/훅설치 시 필수). `org/` 존재 확인. |
 | `--publish <dir>` | 발행 아티팩트 타깃. idempotent(.git·members/local.md 보존 후 재조립). |
-| `--harness claude\|codex\|opencode\|antigravity\|grok` | 발행물에 emit 할 하네스 설정(기본 claude). `claude,codex` 다중 가능. claude 외 하네스는 발행물 전용 파일이 없고 동봉 user-install.mjs 가 배선하므로 claude 와 함께 발행한다. |
+| `--harness claude\|codex\|opencode\|antigravity\|grok\|cursor` | 발행물에 emit 할 하네스 설정(기본 claude). `claude,codex` 다중 가능. claude 외 하네스는 발행물 전용 파일이 없고 동봉 user-install.mjs 가 배선하므로 claude 와 함께 발행한다. |
 | `--org-name <name>` | 헤더 표시명 오버라이드(미지정 시 `org/org-defaults.md` 의 `org-name:` frontmatter → 첫 H1 → 디렉토리명). |
 | `--emit-root` | `--org` 루트에도 CLAUDE.md/AGENTS.md 생성(선택, 소스 레포 내부 dogfood). |
 | `--install-hooks <dir>…` | 각 디렉토리에 PROJECT-DIR 훅만 비파괴 머지. |
@@ -77,14 +77,15 @@ node generator/build-context.mjs --org ../<org>-org --install-hooks <dir> [<dir>
 
 ## 전달 = user-level 훅 (설계문서 D2/D3)
 
-설치기(`setup/user-install.mjs` — 보통 `lively install` 이 부른다)가 **user-level**(`~/.lively/` + 하네스별 설정: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode·Antigravity·Grok 설정)에 설치 → 멤버는 어느 폴더에서 켜든 컨텍스트+리플렉스를 받는다. 실행 디렉토리는 무의미.
+설치기(`setup/user-install.mjs` — 보통 `lively install` 이 부른다)가 **user-level**(`~/.lively/` + 하네스별 설정: `~/.claude/settings.json` · `~/.codex/config.toml` · OpenCode·Antigravity·Grok·Cursor 설정)에 설치 → 멤버는 어느 폴더에서 켜든 컨텍스트+리플렉스를 받는다. 실행 디렉토리는 무의미.
 
 - **컨텍스트**: `session-preload`(SessionStart)가 게이트웨이에서 조직 맥락(`/api/ui/org/preview`)과 라이브 현황을 받아 주입. 받은 맥락은 `~/.lively/context.md` 에 캐시해 게이트웨이에 못 닿는 세션의 폴백으로 쓴다(설치 시 1회 시드).
-- **조직 자산**: `sync-harness-assets`(SessionStart)가 게이트웨이에 등록된 스킬·서브에이전트·커맨드를 하네스별 자리에 내려받는다(멤버 본인 자산은 불가침).
+- **조직 자산**: `sync-harness-assets`(SessionStart)가 게이트웨이에 등록된 스킬·서브에이전트·커맨드를 하네스별 자리에 내려받는다(멤버 본인 자산은 불가침). `lively install`·`setup`·`update` 도 배선 직후 하네스마다 한 번 돌린다 — 스킬 목록을 대화 시작 때 한 번만 읽는 하네스(codex·cursor 등)도 첫 대화부터 스킬이 보이게(#5013).
 - **리플렉스**: work-flag(작업·기록 신호 + 세션 실행 단계 보고 — PostToolUse·UserPromptSubmit·Notification·Stop 등) + stop-writeback-gate(Stop, 라이트백 1회 게이트) + **run-custom**(런너 — 웹 관리에서 정의한 커스텀 훅 `org_hook` 을 매 세션 게이트웨이 fetch·실행, enabled=false/제거 시 다음 세션 즉시 무효=kill-switch).
 - **incognito**: `LIVELY_OFF=1` (구 `LIVELY_HOOKS_OFF` alias) → 훅 전부(런너·자산 동기화·자가 업데이트 포함) no-op(클린룸).
 - **자가 게이팅**: writeback 게이트는 'lively work' 세션에서만 — cwd 가 `~/.lively/work-roots` prefix 아래 OR 그 세션에서 lively MCP 툴 사용 시.
+- **기록 범위(#5016)**: 컴퓨터마다 «작업 폴더에서만(기본) | 어디서나». «작업 폴더에서만» 이면 작업 폴더 밖에서 켠 AI 세션은 인코그니토와 같다 — 훅은 게이트웨이를 건드리지 않고 끝나고(맥락 주입·기록·대화 업로드·첫 지시 프로젝트 없음 · 세션 시작 훅만 이 컴퓨터 설정을 받아 온다 — 세션 id·폴더·대화는 안 싣는다) MCP 프록시(`lively mcp`·`lively mcp-local`)는 도구 0개. 작업 폴더 = 라이블리가 띄운 세션(웹·노드 · `lively run`) · 위로 `.lively/project.json` 이 있는 폴더 · 등록한 폴더(`lively work-root add` · `/lively-connect` · 웹 «내 컴퓨터별 연결», `~/.lively/work-roots` 파일 줄·env `LIVELY_WORK_ROOTS` 도 포함) 아래. 판정은 `hooks/record-scope.mjs` 한 곳, 설정 정본은 서버(컴퓨터별), 로컬 사본 `~/.lively/record-scope.json` 을 세션 시작 훅이 매번 맞춘다(사본이 아직 없으면 종전 동작). 범위 밖 세션 시작 때 사람에게 한 줄(`systemMessage`)로 `/lively-connect` 를 알리고, 그 자리에서 등록하면 그 세션도 다음 지시부터 연결된다.
 
 ## 멀티하네스 (설계문서 D5)
 
-훅 스크립트 한 벌 공유, 하네스별로 설정 파일만 다르게 emit. Claude·Codex·OpenCode·Antigravity·Grok Build 지원(#1475·#1519·#1689·#1701) — 하네스별 차이는 `hooks/harness-registry.mjs` 표 한 곳에 모은다. openclaw/pi 는 TODO.
+훅 스크립트 한 벌 공유, 하네스별로 설정 파일만 다르게 emit. Claude·Codex·OpenCode·Antigravity·Grok Build·Cursor 지원(#1475·#1519·#1689·#1701·#4927) — 하네스별 차이는 `hooks/harness-registry.mjs` 표 한 곳에 모은다. openclaw/pi 는 TODO.

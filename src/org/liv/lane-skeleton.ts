@@ -37,7 +37,7 @@ export function laneKeyFor(drawerKey: string): string {
 export const PLACEHOLDER_MARK = "## 아직 채워지지 않은 초안";
 const PLACEHOLDER_CRITERIA = [
   PLACEHOLDER_MARK,
-  "처음 설정에서 만든 서랍의 자리표다. 기준은 리브가 이 서랍에 실제로 들어온 자료 표본을 읽은 뒤 쓴다(liv-distill 스킬).",
+  "처음 설정에서 만든 카테고리의 자리표다. 기준은 리브가 이 카테고리에 실제로 들어온 자료 표본을 읽은 뒤 쓴다(liv-distill 스킬).",
   "이 문장이 남아 있는 동안 이 증류기는 켜지 않는다.",
 ].join("\n");
 const PLACEHOLDER_FORMAT = "리브가 표본을 읽은 뒤 정한다.";

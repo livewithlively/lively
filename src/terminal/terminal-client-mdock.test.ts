@@ -5,6 +5,11 @@
 // fail-first: 고치기 전 산출 모듈(TERMJS_MOD=<origin/main 의 web/standalone 컴파일본>)로 돌리면 M1·M2·M3·M5·M6·M8·M9 와
 //  C·E·S 전부(함수 미노출)가 빨간불이다(실측 3/26). M4·M7·M10 은 종전 동작 보존 행이라 그때도 초록. 새 함수는 변이로도 쟀다:
 //  cursor 요구 빼기 → C2 · 모드 8줄 창 넓히기 → E3 · stuck 멈춤 빼기 → S4 가 빨간불.
+// #4990 M13~M16(번호 단추가 글쇠 줄을 갈아 끼우지 않고 맨 앞에 붙는다): 고치기 전 모듈로 M13·M14·M16 이 빨간불(실측 10/25),
+//  M15(다시 그려지기만 하면 밀어 둔 자리 유지)는 «줄 되돌리기를 매 화면 읽기마다» 변이로 빨간불.
+// #4990 후속 P1~P9(긴 한 줄은 화면에 뜬 뒤 Enter): 고치기 전 모듈로 P1·P2·P3·P4·P9 빨간불(실측 10/25). P5·P6(Enter 가 먼저)은
+//  «다음 입력 전에 Enter 보내기» 를 빼는 변이로, P7 은 «접힘 표시» 판정을 빼는 변이로 빨간불 · Enter 를 한 번만 보내는 잠금을 빼면
+//  스위트가 죽는다(되부름). P8 은 종전 동작 보존 행.
 // 실행: npm run build && node dist/terminal/terminal-client-mdock.test.js
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -27,6 +32,7 @@ class FakeNode {
   selectionStart: number | null = null;
   selectionEnd: number | null = null;
   hidden = false;
+  scrollLeft = 0;
   focused = 0;
   blurred = 0;
   parent: FakeNode | null = null;
@@ -231,6 +237,159 @@ t("M10 부모가 없으면(단독 탭) 알리지 않는다 · 오류 없음", as
   const c = composer(h);
   c.fire("focus"); c.fire("blur");
   assert.equal(h.posted.length, 0);
+});
+
+// ── 번호 단추와 글쇠 줄의 공존(#4990) ──
+//  번호가 글쇠 줄을 갈아 끼우면 /permissions 처럼 번호가 안 먹는 목록에서 Esc 도 없어 못 나온다(상민 2026-10-25).
+//  화면을 갈아 끼울 수 있는 가짜 터미널 — 입력 줄이 onRender 로 화면 읽기(150ms 뒤)를 건다.
+const screenTerm = (rows: string[]) => {
+  const st: { rows: string[]; render: (() => void) | null } = { rows, render: null };
+  const lines = (): string[] => [...Array.from({ length: Math.max(0, 24 - st.rows.length) }, () => ""), ...st.rows];
+  const term = {
+    cols: 80, rows: 24, textarea: new FakeNode("textarea"), modes: {},
+    buffer: { active: { type: "normal", length: 24, baseY: 0, cursorX: 0, cursorY: 0,
+      getLine: (i: number) => { const s = lines()[i]; return s === undefined ? null : { translateToString: () => s }; } } },
+    onRender: (fn: () => void) => { st.render = fn; },
+  };
+  const show = async (next: string[]): Promise<void> => { st.rows = next; st.render?.(); await new Promise((r) => setTimeout(r, 200)); };
+  return { term, show };
+};
+const picksOf = (h: Harness): FakeNode | null => h.main.find((n) => /(^|\s)mpicks(\s|$)/.test(n.className));
+const pickLabels = (h: Harness): string[] => (picksOf(h)?.children || []).map((b: any) => b.textContent);
+const PERMS = ["Permissions:  Allow   Ask   Deny   Workspace", "", "❯ 1. Add a new rule…", "  2. Bash(npm run build:*)", "  3. Read(//tmp/**)"];
+const ASK2 = [" Do you want to proceed?", " ❯ 1. Yes", "   2. No"];
+const PLAIN = ["❯ 고쳐 줘", "", "  ? for shortcuts"];
+const dockWith = async (first: string[]) => {
+  const h = await makeCtx();
+  const s = screenTerm(first);
+  h.mod.__injectRefsForTest({ term: s.term });
+  h.mod.setupMobileDock(h.main);
+  await s.show(first);
+  return { h, show: s.show };
+};
+t("M13 번호로 묻는 화면 — 번호가 글쇠 줄 맨 앞에 붙고 Esc·⏎·↑·↓ 는 그대로 남는다 · 번호도 Esc 도 눌린다", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  await show(PERMS);
+  const row = keyRow(h)!;
+  assert.equal(row.hidden, false, "글쇠 줄을 숨기지 않는다(/permissions 에서 Esc 로 나올 길)");
+  const picks = picksOf(h);
+  assert.ok(picks && !picks.hidden, "번호 단추가 선다");
+  assert.equal(row.children[0], picks, "번호는 글쇠 줄 맨 앞이다(따로 한 줄을 더 먹지 않는다)");
+  assert.deepEqual(pickLabels(h), ["1", "2", "3"]);
+  const labels = keyLabels(h);
+  for (const want of ["Esc", "⏎", "↑", "↓"]) assert.ok(labels.includes(want), `«${want}» 가 남아 있어야 한다: ${JSON.stringify(labels)}`);
+  press(picks!.children[1]);
+  press(keyByLabel(h, "Esc"));
+  assert.deepEqual(h.sent, ["2", "\x1b"]);
+});
+t("M14 줄을 밀어 둔 채 번호가 새로 서면 처음으로 되돌린다 · 선택지가 사라지면 번호만 걷히고 글쇠는 남는다", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  assert.equal(picksOf(h)!.hidden, true, "전제: 평소엔 번호가 없다");
+  keyRow(h)!.scrollLeft = 140;   // 복사·붙여넣기 쪽으로 밀어 둠
+  await show(PERMS);
+  assert.equal(keyRow(h)!.scrollLeft, 0, "번호가 화면 밖에 붙지 않게 줄을 처음으로");
+  await show(PLAIN);
+  assert.equal(picksOf(h)!.hidden, true, "번호는 걷힌다");
+  assert.equal(keyRow(h)!.hidden, false, "글쇠 줄은 그대로");
+  assert.ok(keyLabels(h).includes("Esc"));
+});
+t("M15 같은 선택지가 떠 있는 동안 다시 그려지기만 하면 밀어 둔 자리를 건드리지 않는다(뒤쪽 글쇠에 닿게)", async () => {
+  const { h, show } = await dockWith(PERMS);
+  assert.ok(!picksOf(h)!.hidden, "전제: 번호가 떠 있다");
+  keyRow(h)!.scrollLeft = 140;
+  await show(PERMS);
+  assert.equal(keyRow(h)!.scrollLeft, 140);
+});
+t("M16 경계 — 선택지 둘(최소)이면 번호 둘 · 셋에서 둘로 바뀌면 번호도 둘로", async () => {
+  const { h, show } = await dockWith(ASK2);
+  assert.deepEqual(pickLabels(h), ["1", "2"]);
+  assert.equal(keyRow(h)!.hidden, false);
+  await show(PERMS);
+  assert.deepEqual(pickLabels(h), ["1", "2", "3"]);
+  await show(ASK2);
+  assert.deepEqual(pickLabels(h), ["1", "2"]);
+});
+
+// ── 보내기 한 번 = 제출 한 번(#4990 후속) ──
+//  글과 Enter 가 앱에 한 덩어리로 읽히면 Claude Code 는 64자 이상에서 Enter 를 줄바꿈으로 넣는다(제출 안 됨).
+//  긴 한 줄은 글이 화면에 «새로» 뜬 뒤에 Enter 를 보낸다. 화면을 갈아 끼우는 가짜 터미널로 잰다.
+const LONG = "짧게 오케이 라고만 답해 줘 이건 사십 자를 넘기려고 길게 늘인 한국어 문장이다 끝꼬리";   // 49자
+const boxed = (s: string, cut = 34): string[] => ["─".repeat(60), "❯ " + s.slice(0, cut), "  " + s.slice(cut), "─".repeat(60), "  ⏵⏵ auto mode on"];
+const sendText = (h: Harness, text: string): void => { composer(h).value = text; press(sendBtn(h)); };
+const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+t("P1 긴 한 줄 — 글만 먼저 나가고, 화면에(접혀·들여써져) 새로 뜨면 Enter 한 번 · 그 뒤 화면이 또 바뀌어도 더 안 보낸다", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  sendText(h, LONG);
+  assert.deepEqual(h.sent, [LONG], "Enter 는 아직 — 글과 한 덩어리로 읽히면 제출이 안 된다");
+  await show(PLAIN);
+  assert.deepEqual(h.sent, [LONG], "화면에 아직 없으면 계속 기다린다");
+  await show(boxed(LONG));
+  assert.deepEqual(h.sent, [LONG, "\r"]);
+  await show([...boxed(LONG), "⏺ 오케이"]);
+  assert.deepEqual(h.sent, [LONG, "\r"], "Enter 는 한 번만");
+});
+t("P2 보내기 전부터 같은 꼬리가 화면에 있으면(앞서 보낸 같은 글) 그걸로는 안 보내고, 하나 더 뜨면 보낸다", async () => {
+  const before = ["❯ " + LONG, "⏺ 오케이", ...boxed("")];
+  const { h, show } = await dockWith(before);
+  sendText(h, LONG);
+  await show(before);
+  assert.deepEqual(h.sent, [LONG], "있던 꼬리는 우리 글이 뜬 증거가 아니다");
+  await show(["❯ " + LONG, "⏺ 오케이", ...boxed(LONG)]);
+  assert.deepEqual(h.sent, [LONG, "\r"]);
+});
+t("P3 끝내 안 보이면 제한 시간 뒤 Enter 한 번(종전 동작) · 그 뒤로 더 없음", async () => {
+  const { h } = await dockWith(PLAIN);
+  h.mod.__injectRefsForTest({ echoWaitMs: 250 });
+  sendText(h, LONG);
+  await wait(120);
+  assert.deepEqual(h.sent, [LONG], "제한 시간 전엔 기다린다");
+  await wait(300);
+  assert.deepEqual(h.sent, [LONG, "\r"]);
+  await wait(200);
+  assert.deepEqual(h.sent, [LONG, "\r"]);
+});
+t("P4 경계 — 39자는 곧바로 Enter · 40자는 기다린다", async () => {
+  const { h } = await dockWith(PLAIN);
+  const l39 = "가".repeat(39), l40 = "나".repeat(40);
+  assert.equal(h.mod.ECHO_WAIT_MIN, 40, "전제: 경계 40");
+  sendText(h, l39);
+  assert.deepEqual(h.sent, [l39, "\r"]);
+  sendText(h, l40);
+  assert.deepEqual(h.sent, [l39, "\r", l40], "40자는 Enter 를 미룬다");
+});
+t("P5 기다리는 중 Esc 를 누르면 미뤄 둔 Enter 가 먼저 나가고 Esc 가 뒤따른다 · Enter 는 그 한 번뿐", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  sendText(h, LONG);
+  press(keyByLabel(h, "Esc"));
+  assert.deepEqual(h.sent, [LONG, "\r", "\x1b"]);
+  await show(boxed(LONG));
+  assert.deepEqual(h.sent, [LONG, "\r", "\x1b"]);
+});
+t("P6 기다리는 중 다음 글을 보내면 글1 · Enter · 글2 · Enter", async () => {
+  const { h } = await dockWith(PLAIN);
+  sendText(h, LONG);
+  sendText(h, "응");
+  assert.deepEqual(h.sent, [LONG, "\r", "응", "\r"]);
+});
+t("P7 Claude 가 입력칸을 «[Pasted text #1]» 로 접어 꼬리가 안 보여도 그 표시가 새로 생기면 Enter", async () => {
+  const { h, show } = await dockWith(PLAIN);
+  sendText(h, LONG);
+  await show(["─".repeat(60), "❯ [Pasted text #1]", "─".repeat(60)]);
+  assert.deepEqual(h.sent, [LONG, "\r"]);
+});
+t("P8 여러 줄은 붙여넣기 표지로 감싸고 곧바로 Enter(종전)", async () => {
+  const { h } = await dockWith(PLAIN);
+  sendText(h, "첫 줄\n둘째 줄");
+  assert.deepEqual(h.sent, ["\x1b[200~첫 줄\n둘째 줄\x1b[201~", "\r"]);
+});
+t("P9 화면을 못 읽어도(getLine 이 던짐) 오류 없이 제한 시간 뒤 Enter", async () => {
+  const { h } = await dockWith(PLAIN);
+  h.mod.__injectRefsForTest({ echoWaitMs: 150, term: { cols: 80, rows: 24, textarea: new FakeNode("textarea"), modes: {},
+    buffer: { active: { type: "normal", length: 24, baseY: 0, cursorX: 0, cursorY: 0, getLine: () => { throw new Error("buffer gone"); } } } } });
+  sendText(h, LONG);
+  assert.deepEqual(h.sent, [LONG]);
+  await wait(300);
+  assert.deepEqual(h.sent, [LONG, "\r"]);
 });
 
 // ── 번호로 고르기 판정 ──

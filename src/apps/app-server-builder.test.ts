@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -102,7 +103,18 @@ function readZip(buf: Buffer): ZEnt[] {
   return out;
 }
 const fileOf = (z: ZEnt[], n: string): ZEnt | undefined => z.find((e) => e.name === n);
-/** zip 을 새 폴더에 풀고(링크는 링크로) 시작 스크립트(lively-run.sh)로 띄워 «/» 의 본문을 받는다 — 5초 안에 못 받으면 "". */
+/** 지금 비어 있는 포트 — OS 에게 받고(listen(0)) 바로 닫는다. 표본 서버처럼 주소 없이 받아 같은 자리를 잰다. */
+const freePort = (): Promise<number> => new Promise((resolve, reject) => {
+  const s = net.createServer();
+  s.once("error", reject);
+  s.listen(0, () => { const { port } = s.address() as net.AddressInfo; s.close(() => resolve(port)); });
+});
+/**
+ * zip 을 새 폴더에 풀고(링크는 링크로) 시작 스크립트(lively-run.sh)로 띄워 «/» 의 본문을 받는다 — 30초 안에 못 받으면 "".
+ *  포트는 OS 가 빈 것으로 준다. 종전엔 20000~39999 에서 무작위로 골랐고 상한이 5초였다 — 그 자리를 다른 소켓이 쥐고 있거나
+ *  부하(-j 4) 속에서 sh → node 기동이 5초를 넘기면 빈 본문이 되어 CI 에서 간헐적으로 빨갰다(2026-10-26 main run 40269685959 ·
+ *  merge queue 40289205992). 서버가 먼저 죽으면 상한을 기다리지 않고 끝내고, 그 출력과 종료 사유를 남긴다.
+ */
 async function bootZip(z: ZEnt[]): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "boot-"));
   for (const e of z) {
@@ -111,14 +123,28 @@ async function bootZip(z: ZEnt[]): Promise<string> {
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     if ((e.mode & 0o170000) === 0o120000) fs.symlinkSync(e.data.toString(), abs); else fs.writeFileSync(abs, e.data, { mode: e.mode & 0o777 });
   }
-  const port = 20000 + Math.floor(Math.random() * 20000);
-  const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: "ignore" });
+  const port = await freePort();
+  //  detached = 제 프로세스 그룹. 시작 스크립트는 sh 라 서버(node)는 그 손자다 — sh 만 죽이면 node 가 PID 1 에 붙어 영영 남는다.
+  //   그래서 그룹째 죽인다.
+  const srvProc = spawn(path.join(dir, "lively-run.sh"), [], { env: { ...process.env, PORT: String(port), LAMBDA_TASK_ROOT: dir }, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  let out = "";
+  let ended: string | null = null;
+  srvProc.stdout!.on("data", (d: Buffer) => { out += d.toString(); });
+  srvProc.stderr!.on("data", (d: Buffer) => { out += d.toString(); });
+  srvProc.on("exit", (code, signal) => { ended = `종료 code=${code} signal=${signal}`; });
+  srvProc.on("error", (err) => { ended = `실행 실패 ${err.message}`; });
   let body = "";
-  for (let i = 0; i < 50 && !body; i++) {
-    await new Promise((r) => setTimeout(r, 100));
-    body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
+  try {
+    const until = Date.now() + 30_000;
+    while (!body && ended === null && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 100));
+      body = await new Promise<string>((r) => http.get(`http://127.0.0.1:${port}/`, (res) => { let b = ""; res.on("data", (d) => (b += d)); res.on("end", () => r(b)); }).on("error", () => r("")));
+    }
+    if (!body) console.error(`bootZip: 본문을 못 받았다(포트 ${port} · ${ended ?? "30초 상한"})\n${out}`);
+  } finally {
+    if (srvProc.pid) { try { process.kill(-srvProc.pid, "SIGKILL"); } catch { /* 이미 끝났다 */ } }
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
   }
-  srvProc.kill("SIGKILL");
   return body;
 }
 const memFile = (mb: number): string => {

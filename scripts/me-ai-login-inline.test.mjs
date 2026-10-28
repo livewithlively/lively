@@ -10,14 +10,19 @@ import test from "node:test";
 const SRC = readFileSync(new URL("../web/me-ai.ts", import.meta.url), "utf8");
 const PROFILES = readFileSync(new URL("../src/terminal/profiles.ts", import.meta.url), "utf8");
 const MOD = readFileSync(new URL("../web/lib/ai-login-inline.ts", import.meta.url), "utf8");
+//  (#4970) 행 아래 로그인 칸은 ai-login-panel.ts 한 벌로 떼어 냈다 — 처음 설정 «AI 연결» 과 같은 칸이다. 칸의 계약은 그 파일에서 본다.
+const PANEL = readFileSync(new URL("../web/ai-login-panel.ts", import.meta.url), "utf8");
 const code = (s) => s.split("\n").filter((l) => {
   const t = l.trim();
   return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
 }).join("\n");
 
 test("배선 · 소스를 실제로 읽었다(vacuous 방지)", () => {
-  assert.ok(SRC.length > 2000 && PROFILES.length > 5000 && MOD.length > 2000);
+  assert.ok(SRC.length > 2000 && PROFILES.length > 5000 && MOD.length > 2000 && PANEL.length > 2000);
   assert.match(SRC, /aiAccountRow/);
+  //  칸은 한 벌이다 — [내 AI 계정]이 그 칸을 쓴다(사본이 남으면 실측 처방이 갈린다).
+  assert.match(SRC, /from '\.\/ai-login-panel\.js'/, "[내 AI 계정]이 공용 칸을 안 쓴다");
+  assert.match(code(SRC), /aiLoginPanel\(a, reload\)/, "행이 공용 칸을 안 만든다");
 });
 
 test("★ 로그인이 이 자리에서 끝난다 — 버튼이 새 탭을 여는 것이 기본 동작이 아니다", () => {
@@ -46,7 +51,7 @@ test("★ 사람이 누른 로그인은 **새로** 띄운다 — 지난 시도�
 });
 
 test("★ 두 갈래를 **하네스로** 가른다 — 주소·코드로 끝나면 카드, 아니면 터미널", () => {
-  const c = code(SRC);
+  const c = code(PANEL);
   assert.match(c, /isInlineCardHarness\(a\.key\)/, "갈림은 공용 판정을 쓴다(사본 금지)");
   assert.match(c, /paintTerminal\(\)/, "카드로 못 끝내는 하네스는 터미널을 이 자리에 띄운다");
   assert.match(c, /paintCard\(\)/, "끝나는 하네스는 주소·코드만 보여 준다");
@@ -84,13 +89,13 @@ test("★ 카드가 못 뜨면 **터미널로 떨어진다** — 그 자리를 �
   //  ⚠ 실측(2026-09-01, 매니지드): 카드는 멤버 중계 = **tmux 컨테이너**에서 로그인 명령을 돌리는데
   //   #2454(이미지 역할 분할)가 거기서 하네스 4종을 걷어냈다 → «grok 없음».
   //   터미널 경로는 **세션 컨테이너**를 만들고 그쪽엔 하네스가 있다. 그러니 되는 길로 옮긴다.
-  const c = code(SRC);
+  const c = code(PANEL);
   assert.match(c, /failed: \(m\) => \{[^]{0,400}paintTerminal\(\)/, "시작 실패는 터미널로 떨어진다");
   assert.match(c, /fellBack/, "한 번만 떨어진다(왕복 금지)");
 });
 
 test("★ 막다른 패널 금지 — 어떤 갈래에서도 창으로 나가는 길이 있다", () => {
-  const c = code(SRC);
+  const c = code(PANEL);
   assert.match(c, /openWindow/, "창으로 여는 탈출로가 있다");
   //  ⚠ 이미 만든 세션이 있으면 **그 세션**을 연다(새 세션을 또 만들면 두 자리에서 로그인하게 된다).
   assert.match(c, /if \(term\) \{[^]{0,160}loginTerminalPopoutUrl\(term\)/, "탈출로는 같은 세션을 연다");
@@ -99,16 +104,20 @@ test("★ 막다른 패널 금지 — 어떤 갈래에서도 창으로 나가는
 });
 
 test("★ 창 열기는 **사람이 누를 때만** — await 뒤의 window.open 은 팝업차단에 조용히 막힌다", () => {
-  //  #2055 실측. 그래서 window.open 은 onclick 안에서만 나타나야 한다.
-  const c = code(SRC);
-  for (const m of c.matchAll(/window\.open/g)) {
-    const before = c.slice(Math.max(0, m.index - 600), m.index);
-    assert.ok(/onclick|openWindow/.test(before), `window.open 이 사람이 누르는 자리 안에 있다 (index ${m.index})`);
+  //  #2055 실측. 그래서 window.open 은 onclick 안에서만 나타나야 한다(행·칸 두 파일 모두).
+  let seen = 0;
+  for (const c of [code(SRC), code(PANEL)]) {
+    for (const m of c.matchAll(/window\.open/g)) {
+      seen++;
+      const before = c.slice(Math.max(0, m.index - 600), m.index);
+      assert.ok(/onclick|openWindow/.test(before), `window.open 이 사람이 누르는 자리 안에 있다 (index ${m.index})`);
+    }
   }
+  assert.ok(seen > 0, "창 여는 자리를 못 찾았다 — 검사가 헛돈다");
 });
 
 test("★ 끝나면 상태를 다시 읽는다 — «로그인했는데 화면은 연결 안 됨» 을 남기지 않는다", () => {
-  const c = code(SRC);
+  const c = code(PANEL);
   assert.match(c, /done: \(\)[^]{0,200}reload\(\)/, "카드가 끝나면 목록을 새로 읽는다");
   assert.match(c, /상태 새로고침/, "터미널 갈래는 사람이 끝냈다고 알릴 수 있다(그 자리에서 판정을 다시 잰다)");
 });

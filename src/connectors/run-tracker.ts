@@ -15,9 +15,10 @@ import { buildChildEnv } from "./child-env.js";
 import { itemsPool, tenantBindingActive, tenantBindingSql, withTx } from "../db/client.js";
 import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
+import { initConnectorRunSchema } from "./run-schema.js";
 import type { JobRoute } from "./run-unit.js";   // 타입만 — run-unit 은 동적으로 부른다(아래 unitMod)
 
-const LOG_CAP = 400_000;          // connector_run.log tail 캡(문자)
+export const LOG_CAP = 400_000;   // connector_run.log tail 캡(문자)
 const FLUSH_MS = 1500;            // 로그 flush 주기(하트비트 겸용)
 const FLUSH_BYTES = 16_384;       // 즉시 flush 임계
 // 하트비트 liveness(#586 실배포 교훈): 게이트웨이(부모)가 재시작되면 로그 스트리밍·종료 기록을 하던 추적이
@@ -84,31 +85,7 @@ function ensureRunSchema(): Promise<void> {
   if (!schemaReady) {
     schemaReady = (async () => {
       if (await runSchemaComplete()) return; // 이미 완성 — 권한 없는 역으로도 통과한다
-      await itemsPool.query(`
-      CREATE TABLE IF NOT EXISTS connector_run(
-        id BIGSERIAL PRIMARY KEY,
-        system TEXT NOT NULL,
-        mode TEXT NOT NULL DEFAULT 'incremental',
-        trigger TEXT NOT NULL DEFAULT 'cron',
-        status TEXT NOT NULL DEFAULT 'running',
-        started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        finished_at TIMESTAMPTZ,
-        exit_code INT,
-        stats JSONB,
-        log TEXT NOT NULL DEFAULT '',
-        started_by TEXT);
-      CREATE INDEX IF NOT EXISTS connector_run_system_idx ON connector_run(system, started_at DESC);
-      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS pid INT;
-      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now();
-      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS log_total BIGINT NOT NULL DEFAULT 0;
-      UPDATE connector_run SET log_total = char_length(log) WHERE log_total = 0 AND log <> '';
-      -- #1419 T1 — 실행을 **수집기 인스턴스**에 귀속. 구 행은 NULL(레거시 system 단위 실행)로 남고,
-      --  화면은 collector_id 가 있으면 그 수집기 이력으로, 없으면 종전처럼 system 이력으로 읽는다.
-      --  ⚠ FK 를 걸지 않는다 — 수집기를 지워도 그 실행 이력(무슨 일이 있었나)은 남아야 한다(감사 성격).
-      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS collector_id BIGINT;
-      CREATE INDEX IF NOT EXISTS connector_run_collector_idx ON connector_run(collector_id, started_at DESC)
-        WHERE collector_id IS NOT NULL;
-    `);
+      await initConnectorRunSchema();
     })();
     // ⚠ **실패한 프라미스를 캐시하지 않는다**(같은 실측에서 함께 드러난 두 번째 결함): 캐시해 두면 부팅 때 한 번
     //  실패한 뒤로 그 프로세스가 사는 내내 **모든 호출이 그 옛 거절을 그대로 다시 던진다** — 스택이 부팅 시점을
@@ -459,15 +436,8 @@ export function trackRunChild(runId: number, child: ChildProcess, o: TrackOpts):
         let stats: unknown = null;
         try {
           const r = await itemsPool.query(`SELECT log FROM connector_run WHERE id=$1`, [runId]);
-          const log = String((r.rows[0] as { log: string } | undefined)?.log ?? "");
-          for (const line of log.split("\n").reverse()) {
-            const t = line.trim();
-            if (!t.startsWith("{")) continue;
-            try {
-              const j = JSON.parse(t) as Record<string, unknown>;
-              if (j.msg && String(j.msg).includes("싱크 완료")) { stats = { msg: j.msg, ...j, time: undefined, pid: undefined, hostname: undefined, level: undefined }; break; }
-            } catch { /* JSON 아닌 줄 */ }
-          }
+          const { runStatsFromLog } = await import("./sync-outcome.js");
+          stats = runStatsFromLog(String((r.rows[0] as { log: string } | undefined)?.log ?? ""));
         } catch { /* 조회 실패 무시 */ }
         const ok = code === 0;
         // 정상 완주(exit 0)는 취소 플래그보다 우선 — kill 직전에 이미 끝난 run 을 canceled 로 오기록하지 않게(리뷰 지적).

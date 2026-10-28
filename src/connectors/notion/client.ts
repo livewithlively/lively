@@ -1,6 +1,7 @@
 // Notion HTTP 클라이언트(#1313 R22 분할 — 구 notion.ts 38-44·70-217).
 //  커넥터 전 계층이 쓰는 유일한 네트워크 표면: config 해석 + 인증/버전 헤더 + rate limit 슬롯 + 커서 페이지네이션,
 //  그리고 #976 아웃바운드(위키 투영) 공개 표면. 트래버스/방출 계층은 여기 말고 노션을 직접 부르지 않는다.
+import { assetMaxBytes } from "../asset-limits.js";
 import { stateDir } from "../../ops/state-dir.js";
 import { resolveConnectorConfig } from "../config.js";
 import { parseNotionRootId } from "../notion-md.js";
@@ -22,6 +23,8 @@ export const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 export interface NotionConfig {
   token: string; instance: string; version: string;
   rootIds: string[]; excludeIds: string[]; comments: "page" | "all" | "off"; assetDir: string;
+  /** #5012 첨부 크기 상한(바이트) — 수집기 설정 «첨부 크기 상한(MB)», 기본 50MB. */
+  assetMaxBytes: number;
 }
 
 export async function loadConfig(): Promise<NotionConfig> {
@@ -52,6 +55,7 @@ export async function loadConfig(): Promise<NotionConfig> {
     rootIds, excludeIds,
     comments: cm === "all" || cm === "off" ? (cm as "all" | "off") : "page",
     assetDir: c.asset_dir || stateDir("notion-assets"),
+    assetMaxBytes: assetMaxBytes(c.asset_max_mb),
   };
 }
 

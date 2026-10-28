@@ -62,6 +62,14 @@ check(F.parseBuilderRoute(["builder", "new"], q({ sel: "x" })).id === "" && F.pa
 const K = (view, id = "", how = "edit") => F.builderSideKey({ view, id, how });
 check(K("new") === "new" && K("resume", "box-1") === "draft:box-1" && K("app", "memo") === "app:memo" && K("app", "memo", "copy") === "app:memo", "R8 켜질 줄 — 새 앱 · 이어서 = 그 만들던 앱 · 고치기 · 사본 = 그 앱");
 check(K("list") === "all" && K("list", "memo") === "app:memo" && K("list", "draft:box-1") === "draft:box-1", "R9 목록 — 고른 것 없으면 「모든 앱」 · 고른 앱 · 고른 만들던 앱");
+// ── 앱 「개발 정보」(#4632 원준 2026-10-26 «(i) 같은거나 … 개발 정보? 뭐 이런 느낌이 드는 버튼») — #/builder/spec/<앱> ──
+{
+  const back = (r) => { const [path, qs] = r.replace(/^#\//, "").split("?"); return F.parseBuilderRoute(path.split("/"), q(qs ? Object.fromEntries(new URLSearchParams(qs)) : {})); };
+  check(JSON.stringify(F.parseBuilderRoute(["builder", "spec", "app-2csk6w"])) === JSON.stringify({ view: "spec", id: "app-2csk6w", how: "edit" })
+    && F.parseBuilderRoute(["builder", "spec", "a%20b"]).id === "a b" && F.parseBuilderRoute(["builder", "spec"]).view === "list", "R14 개발 정보 주소 읽기 — 앱 id(디코드) · id 없으면 목록");
+  check(F.builderRoute("spec", "a b") === "#/builder/spec/a%20b" && JSON.stringify(back(F.builderRoute("spec", "memo"))) === JSON.stringify({ view: "spec", id: "memo", how: "edit" }), "R15 개발 정보 주소 짓기 ↔ 읽기 왕복");
+  check(K("spec", "memo") === "app:memo" && T("spec") === "앱빌더 · 개발 정보", "R16 개발 정보 화면 — 사이드바는 그 앱 줄이 켜지고 탭 이름은 「앱빌더 · 개발 정보」");
+}
 const H = (h) => F.parseBuilderHash(h);
 check(H("#/sources") === null && H("") === null && H(null) === null && H("#/") === null, "R10 앱빌더 주소가 아니면 null");
 check(JSON.stringify(H("#/builder/s/box%201")) === JSON.stringify({ view: "resume", id: "box 1", how: "edit" }) && H("#builder").view === "list"
@@ -134,6 +142,22 @@ check(F.isTrySession(F.trySessionLabel("회의록")) && F.isTrySession(F.trySess
   check(F.isTrySessionRow(logRow) && F.isTrySessionRow({ label: '"회의록" 앱 시험' }) && F.isTrySessionRow({ name: '"회의록" 앱 시험' }) && F.isTrySessionRow({ label: "x", logTitle: brief }) && F.isTrySessionRow({ label: "x", raw: { title: brief } }), "G9 isTrySessionRow — 박스 줄(label) · 기록 줄(name · title) · 접힌 줄(logTitle) · 날 줄(raw.title)");
   check(!F.isTrySessionRow({ label: '"회의록" 앱 제작', title: "회의록 앱을 만들고 싶어" }) && !F.isTrySessionRow(null) && !F.isTrySessionRow({}) && !F.isTrySessionRow({ label: 3, raw: null }), "G10 시험 세션이 아닌 줄 · 빈 값 · 이상한 값은 거르지 않는다");
   check(F.findTrySession([{ id: "box-x", label: '"회의록" 앱 시험', projectId: 4680, owned: false }, { id: "box-y", label: '"회의록" 앱 시험', projectId: 4680, trashedAt: "2026-10-15" }, { id: "box-z", label: '"회의록" 앱 시험', projectId: 4680 }], '"회의록" 앱 시험', 4680) === "box-z", "G11 남의 세션 · 치운 세션은 다시 쓰지 않는다");
+}
+
+// V ③ 실제 화면을 보는 중 — 주소에 적는다(#4632 원준 2026-10-19 «3단계에서 앱 전체화면 보면서 만들 때 … 앱 빌더의 사이드바가 등장하네. 안그렇게 해줘»)
+//  사이드바 주인(lib/side-owner)이 이 표시로 앱빌더 사이드바를 접는다. 이게 틀리면 시험 세션 옆에 앱빌더 목록이 서거나, 허브로 돌아와도 사이드바가 안 돌아온다.
+{
+  const has = typeof F.builderSeeRoute === "function" && typeof F.builderSeeing === "function";
+  check(has, "V0 builderSeeRoute · builderSeeing 이 있다");
+  if (has) {
+    const r = F.builderSeeRoute("box 1", "widget");
+    check(r === "#/builder/s/box%201?see=widget" && F.builderSeeing(r) === "widget" && F.builderSeeing(F.builderSeeRoute("s2", "app")) === "app", "V1 짓기 ↔ 읽기 — 세션 id 를 싸서 · 꼴 둘(widget · app)");
+    check(F.parseBuilderHash(r) && F.parseBuilderHash(r).view === "resume" && F.parseBuilderHash(r).id === "box 1", "V1 보는 중 주소도 그 세션을 이어 만드는 주소다(앱빌더가 같은 화면을 그린다)");
+    const S = F.builderSeeing;
+    check(S("#/builder/s/x?see=zzz") === "" && S("#/builder/s/x?see=") === "" && S("#/builder/s/x") === "" && S("#/builder?see=widget") === "" && S("#/builder/new?see=widget") === ""
+      && S("#/builder/app/memo?see=app") === "" && S("#/s/box-1?see=widget") === "" && S("") === "" && S(null) === "" && S(undefined) === "" && S("#/builder/s/?see=widget") === "",
+      "V2 그 밖은 '' — 모르는 값 · 빈 값 · 표시 없음 · 목록 · 새 앱 · 고치기 · 다른 화면 · 빈 주소 · 세션 없는 주소");
+  }
 }
 
 console.log(`builder-flow: ${pass} 통과 · ${fail} 실패`);

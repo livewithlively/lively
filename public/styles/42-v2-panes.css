@@ -384,6 +384,13 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-fcsep { flex: none; font-size: 11px; color: var(--muted-3); }
 .pn-frow1 .pn-fine { flex: none; }
 .pn-frow1 .pn-fine.sel { color: var(--blue); font-weight: 700; }
+/* #4882 자료 앱의 위젯 — 경로 첫 칸에 자료 앱의 얼굴(폴더 · 자료 색), 줄 끝에 자료 앱으로 가는 문. */
+.pn-fcrumb.app { display: inline-flex; align-items: center; gap: 4px; }
+.pn-fcrumb.app > span { overflow: hidden; text-overflow: ellipsis; }
+.pn-fapp-ic { flex: none; stroke: var(--gi-c-src); }
+.pn-fapp { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.pn-fapp:hover { background: var(--bg-punch); color: var(--ink); }
 
 .pn-files:focus-visible .pn-fbody { box-shadow: inset 0 0 0 2px rgba(45,107,240,.28); border-radius: 9px; }   /* 키보드로 들어왔을 때만 — 이 칸이 키를 받는다 */
 
@@ -751,7 +758,57 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-zoom.is-fit .pn-zoom-lbl { color: var(--blue); }
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
+
+/* ── AI 와 같이 쓰는 브라우저(#4993) — webview 는 칸 안이 아니라 body 아래 «브라우저 층»에 산다(v2/browser-tabs.ts) ──
+   층은 상자를 만들지 않는다(display: contents) — 탭마다 제 자리의 쌓임 높이로 뿌리 맥락에서 겨루게. 위치·크기·배율은
+   층이 매 틀 인라인으로 준다. 여기 규칙은 «모양»과 «끌기 보호»뿐이다. */
+.bt-layer { display: contents; }
+.bt-view { display: flex; border: 0; background: #fff; }
+/* 셸에서 시작한 끌기(경계·탭·글 선택)가 webview 위를 지나면 webview 가 마우스를 삼켜 끌기가 끊긴다 — 누르는 동안만 손을 뗀다. */
+.bt-layer.bt-passive .bt-view,
+body.v2-splitting-x .bt-view, body.v2-splitting-y .bt-view, body.cm-dragging .bt-view { pointer-events: none !important; }
+/* 겹침 판 — webview 와 같은 자리, 한 칸 위. 판 자체는 클릭을 통과시키고 안의 알약·안내만 받는다. */
+.bt-overlay { pointer-events: none; box-sizing: border-box; border-radius: 0; transition: box-shadow .2s ease; }
+.bt-overlay > * { pointer-events: auto; }
+/* AI 가 지금 이 탭을 조작하는 중 — 테두리 한 줄로 알린다(사람이 무엇이 움직이는지 안다). */
+.bt-overlay.bt-ai-on { box-shadow: inset 0 0 0 2px var(--purple); }
+.pn-web-live .pn-webstage { background: transparent; }
+/* 빈 탭 안내 — 겹침 판 가운데(webview 위). */
+.pn-web-empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 6px; padding: 24px; text-align: center; background: var(--surface); pointer-events: none; }
+.pn-web-empty[hidden] { display: none; }
+.pn-web-empty-h { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.pn-web-empty-p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; max-width: 320px; }
+/* 주소줄의 AI 표시 — 누르면 이 탭의 AI 조작을 멈춘다(사람은 계속 쓴다). */
+.pn-web-ai { flex: none; height: 24px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--purple) 45%, var(--line)); border-radius: 999px;
+  background: color-mix(in srgb, var(--purple) 10%, var(--bg)); color: var(--purple-text); font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.pn-web-ai[hidden] { display: none; }
+.pn-web-ai.busy::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--purple); vertical-align: 1px; animation: pn-web-ai-pulse 1s ease-in-out infinite; }
+.pn-web-ai.paused { border-color: color-mix(in srgb, var(--red, #E5484D) 45%, var(--line)); background: color-mix(in srgb, var(--red, #E5484D) 9%, var(--bg)); color: var(--red, #C8333A); }
+@keyframes pn-web-ai-pulse { 50% { opacity: .25; } }
+/* 사람에게 넘기기 — AI 가 부탁한 일(로그인·인증)과 [완료]. 주소줄 바로 아래(무대를 덮지 않게 무대를 밀어낸다). */
+.pn-web-handoff { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--purple) 30%, var(--line));
+  background: color-mix(in srgb, var(--purple) 8%, var(--bg)); font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+.pn-web-handoff[hidden] { display: none; }
+.pn-web-ho-h { flex: none; font-weight: 800; color: var(--purple-text); }
+.pn-web-ho-t { flex: 1; min-width: 160px; word-break: keep-all; }
+.pn-web-ho-acts { flex: none; display: inline-flex; gap: 6px; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+/* ── 웹 판 원격 화면(#4993 (A)) — 데스크톱 앱 탭의 스크린샷을 그리고, 누르고 쓰는 것을 그 탭으로 보낸다(web/v2/remote-web.ts) ──
+   그림은 무대 안에 통째로 맞춰 넣는다(가로 · 세로 중 먼저 닿는 쪽, 가운데) — 무대가 구르지 않아야 휠이 전부 원격 페이지로 간다
+   (무대가 구르는데 휠을 막으면 세로로 긴 그림 아래에 영영 못 닿는다 — 격리 리뷰). 좌표는 그림 상자로 재므로 맞춤과 무관하다.
+   글은 숨긴 입력칸(sink)이 받는다 — 칸은 편집 칸이 아니라 한글 조합이 안 일어난다. 16px — 아이폰은 16px 미만 입력칸에
+   초점이 가면 화면을 확대한다(50-mobile.css 머리말). */
+.pn-remote-stage { overflow: hidden; }
+.pn-remote-img { position: absolute; inset: 0; margin: auto; display: block; max-width: 100%; max-height: 100%; width: auto; height: auto;
+  user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+.pn-remote-sink { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; margin: 0; resize: none; overflow: hidden; pointer-events: none; font-size: 16px; }
+.pn-remote-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
+  text-align: center; font-size: 13px; line-height: 1.6; color: var(--muted); background: var(--surface); word-break: keep-all; }
+.pn-remote-msg[hidden] { display: none; }
+/* 아래 줄은 두 줄까지 — 긴 안내가 여러 줄로 서면 그림 칸이 줄어 같은 휠이 더 멀리 갔다(전문은 title). */
+.pn-remote-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 화면이 굴리기를 따라오는 중 — 누르면 안 간다(«그림이 멈춘 뒤 다시»). 커서로 미리 알린다. */
+.pn-web-remote[data-behind] .pn-remote-img { cursor: progress; }
 /* ⚠ position: relative — 배율 알약이 이 칸의 오른쪽 아래에 선다(무대 안에 두면 내용과 함께 굴러간다). */
 .pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
 /* ── 뷰어 무대 — 펴 놓은 것이 서는 자리 (#762) ─────────────────────────────────

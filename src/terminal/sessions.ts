@@ -26,7 +26,7 @@ import { loadStoragePolicy } from "../org/policies/runtime-loaders.js"; // #1313
 import { assertDiskWritable } from "../ops/disk-guard.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
-import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
+import { wrapAsMember, memberExecConfigured, type CgroupLimit } from "./terminal-isolation.js";
 import { tmuxInSessionContainer, sessionEnsureArgv, sessionPaneArgv, ensureSessionContainerViaRelay } from "./session-tmux.js";   // #2545 — 새 세션은 자기 세션 컨테이너 안 tmux(3단계)
 import { collectPaneArgv, isCollectRunDir } from "./collect-run-pane.js";   // #4213 T11 — 수집 실행 세션(판 = 러너 하나 · 작은 크기)
 import { onNode } from "../exec-topology.js";   // #2599 T2 — 「노드 프로세스인가」의 단일 출처
@@ -37,7 +37,7 @@ import { memberMkdir, memberWriteFile, memberShOut, execAt, type ExecAt } from "
 import os from "node:os";
 import path from "node:path";
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
-import { ensureFolderTrusted, TRUST_PLANS, type TrustIo } from "./harness-trust.js";
+import { ensureFolderTrusted, ensureClaudeOnboarded, TRUST_PLANS, type TrustIo } from "./harness-trust.js";
 import { ensureCodexUpdateCheckOff } from "./codex-update-check.js";   // #4135 후속 — 시작 «Update available» 창이 codex 를 죽이던 것
 import { ensureCodexHooksTrusted } from "./codex-hook-trust-apply.js";   // #4135 후속 — «Hooks need review» 를 미리 지운다   // #1631·#2478 — 첫 실행 «폴더 신뢰» 물음이 첫 지시를 삼키던 것
 import { autoTrustWorkspace } from "./session-create-guards.js";
@@ -49,10 +49,11 @@ import { appPluginArgs, writeAppHome, materializePreparedAppAssets, directFsWrit
 //  #2165 — DB 를 타는 둘(mintAppToken·materializeAppAssets)은 게이트웨이 능력이다. 노드는 게이트웨이가
 //   미리 발급·추출해 실어 보낸 것(input.appSession)을 쓰므로 이 경로에 오지 않는다.
 import { gatewayUrl } from "../gateway-url.js";
-import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, AUTO_MODE_FLAG, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, themeEnvArgs, harnessSettingsArgv, harnessThemeEnvArgs, harnessLaunchArgv, harnessLoginArgv, paneLaunchArgv, launchReportsEnd, type SessionInfo, type CreateInput, codexAppServerPaneArgv, chatRuntimePaneArgv } from "./catalog.js";
 import { harnessIo, type ScreenRun } from "./harness-io/adapter.js";   // #4135 — 이 하네스의 화면 판정(확인 필요) · #4502 실행 상태
 import { codexChatPhase } from "./harness-io/codex-chat-runtime.js";   // #2055 — app-server 세션의 AI 는 pane 이 아니라 런타임이다
-import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, tmuxViaRelay, isNoTmuxServer } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, tmuxBatch, tmuxBatchQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, lastBusyFor, sessionDir, encodeOptJson, decodeOptJson, isSessionGoneError, localServerAbsentVerdict, tmuxViaRelay, isNoTmuxServer, tmuxCliEnv, TMUX_LOCAL_TIMEOUT_MS } from "./tmux-exec.js";
+import { muxGenerationsActive, killEmptyMuxServers } from "./mux-generations.js";   // #4931 — 노드 tmux 세대
 import { sessionActivityTitle, scrapePane, screenRunEffects, screenReadPlan, resolveAgentPhase, observeAgentRun, harnessReportsBusy, parseReportedPhase, backgroundHolds } from "./phase.js";
 import { sessionMetaCmds, sessionWindowCmds, metaHealCmds, needsMetaHeal, makeMetaHealGate } from "./session-meta-heal.js";   // #3892 — 표식 한 벌 + 표식 없는 세션 되채우기
 import { ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, mintSessionMcpToken, revokeSessionHookToken } from "./profiles.js";
@@ -237,6 +238,13 @@ export async function listSessionsRaw(opts?: { strict?: boolean }): Promise<Sess
 export { isNoTmuxServer } from "./tmux-exec.js";
 
 export async function killEmptyTmuxServer(): Promise<void> {
+  //  #4931 — 노드 tmux 세대가 켜져 있으면 **전용 세대만** 본다. 기본 소켓은 이제 사람의 개인 tmux 이거나 같은 박스의
+  //   다른 게이트웨이 서버일 수 있어(맥미니 실측: 노드·olddev·개인 세션이 한 서버) 그 서버를 죽이면 남의 세션이 끝난다.
+  if (muxGenerationsActive()) {
+    const killed = await killEmptyMuxServers({ timeoutMs: TMUX_LOCAL_TIMEOUT_MS, env: tmuxCliEnv() });
+    if (killed.length) logger.info({ killed }, "빈 tmux 세대 서버 정리(세션 0 확답) — 다음 새 세션이 이 데몬의 env 로 서버를 다시 띄운다");
+    return;
+  }
   let raw: string;
   try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
   catch (e) {   // 못 봤다 ≠ 비었다
@@ -739,7 +747,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (!SAFE_VALUE_RE.test(v) || v.length > 64) throw new HttpError(400, `${def.label} 값 형식이 잘못되었습니다`);
       cmd.push(def.name, v); appliedFlags[def.name] = v;
     }
+    //  (#5058) 자동 승인(전부 건너뜀)이 오토모드보다 세다 — 둘 다 청했으면 자동 승인. 오토모드는 그 하네스의 autoModeArgv, 없으면 자동 승인으로 뜬다.
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+    else if (String(input.flags?.[AUTO_MODE_FLAG] ?? "") === "1") {
+      if (harness.autoModeArgv) cmd.push(...harness.autoModeArgv);
+      else if (harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
+      appliedFlags[AUTO_MODE_FLAG] = "1";
+    }
     // 화면 테마(#1683 후속) + 상시세션 사용량 statusLine — claude 는 둘을 한 --settings 로 합쳐 얹는다(managed 만
     //  statusLine 주입 — 사람 세션 footer 불변). 사람 설정 파일은 건드리지 않는다(harnessSettingsArgv 주석).
     //  지원 안 하는 하네스면 빈 배열이라 종전 그대로다.
@@ -1095,6 +1109,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         write: async (p, t) => { await fsp.mkdir(path.dirname(p), { recursive: true, mode: 0o700 }); await fsp.writeFile(p, t, { mode: 0o600 }); },
       };
     await ensureFolderTrusted(io, configFile, target, trustOk, harness.key);
+    //  #4940 — 화면 안에서 로그인을 끝낸 claude 의 첫 실행 안내(글자 스타일 고르기 …)를 넘긴다. 안 넘기면 이 세션이 그 화면에서
+    //   기다리고 첫 지시가 영영 «전달하는 중…» 이다(harness-trust.ts ensureClaudeOnboarded 머리말). 폴더 신뢰(trustOk)와는 다른 축 —
+    //   계정의 일이라 폴더가 누구 것이든 넣는다. 로그인 전 설정엔 쓰지 않는다.
+    //   매니지드(중계)는 키트를 심을 때 이미 넣으므로(member-kit-seed.ts) 거기선 한 번 더 읽지 않는다 — 멤버 경계 왕복마다 0.5~1초다.
+    if (harness.key === "claude" && !memberExecConfigured()) await ensureClaudeOnboarded(io, configFile);
     //  ── codex «Hooks need review» 를 미리 지운다 (#4135 후속) ─────────────────────────────
     //  codex 는 훅을 돌리기 전에 그 창으로 신뢰를 받는다. 우리 킷이 심은 훅 21개가 매번 «새 훅» 으로 잡혀
     //   새 세션마다 그 창이 뜨고 **첫 지시가 그 뒤에서 멈췄다**(원준님 실측 2026-09-25). 그 상태에서는 상태
@@ -1336,8 +1355,10 @@ async function tmuxKill(id: string): Promise<void> {
   //  (상민님 2026-08-21 실측: 끝난 세션 보관 → HTTP 500 internal_error, 로그에 can't find session).
   //  보관·회수의 목표 상태는 '그 tmux 가 없음' 이므로, 이미 없으면 목표는 이미 이뤄진 것이다.
   //  소켓 접속불가·타임아웃은 판정 불가라 isSessionGoneError 가 false 를 주고 그대로 던진다(모르면 성공이라 말하지 않는다).
+  //  (#4940) 단 셀프호스트에서 tmux 서버가 아예 없다는 두 번의 답(localServerAbsentVerdict)도 «이미 없음» 이다 — 안 그러면 세션이 다 끝난 뒤
+  //   [보관 ×]·관리자 회수·수집 러너 정리가 "no server running" 으로 실패하고, killSession 은 훅 토큰 회수·행 정리 전에 멈춘다.
   try { await tmux(["kill-session", "-t", id]); }
-  catch (err) { if (!isSessionGoneError(err)) throw err; }
+  catch (err) { if (!isSessionGoneError(err) && (await localServerAbsentVerdict(err)) !== true) throw err; }
 }
 async function lastResultSeen(id: string): Promise<boolean | undefined> {
   try { return lastResultSeenFrom(await tmux(["display-message", "-p", "-t", id, LAST_RESULT_SEEN_FMT])); }

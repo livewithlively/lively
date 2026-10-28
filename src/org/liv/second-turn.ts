@@ -36,6 +36,9 @@ export interface SecondTurnInput {
   firstOrder: string | null;
   collectors: SecondTurnCollector[];
   partial: boolean;          // 상한까지 기다렸는데 일부 수집이 아직 → 있는 것으로 시작
+  /** (#5060) 처음 설정에서 파일을 올렸나 · 그 올리기가 상한까지 안 끝났나. 둘 다 없으면 종전 지시문 그대로다. */
+  uploaded?: boolean;
+  uploading?: boolean;
   waitedMin: number;         // 온보딩 끝난 뒤 흐른 시간(분)
 }
 
@@ -97,10 +100,13 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "",
     "## 먼저 — 1턴의 실측은 낡았다. **지금 상태를 다시 읽어라.**",
     "1턴에서 본 숫자를 믿지 마라. 아래 도구로 지금 것을 새로 읽고 시작한다:",
-    "- `source_list`(자료 — 종류·제목·건수) · `category_list`(카테고리 = 서랍) · `org_collectors`(수집기와 마지막 실행) · `collect_units`(Claude 커넥터로 모으는 곳 — 수집 단위) · `org_distiller_list`(증류기) · `knowledge_list`(이미 있는 지식)",
-    `- 처음 설정 답: 일하는 형태·직무 ${i.work ? `"${i.work}"` : "없음"} · 서랍 ${i.drawers.length ? i.drawers.join(" · ") : "없음"} · 첫 지시 ${i.firstOrder ? `"${i.firstOrder}"` : "없음"}`,
+    "- `source_list`(자료 — 종류·제목·건수) · `category_list`(카테고리) · `org_collectors`(수집기와 마지막 실행) · `collect_units`(Claude 커넥터로 모으는 곳 — 수집 단위) · `org_distiller_list`(증류기) · `knowledge_list`(이미 있는 지식)",
+    `- 처음 설정 답: 일하는 형태·직무 ${i.work ? `"${i.work}"` : "없음"} · 카테고리 후보 ${i.drawers.length ? i.drawers.join(" · ") : "없음"} · 첫 지시 ${i.firstOrder ? `"${i.firstOrder}"` : "없음"}`,
     collectLine,
     ...(i.partial ? ["- ⚠ 일부 수집이 아직 안 끝났다. 자료가 부족해 보이면 **최대 1분** 기다렸다가 다시 읽고 시작하라. 그 뒤엔 있는 것으로 간다."] : []),
+    //  #5060 — 처음 설정에서 올린 파일(자료 kind=local_file). 첫 업로드 때 꺼진 채로 생긴 로컬 증류기(local-files)가 그 catch-all 이다.
+    ...(i.uploaded ? ["- 처음 설정에서 파일을 올렸다 — `source_list` 의 `local_file` 자료가 그것이다. 꺼진 채로 만들어 둔 «내 컴퓨터 자료» 증류기(`local-files`)가 있다 — catch-all 로 넓혀 쓰거나 서랍 레인의 입구에 붙이고, **켜서 끝낸다**(켜지 않으면 올린 파일은 지식이 되지 않는다)."] : []),
+    ...(i.uploading ? ["- ⚠ 올린 파일이 아직 다 올라오지 않았다(사람 화면에서 계속 올라가는 중일 수 있다). 지금 있는 것으로 시작한다 — 켜 둔 증류기가 나중에 올라온 파일도 이어서 정리한다."] : []),
     "",
     "## 목표 — 이 사람에게 맞는 카테고리·수집기·증류기를 세우고 첫 지식을 낸다",
     "",
@@ -108,10 +114,14 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "   수집기 → **자료 가져오기**(외부 앱 연결 화면의 그 스위치) · 증류기 → **지식으로 정리하기**.",
    "   도구 이름(org_collector_upsert 등)은 그대로 쓰되, 요약·설명 문장에서는 위 말로 바꿔 말한다.",
     "   카테고리는 화면에 있는 말이라 사람에게도 **카테고리**라고 한다(«서랍»이라고 하지 않는다).",
+    "   «레인»·«catch-all»·«배치»·«뼈대»·«판정 단위»도 화면에 없는 말이다 — 사람에게는 쓰지 않는다.",
+    "⚠ **사람에게 묻는 문장(객관식 질문)은 이 대화를 처음 보는 사람도 알아들어야 한다.** 질문만 보고도 ① 무엇을 정하는지 ② 왜 지금 묻는지 ③ 고르면 각각 무슨 일이 생기는지가 보여야 한다.",
+    "   «첫 ○○», «이 정의로», «다시 실행» 처럼 앞 맥락을 알아야 뜻이 서는 말을 쓰지 않는다. 카테고리를 말할 때는 이름과 무엇을 담는지 한 줄을 함께 쓴다.",
+    "   선택지 이름은 하는 일을 그대로 말한다(예: «‘운영·인프라’ 카테고리로 옮겨 모으기» · «‘제품 개발’에 그대로 두기»).",
     `틀에 박힌 것을 찍어내지 마라. 같은 직무라도 사람마다 자료의 성격이 다르다 — **자료를 실제로 읽고** ${who}의 일하는 방식에 맞춰라.`,
     "",
     "## 먼저 `liv-distill` 스킬을 열어 그 절차대로 한다",
-    "이 스킬이 두뇌다 — 레인은 서랍 기준(자료 종류로 가르지 않는다), 표본 읽기 예산(자료 수의 2배), catch-all, 증류기 key `liv-<서랍 key>` 멱등, 물어도 되는 것 3종, 첫 지시 = 인수 시험, 첫 문장부터 한국어. 스킬이 없으면 아래 절차만으로 간다.",
+    "이 스킬이 두뇌다 — 레인은 카테고리 기준(자료 종류로 가르지 않는다), 표본 읽기 예산(자료 수의 2배), catch-all, 증류기 key `liv-<카테고리 key>` 멱등, 물어도 되는 것 3종, 첫 지시 = 인수 시험, 첫 문장부터 한국어. 스킬이 없으면 아래 절차만으로 간다.",
     "⚠ 아래 **절차 2(카테고리 만들기)는 스킬에 이 단계가 없어도 반드시 한다** — 워크스페이스에 따라 스킬이 이 단계가 생기기 전 판일 수 있다.",
     "",
     "## 절차",
@@ -124,7 +134,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     ...groupStepLines(i),
     "   - **묻지 않고 만든다.** 사람은 나중에 화면에서 이름을 바꾸거나 치울 수 있다. 물을 것이 생겨도 카테고리를 다 만든 뒤에 묻는다(`lively-taxonomy` 스킬의 항목별 승인 절차는 여기서 쓰지 않는다).",
     "   - 만든 뒤 `category_list` 로 다시 읽어 실제로 생겼는지 확인한다. 만들기가 실패하면 오류 문구를 그대로 두고, 요약 첫 줄에 «카테고리를 만들지 못했다»와 그 이유를 쓴다.",
-    "3. **카테고리(서랍)마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
+    "3. **카테고리마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
     "4. **수집기 범위를 손본다** — `org_collector_upsert`. 자료를 읽어 보니 잡담 채널·알림 봇이 섞여 있으면 뺀다. 주기는 이 사람의 반복 주기에 맞춘다.",
     //  #4213 T13 — 처음 연결 대화(liv-connect)가 Claude 커넥터로 모은 곳은 수집기가 아니라 수집 단위다. 단위의 설명·성격·활동량은
     //   «리브가 첫 수집 자료를 질적으로 읽은 뒤 쓴다»(설계 §3) — 1에서 표본을 읽은 이 턴이 그 자리다. [외부 앱 연결] 현황판이 보여 준다.
@@ -135,7 +145,7 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "",
     "## 규율",
     "- **멱등** — 이미 있는 카테고리·수집기·증류기는 다시 만들지 말고 쓰거나 갱신한다(같은 key 로 upsert). 이 지시가 두 번 와도 결과는 하나다.",
-    "- **물어야 할 때만 묻는다** — 자료를 본 뒤에도 정말 갈리는 것(예: 두 서랍 중 어디로, 어떤 채널을 뺄지)만 `me_liv_ask_choice`. 자격이 필요하면 `me_liv_ask_secret`, 파일이 더 필요하면 `me_liv_ask_upload`. 물었으면 그 턴은 거기서 끝난다 — 답이 오면 이어서 한다.",
+    "- **물어야 할 때만 묻는다** — 자료를 본 뒤에도 정말 갈리는 것(예: 두 카테고리 중 어디로, 어떤 채널을 뺄지)만 `me_liv_ask_choice`. 자격이 필요하면 `me_liv_ask_secret`, 파일이 더 필요하면 `me_liv_ask_upload`. 물었으면 그 턴은 거기서 끝난다 — 답이 오면 이어서 한다.",
     "- **되돌리기 어려운 것은 하지 않는다** — 자료·지식 삭제, 외부 전송, 남의 설정.",
     "- **끝나면 요약한다** — 만든 것(카테고리·수집기·증류기·지식 — 카테고리는 이름을 빠짐없이) · 바꾼 것 · 못 한 것과 이유. 그리고 턴을 끝낸다.",
   ].join("\n");
@@ -149,7 +159,9 @@ export interface SecondTurnState {
     /** 1턴 갈래(#4213 T13) — connect = 설치자의 «처음 연결» 대화 · join = 합류자(2턴 없음) · 비었으면 종전. */
     flow?: string | null;
     /** 리브가 «처음 연결·처음 수집 끝» 을 찍은 시각(connect 갈래의 2턴 신호). */
-    collect_done_at?: string | null } | null;
+    collect_done_at?: string | null;
+    /** (#5060) 처음 설정에서 시작한 백그라운드 올리기 — 시작·끝 시각. 시작만 있으면 끝나길 기다린다(상한까지). */
+    upload_started_at?: string | null; upload_done_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
   /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거.
@@ -161,9 +173,10 @@ export interface SecondTurnState {
 }
 export type SecondTurnDecision =
   | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" | "join" }
-  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" | "connecting" }
+  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" | "connecting" | "uploading" }
   //  세션이 사라졌지만 **일은 남아 있다** — 새 창구를 열어 거기로 배달한다(#1631). 딱 한 번.
-  | { action: "reopen"; reason: "session-gone" }
+  //  (#5060) files — 파일만 올리고 외부 앱 연결을 미룬 사람. 열린 세션이 처음부터 없다 — 같은 길로 새로 연다(역시 딱 한 번).
+  | { action: "reopen"; reason: "session-gone" | "files" }
   | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" | "stale" }
   | { action: "fire"; partial: boolean; waitedMin: number };
 
@@ -227,10 +240,28 @@ export const SECOND_TURN_STALE_MS = 24 * 60 * 60_000;
  *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 그 사이에 세션이 사라졌으면 한 번 다시 여는 길(reopen)이 아직 열려 있다.
  */
 export const CONNECT_FLOW_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) 처음 설정에서 시작한 백그라운드 올리기를 기다리는 상한. 화면이 다 올리면 upload_done_at 을 찍고 그때 쏜다.
+ *  안 찍혀도(탭을 닫았다 · 화면이 신호를 못 보냈다) 이 시간이 지나면 올라온 것으로 쏜다 — 켜 둔 증류기가 나중 것도 이어서 정리한다.
+ *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 파일 갈래는 기다린 뒤 세션을 **새로 여는데**, 그 길(reopen)이 2h 뒤엔 닫힌다.
+ */
+export const UPLOAD_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) [연결할게요]를 눌렀는데 연결 대화가 아직 안 묶인 사이(me_liv_open from:"welcome" 이 몇 초 뒤 session_id 를 적는다)를 기다리는 유예.
+ *  이 안에서 새로 열면 곧 묶일 대화를 두고 세션이 하나 더 선다. 이 뒤에도 안 묶였으면(서버가 대화를 못 열었다 · 사람이 탭을 닫았다)
+ *  올린 파일이 있을 때 파일 갈래처럼 새로 연다 — 아니면 올린 파일이 영영 정리되지 않는다(격리 리뷰 2026-10-27).
+ */
+export const CONNECT_BIND_GRACE_MS = 10 * 60_000;
+
+/** (순수) 세션 없이 후보가 되는 갈래 — 파일 갈래, 그리고 대화가 끝내 안 묶인 «처음 연결» 갈래 중 파일을 올린 것. */
+export function opensFreshSession(w: { session_id?: string | null; flow?: string | null; upload_started_at?: string | null } | null | undefined): boolean {
+  return !!w && !w.session_id && (w.flow === "files" || (w.flow === "connect" && !!w.upload_started_at));
+}
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
-  if (!w?.session_id || !w.done_at) return { action: "skip", reason: "no-kickoff" };
+  //  (#5060) 파일 갈래는 세션 없이 온다 — 처음 설정을 끝냈으면 후보다(아래에서 기다렸다가 새로 연다).
+  if (!w?.done_at || (!w.session_id && !opensFreshSession(w))) return { action: "skip", reason: "no-kickoff" };
   //  (#4213 T13) 합류자의 리브는 «빠진 앱 연결» 대화뿐이다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다.
   if (w.flow === "join") return { action: "skip", reason: "join" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
@@ -239,8 +270,18 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const waited = s.now - done;
   //  (#4213 T13) 설치자의 «처음 연결» 대화 — 리브가 커넥터 확인·목록·범위 확인·처음 수집·첫 보고를 하는 동안엔 쏘지 않는다.
   //   사람에게 물어 놓고 답을 기다리는 사이(세션은 쉬는 중)에 증류 지시가 끼어들면 대화가 엉킨다. 신호는 리브가 찍는 collect_done_at.
-  if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
+  //  (#5060) 연결 대화가 아직 안 묶였다 — 곧 묶인다(유예). 유예 뒤엔 묶일 대화가 없으니 «처음 수집 끝» 도 오지 않는다(기다리지 않는다).
+  if (w.flow === "connect" && !w.session_id) { if (waited < CONNECT_BIND_GRACE_MS) return { action: "wait", reason: "connecting" }; }
+  else if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
+  //  (#5060) 처음 설정에서 올리기를 시작했으면 다 올라오길 기다린다 — 반쯤 올라온 표본으로 카테고리를 짜면 나머지가 안 맞는다.
+  if (w.upload_started_at && !w.upload_done_at && waited < UPLOAD_MAX_WAIT_MS) return { action: "wait", reason: "uploading" };
   if (!s.session) {
+    //  (#5060) 파일 갈래(또는 끝내 안 묶인 연결 갈래) — 처음부터 열린 세션이 없다. «사라졌다» 가 아니라 «아직 안 열었다» 다. 같은 길(새로 열기)로 — 딱 한 번.
+    if (opensFreshSession(w)) {
+      if (w.distill_reopened_at) return { action: "giveup", reason: "session-gone-again" };
+      if (waited > TURN1_DELIVERY_TTL_MS) return { action: "giveup", reason: "stale" };
+      return { action: "reopen", reason: "files" };
+    }
     //  ★ #1631 실측(2026-08-31 dev): 1턴을 성공으로 끝낸 리브 세션이 **수집 대기 20분 사이에 사라졌다.**
     //   종전엔 그 자리에서 영구 포기했고(distill_gave_up_at·멱등 가드), 그 사람의 증류기 15개가 **영원히 꺼진 채**
     //   남아 온보딩을 완주하고도 지식을 하나도 못 얻었다. 세션이 왜 죽었는지는 게이트웨이 기록에 없다

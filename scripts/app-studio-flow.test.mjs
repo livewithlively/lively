@@ -8,7 +8,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const mod = join(root, "public/app/lib/studio-flow.js");
+//  STUDIO_FLOW_JS — 다른 빌드(fail-first · 옛 트리)를 물릴 때. 없으면 이 트리의 빌드.
+const mod = process.env.STUDIO_FLOW_JS || join(root, "public/app/lib/studio-flow.js");
 if (!existsSync(mod)) { console.log("app-studio-flow: 빌드 없음(public/app/lib/studio-flow.js) — 건너뜀"); process.exit(0); }
 const F = await import(mod);
 let pass = 0, fail = 0;
@@ -21,7 +22,73 @@ check(F.parseCard("이름: 없음 블록 없음") === null && F.parseCard("[[기
 const two = F.parseCard("[[기획카드]]\n이름: 첫째\n[[/기획카드]] 고쳤어요 [[기획카드]]\n이름: 둘째\n할 수 있는 것: a, b\n[[/기획카드]]");
 check(two && two.name === "둘째" && two.can.join("|") === "a|b", "C3 블록이 여럿이면 마지막 · 쉼표로 나눈 목록도", two);
 const txt = F.cardText(card);
-check(/^\[\[기획카드\]\]\n이름: 회의 안건\n/.test(txt) && /할 수 있는 것: 더하기 · 회의별 보기 · 끝난 것 접기\n/.test(txt) && /\[\[\/기획카드\]\]$/.test(txt) && F.parseCard(txt).can.length === 3, "C4 카드 → 글 → 카드가 같다", txt);
+check(/^\[\[기획카드\]\]\n앱 이름: 회의 안건\n/.test(txt) && /주요 기능: 더하기 · 회의별 보기 · 끝난 것 접기\n/.test(txt) && /\[\[\/기획카드\]\]$/.test(txt) && F.parseCard(txt).can.length === 3, "C4 카드 → 글 → 카드가 같다", txt);
+
+// ══ L 줄 이름 · X 더한 항목(원준 2026-10-26 «무엇을 적나 이런거 좀 이상한데 … 명확하게» · «섹션 제목과 본문도 원한다면 더 추가해서») ══
+{
+  const NEW = ["앱 이름", "쓰는 사람", "저장하는 정보", "주요 기능", "넣지 않는 기능", "첫 화면", "알림", "참고한 서비스"];
+  const OLD = /(^|\n)(이름|누가 쓰나|무엇을 적나|할 수 있는 것|안 하는 것|참고한 것):/;
+  const t = F.cardText(card);
+  check(JSON.stringify(t.split("\n").slice(1, -1).map((l) => l.split(":")[0])) === JSON.stringify(NEW) && !OLD.test(t), "L1 카드 글의 줄 이름 = 새 이름 여덟 · 옛 이름 없음", t);
+  const nw = F.parseCard("[[기획카드]]\n앱 이름: 출장비\n쓰는 사람: 출장 다녀온 사람\n저장하는 정보: 날짜 · 금액\n주요 기능: 올리기 · 모아 보기 · 승인\n넣지 않는 기능: 송금\n첫 화면: 이번 달 목록\n알림: 승인되면 올린 사람에게\n참고한 서비스: 비즈플레이\n[[/기획카드]]");
+  check(nw && nw.name === "출장비" && nw.who === "출장 다녀온 사람" && nw.items === "날짜 · 금액" && nw.can.length === 3 && nw.not === "송금" && nw.first === "이번 달 목록" && nw.notify === "승인되면 올린 사람에게" && nw.ref === "비즈플레이" && !nw.extra, "L2 새 이름으로 답한 카드를 읽는다(더한 항목으로 새지 않는다)", nw);
+  check(card && card.who && card.items && card.not && !card.extra, "L3 옛 이름(누가 쓰나 · 무엇을 적나 · 할 수 있는 것 · 안 하는 것)도 그대로 읽는다", card);
+  //  아래는 읽기(L2)와 따로 — 손으로 지은 같은 카드로(옛 트리에서 L2 가 못 읽어도 줄마다 따로 빨갛게).
+  const NWC = { name: "출장비", who: "출장 다녀온 사람", items: "날짜 · 금액", can: ["올리기", "모아 보기", "승인"], not: "송금", first: "이번 달 목록", notify: "승인되면 올린 사람에게", ref: "비즈플레이" };
+  const pb = F.planBrief("출장비 정리", "both", "출장비"), cb = F.checkBrief(NWC, "trip");
+  check(NEW.every((n) => pb.includes("\n" + n + ": ")) && !OLD.test(pb) && !/할 수 있는 것|참고한 것/.test(pb) && /「주요 기능」을/.test(cb) && !/할 수 있는 것/.test(cb), "L4 planBrief 틀 · checkBrief 가 새 이름만", [pb.slice(-260), cb.split("\n")[1]]);
+  const withX = { ...NWC, extra: [{ title: "결재 순서", body: "팀장 다음 재무" }, { title: "보관 기간", body: "5년" }] };
+  const xt = F.cardText(withX), back = F.parseCard(xt);
+  check(/\n참고한 서비스: 비즈플레이\n결재 순서: 팀장 다음 재무\n보관 기간: 5년\n\[\[\/기획카드\]\]$/.test(xt) && !!back && JSON.stringify(back.extra) === JSON.stringify(withX.extra) && back.ref === "비즈플레이", "X1 더한 항목 → 정해진 줄 뒤에 「제목: 본문」 · 다시 읽으면 순서 · 글 그대로", xt);
+  const x2 = F.cardText({ ...NWC, extra: [{ title: "", body: "" }, { title: "", body: "영수증 사진 필수" }, { title: "메모", body: "" }, { title: "  ", body: " \n " }] });
+  check(/\n추가 내용: 영수증 사진 필수\n메모: \n\[\[\/기획카드\]\]$/.test(x2), "X2 빈 쌍은 안 싣는다 · 본문만이면 「추가 내용」 · 제목만이면 「제목: 」", x2);
+  const x3 = F.cardText({ ...NWC, extra: [{ title: "알림", body: "매주 월요일 요약" }] }), b3 = F.parseCard(x3);
+  check(/\n추가 알림: 매주 월요일 요약\n\[\[/.test(x3) && !!b3 && b3.notify === "승인되면 올린 사람에게" && b3.extra && b3.extra[0].title === "추가 알림", "X3 정해진 줄 이름과 같은 제목은 「추가 …」 로 — 정해진 「알림」 을 덮지 않는다", x3);
+  const b4 = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n참고한 서비스: [Otter 블로그](https://otter.ai/blog), [Fireflies\nSkills](https://fireflies.ai/blog/), 앱스토어\n결재 순서: 팀장\n[[/기획카드]]");
+  check(b4 && JSON.stringify(b4.extra) === JSON.stringify([{ title: "결재 순서", body: "팀장" }]), "X4 링크가 이어진 조각 줄은 더한 항목이 아니다(제목 꼴만)", b4 && b4.extra);
+  //  격리 리뷰 — 한 줄에 주소만 둔 참고 목록(«https://…» · «- https://…»)이 «https» 항목으로 새던 것
+  const b4b = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n참고한 서비스: Otter\nhttps://otter.ai/blog\n- https://fireflies.ai/x\nHTTP://a.b/c\n[[/기획카드]]");
+  check(b4b && b4b.ref === "Otter" && !b4b.extra, "X4 주소만 둔 줄(https://…)도 더한 항목이 아니다", b4b && b4b.extra);
+  //  줄머리(- · 1.)가 붙은 «이름: 값» 은 위 줄의 하위 목록이다 — 더한 항목이 아니다(정해진 이름이면 종전대로 그 줄).
+  const b6 = F.parseCard("[[기획카드]]\n앱 이름: 회의록\n주요 기능: 올리기 · 찾기 · 넣기\n- 올리기: 음성 업로드\n1. 찾기: 날짜와 낱말\n- 첫 화면: 목록\n결재 순서: 팀장\n[[/기획카드]]");
+  check(b6 && b6.first === "목록" && b6.can.length === 3 && JSON.stringify(b6.extra) === JSON.stringify([{ title: "결재 순서", body: "팀장" }]), "X6 줄머리가 붙은 하위 목록은 더한 항목이 아니다 · 줄머리 붙은 정해진 줄은 종전대로", b6);
+  //  쓴 제목은 다시 읽힌다 — 읽을 수 없는 글자(& / ( ) -)는 띄어쓰기로 바꿔 쓴다.
+  const x7 = F.cardText({ ...NWC, extra: [{ title: "Q&A", body: "자주 묻는 것" }, { title: "결재(팀장)", body: "먼저" }, { title: "2단계-승인", body: "재무" }] }), b7 = F.parseCard(x7);
+  check(!!b7 && JSON.stringify((b7.extra || []).map((x) => x.title)) === JSON.stringify(["Q A", "결재 팀장", "2단계 승인"]) && (b7.extra || []).length === 3, "X7 기호가 든 제목도 쓰고 다시 읽으면 남는다(기호는 띄어쓰기로)", x7);
+  check(/기획 카드 앱 이름 줄에 그대로/.test(F.planBrief("출장비 정리", "both", "출장비")), "L4 planBrief 의 이름 줄도 새 이름(앱 이름)");
+  const x5 = F.cardText({ name: "옛 앱", who: "", items: "", can: [], not: "", first: "" });
+  check(/\n참고한 서비스: \n\[\[\/기획카드\]\]$/.test(x5) && !/undefined/.test(x5) && x5.split("\n").length === 10, "X5 옛 카드(더한 항목 없음) — 덧줄 · undefined 없음", x5);
+}
+
+// ══ R 「참고한 서비스」 보기(원준 2026-10-26 «주소 그냥 하이퍼링크로 … 줄바꿈 … 이쁘게» · «주소 일일이 복붙해야하더라») ══
+{
+  const prose = "Otter.ai에서는 회의 종류별 템플릿·제목과 참석자 규칙으로 템플릿을 저절로 고르는 방식·요약/전사/AI 채팅 탭 구성을, Fireflies.ai에서는 프롬프트로 만드는 맞춤 정리 형식, 전사문 옆 AI 패널을, 네이버 클로바노트에서는 요약·주요 주제·다음 할 일 정리와 그 결과를 고칠 수 있게 한 점, 말한 사람 구분, 검색을 가져왔습니다(출처: [Otter 블로그](https://otter.ai/blog/otter-meeting-types), [Otter 리뷰](https://kripeshadwani.com/otter-ai-review/), [Fireflies AI Skills](https://fireflies.ai/blog/fireflies-ai-apps/), [Fireflies Notepad 가이드](https://guide.fireflies.ai/articles/6653885315), [클로바노트 앱스토어](https://apps.apple.com/kr/app/%ED%81%B4/id1530010245)).";
+  const RV = F.refView || (() => null);   // 옛 트리엔 없다 — 줄마다 따로 빨갛게
+  const r1 = RV(prose);
+  const names = r1 && r1.items.map((x) => x.name), texts = r1 ? r1.items.map((x) => x.text).join("|") : "";
+  check(!!r1 && JSON.stringify(names) === JSON.stringify(["Otter.ai", "Fireflies.ai", "네이버 클로바노트"]) && !/가져왔|출처|https?:|\]\(|\(\s*,/.test(texts) && /검색$/.test(r1.items[2].text) && /탭 구성$/.test(r1.items[0].text), "R1 원준 화면의 산문 — 서비스 셋 · 끝말 · 출처 꼬리 · 주소 없음", r1);
+  check(!!r1 && r1.links.length === 5 && r1.links[0].label === "Otter 블로그" && r1.links[4].url.startsWith("https://apps.apple.com/") && r1.links.every((l) => /^https:\/\//.test(l.url)), "R1 출처 링크 다섯(이름 · 주소)", r1 && r1.links);
+  const r2 = RV("Otter: 회의 목록, 정리본 탭 ; 클로바노트: 말한 사람 구분 ; 출처: [Otter 블로그](https://otter.ai/blog), [앱스토어](https://apps.apple.com/x)");
+  check(!!r2 && JSON.stringify(r2.items) === JSON.stringify([{ name: "Otter", text: "회의 목록, 정리본 탭" }, { name: "클로바노트", text: "말한 사람 구분" }]) && r2.links.length === 2, "R2 새 꼴(이름: 것 ; … ; 출처: 링크)", r2);
+  const r3 = RV("노션 캘린더 보기 참고 https://www.notion.so/calendar");
+  check(!!r3 && r3.links.length === 1 && r3.links[0].label === "notion.so" && r3.items.length === 1 && !/https/.test(r3.items[0].text), "R3 맨 주소는 호스트 이름 링크로", r3);
+  const r4 = RV("애플 메모");
+  check(!!r4 && JSON.stringify(r4) === JSON.stringify({ items: [{ name: "", text: "애플 메모" }], links: [] }), "R4 링크 없는 짧은 글 — 한 항목", r4);
+  const r5 = RV("");
+  check(!!r5 && r5.items.length === 0 && r5.links.length === 0, "R5 빈 글 — 아무것도 없음", r5);
+  const r6 = RV("나쁜 것 [눌러](javascript:alert(1)) [그림](data:text/html,x)");
+  check(!!r6 && r6.links.length === 0, "R6 javascript: · data: 는 링크로 만들지 않는다", r6);
+  //  격리 리뷰 — 괄호가 든 주소 · 대괄호가 든 이름 · 문장 부호로 끝나는 맨 주소 · 다 걷고 남은 게 없을 때
+  const r8 = RV("위키: 회의록 정의 ; 출처: [Wikipedia](https://en.wikipedia.org/wiki/Minutes_(document)), [B](https://b.com)");
+  check(!!r8 && r8.links.length === 2 && r8.links[0].url === "https://en.wikipedia.org/wiki/Minutes_(document)" && JSON.stringify(r8.items) === JSON.stringify([{ name: "위키", text: "회의록 정의" }]), "R8 괄호가 든 주소가 잘리지 않고 남는 괄호 조각도 없다", r8);
+  const r9 = RV("노트: 정리 ; 출처: [Foo [1]](https://a.com/x)");
+  check(!!r9 && r9.links.length === 1 && r9.links[0].label === "Foo [1]" && r9.items.length === 1 && !/\[|\]/.test(r9.items[0].text), "R9 대괄호가 든 이름도 링크 하나로", r9);
+  const r10 = RV("자세한 건 https://otter.ai/blog. 그리고 (https://a.com/b_(c)) 참고");
+  check(!!r10 && r10.links.map((l) => l.url).join(" ") === "https://otter.ai/blog https://a.com/b_(c)", "R10 맨 주소 끝 마침표는 주소가 아니다 · 괄호 한 겹 주소는 통째로", r10 && r10.links);
+  const r11 = RV("참고했습니다");
+  check(!!r11 && JSON.stringify(r11.items) === JSON.stringify([{ name: "", text: "참고했습니다" }]), "R11 다 걷고 남은 게 없으면 원문 그대로(빈 칸 아님)", r11);
+  check(/서비스 이름: 가져온 것/.test(F.planBrief("회의록 정리", "both", "회의록")) && /출처: \[이름\]\(주소\)/.test(F.planBrief("회의록 정리", "both", "회의록")), "R7 planBrief — 참고한 서비스를 «이름: 것 ; … ; 출처: [이름](주소)» 꼴로 청한다");
+}
 
 // 걸음 · 점검
 check(F.parseStep("[[걸음 1/4]] 기획 읽음 … [[걸음 3/4]] 자료 표") === 3 && F.parseStep("아직") === 0 && F.parseStep("[[걸음 4/4]] 저장 [[걸음 2/4]]") === 4 && F.parseStep("[[걸음 9/4]]") === 4, "S1 걸음은 가장 큰 n(1~4)");
@@ -75,11 +142,11 @@ check(F.verArrived(11) === "열한 번째 버전이 나왔어요" && F.verArrive
 const refCard = F.parseCard("[[기획카드]]\n이름: 회의록\n할 수 있는 것: 올리기 · 정리 · 넣기\n참고한 것: Otter 의 회의 목록 + 정리본 탭\n[[/기획카드]]");
 check(refCard && refCard.ref === "Otter 의 회의 목록 + 정리본 탭", "H1 카드의 「참고한 것」 줄을 읽는다", refCard);
 const oldCard = { name: "회의 안건", who: "준비하는 사람", items: "제목", can: ["더하기"], not: "", first: "목록" };   // 기록 · 매니페스트에 남은 옛 카드(ref 칸이 아예 없다)
-check(card && !card.ref && !/undefined/.test(F.cardText(oldCard)) && /\n참고한 것: \n\[\[\/기획카드\]\]/.test(F.cardText(oldCard)), "H2 옛 카드(참고 줄 없음)도 읽히고 cardText 에 undefined 가 없다", F.cardText(oldCard));
+check(card && !card.ref && !/undefined/.test(F.cardText(oldCard)) && /\n참고한 서비스: \n\[\[\/기획카드\]\]/.test(F.cardText(oldCard)), "H2 옛 카드(참고 줄 없음)도 읽히고 cardText 에 undefined 가 없다", F.cardText(oldCard));
 const pb2 = F.planBrief("회의록 정리", "both", "회의록");
-check(/비슷한 앱 · 서비스/.test(pb2) && /\n참고한 것: \n\[\[\/기획카드\]\]/.test(pb2), "H3 planBrief — 비슷한 앱 · 서비스를 견주고 카드에 「참고한 것」 줄", pb2);
+check(/비슷한 앱 · 서비스/.test(pb2) && /\n참고한 서비스: \n\[\[\/기획카드\]\]/.test(pb2), "H3 planBrief — 비슷한 앱 · 서비스를 견주고 카드에 「참고한 서비스」 줄", pb2);
 const db2 = F.draftBrief(refCard, "both", "meeting-notes");
-check(/초안을 만들어/.test(db2) && db2.includes(F.WIREFRAME_PATH) && F.WIREFRAME_PATH === "studio/wireframe.html" && !/첫 판/.test(db2) && !/판/.test(db2.replace(/참고한 것[^\n]*/g, "")), "H4 draftBrief — 초안 · 와이어프레임 파일을 함께 저장 · 「판」 없음", db2);
+check(/초안을 만들어/.test(db2) && db2.includes(F.WIREFRAME_PATH) && F.WIREFRAME_PATH === "studio/wireframe.html" && !/첫 판/.test(db2) && !/판/.test(db2.replace(/참고한 서비스[^\n]*/g, "")), "H4 draftBrief — 초안 · 와이어프레임 파일을 함께 저장 · 「판」 없음", db2);
 const fb2 = F.fixBrief(2, [{ x: 0.1, y: 0.2, where: "", note: "크게", kind: "pin" }], "", "both", "meeting-notes");
 check(/새 버전으로 저장/.test(fb2) && fb2.includes(F.WIREFRAME_PATH) && !/판/.test(fb2), "H5 fixBrief — 새 버전 · 와이어프레임도 맞춰 · 「판」 없음", fb2);
 const wb2 = F.wireframeBrief("meeting-notes");
@@ -156,12 +223,96 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   const nc = F.parseCard("[[기획카드]]\n이름: 팀 채널\n할 수 있는 것: 올리기 · 답하기 · 찾기\n알림: 나를 언급하면 · 내 스레드에 답이 달리면\n참고한 것: 슬랙\n[[/기획카드]]");
   check(nc && nc.notify === "나를 언급하면 · 내 스레드에 답이 달리면" && nc.ref === "슬랙", "S1 카드의 「알림」 줄을 읽는다(참고한 것과 섞이지 않는다)", nc);
   const pb = F.planBrief("팀 대화", "side");
-  check(/\n첫 화면: \n알림: \n참고한 것: \n\[\[\/기획카드\]\]/.test(pb) && /알림은 언제 누구에게/.test(pb), "S2 planBrief 틀에 「알림: 」 줄 — 첫 화면 뒤 · 참고한 것 앞", pb);
+  check(/\n첫 화면: \n알림: \n참고한 서비스: \n\[\[\/기획카드\]\]/.test(pb) && /알림은 언제 누구에게/.test(pb), "S2 planBrief 틀에 「알림: 」 줄 — 첫 화면 뒤 · 참고한 것 앞", pb);
   const old = F.parseCard("[[기획카드]]\n이름: 옛 앱\n[[/기획카드]]");
-  check(old && !old.notify && /\n알림: \n참고한 것: \n\[\[\/기획카드\]\]$/.test(F.cardText(old)) && !/undefined/.test(F.cardText(old)), "S3 옛 카드(알림 줄 없음)도 읽히고 cardText 에 빈 알림 줄 · undefined 없음", F.cardText(old));
+  check(old && !old.notify && /\n알림: \n참고한 서비스: \n\[\[\/기획카드\]\]$/.test(F.cardText(old)) && !/undefined/.test(F.cardText(old)), "S3 옛 카드(알림 줄 없음)도 읽히고 cardText 에 빈 알림 줄 · undefined 없음", F.cardText(old));
   check(F.CARD_ROWS.some((r) => r.k === "notify" && r.label === "알림") && F.emptyCard().notify === "", "S4 CARD_ROWS 에 알림 줄 · 빈 카드에도 칸");
   const db = F.draftBrief(nc, "side", "talk");
   check(/permissions\.notifications: true/.test(db) && /app_notify/.test(db) && /\[나 ▸ 알림\]/.test(db) && /#\/open\//.test(db), "S5 draftBrief 가 알림 규칙(권한 선언 · app_notify · 앱 안 설정 · 전체 on/off 는 라이블리)을 싣는다", db);
+}
+
+// ══ N 단계 바 — 와 본 곳이면 앞으로도 간다(#4632 원준 2026-10-19 «다 저장했었으면 이전으로 가는거 말고 다음으로 가는것도 · 상단 탭을 클릭하는 방향으로도») ══
+//  사양 표 N(스크래치패드 spec-side-foot-phone.md 사양 2). 이게 틀리면 ①로 돌아간 뒤 ③으로 다시 갈 길이 «이 내용으로 다시 기획»(AI 에게 다시 시키기)뿐이다.
+{
+  const has = typeof F.reachedOf === "function" && typeof F.stageTabs === "function" && typeof F.nextStageOpen === "function";
+  check(has, "N0 단계 바 규칙(reachedOf · stageTabs · nextStageOpen)이 있다");
+  if (has) {
+    const R = F.reachedOf;
+    check(R({ stage: "plan" }) === 1 && R({ stage: "fix", appId: "a" }) === 2 && R({ stage: "plan", appId: "a" }) === 2 && R({ stage: "put", done: true }) === 4 && R({ stage: "draft" }) === 2,
+      "N1 옛 기록(reached 없음) — 지금 단계 · 앱이 있으면 ③ · 넣었으면 ⑤ · 첫 판 기다림(draft)은 ③", [R({ stage: "plan" }), R({ stage: "fix", appId: "a" }), R({ stage: "put", done: true }), R({ stage: "draft" })]);
+    check(R({ stage: "plan", reached: 3 }) === 3 && R({ stage: "plan", reached: 9 }) === 4 && R({ stage: "check", reached: -1 }) === 3 && R({ stage: "check", reached: NaN }) === 3 && R({ stage: "check", reached: 0 }) === 3 && R({ stage: "plan", reached: 2.7 }) === 2,
+      "N2 와 본 끝 — 적힌 값 · 끝(⑤)에서 자른다 · 틀린 값(음수 · NaN)은 버린다 · 지금 단계보다 작으면 지금 단계", [R({ stage: "plan", reached: 9 }), R({ stage: "check", reached: -1 }), R({ stage: "check", reached: 0 })]);
+    const T = (c, r, m) => F.stageTabs(c, r, m).join(",");
+    check(T(2, 3, "new") === "back,back,on,ahead,todo" && T(0, 2, "new") === "on,ahead,ahead,todo,todo" && T(2, 4, "copy") === "done,done,on,ahead,ahead" && T(4, 4, "new") === "back,back,back,back,on" && T(1, 1, "new") === "back,on,todo,todo,todo",
+      "N3 칸마다 — 지난 곳 돌아가기 · 와 본 앞 곳 다시 가기 · 아직 안 간 곳은 못 누른다 · 사본 · 고치기의 ①②는 원본의 것", [T(2, 3, "new"), T(0, 2, "new"), T(2, 4, "copy")]);
+    const N = F.nextStageOpen;
+    check(N(0, 0, "new") === -1 && N(0, 2, "new") === 1 && N(1, 2, "new") === 2 && N(4, 4, "new") === -1 && N(2, 2, "new") === -1 && N(2, 3, "edit") === 3 && N(1, 4, "copy") === 2,
+      "N4 「다음 →」 — 바로 다음이 와 본 곳일 때만 · 끝 단계엔 없다", [N(0, 0, "new"), N(1, 2, "new"), N(2, 2, "new"), N(2, 3, "edit")]);
+  }
+}
+
+// ══ S 기다리던 AI 일이 멈췄나(원준 2026-10-26 «초안을 만들고 있어요(시작하는 중)에서 진전이 안 된다» — 세션이 돌던 노트북이 잠들어 턴이 끝났다) ══
+{
+  const RS = F.runStall || (() => "없음"), RB = F.resumeBrief || (() => "");
+  const T = [
+    [null, "ended", "S1 세션 줄이 없다 → 세션이 꺼짐"],
+    [{ agentState: "offline", node: { online: false } }, "offline", "S2 세션이 돌던 컴퓨터가 꺼짐(잠듦)"],
+    [{ agentState: "busy", working: true, node: { online: false } }, "offline", "S2 컴퓨터가 꺼졌으면 옛 «도는 중» 신호보다 먼저"],
+    [{ restorable: true, agentState: "offline" }, "ended", "S3 되살릴 수 있는 줄 → 세션이 꺼짐"],
+    [{ agentState: "waiting", awaiting: true }, "ask", "S4 확인을 기다림"],
+    [{ agentState: "idle", awaiting: true }, "ask", "S4 awaiting 만 있어도"],
+    [{ agentState: "offline", working: true }, null, "S5 도는 중(working) — 아무도 안 봐서 offline 이어도"],
+    [{ agentState: "idle", background: true }, null, "S5 백그라운드 작업이 남음"],
+    [{ agentState: "busy" }, null, "S5 agentState busy"],
+    [{ agentState: "idle" }, "idle", "S6 턴이 끝났는데 결과가 없음"],
+    [{ agentState: "offline", node: { online: true } }, "idle", "S6 탭에 안 열린 채 끝남"],
+    [{ agentState: "offline", observed: false }, null, "S7 지어낸 줄 — 모르면 멈췄다 하지 않는다"],
+  ];
+  for (const [row, want, what] of T) check(RS(row) === want, what, { row, got: RS(row) });
+  check(F.STALL_MS === 30000, "S8 멈춤이 30초 이어져야 말한다", F.STALL_MS);
+  const d = RB("draft"), fx = RB("fix"), pl = RB("plan"), ck = RB("check");
+  check(/이어서/.test(d) && /\[\[걸음 n\/4\]\]/.test(d) && /app_save/.test(d), "S9 초안 이어서 — 걸음 표식 · app_save 를 다시 일러 준다", d);
+  check(/새 버전/.test(fx) && /app_save/.test(fx) && /기획 카드/.test(pl) && /\[\[대조\]\]/.test(ck), "S9 고침 · 기획 · 대조 이어서 — 저마다 화면이 읽는 꼴을 다시 일러 준다", [fx, pl, ck]);
+}
+
+// ══ I ④ 아이콘(원준 2026-10-28 «자동으로 만들어진 디자인 사항 · 아이콘 커스텀하는 창 · AI한테 그 아이콘 수정할 수 있는 창») ══
+//  AI 가 [[아이콘]] 한 줄로 보낸 그림을 서버가 받는 꼴(path: SVG 명령 · 숫자 · 구분자 1~2000자 · 색 #RRGGBB)일 때만 받는다 — 틀린 것을 받으면 마무리 저장이 400 으로 막힌다.
+{
+  const PI = F.parseIcon || (() => "없음"), IS = F.iconSpec || (() => "없음"), IB = F.iconBrief || (() => "");
+  const a = PI("네.\n[[아이콘]] path: M4 6h16 M4 12h10 | color: #118E6E | dark: #16B48C\n고르세요");
+  check(a && a.path === "M4 6h16 M4 12h10" && a.color === "#118E6E" && a.color_dark === "#16B48C", "I1 [[아이콘]] 한 줄을 읽는다(앞뒤 말 무시)", a);
+  const b = PI("[[아이콘]] path: M1 1 | color: #111111 | dark: #222222\n고쳤어요\n[[아이콘]] path: \"M2 2l3 3\" | color: #2D6BF0 | dark: #739DF5");
+  check(b && b.path === "M2 2l3 3" && b.color === "#2D6BF0", "I2 여럿이면 마지막 · I3 따옴표는 뗀다", b);
+  check(PI("[[아이콘]] path: <path d=M1 1/> | color: #111111 | dark: #222222") === null && PI("[[아이콘]] path: circle 12 | color: #111111") === null, "I4 path 에 허용 밖 글자면 버린다");
+  check(PI("[[아이콘]] path: M1 1 | color: red | dark: #222222") === null && PI("[[아이콘]] path: M1 1 | color: #11111 | dark: #222222") === null, "I5 색이 #RRGGBB 가 아니면 버린다");
+  const c = PI("[[아이콘]] path: M1 1 | color: #111111 | dark: blue");
+  check(c && c.color === "#111111" && !("color_dark" in c), "I6 다크 색만 틀리면 그것만 뺀다", c);
+  check(PI("아이콘을 그렸어요. path: M1 1 | color: #111111") === null && PI("") === null, "I7 표식이 없으면 null");
+  check(PI("[[아이콘]] path:  | color: #111111 | dark: #222222") === null, "I8 path 가 비면 null");
+  check(IS(null) === null && IS("M1 1") === null && IS({ path: "M1 1", color: "#ABCDEF", color_dark: "#000000" })?.color_dark === "#000000", "I9 iconSpec — 객체가 아니면 null · 맞으면 그대로");
+  const long = (n) => "M" + "1".repeat(n - 1);
+  check(IS({ path: long(2000), color: "#111111" }) !== null && IS({ path: long(2001), color: "#111111" }) === null, "I10 path 2000자는 받고 2001자는 버린다(서버 상한)");
+  const ib = IB("회의록", "meeting-notes", "마이크와 메모지", { path: "M7 7h3", color: "#111111" });
+  check(/meeting-notes/.test(ib) && /마이크와 메모지/.test(ib) && /M7 7h3/.test(ib) && /app_save 하지 마/.test(ib) && /\[\[아이콘\]\] path: .* \| color: #RRGGBB \| dark: #RRGGBB/.test(ib), "I11 iconBrief — 원하는 그림 · 지금 그림 · 앱은 저장 말고 [[아이콘]] 한 줄로", ib);
+  const ib2 = IB("회의록", "meeting-notes", "   ", null);
+  check(/앱이 하는 일/.test(ib2) && !/지금 아이콘/.test(ib2) && !/원하는 그림/.test(ib2), "I12 원하는 그림이 비고 지금 아이콘이 없으면 앱이 하는 일로", ib2);
+  const db = F.draftBrief({ name: "회의록", who: "", items: "", can: ["a"], not: "", first: "" }, "both", "mn");
+  check(/"icon": \{"path"/.test(db) && /"color"/.test(db) && /"color_dark"/.test(db), "I13 첫 판을 청하는 글이 아이콘도 그리라고 한다", db.slice(-400));
+}
+
+// ══ L 답 글이 «사용 한도에 걸렸다» 는 하네스 알림인가(원준 2026-10-28 — 고침을 받자마자 한도로 끝났는데 화면은 «멈췄어요» 만 말했다) ══
+{
+  const PL = F.parseLimit || (() => "없음");
+  const T = [
+    ["You've hit your weekly limit · resets 9am (Asia/Seoul)", "이번 주 AI 사용 한도에 걸려 멈췄어요. 오전 9시에 풀려요.", "L1 주간 한도 · 풀리는 때"],
+    ["You\u2019ve hit your limit · resets 2:30pm (Asia/Seoul)", "AI 사용 한도에 걸려 멈췄어요. 오후 2시 30분에 풀려요.", "L2 굽은 따옴표 · 분까지"],
+    ["You've hit your weekly limit · resets Nov 3, 12am (Asia/Seoul)", "이번 주 AI 사용 한도에 걸려 멈췄어요. 11월 3일 오전 12시에 풀려요.", "L3 날짜가 붙은 때"],
+    ["Claude AI usage limit reached|1761613200", "AI 사용 한도에 걸려 멈췄어요.", "L4 옛 꼴 — 때를 못 읽으면 까닭만"],
+    ["API 에 rate limit 이 걸리면 백오프하도록 고쳤어요. You've hit your limit 같은 글은 화면에 안 보여요.", null, "L5 AI 가 한도 이야기를 하는 보통 답은 아니다"],
+    ["x".repeat(400) + " You've hit your weekly limit", null, "L6 긴 답 속 낱말은 아니다"],
+    ["", null, "L7 빈 글"],
+  ];
+  for (const [t, want, what] of T) check(PL(t) === want, what, { got: PL(t) });
 }
 
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);

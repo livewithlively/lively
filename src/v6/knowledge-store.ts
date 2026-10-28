@@ -4,7 +4,8 @@
 //  검색(grep·하이브리드·유사·추천)은 knowledge-search.ts, 링크·위키링크·그래프는 knowledge-links.ts 로 분리(#1313 R21).
 //  둘 다 아래에서 **재수출**한다 — 이 모듈이 지식 표면의 배럴이라 기존 호출부(40+)는 무수정이다.
 import { itemsPool } from "../db/client.js";
-import { q, one, type Db } from "../db/client.js";
+import { q, one, withTx, type Db } from "../db/client.js";
+import { isJsonObject, jsonEqual, mergeFieldsPatch } from "./knowledge-fields.js";
 import { restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임.
@@ -566,6 +567,38 @@ export async function setKnowledgeTitle(name: string, title: string, ctx?: Write
   return after as KnowledgeRow;
 }
 
+// fields(메타데이터 jsonb) 부분 갱신 — 본문·제목 불변. 병합 규칙은 knowledge-fields.ts(RFC 7396).
+//  set_title 과 같은 클래스로 version+1·updated_at·updated_by 를 올린다 — 호출자가 expected_version 으로 CAS 를 걸 수
+//  있어야 하고, 이 값은 knowledge_get 으로 에이전트 작업 근거(code_sot 등)에 쓰이는 내용이다.
+//  임베딩은 다시 계산하지 않는다 — embeddingInputText 는 제목·요약·본문만 읽는다(fields 는 입력이 아니다).
+//  읽기-병합-쓰기를 한 트랜잭션에서 행을 잠그고 한다: 잠금 없이 병합하면 동시 패치 둘 중 하나의 키가 조용히 사라진다.
+//  check 는 잠근 행과 병합 결과를 보고 거절(throw)할 기회다 — 버전 대조·크기 상한 같은 표면 규칙은 호출자가 정한다.
+//  감사는 set_props_ui 처럼 부분 스냅샷({fields})이라 knowledge_revert 는 이 op 를 되돌리지 않는다(본문 스냅샷이 없으면 거절).
+//  ⚠ 커넥터 미러 재싱크는 fields 를 원본값으로 **통째로** 바꾼다(mirror-knowledge.ts 의 fields=EXCLUDED.fields) — 이 함수는 그걸 막지 않는다.
+export async function patchKnowledgeFields(
+  name: string, patch: Record<string, unknown>,
+  opts: { check?: (before: KnowledgeRow, merged: Record<string, unknown>) => void; changeNote?: string | null },
+  ctx?: WriteCtx,
+): Promise<{ found: false } | { found: true; knowledge: KnowledgeRow & { fields: Record<string, unknown> }; changed: boolean }> {
+  return withTx(async (client) => {
+    const before = await one(client, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1 FOR UPDATE`, [name]) as
+      (KnowledgeRow & { fields: unknown }) | undefined;
+    if (!before) return { found: false as const };
+    const beforeFields = isJsonObject(before.fields) ? before.fields : {};
+    const merged = mergeFieldsPatch(beforeFields, patch);
+    opts.check?.(before, merged);
+    if (jsonEqual(beforeFields, merged)) return { found: true as const, knowledge: { ...before, fields: beforeFields }, changed: false };
+    const after = await one(client,
+      `UPDATE knowledge SET fields=$2::jsonb, version=version+1, updated_at=now(), updated_by=$3
+        WHERE name=$1 RETURNING ${K_COLS}, fields`, [name, JSON.stringify(merged), ctx?.actor ?? null]) as
+      KnowledgeRow & { fields: Record<string, unknown> };
+    await auditKnowledge(name, "set_fields",
+      { fields: beforeFields, version: before.version },
+      { fields: merged, version: after.version, ...(opts.changeNote ? { change_note: opts.changeNote } : {}) }, ctx, client);
+    return { found: true as const, knowledge: after, changed: true };
+  });
+}
+
 // ── #592 항목 단위 속성 노출 오버라이드(props_ui) — { show:[키], hide:[키], full_width:bool } 부분 병합. ──
 //  키에 null 을 명시하면 그 키 제거, undefined(미전송)는 미변경. 전부 비면 컬럼 NULL 로 환원.
 //  뷰 설정은 내용이 아니다 — version 불변(setKnowledgeWiki 참조), updated_at 도 불변(목록 최신순 정렬을
@@ -662,7 +695,8 @@ export async function stampSessionVisibility(name: string, sessionId?: string | 
 //  activity_knowledge 는 FK ON DELETE CASCADE 라 링크가 동반 삭제된다(복원 시 링크는 돌아오지 않음 — project 와 동형).
 //  사람전용 게이트(에이전트 403)는 capability 계층(knowledge_delete)에서 선행한다(여기는 순수 데이터).
 export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  //  fields 도 스냅샷에 싣는다 — knowledge_set_fields 로 사람·에이전트가 쓴 값은 커넥터 재싱크로 되살아나지 않는다.
+  const before = await one(itemsPool, `SELECT ${K_SEL}, k.fields FROM knowledge k WHERE k.name=$1`, [name]);
   if (!before) throw new Error(`지식 '${name}' 없음`);
   await itemsPool.query(`DELETE FROM knowledge WHERE name=$1`, [name]);
   await auditKnowledge(name, "delete", before, null, ctx);
@@ -672,7 +706,9 @@ export async function deleteKnowledge(name: string, ctx?: WriteCtx): Promise<Kno
 // 복원 — 마지막 delete 의 before 스냅샷(전문)을 그대로 재적재한다. 본문/메타는 삭제 시점 그대로,
 //  복원 사실(누가/언제)은 감사 op='restore' 로 기록된다. 이미 존재하면(삭제 상태 아님) 거부.
 export async function restoreKnowledge(before: Record<string, unknown>, ctx?: WriteCtx): Promise<KnowledgeRow> {
-  const after = await restoreSnapshot<KnowledgeRow>("knowledge", K_COLS, "name", before);
+  //  fields 는 스냅샷에 있을 때만 되살린다(restoreSnapshot 은 스냅샷에 있는 키만 쓴다 — fields 를 싣기 전의 옛 삭제분은 기본값).
+  //  jsonb 칸에 객체를 그대로 넘기면 pg 가 직렬화한다.
+  const after = await restoreSnapshot<KnowledgeRow>("knowledge", `${K_COLS}, fields`, "name", before);
   await forgetClassifierSeen([after.name]);   // #4194 — 링크 없이 돌아온다(위 주석) → 카테고리 붙이기 레인이 다시 봐야 한다
   await auditKnowledge(after.name, "restore", null, after, ctx);
   return after;

@@ -91,7 +91,8 @@ run_as_service() {
   local svc="${SERVICE_USER:-$(id -un)}"
   if [ "$svc" = "$(id -un)" ] || [ "$(detect_os)" != linux ]; then "$@"; return; fi
   local h; h="$(getent passwd "$svc" | cut -d: -f6)"
-  sudo -u "$svc" env HOME="$h" PATH="$PATH" \
+  #  (#4970) 그 유저의 사용자 몫 폴더를 앞에 — 방금 그 유저 홈에 깐 클로드(ensure_server_ais)를 키트가 찾게(운영자 PATH 에는 없다).
+  sudo -u "$svc" env HOME="$h" PATH="$h/.local/bin:$h/.npm-global/bin:$PATH" \
     BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-}" ORG_DOMAIN="${ORG_DOMAIN:-}" \
     BOOTSTRAP_ADMIN_PASSWORD="${BOOTSTRAP_ADMIN_PASSWORD:-}" BOOTSTRAP_ADMIN_ID="${BOOTSTRAP_ADMIN_ID:-}" BOOTSTRAP_ADMIN_NAME="${BOOTSTRAP_ADMIN_NAME:-}" \
     BOOTSTRAP_RETRY_MAX_MS="${BOOTSTRAP_RETRY_MAX_MS:-}" SKIP_BASELINE="${SKIP_BASELINE:-}" SKIP_CONNECTORS="${SKIP_CONNECTORS:-}" BASELINE_FORCE="${BASELINE_FORCE:-}" \
@@ -127,11 +128,14 @@ render_service_unit() {
       if [ -n "${GATEWAY_MEMORY_HIGH_MB:-}" ] && printf '%s' "${GATEWAY_MEMORY_HIGH_MB}" | grep -qE '^[0-9]+$' && [ "${GATEWAY_MEMORY_HIGH_MB}" -gt 0 ]; then
         mem_high_line="MemoryHigh=${GATEWAY_MEMORY_HIGH_MB}M"
       fi
+      # PATH 끝의 사용자 몫 폴더(#4970) — 세션 계약(session-env.sh ②)과 같은 셋·순서(.local → .npm-global → .lively).
+      #  provision.sh 가 claude 를 서비스 유저 홈(~/.local/bin)에 네이티브로 깐다.
+      #  tmux 는 게이트웨이 PATH 로만 명령을 찾으므로 이 폴더가 없으면 세션·화면 안 로그인이 «claude 없음» 이 된다(위시스트 실측 2026-10-23).
       sed -e "s#@APP_DIR@#$APP_DIR#g" \
           -e "s#@APP_USER@#$svc_user#g" \
           -e "s#@NODE_BIN@#$node_bin#g" \
           -e "s#@MEMORY_HIGH_LINE@#$mem_high_line#g" \
-          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
+          -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.local/bin:$svc_home/.npm-global/bin:$svc_home/.lively/bin#g" \
           "$DEPLOY_DIR/linux/lively-gateway.service" | sudo tee "$unit" >/dev/null
       sudo systemctl daemon-reload
       ok "systemd 유닛 렌더: $unit (User=$svc_user${mem_high_line:+, $mem_high_line})"
@@ -145,7 +149,7 @@ render_service_unit() {
       if [ -f "$plist" ]; then cp "$plist" "$plist.bak-$(date +%Y%m%d-%H%M%S)"; warn "기존 plist 백업 후 갱신"; fi
       sed -e "s#@APP_DIR@#$APP_DIR#g" \
           -e "s#@NODE_BIN@#$node_bin#g" \
-          -e "s#@PATH@#$node_dir:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.npm-global/bin#g" \
+          -e "s#@PATH@#$node_dir:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin:$HOME/.npm-global/bin:$HOME/.lively/bin#g" \
           "$DEPLOY_DIR/mac/io.lvly.lively.plist" > "$plist"
       ok "launchd plist 렌더: $plist"
       ;;
@@ -179,11 +183,12 @@ render_bluegreen_unit() {
     mem_high_line="MemoryHigh=${GATEWAY_MEMORY_HIGH_MB}M"
   fi
   local unit="/etc/systemd/system/lively-gateway@.service"
+  # PATH 끝의 ~/.local/bin·~/.lively/bin(#4970) — 단일 유닛(render_service_unit)과 같은 이유.
   sed -e "s#@LIVELY_ROOT@#$root#g" \
       -e "s#@APP_USER@#$svc_user#g" \
       -e "s#@NODE_BIN@#$node_bin#g" \
       -e "s#@MEMORY_HIGH_LINE@#$mem_high_line#g" \
-      -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
+      -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.local/bin:$svc_home/.npm-global/bin:$svc_home/.lively/bin#g" \
       "$DEPLOY_DIR/linux/lively-gateway@.service" | sudo tee "$unit" >/dev/null
   sudo systemctl daemon-reload
   ok "systemd 템플릿 유닛 렌더: $unit (User=$svc_user${mem_high_line:+, $mem_high_line})"
@@ -344,6 +349,93 @@ ensure_journal_read_access() {
   else
     warn "저널 읽기: systemd-journal 그룹 추가 실패(비치명 — earlyoom kill 이 관리탭·경보에 안 보일 뿐)"
   fi
+}
+
+# ── 서버에서 띄울 AI 넷(#4970) ──
+#  처음 설정 «AI 연결» 은 이 서버에서 띄울 수 있는 AI 만 보인다(src/terminal/harness-installed.ts). 종전 설치는 클로드만 깔아(설치 유저 ·
+#   격리면 구성원마다 클로드·챗GPT) 새 박스의 그 장면에 클로드 하나만 떴다 — 제미나이·그록은 손으로 돌리는 스크립트였다(위시스트 실측
+#   2026-10-23). 그래서 설치(install.sh) · 업데이트(update.sh) · blue-green 배포(deploy-release.sh)가 넷을 갖춘다.
+#   · 게이트웨이 유저 몫 — 클로드(네이티브 self-update · #1023) · 챗GPT(npm prefix 를 그 홈으로 — 자동 업데이트 EACCES). 비격리 박스의
+#     세션이 이 유저로 돈다. 격리 박스의 구성원 몫은 provision-member 가 같은 도우미로 깐다.
+#   · 박스 전체 — 제미나이(agy) · 그록(grok) → /usr/local/bin(install-harness-clis.sh — 벤더 설치기를 root 로 돌리지 않는다). 하나씩 부른다 —
+#     그 스크립트는 첫 실패에서 멈추므로, 한 업체 사이트가 막히면 다른 하나까지 못 깔게 된다(격리 리뷰).
+#  없는 것만 깐다(이미 있으면 도우미들이 조용히 건너뛴다) · 실패는 경고다(설치·업데이트를 멈추지 않는다 — 클로드만으로도 박스는 돈다).
+#  도우미마다 LIVELY_SERVER_AIS_TIMEOUT 초(기본 600)에서 끊는다 — npm·벤더 설치기에는 자기 상한이 없어, 바깥으로 못 나가는 박스면 배포마다 매달린다.
+#  끄기: LIVELY_SERVER_AIS=off (바깥 사이트에서 실행 파일을 받으면 안 되는 박스 — LIVELY_MEM_SAFETY=off 와 같은 모양). OFFLINE=1 도 받지 않는다.
+#  리눅스만 — 도우미들이 runuser 를 쓴다(맥은 os_install_deps 의 클로드만). OS 는 여기서 잰다(물려받은 OS 환경 변수에 기대지 않는다).
+#  ⚠ 게이트웨이가 root 로 돌면 챗GPT 도우미를 부르지 않는다 — 도우미가 그 유저의 ~/.npmrc 에 prefix(~/.npm-global)를 더하는데, root 면
+#   그 뒤의 `sudo npm i -g` 가 PATH 밖(/root/.npm-global)으로 간다. 이미 codex 가 있으면 조용히, 없으면 손으로 까는 법을 알린다.
+#  인자 = 도우미가 있는 deploy 폴더(기본은 이 파일의 것 — blue-green 은 새 릴리스의 것을 넘긴다).
+ensure_server_ais() {
+  local d="${1:-$DEPLOY_DIR}" t="${LIVELY_SERVER_AIS_TIMEOUT:-600}" os u h
+  if [ "${LIVELY_SERVER_AIS:-on}" = "off" ]; then log "서버 AI: LIVELY_SERVER_AIS=off — 설치 건너뜀"; return 0; fi
+  if [ "${OFFLINE:-0}" = "1" ]; then log "서버 AI: OFFLINE — 설치 건너뜀(사전 설치 가정)"; return 0; fi
+  os="$(detect_os)"
+  if [ "$os" != linux ]; then log "서버 AI: 이 OS($os)는 클로드만 설치합니다 — 챗GPT·제미나이·그록은 필요하면 직접 설치하세요"; return 0; fi
+  u="${SERVICE_USER:-$(id -un)}"
+  log "서버 AI 갖추기 — 게이트웨이 유저($u) 몫 클로드·챗GPT · 박스 전체 제미나이·그록(없는 것만 · 하나에 ${t}초까지)"
+  sudo timeout "$t" bash "$d/install-claude-user.sh" "$u" || warn "서버 AI: 클로드 설치 경고 — 나중에: sudo bash deploy/install-claude-user.sh $u"
+  if [ "$u" != root ]; then
+    sudo timeout "$t" bash "$d/install-codex-user.sh" "$u" || warn "서버 AI: 챗GPT(codex) 설치 경고 — 나중에: sudo bash deploy/install-codex-user.sh $u"
+  elif ! command -v codex >/dev/null 2>&1; then
+    warn "서버 AI: 게이트웨이가 root 로 돕니다 — 챗GPT(codex)는 깔지 않습니다(root 의 npm 전역 자리를 바꾸지 않으려고). 필요하면: sudo npm i -g @openai/codex"
+  fi
+  for h in agy grok; do
+    sudo timeout "$t" bash "$d/install-harness-clis.sh" "$h" \
+      || warn "서버 AI: $h 설치 실패(비치명) — 나중에: sudo bash deploy/install-harness-clis.sh $h"
+  done
+  return 0
+}
+
+# 구성원 격리(#524)를 새 설치의 기본으로 켠다(#5031). 종전엔 손으로 `sudo bash deploy/linux/install-isolation.sh` 를 돌려야 켜져,
+#  기본 설치 박스는 구성원 세션이 게이트웨이 유저 하나로 돌았다 — 서로의 AI 로그인 정보가 보이고, 클로드 밖의 AI 는 박스 공용 계정이며,
+#  조직 스킬 받은 목록을 같이 써 남의 스킬 파일을 지울 수 있었다(#5019 남은 한계). 비용(구성원마다 OS 계정 · 그 사람 몫 클로드·챗GPT
+#  ≈700MB)은 그 사람이 이 서버에서 세션·작업을 처음 열 때 든다(웹 세션 · 처음 설정의 서버 AI 연결 · 프로젝트 대화 · 에이전트 작업 등 —
+#  src/terminal/profiles.ts ensureMemberOsUser). PC 의 AI 만 쓰는 사람은 0 이다.
+#  건너뛰는 경우(로그만 — 모두 0 으로 돈다):
+#   · LIVELY_MEMBER_ISOLATION=off — 1인용·디스크 작은 박스. 게이트웨이도 같은 값을 하드 킬로 읽는다(terminal-isolation.ts isolationEnabled).
+#   · 맥 — 격리는 리눅스 OS 계정 경계다.
+#   · OFFLINE=1 · LIVELY_SERVER_AIS=off — 구성원 계정을 만들 때 그 사람 몫 AI 를 바깥(claude.ai·npm)에서 받는데, 게이트웨이 env 엔 OFFLINE 이
+#     없어 도우미의 오프라인 건너뛰기가 안 먹는다 → 바깥이 막힌 박스는 구성원 첫 사용이 만들기 상한(180초)까지 매달린다(격리 리뷰).
+#     필요하면 사전 설치 뒤 손으로 켠다.
+#   · 기존 설치 위에 다시 돌림(LIVELY_PRIOR_INSTALL=1 — install.sh 가 잰다: FORCE=1 · 게이트웨이 정지 중) — 모드를 바꾸면 구성원이 다들
+#     AI 에 다시 로그인해야 한다. 그래도 켜려면 LIVELY_MEMBER_ISOLATION=on 을 명시한다.
+#  · 깐 뒤 게이트웨이를 다시 띄운다 — install-isolation 이 게이트웨이 유저를 lively-shared·lively-broker 그룹에 넣는데, 그룹은 프로세스가 뜰 때 붙는다.
+#  · 깔다 실패하면 경고 — 격리 없이 돈다. 이번에 처음 놓인 box-spawn 은 걷는다: install-isolation 은 box-spawn 을 먼저, sudoers 를 마지막에
+#    까는데, 끝에서 실패하면 «격리 장치 있음» 으로 보이면서 계정을 못 만드는 반쪽(구성원 [연결]이 503)이 된다(격리 리뷰).
+#    다시 띄운 게이트웨이가 안 돌아오면 그건 die(wait_healthz·wait_ready)다.
+#  업데이트(update.sh · deploy-release.sh)는 이걸 부르지 않는다 — 이미 격리 박스면 그쪽이 리프레시하고, 아니면 모드를 그대로 둔다.
+#  인자 = install-isolation.sh 가 있는 deploy 폴더(기본은 이 파일의 것).
+ensure_member_isolation() {
+  local d="${1:-$DEPLOY_DIR}" os u want="${LIVELY_MEMBER_ISOLATION:-}" spawn=/opt/lively/libexec/box-spawn had_spawn=0
+  if [ "$want" = "off" ]; then
+    log "구성원 격리: LIVELY_MEMBER_ISOLATION=off — 깔지 않습니다(구성원 세션이 게이트웨이 유저 하나로 돕니다)"; return 0
+  fi
+  os="$(detect_os)"
+  if [ "$os" != linux ]; then log "구성원 격리: 이 OS($os)는 지원하지 않습니다(리눅스 전용) — 건너뜀"; return 0; fi
+  if [ "$want" != "on" ]; then
+    if [ "${OFFLINE:-0}" = "1" ] || [ "${LIVELY_SERVER_AIS:-on}" = "off" ]; then
+      log "구성원 격리: 바깥에서 AI 를 받지 않는 박스(OFFLINE · LIVELY_SERVER_AIS=off)라 기본으로 켜지 않습니다 — 구성원 몫 AI 를 갖춘 뒤 켜려면: sudo GATEWAY_USER=<게이트웨이 유저> bash deploy/linux/install-isolation.sh"
+      return 0
+    fi
+    if [ "${LIVELY_PRIOR_INSTALL:-0}" = "1" ]; then
+      log "구성원 격리: 기존 설치 위에 다시 설치합니다 — 모드를 그대로 둡니다(켜려면 LIVELY_MEMBER_ISOLATION=on · 구성원은 AI 에 다시 로그인)"
+      return 0
+    fi
+  fi
+  u="${SERVICE_USER:-$(id -un)}"
+  [ -e "$spawn" ] && had_spawn=1
+  log "구성원 격리 켜기 — 구성원마다 OS 계정(box_<사람>)으로 세션을 돌립니다 · 계정은 그 사람이 이 서버에서 세션·작업을 처음 열 때 만듭니다"
+  if ! sudo GATEWAY_USER="$u" bash "$d/linux/install-isolation.sh"; then
+    if [ "$had_spawn" = 0 ]; then sudo rm -f "$spawn" || true; fi
+    warn "구성원 격리 설치 실패 — 격리 없이 돕니다. 나중에: sudo GATEWAY_USER=$u bash deploy/linux/install-isolation.sh 뒤 게이트웨이 재시작"
+    return 0
+  fi
+  restart_gateway
+  wait_healthz
+  wait_ready
+  ok "구성원 격리 켜짐(이 박스에서 끄려면 .env 에 LIVELY_MEMBER_ISOLATION=off 를 넣고 게이트웨이 재시작)"
+  return 0
 }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "필요한 명령 없음: $1"; }

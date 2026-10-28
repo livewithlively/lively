@@ -27,10 +27,11 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 // 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
-import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
+import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isForeignCursorInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
 import { openWork } from "./bg-jobs.mjs";
+import { inScopeNow } from "./record-scope.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -45,7 +46,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 camelCase 페이로드 오파싱 + 이중 기록).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 // 어드민 런타임 설정 — ~/.lively/hooks-config.json 의 hooks[name]===false 면 이 훅 비활성(fail-open: 못 읽으면 활성).
 function hookDisabled(name) {
@@ -166,6 +168,8 @@ try {
   const raw = await readStdin();
   let input;
   try { input = JSON.parse(raw); } catch { process.exit(0); }
+  // 기록 범위(#5016) — 작업 폴더 밖이면 인코그니토와 같다(기록 표식·넛지·세션 보고 전부 없음). 판정은 record-scope.mjs 하나.
+  if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: HARNESS, lively: join(homedir(), ".lively") }).inScope) process.exit(0);
   const sid = String(input?.session_id ?? "");
   const event = String(input?.hook_event_name ?? "");
 
@@ -360,7 +364,11 @@ try {
     //  노드 세션은 기록이 턴 끝에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다). 스로틀 없음 — 사람 손 속도다.
     //  페이로드 이름: claude 원조 `prompt` · 어댑터/구버전 `prompt_text`. 서버가 다시 다듬으므로(300자) 여긴 상한만 건다.
     //  /active 와 **나란히** 보낸다 — 이 훅은 프롬프트 처리 앞에서 도는 핫패스라 왕복을 직렬로 쌓지 않는다.
-    if (token && event === "UserPromptSubmit") {
+    //  #5048 — 읽기전용·인코그니토는 보내지 않는다. 이 줄은 org_session_state.last_prompt 에 **저장**된다(지시 앞 300자) —
+    //   «읽기전용은 기록하지 않음» 의 대상이다. /active(단계·시각)는 내용이 없어 그대로 보낸다. 서버도 그 세션의 모드로 거부한다.
+    const mode = String(process.env.LIVELY_MODE || "").trim().toLowerCase();
+    const quiet = mode === "readonly" || mode === "incognito" || process.env.LIVELY_READONLY === "1" || process.env.LIVELY_INCOGNITO === "1";
+    if (token && event === "UserPromptSubmit" && !quiet) {
       const p = String(input?.prompt ?? input?.prompt_text ?? "").replace(/\s+/g, " ").trim();
       if (p) jobs.push(post("/last-prompt", { prompt: Array.from(p).slice(0, 600).join("") }));
     }

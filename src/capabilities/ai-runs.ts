@@ -42,7 +42,7 @@ const appAiRun: Capability = {
   title: "앱 AI 실행",
   description:
     "앱의 AI 작업 입구 하나(/_lively/ai/runs). 프롬프트(+결과 스키마 · 파일 · 작업 이름)를 보내면 게이트웨이가 실행 계정(작업별 > 앱별 > 워크스페이스 기본값 — API 키 또는 본인 구독)과 자리를 고른다: " +
-    "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 사람이 앱 화면에서 직접 보낸 요청만. " +
+    "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만 — 앱 서버 · 자동화는 API 키. " +
     "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits).",
   scope: null,
   input: aiRunInput,
@@ -53,7 +53,7 @@ const appAiRun: Capability = {
   handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
     //  #1442 짧은 메타 필드 조정 — 큰 프롬프트를 실은 호출이 이름표 길이 하나로 통째로 튕기지 않게. 보고는 응답 capped 로.
     const capped = applySoftCaps("app_ai_run", input, SOFT_CAPS.app_ai_run!);
-    return { ...(await (await svc()).submitRun(input, user, { source: ctx?.source }, await deps())), ...capped };
+    return { ...(await (await svc()).submitRun(input, user, { source: ctx?.source, session: ctx?.session }, await deps())), ...capped };
   },
 };
 
@@ -97,7 +97,7 @@ const appAiTargets: Capability = {
   scope: null,
   input: { app_id: z.string().optional() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-targets"], parse: (req) => { const q = (req.query ?? {}) as Record<string, unknown>; return q.app_id ? { app_id: String(q.app_id) } : {}; } }] },
-  handler: async (input: Record<string, unknown>, user: LivelyUser) => (await svc()).targetsFor(user, input, await deps()),
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => (await svc()).targetsFor(user, input, await deps(), { session: ctx?.session }),
 };
 
 // ── 실행 계정 설정 — org_runtime_config.app_ai_account 한 칸 ──

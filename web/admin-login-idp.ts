@@ -21,6 +21,8 @@ function loginIdpEditor(detail: any, data: any) {
   body.append(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
 
   const callbackUrl = location.origin + '/api/ui/auth/oidc/callback';
+  // IdP 로그아웃(RP-Initiated Logout)을 켤 때 IdP 허용 목록에 등록할 «로그아웃 후 이동 주소» — 서버가 보내는 값과 같다(auth/logout-redirect.ts).
+  const postLogoutUrl = location.origin + '/ui/';
 
   (async () => {
     let cfg: any;
@@ -71,6 +73,8 @@ function loginIdpEditor(detail: any, data: any) {
       type: 'text', value: (cfg.allowed_domains || []).join(', '), placeholder: 'honest.ai (비우면 자동 가입 없음)',
     }) as any;
     const label = el('input', { type: 'text', value: cfg.label || '', placeholder: '비우면 issuer 로 자동(예: Google 계정으로 로그인)' }) as any;
+    const idpLogout = el('input', { type: 'checkbox' }) as any;
+    idpLogout.checked = !!cfg.idp_logout;
 
     const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' }) as any;
     saveBtn.disabled = !canEdit;
@@ -84,6 +88,7 @@ function loginIdpEditor(detail: any, data: any) {
         client_id: clientId.value.trim(),
         allowed_domains: domains.value,
         label: label.value.trim() || null,
+        idp_logout: !!idpLogout.checked,
       };
       // 시크릿은 **입력했을 때만** 보낸다 — 빈 칸으로 저장해도 기존 시크릿이 지워지지 않게(3상태 중 '보존').
       if (secret.value.trim()) payload.client_secret = secret.value.trim();
@@ -112,12 +117,16 @@ function loginIdpEditor(detail: any, data: any) {
       } catch (e: any) { toast((e && e.message) || '지우지 못했습니다', true); clearBtn.disabled = false; }
     });
 
-    const cbBox = el('div', { class: 'admin-ro', style: 'word-break:break-all' }, callbackUrl);
-    const copyBtn = el('button', { class: 'btn btn-sm', text: '복사' }) as any;
-    copyBtn.addEventListener('click', async () => {
-      try { await navigator.clipboard.writeText(callbackUrl); toast('복사했습니다.'); }
-      catch (_) { toast('복사하지 못했습니다 — 주소를 직접 선택해 복사하세요', true); }
-    });
+    // 주소 한 줄 + 복사 버튼 — IdP 콘솔에 글자 그대로 넣어야 하는 값들(리디렉션 주소 · 로그아웃 후 이동 주소).
+    const copyRow = (url: string) => {
+      const box = el('div', { class: 'admin-ro', style: 'word-break:break-all' }, url);
+      const btn = el('button', { class: 'btn btn-sm', text: '복사' }) as any;
+      btn.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(url); toast('복사했습니다.'); }
+        catch (_) { toast('복사하지 못했습니다 — 주소를 직접 선택해 복사하세요', true); }
+      });
+      return el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap' }, box, btn);
+    };
 
     body.replaceChildren(
       statusBanner(cfg),
@@ -125,7 +134,7 @@ function loginIdpEditor(detail: any, data: any) {
         'IdP 콘솔(구글 Cloud Console ▸ Google Auth Platform)에서 웹 애플리케이션 클라이언트를 만들고, ' +
         '아래 리디렉션 주소를 그대로 등록한 뒤 발급된 클라이언트 ID·시크릿을 여기 넣으세요. ' +
         '구글 워크스페이스라면 Audience 를 Internal 로 두면 조직 구성원만 로그인할 수 있고 구글 검증 절차도 없습니다.')),
-      field('IdP 에 등록할 리디렉션 주소', el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap' }, cbBox, copyBtn)),
+      field('IdP 에 등록할 리디렉션 주소', copyRow(callbackUrl)),
       field('회사 계정 로그인 사용', el('label', { style: 'display:flex; gap:8px; align-items:center' }, enabled,
         el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('끄면 이메일·비밀번호만 남습니다.')))),
       field('issuer (IdP 주소)', issuer),
@@ -136,6 +145,13 @@ function loginIdpEditor(detail: any, data: any) {
           '이 도메인의 회사 이메일이면 첫 로그인에 구성원이 자동으로 만들어집니다(권한은 지식·프로젝트 조회만). ' +
           '비우면 미리 등록된 구성원만 로그인할 수 있습니다.')))),
       field('로그인 버튼 문구', label),
+      field('로그아웃하면 회사 SSO 에서도 나가기', el('div', {},
+        el('label', { style: 'display:flex; gap:8px; align-items:center' }, idpLogout,
+          el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('켜면 로그아웃할 때 IdP 세션까지 끝냅니다. 같은 IdP 로 로그인한 다른 회사 앱에서도 나가게 됩니다.'))),
+        el('p', { class: 'admin-hint', style: 'margin:6px 0 0' }, ...uiText(
+          '켜기 전에 IdP 클라이언트 설정의 «로그아웃 후 이동 주소(Post logout redirect URI)» 허용 목록에 아래 주소를 그대로 등록하세요. ' +
+          '등록하지 않으면 로그아웃할 때 IdP 오류 화면이 뜹니다. IdP 가 로그아웃 주소를 알려주지 않으면(구글 등) 켜도 웹 세션만 끝납니다.')),
+        copyRow(postLogoutUrl))),
       el('div', { class: 'admin-actions' }, saveBtn, status));
   }
 }

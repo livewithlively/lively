@@ -12,6 +12,7 @@ import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initActivitySchema } from "../activity/schema.js";
 import { initV6Schema } from "../v6/schema.js";
+import { initConnectorRunSchema } from "../connectors/run-schema.js";
 import { ensureTenantColumn, pinIdentityGlobalTenant, refreshTenantDefault } from "../db/tenant-column.js";
 import { reconcilePersonalUploadVisibilitySafe } from "../v6/vis-personal-unlock.js"; // #4007 — 개인 업로드 자동 잠금 소급 해제(멱등)
 import { migrateDistillerPresetTextSafe } from "../org/distill/preset-text-migrate.js"; // #4824 — 프리셋 레인의 저장된 문구 이관(멱등)
@@ -47,6 +48,11 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   note("activity schema ready");
   await initV6Schema();
   note("v6 schema ready");
+  // #5012 — 수집 실행 기록(connector_run). 종전엔 run-tracker 가 첫 사용 때만 만들어, 처음부터 registry 로 설치한
+  //  박스(앱 role 은 DDL 불가)에서는 영영 안 생겨 수집기가 전부 실패했다. 소유자가 치는 이 체인에서 만들고,
+  //  ensureTenantColumn **앞**이라 같은 체인에서 tenant_id·격리 정책이 붙는다. 상세 connectors/run-schema.ts.
+  await initConnectorRunSchema();
+  note("connector_run schema ready");
   // #1437 — `tenant_id` 와 복합 UNIQUE 보장. **모든 스키마가 만들어진 뒤**여야 한다(카탈로그를 읽으므로).
   //  단일 테넌트에서는 값이 상수라 동작이 달라지지 않는다 — SQL 방언을 하나로 유지하기 위한 것이다.
   const tc = await ensureTenantColumn();

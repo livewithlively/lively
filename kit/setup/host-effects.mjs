@@ -8,7 +8,7 @@ import {
   spawn as nodeSpawn,
   spawnSync as nodeSpawnSync,
 } from "node:child_process";
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, resolve, sep } from "node:path";
 
@@ -102,14 +102,38 @@ const sandboxProcessAllowed = ({ command, args = [], options = {} }, env) => {
     .filter(Boolean)
     .some((root) => inside(resolved, root));
 };
+/**
+ * sandbox 가 여는 loopback 포트의 하한 = 시험 고정물이 listen(0) 으로 받는 **임시 포트 범위**의 시작.
+ *  Linux 기본 범위는 32768–60999(실측 34699~45001), macOS·Windows 는 49152 부터라 종전엔 32768 로 박았다. IANA 의 49152 만
+ *  가정하면 CI 의 실제 loopback fixture 를 막는다. 그런데 gVisor 세션 컨테이너(중앙 박스)는 `ip_local_port_range` 가
+ *  «16000 65535» 다 — listen(0) 이 32768 아래를 받는 순간 시험이 자기 고정물에 못 닿아 «HostEffects denied network» 로
+ *  빨갰고, 받는 포트가 실행마다 달라 목록이 매번 바뀌었다(#4673 · #5029). 그래서 그 기계의 범위 시작이 더 낮으면 그것을 따른다.
+ *  ⚠ SANDBOX_PORT_FLOOR 아래로는 내리지 않는다 — 범위를 1024 부터로 넓힌 기계에서도 게이트웨이(8080)·Postgres(5432) 같은
+ *   기본 로컬 서비스 포트는 계속 닫혀 있어야 한다. 범위를 못 읽으면(macOS·Windows) 종전 그대로 32768.
+ *  ⚠ 범위 시작이 10000 보다 낮은 기계(예: «1024 65535»)에선 고정물이 1024–9999 를 받으면 여전히 막힌다 — 서비스 포트를 지키는 값이다.
+ *  ⚠ kit/cli/lively.mjs 의 인라인 경계(inlineSandboxPortLowerBound · inlineSandboxPortMin)가 같은 규칙의 사본이다 — 둘을 함께 고친다
+ *   (P-W3 이 두 함수를 같은 표로 실제로 돌려 맞춰 본다).
+ */
+const SANDBOX_PORT_FLOOR = 10000;
+export const sandboxPortLowerBound = (rangeText) => {
+  const m = /^\s*(\d+)/.exec(String(rangeText ?? ""));
+  const lo = m ? Number(m[1]) : 32768;
+  return lo < 32768 ? Math.max(lo, SANDBOX_PORT_FLOOR) : 32768;
+};
+const readPortRange = () => { try { return readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8"); } catch { return ""; } };
+// 이 기계의 하한 — 처음 물을 때 한 번 읽고 기억한다. 모듈을 불러올 때 읽으면 native 로 도는 훅·CLI 가 뜰 때마다 /proc 를 읽는다
+//  (macOS·Windows 에선 그때마다 ENOENT 예외) — sandbox 의 네트워크 판정만 이 값을 쓴다.
+let sandboxPortMinMemo = null;
+export const sandboxPortMin = () => {
+  if (sandboxPortMinMemo === null) sandboxPortMinMemo = sandboxPortLowerBound(readPortRange());
+  return sandboxPortMinMemo;
+};
 const sandboxNetworkAllowed = (input) => {
   try {
     const u = new URL(typeof input === "string" ? input : input?.url);
     const loopback = u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "[::1]";
     const port = Number(u.port);
-    // Linux의 listen(0)은 통상 32768부터 배정된다. IANA의 49152만 가정하면 CI의 실제
-    // loopback fixture를 차단한다. 기본 서비스 포트는 이 범위 밖이라 계속 닫힌다.
-    return loopback && Number.isInteger(port) && port >= 32768 && port <= 65535;
+    return loopback && Number.isInteger(port) && port >= sandboxPortMin() && port <= 65535;
   } catch { return false; }
 };
 
