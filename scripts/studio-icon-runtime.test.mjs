@@ -61,6 +61,7 @@ window.fetch = async (u, init) => {
   m = /^\\/api\\/ui\\/apps\\/(\\w+)\\/server/.exec(p);
   if (m) return j({ server_declared: false });
   m = /^\\/api\\/ui\\/apps\\/(\\w+)(\\?|$)/.exec(p);
+  if (m && m[1] === "flaky") return new Response("{}", { status: 500 });
   if (m && window.__apps[m[1]]) return j({ app: window.__apps[m[1]] });
   if (p.startsWith("/api/ui/me/whoami")) return j({ member_id: "wonjoon-jang", display_name: "원준" });
   if (p.startsWith("/api/ui/apps")) return j({ apps: [] });
@@ -110,13 +111,13 @@ async function PAGE_MAIN() {
   R.p4 = { open: !!open, tiles: picks().length, first: picks()[0] ? picks()[0].getAttribute("title") : null, firstOn: picks()[0] ? picks()[0].classList.contains("on") : null, sw: $$(".v2-studio-ico-sw").length };
   // P5 — 기본 그림(목록의 셋째 = 기본 그림 둘째) 고르기
   const preset = picks()[2]; const presetD = preset ? preset.querySelector("path").getAttribute("d") : null;
-  if (preset) preset.click();
+  if (preset) { preset.focus(); preset.click(); }
   await sleep(200);
-  R.p5 = { icon: recNow().icon || null, presetD, d: sideD(), on: picks()[2] ? picks()[2].classList.contains("on") : null, sub: sub(), reset: !!btn(/^처음대로$/), prompts: window.__prompts.length - p0, saves: window.__saves.length - s0 };
+  R.p5 = { focusK: document.activeElement ? document.activeElement.getAttribute("data-ico-k") : null,  icon: recNow().icon || null, presetD, d: sideD(), on: picks()[2] ? picks()[2].classList.contains("on") : null, sub: sub(), reset: !!btn(/^처음대로$/), prompts: window.__prompts.length - p0, saves: window.__saves.length - s0 };
   // P6 — 색(넷째 = 와인)
   const sw = $$(".v2-studio-ico-sw")[3]; if (sw) sw.click();
   await sleep(200);
-  R.p6 = { icon: recNow().icon || null, swOn: $$(".v2-studio-ico-sw")[3] ? $$(".v2-studio-ico-sw")[3].classList.contains("on") : null };
+  R.p6 = { icon: recNow().icon || null, swOn: $$(".v2-studio-ico-sw")[3] ? $$(".v2-studio-ico-sw")[3].classList.contains("on") : null, pressed: $$(".v2-studio-ico-sw").map((b) => b.getAttribute("aria-pressed")) };
   // P7 — 처음대로
   const rs = btn(/^처음대로$/); if (rs) rs.click();
   await sleep(200);
@@ -151,6 +152,25 @@ async function PAGE_MAIN() {
   St.openAppStudio({ sid: "box-s2" }, opts);
   await sleep(1800);
   R.p11 = { sub: sub(), d: sideD(), liv: St.iconPath("liv") };
+  // P12 — 고른 뒤 AI 가 새 버전에 다른 아이콘을 넣었다(고를 때 저장돼 있던 것 = 옛 그림) → 고른 것은 걷히고 새 아이콘이 선다
+  const rec3 = { ...base, sid: "box-s3", appId: "notes", title: "회의록", icon: { path: "M1 1h3", color: "#118E6E" }, iconBase: "M2 2h9" };
+  localStorage.setItem("lively_v2_app_studio", JSON.stringify([rec3]));
+  St.openAppStudio({ sid: "box-s3" }, opts);
+  await sleep(1800);
+  R.p12 = { icon: recNow("box-s3").icon || null, d: sideD() };
+  // P13 — 같은 기록인데 저장된 아이콘이 고를 때 그대로면 고른 것을 지킨다
+  const rec4 = { ...rec3, sid: "box-s4", iconBase: window.__apps.notes.manifest.icon.path };
+  localStorage.setItem("lively_v2_app_studio", JSON.stringify([rec4]));
+  St.openAppStudio({ sid: "box-s4" }, opts);
+  await sleep(1800);
+  R.p13 = { icon: recNow("box-s4").icon ? recNow("box-s4").icon.path : null, d: sideD() };
+  // P14 — 지금 아이콘을 못 읽었다 → 「없다」 가 아니라 「못 불러왔다」
+  window.__apps.flaky = null;
+  const rec5 = { ...base, sid: "box-s5", appId: "flaky", title: "안건" };
+  localStorage.setItem("lively_v2_app_studio", JSON.stringify([rec5]));
+  St.openAppStudio({ sid: "box-s5" }, opts);
+  await sleep(1800);
+  R.p14 = { sub: sub() };
   R.errors = errors;
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
 }
@@ -194,6 +214,11 @@ same(R.p9 && [R.p9.badIcon, /그리는 중/.test(R.p9.status || ""), R.p9.icon &
   [null, true, R.p9 && R.p9.newD, 1, "AI가 방금 그린 그림", true, R.p9 && R.p9.newD, true], "P9 틀린 답은 버리고 기다린다 · 맞는 답은 그림 목록 맨 앞에 골라져 선다");
 same(R.p10 && [R.p10.saves, R.p10.icon, R.p10.recIcon, R.p10.stage], [1, { path: R.p9 && R.p9.newD, color: "#D5541F", color_dark: "#E7845B" }, null, "put"], "P10 「완료 · 다음 단계로」 — 마무리 저장에 아이콘이 실린다 · 기록에서 걷힌다");
 same(R.p11 && [/아직 아이콘이 없어/.test(R.p11.sub || ""), R.p11.d === R.p11.liv], [true, true], "P11 아이콘 없는 앱 — 기본 그림이라고 말한다");
+same(R.p5 && R.p5.focusK, R.p5 && "g:" + R.p5.presetD, "P5b 고른 뒤에도 포커스가 고른 그림 칸에 남는다(다시 그려도)");
+same(R.p6 && R.p6.pressed, ["false", "false", "false", "true", "false", "false", "false", "false", "false"], "P6b 색 칸 — 고른 것만 aria-pressed");
+same(R.p12, { icon: null, d: ICON.path }, "P12 고른 뒤 저장된 아이콘이 바뀌었으면 고른 것을 걷는다(새 아이콘을 덮지 않는다)");
+same(R.p13, { icon: "M1 1h3", d: "M1 1h3" }, "P13 저장된 아이콘이 그대로면 고른 것을 지킨다");
+same(R.p14 && /불러오지 못했어요/.test(R.p14.sub || ""), true, "P14 지금 아이콘을 못 읽으면 「없다」 고 하지 않는다");
 same(R.errors, [], "W 페이지 예외 없음");
 
 console.log(`studio-icon-runtime: ${pass} passed · ${fail} failed`);

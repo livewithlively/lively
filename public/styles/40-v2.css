@@ -1933,7 +1933,8 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-ico-pick:hover { border-color: color-mix(in srgb, var(--purple, #7B61E0) 50%, var(--line)); }
 .v2-studio-ico-pick.on, .v2-studio-ico-sw.on { border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 2px color-mix(in srgb, var(--purple, #7B61E0) 30%, transparent); }
 .v2-studio-ico-colors { display: flex; flex-wrap: wrap; gap: 8px; }
-.v2-studio-ico-sw { width: 24px; height: 24px; border-radius: 999px; border: 2px solid var(--bg); outline: 1px solid var(--line); padding: 0; cursor: pointer; }
+.v2-studio-ico-sw { width: 24px; height: 24px; border-radius: 999px; border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--line); padding: 0; cursor: pointer; }
+.v2-studio-ico-pick:focus-visible, .v2-studio-ico-sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .v2-studio-ico-ask { display: flex; gap: 6px; flex-wrap: wrap; }
 .v2-studio-ico-ask .v2-studio-name-in { flex: 1 1 160px; min-width: 0; }
 .v2-studio-name-in { height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13.5px; background: var(--bg); color: var(--ink); min-width: 180px; }
