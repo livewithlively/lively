@@ -73,7 +73,9 @@ export async function openConnectSession(o: { fromWelcome?: boolean } = {}): Pro
 
 /** «쓰는 AI 에서 하기» 세 걸음 — 서버에 로그인된 AI 가 없을 때. 사람이 손대는 것은 받기·로그인·붙여넣기 셋뿐이다.
  *  say — 셋째 걸음에서 쓰는 AI 에 붙여 넣을 말(기본: 외부 앱 연결). 리브 화면은 점검하는 말을 준다. */
-export function ownAiStepsHtml(say: string = SAY_IN_AI): string {
+/** 앱 받기 · 앱에서 로그인 — 두 걸음(#5060). «쓰는 AI 에서 하기» 의 앞 두 걸음이자, 처음 설정 «앱으로 이어 하기» 장면의 안내다.
+ *  [앱 받기]는 data-get — 배선은 wireOwnAiSteps 가 한다(받기 주소를 미리 물어 둔다). */
+export function appInstallStepsHtml(): string {
   const os = desktopOs();
   const getBtn = '<button type="button" class="ob-btn ob-btn-sub ob-btn-inline ob-btn-mini" data-get>앱 받기</button>';
   const step1 = os === 'win'
@@ -87,9 +89,7 @@ export function ownAiStepsHtml(say: string = SAY_IN_AI): string {
     ? `앱을 열고 ${kbd('라이블리 클라우드로 로그인')}을 누르세요. 브라우저에 승인 화면이 뜨면 ${kbd('승인')}을 누르세요.`
     : `앱을 열고 <b>회사에 직접 설치했어요 — 주소 입력</b>을 눌러 아래 주소를 넣고 ${kbd('연결')}을 누르세요. 브라우저에 승인 화면이 뜨면 ${kbd('승인')}을 누르세요.`;
   const host = String(location.host || '');
-  return `<p class="ob-q-help">이 워크스페이스에는 아직 로그인된 AI가 없어요. 커서·Claude Code처럼 평소 쓰시는 AI에서 연결을 이어 가시면 됩니다.</p>
-    <div class="ob-ins-list">
-      <div class="ob-ins" data-n="1">
+  return `<div class="ob-ins" data-n="1">
         <b class="ob-ins-t">라이블리 앱을 받아 설치합니다</b>
         <p class="ob-ins-p">${step1}</p>
       </div>
@@ -97,7 +97,13 @@ export function ownAiStepsHtml(say: string = SAY_IN_AI): string {
         <b class="ob-ins-t">앱에서 이 워크스페이스에 로그인합니다</b>
         <p class="ob-ins-p">${step2}</p>
         ${managed || !host ? '' : cmdBox(host)}
-      </div>
+      </div>`;
+}
+
+export function ownAiStepsHtml(say: string = SAY_IN_AI): string {
+  return `<p class="ob-q-help">이 워크스페이스에는 아직 로그인된 AI가 없어요. 커서·Claude Code처럼 평소 쓰시는 AI에서 연결을 이어 가시면 됩니다.</p>
+    <div class="ob-ins-list">
+      ${appInstallStepsHtml()}
       <div class="ob-ins" data-n="3">
         <b class="ob-ins-t">쓰시는 AI에 이렇게 말합니다</b>
         <p class="ob-ins-p">설치가 끝나면 쓰시던 AI를 한 번 껐다 켜고, 새 대화에 아래 말을 그대로 붙여 넣으세요.</p>
@@ -122,9 +128,16 @@ export function wireOwnAiSteps(root: ParentNode): void {
       toast('복사가 막혀 있어요. 파랗게 선택해 뒀으니 ⌘/Ctrl + C 로 복사해 주세요.');
     }
   });
+  const doGet = desktopDownloader();
+  root.querySelectorAll<HTMLElement>('[data-get]').forEach((b) => b.onclick = (e) => { e.preventDefault(); doGet(); });
+}
+
+/** 내려받기 함수 — 받기 주소를 **지금** 물어 두고, 돌려준 함수는 누른 그 자리에서 곧바로 받는다(누른 순간 await 하면 사용자 제스처가 풀려 막힌다).
+ *  주소를 아직 모르거나 못 가렸으면 받는 곳(릴리스 페이지)을 연다. 처음 설정 «앱으로 이어 하기» 는 장면을 그릴 때 이걸 받아 둔다(#5060). */
+export function desktopDownloader(): () => void {
   let url: string | null = null;
   void desktopLink().then((u) => { url = u; });
-  const doGet = () => {
+  return () => {
     if (url) {
       const a = document.createElement('a'); a.href = url; a.rel = 'noopener';
       document.body.appendChild(a); a.click(); a.remove();
@@ -134,5 +147,4 @@ export function wireOwnAiSteps(root: ParentNode): void {
       toast('받는 곳을 새 창으로 열었어요.');
     }
   };
-  root.querySelectorAll<HTMLElement>('[data-get]').forEach((b) => b.onclick = (e) => { e.preventDefault(); doGet(); });
 }

@@ -155,7 +155,8 @@ export const livCapabilities: Capability[] = [
       const welcomeDeferred = typeof input.welcome_deferred === "boolean" ? input.welcome_deferred : undefined;
       const collectDone = input.collect_done === true;   // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호)
       const uploadDone = input.upload_done === true;     // #5060 — 화면의 백그라운드 올리기가 다 비었다(2턴이 기다리던 신호)
-      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone && !uploadDone) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done · upload_done 중 하나는 있어야 합니다");
+      const desktopSeen = input.desktop_seen === true;   // #5060 — 처음 설정을 데스크톱 앱 안에서 열었다(브라우저 탭이 접히는 신호)
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone && !uploadDone && !desktopSeen) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done · upload_done · desktop_seen 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
@@ -170,6 +171,7 @@ export const livCapabilities: Capability[] = [
           welcomeDeferred,
           collectDone,
           uploadDone,
+          desktopSeen,
         }),
       };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
@@ -197,6 +199,9 @@ export const livCapabilities: Capability[] = [
       upload_done: z.boolean().optional()
         .describe("(화면) 처음 설정에서 시작한 파일 올리기가 끝났다는 표식(#5060). 리브(AI)가 찍는 값이 아니다 — 화면의 백그라운드 올리기가 " +
           "다 비면 찍는다. 처음 설정에서 올리기를 시작한 칸에만 남고, 처음 찍힌 시각을 지킨다."),
+      desktop_seen: z.boolean().optional()
+        .describe("(화면) 처음 설정을 데스크톱 앱 안에서 열었다는 표식(#5060). 리브(AI)가 찍는 값이 아니다. 마지막 시각을 남기고, " +
+          "브라우저에서 [앱 받기]를 누른 사람의 탭이 그 값을 보고 «앱에서 이어 하고 있어요» 로 접힌다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────

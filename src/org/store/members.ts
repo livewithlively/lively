@@ -393,6 +393,9 @@ export interface LivProfile {
    *  '지금은 말고'지 '영영 말고'가 아니다.
    */
   welcome_deferred_at?: string | null;
+  /** (#5060) 처음 설정을 **데스크톱 앱 안에서** 마지막으로 연 시각. 브라우저에서 [앱 받기]를 누른 사람의 탭이 이 값을 보고
+   *  «앱에서 이어 하고 있어요» 로 접힌다(같은 처음 설정을 두 곳에서 하지 않게). 마지막 시각이 뜻이 있다(매번 갱신). */
+  desktop_seen_at?: string | null;
   /**
    * 이 워크스페이스에 **어떻게 들어왔나**(#1631, 원준 결정 2026-09-13) — 처음 설정의 갈래(주인 / 초대로 들어온 사람)와
    *  «터미널 → 내 컴퓨터 / 앱 받기» 장면을 보일지의 재료. 매니지드에선 계정 서버만 아는 사실이라, 처음 설정 현황(폴링 자리)이
@@ -676,7 +679,7 @@ export function withUploadDone(welcome: LivWelcome | null | undefined, at: Date)
 }
 
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean; uploadDone?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean; uploadDone?: boolean; desktopSeen?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
@@ -687,6 +690,8 @@ export async function appendLivProfile(
   if (patch.collectDone && next.welcome) next.welcome = withCollectDone(next.welcome, new Date()) ?? next.welcome;
   // #5060 — 처음 설정에서 시작한 백그라운드 올리기가 끝났다(2턴이 기다리던 신호). 시작 표식이 있는 칸에만, 처음 시각을 지킨다.
   if (patch.uploadDone && next.welcome) next.welcome = withUploadDone(next.welcome, new Date()) ?? next.welcome;
+  // #5060 — 처음 설정을 데스크톱 앱 안에서 열었다. 마지막 시각(브라우저 탭이 «[앱 받기] 를 누른 뒤에 앱이 열렸나» 를 잰다).
+  if (patch.desktopSeen) next.desktop_seen_at = new Date().toISOString();
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
