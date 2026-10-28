@@ -355,6 +355,7 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
   border: 1px solid var(--line-net); border-radius: 999px; background: var(--bg); font-size: 11px; color: var(--muted-head); }
 .pn-att-c svg { flex: none; color: var(--muted-2); }
 .pn-att-c .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-att-c.wait { opacity: .6; }   /* 같은 배치에서 차례를 기다리는 칩(#5091) */
 .pn-att-x { flex: none; width: 15px; height: 15px; border: 0; border-radius: 50%; background: none; color: var(--muted-2); font-size: 9px; line-height: 1; cursor: pointer; }
 .pn-att-x:hover { background: var(--bg-punch); color: var(--ink); }
 .pn-newpane.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; }
