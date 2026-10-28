@@ -713,7 +713,7 @@ async function build(rec: StudioRec): Promise<void> {
     waiting: !!rec.fixing, waitT0: rec.fixing ? rec.fixing.at : 0, topVer: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0, limit: '',   // limit: AI 답 글이 알린 사용 한도(parseLimit 의 한 줄) — 새로 보내면 걷는다
     iconOpen: false, iconWait: false, iconMiss: false, iconT: 0, iconRead: false, iconFail: false,   // ④ 아이콘 — 고르는 칸이 펼쳐졌나 · AI 가 그리는 중 · 안 보냈다 · 지금 아이콘을 읽었나 · 못 읽었나
-    iconT0: 0, iconTick: 0,   // ④ AI 에게 그려 달라고 보낸 때 · 흐른 시간 시계
+    iconT0: 0, iconTick: 0, iconLast: '',   // ④ AI 에게 그려 달라고 보낸 때 · 흐른 시간 시계 · 보낸 글(멈췄을 때 그대로 다시 보낸다)
     colorOpen: false, cpick: null as Hsv | null, hexBad: false,   // ④ 「다른 색」 — 팔레트가 펼쳐졌나 · 손잡이 자리(다시 그려도 그대로) · 적은 색 코드가 틀렸나
     //  막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다 · 막 보낸 고침도 보낸 때부터 60초(armRun 과 같은 틈)
     quietTill: Math.max(Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
@@ -776,12 +776,13 @@ async function build(rec: StudioRec): Promise<void> {
    *  원준 2026-10-28 «중간에 안됐는데 수정중 하면서 시간 세고있으면 어떡해» — 막대만 멈췄다 하고 띠는 «AI 수정 중 11:06» 을 세고 있었다. */
   const stallInfo = (): { text: string; short: string; go: string; resume: boolean } | null => {
     const kind = runKind(); if (!S.stall || !kind) return null;
-    const go = kind === 'fix' ? '이어서 수정하기' : '이어서 만들기';
+    const go = kind === 'fix' ? '이어서 수정하기' : kind === 'icon' ? '다시 부탁하기' : '이어서 만들기';
     if (S.stall === 'ask') return { text: 'AI가 확인을 기다리고 있어요. 「AI 세션 보기」를 눌러 답해주세요.', short: 'AI가 확인을 기다려요', go, resume: false };
     if (S.stall === 'offline') return { text: '세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있거나 잠들어 있어서 AI가 멈췄어요. 그 컴퓨터를 켜면 이어서 할 수 있어요.', short: 'AI가 멈췄어요', go, resume: false };
-    if (S.stall === 'ended') return { text: '세션이 꺼져서 AI가 멈췄어요. 「' + go + '」를 누르면 세션을 다시 켜고 멈춘 곳부터 해요.', short: 'AI가 멈췄어요', go, resume: true };
-    if (S.stall === 'limit') return { text: (S.limit || 'AI 사용 한도에 걸려 멈췄어요.') + ' 풀린 뒤 「' + go + '」를 누르면 멈춘 곳부터 해요.', short: 'AI 사용 한도로 멈췄어요', go, resume: true };
-    return { text: 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 멈춘 곳부터 다시 해요.', short: 'AI가 멈췄어요', go, resume: true };
+    const from = kind === 'icon' ? '다시 그려요' : '멈춘 곳부터 해요';   // 아이콘은 처음 글을 다시 보낸다(이어서가 아니다)
+    if (S.stall === 'ended') return { text: '세션이 꺼져서 AI가 멈췄어요. 「' + go + '」를 누르면 세션을 다시 켜고 ' + from + '.', short: 'AI가 멈췄어요', go, resume: true };
+    if (S.stall === 'limit') return { text: (S.limit || 'AI 사용 한도에 걸려 멈췄어요.') + ' 풀린 뒤 「' + go + '」를 누르면 ' + from + '.', short: 'AI 사용 한도로 멈췄어요', go, resume: true };
+    return { text: 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 ' + (kind === 'icon' ? '다시 그려요' : '멈춘 곳부터 다시 해요') + '.', short: 'AI가 멈췄어요', go, resume: true };
   };
   const prevOf = (): 'what' | StudioStage | null => {
     if (rec.stage === 'plan') return rec.mode === 'new' ? 'what' : null;
@@ -813,7 +814,7 @@ async function build(rec: StudioRec): Promise<void> {
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
     } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
-    const st = stallInfo();
+    const st = runKind() === 'icon' ? null : stallInfo();   // 아이콘 기다림의 멈춤은 ④ 아이콘 칸이 말한다 — 위 줄의 「완료 · 다음 단계로」 를 가리지 않는다
     if (st) {   // 기다리던 AI 일이 멈췄다 — «만들고 있어요» 대신 까닭과 할 일(원준 2026-10-26)
       kids.length = 0; text = st.text;
       if (S.stall === 'ask') kids.push(nowBtn('AI 세션 보기', true, () => { S.chatMode = 'float'; applyPlace(); }));
@@ -1129,11 +1130,13 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const paintDraft = (): void => { paintDraftView(); void findApp(); };
   /** 지금 AI 의 답을 기다리는 일 — 없으면 null(멈춤을 볼 까닭이 없다). */
-  const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | null => {
+  const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | 'icon' | null => {
     if (rec.stage === 'plan' && !rec.card) return 'plan';
     if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) return 'draft';
     if (S.waiting) return 'fix';   // 고침 기다림은 기록(rec.fixing)에 있다 — 나갔다 새로 열어도 멈춤을 본다
     if (rec.stage === 'check' && S.checkWait) return 'check';
+    //  ④ 「AI에게 그려 달라기」 도 멈춤을 본다 — 세션이 꺼진 채 보냈더니 «그리고 있어요» 만 끝없이 돌았다(원준 2026-10-28 «언제까지 기다려야하는지»).
+    if (S.iconWait) return 'icon';
     return null;
   };
   const reviewStall = (): { text: string; resume: boolean } | null => { const st = stallInfo(); return st ? { text: st.text, resume: st.resume } : null; };
@@ -1144,6 +1147,7 @@ async function build(rec: StudioRec): Promise<void> {
     else if (rec.stage === 'fix' && S.waiting) paintHub();
     if (S.waiting) { window.clearTimeout(S.tick); if (was && !k) S.waitT0 = Date.now(); tickWait(); }   // 다시 돌면 시계는 그때부터
     if (S.review) S.review.update({ stall: reviewStall() });
+    if (rec.stage === 'check' && S.iconWait) paintCheck();   // ④ 아이콘 기다림 칸이 까닭과 「다시 부탁하기」 를 말한다
     paintNow();
   };
   /** 새로 AI 에게 일을 맡겼다 — 지난 멈춤을 걷고 60초 동안은 멈췄다 하지 않는다(말이 막 닿는 틈). */
@@ -1185,9 +1189,11 @@ async function build(rec: StudioRec): Promise<void> {
       let ok = false;
       for (let i = 0; i < (restored ? 3 : 1) && !ok && !S.dead; i++) {
         if (i) await new Promise((r) => window.setTimeout(r, 3000));
-        ok = await send(resumeBrief(kind));
+        //  아이콘은 처음 글을 그대로 다시 — 꺼진 세션으로 간 글은 AI 가 받은 적이 없다(«이어서» 가 아니다).
+        ok = await send(kind === 'icon' && S.iconLast ? S.iconLast : resumeBrief(kind === 'icon' ? 'check' : kind));
       }
-      if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');
+      if (ok && kind === 'icon') { armIconWait(); toast('아이콘을 다시 그려 달라고 AI에게 보냈어요.'); if (rec.stage === 'check') paintCheck(); }
+      else if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');
     } finally { resuming = false; }
   };
   const nameIn = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '40', 'aria-label': '앱 이름' }) as HTMLInputElement;
@@ -1227,12 +1233,17 @@ async function build(rec: StudioRec): Promise<void> {
   const askIcon = async (): Promise<void> => {
     if (S.iconWait || !rec.appId) return;
     await drain();   // 보내기 전에 쌓인 답(④ 대조)을 먼저 읽는다
-    if (S.dead || !(await send(iconBrief(nameIn.value.trim() || S.title, rec.appId, iconAsk.value, iconNow())))) return;
+    const brief = iconBrief(nameIn.value.trim() || S.title, rec.appId, iconAsk.value, iconNow());
+    if (S.dead || !(await send(brief))) return;
+    S.iconLast = brief;
+    armIconWait();
+    if (rec.stage === 'check') paintCheck();
+  };
+  const armIconWait = (): void => {
     S.iconWait = true; S.iconMiss = false; S.iconT0 = Date.now(); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick);
     S.iconT = window.setTimeout(() => { if (S.dead || !S.iconWait) return; stopIconWait(); S.iconMiss = true; if (rec.stage === 'check') paintCheck(); }, 180000);
     //  흐른 시간은 그 글자만 고친다(다시 그리지 않는다 — 적던 칸 · 끌던 손잡이가 흔들리지 않게).
     S.iconTick = window.setInterval(() => { const n = document.querySelector('.v2-studio-ico-waitclock'); if (n) n.textContent = mmss(Date.now() - S.iconT0); }, 1000);
-    if (rec.stage === 'check') paintCheck();
   };
   //  기다림을 걷는다 — 답이 왔을 때 · 3분이 지났을 때 · 사람이 「그만 기다리기」 를 눌렀을 때. 늦게 온 답도 onText 가 받아 그림 목록에 더한다.
   const stopIconWait = (): void => { S.iconWait = false; window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); };
@@ -1338,6 +1349,7 @@ async function build(rec: StudioRec): Promise<void> {
       onclick: () => { S.colorOpen = !S.colorOpen; S.hexBad = false; if (S.colorOpen) S.cpick = hexToHsv(cur ? cur.color : ICON_COLORS[0].color); paintCheck(); } },
       el('span', { class: 'v2-studio-ico-more-dot', ...(custom ? { style: 'background: var(--gi-c-' + faceOf(cur) + ')' } : {}) }), el('span', { text: '다른 색' }));
     const askBtn = el('button', { type: 'button', class: 'v2-studio-go sm', 'data-ico-k': 'ask', text: 'AI에게 그려 달라기', disabled: S.iconWait || !rec.appId, onclick: () => { void askIcon(); } });
+    const stall = S.iconWait ? stallInfo() : null;   // 기다리는데 세션이 멈췄다 — 까닭 · 「다시 부탁하기」
     iconAsk.onkeydown = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); void askIcon(); } };
     return el('div', { class: 'v2-studio-ico-ed' },
       el('b', { text: '그림' }), el('div', { class: 'v2-studio-ico-grid' }, ...tiles),
@@ -1346,10 +1358,11 @@ async function build(rec: StudioRec): Promise<void> {
       el('b', { text: 'AI에게 부탁하기' }), el('div', { class: 'v2-studio-ico-ask' }, iconAsk, askBtn),
       //  기다리는 동안 — 흐른 시간 · 보통 걸리는 때 · 어디서 보나 · 그만 기다리기(원준 2026-10-28 «언제까지 기다려야하는지 감이 안오는데»).
       S.iconWait
-        ? el('div', { class: 'v2-studio-ico-wait', role: 'status', 'aria-live': 'polite' },
+        ? el('div', { class: 'v2-studio-ico-wait' + (stall ? ' stalled' : ''), role: 'status', 'aria-live': 'polite' },
           el('span', { class: 'v2-studio-ico-spin', 'aria-hidden': 'true' }),
           el('div', {}, el('b', {}, 'AI가 아이콘을 그리고 있어요 ', el('span', { class: 'v2-studio-ico-waitclock', text: mmss(Date.now() - S.iconT0) })),
-            el('small', { text: '보통 1분 안에 끝나요. 진행은 위 「AI 세션 보기」에서 볼 수 있어요.' })),
+            el('small', { class: stall ? 'warn' : '', text: stall ? stall.text : '보통 1분 안에 끝나요. 진행은 위 「AI 세션 보기」에서 볼 수 있어요.' })),
+          ...(stall && stall.resume ? [el('button', { type: 'button', class: 'v2-studio-go sm', 'data-ico-k': 'resume', text: stall.go, onclick: () => { void resumeRun(); } })] : []),
           el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'stopwait', text: '그만 기다리기', title: '나중에 답이 오면 그림 목록에 더해 둬요', onclick: () => { stopIconWait(); paintCheck(); } }))
         : el('small', { role: 'status', 'aria-live': 'polite', class: S.iconMiss ? 'warn' : '', text: S.iconMiss ? '3분 동안 답이 없었어요. 「AI 세션 보기」에서 확인하거나 다시 부탁해주세요.' : '원하는 그림을 적으면 AI가 새로 그려 그림 목록 맨 앞에 더해요.' }));
   };

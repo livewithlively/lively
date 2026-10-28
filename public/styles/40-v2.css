@@ -1986,6 +1986,9 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-ico-wait > div { flex: 1 1 auto; min-width: 0; display: grid; gap: 2px; }
 .v2-studio-ico-wait b { font-size: 13px; }
 .v2-studio-ico-wait small { font-size: 12px; color: var(--ink-sub); }
+.v2-studio-ico-wait small.warn { color: var(--warn-text, #9A5B2E); }
+.v2-studio-ico-wait.stalled .v2-studio-ico-spin { animation: none; border-top-color: var(--warn-text, #9A5B2E); }
+.v2-studio-ico-wait { flex-wrap: wrap; }
 .v2-studio-ico-waitclock { font-variant-numeric: tabular-nums; color: var(--purple-text, #5B3FD0); }
 .v2-studio-ico-spin { width: 16px; height: 16px; flex: none; border-radius: 999px; border: 2px solid color-mix(in srgb, var(--purple, #7B61E0) 25%, transparent); border-top-color: var(--purple, #7B61E0); animation: v2-studio-ico-spin .9s linear infinite; }
 @keyframes v2-studio-ico-spin { to { transform: rotate(360deg); } }
