@@ -141,6 +141,7 @@ const GUIDE =
   let input = {}; try { input = JSON.parse(stdinData || "{}"); } catch { return; }
   const boxId = executionSessionId(input);
   if (!boxId) return;
+  if (input.lively_prompt_injected) return;     // 작업 끝 알림·하위 에이전트 보고는 세션이 무엇인지 말해 주지 않는다(러너 판정)
   if (!namingPromptOk(input.prompt)) return;
 
   // 세션당 1회 — O_EXCL 원자 생성(병렬 턴 대비). 이게 이 훅의 **유일한** I/O 다.
