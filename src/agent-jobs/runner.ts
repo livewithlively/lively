@@ -27,6 +27,12 @@ export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
 /** 판(부트)이 받는 env 이름 — 작업 id 와 일회용 부트 비밀. 부트가 읽자마자 지운다(하네스에 안 물려준다). */
 export const JOB_ID_ENV = "LVLY_JOB_ID";
 export const JOB_BOOT_ENV = "LVLY_JOB_BOOT";
+/**
+ * 박스 위 실행면(#5082 launch-host.ts)만 싣는 env 둘 — 판이 부를 루프백 포트 · 워크스페이스(`x-lively-workspace`, 셀프호스트 다중 워크스페이스).
+ *  매니지드 판은 싣지 않는다 — 그 판의 `localhost:8080` 은 세션 루프백이고 테넌트는 브로커가 붙인다(판이 정하지 않는다). 없으면 종전 그대로다.
+ */
+export const JOB_PORT_ENV = "LVLY_JOB_PORT";
+export const JOB_WS_ENV = "LVLY_JOB_WS";
 /** 브로커 tmux 인자 상한(lvly-cloud validateTmuxArgv) — 부트가 넘으면 판이 아예 안 뜬다. */
 export const TMUX_ARG_MAX = 4096;
 
@@ -43,6 +49,7 @@ export const BOOT_SOURCE = [
   `const h=require("http"),e=process.env,id=e.${JOB_ID_ENV},k=e.${JOB_BOOT_ENV};delete e.${JOB_BOOT_ENV};let n=0;`,
   `const G={host:"${RUNNER_GATEWAY.host}",port:${RUNNER_GATEWAY.port}},u=s=>"/api/agent-jobs/"+encodeURIComponent(id)+"/"+s,`,
   `H={authorization:"Bearer "+k,"content-type":"application/json"};`,
+  `if(e.${JOB_PORT_ENV})G.port=+e.${JOB_PORT_ENV};if(e.${JOB_WS_ENV})H["x-lively-workspace"]=e.${JOB_WS_ENV};`,
   `const fail=(s,c,m,x)=>{console.error("lvly-job "+s+": "+c+" "+m);`,
   `const q=h.request({...G,path:u("boot-failed"),method:"POST",headers:H,timeout:5000},r=>{r.resume();r.on("close",()=>process.exit(x))});`,
   `q.on("timeout",()=>q.destroy());q.on("error",()=>process.exit(x));q.end(JSON.stringify({stage:s,status:c,message:String(m).slice(0,300)}))};`,
@@ -92,12 +99,15 @@ export const RUNNER_SOURCE = String.raw`
 const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process"), http = require("http");
 const J = job;
 const GW = { host: "${RUNNER_GATEWAY.host}", port: ${RUNNER_GATEWAY.port} };
+// 박스 위 실행면(#5082)만 싣는 둘 — 포트 · 워크스페이스. 없으면 종전 그대로(매니지드는 브로커가 테넌트를 붙인다).
+if (process.env.${JOB_PORT_ENV}) GW.port = Number(process.env.${JOB_PORT_ENV});
+const WS = process.env.${JOB_WS_ENV} || "";
 function call(kind, body, tries) {
   return new Promise((resolve) => {
     const once = (left) => {
       const data = JSON.stringify(body);
       const q = http.request({ host: GW.host, port: GW.port, path: "/api/agent-jobs/" + encodeURIComponent(String(J.id)) + "/" + kind, method: "POST",
-        headers: { authorization: "Bearer " + J.secret, "content-type": "application/json", "content-length": Buffer.byteLength(data) }, timeout: 20000 }, (r) => {
+        headers: Object.assign({ authorization: "Bearer " + J.secret, "content-type": "application/json", "content-length": Buffer.byteLength(data) }, WS ? { "x-lively-workspace": WS } : {}), timeout: 20000 }, (r) => {
         let b = ""; r.setEncoding("utf8"); r.on("data", (d) => { b += d; });
         r.on("end", () => {
           if (r.statusCode === 200) { try { resolve(JSON.parse(b)); } catch (e) { resolve({}); } return; }
@@ -120,7 +130,7 @@ let mcpPath = null;
 if (J.mcp) { mcpPath = path.join(dir, "mcp.json"); fs.writeFileSync(mcpPath, JSON.stringify(J.mcp), { mode: 0o600 }); }
 const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a)).filter((a) => a !== null);
 const env = Object.assign({}, process.env, J.env || {});
-delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV};
+delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV}; delete env.${JOB_PORT_ENV}; delete env.${JOB_WS_ENV};
 // 빈 설정 폴더 자리표(#4488 API 키 실행) — 하네스가 멤버 홈의 로그인을 읽지 않게 이 작업만의 설정 폴더를 만든다. 빈 값은 «그 변수를 지워라» 다.
 for (const k of Object.keys(env)) {
   if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; }

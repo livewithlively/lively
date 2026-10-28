@@ -40,6 +40,8 @@ const TOPOLOGY_ENV = [
   "LIVELY_SESSION_HARNESSES",
   //  #4931 — 노드 tmux 세대 스위치(새 세션을 고정판 전용 소켓에 띄우나 · 종전 기본 소켓으로 되돌리나).
   "LIVELY_MUX_PIN",
+  //  #5082 — 브로커 없는 박스의 에이전트 작업 실행면 스위치 · 그 판이 부를 루프백 포트(«작업 판이 어디서 도나»).
+  "LIVELY_AGENT_JOBS", "LIVELY_AGENT_JOBS_PORT",
 ];
 
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.

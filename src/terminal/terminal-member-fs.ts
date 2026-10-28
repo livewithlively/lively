@@ -379,6 +379,31 @@ export function memberWriteFile(osUser: string, absPath: string, data: string, m
  *   링크를 따라가지 않고 링크 자체를 갈아 끼운다. 목적지가 디렉터리면 그 안으로 옮겨지는 대신 거절한다.
  *  경로·임시 꼬리는 argv($0·$1), 값은 stdin 이다(memberWriteFile 과 같은 인젝션 없는 규약).
  */
+/**
+ * 비밀을 그 멤버만 여는 **새 임시 폴더**(mktemp -d — 0700 · 추측할 수 없는 이름) 안 파일(0600)에 두고 그 경로를 돌려준다(#5082 박스 위
+ *  작업 판의 부트 비밀). 경로를 부르는 쪽이 정하지 않는다 — 그 멤버가 폴더를 새로 만들므로 남이 미리 심어 둔 파일 · 링크에 쓸 일이 없다.
+ *  값은 stdin 이다(argv · 프로세스 목록에 안 남는다 — memberWriteSecretFile 과 같은 규약). 읽는 쪽이 파일과 폴더를 지운다.
+ */
+export function memberWriteTempSecret(osUser: string, data: string): Promise<string> {
+  const script = 'umask 077; d=$(mktemp -d "${TMPDIR:-/tmp}/lvly-job.XXXXXXXX") || exit 1; '
+    + 'if cat > "$d/boot"; then printf "%s" "$d/boot"; exit 0; fi; rm -f -- "$d/boot"; rmdir -- "$d"; exit 1';
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", script], ["pipe", "pipe", "pipe"]);
+    const err = collectErr(c);
+    const out = collectText(c.stdout);
+    c.on("error", reject);
+    const stdin = c.stdin;
+    if (!stdin) return reject(new Error("member temp secret: no stdin"));
+    stdin.on("error", reject);
+    stdin.end(data);
+    c.on("close", (code) => {
+      const p = out.get().trim();
+      if (code === 0 && p.startsWith("/") && p.endsWith("/boot")) return resolve(p);
+      reject(new Error(err.get() || `member temp secret exit ${code}`));
+    });
+  });
+}
+
 export function memberWriteSecretFile(osUser: string, absPath: string, data: string): Promise<void> {
   const nonce = crypto.randomBytes(12).toString("hex");
   const script = 'umask 077; [ -d "$0" ] && { echo "목적지가 디렉터리다: $0" >&2; exit 1; }; t="$0.$1.tmp"; set -C; '

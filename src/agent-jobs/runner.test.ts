@@ -7,7 +7,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
+import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -30,7 +30,8 @@ process.stdin.on("end", () => {
   const mcpFile = i > 0 ? process.argv[i + 1] : null;
   fs.writeFileSync(rec, JSON.stringify({
     argv: process.argv.slice(2), stdin, cwd: process.cwd(),
-    env: { boot: process.env.${JOB_BOOT_ENV} ?? null, id: process.env.${JOB_ID_ENV} ?? null, extra: process.env.EXTRA ?? null },
+    env: { boot: process.env.${JOB_BOOT_ENV} ?? null, id: process.env.${JOB_ID_ENV} ?? null, extra: process.env.EXTRA ?? null,
+      port: process.env.${JOB_PORT_ENV} ?? null, ws: process.env.${JOB_WS_ENV} ?? null },
     mcp: mcpFile && fs.existsSync(mcpFile) ? fs.readFileSync(mcpFile, "utf8") : null,
     mcpMode: mcpFile && fs.existsSync(mcpFile) ? (fs.statSync(mcpFile).mode & 0o777) : null,
   }));
@@ -48,6 +49,8 @@ process.stdin.on("end", () => {
 
 interface Seen {
   boot: number; ticks: Array<Record<string, unknown>>; results: Array<Record<string, unknown>>; auth: string[]; tickAt: number[]; resultAt: number[];
+  /** 요청마다 실린 워크스페이스 머리(#5082 — 박스 위 판만 싣는다) · 그 요청의 경로. */
+  ws: Array<{ url: string; ws: string | string[] | undefined }>;
   /** 시작 실패 보고(#4829 boot-failed) — 비밀 · 본문. */
   failed: Array<{ auth: string | undefined; body: Record<string, unknown> }>;
 }
@@ -58,7 +61,7 @@ async function gateway(o: {
   /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기 · 머리만 주고 멈추기. */
   bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
 }): Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
-  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [] };
+  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [], ws: [] };
   let resultCalls = 0;
   const srv = http.createServer((req, res) => {
     let body = "";
@@ -66,6 +69,7 @@ async function gateway(o: {
     req.on("data", (d) => { body += d; });
     req.on("end", () => {
       seen.auth.push(`${req.url} ${req.headers.authorization}`);
+      seen.ws.push({ url: String(req.url), ws: req.headers["x-lively-workspace"] });
       const json = (status: number, v: unknown): void => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(v)); };
       if (req.url === "/api/agent-jobs/1/boot") {
         seen.boot++;
@@ -152,7 +156,8 @@ await t("R2 정상 — 박동 · 결과 한 번(답·대화 id·종료코드) ·
     assert.ok(after.length >= 2 && after.every((a) => a.endsWith("Bearer CALLBACK-SECRET")), JSON.stringify(g.seen.auth));
     const h = JSON.parse(fs.readFileSync(record, "utf8"));
     assert.equal(h.stdin, "프롬프트 — 한글과 \"따옴표\"\n둘째 줄");
-    assert.deepEqual(h.env, { boot: null, id: null, extra: "1" });
+    assert.deepEqual(h.env, { boot: null, id: null, extra: "1", port: null, ws: null });
+    assert.ok(g.seen.ws.length >= 3 && g.seen.ws.every((x) => x.ws === undefined), "#5082 F1 — 포트 · 워크스페이스 env 가 없으면 머리를 싣지 않는다(매니지드 종전 그대로)");
     assert.equal(h.cwd, fs.realpathSync(tmp));
     assert.equal(h.argv[0], "--mcp-config");
     assert.notEqual(h.argv[1], MCP_CONFIG_PLACEHOLDER);
@@ -281,6 +286,43 @@ await t("R6 결과를 올리는 동안에도 박동한다 — 게이트웨이가
     const sent = g.seen.resultAt[0]!;
     const during = g.seen.tickAt.filter((at) => at > sent && at < sent + 1_200).length;
     assert.ok(during >= 3, `결과를 기다리는 1.2초 동안 박동 ${during}번(박동 간격 150ms)`);
+  } finally { await g.close(); }
+});
+
+/** 진짜 부트를 **원문 그대로**(포트 자리를 바꾸지 않고) — 박스 위 판처럼 포트 · 워크스페이스를 env 로 준다(#5082). */
+function runBootEnv(env: Record<string, string>): Promise<number | null> {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, ["-e", BOOT_SOURCE], { cwd: tmp, env: { ...process.env, [JOB_ID_ENV]: "1", [JOB_BOOT_ENV]: "BOOT-SECRET", ...env }, stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    p.stderr.on("data", (d) => { err += d; });
+    const kill = setTimeout(() => { p.kill("SIGKILL"); }, 30_000);
+    p.on("close", (code) => { clearTimeout(kill); if (code !== 0) console.log(`  (부트 stderr: ${err.slice(0, 300)})`); resolve(code); });
+  });
+}
+
+await t("#5082 F2·F3·F4 포트 · 워크스페이스 env — 부트 · 박동 · 결과가 모두 그 포트로 · 모든 콜백에 x-lively-workspace · 하네스는 그 env 를 안 받는다", async () => {
+  const record = path.join(tmp, "p1.json");
+  //  본체도 원문 그대로 준다 — 본체가 env 의 포트를 따라오지 못하면 박동 · 결과가 8080 으로 가서 이 게이트웨이에 안 닿는다.
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, runnerCode: RUNNER_SOURCE });
+  try {
+    assert.equal(await runBootEnv({ [JOB_PORT_ENV]: String(g.port), [JOB_WS_ENV]: "acme" }), 0);
+    assert.equal(g.seen.boot, 1);
+    assert.ok(g.seen.ticks.length >= 1, `박동 ${g.seen.ticks.length}`);
+    assert.equal(g.seen.results.length, 1, "결과가 그 포트로 왔다");
+    assert.ok(g.seen.ws.length >= 3, JSON.stringify(g.seen.ws));
+    for (const x of g.seen.ws) assert.equal(x.ws, "acme", `머리 없는 콜백: ${x.url}`);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.deepEqual(h.env, { boot: null, id: null, extra: "1", port: null, ws: null }, "작업 내부 env 는 하네스에 안 간다");
+  } finally { await g.close(); }
+});
+
+await t("#5082 F2 포트 env 만(워크스페이스 없음) — 그 포트로 가고 머리는 싣지 않는다", async () => {
+  const record = path.join(tmp, "p2.json");
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, runnerCode: RUNNER_SOURCE });
+  try {
+    assert.equal(await runBootEnv({ [JOB_PORT_ENV]: String(g.port) }), 0);
+    assert.equal(g.seen.results.length, 1);
+    assert.ok(g.seen.ws.every((x) => x.ws === undefined), JSON.stringify(g.seen.ws));
   } finally { await g.close(); }
 });
 

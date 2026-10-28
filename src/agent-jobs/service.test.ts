@@ -334,6 +334,14 @@ await t("V3 매니지드가 아니면 501", async () => {
   await assert.rejects(submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI), httpErr(501));
 });
 
+await t("V3b 못 띄우는 배포의 501 은 실행면이 준 문장(무엇을 켜면 되는지)을 그대로 싣는다 · 행을 만들지 않는다(#5082 B7)", async () => {
+  const w = world();
+  w.available = false; w.usable.add("alice:memo");
+  w.deps.unavailableMessage = () => "관리자가 LIVELY_AGENT_JOBS=host 를 켜면 됩니다(가짜)";
+  await assert.rejects(submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI), httpErr(501, /LIVELY_AGENT_JOBS=host/));
+  assert.equal(w.rows.size, 0);
+});
+
 // ── 배차 · 부트 · 박동 · 결과 ────────────────────────────────────────────────
 async function startedJob(w: World, who = "alice", app = "memo"): Promise<{ id: number; boot: string; sid: string }> {
   w.usable.add(`${who}:${app}`);
@@ -400,6 +408,30 @@ await t("B2 부트 성공 — 콜백 비밀 · 판 본체 · 하네스 인자(�
   assert.equal(lv.headers.Authorization, `Bearer tok-${id}`);
   assert.equal(lv.headers["x-lively-workspace"], "acme-1234");
   assert.equal(job.timeoutMs, row.timeout_sec * 1000);
+});
+
+await t("B2h 판이 받는 자리는 실행면이 준다(#5082 D) — 박스 위 판의 작업 폴더(박스 위 경로) · MCP 주소(그 박스의 루프백 포트) · 행의 작업 폴더는 그대로", async () => {
+  const w = world();
+  const seenRows: number[] = [];
+  w.deps.paneView = async (job) => { seenRows.push(job.id); return { cwd: "/srv/lively/apps/memo", mcpUrl: "http://127.0.0.1:18080/mcp" }; };
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.deepEqual(seenRows, [id], "그 작업으로 한 번 묻는다");
+  assert.equal(job.cwd, "/srv/lively/apps/memo");
+  assert.equal((job.mcp as any).mcpServers.lively.url, "http://127.0.0.1:18080/mcp");
+  assert.equal((job.mcp as any).mcpServers.lively.headers["x-lively-workspace"], "acme-1234", "워크스페이스 머리는 그대로");
+  assert.equal(w.rows.get(id)!.cwd, "/work/apps/memo", "행에는 컨테이너 경로가 남는다(이어받기 · 홈 없는 작업 판정이 그 꼴을 본다)");
+});
+
+await t("B2i 판이 볼 자리를 못 구하면(실행면이 던짐) 그 작업은 돌지 않는다 — 실패(사유) · 방금 만든 토큰 폐기 · 410", async () => {
+  const w = world();
+  w.deps.paneView = async () => { throw new Error("작업 폴더를 박스 위 자리로 옮길 수 없습니다(가짜)"); };
+  const { id, boot } = await startedJob(w);
+  await assert.rejects(onBoot(id, boot, w.deps), httpErr(410));
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /실행 환경을 만들지 못했습니다: 작업 폴더를 박스 위 자리로/);
+  assert.deepEqual(w.revoked, [tokHash(id)], "판에 안 간 토큰은 바로 버린다");
 });
 
 await t("박동 — 비밀이 맞을 때만 · 진행 꼬리·대화 id 를 싣고 취소 요청을 돌려준다", async () => {

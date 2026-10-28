@@ -73,7 +73,7 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       //  작업 컨테이너 접수 — 입력 검증(앱 폴더 · 프로젝트 폴더)은 agent-jobs/service.submitAgentJob 과 같은 자.
       const svc = await import("../agent-jobs/service.js");
       const jobs = await (await import("../agent-jobs/live.js")).liveAgentJobDeps();
-      if (!(await jobs.available())) throw new HttpError(501, "작업 컨테이너는 매니지드 워크스페이스에서만 돕니다 — 이 실행은 단발(프록시)로만 됩니다");
+      if (!(await jobs.available())) throw new HttpError(501, `${jobs.unavailableMessage?.() ?? "이 배포에서는 에이전트 작업을 띄울 수 없습니다"} — 이 실행은 단발(프록시)로만 됩니다`);
       const plan = await import("../agent-jobs/plan.js");
       const p = await jobs.policy();
       //  #4891 — 홈 없는 작업은 앱 폴더에서만 돈다(부르는 쪽이 이미 걸렀다 — 여기서도 프로젝트 폴더를 받지 않는다).

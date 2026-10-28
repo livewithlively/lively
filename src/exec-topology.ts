@@ -156,6 +156,34 @@ export interface ExecTopology {
    *  게이트웨이·매니지드 세션 호스트(중계)·윈도우 노드에선 읽기만 하고 쓰이지 않는다(`terminal/mux-generations` 의 켜짐 조건).
    */
   muxPin: MuxPinMode;
+  /**
+   * 브로커가 없는 박스의 에이전트 작업 실행면(`LIVELY_AGENT_JOBS`, #5082) — 앱 AI 에이전트 작업(`claude -p` 판)을 어디서 띄우나.
+   *  · `off`(기본) = 띄우지 않는다(종전 — 접수가 501).
+   *  · `host` = 이 박스의 tmux 에 판을 띄운다 — 사람 세션과 같은 OS 계정 · 홈 규칙(agent-jobs/launch-host.ts).
+   *  ⚠ 세션 컨테이너 확보 훅이 있는 배포(매니지드)는 이 값을 보지 않는다 — 늘 브로커 길이다(agent-jobs/surface.ts).
+   *  ⚠ 값은 **정확히** `host`(앞뒤 공백만 벗긴다). 켜는 스위치는 관대하게 읽지 않는다(`LIVELY_TMUX_ROUTE` 와 같은 규율).
+   */
+  agentJobs: AgentJobsMode;
+  /**
+   * 그 판이 부를 이 박스 게이트웨이의 루프백 포트(`LIVELY_AGENT_JOBS_PORT`, #5082). 기본 8080 — 청/녹 박스에선 색이 바뀌어도 그대로인
+   *  고정 진입점이다(deploy/linux/lively-loopback.socket). 게이트웨이를 다른 포트로 띄운 개발 박스만 바꾼다.
+   */
+  agentJobsPort: number;
+}
+
+/** `LIVELY_AGENT_JOBS` 의 값(#5082) — `agentJobs` 필드 머리말 참조. */
+export type AgentJobsMode = "off" | "host";
+
+/** `LIVELY_AGENT_JOBS` 파서(순수) — **정확히** `host` 만 켠다(앞뒤 공백만 벗긴다). 그 밖(빈 값 · 대소문자 · 오타)은 off. */
+export function parseAgentJobs(raw: string | undefined): AgentJobsMode {
+  return (raw ?? "").trim() === "host" ? "host" : "off";
+}
+
+/** `LIVELY_AGENT_JOBS_PORT` 파서(순수) — 1~65535 의 정수만. 그 밖(빈 값 포함)은 8080. */
+export function parseAgentJobsPort(raw: string | undefined): number {
+  const s = (raw ?? "").trim();
+  const n = /^[0-9]{1,5}$/.test(s) ? Number(s) : NaN;
+  return n >= 1 && n <= 65535 ? n : 8080;
 }
 
 /** `LIVELY_MUX_PIN` 의 세 값(#4931) — `muxPin` 필드 머리말 참조. */
@@ -301,7 +329,11 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   // ── muxPin (#4931) ──  노드 tmux 세대 스위치. 쓰이는 자리는 노드(소켓 배치·비윈도우)뿐이다.
   const muxPin = parseMuxPin(env.LIVELY_MUX_PIN);
 
-  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker, sessionHarnesses, muxPin };
+  // ── agentJobs (#5082) ──  브로커 없는 박스의 에이전트 작업 실행면 스위치와 판이 부를 루프백 포트.
+  const agentJobs = parseAgentJobs(env.LIVELY_AGENT_JOBS);
+  const agentJobsPort = parseAgentJobsPort(env.LIVELY_AGENT_JOBS_PORT);
+
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker, sessionHarnesses, muxPin, agentJobs, agentJobsPort };
 }
 
 let frozen: ExecTopology | null = null;

@@ -99,12 +99,17 @@ const KEYS = Object.keys(DEFAULT_AGENT_JOB_POLICY) as Array<keyof AgentJobPolicy
 async function limitsSnapshot(): Promise<Record<string, unknown>> {
   const { agentJobPolicyRow } = await import("../agent-jobs/store.js");
   const row = await agentJobPolicyRow();
+  const policy = resolveAgentJobPolicy(row);
+  //  #5082 — 이 배포의 실행면과 작업 메모리 상한이 실제로 걸리나(셀프호스트 박스에서 cgroup 래퍼를 못 쓰면 상한 없이 돈다 — 관리자가 여기서 본다).
+  const { describeJobSurface } = await import("../agent-jobs/surface.js");
+  const surface = await describeJobSurface(policy.memory_max_mb).catch(() => null);
   return {
-    policy: resolveAgentJobPolicy(row),          // 지금 쓰는 값(DB > env 시드 > 기본값)
+    policy,                                      // 지금 쓰는 값(DB > env 시드 > 기본값)
     workspace_setting: row,                      // 관리자가 이 워크스페이스에 적은 값
     source: agentJobPolicySource(row),
     defaults: DEFAULT_AGENT_JOB_POLICY,
     range: AGENT_JOB_POLICY_RANGE,
+    surface,
   };
 }
 
@@ -112,7 +117,9 @@ const agentJobLimits: Capability = {
   name: "agent_job_limits",
   title: "에이전트 작업 상한 보기",
   description: "작업 컨테이너의 워크스페이스 상한 — max_running(동시) · max_running_per_member(실행 계정당 동시) · max_queued(대기열) · queue_wait_min(대기 상한) · " +
-    "default_timeout_min · max_timeout_min(실행 시간) · silent_sec(판 무응답) · start_timeout_sec(시작 상한) · keep_days(끝난 작업 기록 보존 일수 — 지나면 행째 지움 · 0 = 무기한 · 앱 AI 실행 기록은 따로 남음). " +
+    "default_timeout_min · max_timeout_min(실행 시간) · silent_sec(판 무응답) · start_timeout_sec(시작 상한) · keep_days(끝난 작업 기록 보존 일수 — 지나면 행째 지움 · 0 = 무기한 · 앱 AI 실행 기록은 따로 남음) · " +
+    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트 박스 위 실행에서 cgroup 으로 건다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
+    "surface 는 이 배포의 실행면(broker 매니지드 · host 셀프호스트 박스 위 · none 못 띄움)과 메모리 상한을 실제로 걸 수 있는지다. " +
     "고치기는 관리자 agent_job_limits_set. 구성원 누구나.",
   scope: null,
   input: {},
