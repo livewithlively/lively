@@ -42,6 +42,19 @@ export function overrideSourceMeta(stageMeta: Record<string, unknown>, builtinId
  * 지울 판(순수) — 구성원 판 가운데 최신 keep 개 밖의 것. 원본 판은 절대 안 지운다.
  *  rows 의 순서는 가리지 않는다(version_no 로 정렬해서 본다).
  */
+/**
+ * 설치된 내용이 어느 판 «하나»인가 — 같은 내용(해시)의 판이 여럿일 수 있다(예: 바뀐 것 없이 두 번 저장한 «마무리» 판).
+ *  내용으로만 고르면 그 판들이 모두 «지금 쓰는 버전»으로 서서 버전 목록에 지금 판이 둘 보였다(#4632 2026-10-29 회의록 V12 · V13).
+ *  지금 판 번호가 그 내용이면 그 번호, 아니면 그 내용의 가장 최근 판. 내용이 없거나 맞는 판이 없으면 null.
+ */
+export function installedVersionNo(contentHash: string | null, currentNo: number | null, versions: ReadonlyArray<{ version_no: number; content_hash: string | null }>): number | null {
+  if (!contentHash) return null;
+  const same = versions.filter((v) => v.content_hash != null && v.content_hash === contentHash);
+  if (!same.length) return null;
+  if (currentNo != null && same.some((v) => v.version_no === currentNo)) return currentNo;
+  return Math.max(...same.map((v) => v.version_no));
+}
+
 export function versionsToPrune(
   rows: ReadonlyArray<{ version_no: number; origin: AppVersionOrigin | string }>, keep: number = APP_VERSION_KEEP,
   protect: ReadonlyArray<number | null | undefined> = [],

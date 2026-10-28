@@ -22,7 +22,7 @@ import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
 import { builtinAppDir } from "../apps/builtin-root.js";
 import {
   filesFromStored, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
-  readPackageDir, uiPagesFromFiles, versionsToPrune, type AppFile,
+  installedVersionNo, readPackageDir, uiPagesFromFiles, versionsToPrune, type AppFile,
 } from "../apps/app-versions.js";
 //  #4481 앱 v2-2 — 판 파일은 파일 목록(bundle) + 저장소(S3 · 자가호스팅 DB). 읽기·쓰기는 app-version-files 한 자리를 지난다.
 import { appBundlePolicy, insertVersion, publishedScreens, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
@@ -973,11 +973,14 @@ const appVersions: Capability = {
     const pubNo = app.visibility === "all" ? (app.draft_by ? app.published_version_no : null) : null;
     //  남의 공개 전 판(마지막 공개 뒤 다른 사람이 저장한 판)은 그 사람 · 책임자 · 관리자에게만 선다(격리 리뷰 NB-6).
     const since = publishedAtMs(app);
-    const versions = (await store.listAppVersions(id)).filter((v) => !isOthersPendingVersion(app, v, who, since)).map((v) => ({
+    const all = await store.listAppVersions(id);
+    //  설치된 내용의 판은 하나로 고른다 — 같은 내용의 판이 여럿이어도 «지금 쓰는 버전»은 하나다(installedVersionNo).
+    const inst = installedVersionNo(app.content_hash, app.current_version_no, all);
+    const versions = all.filter((v) => !isOthersPendingVersion(app, v, who, since)).map((v) => ({
       ...v,
-      is_current: sees != null ? v.version_no === sees : isCurrentVersion(app, v),
+      is_current: sees != null ? v.version_no === sees : v.version_no === inst,
       //  초안이 없으면 설치된 상태가 곧 공개 판이다 — 그 판(내용 기준)을 공개 판으로 표시한다.
-      is_published: app.visibility === "all" && (pubNo != null ? v.version_no === pubNo : isCurrentVersion(app, v)),
+      is_published: app.visibility === "all" && (pubNo != null ? v.version_no === pubNo : v.version_no === inst),
     }));
     return {
       app_id: id, current_version_no: sees ?? app.current_version_no, builtin_version: app.builtin_version, overrides_builtin: isOverrideSource(app.source), versions,
