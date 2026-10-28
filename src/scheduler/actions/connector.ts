@@ -83,8 +83,10 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
 async function nudgeDistillNow(): Promise<void> {
   try {
     const { q, itemsPool } = await import("../../db/client.js");
-    const rows = await q(itemsPool,
-      `SELECT id FROM org_cron WHERE enabled=true AND action IN ('distill_sources_headless','distill_sources')`);
+    const { isNudgeableDistillJob } = await import("./distill-nudge.js");
+    const rows = (await q(itemsPool,
+      `SELECT id, cron_expr FROM org_cron WHERE enabled=true AND action IN ('distill_sources_headless','distill_sources')`))
+      .filter((r) => isNudgeableDistillJob(r as { cron_expr?: string | null }));
     if (!rows.length) return;
     const { runCronById } = await import("../engine.js");
     for (const r of rows) { try { await runCronById(String((r as Record<string, unknown>).id)); } catch { /* 한 잡의 실패가 나머지를 막지 않는다 */ } }

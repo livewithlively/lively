@@ -107,6 +107,9 @@ test("③ 기준이 자리표뿐인 뼈대를 «설정됨» 으로 세지 않는
 test("④ 수집이 끝나면 증류를 지금 민다", () => {
   assert.match(CONNECTOR, /void nudgeDistillNow\(\);/, "수집 완료가 증류로 이어지지 않는다");
   assert.match(CONNECTOR, /action IN \('distill_sources_headless','distill_sources'\)/, "증류 잡을 찾지 않는다");
+  //  시각형(cron_expr) 잡은 깨우지 않는다 — 깨우면 «야간에만» 같은 벽시계 약속이 수집 주기마다 깨진다(distill-nudge.ts).
+  assert.match(CONNECTOR, /SELECT id, cron_expr FROM org_cron/, "잡의 시각 설정을 안 읽는다 — 시각형 잡을 가를 수 없다");
+  assert.match(CONNECTOR, /\.filter\(\(r\) => isNudgeableDistillJob\(/, "시각형 잡을 걸러내지 않는다");
   //  수집의 성패를 증류가 좌우하면 안 된다.
   assert.match(CONNECTOR, /async function nudgeDistillNow\(\): Promise<void> \{\s*\n\s*try \{/,
     "증류 실패가 수집 잡을 깬다");
