@@ -26,7 +26,7 @@ const withEnv = <T>(vals: Record<string, string>, fn: () => T): T => {
 
 t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초 · 보존 90일(2026-10-19 결정)", () => withEnv({}, () => {
   assert.deepEqual(resolveAgentJobPolicy({}), {
-    max_running: 2, max_running_per_member: 2, max_queued: 20, queue_wait_min: 30,
+    max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 2, max_queued: 20, queue_wait_min: 30,
     default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180, keep_days: 90,
   });
   assert.deepEqual(resolveAgentJobPolicy(null), D);
@@ -36,7 +36,7 @@ t("Q2 범위 — 정확히 경계는 그대로 · 밖이면 경계로 접고 · 
   for (const k of Object.keys(R) as Array<keyof typeof R>) {
     const [lo, hi] = R[k];
     //  사람당 동시는 축 사이 관계(≤ 워크스페이스 동시 2)가 뒤따라 접으므로 따로 본다(Q3).
-    if (k === "max_running_per_member") continue;
+    if (k === "max_running_per_member" || k === "max_running_per_service_seat") continue;   // #5081 공용 시트 상한도 같은 관계(Q9)
     assert.equal(normalizeAgentJobPolicy({ [k]: lo })[k], lo, `${k} 최소 ${lo}`);
     assert.equal(normalizeAgentJobPolicy({ [k]: lo - 1 })[k], lo, `${k} 최소 밑은 최소로`);
     if (k !== "default_timeout_min") assert.equal(normalizeAgentJobPolicy({ [k]: hi + 1 })[k], hi, `${k} 최대 위는 최대로`);
@@ -98,6 +98,18 @@ t("Q8 보존 일수(#4828) — 0 은 무기한(유효한 선택) · 범위 0~365
     assert.equal(resolveAgentJobPolicy({ keep_days: 0 }).keep_days, 0, "DB 의 0(무기한)이 env 를 이긴다");
   });
   assert.equal(agentJobPolicyPatchError({ keep_days: 3650 }), null, "다른 축과 관계가 없다");
+}));
+
+t("Q9 공용 시트 상한(#5081) — 기본 2 · 범위 1~20 · ≤ 워크스페이스 동시(읽을 때 접고 · 고칠 때 거절) · 같아도 된다(경계)", () => withEnv({}, () => {
+  assert.equal(D.max_running_per_service_seat, 2);
+  assert.deepEqual(R.max_running_per_service_seat, [1, 20]);
+  assert.equal(resolveAgentJobPolicy({ max_running: 3, max_running_per_service_seat: 7 }).max_running_per_service_seat, 3, "읽을 때 워크스페이스 동시로 접는다");
+  assert.equal(resolveAgentJobPolicy({ max_running: 20, max_running_per_service_seat: 21 }).max_running_per_service_seat, 20, "범위 위는 최대로");
+  assert.equal(resolveAgentJobPolicy({ max_running_per_service_seat: 0 }).max_running_per_service_seat, 1, "범위 밑은 최소로");
+  assert.match(agentJobPolicyPatchError({ max_running_per_service_seat: 3 }) ?? "", /max_running_per_service_seat\(3\).*max_running\(2\)/, "기본 동시 2 보다 크면 거절");
+  assert.equal(agentJobPolicyPatchError({ max_running: 4, max_running_per_service_seat: 4 }), null, "같으면 된다(경계)");
+  assert.match(agentJobPolicyPatchError({ max_running: 4, max_running_per_service_seat: 5 }) ?? "", /이하/, "하나 넘으면 거절(경계)");
+  withEnv({ LIVELY_AGENT_JOB_MAX_RUNNING_PER_SERVICE_SEAT: "6", LIVELY_AGENT_JOB_MAX_RUNNING: "8" }, () => assert.equal(resolveAgentJobPolicy({}).max_running_per_service_seat, 6, "env 시드"));
 }));
 
 console.log(`# ${pass} pass`);

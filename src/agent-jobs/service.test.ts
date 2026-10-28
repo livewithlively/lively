@@ -55,6 +55,11 @@ interface World {
   /** 보존 기간 설정을 읽는 것이 던지나(#4828 — DB 가 잠깐 막힘). */
   policyRowError: boolean;
   claims: number;
+  /** #5081 배차가 자리 주기에 넘긴 공용 시트 묶음(부를 때마다) · 공용 시트 목록 읽기가 던지나. */
+  claimSeats: Array<ReadonlySet<string> | undefined>;
+  /** 저장소에 넣으려던 접수(#5081 — 공용 시트 표시를 본다). */
+  inserted: NewAgentJob[];
+  sharedSeats: Set<string> | "error";
   listening: number;
   /** 다음 부트를 «다른 판이 먼저 물었다» 로 만든다(한 번). */
   bootRace: boolean;
@@ -78,6 +83,7 @@ function world(): World {
   const ended = (s: string): boolean => ["done", "failed", "timeout", "canceled"].includes(s);
   const store: AgentJobDeps["store"] = {
     async insertAgentJob(j: NewAgentJob, p) {
+      w.inserted.push(j);
       const queued = [...rows.values()].filter((r) => r.status === "queued").length;
       const running = [...rows.values()].filter((r) => r.status === "starting" || r.status === "running").length;
       const room = p.max_queued > 0 ? queued < p.max_queued : running < p.max_running && queued === 0;
@@ -101,7 +107,8 @@ function world(): World {
       const queued = [...rows.values()]
         .filter((r) => r.status === "queued" && !r.cancel_requested && (r.attempts === 0 || now - (requeuedAt.get(r.id) ?? 0) >= gapMs))
         .sort((a, b) => a.id - b.id);
-      const pick = planClaims(live, queued, p);
+      w.claimSeats.push(o.sharedSeats);
+      const pick = planClaims(live, queued, p, o.sharedSeats);
       return pick.map((id) => {
         const m = mint(id);
         const r = rows.get(id)!;
@@ -201,7 +208,7 @@ function world(): World {
   };
   Object.assign(w, {
     rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
-    mintError: null, onMint: null, beforeFinish: null, beforeFailBoot: null, policyRowError: false, claims: 0, listening: 0, bootRace: false, available: true,
+    mintError: null, onMint: null, beforeFinish: null, beforeFailBoot: null, policyRowError: false, claims: 0, claimSeats: [], inserted: [], sharedSeats: new Set<string>(), listening: 0, bootRace: false, available: true,
     policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(), prunedWith: [],
     setNow: (ms: number) => { now = ms; },
   });
@@ -231,6 +238,7 @@ function world(): World {
     assertAppUsable: async (u, app) => { if (!w.usable.has(`${u.userId}:${app}`)) throw new HttpError(403, `앱 '${app}' 사용 동의(grant)가 없습니다`); },
     later: (fn, ms) => { w.later.push({ fn, ms }); },
     workspaceSlug: () => "acme-1234",
+    sharedSeats: async () => { if (w.sharedSeats === "error") throw new Error("설정을 못 읽었다(가짜)"); return w.sharedSeats; },
     hex8: () => (++hex).toString(16).padStart(8, "0"),
     now: () => now,
   };
@@ -1001,7 +1009,7 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
 async function endedJob(w: World, prompt: string, endedAgoDays: number): Promise<number> {
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
-    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false,
+    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false, sharedSeat: false,
   }, { ...w.policy, max_queued: 500 });
   assert.ok("row" in r);
   const row = w.rows.get(r.row.id)!;
@@ -1123,7 +1131,7 @@ await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(
   const w = world();
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true,
+    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true, sharedSeat: false,
   }, w.policy, w.deps);
   assert.equal(row.homeless, true);
   assert.equal(publicJob(row, { own: true }).homeless, true);
@@ -1131,6 +1139,36 @@ await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(
   const mine = await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), w.deps, UI);
   assert.equal(mine.homeless, false, "사람이 보낸 작업은 사람 자리");
   assert.equal(w.rows.get(mine.id as number)!.homeless, false);
+});
+
+await t("SS1 공용 시트(#5081) — 배차가 시트 묶음을 자리 주기에 넘긴다(보낸 사람당 + 시트 전체) · 못 읽으면 빈 묶음 · 사람 도구 접수는 표시 false", async () => {
+  const shared = (requester: string): NewAgentJob => ({
+    requester, accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
+    model: null, label: null, prompt: `${requester} 의 질문`, resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true,
+  });
+  const w = world();
+  w.policy = { ...w.policy, max_running: 4, max_running_per_member: 1, max_running_per_service_seat: 2 };
+  w.sharedSeats = new Set(["seat"]);
+  w.usable.add("seat:crm");   // 가짜 판정은 자리의 구성원으로 본다(진짜 판정 — 보낸 사람의 동의 — 은 live.assertSharedSeatJobAllowed)
+  for (const who of ["alice", "bob", "carol"]) await enqueueAgentJob(shared(who), w.policy, w.deps);
+  await w.drain(0);
+  assert.ok(w.claimSeats.length > 0 && w.claimSeats.every((s) => s?.has("seat")), "배차가 시트 묶음을 넘겼다(관측 장치)");
+  assert.deepEqual(w.launched.map((l) => w.rows.get(l.id)!.requester), ["alice", "bob"], "보낸 사람당 1 · 시트 전체 2 — 셋째는 기다린다");
+  assert.equal(w.inserted.every((j) => j.sharedSeat === true), true);
+  //  공용 시트 목록을 못 읽으면 빈 묶음으로 — 시트 계정 하나로 세는 종전 셈(더 좁다)으로 하나만 띄운다.
+  const e = world();
+  e.policy = { ...e.policy, max_running: 4, max_running_per_member: 1, max_running_per_service_seat: 2 };
+  e.sharedSeats = "error";
+  e.usable.add("seat:crm");
+  for (const who of ["alice", "bob"]) await enqueueAgentJob(shared(who), e.policy, e.deps);
+  await e.drain(0);
+  assert.ok(e.claimSeats.length > 0 && e.claimSeats.every((s) => s !== undefined && s.size === 0), "읽기 실패 → 빈 묶음");
+  assert.equal(e.launched.length, 1, "시트 계정 하나로 센다");
+  //  사람 도구(agent_job_run)로 보낸 작업은 공용 시트 표시를 달지 않는다(본인 구독뿐).
+  const h = world();
+  h.usable.add("alice:memo");
+  await submitAgentJob({ prompt: "일" }, appUser("alice", "memo"), h.deps, UI);
+  assert.equal(h.inserted.at(-1)!.sharedSeat, false);
 });
 
 console.log(`# ${pass} pass`);

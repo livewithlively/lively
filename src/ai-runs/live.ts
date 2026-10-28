@@ -76,8 +76,9 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       if (!(await jobs.available())) throw new HttpError(501, "작업 컨테이너는 매니지드 워크스페이스에서만 돕니다 — 이 실행은 단발(프록시)로만 됩니다");
       const plan = await import("../agent-jobs/plan.js");
       const p = await jobs.policy();
-      //  #4891 — 홈 없는 작업은 앱 폴더에서만 돈다(부르는 쪽이 이미 걸렀다 — 여기서도 프로젝트 폴더를 받지 않는다).
+      //  #4891 — 홈 없는 작업은 앱 폴더에서만 돈다(부르는 쪽이 이미 걸렀다 — 여기서도 프로젝트 폴더를 받지 않는다). #5081 공용 시트도 같다(시트 홈은 함께 쓴다).
       if (j.homeless && j.projectId != null) throw new HttpError(400, "홈 없는 작업은 앱 폴더에서만 돕니다");
+      if (j.sharedSeat && j.projectId != null) throw new HttpError(400, "공용 시트로 도는 작업은 앱 폴더에서만 돕니다");
       if (j.projectId != null) await jobs.assertProjectCwd(user, j.projectId);
       const cwd = j.projectId != null ? plan.projectFolderCwd(j.projectId) : plan.appFolderCwd(j.appId);
       let resumeConv: string | null = null;
@@ -142,8 +143,22 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     }),
     isAdmin,
     isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
+    memberFacts: memberFactsOf,
+    jobSharedSeat: async (jobId) => (await import("../agent-jobs/store.js")).agentJobSharedSeat(jobId),
   };
   return cached;
+}
+
+/**
+ * #5081 구성원의 사실 — 이 워크스페이스의 활성 사람 구성원인가 · 관리자 권한. 앱 서버 id(`app-server:…`)처럼 구성원 표에 없는 이름은 «아님».
+ *  공용 시트의 시트 계정과 보낸 사람(앱 서버가 실은 사람 신원이면 그 사람)을 같은 자로 본다 — agent-jobs/live.assertJobAllowed 도 이것을 쓴다.
+ */
+export async function memberFactsOf(member: string): Promise<{ active: boolean; admin: boolean }> {
+  const { getMember } = await import("../org/store/members.js");
+  const { workspaceAccessAllowed } = await import("../org/tenancy/gate.js");
+  const m = member ? await getMember(member) : null;
+  if (!m || m.state !== "active" || m.kind !== "human" || !(await workspaceAccessAllowed(m.id))) return { active: false, admin: false };
+  return { active: true, admin: Array.isArray(m.scopes) && m.scopes.includes("admin") };
 }
 
 /** 로그인 판정은 비싸다(원격 실행 2번) — 60초 기억(설계 §12 ④ «짧게 기억»). 모름(null)도 기억한다. */

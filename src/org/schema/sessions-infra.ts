@@ -619,6 +619,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  #4891 homeless — 사람 홈 없는 작업 컨테이너에서 도는 작업(앱 서버가 보낸 API 키 에이전트 작업). 그 작업 폴더는 앱 폴더뿐이고
   //   브로커는 멤버 홈을 붙이지 않는다(agent-jobs/launch.ts). 접수 때 정해지고 바뀌지 않는다.
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS homeless BOOLEAN NOT NULL DEFAULT false`);
+  //  #5081 shared_seat — 공용 시트로 도는 작업(앱 AI 실행이 접수). 자리(홈 · Claude 로그인)는 시트 계정 · 작업 AI 의 라이블리 신원은 보낸 사람.
+  //   접수 때 정해지고 바뀌지 않는다. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts SHARED_SEAT_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).

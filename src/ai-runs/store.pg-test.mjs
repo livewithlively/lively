@@ -130,6 +130,23 @@ try {
   const pol = await st.aiRunPolicyRow();
   const acc = await st.aiAccountRow();
   chk("T11 설정 칸 왕복", pol.max_inflight === 7 && acc.default.member === "alice" && acc.apps.crm.jobs.s.kind === "api_key", JSON.stringify([pol, acc]));
+
+  // ── T12 설정 칸 고쳐 쓰기(#5081 updateAiAccountRow) — 행 잠금으로 동시 고치기가 서로를 지우지 않는다 · 던지면 아무것도 안 쓴다 ──
+  //  관리자 승인과 본인 동의는 다른 사람이 거의 같이 적는다 — 읽고 → 쓰기 사이가 열려 있으면 한쪽이 사라진다(종전 writeAiAccountRow 는 그랬다).
+  await st.writeAiAccountRow({});
+  const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+  await Promise.all(["admin", "member"].map((part, i) => st.updateAiAccountRow(async (cur) => {
+    await sleepMs(i === 0 ? 150 : 0);   // 첫째가 읽고 오래 쥔다 — 잠금이 없으면 둘째가 같은 옛 값을 읽어 덮어쓴다
+    const s = { ...(cur ?? {}) };
+    s.service_seats = { ...(s.service_seats ?? {}), seat: { ...(s.service_seats?.seat ?? {}), [part]: part === "admin" ? { by: "root", at: "t" } : { at: "t" } } };
+    return { next: s, out: null };
+  })));
+  const both = (await st.aiAccountRow()).service_seats?.seat ?? {};
+  chk("T12 동시 고치기 — 관리자 승인과 본인 동의가 둘 다 남는다", !!both.admin && !!both.member, JSON.stringify(both));
+  let threw = null;
+  try { await st.updateAiAccountRow(() => { throw Object.assign(new Error("거절"), { status: 409 }); }); } catch (e) { threw = e; }
+  const after = (await st.aiAccountRow()).service_seats?.seat ?? {};
+  chk("T12b fn 이 던지면 쓰지 않는다(그 오류가 그대로 나온다)", threw?.status === 409 && !!after.admin && !!after.member, JSON.stringify({ status: threw?.status, after }));
 } catch (e) {
   bad("예외", String((e && e.stack) || e));
 } finally {

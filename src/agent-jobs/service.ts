@@ -24,6 +24,8 @@
 //  동의를 거두거나 앱이 꺼지거나 실행 계정이 비활성이 되면: 기다리는 작업은 띄우지 않고(배차 직전 재판정) · 도는 작업은 감시가 멈춘다
 //  (사유를 남겨 다음 박동에 끊김 · 띄우는 중이면 바로 끝내고 걷는다).
 //  관리자는 남의 작업의 상태·오류만 본다 — 프롬프트·답·진행 꼬리는 보낸 사람 것이다(작업은 그 사람의 홈·지식으로 돈다).
+//  #5081 공용 시트 작업(앱 AI 실행이 접수 — ai-runs)은 예외다: 자리(홈 · Claude 로그인)는 시트 계정, 작업 AI 의 라이블리 신원은 보낸 사람(앱 서버 급)이다.
+//   시트 지정을 거두거나 시트 계정이 관리자가 되거나 보낸 사람이 구성원이 아니게 되면 위와 같이 띄우지 않고 · 멈춘다(live.assertJobAllowed).
 //
 //  ⚠ 청/녹 두 슬롯이 같은 작업을 볼 수 있다 — 상태 전이는 전부 store 의 «지금 상태가 이것일 때만» 쓰기로 한 번만 넘어간다.
 import { HttpError } from "../http-error.js";
@@ -65,6 +67,11 @@ export interface AgentJobDeps {
   jobEnv?(job: AgentJobRow): Promise<Record<string, string>>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
+  /**
+   * #5081 지금 공용 시트로 켜진 계정들(관리자 승인 + 본인 동의) — 자리 주기가 그 시트의 작업을 보낸 사람당 · 시트 전체로 센다(plan.planClaims).
+   *  못 읽으면 빈 묶음으로 센다(시트 계정 하나로 세는 종전 셈 — 더 좁다).
+   */
+  sharedSeats?(): Promise<ReadonlySet<string>>;
   revokeToken(tokenHash: string): Promise<void>;
   /** 그 프로젝트 폴더에서 이 사람이 셸을 띄울 수 있나(사람 세션과 같은 판정 — 안 되면 던진다). */
   assertProjectCwd(user: LivelyUser, projectId: number): Promise<void>;
@@ -204,6 +211,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     resumeConversation: resumeConv, resumeJobId,
     timeoutSec: timeoutSecOf(input.timeout_min, p),
     homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
+    sharedSeat: false, // 이 길은 본인 구독뿐이다(#5081 공용 시트는 앱 AI 실행 — ai-runs — 으로만 생긴다)
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
@@ -252,8 +260,12 @@ const isTransient = (e: unknown): boolean => !!e && typeof e === "object" && (e 
 export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
   if (!(await d.available())) return 0;
   const p = await d.policy();
+  const sharedSeats = d.sharedSeats ? await d.sharedSeats().catch((e) => {
+    logger.warn({ err: (e as Error)?.message }, "[agent-job] 공용 시트 목록을 못 읽었다 — 이번 배차는 시트 계정 하나로 센다");
+    return new Set<string>();
+  }) : new Set<string>();
   const claimed = await d.store.claimAgentJobs(p, (id) => ({ sessionId: jobSessionId(id, d.hex8()), boot: d.store.newJobSecret() }),
-    { retryGapSec: LAUNCH_RETRY_GAP_SEC });
+    { retryGapSec: LAUNCH_RETRY_GAP_SEC, sharedSeats });
   for (const { row, bootSecret } of claimed) {
     logger.info({ job: row.id, session: row.session_id }, "[agent-job] 자리 받음 — 컨테이너를 띄운다");
     d.later(async () => {

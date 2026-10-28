@@ -162,7 +162,8 @@ await t("H4 띄우기 배선 — 판정은 OS 계정 · 확보 앞 · 확보 뒤
   assert.equal(body.split("prepareMemberHome(").length - 1, 1, "멤버 홈 준비는 한 자리");
   assert.equal(body.split("ensureMemberOsUser(").length - 1, 1, "OS 계정 준비는 한 자리");
   assert.match(body, /if \(user\) \{\n\s*const \{ ensureMemberOsUser \}/, "OS 계정 준비는 사람 자리만");
-  assert.match(body, /if \(user\) \{\n\s*const \{ prepareMemberHome \} = await import\(/, "멤버 홈 준비는 사람 자리만");
+  //  #5081 — 공용 시트 작업은 시트 홈에 키트 · git 자격을 심지 않는다(그 홈은 구성원 누구의 지시든 닿는 자리).
+  assert.match(body, /if \(user && !o\.sharedSeat\) \{\n\s*const \{ prepareMemberHome \} = await import\(/, "멤버 홈 준비는 사람 자리 · 공용 시트 작업이 아닐 때만");
 });
 
 console.log(`# ${pass} pass`);

@@ -15,6 +15,8 @@ import { qmark } from './lib/qmark.js';
 import { isInlineCardHarness, startInlineAiLogin, HEADLESS_INLINE, type InlineLoginHandle } from './lib/ai-login-inline.js';
 //  (#4970) 행 아래 펼쳐지는 로그인 칸은 한 벌이다 — 처음 설정 «AI 연결» 과 같은 부품을 쓴다.
 import { aiLoginPanel, aiLoginCodeRow, confirmSharedLogin } from './ai-login-panel.js';
+//  #5081 — 내 계정이 앱 AI 공용 시트로 지정됐을 때만 보이는 동의 칸(지정이 없으면 아무것도 안 그린다).
+import { myServiceSeatNotice } from './lib/ai-service-seat.js';
 
 // ── [내 설정 ▸ 내 AI 계정] 박스 — 내 AI 계정(#1085). ──
 //  '내 AI 에게 무엇을 알려줄까'(개인 규칙, 내 프로필 창)와 달리 이 박스는 '내 AI 가 **무엇으로, 누구 계정으로** 도는가'다.
@@ -306,10 +308,11 @@ function myAiAccountsCard() {
       const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);   // 프로젝트 세션은 전원 공개라 소유자로 좁힌다
       const accounts = ((acc || {}) as any).accounts || [];
       // 공용 계정이라는 사실은 행의 '서버 공용' 배지(+툴팁)로 충분하다 — 같은 말을 배너로 또 적지 않는다(사용자 요구).
+      const seat = await myServiceSeatNotice(meId, () => void load());
       body.replaceChildren(...(accounts.length
         ? accounts.map((a) => aiAccountRow(a, mine, load))
         : [el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI 가 없습니다.'))]),
-      ...headlessSection(headless, load));
+      ...headlessSection(headless, load), ...(seat ? [seat] : []));
     } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
   };
   void load();
@@ -374,8 +377,9 @@ function myAiAccountsGrid() {
       }
       //  실행 멤버를 정해야 하는 경우만 표 아래에 드러낸다(버튼이 필요하다). 나머지 사실은 (?) 안에 있다.
       const line = headless && !runnerSentence(headless) ? runnerLine(headless, load) : null;
-      body.replaceChildren(...rows, ...(line ? [line] : []));
-      if (!keys.length) body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI가 없습니다.')));
+      const seat = await myServiceSeatNotice(meId, () => void load());
+      body.replaceChildren(...rows, ...(line ? [line] : []), ...(seat ? [seat] : []));
+      if (!keys.length) body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI가 없습니다.')), ...(seat ? [seat] : []));
     } catch (e) { body.replaceChildren(errorNote(e, 'AI 계정 상태를 불러오지 못했습니다')); }
   };
   void load();

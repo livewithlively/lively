@@ -22,6 +22,8 @@ interface World {
   runs: Map<number, AiRunRow>; calls: NewLlmCall[]; jobs: Map<number, AgentJobRow>; submitted: SubmitJobInput[]; llm: SingleShotInput[]; canceled: number[];
   settings: AiAccountSettings; key: string | null; policy: AiRunPolicy; llmReply: (i: SingleShotInput, n: number) => SingleShotOutput; submitThrows?: HttpError;
   usedToday: number; inflightCount: number;
+  /** #5081 구성원 표(가짜) — 없는 이름은 활성 · 관리자 아님(앱 서버 id 는 늘 아님). 작업마다 공용 시트 표시. */
+  members: Record<string, { active: boolean; admin: boolean }>; jobShared: Map<number, boolean>;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -33,7 +35,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
   let seq = 0, jseq = 100;
   const w: World = {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
-    llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, ...o,
+    llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const d: AiRunDeps = {
@@ -67,7 +69,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     apiKey: async () => w.key,
     getApp: async (id) => app(id, { ai: { jobs: [{ name: "summarize" }] } }),
     assertAppUsable: async () => undefined,
-    submitJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.submitted.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: j.model, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null, homeless: j.homeless === true } as unknown as AgentJobRow); return { id }; },
+    submitJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.submitted.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: j.model, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null, homeless: j.homeless === true } as unknown as AgentJobRow); w.jobShared.set(id, j.sharedSeat === true); return { id }; },
     getJob: async (id) => w.jobs.get(id) ?? null,
     cancelJob: async (id) => { w.canceled.push(id); },
     singleShot: async (_k, i) => { w.llm.push(i); return w.llmReply(i, w.llm.length); },
@@ -83,6 +85,8 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     sessionTie: async (sid, member) => { const s = w.sessions[sid]; return s ? { owner: s.owner, participant: s.owner === member || s.members.includes(member), human: s.human !== false } : { owner: null, participant: false, human: false }; },
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
+    memberFacts: async (m) => (m.startsWith("app-server:") ? { active: false, admin: false } : w.members[m] ?? { active: true, admin: false }),
+    jobSharedSeat: async (id) => w.jobShared.get(id) === true,
   };
   return { w, d };
 }
@@ -307,13 +311,85 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
     prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7 };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
-  const homeless = agentJobOfRun({ ...base, homeless: true }, o);
+  const homeless = agentJobOfRun({ ...base, homeless: true, sharedSeat: false }, o);
   assert.deepEqual(homeless, {
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true,
+    model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true, sharedSeat: false,
   });
-  assert.equal(agentJobOfRun({ ...base, homeless: false }, o).homeless, false);
-  ok("S5c 작업 접수 → 작업 행이 홈 없는 표시를 그대로 옮긴다");
+  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false }, o).homeless, false);
+  //  #5081 — 공용 시트 표시도 그대로 옮긴다(빠지면 물은 사람의 작업이 시트 계정의 이름으로 돈다).
+  assert.equal(agentJobOfRun({ ...base, accountKind: "subscription", accountMember: "seat", homeless: false, sharedSeat: true }, o).sharedSeat, true);
+  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false }, o).sharedSeat, false);
+  ok("S5c 작업 접수 → 작업 행이 홈 없는 표시 · 공용 시트 표시를 그대로 옮긴다");
+}
+
+// ── S26 공용 시트(#5081) — 엣지 표 B2~B16(스크래치 spec.md): 켜진 시트는 구성원 누구나 · 앱 서버 사람 대리도 · 시트 홈 · 앱 폴더만 ──
+{
+  const NOW = "2026-10-28T00:00:00.000Z";
+  const seatOn = { default: { kind: "subscription" as const, member: "seat" }, service_seats: { seat: { admin: { by: "root", at: NOW }, member: { at: NOW } } } };
+  const srvUser = (id: string): LivelyUser => ({ ...appUser(id, "crm"), appServer: true } as LivelyUser);
+  //  B2 활성 구성원 · 세션 없음 → 받는다 · 보낸 사람 = 그 사람 · 계정 = 시트 · 작업은 시트 자리(구독) · 공용 시트 표시
+  const on = world({ settings: seatOn, key: null });
+  const r2 = await submitRun({ prompt: "정책 질문" }, appUser("alice", "crm"), { source: "app-front" }, on.d);
+  assert.equal(r2.requester, "alice"); assert.equal(r2.requester_kind, "member"); assert.deepEqual(r2.account, { kind: "subscription", member: "seat" });
+  const j2 = on.w.submitted.at(-1)!;
+  assert.equal(j2.accountMember, "seat"); assert.equal(j2.requester, "alice"); assert.equal(j2.sharedSeat, true); assert.equal(j2.homeless, false);
+  assert.equal(j2.bare, true, "B13 단발도 작업 컨테이너(bare)");
+  //  B4 앱 서버 + 사람 신원 → 받는다 · requester = 그 사람 · 시트 홈(홈 없는 자리 아님) · 에이전트 작업도
+  const r4 = await submitRun({ prompt: "변경안을 만들어", files: ["policy.md"] }, srvUser("bob"), { source: "web" }, on.d);
+  assert.equal(r4.requester, "bob"); assert.equal(r4.requester_kind, "app_server"); assert.equal(r4.executor, "job");
+  const j4 = on.w.submitted.at(-1)!;
+  assert.equal(j4.homeless, false, "공용 시트는 앱 서버 요청도 시트 홈에서"); assert.equal(j4.sharedSeat, true); assert.equal(j4.accountKind, "subscription");
+  assert.equal(j4.requester, "bob"); assert.equal(j4.projectId, null);
+  //  B15 시트 계정 본인 요청 → 받는다 · 표시도 공용 시트(한 규칙)
+  await submitRun({ prompt: "x" }, appUser("seat", "crm"), { source: "app-ui" }, on.d);
+  assert.equal(on.w.submitted.at(-1)!.sharedSeat, true);
+  //  B3 보낸 사람이 활성 구성원이 아님(비활성 · 다른 워크스페이스 — memberFacts 가 같은 «아님») · B5 사람 신원 없는 앱 서버(앱 서버 id)
+  const off = world({ settings: seatOn, key: null, members: { carol: { active: false, admin: false } } });
+  await fails(submitRun({ prompt: "x" }, appUser("carol", "crm"), { source: "app-front" }, off.d), 403, /활성 구성원이 보낸 요청에만/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, srvUser("carol"), { source: "web" }, off.d), 403, /활성 구성원이 보낸 요청에만/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, { ...appUser("app-server:t:crm", "crm"), appServer: true } as LivelyUser, { source: "web" }, off.d), 403, /활성 구성원이 보낸 요청에만/, "account_unavailable");
+  assert.equal(off.w.runs.size, 0, "거절은 행을 안 남긴다");
+  //  B7 기계 세션 · 모르는 세션 → 403
+  off.w.sessions["box-task"] = { owner: "alice", members: [], human: false };
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "mcp", session: "box-task" }, off.d), 403, /사람이 보는 세션/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "mcp", session: "box-nope" }, off.d), 403, /사람이 보는 세션/, "account_unavailable");
+  //  B8 project_id → 400 · 행 0 · 작업 0
+  const proj = world({ settings: seatOn, key: null });
+  await fails(submitRun({ prompt: "x", files: ["a.md"], project_id: 12 }, appUser("alice", "crm"), { source: "app-ui" }, proj.d), 400, /앱 폴더에서만/);
+  await fails(submitRun({ prompt: "x", files: ["a.md"], project_id: 12 }, srvUser("alice"), { source: "web" }, proj.d), 400, /앱 폴더에서만/);
+  assert.equal(proj.w.runs.size, 0); assert.equal(proj.w.submitted.length, 0);
+  //  B9 지정됐지만 시트가 관리자 → 공용 아님(앱 서버 · 남 모두 403 + 까닭) / B10 시트 비활성 → 공용 아님
+  const adm = world({ settings: seatOn, key: null, members: { seat: { active: true, admin: true } } });
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, adm.d), 403, /관리자 권한이 있어 공용으로 쓰지 않습니다/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, srvUser("alice"), { source: "web" }, adm.d), 403, /관리자 권한이 있어/, "account_unavailable");
+  const ina = world({ settings: seatOn, key: null, members: { seat: { active: false, admin: false } } });
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, ina.d), 403, /초대받은 사람/, "account_unavailable");
+  //  B11 작업 토큰은 공용 시트라도 403(작업이 작업을 낳지 않는다)
+  await fails(submitRun({ prompt: "x" }, { ...appUser("alice", "crm"), tokenHashPrefix: "jobtok" }, { source: "mcp" }, on.d), 403, /작업 안에서는/);
+  //  B12 API 키 · 앱 서버 에이전트 작업은 종전대로 홈 없는 자리 · 공용 시트 표시 없음
+  const keyed = world();
+  await submitRun({ prompt: "x", files: ["a.md"] }, srvUser("alice"), { source: "web" }, keyed.d);
+  assert.equal(keyed.w.submitted.at(-1)!.homeless, true); assert.equal(keyed.w.submitted.at(-1)!.sharedSeat, false);
+  //  B1/B6 지정 없음 — 종전 판정(사람 남 403 · 앱 서버 403) · 구성원 표를 읽지 않는다
+  const plain = world({ settings: { default: { kind: "subscription", member: "seat" } }, key: null });
+  let looked = 0; const facts = plain.d.memberFacts; plain.d.memberFacts = async (m) => { looked++; return facts(m); };
+  await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, plain.d), 403, /초대받은 사람/, "account_unavailable");
+  await fails(submitRun({ prompt: "x" }, srvUser("alice"), { source: "web" }, plain.d), 403, /앱 서버/, "account_unavailable");
+  assert.equal(looked, 0, "지정이 없으면 구성원 표를 읽지 않는다");
+  //  B14 형식 재시도 — 재시도 작업도 공용 시트 표시 · 시트 홈(원래 작업의 표시를 그대로)
+  const re = world({ settings: seatOn, key: null });
+  await submitRun({ prompt: "요약", schema }, appUser("alice", "crm"), { source: "app-front" }, re.d);
+  const first = re.w.jobs.get(101)!; first.status = "done"; first.conversation_id = "conv-1"; first.result = { text: "형식 밖 글" };
+  const mid = (await syncRun(re.w.runs.get(1)!, re.d))!;
+  assert.equal(mid.retries, 1, "재시도가 나갔다(관측 장치)");
+  assert.equal(re.w.submitted[1]!.sharedSeat, true, "재시도도 공용 시트"); assert.equal(re.w.submitted[1]!.homeless, false); assert.equal(re.w.submitted[1]!.resumeJobId, 101);
+  //  B16 targets — 같은 판정 · 공용 시트라고 알려 준다
+  const tg = await targetsFor(appUser("alice", "crm"), {}, on.d, {});
+  assert.equal((tg.account as { available: boolean }).available, true); assert.equal((tg.account as { shared_seat: boolean }).shared_seat, true);
+  const tgOff = await targetsFor(appUser("carol", "crm"), {}, off.d, {});
+  assert.equal((tgOff.account as { available: boolean }).available, false); assert.match(String((tgOff.account as { reason: string }).reason), /활성 구성원/);
+  ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 관리자/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets");
 }
 
 // ── S15~S19 동기화 — 작업 상태를 따라간다 · 형식 판정 · 재시도 1회 ──

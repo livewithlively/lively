@@ -1,6 +1,6 @@
 // 앱 AI 실행 행(org_app_ai_run) · 프록시 계측(org_app_llm_call) · 워크스페이스 설정 칸 — 읽고 쓰기만 한다 (#4488 앱 v2-9).
 //  ⚠ 모든 조회는 요청 컨텍스트(RLS)의 테넌트로 좁혀진다. 상태를 바꾸는 쓰기는 «지금 상태가 이것일 때만» 조건을 단다(청/녹 두 슬롯 · 정비가 겹쳐도 한 번만).
-import { itemsPool } from "../db/client.js";
+import { itemsPool, withTx } from "../db/client.js";
 import type { AiRunStatus, Executor, RunKind } from "./plan.js";
 
 export interface AiRunRow {
@@ -194,4 +194,17 @@ export async function aiAccountRow(): Promise<unknown> {
 }
 export async function writeAiAccountRow(next: unknown): Promise<void> {
   await itemsPool.query(`UPDATE org_runtime_config SET app_ai_account=$1::jsonb WHERE id=1`, [JSON.stringify(next ?? {})]);
+}
+/**
+ * 설정 칸을 읽고 고쳐 쓴다 — 한 트랜잭션 · 행 잠금(FOR UPDATE)으로(#5081). 실행 계정 설정과 공용 시트 지정(관리자 승인 · 본인 동의)은 다른 사람이
+ *  같은 칸을 거의 같이 고친다 — 읽고 → 쓰기 사이가 열려 있으면 한쪽 동의가 조용히 사라진다. fn 은 읽은 값을 받아 쓸 값을 돌려준다(던지면 아무것도 안 쓴다).
+ *  돌려주는 것: fn 이 돌려준 값.
+ */
+export async function updateAiAccountRow<T>(fn: (cur: unknown) => { next: unknown; out: T } | Promise<{ next: unknown; out: T }>): Promise<T> {
+  return withTx(async (c) => {
+    const r = await c.query(`SELECT app_ai_account FROM org_runtime_config WHERE id=1 FOR UPDATE`);
+    const { next, out } = await fn(r.rows[0]?.app_ai_account ?? {});
+    await c.query(`UPDATE org_runtime_config SET app_ai_account=$1::jsonb WHERE id=1`, [JSON.stringify(next ?? {})]);
+    return out;
+  });
 }

@@ -3,7 +3,7 @@
 //  상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만» 조건을 단다 — 청/녹 두 슬롯·감시·판 보고가 겹쳐도 한 번만 넘어간다.
 import crypto from "node:crypto";
 import { itemsPool, q, withTx } from "../db/client.js";
-import { planClaims, PRUNE_BATCH, type AgentJobStatus } from "./plan.js";
+import { planClaims, PRUNE_BATCH, type AgentJobStatus, type ClaimCandidate } from "./plan.js";
 import { AGENT_JOB_POLICY_RANGE, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
 export interface AgentJobRow {
@@ -98,6 +98,11 @@ export interface NewAgentJob {
    *  필수다 — 접수하는 자리가 빠뜨리면 컴파일이 잡는다(빠지면 사람 홈에서 돈다).
    */
   homeless: boolean;
+  /**
+   * #5081 공용 시트로 도는 작업 — 자리(홈 · Claude 로그인)는 시트 계정(account_member), 작업 AI 의 라이블리 신원은 보낸 사람(requester).
+   *  필수다(homeless 와 같은 까닭 — 빠지면 물은 사람의 작업이 시트 계정의 이름 · 권한으로 돈다).
+   */
+  sharedSeat: boolean;
 }
 
 /**
@@ -114,14 +119,35 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     const queued = Number(cnt[0]?.queued ?? 0), running = Number(cnt[0]?.running ?? 0);
     const room = p.max_queued > 0 ? queued < p.max_queued : running < p.max_running && queued === 0;
     if (!room) return { full: { queued, running } };
+    //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
+    const shared = j.sharedSeat === true;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless${shared ? ", shared_seat" : ""})
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15${shared ? ", true" : ""}) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
         j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true]);
     return { row: norm(rows[0])! };
   });
+}
+
+/**
+ * #5081 공용 시트 표시(org_agent_job.shared_seat)는 COLS 에 넣지 않고 따로 읽는다(agentJobSharedSeat).
+ *  ★ 매니지드 롤은 새 게이트웨이를 먼저 띄우고 공용 DB 마이그레이션을 맨 끝에 돌린다(roll-order-migrate-after-gw-swap-auth-outage-2026-10-20) —
+ *   COLS 에 새 칸을 넣으면 그 몇 분 동안 모든 작업 행 읽기 · 쓰기(RETURNING)가 «없는 칸» 으로 깨진다. 판의 결과 보고는 5초 × 24번(2분)만
+ *   다시 보내므로 그 사이 끝난 작업의 답이 사라진다. 그래서 이 칸은 공용 시트 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직
+ *   없으면(42703) false 다 — 칸이 없으면 그 칸을 단 행도 있을 수 없으니 그 답이 맞다.
+ */
+export const SHARED_SEAT_COL = "shared_seat";
+export async function agentJobSharedSeat(id: number): Promise<boolean> {
+  if (!Number.isSafeInteger(id) || id < 1) return false;
+  try {
+    const r = await q(itemsPool, `SELECT ${SHARED_SEAT_COL} AS shared FROM org_agent_job WHERE id=$1`, [id]);
+    return r[0]?.shared === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
 }
 
 /** 이 테넌트의 대기열 잠금(트랜잭션 끝에 풀린다) — 셈과 자리 주기를 한 줄로 세운다. 테넌트 GUC 가 없으면(단일 테넌트) 상수 열쇠. */
@@ -134,28 +160,27 @@ async function lockTenantQueue(c: Parameters<Parameters<typeof withTx>[0]>[0]): 
  *  돌려주는 것: 넘긴 행과 그 행의 부트 비밀 원문(판을 띄울 때 env 로 한 번 넘긴다 — DB 엔 해시만).
  */
 export async function claimAgentJobs(
-  p: Pick<AgentJobPolicy, "max_running" | "max_running_per_member">,
+  p: Pick<AgentJobPolicy, "max_running" | "max_running_per_member" | "max_running_per_service_seat">,
   mint: (jobId: number) => { sessionId: string; boot: { secret: string; hash: string } },
-  o: { retryGapSec?: number } = {},
+  o: { retryGapSec?: number; sharedSeats?: ReadonlySet<string> } = {},
 ): Promise<Array<{ row: AgentJobRow; bootSecret: string }>> {
   const gap = Math.max(0, Math.floor(o.retryGapSec ?? 0));
   return withTx(async (c) => {
     await lockTenantQueue(c);
-    //  사람당 상한의 축 = 자리의 구성원(plan.jobSeatMember 와 같은 식) — API 키 작업(account_member NULL)도 보낸 사람 자리에 앉으니 그 사람으로 센다(격리 리뷰).
-    const SEAT = `CASE WHEN account_kind='api_key' THEN requester ELSE account_member END AS account_member`;
-    const live = await q(c, `SELECT id, ${SEAT} FROM org_agent_job WHERE status IN ('starting','running')`);
+    //  사람당 상한의 축은 plan.planClaims 가 정한다(자리의 구성원 · 공용 시트는 보낸 사람 — #5081) — 여기선 그 판정에 드는 칸만 읽는다.
+    const CAND = `id, requester, account_kind, account_member`;
+    const live = await q(c, `SELECT ${CAND} FROM org_agent_job WHERE status IN ('starting','running')`);
     //  대기열 전부를 본다(상한 = max_queued 의 범위 끝) — 앞줄이 사람당 상한에 걸려 있어도 그 뒤의 남의 작업이 굶지 않게.
     //   일시 실패로 되돌린 작업(attempts > 0)은 되돌린 뒤 gap 초가 지나야 다시 받는다 — 쉬는 동안엔 뒤의 작업이 그 자리를 쓴다.
     const queued = await q(c,
-      `SELECT id, ${SEAT} FROM org_agent_job
+      `SELECT ${CAND} FROM org_agent_job
         WHERE status='queued' AND NOT cancel_requested AND (attempts = 0 OR updated_at < now() - make_interval(secs => $2))
         ORDER BY id LIMIT $1`,
       [QUEUE_SCAN_MAX, gap]);
-    const pick = planClaims(
-      live.map((r) => ({ id: Number(r.id), account_member: (r.account_member as string | null) ?? null })),
-      queued.map((r) => ({ id: Number(r.id), account_member: (r.account_member as string | null) ?? null })),
-      p,
-    );
+    const cand = (r: Record<string, unknown>): ClaimCandidate => ({
+      id: Number(r.id), requester: String(r.requester ?? ""), account_kind: String(r.account_kind ?? ""), account_member: (r.account_member as string | null) ?? null,
+    });
+    const pick = planClaims(live.map(cand), queued.map(cand), p, o.sharedSeats);
     const out: Array<{ row: AgentJobRow; bootSecret: string }> = [];
     for (const id of pick) {
       const m = mint(id);

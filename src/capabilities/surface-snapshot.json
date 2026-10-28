@@ -5667,6 +5667,16 @@
   "input_hash": "19d0e0ec491b4108"
  },
  {
+  "name": "app_ai_service_seat_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/ai-service-seats"
+  ],
+  "input_hash": "22eb112d59a8f7b2"
+ },
+ {
   "name": "app_ai_limits",
   "scope": null,
   "mcp": true,
@@ -5784,7 +5794,7 @@
   "rest": [
    "POST /api/ui/agent-job-limits"
   ],
-  "input_hash": "8d77283b0070ed8e"
+  "input_hash": "72bc81d7bb5ff6ce"
  },
  {
   "name": "browser_status",

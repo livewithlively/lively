@@ -5,19 +5,33 @@
 //   · 실행 계정은 게이트웨이가 **작업별 > 앱별 > 워크스페이스 기본값** 순으로 고른다(resolveAccount).
 //   · 실행 자리 = 작업 종류 × 실행 계정: 단발 + API 키 → LLM 프록시(컨테이너 없음) · 그 밖(단발+구독 · 에이전트 전부) → 작업 컨테이너(executorFor).
 //   · 구독은 «그 사람 본인(그 세션의 AI 포함) · 그 사람 세션에 초대받아 함께 보는 사람» 의 요청에만(#4423 · 상민 2026-10-19) — subscriptionRefusal.
+//     예외 하나 — 공용 시트(#5081 · 상민 2026-10-28): 관리자가 지정하고 그 계정 본인이 동의한 구독은 워크스페이스 구성원 누구의 요청이든 받는다.
 //   · 결과 형식: 스키마를 보내면 프롬프트 끝에 형식 지시 → 끝난 출력 규칙 검사 → 어긋나면 «형식에 맞게 다시» 1회 → 그래도 어긋나면 원문 붙여 실패.
 export type AiRunStatus = "queued" | "running" | "done" | "failed" | "canceled";
 export const isEndedRun = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
 
 export type AiAccount = { kind: "api_key" } | { kind: "subscription"; member: string };
 
-/** 워크스페이스 설정 한 칸(org_runtime_config.app_ai_account) — 기본 실행 계정 + 앱별·작업별 덮어쓰기 + 기본 모델. */
+/**
+ * 공용 시트 지정 한 줄(#5081) — 관리자 승인과 그 계정 본인의 동의. **둘 다 있어야** 켜진다(남의 개인 구독을 관리자가 혼자 공용으로 못 쓰게).
+ *  한쪽이라도 거두면 줄째 지운다(serviceSeatChange) — 다시 켜려면 두 동의를 새로 받는다.
+ */
+export interface ServiceSeat {
+  /** 관리자 승인 — 누가 · 언제(ISO). */
+  admin?: { by: string; at: string };
+  /** 그 계정 본인의 동의 — 언제(ISO). */
+  member?: { at: string };
+}
+
+/** 워크스페이스 설정 한 칸(org_runtime_config.app_ai_account) — 기본 실행 계정 + 앱별·작업별 덮어쓰기 + 기본 모델 + 공용 시트. */
 export interface AiAccountSettings {
   /** 워크스페이스 기본 실행 계정. 없으면 «API 키가 있으면 API 키» 로 접는다(resolveAccount 의 fallback). */
   default?: AiAccount;
   /** 단발 실행의 기본 모델(앱이 model 을 안 주면). 없으면 DEFAULT_MODEL. */
   default_model?: string;
   apps?: Record<string, { default?: AiAccount; jobs?: Record<string, AiAccount> }>;
+  /** #5081 공용 시트 지정 — 구성원 id → 승인 · 동의. */
+  service_seats?: Record<string, ServiceSeat>;
 }
 
 /** 프롬프트 상한(문자) — 작업 컨테이너의 PROMPT_MAX 와 같다(agent-jobs/plan.ts). */
@@ -61,8 +75,47 @@ export function parseAccountSettings(raw: unknown): AiAccountSettings {
       out.apps[appId] = entry;
     }
   }
+  if (isObj(o.service_seats)) {
+    const seats: Record<string, ServiceSeat> = {};
+    for (const [member, v] of Object.entries(o.service_seats)) {
+      if (!member.trim() || !isObj(v)) continue;
+      const seat: ServiceSeat = {};
+      if (isObj(v.admin) && str(v.admin.by)?.trim() && str(v.admin.at)) seat.admin = { by: String(v.admin.by).trim(), at: String(v.admin.at) };
+      if (isObj(v.member) && str(v.member.at)) seat.member = { at: String(v.member.at) };
+      if (seat.admin || seat.member) seats[member] = seat;
+    }
+    if (Object.keys(seats).length) out.service_seats = seats;
+  }
   return out;
 }
+
+/** (순수) 그 구성원의 공용 시트 지정이 두 동의(관리자 승인 · 본인 동의)를 다 받았나(#5081). */
+export function serviceSeatConsented(s: AiAccountSettings, member: string): boolean {
+  const seat = s.service_seats?.[member];
+  return !!seat?.admin && !!seat?.member;
+}
+
+/** 공용 시트 판정에 쓰는 그 계정의 사실 — service 가 설정과 구성원 표에서 모은다. */
+export interface SeatFacts {
+  /** 관리자 승인 + 본인 동의가 다 있나. */
+  consented: boolean;
+  /** 이 워크스페이스의 활성 사람 구성원인가. */
+  active: boolean;
+  /** 관리자 권한을 가졌나. */
+  admin: boolean;
+}
+
+/**
+ * (순수) 이 구독을 지금 공용으로 쓰나 — 두 동의 · 활성 사람 구성원 · **관리자 권한 없음**.
+ *  관리자 계정은 공용으로 쓰지 않는다: 공용 시트 실행은 구성원 누구의 지시든 그 계정의 홈(Claude 로그인 · 그 계정이 사람 세션을 열면
+ *  심기는 라이블리 토큰 · git 자격)에서 돈다. 관리자 계정이면 지시 한 줄로 누구나 관리자 토큰에 닿는다(같은 uid — 운영체제 경계가 없다).
+ */
+export function seatShared(f: SeatFacts | null | undefined): boolean {
+  return !!f && f.consented && f.active && !f.admin;
+}
+
+/** 공용 시트 판정의 입력 — 그 계정의 사실 + 보낸 사람이 이 워크스페이스의 활성 사람 구성원인가(앱 서버가 실은 사람 신원이면 그 사람). */
+export interface SeatTerms { facts: SeatFacts; requesterActive: boolean }
 
 /**
  * (순수) 실행 계정 — 작업별 > 앱별 > 워크스페이스 기본값 > (API 키가 있으면) API 키. 아무것도 없으면 null(«실행 계정 없음»).
@@ -105,18 +158,34 @@ export function executorFor(kind: RunKind, account: AiAccount): Executor {
  *  제 토큰과 세션 헤더만으로 세션 밖 스크립트에서도 S 구독을 쓸 수 있다(초대 = 함께 보는 사람이라는 결정의 범위 안). ② 들어갈 수 있나(sessionCanEnter)는
  *  끝난 세션도 참으로 본다 — 수명을 두려면 세션 활성 여부를 더 봐야 한다. ③ 세션 없는 S 본인의 토큰(REST)은 사람 세션인지 가릴 길이 없어 본인으로 통과한다.
  *  ④ 앱 주소(app-front · 새 탭)에서 초대받은 사람이 보내는 것은 세션이 안 실려 거절된다(S 본인은 된다).
+ *
+ *  공용 시트(#5081 · 상민 2026-10-28 — seat 를 주고 seatShared 가 참일 때): 본인 · 초대 조건을 건너뛴다. 남는 조건은 둘이다 — 보낸 사람이 이 워크스페이스의
+ *  활성 사람 구성원인가(seat.requesterActive) · 기계 세션에 매이지 않았나(tie). **앱 서버가 사람 신원을 실어 보낸 요청**(서명 신원 · 작업 돌기 신원 ·
+ *  앱 선언 도구의 server 실행기)도 받는다 — 보낸 사람은 그 신원의 사람이다. 사람 신원이 없는 앱 서버 자체 호출 · 자동화(#4491)는 보낸 사람이
+ *  구성원이 아니라(앱 서버 id) requesterActive 에서 걸린다. 작업 AI 자신의 토큰은 부르는 쪽(service.submitRun)이 그 전에 거절한다.
  */
 /** 요청이 매인 세션(ctx.session)의 사실 — 주인 · 보낸 사람이 들어갈 수 있나 · 사람 세션인가(kind human — 위탁·상시·앱·로그인 세션이 아니다). */
 export interface SessionTie { owner: string | null; participant: boolean; human: boolean }
-export function subscriptionRefusal(account: AiAccount, requester: { member: string; kind: "member" | "app_server" }, tie: SessionTie | null | undefined): string | null {
+const MACHINE_SESSION_REFUSAL = "이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 구독은 사람이 보는 세션에서만 쓸 수 있어요. 자동화는 워크스페이스 API 키가 필요합니다";
+export function subscriptionRefusal(
+  account: AiAccount, requester: { member: string; kind: "member" | "app_server" }, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
+): string | null {
   if (account.kind !== "subscription") return null;
-  if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다`;
+  if (seat && seatShared(seat.facts)) {
+    if (!seat.requesterActive) return `이 앱의 실행 계정은 공용 시트(${account.member})입니다 — 공용 시트는 이 워크스페이스의 활성 구성원이 보낸 요청에만 쓸 수 있어요(${requester.member} 은(는) 구성원으로 확인되지 않습니다)`;
+    if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;
+    return null;
+  }
+  //  지정은 됐는데 관리자 권한 때문에 공용으로 안 쓰는 계정 — 거절 문장에 까닭을 붙인다(그대로 두면 «초대받은 사람만» 으로 읽혀 무엇을 고칠지 모른다).
+  const adminSeat = seat?.facts.consented && seat.facts.active && seat.facts.admin
+    ? ` ${account.member}님 계정은 공용 시트로 지정됐지만 관리자 권한이 있어 공용으로 쓰지 않습니다 — 관리자 권한이 없는 전용 계정을 공용 시트로 지정하세요.` : "";
+  if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 앱 서버가 사람 신원을 실어 보낸 요청도 받습니다).${adminSeat}`;
   //  세션에 매인 요청인데 그 세션을 모르거나(fail-closed) 사람 세션이 아니면(위탁·크론 헤드리스 task · 상시 managed · 앱 · 로그인) 구독 주인 본인의 토큰이라도 거절 —
   //  사람 없이 구독이 도는 모양(#4423 · 격리 리뷰 blocking 1). 세션 헤더가 없는 본인 토큰은 가릴 길이 없어 본인으로 통과한다(머리말 한계 ③).
-  if (tie && (tie.owner === null || !tie.human)) return `이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 구독은 사람이 보는 세션에서만 쓸 수 있어요. 자동화는 워크스페이스 API 키가 필요합니다`;
+  if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;
   if (requester.member === account.member) return null;
   if (tie && tie.owner === account.member && tie.participant) return null;
-  return `이 앱의 실행 계정은 ${account.member}님 구독인데 ${requester.member}님이 보냈습니다 — 구독은 본인, 또는 ${account.member}님 세션에 초대받은 사람이 그 세션에서 보낸 요청에만 쓸 수 있어요(워크스페이스 API 키를 등록하면 누구의 요청이든 돕니다)`;
+  return `이 앱의 실행 계정은 ${account.member}님 구독인데 ${requester.member}님이 보냈습니다 — 구독은 본인, 또는 ${account.member}님 세션에 초대받은 사람이 그 세션에서 보낸 요청에만 쓸 수 있어요(워크스페이스 API 키를 등록하면 누구의 요청이든 돕니다).${adminSeat}`;
 }
 
 /**
@@ -124,15 +193,45 @@ export function subscriptionRefusal(account: AiAccount, requester: { member: str
  *  고르지 못한다) 와 **어느 자리를 바꾸나**(워크스페이스 기본값은 관리자만 · 앱별·작업별은 관리자 또는 그 앱의 책임자). 자리 규칙이 없으면 구성원 누구나
  *  워크스페이스 기본값이나 아무 앱의 실행 계정을 자기 구독으로 덮어 다른 모두의 AI 실행을 막을 수 있다(격리 리뷰 blocking 2).
  *  API 키 · 해제도 같은 자리 규칙을 탄다(워크스페이스 = 관리자 · 앱 = 관리자 또는 책임자).
+ *  #5081 공용 시트(nextShared — 고르려는 구독이 지금 공용으로 켜져 있나)는 **관리자도** 건다 — 그 계정 본인이 이미 공용으로 동의했다. 앱 책임자는 못 건다
+ *   (공용 시트를 어느 앱이 쓰는지는 관리자가 정한다 — 약관 회색 · headless-credential-anthropic-terms-judgment-4423 2c).
  */
-export function accountSetRefusal(next: AiAccount | null, actor: { member: string; admin: boolean }, scope: { appId: string | null; appOwner: boolean }): string | null {
-  if (next?.kind === "subscription" && next.member !== actor.member) return `구독 실행 계정은 그 사람 본인만 걸 수 있습니다 — ${next.member}님이 직접 설정해야 해요`;
+export function accountSetRefusal(next: AiAccount | null, actor: { member: string; admin: boolean }, scope: { appId: string | null; appOwner: boolean }, nextShared = false): string | null {
+  if (next?.kind === "subscription" && next.member !== actor.member && !(nextShared && actor.admin)) {
+    if (nextShared) return `공용 시트(${next.member})를 실행 계정으로 거는 것은 관리자만 할 수 있습니다`;
+    return `구독 실행 계정은 그 사람 본인만 걸 수 있습니다 — ${next.member}님이 직접 설정해야 해요(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 관리자도 걸 수 있습니다)`;
+  }
   if (!scope.appId) {
     if (!actor.admin) return "워크스페이스 기본 실행 계정은 관리자만 바꿀 수 있습니다 — 구성원은 자기가 책임자인 앱에만 자기 구독을 걸 수 있어요";
     return null;
   }
   if (!actor.admin && !scope.appOwner) return `앱 '${scope.appId}' 의 실행 계정은 관리자나 그 앱의 책임자만 바꿀 수 있습니다`;
   return null;
+}
+
+/** 공용 시트로 지정하려는 계정의 사실(구성원 표에서). */
+export interface SeatTarget { member: string; exists: boolean; active: boolean; human: boolean; admin: boolean }
+
+/**
+ * (순수) 공용 시트 지정 바꾸기(#5081) — 관리자는 승인을, 그 계정 본인은 동의를 적는다. 둘 다 있어야 켜진다(serviceSeatConsented).
+ *  · 켜기: 관리자가 남을 → 승인 줄 · 본인이 → 동의 줄(먼저 해도 된다 — 순서는 상관없다). 그 밖의 사람은 거절.
+ *    대상은 활성 사람 구성원이어야 하고 **관리자 권한이 없어야** 한다(seatShared 머리말 — 구성원 누구의 지시든 그 홈에서 돈다).
+ *    그래서 관리자가 자기 계정을 혼자 지정하는 길은 없다 — 승인과 동의는 늘 다른 두 사람이다.
+ *  · 끄기: 관리자나 본인 누구든 → 줄째 지운다(두 동의가 다 사라진다 · 다시 켜려면 둘 다 새로).
+ *  돌려주는 것: 적을 다음 줄(null = 지운다) 또는 거절(HTTP 상태 + 문장).
+ */
+export function serviceSeatChange(
+  cur: ServiceSeat | undefined, actor: { member: string; admin: boolean }, target: SeatTarget, on: boolean, nowIso: string,
+): { next: ServiceSeat | null } | { status: number; refusal: string } {
+  if (!target.exists) return { status: 404, refusal: `구성원 없음: ${target.member}` };
+  const self = actor.member === target.member;
+  if (!self && !actor.admin) return { status: 403, refusal: "공용 시트 지정은 관리자와 그 계정 본인만 바꿀 수 있습니다" };
+  if (!on) return { next: null };
+  if (!target.active || !target.human) return { status: 409, refusal: `${target.member} 은(는) 활성 사람 구성원이 아닙니다 — 공용 시트는 활성 사람 구성원 계정만 될 수 있습니다` };
+  if (target.admin) {
+    return { status: 409, refusal: `${target.member} 계정은 관리자 권한이 있어 공용 시트로 지정할 수 없습니다 — 공용 시트로 도는 작업은 구성원 누구의 지시든 그 계정의 홈(로그인 · 토큰)에서 돌아, 관리자 계정이면 누구나 관리자 권한에 닿습니다. 관리자 권한이 없는 전용 계정을 지정하세요` };
+  }
+  return { next: self ? { ...cur, member: { at: nowIso } } : { ...cur, admin: { by: actor.member, at: nowIso } } };
 }
 
 /** (순수) 프롬프트 요지(목록용) — 첫 200자, 줄바꿈은 공백으로. */
