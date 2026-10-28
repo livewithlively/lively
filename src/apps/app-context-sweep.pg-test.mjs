@@ -120,10 +120,11 @@ try {
   const revId = Number((await q(`SELECT id FROM knowledge_revision WHERE name='swpx-hid'`))[0].id);
   const delRevId = Number((await q(`SELECT id FROM knowledge_revision WHERE name='swpx-del'`))[0].id);
 
-  //  범위를 선언한 앱 — 도구 전부(*) · scope 다섯 · 범위 = swp-in + slack
+  //  범위를 선언한 앱 — 범위 = swp-in + slack. 범위를 적은 앱은 «도구 전부» 를 선언할 수 없어서(저장 400) 선언은 좁게 두고, 동의(grant)만 «전부» 로
+  //   넣는다 — 가장 넓은 경우(모든 도구가 열린 범위 앱)에서 범위를 못 지키는 길이 막히는지 잰다. scope 다섯.
   const bob = { userId: BOB, email: "b@x", scopes: ["memory"], projects: ["*"] };
   const files = [
-    { path: "lively-app.json", content: JSON.stringify({ id: "swp-app", title: "swp", version: "1.0.0", permissions: { scopes: ["memory"], tools: ["*"] }, context: { knowledge_categories: ["swp-in"], source_kinds: ["slack"] }, ui: { pages: [{ key: "main", title: "swp", entry: "ui/index.html" }] } }) },
+    { path: "lively-app.json", content: JSON.stringify({ id: "swp-app", title: "swp", version: "1.0.0", permissions: { scopes: ["memory"], tools: ["knowledge_search"] }, context: { knowledge_categories: ["swp-in"], source_kinds: ["slack"] }, ui: { pages: [{ key: "main", title: "swp", entry: "ui/index.html" }] } }) },
     { path: "ui/index.html", content: "<p>x</p>" },
   ];
   const saved = await appCapabilities.find((c) => c.name === "app_save").handler({ files }, bob, { source: "mcp" });

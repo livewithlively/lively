@@ -20,7 +20,7 @@
 //       · 공개범위 축을 끄면 링크도 다른 표면(목록 · 검색)처럼 잠긴 이웃을 보인다(종전엔 링크만 축을 몰랐다 — 격리 리뷰 N6) · 축을 꺼도 범위는 그대로
 //   E10 범위 앱 · 자료: 선언한 종류만 · 범위 밖 source_get = 403 + 기록 · 종류를 안 적으면 0건(닫힘) · 범위 밖 source_artifact(MCP 전용 — 훑기가 못 본다) = 403
 //   E11 범위 앱 · self 소스 = 거절(이름 · 연결 표가 정책 밖이라) · 범위 없으면 종전
-//   E12 매니페스트 · 저장: 없는 카테고리 key = 400 · folders = 400 · 맞는 key 는 저장된다
+//   E12 매니페스트 · 저장: 없는 카테고리 key = 400 · folders = 400 · 맞는 key 는 저장된다 · 범위를 적은 앱의 «도구 전부»(tools · ext_tools 의 *) = 400(앱이 안 생긴다)
 //   E13 어느 판(결정 ③): 공개 앱에 초안 — 고친 사람은 초안의 범위 · 다른 사람은 공개 판의 범위 · 공개 주소는 고친 사람에게도 공개 판 · 초안 주소는 초안
 //   E14 어댑터 배선(runWithAppReadScope): 앱 토큰 사용자로 knowledge_search 핸들러를 부르면 그 앱의 범위로 좁혀진다 · 앱 토큰이 아니면 그대로
 //   E15 공개하면 기억이 비워진다(격리 재검토 권고): 다른 사람이 공개 판 범위를 기억한 직후 초안을 공개하면 곧바로 새 공개 판의 범위(5초 기억을 기다리지 않는다)
@@ -298,6 +298,15 @@ try {
     chk("E12c 오타 칸(knowledge_category) = 400(좁히는 선언은 모르는 칸을 버리지 않는다)", e3?.status === 400, String(e3?.status) + " " + e3?.message);
     const okSave = await save.handler({ files: files("ctx-pol", { knowledge_categories: [C_IN], source_kinds: ["slack"] }) }, bob, { source: "mcp" });
     chk("E12d 맞는 key 는 저장된다", !!okSave && !okSave.error, JSON.stringify(okSave).slice(0, 200));
+    const wild = (perm) => [
+      { path: "lively-app.json", content: JSON.stringify({ id: "ctx-wild", title: "w", version: "1.0.0", permissions: { scopes: ["memory"], ...perm }, context: { knowledge_categories: [C_IN] }, ui: { pages: [{ key: "main", title: "w", entry: "ui/index.html" }] } }) },
+      { path: "ui/index.html", content: "<p>x</p>" },
+    ];
+    const e4 = await thrown(() => save.handler({ files: wild({ tools: ["*"] }) }, bob, { source: "mcp" }));
+    const e5 = await thrown(() => save.handler({ files: wild({ tools: ["knowledge_search"], ext_tools: ["*"] }) }, bob, { source: "mcp" }));
+    const made = (await q(`SELECT count(*)::int AS n FROM org_app WHERE id='ctx-wild'`))[0].n;
+    chk("E12e 범위를 적은 앱의 «도구 전부» = 400 · tools · ext_tools 모두 · 앱이 안 생긴다", e4?.status === 400 && /permissions\.tools/.test(e4.message) && e5?.status === 400 && /permissions\.ext_tools/.test(e5.message) && made === 0,
+      `${e4?.status} ${e4?.message} | ${e5?.status} ${e5?.message} | 생긴 앱 ${made}`);
   }
   // ── E13 어느 판 ──
   {

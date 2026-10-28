@@ -88,13 +88,26 @@ export function runWithAppReadScope<T>(user: Pick<LivelyUser, "appId" | "userId"
 }
 
 /**
- * 설치 · 저장 관문(#5100 «설치·판 저장 때 검증한다») — 선언한 카테고리 key 가 이 워크스페이스에 있어야 한다. 없으면 400.
+ * 설치 · 저장 관문(#5100 «설치·판 저장 때 검증한다») — 범위를 선언했으면 도구를 «전부» 로 받지 않는다(400) · 선언한 카테고리 key 가 이 워크스페이스에
+ *  있어야 한다. 없으면 400.
  *  빈 결과로 두면 앱 제작자는 «그런 지식이 없다» 로 읽는다(오타 하나로 범위가 통째로 닫힌다). 자료 종류 · 모양은 파서(parseAppManifest)가 이미 봤다.
  *  나중에 카테고리를 지우거나 합치면 범위는 줄어드는 쪽으로만 바뀐다(categoryIdsForKeys 가 버린다) — 저장된 앱을 막지는 않는다.
  */
 export async function assertContextInstallable(manifest: unknown): Promise<void> {
   const decl = appContextDeclOf(manifest);
-  if (!decl?.knowledgeCategories.length) return;
+  if (!decl) return;
+  //  «도구 전부» 는 받지 않는다(상민 2026-10-29 결정) — 글자 없는 꼴(* · ** · *_*)은 앞으로 생기는 도구까지 범위 앱에 저절로 연다. 범위를 지킬 수 없는
+  //   도구는 따로 막지만(APP_CONTEXT_UNSAFE_*) 그 목록은 알려진 길이다 — 범위를 적은 앱은 쓸 도구도 적게 한다. 외부 도구(ext_tools)는 라이블리 범위와
+  //   무관하게 바깥 데이터를 읽으니 같이 본다. DB 를 보기 전에 판정한다.
+  const perms = (manifest as { permissions?: Record<string, unknown> } | null)?.permissions ?? {};
+  for (const field of ["tools", "ext_tools"] as const) {
+    const list = Array.isArray(perms[field]) ? (perms[field] as unknown[]) : [];
+    const all = list.filter((x): x is string => typeof x === "string" && x.includes("*") && /^[*_]+$/.test(x));
+    if (all.length) {
+      throw new HttpError(400, `매니페스트 오류 [permissions.${field}]: 맥락 범위(context)를 선언한 앱은 도구를 «전부»(${all.map((x) => `'${x}'`).join(", ")})로 받을 수 없습니다 — 쓸 도구를 이름이나 좁은 꼴(knowledge_* 등)로 적으세요(앞으로 생기는 도구가 범위 앱에 저절로 열리지 않게)`);
+    }
+  }
+  if (!decl.knowledgeCategories.length) return;
   const rows = await q(itemsPool, `SELECT key FROM category WHERE key = ANY($1::text[]) AND state <> 'merged'`, [decl.knowledgeCategories]);
   const have = new Set(rows.map((r) => String(r.key)));
   const missing = decl.knowledgeCategories.filter((k) => !have.has(k));
