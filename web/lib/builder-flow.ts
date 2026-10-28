@@ -144,16 +144,18 @@ export function builderTabTitle(where: BuilderWhere): string {
   return '앱빌더';
 }
 /** 만들던 앱 한 줄의 상태 글 — 앱이 아직 없으면 ② 카드(첫 판을 만드는 중이면 ③ 만드는 중), 있으면 그 단계. 다섯 단계(studio-flow STAGES). */
-export function draftStageText(stage: string, hasApp: boolean, done: boolean): string {
+export function draftStageText(stage: string, hasApp: boolean, done: boolean, fixing = false): string {
   if (done) return '다 만든 앱 · 이어서 고치기';
+  if (hasApp && fixing) return '③ AI가 수정하고 있어요';   // 「수정하기」 를 보내 두었다(기록 fixing) — 줄만 봐도 다시 누를 일이 아님을 안다
   if (!hasApp) return stage === 'draft' ? '③ 시안 만드는 중' : '② 세부 기획 정하기';
   const n: Record<string, string> = { draft: '③ 시안 확인 · 수정', fix: '③ 시안 확인 · 수정', check: '④ 확인', put: '⑤ 넣기' };
   return n[stage] || '③ 시안 확인 · 수정';
 }
 
 /** 사이드바 한 줄에 들어가는 짧은 단계 — 「③ 시안」 처럼. 긴 글(draftStageText)은 줄의 툴팁과 가운데 카드가 쓴다. */
-export function draftStageShort(stage: string, hasApp: boolean, done: boolean): string {
+export function draftStageShort(stage: string, hasApp: boolean, done: boolean, fixing = false): string {
   if (done) return '다 만듦';
+  if (hasApp && fixing) return '③ 수정 중';
   if (!hasApp) return stage === 'draft' ? '③ 시안' : '② 기획';
   const n: Record<string, string> = { check: '④ 확인', put: '⑤ 넣기' };
   return n[stage] || '③ 시안';

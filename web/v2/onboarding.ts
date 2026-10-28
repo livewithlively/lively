@@ -1,4 +1,11 @@
-// v2/onboarding.ts — 처음 설정(#/welcome). (#4970) 인사 → 이름 → (#5060) 파일 올리기 → AI 연결 → «외부 앱을 연결하시겠어요?» 다섯 장면이 전부다.
+// v2/onboarding.ts — 처음 설정(#/welcome). (#4970) 인사 → 이름 → (#5060) 앱으로 이어 하기 → 파일 올리기 → AI 연결 → «외부 앱을 연결하시겠어요?».
+//
+//  ★ #5060(원준님 2026-10-28 «사용자가 최대한 앱에서 시작하게») — 이름 다음에 «앱으로 이어 하기» 를 둔다. 이름까지 받으면 서버에 하다 만
+//   자리(welcome_progress)가 생겨, 앱에서 로그인하는 순간 이어 열 근거가 있다. 다음 장면(파일·AI 연결)이 앱에서 더 나은 첫 자리다.
+//   · 앱 안(window.livelyDesktop)·윈도우/맥이 아닌 곳에서는 이 장면을 건너뛴다(appliesScene). 저장된 자리가 이 장면이어도 앱에서는 다음 장면부터 연다.
+//   · 앱 안의 처음 설정은 서버에 desktop_seen 을 남긴다 — [앱 받기]를 누른 브라우저 탭이 그 값을 보고 «앱에서 이어 하고 있어요» 로 접힌다.
+//   · 설치 파일에는 사람별 값을 심지 않는다(윈도우 설치 도우미는 바이트 고정 — SmartScreen 평판 · 맥 dmg 는 서명·공증). 이어 하기는 서버 자리표 +
+//     같은 계정 로그인으로만 한다. 로그인 수고를 없애는 딥링크(lively://)는 다음 단계(#5073)다.
 //
 //  ★ #5060(원준님 2026-10-27) — 파일 올리기를 **AI 연결 앞에** 둔다. 올린 파일이 지식이 되는 길이 처음 설정에 없었다(#4970 이 서랍·파일 장면을
 //   걷은 뒤 로컬 증류기를 켜는 자리가 사라졌다). 고른 파일은 백그라운드로 올라가고(bg-upload.ts) 사람은 기다리지 않고 다음으로 간다.
@@ -24,7 +31,7 @@
 import { api, state } from '../core.js';
 import { drawRail } from './rail.js';   // 이름을 바꾸면 레일 발치의 [나]도 그 자리에서 다시 그린다(#1813)
 //  (#4970) 연결을 시작하는 문 한 벌 — [외부 앱 연결] 화면의 [연결 도와줘]와 같은 것을 쓴다(세션 열기 · «쓰는 AI 에서 하기» 세 걸음).
-import { openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';
+import { appInstallStepsHtml, desktopDownloader, desktopOs, openConnectSession, ownAiStepsHtml, wireOwnAiSteps } from './connect-own-ai.js';
 //  (#4970) AI 연결 장면의 줄·로그인 칸 — [AI 계정 연결]과 같은 칸 · 같은 로고·이름·순서(onboarding-ai.ts).
 import { mountAiList } from './onboarding-ai.js';
 //  (#5060) 처음 설정에서 고른 파일 — 다른 화면으로 옮겨 가도 계속 올라간다.
@@ -76,6 +83,14 @@ export const OB_COPY = {
   //   구분되지 않았다. 이 길은 **컴퓨터에 프로그램으로 깔아 쓰는 AI**(커서·클로드 코드) 쪽이라 그렇게 말한다.
   aiPc: '컴퓨터에 설치해 쓰는 AI 프로그램으로 할게요 (Cursor·Claude Code 등)',
   aiNone: '이 서버에는 아직 연결할 수 있는 AI가 없어요. 컴퓨터에 설치해 쓰시는 AI 프로그램(Cursor·Claude Code 등)으로 하시면 됩니다.',
+  appTitle: '라이블리 앱에서 이어 하시겠어요?',
+  appHelp: '앱에서는 컴퓨터에서 쓰시는 AI(Cursor·Claude Code 등)를 바로 이을 수 있고, 일이 끝나면 알림으로 알려 드려요. 앱에서 로그인하시면 여기서 하던 자리부터 이어집니다.',
+  appGet: '앱 받기',
+  appWeb: '웹에서 계속할게요',
+  appWaitTitle: '앱을 설치하고 로그인해 주세요',
+  appWaitNote: '앱에서 로그인하시면 지금 하던 자리부터 이어져요. 설치가 어려우면 아래 [웹에서 계속할게요]로 여기서 하셔도 됩니다.',
+  appSeen: '앱에서 이어 하고 계세요. 이 창은 닫으셔도 됩니다.',
+  appSeenHere: '여기서 계속할게요',
   uploadTitle: '일하실 때 쓰는 파일이 있으면 올려 주세요',
   uploadHelp: '올린 파일은 AI가 읽고 지식으로 정리해요. 올라가는 동안 다음 설정을 계속하실 수 있어요.',
   uploadDrop: '파일이나 폴더를 여기로 끌어다 놓으세요',
@@ -109,11 +124,15 @@ function watchWelcomeUploads(): void {
   bgUploadOnChange(() => postUploadDoneIfSettled());
 }
 
+/** 데스크톱 앱 안에서 떠 있나(preload 가 livelyDesktop 을 내어 준다 — 브라우저엔 없다). */
+const inDesktopApp = (): boolean => { try { return !!(window as unknown as { livelyDesktop?: unknown }).livelyDesktop; } catch (_) { return false; } };
+
 type Ctx = { onBare?: (bare: boolean) => void; onGhost?: (on: boolean) => void; onDone?: () => void };
 /** viaPc — AI 연결에서 «PC에서 쓰는 AI로» 를 골랐다(#4970). 그러면 [연결할게요]가 서버 세션을 열지 않는다. */
 /** uploaded — (#5060) 이 처음 설정에서 고른 파일 수(새로 줄 선 것 + 이미 올려 건너뛴 것). 0 이면 올린 것이 없다(반영에 upload 를 싣지 않는다).
  *  serverAi — AI 연결 장면에서 서버 AI 가 하나라도 연결돼 있었나(안내 문구를 사실대로 가른다). */
-interface ObState { scene: string; name: string; nameSet: boolean; trail: string[]; viaPc: boolean; uploaded: number; serverAi: boolean }
+/** appAt — (#5060) [앱 받기]를 누른 시각(ISO). 이 뒤에 앱 안에서 처음 설정이 열렸으면(desktop_seen_at) 이 탭은 접힌다. */
+interface ObState { scene: string; name: string; nameSet: boolean; trail: string[]; viaPc: boolean; uploaded: number; serverAi: boolean; appAt: string | null }
 
 export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy(): void } {
   host.className = 'ob-root';
@@ -123,7 +142,9 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
 <div class="ob-toast" id="toast"></div>`;
   //  화면에 들어온 것 자체가 «보여줬다» 다 — 사람이 스스로 연 경우(홈의 «이어서 하기»·주소)에도 표식은 있어야 옳다(서버가 처음 시각을 지킨다).
   markWelcomeSeen();
-  clearWelcomeDeferred();   // #2232 — 이 화면이 떴다 = 사람이 다시 열었다 → 미룸을 푼다
+  clearWelcomeDeferred();
+  //  (#5060) 앱 안에서 열렸다 — 브라우저에서 [앱 받기]를 누른 탭이 이 값을 보고 접힌다. 실패해도 삼킨다(그 탭엔 [여기서 계속]이 남아 있다).
+  if (inDesktopApp()) void api('/api/ui/me/liv-profile', { method: 'POST', body: JSON.stringify({ desktop_seen: true }) }).catch(() => { /* 비치명 */ });   // #2232 — 이 화면이 떴다 = 사람이 다시 열었다 → 미룸을 푼다
   //  #2232 — 떴다 = 끝낼 때까지 «하다 만 것» 이다. 홈의 «이어서 하기» 줄(me.welcome_pending)을 여기서 미리 맞춘다 — me 는 부팅 때 한 번 읽는다.
   try { if (state.me && !onboardingDone()) (state.me as { welcome_pending?: boolean }).welcome_pending = true; } catch (_) { /* 비치명 */ }
   const exitBtn = host.querySelector('#obExit') as HTMLButtonElement | null;
@@ -154,7 +175,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   const RESUME_WAIT_MS = 2500;
   /** 기다리는 말을 띄우기 전에 조용히 기다리는 시간 — 금방 답이 오면 그 말은 아예 안 보인다(#1631). */
   const RESUME_HINT_MS = 600;
-  const fresh = (): ObState => ({ scene: 'intro', name: '', nameSet: false, trail: [], viaPc: false, uploaded: 0, serverAi: false });
+  const fresh = (): ObState => ({ scene: 'intro', name: '', nameSet: false, trail: [], viaPc: false, uploaded: 0, serverAi: false, appAt: null });
   let S: ObState = fresh();
   /** 아직 **아무것도 답하지 않은** 장면 — 인사(intro)·이름(name). 여기 머문 것은 «하다 만 것» 이 아니다(이름을 적었으면 nameSet 이 말한다).
    *  ⚠ 마운트하는 동안 읽힌다 — 그래서 여기(hadLocal 보다 앞)에 둔다(뒤에 두면 선언 전 참조로 화면이 통째로 죽는다). */
@@ -176,6 +197,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       viaPc: v.viaPc === true,
       uploaded: typeof v.uploaded === 'number' && v.uploaded > 0 ? Math.floor(v.uploaded) : 0,
       serverAi: v.serverAi === true,
+      appAt: typeof v.appAt === 'string' ? v.appAt : null,
     };
   }
 
@@ -216,10 +238,17 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   /* 막1(인사·이름)은 민낯(셸 숨김), 연결 물음은 유령 셸(#2232) — 사이드바를 누르면 처음 설정에서 빠져나가 버리던 자리다. */
   const setStage = (s: string) => { host.className = 'ob-root ob-' + s; ctx.onBare && ctx.onBare(s === 'stage-name'); ctx.onGhost && ctx.onGhost(s !== 'stage-name'); };
   /* ══════════════ 장면 차례 ══════════════ */
-  const ORDER = ['intro', 'name', 'upload', 'ai', 'connect-ask'];
+  const ORDER = ['intro', 'name', 'desktop', 'upload', 'ai', 'connect-ask'];
   const STEP_OF: Record<string, number> = Object.fromEntries(ORDER.map((k, i) => [k, i]));
-  /** 지금 차례표에서 이 장면 **다음**. 끝이면 null. */
-  const nextScene = (cur: string): string | null => { const i = ORDER.indexOf(cur); return i >= 0 && i + 1 < ORDER.length ? ORDER[i + 1]! : null; };
+  /** 이 장면을 지금 보여 주나(#5060) — 앱 장면은 브라우저 · 윈도우/맥에서만(앱 안이면 이미 앱이다 · 그 밖은 받을 앱이 없다). */
+  const appliesScene = (k: string): boolean => k !== 'desktop' || (!inDesktopApp() && (desktopOs() === 'win' || desktopOs() === 'mac'));
+  /** 지금 차례표에서 이 장면 **다음**(보여 주지 않는 장면은 건너뛴다). 끝이면 null. */
+  const nextScene = (cur: string): string | null => {
+    for (let i = ORDER.indexOf(cur) + 1; i > 0 && i < ORDER.length; i++) if (appliesScene(ORDER[i]!)) return ORDER[i]!;
+    return null;
+  };
+  /** 열 자리 — 보여 주지 않는 장면이면 그다음 장면(앱에서 이어 열 때 «앱 받기» 를 다시 보이지 않게). */
+  const landOn = (k: string | null): string | null => (k && !appliesScene(k) ? nextScene(k) : k);
 
   function qHead(lead: string, title: string, help: string) {
     return `<div class="ob-q-top"><div class="ob-q-ic">L</div></div>
@@ -284,6 +313,16 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
         $<HTMLButtonElement>('[data-skip]', el)!.onclick = () => goScene(nextScene('name')!);
         inp.focus();
       },
+    },
+    /* (#5060) 앱으로 이어 하기 — 이름 다음. [앱 받기]를 누르면 이 장면이 «설치하고 로그인해 주세요» 로 바뀌고, 앱이 열리면 접힌다. */
+    desktop: {
+      html: () => qHead(S.nameSet && S.name ? `${esc(S.name)}님, 라이블리는 앱에서 가장 잘 돌아가요.` : '라이블리는 앱에서 가장 잘 돌아가요.',
+        esc(OB_COPY.appTitle), esc(OB_COPY.appHelp))
+        + `<div id="appBody">
+             <button class="ob-btn ob-btn-pri" id="appGet">${esc(OB_COPY.appGet)} (${desktopOs() === 'win' ? 'Windows' : 'Mac'})</button>
+             <button class="ob-q-skip" id="appWeb">${esc(OB_COPY.appWeb)}</button>
+           </div>`,
+      bind: (el) => bindApp(el),
     },
     /* (#5060) 파일 올리기 — AI 연결보다 먼저. 고르면 곧바로 백그라운드로 올라가고 [다음]이 켜진다(기다리지 않는다). 안 올려도 된다. */
     upload: {
@@ -354,6 +393,52 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
       onRows: (anyConnected) => { next.hidden = false; next.disabled = !anyConnected; S.serverAi = anyConnected; save(); },
       onEmpty: () => { next.hidden = true; pc.className = 'ob-btn ob-btn-pri'; },   // 남은 길이 이것뿐이다 — 조용한 링크로 두지 않는다
     });
+  }
+
+  /**
+   * 앱으로 이어 하기 장면을 잇는다(#5060). [앱 받기] → 내려받기 시작 + 이 장면을 설치 안내로 바꾸고, 앱 안에서 처음 설정이 열리면(서버
+   *  desktop_seen_at 이 누른 뒤) «앱에서 이어 하고 계세요» 로 접는다. 묻는 동안만 6초마다 — 장면을 떠나면 멈춘다.
+   */
+  function bindApp(el: HTMLElement) {
+    const body = $('#appBody', el)!;
+    const download = desktopDownloader();   // 받기 주소를 지금 물어 둔다 — 누른 순간에 물으면 늦다
+    const web = () => { stopAppWatch(); goScene(nextScene('desktop')!); };
+    $<HTMLButtonElement>('#appWeb', el)!.onclick = web;
+    const showWait = () => {
+      body.innerHTML = `<p class="ob-q-help"><b>${esc(OB_COPY.appWaitTitle)}</b></p>
+        <div class="ob-ins-list">${appInstallStepsHtml()}</div>
+        <p class="ob-q-help">${esc(OB_COPY.appWaitNote)}</p>
+        <button class="ob-q-skip" id="appWeb2">${esc(OB_COPY.appWeb)}</button>`;
+      wireOwnAiSteps(body);
+      $<HTMLButtonElement>('#appWeb2', body)!.onclick = web;
+      watchApp(body);
+    };
+    $<HTMLButtonElement>('#appGet', el)!.onclick = () => {
+      download();   // 누른 그 자리에서(사용자 제스처 안) 받는다
+      S.appAt = new Date().toISOString(); save();
+      showWait();
+    };
+    //  이미 눌렀던 사람(새로고침·되돌아옴)은 안내부터.
+    if (S.appAt) showWait();
+  }
+  let appWatchT: ReturnType<typeof setTimeout> | null = null;
+  function stopAppWatch() { if (appWatchT) clearTimeout(appWatchT); appWatchT = null; }
+  function watchApp(body: HTMLElement) {
+    stopAppWatch();
+    const tick = async () => {
+      appWatchT = null;
+      if (destroyed || !body.isConnected || S.scene !== 'desktop') return;
+      const r: any = await loadWelcome();
+      const seen = r && typeof r.desktop_seen_at === 'string' ? Date.parse(r.desktop_seen_at) : NaN;
+      if (S.appAt && Number.isFinite(seen) && seen >= Date.parse(S.appAt)) {
+        body.innerHTML = `<p class="ob-q-help">${esc(OB_COPY.appSeen)}</p>
+          <button class="ob-q-skip" id="appHere">${esc(OB_COPY.appSeenHere)}</button>`;
+        $<HTMLButtonElement>('#appHere', body)!.onclick = () => goScene(nextScene('desktop')!);
+        return;
+      }
+      appWatchT = setTimeout(() => void tick(), 6000);
+    };
+    appWatchT = setTimeout(() => void tick(), 3000);
   }
 
   /**
@@ -570,7 +655,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     clearTimeout(waitT);
     if (destroyed) return;                 // 기다리는 사이에 화면을 떠났다 — 없는 화면에 그리지 않는다
     const p = got && (got as any).progress;
-    const scene = p && p.state && typeof p.state === 'object' ? fitScene(p.scene) : null;
+    const scene = p && p.state && typeof p.state === 'object' ? landOn(fitScene(p.scene)) : null;
     if (scene) {
       S = Object.assign(fresh(), pickState(p.state), { scene });
       saveLocal();          // 이 탭에도 얹어 둔다 — 이제부터는 이 탭이 정본이다(서버로 다시 밀지 않는다)
@@ -580,7 +665,7 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
     }
     //  처음부터 — 답한 것이 없는 탭의 저장본(인사·이름에 멈춘 것)은 첫 장면으로 되돌린다. 자취도 비운다.
     if (BEFORE_ANSWER.includes(S.scene)) { S.scene = ORDER[0]!; S.trail = []; }
-    goScene(fitScene(S.scene) || ORDER[0]!);
+    goScene(landOn(fitScene(S.scene)) || ORDER[0]!);
   }
 
   /* ── 부팅 ── */
@@ -589,12 +674,13 @@ export function renderOnboarding(host: HTMLElement, ctx: Ctx = {}): { destroy():
   try { history.replaceState({ ...(history.state || {}), ob: S.scene, obSeq: 0 }, '', location.href); } catch (_) { /* 사파리 rate limit */ }
   // 장면 바로 열기 — 셸에선 질의가 해시 뒤에 붙는다(#/welcome?scene=connect-ask). 검토용.
   const want = new URLSearchParams(location.search).get('scene') || new URLSearchParams((location.hash.split('?')[1] || '')).get('scene');
-  if (want && STEP_OF[want] != null) goScene(want);
-  else if (hadLocal) { goScene(fitScene(S.scene) || ORDER[0]!); schedulePush(); }
+  if (want && STEP_OF[want] != null) goScene(landOn(want)!);
+  else if (hadLocal) { goScene(landOn(fitScene(S.scene)) || ORDER[0]!); schedulePush(); }
   else void resumeFromServer();
   return { destroy() {
     destroyed = true;
     if (toastT) clearTimeout(toastT);
+    stopAppWatch();
     removeEventListener('popstate', onPop);
     removeEventListener('pagehide', onPageHide);
     document.removeEventListener('visibilitychange', onLeave);

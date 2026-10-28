@@ -77,6 +77,9 @@ export interface StudioRec {
   iconAi?: StudioIcon[];
   /** 고를 때 저장돼 있던 아이콘의 path('' = 없었다) — 그 사이 AI 가 새 버전에 다른 아이콘을 넣었으면 고른 것은 낡았다(덮지 않는다 · 격리 리뷰). */
   iconBase?: string;
+  /** ③ 「수정하기」 로 고침을 보낸 때 · 그때 가장 뒤 판 — 새 판이 나올 때까지 있다. 앱빌더를 나갔다 와도 «AI가 수정하고 있어요» 로 다시 열고,
+   *  나가 있던 사이 새 판이 나왔으면 열자마자 끝맺는다(원준 2026-10-28 «다른 데 갔다 다시 들어가면 진행중 페이지로 안 가고 이전으로 돌아간 것처럼»). */
+  fixing?: { at: number; ver: number };
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
@@ -707,11 +710,12 @@ async function build(rec: StudioRec): Promise<void> {
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: rec.step || 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
+    waiting: !!rec.fixing, waitT0: rec.fixing ? rec.fixing.at : 0, topVer: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0, limit: '',   // limit: AI 답 글이 알린 사용 한도(parseLimit 의 한 줄) — 새로 보내면 걷는다
     iconOpen: false, iconWait: false, iconMiss: false, iconT: 0, iconRead: false, iconFail: false,   // ④ 아이콘 — 고르는 칸이 펼쳐졌나 · AI 가 그리는 중 · 안 보냈다 · 지금 아이콘을 읽었나 · 못 읽었나
     colorOpen: false, cpick: null as Hsv | null, hexBad: false,   // ④ 「다른 색」 — 팔레트가 펼쳐졌나 · 손잡이 자리(다시 그려도 그대로) · 적은 색 코드가 틀렸나
-    quietTill: Date.now() - rec.at < 120000 ? rec.at + 120000 : 0 };   // 막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다
+    //  막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다 · 막 보낸 고침도 보낸 때부터 60초(armRun 과 같은 틈)
+    quietTill: Math.max(Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
   const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 버전으로', hidden: true }) as HTMLButtonElement;
@@ -837,6 +841,7 @@ async function build(rec: StudioRec): Promise<void> {
       const vs = await fetchAppVersions(rec.appId); if (S.dead) return;
       const cur = vs.find((v) => v.is_current) || vs[vs.length - 1];
       S.curVer = cur ? cur.version_no : 0;
+      S.topVer = vs.reduce((m, v) => Math.max(m, v.version_no), 0);
       S.prevVer = vs.map((v) => v.version_no).filter((n) => n < S.curVer).sort((a, b) => b - a)[0] || 0;
       ver.textContent = verName(S.curVer);
       undo.hidden = !S.prevVer || rec.stage === 'put'; undo.textContent = S.prevVer ? verJ(S.prevVer, '으로') + ' 되돌리기' : '이전 버전으로';
@@ -1038,6 +1043,14 @@ async function build(rec: StudioRec): Promise<void> {
     }
     S.pollT = window.setTimeout(() => { void findApp(); }, 4000);
   };
+  //  고침이 끝났다(새 판) — 다음 차례로: 몇 번째를 올리고 보낸 코멘트를 걷는다. 새 판이 나왔으니 ④ 확인 · ⑤ 넣기는 그 판으로 다시(«와 본 곳» 을 ③ 으로).
+  const settleFix = (): void => { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; S.pins = []; S.general = ''; rec.pins = []; rec.general = ''; rec.reached = 2; delete rec.fixing; saveRec(rec); };
+  /** 고침을 보냈다 — 보낸 때와 그때 가장 뒤 판을 기록에 둔다(새로 열어도 기다림을 잇고, 그 뒤 판이 생겼는지로 끝났나를 안다). */
+  const markFixing = async (): Promise<void> => {
+    S.waiting = true; S.waitT0 = Date.now();
+    if (rec.appId && !S.topVer) await paintVer();   // 판을 아직 못 읽었다(② 에서 다시 만들기) — 0 이면 끝남을 못 가린다
+    rec.fixing = { at: S.waitT0, ver: S.topVer }; saveRec(rec);
+  };
   const off = onAppEvent((ev) => {
     if (S.dead) return;
     if (!rec.appId) { if (ev.kind === 'updated' || ev.kind === 'attach') { window.clearTimeout(S.pollT); void findApp(); } return; }
@@ -1045,7 +1058,7 @@ async function build(rec: StudioRec): Promise<void> {
       //  고침을 기다리던 중이면 어느 단계에 있든 먼저 끝맺는다 — ② 로 돌아가 있어도 ③ 이 «수정하고 있어요» 에 멈추지 않게(격리 리뷰).
       //   새 버전이 나왔다 — ④ 확인 · ⑤ 넣기는 그 버전으로 다시 해야 하니 «와 본 곳» 을 ③ 으로 당긴다.
       const settled = S.waiting;
-      if (S.waiting) { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; S.pins = []; S.general = ''; rec.pins = []; rec.general = ''; rec.reached = 2; saveRec(rec); }
+      if (S.waiting) settleFix();
       if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); if (settled) { band.hidden = true; paintBar(); paintNow(); } return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
       void showApp(ev.note || '고쳤어요');
     }
@@ -1118,7 +1131,7 @@ async function build(rec: StudioRec): Promise<void> {
   const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | null => {
     if (rec.stage === 'plan' && !rec.card) return 'plan';
     if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) return 'draft';
-    if (S.waiting) return 'fix';   // S.waiting 은 기록에 없다 — 고침을 기다리다 새로 열면 여기선 못 본다(그때는 종전처럼 «수정하고 있어요»)
+    if (S.waiting) return 'fix';   // 고침 기다림은 기록(rec.fixing)에 있다 — 나갔다 새로 열어도 멈춤을 본다
     if (rec.stage === 'check' && S.checkWait) return 'check';
     return null;
   };
@@ -1440,14 +1453,14 @@ async function build(rec: StudioRec): Promise<void> {
     const say = '기획 카드를 이렇게 바꿨어요. 바뀐 카드대로 앱을 고쳐주세요.\n' + cardText(rec.card);
     if (await send(fixBrief(rec.round + 1, [], say, rec.place, rec.appId))) {
       rec.cardSent = cardText(rec.card); saveRec(rec);
-      S.waiting = true; S.waitT0 = Date.now(); tickWait();
+      await markFixing(); tickWait();
       await setStage('fix');
     }
   };
   const sendFix = async (): Promise<void> => {
     if (S.waiting) return;
     const pins = S.pins.filter((p) => p.note.trim()); if (!pins.length && !S.general.trim()) return;
-    if (await send(fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) { S.waiting = true; S.waitT0 = Date.now(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); if (S.review) S.review.update({ waiting: true }); }
+    if (await send(fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) { await markFixing(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); if (S.review) S.review.update({ waiting: true }); }
   };
   //  #4732 「이대로 넣기」 는 연타를 막지 않는 단추라 — 미리 보기 · 저장 · 공개가 두 번 나가지 않게 하나씩만.
   let putting = false;
@@ -1505,7 +1518,20 @@ async function build(rec: StudioRec): Promise<void> {
     if (v) { S.vis = v; if (v.title) { S.title = v.title; rec.title = S.title; name.textContent = S.title; } if (!rec.card && v.card) rec.card = v.card as StudioCard; paintVis(); }
   }
   if (!rec.from) rec.from = await logEnd(rec.sid);
+  //  고침을 보내 두고 나갔다 왔다 — 그 사이 새 판이 나왔으면 끝맺고 그 판을 알리고, 아니면 «AI가 수정하고 있어요» 를 잇는다(시계는 보낸 때부터).
+  let fixedAway = '';
+  if (rec.fixing && rec.appId) {
+    try {
+      const vs = await fetchAppVersions(rec.appId); if (S.dead) return;
+      const f = rec.fixing;
+      //  보낼 때 판을 못 읽었으면(ver 0) 보낸 뒤에 저장된 판으로 가린다
+      const fresh = vs.filter((v) => (f.ver > 0 ? v.version_no > f.ver : Date.parse(v.saved_at) > f.at)).sort((a, b) => b.version_no - a.version_no)[0];
+      if (fresh) { settleFix(); fixedAway = fresh.note || '고쳤어요'; }
+    } catch (_) { /* 판 이력을 못 읽으면 기다림을 잇는다 — 새 판이 오면 사건이 끝맺는다 */ }
+  }
   await setStage(rec.stage);
+  if (fixedAway && rec.stage === 'fix') await showApp(fixedAway);
+  else if (S.waiting) tickWait();
   void pump();
   void watchRun();
   //  새로고침 전에 실제 화면(시험 세션 · 앱 화면)을 보던 중이었으면 그 화면과 막대를 다시 연다(원준 2026-10-16 «새로고침하니까 밑에 떠 있는 창 사라짐»).
