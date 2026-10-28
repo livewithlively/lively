@@ -16,7 +16,8 @@ export function normHex(raw: string): string | null {
   return null;
 }
 function rgbOf(hex: string): Rgb { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
-function hexOf([r, g, b]: Rgb): string { return '#' + [r, g, b].map((x) => Math.round(clamp(x, 0, 255)).toString(16).padStart(2, '0')).join('').toUpperCase(); }
+//  NaN 은 0 으로 — 그대로 두면 «#FF00NAN» 이 나와 마무리 저장이 400 으로 막힌다(격리 리뷰).
+function hexOf([r, g, b]: Rgb): string { return '#' + [r, g, b].map((x) => Math.round(clamp(Number.isFinite(x) ? x : 0, 0, 255)).toString(16).padStart(2, '0')).join('').toUpperCase(); }
 
 /** 색 면 · 색상 띠의 자리 → 색 코드. */
 export function hsvToHex({ h, s, v }: Hsv): string {
@@ -61,7 +62,8 @@ export const LIGHT_TILE = '#F6FAFF', DARK_TILE = '#171F31';
 /** 선 그림이 읽히는 대비의 아래 끝 — 큰 그림 · 선(WCAG 비문자 3:1). */
 export const ICON_MIN_CONTRAST = 3;
 
-/** 어두운 화면용 짝 — 같은 색상 · 채도로 밝기만 올린다(9색의 짝처럼 한 단계 밝게). 어두운 타일 위에서 대비가 4 이상이 될 때까지 더 올린다. */
+/** 어두운 화면용 짝 — 같은 색상 · 채도로 밝기만 올린다(9색의 짝처럼 한 단계 밝게). 어두운 타일 위에서 대비가 4 이상이 될 때까지 더 올린다.
+ *  밝기 0.9 가 위 끝이라, 그보다 밝은 색(흰색에 가까운 색)은 짝이 조금 어두워진다 — 어두운 타일 위에선 여전히 잘 보인다. */
 export function darkPair(raw: string): string {
   const hex = normHex(raw) || '#576889';
   const [h, s, l] = toHsl(rgbOf(hex));

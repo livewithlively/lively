@@ -8,6 +8,7 @@
 //  R1 색 코드 → 자리 → 색 코드가 그대로 돈다 · R2 회색은 채도 0 · R3 틀린 코드 → null
 //  C1 대비 — 검정 · 흰색 21 · 같은 색 1
 //  D1 어두운 화면 짝은 어두운 타일 위 대비 4 이상(9색 · 아주 어두운 색) · D2 짝은 원래보다 밝다 · D3 아주 밝은 색 · 틀린 코드도 색 코드를 낸다
+//  H5 NaN 이 와도 색 코드 꼴 · D1 에 아주 밝은 색도
 //  L1 흐림 판정 = 밝은 타일 위 대비 3 미만(회색 띠 전체로 경계 확인) · L2 9색은 흐리지 않다 · L3 틀린 코드는 흐림이 아니다
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,6 +30,7 @@ check([N("#abcd"), N("#1234567"), N("#ggg000"), N(""), N(null)].every((x) => x =
 check(H({ h: 0, s: 1, v: 1 }) === "#FF0000" && H({ h: 120, s: 1, v: 1 }) === "#00FF00" && H({ h: 240, s: 1, v: 1 }) === "#0000FF", "H1 색상 띠의 진한 색", [H({ h: 0, s: 1, v: 1 }), H({ h: 120, s: 1, v: 1 })]);
 check(H({ h: 77, s: 0.4, v: 0 }) === "#000000" && H({ h: 200, s: 0, v: 1 }) === "#FFFFFF", "H2 검정 · 흰색");
 check(H({ h: 360, s: 1, v: 1 }) === "#FF0000" && H({ h: -120, s: 1, v: 1 }) === "#0000FF", "H3 360 = 0 · 음수는 감는다", [H({ h: 360, s: 1, v: 1 }), H({ h: -120, s: 1, v: 1 })]);
+check([H({ h: NaN, s: 1, v: 1 }), H({ h: 0, s: NaN, v: NaN })].every((x) => /^#[0-9A-F]{6}$/.test(x)), "H5 NaN 이 와도 색 코드 꼴(마무리 저장이 400 으로 막히지 않게)", [H({ h: NaN, s: 1, v: 1 }), H({ h: 0, s: NaN, v: NaN })]);
 check(H({ h: 0, s: 2, v: 1.5 }) === "#FF0000" && H({ h: 0, s: -1, v: -1 }) === "#000000", "H4 0~1 밖은 끝에 붙인다");
 
 const ROUND = ["#3A7BD5", "#118E6E", "#B0323F", "#D6457A", "#576889", "#0D88A7", "#FFFFFF", "#000000", "#7F7F7F", "#FF8800"];
@@ -41,7 +43,8 @@ check(Math.abs(K("#000000", "#FFFFFF") - 21) < 0.01 && Math.abs(K("#3A7BD5", "#3
 
 const NINE = SF && Array.isArray(SF.ICON_COLORS) ? SF.ICON_COLORS.map((c) => c.color) : ["#118E6E", "#2D6BF0", "#8A3FD1"];
 const darks = [...NINE, "#000000", "#101020", "#3A1010", "#7F7F7F"];
-const weak = darks.filter((x) => K(D(x), C.DARK_TILE) < 4);
+const allD = [...darks, "#FFFFFF", "#F5F5DC", "#FFF8E0"];
+const weak = allD.filter((x) => K(D(x), C.DARK_TILE) < 4);
 check(weak.length === 0, "D1 어두운 화면 짝은 어두운 타일 위 대비 4 이상", weak.map((x) => [x, D(x), K(D(x), C.DARK_TILE).toFixed(2)]));
 const lum = (x) => K(x, "#000000");
 const notBrighter = darks.filter((x) => !(lum(D(x)) > lum(x)));

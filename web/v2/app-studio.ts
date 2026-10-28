@@ -713,6 +713,7 @@ async function build(rec: StudioRec): Promise<void> {
     waiting: !!rec.fixing, waitT0: rec.fixing ? rec.fixing.at : 0, topVer: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0, limit: '',   // limit: AI 답 글이 알린 사용 한도(parseLimit 의 한 줄) — 새로 보내면 걷는다
     iconOpen: false, iconWait: false, iconMiss: false, iconT: 0, iconRead: false, iconFail: false,   // ④ 아이콘 — 고르는 칸이 펼쳐졌나 · AI 가 그리는 중 · 안 보냈다 · 지금 아이콘을 읽었나 · 못 읽었나
+    iconT0: 0, iconTick: 0,   // ④ AI 에게 그려 달라고 보낸 때 · 흐른 시간 시계
     colorOpen: false, cpick: null as Hsv | null, hexBad: false,   // ④ 「다른 색」 — 팔레트가 펼쳐졌나 · 손잡이 자리(다시 그려도 그대로) · 적은 색 코드가 틀렸나
     //  막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다 · 막 보낸 고침도 보낸 때부터 60초(armRun 과 같은 틈)
     quietTill: Math.max(Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
@@ -1067,7 +1068,7 @@ async function build(rec: StudioRec): Promise<void> {
   const onText = (t: string): void => {
     //  ④ 「AI에게 그려 달라기」 의 답 — 어느 단계에서 와도 받아 둔다(그새 다른 단계로 갔어도 돌아오면 그림 목록 맨 앞에 있다).
     const ic = parseIcon(t);
-    if (ic) { rec.iconAi = [ic, ...(rec.iconAi || []).filter((x) => x.path !== ic.path)].slice(0, 4); setPick(ic); S.iconWait = false; S.iconMiss = false; window.clearTimeout(S.iconT); if (rec.stage === 'check') paintCheck(); }
+    if (ic) { rec.iconAi = [ic, ...(rec.iconAi || []).filter((x) => x.path !== ic.path)].slice(0, 4); setPick(ic); S.iconWait = false; S.iconMiss = false; window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); if (rec.stage === 'check') paintCheck(); }
     //  하네스가 «사용 한도에 걸렸다» 로 턴을 끝냈다 — 기다리지 않고 바로 까닭을 말한다(세션 줄로는 그냥 idle 이다).
     const lim = parseLimit(t); if (lim) { S.limit = lim; if (runKind()) setStall('limit'); return; }
     if (rec.stage === 'plan') { const c = parseCard(t); if (c) { rec.card = c; saveRec(rec); paintPlan(); paintNow();
@@ -1207,7 +1208,7 @@ async function build(rec: StudioRec): Promise<void> {
   const iconAsk = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '80', placeholder: '예: 마이크와 메모지', 'aria-label': 'AI에게 부탁할 아이콘 그림' }) as HTMLInputElement;
   //  「다른 색」 의 색상 띠 · 색 코드 칸 — 다시 그려도 같은 요소를 단다(끄는 중 · 치는 중에 손이 안 빠지게).
   const hueIn = el('input', { class: 'v2-studio-cpick-hue', type: 'range', min: '0', max: '360', step: '1', 'aria-label': '색상' }) as HTMLInputElement;
-  const hexIn = el('input', { class: 'v2-studio-name-in v2-studio-cpick-hex', type: 'text', maxlength: '7', spellcheck: 'false', placeholder: '#3A7BD5', 'aria-label': '색 코드' }) as HTMLInputElement;
+  const hexIn = el('input', { class: 'v2-studio-name-in v2-studio-cpick-hex', type: 'text', maxlength: '12', spellcheck: 'false', placeholder: '#3A7BD5', 'aria-label': '색 코드' }) as HTMLInputElement;
   const iconNow = (): StudioIcon | null => rec.icon || (S.vis ? S.vis.icon : null);
   /** 고른 아이콘을 기록한다 — 그때 저장돼 있던 아이콘을 함께 적어 둔다(iconBase). spec 이 null 이면 고른 것을 걷는다. */
   const setPick = (spec: StudioIcon | null): void => {
@@ -1227,20 +1228,28 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.iconWait || !rec.appId) return;
     await drain();   // 보내기 전에 쌓인 답(④ 대조)을 먼저 읽는다
     if (S.dead || !(await send(iconBrief(nameIn.value.trim() || S.title, rec.appId, iconAsk.value, iconNow())))) return;
-    S.iconWait = true; S.iconMiss = false; window.clearTimeout(S.iconT);
-    S.iconT = window.setTimeout(() => { if (S.dead || !S.iconWait) return; S.iconWait = false; S.iconMiss = true; if (rec.stage === 'check') paintCheck(); }, 180000);
+    S.iconWait = true; S.iconMiss = false; S.iconT0 = Date.now(); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick);
+    S.iconT = window.setTimeout(() => { if (S.dead || !S.iconWait) return; stopIconWait(); S.iconMiss = true; if (rec.stage === 'check') paintCheck(); }, 180000);
+    //  흐른 시간은 그 글자만 고친다(다시 그리지 않는다 — 적던 칸 · 끌던 손잡이가 흔들리지 않게).
+    S.iconTick = window.setInterval(() => { const n = document.querySelector('.v2-studio-ico-waitclock'); if (n) n.textContent = mmss(Date.now() - S.iconT0); }, 1000);
     if (rec.stage === 'check') paintCheck();
   };
+  //  기다림을 걷는다 — 답이 왔을 때 · 3분이 지났을 때 · 사람이 「그만 기다리기」 를 눌렀을 때. 늦게 온 답도 onText 가 받아 그림 목록에 더한다.
+  const stopIconWait = (): void => { S.iconWait = false; window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); };
+  const mmss = (ms: number): string => { const t = Math.max(0, Math.floor(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
   const iconRow = (): HTMLElement => {
     const cur = iconNow(); const face = faceOf(cur); const title = nameIn.value.trim() || S.title;
     const sub = rec.icon ? '바꾼 아이콘은 「완료 · 다음 단계로」를 누르면 저장돼요.'
       : cur ? (rec.mode === 'new' ? 'AI가 앱을 만들 때 그린 아이콘이에요. 아래 자리에 같은 그림이 나와요.' : '지금 앱의 아이콘이에요. 아래 자리에 같은 그림이 나와요.')
         : !S.iconRead ? '아이콘을 불러오는 중…' : S.iconFail ? '지금 아이콘을 불러오지 못했어요. 잠시 후 다시 확인해주세요.' : '아직 아이콘이 없어 기본 그림으로 보여요. 「아이콘 바꾸기」에서 고를 수 있어요.';
-    const spot = (cap: string, body: HTMLElement): HTMLElement => el('figure', { class: 'v2-studio-ico-spot' }, body, el('figcaption', { text: cap }));
-    const spots = el('div', { class: 'v2-studio-ico-spots' },
-      spot('사이드바', el('div', { class: 'v2-studio-ico-side' }, glyph(face, 'v2-ic'), el('span', { text: title }))),
-      ...(rec.place !== 'full' ? [spot('세션 위젯', el('div', { class: 'v2-studio-ico-tab' }, glyph(face, 'v2-ic'), el('span', { text: title })))] : []),
-      spot('앱 찾기', el('div', { class: 'v2-studio-ico-pad' }, appGlassIcon(face, 'v2-studio-ico-tile'), el('span', { text: title }))));
+    //  미리보기 = 그 자리의 작은 화면(원준 2026-10-28 «정렬이랑 위계 깨져있어 · 어디부분 말하는건지 감도 안옴»). 칸마다 위에 자리 이름,
+    //   안에는 그 자리의 생김새 — 사이드바는 줄 목록 속 한 줄 · 세션 위젯은 탭 줄 속 한 탭 · 앱 찾기는 타일 사이 한 칸. 이웃은 흐린 자리표시라 누를 것처럼 안 보인다.
+    const ghost = (cls: string): HTMLElement => el('span', { class: 'v2-studio-ico-ghost ' + cls, 'aria-hidden': 'true' });
+    const spot = (cap: string, body: HTMLElement): HTMLElement => el('figure', { class: 'v2-studio-ico-spot' }, el('figcaption', { text: cap }), el('div', { class: 'v2-studio-ico-stage' }, body));
+    const spots = el('div', { class: 'v2-studio-ico-spots', role: 'group', 'aria-label': '이 아이콘이 보이는 자리' },
+      spot('왼쪽 사이드바', el('div', { class: 'v2-studio-ico-mside' }, ghost('row'), el('div', { class: 'v2-studio-ico-side' }, glyph(face, 'v2-ic'), el('span', { text: title })), ghost('row'))),
+      ...(rec.place !== 'full' ? [spot('세션 위젯 탭', el('div', { class: 'v2-studio-ico-mtab' }, ghost('tab'), el('div', { class: 'v2-studio-ico-tab' }, glyph(face, 'v2-ic'), el('span', { text: title })), ghost('tab')))] : []),
+      spot('앱 찾기', el('div', { class: 'v2-studio-ico-mpad' }, ghost('tile'), el('div', { class: 'v2-studio-ico-pad' }, appGlassIcon(face, 'v2-studio-ico-tile'), el('span', { text: title })), ghost('tile'))));
     const act = el('div', { class: 'v2-studio-ico-act' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'toggle', 'aria-expanded': String(S.iconOpen), text: S.iconOpen ? '접기' : '아이콘 바꾸기', onclick: () => { S.iconOpen = !S.iconOpen; paintCheck(); } }),
       ...(rec.icon ? [el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'reset', text: '처음대로', title: '바꾸기 전 아이콘으로 돌아가요', onclick: () => { setPick(null); paintCheck(); } })] : []));
@@ -1250,10 +1259,10 @@ async function build(rec: StudioRec): Promise<void> {
   const darkNow = (): boolean => { const t = document.documentElement.getAttribute('data-theme'); return t === 'dark' || (t !== 'light' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); };
   const colorPicker = (cur: StudioIcon | null, path0: string): HTMLElement => {
     //  팔레트 밖에서 색이 바뀌었으면(9색 · AI 그림 · 처음대로) 손잡이를 지금 색으로 옮긴다.
-    if (S.cpick && cur && hsvToHex(S.cpick) !== cur.color.toUpperCase()) S.cpick = null;
+    if (S.cpick && cur && hsvToHex(S.cpick) !== cur.color.toUpperCase()) { S.cpick = null; S.hexBad = false; }   // 틀렸다던 색 코드 안내도 걷는다
     const hsv: Hsv = S.cpick || hexToHsv(cur ? cur.color : ICON_COLORS[0].color) || { h: 210, s: 0.7, v: 0.8 }; S.cpick = hsv;
     const knob = el('span', { class: 'v2-studio-cpick-knob' });   // <i> 는 안 된다 — 확인 줄의 체크 칸 규칙(.v2-studio-chk i)이 먹는다
-    const sv = el('div', { class: 'v2-studio-cpick-sv', 'data-ico-k': 'sv', tabindex: '0', role: 'slider', 'aria-label': '채도와 밝기(방향키로 옮겨요)' }, knob) as HTMLElement;
+    const sv = el('div', { class: 'v2-studio-cpick-sv', 'data-ico-k': 'sv', tabindex: '0', role: 'application', 'aria-roledescription': '색 면', 'aria-label': '채도와 밝기(방향키로 옮겨요)' }, knob) as HTMLElement;
     const chip = el('span', { class: 'v2-studio-cpick-chip' });
     const note = el('small', { class: 'v2-studio-cpick-note', role: 'status', 'aria-live': 'polite' });
     //  지금 손잡이 자리를 그린다 — 색 면 바탕(색상) · 손잡이 · 띠 · 코드 · 견본 · 위 미리보기 세 자리 · 흐림 안내. 다시 그리지 않는다.
@@ -1275,25 +1284,33 @@ async function build(rec: StudioRec): Promise<void> {
       note.classList.toggle('warn', S.hexBad || tooLight(hex));
       return hex;
     };
-    const commit = (): void => { const hex = hsvToHex(hsv); S.hexBad = false; setPick({ path: path0, color: hex, color_dark: darkPair(hex) }); paintCheck(); };
+    let keyT = 0;
+    const commit = (): void => { window.clearTimeout(keyT); const hex = hsvToHex(hsv); S.hexBad = false; setPick({ path: path0, color: hex, color_dark: darkPair(hex) }); paintCheck(); };
+    //  다시 그리지 않고 고른다 — 색 코드 칸을 떠날 때(blur). 다시 그리면 그 순간 누르던 다른 칸(색 · 그림)이 문서에서 빠져 그 누름이 사라진다(격리 리뷰).
+    //   미리보기는 show(true) 로 칠해 두고, 다음에 다시 그릴 때 제 색으로 선다.
+    const commitQuiet = (): void => { const hex = hsvToHex(hsv); S.hexBad = false; setPick({ path: path0, color: hex, color_dark: darkPair(hex) }); show(true); };
     const at = (e: PointerEvent): void => { const r = sv.getBoundingClientRect(); hsv.s = Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || 1))); hsv.v = 1 - Math.min(1, Math.max(0, (e.clientY - r.top) / (r.height || 1))); show(true); };
     let drag = false;
-    sv.onpointerdown = (e: PointerEvent) => { drag = true; try { sv.setPointerCapture(e.pointerId); } catch (_) { /* 잡지 못해도 끈다 */ } sv.focus(); at(e); e.preventDefault(); };
+    //  왼쪽 단추 · 첫 손가락만(오른쪽 단추는 메뉴가 떠 pointerup 이 안 올 수 있다). 끄는 중 잡기를 놓치면(lostpointercapture) 거기서 고른다.
+    //   끄는 사이 바깥 일(AI 답 · 새 버전)로 ④ 가 다시 그려지면 이 색 면은 문서에서 빠지고 끌기도 끝난다 — 손잡이는 마지막으로 고른 색으로 돌아간다.
+    sv.onpointerdown = (e: PointerEvent) => { if (e.button !== 0 || !e.isPrimary) return; drag = true; try { sv.setPointerCapture(e.pointerId); } catch (_) { /* 잡지 못해도 끈다 */ } sv.focus(); at(e); e.preventDefault(); };
     sv.onpointermove = (e: PointerEvent) => { if (drag) at(e); };
     sv.onpointerup = (e: PointerEvent) => { if (!drag) return; drag = false; at(e); commit(); };
     sv.onpointercancel = () => { if (drag) { drag = false; commit(); } };
+    sv.onlostpointercapture = () => { if (drag) { drag = false; commit(); } };
     sv.onkeydown = (e: KeyboardEvent) => {
       const d = e.shiftKey ? 0.1 : 0.02;
       if (e.key === 'ArrowLeft') hsv.s = Math.max(0, hsv.s - d); else if (e.key === 'ArrowRight') hsv.s = Math.min(1, hsv.s + d);
       else if (e.key === 'ArrowUp') hsv.v = Math.min(1, hsv.v + d); else if (e.key === 'ArrowDown') hsv.v = Math.max(0, hsv.v - d);
       else return;
-      e.preventDefault(); commit();
+      //  누르고 있으면 되풀이가 빠르다 — 칠하기는 바로, 고르기(다시 그리기 · 그림 등록)는 손을 뗀 뒤 한 번.
+      e.preventDefault(); show(true); window.clearTimeout(keyT); keyT = window.setTimeout(() => { if (!S.dead) commit(); }, 300);
     };
     hueIn.oninput = () => { hsv.h = Number(hueIn.value) || 0; show(true); };
     hueIn.onchange = () => { hsv.h = Number(hueIn.value) || 0; commit(); };
     const takeHex = (): void => { const hex = normHex(hexIn.value); if (!hex) { S.hexBad = true; show(); return; } const v = hexToHsv(hex); if (v) Object.assign(hsv, v); hexIn.value = hex; commit(); };
     hexIn.onkeydown = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); takeHex(); } };
-    hexIn.onchange = () => { takeHex(); };
+    hexIn.onchange = () => { const hex = normHex(hexIn.value); if (!hex) { S.hexBad = true; show(); return; } const v = hexToHsv(hex); if (v) Object.assign(hsv, v); hexIn.value = hex; commitQuiet(); };
     const box = el('div', { class: 'v2-studio-cpick' }, sv, hueIn, el('div', { class: 'v2-studio-cpick-row' }, chip, hexIn), note);
     show();
     return box;
@@ -1317,7 +1334,7 @@ async function build(rec: StudioRec): Promise<void> {
     //  「다른 색」(원준 2026-10-28 «9개 냅두고, 원하면 다른 색을 훨씬 더 다양하게 · 연속적 컬러팔레트») — 색 면(채도 × 밝기) · 색상 띠 · 색 코드.
     //   사람은 밝은 화면 색 하나만 고르고, 어두운 화면 색은 darkPair 가 만든다. 끄는 동안은 미리보기만 칠하고(다시 그리지 않는다) 손을 떼면 고른다.
     const custom = !!cur && !ICON_COLORS.some((c) => c.color.toLowerCase() === cur.color.toLowerCase());
-    const more = el('button', { type: 'button', class: 'v2-studio-ico-more' + (custom ? ' on' : ''), 'data-ico-k': 'more', 'aria-expanded': String(S.colorOpen), 'aria-pressed': String(custom), title: '색 더 고르기',
+    const more = el('button', { type: 'button', class: 'v2-studio-ico-more' + (custom ? ' on' : ''), 'data-ico-k': 'more', 'aria-expanded': String(S.colorOpen), title: '색 더 고르기', 'aria-label': custom ? '다른 색(지금 고른 색)' : '다른 색',
       onclick: () => { S.colorOpen = !S.colorOpen; S.hexBad = false; if (S.colorOpen) S.cpick = hexToHsv(cur ? cur.color : ICON_COLORS[0].color); paintCheck(); } },
       el('span', { class: 'v2-studio-ico-more-dot', ...(custom ? { style: 'background: var(--gi-c-' + faceOf(cur) + ')' } : {}) }), el('span', { text: '다른 색' }));
     const askBtn = el('button', { type: 'button', class: 'v2-studio-go sm', 'data-ico-k': 'ask', text: 'AI에게 그려 달라기', disabled: S.iconWait || !rec.appId, onclick: () => { void askIcon(); } });
@@ -1327,7 +1344,14 @@ async function build(rec: StudioRec): Promise<void> {
       el('b', { text: '색' }), el('div', { class: 'v2-studio-ico-colors' }, ...swatches, more),
       ...(S.colorOpen ? [colorPicker(cur, path0)] : []),
       el('b', { text: 'AI에게 부탁하기' }), el('div', { class: 'v2-studio-ico-ask' }, iconAsk, askBtn),
-      el('small', { role: 'status', 'aria-live': 'polite', text: S.iconWait ? 'AI가 아이콘을 그리는 중…' : S.iconMiss ? 'AI가 아이콘을 보내지 않았어요. 다시 부탁해주세요.' : '원하는 그림을 적으면 AI가 새로 그려 그림 목록 맨 앞에 더해요.' }));
+      //  기다리는 동안 — 흐른 시간 · 보통 걸리는 때 · 어디서 보나 · 그만 기다리기(원준 2026-10-28 «언제까지 기다려야하는지 감이 안오는데»).
+      S.iconWait
+        ? el('div', { class: 'v2-studio-ico-wait', role: 'status', 'aria-live': 'polite' },
+          el('span', { class: 'v2-studio-ico-spin', 'aria-hidden': 'true' }),
+          el('div', {}, el('b', {}, 'AI가 아이콘을 그리고 있어요 ', el('span', { class: 'v2-studio-ico-waitclock', text: mmss(Date.now() - S.iconT0) })),
+            el('small', { text: '보통 1분 안에 끝나요. 진행은 위 「AI 세션 보기」에서 볼 수 있어요.' })),
+          el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'stopwait', text: '그만 기다리기', title: '나중에 답이 오면 그림 목록에 더해 둬요', onclick: () => { stopIconWait(); paintCheck(); } }))
+        : el('small', { role: 'status', 'aria-live': 'polite', class: S.iconMiss ? 'warn' : '', text: S.iconMiss ? '3분 동안 답이 없었어요. 「AI 세션 보기」에서 확인하거나 다시 부탁해주세요.' : '원하는 그림을 적으면 AI가 새로 그려 그림 목록 맨 앞에 더해요.' }));
   };
   const paintCheck = (): void => {
     const h = appHost(); const c = rec.card;
@@ -1505,7 +1529,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
-    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
