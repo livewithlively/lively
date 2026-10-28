@@ -20,6 +20,9 @@
 //      종전 DELETE ?reclaim=1 은 지난 세션으로 남겨 여기서 다시 섰다
 //  T12 세션을 못 지우면 — 카드 남음 · 까닭을 알림 · 다시 누를 수 있다
 //  T13 이미 없는 세션이면 — 지운 것으로 친다(카드 사라짐)
+//  T14 다른 브라우저에서 지운 만들기(원준 2026-10-28 «사파리 브라우전데 안지워졌어») — 이 브라우저에 기록만 남고 서버 세션 목록엔 그 세션이 없다
+//      → 카드가 안 서고 그 기록도 걷힌다
+//  T15 막 시작한 만들기(기록이 2분 안) — 세션이 아직 목록에 없어도 선다
 //  W  페이지 예외 없음 · 앱 목록 요청이 실제로 나갔다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(카드에 지우기가 없던 origin/main 에서 T1~T7 이 빨갛다).
@@ -86,12 +89,13 @@ async function PAGE_MAIN() {
     rec("box-t", "다른 데서 지운 것", "", "plan", 6), // 다른 브라우저에서 지워 세션이 휴지통에 있다
     rec("box-f", "견적", "", "plan", 7),              // 세션을 휴지통에 못 넣을 것(컴퓨터가 꺼짐)
     rec("box-g", "없는 세션", "", "plan", 8),         // 서버에 그 세션이 이미 없다
+    { ...rec("box-old", "사파리에 남은 기록", "notes", "fix", 0), at: NOW - 10 * 60_000 },   // 다른 브라우저에서 지워 서버에 세션이 없다
   ]));
   //  셸의 세션 목록 — 서버처럼 휴지통에 넣은 세션엔 trashedAt 이 실린다(sess-merge). 지난 세션(restorable)은 그대로 실린다.
   const row = (id, label, i, trashedAt = null) => ({ id, label, projectId: null, owned: true, lastSeen: NOW - (20 + i) * 1000, restorable: true, trashedAt, logId: "uuid-" + id, logNode: "", raw: { claudeSessionId: "uuid-" + id } });
   const SESS = [row("box-s", '"메모" 앱 제작', 1), row("box-u", '"할 일" 앱 제작', 2, "2026-10-28T00:00:00Z"), row("box-t", '"다른 데서 지운 것" 앱 제작', 3, "2026-10-28T00:00:00Z")];
   //  완전 삭제한 세션은 서버 목록에서 빠진다(session-trash purged).
-  const env = { projects: () => [], sessions: () => SESS.filter((s) => !window.__purged.has(s.id)), redrawSide: () => {}, setRoute: () => {} };
+  const env = { projects: () => [], sessions: () => SESS.filter((s) => !window.__purged.has(s.id)), sessionsReady: () => true, redrawSide: () => {}, setRoute: () => {} };
   history.replaceState(null, "", "#/builder");
   B.renderBuilderApp(host, ["builder"], new URLSearchParams(""), env);
   await sleep(800);
@@ -105,6 +109,8 @@ async function PAGE_MAIN() {
 
   // T10
   R.t10 = { stopped: !!cardOf("메모"), trashed: !!cardOf("할 일"), localTrashed: !!cardOf("다른 데서 지운 것") };
+  R.t14 = { card: !!cardOf("사파리에 남은 기록"), rec: JSON.parse(localStorage.getItem("lively_v2_app_studio") || "[]").some((r) => r.sid === "box-old") };
+  R.t15 = !!cardOf("여행 계획");   // box-b — 기록만 있고(방금) 세션 목록엔 없다
   // T1
   R.t1 = btnsOf(cardOf("회의록"));
   // T2 — 한 번
@@ -232,6 +238,8 @@ check(R.t8 && R.t8.hide === 0 && !/목록에서 빼기/.test(R.t8.mini || "") &&
 same(R.t8 && [R.t8.panel, R.t8.armed, R.t8.writes, R.t8.gone], [true, "한 번 더 누르면 지워져요. 되돌릴 수 없어요.", [DISCARD("mine2"), DEL("box-d")], true], "T8 오른쪽 「모두 지우기」 도 그대로 두 번 눌러 지운다");
 same(R.t9 && [R.t9.again, R.t9.writes, R.t9.gone], [true, [DISCARD("mine3"), DEL("box-e")], true], "T9 지우는 사이 다시 그려진 카드로 또 눌러도 한 번만 지운다");
 same(R.t10, { stopped: true, trashed: false, localTrashed: false }, "T10 지난 세션(멈춘 만들기)은 선다 · 휴지통의 세션은 안 선다 · 이 브라우저 기록이 있어도 세션이 휴지통이면 안 선다");
+same(R.t14, { card: false, rec: false }, "T14 서버에 세션이 없는 이 브라우저의 기록(다른 브라우저에서 지운 것) — 카드가 안 서고 기록도 걷힌다");
+same(R.t15, true, "T15 막 시작한 만들기는 세션이 아직 목록에 없어도 선다");
 same(R.t11 && [R.t11.writes, R.t11.gone, R.t11.reopened], [PURGE_ALL("box-s"), true, false], "T11 지운 뒤 새로 열어도 카드가 다시 서지 않는다(세션 완전 삭제 + 대화 기록 파기)");
 same(R.t12 && [R.t12.writes, R.t12.gone, R.t12.btn, /앱빌딩 세션을 지우지 못했어요/.test(R.t12.toast) && /멈추지 못했어요/.test(R.t12.toast)], [[DEL("box-f")], false, { text: "지우기", disabled: false }, true], "T12 세션을 못 옮기면 카드 남음 · 까닭을 알림 · 다시 누를 수 있다");
 same(R.t13 && [R.t13.writes, R.t13.gone], [[DEL("box-g")], true], "T13 이미 없는 세션이면 지운 것으로 친다");

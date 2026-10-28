@@ -197,8 +197,13 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   const seq = ++v.seq;
   v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: '불러오는 중…' }));
   await refreshBuilderModel(true);
+  //  셸이 세션 목록을 아직 못 받았으면 받을 때까지(15초까지) 기다린다 — 받기 전엔 이 브라우저의 기록이 지운 만들기인지 모른다
+  //   (builder-model goneRec). 가운데 목록은 셸이 세션을 새로 받아도 다시 그려지지 않으니, 먼저 그리면 지운 카드가 그대로 남는다.
+  for (let t = 0; env.sessionsReady && !env.sessionsReady() && t < 50 && seq === v.seq; t++) await new Promise((r) => setTimeout(r, 300));
   const M = builderModelNow(env);
   if (seq !== v.seq || !v.root.isConnected) return;
+  //  서버에 세션이 없는 이 브라우저의 기록 — 지운 만들기다(다른 브라우저에서 지웠다). 기록도 걷는다(앱 찾기의 «만드는 중» 판정도 이 기록을 읽는다).
+  if (M) M.goneRecs.forEach((sid) => dropStudioRec(sid));
   if (!M) { v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: builderModelFailed() ? '앱 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.' : '불러오는 중…' })); return; }
   const { apps, me: m, drafts, mine, team } = M;
   //  사이드바에서 팀원이 만든 앱을 골라 왔으면 그 묶음을 펴 둔다 — 고른 카드가 접힌 묶음 안에 숨지 않게.
