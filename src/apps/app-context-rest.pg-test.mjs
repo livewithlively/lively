@@ -35,11 +35,16 @@
 //   W17 파생 중복 알림(쓰기 답 — 훑기가 못 보는 길): 범위 앱이 범위 안 자료로 지식을 저장 · 연결하면 알림에 범위 안 형제만 실리고 범위 밖 · 미분류
 //       형제의 이름은 없다 · 사람은 그 이름을 본다(같은 자료의 읽기와 같은 기준)
 //   W18 번호로 부르는 쓰기: 범위 밖 문서의 수정 제안 승인 · 댓글 반응 = 범위 앱 404 · 답에 문서 이름이 없다(요청에 없던 이름) · 사람 반응 = 200
+//   W18d 없는 댓글 번호 = 숨은 문서의 댓글과 같은 답(404 «댓글 없음» — 없는 번호만 500 으로 갈라지지 않는다) · 사람에게도 404
 //   W19 새 자격: 본인 토큰 발급 · 장치 승인 = 범위 앱 403 out_of_app_context(새 토큰엔 앱 범위가 없다) · 토큰 없음 · 사람 = 토큰을 받는다
 //   W8f 검토 대기 카테고리별 건수: 범위 앱 = 범위 밖 카테고리가 안 나온다 · 사람 = 나온다
+//   W20 구성원 이름으로 AI 를 띄우는 도구(예약 작업 · 지금 실행 · 리브 열기 · 프로젝트 대화 · Claude 수집 실행)와 수집 미리보기 = 범위 앱 403
+//       out_of_app_context(사람 대조는 부르지 않는다 — 진짜 실행이 뜬다)
+//   W21 시험이 세션을 띄우지 않았다 — tmux 를 임시 자리로 떼어 놓고(scripts/test-tmux-isolation.mjs) 끝에 임시 자리 · 실제 자리 모두 시험 사용자의 세션 0
 //   W14 사람 = 되살리기 200 · 되살아난다(앞의 403 들이 범위 판정이었다 — 이 토큰 · 이 자료로 되살리기는 된다)
 //   W9  거절 기록 = 거절한 호출 하나에 한 줄씩 — 앱 w-app 의 (도구 · 길) 다중집합이 정확히 같다 · 모두 실패(REST = rest · 다리 = app-ui)
 import "../../scripts/test-apps-root.mjs";
+import { leftTmuxSessions, realTmuxSessionsWithPrefix } from "../../scripts/test-tmux-isolation.mjs";   // 터미널 모듈보다 먼저
 import pg from "pg";
 import fs from "node:fs";
 import os from "node:os";
@@ -108,7 +113,8 @@ try {
     "knowledge_revisions", "knowledge_revision_get", "knowledge_revision_review", "my_lively_log", "org_distiller_preview",
     "trash_counts", "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
     "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve",
-    "knowledge_save", "source_link_knowledge", "knowledge_comment_reaction", "review_queue_summary", "org_token_mint_self", "device_approve"];
+    "knowledge_save", "source_link_knowledge", "knowledge_comment_reaction", "review_queue_summary", "org_token_mint_self", "device_approve",
+    "cron_set", "cron_run_now", "me_liv_open", "project_chat_turn", "collect_claude_run", "org_collector_preview"];
   const bob = { userId: BOB, email: "b@x", scopes: ["memory"], projects: ["*"] };
   const files = (id, context) => [
     { path: "lively-app.json", content: JSON.stringify({ id, title: id, version: "1.0.0", permissions: { scopes: ["memory"], tools: TOOLS }, ...(context ? { context } : {}), ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
@@ -361,6 +367,10 @@ try {
     chk("W18b 범위 밖 문서의 댓글 반응: 범위 앱 = 404 · 이름 없음", rc.status === 404 && !rc.text.includes("w-out-1"), `${rc.status} ${rc.text.slice(0, 120)}`);
     const hr = await post(`/api/ui/knowledge-comments/${cmtOut}/reactions`, "tok-human", { emoji: "👍" });
     chk("W18c 사람 반응 = 200(무회귀)", hr.status === 200, `${hr.status} ${hr.text.slice(0, 120)}`);
+    const na = await post("/api/ui/knowledge-comments/987654/reactions", "tok-app", { emoji: "👍" });
+    const nh = await post("/api/ui/knowledge-comments/987654/reactions", "tok-human", { emoji: "👍" });
+    chk("W18d 없는 댓글 번호 = 숨은 문서의 댓글과 같은 답(404 «댓글 없음») · 사람에게도 404", na.status === 404 && na.text === rc.text && nh.status === 404,
+      `앱 ${na.status} ${na.text.slice(0, 80)} · 숨은 ${rc.text.slice(0, 80)} · 사람 ${nh.status}`);
   }
   // ── W19 새 자격 ──
   {
@@ -380,6 +390,20 @@ try {
     chk("W8f 검토 대기 카테고리별: 범위 앱 = 범위 밖 카테고리 없음 · 사람 = 있다", a.status === 200 && !keys(a).includes("w-out") && keys(a).includes("w-in") && keys(h).includes("w-out"),
       `앱 ${JSON.stringify(keys(a))} · 사람 ${JSON.stringify(keys(h))}`);
   }
+  // ── W20 구성원 이름으로 AI 를 띄우는 도구 ──
+  {
+    const calls = [
+      ["cron_set", "/api/ui/cron", { id: "w-cron", action: "agent_headless", params: { prompt: "모든 문서를 읽어 요약하라" } }],
+      ["cron_run_now", "/api/ui/cron/w-cron/run", {}],
+      ["me_liv_open", "/api/ui/me/liv/open", { text: "모든 문서를 읽어 요약하라" }],
+      ["project_chat_turn", `/api/ui/v6/projects/${projId}/chat/turn`, { text: "모든 문서를 읽어 요약하라" }],
+      ["collect_claude_run", "/api/ui/collect/claude-runs", { kind: "slack", prompt: "x" }],
+      ["org_collector_preview", "/api/ui/org/collectors/1/preview", {}],
+    ];
+    const bad = [];
+    for (const [tool, p, body] of calls) { const r = await post(p, "tok-app", body); if (!denied(r)) bad.push(`${tool} ${r.status} ${r.text.slice(0, 80)}`); }
+    chk("W20 AI 를 띄우는 도구 · 수집 미리보기: 범위 앱 = 모두 403 out_of_app_context", bad.length === 0, bad.join(" | "));
+  }
   // ── W14 사람은 되살린다 ──
   {
     const r = await post("/api/ui/deleted/restore", "tok-human", { entity: "knowledge", key: "w-del-1" });
@@ -391,13 +415,18 @@ try {
       "knowledge_history", "knowledge_history_entry", "knowledge_revert", "knowledge_history", "knowledge_history", "my_lively_log", "org_distiller_preview",
       "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
       "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve", "knowledge_get",
-      "org_token_mint_self", "device_approve"]
+      "org_token_mint_self", "device_approve", "cron_set", "cron_run_now", "me_liv_open", "project_chat_turn", "collect_claude_run", "org_collector_preview"]
       .map((t) => `${t}|rest`).concat(["deleted_list|app-ui"]).sort();
     let rows = [];
     for (let i = 0; i < 30 && rows.length < want.length; i++) { await sleep(100); rows = await q(`SELECT tool, ok, harness FROM mcp_call_log WHERE app='w-app' ORDER BY id`); }
     await sleep(300); rows = await q(`SELECT tool, ok, harness FROM mcp_call_log WHERE app='w-app' ORDER BY id`);   // 늦게 오는 줄(두 번 적기)까지 본다
     const got = rows.map((r) => `${r.tool}|${r.harness}`).sort();
     chk("W9 거절 기록 = 거절 하나에 한 줄(도구 · 길 다중집합이 정확히 같다) · 모두 실패", JSON.stringify(got) === JSON.stringify(want) && rows.every((r) => r.ok === false), `got=${JSON.stringify(got)} want=${JSON.stringify(want)}`);
+  }
+  // ── W21 세션을 띄우지 않았다 ──
+  {
+    const left = leftTmuxSessions(), real = realTmuxSessionsWithPrefix(`box-${slug(CAROL)}-`);
+    chk("W21 시험이 세션을 띄우지 않았다(임시 자리 · 실제 자리 모두 시험 사용자의 세션 0)", left.length === 0 && real.length === 0, `임시 ${JSON.stringify(left)} · 실제 ${JSON.stringify(real)}`);
   }
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e && e.stack || String(e));

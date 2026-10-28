@@ -16,7 +16,9 @@
 //   S3 (배선) 부른 길이 충분하다 — 능력 GET 300개 이상 · 맨 GET 1개 이상 · 범위 앱이 2xx 를 받은 길 80개 이상(훑기가 조용히 아무것도 안 부르지 않게)
 //   S4 범위 안 표지(지식 · 자료)는 범위 앱에도 보인다(범위가 통째로 닫혀서 S1 이 통과하는 것이 아니다)
 //   S5 (배선) 표지마다 «사람은 보는데 범위 앱은 못 보는» 길이 적어도 하나 있다 — 그 표지에 대해 S1 이 실제로 무엇인가를 가렸다
+//   S6 시험이 세션을 띄우지 않았다 — tmux 를 임시 자리로 떼어 놓고(scripts/test-tmux-isolation.mjs), 끝에 임시 자리 · 실제 자리 모두 시험 사용자의 세션 0
 import "../../scripts/test-apps-root.mjs";
+import { leftTmuxSessions, realTmuxSessionsWithPrefix } from "../../scripts/test-tmux-isolation.mjs";   // 터미널 모듈보다 먼저
 import pg from "pg";
 import fs from "node:fs";
 import os from "node:os";
@@ -164,9 +166,11 @@ try {
     out = out.map(rest);
     return /:id\b/.test(p) ? out.flatMap((v) => ids.map((i) => v.replace(/:id\b/g, String(i)))) : out;
   };
-  //  쿼리는 두 벌 — 레인 · 범위 밖 문서를 가리키는 것, 지운 문서를 가리키는 것(휴지통 미리보기 등 key=이름 길)
+  //  쿼리는 세 벌 — 레인 · 범위 밖 문서를 가리키는 것, 지운 문서를 가리키는 것(휴지통 미리보기 등 key=이름 길), 이름이 없는 것
+  //   (앞의 두 벌은 그 이름을 요청에 실어 그 이름 표지를 S1 에서 면제한다 — 셋째 벌이 면제 없이 잰다)
   const QSS = ["q=SWPX&text=SWPX%20K%20BODY&name=swpx-hid&limit=50&entity=knowledge&key=swp-lane&since=2020-01-01T00:00:00Z&window=30d&status=pending",
-    "q=SWPX&name=swpx-del&limit=50&entity=knowledge&key=swpx-del&since=2020-01-01T00:00:00Z&window=all"];
+    "q=SWPX&name=swpx-del&limit=50&entity=knowledge&key=swpx-del&since=2020-01-01T00:00:00Z&window=all",
+    "q=SWPX&limit=50&entity=knowledge&since=2020-01-01T00:00:00Z&window=all&status=pending"];
   const BODY = { key: "swp-lane", name: "swpx-hid", q: "SWPX", text: "SWPX K BODY", limit: 50, entity: "knowledge" };
 
   const leaks = new Map();   // "도구 길" → 표지
@@ -219,6 +223,9 @@ try {
   chk("S4 범위 안 표지(지식 · 자료)는 범위 앱에도 보인다", appSawIn.size > 0 && appSawInSource.size > 0, `지식 ${appSawIn.size} · 자료 ${appSawInSource.size}`);
   const notHidden = CANARIES.filter((c) => !scopeHid.has(c));
   chk("S5 (배선) 표지마다 사람은 보는데 범위 앱은 못 보는 길이 있다", notHidden.length === 0, `범위가 한 번도 가리지 않은 표지: ${notHidden.join(", ")}`);
+  const leftSessions = leftTmuxSessions(), realSessions = realTmuxSessionsWithPrefix(`box-${slug(CAROL)}-`);
+  chk("S6 시험이 세션을 띄우지 않았다(임시 자리 · 실제 자리 모두 시험 사용자의 세션 0)", leftSessions.length === 0 && realSessions.length === 0,
+    `임시 자리 ${JSON.stringify(leftSessions)} · 실제 자리 ${JSON.stringify(realSessions)}`);
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e && e.stack || String(e));
 } finally {

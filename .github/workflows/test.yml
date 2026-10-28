@@ -530,7 +530,8 @@ jobs:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-context-rest.pg-test.mjs
       # ④-d5 앱 맥락 범위 훑기(#5100 격리 재재검토 권고) — 범위 밖 표지를 심고 모든 능력 REST GET · 읽기 전용 POST · 맨 GET 길을 범위 앱 토큰으로 불러
-      #    2xx 답에 표지가 실린 길을 이름으로 알린다(적어 둔 목록 밖의 새 길도 재진다). 항상-주입 문서를 돌려주는 길만 예외.
+      #    답(상태와 무관)에 표지가 실린 길을 이름으로 알린다(적어 둔 목록 밖의 새 길도 재진다 · 이름은 요청에 없던 것만). 항상-주입 문서를 돌려주는 길만 예외.
+      #    tmux 는 임시 자리로 떼어 놓고(scripts/test-tmux-isolation.mjs) 시험이 세션을 띄우지 않았는지도 본다.
       - name: 앱 맥락 범위 훑기(모든 읽기 길 · 범위 밖 표지) PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
         env:

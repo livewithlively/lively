@@ -293,7 +293,7 @@ try {
     chk("P1 리스트 grant 지식에 잠긴 자료 단독 연결 → 409(프로젝트 공개범위와 함께 못 지킴)", !r.ok && r.status === 409 && r.body?.reason === "project_list", JSON.stringify(r));
     chk("P1 연결 없음 · 리스트 grant 그대로", (await linksOf(kname("p1"))).length === 0 && JSON.stringify(await knowLists(kname("p1"))) === JSON.stringify([L]));
     //  L4 — 되돌리기(allowNarrow)는 같은 연결을 좁혀서 잇는다(리스트를 걷는다).
-    const u = await attempt(() => linkKnowledgeSource(kname("p1"), sA, "derived_from", { actor: A, source: "web" }, { allowNarrow: true }));
+    const u = await attempt(() => linkKnowledgeSource(kname("p1"), sA, "derived_from", { actor: A, source: "web" }, { allowNarrow: true, viewer: undefined }));
     chk("L4 되돌리기의 다시 잇기는 거절 없이 좁힌다 · 리스트 grant 걷힘", u.ok && (await knowLists(kname("p1"))).length === 0
       && JSON.stringify(await knowAud(kname("p1"))) === JSON.stringify([]) && (await linksOf(kname("p1"))).length === 1, JSON.stringify(u));
     //  P2 — 리스트 grant 지식이 이은 **열린** 자료가 나중에 잠기면(정책 소급 같은 좁히기) 리스트가 걷히고 닫힌다.
@@ -434,7 +434,7 @@ try {
         await c.query(`DELETE FROM source_member WHERE source_id=$1 AND member_id=$2`, [sid, B]);
         await dv.reconcileDerivedVisibility(c, { sourceIds: [sid] });
       });
-      const linked = linkKnowledgeSource(kname(`c${i}`), sid, "derived_from", { actor: A, source: "web" });
+      const linked = linkKnowledgeSource(kname(`c${i}`), sid, "derived_from", { actor: A, source: "web" }, { viewer: undefined });
       await Promise.all([narrow, linked]);
       const aud = await knowAud(kname(`c${i}`));
       if (aud.includes(`member:${B}`) || (await knowRow(kname(`c${i}`)))?.visibility !== "members") worst = { i, aud };

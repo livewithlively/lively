@@ -176,10 +176,11 @@ export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number;
 
 /**
  * 이 자료에서 **이미 파생된** 지식 목록(#1631) — 중복 증류 판정의 재료. 실패는 빈 배열(모름은 경고 없음).
- *  viewer 를 주면 그 사람이 볼 수 있는 지식만(공개범위 · 앱 맥락 범위 — #5100 격리 재재재검토): 알림 글에 형제의 **이름**이 실려 나가므로,
- *  안 보이는 형제를 이름으로 알리면 그 문서가 있다는 것이 샌다. 안 주면(undefined — 증류 내부 판정) 종전대로 전부다.
+ *  viewer 는 그 사람이 볼 수 있는 지식만 고른다(공개범위 · 앱 맥락 범위 — #5100 격리 재재재검토): 알림 글에 형제의 **이름**이 실려 나가므로,
+ *  안 보이는 형제를 이름으로 알리면 그 문서가 있다는 것이 샌다. undefined(증류 내부 판정) · null(특권)은 종전대로 전부다.
+ *  ⚠ 필수 인자다 — 이름을 답에 싣는 함수라, 다음 호출부가 뷰어를 깜빡하면 전부가 나가는 쪽이 기본이 되지 않게 컴파일이 막는다.
  */
-export async function derivedPeersOf(sourceId: number, viewer?: Viewer): Promise<Array<{ name: string; relation: string }>> {
+export async function derivedPeersOf(sourceId: number, viewer: Viewer | undefined): Promise<Array<{ name: string; relation: string }>> {
   try {
     const params: unknown[] = [sourceId];
     const vis = viewer === undefined ? "TRUE" : await knowledgeVisWhere(viewer, params, "k");
@@ -199,8 +200,9 @@ export interface LinkSourceResult {
   derived?: LinkDerivedResult;
 }
 export async function linkKnowledgeSource(
-  name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx,
-  opts: { allowNarrow?: boolean; batchSince?: Date | null; viewer?: Viewer } = {},
+  name: string, sourceId: number, relation: string, ctx: WriteCtx | undefined,
+  //  viewer 는 필수다(derivedPeersOf 머리말 — 알림에 형제 이름이 실린다).
+  opts: { allowNarrow?: boolean; batchSince?: Date | null; viewer: Viewer | undefined },
 ): Promise<LinkSourceResult> {
   //  ⚠ 알림은 **반환값**으로 준다 — 모듈 전역에 담으면 동시 호출(배치 병렬)에서 남의 알림을 집어 온다.
   let dupNote: string | null = null;
@@ -234,7 +236,7 @@ export async function linkKnowledgeSource(
 }
 
 /** #1631 중복 증류 알림 — 이 자료에서 이미 다른 지식이 나왔으면 그 문장(아니면 null). knowledge_save(derived_from)도 쓴다. viewer 는 derivedPeersOf 머리말. */
-export async function derivedDupNote(sourceId: number, name: string, viewer?: Viewer): Promise<string | null> {
+export async function derivedDupNote(sourceId: number, name: string, viewer: Viewer | undefined): Promise<string | null> {
   const { checkDerivedDup } = await import("../org/distill/derived-dup.js");
   const notice = checkDerivedDup(await derivedPeersOf(sourceId, viewer), name);
   if (!notice.duplicate) return null;

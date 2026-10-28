@@ -81,11 +81,10 @@ export const knowledgeCommentReaction: Capability = {
     // 공개범위(#1291) — 반응은 댓글 id 로만 들어온다. 그 댓글이 달린 문서를 볼 수 있어야 한다
     //  (안 보이는 문서에 반응을 남기면 그 문서 화면의 작성자에게 내 존재가 드러나고, 응답 집계도 새어 나간다).
     const viewer = ctx?.viewer ?? null;
-    if (viewer !== null) {
-      const name = await knowledgeNameOfComment(input.id);
-      //  못 보면 «댓글 없음» — 요청엔 댓글 번호뿐이라, 문서 이름을 싣는 글(«지식 '<이름>' 없음»)은 번호만으로 그 이름을 알려 준다(#5100).
-      if (name !== undefined && !(await canSeeKnowledge(name, viewer))) throw new HttpError(404, "댓글 없음");
-    }
+    //  없는 댓글 · 못 보는 문서의 댓글은 같은 «댓글 없음»(#5100) — 요청엔 댓글 번호뿐이라, 문서 이름을 싣는 글(«지식 '<이름>' 없음»)은 번호만으로
+    //   그 이름을 알려 주고, 없는 번호만 FK 오류(500)로 갈라지면 «숨은 문서의 댓글 번호가 있다» 가 드러난다.
+    const name = await knowledgeNameOfComment(input.id);
+    if (name === undefined || (viewer !== null && !(await canSeeKnowledge(name, viewer)))) throw new HttpError(404, "댓글 없음");
     return { reactions: await toggleKnowledgeCommentReaction(input.id, input.emoji, ctx?.actor ?? user?.userId ?? "") };
   },
 };
