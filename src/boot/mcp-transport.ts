@@ -7,7 +7,9 @@ import { listBuiltinOverrides, listBuiltinAlwaysLoad } from "../org/store.js";
 import { agentFromHeaders, readOnlyFromHeaders, incognitoFromHeaders } from "../org/auth/agent-identity.js";
 import { registerDynamicTools } from "../mcp/dynamic-tools.js";
 import { registerProxiedMcpTools } from "../mcp/mcp-proxy.js";
+import { registerAppDeclaredTools } from "../mcp/app-declared-tools.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { LivelyUser } from "../context.js";
 import { sessionedEnabled, newSessionId, getSession, putSession, dropSession } from "../mcp-sessions.js";
 import { logger } from "../log.js";
 
@@ -29,12 +31,16 @@ async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   else if (readOnly) logger.info({ harness }, "읽기전용 세션 — 컨텍스트 스토어 쓰기 툴 소거(#1007)");
   // 앱 토큰(#1780 v2.1 R4-M1) — 인증이 req.auth.extra 에 실은 LivelyUser.appId. 세션 배관(EXEMPT) 도구를 tools/list 에서 감춘다.
   //  sessioned 모드는 initialize 시점 토큰으로 서버를 굽는데 앱 토큰의 appId 는 세션 동안 불변이라 안전(경계는 핸들러 재판정).
-  const appId = ((req as unknown as { auth?: { extra?: { appId?: string } } }).auth?.extra?.appId) ?? null;
+  const user = (req as unknown as { auth?: { extra?: LivelyUser } }).auth?.extra;
+  const appId = user?.appId ?? null;
   const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito, appId);
   // 인코그니토면 외부 프록시·동적 툴도 노출하지 않는다(ext__*·http_proxy 도 lively 게이트웨이 표면 — 클린룸이면 전부 차단).
   if (!incognito) {
     try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
     try { await registerProxiedMcpTools(server); } catch (err) { logger.warn({ err }, "프록시 MCP 등록 실패(무시)"); }
+    //  #5050 앱이 선언한 MCP 도구 — 이 토큰의 사람이 보는 판으로(세션 머리글 없는 OAuth 연결도 같다). 앞의 둘 **다음**이라 이름이 겹치면 그쪽이 이긴다.
+    //   앱 토큰엔 올리지 않는다(★5 — 함수 안에서 거른다). sessioned 모드는 initialize 때의 판으로 굽고, 부를 때 판정을 처음부터 다시 한다.
+    try { await registerAppDeclaredTools(server, user, { readOnly }); } catch (err) { logger.warn({ err }, "앱 선언 도구 등록 실패(무시)"); }
   }
   return server;
 }
