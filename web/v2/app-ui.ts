@@ -162,6 +162,14 @@ export function pushAppState(appId: string, state: Record<string, unknown>): num
   liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected) { f.notify('ui/notifications/state', { state }); n++; } });
   return n;
 }
+/** 검토를 시작한다(markReviewProbe(…, true) 뒤) — 떠 있는 이 앱의 프레임 중 탐침 없이 뜬 것만 다시 띄운다(점검 3-1).
+ *  검토하지 않는 동안(막대를 닫고 앱빌더로 돌아온 사이) 새 판이 와 다시 띄운 프레임은 탐침이 빠져 있다 — 그 화면을 그대로 쓰면
+ *  「선택」 이 아무 답도 못 받아 위치 없는 핀만 꽂혔다. 표시(data-probe)는 띄울 때마다(reload 포함) 그때의 검토 상태로 다시 적는다. 세션 곁칸도 포함한다. */
+export function ensureReviewProbe(appId: string): number {
+  let n = 0;
+  liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && f.root.dataset.probe !== '1') { f.reload(); n++; } });
+  return n;
+}
 export function reloadAppFrames(appId: string): number {
   let n = 0;
   liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && !f.root.closest('.pn-sessapp')) { f.reload(); n++; } });
@@ -194,7 +202,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
   const docFor = (d: AppUiData): string => wrapAppHtml(d.html, d.csp, [opts?.extraScript || '', reviewProbe.has(appId) ? PROBE_JS : ''].filter(Boolean).join('\n') || undefined);
   let doc = first ? docFor(first) : '';
   const srcdocFrame = (d: string): HTMLIFrameElement => el('iframe', {
-    class: 'v2-appui-frame', title: opts?.title || meta.title || appId, 'data-app-id': appId, ...(reviewProbe.has(appId) ? { 'data-probe': '1' } : {}),
+    class: 'v2-appui-frame', title: opts?.title || meta.title || appId, 'data-app-id': appId, ...(wantProbe() ? { 'data-probe': '1' } : {}),
     sandbox: frameSandbox('srcdoc'),   // ⚠ allow-same-origin 없음 = 불투명 오리진(부모 토큰·스토리지 격리). 폼 · 대화창 · 내려받기만(#4482), 팝업 · top 이동 불허.
     srcdoc: d,
   }) as HTMLIFrameElement;
@@ -477,6 +485,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     //  탐침은 다시 띄울 때의 검토 상태로 다시 정한다(markReviewProbe 뒤 reloadAppFrames 가 부른다). 앱 주소면 새 코드로 다시 연다.
     reload: () => {
       topics.clear(); opts?.onTyping?.(false);
+      if (wantProbe()) frame.dataset.probe = '1'; else delete frame.dataset.probe;   // 이번에 띄우는 문서에 탐침이 드나(ensureReviewProbe 가 읽는다)
       if (appOrigin) { relaunch(); return; }
       const d = data as AppUiData | null;   // srcdoc 으로 떠 있으면 이미 읽어 두었다(loadData)
       if (d) doc = docFor(d);

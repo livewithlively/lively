@@ -247,7 +247,11 @@ export interface SessionChatOpts {
   /** #4996 — 터미널로 열기 전에 «다른 사람이 이 세션을 터미널로 보고 있나» 를 열람 도장(v2/presence.ts)으로 확인한다.
    *  도장을 찍는 셸(v2/main.ts markViewedSessionSeen)이 있는 화면만 켠다 — 없는 화면(앱 시험 세션)은 답이 안 와 기다리기만 한다. */
   awaitViewers?: boolean;
+  /** 기록을 못 읽는 답(403 · 404)에 계속 되묻지 않는다 — 셸 목록 밖의 세션 화면(앱빌더 ③ 시험 세션, 점검 3-12)이 켠다.
+   *  403(볼 권한 없음)은 그 자리에서 그만 묻고, 404(아직 없음)는 처음 뜨는 사이를 봐 MISSING_GRACE 번까지만 기다린다. 일반 세션 화면은 종전대로 묻는다. */
+  stopOnMissing?: boolean;
 }
+const MISSING_GRACE = 10;
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
   // ── 터미널이 지금 이 세션에 붙나 — **매 물음마다 지금의 행으로** 답한다(opts.terminalSrc 머리말) ──
@@ -2345,15 +2349,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  말 걸 곳 없는 화면을 본다(실제로 그렇게 헤맸다). 그래서 이 경우만 문구도 버튼도 다르다.
       const msg = livKickoff() && notYet ? (canType() ? '리브가 워크스페이스를 맞추고 있어요 — 답하신 내용과 올려 주신 자료를 읽는 중이에요. 잠시만요.'
           : '리브가 워크스페이스를 살펴보다 멈췄어요 — 시작하다 걸렸을 수 있어요. 터미널로 보기에 그 이유가 있습니다.')
-        : chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요 — 아래에 바로 말을 걸어 보세요.'
+        : chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요. 아래에 바로 말을 걸어 보세요.'
         : nodeMsg ? nodeMsg
         : !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
         //  ⚠ 죽은 세션에 «찾지 못했어요» 로 끝내지 않는다(#1631) — 하네스가 죽어도 래퍼는 **그 pane 에 사유를 적고
         //   세션을 살려 둔다**(catalog.ts harnessExitNotice: «이 세션은 살아 있습니다»). 실측 2026-08-31: 온보딩
         //   킥오프가 첫 실행 «폴더를 신뢰합니까?» 에 걸려 죽었고, 그 물음이 pane 에 그대로 떠 있었는데 화면은
         //   그걸 안 보여 줬다. 답이 한 화면 뒤에 있는데 사람은 «기록을 못 찾았다» 만 읽는다.
-        : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.'
-          : '주고받은 말이 없이 끝났어요 — 시작하다 멈췄을 수 있어요. 터미널 화면에 그 이유가 적혀 있습니다.')
+        : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인이나 확인 창에 멈춰 있는 것일 수 있어요. 터미널로 확인해 보세요.'
+          : '주고받은 말이 없이 끝났어요. 시작하다 멈췄을 수 있어요. 터미널 화면에 그 이유가 적혀 있어요.')
         : unreadable ? String(lastErr.message)
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
         : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
@@ -2626,7 +2630,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = window.setTimeout(() => { poking = false; void poll(); }, 120);
   }
-  let fails = 0;
+  let fails = 0, missing = 0;
   async function poll(): Promise<void> {
     if (destroyed || !src) return;
     if (document.hidden) { schedule(); return; }
@@ -2634,7 +2638,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const src0 = src, from0 = loadedTo;
     try {
       let c = await rawGet(srcPath(src, { from: loadedTo }));
-      fails = 0;
+      fails = 0; missing = 0;
       if (destroyed) return;
       //  ★ 겹친 읽기는 버린다(#4794 시험 W26 이 드러냄). 깨운 읽기(pokePoll — 통보 · 하네스가 그린 순간)는 도는 읽기를 기다리지 않아
       //   같은 자리부터 두 번 읽을 수 있고, 둘 다 그리면 같은 줄이 두 번 선다(보낸 말이 두 번 보였다). 이 읽기가 도는 사이 다른 읽기가
@@ -2676,6 +2680,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const st = Number(e?.status);
       // '아직 없음'은 실패가 아니다 — 박스 파일은 첫 대화 뒤 생기고, 중앙 기록은 살아있는 세션이면 첫 턴이 끝나야 올라온다.
       const notYet = (st === 404 && src.kind === 'box') || ((st === 404 || st === 403) && src.kind === 'log' && !dead());
+      //  셸 목록 밖의 화면(stopOnMissing)은 못 읽는 기록을 영영 되묻지 않는다 — 403 은 바로, 404 는 처음 뜨는 사이만 기다리고 그만 묻는다(점검 3-12).
+      if (opts.stopOnMissing && (st === 403 || (st === 404 && ++missing >= MISSING_GRACE))) { src = null; return; }
       if (notYet) { fails = 0; }
       else if (st === 409 && src.kind === 'box' && e?.message === 'node') {
         // 노드(그 컴퓨터) 세션(#1744) — 박스 경로는 영원히 409 다. 서버가 준 uuid(또는 행의 것)로 중앙 기록으로 갈아탄다. 모르면 멈춘다

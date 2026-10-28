@@ -463,6 +463,8 @@ export interface SessionViewOpts {
   chatHome?: boolean;
   /** 리브 세션이다(#4970) — 리브의 물음을 입력칸 바로 위(터미널을 볼 땐 머리줄 아래)에 띄운다(session-chat.ts livAsks 주석). */
   livAsks?: boolean;
+  /** 못 읽는 기록(403 · 404)에 계속 되묻지 않는다 — session-chat.ts stopOnMissing 주석(앱빌더 시험 세션). */
+  stopOnMissing?: boolean;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
@@ -511,6 +513,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     onResumed: vopts.onResumed,
     chatHome: vopts.chatHome,
     livAsks: vopts.livAsks,
+    stopOnMissing: vopts.stopOnMissing,
   });
 }
 

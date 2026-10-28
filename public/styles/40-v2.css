@@ -3332,9 +3332,6 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-hub-head { text-align: center; display: grid; gap: 6px; }
 .v2-studio-hub-head h2 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
 .v2-studio-hub-head p { margin: 0; color: var(--ink-sub); font-size: 13.5px; line-height: 1.55; }
-/* 글 속 「수정하기」 — 「지금 할 일」 · 막대의 「수정하기」 와 같은 단추(같은 꼴 · 같은 일). 줄 높이만 글에 맞춘다. */
-.v2-studio-hub-head p .v2-studio-fix-in { margin: 2px 1px; vertical-align: middle; }   /* 크기 · 글꼴은 .v2-studio-now-pri 그대로(«버튼 제대로 똑같이») */
-.v2-studio-hub-head p .v2-studio-fix-j { margin-left: 2px; }
 /* 두 단추는 같은 크기 — 같은 너비의 두 칸, 높이는 큰 쪽에 맞춘다(원준 2026-10-15 «박스 크기가 다르네»). 좁으면 한 줄씩. 하나뿐이면 가운데 한 칸. */
 .v2-studio-hub-go { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 6px 0; }
 .v2-studio-hub-go:has(> button:only-child) { grid-template-columns: minmax(0, 340px); justify-content: center; }
@@ -3393,6 +3390,8 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 /* 「수정하기」로 보내 AI 가 반영하고 있는 코멘트 — 흐리게 남긴다(고치는 동안 다음 코멘트를 남기게 · 원준 2026-10-28) */
 .v2-studio-mk.sent { opacity: .42; }
 .v2-studio-mk-n.sent { cursor: default; }
+/* 써 보기 — 앱을 직접 누르는 동안 번호 · 상자는 흐리게 남고 눌리지 않는다(밑의 앱 단추를 가리지 않게 · 점검 3-9) */
+.v2-review-layer[data-tool="try"] > .v2-studio-mk { opacity: .3; pointer-events: none; }
 .v2-studio-tray-row.sent .w { color: var(--muted); }
 .v2-studio-tray-row.sent .v2-studio-tray-in { opacity: .6; }
 @media (max-width: 900px) {
@@ -3425,6 +3424,8 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-try { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; min-height: 0; background: var(--bg); }
 .v2-try--fixed { position: fixed; z-index: 80; }
 .v2-try-shell { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 시험 세션 화면의 안내 글(«아직 주고받은 말이 없어요» 같은 것)은 터미널 글이 아니라 보통 글줄 — 터미널 칸 간격(--tui-ls)을 물려받으면 글자마다 벌어져 보였다(점검 6-3) */
+.v2-try .livc-tui .sc-empty p { font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", sans-serif; font-size: 13.5px; line-height: 1.7; letter-spacing: normal; }
 .v2-try-dock { position: absolute; z-index: 9; top: 0; left: 0; right: 0; }
 .v2-try-dock .v2-review-bar.v2-review-bar--dock { min-height: var(--v2-try-door-h, 57px); box-sizing: border-box; flex-wrap: nowrap; }   /* 문패(.pn-door) 높이를 꼭 덮는다 — 높이는 app-try-session 이 재어 넘긴다 */
 .v2-review-bar--dock > .v2-studio-sp { display: none; }
