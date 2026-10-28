@@ -250,10 +250,13 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
       //  #4667 그 세션이 만드는 앱은 서버 기록(build_session)으로 — 예약만 된 빈 앱이면 앱 없이(②부터) 연다.
       const a = apps.find((x) => x.buildSession === where.id) || null;
       const what = s ? builderSessionWhat(s.label) : '';
-      if (!what && !a) { toast('그 세션의 기록을 찾을 수 없어 새로 만들어요'); location.hash = builderRoute('new'); return; }
+      if (!what && !a && !builderModelNow(env)?.drafts.some((x) => x.sid === where.id && !!x.appId)) { toast('그 세션의 기록을 찾을 수 없어 새로 만들어요'); location.hash = builderRoute('new'); return; }
       //  이름은 사람이 정한 것 — 세션 이름 «"이름" 앱 제작» 에 박혀 있다(다른 브라우저에서 이어도 같은 이름 · 원준 2026-10-15). 없으면 첫 판의 앱 이름.
       const named = s ? builderSessionName(s.label) : '';
-      openAppStudio({ sid: where.id, what: what || (a ? a.title : ''), appId: a && !a.empty ? a.id : '', title: named || (a && !a.empty ? a.title : '') }, opts);
+      //  서버 칸이 다른 세션을 가리켜도 목록이 세션의 마지막 글로 앱을 찾았으면(builder-model) 그 앱으로 잇는다 — 세션 기록을 못 읽어도 ② 로 떨어지지 않게.
+      const dm = a ? null : (builderModelNow(env)?.drafts.find((x) => x.sid === where.id && !!x.appId) || null);
+      const ta = dm ? apps.find((x) => x.id === dm.appId) || null : null;
+      openAppStudio({ sid: where.id, what: what || (a ? a.title : ta ? ta.title : ''), appId: a && !a.empty ? a.id : ta ? ta.id : '', title: named || (a && !a.empty ? a.title : ta ? ta.title : '') }, opts);
     });
     return;
   }
