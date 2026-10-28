@@ -96,7 +96,7 @@ async function PAGE_MAIN() {
   await sleep(1800);
   R.p1 = { rows: $$(".v2-studio-chk").map((r) => txt(r.querySelector("b"))), now: txt($(".v2-studio-now")) };
   R.p2 = { spots: spots(), d: sideD(), tile: !!$(".v2-studio-ico-pad svg.v2-gi"), sub: sub() };
-  if (window.__SHOT) { const t = btn(/^아이콘 바꾸기$/); if (t) t.click(); await sleep(300); document.getElementById("out").textContent = "RESULT{}ENDRESULT"; return; }
+  if (window.__SHOT) { const t = btn(/^아이콘 바꾸기$/); if (t) t.click(); await sleep(300); const mo = host.querySelector(".v2-studio-ico-more"); if (mo) mo.click(); await sleep(300); const ed = host.querySelector(".v2-studio-ico-ed"); if (ed) ed.scrollIntoView({ block: "end" }); document.getElementById("out").textContent = "RESULT{}ENDRESULT"; return; }
   // P3 — 앱 화면만
   const full = $$(".v2-studio-chk-places button").find((b) => txt(b) === "앱 화면"); if (full) full.click();
   await sleep(200);
@@ -122,6 +122,36 @@ async function PAGE_MAIN() {
   const rs = btn(/^처음대로$/); if (rs) rs.click();
   await sleep(200);
   R.p7 = { icon: recNow().icon || null, d: sideD(), firstOn: picks()[0] ? picks()[0].classList.contains("on") : null };
+  // Q — 「다른 색」 팔레트(원준 2026-10-28 «9개 냅두고 · 원하면 다른 색을 훨씬 더 다양하게 · 연속적 컬러팔레트»)
+  const moreB = () => $(".v2-studio-ico-more");
+  R.q1 = { more: !!moreB(), text: txt(moreB()), sw: $$(".v2-studio-ico-sw").length, afterSw: moreB() ? moreB().previousElementSibling && moreB().previousElementSibling.classList.contains("v2-studio-ico-sw") : null, exp: moreB() ? moreB().getAttribute("aria-expanded") : null, picker: !!$(".v2-studio-cpick") };
+  if (moreB()) moreB().click();
+  await sleep(200);
+  const hexI = () => $(".v2-studio-cpick-hex"), note = () => txt($(".v2-studio-cpick-note"));
+  R.q2 = { picker: !!$(".v2-studio-cpick"), sv: !!$(".v2-studio-cpick-sv"), hue: !!$(".v2-studio-cpick-hue"), hex: hexI() ? hexI().value : null, exp: moreB() ? moreB().getAttribute("aria-expanded") : null, saves: window.__saves.length - s0 };
+  const typeHex = async (v) => { const i = hexI(); if (!i) return; i.focus(); i.value = v; i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await sleep(200); };
+  await typeHex("#3a7bd5");
+  R.q3 = { icon: recNow().icon || null, open: !!$(".v2-studio-cpick"), moreOn: moreB() ? moreB().classList.contains("on") : null, swOn: $$(".v2-studio-ico-sw.on").length, d: sideD(), focus: document.activeElement === hexI(), hex: hexI() ? hexI().value : null };
+  await typeHex("zz");
+  R.q4 = { color: (recNow().icon || {}).color || null, note: note() };
+  const hue = $(".v2-studio-cpick-hue");
+  if (hue) { hue.value = "120"; hue.dispatchEvent(new Event("input", { bubbles: true })); await sleep(50); R.q5live = { color: (recNow().icon || {}).color || null }; hue.dispatchEvent(new Event("change", { bubbles: true })); await sleep(200); }
+  R.q5 = { color: (recNow().icon || {}).color || null, hex: hexI() ? hexI().value : null };
+  //  색 면을 끌어 오른쪽 위(채도 · 밝기 가장 큼)에서 놓는다 — 띠가 120 이니 진한 초록.
+  const svEl = $(".v2-studio-cpick-sv");
+  if (svEl) { const r = svEl.getBoundingClientRect(); const ev = (t, x, y) => svEl.dispatchEvent(new PointerEvent(t, { bubbles: true, clientX: x, clientY: y, pointerId: 1 }));
+    ev("pointerdown", r.left + r.width / 2, r.top + r.height / 2); ev("pointermove", r.right + 30, r.top - 30); await sleep(50); R.q6live = (recNow().icon || {}).color || null; ev("pointerup", r.right + 30, r.top - 30); await sleep(200); }
+  R.q6 = { color: (recNow().icon || {}).color || null };
+  await typeHex("#FFF8E0");
+  R.q7 = { note: note(), warn: $(".v2-studio-cpick-note") ? $(".v2-studio-cpick-note").classList.contains("warn") : null };
+  const sw0 = $$(".v2-studio-ico-sw")[0]; if (sw0) sw0.click();
+  await sleep(200);
+  R.q8 = { color: (recNow().icon || {}).color || null, hex: hexI() ? hexI().value : null, moreOn: moreB() ? moreB().classList.contains("on") : null };
+  if (moreB()) moreB().click();
+  await sleep(150);
+  R.q9 = { picker: !!$(".v2-studio-cpick") };
+  const rs2 = btn(/^처음대로$/); if (rs2) rs2.click();
+  await sleep(200);
   // P8 — AI 에게 부탁
   const ask = $(".v2-studio-ico-ask input"); if (ask) { ask.value = "마이크와 메모지"; ask.dispatchEvent(new Event("input", { bubbles: true })); }
   const go = btn(/AI에게 그려 달라기/); if (go) go.click();
@@ -219,6 +249,17 @@ same(R.p6 && R.p6.pressed, ["false", "false", "false", "true", "false", "false",
 same(R.p12, { icon: null, d: ICON.path }, "P12 고른 뒤 저장된 아이콘이 바뀌었으면 고른 것을 걷는다(새 아이콘을 덮지 않는다)");
 same(R.p13, { icon: "M1 1h3", d: "M1 1h3" }, "P13 저장된 아이콘이 그대로면 고른 것을 지킨다");
 same(R.p14 && /불러오지 못했어요/.test(R.p14.sub || ""), true, "P14 지금 아이콘을 못 읽으면 「없다」 고 하지 않는다");
+same(R.q1 && [R.q1.more, R.q1.text, R.q1.sw, R.q1.afterSw, R.q1.exp, R.q1.picker], [true, "다른 색", 9, true, "false", false], "Q1 9색은 그대로 · 그 뒤에 「다른 색」 · 접혀 있다");
+same(R.q2 && [R.q2.picker, R.q2.sv, R.q2.hue, R.q2.hex, R.q2.exp, R.q2.saves], [true, true, true, ICON.color, "true", 0], "Q2 펼치면 색 면 · 색상 띠 · 색 코드(지금 색) · 저장 0건");
+same(R.q3 && [R.q3.icon && R.q3.icon.color, R.q3.icon && R.q3.icon.path, R.q3.icon && R.q3.icon.color_dark, R.q3.open, R.q3.moreOn, R.q3.swOn, R.q3.d, R.q3.focus, R.q3.hex],
+  ["#3A7BD5", ICON.path, R.q3 && R.q3.icon && R.q3.icon.color_dark && /^#[0-9A-F]{6}$/.test(R.q3.icon.color_dark) && R.q3.icon.color_dark !== "#3A7BD5" ? R.q3.icon.color_dark : "어두운 짝 없음", true, true, 0, ICON.path, true, "#3A7BD5"],
+  "Q3 색 코드 — 그 색으로 고른다(그림 그대로 · 어두운 짝을 만든다) · 팔레트는 열린 채 · 「다른 색」 이 골라진 표시 · 칸에 손이 남는다");
+same(R.q4 && [R.q4.color, /여섯 자리/.test(R.q4.note || "")], ["#3A7BD5", true], "Q4 틀린 색 코드 — 고른 것은 그대로 · 고쳐 적으라고 말한다");
+same([R.q5live && R.q5live.color, R.q5 && R.q5.color && R.q5.color !== "#3A7BD5", R.q5 && R.q5.hex === R.q5.color], ["#3A7BD5", true, true], "Q5 색상 띠 — 끄는 동안은 고르지 않고 놓으면 고른다");
+same([R.q6live, R.q6 && R.q6.color], [R.q5 && R.q5.color, "#00FF00"], "Q6 색 면 — 끄는 동안은 고르지 않고 · 오른쪽 위에서 놓으면 그 띠의 가장 진한 색");
+same(R.q7 && [/흐리게/.test(R.q7.note || ""), R.q7.warn], [true, true], "Q7 밝은 화면에서 흐린 색이면 알린다");
+same(R.q8 && [R.q8.color, R.q8.hex, R.q8.moreOn], ["#118E6E", "#118E6E", false], "Q8 9색을 고르면 팔레트 손잡이도 그 색으로 · 「다른 색」 표시가 꺼진다");
+same(R.q9 && R.q9.picker, false, "Q9 「다른 색」 을 다시 누르면 접힌다");
 same(R.errors, [], "W 페이지 예외 없음");
 
 console.log(`studio-icon-runtime: ${pass} passed · ${fail} failed`);

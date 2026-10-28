@@ -1935,6 +1935,25 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-ico-colors { display: flex; flex-wrap: wrap; gap: 8px; }
 .v2-studio-ico-sw { width: 24px; height: 24px; border-radius: 999px; border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--line); padding: 0; cursor: pointer; }
 .v2-studio-ico-pick:focus-visible, .v2-studio-ico-sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* ④ 「다른 색」 — 9색 뒤 알약 단추 · 펼치면 색 면(채도 × 밝기) · 색상 띠 · 색 코드 */
+.v2-studio-ico-more { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-sub); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.v2-studio-ico-more-dot { width: 20px; height: 20px; border-radius: 999px; flex: none; background: conic-gradient(#F44, #FB3, #EE3, #4C4, #3CE, #46F, #C4F, #F44); }
+.v2-studio-ico-more.on, .v2-studio-ico-more[aria-expanded="true"] { border-color: var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); }
+.v2-studio-ico-more:focus-visible, .v2-studio-cpick-sv:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.v2-studio-cpick { display: grid; gap: 8px; max-width: 320px; }
+.v2-studio-cpick-sv { position: relative; height: 140px; border-radius: 8px; cursor: crosshair; touch-action: none;
+  background-image: linear-gradient(to top, #000, rgba(0, 0, 0, 0)), linear-gradient(to right, #fff, rgba(255, 255, 255, 0)); }
+.v2-studio-cpick-knob { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 999px; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .45); pointer-events: none; }
+.v2-studio-cpick-hue { -webkit-appearance: none; appearance: none; width: 100%; height: 14px; margin: 0; border-radius: 999px; cursor: pointer;
+  background: linear-gradient(to right, #F00, #FF0, #0F0, #0FF, #00F, #F0F, #F00); }
+.v2-studio-cpick-hue::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 999px; background: #fff; border: 1px solid rgba(0, 0, 0, .35); box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+.v2-studio-cpick-hue::-moz-range-thumb { width: 16px; height: 16px; border-radius: 999px; background: #fff; border: 1px solid rgba(0, 0, 0, .35); }
+.v2-studio-cpick-hue:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.v2-studio-cpick-row { display: flex; gap: 8px; align-items: center; }
+.v2-studio-cpick-chip { width: 28px; height: 28px; border-radius: 8px; flex: none; box-shadow: inset 0 0 0 1px var(--line); }
+.v2-studio-cpick-hex.v2-studio-name-in { min-width: 0; width: 110px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
+.v2-studio-cpick-note { font-size: 12px; color: var(--ink-sub); }
+.v2-studio-cpick-note.warn { color: var(--warn-text, #B4540A); }
 .v2-studio-ico-ask { display: flex; gap: 6px; flex-wrap: wrap; }
 .v2-studio-ico-ask .v2-studio-name-in { flex: 1 1 160px; min-width: 0; }
 .v2-studio-name-in { height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13.5px; background: var(--bg); color: var(--ink); min-width: 180px; }
