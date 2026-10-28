@@ -97,7 +97,7 @@ t("paperToItem: 자료로 간다 · kind=zotero_item · 개인 라이브러리�
   assert.equal(it.provenance.external_id, "users/7:P1");
   assert.equal(it.provenance.instance, undefined);
   assert.equal(it.provenance.external_url, "https://www.zotero.org/u7/items/P1");
-  assert.equal(it.audience, undefined, "개인 라이브러리 자료를 주인에게 잠갔다 — 워크스페이스에 연결한 자료는 조직 정책을 따른다");
+  assert.equal(it.audience, undefined, "커넥터가 개인 라이브러리 자료에 잠금 표시(audience)를 냈다 — 워크스페이스에 연결한 자료는 조직 정책을 따른다");
   assert.equal(it.fields?.owner_member, "m1");
   assert.equal(it.fields?.has_thinking, false);
   const g = paperToItem(paper, { notes: [], attachments: [] }, opts, { lib: { kind: "groups", id: "9" }, libraryName: "Lab", collectionNames: [], owner: undefined });
@@ -209,7 +209,7 @@ t("★ full: 논문마다 주석(첨부 아래)·노트가 묶이고, 독립 노
   const p1 = out.find((x) => x.provenance.external_id === "users/7:P1")!;
   assert.ok(p1.body!.includes("«핵심»") && p1.body!.includes("내 판단") && p1.body!.includes("컬렉션: 리뷰"));
   assert.equal(p1.fields?.has_thinking, true);
-  assert.equal(p1.audience, undefined, "개인 라이브러리 자료를 주인에게 잠갔다");
+  assert.equal(p1.audience, undefined, "커넥터가 개인 라이브러리 자료에 잠금 표시(audience)를 냈다 — 잠그지 않아야 한다");
   assert.equal(p1.fields?.owner_member, "m1");
   assert.ok(out.find((x) => x.provenance.external_id === "users/7:F2")!.body!.includes("부모 없는 PDF 의 주석"));
   assert.ok(out.find((x) => x.provenance.external_id === "users/7:S1")!.body!.includes(NOTE_HEAD));

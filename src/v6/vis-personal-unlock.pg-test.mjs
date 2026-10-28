@@ -25,6 +25,7 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM source WHERE external_id LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM org_source_vis_policy WHERE note LIKE $1`, [`${TAG}%`]);
   await itemsPool.query(`DELETE FROM project_list WHERE name LIKE $1`, [`${TAG}%`]);
+  await itemsPool.query(`DELETE FROM collect_unit WHERE ref LIKE $1`, [`${TAG}%`]).catch(() => {});
 }
 
 /** 잠긴 자료 1건(대상=MEMBER). system·root 를 바꿔 가며 «자동 잠금이 만든 행» 과 그 밖을 만든다. */
@@ -149,33 +150,48 @@ try {
 
   // ── 라운드 4(#2202): Zotero 개인 라이브러리 — 주인 한 사람에게만 잠긴 행만 연다 ──────────────
   //  (라운드 3 의 로컬 정책은 local 만 다스린다 — Zotero 판정엔 영향이 없어야 한다.)
-  const mkZotero = async (key, library, owner, members) => {
+  //  각 «건드리지 않음» 행은 술어 하나만 어긋나게 만든다 — 그 술어를 지우면 그 행만 열려 빨간불이 된다.
+  const mkZotero = async (key, library, owner, grants) => {
     const r = await itemsPool.query(
       `INSERT INTO source(kind, title, body_md, fields, provenance, external_system, external_instance, external_id, visibility)
        VALUES('zotero_item', $1, 'body', $2::jsonb, 'observed', 'zotero', '', $3, 'members') RETURNING id`,
       [key, JSON.stringify({ library, owner_member: owner }), `${TAG}${key}`]);
     const id = Number(r.rows[0].id);
-    for (const m of members) {
-      await itemsPool.query(`INSERT INTO source_member(source_id, subject_kind, member_id) VALUES($1,'member',$2)`, [id, m]);
+    for (const g of grants) {
+      const [kind, m] = Array.isArray(g) ? g : ["member", g];
+      await itemsPool.query(`INSERT INTO source_member(source_id, subject_kind, member_id) VALUES($1,$2,$3)`, [id, kind, m]);
     }
     return id;
   };
-  const zMine   = await mkZotero("z-mine",   "users/7",  MEMBER, [MEMBER]);              // 커넥터 자동 잠금 → 연다
-  const zShared = await mkZotero("z-shared", "users/7",  MEMBER, [MEMBER, `${TAG}_x`]);  // 주인 말고 대상이 더 있다 → 사람이 정한 것
-  const zOther  = await mkZotero("z-other",  "users/7",  MEMBER, [`${TAG}_x`]);          // 대상이 주인이 아니다
-  const zGroup  = await mkZotero("z-group",  "groups/9", null,   [MEMBER]);              // 그룹 라이브러리 잠금 — 정책·사람 몫
-  const zNoOwn  = await mkZotero("z-noown",  "users/7",  null,   [MEMBER]);              // 주인 기록이 없다 — 자동 잠금이라 단정 못 한다
+  const zMine     = await mkZotero("z-mine",     "users/7",  MEMBER, [MEMBER]);                     // 커넥터 자동 잠금 → 연다
+  const zShared   = await mkZotero("z-shared",   "users/7",  MEMBER, [MEMBER, `${TAG}_x`]);         // 주인 말고 대상이 더 있다
+  const zOther    = await mkZotero("z-other",    "users/7",  MEMBER, [`${TAG}_x`]);                 // 대상이 주인이 아니다
+  const zTeam     = await mkZotero("z-team",     "users/7",  MEMBER, [["team", "1"]]);              // 대상이 팀뿐
+  const zTeamToo  = await mkZotero("z-teamtoo",  "users/7",  MEMBER, [MEMBER, ["team", "1"]]);      // 주인 + 팀
+  const zGroup    = await mkZotero("z-group",    "groups/9", MEMBER, [MEMBER]);                     // 그룹 라이브러리(주인 칸이 있어도) — 라이브러리 술어만 어긋남
+  const zNoOwn    = await mkZotero("z-noown",    "users/7",  null,   [MEMBER]);                     // 주인 기록이 없다
+  const zEmpty    = await mkZotero("z-empty",    "users/7",  MEMBER, []);                           // 대상 0명(관리자만) — 사람·정책이 닫은 것
+  const zUnit     = await mkZotero("z-unit",     "users/7",  MEMBER, [MEMBER]);                     // 수집 단위가 대상을 정하는 연결
+  const zUnitSeen = await mkZotero("z-unitseen", "users/7",  MEMBER, [MEMBER]);                     // 단위 연결이 있지만 audience=false → 연다
+  const U = (await itemsPool.query(
+    `INSERT INTO collect_unit(app, instance, ref, name) VALUES('zotero', '', $1, $1) RETURNING id`, [`${TAG}unit`])).rows[0].id;
+  await itemsPool.query(`INSERT INTO collect_unit_source(unit_id, source_id, audience) VALUES($1,$2,true),($1,$3,false)`, [U, zUnit, zUnitSeen]);
   await mkLockedKnowledge("k-zotero", [[zMine, "derived_from"]]);
   const r4 = await reconcilePersonalUploadVisibility();
   chk("Z1 ★주인 한 사람에게만 잠긴 Zotero 개인 라이브러리 자료가 열린다", await visOf("source", "id", zMine) === "open",
     `visibility=${await visOf("source", "id", zMine)}`);
   chk("Z1b 그 대상 행도 사라진다", await grantsOf("source_member", "source_id", zMine) === 0);
   chk("Z1c 그 자료만 근거인 지식도 열린다", await visOf("knowledge", "name", `${TAG}k-zotero`) === "open");
+  chk("Z1d 단위 연결이 audience=false 면 연다(봇 수집기가 먼저 모은 자료)", await visOf("source", "id", zUnitSeen) === "open");
   chk("Z2 대상이 주인 말고 더 있으면 건드리지 않는다", await visOf("source", "id", zShared) === "members");
   chk("Z3 대상이 주인이 아니면 건드리지 않는다", await visOf("source", "id", zOther) === "members");
-  chk("Z4 그룹 라이브러리 잠금은 건드리지 않는다", await visOf("source", "id", zGroup) === "members");
+  chk("Z3b 대상이 팀뿐이면 건드리지 않는다", await visOf("source", "id", zTeam) === "members");
+  chk("Z3c 주인 + 팀이면 건드리지 않는다", await visOf("source", "id", zTeamToo) === "members");
+  chk("Z4 그룹 라이브러리 잠금은 건드리지 않는다(주인 칸이 있어도)", await visOf("source", "id", zGroup) === "members");
   chk("Z5 주인 기록이 없으면 건드리지 않는다", await visOf("source", "id", zNoOwn) === "members");
-  chk("Z6 집계 — 자료 1 · 지식 1", r4.sources === 1 && r4.knowledge === 1, JSON.stringify(r4));
+  chk("Z5b 대상이 0명(관리자만)이면 건드리지 않는다", await visOf("source", "id", zEmpty) === "members");
+  chk("Z5c ★수집 단위가 대상을 정하는 자료는 건드리지 않는다", await visOf("source", "id", zUnit) === "members");
+  chk("Z6 집계 — 자료 2 · 지식 1", r4.sources === 2 && r4.knowledge === 1, JSON.stringify(r4));
   //  Zotero 정책이 생기면 손을 뗀다.
   const zLater = await mkZotero("z-later", "users/7", MEMBER, [MEMBER]);
   await itemsPool.query(
