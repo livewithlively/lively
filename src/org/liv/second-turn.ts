@@ -36,6 +36,9 @@ export interface SecondTurnInput {
   firstOrder: string | null;
   collectors: SecondTurnCollector[];
   partial: boolean;          // 상한까지 기다렸는데 일부 수집이 아직 → 있는 것으로 시작
+  /** (#5060) 처음 설정에서 파일을 올렸나 · 그 올리기가 상한까지 안 끝났나. 둘 다 없으면 종전 지시문 그대로다. */
+  uploaded?: boolean;
+  uploading?: boolean;
   waitedMin: number;         // 온보딩 끝난 뒤 흐른 시간(분)
 }
 
@@ -101,6 +104,9 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     `- 처음 설정 답: 일하는 형태·직무 ${i.work ? `"${i.work}"` : "없음"} · 카테고리 후보 ${i.drawers.length ? i.drawers.join(" · ") : "없음"} · 첫 지시 ${i.firstOrder ? `"${i.firstOrder}"` : "없음"}`,
     collectLine,
     ...(i.partial ? ["- ⚠ 일부 수집이 아직 안 끝났다. 자료가 부족해 보이면 **최대 1분** 기다렸다가 다시 읽고 시작하라. 그 뒤엔 있는 것으로 간다."] : []),
+    //  #5060 — 처음 설정에서 올린 파일(자료 kind=local_file). 첫 업로드 때 꺼진 채로 생긴 로컬 증류기(local-files)가 그 catch-all 이다.
+    ...(i.uploaded ? ["- 처음 설정에서 파일을 올렸다 — `source_list` 의 `local_file` 자료가 그것이다. 꺼진 채로 만들어 둔 «내 컴퓨터 자료» 증류기(`local-files`)가 있다 — catch-all 로 넓혀 쓰거나 서랍 레인의 입구에 붙이고, **켜서 끝낸다**(켜지 않으면 올린 파일은 지식이 되지 않는다)."] : []),
+    ...(i.uploading ? ["- ⚠ 올린 파일이 아직 다 올라오지 않았다(사람 화면에서 계속 올라가는 중일 수 있다). 지금 있는 것으로 시작한다 — 켜 둔 증류기가 나중에 올라온 파일도 이어서 정리한다."] : []),
     "",
     "## 목표 — 이 사람에게 맞는 카테고리·수집기·증류기를 세우고 첫 지식을 낸다",
     "",
@@ -153,7 +159,9 @@ export interface SecondTurnState {
     /** 1턴 갈래(#4213 T13) — connect = 설치자의 «처음 연결» 대화 · join = 합류자(2턴 없음) · 비었으면 종전. */
     flow?: string | null;
     /** 리브가 «처음 연결·처음 수집 끝» 을 찍은 시각(connect 갈래의 2턴 신호). */
-    collect_done_at?: string | null } | null;
+    collect_done_at?: string | null;
+    /** (#5060) 처음 설정에서 시작한 백그라운드 올리기 — 시작·끝 시각. 시작만 있으면 끝나길 기다린다(상한까지). */
+    upload_started_at?: string | null; upload_done_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
   /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거.
@@ -165,9 +173,10 @@ export interface SecondTurnState {
 }
 export type SecondTurnDecision =
   | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" | "join" }
-  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" | "connecting" }
+  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" | "connecting" | "uploading" }
   //  세션이 사라졌지만 **일은 남아 있다** — 새 창구를 열어 거기로 배달한다(#1631). 딱 한 번.
-  | { action: "reopen"; reason: "session-gone" }
+  //  (#5060) files — 파일만 올리고 외부 앱 연결을 미룬 사람. 열린 세션이 처음부터 없다 — 같은 길로 새로 연다(역시 딱 한 번).
+  | { action: "reopen"; reason: "session-gone" | "files" }
   | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" | "stale" }
   | { action: "fire"; partial: boolean; waitedMin: number };
 
@@ -231,10 +240,28 @@ export const SECOND_TURN_STALE_MS = 24 * 60 * 60_000;
  *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 그 사이에 세션이 사라졌으면 한 번 다시 여는 길(reopen)이 아직 열려 있다.
  */
 export const CONNECT_FLOW_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) 처음 설정에서 시작한 백그라운드 올리기를 기다리는 상한. 화면이 다 올리면 upload_done_at 을 찍고 그때 쏜다.
+ *  안 찍혀도(탭을 닫았다 · 화면이 신호를 못 보냈다) 이 시간이 지나면 올라온 것으로 쏜다 — 켜 둔 증류기가 나중 것도 이어서 정리한다.
+ *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 파일 갈래는 기다린 뒤 세션을 **새로 여는데**, 그 길(reopen)이 2h 뒤엔 닫힌다.
+ */
+export const UPLOAD_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) [연결할게요]를 눌렀는데 연결 대화가 아직 안 묶인 사이(me_liv_open from:"welcome" 이 몇 초 뒤 session_id 를 적는다)를 기다리는 유예.
+ *  이 안에서 새로 열면 곧 묶일 대화를 두고 세션이 하나 더 선다. 이 뒤에도 안 묶였으면(서버가 대화를 못 열었다 · 사람이 탭을 닫았다)
+ *  올린 파일이 있을 때 파일 갈래처럼 새로 연다 — 아니면 올린 파일이 영영 정리되지 않는다(격리 리뷰 2026-10-27).
+ */
+export const CONNECT_BIND_GRACE_MS = 10 * 60_000;
+
+/** (순수) 세션 없이 후보가 되는 갈래 — 파일 갈래, 그리고 대화가 끝내 안 묶인 «처음 연결» 갈래 중 파일을 올린 것. */
+export function opensFreshSession(w: { session_id?: string | null; flow?: string | null; upload_started_at?: string | null } | null | undefined): boolean {
+  return !!w && !w.session_id && (w.flow === "files" || (w.flow === "connect" && !!w.upload_started_at));
+}
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
-  if (!w?.session_id || !w.done_at) return { action: "skip", reason: "no-kickoff" };
+  //  (#5060) 파일 갈래는 세션 없이 온다 — 처음 설정을 끝냈으면 후보다(아래에서 기다렸다가 새로 연다).
+  if (!w?.done_at || (!w.session_id && !opensFreshSession(w))) return { action: "skip", reason: "no-kickoff" };
   //  (#4213 T13) 합류자의 리브는 «빠진 앱 연결» 대화뿐이다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다.
   if (w.flow === "join") return { action: "skip", reason: "join" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
@@ -243,8 +270,18 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const waited = s.now - done;
   //  (#4213 T13) 설치자의 «처음 연결» 대화 — 리브가 커넥터 확인·목록·범위 확인·처음 수집·첫 보고를 하는 동안엔 쏘지 않는다.
   //   사람에게 물어 놓고 답을 기다리는 사이(세션은 쉬는 중)에 증류 지시가 끼어들면 대화가 엉킨다. 신호는 리브가 찍는 collect_done_at.
-  if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
+  //  (#5060) 연결 대화가 아직 안 묶였다 — 곧 묶인다(유예). 유예 뒤엔 묶일 대화가 없으니 «처음 수집 끝» 도 오지 않는다(기다리지 않는다).
+  if (w.flow === "connect" && !w.session_id) { if (waited < CONNECT_BIND_GRACE_MS) return { action: "wait", reason: "connecting" }; }
+  else if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
+  //  (#5060) 처음 설정에서 올리기를 시작했으면 다 올라오길 기다린다 — 반쯤 올라온 표본으로 카테고리를 짜면 나머지가 안 맞는다.
+  if (w.upload_started_at && !w.upload_done_at && waited < UPLOAD_MAX_WAIT_MS) return { action: "wait", reason: "uploading" };
   if (!s.session) {
+    //  (#5060) 파일 갈래(또는 끝내 안 묶인 연결 갈래) — 처음부터 열린 세션이 없다. «사라졌다» 가 아니라 «아직 안 열었다» 다. 같은 길(새로 열기)로 — 딱 한 번.
+    if (opensFreshSession(w)) {
+      if (w.distill_reopened_at) return { action: "giveup", reason: "session-gone-again" };
+      if (waited > TURN1_DELIVERY_TTL_MS) return { action: "giveup", reason: "stale" };
+      return { action: "reopen", reason: "files" };
+    }
     //  ★ #1631 실측(2026-08-31 dev): 1턴을 성공으로 끝낸 리브 세션이 **수집 대기 20분 사이에 사라졌다.**
     //   종전엔 그 자리에서 영구 포기했고(distill_gave_up_at·멱등 가드), 그 사람의 증류기 15개가 **영원히 꺼진 채**
     //   남아 온보딩을 완주하고도 지식을 하나도 못 얻었다. 세션이 왜 죽었는지는 게이트웨이 기록에 없다

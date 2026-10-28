@@ -176,6 +176,10 @@ async function PAGE_MAIN() {
   const nameIn = host.querySelector("#nameIn");
   if (nameIn) nameIn.value = "민";
   host.querySelector("#nameGo")?.click();
+  await sleep(300);
+  //  (#5060) 이름 다음은 파일 올리기 장면이다 — 올릴 것이 없다고 하고 넘어간다(그 장면도 계정 준비를 묻지 않는다).
+  R.q0u = { upload: !!host.querySelector("#upDrop"), asks: n() };
+  host.querySelector("#upSkip")?.click();
   await sleep(900);
   R.q0c = { ...view(host), ai: !!host.querySelector("#aiList"), asks: n(), starts: starts() };
 
@@ -313,6 +317,8 @@ t("Q0 ★ 처음부터 열어도 인사·이름 장면은 계정 준비를 묻�
   assert.equal(R.q0a.accounts, 0, "인사 장면에서 계정 목록을 물었다");
   assert.equal(R.q0b.name, true, "배선 — 이름 장면이 아니다");
   assert.equal(R.q0b.asks, 0, "이름 장면에서 계정 준비를 물었다");
+  assert.equal(R.q0u.upload, true, "배선 — 이름 다음이 파일 올리기 장면이 아니다(#5060)");
+  assert.equal(R.q0u.asks, 0, "파일 올리기 장면에서 계정 준비를 물었다");
   assert.equal(R.q0c.ai, true, "배선 — AI 장면이 아니다");
   assert.equal(R.q0c.asks, 1, `AI 장면이 묻지 않았다(${R.q0c.asks})`);
   assert.equal(R.q0c.starts, 0, "AI 장면이 열자마자 만들기를 시작했다");

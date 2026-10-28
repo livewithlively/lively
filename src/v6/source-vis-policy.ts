@@ -108,7 +108,8 @@ export async function stampSourceVisibility(
 }
 
 /**
- * 커넥터가 «이 자료는 이 사람 것»이라고 말한 자료(RawItem.audience — Zotero 개인 라이브러리)를 그 사람만 보게 잠근다.
+ * 커넥터가 «이 자료는 이 사람 것»이라고 말한 자료(RawItem.audience)를 그 사람만 보게 잠근다.
+ *  (처음 쓴 곳은 Zotero 개인 라이브러리였는데 #2202 에서 걷었다 — 지금 이 표시를 내는 커넥터는 없다.)
  *  INSERT 직후 stampSourceVisibility **다음에** 부른다 — 조직 정책의 결과를 **주인으로 바꿔 쓴다**(개인 라이브러리는 정책의
  *  대상이 아니라 그 사람의 것이다. 정책이 «관리자만» 이어도 주인이 못 보면 안 된다).
  *  ⚠ stampSourceVisibility 와 달리 **축이 꺼져 있어도 심는다.** 그쪽이 축 꺼짐을 지키는 이유는 «켜는 순간 예상 못 한 잠금이

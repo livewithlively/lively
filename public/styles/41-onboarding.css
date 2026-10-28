@@ -609,3 +609,10 @@
 @keyframes obInRun{0%{opacity:0; transform:translateX(0)} 20%{opacity:1} 80%{opacity:1} 100%{opacity:0; transform:translateX(100%)}}
 @keyframes obInLit{0%{border-color:var(--line); background:var(--surface); color:var(--muted)} 45%{border-color:var(--mint); background:var(--bg-success); color:var(--ob-mint-ic)}}
 @keyframes obInPop{from{opacity:0; transform:scale(.6)}}
+/* (#5060) 파일 올리기 장면 — 끌어다 놓는 자리 하나와 고르기 단추 둘. 고른 뒤엔 몇 개를 받았는지 한 줄(ob-up-stat). */
+.ob-up-drop{border:1.5px dashed var(--line); border-radius:12px; padding:22px 16px 18px; text-align:center; background:var(--card); transition:border-color .15s, background .15s}
+.ob-up-drop.drop-active{border-color:var(--blue); background:var(--blue-soft)}
+.ob-up-hint{margin:0; color:var(--ink-sub); font-size:13.5px}
+.ob-up-btns{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
+.ob-up-btns .ob-btn{margin-top:0}
+.ob-up-stat:empty{display:none}

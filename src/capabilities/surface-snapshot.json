@@ -1473,7 +1473,7 @@
   "rest": [
    "POST /api/ui/me/liv-profile"
   ],
-  "input_hash": "75d0fb6f7be1ff82"
+  "input_hash": "7aeaa8e33ff84b68"
  },
  {
   "name": "me_liv_profile_get",
@@ -1573,7 +1573,7 @@
   "rest": [
    "POST /api/ui/me/liv/open"
   ],
-  "input_hash": "44e96f53add69301"
+  "input_hash": "1964b38072182cb5"
  },
  {
   "name": "me_liv_ask_dismiss",
@@ -1633,7 +1633,7 @@
   "rest": [
    "POST /api/ui/me/welcome"
   ],
-  "input_hash": "7aaf9d3fc6eb2fcd"
+  "input_hash": "41a40fc0e4ccbca7"
  },
  {
   "name": "project_chat_turn",

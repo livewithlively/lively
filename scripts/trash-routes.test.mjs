@@ -81,10 +81,11 @@ ok(webFiles.length > 200, "W0 웹 소스를 실제로 훑었다(경로가 죽으
   ok(seen >= 4, `W1a 세션 DELETE 호출을 실제로 찾았다(${seen}건) — 찾는 눈이 살아 있다`);
   eq(bare, [], "W1 ★세션 DELETE 는 전부 reclaim=1 — 되살리기 좌표까지 그 자리에서 지우는 호출이 없다");
 }
-//  W2 — 세션 기록 완전 삭제는 휴지통 화면에서만.
+//  W2 — 세션 기록 완전 삭제는 휴지통 화면에서만. 예외 하나 — 앱빌더 「지우기」(web/v2/builder.ts)는 두 번 눌러 확인받고 앱빌딩 세션을 완전 삭제한다
+//   (원준 2026-10-28 «지우기를 누르면 휴지통으로 옮기는게 아니라 실제로 어디에서도 이게 다 지워지게» — 지난 세션 · 휴지통에 두면 「만들던 앱」 에 다시 섰다, #4632).
 {
   const users = webFiles.filter((f) => f !== "web/session-actions.ts" && /\b(purgeSessionRecord|confirmSessionPurge|confirmSessionPurgeMany|confirmSessionPurgeLocal)\(/.test(read(f)));
-  eq(users, ["web/v2/bins.ts"], "W2 ★세션 완전 삭제를 부르는 화면은 휴지통 하나 — [⋯] 창·세션 이력 앱은 휴지통으로 보낸다");
+  eq(users.sort(), ["web/v2/bins.ts", "web/v2/builder.ts"], "W2 ★세션 완전 삭제를 부르는 화면은 휴지통과 앱빌더 「지우기」 둘 — [⋯] 창·세션 이력 앱은 휴지통으로 보낸다");
   const sess = read("web/sessions.ts"), chat = read("web/session-chat.ts");
   ok(/sessionTrashOp\('trash', \[s\.session_id\]\)/.test(sess) && /sessionTrashOp\('trash', \[sid\]\)/.test(sess) && /sessionTrashOp\('trash', sessionNames\(/.test(chat), "W2b 그 두 화면은 휴지통 표식만 붙인다");
   ok(!/api\([^)]*\/api\/ui\/v6\/sessions\/[^)]*method: 'DELETE'/.test(sess + chat), "W2c 세션 기록 DELETE 를 직접 쏘지도 않는다");

@@ -26,6 +26,9 @@ export interface ReviewHost {
   dock?: HTMLElement;
   pins: StudioPin[]; general: string;   // 부르는 쪽의 것 **그대로**(같은 배열 · 값) — 이 층이 더하고 지우고 고친 뒤 onChange 로 알린다
   version: number; waiting: boolean;
+  /** 기다리던 AI 일이 멈췄다 — 막대가 시계 대신 그 까닭을 말하고, resume 이면 「수정하기」 자리가 「이어서 수정하기」(onResume)가 된다. */
+  stall?: { text: string; resume: boolean } | null;
+  onResume?: () => void;
   /** 이 앱을 만드는 AI 세션 화면(앱빌더의 「AI 세션」 칸) — 「AI에게 말하기」 칸을 처음 열 때 대화 칸으로 옮겨 오고, 층이 걷히면 제자리로 돌려놓는다. */
   chat: HTMLElement;
   /** 막대 칸에 쓴 말을 그 AI 세션에 보낸다 — 보내졌으면 true(칸을 비운다). */
@@ -37,7 +40,7 @@ export interface ReviewHost {
 }
 export interface ReviewApi {
   /** 판 · 기다림 · 이름 · 의견이 바뀌었다(새 판이 왔다 · 보냈다 · 앱빌더 쪽에서 고쳤다). note 를 주면 막대에 잠깐 띄운다(«2판 · 고쳤어요»). */
-  update(p: { version?: number; waiting?: boolean; title?: string; note?: string; pins?: StudioPin[]; general?: string }): void;
+  update(p: { version?: number; waiting?: boolean; stall?: { text: string; resume: boolean } | null; title?: string; note?: string; pins?: StudioPin[]; general?: string }): void;
   close(): void;
   isOpen(): boolean;
 }
@@ -118,13 +121,16 @@ export function openReview(host: ReviewHost): ReviewApi {
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
     hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
-    layer.hidden = !S.frame;
+    if (host.waiting && host.stall) {   // 멈췄다 — «AI 수정 중 m:ss» 를 세지 않고 앱빌더 막대와 같은 말 · 같은 단추
+      send.textContent = '이어서 수정하기'; send.disabled = !host.stall.resume || !host.onResume; hint.textContent = host.stall.text;
+    }
+    layer.hidden = !S.frame;   // 고치는 중에도 짚는다(원준 2026-10-28)
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
     paintTrayBits();   // 열린 코멘트 목록의 머리 · 「수정하기」 도 같은 셈으로
   };
   const setTool = (k: ReviewTool): void => { S.tool = k; closePop(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); paintBar(); paintMarks(); };
   count.onclick = () => toggleTray();
-  send.onclick = () => { if (cmCount()) host.onSend(); };
+  send.onclick = () => { if (host.waiting && host.stall) { if (host.stall.resume && host.onResume) host.onResume(); return; } if (cmCount()) host.onSend(); };
 
   // ── 프레임 찾기 · 따라가기 ──
   const frameWin = (): Window | null => (S.frame && S.frame.contentWindow) || null;
@@ -279,7 +285,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       onInput: (v) => { host.general = v; changed(); }, onEnter: () => g.blur(), onEscape: () => closeTray() });
     taOf.set(g, 'all');
     trayHead = el('b');
-    traySend = el('button', { class: 'v2-studio-now-pri', type: 'button', onclick: () => { if (cmCount()) host.onSend(); } }) as HTMLButtonElement;
+    traySend = el('button', { class: 'v2-studio-now-pri', type: 'button', onclick: () => send.click() }) as HTMLButtonElement;   // 막대의 단추와 같은 일(멈췄으면 「이어서 수정하기」)
     const list = el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows);
     const kids = [
       el('div', { class: 'v2-studio-tray-h' }, trayHead, el('span', { class: 'v2-studio-sp' }),
@@ -359,7 +365,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     paintBar(); if (ok) gen.focus();
   };
   const tickWait = (): void => {
-    if (!host.waiting || S.dead) return;
+    if (!host.waiting || host.stall || S.dead) return;
     const s = Math.floor((Date.now() - S.waitT0) / 1000);
     send.textContent = 'AI 수정 중 ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); paintTrayBits();
     S.waitTick = window.setTimeout(tickWait, 1000);
@@ -373,6 +379,11 @@ export function openReview(host: ReviewHost): ReviewApi {
       const reTray = !!tray;   // 열린 코멘트 목록은 닫지 않고 새 목록으로 다시 그린다
       if (p.pins) { host.pins = p.pins; closePop(); }
       if (p.general != null) host.general = p.general;
+      if (p.stall !== undefined && (p.stall ? p.stall.text + p.stall.resume : '') !== (host.stall ? host.stall.text + host.stall.resume : '')) {
+        const was = !!host.stall; host.stall = p.stall; window.clearTimeout(S.waitTick);
+        if (was && !host.stall && host.waiting) S.waitT0 = Date.now();   // 다시 돌면 시계는 그때부터
+        tickWait();
+      }
       if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; closePop(); if (p.waiting) { S.waitT0 = Date.now(); tickWait(); } else window.clearTimeout(S.waitTick); }   // 도구는 그대로 — 고치는 중에도 짚는다
       paintBar(); paintMarks();
       if (reTray && tray && (p.pins || p.waiting != null)) openTray();

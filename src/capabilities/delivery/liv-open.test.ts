@@ -244,7 +244,7 @@ const src = (rel: string): string => code(readFileSync(new URL(rel, import.meta.
 
 await t("W-S1 실제 문 = openLiv(realDeps) · 넣기는 사람이 보낸 것과 같은 통로(deliverPromptForMember) · 확보는 리브 세션 모듈", () => {
   const CAP = src("./liv-chat.ts");
-  assert.match(CAP, /async \(input: Record<string, unknown>, user: LivelyUser\) => openLiv\(user, input, realDeps\),/);
+  assert.match(CAP, /async \(input: Record<string, unknown>, user: LivelyUser\) => \{\s*const r = await openLiv\(user, input, realDeps\);/);
   assert.match(CAP, /deliverPromptForMember\(sessionId, userId, text\)/, "★ 있는 세션에 넣는 통로가 사람의 보내기와 다르다(접근 판정을 건너뛴다)");
   assert.match(CAP, /ensure: \(user, text, harness\) => ensureLivSession\(user, text, \{ harness \}\),/);
   const SESSION = src("../../org/liv/session.ts");

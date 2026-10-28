@@ -836,6 +836,7 @@ async function PAGE_MAIN() {
     {
       const v = mount("box-w34", "ink=600", { firstPrompt: "liv-connect 스킬로 이 워크스페이스의 외부 앱 연결을 도와줘.", livAsks: true });
       await sleep(1200);
+      v.box.querySelector(".sc-liv-askdock .liv-pick-add")?.click();   // 앱 고르기 카드(#5059)는 입력칸이 [+ 다른 앱] 안에 접혀 있다
       const inp = v.box.querySelector(".sc-liv-askdock .liv-ask-input");
       R.w34 = { hasInput: !!inp, before: v.snap() };
       if (inp) { inp.focus(); inp.value = "sk-w34-secret"; inp.dispatchEvent(new Event("input", { bubbles: true })); }

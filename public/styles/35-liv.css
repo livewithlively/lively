@@ -131,14 +131,81 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-ask-err { color: var(--danger); }
 
 /* 객관식 — **고르는 것이 기본**이다(자유서술은 사람이 가장 오래 멈추는 자리였다).
-   버튼을 세로로 쌓는다: 좁은 레일에서 가로로 흘리면 라벨이 잘리고, 잘린 선택지는 안 골라진다. */
-.liv-ask-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; }
-.liv-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-  text-align: left; white-space: normal; line-height: 1.45; padding: 7px 10px; height: auto; }
-.liv-opt-hint { color: var(--muted); font-size: 11px; }
-/* 고른 것은 색이 아니라 **테두리와 굵기**로도 표시한다 — 색만으로는 색각 이상에서 사라진다. */
-.liv-opt-on { border-color: var(--mint-deep); box-shadow: inset 0 0 0 1px var(--mint-deep); }
-.liv-opt-on b::before { content: "✓ "; color: var(--mint-deep); }
+   #5059(원준 2026-10-27 «짜치다») — [외부 앱 연결](40-v2.css .cn-row)과 같은 형태 언어로 다시 그렸다:
+   공식 로고 타일(.svc-tile) + 굵은 이름 + 한 줄 설명. 카드 전체가 누르는 자리이고, 손을 올리면 떠오른다.
+   고른 것은 색이 아니라 **테두리와 체크**로도 보인다 — 색만으로는 색각 이상에서 사라진다. */
+/* 테두리는 민트 그대로 — «리브가 이 답을 기다리며 멈춰 있다» 는 신호다(.liv-ask). 모양만 [외부 앱 연결] 카드처럼 둥글게. */
+.liv-pick-card { border-radius: 14px; padding: 16px 16px 14px; box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); }
+.liv-pick-head { display: flex; flex-direction: column; gap: 4px; }
+.liv-pick-q { font-size: 15px; font-weight: 750; line-height: 1.45; color: var(--ink); }
+.liv-pick-why { font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); }
+
+.liv-pick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 8px; margin-top: 12px; }
+.liv-pick { position: relative; display: flex; align-items: center; gap: 12px; min-width: 0; width: 100%;
+  padding: 11px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease; }
+.liv-pick:hover { border-color: var(--line-net-2); background: var(--bg-tint); transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(var(--shadow-ink), .08); }
+.liv-pick:active { transform: none; box-shadow: none; }
+.liv-pick:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; }
+.liv-pick:disabled { cursor: default; opacity: .6; }
+.liv-pick.on { border-color: var(--mint-deep); background: color-mix(in srgb, var(--mint) 9%, var(--bg));
+  box-shadow: inset 0 0 0 1px var(--mint-deep); }
+.liv-pick-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.liv-pick-nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.liv-pick-nm b { font-size: 14px; font-weight: 700; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
+.liv-pick-hint { font-size: 12px; line-height: 1.45; color: var(--muted); }
+/* 연결됨 — 서버 판정이 온 뒤에만 보인다(빈 자리는 숨는다). [외부 앱 연결]의 초록 점과 같은 뜻. */
+.liv-pick-st:empty { display: none; }
+.liv-pick-st { flex: none; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--mint-deep); }
+.liv-pick-st::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--mint-deep); }
+/* 오른쪽 표시 — 복수 선택은 빈 동그라미가 체크로 차오르고, 단일 선택은 누르면 바로 가는 화살표. */
+.liv-pick-mk { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--line-net);
+  display: inline-flex; align-items: center; justify-content: center; color: transparent;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease; }
+.liv-pick-mk .liv-pick-ic { width: 13px; height: 13px; stroke-width: 2.6; }
+.liv-pick:hover .liv-pick-mk { border-color: var(--mint-deep); }
+.liv-pick.on .liv-pick-mk { background: var(--mint-deep); border-color: var(--mint-deep); color: var(--on-fill); }
+.liv-pick-mk.go { border: 0; color: var(--muted-2); }
+.liv-pick-mk.go .liv-pick-ic { width: 16px; height: 16px; stroke-width: 2; }
+.liv-pick:hover .liv-pick-mk.go { color: var(--mint-deep); }
+.liv-pick-ic { display: block; width: 20px; height: 20px; stroke: currentColor; stroke-width: var(--ic-stroke, 1.7); fill: none; stroke-linecap: round; stroke-linejoin: round; }
+/* 로고 없는 선택지 · [+ 다른 앱] — 앱 타일과 같은 틀, 브랜드색 대신 중립. */
+.svc-tile.liv-pick-tile-plain { background: var(--bg-punch); color: var(--blue); }
+.liv-pick-add { border-style: dashed; background: none; }
+.liv-pick-add:hover { background: var(--bg-tint); }
+.svc-tile.liv-pick-tile-add { background: var(--bg-tint-2); color: var(--ink-sub); }
+.liv-pick-add.on { box-shadow: none; background: var(--bg-tint); border-style: solid; }
+
+/* [+ 다른 앱]을 펼친 자리 — 라이블리가 연결할 수 있는 다른 앱(로고 알약) + 이름 적는 칸. */
+.liv-pick-more { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--bg-tint); display: flex; flex-direction: column; gap: 10px; }
+.liv-pick-more[hidden] { display: none; }
+.liv-pick-extras:empty { display: none; }
+.liv-pick-extras { display: flex; flex-direction: column; gap: 8px; }
+.liv-pick-extras-h { font-size: 12px; font-weight: 650; color: var(--ink-sub); }
+.liv-pick-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.liv-pick-chip { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px 5px 5px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); font: inherit; font-size: 13px; font-weight: 650; color: var(--ink); cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease; }
+.liv-pick-chip .svc-tile { width: 26px; height: 26px; border-radius: 999px; }
+.liv-pick-chip .svc-tile svg { width: 15px; height: 15px; }
+.liv-pick-chip:hover { border-color: var(--line-net-2); }
+.liv-pick-chip:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; }
+.liv-pick-chip.on { border-color: var(--mint-deep); box-shadow: inset 0 0 0 1px var(--mint-deep); }
+.liv-pick-inrow { display: flex; }
+.liv-pick-in { font-size: 13px; padding: 9px 11px; border-radius: 10px; }
+
+/* 아래 줄 — 으뜸 행동 · 고른 수 · (오른쪽 끝) 나중에.
+   물음 자리(.liv-askdock)는 높이가 46vh 로 잘려 안에서 스크롤된다 — 카드가 길어져도 [이걸로]가 화면 밖으로 밀리지 않게 바닥에 붙인다. */
+.liv-pick-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 14px -16px -14px; padding: 10px 16px 14px;
+  position: sticky; bottom: 0; background: var(--bg); border-radius: 0 0 14px 14px; }
+.liv-pick-send { min-width: 96px; }
+.liv-pick-count { font-size: 12px; color: var(--muted); }
+.liv-pick-count:empty { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .liv-pick, .liv-pick:hover { transition: none; transform: none; }
+}
 
 /* 파일 올리기 — 로컬 폴더를 뒤지는 대신 끌어다 놓는다. */
 .liv-upload-in { flex: 1 1 100%; min-width: 0; font-size: 12px; color: var(--ink-sub); }
@@ -266,9 +333,6 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-askdock:not(:empty) { flex: none; max-height: 46vh; overflow: auto;
   margin: 0 22px; padding: 12px 0 2px; border-top: 1px solid var(--line); }
 .liv-askdock .liv-ask { border-color: var(--mint-deep); }
-/* 대화 칸은 레일보다 넓다 — 선택지를 세로로 길게 쌓지 말고 흐르게 둔다(9개가 화면을 먹지 않게). */
-.liv-askdock .liv-ask-opts { flex-direction: row; flex-wrap: wrap; gap: 6px; }
-.liv-askdock .liv-opt { flex: 0 1 auto; }
 
 /* 리브의 말은 마크다운이다 — 제품 렌더러(.md)를 이 대화의 리듬에 맞춘다.
    목록·강조는 살리되 제목이 커져서 대화가 문서처럼 보이지 않게 눌러 둔다. */

@@ -1703,7 +1703,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('builder');
       noteAppUse('builder');
       tab.aside.replaceChildren();
-      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, redrawSide: () => drawSide(),
+      renderBuilderApp(tab.center, segs, params, { projects: () => data.projects, sessions: () => data.sessions, sessionsReady: () => Number(data.loadedAt) > 0, redrawSide: () => drawSide(),
         //  주소만 바꾼 것(replaceState)도 크롬을 다시 맞춘다 — ③ 실제 화면을 보는 동안 사이드바 열을 접는 것(app-ctx)이 이 주소를 따른다(#4632).
         //  같은 화면(routeKey 'builder') 안의 주소일 때만 — 그 탭이 이미 다른 화면으로 옮겨 갔으면 탭 주소를 앱빌더로 되돌려 쓰지 않는다.
         setRoute: (h) => { if (tab.route !== h && routeKey(tab.route) === routeKey(h)) { tab.route = h; tabsApi?.routed(tab); if (tabsApi?.current() === tab) applyTabChrome(tab); } } });
