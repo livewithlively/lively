@@ -144,10 +144,13 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
     //  서버의 만들기 세션 칸이 이 세션을 가리키지 않아도(다른 세션이 이어졌다) 이 세션이 마지막으로 받은 글이 앱을 가리키면(«1번째 고침이야 … app_pull <id>»)
     //   이미 그 앱을 만들어 ③ 에서 고치던 세션이다 — «② 세부 기획» 이라 하지 않는다(원준 2026-10-29 실제 화면). 그 앱이 다 됐으면 「내가 만든 앱」 에 선다.
     const tid = !a && s.raw ? promptAppId(typeof s.raw.lastPrompt === 'string' ? s.raw.lastPrompt : '') : '';
-    const t = tid ? apps.find((x) => x.id === tid && !x.empty) || null : null;
+    //   내가 만들고 책임자인 앱만(격리 리뷰 #1591 B1 — 남의 앱을 내 만들던 앱으로 세우지 않게). 그 앱을 다른 세션이 만들고 있으면(build_session) 이 카드를 지워도
+    //   앱은 남긴다(keepApp) — 그 세션이 아직 그 앱을 만들고 있다.
+    const t = tid ? apps.find((x) => x.id === tid && !x.empty && x.isOwner && x.madeBy === m.id) || null : null;
     if (t && isDone(t)) return;
     const own = a || t;
-    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: own && !own.empty ? own.title : '' }), stage: own && !own.empty ? 'fix' : 'plan', appId: own && !own.empty ? own.id : '', done: false, at, local: false, node: String(s.node || ''), serverApp: own ? own.id : '', mode, keepApp: keepFor(mode, own ? own.id : '') });
+    const otherBuilds = !a && !!t && !!t.buildSession && t.buildSession !== s.id;
+    drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: own && !own.empty ? own.title : '' }), stage: own && !own.empty ? 'fix' : 'plan', appId: own && !own.empty ? own.id : '', done: false, at, local: false, node: String(s.node || ''), serverApp: own ? own.id : '', mode, keepApp: otherBuilds || keepFor(mode, own ? own.id : '') });
   });
   drafts.sort((a, b) => b.at - a.at);
   //  고치던 앱이 남는 만들기(keepApp)의 앱은 목록에서 빼지 않는다 — 내 앱을 「고치기」 로 열었다 나와도 「내가 만든 앱」 에 그대로(감사 1-1).

@@ -366,8 +366,8 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
     T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: JSON.stringify({ id: "app-2c" }) }] }), U(F.fixBrief(1, [], "x", "both", "app-2c")), U(F.fixBrief(2, [], "y", "both", "app-2c"))].join("\n");
   const tr = ST(full);
   check(tr && tr.card && tr.card.name === card.name && tr.asked === true && tr.appId === "app-2c" && tr.round === 2, "S4 카드 · 초안 청함 · 마지막으로 가리킨 앱(도구 부름 · 고침 글) · 가장 큰 고침 차례", tr);
-  const tool = ST([U(F.planBrief("회의록", "both")), T("mcp__lively__app_pull", { app_id: "memo-1" })].join("\n"));
-  check(tool && tool.appId === "memo-1" && tool.card === null && tool.asked === false && tool.round === 0, "S5 도구 부름의 app_id 만 있어도", tool);
+  const tool = ST([U(F.planBrief("회의록", "both")), T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: JSON.stringify({ id: "memo-1" }) }] })].join("\n"));
+  check(tool && tool.appId === "memo-1" && tool.card === null && tool.asked === false && tool.round === 0, "S5 AI 의 app_save 만 있어도", tool);
   const none = ST("");
   check(none && none.card === null && none.asked === false && none.appId === "" && none.round === 0, "S6 빈 기록 — 아무것도 없다", none);
   const bad = ST([T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: "{깨짐" }] }), T("mcp__lively__app_pull", { app_id: "../etc" }), "깨진 줄"].join("\n"));
@@ -400,6 +400,25 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
     }
   }
   check(left.length === 0, "C1 앱빌더 화면 글에 «—» · 합니다체가 없다", left);
+}
+
+
+// ══ 격리 리뷰 #1591 B1 · 6 · 7 — 앱 id 는 우리 글의 머리에서만 · 다시 기획하면 초안 청함은 낡았다 · 나눠 읽어도 같다 ══
+{
+  const PA = F.promptAppId || (() => "없음"), ST = F.sessionTrace || (() => null), STC = F.sessionTraceChunked || (async () => null);
+  const fixC = F.fixBrief(2, [], "이거 app_pull memo 처럼 해줘 (id 12)", "both", "app-2c");
+  check(PA(fixC) === "app-2c", "B1a 고침 글의 코멘트 속 app_pull memo · (id 12) 는 안 잡는다 — 머리의 id", PA(fixC));
+  check(PA("이거 app_pull memo 처럼 해줘") === "" && PA("나중에 (id 12) 로 바꿔") === "" && PA(F.talkBrief("app_pull memo 처럼", "app-2c", "both", false)) === "", "B1b 머리가 아닌 글(사람 말 · 대화 둘째 말) — 빈 id");
+  check(PA(F.talkBrief("글자 크게", "app-2c", "both", true)) === "app-2c" && PA(F.copyBrief("memo-wj", "메모 · 원준", "메모", "sangmin-yoon", "both")) === "memo-wj" && PA(F.checkBrief(card, "app-2c")) === "app-2c", "B1c 대화 첫 말 · 사본 · 대조 글의 머리");
+  const U = (t) => JSON.stringify({ type: "user", message: { content: t } });
+  const T = (name, input) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  const pull = ST([U(F.planBrief("회의록", "both")), T("mcp__lively__app_pull", { app_id: "memo-other" })].join("\n"));
+  check(pull && pull.appId === "", "B1d AI 의 app_pull(남의 앱 읽기)은 이 만들기의 앱이 아니다", pull);
+  const re = ST([U(F.draftBrief(card, "both", "res-1")), U(F.planBrief("회의록 다시", "both"))].join("\n"));
+  check(re && re.asked === false, "B6 초안을 청한 뒤 다시 기획을 청했다 — 초안 청함은 낡았다", re);
+  const big = Array.from({ length: 4000 }, (_, i) => (i % 3 ? JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x".repeat(50) }] } }) : U(F.fixBrief(i, [], "x", "both", "app-2c")))).join("\n");
+  const a1 = ST(big), a2 = await STC(big, 500);
+  check(a2 && JSON.stringify(a1) === JSON.stringify(a2) && a1.round === 3999 && a1.appId === "app-2c", "B7 나눠 읽어도(chunk) 같은 결과", { a1, a2 });
 }
 
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
