@@ -97,7 +97,9 @@ export const knowledgeRevisionReview: Capability = {
     const got = await getRevision(Number(input.id));
     if (!got) throw new HttpError(404, "수정 제안 없음");
     //  #5100 — 지운 문서의 수정 제안을 승인하면 그 문서가 되살아난다. 앱 맥락 범위가 걸린 요청엔 상세와 같이 없는 것으로 답한다.
-    if (await knowledgeGoneInAppContext(String(got.revision.name), ctx?.viewer ?? null)) throw new HttpError(404, "수정 제안 없음");
+    //   안 보이는 문서의 제안도 상세와 같은 글로 답한다 — 아래 쓰기 판정의 글(«지식 '<이름>' 없음»)은 요청에 없던 이름을 번호만으로 알려 준다.
+    if (await knowledgeGoneInAppContext(String(got.revision.name), ctx?.viewer ?? null)
+      || !(await canSeeKnowledge(String(got.revision.name), ctx?.viewer ?? null))) throw new HttpError(404, "수정 제안 없음");
     await assertKnowledgeWritable(got.revision.name, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return input.decision === "approve"
@@ -126,7 +128,7 @@ export const reviewQueueSummary: Capability = {
   handler: async (_input: unknown, _user: LivelyUser, ctx?: CapabilityCtx) => {
     const counts = await reviewQueueCounts(ctx?.viewer ?? null);
     // #968 by_category — 검토 큐 사이드바(카테고리 트리) 배지용. 실패해도 총계는 살린다(추가 표면일 뿐).
-    const by_category = await reviewQueueCountsByCategory().catch(() => [] as { key: string | null; n: number }[]);
+    const by_category = await reviewQueueCountsByCategory(ctx?.viewer ?? null).catch(() => [] as { key: string | null; n: number }[]);
     return { ...counts, by_category };
   },
 };

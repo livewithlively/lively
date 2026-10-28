@@ -10,6 +10,7 @@ import {
 } from "../../v6/knowledge-comment-store.js";
 import { setKnowledgePropsUi } from "../../v6/knowledge-store.js";
 import { assertKnowledgeVisible, assertKnowledgeWritable } from "./shared.js";
+import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertNoContentSecrets } from "../content-secrets.js";
 
 // ════════ #592 지식/위키 UI — 전역 뷰 설정·속성 오버라이드·댓글·트리 이동(REST 계약 §2). ════════
@@ -82,7 +83,8 @@ export const knowledgeCommentReaction: Capability = {
     const viewer = ctx?.viewer ?? null;
     if (viewer !== null) {
       const name = await knowledgeNameOfComment(input.id);
-      if (name !== undefined) await assertKnowledgeVisible(name, viewer);
+      //  못 보면 «댓글 없음» — 요청엔 댓글 번호뿐이라, 문서 이름을 싣는 글(«지식 '<이름>' 없음»)은 번호만으로 그 이름을 알려 준다(#5100).
+      if (name !== undefined && !(await canSeeKnowledge(name, viewer))) throw new HttpError(404, "댓글 없음");
     }
     return { reactions: await toggleKnowledgeCommentReaction(input.id, input.emoji, ctx?.actor ?? user?.userId ?? "") };
   },

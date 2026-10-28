@@ -18,7 +18,7 @@
 //   E8  범위 앱 · 없는 이름 = «보인다»(새 지식 저장을 막지 않는다 — 존재 판정은 호출부)
 //   E9  범위 앱 · 링크: 범위 안 문서의 링크 목록에 범위 밖 이웃이 안 실린다(종전 knowledgeVisSql 직결 자리)
 //       · 공개범위 축을 끄면 링크도 다른 표면(목록 · 검색)처럼 잠긴 이웃을 보인다(종전엔 링크만 축을 몰랐다 — 격리 리뷰 N6) · 축을 꺼도 범위는 그대로
-//   E10 범위 앱 · 자료: 선언한 종류만 · 범위 밖 source_get = 403 + 기록 · 종류를 안 적으면 0건(닫힘)
+//   E10 범위 앱 · 자료: 선언한 종류만 · 범위 밖 source_get = 403 + 기록 · 종류를 안 적으면 0건(닫힘) · 범위 밖 source_artifact(MCP 전용 — 훑기가 못 본다) = 403
 //   E11 범위 앱 · self 소스 = 거절(이름 · 연결 표가 정책 밖이라) · 범위 없으면 종전
 //   E12 매니페스트 · 저장: 없는 카테고리 key = 400 · folders = 400 · 맞는 key 는 저장된다
 //   E13 어느 판(결정 ③): 공개 앱에 초안 — 고친 사람은 초안의 범위 · 다른 사람은 공개 판의 범위 · 공개 주소는 고친 사람에게도 공개 판 · 초안 주소는 초안
@@ -268,6 +268,9 @@ try {
       chk("E10c 자료 거절도 기록된다", logged.length === 1, JSON.stringify(logged));
       const okS = await scoped(() => get.handler({ id: sSlack }, carol, webCtx));
       chk("E10d 범위 안 source_get 은 열린다", Number(okS?.source?.id) === sSlack);
+      const art = sCap("source_artifact");
+      const ea = await scoped(() => thrown(() => art.handler({ source_id: sMail }, carol, { ...webCtx, source: "mcp" })));
+      chk("E10f 범위 밖 source_artifact(MCP 전용) = 403 out_of_app_context", ea?.status === 403 && ea?.body?.code === "out_of_app_context", String(ea?.status) + " " + ea?.message);
     } else chk("E10b source_get 능력을 찾는다", false, "sourceCapabilities 없음");
     const closed = await scoped(() => ss.listSources({ q: TAG, limit: 50 }, VIEWER), { ...SCOPE, sourceKinds: [] });
     chk("E10e 자료 종류를 안 적으면 자료 0건(닫힘)", closed.length === 0, JSON.stringify(closed.map((r) => r.id)));

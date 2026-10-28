@@ -5,7 +5,7 @@
 //  직접 불러 술어를 재고, 여기는 진짜 Express(registerWebUi · registerTerminalFiles)에 앱 토큰으로 요청해 문이 실제로 걸리는지 잰다.
 //  이 DB 에는 «대상 제한(members)» 지식을 두지 않는다 — filterVisibleByName 의 지름길(잠긴 지식이 없으면 판정 생략)이 켜진 모양을 재야 해서다.
 //
-//  사양 · 엣지 표(격리 리뷰 B1 · N1 · N2 · N3 · 재검토 B1' · 재재검토 B-1~B-3 반영):
+//  사양 · 엣지 표(격리 리뷰 B1 · N1 · N2 · N3 · 재검토 B1' · 재재검토 B-1~B-3 · 재재재검토 반영):
 //   W1  능력 REST · knowledge_get: 범위 밖 = 403 out_of_app_context · 범위 안 = 200 · 사람 토큰 = 200(무회귀) · 범위 없는 앱 토큰 = 200(무회귀)
 //   W2  능력 REST · grep(/knowledge/search): 앱 = 범위 밖 0건 · 사람 = 범위 밖 있음
 //   W3  맨 Express 길 /sources/:id/original(범위 밖 종류 local_file): 앱 = 404(내용 없음) · 사람 = 200(내용)   ← 인증 문이 범위를 물려준다
@@ -32,6 +32,11 @@
 //       자료의 낱말) · 관리기 발견 목록(지운 문서의 인용) · 증류기 목록 = 범위 앱 403 · 사람 = 200 이고 그 내용이 보인다(길이 살아 있다는 대조)
 //   W16 관리기로 범위 넓히기 연쇄(미분류 문서를 범위 안 카테고리로 옮기기): 발견 보고 · 일괄 적용 · 처리(apply) = 범위 앱 403 · 발견이 안 생기고
 //       문서는 미분류 그대로 · 그 문서는 여전히 범위 밖(403)
+//   W17 파생 중복 알림(쓰기 답 — 훑기가 못 보는 길): 범위 앱이 범위 안 자료로 지식을 저장 · 연결하면 알림에 범위 안 형제만 실리고 범위 밖 · 미분류
+//       형제의 이름은 없다 · 사람은 그 이름을 본다(같은 자료의 읽기와 같은 기준)
+//   W18 번호로 부르는 쓰기: 범위 밖 문서의 수정 제안 승인 · 댓글 반응 = 범위 앱 404 · 답에 문서 이름이 없다(요청에 없던 이름) · 사람 반응 = 200
+//   W19 새 자격: 본인 토큰 발급 · 장치 승인 = 범위 앱 403 out_of_app_context(새 토큰엔 앱 범위가 없다) · 토큰 없음 · 사람 = 토큰을 받는다
+//   W8f 검토 대기 카테고리별 건수: 범위 앱 = 범위 밖 카테고리가 안 나온다 · 사람 = 나온다
 //   W14 사람 = 되살리기 200 · 되살아난다(앞의 403 들이 범위 판정이었다 — 이 토큰 · 이 자료로 되살리기는 된다)
 //   W9  거절 기록 = 거절한 호출 하나에 한 줄씩 — 앱 w-app 의 (도구 · 길) 다중집합이 정확히 같다 · 모두 실패(REST = rest · 다리 = app-ui)
 import "../../scripts/test-apps-root.mjs";
@@ -102,7 +107,8 @@ try {
     "content_restore", "content_purge", "content_undo", "knowledge_history", "knowledge_history_entry", "knowledge_revert",
     "knowledge_revisions", "knowledge_revision_get", "knowledge_revision_review", "my_lively_log", "org_distiller_preview",
     "trash_counts", "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
-    "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve"];
+    "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve",
+    "knowledge_save", "source_link_knowledge", "knowledge_comment_reaction", "review_queue_summary", "org_token_mint_self", "device_approve"];
   const bob = { userId: BOB, email: "b@x", scopes: ["memory"], projects: ["*"] };
   const files = (id, context) => [
     { path: "lively-app.json", content: JSON.stringify({ id, title: id, version: "1.0.0", permissions: { scopes: ["memory"], tools: TOOLS }, ...(context ? { context } : {}), ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
@@ -121,7 +127,7 @@ try {
   //  수정 제안 셋 — 있는 범위 밖 · 범위 안 · 지운 범위 밖(지식을 지워도 행이 남는다)
   const rev = async (name, body) => Number((await q(`INSERT INTO knowledge_revision(name,mode,status,base_title,base_body_md,new_title,new_body_md,proposed_by)
     VALUES($1,'staged','pending',$1,$2,$1,$2,$3) RETURNING id`, [name, body, BOB]))[0].id);
-  await rev("w-out-1", "범위 밖 수정 제안 본문");
+  const revOut = await rev("w-out-1", "범위 밖 수정 제안 본문");
   await rev("w-in-1", "범위 안 수정 제안 본문");
   const revDel = await rev("w-del-1", "지운 문서의 수정 제안 본문");
   const alive = async (name) => (await q(`SELECT 1 FROM knowledge WHERE name=$1`, [name])).length > 0;
@@ -142,6 +148,9 @@ try {
   const fMove = Number((await q(`INSERT INTO org_manager_finding(manager_id,kind,target_kind,target_ref,dedup_key,severity,summary,evidence,proposed_action)
     VALUES($1,'mismatch','knowledge','w-uncat-1','f3','note','옮기기','x',$2::jsonb) RETURNING id`, [mgrId, JSON.stringify({ op: "move_category", name: "w-uncat-1", to_category_id: idIn })]))[0].id);
   const catsOf = async (name) => (await q(`SELECT category_id FROM knowledge_category WHERE name=$1`, [name])).map((r) => Number(r.category_id));
+  //  범위 안 자료(slack)에서 파생된 형제 셋 — 범위 안 · 범위 밖 · 미분류(파생 중복 알림의 이름) · 범위 밖 문서의 댓글(번호로 부르는 반응)
+  await q(`INSERT INTO knowledge_source(name,source_id,relation) VALUES('w-in-1',$1,'derived_from'),('w-out-1',$1,'derived_from'),('w-uncat-1',$1,'derived_from')`, [sSlack]);
+  const cmtOut = Number((await q(`INSERT INTO knowledge_comment(name,author,body) VALUES('w-out-1',$1,'범위 밖 댓글') RETURNING id`, [BOB]))[0].id);
   const actId = Number((await q(`INSERT INTO activity(type,title,summary,body,author_person,created_at) VALUES('docs','작업 기록','요약','본문',$1,now()) RETURNING id`, [CAROL]))[0].id);
   await q(`INSERT INTO activity_knowledge(activity_id,name,relation) VALUES($1,'w-out-1','produced'),($1,'w-in-1','references')`, [actId]);
   const projId = Number((await q(`INSERT INTO project(name,level,status,created_by) VALUES('w-project','project','active',$1) RETURNING id`, [CAROL]))[0].id);
@@ -330,6 +339,47 @@ try {
     chk("W16b 일괄 적용 · 처리(apply): 범위 앱 = 403 · 문서는 미분류 그대로 · 여전히 범위 밖(403)", denied(ap) && denied(rs) && cats.length === 0 && denied(kg),
       `${ap.status} ${ap.text.slice(0, 80)} · ${rs.status} ${rs.text.slice(0, 80)} · cats=${JSON.stringify(cats)} · get ${kg.status}`);
   }
+  // ── W17 파생 중복 알림 ──
+  {
+    const sv = await post("/api/ui/knowledge", "tok-app", { name: "w-app-derived", title: "앱이 쓴 지식", body_md: "앱 본문", type: "concept", category: "w-in", derived_from: [sSlack] });
+    const w = String(sv.json?.warning ?? "");
+    chk("W17 범위 앱 저장(derived_from): 알림에 범위 안 형제만 · 범위 밖 · 미분류 이름 없음", sv.status === 200 && w.includes("w-in-1") && !w.includes("w-out-1") && !w.includes("w-uncat-1"),
+      `${sv.status} warning=${w.slice(0, 160)} ${sv.text.slice(0, 120)}`);
+    const lk = await post(`/api/ui/sources/${sSlack}/knowledge`, "tok-app", { name: "w-in-1", relation: "derived_from" });
+    const lw = String(lk.json?.warning ?? "");
+    chk("W17b 범위 앱 연결(source_link_knowledge): 알림에 범위 밖 · 미분류 이름 없음", lk.status === 200 && lw.includes("w-app-derived") && !lw.includes("w-out-1") && !lw.includes("w-uncat-1"),
+      `${lk.status} warning=${lw.slice(0, 160)} ${lk.text.slice(0, 120)}`);
+    const hk = await post(`/api/ui/sources/${sSlack}/knowledge`, "tok-human", { name: "w-in-1", relation: "derived_from" });
+    const hw = String(hk.json?.warning ?? "");
+    chk("W17c 사람 연결: 알림에 범위 밖 형제 이름이 있다(무회귀 — 사람은 그 문서를 본다)", hk.status === 200 && hw.includes("w-out-1"), `${hk.status} warning=${hw.slice(0, 160)}`);
+  }
+  // ── W18 번호로 부르는 쓰기 ──
+  {
+    const ap = await post(`/api/ui/knowledge-revisions/${revOut}/review`, "tok-app", { decision: "approve" });
+    chk("W18 범위 밖 문서의 수정 제안 승인: 범위 앱 = 404 · 이름 없음", ap.status === 404 && !ap.text.includes("w-out-1"), `${ap.status} ${ap.text.slice(0, 120)}`);
+    const rc = await post(`/api/ui/knowledge-comments/${cmtOut}/reactions`, "tok-app", { emoji: "👍" });
+    chk("W18b 범위 밖 문서의 댓글 반응: 범위 앱 = 404 · 이름 없음", rc.status === 404 && !rc.text.includes("w-out-1"), `${rc.status} ${rc.text.slice(0, 120)}`);
+    const hr = await post(`/api/ui/knowledge-comments/${cmtOut}/reactions`, "tok-human", { emoji: "👍" });
+    chk("W18c 사람 반응 = 200(무회귀)", hr.status === 200, `${hr.status} ${hr.text.slice(0, 120)}`);
+  }
+  // ── W19 새 자격 ──
+  {
+    const mt = await post("/api/ui/org/token/self", "tok-app", {});
+    chk("W19 본인 토큰 발급: 범위 앱 = 403 · 토큰 없음", denied(mt) && !/lvk_/.test(mt.text), `${mt.status} ${mt.text.slice(0, 120)}`);
+    const mh = await post("/api/ui/org/token/self", "tok-human", {});
+    chk("W19b 사람 = 토큰을 받는다(무회귀)", mh.status === 200 && typeof mh.json?.token === "string" && mh.json.token.length > 0, `${mh.status} ${mh.text.slice(0, 80)}`);
+    const dv = await post("/api/ui/cli/device/approve", "tok-app", { user_code: "ABCD-EFGH" });
+    const dh = await post("/api/ui/cli/device/approve", "tok-human", { user_code: "ABCD-EFGH" });
+    chk("W19c 장치 승인: 범위 앱 = 403 · 사람 = 핸들러에 닿는다(범위 거절 아님)", denied(dv) && !denied(dh), `${dv.status} ${dv.text.slice(0, 100)} · 사람 ${dh.status} ${dh.text.slice(0, 80)}`);
+  }
+  // ── W8f 검토 대기 카테고리별 건수 ──
+  {
+    const keys = (r) => (r.json?.by_category ?? []).map((x) => x.key);
+    const a = await get("/api/ui/review-queue/summary", "tok-app");
+    const h = await get("/api/ui/review-queue/summary", "tok-human");
+    chk("W8f 검토 대기 카테고리별: 범위 앱 = 범위 밖 카테고리 없음 · 사람 = 있다", a.status === 200 && !keys(a).includes("w-out") && keys(a).includes("w-in") && keys(h).includes("w-out"),
+      `앱 ${JSON.stringify(keys(a))} · 사람 ${JSON.stringify(keys(h))}`);
+  }
   // ── W14 사람은 되살린다 ──
   {
     const r = await post("/api/ui/deleted/restore", "tok-human", { entity: "knowledge", key: "w-del-1" });
@@ -340,7 +390,8 @@ try {
     const want = ["knowledge_get", "deleted_list", "content_snapshot", "content_restore", "content_purge", "content_undo", "trash_counts", "knowledge_projects_v6",
       "knowledge_history", "knowledge_history_entry", "knowledge_revert", "knowledge_history", "knowledge_history", "my_lively_log", "org_distiller_preview",
       "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
-      "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve", "knowledge_get"]
+      "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve", "knowledge_get",
+      "org_token_mint_self", "device_approve"]
       .map((t) => `${t}|rest`).concat(["deleted_list|app-ui"]).sort();
     let rows = [];
     for (let i = 0; i < 30 && rows.length < want.length; i++) { await sleep(100); rows = await q(`SELECT tool, ok, harness FROM mcp_call_log WHERE app='w-app' ORDER BY id`); }

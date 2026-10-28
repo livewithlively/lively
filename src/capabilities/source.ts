@@ -210,7 +210,7 @@ const sourceLinkKnowledge: Capability = {
     //  #4824 — derived_from 은 연결·판정·맞추기가 한 트랜잭션이다. 단독 연결은 좁힌다(닫히는 쪽) — 증류 배치는 그 판에 쓴
     //   지식만 좁힐 수 있다(아니면 409, HttpError 그대로 나간다). 잠긴 자료로의 cites 는 더 넓은 지식에서 409.
     const batch = input.relation === "derived_from" ? await distillBatchOf(ctx?.session) : null;
-    const r = await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx, { batchSince: batch?.since ?? null });
+    const r = await linkKnowledgeSource(input.name, input.source_id, input.relation, writeCtx, { batchSince: batch?.since ?? null, viewer: ctx?.viewer });
     //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 그 사실을 **응답에 실어** 알린다(막지는 않는다).
     //   증류 세션이 그 자리에서 «합칠까 그대로 둘까» 를 정할 수 있어야 중복이 조용히 쌓이지 않는다.
     const visibility = r.derived?.changed

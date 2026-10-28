@@ -3,15 +3,19 @@
 //
 // 왜 따로인가: 범위를 못 지키는 길은 리뷰 때마다 «적어 둔 목록 밖의 형제» 로 나왔다(휴지통 → 이력 → 수정 제안 → 맥락 파이프라인). 길 이름을 적은
 //  시험(app-context-rest.pg-test)은 적은 길만 잰다. 여기는 범위 밖 표지(canary)를 심고 진짜 Express 의 **모든** 능력 REST GET 길 · 읽기 전용
-//  POST 길 · 맨 GET 길을 범위 앱 토큰으로 불러, 2xx 답에 표지가 실린 길을 이름으로 알린다 — 새 길이 생겨도 따로 적지 않고 재진다.
-//  (쓰기 POST 는 부르지 않는다 — 내용을 돌려주는 쓰기 길은 app-context-rest.pg-test 가 길마다 잰다.)
+//  POST 길 · 맨 GET 길을 범위 앱 토큰으로 불러, 답에 표지가 실린 길을 이름으로 알린다 — 새 길이 생겨도 따로 적지 않고 재진다.
+//  ⚠ 쓰기 POST 는 부르지 않는다(이 시험의 빈자리). 내용 · 이름을 돌려주는 쓰기 길은 app-context-rest.pg-test 가 짚은 것만 잰다 —
+//   휴지통 · 실행 취소 · 이력 되돌리기 · 수정 제안 승인 · 댓글 반응 · 파생 중복 알림(저장 · 연결) · 관리기 보고 → 적용 · 새 토큰.
+//   MCP 전용 도구(REST 가 없는 것)도 여기 안 든다 — 이름 목록(app-context-wiring C6)과 app-context.pg-test 가 잰다.
 //
 //  사양 · 엣지 표:
-//   S1 범위 앱 토큰의 2xx 답에 범위 밖 표지가 없다. 예외는 항상-주입 문서(규칙 · 페르소나 섹션 — 범위와 무관하게 모든 세션에 들어간다)를 돌려주는
-//      길(ALWAYS_OK)뿐이고, 그 길에도 항상-주입 표지 말고 다른 표지는 없어야 한다
+//   S1 범위 앱 토큰의 답(2xx 든 아니든)에 범위 밖 표지가 없다 — 내용 표지는 그대로, 이름 표지는 요청에 없던 것만 센다(요청한 이름을 «없음» 으로
+//      되돌려주는 것은 새는 것이 아니다 · 번호만 보냈는데 이름이 오면 샌다). 예외는 항상-주입 문서(규칙 · 페르소나 섹션 — 범위와 무관하게 모든 세션에
+//      들어간다)를 돌려주는 길(ALWAYS_OK)뿐이고, 그 길에도 항상-주입 표지 말고 다른 표지는 없어야 한다
 //   S2 (배선) 표지마다 사람 토큰으로 그것이 보이는 길이 적어도 하나 있다 — 못 심은 표지로 «안 샌다» 고 통과하지 않게
 //   S3 (배선) 부른 길이 충분하다 — 능력 GET 300개 이상 · 맨 GET 1개 이상 · 범위 앱이 2xx 를 받은 길 80개 이상(훑기가 조용히 아무것도 안 부르지 않게)
-//   S4 범위 안 표지는 범위 앱에도 보인다(범위가 통째로 닫혀서 S1 이 통과하는 것이 아니다)
+//   S4 범위 안 표지(지식 · 자료)는 범위 앱에도 보인다(범위가 통째로 닫혀서 S1 이 통과하는 것이 아니다)
+//   S5 (배선) 표지마다 «사람은 보는데 범위 앱은 못 보는» 길이 적어도 하나 있다 — 그 표지에 대해 S1 이 실제로 무엇인가를 가렸다
 import "../../scripts/test-apps-root.mjs";
 import pg from "pg";
 import fs from "node:fs";
@@ -88,6 +92,9 @@ try {
   const sIn = Number((await q(`INSERT INTO source(name,kind,title,body_md,lifecycle,occurred_at) VALUES('swp-s-in','slack','SWPI-S-TITLE','SWPI-S-BODY','active',now()) RETURNING id`))[0].id);
   const sOut = Number((await q(`INSERT INTO source(name,kind,title,body_md,lifecycle,occurred_at) VALUES('swp-s-out','email','SWPX-S-TITLE','SWPX-S-BODY','active',now()) RETURNING id`))[0].id);
   await q(`INSERT INTO knowledge_source(name,source_id,relation) VALUES('swpi-in',$1,'derived_from'),('swpx-hid',$2,'derived_from')`, [sIn, sOut]);
+  //  엇갈린 이웃 — 범위 밖 문서가 범위 안 자료에서 · 범위 안 문서가 범위 밖 종류 자료에서 나왔다 · 범위 밖 문서가 범위 안 문서를 가리킨다(역링크)
+  await q(`INSERT INTO knowledge_source(name,source_id,relation) VALUES('swpx-hid',$1,'cites'),('swpi-in',$2,'cites')`, [sIn, sOut]);
+  await q(`INSERT INTO knowledge_link(from_name,to_name,relation,origin) VALUES('swpx-hid','swpi-in','related','user')`);
   const pdir = path.join(TMP, "personal", slug(OWNER), "uploads");
   fs.mkdirSync(pdir, { recursive: true }); fs.writeFileSync(path.join(pdir, "secret.txt"), "SWPX-LOCAL-FILE-CONTENT");
   const sLocal = Number((await q(`INSERT INTO source(name,kind,title,body_md,lifecycle,occurred_at,external_system,external_instance,external_id,provenance)
@@ -142,9 +149,10 @@ try {
     } catch (e) { return { status: -1, text: String(e?.message ?? e) }; } finally { clearTimeout(to); }
   };
 
+  const NAME_CANARIES = ["swpx-hid", "swpx-del", "swpx-uncat", "swpx-always"];   // 이름 — 요청에 없던 것만 센다(S1)
   const CANARIES = ["SWPX-K-TITLE", "SWPX-K-BODY", "SWPX-K-SUMMARY", "SWPX-K-COMMENT", "SWPX-REV", "SWPX-DEL-TITLE", "SWPX-DEL-BODY", "SWPX-DELREV",
-    "SWPX-UNCAT", "SWPX-S-TITLE", "SWPX-S-BODY", "SWPX-LOCAL", "SWPX-FINDING", "SWPX-DELFINDING", ...ALWAYS_CANARIES, "swpx-hid", "swpx-del", "swpx-uncat"];
-  const hits = (text) => CANARIES.filter((c) => text.includes(c));
+    "SWPX-UNCAT", "SWPX-S-TITLE", "SWPX-S-BODY", "SWPX-LOCAL", "SWPX-FINDING", "SWPX-DELFINDING", "SWPX-ALWAYS", ...NAME_CANARIES];
+  const hits = (text, req) => CANARIES.filter((c) => text.includes(c) && !(NAME_CANARIES.includes(c) && req.includes(c)));
   //  길 변수 — 이름은 범위 밖 · 지운 · 미분류 문서 셋, 이력 번호는 (문서, 그 문서의 감사 행) 짝, :id 는 심은 행 번호들
   const ids = [sOut, sLocal, sIn, projId, idOut, revId, delRevId, actId, fId, mgrId, audit, delAudit, 1];
   const rest = (p) => p.replace(/:key\b/g, "swp-lane").replace(/:repo\b/g, "x").replace(/:kind\b/g, "email").replace(/:system\b/g, "slack")
@@ -152,7 +160,7 @@ try {
   const variants = (p) => {
     let out = /:audit_id\b/.test(p)
       ? [["swpx-hid", audit], ["swpx-del", delAudit]].map(([n, a]) => p.replace(/:name\b/g, n).replace(/:audit_id\b/g, String(a)))
-      : /:name\b/.test(p) ? ["swpx-hid", "swpx-del", "swpx-uncat"].map((n) => p.replace(/:name\b/g, n)) : [p];
+      : /:name\b/.test(p) ? ["swpx-hid", "swpx-del", "swpx-uncat", "swpi-in"].map((n) => p.replace(/:name\b/g, n)) : [p];
     out = out.map(rest);
     return /:id\b/.test(p) ? out.flatMap((v) => ids.map((i) => v.replace(/:id\b/g, String(i)))) : out;
   };
@@ -162,20 +170,25 @@ try {
   const BODY = { key: "swp-lane", name: "swpx-hid", q: "SWPX", text: "SWPX K BODY", limit: 50, entity: "knowledge" };
 
   const leaks = new Map();   // "도구 길" → 표지
-  const humanSeen = new Set();
+  const humanSeen = new Set(), scopeHid = new Set();
   let appOk = 0, capGets = 0, bareGets = 0, posts = 0;
+  const appSawIn = new Set(), appSawInSource = new Set();
   const probe = async (capName, method, url, body) => {
+    const req = url + (body ? JSON.stringify(body) : "");
     const a = await call(method, url, "tok-app", body);
     const h = await call(method, url, "tok-human", body);
-    if (h.status >= 200 && h.status < 300) for (const c of hits(h.text)) humanSeen.add(c);
-    if (!(a.status >= 200 && a.status < 300)) return;
-    appOk++;
-    let found = hits(a.text);
+    const humanHits = h.status >= 200 && h.status < 300 ? hits(h.text, req) : [];
+    for (const c of humanHits) humanSeen.add(c);
+    let found = hits(a.text, req);
+    for (const c of humanHits) if (!found.includes(c)) scopeHid.add(c);
+    if (a.status >= 200 && a.status < 300) {
+      appOk++;
+      if (a.text.includes("SWPI-IN-TITLE")) appSawIn.add(capName);
+      if (a.text.includes("SWPI-S-TITLE")) appSawInSource.add(capName);
+    }
     if (ALWAYS_OK.has(capName)) found = found.filter((c) => !ALWAYS_CANARIES.includes(c));
-    if (found.length) leaks.set(`${capName} ${method} ${url.replace(/\?.*$/, "")}`, found);
-    if (a.text.includes("SWPI-IN-TITLE")) appSawIn.add(capName);
+    if (found.length) leaks.set(`${capName} ${method} ${url.replace(/\?.*$/, "")} (${a.status})`, found);
   };
-  const appSawIn = new Set();
 
   //  ① 능력 REST GET · ② 읽기 전용 능력 POST
   const capPaths = new Set();
@@ -198,12 +211,14 @@ try {
   }
 
   console.log(`  부른 길: 능력 GET ${capGets} · 읽기 전용 POST ${posts} · 맨 GET ${bareGets} · 범위 앱 2xx ${appOk}`);
-  chk("S1 범위 앱 토큰의 2xx 답에 범위 밖 표지가 없다(항상-주입 문서의 길 예외)", leaks.size === 0,
+  chk("S1 범위 앱 토큰의 답에 범위 밖 표지가 없다(항상-주입 문서의 길 예외 · 이름은 요청에 없던 것만)", leaks.size === 0,
     [...leaks].map(([k, v]) => `\n     ${k} → ${v.join(",")}`).join(""));
   const unseen = CANARIES.filter((c) => !humanSeen.has(c));
   chk("S2 (배선) 표지마다 사람 토큰으로 보이는 길이 있다", unseen.length === 0, `사람에게도 안 보인 표지: ${unseen.join(", ")}`);
   chk("S3 (배선) 부른 길이 충분하다(능력 GET ≥ 300 · 맨 GET ≥ 1 · 범위 앱 2xx ≥ 80)", capGets >= 300 && bareGets >= 1 && appOk >= 80, `능력 GET ${capGets} · 맨 GET ${bareGets} · 2xx ${appOk}`);
-  chk("S4 범위 안 표지는 범위 앱에도 보인다", appSawIn.size > 0, "범위 안 문서가 어느 길에도 안 보였다");
+  chk("S4 범위 안 표지(지식 · 자료)는 범위 앱에도 보인다", appSawIn.size > 0 && appSawInSource.size > 0, `지식 ${appSawIn.size} · 자료 ${appSawInSource.size}`);
+  const notHidden = CANARIES.filter((c) => !scopeHid.has(c));
+  chk("S5 (배선) 표지마다 사람은 보는데 범위 앱은 못 보는 길이 있다", notHidden.length === 0, `범위가 한 번도 가리지 않은 표지: ${notHidden.join(", ")}`);
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e && e.stack || String(e));
 } finally {

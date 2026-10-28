@@ -176,13 +176,17 @@ export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number;
 
 /**
  * 이 자료에서 **이미 파생된** 지식 목록(#1631) — 중복 증류 판정의 재료. 실패는 빈 배열(모름은 경고 없음).
+ *  viewer 를 주면 그 사람이 볼 수 있는 지식만(공개범위 · 앱 맥락 범위 — #5100 격리 재재재검토): 알림 글에 형제의 **이름**이 실려 나가므로,
+ *  안 보이는 형제를 이름으로 알리면 그 문서가 있다는 것이 샌다. 안 주면(undefined — 증류 내부 판정) 종전대로 전부다.
  */
-export async function derivedPeersOf(sourceId: number): Promise<Array<{ name: string; relation: string }>> {
+export async function derivedPeersOf(sourceId: number, viewer?: Viewer): Promise<Array<{ name: string; relation: string }>> {
   try {
+    const params: unknown[] = [sourceId];
+    const vis = viewer === undefined ? "TRUE" : await knowledgeVisWhere(viewer, params, "k");
     const r = await itemsPool.query(
       `SELECT ks.name, ks.relation FROM knowledge_source ks
         JOIN knowledge k ON k.name = ks.name AND k.lifecycle = 'active'
-       WHERE ks.source_id = $1`, [sourceId]);
+       WHERE ks.source_id = $1 AND ${vis}`, params);
     return r.rows.map((x) => ({ name: String(x.name), relation: String(x.relation) }));
   } catch { return []; }
 }
@@ -196,14 +200,14 @@ export interface LinkSourceResult {
 }
 export async function linkKnowledgeSource(
   name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx,
-  opts: { allowNarrow?: boolean; batchSince?: Date | null } = {},
+  opts: { allowNarrow?: boolean; batchSince?: Date | null; viewer?: Viewer } = {},
 ): Promise<LinkSourceResult> {
   //  ⚠ 알림은 **반환값**으로 준다 — 모듈 전역에 담으면 동시 호출(배치 병렬)에서 남의 알림을 집어 온다.
   let dupNote: string | null = null;
   //  #1631 — 이 자료에서 파생된 지식이 이미 있으면 **막지 않고 알린다**(증류 세션이 그 자리에서 합칠 수 있게).
   //   실측: 같은 파일이 3초 간격으로 지식 2건이 됐다(슬러그만 다름). 중복 방지가 전적으로 모델 자율이라
   //   건너뛰면 그대로 통과한다. 한 자료에서 여러 지식이 나오는 정당한 경우가 있어 **거절은 하지 않는다.**
-  if (relation === "derived_from") dupNote = await derivedDupNote(sourceId, name);
+  if (relation === "derived_from") dupNote = await derivedDupNote(sourceId, name, opts.viewer);
   //  #4824 — 축 상태는 트랜잭션(잠금) 전에 읽는다(잠금을 쥔 채 풀을 기다리지 않게).
   const enforced = await derivedEnforced();
   // 'cites'(단순 참조)는 공개범위를 건드리지 않는다: 인용했다는 이유로 참조한 쪽까지 잠그면 공개 지식이 링크 하나로
@@ -229,10 +233,10 @@ export async function linkKnowledgeSource(
   return { dupNote, derived };
 }
 
-/** #1631 중복 증류 알림 — 이 자료에서 이미 다른 지식이 나왔으면 그 문장(아니면 null). knowledge_save(derived_from)도 쓴다. */
-export async function derivedDupNote(sourceId: number, name: string): Promise<string | null> {
+/** #1631 중복 증류 알림 — 이 자료에서 이미 다른 지식이 나왔으면 그 문장(아니면 null). knowledge_save(derived_from)도 쓴다. viewer 는 derivedPeersOf 머리말. */
+export async function derivedDupNote(sourceId: number, name: string, viewer?: Viewer): Promise<string | null> {
   const { checkDerivedDup } = await import("../org/distill/derived-dup.js");
-  const notice = checkDerivedDup(await derivedPeersOf(sourceId), name);
+  const notice = checkDerivedDup(await derivedPeersOf(sourceId, viewer), name);
   if (!notice.duplicate) return null;
   logger.warn({ name, sourceId, siblings: notice.siblings }, "[distill] 한 자료에서 지식이 여러 개 파생됐다 — 중복일 수 있다(#1631)");
   return notice.note;

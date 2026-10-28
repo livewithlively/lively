@@ -124,6 +124,7 @@ export function appContextDeniedError(d: { appId: string; actor: string | null; 
 //   공개범위 술어를 지나지 않는 기록을 돌려주거나 되살리거나, 분류를 바꿔 범위 자체를 넓힌다. 범위를 가를 근거가 없으니 닫는다.
 //   이름 → 거절 까닭(앱 제작자가 읽는 글).
 const TRASH_WHY = "지운 지식 · 자료는 범위 안인지 가를 근거(카테고리 연결)가 남지 않습니다";
+const SPAWN_WHY = "새 토큰을 내주거나 구성원 이름으로 따로 실행을 띄웁니다 — 그 토큰 · 실행(과 그 기록)의 라이블리 읽기엔 앱 맥락 범위가 없습니다";
 export const APP_CONTEXT_UNSAFE_TOOLS: ReadonlyMap<string, string> = new Map([
   ["deleted_list", TRASH_WHY],
   ["content_snapshot", TRASH_WHY],
@@ -132,15 +133,23 @@ export const APP_CONTEXT_UNSAFE_TOOLS: ReadonlyMap<string, string> = new Map([
   ["trash_counts", TRASH_WHY],
   ["content_undo", "그 사람의 마지막 웹 변경을 되돌립니다 — 지운 범위 밖 문서도 되살리고 제목을 돌려줍니다"],
   ["my_lively_log", "그 사람이 읽은 지식의 이름 · 제목을 도구 호출 기록에서 곧바로 읽습니다"],
+  //  새 자격 · 실행(격리 재재재검토) — 새 토큰엔 앱이 없고(appId 없음 → 범위 없음), 구성원 이름으로 띄운 실행(위탁 · 브로커)은 그 사람의 토큰으로 읽는다.
+  ["org_token_mint_self", SPAWN_WHY],
+  ["org_token_mint", SPAWN_WHY],
+  ["device_approve", SPAWN_WHY],
+  ["app_server_token_mint", SPAWN_WHY],
+  ["broker_run", SPAWN_WHY],
 ]);
-//  묶음은 이름 앞머리로 막는다 — 맥락 파이프라인(증류기 · 카테고리 붙이기 · 관리기)은 워크스페이스 전체를 다룬다: 레인 표본 · 미분류 지식 ·
-//   관리기 발견의 인용(지운 문서 것까지)을 공개범위 술어 없이 읽고, 관리기 «적용» 은 지식을 다른 카테고리로 옮긴다(앱이 제 범위를 넓히는 길).
-//   이름을 하나씩 적으면 새 형제가 생길 때마다 열린다(재재검토에서 둘이 그렇게 빠졌다) — 앞머리면 새 도구도 기본이 닫힘.
+//  묶음은 이름 앞머리로 막는다 — 이름을 하나씩 적으면 새 형제가 생길 때마다 열린다(재재검토에서 둘이 그렇게 빠졌다). 앞머리면 새 도구도 기본이 닫힘.
+//   · 맥락 파이프라인(증류기 · 카테고리 붙이기 · 관리기)은 워크스페이스 전체를 다룬다: 레인 표본 · 미분류 지식 · 관리기 발견의 인용(지운 문서 것까지)을
+//     공개범위 술어 없이 읽고, 관리기 «적용» 은 지식을 다른 카테고리로 옮긴다(앱이 제 범위를 넓히는 길).
+//   · 위탁(delegate_)은 워커 노드에 구성원 이름의 세션을 띄우고 그 기록을 돌려준다.
 const PIPELINE_WHY = "맥락 파이프라인(증류기 · 카테고리 붙이기 · 관리기) 도구는 워크스페이스 전체의 지식 · 자료를 범위 없이 다루고 분류를 바꿉니다";
 export const APP_CONTEXT_UNSAFE_PREFIXES: ReadonlyMap<string, string> = new Map([
   ["org_distiller_", PIPELINE_WHY],
   ["org_classifier_", PIPELINE_WHY],
   ["org_manager_", PIPELINE_WHY],
+  ["delegate_", SPAWN_WHY],   // 위탁 실행(워커 노드의 구성원 세션) · 그 상태 · 기록
 ]);
 
 /** 범위를 못 지키는 도구면 거절 까닭, 아니면 null(순수). */

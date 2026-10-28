@@ -71,7 +71,8 @@ t("C6 범위를 못 지키는 도구 목록 — 실제 도구를 가리키고 ·
   for (const prefix of APP_CONTEXT_UNSAFE_PREFIXES.keys()) assert.ok([...known].some((n) => n.startsWith(prefix)), `아무 도구도 안 가리키는 앞머리: ${prefix}`);
   const mustDeny = ["deleted_list", "content_snapshot", "content_restore", "content_purge", "trash_counts", "content_undo", "my_lively_log",
     "org_distiller_preview", "org_distiller_category_preview", "org_distiller_tune", "org_distiller_list",
-    "org_manager_findings", "org_manager_finding_report", "org_manager_finding_resolve", "org_manager_findings_apply", "org_classifier_list"];
+    "org_manager_findings", "org_manager_finding_report", "org_manager_finding_resolve", "org_manager_findings_apply", "org_classifier_list",
+    "org_token_mint_self", "org_token_mint", "device_approve", "app_server_token_mint", "broker_run", "delegate_run", "delegate_logs", "delegate_status"];
   for (const name of mustDeny) {
     assert.ok(known.has(name), `짚은 도구가 표면에 없다(이름이 바뀌었나): ${name}`);
     assert.ok((appContextUnsafeWhy(name) ?? "").length > 0, `거절되지 않는다(또는 까닭이 비었다): ${name}`);
