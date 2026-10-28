@@ -14,6 +14,8 @@
 //  B3 4-3 앱 있음 · 카드 없음 — «남아 있는 기획 카드가 없어요» · 「다음 →」     B4 4-4 ② 에 있는데 첫 판 저장 — ② 그대로
 //  B6 4-7 「준비하는 중…」 사이 닫음 — 예약 앱 0 · 화면 안 열림   B7 4-8 ① 다시 기획 — 지난 카드 + «바뀐 점만»   B8 4-9 준비 중 ① 칸 잠김
 //  B9 4-10 기록 없이 이어 열기 · 초안을 이미 청함 — ② 「완료」 없음            C1 6-11 이름 없이 시작 — 머리줄 「새 앱」   C3 6-10 판 정보 전 ③ 제목 비움
+//  R1~R9 격리 리뷰 #1583 후속 — 공개 앱 이름 바꿔 「모두」 넣기도 공개 · 다른 단계에서 온 카드 받기 · 대조 한 번 · 판 읽는 동안 «확인 중» · 카드 고침과 「완료」 한 자물쇠
+//        · 나갔다 온 사이 [[알림]] · 기록 끝을 못 읽으면 0 부터 안 읽기 · ⑤ 저장 중 표시 · 시작 길이 던져도 ① 풀기
 //  E1 6-15 앱 화면을 못 열면 까닭을 말한다                                      W 페이지 예외 없음 · 가짜 서버가 실제로 불렸다
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 빨갛다).
@@ -72,7 +74,9 @@ window.fetch = async (u, init) => {
     let man = {}; try { man = JSON.parse(body.files.find((f) => f.path === "lively-app.json").content); } catch (_) {}
     const a = window.__A[man.id];
     if (!a || a.saveFail) return j({ error: "저장소가 잠시 응답하지 않아요" }, 500);
-    a.versions.push([a.cur + 1, body.note]); a.cur += 1; a.manifest = man; a.saves = (a.saves || 0) + 1; return j({ version_no: a.cur });
+    a.versions.push([a.cur + 1, body.note]); a.cur += 1; a.manifest = man; a.saves = (a.saves || 0) + 1;
+    if (a.vis === "all") a.draft = true;   // 공개 앱에 저장하면 저장한 사람의 초안(#4667)
+    return j({ version_no: a.cur });
   }
   if (p.startsWith("/api/ui/apps/build-start")) { window.__buildStarts = (window.__buildStarts || 0) + 1; return j({ app_id: "res-new" }); }
   if (p.startsWith("/api/ui/apps?session=")) return j({ apps: [] });
@@ -82,6 +86,7 @@ window.fetch = async (u, init) => {
   if (p.startsWith("/api/ui/terminal/sessions") && method === "POST") return j({ ok: true });
   if (p.startsWith("/api/ui/app-instances")) { if (window.__instFail) return j({ error: "인스턴스 자리가 꽉 찼어요" }, 500); return j({ instance: { id: "inst-1" } }); }
   //  앱 목록 — 앱 찾기 목록(listSessionApps)을 쓰는 「앱 화면으로 보기」 시험만 채운다(window.__listApps). 다른 때는 빈 목록(새로 생긴 앱 찾기가 잡지 않게).
+  if ((p === "/api/ui/apps" || p.startsWith("/api/ui/apps?")) && window.__appsNull) return j({ apps: [null] });   // 이상한 목록 — 시작 길이 던지게(R9)
   if (p === "/api/ui/apps" || p.startsWith("/api/ui/apps?")) return j({ apps: window.__listApps ? Object.keys(window.__A).map((id) => ({ id, title: window.__A[id].manifest.title, status: "active", enabled: true, visibility: "me", manifest: { title: window.__A[id].manifest.title, ui: { pages: [{ key: "main", title: "앱", entry: "ui/index.html" }] } } })) : [] });
   if (p.includes("sessions")) return j({ sessions: [] });
   return j({});
@@ -316,6 +321,101 @@ async function PAGE_MAIN() {
   await sleep(4500);
   R.a12 = { btn: !!done12, saves: saves("a12"), pubs: pubs("a12") };
 
+
+  // ══ 격리 리뷰 #1583 후속(R1~R9) ══
+  // R1 · 1 — 이미 공개된 앱(초안 없음)을 ④ 에서 「모두」 로 두고 이름을 바꿨다 — 저장이 만든 내 초안을 공개까지 한다(비공개 초안으로 남지 않게)
+  window.__step = "R1";
+  app("r1", { vis: "all", pubNo: 2 });
+  await open(base("s-r1", { appId: "r1", stage: "check", reached: 3, vis: "all", check: { have: ["정리"], missing: [], ver: 2, card: CT } }));
+  const nr1 = $(".v2-studio-name-in"); if (nr1) { nr1.value = "회의록 새 이름"; nr1.dispatchEvent(new Event("input", { bubbles: true })); }
+  const dr1 = btn(/완료 · 다음 단계로/, $(".v2-studio-now")); if (dr1) dr1.click();
+  await sleep(1500);
+  R.r1 = { saves: saves("r1"), pubs: pubs("r1"), draft: !!window.__A.r1.draft, fin: /워크스페이스 앱이 됐어요/.test(txt($(".v2-studio-fin")) || "") };
+
+  // R2 · 2 — ② 에서 카드 고침을 청해 두고 ③ 으로 갔는데 그 사이 고친 카드가 왔다 — 받아 두고 ② 로 돌아오면 풀려 있다
+  window.__step = "R2";
+  window.__log = ["a"];
+  app("r2", {});
+  await open(base("s-r2", { appId: "r2", stage: "plan", reached: 2, from: 1, cardFix: Date.now() - 1000 }));
+  const t3 = $$(".v2-studio-bar > *")[2]; if (t3 && t3.tagName === "BUTTON") t3.click(); await sleep(600);
+  window.__log.push(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: St.cardText({ ...card, first: "주제별 목록" }) }] } }));
+  await sleep(3500);
+  const t2b = $$(".v2-studio-bar > *")[1]; if (t2b && t2b.tagName === "BUTTON") t2b.click(); await sleep(700);
+  R.r2 = { cardFix: !!recOf("s-r2").cardFix, first: (recOf("s-r2").card || {}).first, wait: !!$(".v2-studio-ask--wait"), editable: $$(".v2-studio-card [contenteditable=true]").length };
+
+  // R3 · 3 — ④ 에 들어와 대조를 청한 뒤 답 전에 ③ 에 갔다가 다시 ④ — 대조는 한 번만 청한다
+  window.__step = "R3";
+  app("r3", {});
+  let pr3 = window.__prompts.length;
+  await open(base("s-r3", { appId: "r3", stage: "check", reached: 3 }));
+  const t3c = $$(".v2-studio-bar > *")[2]; if (t3c && t3c.tagName === "BUTTON") t3c.click(); await sleep(500);
+  const t4c = $$(".v2-studio-bar > *")[3]; if (t4c && t4c.tagName === "BUTTON") t4c.click(); await sleep(900);
+  R.r3 = { checks: window.__prompts.slice(pr3).filter((t) => /\[\[대조\]\]/.test(t)).length };
+
+  // R4 · 4 — ④ 에서 판을 다시 읽는 동안 «확인하는 중» · 「완료」 잠김(지난 판 결과를 먼저 그리지 않는다)
+  window.__step = "R4";
+  app("r4", { verDelay: 2500 });
+  localStorage.setItem("lively_v2_app_studio", JSON.stringify([base("s-r4", { appId: "r4", stage: "check", reached: 3, check: { have: ["정리"], missing: [], ver: 2, card: CT } })]));
+  St.openAppStudio({ sid: "s-r4" }, opts); await sleep(4200);   // 열 때 판 읽기(2.5초)가 끝나 ④ 를 그린 뒤
+  const t3d = $$(".v2-studio-bar > *")[2]; if (t3d && t3d.tagName === "BUTTON") t3d.click(); await sleep(3000);
+  const t4d = $$(".v2-studio-bar > *")[3]; if (t4d && t4d.tagName === "BUTTON") t4d.click(); await sleep(400);
+  const d4 = () => btn(/완료 · 다음 단계로/, $(".v2-studio-now"));
+  R.r4 = { early: { row: txt($(".v2-studio-chk")), done: d4() ? d4().disabled : null } };
+  await sleep(3200);
+  R.r4.late = { row: txt($(".v2-studio-chk")), done: d4() ? d4().disabled : null };
+
+  // R5 · 5 — ② 카드 「수정하기」 를 보내는 사이 「완료」 — 초안을 청하지 않는다
+  window.__step = "R5";
+  window.__log = [];
+  await open(base("s-r5", { appId: "", stage: "plan", reached: 1, cardSent: undefined, round: 0 }));
+  const pr5 = window.__prompts.length;
+  const a5 = $(".v2-studio-ask-in"); if (a5) a5.value = "담당자 칸 추가";
+  const ag5 = btn(/^수정하기$/, $(".v2-studio-ask")); if (ag5) ag5.click();
+  const d5 = btn(/완료 · 다음 단계로/, $(".v2-studio-now")); if (d5) d5.click();
+  await sleep(1000);
+  const s5 = window.__prompts.slice(pr5);
+  R.r5 = { fix: s5.filter((t) => /기획 카드를 이렇게 고쳐서/.test(t)).length, drafts: s5.filter((t) => /초안을 만들어/.test(t)).length };
+
+  // R6 · 6 — 알리기를 보내 두고 나갔다 왔다 · 그 사이 온 [[알림]] 답을 읽어 굳힌다
+  window.__step = "R6";
+  app("r6", { vis: "all", pubNo: 2 });
+  window.__log = ["x", "y", JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "[[알림]] 알렸어요" }] } })];
+  await open(base("s-r6", { appId: "r6", stage: "put", done: true, reached: 4, from: 2, notifySent: Date.now() - 60000 }), 3500);
+  const tb6 = btn(/알리기|알렸어요/, $(".v2-studio-tell"));
+  R.r6 = { text: txt(tb6), disabled: tb6 ? tb6.disabled : null, notified: !!recOf("s-r6").notified };
+
+  // R7 · 7 — 오래된 세션 · 읽던 자리 0 · 열 때 기록 끝을 못 읽었다 — 옛 카드를 처음부터 다시 읽지 않는다
+  window.__step = "R7";
+  window.__log = [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: St.cardText({ ...card, name: "옛 카드" }) }] } })];
+  window.__tailFail = true;
+  await open(base("s-r7", { appId: "", stage: "plan", card: null, reached: 1, from: 0, at: Date.now() - 3600000, title: "회의록" }), 3500);
+  window.__tailFail = false;
+  await sleep(3500);
+  R.r7 = { card: recOf("s-r7").card ? recOf("s-r7").card.name : null, from: recOf("s-r7").from };
+
+  // R8 · 8 — ④ 에서 「다음 →」(서버 빌드를 기다리는 넣기) — 바로 «저장하는 중» · ⑤ 칸은 못 누른다
+  window.__step = "R8";
+  app("r8", { server: true, manifest: { id: "r8", title: "회의록", studio: { place: "both", card } } });
+  await open(base("s-r8", { appId: "r8", stage: "check", reached: 4, check: { have: ["정리"], missing: [], ver: 2, card: CT } }));
+  const n8 = btn(/^다음 →$/); if (n8) n8.click();
+  await sleep(300);
+  const tab5 = $$(".v2-studio-bar > *")[4];
+  R.r8 = { next: !!n8, now: txt($(".v2-studio-now")), tab5: tab5 ? tab5.tagName : null };
+  St.closeAppStudio(); window.__A.r8.server = false;
+  await sleep(500);
+
+  // R9 · 9 — 「만들기 시작」 길이 중간에 던졌다 — ① 칸이 다시 풀리고 까닭을 말한다
+  window.__step = "R9";
+  localStorage.setItem("lively_v2_app_studio", "[]");
+  St.openAppStudio(null, opts); await sleep(500);
+  const w9 = $(".v2-studio-what"); if (w9) { w9.value = "회의록을 음성으로 받아 정리"; w9.dispatchEvent(new Event("input", { bubbles: true })); }
+  window.__appsNull = true; k = t0();
+  const g9 = $(".v2-studio-go"); if (g9) g9.click();
+  await sleep(1500);
+  window.__appsNull = false;
+  R.r9 = { what: w9 ? w9.disabled : null, go: g9 ? [g9.disabled, txt(g9)] : null, toast: toasts.slice(k).some((t) => /시작하지 못했어요/.test(t)) };
+  St.closeAppStudio();
+
   R.calls = window.__calls.length;
   R.errors = errors;
   document.getElementById("out").textContent = "RESULT" + JSON.stringify(R) + "ENDRESULT";
@@ -371,6 +471,16 @@ same(R.b9 && [R.b9.tab, R.b9.done, R.b9.stage, R.b9.sent], [2, false, "draft", 0
 same(R.c1, "새 앱", "C1 6-11 이름 없이 시작 · 카드 전 — 머리줄은 「새 앱」(설명 전체가 이름처럼 뜨지 않게)");
 check(R.c3 && R.c3.early === "" && /다섯 번째 버전이 나왔어요/.test(R.c3.late || ""), "C3 6-10 판 정보를 받기 전 ③ 제목은 비우고 · 받으면 그 판으로", JSON.stringify(R.c3));
 check(R.e1 && R.e1.btn && R.e1.toasts.some((t) => /^앱 화면을 열지 못했어요\(.+\)$/.test(t)) && plain(R.e1.toasts), "E1 6-15 「앱 화면으로 보기」 가 서버 오류로 못 열면 «앱 화면을 열지 못했어요(까닭)»", JSON.stringify(R.e1));
+same(R.r1, { saves: 1, pubs: 1, draft: false, fin: true }, "R1 공개 앱(초안 없음)을 「모두」 로 두고 이름을 바꿈 — 저장한 초안을 공개까지(비공개 초안으로 남지 않는다)");
+same(R.r2 && [R.r2.cardFix, R.r2.first, R.r2.wait, R.r2.editable > 0], [false, "주제별 목록", false, true], "R2 카드 고침을 청해 두고 ③ 에 간 사이 온 카드 — 받아 두고 ② 는 풀려 있다");
+same(R.r3, { checks: 1 }, "R3 대조를 청한 뒤 답 전에 ④ 를 다시 들어와도 대조는 한 번");
+check(R.r4 && /확인하는 중/.test(R.r4.early.row || "") && R.r4.early.done === true && /있어요: 정리/.test(R.r4.late.row || "") && R.r4.late.done === false, "R4 판을 다시 읽는 동안 «확인하는 중» · 「완료」 잠김 · 읽은 뒤 풀린다", JSON.stringify(R.r4));
+same(R.r5, { fix: 1, drafts: 0 }, "R5 카드 고침을 보내는 사이 「완료」 — 초안을 청하지 않는다");
+same(R.r6, { text: "알렸어요", disabled: true, notified: true }, "R6 나갔다 온 사이 온 [[알림]] 답 — 다시 열면 읽어서 굳힌다");
+same(R.r7 && R.r7.card, null, "R7 오래된 세션에서 기록 끝을 못 읽었다 — 옛 카드를 처음부터 다시 읽지 않는다");
+check(R.r7 && R.r7.from === 1, "R7 기록 끝을 다시 읽으면 그 자리부터", JSON.stringify(R.r7));
+check(R.r8 && R.r8.next && /저장하는 중/.test(R.r8.now || "") && R.r8.tab5 !== "BUTTON", "R8 ⑤ 로 가며 저장하는 중 — 바로 «저장하는 중» · ⑤ 칸은 못 누른다", JSON.stringify(R.r8));
+same(R.r9, { what: false, go: [false, "만들기 시작"], toast: true }, "R9 시작 길이 던졌다 — ① 칸이 풀리고 «시작하지 못했어요»");
 check(R.calls > 30, "W  가짜 서버가 실제로 불렸다", R.calls);
 same(R.errors, [], "W  페이지 예외 없음");
 
