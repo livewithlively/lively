@@ -177,7 +177,10 @@ async function PAGE_MAIN() {
   if (nameIn) nameIn.value = "민";
   host.querySelector("#nameGo")?.click();
   await sleep(300);
-  //  (#5060) 이름 다음은 파일 올리기 장면이다 — 올릴 것이 없다고 하고 넘어간다(그 장면도 계정 준비를 묻지 않는다).
+  //  (#5060) 이름 다음은 — 윈도우·맥 브라우저면 «앱으로 이어 하기»(웹에서 계속), 그다음 파일 올리기(올릴 것 없음). 둘 다 계정 준비를 묻지 않는다.
+  R.q0app = { asks: n() };
+  host.querySelector("#appWeb")?.click();
+  await sleep(300);
   R.q0u = { upload: !!host.querySelector("#upDrop"), asks: n() };
   host.querySelector("#upSkip")?.click();
   await sleep(900);
@@ -317,7 +320,8 @@ t("Q0 ★ 처음부터 열어도 인사·이름 장면은 계정 준비를 묻�
   assert.equal(R.q0a.accounts, 0, "인사 장면에서 계정 목록을 물었다");
   assert.equal(R.q0b.name, true, "배선 — 이름 장면이 아니다");
   assert.equal(R.q0b.asks, 0, "이름 장면에서 계정 준비를 물었다");
-  assert.equal(R.q0u.upload, true, "배선 — 이름 다음이 파일 올리기 장면이 아니다(#5060)");
+  assert.equal(R.q0app.asks, 0, "앱 장면에서 계정 준비를 물었다");
+  assert.equal(R.q0u.upload, true, "배선 — 이름(·앱 장면) 다음이 파일 올리기 장면이 아니다(#5060)");
   assert.equal(R.q0u.asks, 0, "파일 올리기 장면에서 계정 준비를 물었다");
   assert.equal(R.q0c.ai, true, "배선 — AI 장면이 아니다");
   assert.equal(R.q0c.asks, 1, `AI 장면이 묻지 않았다(${R.q0c.asks})`);

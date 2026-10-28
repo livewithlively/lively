@@ -167,10 +167,14 @@ function send(job: Job): Promise<void> {
   });
 }
 
-/* ── 탭 닫기 경고 — 도는 동안만 ── */
+/* ── 탭 닫기 경고 — 도는 동안만 · 브라우저에서만 ── */
 let guarded = false;
 const onBeforeUnload = (e: BeforeUnloadEvent): void => { e.preventDefault(); e.returnValue = ''; };
+/** 데스크톱 앱 안인가(preload 의 livelyDesktop). 앱에서는 경고를 걸지 않는다 — Electron 은 beforeunload 를 물어보지 않고 **조용히** 닫기를
+ *  취소해서, 트레이 [종료]·업데이트 재시작이 아무 말 없이 안 먹는 앱이 된다(#5060). 앱 창은 닫아도 숨겨질 뿐이라 올리기가 이어진다. */
+const inDesktopApp = (): boolean => { try { return !!(window as unknown as { livelyDesktop?: unknown }).livelyDesktop; } catch (_) { return false; } };
 function guardUnload(on: boolean): void {
+  if (on && inDesktopApp()) return;
   if (on === guarded) return;
   guarded = on;
   if (on) addEventListener('beforeunload', onBeforeUnload); else removeEventListener('beforeunload', onBeforeUnload);
