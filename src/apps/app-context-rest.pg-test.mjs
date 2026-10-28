@@ -5,7 +5,7 @@
 //  직접 불러 술어를 재고, 여기는 진짜 Express(registerWebUi · registerTerminalFiles)에 앱 토큰으로 요청해 문이 실제로 걸리는지 잰다.
 //  이 DB 에는 «대상 제한(members)» 지식을 두지 않는다 — filterVisibleByName 의 지름길(잠긴 지식이 없으면 판정 생략)이 켜진 모양을 재야 해서다.
 //
-//  사양 · 엣지 표(격리 리뷰 B1 · N1 · N2 · N3 · 재검토 B1' 반영):
+//  사양 · 엣지 표(격리 리뷰 B1 · N1 · N2 · N3 · 재검토 B1' · 재재검토 B-1~B-3 반영):
 //   W1  능력 REST · knowledge_get: 범위 밖 = 403 out_of_app_context · 범위 안 = 200 · 사람 토큰 = 200(무회귀) · 범위 없는 앱 토큰 = 200(무회귀)
 //   W2  능력 REST · grep(/knowledge/search): 앱 = 범위 밖 0건 · 사람 = 범위 밖 있음
 //   W3  맨 Express 길 /sources/:id/original(범위 밖 종류 local_file): 앱 = 404(내용 없음) · 사람 = 200(내용)   ← 인증 문이 범위를 물려준다
@@ -14,6 +14,7 @@
 //   W4e 휴지통 파기: 범위 앱 = 403 · 삭제 스냅샷의 본문이 그대로 남는다
 //   W4f 실행 취소(그 사람의 마지막 웹 변경 = 그 지식을 지운 것): 범위 앱 = 403 · 되살아나지 않는다
 //   W4g 범위를 선언하지 않은 앱 토큰 = 휴지통 목록 200(무회귀)
+//   W4h 휴지통 개수: 범위 앱 = 403 · 사람 = 200(지운 문서 개수를 범위 없이 센다)
 //   W5  activity_list 의 지식 참조: 앱 = 범위 밖 참조 없음 · 사람 = 있음
 //   W6  project_get_v6 의 필요 지식: 앱 = 범위 밖 없음 · 사람 = 있음
 //   W7  knowledge_projects_v6: 앱 · 범위 밖 이름 = 403 · 앱 · 범위 안 이름 = 200 · 사람 · 범위 밖 이름 = 200
@@ -27,6 +28,10 @@
 //       · 사람 목록 = 보인다 · 상세 = 200(무회귀)
 //   W12 내 사용 내역 · 증류기 미리보기: 범위 앱 = 403 · 사람 = 핸들러에 닿는다(200 · 400 «key 또는 draft»)
 //   W13 앱 화면 다리(runAppTool): 범위 앱의 휴지통 목록 = 403 out_of_app_context · 범위 없는 앱 = 열린다
+//   W15 맥락 파이프라인 읽기(이름 앞머리 org_distiller_ · org_manager_ 로 막는다): 카테고리 붙이기 미리보기(미분류 지식) · 증류기 조율(범위 밖 종류
+//       자료의 낱말) · 관리기 발견 목록(지운 문서의 인용) · 증류기 목록 = 범위 앱 403 · 사람 = 200 이고 그 내용이 보인다(길이 살아 있다는 대조)
+//   W16 관리기로 범위 넓히기 연쇄(미분류 문서를 범위 안 카테고리로 옮기기): 발견 보고 · 일괄 적용 · 처리(apply) = 범위 앱 403 · 발견이 안 생기고
+//       문서는 미분류 그대로 · 그 문서는 여전히 범위 밖(403)
 //   W14 사람 = 되살리기 200 · 되살아난다(앞의 403 들이 범위 판정이었다 — 이 토큰 · 이 자료로 되살리기는 된다)
 //   W9  거절 기록 = 거절한 호출 하나에 한 줄씩 — 앱 w-app 의 (도구 · 길) 다중집합이 정확히 같다 · 모두 실패(REST = rest · 다리 = app-ui)
 import "../../scripts/test-apps-root.mjs";
@@ -62,6 +67,7 @@ const { registerTerminalFiles } = await import(`${D}/terminal/terminal-files.js`
 const { knowledgeCapabilities } = await import(`${D}/capabilities/knowledge.js`);
 const { filterVisibleByName } = await import(`${D}/capabilities/knowledge/shared.js`);
 const { runAppTool } = await import(`${D}/capabilities/app-tool-call.js`);
+const { registry } = await import(`${D}/capabilities/index.js`);
 const rs = await import(`${D}/v6/read-scope.js`);
 const { slug } = await import(`${D}/terminal/profiles.js`);
 
@@ -94,7 +100,9 @@ try {
   // 앱 둘 — 범위를 선언한 앱 · 선언하지 않은 앱(무회귀 대조) — 저장 · 공개 · carol 동의
   const TOOLS = ["knowledge_search", "knowledge_grep", "knowledge_get", "source_get", "deleted_list", "content_snapshot", "activity_list", "project_get_v6", "knowledge_projects_v6",
     "content_restore", "content_purge", "content_undo", "knowledge_history", "knowledge_history_entry", "knowledge_revert",
-    "knowledge_revisions", "knowledge_revision_get", "knowledge_revision_review", "my_lively_log", "org_distiller_preview"];
+    "knowledge_revisions", "knowledge_revision_get", "knowledge_revision_review", "my_lively_log", "org_distiller_preview",
+    "trash_counts", "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
+    "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve"];
   const bob = { userId: BOB, email: "b@x", scopes: ["memory"], projects: ["*"] };
   const files = (id, context) => [
     { path: "lively-app.json", content: JSON.stringify({ id, title: id, version: "1.0.0", permissions: { scopes: ["memory"], tools: TOOLS }, ...(context ? { context } : {}), ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
@@ -117,6 +125,23 @@ try {
   await rev("w-in-1", "범위 안 수정 제안 본문");
   const revDel = await rev("w-del-1", "지운 문서의 수정 제안 본문");
   const alive = async (name) => (await q(`SELECT 1 FROM knowledge WHERE name=$1`, [name])).length > 0;
+  //  맥락 파이프라인 — 미분류 문서 · 카테고리 붙이기 레인 · 자료 레인(조율용 범위 밖 종류 자료 7건) · 관리기 발견(있는 범위 밖 · 지운 문서)
+  await q(`INSERT INTO knowledge(name,title,body_md,injection,provenance,lifecycle,confidence,source,visibility) VALUES('w-uncat-1','미분류 비밀 문서','미분류 비밀 본문','recalled','authored','active','ai','authored','open')`);
+  const adminUser = { ...carolUser, scopes: ["memory", "context", "admin"] };
+  const wctx = { source: "web", actor: CAROL, viewer: CAROL };
+  await registry.get("org_distiller_category_upsert").handler({ key: "w-lane", label: "w lane", enabled: true }, adminUser, wctx);
+  await registry.get("org_distiller_upsert").handler({ key: "w-d", label: "w d", enabled: false }, adminUser, wctx);
+  for (let i = 0; i < 7; i++) {
+    const sid = Number((await q(`INSERT INTO source(name,kind,title,body_md,lifecycle,occurred_at) VALUES($1,'email','메일','쿼카표지 환불 정책 내용','active',now()) RETURNING id`, [`w-mail-${i}`]))[0].id);
+    await q(`INSERT INTO knowledge_source(name,source_id,relation) VALUES('w-in-1',$1,'derived_from')`, [sid]);
+  }
+  const mgrId = Number((await q(`INSERT INTO org_manager(key,label,kind,enabled) VALUES('w-mgr','w','contradiction',true) RETURNING id`))[0].id);
+  await q(`INSERT INTO org_manager_finding(manager_id,kind,target_kind,target_ref,dedup_key,severity,summary,evidence) VALUES
+    ($1,'contradiction','knowledge','w-out-1','f1','warn','범위 밖 발견 요약','범위 밖 발견 인용'),
+    ($1,'contradiction','knowledge','w-del-1','f2','warn','지운 문서 발견 요약','지운 설계 비밀 본문 인용')`, [mgrId]);
+  const fMove = Number((await q(`INSERT INTO org_manager_finding(manager_id,kind,target_kind,target_ref,dedup_key,severity,summary,evidence,proposed_action)
+    VALUES($1,'mismatch','knowledge','w-uncat-1','f3','note','옮기기','x',$2::jsonb) RETURNING id`, [mgrId, JSON.stringify({ op: "move_category", name: "w-uncat-1", to_category_id: idIn })]))[0].id);
+  const catsOf = async (name) => (await q(`SELECT category_id FROM knowledge_category WHERE name=$1`, [name])).map((r) => Number(r.category_id));
   const actId = Number((await q(`INSERT INTO activity(type,title,summary,body,author_person,created_at) VALUES('docs','작업 기록','요약','본문',$1,now()) RETURNING id`, [CAROL]))[0].id);
   await q(`INSERT INTO activity_knowledge(activity_id,name,relation) VALUES($1,'w-out-1','produced'),($1,'w-in-1','references')`, [actId]);
   const projId = Number((await q(`INSERT INTO project(name,level,status,created_by) VALUES('w-project','project','active',$1) RETURNING id`, [CAROL]))[0].id);
@@ -185,6 +210,9 @@ try {
     chk("W4f 실행 취소: 범위 앱 = 403 · 되살아나지 않는다", denied(ud) && !(await alive("w-del-1")), `${ud.status} ${ud.text.slice(0, 160)}`);
     const fl = await get("/api/ui/deleted?entity=knowledge", "tok-free");
     chk("W4g 범위를 선언하지 않은 앱 토큰 = 휴지통 목록 200(무회귀)", fl.status === 200 && (fl.json?.entries ?? []).some((e) => e.key === "w-del-1"), `${fl.status} ${fl.text.slice(0, 120)}`);
+    const ca = await get("/api/ui/deleted/counts", "tok-app");
+    const ch = await get("/api/ui/deleted/counts", "tok-human");
+    chk("W4h 휴지통 개수: 범위 앱 = 403 · 사람 = 200", denied(ca) && ch.status === 200 && Number(ch.json?.knowledge) >= 1, `${ca.status} ${ca.text.slice(0, 100)} · 사람 ${ch.status} ${ch.text.slice(0, 80)}`);
   }
   // ── W5 activity_list 지식 참조 ──
   {
@@ -274,6 +302,34 @@ try {
     const free = await runAppTool(carolUser, "w-free", "deleted_list", { entity: "knowledge" }, { source: "app-ui" });
     chk("W13b 다리: 범위 없는 앱 = 열린다(무회귀)", (free?.entries ?? []).some((e) => e.key === "w-del-1"), JSON.stringify(free).slice(0, 160));
   }
+  // ── W15 맥락 파이프라인 읽기 ──
+  {
+    const cp = await get("/api/ui/org/classifiers/preview?key=w-lane", "tok-app");
+    const cph = await get("/api/ui/org/classifiers/preview?key=w-lane", "tok-human");
+    chk("W15 카테고리 붙이기 미리보기: 범위 앱 = 403 · 사람 = 200 · 미분류 문서가 보인다", denied(cp) && cph.status === 200 && cph.text.includes("w-uncat-1"), `${cp.status} ${cp.text.slice(0, 100)} · 사람 ${cph.status} ${cph.text.slice(0, 100)}`);
+    const tn = await post("/api/ui/org/distillers/tune", "tok-app", { key: "w-d" });
+    const tnh = await post("/api/ui/org/distillers/tune", "tok-human", { key: "w-d" });
+    chk("W15b 증류기 조율: 범위 앱 = 403 · 낱말 없음 · 사람 = 200 · 범위 밖 종류 자료의 낱말이 보인다", denied(tn) && !tn.text.includes("쿼카표지") && tnh.status === 200 && tnh.text.includes("쿼카표지"), `${tn.status} ${tn.text.slice(0, 100)} · 사람 ${tnh.status} ${tnh.text.slice(0, 100)}`);
+    const fd = await get("/api/ui/org/manager-findings", "tok-app");
+    const fdh = await get("/api/ui/org/manager-findings", "tok-human");
+    chk("W15c 관리기 발견 목록: 범위 앱 = 403 · 인용 없음 · 사람 = 200 · 지운 문서 발견이 보인다", denied(fd) && !fd.text.includes("비밀 본문 인용") && fdh.status === 200 && fdh.text.includes("지운 문서 발견 요약"), `${fd.status} ${fd.text.slice(0, 100)} · 사람 ${fdh.status} ${fdh.text.slice(0, 100)}`);
+    const dl = await get("/api/ui/org/distillers", "tok-app");
+    const dlh = await get("/api/ui/org/distillers", "tok-human");
+    chk("W15d 증류기 목록(앞머리 묶음): 범위 앱 = 403 · 사람 = 200", denied(dl) && dlh.status === 200, `${dl.status} ${dl.text.slice(0, 100)} · 사람 ${dlh.status}`);
+  }
+  // ── W16 관리기로 범위 넓히기 ──
+  {
+    const rp = await post("/api/ui/org/manager-findings", "tok-app", { manager_key: "w-mgr", target_ref: "w-uncat-1", dedup_key: "esc", severity: "note", summary: "x",
+      proposed_action: { op: "move_category", name: "w-uncat-1", to_category_id: idIn } });
+    const made = (await q(`SELECT count(*)::int AS n FROM org_manager_finding WHERE dedup_key='esc'`))[0].n;
+    chk("W16 발견 보고: 범위 앱 = 403 · 발견이 안 생긴다", denied(rp) && made === 0, `${rp.status} ${rp.text.slice(0, 120)} · 생긴 발견 ${made}`);
+    const ap = await post("/api/ui/org/manager-findings/apply", "tok-app", { ids: [fMove] });
+    const rs = await post(`/api/ui/org/manager-findings/${fMove}/resolve`, "tok-app", { state: "accepted", apply: true });
+    const cats = await catsOf("w-uncat-1");
+    const kg = await get("/api/ui/knowledge/w-uncat-1", "tok-app");
+    chk("W16b 일괄 적용 · 처리(apply): 범위 앱 = 403 · 문서는 미분류 그대로 · 여전히 범위 밖(403)", denied(ap) && denied(rs) && cats.length === 0 && denied(kg),
+      `${ap.status} ${ap.text.slice(0, 80)} · ${rs.status} ${rs.text.slice(0, 80)} · cats=${JSON.stringify(cats)} · get ${kg.status}`);
+  }
   // ── W14 사람은 되살린다 ──
   {
     const r = await post("/api/ui/deleted/restore", "tok-human", { entity: "knowledge", key: "w-del-1" });
@@ -281,8 +337,10 @@ try {
   }
   // ── W9 거절 기록(정확히) ──
   {
-    const want = ["knowledge_get", "deleted_list", "content_snapshot", "content_restore", "content_purge", "content_undo", "knowledge_projects_v6",
-      "knowledge_history", "knowledge_history_entry", "knowledge_revert", "knowledge_history", "knowledge_history", "my_lively_log", "org_distiller_preview"]
+    const want = ["knowledge_get", "deleted_list", "content_snapshot", "content_restore", "content_purge", "content_undo", "trash_counts", "knowledge_projects_v6",
+      "knowledge_history", "knowledge_history_entry", "knowledge_revert", "knowledge_history", "knowledge_history", "my_lively_log", "org_distiller_preview",
+      "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
+      "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve", "knowledge_get"]
       .map((t) => `${t}|rest`).concat(["deleted_list|app-ui"]).sort();
     let rows = [];
     for (let i = 0; i < 30 && rows.length < want.length; i++) { await sleep(100); rows = await q(`SELECT tool, ok, harness FROM mcp_call_log WHERE app='w-app' ORDER BY id`); }

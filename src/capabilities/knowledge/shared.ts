@@ -13,11 +13,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_KNOWLEDGE } from "../../org/delivery/default-content.js";
 import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
-import { anyRestrictedKnowledge } from "../../v6/knowledge-store.js";
+import { anyRestrictedKnowledge, existingKnowledgeNames } from "../../v6/knowledge-store.js";
 import { slugify } from "../../v6/knowledge-common.js";
 import { readScopeFor, outsideReadScope } from "../../v6/read-scope.js";   // #5100 앱 맥락 범위
 import { appContextDeniedError } from "../../apps/app-context.js";
-import { itemsPool, q } from "../../db/client.js";
 import type { LivelyUser } from "../../context.js";
 import type { CapabilityCtx } from "../types.js";
 
@@ -81,7 +80,7 @@ export async function assertKnowledgeInAppContext(name: string, viewer: Viewer, 
  */
 export async function knowledgeGoneInAppContext(name: string, viewer: Viewer): Promise<boolean> {
   if (!name || !(await readScopeFor(viewer))) return false;
-  return !(await q(itemsPool, `SELECT 1 FROM knowledge WHERE name = $1`, [name])).length;
+  return !(await existingKnowledgeNames([name])).has(name);
 }
 
 /**
@@ -122,7 +121,7 @@ export async function filterVisibleByName<T extends { name?: unknown }>(rows: T[
   if (!scoped && !(await anyRestrictedKnowledgeCached())) return rows;
   //  범위가 걸린 요청은 지금 없는 문서의 행(지운 문서의 수정 제안 등)도 뺀다(knowledgeGoneInAppContext 머리말) — 한 번에 묻는다.
   const names = [...new Set(rows.map((r) => String(r?.name ?? "")).filter(Boolean))];
-  const live = scoped ? new Set((await q(itemsPool, `SELECT name FROM knowledge WHERE name = ANY($1::text[])`, [names])).map((r) => String(r.name))) : null;
+  const live = scoped ? await existingKnowledgeNames(names) : null;
   const out: T[] = [];
   for (const r of rows) {
     if (r?.name && live && !live.has(String(r.name))) continue;

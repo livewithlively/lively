@@ -8,10 +8,11 @@
 //   C4 인증 문(appServerGate) — 그대로 보내는 갈래 · 사람 신원으로 바꾼 갈래 모두 범위 안에서 next 한다(맨 라우트가 범위를 물려받는 자리)
 //   C5 범위를 못 지키는 도구의 거절(격리 재검토 B1') — 세 어댑터 모두 앱 도구 판정(requireAppTool) 바로 뒤 · 핸들러 앞에서 assertAppContextSafeTool 을 부른다
 //      (다리는 try 안 — 거절이 기록되게)
-//   C6 그 도구 목록(APP_CONTEXT_UNSAFE_TOOLS)의 이름이 모두 실제 도구다(오타 하나면 그 도구가 조용히 열린다) · 재검토가 짚은 일곱이 다 들어 있다
+//   C6 그 목록(APP_CONTEXT_UNSAFE_TOOLS 이름 · APP_CONTEXT_UNSAFE_PREFIXES 앞머리)이 실제 도구를 가리킨다(오타 하나면 그 도구가 조용히 열린다) ·
+//      재검토 · 재재검토가 짚은 도구가 모두 거절된다 · 범위 안에서 읽는 도구(검색 · 상세 · 자료 · 카테고리 목록 · 파이프라인 개요)는 거절되지 않는다(너무 넓은 앞머리)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { APP_CONTEXT_UNSAFE_TOOLS } from "./app-context.js";
+import { APP_CONTEXT_UNSAFE_TOOLS, APP_CONTEXT_UNSAFE_PREFIXES, appContextUnsafeWhy } from "./app-context.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -64,12 +65,21 @@ t("C5 세 어댑터 — 앱 도구 판정 바로 뒤, 핸들러 앞에서 범위
   assert.ok(tryAt >= 0 && tryAt < guardAt && guardAt < handlerAt, `다리: try(${tryAt}) < 거절(${guardAt}) < 핸들러(${handlerAt})`);
 });
 
-t("C6 범위를 못 지키는 도구 목록 — 모두 실제 도구 · 재검토의 일곱이 다 있다", () => {
+t("C6 범위를 못 지키는 도구 목록 — 실제 도구를 가리키고 · 짚은 도구는 모두 거절 · 범위 안 읽기는 열림", () => {
   const known = new Set((JSON.parse(src("capabilities/surface-snapshot.json")) as { name: string }[]).map((c) => c.name));
   for (const name of APP_CONTEXT_UNSAFE_TOOLS.keys()) assert.ok(known.has(name), `없는 도구 이름: ${name}`);
-  for (const name of ["deleted_list", "content_snapshot", "content_restore", "content_purge", "content_undo", "my_lively_log", "org_distiller_preview"]) {
-    assert.ok(APP_CONTEXT_UNSAFE_TOOLS.has(name), `빠짐: ${name}`);
-    assert.ok((APP_CONTEXT_UNSAFE_TOOLS.get(name) ?? "").length > 0, `거절 까닭이 비었다: ${name}`);
+  for (const prefix of APP_CONTEXT_UNSAFE_PREFIXES.keys()) assert.ok([...known].some((n) => n.startsWith(prefix)), `아무 도구도 안 가리키는 앞머리: ${prefix}`);
+  const mustDeny = ["deleted_list", "content_snapshot", "content_restore", "content_purge", "trash_counts", "content_undo", "my_lively_log",
+    "org_distiller_preview", "org_distiller_category_preview", "org_distiller_tune", "org_distiller_list",
+    "org_manager_findings", "org_manager_finding_report", "org_manager_finding_resolve", "org_manager_findings_apply", "org_classifier_list"];
+  for (const name of mustDeny) {
+    assert.ok(known.has(name), `짚은 도구가 표면에 없다(이름이 바뀌었나): ${name}`);
+    assert.ok((appContextUnsafeWhy(name) ?? "").length > 0, `거절되지 않는다(또는 까닭이 비었다): ${name}`);
+  }
+  for (const name of ["knowledge_search", "knowledge_grep", "knowledge_get", "knowledge_list", "knowledge_similar", "source_get", "source_list",
+    "category_list", "category_get", "org_pipeline_overview", "store_query", "app_ai_run"]) {
+    assert.ok(known.has(name), `대조 도구가 표면에 없다: ${name}`);
+    assert.equal(appContextUnsafeWhy(name), null, `범위 안에서 읽는 도구가 막혔다: ${name}`);
   }
 });
 

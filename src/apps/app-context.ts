@@ -120,18 +120,36 @@ export function appContextDeniedError(d: { appId: string; actor: string | null; 
   return new HttpError(403, d.message, { body: { code: OUT_OF_APP_CONTEXT } });
 }
 
-//  범위를 못 지키는 도구(#5100 격리 리뷰 N2 · 재검토 B1') — 지금 카테고리 연결이 없는 것(지운 행의 스냅샷)이나 공개범위 술어를 지나지 않는
-//   기록을 돌려주거나 되살린다. 범위를 가를 근거가 없으니 닫는다. 이름 → 거절 까닭(앱 제작자가 읽는 글).
+//  범위를 못 지키는 도구(#5100 격리 리뷰 N2 · 재검토 B1' · 재재검토 B-1~B-3) — 지금 카테고리 연결이 없는 것(지운 행의 스냅샷 · 미분류 지식)이나
+//   공개범위 술어를 지나지 않는 기록을 돌려주거나 되살리거나, 분류를 바꿔 범위 자체를 넓힌다. 범위를 가를 근거가 없으니 닫는다.
+//   이름 → 거절 까닭(앱 제작자가 읽는 글).
 const TRASH_WHY = "지운 지식 · 자료는 범위 안인지 가를 근거(카테고리 연결)가 남지 않습니다";
 export const APP_CONTEXT_UNSAFE_TOOLS: ReadonlyMap<string, string> = new Map([
   ["deleted_list", TRASH_WHY],
   ["content_snapshot", TRASH_WHY],
   ["content_restore", TRASH_WHY],
   ["content_purge", TRASH_WHY],
+  ["trash_counts", TRASH_WHY],
   ["content_undo", "그 사람의 마지막 웹 변경을 되돌립니다 — 지운 범위 밖 문서도 되살리고 제목을 돌려줍니다"],
   ["my_lively_log", "그 사람이 읽은 지식의 이름 · 제목을 도구 호출 기록에서 곧바로 읽습니다"],
-  ["org_distiller_preview", "자료 표본을 자료 공개범위 술어 없이 읽습니다"],
 ]);
+//  묶음은 이름 앞머리로 막는다 — 맥락 파이프라인(증류기 · 카테고리 붙이기 · 관리기)은 워크스페이스 전체를 다룬다: 레인 표본 · 미분류 지식 ·
+//   관리기 발견의 인용(지운 문서 것까지)을 공개범위 술어 없이 읽고, 관리기 «적용» 은 지식을 다른 카테고리로 옮긴다(앱이 제 범위를 넓히는 길).
+//   이름을 하나씩 적으면 새 형제가 생길 때마다 열린다(재재검토에서 둘이 그렇게 빠졌다) — 앞머리면 새 도구도 기본이 닫힘.
+const PIPELINE_WHY = "맥락 파이프라인(증류기 · 카테고리 붙이기 · 관리기) 도구는 워크스페이스 전체의 지식 · 자료를 범위 없이 다루고 분류를 바꿉니다";
+export const APP_CONTEXT_UNSAFE_PREFIXES: ReadonlyMap<string, string> = new Map([
+  ["org_distiller_", PIPELINE_WHY],
+  ["org_classifier_", PIPELINE_WHY],
+  ["org_manager_", PIPELINE_WHY],
+]);
+
+/** 범위를 못 지키는 도구면 거절 까닭, 아니면 null(순수). */
+export function appContextUnsafeWhy(tool: string): string | null {
+  const exact = APP_CONTEXT_UNSAFE_TOOLS.get(tool);
+  if (exact) return exact;
+  for (const [prefix, why] of APP_CONTEXT_UNSAFE_PREFIXES) if (tool.startsWith(prefix)) return why;
+  return null;
+}
 
 /**
  * 범위를 못 지키는 도구를 맥락 범위를 선언한 앱 토큰이 부르면 핸들러에 닿기 전에 거절(403)한다. 앱 토큰이 아니거나 범위를 선언하지 않은 앱이면
@@ -140,7 +158,7 @@ export const APP_CONTEXT_UNSAFE_TOOLS: ReadonlyMap<string, string> = new Map([
  *  기록: REST(source "web")는 여기서 적고, MCP(instrument) · 다리(runAppTool 의 catch)는 각자 적는다.
  */
 export async function assertAppContextSafeTool(user: Pick<LivelyUser, "appId" | "userId" | "scopes" | "appAddress">, tool: string, source?: string): Promise<void> {
-  const why = APP_CONTEXT_UNSAFE_TOOLS.get(tool);
+  const why = appContextUnsafeWhy(tool);
   if (!why || !user.appId) return;
   const scope = await resolveAppReadScope(user);
   if (!scope) return;
