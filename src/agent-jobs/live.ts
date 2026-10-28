@@ -5,6 +5,8 @@
 //   멤버의 uid·홈으로 돈다(구독 로그인이 거기 있다) — 같은 uid 라 홈의 키트 토큰·git 자격을 읽을 수 있고, 판이 물려준 env 도 같다.
 //   그래서 앱 동의의 뜻은 «그 앱 화면에서 내가 보낸 지시를 나로서 실행» 이다(상민 2026-10-16 결정 ③ «본인 세션과 같은 신뢰» · 동의 창의
 //   «에이전트 작업» 줄). 받는 길은 service.assertMaySubmit 이 좁힌다(앱 서버 · 앱 토큰 직접 · 작업 AI 자신은 거절).
+//  #5082 박스 위 실행면(셀프호스트)도 같은 한계 위에 하나가 더 있다 — 판이 그 구성원 OS 계정으로 박스 위에서 돌아, 그 계정이 읽을 수 있는
+//   공유 자리(다른 프로젝트 · 다른 앱 폴더 — lively-shared 그룹)가 다 보인다. 앱 폴더만 보이게 하는 것은 도커 실행면(2단계)의 몫이다.
 //  #4891 홈 없는 작업(앱 서버가 보낸 API 키 에이전트 작업)은 다르다: 그 사람의 홈 · OS 계정을 붙이지 않고(launch.ts — 전용 계정 · 빈 홈),
 //   작업 AI 의 토큰도 앱 서버 급 주체다(plan.jobAppTokenOpts — 능력 API · /mcp 에서만 · 무조건 통과 도구 없음). 그 AI 를 부린 것은 앱 서버
 //   코드라, 사람 이름으로 세션을 열거나(홈이 붙는다) 파일 · 계정 길을 쓰는 것을 토큰 층에서도 막는다(격리 리뷰 — 마운트 층만으로는 모자랐다).
@@ -32,16 +34,20 @@ async function assertAppUsableFor(user: LivelyUser, appId: string): Promise<void
 export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
   if (cached) return cached;
   const store = await import("./store.js");
-  const launch = await import("./launch.js");
+  //  #5082 — 판을 세우고 걷는 자리(실행면): 매니지드는 브로커(launch.ts), 브로커 없는 박스는 박스 위(launch-host.ts) — surface.ts 가 고른다.
+  const { jobSurface } = await import("./surface.js");
+  const surface = await jobSurface();
   const pol = await import("../org/policies/agent-job-policy.js");
   const { currentTenant, withTenant } = await import("../org/tenant-context.js");
   const { tenantSlug } = await import("../terminal/catalog.js");
   cached = {
     store,
     policy: () => pol.effectiveAgentJobPolicy(async () => pol.resolveAgentJobPolicy(await store.agentJobPolicyRow())),
-    available: () => launch.jobContainersAvailable(),
-    launch: (job, boot) => launch.launchJobContainer(job, boot),
-    kill: (sid) => launch.killJobContainer(sid),
+    available: () => surface.available(),
+    unavailableMessage: () => surface.unavailableMessage(),
+    launch: (job, boot) => surface.launch(job, boot),
+    kill: (sid) => surface.kill(sid),
+    paneView: (job) => surface.paneView(job),
     assertJobAllowed: async (job) => {
       //  실행 계정 멤버가 아직 활성인가(모든 작업) · 앱 작업이면 그 사람의 지금 권한으로 그 앱을 쓸 수 있나(접수 때와 같은 판정).
       const { getMember } = await import("../org/store/members.js");
@@ -50,8 +56,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
       if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${seat ?? "?"})이 활성 구성원이 아닙니다`);
       if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
     },
-    //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체.
-    jobEnv: async (job) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps()); },
+    //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체. #5082 — 프록시 주소는 판이 보는 게이트웨이 아래.
+    jobEnv: async (job, at) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps(), at); },
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {

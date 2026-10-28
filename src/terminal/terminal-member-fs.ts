@@ -394,3 +394,30 @@ export function memberWriteSecretFile(osUser: string, absPath: string, data: str
     c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member secret write exit ${code}`))));
   });
 }
+
+/** 임시 비밀 스크립트(memberWriteTempSecret) — 시험이 진짜 셸로 돌려 본다(폴더 0700 · 파일 0600 · 실패하면 만든 폴더를 남기지 않는다). */
+export const MEMBER_TEMP_SECRET_SCRIPT = 'umask 077; d=$(mktemp -d "${TMPDIR:-/tmp}/lvly-job.XXXXXXXX") || exit 1; '
+  + 'if cat > "$d/boot"; then printf "%s" "$d/boot"; exit 0; fi; rm -f -- "$d/boot"; rmdir -- "$d"; exit 1';
+
+/**
+ * 비밀을 그 멤버만 여는 **새 임시 폴더**(mktemp -d — 0700 · 추측할 수 없는 이름) 안 파일(0600)에 두고 그 경로를 돌려준다(#5082 박스 위
+ *  작업 판의 부트 비밀). 경로를 부르는 쪽이 정하지 않는다 — 그 멤버가 폴더를 새로 만들므로 남이 미리 심어 둔 파일 · 링크에 쓸 일이 없다.
+ *  값은 stdin 이다(argv · 프로세스 목록에 안 남는다 — memberWriteSecretFile 과 같은 규약). 읽는 쪽이 파일과 폴더를 지운다.
+ */
+export function memberWriteTempSecret(osUser: string, data: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", MEMBER_TEMP_SECRET_SCRIPT], ["pipe", "pipe", "pipe"]);
+    const err = collectErr(c);
+    const out = collectText(c.stdout);
+    c.on("error", reject);
+    const stdin = c.stdin;
+    if (!stdin) return reject(new Error("member temp secret: no stdin"));
+    stdin.on("error", reject);
+    stdin.end(data);
+    c.on("close", (code) => {
+      const p = out.get().trim();
+      if (code === 0 && p.startsWith("/") && p.endsWith("/boot")) return resolve(p);
+      reject(new Error(err.get() || `member temp secret exit ${code}`));
+    });
+  });
+}

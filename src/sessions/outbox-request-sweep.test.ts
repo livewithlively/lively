@@ -382,7 +382,6 @@ t("[H7] 전역 정비는 있던 tickTasksAllTenants 를 부른다 — 여기서 
   assert.doesNotMatch(src, /assignQueued|runningCountByNode/, "배차 로직을 여기서 다시 쓰면 원본과 갈라진다");
 });
 
-console.log(`outbox-request-sweep: ${pass} passed`);
 
 // ── I: 빌트인 앱 시딩 (#2246 후속) ───────────────────────────────────────────
 //  실측: 테넌트 8개 중 7개가 org_app=0 → ai-session 알림이 전이를 감지하고도 전부 거절됐다.
@@ -418,3 +417,30 @@ t("[I5] 테넌트가 둘이면 **각각** 시드된다 — 전역 디바운스�
   assert.equal(shouldSweep("builtin-app-seed", "tenant-B", now, SIX_HOURS_MS), true,
     "다른 테넌트인데 첫 시딩이 막혔다 — 그 테넌트는 앱을 못 받는다");
 });
+
+// ── H1~H3 · 하우스키핑이 도는 배포에도 거는 정비 (#5082) ─────────────────────────────
+//  이 표는 셀프호스트 · registry 에서 무동작이다(maybeSweep) — 박스 위 작업(LIVELY_AGENT_JOBS=host)의 감시 · 보존 · 앱 AI 실행 정비가
+//   거기서 돌 길은 하우스키핑뿐이다(격리 리뷰 · 막을 것). 표시(housekeeping)와 하우스키핑의 배선을 함께 본다.
+t("[H1] 하우스키핑에도 거는 정비는 셋 — 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비", () => {
+  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "job-record-prune"]);
+  for (const j of SWEEP_JOBS.filter((x) => x.housekeeping)) assert.equal(j.scope ?? "tenant", "tenant", `${j.key} 은 워크스페이스마다 돈다`);
+});
+
+t("[H2] 하우스키핑은 표시가 붙은 정비를 그 표의 정의 · 그 표의 주기로 워크스페이스마다 건다(두 벌로 쓰지 않는다)", () => {
+  const hk = readFileSync("src/boot/housekeeping.ts", "utf8");
+  const body = hk.slice(hk.indexOf("function startBackgroundSweeps"), hk.indexOf("export const SCHEMA_ONLY_LAST_STEP"));
+  assert.match(body, /import\("\.\.\/sessions\/outbox-request-sweep\.js"\)/, "표를 불러와야 한다");
+  assert.match(body, /SWEEP_JOBS\.filter\(\(j\) => j\.housekeeping\)/, "표시로 골라야 한다(키를 다시 적으면 이름이 바뀔 때 말없이 빠진다)");
+  assert.match(body, /perTenant\(job\.key, job\.run\)/, "워크스페이스마다 · 그 표의 run 그대로");
+  assert.match(body, /m\.jobIntervalMs\(job, process\.env\)/, "주기도 그 표의 것(조정 env 포함)");
+  assert.match(body, /setInterval\(\(\) => \{ void run\(\); \}, every\)/, "주기마다 돈다");
+});
+
+t("[H3] 하우스키핑에 그 셋을 따로 또 걸지 않는다 — 두 번 돌지 않는다", () => {
+  const hk = readFileSync("src/boot/housekeeping.ts", "utf8");
+  for (const k of ["agent-job-sweep", "job-record-prune", "ai-run-sweep", "sweepAgentJobs", "pruneAgentJobRecords", "sweepAiRuns"]) {
+    assert.ok(!hk.includes(`"${k}"`) && !hk.includes(`.${k}(`), `하우스키핑이 ${k} 를 따로 부른다`);
+  }
+});
+
+console.log(`outbox-request-sweep: ${pass} passed`);

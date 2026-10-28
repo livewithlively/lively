@@ -16,7 +16,7 @@ import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
-import { RUNNER_GATEWAY } from "../agent-jobs/runner.js";
+import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
@@ -89,8 +89,10 @@ export interface AiRunDeps {
 
 export const ACCOUNT_UNAVAILABLE = "account_unavailable";
 export const PROXY_TOKEN_PREFIX = "lvai_";
-/** 작업 컨테이너 안에서 우리 프록시로 가는 주소(세션 루프백 → 게이트웨이 · runner.RUNNER_GATEWAY 와 한 자리) — Claude Code 의 ANTHROPIC_BASE_URL. */
-export const PROXY_BASE_IN_CONTAINER = `http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}/api/llm/anthropic`;
+/** 판이 보는 게이트웨이 아래 우리 프록시 주소 — Claude Code 의 ANTHROPIC_BASE_URL(routes.LLM_PROXY_PREFIX 와 같은 자리). */
+export const proxyBaseAt = (gateway: string): string => `${gateway}/api/llm/anthropic`;
+/** 작업 컨테이너 안에서 우리 프록시로 가는 주소(세션 루프백 → 게이트웨이 · runner.RUNNER_GATEWAY 와 한 자리). */
+export const PROXY_BASE_IN_CONTAINER = proxyBaseAt(RUNNER_GATEWAY_URL);
 /** 판이 빈 설정 폴더를 만들어 바꿔 넣는 자리표(agent-jobs/runner.ts) — 멤버 홈의 Claude 로그인을 읽지 않게. */
 export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
 const memberOf = (u: LivelyUser | undefined): string => String(u?.userId || "");
@@ -446,15 +448,21 @@ export async function sweepAiRuns(d: AiRunDeps): Promise<{ synced: number; stale
 /**
  * 작업 컨테이너의 판이 하네스에 더 줄 env — API 키 실행이면 우리 프록시 주소 + 그 실행 한정 토큰 + 빈 설정 폴더(멤버 홈의 로그인을 읽지 않게).
  *  키는 컨테이너에 들어가지 않는다(설계 §12 ⑤-5). 구독 실행이면 빈 객체.
+ *  at — 판이 보는 게이트웨이(#5082 — 박스 위 판은 그 박스의 루프백 포트)와 실을 워크스페이스(게이트웨이에 바로 닿는 판만 — 셀프호스트 다중
+ *   워크스페이스는 머리로 고른다. Claude Code 가 모든 API 요청에 ANTHROPIC_CUSTOM_HEADERS 를 싣는다 · 프록시는 위로 넘기지 않는다).
  */
-export async function bootEnvForJob(job: Pick<AgentJobRow, "id" | "account_kind">, d: AiRunDeps): Promise<Record<string, string>> {
+export async function bootEnvForJob(
+  job: Pick<AgentJobRow, "id" | "account_kind">, d: AiRunDeps,
+  at: { gateway: string; workspace: string | null } = { gateway: RUNNER_GATEWAY_URL, workspace: null },
+): Promise<Record<string, string>> {
   if (job.account_kind !== "api_key") return {};
   const run = await d.store.getAiRunByJob(job.id);
   if (!run) throw new HttpError(409, "API 키 작업에 붙은 실행 행이 없습니다");
   const t = d.newProxyToken();
   await d.store.setAiRunProxyToken(run.id, t.hash);
   return {
-    ANTHROPIC_BASE_URL: PROXY_BASE_IN_CONTAINER,
+    ANTHROPIC_BASE_URL: proxyBaseAt(at.gateway),
+    ...(at.workspace ? { ANTHROPIC_CUSTOM_HEADERS: `x-lively-workspace: ${at.workspace}` } : {}),
     ANTHROPIC_AUTH_TOKEN: t.token,
     ANTHROPIC_API_KEY: "",
     CLAUDE_CONFIG_DIR: CONFIG_DIR_PLACEHOLDER,

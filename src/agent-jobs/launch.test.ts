@@ -93,7 +93,7 @@ await t("K3 걷기 — 확답이 아닌 실패(중계 시간 초과 · 목록을
 });
 
 await t("F1 확보 단계의 실패는 전부 일시(transient) — 대기열로 되돌려 다시 한다(시도 상한까지) · 문장에 단계와 사유", () => {
-  const steps: LaunchStep[] = ["os-user", "workdir", "ensure", "home", "pane"];
+  const steps: LaunchStep[] = ["os-user", "workdir", "ensure", "home", "memory", "pane"];
   for (const step of steps) {
     const e = stepFailure(step, new Error("노드 자리 없음"));
     assert.ok(e instanceof JobLaunchError, step);

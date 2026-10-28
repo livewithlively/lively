@@ -8,7 +8,7 @@
 //  #4891 홈 없는 작업(앱 서버가 보낸 API 키 에이전트 작업)은 ①의 확보를 «홈 없음» 으로 하고(전용 계정 · 앱 폴더 작업 폴더 · 브로커가 빈 홈을
 //   컨테이너 안에 만든다) ②를 건너뛴다 — 앱 서버 코드가 사람의 홈(자격 · 토큰 · 키트)을 쓰는 작업을 띄우지 못하게.
 //
-//  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 작업 컨테이너는 매니지드 전용이다(자가호스팅 실행은 v2-8).
+//  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 그 박스는 박스 위 실행면(launch-host.ts #5082)을 쓴다. 어느 쪽인지는 surface.ts 가 고른다.
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
 import { HOMELESS_OS_USER, JOB_SESSION_ID_RE, homelessJobRefusal, jobSeatMember } from "./plan.js";
@@ -27,12 +27,14 @@ export class JobLaunchError extends Error {
 }
 
 /** 띄우기의 확보 단계 — 다시 하면 될 수도 있는 것들(인프라가 잠깐 막힘). 다시 해도 안 될 것(계정·배포)은 여기 없다. */
-export type LaunchStep = "os-user" | "workdir" | "ensure" | "home" | "pane";
+export type LaunchStep = "os-user" | "workdir" | "ensure" | "home" | "memory" | "pane";
 const STEP_FAILURE: Readonly<Record<LaunchStep, string>> = {
   "os-user": "실행 계정의 OS 계정을 준비하지 못했습니다",
   workdir: "작업 폴더를 만들지 못했습니다",
   ensure: "작업 컨테이너를 확보하지 못했습니다",
   home: "실행 계정의 홈을 준비하지 못했습니다",
+  //  #5082 박스 위 실행면 — 작업 메모리 상한을 걸 수 있는지 묻다 끊겼다(sudo 시간 초과 등). 확답으로 못 건다면 일시 실패가 아니다(launch-host).
+  memory: "작업 메모리 상한을 걸 수 있는지 확인하지 못했습니다",
   pane: "작업 컨테이너에 판을 띄우지 못했습니다",
 };
 /** (순수) 확보 단계의 실패 → 일시(transient) 띄우기 실패. 분류는 여기 한 자리다(launch.test 가 단계마다 본다). */
@@ -48,8 +50,8 @@ export async function jobContainersAvailable(): Promise<boolean> {
   return tmuxInSessionContainer(tenantSlug());
 }
 
-/** 실행 계정 멤버를 LivelyUser 로 — OS 계정·멤버 홈 준비(git 자격)가 이 신원으로 돈다. 비활성·사람 아님이면 던진다. */
-async function accountUser(memberId: string): Promise<LivelyUser> {
+/** 실행 계정 멤버를 LivelyUser 로 — OS 계정·멤버 홈 준비(git 자격)가 이 신원으로 돈다. 비활성·사람 아님이면 던진다(박스 위 실행면 #5082 도 같은 판정). */
+export async function accountUser(memberId: string): Promise<LivelyUser> {
   const { getMember } = await import("../org/store/members.js");
   const m = await getMember(memberId);
   if (!m || m.state !== "active" || (m.kind && m.kind !== "human")) throw new JobLaunchError(`실행 계정(${memberId})이 활성 사람 구성원이 아닙니다`);

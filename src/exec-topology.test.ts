@@ -37,6 +37,8 @@ import {
   parseTmuxRoute,
   parseSessionHarnesses,
   parseMuxPin,
+  parseAgentJobs,
+  parseAgentJobsPort,
   MUX_PIN_DEFAULT,
   nodeMuxGenerationsApply,
   type ExecTopology,
@@ -59,6 +61,7 @@ const TOPO_KEYS = [
   "LIVELY_ATTACH_WORKER_K",
   "LIVELY_TMUX_ROUTE", "LVLY_TMUX_SOCK_TEMPLATE",   // #2600 T3-a — 허브 env(URL·비밀)는 토폴로지가 더는 안 읽는다
   "LIVELY_SESSION_HARNESSES",   // #4067 — 세션 이미지의 하네스 목록
+  "LIVELY_AGENT_JOBS", "LIVELY_AGENT_JOBS_PORT",   // #5082 — 브로커 없는 박스의 에이전트 작업 실행면 · 판이 부를 루프백 포트
 ] as const;
 
 /** 시험용 env 한 벌 — 적지 않은 키는 «미설정»이다. */
@@ -698,7 +701,32 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     sessionHarnesses: null,
     //  #4931 — 노드 tmux 세대 스위치. 설정 없음 = 기본값 auto(2단계 — MUX_PIN_DEFAULT · 쓰는 자리는 노드뿐).
     muxPin: "auto",
+    //  #5082 — 브로커 없는 박스의 에이전트 작업 실행면. 설정 없음 = 꺼짐(종전 — 접수 501) · 판이 부를 루프백 포트는 고정 진입점 8080.
+    agentJobs: "off",
+    agentJobsPort: 8080,
   });
+});
+
+test("§7 에이전트 작업 실행면 스위치(#5082 A1·A2) — 정확히 `host` 만 켠다(앞뒤 공백만 벗긴다)", () => {
+  for (const [raw, want] of [["host", "host"], [" host ", "host"], ["\thost\n", "host"], ["Host", "off"], ["HOST", "off"], ["hosts", "off"], ["host1", "off"], ["on", "off"], ["1", "off"], ["true", "off"], ["", "off"], ["   ", "off"], [undefined, "off"]] as const) {
+    assert.equal(parseAgentJobs(raw), want, JSON.stringify(raw));
+    assert.equal(computeExecTopology(E(raw === undefined ? {} : { LIVELY_AGENT_JOBS: raw })).agentJobs, want, `토폴로지 ${JSON.stringify(raw)}`);
+  }
+});
+
+test("§7 판이 부를 루프백 포트(#5082 A3·A4) — 1~65535 정수만 그 값 · 그 밖은 8080", () => {
+  for (const [raw, want] of [["1", 1], ["65535", 65535], ["18080", 18080], [" 9000 ", 9000], ["0", 8080], ["65536", 8080], ["99999", 8080], ["80a", 8080], ["-1", 8080], ["8080.5", 8080], ["1e3", 8080], ["0x50", 8080], ["", 8080], [undefined, 8080]] as const) {
+    assert.equal(parseAgentJobsPort(raw), want, JSON.stringify(raw));
+    assert.equal(computeExecTopology(E(raw === undefined ? {} : { LIVELY_AGENT_JOBS_PORT: raw })).agentJobsPort, want, `토폴로지 ${JSON.stringify(raw)}`);
+  }
+});
+
+test("§7 실행면 스위치는 다른 축을 바꾸지 않는다(#5082) — 매니지드 env 에 얹어도 값만 실리고 나머지가 같다", () => {
+  const base = computeExecTopology(E(MANAGED));
+  const withHost = computeExecTopology(E({ ...MANAGED, LIVELY_AGENT_JOBS: "host", LIVELY_AGENT_JOBS_PORT: "9001" }));
+  assert.equal(withHost.agentJobs, "host", "값은 그대로 싣는다 — 매니지드에서 안 쓰는 것은 실행면 고르기(agent-jobs/surface)의 몫이다");
+  assert.equal(withHost.agentJobsPort, 9001);
+  assert.deepEqual({ ...withHost, agentJobs: base.agentJobs, agentJobsPort: base.agentJobsPort }, base);
 });
 
 test("★ §7 멤버 uid 강하 wrapper·cgroup wrapper 의 기본 설치 경로 문자열이 같다", () => {
