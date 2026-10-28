@@ -457,6 +457,9 @@ async function showFile(root: string, rel: string, name: string, entry: Entry, s
       cls: { img: 'fpg-img', pdf: 'fpg-pdf', html: 'fpg-html', md: 'fpg-md', code: 'fpg-code', table: 'fpg-table', audio: 'fpg-audio', video: 'fpg-video', msg: 'fpg-msg' },
       pdfHash: '#toolbar=1&view=FitH',
       mkBtn,
+      //  #4632 검토 다리 — 링크로 연 검토 문서(html)도 고른 것 · 메모를 남기고 복사한다(원준 2026-10-28 «항상 라이블리에서 보여지게»).
+      //   세션 옆 자료 보기(panes-parts)와 같은 다리이고, 저장 이름 공간은 이 링크의 자리(뿌리 + 경로)라 문서끼리 섞이지 않는다.
+      bridgeNs: 'f:' + root + ':' + rel,
     });
   } catch (e: any) {
     replaceKids(stage, el('div', { class: 'fpg-msg', text: '미리보기 실패 — ' + ((e && e.message) || e) }));
