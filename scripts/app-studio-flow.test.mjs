@@ -315,5 +315,42 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   for (const [t, want, what] of T) check(PL(t) === want, what, { got: PL(t) });
 }
 
+
+// ══ 점검 2-7 · 2-3 · 6-13 · 2-9 · 4-10 · 4-8 (원준 2026-10-29 «다 봤는데 그냥 싹 다 고쳐») — 스크래치패드 spec-forkC-flow.md 의 P · N · T · D · B 행 ══
+{
+  const V = (no, note) => ({ version_no: no, note });
+  const VP = F.verPlan || (() => ({ base: -1, prev: -1 }));
+  const vp = [
+    [[V(1, "초안 · 회의록"), V(2, "글자를 키웠어요"), V(3, "마무리 · 회의록")], 3, { base: 2, prev: 1 }, "P1 마무리 판 위 — 내용 판은 그 아래 AI 판 · 되돌릴 곳은 그 앞 AI 판"],
+    [[V(1, "초안"), V(2, "고침"), V(3, "마무리 · a"), V(4, "마무리 · b")], 4, { base: 2, prev: 1 }, "P2 마무리 판이 겹쳐도 건너뛴다"],
+    [[V(1, "초안"), V(2, "고침"), V(3, "고침")], 3, { base: 3, prev: 2 }, "P3 마무리가 없으면 바로 앞 판"],
+    [[V(1, "초안")], 1, { base: 1, prev: 0 }, "P4 판 하나 — 되돌릴 곳 없음"],
+    [[], 0, { base: 0, prev: 0 }, "P5 판 목록이 비었다"],
+    [[V(1, "초안"), V(2, "마무리 · 회의록")], 2, { base: 1, prev: 0 }, "P6 첫 판 위 마무리만 — 되돌릴 AI 판 없음"],
+  ];
+  for (const [vs, cur, want, what] of vp) { const got = VP(vs, cur); check(got.base === want.base && got.prev === want.prev, what, got); }
+  const SN = F.systemNote || (() => null), PN = F.plainNote || ((x) => x);
+  check(PN("되돌림 → 3판") === "V3 로 되돌렸어요" && SN("되돌림 → 3판") === true, "N1 되돌림 사건 — 화면 말 · 사람이 한 저장", { t: PN("되돌림 → 3판"), s: SN("되돌림 → 3판") });
+  check(PN("5판 공개") === "V5 를 공개했어요" && SN("5판 공개") === true, "N2 공개 사건 — 화면 말 · 사람이 한 저장", { t: PN("5판 공개"), s: SN("5판 공개") });
+  check(SN("마무리 · 회의록") === true, "N3 마무리 저장은 AI 고침이 아니다");
+  const n4 = PN("1판 — 초안을 만들었어요");
+  check(SN("글자를 키웠어요") === false && !/판|—/.test(n4) && /초안/.test(n4), "N4 AI 고침 — 「판」 「—」 없이", n4);
+  check(SN("") === false && SN(null) === false && PN(null) === "" && PN("") === "", "N5 빈 note · null — AI 고침 · 빈 글");
+  const PNo = F.parseNotify || (() => "없음");
+  const t1 = PNo("[[알림]] 알렸어요"), t2 = PNo("[[알림]] 못 했어요: 슬랙이 연결되지 않았어요"), t3 = PNo("알렸어요"), t4 = PNo("앱을 다 만들고 나서 팀에 알렸어요. 그리고 이런 것도 했어요."), t5 = PNo("받았어요");
+  check(t1 && t1.ok === true, "T1 [[알림]] 알렸어요 — 굳힌다", t1);
+  check(t2 && t2.ok === false && /슬랙/.test(t2.why), "T2 못 했어요 — 까닭", t2);
+  check(t3 && t3.ok === true && t4 === null && t5 === null, "T3 표식 없는 「알렸어요」 한 줄은 ok · 긴 답 속 낱말 · 다른 답은 아니다", { t3, t4, t5 });
+  const U = (t) => JSON.stringify({ type: "user", message: { role: "user", content: t } });
+  const A = (t) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+  const DA = F.draftAsked || (() => null);
+  const asked = [U(F.planBrief("회의록", "both")), A("[[기획카드]]\n앱 이름: 회의록\n[[/기획카드]]"), U(F.draftBrief(card, "both", "app-1"))].join("\n");
+  check(DA(asked) === true, "D1 사람 글에 초안 청함이 있다");
+  check(DA([U(F.planBrief("회의록", "both")), A("카드")].join("\n")) === false && DA("") === false, "D2 기획만 청했거나 기록이 없다 — 아니다");
+  const b1 = F.planBrief("회의록을 주제별로", "both", "회의록", card), b2 = F.planBrief("회의록", "both", "회의록");
+  check(b1.includes(F.cardText(card)) && /바뀐 점만/.test(b1), "B1 ① 다시 기획 — 지난 카드 전문 + 「바뀐 점만」", b1.slice(-200));
+  check(!/지난 기획 카드/.test(b2), "B2 지난 카드가 없으면 그 말도 없다");
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

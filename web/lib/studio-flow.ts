@@ -179,6 +179,33 @@ export function verArrived(n: number): string {
   return k <= 1 ? '초안이 나왔어요' : verOrdinal(k) + ' 버전이 나왔어요';
 }
 
+/** 앱빌더 ④ 의 «마무리» 저장(이름 · 자리 · 넣기 표시) — AI 가 고친 판이 아니다. 되돌리기 · 대조가 이 판을 건너뛴다(점검 2-7). */
+export const isWrapNote = (note: string | null | undefined): boolean => /^마무리 · /.test(String(note || '').trim());
+/** 지금 판(cur)의 «내용 판»(마무리 판이면 그 아래 마지막 AI 판)과 「이전 버전으로」 가 갈 판(내용 판 아래 마지막 AI 판 · 없으면 0).
+ *  마무리 판 V7 위에서 「V6로 되돌리기」 를 누르면 이름 · 넣기 표시만 되돌아가던 것(점검 2-7). */
+export function verPlan(vs: ReadonlyArray<{ version_no: number; note: string | null }>, cur: number): { base: number; prev: number } {
+  const below = vs.filter((v) => v.version_no <= cur).slice().sort((a, b) => b.version_no - a.version_no);
+  const baseV = below.find((v) => !isWrapNote(v.note));
+  const base = baseV ? baseV.version_no : cur;
+  const prevV = below.find((v) => v.version_no < base && !isWrapNote(v.note));
+  return { base, prev: prevV ? prevV.version_no : 0 };
+}
+/** 서버 사건 글의 「판」 낱말 — 화면 글에는 이 낱말을 쓰지 않아서(K1 이 소스를 훑는다) 서버가 쓴 글을 읽는 자리만 코드 포인트로 적는다. */
+const PAN = '\uD310';
+const RE_REVERT = new RegExp('^되돌림 → (\\d+)' + PAN + '$'), RE_PUB = new RegExp('^(\\d*)' + PAN + ' 공개$'), RE_NO = new RegExp('(\\d+)' + PAN, 'g');
+/** 앱 사건의 note 가 사람(화면)이 한 일인가 — 되돌림 · 공개 · 마무리 · 배포 설정의 자리 바꿈. 그건 AI 고침이 끝난 표시가 아니다(점검 2-3). */
+export function systemNote(note: string | null | undefined): boolean {
+  const t = String(note || '').trim();
+  return RE_REVERT.test(t) || RE_PUB.test(t) || isWrapNote(t) || /^쓰는 자리 · /.test(t);
+}
+/** 서버가 적은 글을 화면 말로 — 판 번호 → V · 「—」 는 마침표로 끊는다(점검 6-13 · 2-4). */
+export function plainNote(note: string | null | undefined): string {
+  const t = String(note || '').trim();
+  let m = RE_REVERT.exec(t); if (m) return verJ(Number(m[1]), '으로') + ' 되돌렸어요';
+  m = RE_PUB.exec(t); if (m) return m[1] ? verJ(Number(m[1]), '을') + ' 공개했어요' : '공개했어요';
+  return t.replace(RE_NO, (_, n) => verName(Number(n)) || n + '번째 버전').replace(/\s*—\s*/g, '. ').replace(/\s*→\s*/g, ', ').trim();
+}
+
 export const DRAFT_STEPS = ['기획 읽는 중', '화면 짜는 중', '자료 표 만드는 중', '저장하는 중'];
 /** [[걸음 n/4]] 가운데 가장 큰 n(1~4) · 없으면 0. */
 export function parseStep(text: string): number {
@@ -307,6 +334,23 @@ export function assistantTexts(ndjson: string): string[] {
   return out;
 }
 
+/** 세션 기록(ndjson) 가운데 사람이 보낸 글만(도구 결과는 뺀다). */
+export function userTexts(ndjson: string): string[] {
+  const out: string[] = [];
+  String(ndjson || '').split('\n').forEach((line) => {
+    const s = line.trim(); if (!s) return;
+    let o: any; try { o = JSON.parse(s); } catch (_) { return; }
+    if (!o || o.type !== 'user') return;
+    const c = o.message && o.message.content;
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b: any) => b && b.type === 'text').map((b: any) => String(b.text || '')).join('\n') : '';
+    if (t.trim()) out.push(t);
+  });
+  return out;
+}
+/** 이 세션에 초안(첫 판)을 이미 청했나 — 기록이 없는 브라우저에서 이어 열 때 ② 의 「완료」 로 또 청하지 않게(점검 4-10). draftBrief 의 첫 말로 가린다. */
+export const DRAFT_ASK_HEAD = '이 기획 카드대로 초안을 만들어 저장해 줘.';
+export function draftAsked(ndjson: string): boolean { return userTexts(ndjson).some((t) => t.trim().startsWith(DRAFT_ASK_HEAD)); }
+
 export function freshApps(known: string[], apps: Array<{ id: string; status?: string }>): string[] {
   return apps.filter((a) => a && (a.status == null || a.status === 'active') && !known.includes(String(a.id))).map((a) => String(a.id));
 }
@@ -341,18 +385,20 @@ export const WIREFRAME_PATH = 'studio/wireframe.html';
 const NOTIFY = '알림: 기획 카드의 「알림」 줄이 「없음」 이 아니면 lively-app.json 에 permissions.notifications: true 를 켜고(app_notify 도구가 따라온다), 그 순간에 app_notify {member_id, title, body, href, dedupe_key} 로 받을 사람마다 보내 줘(href 는 #/open/<앱 id>?… — 앱이 lively.state 로 읽어 그 자리를 연다). 앱 안에는 사람마다 «무엇을 받을지»(예: 전부 · 나를 언급할 때만 · 없음) 고르는 설정을 두고 그 값은 보내는 쪽이 읽을 수 있게 앱 표에 저장해(개인 prefs 는 남이 못 읽어). 앱 전체 알림 켜고 끄기는 라이블리 [나 ▸ 알림] 이 맡으니 앱이 따로 만들지 마.';
 const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 줘: app_save 의 files 에 ${WIREFRAME_PATH} — 피그마 보드처럼 이 앱의 화면을 한 장씩 프레임으로 가로로 나란히 놓고(화면이 하나여도 한 장), 프레임마다 위에 화면 이름표 · 안은 얇은 선(1px 회색)으로 그린 칸 · 글 · 단추, 그리고 **단추 하나하나마다** 그 단추에서 나가는 화살표로 어느 화면(또는 어느 칸)으로 이어지는지 이어 그린 HTML 한 장(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림 · 화면 수만큼 넓어도 된다).`;
 /** ① 사람이 적은 설명(여러 줄일 수 있다)과 이름(비면 AI 가 짓는다)으로 기획 카드를 청한다. */
-export function planBrief(what: string, place: StudioPlace, name = ''): string {
+export function planBrief(what: string, place: StudioPlace, name = '', prev?: StudioCard | null): string {
   const desc = String(what || '').trim(), nm = String(name || '').trim();
+  //  ① 로 돌아와 다시 기획 — 고쳐 둔 카드(사람이 고친 줄 · 더한 항목)를 버리지 않게 지난 카드를 함께 보낸다(점검 4-8).
+  const keep = prev ? `\n지난 기획 카드야(사람이 고친 줄 · 더한 항목 포함). 바뀐 점만 반영하고 나머지 줄과 더한 항목은 그대로 둬:\n${cardText(prev)}\n` : '';
   const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
   return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 ${LABEL.name} 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + `아직 만들지 말고, ${BENCH} `
     + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · ' + LABEL.can + '은 셋을 · 로 · ' + LABEL.notify + '은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · ' + LABEL.ref + '는 서비스마다 「서비스 이름: 가져온 것」을 ; 로 나누고 맨 끝에 「출처: [이름](주소), [이름](주소)」 · 주소는 이 꼴로만):\n'
-    + cardText(emptyCard());
+    + cardText(emptyCard()) + keep;
 }
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
 export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
   const id = String(appId || '').trim();
-  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n${ICON}\n`
+  return `${DRAFT_ASK_HEAD} ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n${ICON}\n`
     + (id ? `이 앱의 id 는 ${id} 로 미리 잡아 뒀어 — lively-app.json 의 id 를 꼭 ${id} 로 해 줘.\n` : '')
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
@@ -413,7 +459,16 @@ export function checkBrief(card: StudioCard, appId: string): string {
 export function notifyBrief(name: string, line: string, slack: string): string {
   return `이 앱을 팀에 알려 줘. 지식에 제목 「앱 소개 · ${name}」 으로 아래 글을 저장하고(knowledge_save · 분류는 「세션 작업환경」)`
     + (slack.trim() ? `, 슬랙 채널 ${slack.trim()} 에도 같은 글을 보내 줘(못 보내면 지식만)` : '')
-    + '. 끝나면 「알렸어요」 한 줄만.\n글: ' + line;
+    + '. 끝나면 「[[알림]] 알렸어요」 한 줄만(못 했으면 「[[알림]] 못 했어요: 까닭 한 줄」).\n글: ' + line;
+}
+/** 「팀에 알리기」 의 답 — ok 알렸다 · fail 못 했다(까닭) · null 아직(점검 2-9: 보내기만 하면 «알렸어요» 로 굳던 것). 표식 없는 「알렸어요」 한 줄(옛 글)도 ok. */
+export function parseNotify(text: string): { ok: true } | { ok: false; why: string } | null {
+  const t = String(text || '');
+  const re = /\[\[알림\]\]\s*([^\n]*)/g; let m: RegExpExecArray | null; let line: string | null = null;
+  while ((m = re.exec(t))) line = m[1].trim();
+  if (line == null) return /^\s*「?알렸어요」?[.!]?\s*$/.test(t) ? { ok: true } : null;
+  if (/^못\s*했/.test(line)) return { ok: false, why: line.replace(/^못\s*했어요\s*[:：]?\s*/, '').trim() };
+  return { ok: true };
 }
 export function copyBrief(copyIdStr: string, copyTitle: string, originTitle: string, originBy: string, place: StudioPlace): string {
   return `워크스페이스 앱 「${originTitle}」${originBy ? '(' + originBy + ' 님이 만듦)' : ''} 의 내 사본 「${copyTitle}」(id ${copyIdStr}) 이 방금 저장돼 있어. app_pull ${copyIdStr} 로 받아 둬. `
