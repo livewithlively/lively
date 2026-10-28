@@ -3280,6 +3280,22 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 /* 막대가 시험 세션 맨 위(문패 줄)에 얹힌 꼴 — 떠 있지 않아 세션의 입력칸 · 앱을 가리지 않는다(원준 2026-10-15). 의견 칸은 막대 아래로(.v2-review-tray--fixed). */
 .v2-review-bar.v2-review-bar--dock { width: auto; position: relative; z-index: auto; left: auto; right: auto; bottom: auto; top: auto; transform: none; max-width: none; border-radius: 0; padding: 8px 16px; box-shadow: none; border-bottom: 1px solid color-mix(in srgb, var(--purple, #7B61E0) 28%, var(--line)); background: color-mix(in srgb, var(--purple, #7B61E0) 7%, var(--bg)); }
 .v2-review-tray.v2-review-tray--fixed { position: fixed; z-index: 86; right: auto; bottom: auto; }
+/* 「AI에게 말하기」 대화 칸(원준 2026-10-28) — 막대에 맞붙어 아래에서 올라온다(막대가 위면 아래로 내려온다). 안에는 이 앱을 만드는 AI 세션 화면.
+   닫아도 숨기기만 한다(visibility) — 터미널을 다시 붙이지 않게. */
+.v2-review-talk { position: absolute; left: 0; right: 0; bottom: 100%; height: min(58vh, 560px); display: flex; flex-direction: column; min-height: 0; background: var(--bg); border-radius: 14px 14px 0 0; box-shadow: 0 0 0 1px var(--line), 0 -12px 30px rgba(21, 35, 59, .16); clip-path: inset(-40px -40px 0 -40px); overflow: hidden;
+  visibility: hidden; opacity: 0; transform: translateY(18px); pointer-events: none; transition: transform .2s ease, opacity .2s ease, visibility 0s linear .2s; }
+.v2-review-talk.on { visibility: visible; opacity: 1; transform: none; pointer-events: auto; transition: transform .2s ease, opacity .2s ease, visibility 0s; }
+.v2-review-bar--top > .v2-review-talk { bottom: auto; top: 100%; border-radius: 0 0 14px 14px; clip-path: inset(0 -40px -40px -40px); transform: translateY(-18px); }
+.v2-review-bar--top > .v2-review-talk.on { transform: none; }
+.v2-review-talk.v2-review-talk--fixed { position: fixed; z-index: 86; right: auto; bottom: auto; border-radius: 0 0 12px 12px; clip-path: none; box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); transform: translateY(-12px); }
+.v2-review-talk.v2-review-talk--fixed.on { transform: none; }
+.v2-review-talk-h { display: flex; align-items: center; gap: 8px; padding: 10px 12px 8px 14px; border-bottom: 1px solid var(--line); }
+.v2-review-talk-h b { font-size: 13.5px; white-space: nowrap; }
+.v2-review-talk-h small { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-review-talk-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.v2-review-talk-body > .v2-studio-chat { flex: 1; min-height: 0; border-left: 0; }
+.v2-review-bar--talk .v2-review-gen { border-color: var(--purple, #7B61E0); }
+@media (prefers-reduced-motion: reduce) { .v2-review-talk, .v2-review-talk.on { transition: none; } }
 .v2-review-flip[hidden] { display: none; }
 
 /* ── ③ 시험 세션(#4632 · v2/app-try-session.ts) — 「세션 위젯으로 보기」. 진짜 세션 화면(mountPanes)을 앱빌더 자리에 그대로 세우고,
