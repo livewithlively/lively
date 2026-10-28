@@ -15,6 +15,7 @@ import { makeDeployDeps } from "./deploy.js";
 import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
 import { declaredTableNames } from "./visibility.js";   // 매니페스트의 data.tables 이름(모양이 어긋나도 던지지 않는다)
 import { archiveLeftoverAppFolder } from "./app-folder-archive.js";   // #4778 새 앱은 빈 앱 폴더로 시작
+import { assertMcpToolNamesFree } from "./app-mcp-store.js";
 
 /** 설치가 데이터 테이블에 한 일(#4224) — 워크스페이스가 설치한 앱에서만 채워진다(기본 앱은 코드가 구조의 주인). */
 export type InstallTablesOutcome = AppTableReport & DroppedTablesReport & { schema: string };
@@ -58,6 +59,8 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   // 앱 데이터 테이블(D6) — 스키마는 누가 구조의 주인인가로 가른다(store-ddl.appSchemaName, #4223).
   const builtin = isBuiltinSource(source);
   const schema = appSchemaFor(builtin);
+  //  #5050 앱이 선언한 MCP 도구 이름 — 다른 앱 · 조직 도구가 이미 쓰면 아무것도 바꾸기 전에 거절(409). 기본 앱의 도구는 목록에 안 오르니 보지 않는다.
+  if (!builtin) await assertMcpToolNamesFree(id, loaded.manifest);
   //  #4778 새 앱 — 같은 id 의 앱 폴더가 남아 있으면(지운 앱의 것) 아무것도 만들기 전에 보관으로 옮긴다(못 보면 503 — 새 앱은 늘 빈 앱 폴더로 시작한다).
   //   부르는 쪽(org_app_install · app_save)이 설치 락 안에서 부른다. 기본 앱(시더)은 건너뛴다 — 코드가 주인인 정해진 id 라 남의 폴더가 없고,
   //   부팅 시딩이 파일 작업 헬퍼에 묶이지 않게.
