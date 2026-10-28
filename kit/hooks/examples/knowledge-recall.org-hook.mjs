@@ -32,7 +32,8 @@ const FETCH_MS = 4000;
     catch { fin(); }
   });
   let prompt = "";
-  try { const o = JSON.parse(stdinData || "{}"); prompt = String(o.prompt || "").trim(); } catch { return; }
+  try { const o = JSON.parse(stdinData || "{}"); if (o.lively_prompt_injected) return; prompt = String(o.prompt || "").trim(); } catch { return; }
+  // lively_prompt_injected: 작업 끝 알림·하위 에이전트 보고 같은 하네스 주입 메시지(러너가 kit/hooks/prompt-origin.mjs 로 판정) — 사람의 질문이 아니다.
   if (prompt.length < MIN_PROMPT_CHARS) return;                 // 짧음 → 스킵
   if (prompt.startsWith("/") || prompt.startsWith("!")) return; // 슬래시·뱅 커맨드 → 스킵
 

@@ -70,10 +70,11 @@ function cacheFile(sid) {
     try { process.stdin.setEncoding("utf8"); process.stdin.on("data", (c) => { d += c; if (d.length > 262144) fin(); }); process.stdin.on("end", fin); process.stdin.on("error", fin); setTimeout(fin, 600); }
     catch { fin(); }
   });
-  let prompt = "", transcriptPath = "", sessionId = "";
+  let prompt = "", transcriptPath = "", sessionId = "", injectedPrompt = false;
   try {
     const o = JSON.parse(stdinData || "{}");
     prompt = String(o.prompt || "").trim();
+    injectedPrompt = Boolean(o.lively_prompt_injected);
     transcriptPath = String(o.transcript_path || "");
     sessionId = String(o.session_id || "");
   } catch { return; }
@@ -81,7 +82,8 @@ function cacheFile(sid) {
 
   const paths = recentReadPaths(transcriptPath);
   // (a) 는 프롬프트가 짧으면 스킵하되, (b) 신호(최근 Read)가 있으면 진행. 둘 다 없으면 종료.
-  const wantHub = prompt.length >= MIN_PROMPT_CHARS;
+  //  하네스 주입 메시지(러너의 lively_prompt_injected)는 사람의 질문이 아니라 (a) 를 건너뛴다. (b) 는 프롬프트가 아니라 최근 Read 신호라 그대로 둔다.
+  const wantHub = !injectedPrompt && prompt.length >= MIN_PROMPT_CHARS;
   if (!wantHub && !paths.length) return;
 
   // 2) base + token (run-custom/session-preload 와 동일 출처)

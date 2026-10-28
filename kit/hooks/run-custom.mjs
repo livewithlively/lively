@@ -37,6 +37,7 @@ import crypto from "node:crypto";
 import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 import { inScopeNow, startedOutside, clearStartedOutside } from "./record-scope.mjs";
+import { isInjectedPrompt } from "./prompt-origin.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -773,8 +774,14 @@ async function main() {
   const hooks = cfg.hooks.filter((hk) => hk && (hk.event === EVENT) && matches(hk, toolName));
   if (!hooks.length) { if (late) emitContext(late); return; }
 
+  // 하네스가 밀어 넣은 프롬프트(작업 끝 알림·하위 에이전트 보고 등)면 훅 입력에 표시를 싣는다. 걸러 내지는 않는다 —
+  //  공유폴더 동기화처럼 매 제출마다 돌아야 하는 훅이 있어서, 사람 의도에 반응하는 훅만 이 값을 보고 빠진다.
+  //  표시가 없던 때는 병렬 하위 에이전트 보고마다 라우터·지식 회수가 주입돼 세션 맥락이 불었다.
+  const hookStdin = EVENT === "UserPromptSubmit" && isInjectedPrompt(input.prompt)
+    ? JSON.stringify({ ...input, lively_prompt_injected: true })
+    : stdin;
   const outputs = []; const fails = [];
-  for (const { hk, out, fail } of await runAll(hooks, stdin, cfg, deadline)) {
+  for (const { hk, out, fail } of await runAll(hooks, hookStdin, cfg, deadline)) {
     const trimmed = out && out.trim() ? out.trim() : "";
     if (trimmed) outputs.push(trimmed);
     // PreToolUse 에서 훅이 뭔가 뱉었는데 결정으로 못 읽히면(예: JSON 앞에 console.log 한 줄) 하네스는 그걸
