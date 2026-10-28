@@ -28,6 +28,13 @@ export interface SpecResponse {
   app_id: string; title: string; version_no: number | null; view: 'published' | 'installed';
   facts: SpecFactsView; spec_state: SpecState; spec_error: string | null;
   spec: { version_no: number | null; made_at: string | null; model: string | null; doc: SpecDocView | null } | null;
+  /** 「다시 만들기」 를 막 눌러 다시 쓰기 간격(1분)이 안 지났다 — 이만큼 뒤에 다시 누를 수 있다(감사 4-11). 없으면 null. */
+  retry_after_ms?: number | null;
+}
+/** 다시 만들기가 간격에 막혔을 때 알림 — «N초 뒤에 다시 눌러 주세요». */
+export function retryAfterText(ms: number): string {
+  const sec = Math.max(1, Math.ceil(ms / 1000));
+  return '방금 다시 써 봤어요. ' + (sec >= 60 ? Math.ceil(sec / 60) + '분' : sec + '초') + ' 뒤에 다시 눌러 주세요.';
 }
 
 //  버전 이름은 앱빌더 나머지와 같은 꼴(초안 · V2 …) — lib/studio-flow verName.

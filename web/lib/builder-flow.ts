@@ -182,6 +182,12 @@ export function isAppInProgress(a: { visibility?: unknown; empty?: boolean | nul
   if (a.studio && a.studio.put === true) return false;
   return building;
 }
+/** 있는 앱을 고치는 세션 이름인가 — «"이름" 앱 고치기»(원본 고치기 · 사본) · 옛 「앱 고치기 · 」. 새 앱 만들기 세션은 아니다(감사 1-3). */
+export function isEditSessionLabel(label: string | null | undefined): boolean {
+  const l = String(label || '').trim();
+  const m = BUILDER_SESSION_RE.exec(l);
+  return m ? m[2] === '고치기' : l.startsWith(BUILDER_SESSION_PREFIXES[1]);
+}
 /** 앱빌더가 지은 세션 이름 «"이름" 앱 제작 · 고치기» 에 박힌 앱 이름 — 그 꼴이 아니면(옛 머리말 · AI 가 지은 이름 · 「새 앱 제작」) 빈 글. */
 export function builderSessionName(label: string | null | undefined): string {
   const m = BUILDER_SESSION_RE.exec(String(label || '').trim());

@@ -37,7 +37,8 @@ import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, draftAsked, parseNotify, plainNote, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, draftAsked, parseNotify, plainNote, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, nextCopyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { REC_MAX, mergeRec, trimRecs } from '../lib/studio-rec.js';   // 기록 한도 · 두 탭 합치기(감사 1-8 · 1-9)
 import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
 import { icon } from './icons.js';
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
@@ -144,21 +145,38 @@ async function studioAi(nodes: RunNode[], nodeId: string): Promise<StudioAi> {
 }
 
 // ── 기록(이 브라우저) ─────────────────────────────────────────────────────────────────────
+//  읽어 낸 기록 하나하나가 읽을 때 어땠는지 — 저장할 때 «이 탭이 바꾼 칸» 만 골라 합친다(같은 앱을 두 탭에서 열어 둔 때 · 감사 1-9 · lib/studio-rec mergeRec).
+const REC_BASE = new WeakMap<StudioRec, Record<string, unknown>>();
 function readRecs(): StudioRec[] {
   try {
     const a = JSON.parse(localStorage.getItem(STUDIO_KEY) || '[]'); if (!Array.isArray(a)) return [];
-    return a.filter((r) => r && r.sid).map((r) => ({ pid: 0, stage: r.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...r }));   // 옛 기록(단계 없던 판)도 선다
+    return a.filter((r) => r && r.sid).map((r) => {
+      const x: StudioRec = { pid: 0, stage: r.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...r };   // 옛 기록(단계 없던 판)도 선다
+      REC_BASE.set(x, JSON.parse(JSON.stringify(x)));
+      return x;
+    });
   } catch (_) { return []; }
 }
-function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(rs.slice(-12))); } catch (_) { /* noop */ } }
-function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r); writeRecs(rs); }   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
+function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(trimRecs(rs, REC_MAX))); } catch (_) { /* noop */ } }
+function saveRec(r: StudioRec): void {
+  const all = readRecs();
+  const stored = all.find((x) => x.sid === r.sid) || null;
+  //  다른 탭이 그 사이 바꾼 칸은 받아 들인다 — 이 탭이 안 바꾼 칸만(바꾼 칸은 이 탭 것이 이긴다). 받은 값은 이 탭의 기록에도 들여 다음 저장이 옛 값으로 되돌리지 않게.
+  const base = REC_BASE.get(r);
+  if (base && stored) mergeRec(r as unknown as Record<string, unknown>, base, stored as unknown as Record<string, unknown>);
+  REC_BASE.set(r, JSON.parse(JSON.stringify(r)));
+  const rs = all.filter((x) => x.sid !== r.sid);
+  rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r);   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
+  writeRecs(rs);
+}
 /** 이 브라우저의 만들던 기록 전부 — 앱빌더 목록이 읽는다. */
 export function studioRecs(): StudioRec[] { return readRecs(); }
 /** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
 export function dropStudioRec(sid: string): void { writeRecs(readRecs().filter((x) => x.sid !== sid)); }
 export function studioRecForApp(appId: string): { sid: string } | null { const r = readRecs().filter((x) => x.appId === appId).pop(); return r ? { sid: r.sid } : null; }
 /** 이 브라우저에서 이 앱을 **새로** 만드는 중인가(⑤ 「이대로 넣기」 전 · 고치기 · 사본은 아니다) — 앱 찾기 · 앱빌더가 만드는 중인 앱을 가른다(builder-flow isAppInProgress · 원준 2026-10-15). */
-export function studioRecBuildingFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done && x.mode === 'new'); }
+//  사본도 넣는다 — 사본은 새로 만드는 내 앱이라 ⑤ 넣기 전엔 앱 찾기 · 레일에 다 된 앱으로 서지 않는다(감사 6-7). 원본 고치기(edit)는 쓰던 앱이라 아니다.
+export function studioRecBuildingFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done && (x.mode === 'new' || x.mode === 'copy')); }
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
 function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (_) { /* noop */ } }
@@ -171,9 +189,9 @@ function saveGeom(patch: WinGeom): void { try { localStorage.setItem(WIN_KEY, JS
 let meCache: { id: string; name: string } | null = null;
 export async function me(): Promise<{ id: string; name: string }> {
   if (meCache) return meCache;
-  try { const d: any = await api('/api/ui/me/whoami'); meCache = { id: String(d?.member_id || ''), name: String(d?.display_name || d?.nickname || d?.member_id || '') }; }
-  catch (_) { meCache = { id: '', name: '' }; }
-  return meCache;
+  //  못 받은 답은 기억하지 않는다 — 다음에 다시 묻는다(감사 6-6 · 배포 직후 한 번 실패하면 내 앱이 「팀원이 만든 앱」 으로 굳었다). 못 받으면 id 가 빈 글.
+  try { const d: any = await api('/api/ui/me/whoami'); const id = String(d?.member_id || ''); const got = { id, name: String(d?.display_name || d?.nickname || id) }; if (id) meCache = got; return got; }
+  catch (_) { return { id: '', name: '' }; }
 }
 export async function studioProject(): Promise<number> {
   try { const d: any = await api('/api/ui/v6/projects?mine=1'); const ps = Array.isArray(d?.projects) ? d.projects : []; const p = ps.find((x: any) => String(x?.name || '').trim() === PROJECT_NAME && !/done|closed|archived/i.test(String(x?.status_category || ''))); return p ? Number(p.id) || 0 : 0; }
@@ -281,8 +299,8 @@ async function readVis(appId: string): Promise<StudioVis | null> {
   } catch (_) { return null; }
 }
 /** ⑧ 내 사본 — 원본 파일을 받아 id · 이름 · studio.origin 만 바꿔 저장한다. 원본은 그대로. */
-async function makeCopy(origin: { id: string; title: string; by: string }, place: StudioPlace): Promise<{ id: string; title: string }> {
-  const m = await me(); const id = copyId(origin.id, m.id); const title = origin.title + ' · ' + (m.name || '내 것');
+async function makeCopy(origin: { id: string; title: string; by: string }, place: StudioPlace, fresh?: { id: string; n: number }): Promise<{ id: string; title: string }> {
+  const m = await me(); const id = fresh ? fresh.id : copyId(origin.id, m.id); const title = origin.title + ' · ' + (m.name || '내 것') + (fresh && fresh.n ? ' ' + fresh.n : '');
   const pulled: any = await api('/api/ui/apps/' + encodeURIComponent(origin.id) + '/pull');
   const files: any[] = (Array.isArray(pulled?.files) ? pulled.files : []).filter((f: any) => f && typeof f.path === 'string' && !/^bin\//.test(f.path));
   const mf = files.find((f) => f.path === 'lively-app.json'); if (!mf) throw new Error('원본의 설명 파일이 없어요');
@@ -329,7 +347,9 @@ const NEW_APP_NAME = '새 앱';
 export { me as studioMe };
 
 /** 이어서 열 세션 — 이 브라우저에 기록이 없으면 세션 이름(what)과 그 세션이 만든 앱(appId)으로 되살린다(앱빌더 #4632). */
-export interface StudioResume { sid: string; what?: string; title?: string; appId?: string }
+export interface StudioResume { sid: string; what?: string; title?: string; appId?: string;
+  /** 「… 앱 고치기」 세션(원본 고치기 · 사본)이면 그 흐름으로 잇는다 — 새 앱 만들기 ②부터가 아니라(감사 1-3). 없으면 새 앱. */
+  mode?: 'copy' | 'edit'; origin?: { id: string; title: string; by: string } }
 /** 앱 만들기를 연다. resume 을 주면 만들던 것을 이어서(그 세션 · 그 단계), 없으면 시작 화면부터. */
 export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOpts): void {
   mountRoot(opts);
@@ -354,7 +374,7 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
       const known = a ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
       const title = resume.title || (a && !a.empty ? String(a.title || '') : '');
       const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || title || (a ? String(a.title || '') : ''), place, appId, known, at: Date.now(),
-        stage: appId ? 'fix' : asked && card ? 'draft' : 'plan', card, round: 0, from, mode: 'new', ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}),
+        stage: appId ? 'fix' : asked && card ? 'draft' : 'plan', card, round: 0, from, mode: resume.mode || 'new', ...(resume.origin ? { origin: resume.origin, named: true } : {}), ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}),
         //  첫 판 전인데 그 세션에 초안을 이미 청했다(다른 브라우저에서 시작) — ② 의 「완료」 로 또 청하지 않게 초안 기다림으로 연다(점검 4-10).
         ...(!appId && asked && card ? { cardSent: cardText(card), reached: 2 } : {}) };
       saveRec(r2); void build(r2);
@@ -370,7 +390,25 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     el('div', { class: 'v2-studio-wait v2-studio-wait--page' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: how === 'copy' ? '사본을 만드는 중이에요' : '수정할 준비를 하는 중이에요' })));
   const place: StudioPlace = app.place || 'both';
   try {
-    const target = how === 'copy' ? await makeCopy(app, place) : { id: app.id, title: app.title };
+    //  감사 1-4 — 이 원본으로 뜬 내 사본이 이미 있으면 덮지 않고 묻는다: 그 사본을 이어서 고치기 · 새 사본(«… 2»).
+    let fresh: { id: string; n: number } | undefined;
+    if (how === 'copy') {
+      const m = await me();
+      const rows = await listApps();
+      const ids = new Set(rows.map((x) => String(x.id)));
+      const row = rows.find((x) => String(x.id) === copyId(app.id, m.id) && (!x.status || x.status === 'active')) || null;
+      const have = row ? String(row.id) : '';
+      if (have) {
+        if (root !== r) return;
+        const haveTitle = String(row.title || have);
+        const pick = await askCopy(r, haveTitle);
+        if (root !== r) return;   // 묻는 사이 닫았거나 다른 화면을 열었다
+        if (!pick) { closeAppStudio(); return; }
+        if (pick === 'edit') { void openAppStudioFor({ id: have, title: haveTitle, by: m.id, place }, 'edit', opts); return; }
+        fresh = nextCopyId(have, ids);
+      }
+    }
+    const target = how === 'copy' ? await makeCopy(app, place, fresh) : { id: app.id, title: app.title };
     if (!root) return;
     const known = (await listApps()).map((a) => String(a.id));
     const pid = await studioProject();
@@ -385,6 +423,20 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     const rec: StudioRec = { sid: s.id, pid, what: target.title, place, appId: target.id, known, at: Date.now(), stage: 'fix', round: 0, from: 0, mode: how, origin: { id: app.id, title: app.title, by: app.by }, title: target.title, card: null, named: true };
     saveRec(rec); if (mountOpts.onSession) mountOpts.onSession(s.id); void build(rec);
   } catch (e: any) { toast((how === 'copy' ? '사본을 만들지 못했어요. ' : '앱을 열지 못했어요. ') + (e && e.message ? e.message : e), true); closeAppStudio(); }
+}
+
+/** 이미 만든 사본이 있을 때 묻는다 — 'edit'(그 사본 이어서 고치기) · 'new'(새 사본) · null(그만두기). */
+function askCopy(r: HTMLElement, title: string): Promise<'edit' | 'new' | null> {
+  return new Promise((done) => {
+    const box = r.querySelector('.v2-studio-wait') || r;
+    box.replaceChildren(el('div', { class: 'v2-studio-ask' },
+      el('b', { text: '이미 만든 사본 「' + title + '」이 있어요.' }),
+      el('p', { text: '그 사본을 이어서 고칠까요? 새 사본을 만들면 고쳐 둔 사본은 그대로 남아요.' }),
+      el('div', { class: 'v2-bld-acts' },
+        el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 고치기', onclick: () => done('edit') }),
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '새 사본 만들기', onclick: () => done('new') }),
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '그만두기', onclick: () => done(null) }))));
+  });
 }
 
 // ── 처음 안내 — 세 장 · 둘러보기 · 단계 말풍선 ────────────────────────────────────────────

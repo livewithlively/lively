@@ -16,7 +16,7 @@ import { appMatches, appRank, padBestIndex, padGroupOfInstalled, type PadGroup }
 import { padHiddenToggle, padPlacement, padTileId } from '../lib/pad-hidden.js';   // #4600 — 앱 찾기에서 빼기·다시 넣기(순수 판정)
 import { ctxMenu } from './panes-kit.js';
 import { studioRecBuildingFor, studioRecForApp } from './app-studio.js';   // #4592 — 「이어서 만들기」 표식(이 브라우저에서 만들던 앱)
-import { builderRoute, isAppInProgress, isBuildingSession } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
+import { builderRoute, isAppInProgress, isBuilderSession, isBuildingSession } from '../lib/builder-flow.js';   // #4632 — 「+ 새 앱」 · ⋯ 는 앱빌더 주소로 간다: ① 이 바로 서고(원준 «이전처럼 바로»), 주소가 있어 **새로고침해도 만들던 자리로 돌아온다**(원준 «만들다가 새로고침하니까 나가져버렸는데»)
 import { verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
 import { CLASSIC_PAGES } from '../lib/classic-pages.js';   // #4632 클래식 첫 칸 → 앱 키(활성 키 판정과 한 벌)
 //  칸 메뉴 줄의 아이콘(icons.ts 이름) — 앱 표의 icon 과 섞이지 않게 여기 모아 둔다(scripts/icon-table.test.mjs G4 는 `icon: '…'` 글자를 앱 표로 센다).
@@ -285,7 +285,7 @@ export { appGlassIcon };
 
 let padEl: HTMLElement | null = null;
 //  #4632 셸이 아는 세션 · 프로젝트 — 앱 찾기가 «앱빌더가 새로 만드는 중인 앱» 을 가르는 데 쓴다(그 앱의 만들기 세션이 앱빌더 세션인가). 셸(main.ts)이 건다.
-type PadCtx = { sessions: ReadonlyArray<{ id: string; label: string; projectId: number | null }>; projects: ReadonlyArray<{ id: number; name: string }> };
+type PadCtx = { sessions: ReadonlyArray<{ id: string; label: string; projectId: number | null; owned?: boolean; task?: unknown }>; projects: ReadonlyArray<{ id: number; name: string }> };
 let padCtx: (() => PadCtx) | null = null;
 export function setLaunchpadContext(fn: () => PadCtx): void { padCtx = fn; }
 /** 이 앱을 앱빌더가 새로 만드는 중인가 — 이 브라우저의 새 앱 기록, 또는 그 앱의 만들기 세션이 앱빌더의 새 앱 세션(lib/builder-flow isBuildingSession). */
@@ -296,6 +296,15 @@ function buildingNow(a: SessionApp): boolean {
   if (!ctx || !s) return false;
   const p = s.projectId ? ctx.projects.find((x) => x.id === s.projectId) : null;
   return isBuildingSession(s.label, p ? p.name : '');
+}
+/** 이 앱의 만들기 세션이 **내 앱빌딩 세션**인가 — 그때만 ⋯ 메뉴에 「이어서 만들기」 를 세운다. 보통 AI 세션으로 만든 앱이면 그 세션이
+ *  앱빌더의 새 앱 만들기로 열려 앱이 «만드는 중» 으로 쳐지고 앱 찾기에서 빠졌다 · 관리자는 남의 세션으로 들어갔다(감사 1-6). */
+function myBuildSession(a: SessionApp): string {
+  const ctx = padCtx ? padCtx() : null;
+  const s = ctx && a.buildSession ? ctx.sessions.find((x) => x.id === a.buildSession) : null;
+  if (!ctx || !s || s.owned === false || s.task) return '';
+  const p = s.projectId ? ctx.projects.find((x) => x.id === s.projectId) : null;
+  return isBuilderSession(s.label, p ? p.name : '') ? s.id : '';
 }
 export function openLaunchpad(): void {
   closeLaunchpad();
@@ -316,7 +325,7 @@ export function openLaunchpad(): void {
     const decorate = (node: HTMLElement, tid: string, title: string, ws?: SessionApp): HTMLElement => {
       const isHidden = hidden.has(tid);
       //  만들던 앱이면 「이어서 만들기」 가 맨 위에 선다(#4592 앱 만들기) — 이 브라우저의 기록, 없으면 서버가 아는 만들기 세션(#4667 · 다른 기기에서 만든 것도).
-      const draft = tid.startsWith('i:') ? (studioRecForApp(tid.slice(2)) || (ws && ws.buildSession ? { sid: ws.buildSession } : null)) : null;
+      const draft = tid.startsWith('i:') ? (studioRecForApp(tid.slice(2)) || (ws && myBuildSession(ws) ? { sid: myBuildSession(ws) } : null)) : null;
       //  워크스페이스 앱(남이 만든 것 포함)은 「내 사본 떠서 고치기」 · 「원본을 고치기」 — ⑧ 남이 만든 앱을 내게 맞게(#4592 원준 2026-10-11).
       const forApp = ws ? { id: ws.id, title: ws.title, by: ws.madeBy, place: (ws.studio && (ws.studio.place === 'side' || ws.studio.place === 'full' || ws.studio.place === 'both') ? ws.studio.place : undefined) as any } : null;
       const menu = (x: number, y: number) => ctxMenu(x, y, [

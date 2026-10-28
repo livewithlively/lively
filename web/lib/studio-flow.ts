@@ -361,6 +361,15 @@ export function copyId(originId: string, memberId: string): string {
   const base = String(originId || 'app').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   return (base.slice(0, 31 - me.length - 1) + '-' + me).replace(/-+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 32);
 }
+/** 같은 원본으로 사본을 또 뜰 때 새 사본의 id · 번호 — copyId 뒤에 «-2», «-3» … 비어 있는 첫 번호(32자 안). 감사 1-4: 고쳐 둔 내 사본을 원본으로 덮지 않는다. */
+export function nextCopyId(id: string, taken: ReadonlySet<string>): { id: string; n: number } {
+  for (let n = 2; n < 1000; n++) {
+    const tail = '-' + n;
+    const x = id.slice(0, 32 - tail.length).replace(/-+$/, '') + tail;
+    if (!taken.has(x)) return { id: x, n };
+  }
+  return { id: id.slice(0, 22) + '-' + Date.now().toString(36).slice(-9), n: 0 };
+}
 
 // ── 단계마다 보내는 글(사람이 치는 글이 아니라 단추가 보낸다 · 대화에 그대로 보이니 짧고 쉬운 말로) ──
 //  #4667 저장은 나만 보는 판(새 앱 · 공개한 앱의 초안)이고 공개는 사람이 정한다 — 모든 글에 같은 문장(격리 리뷰 2-7).

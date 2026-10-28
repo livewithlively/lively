@@ -45,7 +45,7 @@ import { selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, s
 import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.js';
 import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음
-import { builderModelFailed, builderModelNow, onBuilderModel, refreshBuilderModel } from './builder-model.js';   // #4632 앱빌더 사이드바 재료 — 가운데 목록과 같은 한 벌
+import { builderModelFailed, builderModelNow, memberName, onBuilderModel, refreshBuilderModel } from './builder-model.js';   // #4632 앱빌더 사이드바 재료 — 가운데 목록과 같은 한 벌
 import { installedAppFace } from './glass-icon.js';   // #4769 앱 줄의 그림 = 그 앱의 얼굴
 import { catId as taxCatId, fixList as taxFixList, groupKeyOf as taxGroupKey, isArchived as taxArchived, isEmptyCat as taxEmpty, knowledgeOf as taxKnow } from '../lib/taxonomy-map.js';
 import { sessNameFace, type SessFace } from '../lib/sess-name.js';   // #3870 — 세션 이름 규칙 한 벌(머리줄과 같은 것)
@@ -1864,6 +1864,13 @@ function renderSessions(): void {
 //  재료(만들던 앱 판정)는 가운데 목록과 같은 한 벌(builder-model) — 한쪽에만 보이는 앱이 없게.
 const bldFold = new Map<string, boolean>();   // 사람이 접고 편 카드. 없으면 만들던 앱 · 내가 만든 앱은 펼침, 팀원이 만든 앱은 접힘
 let bldBound = false;
+/** 「모든 앱」 의 수 — 가운데 목록에 서는 서로 다른 앱의 수(만들던 앱 · 내가 만든 앱 · 팀원이 만든 앱). 고치던 앱이 두 묶음에 함께 서도 한 번만 센다(감사 6-9). */
+function allAppCount(M: { drafts: ReadonlyArray<{ sid: string; appId: string; serverApp?: string }>; mine: ReadonlyArray<{ id: string }>; team: ReadonlyArray<{ id: string }> }): number {
+  const keys = new Set<string>();
+  M.drafts.forEach((d) => keys.add(d.appId || d.serverApp ? 'a:' + (d.appId || d.serverApp) : 's:' + d.sid));
+  M.mine.forEach((a) => keys.add('a:' + a.id)); M.team.forEach((a) => keys.add('a:' + a.id));
+  return keys.size;
+}
 function renderBuilderSection(): void {
   if (!last) return;
   const { host, data } = last;
@@ -1905,7 +1912,7 @@ function renderBuilderSection(): void {
     const face = (a: { id: string; hasUi: boolean; icon: Parameters<typeof installedAppFace>[0]['icon'] }): string => installedAppFace({ id: a.id, hasUi: a.hasUi, icon: a.icon });
     const mine = M.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), face(a), a.title, appRight(a), a.title + '. 누르면 배포 설정이 열려요.'));
     const team = M.team.map((a) => row('app:' + a.id, builderRoute('list', a.id), face(a), a.title, appRight(a),
-      a.title + '.' + (a.madeBy ? ' 만든 사람: ' + a.madeBy + '.' : '') + ' 누르면 배포 설정이 열려요.'));
+      a.title + '.' + (a.madeBy ? ' 만든 사람: ' + memberName(a.madeBy) + '.' : '') + ' 누르면 배포 설정이 열려요.'));
     listEl.append(
       card('draft', '만들던 앱', 'buildsess', drafts, '만들던 앱이 없어요.'),
       card('mine', '내가 만든 앱', 'apps', mine, '아직 만든 앱이 없어요.'),
@@ -1917,7 +1924,7 @@ function renderBuilderSection(): void {
       secHead('앱빌더', null),
       el('nav', { class: 'v2-kviews', 'aria-label': '앱빌더 화면' },
         fix(builderRoute('new'), 'plus', '새 앱 만들기', null, 'new', '새 앱을 처음부터 만들어요', ' v2-bld-new'),
-        fix(builderRoute('list'), 'grid', '모든 앱', M ? M.drafts.length + M.mine.length : null, 'all', '만들던 앱과 내가 만든 앱을 한눈에 봐요')),
+        fix(builderRoute('list'), 'grid', '모든 앱', M ? allAppCount(M) : null, 'all', '만들던 앱과 내가 만든 앱, 팀원이 만든 앱을 한눈에 봐요')),
       listEl),
     //  레일을 숨겼으면 레일 발치의 [앱] · [나] 가 내려온다(appFoot → footRow) — 그 [앱] 이 같은 앱 찾기라 「앱 찾기」 줄은 그때 두지 않는다.
     appFoot(railIsHidden() ? null : el('button', { class: 'v2-nav v2-foot-link', type: 'button', title: '다 만든 앱은 앱 찾기에서 열어요', onclick: () => openLaunchpad() },
