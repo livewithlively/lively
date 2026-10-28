@@ -21,7 +21,7 @@
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
 import { spawnSession } from './quick-session.js';
 import { takeCreated } from './created-cache.js';
-import { openAppUi, reloadAppFrames } from './app-ui.js';
+import { reloadAppFrames } from './app-ui.js';
 import { onAppEvent } from './live-sync.js';
 import { fetchAppVersions, revertApp } from './app-versions.js';
 import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 표에 할 일을 보여 주고 확인
@@ -29,7 +29,7 @@ import { attachAppToSession } from './session-app-pane.js';   // ⑤ 「지금 �
 import { markReviewOpen, readReviewOpen } from './review-resume.js';   // ③ 실제 화면을 보던 중 새로고침 → 같은 화면 · 막대로
 import { ensureTrySession, mountTrySession, type TrySession } from './app-try-session.js';   // ③ 세션 위젯 = 시험 세션(앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다)
 import { closeReview, openReview, type ReviewApi } from './app-review.js';   // ③ 진짜 화면 위 코멘트 층
-import { createAppInstance, getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 앱 찾기와 같은 인스턴스 탭(#/i/<id>)
+import { getAppInstance } from './app-instance.js';   // ③ 「앱 화면으로 보기」 — 한 번 연 인스턴스 탭(#/i/<id>)을 다시 쓴다
 import { effortChoices, effortKo, findHarness, flagChoices, prettyModel, refreshNodes, runCatalog, runNodes, type RunPick } from './run-picker.js';
 import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNode } from './run-prefs.js';
 import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
@@ -46,8 +46,9 @@ export interface StudioRec {
   view?: 'widget' | 'app';   // ③ 에서 마지막으로 본 실제 화면 — 세션 위젯 · 앱 화면
   /** ③ 세션 위젯의 시험 세션(app-try-session.ts — 앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다). 다시 열면 그 세션으로. */
   trySid?: string;
-  /** ③ 「앱 화면으로 보기」 가 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로. */
-  instId?: string;
+  /** ③ 「앱 화면으로 보기」 가 앱 찾기와 같은 길(apps.openAppById)로 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로.
+   *  옛 칸 instId 는 그 길을 안 거치고 만든 인스턴스라 다시 쓰지 않는다(원준 2026-10-28 «앱 찾기에서 누른 것과 똑같은 게»). */
+  appInst?: string;
   /** ④ 확인에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 'all' 이면 「이대로 넣기」 가 공개한다(app_save publish).
    *  'me' 면 공개하지 않는다 — 새 앱은 나만 보는 앱으로, 이미 공개한 앱을 고친 것이면 내 초안으로 남는다(공개를 거두지 않는다 · #4667). */
   vis?: 'all' | 'me';
@@ -895,12 +896,19 @@ async function build(rec: StudioRec): Promise<void> {
       S.tryS = mountTrySession(mountOpts.host || document.body, { appId: rec.appId, sid, projectId: pid, onResumed: keep });
     }
     if (view === 'app') {
-      //  앱 화면 = 앱 찾기가 여는 것과 같은 앱 인스턴스 탭(#/i/<인스턴스>, app-instance openInstalledApp 과 같은 길). 한 번 연 것은 다시 쓴다.
-      try {
-        let inst = rec.instId ? await getAppInstance(rec.instId).catch(() => null) : null;
-        if (!inst) { inst = await createAppInstance(rec.appId, { projectId: null, title: S.title }); rec.instId = inst.id; saveRec(rec); }
-        route = '#/i/' + encodeURIComponent(inst.id);
-      } catch (e: any) { toast('앱 화면을 열지 못했어요. ' + (e && e.message ? e.message : e), true); return; }
+      //  앱 화면 = **앱 찾기에서 그 앱을 누른 것과 같은 길**(apps.openAppById → openInstalledApp · 동의 · 실행 자리 · 첫 화면까지 한 벌 — 원준 2026-10-28
+      //   «앱 들어가서 그 회의록 앱 눌렀을 때랑 똑같은 게 실행되게»). 그 길이 준 #/i/<인스턴스> 를 받아 코멘트 층이 그리로 간다. 한 번 연 탭은 다시 쓴다.
+      const inst = rec.appInst ? await getAppInstance(rec.appInst).catch(() => null) : null;
+      if (inst) route = '#/i/' + encodeURIComponent(inst.id);
+      else {
+        let got = '';
+        const { openAppById } = await import('./apps.js');   // 정적으로 들여오면 apps → app-studio → apps 순환(check-imports)
+        const found = await openAppById(rec.appId, (h) => { got = h; });
+        if (!found) { toast('앱 찾기에 「' + S.title + '」 앱이 아직 안 보여요. 잠시 후 다시 시도해주세요.', true); return; }
+        if (!got) return;   // 열지 못했다(동의를 거절했거나 서버 오류 · 그쪽이 이미 말했다)
+        route = got;
+        const m = /^#\/i\/([^?/]+)/.exec(got); if (m) { rec.appInst = decodeURIComponent(m[1]); saveRec(rec); }
+      }
       if (S.dead) return;
     }
     if (root && (S.tryS || !mountOpts.host)) root.hidden = true;   // 시험 세션 화면이 이 자리에 섰거나 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
@@ -1204,7 +1212,9 @@ async function build(rec: StudioRec): Promise<void> {
       const sid = rec.place !== 'full' ? routeSession() : '';
       if (sid && sid !== rec.sid) { if (await attachAppToSession(sid, rec.appId, title)) { closeAppStudio(); toast('「' + title + '」 앱을 이 세션에 위젯으로 붙였어요. 오른쪽 탭에서 볼 수 있어요.'); return; } }
       closeAppStudio();
-      if (!(await openAppUi(rec.appId, { title }))) toast('앱 찾기(왼쪽 「앱」)에서 「' + title + '」 앱을 열어 보세요.');
+      //  앱 찾기에서 그 앱을 누른 것과 같은 길(원준 2026-10-28) — 옛 「앱 UI」 덮개 창(openAppUi)은 레일 · 사이드바가 빠진 다른 화면이었다.
+      const { openAppById } = await import('./apps.js');
+      if (!(await openAppById(rec.appId))) toast('앱 찾기(왼쪽 「앱」)에서 「' + title + '」 앱을 열어 보세요.');
     };
     h.replaceChildren(el('div', { class: 'v2-studio-fin' },
       el('h2', { text: '「' + title + '」 앱이 만들어졌어요' }),
