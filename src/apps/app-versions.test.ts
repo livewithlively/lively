@@ -219,3 +219,16 @@ test("[W1] 새 능력 셋이 등록돼 있고 scope 가 없다(구성원 누구�
   const save = appCapabilities.find((c) => c.name === "app_save")!;
   assert.ok("note" in save.input, "app_save 입력에 note");
 });
+
+// #4632 2026-10-29 — 같은 내용의 판이 둘(바뀐 것 없이 두 번 저장한 «마무리»)이면 «지금 쓰는 버전»은 하나만 선다.
+test("installedVersionNo — 설치된 내용의 판을 하나로 고른다", async () => {
+  const { installedVersionNo } = await import("./app-versions.js");
+  const vs = [{ version_no: 13, content_hash: "h2" }, { version_no: 12, content_hash: "h2" }, { version_no: 11, content_hash: "h1" }];
+  assert.equal(installedVersionNo("h2", 12, vs), 12, "지금 판 번호가 그 내용이면 그 번호");
+  assert.equal(installedVersionNo("h2", 11, vs), 13, "지금 판 번호가 다른 내용이면 그 내용의 가장 최근 판");
+  assert.equal(installedVersionNo("h2", null, vs), 13, "지금 판 번호가 없어도 가장 최근 판 하나");
+  assert.equal(installedVersionNo("h1", 13, vs), 11, "맞는 판이 하나면 그 판");
+  assert.equal(installedVersionNo("hx", 13, vs), null, "맞는 판이 없으면 없음");
+  assert.equal(installedVersionNo(null, 13, vs), null, "설치된 내용을 모르면 없음");
+  assert.equal(installedVersionNo("h2", 12, [{ version_no: 12, content_hash: null }]), null, "해시 없는 판은 맞지 않는다");
+});

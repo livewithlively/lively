@@ -29,7 +29,7 @@ export function sessLikeOfFacts(f: EndFactsMsg | null | undefined): SessLike {
 
 /**
  * 꺼진 세션의 이름(«…세션») — 사유를 모르면 '' (부르는 쪽이 종전 말로 떨어진다 — 모르는 것을 지어내지 않는다).
- *  문장 끝(«이에요 — 아래에 말을 걸면 이어서 열립니다»)은 부르는 쪽이 붙인다.
+ *  문장 끝(«이에요. 아래에 말을 걸면 이어서 열려요.»)은 부르는 쪽이 붙인다.
  */
 export function endedSessPhrase(s: SessLike | null | undefined): string {
   if (!s) return '';

@@ -156,6 +156,20 @@ export function cardText(c: StudioCard): string {
 //  앱빌더 어디서도») — 앱빌더 화면은 판 번호를 이 함수들로만 말한다. 서버 · AI 에게 가는 글의 번호(version_no)는 그대로다.
 /** 판 번호 → 화면 이름: 1 = 초안 · 2 이상 = V2 · V3 … · 0 이하(아직 없음) = 빈 글. */
 export function verName(n: number): string { const k = Math.floor(Number(n) || 0); return k >= 2 ? 'V' + k : k === 1 ? '초안' : ''; }
+/** 낱말 + 조사 — 끝 글자(닫는 「」 · 따옴표는 넘긴다)의 받침으로 고른다: 을/를 · 은/는 · 이/가 · 으로/로(ㄹ 받침은 «로»).
+ *  한글이 아니면 영문 · 숫자를 읽는 소리로 어림한다 — 받침 있음: 0 영 · 1 일 · 3 삼 · 6 육 · 7 칠 · 8 팔 · L 엘 · M 엠 · N 엔 · R 알,
+ *  그 가운데 ㄹ 받침(«로»): 1 · 7 · 8 · L · R. 화면 글에 «을(를)» 을 남기지 않는다(점검 7-3). */
+export function josa(word: string, j: '을' | '은' | '이' | '으로'): string {
+  const w = String(word || '').replace(/[」』"'”’)\]\s]+$/u, '');
+  const ch = w.slice(-1); const c = ch.charCodeAt(0);
+  let jong = -1;   // 받침 번호(0 = 없음)
+  if (c >= 0xac00 && c <= 0xd7a3) jong = (c - 0xac00) % 28;
+  else if (/[013678lmnrLMNR]/.test(ch)) jong = /[178lLrR]/.test(ch) ? 8 : 4;   // 8 = ㄹ · 4 = ㄴ(받침 있음 대표)
+  else jong = 0;
+  const has = jong > 0;
+  const tail = j === '을' ? (has ? '을' : '를') : j === '은' ? (has ? '은' : '는') : j === '이' ? (has ? '이' : '가') : (has && jong !== 8 ? '으로' : '로');
+  return word + tail;
+}
 /** 버전 이름 + 조사 — 초안은 받침이 있고(초안을 · 초안으로 · 초안이 · 초안은), V2 는 띄어 받침 없는 꼴(V2 를 · V2 로 · V2 가 · V2 는). */
 export function verJ(n: number, j: '을' | '으로' | '이' | '은'): string {
   const k = Math.floor(Number(n) || 0);
@@ -177,6 +191,39 @@ export function verOrdinal(n: number): string {
 export function verArrived(n: number): string {
   const k = Math.floor(Number(n) || 0);
   return k <= 1 ? '초안이 나왔어요' : verOrdinal(k) + ' 버전이 나왔어요';
+}
+
+/** 앱빌더 ④ 의 «마무리» 저장(이름 · 자리 · 넣기 표시) — AI 가 고친 판이 아니다. 되돌리기 · 대조가 이 판을 건너뛴다(점검 2-7). */
+export const isWrapNote = (note: string | null | undefined): boolean => /^마무리 · /.test(String(note || '').trim());
+/** 지금 판(cur)의 «내용 판»(마무리 판이면 그 아래 마지막 AI 판)과 「이전 버전으로」 가 갈 판(내용 판 아래 마지막 AI 판 · 없으면 0).
+ *  마무리 판 V7 위에서 「V6로 되돌리기」 를 누르면 이름 · 넣기 표시만 되돌아가던 것(점검 2-7). */
+export function verPlan(vs: ReadonlyArray<{ version_no: number; note: string | null }>, cur: number): { base: number; prev: number } {
+  const below = vs.filter((v) => v.version_no <= cur).slice().sort((a, b) => b.version_no - a.version_no);
+  const baseV = below.find((v) => !isWrapNote(v.note));
+  const base = baseV ? baseV.version_no : cur;
+  const prevV = below.find((v) => v.version_no < base && !isWrapNote(v.note));
+  return { base, prev: prevV ? prevV.version_no : 0 };
+}
+/** 서버 사건 글의 「판」 낱말 — 화면 글에는 이 낱말을 쓰지 않아서(K1 이 소스를 훑는다) 서버가 쓴 글을 읽는 자리만 코드 포인트로 적는다. */
+const PAN = '\uD310';
+const RE_REVERT = new RegExp('^되돌림 → (\\d+)' + PAN + '$'), RE_PUB = new RegExp('^(\\d*)' + PAN + ' 공개$'), RE_NO = new RegExp('(\\d+)' + PAN, 'g');
+/** 앱 사건의 note 가 사람(화면)이 한 일인가 — 되돌림 · 공개 · 마무리 · 배포 설정의 자리 바꿈. 그건 AI 고침이 끝난 표시가 아니다(점검 2-3). */
+export function systemNote(note: string | null | undefined): boolean {
+  const t = String(note || '').trim();
+  return RE_REVERT.test(t) || RE_PUB.test(t) || isWrapNote(t) || /^쓰는 자리 · /.test(t);
+}
+/** 서버가 적은 글을 화면 말로 — 판 번호 → V · 「—」 는 마침표로 끊는다(점검 6-13 · 2-4). */
+export function plainNote(note: string | null | undefined): string {
+  const t = String(note || '').trim();
+  let m = RE_REVERT.exec(t); if (m) return verJ(Number(m[1]), '으로') + ' 되돌렸어요';
+  m = RE_PUB.exec(t); if (m) return m[1] ? verJ(Number(m[1]), '을') + ' 공개했어요' : '공개했어요';
+  return t.replace(RE_NO, (_, n) => verName(Number(n)) || n + '번째 버전').replace(/\s*—\s*/g, '. ').replace(/\s*→\s*/g, ', ').trim();
+}
+const RE_VER_HEAD = new RegExp('^\\s*\\d+\\s*' + PAN + '\\s*[:·]\\s*');
+/** 버전 목록 한 줄의 글 — 줄 앞에 버전 이름(V20)이 이미 서니 서버 글 머리의 «20판:» · «20판 ·» 는 걷고, 나머지는 plainNote 와 같이 화면 말로.
+ *  빈 글이면 '' (부르는 쪽이 «고침» · «처음 만듦» 으로 채운다). 배포 설정 「버전」 · ⑤ 「이렇게 만들었어요」 가 쓴다. */
+export function versionNote(note: string | null | undefined): string {
+  return plainNote(String(note || '').replace(RE_VER_HEAD, ''));
 }
 
 export const DRAFT_STEPS = ['기획 읽는 중', '화면 짜는 중', '자료 표 만드는 중', '저장하는 중'];
@@ -307,6 +354,100 @@ export function assistantTexts(ndjson: string): string[] {
   return out;
 }
 
+/** 세션 기록(ndjson) 가운데 사람이 보낸 글만(도구 결과는 뺀다). */
+export function userTexts(ndjson: string): string[] {
+  const out: string[] = [];
+  String(ndjson || '').split('\n').forEach((line) => {
+    const s = line.trim(); if (!s) return;
+    let o: any; try { o = JSON.parse(s); } catch (_) { return; }
+    if (!o || o.type !== 'user') return;
+    const c = o.message && o.message.content;
+    const t = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b: any) => b && b.type === 'text').map((b: any) => String(b.text || '')).join('\n') : '';
+    if (t.trim()) out.push(t);
+  });
+  return out;
+}
+/** 이 세션에 초안(첫 판)을 이미 청했나 — 기록이 없는 브라우저에서 이어 열 때 ② 의 「완료」 로 또 청하지 않게(점검 4-10). draftBrief 의 첫 말로 가린다. */
+export const DRAFT_ASK_HEAD = '이 기획 카드대로 초안을 만들어 저장해 줘.';
+export function draftAsked(ndjson: string): boolean { return userTexts(ndjson).some((t) => t.trim().startsWith(DRAFT_ASK_HEAD)); }
+
+// ── 기록 없이 이어 열기 — 세션 기록에서 만들기 상태를 되짓는다(원준 2026-10-29 실제 화면: 이미 앱을 만들어 ③ 에서 고치던 세션인데 서버의 만들기 세션 칸이
+//   다른 세션을 가리켜, 기록 없는 브라우저에선 «② 세부 기획 · AI가 기획 카드를 쓰는 중» 이 끝없이 돌았다).
+//   앱 id 는 **우리 글의 머리(앞에 붙는 꼴 그대로)** 에서만 읽는다 — 사람이 적은 코멘트 · 카드 글은 머리 뒤에 붙으니(「[앱 전체] app_pull memo 처럼」 ·
+//   「(id 12)」) 거기 적힌 id 를 앱으로 잡지 않는다(격리 리뷰 #1591 B1). AI 의 도구 부름은 app_save(그 앱을 저장했다)만 — app_pull 은 남의 앱을 읽어 볼 수도 있다.
+const APP_ID = '([a-z0-9][a-z0-9-]{1,63})';
+const ID_OK = /^[a-z0-9][a-z0-9-]{1,63}$/;
+/** 우리 글의 머리 — 각 꼴의 맨 앞에서만 맞춘다(lib 의 brief 들과 같은 글). */
+const BRIEF_HEADS: RegExp[] = [
+  new RegExp('^\\s*\\d+번째 고침이야\\. 아래를 반영해 새 버전으로 저장해 줘\\(app_pull ' + APP_ID + ' 로 지금 버전을'),   // fixBrief
+  new RegExp('^지금부터 시안 화면을 보면서 대화로 고칠게\\.[^\\n]*? 정해지면 app_pull ' + APP_ID + ' 로 받아 고치고'),   // talkBrief(첫 말)
+  new RegExp('^워크스페이스 앱 「[^\\n]*?」\\(id ' + APP_ID + '\\) 을 고치려고 해\\. app_pull \\1 로 받아 둬\\.'),   // editBrief
+  new RegExp('^워크스페이스 앱 「[^\\n]*? 의 내 사본 「[^\\n]*?」\\(id ' + APP_ID + '\\) 이 방금 저장돼 있어\\. app_pull \\1 로 받아 둬\\.'),   // copyBrief
+  new RegExp('^이 앱의 화면 흐름 와이어프레임을 그려 줘\\. app_pull ' + APP_ID + ' 로'),   // wireframeBrief
+  new RegExp('^기획 카드와 지금 버전\\(app_pull ' + APP_ID + '\\)을 대조해서'),   // checkBrief
+];
+/** draftBrief 의 예약 id 줄 — 카드 글 뒤에 붙는다. 카드 안에 같은 꼴이 끼어 있어도 맨 뒤(진짜 줄)를 쓴다. */
+const DRAFT_ID_LINE = new RegExp('\\n이 앱의 id 는 ' + APP_ID + ' 로 미리 잡아 뒀어 — lively-app\\.json 의 id 를 꼭 \\1 로 해 줘\\.', 'g');
+/** 우리가 보낸 글 하나가 가리키는 이 만들기의 앱 id — 우리 글의 머리에서만 · 없으면 ''. */
+export function promptAppId(text: string | null | undefined): string {
+  const t = String(text || '');
+  for (const re of BRIEF_HEADS) { const m = re.exec(t); if (m) return m[1]; }
+  if (t.trim().startsWith(DRAFT_ASK_HEAD)) { DRAFT_ID_LINE.lastIndex = 0; let m: RegExpExecArray | null; let id = ''; while ((m = DRAFT_ID_LINE.exec(t))) id = m[1]; return id; }
+  return '';
+}
+/** 「N번째 고침이야」 의 N — 없으면 0. */
+export function fixRoundOf(text: string | null | undefined): number { const m = /^\s*(\d+)번째 고침이야/.exec(String(text || '')); return m ? Number(m[1]) || 0 : 0; }
+/** AI 가 저장한 앱(app_save 의 lively-app.json id) — 없으면 ''. app_pull(읽기만)은 세지 않는다. */
+function toolAppId(block: any): string {
+  if (!block || block.type !== 'tool_use' || !/app_save$/.test(String(block.name || ''))) return '';
+  const inp = block.input || {};
+  const mf = Array.isArray(inp.files) ? inp.files.find((f: any) => f && f.path === 'lively-app.json') : null;
+  try { const id = mf ? String(JSON.parse(String(mf.content)).id || '') : ''; return ID_OK.test(id) ? id : ''; } catch (_) { return ''; }
+}
+/** planBrief 의 표 — 사람 설명 뒤에 붙는 고정 글. 다시 기획을 청했으면 그 전의 «초안을 청했다» 는 낡았다. */
+const PLAN_MARK = '\n아직 만들지 말고, ';
+export interface SessionTrace { card: StudioCard | null; asked: boolean; appId: string; round: number }
+const traceStart = (): SessionTrace => ({ card: null, asked: false, appId: '', round: 0 });
+const LINE_KIND = /"type"\s*:\s*"(user|assistant)"/;
+function traceLine(out: SessionTrace, line: string): void {
+  const s = line.trim(); if (!s) return;
+  //  JSON 을 풀기 전에 글로 먼저 거른다 — 긴 세션은 도구 결과 줄이 대부분이다(격리 리뷰 #1591 · 7).
+  const k = LINE_KIND.exec(s); if (!k) return;
+  if (k[1] === 'user' && s.includes('"tool_result"')) return;
+  if (k[1] === 'assistant' && !s.includes('기획카드') && !s.includes('app_save')) return;
+  let o: any; try { o = JSON.parse(s); } catch (_) { return; }
+  const c = o && o.message && o.message.content;
+  const blocks: any[] = typeof c === 'string' ? [{ type: 'text', text: c }] : Array.isArray(c) ? c : [];
+  if (o.type === 'user') {
+    const t = blocks.filter((b) => b && b.type === 'text').map((b) => String(b.text || '')).join('\n');
+    if (!t.trim()) return;
+    if (t.includes(PLAN_MARK) && /앱을 만들고 싶어/.test(t)) out.asked = false;   // 다시 기획 — 그 전의 초안 청함은 낡았다(리뷰 6)
+    if (t.trim().startsWith(DRAFT_ASK_HEAD)) out.asked = true;
+    out.round = Math.max(out.round, fixRoundOf(t));
+    const id = promptAppId(t); if (id) out.appId = id;
+  } else if (o.type === 'assistant') {
+    blocks.forEach((b) => {
+      if (b && b.type === 'text') { const cd = parseCard(String(b.text || '')); if (cd) out.card = cd; }
+      const id = toolAppId(b); if (id) out.appId = id;
+    });
+  }
+}
+/** 세션 기록 전체(처음부터)에서 — 마지막 기획 카드 · 초안을 청했나 · 이 만들기의 앱(마지막으로 가리킨 id) · 보낸 고침 차례(가장 큰 N). */
+export function sessionTrace(ndjson: string): SessionTrace {
+  const out = traceStart();
+  String(ndjson || '').split('\n').forEach((line) => traceLine(out, line));
+  return out;
+}
+/** sessionTrace 와 같은 것을 조금씩 — 긴 기록을 읽는 동안 화면이 멈추지 않게 chunk 줄마다 한 번 쉰다. */
+export async function sessionTraceChunked(ndjson: string, chunk = 1500): Promise<SessionTrace> {
+  const out = traceStart(); const lines = String(ndjson || '').split('\n');
+  for (let i = 0; i < lines.length; i += chunk) {
+    if (i) await new Promise((r) => setTimeout(r, 0));
+    for (const line of lines.slice(i, i + chunk)) traceLine(out, line);
+  }
+  return out;
+}
+
 export function freshApps(known: string[], apps: Array<{ id: string; status?: string }>): string[] {
   return apps.filter((a) => a && (a.status == null || a.status === 'active') && !known.includes(String(a.id))).map((a) => String(a.id));
 }
@@ -316,6 +457,15 @@ export function copyId(originId: string, memberId: string): string {
   const me = String(memberId || 'me').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 12) || 'me';
   const base = String(originId || 'app').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   return (base.slice(0, 31 - me.length - 1) + '-' + me).replace(/-+/g, '-').replace(/^[^a-z0-9]+/, '').slice(0, 32);
+}
+/** 같은 원본으로 사본을 또 뜰 때 새 사본의 id · 번호 — copyId 뒤에 «-2», «-3» … 비어 있는 첫 번호(32자 안). 감사 1-4: 고쳐 둔 내 사본을 원본으로 덮지 않는다. */
+export function nextCopyId(id: string, taken: ReadonlySet<string>): { id: string; n: number } {
+  for (let n = 2; n < 1000; n++) {
+    const tail = '-' + n;
+    const x = id.slice(0, 32 - tail.length).replace(/-+$/, '') + tail;
+    if (!taken.has(x)) return { id: x, n };
+  }
+  return { id: id.slice(0, 22) + '-' + Date.now().toString(36).slice(-9), n: 0 };
 }
 
 // ── 단계마다 보내는 글(사람이 치는 글이 아니라 단추가 보낸다 · 대화에 그대로 보이니 짧고 쉬운 말로) ──
@@ -332,18 +482,20 @@ export const WIREFRAME_PATH = 'studio/wireframe.html';
 const NOTIFY = '알림: 기획 카드의 「알림」 줄이 「없음」 이 아니면 lively-app.json 에 permissions.notifications: true 를 켜고(app_notify 도구가 따라온다), 그 순간에 app_notify {member_id, title, body, href, dedupe_key} 로 받을 사람마다 보내 줘(href 는 #/open/<앱 id>?… — 앱이 lively.state 로 읽어 그 자리를 연다). 앱 안에는 사람마다 «무엇을 받을지»(예: 전부 · 나를 언급할 때만 · 없음) 고르는 설정을 두고 그 값은 보내는 쪽이 읽을 수 있게 앱 표에 저장해(개인 prefs 는 남이 못 읽어). 앱 전체 알림 켜고 끄기는 라이블리 [나 ▸ 알림] 이 맡으니 앱이 따로 만들지 마.';
 const WIRE = `저장할 때 화면 흐름 와이어프레임도 함께 넣어 줘: app_save 의 files 에 ${WIREFRAME_PATH} — 피그마 보드처럼 이 앱의 화면을 한 장씩 프레임으로 가로로 나란히 놓고(화면이 하나여도 한 장), 프레임마다 위에 화면 이름표 · 안은 얇은 선(1px 회색)으로 그린 칸 · 글 · 단추, 그리고 **단추 하나하나마다** 그 단추에서 나가는 화살표로 어느 화면(또는 어느 칸)으로 이어지는지 이어 그린 HTML 한 장(외부 자원 없이 · 흰 바탕 · 앱 화면이 아니라 설명 그림 · 화면 수만큼 넓어도 된다).`;
 /** ① 사람이 적은 설명(여러 줄일 수 있다)과 이름(비면 AI 가 짓는다)으로 기획 카드를 청한다. */
-export function planBrief(what: string, place: StudioPlace, name = ''): string {
+export function planBrief(what: string, place: StudioPlace, name = '', prev?: StudioCard | null): string {
   const desc = String(what || '').trim(), nm = String(name || '').trim();
+  //  ① 로 돌아와 다시 기획 — 고쳐 둔 카드(사람이 고친 줄 · 더한 항목)를 버리지 않게 지난 카드를 함께 보낸다(점검 4-8).
+  const keep = prev ? `\n지난 기획 카드야(사람이 고친 줄 · 더한 항목 포함). 바뀐 점만 반영하고 나머지 줄과 더한 항목은 그대로 둬:\n${cardText(prev)}\n` : '';
   const head = desc.includes('\n') ? `이런 앱을 만들고 싶어:\n${desc}\n` : `「${desc}」 앱을 만들고 싶어. `;
   return `${head}${nm ? `앱 이름은 「${nm}」 로 해 줘(기획 카드 ${LABEL.name} 줄에 그대로). ` : ''}${PLACE[place].say}\n`
     + `아직 만들지 말고, ${BENCH} `
     + '그다음 내가 확인할 기획 카드만 아래 꼴 그대로 답해 줘(앞뒤에 다른 말 없이 · 각 줄 한 문장 · ' + LABEL.can + '은 셋을 · 로 · ' + LABEL.notify + '은 언제 누구에게 알리는지(알릴 일이 없으면 「없음」) · ' + LABEL.ref + '는 서비스마다 「서비스 이름: 가져온 것」을 ; 로 나누고 맨 끝에 「출처: [이름](주소), [이름](주소)」 · 주소는 이 꼴로만):\n'
-    + cardText(emptyCard());
+    + cardText(emptyCard()) + keep;
 }
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
 export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
   const id = String(appId || '').trim();
-  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n${ICON}\n`
+  return `${DRAFT_ASK_HEAD} ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n${ICON}\n`
     + (id ? `이 앱의 id 는 ${id} 로 미리 잡아 뒀어 — lively-app.json 의 id 를 꼭 ${id} 로 해 줘.\n` : '')
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
@@ -351,6 +503,12 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
 /** ④ 짚은 곳 — 선택한 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
 /** on: 'wire' — 앱 화면이 아니라 「와이어프레임(화면 흐름) 보기」 보드에서 짚은 곳(좌표는 그 그림 전체의 비율). 없으면 앱 화면. */
 export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number; on?: 'wire';
+  /** 짚을 때 앱 문서가 스크롤돼 있던 자리(px) — x · y 는 그때 보이던 화면의 비율이라, 번호가 스크롤을 따라가고 AI 에게도 «내린 화면» 을 말한다. */
+  sx?: number; sy?: number;
+  /** 짚을 때 앱 안쪽 스크롤 칸들의 스크롤 합(px) — 그 뒤 안쪽 칸이 움직이면 번호가 어느 칸 것인지 몰라 숨긴다(격리 리뷰 #1585). */
+  ix?: number; iy?: number;
+  /** 와이어프레임 그림이 없어 보드에 **앱 화면을 대신 놓았을 때** 그 카드(side = 세션 위젯 꼴 · full = 앱 화면 꼴) — x · y 는 그 카드 안의 비율이다. */
+  screen?: 'side' | 'full';
   /** 「수정하기」로 이미 보내 AI 가 반영하고 있는 코멘트 — 고치는 동안에도 다음 코멘트를 남기게(원준 2026-10-28) 목록엔 두되 세지 않고 고칠 수 없다.
    *  새 버전이 오면 걷는다 · 기록(localStorage)엔 남기지 않는다(새로 열면 보낸 것은 이미 AI 에게 있다). */
   sent?: boolean }
@@ -364,7 +522,10 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
     if (!p.note.trim() || p.sent) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
     //  와이어프레임 보드에서 짚은 곳은 그 그림(${WIREFRAME_PATH}) 안의 자리다 — 앱 화면의 자리와 섞이지 않게 말머리를 가른다.
-    const on = p.on === 'wire' ? `와이어프레임(${WIREFRAME_PATH})의` : '화면의';
+    //   그림이 없어 보드에 앱 화면을 대신 놓았으면 그 화면 카드 안의 자리다(그런 파일은 없다). 앱 화면에서 스크롤을 내린 채 짚었으면 그 화면 기준이다.
+    const sy = Math.round(p.sy || 0);
+    const on = p.on === 'wire' ? (p.screen ? `와이어프레임 보드에 놓은 앱 화면(${p.screen === 'side' ? '세션 위젯' : '앱 화면'} 꼴)의` : `와이어프레임(${WIREFRAME_PATH})의`)
+      : sy > 0 ? `앱을 아래로 ${sy}px 내린 화면의` : '화면의';
     if (p.kind === 'pick') lines.push(`[선택한 요소 ${i + 1}] ${p.where || '요소'} — ${on} ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
     else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] ${on} ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
     else lines.push(`[핀 ${i + 1}] ${on} ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
@@ -395,7 +556,16 @@ export function checkBrief(card: StudioCard, appId: string): string {
 export function notifyBrief(name: string, line: string, slack: string): string {
   return `이 앱을 팀에 알려 줘. 지식에 제목 「앱 소개 · ${name}」 으로 아래 글을 저장하고(knowledge_save · 분류는 「세션 작업환경」)`
     + (slack.trim() ? `, 슬랙 채널 ${slack.trim()} 에도 같은 글을 보내 줘(못 보내면 지식만)` : '')
-    + '. 끝나면 「알렸어요」 한 줄만.\n글: ' + line;
+    + '. 끝나면 「[[알림]] 알렸어요」 한 줄만(못 했으면 「[[알림]] 못 했어요: 까닭 한 줄」).\n글: ' + line;
+}
+/** 「팀에 알리기」 의 답 — ok 알렸다 · fail 못 했다(까닭) · null 아직(점검 2-9: 보내기만 하면 «알렸어요» 로 굳던 것). 표식 없는 「알렸어요」 한 줄(옛 글)도 ok. */
+export function parseNotify(text: string): { ok: true } | { ok: false; why: string } | null {
+  const t = String(text || '');
+  const re = /\[\[알림\]\]\s*([^\n]*)/g; let m: RegExpExecArray | null; let line: string | null = null;
+  while ((m = re.exec(t))) line = m[1].trim();
+  if (line == null) return /^\s*「?알렸어요」?[.!]?\s*$/.test(t) ? { ok: true } : null;
+  if (/^못\s*했/.test(line)) return { ok: false, why: line.replace(/^못\s*했어요\s*[:：]?\s*/, '').trim() };
+  return { ok: true };
 }
 export function copyBrief(copyIdStr: string, copyTitle: string, originTitle: string, originBy: string, place: StudioPlace): string {
   return `워크스페이스 앱 「${originTitle}」${originBy ? '(' + originBy + ' 님이 만듦)' : ''} 의 내 사본 「${copyTitle}」(id ${copyIdStr}) 이 방금 저장돼 있어. app_pull ${copyIdStr} 로 받아 둬. `
@@ -405,11 +575,36 @@ export function editBrief(appId: string, title: string, place: StudioPlace): str
   return `워크스페이스 앱 「${title}」(id ${appId}) 을 고치려고 해. app_pull ${appId} 로 받아 둬. 내가 보내는 고침을 반영해 새 버전으로 저장해 줘(app_save · note 는 바뀐 점 한 줄 · 모두가 쓰는 앱이니 있던 것은 그대로). ${PLACE[place].say} ${RULE} 지금은 「받았어요」 한 줄만.`;
 }
 
-/** 앱 틀 안에 넣는 탐침 — 「찍어서 의견」: 호스트가 비율 좌표를 주면 그 자리의 요소(태그 · 글)를 알려 주고 테두리를 그린다. */
+/** 앱 틀 안에 넣는 탐침 — 「찍어서 의견」: 호스트가 비율 좌표를 주면 그 자리의 요소(태그 · 글)를 알려 주고 테두리를 그린다.
+ *  스크롤도 맡는다(점검 3-3) — 코멘트 도구의 덮개가 휠을 넘기면(wheel) 그 자리의 스크롤되는 칸(본문 포함 · 없으면 문서)을 내리고,
+ *  무엇이든 스크롤되면(처음 한 번 · 그 뒤 50ms 에 한 번 · 안쪽 칸도 잡는다) 자리를 알린다(scroll): 문서 스크롤 sx · sy(본문이 스크롤 칸이면 본문 것) +
+ *  안쪽 칸들의 스크롤 합 ix · iy — 번호는 문서 스크롤을 따라가고, 안쪽 칸이 움직였으면 어느 칸 것인지 몰라 숨긴다. 답(hitres)에도 그때의 값을 싣는다. */
 export const PROBE_JS = "(function(){var box=null;function mark(r){if(!box){box=document.createElement('div');box.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #7B61E0;border-radius:4px;background:rgba(123,97,224,.12);box-shadow:0 0 0 2px #fff';document.documentElement.appendChild(box);}box.style.left=r.left+'px';box.style.top=r.top+'px';box.style.width=r.width+'px';box.style.height=r.height+'px';box.style.display='';}"
-  + "window.addEventListener('message',function(ev){var m=ev.data;if(!m||typeof m!=='object')return;if(m.__studio==='clear'){if(box)box.style.display='none';return;}if(m.__studio!=='hit')return;"
-  + "var W=innerWidth||1,H=innerHeight||1,e=document.elementFromPoint(m.x*W,m.y*H)||document.body;var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);var r=e.getBoundingClientRect();mark(r);"
-  + "parent.postMessage({__studio:'hitres',id:m.id,tag:e.tagName.toLowerCase(),text:t,rect:{l:r.left/W,t:r.top/H,w:r.width/W,h:r.height/H}},'*');});})();";
+  + "var seen=[];function at(){var b=document.body,o={sx:Math.round(Math.max(scrollX||0,b?b.scrollLeft:0)),sy:Math.round(Math.max(scrollY||0,b?b.scrollTop:0)),ix:0,iy:0};for(var i=0;i<seen.length;i++){o.ix+=Math.round(seen[i].scrollLeft);o.iy+=Math.round(seen[i].scrollTop);}return o;}"
+  + "function tell(){var o=at();o.__studio='scroll';parent.postMessage(o,'*');}var pend=0;tell();"
+  + "document.addEventListener('scroll',function(ev){var t=ev.target;if(t&&t.nodeType===1&&t!==document.documentElement&&t!==document.body&&seen.indexOf(t)<0)seen.push(t);if(pend)return;pend=1;setTimeout(function(){pend=0;if(box)box.style.display='none';tell();},50);},{capture:true,passive:true});"
+  + "function can(e,dx,dy){var cs=getComputedStyle(e);if(dy&&/(auto|scroll)/.test(cs.overflowY)&&(dy>0?e.scrollTop+e.clientHeight<e.scrollHeight-1:e.scrollTop>0))return true;if(dx&&/(auto|scroll)/.test(cs.overflowX)&&(dx>0?e.scrollLeft+e.clientWidth<e.scrollWidth-1:e.scrollLeft>0))return true;return false;}"
+  + "window.addEventListener('message',function(ev){var m=ev.data;if(!m||typeof m!=='object')return;if(m.__studio==='clear'){if(box)box.style.display='none';return;}"
+  + "if(m.__studio==='wheel'){var dx=+m.dx||0,dy=+m.dy||0,q=document.elementFromPoint((+m.x||0)*(innerWidth||1),(+m.y||0)*(innerHeight||1));while(q&&q!==document.documentElement){if(can(q,dx,dy)){if(q!==document.body&&seen.indexOf(q)<0)seen.push(q);q.scrollBy(dx,dy);setTimeout(tell,0);return;}q=q.parentElement;}scrollBy(dx,dy);setTimeout(tell,0);return;}"
+  + "if(m.__studio!=='hit')return;"
+  + "var W=innerWidth||1,H=innerHeight||1,e=document.elementFromPoint(m.x*W,m.y*H)||document.body;var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);var r=e.getBoundingClientRect();mark(r);var o=at();"
+  + "parent.postMessage({__studio:'hitres',id:m.id,tag:e.tagName.toLowerCase(),text:t,rect:{l:r.left/W,t:r.top/H,w:r.width/W,h:r.height/H},sx:o.sx,sy:o.sy,ix:o.ix,iy:o.iy},'*');});})();";
+
+/** 탐침의 답(hitres) 거르기 — 실제 화면 막대(app-review)와 와이어프레임 보드(wire-board)가 같이 쓴다(점검 3-13).
+ *  앱(또는 AI 가 쓴 그림)이 돌려준 값이라 그대로 믿지 않는다 — 태그는 짧은 영문만(아니면 div) · 글은 80자 · 좌표와 스크롤은 유한한 수만(아니면 0).
+ *  AI 에게 가는 고침 글에 실린다. hitres 가 아니거나 번호가 없으면 null. */
+export interface HitRes { id: number; tag: string; text: string; rect: { l: number; t: number; w: number; h: number } | null; sx: number; sy: number; ix: number; iy: number }
+/** 탐침이 알린 스크롤(px) — 앱이 준 값이라 0 ~ 1e6 으로 자른다(격리 리뷰 #1585). */
+export const scrollPx = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? Math.min(1e6, Math.max(0, Math.round(n))) : 0; };
+export function readHitRes(m: unknown): HitRes | null {
+  const o = m as any;
+  if (!o || typeof o !== 'object' || o.__studio !== 'hitres' || typeof o.id !== 'number' || !Number.isFinite(o.id)) return null;
+  const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const tag = String(o.tag || '');
+  return { id: o.id, tag: /^[a-z][a-z0-9-]{0,23}$/.test(tag) ? tag : 'div', text: String(o.text || '').slice(0, 80),
+    rect: o.rect && typeof o.rect === 'object' ? { l: num(o.rect.l), t: num(o.rect.t), w: num(o.rect.w), h: num(o.rect.h) } : null,
+    sx: scrollPx(o.sx), sy: scrollPx(o.sy), ix: scrollPx(o.ix), iy: scrollPx(o.iy) };
+}
 
 /** 찍은 자리를 AI 에게 말할 때의 글 — 「<h1 「이번 회의 안건」>」. */
 export function whereText(hit: { tag?: string; text?: string } | null): string {

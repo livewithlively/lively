@@ -137,6 +137,10 @@
             "app_folder": {
               "type": "boolean",
               "default": false
+            },
+            "ai_runs": {
+              "type": "boolean",
+              "default": false
             }
           },
           "additionalProperties": false,
@@ -265,6 +269,19 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 512
+            },
+            "devices": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "microphone",
+                  "camera",
+                  "clipboard-read",
+                  "geolocation"
+                ]
+              },
+              "maxItems": 4
             }
           },
           "additionalProperties": true
@@ -642,7 +659,6 @@
         },
         "icon": {
           "type": "object",
-          "description": "#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널).",
           "properties": {
             "path": {
               "type": "string",
@@ -666,7 +682,49 @@
             "path",
             "color"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널)."
+        },
+        "ai": {
+          "type": "object",
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 32,
+              "default": []
+            }
+          },
+          "additionalProperties": true
+        },
+        "mcp_tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "description": "이 앱이 구성원의 AI 대화창(라이블리 MCP)에 내놓는 도구 — 항목 { name, title?, description, input?, run: { kind, … }, level?: 'L0'|'L1' }. 앱 개발 가이드 «mcp_tools» 절"
         }
       },
       "required": [

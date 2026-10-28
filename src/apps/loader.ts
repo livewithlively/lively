@@ -15,6 +15,7 @@ import path from "node:path";
 import { HttpError } from "../http-error.js";
 import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, type LivelyAppManifest } from "./manifest.js";
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
+import { assertAppMcpToolsInstallable } from "./app-mcp-decl.js";
 import { hashAppPackage } from "./package-hash.js";
 import type { DeployItem } from "./install.js";
 
@@ -44,6 +45,8 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   try {
     manifest = parseAppManifest(JSON.parse(await readFile(manifestPath, "utf8")));
     assertInstallableManifest(manifest); // 설치 경로에서만 — 재파싱(grant)은 버전 불문(롤백 안전)
+    //  #5050 앱이 선언한 MCP 도구 — 뜻 검사(모르는 칸 · 실행기 · 이름 · 입력 스키마)도 설치 · 판 저장 경로에서만(재파싱은 틀린 항목만 건너뛴다).
+    await assertAppMcpToolsInstallable(manifest);
   } catch (e) {
     if ((e as { code?: string }).code === "ENOENT") throw new HttpError(400, "lively-app.json 이 없습니다");
     if (e instanceof HttpError) throw e;

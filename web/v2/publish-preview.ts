@@ -9,7 +9,7 @@
 //     권한 · 없는 앱(4xx)이면 공개도 같은 까닭으로 안 되니 묻지 않고 알린다.
 import { api, toast } from '../core.js';
 import { confirmDialog } from '../ui-primitives.js';
-import { verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
+import { josa, verJ } from '../lib/studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …)
 
 interface PublishPreview {
   changes?: string[]; notes?: string[]; blocked?: string[]; incomplete?: string | null;
@@ -49,7 +49,7 @@ async function ask(appId: string, opts?: { versionNo?: number; title?: string })
   if (blocked.length) {
     await confirmDialog({
       title: '이대로는 공개할 수 없어요',
-      message: name + '을(를) 이대로 공개하면 멈춰요. 아래를 고친 뒤 다시 공개하세요. 지금은 아무것도 바뀌지 않았어요.',
+      message: josa(name, '을') + ' 이대로 공개하면 멈춰요. 아래를 고친 뒤 다시 공개해 주세요. 지금은 아무것도 바뀌지 않았어요.',
       lines: blocked, confirmText: '알겠어요', cancelText: '닫기',
     });
     return false;

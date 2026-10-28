@@ -328,7 +328,7 @@ export function sessAppPart(ctx: PartCtx): Part {
   function paintHead(cur: AttachedApp | null): void {
     head.hidden = !cur || headless;
     if (!cur) { head.replaceChildren(); return; }
-    const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 — 고치기 · 버전 이력 · 크게 보기', 'aria-label': `「${cur.title}」 메뉴`,
+    const more = el('button', { class: 'pn-sessapp-more', type: 'button', title: '이 앱 메뉴(고치기 · 버전 이력 · 크게 보기)', 'aria-label': `「${cur.title}」 메뉴`,
       onclick: (e: MouseEvent) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openMenu(cur, r.right, r.bottom + 4); } }, pnIcon('more', 'pn-i sm'));
     head.replaceChildren(
       faceIcon(cur, 'pn-i sm'),

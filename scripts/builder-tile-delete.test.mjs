@@ -57,6 +57,8 @@ window.fetch = async (u, init) => {
   if (m && method === "POST" && window.__slow) await new Promise((r) => setTimeout(r, window.__slow));
   if (m && method === "POST") { if (window.__failDiscard) return j({ error: "서버가 바빠요" }, 500); window.__gone.add(m[1]); return j({ ok: true }); }
   if (p.startsWith("/api/ui/terminal/sessions/") && method === "DELETE") return j({ ok: true });
+  //  세션 하나 묻기(감사 1-5 — 목록에 없는 기록은 따로 묻고 «없다» 일 때만 걷는다). 이 가짜 서버엔 목록 밖 세션이 없다 → 404.
+  if (p.startsWith("/api/ui/terminal/sessions/") && method === "GET") return j({ error: "세션을 찾을 수 없어요" }, 404);
   if (/^\\/api\\/ui\\/v6\\/sessions\\/[^/]+\\/purge/.test(p) && method === "POST") return j({ ok: true, log: { bytes: 10 } });
   if (p === "/api/ui/terminal/session-trash" && method === "POST") {
     const done = [], skipped = [];

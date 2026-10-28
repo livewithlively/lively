@@ -315,5 +315,111 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   for (const [t, want, what] of T) check(PL(t) === want, what, { got: PL(t) });
 }
 
+
+// ══ 점검 2-7 · 2-3 · 6-13 · 2-9 · 4-10 · 4-8 (원준 2026-10-29 «다 봤는데 그냥 싹 다 고쳐») — 스크래치패드 spec-forkC-flow.md 의 P · N · T · D · B 행 ══
+{
+  const V = (no, note) => ({ version_no: no, note });
+  const VP = F.verPlan || (() => ({ base: -1, prev: -1 }));
+  const vp = [
+    [[V(1, "초안 · 회의록"), V(2, "글자를 키웠어요"), V(3, "마무리 · 회의록")], 3, { base: 2, prev: 1 }, "P1 마무리 판 위 — 내용 판은 그 아래 AI 판 · 되돌릴 곳은 그 앞 AI 판"],
+    [[V(1, "초안"), V(2, "고침"), V(3, "마무리 · a"), V(4, "마무리 · b")], 4, { base: 2, prev: 1 }, "P2 마무리 판이 겹쳐도 건너뛴다"],
+    [[V(1, "초안"), V(2, "고침"), V(3, "고침")], 3, { base: 3, prev: 2 }, "P3 마무리가 없으면 바로 앞 판"],
+    [[V(1, "초안")], 1, { base: 1, prev: 0 }, "P4 판 하나 — 되돌릴 곳 없음"],
+    [[], 0, { base: 0, prev: 0 }, "P5 판 목록이 비었다"],
+    [[V(1, "초안"), V(2, "마무리 · 회의록")], 2, { base: 1, prev: 0 }, "P6 첫 판 위 마무리만 — 되돌릴 AI 판 없음"],
+  ];
+  for (const [vs, cur, want, what] of vp) { const got = VP(vs, cur); check(got.base === want.base && got.prev === want.prev, what, got); }
+  const SN = F.systemNote || (() => null), PN = F.plainNote || ((x) => x);
+  check(PN("되돌림 → 3판") === "V3 로 되돌렸어요" && SN("되돌림 → 3판") === true, "N1 되돌림 사건 — 화면 말 · 사람이 한 저장", { t: PN("되돌림 → 3판"), s: SN("되돌림 → 3판") });
+  check(PN("5판 공개") === "V5 를 공개했어요" && SN("5판 공개") === true, "N2 공개 사건 — 화면 말 · 사람이 한 저장", { t: PN("5판 공개"), s: SN("5판 공개") });
+  check(SN("마무리 · 회의록") === true, "N3 마무리 저장은 AI 고침이 아니다");
+  const n4 = PN("1판 — 초안을 만들었어요");
+  check(SN("글자를 키웠어요") === false && !/판|—/.test(n4) && /초안/.test(n4), "N4 AI 고침 — 「판」 「—」 없이", n4);
+  check(SN("") === false && SN(null) === false && PN(null) === "" && PN("") === "", "N5 빈 note · null — AI 고침 · 빈 글");
+  const PNo = F.parseNotify || (() => "없음");
+  const t1 = PNo("[[알림]] 알렸어요"), t2 = PNo("[[알림]] 못 했어요: 슬랙이 연결되지 않았어요"), t3 = PNo("알렸어요"), t4 = PNo("앱을 다 만들고 나서 팀에 알렸어요. 그리고 이런 것도 했어요."), t5 = PNo("받았어요");
+  check(t1 && t1.ok === true, "T1 [[알림]] 알렸어요 — 굳힌다", t1);
+  check(t2 && t2.ok === false && /슬랙/.test(t2.why), "T2 못 했어요 — 까닭", t2);
+  check(t3 && t3.ok === true && t4 === null && t5 === null, "T3 표식 없는 「알렸어요」 한 줄은 ok · 긴 답 속 낱말 · 다른 답은 아니다", { t3, t4, t5 });
+  const U = (t) => JSON.stringify({ type: "user", message: { role: "user", content: t } });
+  const A = (t) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+  const DA = F.draftAsked || (() => null);
+  const asked = [U(F.planBrief("회의록", "both")), A("[[기획카드]]\n앱 이름: 회의록\n[[/기획카드]]"), U(F.draftBrief(card, "both", "app-1"))].join("\n");
+  check(DA(asked) === true, "D1 사람 글에 초안 청함이 있다");
+  check(DA([U(F.planBrief("회의록", "both")), A("카드")].join("\n")) === false && DA("") === false, "D2 기획만 청했거나 기록이 없다 — 아니다");
+  const b1 = F.planBrief("회의록을 주제별로", "both", "회의록", card), b2 = F.planBrief("회의록", "both", "회의록");
+  check(b1.includes(F.cardText(card)) && /바뀐 점만/.test(b1), "B1 ① 다시 기획 — 지난 카드 전문 + 「바뀐 점만」", b1.slice(-200));
+  check(!/지난 기획 카드/.test(b2), "B2 지난 카드가 없으면 그 말도 없다");
+}
+
+
+// ══ 기록 없이 이어 열기 — 세션 기록에서 되짓기(원준 2026-10-29 실제 화면) · S 행 ══
+{
+  const PA = F.promptAppId || (() => "없음"), FR = F.fixRoundOf || (() => -1), ST = F.sessionTrace || (() => null);
+  check(PA(F.fixBrief(3, [], "글자 크게", "both", "app-2csk6w")) === "app-2csk6w" && PA(F.draftBrief(card, "both", "res-9")) === "res-9" && PA(F.editBrief("memo", "메모", "both")) === "memo", "S1 우리 글에서 앱 id — 고침 · 초안(예약 id) · 고치기", [PA(F.fixBrief(3, [], "x", "both", "app-2csk6w")), PA(F.draftBrief(card, "both", "res-9"))]);
+  check(PA("회의록 앱을 만들고 싶어") === "" && PA("") === "" && PA(null) === "", "S2 앱 id 가 없는 글 · 빈 글 — 빈 id");
+  check(FR(F.fixBrief(4, [], "x", "both", "a1")) === 4 && FR("그냥 고쳐 줘") === 0 && FR(null) === 0, "S3 「N번째 고침이야」 의 N · 없으면 0");
+  const U = (t) => JSON.stringify({ type: "user", message: { content: t } });
+  const A = (t) => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: t }] } });
+  const T = (name, input) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  const full = [U(F.planBrief("회의록", "both")), A(F.cardText(card)), U(F.draftBrief(card, "both", "res-1")),
+    T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: JSON.stringify({ id: "app-2c" }) }] }), U(F.fixBrief(1, [], "x", "both", "app-2c")), U(F.fixBrief(2, [], "y", "both", "app-2c"))].join("\n");
+  const tr = ST(full);
+  check(tr && tr.card && tr.card.name === card.name && tr.asked === true && tr.appId === "app-2c" && tr.round === 2, "S4 카드 · 초안 청함 · 마지막으로 가리킨 앱(도구 부름 · 고침 글) · 가장 큰 고침 차례", tr);
+  const tool = ST([U(F.planBrief("회의록", "both")), T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: JSON.stringify({ id: "memo-1" }) }] })].join("\n"));
+  check(tool && tool.appId === "memo-1" && tool.card === null && tool.asked === false && tool.round === 0, "S5 AI 의 app_save 만 있어도", tool);
+  const none = ST("");
+  check(none && none.card === null && none.asked === false && none.appId === "" && none.round === 0, "S6 빈 기록 — 아무것도 없다", none);
+  const bad = ST([T("mcp__lively__app_save", { files: [{ path: "lively-app.json", content: "{깨짐" }] }), T("mcp__lively__app_pull", { app_id: "../etc" }), "깨진 줄"].join("\n"));
+  check(bad && bad.appId === "", "S7 깨진 매니페스트 · 이상한 id · 깨진 줄은 건너뛴다", bad);
+}
+
+// ══ G7 문구 규칙(#4632 원준 2026-10-29 «싹 다 고쳐» — 점검 7-1 · 7-2 · 7-3 · 6-13 후속) ══
+{
+  const J = typeof F.josa === "function" ? F.josa : () => null;
+  const got = [J("「회의록」", "을"), J("「메모」", "을"), J("세션 위젯", "이"), J("둘 다", "이"), J("앱 화면", "으로"), J("「팀 채널」", "으로"), J("메모", "은"), J("V3", "을"), J("V2", "을"), J("V3", "으로"), J("V13", "으로"), J("V7", "으로"), J("R", "으로")];
+  check(JSON.stringify(got) === JSON.stringify(["「회의록」을", "「메모」를", "세션 위젯이", "둘 다가", "앱 화면으로", "「팀 채널」로", "메모는", "V3을", "V2를", "V3으로", "V13으로", "V7로", "R로"]),
+    "J1 josa — 끝 글자(닫는 「」 넘김) 받침으로 을/를 · 이/가 · 으로/로(ㄹ 은 로) · 은/는 · 숫자는 읽는 소리로", got);
+  const VN = typeof F.versionNote === "function" ? F.versionNote : () => null;
+  const P = "\uD310";
+  const vn = [VN("20" + P + ": 알림을 눌러 들어온 자리로 — 목록이 바로 열려요"), VN("19" + P + " · 글자 크기 키움"), VN("  "), VN(null), VN("되돌림 → 3" + P), VN("마감일 칸 더함")];
+  check(JSON.stringify(vn) === JSON.stringify(["알림을 눌러 들어온 자리로. 목록이 바로 열려요", "글자 크기 키움", "", "", "V3 로 되돌렸어요", "마감일 칸 더함"]),
+    "V1 versionNote — 머리의 «n판:» · «n판 ·» 는 걷고(줄 앞에 버전 이름이 선다) «—» 는 마침표로 · 빈 글은 빈 글 · 사람 글은 그대로", vn);
+  //  C1 — 앱빌더 · 앱 찾기 · 실행할 곳 화면 글에 «—» 와 합니다체가 없다. 주석을 걷은 소스의 따옴표 글(한글이 든 것)만 본다.
+  //   AI 에게 가는 글(lib/studio-flow 의 brief)은 화면 글이 아니라 뺐다.
+  const { readFileSync } = await import("node:fs");
+  const files = ["web/v2/builder.ts", "web/v2/builder-model.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/wire-board.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts",
+    "web/v2/app-spec-page.ts", "web/v2/publish-preview.ts", "web/v2/app-instance.ts", "web/v2/run-prefs.ts", "web/v2/mobile.ts", "web/v2/notify-bell.ts", "web/v2/quick-session.ts", "web/lib/app-menu.ts",
+    "web/v2/app-runtime.ts", "web/v2/app-session.ts"];
+  const left = [];
+  for (const f of files) {
+    const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");
+    for (const m of src.matchAll(/'([^'\n]*)'|`([^`]*)`|"([^"\n]*)"/g)) {
+      const t = m[1] ?? m[2] ?? m[3] ?? "";
+      if (/[가-힣]/.test(t) && (/—/.test(t) || /(습니다|합니다|입니다|됩니다|뜹니다|봅니다|줍니다|엽니다|돕니다)/.test(t))) left.push(f + ": " + t.slice(0, 60));
+    }
+  }
+  check(left.length === 0, "C1 앱빌더 화면 글에 «—» · 합니다체가 없다", left);
+}
+
+
+// ══ 격리 리뷰 #1591 B1 · 6 · 7 — 앱 id 는 우리 글의 머리에서만 · 다시 기획하면 초안 청함은 낡았다 · 나눠 읽어도 같다 ══
+{
+  const PA = F.promptAppId || (() => "없음"), ST = F.sessionTrace || (() => null), STC = F.sessionTraceChunked || (async () => null);
+  const fixC = F.fixBrief(2, [], "이거 app_pull memo 처럼 해줘 (id 12)", "both", "app-2c");
+  check(PA(fixC) === "app-2c", "B1a 고침 글의 코멘트 속 app_pull memo · (id 12) 는 안 잡는다 — 머리의 id", PA(fixC));
+  check(PA("이거 app_pull memo 처럼 해줘") === "" && PA("나중에 (id 12) 로 바꿔") === "" && PA(F.talkBrief("app_pull memo 처럼", "app-2c", "both", false)) === "", "B1b 머리가 아닌 글(사람 말 · 대화 둘째 말) — 빈 id");
+  check(PA(F.talkBrief("글자 크게", "app-2c", "both", true)) === "app-2c" && PA(F.copyBrief("memo-wj", "메모 · 원준", "메모", "sangmin-yoon", "both")) === "memo-wj" && PA(F.checkBrief(card, "app-2c")) === "app-2c", "B1c 대화 첫 말 · 사본 · 대조 글의 머리");
+  const U = (t) => JSON.stringify({ type: "user", message: { content: t } });
+  const T = (name, input) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
+  const pull = ST([U(F.planBrief("회의록", "both")), T("mcp__lively__app_pull", { app_id: "memo-other" })].join("\n"));
+  check(pull && pull.appId === "", "B1d AI 의 app_pull(남의 앱 읽기)은 이 만들기의 앱이 아니다", pull);
+  const re = ST([U(F.draftBrief(card, "both", "res-1")), U(F.planBrief("회의록 다시", "both"))].join("\n"));
+  check(re && re.asked === false, "B6 초안을 청한 뒤 다시 기획을 청했다 — 초안 청함은 낡았다", re);
+  const big = Array.from({ length: 4000 }, (_, i) => (i % 3 ? JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "x".repeat(50) }] } }) : U(F.fixBrief(i, [], "x", "both", "app-2c")))).join("\n");
+  const a1 = ST(big), a2 = await STC(big, 500);
+  check(a2 && JSON.stringify(a1) === JSON.stringify(a2) && a1.round === 3999 && a1.appId === "app-2c", "B7 나눠 읽어도(chunk) 같은 결과", { a1, a2 });
+}
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

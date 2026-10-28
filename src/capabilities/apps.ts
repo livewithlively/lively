@@ -22,7 +22,7 @@ import { listAppSnapshots, restoreAppSnapshot } from "../apps/app-snapshot.js";
 import { builtinAppDir } from "../apps/builtin-root.js";
 import {
   filesFromStored, hasPackageDir, isOverrideSource, originOfCurrent, overlayFiles, overrideSourceMeta,
-  readPackageDir, uiPagesFromFiles, versionsToPrune, type AppFile,
+  installedVersionNo, readPackageDir, uiPagesFromFiles, versionsToPrune, type AppFile,
 } from "../apps/app-versions.js";
 //  #4481 앱 v2-2 — 판 파일은 파일 목록(bundle) + 저장소(S3 · 자가호스팅 DB). 읽기·쓰기는 app-version-files 한 자리를 지난다.
 import { appBundlePolicy, insertVersion, publishedScreens, pullFiles, recordVersion, refreshOrigin, stageVersion, storeVersionBundle, versionBundle, versionFiles } from "../apps/app-version-files.js";
@@ -32,7 +32,7 @@ import { webRootOf } from "../apps/manifest.js";
 import { sessionDirAccess } from "./app-bundle-dir.js";
 import type { StagedSource } from "../apps/install-source.js";
 import {
-  APP_VISIBILITIES, appViewFor, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAdminViewer, isAppOwner, isEmptyDraftApp, isOthersPendingVersion,
+  APP_VISIBILITIES, appViewFor, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, enabledDenial, isAdminViewer, isAppOwner, isEmptyDraftApp, isOthersPendingVersion,
   listsAppFor, publishDenial, tablesGoneAtPublish, unpublishDenial, type AppView, type AppVisibility, type Viewer,
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
 import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
@@ -560,7 +560,11 @@ const appSetEnabled: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const id = appId(input.app_id);
     //  #4667 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다 — 남이 끄고 켜지 못한다(격리 리뷰 NB-4).
-    await requireVisibleApp(id, viewerOf(user));
+    //  보이는 앱이어도 구성원이 만든 앱은 책임자 · 관리자만 켜고 끈다(apps/visibility enabledDenial · 리뷰 N9).
+    const who = viewerOf(user);
+    const app = await requireVisibleApp(id, who);
+    const denied = enabledDenial(app, who);
+    if (denied) throw new HttpError(403, denied);
     await store.setAppEnabled(id, !!input.enabled, wctx(user, ctx));
     if (!input.enabled) await stopWorkersForApp(id, "app_disabled");
     //  #4684 — 끄면 붙은 세션에서 앱 폴더가 떨어지고, 다시 켜면 다시 붙는다(판정은 folderAppsFor — 기다리지 않는다).
@@ -969,11 +973,14 @@ const appVersions: Capability = {
     const pubNo = app.visibility === "all" ? (app.draft_by ? app.published_version_no : null) : null;
     //  남의 공개 전 판(마지막 공개 뒤 다른 사람이 저장한 판)은 그 사람 · 책임자 · 관리자에게만 선다(격리 리뷰 NB-6).
     const since = publishedAtMs(app);
-    const versions = (await store.listAppVersions(id)).filter((v) => !isOthersPendingVersion(app, v, who, since)).map((v) => ({
+    const all = await store.listAppVersions(id);
+    //  설치된 내용의 판은 하나로 고른다 — 같은 내용의 판이 여럿이어도 «지금 쓰는 버전»은 하나다(installedVersionNo).
+    const inst = installedVersionNo(app.content_hash, app.current_version_no, all);
+    const versions = all.filter((v) => !isOthersPendingVersion(app, v, who, since)).map((v) => ({
       ...v,
-      is_current: sees != null ? v.version_no === sees : isCurrentVersion(app, v),
+      is_current: sees != null ? v.version_no === sees : v.version_no === inst,
       //  초안이 없으면 설치된 상태가 곧 공개 판이다 — 그 판(내용 기준)을 공개 판으로 표시한다.
-      is_published: app.visibility === "all" && (pubNo != null ? v.version_no === pubNo : isCurrentVersion(app, v)),
+      is_published: app.visibility === "all" && (pubNo != null ? v.version_no === pubNo : v.version_no === inst),
     }));
     return {
       app_id: id, current_version_no: sees ?? app.current_version_no, builtin_version: app.builtin_version, overrides_builtin: isOverrideSource(app.source), versions,
@@ -1032,11 +1039,18 @@ const appSpec: Capability = {
     const visible = new Set((await store.listAppVersions(id)).filter((v) => !isOthersPendingVersion(installed, v, who, since)).map((v) => v.version_no));
     const budget = await run.specBudgetOk();
     let d = decideSpec(key, versionNo, rows, { now: Date.now(), available, visible, budget });
+    let retryAfter: number | null = null;
     //  「다시 만들기」 는 실패한 이 판에만 — 다 쓴 · 쓰는 중인 설명은 그대로 둔다(누를 때마다 돈이 나가지 않게).
     if (input.regenerate === true && d.failed && available && !budget) d = { ...d, failed: null, limit: true };   // 다시 쓸 몫이 없다고 말한다(격리 리뷰 N2)
     else if (input.regenerate === true && d.failed && available) {
-      void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
-      d = { ...d, failed: null, writing: true };
+      //  다시 쓰기 간격(1분) 안이면 쓰기를 맡지 않는다(writeAppSpec 이 'busy' 로 조용히 돌아와 화면은 같은 실패 문구로 돌아갔다) — 언제 다시 누를지 알린다(감사 4-11).
+      const lastStart = await specStore.lastSpecStart(id);
+      const wait = lastStart == null ? 0 : lastStart + run.SPEC_FORCE_GAP_MS - Date.now();
+      if (wait > 0) retryAfter = wait;
+      else {
+        void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
+        d = { ...d, failed: null, writing: true };
+      }
     } else if (d.kick) {
       void run.writeAppSpec(id, await loadTarget(), { force: false }).catch(() => { /* 행에 까닭이 남는다 */ });
     }
@@ -1044,9 +1058,10 @@ const appSpec: Capability = {
     const facts = await run.factsCache(id, key, async () => { const t = await loadTarget(); return specFacts(t.manifest, t.files); });
     const doc = d.show ? await specStore.getAppSpecDoc(id, d.show.content_hash) : null;
     return {
-      app_id: id, title: installed.title, version_no: versionNo, content_hash: contentHash, view: pub ? "published" : "installed",
+      //  제목도 보는 사람의 판 이름 — 공개 판을 보는 사람에게 공개 전 새 이름이 새지 않게(감사 6-4).
+      app_id: id, title: (pub && typeof (pub.manifest as { title?: unknown } | null)?.title === "string" && (pub.manifest as { title: string }).title) || installed.title, version_no: versionNo, content_hash: contentHash, view: pub ? "published" : "installed",
       facts,
-      spec_state: state, spec_error: state === "failed" ? d.failed : null,
+      spec_state: state, spec_error: state === "failed" ? d.failed : null, retry_after_ms: retryAfter,
       spec: d.show && doc ? { version_no: d.show.version_no, made_at: d.show.made_at ? new Date(d.show.made_at).toISOString() : null, model: d.show.model, doc } : null,
     };
   },

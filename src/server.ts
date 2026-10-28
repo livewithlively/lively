@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerDbTools } from "./tools/db.js";
 import { registerMcpCapabilities } from "./capabilities/index.js";
 import { resolveUser } from "./context.js";
-import { logToolCall, toolResultFailure } from "./org/policies/tool-log.js";
+import { logToolCall, toolResultFailure, TOOL_APP_META_KEY } from "./org/policies/tool-log.js";
 
 // memory_* 폐기(2026-06-24) — knowledge_*(v6)로 통일(ctx_* 가 간 길). org_memory 웹 표면('WIKI 인덱스')은 delivery REST(/api/ui/org/memory) 유지.
 // code_*: 보류 (개발자는 레포 내 네이티브 툴; 필요시 공식 GitHub MCP 래핑)
@@ -15,17 +15,18 @@ type ToolHandler = (args: Record<string, unknown>, extra: unknown) => Promise<un
 //    프록시 계열은 상류 실패를 예외가 아니라 isError:true **정상 반환**으로 돌려주므로, throw 여부만 보면
 //    커넥터가 전부 죽어 있어도 오류 수가 0 으로 적재된다(실측: 구글 3종 403 이 전부 ok=true).
 //  · 신원: harness=이 요청의 접속 신원(buildServer 인자, agentFromHeaders 파생), actor=토큰 principal(resolveUser).
+//  · 앱: 앱 토큰이면 그 앱, 아니면 도구 정의가 단 앱 표지(#5050 앱이 선언한 도구 — _meta["lively/app"]). 관측 전용(org_app_activity).
 //  · 비침습: 적재는 fire-and-forget(logToolCall 내부에서 await 안 함) — 응답 지연 0, 적재 실패는 무시(fail-open).
 //   계측이 핸들러 결과/예외를 바꾸지 않는다(성공값 그대로 반환, 예외 그대로 재던짐).
-function instrument(name: string, handler: ToolHandler, harness?: string | null): ToolHandler {
+function instrument(name: string, handler: ToolHandler, harness?: string | null, toolApp?: string | null): ToolHandler {
   return async (args, extra) => {
     const started = Date.now();
     let actor: string | null = null;
-    let app: string | null = null;
+    let app: string | null = toolApp ?? null;
     try {
       const u = resolveUser(extra);
       actor = u?.userId ?? null;
-      app = u?.appId ?? null;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 이면 그 앱 id 로 귀속(관측 전용)
+      app = u?.appId ?? app;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 이면 그 앱 id 로 귀속(관측 전용)
     } catch {
       // 인증 컨텍스트 해석 실패 → actor 미상으로 기록(/mcp 는 bearer 필수라 보통 도달 안 함)
     }
@@ -74,7 +75,8 @@ export function buildServer(
   const orig = server.registerTool.bind(server);
   server.registerTool = ((name: string, config: unknown, handler: ToolHandler) => {
     if (overrides?.get(name) === false) return undefined;
-    const cb = typeof handler === "function" ? instrument(name, handler, harness) : handler;
+    const tag = (config as { _meta?: Record<string, unknown> } | undefined)?._meta?.[TOOL_APP_META_KEY];
+    const cb = typeof handler === "function" ? instrument(name, handler, harness, typeof tag === "string" ? tag : null) : handler;
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);
   }) as typeof server.registerTool;
   if (!incognito) registerDbTools(server, harness); // 제품 DB (읽기전용 — SELECT-only). 읽기전용 세션엔 유지, 인코그니토엔 스킵(읽기도 차단 = 클린룸).

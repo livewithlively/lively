@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  addressVariantFor, addressViewFor, appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
+  addressVariantFor, addressViewFor, appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, enabledDenial, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
   publishDenial, tablesGoneAtPublish, tablesUsableNow, unpublishDenial, type AppVisState,
 } from "./visibility.js";
 import { APP_ID_RE } from "./manifest.js";
@@ -230,4 +230,19 @@ test("V1~V5 Viewer.address — 주소의 판이 사람의 판을 대신한다(ad
   const p = app({ visibility: "me" });
   assert.equal(appViewFor(p, { userId: "third", scopes: [], address: "pub" }), "none", "V5 못 보는 앱은 주소가 있어도 none");
   assert.equal(appViewFor(p, { ...maker, address: "draft" }), "installed", "나만 보는 앱 — 판이 하나");
+});
+
+// ── 켜고 끄기(리뷰 N9 · 감사 1-7) — 보이기만 하면 누구나 남의 공개 앱을 워크스페이스 전체에서 끌 수 있었다 ──
+test("EN1 구성원이 만든 앱 — 책임자 · 관리자만 켜고 끈다 · 다른 구성원은 까닭", () => {
+  assert.equal(enabledDenial(app(), maker), null);
+  assert.equal(enabledDenial(app(), admin), null);
+  assert.match(String(enabledDenial(app({ title: "회의록" }), other)), /회의록.*책임자와 관리자/);
+});
+test("EN2 책임자가 없는 앱(떠난 사람) — 관리자만", () => {
+  assert.equal(enabledDenial(app({ owner_member: null }), admin), null);
+  assert.notEqual(enabledDenial(app({ owner_member: null }), other), null);
+});
+test("EN3 기본 앱(빌트인)은 워크스페이스 운영 — 구성원 누구나", () => {
+  assert.equal(enabledDenial({ ...app({ owner_member: null }), source: { kind: "builtin" } }, other), null);
+  assert.notEqual(enabledDenial({ ...app(), source: { kind: "upload" } }, other), null);
 });
