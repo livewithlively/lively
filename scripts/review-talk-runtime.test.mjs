@@ -7,11 +7,12 @@
 // 엣지 표(스크래치패드 spec-review-talk.md):
 //  E1 칸 포커스 → 대화 칸 열림 · 안에 넘긴 세션 화면   E2 열기 전엔 세션 화면을 옮기지 않는다
 //  E3 첫 말 Enter → 보낸 글 1건(대화 방식 + 그 글) · 칸 비움   E4 두 번째 말 = 쓴 글 그대로
-//  E5 조합 중 Enter · 빈 글 → 안 보냄   E6 보내기 실패 → 글 그대로 · 다음 말이 다시 «첫 말»
+//  E5 조합 중 Enter · 빈 글 → 안 보냄   E6 보내기 실패 → 글 그대로
 //  E7 「접기」 · Esc → 닫힘 · 세션 화면은 칸 안에 그대로   E8 도구 고름 → 닫힘   E9 코멘트 칸 ↔ 대화 칸 서로 닫음
 //  E10 고치는 중 → 칸 잠김   E11 막대 칸에 쓴 글은 앱 전체 코멘트(general) · 코멘트 수를 안 바꾼다
 //  E12 막대가 걷히면 세션 화면이 제자리로 돌아간다   E13 막대가 위면 대화 칸이 막대 아래로   W 페이지 예외 없음
 //  B talkBrief — 첫 말에만 방식(묻기 · app_pull/app_save · 공개 안 함) · 그 뒤는 글 그대로
+//  ⚠ 범위 밖: «실패한 뒤 다음 말이 다시 첫 말» 플래그(app-studio onTalk) · 세션 위젯 꼴의 고정 자리(placeTalk) · 앱빌더 쪽 걷기 경로(backToBuilder · teardown 은 모두 closeReview 를 거친다).
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 E1 · E3~E9 · E12 · E13 · B 가 빨갛다).
 import { execFileSync } from "node:child_process";

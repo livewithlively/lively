@@ -87,7 +87,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const gen = el('input', { class: 'v2-review-gen', type: 'text', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', 'aria-label': 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요' }) as HTMLInputElement;
   gen.addEventListener('focus', () => openTalk());
   gen.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Escape') { e.preventDefault(); closeTalk(); gen.blur(); return; }
+    if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); closeTalk(); gen.blur(); return; }
     if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); void say(); }
   });
   const note = el('span', { class: 'v2-review-note', hidden: true });
@@ -288,7 +288,8 @@ export function openReview(host: ReviewHost): ReviewApi {
   const openTalk = (): void => {
     if (S.dead || talk.classList.contains('on')) return;
     closeTray(); closePop();
-    if (!chatHome && host.chat.parentNode) chatHome = { parent: host.chat.parentNode, next: host.chat.nextSibling };
+    //  제자리는 열 때마다 다시 적는다 — 그 사이 앱빌더가 「AI 세션」 칸을 떼어 내거나 붙여 세션 화면을 옮겼을 수 있다.
+    if (host.chat.parentNode && host.chat.parentNode !== talkBody) chatHome = { parent: host.chat.parentNode, next: host.chat.nextSibling };
     if (host.chat.parentNode !== talkBody) talkBody.append(host.chat);
     if (!talk.isConnected) { if (host.dock) { talk.classList.add('v2-review-talk--fixed'); document.body.append(talk); } else bar.append(talk); }
     placeTalk();
