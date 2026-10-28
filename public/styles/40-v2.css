@@ -1909,6 +1909,34 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-chk-places { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .v2-studio-chk-places button { font: inherit; font-size: 12.5px; font-weight: 700; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: var(--bg); color: var(--ink-sub); cursor: pointer; }
 .v2-studio-chk-places button.on { border-color: var(--purple, #7B61E0); color: var(--purple-text, #5B3FD0); background: rgba(123, 97, 224, .08); }
+/* ④ 아이콘 — 사이드바 줄 · 세션 위젯 탭 · 앱 찾기 타일 꼴로 미리 보고, 펼치면 그림 · 색 · AI 에게 부탁하기. 좁은 칸(360px)에서도 줄을 바꿔 선다 */
+.v2-studio-ico { display: grid; gap: 8px; margin-top: 2px; min-width: 0; }
+.v2-studio-ico svg.v2-ic, .v2-studio-ico-g { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: var(--ic-stroke, 1.7); stroke-linecap: round; stroke-linejoin: round; }
+.v2-studio-ico-spots { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: flex-end; }
+.v2-studio-ico-spot { margin: 0; display: grid; gap: 4px; justify-items: start; min-width: 0; }
+.v2-studio-ico-spot figcaption { font-size: 11.5px; color: var(--muted); }
+.v2-studio-ico-side, .v2-studio-ico-tab { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 180px; color: var(--ink); }
+.v2-studio-ico-side span, .v2-studio-ico-tab span, .v2-studio-ico-pad span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-ico-side { height: 34px; padding: 0 12px 0 10px; border-radius: 8px; font-size: 14px; font-weight: 700; background: var(--bg); border: 1px solid var(--line); }
+.v2-studio-ico-tab { height: 29px; padding: 0 9px 0 7px; gap: 5px; border-radius: 9px; font-size: 12.5px; font-weight: 700;
+  background: color-mix(in srgb, var(--blue) 12%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 26%, transparent); }
+.v2-studio-ico-pad { display: grid; justify-items: center; gap: 3px; width: 64px; font-size: 11.5px; color: var(--ink); }
+.v2-studio-ico-pad span { max-width: 64px; }
+.v2-studio-ico-tile { width: 40px; height: 40px; }
+.v2-studio-ico-act { display: flex; gap: 6px; flex-wrap: wrap; }
+.v2-studio-ico-ed { display: grid; gap: 6px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.v2-studio-ico-ed > b { font-size: 12.5px; margin-top: 4px; }
+.v2-studio-ico-ed > small { font-size: 12px; }
+.v2-studio-ico-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 6px; }
+.v2-studio-ico-pick { display: grid; place-items: center; height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-tint); cursor: pointer; padding: 0; }
+.v2-studio-ico-pick .v2-studio-ico-g { width: 20px; height: 20px; }
+.v2-studio-ico-pick:hover { border-color: color-mix(in srgb, var(--purple, #7B61E0) 50%, var(--line)); }
+.v2-studio-ico-pick.on, .v2-studio-ico-sw.on { border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 2px color-mix(in srgb, var(--purple, #7B61E0) 30%, transparent); }
+.v2-studio-ico-colors { display: flex; flex-wrap: wrap; gap: 8px; }
+.v2-studio-ico-sw { width: 24px; height: 24px; border-radius: 999px; border: 2px solid var(--bg); box-shadow: 0 0 0 1px var(--line); padding: 0; cursor: pointer; }
+.v2-studio-ico-pick:focus-visible, .v2-studio-ico-sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.v2-studio-ico-ask { display: flex; gap: 6px; flex-wrap: wrap; }
+.v2-studio-ico-ask .v2-studio-name-in { flex: 1 1 160px; min-width: 0; }
 .v2-studio-name-in { height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13.5px; background: var(--bg); color: var(--ink); min-width: 180px; }
 /* ⑥ 넣기 · ⑦ 알리기 — 가운데 한 칸으로 */
 .v2-studio-body--put { grid-template-columns: minmax(0, 1fr) clamp(300px, 28%, 380px); }
