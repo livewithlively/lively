@@ -7,9 +7,12 @@
 //   ② 작업 폴더 — 행의 작업 폴더는 컨테이너 경로(/work/apps/<앱> · /work/shared/project/<n>)다. 그 사람이 보는 박스 위 자리로 옮긴다
 //      (hostJobDir → profiles.resolveRootPath — 사람 세션 · 탐색기와 같은 자). 판이 받는 작업 폴더(paneView)도 같은 자로 다시 구한다.
 //   ③ 홈 준비 — 격리 판만 prepareMemberHome(사람 세션의 비컨테이너 격리 분기와 같은 자리 · 키트 · safe.directory · git 자격).
-//   ④ 판 — `tmux new-session -d -s job-…` 에 판 머리(PANE_PRELUDE) + 부트. 격리면 sudo box-spawn 으로 내려가고(메모리 상한이 정책에 있고 cgroup
-//      래퍼가 있으면 box-cgspawn — 사람 세션과 같은 정책 · 같은 셈), 비격리면 tmux -c 와 그 사람의 Claude 설정 폴더(CLAUDE_CONFIG_DIR).
-//      사람 세션 목록 · 복원은 `box-` 만 보므로 이 판은 안 뜬다(plan.jobSessionId 머리말).
+//   ④ 판 — `tmux new-session -d -s job-…` 에 판 머리(PANE_PRELUDE) + 부트. 격리면 sudo box-spawn 으로 내려가고, 비격리면 tmux -c 와 그 사람의
+//      Claude 설정 폴더(CLAUDE_CONFIG_DIR). 사람 세션 목록 · 복원은 `box-` 만 보므로 이 판은 안 뜬다(plan.jobSessionId 머리말).
+//   ⑤ 메모리 상한 — 작업 정책의 memory_max_mb(기본 3072)를 격리 판의 cgroup MemoryMax 로 건다(box-cgspawn — 사람 세션과 래퍼는 같고 값의
+//      출처가 다르다: 사람 세션은 세션 메모리 정책). 상한을 둔 정책인데 걸 수 없으면 띄우지 않는다(CONTRIBUTING «정책은 있는데 집행 수단이
+//      없으면 오류») — 래퍼가 없거나 sudo 가 허용하지 않으면 다시 해도 안 될 실패, 묻다 끊겼으면 일시 실패. 비격리 박스는 걸 자리가 원래 없어
+//      (사람 세션도 같다) 그대로 띄우고 관리자 보기(agent_job_limits surface)에 보인다. 작업 폴더를 만들기 전에 본다.
 //
 //  ── 부트 비밀은 명령줄에 싣지 않는다(#4422) ──
 //   이 박스의 프로세스 목록(/proc/<pid>/cmdline)은 다른 구성원도 본다 — tmux 클라이언트의 `-e LVLY_JOB_BOOT=…` 는 그 순간 남에게 보이고,
@@ -20,12 +23,20 @@
 //  걷기는 같은 tmux 에 kill-session 한 번이다. 이미 없다는 확답에 «tmux 서버 자체가 없다» 를 넣는다 — 작업 판만 있던 서버는 판이 빠질 때
 //   함께 끝난다(사람 세션의 «서버 없음 = 판정 불가» 규약은 서버가 잠깐 안 보이는 것일 수 있어서지만, 서버 없이 사는 판은 없다).
 //  ⚠ 홈 없는 작업(#4891 — 앱 서버가 보낸 API 키 에이전트 작업)은 이 길에서 띄우지 않는다 — 전용 계정의 빈 홈이 이 박스에 없다.
+//
+//  ── 1단계(박스 위)의 한계 — 도커 실행면(2단계)이 닫는다 ──
+//   · 판은 그 구성원 OS 계정으로 돈다 — 그 계정이 읽을 수 있는 공유 자리(다른 프로젝트 · 다른 앱 폴더)가 다 보인다(live.ts 머리말).
+//   · 같은 구성원의 작업 · 사람 세션은 같은 uid 다 — 서로의 프로세스 env(/proc/<pid>/environ)와 임시 파일을 읽는다. 한 작업의 AI 가 같은 사람의
+//     다른 작업이 받은 앱 토큰 · 프록시 토큰을 읽을 수 있다(홈의 키트 토큰을 읽을 수 있는 것과 같은 한계).
+//   · 앱 폴더는 처음 만든 구성원 소유(2755 — sudo 기본 umask 022)라 다른 구성원의 작업은 읽기만 된다(사람 세션도 같다 — apps/app-folder-ops 머리말).
+//   · 앱 작업이 프로젝트 폴더에서 돌면(project_id) 그 앱 폴더가 작업 폴더 안(.lively/apps/<앱>)에 붙지 않는다 — 박스 위 경로로 직접 연다.
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
 import { APP_ID_RE, JOB_SESSION_ID_RE, jobSeatMember } from "./plan.js";
 import { BOOT_SOURCE, RUNNER_GATEWAY } from "./runner.js";
 import { JobLaunchError, redactSecret, stepFailure } from "./launch.js";
 import type { AgentJobRow } from "./store.js";
+import type { PaneView } from "./surface.js";
 import type { CgroupLimit } from "../terminal/terminal-isolation.js";
 
 /** 박스 위 자리 — 사람 세션의 루트 키(catalog.roots)와 그 안 경로. */
@@ -79,10 +90,16 @@ export function hostPaneArgv(o: {
   ];
 }
 
-/** 박스 위 판이 부를 MCP 주소 — 판의 콜백과 같은 루프백 포트(topology.agentJobsPort). */
-export function hostMcpUrl(port: number): string {
-  return `http://${RUNNER_GATEWAY.host}:${port}/mcp`;
+/** 박스 위 판이 보는 게이트웨이 주소 — 판의 콜백과 같은 루프백 포트(topology.agentJobsPort). MCP · LLM 프록시가 이 아래다. */
+export function hostGateway(port: number): string {
+  return `http://${RUNNER_GATEWAY.host}:${port}`;
 }
+
+/** 작업 메모리 상한을 걸 수 있나 — 된다, 또는 못 건다(그 까닭 · 다시 해 볼 만한가). */
+export type CgroupCheck = { ok: true } | { ok: false; transient: boolean; why: string };
+
+/** 못 걸 때 사람이 할 일 — 접수 실패 · 관리자 보기에 같은 글로 싣는다. */
+const CAP_FIX = "박스에서 sudo GATEWAY_USER=<게이트웨이 계정> bash deploy/linux/install-isolation.sh 를 다시 돌리거나, 상한 없이 돌리려면 관리자가 agent_job_limits_set 으로 memory_max_mb 를 0 으로 바꿉니다";
 
 /** 박스 위 실행면이 쓰는 바깥 일 — 시험이 바꿔 끼운다(기본은 liveHostDeps). */
 export interface HostLaunchDeps {
@@ -100,8 +117,8 @@ export interface HostLaunchDeps {
   profileDir(user: LivelyUser): Promise<string | null>;
   /** 작업 하나의 메모리 상한(작업 정책 memory_max_mb) — 0 이면 undefined(상한 없음). */
   memoryLimit(): Promise<CgroupLimit | undefined>;
-  /** box-cgspawn 을 지금 쓸 수 있나(격리 · 리눅스 · 래퍼 설치 · sudo 허용) — 상한이 있어도 못 쓰면 상한 없이 뜬다(경고를 남긴다). */
-  cgroupReady(): Promise<boolean>;
+  /** box-cgspawn 을 지금 쓸 수 있나(래퍼 설치 · sudo 허용) — 격리 판에 상한이 있을 때만 묻는다. 못 쓰면 그 작업은 띄우지 않는다(머리말 ⑤). */
+  cgroupCheck(): Promise<CgroupCheck>;
   /** 판 계정이 새로 만든 0700 임시 폴더의 0600 비밀 파일 — 경로를 돌려준다. */
   writeSecret(osUser: string | null, secret: string): Promise<string>;
   removeSecret(osUser: string | null, file: string): Promise<void>;
@@ -114,9 +131,12 @@ export interface HostLaunchDeps {
   locale(): string;
 }
 
+/** 비격리 박스에서 게이트웨이 계정으로 띄운다는 경고 — 프로세스마다 한 번(작업마다 찍으면 묻힌다 · 관리자 보기에는 늘 보인다). */
+let warnedGatewayAccount = false;
+
 /**
- * 박스 위 판을 띄운다 — OS 계정 → 작업 폴더 → 홈 준비 → 비밀 파일 → 판. 실패는 JobLaunchError(단계 실패는 일시 — launch.stepFailure).
- *  다시 해도 안 될 것(세션 id 없음 · 홈 없는 작업 · 실행 계정 없음 · 작업 폴더 꼴 밖)은 부수효과 앞에서 끝낸다.
+ * 박스 위 판을 띄운다 — OS 계정 → 메모리 상한 → 작업 폴더 → 홈 준비 → 비밀 파일 → 판. 실패는 JobLaunchError(단계 실패는 일시 — launch.stepFailure).
+ *  다시 해도 안 될 것(세션 id 없음 · 홈 없는 작업 · 실행 계정 없음 · 작업 폴더 꼴 밖 · 상한을 걸 수 없음)은 작업 폴더 · 비밀 파일 앞에서 끝낸다.
  */
 export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?: HostLaunchDeps): Promise<{ container: string }> {
   const sid = job.session_id;
@@ -131,6 +151,21 @@ export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?:
   let osUser: string | null;
   try { osUser = await d.ensureOsUser(user); } catch (e) { throw stepFailure("os-user", e); }
   if (!osUser && d.isolationReady()) throw stepFailure("os-user", `실행 계정 ${seat} 의 OS 계정을 만들지 못했습니다(게이트웨이 계정으로는 띄우지 않는다)`);
+  //  메모리 상한(머리말 ⑤) — 격리 판만 건다. 걸 수 없으면 띄우지 않는다 · 비격리 박스는 걸 자리가 없어 그대로(관리자 보기에 보인다).
+  const cap = await d.memoryLimit().catch((e) => { throw stepFailure("memory", e); });
+  let cg: CgroupLimit | undefined;
+  if (cap && osUser) {
+    const c = await d.cgroupCheck().catch((e): CgroupCheck => ({ ok: false, transient: true, why: String((e as Error)?.message ?? e) }));
+    if (!c.ok) {
+      if (c.transient) throw stepFailure("memory", c.why);
+      throw new JobLaunchError(`작업 메모리 상한(${cap.maxMb}MB)을 걸 수 없어 띄우지 않습니다 — ${c.why}. ${CAP_FIX}`);
+    }
+    cg = cap;
+  }
+  if (!osUser && !warnedGatewayAccount) {
+    warnedGatewayAccount = true;
+    logger.warn({ job: job.id, memoryMaxMb: cap?.maxMb ?? 0 }, "[agent-job] 구성원 격리가 꺼진 박스다 — 작업이 게이트웨이 계정으로 돌고(앱이 시킨 지시가 게이트웨이 권한으로) 메모리 상한을 걸 자리가 없다");
+  }
   let hostCwd: string;
   try {
     hostCwd = await d.resolveDir(user, dir, osUser);
@@ -138,15 +173,6 @@ export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?:
   } catch (e) { throw stepFailure("workdir", e); }
   if (osUser) { try { await d.prepareHome(user, osUser); } catch (e) { throw stepFailure("home", e); } }
   const profileDir = osUser ? null : await d.profileDir(user).catch((e) => { throw stepFailure("home", e); });
-  //  메모리 상한 — 격리 판만 cgroup 으로 건다(비격리 박스는 걸 자리가 없다). 래퍼를 못 쓰면 상한 없이 띄우고 크게 남긴다(띄우기를 막지 않는다 —
-  //   관리자는 agent_job_limits 의 surface.memory_cap 에서 본다).
-  const cap = osUser ? await d.memoryLimit().catch(() => undefined) : undefined;
-  const cg = cap && (await d.cgroupReady().catch(() => false)) ? cap : undefined;
-  if (osUser && !cg) {
-    logger.warn({ job: job.id, session: sid, cap: cap?.maxMb ?? 0 }, cap
-      ? "[agent-job] 작업 메모리 상한을 걸 cgroup 래퍼(box-cgspawn)를 쓸 수 없다 — 상한 없이 띄운다"
-      : "[agent-job] 작업 메모리 상한이 0(없음)이다 — 상한 없이 띄운다(agent_job_limits_set memory_max_mb)");
-  }
   let secretFile: string;
   try { secretFile = await d.writeSecret(osUser, bootSecret); } catch (e) { throw stepFailure("pane", redactSecret(String((e as Error)?.message ?? e), bootSecret)); }
   const argv = hostPaneArgv({
@@ -163,14 +189,20 @@ export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?:
   return { container: sid };
 }
 
-/** 박스 위 판이 보는 자리 — 작업 폴더(박스 위 경로)와 MCP 주소. 띄울 때와 같은 자로 다시 구한다(OS 계정은 그때 만들어 두었다). */
-export async function hostPaneView(job: Pick<AgentJobRow, "cwd" | "account_kind" | "account_member" | "requester">, port: number): Promise<{ cwd: string; mcpUrl: string }> {
+/**
+ * 박스 위 판이 보는 자리 — 작업 폴더(박스 위 경로) · 게이트웨이 주소 · 실을 워크스페이스. 띄울 때와 같은 함수 · 같은 인자로 다시 구한다
+ *  (실행 계정 → OS 계정 → resolveDir · 포트 · 워크스페이스 모두 deps — 둘이 갈리면 판이 만든 적 없는 폴더에서 돈다). OS 계정은 띄울 때 만들어
+ *  두어 여기선 있는 것을 읽는다(ensureMemberOsUser 의 빠른 길). 격리 박스인데 계정이 없으면 띄우기와 같이 거절한다.
+ */
+export async function hostPaneView(job: Pick<AgentJobRow, "cwd" | "account_kind" | "account_member" | "requester">, deps?: HostLaunchDeps): Promise<PaneView> {
   const seat = jobSeatMember(job);
   const dir = hostJobDir(job.cwd);
   if (!seat || !dir) throw new Error("작업 폴더를 박스 위 자리로 옮길 수 없습니다");
-  const { resolveRootPath } = await import("../terminal/profiles.js");
-  const { abs } = await resolveRootPath({ userId: seat } as LivelyUser, dir.root, dir.sub);
-  return { cwd: abs, mcpUrl: hostMcpUrl(port) };
+  const d = deps ?? (await liveHostDeps());
+  const user = await d.accountUser(seat);
+  const osUser = await d.ensureOsUser(user);
+  if (!osUser && d.isolationReady()) throw new Error(`실행 계정 ${seat} 의 OS 계정이 없습니다`);
+  return { cwd: await d.resolveDir(user, dir, osUser), gateway: hostGateway(d.port()), workspace: d.slug() };
 }
 
 /**
@@ -198,37 +230,67 @@ async function jobPolicy(): Promise<{ memory_max_mb: number }> {
   return pol.effectiveAgentJobPolicy(async () => pol.resolveAgentJobPolicy(await store.agentJobPolicyRow()));
 }
 
-/** 래퍼 판정을 이만큼 기억한다 — 판마다 sudo 를 두드리지 않게. 설치를 고치면 10분 안에 따라온다. */
+/** 래퍼 판정을 이만큼 기억한다 — 판마다 sudo 를 두드리지 않게. 설치를 고치면 10분 안에 따라온다. 확답(된다 · 안 된다)만 기억한다. */
 const CGSPAWN_PROBE_MS = 10 * 60_000;
-let cgProbe: { at: number; ok: boolean } | null = null;
+let cgProbe: { at: number; result: CgroupCheck } | null = null;
+
+/** `sudo -n -l <명령>` 의 끝 — 0 = 허용(NOPASSWD) · 1 = 허용 없음 · 비밀번호가 필요 · sudo 없음, null = 모른다(시간 초과 · 못 띄움). */
+export type SudoListProbe = (cmd: string) => Promise<{ code: number | null; error?: string }>;
+
+const sudoListProbe: SudoListProbe = async (cmd) => {
+  const { execFile } = await import("node:child_process");
+  return new Promise((resolve) => {
+    execFile("sudo", ["-n", "-l", cmd], { timeout: 5000 }, (err) => {
+      if (!err) return resolve({ code: 0 });
+      const e = err as NodeJS.ErrnoException & { killed?: boolean };
+      if (e.killed) return resolve({ code: null, error: "sudo 가 5초 안에 답하지 않았습니다" });
+      if (typeof e.code === "number") return resolve({ code: e.code });
+      if (e.code === "ENOENT") return resolve({ code: 1 });
+      resolve({ code: null, error: String(e.message ?? e) });
+    });
+  });
+};
 
 /**
- * box-cgspawn 을 지금 쓸 수 있나 — 격리 켜짐 · 리눅스 · 래퍼가 있고, 게이트웨이 계정이 그것을 비밀번호 없이 sudo 로 부를 수 있다.
- *  래퍼 파일만 보고 고르면(terminal-isolation.cgroupInfraReady) sudoers 줄이 빠진 박스에서 판이 «비밀번호가 필요하다» 로 곧바로 죽는다 —
- *  그 작업은 시작 상한(180초)에 이유 없이 끝난다. `sudo -n -l <래퍼>` 는 허용된 명령이면 0 으로 끝나고(NOPASSWD 줄이면 비밀번호를 묻지 않는다)
- *  아니면 1 이다 — 무엇도 실행하지 않는다.
+ * box-cgspawn 을 지금 쓸 수 있나 — 래퍼가 있고(terminal-isolation.cgroupInfraReady — 격리 켜짐 · 리눅스 · 설치), 게이트웨이 계정이 그것을
+ *  비밀번호 없이 sudo 로 부를 수 있다. 래퍼 파일만 보고 고르면 sudoers 줄이 빠진 박스에서 판이 «비밀번호가 필요하다» 로 곧바로 죽는다 — 그 작업은
+ *  시작 상한(180초)에 이유 없이 끝난다. `sudo -n -l <래퍼>` 는 무엇도 실행하지 않는다. 끝이 0 · 1 이 아니면(시간 초과 등) 모른다 — 기억하지
+ *  않고 일시 실패로 돌려 다음 띄우기에 다시 묻는다(격리 리뷰 — 한 번 끊긴 것을 10분 동안 «못 쓴다» 로 두지 않게). o 는 시험이 바꿔 끼운다.
  */
-export async function cgspawnPermitted(): Promise<boolean> {
+export async function cgspawnCheck(o: { infraReady?: () => boolean; wrapper?: string; probe?: SudoListProbe; now?: () => number } = {}): Promise<CgroupCheck> {
   const iso = await import("../terminal/terminal-isolation.js");
-  if (!iso.cgroupInfraReady()) return false;
-  if (cgProbe && Date.now() - cgProbe.at < CGSPAWN_PROBE_MS) return cgProbe.ok;
-  const { execFile } = await import("node:child_process");
-  const ok = await new Promise<boolean>((resolve) => {
-    execFile("sudo", ["-n", "-l", iso.BOX_CGSPAWN], { timeout: 5000 }, (err) => resolve(!err));
-  });
-  cgProbe = { at: Date.now(), ok };
-  return ok;
+  const wrapper = o.wrapper ?? iso.BOX_CGSPAWN;
+  if (!(o.infraReady ?? iso.cgroupInfraReady)()) return { ok: false, transient: false, why: `cgroup 래퍼(${wrapper})가 이 박스에 없습니다` };
+  const now = (o.now ?? Date.now)();
+  if (cgProbe && now - cgProbe.at < CGSPAWN_PROBE_MS) return cgProbe.result;
+  const r = await (o.probe ?? sudoListProbe)(wrapper);
+  if (r.code !== 0 && r.code !== 1) return { ok: false, transient: true, why: r.error ?? `sudo 가 알 수 없는 끝(${r.code})을 냈습니다` };
+  const result: CgroupCheck = r.code === 0 ? { ok: true }
+    : { ok: false, transient: false, why: `게이트웨이 계정이 cgroup 래퍼(${wrapper})를 비밀번호 없이 sudo 로 쓸 수 없습니다` };
+  cgProbe = { at: now, result };
+  return result;
 }
 
-/** 관리자에게 보일 박스 위 메모리 상한 상태 — 걸리나와 그 이유(agent_job_limits surface.memory_cap). */
+/** 시험 전용 — 기억한 래퍼 판정 · 게이트웨이 계정 경고를 잊는다. */
+export function resetHostProbesForTest(): void { cgProbe = null; warnedGatewayAccount = false; }
+
+/** 박스 위 판이 어느 계정으로 도나 — 격리 박스면 구성원 OS 계정(못 만들면 띄우지 않는다), 아니면 게이트웨이 계정(사람 세션과 같은 판정). */
+export async function hostRunsAs(): Promise<"member" | "gateway"> {
+  const iso = await import("../terminal/terminal-isolation.js");
+  return iso.isolationInfraReady() ? "member" : "gateway";
+}
+
+/** 관리자에게 보일 박스 위 메모리 상한 상태 — 걸리나와 그 이유(agent_job_limits surface.memory_cap). 띄우기와 같은 판정(머리말 ⑤). */
 export async function hostMemoryCapStatus(memoryMaxMb: number): Promise<{ enforced: boolean; note: string }> {
   if (!jobMemoryLimit(memoryMaxMb)) return { enforced: false, note: "memory_max_mb 가 0 이라 작업 메모리 상한 없이 돕니다" };
-  const iso = await import("../terminal/terminal-isolation.js");
-  if (!iso.isolationInfraReady()) return { enforced: false, note: "이 박스는 구성원 격리(OS 계정)가 꺼져 있어 작업이 게이트웨이 계정으로 돌고 상한을 걸 자리가 없습니다" };
-  if (!(await cgspawnPermitted())) {
-    return { enforced: false, note: "cgroup 래퍼(/opt/lively/libexec/box-cgspawn)를 게이트웨이 계정이 sudo 로 쓸 수 없어 상한 없이 돕니다 — 박스에서 sudo GATEWAY_USER=<게이트웨이 계정> bash deploy/linux/install-isolation.sh 를 다시 돌리면 걸립니다" };
+  if ((await hostRunsAs()) === "gateway") {
+    return { enforced: false, note: "이 박스는 구성원 격리(OS 계정)가 꺼져 있어 작업이 게이트웨이 계정으로 돌고 상한을 걸 자리가 없습니다(사람 세션도 같다)" };
   }
-  return { enforced: true, note: "구성원 OS 계정 판마다 cgroup MemoryMax 로 겁니다(넘으면 그 판 안에서 하네스가 먼저 끊깁니다)" };
+  const c = await cgspawnCheck();
+  if (c.ok) return { enforced: true, note: "구성원 OS 계정 판마다 cgroup MemoryMax 로 겁니다(넘으면 그 판 안에서 하네스가 먼저 끊깁니다)" };
+  return { enforced: false, note: c.transient
+    ? `상한을 걸 수 있는지 지금 확인하지 못했습니다(${c.why}) — 그동안 작업은 일시 실패로 다시 시도합니다`
+    : `${c.why} — 이대로는 작업을 띄우지 않습니다. ${CAP_FIX}` };
 }
 
 /** 박스 위 실행면의 살아 있는 의존 — 사람 세션(createSession)과 같은 자리들. */
@@ -258,7 +320,7 @@ export async function liveHostDeps(): Promise<HostLaunchDeps> {
       return dir;
     },
     memoryLimit: async () => jobMemoryLimit((await jobPolicy()).memory_max_mb),
-    cgroupReady: () => cgspawnPermitted(),
+    cgroupCheck: () => cgspawnCheck(),
     writeSecret: async (osUser, secret) => {
       if (osUser) return mfs.memberWriteTempSecret(osUser, secret);
       //  비격리 — 판이 곧 게이트웨이 계정이다. 같은 꼴(새 0700 폴더 · 0600 파일 · 덮어쓰지 않음)로 둔다.

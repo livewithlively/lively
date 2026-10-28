@@ -35,7 +35,7 @@ const agentJobRun: Capability = {
   description:
     "에이전트 작업을 별도 작업 컨테이너에서 돌린다(사람 세션이 없어도 돈다) — **보낸 사람 본인으로**(본인 Claude 구독·홈) 돈다. 작업 폴더는 project_id 또는 app_id(앱 화면이면 그 앱 폴더). " +
     "곧바로 {id,status} 를 돌려준다 — 결과는 agent_job_get. 동시 상한을 넘으면 기다리고 대기열이 차면 429. " +
-    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드 전용(501).",
+    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드와, 관리자가 켠 셀프호스트 박스(LIVELY_AGENT_JOBS=host)에서 돈다 — 그 밖은 501.",
   scope: "context",
   input: agentJobRunInput,
   expose: {
@@ -118,8 +118,8 @@ const agentJobLimits: Capability = {
   title: "에이전트 작업 상한 보기",
   description: "작업 컨테이너의 워크스페이스 상한 — max_running(동시) · max_running_per_member(실행 계정당 동시) · max_queued(대기열) · queue_wait_min(대기 상한) · " +
     "default_timeout_min · max_timeout_min(실행 시간) · silent_sec(판 무응답) · start_timeout_sec(시작 상한) · keep_days(끝난 작업 기록 보존 일수 — 지나면 행째 지움 · 0 = 무기한 · 앱 AI 실행 기록은 따로 남음) · " +
-    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트 박스 위 실행에서 cgroup 으로 건다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
-    "surface 는 이 배포의 실행면(broker 매니지드 · host 셀프호스트 박스 위 · none 못 띄움)과 메모리 상한을 실제로 걸 수 있는지다. " +
+    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트 격리 박스에서 cgroup 으로 건다 · 걸 수 없으면 그 작업을 띄우지 않는다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
+    "surface 는 이 배포의 실행면(broker 매니지드 · host 셀프호스트 박스 위 · none 못 띄움 — unavailable 에 까닭) · 박스 위 판의 계정(runs_as member · gateway) · 메모리 상한을 실제로 거는지다. " +
     "고치기는 관리자 agent_job_limits_set. 구성원 누구나.",
   scope: null,
   input: {},

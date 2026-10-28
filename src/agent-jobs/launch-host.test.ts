@@ -7,12 +7,13 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { hostJobDir, hostPaneArgv, launchHostJob, killHostJob, jobMemoryLimit, PANE_PRELUDE, type HostLaunchDeps } from "./launch-host.js";
-import { jobSurfaceKind, jobsUnavailableMessage } from "./surface.js";
+import { hostJobDir, hostPaneArgv, hostPaneView, launchHostJob, killHostJob, jobMemoryLimit, cgspawnCheck, resetHostProbesForTest, PANE_PRELUDE, type CgroupCheck, type HostLaunchDeps } from "./launch-host.js";
+import { describeJobSurface, jobSurfaceKind, jobsUnavailableMessage, resetJobSurfaceForTest } from "./surface.js";
 import { JobLaunchError, killJobContainer, launchJobContainer } from "./launch.js";
 import { BOOT_SOURCE } from "./runner.js";
 import { computeExecTopology } from "../exec-topology.js";
 import { BOX_CGSPAWN, BOX_SPAWN, cgspawnArgv, wrapAsMember, type CgroupLimit } from "../terminal/terminal-isolation.js";
+import { MEMBER_TEMP_SECRET_SCRIPT } from "../terminal/terminal-member-fs.js";
 import type { LivelyUser } from "../context.js";
 
 let pass = 0;
@@ -49,7 +50,31 @@ await t("B5·B6 노드 에이전트 프로세스 · 중계 tmux 배포(훅 없�
 
 await t("B7 못 띄우는 배포의 501 문장은 무엇을 켜면 되는지(LIVELY_AGENT_JOBS=host)를 말한다 · 매니지드 쪽 문장은 그 스위치를 말하지 않는다", () => {
   assert.match(jobsUnavailableMessage("none"), /LIVELY_AGENT_JOBS=host/);
+  assert.match(jobsUnavailableMessage("none", computeExecTopology({})), /LIVELY_AGENT_JOBS=host/);
   assert.doesNotMatch(jobsUnavailableMessage("broker"), /LIVELY_AGENT_JOBS/);
+});
+
+await t("S1 세션 spawn 훅(LIVELY_SESSION_SPAWN)이 있는 로컬 배포는 스위치를 켜도 none — 501 문장은 그 훅을 말하고 «켜면 된다» 고 하지 않는다", () => {
+  const topo = computeExecTopology({ LIVELY_SESSION_SPAWN: "/opt/x/spawn", LIVELY_AGENT_JOBS: "host" });
+  assert.equal(jobSurfaceKind(topo), "none");
+  const m = jobsUnavailableMessage("none", topo);
+  assert.match(m, /LIVELY_SESSION_SPAWN/);
+  assert.doesNotMatch(m, /LIVELY_AGENT_JOBS=host 를 넣고/);
+  //  노드 · 중계 배포도 까닭을 말한다(스위치 안내가 아니다).
+  assert.doesNotMatch(jobsUnavailableMessage("none", computeExecTopology({ LIVELY_NODE_TOKEN: "lvk_x", LIVELY_AGENT_JOBS: "host" })), /LIVELY_AGENT_JOBS=host 를 넣고/);
+});
+
+await t("R1 관리자 보기 — 이 시험 프로세스(스위치 없음)는 none · 못 띄우는 까닭(501 문장과 같다) · 계정 없음 · 상한 안 걸림", async () => {
+  const ambient = computeExecTopology(process.env);
+  if (jobSurfaceKind(ambient) !== "none") { console.log("# R1 건너뜀 — 이 시험 프로세스의 env 가 실행면을 켰다"); return; }
+  resetJobSurfaceForTest();
+  const v = await describeJobSurface(3072);
+  assert.equal(v.kind, "none");
+  assert.equal(v.available, false);
+  assert.equal(v.unavailable, jobsUnavailableMessage("none", ambient));
+  assert.equal(v.runs_as, null);
+  assert.deepEqual({ mb: v.memory_cap.mb, enforced: v.memory_cap.enforced }, { mb: 3072, enforced: false });
+  resetJobSurfaceForTest();
 });
 
 // ── D. 작업 폴더 대응 ────────────────────────────────────────────────────────────
@@ -108,7 +133,7 @@ await t("C4 워크스페이스가 있으면 판 env(LVLY_TENANT_SLUG)와 판 머
 // ── C. 띄우기 흐름(바꿔 끼운 의존) ────────────────────────────────────────────────
 
 interface Rec { calls: string[]; tmux: string[][]; secrets: Array<{ osUser: string | null; secret: string }>; removed: string[]; mkdirs: Array<[string | null, string]>; wraps: Array<CgroupLimit | undefined> }
-function fakeDeps(o: { osUser?: string | null; isolationReady?: boolean; cap?: number; cgroupOk?: boolean; tmuxFails?: Error; inactive?: boolean; profileDir?: string | null; slug?: string | null } = {}): { d: HostLaunchDeps; rec: Rec } {
+function fakeDeps(o: { osUser?: string | null; isolationReady?: boolean; cap?: number; cgroup?: CgroupCheck | Error; tmuxFails?: Error; inactive?: boolean; profileDir?: string | null; slug?: string | null; port?: number } = {}): { d: HostLaunchDeps; rec: Rec } {
   const rec: Rec = { calls: [], tmux: [], secrets: [], removed: [], mkdirs: [], wraps: [] };
   const osUser = o.osUser === undefined ? "box_alice" : o.osUser;
   const d: HostLaunchDeps = {
@@ -124,14 +149,14 @@ function fakeDeps(o: { osUser?: string | null; isolationReady?: boolean; cap?: n
     prepareHome: async () => { rec.calls.push("home"); },
     profileDir: async () => { rec.calls.push("profile"); return o.profileDir === undefined ? "/home/gw/.lively/profiles/alice/claude" : o.profileDir; },
     memoryLimit: async () => jobMemoryLimit(o.cap ?? 3072),
-    cgroupReady: async () => o.cgroupOk ?? true,
+    cgroupCheck: async () => { rec.calls.push("cgroup"); if (o.cgroup instanceof Error) throw o.cgroup; return o.cgroup ?? { ok: true }; },
     writeSecret: async (os, s) => { rec.calls.push("secret"); rec.secrets.push({ osUser: os, secret: s }); return "/tmp/lvly-job.Q1w2E3r4/boot"; },
     removeSecret: async (_os, f) => { rec.removed.push(f); },
     wrap: (u, a, cwd, cg) => { rec.wraps.push(cg); return cg ? cgspawnArgv(u, a, cwd, cg) : wrapAsMember(u, a, cwd); },
     tmux: async (argv) => { rec.calls.push("tmux"); rec.tmux.push(argv); if (o.tmuxFails) throw o.tmuxFails; return ""; },
     tz: async () => "Asia/Seoul",
     slug: () => (o.slug === undefined ? null : o.slug),
-    port: () => 8080,
+    port: () => o.port ?? 8080,
     locale: () => "C.UTF-8",
   };
   return { d, rec };
@@ -142,7 +167,7 @@ const job = (over: Record<string, unknown> = {}) => ({
 }) as never;
 
 await t("C5 비밀은 판 명령줄 어디에도 없다 — 판 계정 소유 비밀 파일로만(격리 · 비격리 · 워크스페이스 · 포트 모두)", async () => {
-  for (const o of [{}, { osUser: null, isolationReady: false }, { slug: "acme" }, { cap: 0 }, { cgroupOk: false }]) {
+  for (const o of [{}, { osUser: null, isolationReady: false }, { slug: "acme" }, { cap: 0 }, { port: 18080 }]) {
     const { d, rec } = fakeDeps(o);
     await launchHostJob(job(), SECRET, d);
     assert.equal(rec.tmux.length, 1, JSON.stringify(o));
@@ -153,21 +178,46 @@ await t("C5 비밀은 판 명령줄 어디에도 없다 — 판 계정 소유 �
   }
 });
 
-await t("C1·C2 격리 판의 메모리 상한 — 정책 상한 + 래퍼 가능이면 box-cgspawn(MemoryMax 만) · 래퍼 불가 · 상한 0 이면 그냥 sudo(상한 없이)", async () => {
-  {
-    const { d, rec } = fakeDeps({ cap: 3072, cgroupOk: true });
-    await launchHostJob(job(), SECRET, d);
-    assert.deepEqual(rec.wraps, [{ highMb: 0, maxMb: 3072, requestMb: 0 }]);
-    const a = rec.tmux[0]!;
-    const at = a.indexOf("sudo");
-    assert.deepEqual(a.slice(at, at + 10), ["sudo", "-n", "--", BOX_CGSPAWN, "box_alice", "0", "3072M", "--", BOX_SPAWN, "--cwd"]);
+await t("M1 격리 판 · 정책 상한 3072 · 래퍼를 쓸 수 있다 — box-cgspawn(MemoryMax 만)", async () => {
+  const { d, rec } = fakeDeps({ cap: 3072, cgroup: { ok: true } });
+  await launchHostJob(job(), SECRET, d);
+  assert.deepEqual(rec.wraps, [{ highMb: 0, maxMb: 3072, requestMb: 0 }]);
+  const a = rec.tmux[0]!;
+  const at = a.indexOf("sudo");
+  assert.deepEqual(a.slice(at, at + 10), ["sudo", "-n", "--", BOX_CGSPAWN, "box_alice", "0", "3072M", "--", BOX_SPAWN, "--cwd"]);
+});
+
+await t("M2 격리 판 · 정책 상한 · 래퍼를 확답으로 못 쓴다(없음 · sudo 허용 없음) — 다시 해도 안 되는 실패 · 고칠 길을 말한다 · 폴더 · 비밀 · 판 없음", async () => {
+  for (const why of ["cgroup 래퍼(/opt/lively/libexec/box-cgspawn)가 이 박스에 없습니다", "게이트웨이 계정이 cgroup 래퍼를 비밀번호 없이 sudo 로 쓸 수 없습니다"]) {
+    const { d, rec } = fakeDeps({ cap: 3072, cgroup: { ok: false, transient: false, why } });
+    await assert.rejects(launchHostJob(job(), SECRET, d), (e: unknown) => e instanceof JobLaunchError && e.transient === false
+      && e.message.includes("3072MB") && e.message.includes(why) && /memory_max_mb 를 0/.test(e.message) && /install-isolation\.sh/.test(e.message));
+    assert.ok(!["mkdir", "home", "secret", "tmux"].some((c) => rec.calls.includes(c)), JSON.stringify(rec.calls));
   }
-  for (const o of [{ cap: 3072, cgroupOk: false }, { cap: 0, cgroupOk: true }]) {
-    const { d, rec } = fakeDeps(o);
+});
+
+await t("M3 격리 판 · 정책 상한 · 묻다 끊겼다(일시 답 · 던짐) — 일시(memory) 실패 · 폴더 · 비밀 · 판 없음", async () => {
+  for (const cgroup of [{ ok: false, transient: true, why: "sudo 가 5초 안에 답하지 않았습니다" } as CgroupCheck, new Error("spawn EAGAIN")]) {
+    const { d, rec } = fakeDeps({ cap: 3072, cgroup });
+    await assert.rejects(launchHostJob(job(), SECRET, d), (e: unknown) => e instanceof JobLaunchError && e.transient === true && /메모리 상한/.test(e.message));
+    assert.ok(!["mkdir", "home", "secret", "tmux"].some((c) => rec.calls.includes(c)), JSON.stringify(rec.calls));
+  }
+});
+
+await t("M4·M5 상한 0(격리) · 비격리 박스(상한 3072) — 래퍼를 묻지 않고 띄운다(상한 없이)", async () => {
+  {
+    const { d, rec } = fakeDeps({ cap: 0, cgroup: { ok: false, transient: false, why: "묻지 않아야 한다" } });
     await launchHostJob(job(), SECRET, d);
-    assert.deepEqual(rec.wraps, [undefined], JSON.stringify(o));
-    assert.ok(!rec.tmux[0]!.includes(BOX_CGSPAWN), JSON.stringify(o));
-    assert.ok(rec.tmux[0]!.includes(BOX_SPAWN), "상한 없이도 그 계정으로는 내려간다");
+    assert.ok(!rec.calls.includes("cgroup"), "상한 0 이면 묻지 않는다");
+    assert.deepEqual(rec.wraps, [undefined]);
+    assert.ok(!rec.tmux[0]!.includes(BOX_CGSPAWN) && rec.tmux[0]!.includes(BOX_SPAWN), "상한 없이도 그 계정으로는 내려간다");
+  }
+  {
+    const { d, rec } = fakeDeps({ osUser: null, isolationReady: false, cap: 3072, cgroup: { ok: false, transient: false, why: "묻지 않아야 한다" } });
+    await launchHostJob(job(), SECRET, d);
+    assert.ok(!rec.calls.includes("cgroup"), "비격리 박스는 걸 자리가 없다 — 묻지 않는다");
+    assert.equal(rec.tmux.length, 1);
+    assert.ok(!rec.tmux[0]!.includes(BOX_CGSPAWN));
   }
 });
 
@@ -182,11 +232,35 @@ await t("C3 비격리 박스(OS 계정 null · 격리 미지원) — 게이트�
   assert.ok(a.includes("CLAUDE_CONFIG_DIR=/home/gw/.lively/profiles/alice/claude"));
 });
 
-await t("C1 격리 박스 — 그 구성원 계정으로 폴더를 만들고 홈을 준비한 뒤 판(순서)", async () => {
+await t("C1 격리 박스 — 그 구성원 계정 · 상한을 걸 수 있는지 본 뒤 폴더를 만들고 홈을 준비하고 판(순서)", async () => {
   const { d, rec } = fakeDeps();
   await launchHostJob(job(), SECRET, d);
-  assert.deepEqual(rec.calls, ["account:alice", "os-user", "dir:apps/memo", "mkdir", "home", "secret", "tmux"]);
+  assert.deepEqual(rec.calls, ["account:alice", "os-user", "cgroup", "dir:apps/memo", "mkdir", "home", "secret", "tmux"]);
   assert.deepEqual(rec.mkdirs, [["box_alice", "/srv/lively/apps/memo"]]);
+});
+
+await t("V1 판의 첫 말 자리 — 띄울 때 만든 폴더와 같은 경로(앱 · 공유 × 격리 · 비격리) · 게이트웨이 = 그 루프백 포트 · 워크스페이스 = 판에 넘긴 값", async () => {
+  for (const [o, j] of [
+    [{}, job()], [{ osUser: null, isolationReady: false }, job()],
+    [{ slug: "acme", port: 18080 }, job({ cwd: "/work/shared/project/7", project_id: 7, app_id: null })],
+    [{ osUser: null, isolationReady: false, slug: "acme" }, job({ cwd: "/work/shared/project/7", project_id: 7, app_id: null })],
+  ] as const) {
+    const { d, rec } = fakeDeps(o);
+    await launchHostJob(j, SECRET, d);
+    const v = await hostPaneView(j, d);
+    assert.equal(v.cwd, rec.mkdirs[0]![1], `띄울 때 만든 폴더에서 돈다: ${JSON.stringify(o)}`);
+    assert.equal(v.gateway, `http://127.0.0.1:${(o as { port?: number }).port ?? 8080}`);
+    assert.equal(v.workspace, (o as { slug?: string }).slug ?? null);
+    const a = rec.tmux[0]!;
+    const sh = a.indexOf(PANE_PRELUDE);
+    assert.deepEqual(a.slice(sh + 4, sh + 6), [v.gateway.split(":").pop(), v.workspace ?? ""], "판 머리가 받은 포트 · 워크스페이스와 같다");
+  }
+});
+
+await t("V2 격리 박스인데 첫 말 때 OS 계정이 없다 — 던진다(그 작업은 실패로 끝난다)", async () => {
+  const { d } = fakeDeps({ osUser: null, isolationReady: true });
+  await assert.rejects(hostPaneView(job(), d), /OS 계정/);
+  await assert.rejects(hostPaneView(job({ cwd: "/tmp" }), fakeDeps().d), /박스 위 자리/);
 });
 
 await t("C6 홈 없는 작업은 박스 위 길에서 띄우지 않는다 — 다시 해도 안 되는 실패 · 아무것도 안 부른다", async () => {
@@ -224,6 +298,88 @@ await t("C2 작업 정책 상한 → cgroup 상한: 0 · 음수 · NaN 은 상�
   assert.deepEqual(jobMemoryLimit(3072), { highMb: 0, maxMb: 3072, requestMb: 0 });
   assert.deepEqual(jobMemoryLimit(1536.9), { highMb: 0, maxMb: 1536, requestMb: 0 });
   for (const v of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(jobMemoryLimit(v), undefined, String(v));
+});
+
+// ── P. 래퍼를 쓸 수 있나(sudo -n -l) — 확답만 기억한다 ─────────────────────────────────
+
+function probeSpy(codes: Array<number | null>): { probe: (cmd: string) => Promise<{ code: number | null; error?: string }>; asked: string[] } {
+  const asked: string[] = [];
+  return { asked, probe: async (cmd) => { asked.push(cmd); const code = codes.length ? codes.shift()! : 0; return code === null ? { code, error: "sudo 가 5초 안에 답하지 않았습니다" } : { code }; } };
+}
+
+await t("P1 래퍼 파일이 없다 — 확답 «없다»(일시 아님) · sudo 를 묻지 않는다", async () => {
+  resetHostProbesForTest();
+  const s = probeSpy([0]);
+  const r = await cgspawnCheck({ infraReady: () => false, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 1 });
+  assert.deepEqual(r, { ok: false, transient: false, why: "cgroup 래퍼(/opt/x/box-cgspawn)가 이 박스에 없습니다" });
+  assert.deepEqual(s.asked, []);
+});
+
+await t("P2·P3·P5 끝 0 = 된다 · 끝 1 = 못 쓴다(확답) — 10분 기억하고 지나면 다시 묻는다", async () => {
+  for (const [code, ok] of [[0, true], [1, false]] as const) {
+    resetHostProbesForTest();
+    const s = probeSpy([code, code]);
+    let now = 1_000;
+    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => now };
+    const first = await cgspawnCheck(o);
+    assert.equal(first.ok, ok);
+    if (!first.ok) assert.equal(first.transient, false, "확답이다");
+    now += 10 * 60_000 - 1;
+    assert.deepEqual(await cgspawnCheck(o), first, "10분 안엔 기억한 답");
+    assert.deepEqual(s.asked, ["/opt/x/box-cgspawn"], "한 번만 물었다");
+    now += 2;
+    await cgspawnCheck(o);
+    assert.equal(s.asked.length, 2, "10분이 지나면 다시 묻는다");
+  }
+});
+
+await t("P4 묻다 끊겼다(시간 초과) · 알 수 없는 끝(2) — 일시 · 기억하지 않는다(다음 판에 다시 묻는다)", async () => {
+  for (const code of [null, 2]) {
+    resetHostProbesForTest();
+    const s = probeSpy([code, 0]);
+    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 5 };
+    const r = await cgspawnCheck(o);
+    assert.equal(r.ok, false);
+    assert.equal(!r.ok && r.transient, true, String(code));
+    assert.deepEqual(await cgspawnCheck(o), { ok: true }, "같은 시각이라도 다시 물어 새 답을 받는다");
+    assert.equal(s.asked.length, 2);
+  }
+  resetHostProbesForTest();
+});
+
+// ── W. 판 계정의 임시 비밀 스크립트(memberWriteTempSecret) — 진짜 셸 ───────────────────
+
+function runTempSecret(input: string, tmp: string, prefix = ""): Promise<{ code: number | null; out: string }> {
+  return new Promise((resolve) => {
+    const p = spawn("sh", ["-c", `${prefix}${MEMBER_TEMP_SECRET_SCRIPT}`], { stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, TMPDIR: tmp } });
+    let out = "";
+    p.stdout.on("data", (x) => { out += x; });
+    p.on("close", (code) => resolve({ code, out }));
+    p.stdin.on("error", () => undefined);
+    p.stdin.end(input);
+  });
+}
+
+await t("W1 임시 비밀 — 경로 한 줄 · 새 폴더 0700 · 파일 0600 · 내용 = 입력", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lvj-w1-"));
+  try {
+    const r = await runTempSecret(SECRET, tmp);
+    assert.equal(r.code, 0);
+    assert.match(r.out, new RegExp(`^${tmp.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/lvly-job\\.[A-Za-z0-9]{8}/boot$`));
+    assert.equal(fs.statSync(path.dirname(r.out)).mode & 0o777, 0o700);
+    assert.equal(fs.statSync(r.out).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(r.out, "utf8"), SECRET);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+await t("W2 임시 비밀 — 쓰기가 실패하면(파일 크기 한도 0) 0 아닌 끝 · 만든 폴더를 남기지 않는다", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lvj-w2-"));
+  try {
+    const r = await runTempSecret(SECRET, tmp, "ulimit -f 0; trap '' XFSZ; ");
+    assert.notEqual(r.code, 0);
+    assert.equal(r.out, "");
+    assert.deepEqual(fs.readdirSync(tmp), [], "lvly-job.* 폴더가 남지 않는다");
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 // ── C5 판 머리를 진짜 셸로 — 비밀 파일을 읽고 지운 뒤 부트가 그 비밀 · 포트 · 워크스페이스로 부른다 ──

@@ -480,6 +480,21 @@ function startBackgroundSweeps(): void {
 
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
   setTimeout(() => { void perTenant("session-state-backfill", () => backfillSessionStates()); }, 40_000).unref();
+
+  // #5082 — 에이전트 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비(요청 정비표에서 `housekeeping` 표시가 붙은 것). 매니지드는 그 표가 요청에 얹어
+  //  돌리는데 그 표는 여기(셀프호스트 · registry)서 무동작이라 이 자리가 유일한 길이다 — 없으면 박스 위 작업(LIVELY_AGENT_JOBS=host)의 시작 상한 ·
+  //  무응답 · 시간 초과 · 걷기 재시도 · 기다린 작업 배차가 안 돌고, 끝맺지 못한 작업이 동시 상한을 영영 먹는다(격리 리뷰).
+  //  정의와 주기는 그 표의 것을 그대로 쓴다(두 벌이면 한쪽만 고쳐진다 · 주기 조정 env LIVELY_SWEEP_MS_<KEY> 도 같다). 작업을 안 띄우는 박스에선
+  //  열린 행이 없어 조회 한 번이다. 주기가 1분보다 길면(보존 정리 6시간) 부팅 2분 반 뒤 1회를 따로 둔다 — 재기동이 주기보다 잦은 박스에서도 돌게(위 아웃박스와 같은 까닭).
+  //  ⓘ 앱 백그라운드 작업(app-job-*)은 Lambda 함수 전용이라 싣지 않는다(셀프호스트 앱 서버 #4487 의 몫).
+  void import("../sessions/outbox-request-sweep.js").then((m) => {
+    for (const job of m.SWEEP_JOBS.filter((j) => j.housekeeping)) {
+      const run = () => perTenant(job.key, job.run);
+      const every = m.jobIntervalMs(job, process.env);
+      setInterval(() => { void run(); }, every).unref();
+      if (every > 60_000) setTimeout(() => { void run(); }, 150_000).unref();
+    }
+  }).catch((err) => logger.warn({ err }, "정비: 에이전트 작업 정비를 걸지 못했다(비치명 — 다음 재기동에 다시)"));
 }
 
 /**

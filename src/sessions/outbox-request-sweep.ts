@@ -44,6 +44,12 @@ export interface SweepJob {
    *  `schedulerTargets()` 로 하고 각각을 `withTenant` 로 감싼다(`scheduler/tenant-fanout.ts`).
    */
   readonly scope?: "tenant" | "global";
+  /**
+   * 하우스키핑이 도는 배포(셀프호스트 · registry)에서도 **이 정의 그대로** 건다(#5082) — `boot/housekeeping` 의 `startBackgroundSweeps` 가
+   * 이 표시가 붙은 정비를 같은 run · 같은 주기(jobIntervalMs)로 워크스페이스마다 돌린다. 이 표는 그 배포에서 무동작이라(maybeSweep) 표시가 없으면
+   * 그 정비는 거기서 한 번도 안 돈다. 하우스키핑에 제 타이머가 따로 있는 종전 정비는 표시하지 않는다(두 번 돈다).
+   */
+  readonly housekeeping?: true;
   /** 실제 정비. **여기서 새로 정의하지 않고** 원래 함수를 그대로 부른다(복제하면 한쪽만 고쳐진다). */
   readonly run: () => Promise<unknown>;
 }
@@ -146,17 +152,19 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //   (service.reapJob 의 JOB_SESSION_ID_RE), 사람 세션(`box-`)엔 닿지 않는다. 작업 컨테이너의 수명 주인은 이 흐름이다(#4490).
   //  사람이 아무도 없어도 돈다: CP 가 60초마다 테넌트를 부르고, 도는 작업의 판은 5초마다 박동한다(둘 다 요청이라 이 정비를 깨운다).
   //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
-  { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
+  //  #5082 — 박스 위 실행면(셀프호스트 LIVELY_AGENT_JOBS=host)도 이 감시가 끝내고 걷는다 → 하우스키핑에도 건다(housekeeping).
+  { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS, housekeeping: true,
     run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).sweepAgentJobs(await m.liveAgentJobDeps())) },
   // 작업 기록 보존 정리(#4828 앱 v2-29) — 끝났고 걷은 작업 행을 보존 기간(agent_job_policy.keep_days · 기본 90일 · 0 = 무기한)이 지나면 행째 지운다.
   //  일 단위 보존이라 6시간이면 넉넉하다(세션 기록 정리 session-log-reap 과 같은 박자). 한 판에 1,000 행씩 10 판까지 — 더 밀리면 다음 정비가 잇는다.
   //  DB 행만 지운다(컨테이너 · 토큰은 감시 agent-job-sweep 이 먼저 걷는다 — 걷기 전 행은 지우지 않는다). 보존 기간을 못 읽으면 이 정비만 실패한다.
-  //  ⚠ 테넌트 스코프 — 작업 행도 보존 기간 설정도 그 워크스페이스 것이다(RLS).
-  { key: "job-record-prune", intervalMs: SIX_HOURS_MS,
+  //  ⚠ 테넌트 스코프 — 작업 행도 보존 기간 설정도 그 워크스페이스 것이다(RLS). #5082 — 하우스키핑에도 건다(위 감시와 짝).
+  { key: "job-record-prune", intervalMs: SIX_HOURS_MS, housekeeping: true,
     run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).pruneAgentJobRecords(await m.liveAgentJobDeps())) },
   // 앱 AI 실행 정비(#4488 앱 v2-9) — 작업 컨테이너에 붙은 열린 실행을 작업 상태에 맞추고(결과 형식 판정 · 재시도), 게이트웨이가 죽어 끝맺지 못한 단발(프록시)
   //  실행을 끝낸다. 파괴적 동작 없음(DB 행만). ⚠ 테넌트 스코프 — 실행 행은 RLS 로 그 워크스페이스 것만 보인다.
-  { key: "ai-run-sweep", intervalMs: STOP_RULE_SWEEP_MS,
+  //  #5082 — 하우스키핑에도 건다: 셀프호스트도 단발(프록시) 실행이 돌고(끝맺지 못한 행을 닫는 길이 이것뿐) 박스 위 작업에 붙은 실행을 맞춘다.
+  { key: "ai-run-sweep", intervalMs: STOP_RULE_SWEEP_MS, housekeeping: true,
     run: () => import("../ai-runs/live.js").then(async (m) => (await import("../ai-runs/service.js")).sweepAiRuns(await m.liveAiRunDeps())) },
   // 앱 백그라운드 작업 감시(#4486 앱 v2-7) — 대기 초과 · 부른 뒤 시작 없음(다시 부름) · 박동 없음 · 시간 초과를 끝내고, 자리가 나면 기다린 작업을 함수에 비동기로 부른다.
   //  파괴적 동작 없음(DB 행 · 함수 부르기만 — 함수 안에서 도는 작업을 멈추지는 못한다). 사람이 없어도 돈다(CP 가 60초마다 테넌트를 부르고, 도는 작업의

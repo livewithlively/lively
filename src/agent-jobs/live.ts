@@ -35,7 +35,7 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
   if (cached) return cached;
   const store = await import("./store.js");
   //  #5082 — 판을 세우고 걷는 자리(실행면): 매니지드는 브로커(launch.ts), 브로커 없는 박스는 박스 위(launch-host.ts) — surface.ts 가 고른다.
-  const { jobSurface, jobsUnavailableMessage } = await import("./surface.js");
+  const { jobSurface } = await import("./surface.js");
   const surface = await jobSurface();
   const pol = await import("../org/policies/agent-job-policy.js");
   const { currentTenant, withTenant } = await import("../org/tenant-context.js");
@@ -44,7 +44,7 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     store,
     policy: () => pol.effectiveAgentJobPolicy(async () => pol.resolveAgentJobPolicy(await store.agentJobPolicyRow())),
     available: () => surface.available(),
-    unavailableMessage: () => jobsUnavailableMessage(surface.kind),
+    unavailableMessage: () => surface.unavailableMessage(),
     launch: (job, boot) => surface.launch(job, boot),
     kill: (sid) => surface.kill(sid),
     paneView: (job) => surface.paneView(job),
@@ -56,8 +56,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
       if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${seat ?? "?"})이 활성 구성원이 아닙니다`);
       if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
     },
-    //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체.
-    jobEnv: async (job) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps()); },
+    //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체. #5082 — 프록시 주소는 판이 보는 게이트웨이 아래.
+    jobEnv: async (job, at) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps(), at); },
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {

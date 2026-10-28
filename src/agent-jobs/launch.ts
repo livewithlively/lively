@@ -27,12 +27,14 @@ export class JobLaunchError extends Error {
 }
 
 /** 띄우기의 확보 단계 — 다시 하면 될 수도 있는 것들(인프라가 잠깐 막힘). 다시 해도 안 될 것(계정·배포)은 여기 없다. */
-export type LaunchStep = "os-user" | "workdir" | "ensure" | "home" | "pane";
+export type LaunchStep = "os-user" | "workdir" | "ensure" | "home" | "memory" | "pane";
 const STEP_FAILURE: Readonly<Record<LaunchStep, string>> = {
   "os-user": "실행 계정의 OS 계정을 준비하지 못했습니다",
   workdir: "작업 폴더를 만들지 못했습니다",
   ensure: "작업 컨테이너를 확보하지 못했습니다",
   home: "실행 계정의 홈을 준비하지 못했습니다",
+  //  #5082 박스 위 실행면 — 작업 메모리 상한을 걸 수 있는지 묻다 끊겼다(sudo 시간 초과 등). 확답으로 못 건다면 일시 실패가 아니다(launch-host).
+  memory: "작업 메모리 상한을 걸 수 있는지 확인하지 못했습니다",
   pane: "작업 컨테이너에 판을 띄우지 못했습니다",
 };
 /** (순수) 확보 단계의 실패 → 일시(transient) 띄우기 실패. 분류는 여기 한 자리다(launch.test 가 단계마다 본다). */

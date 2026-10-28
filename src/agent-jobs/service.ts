@@ -37,7 +37,7 @@ import {
   PRUNE_BATCH, PRUNE_ROUNDS_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
-import { BROKER_MCP_URL } from "./surface.js";
+import { BROKER_GATEWAY, type PaneView } from "./surface.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
 
 type Store = typeof import("./store.js");
@@ -51,8 +51,9 @@ export interface AgentJobDeps {
   available(): Promise<boolean>;
   /** 못 띄울 때 접수가 돌려줄 문장(501 — 무엇을 켜면 되는지). 없으면 일반 문장. */
   unavailableMessage?(): string;
-  /** 판의 첫 말에 줄 자리 — 작업 폴더(판의 자리 기준)와 MCP 주소(surface.paneView). 없으면 행의 작업 폴더와 매니지드 루프백. 던지면 그 작업은 돌지 않는다. */
-  paneView?(job: AgentJobRow): Promise<{ cwd: string; mcpUrl: string }>;
+  /** 판의 첫 말에 줄 자리 — 작업 폴더(판의 자리 기준) · 게이트웨이 주소 · 실을 워크스페이스(surface.paneView). 없으면 행의 작업 폴더와 매니지드 루프백.
+   *  던지면 그 작업은 돌지 않는다. */
+  paneView?(job: AgentJobRow): Promise<PaneView>;
   /** 띄운다. 일시 실패(컨테이너 확보가 막힘)는 `transient: true` 인 오류로 던진다(launch.JobLaunchError). */
   launch(job: AgentJobRow, bootSecret: string): Promise<unknown>;
   /** 걷는다 — 이미 없다는 확답이면 조용히, 그 밖의 실패는 던진다(launch.killJobContainer). */
@@ -66,8 +67,9 @@ export interface AgentJobDeps {
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
   mintMcpToken(job: AgentJobRow): Promise<{ token: string; tokenHash: string } | null>;
-  /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다. */
-  jobEnv?(job: AgentJobRow): Promise<Record<string, string>>;
+  /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
+   *  at — 판이 보는 게이트웨이 주소와 실을 워크스페이스(#5082 paneView — 프록시도 그 아래 · 그 워크스페이스로). */
+  jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   revokeToken(tokenHash: string): Promise<void>;
@@ -332,12 +334,13 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     throw new HttpError(410, "끝난 작업입니다");
   }
   //  #4488 — 하네스에 더 줄 env(API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 못 만들면 그 작업은 돌지 않는다(신원과 같은 규칙).
-  //  #5082 — 판이 보는 자리(작업 폴더 · MCP 주소)도 실행면이 준다. 박스 위 판은 작업 폴더가 박스 위 경로이고 MCP 포트가 그 박스의 루프백이다.
+  //  #5082 — 판이 보는 자리(작업 폴더 · 게이트웨이 주소 · 워크스페이스)도 실행면이 준다. 박스 위 판은 작업 폴더가 박스 위 경로이고 게이트웨이가
+  //   그 박스의 루프백 포트다 — MCP 와 LLM 프록시가 둘 다 그 아래다(자리를 먼저 구해 env 에 넘긴다).
   let env: Record<string, string> = {};
-  let view: { cwd: string; mcpUrl: string } = { cwd: booted.cwd, mcpUrl: BROKER_MCP_URL };
+  let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
   try {
-    env = d.jobEnv ? await d.jobEnv(booted) : {};
     if (d.paneView) view = await d.paneView(booted);
+    env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
   } catch (e) {
     const why = String((e as Error)?.message ?? e);
     logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
@@ -348,7 +351,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   }
   const slug = d.workspaceSlug();
   //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
-  const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: view.mcpUrl,
+  const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: `${view.gateway}/mcp`,
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
   logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind }, "[agent-job] 판이 섰다");
   return {

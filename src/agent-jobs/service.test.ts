@@ -410,17 +410,31 @@ await t("B2 부트 성공 — 콜백 비밀 · 판 본체 · 하네스 인자(�
   assert.equal(job.timeoutMs, row.timeout_sec * 1000);
 });
 
-await t("B2h 판이 받는 자리는 실행면이 준다(#5082 D) — 박스 위 판의 작업 폴더(박스 위 경로) · MCP 주소(그 박스의 루프백 포트) · 행의 작업 폴더는 그대로", async () => {
+await t("B2h·G1 판이 받는 자리는 실행면이 준다(#5082 D) — 박스 위 판의 작업 폴더(박스 위 경로) · MCP = 그 게이트웨이 /mcp · 판 env 도 같은 게이트웨이 · 워크스페이스 · 행의 작업 폴더는 그대로", async () => {
   const w = world();
   const seenRows: number[] = [];
-  w.deps.paneView = async (job) => { seenRows.push(job.id); return { cwd: "/srv/lively/apps/memo", mcpUrl: "http://127.0.0.1:18080/mcp" }; };
+  const envAt: Array<{ gateway: string; workspace: string | null }> = [];
+  w.deps.paneView = async (job) => { seenRows.push(job.id); return { cwd: "/srv/lively/apps/memo", gateway: "http://127.0.0.1:18080", workspace: "acme-1234" }; };
+  w.deps.jobEnv = async (_job, at) => { envAt.push(at); return { ANTHROPIC_BASE_URL: `${at.gateway}/api/llm/anthropic` }; };
   const { id, boot } = await startedJob(w);
   const job = await onBoot(id, boot, w.deps);
   assert.deepEqual(seenRows, [id], "그 작업으로 한 번 묻는다");
   assert.equal(job.cwd, "/srv/lively/apps/memo");
   assert.equal((job.mcp as any).mcpServers.lively.url, "http://127.0.0.1:18080/mcp");
   assert.equal((job.mcp as any).mcpServers.lively.headers["x-lively-workspace"], "acme-1234", "워크스페이스 머리는 그대로");
+  assert.deepEqual(envAt, [{ gateway: "http://127.0.0.1:18080", workspace: "acme-1234" }], "판 env 는 판이 보는 게이트웨이 · 워크스페이스로 만든다");
+  assert.equal(job.env.ANTHROPIC_BASE_URL, "http://127.0.0.1:18080/api/llm/anthropic");
   assert.equal(w.rows.get(id)!.cwd, "/work/apps/memo", "행에는 컨테이너 경로가 남는다(이어받기 · 홈 없는 작업 판정이 그 꼴을 본다)");
+});
+
+await t("G1b 실행면이 자리를 안 주면(매니지드 기본) — 판 env 는 종전 루프백 게이트웨이 · 워크스페이스 없이", async () => {
+  const w = world();
+  const envAt: Array<{ gateway: string; workspace: string | null }> = [];
+  w.deps.jobEnv = async (_job, at) => { envAt.push(at); return {}; };
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.deepEqual(envAt, [{ gateway: "http://127.0.0.1:8080", workspace: null }]);
+  assert.equal((job.mcp as any).mcpServers.lively.url, "http://127.0.0.1:8080/mcp");
 });
 
 await t("B2i 판이 볼 자리를 못 구하면(실행면이 던짐) 그 작업은 돌지 않는다 — 실패(사유) · 방금 만든 토큰 폐기 · 410", async () => {
