@@ -34,7 +34,9 @@ const when = (ms: number): string => {
   return d.toDateString() === now.toDateString() ? '오늘 ' + hm : (d.getMonth() + 1) + '월 ' + d.getDate() + '일';
 };
 
-interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; spec: HTMLElement; specKey: string; specStop: (() => void) | null; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number }
+interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; spec: HTMLElement; specKey: string; specStop: (() => void) | null; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number;
+  /** 좁은 화면에서 카드를 골라 뒤로 가기 한 칸을 쌓았다(점검 5-1) — 「‹ 목록」 은 그 칸을 되돌린다. */
+  pushed: boolean; repaint: () => void }
 const views = new WeakMap<HTMLElement, View>();
 //  지우는 중인 만들던 앱 — 지우는 사이 목록이 다시 그려져 새 카드의 단추로 한 번 더 지우지 않게(격리 리뷰).
 const deleting = new Set<string>();
@@ -110,9 +112,12 @@ export function renderBuilderApp(host: HTMLElement, segs: readonly string[], par
   } else if (where.view === 'list') {
     closeSpec(v);
     if (v.studioKey) { v.studioKey = ''; closeAppStudio(); }
+    //  이미 목록을 보고 있었으면 카드만 바꾼 것이다(좁은 화면의 고르기 · 뒤로 가기 · 사이드바의 앱 줄) — 목록을 비우지 않는다(감사 6-2).
+    const wasList = !v.body.hidden && v.stage.hidden && !!v.list.querySelector('.v2-bld-sec');
     v.stage.hidden = true; v.top.hidden = false; v.body.hidden = false;
     v.sel = where.id;   // 고른 카드도 주소가 정본이다(#/builder?sel=<앱> — 사이드바의 앱 줄이 이 주소로 온다)
-    void paintList(v, env);
+    if (!where.id) v.pushed = false;
+    void paintList(v, env, wasList);
   } else {
     closeSpec(v);
     v.top.hidden = true; v.body.hidden = true; v.stage.hidden = false;
@@ -136,7 +141,7 @@ function build(env: BuilderEnv): View {
   //  #4632 「개발 정보」(코드 기준 명세 · v2/app-spec-page.ts)는 만들기 화면과 다른 자리에 선다 — 오가도 만들던 화면을 건드리지 않게.
   const spec = el('div', { class: 'v2-bld-stage', hidden: true });
   const root = el('div', { class: 'v2-bld' }, top, body, stage, spec);
-  const v: View = { root, top, body, list, panel, stage, spec, specKey: '', specStop: null, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0 };
+  const v: View = { root, top, body, list, panel, stage, spec, specKey: '', specStop: null, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0, pushed: false, repaint: () => {} };
   void env;
   return v;
 }
@@ -279,7 +284,12 @@ async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> 
   const refresh = (): void => { void paintList(v, env); };
   const repaint = (): void => { void paintList(v, env, true); };   // 서버에서 바뀐 것이 없다 — 깜빡이지 않게(감사 6-2)
   //  카드를 고르면 주소에도 적는다(setSel) — 사이드바가 같은 줄을 켠다.
-  const pick = (key: string): void => { setSel(v, key); repaint(); };
+  //   좁은 화면(목록과 배포 설정이 한 칸씩)에서는 뒤로 가기 한 칸을 쌓는다 — 브라우저 뒤로 가기가 라이블리 밖이 아니라 목록으로 온다(점검 5-1).
+  const pick = (key: string): void => {
+    if (key && key !== v.sel && narrowBuilder()) { v.pushed = true; location.hash = builderRoute('list', key); return; }
+    setSel(v, key); repaint();
+  };
+  v.repaint = repaint;
   //  개발 정보(#4632)는 첫 버전이 있으면 만들던 앱에도 선다(원준 2026-10-27 «개발 정보 페이지 이건 어디있는걸까?» — 회의록은 아직 만들던 앱이다).
   //   거기서 「‹ 앱빌더」 로 돌아오면 주소는 그 앱(#/builder?sel=<앱>)이라, 그 앱을 만들던 카드를 고른다.
   const specApp = (d: Draft): string => (d.appId && apps.some((x) => x.id === d.appId && !x.empty) ? d.appId : '');
@@ -390,15 +400,29 @@ async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> 
   //  사이드바에서 골라 왔으면 그 카드가 보이게 — 목록이 길면 아래에 있다.
   v.list.querySelector('.v2-bld-card.on')?.scrollIntoView({ block: 'nearest' });
   const selDraft = drafts.find((d) => draftKey(d) === v.sel) || null;
+  //  좁은 화면은 한 칸씩 — 고른 카드가 있으면 배포 설정만, 없으면 목록만(점검 5-1 · 처음부터 반쯤 걸친 빈 배포 설정 칸이 카드를 가렸다).
+  v.body.classList.toggle('v2-bld-body--sel', !!selDraft || apps.some((a) => a.id === v.sel));
   if (selDraft) { paintDraftPanel(v, selDraft, specApp(selDraft), deleteDraft); return; }
   const selApp = apps.find((a) => a.id === v.sel) || null;
   paintPanel(v, selApp, m, hidden, refresh, repaint, env);
 }
 
+// ── 좁은 화면 — 목록과 배포 설정을 한 칸씩(점검 5-1) ──
+//  폭은 CSS 의 문턱(40-v2.css «.v2-bld-body--sel»)과 같다. 넓은 화면은 둘을 나란히 두니 뒤로 가기 칸을 쌓지 않는다.
+const NARROW_BUILDER = '(max-width: 900px)';
+function narrowBuilder(): boolean { try { return window.matchMedia(NARROW_BUILDER).matches; } catch (_) { return false; } }
+/** 「‹ 목록」 — 좁은 화면에서만 보인다(CSS). 고를 때 쌓은 뒤로 가기 칸이 있으면 되돌리고(브라우저 뒤로 가기와 같다), 없으면(주소로 바로 왔다) 고른 것만 푼다. */
+function backToList(v: View): HTMLElement {
+  return el('button', { class: 'btn btn-ghost btn-sm v2-bld-back', type: 'button', text: '‹ 목록', onclick: () => {
+    if (v.pushed) { v.pushed = false; history.back(); return; }
+    setSel(v, ''); v.repaint();
+  } });
+}
+
 // ── 만들던 앱 하나 — 이어서 · 지우기(전부) ──
 function paintDraftPanel(v: View, d: Draft, specId: string, del: (d: Draft) => Promise<boolean>): void {
   const delBtn = armedDelete('btn btn-ghost btn-sm', d.keepApp ? '고치던 것 지우기 (세션, 기록)' : '모두 지우기 (앱, 세션, 기록)', '한 번 더 누르면 지워져요. 되돌릴 수 없어요.', '', () => del(d));
-  v.panel.replaceChildren(
+  v.panel.replaceChildren(backToList(v),
     el('h3', { text: '만들던 앱 「' + d.title + '」' }),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '어디까지' }), el('small', { text: draftStageText(d.stage, !!d.appId, d.done, d.fixing) + (d.at ? ' · ' + when(d.at) : '') + (d.local ? '' : ' · 다른 컴퓨터에서 만들던 것') })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '앱' }), el('small', { text: d.keepApp && d.appId ? '쓰던 앱을 고치는 중이에요. 지워도 앱과 버전 이력은 그대로 있어요.' : d.appId ? '초안이 있어요. 지우면 버전 이력도 함께 없어져요.' : '아직 앱이 없어요(기획 단계)' })),
@@ -511,7 +535,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
   const visNote = a.visibility === 'me' ? '나만 쓰는 앱이에요. 다른 사람의 앱 찾기와 세션 위젯 목록에는 보이지 않아요.' + (a.canPublish ? ' 「워크스페이스 모두」를 누르면 공개돼요.' : '')
     : a.draft ? '모두가 공개 버전을 써요. 비공개 ' + verJ(a.draft.versionNo, '은') + ' ' + (a.draft.by === m.id ? '나' : memberName(a.draft.by)) + '에게만 보여요.'
       : '워크스페이스 모두가 써요.' + (a.canUnpublish ? ' 「나만」을 누르면 다른 사람은 더 이상 열 수 없어요.' : '');
-  v.panel.replaceChildren(
+  v.panel.replaceChildren(backToList(v),
     el('h3', { text: '「' + a.title + '」 배포 설정' }),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '누가 쓰나' }), seg([['me', '나만'], ['all', '워크스페이스 모두']], cur, async (k) => {
       if (k === 'all' && !(await ensureAppServer(a.id))) return;   // #4484 서버가 있는 앱이면 공개할 판의 서버부터

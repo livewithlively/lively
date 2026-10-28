@@ -2177,6 +2177,41 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-help { position: fixed; z-index: 7; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; display: grid; box-shadow: 0 8px 24px rgba(21, 35, 59, .18); min-width: 200px; }
 .v2-studio-help button { text-align: left; border: 0; background: none; font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 7px; cursor: pointer; color: var(--ink); }
 .v2-studio-help button:hover { background: var(--gray-bg-2, #F6F8FB); }
+.v2-studio-help button:disabled { opacity: .5; cursor: default; background: none; }
+.v2-review-menu { z-index: 90; }   /* 실제 화면 막대(85)의 「⋯」 — 몸(body)에 붙는다 */
+
+/* ── 좁은 앱 만들기 화면(점검 5-2 · 5-3 · 5-4 · 5-5) — 창이 아니라 만들기 화면의 폭으로 잰다(앱빌더 안 · 우측 사이드바를 연 노트북도 좁다) ── */
+.v2-studio { container: studio / inline-size; }
+.v2-studio-more { display: none; }
+.v2-studio-bar .v2-studio-stn, .v2-studio-bar .v2-studio-stl { font-style: normal; }
+@container studio (max-width: 760px) {
+  /* 머리줄 — 공개하기 · 되돌리기 · AI 세션 보기는 「⋯」 하나로, 「닫기」 는 늘 보인다. 앱 이름은 0 으로 줄지 않는다(버전 · 원본이 먼저 줄어든다). */
+  .v2-studio-top { gap: 6px; padding: 0 10px; }
+  .v2-studio-top .v2-studio-fold { display: none; }
+  .v2-studio-top .v2-studio-more { display: inline-flex; }
+  .v2-studio-top .v2-studio-name { flex: 0 1 auto; min-width: 3.5em; }
+  .v2-studio-top .v2-studio-ver { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .v2-studio-top .v2-studio-origin { display: none; }
+  .v2-studio-top > .btn { flex: none; }
+  /* 단계 바 — 번호만, 지금 단계에만 이름(다섯 이름이 한 줄에 안 들어가 앞 몇 글자만 보였다) */
+  .v2-studio-bar > span, .v2-studio-bar > button.go { flex: 0 0 auto; padding: 4px 9px; }
+  .v2-studio-bar > .on { flex: 1 1 auto; }
+  .v2-studio-bar > :not(.on) > .v2-studio-stl { display: none; }
+}
+/* 처음 안내 · 둘러보기 — 상자 폭으로 잰다 */
+.v2-studio-intro-box { container: introbox / inline-size; max-height: 100%; box-sizing: border-box; }
+.v2-studio-intro-cards .pic { overflow: hidden; }
+.v2-studio-intro-cards > div { min-width: 0; }
+@container introbox (max-width: 640px) {
+  .v2-studio-intro-cards { grid-template-columns: minmax(0, 1fr); }   /* 세 칸이 좁아 그림이 옆 칸으로 넘쳤다(점검 5-5) */
+  .v2-studio-bar--tour > span { flex: 0 0 auto; padding: 4px 9px; }
+  .v2-studio-bar--tour > .on { flex: 1 1 auto; }
+  .v2-studio-bar--tour > :not(.on) > .v2-studio-stl { display: none; }
+}
+/* 둘러보기 — 단추 줄은 상자 아래에 붙어 있고 장면만 굴린다(점검 5-4 · 장면이 길면 단추가 화면 밖으로 밀렸다) */
+.v2-studio-tour .v2-studio-intro-box { display: flex; flex-direction: column; overflow: hidden; }
+.v2-studio-tour .v2-studio-intro-box > * { flex: none; }
+.v2-studio-tour .v2-studio-intro-box > .v2-studio-tour-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .v2-pad-badge--new { background: rgba(123, 97, 224, .14); color: var(--purple-text, #5B3FD0); border-color: transparent; }
 /* #4667 내 초안이 걸린 공개 앱 — 나에게만 서는 표시라 흐린 테두리로(«새로» 와 겹쳐도 구분되게). 「나만」 은 아래 --mine(#4632) */
 .v2-pad-badge--draft { background: transparent; color: var(--purple-text, #5B3FD0); border-color: rgba(123, 97, 224, .45); border-style: dashed; }
@@ -2309,9 +2344,15 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
   .v2-spec-top, .v2-spec-body { padding-left: 16px; padding-right: 16px; }
   .v2-spec-card p { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+/* 좁은 화면 — 목록과 배포 설정을 한 칸씩(점검 5-1). 고른 카드가 없으면 목록만, 있으면 배포 설정만 남은 높이를 다 쓰고 맨 위에 「‹ 목록」.
+   문턱은 builder.ts NARROW_BUILDER 와 같다(거기서 고를 때 뒤로 가기 칸을 쌓는다). 종전엔 빈 배포 설정이 처음부터 아래 46% 를 덮어 맨 아래 카드를 가렸다. */
+.v2-bld-back { display: none; }
 @media (max-width: 900px) {
-  .v2-bld-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
-  .v2-bld-panel { border-left: 0; border-top: 1px solid var(--line); max-height: 46%; }
+  .v2-bld-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .v2-bld-panel { display: none; border-left: 0; }
+  .v2-bld-body--sel > .v2-bld-list { display: none; }
+  .v2-bld-body--sel > .v2-bld-panel { display: grid; }
+  .v2-bld-back { display: inline-flex; justify-self: start; }
 }
 
 /* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
@@ -3523,4 +3564,25 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 @media (max-width: 1599px) { .v2-review-bar--dock .v2-review-hint { display: none; } }
 @media (max-width: 1499px) { .v2-review-bar--dock .v2-review-tools button > span:not(.ico) { display: none; } .v2-review-bar--dock .v2-review-tools button { padding: 0 9px; } }
 @media (max-width: 1100px) { .v2-review-bar--dock .v2-review-mode { display: none; } }
-@media (max-width: 760px) { .v2-review-gen { flex-basis: 100%; max-width: none; order: 20; } }
+.v2-review-more { display: none; }
+@media (max-width: 760px) {
+  .v2-review-gen { flex-basis: 100%; max-width: none; order: 20; }
+  /* 좁은 실제 화면 막대(점검 5-6) — 도구는 그림만(이름은 툴팁), 「완료 · 다음 단계로」 · 자리 바꾸기는 「⋯」 안으로. 두 줄을 넘지 않는다:
+     윗줄 = ‹ 앱빌더 · 도구 · 코멘트 n건 · ⋯ , 아랫줄 = AI에게 말하기 · 수정하기 */
+  .v2-review-bar { gap: 4px; }
+  .v2-review-tools button > span:not(.ico) { display: none; }
+  .v2-review-tools button { padding: 0 7px; }
+  .v2-review-bar .v2-review-name, .v2-review-bar .v2-review-mode, .v2-review-bar .v2-review-sep, .v2-review-bar .v2-review-hint { display: none; }
+  .v2-review-bar > .v2-review-flip, .v2-review-bar > .v2-review-like { display: none; }
+  .v2-review-bar > .v2-review-more { display: inline-flex; }
+  .v2-review-bar:not(.v2-review-bar--dock)::before { content: ''; flex-basis: 100%; height: 0; order: 19; }   /* 아랫줄의 시작 */
+  .v2-review-bar:not(.v2-review-bar--dock) .v2-review-gen { flex: 1 1 0; min-width: 0; }
+  .v2-review-bar--dock .v2-review-gen { flex: 1 1 0; min-width: 48px; max-width: none; }
+  .v2-review-bar:not(.v2-review-bar--dock) > .v2-studio-now-pri { order: 21; flex: none; }
+  .v2-review-bar > .v2-review-note { order: 30; flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .v2-review-bar:not(.v2-review-bar--dock) > .v2-studio-sp { display: none; }
+}
+/* 폰 — 아래 탭 바(50-mobile.css .v2-mtabs · 56px)를 덮지 않게 그 위에 뜬다. 막대는 몸(body)에 붙어 #v2-root 의 --v2-mtabs-h 를 못 받아 값을 그대로 쓴다. */
+@media (max-width: 640px) {
+  .v2-review-bar:not(.v2-review-bar--dock):not(.v2-review-bar--top) { bottom: calc(56px + env(safe-area-inset-bottom, 0px) + 8px); }
+}

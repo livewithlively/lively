@@ -88,7 +88,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const tools = el('span', { class: 'v2-studio-tools v2-review-tools', role: 'tablist', 'aria-label': '코멘트 다는 도구' });
   const count = el('button', { class: 'btn btn-ghost btn-sm v2-review-count', type: 'button' }) as HTMLButtonElement;
   const send = el('button', { class: 'v2-studio-now-pri', type: 'button' }) as HTMLButtonElement;
-  const like = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
+  const like = el('button', { class: 'btn btn-ghost btn-sm v2-review-like', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
   const hint = el('small', { class: 'v2-review-hint' });
   //  지금 보는 화면이 어느 꼴인지(원준 2026-10-16 «지금 보고 있는 창이 앱 전체 창인지 위젯 창인지만 구분해서 알려 주고») — 막대가 문패 줄에 얹혔으면 시험 세션의 세션 위젯.
   const mode = el('span', { class: 'v2-review-mode' + (host.dock ? ' widget' : ' app'), text: host.dock ? '세션 위젯으로 보는 중' : '앱 화면으로 보는 중',
@@ -101,10 +101,30 @@ export function openReview(host: ReviewHost): ReviewApi {
   gen.addEventListener('focus', () => openTalk());
   const note = el('span', { class: 'v2-review-note', hidden: true });
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위나 아래로 옮겨요', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
+  //  좁은 화면(40-v2.css ≤760px)의 「⋯」 — 「완료 · 다음 단계로」 · 막대 자리 바꾸기를 접어 둔다(점검 5-6 · 막대가 여러 줄로 앱을 덮었다).
+  //   누르면 원래 단추를 누른 것과 같다(할 일은 한 벌) · 잠긴 단추는 여기서도 잠겨 있다.
+  const more = el('button', { class: 'btn btn-ghost btn-sm v2-review-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu' }) as HTMLButtonElement;
+  let menu: HTMLElement | null = null;
+  const closeMenu = (): void => { if (menu) { menu.remove(); menu = null; document.removeEventListener('pointerdown', offMenu, true); } };
+  const offMenu = (e: Event): void => { if (menu && !menu.contains(e.target as Node) && e.target !== more) closeMenu(); };
+  more.onclick = () => {
+    if (menu) { closeMenu(); return; }
+    const items = [like, flip].filter((b) => !b.hidden);
+    const m = el('div', { class: 'v2-studio-help v2-review-menu', role: 'menu' }, ...items.map((b) => {
+      const x = el('button', { type: 'button', role: 'menuitem', text: b === flip ? (S.top ? '막대를 아래로 옮기기' : '막대를 위로 옮기기') : (b.textContent || ''), onclick: () => { closeMenu(); b.click(); } }) as HTMLButtonElement;
+      x.disabled = b.disabled;
+      return x;
+    }));
+    const r = more.getBoundingClientRect();
+    m.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - 216))) + 'px';   // 메뉴 폭(최소 200) 만큼 화면 안에
+    if (S.top || r.top < window.innerHeight / 2) m.style.top = Math.round(r.bottom + 6) + 'px'; else m.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
+    document.body.append(m); menu = m;
+    setTimeout(() => document.addEventListener('pointerdown', offMenu, true), 0);
+  };
   bar.append(
     el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요. 적은 코멘트는 그대로 남아요.', onclick: () => host.onBack() }),
     el('span', { class: 'v2-review-name' }, name, ver), mode, el('i', { class: 'v2-review-sep' }),
-    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
+    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip, more,
     hint);
   // ── 층 — 프레임 자리를 따라간다 ──
   const layer = el('div', { class: 'v2-review-layer', hidden: true });
@@ -472,7 +492,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       closeTray(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*');
       //  AI 세션 화면은 부르는 쪽의 것이다 — 옮겨 왔으면 제자리로(막대와 함께 버리지 않는다).
       if (chatHome && host.chat.parentNode === talkBody) chatHome.parent.insertBefore(host.chat, chatHome.next && chatHome.next.parentNode === chatHome.parent ? chatHome.next : null);
-      talk.remove(); layer.remove(); bar.remove(); markReviewProbe(host.appId, false);
+      closeMenu(); talk.remove(); layer.remove(); bar.remove(); markReviewProbe(host.appId, false);
       if (host.onClose) host.onClose();
     },
     isOpen: () => !S.dead,

@@ -493,9 +493,9 @@ function showTour(onDone?: () => void): void {
   const paint = (): void => {
     const s = slides[i];
     box.replaceChildren(
-      el('div', { class: 'v2-studio-bar v2-studio-bar--tour' }, ...STAGES.map((x) => el('span', { class: x.n < s.n ? 'done' : x.n === s.n ? 'on' : '', text: '① ② ③ ④ ⑤ ⑥'.split(' ')[x.n - 1] + ' ' + x.label }))),
+      el('div', { class: 'v2-studio-bar v2-studio-bar--tour' }, ...STAGES.map((x) => el('span', { class: x.n < s.n ? 'done' : x.n === s.n ? 'on' : '', title: x.label }, ...stepText(x.n, x.label)))),
       el('div', { class: 'v2-studio-now' }, el('span', { text: s.now })),
-      el('h2', { text: s.n + '. ' + s.t + ' (예시: 회의 안건)' }), s.body(),
+      el('h2', { text: s.n + '. ' + s.t + ' (예시: 회의 안건)' }), el('div', { class: 'v2-studio-tour-body' }, s.body()),   // 장면만 굴린다 — 단추 줄은 늘 보인다(점검 5-4)
       el('div', { class: 'v2-studio-intro-act' },
         el('button', { class: 'btn btn-ghost', type: 'button', text: '닫기', onclick: () => { ov.remove(); } }),
         el('span', { class: 'v2-studio-sp' }),
@@ -536,6 +536,23 @@ function helpMenu(btn: HTMLElement, onIntro: () => void, onTour: () => void): vo
     el('button', { type: 'button', text: '처음 안내 다시 보기', onclick: () => { m.remove(); onIntro(); } }),
     el('button', { type: 'button', text: '예시로 둘러보기(1분)', onclick: () => { m.remove(); onTour(); } }),
     el('button', { type: 'button', text: '단계별 안내 다시 켜기', onclick: () => { m.remove(); markSeen((s) => { s.coach = {}; }); toast('다음 단계부터 안내가 다시 나와요'); } }));
+  const r = btn.getBoundingClientRect(); m.style.top = (r.bottom + 6) + 'px'; m.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  root.append(m);
+  const off = (e: Event): void => { if (!m.contains(e.target as Node)) { m.remove(); document.removeEventListener('pointerdown', off, true); } };
+  setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
+}
+/** 좁은 머리줄의 「⋯」 — 접은 단추(공개하기 · 되돌리기 · AI 세션 보기)를 지금 보이는 것만 같은 이름으로 늘어놓는다(점검 5-2).
+ *  누르면 원래 단추를 누른 것과 같다 — 할 일은 한 벌(원래 단추의 onclick)이고, 잠긴 단추는 여기서도 잠겨 있다. */
+function foldMenu(btn: HTMLElement, items: HTMLButtonElement[]): void {
+  if (!root) return;
+  root.querySelectorAll('.v2-studio-help').forEach((n) => n.remove());
+  const shown = items.filter((b) => !b.hidden);
+  if (!shown.length) return;
+  const m = el('div', { class: 'v2-studio-help', role: 'menu' }, ...shown.map((b) => {
+    const x = el('button', { type: 'button', role: 'menuitem', text: b.textContent || '', title: b.title || null, onclick: () => { m.remove(); b.click(); } }) as HTMLButtonElement;
+    x.disabled = b.disabled;
+    return x;
+  }));
   const r = btn.getBoundingClientRect(); m.style.top = (r.bottom + 6) + 'px'; m.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
   root.append(m);
   const off = (e: Event): void => { if (!m.contains(e.target as Node)) { m.remove(); document.removeEventListener('pointerdown', off, true); } };
@@ -629,12 +646,16 @@ const CIRC = '① ② ③ ④ ⑤ ⑥'.split(' ');
 function paintStageBar(bar: HTMLElement, cur: number, reached: number, mode: 'new' | 'copy' | 'edit', labelOf: (i: number, label: string) => string, onGo: (k: 'what' | StudioStage) => void, busy = false): void {
   const tabs = stageTabs(cur, busy ? cur : reached, mode);
   bar.replaceChildren(...STAGES.map((x, i) => {
-    const text = CIRC[x.n - 1] + ' ' + labelOf(i, x.label);
+    const label = labelOf(i, x.label);
     const st = tabs[i];
-    if (st === 'back') return el('button', { type: 'button', class: 'done go', text, title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => onGo(x.key) });
-    if (st === 'ahead') return el('button', { type: 'button', class: 'go ahead', text, title: x.key === 'put' ? PUT_GO_TITLE : '이 단계로 다시 가요. 저장한 내용 그대로예요.', onclick: () => onGo(x.key) });
-    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', text, ...(st === 'on' ? { 'aria-current': 'step' } : {}) });
+    if (st === 'back') return el('button', { type: 'button', class: 'done go', title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', 'aria-label': CIRC[x.n - 1] + ' ' + label, onclick: () => onGo(x.key) }, ...stepText(x.n, label));
+    if (st === 'ahead') return el('button', { type: 'button', class: 'go ahead', title: x.key === 'put' ? PUT_GO_TITLE : '이 단계로 다시 가요. 저장한 내용 그대로예요.', 'aria-label': CIRC[x.n - 1] + ' ' + label, onclick: () => onGo(x.key) }, ...stepText(x.n, label));
+    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', title: label, ...(st === 'on' ? { 'aria-current': 'step' } : {}) }, ...stepText(x.n, label));
   }));
+}
+/** 단계 칸의 글 — 번호와 이름을 따로 둔다. 좁은 화면은 번호만 보이고 지금 단계에만 이름을 붙인다(점검 5-3 · 40-v2.css .v2-studio-bar). */
+function stepText(n: number, label: string): HTMLElement[] {
+  return [el('i', { class: 'v2-studio-stn', text: CIRC[n - 1] }), el('i', { class: 'v2-studio-stl', text: ' ' + label })];
 }
 /** 「다음 →」 — 바로 다음 단계가 와 본 곳일 때만(아직 안 간 단계는 그 단계의 주 단추가 연다). 「← 이전」 과 짝. */
 function nextBtnFor(cur: number, reached: number, mode: 'new' | 'copy' | 'edit', onGo: (k: 'what' | StudioStage) => void, busy = false): HTMLElement | null {
@@ -841,6 +862,10 @@ async function build(rec: StudioRec): Promise<void> {
   //  보고 싶으면 머리줄 단추로 떠 있는 창을 열고, 그 창을 끌어 오른쪽 끝에 놓으면 오른쪽 칸에 붙는다(원준 2026-10-14). 안은 **기본 터미널 보기**(원준: «베타인 대화 뷰 말고 기본 터미널 뷰»).
   const chatBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'AI 세션 보기' }) as HTMLButtonElement;
   chatBtn.onclick = () => { S.chatMode = S.chatMode === 'off' ? 'float' : 'off'; applyPlace(); };
+  //  좁은 화면(40-v2.css)에서는 공개하기 · 되돌리기 · AI 세션 보기를 「⋯」 하나로 접는다 — 「닫기」 는 늘 보인다(점검 5-2 · 390px 에서 닫기가 화면 밖으로 밀렸다).
+  [pubBtn, undo, chatBtn].forEach((b) => b.classList.add('v2-studio-fold'));
+  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm v2-studio-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu' }) as HTMLButtonElement;
+  moreBtn.onclick = () => foldMenu(moreBtn, [pubBtn, undo, chatBtn]);
   const tray = el('div', { class: 'v2-studio-tray', hidden: true });   // ③ 보낼 의견 — 허브 안 한 칸(실제 화면의 막대와 같은 것을 본다)
   const appBox = el('div', { class: 'v2-studio-app v2-studio-app--full' });   // 가운데 칸 — 단계마다 카드 · 허브 · 점검표 · 마무리
   const stage = el('div', { class: 'v2-studio-stage' }, appBox);
@@ -1885,7 +1910,7 @@ async function build(rec: StudioRec): Promise<void> {
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
-      el('span', { class: 'v2-studio-sp' }), pubBtn, undo, chatBtn, help,
+      el('span', { class: 'v2-studio-sp' }), pubBtn, undo, chatBtn, moreBtn, help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
     bar, now, band, body, chatWin, dockHint);
   if (rec.appId) {
