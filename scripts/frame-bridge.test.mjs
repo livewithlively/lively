@@ -171,6 +171,9 @@ const msg = (op, rest = {}) => ({ lv: "rv", op, ...rest });
   const FP = read("web/lib/file-preview.ts");
   ok(/sandbox: 'allow-scripts[^']*'/.test(FP) && !/sandbox: '[^']*allow-same-origin/.test(FP), "26a 공용 렌더러는 allow-scripts 만 주고 allow-same-origin 을 주지 않는다");
   ok(FP.includes("bridgeNs?: string") && FP.includes("attachFrameBridge(f, host.bridgeNs)"), "26b 공용 렌더러도 bridgeNs 를 받으면 같은 다리를 건다");
+  //  #4632 링크로 연 자료 보기(#/f · filepage)도 다리를 건다 — 이름 공간은 링크 자리(뿌리 + 경로)라 같은 파일이면 어디서 열어도 같고 다른 파일과 섞이지 않는다.
+  const PG = read("web/filepage.ts");
+  ok(/buildFilePreview\(\{[\s\S]*?bridgeNs: 'f:' \+ root \+ ':' \+ rel,[\s\S]*?\}\)/.test(PG), "26d 자료 보기(#/f)도 링크 자리를 이름 공간으로 다리를 건다");
   const FB = read("web/lib/frame-bridge.ts");
   ok(FB.includes("ev.source !== frame.contentWindow") && FB.includes("postMessage(reply, '*')"), "26c 이 프레임에서 온 메시지만 받고 답은 그 프레임 창으로만 간다");
 }
