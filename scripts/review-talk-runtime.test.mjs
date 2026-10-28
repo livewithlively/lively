@@ -12,6 +12,7 @@
 //  W1~W5 고치는 중(「수정하기」 를 보낸 뒤) — 도구 · 앱 위 층 · 새 코멘트 · 「AI에게 말하기」 가 그대로 · 보낸 것은 흐리게 · 세지 않음 · 못 고침   E11 막대 칸에 쓴 글은 앱 전체 코멘트(general) · 코멘트 수를 안 바꾼다
 //  E12 막대가 걷히면 세션 화면이 제자리로 돌아간다   E13 막대가 위면 대화 칸이 막대 아래로   W 페이지 예외 없음
 //  B talkBrief — 첫 말에만 방식(묻기 · app_pull/app_save · 공개 안 함) · 그 뒤는 글 그대로
+//  G1~G5 코멘트 흐름 — 늘어나는 글 칸(막대 · 목록 · 그 자리 칸) · Shift+Enter 줄바꿈 · 목록을 연 채 연달아 짚기 · 목록 맨 아래 「수정하기」 · Esc
 //  ⚠ 범위 밖: «실패한 뒤 다음 말이 다시 첫 말» 플래그(app-studio onTalk) · 세션 위젯 꼴의 고정 자리(placeTalk) · 앱빌더 쪽 걷기 경로(backToBuilder · teardown 은 모두 closeReview 를 거친다).
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 E1 · E3~E9 · E12 · E13 · W · B 가 빨갛다).
@@ -121,11 +122,46 @@ async function PAGE_MAIN() {
   await sleep(100);
   R.w.pins = host.pins.length; R.w.newNote = host.pins[1] && host.pins[1].note; R.w.newSent = !!(host.pins[1] && host.pins[1].sent); R.w.countAfter = $(".v2-review-count").textContent;
   $(".v2-review-count").click(); await sleep(150);
-  R.w.tray = [...document.querySelectorAll(".v2-review-tray .v2-studio-tray-row:not(.all)")].map((r) => ({ sent: r.classList.contains("sent"), dis: r.querySelector("input").disabled, x: !!r.querySelector(".x") }));
+  R.w.tray = [...document.querySelectorAll(".v2-review-tray .v2-studio-tray-row:not(.all)")].map((r) => ({ sent: r.classList.contains("sent"), dis: r.querySelector(".v2-studio-tray-in").disabled, x: !!r.querySelector(".x") }));
   $(".v2-review-count").click(); await sleep(100);
   type("고치는 중 말"); key("Enter"); await sleep(250);
   R.w.talkN = sent.length; R.w.talkLast = sent[sent.length - 1];
   api.update({ waiting: false }); await sleep(100);
+  window.__step = "G";
+  //  코멘트 흐름(원준 2026-10-28 «텍스트박스가 한 줄로 고정 · 글을 많이 치면 불편 · 여러 개 코멘트 넘기기도 어렵고»)
+  R.g = {};
+  //  G1 막대 칸은 늘어나는 글 칸 — 여러 줄이면 높이가 늘고 4줄을 넘으면 칸 안에서 스크롤 · Shift+Enter 는 보내지 않는다
+  R.g.genTag = gen.tagName;
+  { const h0 = gen.getBoundingClientRect().height; type("한 줄"); const h1 = gen.getBoundingClientRect().height;
+    type("첫째 줄\n둘째 줄\n셋째 줄"); const h3 = gen.getBoundingClientRect().height;
+    type("1\n2\n3\n4\n5\n6\n7\n8"); const h8 = gen.getBoundingClientRect().height;
+    R.g.gen = { h0: Math.round(h0), h1: Math.round(h1), h3: Math.round(h3), h8: Math.round(h8), scroll: gen.style.overflowY };
+    const n0 = sent.length; const ev = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }); gen.dispatchEvent(ev); await sleep(150);
+    R.g.shift = { sent: sent.length - n0, prevented: ev.defaultPrevented }; type(""); }
+  { const fold = document.querySelector(".v2-review-talk-h button"); if (isOpen() && fold) fold.click(); await sleep(150); }
+  //  G2 코멘트 목록을 열어 둔 채 앱을 연달아 짚는다 — 목록은 열린 채 · 짚을 때마다 끝에 한 장 · 그 칸에 바로 쓴다
+  toolBtns().find((b) => /핀/.test(b.textContent)).click(); await sleep(50);
+  $(".v2-review-count").click(); await sleep(150);
+  const cards = () => [...document.querySelectorAll(".v2-review-tray .v2-studio-tray-row:not(.all)")];
+  const n0 = cards().length;
+  const clickApp = async (fx, fy) => { const r = ov.getBoundingClientRect(); ov.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: r.left + r.width * fx, clientY: r.top + r.height * fy })); ov.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: r.left + r.width * fx, clientY: r.top + r.height * fy })); await sleep(1100); };
+  await clickApp(0.3, 0.2);
+  R.g.a = { tray: !!document.querySelector(".v2-review-tray"), cards: cards().length - n0, pop: !!document.querySelector(".v2-studio-pop"), focused: document.activeElement && document.activeElement.closest && !!document.activeElement.closest(".v2-review-tray"), lastFocused: document.activeElement === (cards().at(-1) || {}).querySelector?.(".v2-studio-tray-in") };
+  { const ta = document.activeElement; ta.value = "여기 색 바꾸기\n그리고 굵게"; ta.dispatchEvent(new Event("input", { bubbles: true })); R.g.a.grew = ta.getBoundingClientRect().height > 40; }
+  await clickApp(0.7, 0.4);
+  { const ta = document.activeElement; ta.value = "간격 넓히기"; ta.dispatchEvent(new Event("input", { bubbles: true })); }
+  await sleep(100);
+  R.g.b = { tray: !!document.querySelector(".v2-review-tray"), cards: cards().length - n0, notes: host.pins.slice(-2).map((p) => p.note), head: (document.querySelector(".v2-review-tray .v2-studio-tray-h b") || {}).textContent, barCount: $(".v2-review-count").textContent };
+  //  G3 목록 맨 아래 「수정하기」 — 막대의 단추와 같은 글 · 같은 일
+  { const fs = document.querySelector(".v2-review-tray .v2-studio-tray-f .v2-studio-now-pri"), bs = document.querySelector(".v2-review-bar > .v2-studio-now-pri");
+    R.g.c = { foot: fs && fs.textContent, bar: bs && bs.textContent, dis: fs && fs.disabled }; let sentFix = 0; const was = host.onSend; host.onSend = () => { sentFix++; }; if (fs) fs.click(); await sleep(50); host.onSend = was; R.g.c.sentFix = sentFix; }
+  //  G4 Esc 로 닫힌다(목록 칸 안에서)
+  { const last = cards().at(-1), ta = last && last.querySelector(".v2-studio-tray-in"); if (ta) { ta.focus(); ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await sleep(100); } R.g.d = { had: !!ta, closed: !!ta && !document.querySelector(".v2-review-tray") }; }
+  //  G5 목록이 닫혀 있으면 짚은 곳 옆에 그 자리 칸 — 늘어나는 칸 · Shift+Enter 는 닫지 않는다 · Enter 는 닫는다
+  await clickApp(0.5, 0.6);
+  { const ta = document.querySelector(".v2-studio-pop textarea"); R.g.e = { pop: !!ta };
+    if (ta) { const ev = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }); ta.dispatchEvent(ev); R.g.e.shiftKept = !!document.querySelector(".v2-studio-pop") && !ev.defaultPrevented;
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); await sleep(50); R.g.e.enterClosed = !document.querySelector(".v2-studio-pop"); } }
   window.__step = "E13";
   $(".v2-review-flip").click(); await sleep(50);
   gen.focus(); gen.dispatchEvent(new FocusEvent("focus")); await sleep(300);
@@ -188,6 +224,15 @@ check(R.e12.parent === "side" && R.e12.order === "after" && !R.e12.talkLeft, "E1
 check(R.e12.closedInside === "side", "E12 부르는 쪽 onClose 때 이미 제자리다", R.e12);
 check(/먼저 짧게 물어봐/.test(R.b.first) && /app_pull mn/.test(R.b.first) && /app_save/.test(R.b.first) && /app_visibility_set 은 부르지 마/.test(R.b.first) && R.b.first.endsWith("\n파란색으로"), "B 첫 말엔 대화 방식(묻기 · app_pull/app_save · 공개 안 함) + 그 글", R.b);
 check(R.b.next === "파란색으로", "B 두 번째 말부터는 글 그대로", R.b);
+check(R.g.genTag === "TEXTAREA" && R.g.gen.h3 > R.g.gen.h1 + 20 && R.g.gen.h8 > R.g.gen.h3 && R.g.gen.h8 < R.g.gen.h1 * 4 + 30 && R.g.gen.scroll === "auto", "G1 막대 칸은 글 줄에 맞춰 늘고 4줄을 넘으면 칸 안에서 스크롤", R.g.gen);
+check(R.g.shift.sent === 0 && !R.g.shift.prevented, "G1 Shift+Enter 는 보내지 않고 줄을 바꾼다", R.g.shift);
+check(R.g.a.tray && R.g.a.cards === 1 && !R.g.a.pop && R.g.a.lastFocused, "G2 목록을 연 채 앱을 짚으면 목록은 열린 채 끝에 한 장 · 그 칸에 바로 쓴다", R.g.a);
+check(R.g.a.grew, "G2 목록의 칸도 여러 줄이면 늘어난다", R.g.a);
+check(R.g.b.tray && R.g.b.cards === 2 && JSON.stringify(R.g.b.notes) === JSON.stringify(["여기 색 바꾸기\n그리고 굵게", "간격 넓히기"]), "G2 이어서 짚어도 목록이 열린 채 한 장 더 · 두 코멘트가 그대로", R.g.b);
+check(R.g.b.head === R.g.b.barCount.replace(/ · 빈 코멘트.*/, "").replace("코멘트 ", "코멘트 · "), "G2 목록 머리의 셈 = 막대의 셈", R.g.b);
+check(R.g.c.foot && R.g.c.foot === R.g.c.bar && !R.g.c.dis && R.g.c.sentFix === 1, "G3 목록 맨 아래 「수정하기」 는 막대와 같은 글 · 눌러서 보낸다", R.g.c);
+check(R.g.d.closed, "G4 목록 칸에서 Esc 로 닫힌다", R.g.d);
+check(R.g.e.pop && R.g.e.shiftKept && R.g.e.enterClosed, "G5 그 자리 칸 — Shift+Enter 는 줄바꿈 · Enter 는 완료", R.g.e);
 check(!R.errors.length, "W 페이지 예외 없음", R.errors);
 
 console.log(`\n${pass} pass · ${fail} fail`);

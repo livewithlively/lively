@@ -2017,19 +2017,29 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-pop .k { display: flex; align-items: center; gap: 6px; font-size: 12.5px; min-width: 0; }
 .v2-studio-pop .k .n { flex: none; width: 18px; height: 18px; border-radius: 50%; background: #E56450; color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; }
 .v2-studio-pop .k .w { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-studio-pop .ta { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; resize: vertical; background: var(--bg); color: var(--ink); }
+.v2-studio-pop .ta { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit; font-size: 13px; line-height: 1.45; min-height: 52px; resize: none; background: var(--bg); color: var(--ink); }
 .v2-studio-pop .act { display: flex; align-items: center; gap: 6px; }
+.v2-studio-pop-key { color: var(--muted); font-size: 11px; }
 .v2-studio-tray { width: 100%; flex: none !important; background: var(--bg); border-radius: 12px; box-shadow: 0 0 0 1px var(--line); padding: 8px 12px; display: grid; gap: 6px; }
 .v2-studio-tray[hidden] { display: none; }
 .v2-studio-tray-h { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .v2-studio-tray-h small { color: var(--muted); font-size: 12px; }
-.v2-studio-tray-list { display: grid; gap: 5px; max-height: 150px; overflow: auto; }
-.v2-studio-tray-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.v2-studio-tray-list { display: grid; gap: 10px; max-height: min(40vh, 400px); overflow: auto; padding-right: 2px; }
+.v2-studio-tray-f { display: flex; align-items: center; gap: 8px; }
+.v2-studio-tray-f small { color: var(--muted); font-size: 11.5px; }
+/* 글이 늘면 세로로 늘어나는 칸(v2/grow-text.ts) — 높이는 그 모듈이 잰다 */
+.v2-grow { display: block; resize: none; overflow-y: hidden; }
+.v2-studio-tray-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 4px; min-width: 0; }
+/* 한 장 = 윗줄(번호 · 자리 · ✕) + 아랫줄(글 칸 전체 폭) — 글이 길어져 칸이 늘어도 번호 · 자리가 밀리지 않는다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») */
+.v2-studio-tray-row > .n { grid-column: 1; grid-row: 1; }
+.v2-studio-tray-row > .w { grid-column: 2; grid-row: 1; }
+.v2-studio-tray-row > .x { grid-column: 3; grid-row: 1; }
+.v2-studio-tray-row > .v2-studio-tray-in { grid-column: 1 / -1; grid-row: 2; }
 .v2-studio-tray-row .n { flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: #E56450; color: #fff; font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; }
-.v2-studio-tray-row .w { flex: none; width: 200px; color: var(--ink-sub); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-studio-tray-row .w { min-width: 0; color: var(--ink-sub); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-studio-tray-row.all .w { width: auto; min-width: 64px; font-weight: 700; }   /* 「앱 전체」 칸은 말 바로 뒤에서 끝까지(원준 2026-10-16 «이게 말이 되는 사이즈와 위치의 텍스트 박스야?» — 228px 빈 자리 뒤 반쪽 칸이었다) */
 .v2-studio-tray-row .x { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font: inherit; }
-.v2-studio-tray-in { flex: 1; min-width: 0; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2-studio-tray-in { min-width: 0; width: 100%; box-sizing: border-box; min-height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; font: inherit; font-size: 13px; line-height: 1.45; background: var(--bg); color: var(--ink); }
 /* ② 카드를 통째로 다시 쓰게 하는 한마디 */
 .v2-studio-ask { display: flex; gap: 6px; padding: 10px 16px 14px; }
 .v2-studio-ask-in { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
@@ -3236,7 +3246,7 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-wf-btn b { font-size: 13.5px; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; }
 .v2-studio-wf-btn small { font-size: 12px; color: var(--muted); }
 .v2-studio-wf-btn:hover { background: rgba(123, 97, 224, .08); }
-.v2-studio-hub .v2-studio-tray-list { max-height: 300px; gap: 8px; }
+.v2-studio-hub .v2-studio-tray-list { max-height: 460px; gap: 12px; }
 /* 허브의 「보낼 의견」 칸은 크게(원준 2026-10-16 «좀 더 사이즈를 키웠으면») — 시험 세션 막대의 「의견 n건」 칸은 그대로 */
 .v2-studio-hub .v2-studio-tray { padding: 14px 18px; gap: 10px; border-radius: 14px; }
 .v2-studio-hub .v2-studio-tray-h { font-size: 15px; }
@@ -3244,7 +3254,7 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-hub .v2-studio-tray-row { gap: 10px; }
 .v2-studio-hub .v2-studio-tray-row .w { font-size: 14px; }
 .v2-studio-hub .v2-studio-tray-row .n { width: 24px; height: 24px; font-size: 12px; }
-.v2-studio-hub .v2-studio-tray-in { height: 42px; padding: 0 12px; border-radius: 10px; font-size: 14.5px; }
+.v2-studio-hub .v2-studio-tray-in { min-height: 42px; padding: 10px 12px; border-radius: 10px; font-size: 14.5px; }
 .v2-studio-hub-wait { display: flex; align-items: center; gap: 8px; justify-content: center; color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 13px; }
 .v2-studio-hub-fine { text-align: center; color: var(--muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
 .v2-review-bar { position: fixed; z-index: 85; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: max-content; max-width: calc(100vw - 24px); padding: 8px 10px 8px 8px; border-radius: 14px; background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 14px 40px rgba(21, 35, 59, .28); font-size: 13px; }
@@ -3389,7 +3399,7 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-review-mode { flex: none; font-size: 11.5px; font-weight: 800; line-height: 20px; padding: 0 8px; border-radius: 10px; white-space: nowrap; }
 .v2-review-mode.app { color: #0E7A55; background: rgba(31, 157, 107, .12); }
 .v2-review-mode.widget { color: #1F4FC4; background: rgba(34, 99, 239, .1); }
-.v2-review-gen { flex: 1 1 220px; min-width: 160px; max-width: 360px; height: 30px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
+.v2-review-gen { flex: 1 1 220px; min-width: 160px; max-width: 360px; min-height: 30px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font: inherit; font-size: 13px; line-height: 18px; background: var(--bg); color: var(--ink); }
 .v2-review-gen:focus { outline: none; border-color: var(--purple, #7B61E0); box-shadow: 0 0 0 3px rgba(123, 97, 224, .14); }
 .v2-review-gen:disabled { opacity: .5; }
 .v2-review-bar--dock .v2-review-gen { flex: 1 1 150px; min-width: 120px; max-width: 280px; }

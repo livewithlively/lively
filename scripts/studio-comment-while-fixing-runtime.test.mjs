@@ -10,7 +10,7 @@
 //  C2 고치는 중 — 허브에 실제 화면 단추가 그대로 있고 눌러서 간다(코멘트 층이 선다)
 //  C3 고치는 중에 남긴 코멘트 — 셈 1 · 기록(localStorage)엔 보낸 핀이 없다
 //  C4 새 버전 도착 — 보낸 것만 걷히고 새 코멘트는 그대로 · 「수정하기 · 1건」 이 다시 눌린다
-//  C5 다음 「수정하기」 — 새 코멘트만 보낸다(먼저 보낸 것은 다시 안 간다)   W 페이지 예외 없음
+//  C5 다음 「수정하기」 — 새 코멘트만 보낸다(먼저 보낸 것은 다시 안 간다)   C6 허브의 칸도 늘어나는 글 칸   W 페이지 예외 없음
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 트리에서 C1 · C2 · C3 · C4 · C5 가 빨갛다).
 import { execFileSync } from "node:child_process";
@@ -71,7 +71,7 @@ async function PAGE_MAIN() {
   const rec0 = { sid: "box-s1", pid: 0, what: "회의 녹음 정리", place: "full", appId: "mn", draftId: "mn", known: [], at: Date.now() - 3600000, card: CARD, round: 1, from: 5, mode: "new", title: "회의록", named: true, reached: 2, stage: "fix", pins: [pin1], general: "전체 톤 밝게" };
   const stored = () => JSON.parse(localStorage.getItem("lively_v2_app_studio") || "[]")[0] || {};
   const fixBtn = () => document.querySelector(".v2-studio-fix-in");
-  const trayRows = () => [...document.querySelectorAll(".v2-studio-tray .v2-studio-tray-row:not(.all)")].map((r) => ({ sent: r.classList.contains("sent"), note: r.querySelector("input").value, dis: r.querySelector("input").disabled }));
+  const trayRows = () => [...document.querySelectorAll(".v2-studio-tray .v2-studio-tray-row:not(.all)")].map((r) => ({ sent: r.classList.contains("sent"), note: r.querySelector(".v2-studio-tray-in").value, dis: r.querySelector(".v2-studio-tray-in").disabled }));
   localStorage.setItem("lively_v2_app_studio", JSON.stringify([rec0]));
   location.hash = "#/builder";
   St.openAppStudio({ sid: "box-s1" }, { host, onClose: () => {}, onSee: () => {} });
@@ -79,22 +79,26 @@ async function PAGE_MAIN() {
 
   window.__step = "C1";
   R.before = { btn: txt(fixBtn()), dis: fixBtn() && fixBtn().disabled };
+  //  C6 허브의 코멘트 칸도 늘어나는 글 칸(원준 2026-10-28 «한 줄로 고정 · 너무 불편»)
+  { const all = document.querySelector(".v2-studio-tray .v2-studio-tray-row.all .v2-studio-tray-in"); const h1 = all.getBoundingClientRect().height;
+    const was = all.value; all.value = "1\n2\n3"; all.dispatchEvent(new Event("input", { bubbles: true })); const h3 = all.getBoundingClientRect().height;
+    all.value = was; all.dispatchEvent(new Event("input", { bubbles: true })); R.c6 = { tag: all.tagName, h1: Math.round(h1), h3: Math.round(h3) }; }
   fixBtn().click(); await sleep(1500);
   R.c1 = { prompts: window.__prompts.slice(), btn: txt(fixBtn()), dis: fixBtn().disabled, rows: trayRows(),
-    general: (document.querySelector(".v2-studio-tray .v2-studio-tray-row.all input") || {}).value };
+    general: (document.querySelector(".v2-studio-tray .v2-studio-tray-row.all .v2-studio-tray-in") || {}).value };
   window.__step = "C2";
   const goB = [...document.querySelectorAll(".v2-studio-hub-go button")].find((b) => /앱 화면으로 보기/.test(b.textContent));
   R.c2 = { goBtn: !!goB, wait: !!document.querySelector(".v2-studio-hub-wait") };
   //  고치는 중에 앱빌더 쪽 칸에 새 코멘트를 적는다(실제 화면 막대에서 짚은 것과 같은 목록)
   window.__step = "C3";
-  const g = document.querySelector(".v2-studio-tray .v2-studio-tray-row.all input");
+  const g = document.querySelector(".v2-studio-tray .v2-studio-tray-row.all .v2-studio-tray-in");
   g.value = "버튼 둥글게"; g.dispatchEvent(new Event("input", { bubbles: true })); await sleep(200);
   R.c3 = { btn: txt(fixBtn()), dis: fixBtn().disabled, storedPins: (stored().pins || []).length, storedGeneral: stored().general };
   if (goB) { goB.click(); await sleep(2500); }
   R.c2.bar = !!document.querySelector(".v2-review-bar"); R.c2.hash = location.hash;
   window.__step = "C4";
   window.__ver = 1; window.__push({ type: "app", kind: "updated", app_id: "mn", session: null, version_no: 3, note: "제목 키움" }); await sleep(2500);
-  R.c4 = { rows: trayRows(), btn: txt(fixBtn()), dis: fixBtn() && fixBtn().disabled, general: (document.querySelector(".v2-studio-tray .v2-studio-tray-row.all input") || {}).value,
+  R.c4 = { rows: trayRows(), btn: txt(fixBtn()), dis: fixBtn() && fixBtn().disabled, general: (document.querySelector(".v2-studio-tray .v2-studio-tray-row.all .v2-studio-tray-in") || {}).value,
     barCount: txt(document.querySelector(".v2-review-count")), barSendDis: (document.querySelector(".v2-review-bar .v2-studio-now-pri") || {}).disabled };
   window.__step = "C5";
   window.__prompts.length = 0; fixBtn().click(); await sleep(1500);
@@ -138,6 +142,7 @@ same(R.c4.rows, [], "C4 새 버전이 오면 보낸 핀만 걷힌다");
 check(R.c4.general === "버튼 둥글게" && /수정하기 · 1건/.test(R.c4.btn || "") && !R.c4.dis, "C4 고치는 중에 남긴 코멘트는 그대로 · 「수정하기 · 1건」 이 눌린다", R.c4);
 check(/코멘트 1건/.test(R.c4.barCount || "") && R.c4.barSendDis === false, "C4 실제 화면 막대도 같은 셈 · 단추가 눌린다", R.c4);
 check(R.c5.prompts.length === 1 && /버튼 둥글게/.test(R.c5.prompts[0]) && !/제목 더 크게/.test(R.c5.prompts[0]), "C5 다음 「수정하기」 는 새 코멘트만 보낸다", R.c5);
+check(R.c6.tag === "TEXTAREA" && R.c6.h3 > R.c6.h1 + 20, "C6 허브의 코멘트 칸도 글 줄에 맞춰 늘어난다", R.c6);
 check(!R.errors.length, "W 페이지 예외 없음", R.errors);
 
 console.log(`\n#4632 고치는 중에도 코멘트: ${pass} passed, ${fail} failed`);
