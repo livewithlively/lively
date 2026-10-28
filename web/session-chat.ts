@@ -1050,9 +1050,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  #4695 T5 — 하네스 종료 규칙이 끈 세션이면 쪽지로 왜 꺼졌는지 말하고, 쓰다 만 글·답을 기다리던 질문을 되돌린다(applyStopNote).
       const restored = applyStopNote();
       const note = stopNoteOf(target.raw?.stopNote);
-      view.setNote(restored.draft ? '보내지 못한 말을 입력칸에 돌려 두었어요 — 보내면 이 세션이 다시 열리고 그 말이 들어갑니다.'
-        : note ? `${stopNoteWhy(note)} — 아래에 말을 걸면 다시 띄워 이어서 답합니다.`
-        : `${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
+      view.setNote(restored.draft ? '보내지 못한 말을 입력칸에 돌려 두었어요. 보내면 이 세션이 다시 열리고 그 말이 들어가요.'
+        : note ? `${stopNoteWhy(note)}. 아래에 말을 걸면 다시 띄워 이어서 답해요.`
+        : `${why}이에요. 아래에 말을 걸면 이어서 열려요.`);   // 해요체 · «—» 없이(점검 7-1)
       view.busy(false);
       return;
     }
@@ -1412,7 +1412,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4783 — 액자가 서버에게 들은 끝난 사유(end)로 부른다 — 없으면 목록 행의 것, 그것도 없으면 종전 말(«멈춰 있는»).
     const phrase = endedSessPhrase(end ? sessLikeOfFacts(end) : null) || endedSessPhrase(target.raw);
     const name = phrase || '멈춰 있는 세션';
-    view.setNote(canRevive() ? `${name}이에요 — 아래에 말을 걸면 이어서 열립니다.` : `${name}이에요 — 대화 기록만 남아 있어요.`);
+    view.setNote(canRevive() ? `${name}이에요. 아래에 말을 걸면 이어서 열려요.` : `${name}이에요. 대화 기록만 남아 있어요.`);
     emitView();   // #4996 — setMode('chat') 은 액자를 걷기 전에 불렸다(위) — 걷은 지금 다시 잰다
   }
 
@@ -2936,7 +2936,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         nextId = String(r?.session?.id || '');
         if (r?.mode === 'fallback' && r?.reason) toast(String(r.reason));
       }
-      if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
+      if (!nextId) throw new Error('새 세션 번호를 받지 못했어요.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
       //  #4917 — 서버가 «아직 살아 있다(already)» 고만 답하고 새로 띄운 것이 없으면 이어받은 게 아니다. 종전엔 그때도
       //   «이어받기 세션을 열었어요» 가 떠, 사람은 열렸다는데 화면이 그대로인 세션 앞에서 같은 말을 계속 보냈다.

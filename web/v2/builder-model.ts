@@ -4,6 +4,7 @@
 //   한쪽에만 보이는 앱이 생긴다. 그래서 판정(만들던 앱 · 내가 만든 앱 · 팀원이 만든 앱)은 여기 한 자리에만 두고, 둘은 그리기만 한다.
 //  서버에서 받는 것(앱 목록 · 나)은 한 번 받아 두고 30초 안에는 다시 받지 않는다. 이 브라우저의 만들기 기록 · 셸의 세션 목록은 그릴 때마다 새로 읽는다.
 import { api } from '../core.js';
+import { ensureMemberNames } from './member-names.js';   // 카드 · 배포 설정의 표시 이름(감사 6-5)
 import { studioMe, studioRecBuildingFor, studioRecs } from './app-studio.js';
 import { appStateOf } from './app-session.js';
 import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
@@ -150,24 +151,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   return { apps, me: m, drafts, mine, team, goneRecs, askRecs };
 }
 
-// ── 사람 이름 ──
-//  카드 · 배포 설정 · 사이드바는 계정 아이디(sangmin-yoon)가 아니라 표시 이름(윤상민)을 쓴다(감사 6-5). 명부는 앱 목록과 함께 받고, 못 받으면 아이디 그대로.
-let names: Map<string, string> | null = null;
-let namesAt = 0;   // 마지막으로 물은 때 — 못 받았으면 5분 뒤에 다시(명부를 못 읽는 사람에게 30초마다 묻지 않게)
-async function fetchNames(): Promise<void> {
-  try {
-    const d: any = await api('/api/ui/org/members');
-    const rows: any[] = Array.isArray(d?.members) ? d.members : Array.isArray(d) ? d : [];
-    const m = new Map<string, string>();
-    rows.forEach((x) => { if (x && x.id) m.set(String(x.id), String(x.display_name || x.nickname || x.id)); });
-    if (m.size) names = m;
-  } catch (_) { /* 아이디로 보인다 */ }
-}
-/** 구성원 id → 표시 이름(모르면 id). 빈 id 는 빈 글. */
-export function memberName(id: string | null | undefined): string {
-  const k = String(id || ''); if (!k) return '';
-  return (names && names.get(k)) || k;
-}
+// ── 사람 이름 ── 명부는 잎 모듈(member-names)이 들고 있다 — 만들기 화면(app-studio)도 같은 것을 읽는다(이 모듈과 서로 들이지 않게).
+export { memberName } from './member-names.js';
 
 // ── 받아 둔 것 ──
 const FRESH_MS = 30_000;
@@ -187,7 +172,7 @@ export function builderModelFailed(): boolean { return !got && failed; }
 export function refreshBuilderModel(force = false): Promise<void> {
   if (!force && got && Date.now() - got.at < FRESH_MS) return Promise.resolve();
   if (inflight) return force ? inflight.then(() => refreshBuilderModel(true)) : inflight;
-  inflight = Promise.all([fetchApps(), studioMe(), names || Date.now() - namesAt < 300_000 ? Promise.resolve() : (namesAt = Date.now(), fetchNames())]).then(([apps, me]) => {
+  inflight = Promise.all([fetchApps(), studioMe(), ensureMemberNames()]).then(([apps, me]) => {
     //  나를 못 받았으면(빈 id) 받기 실패로 친다 — 그 답으로 묶으면 내 앱이 전부 「팀원이 만든 앱」 으로 간다(감사 6-6). 다음 그리기에서 다시 묻는다.
     if (!apps || !me.id) { failed = true; if (got) return; }
     else { failed = false; got = { apps, me, at: Date.now() }; }

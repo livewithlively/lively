@@ -156,6 +156,20 @@ export function cardText(c: StudioCard): string {
 //  앱빌더 어디서도») — 앱빌더 화면은 판 번호를 이 함수들로만 말한다. 서버 · AI 에게 가는 글의 번호(version_no)는 그대로다.
 /** 판 번호 → 화면 이름: 1 = 초안 · 2 이상 = V2 · V3 … · 0 이하(아직 없음) = 빈 글. */
 export function verName(n: number): string { const k = Math.floor(Number(n) || 0); return k >= 2 ? 'V' + k : k === 1 ? '초안' : ''; }
+/** 낱말 + 조사 — 끝 글자(닫는 「」 · 따옴표는 넘긴다)의 받침으로 고른다: 을/를 · 은/는 · 이/가 · 으로/로(ㄹ 받침은 «로»).
+ *  한글이 아니면 영문 · 숫자를 읽는 소리로 어림한다 — 받침 있음: 0 영 · 1 일 · 3 삼 · 6 육 · 7 칠 · 8 팔 · L 엘 · M 엠 · N 엔 · R 알,
+ *  그 가운데 ㄹ 받침(«로»): 1 · 7 · 8 · L · R. 화면 글에 «을(를)» 을 남기지 않는다(점검 7-3). */
+export function josa(word: string, j: '을' | '은' | '이' | '으로'): string {
+  const w = String(word || '').replace(/[」』"'”’)\]\s]+$/u, '');
+  const ch = w.slice(-1); const c = ch.charCodeAt(0);
+  let jong = -1;   // 받침 번호(0 = 없음)
+  if (c >= 0xac00 && c <= 0xd7a3) jong = (c - 0xac00) % 28;
+  else if (/[013678lmnrLMNR]/.test(ch)) jong = /[178lLrR]/.test(ch) ? 8 : 4;   // 8 = ㄹ · 4 = ㄴ(받침 있음 대표)
+  else jong = 0;
+  const has = jong > 0;
+  const tail = j === '을' ? (has ? '을' : '를') : j === '은' ? (has ? '은' : '는') : j === '이' ? (has ? '이' : '가') : (has && jong !== 8 ? '으로' : '로');
+  return word + tail;
+}
 /** 버전 이름 + 조사 — 초안은 받침이 있고(초안을 · 초안으로 · 초안이 · 초안은), V2 는 띄어 받침 없는 꼴(V2 를 · V2 로 · V2 가 · V2 는). */
 export function verJ(n: number, j: '을' | '으로' | '이' | '은'): string {
   const k = Math.floor(Number(n) || 0);
@@ -204,6 +218,12 @@ export function plainNote(note: string | null | undefined): string {
   let m = RE_REVERT.exec(t); if (m) return verJ(Number(m[1]), '으로') + ' 되돌렸어요';
   m = RE_PUB.exec(t); if (m) return m[1] ? verJ(Number(m[1]), '을') + ' 공개했어요' : '공개했어요';
   return t.replace(RE_NO, (_, n) => verName(Number(n)) || n + '번째 버전').replace(/\s*—\s*/g, '. ').replace(/\s*→\s*/g, ', ').trim();
+}
+const RE_VER_HEAD = new RegExp('^\\s*\\d+\\s*' + PAN + '\\s*[:·]\\s*');
+/** 버전 목록 한 줄의 글 — 줄 앞에 버전 이름(V20)이 이미 서니 서버 글 머리의 «20판:» · «20판 ·» 는 걷고, 나머지는 plainNote 와 같이 화면 말로.
+ *  빈 글이면 '' (부르는 쪽이 «고침» · «처음 만듦» 으로 채운다). 배포 설정 「버전」 · ⑤ 「이렇게 만들었어요」 가 쓴다. */
+export function versionNote(note: string | null | undefined): string {
+  return plainNote(String(note || '').replace(RE_VER_HEAD, ''));
 }
 
 export const DRAFT_STEPS = ['기획 읽는 중', '화면 짜는 중', '자료 표 만드는 중', '저장하는 중'];

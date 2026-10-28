@@ -1,6 +1,7 @@
 // v2 AppInstance 클라이언트(#1780 v2.1) — 상단 탭 하나가 이 실행 인스턴스 하나를 연다.
 // AppPackage 설치와 분리되어 같은 앱을 여러 번, 서로 다른 프로젝트 맥락으로 열 수 있다.
 import { api, el, toast } from '../core.js';
+import { josa } from '../lib/studio-flow.js';   // «을(를)» 대신 받침으로 고른 조사(점검 7-3)
 
 export interface AppWorkerRuntime {
   kind: 'worker';
@@ -121,7 +122,7 @@ export async function listDismissedSessions(): Promise<DismissedSession[]> {
 
 export async function getAppInstance(id: string): Promise<AppInstanceRecord> {
   const out: any = await api('/api/ui/app-instances/' + encodeURIComponent(id));
-  if (!out?.instance?.id) throw new Error('앱 인스턴스를 받지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱 화면 정보를 받지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -146,7 +147,7 @@ export async function createAppInstance(appId: string, opts?: {
       ...(opts?.execution ? { execution: opts.execution } : {}),
     }),
   });
-  if (!out?.instance?.id) throw new Error('앱 인스턴스를 만들지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱 화면을 만들지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -222,7 +223,7 @@ export async function closeAppInstance(id: string): Promise<void> {
 
 export async function restartAppInstance(id: string): Promise<AppInstanceRecord> {
   const out: any = await api('/api/ui/app-instances/' + encodeURIComponent(id) + '/restart', { method: 'POST', body: '{}' });
-  if (!out?.instance?.id) throw new Error('앱 worker를 다시 실행하지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱의 뒤에서 도는 코드를 다시 실행하지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -235,7 +236,7 @@ export async function updateAppInstance(id: string, patch: { title?: string | nu
       ...(patch.state ? { state: patch.state } : {}),
     }),
   });
-  if (!out?.instance?.id) throw new Error('앱 인스턴스를 갱신하지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱 화면 정보를 바꾸지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -277,17 +278,17 @@ function executionDialog(title: string, allowCentral: boolean, nodes: ExecutionN
     const choices: HTMLElement[] = [];
     if (allowCentral) choices.push(el('button', { class: 'v2-exec-opt', type: 'button', onclick: () => finish({ kind: 'central' }) },
       el('b', { text: '이 게이트웨이' }),
-      el('span', { text: '조직 서버에서 계속 실행합니다.' }),
+      el('span', { text: '조직 서버에서 계속 실행해요.' }),
       el('small', { text: '기본' })));
     for (const node of nodes) choices.push(el('button', { class: 'v2-exec-opt', type: 'button', onclick: () => finish({ kind: 'remote', node_id: node.id }) },
       el('b', { text: node.name }),
-      el('span', { text: '원격 노드에서 같은 worker 계약으로 실행합니다.' }),
+      el('span', { text: '원격 컴퓨터에서 같은 방식으로 실행해요.' }),
       el('small', { text: node.id })));
     const overlay = el('div', { class: 'v2-exec-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': title + ' 실행 위치 선택',
       onclick: (event: Event) => { if (event.target === overlay) finish(null); } },
       el('div', { class: 'v2-exec' },
-        el('h3', { text: '「' + title + '」을(를) 어디에서 실행할까요?' }),
-        el('p', { text: '앱 화면은 지금 탭에 열리고, 아래 선택은 앱의 worker 코드가 도는 컴퓨터입니다.' }),
+        el('h3', { text: josa('「' + title + '」', '을') + ' 어디에서 실행할까요?' }),
+        el('p', { text: '앱 화면은 지금 탭에 열려요. 아래에서 고르는 것은 앱의 뒤에서 도는 코드가 실행될 컴퓨터예요.' }),
         el('div', { class: 'v2-exec-list' }, ...choices),
         el('div', { class: 'v2-exec-actions' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(null) }))));
     document.body.append(overlay);

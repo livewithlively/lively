@@ -18,20 +18,20 @@ const STATUS_TEXT: Record<AppWorkerRun['status'], string> = {
 };
 
 const REASON_TEXT: Record<string, string> = {
-  explicit: '사용자가 중지했습니다.',
-  placement_changed: '실행 위치가 바뀌었습니다.',
-  package_updated: '앱이 업데이트되었습니다.',
-  instance_closed: '앱 인스턴스를 닫았습니다.',
-  app_disabled: '앱이 비활성화되었습니다.',
-  app_removed: '앱이 제거되었습니다.',
-  grant_revoked: '앱 권한을 철회했습니다.',
-  member_deactivated: '구성원이 비활성화되었습니다.',
-  idle_timeout: '오랫동안 사용하지 않아 중지했습니다.',
-  memory_budget: '메모리 예산을 넘어 중지했습니다.',
-  protocol_error: 'worker 통신 규약을 지키지 않아 중지했습니다.',
-  ready_timeout: '정해진 시간 안에 준비되지 않았습니다.',
-  process_exit: 'worker 프로세스가 종료되었습니다.',
-  host_shutdown: '실행 호스트가 종료되었습니다.',
+  explicit: '사용자가 멈췄어요.',
+  placement_changed: '실행 위치가 바뀌었어요.',
+  package_updated: '앱이 새 버전으로 바뀌었어요.',
+  instance_closed: '앱 화면을 닫았어요.',
+  app_disabled: '앱이 꺼졌어요.',
+  app_removed: '앱이 지워졌어요.',
+  grant_revoked: '앱 권한을 거둬들였어요.',
+  member_deactivated: '구성원 계정이 꺼졌어요.',
+  idle_timeout: '오랫동안 쓰지 않아 멈췄어요.',
+  memory_budget: '쓸 수 있는 메모리를 넘어 멈췄어요.',
+  protocol_error: '앱의 뒤에서 도는 코드가 약속된 방식으로 답하지 않아 멈췄어요.',
+  ready_timeout: '정해진 시간 안에 준비되지 않았어요.',
+  process_exit: '앱의 뒤에서 도는 코드가 끝났어요.',
+  host_shutdown: '실행하던 컴퓨터가 꺼졌어요.',
 };
 
 function locationText(instance: AppInstanceRecord): string {
@@ -41,10 +41,10 @@ function locationText(instance: AppInstanceRecord): string {
 }
 
 function detailText(worker: AppWorkerRun | null): string {
-  if (!worker) return 'worker 실행 기록을 아직 받지 못했습니다.';
+  if (!worker) return '앱의 뒤에서 도는 코드의 실행 기록을 아직 받지 못했어요.';
   const reason = worker.reason ? (REASON_TEXT[worker.reason] || `종료 사유: ${worker.reason}`) : '';
-  const exit = worker.exit_code == null ? '' : ` 종료 코드 ${worker.exit_code}입니다.`;
-  return reason ? reason + exit : '앱의 worker 코드가 격리된 환경에서 실행됩니다.';
+  const exit = worker.exit_code == null ? '' : ` 끝난 번호는 ${worker.exit_code}예요.`;
+  return reason ? reason + exit : '앱의 뒤에서 도는 코드가 따로 떨어진 환경에서 실행돼요.';
 }
 
 /** 앱 iframe 위에 신뢰 가능한 실행 위치·상태를 표시하고 terminal 상태를 가볍게 갱신한다. */
@@ -85,7 +85,7 @@ export function mountAppRuntimeView(initial: AppInstanceRecord, frame: AppUiFram
     restarting = true;
     paint();
     try { current = await restartAppInstance(current.id); paint(); }
-    catch (error: any) { toast('앱 worker를 다시 실행하지 못했어요 — ' + (error?.message || error), true); }
+    catch (error: any) { toast('앱의 뒤에서 도는 코드를 다시 실행하지 못했어요. ' + (error?.message || error), true); }
     finally { restarting = false; paint(); }
   };
   paint();

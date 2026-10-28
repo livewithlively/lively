@@ -188,13 +188,13 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     const rows: HTMLElement[] = [];
     const row = (ic: SVGElement, label: string, attrs: Record<string, unknown>, tag: 'a' | 'button' = 'a'): HTMLElement =>
       el(tag, { class: 'v2-msheet-row', ...(tag === 'button' ? { type: 'button' } : {}), ...attrs }, ic, el('span', { class: 'v2-msheet-t', text: label }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-msheet-go', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' }))) as HTMLElement;
-    rows.push(row(tabIcon('bell'), '확인할 것 — 받은 알림', { href: '#/inbox' }));   // #4180 — 홈 밖에서도 가는 길 하나
+    rows.push(row(tabIcon('bell'), '확인할 것', { href: '#/inbox' }));   // #4180 — 홈 밖에서도 가는 길 하나
     if (LIV_ENTRY_VISIBLE) rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
     for (const a of visibleApps()) { if (skip.has(a.key)) continue; rows.push(row(appIcon(a.icon, 'v2-mtab-ic'), a.title, { href: appHref(a) })); }
     rows.push(row(tabIcon('link'), '외부 앱 연결', { href: '#/connect' }));
     rows.push(row(tabIcon('apps'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }, 'button'));
     const me: any = state.me || {};
-    rows.push(row(tabIcon('gear'), (personName(me) || '나') + ' — 내 프로필 · 환경설정', { onclick: () => { closeAll(); openMeModal({}); } }, 'button'));
+    rows.push(row(tabIcon('gear'), (personName(me) || '나') + '(내 프로필 · 환경설정)', { onclick: () => { closeAll(); openMeModal({}); } }, 'button'));
     sheet.replaceChildren(
       el('div', { class: 'v2-msheet-h' }, el('span', { class: 'v2-msheet-ht', text: '더보기' }),
         el('button', { class: 'v2-msheet-x', type: 'button', 'aria-label': '닫기', onclick: () => closeAll() }, icon('x', 'v2-mtab-ic'))),
