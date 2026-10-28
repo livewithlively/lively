@@ -752,9 +752,10 @@ function placePic(k: StudioPlace): HTMLElement {
 async function build(rec: StudioRec): Promise<void> {
   if (!root) return;
   if (teardown) { teardown(); teardown = null; }
-  //  title — 정한 이름(① · 기획 카드)이 없으면 비워 둔다(머리줄은 「새 앱」). 설명 전체가 이름처럼 뜨던 것(점검 6-11).
+  //  title — 정한 이름(① · 기획 카드)이 없고 아직 앱도 없으면 비워 둔다(머리줄은 「새 앱」). 설명 전체가 이름처럼 뜨던 것(점검 6-11).
+  //   앱이 있으면 서버 이름이 덮는다(아래 readVis) — 못 읽었을 때만 설명으로 남는다.
   //   baseVer — 지금 판의 «내용 판»(마무리 판이면 그 아래 AI 판 · lib/studio-flow verPlan) · verOk 판 이력을 이번에 읽었나 · sending ② 에서 보내는 중(두 번 안 가게)
-  const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || '', curVer: 0, prevVer: 0, baseVer: 0, verOk: false, sending: false, pollT: 0, logT: 0,
+  const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || (rec.appId ? rec.what : ''), curVer: 0, prevVer: 0, baseVer: 0, verOk: false, sending: false, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: rec.step || 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
     waiting: !!rec.fixing, waitT0: rec.fixing ? rec.fixing.at : 0, topVer: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0, limit: '',   // limit: AI 답 글이 알린 사용 한도(parseLimit 의 한 줄) — 새로 보내면 걷는다
@@ -1670,10 +1671,13 @@ async function build(rec: StudioRec): Promise<void> {
     else if (s === 'check') {
       //  같은 버전 · 같은 기획 카드로 이미 대조했으면 그 결과를 그대로 — 단계 바로 오갈 때마다 AI 에게 다시 묻지 않는다.
       //  ④ 에 올 때마다 판을 다시 읽는다 — 새 판이 막 나왔는데 앞 판 번호를 들고 와 앞 판의 대조를 그대로 보이던 것(점검 2-8). 못 읽었으면 지난 결과를 믿지 않는다.
-      const verOk = rec.appId ? await paintVer() : false; if (S.dead || rec.stage !== 'check') return;   // 기다리는 사이 다른 단계로 갔거나 닫혔다
       //  대조는 «내용 판»(마무리 판이면 그 아래 AI 판)으로 잰다 — 넣기만 하고 바뀐 게 없으면 ④ 가 AI 에게 다시 묻지 않게(점검 2-7).
-      const same = verOk && !!rec.check && S.baseVer > 0 && rec.check.ver === S.baseVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
-      S.check = same && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; paintCheck();
+      const sameAt = (ok: boolean): boolean => ok && !!rec.check && S.baseVer > 0 && rec.check.ver === S.baseVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
+      const keep = (ok: boolean): void => { S.check = sameAt(ok) && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; };
+      keep(S.verOk); paintCheck();   // 먼저 아는 것으로 그리고(빈 화면으로 기다리지 않게) 판을 읽은 뒤 다시 맞춘다
+      const verOk = rec.appId ? await paintVer() : false; if (S.dead || rec.stage !== 'check') return;   // 기다리는 사이 다른 단계로 갔거나 닫혔다
+      const same = sameAt(verOk);
+      keep(verOk); paintCheck();
       //  ④ 아이콘은 지금 버전의 매니페스트에서 — ③ 에서 버전이 올랐을 수 있어 들어올 때마다 다시 읽는다.
       //   고른 것이 있는데 그 사이 저장된 아이콘이 바뀌었으면(AI 가 새 버전에 넣었다) 고른 것은 낡았다 — 걷어 새 아이콘을 덮지 않게.
       if (rec.appId) void readVis(rec.appId).then((v) => {
