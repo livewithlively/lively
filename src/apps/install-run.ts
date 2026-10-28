@@ -16,6 +16,8 @@ import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
 import { declaredTableNames } from "./visibility.js";   // 매니페스트의 data.tables 이름(모양이 어긋나도 던지지 않는다)
 import { archiveLeftoverAppFolder } from "./app-folder-archive.js";   // #4778 새 앱은 빈 앱 폴더로 시작
 import { assertContextInstallable, clearAppContextCache } from "./app-context.js";   // #5100 맥락 범위의 카테고리 key 확인 · 설치 뒤 기억 비우기
+import { assertMcpToolNamesFree, withMcpToolNamesLock } from "./app-mcp-store.js";
+import { declaresMcpTools } from "./app-mcp-decl.js";
 
 /** 설치가 데이터 테이블에 한 일(#4224) — 워크스페이스가 설치한 앱에서만 채워진다(기본 앱은 코드가 구조의 주인). */
 export type InstallTablesOutcome = AppTableReport & DroppedTablesReport & { schema: string };
@@ -48,6 +50,13 @@ export interface InstallOptions {
 }
 
 export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: WriteCtx, opts: InstallOptions = {}): Promise<InstallOutcome> {
+  //  #5050 mcp_tools 를 선언한 앱 — 이름 검사부터 설치 끝까지 워크스페이스의 도구 이름 자리를 쥔다(앱마다인 설치 락만으로는 다른 두 앱이 같은 이름으로
+  //   동시에 검사를 지난다). 선언하지 않은 앱 · 기본 앱은 종전 그대로(잠금 없음).
+  if (!isBuiltinSource(source) && declaresMcpTools(loaded.manifest)) return withMcpToolNamesLock(() => installLoadedAppNow(loaded, source, ctx, opts));
+  return installLoadedAppNow(loaded, source, ctx, opts);
+}
+
+async function installLoadedAppNow(loaded: LoadedApp, source: unknown, ctx: WriteCtx, opts: InstallOptions): Promise<InstallOutcome> {
   const id = loaded.manifest.id;
   const existing = await getApp(id);
   const meta: InstallAppMeta = {
@@ -62,6 +71,8 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   //  #5100 맥락 범위 — 선언한 카테고리 key 가 이 워크스페이스에 있어야 한다(오타 하나로 범위가 통째로 닫히지 않게). 아무것도 바꾸기 전에 본다.
   //   기본 앱(시더)은 건너뛴다 — 카테고리는 워크스페이스마다 달라, 여기서 던지면 시딩 전체가 보상된다. 덮어쓴 빌트인은 구성원이 고친 것이라 본다.
   if (!builtin || isOverrideSource(source)) await assertContextInstallable(loaded.manifest);
+  //  #5050 앱이 선언한 MCP 도구 이름 — 다른 앱 · 조직 도구가 이미 쓰면 아무것도 바꾸기 전에 거절(409). 기본 앱의 도구는 목록에 안 오르니 보지 않는다.
+  if (!builtin && declaresMcpTools(loaded.manifest)) await assertMcpToolNamesFree(id, loaded.manifest);
   //  #4778 새 앱 — 같은 id 의 앱 폴더가 남아 있으면(지운 앱의 것) 아무것도 만들기 전에 보관으로 옮긴다(못 보면 503 — 새 앱은 늘 빈 앱 폴더로 시작한다).
   //   부르는 쪽(org_app_install · app_save)이 설치 락 안에서 부른다. 기본 앱(시더)은 건너뛴다 — 코드가 주인인 정해진 id 라 남의 폴더가 없고,
   //   부팅 시딩이 파일 작업 헬퍼에 묶이지 않게.

@@ -1997,17 +1997,22 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       //   동의 창을 띄우고, 끝나면 그 앱 주소의 그 자리로 돌려보낸다. 돌아갈 곳은 지금 워크스페이스의 그 앱 주소를 여기서 만든다(appGrantReturn —
       //   링크가 주는 주소는 받지 않는다 · 열린 리다이렉트 방지).
       //   이 탭은 저장하지 않는다(tabs.ts routeSticky) — 되살아나면 라이블리를 열었는데 동의 창이 뜨고 앱 주소로 넘어간다.
+      //   #5050 &from=mcp — AI 대화창(라이블리 MCP 의 앱 선언 도구)이 준 동의 주소다. 돌아갈 앱 주소가 없다 — 동의만 받고 «대화창으로 돌아가» 를 말한다.
       const appId = decodeURIComponent(segs[1]);
+      const fromMcp = params.get('from') === 'mcp';
       const me0 = (state.me || {}) as { app_domain?: string | null; workspace_registry?: { current?: string | null } };
-      const back = appGrantReturn(appId, params.get('v') === 'draft' ? 'draft' : 'pub', params.get('next'), me0.workspace_registry?.current, me0.app_domain);
+      const back = fromMcp ? null : appGrantReturn(appId, params.get('v') === 'draft' ? 'draft' : 'pub', params.get('next'), me0.workspace_registry?.current, me0.app_domain);
       tab.center.replaceChildren(el('div', { class: 'pn-empty' }, el('p', { class: 'pn-fine', text: '앱 사용 동의를 확인하는 중이에요…' })));
       tab.aside.replaceChildren();
       const granted = await ensureAppGrant(appId).catch(() => false);
       if (seq !== tab.seq) return;
       if (granted && back) { location.replace(back); return; }
+      const after = fromMcp
+        ? (granted ? 'AI 대화창으로 돌아가 같은 도구를 다시 불러 달라고 하세요. 도구 목록을 새로 받으면 도구 설명도 보여요.' : '동의하지 않으면 AI 대화창에서 이 앱의 도구를 쓸 수 없어요. 이 주소를 다시 열면 다시 물어요.')
+        : (granted ? '앱으로 돌아가 다시 해 보세요.' : '동의하지 않으면 이 앱이 표 · 앱 폴더를 읽고 쓸 수 없어요. 앱으로 돌아가면 다시 물어요.');
       tab.center.replaceChildren(el('div', { class: 'pn-empty' },
         el('b', { text: granted ? '동의했어요.' : '동의하지 않았어요.' }),
-        el('p', { class: 'pn-fine', text: granted ? '앱으로 돌아가 다시 해 보세요.' : '동의하지 않으면 이 앱이 표 · 앱 폴더를 읽고 쓸 수 없어요. 앱으로 돌아가면 다시 물어요.' }),
+        el('p', { class: 'pn-fine', text: after }),
         ...(back ? [el('p', {}, el('a', { class: 'btn btn-sm', href: back, text: '앱으로 돌아가기' }))] : [])));
     } else if (isWikiListRoute(tab.route)) {
       //  #4233 [위키] 본문 목록을 셸이 직접 그린다(원준 2026-09-26 «A를 뼈대로 · 새로 들어온 지식 카드 줄»). 종전엔 클래식 위키를 액자에 실었다.

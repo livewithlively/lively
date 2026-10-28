@@ -263,23 +263,25 @@ const contextSchema = z.object({
 // 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
 export const SUPPORTED_MANIFEST_SCHEMA = 1;
 
+// #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
+//  describe 글은 public/lively-app.schema.json(scripts/gen-app-schema.mjs 가 이 스키마로 만든다)의 편집기 설명이 된다.
+const appIconSchema = z.object({
+  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만")
+    .describe("SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB").describe("라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"),
+  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").describe("다크 테마의 선 색 #RRGGBB(없으면 color)").optional(),
+}).strict()
+  .describe("#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널).")
+  .optional();
+
 // 매니페스트 전체.
 //  ★ 최상위는 **passthrough**(미지 키 통과), 중첩은 strict — #1780 v2 §7-1 전방호환(설계 R2-C4).
 //   v2 코어가 `runtime`·`triggers`·`config` 같은 최상위 키를 더한 매니페스트를 설치한 뒤 이 코어로 **롤백**하면
 //   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
 //   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
 //   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
-// #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
-//  설명(.describe)은 편집기용 public/lively-app.schema.json 에 그대로 실린다(scripts/gen-app-schema.mjs — 손으로 쓴 설명이 다시 만들 때 사라지지 않게).
-const appIconSchema = z.object({
-  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만")
-    .describe("SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"),
-  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB").describe("라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"),
-  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").optional().describe("다크 테마의 선 색 #RRGGBB(없으면 color)"),
-}).strict().optional()
-  .describe("#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널).");
-
-//  export — scripts/gen-app-schema.mjs 가 이것으로 public/lively-app.schema.json 을 만든다(#4769 이 아이콘 선언을 끼우며 export 가 그쪽에 붙어 있었다).
+//  ⚠ export — scripts/gen-app-schema.mjs 가 이 스키마로 public/lively-app.schema.json 을 만든다(#4769 에서 export 가 위 아이콘 스키마로 옮겨 붙어
+//   생성기가 못 돌았다 — #5050 에서 되돌림).
 export const appManifestSchema = z.object({
   // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
   //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
@@ -335,6 +337,14 @@ export const appManifestSchema = z.object({
   ai: aiSchema,
   //  #5100 읽을 맥락의 범위(위 contextSchema 머리말).
   context: contextSchema,
+  //  #5050 앱이 구성원의 AI 에 **내놓는** 도구(앱 v2-40) — permissions.tools(앱이 쓰는 라이블리 도구) · tools.*(앱이 설치하는 프록시 도구)와 다른 말이다.
+  //   최상위 칸이다(tools 는 strict 라 거기 두면 이 칸을 모르는 옛 코어가 매니페스트를 통째로 못 읽는다 — web.root 와 같은 까닭).
+  //   여기서는 «객체의 배열» 만 본다(tools.mcp_servers 와 같은 규약 — 설치가 재검증): 항목의 뜻 검사는 설치 · 판 저장 때 apps/app-mcp-decl.ts
+  //   assertAppMcpToolsInstallable(loader 가 부른다)이, 저장된 것 읽기는 appMcpToolsOf(틀린 항목만 건너뜀)가 한다 — 새 코어가 항목에 칸을 더해도
+  //   이 코어의 재파싱(동의 · 표시)이 깨지지 않게. 선언이 없으면 칸도 만들지 않는다(기본값 없음 — 도구 목록의 DB 읽기가 이 칸이 있는 앱만 고른다).
+  mcp_tools: z.array(z.record(z.unknown()))
+    .describe("이 앱이 구성원의 AI 대화창(라이블리 MCP)에 내놓는 도구 — 항목 { name, title?, description, input?, run: { kind, … }, level?: 'L0'|'L1' }. 앱 개발 가이드 «mcp_tools» 절")
+    .optional(),
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;

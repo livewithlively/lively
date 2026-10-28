@@ -26,6 +26,8 @@ import { logger } from "../../log.js";
 //   상류가 필드를 어떻게 바꾸든 정책은 그대로 선다. 예외(값도 저장)는 MCP 서버/툴 단위 토글이며, 그 단위 역시
 //   우리가 등록한 것이라 외부 변경에 무효화되지 않는다.
 export const EXT_PREFIX = "ext__"; // 프록시 툴 네임스페이스(SoT) — mcp-proxy.ts 의 NS 가 이 값을 쓴다.
+/** #5050 앱이 선언한 MCP 도구의 정의 _meta 에 다는 앱 표지 — server.ts 의 계측(instrument)이 그 호출을 그 앱에 귀속한다(mcp_call_log.app · org_app_activity). */
+export const TOOL_APP_META_KEY = "lively/app";
 
 const EXTERNAL_TOOLS = new Map<string, boolean>(); // 툴 이름 → logArgs(인자 값 저장 허용 여부)
 

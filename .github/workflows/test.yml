@@ -592,6 +592,15 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-folder-quota.pg-test.mjs
+      # ⑤-m5 앱이 선언한 MCP 도구(#5050 앱 v2-40) — 세션 머리글 없는 OAuth 토큰(진짜 인가 흐름)으로 실제 /mcp 에 붙어, 앱의 mcp_tools 가
+      #    보는 사람의 판(초안 · 공개)대로 tools/list 에 서고 부르면 실행기(시험 실행기)로 넘어가는지 · 동의 없으면 동의 주소 · 나만 보는 앱 · 읽기 전용 ·
+      #    앱 토큰 · 설치 때 이름 겹침 · 약속 지문 · 워크스페이스 격리(정책을 켠 DB 에 앱 역할로)를 잰다. 판정이 SQL(공개 판 · 동의 · 겹침)과 요청마다의
+      #    서버 굽기에 걸쳐 있어 목으로는 못 본다.
+      - name: 앱 선언 MCP 도구 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/mcp/app-declared-tools.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트
