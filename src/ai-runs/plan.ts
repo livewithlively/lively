@@ -96,8 +96,9 @@ export function serviceSeatConsented(s: AiAccountSettings, member: string): bool
 }
 
 /**
- * 공용 시트 계정이 가져도 되는 권한 — 구성원 기본값(org/store/members.upsertMember)과 같다. 그 밖(admin · runtime · db · db:<소스> · code)이
- *  하나라도 있으면 «높은 권한» 이다(seatElevated).
+ * 공용 시트 계정이 가져도 되는 권한 — 허용 목록이라 여기서 따로 정한다. 지금은 구성원 기본값(org/store/members.upsertMember)과 같은 셋이지만
+ *  기본값이 넓어져도 이 셋은 함께 넓어지지 않는다(넓히려면 여기를 고친다). 그 밖(admin · runtime · db · db:<소스> · code)이 하나라도 있으면
+ *  «높은 권한» 이다(seatElevated).
  */
 export const SEAT_BASIC_SCOPES: ReadonlySet<string> = new Set(["items", "context", "memory"]);
 /** (순수) 기본 권한 밖의 권한이 있나 — 공용 시트로 쓰지 않는 계정. */
@@ -204,15 +205,15 @@ export function subscriptionRefusal(
     return null;
   }
   //  지정은 됐는데 높은 권한 때문에 공용으로 안 쓰는 계정 — 거절 문장에 까닭을 붙인다(그대로 두면 «초대받은 사람만» 으로 읽혀 무엇을 고칠지 모른다).
-  const adminSeat = seat?.facts.consented && seat.facts.active && seat.facts.elevated
+  const elevatedSeat = seat?.facts.consented && seat.facts.active && seat.facts.elevated
     ? ` ${account.member}님 계정은 공용 시트로 지정됐지만 높은 권한(관리자 · 실행 · DB · 코드)이 있어 공용으로 쓰지 않습니다 — 기본 권한(items · context · memory)만 가진 전용 계정을 공용 시트로 지정하세요.` : "";
-  if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 앱 서버가 사람 신원을 실어 보낸 요청도 받습니다).${adminSeat}`;
+  if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 앱 서버가 사람 신원을 실어 보낸 요청도 받습니다).${elevatedSeat}`;
   //  세션에 매인 요청인데 그 세션을 모르거나(fail-closed) 사람 세션이 아니면(위탁·크론 헤드리스 task · 상시 managed · 앱 · 로그인) 구독 주인 본인의 토큰이라도 거절 —
   //  사람 없이 구독이 도는 모양(#4423 · 격리 리뷰 blocking 1). 세션 헤더가 없는 본인 토큰은 가릴 길이 없어 본인으로 통과한다(머리말 한계 ③).
   if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;
   if (requester.member === account.member) return null;
   if (tie && tie.owner === account.member && tie.participant) return null;
-  return `이 앱의 실행 계정은 ${account.member}님 구독인데 ${requester.member}님이 보냈습니다 — 구독은 본인, 또는 ${account.member}님 세션에 초대받은 사람이 그 세션에서 보낸 요청에만 쓸 수 있어요(워크스페이스 API 키를 등록하면 누구의 요청이든 돕니다).${adminSeat}`;
+  return `이 앱의 실행 계정은 ${account.member}님 구독인데 ${requester.member}님이 보냈습니다 — 구독은 본인, 또는 ${account.member}님 세션에 초대받은 사람이 그 세션에서 보낸 요청에만 쓸 수 있어요(워크스페이스 API 키를 등록하면 누구의 요청이든 돕니다).${elevatedSeat}`;
 }
 
 /**
@@ -244,8 +245,9 @@ export interface SeatTarget { member: string; exists: boolean; active: boolean; 
  *  · 켜기: 관리자가 남을 → 승인 줄 · 본인이 → 동의 줄(먼저 해도 된다 — 순서는 상관없다). 그 밖의 사람은 거절.
  *    대상은 활성 사람 구성원이어야 하고 **기본 권한뿐이어야** 한다(seatShared 머리말 — 구성원 누구의 지시든 그 홈에서 돈다).
  *    그래서 관리자가 자기 계정을 혼자 지정하는 길은 없다 — 승인과 동의는 늘 다른 두 사람이다.
+ *    이미 그 사람의 줄이 있으면(다시 승인 · 다시 동의) 그대로 둔다 — 시각 · 승인한 관리자를 덮지 않고, 감사도 남지 않는다(바뀐 것 없음).
  *  · 끄기: 관리자나 본인 누구든 → 줄째 지운다(두 동의가 다 사라진다 · 다시 켜려면 둘 다 새로). 구성원 표에서 지워진 계정의 줄도 지운다 —
- *    구성원을 지우면(org/store/members.removeMember — 행째) 지정 줄은 설정에 남는다.
+ *    보통은 비활성 · 삭제 때 회수가 지우지만(apps/member-deactivation), 그 전에 지워졌거나 회수가 실패한 줄이 남을 수 있다.
  *  돌려주는 것: 적을 다음 줄(null = 지운다) 또는 거절(HTTP 상태 + 문장).
  */
 export function serviceSeatChange(
@@ -259,7 +261,8 @@ export function serviceSeatChange(
   if (target.elevated) {
     return { status: 409, refusal: `${target.member} 계정은 높은 권한(관리자 · 실행 · DB · 코드)이 있어 공용 시트로 지정할 수 없습니다 — 공용 시트로 도는 작업은 구성원 누구의 지시든 그 계정의 홈(로그인 · 토큰)에서 돌아, 누구나 그 권한에 닿습니다. 기본 권한(items · context · memory)만 가진 전용 계정을 지정하세요` };
   }
-  return { next: self ? { ...cur, member: { at: nowIso } } : { ...cur, admin: { by: actor.member, at: nowIso } } };
+  if (self) return { next: cur?.member ? cur : { ...cur, member: { at: nowIso } } };
+  return { next: cur?.admin ? cur : { ...cur, admin: { by: actor.member, at: nowIso } } };
 }
 
 /** (순수) 프롬프트 요지(목록용) — 첫 200자, 줄바꿈은 공백으로. */

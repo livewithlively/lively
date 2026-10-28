@@ -127,6 +127,12 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(next(serviceSeatChange(a2!, root, { ...tx, exists: false, active: false, human: false }, false, NOW)), null, "A10 지워진 계정의 줄 지우기");
   refused(serviceSeatChange(undefined, bob, { ...tx, exists: false }, true, NOW), 403, /관리자와 그 계정 본인만/);
   refused(serviceSeatChange(a2!, bob, { ...tx, exists: false }, false, NOW), 403, /관리자와 그 계정 본인만/);
+  //  A11 다시 켜기 — 이미 그 사람의 줄이 있으면 그대로(같은 객체 · 시각과 승인한 관리자를 덮지 않는다 → 처리기는 쓰지도 감사하지도 않는다)
+  const LATER = "2026-10-29T00:00:00.000Z";
+  assert.equal(next(serviceSeatChange(a2!, x, tx, true, LATER)), a2, "A11 본인 다시 동의 — 그대로");
+  assert.equal(next(serviceSeatChange(a2!, root, tx, true, LATER)), a2, "A11 관리자 다시 승인 — 그대로");
+  assert.deepEqual(next(serviceSeatChange(a2!, { member: "root2", admin: true }, tx, true, LATER))!.admin, { by: "root", at: NOW }, "A11 다른 관리자가 다시 승인해도 처음 승인이 남는다");
+  assert.deepEqual(next(serviceSeatChange(a1!, x, tx, true, LATER)), { admin: { by: "root", at: NOW }, member: { at: LATER } }, "A11 승인만 있던 줄에 본인 동의는 더한다");
 
   //  H1 설정 해석 — 깨진 조각 · 빈 이름은 버리고, 한쪽만 있는 줄은 남긴다(대기 상태를 잃지 않게)
   const parsed = parseAccountSettings({ service_seats: {
@@ -158,10 +164,10 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.match(subscriptionRefusal(sub, srv, null, null)!, /앱 서버/, "B6 지정 없음 · 앱 서버 → 종전대로 403");
   assert.match(subscriptionRefusal(sub, alice, { owner: "alice", participant: true, human: false }, terms(true))!, /사람이 보는 세션/, "B7 기계 세션");
   assert.match(subscriptionRefusal(sub, alice, { owner: null, participant: false, human: false }, terms(true))!, /사람이 보는 세션/, "B7 모르는 세션");
-  const adminSeat = terms(true, { ...on, elevated: true });
-  assert.match(subscriptionRefusal(sub, alice, null, adminSeat)!, /높은 권한\(관리자 · 실행 · DB · 코드\)이 있어 공용으로 쓰지 않습니다/, "B9 시트가 높은 권한 — 까닭을 붙인다");
-  assert.match(subscriptionRefusal(sub, srv, null, adminSeat)!, /높은 권한/, "B9 앱 서버 쪽 문장에도");
-  assert.equal(subscriptionRefusal(sub, { member: "seat", kind: "member" }, null, adminSeat), null, "B9 시트 계정 본인은 종전대로 본인");
+  const elevatedSeat = terms(true, { ...on, elevated: true });
+  assert.match(subscriptionRefusal(sub, alice, null, elevatedSeat)!, /높은 권한\(관리자 · 실행 · DB · 코드\)이 있어 공용으로 쓰지 않습니다/, "B9 시트가 높은 권한 — 까닭을 붙인다");
+  assert.match(subscriptionRefusal(sub, srv, null, elevatedSeat)!, /높은 권한/, "B9 앱 서버 쪽 문장에도");
+  assert.equal(subscriptionRefusal(sub, { member: "seat", kind: "member" }, null, elevatedSeat), null, "B9 시트 계정 본인은 종전대로 본인");
   assert.match(subscriptionRefusal(sub, alice, null, terms(true, { ...on, active: false }))!, /초대받은 사람/, "B10 시트 비활성 → 공용 아님 · 종전 거절");
   assert.doesNotMatch(subscriptionRefusal(sub, alice, null, terms(true, { ...on, active: false }))!, /높은 권한/);
   assert.equal(subscriptionRefusal({ kind: "api_key" }, srv, null, terms(false)), null, "API 키는 공용 시트 판정과 무관");

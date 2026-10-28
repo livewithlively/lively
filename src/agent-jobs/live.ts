@@ -16,8 +16,8 @@ import crypto from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
-import { MCP_TOKEN_SLACK_SEC, type AgentJobDeps } from "./service.js";
-import { jobAppTokenOpts, jobIdentityMember, jobSeatMember, sharedSeatJobRefusal } from "./plan.js";
+import { MCP_TOKEN_SLACK_SEC, assertSharedSeatJob, type AgentJobDeps } from "./service.js";
+import { jobAppTokenOpts, jobIdentityMember, jobSeatMember } from "./plan.js";
 import type { AgentJobRow } from "./store.js";
 
 /** 이 작업이 공용 시트로 도는 작업인가(#5081) — 구독 작업만 표시를 읽는다(API 키 작업은 그 표시가 생기지 않는다). */
@@ -27,23 +27,22 @@ async function sharedSeatJob(job: Pick<AgentJobRow, "id" | "account_kind">): Pro
 }
 
 /**
- * #5081 공용 시트 작업을 아직 돌려도 되나 — 사실(시트 지정 · 시트 계정 · 보낸 사람)을 모아 plan.sharedSeatJobRefusal 로 재고, 통과하면 보낸 사람이
- *  그 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의)를 본다. 접수 때(ai-runs/service.submitRun)와 같은 자다.
- *  «안 된다» 는 HttpError(409 · 403 · 404) — 배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다.
+ * #5081 공용 시트 작업을 아직 돌려도 되나 — 판정은 service.assertSharedSeatJob(시트 계정 · 보낸 사람의 사실 → plan.sharedSeatJobRefusal → 보낸 사람의
+ *  앱 동의). 여기서는 그 사실의 출처(설정 칸 · 구성원 표 · 앱 판정)만 잇는다.
  */
 async function assertSharedSeatJobAllowed(job: Pick<AgentJobRow, "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">): Promise<void> {
   const { memberFactsOf } = await import("../ai-runs/live.js");
   const { parseAccountSettings, serviceSeatConsented } = await import("../ai-runs/plan.js");
   const { aiAccountRow } = await import("../ai-runs/store.js");
-  const seat = job.account_member ?? "";
-  const [settings, seatFacts, requesterFacts] = await Promise.all([aiAccountRow(), memberFactsOf(seat), memberFactsOf(job.requester)]);
-  const why = sharedSeatJobRefusal(job, {
-    consented: serviceSeatConsented(parseAccountSettings(settings), seat), seat: seatFacts, requesterActive: requesterFacts.active,
-  });
-  if (why) throw new HttpError(409, why);
   const { getMember } = await import("../org/store/members.js");
-  const r = await getMember(job.requester);
-  await assertAppUsableFor({ userId: job.requester, scopes: Array.isArray(r?.scopes) ? r!.scopes : [] } as LivelyUser, job.app_id!);
+  return assertSharedSeatJob(job, {
+    seatConsented: async (member) => serviceSeatConsented(parseAccountSettings(await aiAccountRow()), member),
+    memberFacts: memberFactsOf,
+    assertAppUsable: async (member, appId) => {
+      const r = await getMember(member);
+      await assertAppUsableFor({ userId: member, scopes: Array.isArray(r?.scopes) ? r!.scopes : [] } as LivelyUser, appId);
+    },
+  });
 }
 
 let cached: AgentJobDeps | null = null;

@@ -60,7 +60,7 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
 
 export interface AiRunDeps {
   store: Pick<Store, "insertAiRun" | "getAiRun" | "getAiRunByToken" | "getAiRunByJob" | "setAiRunJob" | "setAiRunProxyToken" | "markAiRunRunning" | "retryAiRun"
-    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp">;
+    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "aiRunSharedSeat">;
   policy(): Promise<AiRunPolicy>;
   accountSettings(): Promise<AiAccountSettings>;
   /** 워크스페이스 Anthropic API 키(org_credential anthropic_api_key) — 없으면 null. 값은 LLM 호출 헤더에만 쓴다. */
@@ -98,8 +98,6 @@ export interface AiRunDeps {
    *  없는 사람(앱 서버 id 포함)은 { active: false, elevated: false }. 공용 시트 판정(시트 계정 · 보낸 사람)이 쓴다.
    */
   memberFacts(member: string): Promise<{ active: boolean; elevated: boolean }>;
-  /** 이 작업이 공용 시트로 도는 작업인가(agent-jobs store.agentJobSharedSeat) — 형식 재시도가 원래 작업의 자리를 그대로 탄다. */
-  jobSharedSeat(jobId: number): Promise<boolean>;
 }
 
 export const ACCOUNT_UNAVAILABLE = "account_unavailable";
@@ -273,7 +271,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     appId, requester: who.member, requesterKind: who.kind, source: ctx.source ?? null, jobName, kind,
     accountKind: account.kind, accountMember: account.kind === "subscription" ? account.member : null, executor,
     model: model ?? (executor === "proxy" ? settings.default_model ?? DEFAULT_MODEL : null), label, prompt, systemPrompt: system, schema,
-    status: executor === "proxy" ? "running" : "queued",
+    status: executor === "proxy" ? "running" : "queued", sharedSeat,
   };
   const row = await d.store.insertAiRun(n);
   logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor }, "[ai-run] 접수");
@@ -443,8 +441,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         model: job.model, label: `${run.label ?? `AI 실행 #${run.id}`} (형식 다시)`, prompt: retryInstruction(judged.errors, run.schema),
         timeoutMin: Math.max(1, Math.round(job.timeout_sec / 60)), bare: run.kind === "single", resumeJobId: job.id,
         //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
-        //  #5081 — 공용 시트 표시도 원래 작업 것을 그대로(지금 설정으로 다시 고르지 않는다 — 그 사이 지정을 거뒀으면 재시도는 띄우기 직전에 멈춘다).
-        homeless: job.homeless === true, sharedSeat: await d.jobSharedSeat(job.id),
+        //  #5081 — 공용 시트 표시도 이 실행 것을 그대로(지금 설정으로 다시 고르지 않는다 — 그 사이 지정을 거뒀으면 재시도는 띄우기 직전에 멈춘다).
+        homeless: job.homeless === true, sharedSeat: await d.store.aiRunSharedSeat(run.id),
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {
@@ -499,24 +497,28 @@ export async function bootEnvForJob(job: Pick<AgentJobRow, "id" | "account_kind"
 // ── 조회 · 취소 · 대상 ──
 /**
  * 내 실행인가 — 보낸 사람, 또는 (구독 실행이면) 그 구독의 주인(초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 실행 — 격리 리뷰 non-blocking 3).
- *  #5081 공용 시트로 돈 실행(sharedSeat — 그 작업의 shared_seat 표시)은 구독 주인의 것이 아니다 — 시트 계정은 구성원 누구의 지시든 받는 자리일 뿐이고
+ *  #5081 공용 시트로 돈 실행(sharedSeat — 실행 행의 shared_seat 표시)은 구독 주인의 것이 아니다 — 시트 계정은 구성원 누구의 지시든 받는 자리일 뿐이고
  *   지시 · 답은 물은 사람 것이다(시트 계정으로 로그인한 사람이 남의 질문 · 답을 읽거나 끊지 않게). 지정을 거둔 뒤에도 그 실행은 그대로 남의 것이다.
+ *   sharedSeat 는 필수다 — 빠뜨린 자리가 기본값(«공용 시트 아님»)으로 남의 실행을 열지 않게.
  */
-export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser, sharedSeat = false): boolean {
+export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser, sharedSeat: boolean): boolean {
   const me = memberOf(user);
   return r.requester === me || (!sharedSeat && r.account_kind === "subscription" && r.account_member === me);
 }
-export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps, sharedSeat = false): boolean {
+export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps, sharedSeat: boolean): boolean {
   if (d.isAdmin(user) && !user.appId) return true;
   if (!isOwnRun(r, user, sharedSeat)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;
 }
-/** 이 실행이 공용 시트로 돌았나(#5081) — 구독 주인 가지만이 판정을 가를 때만 작업 표시를 읽는다(그 밖엔 답이 같다 — 읽지 않는다). */
-async function sharedSeatRunFor(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member" | "job_id">, user: LivelyUser, d: Pick<AiRunDeps, "jobSharedSeat">): Promise<boolean> {
+/**
+ * 이 실행이 공용 시트로 돌았나(#5081 — 실행 행의 표시 · store.aiRunSharedSeat) — 구독 주인 가지만이 판정을 가를 때만 읽는다(그 밖엔 답이 같다).
+ *  작업 행을 보지 않는다 — 작업 행이 없거나(접수 실패) 지워져도(보존 정리) 실행 행의 표시는 남는다.
+ */
+async function sharedSeatRunFor(r: Pick<AiRunRow, "id" | "requester" | "account_kind" | "account_member">, user: LivelyUser, d: Pick<AiRunDeps, "store">): Promise<boolean> {
   const me = memberOf(user);
-  if (r.requester === me || r.account_kind !== "subscription" || r.account_member !== me || r.job_id == null) return false;
-  return d.jobSharedSeat(r.job_id);
+  if (r.requester === me || r.account_kind !== "subscription" || r.account_member !== me) return false;
+  return d.store.aiRunSharedSeat(r.id);
 }
 
 export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {

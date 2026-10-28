@@ -144,7 +144,6 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     isAdmin,
     isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
     memberFacts: memberFactsOf,
-    jobSharedSeat: async (jobId) => (await import("../agent-jobs/store.js")).agentJobSharedSeat(jobId),
   };
   return cached;
 }
@@ -161,6 +160,26 @@ export async function memberFactsOf(member: string): Promise<{ active: boolean; 
   const m = member ? await getMember(member) : null;
   if (!m || m.state !== "active" || m.kind !== "human" || !(await workspaceAccessAllowed(m.id))) return { active: false, elevated: false };
   return { active: true, elevated: seatElevated(Array.isArray(m.scopes) ? m.scopes : []) };
+}
+
+/**
+ * #5081 구성원이 비활성 · 삭제되면 그 계정의 공용 시트 지정(관리자 승인 · 본인 동의)을 지운다 — 앱 동의(org_app_grant)를 거두는 것과 같은 까닭
+ *  (apps/member-deactivation 머리말): 남겨 두면 다시 활성화되거나 같은 id 로 다시 만들어질 때 두 동의가 되살아난다(동의한 적 없는 사람에게도).
+ *  지운 줄이 있으면 감사(op app_ai_service_seat · 쓰기와 같은 트랜잭션)에 남기고 true, 없으면 쓰지 않고 false.
+ */
+export async function dropServiceSeatOf(member: string): Promise<boolean> {
+  const store = await import("./store.js");
+  const { audit } = await import("../org/store/audit.js");
+  return store.updateAiAccountRow(async (cur, c) => {
+    const s = parseAccountSettings(cur);
+    const before = s.service_seats?.[member];
+    if (!before) return { next: null, out: false };
+    const seats = { ...s.service_seats };
+    delete seats[member];
+    if (Object.keys(seats).length) s.service_seats = seats; else delete s.service_seats;
+    await audit("org_runtime_config", "1", "app_ai_service_seat", { member, seat: before }, { member, seat: null }, undefined, "member-deactivation", c);
+    return { next: s, out: true };
+  });
 }
 
 /** 로그인 판정은 비싸다(원격 실행 2번) — 60초 기억(설계 §12 ④ «짧게 기억»). 모름(null)도 기억한다. */

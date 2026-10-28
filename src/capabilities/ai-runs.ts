@@ -11,7 +11,7 @@ import { isAdmin } from "./principal.js";
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 import { AI_RUN_POLICY_RANGE, DEFAULT_AI_RUN_POLICY, aiRunPolicySource, invalidateAiRunPolicyCache, resolveAiRunPolicy, type AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import {
-  JOB_NAME_RE, MODEL_RE, PROMPT_MAX, WAIT_MAX_SEC, accountSetRefusal, parseAccountSettings, seatElevated, seatShared, seatState, serviceSeatChange,
+  JOB_NAME_RE, MODEL_RE, PROMPT_MAX, WAIT_MAX_SEC, accountSetRefusal, parseAccountSettings, seatShared, seatState, serviceSeatChange,
   serviceSeatConsented, type AiAccount, type AiAccountSettings, type SeatTarget,
 } from "../ai-runs/plan.js";
 import { APP_ID_RE } from "../agent-jobs/plan.js";
@@ -186,6 +186,10 @@ const appAiAccountSet: Capability = {
     const { audit } = await import("../org/store/audit.js");
     await store.updateAiAccountRow(async (cur, c) => {
       const before = parseAccountSettings(cur);
+      //  남의 구독을 공용 시트로 거는 판정(nextShared)은 잠금 밖에서 했다 — 그 사이 지정이 풀렸으면 걸지 않는다(그 구독은 이제 본인 · 초대받은 사람만).
+      if (nextShared && next?.kind === "subscription" && !serviceSeatConsented(before, next.member)) {
+        throw new HttpError(409, `${next.member} 계정의 공용 시트 지정이 그 사이 풀렸습니다 — 상태를 다시 확인하세요`);
+      }
       const s: AiAccountSettings = parseAccountSettings(cur);
       if (appId) {
         s.apps ??= {};
@@ -232,8 +236,9 @@ const appAiServiceSeatSet: Capability = {
     if (typeof input.on !== "boolean") throw new HttpError(400, "on 은 true · false 중 하나");
     const { getMember } = await import("../org/store/members.js");
     const m = await getMember(member);
+    //  사실은 실행 판정과 같은 출처(memberFacts — 비활성 · 사람 아님이면 elevated 를 안 보지만, 그 경우는 serviceSeatChange 가 먼저 409 로 거절한다).
     const f = m ? await d.memberFacts(member) : { active: false, elevated: false };
-    const target: SeatTarget = { member, exists: !!m, active: f.active, human: m?.kind === "human", elevated: seatElevated(Array.isArray(m?.scopes) ? m!.scopes : []) };
+    const target: SeatTarget = { member, exists: !!m, active: f.active, human: m?.kind === "human", elevated: f.elevated };
     const actor = { member: user.userId, admin: isAdmin(user) };
     const store = await import("../ai-runs/store.js");
     //  승인 · 동의 · 거두기는 «누가 남의 구독을 공용으로 열었나» 를 가리는 기록이라 감사에 남긴다 — 같은 트랜잭션으로(쓰기만 남고 기록이 빠지지 않게).

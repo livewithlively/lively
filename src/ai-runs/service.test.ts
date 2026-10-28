@@ -22,8 +22,11 @@ interface World {
   runs: Map<number, AiRunRow>; calls: NewLlmCall[]; jobs: Map<number, AgentJobRow>; submitted: SubmitJobInput[]; llm: SingleShotInput[]; canceled: number[];
   settings: AiAccountSettings; key: string | null; policy: AiRunPolicy; llmReply: (i: SingleShotInput, n: number) => SingleShotOutput; submitThrows?: HttpError;
   usedToday: number; inflightCount: number;
-  /** #5081 구성원 표(가짜) — 없는 이름은 활성 · 기본 권한뿐(앱 서버 id 는 늘 아님). 작업마다 공용 시트 표시. */
-  members: Record<string, { active: boolean; elevated: boolean }>; jobShared: Map<number, boolean>;
+  /**
+   * #5081 구성원 표(가짜) — 없는 이름은 활성 · 기본 권한뿐(앱 서버 id 는 늘 아님). 작업마다 · 실행마다 공용 시트 표시.
+   *  실행 표시는 행 모양(COLS)에 없고 따로 읽는다(store.RUN_SHARED_SEAT_COL) — 가짜도 행 밖 지도로 둔다.
+   */
+  members: Record<string, { active: boolean; elevated: boolean }>; jobShared: Map<number, boolean>; runShared: Map<number, boolean>;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -35,7 +38,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
   let seq = 0, jseq = 100;
   const w: World = {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
-    llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), ...o,
+    llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), runShared: new Map(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const d: AiRunDeps = {
@@ -46,8 +49,9 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
           account_kind: n.accountKind, account_member: n.accountMember, executor: n.executor, job_id: null, model: n.model, label: n.label, prompt: n.prompt, system_prompt: n.systemPrompt,
           schema: n.schema, result: null, error: null, session_note: null, proxy_token_hash: null, retries: 0, input_tokens: null, output_tokens: null,
           created_at: new Date(), started_at: n.status === "running" ? new Date() : null, ended_at: null, updated_at: new Date() };
-        w.runs.set(id, row); return { ...row };
+        w.runs.set(id, row); w.runShared.set(id, n.sharedSeat === true); return { ...row };
       },
+      async aiRunSharedSeat(id) { return w.runShared.get(id) === true; },
       async getAiRun(id) { const r = w.runs.get(id); return r ? { ...r } : null; },
       async getAiRunByToken(h) { const r = [...w.runs.values()].find((x) => x.proxy_token_hash === h && !ended(x.status)); return r ? { ...r } : null; },
       async getAiRunByJob(j) { const r = [...w.runs.values()].find((x) => x.job_id === j); return r ? { ...r } : null; },
@@ -61,7 +65,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async openRunCountOf(req) { return [...w.runs.values()].filter((r) => r.requester === req && !ended(r.status)).length; },
       //  SQL(store.listAiRuns)과 같은 뜻 — 내 실행 = 보낸 것 + 공용 시트가 아닌 내 구독으로 도는 것(#5081 · 실 Postgres 는 store.pg-test T13).
       async listAiRuns(f) {
-        const shared = (r: AiRunRow): boolean => r.job_id != null && w.jobShared.get(r.job_id) === true;
+        const shared = (r: AiRunRow): boolean => w.runShared.get(r.id) === true;
         return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester && !shared(r))))
           .map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null, shared_seat: shared(r) } as unknown as AiRunSummaryRow));
       },
@@ -91,7 +95,6 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
     memberFacts: async (m) => (m.startsWith("app-server:") ? { active: false, elevated: false } : w.members[m] ?? { active: true, elevated: false }),
-    jobSharedSeat: async (id) => w.jobShared.get(id) === true,
   };
   return { w, d };
 }
@@ -415,6 +418,22 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   assert.equal(adminRows.find((r) => r.id === vr.id)?.prompt_preview, null, "관리자가 된 시트 계정의 목록에 남의 지시 앞머리가 없다");
   assert.equal(adminRows.find((r) => r.id === seatOwn.id)?.prompt_preview, "시트 본인 질문");
   assert.ok(!("prompt" in (await getRunFor(Number(vr.id), seatAdmin, view.d))), "하나 보기도 상태만(관리자 규칙)");
+  //  표시는 실행 행에 있다 — 작업 행이 없는 실행(접수 중 대기열이 차 실패)도, 작업 행이 지워진 실행(보존 정리)도 시트 계정의 것이 아니다(격리 리뷰).
+  const full = world({ settings: seatOn, key: null, submitThrows: new HttpError(429, "작업 대기열이 찼습니다") });
+  await fails(submitRun({ prompt: "앨리스의 질문(대기열 참)" }, appUser("alice", "crm"), { source: "app-front" }, full.d), 429);
+  const orphan = [...full.w.runs.values()][0]!;
+  assert.equal(orphan.status, "failed"); assert.equal(orphan.job_id, null, "작업 행이 없는 실행(관측 장치)");
+  await fails(getRunFor(orphan.id, member("seat"), full.d), 404);
+  await fails(cancelRunFor(orphan.id, member("seat"), full.d), 404);
+  assert.deepEqual((await listRunsFor({ app_id: "crm" }, member("seat"), full.d)).runs, [], "작업 없는 공용 시트 실행도 시트 계정의 목록에 없다");
+  assert.equal((await getRunFor(orphan.id, member("alice"), full.d)).prompt, "앨리스의 질문(대기열 참)", "물은 사람은 본다");
+  const pruned = world({ settings: seatOn, key: null });
+  const pr = await submitRun({ prompt: "오래된 질문" }, appUser("alice", "crm"), { source: "app-front" }, pruned.d);
+  pruned.w.jobs.clear(); pruned.w.jobShared.clear();   // 보존 정리가 작업 행을 지웠다
+  await fails(getRunFor(Number(pr.id), member("seat"), pruned.d), 404);
+  assert.deepEqual((await listRunsFor({ app_id: "crm" }, member("seat"), pruned.d)).runs, [], "작업 행이 지워진 공용 시트 실행도 시트 계정의 목록에 없다");
+  //  공용 시트가 아닌 구독(초대받은 사람이 주인 세션에서 보냄)의 실행 표시는 false — 주인 가지(종전 #4488)가 그대로다(S9b 등).
+  assert.equal(view.w.runShared.get(Number(seatOwn.id)), false, "시트 본인 실행 · 지정 거둔 뒤 실행은 표시 없음");
   ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 높은 권한/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets · 시트 계정은 남의 실행을 못 봄");
 }
 

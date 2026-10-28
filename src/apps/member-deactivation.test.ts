@@ -41,6 +41,22 @@ test("한 세션의 kill 실패는 나머지 회수를 막지 않는다(failed �
   assert.deepEqual(calls.deleted, ["b"], "실패한 세션의 상태행은 지우지 않는다(다음 회수 기회 보존)");
 });
 
+test("#5081 공용 시트 지정도 지운다 · 지운 줄이 있으면 결과에 표시 · 실패해도 나머지 회수는 돈다", async () => {
+  const dropped: string[] = [];
+  const { deps, calls } = fakes([{ id: "s-app", app_id: "x" }]);
+  const r = await reclaimMemberAppFootprint("seat", { ...deps, dropServiceSeat: async (m) => { dropped.push(m); return true; } });
+  assert.deepEqual(dropped, ["seat"], "그 멤버의 지정을 지운다");
+  assert.equal(r.service_seat_dropped, true);
+  const none = await reclaimMemberAppFootprint("bob", { ...deps, dropServiceSeat: async () => false });
+  assert.ok(!("service_seat_dropped" in none), "지운 줄이 없으면 표시 없음");
+  const failing = fakes([{ id: "s-app", app_id: "x" }]);
+  const rf = await reclaimMemberAppFootprint("seat", { ...failing.deps, dropServiceSeat: async () => { throw new Error("DB 막힘"); } });
+  assert.deepEqual(rf.sessions, ["s-app"], "지정 지우기가 실패해도 앱 세션 회수는 돈다");
+  assert.deepEqual(failing.calls.revoke, ["seat"]);
+  assert.ok(!("service_seat_dropped" in rf));
+  assert.deepEqual(calls.central, ["s-app", "s-app"], "지정을 지운 회수 · 지울 줄이 없던 회수 모두 앱 세션을 걷는다");
+});
+
 test("앱 세션 0 → grant 만 회수, kill 0회(경계)", async () => {
   const { deps, calls } = fakes([{ id: "p", app_id: null }]);
   const r = await reclaimMemberAppFootprint("m", deps);

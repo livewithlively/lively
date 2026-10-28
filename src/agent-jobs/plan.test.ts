@@ -7,6 +7,7 @@ import {
   TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
+import { seatShared } from "../ai-runs/plan.js";
 import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
 
 let pass = 0;
@@ -107,6 +108,13 @@ t("G1 공용 시트 작업을 아직 돌려도 되나 — 모양(구독 · 앱 �
   for (const [o, fo, re] of rows) assert.match(sharedSeatJobRefusal({ ...job, ...o }, { ...f, ...fo }) ?? "", re, JSON.stringify([o, fo]));
   //  모양이 먼저다 — 사실을 몰라도(다 «아님») 모양 거절 문장이 나온다(사실 조회가 실패해도 모양이 틀린 작업은 같은 까닭으로 끝난다).
   assert.match(sharedSeatJobRefusal({ ...job, project_id: 3 }, { consented: false, seat: { active: false, elevated: true }, requesterActive: false }) ?? "", /프로젝트 폴더/);
+});
+t("G2 두 판정은 한 뜻 — 모양이 맞는 작업에서 «재판정 통과» ⇔ «접수 때 공용 시트(ai-runs/plan.seatShared)» 이고 보낸 사람이 활성", () => {
+  const job = { account_kind: "subscription", account_member: "seat", requester: "alice", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  for (const consented of [true, false]) for (const active of [true, false]) for (const elevated of [true, false]) for (const requesterActive of [true, false]) {
+    const passed = sharedSeatJobRefusal(job, { consented, seat: { active, elevated }, requesterActive }) === null;
+    assert.equal(passed, seatShared({ consented, active, elevated }) && requesterActive, JSON.stringify({ consented, active, elevated, requesterActive }));
+  }
 });
 
 // ── 감시 ─────────────────────────────────────────────────────────────────────

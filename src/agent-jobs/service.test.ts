@@ -7,6 +7,7 @@ import { HttpError } from "../http-error.js";
 import type { LivelyUser } from "../context.js";
 import {
   submitAgentJob, onBoot, onBootFailed, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
+  assertSharedSeatJob,
   enqueueAgentJob, publicJob,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
@@ -993,12 +994,12 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
   const admin = await getAgentJobFor(id, human("root", ["context", "admin"]), w.deps);
   assert.ok(!("prompt" in admin), "관리자에게도 남의 프롬프트 원문은 안 준다");
   assert.ok(!("result" in admin) && !("output_tail" in admin), "관리자에게도 남의 답·진행 꼬리는 안 준다(상태·오류만)");
-  assert.equal(canSeeJob(w.rows.get(id)!, { userId: "root", scopes: ["admin"], appId: "memo" } as LivelyUser), false, "앱 화면 안의 관리자는 관리자로 안 본다");
+  assert.equal(canSeeJob(w.rows.get(id)!, { userId: "root", scopes: ["admin"], appId: "memo" } as LivelyUser, false), false, "앱 화면 안의 관리자는 관리자로 안 본다");
   //  #4488 — 초대받은 사람이 보내 내 구독·내 자리로 도는 작업은 그 구독의 주인도 본다(취소도 같은 판정). API 키 작업은 보낸 사람만.
   const invitedJob = { ...w.rows.get(id)!, requester: "bob", account_kind: "subscription", account_member: "alice" } as AgentJobRow;
-  assert.equal(canSeeJob(invitedJob, { userId: "alice", scopes: ["context"] } as LivelyUser), true, "구독 주인은 본다");
-  assert.equal(canSeeJob(invitedJob, { userId: "carol", scopes: ["context"] } as LivelyUser), false);
-  assert.equal(canSeeJob({ ...invitedJob, account_kind: "api_key", account_member: null } as AgentJobRow, { userId: "alice", scopes: ["context"] } as LivelyUser), false, "API 키 작업은 보낸 사람만");
+  assert.equal(canSeeJob(invitedJob, { userId: "alice", scopes: ["context"] } as LivelyUser, false), true, "구독 주인은 본다");
+  assert.equal(canSeeJob(invitedJob, { userId: "carol", scopes: ["context"] } as LivelyUser, false), false);
+  assert.equal(canSeeJob({ ...invitedJob, account_kind: "api_key", account_member: null } as AgentJobRow, { userId: "alice", scopes: ["context"] } as LivelyUser, false), false, "API 키 작업은 보낸 사람만");
   const list = await listAgentJobsFor({}, human("bob"), w.deps);
   assert.deepEqual(list.jobs, []);
   const listAdmin = await listAgentJobsFor({}, human("root", ["admin"]), w.deps);
@@ -1152,7 +1153,7 @@ await t("SS1 공용 시트(#5081) — 배차가 시트 묶음을 자리 주기�
   const w = world();
   w.policy = { ...w.policy, max_running: 4, max_running_per_member: 1, max_running_per_service_seat: 2 };
   w.sharedSeats = new Set(["seat"]);
-  w.usable.add("seat:crm");   // 가짜 판정은 자리의 구성원으로 본다(진짜 판정 — 보낸 사람의 동의 — 은 live.assertSharedSeatJobAllowed)
+  w.usable.add("seat:crm");   // 가짜 판정은 자리의 구성원으로 본다(진짜 판정 — 보낸 사람의 동의 — 은 service.assertSharedSeatJob · SS3)
   for (const who of ["alice", "bob", "carol"]) await enqueueAgentJob(shared(who), w.policy, w.deps);
   await w.drain(0);
   assert.ok(w.claimSeats.length > 0 && w.claimSeats.every((s) => s?.has("seat")), "배차가 시트 묶음을 넘겼다(관측 장치)");
@@ -1199,6 +1200,42 @@ await t("SS2 공용 시트(#5081) 작업 보기 — 시트 계정(구독 주인)
   assert.equal((await getAgentJobFor(inv.row.id, human("seat"), w.deps)).status, "queued", "공용 시트가 아닌 구독 주인은 본다");
   await cancelAgentJobFor(inv.row.id, human("seat"), w.deps);
   assert.equal(w.rows.get(inv.row.id)!.status, "canceled", "공용 시트가 아닌 구독 주인은 끊는다");
+});
+
+await t("SS3 공용 시트 재판정(#5081 assertSharedSeatJob) — 시트의 사실은 시트 계정으로 · 보낸 사람의 사실은 보낸 사람으로 · 앱 동의는 보낸 사람의 것", async () => {
+  const job = { account_kind: "subscription", account_member: "seat", requester: "alice", app_id: "crm", project_id: null, cwd: "/work/apps/crm" } as const;
+  type F = { active: boolean; elevated: boolean };
+  const loaders = (o: { consented?: boolean; seat?: F; alice?: F; appOk?: Set<string> } = {}) => {
+    const seen = { consented: [] as string[], facts: [] as string[], app: [] as string[] };
+    return {
+      seen,
+      l: {
+        seatConsented: async (m: string) => { seen.consented.push(m); return o.consented ?? true; },
+        memberFacts: async (m: string) => { seen.facts.push(m); return (m === "seat" ? o.seat : m === "alice" ? o.alice : undefined) ?? { active: true, elevated: false }; },
+        assertAppUsable: async (m: string, app: string) => { seen.app.push(`${m}:${app}`); if (o.appOk && !o.appOk.has(m)) throw new HttpError(403, `앱 '${app}' 사용 동의(grant)가 없습니다`); },
+      },
+    };
+  };
+  const ok1 = loaders({ appOk: new Set(["alice"]) });
+  await assertSharedSeatJob(job, ok1.l);
+  assert.deepEqual(ok1.seen.consented, ["seat"], "지정은 시트 계정으로 본다");
+  assert.deepEqual(ok1.seen.facts.sort(), ["alice", "seat"]);
+  assert.deepEqual(ok1.seen.app, ["alice:crm"], "앱 동의는 보낸 사람의 것(시트 계정의 동의가 아니다)");
+  //  시트만 높은 권한 · 보낸 사람은 기본 권한 → 거절(사실을 바꿔 읽으면 통과해 버린다)
+  await assert.rejects(assertSharedSeatJob(job, loaders({ seat: { active: true, elevated: true } }).l), httpErr(409, /높은 권한/));
+  //  보낸 사람만 비활성 · 시트는 활성 → 거절
+  await assert.rejects(assertSharedSeatJob(job, loaders({ alice: { active: false, elevated: false } }).l), httpErr(409, /보낸 사람\(alice\)/));
+  //  시트만 비활성 → 거절
+  await assert.rejects(assertSharedSeatJob(job, loaders({ seat: { active: false, elevated: false } }).l), httpErr(409, /공용 시트 계정\(seat\)이 활성/));
+  //  보낸 사람이 높은 권한이어도 시트가 기본 권한이면 통과(보낸 사람의 권한은 작업 토큰이 따로 좁힌다 — 앱 동의 ∩ 그 사람)
+  await assertSharedSeatJob(job, loaders({ alice: { active: true, elevated: true } }).l);
+  //  지정이 풀림 → 거절 · 보낸 사람의 앱 동의 없음 → 403 · 그때 시트 계정에 동의가 있어도 소용없다
+  await assert.rejects(assertSharedSeatJob(job, loaders({ consented: false }).l), httpErr(409, /지정이 풀렸습니다/));
+  await assert.rejects(assertSharedSeatJob(job, loaders({ appOk: new Set(["seat"]) }).l), httpErr(403, /동의/));
+  //  모양이 틀리면(프로젝트 폴더) 사실과 무관하게 거절하고 앱 판정까지 가지 않는다
+  const shape = loaders();
+  await assert.rejects(assertSharedSeatJob({ ...job, project_id: 3, cwd: "/work/shared/project/3" }, shape.l), httpErr(409, /프로젝트 폴더/));
+  assert.deepEqual(shape.seen.app, []);
 });
 
 console.log(`# ${pass} pass`);

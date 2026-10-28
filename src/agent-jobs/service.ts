@@ -35,7 +35,7 @@ import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agen
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
   LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
-  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
   PRUNE_BATCH, PRUNE_ROUNDS_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
@@ -97,6 +97,31 @@ export const MAX_LAUNCH_ATTEMPTS = 5;
  *  시도 상한이 몇 초 만에 다 닳는다(증분 재검토). 감시 주기와 같은 30초 — 시도 5번이면 적어도 2분.
  */
 export const LAUNCH_RETRY_GAP_SEC = 30;
+/** #5081 공용 시트 재판정이 읽는 사실의 출처 — live 가 설정 · 구성원 표 · 앱 판정을 잇는다(시험은 가짜로). */
+export interface SharedSeatJobLoaders {
+  /** 그 계정의 공용 시트 지정(관리자 승인 + 본인 동의)이 그대로인가. */
+  seatConsented(member: string): Promise<boolean>;
+  /** 그 구성원이 이 워크스페이스의 활성 사람 구성원인가 · 기본 권한 밖의 권한이 있나(ai-runs/live.memberFactsOf). */
+  memberFacts(member: string): Promise<{ active: boolean; elevated: boolean }>;
+  /** 그 사람이 그 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 안 되면 HttpError 를 던진다. */
+  assertAppUsable(member: string, appId: string): Promise<void>;
+}
+
+/**
+ * #5081 공용 시트 작업을 아직 돌려도 되나 — 시트 계정의 사실은 account_member 로, 보낸 사람의 사실은 requester 로 읽어 plan.sharedSeatJobRefusal 로 재고,
+ *  통과하면 **보낸 사람**의 앱 동의를 본다(시트 계정의 동의가 아니다 — 앱을 쓰는 사람은 물은 사람이다). 접수 때(ai-runs/service.submitRun)와 같은 자다.
+ *  «안 된다» 는 HttpError(409 · 403 · 404) — 배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다(live.assertJobAllowed).
+ */
+export async function assertSharedSeatJob(
+  job: Pick<AgentJobRow, "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">, l: SharedSeatJobLoaders,
+): Promise<void> {
+  const seat = job.account_member ?? "";
+  const [consented, seatFacts, requesterFacts] = await Promise.all([l.seatConsented(seat), l.memberFacts(seat), l.memberFacts(job.requester)]);
+  const why = sharedSeatJobRefusal(job, { consented, seat: seatFacts, requesterActive: requesterFacts.active });
+  if (why) throw new HttpError(409, why);
+  await l.assertAppUsable(job.requester, job.app_id!);
+}
+
 /** 더 돌릴 수 없게 돼(동의 철회 · 앱 꺼짐 · 실행 계정 비활성) 감시가 멈춘 작업의 오류 문장 — 판정이 낸 사유를 붙인다. */
 export function stoppedReason(why: string): string {
   return `더 돌릴 수 없게 돼 멈췄습니다 — ${why}`.slice(0, 600);
@@ -539,8 +564,9 @@ export async function pruneAgentJobRecords(
 /**
  * 이 사람(이 앱)이 이 작업을 볼 수 있나 — 관리자는 다 · 앱 화면은 제 앱의 제 작업만 · 사람은 제 작업만.
  *  sharedSeat = 공용 시트로 도는 작업인가(#5081) — 그 작업은 시트 계정(구독 주인)의 것이 아니다(ai-runs/service.isOwnRun 과 같은 규칙).
+ *   필수다 — 빠뜨린 자리가 기본값(«공용 시트 아님»)으로 남의 작업을 열지 않게.
  */
-export function canSeeJob(r: AgentJobRow, user: LivelyUser, sharedSeat = false): boolean {
+export function canSeeJob(r: AgentJobRow, user: LivelyUser, sharedSeat: boolean): boolean {
   if (isAdmin(user) && !user.appId) return true;
   const me = memberOf(user);
   //  구독 실행의 주인(account_member)도 본다 — 초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 작업(#4488 · 격리 리뷰). 취소도 같은 판정.
