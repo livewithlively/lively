@@ -172,7 +172,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const all = (): StudioPin[] => o.pins();
   const changed = (): void => { o.onPins(all()); paintCount(); paintMarks(); if (!list.hidden) paintList(); };
   const paintCount = (): void => {
-    const mine = all().filter((p) => p.on === 'wire'); const n = mine.filter((p) => p.note.trim()).length;
+    const mine = all().filter((p) => p.on === 'wire' && !p.sent); const n = mine.filter((p) => p.note.trim()).length;   // 보내서 반영 중인 것은 세지 않는다
     count.textContent = '코멘트 ' + n + '건' + (mine.length > n ? ' · 빈 코멘트 ' + (mine.length - n) : '');
   };
   const paintMarks = (): void => {

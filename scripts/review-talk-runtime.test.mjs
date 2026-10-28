@@ -9,12 +9,12 @@
 //  E3 첫 말 Enter → 보낸 글 1건(대화 방식 + 그 글) · 칸 비움   E4 두 번째 말 = 쓴 글 그대로
 //  E5 조합 중 Enter · 빈 글 → 안 보냄   E6 보내기 실패 → 글 그대로
 //  E7 「접기」 · Esc → 닫힘 · 세션 화면은 칸 안에 그대로   E8 도구 고름 → 닫힘   E9 코멘트 칸 ↔ 대화 칸 서로 닫음
-//  E10 고치는 중 → 칸 잠김   E11 막대 칸에 쓴 글은 앱 전체 코멘트(general) · 코멘트 수를 안 바꾼다
+//  W1~W5 고치는 중(「수정하기」 를 보낸 뒤) — 도구 · 앱 위 층 · 새 코멘트 · 「AI에게 말하기」 가 그대로 · 보낸 것은 흐리게 · 세지 않음 · 못 고침   E11 막대 칸에 쓴 글은 앱 전체 코멘트(general) · 코멘트 수를 안 바꾼다
 //  E12 막대가 걷히면 세션 화면이 제자리로 돌아간다   E13 막대가 위면 대화 칸이 막대 아래로   W 페이지 예외 없음
 //  B talkBrief — 첫 말에만 방식(묻기 · app_pull/app_save · 공개 안 함) · 그 뒤는 글 그대로
 //  ⚠ 범위 밖: «실패한 뒤 다음 말이 다시 첫 말» 플래그(app-studio onTalk) · 세션 위젯 꼴의 고정 자리(placeTalk) · 앱빌더 쪽 걷기 경로(backToBuilder · teardown 은 모두 closeReview 를 거친다).
 //
-// fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 E1 · E3~E9 · E12 · E13 · B 가 빨갛다).
+// fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 E1 · E3~E9 · E12 · E13 · W · B 가 빨갛다).
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -105,11 +105,26 @@ async function PAGE_MAIN() {
   fail = true; type("실패할 말"); key("Enter"); await sleep(200);
   R.e6 = { val: gen.value, n: sent.length };
   fail = false;
-  window.__step = "E10";
-  api.update({ waiting: true }); await sleep(100);
-  R.e10 = { disabled: gen.disabled };
-  type("고치는 중 말"); key("Enter"); await sleep(150);
-  R.e10.n = sent.length;
+  window.__step = "W";
+  //  고치는 중(원준 2026-10-28 «하나 치고 나서는 다 적용될 때까지 다른 코멘트를 남기는 게 비활성화 · 해결해야») — 부르는 쪽이 보낸 코멘트에 sent 를 찍고 앱 전체 칸을 비운다.
+  { const pb = [...document.querySelectorAll(".v2-review-tools button")].find((b) => /선택/.test(b.textContent)); pb.click(); await sleep(50); }
+  host.pins[0].sent = true; api.update({ waiting: true, general: "" }); await sleep(600);
+  const ov = document.querySelector(".v2-review-ov"), sendB = document.querySelector(".v2-review-bar .v2-studio-now-pri");
+  const toolBtns = () => [...document.querySelectorAll(".v2-review-tools button")];
+  R.w = { genDisabled: gen.disabled, toolsDisabled: toolBtns().some((b) => b.disabled), toolOn: (toolBtns().find((b) => b.classList.contains("on")) || {}).textContent,
+    layerHidden: document.querySelector(".v2-review-layer").hidden, sendDis: sendB.disabled, sendText: sendB.textContent, count: $(".v2-review-count").textContent, hint: $(".v2-review-hint").textContent };
+  { const sm = document.querySelector(".v2-studio-mk-n.sent"); R.w.sentMark = !!sm && getComputedStyle(sm).opacity < 0.6; if (sm) sm.click(); await sleep(150); R.w.popOnSent = !!document.querySelector(".v2-studio-pop"); }
+  toolBtns().find((b) => /핀/.test(b.textContent)).click(); await sleep(50);
+  { const r = ov.getBoundingClientRect(); ov.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: r.left + r.width * 0.6, clientY: r.top + r.height * 0.6 })); }
+  await sleep(1100);   // 탐침 답을 0.7초 기다린다(프레임이 답하지 않는 시험 문서)
+  { const ta = document.querySelector(".v2-studio-pop textarea"); R.w.pop = !!ta; if (ta) { ta.value = "버튼 더 크게"; ta.dispatchEvent(new Event("input", { bubbles: true })); ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); } }
+  await sleep(100);
+  R.w.pins = host.pins.length; R.w.newNote = host.pins[1] && host.pins[1].note; R.w.newSent = !!(host.pins[1] && host.pins[1].sent); R.w.countAfter = $(".v2-review-count").textContent;
+  $(".v2-review-count").click(); await sleep(150);
+  R.w.tray = [...document.querySelectorAll(".v2-review-tray .v2-studio-tray-row:not(.all)")].map((r) => ({ sent: r.classList.contains("sent"), dis: r.querySelector("input").disabled, x: !!r.querySelector(".x") }));
+  $(".v2-review-count").click(); await sleep(100);
+  type("고치는 중 말"); key("Enter"); await sleep(250);
+  R.w.talkN = sent.length; R.w.talkLast = sent[sent.length - 1];
   api.update({ waiting: false }); await sleep(100);
   window.__step = "E13";
   $(".v2-review-flip").click(); await sleep(50);
@@ -125,6 +140,7 @@ async function PAGE_MAIN() {
 }
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${css("01-base.css", "40-v2.css")}</style></head><body>
+<iframe class="v2-appui-frame" data-app-id="mn" srcdoc="<p>앱</p>" style="position:fixed;left:20px;top:20px;width:900px;height:460px;border:0"></iframe>
 <div id="side" class="v2-studio-side"><div id="head">AI 세션</div><div id="chat" class="v2-studio-chat"><div class="term">터미널</div></div><div id="after"></div></div>
 <div id="out"></div>
 <script>${bundle}</script>
@@ -141,6 +157,7 @@ let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL  ${n} — ${why}`); };
 const check = (cond, n, why = "") => (cond ? ok(n) : bad(n, typeof why === "string" ? why : JSON.stringify(why)));
+const same = (got, want, n) => { const a = JSON.stringify(got), b = JSON.stringify(want); return a === b ? ok(n) : bad(n, `기대 ${b} · 실제 ${a}`); };
 
 check(R.e2.parent === "side" && !R.e2.open, "E2 열기 전엔 세션 화면이 제자리 · 대화 칸 닫힘", R.e2);
 check(/AI에게 말하기/.test(R.e2.placeholder || ""), "E2 막대 칸은 「AI에게 말하기」", R.e2);
@@ -159,7 +176,13 @@ check(R.e8.before8 && !R.e8.after, "E8 도구를 고르면 닫힌다", R.e8);
 check(R.e9.trayOpen && !R.e9.talkAfterTray, "E9 코멘트 칸을 열면 대화 칸이 닫힌다", R.e9);
 check(R.e9.talkBack && R.e9.trayGone && R.e9.joined, "E9 대화 칸을 열면 코멘트 칸이 닫히고 막대와 맞붙은 채", R.e9);
 check(R.e6.val === "실패할 말" && R.e6.n === 2, "E6 못 보내면 쓴 글을 그대로 둔다", R.e6);
-check(R.e10.disabled && R.e10.n === 2, "E10 고치는 중엔 칸이 잠기고 안 보낸다", R.e10);
+check(!R.w.toolsDisabled && /선택/.test(R.w.toolOn || "") && !R.w.layerHidden, "W1 고치는 중에도 도구가 눌리고 고른 도구 그대로 · 앱 위 층이 선다", R.w);
+check(R.w.sendDis && /AI 수정 중/.test(R.w.sendText) && /다음 코멘트를 남겨/.test(R.w.hint), "W1 「수정하기」 는 고치는 중이라 잠기고 그동안 남기라고 말한다", R.w);
+check(/코멘트 0건/.test(R.w.count), "W2 보낸(반영 중) 코멘트는 세지 않는다", R.w);
+check(R.w.sentMark && !R.w.popOnSent, "W2 보낸 코멘트 번호는 흐리고 눌러도 칸이 안 열린다", R.w);
+check(R.w.pop && R.w.pins === 2 && R.w.newNote === "버튼 더 크게" && !R.w.newSent && /코멘트 1건/.test(R.w.countAfter), "W3 고치는 중에 새 핀 · 코멘트를 남기고 그것만 센다", R.w);
+same(R.w.tray, [{ sent: true, dis: true, x: false }, { sent: false, dis: false, x: true }], "W4 코멘트 칸 — 보낸 줄은 잠기고 지울 수 없다 · 새 줄은 그대로");
+check(!R.w.genDisabled && R.w.talkN === 3 && R.w.talkLast === "고치는 중 말", "W5 고치는 중에도 「AI에게 말하기」 로 보낸다", R.w);
 check(R.e13.open && R.e13.below, "E13 막대가 위면 대화 칸이 막대 아래로", R.e13);
 check(R.e12.parent === "side" && R.e12.order === "after" && !R.e12.talkLeft, "E12 막대가 걷히면 세션 화면이 제자리(같은 순서)로 · 대화 칸도 걷힌다", R.e12);
 check(R.e12.closedInside === "side", "E12 부르는 쪽 onClose 때 이미 제자리다", R.e12);

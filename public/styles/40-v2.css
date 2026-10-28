@@ -3273,6 +3273,11 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-review-layer .v2-studio-mk-box { pointer-events: none; }
 .v2-review-ov { position: absolute; inset: 0; z-index: 3; }
 .v2-review-ov[hidden] { display: none; }
+/* 「수정하기」로 보내 AI 가 반영하고 있는 코멘트 — 흐리게 남긴다(고치는 동안 다음 코멘트를 남기게 · 원준 2026-10-28) */
+.v2-studio-mk.sent { opacity: .42; }
+.v2-studio-mk-n.sent { cursor: default; }
+.v2-studio-tray-row.sent .w { color: var(--muted); }
+.v2-studio-tray-row.sent .v2-studio-tray-in { opacity: .6; }
 @media (max-width: 900px) {
   .v2-review-bar { left: 8px; right: 8px; transform: none; max-width: none; width: auto; }
   .v2-studio-hub-go button { min-width: 0; width: 100%; }

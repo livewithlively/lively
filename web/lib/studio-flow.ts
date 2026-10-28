@@ -281,7 +281,12 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
 }
 /** ④ 짚은 곳 — 선택한 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
 /** on: 'wire' — 앱 화면이 아니라 「와이어프레임(화면 흐름) 보기」 보드에서 짚은 곳(좌표는 그 그림 전체의 비율). 없으면 앱 화면. */
-export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number; on?: 'wire' }
+export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number; on?: 'wire';
+  /** 「수정하기」로 이미 보내 AI 가 반영하고 있는 코멘트 — 고치는 동안에도 다음 코멘트를 남기게(원준 2026-10-28) 목록엔 두되 세지 않고 고칠 수 없다.
+   *  새 버전이 오면 걷는다 · 기록(localStorage)엔 남기지 않는다(새로 열면 보낸 것은 이미 AI 에게 있다). */
+  sent?: boolean }
+/** 아직 안 보낸 코멘트 — 셈 · 보내기 · 기록이 이 한 술어를 쓴다. */
+export const unsent = (p: StudioPin): boolean => !p.sent;
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
   const pc = (v?: number): number => Math.round((v || 0) * 100);

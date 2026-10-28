@@ -14,7 +14,7 @@
 //  떠나면(다른 주소로 · 「‹ 앱빌더」 · 부르는 쪽이 close) 층과 막대를 걷는다. 한 번에 하나만 뜬다.
 import { el } from '../core.js';
 import { markReviewProbe } from './app-ui.js';
-import { verName, whereText, type StudioPin } from '../lib/studio-flow.js';
+import { unsent, verName, whereText, type StudioPin } from '../lib/studio-flow.js';
 
 export type ReviewTool = 'try' | 'pick' | 'pin' | 'box';
 export interface ReviewHost {
@@ -105,21 +105,21 @@ export function openReview(host: ReviewHost): ReviewApi {
   if (host.dock) { bar.classList.add('v2-review-bar--dock'); flip.hidden = true; count.after(hint); host.dock.append(bar); document.body.append(layer); }
   else document.body.append(layer, bar);
 
-  const cmCount = (): number => host.pins.filter((p) => p.note.trim()).length + (host.general.trim() ? 1 : 0);
+  const cmCount = (): number => host.pins.filter((p) => unsent(p) && p.note.trim()).length + (host.general.trim() ? 1 : 0);   // 보내서 반영 중인 것은 세지 않는다
   const changed = (): void => { host.onChange({ pins: host.pins, general: host.general }); paintBar(); };
   const paintBar = (): void => {
     const n = cmCount();
-    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; b.disabled = host.waiting; return b; }));
+    tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; return b; }));   // 고치는 중에도 짚는다 — 다음 「수정하기」 몫(원준 2026-10-28)
     const blank = host.pins.filter((p) => !p.note.trim()).length;
     count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 수정 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
-    gen.disabled = host.waiting || S.talkBusy;   // 「수정하기」 묶음을 고치는 중엔 말을 받지 않는다(두 지시가 한 세션에 섞이지 않게)
+    gen.disabled = S.talkBusy;   // 고치는 중에도 말한다 — AI 세션이 받아 두었다가 이어서 한다(원준 2026-10-28 «다 적용될 때까지 비활성화 · 해결해야»)
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
-    hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 다음 버전이 나오면 앱이 바뀌어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
-    layer.hidden = !S.frame || host.waiting;
+    hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
+    layer.hidden = !S.frame;
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
   };
   const setTool = (k: ReviewTool): void => { S.tool = k; closePop(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); paintBar(); paintMarks(); };
@@ -199,12 +199,14 @@ export function openReview(host: ReviewHost): ReviewApi {
       if (p.on === 'wire') return;   // 와이어프레임 보드에서 짚은 곳 — 앱 화면 위엔 그리지 않는다(번호는 그대로 i + 1)
       const hot = i === S.active;
       if (p.kind === 'pick' || p.kind === 'box') {
-        const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') });
+        const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') + (p.sent ? ' sent' : '') });
         Object.assign(b.style, { left: p.x * 100 + '%', top: p.y * 100 + '%', width: (p.w || 0) * 100 + '%', height: (p.h || 0) * 100 + '%' });
         layer.append(b);
       }
-      const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : ''), title: p.note || p.where || '', 'aria-label': (i + 1) + '번 코멘트 열기',
-        onclick: (e: MouseEvent) => { e.stopPropagation(); openPop(i); } }, el('span', { text: String(i + 1) }));
+      //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 고칠 수 없다(이미 AI 에게 갔다).
+      const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
+        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
+        onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent) openPop(i); } }, el('span', { text: String(i + 1) }));
       n.style.left = p.x * 100 + '%'; n.style.top = p.y * 100 + '%';
       layer.append(n);
     });
@@ -248,9 +250,10 @@ export function openReview(host: ReviewHost): ReviewApi {
       const inp = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLInputElement; inp.value = p.note;
       inp.addEventListener('input', () => { p.note = inp.value; changed(); });
       const wire = p.on === 'wire';
-      return el('div', { class: 'v2-studio-tray-row' }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '그 자리 보기', disabled: wire, onclick: () => { closeTray(); openPop(i); } }),
-        el('span', { class: 'w', text: (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { removePin(i); closeTray(); openTray(); } }));
+      if (p.sent) { inp.disabled = true; inp.title = 'AI가 반영하고 있어요'; }
+      return el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '그 자리 보기', disabled: wire || !!p.sent, onclick: () => { closeTray(); openPop(i); } }),
+        el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
+        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { removePin(i); closeTray(); openTray(); } }));
     });
     const g = el('input', { class: 'v2-studio-tray-in', type: 'text', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', 'aria-label': '앱 전체 코멘트' }) as HTMLInputElement; g.value = host.general;
     g.addEventListener('input', () => { host.general = g.value; changed(); });
@@ -303,7 +306,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     bar.classList.remove('v2-review-bar--talk'); if (!tray) bar.classList.remove('v2-review-bar--tray');
   };
   const say = async (): Promise<void> => {
-    const t = gen.value.trim(); if (!t || S.talkBusy || host.waiting) return;
+    const t = gen.value.trim(); if (!t || S.talkBusy) return;
     openTalk();
     S.talkBusy = true; paintBar();
     const ok = await host.onTalk(t).catch(() => false);
@@ -326,7 +329,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       if (p.version != null) host.version = p.version;
       if (p.pins) { host.pins = p.pins; closePop(); closeTray(); }
       if (p.general != null) host.general = p.general;
-      if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; closePop(); closeTray(); if (p.waiting) { S.waitT0 = Date.now(); S.tool = 'try'; tickWait(); } else { window.clearTimeout(S.waitTick); S.tool = 'pick'; } }
+      if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; closePop(); closeTray(); if (p.waiting) { S.waitT0 = Date.now(); tickWait(); } else window.clearTimeout(S.waitTick); }   // 도구는 그대로 — 고치는 중에도 짚는다
       paintBar(); paintMarks();
       if (p.note) { note.textContent = (host.version ? verName(host.version) + ' · ' : '') + p.note; note.hidden = false; window.clearTimeout(S.noteT); S.noteT = window.setTimeout(() => { note.hidden = true; }, 8000); }
     },
