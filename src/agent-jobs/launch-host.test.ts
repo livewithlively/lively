@@ -410,8 +410,8 @@ function runPrelude(args: string[]): Promise<{ code: number | null; err: string 
 
 await t("C5·F2·F3 판 머리(진짜 셸) — 비밀 파일을 읽고 파일 · 폴더를 지운 뒤 부트가 그 비밀로 · 인자의 포트로 · 워크스페이스 머리를 싣고 부른다", async () => {
   const g = await bootTarget();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-job."));
   try {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-job."));
     const file = path.join(dir, "boot");
     fs.writeFileSync(file, SECRET, { mode: 0o600 });
     const r = await runPrelude([file, "1", String(g.port), "acme", BOOT_SOURCE]);
@@ -423,13 +423,13 @@ await t("C5·F2·F3 판 머리(진짜 셸) — 비밀 파일을 읽고 파일 ·
       assert.equal(s.auth, `Bearer ${SECRET}`, "파일의 비밀이 그대로");
       assert.equal(s.ws, "acme", "워크스페이스 머리");
     }
-  } finally { await g.close(); }
+  } finally { await g.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 await t("C5 판 머리 — 워크스페이스가 빈 값이면 머리를 싣지 않는다 · 비밀 파일이 없으면 부르지 않고 3", async () => {
   const g = await bootTarget();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-job."));
   try {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-job."));
     const file = path.join(dir, "boot");
     fs.writeFileSync(file, SECRET, { mode: 0o600 });
     assert.equal((await runPrelude([file, "1", String(g.port), "", BOOT_SOURCE])).code, 3);
@@ -439,7 +439,7 @@ await t("C5 판 머리 — 워크스페이스가 빈 값이면 머리를 싣지 
     assert.equal(r.code, 3);
     assert.match(r.err, /부트 비밀을 읽지 못했습니다/);
     assert.equal(g.seen.length, before, "비밀이 없으면 게이트웨이를 부르지 않는다");
-  } finally { await g.close(); }
+  } finally { await g.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ── E. 걷기 ──────────────────────────────────────────────────────────────────────
