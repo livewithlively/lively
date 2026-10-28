@@ -95,7 +95,8 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
   if (isInsert) {
     await stampSourceVisibility(client, id, system,
       [it.container_ref, it.container_name, fields.container_ref as string, fields.container_name as string]);
-    //  커넥터가 주인을 아는 자료(Zotero 개인 라이브러리)는 그 사람만 보게 — 정책 결과를 주인으로 바꿔 쓴다(stampSourceAudience).
+    //  커넥터가 «이 사람 것»이라고 말한 자료(RawItem.audience)는 그 사람만 보게 — 정책 결과를 주인으로 바꿔 쓴다(stampSourceAudience).
+    //   ⚠ 지금은 이 표시를 내는 커넥터가 없다(Zotero 개인 라이브러리는 #2202 에서 걷었다 — 연결 = 팀과 함께 쓰기).
     if (it.audience?.length) await stampSourceAudience(client, id, it.audience);
   }
 

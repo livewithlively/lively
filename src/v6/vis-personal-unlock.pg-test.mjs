@@ -146,6 +146,43 @@ try {
   const r3 = await reconcilePersonalUploadVisibility();
   chk("P1 ★로컬 정책이 있는 테넌트에서는 아무것도 열지 않는다", r3.sources === 0, JSON.stringify(r3));
   chk("P1b 그 자료는 잠긴 채로 남는다", await visOf("source", "id", sPersonal2) === "members");
+
+  // ── 라운드 4(#2202): Zotero 개인 라이브러리 — 주인 한 사람에게만 잠긴 행만 연다 ──────────────
+  //  (라운드 3 의 로컬 정책은 local 만 다스린다 — Zotero 판정엔 영향이 없어야 한다.)
+  const mkZotero = async (key, library, owner, members) => {
+    const r = await itemsPool.query(
+      `INSERT INTO source(kind, title, body_md, fields, provenance, external_system, external_instance, external_id, visibility)
+       VALUES('zotero_item', $1, 'body', $2::jsonb, 'observed', 'zotero', '', $3, 'members') RETURNING id`,
+      [key, JSON.stringify({ library, owner_member: owner }), `${TAG}${key}`]);
+    const id = Number(r.rows[0].id);
+    for (const m of members) {
+      await itemsPool.query(`INSERT INTO source_member(source_id, subject_kind, member_id) VALUES($1,'member',$2)`, [id, m]);
+    }
+    return id;
+  };
+  const zMine   = await mkZotero("z-mine",   "users/7",  MEMBER, [MEMBER]);              // 커넥터 자동 잠금 → 연다
+  const zShared = await mkZotero("z-shared", "users/7",  MEMBER, [MEMBER, `${TAG}_x`]);  // 주인 말고 대상이 더 있다 → 사람이 정한 것
+  const zOther  = await mkZotero("z-other",  "users/7",  MEMBER, [`${TAG}_x`]);          // 대상이 주인이 아니다
+  const zGroup  = await mkZotero("z-group",  "groups/9", null,   [MEMBER]);              // 그룹 라이브러리 잠금 — 정책·사람 몫
+  const zNoOwn  = await mkZotero("z-noown",  "users/7",  null,   [MEMBER]);              // 주인 기록이 없다 — 자동 잠금이라 단정 못 한다
+  await mkLockedKnowledge("k-zotero", [[zMine, "derived_from"]]);
+  const r4 = await reconcilePersonalUploadVisibility();
+  chk("Z1 ★주인 한 사람에게만 잠긴 Zotero 개인 라이브러리 자료가 열린다", await visOf("source", "id", zMine) === "open",
+    `visibility=${await visOf("source", "id", zMine)}`);
+  chk("Z1b 그 대상 행도 사라진다", await grantsOf("source_member", "source_id", zMine) === 0);
+  chk("Z1c 그 자료만 근거인 지식도 열린다", await visOf("knowledge", "name", `${TAG}k-zotero`) === "open");
+  chk("Z2 대상이 주인 말고 더 있으면 건드리지 않는다", await visOf("source", "id", zShared) === "members");
+  chk("Z3 대상이 주인이 아니면 건드리지 않는다", await visOf("source", "id", zOther) === "members");
+  chk("Z4 그룹 라이브러리 잠금은 건드리지 않는다", await visOf("source", "id", zGroup) === "members");
+  chk("Z5 주인 기록이 없으면 건드리지 않는다", await visOf("source", "id", zNoOwn) === "members");
+  chk("Z6 집계 — 자료 1 · 지식 1", r4.sources === 1 && r4.knowledge === 1, JSON.stringify(r4));
+  //  Zotero 정책이 생기면 손을 뗀다.
+  const zLater = await mkZotero("z-later", "users/7", MEMBER, [MEMBER]);
+  await itemsPool.query(
+    `INSERT INTO org_source_vis_policy(match_system, match_channel, visibility, priority, enabled, note)
+     VALUES('zotero', NULL, 'members', 0, true, $1)`, [`${TAG}zpolicy`]);
+  const r5 = await reconcilePersonalUploadVisibility();
+  chk("Z7 ★Zotero 정책이 있는 테넌트에서는 열지 않는다", r5.sources === 0 && await visOf("source", "id", zLater) === "members", JSON.stringify(r5));
 } finally {
   await cleanup();
   await itemsPool.end().catch(() => {});

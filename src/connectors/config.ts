@@ -345,7 +345,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
         "zotero.org/settings/keys 를 엽니다(로그인 필요) ▸ [Create new private key] — 설정 메뉴 이름은 계정마다 «Feeds/API»·«Security» 로 다르게 보여 주소로 가는 편이 확실합니다",
         "Personal Library 의 «Allow library access» 와 «Allow notes access» 를 켭니다 — 노트 권한이 없으면 노트가 빠집니다. 연구실 그룹도 모으려면 Default Group Permissions 를 «Read Only» 로 둡니다",
         "[Save Key] 를 누르면 나오는 키를 아래 'API 키' 칸에 저장합니다. (이미 [외부 앱 연결 ▸ Zotero]에 저장해 뒀다면 키 칸을 비우고 '키 출처'에 member:<내 구성원 id> 를 적으세요)",
-        "모을 라이브러리를 정합니다 — 비우면 이 키가 읽을 수 있는 라이브러리 전부(개인 + 그룹)입니다. 좁히려면 users/<id> · groups/<id> 를 적고, 컬렉션만 모으려면 컬렉션 key 를 적습니다(컬렉션을 적으면 그 컬렉션만 — 다른 라이브러리를 통째로 함께 모으려면 라이브러리 칸에도 적습니다). 개인 라이브러리는 '키 출처'가 member:<구성원 id> 일 때만 모읍니다(주인에게 잠그기 위해)",
+        "모을 라이브러리를 정합니다 — 비우면 이 키가 읽을 수 있는 라이브러리 전부(개인 + 그룹)입니다. 좁히려면 users/<id> · groups/<id> 를 적고, 컬렉션만 모으려면 컬렉션 key 를 적습니다(컬렉션을 적으면 그 컬렉션만 — 다른 라이브러리를 통째로 함께 모으려면 라이브러리 칸에도 적습니다).",
       ],
       url: "https://www.zotero.org/settings/keys/new",
     },
