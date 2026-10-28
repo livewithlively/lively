@@ -45,8 +45,10 @@ const list = (name: string): string[] =>
 
 /** 소스의 nextScene 식을 주어진 차례표로 돌린다. */
 const nextSceneOn = (order: string[]) => {
-  const fn = compile(["ORDER", "cur"], js(grab(/const nextScene = \(cur: string\): string \| null => \{([^}]*)\};/, "nextScene")));
-  return (cur: string) => fn(order, cur);
+  //  (#5060) 다음 장면은 «지금 보여 주는 장면만» 센다(appliesScene — 앱 장면은 앱 안·윈도우/맥이 아닌 곳에서 건너뛴다). 그 판정은
+  //   onboarding-app-scene-runtime A3~A5 가 잰다 — 여기서는 전부 보여 주는 판으로 돌린다(차례 그 자체를 잰다).
+  const fn = compile(["ORDER", "cur", "appliesScene"], js(grab(/const nextScene = \(cur: string\): string \| null => \{([^}]*)\};/, "nextScene")));
+  return (cur: string) => fn(order, cur, () => true);
 };
 
 /** 단추 하나짜리 장면의 bind 를 가짜 DOM 으로 돌려 «누르면 어디로 가나» 를 잰다. */
@@ -118,7 +120,8 @@ test("E8′ 아무것도 답하지 않은 탭이 「이름」에 멈춰 있어�
   for (const start of ["name", "intro"]) {
     const S: { scene: string; nameSet: boolean; trail: string[] } = { scene: start, nameSet: false, trail: start === "intro" ? [] : ["intro"] };
     const hit = { to: "" };
-    compile(["S", "ORDER", "BEFORE_ANSWER", "fitScene", "goScene"], tail)(S, ORDER, BEFORE, fitScene, (k: string) => { hit.to = k; });
+    //  (#5060) landOn — 보여 주지 않는 장면이면 그다음으로(앱 안에서 «앱 받기» 를 다시 안 보이게). 이 행의 관심사가 아니라 그대로 통과시킨다.
+    compile(["S", "ORDER", "BEFORE_ANSWER", "fitScene", "goScene", "landOn"], tail)(S, ORDER, BEFORE, fitScene, (k: string) => { hit.to = k; }, (k: string | null) => k);
     assert.equal(hit.to, "intro", `저장본 ${start} 에서 인사를 건너뛰고 ${hit.to} 부터 연다`);
     assert.deepEqual(S.trail, [], `저장본 ${start} 의 옛 자취가 남아 첫 장면의 «뒤로» 가 옛 자리로 간다`);
   }

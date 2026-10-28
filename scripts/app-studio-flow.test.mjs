@@ -275,6 +275,31 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   check(/새 버전/.test(fx) && /app_save/.test(fx) && /기획 카드/.test(pl) && /\[\[대조\]\]/.test(ck), "S9 고침 · 기획 · 대조 이어서 — 저마다 화면이 읽는 꼴을 다시 일러 준다", [fx, pl, ck]);
 }
 
+// ══ I ④ 아이콘(원준 2026-10-28 «자동으로 만들어진 디자인 사항 · 아이콘 커스텀하는 창 · AI한테 그 아이콘 수정할 수 있는 창») ══
+//  AI 가 [[아이콘]] 한 줄로 보낸 그림을 서버가 받는 꼴(path: SVG 명령 · 숫자 · 구분자 1~2000자 · 색 #RRGGBB)일 때만 받는다 — 틀린 것을 받으면 마무리 저장이 400 으로 막힌다.
+{
+  const PI = F.parseIcon || (() => "없음"), IS = F.iconSpec || (() => "없음"), IB = F.iconBrief || (() => "");
+  const a = PI("네.\n[[아이콘]] path: M4 6h16 M4 12h10 | color: #118E6E | dark: #16B48C\n고르세요");
+  check(a && a.path === "M4 6h16 M4 12h10" && a.color === "#118E6E" && a.color_dark === "#16B48C", "I1 [[아이콘]] 한 줄을 읽는다(앞뒤 말 무시)", a);
+  const b = PI("[[아이콘]] path: M1 1 | color: #111111 | dark: #222222\n고쳤어요\n[[아이콘]] path: \"M2 2l3 3\" | color: #2D6BF0 | dark: #739DF5");
+  check(b && b.path === "M2 2l3 3" && b.color === "#2D6BF0", "I2 여럿이면 마지막 · I3 따옴표는 뗀다", b);
+  check(PI("[[아이콘]] path: <path d=M1 1/> | color: #111111 | dark: #222222") === null && PI("[[아이콘]] path: circle 12 | color: #111111") === null, "I4 path 에 허용 밖 글자면 버린다");
+  check(PI("[[아이콘]] path: M1 1 | color: red | dark: #222222") === null && PI("[[아이콘]] path: M1 1 | color: #11111 | dark: #222222") === null, "I5 색이 #RRGGBB 가 아니면 버린다");
+  const c = PI("[[아이콘]] path: M1 1 | color: #111111 | dark: blue");
+  check(c && c.color === "#111111" && !("color_dark" in c), "I6 다크 색만 틀리면 그것만 뺀다", c);
+  check(PI("아이콘을 그렸어요. path: M1 1 | color: #111111") === null && PI("") === null, "I7 표식이 없으면 null");
+  check(PI("[[아이콘]] path:  | color: #111111 | dark: #222222") === null, "I8 path 가 비면 null");
+  check(IS(null) === null && IS("M1 1") === null && IS({ path: "M1 1", color: "#ABCDEF", color_dark: "#000000" })?.color_dark === "#000000", "I9 iconSpec — 객체가 아니면 null · 맞으면 그대로");
+  const long = (n) => "M" + "1".repeat(n - 1);
+  check(IS({ path: long(2000), color: "#111111" }) !== null && IS({ path: long(2001), color: "#111111" }) === null, "I10 path 2000자는 받고 2001자는 버린다(서버 상한)");
+  const ib = IB("회의록", "meeting-notes", "마이크와 메모지", { path: "M7 7h3", color: "#111111" });
+  check(/meeting-notes/.test(ib) && /마이크와 메모지/.test(ib) && /M7 7h3/.test(ib) && /app_save 하지 마/.test(ib) && /\[\[아이콘\]\] path: .* \| color: #RRGGBB \| dark: #RRGGBB/.test(ib), "I11 iconBrief — 원하는 그림 · 지금 그림 · 앱은 저장 말고 [[아이콘]] 한 줄로", ib);
+  const ib2 = IB("회의록", "meeting-notes", "   ", null);
+  check(/앱이 하는 일/.test(ib2) && !/지금 아이콘/.test(ib2) && !/원하는 그림/.test(ib2), "I12 원하는 그림이 비고 지금 아이콘이 없으면 앱이 하는 일로", ib2);
+  const db = F.draftBrief({ name: "회의록", who: "", items: "", can: ["a"], not: "", first: "" }, "both", "mn");
+  check(/"icon": \{"path"/.test(db) && /"color"/.test(db) && /"color_dark"/.test(db), "I13 첫 판을 청하는 글이 아이콘도 그리라고 한다", db.slice(-400));
+}
+
 // ══ L 답 글이 «사용 한도에 걸렸다» 는 하네스 알림인가(원준 2026-10-28 — 고침을 받자마자 한도로 끝났는데 화면은 «멈췄어요» 만 말했다) ══
 {
   const PL = F.parseLimit || (() => "없음");

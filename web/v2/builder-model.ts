@@ -54,7 +54,7 @@ async function fetchApps(): Promise<BApp[] | null> {
 }
 
 /** 만들던 앱 한 줄. local = 이 브라우저의 기록에서 왔다 · serverApp = 서버가 아는 그 만들기의 앱. */
-export interface Draft { sid: string; title: string; stage: string; appId: string; done: boolean; at: number; local: boolean; node: string; serverApp?: string }
+export interface Draft { sid: string; title: string; stage: string; appId: string; done: boolean; fixing?: boolean; at: number; local: boolean; node: string; serverApp?: string }
 export interface BuilderModel { apps: BApp[]; me: { id: string; name: string }; drafts: Draft[]; mine: BApp[]; team: BApp[]; goneRecs: string[] }
 /** 막 시작한 만들기는 세션이 목록에 오기 전일 수 있다 — 그동안은 기록만 있어도 세운다. */
 export const REC_GRACE_MS = 2 * 60_000;
@@ -71,6 +71,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   //  #4667 «다 만든 앱» = 마무리(⑤ 「이대로 넣기」)를 지났거나 공개한 앱. 만들기 세션 · 만든 사람은 서버 기록(build_session · made_by)이다.
   const isDone = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
   //  카드 이름 = 사람이 정한 앱 이름(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로») — 기록의 이름 · 기획 카드 · 세션 이름 «"이름" 앱 제작» · 앱 이름 차례(lib/builder-flow draftTitle).
+  //  고침을 보내 둔 기록(fixing) — 앱의 지금 판이 보낸 때 판보다 뒤면 이미 끝났다(앱빌더를 열면 끝맺는다 · 그 전에도 줄은 «수정 중» 이라 하지 않는다).
+  const fixingOf = (r: { appId: string; fixing?: { ver: number } }): boolean => { const a = r.fixing && r.appId ? apps.find((x) => x.id === r.appId) : null; return !!r.fixing && !(a && r.fixing.ver > 0 && a.versionNo > r.fixing.ver); };
   const appTitleOf = (id: string): string => { const a = id ? apps.find((x) => x.id === id) : null; return a && !a.empty ? a.title : ''; };
   //  이 브라우저의 기록은 **서버에 그 세션이 있을 때만** 선다. 기록은 브라우저마다 따로라, 한 브라우저에서 지우면(세션 완전 삭제)
   //   다른 브라우저엔 기록이 그대로 남는다 — 종전엔 그 기록만으로 카드가 서서 지운 만들기가 사파리 · 다른 컴퓨터에서 다시 섰다
@@ -79,7 +81,7 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const ready = !!env.sessionsReady?.();
   const goneRec = (r: { sid: string; at?: number }): boolean => ready && !sessOf(r.sid) && Date.now() - (Number(r.at) || 0) > REC_GRACE_MS;
   const goneRecs = recs.filter(goneRec).map((r) => r.sid);
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
   const seen = new Set(drafts.map((d) => d.sid));
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).

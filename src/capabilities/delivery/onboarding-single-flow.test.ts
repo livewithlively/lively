@@ -47,10 +47,10 @@ await t("E14 반영은 리브 세션을 열지 않는다 · 갈래는 welcomeFlo
 const OB_RAW = readFileSync(new URL("../../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 const OB = code(OB_RAW);
 
-await t("E15 차례는 인사 → 이름 → 파일 올리기 → AI 연결 → 연결 물음(첫 관리자·합류자 같음) — (PR4) AI 연결이 외부 앱 앞 · (#5060) 파일 올리기가 AI 연결 앞", () => {
+await t("E15 차례는 인사 → 이름 → 앱으로 이어 하기 → 파일 올리기 → AI 연결 → 연결 물음(첫 관리자·합류자 같음) — (PR4) AI 연결이 외부 앱 앞 · (#5060) 파일 올리기가 AI 연결 앞 · 앱 장면은 이름 다음(어디서 건너뛰나는 onboarding-app-scene-runtime A3~A5)", () => {
   const m = OB.match(/const ORDER = (\[[^\]]*\]);/);
   assert.ok(m, "차례표를 못 찾았다 — 검사가 헛돈다");
-  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "upload", "ai", "connect-ask"]);
+  assert.deepEqual(JSON.parse(m![1]!.replace(/'/g, '"')), ["intro", "name", "desktop", "upload", "ai", "connect-ask"]);
   assert.doesNotMatch(OB, /ORDER_JOIN|isJoin\(|JOIN\b/, "합류자 갈래가 남아 있다");
 });
 
@@ -60,9 +60,9 @@ await t("E16 옛 판의 저장된 자리를 알아본다(team→name · done→c
   //  타입 표기만 걷어 그대로 돌린다(본문은 화면이 쓰는 그 글자다).
   const body = fn![1]!.replace(/: string \| null/g, "");
   const fitScene = new Function("STEP_OF", "scene", body) as (steps: Record<string, number>, s: unknown) => string | null;
-  const STEP_OF = { intro: 0, name: 1, upload: 2, ai: 3, "connect-ask": 4 };
+  const STEP_OF = { intro: 0, name: 1, desktop: 2, upload: 3, ai: 4, "connect-ask": 5 };
   const cases: Array<[unknown, string | null]> = [
-    ["intro", "intro"], ["name", "name"], ["upload", "upload"], ["ai", "ai"], ["connect-ask", "connect-ask"],
+    ["intro", "intro"], ["name", "name"], ["desktop", "desktop"], ["upload", "upload"], ["ai", "ai"], ["connect-ask", "connect-ask"],
     //  (PR4) 옛 «AI 연결»(claude)·질문 장면들은 AI 연결부터 — 외부 앱 물음으로 건너뛰면 AI 를 안 잇고 지나간다.
     ["team", "name"], ["claude", "ai"], ["done", "connect-ask"], ["stage", "ai"], ["app", "ai"],
     ["", null], [null, null],

@@ -50,6 +50,9 @@ window.fetch = async (u, init) => {
     return j({ sessions: window.__row ? [Object.assign({ id: "box-s1" }, window.__row)] : [] });
   }
   if (/^\\/api\\/ui\\/apps\\/mn(\\?|$)/.test(p)) return j({ app: { id: "mn", title: "", empty: true, visibility: "me" } });
+  //  T14 — ④ 에 와 있는 앱(아이콘 있음)
+  if (/^\\/api\\/ui\\/apps\\/ic\\/versions/.test(p)) return j({ versions: [{ version_no: 1, is_current: true, note: "초안", saved_at: "2026-10-28T00:00:00Z" }] });
+  if (/^\\/api\\/ui\\/apps\\/ic(\\?|$)/.test(p)) return j({ app: { id: "ic", title: "회의록", visibility: "me", published_version_no: 0, manifest: { id: "ic", title: "회의록", icon: { path: "M6 4h12v16H6z", color: "#2D6BF0", color_dark: "#739DF5" } } } });
   if (p.startsWith("/api/ui/me/whoami")) return j({ member_id: "wonjoon-jang", display_name: "원준" });
   if (p.startsWith("/api/ui/apps")) return j({ apps: [] });
   if (p.includes("sessions")) return j({ sessions: [] });
@@ -133,6 +136,20 @@ async function PAGE_MAIN() {
   window.__row = { agentState: "busy", working: true };
   await sleep(10500);
   R.t12.cleared = view();
+  window.__step = "T14";
+  //  ④ 「AI에게 그려 달라기」 를 꺼진 세션으로 보냈다 — 아이콘 칸이 까닭과 「다시 부탁하기」 를 말한다 · 위 줄의 「완료 · 다음 단계로」 는 그대로
+  //   · 누르면 세션을 되살리고 **처음 글 그대로**([[아이콘]]) 다시 보낸다(«이어서» 글이 아니다 — 꺼진 세션은 그 글을 받은 적이 없다)
+  await mount({ ...base, stage: "check", appId: "ic", draftId: "", card: null, reached: 3, round: 1 }, undefined);
+  { const ob = [...host.querySelectorAll("button")].find((b) => /^아이콘 바꾸기$/.test(b.textContent)); if (ob) ob.click(); await sleep(300);
+    const ab = [...host.querySelectorAll("button")].find((b) => /AI에게 그려 달라기/.test(b.textContent)); if (ab) ab.click(); await sleep(800);
+    R.t14 = { early: txt($(".v2-studio-ico-wait")) };
+    await sleep(115000);   // 말이 닿는 틈 60초 + 멈춤 30초 + 10초마다 묻기
+    const rb = [...host.querySelectorAll(".v2-studio-ico-wait button")].find((b) => /다시 부탁하기/.test(b.textContent));
+    R.t14.late = txt($(".v2-studio-ico-wait")); R.t14.resume = !!rb; R.t14.now = view();
+    window.__calls.length = 0; const p0 = window.__prompts.length;
+    if (rb) rb.click(); await sleep(8000);
+    R.t14.calls = window.__calls.filter((c) => c !== "row"); R.t14.resent = window.__prompts.slice(p0).map((t) => /\[\[아이콘\]\]/.test(t) && !/끊겼어요/.test(t));
+    R.t14.after = txt($(".v2-studio-ico-wait")); }
   window.__step = "T13";
   //  닫으면 세션 상태를 더 묻지 않는다
   St.closeAppStudio(); window.__calls.length = 0;
@@ -152,7 +169,7 @@ ${FETCH}
 <script>${bundle}</script>
 <script>(${PAGE_MAIN.toString()})().catch((e) => { document.getElementById("out").textContent = "RESULT" + JSON.stringify({ crash: (window.__step || "") + " " + String((e && e.stack) || e).slice(0, 900) }) + "ENDRESULT"; });</script>`;
 
-const dom = await dumpDom(chrome, { html: PAGE, prefix: "studio-stall-", virtualTimeBudget: 600000, args: ["--window-size=1200,900"] });
+const dom = await dumpDom(chrome, { html: PAGE, prefix: "studio-stall-", virtualTimeBudget: 760000, args: ["--window-size=1200,900"] });
 const m = /RESULT(\{.*\})ENDRESULT/s.exec(dom.replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&"));
 if (!m) { console.error("FAIL  결과 표지를 못 받았다 — 페이지가 끝까지 못 돌았다\n" + dom.slice(-800)); process.exit(1); }
 const R = JSON.parse(m[1]);
@@ -185,6 +202,11 @@ check(R.t10 && !stalled(R.t10) && R.t10.spin && R.t10.rows >= 3, "T10 상태를 
 check(R.t11 && !stalled(R.t11.early) && /끝내지 못하고 멈췄어요/.test(R.t11.late.now || ""), "T11 막 연 만들기는 2분 동안 멈췄다 하지 않는다(세션이 뜨는 틈) · 그 뒤엔 말한다", R.t11);
 check(R.t12 && /끝내지 못하고 멈췄어요/.test(R.t12.before.now || "") && !stalled(R.t12.cleared), "T12 ② 카드 기다림도 멈춤을 말하고 · 다시 돌면 걷힌다", R.t12);
 same(R.t13, 0, "T13 닫으면 세션 상태를 더 묻지 않는다");
+check(R.t14 && /그리고 있어요/.test(R.t14.early || "") && !/꺼져서/.test(R.t14.early || ""), "T14 ④ 아이콘 — 막 보낸 때는 그냥 기다린다", R.t14 && R.t14.early);
+check(R.t14 && /세션이 꺼져서/.test(R.t14.late || "") && /다시 켜고 다시 그려요/.test(R.t14.late || "") && R.t14.resume, "T14 꺼진 세션이면 아이콘 칸이 까닭과 「다시 부탁하기」 를 말한다", R.t14 && R.t14.late);
+check(R.t14 && /다섯 가지/.test(R.t14.now.now || "") && R.t14.now.btns.some(([t, d]) => /완료 · 다음 단계로/.test(t) && !d), "T14 위 줄은 그대로(「완료 · 다음 단계로」 를 가리지 않는다)", R.t14 && R.t14.now);
+same(R.t14 && [R.t14.calls, R.t14.resent], [["restore", "prompt"], [true]], "T14 「다시 부탁하기」 — 세션을 되살리고 처음 아이콘 글 그대로 다시 보낸다");
+check(R.t14 && /보통 1분/.test(R.t14.after || ""), "T14 다시 보낸 뒤엔 기다림을 처음부터(멈춤 표시를 걷는다)", R.t14 && R.t14.after);
 same(R.errors, [], "W  페이지 예외 없음");
 
 console.log(`\n#4632 앱빌더 멈춤 알아보기: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

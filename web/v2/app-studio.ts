@@ -37,7 +37,11 @@ import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, talkBrief, unsent, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, talkBrief, unsent, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
+import { icon } from './icons.js';
+import { appGlyphName, iconPath } from '../lib/icon-paths.js';
+import { darkPair, hexToHsv, hsvToHex, normHex, tooLight, type Hsv } from '../lib/icon-color.js';   // ④ 「다른 색」 팔레트
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -69,9 +73,19 @@ export interface StudioRec {
   whatEdit?: { name: string; what: string; place: StudioPlace };
   /** ③ 첫 판 전 AI 가 알린 걸음(1~4 · [[걸음 n/4]]) — 새로 열어도 «시작하는 중» 으로 돌아가지 않게(원준 2026-10-26). 초안을 다시 청하면 0. */
   step?: number;
+  /** ④ 에서 고른 아이콘(아직 저장 전) — 「완료 · 다음 단계로」 의 마무리 저장이 매니페스트 icon 에 싣는다. 없으면 지금 아이콘 그대로. */
+  icon?: StudioIcon;
+  /** ④ 「AI에게 그려 달라기」 로 받은 그림들(최근 것 먼저 · 여섯까지) — 단계를 오가도 남는다. */
+  iconAi?: StudioIcon[];
+  /** 고를 때 저장돼 있던 아이콘의 path('' = 없었다) — 그 사이 AI 가 새 버전에 다른 아이콘을 넣었으면 고른 것은 낡았다(덮지 않는다 · 격리 리뷰). */
+  iconBase?: string;
+  /** ③ 「수정하기」 로 고침을 보낸 때 · 그때 가장 뒤 판 — 새 판이 나올 때까지 있다. 앱빌더를 나갔다 와도 «AI가 수정하고 있어요» 로 다시 열고,
+   *  나가 있던 사이 새 판이 나왔으면 열자마자 끝맺는다(원준 2026-10-28 «다른 데 갔다 다시 들어가면 진행중 페이지로 안 가고 이전으로 돌아간 것처럼»). */
+  fixing?: { at: number; ver: number };
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
+const WIN_KEY = 'lively_v2_app_studio_chatwin';
 export const PROJECT_NAME = BUILDER_PROJECT_NAME;   // #4632 — 앱빌더가 여는 세션은 전부 이 프로젝트. 사람에게는 프로젝트가 아니라 앱빌더가 그 문이다(lib/builder-flow)
 const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안건을 모으고 끝난 것 표시', card: { name: '회의 안건', who: '회의를 준비하는 사람과 참석자 모두', items: '안건 제목 · 회의 날짜 · 끝남 표시', can: ['안건 더하기', '회의별로 모아 보기', '끝난 것 접기'], not: '회의록 쓰기 · 알림 보내기', first: '이번 회의 안건 목록(안 끝난 것 먼저)' } };
 
@@ -131,7 +145,7 @@ function readRecs(): StudioRec[] {
   } catch (_) { return []; }
 }
 function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(rs.slice(-12))); } catch (_) { /* noop */ } }
-function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r.pins && r.pins.some((p) => p.sent) ? { ...r, pins: r.pins.filter(unsent) } : r); writeRecs(rs); }   // 보낸(반영 중) 코멘트는 남기지 않는다
+function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r); writeRecs(rs); }   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
 /** 이 브라우저의 만들던 기록 전부 — 앱빌더 목록이 읽는다. */
 export function studioRecs(): StudioRec[] { return readRecs(); }
 /** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
@@ -142,6 +156,10 @@ export function studioRecBuildingFor(appId: string): boolean { return !!appId &&
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
 function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (_) { /* noop */ } }
+//  AI 세션 창의 자리 · 크기(떠 있는 창 l·t·w·h · 오른쪽 칸 너비 side) — 사람이 맞춘 대로 다음에도 연다(원준 2026-10-28 «창 사이즈 조절이 안 됨»).
+interface WinGeom { l?: number; t?: number; w?: number; h?: number; side?: number }
+function readGeom(): WinGeom { try { const g = JSON.parse(localStorage.getItem(WIN_KEY) || '{}'); return g && typeof g === 'object' ? g : {}; } catch (_) { return {}; } }
+function saveGeom(patch: WinGeom): void { try { localStorage.setItem(WIN_KEY, JSON.stringify({ ...readGeom(), ...patch })); } catch (_) { /* noop */ } }
 
 // ── 세션 · 기록 · 나 ──────────────────────────────────────────────────────────────────────
 let meCache: { id: string; name: string } | null = null;
@@ -235,14 +253,14 @@ export function studioUiOnly(studio: any): Record<string, unknown> {
   return keep;
 }
 /** #4667 그 앱의 지금 공개 상태(서버) — 머리줄 「n판 · 나만 보는 초안」 · 「공개하기」 · ④⑤ 의 재료. 못 읽으면 null. */
-export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown }
+export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown; icon: StudioIcon | null }
 async function readVis(appId: string): Promise<StudioVis | null> {
   try {
     const out: any = await api('/api/ui/apps/' + encodeURIComponent(appId)); const a = out?.app || out; if (!a) return null;
     const me0 = await me();
     return { visibility: a.visibility === 'me' ? 'me' : 'all', publishedNo: Number(a.published_version_no) || 0,
       draftMine: !!(a.draft && a.draft.by && a.draft.by === me0.id), canPublish: !!a.can_publish, canUnpublish: !!a.can_unpublish, empty: !!a.empty,
-      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null };
+      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null, icon: iconSpec(a.manifest && a.manifest.icon) };
   } catch (_) { return null; }
 }
 /** ⑧ 내 사본 — 원본 파일을 받아 id · 이름 · studio.origin 만 바꿔 저장한다. 원본은 그대로. */
@@ -385,7 +403,7 @@ function showTour(onDone?: () => void): void {
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고, 쓸 자리를 고른 뒤 「만들기 시작」을 눌러주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
     { n: 2, t: '세부 기획 정하기', now: '기획 카드에서 틀린 내용을 고쳐주세요', body: () => cardView(c, null) },
     { n: 3, t: '시안 확인 · 수정', now: '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2: 제목에 날짜, 「끝남」 단추, 안 끝난 것 먼저' }))) },
-    { n: 4, t: '확인', now: '아래 네 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 누가 쓰나: 나만 (기본)' }))) },
+    { n: 4, t: '확인', now: '아래 다섯 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 누가 쓰나: 나만 (기본)' }), el('div', { text: '✓ 아이콘: AI가 그린 그림' }))) },
     { n: 5, t: '넣기', now: '「지금 써 보기」로 바로 열어 보고, 「팀에 알리기」로 팀에 알려주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요: 초안, V2 날짜와 끝남 단추, V3 글자 크기' }), el('div', { text: '이렇게 쓰세요: 세션 오른쪽 위 +에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기: 「장원준 님이 「회의 안건」 앱을 만들었어요」' }))) },
   ];
   let i = 0; const ov = el('div', { class: 'v2-studio-intro v2-studio-tour' }); const box = el('div', { class: 'v2-studio-intro-box' });
@@ -699,9 +717,13 @@ async function build(rec: StudioRec): Promise<void> {
   if (teardown) { teardown(); teardown = null; }
   const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: rec.step || 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
-    waiting: false, waitT0: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
+    waiting: !!rec.fixing, waitT0: rec.fixing ? rec.fixing.at : 0, topVer: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0, limit: '',   // limit: AI 답 글이 알린 사용 한도(parseLimit 의 한 줄) — 새로 보내면 걷는다
-    quietTill: Date.now() - rec.at < 120000 ? rec.at + 120000 : 0 };   // 막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다
+    iconOpen: false, iconWait: false, iconMiss: false, iconT: 0, iconRead: false, iconFail: false,   // ④ 아이콘 — 고르는 칸이 펼쳐졌나 · AI 가 그리는 중 · 안 보냈다 · 지금 아이콘을 읽었나 · 못 읽었나
+    iconT0: 0, iconTick: 0, iconLast: '',   // ④ AI 에게 그려 달라고 보낸 때 · 흐른 시간 시계 · 보낸 글(멈췄을 때 그대로 다시 보낸다)
+    colorOpen: false, cpick: null as Hsv | null, hexBad: false,   // ④ 「다른 색」 — 팔레트가 펼쳐졌나 · 손잡이 자리(다시 그려도 그대로) · 적은 색 코드가 틀렸나
+    //  막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다 · 막 보낸 고침도 보낸 때부터 60초(armRun 과 같은 틈)
+    quietTill: Math.max(Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
   const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 버전으로', hidden: true }) as HTMLButtonElement;
@@ -722,13 +744,87 @@ async function build(rec: StudioRec): Promise<void> {
   const sideHead = el('div', { class: 'v2-studio-side-head' }, el('b', { text: 'AI 세션' }), el('small', { text: '이 앱을 만드는 대화' }), el('span', { class: 'v2-studio-sp' }),
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '떼어 내기', onclick: () => { S.chatMode = 'float'; applyPlace(); } }),
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => { S.chatMode = 'off'; applyPlace(); } }));
-  const side = el('div', { class: 'v2-studio-side' }, sideHead, chatHost);
-  const winHead = el('div', { class: 'v2-studio-chatwin-head', title: '끌어서 옮길 수 있어요. 오른쪽 끝에 놓으면 붙어요.' }, el('b', { text: 'AI 세션' }), el('small', { text: '끌어서 오른쪽 끝에 놓으면 붙어요' }), el('span', { class: 'v2-studio-sp' }),
+  //  오른쪽 칸 너비 — 칸의 왼쪽 가장자리를 끌어 바꾼다(원준 2026-10-28).
+  const sideGrip = el('span', { class: 'v2-studio-sidegrip', title: '끌어서 너비를 바꿔요', 'aria-hidden': 'true' });
+  const side = el('div', { class: 'v2-studio-side' }, sideGrip, sideHead, chatHost);
+  //  떠 있는 창 — 머리줄을 끌어 옮기고 · 가장자리와 모서리를 끌어 크기를 바꾸고 · 「크게 보기」(머리줄 두 번 눌러도)로 화면을 거의 다 쓴다(원준 2026-10-28 «사이즈가 고정 · 대화하기 너무 불편»).
+  const bigBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '크게 보기', onclick: () => toggleBig() }) as HTMLButtonElement;
+  const winHead = el('div', { class: 'v2-studio-chatwin-head', title: '끌어서 옮길 수 있어요. 가장자리를 끌면 크기가 바뀌어요.' }, el('b', { text: 'AI 세션' }), el('small', { text: '끌어서 오른쪽 끝에 놓으면 붙어요' }), el('span', { class: 'v2-studio-sp' }), bigBtn,
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '오른쪽에 붙이기', onclick: () => { S.chatMode = 'dock'; applyPlace(); } }),
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✕', title: '닫기', 'aria-label': 'AI 세션 닫기', onclick: () => { S.chatMode = 'off'; applyPlace(); } }));
   const winBody = el('div', { class: 'v2-studio-chatwin-body' });
-  const chatWin = el('div', { class: 'v2-studio-chatwin', hidden: true, role: 'dialog', 'aria-label': 'AI 세션' }, winHead, winBody);
+  const grips = (['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const).map((d) => el('span', { class: 'v2-studio-grip v2-studio-grip--' + d, 'data-d': d, 'aria-hidden': 'true' }));
+  const chatWin = el('div', { class: 'v2-studio-chatwin', hidden: true, role: 'dialog', 'aria-label': 'AI 세션' }, winHead, winBody, ...grips);
   const dockHint = el('div', { class: 'v2-studio-dockhint', hidden: true }, el('span', { text: '여기에 놓으면 오른쪽에 붙어요' }));
+  const WIN_TOP = 48, WIN_MIN_W = 320, WIN_MIN_H = 240;   // 창 위끝은 머리줄(48px) 아래 · 가장 작은 크기
+  type Geom = { l: number; t: number; w: number; h: number };
+  const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+  const winNow = (): Geom | null => {
+    if (!root) return null;
+    const r = chatWin.getBoundingClientRect(), rr = root.getBoundingClientRect();
+    return { l: r.left - rr.left, t: r.top - rr.top, w: r.width, h: r.height };
+  };
+  //  화면 안에 들게 — 창이 줄었거나 저장한 크기가 지금 화면보다 크면 줄여서 넣는다.
+  const fitWin = (g: Geom): Geom | null => {
+    if (!root) return null;
+    const rr = root.getBoundingClientRect();
+    const w = clampN(g.w, Math.min(WIN_MIN_W, rr.width), rr.width), h = clampN(g.h, Math.min(WIN_MIN_H, rr.height - WIN_TOP), rr.height - WIN_TOP);
+    return { l: clampN(g.l, 0, rr.width - w), t: clampN(g.t, WIN_TOP, rr.height - h), w, h };
+  };
+  const setWin = (g: Geom | null): void => {
+    if (!g) return;
+    Object.assign(chatWin.style, { left: g.l + 'px', top: g.t + 'px', width: g.w + 'px', height: g.h + 'px', right: 'auto', bottom: 'auto' });
+  };
+  let bigFrom: Geom | null = null;   // 「크게 보기」 전의 자리 — 「작게 보기」가 돌아간다(크게 본 것은 저장하지 않는다)
+  const paintBig = (): void => { bigBtn.textContent = bigFrom ? '작게 보기' : '크게 보기'; };
+  const toggleBig = (): void => {
+    if (!root) return;
+    if (bigFrom) { setWin(fitWin(bigFrom)); bigFrom = null; }
+    else {
+      bigFrom = winNow();
+      const rr = root.getBoundingClientRect();
+      setWin(fitWin({ l: 12, t: WIN_TOP + 8, w: rr.width - 24, h: rr.height - WIN_TOP - 20 }));
+    }
+    paintBig();
+  };
+  const keepWin = (): void => { const g = winNow(); if (g) saveGeom(g); bigFrom = null; paintBig(); };
+  winHead.addEventListener('dblclick', (e: MouseEvent) => { if (!(e.target as HTMLElement).closest('button')) toggleBig(); });
+  for (const grip of grips) grip.addEventListener('pointerdown', (e: PointerEvent) => {
+    const g0 = winNow(); if (!g0 || !root) return;
+    e.preventDefault(); e.stopPropagation();
+    const d = grip.dataset.d || '', rr = root.getBoundingClientRect();
+    grip.setPointerCapture(e.pointerId); root.classList.add('v2-studio--drag');
+    const move = (ev: PointerEvent): void => {
+      const dx = ev.clientX - e.clientX, dy = ev.clientY - e.clientY;
+      let { l, t, w, h } = g0;
+      if (d.includes('e')) w = clampN(g0.w + dx, WIN_MIN_W, rr.width - g0.l);
+      if (d.includes('w')) { w = clampN(g0.w - dx, WIN_MIN_W, g0.l + g0.w); l = g0.l + g0.w - w; }
+      if (d.includes('s')) h = clampN(g0.h + dy, WIN_MIN_H, rr.height - g0.t);
+      if (d.includes('n')) { h = clampN(g0.h - dy, WIN_MIN_H, g0.t + g0.h - WIN_TOP); t = g0.t + g0.h - h; }
+      setWin({ l, t, w, h });
+    };
+    const up = (): void => {
+      grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+      root?.classList.remove('v2-studio--drag'); keepWin();
+    };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+  });
+  sideGrip.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (!root) return;
+    e.preventDefault();
+    const br = body.getBoundingClientRect();
+    sideGrip.setPointerCapture(e.pointerId); root.classList.add('v2-studio--drag', 'v2-studio--sizing');
+    let w = side.getBoundingClientRect().width;
+    const move = (ev: PointerEvent): void => {
+      w = clampN(br.right - ev.clientX, 300, Math.max(300, br.width - 360));   // 가운데 칸이 360px 아래로 줄지 않게
+      body.style.setProperty('--studio-side-w', 'min(' + Math.round(w) + 'px, 70%)');
+    };
+    const up = (): void => {
+      sideGrip.removeEventListener('pointermove', move); sideGrip.removeEventListener('pointerup', up); sideGrip.removeEventListener('pointercancel', up);
+      root?.classList.remove('v2-studio--drag', 'v2-studio--sizing'); saveGeom({ side: Math.round(w) });
+    };
+    sideGrip.addEventListener('pointermove', move); sideGrip.addEventListener('pointerup', up); sideGrip.addEventListener('pointercancel', up);
+  });
   winHead.addEventListener('pointerdown', (e: PointerEvent) => {
     if ((e.target as HTMLElement).closest('button') || !root) return;
     const r = chatWin.getBoundingClientRect(), rr = root.getBoundingClientRect(); const dx = e.clientX - r.left, dy = e.clientY - r.top;
@@ -742,11 +838,12 @@ async function build(rec: StudioRec): Promise<void> {
     const up = (ev: PointerEvent): void => {
       winHead.removeEventListener('pointermove', move); winHead.removeEventListener('pointerup', up); winHead.removeEventListener('pointercancel', up);
       root?.classList.remove('v2-studio--drag'); dockHint.hidden = true;
-      if (near(ev.clientX)) { S.chatMode = 'dock'; applyPlace(); }
+      if (near(ev.clientX)) { S.chatMode = 'dock'; applyPlace(); } else if (!bigFrom) { const g = winNow(); if (g) saveGeom(g); }
     };
     winHead.addEventListener('pointermove', move); winHead.addEventListener('pointerup', up); winHead.addEventListener('pointercancel', up);
   });
   const body = el('div', { class: 'v2-studio-body' }, stage, side);
+  { const sw = readGeom().side; if (sw) body.style.setProperty('--studio-side-w', 'min(' + sw + 'px, 70%)'); }
   const paintBar = (): void => {
     //  지난 단계는 눌러서 돌아가고(원준 2026-10-14 «뒤로 가는 게 너무 없다»), 와 본 앞 단계는 눌러서 다시 간다(원준 2026-10-19) — 적은 것은 기록에 있으니 날아가지 않는다.
     paintStageBar(bar, stageIndex(rec.stage), reachedOf(rec), rec.mode, (i, label) => {
@@ -761,12 +858,13 @@ async function build(rec: StudioRec): Promise<void> {
    *  원준 2026-10-28 «중간에 안됐는데 수정중 하면서 시간 세고있으면 어떡해» — 막대만 멈췄다 하고 띠는 «AI 수정 중 11:06» 을 세고 있었다. */
   const stallInfo = (): { text: string; short: string; go: string; resume: boolean } | null => {
     const kind = runKind(); if (!S.stall || !kind) return null;
-    const go = kind === 'fix' ? '이어서 수정하기' : '이어서 만들기';
+    const go = kind === 'fix' ? '이어서 수정하기' : kind === 'icon' ? '다시 부탁하기' : '이어서 만들기';
     if (S.stall === 'ask') return { text: 'AI가 확인을 기다리고 있어요. 「AI 세션 보기」를 눌러 답해주세요.', short: 'AI가 확인을 기다려요', go, resume: false };
     if (S.stall === 'offline') return { text: '세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있거나 잠들어 있어서 AI가 멈췄어요. 그 컴퓨터를 켜면 이어서 할 수 있어요.', short: 'AI가 멈췄어요', go, resume: false };
-    if (S.stall === 'ended') return { text: '세션이 꺼져서 AI가 멈췄어요. 「' + go + '」를 누르면 세션을 다시 켜고 멈춘 곳부터 해요.', short: 'AI가 멈췄어요', go, resume: true };
-    if (S.stall === 'limit') return { text: (S.limit || 'AI 사용 한도에 걸려 멈췄어요.') + ' 풀린 뒤 「' + go + '」를 누르면 멈춘 곳부터 해요.', short: 'AI 사용 한도로 멈췄어요', go, resume: true };
-    return { text: 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 멈춘 곳부터 다시 해요.', short: 'AI가 멈췄어요', go, resume: true };
+    const from = kind === 'icon' ? '다시 그려요' : '멈춘 곳부터 해요';   // 아이콘은 처음 글을 다시 보낸다(이어서가 아니다)
+    if (S.stall === 'ended') return { text: '세션이 꺼져서 AI가 멈췄어요. 「' + go + '」를 누르면 세션을 다시 켜고 ' + from + '.', short: 'AI가 멈췄어요', go, resume: true };
+    if (S.stall === 'limit') return { text: (S.limit || 'AI 사용 한도에 걸려 멈췄어요.') + ' 풀린 뒤 「' + go + '」를 누르면 ' + from + '.', short: 'AI 사용 한도로 멈췄어요', go, resume: true };
+    return { text: 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 ' + (kind === 'icon' ? '다시 그려요' : '멈춘 곳부터 다시 해요') + '.', short: 'AI가 멈췄어요', go, resume: true };
   };
   const prevOf = (): 'what' | StudioStage | null => {
     if (rec.stage === 'plan') return rec.mode === 'new' ? 'what' : null;
@@ -796,9 +894,9 @@ async function build(rec: StudioRec): Promise<void> {
       else if (S.waiting) text = 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.';
       else if (hasCm) { text = '코멘트 ' + cmCount() + '건을 남겼어요. 「수정하기」를 누르면 AI가 반영해 다음 버전을 만들어요.'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
-    } else if (rec.stage === 'check') { text = '아래 네 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
+    } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
-    const st = stallInfo();
+    const st = runKind() === 'icon' ? null : stallInfo();   // 아이콘 기다림의 멈춤은 ④ 아이콘 칸이 말한다 — 위 줄의 「완료 · 다음 단계로」 를 가리지 않는다
     if (st) {   // 기다리던 AI 일이 멈췄다 — «만들고 있어요» 대신 까닭과 할 일(원준 2026-10-26)
       kids.length = 0; text = st.text;
       if (S.stall === 'ask') kids.push(nowBtn('AI 세션 보기', true, () => { S.chatMode = 'float'; applyPlace(); }));
@@ -827,6 +925,7 @@ async function build(rec: StudioRec): Promise<void> {
       const vs = await fetchAppVersions(rec.appId); if (S.dead) return;
       const cur = vs.find((v) => v.is_current) || vs[vs.length - 1];
       S.curVer = cur ? cur.version_no : 0;
+      S.topVer = vs.reduce((m, v) => Math.max(m, v.version_no), 0);
       S.prevVer = vs.map((v) => v.version_no).filter((n) => n < S.curVer).sort((a, b) => b - a)[0] || 0;
       ver.textContent = verName(S.curVer);
       undo.hidden = !S.prevVer || rec.stage === 'put'; undo.textContent = S.prevVer ? verJ(S.prevVer, '으로') + ' 되돌리기' : '이전 버전으로';
@@ -863,8 +962,12 @@ async function build(rec: StudioRec): Promise<void> {
     if (host && chatHost.parentElement !== host) host.append(chatHost);
     body.classList.toggle('v2-studio-body--solo', !inSide);
     chatWin.hidden = S.chatMode !== 'float';
+    if (S.chatMode === 'float') { const g = readGeom(); bigFrom = null; paintBig(); if (g.w && g.h && g.l != null && g.t != null) setWin(fitWin({ l: g.l, t: g.t, w: g.w, h: g.h })); }
     chatBtn.textContent = S.chatMode === 'off' ? 'AI 세션 보기' : 'AI 세션 닫기';
   };
+  //  브라우저 창이 줄면 떠 있는 창도 화면 안으로 들인다(저장한 크기는 그대로 둔다).
+  const onWinResize = (): void => { if (S.chatMode === 'float' && chatWin.style.width) setWin(fitWin(winNow() || { l: 0, t: WIN_TOP, w: WIN_MIN_W, h: WIN_MIN_H })); };
+  window.addEventListener('resize', onWinResize);
   const appHost = (): HTMLElement => { const h0 = appBox.querySelector('.v2-studio-app-body') as HTMLElement | null; if (h0) return h0; const h = el('div', { class: 'v2-studio-app-body' }); appBox.replaceChildren(h); return h; };
   const waiting = (title: string, sub: string, steps?: HTMLElement, still = false): void => {
     appHost().replaceChildren(el('div', { class: 'v2-studio-wait' + (still ? ' v2-studio-wait--still' : '') }, ...(still ? [] : [el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' })]), el('b', { text: title }), ...(steps ? [steps] : []), ...sub.split('\n').map((t) => el('p', { text: t }))));
@@ -1041,6 +1144,15 @@ async function build(rec: StudioRec): Promise<void> {
   };
   //  보낸 코멘트를 걷는다 — 같은 배열을 제자리에서 줄인다(실제 화면 막대 · 와이어프레임 보드가 같은 배열을 쥐고 있다 · 새 배열로 갈면 그 사이 짚은 것이 옛 배열로 가 보낸 것이 되살아난다).
   const dropSent = (): void => { for (let i = S.pins.length - 1; i >= 0; i--) if (S.pins[i].sent) S.pins.splice(i, 1); rec.pins = S.pins; if (S.review) S.review.update({ pins: S.pins }); };
+  //  고침이 끝났다(새 판) — 다음 차례로: 몇 번째를 올리고 보낸 코멘트만 걷는다(고치는 동안 새로 남긴 코멘트는 다음 「수정하기」 몫 · 원준 2026-10-28).
+  //   새 판이 나왔으니 ④ 확인 · ⑤ 넣기는 그 판으로 다시(«와 본 곳» 을 ③ 으로).
+  const settleFix = (): void => { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; dropSent(); rec.reached = 2; delete rec.fixing; saveRec(rec); };
+  /** 고침을 보냈다 — 보낸 때와 그때 가장 뒤 판을 기록에 둔다(새로 열어도 기다림을 잇고, 그 뒤 판이 생겼는지로 끝났나를 안다). */
+  const markFixing = async (): Promise<void> => {
+    S.waiting = true; S.waitT0 = Date.now();
+    if (rec.appId && !S.topVer) await paintVer();   // 판을 아직 못 읽었다(② 에서 다시 만들기) — 0 이면 끝남을 못 가린다
+    rec.fixing = { at: S.waitT0, ver: S.topVer }; saveRec(rec);
+  };
   const off = onAppEvent((ev) => {
     if (S.dead) return;
     if (!rec.appId) { if (ev.kind === 'updated' || ev.kind === 'attach') { window.clearTimeout(S.pollT); void findApp(); } return; }
@@ -1048,8 +1160,7 @@ async function build(rec: StudioRec): Promise<void> {
       //  고침을 기다리던 중이면 어느 단계에 있든 먼저 끝맺는다 — ② 로 돌아가 있어도 ③ 이 «수정하고 있어요» 에 멈추지 않게(격리 리뷰).
       //   새 버전이 나왔다 — ④ 확인 · ⑤ 넣기는 그 버전으로 다시 해야 하니 «와 본 곳» 을 ③ 으로 당긴다.
       const settled = S.waiting;
-      //  보낸 코멘트만 걷는다 — 고치는 동안 새로 남긴 코멘트는 다음 「수정하기」 몫으로 그대로(원준 2026-10-28).
-      if (S.waiting) { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; dropSent(); rec.reached = 2; saveRec(rec); }
+      if (S.waiting) settleFix();
       else if (S.pins.some((p) => p.sent)) dropSent();
       if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); if (settled) { band.hidden = true; paintBar(); paintNow(); } return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
       void showApp(ev.note || '고쳤어요');
@@ -1057,6 +1168,9 @@ async function build(rec: StudioRec): Promise<void> {
   });
   // AI 답 읽기 — 단계가 보낸 글 뒤의 답만(rec.from 워터마크). 2.5초마다.
   const onText = (t: string): void => {
+    //  ④ 「AI에게 그려 달라기」 의 답 — 어느 단계에서 와도 받아 둔다(그새 다른 단계로 갔어도 돌아오면 그림 목록 맨 앞에 있다).
+    const ic = parseIcon(t);
+    if (ic) { rec.iconAi = [ic, ...(rec.iconAi || []).filter((x) => x.path !== ic.path)].slice(0, 4); setPick(ic); S.iconWait = false; S.iconMiss = false; window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); if (rec.stage === 'check') paintCheck(); }
     //  하네스가 «사용 한도에 걸렸다» 로 턴을 끝냈다 — 기다리지 않고 바로 까닭을 말한다(세션 줄로는 그냥 idle 이다).
     const lim = parseLimit(t); if (lim) { S.limit = lim; if (runKind()) setStall('limit'); return; }
     if (rec.stage === 'plan') { const c = parseCard(t); if (c) { rec.card = c; saveRec(rec); paintPlan(); paintNow();
@@ -1066,10 +1180,14 @@ async function build(rec: StudioRec): Promise<void> {
     else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; rec.step = n; saveRec(rec); paintSteps(); paintNow(); } }
     else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; if (S.checkFor && S.checkFor.ver > 0) { rec.check = { ...ck, ...S.checkFor }; saveRec(rec); } paintCheck(); paintNow(); } }
   };
-  const pump = async (): Promise<void> => {
+  //  drain — 쌓인 답을 지금 한 번 읽는다. 새 글을 보내기 전에도 부른다(보내면 워터마크가 기록 끝으로 가서, 아직 안 읽은 답 · 예: ④ 대조를 건너뛴다).
+  const drain = async (): Promise<void> => {
     if (S.dead) return;
     const r = await rawLog(rec.sid, 'from=' + rec.from);
     if (!S.dead && r && r.to > rec.from) { const texts = assistantTexts(r.text); rec.from = r.to; saveRec(rec); texts.forEach(onText); }
+  };
+  const pump = async (): Promise<void> => {
+    await drain();
     if (!S.dead) S.logT = window.setTimeout(() => { void pump(); }, 2500);
   };
   // 기다림 띠(③ 보낸 뒤) — m:ss
@@ -1113,11 +1231,13 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const paintDraft = (): void => { paintDraftView(); void findApp(); };
   /** 지금 AI 의 답을 기다리는 일 — 없으면 null(멈춤을 볼 까닭이 없다). */
-  const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | null => {
+  const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | 'icon' | null => {
     if (rec.stage === 'plan' && !rec.card) return 'plan';
     if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) return 'draft';
-    if (S.waiting) return 'fix';   // S.waiting 은 기록에 없다 — 고침을 기다리다 새로 열면 여기선 못 본다(그때는 종전처럼 «수정하고 있어요»)
+    if (S.waiting) return 'fix';   // 고침 기다림은 기록(rec.fixing)에 있다 — 나갔다 새로 열어도 멈춤을 본다
     if (rec.stage === 'check' && S.checkWait) return 'check';
+    //  ④ 「AI에게 그려 달라기」 도 멈춤을 본다 — 세션이 꺼진 채 보냈더니 «그리고 있어요» 만 끝없이 돌았다(원준 2026-10-28 «언제까지 기다려야하는지»).
+    if (S.iconWait) return 'icon';
     return null;
   };
   const reviewStall = (): { text: string; resume: boolean } | null => { const st = stallInfo(); return st ? { text: st.text, resume: st.resume } : null; };
@@ -1128,6 +1248,7 @@ async function build(rec: StudioRec): Promise<void> {
     else if (rec.stage === 'fix' && S.waiting) paintHub();
     if (S.waiting) { window.clearTimeout(S.tick); if (was && !k) S.waitT0 = Date.now(); tickWait(); }   // 다시 돌면 시계는 그때부터
     if (S.review) S.review.update({ stall: reviewStall() });
+    if (rec.stage === 'check' && S.iconWait) paintCheck();   // ④ 아이콘 기다림 칸이 까닭과 「다시 부탁하기」 를 말한다
     paintNow();
   };
   /** 새로 AI 에게 일을 맡겼다 — 지난 멈춤을 걷고 60초 동안은 멈췄다 하지 않는다(말이 막 닿는 틈). */
@@ -1169,9 +1290,11 @@ async function build(rec: StudioRec): Promise<void> {
       let ok = false;
       for (let i = 0; i < (restored ? 3 : 1) && !ok && !S.dead; i++) {
         if (i) await new Promise((r) => window.setTimeout(r, 3000));
-        ok = await send(resumeBrief(kind));
+        //  아이콘은 처음 글을 그대로 다시 — 꺼진 세션으로 간 글은 AI 가 받은 적이 없다(«이어서» 가 아니다).
+        ok = await send(kind === 'icon' && S.iconLast ? S.iconLast : resumeBrief(kind === 'icon' ? 'check' : kind));
       }
-      if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');
+      if (ok && kind === 'icon') { armIconWait(); toast('아이콘을 다시 그려 달라고 AI에게 보냈어요.'); if (rec.stage === 'check') paintCheck(); }
+      else if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');
     } finally { resuming = false; }
   };
   const nameIn = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '40', 'aria-label': '앱 이름' }) as HTMLInputElement;
@@ -1187,8 +1310,169 @@ async function build(rec: StudioRec): Promise<void> {
         : live ? '이 버전은 나만 볼 수 있어요. 다른 사람은 지금 공개 버전을 계속 써요.'
           : '나만 볼 수 있어요. 나중에 앱빌더 배포 설정에서 공개할 수 있어요.' }));
   };
+  // ── ④ 아이콘(원준 2026-10-28) — 지금 아이콘이 사이드바 · 세션 위젯 · 앱 찾기에 어떻게 서는지 보이고, 그림 · 색을 고르거나 AI 에게 다시 그려 달란다 ──
+  //  고른 것은 rec.icon 에만 두고 「완료 · 다음 단계로」 의 마무리 저장(putAppOnce)이 매니페스트 icon 에 싣는다 — 고를 때마다 버전이 오르지 않게.
+  const iconAsk = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '80', placeholder: '예: 마이크와 메모지', 'aria-label': 'AI에게 부탁할 아이콘 그림' }) as HTMLInputElement;
+  //  「다른 색」 의 색상 띠 · 색 코드 칸 — 다시 그려도 같은 요소를 단다(끄는 중 · 치는 중에 손이 안 빠지게).
+  const hueIn = el('input', { class: 'v2-studio-cpick-hue', type: 'range', min: '0', max: '360', step: '1', 'aria-label': '색상' }) as HTMLInputElement;
+  const hexIn = el('input', { class: 'v2-studio-name-in v2-studio-cpick-hex', type: 'text', maxlength: '12', spellcheck: 'false', placeholder: '#3A7BD5', 'aria-label': '색 코드' }) as HTMLInputElement;
+  const iconNow = (): StudioIcon | null => rec.icon || (S.vis ? S.vis.icon : null);
+  /** 고른 아이콘을 기록한다 — 그때 저장돼 있던 아이콘을 함께 적어 둔다(iconBase). spec 이 null 이면 고른 것을 걷는다. */
+  const setPick = (spec: StudioIcon | null): void => {
+    if (spec) { if (!rec.icon) rec.iconBase = S.vis && S.vis.icon ? S.vis.icon.path : ''; rec.icon = spec; } else { delete rec.icon; delete rec.iconBase; }
+    saveRec(rec);
+  };
+  /** 미리 그릴 그림 이름 — 선언은 미리보기 이름으로 등록한다(앱 id 로 등록하면 저장 전에 이 창 밖의 그 앱 그림까지 바뀐다). 없으면 기본 그림. */
+  const faceOf = (spec: StudioIcon | null): string => {
+    if (!spec) return builtinAppIcon(rec.appId, true);
+    const k = spec.path + '|' + spec.color + '|' + (spec.color_dark || ''); let h = 0;
+    for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) | 0;
+    return registerAppIcon('studio-pv-' + (h >>> 0).toString(36), spec) || builtinAppIcon(rec.appId, true);
+  };
+  /** 글자 옆 선 그림을 그 그림의 색으로(사이드바 줄 · 세션 위젯 탭과 같은 꼴 · session-app-pane faceIcon). */
+  const glyph = (face: string, cls: string): SVGElement => { const svg = icon(appGlyphName(face), cls); svg.setAttribute('style', 'color: var(--gi-c-' + face + ')'); return svg; };
+  const askIcon = async (): Promise<void> => {
+    if (S.iconWait || !rec.appId) return;
+    await drain();   // 보내기 전에 쌓인 답(④ 대조)을 먼저 읽는다
+    const brief = iconBrief(nameIn.value.trim() || S.title, rec.appId, iconAsk.value, iconNow());
+    if (S.dead || !(await send(brief))) return;
+    S.iconLast = brief;
+    armIconWait();
+    if (rec.stage === 'check') paintCheck();
+  };
+  const armIconWait = (): void => {
+    S.iconWait = true; S.iconMiss = false; S.iconT0 = Date.now(); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick);
+    S.iconT = window.setTimeout(() => { if (S.dead || !S.iconWait) return; stopIconWait(); S.iconMiss = true; if (rec.stage === 'check') paintCheck(); }, 180000);
+    //  흐른 시간은 그 글자만 고친다(다시 그리지 않는다 — 적던 칸 · 끌던 손잡이가 흔들리지 않게).
+    S.iconTick = window.setInterval(() => { const n = document.querySelector('.v2-studio-ico-waitclock'); if (n) n.textContent = mmss(Date.now() - S.iconT0); }, 1000);
+  };
+  //  기다림을 걷는다 — 답이 왔을 때 · 3분이 지났을 때 · 사람이 「그만 기다리기」 를 눌렀을 때. 늦게 온 답도 onText 가 받아 그림 목록에 더한다.
+  const stopIconWait = (): void => { S.iconWait = false; window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); };
+  const mmss = (ms: number): string => { const t = Math.max(0, Math.floor(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+  const iconRow = (): HTMLElement => {
+    const cur = iconNow(); const face = faceOf(cur); const title = nameIn.value.trim() || S.title;
+    const sub = rec.icon ? '바꾼 아이콘은 「완료 · 다음 단계로」를 누르면 저장돼요.'
+      : cur ? (rec.mode === 'new' ? 'AI가 앱을 만들 때 그린 아이콘이에요. 아래 자리에 같은 그림이 나와요.' : '지금 앱의 아이콘이에요. 아래 자리에 같은 그림이 나와요.')
+        : !S.iconRead ? '아이콘을 불러오는 중…' : S.iconFail ? '지금 아이콘을 불러오지 못했어요. 잠시 후 다시 확인해주세요.' : '아직 아이콘이 없어 기본 그림으로 보여요. 「아이콘 바꾸기」에서 고를 수 있어요.';
+    //  미리보기 = 그 자리의 작은 화면(원준 2026-10-28 «정렬이랑 위계 깨져있어 · 어디부분 말하는건지 감도 안옴»). 칸마다 위에 자리 이름,
+    //   안에는 그 자리의 생김새 — 사이드바는 줄 목록 속 한 줄 · 세션 위젯은 탭 줄 속 한 탭 · 앱 찾기는 타일 사이 한 칸. 이웃은 흐린 자리표시라 누를 것처럼 안 보인다.
+    const ghost = (cls: string): HTMLElement => el('span', { class: 'v2-studio-ico-ghost ' + cls, 'aria-hidden': 'true' });
+    const spot = (cap: string, body: HTMLElement): HTMLElement => el('figure', { class: 'v2-studio-ico-spot' }, el('figcaption', { text: cap }), el('div', { class: 'v2-studio-ico-stage' }, body));
+    const spots = el('div', { class: 'v2-studio-ico-spots', role: 'group', 'aria-label': '이 아이콘이 보이는 자리' },
+      spot('왼쪽 사이드바', el('div', { class: 'v2-studio-ico-mside' }, ghost('row'), el('div', { class: 'v2-studio-ico-side' }, glyph(face, 'v2-ic'), el('span', { text: title })), ghost('row'))),
+      ...(rec.place !== 'full' ? [spot('세션 위젯 탭', el('div', { class: 'v2-studio-ico-mtab' }, ghost('tab'), el('div', { class: 'v2-studio-ico-tab' }, glyph(face, 'v2-ic'), el('span', { text: title })), ghost('tab')))] : []),
+      spot('앱 찾기', el('div', { class: 'v2-studio-ico-mpad' }, ghost('tile'), el('div', { class: 'v2-studio-ico-pad' }, appGlassIcon(face, 'v2-studio-ico-tile'), el('span', { text: title })), ghost('tile'))));
+    const act = el('div', { class: 'v2-studio-ico-act' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'toggle', 'aria-expanded': String(S.iconOpen), text: S.iconOpen ? '접기' : '아이콘 바꾸기', onclick: () => { S.iconOpen = !S.iconOpen; paintCheck(); } }),
+      ...(rec.icon ? [el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'reset', text: '처음대로', title: '바꾸기 전 아이콘으로 돌아가요', onclick: () => { setPick(null); paintCheck(); } })] : []));
+    return el('div', { class: 'v2-studio-ico' }, el('span', { text: sub }), spots, act, ...(S.iconOpen ? [iconEditor(cur)] : []));
+  };
+  /** 어두운 화면으로 보고 있나(90-dark.css 의 두 선택자와 같은 잣대) — 끄는 동안의 미리보기를 그 화면의 색으로 칠한다. */
+  const darkNow = (): boolean => { const t = document.documentElement.getAttribute('data-theme'); return t === 'dark' || (t !== 'light' && !!window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); };
+  const colorPicker = (cur: StudioIcon | null, path0: string): HTMLElement => {
+    //  팔레트 밖에서 색이 바뀌었으면(9색 · AI 그림 · 처음대로) 손잡이를 지금 색으로 옮긴다.
+    if (S.cpick && cur && hsvToHex(S.cpick) !== cur.color.toUpperCase()) { S.cpick = null; S.hexBad = false; }   // 틀렸다던 색 코드 안내도 걷는다
+    const hsv: Hsv = S.cpick || hexToHsv(cur ? cur.color : ICON_COLORS[0].color) || { h: 210, s: 0.7, v: 0.8 }; S.cpick = hsv;
+    const knob = el('span', { class: 'v2-studio-cpick-knob' });   // <i> 는 안 된다 — 확인 줄의 체크 칸 규칙(.v2-studio-chk i)이 먹는다
+    const sv = el('div', { class: 'v2-studio-cpick-sv', 'data-ico-k': 'sv', tabindex: '0', role: 'application', 'aria-roledescription': '색 면', 'aria-label': '채도와 밝기(방향키로 옮겨요)' }, knob) as HTMLElement;
+    const chip = el('span', { class: 'v2-studio-cpick-chip' });
+    const note = el('small', { class: 'v2-studio-cpick-note', role: 'status', 'aria-live': 'polite' });
+    //  지금 손잡이 자리를 그린다 — 색 면 바탕(색상) · 손잡이 · 띠 · 코드 · 견본 · 위 미리보기 세 자리 · 흐림 안내. 다시 그리지 않는다.
+    const show = (live = false): string => {
+      const hex = hsvToHex(hsv);
+      sv.style.backgroundColor = 'hsl(' + Math.round(hsv.h) + ' 100% 50%)';
+      knob.style.left = (hsv.s * 100) + '%'; knob.style.top = ((1 - hsv.v) * 100) + '%'; knob.style.background = hex;
+      sv.setAttribute('aria-valuetext', hex);
+      hueIn.value = String(Math.round(hsv.h)); if (document.activeElement !== hexIn) hexIn.value = hex;
+      const tint = darkNow() ? darkPair(hex) : hex;
+      chip.style.background = tint;
+      const host = live ? sv.closest('.v2-studio-ico') : null;   // 끄는 중에만 — 고른 뒤엔 위 미리보기가 제 색(등록한 짝)으로 다시 그려진다
+      if (host) {
+        host.querySelectorAll<SVGElement>('.v2-studio-ico-spots svg.v2-ic').forEach((n) => { n.style.color = tint; });
+        host.querySelectorAll<SVGElement>('.v2-studio-ico-spots .v2-gi-glyph').forEach((n) => n.setAttribute('stroke', tint));
+      }
+      note.textContent = S.hexBad ? '색 코드는 #과 여섯 자리로 적어주세요. 예: #3A7BD5'
+        : tooLight(hex) ? '밝은 화면에서 흐리게 보여요. 조금 더 진한 색을 골라주세요.' : '어두운 화면에서는 같은 색을 조금 밝게 보여줘요.';
+      note.classList.toggle('warn', S.hexBad || tooLight(hex));
+      return hex;
+    };
+    let keyT = 0;
+    const commit = (): void => { window.clearTimeout(keyT); const hex = hsvToHex(hsv); S.hexBad = false; setPick({ path: path0, color: hex, color_dark: darkPair(hex) }); paintCheck(); };
+    //  다시 그리지 않고 고른다 — 색 코드 칸을 떠날 때(blur). 다시 그리면 그 순간 누르던 다른 칸(색 · 그림)이 문서에서 빠져 그 누름이 사라진다(격리 리뷰).
+    //   미리보기는 show(true) 로 칠해 두고, 다음에 다시 그릴 때 제 색으로 선다.
+    const commitQuiet = (): void => { const hex = hsvToHex(hsv); S.hexBad = false; setPick({ path: path0, color: hex, color_dark: darkPair(hex) }); show(true); };
+    const at = (e: PointerEvent): void => { const r = sv.getBoundingClientRect(); hsv.s = Math.min(1, Math.max(0, (e.clientX - r.left) / (r.width || 1))); hsv.v = 1 - Math.min(1, Math.max(0, (e.clientY - r.top) / (r.height || 1))); show(true); };
+    let drag = false;
+    //  왼쪽 단추 · 첫 손가락만(오른쪽 단추는 메뉴가 떠 pointerup 이 안 올 수 있다). 끄는 중 잡기를 놓치면(lostpointercapture) 거기서 고른다.
+    //   끄는 사이 바깥 일(AI 답 · 새 버전)로 ④ 가 다시 그려지면 이 색 면은 문서에서 빠지고 끌기도 끝난다 — 손잡이는 마지막으로 고른 색으로 돌아간다.
+    sv.onpointerdown = (e: PointerEvent) => { if (e.button !== 0 || !e.isPrimary) return; drag = true; try { sv.setPointerCapture(e.pointerId); } catch (_) { /* 잡지 못해도 끈다 */ } sv.focus(); at(e); e.preventDefault(); };
+    sv.onpointermove = (e: PointerEvent) => { if (drag) at(e); };
+    sv.onpointerup = (e: PointerEvent) => { if (!drag) return; drag = false; at(e); commit(); };
+    sv.onpointercancel = () => { if (drag) { drag = false; commit(); } };
+    sv.onlostpointercapture = () => { if (drag) { drag = false; commit(); } };
+    sv.onkeydown = (e: KeyboardEvent) => {
+      const d = e.shiftKey ? 0.1 : 0.02;
+      if (e.key === 'ArrowLeft') hsv.s = Math.max(0, hsv.s - d); else if (e.key === 'ArrowRight') hsv.s = Math.min(1, hsv.s + d);
+      else if (e.key === 'ArrowUp') hsv.v = Math.min(1, hsv.v + d); else if (e.key === 'ArrowDown') hsv.v = Math.max(0, hsv.v - d);
+      else return;
+      //  누르고 있으면 되풀이가 빠르다 — 칠하기는 바로, 고르기(다시 그리기 · 그림 등록)는 손을 뗀 뒤 한 번.
+      e.preventDefault(); show(true); window.clearTimeout(keyT); keyT = window.setTimeout(() => { if (!S.dead) commit(); }, 300);
+    };
+    hueIn.oninput = () => { hsv.h = Number(hueIn.value) || 0; show(true); };
+    hueIn.onchange = () => { hsv.h = Number(hueIn.value) || 0; commit(); };
+    const takeHex = (): void => { const hex = normHex(hexIn.value); if (!hex) { S.hexBad = true; show(); return; } const v = hexToHsv(hex); if (v) Object.assign(hsv, v); hexIn.value = hex; commit(); };
+    hexIn.onkeydown = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); takeHex(); } };
+    hexIn.onchange = () => { const hex = normHex(hexIn.value); if (!hex) { S.hexBad = true; show(); return; } const v = hexToHsv(hex); if (v) Object.assign(hsv, v); hexIn.value = hex; commitQuiet(); };
+    const box = el('div', { class: 'v2-studio-cpick' }, sv, hueIn, el('div', { class: 'v2-studio-cpick-row' }, chip, hexIn), note);
+    show();
+    return box;
+  };
+  const iconEditor = (cur: StudioIcon | null): HTMLElement => {
+    const tone = cur ? { color: cur.color, color_dark: cur.color_dark || cur.color } : { color: ICON_COLORS[0].color, color_dark: ICON_COLORS[0].color_dark };
+    const pick = (spec: StudioIcon): void => { setPick(spec); paintCheck(); };
+    const tile = (spec: StudioIcon, tip: string): HTMLElement => el('button', { type: 'button', class: 'v2-studio-ico-pick' + (cur && cur.path === spec.path ? ' on' : ''), 'data-ico-k': 'g:' + spec.path, title: tip, 'aria-label': tip, 'aria-pressed': String(!!cur && cur.path === spec.path), onclick: () => pick(spec) }, glyph(faceOf(spec), 'v2-studio-ico-g'));
+    const ai = rec.iconAi || []; const first = S.vis && S.vis.icon && !ai.some((x) => x.path === S.vis!.icon!.path) ? S.vis.icon : null;
+    const tiles = [
+      ...ai.map((x, i) => tile(x, i === 0 ? 'AI가 방금 그린 그림' : 'AI가 그린 그림')),
+      ...(first ? [tile(first, rec.mode === 'new' ? 'AI가 처음 그린 그림' : '지금 아이콘')] : []),
+      ...ICON_GLYPHS.map((n) => tile({ path: iconPath(n), ...tone }, '기본 그림')),
+    ];
+    //  색 칸은 그 색으로 등록한 미리보기 토큰(--gi-c-…)으로 칠한다 — 라이트 · 다크에서 실제로 쓰일 색이 그대로 보인다.
+    const path0 = cur ? cur.path : iconPath(appGlyphName(builtinAppIcon(rec.appId, true)));
+    const swatches = ICON_COLORS.map((c) => { const spec = { path: path0, color: c.color, color_dark: c.color_dark };
+      const on = !!cur && cur.color.toLowerCase() === c.color.toLowerCase();
+      return el('button', { type: 'button', class: 'v2-studio-ico-sw' + (on ? ' on' : ''), 'data-ico-k': 'c:' + c.color, 'aria-pressed': String(on), title: c.name, 'aria-label': c.name + ' 색',
+        style: 'background: var(--gi-c-' + faceOf(spec) + ')', onclick: () => pick(spec) }); });
+    //  「다른 색」(원준 2026-10-28 «9개 냅두고, 원하면 다른 색을 훨씬 더 다양하게 · 연속적 컬러팔레트») — 색 면(채도 × 밝기) · 색상 띠 · 색 코드.
+    //   사람은 밝은 화면 색 하나만 고르고, 어두운 화면 색은 darkPair 가 만든다. 끄는 동안은 미리보기만 칠하고(다시 그리지 않는다) 손을 떼면 고른다.
+    const custom = !!cur && !ICON_COLORS.some((c) => c.color.toLowerCase() === cur.color.toLowerCase());
+    const more = el('button', { type: 'button', class: 'v2-studio-ico-more' + (custom ? ' on' : ''), 'data-ico-k': 'more', 'aria-expanded': String(S.colorOpen), title: '색 더 고르기', 'aria-label': custom ? '다른 색(지금 고른 색)' : '다른 색',
+      onclick: () => { S.colorOpen = !S.colorOpen; S.hexBad = false; if (S.colorOpen) S.cpick = hexToHsv(cur ? cur.color : ICON_COLORS[0].color); paintCheck(); } },
+      el('span', { class: 'v2-studio-ico-more-dot', ...(custom ? { style: 'background: var(--gi-c-' + faceOf(cur) + ')' } : {}) }), el('span', { text: '다른 색' }));
+    const askBtn = el('button', { type: 'button', class: 'v2-studio-go sm', 'data-ico-k': 'ask', text: 'AI에게 그려 달라기', disabled: S.iconWait || !rec.appId, onclick: () => { void askIcon(); } });
+    const stall = S.iconWait ? stallInfo() : null;   // 기다리는데 세션이 멈췄다 — 까닭 · 「다시 부탁하기」
+    iconAsk.onkeydown = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); void askIcon(); } };
+    return el('div', { class: 'v2-studio-ico-ed' },
+      el('b', { text: '그림' }), el('div', { class: 'v2-studio-ico-grid' }, ...tiles),
+      el('b', { text: '색' }), el('div', { class: 'v2-studio-ico-colors' }, ...swatches, more),
+      ...(S.colorOpen ? [colorPicker(cur, path0)] : []),
+      el('b', { text: 'AI에게 부탁하기' }), el('div', { class: 'v2-studio-ico-ask' }, iconAsk, askBtn),
+      //  기다리는 동안 — 흐른 시간 · 보통 걸리는 때 · 어디서 보나 · 그만 기다리기(원준 2026-10-28 «언제까지 기다려야하는지 감이 안오는데»).
+      S.iconWait
+        ? el('div', { class: 'v2-studio-ico-wait' + (stall ? ' stalled' : ''), role: 'status', 'aria-live': 'polite' },
+          el('span', { class: 'v2-studio-ico-spin', 'aria-hidden': 'true' }),
+          el('div', {}, el('b', {}, 'AI가 아이콘을 그리고 있어요 ', el('span', { class: 'v2-studio-ico-waitclock', text: mmss(Date.now() - S.iconT0) })),
+            el('small', { class: stall ? 'warn' : '', text: stall ? stall.text : '보통 1분 안에 끝나요. 진행은 위 「AI 세션 보기」에서 볼 수 있어요.' })),
+          ...(stall && stall.resume ? [el('button', { type: 'button', class: 'v2-studio-go sm', 'data-ico-k': 'resume', text: stall.go, onclick: () => { void resumeRun(); } })] : []),
+          el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-ico-k': 'stopwait', text: '그만 기다리기', title: '나중에 답이 오면 그림 목록에 더해 둬요', onclick: () => { stopIconWait(); paintCheck(); } }))
+        : el('small', { role: 'status', 'aria-live': 'polite', class: S.iconMiss ? 'warn' : '', text: S.iconMiss ? '3분 동안 답이 없었어요. 「AI 세션 보기」에서 확인하거나 다시 부탁해주세요.' : '원하는 그림을 적으면 AI가 새로 그려 그림 목록 맨 앞에 더해요.' }));
+  };
   const paintCheck = (): void => {
     const h = appHost(); const c = rec.card;
+    //  다시 그려도 손이 있던 자리로 — 아이콘 칸의 그림 · 색 · 단추에서 고르면 포커스가 몸으로 빠지지 않게(격리 리뷰). 입력칸(이름 · 부탁)은 같은 요소를 다시 단다.
+    const act = document.activeElement as HTMLElement | null;
+    const focusK = act && h.contains(act) ? act.getAttribute('data-ico-k') : null;
+    const refocus = act === iconAsk || act === nameIn || act === hueIn || act === hexIn ? act : null;
     const row = (ok: boolean | null, title: string, sub: HTMLElement | string): HTMLElement => el('div', { class: 'v2-studio-chk' + (ok === true ? ' ok' : ok === false ? ' no' : '') }, el('i', { text: ok === true ? '✓' : ok === false ? '!' : '…' }), el('div', {}, el('b', { text: title }), typeof sub === 'string' ? el('span', { text: sub }) : sub));
     const r1 = !c ? row(null, '원하던 것이 다 있나요?', '기획 카드가 없는 앱이라 비교하지 않았어요. 앱을 직접 써 보고 확인해주세요.')
       : S.check ? row(S.check.missing.length === 0, '원하던 것이 다 있나요?', S.check.missing.length ? '빠진 것: ' + S.check.missing.join(', ') + '. 「더 고치기」를 눌러 코멘트로 남겨주세요.' : '있어요: ' + (S.check.have.length ? S.check.have.join(', ') : c.can.join(', ')) + ' (AI가 기획 카드와 비교)')
@@ -1199,8 +1483,15 @@ async function build(rec: StudioRec): Promise<void> {
       row(true, '이름', el('span', {}, nameIn, el('small', { text: ' 여기서 바꿀 수 있어요' }))),
       row(true, '쓰는 자리', places),
       row(true, '누가 쓰나', whoRow()),
+      row(true, '아이콘', iconRow()),
       el('p', { class: 'v2-studio-fine', text: '하나라도 다르면 「더 고치기」를 눌러 ③ 단계로 돌아가요.' })));
-    coach('check', h.querySelector('.v2-studio-chks'), '네 가지만 확인하면 돼요. 다른 게 있으면 「더 고치기」를 눌러주세요.', '이름이 「' + S.title + '」 맞나요?');
+    coach('check', h.querySelector('.v2-studio-chks'), '다섯 가지만 확인하면 돼요. 다른 게 있으면 「더 고치기」를 눌러주세요.', '이름이 「' + S.title + '」 맞나요?');
+    if (refocus) refocus.focus();
+    else if (focusK) {
+      const hit = [...h.querySelectorAll<HTMLElement>('[data-ico-k]')].find((n) => n.getAttribute('data-ico-k') === focusK)
+        || h.querySelector<HTMLElement>('[data-ico-k="toggle"]');   // 「처음대로」 처럼 사라진 단추면 펼치기 단추로
+      if (hit) hit.focus();
+    }
   };
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
@@ -1282,6 +1573,13 @@ async function build(rec: StudioRec): Promise<void> {
       //  버전을 못 읽었으면(0) 지난 결과를 믿지 않는다 — 다른 버전의 대조를 그대로 보일 수 있다.
       const same = !!rec.check && S.curVer > 0 && rec.check.ver === S.curVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
       S.check = same && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; paintCheck();
+      //  ④ 아이콘은 지금 버전의 매니페스트에서 — ③ 에서 버전이 올랐을 수 있어 들어올 때마다 다시 읽는다.
+      //   고른 것이 있는데 그 사이 저장된 아이콘이 바뀌었으면(AI 가 새 버전에 넣었다) 고른 것은 낡았다 — 걷어 새 아이콘을 덮지 않게.
+      if (rec.appId) void readVis(rec.appId).then((v) => {
+        if (S.dead) return; S.iconRead = true; S.iconFail = !v;
+        if (v) { S.vis = v; if (rec.icon && rec.iconBase !== undefined && rec.iconBase !== (v.icon ? v.icon.path : '')) setPick(null); }
+        if (rec.stage === 'check') paintCheck();
+      });
       //  청한 때의 버전 · 카드로 결과에 도장을 찍는다(답이 올 때의 것이 아니라 — 그 사이 바뀌었으면 다음에 다시 묻는다).
       if (!same && rec.card && rec.appId) { S.checkWait = true; S.checkFor = { ver: S.curVer, card: cardText(rec.card) }; void send(checkBrief(rec.card, rec.appId)); }
     }
@@ -1295,7 +1593,7 @@ async function build(rec: StudioRec): Promise<void> {
     const say = '기획 카드를 이렇게 바꿨어요. 바뀐 카드대로 앱을 고쳐주세요.\n' + cardText(rec.card);
     if (await send(fixBrief(rec.round + 1, [], say, rec.place, rec.appId))) {
       rec.cardSent = cardText(rec.card); saveRec(rec);
-      S.waiting = true; S.waitT0 = Date.now(); tickWait();
+      await markFixing(); tickWait();
       await setStage('fix');
     }
   };
@@ -1305,8 +1603,8 @@ async function build(rec: StudioRec): Promise<void> {
     if (await send(fixBrief(rec.round + 1, S.pins, gSent, rec.place, rec.appId))) {   // 번호가 화면과 같게 전부 넘긴다(fixBrief 가 보낸 것 · 빈 것을 건너뛴다)
       //  보낸 것은 «반영 중» 으로 남기고(세지 않는다 · 고칠 수 없다) 앱 전체 칸은 비운다 — 고치는 동안 다음 코멘트를 새로 쌓는다(원준 2026-10-28).
       //   보내는 사이에 앱 전체 칸에 더 쓴 것은 지우지 않는다(보낸 글 그대로일 때만 비운다).
-      pins.forEach((p) => { p.sent = true; }); if (S.general === gSent) { S.general = ''; rec.general = ''; } saveRec(rec);
-      S.waiting = true; S.waitT0 = Date.now(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); paintTray();
+      pins.forEach((p) => { p.sent = true; }); if (S.general === gSent) { S.general = ''; rec.general = ''; }
+      await markFixing(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); paintTray();
       if (S.review) S.review.update({ waiting: true, general: S.general });
     }
   };
@@ -1327,7 +1625,9 @@ async function build(rec: StudioRec): Promise<void> {
     try {
       //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
       //   「워크스페이스 모두」 면 이 저장이 곧 공개다(publish) · 「나만」 이면 공개하지 않는다.
-      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName, { publish: share === 'all' });
+      const pickedIcon = rec.icon ? iconSpec(rec.icon) : null;   // ④ 에서 고른 아이콘 — 서버 잣대로 한 번 더 거른다(틀린 선언이면 이 저장이 400 으로 막힌다)
+      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; if (pickedIcon) man.icon = pickedIcon; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName + (pickedIcon ? ' · 아이콘' : ''), { publish: share === 'all' });
+      delete rec.icon; delete rec.iconBase;   // 매니페스트에 실렸다 — 다음 ④ 는 저장된 아이콘에서 시작한다
       S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
     } catch (e: any) { toast('마무리 표시를 저장하지 못했어요. 앱은 그대로 쓸 수 있어요. (' + (e && e.message ? e.message : e) + ')', true); }
     S.vis = await readVis(rec.appId);
@@ -1351,7 +1651,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
-    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); window.removeEventListener('resize', onWinResize); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
@@ -1364,7 +1664,20 @@ async function build(rec: StudioRec): Promise<void> {
     if (v) { S.vis = v; if (v.title) { S.title = v.title; rec.title = S.title; name.textContent = S.title; } if (!rec.card && v.card) rec.card = v.card as StudioCard; paintVis(); }
   }
   if (!rec.from) rec.from = await logEnd(rec.sid);
+  //  고침을 보내 두고 나갔다 왔다 — 그 사이 새 판이 나왔으면 끝맺고 그 판을 알리고, 아니면 «AI가 수정하고 있어요» 를 잇는다(시계는 보낸 때부터).
+  let fixedAway = '';
+  if (rec.fixing && rec.appId) {
+    try {
+      const vs = await fetchAppVersions(rec.appId); if (S.dead) return;
+      const f = rec.fixing;
+      //  보낼 때 판을 못 읽었으면(ver 0) 보낸 뒤에 저장된 판으로 가린다
+      const fresh = vs.filter((v) => (f.ver > 0 ? v.version_no > f.ver : Date.parse(v.saved_at) > f.at)).sort((a, b) => b.version_no - a.version_no)[0];
+      if (fresh) { settleFix(); fixedAway = fresh.note || '고쳤어요'; }
+    } catch (_) { /* 판 이력을 못 읽으면 기다림을 잇는다 — 새 판이 오면 사건이 끝맺는다 */ }
+  }
   await setStage(rec.stage);
+  if (fixedAway && rec.stage === 'fix') await showApp(fixedAway);
+  else if (S.waiting) tickWait();
   void pump();
   void watchRun();
   //  새로고침 전에 실제 화면(시험 세션 · 앱 화면)을 보던 중이었으면 그 화면과 막대를 다시 연다(원준 2026-10-16 «새로고침하니까 밑에 떠 있는 창 사라짐»).

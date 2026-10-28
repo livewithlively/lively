@@ -8,7 +8,7 @@
 // 엣지 표:
 //  C1 「수정하기」 — 보낸 글에 그 코멘트 · 앱 전체 글 · 보낸 핀은 반영 중(세지 않음) · 앱 전체 칸은 비움 · 단추 잠김
 //  C2 고치는 중 — 허브에 실제 화면 단추가 그대로 있고 눌러서 간다(코멘트 층이 선다)
-//  C3 고치는 중에 남긴 코멘트 — 셈 1 · 기록(localStorage)엔 보낸 핀이 없다
+//  C3 고치는 중에 남긴 코멘트 — 셈 1 · 기록엔 보낸 핀이 «반영 중» 으로 남는다(고치는 중일 때만)
 //  C4 새 버전 도착 — 보낸 것만 걷히고 새 코멘트는 그대로 · 「수정하기 · 1건」 이 다시 눌린다
 //  C5 다음 「수정하기」 — 새 코멘트만 보낸다(먼저 보낸 것은 다시 안 간다)   C6 허브의 칸도 늘어나는 글 칸   W 페이지 예외 없음
 //
@@ -93,7 +93,7 @@ async function PAGE_MAIN() {
   window.__step = "C3";
   const g = document.querySelector(".v2-studio-tray .v2-studio-tray-row.all .v2-studio-tray-in");
   g.value = "버튼 둥글게"; g.dispatchEvent(new Event("input", { bubbles: true })); await sleep(200);
-  R.c3 = { btn: txt(fixBtn()), dis: fixBtn().disabled, storedPins: (stored().pins || []).length, storedGeneral: stored().general };
+  R.c3 = { btn: txt(fixBtn()), dis: fixBtn().disabled, storedPins: (stored().pins || []).length, storedSent: (stored().pins || []).filter((p) => p.sent).length, storedGeneral: stored().general };
   if (goB) { goB.click(); await sleep(2500); }
   R.c2.bar = !!document.querySelector(".v2-review-bar"); R.c2.hash = location.hash;
   window.__step = "C4";
@@ -137,7 +137,7 @@ check(R.c1.general === "" && R.c1.dis, "C1 앱 전체 칸은 비우고 단추는
 check(R.c2.goBtn && R.c2.wait, "C2 고치는 중에도 허브에 실제 화면 단추가 있다(기다림 줄과 함께)", R.c2);
 check(R.c2.bar && /^#\/i\/inst-/.test(R.c2.hash), "C2 눌러서 실제 화면으로 간다 · 코멘트 층이 선다", R.c2);
 check(/수정하기 · 1건/.test(R.c3.btn || "") && R.c3.dis, "C3 고치는 중에 남긴 코멘트를 센다(단추는 아직 잠김)", R.c3);
-check(R.c3.storedPins === 0 && R.c3.storedGeneral === "버튼 둥글게", "C3 기록엔 보낸 핀이 없고 새 코멘트는 있다", R.c3);
+check(R.c3.storedPins === 1 && R.c3.storedSent === 1 && R.c3.storedGeneral === "버튼 둥글게", "C3 고치는 중엔 보낸 핀도 «반영 중» 으로 기록에 남는다(다시 열어도 보이게 · #1567 기다림 기록과 짝) · 새 코멘트도 있다", R.c3);
 same(R.c4.rows, [], "C4 새 버전이 오면 보낸 핀만 걷힌다");
 check(R.c4.general === "버튼 둥글게" && /수정하기 · 1건/.test(R.c4.btn || "") && !R.c4.dis, "C4 고치는 중에 남긴 코멘트는 그대로 · 「수정하기 · 1건」 이 눌린다", R.c4);
 check(/코멘트 1건/.test(R.c4.barCount || "") && R.c4.barSendDis === false, "C4 실제 화면 막대도 같은 셈 · 단추가 눌린다", R.c4);

@@ -4,6 +4,7 @@
 //   · 기획 카드  [[기획카드]] … [[/기획카드]]   줄마다 「줄 이름: 값」(CARD_ROWS · 더한 항목은 그 뒤)
 //   · 걸음      [[걸음 n/4]]                   1 기획 읽음 · 2 화면 짬 · 3 자료 표 · 4 저장
 //   · 점검      [[대조]] 있음: a · b | 빠짐: 없음
+//   · 아이콘    [[아이콘]] path: … | color: #… | dark: #…   ④ 「AI에게 그려 달라기」 의 답(앱은 저장하지 않는다)
 //  시험: scripts/app-studio-flow.test.mjs
 
 export type StudioPlace = 'side' | 'full' | 'both';
@@ -245,6 +246,53 @@ export function parseCheck(text: string): { have: string[]; missing: string[] } 
   return { have: none(have) ? [] : splitList(have), missing: none(miss) ? [] : splitList(miss) };
 }
 
+// ── ④ 아이콘(원준 2026-10-28 «자동으로 만들어진 디자인 사항들도 정리해서 보여주면 · 아이콘 커스텀하는 창 · AI한테 그 아이콘 수정할 수 있는 창») ──
+//  앱 아이콘은 매니페스트 icon {path, color, color_dark} 한 벌이고(#4769), 사이드바 줄 · 세션 위젯 탭 · 앱 찾기 타일이 같은 그림을 쓴다.
+//  첫 판을 짤 때 AI 가 그리고(draftBrief ICON), ④ 에서 사람이 보고 고른다. 고른 것은 「완료 · 다음 단계로」 의 마무리 저장에 함께 실린다.
+//  AI 에게 다시 그려 달라고 할 때는 앱을 저장하지 않고 [[아이콘]] 한 줄로만 받는다 — 버전이 올라가면 ④ 대조를 다시 해야 해서.
+export interface StudioIcon { path: string; color: string; color_dark?: string }
+//  서버(src/apps/manifest.ts APP_ICON_PATH_RE · APP_ICON_COLOR_RE)와 같은 잣대 — 여기서 걸러야 마무리 저장이 400 으로 안 막힌다.
+const ICON_PATH_OK = /^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]{1,2000}$/;
+const ICON_COLOR_OK = /^#[0-9a-fA-F]{6}$/;
+/** 아이콘 선언을 서버 잣대로 거른다 — 틀리면 null. */
+export function iconSpec(raw: unknown): StudioIcon | null {
+  const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null; if (!o) return null;
+  const path = typeof o.path === 'string' ? o.path.replace(/\s+/g, ' ').trim() : '';
+  const color = typeof o.color === 'string' ? o.color.trim() : '';
+  const dark = typeof o.color_dark === 'string' ? o.color_dark.trim() : '';
+  if (!ICON_PATH_OK.test(path) || !ICON_COLOR_OK.test(color)) return null;
+  return ICON_COLOR_OK.test(dark) ? { path, color, color_dark: dark } : { path, color };
+}
+const ICON_SHAPE = '24×24 격자 위 선 그림 하나(SVG path d 에 명령과 숫자만 · 획 굵기 1.7 · 채우기 없음 · 선은 2~22 안 · 16px 에서도 알아볼 만큼 단순하게)';
+//  첫 판에 아이콘을 넣는 약속 — 사이드바 · 세션 위젯 · 앱 찾기에 같은 그림이 선다.
+const ICON = `lively-app.json 에 앱 아이콘도 넣어 줘: "icon": {"path": ${ICON_SHAPE}, "color": 밝은 바탕용 #RRGGBB, "color_dark": 어두운 바탕용 #RRGGBB}. 앱이 하는 일이 한눈에 보이는 그림으로(사이드바 · 세션 위젯 · 앱 찾기에 같은 그림이 나와).`;
+/** ④ 「AI에게 그려 달라기」 — 앱은 저장하지 말고 [[아이콘]] 한 줄로만. ask 가 비면 앱이 하는 일로. */
+export function iconBrief(title: string, appId: string, ask: string, now: StudioIcon | null): string {
+  const want = String(ask || '').replace(/\s+/g, ' ').trim();
+  return `「${title}」 앱(app_id ${appId})의 아이콘을 새로 그려 줘. ${want ? '원하는 그림: ' + want + '.' : '앱이 하는 일이 한눈에 보이는 그림으로.'} `
+    + (now ? `지금 아이콘은 path "${now.path}" · 색 ${now.color}${now.color_dark ? ' / ' + now.color_dark : ''} 야. ` : '')
+    + `${ICON_SHAPE}, 색은 밝은 바탕용과 어두운 바탕용 둘. 앱 코드는 고치지 말고(app_save 하지 마) 앞뒤에 다른 말 없이 이 한 줄로만 답해 줘:\n`
+    + '[[아이콘]] path: (SVG path d) | color: #RRGGBB | dark: #RRGGBB';
+}
+/** [[아이콘]] path: … | color: #… | dark: #… — 여럿이면 마지막. 잣대에 안 맞으면 null. */
+export function parseIcon(text: string): StudioIcon | null {
+  const re = /\[\[아이콘\]\]\s*([^\n]*)/g; let m: RegExpExecArray | null; let line = '';
+  while ((m = re.exec(String(text || '')))) line = m[1];
+  if (!line) return null;
+  const part = (label: RegExp): string => { const mm = label.exec(line); return mm ? mm[1].trim().replace(/^["'`]+|["'`]+$/g, '') : ''; };
+  return iconSpec({ path: part(/path\s*[:：]\s*([^|]*)/i), color: part(/color\s*[:：]\s*([^|]*)/i), color_dark: part(/dark\s*[:：]\s*([^|]*)/i) });
+}
+/** ④ 그림 고르기의 기본 그림 — 레일 · 사이드바와 같은 선 그림 표(lib/icon-paths)의 이름. 앱이 흔히 하는 일 위주. */
+export const ICON_GLYPHS = ['note', 'doc', 'list', 'task', 'chart', 'board', 'timeline', 'clock', 'bell', 'chat', 'quote', 'folder', 'img', 'star', 'bolt', 'spark', 'people', 'pen'] as const;
+/** ④ 색 고르기 — 앱 아이콘 색 토큰(01-base.css · 90-dark.css --gi-c-*)과 같은 짝(밝은 바탕 · 어두운 바탕). */
+export const ICON_COLORS: ReadonlyArray<{ color: string; color_dark: string; name: string }> = [
+  { color: '#118E6E', color_dark: '#16B48C', name: '초록' }, { color: '#2D6BF0', color_dark: '#739DF5', name: '파랑' },
+  { color: '#8A3FD1', color_dark: '#C084FC', name: '보라' }, { color: '#B0323F', color_dark: '#E8737F', name: '와인' },
+  { color: '#D5541F', color_dark: '#E7845B', name: '주황' }, { color: '#D6457A', color_dark: '#E37EA3', name: '분홍' },
+  { color: '#0D88A7', color_dark: '#10ACD3', name: '청록' }, { color: '#B36E18', color_dark: '#E08A1E', name: '호박' },
+  { color: '#576889', color_dark: '#909EB8', name: '회색' },
+];
+
 /** 세션 기록(ndjson) 가운데 AI 답의 글만 — 줄마다 한 덩이. */
 export function assistantTexts(ndjson: string): string[] {
   const out: string[] = [];
@@ -295,7 +343,7 @@ export function planBrief(what: string, place: StudioPlace, name = ''): string {
 /** ②→③ 첫 판 — appId 는 「만들기 시작」 때 서버가 예약해 둔 앱(#4667). 그 id 로 저장해야 이 만들기의 앱이 된다(다르면 서버가 409). */
 export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): string {
   const id = String(appId || '').trim();
-  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n`
+  return `이 기획 카드대로 초안을 만들어 저장해 줘. ${PLACE[place].say}\n${LEGACY}\n${cardText(card)}\n${RULE}\n${NOTIFY}\n${WIRE}\n${ICON}\n`
     + (id ? `이 앱의 id 는 ${id} 로 미리 잡아 뒀어 — lively-app.json 의 id 를 꼭 ${id} 로 해 줘.\n` : '')
     + '진행을 알 수 있게 단계마다 한 줄씩 먼저 보내 줘: [[걸음 1/4]] 기획 읽음 → [[걸음 2/4]] 화면 짬 → [[걸음 3/4]] 자료 표 → [[걸음 4/4]] 저장. '
     + 'app_save 의 note 는 「초안 · 무엇이 되는지 한 줄」. 끝나면 쉬운 말 두 줄만(코드 · 파일 · 도구 이름은 빼고).';
