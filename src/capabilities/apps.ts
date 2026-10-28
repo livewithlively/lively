@@ -1032,11 +1032,18 @@ const appSpec: Capability = {
     const visible = new Set((await store.listAppVersions(id)).filter((v) => !isOthersPendingVersion(installed, v, who, since)).map((v) => v.version_no));
     const budget = await run.specBudgetOk();
     let d = decideSpec(key, versionNo, rows, { now: Date.now(), available, visible, budget });
+    let retryAfter: number | null = null;
     //  「다시 만들기」 는 실패한 이 판에만 — 다 쓴 · 쓰는 중인 설명은 그대로 둔다(누를 때마다 돈이 나가지 않게).
     if (input.regenerate === true && d.failed && available && !budget) d = { ...d, failed: null, limit: true };   // 다시 쓸 몫이 없다고 말한다(격리 리뷰 N2)
     else if (input.regenerate === true && d.failed && available) {
-      void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
-      d = { ...d, failed: null, writing: true };
+      //  다시 쓰기 간격(1분) 안이면 쓰기를 맡지 않는다(writeAppSpec 이 'busy' 로 조용히 돌아와 화면은 같은 실패 문구로 돌아갔다) — 언제 다시 누를지 알린다(감사 4-11).
+      const lastStart = await specStore.lastSpecStart(id);
+      const wait = lastStart == null ? 0 : lastStart + run.SPEC_FORCE_GAP_MS - Date.now();
+      if (wait > 0) retryAfter = wait;
+      else {
+        void run.writeAppSpec(id, await loadTarget(), { force: true }).catch(() => { /* 행에 까닭이 남는다 */ });
+        d = { ...d, failed: null, writing: true };
+      }
     } else if (d.kick) {
       void run.writeAppSpec(id, await loadTarget(), { force: false }).catch(() => { /* 행에 까닭이 남는다 */ });
     }
@@ -1044,9 +1051,10 @@ const appSpec: Capability = {
     const facts = await run.factsCache(id, key, async () => { const t = await loadTarget(); return specFacts(t.manifest, t.files); });
     const doc = d.show ? await specStore.getAppSpecDoc(id, d.show.content_hash) : null;
     return {
-      app_id: id, title: installed.title, version_no: versionNo, content_hash: contentHash, view: pub ? "published" : "installed",
+      //  제목도 보는 사람의 판 이름 — 공개 판을 보는 사람에게 공개 전 새 이름이 새지 않게(감사 6-4).
+      app_id: id, title: (pub && typeof (pub.manifest as { title?: unknown } | null)?.title === "string" && (pub.manifest as { title: string }).title) || installed.title, version_no: versionNo, content_hash: contentHash, view: pub ? "published" : "installed",
       facts,
-      spec_state: state, spec_error: state === "failed" ? d.failed : null,
+      spec_state: state, spec_error: state === "failed" ? d.failed : null, retry_after_ms: retryAfter,
       spec: d.show && doc ? { version_no: d.show.version_no, made_at: d.show.made_at ? new Date(d.show.made_at).toISOString() : null, model: d.show.model, doc } : null,
     };
   },

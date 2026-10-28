@@ -1635,6 +1635,8 @@ input.v2-pad-search::-webkit-search-cancel-button { -webkit-appearance: none; ap
 .v2-pad-item.is-first { background: rgba(var(--tint-ink), .12); }
 .v2-pad-item b { font-size: 12.5px; font-weight: 700; line-height: 1.35; }
 .v2-pad-ico { width: 60px; height: 60px; display: grid; place-items: center; color: var(--ink-sub); }
+/* 앱 찾기는 #v2-root 밖(body)에 붙는다 — 선 그림 아이콘의 선 색을 여기서 준다(감사 6-1 · 「+ 새 앱」 의 ＋ · 칸의 ⋯ 가 빈 네모로 보였다). */
+.v2-pad .v2-ic { stroke: currentColor; stroke-width: var(--ic-stroke, 1.7); fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .v2-pad-ico .v2-ic { width: 30px; height: 30px; }
 /* 앱 아이콘(#4233) — 타일 하나 + 선 아이콘 하나(v2/glass-icon.ts). 런치패드의 배경 · 흐림 · 격자는 그대로다.
    선의 색은 앱마다 다르다(--gi-c-*, SVG 의 stroke 속성이 고른다).
