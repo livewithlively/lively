@@ -5,7 +5,8 @@
 //  워크스페이스 격리는 행 격리 정책이 한다(org_app · org_app_version · org_tool — 이 함수들의 SQL 은 tenant_id 를 적지 않는다).
 import { itemsPool } from "../db/client.js";
 import { HttpError } from "../http-error.js";
-import { withAppInstallLock, type AppVisibility } from "../org/store/apps.js";
+import { withAppInstallLock, APP_INSTALL_LOCK_TIMEOUT, type AppVisibility } from "../org/store/apps.js";
+import { HTTP_TOOL_PRESETS } from "../org/delivery/http-tool-presets.js";
 import { appMcpToolsOf } from "./app-mcp-decl.js";
 
 /** 도구 목록 판정에 쓰는 앱 칸(org_app 의 부분) + 설치된 판의 mcp_tools + 공개 판의 이름표 · mcp_tools. */
@@ -70,11 +71,25 @@ export async function takenMcpToolNames(names: readonly string[], opts: { except
 }
 
 /**
- * 설치 · 판 저장 때의 이름 겹침 검사(409). 앱 이름을 밝히지 않는다 — 겹친 앱이 남의 «나만 보는 앱» 일 수 있다(그런 앱은 없는 앱과 같다 · visibility.ts).
- *  검사와 설치는 withMcpToolNamesLock 안에서 이어 돈다(설치 코어 install-run.ts) — 다른 두 앱이 같은 이름으로 동시에 지나가지 못한다.
+ * 라이블리 도구 묶음(프리셋 — 구글 · 슬랙 · 깃허브 등, org/delivery/http-tool-presets.ts)의 도구 이름. 아직 심지 않은 묶음의 이름도 앱이 못 쓴다 —
+ *  관리자가 나중에 묶음을 심으면(관리 창구 · 연결 직후 자동 적용 ensureHttpToolPresetGroup) 먼저 올라가는 조직 도구가 앱 도구를 말없이 가린다.
+ *  이미 심긴 것은 org_tool 행으로도 걸린다. 새 코어가 묶음에 이름을 더하면 그 이름은 그 뒤의 설치 · 저장부터 막힌다(그 전에 그 이름을 쓴 앱은 묶음을
+ *  심는 순간 가려지고 목록 등록 경고가 남는다).
+ */
+const PRESET_TOOL_NAMES: ReadonlySet<string> = new Set(HTTP_TOOL_PRESETS.flatMap((g) => g.tools.map((t) => t.name)));
+
+/**
+ * 설치 · 판 저장 때의 이름 검사 — 도구 묶음 이름이면 400, 다른 앱 · 조직 도구가 쓰면 409. 앱 이름을 밝히지 않는다 — 겹친 앱이 남의 «나만 보는 앱» 일 수
+ *  있다(그런 앱은 없는 앱과 같다 · visibility.ts). 검사와 설치는 withMcpToolNamesLock 안에서 이어 돈다(설치 코어 install-run.ts) — 다른 두 앱이 같은 이름으로
+ *  동시에 지나가지 못한다.
  */
 export async function assertMcpToolNamesFree(appId: string, manifest: unknown): Promise<void> {
-  const taken = await takenMcpToolNames(appMcpToolsOf(manifest).map((d) => d.name), { exceptApp: appId });
+  const names = appMcpToolsOf(manifest).map((d) => d.name);
+  const preset = names.filter((n) => PRESET_TOOL_NAMES.has(n));
+  if (preset.length) {
+    throw new HttpError(400, `도구 이름 ${preset.map((n) => `'${n}'`).join(" · ")} 은(는) 라이블리 도구 묶음(구글 · 슬랙 · 깃허브 등)이 쓰는 이름이라 앱이 쓸 수 없습니다 — mcp_tools 의 name 을 바꿔 다시 저장하세요`);
+  }
+  const taken = await takenMcpToolNames(names, { exceptApp: appId });
   if (taken.length) {
     throw new HttpError(409, `도구 이름 ${taken.map((n) => `'${n}'`).join(" · ")} 은(는) 이 워크스페이스의 다른 앱이나 도구가 이미 씁니다 — mcp_tools 의 name 을 바꿔 다시 저장하세요`);
   }
@@ -85,6 +100,15 @@ export async function assertMcpToolNamesFree(appId: string, manifest: unknown): 
  *  앱 id 꼴(소문자 · 하이픈)에 없는 밑줄 이름이라 어떤 앱의 락과도 겹치지 않는다. 잡는 순서는 늘 앱 락 → 이 락이다(교착 없음).
  */
 export const MCP_TOOL_NAMES_LOCK = "__mcp_tool_names__";
-export function withMcpToolNamesLock<T>(fn: () => Promise<T>): Promise<T> {
-  return withAppInstallLock(MCP_TOOL_NAMES_LOCK, fn);
+export async function withMcpToolNamesLock<T>(fn: () => Promise<T>, opts: { waitMs?: number } = {}): Promise<T> {
+  let entered = false;
+  try {
+    return await withAppInstallLock(MCP_TOOL_NAMES_LOCK, () => { entered = true; return fn(); }, opts);
+  } catch (e) {
+    //  이름 자리를 못 잡았다(fn 이 돌기 전) — 기다린 까닭은 이 앱이 아니라 다른 앱의 설치다. 잠금의 속 이름 대신 그 까닭을 말한다. fn 안의 오류는 그대로.
+    if (!entered && (e as { code?: unknown })?.code === APP_INSTALL_LOCK_TIMEOUT) {
+      throw new HttpError(409, "이 워크스페이스에서 다른 앱의 AI 도구 이름 확인이 아직 진행 중입니다 — 잠시 뒤 다시 저장하세요");
+    }
+    throw e;
+  }
 }

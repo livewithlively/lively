@@ -1,5 +1,5 @@
 // 앱이 선언한 MCP 도구(#5050 앱 v2-40) — 누구의 목록에 어느 판의 도구가 서나(listedAppsFor · 판정) · DB 앞에서 끝나는 길. DB 를 지나는 끝단은 app-declared-tools.pg-test.mjs.
-//  L1 공개 앱 · L2 초안 걸린 공개 앱(만든 사람 = 초안 · 남 = 공개 판) · L2b 공개 판 행 없음 · L3 나만 보는 앱(책임자만 — 관리자에게도 안 선다) ·
+//  L1 공개 앱 · L2 초안 걸린 공개 앱(만든 사람 = 초안 · 남 = 공개 판) · L2b 공개 판 행 없음 · L2c 그 경고는 한 번만 · L3 나만 보는 앱(책임자만 — 관리자에게도 안 선다) ·
 //  L4 기본 앱 · 빈 예약 · L5 읽기 전용(L0 만) · L6 실행기 없는 kind · L7 선언 0개 ·
 //  N1 앱 토큰 · 앱 서버 주체 · scope 없는 토큰은 등록 0(DB 안 봄) · N2 실행기가 하나도 없으면 등록 0(DB 안 봄) · N3 부르기 — 앱 토큰 · 앱 서버 주체 · scope 없음은 DB 앞에서 거절
 //  (유닛 러너엔 DB 주소가 없다 — db/client 는 주소가 없으면 곧바로 던지므로, DB 에 닿으면 N1 · N2 · N3 가 빨개진다)
@@ -8,6 +8,7 @@ import { listedAppsFor, registerAppDeclaredTools, callAppDeclaredTool } from "./
 import { registerAppMcpExecutor } from "../apps/app-mcp-executors.js";
 import type { McpToolAppRow } from "../apps/app-mcp-store.js";
 import type { LivelyUser } from "../context.js";
+import { logger } from "../log.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -46,6 +47,18 @@ await t("L2 초안 걸린 공개 앱 — 초안 만든 사람은 초안의 도�
 await t("L2b 공개 판 행이 없으면(불변식 위반) 설치된 상태의 도구로 — 앱이 사라지는 쪽으로 틀리지 않는다", () => {
   const rows = [row({ id: "wiki", draft_by: "drafter", published_version_no: 3, mcp_tools: [decl("installed_tool")], published: null })];
   assert.deepEqual(names(rows, who("alice")), ["wiki:installed_tool"]);
+});
+
+await t("L2c 공개 판 행이 없다는 경고는 (앱, 판)마다 한 번만 — 목록 짜기는 MCP 요청마다 돈다", () => {
+  const rows = [row({ id: "lost", draft_by: "drafter", published_version_no: 7, published: null })];
+  const orig = logger.warn;
+  let n = 0;
+  logger.warn = ((..._a: unknown[]) => { n++; }) as typeof logger.warn;
+  try {
+    for (let i = 0; i < 3; i++) listedAppsFor(rows, who("alice"), false);
+    listedAppsFor([row({ id: "lost", draft_by: "drafter", published_version_no: 8, published: null })], who("alice"), false);
+  } finally { logger.warn = orig; }
+  assert.equal(n, 2, "판 7 에 한 번 · 판 8 에 한 번");
 });
 
 await t("L3 나만 보는 앱 — 책임자에게만 선다(다른 구성원 · 관리자에게도 안 선다)", () => {

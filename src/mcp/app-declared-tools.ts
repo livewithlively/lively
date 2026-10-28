@@ -55,6 +55,15 @@ export function appToolsHolder(app: AppVisState & { source: unknown; current_ver
 /** 목록에 올릴 앱 하나 — 그 사람이 보는 판의 이름표 · 선언. */
 interface ListedApp { row: McpToolAppRow; title: string; decls: AppMcpToolDecl[] }
 
+//  같은 까닭의 경고는 한 번만 — 목록 짜기 · 등록은 MCP 요청마다 돈다(키가 1000개를 넘으면 비우고 다시 센다). 키의 앱 id · 도구 이름엔 ':' 이 없다.
+const warned = new Set<string>();
+function warnOnce(key: string, obj: Record<string, unknown>, msg: string): void {
+  if (warned.has(key)) return;
+  if (warned.size > 1000) warned.clear();
+  warned.add(key);
+  logger.warn(obj, msg);
+}
+
 /** 이 사람의 목록에 설 앱과 도구(판정만 — 공개 판 행이 빠진 불변식 위반만 기록으로 알린다). 공개 판을 보는 앱의 선언은 row.published 에서. */
 export function listedAppsFor(rows: readonly McpToolAppRow[], who: Viewer, readOnly: boolean): ListedApp[] {
   const out: ListedApp[] = [];
@@ -67,16 +76,16 @@ export function listedAppsFor(rows: readonly McpToolAppRow[], who: Viewer, readO
     if (view === "published") {
       //  공개 판 행이 없으면(불변식 위반) 설치된 상태를 보인다 — app-view.ts viewAppFor 와 같은 쪽으로 틀린다.
       if (row.published) { mcp = row.published.mcp_tools; title = row.published.title || row.title; }
-      else logger.warn({ app: row.id, published: row.published_version_no }, "공개 판 행이 없어 설치된 상태의 도구를 보인다(#5050 · #4667 불변식)");
+      else {
+        warnOnce(`published:${row.id}:${row.published_version_no}`, { app: row.id, published: row.published_version_no },
+          "공개 판 행이 없어 설치된 상태의 도구를 보인다(#5050 · #4667 불변식)");
+      }
     }
     const decls = appMcpToolsOf({ mcp_tools: mcp }).filter((d) => !!appMcpExecutor(d.run.kind) && (!readOnly || d.level === "L0"));
     if (decls.length) out.push({ row, title, decls });
   }
   return out;
 }
-
-//  같은 이름이 이미 선 경고는 (앱, 도구)마다 한 번만 — 이 등록은 MCP 요청마다 돈다.
-const warnedClash = new Set<string>();
 
 /**
  * 요청마다 — 이 사람이 볼 수 있는 앱의 선언 도구를 server 에 올린다. 올린 수. 실패는 부르는 쪽이 삼킨다(fail-open — 기본 표면은 그대로).
@@ -110,12 +119,8 @@ export async function registerAppDeclaredTools(server: McpServer, user: LivelyUs
         n++;
       } catch (err) {
         //  같은 이름이 이미 섰다 — 빌트인 · http_proxy · 프록시 도구 · 먼저 설치된 앱이 이긴다(설치 검사 밖에서 생긴 이름 · 그 뒤에 생긴 조직 도구).
-        const key = `${a.row.id}\0${d.name}`;
-        if (!warnedClash.has(key)) {
-          if (warnedClash.size > 1000) warnedClash.clear();
-          warnedClash.add(key);
-          logger.warn({ app: a.row.id, tool: d.name, err: (err as Error)?.message }, "앱 선언 도구를 올리지 못했다 — 이름이 이미 쓰였거나 선언을 읽지 못함(#5050)");
-        }
+        warnOnce(`clash:${a.row.id}:${d.name}`, { app: a.row.id, tool: d.name, err: (err as Error)?.message },
+          "앱 선언 도구를 올리지 못했다 — 이름이 이미 쓰였거나 선언을 읽지 못함(#5050)");
       }
     }
   }

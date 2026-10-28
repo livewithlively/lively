@@ -1,6 +1,6 @@
 // 앱이 선언한 MCP 도구(#5050 앱 v2-40) — 선언 읽기 · 설치 검사 · 약속 지문 · 표시 · 결과 글(순수). DB 쪽(이름 겹침 · 등록 · 부르기)은
 //  mcp/app-declared-tools.pg-test.mjs, 목록 판정(판 · 공개 범위)은 mcp/app-declared-tools.test.ts.
-//  R1~R7 저장된 것 읽기(던지지 않음) · I1~I16 설치 검사(경계 I4b · I7 · I10 · I6b · I15) · C1~C4 약속 지문 · P1~P3 동의 전 표시(대리 글자 · 숨은 글자) ·
+//  R1~R7 저장된 것 읽기(던지지 않음) · I1~I16 설치 검사(경계 I4b · I7 · I10 · I6b · I15) · C1~C4 약속 지문 · P1~P3b 동의 전 표시(대리 글자 · 숨은 글자 · 이모지) ·
 //  T1~T5 결과 글 · U1 동의 주소 · M1~M4 매니페스트 칸 · X1 프록시 접두 정본
 import assert from "node:assert/strict";
 import {
@@ -162,7 +162,7 @@ await t("I14 깨진 글자(짝 없는 대리 글자) — 설명 · 제목 · 입
   }
   assert.equal((await assertAppMcpToolsInstallable(m([tool({ description: "온전한 이모지 😀 는 된다" })]))).length, 1);
 });
-await t("I15 run 칸 — 객체 6단(run 자신 포함 · 경계)은 통과 · 7단 · 8KiB 넘음 · 예약 키는 400", async () => {
+await t("I15 run 칸 — 객체 6단(run 자신 포함 · 경계)은 통과 · 7단 · JSON 8192자 넘음 · 예약 키는 400", async () => {
   const nest = (n: number): Record<string, unknown> => { let v: Record<string, unknown> = { leaf: 1 }; for (let i = 1; i < n; i++) v = { d: v }; return v; };
   assert.equal((await assertAppMcpToolsInstallable(m([tool({ run: { kind: "echo", x: nest(5) } })]))).length, 1);
   await rejects(assertAppMcpToolsInstallable(m([tool({ run: { kind: "echo", x: nest(6) } })])), /run 의 중첩이 너무 깊습니다/);
@@ -222,9 +222,16 @@ await t("P2b 이름표는 코드포인트로 자른다 — 40번째가 이모지
   assert.equal(out, "a".repeat(39) + "😀…");
   assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(out), "온전한 글자만");
 });
-await t("P3 보이지 않는 글자 — 폭 없는 글자 · 방향 바꾸기 · 태그 글자 · 변형 선택자 · 짝 없는 대리 글자를 걷는다", () => {
-  assert.equal(appLabel("가\u200B나\u202E다\u{E0041}\u{E0042}라\uFE0F마\uD83D바"), "가 나 다 라 마 바");
-  assert.equal(appLabel("\u{E0063}\u{E0061}\u{E006C}\u{E006C}"), "앱", "태그 글자만으로 된 제목은 빈 이름");
+await t("P3 보이지 않는 글자는 지운다 — 폭 없는 글자 · 방향 바꾸기 · 태그 글자 · 변형 선택자 · 짝 없는 대리 글자 · 한글 채움 · 빈 점자(보이던 모양 그대로)", () => {
+  assert.equal(appLabel("가\u200B나\u202E다\u{E0041}\u{E0042}라\uFE0F마\uD83D바"), "가나다라마바");
+  assert.equal(appLabel("가\u200B 나"), "가 나");
+  for (const blank of ["\u{E0063}\u{E0061}\u{E006C}\u{E006C}", "\u3164\u3164", "\u115F\u1160", "\uFFA0", "\u2800\u2800", "\u200B\u034F"]) {
+    assert.equal(appLabel(blank), "앱", `보이지 않는 글자만으로 된 제목은 빈 이름: ${JSON.stringify(blank)}`);
+  }
+});
+await t("P3b 이모지는 갈라지지 않는다 — 키캡은 숫자에 붙고 이어 붙인 이모지는 낱 이모지로(사이에 빈칸 없음)", () => {
+  assert.equal(appLabel("1\uFE0F\u20E3 팀"), "1\u20E3 팀");
+  assert.equal(appLabel("\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 가족"), "\u{1F468}\u{1F469}\u{1F467} 가족");
 });
 
 // ── 결과 글 ──

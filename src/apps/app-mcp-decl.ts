@@ -44,8 +44,9 @@ export const PROXY_TOOL_PREFIX = "ext__";
 const INPUT_PROP_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
 /** 입력 속성 설명 한 칸의 상한 — 동의한 사람의 도구 목록에 그대로 실린다(스키마 전체 상한 32KiB 는 json-schema.ts). */
 export const INPUT_PROP_DESC_MAX = 500;
-/** run 칸의 크기 · 깊이 상한 — 실행기 설정이다(SQL 한 문장 · 라우트 정도). 깊이를 막아야 약속 지문 · 글자 검사가 재귀로 넘치지 않는다. */
-const RUN_MAX_BYTES = 8 * 1024;
+/** run 칸의 크기 · 깊이 상한 — 실행기 설정이다(SQL 한 문장 · 라우트 정도). 깊이를 막아야 약속 지문 · 글자 검사가 재귀로 넘치지 않는다.
+ *  크기는 JSON 글자 수다(바이트가 아니다 — 한글이면 바이트로는 더 크다). */
+const RUN_MAX_CHARS = 8192;
 const RUN_MAX_DEPTH = 6;
 /** 짝 없는 UTF-16 대리 글자(반쪽) — 이런 문자열은 도구 목록을 받아 모델 API 로 넘기는 쪽이 요청째 거부할 수 있다. */
 const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
@@ -90,7 +91,7 @@ function runProblem(run: Record<string, unknown>): string | null {
   const tooDeep = (v: unknown, d: number): boolean =>
     !!v && typeof v === "object" && (d > RUN_MAX_DEPTH || Object.values(v as Record<string, unknown>).some((x) => tooDeep(x, d + 1)));
   if (tooDeep(run, 1)) return `run 의 중첩이 너무 깊습니다(${RUN_MAX_DEPTH}단 초과)`;
-  if (JSON.stringify(run).length > RUN_MAX_BYTES) return `run 이 너무 큽니다(${RUN_MAX_BYTES / 1024}KiB 초과)`;
+  if (JSON.stringify(run).length > RUN_MAX_CHARS) return `run 이 너무 큽니다(JSON ${RUN_MAX_CHARS}자 초과)`;
   return null;
 }
 /**
@@ -103,7 +104,11 @@ function rawItemProblem(item: unknown): string | null {
   if (/"(__proto__|constructor|prototype)"\s*:/.test(json)) return "예약 키(__proto__/constructor/prototype)는 쓸 수 없습니다";
   return null;
 }
-/** input 위생 — 스키마 위생(json-schema.ts) · 속성 이름 · 속성 값의 꼴. 틀리면 까닭. */
+/**
+ * input 위생 — 스키마 위생(json-schema.ts) · 속성 이름 · 속성 값의 꼴. 틀리면 까닭.
+ *  속성 값은 얕게(type · description)만 본다 — 도구 목록으로 모델에 나가는 것이 최상위 속성의 그 둘뿐이라서다(mcp/json-schema.ts
+ *  jsonSchemaToZodShape — 중첩 스키마는 unknown 으로 떨어진다). 변환기가 더 싣게 바뀌면 이 검사도 넓힌다.
+ */
 function inputProblem(input: Record<string, unknown>): string | null {
   try { assertSafeJsonSchema(input); } catch (e) { return `input — ${(e as Error).message}`; }
   const props = (input as { properties?: unknown }).properties;
@@ -112,7 +117,9 @@ function inputProblem(input: Record<string, unknown>): string | null {
     if (!INPUT_PROP_RE.test(k)) return `input.properties 의 이름 '${k}' 은(는) 쓸 수 없습니다 — 영문·숫자·_·.·- 1~64자만(AI 도구 규칙)`;
     if (!v || typeof v !== "object" || Array.isArray(v)) return `input.properties.${k} 는 객체(JSON Schema)여야 합니다`;
     const p = v as { type?: unknown; description?: unknown };
-    if (p.type !== undefined && typeof p.type !== "string") return `input.properties.${k}.type 은 글자여야 합니다(예: "string")`;
+    if (p.type !== undefined && typeof p.type !== "string") {
+      return `input.properties.${k}.type 은 글자 하나여야 합니다(예: "string") — ["string","null"] 같은 배열 type 은 지원하지 않습니다(없어도 되는 칸은 required 에서 빼세요)`;
+    }
     if (p.description !== undefined && (typeof p.description !== "string" || p.description.length > INPUT_PROP_DESC_MAX)) {
       return `input.properties.${k}.description 은 ${INPUT_PROP_DESC_MAX}자 이하의 글자여야 합니다`;
     }
@@ -244,11 +251,15 @@ export function appMcpToolContract(d: AppMcpToolDecl): string {
 }
 
 // ── 표시 ────────────────────────────────────────────────────────────────────────────────
-//  걷는 글자: 제어(Cc) · 서식(Cf — 폭 없는 글자 · 방향 바꾸기 · 태그 글자 U+E00xx) · 짝 없는 대리 글자(Cs) · 줄/문단 구분 · 변형 선택자.
-const LABEL_STRIP_RE = /[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]/gu;
+//  지우는 글자(보이지 않던 것 — 지워도 보이던 모양 그대로다): 서식(Cf — 폭 없는 글자 · 방향 바꾸기 · 태그 글자 U+E00xx · 이음 글자) ·
+//   짝 없는 대리 글자(Cs) · 변형 선택자 · 자소 이음(U+034F) · 몽골 변형 선택자 · 크메르 묵음 모음 · 한글 채움(U+115F · U+1160 · U+3164 · U+FFA0) ·
+//   빈 점자(U+2800). 이음 글자까지 지우므로 이어 붙인 이모지(가족 등)는 낱 이모지 여럿으로 보인다.
+//  띄우는 글자: 제어(Cc — 줄바꿈 · 탭) · 줄/문단 구분(Zl · Zp) — 한 줄 이름표로.
+const LABEL_DROP_RE = /[\p{Cf}\p{Cs}\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}\u{034F}\u{180B}-\u{180D}\u{180F}\u{17B4}\u{17B5}\u{115F}\u{1160}\u{3164}\u{FFA0}\u{2800}]/gu;
+const LABEL_SPACE_RE = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
 /** 앱 제목을 한 줄 이름표로 — 보이지 않는 글자를 걷고 **코드포인트** 40개에서 자른다(대리 글자 쌍을 반으로 자르지 않게). 동의 전 표시 · 오류 글에 쓴다. */
 export function appLabel(title: string): string {
-  const s = String(title ?? "").replace(LABEL_STRIP_RE, " ").replace(/\s+/g, " ").trim();
+  const s = String(title ?? "").replace(LABEL_DROP_RE, "").replace(LABEL_SPACE_RE, " ").replace(/\s+/g, " ").trim();
   const cps = Array.from(s);
   return cps.length > 40 ? `${cps.slice(0, 40).join("")}…` : s || "앱";
 }

@@ -7,7 +7,7 @@ import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { isBuiltinToolName, toolCandidates } from "../../mcp/mcp-surface.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
-import { getRuntimeConfig, listTools, upsertTool, removeTool, type ToolKind, type OrgToolInput } from "../../org/store.js";
+import { getRuntimeConfig, listTools, getTool, upsertTool, removeTool, type ToolKind, type OrgToolInput } from "../../org/store.js";
 import { HTTP_TOOL_PRESETS } from "../../org/delivery/http-tool-presets.js";
 import { applyHttpToolPresetGroup, findHttpToolPresetGroup } from "../../org/delivery/http-tool-preset-apply.js";
 import { restRuntime, str, wctx } from "./shared.js";
@@ -39,8 +39,11 @@ export const toolsCapabilities: Capability[] = [
       if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(rawName)) throw new HttpError(400, "name 은 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
       if (kind === "http_proxy" && isBuiltinToolName(rawName)) throw new HttpError(400, `name '${rawName}' 는 빌트인 도구와 충돌합니다`);
       if (kind === "builtin" && !isBuiltinToolName(rawName)) throw new HttpError(400, `'${rawName}' 는 빌트인 도구가 아닙니다(kind=builtin 은 빌트인 토글 전용)`);
-      //  #5050 — 앱이 선언한 MCP 도구(mcp_tools)와 같은 이름이면 거절한다. 도구 목록은 이 도구를 먼저 올리므로 그 앱의 도구가 말없이 가려진다(앱 쪽 설치는 반대 방향을 409 로 막는다).
-      if (kind === "http_proxy" && (await takenMcpToolNames([rawName], { orgTools: false })).length) {
+      //  #5050 — 새 이름이 앱이 선언한 MCP 도구(mcp_tools)와 같으면 거절한다. 도구 목록은 이 도구를 먼저 올리므로 그 앱의 도구가 말없이 가려진다(앱 쪽 설치는
+      //   반대 방향을 409 로 막는다). 이미 있는 조직 도구는 고치고 끌 수 있게 둔다 — 겹친 채로 있을 수 있는 것은 아래 틈에서 생긴 것뿐이고 지우기는 늘 된다.
+      //   틈: 이 검사는 도구 이름 자리 잠금(apps/app-mcp-store.ts) 밖이라 앱 설치와 정확히 같은 때면 둘 다 지날 수 있다(결과는 가려짐 + 목록 등록 경고).
+      //   도구 묶음(프리셋)은 이 길을 지나지 않는다 — 그 이름은 앱 쪽 설치가 처음부터 막는다.
+      if (kind === "http_proxy" && !(await getTool(rawName)) && (await takenMcpToolNames([rawName], { orgTools: false })).length) {
         throw new HttpError(409, `name '${rawName}' 은(는) 이 워크스페이스의 앱이 AI 도구로 선언한 이름(mcp_tools)과 겹칩니다 — 다른 이름을 쓰세요`);
       }
       const base: OrgToolInput = {

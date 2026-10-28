@@ -12,7 +12,8 @@
 //  E9 기본 앱 · E10 읽기 전용 · E11 인코그니토 · 앱 토큰 · E12 설치 거부(남 앱 이름 · 조직 도구 이름 · 빌트인 이름 · 모르는 실행기 · 자기 재설치 통과) ·
 //  E13 약속 지문(level 바뀜 → tool_changed · 설명만 바뀜 → 실행) · E14 워크스페이스 B(같은 이름 · 동의 · 도구가 A 에 안 샘) · E15 인자 ·
 //  E16 실행기 오류 · E17 결과 상한 · E18 scope 없는 토큰 · E20 이름 겹침(먼저 설치된 앱) · E21 공개 주소 모름 ·
-//  E12b 되돌리기(app_revert)도 이름 검사 · E12c 같은 이름 동시 설치는 하나만 · E12d 조직 도구를 앱 도구 이름으로 못 만든다 · E22 비활성 구성원 ·
+//  E6b 초안이 mcp_tools 칸을 통째로 뺀 공개 앱(공개 판 갈래) · E12b 되돌리기(app_revert)도 이름 검사 · E12c 같은 이름 동시 설치는 하나만 ·
+//  E12d 조직 도구를 앱 도구 이름으로 못 만든다 · E12e 도구 묶음(프리셋) 이름 · E12f 이미 겹친 조직 도구는 고칠 수 있다 · E12g 이름 자리 대기 초과 · E22 비활성 구성원 ·
 //  E23 비용 — 선언한 앱이 없으면 MCP 요청마다 쿼리 1번 · 실행기가 없으면 0번
 //  G0 · G1 배선 — 정책 · 앱 역할 · 시험 실행기가 실제로 불렸다
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
@@ -91,6 +92,8 @@ try {
   const { registerAppMcpExecutor } = await import(`${D}/apps/app-mcp-executors.js`);
   const { appMcpToolsOf, appMcpToolContract } = await import(`${D}/apps/app-mcp-decl.js`);
   const { callAppDeclaredTool, registerAppDeclaredTools } = await import(`${D}/mcp/app-declared-tools.js`);
+  const { withMcpToolNamesLock, MCP_TOOL_NAMES_LOCK } = await import(`${D}/apps/app-mcp-store.js`);
+  const { appInstallLockKey } = await import(`${D}/org/store/apps.js`);
   const { toolsCapabilities } = await import(`${D}/capabilities/delivery/tools.js`);
   const { HttpError } = await import(`${D}/http-error.js`);
   setToolCandidates(buildToolCandidates());   // 부팅(index.ts)과 같게 — 빌트인 이름 충돌 검사가 실제 표면을 본다
@@ -100,10 +103,14 @@ try {
   chk("G0 스키마 · 정책 자식 프로세스가 콘텐츠 표에 정책을 걸었다", Number(policies?.tables) > 0, policyOut.slice(-300));
   const role = (await itemsPool.query(`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`)).rows[0];
   const ISOLATED = ["org_app", "org_app_version", "org_app_grant", "org_tool"];
-  const rels = await Promise.all(ISOLATED.map(async (t) => ({
-    t, ...(await dbc.query(`SELECT relrowsecurity AS on, relforcerowsecurity AS forced FROM pg_class WHERE relname=$1 AND relkind='r'`, [t])).rows[0],
-    pols: (await dbc.query(`SELECT polname FROM pg_policy WHERE polrelid=$1::regclass`, [t])).rows.map((r) => r.polname),
-  })));
+  //  한 클라이언트(dbc)에 쿼리를 겹쳐 보내지 않는다 — pg 가 경고하고(pg@9 에서 없어진다) 차례로 줄 세운다. 표마다 차례로.
+  const rels = [];
+  for (const t of ISOLATED) {
+    rels.push({
+      t, ...(await dbc.query(`SELECT relrowsecurity AS on, relforcerowsecurity AS forced FROM pg_class WHERE relname=$1 AND relkind='r'`, [t])).rows[0],
+      pols: (await dbc.query(`SELECT polname FROM pg_policy WHERE polrelid=$1::regclass`, [t])).rows.map((r) => r.polname),
+    });
+  }
   chk("G1 앱 역할은 슈퍼유저 · BYPASSRLS 가 아니고, 이 기능이 읽는 넷(org_app · org_app_version · org_app_grant · org_tool) 모두 FORCE RLS · tenant_isolation",
     role && role.rolsuper === false && role.rolbypassrls === false && rels.every((r) => r.on === true && r.forced === true && r.pols.includes("tenant_isolation")), J({ role, rels }));
 
@@ -283,6 +290,16 @@ try {
       && !r6d.isError && c6d?.tool.run.tag === "draft" && c6d?.app.view === "installed" && c6d?.app.variant === "draft" && c6d?.caller.userId === "dana"
       && !r6a.isError && c6a?.tool.run.tag === "pub" && c6a?.app.view === "published" && c6a?.app.variant === "pub" && c6a?.caller.userId === "alice",
     J({ d: c6d && { run: c6d.tool.run, app: c6d.app }, a: c6a && { run: c6a.tool.run, app: c6a.app } }));
+  //  공개 앱에 건 초안이 mcp_tools 칸을 통째로 뺐다 — 설치된 상태(초안)엔 칸이 없고 공개 판에만 있다. 목록 쿼리의 공개 판 갈래(v.manifest ? 'mcp_tools')가 이 앱을 고른다.
+  const namesOf = async (t) => { const c = await mcp(t); try { return (await c.list()).map((x) => x.name); } finally { await c.close(); } };
+  await install("pubonly", "공개만 도구", [T("pub_only_q")]);
+  await save("dana", "pubonly", "공개만 도구(초안)", undefined);
+  const pubRow = (await itemsPool.query(`SELECT draft_by, manifest ? 'mcp_tools' AS has FROM org_app WHERE id='pubonly'`)).rows[0];
+  const l6bA = await namesOf(tok.alice);
+  const l6bD = await namesOf(tok.dana);
+  chk("E6b 공개 앱의 초안이 mcp_tools 칸을 통째로 빼도 다른 사람에게는 공개 판 도구가 선다 · 초안을 고친 사람에게는 안 선다",
+    pubRow?.draft_by === "dana" && pubRow?.has === false && l6bA.includes("pub_only_q") && !l6bD.includes("pub_only_q"),
+    J({ pubRow, alice: l6bA.includes("pub_only_q"), dana: l6bD.includes("pub_only_q") }));
 
   // ── E7 ──
   const O = await mcp(tok.owen);
@@ -369,6 +386,36 @@ try {
   const eTool = await errOf(toolsCapabilities.find((c) => c.name === "org_tool_upsert").handler({ name: "lookup", kind: "http_proxy", url: "https://example.invalid/api" }, P("boss", true), ctx));
   const eToolOk = await errOf(toolsCapabilities.find((c) => c.name === "org_tool_upsert").handler({ name: "free_proxy_name", kind: "http_proxy", url: "https://example.invalid/api" }, P("boss", true), ctx));
   chk("E12d 앱이 선언한 이름으로 조직 도구를 만들면 409(앱 도구가 말없이 가려지지 않게) · 겹치지 않는 이름은 된다", eTool?.status === 409 && /'lookup'/.test(eTool.message) && eToolOk === null, J({ eTool: eTool && [eTool.status, eTool.message], eToolOk: eToolOk?.message }));
+
+  // ── E12e 도구 묶음(프리셋) 이름 — 아직 심지 않았어도 앱이 못 쓴다 ──
+  const presetTools = (await itemsPool.query(`SELECT name FROM org_tool WHERE name IN ('github_get_issue','slack_send_message')`)).rows;
+  const ePreset = await errOf(install("dup-preset", "묶음 이름", [T("github_get_issue")]));
+  const ePresetSave = await errOf(save("bob", "dup-preset-b", "묶음 이름(구성원)", [T("slack_send_message")]));
+  const presetRows = (await itemsPool.query(`SELECT id FROM org_app WHERE id IN ('dup-preset','dup-preset-b')`)).rows;
+  chk("E12e 라이블리 도구 묶음(프리셋) 이름은 아직 심지 않았어도 400 — 설치 · 구성원 저장 둘 다 · 아무 앱도 안 생김",
+    presetTools.length === 0 && ePreset?.status === 400 && /도구 묶음/.test(ePreset.message) && /'github_get_issue'/.test(ePreset.message)
+      && ePresetSave?.status === 400 && /'slack_send_message'/.test(ePresetSave.message) && presetRows.length === 0,
+    J({ presetTools, ePreset: ePreset && [ePreset.status, ePreset.message], ePresetSave: ePresetSave && [ePresetSave.status, ePresetSave.message], presetRows }));
+
+  // ── E12f 이미 겹친 조직 도구도 고치고 끌 수 있다 — 겹침은 검사 밖의 틈에서만 생긴다(여기선 앱 행을 바로 고쳐 만든다) ──
+  await install("clash-app", "겹친 앱", [T("clash_q")]);
+  await itemsPool.query(`UPDATE org_app SET manifest = jsonb_set(manifest, '{mcp_tools,0,name}', '"free_proxy_name"') WHERE id='clash-app'`);
+  const eEdit = await errOf(toolsCapabilities.find((c) => c.name === "org_tool_upsert").handler({ name: "free_proxy_name", kind: "http_proxy", url: "https://example.invalid/v2", enabled: false }, P("boss", true), ctx));
+  const edited = (await itemsPool.query(`SELECT enabled, url FROM org_tool WHERE name='free_proxy_name'`)).rows[0];
+  await cap("org_app_remove").handler({ app_id: "clash-app" }, P("boss", true), ctx);
+  chk("E12f 앱 도구와 이미 겹친 조직 도구는 고치고 끌 수 있다(새 이름만 409)", eEdit === null && edited?.enabled === false && edited?.url === "https://example.invalid/v2",
+    J({ eEdit: eEdit && [eEdit.status, eEdit.message], edited }));
+
+  // ── E12g 도구 이름 자리를 못 잡으면 — 잠금의 속 이름 대신 까닭(409) · 안의 일은 돌지 않는다 ──
+  const lockKey = appInstallLockKey(MCP_TOOL_NAMES_LOCK);
+  await dbc.query("SELECT pg_advisory_lock(hashtext($1))", [lockKey]);
+  let ranLocked = false;
+  const eLock = await errOf(withMcpToolNamesLock(async () => { ranLocked = true; }, { waitMs: 300 }));
+  await dbc.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
+  const eLockFree = await errOf(withMcpToolNamesLock(async () => { ranLocked = ranLocked || "after"; }, { waitMs: 300 }));
+  chk("E12g 이름 자리 대기 시간 초과는 409 «다른 앱의 AI 도구 이름 확인이 진행 중» — 속 이름(__mcp_tool_names__)을 안 비춘다 · 풀리면 돈다",
+    eLock?.status === 409 && /다른 앱의 AI 도구 이름 확인/.test(eLock.message) && !/__mcp_tool_names__/.test(eLock.message) && eLockFree === null && ranLocked === "after",
+    J({ eLock: eLock && [eLock.status, eLock.message], eLockFree: eLockFree?.message, ranLocked, lockKey }));
 
   // ── E22 비활성 구성원 ──
   await upsertMember({ id: "ghost", display_name: "떠난 사람", state: "inactive", scopes: MEMBER_SCOPES }, "pgt");
