@@ -290,8 +290,9 @@ export const unsent = (p: StudioPin): boolean => !p.sent;
 export function fixBrief(round: number, pins: StudioPin[], general: string, place: StudioPlace, appId: string): string {
   const lines: string[] = [];
   const pc = (v?: number): number => Math.round((v || 0) * 100);
+  //  번호는 화면의 번호(i + 1) — 보낸(반영 중) 것 · 빈 것은 건너뛰되 번호는 그대로 둔다.
   pins.forEach((p, i) => {
-    if (!p.note.trim()) return;
+    if (!p.note.trim() || p.sent) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
     //  와이어프레임 보드에서 짚은 곳은 그 그림(${WIREFRAME_PATH}) 안의 자리다 — 앱 화면의 자리와 섞이지 않게 말머리를 가른다.
     const on = p.on === 'wire' ? `와이어프레임(${WIREFRAME_PATH})의` : '화면의';

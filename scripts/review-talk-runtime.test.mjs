@@ -13,6 +13,7 @@
 //  E12 막대가 걷히면 세션 화면이 제자리로 돌아간다   E13 막대가 위면 대화 칸이 막대 아래로   W 페이지 예외 없음
 //  B talkBrief — 첫 말에만 방식(묻기 · app_pull/app_save · 공개 안 함) · 그 뒤는 글 그대로
 //  G1~G5 코멘트 흐름 — 늘어나는 글 칸(막대 · 목록 · 그 자리 칸) · Shift+Enter 줄바꿈 · 목록을 연 채 연달아 짚기 · 목록 맨 아래 「수정하기」 · Esc
+//  H1~H4 리뷰가 잡은 것 — 그 자리 칸과 목록은 함께 서지 않음 · 다시 그려도 쓰던 칸 · 커서 · AI 번호 = 화면 번호 · 세션 위젯 꼴 목록의 고정 자리
 //  ⚠ 범위 밖: «실패한 뒤 다음 말이 다시 첫 말» 플래그(app-studio onTalk) · 세션 위젯 꼴의 고정 자리(placeTalk) · 앱빌더 쪽 걷기 경로(backToBuilder · teardown 은 모두 closeReview 를 거친다).
 //
 // fail-first: `SRC_ROOT=<다른 트리>` 로 그 트리의 web/ · public/styles 를 물린다(이 변경 전 origin/main 에서 E1 · E3~E9 · E12 · E13 · W · B 가 빨갛다).
@@ -162,6 +163,25 @@ async function PAGE_MAIN() {
   { const ta = document.querySelector(".v2-studio-pop textarea"); R.g.e = { pop: !!ta };
     if (ta) { const ev = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }); ta.dispatchEvent(ev); R.g.e.shiftKept = !!document.querySelector(".v2-studio-pop") && !ev.defaultPrevented;
       ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); await sleep(50); R.g.e.enterClosed = !document.querySelector(".v2-studio-pop"); } }
+  window.__step = "H";
+  //  리뷰가 잡은 것(2026-10-28): H1 목록을 연 채 앱의 번호를 누르면 그 자리 칸이 뜨고 목록은 닫힌다(옛 글을 든 목록이 남지 않게)
+  R.h = {};
+  $(".v2-review-count").click(); await sleep(150);
+  { const mk = [...document.querySelectorAll(".v2-review-layer .v2-studio-mk-n")].find((n) => !n.classList.contains("sent")); if (mk) mk.click(); await sleep(150);
+    R.h.h1 = { mk: !!mk, pop: !!document.querySelector(".v2-studio-pop"), tray: !!document.querySelector(".v2-review-tray") };
+    const ta = document.querySelector(".v2-studio-pop textarea"); if (ta) ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await sleep(80); }
+  //  H2 목록에서 쓰는 중에 목록을 다시 그려도(새 버전 도착 · 고치는 중 표시) 그 칸 · 커서가 그대로
+  $(".v2-review-count").click(); await sleep(150);
+  { const tas = [...document.querySelectorAll(".v2-review-tray .v2-studio-tray-row:not(.all) .v2-studio-tray-in")].filter((x) => !x.disabled); const ta = tas[tas.length - 1];
+    const pinObj = host.pins.filter((p) => !p.sent).at(-1);
+    if (!ta) R.h.h2 = { missing: true }; else { ta.focus(); ta.value = "쓰는 중인 글"; ta.dispatchEvent(new Event("input", { bubbles: true })); ta.setSelectionRange(3, 3);
+    api.update({ waiting: true }); await sleep(100);
+    const now = document.activeElement;
+    R.h.h2 = { tray: !!document.querySelector(".v2-review-tray"), sameEl: now === ta, isTa: now && now.tagName === "TEXTAREA" && !!now.closest(".v2-review-tray"), val: now && now.value, caret: now && now.selectionStart, note: pinObj && pinObj.note };
+    api.update({ waiting: false }); await sleep(80); } }
+  { const b2 = document.querySelector(".v2-review-tray .v2-studio-tray-h button"); if (b2) b2.click(); await sleep(80); }
+  //  H3 fixBrief 의 번호 = 화면의 번호(보낸 것 · 빈 것을 건너뛰어도 번호는 그대로)
+  R.h.h3 = Rv.Flow.fixBrief(2, [{ kind: "pin", x: 0, y: 0, where: "", note: "앞에 보낸 것", sent: true }, { kind: "pin", x: 0.1, y: 0.1, where: "", note: "" }, { kind: "pin", x: 0.5, y: 0.5, where: "버튼", note: "새로 단 것" }], "", "full", "mn");
   window.__step = "E13";
   $(".v2-review-flip").click(); await sleep(50);
   gen.focus(); gen.dispatchEvent(new FocusEvent("focus")); await sleep(300);
@@ -169,6 +189,19 @@ async function PAGE_MAIN() {
   window.__step = "E12";
   api.close(); await sleep(100);
   R.e12 = { parent: chat.parentNode && chat.parentNode.id, order: chat.nextElementSibling && chat.nextElementSibling.id, talkLeft: !!talk(), closedInside: R.closedInside };
+  window.__step = "H4";
+  //  H4 세션 위젯 꼴(막대가 문패 줄에 얹힘) — 목록을 연 채 짚어 다시 그려도 고정 자리(--fixed)가 남는다
+  { const dockEl = document.getElementById("dock"); const h2 = { ...host, pins: [], general: "", dock: dockEl, chat: document.getElementById("chat2"), onClose: () => {} };
+    location.hash = h2.route; const api2 = Rv.openReview(h2); await sleep(400);
+    [...document.querySelectorAll(".v2-review-tools button")].find((x) => /핀/.test(x.textContent)).click(); await sleep(50);
+    document.querySelector(".v2-review-count").click(); await sleep(150);
+    const t0 = document.querySelector(".v2-review-tray"); const st0 = t0 && { fixed: t0.classList.contains("v2-review-tray--fixed"), pos: getComputedStyle(t0).position, top: t0.style.top };
+    const ov2 = document.querySelector(".v2-review-ov"); const r = ov2.getBoundingClientRect();
+    ov2.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: r.left + r.width * 0.4, clientY: r.top + r.height * 0.4 })); await sleep(1100);
+    ov2.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: r.left + r.width * 0.6, clientY: r.top + r.height * 0.6 })); await sleep(1100);
+    const t1 = document.querySelector(".v2-review-tray");
+    R.h.h4 = { st0, same: t1 === t0, fixed: !!t1 && t1.classList.contains("v2-review-tray--fixed"), pos: t1 && getComputedStyle(t1).position, top: t1 && t1.style.top, cards: document.querySelectorAll(".v2-review-tray .v2-studio-tray-row:not(.all)").length };
+    api2.close(); await sleep(50); }
   window.__step = "B";
   R.b = { first: Rv.Flow.talkBrief("  파란색으로  ", "mn", "full", true), next: Rv.Flow.talkBrief("  파란색으로  ", "mn", "full", false) };
   R.errors = errors;
@@ -177,6 +210,7 @@ async function PAGE_MAIN() {
 
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>${css("01-base.css", "40-v2.css")}</style></head><body>
 <iframe class="v2-appui-frame" data-app-id="mn" srcdoc="<p>앱</p>" style="position:fixed;left:20px;top:20px;width:900px;height:460px;border:0"></iframe>
+<div id="dock" style="position:fixed;left:0;right:0;top:620px;height:57px"></div><div id="chat2" class="v2-studio-chat"></div>
 <div id="side" class="v2-studio-side"><div id="head">AI 세션</div><div id="chat" class="v2-studio-chat"><div class="term">터미널</div></div><div id="after"></div></div>
 <div id="out"></div>
 <script>${bundle}</script>
@@ -233,6 +267,10 @@ check(R.g.b.head === R.g.b.barCount.replace(/ · 빈 코멘트.*/, "").replace("
 check(R.g.c.foot && R.g.c.foot === R.g.c.bar && !R.g.c.dis && R.g.c.sentFix === 1, "G3 목록 맨 아래 「수정하기」 는 막대와 같은 글 · 눌러서 보낸다", R.g.c);
 check(R.g.d.closed, "G4 목록 칸에서 Esc 로 닫힌다", R.g.d);
 check(R.g.e.pop && R.g.e.shiftKept && R.g.e.enterClosed, "G5 그 자리 칸 — Shift+Enter 는 줄바꿈 · Enter 는 완료", R.g.e);
+check(R.h.h1.mk && R.h.h1.pop && !R.h.h1.tray, "H1 목록을 연 채 앱의 번호를 누르면 그 자리 칸이 뜨고 목록은 닫힌다", R.h.h1);
+check(R.h.h2.tray && R.h.h2.isTa && R.h.h2.val === "쓰는 중인 글" && R.h.h2.caret === 3 && R.h.h2.note === "쓰는 중인 글", "H2 쓰는 중에 목록을 다시 그려도 그 칸 · 커서가 그대로", R.h.h2);
+check(/\[핀 3\][^\n]*새로 단 것/.test(R.h.h3) && !/앞에 보낸 것/.test(R.h.h3) && !/\[핀 1\]/.test(R.h.h3), "H3 AI 에게 가는 번호 = 화면의 번호(보낸 것 · 빈 것은 빼되 번호는 그대로)", R.h.h3);
+check(R.h.h4.st0 && R.h.h4.st0.fixed && R.h.h4.same && R.h.h4.fixed && R.h.h4.pos === "fixed" && R.h.h4.top === R.h.h4.st0.top && R.h.h4.cards === 2, "H4 세션 위젯 꼴 — 목록을 다시 그려도 같은 상자 · 고정 자리 그대로", R.h.h4);
 check(!R.errors.length, "W 페이지 예외 없음", R.errors);
 
 console.log(`\n${pass} pass · ${fail} fail`);

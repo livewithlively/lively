@@ -3,7 +3,7 @@
 //
 //  · 한 줄에서 시작해 max 줄까지 늘고, 넘으면 칸 안에서 스크롤한다.
 //  · Enter = 끝냄(onEnter) · Shift+Enter = 줄바꿈 · Esc = onEscape. 한글 조합 중의 Enter · Esc 는 건드리지 않는다(조합을 끝내는 키다).
-//  · 값을 코드로 바꿨으면 fitGrow 를 부른다(입력 사건이 없다). 아직 문서에 안 붙은 칸은 붙은 다음 틀에서 맞춘다.
+//  · 값을 코드로 바꿨으면 fitGrow 를 부른다(입력 사건이 없다). 아직 문서에 안 붙은 칸은 붙은 다음 틀에서, 숨었던 칸은 보일 때(폭이 생길 때) 맞춘다.
 import { el } from '../core.js';
 
 export interface GrowOpts {
@@ -23,7 +23,7 @@ const MAX_OF = new WeakMap<HTMLTextAreaElement, number>();
 
 /** 글 줄 수에 맞춰 높이를 다시 잰다(최대 줄 수까지 · 넘으면 칸 안 스크롤). */
 export function fitGrow(ta: HTMLTextAreaElement): void {
-  if (!ta.isConnected) return;
+  if (!ta.isConnected || !ta.getClientRects().length) return;   // 숨은 칸(display:none)은 잴 수 없다 — 보이게 되면 폭이 생겨 아래 지켜보기가 다시 잰다
   const cs = getComputedStyle(ta);
   const fs = parseFloat(cs.fontSize) || 13;
   const line = parseFloat(cs.lineHeight) || fs * 1.45;   // 'normal' 이면 글자 크기에서
@@ -51,5 +51,10 @@ export function growText(o: GrowOpts): HTMLTextAreaElement {
     if (e.key === 'Escape' && o.onEscape) { e.preventDefault(); o.onEscape(); }
   });
   requestAnimationFrame(() => fitGrow(ta));   // 붙은 다음 틀에서 — 처음부터 긴 글이 든 칸
+  //  폭이 바뀌면(숨었다 보임 · 창 크기) 줄 바꿈이 달라진다 — 폭이 바뀐 때만 다시 잰다(높이는 fitGrow 자신이 바꾸니 높이로 다시 재면 돌고 돈다).
+  if (typeof ResizeObserver !== 'undefined') {
+    let w = -1;
+    new ResizeObserver((es) => { const nw = Math.round(es[0] ? es[0].contentRect.width : 0); if (nw !== w) { w = nw; if (nw > 0) fitGrow(ta); } }).observe(ta);
+  }
   return ta;
 }

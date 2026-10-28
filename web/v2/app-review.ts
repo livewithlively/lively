@@ -86,7 +86,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   //  「AI에게 말하기」(원준 2026-10-28 «앱 전체에 코멘트하는 텍스트박스를 누르면 아래에서 위로 올라오게 · AI와 대화하면서 물어보고 지정하고 수정»).
   //   옛 «앱 전체 코멘트» 칸(원준 2026-10-16 «바로바로 텍스트 쳐서»)의 자리다 — 묶어 보내는 앱 전체 코멘트는 「코멘트 n건」 칸의 「앱 전체」 줄에 그대로 있다.
   //   글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 보내기 · Shift+Enter 줄바꿈.
-  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요 · Shift+Enter 줄바꿈', max: 4,
+  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요 · Shift+Enter 줄바꿈', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
     onEnter: () => { void say(); }, onEscape: () => { closeTalk(); gen.blur(); } });
   gen.addEventListener('focus', () => openTalk());
   const note = el('span', { class: 'v2-review-note', hidden: true });
@@ -220,6 +220,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const openPop = (i: number): void => {
     const p = host.pins[i]; if (!p) return;
     if (pop) pop.remove();
+    closeTray();   // 그 자리 칸과 코멘트 목록은 함께 서지 않는다 — 한쪽에서 고친 것을 다른 쪽이 옛 글로 들고 있게 된다
     S.active = i; paintMarks();
     const ta = growText({ class: 'ta', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note, max: 8,
       onInput: (v) => { p.note = v; changed(); }, onEnter: () => closePop(), onEscape: () => closePop() });
@@ -251,37 +252,46 @@ export function openReview(host: ReviewHost): ReviewApi {
     if (trayHead) trayHead.textContent = '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '');
     if (traySend) { traySend.textContent = send.textContent; traySend.disabled = send.disabled; }
   };
+  //  다시 그려도 쓰던 칸을 잃지 않는다 — 칸 ↔ 그 코멘트(같은 객체)를 기억했다가 새 칸에 커서 · 고른 글을 되돌린다(고치는 중 새 버전이 오면 목록을 다시 그린다).
+  const taOf = new WeakMap<HTMLTextAreaElement, StudioPin | 'all'>();
   const openTray = (focus?: number): void => {
     closeTalk(); closePop();
-    const keepScroll = tray ? (tray.querySelector('.v2-studio-tray-list') as HTMLElement | null)?.scrollTop || 0 : 0;
+    const prevList = tray ? (tray.querySelector('.v2-studio-tray-list') as HTMLElement | null) : null;
+    const keepScroll = prevList ? prevList.scrollTop : 0;
+    const act = tray && document.activeElement instanceof HTMLTextAreaElement && tray.contains(document.activeElement) ? document.activeElement : null;
+    const keep = act ? { key: taOf.get(act), a: act.selectionStart, b: act.selectionEnd } : null;
     const mark = (i: number): void => { if (S.active !== i) { S.active = i; paintMarks(); } };
     const rows = host.pins.map((p, i) => {
       const wire = p.on === 'wire';
       const inp = growText({ class: 'v2-studio-tray-in', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note,
         onInput: (v) => { p.note = v; changed(); }, onEnter: () => inp.blur(), onEscape: () => closeTray() });
-      inp.addEventListener('focus', () => mark(i));
+      taOf.set(inp, p);
+      inp.addEventListener('focus', () => mark(host.pins.indexOf(p)));
       if (p.sent) { inp.disabled = true; inp.title = 'AI가 반영하고 있어요'; }
-      const row = el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '앱에서 그 자리 보기', disabled: wire, onclick: () => mark(i) }),
+      //  ✕ · 번호는 그 코멘트(객체)로 찾는다 — 다른 데서 하나가 지워져도 엉뚱한 것을 지우지 않는다.
+      const row = el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '앱에서 그 자리 보기', disabled: wire, onclick: () => mark(host.pins.indexOf(p)) }),
         el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { removePin(i); openTray(); } }));
-      row.addEventListener('pointerenter', () => mark(i));
+        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { const j = host.pins.indexOf(p); if (j >= 0) removePin(j); openTray(); } }));
+      row.addEventListener('pointerenter', () => mark(host.pins.indexOf(p)));
       return row;
     });
     const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: host.general,
       onInput: (v) => { host.general = v; changed(); }, onEnter: () => g.blur(), onEscape: () => closeTray() });
+    taOf.set(g, 'all');
     trayHead = el('b');
     traySend = el('button', { class: 'v2-studio-now-pri', type: 'button', onclick: () => { if (cmCount()) host.onSend(); } }) as HTMLButtonElement;
     const list = el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows);
-    const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '코멘트' },
+    const kids = [
       el('div', { class: 'v2-studio-tray-h' }, trayHead, el('span', { class: 'v2-studio-sp' }),
         el('small', { text: host.pins.length ? '열어 둔 채로 앱을 이어서 짚으면 여기에 한 장씩 더해져요' : '선택 · 핀 · 영역으로 앱을 짚으면 여기에 한 장씩 더해져요' }),
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '접기', onclick: () => closeTray() })),
       //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
       list,
-      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend));
-    paintTrayBits();
-    if (tray) { tray.replaceWith(t); tray = t; list.scrollTop = keepScroll; }
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
+    //  이미 열려 있으면 그 상자를 그대로 두고 속만 간다 — 세션 위젯 꼴의 고정 자리(--fixed · 위치)가 남는다.
+    if (tray) tray.replaceChildren(...kids);
     else {
+      const t = el('div', { class: 'v2-studio-tray v2-review-tray', role: 'dialog', 'aria-label': '코멘트' }, ...kids);
       tray = t;
       if (host.dock) {
         //  막대가 화면 맨 위 줄에 들어앉았으면 칸은 막대 **아래로** — 몸(body)에 붙여 앱 위 층(.v2-review-layer)보다 위에 선다(그 층이 사이드바의 앱을 덮고 있다).
@@ -293,10 +303,16 @@ export function openReview(host: ReviewHost): ReviewApi {
       //  막대와 칸은 한 덩어리(원준 2026-10-16 «이거 두 개를 왜 하나로 안 붙이는 거야») — 사이 틈 없이 맞붙고 맞닿은 모서리는 각진다.
       bar.classList.add('v2-review-bar--tray');
     }
-    t.querySelectorAll('textarea').forEach((x) => fitGrow(x as HTMLTextAreaElement));
-    if (focus != null) {
-      const ta = list.querySelectorAll('.v2-studio-tray-row:not(.all) textarea')[focus] as HTMLTextAreaElement | undefined;
-      if (ta) { ta.scrollIntoView({ block: 'nearest' }); ta.focus(); }
+    paintTrayBits();
+    list.querySelectorAll('textarea').forEach((x) => fitGrow(x as HTMLTextAreaElement));
+    list.scrollTop = keepScroll;   // 칸 높이를 맞춘 뒤에 — 한 줄짜리일 때 되돌리면 브라우저가 깎는다
+    let to: HTMLTextAreaElement | undefined;
+    if (focus != null) to = list.querySelectorAll('.v2-studio-tray-row:not(.all) textarea')[focus] as HTMLTextAreaElement | undefined;
+    else if (keep && keep.key) to = [...list.querySelectorAll('textarea')].find((x) => taOf.get(x as HTMLTextAreaElement) === keep.key) as HTMLTextAreaElement | undefined;
+    if (to && !to.disabled) {
+      if (focus != null) to.scrollIntoView({ block: 'nearest' });
+      to.focus();
+      if (keep && focus == null) { try { to.setSelectionRange(keep.a, keep.b); } catch (_) { /* 글이 줄었으면 끝으로 */ } }
     }
   };
   const toggleTray = (): void => { if (tray) closeTray(); else openTray(); };

@@ -1029,6 +1029,8 @@ async function build(rec: StudioRec): Promise<void> {
     }
     S.pollT = window.setTimeout(() => { void findApp(); }, 4000);
   };
+  //  보낸 코멘트를 걷는다 — 같은 배열을 제자리에서 줄인다(실제 화면 막대 · 와이어프레임 보드가 같은 배열을 쥐고 있다 · 새 배열로 갈면 그 사이 짚은 것이 옛 배열로 가 보낸 것이 되살아난다).
+  const dropSent = (): void => { for (let i = S.pins.length - 1; i >= 0; i--) if (S.pins[i].sent) S.pins.splice(i, 1); rec.pins = S.pins; if (S.review) S.review.update({ pins: S.pins }); };
   const off = onAppEvent((ev) => {
     if (S.dead) return;
     if (!rec.appId) { if (ev.kind === 'updated' || ev.kind === 'attach') { window.clearTimeout(S.pollT); void findApp(); } return; }
@@ -1037,8 +1039,8 @@ async function build(rec: StudioRec): Promise<void> {
       //   새 버전이 나왔다 — ④ 확인 · ⑤ 넣기는 그 버전으로 다시 해야 하니 «와 본 곳» 을 ③ 으로 당긴다.
       const settled = S.waiting;
       //  보낸 코멘트만 걷는다 — 고치는 동안 새로 남긴 코멘트는 다음 「수정하기」 몫으로 그대로(원준 2026-10-28).
-      if (S.waiting) { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; S.pins = S.pins.filter(unsent); rec.pins = S.pins; rec.reached = 2; saveRec(rec); }
-      else if (S.pins.some((p) => p.sent)) { S.pins = S.pins.filter(unsent); rec.pins = S.pins; }
+      if (S.waiting) { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; dropSent(); rec.reached = 2; saveRec(rec); }
+      else if (S.pins.some((p) => p.sent)) dropSent();
       if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); if (settled) { band.hidden = true; paintBar(); paintNow(); } return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
       void showApp(ev.note || '고쳤어요');
     }
@@ -1280,12 +1282,13 @@ async function build(rec: StudioRec): Promise<void> {
   };
   const sendFix = async (): Promise<void> => {
     if (S.waiting) return;
-    const pins = S.pins.filter((p) => unsent(p) && p.note.trim()); if (!pins.length && !S.general.trim()) return;
-    if (await send(fixBrief(rec.round + 1, pins, S.general, rec.place, rec.appId))) {
+    const pins = S.pins.filter((p) => unsent(p) && p.note.trim()); const gSent = S.general; if (!pins.length && !gSent.trim()) return;
+    if (await send(fixBrief(rec.round + 1, S.pins, gSent, rec.place, rec.appId))) {   // 번호가 화면과 같게 전부 넘긴다(fixBrief 가 보낸 것 · 빈 것을 건너뛴다)
       //  보낸 것은 «반영 중» 으로 남기고(세지 않는다 · 고칠 수 없다) 앱 전체 칸은 비운다 — 고치는 동안 다음 코멘트를 새로 쌓는다(원준 2026-10-28).
-      pins.forEach((p) => { p.sent = true; }); S.general = ''; rec.general = ''; saveRec(rec);
+      //   보내는 사이에 앱 전체 칸에 더 쓴 것은 지우지 않는다(보낸 글 그대로일 때만 비운다).
+      pins.forEach((p) => { p.sent = true; }); if (S.general === gSent) { S.general = ''; rec.general = ''; } saveRec(rec);
       S.waiting = true; S.waitT0 = Date.now(); tickWait(); paintBar(); paintNow(); if (rec.stage === 'fix') paintHub(); paintTray();
-      if (S.review) S.review.update({ waiting: true, general: '' });
+      if (S.review) S.review.update({ waiting: true, general: S.general });
     }
   };
   //  #4732 「이대로 넣기」 는 연타를 막지 않는 단추라 — 미리 보기 · 저장 · 공개가 두 번 나가지 않게 하나씩만.

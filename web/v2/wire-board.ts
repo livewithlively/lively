@@ -181,13 +181,15 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
       if (p.on !== 'wire') return;
       const hot = i === S.active;
       if (p.kind === 'pick' || p.kind === 'box') {
-        const b = el('div', { class: 'v2-wb-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') });
+        const b = el('div', { class: 'v2-wb-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') + (p.sent ? ' sent' : '') });
         Object.assign(b.style, { left: p.x * S.cw + 'px', top: p.y * S.ch + 'px', width: (p.w || 0) * S.cw + 'px', height: (p.h || 0) * S.ch + 'px' });
         marks.append(b);
       }
       //  번호는 화면 크기 그대로(확대해도 같은 크기) — 보드 배율의 역수로 되돌린다.
-      const n = el('button', { type: 'button', class: 'v2-wb-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : ''), title: p.note || p.where || '', 'aria-label': (i + 1) + '번 코멘트 열기',
-        onclick: (e: MouseEvent) => { e.stopPropagation(); openPop(i); } }, el('span', { text: String(i + 1) }));
+      //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 실제 화면 막대(app-review)와 같은 규칙.
+      const n = el('button', { type: 'button', class: 'v2-wb-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
+        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
+        onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent) openPop(i); } }, el('span', { text: String(i + 1) }));
       Object.assign(n.style, { left: p.x * S.cw + 'px', top: p.y * S.ch + 'px', transform: `translate(-50%, -50%) scale(${1 / S.k})` });
       marks.append(n);
     });
@@ -204,7 +206,7 @@ export function openWireBoard(o: WireBoardOpts): WireBoard {
   const closePop = (): void => { if (pop) { pop.remove(); pop = null; } if (S.active >= 0) { S.active = -1; paintMarks(); } };
   const removePin = (i: number): void => { const ps = all(); ps.splice(i, 1); closePop(); changed(); };
   const openPop = (i: number): void => {
-    const p = all()[i]; if (!p) return;
+    const p = all()[i]; if (!p || p.sent) return;
     if (pop) pop.remove();
     S.active = i; paintMarks();
     const ta = el('textarea', { class: 'ta', rows: '2', placeholder: '이 자리를 어떻게 고칠까요', 'aria-label': (i + 1) + '번 코멘트' }) as HTMLTextAreaElement; ta.value = p.note;
