@@ -23,6 +23,7 @@ import { padTileId } from '../lib/pad-hidden.js';
 import { PLACE, verJ, verName, type StudioPlace } from '../lib/studio-flow.js';
 import { builderRoute, builderSeeRoute, builderTabTitle, builderSessionName, builderSessionWhat, draftStageText, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 import { renderAppSpec } from './app-spec-page.js';   // #4632 앱 「개발 정보」
+import { purgeSessionRecord, sessionTrashOp } from '../session-actions.js';   // #4632 앱빌딩 세션은 완전 삭제(지난 세션 · 휴지통에 두면 다시 「만들던 앱」 에 선다)
 import { FOLDER_LIMIT_MAX_GB, folderLine, folderSavedText, parseFolderInput } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
 
 export type { BuilderEnv } from './builder-model.js';
@@ -196,8 +197,13 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
   const seq = ++v.seq;
   v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: '불러오는 중…' }));
   await refreshBuilderModel(true);
+  //  셸이 세션 목록을 아직 못 받았으면 받을 때까지(15초까지) 기다린다 — 받기 전엔 이 브라우저의 기록이 지운 만들기인지 모른다
+  //   (builder-model goneRec). 가운데 목록은 셸이 세션을 새로 받아도 다시 그려지지 않으니, 먼저 그리면 지운 카드가 그대로 남는다.
+  for (let t = 0; env.sessionsReady && !env.sessionsReady() && t < 50 && seq === v.seq; t++) await new Promise((r) => setTimeout(r, 300));
   const M = builderModelNow(env);
   if (seq !== v.seq || !v.root.isConnected) return;
+  //  서버에 세션이 없는 이 브라우저의 기록 — 지운 만들기다(다른 브라우저에서 지웠다). 기록도 걷는다(앱 찾기의 «만드는 중» 판정도 이 기록을 읽는다).
+  if (M) M.goneRecs.forEach((sid) => dropStudioRec(sid));
   if (!M) { v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: builderModelFailed() ? '앱 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.' : '불러오는 중…' })); return; }
   const { apps, me: m, drafts, mine, team } = M;
   //  사이드바에서 팀원이 만든 앱을 골라 왔으면 그 묶음을 펴 둔다 — 고른 카드가 접힌 묶음 안에 숨지 않게.
@@ -267,11 +273,36 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
       try { await api('/api/ui/apps/' + encodeURIComponent(appId) + '/discard', { method: 'POST', body: JSON.stringify({}) }); }
       catch (e: any) { if (e?.status !== 404) { toast('앱을 지우지 못했어요. ' + why(e), true); return false; } }
     }
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(d.sid) + '?reclaim=1' + (d.node ? '&node=' + encodeURIComponent(d.node) : ''), { method: 'DELETE' }); }
-    catch (e: any) { if (e?.status !== 404) toast('앱과 기록은 지웠지만 세션을 멈추지 못했어요. (' + why(e) + ')', true); }
-    //  ③ 시험 세션(목록엔 안 서는 «"이름" 앱 시험» — app-try-session.ts)도 함께 걷는다. 이 브라우저가 띄운 것만 안다 — 없으면 건너뛴다.
+    //  앱빌딩 세션은 **완전 삭제**한다 — 멈추고, 되살리기 좌표(desired-state)를 지우고, 완전 삭제 표식을 붙이고(어느 목록 · 어느 컴퓨터에서도
+    //   다시 안 선다), 대화 기록까지 파기한다. 휴지통의 「완전 삭제」 와 같은 두 걸음(bins.ts purgeSession)이다.
+    //   종전엔 DELETE ?reclaim=1(지난 세션으로 보관)이라 행이 restorable 로 남았고, 앱빌더는 지난 세션도 「만들던 앱」 으로 세워
+    //   새로 열면 지운 카드가 다시 섰다(원준 2026-10-28 «진짜 할거라고 다 삭제했는데 … 다 부활해있어» · «실제로 어디에서도 이게 다 지워지게»).
+    //   없는 세션 · 이미 완전 삭제된 세션은 지운 것으로 친다.
+    const purge = async (sid: string): Promise<string> => {
+      const row: any = env.sessions().find((x) => x.id === sid) || null;
+      const uuid = String((row && (row.logId || (row.raw && row.raw.claudeSessionId))) || '');
+      const r = await sessionTrashOp('purge', [sid, uuid].filter(Boolean));
+      const s = r.done.length ? null : (r.skipped.find((x) => x.id === sid) || r.skipped[0] || null);
+      const w = s ? String(s.why || '') : '';
+      if (s && !/없는 세션/.test(w)) return w || '세션을 지우지 못했어요';
+      //  대화 기록 — 모으지 않은 세션(기록 없음)이면 404 · 403 이 온다. 세션은 이미 지웠으니 그건 막지 않는다.
+      if (uuid) {
+        try { await purgeSessionRecord(uuid, String((row && (row.logNode ?? '')) || ''), null); }   // null = 대화 기록만({ log: true }) — 세션이 남긴 지식 · 프로젝트는 건드리지 않는다
+        catch (e: any) { if (e?.status !== 404 && e?.status !== 403) toast('앱빌딩 세션은 지웠지만 대화 기록을 지우지 못했어요. (' + why(e) + ')', true); }
+      }
+      return '';
+    };
+    let left = '';
+    try { left = await purge(d.sid); }
+    catch (e: any) { left = why(e); }
+    if (left) {
+      toast((appId && !shared ? '앱은 지웠지만 ' : '') + '앱빌딩 세션을 지우지 못했어요. ' + left, true);
+      refresh();
+      return false;
+    }
+    //  ③ 시험 세션(목록엔 안 서는 «"이름" 앱 시험» — app-try-session.ts)도 함께 지운다. 이 브라우저가 띄운 것만 안다 — 없으면 건너뛴다.
     const trySid = (studioRecs().find((r) => r.sid === d.sid) || { trySid: '' }).trySid;
-    if (trySid) { try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(trySid) + '?reclaim=1', { method: 'DELETE' }); } catch (_) { /* 이미 없으면 그만 */ } }
+    if (trySid) { try { await purge(trySid); } catch (_) { /* 이미 없으면 그만 */ } }
     deletedSids.add(d.sid); dropStudioRec(d.sid); if (v.sel === draftKey(d)) setSel(v, '');
     toast(shared ? '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요. 공개한 앱은 그대로 있고, 비공개 버전은 버전 이력에 남아요.' : d.appId ? '「' + d.title + '」 앱과 앱빌딩 세션, 기록을 모두 지웠어요.' : '「' + d.title + '」의 앱빌딩 세션과 기록을 지웠어요.');
     refresh();
@@ -311,7 +342,7 @@ function paintDraftPanel(v: View, d: Draft, specId: string, del: (d: Draft) => P
     el('div', { class: 'v2-bld-acts' },
       el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
       specId ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '개발 정보 보기', title: '지금 버전의 코드를 기준으로 쓴 이 앱의 명세예요', onclick: () => { location.hash = builderRoute('spec', specId); } }) : null),
-    el('p', { class: 'v2-bld-mini', text: '만들던 앱은 지우기 전까지 이 목록과 사이드바에 늘 보여요. 「모두 지우기」는 앱, 앱빌딩 세션, 기록을 모두 지우고 세션은 휴지통으로 옮겨요.' }),
+    el('p', { class: 'v2-bld-mini', text: '만들던 앱은 지우기 전까지 이 목록과 사이드바에 늘 보여요. 「모두 지우기」는 앱, 앱빌딩 세션, 대화 기록을 모두 완전히 지워요. 휴지통에도 남지 않고 되돌릴 수 없어요.' }),
     el('div', { class: 'v2-bld-acts' }, el('span', { class: 'v2-studio-sp' }), delBtn));
 }
 

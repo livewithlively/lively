@@ -13,7 +13,9 @@ import { draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
-  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null }>;
+  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null; trashedAt?: string | null; logId?: string | null; logNode?: string | null; raw?: { claudeSessionId?: unknown } | null }>;
+  /** 세션 목록(정본)을 한 번이라도 받았나 — 받은 뒤에만 «기록은 있는데 서버에 세션이 없다» 를 «지운 만들기» 로 읽는다. 안 주면 모른다(종전대로 기록을 다 세운다). */
+  sessionsReady?: () => boolean;
   /** 앱빌더 사이드바를 다시 그린다 — 앱빌더 안의 이동(셸이 다시 그리지 않는다)과 목록을 새로 받은 뒤. */
   redrawSide?: () => void;
   /** 앱빌더가 주소를 hashchange 없이 바꿨다(고른 카드 · 새 세션) — 셸 탭의 주소도 맞춘다(탭을 다시 켜면 그 주소로 돌아온다). */
@@ -53,13 +55,15 @@ async function fetchApps(): Promise<BApp[] | null> {
 
 /** 만들던 앱 한 줄. local = 이 브라우저의 기록에서 왔다 · serverApp = 서버가 아는 그 만들기의 앱. */
 export interface Draft { sid: string; title: string; stage: string; appId: string; done: boolean; at: number; local: boolean; node: string; serverApp?: string }
-export interface BuilderModel { apps: BApp[]; me: { id: string; name: string }; drafts: Draft[]; mine: BApp[]; team: BApp[] }
+export interface BuilderModel { apps: BApp[]; me: { id: string; name: string }; drafts: Draft[]; mine: BApp[]; team: BApp[]; goneRecs: string[] }
+/** 막 시작한 만들기는 세션이 목록에 오기 전일 수 있다 — 그동안은 기록만 있어도 세운다. */
+export const REC_GRACE_MS = 2 * 60_000;
 
 /** 방금 지운 앱빌딩 세션 — 셸의 세션 목록이 갱신되기 전에 「만들던 앱」 에 다시 서지 않게(가운데 · 사이드바 둘 다). */
 export const deletedSids = new Set<string>();
 
 /** 받아 둔 앱 목록 · 나 + 지금의 기록 · 세션 → 세 묶음. 가운데 목록과 사이드바가 같은 이 판정을 쓴다. */
-export function buildModel(apps: BApp[], m: { id: string; name: string }, env: Pick<BuilderEnv, 'projects' | 'sessions'>): BuilderModel {
+export function buildModel(apps: BApp[], m: { id: string; name: string }, env: Pick<BuilderEnv, 'projects' | 'sessions' | 'sessionsReady'>): BuilderModel {
   const projName = (pid: number | null): string => { const p = pid ? env.projects().find((x) => x.id === pid) : null; return p ? p.name : ''; };
   // 만들던 앱 — 이 브라우저의 기록 + 앱빌딩 세션(기록이 없어도) · 다 만든 것은 뺀다
   const recs = studioRecs();
@@ -68,7 +72,14 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const isDone = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
   //  카드 이름 = 사람이 정한 앱 이름(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로») — 기록의 이름 · 기획 카드 · 세션 이름 «"이름" 앱 제작» · 앱 이름 차례(lib/builder-flow draftTitle).
   const appTitleOf = (id: string): string => { const a = id ? apps.find((x) => x.id === id) : null; return a && !a.empty ? a.title : ''; };
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
+  //  이 브라우저의 기록은 **서버에 그 세션이 있을 때만** 선다. 기록은 브라우저마다 따로라, 한 브라우저에서 지우면(세션 완전 삭제)
+  //   다른 브라우저엔 기록이 그대로 남는다 — 종전엔 그 기록만으로 카드가 서서 지운 만들기가 사파리 · 다른 컴퓨터에서 다시 섰다
+  //   (원준 2026-10-28 «사파리 브라우전데 안지워졌어»). 세션 목록을 받기 전 · 막 시작한 만들기(REC_GRACE_MS)는 모르니 세운다.
+  //   그 세션을 휴지통에 버렸어도 서지 않는다. 서지 않는 기록은 goneRecs 로 돌려 부르는 쪽(앱빌더 목록)이 지운다.
+  const ready = !!env.sessionsReady?.();
+  const goneRec = (r: { sid: string; at?: number }): boolean => ready && !sessOf(r.sid) && Date.now() - (Number(r.at) || 0) > REC_GRACE_MS;
+  const goneRecs = recs.filter(goneRec).map((r) => r.sid);
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
   const seen = new Set(drafts.map((d) => d.sid));
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
@@ -84,7 +95,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
     drafts.push({ sid: a.buildSession, title: draftTitle({ label: sessOf(a.buildSession)?.label, appTitle: a.empty ? '' : a.title, what: a.empty ? a.title : '' }), stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id });
   });
   //  내 세션만(owned 는 서버 판정 — 없으면 옛 목록, 그때는 보인다). 남이 만들던 앱은 남의 것이다.
-  env.sessions().filter((s) => !s.task && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
+  //   휴지통에 버린 세션(홈 사이드바)은 만들던 앱이 아니다 — 지난 세션(멈춘 것)은 이어서 만들 수 있으니 그대로 선다. 앱빌더 「지우기」 는 완전 삭제라 목록에서 아예 빠진다.
+  env.sessions().filter((s) => !s.task && !s.trashedAt && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
     if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 다 만들어졌다 — 「내가 만든 앱」 에 선다
     const a = apps.find((x) => x.buildSession === s.id);
     drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
@@ -94,7 +106,7 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const ws = apps.filter((a) => !a.builtin && !a.empty);
   const mine = ws.filter((a) => !draftAppIds.has(a.id) && (a.madeBy === m.id || a.ownerMember === m.id));
   const team = ws.filter((a) => !mine.includes(a) && !draftAppIds.has(a.id));
-  return { apps, me: m, drafts, mine, team };
+  return { apps, me: m, drafts, mine, team, goneRecs };
 }
 
 // ── 받아 둔 것 ──
@@ -104,7 +116,7 @@ let failed = false;   // 마지막으로 받기가 실패했다(받아 둔 것�
 let inflight: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 /** 받아 둔 재료로 지금의 세 묶음 — 아직 한 번도 못 받았으면 null(그리는 쪽은 «불러오는 중»). */
-export function builderModelNow(env: Pick<BuilderEnv, 'projects' | 'sessions'>): BuilderModel | null {
+export function builderModelNow(env: Pick<BuilderEnv, 'projects' | 'sessions' | 'sessionsReady'>): BuilderModel | null {
   return got ? buildModel(got.apps, got.me, env) : null;
 }
 /** 한 번도 못 받았고 마지막 받기가 실패했다 — 그리는 쪽은 «불러오는 중» 대신 그렇다고 말한다. */
