@@ -86,7 +86,8 @@ test("G6 부르는 자리 — MCP 어댑터와 REST 어댑터가 둘 다, 핸들
   assert.ok(iHandler > iGuard, "MCP 어댑터: 판정이 핸들러보다 앞이어야 한다");
   const rest = read("web.ts");
   const rGuard = rest.indexOf("if (claimed && isReadOnlyBlocked(cap)) await requireSessionWriter(user.userId, claimed);");
-  const rHandler = rest.indexOf("res.json(await cap.handler(input, user, {");
+  //  #5100 — 핸들러 호출은 앱 맥락 범위 감싸기(runWithAppReadScope) 안에 있다. 부르는 자리는 그대로 하나라 «cap.handler(input, user,» 로 찾는다.
+  const rHandler = rest.indexOf("cap.handler(input, user, {");
   assert.ok(rGuard > 0, "REST 어댑터에 판정 호출이 없다");
   assert.ok(rHandler > rGuard, "REST 어댑터: 판정이 핸들러보다 앞이어야 한다");
 });
