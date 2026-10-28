@@ -13,8 +13,8 @@
 //  E13 약속 지문(level 바뀜 → tool_changed · 설명만 바뀜 → 실행) · E14 워크스페이스 B(같은 이름 · 동의 · 도구가 A 에 안 샘) · E15 인자 ·
 //  E16 실행기 오류 · E17 결과 상한 · E18 scope 없는 토큰 · E20 이름 겹침(먼저 설치된 앱) · E21 공개 주소 모름 ·
 //  E6b 초안이 mcp_tools 칸을 통째로 뺀 공개 앱(공개 판 갈래) · E12b 되돌리기(app_revert)도 이름 검사 · E12c 같은 이름 동시 설치는 하나만 ·
-//  E12d 조직 도구를 앱 도구 이름으로 못 만든다 · E12e 도구 묶음(프리셋) 이름 · E12f 이미 겹친 조직 도구는 고칠 수 있다 · E12g 이름 자리 대기 초과 · E22 비활성 구성원 ·
-//  E23 비용 — 선언한 앱이 없으면 MCP 요청마다 쿼리 1번 · 실행기가 없으면 0번
+//  E12d 조직 도구를 앱 도구 이름으로 못 만든다 · E12e 도구 묶음(프리셋) 이름 · E12f 이미 겹친 조직 도구는 고칠 수 있다 · E12g 이름 자리 대기 초과 · E12h 관리 창구의 묶음 심기 겹침 ·
+//  E22 비활성 구성원 · E23 비용 — 선언한 앱이 없으면 MCP 요청마다 쿼리 1번 · 실행기가 없으면 0번
 //  G0 · G1 배선 — 정책 · 앱 역할 · 시험 실행기가 실제로 불렸다
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
@@ -93,7 +93,7 @@ try {
   const { appMcpToolsOf, appMcpToolContract } = await import(`${D}/apps/app-mcp-decl.js`);
   const { callAppDeclaredTool, registerAppDeclaredTools } = await import(`${D}/mcp/app-declared-tools.js`);
   const { withMcpToolNamesLock, MCP_TOOL_NAMES_LOCK } = await import(`${D}/apps/app-mcp-store.js`);
-  const { appInstallLockKey } = await import(`${D}/org/store/apps.js`);
+  const { appInstallLockKey, APP_INSTALL_LOCK_TIMEOUT } = await import(`${D}/org/store/apps.js`);
   const { toolsCapabilities } = await import(`${D}/capabilities/delivery/tools.js`);
   const { HttpError } = await import(`${D}/http-error.js`);
   setToolCandidates(buildToolCandidates());   // 부팅(index.ts)과 같게 — 빌트인 이름 충돌 검사가 실제 표면을 본다
@@ -413,9 +413,25 @@ try {
   const eLock = await errOf(withMcpToolNamesLock(async () => { ranLocked = true; }, { waitMs: 300 }));
   await dbc.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]);
   const eLockFree = await errOf(withMcpToolNamesLock(async () => { ranLocked = ranLocked || "after"; }, { waitMs: 300 }));
-  chk("E12g 이름 자리 대기 시간 초과는 409 «다른 앱의 AI 도구 이름 확인이 진행 중» — 속 이름(__mcp_tool_names__)을 안 비춘다 · 풀리면 돈다",
-    eLock?.status === 409 && /다른 앱의 AI 도구 이름 확인/.test(eLock.message) && !/__mcp_tool_names__/.test(eLock.message) && eLockFree === null && ranLocked === "after",
-    J({ eLock: eLock && [eLock.status, eLock.message], eLockFree: eLockFree?.message, ranLocked, lockKey }));
+  //  잡은 뒤 안의 일이 같은 표지(code)의 오류를 내면 그대로 나간다 — «다른 앱 설치 중» 으로 바꾸는 것은 잡기 전뿐이다.
+  const eInner = await errOf(withMcpToolNamesLock(async () => { throw Object.assign(new Error("inner"), { code: APP_INSTALL_LOCK_TIMEOUT }); }, { waitMs: 300 }));
+  chk("E12g 이름 자리 대기 시간 초과는 409 «다른 앱의 AI 도구 이름 확인이 진행 중» — 속 이름(__mcp_tool_names__)을 안 비춘다 · 풀리면 돈다 · 안의 오류는 그대로",
+    eLock?.status === 409 && /다른 앱의 AI 도구 이름 확인/.test(eLock.message) && !/__mcp_tool_names__/.test(eLock.message) && eLockFree === null && ranLocked === "after"
+      && eInner?.message === "inner" && eInner?.status === undefined && eInner?.code === APP_INSTALL_LOCK_TIMEOUT,
+    J({ eLock: eLock && [eLock.status, eLock.message], eLockFree: eLockFree?.message, ranLocked, lockKey, eInner: eInner && [eInner.status, eInner.message, eInner.code] }));
+
+  // ── E12h 관리 창구의 도구 묶음 심기 — 아직 없는 묶음 도구 이름을 앱이 쓰고 있으면 409 · 아무것도 안 심는다 ──
+  //  (묶음 이름은 설치 때 예약되므로 이 겹침은 새 코어가 묶음에 이름을 더했을 때만 생긴다 — 여기선 앱 행을 바로 고쳐 만든다)
+  await install("preset-holder", "묶음 이름을 쥔 앱", [T("holder_q")]);
+  await itemsPool.query(`UPDATE org_app SET manifest = jsonb_set(manifest, '{mcp_tools,0,name}', '"figma_get_me"') WHERE id='preset-holder'`);
+  const allowBefore = (await itemsPool.query(`SELECT url_allowlist FROM org_runtime_config`)).rows[0]?.url_allowlist ?? null;
+  const ePresetApply = await errOf(toolsCapabilities.find((c) => c.name === "org_http_tool_preset_apply").handler({ key: "figma" }, P("boss", true), ctx));
+  const figmaTools = (await itemsPool.query(`SELECT name FROM org_tool WHERE name LIKE 'figma\\_%'`)).rows;
+  const allowAfter = (await itemsPool.query(`SELECT url_allowlist FROM org_runtime_config`)).rows[0]?.url_allowlist ?? null;
+  await cap("org_app_remove").handler({ app_id: "preset-holder" }, P("boss", true), ctx);
+  chk("E12h 관리 창구가 도구 묶음을 심을 때 앱이 쓰는 이름이 있으면 409 — 도구 · 허용 주소 모두 그대로(앱은 밝히지 않는다)",
+    ePresetApply?.status === 409 && /'figma_get_me'/.test(ePresetApply.message) && !/preset-holder/.test(ePresetApply.message) && figmaTools.length === 0 && J(allowAfter) === J(allowBefore),
+    J({ ePresetApply: ePresetApply && [ePresetApply.status, ePresetApply.message], figmaTools, allowBefore, allowAfter }));
 
   // ── E22 비활성 구성원 ──
   await upsertMember({ id: "ghost", display_name: "떠난 사람", state: "inactive", scopes: MEMBER_SCOPES }, "pgt");

@@ -225,6 +225,7 @@ await t("P2b 이름표는 코드포인트로 자른다 — 40번째가 이모지
 await t("P3 보이지 않는 글자는 지운다 — 폭 없는 글자 · 방향 바꾸기 · 태그 글자 · 변형 선택자 · 짝 없는 대리 글자 · 한글 채움 · 빈 점자(보이던 모양 그대로)", () => {
   assert.equal(appLabel("가\u200B나\u202E다\u{E0041}\u{E0042}라\uFE0F마\uD83D바"), "가나다라마바");
   assert.equal(appLabel("가\u200B 나"), "가 나");
+  assert.equal(appLabel("값\u06DD 끝"), "값\u06DD 끝", "글리프가 있는 서식 글자(아랍 아야 끝 표시)는 남긴다");
   for (const blank of ["\u{E0063}\u{E0061}\u{E006C}\u{E006C}", "\u3164\u3164", "\u115F\u1160", "\uFFA0", "\u2800\u2800", "\u200B\u034F"]) {
     assert.equal(appLabel(blank), "앱", `보이지 않는 글자만으로 된 제목은 빈 이름: ${JSON.stringify(blank)}`);
   }

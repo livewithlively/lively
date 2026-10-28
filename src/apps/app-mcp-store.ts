@@ -73,8 +73,8 @@ export async function takenMcpToolNames(names: readonly string[], opts: { except
 /**
  * 라이블리 도구 묶음(프리셋 — 구글 · 슬랙 · 깃허브 등, org/delivery/http-tool-presets.ts)의 도구 이름. 아직 심지 않은 묶음의 이름도 앱이 못 쓴다 —
  *  관리자가 나중에 묶음을 심으면(관리 창구 · 연결 직후 자동 적용 ensureHttpToolPresetGroup) 먼저 올라가는 조직 도구가 앱 도구를 말없이 가린다.
- *  이미 심긴 것은 org_tool 행으로도 걸린다. 새 코어가 묶음에 이름을 더하면 그 이름은 그 뒤의 설치 · 저장부터 막힌다(그 전에 그 이름을 쓴 앱은 묶음을
- *  심는 순간 가려지고 목록 등록 경고가 남는다).
+ *  이미 심긴 것은 org_tool 행으로도 걸린다. 새 코어가 묶음에 이름을 더하면 그 이름은 그 뒤의 설치 · 저장부터 막힌다. 그 전에 그 이름을 쓴 앱이 있으면
+ *  관리 창구(org_http_tool_preset_apply)는 409 로 심지 않고, 연결 직후 자동 적용은 심어서 그 앱 도구가 가려진다(목록 등록 경고).
  */
 const PRESET_TOOL_NAMES: ReadonlySet<string> = new Set(HTTP_TOOL_PRESETS.flatMap((g) => g.tools.map((t) => t.name)));
 

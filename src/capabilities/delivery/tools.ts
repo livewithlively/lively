@@ -42,7 +42,7 @@ export const toolsCapabilities: Capability[] = [
       //  #5050 — 새 이름이 앱이 선언한 MCP 도구(mcp_tools)와 같으면 거절한다. 도구 목록은 이 도구를 먼저 올리므로 그 앱의 도구가 말없이 가려진다(앱 쪽 설치는
       //   반대 방향을 409 로 막는다). 이미 있는 조직 도구는 고치고 끌 수 있게 둔다 — 겹친 채로 있을 수 있는 것은 아래 틈에서 생긴 것뿐이고 지우기는 늘 된다.
       //   틈: 이 검사는 도구 이름 자리 잠금(apps/app-mcp-store.ts) 밖이라 앱 설치와 정확히 같은 때면 둘 다 지날 수 있다(결과는 가려짐 + 목록 등록 경고).
-      //   도구 묶음(프리셋)은 이 길을 지나지 않는다 — 그 이름은 앱 쪽 설치가 처음부터 막는다.
+      //   도구 묶음(프리셋)은 이 길을 지나지 않는다 — 그 이름은 앱 쪽 설치가 처음부터 막고, 관리 창구(org_http_tool_preset_apply)가 한 번 더 본다.
       if (kind === "http_proxy" && !(await getTool(rawName)) && (await takenMcpToolNames([rawName], { orgTools: false })).length) {
         throw new HttpError(409, `name '${rawName}' 은(는) 이 워크스페이스의 앱이 AI 도구로 선언한 이름(mcp_tools)과 겹칩니다 — 다른 이름을 쓰세요`);
       }
@@ -156,6 +156,14 @@ export const toolsCapabilities: Capability[] = [
       const key = str(input.key, "key", 64).trim();
       const group = findHttpToolPresetGroup(key);
       if (!group) throw new HttpError(400, `그런 프리셋 묶음이 없습니다: ${key} (가능: ${HTTP_TOOL_PRESETS.map((g) => g.key).join(", ")})`);
+      //  #5050 — 아직 없는 묶음 도구의 이름을 앱이 AI 도구(mcp_tools)로 쓰고 있으면 심지 않는다. 심으면 먼저 올라가는 이 도구가 앱 도구를 말없이 가린다.
+      //   묶음 이름은 앱 설치 때 예약되므로(apps/app-mcp-store.ts) 이 겹침은 새 코어가 묶음에 이름을 더했을 때만 생긴다. 연결 직후 자동 적용은 이 검사를
+      //   지나지 않는다(그 길에서 겹치면 가려지고 목록 등록 경고가 남는다). 겹친 앱은 밝히지 않는다(남의 나만 보는 앱일 수 있다).
+      const have = new Set((await listTools()).map((t) => t.name));
+      const clash = await takenMcpToolNames(group.tools.map((t) => t.name).filter((n) => !have.has(n)), { orgTools: false });
+      if (clash.length) {
+        throw new HttpError(409, `묶음 '${key}' 의 도구 이름 ${clash.map((n) => `'${n}'`).join(" · ")} 을(를) 이 워크스페이스의 앱이 AI 도구(mcp_tools)로 쓰고 있습니다 — 그 앱의 도구 이름을 바꾼 뒤 다시 심으세요`);
+      }
       //  심기·allowlist 병합은 연결 직후 자동 적용(#4211)과 **같은 함수** — 두 벌이면 한쪽만 호스트를 빠뜨린다.
       const r = await applyHttpToolPresetGroup(group, wctx(user, ctx));
       return { ok: true, key, applied: r.applied, added_hosts: r.added_hosts };

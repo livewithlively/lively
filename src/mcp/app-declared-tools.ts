@@ -19,6 +19,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { getApp, getActiveGrant, listActiveGrants } from "../org/store/apps.js";
 import { getMember } from "../org/store/members.js";
+import { currentTenant } from "../org/tenant-context.js";
 import { TOOL_APP_META_KEY } from "../org/policies/tool-log.js";
 import { viewAppFor } from "../apps/app-view.js";
 import { appViewFor, listsAppFor, isEmptyDraftApp, addressVariantFor, type AppVisState, type Viewer } from "../apps/visibility.js";
@@ -55,13 +56,16 @@ export function appToolsHolder(app: AppVisState & { source: unknown; current_ver
 /** 목록에 올릴 앱 하나 — 그 사람이 보는 판의 이름표 · 선언. */
 interface ListedApp { row: McpToolAppRow; title: string; decls: AppMcpToolDecl[] }
 
-//  같은 까닭의 경고는 한 번만 — 목록 짜기 · 등록은 MCP 요청마다 돈다(키가 1000개를 넘으면 비우고 다시 센다). 키의 앱 id · 도구 이름엔 ':' 이 없다.
+//  같은 까닭의 경고는 워크스페이스마다 한 번만 — 목록 짜기 · 등록은 MCP 요청마다 돈다(키가 1000개를 넘으면 비우고 다시 센다). 매니지드는 한 프로세스에
+//   워크스페이스가 여럿이라 키와 기록에 워크스페이스를 넣는다. 키의 앱 id · 도구 이름엔 ':' 이 없다.
 const warned = new Set<string>();
 function warnOnce(key: string, obj: Record<string, unknown>, msg: string): void {
-  if (warned.has(key)) return;
+  const tenant = currentTenant()?.id ?? null;
+  const k = `${tenant ?? "-"}:${key}`;
+  if (warned.has(k)) return;
   if (warned.size > 1000) warned.clear();
-  warned.add(key);
-  logger.warn(obj, msg);
+  warned.add(k);
+  logger.warn({ ...obj, tenant }, msg);
 }
 
 /** 이 사람의 목록에 설 앱과 도구(판정만 — 공개 판 행이 빠진 불변식 위반만 기록으로 알린다). 공개 판을 보는 앱의 선언은 row.published 에서. */
