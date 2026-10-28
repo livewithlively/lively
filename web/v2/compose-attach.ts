@@ -14,7 +14,9 @@
 //  경로가 나온다. 공유폴더 동기화(project-pull/pull-turn)가 그 파일을 이미 그 자리에 내려둔다.
 //
 //  업로드는 authUploadProgress(XHR) — 상한이 1GB 로 열려(#1870) 진행률 없는 업로드는 멈춘 것과 구분이 안 된다.
-//  진행률은 그 파일의 칩에 % 로 얹고, 올리는 중엔 ✕ 가 취소를 겸한다. 올리는 중 전송(Enter)은 호출자가
+//  진행률은 그 파일의 칩에 % 로 얹고, 올리는 중엔 ✕ 가 취소를 겸한다. 한 번에 여러 개를 놓으면 칩을 **처음부터 다**
+//  세우고 아직 차례가 안 온 것은 «대기» 로 보인다(#5091) — 한 장씩 차례로 나타나면 하나만 올린 건지 여럿을 놓은 건지
+//  사람이 알 수 없었다. 전송 자체는 여전히 순차다(아래 루프의 주석). 올리는 중 전송(Enter)은 호출자가
 //  busy() 로 막는다 — 안 막으면 아직 안 올라간 파일이 지시에서 조용히 빠진다(큰 파일에서 실제로 나는 사고).
 import { apiUrl, el, toast } from '../core.js';
 import { authUploadProgress, upDropZone, upIsAbort } from '../projects/files-upload.js';
@@ -24,7 +26,8 @@ import { attachName, pnIcon } from './panes-kit.js';
 const MAX_ATTACH = 1024 * 1024 * 1024;
 
 // rel = 프로젝트(또는 개인 폴더) **상대경로** — 지시 꼬리에 적는 값(노드 무관). abs = 서버가 준 절대경로, 칩 툴팁 표시용.
-interface Att { name: string; rel: string; abs: string; pct: number | null; ctl: AbortController | null }
+// wait = 같은 배치에서 앞 파일을 기다리는 중(칩은 서 있지만 전송 전) — 칩 글자가 «대기» 로 나온다.
+interface Att { name: string; rel: string; abs: string; pct: number | null; wait: boolean; ctl: AbortController | null }
 
 export interface ComposerAttach {
   /** 첨부 칩 줄 — 입력칸과 버튼 줄 사이에 넣는다(비면 숨김). */
@@ -52,9 +55,9 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
 
   function paint(): void {
     chips.hidden = !items.length;
-    chips.replaceChildren(...items.map((a) => el('span', { class: 'pn-att-c', title: a.abs || a.name },
+    chips.replaceChildren(...items.map((a) => el('span', { class: a.wait ? 'pn-att-c wait' : 'pn-att-c', title: a.abs || a.name },
       pnIcon('doc', 'pn-i sm'),
-      el('span', { class: 'n', text: a.pct == null ? a.name : `${a.name} · ${Math.floor(a.pct)}%` }),
+      el('span', { class: 'n', text: a.pct == null ? a.name : a.wait ? `${a.name} · 대기` : `${a.name} · ${Math.floor(a.pct)}%` }),
       el('button', { class: 'pn-att-x', type: 'button', title: a.pct == null ? '첨부 빼기' : '올리기 취소', 'aria-label': a.pct == null ? '첨부 빼기' : '올리기 취소', text: '✕',
         onclick: () => { a.ctl?.abort(); const i = items.indexOf(a); if (i >= 0) items.splice(i, 1); paint(); } }))));
   }
@@ -70,12 +73,18 @@ export function composerAttach(opts: { projectId: () => number; onChanged?: () =
   async function attachFiles(files: File[]): Promise<void> {
     if (!files.length) return;
     let ok = 0;
+    // 칩부터 다 세운다(#5091) — 이름 중복 회피도 여기서 끝내야 같은 배치 안의 같은 이름이 서로를 본다.
+    const queue: { f: File; a: Att }[] = [];
     for (const f of files) {
       if (f.size > MAX_ATTACH) { toast(`${f.name || '파일'} — 파일이 너무 커요(상한 1GB). 나눠서 올려주세요.`, true); continue; }
-      const nm = attachName(f, items.map((a) => a.name));
-      const ctl = new AbortController();
-      const a: Att = { name: nm, rel: '', abs: '', pct: 0, ctl };
-      items.push(a); paint();
+      const a: Att = { name: attachName(f, items.map((x) => x.name)), rel: '', abs: '', pct: 0, wait: true, ctl: new AbortController() };
+      items.push(a); queue.push({ f, a });
+    }
+    paint();
+    for (const { f, a } of queue) {
+      if (items.indexOf(a) < 0) continue;     // 차례가 오기 전에 ✕ 로 뺐거나 clear() 됐다
+      const nm = a.name, ctl = a.ctl!;
+      a.wait = false; paint();
       try {
         // 순차 업로드(upSend 와 같은 이유) — 병렬로 쏘면 큰 파일 여럿이 회선을 나눠 서로 오래 걸린다.
         const j: any = await authUploadProgress(urlFor(nm), f, (pct: number) => { if (items.indexOf(a) >= 0) { a.pct = pct; paint(); } }, ctl.signal);
