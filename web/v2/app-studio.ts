@@ -19,8 +19,8 @@
 //   · 찍어서 의견 = 실제 화면의 앱 프레임(app-ui 가 검토 중인 앱의 문서에 탐침을 넣는다)에게 비율 좌표의 요소(태그 · 글)를 묻는다 — app-review.ts.
 //   · 사본 = /apps/:id/pull → id · 이름을 바꿔 /apps/save {origin_app_id} — 원본 · 만든 사람은 서버 기록(#4667). 판 = fetchAppVersions · revertApp.
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
-import { spawnSession } from './quick-session.js';
-import { memberName } from './builder-model.js';   // ⑤ 「이렇게 시작했어요」 의 만든 사람 — 계정 아이디가 아니라 표시 이름(점검 6-5 · 명부는 앱빌더 목록이 받아 둔다)
+import { isCreatingQuickSession, spawnSession } from './quick-session.js';
+import { memberName } from './member-names.js';   // ⑤ 「이렇게 시작했어요」 의 만든 사람 — 계정 아이디가 아니라 표시 이름(점검 6-5 · 명부는 앱빌더 목록이 받아 둔다)
 import { takeCreated } from './created-cache.js';
 import { reloadAppFrames } from './app-ui.js';
 import { growText } from './grow-text.js';   // 코멘트 칸 — 글이 길면 세로로 늘어난다
@@ -430,7 +430,8 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     forgetAiLogins(); const ai = await studioAi([], '');
     const run: RunPick = { harness: ai.harness, flags: ai.flags, node: '', mode: 'normal', autoApprove: sessionDefaults().autoApprove, writeVis: '' };
     const s = await spawnSession(brief, { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run, label: builderSessionLabel(target.title, how) });
-    if (!s) { closeAppStudio(); return; }   // 까닭은 spawnSession 이 이미 알렸다 — 같은 알림을 두 번 띄우지 않는다(점검 7-1)
+    //  실패면 까닭은 spawnSession 이 이미 알렸다 — 같은 알림을 두 번 띄우지 않는다(점검 7-1). 다른 세션을 여는 중이라 말없이 null 이면(두 번 누름) 여기서 알린다.
+    if (!s) { if (isCreatingQuickSession()) toast('세션을 여는 중이에요. 열리면 다시 눌러 주세요.'); closeAppStudio(); return; }
     //  #4667 이 세션이 이 앱의 만들기 세션 — 내가 책임자인 앱(내 사본 · 내가 만든 앱)이면 서버가 잇고, 남의 원본이면 그대로 둔다.
     void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, app_id: target.id }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
     const rec: StudioRec = { sid: s.id, pid, what: target.title, place, appId: target.id, known, at: Date.now(), stage: 'fix', round: 0, from: 0, mode: how, origin: { id: app.id, title: app.title, by: app.by }, title: target.title, card: null, named: true };
@@ -554,19 +555,25 @@ function helpMenu(btn: HTMLElement, onIntro: () => void, onTour: () => void): vo
  *  누르면 원래 단추를 누른 것과 같다 — 할 일은 한 벌(원래 단추의 onclick)이고, 잠긴 단추는 여기서도 잠겨 있다. */
 function foldMenu(btn: HTMLElement, items: HTMLButtonElement[]): void {
   if (!root) return;
+  //  열려 있으면 닫는다 — 「⋯」 를 다시 누르면 접힌다(아래 바깥 누름 처리는 이 단추를 건너뛴다).
+  if (openFold) { openFold(); return; }
   root.querySelectorAll('.v2-studio-help').forEach((n) => n.remove());
   const shown = items.filter((b) => !b.hidden);
   if (!shown.length) return;
+  const close = (): void => { m.remove(); document.removeEventListener('pointerdown', off, true); document.removeEventListener('keydown', onKey, true); btn.setAttribute('aria-expanded', 'false'); openFold = null; };
   const m = el('div', { class: 'v2-studio-help', role: 'menu' }, ...shown.map((b) => {
-    const x = el('button', { type: 'button', role: 'menuitem', text: b.textContent || '', title: b.title || null, onclick: () => { m.remove(); b.click(); } }) as HTMLButtonElement;
+    const x = el('button', { type: 'button', role: 'menuitem', text: b.textContent || '', title: b.title || null, onclick: () => { close(); b.click(); } }) as HTMLButtonElement;
     x.disabled = b.disabled;
     return x;
   }));
+  const off = (e: Event): void => { const t = e.target as Node; if (!m.contains(t) && !btn.contains(t)) close(); };
+  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); } };
   const r = btn.getBoundingClientRect(); m.style.top = (r.bottom + 6) + 'px'; m.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
-  root.append(m);
-  const off = (e: Event): void => { if (!m.contains(e.target as Node)) { m.remove(); document.removeEventListener('pointerdown', off, true); } };
-  setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
+  root.append(m); btn.setAttribute('aria-expanded', 'true'); openFold = close;
+  setTimeout(() => { if (openFold === close) { document.addEventListener('pointerdown', off, true); document.addEventListener('keydown', onKey, true); } }, 0);
 }
+/** 열려 있는 「⋯」 메뉴를 닫는 함수 — 없으면 null. */
+let openFold: (() => void) | null = null;
 //  누른 채인가 — 「참고한 서비스」 가 보기로 돌아갈 때를 늦춘다(cardView).
 let pointerHeld = false;
 if (typeof document !== 'undefined') {
@@ -659,7 +666,7 @@ function paintStageBar(bar: HTMLElement, cur: number, reached: number, mode: 'ne
     const st = tabs[i];
     if (st === 'back') return el('button', { type: 'button', class: 'done go', title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', 'aria-label': CIRC[x.n - 1] + ' ' + label, onclick: () => onGo(x.key) }, ...stepText(x.n, label));
     if (st === 'ahead') return el('button', { type: 'button', class: 'go ahead', title: x.key === 'put' ? PUT_GO_TITLE : '이 단계로 다시 가요. 저장한 내용 그대로예요.', 'aria-label': CIRC[x.n - 1] + ' ' + label, onclick: () => onGo(x.key) }, ...stepText(x.n, label));
-    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', title: label, ...(st === 'on' ? { 'aria-current': 'step' } : {}) }, ...stepText(x.n, label));
+    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', title: label, 'aria-label': CIRC[x.n - 1] + ' ' + label, ...(st === 'on' ? { 'aria-current': 'step' } : {}) }, ...stepText(x.n, label));   // 좁으면 이름이 숨는다 — 읽는 이름은 그대로
   }));
 }
 /** 단계 칸의 글 — 번호와 이름을 따로 둔다. 좁은 화면은 번호만 보이고 지금 단계에만 이름을 붙인다(점검 5-3 · 40-v2.css .v2-studio-bar). */
@@ -873,7 +880,7 @@ async function build(rec: StudioRec): Promise<void> {
   chatBtn.onclick = () => { S.chatMode = S.chatMode === 'off' ? 'float' : 'off'; applyPlace(); };
   //  좁은 화면(40-v2.css)에서는 공개하기 · 되돌리기 · AI 세션 보기를 「⋯」 하나로 접는다 — 「닫기」 는 늘 보인다(점검 5-2 · 390px 에서 닫기가 화면 밖으로 밀렸다).
   [pubBtn, undo, chatBtn].forEach((b) => b.classList.add('v2-studio-fold'));
-  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm v2-studio-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu' }) as HTMLButtonElement;
+  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm v2-studio-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement;
   moreBtn.onclick = () => foldMenu(moreBtn, [pubBtn, undo, chatBtn]);
   const tray = el('div', { class: 'v2-studio-tray', hidden: true });   // ③ 보낼 의견 — 허브 안 한 칸(실제 화면의 막대와 같은 것을 본다)
   const appBox = el('div', { class: 'v2-studio-app v2-studio-app--full' });   // 가운데 칸 — 단계마다 카드 · 허브 · 점검표 · 마무리
@@ -1920,7 +1927,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (to != null) { rec.reached = 2; saveRec(rec); await showApp(verJ(to, '으로') + ' 되돌렸어요'); }   // 되돌린 버전으로 ④ · ⑤ 를 다시
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
-  teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
+  teardown = () => { S.dead = true; if (openFold) openFold(); if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
     window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); window.removeEventListener('resize', onWinResize); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,

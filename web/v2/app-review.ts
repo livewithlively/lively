@@ -103,10 +103,11 @@ export function openReview(host: ReviewHost): ReviewApi {
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위나 아래로 옮겨요', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
   //  좁은 화면(40-v2.css ≤760px)의 「⋯」 — 「완료 · 다음 단계로」 · 막대 자리 바꾸기를 접어 둔다(점검 5-6 · 막대가 여러 줄로 앱을 덮었다).
   //   누르면 원래 단추를 누른 것과 같다(할 일은 한 벌) · 잠긴 단추는 여기서도 잠겨 있다.
-  const more = el('button', { class: 'btn btn-ghost btn-sm v2-review-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu' }) as HTMLButtonElement;
+  const more = el('button', { class: 'btn btn-ghost btn-sm v2-review-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement;
   let menu: HTMLElement | null = null;
-  const closeMenu = (): void => { if (menu) { menu.remove(); menu = null; document.removeEventListener('pointerdown', offMenu, true); } };
-  const offMenu = (e: Event): void => { if (menu && !menu.contains(e.target as Node) && e.target !== more) closeMenu(); };
+  const closeMenu = (): void => { if (menu) { menu.remove(); menu = null; document.removeEventListener('pointerdown', offMenu, true); document.removeEventListener('keydown', keyMenu, true); more.setAttribute('aria-expanded', 'false'); } };
+  const offMenu = (e: Event): void => { if (menu && !menu.contains(e.target as Node) && !more.contains(e.target as Node)) closeMenu(); };
+  const keyMenu = (e: KeyboardEvent): void => { if (e.key === 'Escape' && menu) { e.preventDefault(); e.stopPropagation(); closeMenu(); more.focus(); } };
   more.onclick = () => {
     if (menu) { closeMenu(); return; }
     const items = [like, flip].filter((b) => !b.hidden);
@@ -118,8 +119,8 @@ export function openReview(host: ReviewHost): ReviewApi {
     const r = more.getBoundingClientRect();
     m.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - 216))) + 'px';   // 메뉴 폭(최소 200) 만큼 화면 안에
     if (S.top || r.top < window.innerHeight / 2) m.style.top = Math.round(r.bottom + 6) + 'px'; else m.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
-    document.body.append(m); menu = m;
-    setTimeout(() => document.addEventListener('pointerdown', offMenu, true), 0);
+    document.body.append(m); menu = m; more.setAttribute('aria-expanded', 'true');
+    setTimeout(() => { if (menu === m) { document.addEventListener('pointerdown', offMenu, true); document.addEventListener('keydown', keyMenu, true); } }, 0);
   };
   bar.append(
     el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요. 적은 코멘트는 그대로 남아요.', onclick: () => host.onBack() }),

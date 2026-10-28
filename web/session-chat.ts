@@ -2936,7 +2936,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         nextId = String(r?.session?.id || '');
         if (r?.mode === 'fallback' && r?.reason) toast(String(r.reason));
       }
-      if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
+      if (!nextId) throw new Error('새 세션 번호를 받지 못했어요.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
       //  #4917 — 서버가 «아직 살아 있다(already)» 고만 답하고 새로 띄운 것이 없으면 이어받은 게 아니다. 종전엔 그때도
       //   «이어받기 세션을 열었어요» 가 떠, 사람은 열렸다는데 화면이 그대로인 세션 앞에서 같은 말을 계속 보냈다.

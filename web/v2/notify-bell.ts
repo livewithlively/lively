@@ -33,7 +33,7 @@ export function notifyBell(): HTMLElement {
   const paint = (count: number): void => {
     n.hidden = count <= 0;
     n.textContent = count > 99 ? '99+' : String(count);
-    const label = count > 0 ? `확인할 것(안 읽은 알림 ${count}개)` : '확인할 것';
+    const label = count > 0 ? `확인할 것: 받은 알림(안 읽은 것 ${count}개)` : '확인할 것: 받은 알림';
     btn.setAttribute('aria-label', label); btn.title = label;
   };
   paint(unreadCount());
@@ -57,7 +57,7 @@ export function notifyBell(): HTMLElement {
 function openPopover(anchor: HTMLButtonElement): void {
   const head = el('div', { class: 'v2-noti-pop-h' }, el('span', { class: 'v2-k', text: '확인할 것' }));
   const list = el('div', { class: 'v2-noti-pop-b', role: 'list' }, el('p', { class: 'v2-noti-pop-empty', text: '불러오는 중…' }));
-  const panel = el('div', { class: 'v2-noti-pop', role: 'dialog', 'aria-label': '확인할 것' },
+  const panel = el('div', { class: 'v2-noti-pop', role: 'dialog', 'aria-label': '확인할 것: 받은 알림' },
     head, list,
     el('div', { class: 'v2-noti-pop-f' }, el('a', { href: '#/inbox', text: '전체 보기 →' })));
   const close = anchoredPopover(anchor, panel);

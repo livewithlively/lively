@@ -7,6 +7,8 @@
 //  N1 (5-1) 500 · 고른 카드 없음 — 배포 설정 칸이 없고(반쯤 걸쳐 카드를 가리던 것) 목록만
 //  N2 (5-1) 500 · 카드를 누름 — 뒤로 가기 한 칸이 쌓이고(history.length +1) 배포 설정만 · 맨 위 「‹ 목록」
 //  N3 (5-1) 500 · 「‹ 목록」 — 쌓은 칸을 되돌려 주소가 #/builder · 목록이 다시 선다
+//  N5 (5-1 리뷰) 500 · 고른 뒤 만들기를 열었다 닫고 「‹ 목록」 — #/builder(만들기가 다시 열리지 않는다)
+//  N6 (5-1 리뷰) 500 · 고른 뒤 개발 정보를 다녀와 「‹ 목록」 — #/builder
 //  N4 (5-1) 1200 — 고른 것이 없어도 배포 설정 칸이 서고 「‹ 목록」 은 없다 · 카드를 눌러도 뒤로 가기 칸을 쌓지 않는다
 //  H1 (5-2) 500 · ③ 머리줄 — 공개하기 · 되돌리기 · AI 세션 보기는 숨고 「⋯」 · 「닫기」 는 화면 안 · 앱 이름 폭 > 0
 //  H2 (5-2) 500 · 「⋯」 — 보이는 접은 단추만 같은 이름으로 · 누르면 원래 단추가 한 일(AI 세션 창이 열린다)
@@ -48,6 +50,7 @@ window.fetch = async (u, init) => {
   const j = (o) => new Response(JSON.stringify(o), { status: 200, headers: { "Content-Type": "application/json", "X-Log-To": "5" } });
   if (p.includes("/transcript")) return new Response("", { status: 200, headers: { "X-Log-To": "5" } });
   if (p.startsWith("/api/ui/notify/stream")) return new Response(new ReadableStream({ start() {} }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  if (p.startsWith("/api/ui/apps/notes/spec")) return j({ app_id: "notes", title: "회의록", version_no: 3, view: "installed", facts: { calls: [], tables: [], pages: [], perms: [], files: [], server: null, instructions: false }, spec_state: "unavailable", spec_error: null, spec: null });
   if (p.startsWith("/api/ui/apps/notes/versions")) return j({ versions: [1, 2, 3].map((n) => ({ version_no: n, is_current: n === 3, is_published: n === 2, note: n > 1 ? "고침" : "초안", saved_at: "2026-10-19T00:00:00Z" })) });
   if (/^\\/api\\/ui\\/apps\\/notes(\\?|$)/.test(p)) return j({ app: { id: "notes", title: "회의록 정리 도우미", visibility: "all", published_version_no: 2, current_version_no: 3, can_edit: true, can_publish: true, draft: { by: "wonjoon-jang", version_no: 3 }, manifest: { studio: { card: ${JSON.stringify(CARD)} } } } });
   if (p.startsWith("/api/ui/me/whoami")) return j({ member_id: "wonjoon-jang", display_name: "원준" });
@@ -85,6 +88,22 @@ async function PAGE_MAIN() {
   R.n2 = { pushed: history.length - h0, hash: location.hash, panel: shown(panel()), list: shown(list()), back: shown(back), backText: txt(back), first: panel() && panel().firstElementChild === back };
   if (back && shown(back)) { back.click(); await sleep(1200); }
   R.n3 = { hash: location.hash, list: shown(list()), panel: shown(panel()) };
+  //  N5 · N6 (격리 리뷰) — 고른 뒤 만들기 · 개발 정보를 다녀와서 「‹ 목록」: 그 사이 쌓인 칸을 되돌리면 만들기 화면이 다시 열렸다. 목록으로만 와야 한다.
+  const trip = async (to, back) => {
+    const c = [...bhost.querySelectorAll(".v2-bld-card")].find((x) => txt(x.querySelector(".hd b")) === "회의록");
+    if (c) { c.querySelector(".hd").click(); await sleep(900); }
+    location.hash = to; await sleep(1500);
+    const inStudio = !!bhost.querySelector(".v2-studio");
+    await back(); await sleep(1200);
+    const b2 = bhost.querySelector(".v2-bld-back");
+    const before = location.hash;
+    if (b2 && shown(b2)) { b2.click(); await sleep(1500); }
+    return { inStudio, before, hash: location.hash, studio: !!bhost.querySelector(".v2-studio"), list: shown(list()), spec: [...bhost.querySelectorAll(".v2-bld-stage")].some(shown) };
+  };
+  localStorage.setItem("lively_v2_app_studio_seen", JSON.stringify({ intro: 1, coach: { plan: 1, draft: 1, check: 1, put: 1, fix: 1 } }));
+  localStorage.setItem("lively_v2_app_studio", JSON.stringify([{ sid: "box-n5", pid: 0, what: "회의록", place: "both", appId: "notes", known: [], at: Date.now() - 600000, stage: "fix", card: window.__CARD, round: 1, from: 5, mode: "edit", title: "회의록", named: true, reached: 3 }]));
+  R.n5 = await trip("#/builder/s/box-n5", async () => { const x = [...bhost.querySelectorAll(".v2-studio-top button")].find((b) => txt(b) === "닫기"); if (x) x.click(); });
+  R.n6 = await trip("#/builder/spec/notes", async () => { location.hash = "#/builder?sel=notes"; });
 
   // ── ③ 만들기 화면 머리줄 · 단계 바 ──
   window.__step = "H";
@@ -197,6 +216,8 @@ check(N.w === 500, "창 폭 500 으로 떴다", N.w);
 check(N.n1 && N.n1.cards >= 2 && N.n1.list && !N.n1.panel, "N1 500 · 고른 카드 없음 — 배포 설정 칸 없이 목록만", N.n1);
 check(N.n2 && N.n2.pushed === 1 && /sel=notes/.test(N.n2.hash) && N.n2.panel && !N.n2.list && N.n2.back && N.n2.first && N.n2.backText === "‹ 목록", "N2 500 · 카드를 누르면 뒤로 가기 한 칸 · 배포 설정만 · 맨 위 「‹ 목록」", N.n2);
 check(N.n3 && N.n3.hash === "#/builder" && N.n3.list && !N.n3.panel, "N3 500 · 「‹ 목록」 — 쌓은 칸을 되돌려 목록으로", N.n3);
+check(N.n5 && N.n5.inStudio && /sel=notes/.test(N.n5.before) && N.n5.hash === "#/builder" && !N.n5.studio && N.n5.list, "N5 500 · 고른 뒤 만들기를 열었다 닫고 「‹ 목록」 — 목록으로(만들기가 다시 열리지 않는다)", N.n5);
+check(N.n6 && /sel=notes/.test(N.n6.before) && N.n6.hash === "#/builder" && !N.n6.studio && !N.n6.spec && N.n6.list, "N6 500 · 고른 뒤 개발 정보를 다녀와 「‹ 목록」 — 목록으로", N.n6);
 check(N.h1 && N.h1.foldAll.length === 3 && N.h1.foldShown.length === 0 && N.h1.more && N.h1.closeIn && N.h1.nameW > 20 && N.h1.overflow <= 0, "H1 500 · 머리줄 — 공개하기 · 되돌리기 · AI 세션 보기는 「⋯」 로 · 「닫기」 는 화면 안 · 이름이 보인다", N.h1);
 check(N.h2 && Array.isArray(N.h2.items) && N.h2.items.includes("AI 세션 보기") && N.h2.items.includes("공개하기") && N.h2.chatOpen && N.h2.menuGone, "H2 500 · 「⋯」 — 보이는 단추만 같은 이름 · 누르면 원래 단추가 한 일", N.h2);
 check(N.s1 && N.s1.on >= 0 && N.s1.names.filter(Boolean).length === 1 && N.s1.names[N.s1.on] && N.s1.overflow <= 0 && /^① /.test(N.s1.text || ""), "S1 500 · 단계 바 — 지금 단계만 이름 · 나머지는 번호 · 넘치지 않는다(글은 그대로)", N.s1);

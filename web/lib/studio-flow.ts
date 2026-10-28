@@ -157,13 +157,14 @@ export function cardText(c: StudioCard): string {
 /** 판 번호 → 화면 이름: 1 = 초안 · 2 이상 = V2 · V3 … · 0 이하(아직 없음) = 빈 글. */
 export function verName(n: number): string { const k = Math.floor(Number(n) || 0); return k >= 2 ? 'V' + k : k === 1 ? '초안' : ''; }
 /** 낱말 + 조사 — 끝 글자(닫는 「」 · 따옴표는 넘긴다)의 받침으로 고른다: 을/를 · 은/는 · 이/가 · 으로/로(ㄹ 받침은 «로»).
- *  한글이 아니면 영문 · 숫자를 읽는 소리로 어림한다(…L · M · N · R · 0 1 3 6 7 8 은 받침). 화면 글에 «을(를)» 을 남기지 않는다(점검 7-3). */
+ *  한글이 아니면 영문 · 숫자를 읽는 소리로 어림한다 — 받침 있음: 0 영 · 1 일 · 3 삼 · 6 육 · 7 칠 · 8 팔 · L 엘 · M 엠 · N 엔 · R 알,
+ *  그 가운데 ㄹ 받침(«로»): 1 · 7 · 8 · L · R. 화면 글에 «을(를)» 을 남기지 않는다(점검 7-3). */
 export function josa(word: string, j: '을' | '은' | '이' | '으로'): string {
   const w = String(word || '').replace(/[」』"'”’)\]\s]+$/u, '');
   const ch = w.slice(-1); const c = ch.charCodeAt(0);
   let jong = -1;   // 받침 번호(0 = 없음)
   if (c >= 0xac00 && c <= 0xd7a3) jong = (c - 0xac00) % 28;
-  else if (/[0136781lmnrLMNR]/.test(ch)) jong = /[lL1378]/.test(ch) ? 8 : 4;   // 8 = ㄹ · 4 = ㄴ(받침 있음 대표)
+  else if (/[013678lmnrLMNR]/.test(ch)) jong = /[178lLrR]/.test(ch) ? 8 : 4;   // 8 = ㄹ · 4 = ㄴ(받침 있음 대표)
   else jong = 0;
   const has = jong > 0;
   const tail = j === '을' ? (has ? '을' : '를') : j === '은' ? (has ? '은' : '는') : j === '이' ? (has ? '이' : '가') : (has && jong !== 8 ? '으로' : '로');

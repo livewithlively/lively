@@ -355,8 +355,8 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
 // ══ G7 문구 규칙(#4632 원준 2026-10-29 «싹 다 고쳐» — 점검 7-1 · 7-2 · 7-3 · 6-13 후속) ══
 {
   const J = typeof F.josa === "function" ? F.josa : () => null;
-  const got = [J("「회의록」", "을"), J("「메모」", "을"), J("세션 위젯", "이"), J("둘 다", "이"), J("앱 화면", "으로"), J("「팀 채널」", "으로"), J("메모", "은"), J("V3", "을"), J("V2", "을")];
-  check(JSON.stringify(got) === JSON.stringify(["「회의록」을", "「메모」를", "세션 위젯이", "둘 다가", "앱 화면으로", "「팀 채널」로", "메모는", "V3을", "V2를"]),
+  const got = [J("「회의록」", "을"), J("「메모」", "을"), J("세션 위젯", "이"), J("둘 다", "이"), J("앱 화면", "으로"), J("「팀 채널」", "으로"), J("메모", "은"), J("V3", "을"), J("V2", "을"), J("V3", "으로"), J("V13", "으로"), J("V7", "으로"), J("R", "으로")];
+  check(JSON.stringify(got) === JSON.stringify(["「회의록」을", "「메모」를", "세션 위젯이", "둘 다가", "앱 화면으로", "「팀 채널」로", "메모는", "V3을", "V2를", "V3으로", "V13으로", "V7로", "R로"]),
     "J1 josa — 끝 글자(닫는 「」 넘김) 받침으로 을/를 · 이/가 · 으로/로(ㄹ 은 로) · 은/는 · 숫자는 읽는 소리로", got);
   const VN = typeof F.versionNote === "function" ? F.versionNote : () => null;
   const P = "\uD310";
@@ -367,7 +367,8 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   //   AI 에게 가는 글(lib/studio-flow 의 brief)은 화면 글이 아니라 뺐다.
   const { readFileSync } = await import("node:fs");
   const files = ["web/v2/builder.ts", "web/v2/builder-model.ts", "web/v2/app-studio.ts", "web/v2/app-review.ts", "web/v2/wire-board.ts", "web/v2/app-try-session.ts", "web/v2/apps.ts",
-    "web/v2/app-spec-page.ts", "web/v2/publish-preview.ts", "web/v2/app-instance.ts", "web/v2/run-prefs.ts", "web/v2/mobile.ts", "web/v2/notify-bell.ts", "web/v2/quick-session.ts", "web/lib/app-menu.ts"];
+    "web/v2/app-spec-page.ts", "web/v2/publish-preview.ts", "web/v2/app-instance.ts", "web/v2/run-prefs.ts", "web/v2/mobile.ts", "web/v2/notify-bell.ts", "web/v2/quick-session.ts", "web/lib/app-menu.ts",
+    "web/v2/app-runtime.ts", "web/v2/app-session.ts"];
   const left = [];
   for (const f of files) {
     const src = readFileSync(join(root, f), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "");

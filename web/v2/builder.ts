@@ -35,8 +35,9 @@ const when = (ms: number): string => {
 };
 
 interface View { root: HTMLElement; top: HTMLElement; body: HTMLElement; list: HTMLElement; panel: HTMLElement; stage: HTMLElement; spec: HTMLElement; specKey: string; specStop: (() => void) | null; sel: string; studioKey: string; watch: number; teamOpen: boolean; seq: number;
-  /** 좁은 화면에서 카드를 골라 뒤로 가기 한 칸을 쌓았다(점검 5-1) — 「‹ 목록」 은 그 칸을 되돌린다. */
-  pushed: boolean; repaint: () => void }
+  /** 좁은 화면에서 카드를 골라 쌓은 뒤로 가기 칸의 주소(점검 5-1) — 「‹ 목록」 은 지금 주소가 바로 그것일 때만 그 칸을 되돌린다.
+   *  만들기 · 개발 정보를 다녀오거나 사이드바로 다른 카드에 왔으면 그 칸은 이미 지난 것이라 되돌리지 않는다(되돌리면 만들기 화면이 다시 열렸다 · 격리 리뷰). */
+  pushedHash: string; repaint: () => void }
 const views = new WeakMap<HTMLElement, View>();
 //  지우는 중인 만들던 앱 — 지우는 사이 목록이 다시 그려져 새 카드의 단추로 한 번 더 지우지 않게(격리 리뷰).
 const deleting = new Set<string>();
@@ -106,6 +107,7 @@ export function renderBuilderApp(host: HTMLElement, segs: readonly string[], par
   if (where.view === 'spec') {
     //  개발 정보 — 「‹ 앱빌더」 는 그 앱 카드를 고른 목록으로 돌아간다. 같은 앱을 다시 그리는 것(해시 재적용)이면 그대로 둔다.
     if (v.studioKey) { v.studioKey = ''; closeAppStudio(); }
+    v.pushedHash = '';   // 목록을 떠났다 — 고를 때 쌓은 칸은 지난 것
     v.top.hidden = true; v.body.hidden = true; v.stage.hidden = true; v.spec.hidden = false;
     v.sel = where.id;
     if (v.specKey !== where.id) { closeSpec(v); v.spec.hidden = false; v.specKey = where.id; v.specStop = renderAppSpec(v.spec, where.id, () => { location.hash = builderRoute('list', where.id); }); }
@@ -116,10 +118,14 @@ export function renderBuilderApp(host: HTMLElement, segs: readonly string[], par
     const wasList = !v.body.hidden && v.stage.hidden && !!v.list.querySelector('.v2-bld-sec');
     v.stage.hidden = true; v.top.hidden = false; v.body.hidden = false;
     v.sel = where.id;   // 고른 카드도 주소가 정본이다(#/builder?sel=<앱> — 사이드바의 앱 줄이 이 주소로 온다)
-    if (!where.id) v.pushed = false;
-    void paintList(v, env, wasList);
+    if (v.pushedHash && location.hash !== v.pushedHash) v.pushedHash = '';
+    //  좁은 화면의 한 칸씩 — 목록을 다시 받기 전에 바로 맞춘다(고른 카드가 실제로 있는지는 아래 그리기가 다시 본다).
+    v.body.classList.toggle('v2-bld-body--sel', !!where.id);
+    //  고른 것을 풀고 목록으로 왔으면(뒤로 가기 · 「‹ 목록」) 목록을 비우지 않되 앱 목록은 새로 받는다 — 배포 설정에서 바꾼 것이 카드에 보이게.
+    void paintList(v, env, wasList, wasList && !where.id);
   } else {
     closeSpec(v);
+    v.pushedHash = '';   // 목록을 떠났다 — 고를 때 쌓은 칸은 지난 것
     v.top.hidden = true; v.body.hidden = true; v.stage.hidden = false;
     openStudio(v, where, env);
   }
@@ -141,7 +147,7 @@ function build(env: BuilderEnv): View {
   //  #4632 「개발 정보」(코드 기준 명세 · v2/app-spec-page.ts)는 만들기 화면과 다른 자리에 선다 — 오가도 만들던 화면을 건드리지 않게.
   const spec = el('div', { class: 'v2-bld-stage', hidden: true });
   const root = el('div', { class: 'v2-bld' }, top, body, stage, spec);
-  const v: View = { root, top, body, list, panel, stage, spec, specKey: '', specStop: null, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0, pushed: false, repaint: () => {} };
+  const v: View = { root, top, body, list, panel, stage, spec, specKey: '', specStop: null, sel: '', studioKey: '', watch: 0, teamOpen: false, seq: 0, pushedHash: '', repaint: () => {} };
   void env;
   return v;
 }
@@ -263,10 +269,10 @@ function openStudio(v: View, where: BuilderWhere, env: BuilderEnv): void {
 
 // ── 목록 ──
 /** 목록을 그린다. soft = 카드만 골랐다(감사 6-2) — 목록을 «불러오는 중» 으로 비우지 않고, 받아 둔 앱 목록(30초)을 그대로 쓴다. */
-async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> {
+async function paintList(v: View, env: BuilderEnv, soft = false, fetch = !soft): Promise<void> {
   const seq = ++v.seq;
   if (!soft || !v.list.querySelector('.v2-bld-sec')) v.list.replaceChildren(el('p', { class: 'v2-bld-empty', text: '불러오는 중…' }));
-  await refreshBuilderModel(!soft);
+  await refreshBuilderModel(fetch);   // fetch = 앱 목록을 새로 받는다(soft 여도 · 고른 것을 풀고 목록으로 돌아올 때)
   //  셸이 세션 목록을 아직 못 받았으면 받을 때까지(15초까지) 기다린다 — 받기 전엔 이 브라우저의 기록이 지운 만들기인지 모른다
   //   (builder-model goneRec). 가운데 목록은 셸이 세션을 새로 받아도 다시 그려지지 않으니, 먼저 그리면 지운 카드가 그대로 남는다.
   for (let t = 0; env.sessionsReady && !env.sessionsReady() && t < 50 && seq === v.seq; t++) await new Promise((r) => setTimeout(r, 300));
@@ -286,8 +292,8 @@ async function paintList(v: View, env: BuilderEnv, soft = false): Promise<void> 
   //  카드를 고르면 주소에도 적는다(setSel) — 사이드바가 같은 줄을 켠다.
   //   좁은 화면(목록과 배포 설정이 한 칸씩)에서는 뒤로 가기 한 칸을 쌓는다 — 브라우저 뒤로 가기가 라이블리 밖이 아니라 목록으로 온다(점검 5-1).
   const pick = (key: string): void => {
-    if (key && key !== v.sel && narrowBuilder()) { v.pushed = true; location.hash = builderRoute('list', key); return; }
-    setSel(v, key); repaint();
+    if (key && key !== v.sel && narrowBuilder()) { const to = builderRoute('list', key); v.pushedHash = to; location.hash = to; return; }
+    setSel(v, key); v.body.classList.toggle('v2-bld-body--sel', !!key); repaint();
   };
   v.repaint = repaint;
   //  개발 정보(#4632)는 첫 버전이 있으면 만들던 앱에도 선다(원준 2026-10-27 «개발 정보 페이지 이건 어디있는걸까?» — 회의록은 아직 만들던 앱이다).
@@ -414,8 +420,8 @@ function narrowBuilder(): boolean { try { return window.matchMedia(NARROW_BUILDE
 /** 「‹ 목록」 — 좁은 화면에서만 보인다(CSS). 고를 때 쌓은 뒤로 가기 칸이 있으면 되돌리고(브라우저 뒤로 가기와 같다), 없으면(주소로 바로 왔다) 고른 것만 푼다. */
 function backToList(v: View): HTMLElement {
   return el('button', { class: 'btn btn-ghost btn-sm v2-bld-back', type: 'button', text: '‹ 목록', onclick: () => {
-    if (v.pushed) { v.pushed = false; history.back(); return; }
-    setSel(v, ''); v.repaint();
+    if (v.pushedHash && location.hash === v.pushedHash) { v.pushedHash = ''; history.back(); return; }
+    v.pushedHash = ''; setSel(v, ''); v.body.classList.remove('v2-bld-body--sel'); v.repaint();
   } });
 }
 
