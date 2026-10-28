@@ -1899,8 +1899,8 @@ function renderBuilderSection(): void {
   if (!M) listEl.append(el('p', { class: 'v2-empty', text: builderModelFailed() && sideTruthReady(data) ? '앱 목록을 불러오지 못했어요. 잠시 후 다시 시도해주세요.' : '불러오는 중…' }));
   else {
     //  툴팁 — 이름. 지금 단계. 누르면 할 일(문장은 마침표로 끊는다 · ui-copy 규칙).
-    const drafts = M.drafts.map((d) => row('draft:' + d.sid, builderRoute('resume', d.sid), 'buildsess', d.title, draftStageShort(d.stage, !!d.appId, d.done),
-      d.title + '. ' + draftStageText(d.stage, !!d.appId, d.done) + '. 누르면 이어서 만들어요.'));
+    const drafts = M.drafts.map((d) => row('draft:' + d.sid, builderRoute('resume', d.sid), 'buildsess', d.title, draftStageShort(d.stage, !!d.appId, d.done, d.fixing),
+      d.title + '. ' + draftStageText(d.stage, !!d.appId, d.done, d.fixing) + '. 누르면 이어서 만들어요.'));
     //  앱 줄의 그림은 그 앱의 얼굴(#4769 매니페스트 icon 선언 · 없으면 기본 그림) — 앱 찾기 · 독 · 가운데 카드와 같은 그림.
     const face = (a: { id: string; hasUi: boolean; icon: Parameters<typeof installedAppFace>[0]['icon'] }): string => installedAppFace({ id: a.id, hasUi: a.hasUi, icon: a.icon });
     const mine = M.mine.map((a) => row('app:' + a.id, builderRoute('list', a.id), face(a), a.title, appRight(a), a.title + '. 누르면 배포 설정이 열려요.'));
