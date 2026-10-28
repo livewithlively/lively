@@ -9,7 +9,7 @@ import { appStateOf } from './app-session.js';
 import { declaresServer } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { appIconSpecOf, type AppIconSpec } from './glass-icon.js';   // #4769 구성원 앱의 아이콘 선언
 import { folderView, type FolderView } from '../lib/app-folder-text.js';   // #4785 앱 폴더 줄
-import { draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from '../lib/builder-flow.js';
+import { builderSessionName, draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from '../lib/builder-flow.js';
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
@@ -81,9 +81,15 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const ready = !!env.sessionsReady?.();
   const goneRec = (r: { sid: string; at?: number }): boolean => ready && !sessOf(r.sid) && Date.now() - (Number(r.at) || 0) > REC_GRACE_MS;
   const goneRecs = recs.filter(goneRec).map((r) => r.sid);
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
+  //  ★ 만든 앱(⑤ 넣기를 지났거나 공개한 앱)은 고치는 중이어도 「내가 만든 앱」 이다(원준 2026-10-28 «한번이라도 5번 단계까지 끝까지 가면 그건 만든 앱에 있어야»).
+  //   그 앱의 기록 · 고치기 세션은 「만들던 앱」 카드가 되지 않는다 — 종전엔 앱의 지금 만들기 세션(build_session) 하나만 끝난 것으로 봐서, 「고치기」 를
+  //   다시 누를 때마다 앞의 고치기 세션이 「만들던 앱」 에 같은 이름의 앱으로 하나 더 섰다(원준 2026-10-28 «회의록 어플이 두 개가 됐어»).
+  const doneApp = (id: string): boolean => { const a = id ? apps.find((x) => x.id === id) : null; return !!a && isDone(a); };
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt && !goneRec(r) && !doneApp(r.appId || r.draftId || '')).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, fixing: fixingOf(r), at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
   const seen = new Set(drafts.map((d) => d.sid));
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
+  //  내가 만든 앱의 이름을 단 세션(«"회의록" 앱 제작») — 만들기 세션 기록이 다른 세션으로 옮겨 간 옛 세션이다. 그 앱은 이미 「내가 만든 앱」 에 있다.
+  const doneTitles = new Set(apps.filter((a) => isDone(a) && (a.madeBy === m.id || a.ownerMember === m.id)).map((a) => a.title.trim()));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
   //   앱 찾기와 같은 자(lib/builder-flow isAppInProgress) — 앱빌더가 새로 만드는 중인 앱만 여기 서고, 그 앱은 앱 찾기에 앱으로 서지 않는다. 빈 예약(첫 판 전)도 여기.
   //   보통 AI 세션이 저장한 나만 보는 앱(그 세션도 build_session 으로 적힌다)은 다 만든 앱이라 「내가 만든 앱」 에 선다.
@@ -100,6 +106,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   //   휴지통에 버린 세션(홈 사이드바)은 만들던 앱이 아니다 — 지난 세션(멈춘 것)은 이어서 만들 수 있으니 그대로 선다. 앱빌더 「지우기」 는 완전 삭제라 목록에서 아예 빠진다.
   env.sessions().filter((s) => !s.task && !s.trashedAt && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
     if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 다 만들어졌다 — 「내가 만든 앱」 에 선다
+    if (!isBuildingSession(s.label, projName(s.projectId))) return;   // 고치기 세션(«"이름" 앱 고치기»)은 만든 앱을 고치는 것 — 만들던 앱이 아니다
+    if (doneTitles.has(builderSessionName(s.label).trim())) return;   // 그 이름의 앱을 이미 다 만들었다(기록이 다른 세션으로 옮겨 간 옛 세션)
     const a = apps.find((x) => x.buildSession === s.id);
     drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
   });

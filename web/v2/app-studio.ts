@@ -193,6 +193,10 @@ async function sendPrompt(rec: StudioRec, text: string): Promise<boolean> {
 async function relabel(sid: string, name: string | undefined, mode: 'new' | 'copy' | 'edit'): Promise<void> {
   try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid), { method: 'POST', body: JSON.stringify({ label: builderSessionLabel(name, mode) }) }); } catch (_) { /* 이름은 못 바꿔도 된다 */ }
 }
+/** 그 세션이 서버에 아직 있나 — 못 읽으면 있는 것으로 본다(흔들리는 네트워크 때문에 같은 앱의 고치기 세션을 하나 더 열지 않게). */
+async function sessionExists(sid: string): Promise<boolean> {
+  try { const d: any = await api('/api/ui/terminal/sessions?only=' + encodeURIComponent(sid)); return !Array.isArray(d?.sessions) || d.sessions.length > 0; } catch (_) { return true; }
+}
 async function listApps(): Promise<any[]> { try { const out: any = await api('/api/ui/apps'); return Array.isArray(out?.apps) ? out.apps : []; } catch (_) { return []; } }
 /** 매니페스트 한 군데를 고쳐 새 판으로 저장한다. opts.publish — 저장하면서 바로 모두에게 공개(#4667 · 배포 설정처럼 «모두의 앱» 을 바꾸는 일). */
 export async function patchManifest(appId: string, patch: (man: any) => void, note: string, opts?: { publish?: boolean }): Promise<void> {
@@ -336,8 +340,12 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
       if (!root) return;
       const known = a ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
       const title = resume.title || (a && !a.empty ? String(a.title || '') : '');
+      //  만든 앱(⑤ 넣기를 지났거나 공개한 앱)을 이어 여는 것은 고치기다 — 종전엔 늘 'new' 라 세션 이름이 «"이름" 앱 고치기» 에서 «"이름" 앱 제작» 으로
+      //   되바뀌고 ①② 가 다시 열렸다(원준 2026-10-28 «누구맘대로 갈라졌어»). 사본(원본 기록이 있는 앱)은 사본 흐름으로.
+      const made = !!a && !a.empty && ((a.manifest && a.manifest.studio && a.manifest.studio.put === true) || a.visibility === 'all');
+      const mode: StudioRec['mode'] = made ? 'edit' : a && a.origin ? 'copy' : 'new';
       const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || title || (a ? String(a.title || '') : ''), place, appId, known, at: Date.now(),
-        stage: appId ? 'fix' : 'plan', card, round: 0, from, mode: 'new', ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}) };
+        stage: appId ? 'fix' : 'plan', card, round: 0, from, mode, ...(mode !== 'new' ? { named: true } : {}), ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}) };
       saveRec(r2); void build(r2);
     })();
     return;
@@ -346,6 +354,14 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
 }
 /** ⑧ 남이 만든(또는 내가 만든) 앱을 내게 맞게 — 사본을 떠서, 또는 원본을 그대로 고치기. ③ 시안 확인 · 고치기에서 연다. */
 export async function openAppStudioFor(app: { id: string; title: string; by: string; place?: StudioPlace }, how: 'copy' | 'edit', opts?: StudioMountOpts): Promise<void> {
+  //  같은 앱의 고치기를 이미 열어 둔 게 있으면 그 세션을 다시 연다 — 「고치기」 를 누를 때마다 새 세션을 열면 앱 하나에 고치기 세션이 쌓이고,
+  //   앱의 만들기 세션 기록(build_session)이 새 세션으로 옮겨 가 앞의 세션이 「만들던 앱」 에 같은 이름으로 하나 더 섰다(원준 2026-10-28 «회의록 어플이 두 개가 됐어»).
+  //   그 세션이 서버에서 없어졌으면(완전 삭제) 기록을 걷고 새로 연다.
+  const prior = readRecs().filter((x) => x.appId === app.id && x.mode === how && !x.done).pop();
+  if (prior) {
+    if (await sessionExists(prior.sid)) { mountRoot(opts); if (mountOpts.onSession) mountOpts.onSession(prior.sid); void build(prior); return; }
+    dropStudioRec(prior.sid);
+  }
   const r = mountRoot(opts);
   r.replaceChildren(el('div', { class: 'v2-studio-top' }, crumb(), el('b', { class: 'v2-studio-name', text: app.title || NEW_APP_NAME }), el('span', { class: 'v2-studio-sp' })),
     el('div', { class: 'v2-studio-wait v2-studio-wait--page' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: how === 'copy' ? '사본을 만드는 중이에요' : '수정할 준비를 하는 중이에요' })));
