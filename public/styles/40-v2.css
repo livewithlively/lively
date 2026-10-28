@@ -2147,6 +2147,8 @@ button.v2-studio-crumb:focus-visible { outline: 2px solid var(--purple, #7B61E0)
 .v2-studio-tray-in { min-width: 0; width: 100%; box-sizing: border-box; min-height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 5px 9px; font: inherit; font-size: 13px; line-height: 1.45; background: var(--bg); color: var(--ink); }
 /* ② 카드를 통째로 다시 쓰게 하는 한마디 */
 .v2-studio-ask { display: flex; gap: 6px; padding: 10px 16px 14px; }
+/* ② AI 가 카드를 고치는 중 — 칸 대신 기다림 줄(점검 4-2) */
+.v2-studio-ask--wait { align-items: center; gap: 8px; color: var(--purple-text, #5B3FD0); font-weight: 700; font-size: 13px; }
 .v2-studio-ask-in { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); }
 .v2-studio-intro-cards b { display: block; font-size: 14px; margin-bottom: 3px; }
 .v2-studio-intro-cards small { color: var(--ink-sub); line-height: 1.5; display: block; }

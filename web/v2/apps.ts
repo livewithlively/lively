@@ -102,19 +102,22 @@ export function visibleApps(): AppDef[] { return APPS.filter((a) => !a.hidden &&
  *  여기서 openInstalledApp 을 부르면 #/i/<id> 로 가는데, 그 앱들은 UI 페이지가 없어 그 자리에서 죽는다(#2423).
  *  UI 앱이면 UI 를(샌드박스 iframe), 아니면 그 앱 전용 AI 세션을 연다. 서버가 화면을 만드는 앱(web.server)도 UI 앱이다(#4485 후속 — hasAppScreen).
  */
-export function openAppEntry(a: SessionApp, go?: (hash: string) => void): Promise<boolean> {
+export function openAppEntry(a: SessionApp, go?: (hash: string) => void, onError?: (why: string) => void): Promise<boolean> {
   if (a.system?.route) { if (go) go(a.system.route); else location.hash = a.system.route; return Promise.resolve(true); }
-  if (hasAppScreen(a) || a.system) return openInstalledApp(a, null, { go });
+  if (hasAppScreen(a) || a.system) return openInstalledApp(a, null, { go, onError });
   void openAppSession(a.id, { title: a.title }); return Promise.resolve(true);
 }
 
 /** 앱 id 로 연다 — 지금 이 사람에게 서 있는 앱(앱 찾기와 같은 목록)이면 openAppEntry, 없으면 false(호출부가 말한다).
  *  앱빌더의 「앱 화면으로 보기」 · 「지금 써 보기」 도 이 길이다(원준 2026-10-28 «앱 들어가서 그 회의록 앱 눌렀을 때랑 똑같은 게 실행되게»).
  *  go — 주소를 바꾸는 법(없으면 location.hash). 앱빌더 ③ 은 그 주소를 받아 코멘트 층이 그리로 간다 — 열지 못했으면 go 가 안 불린다. */
-export async function openAppById(appId: string, go?: (hash: string) => void): Promise<boolean> {
+export async function openAppById(appId: string, go?: (hash: string) => void, onError?: (why: string) => void): Promise<boolean> {
   const a = (await listSessionApps()).find((x) => x.id === appId);
   if (!a) return false;
-  await openAppEntry(a, go);   // 열다 실패하면(동의 거절 · 서버 오류) 그쪽이 말한다 — 여기선 «목록에 있었다» 만 돌려준다
+  //  열다 실패하면(서버 오류) 그쪽이 말한다 — onError 를 주면 그리로(부른 쪽이 제 말로) · 동의 거절은 조용히. 여기선 «목록에 있었다» 만 돌려준다.
+  //   화면이 없는 앱(세션 앱)은 앱 화면으로 볼 수 없다 — onError 를 준 쪽(앱빌더 ③)에는 세션을 열지 않고 그렇다고 말한다.
+  if (onError && !(hasAppScreen(a) || a.system)) { onError('이 앱에는 앱 화면이 없어요'); return true; }
+  await openAppEntry(a, go, onError);
   return true;
 }
 

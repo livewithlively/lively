@@ -175,6 +175,9 @@ export async function openInstalledApp(app: {
   state?: Record<string, unknown>;
   /** 주소를 바꾸는 법 — 없으면 location.hash. 라우터 안에서 부르면 replace 로 넘겨 뒤로 가기에 자리를 남기지 않는다. */
   go?: (hash: string) => void;
+  /** 열지 못했을 때(서버 오류 · 이상한 답) 까닭을 받는다 — 주면 여기서 알리지 않고 부른 쪽이 제 말로 알린다(앱빌더 ③ 「앱 화면을 열지 못했어요(까닭)」 · 점검 6-15).
+   *  사람이 동의 · 실행 자리를 거절한 것은 실패가 아니라 부르지 않는다. */
+  onError?: (why: string) => void;
 }): Promise<boolean> {
   try {
     if (app.runtime) {
@@ -194,7 +197,8 @@ export async function openInstalledApp(app: {
     if (extra?.go) extra.go(hash); else location.hash = hash;
     return true;
   } catch (e: any) {
-    toast('앱을 열지 못했어요 — ' + (e && e.message ? e.message : e), true);
+    const why = String(e && e.message ? e.message : e);
+    if (extra?.onError) extra.onError(why); else toast('앱을 열지 못했어요. ' + why, true);
     return false;
   }
 }
