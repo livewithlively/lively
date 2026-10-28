@@ -20,6 +20,17 @@
 //
 //  ⚠ 여는 것은 되돌릴 수 없다. 그래서 조건을 넓히지 마라 — 특히 `external_system='local'` 과
 //   `fields.root='personal'` 두 술어는 «자동 잠금이 만든 행» 의 정의 그 자체다.
+//
+//  #2202 — 같은 자리에서 **Zotero 개인 라이브러리** 자동 잠금도 푼다. 커넥터가 개인 라이브러리 자료를 주인에게 잠가
+//   들여왔는데(RawItem.audience → stampSourceAudience), 워크스페이스에 연결한 자료는 팀과 함께 쓰는 것으로 정했다(장원준
+//   2026-10-28). 잠금 기제는 커넥터에서 걷었고, 남은 잠긴 행을 여기서 연다. «자동 잠금이 만든 행» 의 정의:
+//   `external_system='zotero'` ∧ `fields.library` 가 `users/…`(개인 라이브러리) ∧ 대상이 **정확히 그 주인 한 사람**
+//   (`fields.owner_member`) ∧ 수집 단위가 대상을 정하는 연결이 없음 ∧ 그 테넌트에 Zotero 인입정책이 없음.
+//   대상이 주인 말고 한 명이라도 더 있거나 다르면(사람·정책이 정한 것) 건드리지 않는다.
+//   ⚠ 사람이 손으로 «주인 한 사람만» 으로 잠근 행은 자동 잠금과 똑같이 생겨 구분할 수 없다 — 단건 자료 공개범위를 바꾸는
+//    수단이 없어(위 배경) 실제로는 생기지 않는다고 보고 연다. 그런 수단이 생기면 이 술어를 다시 보라.
+//   ⚠ Zotero 정책이 있는 테넌트의 옛 잠금은 여기서 열지 않는다 — 정책 backfill 이 다시 판정할 몫이다(그 전까진 주인 말고는
+//    못 보고, 주인이 아닌 신원으로 도는 증류에도 안 보인다).
 import { itemsPool, withTx } from "../db/client.js";
 import { logger } from "../log.js";
 
@@ -45,9 +56,20 @@ export async function reconcilePersonalUploadVisibility(): Promise<PersonalUnloc
   //  테넌트 축은 두 표에 tenant_id 가 다 있을 때만 건다(없으면 단일 테넌트라 구분할 것이 없다).
   const polTable = await hasTable("org_source_vis_policy");
   const byTenant = polTable && await hasColumn("org_source_vis_policy", "tenant_id") && await hasColumn("source", "tenant_id");
-  const governed = polTable
-    ? `EXISTS (SELECT 1 FROM org_source_vis_policy p WHERE p.enabled AND p.match_system='local'${byTenant ? " AND p.tenant_id = s.tenant_id" : ""})`
+  const governed = (system: "local" | "zotero"): string => polTable
+    ? `EXISTS (SELECT 1 FROM org_source_vis_policy p WHERE p.enabled AND p.match_system='${system}'${byTenant ? " AND p.tenant_id = s.tenant_id" : ""})`
     : "false";
+  //  #2202 Zotero — 수집 단위가 대상을 정하는 자료(audience=true 연결)는 단위의 잠금이다. 그 표가 없으면 그런 연결도 없다.
+  const unitAudience = (await hasTable("collect_unit_source"))
+    ? `EXISTS (SELECT 1 FROM collect_unit_source us WHERE us.source_id = s.id AND us.audience)` : "false";
+  const zoteroAutoLock = `s.external_system='zotero'
+           AND s.fields->>'library' LIKE 'users/%'
+           AND COALESCE(s.fields->>'owner_member', '') <> ''
+           AND EXISTS (SELECT 1 FROM source_member m WHERE m.source_id = s.id)
+           AND NOT EXISTS (SELECT 1 FROM source_member m WHERE m.source_id = s.id
+                            AND NOT (m.subject_kind='member' AND m.member_id = s.fields->>'owner_member'))
+           AND NOT ${unitAudience}
+           AND NOT ${governed("zotero")}`;
 
   //  지식 술어에 쓰는 표 확인은 트랜잭션 **전에**(풀 읽기). 리스트 grant 표가 없는 배포면 그 술어는 참(grant 가 있을 수 없다).
   const listed = (await hasTable("knowledge_list_grant"))
@@ -71,9 +93,10 @@ export async function reconcilePersonalUploadVisibility(): Promise<PersonalUnloc
       WITH tgt AS (
         UPDATE source s SET visibility='open', updated_at=now()
          WHERE s.visibility='members'
-           AND s.external_system='local'
-           AND s.fields->>'root'='personal'
-           AND NOT ${governed}
+           AND ((s.external_system='local'
+                 AND s.fields->>'root'='personal'
+                 AND NOT ${governed("local")})
+             OR (${zoteroAutoLock}))
         RETURNING s.id),
       freed AS (DELETE FROM source_member m WHERE m.source_id IN (SELECT id FROM tgt) RETURNING 1)
       SELECT (SELECT count(*) FROM tgt)::int AS sources, (SELECT count(*) FROM freed)::int AS grants,
@@ -109,7 +132,7 @@ export async function reconcilePersonalUploadVisibilitySafe(): Promise<PersonalU
   try {
     const r = await reconcilePersonalUploadVisibility();
     if (r.sources || r.knowledge) {
-      logger.info(`[vis] 개인 업로드 자동 잠금 해제(#4007) — 자료 ${r.sources}건(대상 ${r.sourceGrants}행) · 지식 ${r.knowledge}건`);
+      logger.info(`[vis] 개인 업로드·Zotero 개인 라이브러리 자동 잠금 해제(#4007·#2202) — 자료 ${r.sources}건(대상 ${r.sourceGrants}행) · 지식 ${r.knowledge}건`);
     }
     return r;
   } catch (e) {

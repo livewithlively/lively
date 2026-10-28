@@ -3,7 +3,7 @@
 //
 //  이 테스트가 지키는 것: ① 주석은 논문이 아니라 PDF 첨부에 달린다(주석 → 첨부 → 논문) — 묶기가 틀리면 하이라이트가
 //  조용히 사라진다. ② 증분 run 은 바뀐 주석 하나로 그 논문 전체를 다시 묶어야 한다(주석만 따로 오면 뜻이 없다).
-//  ③ 개인 라이브러리 자료만 주인에게 잠긴다. ④ 증류 사전필터 표지(머리)는 주석·노트가 있을 때만 달린다.
+//  ③ 커넥터는 자료를 잠그지 않는다(개인 라이브러리도 조직 정책을 따른다 · #2202) — 주인은 기록만. ④ 증류 사전필터 표지(머리)는 주석·노트가 있을 때만 달린다.
 import assert from "node:assert/strict";
 import {
   parseLibraryList, parseCollectionKeys, expandCollections, colorName, noteHtmlToText, creatorsLine, yearOf,
@@ -88,7 +88,7 @@ t("buildPaperDoc: 생각이 있을 때만 머리가 붙고, 자동 태그는 빠
   assert.equal(off.updatedAt, "2026-03-01T00:00:00.000Z", "꺼 둔 주석이 바뀌어도 수정 시각이 따라와야 커서가 멈추지 않는다");
 });
 
-t("paperToItem: 자료로 간다 · kind=zotero_item · 개인만 주인에게 잠긴다 · instance 없이 같은 외부 좌표", () => {
+t("paperToItem: 자료로 간다 · kind=zotero_item · 개인 라이브러리도 잠그지 않고 주인만 기록 · instance 없이 같은 외부 좌표", () => {
   const lib = { kind: "users" as const, id: "7" };
   const it = paperToItem(paper, { notes: [], attachments: [] }, opts, { lib, libraryName: "내 라이브러리", collectionNames: [], username: "u7", owner: "m1" });
   assert.equal(routeIngestV6(it.type, "zotero"), "source");
@@ -97,7 +97,8 @@ t("paperToItem: 자료로 간다 · kind=zotero_item · 개인만 주인에게 �
   assert.equal(it.provenance.external_id, "users/7:P1");
   assert.equal(it.provenance.instance, undefined);
   assert.equal(it.provenance.external_url, "https://www.zotero.org/u7/items/P1");
-  assert.deepEqual(it.audience, ["m1"]);
+  assert.equal(it.audience, undefined, "커넥터가 개인 라이브러리 자료에 잠금 표시(audience)를 냈다 — 워크스페이스에 연결한 자료는 조직 정책을 따른다");
+  assert.equal(it.fields?.owner_member, "m1");
   assert.equal(it.fields?.has_thinking, false);
   const g = paperToItem(paper, { notes: [], attachments: [] }, opts, { lib: { kind: "groups", id: "9" }, libraryName: "Lab", collectionNames: [], owner: undefined });
   assert.equal(g.audience, undefined, "그룹 라이브러리 자료를 한 사람에게 잠갔다");
@@ -202,13 +203,14 @@ async function run(libs: Record<string, Lib>, cfg: Record<string, string | undef
 }
 const ids = (xs: RawItem[]): string[] => xs.map((x) => x.provenance.external_id).sort();
 
-t("★ full: 논문마다 주석(첨부 아래)·노트가 묶이고, 독립 노트·부모 없는 PDF 도 한 건 · 개인만 잠긴다", async () => {
+t("★ full: 논문마다 주석(첨부 아래)·노트가 묶이고, 독립 노트·부모 없는 PDF 도 한 건 · 아무것도 잠그지 않는다", async () => {
   const { out } = await run(library(), { token_source: "member:m1" });
   assert.deepEqual(ids(out), ["groups/9:G1", "users/7:F2", "users/7:P1", "users/7:P2", "users/7:P3", "users/7:P4", "users/7:S1"]);
   const p1 = out.find((x) => x.provenance.external_id === "users/7:P1")!;
   assert.ok(p1.body!.includes("«핵심»") && p1.body!.includes("내 판단") && p1.body!.includes("컬렉션: 리뷰"));
   assert.equal(p1.fields?.has_thinking, true);
-  assert.deepEqual(p1.audience, ["m1"]);
+  assert.equal(p1.audience, undefined, "커넥터가 개인 라이브러리 자료에 잠금 표시(audience)를 냈다 — 잠그지 않아야 한다");
+  assert.equal(p1.fields?.owner_member, "m1");
   assert.ok(out.find((x) => x.provenance.external_id === "users/7:F2")!.body!.includes("부모 없는 PDF 의 주석"));
   assert.ok(out.find((x) => x.provenance.external_id === "users/7:S1")!.body!.includes(NOTE_HEAD));
   const g1 = out.find((x) => x.provenance.external_id === "groups/9:G1")!;
@@ -236,11 +238,13 @@ t("★ 라이브러리 하나가 실패하면 나머지는 받되 run 은 실패
   assert.equal(gone.error, null, "나간 그룹이 매 run 실패를 만든다");
 });
 
-t("주인을 모르는 수집기(키를 직접 붙인 것)는 개인 라이브러리를 건너뛴다 — 잠글 사람을 모르면 열지 않는다", async () => {
+t("주인을 모르는 수집기(키를 직접 붙인 것)도 개인 라이브러리를 모은다 — 잠그지 않으니 주인을 몰라도 된다(주인 칸만 빈다)", async () => {
   const r = await run(library(), { token_source: undefined, token: "KEY" });
-  assert.deepEqual(ids(r.out), ["groups/9:G1"]);
-  const only = await run(library(), { token_source: undefined, token: "KEY", libraries: "users/7" });
-  assert.match(String(only.error?.message), /주인/, "모을 것이 개인 라이브러리뿐인데 0건 성공으로 끝났다");
+  assert.equal(r.error, null);
+  assert.ok(ids(r.out).includes("users/7:P1") && ids(r.out).includes("groups/9:G1"), "주인을 모른다고 개인 라이브러리를 건너뛰었다");
+  const p1 = r.out.find((x) => x.provenance.external_id === "users/7:P1")!;
+  assert.equal(p1.audience, undefined);
+  assert.equal(p1.fields?.owner_member, null);
 });
 
 t("라이브러리를 고르면 그것만 · 노트를 끄면 독립 노트가 빠지고 논문 본문에 노트 머리가 없다", async () => {
