@@ -469,7 +469,9 @@ function folderRow(a: BApp, refresh: () => void): HTMLElement {
 /** 카드 작은 줄의 버전 — 공개한 앱에 공개 전 버전이 있으면 둘을 나눠 적는다(«공개 V3 · 내 버전 V5» · 감사 6-9). */
 function verLine(a: BApp, me: string): string {
   if (a.visibility !== 'all' || !a.publishedNo) return verName(a.versionNo);
-  if (!a.draft || a.draft.versionNo === a.publishedNo) return verName(a.publishedNo);
+  //  초안이 없으면 설치된 판이 곧 모두가 쓰는 판이다 — 배포 설정 「버전」 의 «지금 쓰는 버전»과 같은 번호를 적는다(공개 번호는 같은 내용의 옛 판을 가리킬 수 있다).
+  if (!a.draft) return verName(a.versionNo || a.publishedNo);
+  if (a.draft.versionNo === a.publishedNo) return verName(a.publishedNo);
   return '공개 ' + verName(a.publishedNo) + ' · ' + (a.draft.by === me ? '내 버전 ' : '비공개 ') + verName(a.draft.versionNo);
 }
 
