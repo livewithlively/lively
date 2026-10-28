@@ -3,9 +3,18 @@
 //  · 본인 안내(myServiceSeatNotice) — [내 AI 계정] 에 둔다: 내 계정이 지정됐을 때만 보이고, 동의 · 거두기를 받는다.
 //  두 쪽 다 /api/ui/ai-account(service_seats · settings)를 읽고, 바꾸는 것은 /api/ui/ai-service-seats · /api/ui/ai-account 뿐이다.
 //  ★ 켜는 데는 두 사람이 필요하다(관리자 승인 + 그 계정 본인 동의) — 한쪽만으로는 켜지지 않는다. 그래서 화면도 «기다리는 쪽» 을 말한다.
-import { api, cardHead, el, errorNote, relTime, toast, uiText } from '../core.js';
-import { field } from '../ui-primitives.js';
-import { memberCombo } from './widgets.js';
+//  lib/ 는 페이지 층(core · ui-primitives)을 모른다(scripts/check-imports R28/R29) — 원 출처에서 직접 받는다.
+import { api } from './net.js';
+import { el } from './dom.js';
+import { toast } from './overlay.js';
+import { relTime } from './format.js';
+import { uiText } from './uitext.js';
+import { cardHead, errorNote, memberCombo } from './widgets.js';
+
+/** 라벨 + 컨트롤 한 칸 — ui-primitives.field 와 같은 꼴(lib 는 그 파일을 import 하지 않는다). */
+function field(label: string, control: HTMLElement): HTMLElement {
+  return el('div', { class: 'field' }, el('label', { class: 'field-label', text: label }), control);
+}
 
 interface SeatRow {
   member: string; on: boolean; state: string;
