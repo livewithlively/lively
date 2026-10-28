@@ -79,6 +79,7 @@ export interface StudioRec {
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
+const WIN_KEY = 'lively_v2_app_studio_chatwin';
 export const PROJECT_NAME = BUILDER_PROJECT_NAME;   // #4632 — 앱빌더가 여는 세션은 전부 이 프로젝트. 사람에게는 프로젝트가 아니라 앱빌더가 그 문이다(lib/builder-flow)
 const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안건을 모으고 끝난 것 표시', card: { name: '회의 안건', who: '회의를 준비하는 사람과 참석자 모두', items: '안건 제목 · 회의 날짜 · 끝남 표시', can: ['안건 더하기', '회의별로 모아 보기', '끝난 것 접기'], not: '회의록 쓰기 · 알림 보내기', first: '이번 회의 안건 목록(안 끝난 것 먼저)' } };
 
@@ -149,6 +150,10 @@ export function studioRecBuildingFor(appId: string): boolean { return !!appId &&
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
 function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (_) { /* noop */ } }
+//  AI 세션 창의 자리 · 크기(떠 있는 창 l·t·w·h · 오른쪽 칸 너비 side) — 사람이 맞춘 대로 다음에도 연다(원준 2026-10-28 «창 사이즈 조절이 안 됨»).
+interface WinGeom { l?: number; t?: number; w?: number; h?: number; side?: number }
+function readGeom(): WinGeom { try { const g = JSON.parse(localStorage.getItem(WIN_KEY) || '{}'); return g && typeof g === 'object' ? g : {}; } catch (_) { return {}; } }
+function saveGeom(patch: WinGeom): void { try { localStorage.setItem(WIN_KEY, JSON.stringify({ ...readGeom(), ...patch })); } catch (_) { /* noop */ } }
 
 // ── 세션 · 기록 · 나 ──────────────────────────────────────────────────────────────────────
 let meCache: { id: string; name: string } | null = null;
@@ -730,13 +735,87 @@ async function build(rec: StudioRec): Promise<void> {
   const sideHead = el('div', { class: 'v2-studio-side-head' }, el('b', { text: 'AI 세션' }), el('small', { text: '이 앱을 만드는 대화' }), el('span', { class: 'v2-studio-sp' }),
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '떼어 내기', onclick: () => { S.chatMode = 'float'; applyPlace(); } }),
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => { S.chatMode = 'off'; applyPlace(); } }));
-  const side = el('div', { class: 'v2-studio-side' }, sideHead, chatHost);
-  const winHead = el('div', { class: 'v2-studio-chatwin-head', title: '끌어서 옮길 수 있어요. 오른쪽 끝에 놓으면 붙어요.' }, el('b', { text: 'AI 세션' }), el('small', { text: '끌어서 오른쪽 끝에 놓으면 붙어요' }), el('span', { class: 'v2-studio-sp' }),
+  //  오른쪽 칸 너비 — 칸의 왼쪽 가장자리를 끌어 바꾼다(원준 2026-10-28).
+  const sideGrip = el('span', { class: 'v2-studio-sidegrip', title: '끌어서 너비를 바꿔요', 'aria-hidden': 'true' });
+  const side = el('div', { class: 'v2-studio-side' }, sideGrip, sideHead, chatHost);
+  //  떠 있는 창 — 머리줄을 끌어 옮기고 · 가장자리와 모서리를 끌어 크기를 바꾸고 · 「크게 보기」(머리줄 두 번 눌러도)로 화면을 거의 다 쓴다(원준 2026-10-28 «사이즈가 고정 · 대화하기 너무 불편»).
+  const bigBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '크게 보기', onclick: () => toggleBig() }) as HTMLButtonElement;
+  const winHead = el('div', { class: 'v2-studio-chatwin-head', title: '끌어서 옮길 수 있어요. 가장자리를 끌면 크기가 바뀌어요.' }, el('b', { text: 'AI 세션' }), el('small', { text: '끌어서 오른쪽 끝에 놓으면 붙어요' }), el('span', { class: 'v2-studio-sp' }), bigBtn,
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '오른쪽에 붙이기', onclick: () => { S.chatMode = 'dock'; applyPlace(); } }),
     el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✕', title: '닫기', 'aria-label': 'AI 세션 닫기', onclick: () => { S.chatMode = 'off'; applyPlace(); } }));
   const winBody = el('div', { class: 'v2-studio-chatwin-body' });
-  const chatWin = el('div', { class: 'v2-studio-chatwin', hidden: true, role: 'dialog', 'aria-label': 'AI 세션' }, winHead, winBody);
+  const grips = (['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const).map((d) => el('span', { class: 'v2-studio-grip v2-studio-grip--' + d, 'data-d': d, 'aria-hidden': 'true' }));
+  const chatWin = el('div', { class: 'v2-studio-chatwin', hidden: true, role: 'dialog', 'aria-label': 'AI 세션' }, winHead, winBody, ...grips);
   const dockHint = el('div', { class: 'v2-studio-dockhint', hidden: true }, el('span', { text: '여기에 놓으면 오른쪽에 붙어요' }));
+  const WIN_TOP = 48, WIN_MIN_W = 320, WIN_MIN_H = 240;   // 창 위끝은 머리줄(48px) 아래 · 가장 작은 크기
+  type Geom = { l: number; t: number; w: number; h: number };
+  const clampN = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+  const winNow = (): Geom | null => {
+    if (!root) return null;
+    const r = chatWin.getBoundingClientRect(), rr = root.getBoundingClientRect();
+    return { l: r.left - rr.left, t: r.top - rr.top, w: r.width, h: r.height };
+  };
+  //  화면 안에 들게 — 창이 줄었거나 저장한 크기가 지금 화면보다 크면 줄여서 넣는다.
+  const fitWin = (g: Geom): Geom | null => {
+    if (!root) return null;
+    const rr = root.getBoundingClientRect();
+    const w = clampN(g.w, Math.min(WIN_MIN_W, rr.width), rr.width), h = clampN(g.h, Math.min(WIN_MIN_H, rr.height - WIN_TOP), rr.height - WIN_TOP);
+    return { l: clampN(g.l, 0, rr.width - w), t: clampN(g.t, WIN_TOP, rr.height - h), w, h };
+  };
+  const setWin = (g: Geom | null): void => {
+    if (!g) return;
+    Object.assign(chatWin.style, { left: g.l + 'px', top: g.t + 'px', width: g.w + 'px', height: g.h + 'px', right: 'auto', bottom: 'auto' });
+  };
+  let bigFrom: Geom | null = null;   // 「크게 보기」 전의 자리 — 「작게 보기」가 돌아간다(크게 본 것은 저장하지 않는다)
+  const paintBig = (): void => { bigBtn.textContent = bigFrom ? '작게 보기' : '크게 보기'; };
+  const toggleBig = (): void => {
+    if (!root) return;
+    if (bigFrom) { setWin(fitWin(bigFrom)); bigFrom = null; }
+    else {
+      bigFrom = winNow();
+      const rr = root.getBoundingClientRect();
+      setWin(fitWin({ l: 12, t: WIN_TOP + 8, w: rr.width - 24, h: rr.height - WIN_TOP - 20 }));
+    }
+    paintBig();
+  };
+  const keepWin = (): void => { const g = winNow(); if (g) saveGeom(g); bigFrom = null; paintBig(); };
+  winHead.addEventListener('dblclick', (e: MouseEvent) => { if (!(e.target as HTMLElement).closest('button')) toggleBig(); });
+  for (const grip of grips) grip.addEventListener('pointerdown', (e: PointerEvent) => {
+    const g0 = winNow(); if (!g0 || !root) return;
+    e.preventDefault(); e.stopPropagation();
+    const d = grip.dataset.d || '', rr = root.getBoundingClientRect();
+    grip.setPointerCapture(e.pointerId); root.classList.add('v2-studio--drag');
+    const move = (ev: PointerEvent): void => {
+      const dx = ev.clientX - e.clientX, dy = ev.clientY - e.clientY;
+      let { l, t, w, h } = g0;
+      if (d.includes('e')) w = clampN(g0.w + dx, WIN_MIN_W, rr.width - g0.l);
+      if (d.includes('w')) { w = clampN(g0.w - dx, WIN_MIN_W, g0.l + g0.w); l = g0.l + g0.w - w; }
+      if (d.includes('s')) h = clampN(g0.h + dy, WIN_MIN_H, rr.height - g0.t);
+      if (d.includes('n')) { h = clampN(g0.h - dy, WIN_MIN_H, g0.t + g0.h - WIN_TOP); t = g0.t + g0.h - h; }
+      setWin({ l, t, w, h });
+    };
+    const up = (): void => {
+      grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
+      root?.classList.remove('v2-studio--drag'); keepWin();
+    };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+  });
+  sideGrip.addEventListener('pointerdown', (e: PointerEvent) => {
+    if (!root) return;
+    e.preventDefault();
+    const br = body.getBoundingClientRect();
+    sideGrip.setPointerCapture(e.pointerId); root.classList.add('v2-studio--drag', 'v2-studio--sizing');
+    let w = side.getBoundingClientRect().width;
+    const move = (ev: PointerEvent): void => {
+      w = clampN(br.right - ev.clientX, 300, Math.max(300, br.width - 360));   // 가운데 칸이 360px 아래로 줄지 않게
+      body.style.setProperty('--studio-side-w', 'min(' + Math.round(w) + 'px, 70%)');
+    };
+    const up = (): void => {
+      sideGrip.removeEventListener('pointermove', move); sideGrip.removeEventListener('pointerup', up); sideGrip.removeEventListener('pointercancel', up);
+      root?.classList.remove('v2-studio--drag', 'v2-studio--sizing'); saveGeom({ side: Math.round(w) });
+    };
+    sideGrip.addEventListener('pointermove', move); sideGrip.addEventListener('pointerup', up); sideGrip.addEventListener('pointercancel', up);
+  });
   winHead.addEventListener('pointerdown', (e: PointerEvent) => {
     if ((e.target as HTMLElement).closest('button') || !root) return;
     const r = chatWin.getBoundingClientRect(), rr = root.getBoundingClientRect(); const dx = e.clientX - r.left, dy = e.clientY - r.top;
@@ -750,11 +829,12 @@ async function build(rec: StudioRec): Promise<void> {
     const up = (ev: PointerEvent): void => {
       winHead.removeEventListener('pointermove', move); winHead.removeEventListener('pointerup', up); winHead.removeEventListener('pointercancel', up);
       root?.classList.remove('v2-studio--drag'); dockHint.hidden = true;
-      if (near(ev.clientX)) { S.chatMode = 'dock'; applyPlace(); }
+      if (near(ev.clientX)) { S.chatMode = 'dock'; applyPlace(); } else if (!bigFrom) { const g = winNow(); if (g) saveGeom(g); }
     };
     winHead.addEventListener('pointermove', move); winHead.addEventListener('pointerup', up); winHead.addEventListener('pointercancel', up);
   });
   const body = el('div', { class: 'v2-studio-body' }, stage, side);
+  { const sw = readGeom().side; if (sw) body.style.setProperty('--studio-side-w', 'min(' + sw + 'px, 70%)'); }
   const paintBar = (): void => {
     //  지난 단계는 눌러서 돌아가고(원준 2026-10-14 «뒤로 가는 게 너무 없다»), 와 본 앞 단계는 눌러서 다시 간다(원준 2026-10-19) — 적은 것은 기록에 있으니 날아가지 않는다.
     paintStageBar(bar, stageIndex(rec.stage), reachedOf(rec), rec.mode, (i, label) => {
@@ -871,8 +951,12 @@ async function build(rec: StudioRec): Promise<void> {
     if (host && chatHost.parentElement !== host) host.append(chatHost);
     body.classList.toggle('v2-studio-body--solo', !inSide);
     chatWin.hidden = S.chatMode !== 'float';
+    if (S.chatMode === 'float') { const g = readGeom(); bigFrom = null; paintBig(); if (g.w && g.h && g.l != null && g.t != null) setWin(fitWin({ l: g.l, t: g.t, w: g.w, h: g.h })); }
     chatBtn.textContent = S.chatMode === 'off' ? 'AI 세션 보기' : 'AI 세션 닫기';
   };
+  //  브라우저 창이 줄면 떠 있는 창도 화면 안으로 들인다(저장한 크기는 그대로 둔다).
+  const onWinResize = (): void => { if (S.chatMode === 'float' && chatWin.style.width) setWin(fitWin(winNow() || { l: 0, t: WIN_TOP, w: WIN_MIN_W, h: WIN_MIN_H })); };
+  window.addEventListener('resize', onWinResize);
   const appHost = (): HTMLElement => { const h0 = appBox.querySelector('.v2-studio-app-body') as HTMLElement | null; if (h0) return h0; const h = el('div', { class: 'v2-studio-app-body' }); appBox.replaceChildren(h); return h; };
   const waiting = (title: string, sub: string, steps?: HTMLElement, still = false): void => {
     appHost().replaceChildren(el('div', { class: 'v2-studio-wait' + (still ? ' v2-studio-wait--still' : '') }, ...(still ? [] : [el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' })]), el('b', { text: title }), ...(steps ? [steps] : []), ...sub.split('\n').map((t) => el('p', { text: t }))));
@@ -1428,7 +1512,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
-    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); window.removeEventListener('resize', onWinResize); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
