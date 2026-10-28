@@ -186,6 +186,21 @@ async function sendPrompt(rec: StudioRec, text: string): Promise<boolean> {
     return true;
   } catch (e: any) { toast('AI에게 보내지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); return false; }
 }
+/** 세션 한 줄(목록 API) — 없으면 null(목록에 없음), 못 읽으면 undefined(모름). */
+async function sessionRow(sid: string): Promise<any | null | undefined> {
+  try { const d: any = await api('/api/ui/terminal/sessions?only=' + encodeURIComponent(sid) + '&includeProjects=1'); return Array.isArray(d?.sessions) ? (d.sessions[0] || null) : undefined; }
+  catch (_) { return undefined; }
+}
+/**
+ * 꺼진 만들기 세션을 되살린다 — 되살리면 대개 **새 세션 id** 가 선다(서버 restore 가 대화 · 아직 못 간 글(아웃박스)을 새 세션으로 옮긴다 ·
+ *  같은 id 로 되살리거나 이미 이어진 세션이면 그 id). 돌려주는 것: 이제 말을 걸 세션 id 와 (있으면) 그 세션 줄.
+ *  ⚠ 옛 id 에 계속 보내면 글이 꺼진 세션의 아웃박스에 쌓여 AI 에게 닿지 않는다(원준 2026-10-28 «앱빌더에서 수정한 게 AI 세션 안에까지 안 들어간다 · 특히 AI 를 꺼 둔 상태일 때»).
+ */
+async function reviveSession(sid: string): Promise<{ id: string; row: any | null }> {
+  const out: any = await api(restorePath(sid), { method: 'POST', body: '{}' });
+  const row = out && out.session && out.session.id ? out.session : null;
+  return { id: String((row && row.id) || (out && (out.movedTo || out.id)) || sid), row };
+}
 /** 앱빌딩 세션 이름을 못 박는다(사람이 지은 이름 — 에이전트의 session_rename 이 덮지 못한다). 실패해도 만들기는 간다. */
 async function relabel(sid: string, name: string | undefined, mode: 'new' | 'copy' | 'edit'): Promise<void> {
   try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid), { method: 'POST', body: JSON.stringify({ label: builderSessionLabel(name, mode) }) }); } catch (_) { /* 이름은 못 바꿔도 된다 */ }
@@ -626,6 +641,14 @@ function start(prefill?: StudioRec | null): void {
     if (prefill) {
       //  뒤로 와서 고친 뒤 — 세션은 그대로, 기획 카드만 다시 청한다. 적은 것은 기록에 남는다.
       const rec = prefill;
+      //  꺼진 세션이면 먼저 되살려 새 세션으로 옮긴다(build 의 ensureLive 와 같은 까닭 — 꺼진 세션에 보낸 글은 AI 에게 닿지 않는다).
+      const row = await sessionRow(rec.sid);
+      if (row && row.restorable === true && !(row.node && row.node.online === false)) {
+        try {
+          const r = await reviveSession(rec.sid);
+          if (r.id !== rec.sid) { writeRecs(readRecs().filter((x) => x.sid !== rec.sid)); rec.sid = r.id; rec.from = 0; saveRec(rec); if (mountOpts.onSession) mountOpts.onSession(r.id); }
+        } catch (e: any) { toast('AI 세션을 다시 켜지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); go.disabled = false; go.textContent = '이 내용으로 다시 기획'; return; }
+      }
       //  먼저 보낸다 — 못 보냈으면 기록을 그대로 둔다(고치던 것은 whatEdit 에 남아 있다 · 격리 리뷰).
       if (!(await sendPrompt(rec, planBrief(what, place, nm)))) { go.disabled = false; go.textContent = '이 내용으로 다시 기획'; return; }
       rec.what = what; rec.place = place; if (nm) { rec.title = nm; rec.named = true; } else { delete rec.title; rec.named = false; }
@@ -1229,17 +1252,79 @@ async function build(rec: StudioRec): Promise<void> {
   };
   /** 새로 AI 에게 일을 맡겼다 — 지난 멈춤을 걷고 60초 동안은 멈췄다 하지 않는다(말이 막 닿는 틈). */
   const armRun = (): void => { S.stallT0 = 0; S.quietTill = Date.now() + 60000; S.limit = ''; setStall(null); };
-  //  이 화면에서 AI 에게 보내는 글은 모두 여기로 — 보내면 멈춤 판정을 처음부터.
-  const send = async (text: string): Promise<boolean> => { const ok = await sendPrompt(rec, text); if (ok) armRun(); return ok; };
+  /** AI 세션 화면을 끼운다(리브와 같은 방식: 목록을 한 번 읽어 그 세션 한 장으로) — 기본 터미널 보기(chatHome 아님).
+   *  extra — 막 되살린 세션 줄(목록이 아직 못 따라왔을 수 있다 · 최대 8초 늦다). 세션 화면이 스스로 이어받으면(onResumed) 그 세션으로 옮긴다. */
+  const mountChat = async (extra: any | null): Promise<void> => {
+    if (S.chat) { S.chat.destroy(); S.chat = null; }
+    const sid = rec.sid;
+    try {
+      const [live, logs] = await Promise.all([
+        api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
+        api('/api/ui/v6/sessions?limit=40').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
+      ]);
+      if (S.dead || sid !== rec.sid) return;
+      const { mergeSessions, renderSession } = await import('./views.js');   // 정적으로 들여오면 views → apps → app-studio → views 순환(check-imports)
+      const made = takeCreated(sid);
+      let rows = made ? [made, ...(live as any[])] : (live as any[]);
+      if (extra && extra.id === sid && !rows.some((x: any) => x && x.id === sid)) rows = [extra, ...rows];
+      //  세션 이름 되맞추기 — 정한 앱 이름이 있는데 세션 이름이 «"이름" 앱 제작» 꼴이 아니면(옛 머리말 · AI 가 지은 이름) 한 번 바로잡는다(원준 2026-10-15).
+      const row = rows.find((x: any) => x && x.id === sid);
+      const nm = String(rec.title || (rec.card && rec.card.name) || '').trim();
+      if (row && nm && String(row.label || '').trim() !== builderSessionLabel(nm, rec.mode)) void relabel(sid, nm, rec.mode);
+      chatHost.replaceChildren();
+      S.chat = renderSession(chatHost, { projects: [], sessions: mergeSessions(rows, logs as any[]), loadedAt: Date.now() } as any, sid,
+        { solo: true, isVisible: () => !!root && chatHost.isConnected, onResumed: (nid: string) => { void adoptSid(nid); } });
+    } catch (e: any) {
+      chatHost.replaceChildren(el('p', { class: 'v2-muted', text: 'AI 세션을 열지 못했어요. ' + (e && e.message ? e.message : e) }));
+    }
+  };
+  /**
+   * 만들기 세션이 새 id 로 이어졌다(되살리기 · 세션 화면의 자동 이어받기) — 기록 · 주소 · 세션 화면 · 답 읽기를 모두 새 세션으로 옮긴다.
+   *  안 옮기면 이 화면은 꺼진 옛 세션에 글을 보내고(아웃박스에 쌓여 AI 에게 닿지 않는다) 옛 기록만 읽어 «AI가 멈췄어요» 를 되풀이한다.
+   */
+  const adoptSid = async (nid: string, row?: any | null): Promise<void> => {
+    const old = rec.sid;
+    if (!nid || nid === old || S.dead) return;
+    writeRecs(readRecs().filter((x) => x.sid !== old));
+    rec.sid = nid; rec.from = await logEnd(nid); saveRec(rec);
+    if (S.dead) return;
+    //  주소 · 앱빌더의 열린 자리를 새 세션으로(onSession — 세션이 처음 생길 때와 같은 길 · hashchange 없음). 실제 화면을 보던 중이면 그 표시도 잇는다.
+    if (mountOpts.onSession) mountOpts.onSession(nid);
+    if (S.tryS && mountOpts.onSee) mountOpts.onSee(nid, 'widget');
+    const nm = String(rec.title || (rec.card && rec.card.name) || '').trim();
+    if (nm) void relabel(nid, nm, rec.mode);
+    void mountChat(row || null);
+  };
+  /**
+   * 보내기 전에 만들기 세션이 살아 있나 본다 — 꺼져 있으면(박스가 없고 되살릴 수 있음) 먼저 되살리고 새 세션으로 옮긴 뒤 보낸다.
+   *  종전엔 꺼진 세션에 그냥 보냈다 — 서버는 «받았다(queued)» 고 답하고 화면은 «AI가 수정하고 있어요» 를 띄웠지만 글은 꺼진 세션의
+   *  아웃박스에 쌓였다. 1분 반 뒤 «멈췄어요» → 「이어서」 를 눌러도 되살린 새 세션이 아니라 옛 세션에 또 보냈다.
+   *  «되살릴 수 있다(restorable)» 고 확답한 줄일 때만 되살린다 — 모르거나(목록을 못 읽음) 줄이 없으면 종전대로 보내고 멈춤 막대에 맡긴다.
+   *  막 되살린 뒤 20초는 다시 보지 않는다(목록이 최대 8초 늦어 방금 되살린 세션을 아직 «꺼짐» 으로 줄 수 있다).
+   */
+  let reviving: Promise<boolean> | null = null, revivedAt = 0;
+  const ensureLive = (): Promise<boolean> => {
+    if (reviving) return reviving;
+    if (Date.now() - revivedAt < 20000) return Promise.resolve(true);
+    reviving = (async (): Promise<boolean> => {
+      const row = await sessionRow(rec.sid);
+      if (!row || row.restorable !== true) return true;
+      if (row.node && row.node.online === false) return true;   // 노트북이 잠듦 — 되살릴 수 없다(멈춤 막대가 까닭을 말한다)
+      toast('꺼져 있던 AI 세션을 다시 켜고 보낼게요.');
+      try { const r = await reviveSession(rec.sid); revivedAt = Date.now(); await adoptSid(r.id, r.row); return !S.dead; }
+      catch (e: any) { toast('AI 세션을 다시 켜지 못해 보내지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); return false; }
+    })().finally(() => { reviving = null; });
+    return reviving;
+  };
+  //  이 화면에서 AI 에게 보내는 글은 모두 여기로 — 꺼진 세션이면 먼저 켜고, 보내면 멈춤 판정을 처음부터.
+  const send = async (text: string): Promise<boolean> => { if (!(await ensureLive())) return false; const ok = await sendPrompt(rec, text); if (ok) armRun(); return ok; };
   //  AI 일을 기다리는 동안 10초마다 그 세션 한 줄을 본다 — 멈춤이 STALL_MS 넘게 이어지면 막대가 까닭과 「이어서 만들기」 를 낸다.
   //   만들기 세션이 돌던 노트북이 잠들어 턴이 끝났는데 화면은 몇 시간째 «만들고 있어요» 였다(원준 2026-10-26).
   const watchRun = async (): Promise<void> => {
     if (S.dead) return;
     if (!runKind()) { S.stallT0 = 0; setStall(null); }
     else {
-      let row: any = undefined;
-      try { const d: any = await api('/api/ui/terminal/sessions?only=' + encodeURIComponent(rec.sid) + '&includeProjects=1'); row = Array.isArray(d?.sessions) ? (d.sessions[0] || null) : undefined; }
-      catch (_) { /* 못 읽으면 그대로 둔다 */ }
+      const row = await sessionRow(rec.sid);   // 못 읽으면(undefined) 그대로 둔다
       if (S.dead) return;
       if (row !== undefined) {
         let k = runStall(row); const now = Date.now();
@@ -1258,8 +1343,10 @@ async function build(rec: StudioRec): Promise<void> {
     try {
       const restored = S.stall === 'ended';
       if (restored) {
-        try { await api(restorePath(rec.sid), { method: 'POST', body: '{}' }); }
+        //  되살리면 새 세션 id 가 선다 — 그리로 옮겨야 이어 하라는 글이 닿고 답도 읽힌다(adoptSid).
+        try { const r = await reviveSession(rec.sid); revivedAt = Date.now(); await adoptSid(r.id, r.row); }
         catch (e: any) { toast('세션을 다시 켜지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); return; }
+        if (S.dead) return;
         S.stall = 'idle';   // 세션은 켜졌다 — 글이 못 가도 다음 누름은 되살리지 않고 글만
       }
       //  막 되살린 세션은 글을 받을 준비가 늦을 수 있다 — 3초 간격으로 세 번까지(마지막 실패만 알린다).
@@ -1558,24 +1645,7 @@ async function build(rec: StudioRec): Promise<void> {
   { const m = readReviewOpen();
     if (m && m.sid === rec.sid && m.appId === rec.appId && rec.stage === 'fix' && rec.appId && !S.dead) void openReal(m.view);
     else if (mountOpts.onSee) mountOpts.onSee(rec.sid, null); }   // 다시 열 화면이 없다 — 주소에 남은 «보는 중» 표시를 걷어 앱빌더 사이드바를 되돌린다
-  // AI 세션 — 그 세션 화면을 끼운다(리브와 같은 방식: 목록을 한 번 읽어 그 세션 한 장으로). 기본 터미널 보기(chatHome 아님).
-  try {
-    const [live, logs] = await Promise.all([
-      api('/api/ui/terminal/sessions?includeProjects=1').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
-      api('/api/ui/v6/sessions?limit=40').then((d: any) => (d && d.sessions) || []).catch(() => [] as any[]),
-    ]);
-    if (S.dead) return;
-    const { mergeSessions, renderSession } = await import('./views.js');   // 정적으로 들여오면 views → apps → app-studio → views 순환(check-imports)
-    const made = takeCreated(rec.sid);
-    const rows = made ? [made, ...(live as any[])] : (live as any[]);
-    //  세션 이름 되맞추기 — 정한 앱 이름이 있는데 세션 이름이 «"이름" 앱 제작» 꼴이 아니면(옛 머리말 · AI 가 지은 이름) 한 번 바로잡는다(원준 2026-10-15).
-    const row = rows.find((x: any) => x && x.id === rec.sid);
-    const nm = String(rec.title || (rec.card && rec.card.name) || '').trim();
-    if (row && nm && String(row.label || '').trim() !== builderSessionLabel(nm, rec.mode)) void relabel(rec.sid, nm, rec.mode);
-    S.chat = renderSession(chatHost, { projects: [], sessions: mergeSessions(rows, logs as any[]), loadedAt: Date.now() } as any, rec.sid, { solo: true, isVisible: () => !!root && chatHost.isConnected });
-  } catch (e: any) {
-    chatHost.replaceChildren(el('p', { class: 'v2-muted', text: 'AI 세션을 열지 못했어요. ' + (e && e.message ? e.message : e) }));
-  }
+  void mountChat(null);
 }
 
 function whenText(iso: string): string {
