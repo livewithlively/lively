@@ -26,6 +26,7 @@ import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
 import { viewerOf } from "./capabilities/principal.js";
+import { runWithAppReadScope } from "./apps/app-context.js";   // #5100 앱 맥락 범위 — 앱 토큰 REST 호출을 그 앱의 읽기 범위 안에서
 import { wrap, HttpError } from "./http/rest-util.js";
 import { DANGEROUS_SCOPES, type Scope } from "./auth/scopes.js";
 import { sessionOrBearer } from "./auth/http-auth.js";
@@ -403,7 +404,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       }
       // /api/ui 응답은 전부 비공개(토큰 발급 평문 포함) — 프록시/브라우저 캐시 금지.
       res.setHeader("Cache-Control", "no-store");
-      res.json(await cap.handler(input, user, {
+      //  #5100 앱 맥락 범위 — 앱 토큰(앱 서버 · 앱 작업이 부르는 REST)이면 그 앱의 읽기 범위 안에서 돌린다. 앱 토큰이 아니면 그대로.
+      res.json(await runWithAppReadScope(user, () => cap.handler(input, user, {
         source: "web",
         actor: user.userId || user.email,
         // 세션(#852) — REST(스크립트)도 x-lively-session 을 실으면 MCP 와 같은 규칙으로 기록된다(형식 검증 + 소비처 canAttach).
@@ -415,7 +417,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
         readOnly, // #1007 — me 가 반환(모드 관측). 강제는 위 게이트가 이미 수행.
         incognito, // #1007+ — me 가 mode 반환
         viewer: viewerOf(user), // #1291 — 열람 신원. MCP 어댑터와 같은 규칙(v2: admin 도 특권이 아니다 — 우회는 긴급열람으로만).
-      }));
+      })));
     });
     for (const path of mount.paths) {
       if (mount.method === "GET") app.get(path, ...mwCap(cap.scope), handler);

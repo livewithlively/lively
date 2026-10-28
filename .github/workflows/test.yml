@@ -514,6 +514,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-versions.pg-test.mjs
+      # ④-d3 앱 맥락 범위(#5100 앱 v2-43) — 범위는 전부 SQL 의 모양이다: 공개범위 술어에 AND 로 붙는 카테고리 조건 · 하이브리드의 두 후보 CTE ·
+      #    벡터 채널의 «떠 두고 정확히 재기»(MATERIALIZED — 시험 DB 가 HNSW 계획을 쓰게 순차 스캔 · 정렬을 끈다) · 자료 종류 · knowledge_get 거절 기록 ·
+      #    어느 판의 선언인가(초안 · 공개 · 주소). 범위 밖 문서가 후보 상위 N 을 채우는 모양은 실제 행과 실제 벡터 순위에서만 드러난다.
+      - name: 앱 맥락 범위(두 채널 범위 밖 0건 · 거절 기록 · 판) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-context.pg-test.mjs
       # ④-d3 앱 공개 상태(#4667 · 앱 v2-15) — 목으로는 못 보는 것: 예약한 빈 앱이 설치로 채워져도 만든 사람·만들기 세션이 **남는지** ·
       #    공개 앱에 초안을 깔 때 공개 판이 판 행에 못 박혀 남에겐 그 판의 화면·제목이 가는지 · 초안이 뺀 표가 공개 전까지 살아 있다가 공개 때 보관되는지 ·
       #    공개를 거두면 붙여 둔 세션의 데이터까지 막히는지 · 떠난 사람의 책임자 이관과 관리자 알림.

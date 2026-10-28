@@ -13,6 +13,9 @@ import { distillBatchOf } from "../org/distill/distill-batch.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 import { personalRootMember } from "../ingest/local-file-core.js";   // 순수 — 휴지통 목록의 «내 개인 폴더» 판정(#3778)
+import { SOURCE_KINDS } from "../v6/source-kinds.js";
+import { readScopeFor, outsideReadScope } from "../v6/read-scope.js";   // #5100 앱 맥락 범위
+import { appContextDenied } from "../apps/app-context.js";
 
 // 공개범위(#1291) — 안 보이는 자료는 고칠 수도, 지울 수도, 원본을 받을 수도 없다. 문구는 없는 자료와 동일(존재 은닉).
 //  지식(assertKnowledgeWritable)과 같은 규율: id 를 아는 것만으로 비가시 본문을 덮어쓰거나 파일로 빼내지 못하게.
@@ -21,7 +24,19 @@ async function assertSourceVisible(id: unknown, viewer: Viewer): Promise<void> {
   if (!(await canSeeSource(Number(id), viewer))) throw new HttpError(404, `자료 #${Number(id)} 없음`);
 }
 
-export const SOURCE_KINDS = ["transcript", "minutes", "email", "slack", "discord", "notion_doc", "clickup_doc", "drive_file", "local_file", "figma_comment", "github_issue", "gitlab_issue", "linear_issue", "zotero_item", "other"] as const;
+// 앱 맥락 범위(#5100) 밖 자료를 번호로 열었나 — 지식(knowledge/shared.ts assertKnowledgeInAppContext)과 같은 규율:
+//  공개범위로는 보이는데 이 앱이 선언한 자료 종류 밖이면 거절(403)하고 기록한다. 공개범위로도 안 보이면 종전대로 «없음».
+async function assertSourceInAppContext(id: number, viewer: Viewer, user: LivelyUser, ctx: CapabilityCtx | undefined, tool: string): Promise<void> {
+  const scope = await readScopeFor(viewer);
+  if (!scope) return;
+  if (await canSeeSource(id, viewer)) return;
+  if (!(await outsideReadScope(() => canSeeSource(id, viewer)))) return;   // 범위 없이 보였나만 본다(내용은 읽지 않는다)
+  throw appContextDenied({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `source:${id}`, source: ctx?.source,
+    message: `자료 #${id} 은(는) 이 앱이 읽을 수 있는 맥락 범위(매니페스트 context.source_kinds) 밖입니다` });
+}
+
+//  표준 자료 종류 — 정본은 잎 모듈(v6/source-kinds.ts · 앱 매니페스트의 맥락 범위와 같은 목록, #5100). 종전 import 자리를 위해 다시 내보낸다.
+export { SOURCE_KINDS };
 
 const sourceListInput = {
   kind: z.enum(SOURCE_KINDS).optional(),
@@ -94,7 +109,8 @@ const sourceGet: Capability = {
     rest: [{ method: "GET", paths: ["/api/ui/sources/:id"],
       parse: (req) => ({ id: Number(req.params?.id) }) }],
   },
-  handler: async (input: SourceGetInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: SourceGetInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertSourceInAppContext(input.id, ctx?.viewer ?? null, user, ctx, "source_get");   // #5100 범위 밖 = 거절 + 기록
     // 안 보이는 자료면 getSource 가 undefined → 없는 자료와 같은 문구(존재 은닉).
     const source = await getSource(input.id, ctx?.viewer ?? null);
     if (!source) throw new Error(`자료 #${input.id} 없음`);
@@ -264,9 +280,10 @@ const sourceArtifact: Capability = {
   scope: "memory",
   input: sourceArtifactInput,
   expose: { mcp: true, rest: false }, // MCP 전용 — 서버-로컬 경로 반환(같은 호스트의 distill 세션이 Read).
-  handler: async (input: SourceArtifactInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: SourceArtifactInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     // 공개범위(#1291) — 여기가 **원본 바이트가 디스크로 나가는** 자리다(세션이 그 경로를 Read 한다).
     //  목록·상세를 막아도 이 경로가 열려 있으면 id 만 알면 원본을 통째로 빼낼 수 있다.
+    await assertSourceInAppContext(input.source_id, ctx?.viewer ?? null, user, ctx, "source_artifact");   // #5100 앱 맥락 범위 — 같은 까닭
     await assertSourceVisible(input.source_id, ctx?.viewer ?? null);
     const { materializeSourceArtifact } = await import("../v6/source-artifact.js");
     return await materializeSourceArtifact(input.source_id);

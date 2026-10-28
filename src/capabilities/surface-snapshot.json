@@ -2424,7 +2424,7 @@
   "rest": [
    "GET /api/ui/knowledge"
   ],
-  "input_hash": "b9df3216275e6914"
+  "input_hash": "0db257f76e10fe4f"
  },
  {
   "name": "knowledge_grep",
@@ -2434,7 +2434,7 @@
   "rest": [
    "GET /api/ui/knowledge/search"
   ],
-  "input_hash": "1b1df432246b1796"
+  "input_hash": "05077e3f14d05fd0"
  },
  {
   "name": "knowledge_search",
@@ -2444,7 +2444,7 @@
   "rest": [
    "GET /api/ui/knowledge/semantic"
   ],
-  "input_hash": "9a231ea401b34de9"
+  "input_hash": "1770cb4d4670be03"
  },
  {
   "name": "knowledge_similar",
@@ -2454,7 +2454,7 @@
   "rest": [
    "GET /api/ui/knowledge/similar"
   ],
-  "input_hash": "f1c8d76f08ce08db"
+  "input_hash": "e1e9737506bcda9b"
  },
  {
   "name": "knowledge_graph",

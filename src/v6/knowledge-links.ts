@@ -7,8 +7,8 @@ import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { type WriteCtx } from "./content-audit.js";
 import { extractWikiLinkTargets } from "./wikilink.js";   // #907 본문 [[…]] → 자동 엣지(문법층은 순수 함수로 분리)
-import { visibleListIds, type Viewer } from "./visibility.js";
-import { knowledgeVisSql, knowledgeVisWhere, slugify, auditKnowledge } from "./knowledge-common.js";
+import { type Viewer } from "./visibility.js";
+import { knowledgeVisWhere, slugify, auditKnowledge } from "./knowledge-common.js";
 import {
   assertCitesAllowed, derivedEnforced, linkDerivedSources, withDerivedTx, type LinkDerivedResult,
 } from "./derived-visibility.js";
@@ -46,15 +46,17 @@ export async function unlinkKnowledge(fromName: string, toName: string, relation
 // 양방향 — outgoing(이 지식이 가리키는) + incoming(이 지식을 가리키는 = 백링크). 비활성 지식은 제외.
 // viewer(#1291) — 이웃 지식의 **제목**이 그대로 실려 나가는 자리다. 특히 incoming(백링크)은 남이 건 엣지라,
 //  대상 제한 문서가 공개 문서를 가리키면 그 제목이 공개 문서 화면에 뜬다. 안 보이는 이웃은 행 자체를 뺀다.
+//  술어는 단일 진입점(knowledgeVisWhere)으로 — 종전엔 knowledgeVisSql 을 직접 불러 축 꺼짐 · 긴급 열람 · 앱 맥락 범위(#5100)를 못 봤다
+//   (범위를 선언한 앱이 범위 안 문서를 열면 범위 밖 이웃의 제목이 링크로 실려 나갔다). 두 쿼리는 자리번호가 같아($1=name) 술어 하나를 함께 쓴다.
 export async function listKnowledgeLinks(name: string, viewer?: Viewer): Promise<{ outgoing: KnowledgeLinkRow[]; incoming: KnowledgeLinkRow[] }> {
-  const visSql = viewer === undefined || viewer === null ? "" : ` AND ${knowledgeVisSql(2, await visibleListIds(viewer))}`;   // $1=name, $2=viewer
-  const visArgs = viewer === undefined || viewer === null ? [] : [viewer];
+  const params: unknown[] = [name];
+  const vis = await knowledgeVisWhere(viewer, params);
   const outgoing = await q(itemsPool,
     `SELECT l.to_name AS name, l.relation, l.origin, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.to_name
-     WHERE l.from_name=$1 AND k.lifecycle='active'${visSql} ORDER BY l.relation, k.updated_at DESC`, [name, ...visArgs]);
+     WHERE l.from_name=$1 AND k.lifecycle='active' AND ${vis} ORDER BY l.relation, k.updated_at DESC`, params);
   const incoming = await q(itemsPool,
     `SELECT l.from_name AS name, l.relation, l.origin, k.title FROM knowledge_link l JOIN knowledge k ON k.name=l.from_name
-     WHERE l.to_name=$1 AND k.lifecycle='active'${visSql} ORDER BY l.relation, k.updated_at DESC`, [name, ...visArgs]);
+     WHERE l.to_name=$1 AND k.lifecycle='active' AND ${vis} ORDER BY l.relation, k.updated_at DESC`, params);
   return { outgoing, incoming };
 }
 // ════════ #907 본문 [[위키링크]] → 자동 엣지(origin='wikilink'). **본문이 SoT**. ════════

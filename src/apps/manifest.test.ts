@@ -330,3 +330,61 @@ test("#4488 permissions.ai_runs → AI 실행 도구 다섯 함의(중복 없음
   assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "x", prompt: "y" }] } }), /매니페스트/, "jobs 안 미지 키는 거부");
   assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [], later: 1 } }), "ai 의 미지 키는 통과(전방호환)");
 });
+
+// ── #5100 앱 맥락 범위 — context 칸(저장 관문 · 사양 B) ─────────────────────────
+//  M1 없음 = 칸 없음(종전) · M2 {} = 두 목록 빈 것(닫힘) · M3 key 64자 통과 · 65자 400 · M4 key 꼴 · M5 50개 통과 · 51개 400
+//  M6 자료 종류 표준 / 모르는 값 · M7 folders 는 빈 배열이라도 400(context.folders) · M8 오타 칸 400 · M9 글 · 배열 · null 400
+//  M10 최상위 모르는 칸은 context 와 함께여도 종전대로 통과
+const withContext = (context: unknown): Record<string, unknown> => ({ ...base(), context });
+const rejects400 = (raw: Record<string, unknown>, where: RegExp): void => {
+  assert.throws(() => parseAppManifest(raw), (e: unknown) => (e as { status?: number }).status === 400 && where.test(String((e as Error).message)));
+};
+
+test("#5100 M1 context 없음 — 칸 없음(범위 없음 · 종전)", () => {
+  assert.equal(parseAppManifest(base()).context, undefined);
+});
+
+test("#5100 M2 context {} — 두 목록 모두 빈 것(선언했지만 비었다 = 닫힘)", () => {
+  assert.deepEqual(parseAppManifest(withContext({})).context, { knowledge_categories: [], source_kinds: [] });
+});
+
+test("#5100 M3 카테고리 key 64자 통과 · 65자 400", () => {
+  const k64 = "a" + "b".repeat(63);
+  assert.deepEqual(parseAppManifest(withContext({ knowledge_categories: [k64] })).context?.knowledge_categories, [k64]);
+  rejects400(withContext({ knowledge_categories: [k64 + "c"] }), /context\.knowledge_categories/);
+});
+
+test("#5100 M4 key 꼴 — 대문자 · 하이픈으로 시작 · 한글은 400", () => {
+  for (const bad of ["Policy", "-policy", "정책"]) rejects400(withContext({ knowledge_categories: [bad] }), /context\.knowledge_categories/);
+  assert.deepEqual(parseAppManifest(withContext({ knowledge_categories: ["d-156e8f8e77", "runtime-ops", "a_b"] })).context?.knowledge_categories, ["d-156e8f8e77", "runtime-ops", "a_b"]);
+});
+
+test("#5100 M5 카테고리 50개 통과 · 51개 400", () => {
+  const keys = (n: number) => Array.from({ length: n }, (_, i) => `k${i}`);
+  assert.equal(parseAppManifest(withContext({ knowledge_categories: keys(50) })).context?.knowledge_categories.length, 50);
+  rejects400(withContext({ knowledge_categories: keys(51) }), /context\.knowledge_categories/);
+});
+
+test("#5100 M6 자료 종류 — 표준 값 통과 · 모르는 값 400", () => {
+  assert.deepEqual(parseAppManifest(withContext({ source_kinds: ["slack", "local_file"] })).context?.source_kinds, ["slack", "local_file"]);
+  rejects400(withContext({ source_kinds: ["gmail"] }), /context\.source_kinds/);
+});
+
+test("#5100 M7 folders 는 빈 배열이라도 400 — 다음 판", () => {
+  rejects400(withContext({ folders: [] }), /context\.folders/);
+  rejects400(withContext({ knowledge_categories: ["a1"], folders: ["shared/x"] }), /context\.folders/);
+});
+
+test("#5100 M8 모르는 칸(오타) 400 — 좁히는 선언은 모르는 칸을 버리지 않는다", () => {
+  rejects400(withContext({ knowledge_category: ["a1"] }), /context/);
+});
+
+test("#5100 M9 context 가 글 · 배열 · null 이면 400", () => {
+  for (const bad of ["policy", ["policy"], null]) rejects400(withContext(bad), /context/);
+});
+
+test("#5100 M10 최상위 모르는 칸은 context 와 함께여도 종전대로 통과", () => {
+  const m = parseAppManifest({ ...withContext({ knowledge_categories: ["a1"] }), future_key: { x: 1 } }) as Record<string, unknown>;
+  assert.deepEqual(m.future_key, { x: 1 });
+  assert.deepEqual((m.context as { knowledge_categories: string[] }).knowledge_categories, ["a1"]);
+});

@@ -19,6 +19,7 @@
 import { itemsPool } from "../db/client.js";
 import { axisOn } from "./visibility-axes.js";
 import { q } from "../db/client.js";
+import { readScopeFor, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 앱 맥락 범위
 
 // viewer 규약: 문자열=그 멤버로 판정 / null=특권(내부 시스템 경로·긴급열람, 필터 없음).
 //  ⚠ undefined 를 특권으로 쓰지 않는다 — '깜빡하고 안 넘김'과 '의도적 특권'이 구분돼야 한다(호출부에서 명시).
@@ -244,8 +245,10 @@ export async function hiddenProjects(viewer: Viewer): Promise<HiddenProjects> {
 /** grant·공개범위가 바뀌면 즉시 반영되도록 캐시를 버린다(설정 변경 경로에서 호출). */
 export function invalidateVisibilityCache(): void { hiddenCache.clear(); }
 
-/** 지식 1건이 이 뷰어에게 보이나 — 직접 grant 또는 컨테이너(리스트) 참조 grant. */
+/** 지식 1건이 이 뷰어에게 보이나 — 직접 grant 또는 컨테이너(리스트) 참조 grant. 앱 토큰 요청이면 그 앱의 맥락 범위 안이어야 한다(#5100). */
 export async function canSeeKnowledge(name: string, viewer: Viewer): Promise<boolean> {
+  //  앱 맥락 범위(#5100) — 목록·검색(knowledgeVisWhere)과 같은 판정. 긴급 열람보다 먼저 본다(긴급 열람은 범위를 넓히지 않는다 — read-scope.ts).
+  if (!(await knowledgeInReadScope(name, viewer))) return false;
   // 긴급 열람을 여기서도 본다 — 목록·검색(knowledgeVisWhere)은 이미 반영하는데 단건 조회만 빼면
   //  "검색엔 제목이 뜨는데 열면 404" 가 된다(#1291 v2).
   const eff = await effectiveViewer(viewer);
@@ -267,4 +270,14 @@ export async function canSeeKnowledge(name: string, viewer: Viewer): Promise<boo
   if (!viaList.length) return false;
   const ids = await visibleListIds(viewer);
   return ids === null || viaList.some((r) => ids.has(Number(r.list_id)));
+}
+
+/** 앱 맥락 범위 안인가(#5100) — 범위가 없으면(앱 토큰 아님 · 범위 미선언 · 특권 뷰어) true. 없는 문서도 true(존재 판정은 호출부 — 새 이름 저장을 막지 않게). */
+async function knowledgeInReadScope(name: string, viewer: Viewer): Promise<boolean> {
+  const scope = await readScopeFor(viewer);
+  if (!scope) return true;
+  const params: unknown[] = [name];
+  const inScope = knowledgeInCategoriesSql(scope.knowledgeCategoryIds, params, "k");
+  const rows = await q(itemsPool, `SELECT (${inScope}) AS ok FROM knowledge k WHERE k.name = $1`, params);
+  return !rows.length || rows[0].ok === true;
 }

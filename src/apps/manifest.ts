@@ -14,6 +14,7 @@ import { HttpError } from "../http-error.js";
 import { SCOPES_ALLOWED } from "../auth/scopes.js";
 import { STRICT_SLUG, assertAssetId } from "../org/asset-id.js";
 import { parseColumnType, defaultLiteralText, DEFAULT_EXPRS } from "./store-ddl.js";
+import { SOURCE_KINDS } from "../v6/source-kinds.js";   // #5100 맥락 범위의 자료 종류(잎 모듈 — DB 무접근)
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 
@@ -241,6 +242,24 @@ const agentSchema = z.object({
   reinject_every: z.number().int().min(5).max(500).default(40),
 }).strict().optional();
 
+// #5100 앱 v2-43 — 앱이 **읽을 맥락의 범위**. 선언하면 이 앱 토큰(앱 세션 · 앱 작업 · 앱 서버 · 앱 화면)의 지식 · 자료 읽기가
+//  공개범위 ∩ 이 범위로 좁혀진다(v6/read-scope.ts). 선언하지 않으면 종전과 같다(실행 멤버가 보는 것 전부).
+//  · knowledge_categories — 읽을 지식의 카테고리 key(category_list 의 key). 적은 카테고리만 — 카테고리 사이 연결선(의존 관계)이나 화면 묶음은
+//    따라가지 않는다(상민 2026-10-28 결정 ①). 없는 key 는 설치 · 저장 때 거절한다(apps/app-context.ts assertContextInstallable).
+//  · source_kinds — 읽을 자료의 종류(v6/source-kinds.ts). **적지 않으면 자료는 하나도 못 읽는다**(닫힘 — 결정 ②).
+//  · folders — 다음 판이다. 지금 적으면 저장을 거절한다(적은 범위가 지켜지지 않는데 지켜진다고 믿게 두지 않는다).
+//  ★ strict — 최상위(passthrough)와 달리 오타를 거절한다: 좁히는 선언에서 모르는 칸을 버리면 앱 제작자는 좁혔다고 믿는데 실제로는
+//   안 좁혀진다(권한 선언 permissions 가 strict 인 것과 같은 까닭). 이 칸을 모르는 옛 코어로 되돌리면 범위 없이 읽힌다 — 롤백 메모.
+const contextSchema = z.object({
+  knowledge_categories: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "카테고리 key 는 소문자 슬러그(a-z0-9_-, 64자 이내) — category_list 의 key"))
+    .max(50).default([])
+    .describe("이 앱이 읽을 지식의 카테고리 key(category_list 의 key). 적은 카테고리에 든 지식만 읽힌다 — 연결선 · 묶음은 따라가지 않는다"),
+  source_kinds: z.array(z.enum(SOURCE_KINDS)).max(SOURCE_KINDS.length).default([])
+    .describe("이 앱이 읽을 자료의 종류. 적지 않으면 자료는 하나도 못 읽는다"),
+  folders: z.unknown().optional().describe("다음 판 — 지금 적으면 저장을 거절한다"),
+}).strict().optional()
+  .describe("이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기가 공개범위 ∩ 이 범위로 좁혀진다. 적지 않으면 실행한 사람이 보는 것 전부");
+
 // 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
 export const SUPPORTED_MANIFEST_SCHEMA = 1;
 
@@ -250,14 +269,15 @@ export const SUPPORTED_MANIFEST_SCHEMA = 1;
 //   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
 //   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
 //   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
-export // #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
+// #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
 const appIconSchema = z.object({
   path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만"),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB"),
   color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").optional(),
 }).strict().optional();
 
-const appManifestSchema = z.object({
+//  export — scripts/gen-app-schema.mjs 가 이것으로 public/lively-app.schema.json 을 만든다(#4769 이 아이콘 선언을 끼우며 export 가 그쪽에 붙어 있었다).
+export const appManifestSchema = z.object({
   // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
   //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
   $schema: z.string().max(500).optional(),
@@ -310,6 +330,8 @@ const appManifestSchema = z.object({
   icon: appIconSchema,
   //  #4488 AI 실행 작업 선언 — 최상위 passthrough 라 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
   ai: aiSchema,
+  //  #5100 읽을 맥락의 범위(위 contextSchema 머리말).
+  context: contextSchema,
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
@@ -410,6 +432,11 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   const srv = (m as { web?: { server?: unknown } }).web?.server;
   if (srv === true || (!!srv && typeof srv === "object" && !Array.isArray(srv))) {
     for (const t of APP_JOB_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
+  }
+
+  // #5100 폴더 범위는 다음 판 — 적어 둔 범위가 지켜지지 않는데 지켜진다고 믿게 두지 않는다(결정 ②).
+  if (m.context && m.context.folders !== undefined) {
+    throw new HttpError(400, "매니페스트 오류 [context.folders]: 폴더 범위는 아직 지원하지 않습니다(다음 판) — 지금은 knowledge_categories · source_kinds 만 적을 수 있습니다");
   }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.

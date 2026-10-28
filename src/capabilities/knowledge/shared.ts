@@ -7,7 +7,7 @@
 //   (anyRestrictedKnowledge)와 반드시 동거한다 — 다른 파일로 나누면 ESM import 바인딩이 재할당 불가다.
 import { HttpError } from "../rest-util.js";
 import type { WikiLinkResult } from "../../v6/knowledge-store.js";
-import { checkKnowledgeClassification } from "../../v6/category-store.js";
+import { checkKnowledgeClassification, getCategory, getCategoryByKey } from "../../v6/category-store.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,10 @@ import { DEFAULT_KNOWLEDGE } from "../../org/delivery/default-content.js";
 import { canSeeKnowledge, type Viewer } from "../../v6/visibility.js";
 import { anyRestrictedKnowledge } from "../../v6/knowledge-store.js";
 import { slugify } from "../../v6/knowledge-common.js";
+import { readScopeFor, outsideReadScope } from "../../v6/read-scope.js";   // #5100 앱 맥락 범위
+import { appContextDenied } from "../../apps/app-context.js";
+import type { LivelyUser } from "../../context.js";
+import type { CapabilityCtx } from "../types.js";
 
 // 공개범위(#1291) — name 을 가진 행 배열에서 안 보이는 것을 걸러낸다. 목록 표면 공용.
 //  대부분의 조직에서 members 지식은 0건이라 첫 조회에서 바로 통과한다(문서마다 판정하지만 값싼 경로).
@@ -52,6 +56,36 @@ export async function assertKnowledgeWritable(name: unknown, viewer: Viewer): Pr
   if (normalized !== String(name) && !(await canSeeKnowledge(normalized, viewer))) {
     throw new HttpError(404, `지식 '${String(name)}' 없음`);
   }
+}
+
+/**
+ * 앱 맥락 범위(#5100) 밖 문서를 이름으로 열었나 — 공개범위로는 보이는데 이 앱이 선언한 범위 밖이면 거절(403)하고 기록한다.
+ *  «없음» 과 문구를 가르는 까닭: 앱 제작자가 범위를 잘못 적었는지 바로 알게(그 사람은 공개범위로 이미 보는 문서다 — 새는 것이 없다).
+ *  공개범위로도 안 보이는 문서 · 없는 문서 · 범위 안 문서는 아무것도 안 한다(호출부의 종전 판정 — «없음» 존재 은닉 — 이 이어진다).
+ */
+export async function assertKnowledgeInAppContext(name: string, viewer: Viewer, user: LivelyUser, ctx: CapabilityCtx | undefined, tool: string): Promise<void> {
+  const scope = await readScopeFor(viewer);
+  if (!scope || !name) return;
+  if (await canSeeKnowledge(name, viewer)) return;
+  //  범위 없이 보였나만 본다(내용을 읽지 않는다 — read-scope.ts outsideReadScope 의 쓰임 ⓐ).
+  if (!(await outsideReadScope(() => canSeeKnowledge(name, viewer)))) return;
+  throw appContextDenied({ appId: scope.appId, actor: user?.userId ?? null, tool, target: `knowledge:${name}`, source: ctx?.source,
+    message: `지식 '${name}' 은(는) 이 앱이 읽을 수 있는 맥락 범위(매니페스트 context.knowledge_categories) 밖입니다` });
+}
+
+/** 지식 검색 도구의 category 인자 설명(#5100) — grep · search · similar 가 같은 글을 쓴다. */
+export const CATEGORY_ARG_DESC = "카테고리 key(category_list 의 key — 예: runtime-ops) 또는 숫자 id — 그 카테고리에 든 지식만 찾는다. 없는 카테고리면 오류";
+
+/**
+ * category 인자(#5100) → 카테고리 id 목록. 비었으면 null(거르지 않는다). 없는(또는 합쳐진) 카테고리는 400 — 빈 결과로 두면 «그런 지식이 없다» 로 읽힌다.
+ *  key 를 먼저 찾는다 — key 도 숫자만으로 될 수 있어서(categories.ts KEY_RE · 예 «2024»), 숫자를 곧바로 id 로 읽으면 그 key 를 못 찾는다. 없을 때만 숫자를 id 로.
+ */
+export async function categoryArg(raw: string | undefined): Promise<number[] | null> {
+  const v = String(raw ?? "").trim();
+  if (!v) return null;
+  const row = (await getCategoryByKey(v.toLowerCase())) ?? (/^\d+$/.test(v) ? await getCategory(Number(v)) : undefined);
+  if (!row || row.state === "merged") throw new HttpError(400, `카테고리 '${v}' 이(가) 없습니다 — category_list 의 key 를 적으세요`);
+  return [Number(row.id)];
 }
 
 export async function filterVisibleByName<T extends { name?: unknown }>(rows: T[], viewer: Viewer): Promise<T[]> {
