@@ -124,7 +124,7 @@ export function appContextDeniedError(d: { appId: string; actor: string | null; 
 //   공개범위 술어를 지나지 않는 기록을 돌려주거나 되살리거나, 분류를 바꿔 범위 자체를 넓힌다. 범위를 가를 근거가 없으니 닫는다.
 //   이름 → 거절 까닭(앱 제작자가 읽는 글).
 const TRASH_WHY = "지운 지식 · 자료는 범위 안인지 가를 근거(카테고리 연결)가 남지 않습니다";
-const NEW_TOKEN_OR_RUN_WHY = "새 토큰을 내주거나 구성원 이름으로 따로 실행을 띄웁니다 — 그 토큰 · 실행(과 그 기록)의 라이블리 읽기엔 앱 맥락 범위가 없습니다";
+const NEW_TOKEN_OR_RUN_WHY = "새 토큰 · 구성원 이름의 실행(과 그 기록)을 다루는 도구입니다 — 그 토큰 · 실행의 라이블리 읽기엔 앱 맥락 범위가 없습니다";
 export const APP_CONTEXT_UNSAFE_TOOLS: ReadonlyMap<string, string> = new Map([
   ["deleted_list", TRASH_WHY],
   ["content_snapshot", TRASH_WHY],
@@ -139,13 +139,13 @@ export const APP_CONTEXT_UNSAFE_TOOLS: ReadonlyMap<string, string> = new Map([
   ["device_approve", NEW_TOKEN_OR_RUN_WHY],
   ["app_server_token_mint", NEW_TOKEN_OR_RUN_WHY],
   ["broker_run", NEW_TOKEN_OR_RUN_WHY],
-  ["me_liv_open", NEW_TOKEN_OR_RUN_WHY],   // 리브 세션을 지시(text)와 함께 연다
 ]);
 //  묶음은 이름 꼴로 막는다 — 이름을 하나씩 적으면 새 형제가 생길 때마다 열린다(재재검토에서 둘이, 재재재검토 뒤에 셋이 그렇게 빠졌다).
 //   꼴로 막으면 같은 묶음의 새 도구도 기본이 닫힘이다.
 //   · 맥락 파이프라인(수집 · 증류 · 카테고리 붙이기 · 관리기)은 워크스페이스 전체를 다룬다: 수집 미리보기 · 실행 기록 · 레인 표본 · 미분류 지식 ·
 //     관리기 발견의 인용(지운 문서 것까지)을 공개범위 술어 없이 읽고, 관리기 «적용» 은 지식을 다른 카테고리로 옮긴다(앱이 제 범위를 넓히는 길).
-//   · 구성원 이름의 실행(위탁 · 예약 작업 · 프로젝트 대화)은 그 사람의 토큰으로 도는 AI 를 띄우고 그 기록을 돌려준다.
+//   · 구성원 이름의 실행(위탁 · 예약 작업 · 프로젝트 대화 · 리브 · 첫 분석)은 그 사람의 토큰으로 도는 AI 를 띄우고 그 기록을 돌려준다.
+//     실행 모듈을 직접 불러오는 능력 파일의 도구가 모두 여기 걸리는지는 app-context-wiring C7 이 소스로 잰다(다른 모듈을 거쳐 띄우는 길은 못 본다 — 예약 작업).
 const PIPELINE_WHY = "맥락 파이프라인(수집 · 증류 · 카테고리 붙이기 · 관리기) 도구는 워크스페이스 전체의 지식 · 자료를 범위 없이 다루고 분류를 바꿉니다";
 export const APP_CONTEXT_UNSAFE_FAMILIES: ReadonlyArray<{ label: string; match: RegExp; why: string }> = [
   { label: "수집", match: /^(collect_|org_collector_|org_connector_)|^org_[a-z0-9]+_collect(_|$)/, why: PIPELINE_WHY },
@@ -153,6 +153,8 @@ export const APP_CONTEXT_UNSAFE_FAMILIES: ReadonlyArray<{ label: string; match: 
   { label: "위탁", match: /^delegate_/, why: NEW_TOKEN_OR_RUN_WHY },          // 워커 노드의 구성원 세션 · 그 상태 · 기록
   { label: "예약 작업", match: /^cron_/, why: NEW_TOKEN_OR_RUN_WHY },         // 헤드리스 AI 를 구성원 이름으로 예약 · 지금 실행
   { label: "프로젝트 대화", match: /^project_chat_/, why: NEW_TOKEN_OR_RUN_WHY },   // 헤드리스 대화 한 턴 · 그 기록
+  { label: "리브", match: /^me_liv_/, why: NEW_TOKEN_OR_RUN_WHY },                // 구성원의 도우미 세션(지시와 함께 열기 · 그 세션 · 물음)
+  { label: "첫 분석", match: /^me_welcome_/, why: NEW_TOKEN_OR_RUN_WHY },         // 처음 설정의 분석 세션(구성원 이름으로 띄움 · 그 스트림 · 적용)
 ];
 
 /** 범위를 못 지키는 도구면 거절 까닭, 아니면 null(순수). */

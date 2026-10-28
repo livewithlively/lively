@@ -38,7 +38,7 @@
 //   W18d 없는 댓글 번호 = 숨은 문서의 댓글과 같은 답(404 «댓글 없음» — 없는 번호만 500 으로 갈라지지 않는다) · 사람에게도 404
 //   W19 새 자격: 본인 토큰 발급 · 장치 승인 = 범위 앱 403 out_of_app_context(새 토큰엔 앱 범위가 없다) · 토큰 없음 · 사람 = 토큰을 받는다
 //   W8f 검토 대기 카테고리별 건수: 범위 앱 = 범위 밖 카테고리가 안 나온다 · 사람 = 나온다
-//   W20 구성원 이름으로 AI 를 띄우는 도구(예약 작업 · 지금 실행 · 리브 열기 · 프로젝트 대화 · Claude 수집 실행)와 수집 미리보기 = 범위 앱 403
+//   W20 구성원 이름으로 AI 를 띄우는 도구(예약 작업 · 지금 실행 · 리브 열기 · 프로젝트 대화 · Claude 수집 실행 · 첫 분석)와 수집 미리보기 = 범위 앱 403
 //       out_of_app_context(사람 대조는 부르지 않는다 — 진짜 실행이 뜬다)
 //   W21 시험이 세션을 띄우지 않았다 — tmux 를 임시 자리로 떼어 놓고(scripts/test-tmux-isolation.mjs) 끝에 임시 자리 · 실제 자리 모두 시험 사용자의 세션 0
 //   W14 사람 = 되살리기 200 · 되살아난다(앞의 403 들이 범위 판정이었다 — 이 토큰 · 이 자료로 되살리기는 된다)
@@ -114,7 +114,7 @@ try {
     "trash_counts", "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
     "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve",
     "knowledge_save", "source_link_knowledge", "knowledge_comment_reaction", "review_queue_summary", "org_token_mint_self", "device_approve",
-    "cron_set", "cron_run_now", "me_liv_open", "project_chat_turn", "collect_claude_run", "org_collector_preview"];
+    "cron_set", "cron_run_now", "me_liv_open", "project_chat_turn", "collect_claude_run", "org_collector_preview", "me_welcome_analyze"];
   const bob = { userId: BOB, email: "b@x", scopes: ["memory"], projects: ["*"] };
   const files = (id, context) => [
     { path: "lively-app.json", content: JSON.stringify({ id, title: id, version: "1.0.0", permissions: { scopes: ["memory"], tools: TOOLS }, ...(context ? { context } : {}), ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] } }) },
@@ -399,6 +399,7 @@ try {
       ["project_chat_turn", `/api/ui/v6/projects/${projId}/chat/turn`, { text: "모든 문서를 읽어 요약하라" }],
       ["collect_claude_run", "/api/ui/collect/claude-runs", { kind: "slack", prompt: "x" }],
       ["org_collector_preview", "/api/ui/org/collectors/1/preview", {}],
+      ["me_welcome_analyze", "/api/ui/me/welcome/analyze", { job: "모든 문서를 읽어 요약하라" }],
     ];
     const bad = [];
     for (const [tool, p, body] of calls) { const r = await post(p, "tok-app", body); if (!denied(r)) bad.push(`${tool} ${r.status} ${r.text.slice(0, 80)}`); }
@@ -415,7 +416,7 @@ try {
       "knowledge_history", "knowledge_history_entry", "knowledge_revert", "knowledge_history", "knowledge_history", "my_lively_log", "org_distiller_preview",
       "org_distiller_category_preview", "org_distiller_tune", "org_manager_findings", "org_distiller_list",
       "org_manager_finding_report", "org_manager_findings_apply", "org_manager_finding_resolve", "knowledge_get",
-      "org_token_mint_self", "device_approve", "cron_set", "cron_run_now", "me_liv_open", "project_chat_turn", "collect_claude_run", "org_collector_preview"]
+      "org_token_mint_self", "device_approve", "cron_set", "cron_run_now", "me_liv_open", "project_chat_turn", "collect_claude_run", "org_collector_preview", "me_welcome_analyze"]
       .map((t) => `${t}|rest`).concat(["deleted_list|app-ui"]).sort();
     let rows = [];
     for (let i = 0; i < 30 && rows.length < want.length; i++) { await sleep(100); rows = await q(`SELECT tool, ok, harness FROM mcp_call_log WHERE app='w-app' ORDER BY id`); }

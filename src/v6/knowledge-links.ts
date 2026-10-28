@@ -178,7 +178,7 @@ export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number;
  * 이 자료에서 **이미 파생된** 지식 목록(#1631) — 중복 증류 판정의 재료. 실패는 빈 배열(모름은 경고 없음).
  *  viewer 는 그 사람이 볼 수 있는 지식만 고른다(공개범위 · 앱 맥락 범위 — #5100 격리 재재재검토): 알림 글에 형제의 **이름**이 실려 나가므로,
  *  안 보이는 형제를 이름으로 알리면 그 문서가 있다는 것이 샌다. undefined(증류 내부 판정) · null(특권)은 종전대로 전부다.
- *  ⚠ 필수 인자다 — 이름을 답에 싣는 함수라, 다음 호출부가 뷰어를 깜빡하면 전부가 나가는 쪽이 기본이 되지 않게 컴파일이 막는다.
+ *  ⚠ 필수 인자다 — 이름을 답에 싣는 함수라 호출부가 뷰어(또는 «증류 내부» 의 undefined)를 명시하게 한다.
  */
 export async function derivedPeersOf(sourceId: number, viewer: Viewer | undefined): Promise<Array<{ name: string; relation: string }>> {
   try {

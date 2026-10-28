@@ -9,9 +9,11 @@
 //   C5 범위를 못 지키는 도구의 거절(격리 재검토 B1') — 세 어댑터 모두 앱 도구 판정(requireAppTool) 바로 뒤 · 핸들러 앞에서 assertAppContextSafeTool 을 부른다
 //      (다리는 try 안 — 거절이 기록되게)
 //   C6 그 목록(APP_CONTEXT_UNSAFE_TOOLS 이름 · APP_CONTEXT_UNSAFE_FAMILIES 이름 꼴)이 실제 도구를 가리킨다(오타 하나면 그 도구가 조용히 열린다) ·
-//      재검토 · 재재검토가 짚은 도구가 모두 거절된다 · 범위 안에서 읽는 도구(검색 · 상세 · 자료 · 카테고리 목록 · 파이프라인 개요)는 거절되지 않는다(너무 넓은 앞머리)
+//      재검토 · 재재검토가 짚은 도구가 모두 거절된다 · 범위 안에서 읽는 도구(검색 · 상세 · 자료 · 카테고리 목록 · 파이프라인 개요)는 거절되지 않는다(너무 넓은 묶음)
+//   C7 실행 모듈(위탁 작업 · 작업 세션 · 헤드리스 실행 · 리브 세션 · 터미널 세션 · 수집 실행)을 직접 불러오는 능력 파일의 도구는 모두 거절된다
+//      (구성원 이름으로 띄운 실행엔 앱 범위가 없다 — 이름을 하나씩 적다가 이 PR 에서만 세 번 샜다). 다른 모듈을 거쳐 띄우는 길(예약 작업)은 못 본다 — 묶음이 막는다
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { APP_CONTEXT_UNSAFE_TOOLS, APP_CONTEXT_UNSAFE_FAMILIES, appContextUnsafeWhy } from "./app-context.js";
 
 let pass = 0;
@@ -74,7 +76,8 @@ t("C6 범위를 못 지키는 도구 목록 — 실제 도구를 가리키고 ·
     "org_manager_findings", "org_manager_finding_report", "org_manager_finding_resolve", "org_manager_findings_apply", "org_classifier_list",
     "org_token_mint_self", "org_token_mint", "device_approve", "app_server_token_mint", "broker_run", "delegate_run", "delegate_logs", "delegate_status",
     "cron_set", "cron_run_now", "cron_list", "me_liv_open", "project_chat_turn", "project_chat_get",
-    "collect_claude_run", "collect_claude_run_get", "collect_unit_listing", "org_collector_preview", "org_connector_run_log", "org_slack_collect_set", "org_google_collect"];
+    "collect_claude_run", "collect_claude_run_get", "collect_unit_listing", "org_collector_preview", "org_connector_run_log", "org_slack_collect_set", "org_google_collect",
+    "me_welcome_analyze", "me_welcome_analyze_read", "me_liv_session"];
   for (const name of mustDeny) {
     assert.ok(known.has(name), `짚은 도구가 표면에 없다(이름이 바뀌었나): ${name}`);
     assert.ok((appContextUnsafeWhy(name) ?? "").length > 0, `거절되지 않는다(또는 까닭이 비었다): ${name}`);
@@ -84,6 +87,21 @@ t("C6 범위를 못 지키는 도구 목록 — 실제 도구를 가리키고 ·
     assert.ok(known.has(name), `대조 도구가 표면에 없다: ${name}`);
     assert.equal(appContextUnsafeWhy(name), null, `범위 안에서 읽는 도구가 막혔다: ${name}`);
   }
+});
+
+t("C7 실행 모듈을 직접 불러오는 능력 파일 — 그 파일의 도구는 모두 거절된다", () => {
+  const SPAWN_IMPORT = /(?:from |import\()"[^"]*\/(?:node\/task-store|node\/tasks|scheduler\/actions\/_headless|org\/liv\/session|terminal\/sessions|terminal\/collect-run)\.js"/;
+  const TOOL_NAME = /(?:name: "|rest(?:Work|Read|Only|Runtime)\(")([a-z0-9_]+)"/g;
+  const walk = (dir: URL): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory()
+    ? walk(new URL(`${e.name}/`, dir)) : (/\.ts$/.test(e.name) && !/\.test\.ts$/.test(e.name) ? [new URL(e.name, dir).pathname] : []));
+  const files = walk(new URL("../../src/capabilities/", import.meta.url)).filter((f) => SPAWN_IMPORT.test(readFileSync(f, "utf8")));
+  const tools = files.flatMap((f) => [...readFileSync(f, "utf8").matchAll(TOOL_NAME)].map((m) => ({ f: f.replace(/^.*\/src\//, ""), name: m[1] })));
+  //  배선 — 지금 아는 실행 입구가 이 센서스에 든다(정규식이 조용히 아무것도 못 잡으면 시험이 헛돈다)
+  for (const name of ["delegate_run", "project_chat_turn", "me_welcome_analyze", "me_liv_open", "collect_claude_run"]) {
+    assert.ok(tools.some((x) => x.name === name), `센서스가 실행 입구를 못 봤다: ${name} (파일 ${files.length}개)`);
+  }
+  const open = tools.filter((x) => appContextUnsafeWhy(x.name) === null);
+  assert.equal(open.length, 0, `실행 모듈을 부르는 파일에 막히지 않은 도구: ${open.map((x) => `${x.f}:${x.name}`).join(", ")}`);
 });
 
 console.log(`\n${pass} 통과`);
