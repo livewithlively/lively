@@ -167,7 +167,7 @@ export function pushAppState(appId: string, state: Record<string, unknown>): num
  *  「선택」 이 아무 답도 못 받아 위치 없는 핀만 꽂혔다. 표시(data-probe)는 띄울 때마다(reload 포함) 그때의 검토 상태로 다시 적는다. 세션 곁칸도 포함한다. */
 export function ensureReviewProbe(appId: string): number {
   let n = 0;
-  liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && f.root.dataset.probe !== '1') { f.reload(); n++; } });
+  liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && f.root.getAttribute('data-probe') !== '1') { f.reload(); n++; } });
   return n;
 }
 export function reloadAppFrames(appId: string): number {
@@ -485,7 +485,7 @@ export async function mountAppUiFrame(appId: string, opts?: AppUiMountOpts): Pro
     //  탐침은 다시 띄울 때의 검토 상태로 다시 정한다(markReviewProbe 뒤 reloadAppFrames 가 부른다). 앱 주소면 새 코드로 다시 연다.
     reload: () => {
       topics.clear(); opts?.onTyping?.(false);
-      if (wantProbe()) frame.dataset.probe = '1'; else delete frame.dataset.probe;   // 이번에 띄우는 문서에 탐침이 드나(ensureReviewProbe 가 읽는다)
+      if (wantProbe()) frame.setAttribute('data-probe', '1'); else frame.removeAttribute('data-probe');   // 이번에 띄우는 문서에 탐침이 드나(ensureReviewProbe 가 읽는다)
       if (appOrigin) { relaunch(); return; }
       const d = data as AppUiData | null;   // srcdoc 으로 떠 있으면 이미 읽어 두었다(loadData)
       if (d) doc = docFor(d);

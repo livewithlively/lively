@@ -173,7 +173,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     const f = findFrame();
     if (f !== S.frame) {
       S.frame = f; S.sx = 0; S.sy = 0;   // 다른 문서 — 스크롤은 그 탐침이 알릴 때까지 맨 위로 본다
-      if (f && f.dataset.probe !== '1') ensureReviewProbe(host.appId);   // 막대를 연 뒤에 나타난 옛 프레임(탐침 없이 뜬 것)
+      if (f && f.getAttribute('data-probe') !== '1') ensureReviewProbe(host.appId);   // 막대를 연 뒤에 나타난 옛 프레임(탐침 없이 뜬 것)
       closePop(); paintBar(); paintMarks();
     }
     if (f) { const r = f.getBoundingClientRect(); layer.style.left = r.left + 'px'; layer.style.top = r.top + 'px'; layer.style.width = r.width + 'px'; layer.style.height = r.height + 'px'; }
