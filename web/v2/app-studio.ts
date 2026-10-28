@@ -36,7 +36,10 @@ import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, nextStageOpen, notifyBrief, parseCard, parseCheck, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
+import { icon } from './icons.js';
+import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 
 export type { StudioPlace };
 export interface StudioRec {
@@ -67,6 +70,10 @@ export interface StudioRec {
   whatEdit?: { name: string; what: string; place: StudioPlace };
   /** ③ 첫 판 전 AI 가 알린 걸음(1~4 · [[걸음 n/4]]) — 새로 열어도 «시작하는 중» 으로 돌아가지 않게(원준 2026-10-26). 초안을 다시 청하면 0. */
   step?: number;
+  /** ④ 에서 고른 아이콘(아직 저장 전) — 「완료 · 다음 단계로」 의 마무리 저장이 매니페스트 icon 에 싣는다. 없으면 지금 아이콘 그대로. */
+  icon?: StudioIcon;
+  /** ④ 「AI에게 그려 달라기」 로 받은 그림들(최근 것 먼저 · 여섯까지) — 단계를 오가도 남는다. */
+  iconAi?: StudioIcon[];
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
@@ -233,14 +240,14 @@ export function studioUiOnly(studio: any): Record<string, unknown> {
   return keep;
 }
 /** #4667 그 앱의 지금 공개 상태(서버) — 머리줄 「n판 · 나만 보는 초안」 · 「공개하기」 · ④⑤ 의 재료. 못 읽으면 null. */
-export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown }
+export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown; icon: StudioIcon | null }
 async function readVis(appId: string): Promise<StudioVis | null> {
   try {
     const out: any = await api('/api/ui/apps/' + encodeURIComponent(appId)); const a = out?.app || out; if (!a) return null;
     const me0 = await me();
     return { visibility: a.visibility === 'me' ? 'me' : 'all', publishedNo: Number(a.published_version_no) || 0,
       draftMine: !!(a.draft && a.draft.by && a.draft.by === me0.id), canPublish: !!a.can_publish, canUnpublish: !!a.can_unpublish, empty: !!a.empty,
-      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null };
+      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null, icon: iconSpec(a.manifest && a.manifest.icon) };
   } catch (_) { return null; }
 }
 /** ⑧ 내 사본 — 원본 파일을 받아 id · 이름 · studio.origin 만 바꿔 저장한다. 원본은 그대로. */
@@ -383,7 +390,7 @@ function showTour(onDone?: () => void): void {
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고, 쓸 자리를 고른 뒤 「만들기 시작」을 눌러주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
     { n: 2, t: '세부 기획 정하기', now: '기획 카드에서 틀린 내용을 고쳐주세요', body: () => cardView(c, null) },
     { n: 3, t: '시안 확인 · 수정', now: '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2: 제목에 날짜, 「끝남」 단추, 안 끝난 것 먼저' }))) },
-    { n: 4, t: '확인', now: '아래 네 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 누가 쓰나: 나만 (기본)' }))) },
+    { n: 4, t: '확인', now: '아래 다섯 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 누가 쓰나: 나만 (기본)' }), el('div', { text: '✓ 아이콘: AI가 그린 그림' }))) },
     { n: 5, t: '넣기', now: '「지금 써 보기」로 바로 열어 보고, 「팀에 알리기」로 팀에 알려주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요: 초안, V2 날짜와 끝남 단추, V3 글자 크기' }), el('div', { text: '이렇게 쓰세요: 세션 오른쪽 위 +에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기: 「장원준 님이 「회의 안건」 앱을 만들었어요」' }))) },
   ];
   let i = 0; const ov = el('div', { class: 'v2-studio-intro v2-studio-tour' }); const box = el('div', { class: 'v2-studio-intro-box' });
@@ -699,6 +706,7 @@ async function build(rec: StudioRec): Promise<void> {
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: rec.step || 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
     waiting: false, waitT0: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0,
+    iconOpen: false, iconWait: false, iconMiss: false, iconT: 0, iconRead: false,   // ④ 아이콘 — 고르는 칸이 펼쳐졌나 · AI 가 그리는 중 · 안 보냈다 · 지금 아이콘을 읽었나
     quietTill: Date.now() - rec.at < 120000 ? rec.at + 120000 : 0 };   // 막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다
   const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
@@ -783,7 +791,7 @@ async function build(rec: StudioRec): Promise<void> {
       else if (S.waiting) text = 'AI가 수정하고 있어요. 다음 버전이 나오면 화면이 바뀌어요.';
       else if (hasCm) { text = '코멘트 ' + cmCount() + '건을 남겼어요. 「수정하기」를 누르면 AI가 반영해 다음 버전을 만들어요.'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
-    } else if (rec.stage === 'check') { text = '아래 네 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
+    } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
     const kind = runKind();
     if (S.stall && kind) {   // 기다리던 AI 일이 멈췄다 — «만들고 있어요» 대신 까닭과 할 일(원준 2026-10-26)
@@ -1026,6 +1034,9 @@ async function build(rec: StudioRec): Promise<void> {
   });
   // AI 답 읽기 — 단계가 보낸 글 뒤의 답만(rec.from 워터마크). 2.5초마다.
   const onText = (t: string): void => {
+    //  ④ 「AI에게 그려 달라기」 의 답 — 어느 단계에서 와도 받아 둔다(그새 다른 단계로 갔어도 돌아오면 그림 목록 맨 앞에 있다).
+    const ic = parseIcon(t);
+    if (ic) { rec.iconAi = [ic, ...(rec.iconAi || []).filter((x) => x.path !== ic.path)].slice(0, 6); rec.icon = ic; saveRec(rec); S.iconWait = false; S.iconMiss = false; window.clearTimeout(S.iconT); if (rec.stage === 'check') paintCheck(); }
     if (rec.stage === 'plan') { const c = parseCard(t); if (c) { rec.card = c; saveRec(rec); paintPlan(); paintNow();
       //  ①에서 이름을 비웠으면 기획 카드의 이름으로 세션 이름을 한 번 짓는다 — «"회의 안건" 앱 제작».
       //   그 이름이 곧 이 앱의 이름이다 — 머리줄 · 앱빌더 카드 · 세션 이름이 같은 글을 쓴다(원준 2026-10-15).
@@ -1033,10 +1044,14 @@ async function build(rec: StudioRec): Promise<void> {
     else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; rec.step = n; saveRec(rec); paintSteps(); paintNow(); } }
     else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; if (S.checkFor && S.checkFor.ver > 0) { rec.check = { ...ck, ...S.checkFor }; saveRec(rec); } paintCheck(); paintNow(); } }
   };
-  const pump = async (): Promise<void> => {
+  //  drain — 쌓인 답을 지금 한 번 읽는다. 새 글을 보내기 전에도 부른다(보내면 워터마크가 기록 끝으로 가서, 아직 안 읽은 답 · 예: ④ 대조를 건너뛴다).
+  const drain = async (): Promise<void> => {
     if (S.dead) return;
     const r = await rawLog(rec.sid, 'from=' + rec.from);
     if (!S.dead && r && r.to > rec.from) { const texts = assistantTexts(r.text); rec.from = r.to; saveRec(rec); texts.forEach(onText); }
+  };
+  const pump = async (): Promise<void> => {
+    await drain();
     if (!S.dead) S.logT = window.setTimeout(() => { void pump(); }, 2500);
   };
   // 기다림 띠(③ 보낸 뒤) — m:ss
@@ -1147,6 +1162,65 @@ async function build(rec: StudioRec): Promise<void> {
         : live ? '이 버전은 나만 볼 수 있어요. 다른 사람은 지금 공개 버전을 계속 써요.'
           : '나만 볼 수 있어요. 나중에 앱빌더 배포 설정에서 공개할 수 있어요.' }));
   };
+  // ── ④ 아이콘(원준 2026-10-28) — 지금 아이콘이 사이드바 · 세션 위젯 · 앱 찾기에 어떻게 서는지 보이고, 그림 · 색을 고르거나 AI 에게 다시 그려 달란다 ──
+  //  고른 것은 rec.icon 에만 두고 「완료 · 다음 단계로」 의 마무리 저장(putAppOnce)이 매니페스트 icon 에 싣는다 — 고를 때마다 버전이 오르지 않게.
+  const iconAsk = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '80', placeholder: '예: 마이크와 메모지', 'aria-label': 'AI에게 부탁할 아이콘 그림' }) as HTMLInputElement;
+  const iconNow = (): StudioIcon | null => rec.icon || (S.vis ? S.vis.icon : null);
+  /** 미리 그릴 그림 이름 — 선언은 미리보기 이름으로 등록한다(앱 id 로 등록하면 저장 전에 이 창 밖의 그 앱 그림까지 바뀐다). 없으면 기본 그림. */
+  const faceOf = (spec: StudioIcon | null): string => {
+    if (!spec) return builtinAppIcon(rec.appId, true);
+    const k = spec.path + '|' + spec.color + '|' + (spec.color_dark || ''); let h = 0;
+    for (let i = 0; i < k.length; i++) h = (h * 31 + k.charCodeAt(i)) | 0;
+    return registerAppIcon('studio-pv-' + (h >>> 0).toString(36), spec) || builtinAppIcon(rec.appId, true);
+  };
+  /** 글자 옆 선 그림을 그 그림의 색으로(사이드바 줄 · 세션 위젯 탭과 같은 꼴 · session-app-pane faceIcon). */
+  const glyph = (face: string, cls: string): SVGElement => { const svg = icon(appGlyphName(face), cls); svg.setAttribute('style', 'color: var(--gi-c-' + face + ')'); return svg; };
+  const askIcon = async (): Promise<void> => {
+    if (S.iconWait || !rec.appId) return;
+    await drain();   // 보내기 전에 쌓인 답(④ 대조)을 먼저 읽는다
+    if (S.dead || !(await send(iconBrief(nameIn.value.trim() || S.title, rec.appId, iconAsk.value, iconNow())))) return;
+    S.iconWait = true; S.iconMiss = false; window.clearTimeout(S.iconT);
+    S.iconT = window.setTimeout(() => { if (S.dead || !S.iconWait) return; S.iconWait = false; S.iconMiss = true; if (rec.stage === 'check') paintCheck(); }, 180000);
+    if (rec.stage === 'check') paintCheck();
+  };
+  const iconRow = (): HTMLElement => {
+    const cur = iconNow(); const face = faceOf(cur); const title = nameIn.value.trim() || S.title;
+    const sub = rec.icon ? '바꾼 아이콘은 「완료 · 다음 단계로」를 누르면 저장돼요.'
+      : cur ? (rec.mode === 'new' ? 'AI가 앱을 만들 때 그린 아이콘이에요. 아래 자리에 같은 그림이 나와요.' : '지금 앱의 아이콘이에요. 아래 자리에 같은 그림이 나와요.')
+        : !S.iconRead ? '아이콘을 불러오는 중…' : '아직 아이콘이 없어 기본 그림으로 보여요. 「아이콘 바꾸기」에서 고를 수 있어요.';
+    const spot = (cap: string, body: HTMLElement): HTMLElement => el('figure', { class: 'v2-studio-ico-spot' }, body, el('figcaption', { text: cap }));
+    const spots = el('div', { class: 'v2-studio-ico-spots' },
+      spot('사이드바', el('div', { class: 'v2-studio-ico-side' }, glyph(face, 'v2-ic'), el('span', { text: title }))),
+      ...(rec.place !== 'full' ? [spot('세션 위젯', el('div', { class: 'v2-studio-ico-tab' }, glyph(face, 'v2-ic'), el('span', { text: title })))] : []),
+      spot('앱 찾기', el('div', { class: 'v2-studio-ico-pad' }, appGlassIcon(face, 'v2-studio-ico-tile'), el('span', { text: title }))));
+    const act = el('div', { class: 'v2-studio-ico-act' },
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-expanded': String(S.iconOpen), text: S.iconOpen ? '접기' : '아이콘 바꾸기', onclick: () => { S.iconOpen = !S.iconOpen; paintCheck(); } }),
+      ...(rec.icon ? [el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '처음대로', title: '바꾸기 전 아이콘으로 돌아가요', onclick: () => { delete rec.icon; saveRec(rec); paintCheck(); } })] : []));
+    return el('div', { class: 'v2-studio-ico' }, el('span', { text: sub }), spots, act, ...(S.iconOpen ? [iconEditor(cur)] : []));
+  };
+  const iconEditor = (cur: StudioIcon | null): HTMLElement => {
+    const tone = cur ? { color: cur.color, color_dark: cur.color_dark || cur.color } : { color: ICON_COLORS[0].color, color_dark: ICON_COLORS[0].color_dark };
+    const pick = (spec: StudioIcon): void => { rec.icon = spec; saveRec(rec); paintCheck(); };
+    const tile = (spec: StudioIcon, tip: string): HTMLElement => el('button', { type: 'button', class: 'v2-studio-ico-pick' + (cur && cur.path === spec.path ? ' on' : ''), title: tip, 'aria-label': tip, 'aria-pressed': String(!!cur && cur.path === spec.path), onclick: () => pick(spec) }, glyph(faceOf(spec), 'v2-studio-ico-g'));
+    const ai = rec.iconAi || []; const first = S.vis && S.vis.icon && !ai.some((x) => x.path === S.vis!.icon!.path) ? S.vis.icon : null;
+    const tiles = [
+      ...ai.map((x, i) => tile(x, i === 0 ? 'AI가 방금 그린 그림' : 'AI가 그린 그림')),
+      ...(first ? [tile(first, rec.mode === 'new' ? 'AI가 처음 그린 그림' : '지금 아이콘')] : []),
+      ...ICON_GLYPHS.map((n) => tile({ path: iconPath(n), ...tone }, '기본 그림')),
+    ];
+    //  색 칸은 그 색으로 등록한 미리보기 토큰(--gi-c-…)으로 칠한다 — 라이트 · 다크에서 실제로 쓰일 색이 그대로 보인다.
+    const path0 = cur ? cur.path : iconPath(appGlyphName(builtinAppIcon(rec.appId, true)));
+    const swatches = ICON_COLORS.map((c) => { const spec = { path: path0, color: c.color, color_dark: c.color_dark };
+      return el('button', { type: 'button', class: 'v2-studio-ico-sw' + (cur && cur.color.toLowerCase() === c.color.toLowerCase() ? ' on' : ''), title: c.name, 'aria-label': c.name + ' 색',
+        style: 'background: var(--gi-c-' + faceOf(spec) + ')', onclick: () => pick(spec) }); });
+    const askBtn = el('button', { type: 'button', class: 'v2-studio-go sm', text: 'AI에게 그려 달라기', disabled: S.iconWait || !rec.appId, onclick: () => { void askIcon(); } });
+    iconAsk.onkeydown = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); void askIcon(); } };
+    return el('div', { class: 'v2-studio-ico-ed' },
+      el('b', { text: '그림' }), el('div', { class: 'v2-studio-ico-grid' }, ...tiles),
+      el('b', { text: '색' }), el('div', { class: 'v2-studio-ico-colors' }, ...swatches),
+      el('b', { text: 'AI에게 부탁하기' }), el('div', { class: 'v2-studio-ico-ask' }, iconAsk, askBtn),
+      el('small', { text: S.iconWait ? 'AI가 아이콘을 그리는 중…' : S.iconMiss ? 'AI가 아이콘을 보내지 않았어요. 다시 부탁해주세요.' : '원하는 그림을 적으면 AI가 새로 그려 그림 목록 맨 앞에 더해요.' }));
+  };
   const paintCheck = (): void => {
     const h = appHost(); const c = rec.card;
     const row = (ok: boolean | null, title: string, sub: HTMLElement | string): HTMLElement => el('div', { class: 'v2-studio-chk' + (ok === true ? ' ok' : ok === false ? ' no' : '') }, el('i', { text: ok === true ? '✓' : ok === false ? '!' : '…' }), el('div', {}, el('b', { text: title }), typeof sub === 'string' ? el('span', { text: sub }) : sub));
@@ -1159,8 +1233,9 @@ async function build(rec: StudioRec): Promise<void> {
       row(true, '이름', el('span', {}, nameIn, el('small', { text: ' 여기서 바꿀 수 있어요' }))),
       row(true, '쓰는 자리', places),
       row(true, '누가 쓰나', whoRow()),
+      row(true, '아이콘', iconRow()),
       el('p', { class: 'v2-studio-fine', text: '하나라도 다르면 「더 고치기」를 눌러 ③ 단계로 돌아가요.' })));
-    coach('check', h.querySelector('.v2-studio-chks'), '네 가지만 확인하면 돼요. 다른 게 있으면 「더 고치기」를 눌러주세요.', '이름이 「' + S.title + '」 맞나요?');
+    coach('check', h.querySelector('.v2-studio-chks'), '다섯 가지만 확인하면 돼요. 다른 게 있으면 「더 고치기」를 눌러주세요.', '이름이 「' + S.title + '」 맞나요?');
   };
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
@@ -1240,6 +1315,8 @@ async function build(rec: StudioRec): Promise<void> {
       //  버전을 못 읽었으면(0) 지난 결과를 믿지 않는다 — 다른 버전의 대조를 그대로 보일 수 있다.
       const same = !!rec.check && S.curVer > 0 && rec.check.ver === S.curVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
       S.check = same && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; paintCheck();
+      //  ④ 아이콘은 지금 버전의 매니페스트에서 — ③ 에서 버전이 올랐을 수 있어 들어올 때마다 다시 읽는다.
+      if (rec.appId) void readVis(rec.appId).then((v) => { if (S.dead) return; S.iconRead = true; if (v) S.vis = v; if (rec.stage === 'check') paintCheck(); });
       //  청한 때의 버전 · 카드로 결과에 도장을 찍는다(답이 올 때의 것이 아니라 — 그 사이 바뀌었으면 다음에 다시 묻는다).
       if (!same && rec.card && rec.appId) { S.checkWait = true; S.checkFor = { ver: S.curVer, card: cardText(rec.card) }; void send(checkBrief(rec.card, rec.appId)); }
     }
@@ -1279,7 +1356,9 @@ async function build(rec: StudioRec): Promise<void> {
     try {
       //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
       //   「워크스페이스 모두」 면 이 저장이 곧 공개다(publish) · 「나만」 이면 공개하지 않는다.
-      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName, { publish: share === 'all' });
+      const pickedIcon = rec.icon ? iconSpec(rec.icon) : null;   // ④ 에서 고른 아이콘 — 서버 잣대로 한 번 더 거른다(틀린 선언이면 이 저장이 400 으로 막힌다)
+      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; if (pickedIcon) man.icon = pickedIcon; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName + (pickedIcon ? ' · 아이콘' : ''), { publish: share === 'all' });
+      delete rec.icon;   // 매니페스트에 실렸다 — 다음 ④ 는 저장된 아이콘에서 시작한다
       S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
     } catch (e: any) { toast('마무리 표시를 저장하지 못했어요. 앱은 그대로 쓸 수 있어요. (' + (e && e.message ? e.message : e) + ')', true); }
     S.vis = await readVis(rec.appId);
@@ -1303,7 +1382,7 @@ async function build(rec: StudioRec): Promise<void> {
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
   teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
-    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
+    window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
