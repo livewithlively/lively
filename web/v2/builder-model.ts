@@ -13,7 +13,7 @@ import { draftTitle, isAppInProgress, isBuilderSession, isBuildingSession } from
 
 export interface BuilderEnv {
   projects: () => ReadonlyArray<{ id: number; name: string }>;
-  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null }>;
+  sessions: () => ReadonlyArray<{ id: string; label: string; projectId: number | null; task?: unknown; lastSeen?: number; createdAt?: number; owned?: boolean; node?: string | null; trashedAt?: string | null; logId?: string | null; logNode?: string | null; raw?: { claudeSessionId?: unknown } | null }>;
   /** 앱빌더 사이드바를 다시 그린다 — 앱빌더 안의 이동(셸이 다시 그리지 않는다)과 목록을 새로 받은 뒤. */
   redrawSide?: () => void;
   /** 앱빌더가 주소를 hashchange 없이 바꿨다(고른 카드 · 새 세션) — 셸 탭의 주소도 맞춘다(탭을 다시 켜면 그 주소로 돌아온다). */
@@ -68,7 +68,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
   const isDone = (a: BApp): boolean => !a.empty && (!!(a.studio && a.studio.put) || a.visibility === 'all');
   //  카드 이름 = 사람이 정한 앱 이름(원준 2026-10-15 «내가 이름 정해 주지 않았나? 그걸로») — 기록의 이름 · 기획 카드 · 세션 이름 «"이름" 앱 제작» · 앱 이름 차례(lib/builder-flow draftTitle).
   const appTitleOf = (id: string): string => { const a = id ? apps.find((x) => x.id === id) : null; return a && !a.empty ? a.title : ''; };
-  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid)).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
+  //  이 브라우저의 기록이 남아 있어도 그 세션을 휴지통에 버렸으면 서지 않는다.
+  const drafts: Draft[] = recs.filter((r) => !r.done && !deletedSids.has(r.sid) && !sessOf(r.sid)?.trashedAt).map((r) => ({ sid: r.sid, title: draftTitle({ title: r.title, cardName: r.card && r.card.name, label: sessOf(r.sid)?.label, appTitle: appTitleOf(r.appId || r.draftId || ''), what: r.what }), stage: r.stage, appId: r.appId, done: !!r.done, at: r.at, local: true, node: String(sessOf(r.sid)?.node || ''), serverApp: r.draftId || r.appId || '' }));
   const seen = new Set(drafts.map((d) => d.sid));
   const doneSids = new Set(apps.filter((a) => a.buildSession && isDone(a)).map((a) => a.buildSession));
   //  서버가 아는 내 만들기 — 공개 전이고 마무리 전인 나만 보는 앱(다른 기기 · 다른 브라우저에서 시작한 것도 여기 선다).
@@ -84,7 +85,8 @@ export function buildModel(apps: BApp[], m: { id: string; name: string }, env: P
     drafts.push({ sid: a.buildSession, title: draftTitle({ label: sessOf(a.buildSession)?.label, appTitle: a.empty ? '' : a.title, what: a.empty ? a.title : '' }), stage: a.empty ? 'plan' : 'fix', appId: a.empty ? '' : a.id, done: false, at: a.installedAt, local: false, node: String(sessOf(a.buildSession)?.node || ''), serverApp: a.id });
   });
   //  내 세션만(owned 는 서버 판정 — 없으면 옛 목록, 그때는 보인다). 남이 만들던 앱은 남의 것이다.
-  env.sessions().filter((s) => !s.task && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
+  //   휴지통에 버린 세션(홈 사이드바)은 만들던 앱이 아니다 — 지난 세션(멈춘 것)은 이어서 만들 수 있으니 그대로 선다. 앱빌더 「지우기」 는 완전 삭제라 목록에서 아예 빠진다.
+  env.sessions().filter((s) => !s.task && !s.trashedAt && s.owned !== false && !seen.has(s.id) && !deletedSids.has(s.id) && isBuilderSession(s.label, projName(s.projectId))).forEach((s) => {
     if (doneSids.has(s.id)) return;   // 그 세션이 만든 앱이 이미 다 만들어졌다 — 「내가 만든 앱」 에 선다
     const a = apps.find((x) => x.buildSession === s.id);
     drafts.push({ sid: s.id, title: draftTitle({ label: s.label, appTitle: a && !a.empty ? a.title : '' }), stage: a && !a.empty ? 'fix' : 'plan', appId: a && !a.empty ? a.id : '', done: false, at: s.lastSeen || s.createdAt || 0, local: false, node: String(s.node || ''), serverApp: a ? a.id : '' });
