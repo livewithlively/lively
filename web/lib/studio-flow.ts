@@ -406,6 +406,12 @@ export function draftBrief(card: StudioCard, place: StudioPlace, appId = ''): st
 /** ④ 짚은 곳 — 선택한 요소(pick) · 핀(pin, 기본) · 영역(box). 좌표는 앱 화면의 비율(0~1), w · h 는 요소 · 영역의 크기. */
 /** on: 'wire' — 앱 화면이 아니라 「와이어프레임(화면 흐름) 보기」 보드에서 짚은 곳(좌표는 그 그림 전체의 비율). 없으면 앱 화면. */
 export interface StudioPin { x: number; y: number; where: string; note: string; kind?: 'pick' | 'pin' | 'box'; w?: number; h?: number; on?: 'wire';
+  /** 짚을 때 앱 문서가 스크롤돼 있던 자리(px) — x · y 는 그때 보이던 화면의 비율이라, 번호가 스크롤을 따라가고 AI 에게도 «내린 화면» 을 말한다. */
+  sx?: number; sy?: number;
+  /** 짚을 때 앱 안쪽 스크롤 칸들의 스크롤 합(px) — 그 뒤 안쪽 칸이 움직이면 번호가 어느 칸 것인지 몰라 숨긴다(격리 리뷰 #1585). */
+  ix?: number; iy?: number;
+  /** 와이어프레임 그림이 없어 보드에 **앱 화면을 대신 놓았을 때** 그 카드(side = 세션 위젯 꼴 · full = 앱 화면 꼴) — x · y 는 그 카드 안의 비율이다. */
+  screen?: 'side' | 'full';
   /** 「수정하기」로 이미 보내 AI 가 반영하고 있는 코멘트 — 고치는 동안에도 다음 코멘트를 남기게(원준 2026-10-28) 목록엔 두되 세지 않고 고칠 수 없다.
    *  새 버전이 오면 걷는다 · 기록(localStorage)엔 남기지 않는다(새로 열면 보낸 것은 이미 AI 에게 있다). */
   sent?: boolean }
@@ -419,7 +425,10 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
     if (!p.note.trim() || p.sent) return;
     const at = `왼쪽에서 ${pc(p.x)}% · 위에서 ${pc(p.y)}%`;
     //  와이어프레임 보드에서 짚은 곳은 그 그림(${WIREFRAME_PATH}) 안의 자리다 — 앱 화면의 자리와 섞이지 않게 말머리를 가른다.
-    const on = p.on === 'wire' ? `와이어프레임(${WIREFRAME_PATH})의` : '화면의';
+    //   그림이 없어 보드에 앱 화면을 대신 놓았으면 그 화면 카드 안의 자리다(그런 파일은 없다). 앱 화면에서 스크롤을 내린 채 짚었으면 그 화면 기준이다.
+    const sy = Math.round(p.sy || 0);
+    const on = p.on === 'wire' ? (p.screen ? `와이어프레임 보드에 놓은 앱 화면(${p.screen === 'side' ? '세션 위젯' : '앱 화면'} 꼴)의` : `와이어프레임(${WIREFRAME_PATH})의`)
+      : sy > 0 ? `앱을 아래로 ${sy}px 내린 화면의` : '화면의';
     if (p.kind === 'pick') lines.push(`[선택한 요소 ${i + 1}] ${p.where || '요소'} — ${on} ${at} · 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% → ${p.note.trim()}`);
     else if (p.kind === 'box') lines.push(`[영역 ${i + 1}] ${on} ${at} 지점부터 폭 ${pc(p.w)}% · 높이 ${pc(p.h)}% 인 영역${p.where ? ' · 가운데 ' + p.where : ''} → ${p.note.trim()}`);
     else lines.push(`[핀 ${i + 1}] ${on} ${at} 자리${p.where ? ' · ' + p.where : ''} → ${p.note.trim()}`);
@@ -469,11 +478,36 @@ export function editBrief(appId: string, title: string, place: StudioPlace): str
   return `워크스페이스 앱 「${title}」(id ${appId}) 을 고치려고 해. app_pull ${appId} 로 받아 둬. 내가 보내는 고침을 반영해 새 버전으로 저장해 줘(app_save · note 는 바뀐 점 한 줄 · 모두가 쓰는 앱이니 있던 것은 그대로). ${PLACE[place].say} ${RULE} 지금은 「받았어요」 한 줄만.`;
 }
 
-/** 앱 틀 안에 넣는 탐침 — 「찍어서 의견」: 호스트가 비율 좌표를 주면 그 자리의 요소(태그 · 글)를 알려 주고 테두리를 그린다. */
+/** 앱 틀 안에 넣는 탐침 — 「찍어서 의견」: 호스트가 비율 좌표를 주면 그 자리의 요소(태그 · 글)를 알려 주고 테두리를 그린다.
+ *  스크롤도 맡는다(점검 3-3) — 코멘트 도구의 덮개가 휠을 넘기면(wheel) 그 자리의 스크롤되는 칸(본문 포함 · 없으면 문서)을 내리고,
+ *  무엇이든 스크롤되면(처음 한 번 · 그 뒤 50ms 에 한 번 · 안쪽 칸도 잡는다) 자리를 알린다(scroll): 문서 스크롤 sx · sy(본문이 스크롤 칸이면 본문 것) +
+ *  안쪽 칸들의 스크롤 합 ix · iy — 번호는 문서 스크롤을 따라가고, 안쪽 칸이 움직였으면 어느 칸 것인지 몰라 숨긴다. 답(hitres)에도 그때의 값을 싣는다. */
 export const PROBE_JS = "(function(){var box=null;function mark(r){if(!box){box=document.createElement('div');box.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:2px solid #7B61E0;border-radius:4px;background:rgba(123,97,224,.12);box-shadow:0 0 0 2px #fff';document.documentElement.appendChild(box);}box.style.left=r.left+'px';box.style.top=r.top+'px';box.style.width=r.width+'px';box.style.height=r.height+'px';box.style.display='';}"
-  + "window.addEventListener('message',function(ev){var m=ev.data;if(!m||typeof m!=='object')return;if(m.__studio==='clear'){if(box)box.style.display='none';return;}if(m.__studio!=='hit')return;"
-  + "var W=innerWidth||1,H=innerHeight||1,e=document.elementFromPoint(m.x*W,m.y*H)||document.body;var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);var r=e.getBoundingClientRect();mark(r);"
-  + "parent.postMessage({__studio:'hitres',id:m.id,tag:e.tagName.toLowerCase(),text:t,rect:{l:r.left/W,t:r.top/H,w:r.width/W,h:r.height/H}},'*');});})();";
+  + "var seen=[];function at(){var b=document.body,o={sx:Math.round(Math.max(scrollX||0,b?b.scrollLeft:0)),sy:Math.round(Math.max(scrollY||0,b?b.scrollTop:0)),ix:0,iy:0};for(var i=0;i<seen.length;i++){o.ix+=Math.round(seen[i].scrollLeft);o.iy+=Math.round(seen[i].scrollTop);}return o;}"
+  + "function tell(){var o=at();o.__studio='scroll';parent.postMessage(o,'*');}var pend=0;tell();"
+  + "document.addEventListener('scroll',function(ev){var t=ev.target;if(t&&t.nodeType===1&&t!==document.documentElement&&t!==document.body&&seen.indexOf(t)<0)seen.push(t);if(pend)return;pend=1;setTimeout(function(){pend=0;if(box)box.style.display='none';tell();},50);},{capture:true,passive:true});"
+  + "function can(e,dx,dy){var cs=getComputedStyle(e);if(dy&&/(auto|scroll)/.test(cs.overflowY)&&(dy>0?e.scrollTop+e.clientHeight<e.scrollHeight-1:e.scrollTop>0))return true;if(dx&&/(auto|scroll)/.test(cs.overflowX)&&(dx>0?e.scrollLeft+e.clientWidth<e.scrollWidth-1:e.scrollLeft>0))return true;return false;}"
+  + "window.addEventListener('message',function(ev){var m=ev.data;if(!m||typeof m!=='object')return;if(m.__studio==='clear'){if(box)box.style.display='none';return;}"
+  + "if(m.__studio==='wheel'){var dx=+m.dx||0,dy=+m.dy||0,q=document.elementFromPoint((+m.x||0)*(innerWidth||1),(+m.y||0)*(innerHeight||1));while(q&&q!==document.documentElement){if(can(q,dx,dy)){if(q!==document.body&&seen.indexOf(q)<0)seen.push(q);q.scrollBy(dx,dy);setTimeout(tell,0);return;}q=q.parentElement;}scrollBy(dx,dy);setTimeout(tell,0);return;}"
+  + "if(m.__studio!=='hit')return;"
+  + "var W=innerWidth||1,H=innerHeight||1,e=document.elementFromPoint(m.x*W,m.y*H)||document.body;var t=(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().slice(0,80);var r=e.getBoundingClientRect();mark(r);var o=at();"
+  + "parent.postMessage({__studio:'hitres',id:m.id,tag:e.tagName.toLowerCase(),text:t,rect:{l:r.left/W,t:r.top/H,w:r.width/W,h:r.height/H},sx:o.sx,sy:o.sy,ix:o.ix,iy:o.iy},'*');});})();";
+
+/** 탐침의 답(hitres) 거르기 — 실제 화면 막대(app-review)와 와이어프레임 보드(wire-board)가 같이 쓴다(점검 3-13).
+ *  앱(또는 AI 가 쓴 그림)이 돌려준 값이라 그대로 믿지 않는다 — 태그는 짧은 영문만(아니면 div) · 글은 80자 · 좌표와 스크롤은 유한한 수만(아니면 0).
+ *  AI 에게 가는 고침 글에 실린다. hitres 가 아니거나 번호가 없으면 null. */
+export interface HitRes { id: number; tag: string; text: string; rect: { l: number; t: number; w: number; h: number } | null; sx: number; sy: number; ix: number; iy: number }
+/** 탐침이 알린 스크롤(px) — 앱이 준 값이라 0 ~ 1e6 으로 자른다(격리 리뷰 #1585). */
+export const scrollPx = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? Math.min(1e6, Math.max(0, Math.round(n))) : 0; };
+export function readHitRes(m: unknown): HitRes | null {
+  const o = m as any;
+  if (!o || typeof o !== 'object' || o.__studio !== 'hitres' || typeof o.id !== 'number' || !Number.isFinite(o.id)) return null;
+  const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const tag = String(o.tag || '');
+  return { id: o.id, tag: /^[a-z][a-z0-9-]{0,23}$/.test(tag) ? tag : 'div', text: String(o.text || '').slice(0, 80),
+    rect: o.rect && typeof o.rect === 'object' ? { l: num(o.rect.l), t: num(o.rect.t), w: num(o.rect.w), h: num(o.rect.h) } : null,
+    sx: scrollPx(o.sx), sy: scrollPx(o.sy), ix: scrollPx(o.ix), iy: scrollPx(o.iy) };
+}
 
 /** 찍은 자리를 AI 에게 말할 때의 글 — 「<h1 「이번 회의 안건」>」. */
 export function whereText(hit: { tag?: string; text?: string } | null): string {

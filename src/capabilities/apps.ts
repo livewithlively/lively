@@ -32,7 +32,7 @@ import { webRootOf } from "../apps/manifest.js";
 import { sessionDirAccess } from "./app-bundle-dir.js";
 import type { StagedSource } from "../apps/install-source.js";
 import {
-  APP_VISIBILITIES, appViewFor, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, isAdminViewer, isAppOwner, isEmptyDraftApp, isOthersPendingVersion,
+  APP_VISIBILITIES, appViewFor, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, enabledDenial, isAdminViewer, isAppOwner, isEmptyDraftApp, isOthersPendingVersion,
   listsAppFor, publishDenial, tablesGoneAtPublish, unpublishDenial, type AppView, type AppVisibility, type Viewer,
 } from "../apps/visibility.js";   // #4632 공개 범위(나만 · 모두) · #4667 공개 판 · 초안 · 책임자
 import { asPublished, liveTableNames, viewAppFor } from "../apps/app-view.js";
@@ -560,7 +560,11 @@ const appSetEnabled: Capability = {
   handler: async (input: Record<string, unknown>, user, ctx) => {
     const id = appId(input.app_id);
     //  #4667 남이 만들고 있는(나만 보는) 앱은 없는 앱과 같다 — 남이 끄고 켜지 못한다(격리 리뷰 NB-4).
-    await requireVisibleApp(id, viewerOf(user));
+    //  보이는 앱이어도 구성원이 만든 앱은 책임자 · 관리자만 켜고 끈다(apps/visibility enabledDenial · 리뷰 N9).
+    const who = viewerOf(user);
+    const app = await requireVisibleApp(id, who);
+    const denied = enabledDenial(app, who);
+    if (denied) throw new HttpError(403, denied);
     await store.setAppEnabled(id, !!input.enabled, wctx(user, ctx));
     if (!input.enabled) await stopWorkersForApp(id, "app_disabled");
     //  #4684 — 끄면 붙은 세션에서 앱 폴더가 떨어지고, 다시 켜면 다시 붙는다(판정은 folderAppsFor — 기다리지 않는다).

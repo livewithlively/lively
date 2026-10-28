@@ -6,7 +6,7 @@
 //  설명을 쓰는 중이면 6초마다 다시 묻는다(창이 붙어 있는 동안만).
 import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
-import { callKindLabel, isCurrentSpec, mergeTables, retryAfterText, sizeText, specShouldPoll, specStateLine, whereText, type SpecResponse } from '../lib/app-spec-view.js';
+import { callKindLabel, isCurrentSpec, mergeTables, regenToast, sizeText, specShouldPoll, specStateLine, whereText, type SpecResponse } from '../lib/app-spec-view.js';
 
 const POLL_MS = 6000;
 const POLL_MAX = 100;   // 10분
@@ -50,7 +50,7 @@ export function renderAppSpec(host: HTMLElement, appId: string, back: () => void
     }
     if (stopped || !root.isConnected) return;
     painted = true; fails = 0; last = r;
-    if (method === 'POST') toast(r.retry_after_ms ? retryAfterText(r.retry_after_ms) : '설명을 다시 쓰기 시작했어요', !!r.retry_after_ms);
+    if (method === 'POST') { const t = regenToast(r); toast(t.text, t.warn); }
     const more = specShouldPoll(r.spec_state) && polls < POLL_MAX;
     paint(r, specShouldPoll(r.spec_state) && !more ? 'slow' : '');
     if (more) { polls++; timer = window.setTimeout(() => { if (root.isConnected) void load(); else stop(); }, POLL_MS); }

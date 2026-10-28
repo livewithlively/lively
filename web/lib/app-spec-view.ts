@@ -31,6 +31,18 @@ export interface SpecResponse {
   /** 「다시 만들기」 를 막 눌러 다시 쓰기 간격(1분)이 안 지났다 — 이만큼 뒤에 다시 누를 수 있다(감사 4-11). 없으면 null. */
   retry_after_ms?: number | null;
 }
+/** 「다시 만들기」 를 누른 뒤의 알림 — 실제로 다시 쓰기 시작했을 때만 «시작했어요», 아니면 왜 못 했는지(리뷰 N10 · 감사 4-11).
+ *  간격에 막힘(retry_after_ms) · 오늘 몫을 다 씀(limit) · 키 없음(unavailable) · 그대로 실패(failed) · 이미 다 씀(ok). */
+export function regenToast(r: Pick<SpecResponse, 'spec_state' | 'retry_after_ms'>): { text: string; warn: boolean } {
+  if (r.retry_after_ms) return { text: retryAfterText(r.retry_after_ms), warn: true };
+  switch (r.spec_state) {
+    case 'writing': case 'stale': return { text: '설명을 다시 쓰기 시작했어요', warn: false };
+    case 'limit': return { text: '오늘 설명을 쓸 수 있는 횟수를 다 썼어요. 내일 다시 눌러 주세요.', warn: true };
+    case 'unavailable': return { text: '워크스페이스 API 키가 없어 설명을 다시 쓰지 못했어요.', warn: true };
+    case 'ok': return { text: '이미 지금 버전의 설명이 있어요.', warn: false };
+    default: return { text: '설명을 다시 쓰기 시작하지 못했어요. 잠시 후 다시 눌러 주세요.', warn: true };
+  }
+}
 /** 다시 만들기가 간격에 막혔을 때 알림 — «N초 뒤에 다시 눌러 주세요». */
 export function retryAfterText(ms: number): string {
   const sec = Math.max(1, Math.ceil(ms / 1000));

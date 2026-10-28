@@ -17,12 +17,13 @@ const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.str
 /**
  * cur(이 탭의 기록 — 고쳐 쓴다)에 stored(지금 저장돼 있는 것)를 합친다. base = 이 탭이 그 기록을 읽었을 때.
  *  이 탭이 안 바꾼 칸(cur === base)인데 저장된 값이 달라졌으면(다른 탭이 바꿨다) 저장된 값을 받는다. 두 탭이 같은 칸을 바꿨으면 이 탭(나중 저장)이 이긴다.
- *  다른 탭이 지운 칸은 이 탭도 지운다. 바꾼 칸의 이름을 돌려준다(받은 것).
+ *  다른 탭이 지운 칸은 이 탭도 지운다. skip 의 칸은 늘 이 탭 것(화면이 그 값을 쥐고 있어 바꿔 끼우면 갈라진다). 바꾼 칸의 이름을 돌려준다(받은 것).
  */
-export function mergeRec(cur: Record<string, unknown>, base: Record<string, unknown>, stored: Record<string, unknown>): string[] {
+export function mergeRec(cur: Record<string, unknown>, base: Record<string, unknown>, stored: Record<string, unknown>, skip: readonly string[] = []): string[] {
   const took: string[] = [];
   const keys = new Set([...Object.keys(cur), ...Object.keys(stored), ...Object.keys(base)]);
   for (const k of keys) {
+    if (skip.includes(k)) continue;
     if (!same(cur[k], base[k])) continue;          // 이 탭이 바꿨다
     if (same(stored[k], base[k])) continue;        // 다른 탭도 안 바꿨다
     if (stored[k] === undefined) delete cur[k]; else cur[k] = JSON.parse(JSON.stringify(stored[k]));
