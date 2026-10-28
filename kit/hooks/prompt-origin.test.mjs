@@ -17,11 +17,12 @@ import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
 
-// 사양이 이름으로 정한 접두 — 서버 판별식에 없는 `<agent-message` 도 여기엔 있다.
+// 사양이 이름으로 정한 접두 — web/lib/ask-text.ts 정본의 일부다. 정본 전체는 §M4 가 덮는다.
 const SPEC_PREFIXES = [
   "<command-name", "<local-command-", "<command-message", "<command-args", "<bash-",
   "<task-notification", "<system-reminder", "<agent-message",
   "[Request interrupted", "Caveat:", "This session is being continued",
+  "Another Claude session sent a message",
 ];
 
 // ── §M1 접두로 시작하면 주입이다(앞 공백은 건너뛴다) ──
@@ -46,37 +47,22 @@ const SPEC_PREFIXES = [
     : bad("M2 사람 말 = false", `true 로 나온 입력: ${JSON.stringify(wrong)}`);
 }
 
-// ── §M3 INJECTED_PROMPT_RE 는 isInjectedPrompt 와 같은 판정을 하는 정규식이다(문자열 입력) ──
-{
-  const rows = [
-    ...SPEC_PREFIXES.map((p) => `  ${p}>x`),
-    ...SPEC_PREFIXES.map((p) => `사람 ${p}`),
-  ];
-  const diverge = INJECTED_PROMPT_RE instanceof RegExp
-    ? rows.filter((s) => INJECTED_PROMPT_RE.test(s) !== isInjectedPrompt(s))
-    : ["(RegExp 아님)"];
-  diverge.length === 0
-    ? ok(`M3 INJECTED_PROMPT_RE 가 RegExp 이고 ${rows.length}행에서 isInjectedPrompt 와 같은 답을 낸다`)
-    : bad("M3 INJECTED_PROMPT_RE 일치", `어긋난 입력: ${JSON.stringify(diverge)}`);
-}
-
-// ── §M4 서버 판별식(INJECTED_RE)의 접두는 전부 이 모듈도 주입으로 본다 ──
-//  서버 TS 를 import 할 수 없어 선언 한 줄을 텍스트로 읽는다. 서버에 접두가 늘면 이 시험이 따라 늘어난다.
-{
-  const ts = readFileSync(join(REPO, "src", "terminal", "terminal-transcript.ts"), "utf8");
+// ── §M4 서버 판별식(INJECTED_RE) 두 벌의 접두는 전부 이 모듈도 주입으로 본다 ──
+//  TS 를 import 할 수 없어 선언 한 줄을 텍스트로 읽는다. 어느 쪽에 접두가 늘면 이 시험이 따라 늘어난다.
+for (const rel of [["src", "terminal", "terminal-transcript.ts"], ["web", "lib", "ask-text.ts"]]) {
+  const ts = readFileSync(join(REPO, ...rel), "utf8");
   const m = ts.match(/^export const INJECTED_RE = \/\^\\s\*\((.+)\)\/;\s*$/m);
-  if (!m) bad("M4 서버 INJECTED_RE 선언", "`export const INJECTED_RE = /^\\s*(…)/;` 한 줄을 찾지 못했다");
-  else {
-    const serverRe = new RegExp(`^\\s*(${m[1]})`);
-    // 대안 하나하나는 리터럴 접두다(정규식 이스케이프만 걷어낸다).
-    const alts = m[1].split("|").map((a) => a.replace(/\\(.)/g, "$1"));
-    const samples = alts.map((a) => `${a} 서버 접두 표본`);
-    const notServer = samples.filter((s) => !serverRe.test(s)); // 표본 생성이 틀렸으면 시험 자체가 무의미하다
-    const missed = samples.filter((s) => !isInjectedPrompt(s));
-    alts.length > 0 && notServer.length === 0 && missed.length === 0
-      ? ok(`M4 서버 INJECTED_RE 접두 ${alts.length}종을 이 모듈도 전부 주입으로 본다`)
-      : bad("M4 서버 접두 포함", `alts=${JSON.stringify(alts)} 표본불일치=${JSON.stringify(notServer)} 놓침=${JSON.stringify(missed)}`);
-  }
+  const at = rel.join("/");
+  if (!m) { bad(`M4 ${at} INJECTED_RE 선언`, "`export const INJECTED_RE = /^\\s*(…)/;` 한 줄을 찾지 못했다"); continue; }
+  const serverRe = new RegExp(`^\\s*(${m[1]})`);
+  // 대안 하나하나는 리터럴 접두다(정규식 이스케이프만 걷어낸다).
+  const alts = m[1].split("|").map((x) => x.replace(/\\(.)/g, "$1"));
+  const samples = alts.map((x) => `${x} 서버 접두 표본`);
+  const notServer = samples.filter((x) => !serverRe.test(x)); // 표본 생성이 틀렸으면 시험 자체가 무의미하다
+  const missed = samples.filter((x) => !isInjectedPrompt(x));
+  alts.length > 0 && notServer.length === 0 && missed.length === 0 && INJECTED_PROMPT_RE instanceof RegExp
+    ? ok(`M4 ${at} 접두 ${alts.length}종을 이 모듈도 전부 주입으로 본다`)
+    : bad(`M4 ${at} 접두 포함`, `alts=${JSON.stringify(alts)} 표본불일치=${JSON.stringify(notServer)} 놓침=${JSON.stringify(missed)}`);
 }
 
 // ── 러너: 훅이 받은 stdin 을 그대로 되돌려 보는 훅 ──

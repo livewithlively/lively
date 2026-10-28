@@ -74,7 +74,7 @@ function cacheFile(sid) {
   try {
     const o = JSON.parse(stdinData || "{}");
     prompt = String(o.prompt || "").trim();
-    injectedPrompt = o.lively_prompt_injected === true;
+    injectedPrompt = Boolean(o.lively_prompt_injected);
     transcriptPath = String(o.transcript_path || "");
     sessionId = String(o.session_id || "");
   } catch { return; }
