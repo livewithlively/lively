@@ -249,7 +249,7 @@ async function paintList(v: View, env: BuilderEnv): Promise<void> {
     const card = el('div', { class: 'v2-bld-card v2-bld-card--sel' + (v.sel === draftKey(d) ? ' on' : ''), role: 'listitem', tabindex: '0', title: '누르면 오른쪽에 이어서 만들기와 지우기가 나와요',
       onclick: (e: MouseEvent) => { if ((e.target as HTMLElement).closest('button')) return; pick(draftKey(d)); },
       onkeydown: (e: KeyboardEvent) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === card) { e.preventDefault(); pick(draftKey(d)); } } },
-      el('div', { class: 'hd' }, appGlassIcon('builder'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done), when(d.at), d.local ? '' : '다른 컴퓨터에서'].filter(Boolean).join(' · ') }))),
+      el('div', { class: 'hd' }, appGlassIcon('builder'), el('div', { style: 'min-width:0' }, el('b', { text: d.title }), el('small', { text: [draftStageText(d.stage, !!d.appId, d.done, d.fixing), when(d.at), d.local ? '' : '다른 컴퓨터에서'].filter(Boolean).join(' · ') }))),
       el('div', { class: 'v2-bld-acts' },
         el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
         specApp(d) ? specBtn(specApp(d)) : null,
@@ -337,7 +337,7 @@ function paintDraftPanel(v: View, d: Draft, specId: string, del: (d: Draft) => P
   const delBtn = armedDelete('btn btn-ghost btn-sm', '모두 지우기 (앱, 세션, 기록)', '한 번 더 누르면 지워져요. 되돌릴 수 없어요.', '', () => del(d));
   v.panel.replaceChildren(
     el('h3', { text: '만들던 앱 「' + d.title + '」' }),
-    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '어디까지' }), el('small', { text: draftStageText(d.stage, !!d.appId, d.done) + (d.at ? ' · ' + when(d.at) : '') + (d.local ? '' : ' · 다른 컴퓨터에서 만들던 것') })),
+    el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '어디까지' }), el('small', { text: draftStageText(d.stage, !!d.appId, d.done, d.fixing) + (d.at ? ' · ' + when(d.at) : '') + (d.local ? '' : ' · 다른 컴퓨터에서 만들던 것') })),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '앱' }), el('small', { text: d.appId ? '초안이 있어요(' + d.appId + '). 지우면 버전 이력도 함께 없어져요.' : '아직 앱이 없어요(기획 단계)' })),
     el('div', { class: 'v2-bld-acts' },
       el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 만들기', onclick: () => { location.hash = builderRoute('resume', d.sid); } }),
