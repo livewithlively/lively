@@ -162,12 +162,13 @@ export function pushAppState(appId: string, state: Record<string, unknown>): num
   liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected) { f.notify('ui/notifications/state', { state }); n++; } });
   return n;
 }
-/** 검토를 시작한다(markReviewProbe(…, true) 뒤) — 떠 있는 이 앱의 프레임 중 탐침 없이 뜬 것만 다시 띄운다(점검 3-1).
+/** 검토 막대가 따라가는 프레임(only)이 탐침 없이 떠 있으면 그것만 다시 띄운다(점검 3-1 · markReviewProbe(…, true) 뒤).
  *  검토하지 않는 동안(막대를 닫고 앱빌더로 돌아온 사이) 새 판이 와 다시 띄운 프레임은 탐침이 빠져 있다 — 그 화면을 그대로 쓰면
- *  「선택」 이 아무 답도 못 받아 위치 없는 핀만 꽂혔다. 표시(data-probe)는 띄울 때마다(reload 포함) 그때의 검토 상태로 다시 적는다. 세션 곁칸도 포함한다. */
-export function ensureReviewProbe(appId: string): number {
+ *  「선택」 이 아무 답도 못 받아 위치 없는 핀만 꽂혔다. 표시(data-probe)는 띄울 때마다(reload 포함) 그때의 검토 상태로 다시 적는다. */
+export function ensureReviewProbe(appId: string, only: Element): number {
+  //  막대가 따라가는 그 프레임만 — 같은 앱의 다른 화면(다른 탭 · 곁칸)을 다시 띄우면 거기 쓰던 상태를 잃는다(격리 리뷰 #1585).
   let n = 0;
-  liveFrames.get(appId)?.forEach((f) => { if (f.root.isConnected && f.root.getAttribute('data-probe') !== '1') { f.reload(); n++; } });
+  liveFrames.get(appId)?.forEach((f) => { if (f.root === only && f.root.isConnected && f.root.getAttribute('data-probe') !== '1') { f.reload(); n++; } });
   return n;
 }
 export function reloadAppFrames(appId: string): number {

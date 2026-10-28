@@ -247,9 +247,10 @@ export interface SessionChatOpts {
   /** #4996 — 터미널로 열기 전에 «다른 사람이 이 세션을 터미널로 보고 있나» 를 열람 도장(v2/presence.ts)으로 확인한다.
    *  도장을 찍는 셸(v2/main.ts markViewedSessionSeen)이 있는 화면만 켠다 — 없는 화면(앱 시험 세션)은 답이 안 와 기다리기만 한다. */
   awaitViewers?: boolean;
-  /** 기록을 못 읽는 답(403 · 404)에 계속 되묻지 않는다 — 셸 목록 밖의 세션 화면(앱빌더 ③ 시험 세션, 점검 3-12)이 켠다.
-   *  403(볼 권한 없음)은 그 자리에서 그만 묻고, 404(아직 없음)는 처음 뜨는 사이를 봐 MISSING_GRACE 번까지만 기다린다. 일반 세션 화면은 종전대로 묻는다. */
-  stopOnMissing?: boolean;
+  /** 기록을 못 읽는 답(403 · 404)에 촘촘히 되묻지 않는다 — 셸 목록 밖의 세션 화면(앱빌더 ③ 시험 세션, 점검 3-12)이 켠다.
+   *  MISSING_GRACE 번 이어지면 안전망 주기(POLL_SAFETY_MS)로 물러난다 — 멈추지는 않는다(뜨는 중인 세션은 그 답이 «아직 없음» 이다).
+   *  읽히면 · 통보가 오면 다시 촘촘히. 죽은 세션의 403 만 그만 묻는다. 일반 세션 화면은 종전대로 묻는다. */
+  slowOnMissing?: boolean;
 }
 const MISSING_GRACE = 10;
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
@@ -1867,6 +1868,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let kickoffOpened = false;
   let pollTimer: number | null = null;
   let poking = false;                         // 깨워 둔 폴이 아직 안 돌았나(pokePoll — 밀어내기 방지)
+  let missing = 0;                            // 못 읽은 답(403 · 404)이 이어진 수 — slowOnMissing 이면 MISSING_GRACE 뒤로 느슨하게 묻는다
   let destroyed = false;
   let lastLineAt = 0;
   //  ★ #3699 — 서버가 «대화 파일이 자랐다» 를 밀어 주고 있나. 참일 때만 폴을 안전망 주기로 늦춘다.
@@ -2609,6 +2611,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   되살린 세션은 기록의 마지막 줄이 오래돼 «도는 중» 이 첫 폴에서 접히고(poll 의 120초 유예) 3초 주기로 물러나며,
     //   통보(watchLive)는 새 컨테이너의 감시자가 서기 전엔 안 온다. 길어야 유예(8초)라 위 두 절감의 범위 밖이다.
     if (termWarm?.painted && deliveryPending() && src.kind === 'box') ms = Math.min(ms, POLL_RUN_MS);
+    //  점검 3-12 — 셸 목록 밖의 화면이 못 읽는 기록을 유예(MISSING_GRACE 번) 넘게 받았으면 안전망 주기로만 묻는다(통보 · pokePoll 은 그대로 깨운다).
+    if (opts.slowOnMissing && missing >= MISSING_GRACE) ms = Math.max(ms, POLL_SAFETY_MS);
     //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
     //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
     //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).
@@ -2627,10 +2631,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   미루는 것은 다르다 — 여기서 필요한 것은 «120ms 안에 한 번» 이지 «마지막 통보로부터 120ms» 가 아니다.
     if (poking) return;
     poking = true;
+    missing = 0;                              // 파일이 자랐다는 통보 — 다시 촘촘히 묻는다
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = window.setTimeout(() => { poking = false; void poll(); }, 120);
   }
-  let fails = 0, missing = 0;
+  let fails = 0;
   async function poll(): Promise<void> {
     if (destroyed || !src) return;
     if (document.hidden) { schedule(); return; }
@@ -2680,8 +2685,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const st = Number(e?.status);
       // '아직 없음'은 실패가 아니다 — 박스 파일은 첫 대화 뒤 생기고, 중앙 기록은 살아있는 세션이면 첫 턴이 끝나야 올라온다.
       const notYet = (st === 404 && src.kind === 'box') || ((st === 404 || st === 403) && src.kind === 'log' && !dead());
-      //  셸 목록 밖의 화면(stopOnMissing)은 못 읽는 기록을 영영 되묻지 않는다 — 403 은 바로, 404 는 처음 뜨는 사이만 기다리고 그만 묻는다(점검 3-12).
-      if (opts.stopOnMissing && (st === 403 || (st === 404 && ++missing >= MISSING_GRACE))) { src = null; return; }
+      //  셸 목록 밖의 화면(slowOnMissing)은 못 읽는 기록을 촘촘히 되묻지 않는다(점검 3-12) — 유예 뒤로는 안전망 주기로 물러난다(schedule).
+      //   멈추지는 않는다: 뜨는 중인 세션은 403 · 404 가 «아직 없음» 이고(위 notYet), 매니지드 첫 부팅은 30초를 넘기기도 한다. 죽은 세션의 403 만 끝이다.
+      if (opts.slowOnMissing && (st === 403 || st === 404)) {
+        if (st === 403 && dead()) { src = null; return; }
+        missing++;
+      }
       if (notYet) { fails = 0; }
       else if (st === 409 && src.kind === 'box' && e?.message === 'node') {
         // 노드(그 컴퓨터) 세션(#1744) — 박스 경로는 영원히 409 다. 서버가 준 uuid(또는 행의 것)로 중앙 기록으로 갈아탄다. 모르면 멈춘다
