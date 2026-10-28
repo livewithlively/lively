@@ -162,6 +162,14 @@ export function verJ(n: number, j: '을' | '으로' | '이' | '은'): string {
   if (k <= 1) return '초안' + j;
   return 'V' + k + ' ' + ({ 을: '를', 으로: '로', 이: '가', 은: '는' } as const)[j];
 }
+/** 공개 확인의 머리 · 본문 — 처음 공개(나만 → 모두)와 이미 공개한 앱의 새 버전 공개를 다르게 말한다. 시험: scripts/app-studio-flow.test.mjs P1~P4. */
+export function publishAsk(opts?: { versionNo?: number; title?: string; liveNo?: number }): { title: string; message: string } {
+  const name = opts && opts.title ? '「' + opts.title + '」 앱' : '이 앱';
+  const live = Number(opts && opts.liveNo) || 0;
+  if (opts && opts.versionNo) return { title: verJ(opts.versionNo, '으로') + ' 되돌려 모두에게 공개할까요?', message: '공개하면 워크스페이스의 모든 사람이 ' + verJ(opts.versionNo, '을') + ' 쓰게 돼요.' };
+  if (live > 0) return { title: '이 버전을 모두에게 공개할까요?', message: '공개하면 워크스페이스의 모든 사람이 지금 쓰는 공개 버전(' + verName(live) + ') 대신 이 버전을 쓰게 돼요.' };
+  return { title: name + '을 워크스페이스 모두에게 공개할까요?', message: '공개하면 워크스페이스의 모든 사람이 앱 찾기에서 이 앱을 보고 쓸 수 있어요.' };
+}
 //  서수는 우리말로 끝까지 — 열한 번째 · 스무 번째 · 아흔아홉 번째(원준 2026-10-16 «그 뒤도 열한 번째 버전이 나왔어요 <- 이렇게»). 백부터는 숫자(100번째).
 const ORD_ONE = ['', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉'];
 const ORD_TEN = ['', '열', '스물', '서른', '마흔', '쉰', '예순', '일흔', '여든', '아흔'];

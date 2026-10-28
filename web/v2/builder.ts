@@ -420,7 +420,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
         //  #4484 서버가 있는 앱이면 공개할 판의 서버가 빌드돼 있어야 한다(남이 저장한 판이면 그 사람이 먼저 빌드해야 한다 — 서버가 까닭을 말한다).
         if (!(await ensureAppServer(a.id))) return;
         //  #4732 남의 것이어도(책임자 · 관리자) 공개하면 표에 무엇을 하는지 먼저 보여 주고 묻는다.
-        if (!(await confirmPublish(a.id, { title: a.title }))) return;
+        if (!(await confirmPublish(a.id, { title: a.title, liveNo: a.publishedNo }))) return;
         void post('/visibility', { visibility: 'all' }, verJ(a.draft!.versionNo, '을') + ' 공개했어요. 이제 워크스페이스 모두가 써요.');
       } }))] : []),
     el('div', { class: 'v2-bld-row' }, el('span', { class: 'k', text: '쓰는 자리' }), seg([['side', '세션 위젯'], ['full', '앱 화면'], ['both', '둘 다']], pl, async (k) => {

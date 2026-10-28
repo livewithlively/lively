@@ -54,9 +54,12 @@ export interface StudioRec {
   /** ③ 「앱 화면으로 보기」 가 앱 찾기와 같은 길(apps.openAppById)로 연 앱 인스턴스(#/i/<id>) — 다시 열 때 같은 탭으로.
    *  옛 칸 instId 는 그 길을 안 거치고 만든 인스턴스라 다시 쓰지 않는다(원준 2026-10-28 «앱 찾기에서 누른 것과 똑같은 게»). */
   appInst?: string;
-  /** ④ 확인에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 'all' 이면 「이대로 넣기」 가 공개한다(app_save publish).
-   *  'me' 면 공개하지 않는다 — 새 앱은 나만 보는 앱으로, 이미 공개한 앱을 고친 것이면 내 초안으로 남는다(공개를 거두지 않는다 · #4667). */
+  /** ⑤ 넣기에서 고른 공개 범위 — 기본 「나만」(원준 2026-10-14 «디폴트가 내가 만든 앱은 나만»). 'all' 이면 「넣기」 가 확인 창을 거쳐 공개한다(app_save publish).
+   *  'me' 면 공개하지 않는다 — 새 앱은 나만 보는 앱으로, 이미 공개한 앱을 고친 것이면 내 초안으로 남는다(공개를 거두지 않는다 · #4667).
+   *  원준 2026-10-28 «5단계에서 하는 일이 너무 없는거 아닌가» — 종전엔 ④ 확인에서 골랐고 ⑤ 는 결과만 보였다. */
   vis?: 'all' | 'me';
+  /** ④ 에서 고친 이름 — ⑤ 「넣기」 의 마무리 저장이 매니페스트 title 에 싣는다(닫았다 열어도 남게 기록에). */
+  putName?: string;
   /** ④ 에서 적던 의견 — 뒤로 갔다 와도 날아가지 않게 기록에 둔다(원준 2026-10-14 «뒤로가기 눌러도 입력했던 내용은 절대 안 날아가게»). */
   pins?: StudioPin[]; general?: string;
   /** 세션 이름을 기획 카드의 이름으로 한 번 지었나(①에서 이름을 비워 둔 경우). */
@@ -419,7 +422,7 @@ function showTour(onDone?: () => void): void {
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고, 쓸 자리를 고른 뒤 「만들기 시작」을 눌러주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
     { n: 2, t: '세부 기획 정하기', now: '기획 카드에서 틀린 내용을 고쳐주세요', body: () => cardView(c, null) },
     { n: 3, t: '시안 확인 · 수정', now: '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2: 제목에 날짜, 「끝남」 단추, 안 끝난 것 먼저' }))) },
-    { n: 4, t: '확인', now: '아래 다섯 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 누가 쓰나: 나만 (기본)' }), el('div', { text: '✓ 아이콘: AI가 그린 그림' }))) },
+    { n: 4, t: '확인', now: '아래 네 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 아이콘: AI가 그린 그림' }))) },
     { n: 5, t: '넣기', now: '「지금 써 보기」로 바로 열어 보고, 「팀에 알리기」로 팀에 알려주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요: 초안, V2 날짜와 끝남 단추, V3 글자 크기' }), el('div', { text: '이렇게 쓰세요: 세션 오른쪽 위 +에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기: 「장원준 님이 「회의 안건」 앱을 만들었어요」' }))) },
   ];
   let i = 0; const ov = el('div', { class: 'v2-studio-intro v2-studio-tour' }); const box = el('div', { class: 'v2-studio-intro-box' });
@@ -910,7 +913,8 @@ async function build(rec: StudioRec): Promise<void> {
       else if (S.waiting) text = 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.';
       else if (hasCm) { text = '코멘트 ' + cmCount() + '건을 남겼어요. 「수정하기」를 누르면 AI가 반영해 다음 버전을 만들어요.'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
       else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
-    } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
+    } else if (rec.stage === 'check') { text = '아래 네 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void toPut(); }, S.check != null && S.check.missing.length > 0)); }
+    else if (rec.stage === 'put' && !rec.done) { text = '누가 쓸지 고르고 「넣기」를 눌러주세요.'; kids.push(nowBtn(putLabel(), true, () => { void putApp(); })); }
     else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
     const st = runKind() === 'icon' ? null : stallInfo();   // 아이콘 기다림의 멈춤은 ④ 아이콘 칸이 말한다 — 위 줄의 「완료 · 다음 단계로」 를 가리지 않는다
     if (st) {   // 기다리던 AI 일이 멈췄다 — «만들고 있어요» 대신 까닭과 할 일(원준 2026-10-26)
@@ -961,7 +965,7 @@ async function build(rec: StudioRec): Promise<void> {
     if (!rec.appId || pubBtn.disabled) return;
     pubBtn.disabled = true;
     try {
-      if (!(await confirmPublish(rec.appId, { title: S.title }))) { pubBtn.disabled = false; return; }
+      if (!(await confirmPublish(rec.appId, { title: S.title, liveNo: liveNo() }))) { pubBtn.disabled = false; return; }
       const out: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: 'all' }) });
       const n = Number(out && out.version_no) || S.curVer;
       toast(verJ(n, '을') + ' 공개했어요. 이어서 수정하면 ' + verJ(n + 1, '은') + ' 다시 비공개로 시작해요.');
@@ -1314,15 +1318,15 @@ async function build(rec: StudioRec): Promise<void> {
     } finally { resuming = false; }
   };
   const nameIn = el('input', { class: 'v2-studio-name-in', type: 'text', maxlength: '40', 'aria-label': '앱 이름' }) as HTMLInputElement;
-  //  ④ 누가 쓰나(#4632 기본 「나만」 · #4667) — 「워크스페이스 모두」 면 「이대로 넣기」 가 공개한다. 「나만」 이면 공개하지 않는다: 새 앱은 나만 보는 앱으로,
+  //  ⑤ 누가 쓰나(#4632 기본 「나만」 · #4667) — 「워크스페이스 모두」 면 「넣기」 가 확인 창을 거쳐 공개한다. 「나만」 이면 공개하지 않는다: 새 앱은 나만 보는 앱으로,
   //   이미 공개한 앱을 고친 것이면 내 초안으로 남고 다른 사람은 공개 판을 계속 쓴다(공개를 거두는 일은 앱빌더 배포 설정에서).
   const whoRow = (): HTMLElement => {
     const vis = rec.vis || 'me';
     const live = !!S.vis && S.vis.visibility === 'all';
     const opts: Array<['all' | 'me', string]> = [['me', live ? '비공개로 두기 (기본)' : '나만 (기본)'], ['all', live ? '모두에게 공개' : '워크스페이스 모두']];
     return el('span', {},
-      el('div', { class: 'v2-studio-chk-places' }, ...opts.map(([k, t]) => el('button', { type: 'button', class: k === vis ? 'on' : '', text: t, onclick: () => { rec.vis = k; saveRec(rec); paintCheck(); } }))),
-      el('small', { text: vis === 'all' ? '「완료 · 다음 단계로」를 누르면 공개돼요. 워크스페이스 모두가 앱 찾기에서 쓸 수 있어요.'
+      el('div', { class: 'v2-studio-chk-places' }, ...opts.map(([k, t]) => el('button', { type: 'button', class: k === vis ? 'on' : '', text: t, onclick: () => { rec.vis = k; saveRec(rec); paintPick(); paintNow(); } }))),
+      el('small', { text: vis === 'all' ? '「넣고 모두에게 공개하기」를 누르면 한 번 더 확인한 뒤 공개돼요. 워크스페이스 모두가 앱 찾기에서 쓸 수 있어요.'
         : live ? '이 버전은 나만 볼 수 있어요. 다른 사람은 지금 공개 버전을 계속 써요.'
           : '나만 볼 수 있어요. 나중에 앱빌더 배포 설정에서 공개할 수 있어요.' }));
   };
@@ -1498,16 +1502,38 @@ async function build(rec: StudioRec): Promise<void> {
     h.replaceChildren(el('div', { class: 'v2-studio-chks' }, r1,
       row(true, '이름', el('span', {}, nameIn, el('small', { text: ' 여기서 바꿀 수 있어요' }))),
       row(true, '쓰는 자리', places),
-      row(true, '누가 쓰나', whoRow()),
       row(true, '아이콘', iconRow()),
       el('p', { class: 'v2-studio-fine', text: '하나라도 다르면 「더 고치기」를 눌러 ③ 단계로 돌아가요.' })));
-    coach('check', h.querySelector('.v2-studio-chks'), '다섯 가지만 확인하면 돼요. 다른 게 있으면 「더 고치기」를 눌러주세요.', '이름이 「' + S.title + '」 맞나요?');
+    coach('check', h.querySelector('.v2-studio-chks'), '네 가지만 확인하면 돼요. 다른 게 있으면 「더 고치기」를 눌러주세요.', '이름이 「' + S.title + '」 맞나요?');
     if (refocus) refocus.focus();
     else if (focusK) {
       const hit = [...h.querySelectorAll<HTMLElement>('[data-ico-k]')].find((n) => n.getAttribute('data-ico-k') === focusK)
         || h.querySelector<HTMLElement>('[data-ico-k="toggle"]');   // 「처음대로」 처럼 사라진 단추면 펼치기 단추로
       if (hit) hit.focus();
     }
+  };
+  //  ④ → ⑤ — 저장은 ⑤ 「넣기」 가 한 번에 한다(이름 · 아이콘 · 자리 · 공개). 여기서는 고친 이름만 기록에 둔다.
+  const toPut = async (): Promise<void> => { const nm = nameIn.value.trim(); if (nm) rec.putName = nm; else delete rec.putName; saveRec(rec); await setStage('put'); };
+  /** 이미 공개한 앱이면 지금 공개 판 번호(공개 확인 창이 «지금 쓰는 V3 대신» 이라 말한다) — 아니면 0. */
+  const liveNo = (): number => (S.vis && S.vis.visibility === 'all' ? S.vis.publishedNo : 0);
+  const putLabel = (): string => ((rec.vis || 'me') === 'all' ? '넣고 모두에게 공개하기' : '넣기');
+  //  ⑤ 넣기 — 넣기 전(원준 2026-10-28 «5단계에서 하는 일이 너무 없는거 아닌가 · 팀원 전원에게 보이는 과정일 때 마지막으로 확인 팝업»).
+  //   ④ 에서 정한 것을 한 번 보이고, 누가 쓸지 고른다. 「워크스페이스 모두」 면 「넣기」 가 확인 창(publish-preview)을 거쳐 공개한다 · 「나만」 이면 묻지 않는다.
+  const paintPick = (): void => {
+    const h = appHost(); const nm = (rec.putName || '').trim() || S.title;
+    const iconText = rec.icon ? '새로 고른 아이콘' : '지금 아이콘 그대로';
+    const go = el('button', { class: 'v2-studio-go', type: 'button', text: putLabel(), onclick: () => { void putApp(); } }) as HTMLButtonElement;
+    h.replaceChildren(el('div', { class: 'v2-studio-fin v2-studio-pick' },
+      el('h2', { text: '「' + nm + '」 앱을 넣을 준비가 됐어요' }),
+      el('p', { class: 'v2-studio-lead', text: '누가 쓸지 고르고 「넣기」를 누르면 앱 찾기에 들어가요.' }),
+      el('h3', { text: '누가 쓰나' }), whoRow(),
+      el('h3', { text: '④에서 정한 것' }),
+      el('div', { class: 'v2-studio-steps-list' },
+        el('div', { class: 'v2-studio-step' }, el('b', { text: '이름' }), el('p', { text: nm })),
+        el('div', { class: 'v2-studio-step' }, el('b', { text: '쓰는 자리' }), el('p', { text: PLACE[rec.place].title })),
+        el('div', { class: 'v2-studio-step' }, el('b', { text: '아이콘' }), el('p', { text: iconText }))),
+      el('div', { class: 'v2-studio-fin-act' }, go, el('button', { class: 'btn btn-ghost', type: 'button', text: '← 확인으로', onclick: () => { void setStage('check'); } }))));
+    coach('put', go.parentElement, '누가 쓸지 고르고 「넣기」를 눌러주세요. 「워크스페이스 모두」를 고르면 한 번 더 확인해요.', '처음엔 「나만」으로 넣어 써 보고, 나중에 공개해도 돼요');
   };
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
@@ -1579,7 +1605,7 @@ async function build(rec: StudioRec): Promise<void> {
     appBox.className = 'v2-studio-app ' + (s === 'plan' || s === 'check' ? 'v2-studio-app--side' : 'v2-studio-app--full');
     undo.hidden = s === 'put' || !S.prevVer;
     appBox.replaceChildren();
-    if (s === 'put') { rec.done = true; saveRec(rec); paintPut(); }
+    if (s === 'put') { if (rec.done) paintPut(); else paintPick(); }   // 넣기 전이면 「누가 쓰나」 를 고르는 화면 · 넣었으면 결과 화면
     else if (s === 'plan') paintPlan();
     else if (s === 'draft') paintDraft();
     else if (s === 'fix') { if (!rec.appId) paintDraft(); else { paintHub(); void paintVer().then(() => { if (!S.dead && rec.stage === 'fix') paintHub(); }); } }
@@ -1632,12 +1658,12 @@ async function build(rec: StudioRec): Promise<void> {
     try { await putAppOnce(); } finally { putting = false; }
   };
   const putAppOnce = async (): Promise<void> => {
-    const newName = nameIn.value.trim() || S.title;
+    const newName = nameIn.value.trim() || (rec.putName || '').trim() || S.title;
     const share = rec.vis || 'me';
     //  #4484 서버가 있는 앱이면 넣기 전에 서버부터(실패하면 넣지 않는다 — 기록은 만들기 세션으로 간다).
     if (!(await ensureAppServer(rec.appId))) return;
     //  #4732 「워크스페이스 모두」 면 이 저장이 곧 공개다 — 고친 공개 앱이면 미뤄 둔 표 변경이 이때 적용되므로 먼저 보여 주고 묻는다(새 앱은 할 일이 없어 묻지 않는다).
-    if (share === 'all' && !(await confirmPublish(rec.appId, { title: newName }))) return;
+    if (share === 'all' && !(await confirmPublish(rec.appId, { title: newName, liveNo: liveNo() }))) return;
     try {
       //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
       //   「워크스페이스 모두」 면 이 저장이 곧 공개다(publish) · 「나만」 이면 공개하지 않는다.
@@ -1647,7 +1673,7 @@ async function build(rec: StudioRec): Promise<void> {
       S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
     } catch (e: any) { toast('마무리 표시를 저장하지 못했어요. 앱은 그대로 쓸 수 있어요. (' + (e && e.message ? e.message : e) + ')', true); }
     S.vis = await readVis(rec.appId);
-    rec.vis = undefined; saveRec(rec);   // 이번 넣기에 쓴 ④ 의 고름 — 다음 고침은 기본(「나만」 · 공개한 앱이면 「내 초안으로 두기」)에서 다시 고른다
+    rec.vis = undefined; delete rec.putName; rec.done = true; saveRec(rec);   // 이번 넣기에 쓴 ⑤ 의 고름 — 다음 고침은 기본(「나만」 · 공개한 앱이면 「내 초안으로 두기」)에서 다시 고른다
     await setStage('put');
     paintVis();
   };
@@ -1655,7 +1681,7 @@ async function build(rec: StudioRec): Promise<void> {
   const setVisibility = async (v: 'all' | 'me'): Promise<boolean> => {
     try {
       if (v === 'all' && !(await ensureAppServer(rec.appId))) return false;   // #4484 공개할 판의 서버가 빌드돼 있어야 한다
-      if (v === 'all' && !(await confirmPublish(rec.appId, { title: S.title }))) return false;   // #4732
+      if (v === 'all' && !(await confirmPublish(rec.appId, { title: S.title, liveNo: liveNo() }))) return false;   // #4732 · 모두가 쓰게 된다는 확인
       await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) });
       S.vis = await readVis(rec.appId); paintVis(); return true;   // ④ 의 고름(rec.vis)은 건드리지 않는다 — 다음 고침의 기본은 다시 「나만」 쪽(격리 리뷰 2-9)
     } catch (e: any) { toast('공개 범위를 바꾸지 못했어요. ' + (e && e.message ? e.message : e), true); return false; }

@@ -315,5 +315,18 @@ check(/시험해 보는 세션/.test(tb2) && /meeting-notes/.test(tb2) && /app_s
   for (const [t, want, what] of T) check(PL(t) === want, what, { got: PL(t) });
 }
 
+// ══ P 공개 확인 창의 글(원준 2026-10-28 «마지막으로 확인 누르면 모든 팀원들이 이 앱을 사용할 수 있다 하는 팝업») ══
+//  처음 공개(나만 → 모두) · 이미 공개한 앱의 새 버전 · 지난 판으로 되돌려 공개를 다르게 말한다. 이름이 없으면 「이 앱」.
+if (typeof F.publishAsk === "function") {
+  const a = F.publishAsk({ title: "회의록" });
+  check(a.title === "「회의록」 앱을 워크스페이스 모두에게 공개할까요?" && /모든 사람이 앱 찾기에서 이 앱을 보고 쓸 수 있어요/.test(a.message), "P1 처음 공개 — 이름 · «모든 사람이 앱 찾기에서»", a);
+  const b = F.publishAsk({ title: "회의록", liveNo: 3 });
+  check(b.title === "이 버전을 모두에게 공개할까요?" && /지금 쓰는 공개 버전\(V3\) 대신 이 버전/.test(b.message), "P2 이미 공개한 앱(공개 판 V3) — 지금 쓰는 판 대신", b);
+  const c = F.publishAsk({ title: "회의록", versionNo: 2, liveNo: 5 });
+  check(c.title === "V2 로 되돌려 모두에게 공개할까요?" && /V2 를 쓰게 돼요/.test(c.message), "P3 지난 판으로 되돌려 공개 — 그 판 이름(공개 판보다 먼저)", c);
+  const d = F.publishAsk({});
+  check(d.title === "이 앱을 워크스페이스 모두에게 공개할까요?" && F.publishAsk({ liveNo: 0 }).title === d.title, "P4 이름 없음(«이 앱 앱을» 이 아니다) · 공개 판 0(경계) — 처음 공개 꼴", d);
+} else check(false, "P0 publishAsk 가 없다(공개 확인 창 글)");
+
 console.log(`app-studio-flow: ${pass} 통과 · ${fail} 실패`);
 process.exit(fail ? 1 : 0);

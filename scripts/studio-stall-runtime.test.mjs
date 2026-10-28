@@ -204,7 +204,7 @@ check(R.t12 && /끝내지 못하고 멈췄어요/.test(R.t12.before.now || "") &
 same(R.t13, 0, "T13 닫으면 세션 상태를 더 묻지 않는다");
 check(R.t14 && /그리고 있어요/.test(R.t14.early || "") && !/꺼져서/.test(R.t14.early || ""), "T14 ④ 아이콘 — 막 보낸 때는 그냥 기다린다", R.t14 && R.t14.early);
 check(R.t14 && /세션이 꺼져서/.test(R.t14.late || "") && /다시 켜고 다시 그려요/.test(R.t14.late || "") && R.t14.resume, "T14 꺼진 세션이면 아이콘 칸이 까닭과 「다시 부탁하기」 를 말한다", R.t14 && R.t14.late);
-check(R.t14 && /다섯 가지/.test(R.t14.now.now || "") && R.t14.now.btns.some(([t, d]) => /완료 · 다음 단계로/.test(t) && !d), "T14 위 줄은 그대로(「완료 · 다음 단계로」 를 가리지 않는다)", R.t14 && R.t14.now);
+check(R.t14 && /네 가지/.test(R.t14.now.now || "") && R.t14.now.btns.some(([t, d]) => /완료 · 다음 단계로/.test(t) && !d), "T14 위 줄은 그대로(「완료 · 다음 단계로」 를 가리지 않는다)", R.t14 && R.t14.now);
 same(R.t14 && [R.t14.calls, R.t14.resent], [["restore", "prompt"], [true]], "T14 「다시 부탁하기」 — 세션을 되살리고 처음 아이콘 글 그대로 다시 보낸다");
 check(R.t14 && /보통 1분/.test(R.t14.after || ""), "T14 다시 보낸 뒤엔 기다림을 처음부터(멈춤 표시를 걷는다)", R.t14 && R.t14.after);
 same(R.errors, [], "W  페이지 예외 없음");

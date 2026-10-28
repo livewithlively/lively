@@ -29,6 +29,7 @@ export interface BApp {
   visibility: 'all' | 'me'; madeBy: string; ownerMember: string | null; origin: { id: string; title: string; madeBy: string } | null;
   view: 'installed' | 'published'; draft: { by: string; versionNo: number } | null; buildSession: string; isOwner: boolean; canPublish: boolean; canUnpublish: boolean;
   empty: boolean;   // 「만들기 시작」 이 예약만 하고 아직 첫 판이 없는 앱
+  publishedNo: number;   // 공개한 판 번호(0 = 아직 공개 전) — 공개 확인 창이 «지금 쓰는 V3 대신» 이라 말한다
   //  #4785 앱 폴더 — 원하는 상한 · 매니지드 쿼터 정비가 잰 쓰는 양과 그때 걸려 있던 상한 · 단계 · 바꿀 수 있나 · 거나(lib/app-folder-text).
   folder: FolderView;
 }
@@ -47,7 +48,7 @@ async function fetchApps(): Promise<BApp[] | null> {
       hasInstructions: !!(a.manifest && a.manifest.agent && a.manifest.agent.instructions),
       icon: appIconSpecOf(a.manifest),   // #4769
       studio: a.manifest && a.manifest.studio && typeof a.manifest.studio === 'object' ? a.manifest.studio : null,
-      ...appStateOf(a), empty: a.empty === true,
+      ...appStateOf(a), empty: a.empty === true, publishedNo: Number(a.published_version_no) || 0,
       folder: folderView(a.folder),
     }));
   } catch (_) { return null; }
