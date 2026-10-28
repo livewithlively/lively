@@ -345,6 +345,12 @@ export function fixBrief(round: number, pins: StudioPin[], general: string, plac
   if (general.trim()) lines.push(`[앱 전체] ${general.trim()}`);
   return `${round}번째 고침이야. 아래를 반영해 새 버전으로 저장해 줘(app_pull ${appId} 로 지금 버전을 받아 고치고 app_save · note 는 바뀐 점 한 줄 · 화면 흐름이 바뀌면 ${WIREFRAME_PATH} 도 맞춰 고쳐 · 그 파일이 아직 없으면 이번에 함께 그려). ${PLACE[place].say} ${NO_PUBLISH} 못 하는 건 이유 한 줄로.\n${lines.join('\n')}`;
 }
+/** ③ 실제 화면 막대의 「AI에게 말하기」 — 시안을 보며 만드는 AI 와 주고받으며 고친다(원준 2026-10-28 «대화형으로 수정»).
+ *  그 화면을 연 뒤 첫 말에만 방식을 붙인다 — 터미널에 그대로 남으니 짧게 · 두 번째 말부터는 사람이 쓴 글 그대로. */
+export function talkBrief(text: string, appId: string, place: StudioPlace, first: boolean): string {
+  if (!first) return text.trim();
+  return `지금부터 시안 화면을 보면서 대화로 고칠게. 뜻이 애매하면 고치기 전에 먼저 짧게 물어봐 줘. 정해지면 app_pull ${appId} 로 받아 고치고 app_save 해 줘(note 는 바뀐 점 한 줄 · 화면 흐름이 바뀌면 ${WIREFRAME_PATH} 도). ${PLACE[place].say} ${NO_PUBLISH} 답은 짧게.\n${text.trim()}`;
+}
 /** ③ 「세션 위젯으로 보기」 시험 세션의 첫 지시 — 앱을 **써 보는** 세션이지 고치는 세션이 아니다(원준 2026-10-15 «수정을 위한 AI 세션이 아니어야»). */
 export function tryBrief(title: string, appId: string): string {
   //  시험 세션은 터미널로 바로 열린다(원준 2026-10-16 «그냥 한 방에 터미널로 보이게») — 터미널엔 이 글이 첫 줄로 남으니 한 줄로 짧게.

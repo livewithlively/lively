@@ -57,7 +57,7 @@ export const zoteroCollectCapabilities = makeMemberTokenCollect({
   scopeKeys: ["libraries", "collections"],
   optionKeys: ["include_annotations", "include_notes", "include_fulltext", "include_auto_tags"],
   scopeHint: "비워 두면 이 키가 읽을 수 있는 라이브러리 전부(내 라이브러리 + 키에 열린 그룹)를 가져옵니다 — 좁히려면 users/<id>·groups/<id> 나 컬렉션 key 를 넣으세요.",
-  outcome: "논문마다 서지·초록·주석(하이라이트·코멘트)·노트를 한 자료로 묶어 자료함에 넣고, 논문 증류기가 꺼진 채로 함께 준비된다. 개인 라이브러리 자료는 자료 공개범위가 켜진 워크스페이스에서 그 사람만 본다.",
+  outcome: "논문마다 서지·초록·주석(하이라이트·코멘트)·노트를 한 자료로 묶어 자료함에 넣고, 논문 증류기가 꺼진 채로 함께 준비된다. 개인·그룹 라이브러리 자료 모두 워크스페이스 구성원이 함께 본다(조직의 자료 공개범위 정책이 있으면 그것을 따른다).",
   onEnabled: async ({ actor, source }) => { await ensureZoteroPapersDistiller({ actor, source: `collect-toggle:${source}` }); },
 });
 

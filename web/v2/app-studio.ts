@@ -36,7 +36,7 @@ import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, talkBrief, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
 import { icon } from './icons.js';
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
@@ -890,6 +890,7 @@ async function build(rec: StudioRec): Promise<void> {
     let route = location.hash;
     //  먼저 걷는다 — 열린 코멘트 층이 있으면 openReview 가 그것을 닫으며 onClose(dropTry)를 부르는데, 그때면 이 아래에서 막 세운 시험 세션 화면이 걷힌다.
     closeReview(); S.review = null; dropTry();
+    let talked = false;
     if (view === 'widget') {
       //  세션 위젯 = **시험 세션**(앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다)의 우측 사이드바 — 이 자리 · 이 주소에 진짜 세션 화면이 선다
       //   (앱빌더 화면만 비킨다). 처음이면 세션을 띄우고 앱을 붙인다(몇 초 · 동의를 거절하면 조용히 멈춘다).
@@ -916,6 +917,9 @@ async function build(rec: StudioRec): Promise<void> {
     S.review = openReview({
       appId: rec.appId, title: S.title, route, dock: S.tryS ? S.tryS.dock : undefined,
       pins: S.pins, general: S.general, version: S.curVer, waiting: S.waiting,
+      //  「AI에게 말하기」 — 이 앱을 만드는 AI 세션 화면을 막대의 대화 칸에 빌려준다(원준 2026-10-28 «대화형으로 수정»). 이 화면을 연 뒤 첫 말에만 대화 방식을 붙인다.
+      chat: chatHost,
+      onTalk: async (text) => { const ok = await send(talkBrief(text, rec.appId, rec.place, !talked)); if (ok) talked = true; return ok; },
       onChange: (p) => { S.pins = p.pins; S.general = p.general; rec.pins = S.pins; rec.general = S.general; saveRec(rec); paintTray(); paintNow(); },
       onSend: () => { void sendFix(); },
       onLike: () => { backToBuilder(); void setStage('check'); },

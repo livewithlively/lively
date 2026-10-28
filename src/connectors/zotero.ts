@@ -21,9 +21,10 @@
 //    개인 라이브러리엔 연구와 무관한 자료가 섞이는 일이 흔하고, Zotero 는 일부만 동기화하는 길이 없다 — 좁히기는 여기서 한다.
 //
 // ── 공개범위 ─────────────────────────────────────────────────────────────────────────
-//  개인 라이브러리에서 온 자료는 그 라이브러리 주인(수집기를 켠 구성원)만 보게 태어난다(audience — 자료 공개범위 축이 켜져
-//  있을 때만 효력이 있다. 꺼진 워크스페이스는 모든 자료가 열려 있는 것이 그 조직의 선택이다). 그룹 라이브러리는 조직의
-//  자료 공개범위 정책을 그대로 따른다(채널 = 그룹 이름).
+//  개인·그룹 라이브러리 모두 조직의 자료 공개범위 정책을 그대로 따른다(채널 = 라이브러리 이름) — 커넥터가 따로 잠그지 않는다.
+//  워크스페이스에 연결한다는 것 자체가 «팀과 함께 쓰겠다»는 뜻이다(장원준 2026-10-28, #2202). 예전엔 개인 라이브러리를
+//  주인에게만 잠갔는데(audience), 그 자료는 주인이 아닌 신원으로 도는 증류에 보이지 않아 영영 지식이 되지 못했다(#5072).
+//  이미 잠겨 들어온 자료는 부팅 조정기가 푼다(v6/vis-personal-unlock.ts).
 //
 // ── 증분 ─────────────────────────────────────────────────────────────────────────
 //  run-sync 의 커서 = 자료 updated_at 의 최대. 논문 자료의 updated_at 은 «논문과 그 아래 노트·첨부·주석 중 가장 늦은 수정»이다.
@@ -327,7 +328,7 @@ export interface ItemCtx {
   libraryName: string;
   collectionNames: string[];
   username?: string;
-  /** 개인 라이브러리면 그 주인(구성원 id) — 그 사람만 보게 태어난다. */
+  /** 개인 라이브러리면 그 주인(구성원 id) — 누구의 라이브러리인지 기록만 한다(잠그지 않는다). */
   owner?: string;
 }
 
@@ -357,7 +358,6 @@ export function paperToItem(paper: ZItem, bundle: PaperBundle, opts: PaperOpts, 
     body: doc.body,
     occurred_at: d.dateAdded || undefined,
     updated_at: doc.updatedAt ?? d.dateModified ?? undefined,
-    ...(ctx.owner ? { audience: [ctx.owner] } : {}),
     fields: {
       library: libraryPath(ctx.lib),
       library_name: ctx.libraryName,
@@ -374,7 +374,7 @@ export function paperToItem(paper: ZItem, bundle: PaperBundle, opts: PaperOpts, 
       // 연구자의 생각(주석·노트)이 담겼나 — 증류는 이것이 참인 논문만 지식으로 만든다(서지만 있는 논문은 검색용 자료로 남는다).
       has_thinking: doc.annotationCount + doc.noteCount > 0,
       added_by: who?.name || who?.username || null,
-      // 개인 라이브러리의 주인 — 잠금은 태어날 때 한 번(audience)이라, 공개범위 축을 나중에 켠 조직이 소급할 근거로 남긴다.
+      // 개인 라이브러리의 주인(수집기를 켠 구성원) — 누구의 라이브러리인지. 잠금 근거가 아니다(옛 잠금을 풀 때 대조에 쓴다).
       owner_member: ctx.owner ?? null,
     },
     raw: { key: paper.key, version: paper.version, itemType: d.itemType, library: libraryPath(ctx.lib) },
@@ -575,18 +575,10 @@ export async function* zoteroItems(
   //   그래서 다른 라이브러리는 끝까지 받되 실패를 모아 마지막에 던진다(커서 동결 → 다음 run 이 같은 창을 다시 읽는다).
   const failures: string[] = [];
   let collectionHits = 0;
-  let ownerSkipped = 0;
 
   for (const lib of libs) {
     const lp = libraryPath(lib);
     const libraryName = lib.name || (lib.kind === "users" ? "내 라이브러리" : `그룹 ${lib.id}`);
-    //  주인을 모르는 개인 라이브러리는 모으지 않는다(닫는 쪽) — 누구 것인지 모르면 그 사람에게만 보이게 잠글 수도 없다.
-    //   토글(token_source=member:<id>)로 만든 수집기는 늘 주인이 있다. 관리탭에서 키를 직접 붙여 만든 수집기만 여기 걸린다.
-    if (lib.kind === "users" && !owner) {
-      console.warn(`zotero: ${lp} — 이 수집기는 키 주인(구성원)을 몰라 개인 라이브러리를 건너뜁니다. '키 출처'를 member:<구성원 id> 로 지정하세요.`);
-      ownerSkipped++;
-      continue;
-    }
     try {
       // ① 컬렉션 이름표(본문의 «컬렉션:» 줄)와 좁히기
       const cols: Array<{ key: string; parentCollection?: string | false; name?: string }> = [];
@@ -688,10 +680,6 @@ export async function* zoteroItems(
       console.warn(`zotero: ${lp}(${libraryName}) 수집 실패 — ${(e as Error).message}`);
       failures.push(`${libraryName}(${lp}): ${(e as Error).message}`);
     }
-  }
-  //  모을 라이브러리가 그 하나(개인)뿐이었는데 주인을 몰라 건너뛰었다 — 0건 «성공» 으로 끝내면 아무도 모른다.
-  if (ownerSkipped && ownerSkipped === libs.length) {
-    throw new Error("이 수집기는 키 주인(구성원)을 몰라 개인 라이브러리를 모으지 않았습니다 — [외부 앱 연결 ▸ Zotero]에서 켜거나 '키 출처'를 member:<구성원 id> 로 지정하세요.");
   }
   if (pickedCollections.length && !collectionHits) {
     throw new Error(`고른 컬렉션(${pickedCollections.join(", ")})을 어느 라이브러리에서도 찾지 못했습니다 — 컬렉션 key 를 다시 확인하세요(웹 라이브러리 주소의 collections/ 뒤 8자).`);
