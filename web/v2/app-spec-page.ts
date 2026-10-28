@@ -6,10 +6,11 @@
 //  설명을 쓰는 중이면 6초마다 다시 묻는다(창이 붙어 있는 동안만).
 import { api, el, toast } from '../core.js';
 import { icon } from './icons.js';
-import { callKindLabel, isCurrentSpec, mergeTables, sizeText, specShouldPoll, specStateLine, whereText, type SpecResponse } from '../lib/app-spec-view.js';
+import { callKindLabel, isCurrentSpec, mergeTables, regenToast, sizeText, specShouldPoll, specStateLine, whereText, type SpecResponse } from '../lib/app-spec-view.js';
 
 const POLL_MS = 6000;
 const POLL_MAX = 100;   // 10분
+const FAIL_MAX = 5;   // 쓰는 중에 다시 묻기가 연달아 이만큼 실패하면 멈추고 「다시 불러오기」(감사 4-11)
 
 type Kid = HTMLElement | null;
 const kids = (xs: Kid[]): HTMLElement[] => xs.filter((x): x is HTMLElement => !!x);
@@ -23,7 +24,7 @@ export function renderAppSpec(host: HTMLElement, appId: string, back: () => void
   const body = el('div', { class: 'v2-spec-body' }, el('p', { class: 'v2-bld-empty', text: '불러오는 중…' }));
   const root = el('div', { class: 'v2-spec' }, head, el('div', { class: 'v2-spec-scroll' }, body));
   host.replaceChildren(root);
-  let timer = 0; let polls = 0; let stopped = false;
+  let timer = 0; let polls = 0; let stopped = false; let fails = 0; let last: SpecResponse | null = null;
   const stop = (): void => { stopped = true; window.clearTimeout(timer); };
   const backBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', onclick: back }, el('span', { text: '‹ 앱빌더' }));
   head.replaceChildren(backBtn, el('h1', { text: '개발 정보' }));
@@ -36,27 +37,36 @@ export function renderAppSpec(host: HTMLElement, appId: string, back: () => void
       r = await api('/api/ui/apps/' + encodeURIComponent(appId) + '/spec', method === 'POST' ? { method: 'POST', body: JSON.stringify({ regenerate: true }) } : undefined) as SpecResponse;
     } catch (e: any) {
       if (stopped || !root.isConnected) return;
-      //  이미 그린 화면이 있으면(다시 묻기 · 다시 만들기 실패) 지우지 않고 알리기만 — 코드에서 읽은 것은 그대로 쓸 수 있다.
+      //  쓰는 중에 다시 묻기가 실패했다(네트워크 한 번) — 멈추지 않고 정해진 횟수 안에서 다시 묻는다. 그래도 안 되면 도는 표시를 멈추고 「다시 불러오기」(감사 4-11).
+      if (painted && last && specShouldPoll(last.spec_state) && method === 'GET' && !(e && e.status === 404)) {
+        fails++;
+        if (fails < FAIL_MAX) { timer = window.setTimeout(() => { if (root.isConnected) void load(); else stop(); }, POLL_MS); return; }
+        paint(last, 'lost'); return;
+      }
+      //  이미 그린 화면이 있으면(다시 만들기 실패) 지우지 않고 알리기만 — 코드에서 읽은 것은 그대로 쓸 수 있다.
       if (painted && !(e && e.status === 404)) { toast('개발 정보를 다시 불러오지 못했어요. ' + (e && e.message ? e.message : ''), true); return; }
       body.replaceChildren(el('p', { class: 'v2-bld-empty', text: e && e.status === 404 ? '이 앱을 찾을 수 없어요. 지워졌거나 볼 수 없는 앱이에요.' : '개발 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.' }));
       return;
     }
     if (stopped || !root.isConnected) return;
-    painted = true;
+    painted = true; fails = 0; last = r;
+    if (method === 'POST') { const t = regenToast(r); toast(t.text, t.warn); }
     const more = specShouldPoll(r.spec_state) && polls < POLL_MAX;
-    paint(r, specShouldPoll(r.spec_state) && !more);
+    paint(r, specShouldPoll(r.spec_state) && !more ? 'slow' : '');
     if (more) { polls++; timer = window.setTimeout(() => { if (root.isConnected) void load(); else stop(); }, POLL_MS); }
   };
 
-  //  gaveUp = 쓰는 중인데 10분 동안 다시 물어도 끝나지 않아 묻기를 멈췄다 — 도는 표시 대신 「다시 불러오기」.
-  const paint = (r: SpecResponse, gaveUp = false): void => {
+  //  stop = 묻기를 멈췄다 — 'slow' 쓰는 중인데 10분 동안 끝나지 않았다 · 'lost' 다시 묻기가 연달아 실패했다. 도는 표시 대신 「다시 불러오기」.
+  const paint = (r: SpecResponse, halt: '' | 'slow' | 'lost' = ''): void => {
+    const gaveUp = !!halt;
     const doc = r.spec && r.spec.doc ? r.spec.doc : null;
     const f = r.facts;
-    const line = gaveUp ? { tone: 'warn' as const, text: '설명을 쓰는 데 오래 걸리고 있어요. 「다시 불러오기」를 눌러 확인해 주세요.' } : specStateLine(r);
+    const line = halt === 'slow' ? { tone: 'warn' as const, text: '설명을 쓰는 데 오래 걸리고 있어요. 「다시 불러오기」를 눌러 확인해 주세요.' }
+      : halt === 'lost' ? { tone: 'warn' as const, text: '설명이 다 됐는지 확인하지 못했어요. 「다시 불러오기」를 눌러 주세요.' } : specStateLine(r);
     head.replaceChildren(...kids([backBtn, el('h1', {}, el('span', { text: '「' + (r.title || r.app_id) + '」 개발 정보' })),
       el('span', { class: 'v2-studio-sp' }),
-      r.spec_state === 'failed' ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '다시 만들기', onclick: () => { polls = 0; toast('설명을 다시 쓰기 시작했어요'); void load('POST'); } }) : null,
-      gaveUp ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '다시 불러오기', onclick: () => { polls = 0; void load(); } }) : null]));
+      r.spec_state === 'failed' ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '다시 만들기', onclick: () => { polls = 0; void load('POST'); } }) : null,
+      gaveUp ? el('button', { class: 'v2-bld-pri sm', type: 'button', text: '다시 불러오기', onclick: () => { polls = 0; fails = 0; void load(); } }) : null]));
     const state = el('div', { class: 'v2-spec-state ' + line.tone }, !gaveUp && specShouldPoll(r.spec_state) ? el('span', { class: 'v2-spec-spin', 'aria-hidden': 'true' }) : null, el('span', { text: line.text }));
     const tables = mergeTables(f.tables, doc);
     const aiOnly = (t: string): HTMLElement => el('p', { class: 'v2-bld-mini', text: t });

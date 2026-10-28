@@ -5,7 +5,7 @@
 //  왜 메뉴가 있나(원준 2026-10-07): 이 앱들은 완성품이 아니라 **각자 AI 에게 시켜 고쳐 쓰는 앱**이다. 「고치고 싶다」는 생각은
 //   앱을 보고 있을 때 들므로 그 자리(앱 탭)에 문을 둔다 — 세션이 곧 빌더다. 별도 「앱 빌더」 앱은 만들지 않는다(기획안 2판 05절).
 
-import { verName } from './studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …) — 원준 2026-10-15 «판 이라는 워딩 전면 금지»
+import { verName, versionNote } from './studio-flow.js';   // #4632 판 번호는 버전 이름으로(초안 · V2 …) — 원준 2026-10-15 «판 이라는 워딩 전면 금지»
 
 /** 서버 app_versions 한 줄(SPEC §1-3). */
 export interface AppVersion {
@@ -66,7 +66,8 @@ export function draftTextFor(title: string): string { return `「${title}」 앱
 /** 방금 고침 띠의 글. */
 export function bandText(ev: { version_no?: number; note?: string }): string {
   const n = ev.version_no ? `${verName(ev.version_no)} · ` : '';
-  return `${n}방금 고침${ev.note ? ' · ' + ev.note : ''}`;
+  const t = versionNote(ev.note);   // 서버 글 머리의 «n판:» · «—» 를 화면 말로(점검 6-13 후속)
+  return `${n}방금 고침${t ? ' · ' + t : ''}`;
 }
 
 /**
@@ -96,8 +97,9 @@ export function versionRows(versions: readonly AppVersion[], revert: (versionNo:
   };
   return [...versions].sort((a, b) => b.version_no - a.version_no).map((v) => {
     const who = v.origin === 'builtin' ? '원본 · 릴리스 ' + v.version : [v.saved_by, when(v.saved_at)].filter(Boolean).join(' · ');
+    const note = versionNote(v.note);   // 서버 글 머리의 «n판:» · «—» 를 화면 말로(점검 6-13 후속)
     return {
-      label: `${verName(v.version_no)}${v.note ? ' · ' + v.note : v.origin === 'builtin' ? ' · 라이블리 기본 앱' : ''}`,
+      label: `${verName(v.version_no)}${note ? ' · ' + note : v.origin === 'builtin' ? ' · 라이블리 기본 앱' : ''}`,
       hint: v.is_current ? '지금' : who,
       off: v.is_current,
       icon: v.is_current ? 'check' : undefined,

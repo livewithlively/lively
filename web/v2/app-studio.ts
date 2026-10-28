@@ -19,7 +19,8 @@
 //   · 찍어서 의견 = 실제 화면의 앱 프레임(app-ui 가 검토 중인 앱의 문서에 탐침을 넣는다)에게 비율 좌표의 요소(태그 · 글)를 묻는다 — app-review.ts.
 //   · 사본 = /apps/:id/pull → id · 이름을 바꿔 /apps/save {origin_app_id} — 원본 · 만든 사람은 서버 기록(#4667). 판 = fetchAppVersions · revertApp.
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
-import { spawnSession } from './quick-session.js';
+import { isCreatingQuickSession, spawnSession } from './quick-session.js';
+import { memberName } from './member-names.js';   // ⑤ 「이렇게 시작했어요」 의 만든 사람 — 계정 아이디가 아니라 표시 이름(점검 6-5 · 명부는 앱빌더 목록이 받아 둔다)
 import { takeCreated } from './created-cache.js';
 import { reloadAppFrames } from './app-ui.js';
 import { growText } from './grow-text.js';   // 코멘트 칸 — 글이 길면 세로로 늘어난다
@@ -36,8 +37,10 @@ import { nodeOptions, nodeWhere, resolveNodeChoice, sessionDefaults, type RunNod
 import { pickStudioAi, studioAiFlags, studioAiInputs, type StudioLogins } from '../lib/studio-ai.js';
 import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/builder-flow.js';
 import type { SessionChatHandle } from '../session-chat.js';
+import type { WireBoard } from './wire-board.js';   // 형만 — 보드는 열 때 늦게 들여온다(openWireframe)
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, talkBrief, unsent, copyBrief, copyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, sessionTraceChunked, parseNotify, plainNote, versionNote, josa, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, nextCopyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { REC_MAX, mergeRec, trimRecs } from '../lib/studio-rec.js';   // 기록 한도 · 두 탭 합치기(감사 1-8 · 1-9)
 import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
 import { icon } from './icons.js';
 import { appGlyphName, iconPath } from '../lib/icon-paths.js';
@@ -82,6 +85,12 @@ export interface StudioRec {
   /** ③ 「수정하기」 로 고침을 보낸 때 · 그때 가장 뒤 판 — 새 판이 나올 때까지 있다. 앱빌더를 나갔다 와도 «AI가 수정하고 있어요» 로 다시 열고,
    *  나가 있던 사이 새 판이 나왔으면 열자마자 끝맺는다(원준 2026-10-28 «다른 데 갔다 다시 들어가면 진행중 페이지로 안 가고 이전으로 돌아간 것처럼»). */
   fixing?: { at: number; ver: number };
+  /** ① 에서 기획을 다시 청한 때 — 카드가 오면 걷는다. 앱은 있는데 카드가 없는 ② 가 «AI가 쓰는 중» 인지(이게 있다) «남은 카드 없음» 인지(없다) 가른다(점검 4-3). */
+  planAt?: number;
+  /** ② 카드 아래 「수정하기」 로 카드 고침을 청한 때 — 고친 카드가 올 때까지 카드 편집 · 「완료」 를 잠근다(점검 4-2). */
+  cardFix?: number;
+  /** ⑤ 「팀에 알리기」 를 보낸 때 — AI 가 [[알림]] 으로 답하기 전(다시 누를 수 있다 · 점검 2-9). 답이 오면 notified 로 굳는다. */
+  notifySent?: number;
 }
 const STUDIO_KEY = 'lively_v2_app_studio';
 const SEEN_KEY = 'lively_v2_app_studio_seen';
@@ -90,7 +99,7 @@ export const PROJECT_NAME = BUILDER_PROJECT_NAME;   // #4632 — 앱빌더가 �
 const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안건을 모으고 끝난 것 표시', card: { name: '회의 안건', who: '회의를 준비하는 사람과 참석자 모두', items: '안건 제목 · 회의 날짜 · 끝남 표시', can: ['안건 더하기', '회의별로 모아 보기', '끝난 것 접기'], not: '회의록 쓰기 · 알림 보내기', first: '이번 회의 안건 목록(안 끝난 것 먼저)' } };
 
 // ① 설명칸 — 예시는 칸 안 안내글 하나로만(원준 2026-10-14 «예시로 채우기 · 적어 두면 좋은 것 다 빼»).
-const DESC_PH = '예: 회의록을 음성 파일로 주면 이를 음성 파일을 전사하고 내용을 요약해서 정리해주면 좋겠어요. 회의록을 정리하는 형식을 사용자가 개인화 할 수 있으면 좋겠어요. 앱 화면에서는 이전의 회의록이 날짜별로 정리되어있으면 좋겠고, 해당 날짜의 회의록을 누르면 정리본이 나오면 좋겠어요. AI 세션의 사이드바에서는 기존의 회의록을 찾고 그 회의록 정리본을 제가 참고하거나, AI 세션에 한 번에 집어넣을 수 있도록 하고 싶어요.';
+const DESC_PH = '예: 회의 음성 파일을 올리면 글로 받아 적고 내용을 요약해서 정리해 주면 좋겠어요. 회의록을 정리하는 형식을 사용자가 개인화할 수 있으면 좋겠어요. 앱 화면에서는 이전의 회의록이 날짜별로 정리되어 있으면 좋겠고, 해당 날짜의 회의록을 누르면 정리본이 나오면 좋겠어요. AI 세션의 사이드바에서는 기존의 회의록을 찾고 그 회의록 정리본을 제가 참고하거나, AI 세션에 한 번에 집어넣을 수 있도록 하고 싶어요.';
 const firstLine = (s: string): string => String(s || '').split('\n')[0].trim();
 // 앱 만들기 세션의 AI · 모델 · 생각 깊이 — 사람이 고르지 않고 여기서 정한다(원준 2026-10-14). 하네스마다의 값과 고르는 순서는 lib/studio-ai 가 정본이다(#4632 2026-10-26 —
 //  Codex 나 다른 AI 하나만 연결한 사람도 그 AI 의 «claude opus · 높음» 급으로 연다). 카탈로그에 없는 값이면 그 축은 안 넘긴다(AI 설정 그대로).
@@ -133,26 +142,51 @@ async function studioAi(nodes: RunNode[], nodeId: string): Promise<StudioAi> {
   const h = findHarness(hs, harness);
   const flags = studioAiFlags(harness, flagChoices(h, '--model'), (m) => effortChoices(h, m));
   const name = harness === 'claude' ? 'Claude' : (h?.label || harness);
-  const model = flags['--model'] ? name + ' ' + prettyModel(flags['--model']).replace(/^Gpt\b/, 'GPT') : name + ' · 모델은 AI 설정 그대로';
-  return { harness, flags, chip: model + (flags['--effort'] ? ' · 생각 깊이 ' + effortKo(flags['--effort']) : '') };
+  const model = flags['--model'] ? name + ' ' + prettyModel(flags['--model']).replace(/^Gpt\b/, 'GPT') : name + '(모델은 AI 설정 그대로)';
+  return { harness, flags, chip: model + (flags['--effort'] ? ', 생각 깊이 ' + effortKo(flags['--effort']) : '') };   // «·» 로 잇지 않는다(점검 7-2)
 }
 
 // ── 기록(이 브라우저) ─────────────────────────────────────────────────────────────────────
+//  읽어 낸 기록 하나하나가 읽을 때 어땠는지 — 저장할 때 «이 탭이 바꾼 칸» 만 골라 합친다(같은 앱을 두 탭에서 열어 둔 때 · 감사 1-9 · lib/studio-rec mergeRec).
+//   읽을 때는 그때 읽은 저장 글 한 벌만 가리켜 둔다(기록마다 깊은 복사를 하지 않는다 · 리뷰 N4). 저장할 때 그 글에서 이 기록의 그때 꼴을 꺼낸다.
+const REC_SRC = new WeakMap<StudioRec, string>();
+const REC_BASE = new WeakMap<StudioRec, Record<string, unknown>>();
+const MERGE_SKIP: readonly string[] = ['pins', 'general'];
+const recDefaults = (r: any): StudioRec => ({ pid: 0, stage: r.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...r });   // 옛 기록(단계 없던 판)도 선다
 function readRecs(): StudioRec[] {
   try {
-    const a = JSON.parse(localStorage.getItem(STUDIO_KEY) || '[]'); if (!Array.isArray(a)) return [];
-    return a.filter((r) => r && r.sid).map((r) => ({ pid: 0, stage: r.appId ? 'fix' : 'plan', card: null, round: 0, from: 0, mode: 'new', ...r }));   // 옛 기록(단계 없던 판)도 선다
+    const raw = localStorage.getItem(STUDIO_KEY) || '[]';
+    const a = JSON.parse(raw); if (!Array.isArray(a)) return [];
+    return a.filter((r) => r && r.sid).map((r) => { const x = recDefaults(r); REC_SRC.set(x, raw); return x; });
   } catch (_) { return []; }
 }
-function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(rs.slice(-12))); } catch (_) { /* noop */ } }
-function saveRec(r: StudioRec): void { const rs = readRecs().filter((x) => x.sid !== r.sid); rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r); writeRecs(rs); }   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
+/** 이 탭이 이 기록을 읽었을(또는 마지막으로 저장했을) 때의 꼴. 모르면 null. */
+function recBase(r: StudioRec): Record<string, unknown> | null {
+  const b = REC_BASE.get(r); if (b) return b;
+  const raw = REC_SRC.get(r); if (!raw) return null;
+  try { const a = JSON.parse(raw); const x = Array.isArray(a) ? a.find((y: any) => y && y.sid === r.sid) : null; return x ? (recDefaults(x) as unknown as Record<string, unknown>) : null; } catch (_) { return null; }
+}
+function writeRecs(rs: StudioRec[]): void { try { localStorage.setItem(STUDIO_KEY, JSON.stringify(trimRecs(rs, REC_MAX))); } catch (_) { /* noop */ } }
+function saveRec(r: StudioRec): void {
+  const all = readRecs();
+  const stored = all.find((x) => x.sid === r.sid) || null;
+  //  다른 탭이 그 사이 바꾼 칸은 받아 들인다 — 이 탭이 안 바꾼 칸만(바꾼 칸은 이 탭 것이 이긴다). 받은 값은 이 탭의 기록에도 들여 다음 저장이 옛 값으로 되돌리지 않게.
+  //   코멘트(pins · general)는 이 탭 화면이 쥔 것(S.pins 와 같은 배열)이라 합치지 않는다 — 바꿔 끼우면 화면과 기록이 갈라진다(리뷰 N5).
+  const base = recBase(r);
+  if (base && stored) mergeRec(r as unknown as Record<string, unknown>, base, stored as unknown as Record<string, unknown>, MERGE_SKIP);
+  REC_BASE.set(r, JSON.parse(JSON.stringify(r)));
+  const rs = all.filter((x) => x.sid !== r.sid);
+  rs.push(r.pins && r.pins.some((p) => p.sent) && !r.fixing ? { ...r, pins: r.pins.filter(unsent) } : r);   // 보낸(반영 중) 코멘트는 고치는 중일 때만 남긴다(다시 열어도 «반영 중» 으로 · 끝나면 settleFix 가 걷는다)
+  writeRecs(rs);
+}
 /** 이 브라우저의 만들던 기록 전부 — 앱빌더 목록이 읽는다. */
 export function studioRecs(): StudioRec[] { return readRecs(); }
 /** 만들던 기록 하나를 지운다(세션 · 앱은 그대로). */
 export function dropStudioRec(sid: string): void { writeRecs(readRecs().filter((x) => x.sid !== sid)); }
 export function studioRecForApp(appId: string): { sid: string } | null { const r = readRecs().filter((x) => x.appId === appId).pop(); return r ? { sid: r.sid } : null; }
 /** 이 브라우저에서 이 앱을 **새로** 만드는 중인가(⑤ 「이대로 넣기」 전 · 고치기 · 사본은 아니다) — 앱 찾기 · 앱빌더가 만드는 중인 앱을 가른다(builder-flow isAppInProgress · 원준 2026-10-15). */
-export function studioRecBuildingFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done && x.mode === 'new'); }
+//  사본도 넣는다 — 사본은 새로 만드는 내 앱이라 ⑤ 넣기 전엔 앱 찾기 · 레일에 다 된 앱으로 서지 않는다(감사 6-7). 원본 고치기(edit)는 쓰던 앱이라 아니다.
+export function studioRecBuildingFor(appId: string): boolean { return !!appId && readRecs().some((x) => x.appId === appId && !x.done && (x.mode === 'new' || x.mode === 'copy')); }
 interface Seen { intro?: 1; coach?: Record<string, 1> }
 function readSeen(): Seen { try { const s = JSON.parse(localStorage.getItem(SEEN_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (_) { return {}; } }
 function markSeen(patch: (s: Seen) => void): void { const s = readSeen(); patch(s); try { localStorage.setItem(SEEN_KEY, JSON.stringify(s)); } catch (_) { /* noop */ } }
@@ -165,9 +199,9 @@ function saveGeom(patch: WinGeom): void { try { localStorage.setItem(WIN_KEY, JS
 let meCache: { id: string; name: string } | null = null;
 export async function me(): Promise<{ id: string; name: string }> {
   if (meCache) return meCache;
-  try { const d: any = await api('/api/ui/me/whoami'); meCache = { id: String(d?.member_id || ''), name: String(d?.display_name || d?.nickname || d?.member_id || '') }; }
-  catch (_) { meCache = { id: '', name: '' }; }
-  return meCache;
+  //  못 받은 답은 기억하지 않는다 — 다음에 다시 묻는다(감사 6-6 · 배포 직후 한 번 실패하면 내 앱이 「팀원이 만든 앱」 으로 굳었다). 못 받으면 id 가 빈 글.
+  try { const d: any = await api('/api/ui/me/whoami'); const id = String(d?.member_id || ''); const got = { id, name: String(d?.display_name || d?.nickname || id) }; if (id) meCache = got; return got; }
+  catch (_) { return { id: '', name: '' }; }
 }
 export async function studioProject(): Promise<number> {
   try { const d: any = await api('/api/ui/v6/projects?mine=1'); const ps = Array.isArray(d?.projects) ? d.projects : []; const p = ps.find((x: any) => String(x?.name || '').trim() === PROJECT_NAME && !/done|closed|archived/i.test(String(x?.status_category || ''))); return p ? Number(p.id) || 0 : 0; }
@@ -181,10 +215,11 @@ async function rawLog(sid: string, q: string): Promise<{ text: string; to: numbe
     return { text: await res.text(), to: Number(res.headers.get('X-Log-To')) || 0 };
   } catch (_) { return null; }
 }
-async function logEnd(sid: string): Promise<number> { const r = await rawLog(sid, 'tail=1'); return r ? r.to : 0; }
+async function logEnd(sid: string): Promise<number | null> { const r = await rawLog(sid, 'tail=1'); return r ? r.to : null; }
 async function sendPrompt(rec: StudioRec, text: string): Promise<boolean> {
   try {
-    rec.from = await logEnd(rec.sid); saveRec(rec);
+    //  보낸 글 뒤의 답만 읽게 기록 끝을 잡는다 — 못 읽었으면 그 전 자리 그대로(0 으로 가면 지난 대화를 처음부터 다시 읽어 옛 카드 · 옛 한도 글이 되살아난다 · 점검 4-5).
+    const end = await logEnd(rec.sid); if (end != null) rec.from = end; saveRec(rec);
     await api('/api/ui/terminal/sessions/' + encodeURIComponent(rec.sid) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) });
     return true;
   } catch (e: any) { toast('AI에게 보내지 못했어요. 잠시 후 다시 시도해주세요. (' + (e && e.message ? e.message : e) + ')', true); return false; }
@@ -215,8 +250,9 @@ interface ServerStatusView {
  *  같은 코드가 이미 올라가 있으면 바로 지나간다. 빌드는 몇 분 걸릴 수 있어 시작만 하고 상태를 3초마다 본다(최대 12분).
  *  돌려주는 값: true = 넣기 · 공개를 이어서 해도 된다(서버 앱이 아니거나 · 이 워크스페이스에 앱 서버가 없거나 · 올라갔다) · false = 멈춘다(실패 · 시간 초과).
  *  실패하면 그 기록은 서버가 이 앱의 만들기 세션에도 넣는다 — 그 세션의 AI 가 보고 고친다.
+ *  alive — 부른 화면이 아직 있나. 닫혔으면 기다리기를 바로 멈추고 false(닫힌 화면에서 뒤늦게 저장 · 공개하지 않게 · 점검 2-6).
  */
-export async function ensureAppServer(appId: string, onProgress?: (text: string) => void): Promise<boolean> {
+export async function ensureAppServer(appId: string, onProgress?: (text: string) => void, alive: () => boolean = () => true): Promise<boolean> {
   const path = '/api/ui/apps/' + encodeURIComponent(appId) + '/server';
   let st: ServerStatusView | null;
   try { st = await api(path); } catch (_) { return true; }   // 상태를 못 읽으면(옛 서버) 종전대로 넣는다
@@ -225,12 +261,17 @@ export async function ensureAppServer(appId: string, onProgress?: (text: string)
   if (st.installed && st.installed.deployed_to_cur) return true;
   try { await api(path + '/deploy', { method: 'POST', body: JSON.stringify({ wait_s: 3 }) }); }
   catch (e: unknown) { toast('서버를 빌드하지 못했어요. ' + (e instanceof Error ? e.message : String(e)), true); return false; }
+  if (!alive()) return false;
   toast('서버를 빌드하고 있어요. 몇 분 걸릴 수 있어요.');
   const t0 = Date.now();
   let told = t0;
+  const late = (): boolean => Date.now() - t0 > 12 * 60_000;
   for (;;) {
     await new Promise((r) => window.setTimeout(r, 3000));
-    try { st = await api(path); } catch (_) { continue; }
+    if (!alive()) return false;
+    //  상태를 못 읽어도(연결이 끊겼다) 12분 제한은 지킨다 — 종전엔 continue 로 제한 검사를 건너뛰어 끝없이 기다렸다(점검 2-6).
+    try { st = await api(path); } catch (_) { if (late()) { toast('서버 상태를 12분 넘게 읽지 못해 기다리기를 멈췄어요. 연결을 확인하고 다시 눌러주세요.', true); return false; } continue; }
+    if (!alive()) return false;
     const b = st && st.installed && st.installed.build;
     if (st && st.installed && st.installed.deployed_to_cur && !st.deploying) { toast('서버를 올렸어요'); return true; }
     if (st && !st.deploying) {
@@ -241,10 +282,10 @@ export async function ensureAppServer(appId: string, onProgress?: (text: string)
       toast(why + ' 기록은 만들기 세션의 AI에게 보냈어요.', true);
       return false;
     }
-    const line = '서버 빌드 중 · ' + Math.round((Date.now() - t0) / 1000) + '초' + (b && b.now ? ' · ' + String(b.now).slice(0, 80) : '');
+    const line = '서버를 빌드하고 있어요(' + Math.round((Date.now() - t0) / 1000) + '초).' + (b && b.now ? ' 지금 하는 일: ' + String(b.now).slice(0, 80) : '');   // «·» 로 잇지 않는다(점검 7-2)
     if (onProgress) onProgress(line);
     else if (Date.now() - told >= 30_000) { told = Date.now(); toast(line); }
-    if (Date.now() - t0 > 12 * 60_000) { toast('서버 빌드가 12분 넘게 끝나지 않아 기다리기를 멈췄어요. 상태는 앱빌더에서 다시 볼 수 있어요.', true); return false; }
+    if (late()) { toast('서버 빌드가 12분 넘게 끝나지 않아 기다리기를 멈췄어요. 상태는 앱빌더에서 다시 볼 수 있어요.', true); return false; }
   }
 }
 /** 매니페스트 studio 칸에서 서버가 기록하는 것(만든 사람 · 만들기 세션 · 원본)을 걷는다 — #4667 그건 앱 코드가 아니라 서버 칸이 정본이다. 자리 · 기획 카드는 남긴다. */
@@ -253,19 +294,27 @@ export function studioUiOnly(studio: any): Record<string, unknown> {
   return keep;
 }
 /** #4667 그 앱의 지금 공개 상태(서버) — 머리줄 「n판 · 나만 보는 초안」 · 「공개하기」 · ④⑤ 의 재료. 못 읽으면 null. */
-export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown; icon: StudioIcon | null }
+export interface StudioVis { visibility: 'all' | 'me'; publishedNo: number; draftMine: boolean; canPublish: boolean; canUnpublish: boolean; empty: boolean; title: string; card: unknown; icon: StudioIcon | null;
+  /** 매니페스트 studio 의 자리 · 마무리 표시(put) — ④ 에서 바뀐 게 없으면 마무리를 다시 저장하지 않는다(점검 2-1 · 2-7). */
+  place: StudioPlace | ''; put: boolean;
+  /** 만든 사람 · 책임자인가 · 서버가 아는 만들기 세션 — 기록에서 되지은 앱이 내 것인지 · 다른 세션이 만드는 중인지 본다(격리 리뷰 #1591 B1). */
+  madeBy: string; isOwner: boolean; buildSession: string }
+const placeOf = (p: unknown): StudioPlace | '' => (p === 'side' || p === 'full' || p === 'both' ? p : '');
 async function readVis(appId: string): Promise<StudioVis | null> {
   try {
     const out: any = await api('/api/ui/apps/' + encodeURIComponent(appId)); const a = out?.app || out; if (!a) return null;
     const me0 = await me();
     return { visibility: a.visibility === 'me' ? 'me' : 'all', publishedNo: Number(a.published_version_no) || 0,
       draftMine: !!(a.draft && a.draft.by && a.draft.by === me0.id), canPublish: !!a.can_publish, canUnpublish: !!a.can_unpublish, empty: !!a.empty,
-      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null, icon: iconSpec(a.manifest && a.manifest.icon) };
+      title: String(a.title || ''), card: a.manifest && a.manifest.studio ? a.manifest.studio.card : null, icon: iconSpec(a.manifest && a.manifest.icon),
+      place: placeOf(a.manifest && a.manifest.studio && a.manifest.studio.place), put: !!(a.manifest && a.manifest.studio && a.manifest.studio.put),
+      madeBy: String(a.made_by || a.installed_by || ''), isOwner: !!a.is_owner, buildSession: String(a.build_session || '') };
   } catch (_) { return null; }
 }
 /** ⑧ 내 사본 — 원본 파일을 받아 id · 이름 · studio.origin 만 바꿔 저장한다. 원본은 그대로. */
-async function makeCopy(origin: { id: string; title: string; by: string }, place: StudioPlace): Promise<{ id: string; title: string }> {
-  const m = await me(); const id = copyId(origin.id, m.id); const title = origin.title + ' · ' + (m.name || '내 것');
+async function makeCopy(origin: { id: string; title: string; by: string }, place: StudioPlace, fresh?: { id: string; n: number }): Promise<{ id: string; title: string }> {
+  const m = await me(); if (!m.id) throw new Error('내 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
+  const id = fresh ? fresh.id : copyId(origin.id, m.id); const title = origin.title + ' · ' + (m.name || '내 것') + (fresh && fresh.n ? ' ' + fresh.n : '');
   const pulled: any = await api('/api/ui/apps/' + encodeURIComponent(origin.id) + '/pull');
   const files: any[] = (Array.isArray(pulled?.files) ? pulled.files : []).filter((f: any) => f && typeof f.path === 'string' && !/^bin\//.test(f.path));
   const mf = files.find((f) => f.path === 'lively-app.json'); if (!mf) throw new Error('원본의 설명 파일이 없어요');
@@ -312,7 +361,9 @@ const NEW_APP_NAME = '새 앱';
 export { me as studioMe };
 
 /** 이어서 열 세션 — 이 브라우저에 기록이 없으면 세션 이름(what)과 그 세션이 만든 앱(appId)으로 되살린다(앱빌더 #4632). */
-export interface StudioResume { sid: string; what?: string; title?: string; appId?: string }
+export interface StudioResume { sid: string; what?: string; title?: string; appId?: string;
+  /** 「… 앱 고치기」 세션(원본 고치기 · 사본)이면 그 흐름으로 잇는다 — 새 앱 만들기 ②부터가 아니라(감사 1-3). 없으면 새 앱. */
+  mode?: 'copy' | 'edit'; origin?: { id: string; title: string; by: string } }
 /** 앱 만들기를 연다. resume 을 주면 만들던 것을 이어서(그 세션 · 그 단계), 없으면 시작 화면부터. */
 export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOpts): void {
   mountRoot(opts);
@@ -325,20 +376,35 @@ export function openAppStudio(resume?: StudioResume | null, opts?: StudioMountOp
       const rows: any[] = await api('/api/ui/apps?session=' + encodeURIComponent(resume.sid)).then((d: any) => (Array.isArray(d?.apps) ? d.apps : [])).catch(() => []);
       const a = rows[0] || null;
       if (!root) return;
-      if (!a && !resume.what && !resume.appId) { start(); return; }
-      const appId = a ? (a.empty ? '' : String(a.id)) : (resume.appId || '');
-      const pl = a && a.manifest && a.manifest.studio ? a.manifest.studio.place : '';
-      const place: StudioPlace = pl === 'side' || pl === 'full' || pl === 'both' ? pl : 'both';
-      let card: StudioCard | null = a && a.manifest && a.manifest.studio && a.manifest.studio.card ? a.manifest.studio.card : null;
-      let from = 0;
+      //  세션 기록을 처음부터 읽어 만들기 상태를 되짓는다(lib/studio-flow sessionTrace) — 마지막 기획 카드 · 초안을 청했나 · 이 세션이 받고 저장한 앱 · 보낸 고침 차례.
+      //   서버의 만들기 세션 칸이 다른 세션을 가리키면(위 역조회가 빈다) 이미 앱을 만들어 ③ 에서 고치던 세션도 «② 쓰는 중» 으로 열렸다(원준 2026-10-29 실제 화면).
       const log = await rawLog(resume.sid, 'from=0');
-      if (log) { from = log.to; if (!card) assistantTexts(log.text).forEach((t) => { const c = parseCard(t); if (c) card = c; }); }
+      const tr = log ? await sessionTraceChunked(log.text) : { card: null, asked: false, appId: '', round: 0 };   // 긴 기록은 조금씩(화면이 멈추지 않게)
       if (!root) return;
-      const known = a ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
-      const title = resume.title || (a && !a.empty ? String(a.title || '') : '');
+      //  역조회가 비었고 이어 받을 앱 id 도 없으면 — 기록이 가리킨 앱이 아직 있는지(빈 예약이 아닌지) · **내 앱인지** 서버에 묻는다.
+      //   내가 만들었거나 책임자인 앱만 잇는다 — 남의 앱을 이 만들기의 앱으로 붙이지 않게(격리 리뷰 #1591 B1). 그 앱의 만들기 세션이 다른 세션이어도 잇되,
+      //   앱빌더 「지우기」 는 그 앱을 지우지 않는다(builder.ts madeHere · builder-model keepApp).
+      let traced: StudioVis | null = null;
+      if (!a && !resume.appId && tr.appId) {
+        const [tv, me0] = await Promise.all([readVis(tr.appId), me()]); if (!root) return;
+        traced = tv && !tv.empty && !!me0.id && (tv.madeBy === me0.id || tv.isOwner) ? tv : null;
+      }
+      if (!a && !resume.what && !resume.appId && !traced && !tr.card) { start(); return; }
+      const appId = a ? (a.empty ? '' : String(a.id)) : (resume.appId || (traced ? tr.appId : ''));
+      const pl = a && a.manifest && a.manifest.studio ? a.manifest.studio.place : traced ? traced.place : '';
+      const place: StudioPlace = pl === 'side' || pl === 'full' || pl === 'both' ? pl : 'both';
+      const card: StudioCard | null = (a && a.manifest && a.manifest.studio && a.manifest.studio.card ? a.manifest.studio.card : null) || (traced && traced.card ? traced.card as StudioCard : null) || tr.card;
+      const from = log ? log.to : 0, asked = tr.asked;
+      const known = a || traced ? [] : (await listApps()).map((x) => String(x.id));   // 예약이 없던 옛 만들기만 «새로 생긴 앱» 을 찾는다
+      const title = resume.title || (a && !a.empty ? String(a.title || '') : traced ? traced.title : '');
       const r2: StudioRec = { sid: resume.sid, pid: 0, what: resume.what || title || (a ? String(a.title || '') : ''), place, appId, known, at: Date.now(),
-        stage: appId ? 'fix' : 'plan', card, round: 0, from, mode: 'new', ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}) };
-      saveRec(r2); void build(r2);
+        stage: appId ? 'fix' : asked && card ? 'draft' : 'plan', card, round: appId ? tr.round : 0, from, mode: resume.mode || 'new', ...(resume.origin ? { origin: resume.origin, named: true } : {}), ...(a ? { draftId: String(a.id) } : {}), ...(title ? { title } : {}),
+        //  첫 판 전인데 그 세션에 초안을 이미 청했다(다른 브라우저에서 시작) — ② 의 「완료」 로 또 청하지 않게 초안 기다림으로 연다(점검 4-10).
+        ...(!appId && asked && card ? { cardSent: cardText(card), reached: 2 } : {}),
+      };
+      //  기록에서 되지은 만들기 — 아무것도 못 되짓고(카드 없음) AI 도 안 돌고 있으면 «쓰는 중» 으로 기다리게 하지 않는다(stallInfo).
+      //   이 화면에서만 아는 표시다(기록에 남기지 않는다 · 리뷰 B2: 남겨 두면 나중에 ① 에서 다시 기획할 때도 «쓰지 않았어요» 가 바로 떴다). 기록을 실제로 읽었을 때만.
+      saveRec(r2); void build(r2, { rebuilt: !!log });
     })();
     return;
   }
@@ -351,7 +417,27 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     el('div', { class: 'v2-studio-wait v2-studio-wait--page' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('b', { text: how === 'copy' ? '사본을 만드는 중이에요' : '수정할 준비를 하는 중이에요' })));
   const place: StudioPlace = app.place || 'both';
   try {
-    const target = how === 'copy' ? await makeCopy(app, place) : { id: app.id, title: app.title };
+    //  감사 1-4 — 이 원본으로 뜬 내 사본이 이미 있으면 덮지 않고 묻는다: 그 사본을 이어서 고치기 · 새 사본(«… 2»).
+    let fresh: { id: string; n: number } | undefined;
+    if (how === 'copy') {
+      const m = await me();
+      //  나를 못 받으면 사본 id 를 지을 수 없다(«-me» 로 지으면 다른 사람의 사본과 부딪친다 · 리뷰 N6) — 멈추고 알린다.
+      if (!m.id) throw new Error('내 정보를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.');
+      const rows = await listApps();
+      const ids = new Set(rows.map((x) => String(x.id)));
+      const row = rows.find((x) => String(x.id) === copyId(app.id, m.id) && (!x.status || x.status === 'active')) || null;
+      const have = row ? String(row.id) : '';
+      if (have) {
+        if (root !== r) return;
+        const haveTitle = String(row.title || have);
+        const pick = await askCopy(r, haveTitle);
+        if (root !== r) return;   // 묻는 사이 닫았거나 다른 화면을 열었다
+        if (!pick) { closeAppStudio(); return; }
+        if (pick === 'edit') { void openAppStudioFor({ id: have, title: haveTitle, by: m.id, place }, 'edit', opts); return; }
+        fresh = nextCopyId(have, ids);
+      }
+    }
+    const target = how === 'copy' ? await makeCopy(app, place, fresh) : { id: app.id, title: app.title };
     if (!root) return;
     const known = (await listApps()).map((a) => String(a.id));
     const pid = await studioProject();
@@ -360,13 +446,36 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     forgetAiLogins(); const ai = await studioAi([], '');
     const run: RunPick = { harness: ai.harness, flags: ai.flags, node: '', mode: 'normal', autoApprove: sessionDefaults().autoApprove, writeVis: '' };
     const s = await spawnSession(brief, { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run, label: builderSessionLabel(target.title, how) });
-    if (!s) { toast('세션을 열지 못했어요', true); closeAppStudio(); return; }
+    //  실패면 까닭은 spawnSession 이 이미 알렸다 — 같은 알림을 두 번 띄우지 않는다(점검 7-1). 다른 세션을 여는 중이라 말없이 null 이면(두 번 누름) 여기서 알린다.
+    if (!s) { if (isCreatingQuickSession()) toast('세션을 여는 중이에요. 열리면 다시 눌러 주세요.'); closeAppStudio(); return; }
     //  #4667 이 세션이 이 앱의 만들기 세션 — 내가 책임자인 앱(내 사본 · 내가 만든 앱)이면 서버가 잇고, 남의 원본이면 그대로 둔다.
     void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, app_id: target.id }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
     const rec: StudioRec = { sid: s.id, pid, what: target.title, place, appId: target.id, known, at: Date.now(), stage: 'fix', round: 0, from: 0, mode: how, origin: { id: app.id, title: app.title, by: app.by }, title: target.title, card: null, named: true };
     saveRec(rec); if (mountOpts.onSession) mountOpts.onSession(s.id); void build(rec);
   } catch (e: any) { toast((how === 'copy' ? '사본을 만들지 못했어요. ' : '앱을 열지 못했어요. ') + (e && e.message ? e.message : e), true); closeAppStudio(); }
 }
+
+/** 이미 만든 사본이 있을 때 묻는다 — 'edit'(그 사본 이어서 고치기) · 'new'(새 사본) · null(그만두기). */
+function askCopy(r: HTMLElement, title: string): Promise<'edit' | 'new' | null> {
+  return new Promise((done) => {
+    const box = r.querySelector('.v2-studio-wait') || r;
+    box.replaceChildren(el('div', { class: 'v2-studio-ask' },
+      el('b', { text: '이미 만든 사본 「' + title + '」이 있어요.' }),
+      el('p', { text: '그 사본을 이어서 고칠까요? 새 사본을 만들면 고쳐 둔 사본은 그대로 남아요.' }),
+      el('div', { class: 'v2-bld-acts' },
+        el('button', { class: 'v2-bld-pri sm', type: 'button', text: '이어서 고치기', onclick: () => done('edit') }),
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '새 사본 만들기', onclick: () => done('new') }),
+        el('button', { class: 'btn btn-ghost', type: 'button', text: '그만두기', onclick: () => done(null) }))));
+  });
+}
+
+/** 여러 줄 글 — 줄마다 한 덩이(빈 줄은 건너뛴다). «·» 로 이어 붙이던 요약을 줄로 나눈다(점검 7-2). */
+function lineP(...lines: string[]): HTMLElement {
+  const xs = lines.filter((x) => x && x.trim());
+  return el('p', {}, ...xs.flatMap((x, k) => (k ? [el('br'), document.createTextNode(x)] : [document.createTextNode(x)])));
+}
+/** «…예요» · «…이에요» — 끝 글자 받침으로(둘 다예요 · 세션 위젯이에요 · 앱 화면이에요). */
+function copula(w: string): string { return josa(w, '이') === w + '이' ? w + '이에요' : w + '예요'; }
 
 // ── 처음 안내 — 세 장 · 둘러보기 · 단계 말풍선 ────────────────────────────────────────────
 function showIntro(onStart: () => void, onTour: () => void): void {
@@ -375,7 +484,7 @@ function showIntro(onStart: () => void, onTour: () => void): void {
   const close = (): void => { markSeen((s) => { s.intro = 1; }); ov.remove(); };
   const cards = [
     { pic: 'talk', t: '대화하며 앱을 만들어요', s: '코드를 볼 필요 없이, AI와 대화하며 필요한 앱을 만들 수 있어요.' },
-    { pic: 'steps', t: '따라가다보면 자연스럽게 생성돼요', s: '라이블리가 창에 띄운 단계를 자연스럽게 따라가다보면 자연스럽게 완성돼요' },
+    { pic: 'steps', t: '단계를 따라가다 보면 완성돼요', s: '라이블리가 창에 띄운 단계를 차례로 따라가다 보면 앱이 저절로 만들어져요.' },
     { pic: 'share', t: '팀에게 공유할 수도 있어요', s: '나만 쓸 수도 있고, 원한다면 팀원들이 함께 사용하도록 공유할 수 있어요.' },
   ];
   // 그림은 글자 대신 작은 장면 — 대화 → 앱 · 단계 바를 따라 누름 · 나 → 앱 → 팀원(건너뛰기는 「시작하기」 와 하는 일이 같아 걷었다)
@@ -402,7 +511,7 @@ function showTour(onDone?: () => void): void {
   const slides: Array<{ n: number; t: string; now: string; body: () => HTMLElement }> = [
     { n: 1, t: '앱 이름과 기능 정하기', now: '이름과 하고 싶은 일을 적고, 쓸 자리를 고른 뒤 「만들기 시작」을 눌러주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'in', text: '회의 안건' }), el('div', { class: 'in', text: EXAMPLE.what }), el('div', { class: 'row' }, el('span', { class: 'on', text: '세션 위젯' }), el('span', { text: '앱 화면' }), el('span', { text: '둘 다' }))) },
     { n: 2, t: '세부 기획 정하기', now: '기획 카드에서 틀린 내용을 고쳐주세요', body: () => cardView(c, null) },
-    { n: 3, t: '시안 확인 · 수정', now: '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2: 제목에 날짜, 「끝남」 단추, 안 끝난 것 먼저' }))) },
+    { n: 3, t: '시안 확인 · 수정', now: '실제 화면에서 어떻게 동작하는지 써 보고, 고칠 곳에 코멘트를 남겨주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'steps' }, ...DRAFT_STEPS.map((s, i) => el('span', { class: i < 4 ? 'done' : '', text: s }))), el('div', { class: 'app' }, el('b', { text: '이번 회의 안건 📍' }), el('div', { text: '☐ 지표 대시보드 범위 정하기 📍' }), el('div', { text: '☐ 다음 분기 채용' }), el('div', { class: 'mute', text: '☑ 지난 회의록 확인' })), el('div', { class: 'cm' }, el('div', { text: '📍 제목 「이번 회의 안건」 → 회의 날짜도 같이 보이게' }), el('div', { text: '📍 안건 줄 → 체크 말고 「끝남」 단추로' }), el('div', { class: 'mute', text: '→ V2: 제목에 날짜, 「끝남」 단추, 안 끝난 것 먼저' }))) },
     { n: 4, t: '확인', now: '아래 다섯 가지가 맞는지 확인해주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '✓ 원하던 것이 다 있나요? 셋 다 있어요' }), el('div', { text: '✓ 이름: 회의 안건' }), el('div', { text: '✓ 쓰는 자리: 세션 위젯' }), el('div', { text: '✓ 누가 쓰나: 나만 (기본)' }), el('div', { text: '✓ 아이콘: AI가 그린 그림' }))) },
     { n: 5, t: '넣기', now: '「지금 써 보기」로 바로 열어 보고, 「팀에 알리기」로 팀에 알려주세요.', body: () => el('div', { class: 'v2-studio-tour-wire' }, el('div', { class: 'chk' }, el('div', { text: '이렇게 만들었어요: 초안, V2 날짜와 끝남 단추, V3 글자 크기' }), el('div', { text: '이렇게 쓰세요: 세션 오른쪽 위 +에서 이 앱을 고르면 세션 위젯으로 붙어요' }), el('div', { text: '팀에 알리기: 「장원준 님이 「회의 안건」 앱을 만들었어요」' }))) },
   ];
@@ -410,9 +519,9 @@ function showTour(onDone?: () => void): void {
   const paint = (): void => {
     const s = slides[i];
     box.replaceChildren(
-      el('div', { class: 'v2-studio-bar v2-studio-bar--tour' }, ...STAGES.map((x) => el('span', { class: x.n < s.n ? 'done' : x.n === s.n ? 'on' : '', text: '① ② ③ ④ ⑤ ⑥'.split(' ')[x.n - 1] + ' ' + x.label }))),
+      el('div', { class: 'v2-studio-bar v2-studio-bar--tour' }, ...STAGES.map((x) => el('span', { class: x.n < s.n ? 'done' : x.n === s.n ? 'on' : '', title: x.label }, ...stepText(x.n, x.label)))),
       el('div', { class: 'v2-studio-now' }, el('span', { text: s.now })),
-      el('h2', { text: s.n + '. ' + s.t + ' (예시: 회의 안건)' }), s.body(),
+      el('h2', { text: s.n + '. ' + s.t + ' (예시: 회의 안건)' }), el('div', { class: 'v2-studio-tour-body' }, s.body()),   // 장면만 굴린다 — 단추 줄은 늘 보인다(점검 5-4)
       el('div', { class: 'v2-studio-intro-act' },
         el('button', { class: 'btn btn-ghost', type: 'button', text: '닫기', onclick: () => { ov.remove(); } }),
         el('span', { class: 'v2-studio-sp' }),
@@ -458,6 +567,29 @@ function helpMenu(btn: HTMLElement, onIntro: () => void, onTour: () => void): vo
   const off = (e: Event): void => { if (!m.contains(e.target as Node)) { m.remove(); document.removeEventListener('pointerdown', off, true); } };
   setTimeout(() => document.addEventListener('pointerdown', off, true), 0);
 }
+/** 좁은 머리줄의 「⋯」 — 접은 단추(공개하기 · 되돌리기 · AI 세션 보기)를 지금 보이는 것만 같은 이름으로 늘어놓는다(점검 5-2).
+ *  누르면 원래 단추를 누른 것과 같다 — 할 일은 한 벌(원래 단추의 onclick)이고, 잠긴 단추는 여기서도 잠겨 있다. */
+function foldMenu(btn: HTMLElement, items: HTMLButtonElement[]): void {
+  if (!root) return;
+  //  열려 있으면 닫는다 — 「⋯」 를 다시 누르면 접힌다(아래 바깥 누름 처리는 이 단추를 건너뛴다).
+  if (openFold) { openFold(); return; }
+  root.querySelectorAll('.v2-studio-help').forEach((n) => n.remove());
+  const shown = items.filter((b) => !b.hidden);
+  if (!shown.length) return;
+  const close = (): void => { m.remove(); document.removeEventListener('pointerdown', off, true); document.removeEventListener('keydown', onKey, true); btn.setAttribute('aria-expanded', 'false'); openFold = null; };
+  const m = el('div', { class: 'v2-studio-help', role: 'menu' }, ...shown.map((b) => {
+    const x = el('button', { type: 'button', role: 'menuitem', text: b.textContent || '', title: b.title || null, onclick: () => { close(); b.click(); } }) as HTMLButtonElement;
+    x.disabled = b.disabled;
+    return x;
+  }));
+  const off = (e: Event): void => { const t = e.target as Node; if (!m.contains(t) && !btn.contains(t)) close(); };
+  const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.preventDefault(); close(); btn.focus(); } };
+  const r = btn.getBoundingClientRect(); m.style.top = (r.bottom + 6) + 'px'; m.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  root.append(m); btn.setAttribute('aria-expanded', 'true'); openFold = close;
+  setTimeout(() => { if (openFold === close) { document.addEventListener('pointerdown', off, true); document.addEventListener('keydown', onKey, true); } }, 0);
+}
+/** 열려 있는 「⋯」 메뉴를 닫는 함수 — 없으면 null. */
+let openFold: (() => void) | null = null;
 //  누른 채인가 — 「참고한 서비스」 가 보기로 돌아갈 때를 늦춘다(cardView).
 let pointerHeld = false;
 if (typeof document !== 'undefined') {
@@ -546,19 +678,25 @@ const CIRC = '① ② ③ ④ ⑤ ⑥'.split(' ');
 function paintStageBar(bar: HTMLElement, cur: number, reached: number, mode: 'new' | 'copy' | 'edit', labelOf: (i: number, label: string) => string, onGo: (k: 'what' | StudioStage) => void, busy = false): void {
   const tabs = stageTabs(cur, busy ? cur : reached, mode);
   bar.replaceChildren(...STAGES.map((x, i) => {
-    const text = CIRC[x.n - 1] + ' ' + labelOf(i, x.label);
+    const label = labelOf(i, x.label);
     const st = tabs[i];
-    if (st === 'back') return el('button', { type: 'button', class: 'done go', text, title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => onGo(x.key) });
-    if (st === 'ahead') return el('button', { type: 'button', class: 'go ahead', text, title: '이 단계로 다시 가요. 저장한 내용 그대로예요.', onclick: () => onGo(x.key) });
-    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', text, ...(st === 'on' ? { 'aria-current': 'step' } : {}) });
+    if (st === 'back') return el('button', { type: 'button', class: 'done go', title: '이 단계로 돌아가요. 적은 내용은 그대로 남아요.', 'aria-label': CIRC[x.n - 1] + ' ' + label, onclick: () => onGo(x.key) }, ...stepText(x.n, label));
+    if (st === 'ahead') return el('button', { type: 'button', class: 'go ahead', title: x.key === 'put' ? PUT_GO_TITLE : '이 단계로 다시 가요. 저장한 내용 그대로예요.', 'aria-label': CIRC[x.n - 1] + ' ' + label, onclick: () => onGo(x.key) }, ...stepText(x.n, label));
+    return el('span', { class: st === 'on' ? 'on' : st === 'done' ? 'done' : '', title: label, 'aria-label': CIRC[x.n - 1] + ' ' + label, ...(st === 'on' ? { 'aria-current': 'step' } : {}) }, ...stepText(x.n, label));   // 좁으면 이름이 숨는다 — 읽는 이름은 그대로
   }));
+}
+/** 단계 칸의 글 — 번호와 이름을 따로 둔다. 좁은 화면은 번호만 보이고 지금 단계에만 이름을 붙인다(점검 5-3 · 40-v2.css .v2-studio-bar). */
+function stepText(n: number, label: string): HTMLElement[] {
+  return [el('i', { class: 'v2-studio-stn', text: CIRC[n - 1] }), el('i', { class: 'v2-studio-stl', text: ' ' + label })];
 }
 /** 「다음 →」 — 바로 다음 단계가 와 본 곳일 때만(아직 안 간 단계는 그 단계의 주 단추가 연다). 「← 이전」 과 짝. */
 function nextBtnFor(cur: number, reached: number, mode: 'new' | 'copy' | 'edit', onGo: (k: 'what' | StudioStage) => void, busy = false): HTMLElement | null {
   if (busy) return null;   // AI 가 고치는 중 — 위 paintStageBar 의 busy 와 같은 까닭
   const i = nextStageOpen(cur, reached, mode);
-  return i < 0 ? null : el('button', { class: 'btn btn-ghost btn-sm v2-studio-next', type: 'button', text: '다음 →', title: '다음 단계로 가요. 저장한 내용 그대로예요.', onclick: () => onGo(STAGES[i].key) });
+  return i < 0 ? null : el('button', { class: 'btn btn-ghost btn-sm v2-studio-next', type: 'button', text: '다음 →', title: STAGES[i].key === 'put' ? PUT_GO_TITLE : '다음 단계로 가요. 저장한 내용 그대로예요.', onclick: () => onGo(STAGES[i].key) });
 }
+/** ⑤ 로 가는 단추의 풀이 — ⑤ 로 가는 길은 「완료 · 다음 단계로」 와 같은 저장을 거친다(점검 2-1). */
+const PUT_GO_TITLE = '④에서 바꾼 것을 저장하고 ⑤로 가요. 바꾼 것이 없으면 그냥 가요.';
 
 // ── ① 앱 이름과 기능 정하기 — 이름 · 설명(자세할수록 좋다) · 자리 · 누가 어디서 만드나 ──────────────
 const DRAFT_KEY = 'lively_v2_app_studio_draft';   // ① 에 적던 것(세션이 생기기 전) — 닫았다 열어도 남는다
@@ -623,35 +761,68 @@ function start(prefill?: StudioRec | null): void {
     const d = sessionDefaults();
     return { harness: ai.harness, flags: ai.flags, node: ch.id, mode: 'normal', autoApprove: d.autoApprove, writeVis: '' };
   };
+  //  「준비하는 중…」 동안 ① 칸을 잠근다 — AI 에게는 누른 때의 내용만 간다(그새 친 글은 반영도 안 되고 엉뚱한 때 초안으로 되살아났다 · 점검 4-9).
+  const lockForm = (on: boolean): void => {
+    nameIn.disabled = on; input.disabled = on; nodeSel.disabled = on;
+    cards.forEach((c) => { (c as HTMLButtonElement).disabled = on; });
+  };
   const begin = async (): Promise<void> => {
     const what = input.value.trim(), nm = nameIn.value.trim(); if (!what || go.disabled) return;
-    go.disabled = true; go.textContent = '준비하는 중…';
+    go.disabled = true; go.textContent = '준비하는 중…'; lockForm(true);
+    //  기다리는 사이 닫았거나 다른 만들던 앱을 열었으면 거기서 멈춘다 — 뒤에서 세션 · 빈 예약 앱을 만들거나 보던 화면을 빼앗지 않게(점검 4-7).
+    const r0 = root;
+    const gone = (): boolean => !root || root !== r0 || !go.isConnected;
+    const undo = (label: string): void => { if (gone()) return; go.disabled = false; go.textContent = label; lockForm(false); };
+    //  어느 길로 끝나든(못 보냄 · 세션을 못 엶 · 중간에 던짐) ① 을 다시 풀어 준다 — 넘겨줬거나(build) 화면이 바뀌었으면 그대로 둔다(격리 리뷰 #1583 · 9).
+    let handed = false;
+    //   세션이 서면 바로 넘긴 것으로 친다 — 그 뒤에 던져도 「만들기 시작」 을 다시 풀면 세션이 하나 더 생긴다(격리 리뷰 #1591 · 8).
+    let made = '';
+    try { handed = await beginNow(what, nm, gone, (sid) => { handed = true; made = sid; }); }
+    catch (e: any) {
+      toast('시작하지 못했어요. ' + (e && e.message ? e.message : e), true);
+      //  세션은 섰는데 그 뒤에서 던졌다 — 세운 세션의 화면으로 넘긴다(기록이 있으면 · 없으면 앱빌더 「만들던 앱」 에서 이어 연다).
+      const r = made && !gone() ? readRecs().find((x) => x.sid === made) || null : null;
+      if (r) void build(r);
+    }
+    finally { if (!handed) undo(prefill ? '이 내용으로 다시 기획' : '만들기 시작'); }
+  };
+  /** 「만들기 시작」 · 「이 내용으로 다시 기획」 의 본체 — 화면을 넘겼으면(build) 또는 그사이 화면이 바뀌었으면 true. */
+  const beginNow = async (what: string, nm: string, gone: () => boolean, spawned: (sid: string) => void): Promise<boolean> => {
     if (prefill) {
       //  뒤로 와서 고친 뒤 — 세션은 그대로, 기획 카드만 다시 청한다. 적은 것은 기록에 남는다.
       const rec = prefill;
       //  먼저 보낸다 — 못 보냈으면 기록을 그대로 둔다(고치던 것은 whatEdit 에 남아 있다 · 격리 리뷰).
-      if (!(await sendPrompt(rec, planBrief(what, place, nm)))) { go.disabled = false; go.textContent = '이 내용으로 다시 기획'; return; }
+      //   지난 카드(사람이 고친 줄 · 더한 항목)를 함께 보내 바뀐 점만 반영하게 한다 — 이름 하나 바꿨다고 기획 작업이 날아가지 않게(점검 4-8).
+      if (!(await sendPrompt(rec, planBrief(what, place, nm, rec.card)))) return gone();
       rec.what = what; rec.place = place; if (nm) { rec.title = nm; rec.named = true; } else { delete rec.title; rec.named = false; }
       //  기획을 다시 받는다 — ④ · ⑤ 는 옛 기획의 것이라 «와 본 곳» 을 당긴다(앱이 이미 있으면 ③ 의 옛 시안은 그대로 볼 수 있다). 넣은 앱이어도(done) 다시 만드는 중이다.
       //   청한 카드를 빈 글로 두어, 새 카드가 오면 ② 에 「바꾼 기획대로 다시 만들기」 가 선다(옛 시안으로 그냥 넘어가지 않게).
-      rec.card = null; rec.stage = 'plan'; rec.reached = 1; rec.done = false; rec.cardSent = ''; delete rec.whatEdit; delete rec.check; saveRec(rec);
+      //   planAt — 이 카드를 청한 때. 앱이 있는데 카드가 없는 ② 가 «쓰는 중» 인지 «남은 카드 없음» 인지 가른다(점검 4-3).
+      rec.card = null; rec.stage = 'plan'; rec.reached = 1; rec.done = false; rec.cardSent = ''; rec.planAt = Date.now(); delete rec.cardFix; delete rec.whatEdit; delete rec.check; saveRec(rec);
       void relabel(rec.sid, nm, 'new');
-      void build(rec); return;
+      if (!gone()) void build(rec);
+      return true;
     }
     const known = (await listApps()).map((a) => String(a.id));   // 이 뒤에 새로 생기는 앱이 «내가 만들고 있는 앱»
     const pid = await studioProject();
     const run = await studioRun();
+    if (gone()) return true;
     //  이름은 만들 때 같이 싣는다 — 서버가 사람 이름으로 박아 AI 가 제 이름(「회의록 기획카드」 같은)으로 덮지 못한다(원준 2026-10-15).
     const s = await spawnSession(planBrief(what, place, nm), { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run, label: builderSessionLabel(nm, 'new') });
-    if (!s) { go.disabled = false; go.textContent = '만들기 시작'; return; }
+    if (!s) return gone();
+    spawned(s.id);
     const rec: StudioRec = { sid: s.id, pid, what, place, appId: '', known, at: Date.now(), stage: 'plan', card: null, round: 0, from: 0, mode: 'new', ...(nm ? { title: nm, named: true } : {}) };
     saveRec(rec); writeDraft(null);   // 세션 이름은 위에서 같이 실었다 — «"이름" 앱 제작» · 이름을 비웠으면 «새 앱 제작» → 기획 카드가 오면 그 이름으로
+    //  세션이 뜨는 사이 닫았거나 다른 화면으로 갔다 — 세션은 이미 섰으니 기록은 두되(만들던 앱에서 이어 연다) 빈 예약 앱은 만들지 않고 화면도 빼앗지 않는다.
+    if (gone()) return true;
     //  #4667 초안 앱을 지금 만든다(나만 보는 빈 앱 · 만든 사람 = 나 · 만들기 세션 = 이 세션). AI 는 이 id 로 저장한다(시안 글에 실린다).
     //   못 만들면 종전처럼 «새로 생긴 앱» 을 찾는다(예약 없는 길).
     try { const r: any = await api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, title: nm || firstLine(what) }) }); if (r && r.app_id) { rec.draftId = String(r.app_id); saveRec(rec); } }
     catch (_) { /* 예약 없이 간다 */ }
-    if (mountOpts.onSession) mountOpts.onSession(s.id);
+    if (gone()) return true;
+    try { if (mountOpts.onSession) mountOpts.onSession(s.id); } catch (_) { /* 주소를 못 적어도 화면은 연다 */ }
     void build(rec);
+    return true;
   };
   go.onclick = () => { void begin(); };
   input.addEventListener('input', sync);
@@ -686,7 +857,7 @@ function start(prefill?: StudioRec | null): void {
       el('div', { class: 'v2-studio-places' }, ...cards),
       el('div', { class: 'v2-studio-ai' },
         el('div', { class: 'v2-studio-ai-h' }, el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', { text: '이 앱은 AI가 만들어요' })),
-        el('p', { text: prefill ? '적은 내용을 바꾸고 「이 내용으로 다시 기획」을 누르면 AI가 기획 카드를 다시 써요. 바꾸지 않았으면 「다음 단계로」로 그대로 이어가요.' : '「만들기 시작」을 누르면 AI 세션이 하나 열려서 이를 바탕으로 더 궁금한 점을 물어볼거예요.' }),
+        el('p', { text: prefill ? '적은 내용을 바꾸고 「이 내용으로 다시 기획」을 누르면 AI가 기획 카드를 다시 써요. 바꾸지 않았으면 「다음 단계로」로 그대로 이어가요.' : '「만들기 시작」을 누르면 AI 세션이 하나 열리고, AI가 기획 카드를 먼저 써서 보여줘요.' }),
         el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '어디서 실행할까요' }), nodeSel, nodeNote),
         el('div', { class: 'v2-studio-ai-row' }, el('span', { class: 'k', text: '모델 · 생각 깊이' }), modelChip, el('small', { class: 'v2-studio-ai-note', text: '앱 만들기에 맞게 정해 두었어요' }), el('span', { class: 'v2-studio-sp' }),
           //  뒤로 온 ① — 아래 단추 자리에도 「다음 단계로」(원준 2026-10-19 «밑에 이 내용으로 다시 기획 이거밖에 없어서 어색해»). 위 「다음 →」 과 같은 길.
@@ -712,10 +883,14 @@ function placePic(k: StudioPlace): HTMLElement {
 //   여기엔 앱을 띄우지 않는다. 가운데 단추가 실제 화면으로 보내고 그 위에 코멘트 층(app-review.ts)이 선다 — 세션 위젯 = **시험 세션**(app-try-session.ts:
 //   앱을 만드는 세션과 다른 진짜 AI 세션 · 진짜 세션 화면 · 우측 사이드바에 앱 · 사람이 쳐서 써 본다), 앱 화면 = #/i/<앱>.
 //   앱을 앱빌딩 세션에 붙이지 않는다(원준 2026-10-15 «시연 중이잖아 · 앱을 수정하는 세션이 들어가면 안 되지» — 붙여 두면 앱이 보낸 글이 만드는 대화에 섞였다).
-async function build(rec: StudioRec): Promise<void> {
+/** opts.rebuilt — 이 브라우저에 기록이 없어 세션 기록에서 되지었다(openAppStudio). 카드를 못 되짓고 AI 가 안 돌면 «쓰는 중» 대신 «카드를 쓰지 않았어요». 이 화면에서만 산다. */
+async function build(rec: StudioRec, opts?: { rebuilt?: boolean }): Promise<void> {
   if (!root) return;
   if (teardown) { teardown(); teardown = null; }
-  const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || rec.what, curVer: 0, prevVer: 0, pollT: 0, logT: 0,
+  //  title — 정한 이름(① · 기획 카드)이 없고 아직 앱도 없으면 비워 둔다(머리줄은 「새 앱」). 설명 전체가 이름처럼 뜨던 것(점검 6-11).
+  //   앱이 있으면 서버 이름이 덮는다(아래 readVis) — 못 읽었을 때만 설명으로 남는다.
+  //   baseVer — 지금 판의 «내용 판»(마무리 판이면 그 아래 AI 판 · lib/studio-flow verPlan) · verOk 판 이력을 이번에 읽었나 · sending ② 에서 보내는 중(두 번 안 가게)
+  const S = { dead: false, chat: null as SessionChatHandle | null, title: rec.title || (rec.card && rec.card.name) || (rec.appId ? rec.what : ''), putting: false, checkReading: false, fromUnknown: false, curVer: 0, prevVer: 0, baseVer: 0, verOk: false, sending: false, pollT: 0, logT: 0,
     pins: (rec.pins || []) as StudioPin[], general: rec.general || '', step: rec.step || 0, check: null as { have: string[]; missing: string[] } | null, checkWait: false,
     waiting: !!rec.fixing, waitT0: rec.fixing ? rec.fixing.at : 0, topVer: 0, tick: 0, checkFor: null as { ver: number; card: string } | null, chatMode: 'off' as 'off' | 'float' | 'dock', review: null as ReviewApi | null, tryS: null as TrySession | null, lastNote: '', vis: null as StudioVis | null, board: null as { close(): void } | null,
     stall: null as RunStall | null, stallNode: '', stallT0: 0, runT: 0, limit: '',   // limit: AI 답 글이 알린 사용 한도(parseLimit 의 한 줄) — 새로 보내면 걷는다
@@ -723,7 +898,9 @@ async function build(rec: StudioRec): Promise<void> {
     iconT0: 0, iconTick: 0, iconLast: '',   // ④ AI 에게 그려 달라고 보낸 때 · 흐른 시간 시계 · 보낸 글(멈췄을 때 그대로 다시 보낸다)
     colorOpen: false, cpick: null as Hsv | null, hexBad: false,   // ④ 「다른 색」 — 팔레트가 펼쳐졌나 · 손잡이 자리(다시 그려도 그대로) · 적은 색 코드가 틀렸나
     //  막 연 만들기(세션이 뜨는 중) — 2분 동안은 멈췄다 하지 않는다 · 막 보낸 고침도 보낸 때부터 60초(armRun 과 같은 틈)
-    quietTill: Math.max(Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
+    //   기록에서 되지은 만들기(rebuilt)는 막 연 것이 아니다 — 세션은 이미 오래 있었다(그 2분을 기다리지 않는다).
+    rebuilt: !!(opts && opts.rebuilt),
+    quietTill: Math.max(!(opts && opts.rebuilt) && Date.now() - rec.at < 120000 ? rec.at + 120000 : 0, rec.fixing ? rec.fixing.at + 60000 : 0) };
   const name = el('b', { class: 'v2-studio-name', text: S.title || NEW_APP_NAME });
   const ver = el('span', { class: 'v2-studio-ver', text: '' });
   const undo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이전 버전으로', hidden: true }) as HTMLButtonElement;
@@ -737,6 +914,10 @@ async function build(rec: StudioRec): Promise<void> {
   //  보고 싶으면 머리줄 단추로 떠 있는 창을 열고, 그 창을 끌어 오른쪽 끝에 놓으면 오른쪽 칸에 붙는다(원준 2026-10-14). 안은 **기본 터미널 보기**(원준: «베타인 대화 뷰 말고 기본 터미널 뷰»).
   const chatBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: 'AI 세션 보기' }) as HTMLButtonElement;
   chatBtn.onclick = () => { S.chatMode = S.chatMode === 'off' ? 'float' : 'off'; applyPlace(); };
+  //  좁은 화면(40-v2.css)에서는 공개하기 · 되돌리기 · AI 세션 보기를 「⋯」 하나로 접는다 — 「닫기」 는 늘 보인다(점검 5-2 · 390px 에서 닫기가 화면 밖으로 밀렸다).
+  [pubBtn, undo, chatBtn].forEach((b) => b.classList.add('v2-studio-fold'));
+  const moreBtn = el('button', { class: 'btn btn-ghost btn-sm v2-studio-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement;
+  moreBtn.onclick = () => foldMenu(moreBtn, [pubBtn, undo, chatBtn]);
   const tray = el('div', { class: 'v2-studio-tray', hidden: true });   // ③ 보낼 의견 — 허브 안 한 칸(실제 화면의 막대와 같은 것을 본다)
   const appBox = el('div', { class: 'v2-studio-app v2-studio-app--full' });   // 가운데 칸 — 단계마다 카드 · 허브 · 점검표 · 마무리
   const stage = el('div', { class: 'v2-studio-stage' }, appBox);
@@ -851,13 +1032,17 @@ async function build(rec: StudioRec): Promise<void> {
       if (rec.mode !== 'new' && i < 3) t = i === 0 ? '앱 이름과 기능(원본)' : i === 1 ? '세부 기획(물려받음)' : '원본 시안 확인 · 수정';
       if (STAGES[i].key === 'fix' && rec.round > 0) t += ' · ' + (rec.round + (rec.stage === 'fix' && !S.waiting ? 1 : 0)) + '번째';
       return t;
-    }, (k) => { void goTo(k); }, S.waiting);
+    }, (k) => { void goTo(k); }, S.waiting || S.putting);   // 저장하는 동안엔 앞으로 못 간다(⑤ 를 두 번 누르지 않게)
   };
   /** 한 단계 뒤 — ①로 가면 세션은 두고 적었던 것을 다시 보인다. 없으면 null(① 이거나 고치기 흐름의 ①~③). */
   /** 멈춘 AI 일을 화면 모든 자리(막대 · 띠 · 허브 · 실제 화면의 코멘트 막대)가 같은 말로 — 멈추지 않았으면 null.
    *  원준 2026-10-28 «중간에 안됐는데 수정중 하면서 시간 세고있으면 어떡해» — 막대만 멈췄다 하고 띠는 «AI 수정 중 11:06» 을 세고 있었다. */
   const stallInfo = (): { text: string; short: string; go: string; resume: boolean } | null => {
     const kind = runKind(); if (!S.stall || !kind) return null;
+    //  기록에서 되지었는데 카드도 없고 AI 도 안 돈다 — 카드를 청한 적이 없거나 쓰다 끝났다. «쓰는 중» 대신 그렇다고 말하고 처음 적은 내용으로 다시 부탁하게 한다.
+    if (cardNeverCame() && S.stall !== 'ask') return S.stall === 'offline'
+      ? { text: 'AI가 기획 카드를 쓰지 않았어요. 세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있어요. 그 컴퓨터를 켜면 다시 부탁할 수 있어요.', short: 'AI가 카드를 쓰지 않았어요', go: '다시 부탁하기', resume: false }
+      : { text: 'AI가 기획 카드를 쓰지 않았어요. 「다시 부탁하기」를 누르면 처음 적은 내용으로 다시 부탁해요.', short: 'AI가 카드를 쓰지 않았어요', go: '다시 부탁하기', resume: true };
     const go = kind === 'fix' ? '이어서 수정하기' : kind === 'icon' ? '다시 부탁하기' : '이어서 만들기';
     if (S.stall === 'ask') return { text: 'AI가 확인을 기다리고 있어요. 「AI 세션 보기」를 눌러 답해주세요.', short: 'AI가 확인을 기다려요', go, resume: false };
     if (S.stall === 'offline') return { text: '세션이 돌던 컴퓨터' + (S.stallNode ? '(' + S.stallNode + ')' : '') + '가 꺼져 있거나 잠들어 있어서 AI가 멈췄어요. 그 컴퓨터를 켜면 이어서 할 수 있어요.', short: 'AI가 멈췄어요', go, resume: false };
@@ -866,6 +1051,8 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.stall === 'limit') return { text: (S.limit || 'AI 사용 한도에 걸려 멈췄어요.') + ' 풀린 뒤 「' + go + '」를 누르면 ' + from + '.', short: 'AI 사용 한도로 멈췄어요', go, resume: true };
     return { text: 'AI가 끝내지 못하고 멈췄어요. 「' + go + '」를 누르면 ' + (kind === 'icon' ? '다시 그려요' : '멈춘 곳부터 다시 해요') + '.', short: 'AI가 멈췄어요', go, resume: true };
   };
+  /** 기록에서 되지은 ② 인데 카드가 없다(그리고 AI 가 고치는 카드도 아니다) — 멈추면 «쓰는 중» 대신 «카드를 쓰지 않았어요». */
+  const cardNeverCame = (): boolean => S.rebuilt && rec.stage === 'plan' && !rec.card && !rec.cardFix && !rec.planAt;
   const prevOf = (): 'what' | StudioStage | null => {
     if (rec.stage === 'plan') return rec.mode === 'new' ? 'what' : null;
     if (rec.stage === 'draft' || rec.stage === 'fix') return rec.mode === 'new' ? 'plan' : null;
@@ -875,6 +1062,9 @@ async function build(rec: StudioRec): Promise<void> {
   const goTo = async (k: 'what' | StudioStage): Promise<void> => {
     rec.pins = S.pins; rec.general = S.general; saveRec(rec);
     if (k === 'what') { if (teardown) { teardown(); teardown = null; } closeCoach(); start(rec); return; }   // ①로 — 열린 안내는 닫는다(다시 와도 또 서지 않게)
+    //  ⑤ 로 가는 길(「다음 →」 · 단계 바 ⑤ · 「완료 · 다음 단계로」)은 모두 같은 저장을 거친다 — ④ 에서 이름 · 공개 범위를 바꾸고 「다음 →」 를 누르면
+    //   ⑤ 로는 넘어가는데 아무것도 저장 · 공개되지 않던 것(점검 2-1). 바꾼 게 없으면 저장 없이 그냥 간다(putAppOnce).
+    if (k === 'put') { await putApp(); return; }
     await setStage(k === 'fix' && !rec.appId ? 'draft' : k);
   };
   const nowBtn = (text: string, pri: boolean, run: () => void, disabled = false): HTMLButtonElement => { const b = el('button', { class: pri ? 'v2-studio-now-pri' : 'btn btn-ghost btn-sm', type: 'button', text, onclick: run }) as HTMLButtonElement; b.disabled = disabled; return b; };
@@ -883,78 +1073,102 @@ async function build(rec: StudioRec): Promise<void> {
     const kids: Array<HTMLElement | null> = []; let text = '';
     const hasCm = cmCount() > 0;
     if (rec.stage === 'plan') {
-      text = rec.card ? '기획 카드에서 틀린 내용을 고쳐주세요' : 'AI가 기획 카드를 쓰는 중이에요';
+      text = rec.cardFix ? 'AI가 기획 카드를 고치고 있어요' : rec.card ? '기획 카드에서 틀린 내용을 고쳐주세요' : noCardLeft() ? '남아 있는 기획 카드가 없어요' : 'AI가 기획 카드를 쓰는 중이에요';
       //  이미 이 기획으로 시안을 청했다(와 본 곳이 ③ 이상) — 카드를 안 고쳤으면 「다음 →」 로 그대로 간다(다시 만들지 않는다).
       //   고쳤으면 「바꾼 기획대로 다시 만들기」(앱이 있으면 새 버전 · 아직 첫 판 전이면 초안을 다시 청한다).
-      if (reachedOf(rec) < 2) kids.push(nowBtn('완료 · 다음 단계로', true, () => { void toDraft(); }, !rec.card));
-      else if (rec.card && rec.cardSent != null && cardText(rec.card) !== rec.cardSent) kids.push(nowBtn('바꾼 기획대로 다시 만들기', true, () => { void remake(); }, S.waiting));
+      //   보내는 중(S.sending) · AI 가 카드를 고치는 중(rec.cardFix)엔 잠근다 — 두 번 누르면 초안을 두 번 만들고(점검 4-1), 고치기 전 카드로 초안이 나갔다(4-2).
+      const hold = S.sending || !!rec.cardFix;
+      if (reachedOf(rec) < 2) kids.push(nowBtn('완료 · 다음 단계로', true, () => { void toDraft(); }, !rec.card || hold));
+      else if (rec.card && rec.cardSent != null && cardText(rec.card) !== rec.cardSent) kids.push(nowBtn('바꾼 기획대로 다시 만들기', true, () => { void remake(); }, S.waiting || hold));
     }
     else if (rec.stage === 'draft' || rec.stage === 'fix') {
       if (!rec.appId) text = 'AI가 초안을 만들고 있어요(' + (S.step ? DRAFT_STEPS[S.step - 1] : '시작하는 중') + '). 몇 분 걸려요.';
       else if (S.waiting) text = 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.';
       else if (hasCm) { text = '코멘트 ' + cmCount() + '건을 남겼어요. 「수정하기」를 누르면 AI가 반영해 다음 버전을 만들어요.'; kids.push(nowBtn('완료 · 다음 단계로', false, () => { void setStage('check'); }), nowBtn('수정하기 · ' + cmCount() + '건', true, () => { void sendFix(); })); }
-      else { text = '가상 화면에서 실제로 어떻게 동작하는지 테스트해 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
-    } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.check != null && S.check.missing.length > 0)); }
-    else if (rec.stage === 'put') { text = (S.vis && S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
+      else { text = '실제 화면에서 어떻게 동작하는지 써 보고, 고칠 곳에 코멘트를 남겨주세요.'; kids.push(nowBtn('완료 · 다음 단계로', rec.round >= 1, () => { void setStage('check'); })); }
+    } else if (rec.stage === 'check') { text = '아래 다섯 가지가 맞는지 확인해주세요.'; kids.push(nowBtn('더 고치기', false, () => { void setStage('fix'); }), nowBtn('완료 · 다음 단계로', true, () => { void putApp(); }, S.checkReading || (S.check != null && S.check.missing.length > 0))); }
+    //  공개 상태를 못 읽었으면 «모두에게 공개됐어요» 로 치지 않는다(점검 2-5).
+    else if (rec.stage === 'put') { text = (!S.vis ? '앱이 만들어졌어요. 공개 상태는 확인하지 못했어요.' : S.vis.visibility === 'me' ? '앱이 만들어졌어요. 지금은 나만 볼 수 있어요.' : S.vis.draftMine ? '이 버전은 비공개로 두었어요. 다른 사람은 공개 버전을 써요.' : '워크스페이스 앱이 됐어요.') + ' 「지금 써 보기」로 바로 열어 보세요.'; }
     const st = runKind() === 'icon' ? null : stallInfo();   // 아이콘 기다림의 멈춤은 ④ 아이콘 칸이 말한다 — 위 줄의 「완료 · 다음 단계로」 를 가리지 않는다
     if (st) {   // 기다리던 AI 일이 멈췄다 — «만들고 있어요» 대신 까닭과 할 일(원준 2026-10-26)
       kids.length = 0; text = st.text;
       if (S.stall === 'ask') kids.push(nowBtn('AI 세션 보기', true, () => { S.chatMode = 'float'; applyPlace(); }));
       else kids.push(nowBtn(st.go, true, () => { void resumeRun(); }, !st.resume));
     }
+    //  ⑤ 로 가며 저장하는 중 — 단계 바로 ⑤ 를 눌렀을 때도 바로 그렇다고 말하고 두 번 못 누르게(격리 리뷰 #1583 · 8).
+    if (S.putting) { kids.length = 0; text = '바꾼 것을 저장하는 중이에요.'; kids.push(nowBtn('저장하는 중…', true, () => { /* 저장 중 */ }, true)); }
     const prev = prevOf();
-    const next = nextBtnFor(stageIndex(rec.stage), reachedOf(rec), rec.mode, (k) => { void goTo(k); }, S.waiting);
+    const next = nextBtnFor(stageIndex(rec.stage), reachedOf(rec), rec.mode, (k) => { void goTo(k); }, S.waiting || S.putting);
     now.replaceChildren(...(prev ? [el('button', { class: 'btn btn-ghost btn-sm v2-studio-back', type: 'button', text: '← 이전', title: '이전 단계로 돌아가요. 적은 내용은 그대로 남아요.', onclick: () => { void goTo(prev); } })] : []),
       ...(next ? [next] : []),
       el('span', { class: 'v2-studio-now-t', text }), el('span', { class: 'v2-studio-sp' }), ...kids.filter(Boolean) as HTMLElement[]);
     rec.pins = S.pins; rec.general = S.general; saveRec(rec);   // 적던 의견은 늘 기록에(뒤로 가도 · 닫아도 그대로)
-    syncFixIn();
+    syncFixIn(); syncHead();
   };
-  /** 허브 글 속 「수정하기」 단추를 막대의 단추와 맞춘다 — 의견이 있어야 눌리고(「수정하기 · n건」), 고치는 중엔 잠긴다. 뒤 조사도 글에 맞춘다(수정하기를 · n건을). */
+  /** 머리줄 「이전 버전으로」 · 「공개하기」 — AI 가 고치는 중엔 잠근다. 그 사이 되돌리거나 공개하면 그 저장 사건을 «고침 끝» 으로 알아듣고,
+   *  조금 뒤 AI 가 진짜로 저장하며 되돌린 것 위에 덮어썼다(점검 2-3). 사건 쪽도 사람이 한 저장은 끝맺지 않는다(systemNote). */
+  const syncHead = (): void => {
+    const hold = S.waiting ? 'AI가 수정을 마치면 누를 수 있어요' : '';
+    undo.disabled = !!hold || undoBusy; pubBtn.disabled = !!hold || publishing;
+    undo.title = hold; pubBtn.title = hold;
+  };
+  let undoBusy = false, publishing = false;
+  /** 앱은 있는데 남은 기획 카드가 없다(기획 카드 없이 만든 앱 · 다시 청한 것도 아니다) — «쓰는 중» 으로 끝없이 기다리게 하지 않는다(점검 4-3). */
+  const noCardLeft = (): boolean => !rec.card && !!rec.appId && !rec.planAt;
+  /** 허브 코멘트 목록 맨 아래 「수정하기」 단추를 막대의 단추와 맞춘다 — 의견이 있어야 눌리고(「수정하기 · n건」), 고치는 중엔 잠긴다. */
   const syncFixIn = (): void => {
     const n = cmCount();
     appBox.querySelectorAll('.v2-studio-fix-in').forEach((b0: Element) => { const b = b0 as HTMLButtonElement;
       b.textContent = '수정하기' + (n ? ' · ' + n + '건' : ''); b.disabled = S.waiting || n === 0;
       b.title = S.waiting ? (n ? 'AI가 지금 수정을 마치면 보낼 수 있어요' : 'AI가 수정하고 있어요') : n ? '코멘트 ' + n + '건을 AI에게 보내요' : '코멘트를 남기면 누를 수 있어요';
-      const j = b.nextElementSibling; if (j && j.classList.contains('v2-studio-fix-j')) j.textContent = n ? '을' : '를';
     });
   };
-  const paintVer = async (): Promise<void> => {
-    if (!rec.appId) return;
+  /** 판 이력을 다시 읽는다 — 읽었으면 true. 못 읽었으면 false(지난 판 번호를 믿지 않게 · 점검 2-8). */
+  const paintVer = async (): Promise<boolean> => {
+    if (!rec.appId) return false;
     try {
-      const vs = await fetchAppVersions(rec.appId); if (S.dead) return;
+      const vs = await fetchAppVersions(rec.appId); if (S.dead) return false;
       const cur = vs.find((v) => v.is_current) || vs[vs.length - 1];
       S.curVer = cur ? cur.version_no : 0;
       S.topVer = vs.reduce((m, v) => Math.max(m, v.version_no), 0);
-      S.prevVer = vs.map((v) => v.version_no).filter((n) => n < S.curVer).sort((a, b) => b - a)[0] || 0;
+      //  마무리 판(이름 · 넣기 표시만 바꾼 판)은 되돌릴 곳으로 세지 않는다 — 그 위에서 되돌리면 마지막 AI 고침이 아니라 이름만 되돌아갔다(점검 2-7).
+      const vp = verPlan(vs, S.curVer); S.baseVer = vp.base; S.prevVer = vp.prev; S.verOk = true;
       ver.textContent = verName(S.curVer);
       undo.hidden = !S.prevVer || rec.stage === 'put'; undo.textContent = S.prevVer ? verJ(S.prevVer, '으로') + ' 되돌리기' : '이전 버전으로';
-      S.vis = await readVis(rec.appId); if (S.dead) return;
+      S.vis = await readVis(rec.appId); if (S.dead) return false;
       paintVis();
-    } catch (_) { /* 판 이력을 못 읽어도 만들기는 간다 */ }
+      return true;
+    } catch (_) { return false; }   // 판 이력을 못 읽어도 만들기는 간다
   };
   //  #4667 머리줄의 판 글 — 「n판 · 나만 보는 초안」(공개 전) · 「n판 · 초안 · 공개 판은 m판」(공개한 앱을 내가 고침) · 「n판 · 공개됨」.
   const paintVis = (): void => {
     const v = S.vis;
-    const state = !v ? '' : v.visibility === 'me' ? '비공개' : v.draftMine ? '비공개 · 공개 버전은 ' + verName(v.publishedNo) : '공개됨';
-    ver.textContent = verName(S.curVer) + (state ? (S.curVer ? ' · ' : '') + state : '');
+    //  «V5 비공개(공개 버전은 V3)» — «·» 로 상태를 잇지 않는다(점검 7-2)
+    const state = !v ? '' : v.visibility === 'me' ? '비공개' : v.draftMine ? '비공개(공개 버전은 ' + verName(v.publishedNo) + ')' : '공개됨';
+    ver.textContent = verName(S.curVer) + (state ? (S.curVer ? ' ' : '') + state : '');
     ver.title = !v ? '' : v.visibility === 'me' ? '나만 볼 수 있어요' : v.draftMine ? '이 버전은 나만 볼 수 있어요. 다른 사람은 ' + verJ(v.publishedNo, '을') + ' 써요.' : '워크스페이스 모두가 이 버전을 써요';
     pubBtn.hidden = !v || !v.canPublish || !(v.draftMine || (v.visibility === 'me' && !!rec.done));
   };
-  pubBtn.onclick = async () => {
-    if (!rec.appId || pubBtn.disabled) return;
-    pubBtn.disabled = true;
+  //  머리줄 「공개하기」 · ⑤ 본문의 공개 단추가 같은 길 — 서버가 있는 앱이면 서버부터 올리고(점검 2-2 · 종전 머리줄은 이 단계를 건너뛰었다),
+  //   표에 할 일을 보여 주고 묻고, 결과대로 말한다(할 일이 없었으면 «이미 공개» · 다음 버전 번호는 짐작하지 않는다 · 점검 2-10).
+  //   확인 창이 열린 채 다른 공개 단추를 누르면 그렇다고 알린다(종전엔 아무 반응이 없었다).
+  const publishNow = async (): Promise<boolean> => {
+    if (!rec.appId) return false;
+    if (publishing) { toast('공개 확인 창이 이미 열려 있어요. 그 창에서 골라주세요.'); return false; }
+    if (S.waiting) { toast('AI가 수정을 마치면 공개할 수 있어요.'); return false; }
+    publishing = true; syncHead();
     try {
-      if (!(await confirmPublish(rec.appId, { title: S.title }))) { pubBtn.disabled = false; return; }
-      const out: any = await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: 'all' }) });
-      const n = Number(out && out.version_no) || S.curVer;
-      toast(verJ(n, '을') + ' 공개했어요. 이어서 수정하면 ' + verJ(n + 1, '은') + ' 다시 비공개로 시작해요.');
-      S.vis = await readVis(rec.appId); paintVis();
+      const was = S.vis;
+      if (was && was.visibility === 'all' && !was.draftMine) { toast('이미 워크스페이스 모두가 이 버전을 쓰고 있어요.'); return true; }
+      if (!(await setVisibility('all'))) return false;
+      const n = S.vis && S.vis.visibility === 'all' ? S.vis.publishedNo : 0;
+      toast((n ? verJ(n, '을') + ' 공개했어요.' : '공개했어요.') + ' 이제 워크스페이스 모두가 써요.');
       if (rec.stage === 'put') paintPut();
       paintNow();
-    } catch (e: any) { toast('공개하지 못했어요. ' + (e && e.message ? e.message : e), true); }
-    pubBtn.disabled = false;
+      return true;
+    } finally { publishing = false; syncHead(); }
   };
+  pubBtn.onclick = () => { void publishNow(); };
   // AI 세션 자리 — 접힘(기본) · 떠 있는 창 · 오른쪽 칸
   const applyPlace = (): void => {
     const inSide = S.chatMode === 'dock';
@@ -988,8 +1202,12 @@ async function build(rec: StudioRec): Promise<void> {
     opening = true;
     try { await openRealNow(view); } finally { opening = false; }
   };
+  let realSeq = 0;
   const openRealNow = async (view: 'widget' | 'app'): Promise<void> => {
     rec.view = view; saveRec(rec);
+    //  띄우는 데 몇 초 걸린다(시험 세션 · 앱 열기). 그사이 다른 단계로 갔으면 다 띄운 뒤에 그 화면을 덮지 않는다(점검 3-11).
+    const seq = ++realSeq, stage0 = rec.stage;
+    const here = (): boolean => !S.dead && seq === realSeq && rec.stage === stage0;
     let route = location.hash;
     //  먼저 걷는다 — 열린 코멘트 층이 있으면 openReview 가 그것을 닫으며 onClose(dropTry)를 부르는데, 그때면 이 아래에서 막 세운 시험 세션 화면이 걷힌다.
     closeReview(); S.review = null; dropTry();
@@ -998,13 +1216,13 @@ async function build(rec: StudioRec): Promise<void> {
       //  세션 위젯 = **시험 세션**(앱을 만드는 세션과 다른 진짜 AI 세션 · 목록엔 안 선다)의 우측 사이드바 — 이 자리 · 이 주소에 진짜 세션 화면이 선다
       //   (앱빌더 화면만 비킨다). 처음이면 세션을 띄우고 앱을 붙인다(몇 초 · 동의를 거절하면 조용히 멈춘다).
       const pid = await studioProject().catch(() => 0);
-      if (S.dead) return;
+      if (!here()) return;
       if (!pid) { toast('앱빌더 프로젝트를 찾지 못했어요. 잠시 후 다시 시도해주세요.', true); return; }
       if (!rec.trySid) toast('시안을 여는 중이에요. 처음엔 몇 초 걸려요.');
       //  세션 id 는 정해지는 즉시 기록한다 — 붙이기가 실패하거나 그 사이 화면을 떠나도 다음에 같은 세션을 쓴다(숨긴 세션이라 사람은 못 찾는다).
       const keep = (sid: string): void => { if (rec.trySid !== sid) { rec.trySid = sid; saveRec(rec); } };
       const sid = await ensureTrySession({ appId: rec.appId, title: S.title, projectId: pid, prevSid: rec.trySid, onSpawned: keep });
-      if (!sid || S.dead) return;
+      if (!sid || !here()) return;   // 세션은 기록해 두었다(keep) — 다음에 누르면 그 세션을 쓴다
       S.tryS = mountTrySession(mountOpts.host || document.body, { appId: rec.appId, sid, projectId: pid, onResumed: keep });
     }
     if (view === 'app') {
@@ -1015,22 +1233,24 @@ async function build(rec: StudioRec): Promise<void> {
       else {
         let got = '';
         const { openAppById } = await import('./apps.js');   // 정적으로 들여오면 apps → app-studio → apps 순환(check-imports)
-        const found = await openAppById(rec.appId, (h) => { got = h; });
+        let failed = '';
+        const found = await openAppById(rec.appId, (h) => { got = h; }, (why) => { failed = why; });
         if (!found) { toast('앱 찾기에 「' + S.title + '」 앱이 아직 안 보여요. 잠시 후 다시 시도해주세요.', true); return; }
-        if (!got) return;   // 열지 못했다(동의를 거절했거나 서버 오류 · 그쪽이 이미 말했다)
+        //  열지 못했다 — 서버 오류 · 이상한 답이면 까닭을 말한다(종전엔 화면이 그대로고 아무 말이 없었다 · 점검 6-15). 동의를 거절했으면 조용히.
+        if (!got) { if (failed) toast('앱 화면을 열지 못했어요(' + plainNote(failed) + ')', true); return; }
         route = got;
         const m = /^#\/i\/([^?/]+)/.exec(got); if (m) { rec.appInst = decodeURIComponent(m[1]); saveRec(rec); }
       }
-      if (S.dead) return;
+      if (!here()) return;
     }
     if (root && (S.tryS || !mountOpts.host)) root.hidden = true;   // 시험 세션 화면이 이 자리에 섰거나 창 전체를 덮는 꼴이면 비킨다 — 실제 화면이 보여야 한다
     S.review = openReview({
       appId: rec.appId, title: S.title, route, dock: S.tryS ? S.tryS.dock : undefined,
-      pins: S.pins, general: S.general, version: S.curVer, waiting: S.waiting, stall: reviewStall(),
+      pins: S.pins, general: S.general, version: S.curVer, waiting: S.waiting, waitSince: S.waiting ? S.waitT0 : undefined, stall: reviewStall(),
       onResume: () => { void resumeRun(); },
       //  「AI에게 말하기」 — 이 앱을 만드는 AI 세션 화면을 막대의 대화 칸에 빌려준다(원준 2026-10-28 «대화형으로 수정»). 이 화면을 연 뒤 첫 말에만 대화 방식을 붙인다.
       chat: chatHost,
-      onTalk: async (text) => { const ok = await send(talkBrief(text, rec.appId, rec.place, !talked)); if (ok) talked = true; return ok; },
+      onTalk: (text) => sendingOnce(async () => { const ok = await send(talkBrief(text, rec.appId, rec.place, !talked)); if (ok) talked = true; return ok; }, false),
       onChange: (p) => { S.pins = p.pins; S.general = p.general; rec.pins = S.pins; rec.general = S.general; saveRec(rec); paintTray(); paintNow(); },
       onSend: () => { void sendFix(); },
       onLike: () => { backToBuilder(); void setStage('check'); },
@@ -1044,29 +1264,54 @@ async function build(rec: StudioRec): Promise<void> {
     markReviewOpen({ sid: rec.sid, appId: rec.appId, view, route });
   };
   // 보낼 의견 — 짚은 곳마다 한 줄 · 앱 전체 한 칸(실제 화면의 막대 「의견 n건」 과 같은 것)
-  const paintTray = (): void => {
+  //  다시 그려도 쓰던 칸을 잃지 않는다 — 칸 ↔ 그 코멘트(같은 객체)를 기억했다가 새 칸에 커서 · 고른 글을 되돌린다(실제 화면 막대와 같은 방식 · 점검 3-6).
+  //   ✕ 도 번호가 아니라 그 코멘트로 지운다 — 목록이 바뀌는 틈(새 판이 와 보낸 코멘트가 빠짐)에 다른 줄을 지우지 않게.
+  const trayOf = new WeakMap<HTMLTextAreaElement, StudioPin | 'all'>();
+  type TrayKeep = { key: StudioPin | 'all' | undefined; a: number; b: number } | null;
+  //  쓰던 칸 — 허브를 통째로 다시 그리면(paintHub) 목록이 문서에서 잠깐 떨어져 초점을 잃으니, 그 전에 잰다.
+  const trayFocus = (): TrayKeep => {
+    const act = document.activeElement instanceof HTMLTextAreaElement && tray.contains(document.activeElement) ? document.activeElement : null;
+    return act ? { key: trayOf.get(act), a: act.selectionStart, b: act.selectionEnd } : null;
+  };
+  const paintTray = (keep: TrayKeep = trayFocus()): void => {
     if (rec.stage !== 'fix' || !rec.appId) { tray.hidden = true; return; }
     tray.hidden = false;
+    const prevList = tray.querySelector('.v2-studio-tray-list') as HTMLElement | null;
+    const keepScroll = prevList ? prevList.scrollTop : 0;
     const rows = S.pins.map((p, i) => {
       //  글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 완료 · Shift+Enter 줄바꿈.
       const inp = growText({ class: 'v2-studio-tray-in', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note,
         onInput: (v) => { p.note = v; paintNow(); if (S.review) S.review.update({}); }, onEnter: () => inp.blur() });
+      trayOf.set(inp, p);
       const wire = p.on === 'wire';
       if (p.sent) { inp.disabled = true; inp.title = 'AI가 반영하고 있어요'; }
-      return el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, wire ? el('button', { type: 'button', class: 'n', text: String(i + 1), title: '와이어프레임에서 그 자리 보기', onclick: () => { void openWireframe(i); } }) : el('span', { class: 'n', text: String(i + 1) }),
+      return el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, wire ? el('button', { type: 'button', class: 'n', text: String(i + 1), title: '와이어프레임에서 그 자리 보기', onclick: () => { const j = S.pins.indexOf(p); if (j >= 0) void openWireframe(j); } }) : el('span', { class: 'n', text: String(i + 1) }),
         el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { S.pins.splice(i, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); } }));
+        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { const j = S.pins.indexOf(p); if (j < 0) return; S.pins.splice(j, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); syncBoard(); } }));
     });
-    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: S.general,
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 (예: 글자 조금 크게)', label: '앱 전체 코멘트', value: S.general,
       onInput: (v) => { S.general = v; paintNow(); if (S.review) S.review.update({ general: S.general }); }, onEnter: () => g.blur() });
-    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '실제 화면에서 번호를 누르면 그 자리를 보여줘요.' : '실제 화면에서 선택 · 핀 · 영역으로 코멘트를 남기면 여기 모여요 · 앱 전체에 주는 코멘트는 바로 적어도 돼요' })),
-      el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows),   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
-      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' })));
+    trayOf.set(g, 'all');
+    //  「수정하기」 는 목록 맨 아래에(실제 화면 막대의 목록과 같은 자리) — 안내 글 속에 넣었던 단추다(점검 6-12 · 글에는 이름만). 글 · 눌림은 syncFixIn 이 맞춘다.
+    const list = el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows);   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
+    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '실제 화면에서 번호를 누르면 그 자리를 보여줘요.' : '실제 화면에서 선택, 핀, 영역으로 코멘트를 남기면 여기 모여요. 앱 전체에 주는 코멘트는 바로 적어도 돼요.' })),
+      list,
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료, Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }),
+        el('button', { class: 'v2-studio-now-pri v2-studio-fix-in', type: 'button', onclick: () => { void sendFix(); } })));
+    syncFixIn();
+    list.scrollTop = keepScroll;
+    if (keep && keep.key) {
+      const to = [...list.querySelectorAll('textarea')].find((x) => trayOf.get(x as HTMLTextAreaElement) === keep.key) as HTMLTextAreaElement | undefined;
+      if (to && !to.disabled) { to.focus(); try { to.setSelectionRange(keep.a, keep.b); } catch (_) { /* 글이 줄었으면 끝으로 */ } }
+    }
   };
   // ③ 허브 — 판 · 가운데 단추(실제 화면으로) · 보낼 의견
   // ── 와이어프레임(화면 흐름) 보기 — 화면 전체 보드(v2/wire-board.ts · 원준 2026-10-16 «전체화면 · 피그마 보드처럼 · 여기서도 선택 · 핀 · 영역»).
   //   AI 가 앱과 함께 저장한 그림(lib/studio-flow WIREFRAME_PATH)을 놓는다. 그림이 아직 없는 앱은 앱 화면 그대로를 한 장으로(«한 장만 나와도 그냥 있는 거지») —
   //   「그려 달라기」 단추는 걷었다. 다음 「수정하기」 가 그 그림을 함께 그리게 한다(fixBrief). 보드에서 단 코멘트는 on:'wire' 로 같은 목록에 모인다.
+  //  보드가 열린 채 목록이 밖에서 바뀌면(새 판이 와 보낸 코멘트가 빠짐 · 허브에서 지움) 보드에도 알린다 — 번호 · 열린 칸을 맞춘다(점검 3-5).
+  let boardApi: WireBoard | null = null;
+  const syncBoard = (): void => { if (boardApi && S.board === boardApi) boardApi.refresh(); };
   const openWireframe = async (focus?: number): Promise<void> => {
     if (!rec.appId || !root) return;
     let html = '';
@@ -1078,13 +1323,13 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.dead) return;
     const { openWireBoard } = await import('./wire-board.js');
     if (S.dead) return;
-    S.board = openWireBoard({ appId: rec.appId, title: S.title, version: verName(S.curVer), place: rec.place, html, focus,
+    S.board = boardApi = openWireBoard({ appId: rec.appId, title: S.title, version: verName(S.curVer), place: rec.place, html, focus,
       pins: () => S.pins,
       onPins: (ps) => { if (S.dead) return; S.pins = ps; rec.pins = ps; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); },
-      onClose: () => { S.board = null; } });
+      onClose: () => { S.board = null; boardApi = null; } });
   };
   const paintHub = (): void => {
-    const h = appHost();
+    const h = appHost(), keep = trayFocus();   // 다시 그리기 전에 — 쓰던 칸을 되돌린다(점검 3-6)
     const views: Array<['widget' | 'app', string, string]> = [];
     if (rec.place !== 'full') views.push(['widget', '세션 위젯으로 보기', 'AI 세션의 우측 사이드바에 붙은 모습']);
     if (rec.place !== 'side') views.push(['app', '앱 화면으로 보기', '실제 앱의 사용 화면과 동일한 화면']);
@@ -1093,17 +1338,17 @@ async function build(rec: StudioRec): Promise<void> {
     const go = el('div', { class: 'v2-studio-hub-go' }, ...views.map(([k, t, s], i) => el('button', { type: 'button', class: i ? 'alt' : '', onclick: () => { void openReal(k); } }, placePic(k === 'widget' ? 'side' : 'full'), el('b', { text: t }), el('small', { text: s }))));
     h.replaceChildren(el('div', { class: 'v2-studio-hub' },
       el('div', { class: 'v2-studio-hub-head' },
-        el('h2', { text: rec.mode !== 'new' && rec.round === 0 && !S.waiting ? '원본 그대로 열렸어요' : S.waiting ? (stallInfo() || { short: 'AI가 수정하고 있어요' }).short : verArrived(S.curVer || 1) }),
-        //  글 속 「수정하기」 는 진짜 단추다 — 「지금 할 일」 줄 · 코멘트 막대의 「수정하기」 와 같은 꼴 · 같은 일(sendFix) · 같은 때 눌린다(원준 2026-10-16
-        //   «버튼 제대로 똑같이 구현하고, 저 문구 위에 있는 버튼 눌러도 똑같이 작동하게»). 글 · 눌림은 syncFixIn 이 의견 수에 맞춘다.
-        el('p', {}, '진짜 라이블리 화면에서 써 보고, 고칠 곳을 짚어서 적어주세요. 그 화면에서 하나하나 코멘트를 남기거나, 이 화면으로 돌아와 여기에 적어도 돼요. 다음 화면에서 ',
-          el('button', { class: 'v2-studio-now-pri v2-studio-fix-in', type: 'button', onclick: () => { void sendFix(); } }), el('span', { class: 'v2-studio-fix-j' }), ' 누르면 AI가 한 번에 고쳐 다음 버전을 내요.')),
+        el('h2', { text: rec.mode !== 'new' && rec.round === 0 && !S.waiting ? '원본 그대로 열렸어요' : S.waiting ? (stallInfo() || { short: 'AI가 수정하고 있어요' }).short : S.curVer ? verArrived(S.curVer) : '' }),   // 판을 읽기 전엔 비워 둔다(«초안이 나왔어요» 로 잘못 섰다가 바뀌던 것 · 점검 6-10)
+        //  글에는 단추 이름만 적는다(점검 6-12 · 글 속에 잠긴 진짜 단추가 있으면 눌러야 할 것처럼 보였다). 진짜 「수정하기」 는 아래 코멘트 목록 맨 아래에 있다
+        //   (원준 2026-10-16 «버튼 제대로 똑같이 구현하고 … 눌러도 똑같이 작동하게» — 같은 꼴 · 같은 일(sendFix) · 같은 때 눌린다. syncFixIn).
+        el('p', { text: '진짜 라이블리 화면에서 써 보고, 고칠 곳을 짚어서 적어주세요. 그 화면에서 하나하나 코멘트를 남기거나, 여기 아래 코멘트 칸에 적어도 돼요. 다 적었으면 여기서 「수정하기」를 누르세요. AI가 한 번에 고쳐 다음 버전을 만들어요.' })),
       //  고치는 중에도 실제 화면으로 간다(원준 2026-10-28 «하나 치고 나서는 다 적용될 때까지 다른 코멘트를 남기는 게 비활성화») — 기다림(또는 멈춤) 줄은 단추 위에.
-      ...(S.waiting ? [S.stall ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { text: '위 막대에서 까닭을 보고 이어서 수정할 수 있어요.' }))
+      //   멈춤 줄은 까닭에 맞춘다 — AI 가 확인을 기다리면 이어서 수정할 일이 아니라 답할 일이다(점검 3-7).
+      ...(S.waiting ? [S.stall ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { text: S.stall === 'ask' ? 'AI가 확인을 기다리고 있어요. 위 「AI 세션 보기」를 눌러 답해 주세요.' : (stallInfo() || { resume: false }).resume ? '위 막대에서 까닭을 보고 이어서 수정할 수 있어요.' : '위 막대에서 까닭을 확인해 주세요.' }))
         : el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '다음 버전이 나오면 화면이 바뀌어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' }))] : []), go,
-      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여줍니다.' })),
+      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여 줘요.' })),
       tray));
-    paintTray(); syncFixIn();
+    paintTray(keep); syncFixIn();
     if (S.waiting) { if (openCoach && openCoach.key === 'draft') closeCoach(); }   // 고침을 보냈다 — 첫 안내는 할 일을 다 했다
     else recoach('draft', go);
   };
@@ -1111,10 +1356,12 @@ async function build(rec: StudioRec): Promise<void> {
   const showApp = async (note?: string): Promise<void> => {
     if (S.dead || !rec.appId) return;
     await paintVer(); if (S.dead) return;
-    if (note != null) { S.lastNote = note; band.replaceChildren(el('span', { text: (S.curVer ? verName(S.curVer) + ' · ' : '') + (note || '고쳤어요') })); band.hidden = false; }
+    //  서버가 적은 글(«되돌림 → 3판» · «5판 공개»)은 화면 말로 바꿔 적는다(점검 6-13). 이미 판 이름으로 시작하면 앞에 또 붙이지 않는다.
+    if (note != null) { const t = plainNote(note) || '고쳤어요'; S.lastNote = t; band.replaceChildren(el('span', { text: (S.curVer && !/^(V\d+|초안)/.test(t) ? verName(S.curVer) + ' · ' : '') + t })); band.hidden = false; }
     if (rec.stage === 'fix') paintHub();
     paintBar(); paintNow();
-    if (S.review) S.review.update({ version: S.curVer, waiting: S.waiting, title: S.title, pins: S.pins, general: S.general, note: note || undefined });
+    if (S.review) S.review.update({ version: S.curVer, waiting: S.waiting, title: S.title, pins: S.pins, general: S.general, note: note ? plainNote(note) || undefined : undefined });
+    syncBoard();
     reloadAppFrames(rec.appId);   // 앱 화면(#/i) 탭은 제 사건이 없다 — 새 판을 다시 띄운다(세션 곁칸은 스스로 띄운다)
   };
   // 새로 생긴 앱 찾기 — 시작할 때 없던 id. 여럿이면 가장 나중 것. 생기면 ③ 허브로(붙이기는 setStage 가).
@@ -1135,6 +1382,9 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.dead) return;
     if (found) {
       rec.appId = found; S.title = foundTitle; rec.title = S.title; saveRec(rec); name.textContent = S.title;
+      //  초안 · 시안 단계에 있을 때만 ③ 으로 옮긴다 — ① · ② 로 가 다시 기획을 청해 둔 사이 첫 판이 저장되면, 화면을 빼앗고 새 카드를 버리던 것(점검 4-4).
+      //   다른 단계면 앱이 생겼다는 것만 기록하고 그 자리를 그대로 둔다(단계 바 · 「다음 →」 이 ③ 을 연다).
+      if (rec.stage !== 'draft' && rec.stage !== 'fix') { void paintVer(); paintBar(); paintNow(); return; }
       await setStage('fix');
       await showApp('처음 만들었어요');
       coach('draft', appBox.querySelector('.v2-studio-hub-go'), '진짜 앱이 생겼어요. 가운데 단추로 실제 라이블리 화면에서 어떻게 동작하는지 테스트해보고, 고칠 곳에 코멘트를 남기세요.', '제목을 누르고 「글자 더 크게」');
@@ -1143,7 +1393,7 @@ async function build(rec: StudioRec): Promise<void> {
     S.pollT = window.setTimeout(() => { void findApp(); }, 4000);
   };
   //  보낸 코멘트를 걷는다 — 같은 배열을 제자리에서 줄인다(실제 화면 막대 · 와이어프레임 보드가 같은 배열을 쥐고 있다 · 새 배열로 갈면 그 사이 짚은 것이 옛 배열로 가 보낸 것이 되살아난다).
-  const dropSent = (): void => { for (let i = S.pins.length - 1; i >= 0; i--) if (S.pins[i].sent) S.pins.splice(i, 1); rec.pins = S.pins; if (S.review) S.review.update({ pins: S.pins }); };
+  const dropSent = (): void => { for (let i = S.pins.length - 1; i >= 0; i--) if (S.pins[i].sent) S.pins.splice(i, 1); rec.pins = S.pins; if (S.review) S.review.update({ pins: S.pins }); syncBoard(); };
   //  고침이 끝났다(새 판) — 다음 차례로: 몇 번째를 올리고 보낸 코멘트만 걷는다(고치는 동안 새로 남긴 코멘트는 다음 「수정하기」 몫 · 원준 2026-10-28).
   //   새 판이 나왔으니 ④ 확인 · ⑤ 넣기는 그 판으로 다시(«와 본 곳» 을 ③ 으로).
   const settleFix = (): void => { S.waiting = false; window.clearTimeout(S.tick); rec.round += 1; dropSent(); rec.reached = 2; delete rec.fixing; saveRec(rec); };
@@ -1159,9 +1409,11 @@ async function build(rec: StudioRec): Promise<void> {
     if (ev.app_id === rec.appId && ev.kind === 'updated') {
       //  고침을 기다리던 중이면 어느 단계에 있든 먼저 끝맺는다 — ② 로 돌아가 있어도 ③ 이 «수정하고 있어요» 에 멈추지 않게(격리 리뷰).
       //   새 버전이 나왔다 — ④ 확인 · ⑤ 넣기는 그 버전으로 다시 해야 하니 «와 본 곳» 을 ③ 으로 당긴다.
-      const settled = S.waiting;
-      if (S.waiting) settleFix();
-      else if (S.pins.some((p) => p.sent)) dropSent();
+      //  되돌림 · 공개 · 마무리(사람이 한 저장)는 AI 고침이 끝난 표시가 아니다 — 그걸 끝으로 알아들으면 보낸 코멘트가 걷히고 AI 가 나중에 그 위에 덮어썼다(점검 2-3).
+      const byAi = !systemNote(ev.note);
+      const settled = S.waiting && byAi;
+      if (settled) settleFix();
+      else if (byAi && S.pins.some((p) => p.sent)) dropSent();
       if (rec.stage === 'put' || rec.stage === 'check' || rec.stage === 'plan') { void paintVer(); if (settled) { band.hidden = true; paintBar(); paintNow(); } return; }   // 마무리 표시 저장도 'updated' 다 — 그 화면을 갈아 끼우지 않는다
       void showApp(ev.note || '고쳤어요');
     }
@@ -1173,16 +1425,28 @@ async function build(rec: StudioRec): Promise<void> {
     if (ic) { rec.iconAi = [ic, ...(rec.iconAi || []).filter((x) => x.path !== ic.path)].slice(0, 4); setPick(ic); S.iconWait = false; S.iconMiss = false; window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); if (rec.stage === 'check') paintCheck(); }
     //  하네스가 «사용 한도에 걸렸다» 로 턴을 끝냈다 — 기다리지 않고 바로 까닭을 말한다(세션 줄로는 그냥 idle 이다).
     const lim = parseLimit(t); if (lim) { S.limit = lim; if (runKind()) setStall('limit'); return; }
-    if (rec.stage === 'plan') { const c = parseCard(t); if (c) { rec.card = c; saveRec(rec); paintPlan(); paintNow();
+    //  ⑤ 「팀에 알리기」 의 답 — 답이 와야 «알렸어요» 로 굳힌다(점검 2-9). 못 했으면 까닭을 알리고 다시 누를 수 있게.
+    const nt = rec.notifySent ? parseNotify(t) : null;
+    if (nt) { delete rec.notifySent; if (nt.ok) { rec.notified = true; toast('팀에 알렸어요.'); } else toast('팀에 알리지 못했어요. ' + (nt.why || 'AI 세션에서 까닭을 볼 수 있어요.'), true); saveRec(rec); if (rec.stage === 'put') paintPut(); }
+    //  기획 카드 — ② 에 있을 때, 또는 카드를 청해 두고(다시 기획 · 카드 고침) 다른 단계로 가 있을 때도 받는다. ② 에서만 받으면 ③ · ④ 에 가 있는 사이 온 답이
+    //   버려지고 ② 는 «고치고 있어요» 에 영영 잠겼다(격리 리뷰 #1583 · 2). 화면은 ② 일 때만 다시 그린다.
+    const cardC = rec.stage === 'plan' || rec.cardFix || rec.planAt ? parseCard(t) : null;
+    if (cardC) { const c = cardC; rec.card = c; delete rec.cardFix; delete rec.planAt; S.rebuilt = false; saveRec(rec); if (rec.stage === 'plan') { paintPlan(); paintNow(); }
       //  ①에서 이름을 비웠으면 기획 카드의 이름으로 세션 이름을 한 번 짓는다 — «"회의 안건" 앱 제작».
       //   그 이름이 곧 이 앱의 이름이다 — 머리줄 · 앱빌더 카드 · 세션 이름이 같은 글을 쓴다(원준 2026-10-15).
-      if (!rec.named && !rec.title && c.name) { rec.named = true; rec.title = c.name; S.title = c.name; name.textContent = c.name; saveRec(rec); void relabel(rec.sid, c.name, 'new'); } } }
+      if (!rec.named && !rec.title && c.name) { rec.named = true; rec.title = c.name; S.title = c.name; name.textContent = c.name; saveRec(rec); void relabel(rec.sid, c.name, 'new'); } }
+    if (rec.stage === 'plan') { /* 카드는 위에서 받았다 */ }
     else if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) { const n = parseStep(t); if (n > S.step) { S.step = n; rec.step = n; saveRec(rec); paintSteps(); paintNow(); } }
     else if (rec.stage === 'check') { const ck = parseCheck(t); if (ck) { S.check = ck; S.checkWait = false; if (S.checkFor && S.checkFor.ver > 0) { rec.check = { ...ck, ...S.checkFor }; saveRec(rec); } paintCheck(); paintNow(); } }
   };
   //  drain — 쌓인 답을 지금 한 번 읽는다. 새 글을 보내기 전에도 부른다(보내면 워터마크가 기록 끝으로 가서, 아직 안 읽은 답 · 예: ④ 대조를 건너뛴다).
-  const drain = async (): Promise<void> => {
+  //   한 번에 하나만 — 펌프 · 보내기 전 읽기가 겹쳐 같은 답을 두 번 처리하지 않게(격리 리뷰 #1591 · 5).
+  let draining: Promise<void> | null = null;
+  const drain = (): Promise<void> => draining || (draining = drainNow().finally(() => { draining = null; }));
+  const drainNow = async (): Promise<void> => {
     if (S.dead) return;
+    //  열 때 기록 끝을 못 읽었다(오래된 세션) — 0 부터 읽으면 지난 대화의 옛 카드 · 옛 한도 글이 되살아난다. 끝을 다시 물어 잡을 때까지 읽지 않는다(격리 리뷰 #1583 · 7).
+    if (S.fromUnknown && !rec.from) { const end = await logEnd(rec.sid); if (S.dead || end == null) return; rec.from = end; S.fromUnknown = false; saveRec(rec); return; }
     const r = await rawLog(rec.sid, 'from=' + rec.from);
     if (!S.dead && r && r.to > rec.from) { const texts = assistantTexts(r.text); rec.from = r.to; saveRec(rec); texts.forEach(onText); }
   };
@@ -1200,14 +1464,29 @@ async function build(rec: StudioRec): Promise<void> {
     const h = appHost();
     //  옛 기록(카드 글을 안 적던 판)으로 ② 에 왔다 — 지금 카드를 «청한 카드» 로 잡아 둔다(이 뒤에 고친 것만 «바꾼 기획» 이다).
     if (rec.card && rec.cardSent == null && reachedOf(rec) >= 2) { rec.cardSent = cardText(rec.card); saveRec(rec); }
-    if (!rec.card) { waiting('AI가 기획 카드를 쓰는 중이에요', '한 줄 요청을 읽고 AI가 정리해요(1분 안팎).\n카드가 오면 다르게 생각하신 내용이 있는지 확인해주세요.'); return; }
+    if (!rec.card && noCardLeft()) { waiting('남아 있는 기획 카드가 없어요', '이 앱은 기획 카드를 따로 남기지 않았어요.\n「다음 →」을 누르면 지금 시안을 볼 수 있어요.', undefined, true); return; }
+    if (!rec.card) { waiting(S.stall ? (cardNeverCame() && S.stall !== 'ask' ? 'AI가 기획 카드를 쓰지 않았어요' : 'AI가 기획 카드를 쓰다 멈췄어요') : 'AI가 기획 카드를 쓰는 중이에요', S.stall ? (cardNeverCame() && S.stall !== 'ask' ? '위 줄의 「다시 부탁하기」로 처음 적은 내용대로 다시 청할 수 있어요.' : '위 줄에서 까닭을 보고 이어서 쓰게 할 수 있어요.') : '적어 주신 내용을 읽고 AI가 정리해요(1분 안팎).\n카드가 오면 다르게 생각하신 내용이 있는지 확인해주세요.', undefined, !!S.stall); return; }
+    //  AI 가 카드를 고치는 중 — 카드는 보기만 하고 아래 칸 대신 기다림 줄(점검 4-2). 그사이 손으로 고친 줄은 고친 카드가 오면 덮였고,
+    //   그사이 「완료」 를 누르면 고치기 전 카드로 초안이 나갔다. 멈추면 위 줄이 까닭과 「이어서 만들기」 를 말한다.
+    if (rec.cardFix) {
+      h.replaceChildren(cardView(rec.card, null), el('div', { class: 'v2-studio-ask v2-studio-ask--wait', role: 'status' },
+        ...(S.stall ? [] : [el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' })]),
+        el('span', { text: S.stall ? 'AI가 카드를 고치다 멈췄어요. 위 줄에서 까닭을 볼 수 있어요.' : 'AI가 카드를 고치고 있어요. 고친 카드가 오면 여기 바뀌어요.' }),
+        el('span', { class: 'v2-studio-sp' }),
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '그만 기다리기', title: '지금 카드로 계속해요. 나중에 고친 카드가 오면 그걸로 바뀌어요.', onclick: () => { delete rec.cardFix; saveRec(rec); paintPlan(); paintNow(); } })));
+      return;
+    }
     // 대화를 접어 두었으니 카드를 통째로 다시 쓰게 하는 한마디는 카드 아래에서 받는다.
     const ask = el('input', { class: 'v2-studio-ask-in', type: 'text', maxlength: '400', placeholder: '고칠 내용을 적어주세요. 예: 더 단순하게, 담당자 칸 추가', 'aria-label': '기획 카드 수정 요청' }) as HTMLInputElement;
     const askGo = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '수정하기' }) as HTMLButtonElement;
-    const doAsk = async (): Promise<void> => {
-      const t = ask.value.trim(); if (!t || !rec.card || askGo.disabled) return;
+    //  카드 고침도 ② 의 다른 보내기(「완료」 · 다시 만들기)와 같은 자물쇠로 — 고침을 보내는 사이 「완료」 가 고치기 전 카드로 초안을 청하지 않게(격리 리뷰 #1583 · 5).
+    const doAsk = (): Promise<void> => sendingOnce(doAskNow, undefined);
+    const doAskNow = async (): Promise<void> => {
+      const t = ask.value.trim(); if (!t || !rec.card || askGo.disabled || rec.cardFix) return;
       askGo.disabled = true;
-      if (await send('기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이 · 정해진 줄 뒤에 내가 더한 줄도 그대로 남겨): ' + t + '\n지금 카드:\n' + cardText(rec.card))) { ask.value = ''; toast('AI가 기획 카드를 고치고 있어요.'); }
+      if (await send('기획 카드를 이렇게 고쳐서 같은 꼴로 다시 답해 줘(앞뒤에 다른 말 없이 · 정해진 줄 뒤에 내가 더한 줄도 그대로 남겨): ' + t + '\n지금 카드:\n' + cardText(rec.card))) {
+        ask.value = ''; rec.cardFix = Date.now(); saveRec(rec); paintPlan(); paintNow(); return;   // 고친 카드가 올 때까지 잠근다(점검 4-2)
+      }
       askGo.disabled = false;
     };
     askGo.onclick = () => { void doAsk(); };
@@ -1232,7 +1511,7 @@ async function build(rec: StudioRec): Promise<void> {
   const paintDraft = (): void => { paintDraftView(); void findApp(); };
   /** 지금 AI 의 답을 기다리는 일 — 없으면 null(멈춤을 볼 까닭이 없다). */
   const runKind = (): 'plan' | 'draft' | 'fix' | 'check' | 'icon' | null => {
-    if (rec.stage === 'plan' && !rec.card) return 'plan';
+    if (rec.stage === 'plan' && ((!rec.card && !noCardLeft()) || rec.cardFix)) return 'plan';   // 카드를 쓰는 중 · 고치는 중(남은 카드가 없는 앱은 기다릴 일이 없다)
     if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) return 'draft';
     if (S.waiting) return 'fix';   // 고침 기다림은 기록(rec.fixing)에 있다 — 나갔다 새로 열어도 멈춤을 본다
     if (rec.stage === 'check' && S.checkWait) return 'check';
@@ -1240,21 +1519,25 @@ async function build(rec: StudioRec): Promise<void> {
     if (S.iconWait) return 'icon';
     return null;
   };
-  const reviewStall = (): { text: string; resume: boolean } | null => { const st = stallInfo(); return st ? { text: st.text, resume: st.resume } : null; };
+  //  ask — AI 가 확인을 기다린다. 막대엔 「AI 세션 보기」 가 없어 막대가 제 말(「AI에게 말하기」로 답하기)로 바꿔 말한다(점검 3-7).
+  const reviewStall = (): { text: string; resume: boolean; ask: boolean } | null => { const st = stallInfo(); return st ? { text: st.text, resume: st.resume, ask: S.stall === 'ask' } : null; };
   const setStall = (k: RunStall | null, node = S.stallNode): void => {
     if (k === S.stall && node === S.stallNode) return;
     const was = S.stall; S.stall = k; S.stallNode = node;
     if ((rec.stage === 'draft' || rec.stage === 'fix') && !rec.appId) paintDraftView();   // 앱 찾기(findApp)는 이미 돌고 있다 — 다시 걸지 않는다
+    else if (rec.stage === 'plan' && (!rec.card || rec.cardFix)) paintPlan();   // ② 기다림 줄도 멈춤을 말한다
     else if (rec.stage === 'fix' && S.waiting) paintHub();
     if (S.waiting) { window.clearTimeout(S.tick); if (was && !k) S.waitT0 = Date.now(); tickWait(); }   // 다시 돌면 시계는 그때부터
-    if (S.review) S.review.update({ stall: reviewStall() });
+    if (S.review) S.review.update({ stall: reviewStall(), waitSince: S.waitT0 });   // 막대 시계도 같은 때부터(점검 3-10)
     if (rec.stage === 'check' && S.iconWait) paintCheck();   // ④ 아이콘 기다림 칸이 까닭과 「다시 부탁하기」 를 말한다
     paintNow();
   };
   /** 새로 AI 에게 일을 맡겼다 — 지난 멈춤을 걷고 60초 동안은 멈췄다 하지 않는다(말이 막 닿는 틈). */
   const armRun = (): void => { S.stallT0 = 0; S.quietTill = Date.now() + 60000; S.limit = ''; setStall(null); };
   //  이 화면에서 AI 에게 보내는 글은 모두 여기로 — 보내면 멈춤 판정을 처음부터.
-  const send = async (text: string): Promise<boolean> => { const ok = await sendPrompt(rec, text); if (ok) armRun(); return ok; };
+  //   보내기 전에 쌓인 답을 먼저 읽는다 — 보내면 읽던 자리가 기록 끝으로 가서, 아직 안 읽은 답(다른 단계에서 온 기획 카드 · 알림 답)을 건너뛴다.
+  //   보냈으면 «기록에서 되지었다» 는 끝 — 이제 AI 가 이 화면의 글을 받았다. 보내며 읽던 자리를 잡았으면(sendPrompt) «끝을 모른다» 도 끝(리뷰 3).
+  const send = async (text: string): Promise<boolean> => { await drain(); const ok = await sendPrompt(rec, text); if (ok) { armRun(); S.rebuilt = false; } if (rec.from > 0) S.fromUnknown = false; return ok; };
   //  AI 일을 기다리는 동안 10초마다 그 세션 한 줄을 본다 — 멈춤이 STALL_MS 넘게 이어지면 막대가 까닭과 「이어서 만들기」 를 낸다.
   //   만들기 세션이 돌던 노트북이 잠들어 턴이 끝났는데 화면은 몇 시간째 «만들고 있어요» 였다(원준 2026-10-26).
   const watchRun = async (): Promise<void> => {
@@ -1270,7 +1553,8 @@ async function build(rec: StudioRec): Promise<void> {
         if (k === 'idle' && S.limit) k = 'limit';   // 턴이 끝난 까닭을 답 글이 말했다
         const node = row && row.node && row.node.name ? String(row.node.name).replace(/\.local$/, '') : '';
         if (!k) { S.stallT0 = 0; setStall(null, node); }
-        else if (now >= S.quietTill) { if (!S.stallT0) S.stallT0 = now; if (now - S.stallT0 >= STALL_MS) setStall(k, node); }
+        //  되지은 ② 에 카드가 없으면 기다릴 까닭이 없다 — 세션이 이미 멈춰 있으면 바로 말한다(30초를 «쓰는 중» 으로 돌지 않게).
+        else if (now >= S.quietTill) { if (!S.stallT0) S.stallT0 = now; if (now - S.stallT0 >= (cardNeverCame() ? 0 : STALL_MS)) setStall(k, node); }
       }
     }
     if (!S.dead) S.runT = window.setTimeout(() => { void watchRun(); }, 10000);
@@ -1291,7 +1575,8 @@ async function build(rec: StudioRec): Promise<void> {
       for (let i = 0; i < (restored ? 3 : 1) && !ok && !S.dead; i++) {
         if (i) await new Promise((r) => window.setTimeout(r, 3000));
         //  아이콘은 처음 글을 그대로 다시 — 꺼진 세션으로 간 글은 AI 가 받은 적이 없다(«이어서» 가 아니다).
-        ok = await send(kind === 'icon' && S.iconLast ? S.iconLast : resumeBrief(kind === 'icon' ? 'check' : kind));
+        //  되지은 ② 에 카드가 없다 — «이어서» 가 아니라 처음 적은 내용으로 기획을 다시 청한다.
+        ok = await send(cardNeverCame() ? planBrief(rec.what, rec.place, rec.title || '') : kind === 'icon' && S.iconLast ? S.iconLast : resumeBrief(kind === 'icon' ? 'check' : kind));
       }
       if (ok && kind === 'icon') { armIconWait(); toast('아이콘을 다시 그려 달라고 AI에게 보냈어요.'); if (rec.stage === 'check') paintCheck(); }
       else if (ok) toast('멈춘 곳부터 이어서 하라고 AI에게 보냈어요.');
@@ -1476,7 +1761,7 @@ async function build(rec: StudioRec): Promise<void> {
     const row = (ok: boolean | null, title: string, sub: HTMLElement | string): HTMLElement => el('div', { class: 'v2-studio-chk' + (ok === true ? ' ok' : ok === false ? ' no' : '') }, el('i', { text: ok === true ? '✓' : ok === false ? '!' : '…' }), el('div', {}, el('b', { text: title }), typeof sub === 'string' ? el('span', { text: sub }) : sub));
     const r1 = !c ? row(null, '원하던 것이 다 있나요?', '기획 카드가 없는 앱이라 비교하지 않았어요. 앱을 직접 써 보고 확인해주세요.')
       : S.check ? row(S.check.missing.length === 0, '원하던 것이 다 있나요?', S.check.missing.length ? '빠진 것: ' + S.check.missing.join(', ') + '. 「더 고치기」를 눌러 코멘트로 남겨주세요.' : '있어요: ' + (S.check.have.length ? S.check.have.join(', ') : c.can.join(', ')) + ' (AI가 기획 카드와 비교)')
-      : row(null, '원하던 것이 다 있나요?', 'AI가 기획 카드와 지금 버전을 비교하는 중…');
+      : row(null, '원하던 것이 다 있나요?', S.checkReading ? '지금 버전을 확인하는 중…' : 'AI가 기획 카드와 지금 버전을 비교하는 중…');
     if (nameIn.value === '') nameIn.value = S.title;
     const places = el('div', { class: 'v2-studio-chk-places' }, ...(Object.keys(PLACE) as StudioPlace[]).map((k) => el('button', { type: 'button', class: k === rec.place ? 'on' : '', text: PLACE[k].title, onclick: () => { rec.place = k; saveRec(rec); paintCheck(); } })));
     h.replaceChildren(el('div', { class: 'v2-studio-chks' }, r1,
@@ -1496,18 +1781,27 @@ async function build(rec: StudioRec): Promise<void> {
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
     const steps: HTMLElement[] = [
-      el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : '이렇게 부탁했어요' }), el('p', { text: rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + rec.origin.by + ' 님이 만듦)' : '') + '의 사본 · ' + placeName : '「' + firstLine(rec.what) + '」 · ' + placeName })),
-      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 저장하는 정보: ' + c.items + ' · 주요 기능: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI가 세션에서 만들었어요' }), el('p', { text: '수정할 때마다 버전이 하나씩 올라가요(초안 → V2 → V3).' })),
+      //  «·» 로 절을 잇지 않고 줄을 나눈다(점검 7-2) · 고치기는 부탁 글이 아니라 「앱」을 고쳤다고(점검 7-3 — «이렇게 부탁했어요 「메모」» 였다)
+      el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : rec.mode === 'edit' ? '이렇게 고쳤어요' : '이렇게 부탁했어요' }),
+        lineP(rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + memberName(rec.origin.by) + ' 님이 만든 앱)' : '') + '의 사본으로 시작했어요.'
+          : rec.mode === 'edit' ? josa('「' + (title || rec.origin?.title || '') + '」', '을') + ' 고쳤어요.' : '「' + firstLine(rec.what) + '」',
+        '쓰는 자리는 ' + copula(placeName) + '.')),
+      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), lineP('쓰는 사람: ' + c.who, '저장하는 정보: ' + c.items, '주요 기능: ' + c.can.join(', ')))
+        : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI가 세션에서 만들었어요' }), el('p', { text: '수정할 때마다 버전이 하나씩 올라가요(초안 → V2 → V3).' })),
     ];
     const list = el('div', { class: 'v2-studio-steps-list' }, ...steps);
+    //  공개 상태를 못 읽은 채 왔다 — 한 번 더 읽어 보고, 읽히면 그 상태로 다시 그린다(못 읽으면 «확인하지 못했어요» 그대로).
+    if (!S.vis && rec.appId) void readVis(rec.appId).then((v) => { if (v && !S.dead && rec.stage === 'put') { S.vis = v; paintVis(); paintNow(); paintPut(); } });
     fetchAppVersions(rec.appId).then((vs) => {
       if (S.dead) return; const rows = vs.slice().sort((a, b) => a.version_no - b.version_no);
-      const vrow = (v: { version_no: number; note: string | null; saved_at: string }): HTMLElement => el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('b', { text: verName(v.version_no) }), el('p', { text: (v.note || '').trim() || (v.version_no === 1 ? '처음 만듦' : '고침') }), el('small', { text: whenText(v.saved_at) }));
+      const vrow = (v: { version_no: number; note: string | null; saved_at: string }): HTMLElement => el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('b', { text: verName(v.version_no) }), el('p', { text: versionNote(v.note) || (v.version_no === 1 ? '처음 만듦' : '고침') }), el('small', { text: whenText(v.saved_at) }));
       const vr = rows.length <= 8 ? rows.map(vrow) : [vrow(rows[0]), el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('p', { text: '… ' + (rows.length - 7) + '번 더 고쳤어요' })), ...rows.slice(-6).map(vrow)];
       vr.forEach((n) => list.append(n));
       //  #4667 공개 상태대로 말한다 — 공개(모두) · 나만 보는 앱 · 공개한 앱에 둔 내 초안.
       const v = S.vis;
-      list.append(!v || (v.visibility === 'all' && !v.draftMine)
+      //  공개 상태를 못 읽었으면 그대로 말한다 — «워크스페이스 앱이 됐어요» 로 치면 팀원이 못 여는 앱을 알리게 된다(점검 2-5).
+      if (!v) { list.append(el('div', { class: 'v2-studio-step' }, el('b', { text: '공개 상태를 확인하지 못했어요' }), el('p', { text: '앱빌더의 「내가 만든 앱」에서 이 앱을 누르면 지금 공개 범위를 볼 수 있어요.' }))); return; }
+      list.append(v.visibility === 'all' && !v.draftMine
         ? el('div', { class: 'v2-studio-step' }, el('b', { text: '워크스페이스 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」에 「' + title + '」 이름으로 있어요. 워크스페이스 모두가 쓸 수 있어요.' }))
         : v.visibility === 'me'
           ? el('div', { class: 'v2-studio-step' }, el('b', { text: '내 앱이 됐어요' }), el('p', { text: '앱 찾기(왼쪽 「앱」)에 「' + title + '」 이름으로 있어요. 지금은 나만 볼 수 있고, 아래에서 팀에 공개할 수 있어요.' }))
@@ -1517,19 +1811,24 @@ async function build(rec: StudioRec): Promise<void> {
     if (rec.place !== 'full') how.push(el('div', {}, el('span', { class: 'k', text: '세션 위젯으로' }), el('span', { text: '세션 오른쪽 위 +에서 이 앱을 고르면 세션 위젯으로 붙어요. 세션의 AI에게 말하면 위젯 내용을 읽고 바꿔줘요.' })));
     if (rec.place !== 'side') how.push(el('div', {}, el('span', { class: 'k', text: '앱 화면으로' }), el('span', { text: '앱 찾기(왼쪽 「앱」)에서 이 앱을 누르면 전체 화면으로 열려요.' })));
     how.push(el('div', {}, el('span', { class: 'k', text: '더 고치려면' }), el('span', { text: '앱빌더의 「내가 만든 앱」에서 「고치기」를 눌러주세요. 수정할 때마다 새 버전이 생기고, 이전 버전으로 되돌릴 수도 있어요.' })));
-    const shared = !S.vis || (S.vis.visibility === 'all' && !S.vis.draftMine);
+    const shared = !!S.vis && S.vis.visibility === 'all' && !S.vis.draftMine;   // 못 읽었으면(null) 모두의 앱으로 치지 않는다(점검 2-5)
     if (shared) how.push(el('div', {}, el('span', { class: 'k', text: '팀원은' }), el('span', { text: '앱 찾기의 ⋯ 메뉴에서 「내 사본 떠서 고치기」로 사본을 만들어 바꿔 쓰거나, 「원본을 고치기」로 새 버전을 만들어 공개할 수 있어요.' })));
     // ⑦ 팀에 알리기 — 글은 기획 카드에서 미리 적는다. 지식 「앱 소개」 + 슬랙(적으면).
     const line = el('textarea', { class: 'ta', rows: '4' }) as HTMLTextAreaElement;
     line.value = (meCache && meCache.name ? meCache.name + ' 님이 ' : '') + '「' + title + '」 앱을 만들었어요.\n' + (c ? '주요 기능: ' + c.can.join(', ') : firstLine(rec.what)) + '\n쓰는 자리: ' + placeName + '\n앱 찾기(왼쪽 「앱」)의 「워크스페이스 앱」에서 열 수 있어요.';
     const slack = el('input', { class: 'v2-studio-name-in', type: 'text', placeholder: '슬랙 채널 (선택, 예: #product)', maxlength: '60' }) as HTMLInputElement;
-    const tellBtn = el('button', { class: 'v2-studio-go sm', type: 'button', text: rec.notified ? '알렸어요' : '팀에 알리기' }) as HTMLButtonElement; tellBtn.disabled = !!rec.notified;
-    tellBtn.onclick = async () => { tellBtn.disabled = true; if (await send(notifyBrief(title, line.value.trim(), slack.value))) { rec.notified = true; saveRec(rec); tellBtn.textContent = '알렸어요'; toast('AI가 팀에 알리고 있어요. 결과는 AI 세션에서 볼 수 있어요.'); } else tellBtn.disabled = false; };
+    //  보내기만 하면 «알렸어요» 로 굳던 것(점검 2-9) — AI 가 [[알림]] 으로 답해야 굳힌다(onText). 그 전엔 «보냈어요» 를 보이고 다시 누를 수 있다.
+    const tellBtn = el('button', { class: 'v2-studio-go sm', type: 'button', text: rec.notified ? '알렸어요' : rec.notifySent ? '다시 알리기' : '팀에 알리기' }) as HTMLButtonElement; tellBtn.disabled = !!rec.notified;
+    const tellNote = el('small', { class: 'v2-studio-fine', role: 'status', text: rec.notifySent && !rec.notified ? '보냈어요. 결과는 AI 세션에서 볼 수 있어요.' : '' });
+    tellBtn.onclick = async () => { tellBtn.disabled = true; if (await send(notifyBrief(title, line.value.trim(), slack.value))) { rec.notifySent = Date.now(); saveRec(rec); tellBtn.textContent = '다시 알리기'; tellNote.textContent = '보냈어요. 결과는 AI 세션에서 볼 수 있어요.'; } tellBtn.disabled = !!rec.notified; };
     const tryBtn = el('button', { class: 'v2-studio-go', type: 'button', text: '지금 써 보기' }) as HTMLButtonElement;
+    const tryNote = el('p', { class: 'v2-studio-fine v2-studio-try-note', role: 'status', hidden: true });
     tryBtn.onclick = async () => {
       tryBtn.disabled = true;
       const sid = rec.place !== 'full' ? routeSession() : '';
       if (sid && sid !== rec.sid) { if (await attachAppToSession(sid, rec.appId, title)) { closeAppStudio(); toast('「' + title + '」 앱을 이 세션에 위젯으로 붙였어요. 오른쪽 탭에서 볼 수 있어요.'); return; } }
+      //  세션 위젯으로만 쓰는 앱 — 앱빌더 안엔 붙일 세션이 없다. 전체 화면으로 열면 다른 모습을 보여 주게 되니 붙이는 길을 알린다(점검 2-11).
+      if (rec.place === 'side') { tryBtn.disabled = false; tryNote.hidden = false; tryNote.textContent = '세션 위젯 앱은 AI 세션에 붙여 써요. 쓰고 싶은 세션을 열고, 세션 오른쪽 위 +에서 「' + title + '」 앱을 고르면 붙어요.'; return; }
       closeAppStudio();
       //  앱 찾기에서 그 앱을 누른 것과 같은 길(원준 2026-10-28) — 옛 「앱 UI」 덮개 창(openAppUi)은 레일 · 사이드바가 빠진 다른 화면이었다.
       const { openAppById } = await import('./apps.js');
@@ -1541,15 +1840,17 @@ async function build(rec: StudioRec): Promise<void> {
       el('h3', { text: '이렇게 만들었어요' }), list,
       el('h3', { text: '이렇게 쓰세요' }), el('div', { class: 'v2-studio-how' }, ...how),
       //  팀에 알리기는 모두가 쓰는 앱일 때만 — 나만 보는 앱 · 내 초안을 알리면 팀원은 열 수 없는 앱을 보게 된다(#4667). 그 전엔 「팀에 공개하기」(#4632).
-      el('h3', { text: shared ? '팀에 알리기' : '팀에 공개하기' }),
-      shared
-        ? el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: '팀 지식에 「앱 소개」로 남고 대시보드 알림에 떠요. 슬랙 채널을 적으면 그 채널에도 보내요.' }), line, el('div', { class: 'v2-studio-tell-act' }, slack, tellBtn))
-        : el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: S.vis && S.vis.draftMine
+      //  공개 상태를 못 읽었으면 알리기 · 공개 칸을 세우지 않는다 — 열 수 있는지 모르는 앱을 알리지 않게(점검 2-5).
+      ...(!S.vis ? [] : shared ? [el('h3', { text: '팀에 알리기' }),
+        el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: '팀 지식에 「앱 소개」로 남고 대시보드 알림에 떠요. 슬랙 채널을 적으면 그 채널에도 보내요.' }), line, el('div', { class: 'v2-studio-tell-act' }, slack, tellBtn), tellNote)]
+        : [el('h3', { text: '팀에 공개하기' }),
+          el('div', { class: 'v2-studio-tell' }, el('p', { class: 'v2-studio-fine', text: S.vis.draftMine
             ? '이 버전은 아직 나만 볼 수 있어요. 공개하면 워크스페이스 모두가 이 버전을 쓰고, 팀에 알릴 수 있어요.'
             : '지금은 나만 쓰는 앱이에요. 공개하면 워크스페이스 모두가 앱 찾기에서 쓸 수 있고, 팀에 알릴 수 있어요. 공개 범위는 앱빌더 배포 설정에서 언제든 바꿀 수 있어요.' }),
-          el('div', { class: 'v2-studio-tell-act' }, el('button', { class: 'v2-studio-go sm', type: 'button', text: S.vis && S.vis.draftMine ? '이 버전을 모두에게 공개하기' : '워크스페이스 모두에게 공개하기', disabled: !!S.vis && !S.vis.canPublish,
-            onclick: async (e: Event) => { const b = e.currentTarget as HTMLButtonElement; b.disabled = true; if (await setVisibility('all')) { toast('워크스페이스 모두에게 공개했어요'); paintNow(); paintPut(); } else b.disabled = false; } }))),
-      el('div', { class: 'v2-studio-fin-act' }, tryBtn, el('button', { class: 'btn btn-ghost', type: 'button', text: '더 고치기', onclick: () => { rec.done = false; void setStage('fix'); } }))));
+            //  머리줄 「공개하기」 와 같은 길(publishNow — 서버 · 확인 · 결과대로 말하기)
+            el('div', { class: 'v2-studio-tell-act' }, el('button', { class: 'v2-studio-go sm', type: 'button', text: S.vis.draftMine ? '이 버전을 모두에게 공개하기' : '워크스페이스 모두에게 공개하기', disabled: !S.vis.canPublish,
+              onclick: () => { void publishNow(); } })))]),
+      el('div', { class: 'v2-studio-fin-act' }, tryBtn, el('button', { class: 'btn btn-ghost', type: 'button', text: '더 고치기', onclick: () => { rec.done = false; void setStage('fix'); } })), tryNote));
     coach('put', tryBtn.parentElement, (shared ? '워크스페이스 앱이 됐어요. ' : S.vis && S.vis.draftMine ? '이 버전은 비공개로 두었어요. ' : '앱이 만들어졌어요. 지금은 나만 볼 수 있어요. ') + '「지금 써 보기」로 바로 열어 보세요.', rec.place === 'full' ? '전체 화면으로 열어 직접 써 보세요' : '세션 위젯으로 붙이고 AI에게 「안건 3개 적어 줘」처럼 말해 보세요');
   };
 
@@ -1569,10 +1870,17 @@ async function build(rec: StudioRec): Promise<void> {
     else if (s === 'fix') { if (!rec.appId) paintDraft(); else { paintHub(); void paintVer().then(() => { if (!S.dead && rec.stage === 'fix') paintHub(); }); } }
     else if (s === 'check') {
       //  같은 버전 · 같은 기획 카드로 이미 대조했으면 그 결과를 그대로 — 단계 바로 오갈 때마다 AI 에게 다시 묻지 않는다.
-      if (rec.appId && !S.curVer) { await paintVer(); if (S.dead || rec.stage !== 'check') return; }   // 기다리는 사이 다른 단계로 갔거나 닫혔다
-      //  버전을 못 읽었으면(0) 지난 결과를 믿지 않는다 — 다른 버전의 대조를 그대로 보일 수 있다.
-      const same = !!rec.check && S.curVer > 0 && rec.check.ver === S.curVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
-      S.check = same && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; paintCheck();
+      //  ④ 에 올 때마다 판을 다시 읽는다 — 새 판이 막 나왔는데 앞 판 번호를 들고 와 앞 판의 대조를 그대로 보이던 것(점검 2-8). 못 읽었으면 지난 결과를 믿지 않는다.
+      //  대조는 «내용 판»(마무리 판이면 그 아래 AI 판)으로 잰다 — 넣기만 하고 바뀐 게 없으면 ④ 가 AI 에게 다시 묻지 않게(점검 2-7).
+      const sameAt = (ok: boolean): boolean => ok && !!rec.check && S.baseVer > 0 && rec.check.ver === S.baseVer && rec.check.card === (rec.card ? cardText(rec.card) : '');
+      const keep = (ok: boolean): void => { S.check = sameAt(ok) && rec.check ? { have: rec.check.have, missing: rec.check.missing } : null; };
+      //  판을 다시 읽는 동안은 «확인 중» 으로 그리고 「완료」 를 잠근다 — 지난 판의 결과를 먼저 그리면 낡은 «있어요» 를 믿고 넣을 수 있었다(격리 리뷰 #1583 · 4).
+      S.checkReading = true; S.check = null; paintCheck(); paintNow();
+      const verOk = rec.appId ? await paintVer() : false;
+      S.checkReading = false;
+      if (S.dead || rec.stage !== 'check') return;   // 기다리는 사이 다른 단계로 갔거나 닫혔다
+      const same = sameAt(verOk);
+      keep(verOk); paintCheck();
       //  ④ 아이콘은 지금 버전의 매니페스트에서 — ③ 에서 버전이 올랐을 수 있어 들어올 때마다 다시 읽는다.
       //   고른 것이 있는데 그 사이 저장된 아이콘이 바뀌었으면(AI 가 새 버전에 넣었다) 고른 것은 낡았다 — 걷어 새 아이콘을 덮지 않게.
       if (rec.appId) void readVis(rec.appId).then((v) => {
@@ -1581,15 +1889,28 @@ async function build(rec: StudioRec): Promise<void> {
         if (rec.stage === 'check') paintCheck();
       });
       //  청한 때의 버전 · 카드로 결과에 도장을 찍는다(답이 올 때의 것이 아니라 — 그 사이 바뀌었으면 다음에 다시 묻는다).
-      if (!same && rec.card && rec.appId) { S.checkWait = true; S.checkFor = { ver: S.curVer, card: cardText(rec.card) }; void send(checkBrief(rec.card, rec.appId)); }
+      //  같은 판 · 같은 카드의 대조를 이미 청해 두고 답을 기다리는 중이면 다시 청하지 않는다(④ 를 빨리 두 번 들어와도 한 번 · 격리 리뷰 #1583 · 3).
+      const want = { ver: verOk ? S.baseVer : 0, card: rec.card ? cardText(rec.card) : '' };
+      const pending = S.checkWait && !!S.checkFor && S.checkFor.ver === want.ver && S.checkFor.card === want.card;
+      //   못 보냈으면 기다림을 푼다 — 다음에 ④ 로 오면 다시 청한다(격리 리뷰 #1591 · 4).
+      if (!same && rec.card && rec.appId && !pending) { S.checkWait = true; S.checkFor = want; void send(checkBrief(rec.card, rec.appId)).then((ok) => { if (ok || S.dead || S.checkFor !== want) return; S.checkWait = false; S.checkFor = null; if (rec.stage === 'check') { paintCheck(); paintNow(); } }); }
     }
     applyPlace(); paintBar(); paintNow(); paintTray();
   };
-  const toDraft = async (): Promise<void> => { if (!rec.card) return; if (await send(draftBrief(rec.card, rec.place, rec.draftId || ''))) { rec.cardSent = cardText(rec.card); rec.step = 0; saveRec(rec); S.step = 0; await setStage('draft'); } };
+  //  ② 에서 보내는 글은 한 번만 — 보내는 1~2초 사이 한 번 더 누르면 초안을 두 번 만들고 둘째 저장이 «고쳤어요» 새 버전으로 잡혔다(점검 4-1).
+  //   ③ 「수정하기」 · 「AI에게 말하기」 도 같은 자물쇠 — 한 번에 한 글만 간다(격리 리뷰 #1591 · 5). 이미 보내는 중이면 busy 를 돌려준다(보내지 않았다).
+  const sendingOnce = async <T,>(run: () => Promise<T>, busy: T): Promise<T> => {
+    if (S.sending) return busy;
+    S.sending = true; paintNow();
+    try { return await run(); } finally { S.sending = false; if (!S.dead) paintNow(); }
+  };
+  const toDraft = (): Promise<void> => sendingOnce(toDraftNow, undefined);
+  const toDraftNow = async (): Promise<void> => { if (!rec.card || rec.cardFix) return; if (await send(draftBrief(rec.card, rec.place, rec.draftId || ''))) { rec.cardSent = cardText(rec.card); rec.step = 0; saveRec(rec); S.step = 0; await setStage('draft'); } };
   //  ② 에서 기획 카드를 고친 뒤 「바꾼 기획대로 다시 만들기」 — 앱이 있으면 고침 한 번(바뀐 카드 전문을 앱 전체 코멘트로 · 새 버전), 첫 판 전이면 초안을 다시 청한다.
-  const remake = async (): Promise<void> => {
-    if (!rec.card || S.waiting) return;
-    if (!rec.appId) { await toDraft(); return; }
+  const remake = (): Promise<void> => sendingOnce(remakeNow, undefined);
+  const remakeNow = async (): Promise<void> => {
+    if (!rec.card || S.waiting || rec.cardFix) return;
+    if (!rec.appId) { await toDraftNow(); return; }
     const say = '기획 카드를 이렇게 바꿨어요. 바뀐 카드대로 앱을 고쳐주세요.\n' + cardText(rec.card);
     if (await send(fixBrief(rec.round + 1, [], say, rec.place, rec.appId))) {
       rec.cardSent = cardText(rec.card); saveRec(rec);
@@ -1597,7 +1918,8 @@ async function build(rec: StudioRec): Promise<void> {
       await setStage('fix');
     }
   };
-  const sendFix = async (): Promise<void> => {
+  const sendFix = (): Promise<void> => sendingOnce(sendFixNow, undefined);
+  const sendFixNow = async (): Promise<void> => {
     if (S.waiting) return;
     const pins = S.pins.filter((p) => unsent(p) && p.note.trim()); const gSent = S.general; if (!pins.length && !gSent.trim()) return;
     if (await send(fixBrief(rec.round + 1, S.pins, gSent, rec.place, rec.appId))) {   // 번호가 화면과 같게 전부 넘긴다(fixBrief 가 보낸 것 · 빈 것을 건너뛴다)
@@ -1609,28 +1931,59 @@ async function build(rec: StudioRec): Promise<void> {
     }
   };
   //  #4732 「이대로 넣기」 는 연타를 막지 않는 단추라 — 미리 보기 · 저장 · 공개가 두 번 나가지 않게 하나씩만.
-  let putting = false;
   const putApp = async (): Promise<void> => {
-    if (putting) return;
-    putting = true;
-    try { await putAppOnce(); } finally { putting = false; }
+    if (S.putting) return;
+    S.putting = true; paintBar(); paintNow();
+    try { await putAppOnce(); } finally { S.putting = false; if (!S.dead) { paintBar(); paintNow(); } }
   };
   const putAppOnce = async (): Promise<void> => {
+    if (!rec.appId) return;
     const newName = nameIn.value.trim() || S.title;
     const share = rec.vis || 'me';
-    //  #4484 서버가 있는 앱이면 넣기 전에 서버부터(실패하면 넣지 않는다 — 기록은 만들기 세션으로 간다).
-    if (!(await ensureAppServer(rec.appId))) return;
-    //  #4732 「워크스페이스 모두」 면 이 저장이 곧 공개다 — 고친 공개 앱이면 미뤄 둔 표 변경이 이때 적용되므로 먼저 보여 주고 묻는다(새 앱은 할 일이 없어 묻지 않는다).
-    if (share === 'all' && !(await confirmPublish(rec.appId, { title: newName }))) return;
-    try {
-      //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
-      //   「워크스페이스 모두」 면 이 저장이 곧 공개다(publish) · 「나만」 이면 공개하지 않는다.
-      const pickedIcon = rec.icon ? iconSpec(rec.icon) : null;   // ④ 에서 고른 아이콘 — 서버 잣대로 한 번 더 거른다(틀린 선언이면 이 저장이 400 으로 막힌다)
-      await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; if (pickedIcon) man.icon = pickedIcon; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName + (pickedIcon ? ' · 아이콘' : ''), { publish: share === 'all' });
+    const alive = (): boolean => !S.dead;
+    //  지금 서버의 것과 견준다 — 이름 · 자리 · 기획 카드 · 아이콘 · 넣기 표시가 그대로면 마무리를 다시 저장하지 않는다(넣을 때마다 버전이 하나 늘고
+    //   「이전 버전으로」 가 엉뚱한 곳으로 가던 것 · 점검 2-7). 못 읽었으면 저장한다.
+    const v = await readVis(rec.appId); if (S.dead) return;
+    const pickedIcon = rec.icon ? iconSpec(rec.icon) : null;   // ④ 에서 고른 아이콘 — 서버 잣대로 한 번 더 거른다(틀린 선언이면 이 저장이 400 으로 막힌다)
+    const cardOf = (c: unknown): string => { try { return c ? cardText(c as StudioCard) : ''; } catch (_) { return ''; } };
+    const changed = !v || !v.put || newName !== v.title || rec.place !== v.place || !!pickedIcon || (!!rec.card && cardText(rec.card) !== cardOf(v.card));
+    //  공개 앱(초안 없음)을 「모두」 로 두고 이름 등을 바꿨다 — 저장이 내 초안을 만들므로 그 초안을 공개해야 한다(격리 리뷰 #1583 · 1: 종전엔 비공개 초안으로 남았다).
+    const wantPub = share === 'all' && (changed || !v || v.visibility === 'me' || v.draftMine);
+    if (!changed && !wantPub) {
+      if (v) S.vis = v;
+      rec.vis = undefined; saveRec(rec);
+      await setStage('put'); paintVis(); return;
+    }
+    //  #4484 서버가 있는 앱이면 넣기 전에 서버부터(실패하면 넣지 않는다 — 기록은 만들기 세션으로 간다). 닫으면 기다리기를 멈춘다(점검 2-6).
+    //   저장 앞에 빌드해도 된다 — 빌드 지문은 매니페스트(lively-app.json)를 빼고 잰다(src/apps/app-server-config.ts buildKeyOf · ZIP_EXCLUDE). 이름 · 자리 · 아이콘만 바꾼
+    //   마무리 판은 같은 지문이라 공개 검사(app-server-deploy.ts publishServerDenial — 지금 판의 지문으로 빌드를 찾는다)가 앞 판의 빌드를 그대로 쓴다.
+    if (!(await ensureAppServer(rec.appId, undefined, alive))) return;
+    if (S.dead) return;
+    const why = (e: any): string => plainNote(e && e.message ? e.message : String(e));
+    if (changed) {
+      try {
+        //  #4667 만든 사람 · 만들기 세션 · 원본은 서버가 이미 기록했다 — 매니페스트엔 자리 · 기획 카드 · 마무리 표시만(옛 칸은 걷는다).
+        //   저장과 공개를 나눠 부른다 — 한 번에 부르면 공개만 막혀도 «저장하지 못했어요» 로 읽혔다(점검 2-4).
+        await patchManifest(rec.appId, (man) => { if (newName) man.title = newName; if (pickedIcon) man.icon = pickedIcon; man.studio = { ...studioUiOnly(man.studio), place: rec.place, put: true, ...(rec.card ? { card: rec.card } : {}) }; }, '마무리 · ' + newName + (pickedIcon ? ' · 아이콘' : ''));
+      } catch (e: any) { toast('저장하지 못했어요. ' + why(e) + ' 앱은 그대로 쓸 수 있어요.', true); return; }   // ④ 그대로 — 다시 누를 수 있다
       delete rec.icon; delete rec.iconBase;   // 매니페스트에 실렸다 — 다음 ④ 는 저장된 아이콘에서 시작한다
-      S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
-    } catch (e: any) { toast('마무리 표시를 저장하지 못했어요. 앱은 그대로 쓸 수 있어요. (' + (e && e.message ? e.message : e) + ')', true); }
-    S.vis = await readVis(rec.appId);
+    }
+    //  저장이 됐으면 바꾼 이름은 공개가 막혀도 머리줄 · 세션 이름에 들어간다(점검 2-4).
+    S.title = newName; rec.title = newName; name.textContent = newName; void relabel(rec.sid, newName, rec.mode);
+    if (wantPub) {
+      //  저장한 뒤의 상태로 판단한다 — 공개 앱은 저장해야 내 초안이 생기고, 그때서야 공개할 것이 있다(can_publish). 공개할 권한이 없으면 묻지도 보내지도 않는다(격리 리뷰 #1591 · 9).
+      const after = changed ? await readVis(rec.appId) : v; if (S.dead) return;
+      const pending = !after || after.visibility === 'me' || after.draftMine;
+      if (pending && after && !after.canPublish) toast((changed ? '저장했어요. ' : '') + '이 앱을 공개할 권한이 없어서 나만 볼 수 있어요.', true);
+      else if (pending) {
+        //  #4732 「워크스페이스 모두」 면 이 넣기가 곧 공개다 — 고친 공개 앱이면 미뤄 둔 표 변경이 이때 적용되므로 먼저 보여 주고 묻는다. 그만두면 ④ 에 남는다(저장한 것은 내 초안으로 남는다).
+        if (!(await confirmPublish(rec.appId, { title: newName }))) { S.vis = await readVis(rec.appId); paintVis(); return; }
+        if (S.dead) return;
+        try { await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: 'all' }) }); }
+        catch (e: any) { toast((changed ? '저장했어요. ' : '') + '공개는 못 했어요. ' + why(e), true); }
+      }
+    }
+    S.vis = await readVis(rec.appId); if (S.dead) return;
     rec.vis = undefined; saveRec(rec);   // 이번 넣기에 쓴 ④ 의 고름 — 다음 고침은 기본(「나만」 · 공개한 앱이면 「내 초안으로 두기」)에서 다시 고른다
     await setStage('put');
     paintVis();
@@ -1638,24 +1991,25 @@ async function build(rec: StudioRec): Promise<void> {
   //  공개 범위(#4632 app_visibility_set) — 'all' 이면 「공개하기」(나만 보는 앱을 처음 공개 · 공개한 앱의 내 초안을 공개 판으로, #4667). 못 해도 앱은 그대로.
   const setVisibility = async (v: 'all' | 'me'): Promise<boolean> => {
     try {
-      if (v === 'all' && !(await ensureAppServer(rec.appId))) return false;   // #4484 공개할 판의 서버가 빌드돼 있어야 한다
+      if (v === 'all' && !(await ensureAppServer(rec.appId, undefined, () => !S.dead))) return false;   // #4484 공개할 판의 서버가 빌드돼 있어야 한다(닫으면 기다리기를 멈춘다 · 점검 2-6)
       if (v === 'all' && !(await confirmPublish(rec.appId, { title: S.title }))) return false;   // #4732
       await api('/api/ui/apps/' + encodeURIComponent(rec.appId) + '/visibility', { method: 'POST', body: JSON.stringify({ visibility: v }) });
       S.vis = await readVis(rec.appId); paintVis(); return true;   // ④ 의 고름(rec.vis)은 건드리지 않는다 — 다음 고침의 기본은 다시 「나만」 쪽(격리 리뷰 2-9)
-    } catch (e: any) { toast('공개 범위를 바꾸지 못했어요. ' + (e && e.message ? e.message : e), true); return false; }
+    } catch (e: any) { toast('공개하지 못했어요. ' + plainNote(e && e.message ? e.message : String(e)), true); return false; }
   };
   undo.onclick = async () => {
-    if (!rec.appId || !S.prevVer) return;
-    undo.disabled = true; const to = await revertApp(rec.appId, S.prevVer, S.title); undo.disabled = false;
+    if (!rec.appId || !S.prevVer || undoBusy) return;
+    if (S.waiting) { toast('AI가 수정을 마치면 되돌릴 수 있어요.'); return; }   // 고치는 중엔 잠근다(점검 2-3 · syncHead)
+    undoBusy = true; syncHead(); const to = await revertApp(rec.appId, S.prevVer, S.title); undoBusy = false; syncHead();
     if (to != null) { rec.reached = 2; saveRec(rec); await showApp(verJ(to, '으로') + ' 되돌렸어요'); }   // 되돌린 버전으로 ④ · ⑤ 를 다시
   };
   help.onclick = () => helpMenu(help, () => showIntro(() => { /* 그대로 */ }, () => showTour()), () => showTour());
-  teardown = () => { S.dead = true; if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
+  teardown = () => { S.dead = true; if (openFold) openFold(); if (S.board) { const bd = S.board; S.board = null; bd.close(); }   // 보드는 몸(body)에 붙어 있다 — 창과 함께 걷는다
     window.clearTimeout(S.pollT); window.clearTimeout(S.logT); window.clearTimeout(S.tick); window.clearTimeout(S.runT); window.clearTimeout(S.iconT); window.clearInterval(S.iconTick); window.removeEventListener('resize', onWinResize); off(); if (S.review) { S.review = null; closeReview(); } dropTry(); if (S.chat) S.chat.destroy(); };
   root.replaceChildren(
     el('div', { class: 'v2-studio-top v2-studio-top--build' }, crumb(), name, ver,
       ...(rec.origin ? [el('small', { class: 'v2-studio-origin', text: '원본: ' + rec.origin.title })] : []),
-      el('span', { class: 'v2-studio-sp' }), pubBtn, undo, chatBtn, help,
+      el('span', { class: 'v2-studio-sp' }), pubBtn, undo, chatBtn, moreBtn, help,
       el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: () => closeAppStudio() })),
     bar, now, band, body, chatWin, dockHint);
   if (rec.appId) {
@@ -1663,7 +2017,11 @@ async function build(rec: StudioRec): Promise<void> {
     const v = await readVis(rec.appId);
     if (v) { S.vis = v; if (v.title) { S.title = v.title; rec.title = S.title; name.textContent = S.title; } if (!rec.card && v.card) rec.card = v.card as StudioCard; paintVis(); }
   }
-  if (!rec.from) rec.from = await logEnd(rec.sid);
+  if (!rec.from) {
+    const end = await logEnd(rec.sid);
+    if (end != null) rec.from = end;
+    else if (Date.now() - rec.at > 120000) S.fromUnknown = true;   // 막 연 세션(2분 안)은 기록이 이 만들기의 것뿐이라 0 부터 읽어도 된다
+  }
   //  고침을 보내 두고 나갔다 왔다 — 그 사이 새 판이 나왔으면 끝맺고 그 판을 알리고, 아니면 «AI가 수정하고 있어요» 를 잇는다(시계는 보낸 때부터).
   let fixedAway = '';
   if (rec.fixing && rec.appId) {

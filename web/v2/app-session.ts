@@ -160,7 +160,7 @@ export async function spawnAppSession(
     }
     return { id };
   } catch (e: any) {
-    toast('앱을 열지 못했어요 — ' + (e && e.message ? e.message : e), true);
+    toast('앱을 열지 못했어요. ' + (e && e.message ? e.message : e), true);
     return null;
   } finally { spawning = false; }
 }
@@ -189,7 +189,7 @@ async function postAppSession(appId: string, opts?: { title?: string; projectId?
     }),
   });
   const id = out && out.session && out.session.id ? String(out.session.id) : '';
-  if (!id) throw new Error('세션 id 를 받지 못했습니다');
+  if (!id) throw new Error('세션 번호를 받지 못했어요.');
   return id;
 }
 
@@ -244,21 +244,21 @@ function appConsent(app: SessionApp): Promise<boolean> {
         // 세션에 글 보내기(#4594) — 이것도 성격이 다르다: '앱이 내 AI 세션을 움직이나'. 붙은 세션에만, 내가 누른 동작에서만 들어간다.
         app.chatSend ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '세션에 글 보내기' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱에서 내가 단추를 누르면 그 내용이 이 앱을 붙인 AI 세션에 메시지로 들어가요 — 앱이 혼자 보내진 않아요(분당 20건까지)' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱에서 내가 단추를 누르면 그 내용이 이 앱을 붙인 AI 세션에 메시지로 들어가요. 앱이 혼자 보내지는 않아요(분당 20건까지).' }))) : null,
         // 에이전트 작업(#4490) — '앱이 내 Claude 구독으로 사람 없는 작업을 돌리나'. 도구 칩 하나로는 무게가 안 보인다: 작업은 나로서(내 구독 · 내 홈의
         //  로그인·파일) 돌고, 받는 길은 이 앱 화면에서 내가 보낸 것뿐이다(앱 서버 · 자동화 · 작업 안에서는 거절 — agent-jobs/service.ts).
         app.tools.includes('agent_job_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '에이전트 작업' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱 화면에서 내가 보낸 지시를 별도 작업 컨테이너에서 나로서 돌려요 — 내 Claude 구독을 쓰고 내 홈의 파일·로그인에 닿아요. 앱 서버나 자동화가 혼자 보내진 않아요' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱 화면에서 내가 보낸 지시를 별도 작업 컨테이너에서 내 이름으로 돌려요. 내 Claude 구독을 쓰고 내 홈의 파일과 로그인에 닿아요. 앱 서버나 자동화가 혼자 보내지는 않아요.' }))) : null,
         // AI 실행(#4488 앱 v2-9) — '앱이 AI 를 돌리나(누구 돈 · 누구 계정으로)'. 실행 계정은 워크스페이스가 정한다: API 키면 워크스페이스 돈,
         //  구독이면 **내 구독**(내가 이 앱 화면에서 보낸 요청만 · 내 자리). 설계 §5 «grant 항목 — 내 AI 계정 사용 · 붙은 세션에서 실행 · 새 대화 만들기» 를 한 줄에.
         app.tools.includes('app_ai_run') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: 'AI 실행' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱이 AI 에게 일을 시킬 수 있어요 — 워크스페이스 API 키가 있으면 그 돈으로, 아니면 내 Claude 구독으로(내가 이 앱 화면에서 보낸 요청만 · 내 이름으로 새 대화) 돌아요. 실행 기록은 이 앱의 AI 실행 목록에 남아요' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱이 AI에게 일을 시킬 수 있어요. 워크스페이스 API 키가 있으면 그 돈으로, 없으면 내 Claude 구독으로 돌아요(내가 이 앱 화면에서 보낸 요청만, 내 이름으로 새 대화). 실행 기록은 이 앱의 AI 실행 목록에 남아요.' }))) : null,
         // 백그라운드 작업(#4486 앱 v2-7) — '앱 서버가 내 이름으로 뒤에서 일을 하나'. 서버를 둔 앱(web.server)이 함의한다. 화면을 닫아도 15분까지 돈다.
         app.tools.includes('app_job_start') ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '백그라운드 작업' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱의 서버가 오래 걸리는 일을 뒤에서 내 이름으로 처리할 수 있어요 — 화면을 닫아도 한 번에 15분까지 돌고, 이 앱에 동의한 범위 안에서만 움직여요. 진행과 결과는 이 앱의 작업 목록에 남아요' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱의 서버가 오래 걸리는 일을 뒤에서 내 이름으로 처리할 수 있어요. 화면을 닫아도 한 번에 15분까지 돌고, 이 앱에 동의한 범위 안에서만 움직여요. 진행과 결과는 이 앱의 작업 목록에 남아요.' }))) : null,
         // 프로젝트 자료 읽기(#4592) — '내 프로젝트의 파일이 앱으로 들어오나'. 붙인 세션의 프로젝트에서, 선언한 종류만, 읽기만.
         app.projectFiles.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '프로젝트 자료 읽기' }),
           el('div', { class: 'v2-consent-chips' },
@@ -271,7 +271,7 @@ function appConsent(app: SessionApp): Promise<boolean> {
         //  동의한 구성원이 함께 보고(세션에 붙이면 .lively/apps/<앱>/ 로도 보인다), 다른 폴더 · 다른 앱 폴더에는 닿지 않는다.
         app.appFolder ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '앱 폴더' }),
           el('div', { class: 'v2-consent-chips' },
-            el('span', { class: 'v2-consent-chip', text: '이 앱 전용 폴더에 파일을 올리고 받을 수 있어요(내 이름으로 올려요). 이 앱에 동의한 구성원이 그 파일을 함께 봐요 — 다른 폴더에는 닿지 않아요' }))) : null,
+            el('span', { class: 'v2-consent-chip', text: '이 앱 전용 폴더에 파일을 올리고 받을 수 있어요(내 이름으로 올려요). 이 앱에 동의한 구성원이 그 파일을 함께 봐요. 다른 폴더에는 닿지 않아요.' }))) : null,
         // 선언된 사이트 — 앱이 화면에 싣거나 직접 연결하는 곳. 없으면 줄 자체를 안 그린다(없는 걸 설명하지 않는다).
         app.sites.length ? el('div', { class: 'v2-consent-grp' }, el('b', { text: '사이트' }),
           el('div', { class: 'v2-consent-chips' }, ...chips(app.sites.map((d) => d === '*' ? '모든 사이트(화면에 싣기)' : d), ''))) : null,

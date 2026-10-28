@@ -85,6 +85,7 @@ export function mountTrySession(host: HTMLElement, o: { appId: string; sid: stri
         chat = renderSession(h, data, s, { trail: (oo && oo.trail) || null, onOpenFiles: oo && oo.openFiles ? oo.openFiles : undefined,
           filesLabel: oo && oo.filesLabel ? oo.filesLabel : undefined, appDoor: oo && oo.appDoor ? oo.appDoor : undefined,
           isVisible: () => !dead && root.isConnected,
+          slowOnMissing: true,   // 셸 목록 밖의 숨긴 세션 — 못 읽는 기록(403 · 404)이 이어지면 느슨하게 묻는다(점검 3-12)
           //  되살렸다 — 셸 주소(#/s/…)로 가지 않고 이 자리에서 다시 세운다(셸 목록엔 이 세션이 없어 그 주소는 길을 잃는다). 같은 id 로 되살린 것(#4694 뒤
           //   대개 그렇다)도 셸처럼 다시 그린다 — 복원 응답이 «중단됨» 줄을 이겨 살아 있는 화면으로 선다. 새 id 면 기록도 옮긴다.
           onResumed: (nid: string) => { if (dead || !nid) return; if (nid !== sid) { sid = nid; o.onResumed(nid); } remount(); } });

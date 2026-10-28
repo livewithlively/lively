@@ -194,7 +194,7 @@ same(card("만들던 앱") && card("만들던 앱").rows.map((r) => r.slice(0, 3
 same(card("내가 만든 앱") && card("내가 만든 앱").rows.map((r) => r.slice(0, 3)),
   [["메모 · 원준", "나만", "#/builder?sel=memo-w"], ["회의록", "꺼짐", "#/builder?sel=meeting"]],
   "D3 · D4 내가 만든 앱 — 만드는 중인 앱(노트) · 기본 앱 · 지운 앱은 없다 · 나만 보는 앱 「나만」 · 꺼진 앱 「꺼짐」 · 누르면 그 앱의 배포 설정");
-same(R.d1 && (R.d1.fixed.find((f) => f.n === "모든 앱") || {}).cnt, "5", "D3 「모든 앱」 = 만들던 앱 + 내가 만든 앱");
+same(R.d1 && (R.d1.fixed.find((f) => f.n === "모든 앱") || {}).cnt, "6", "D3 「모든 앱」 = 가운데 목록에 서는 서로 다른 앱 수(만들던 앱 3 + 내가 만든 앱 2 + 팀원이 만든 앱 1 · 감사 6-9)");
 // ── D5 ──
 const D5 = R.d5 || {};
 same([D5.list && D5.list.on, D5.neu && D5.neu.on, D5.resume && D5.resume.on, D5.sel && D5.sel.on, D5.copy && D5.copy.on, D5.draftSel && D5.draftSel.on],

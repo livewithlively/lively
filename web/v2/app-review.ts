@@ -13,9 +13,9 @@
 //  상태(짚은 곳 · 앱 전체 의견 · 판 · 기다림)는 부르는 쪽(앱빌더 만들기 화면)이 쥔다 — 이 층은 보여 주고 받아 적고(onChange) 단추를 전할 뿐(onSend · onLike · onBack).
 //  떠나면(다른 주소로 · 「‹ 앱빌더」 · 부르는 쪽이 close) 층과 막대를 걷는다. 한 번에 하나만 뜬다.
 import { el } from '../core.js';
-import { markReviewProbe } from './app-ui.js';
+import { ensureReviewProbe, markReviewProbe } from './app-ui.js';
 import { fitGrow, growText } from './grow-text.js';
-import { unsent, verName, whereText, type StudioPin } from '../lib/studio-flow.js';
+import { readHitRes, scrollPx, unsent, verName, whereText, type HitRes, type StudioPin } from '../lib/studio-flow.js';
 
 export type ReviewTool = 'try' | 'pick' | 'pin' | 'box';
 export interface ReviewHost {
@@ -26,8 +26,11 @@ export interface ReviewHost {
   dock?: HTMLElement;
   pins: StudioPin[]; general: string;   // 부르는 쪽의 것 **그대로**(같은 배열 · 값) — 이 층이 더하고 지우고 고친 뒤 onChange 로 알린다
   version: number; waiting: boolean;
-  /** 기다리던 AI 일이 멈췄다 — 막대가 시계 대신 그 까닭을 말하고, resume 이면 「수정하기」 자리가 「이어서 수정하기」(onResume)가 된다. */
-  stall?: { text: string; resume: boolean } | null;
+  /** 고침을 보낸 시각(ms) — 막대 시계가 앱빌더 띠와 같은 시계로 이어서 센다(점검 3-10). 없으면 막대를 연 때부터. */
+  waitSince?: number;
+  /** 기다리던 AI 일이 멈췄다 — 막대가 시계 대신 그 까닭을 말하고, resume 이면 「수정하기」 자리가 「이어서 수정하기」(onResume)가 된다.
+   *  ask = AI 가 확인을 기다린다 — 답할 곳은 막대의 「AI에게 말하기」 다(점검 3-7 · 그 단추가 대화 칸을 연다). */
+  stall?: ReviewStall | null;
   onResume?: () => void;
   /** 이 앱을 만드는 AI 세션 화면(앱빌더의 「AI 세션」 칸) — 「AI에게 말하기」 칸을 처음 열 때 대화 칸으로 옮겨 오고, 층이 걷히면 제자리로 돌려놓는다. */
   chat: HTMLElement;
@@ -38,9 +41,10 @@ export interface ReviewHost {
   /** 층이 걷혔다(다른 데로 갔다 · close) — 부르는 쪽이 손잡이를 놓는다. */
   onClose?: () => void;
 }
+export interface ReviewStall { text: string; resume: boolean; ask?: boolean }
 export interface ReviewApi {
   /** 판 · 기다림 · 이름 · 의견이 바뀌었다(새 판이 왔다 · 보냈다 · 앱빌더 쪽에서 고쳤다). note 를 주면 막대에 잠깐 띄운다(«2판 · 고쳤어요»). */
-  update(p: { version?: number; waiting?: boolean; stall?: { text: string; resume: boolean } | null; title?: string; note?: string; pins?: StudioPin[]; general?: string }): void;
+  update(p: { version?: number; waiting?: boolean; waitSince?: number; stall?: ReviewStall | null; title?: string; note?: string; pins?: StudioPin[]; general?: string }): void;
   close(): void;
   isOpen(): boolean;
 }
@@ -60,7 +64,7 @@ function toolIcon(k: ReviewTool): HTMLElement {
 }
 const TOOLS: Array<{ k: ReviewTool; t: string; help: string }> = [
   { k: 'try', t: '써 보기', help: '직접 써 보면서 앱의 실제 동작을 확인해요.' },
-  { k: 'pick', t: '선택', help: '앱 안의 버튼 · 칸 · 글을 선택해요' },
+  { k: 'pick', t: '선택', help: '앱 안의 버튼, 칸, 글을 선택해요.' },
   { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 코멘트를 적어요.' },
   { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 코멘트를 적어요.' },
 ];
@@ -71,7 +75,10 @@ export function closeReview(): void { if (cur) { const c = cur; cur = null; c.cl
 export function openReview(host: ReviewHost): ReviewApi {
   closeReview();
   const routeBase = host.route.split('?')[0];
-  const S = { tool: 'pick' as ReviewTool, active: -1, hoverAt: 0, hitSeq: 1, hitWaits: {} as Record<number, (h: any) => void>, frame: null as HTMLIFrameElement | null, dead: false, tick: 0, noteT: 0, waitT0: 0, waitTick: 0, top: false, talkBusy: false };
+  const S = { tool: 'pick' as ReviewTool, active: -1, hoverAt: 0, hitSeq: 1, hitWaits: {} as Record<number, (h: HitRes | null) => void>, frame: null as HTMLIFrameElement | null, dead: false, tick: 0, noteT: 0,
+    waitT0: host.waitSince || Date.now(), waitTick: 0, top: false, talkBusy: false,
+    sx: 0, sy: 0, ix: 0, iy: 0, innerHid: 0 };   // 앱 문서의 지금 스크롤(px · 탐침이 알린다) — 번호는 짚을 때의 스크롤(p.sx · p.sy)과의 차이만큼 옮겨 그린다(점검 3-3).
+  //   ix · iy = 안쪽 스크롤 칸들의 합 — 짚은 뒤 달라졌으면 그 번호가 어느 칸 것인지 몰라 숨긴다(innerHid = 숨긴 수)
   markReviewProbe(host.appId, true);
 
   // ── 막대 ──
@@ -81,7 +88,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   const tools = el('span', { class: 'v2-studio-tools v2-review-tools', role: 'tablist', 'aria-label': '코멘트 다는 도구' });
   const count = el('button', { class: 'btn btn-ghost btn-sm v2-review-count', type: 'button' }) as HTMLButtonElement;
   const send = el('button', { class: 'v2-studio-now-pri', type: 'button' }) as HTMLButtonElement;
-  const like = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
+  const like = el('button', { class: 'btn btn-ghost btn-sm v2-review-like', type: 'button', text: '완료 · 다음 단계로', title: '고칠 곳이 없으면 다음 단계로', onclick: () => host.onLike() }) as HTMLButtonElement;
   const hint = el('small', { class: 'v2-review-hint' });
   //  지금 보는 화면이 어느 꼴인지(원준 2026-10-16 «지금 보고 있는 창이 앱 전체 창인지 위젯 창인지만 구분해서 알려 주고») — 막대가 문패 줄에 얹혔으면 시험 세션의 세션 위젯.
   const mode = el('span', { class: 'v2-review-mode' + (host.dock ? ' widget' : ' app'), text: host.dock ? '세션 위젯으로 보는 중' : '앱 화면으로 보는 중',
@@ -89,15 +96,36 @@ export function openReview(host: ReviewHost): ReviewApi {
   //  「AI에게 말하기」(원준 2026-10-28 «앱 전체에 코멘트하는 텍스트박스를 누르면 아래에서 위로 올라오게 · AI와 대화하면서 물어보고 지정하고 수정»).
   //   옛 «앱 전체 코멘트» 칸(원준 2026-10-16 «바로바로 텍스트 쳐서»)의 자리다 — 묶어 보내는 앱 전체 코멘트는 「코멘트 n건」 칸의 「앱 전체」 줄에 그대로 있다.
   //   글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 보내기 · Shift+Enter 줄바꿈.
-  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요 · Shift+Enter 줄바꿈', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
+  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 (예: 글자 조금 크게)', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요. 줄을 바꾸려면 Shift+Enter를 눌러요.', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
     onEnter: () => { void say(); }, onEscape: () => { closeTalk(); gen.blur(); } });
   gen.addEventListener('focus', () => openTalk());
   const note = el('span', { class: 'v2-review-note', hidden: true });
   const flip = el('button', { class: 'btn btn-ghost btn-sm v2-review-flip', type: 'button', text: '↑', title: '막대를 위나 아래로 옮겨요', 'aria-label': '막대 자리 바꾸기', onclick: () => { S.top = !S.top; bar.classList.toggle('v2-review-bar--top', S.top); flip.textContent = S.top ? '↓' : '↑'; } });
+  //  좁은 화면(40-v2.css ≤760px)의 「⋯」 — 「완료 · 다음 단계로」 · 막대 자리 바꾸기를 접어 둔다(점검 5-6 · 막대가 여러 줄로 앱을 덮었다).
+  //   누르면 원래 단추를 누른 것과 같다(할 일은 한 벌) · 잠긴 단추는 여기서도 잠겨 있다.
+  const more = el('button', { class: 'btn btn-ghost btn-sm v2-review-more', type: 'button', text: '⋯', title: '더 보기', 'aria-label': '더 보기', 'aria-haspopup': 'menu', 'aria-expanded': 'false' }) as HTMLButtonElement;
+  let menu: HTMLElement | null = null;
+  const closeMenu = (): void => { if (menu) { menu.remove(); menu = null; document.removeEventListener('pointerdown', offMenu, true); document.removeEventListener('keydown', keyMenu, true); more.setAttribute('aria-expanded', 'false'); } };
+  const offMenu = (e: Event): void => { if (menu && !menu.contains(e.target as Node) && !more.contains(e.target as Node)) closeMenu(); };
+  const keyMenu = (e: KeyboardEvent): void => { if (e.key === 'Escape' && menu) { e.preventDefault(); e.stopPropagation(); closeMenu(); more.focus(); } };
+  more.onclick = () => {
+    if (menu) { closeMenu(); return; }
+    const items = [like, flip].filter((b) => !b.hidden);
+    const m = el('div', { class: 'v2-studio-help v2-review-menu', role: 'menu' }, ...items.map((b) => {
+      const x = el('button', { type: 'button', role: 'menuitem', text: b === flip ? (S.top ? '막대를 아래로 옮기기' : '막대를 위로 옮기기') : (b.textContent || ''), onclick: () => { closeMenu(); b.click(); } }) as HTMLButtonElement;
+      x.disabled = b.disabled;
+      return x;
+    }));
+    const r = more.getBoundingClientRect();
+    m.style.left = Math.round(Math.max(8, Math.min(r.left, window.innerWidth - 216))) + 'px';   // 메뉴 폭(최소 200) 만큼 화면 안에
+    if (S.top || r.top < window.innerHeight / 2) m.style.top = Math.round(r.bottom + 6) + 'px'; else m.style.bottom = Math.round(window.innerHeight - r.top + 6) + 'px';
+    document.body.append(m); menu = m; more.setAttribute('aria-expanded', 'true');
+    setTimeout(() => { if (menu === m) { document.addEventListener('pointerdown', offMenu, true); document.addEventListener('keydown', keyMenu, true); } }, 0);
+  };
   bar.append(
     el('button', { class: 'btn btn-ghost btn-sm v2-review-back', type: 'button', text: '‹ 앱빌더', title: '앱빌더로 돌아가요. 적은 코멘트는 그대로 남아요.', onclick: () => host.onBack() }),
     el('span', { class: 'v2-review-name' }, name, ver), mode, el('i', { class: 'v2-review-sep' }),
-    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip,
+    tools, count, gen, el('span', { class: 'v2-studio-sp' }), note, like, send, flip, more,
     hint);
   // ── 층 — 프레임 자리를 따라간다 ──
   const layer = el('div', { class: 'v2-review-layer', hidden: true });
@@ -113,7 +141,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     const n = cmCount();
     tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; return b; }));   // 고치는 중에도 짚는다 — 다음 「수정하기」 몫(원준 2026-10-28)
     const blank = host.pins.filter((p) => !p.note.trim()).length;
-    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank : '');
+    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank + '건' : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 수정 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
@@ -121,27 +149,42 @@ export function openReview(host: ReviewHost): ReviewApi {
     ver.textContent = verName(host.version);
     const t = TOOLS.find((x) => x.k === S.tool) || TOOLS[1];
     hint.textContent = host.waiting ? 'AI가 수정하고 있어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' : !S.frame ? (host.dock ? '앱을 여는 중이에요. 시안을 보고 수정할 내용을 알려주세요.' : '앱이 아직 안 보여요. 앱 화면이 뜨면 코멘트를 남길 수 있어요.') : t.help;
+    if (S.frame && S.innerHid && !host.stall) hint.textContent = '앱 안의 목록이 스크롤돼서 번호 ' + S.innerHid + '개를 숨겼어요. 목록을 짚었던 자리로 되돌리면 다시 보여요.';
     if (host.waiting && host.stall) {   // 멈췄다 — «AI 수정 중 m:ss» 를 세지 않고 앱빌더 막대와 같은 말 · 같은 단추
       send.textContent = '이어서 수정하기'; send.disabled = !host.stall.resume || !host.onResume; hint.textContent = host.stall.text;
+      //  AI 가 확인을 기다린다 — 이 막대엔 「AI 세션 보기」 가 없다. 답할 곳은 「AI에게 말하기」(그 대화 칸에 그 AI 세션이 선다 · 점검 3-7).
+      if (host.stall.ask) { send.textContent = 'AI에게 답하기'; send.disabled = false; hint.textContent = 'AI가 확인을 기다리고 있어요. 「AI에게 말하기」를 눌러 답해 주세요.'; }
     }
     layer.hidden = !S.frame;   // 고치는 중에도 짚는다(원준 2026-10-28)
+    layer.dataset.tool = S.tool;   // 써 보기면 번호 · 상자가 흐리고 눌리지 않는다(앱의 단추를 가리지 않게 · 점검 3-9)
     ov.dataset.tool = S.tool; ov.hidden = S.tool === 'try';
     paintTrayBits();   // 열린 코멘트 목록의 머리 · 「수정하기」 도 같은 셈으로
   };
   const setTool = (k: ReviewTool): void => { S.tool = k; closePop(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); paintBar(); paintMarks(); };
   count.onclick = () => toggleTray();
-  send.onclick = () => { if (host.waiting && host.stall) { if (host.stall.resume && host.onResume) host.onResume(); return; } if (cmCount()) host.onSend(); };
+  send.onclick = () => {
+    if (host.waiting && host.stall) {
+      if (host.stall.ask) { openTalk(); gen.focus(); return; }   // 대화 칸을 열고 막대 칸에 바로 쓴다
+      if (host.stall.resume && host.onResume) host.onResume();
+      return;
+    }
+    if (cmCount()) host.onSend();
+  };
 
   // ── 프레임 찾기 · 따라가기 ──
   const frameWin = (): Window | null => (S.frame && S.frame.contentWindow) || null;
+  //  이 층이 띄운 것(막대 · 앱 위 층 · 코멘트 목록 · 대화 칸)은 앱을 가린 것으로 치지 않는다 — 막대를 위로 옮기거나(↑) 대화 칸을 크게 열면
+  //   그것이 앱 위쪽 가운데 점을 덮어, 앱이 가려졌다고 보고 번호를 다 숨겼다(점검 3-2).
+  const ours = (n: Element): boolean => layer.contains(n) || bar.contains(n) || talk.contains(n) || (!!tray && tray.contains(n));
   const findFrame = (): HTMLIFrameElement | null => {
     let best: HTMLIFrameElement | null = null, area = 0;
     document.querySelectorAll('iframe.v2-appui-frame[data-app-id="' + CSS.escape(host.appId) + '"]').forEach((n) => {
       const f = n as HTMLIFrameElement; const r = f.getBoundingClientRect();
       if (r.width < 40 || r.height < 40 || !f.getClientRects().length) return;
-      //  떠 있는 창(다른 화면의 덮개) 속이 아닌, 지금 화면에 보이는 것 — 가운데 점이 그 프레임(또는 그 위 층)에 닿는가
-      const hit = document.elementFromPoint(r.left + r.width / 2, Math.min(r.top + 24, r.bottom - 1));
-      if (hit && hit !== f && !layer.contains(hit) && !f.contains(hit)) return;
+      //  떠 있는 창(다른 화면의 덮개) 속이 아닌, 지금 화면에 보이는 것 — 위쪽 가운데 점에서 우리 것을 걷어 낸 맨 위가 그 프레임인가
+      const at = document.elementsFromPoint(r.left + r.width / 2, Math.min(r.top + 24, r.bottom - 1));
+      const top = at.find((x) => !ours(x));
+      if (top && top !== f && !f.contains(top)) return;
       if (r.width * r.height > area) { best = f; area = r.width * r.height; }
     });
     return best;
@@ -150,7 +193,12 @@ export function openReview(host: ReviewHost): ReviewApi {
     if (S.dead) return;
     if (!location.hash.startsWith(routeBase)) { api.close(); return; }   // 다른 데로 갔다 — 층을 걷는다(적은 것은 이미 부르는 쪽에 있다)
     const f = findFrame();
-    if (f !== S.frame) { S.frame = f; closePop(); paintBar(); paintMarks(); }
+    if (f !== S.frame) {
+      S.frame = f; S.sx = 0; S.sy = 0; S.ix = 0; S.iy = 0;   // 다른 문서 — 스크롤은 그 탐침이 알릴 때까지 맨 위로 본다
+      //  검토하지 않는 동안 새 판으로 다시 뜬 프레임에는 탐침이 없다 — 막대가 따라가는 **이 프레임만** 다시 띄운다(점검 3-1 · 다른 화면의 쓰던 상태는 건드리지 않는다)
+      if (f && f.getAttribute('data-probe') !== '1') ensureReviewProbe(host.appId, f);
+      closePop(); paintBar(); paintMarks();
+    }
     if (f) { const r = f.getBoundingClientRect(); layer.style.left = r.left + 'px'; layer.style.top = r.top + 'px'; layer.style.width = r.width + 'px'; layer.style.height = r.height + 'px'; }
   };
   S.tick = window.setInterval(follow, 250);
@@ -158,7 +206,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   window.addEventListener('resize', onScroll); document.addEventListener('scroll', onScroll, true);
 
   // ── 짚기 — 앱 위 투명한 층(도구마다 하는 일이 다르다: 고르기 = 요소 · 핀 = 점 · 영역 = 끌어 그린 상자) ──
-  const askHit = async (x: number, y: number): Promise<any> => {
+  const askHit = async (x: number, y: number): Promise<HitRes | null> => {
     const w = frameWin(); if (!w) return null;
     const id = S.hitSeq++;
     return new Promise((res) => { S.hitWaits[id] = res; w.postMessage({ __studio: 'hit', id, x, y }, '*'); setTimeout(() => { if (S.hitWaits[id]) { delete S.hitWaits[id]; res(null); } }, 700); });
@@ -170,7 +218,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   //  코멘트 목록이 열려 있으면 그 끝에 한 줄을 더해 그 칸에 바로 쓴다(목록은 닫지 않는다 — 원준 2026-10-28 «여러 개 코멘트 넘기기도 어렵고»).
   //   닫혀 있으면 짚은 곳 옆에 그 자리 칸이 뜬다. 도구는 그대로라 이어서 다음 곳을 짚는다.
   const addItem = (p: StudioPin): void => { host.pins.push(p); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*'); changed(); paintMarks(); if (tray) openTray(host.pins.length - 1); else openPop(host.pins.length - 1); };
-  let drag: { x: number; y: number; box: HTMLElement } | null = null; let skip = false;
+  let drag: { x: number; y: number; box: HTMLElement; at: { sx: number; sy: number; ix: number; iy: number } } | null = null; let skip = false;
   ov.addEventListener('pointermove', (e: PointerEvent) => {
     if (S.tool === 'pick' && Date.now() - S.hoverAt > 70) { S.hoverAt = Date.now(); const w = frameWin(); const q = ratio(e); if (w) w.postMessage({ __studio: 'hit', id: 0, x: q.x, y: q.y }, '*'); }
     if (S.tool === 'box' && drag) {
@@ -182,14 +230,17 @@ export function openReview(host: ReviewHost): ReviewApi {
   ov.addEventListener('pointerdown', (e: PointerEvent) => {
     if (pop) { closePop(); skip = true; return; }   // 열린 의견 칸 밖을 누르면 먼저 닫기만 한다
     if (S.tool !== 'box') return;
-    const q = ratio(e); const box = el('div', { class: 'v2-studio-mk v2-studio-mk-box draft' }); layer.append(box); drag = { x: q.x, y: q.y, box }; ov.setPointerCapture(e.pointerId);
+    const q = ratio(e); const box = el('div', { class: 'v2-studio-mk v2-studio-mk-box draft' }); layer.append(box); drag = { x: q.x, y: q.y, box, at: scrollAt(null) };   // 상자는 그리기 시작한 화면 기준
+    try { ov.setPointerCapture(e.pointerId); } catch (_) { /* 이미 끝난 누름 — 잡지 않아도 끌기는 된다 */ }
   });
+  //  짚은 곳에는 그때의 스크롤을 남긴다 — 번호가 문서 자리를 따라가고(paintMarks) AI 에게도 그 화면 기준이라고 말한다(fixBrief · 점검 3-3).
+  const scrollAt = (hit: HitRes | null): { sx: number; sy: number; ix: number; iy: number } => (hit ? { sx: hit.sx, sy: hit.sy, ix: hit.ix, iy: hit.iy } : { sx: S.sx, sy: S.sy, ix: S.ix, iy: S.iy });
   ov.addEventListener('click', async (e: MouseEvent) => {
     if (skip) { skip = false; return; }
     if (S.tool !== 'pick' && S.tool !== 'pin') return;
     const q = ratio(e); const hit = await askHit(q.x, q.y);
-    if (S.tool === 'pick' && hit && hit.rect) addItem({ kind: 'pick', x: hit.rect.l, y: hit.rect.t, w: hit.rect.w, h: hit.rect.h, where: whereText(hit), note: '' });
-    else addItem({ kind: 'pin', x: q.x, y: q.y, where: whereText(hit), note: '' });
+    if (S.tool === 'pick' && hit && hit.rect) addItem({ kind: 'pick', x: hit.rect.l, y: hit.rect.t, w: hit.rect.w, h: hit.rect.h, where: whereText(hit), note: '', ...scrollAt(hit) });
+    else addItem({ kind: 'pin', x: q.x, y: q.y, where: whereText(hit), note: '', ...scrollAt(hit) });
   });
   ov.addEventListener('pointerup', async (e: PointerEvent) => {
     if (S.tool !== 'box' || !drag) return;
@@ -197,37 +248,81 @@ export function openReview(host: ReviewHost): ReviewApi {
     const l = Math.min(q.x, d.x), t = Math.min(q.y, d.y), w = Math.abs(q.x - d.x), hh = Math.abs(q.y - d.y);
     if (w < 0.02 || hh < 0.02) return;   // 너무 작은 상자는 실수로 본다
     const hit = await askHit(l + w / 2, t + hh / 2);
-    addItem({ kind: 'box', x: l, y: t, w, h: hh, where: whereText(hit), note: '' });
+    addItem({ kind: 'box', x: l, y: t, w, h: hh, where: whereText(hit), note: '', ...d.at });
   });
-  const onMsg = (ev: MessageEvent): void => { const m: any = ev.data; if (!m || m.__studio !== 'hitres' || ev.source !== frameWin()) return; const w = S.hitWaits[m.id]; if (w) { delete S.hitWaits[m.id]; w(m); } };
+  //  도구를 쓰는 중에도 휠은 앱으로 — 덮개가 받아 탐침에게 넘기고, 탐침이 그 자리의 스크롤되는 칸(없으면 문서)을 내린다(점검 3-3).
+  ov.addEventListener('wheel', (e: WheelEvent) => {
+    const w = frameWin(); if (!w || e.ctrlKey || e.metaKey) return;   // ⌘/Ctrl + 휠(확대)은 브라우저 몫
+    e.preventDefault();
+    const q = ratio(e), r = layer.getBoundingClientRect();
+    const f = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? Math.max(1, r.height) : 1;
+    w.postMessage({ __studio: 'wheel', x: q.x, y: q.y, dx: e.deltaX * f, dy: e.deltaY * f }, '*');
+  }, { passive: false });
+  //  위치 답(hitres)은 보드와 같은 거르기(readHitRes · 점검 3-13) · 스크롤 알림(scroll)은 번호를 옮겨 그린다. 이 프레임에서 온 것만.
+  const onMsg = (ev: MessageEvent): void => {
+    if (!ev.source || ev.source !== frameWin()) return;
+    const m: any = ev.data;
+    if (m && typeof m === 'object' && m.__studio === 'scroll') {
+      const sx = scrollPx(m.sx), sy = scrollPx(m.sy), ix = scrollPx(m.ix), iy = scrollPx(m.iy);   // 앱이 준 값 — 0 ~ 1e6 으로 자른다
+      if (sx !== S.sx || sy !== S.sy || ix !== S.ix || iy !== S.iy) { S.sx = sx; S.sy = sy; S.ix = ix; S.iy = iy; paintMarks(); placePop(); }
+      return;
+    }
+    const h = readHitRes(m); if (!h) return;
+    const w = S.hitWaits[h.id]; if (w) { delete S.hitWaits[h.id]; w(h); }
+  };
   window.addEventListener('message', onMsg);
+  //  짚은 곳이 지금 화면의 어디에 있나(비율) — 짚은 뒤 앱이 스크롤된 만큼 옮긴다. 층이 아직 없으면(크기 0) 옮기지 않는다.
+  const shown = (p: StudioPin): { x: number; y: number } => {
+    const r = layer.getBoundingClientRect();
+    return { x: p.x - (r.width > 0 ? (S.sx - (p.sx || 0)) / r.width : 0), y: p.y - (r.height > 0 ? (S.sy - (p.sy || 0)) / r.height : 0) };
+  };
   const paintMarks = (): void => {
     layer.querySelectorAll('.v2-studio-mk').forEach((n) => n.remove());
+    const hid0 = S.innerHid; S.innerHid = 0;
     host.pins.forEach((p, i) => {
       if (p.on === 'wire') return;   // 와이어프레임 보드에서 짚은 곳 — 앱 화면 위엔 그리지 않는다(번호는 그대로 i + 1)
       const hot = i === S.active;
+      const q = shown(p);
+      if (q.y + (p.h || 0) < 0 || q.y > 1 || q.x + (p.w || 0) < 0 || q.x > 1) return;   // 스크롤로 화면 밖에 나갔다 — 앱 밖에 그리지 않는다
+      if ((p.ix || 0) !== S.ix || (p.iy || 0) !== S.iy) { S.innerHid++; return; }   // 안쪽 칸이 스크롤됐다 — 어느 칸의 것인지 몰라 숨긴다(막대가 그렇다고 말한다)
       if (p.kind === 'pick' || p.kind === 'box') {
         const b = el('div', { class: 'v2-studio-mk v2-studio-mk-box' + (p.kind === 'pick' ? ' pick' : '') + (hot ? ' hot' : '') + (p.sent ? ' sent' : '') });
-        Object.assign(b.style, { left: p.x * 100 + '%', top: p.y * 100 + '%', width: (p.w || 0) * 100 + '%', height: (p.h || 0) * 100 + '%' });
+        Object.assign(b.style, { left: q.x * 100 + '%', top: q.y * 100 + '%', width: (p.w || 0) * 100 + '%', height: (p.h || 0) * 100 + '%' });
         layer.append(b);
       }
       //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 고칠 수 없다(이미 AI 에게 갔다).
       const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
-        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
-        onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent) openPop(i); } }, el('span', { text: String(i + 1) }));
-      n.style.left = p.x * 100 + '%'; n.style.top = p.y * 100 + '%';
+        title: p.sent ? 'AI가 반영하고 있어요. ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트, 반영 중' : '번 코멘트 열기'),
+        onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent && S.tool !== 'try') openPop(host.pins.indexOf(p)); } }, el('span', { text: String(i + 1) }));
+      n.style.left = q.x * 100 + '%'; n.style.top = q.y * 100 + '%';
       layer.append(n);
     });
+    if (hid0 !== S.innerHid) paintBar();   // 숨긴 번호가 생기거나 없어졌다 — 막대 안내를 바꾼다
   };
-  // 그 자리의 의견 칸 — 짚은 곳 옆에 뜬다
-  let pop: HTMLElement | null = null;
-  const closePop = (): void => { if (pop) { pop.remove(); pop = null; } if (S.active >= 0) { S.active = -1; paintMarks(); } };
-  const removePin = (i: number): void => { host.pins.splice(i, 1); closePop(); changed(); paintMarks(); };
+  // 그 자리의 의견 칸 — 짚은 곳 옆에 뜬다. 칸은 번호가 아니라 **그 코멘트(객체)** 를 든다 — 새 판이 와 앞의 보낸 코멘트가 빠지면 번호가 당겨지는데,
+  //  번호를 들고 있으면 칸이 닫히거나(점검 3-4) 「취소」 가 다른 코멘트를 지웠다.
+  let pop: HTMLElement | null = null, popPin: StudioPin | null = null;
+  const closePop = (): void => { if (pop) { pop.remove(); pop = null; } popPin = null; if (S.active >= 0) { S.active = -1; paintMarks(); } };
+  const removePin = (p: StudioPin): void => { const j = host.pins.indexOf(p); if (j >= 0) host.pins.splice(j, 1); closePop(); changed(); paintMarks(); };
+  //  칸의 번호 · 자리를 지금 목록 · 스크롤에 맞춘다(옮겨 그리기 · 새 목록).
+  const placePop = (): void => {
+    if (!pop || !popPin) return;
+    const i = host.pins.indexOf(popPin), p = popPin, q = shown(p);
+    const n = pop.querySelector('.k .n'); if (n) n.textContent = String(i + 1);
+    pop.setAttribute('aria-label', (i + 1) + '번 코멘트');
+    const right = q.x + (p.w || 0);
+    pop.style.top = Math.max(0, Math.min(q.y * 100, 66)) + '%';
+    //  짚은 곳의 오른쪽 · 왼쪽 중 **화면에** 자리가 있는 쪽 — 앱 칸 안의 비율로만 고르면 화면 오른쪽 끝의 좁은 사이드바(340)에서 칸이 화면 밖으로 나갔다.
+    const lr = layer.getBoundingClientRect(), need = 280 + 12 + 8;
+    const roomR = window.innerWidth - (lr.left + right * lr.width), roomL = lr.left + q.x * lr.width;
+    const toRight = roomR >= need ? true : roomL >= need ? false : roomR >= roomL;
+    if (toRight) { pop.style.left = 'calc(' + right * 100 + '% + 12px)'; pop.style.right = ''; } else { pop.style.right = 'calc(' + (100 - q.x * 100) + '% + 12px)'; pop.style.left = ''; }
+  };
   const openPop = (i: number): void => {
     const p = host.pins[i]; if (!p) return;
     if (pop) pop.remove();
     closeTray();   // 그 자리 칸과 코멘트 목록은 함께 서지 않는다 — 한쪽에서 고친 것을 다른 쪽이 옛 글로 들고 있게 된다
-    S.active = i; paintMarks();
+    S.active = i; popPin = p; paintMarks();
     const ta = growText({ class: 'ta', placeholder: '이 자리를 어떻게 고칠까요', label: (i + 1) + '번 코멘트', value: p.note, max: 8,
       onInput: (v) => { p.note = v; changed(); }, onEnter: () => closePop(), onEscape: () => closePop() });
     const kind = p.kind === 'pick' ? '선택한 요소' : p.kind === 'box' ? '영역' : '핀';
@@ -235,18 +330,11 @@ export function openReview(host: ReviewHost): ReviewApi {
       el('div', { class: 'k' }, el('span', { class: 'n', text: String(i + 1) }), el('b', { text: kind }), el('span', { class: 'w', text: p.where || '' })),
       ta,
       el('div', { class: 'act' },
-        el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 코멘트를 지워요', onclick: () => removePin(i) }),
+        el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '취소', title: '이 자리 코멘트를 지워요', onclick: () => removePin(p) }),
         el('small', { class: 'v2-studio-pop-key', text: 'Shift+Enter 줄바꿈' }),
         el('span', { class: 'v2-studio-sp' }), el('button', { type: 'button', class: 'v2-studio-now-pri', text: '완료', onclick: () => closePop() })));
     pp.addEventListener('pointerdown', (e) => e.stopPropagation());
-    const right = p.x + (p.w || 0);
-    pp.style.top = Math.min(p.y * 100, 66) + '%';
-    //  짚은 곳의 오른쪽 · 왼쪽 중 **화면에** 자리가 있는 쪽 — 앱 칸 안의 비율로만 고르면 화면 오른쪽 끝의 좁은 사이드바(340)에서 칸이 화면 밖으로 나갔다.
-    const lr = layer.getBoundingClientRect(), need = 280 + 12 + 8;
-    const roomR = window.innerWidth - (lr.left + right * lr.width), roomL = lr.left + p.x * lr.width;
-    const toRight = roomR >= need ? true : roomL >= need ? false : roomR >= roomL;
-    if (toRight) pp.style.left = 'calc(' + right * 100 + '% + 12px)'; else pp.style.right = 'calc(' + (100 - p.x * 100) + '% + 12px)';
-    pop = pp; layer.append(pp); fitGrow(ta); ta.focus();
+    pop = pp; placePop(); layer.append(pp); fitGrow(ta); ta.focus();
   };
   // 코멘트 목록 — 막대에 맞붙어 열린다(짚은 곳마다 한 장 · 앱 전체 한 칸 · 맨 아래 「수정하기」).
   //  앱을 짚어도 닫히지 않는다 — 열어 둔 채 이곳저곳 짚으면 짚을 때마다 끝에 한 장이 생기고 그 칸에 바로 쓴다(원준 2026-10-28 «여러 개 코멘트 넘기기도 어렵고 · 쓰기가 너무 불편»).
@@ -277,11 +365,11 @@ export function openReview(host: ReviewHost): ReviewApi {
       //  ✕ · 번호는 그 코멘트(객체)로 찾는다 — 다른 데서 하나가 지워져도 엉뚱한 것을 지우지 않는다.
       const row = el('div', { class: 'v2-studio-tray-row' + (p.sent ? ' sent' : '') }, el('button', { type: 'button', class: 'n', text: String(i + 1), title: wire ? '와이어프레임에 남긴 코멘트예요. 앱빌더의 「와이어프레임(화면 흐름) 보기」에서 볼 수 있어요.' : '앱에서 그 자리 보기', disabled: wire, onclick: () => mark(host.pins.indexOf(p)) }),
         el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
-        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { const j = host.pins.indexOf(p); if (j >= 0) removePin(j); openTray(); } }));
+        p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { removePin(p); openTray(); } }));
       row.addEventListener('pointerenter', () => mark(host.pins.indexOf(p)));
       return row;
     });
-    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: host.general,
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 (예: 글자 조금 크게)', label: '앱 전체 코멘트', value: host.general,
       onInput: (v) => { host.general = v; changed(); }, onEnter: () => g.blur(), onEscape: () => closeTray() });
     taOf.set(g, 'all');
     trayHead = el('b');
@@ -293,7 +381,7 @@ export function openReview(host: ReviewHost): ReviewApi {
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '접기', onclick: () => closeTray() })),
       //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
       list,
-      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료, Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
     //  이미 열려 있으면 그 상자를 그대로 두고 속만 간다 — 세션 위젯 꼴의 고정 자리(--fixed · 위치)가 남는다.
     if (tray) tray.replaceChildren(...kids);
     else {
@@ -377,14 +465,22 @@ export function openReview(host: ReviewHost): ReviewApi {
       if (p.title != null) { host.title = p.title; name.textContent = '「' + host.title + '」'; }
       if (p.version != null) host.version = p.version;
       const reTray = !!tray;   // 열린 코멘트 목록은 닫지 않고 새 목록으로 다시 그린다
-      if (p.pins) { host.pins = p.pins; closePop(); }
+      if (p.pins) {
+        //  쓰던 그 자리 칸은 그 코멘트가 아직 목록에 있으면 그대로 둔다 — 번호만 새 목록에 맞춘다(점검 3-4). 없어졌으면 닫는다.
+        host.pins = p.pins;
+        if (popPin && host.pins.includes(popPin)) { S.active = host.pins.indexOf(popPin); placePop(); }
+        else { closePop(); S.active = -1; }
+      }
       if (p.general != null) host.general = p.general;
-      if (p.stall !== undefined && (p.stall ? p.stall.text + p.stall.resume : '') !== (host.stall ? host.stall.text + host.stall.resume : '')) {
+      const sk = (x: ReviewStall | null | undefined): string => (x ? x.text + '|' + x.resume + '|' + !!x.ask : '');
+      if (p.stall !== undefined && sk(p.stall) !== sk(host.stall)) {
         const was = !!host.stall; host.stall = p.stall; window.clearTimeout(S.waitTick);
-        if (was && !host.stall && host.waiting) S.waitT0 = Date.now();   // 다시 돌면 시계는 그때부터
+        if (was && !host.stall && host.waiting) S.waitT0 = p.waitSince || Date.now();   // 다시 돌면 시계는 그때부터
         tickWait();
       }
-      if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; closePop(); if (p.waiting) { S.waitT0 = Date.now(); tickWait(); } else window.clearTimeout(S.waitTick); }   // 도구는 그대로 — 고치는 중에도 짚는다
+      //  기다림이 시작돼도 · 끝나도 쓰던 칸은 닫지 않는다(점검 3-4) — 도구도 그대로(고치는 중에도 짚는다).
+      if (p.waiting != null && p.waiting !== host.waiting) { host.waiting = p.waiting; window.clearTimeout(S.waitTick); if (p.waiting) { S.waitT0 = p.waitSince || Date.now(); tickWait(); } }
+      else if (p.waitSince && p.waitSince !== S.waitT0 && host.waiting) { S.waitT0 = p.waitSince; window.clearTimeout(S.waitTick); tickWait(); }   // 앱빌더의 시계에 맞춘다(점검 3-10)
       paintBar(); paintMarks();
       if (reTray && tray && (p.pins || p.waiting != null)) openTray();
       if (p.note) { note.textContent = (host.version ? verName(host.version) + ' · ' : '') + p.note; note.hidden = false; window.clearTimeout(S.noteT); S.noteT = window.setTimeout(() => { note.hidden = true; }, 8000); }
@@ -397,13 +493,14 @@ export function openReview(host: ReviewHost): ReviewApi {
       closeTray(); closeTalk(); const w = frameWin(); if (w) w.postMessage({ __studio: 'clear' }, '*');
       //  AI 세션 화면은 부르는 쪽의 것이다 — 옮겨 왔으면 제자리로(막대와 함께 버리지 않는다).
       if (chatHome && host.chat.parentNode === talkBody) chatHome.parent.insertBefore(host.chat, chatHome.next && chatHome.next.parentNode === chatHome.parent ? chatHome.next : null);
-      talk.remove(); layer.remove(); bar.remove(); markReviewProbe(host.appId, false);
+      closeMenu(); talk.remove(); layer.remove(); bar.remove(); markReviewProbe(host.appId, false);
       if (host.onClose) host.onClose();
     },
     isOpen: () => !S.dead,
   };
   cur = api;
   paintBar(); paintMarks();
+  tickWait();   // 고치는 중에 열었다 — 보낸 때부터 이어서 센다(«AI 수정 중…» 에 멈춰 있지 않게 · 점검 3-10)
   if (location.hash !== host.route) location.hash = host.route;   // 셸이 그 화면을 연다(탭이 있으면 그 탭으로) — 층은 프레임이 보이면 거기 선다
   follow();
   return api;

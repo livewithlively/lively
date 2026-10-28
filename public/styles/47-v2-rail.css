@@ -700,7 +700,7 @@ button.v2-wspop-row { padding: 8px; gap: 12px; }
 .v2-ksp-t .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 700; line-height: 1.5; }
 .v2-ksp-ic { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--muted-2); stroke-width: var(--ic-stroke); stroke-linecap: round; stroke-linejoin: round; }
 .v2-ksp-h:hover .v2-ksp-ic { stroke: var(--blue); }
-.v2-ksp-h .v2-car { transition: transform .15s ease; }
+.v2-ksp-h .v2-car { transition: transform .15s ease; display: inline-grid; place-items: center; }   /* 글자를 칸 가운데에 — 돌려도 그 자리(감사 6-14 · 펼친 ˅ 가 6px 떠 있었다) */
 .v2-ksp.open > .v2-ksp-h .v2-car { transform: rotate(90deg); }
 .v2-ksp-h > .v2-cnt { flex: none; }
 .v2-ksp-edit { position: absolute; right: 5px; top: 50%; margin-top: -11px; width: 22px; height: 22px; display: none; place-items: center; border-radius: 6px; color: var(--muted); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line); text-decoration: none; }

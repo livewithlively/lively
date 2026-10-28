@@ -247,7 +247,12 @@ export interface SessionChatOpts {
   /** #4996 — 터미널로 열기 전에 «다른 사람이 이 세션을 터미널로 보고 있나» 를 열람 도장(v2/presence.ts)으로 확인한다.
    *  도장을 찍는 셸(v2/main.ts markViewedSessionSeen)이 있는 화면만 켠다 — 없는 화면(앱 시험 세션)은 답이 안 와 기다리기만 한다. */
   awaitViewers?: boolean;
+  /** 기록을 못 읽는 답(403 · 404)에 촘촘히 되묻지 않는다 — 셸 목록 밖의 세션 화면(앱빌더 ③ 시험 세션, 점검 3-12)이 켠다.
+   *  MISSING_GRACE 번 이어지면 안전망 주기(POLL_SAFETY_MS)로 물러난다 — 멈추지는 않는다(뜨는 중인 세션은 그 답이 «아직 없음» 이다).
+   *  읽히면 · 통보가 오면 다시 촘촘히. 죽은 세션의 403 만 그만 묻는다. 일반 세션 화면은 종전대로 묻는다. */
+  slowOnMissing?: boolean;
 }
+const MISSING_GRACE = 10;
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
   // ── 터미널이 지금 이 세션에 붙나 — **매 물음마다 지금의 행으로** 답한다(opts.terminalSrc 머리말) ──
@@ -1045,9 +1050,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  #4695 T5 — 하네스 종료 규칙이 끈 세션이면 쪽지로 왜 꺼졌는지 말하고, 쓰다 만 글·답을 기다리던 질문을 되돌린다(applyStopNote).
       const restored = applyStopNote();
       const note = stopNoteOf(target.raw?.stopNote);
-      view.setNote(restored.draft ? '보내지 못한 말을 입력칸에 돌려 두었어요 — 보내면 이 세션이 다시 열리고 그 말이 들어갑니다.'
-        : note ? `${stopNoteWhy(note)} — 아래에 말을 걸면 다시 띄워 이어서 답합니다.`
-        : `${why}이에요 — 아래에 말을 걸면 이어서 열립니다.`);
+      view.setNote(restored.draft ? '보내지 못한 말을 입력칸에 돌려 두었어요. 보내면 이 세션이 다시 열리고 그 말이 들어가요.'
+        : note ? `${stopNoteWhy(note)}. 아래에 말을 걸면 다시 띄워 이어서 답해요.`
+        : `${why}이에요. 아래에 말을 걸면 이어서 열려요.`);   // 해요체 · «—» 없이(점검 7-1)
       view.busy(false);
       return;
     }
@@ -1407,7 +1412,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  #4783 — 액자가 서버에게 들은 끝난 사유(end)로 부른다 — 없으면 목록 행의 것, 그것도 없으면 종전 말(«멈춰 있는»).
     const phrase = endedSessPhrase(end ? sessLikeOfFacts(end) : null) || endedSessPhrase(target.raw);
     const name = phrase || '멈춰 있는 세션';
-    view.setNote(canRevive() ? `${name}이에요 — 아래에 말을 걸면 이어서 열립니다.` : `${name}이에요 — 대화 기록만 남아 있어요.`);
+    view.setNote(canRevive() ? `${name}이에요. 아래에 말을 걸면 이어서 열려요.` : `${name}이에요. 대화 기록만 남아 있어요.`);
     emitView();   // #4996 — setMode('chat') 은 액자를 걷기 전에 불렸다(위) — 걷은 지금 다시 잰다
   }
 
@@ -1863,6 +1868,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let kickoffOpened = false;
   let pollTimer: number | null = null;
   let poking = false;                         // 깨워 둔 폴이 아직 안 돌았나(pokePoll — 밀어내기 방지)
+  let missing = 0;                            // 못 읽은 답(403 · 404)이 이어진 수 — slowOnMissing 이면 MISSING_GRACE 뒤로 느슨하게 묻는다
   let destroyed = false;
   let lastLineAt = 0;
   //  ★ #3699 — 서버가 «대화 파일이 자랐다» 를 밀어 주고 있나. 참일 때만 폴을 안전망 주기로 늦춘다.
@@ -2345,15 +2351,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  말 걸 곳 없는 화면을 본다(실제로 그렇게 헤맸다). 그래서 이 경우만 문구도 버튼도 다르다.
       const msg = livKickoff() && notYet ? (canType() ? '리브가 워크스페이스를 맞추고 있어요 — 답하신 내용과 올려 주신 자료를 읽는 중이에요. 잠시만요.'
           : '리브가 워크스페이스를 살펴보다 멈췄어요 — 시작하다 걸렸을 수 있어요. 터미널로 보기에 그 이유가 있습니다.')
-        : chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요 — 아래에 바로 말을 걸어 보세요.'
+        : chatFirst() && notYet && canType() ? '아직 주고받은 말이 없어요. 아래에 바로 말을 걸어 보세요.'
         : nodeMsg ? nodeMsg
         : !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
         //  ⚠ 죽은 세션에 «찾지 못했어요» 로 끝내지 않는다(#1631) — 하네스가 죽어도 래퍼는 **그 pane 에 사유를 적고
         //   세션을 살려 둔다**(catalog.ts harnessExitNotice: «이 세션은 살아 있습니다»). 실측 2026-08-31: 온보딩
         //   킥오프가 첫 실행 «폴더를 신뢰합니까?» 에 걸려 죽었고, 그 물음이 pane 에 그대로 떠 있었는데 화면은
         //   그걸 안 보여 줬다. 답이 한 화면 뒤에 있는데 사람은 «기록을 못 찾았다» 만 읽는다.
-        : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.'
-          : '주고받은 말이 없이 끝났어요 — 시작하다 멈췄을 수 있어요. 터미널 화면에 그 이유가 적혀 있습니다.')
+        : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인이나 확인 창에 멈춰 있는 것일 수 있어요. 터미널로 확인해 보세요.'
+          : '주고받은 말이 없이 끝났어요. 시작하다 멈췄을 수 있어요. 터미널 화면에 그 이유가 적혀 있어요.')
         : unreadable ? String(lastErr.message)
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
         : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
@@ -2605,6 +2611,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   되살린 세션은 기록의 마지막 줄이 오래돼 «도는 중» 이 첫 폴에서 접히고(poll 의 120초 유예) 3초 주기로 물러나며,
     //   통보(watchLive)는 새 컨테이너의 감시자가 서기 전엔 안 온다. 길어야 유예(8초)라 위 두 절감의 범위 밖이다.
     if (termWarm?.painted && deliveryPending() && src.kind === 'box') ms = Math.min(ms, POLL_RUN_MS);
+    //  점검 3-12 — 셸 목록 밖의 화면이 못 읽는 기록을 유예(MISSING_GRACE 번) 넘게 받았으면 안전망 주기로만 묻는다(통보 · pokePoll 은 그대로 깨운다).
+    if (opts.slowOnMissing && missing >= MISSING_GRACE) ms = Math.max(ms, POLL_SAFETY_MS);
     //  죽은 세션에는 **애초에 물을 것이 없다.** 중앙 기록은 더 안 늘고(옛 조건), 박스 파일은 대화가
     //   한 번도 없었으면(loadedTo === 0) 그 파일이 **생길 일 자체가 없다** — 세션이 죽었으니까.
     //   그런데도 3초마다 물어서 404 를 영원히 하나씩 뱉었다(#1631, 2026-08-31 실측: 즉사한 리브 세션 화면).
@@ -2623,6 +2631,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //   미루는 것은 다르다 — 여기서 필요한 것은 «120ms 안에 한 번» 이지 «마지막 통보로부터 120ms» 가 아니다.
     if (poking) return;
     poking = true;
+    missing = 0;                              // 파일이 자랐다는 통보 — 다시 촘촘히 묻는다
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = window.setTimeout(() => { poking = false; void poll(); }, 120);
   }
@@ -2634,7 +2643,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const src0 = src, from0 = loadedTo;
     try {
       let c = await rawGet(srcPath(src, { from: loadedTo }));
-      fails = 0;
+      fails = 0; missing = 0;
       if (destroyed) return;
       //  ★ 겹친 읽기는 버린다(#4794 시험 W26 이 드러냄). 깨운 읽기(pokePoll — 통보 · 하네스가 그린 순간)는 도는 읽기를 기다리지 않아
       //   같은 자리부터 두 번 읽을 수 있고, 둘 다 그리면 같은 줄이 두 번 선다(보낸 말이 두 번 보였다). 이 읽기가 도는 사이 다른 읽기가
@@ -2676,6 +2685,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const st = Number(e?.status);
       // '아직 없음'은 실패가 아니다 — 박스 파일은 첫 대화 뒤 생기고, 중앙 기록은 살아있는 세션이면 첫 턴이 끝나야 올라온다.
       const notYet = (st === 404 && src.kind === 'box') || ((st === 404 || st === 403) && src.kind === 'log' && !dead());
+      //  셸 목록 밖의 화면(slowOnMissing)은 못 읽는 기록을 촘촘히 되묻지 않는다(점검 3-12) — 유예 뒤로는 안전망 주기로 물러난다(schedule).
+      //   멈추지는 않는다: 뜨는 중인 세션은 403 · 404 가 «아직 없음» 이고(위 notYet), 매니지드 첫 부팅은 30초를 넘기기도 한다. 죽은 세션의 403 만 끝이다.
+      if (opts.slowOnMissing && (st === 403 || st === 404)) {
+        if (st === 403 && dead()) { src = null; return; }
+        missing++;
+      }
       if (notYet) { fails = 0; }
       else if (st === 409 && src.kind === 'box' && e?.message === 'node') {
         // 노드(그 컴퓨터) 세션(#1744) — 박스 경로는 영원히 409 다. 서버가 준 uuid(또는 행의 것)로 중앙 기록으로 갈아탄다. 모르면 멈춘다
@@ -2921,7 +2936,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         nextId = String(r?.session?.id || '');
         if (r?.mode === 'fallback' && r?.reason) toast(String(r.reason));
       }
-      if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
+      if (!nextId) throw new Error('새 세션 번호를 받지 못했어요.');
       // 이미 이어져 있던 것과 지금 새로 이어받은 것은 사람에게 **다른 사실**이다 — 문구를 가른다.
       //  #4917 — 서버가 «아직 살아 있다(already)» 고만 답하고 새로 띄운 것이 없으면 이어받은 게 아니다. 종전엔 그때도
       //   «이어받기 세션을 열었어요» 가 떠, 사람은 열렸다는데 화면이 그대로인 세션 앞에서 같은 말을 계속 보냈다.
