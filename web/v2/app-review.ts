@@ -64,7 +64,7 @@ function toolIcon(k: ReviewTool): HTMLElement {
 }
 const TOOLS: Array<{ k: ReviewTool; t: string; help: string }> = [
   { k: 'try', t: '써 보기', help: '직접 써 보면서 앱의 실제 동작을 확인해요.' },
-  { k: 'pick', t: '선택', help: '앱 안의 버튼 · 칸 · 글을 선택해요' },
+  { k: 'pick', t: '선택', help: '앱 안의 버튼, 칸, 글을 선택해요.' },
   { k: 'pin', t: '핀', help: '누른 자리에 핀을 꽂고 코멘트를 적어요.' },
   { k: 'box', t: '영역', help: '끌어서 상자를 그리면 그 영역 전체에 코멘트를 적어요.' },
 ];
@@ -96,7 +96,7 @@ export function openReview(host: ReviewHost): ReviewApi {
   //  「AI에게 말하기」(원준 2026-10-28 «앱 전체에 코멘트하는 텍스트박스를 누르면 아래에서 위로 올라오게 · AI와 대화하면서 물어보고 지정하고 수정»).
   //   옛 «앱 전체 코멘트» 칸(원준 2026-10-16 «바로바로 텍스트 쳐서»)의 자리다 — 묶어 보내는 앱 전체 코멘트는 「코멘트 n건」 칸의 「앱 전체」 줄에 그대로 있다.
   //   글이 길면 세로로 늘어난다(원준 2026-10-28 «한 줄로 고정 · 너무 불편») — Enter 보내기 · Shift+Enter 줄바꿈.
-  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 · 예: 글자 조금 크게', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요 · Shift+Enter 줄바꿈', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
+  const gen = growText({ class: 'v2-review-gen', placeholder: 'AI에게 말하기 (예: 글자 조금 크게)', label: 'AI에게 말하기', title: '이 앱을 만드는 AI와 대화하며 수정해요. 줄을 바꾸려면 Shift+Enter를 눌러요.', max: host.dock ? 2 : 4,   // 세션 위젯 꼴은 문패 줄에 얹혀 있어 두 줄까지
     onEnter: () => { void say(); }, onEscape: () => { closeTalk(); gen.blur(); } });
   gen.addEventListener('focus', () => openTalk());
   const note = el('span', { class: 'v2-review-note', hidden: true });
@@ -140,7 +140,7 @@ export function openReview(host: ReviewHost): ReviewApi {
     const n = cmCount();
     tools.replaceChildren(...TOOLS.map((x) => { const b = el('button', { type: 'button', role: 'tab', class: x.k === S.tool ? 'on' : '', 'aria-selected': x.k === S.tool ? 'true' : 'false', title: x.t + '\n' + x.help, onclick: () => setTool(x.k) }, toolIcon(x.k), el('span', { text: x.t })) as HTMLButtonElement; return b; }));   // 고치는 중에도 짚는다 — 다음 「수정하기」 몫(원준 2026-10-28)
     const blank = host.pins.filter((p) => !p.note.trim()).length;
-    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank : '');
+    count.textContent = '코멘트 ' + n + '건' + (blank ? ' · 빈 코멘트 ' + blank + '건' : '');
     count.title = '적은 코멘트 · 앱 전체 코멘트';
     send.textContent = host.waiting ? 'AI 수정 중…' : '수정하기' + (n ? ' · ' + n + '건' : '');
     send.disabled = host.waiting || n === 0; like.disabled = host.waiting;
@@ -291,7 +291,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       }
       //  보낸 코멘트(반영 중)는 흐리게 · 눌러도 칸을 열지 않는다 — 고칠 수 없다(이미 AI 에게 갔다).
       const n = el('button', { type: 'button', class: 'v2-studio-mk v2-studio-mk-n' + (p.kind === 'pick' || p.kind === 'box' ? '' : ' pin') + (hot ? ' hot' : '') + (p.sent ? ' sent' : ''),
-        title: p.sent ? 'AI가 반영하고 있어요 · ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트 · 반영 중' : '번 코멘트 열기'),
+        title: p.sent ? 'AI가 반영하고 있어요. ' + (p.note || p.where || '') : p.note || p.where || '', 'aria-label': (i + 1) + (p.sent ? '번 코멘트, 반영 중' : '번 코멘트 열기'),
         onclick: (e: MouseEvent) => { e.stopPropagation(); if (!p.sent && S.tool !== 'try') openPop(host.pins.indexOf(p)); } }, el('span', { text: String(i + 1) }));
       n.style.left = q.x * 100 + '%'; n.style.top = q.y * 100 + '%';
       layer.append(n);
@@ -368,7 +368,7 @@ export function openReview(host: ReviewHost): ReviewApi {
       row.addEventListener('pointerenter', () => mark(host.pins.indexOf(p)));
       return row;
     });
-    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: host.general,
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 (예: 글자 조금 크게)', label: '앱 전체 코멘트', value: host.general,
       onInput: (v) => { host.general = v; changed(); }, onEnter: () => g.blur(), onEscape: () => closeTray() });
     taOf.set(g, 'all');
     trayHead = el('b');
@@ -380,7 +380,7 @@ export function openReview(host: ReviewHost): ReviewApi {
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '접기', onclick: () => closeTray() })),
       //  앱 전체 의견 칸은 머리 바로 아래 — 짚은 자리 줄들보다 위(원준 2026-10-15 «텍스트 박스 위치가 그 윗줄에 보낼 의견 아래에»)
       list,
-      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료, Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }), traySend)];
     //  이미 열려 있으면 그 상자를 그대로 두고 속만 간다 — 세션 위젯 꼴의 고정 자리(--fixed · 위치)가 남는다.
     if (tray) tray.replaceChildren(...kids);
     else {

@@ -20,7 +20,7 @@ import { confirmPublish } from './publish-preview.js';   // #4732 공개 전에 
 import { closeAppStudio, dropStudioRec, ensureAppServer, openAppStudio, openAppStudioFor, patchManifest, studioRecBuildingFor, studioRecs, studioUiOnly } from './app-studio.js';
 import { readPadHidden, togglePadHidden } from './apps.js';
 import { padTileId } from '../lib/pad-hidden.js';
-import { PLACE, verJ, verName, type StudioPlace } from '../lib/studio-flow.js';
+import { PLACE, verJ, verName, versionNote, type StudioPlace } from '../lib/studio-flow.js';
 import { builderRoute, builderSeeRoute, builderTabTitle, builderSessionName, builderSessionWhat, draftStageText, isBuilderSession, isBuildingSession, isEditSessionLabel, parseBuilderHash, parseBuilderRoute, type BuilderWhere } from '../lib/builder-flow.js';
 import { renderAppSpec } from './app-spec-page.js';   // #4632 앱 「개발 정보」
 import { purgeSessionRecord, sessionTrashOp } from '../session-actions.js';   // #4632 앱빌딩 세션은 완전 삭제(지난 세션 · 휴지통에 두면 다시 「만들던 앱」 에 선다)
@@ -482,7 +482,7 @@ function paintPanel(v: View, a: BApp | null, m: { id: string; name: string }, hi
     const rows = vs.slice().sort((x, y) => y.version_no - x.version_no);
     //  #4667 is_current = 내가 지금 보는 판 · is_published = 모두가 쓰는 판. 「이 판으로」 는 배포 설정이라 공개 앱이면 그 판을 바로 모두의 판으로(고칠 수 있는 사람).
     const pubIt = a.visibility === 'all' && a.canEdit;
-    vers.replaceChildren(...(rows.length ? rows.slice(0, 8).map((x) => el('div', {}, el('b', { text: verName(x.version_no) }), el('span', { text: (x.note || '').trim() || (x.version_no === 1 ? '처음 만듦' : '고침') }),
+    vers.replaceChildren(...(rows.length ? rows.slice(0, 8).map((x) => el('div', {}, el('b', { text: verName(x.version_no) }), el('span', { text: versionNote(x.note) || (x.version_no === 1 ? '처음 만듦' : '고침') }),
       x.is_published && !x.is_current ? el('small', { text: '공개 버전' }) : null,
       x.is_current ? el('small', { text: a.visibility === 'all' && x.is_published ? '지금 쓰는 버전 · 공개' : '지금 보는 버전' })
         : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '이 버전으로', onclick: async () => {

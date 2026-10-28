@@ -107,7 +107,7 @@ export function nodeOptions(nodes: RunNode[]): NodeOpt[] {
     { v: NODE_CENTRAL, t: '중앙 컴퓨터', off: false },
     ...nodes.map((n) => ({
       v: n.id,
-      t: nodeName(nodes, n.id) + (n.shared ? ' (공유)' : '') + (!n.online ? ' — 지금 꺼짐' : !nodeCanRunAi(n) ? ' — AI 를 못 찾음' : ''),
+      t: nodeName(nodes, n.id) + (n.shared ? ' (공유)' : '') + (!n.online ? ' (지금 꺼짐)' : !nodeCanRunAi(n) ? ' (AI를 못 찾음)' : ''),   // «—» 대신 괄호(점검 7-1)
       off: !nodeUsable(n),
     })),
   ];

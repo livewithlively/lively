@@ -20,6 +20,7 @@
 //   · 사본 = /apps/:id/pull → id · 이름을 바꿔 /apps/save {origin_app_id} — 원본 · 만든 사람은 서버 기록(#4667). 판 = fetchAppVersions · revertApp.
 import { api, apiUrl, el, toast, TOKEN_KEY } from '../core.js';
 import { spawnSession } from './quick-session.js';
+import { memberName } from './builder-model.js';   // ⑤ 「이렇게 시작했어요」 의 만든 사람 — 계정 아이디가 아니라 표시 이름(점검 6-5 · 명부는 앱빌더 목록이 받아 둔다)
 import { takeCreated } from './created-cache.js';
 import { reloadAppFrames } from './app-ui.js';
 import { growText } from './grow-text.js';   // 코멘트 칸 — 글이 길면 세로로 늘어난다
@@ -38,7 +39,7 @@ import { BUILDER_PROJECT_NAME, builderRoute, builderSessionLabel } from '../lib/
 import type { SessionChatHandle } from '../session-chat.js';
 import type { WireBoard } from './wire-board.js';   // 형만 — 보드는 열 때 늦게 들여온다(openWireframe)
 import { restorePath } from '../lib/restore-force.js';
-import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, draftAsked, parseNotify, plainNote, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, nextCopyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
+import { CARD_ROWS, DRAFT_STEPS, ICON_COLORS, ICON_GLYPHS, PLACE, STAGES, WIREFRAME_PATH, verArrived, verJ, verName, assistantTexts, cardText, checkBrief, draftAsked, parseNotify, plainNote, versionNote, josa, systemNote, verPlan, talkBrief, unsent, copyBrief, copyId, nextCopyId, draftBrief, editBrief, emptyCard, fixBrief, freshApps, iconBrief, iconSpec, nextStageOpen, notifyBrief, parseCard, parseCheck, parseIcon, parseLimit, parseStep, planBrief, reachedOf, refView, resumeBrief, runStall, splitList, stageIndex, stageTabs, STALL_MS, type CardExtra, type RunStall, type StudioCard, type StudioIcon, type StudioPin, type StudioPlace, type StudioStage } from '../lib/studio-flow.js';
 import { REC_MAX, mergeRec, trimRecs } from '../lib/studio-rec.js';   // 기록 한도 · 두 탭 합치기(감사 1-8 · 1-9)
 import { appGlassIcon, builtinAppIcon, registerAppIcon } from './glass-icon.js';   // ④ 아이콘 — 고르는 그림을 사이드바 · 세션 위젯 · 앱 찾기 꼴로 미리 그린다
 import { icon } from './icons.js';
@@ -98,7 +99,7 @@ export const PROJECT_NAME = BUILDER_PROJECT_NAME;   // #4632 — 앱빌더가 �
 const EXAMPLE: { what: string; card: StudioCard } = { what: '주간 회의 안건을 모으고 끝난 것 표시', card: { name: '회의 안건', who: '회의를 준비하는 사람과 참석자 모두', items: '안건 제목 · 회의 날짜 · 끝남 표시', can: ['안건 더하기', '회의별로 모아 보기', '끝난 것 접기'], not: '회의록 쓰기 · 알림 보내기', first: '이번 회의 안건 목록(안 끝난 것 먼저)' } };
 
 // ① 설명칸 — 예시는 칸 안 안내글 하나로만(원준 2026-10-14 «예시로 채우기 · 적어 두면 좋은 것 다 빼»).
-const DESC_PH = '예: 회의록을 음성 파일로 주면 이를 음성 파일을 전사하고 내용을 요약해서 정리해주면 좋겠어요. 회의록을 정리하는 형식을 사용자가 개인화 할 수 있으면 좋겠어요. 앱 화면에서는 이전의 회의록이 날짜별로 정리되어있으면 좋겠고, 해당 날짜의 회의록을 누르면 정리본이 나오면 좋겠어요. AI 세션의 사이드바에서는 기존의 회의록을 찾고 그 회의록 정리본을 제가 참고하거나, AI 세션에 한 번에 집어넣을 수 있도록 하고 싶어요.';
+const DESC_PH = '예: 회의 음성 파일을 올리면 글로 받아 적고 내용을 요약해서 정리해 주면 좋겠어요. 회의록을 정리하는 형식을 사용자가 개인화할 수 있으면 좋겠어요. 앱 화면에서는 이전의 회의록이 날짜별로 정리되어 있으면 좋겠고, 해당 날짜의 회의록을 누르면 정리본이 나오면 좋겠어요. AI 세션의 사이드바에서는 기존의 회의록을 찾고 그 회의록 정리본을 제가 참고하거나, AI 세션에 한 번에 집어넣을 수 있도록 하고 싶어요.';
 const firstLine = (s: string): string => String(s || '').split('\n')[0].trim();
 // 앱 만들기 세션의 AI · 모델 · 생각 깊이 — 사람이 고르지 않고 여기서 정한다(원준 2026-10-14). 하네스마다의 값과 고르는 순서는 lib/studio-ai 가 정본이다(#4632 2026-10-26 —
 //  Codex 나 다른 AI 하나만 연결한 사람도 그 AI 의 «claude opus · 높음» 급으로 연다). 카탈로그에 없는 값이면 그 축은 안 넘긴다(AI 설정 그대로).
@@ -141,8 +142,8 @@ async function studioAi(nodes: RunNode[], nodeId: string): Promise<StudioAi> {
   const h = findHarness(hs, harness);
   const flags = studioAiFlags(harness, flagChoices(h, '--model'), (m) => effortChoices(h, m));
   const name = harness === 'claude' ? 'Claude' : (h?.label || harness);
-  const model = flags['--model'] ? name + ' ' + prettyModel(flags['--model']).replace(/^Gpt\b/, 'GPT') : name + ' · 모델은 AI 설정 그대로';
-  return { harness, flags, chip: model + (flags['--effort'] ? ' · 생각 깊이 ' + effortKo(flags['--effort']) : '') };
+  const model = flags['--model'] ? name + ' ' + prettyModel(flags['--model']).replace(/^Gpt\b/, 'GPT') : name + '(모델은 AI 설정 그대로)';
+  return { harness, flags, chip: model + (flags['--effort'] ? ', 생각 깊이 ' + effortKo(flags['--effort']) : '') };   // «·» 로 잇지 않는다(점검 7-2)
 }
 
 // ── 기록(이 브라우저) ─────────────────────────────────────────────────────────────────────
@@ -281,7 +282,7 @@ export async function ensureAppServer(appId: string, onProgress?: (text: string)
       toast(why + ' 기록은 만들기 세션의 AI에게 보냈어요.', true);
       return false;
     }
-    const line = '서버 빌드 중 · ' + Math.round((Date.now() - t0) / 1000) + '초' + (b && b.now ? ' · ' + String(b.now).slice(0, 80) : '');
+    const line = '서버를 빌드하고 있어요(' + Math.round((Date.now() - t0) / 1000) + '초).' + (b && b.now ? ' 지금 하는 일: ' + String(b.now).slice(0, 80) : '');   // «·» 로 잇지 않는다(점검 7-2)
     if (onProgress) onProgress(line);
     else if (Date.now() - told >= 30_000) { told = Date.now(); toast(line); }
     if (late()) { toast('서버 빌드가 12분 넘게 끝나지 않아 기다리기를 멈췄어요. 상태는 앱빌더에서 다시 볼 수 있어요.', true); return false; }
@@ -429,7 +430,7 @@ export async function openAppStudioFor(app: { id: string; title: string; by: str
     forgetAiLogins(); const ai = await studioAi([], '');
     const run: RunPick = { harness: ai.harness, flags: ai.flags, node: '', mode: 'normal', autoApprove: sessionDefaults().autoApprove, writeVis: '' };
     const s = await spawnSession(brief, { ...(pid > 0 ? { projectId: pid } : { projectName: PROJECT_NAME }), run, label: builderSessionLabel(target.title, how) });
-    if (!s) { toast('세션을 열지 못했어요', true); closeAppStudio(); return; }
+    if (!s) { closeAppStudio(); return; }   // 까닭은 spawnSession 이 이미 알렸다 — 같은 알림을 두 번 띄우지 않는다(점검 7-1)
     //  #4667 이 세션이 이 앱의 만들기 세션 — 내가 책임자인 앱(내 사본 · 내가 만든 앱)이면 서버가 잇고, 남의 원본이면 그대로 둔다.
     void api('/api/ui/apps/build-start', { method: 'POST', body: JSON.stringify({ session_id: s.id, app_id: target.id }) }).catch(() => { /* 못 이어도 고치기는 된다 */ });
     const rec: StudioRec = { sid: s.id, pid, what: target.title, place, appId: target.id, known, at: Date.now(), stage: 'fix', round: 0, from: 0, mode: how, origin: { id: app.id, title: app.title, by: app.by }, title: target.title, card: null, named: true };
@@ -451,6 +452,14 @@ function askCopy(r: HTMLElement, title: string): Promise<'edit' | 'new' | null> 
   });
 }
 
+/** 여러 줄 글 — 줄마다 한 덩이(빈 줄은 건너뛴다). «·» 로 이어 붙이던 요약을 줄로 나눈다(점검 7-2). */
+function lineP(...lines: string[]): HTMLElement {
+  const xs = lines.filter((x) => x && x.trim());
+  return el('p', {}, ...xs.flatMap((x, k) => (k ? [el('br'), document.createTextNode(x)] : [document.createTextNode(x)])));
+}
+/** «…예요» · «…이에요» — 끝 글자 받침으로(둘 다예요 · 세션 위젯이에요 · 앱 화면이에요). */
+function copula(w: string): string { return josa(w, '이') === w + '이' ? w + '이에요' : w + '예요'; }
+
 // ── 처음 안내 — 세 장 · 둘러보기 · 단계 말풍선 ────────────────────────────────────────────
 function showIntro(onStart: () => void, onTour: () => void): void {
   if (!root) return;
@@ -458,7 +467,7 @@ function showIntro(onStart: () => void, onTour: () => void): void {
   const close = (): void => { markSeen((s) => { s.intro = 1; }); ov.remove(); };
   const cards = [
     { pic: 'talk', t: '대화하며 앱을 만들어요', s: '코드를 볼 필요 없이, AI와 대화하며 필요한 앱을 만들 수 있어요.' },
-    { pic: 'steps', t: '따라가다보면 자연스럽게 생성돼요', s: '라이블리가 창에 띄운 단계를 자연스럽게 따라가다보면 자연스럽게 완성돼요' },
+    { pic: 'steps', t: '단계를 따라가다 보면 완성돼요', s: '라이블리가 창에 띄운 단계를 차례로 따라가다 보면 앱이 저절로 만들어져요.' },
     { pic: 'share', t: '팀에게 공유할 수도 있어요', s: '나만 쓸 수도 있고, 원한다면 팀원들이 함께 사용하도록 공유할 수 있어요.' },
   ];
   // 그림은 글자 대신 작은 장면 — 대화 → 앱 · 단계 바를 따라 누름 · 나 → 앱 → 팀원(건너뛰기는 「시작하기」 와 하는 일이 같아 걷었다)
@@ -1083,8 +1092,9 @@ async function build(rec: StudioRec): Promise<void> {
   //  #4667 머리줄의 판 글 — 「n판 · 나만 보는 초안」(공개 전) · 「n판 · 초안 · 공개 판은 m판」(공개한 앱을 내가 고침) · 「n판 · 공개됨」.
   const paintVis = (): void => {
     const v = S.vis;
-    const state = !v ? '' : v.visibility === 'me' ? '비공개' : v.draftMine ? '비공개 · 공개 버전은 ' + verName(v.publishedNo) : '공개됨';
-    ver.textContent = verName(S.curVer) + (state ? (S.curVer ? ' · ' : '') + state : '');
+    //  «V5 비공개(공개 버전은 V3)» — «·» 로 상태를 잇지 않는다(점검 7-2)
+    const state = !v ? '' : v.visibility === 'me' ? '비공개' : v.draftMine ? '비공개(공개 버전은 ' + verName(v.publishedNo) + ')' : '공개됨';
+    ver.textContent = verName(S.curVer) + (state ? (S.curVer ? ' ' : '') + state : '');
     ver.title = !v ? '' : v.visibility === 'me' ? '나만 볼 수 있어요' : v.draftMine ? '이 버전은 나만 볼 수 있어요. 다른 사람은 ' + verJ(v.publishedNo, '을') + ' 써요.' : '워크스페이스 모두가 이 버전을 써요';
     pubBtn.hidden = !v || !v.canPublish || !(v.draftMine || (v.visibility === 'me' && !!rec.done));
   };
@@ -1228,14 +1238,14 @@ async function build(rec: StudioRec): Promise<void> {
         el('span', { class: 'w', text: (p.sent ? '반영 중 · ' : '') + (wire ? '와이어프레임 · ' : '') + (p.kind === 'pick' ? '요소 ' : p.kind === 'box' ? '영역 ' : '핀 ') + (p.where || '') }), inp,
         p.sent ? null : el('button', { type: 'button', class: 'x', text: '✕', title: '이 코멘트 지우기', onclick: () => { const j = S.pins.indexOf(p); if (j < 0) return; S.pins.splice(j, 1); rec.pins = S.pins; saveRec(rec); paintTray(); paintNow(); if (S.review) S.review.update({ pins: S.pins }); syncBoard(); } }));
     });
-    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 · 예: 글자 조금 크게', label: '앱 전체 코멘트', value: S.general,
+    const g = growText({ class: 'v2-studio-tray-in', placeholder: '앱 전체 코멘트 (예: 글자 조금 크게)', label: '앱 전체 코멘트', value: S.general,
       onInput: (v) => { S.general = v; paintNow(); if (S.review) S.review.update({ general: S.general }); }, onEnter: () => g.blur() });
     trayOf.set(g, 'all');
     //  「수정하기」 는 목록 맨 아래에(실제 화면 막대의 목록과 같은 자리) — 안내 글 속에 넣었던 단추다(점검 6-12 · 글에는 이름만). 글 · 눌림은 syncFixIn 이 맞춘다.
     const list = el('div', { class: 'v2-studio-tray-list' }, el('div', { class: 'v2-studio-tray-row all' }, el('span', { class: 'w', text: '앱 전체' }), g), ...rows);   // 앱 전체 칸은 머리 바로 아래(원준 2026-10-15)
-    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '실제 화면에서 번호를 누르면 그 자리를 보여줘요.' : '실제 화면에서 선택 · 핀 · 영역으로 코멘트를 남기면 여기 모여요 · 앱 전체에 주는 코멘트는 바로 적어도 돼요' })),
+    tray.replaceChildren(el('div', { class: 'v2-studio-tray-h' }, el('b', { text: '코멘트' + (cmCount() ? ' · ' + cmCount() + '건' : '') }), el('span', { class: 'v2-studio-sp' }), el('small', { text: S.pins.length ? '실제 화면에서 번호를 누르면 그 자리를 보여줘요.' : '실제 화면에서 선택, 핀, 영역으로 코멘트를 남기면 여기 모여요. 앱 전체에 주는 코멘트는 바로 적어도 돼요.' })),
       list,
-      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료 · Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }),
+      el('div', { class: 'v2-studio-tray-f' }, el('small', { text: 'Enter 완료, Shift+Enter 줄바꿈' }), el('span', { class: 'v2-studio-sp' }),
         el('button', { class: 'v2-studio-now-pri v2-studio-fix-in', type: 'button', onclick: () => { void sendFix(); } })));
     syncFixIn();
     list.scrollTop = keepScroll;
@@ -1285,7 +1295,7 @@ async function build(rec: StudioRec): Promise<void> {
       //   멈춤 줄은 까닭에 맞춘다 — AI 가 확인을 기다리면 이어서 수정할 일이 아니라 답할 일이다(점검 3-7).
       ...(S.waiting ? [S.stall ? el('div', { class: 'v2-studio-hub-wait' }, el('span', { text: S.stall === 'ask' ? 'AI가 확인을 기다리고 있어요. 위 「AI 세션 보기」를 눌러 답해 주세요.' : (stallInfo() || { resume: false }).resume ? '위 막대에서 까닭을 보고 이어서 수정할 수 있어요.' : '위 막대에서 까닭을 확인해 주세요.' }))
         : el('div', { class: 'v2-studio-hub-wait' }, el('span', { class: 'v2-studio-spin', 'aria-hidden': 'true' }), el('span', { text: '다음 버전이 나오면 화면이 바뀌어요. 그동안 다음 코멘트를 남겨 둘 수 있어요.' }))] : []), go,
-      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여줍니다.' })),
+      el('button', { class: 'v2-studio-wf-btn', type: 'button', onclick: () => { void openWireframe(); } }, el('b', { text: '와이어프레임(화면 흐름) 보기' }), el('small', { text: '화면에서 무엇을 누르면 다른 어느 화면으로 이어지는지 보여 줘요.' })),
       tray));
     paintTray(keep); syncFixIn();
     if (S.waiting) { if (openCoach && openCoach.key === 'draft') closeCoach(); }   // 고침을 보냈다 — 첫 안내는 할 일을 다 했다
@@ -1705,15 +1715,20 @@ async function build(rec: StudioRec): Promise<void> {
   const paintPut = (): void => {
     const h = appHost(); const c = rec.card; const placeName = PLACE[rec.place].title; const title = S.title;
     const steps: HTMLElement[] = [
-      el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : '이렇게 부탁했어요' }), el('p', { text: rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + rec.origin.by + ' 님이 만듦)' : '') + '의 사본 · ' + placeName : '「' + firstLine(rec.what) + '」 · ' + placeName })),
-      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), el('p', { text: c.who + ' · 저장하는 정보: ' + c.items + ' · 주요 기능: ' + c.can.join(' · ') })) : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI가 세션에서 만들었어요' }), el('p', { text: '수정할 때마다 버전이 하나씩 올라가요(초안 → V2 → V3).' })),
+      //  «·» 로 절을 잇지 않고 줄을 나눈다(점검 7-2) · 고치기는 부탁 글이 아니라 「앱」을 고쳤다고(점검 7-3 — «이렇게 부탁했어요 「메모」» 였다)
+      el('div', { class: 'v2-studio-step' }, el('b', { text: rec.mode === 'copy' ? '이렇게 시작했어요' : rec.mode === 'edit' ? '이렇게 고쳤어요' : '이렇게 부탁했어요' }),
+        lineP(rec.mode === 'copy' && rec.origin ? '「' + rec.origin.title + '」' + (rec.origin.by ? '(' + memberName(rec.origin.by) + ' 님이 만든 앱)' : '') + '의 사본으로 시작했어요.'
+          : rec.mode === 'edit' ? josa('「' + (title || rec.origin?.title || '') + '」', '을') + ' 고쳤어요.' : '「' + firstLine(rec.what) + '」',
+        '쓰는 자리는 ' + copula(placeName) + '.')),
+      c ? el('div', { class: 'v2-studio-step' }, el('b', { text: '기획 카드로 정했어요' }), lineP('쓰는 사람: ' + c.who, '저장하는 정보: ' + c.items, '주요 기능: ' + c.can.join(', ')))
+        : el('div', { class: 'v2-studio-step' }, el('b', { text: 'AI가 세션에서 만들었어요' }), el('p', { text: '수정할 때마다 버전이 하나씩 올라가요(초안 → V2 → V3).' })),
     ];
     const list = el('div', { class: 'v2-studio-steps-list' }, ...steps);
     //  공개 상태를 못 읽은 채 왔다 — 한 번 더 읽어 보고, 읽히면 그 상태로 다시 그린다(못 읽으면 «확인하지 못했어요» 그대로).
     if (!S.vis && rec.appId) void readVis(rec.appId).then((v) => { if (v && !S.dead && rec.stage === 'put') { S.vis = v; paintVis(); paintNow(); paintPut(); } });
     fetchAppVersions(rec.appId).then((vs) => {
       if (S.dead) return; const rows = vs.slice().sort((a, b) => a.version_no - b.version_no);
-      const vrow = (v: { version_no: number; note: string | null; saved_at: string }): HTMLElement => el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('b', { text: verName(v.version_no) }), el('p', { text: (v.note || '').trim() || (v.version_no === 1 ? '처음 만듦' : '고침') }), el('small', { text: whenText(v.saved_at) }));
+      const vrow = (v: { version_no: number; note: string | null; saved_at: string }): HTMLElement => el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('b', { text: verName(v.version_no) }), el('p', { text: versionNote(v.note) || (v.version_no === 1 ? '처음 만듦' : '고침') }), el('small', { text: whenText(v.saved_at) }));
       const vr = rows.length <= 8 ? rows.map(vrow) : [vrow(rows[0]), el('div', { class: 'v2-studio-step v2-studio-step--ver' }, el('p', { text: '… ' + (rows.length - 7) + '번 더 고쳤어요' })), ...rows.slice(-6).map(vrow)];
       vr.forEach((n) => list.append(n));
       //  #4667 공개 상태대로 말한다 — 공개(모두) · 나만 보는 앱 · 공개한 앱에 둔 내 초안.
