@@ -3,17 +3,25 @@
 //   두 타이머는 body.isConnected 로 '이 패널이 아직 DOM 에 붙어 있나'를 매 tick 확인하고, 아니면 스스로
 //   멈춘다(섹션 이동 시 누수 방지). 타이머 변수는 embeddingsEditor 지역이라 모듈 전역 상태가 없다 —
 //   패널을 다시 그리면 새 클로저가 새 타이머를 쥐고, 옛 타이머는 isConnected=false 를 보고 끝난다.
-import { absTime, api, cardHead, el, fmtNum, toast, uiText } from './core.js';
-import { field } from './ui-primitives.js';
+import { absTime, api, cardHead, el, fmtNum, replaceKids, toast, uiText } from './core.js';
 import { sectionHead } from './admin-widgets.js';
+import { dlvBox } from './lib/dlv.js';
 
-function embeddingsEditor(detail, data) {
+//  #5159 — 한 화면에 들도록 2단으로 다시 짰다: 왼쪽 「연결」(설정 폼) · 오른쪽 「지금 상태」(지식·프로젝트 임베딩 수 + 백필).
+//   성능 조절 세 칸(배치·타임아웃·메모리 게이트)은 접힘으로 — 처음 켤 때 손댈 일이 없는 값이다.
+//   bare 면 머리(sectionHead)·카드를 그리지 않는다 — [AI 주입 설정] 세부 페이지가 자기 머리를 그린다.
+function embeddingsEditor(detail, data, opts: { bare?: boolean } = {}) {
   const canEdit = !!data.canEdit;
-  const body = el('div');
-  detail.replaceChildren(
+  const body = el('div', { class: 'emb-body' });
+  if (opts.bare) replaceKids(detail, body);
+  else replaceKids(detail,
     sectionHead('의미 검색 (임베딩)', 'AI와 사람이 지식을 단어가 아니라 뜻으로 찾게 합니다. 꺼 두면 단어가 그대로 들어간 지식만 찾습니다.'),
     el('div', { class: 'card' }, cardHead('의미 검색 상태와 설정'), body));
   body.append(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+
+  // 라벨 + 칸 + 힌트 한 줄 — 짧은 칸은 .dlv-frow 로 한 줄에 둘·셋씩 세운다.
+  const fld = (label, ctrl, hint?) => el('label', { class: 'dlv-f' },
+    el('span', { class: 'dlv-f-l', text: label }), ctrl, hint ? el('span', { class: 'dlv-f-h' }, ...uiText(hint)) : null);
 
   let pollTimer: any = null;
   const stopPoll = () => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
@@ -26,7 +34,7 @@ function embeddingsEditor(detail, data) {
   // 일시중지/재개 토글 + 상태 배너. paused=true 면 코랄 경고(자동·수동 백필 모두 멈춤), false 면 평상 힌트.
   function renderPauseControl(paused, region) {
     if (!region) return;
-    const btn = el('button', { class: 'btn btn-sm', text: paused ? '자동 백필 재개' : '자동 백필 일시중지' });
+    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: paused ? '자동 백필 재개' : '자동 백필 일시중지' });
     btn.disabled = !canEdit;
     const note = el('div');
     if (paused) {
@@ -35,8 +43,8 @@ function embeddingsEditor(detail, data) {
         el('div', { text: '⏸ 자동 임베딩 백필이 일시중지되었습니다.' }),
         el('div', { text: '자동 스윕(부팅·10분 주기·동기화 후·저장 시)과 수동 백필이 모두 멈춰 있습니다. 새로 쌓이는 미임베딩은 재개할 때까지 채워지지 않습니다(그동안 검색은 grep 폴백으로 동작). 재개하면 그동안 밀린 항목을 이어서 채웁니다. 이 설정은 게이트웨이 재시작 후에도 유지됩니다.' }));
     } else {
-      note.className = 'admin-hint';
-      note.textContent = '자동 백필이 켜져 있습니다(정상 동작). 성능 등의 이유로 멈추려면 일시중지하세요 — 실행 중이던 백필도 곧 멈춥니다.';
+      note.className = 'dlv-box-hint';
+      note.textContent = '새로 쌓이는 미임베딩을 백그라운드에서 채우는 중입니다. 성능에 부담이 되면 일시중지합니다.';
     }
     btn.addEventListener('click', async () => {
       btn.disabled = true;
@@ -46,14 +54,13 @@ function embeddingsEditor(detail, data) {
         load(); // paused 상태·양쪽 백필 버튼 게이트를 한번에 재계산
       } catch (e: any) { toast(e.message, true); btn.disabled = false; }
     });
-    region.replaceChildren(note,
-      canEdit ? el('div', { class: 'admin-actions' }, btn) : el('p', { class: 'admin-hint' }, ...uiText('※ 편집은 관리자만 가능합니다.')));
+    replaceKids(region, note, canEdit ? el('div', { class: 'dlv-box-acts' }, btn) : null);
   }
 
   async function load() {
     let st;
     try { st = await api('/api/ui/org/embeddings'); }
-    catch (e: any) { body.replaceChildren(el('p', { class: 'admin-hint', text: '상태를 불러오지 못했습니다: ' + e.message })); return; }
+    catch (e: any) { replaceKids(body, el('p', { class: 'dlv-note', text: '상태를 불러오지 못했습니다: ' + e.message })); return; }
     buildOnce(st);
   }
 
@@ -85,7 +92,7 @@ function embeddingsEditor(detail, data) {
     const backfillMinIn = el('input', { class: 'input emb-num', type: 'number', min: '0', max: '1048576', placeholder: '0  (끔; 16GB 박스 권장 4096~5000)' });
     backfillMinIn.value = String(cfg.backfill_min_available_mb || 0); backfillMinIn.disabled = !canEdit;
 
-    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' }); saveBtn.disabled = !canEdit;
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '설정 저장' }); saveBtn.disabled = !canEdit;
     const saveSt = el('span', { class: 'admin-status' });
     saveBtn.addEventListener('click', async () => {
       saveBtn.disabled = true; saveSt.textContent = '';
@@ -110,43 +117,40 @@ function embeddingsEditor(detail, data) {
 
     // #688 설정 출처 안내 — env 시드로 도는지 / 명시적 off 인지(관리탭 저장과 .env 의 우선순위 혼동 방지).
     const srcNote = st.config_source === 'env'
-      ? el('p', { class: 'admin-hint' }, ...uiText('현재 설정은 서버 환경변수(.env EMBEDDINGS_*) 시드로 동작 중입니다 — 여기서 저장하면 관리탭(DB) 설정이 우선하게 됩니다.'))
+      ? el('p', { class: 'dlv-note' }, ...uiText('지금은 서버 환경변수(.env EMBEDDINGS_*)로 동작 중입니다 — 여기서 저장하면 이 설정이 우선합니다.'))
       : st.config_source === 'db-off'
-        ? el('p', { class: 'admin-hint' }, ...uiText('관리탭에서 명시적으로 꺼둔 상태입니다 — 서버 .env 의 EMBEDDINGS_* 시드는 무시됩니다(다시 켜려면 여기서 켜기 저장).'))
+        ? el('p', { class: 'dlv-note' }, ...uiText('여기서 꺼 둔 상태입니다 — 서버 .env 의 EMBEDDINGS_* 값은 무시됩니다.'))
         : null;
 
     const statusRegion = el('div');
     const projectRegion = el('div');
     pauseRegion = el('div'); // #1060 — updateStatus 가 st.backfill_paused 로 채운다(초기·폴링 공통)
-    body.replaceChildren(
-      ...(srcNote ? [srcNote] : []),
-      field('벡터 임베딩', provSel),
-      field('엔드포인트 base_url', baseIn),
-      el('p', { class: 'admin-hint' }, ...uiText('로컬 사이드카 또는 외부 API 주소입니다. 경로 /v1/embeddings 는 자동으로 붙습니다.')),
-      field('모델', modelIn),
-      field('차원', dimIn),
-      el('p', { class: 'admin-hint' }, ...uiText('모델의 출력 차원과 일치해야 합니다. 변경하면 전체 재임베딩이 필요합니다.')),
-      field('인증 환경변수 이름 (선택 · 외부 API 용)', authIn),
-      el('p', { class: 'admin-hint' }, ...uiText('키 값이 아니라 키를 담은 환경변수의 이름을 입력합니다.')),
-      field('배치 크기', batchIn),
-      el('p', { class: 'admin-hint' }, ...uiText('요청당 보내는 텍스트 수입니다. 느린 백엔드나 CPU 백엔드에서는 낮추면 타임아웃을 피할 수 있습니다(기본 8).')),
-      field('요청 타임아웃 (ms)', timeoutIn),
-      el('p', { class: 'admin-hint' }, ...uiText('초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).')),
-      field('백필 메모리 게이트 (MB, 0=끔)', backfillMinIn),
-      el('p', { class: 'admin-hint' }, ...uiText('#1059 — 자동 백필이 임베딩 모델(예: Ollama)을 호출하기 전 가용 메모리를 확인해, 이 값 미만이면 이번 스윕을 건너뜁니다(다음 주기 재시도, 밀린 항목 유실 없음). 모델 로드 스파이크가 세션 baseline 과 겹쳐 박스가 OOM 나는 걸 예방합니다. 0=끔(무회귀). 16GB 박스 권장 4096~5000. 수동 백필 버튼은 게이트하지 않습니다.')),
-      canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint' }, ...uiText('※ 편집은 관리자만 가능합니다.')),
-      // #1060 자동 백필 일시중지 — knowledge·project 를 함께 지배하므로 두 백필 섹션 위에. 임베딩 켜진 경우에만 노출(꺼지면 백필 자체가 무의미).
-      ...(on ? [
-        el('div', { class: 'admin-subhead', text: '자동 임베딩 백필' }),
-        el('p', { class: 'admin-hint' }, ...uiText('저장·수정·동기화, 그리고 부팅·10분 주기 스윕으로 쌓이는 미임베딩을 게이트웨이가 백그라운드에서 자동으로 채웁니다. 임베딩 백엔드가 느리거나(CPU) 성능에 영향을 줄 때는 아래에서 일시중지하세요 — 재개할 때까지 자동·수동 백필이 모두 멈추고, 재개하면 그동안 밀린 항목을 이어서 채웁니다.')),
-        pauseRegion,
-      ] : []),
-      el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (임베딩을 나중에 켠 경우)' }),
-      el('p', { class: 'admin-hint' }, ...uiText('임베딩을 켜도 이미 저장된 지식은 자동으로 임베딩되지 않습니다(켠 이후에 새로 만들거나 수정한 지식만 자동 처리). 기존 지식은 아래 버튼으로 일괄 임베딩하세요 — 중단하거나 다시 실행해도 안전합니다.')),
-      statusRegion,
-      el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용)' }),
-      el('p', { class: 'admin-hint' }, ...uiText('프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩을 켠 이후에 생성·수정·동기화된 항목은 텍스트가 실제로 바뀔 때만 자동으로 임베딩되고, 기존 항목은 아래 버튼으로 일괄 임베딩합니다. 지식과 같은 임베딩 설정을 사용합니다.')),
-      projectRegion);
+    const perf = el('details', { class: 'dlv-more' },
+      el('summary', { text: '성능 조절 — 느린 백엔드일 때만' }),
+      el('div', { class: 'dlv-frow dlv-frow-3' },
+        fld('배치 크기', batchIn, '요청당 텍스트 수(기본 8).'),
+        fld('요청 타임아웃 (ms)', timeoutIn, '넘으면 배치를 반으로 줄여 다시 보냅니다.'),
+        // #1059 — 자동 백필이 임베딩 모델(예: Ollama)을 부르기 전 가용 메모리를 보고, 이 값 미만이면 이번 스윕을 건너뛴다
+        //  (다음 주기 재시도, 유실 없음). 모델 로드 스파이크가 세션 baseline 과 겹쳐 박스가 OOM 나는 걸 막는다. 수동 백필은 안 막는다.
+        fld('백필 메모리 게이트 (MB)', backfillMinIn, '가용 메모리가 이보다 적으면 자동 백필을 건너뜁니다. 0 = 끔.')));
+    replaceKids(body, el('div', { class: 'dlv-grid' },
+      el('div', { class: 'dlv-col' },
+        dlvBox('연결', null,
+          srcNote,
+          fld('사용', provSel),
+          fld('엔드포인트 base_url', baseIn, '로컬 사이드카나 외부 API 주소입니다. /v1/embeddings 는 자동으로 붙습니다.'),
+          el('div', { class: 'dlv-frow' },
+            fld('모델', modelIn),
+            fld('차원', dimIn, '바꾸면 전체를 다시 임베딩합니다.')),
+          fld('인증 환경변수 이름 (외부 API 만)', authIn, '키 값이 아니라 키를 담은 환경변수의 이름입니다.'),
+          perf,
+          canEdit ? el('div', { class: 'dlv-box-acts' }, saveSt, saveBtn) : el('p', { class: 'dlv-note', text: '편집은 관리자만 합니다.' })),
+        // #1060 자동 백필 일시중지 — knowledge·project 를 함께 지배하므로 한 번만. 임베딩이 켜졌을 때만(꺼지면 백필 자체가 무의미).
+        //  왼쪽 칸에 둔다 — 오른쪽 두 칸은 직전 백필 실패 안내가 붙으면 길어진다(실측: 셋을 오른쪽에 쌓으면 1440×900 에서 111px 넘침).
+        on ? dlvBox('자동 백필', null, pauseRegion) : null),
+      el('div', { class: 'dlv-col' },
+        dlvBox('지식', null, statusRegion),
+        dlvBox('프로젝트 · 태스크', null, projectRegion))));
     updateStatus(st, statusRegion);
     loadProjectStatus(projectRegion);
   }
@@ -158,6 +162,15 @@ function embeddingsEditor(detail, data) {
     if (reason === 'schema') return 'pgvector 스키마가 없습니다 — items-db 컨테이너가 pgvector 이미지인지 확인하세요.';
     if (/timeout|abort/i.test(reason)) return '임베딩 요청이 요청 타임아웃을 초과했습니다(느린 CPU 백엔드에서 흔함) — 배치 크기를 줄이고(예 2) 요청 타임아웃을 늘려(예 600000) 저장한 뒤 재시도하세요.';
     return '오류가 반복되면 게이트웨이 로그를 확인하세요.';
+  }
+
+  // 임베딩 현황 한 칸 — 큰 숫자(임베딩됨/전체) + 남은 수 + 직전 백필 줄 + 백필 단추.
+  function statTile(embedded, backlog, jobLine, bfBtn, bfSt) {
+    return el('div', { class: 'dlv-stat' },
+      el('div', { class: 'dlv-stat-n' }, fmtNum(embedded), el('small', { text: ' / ' + fmtNum(backlog.total || 0) })),
+      el('div', { class: 'dlv-stat-l', text: '임베딩됨 · 남은 ' + fmtNum(backlog.pending || 0) + '건' }),
+      jobLine.textContent ? jobLine : null,
+      el('div', { class: 'dlv-box-acts' }, bfSt, bfBtn));
   }
 
   // 백로그·잡 진행만 갱신(폼은 그대로). 잡이 돌면 폴링.
@@ -173,18 +186,18 @@ function embeddingsEditor(detail, data) {
     // #1060 — 일시중지 컨트롤을 최신 상태로(초기 렌더·폴링 공통). on 일 때만 pauseRegion 이 존재.
     if (on) renderPauseControl(paused, pauseRegion);
 
-    const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '백필 진행 중…' : '기존 지식 임베딩(백필)' });
+    const bfBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: running ? '백필 진행 중…' : '남은 지식 임베딩' });
     bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0 || paused;
     const bfSt = el('span', { class: 'admin-status' });
     if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
-    else if (paused) bfSt.replaceChildren(...uiText('일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.'));
+    else if (paused) bfSt.replaceChildren(...uiText('일시중지됨 — 아래 [자동 백필]에서 재개합니다.'));
     else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
     bfBtn.addEventListener('click', async () => {
       bfBtn.disabled = true;
       try {
         await api('/api/ui/org/embeddings/backfill', { method: 'POST', body: JSON.stringify({ mode: 'pending' }) });
         toast('백필 시작 — 진행 상황을 표시합니다.');
-        poll();
+        poll(region);
       } catch (e: any) { toast(e.message, true); bfBtn.disabled = false; }
     });
 
@@ -201,10 +214,7 @@ function embeddingsEditor(detail, data) {
       else if (job.finishedAt) jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
     }
 
-    region.replaceChildren(
-      el('p', { class: 'admin-hint', text: `기존 지식 ${fmtNum(backlog.total)}건 중 임베딩 ${fmtNum(embedded)}건 · 미임베딩 ${fmtNum(backlog.pending)}건.` }),
-      jobLine,
-      el('div', { class: 'admin-actions' }, bfBtn, bfSt));
+    replaceKids(region, statTile(embedded, backlog, jobLine, bfBtn, bfSt));
 
     stopPoll();
     if (running) poll(region);
@@ -232,11 +242,11 @@ function embeddingsEditor(detail, data) {
     const embedded = Math.max(0, (backlog.total || 0) - (backlog.pending || 0));
     const running = !!(job && job.running);
 
-    const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '프로젝트 백필 진행 중…' : '프로젝트 임베딩(백필)' });
+    const bfBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: running ? '백필 진행 중…' : '남은 프로젝트 임베딩' });
     bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0 || paused;
     const bfSt = el('span', { class: 'admin-status' });
     if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
-    else if (paused) bfSt.replaceChildren(...uiText('일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.'));
+    else if (paused) bfSt.replaceChildren(...uiText('일시중지됨 — 아래 [자동 백필]에서 재개합니다.'));
     else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
     bfBtn.addEventListener('click', async () => {
       bfBtn.disabled = true;
@@ -260,10 +270,7 @@ function embeddingsEditor(detail, data) {
       else if (job.finishedAt) jobLine.textContent = `직전 백필 완료: ${fmtNum(job.embedded)}건 (${absTime(job.finishedAt)}).`;
     }
 
-    region.replaceChildren(
-      el('p', { class: 'admin-hint', text: `프로젝트 ${fmtNum(backlog.total)}건 중 임베딩 ${fmtNum(embedded)}건 · 미임베딩 ${fmtNum(backlog.pending)}건.` }),
-      jobLine,
-      el('div', { class: 'admin-actions' }, bfBtn, bfSt));
+    replaceKids(region, statTile(embedded, backlog, jobLine, bfBtn, bfSt));
 
     stopProjPoll();
     if (running) pollProj(region);
@@ -280,7 +287,7 @@ function embeddingsEditor(detail, data) {
 
   async function loadProjectStatus(region) {
     try { const st = await api('/api/ui/org/project-embeddings'); renderProjectStatus(st, region); }
-    catch (e: any) { region.replaceChildren(el('p', { class: 'admin-hint', text: '프로젝트 임베딩 상태를 불러오지 못했습니다: ' + e.message })); }
+    catch (e: any) { replaceKids(region, el('p', { class: 'dlv-note', text: '프로젝트 임베딩 상태를 불러오지 못했습니다: ' + e.message })); }
   }
 
   load();
