@@ -8,7 +8,10 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { TRANSCRIPT_GZ_MAX } from "./plan.js";
 
-export function registerAgentJobRoutes(app: express.Express): void {
+/** #5101 대화 기록 본문을 다 받기까지의 상한 — 멈춘 보고가 그 작업의 자리(receiving)를 쥐고 있지 못하게(판의 요청 상한 20초 · 8MiB 를 넉넉히 넘는다). */
+const TRANSCRIPT_BODY_MS = 120_000;
+
+export function registerAgentJobRoutes(app: express.Express, o: { transcriptBodyMs?: number } = {}): void {
   const idOf = (req: express.Request): number => {
     const n = Number(req.params.id);
     if (!Number.isSafeInteger(n) || n < 1) throw new HttpError(404, "없는 작업입니다");
@@ -47,9 +50,11 @@ export function registerAgentJobRoutes(app: express.Express): void {
       void (async () => {
         const id = idOf(req);
         const { transcriptGate } = await import("./service.js");
-        if ((await transcriptGate(id, bearer(req), await deps())).take && !receiving.has(id)) {
+        //  문을 기다리는 사이 연결이 끊겼으면(res.destroyed) 자리를 잡지 않는다 — close 는 이미 지나가 다시 오지 않는다(격리 리뷰: 잡으면 영영 남는다).
+        if ((await transcriptGate(id, bearer(req), await deps())).take && !receiving.has(id) && !res.destroyed) {
           receiving.add(id);
-          res.on("close", () => receiving.delete(id));   // 답을 보냈거나 연결이 끊겼다
+          const stall = setTimeout(() => req.destroy(), o.transcriptBodyMs ?? TRANSCRIPT_BODY_MS);
+          res.on("close", () => { clearTimeout(stall); receiving.delete(id); });   // 답을 보냈거나 연결이 끊겼다
           next();
           return;
         }

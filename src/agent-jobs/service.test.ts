@@ -4,6 +4,7 @@
 //   store.pg-test.mjs 가 실제 Postgres 에서 잰다. 여기선 흐름이 그 조건을 **부르는가**(배선)를 본다.
 import assert from "node:assert/strict";
 import { HttpError } from "../http-error.js";
+import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import zlibSync from "node:zlib";
 import {
@@ -557,6 +558,26 @@ await t("X2 결과 — 끝 상태와 답을 적고, 걷기는 조금 뒤(kill ·
   assert.equal(w.rows.get(id)!.reaped, true);
   assert.equal(w.rows.get(second.id as number)!.status, "starting", "자리가 나서 다음 작업이 떴다");
   await assert.rejects(onResult(id, job.secret, {}, w.deps), httpErr(410));   // 두 번째 보고는 끝난 작업
+});
+
+await t("X1b(#5101) 결과 보고의 대화 기록 까닭(transcript_note) — 작업 번호와 함께 경고 로그 · 작업은 그대로 done · 오류 글에 섞이지 않는다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  const warned: unknown[][] = [];
+  const orig = logger.warn;
+  (logger as unknown as { warn: (...a: unknown[]) => void }).warn = (...a: unknown[]) => { warned.push(a); };
+  try {
+    const out = await onResult(id, job.secret, {
+      exit_code: 0, conversation_id: "0a1b2c3d-0000-4000-8000-000000000003", result: { text: "답", is_error: false },
+      stderr_tail: "", tail: "", transcript_note: "transcript skipped: 압축 9437184 > 8388608\n",
+    }, w.deps);
+    assert.equal(out.status, "done");
+  } finally { (logger as unknown as { warn: typeof orig }).warn = orig; }
+  const hit = warned.find((a) => /대화 기록/.test(String(a[1])));
+  assert.ok(hit, "경고 로그가 남는다(관측 장치 확인)");
+  assert.deepEqual(hit![0], { job: id, note: "transcript skipped: 압축 9437184 > 8388608\n" }, "작업 번호와 그 까닭");
+  assert.equal(w.rows.get(id)!.error, null, "끝난 작업의 오류 칸은 그대로 비어 있다");
 });
 
 await t("X2 결과 — 판이 끊은 보고는 그 사유로(timeout · canceled), 자격 문제는 «AI 연결 필요»", async () => {

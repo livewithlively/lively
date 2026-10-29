@@ -553,16 +553,19 @@ try {
     const srv = await new Promise((res) => { const x = app.listen(0, "127.0.0.1", () => res(x)); });
     const port = srv.address().port;
     //  declare 를 주면 본문을 그만큼이라고 밝히고 일부만 보낸다(끝내지 않는다) — 입구가 본문을 읽기 전에 답하면 답이 오고, 본문을 기다리면 3초 뒤 «timeout».
+    //  답이 안 오면 o.wait(기본 3초) 뒤 우리가 끊는다(«timeout») · 게이트웨이가 먼저 끊으면 «reset».
     const post = (id, o) => new Promise((resolve) => {
       const body = o.body ?? Buffer.alloc(0);
-      const req = http.request({ host: "127.0.0.1", port, method: "POST", path: `/api/agent-jobs/${id}/transcript`, headers: {
+      let done = false;
+      const fin = (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+      const req = http.request({ host: "127.0.0.1", port: o.port ?? port, method: "POST", path: `/api/agent-jobs/${id}/transcript`, headers: {
         ...(o.secret ? { authorization: `Bearer ${o.secret}` } : {}), "content-type": o.type ?? "application/gzip",
         ...(o.conv ? { "x-lvly-conversation": o.conv } : {}), "content-length": String(o.declare ?? body.length) } }, (res) => {
         let b = ""; res.setEncoding("utf8"); res.on("data", (c) => { b += c; });
-        res.on("end", () => { clearTimeout(timer); req.destroy(); let j = null; try { j = JSON.parse(b); } catch { /* 글 */ } resolve({ status: res.statusCode, json: j }); });
+        res.on("end", () => { req.destroy(); let j = null; try { j = JSON.parse(b); } catch { /* 글 */ } fin({ status: res.statusCode, json: j }); });
       });
-      const timer = setTimeout(() => { req.destroy(); resolve({ status: "timeout" }); }, 3000);
-      req.on("error", () => { /* destroy 뒤 */ });
+      const timer = setTimeout(() => { fin({ status: "timeout" }); req.destroy(); }, o.wait ?? 3000);
+      req.on("error", () => fin({ status: "reset" }));
       if (o.declare) req.write(body); else req.end(body);
     });
     const keyWith = async (who, accountKind = "api_key") => {
@@ -597,8 +600,8 @@ try {
       //  TR7c 같은 작업의 보고가 겹치면(격리 리뷰 — 저장 전에 8MiB 를 N 개 겹쳐 메모리를 쥐게 하기) — 먼저 온 것이 본문을 받는 동안 둘째는 본문 전에
       //   200 stored:false · 먼저 것이 끊기면(연결 닫힘) 다시 받는다.
       const c7 = await keyWith("tr7f");
-      const hold = post(c7.id, { secret: c7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX });   // 본문을 다 보내지 않고 쥔다(3초 뒤 끊음)
-      await new Promise((r) => setTimeout(r, 400));
+      const hold = post(c7.id, { secret: c7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX, wait: 4000 });   // 본문을 다 보내지 않고 쥔다(4초 뒤 끊음)
+      await new Promise((r) => setTimeout(r, 1000));   // 먼저 것이 문을 지나 본문을 기다릴 때까지(느린 CI 를 넉넉히)
       const second = await post(c7.id, { secret: c7.secret, body: gz, conv: CONV });
       const held = await hold;
       await new Promise((r) => setTimeout(r, 300));
@@ -607,6 +610,35 @@ try {
         held.status === "timeout" && second.status === 200 && second.json?.stored === false && third.status === 200 && third.json?.stored === true
           && Buffer.compare((await st.agentJobTranscript(c7.id))?.gz ?? Buffer.alloc(0), gz) === 0,
         JSON.stringify({ held, second, third }));
+      //  TR7d 문을 기다리는 사이 끊긴 보고(격리 리뷰 — 잡으면 close 가 이미 지나가 자리가 영영 남는다) — 문이 표를 읽는 동안 옆 연결이 표를 잠가 붙잡아 두고,
+      //   그 사이 끊는다. 잠금이 풀려 문이 마저 돌아도 끊긴 요청은 자리를 잡지 않는다 → 다음 보고는 받는다.
+      const d7 = await keyWith("tr7g");
+      const locker = await itemsPool.connect();
+      let dropped = null;
+      try {
+        await locker.query("BEGIN");
+        await locker.query("LOCK TABLE org_agent_job IN ACCESS EXCLUSIVE MODE");
+        dropped = await post(d7.id, { secret: d7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX, wait: 300 });
+        await new Promise((r) => setTimeout(r, 200));
+      } finally { await locker.query("COMMIT").catch(() => undefined); locker.release(); }
+      await new Promise((r) => setTimeout(r, 500));   // 붙잡혔던 문이 마저 돈다
+      const afterDrop = await post(d7.id, { secret: d7.secret, body: gz, conv: CONV });
+      chk("TR7d 문을 기다리는 사이 끊긴 보고는 자리를 잡지 않는다 — 다음 보고는 받는다(stored:true)",
+        dropped?.status === "timeout" && afterDrop.status === 200 && afterDrop.json?.stored === true, JSON.stringify({ dropped, afterDrop }));
+      //  TR7e 멈춘 본문 — 본문 상한 시간(시험 0.5초 · 운영 120초)이 지나면 게이트웨이가 끊고 자리를 푼다 → 다음 보고는 받는다.
+      const app2 = express();
+      app2.use(express.json({ limit: "1mb" }));
+      registerAgentJobRoutes(app2, { transcriptBodyMs: 500 });
+      const srv2 = await new Promise((res) => { const x = app2.listen(0, "127.0.0.1", () => res(x)); });
+      try {
+        const e7 = await keyWith("tr7h");
+        const t0 = Date.now();
+        const stalled = await post(e7.id, { port: srv2.address().port, secret: e7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX, wait: 5000 });
+        const ms = Date.now() - t0;
+        const next = await post(e7.id, { port: srv2.address().port, secret: e7.secret, body: gz, conv: CONV });
+        chk("TR7e 멈춘 본문은 상한 시간 뒤 게이트웨이가 끊는다(우리 5초 전에) · 자리를 풀어 다음 보고는 받는다",
+          stalled.status === "reset" && ms < 3000 && next.status === 200 && next.json?.stored === true, JSON.stringify({ stalled, ms, next }));
+      } finally { await new Promise((r) => srv2.close(r)); }
     } finally { await new Promise((r) => srv.close(r)); }
     await cleanup();
     //  TR5 칸이 아직 없을 때(롤 창) — 적기 false · 읽기 null · 정리 0(던지지 않음) · 보통 접수 · 자리 주기 · 행 읽기 · 끝내기는 돈다. 끝나면 칸을 되돌린다(같은 DDL).

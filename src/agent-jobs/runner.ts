@@ -157,7 +157,7 @@ for (const k of Object.keys(env)) {
   if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; cfgDir = c; }
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
 }
-let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null;
+let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null, tNote = "";
 // #5101 대화 기록 묶음 — 그 빈 설정 폴더의 projects/ 아래 파일 전부(대화 파일 · 큰 도구 결과 파일 <대화>/tool-results/* · 하위 에이전트 대화)를
 //  projects/ 기준 상대 경로 그대로 담는다: gzip(JSON {v:1, cfg:<이 작업의 설정 폴더>, files:[{p, d(base64)}]}). 큰 도구 결과는 대화 파일에
 //  «<설정 폴더>/projects/…/tool-results/x.txt 에 저장했다» 는 안내문으로만 남는다(collect-run-script 머리말 · 매니지드 실측 2026-10-16) — 그래서 파일까지
@@ -186,28 +186,33 @@ const listProjectFiles = () => {
 if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
   try {
     const b = JSON.parse(zlib.gunzipSync(Buffer.from(String(J.transcript.gz), "base64"), { maxOutputLength: RAW_MAX }).toString("utf8"));
-    if (!b || b.v !== 1) throw new Error("묶음 형식(v " + (b && b.v) + ")을 모른다");
+    if (!b || b.v !== 1) throw new Error("묶음 형식(v " + String(JSON.stringify(b && b.v)).slice(0, 40) + ")을 모른다");
     const from = typeof b.cfg === "string" && b.cfg.length > 1 ? b.cfg + "/" : null;
     const files = Array.isArray(b.files) ? b.files.slice(0, BUNDLE_FILES_MAX) : [];
+    //  전부 아니면 없음 — 먼저 다 바꿔 세고(경로를 바꿔 쓰면 늘 수 있다 · 짧은 앞 경로) 상한 안일 때만 쓴다. 반쯤 놓인 대화(큰 결과 파일 없이)로 잇지 않는다.
+    const put = [];
     let found = false, written = 0;
     for (const f of files) {
       if (!f || !safeRel(f.p)) continue;
-      const dest = path.join(projDir(), f.p);
       let data = Buffer.from(String(f.d || ""), "base64");
       if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(cfgDir + "/"), "utf8");
-      //  경로를 바꿔 쓰면 늘 수 있다(짧은 앞 경로) — 되돌려 쓰는 총량도 풀린 상한 안이어야 한다.
       if ((written += data.length) > RAW_MAX) throw new Error("되돌릴 크기가 상한(" + RAW_MAX + ")을 넘는다");
-      fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(dest, data, { mode: 0o600 });
+      put.push([f.p, data]);
       if (f.p.endsWith("/" + J.transcript.conv + ".jsonl")) found = true;
     }
-    if (!found) errTail += "transcript restore: 그 대화 파일이 묶음에 없다\n";
-  } catch (e) { errTail += "transcript restore: " + (e && e.message) + "\n"; }
+    for (const [p, data] of put) {
+      const dest = path.join(projDir(), p);
+      fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(dest, data, { mode: 0o600 });
+    }
+    if (!found) tNote += "transcript restore: 그 대화 파일이 묶음에 없다\n";
+  } catch (e) { tNote += "transcript restore: " + (e && e.message) + "\n"; }
 }
 // #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
 //  읽기 전에 크기부터 잰다 — 너무 큰 기록을 메모리에 올리다 판이 죽으면 결과까지 잃는다(base64 · JSON 을 더해도 풀린 상한 안이어야 한다).
-//  못 올리면 그 까닭을 결과의 stderr_tail 에 한 줄 남긴다 — 나중에 이어받기가 «기록이 없습니다» 로 거절될 때 어느 상한이었는지 그 작업만 보면 안다(격리 리뷰).
-const skipTranscript = (why) => { errTail += "transcript skipped: " + why + "\n"; };
+//  못 올리면(되돌리지 못한 것도) 그 까닭을 결과 보고의 transcript_note 칸에 싣는다 — 게이트웨이가 작업 번호와 함께 경고 로그로 남긴다. 나중에 이어받기가
+//   «기록이 없습니다» 로 거절될 때 어느 상한이었는지 그 작업으로 찾는다(격리 리뷰). stderr_tail 에 섞지 않는다 — 실패 글은 그 끝 세 줄을 쓴다.
+const skipTranscript = (why) => { tNote += "transcript skipped: " + why + "\n"; };
 const saveTranscript = async () => {
   if (!cfgDir || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
   let gz = null;
@@ -222,8 +227,8 @@ const saveTranscript = async () => {
   } catch (e) { return skipTranscript(String(e && e.message)); }
   if (gz.length > J.transcriptMax) return skipTranscript("압축 " + gz.length + " > " + J.transcriptMax);
   const r = await call("transcript", null, 3, { buf: gz, type: "application/gzip", headers: { "x-lvly-conversation": conv } });
-  if (!r || r.status) errTail += "transcript upload: " + (r ? r.status : "연결 실패") + "\n";
-  else if (r.stored === false) errTail += "transcript upload: 게이트웨이가 받지 않았다\n";
+  if (!r || r.status) tNote += "transcript upload: " + (r ? r.status : "연결 실패") + "\n";
+  else if (r.stored === false) tNote += "transcript upload: 새로 받지 않았다(이미 받았거나 받을 일이 없다고 답함)\n";
 };
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
@@ -264,7 +269,7 @@ const finish = async (code, signal) => {
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
   await saveTranscript();
-  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n") }, 24);
+  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null }, 24);
   clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   process.exit(0);

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
   convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, sharedSeatJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE,
-  TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts,
+  TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts, TRANSCRIPT_NOTE_MAX,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
 import { seatShared } from "../ai-runs/plan.js";
@@ -243,6 +243,12 @@ t("P2 DB 칸이 받지 않는 값 — 글의 NUL 은 빼고 · 종료코드는 I
   for (const bad of [1.5, 1e12, -2147483649, 2147483648, Number.NaN]) assert.equal(parseRunnerReport({ exit_code: bad }).exit_code, null, String(bad));
   for (const ok of [0, 1, 137, -2, 2147483647, -2147483648]) assert.equal(parseRunnerReport({ exit_code: ok }).exit_code, ok, String(ok));
 });
+
+t("P3(#5101) 대화 기록 까닭(transcript_note) — 글이면 NUL 빼고 상한까지 · 빈 글 · 글 아님 · 없음은 null", () => {
+  assert.equal(parseRunnerReport({ transcript_note: "transcript skipped: 압축 9 > 8\u0000" }).transcript_note, "transcript skipped: 압축 9 > 8");
+  assert.equal(parseRunnerReport({ transcript_note: "가".repeat(TRANSCRIPT_NOTE_MAX + 50) }).transcript_note?.length, TRANSCRIPT_NOTE_MAX);
+  for (const bad of ["", 7, { a: 1 }, null, undefined]) assert.equal(parseRunnerReport({ transcript_note: bad }).transcript_note, null, JSON.stringify(bad));
+});
 t("P1 판 보고는 칸마다 거르고 자른다 — 대화 id 모양 · 긴 글 · usage 의 문자열·중첩 · 모르는 stopped", () => {
   const r = parseRunnerReport({
     exit_code: "0", signal: 9, stopped: "exploded", conversation_id: "../../etc/passwd", model: "m".repeat(500),
@@ -261,7 +267,7 @@ t("P1 판 보고는 칸마다 거르고 자른다 — 대화 id 모양 · 긴 �
   assert.deepEqual(r.result?.usage, { input_tokens: 5 });
   assert.equal(r.stderr_tail, "");
   assert.equal(r.tail.length, TAIL_MAX);
-  assert.deepEqual(parseRunnerReport(null), { exit_code: null, signal: null, stopped: null, conversation_id: null, model: null, result: null, stderr_tail: "", tail: "" });
+  assert.deepEqual(parseRunnerReport(null), { exit_code: null, signal: null, stopped: null, conversation_id: null, model: null, result: null, stderr_tail: "", tail: "", transcript_note: null });
   const uuid = "0A1B2C3D-0000-4000-8000-000000000000";
   assert.equal(convIdOf(uuid), uuid.toLowerCase());
 });

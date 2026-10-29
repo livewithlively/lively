@@ -30,6 +30,8 @@ export const LABEL_MAX = 120;
  */
 export const TRANSCRIPT_GZ_MAX = 8 * 1024 * 1024;
 export const TRANSCRIPT_RAW_MAX = 64 * 1024 * 1024;
+/** #5101 판이 결과 보고에 싣는 «대화 기록을 못 되돌렸다 · 못 올렸다» 까닭의 상한(글자) — 게이트웨이는 작업 번호와 함께 경고 로그로 남긴다. */
+export const TRANSCRIPT_NOTE_MAX = 1000;
 
 /** 앱 id 규칙(코어 manifest APP_ID_RE · 브로커 sessionapps.APP_ID_RE 와 같은 자) — 앱 폴더 경로 조각으로 안전하다. */
 export const APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
@@ -294,6 +296,8 @@ export interface RunnerReport {
   result: { text: string | null; is_error: boolean; subtype: string | null; num_turns: number | null; duration_ms: number | null; cost_usd: number | null; usage: Record<string, unknown> | null } | null;
   stderr_tail: string;
   tail: string;
+  /** #5101 판이 대화 기록을 되돌리거나 올리지 못한 까닭(stderr_tail 과 따로 — 실패 글이 쓰는 끝 세 줄을 차지하지 않게). 없으면 null. */
+  transcript_note?: string | null;
 }
 
 /**
@@ -343,6 +347,7 @@ export function parseRunnerReport(body: unknown): RunnerReport {
     } : null,
     stderr_tail: str(b.stderr_tail, STDERR_TAIL_MAX) ?? "",
     tail: str(b.tail, TAIL_MAX) ?? "",
+    transcript_note: str(b.transcript_note, TRANSCRIPT_NOTE_MAX) || null,
   };
 }
 

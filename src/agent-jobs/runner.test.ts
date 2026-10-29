@@ -444,7 +444,7 @@ await t("T1(#5101) API 키 작업 — 끝나면 설정 폴더 projects/ 아래 �
     assert.ok(tr.at <= g.seen.resultAt[0]!, "결과보다 먼저(결과가 곧바로 같은 대화를 잇는 작업을 낳을 수 있다)");
     assert.ok(typeof h.cfg === "string" && h.cfg !== CONFIG_DIR_PLACEHOLDER, "자리표가 이 작업만의 폴더로 바뀌었다");
     assert.ok(!fs.existsSync(h.cfg), "끝나면 설정 폴더를 지운다");
-    assert.doesNotMatch(String(g.seen.results[0]!.stderr_tail), /transcript (skipped|upload)/, "올렸으면 까닭 줄이 없다");
+    assert.equal(g.seen.results[0]!.transcript_note, null, "올렸으면 까닭이 없다");
   } finally { await g.close(); }
 });
 
@@ -495,8 +495,9 @@ await t("T3(#5101) 이어받는 작업 — 받은 묶음을 하네스를 띄우�
   try {
     assert.equal(await runBoot(g3.port), 0);
     assert.equal(JSON.parse(fs.readFileSync(r3, "utf8")).restored, null, "풀면 상한을 넘는 묶음(압축 폭탄)은 안 놓는다");
-    const why3 = String((g3.seen.results[0] as Record<string, unknown>).stderr_tail);
-    assert.match(why3, /transcript restore/, "까닭을 결과에 남긴다");
+    const why3 = String((g3.seen.results[0] as Record<string, unknown>).transcript_note);
+    assert.match(why3, /transcript restore/, "까닭을 결과 보고의 transcript_note 에(게이트웨이가 작업 번호와 함께 로그로)");
+    assert.doesNotMatch(String((g3.seen.results[0] as Record<string, unknown>).stderr_tail), /transcript/, "stderr_tail 엔 섞지 않는다(실패 글이 끝 세 줄을 쓴다)");
     assert.doesNotMatch(why3, /되돌릴 크기/, "푸는 도중에 멈춘다 — 다 풀어 메모리에 올린 뒤 세지 않는다(쓰는 총량 상한은 그 뒤의 둘째 막이)");
   } finally { await g3.close(); }
 });
@@ -510,7 +511,7 @@ await t("T3d(#5101) 되돌리기 — 모르는 묶음 형식(v 1 이 아님)은 
   try {
     assert.equal(await runBoot(g.port), 0);
     assert.equal(JSON.parse(fs.readFileSync(r1, "utf8")).restored, null, "모르는 형식은 놓지 않는다");
-    assert.match(String(g.seen.results[0]!.stderr_tail), /transcript restore: 묶음 형식\(v 2\)을 모른다/);
+    assert.match(String(g.seen.results[0]!.transcript_note), /transcript restore: 묶음 형식\(v 2\)을 모른다/);
   } finally { await g.close(); }
   //  앞 설정 폴더 경로가 짧으면(«/a») 바꿔 쓸 때마다 수십 배로 는다 — 3천 바이트 상한에서 «/a/» 300 번(900 바이트)은 넘친다.
   const r2 = path.join(tmp, "t3e.json");
@@ -520,8 +521,23 @@ await t("T3d(#5101) 되돌리기 — 모르는 묶음 형식(v 1 이 아님)은 
   try {
     assert.equal(await runBoot(g2.port), 0);
     assert.equal(JSON.parse(fs.readFileSync(r2, "utf8")).restored, null, "넘치는 파일은 쓰지 않는다");
-    assert.match(String(g2.seen.results[0]!.stderr_tail), /transcript restore: 되돌릴 크기가 상한\(3000\)을 넘는다/);
+    assert.match(String(g2.seen.results[0]!.transcript_note), /transcript restore: 되돌릴 크기가 상한\(3000\)을 넘는다/);
   } finally { await g2.close(); }
+  //  전부 아니면 없음(격리 리뷰) — 대화 파일(작음) · 늘어나는 하위 에이전트 대화 · 큰 결과 파일 셋 중 둘째에서 넘치면 첫째도 놓지 않는다(반쪽 대화로 잇지 않는다).
+  const r3 = path.join(tmp, "t3e3.json");
+  const three: Bundle = { v: 1, cfg: "/a", files: [
+    { p: `-fake-cwd/${CONV_R}.jsonl`, d: b64("앞 대화 Output has been saved to /a/projects/-fake-cwd/" + CONV_R + "/tool-results/r.txt end\n") },
+    { p: `-fake-cwd/${CONV_R}/subagents/agent-1.jsonl`, d: b64("/a/".repeat(1000)) },
+    { p: `-fake-cwd/${CONV_R}/tool-results/r.txt`, d: b64("큰 결과") },
+  ] };
+  const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r3, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 20_000, transcript: { conv: CONV_R, gz: bundleB64(three) } } });
+  try {
+    assert.equal(await runBoot(g3.port), 0);
+    const h3 = JSON.parse(fs.readFileSync(r3, "utf8"));
+    assert.equal(h3.restored, null, "첫 파일(대화)도 놓지 않았다");
+    assert.match(String(g3.seen.results[0]!.transcript_note), /되돌릴 크기가 상한\(20000\)/);
+  } finally { await g3.close(); }
 });
 
 await t("T4(#5101) 압축한 묶음이 상한을 넘거나 · 풀린 크기가 상한에 가까우면(읽기 전에 잰다) — 올리지 않는다 · 결과는 올린다", async () => {
@@ -530,14 +546,15 @@ await t("T4(#5101) 압축한 묶음이 상한을 넘거나 · 풀린 크기가 �
     assert.equal(await runBoot(g.port), 0);
     assert.equal(g.seen.transcripts.length, 0, "압축 상한");
     assert.equal(g.seen.results.length, 1);
-    assert.match(String(g.seen.results[0]!.stderr_tail), /transcript skipped: 압축 \d+ > 1000/, "까닭을 결과에 한 줄(격리 리뷰)");
+    assert.match(String(g.seen.results[0]!.transcript_note), /transcript skipped: 압축 \d+ > 1000/, "까닭을 결과 보고에 한 줄(격리 리뷰)");
+    assert.doesNotMatch(String(g.seen.results[0]!.stderr_tail), /transcript/);
   } finally { await g.close(); }
   const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4b.json"), envExtra: { ...KEY_ENV, FAKE_BIG: "1" }, bootExtra: { transcriptMax: 10_000_000, transcriptRawMax: 50_000 } });
   try {
     assert.equal(await runBoot(g2.port), 0);
     assert.equal(g2.seen.transcripts.length, 0, "64KB 대화 > 풀린 상한 50KB 의 70% — 읽지 않고 건너뛴다");
     assert.equal(g2.seen.results.length, 1);
-    assert.match(String(g2.seen.results[0]!.stderr_tail), /transcript skipped: 풀린 크기 \d+ > 35000/);
+    assert.match(String(g2.seen.results[0]!.transcript_note), /transcript skipped: 풀린 크기 \d+ > 35000/);
   } finally { await g2.close(); }
 });
 
@@ -546,18 +563,18 @@ await t("T4c(#5101) 파일이 상한(2000)보다 많으면 올리지 않는다 �
   try {
     assert.equal(await runBoot(g.port), 0);
     assert.equal(g.seen.transcripts.length, 0);
-    assert.match(String(g.seen.results[0]!.stderr_tail), /transcript skipped: 파일이 너무 많다\(2000 초과\)/);
+    assert.match(String(g.seen.results[0]!.transcript_note), /transcript skipped: 파일이 너무 많다\(2000 초과\)/);
   } finally { await g.close(); }
   const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4d.json"), envExtra: KEY_ENV, bootExtra: { transcriptMax: 1_000_000 }, transcriptStatus: 400 });
   try {
     assert.equal(await runBoot(g2.port), 0);
     assert.equal(g2.seen.transcripts.length, 1, "4xx 는 다시 보내지 않는다");
-    assert.match(String(g2.seen.results[0]!.stderr_tail), /transcript upload: 400/);
+    assert.match(String(g2.seen.results[0]!.transcript_note), /transcript upload: 400/);
   } finally { await g2.close(); }
   const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4e.json"), envExtra: KEY_ENV, bootExtra: { transcriptMax: 1_000_000 }, transcriptNotStored: true });
   try {
     assert.equal(await runBoot(g3.port), 0);
-    assert.match(String(g3.seen.results[0]!.stderr_tail), /transcript upload: 게이트웨이가 받지 않았다/);
+    assert.match(String(g3.seen.results[0]!.transcript_note), /transcript upload: 새로 받지 않았다/);
   } finally { await g3.close(); }
 });
 

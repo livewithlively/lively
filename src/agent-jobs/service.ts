@@ -510,6 +510,8 @@ export async function onResult(id: number, presented: string, body: unknown, d: 
   });
   if (!ended) throw new HttpError(410, "끝난 작업입니다");
   logger.info({ job: id, status: out.status }, "[agent-job] 결과");
+  //  #5101 판이 대화 기록을 되돌리거나 올리지 못했으면 그 까닭(크기 · 파일 수 · 형식 · 4xx) — 나중에 이어받기가 «기록이 없습니다» 로 거절될 때 작업 번호로 찾는다.
+  if (rep.transcript_note) logger.warn({ job: id, note: rep.transcript_note }, "[agent-job] 대화 기록을 되돌리거나 올리지 못했다");
   d.later(() => reapJob(ended, d), REAP_DELAY_MS);
   d.later(() => dispatchAgentJobs(d), 0);
   return { ok: true, status: out.status };
