@@ -18,6 +18,7 @@ import { actorOf, restRead, restWork } from "./shared.js";
 import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
 // #4194 — 증류기의 두 번째 레인(카테고리 붙이기). 목록만 여기서 함께 준다 — 쓰기는 org_distiller_category_*(delivery/classifiers.ts).
 import { assertLaneFields } from "../../org/distill/lanes.js";
+import { derivedEnforced } from "../../v6/derived-visibility.js";
 import { listClassifiers, getClassifier, classifierCoverage } from "../../org/store/classifiers.js";
 import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/distill/figma-preset.js";   // #1881 L3
 import { ensureZoteroPapersDistiller, ZOTERO_DISTILLER_KEY } from "../../org/distill/zotero-preset.js";
@@ -256,6 +257,7 @@ export const ingestDistillersCapabilities: Capability[] = [
 
       const limit = Math.min(Math.max(1, Number(input.limit) || 10), 50);
       const sample = await listDistillerInbox(d, all, limit);
+      const lockEnforced = await derivedEnforced();
       return {
         distiller: { ...d, scope_text: describeScope(d) },
         backlog: await countDistillerBacklog(d, all),
@@ -275,10 +277,10 @@ export const ingestDistillersCapabilities: Capability[] = [
           author: (s.fields as Record<string, unknown> | null)?.author_name ?? null,
         })),
         // 실제로 나갈 프롬프트(허용선 문구는 실행 시점 정책으로 다시 조립되니 여기선 자리표시).
-        prompt: buildDistillerPrompt({ distiller: d, rows: sample, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)" }),
+        prompt: buildDistillerPrompt({ distiller: d, rows: sample, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)", lockEnforced }),
         // 조각별 기본값·현재 덮어쓴 값(#1419-B) — 관리탭이 "무엇을 덮어쓰는지"를 보여줄 재료.
         //  조립은 buildDistillerPrompt 한 곳에서만 한다(B7: 미리보기와 실제 배치가 갈리면 미리보기가 거짓이 된다).
-        sections: distillerSectionViews(d, { count: sample.length, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)" }),
+        sections: distillerSectionViews(d, { count: sample.length, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)", lockEnforced }),
       };
     }, {
       key: z.string().optional().describe("증류기 key. draft 만 줄 땐 생략 가능(새 증류기 미리보기)"),

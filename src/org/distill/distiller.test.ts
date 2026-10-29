@@ -1094,6 +1094,18 @@ t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) —
   console.log('ok  #4824 digest: 잠긴 자료 표시');
 }
 
+// 지식 축이 꺼진 조직(lockEnforced=false)엔 «잠김→새 지식(409)» 안내가 없다 — 거절도 좁히기도 없는데 안내가 남으면
+//  증류기가 매핑된 기존 문서 대신 새 지식을 만들거나 skip 한다. 생략 시(true)는 종전 그대로.
+{
+  const lockedRows = [{ id: 9, title: 'DM', body_md: '내용', visibility: 'members', fields: { container_name: 'dm-a' } }];
+  const on = buildDistillerPrompt({ distiller: mk(), rows: lockedRows, policySummary: POLICY });
+  assert.ok(on.includes('잠김(볼 수 있는 사람만 봄)') && on.includes('409'), on.slice(0, 300));
+  const off = buildDistillerPrompt({ distiller: mk(), rows: lockedRows, policySummary: POLICY, lockEnforced: false });
+  assert.ok(!off.includes('잠김') && !off.includes('409'), off);
+  assert.ok(off.includes('derived_from 없는 저장은 거절된다'), '절차 ③ 의 나머지는 남는다');
+  console.log('ok  lockEnforced=false: 잠김 표시·409 안내 생략');
+}
+
 // #5012 — 이슈 트래커 자료는 머리줄만 보고 «어느 이슈 · 어느 프로젝트 · 상태 · 라벨» 을 알 수 있어야 한다(개체 레인의 매핑표 재료).
 {
   const head = (row: Record<string, unknown>): string => {
