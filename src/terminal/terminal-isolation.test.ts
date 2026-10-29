@@ -77,6 +77,18 @@ t("cgspawnArgv(#5082 스왑 상한): swapMaxMb 를 주면 네 번째 값 — 0 =
   }
 });
 
+t("cgspawnArgv(#5082 OOMPolicy): oomPolicy 를 주면 스왑 값 뒤 다섯 번째 값 · 스왑을 안 줬으면 infinity(종전)로 그 자리를 채운다 · 모르는 값은 싣지 않는다", () => {
+  assert.deepEqual(
+    cgspawnArgv("box_x", ["node"], "/srv/lively/apps/a", { highMb: 0, maxMb: 3072, requestMb: 0, swapMaxMb: 0, oomPolicy: "continue" }),
+    ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "3072M", "0", "continue", "--", BOX_SPAWN, "--cwd", "/srv/lively/apps/a", "node"],
+  );
+  assert.deepEqual(cgspawnArgv("box_x", [], undefined, { maxMb: 2048, oomPolicy: "stop" }), ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "2048M", "infinity", "stop", "--", BOX_SPAWN]);
+  assert.deepEqual(cgspawnArgv("box_x", [], undefined, { maxMb: 2048, swapMaxMb: -1, oomPolicy: "continue" }), ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "2048M", "infinity", "continue", "--", BOX_SPAWN], "틀린 스왑 값도 infinity 로 채운다");
+  for (const bad of ["kill", "", "continue; rm -rf /"]) {
+    assert.deepEqual(cgspawnArgv("box_x", [], undefined, { maxMb: 2048, oomPolicy: bad as never }), ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "2048M", "--", BOX_SPAWN], `${JSON.stringify(bad)} 는 싣지 않는다`);
+  }
+});
+
 t("wrapAsMember(cg 지정): cgroup 인프라 미설치 박스면 종전 sudo -u 경로로 폴백(cap-gated 무회귀)", () => {
   // box_test 로컬엔 /opt/lively/libexec/box-cgspawn 이 없어 cgroupInfraReady()=false → 폴백 기대.
   //  인프라가 있는 박스(EC2 등)면 cgspawn 경유 — 그 경우만 positive shape 를 확인(환경 의존이라 조건부).

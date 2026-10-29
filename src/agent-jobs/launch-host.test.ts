@@ -181,10 +181,10 @@ await t("C5 비밀은 판 명령줄 어디에도 없다 — 판 계정 소유 �
 await t("M1 격리 판 · 정책 상한 3072 · 래퍼를 쓸 수 있다 — box-cgspawn(MemoryMax · 스왑 없음)", async () => {
   const { d, rec } = fakeDeps({ cap: 3072, cgroup: { ok: true } });
   await launchHostJob(job(), SECRET, d);
-  assert.deepEqual(rec.wraps, [{ highMb: 0, maxMb: 3072, requestMb: 0, swapMaxMb: 0 }]);
+  assert.deepEqual(rec.wraps, [{ highMb: 0, maxMb: 3072, requestMb: 0, swapMaxMb: 0, oomPolicy: "continue" }]);
   const a = rec.tmux[0]!;
   const at = a.indexOf("sudo");
-  assert.deepEqual(a.slice(at, at + 11), ["sudo", "-n", "--", BOX_CGSPAWN, "box_alice", "0", "3072M", "0", "--", BOX_SPAWN, "--cwd"], "#5082 — 스왑 없음(네 번째 값 0)도 함께");
+  assert.deepEqual(a.slice(at, at + 12), ["sudo", "-n", "--", BOX_CGSPAWN, "box_alice", "0", "3072M", "0", "continue", "--", BOX_SPAWN, "--cwd"], "#5082 — 스왑 없음(네 번째 값 0) · 넘친 프로세스만 끊기(다섯 번째 continue)도 함께");
 });
 
 await t("M2 격리 판 · 정책 상한 · 래퍼를 확답으로 못 쓴다(없음 · sudo 허용 없음) — 다시 해도 안 되는 실패 · 고칠 길을 말한다 · 폴더 · 비밀 · 판 없음", async () => {
@@ -313,8 +313,8 @@ await t("C9 판 명령이 실패 — 일시(pane) 실패 · 문장에 비밀이 
 });
 
 await t("C2 작업 정책 상한 → cgroup 상한: 0 · 음수 · NaN 은 상한 없음 · 소수는 내림", () => {
-  assert.deepEqual(jobMemoryLimit(3072), { highMb: 0, maxMb: 3072, requestMb: 0, swapMaxMb: 0 }, "스왑은 막는다(RAM 상한만 걸면 넘친 만큼 스왑으로 빠진다)");
-  assert.deepEqual(jobMemoryLimit(1536.9), { highMb: 0, maxMb: 1536, requestMb: 0, swapMaxMb: 0 });
+  assert.deepEqual(jobMemoryLimit(3072), { highMb: 0, maxMb: 3072, requestMb: 0, swapMaxMb: 0, oomPolicy: "continue" }, "스왑은 막고(RAM 상한만 걸면 넘친 만큼 스왑으로 빠진다) 넘친 프로세스만 끊는다");
+  assert.deepEqual(jobMemoryLimit(1536.9), { highMb: 0, maxMb: 1536, requestMb: 0, swapMaxMb: 0, oomPolicy: "continue" });
   for (const v of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(jobMemoryLimit(v), undefined, String(v));
 });
 
@@ -338,7 +338,7 @@ await t("P2·P3·P5 끝 0 = 된다(10분 기억) · 끝 1 = 못 쓴다(확답 ·
     resetHostProbesForTest();
     const s = probeSpy([code, code]);
     let now = 1_000;
-    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => now, readWrapper: async () => "# lively-cgspawn-caps: swap-max\n" };
+    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => now, readWrapper: async () => "# lively-cgspawn-caps: swap-max oom-policy\n" };
     const first = await cgspawnCheck(o);
     assert.equal(first.ok, ok);
     if (!first.ok) assert.equal(first.transient, false, "확답이다");
@@ -358,7 +358,7 @@ await t("P6 같은 때 여러 번 물어도 sudo 는 한 번 — 묻는 중인 �
     let release: (v: { code: number | null; error?: string }) => void = () => undefined;
     let asked = 0;
     const probe = (_cmd: string) => { asked++; return new Promise<{ code: number | null; error?: string }>((r) => { release = r; }); };
-    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe, now: () => 7, readWrapper: async () => "# lively-cgspawn-caps: swap-max\n" };
+    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe, now: () => 7, readWrapper: async () => "# lively-cgspawn-caps: swap-max oom-policy\n" };
     const all = Promise.all([cgspawnCheck(o), cgspawnCheck(o), cgspawnCheck(o)]);
     await new Promise((r) => setImmediate(r));
     release(code === null ? { code, error: "끊김" } : { code });
@@ -440,7 +440,7 @@ await t("P4 묻다 끊겼다(시간 초과) · 알 수 없는 끝(2) — 일시 
   for (const code of [null, 2]) {
     resetHostProbesForTest();
     const s = probeSpy([code, 0]);
-    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 5, readWrapper: async () => "# lively-cgspawn-caps: swap-max\n" };
+    const o = { infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 5, readWrapper: async () => "# lively-cgspawn-caps: swap-max oom-policy\n" };
     const r = await cgspawnCheck(o);
     assert.equal(r.ok, false);
     assert.equal(!r.ok && r.transient, true, String(code));
@@ -456,9 +456,10 @@ await t("P8 래퍼가 스왑 값을 모르는 옛 판이면 일시(배포가 래
   const old = await cgspawnCheck({ infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 9, readWrapper: async () => "#!/usr/bin/env bash\n# box-cgspawn (옛 판)\n" });
   assert.equal(old.ok, false);
   assert.equal(!old.ok && old.transient, true, "옛 판은 일시 — 그때 들어온 작업은 다시 기다린다");
-  assert.ok(!old.ok && old.why.startsWith("cgroup 래퍼(/opt/x/box-cgspawn)가 스왑 상한을 모르는 옛 판입니다") && /install-isolation\.sh/.test(old.why) && /memory_max_mb 를 0/.test(old.why), !old.ok ? old.why : "");
+  assert.ok(!old.ok && old.why.startsWith("cgroup 래퍼(/opt/x/box-cgspawn)가 작업 상한 값(스왑 없음 · 넘친 프로세스만 끊기)을 모르는 옛 판입니다") && /install-isolation\.sh/.test(old.why) && /memory_max_mb 를 0/.test(old.why), !old.ok ? old.why : "");
   assert.deepEqual(s.asked, [], "옛 판이면 sudo 를 묻지 않는다");
-  for (const near of ["# usage: ... swap-max ...\n", "#  lively-cgspawn-caps: swap-max\n", "x # lively-cgspawn-caps: swap-max\n", "# lively-cgspawn-caps: swap-maxx\n"]) {
+  for (const near of ["# usage: ... swap-max oom-policy ...\n", "#  lively-cgspawn-caps: swap-max oom-policy\n", "x # lively-cgspawn-caps: swap-max oom-policy\n",
+    "# lively-cgspawn-caps: swap-maxx oom-policy\n", "# lively-cgspawn-caps: swap-max\n", "# lively-cgspawn-caps: oom-policy\n", "# lively-cgspawn-caps: swap-max\n# oom-policy\n"]) {
     const r = await cgspawnCheck({ infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 9, readWrapper: async () => near });
     assert.ok(!r.ok && r.transient && r.why.includes("옛 판"), `표지 줄 꼴이 아니면 옛 판: ${JSON.stringify(near)}`);
   }
@@ -470,17 +471,18 @@ await t("P8 래퍼가 스왑 값을 모르는 옛 판이면 일시(배포가 래
   const unread = await cgspawnCheck({ infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 9, readWrapper: async () => { throw new Error("EACCES"); } });
   assert.equal(unread.ok, false);
   assert.equal(!unread.ok && unread.transient, true, "못 읽으면 일시");
-  const fresh = await cgspawnCheck({ infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 9, readWrapper: async () => "# lively-cgspawn-caps: swap-max\n" });
+  const fresh = await cgspawnCheck({ infraReady: () => true, wrapper: "/opt/x/box-cgspawn", probe: s.probe, now: () => 9, readWrapper: async () => "# lively-cgspawn-caps: swap-max oom-policy\n" });
   assert.deepEqual(fresh, { ok: true }, "표지가 있으면 sudo 판정으로 간다");
   assert.equal(s.asked.length, 1);
   resetHostProbesForTest();
 });
 
-await t("P9 설치되는 box-cgspawn 은 스왑 표지 줄을 품는다(코어가 찾는 글과 같다)", async () => {
-  const { CGSPAWN_SWAP_CAP_RE } = await import("./launch-host.js");
+await t("P9 설치되는 box-cgspawn 은 작업 상한 표지 줄을 품는다(코어가 찾는 글과 같다)", async () => {
+  const { CGSPAWN_JOB_CAPS_RE } = await import("./launch-host.js");
   const wrapperSrc = fs.readFileSync(path.join(process.cwd(), "deploy", "linux", "box-cgspawn"), "utf8");
-  assert.match(wrapperSrc, CGSPAWN_SWAP_CAP_RE);
+  assert.match(wrapperSrc, CGSPAWN_JOB_CAPS_RE);
   assert.match(wrapperSrc, /--property=MemorySwapMax="\$memswap"/, "네 번째 값을 MemorySwapMax 로 건다");
+  assert.match(wrapperSrc, /--property=OOMPolicy="\$oompolicy"/, "다섯 번째 값을 OOMPolicy 로 건다");
 });
 
 // ── W. 판 계정의 임시 비밀 스크립트(memberWriteTempSecret) — 진짜 셸 ───────────────────

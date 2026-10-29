@@ -11,15 +11,19 @@
 #   (모든 세션이 KillMode=process 하에 눌러앉아 10GB 로 부풀던 그 cgroup) 팽창도 자동 해소된다.
 #
 #  호출(게이트웨이 → 잠긴 sudoers → 이 스크립트, terminal-isolation.ts wrapAsMember 가 argv 생성):
-#     sudo -n -- /opt/lively/libexec/box-cgspawn <osUser> <memHigh> <memMax> [<memSwapMax>] -- /opt/lively/libexec/box-spawn [--cwd DIR] [harness...]
+#     sudo -n -- /opt/lively/libexec/box-cgspawn <osUser> <memHigh> <memMax> [<memSwapMax> [<oomPolicy>]] -- /opt/lively/libexec/box-spawn [--cwd DIR] [harness...]
 #   · <osUser>  = box_<slug> 또는 broker_<slug> (아래 정규식). root·임의유저 거부 → uid 상승 불가.
 #   · <memHigh> = MemoryHigh(소프트: 초과 시 강한 회수·스로틀, kill 아님) 예 "3072M", 또는 "0"/"infinity"=무제한(생략).
 #   · <memMax>  = MemoryMax(하드: 초과 시 그 scope 안에서 OOM-kill)  예 "4096M", 또는 "0"/"infinity"=무제한(생략).
 #   · <memSwapMax>(선택 · #5082) = MemorySwapMax(그 scope 의 스왑 상한) 예 "0"=스왑 없음 · "1024M", "infinity"=무제한(생략).
 #      ⚠ 여기만 «0 = 스왑 없음» 이다(위 둘의 «0 = 무제한» 과 뜻이 다르다). 생략하면 종전 그대로(스왑 무제한 — 사람 세션).
 #      MemoryMax 만 걸면 넘친 만큼 스왑으로 빠져 상한이 RAM 에만 걸린다(실측 2026-10-29 Ubuntu 24.04 · 스왑 8G: 상한 512MiB 작업이 스왑 1,696MiB).
+#   · <oomPolicy>(선택 · #5082 · <memSwapMax> 뒤에만) = OOMPolicy — "stop"(systemd 기본: 한 프로세스가 OOM-kill 되면 scope 전체를 멈춘다) 또는
+#      "continue"(그 프로세스만 끊기고 나머지는 산다). 앱 AI 작업 판은 continue 다 — 도구 하나가 상한을 넘어도 하네스가 살아 그 실패를 받는다
+#      (매니지드 작업 컨테이너와 같다. 실측 2026-10-29 systemd 255: stop 이면 넘친 python 과 함께 셸 · 하네스까지 끊겨 작업이 «응답 없음» 으로 끝났다).
+#      scope 의 OOMPolicy 는 systemd 253 부터 받는다 — 그보다 낮으면 걸지 않는다(종전 그대로 · systemd-run 이 모르는 속성으로 실패하지 않게).
 #   ⓘ 아래 caps 줄은 게이트웨이가 이 파일을 읽어 «이 래퍼가 무엇을 받나» 를 아는 표지다(agent-jobs/launch-host.ts cgspawnCheck) — 지우지 않는다.
-# lively-cgspawn-caps: swap-max
+# lively-cgspawn-caps: swap-max oom-policy
 #   · '--' 뒤 첫 토큰은 **반드시 box-spawn 경로**(고정). 임의 바이너리 실행 봉쇄(방어).
 #
 #  이 래퍼가 하는 일(그 외 권한상승 없음): 인자 엄격검증 → systemd-run --scope(root 라 polkit 없이 cgroup 생성)
@@ -46,13 +50,15 @@ die() { echo "box-cgspawn: $*" >&2; exit 2; }
 # ── 인자 파싱 ──
 osuser="${1:-}"; memhigh="${2:-}"; memmax="${3:-}"
 [ -n "$osuser" ] && [ -n "$memhigh" ] && [ -n "$memmax" ] \
-  || die "usage: box-cgspawn <osUser> <memHigh> <memMax> [<memSwapMax>] -- <cmd...>"
-#  #5082 — 네 번째 자리가 '--' 가 아니면 스왑 상한이고, 그다음이 반드시 '--' 다(값을 둘 이상 더 받지 않는다).
-memswap=""
+  || die "usage: box-cgspawn <osUser> <memHigh> <memMax> [<memSwapMax> [<oomPolicy>]] -- <cmd...>"
+#  #5082 — 네 번째 자리가 '--' 가 아니면 스왑 상한, 다섯 번째도 아니면 OOMPolicy 이고, 그다음이 반드시 '--' 다(값을 둘보다 더 받지 않는다).
+memswap=""; oompolicy=""
 if [ "${4:-}" = "--" ]; then
   shift 4
 elif [ "${5:-}" = "--" ]; then
   memswap="$4"; shift 5
+elif [ "${6:-}" = "--" ]; then
+  memswap="$4"; oompolicy="$5"; shift 6
 else
   die "missing '--' separator (got '${4:-}')"
 fi
@@ -90,6 +96,7 @@ mem_ok() { [[ "$1" =~ ^([0-9]+[KMG]?|0|infinity)$ ]]; }
 mem_ok "$memhigh" || die "invalid memHigh: ${memhigh}"
 mem_ok "$memmax"  || die "invalid memMax: ${memmax}"
 [ -z "$memswap" ] || mem_ok "$memswap" || die "invalid memSwapMax: ${memswap}"
+[ -z "$oompolicy" ] || [[ "$oompolicy" =~ ^(stop|continue)$ ]] || die "invalid oomPolicy: ${oompolicy}"
 
 # ── '--' 뒤 명령의 첫 토큰은 반드시 box-spawn(고정 경로). 임의 바이너리 실행 봉쇄. ──
 BOX_SPAWN="${LIVELY_BOX_SPAWN:-/opt/lively/libexec/box-spawn}"
@@ -103,6 +110,11 @@ if command -v systemd-run >/dev/null 2>&1 && [ "$(stat -fc %T /sys/fs/cgroup 2>/
   [ "$memmax"  != 0 ] && [ "$memmax"  != infinity ] && props+=( --property=MemoryMax="$memmax" )
   #  스왑 — 준 값 그대로(0 = 스왑 없음). infinity 나 생략이면 걸지 않는다(종전).
   if [ -n "$memswap" ] && [ "$memswap" != infinity ]; then props+=( --property=MemorySwapMax="$memswap" ); fi
+  #  OOMPolicy — scope 는 systemd 253 부터 받는다(머리말). 판 번호를 못 읽으면 걸지 않는다(종전).
+  if [ -n "$oompolicy" ]; then
+    sdver="$(systemctl --version 2>/dev/null | awk 'NR==1 {print $2}')"; sdver="${sdver%%[!0-9]*}"
+    if [ -n "$sdver" ] && [ "$sdver" -ge 253 ]; then props+=( --property=OOMPolicy="$oompolicy" ); fi
+  fi
   # --expand-environment=no: systemd 254+ 에만 있는 옵션. argv 의 '$' 를 systemd 가 확장하지 않게(우리 argv 는
   #  이미 화이트리스트지만 향후 기본동작 변경·경고 차단). 구 systemd 엔 없으니 지원할 때만 추가(portable).
   expand=()

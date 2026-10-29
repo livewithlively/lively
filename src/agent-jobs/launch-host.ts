@@ -10,9 +10,12 @@
 //      #5081 공용 시트 작업은 건너뛴다 — 그 홈은 구성원 누구의 지시든 닿는 자리라 키트(라이블리 토큰) · git 자격을 새로 심지 않는다(launch.ts 와 같다).
 //   ④ 판 — `tmux new-session -d -s job-…` 에 판 머리(PANE_PRELUDE) + 부트. 격리면 sudo box-spawn 으로 내려가고, 비격리면 tmux -c 와 그 사람의
 //      Claude 설정 폴더(CLAUDE_CONFIG_DIR). 사람 세션 목록 · 복원은 `box-` 만 보므로 이 판은 안 뜬다(plan.jobSessionId 머리말).
-//   ⑤ 메모리 상한 — 작업 정책의 memory_max_mb(기본 3072)를 격리 판의 cgroup MemoryMax 로 걸고, 스왑은 막는다(MemorySwapMax=0 — box-cgspawn
-//      네 번째 값). MemoryMax 만 걸면 넘친 만큼 스왑으로 빠져 상한이 RAM 에만 걸린다(실측 2026-10-29 Ubuntu 24.04 · 스왑 8G: 상한 512MiB 작업이
-//      스왑 1,696MiB). 사람 세션과 래퍼는 같고 값의 출처가 다르다(사람 세션은 세션 메모리 정책 · 스왑 값을 넘기지 않는다 — 종전 그대로).
+//   ⑤ 메모리 상한 — 작업 정책의 memory_max_mb(기본 3072)를 격리 판의 cgroup MemoryMax 로 걸고, 스왑은 막고(MemorySwapMax=0 — box-cgspawn
+//      네 번째 값), 넘친 프로세스만 끊는다(OOMPolicy=continue — 다섯 번째 값). 실측(2026-10-29 Ubuntu 24.04 · systemd 255 · 스왑 8G):
+//      MemoryMax 만 걸면 넘친 만큼 스왑으로 빠져 상한이 RAM 에만 걸렸고(상한 512MiB 작업이 스왑 1,696MiB), 스왑을 막으면 systemd 기본(stop)이
+//      넘친 python 과 함께 하네스 · 판 머리까지 멈춰 작업이 «응답 없음» 으로 끝났다. continue 면 그 도구만 실패하고 하네스가 그 실패를 받는다
+//      (매니지드 작업 컨테이너와 같다 · scope 의 OOMPolicy 는 systemd 253 부터 — 그 아래는 래퍼가 걸지 않아 종전처럼 판 전체가 멈춘다).
+//      사람 세션과 래퍼는 같고 값의 출처가 다르다(사람 세션은 세션 메모리 정책 · 스왑 · OOMPolicy 값을 넘기지 않는다 — 종전 그대로).
 //      상한을 둔 정책인데 걸 수 없으면 띄우지 않는다(CONTRIBUTING «정책은 있는데 집행 수단이 없으면 오류») — 래퍼가 없거나 sudo 가 허용하지 않으면
 //      다시 해도 안 될 실패, 묻다 끊겼거나 래퍼가 스왑 값을 모르는 옛 판이면 일시 실패(옛 판은 배포가 새 판을 띄운 뒤 래퍼를 다시 놓는 사이에
 //      생긴다 — cgspawnCheck). 비격리 박스는 걸 자리가 원래 없어(사람 세션도 같다) 그대로 띄우고 관리자 보기(agent_job_limits surface)에 보인다.
@@ -225,13 +228,21 @@ export async function killHostJob(sessionId: string, run?: (args: string[]) => P
 /** 비밀 파일의 폴더가 우리가 만든 임시 폴더 꼴인가 — 지우기 전에 본다(엉뚱한 폴더를 rm -rf 하지 않게). */
 const SECRET_DIR_RE = /\/lvly-job\.[A-Za-z0-9]{6,}$/;
 
-/** (순수) 작업 정책의 메모리 상한(MB) → cgroup 상한. 0 = 상한 없음. MemoryMax 하나만 건다(MemoryHigh 로 판을 느리게 조이지 않는다). */
+/**
+ * (순수) 작업 정책의 메모리 상한(MB) → cgroup 상한. 0 = 상한 없음. MemoryMax 하나만 건다(MemoryHigh 로 판을 느리게 조이지 않는다) ·
+ *  스왑 없음 · 넘친 프로세스만 끊기(머리말 ⑤).
+ */
 export function jobMemoryLimit(memoryMaxMb: number): CgroupLimit | undefined {
-  return Number.isFinite(memoryMaxMb) && memoryMaxMb > 0 ? { highMb: 0, maxMb: Math.floor(memoryMaxMb), requestMb: 0, swapMaxMb: 0 } : undefined;
+  return Number.isFinite(memoryMaxMb) && memoryMaxMb > 0
+    ? { highMb: 0, maxMb: Math.floor(memoryMaxMb), requestMb: 0, swapMaxMb: 0, oomPolicy: "continue" }
+    : undefined;
 }
 
-/** box-cgspawn 이 스왑 값(네 번째 값)을 받나 — 래퍼 파일의 표지 줄(`# lively-cgspawn-caps: … swap-max …`). 옛 판은 네 값을 받으면 판이 곧바로 죽는다. */
-export const CGSPAWN_SWAP_CAP_RE = /^# lively-cgspawn-caps:.*\bswap-max\b/m;
+/**
+ * box-cgspawn 이 작업 상한 값(네 번째 스왑 · 다섯 번째 OOMPolicy)을 받나 — 래퍼 파일의 표지 줄(`# lively-cgspawn-caps: swap-max oom-policy`).
+ *  옛 판은 값을 더 받으면 판이 곧바로 죽는다.
+ */
+export const CGSPAWN_JOB_CAPS_RE = /^# lively-cgspawn-caps:(?=.*\bswap-max\b)(?=.*\boom-policy\b)/m;
 
 async function jobPolicy(): Promise<{ memory_max_mb: number }> {
   const pol = await import("../org/policies/agent-job-policy.js");
@@ -275,14 +286,14 @@ export async function cgspawnCheck(o: { infraReady?: () => boolean; wrapper?: st
   const iso = await import("../terminal/terminal-isolation.js");
   const wrapper = o.wrapper ?? iso.BOX_CGSPAWN;
   if (!(o.infraReady ?? iso.cgroupInfraReady)()) return { ok: false, transient: false, why: `cgroup 래퍼(${wrapper})가 이 박스에 없습니다` };
-  //  스왑 값을 아는 판인가 — 래퍼는 root 소유 0755 라 게이트웨이가 읽는다. 못 읽으면 모르는 것이라 일시로 둔다(기억하지 않는다).
+  //  작업 상한 값(스왑 · OOMPolicy)을 아는 판인가 — 래퍼는 root 소유 0755 라 게이트웨이가 읽는다. 못 읽으면 모르는 것이라 일시로 둔다(기억하지 않는다).
   //   옛 판도 일시다 — 배포(deploy-release.sh)는 새 판으로 넘긴 «뒤에» 격리 인프라(이 래퍼)를 다시 놓아, 그 사이 잠깐 새 코어 + 옛 래퍼가 된다.
   //   그때 들어온 작업은 실패시키지 않고 다시 기다리게 한다. 다시 놓기가 실패해 그대로면 시도를 다 쓰고 고칠 길과 함께 실패한다(service).
   let text: string;
   try { text = await (o.readWrapper ?? (async (p: string) => (await import("node:fs/promises")).readFile(p, "utf8")))(wrapper); }
   catch (e) { return { ok: false, transient: true, why: `cgroup 래퍼(${wrapper})를 읽지 못했습니다: ${String((e as Error)?.message ?? e)}` }; }
-  if (!CGSPAWN_SWAP_CAP_RE.test(text)) {
-    return { ok: false, transient: true, why: `cgroup 래퍼(${wrapper})가 스왑 상한을 모르는 옛 판입니다(배포가 래퍼를 새로 놓는 중이면 곧 풀립니다 — 그대로면 ${CAP_FIX})` };
+  if (!CGSPAWN_JOB_CAPS_RE.test(text)) {
+    return { ok: false, transient: true, why: `cgroup 래퍼(${wrapper})가 작업 상한 값(스왑 없음 · 넘친 프로세스만 끊기)을 모르는 옛 판입니다(배포가 래퍼를 새로 놓는 중이면 곧 풀립니다 — 그대로면 ${CAP_FIX})` };
   }
   const now = (o.now ?? Date.now)();
   if (cgProbe && now - cgProbe.at < (cgProbe.result.ok ? CGSPAWN_OK_MS : CGSPAWN_NO_MS)) return cgProbe.result;
@@ -315,7 +326,9 @@ export async function hostMemoryCapStatus(memoryMaxMb: number, o: { runsAs?: () 
     return { enforced: false, note: "이 박스는 구성원 격리(OS 계정)가 꺼져 있어 작업이 게이트웨이 계정으로 돌고 상한을 걸 자리가 없습니다(사람 세션도 같다)" };
   }
   const c = await (o.check ?? cgspawnCheck)();
-  if (c.ok) return { enforced: true, note: "구성원 OS 계정 판마다 cgroup MemoryMax 로 겁니다(넘으면 그 판 안에서 하네스가 먼저 끊깁니다)" };
+  if (c.ok) {
+    return { enforced: true, note: "구성원 OS 계정 판마다 cgroup MemoryMax 로 겁니다(스왑 없이) — 넘으면 그 판 안에서 메모리를 가장 많이 쓰는 프로세스가 끊기고, systemd 253 이상이면 나머지(하네스)는 살아 그 실패를 받습니다(그 아래는 판 전체가 멈춥니다)" };
+  }
   return { enforced: false, note: c.transient
     ? `지금은 상한을 걸지 못합니다 — ${c.why}. 그동안 작업은 일시 실패로 다시 시도합니다`
     : `${c.why} — 이대로는 작업을 띄우지 않습니다. ${CAP_FIX}` };
