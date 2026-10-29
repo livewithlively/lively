@@ -2,7 +2,7 @@
 //  ⚠ 모든 조회는 요청 컨텍스트(RLS)의 테넌트로 좁혀진다. 상태를 바꾸는 쓰기는 «지금 상태가 이것일 때만» 조건을 단다(청/녹 두 슬롯 · 정비가 겹쳐도 한 번만).
 import type pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
-import type { AiAccountSettings, AiRunStatus, Executor, RunKind } from "./plan.js";
+import type { AiAccountSettings, AiRunStatus, Executor, ResumeLink, RunKind } from "./plan.js";
 
 export interface AiRunRow {
   id: number;
@@ -52,18 +52,86 @@ export interface NewAiRun {
    *  지시 · 답이 시트 계정에게 보인다. 실행 행에 남긴다(RUN_SHARED_SEAT_COL 머리말 — 작업 행이 없거나 지워져도 그대로 남게).
    */
   sharedSeat: boolean;
+  /** #5101 이어받은 실행이면 그 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭) — 없으면(새 질문) 생략 · null. RUN_RESUME_COLS 머리말(롤 창). */
+  resume?: ResumeLink | null;
+}
+
+/** 실행 행 하나를 넣는 SQL(insertAiRun · insertResumedAiRun 이 같은 글을 쓴다). */
+function insertRunSql(n: NewAiRun): { sql: string; args: unknown[] } {
+  //  #5081 shared_seat 칸은 공용 시트 실행일 때만 적는다 — RUN_SHARED_SEAT_COL 머리말(롤 창에서 다른 실행의 접수가 «없는 칸» 으로 깨지지 않게).
+  //  #5101 이어받기 칸 넷도 같은 까닭으로 이어받은 실행일 때만 적는다(RUN_RESUME_COLS 머리말).
+  const shared = n.sharedSeat === true;
+  const rs = n.resume ?? null;
+  const extraCols = `${shared ? `, ${RUN_SHARED_SEAT_COL}` : ""}${rs ? `, ${RUN_RESUME_COLS.join(", ")}` : ""}`;
+  const extraVals = `${shared ? ", true" : ""}${rs ? ", $16, $17, $18, $19" : ""}`;
+  return {
+    sql: `INSERT INTO org_app_ai_run(status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, model, label, prompt,
+                                system_prompt, schema, started_at${extraCols})
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, CASE WHEN $1='running' THEN now() ELSE NULL END${extraVals}) RETURNING ${COLS}`,
+    args: [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
+      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, ...(rs ? [rs.of, rs.root, rs.depth, rs.reason] : [])],
+  };
 }
 
 export async function insertAiRun(n: NewAiRun): Promise<AiRunRow> {
-  //  #5081 shared_seat 칸은 공용 시트 실행일 때만 적는다 — RUN_SHARED_SEAT_COL 머리말(롤 창에서 다른 실행의 접수가 «없는 칸» 으로 깨지지 않게).
-  const shared = n.sharedSeat === true;
-  const r = await itemsPool.query(
-    `INSERT INTO org_app_ai_run(status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, model, label, prompt,
-                                system_prompt, schema, started_at${shared ? `, ${RUN_SHARED_SEAT_COL}` : ""})
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, CASE WHEN $1='running' THEN now() ELSE NULL END${shared ? ", true" : ""}) RETURNING ${COLS}`,
-    [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
-      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null]);
+  const { sql, args } = insertRunSql(n);
+  const r = await itemsPool.query(sql, args);
   return norm(r.rows[0])!;
+}
+
+/**
+ * #5101 이어받기 칸(org_app_ai_run.resume_of · resume_root · resume_depth · resume_reason)도 COLS 에 넣지 않고 따로 읽는다 — RUN_SHARED_SEAT_COL 과
+ *  같은 까닭(롤 창: 새 게이트웨이가 공용 DB 마이그레이션보다 먼저 받는다). 이어받은 실행을 넣을 때만 적고(insertAiRun), 읽을 때 칸이 아직 없으면(42703)
+ *  «이어받은 실행이 아니다» 다 — 칸이 없으면 그 칸을 단 행도 없다. ★ 롤 창에 이어받기를 보내면 «없는 칸» 으로 접수가 실패한다 — 부르는 쪽
+ *  (service.submitRun)이 503 으로 다시 보내라고 한다.
+ */
+export const RUN_RESUME_COLS = ["resume_of", "resume_root", "resume_depth", "resume_reason"] as const;
+const isUndefinedColumn = (e: unknown): boolean => (e as { code?: string })?.code === "42703";
+
+/** 이 실행이 이어받은 줄 — 새 질문(처음 실행)이면 null. */
+export async function aiRunResumeLink(id: number): Promise<ResumeLink | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await itemsPool.query(`SELECT resume_of, resume_root, resume_depth, resume_reason FROM org_app_ai_run WHERE id=$1`, [id]);
+    const x = r.rows[0];
+    if (!x || x.resume_of == null) return null;
+    return { of: Number(x.resume_of), root: Number(x.resume_root ?? x.resume_of), depth: Number(x.resume_depth ?? 1), reason: (x.resume_reason as string | null) ?? null };
+  } catch (e) {
+    if (isUndefinedColumn(e)) return null;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * 한 질문(처음 실행)을 이어받은 수를 세는 조건 — 갈래까지 다 센다. 띄우지도 못한 시도(작업 실행인데 작업 행 없이 실패 — 대기열이 참 · 작업 컨테이너가
+ *  없는 배포)는 뺀다 — 한 번도 돌지 않은 시도가 앱의 다시 묻기 몫을 깎지 않게(격리 리뷰). 아직 작업을 달기 전인 열린 시도는 센다(동시에 보내도 넘지 않게).
+ */
+const RESUME_COUNTED = `resume_root=$1 AND NOT (executor='job' AND job_id IS NULL AND status='failed')`;
+
+/** 한 질문(처음 실행 rootId)을 이어받은 수(RESUME_COUNTED) — 접수 전 미리 보기(plan.resumeRefusal). 끝을 막는 것은 insertResumedAiRun 이다. */
+export async function resumeCountOfRoot(rootId: number): Promise<number> {
+  try {
+    const r = await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_ai_run WHERE ${RESUME_COUNTED}`, [rootId]);
+    return Number(r.rows[0]?.n ?? 0);
+  } catch (e) {
+    if (isUndefinedColumn(e)) return 0;   // 마이그레이션 전 — 칸이 없으면 이어받은 실행도 없다
+    throw e;
+  }
+}
+
+/**
+ * 이어받은 실행을 넣는다 — 그 질문(root)의 잠금 안에서 세고(RESUME_COUNTED) 상한 아래일 때만 넣는다. 같은 질문을 동시에 여럿 이어도 상한을 넘지 않는다
+ *  (세고 → 넣기가 따로면 동시에 보낸 만큼 다 받는다 — 격리 리뷰 실측 8/8). 상한에 닿았으면 { limit: 센 수 }.
+ *  ⚠ 칸이 아직 없으면(롤 창) 42703 을 그대로 던진다 — 부르는 쪽이 503 으로 바꾼다.
+ */
+export async function insertResumedAiRun(n: NewAiRun & { resume: ResumeLink }, maxResumes: number): Promise<{ row: AiRunRow } | { limit: number }> {
+  return withTx(async (c) => {
+    await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('lvly-ai-resume:' || $1::text, 0))`, [String(n.resume.root)]);
+    const counted = Number((await c.query(`SELECT count(*)::int AS n FROM org_app_ai_run WHERE ${RESUME_COUNTED}`, [n.resume.root])).rows[0]?.n ?? 0);
+    if (counted >= maxResumes) return { limit: counted };
+    const { sql, args } = insertRunSql(n);
+    return { row: norm((await c.query(sql, args)).rows[0])! };
+  });
 }
 
 export async function getAiRun(id: number): Promise<AiRunRow | null> {

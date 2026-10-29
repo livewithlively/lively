@@ -2,8 +2,9 @@
 //  이게 틀리면: 작업별 설정이 앱별에 밀리거나, 구독이 남의 요청을 처리하거나(#4423), 단발이 컨테이너로 가거나, 스키마 어긋남을 맞음으로 읽는다.
 import assert from "node:assert/strict";
 import {
-  accountSetRefusal, executorFor, extractJson, judgeOutput, overDailyBudget, parseAccountSettings, resolveAccount, runKindOf, runStatusOfJob, schemaInputError,
-  schemaInstruction, seatElevated, seatShared, seatState, serviceSeatChange, serviceSeatConsented, subscriptionRefusal, validateJsonSchema, waitSecOf, WAIT_MAX_SEC,
+  accountSetRefusal, executorFor, extractJson, judgeOutput, overDailyBudget, parseAccountSettings, resolveAccount, resumeHistory, resumeInputError, resumeLabel,
+  resumeRefusal, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction, seatElevated, seatShared, seatState, serviceSeatChange, serviceSeatConsented,
+  subscriptionRefusal, validateJsonSchema, waitSecOf, LABEL_MAX, WAIT_MAX_SEC,
   type AiAccountSettings, type ServiceSeat,
 } from "./plan.js";
 
@@ -255,6 +256,78 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(waitSecOf(999), WAIT_MAX_SEC, "앞단 무응답 30초 안으로 접는다");
   assert.equal(WAIT_MAX_SEC < 30, true);
   ok("P12~P14 하루 상한 · 작업 상태 대응 · wait 접기");
+}
+
+// ── PR1~PR4 #5101 이어받기 판정(순수) — 태스크 #5101 · 지식 app-ai-run-resume-asbuilt-5101 엣지 표 R2c/R2d · R7 · R8 · R15 · N1 ──
+{
+  const p = { status: "done", app_id: "crm", requester: "alice", requester_kind: "member" };
+  const base = { requester: "alice", requesterKind: "member", appId: "crm", conversation: true, resumesOfRoot: 0, maxResumes: 3 };
+  const code = (r: ReturnType<typeof resumeRefusal>): string | null => r?.code ?? null;
+  assert.equal(resumeRefusal(p, base), null);
+  assert.equal(code(resumeRefusal(null, base)), "resume_not_found");
+  assert.equal(code(resumeRefusal(p, { ...base, requester: "bob" })), "resume_not_found", "남이 보낸 실행");
+  assert.equal(code(resumeRefusal(p, { ...base, appId: "talk" })), "resume_not_found", "다른 앱의 실행");
+  assert.equal(resumeRefusal(null, base)!.status, 404);
+  //  순서 — 남의 실행이면 다른 사실(꺼짐 · 상한 · 대화)이 무엇이든 404(있는지 드러내지 않는다).
+  assert.equal(code(resumeRefusal({ ...p, status: "running" }, { ...base, requester: "bob", maxResumes: 0, conversation: false })), "resume_not_found");
+  //  다른 자리 — 앱 화면(member)에서 시작한 대화를 앱 서버가 · 그 거꾸로(409 — 같은 사람이라 있는지는 감추지 않는다). 404 가 먼저다.
+  const ch = resumeRefusal(p, { ...base, requesterKind: "app_server" })!;
+  assert.equal(ch.code, "resume_not_resumable"); assert.equal(ch.status, 409); assert.match(ch.message, /앱 서버가 시작한 대화는 앱 서버에서만/);
+  assert.equal(code(resumeRefusal({ ...p, requester_kind: "app_server" }, base)), "resume_not_resumable");
+  assert.equal(resumeRefusal({ ...p, requester_kind: "app_server" }, { ...base, requesterKind: "app_server" }), null, "같은 자리면 받는다");
+  assert.equal(code(resumeRefusal(p, { ...base, requester: "bob", requesterKind: "app_server" })), "resume_not_found", "남의 실행이면 자리를 보기 전에 404");
+  assert.equal(code(resumeRefusal(p, { ...base, maxResumes: 0 })), "resume_disabled");
+  assert.equal(code(resumeRefusal({ ...p, status: "queued" }, base)), "resume_not_ended");
+  assert.equal(code(resumeRefusal({ ...p, status: "running" }, base)), "resume_not_ended");
+  assert.equal(code(resumeRefusal({ ...p, status: "canceled" }, base)), "resume_not_resumable");
+  assert.equal(resumeRefusal({ ...p, status: "failed" }, base), null, "실패해도 대화가 있으면 잇는다");
+  const nc = resumeRefusal(p, { ...base, conversation: false, noConversationWhy: "기록 없음" })!;
+  assert.equal(nc.code, "resume_not_resumable"); assert.equal(nc.status, 409); assert.match(nc.message, /기록 없음/, "까닭을 붙인다");
+  assert.doesNotMatch(resumeRefusal(p, { ...base, conversation: false })!.message, /\(\)/, "까닭이 없으면 빈 괄호를 안 붙인다");
+  //  경계 — 상한 3: 이미 2번이면 받는다 · 3번이면 거절(>=) · 상한 1 에 0번이면 받는다.
+  assert.equal(resumeRefusal(p, { ...base, resumesOfRoot: 2 }), null);
+  assert.equal(code(resumeRefusal(p, { ...base, resumesOfRoot: 3 })), "resume_limit");
+  assert.equal(code(resumeRefusal(p, { ...base, resumesOfRoot: 4 })), "resume_limit");
+  assert.equal(resumeRefusal(p, { ...base, maxResumes: 1, resumesOfRoot: 0 }), null);
+  assert.equal(code(resumeRefusal(p, { ...base, maxResumes: 1, resumesOfRoot: 1 })), "resume_limit");
+  ok("PR1 resumeRefusal — 404(없음 · 남 · 다른 앱 · 맨 먼저) · 꺼짐 · 안 끝남 · 취소 · 대화 없음 · 상한 경계(>=)");
+
+  const single = { job_name: "summarize", system_prompt: "S", kind: "single" as const };
+  const agent = { job_name: null, system_prompt: null, kind: "agent" as const };
+  assert.equal(resumeInputError({}, single, null), null);
+  assert.match(resumeInputError({ job: "other" }, single, null)!, /job/);
+  assert.equal(resumeInputError({ job: "summarize" }, single, null), null, "같은 작업 이름");
+  assert.match(resumeInputError({ job: "summarize" }, agent, null)!, /job/, "앞 실행에 작업 이름이 없는데 준 것");
+  assert.equal(resumeInputError({ job: "" }, agent, null), null, "빈 값은 안 준 것");
+  assert.match(resumeInputError({ system: "T" }, single, null)!, /system/);
+  assert.equal(resumeInputError({ system: " S " }, single, null), null, "같은 system(앞뒤 공백)");
+  assert.match(resumeInputError({ system: "S" }, agent, null)!, /system/, "앞 실행에 system 이 없는데 준 것");
+  assert.equal(resumeInputError({ system: "  " }, agent, null), null, "빈 system 은 안 준 것");
+  assert.match(resumeInputError({ files: ["a"] }, single, null)!, /단발 실행은/);
+  assert.match(resumeInputError({ agent: true }, single, null)!, /단발 실행은/);
+  assert.equal(resumeInputError({ files: [] }, single, null), null, "빈 files 는 단발 그대로");
+  assert.equal(resumeInputError({ files: ["a"] }, agent, 7), null, "에이전트엔 파일을 더 알려 줄 수 있다");
+  assert.match(resumeInputError({ project_id: 8 }, agent, 7)!, /작업 폴더/);
+  assert.equal(resumeInputError({ project_id: 7 }, agent, 7), null);
+  assert.match(resumeInputError({ project_id: 7 }, agent, null)!, /작업 폴더/, "앱 폴더 대화를 프로젝트 폴더로");
+  ok("PR2 resumeInputError — job · system · 종류 · 작업 폴더 · 같은 값 · 빈 값");
+
+  assert.equal(resumeLabel(null, 12, 1), "AI 실행 #12 (이어받기 1)");
+  assert.equal(resumeLabel("정책 질문", 12, 1), "정책 질문 (이어받기 1)");
+  assert.equal(resumeLabel("정책 질문 (이어받기 1)", 12, 2), "정책 질문 (이어받기 2)");
+  assert.equal(resumeLabel("  ", 12, 3), "AI 실행 #12 (이어받기 3)");
+  const long = resumeLabel("가".repeat(200), 1, 12);
+  assert.equal(long.length, LABEL_MAX, "이름표 상한"); assert.ok(long.endsWith(" (이어받기 12)"), "길면 앞 이름표를 줄이고 번호는 남긴다");
+  ok("PR3 resumeLabel — 빈 이름표 · 번호 갈기 · 상한");
+
+  const sc = { type: "object" };
+  assert.deepEqual(resumeHistory([{ prompt: "Q", schema: null, result: { text: "A" } }, { prompt: "R", schema: sc, result: { text: "B" } }]), [
+    { role: "user", content: "Q" }, { role: "assistant", content: "A" }, { role: "user", content: "R" + schemaInstruction(sc) }, { role: "assistant", content: "B" },
+  ]);
+  assert.equal(resumeHistory([{ prompt: "Q", schema: null, result: null }]), null, "답 없는 실행이 끼면 대화 없음");
+  assert.equal(resumeHistory([{ prompt: "Q", schema: null, result: { text: "A" } }, { prompt: "R", schema: null, result: { text: "  " } }]), null, "빈 답도");
+  assert.equal(resumeHistory([]), null, "끊긴 줄(빈 배열)");
+  ok("PR4 resumeHistory — 차례 · 형식 지시 · 답 없음/빈 답/끊긴 줄은 null");
 }
 
 console.log(`ai-runs plan.test: ${pass} passed`);

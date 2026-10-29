@@ -4,7 +4,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { RateWindow } from "../apps/app-chat-send.js";
-import { PROXY_TOKEN_PREFIX, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { PROXY_TOKEN_PREFIX, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
 import { parseAccountSettings } from "./plan.js";
 
 /** 워크스페이스 Anthropic API 키의 자격 금고 kind(org_credential_set kind=anthropic_api_key · owner=gateway). */
@@ -83,15 +83,18 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
       const cwd = j.projectId != null ? plan.projectFolderCwd(j.projectId) : plan.appFolderCwd(j.appId);
       let resumeConv: string | null = null;
       if (j.resumeJobId != null) {
-        const prev = await jobs.store.getAgentJob(j.resumeJobId);
-        if (!prev || !prev.conversation_id) throw new HttpError(409, "이어받을 작업의 대화가 없습니다");
-        resumeConv = prev.conversation_id;
+        //  #5101 이을 대화가 남았나 — 접수 전 판정(resumeTarget)과 같은 함수로 한 번 더 본다. API 키 작업의 대화는 게이트웨이가 보관한 기록뿐이다
+        //   (빈 설정 폴더는 끝나면 지워진다) — 없으면 띄워 봐야 «대화 없음» 으로 끝난다. 형식 재시도는 이 409 를 받아 «원문 붙여 실패» 로 끝낸다(syncRun).
+        const t = await resumeTargetOf(j.resumeJobId);
+        if (!t?.resumable || !t.conversation) throw new HttpError(409, `이어받을 작업의 대화가 없습니다${t?.why ? ` — ${t.why}` : ""}`);
+        resumeConv = t.conversation;
       }
       const ai = await import("./service.js");
       const row = await svc.enqueueAgentJob(ai.agentJobOfRun(j, { cwd, resumeConversation: resumeConv, timeoutSec: plan.timeoutSecOf(j.timeoutMin ?? undefined, p) }), p, jobs);
       return { id: row.id };
     },
     getJob: async (id) => (await import("../agent-jobs/store.js")).getAgentJob(id),
+    resumeTarget: resumeTargetOf,
     cancelJob: async (id, user) => {
       const svc = await import("../agent-jobs/service.js");
       const jobs = await (await import("../agent-jobs/live.js")).liveAgentJobDeps();
@@ -149,6 +152,23 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     memberFacts: memberFactsOf,
   };
   return cached;
+}
+
+/**
+ * #5101 이어받을 작업(앞 실행의 작업 행)의 사실 — 작업 폴더 · 모델 · 이을 대화가 남았나. 작업 행이 없으면(보존 정리로 지워짐) null.
+ *  API 키 작업은 게이트웨이가 보관한 대화 기록이 그 작업의 대화 id 와 맞아야 잇는다(빈 설정 폴더는 끝나면 지워진다 — agent-jobs/plan.TRANSCRIPT_GZ_MAX).
+ *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남는다 — 대화 id 만 본다.
+ */
+export async function resumeTargetOf(jobId: number): Promise<ResumeTarget | null> {
+  const store = await import("../agent-jobs/store.js");
+  const j = await store.getAgentJob(jobId);
+  if (!j) return null;
+  const base = { projectId: j.project_id, model: j.model, conversation: j.conversation_id };
+  if (!j.conversation_id) return { ...base, resumable: false, why: "그 작업에 대화가 남지 않았습니다 — 하네스가 대화를 시작하기 전에 끝났습니다" };
+  if (j.account_kind === "api_key" && (await store.agentJobTranscriptConv(j.id)) !== j.conversation_id) {
+    return { ...base, resumable: false, why: "API 키 작업의 대화 기록이 없습니다 — 게이트웨이는 끝난 뒤 transcript_keep_days 동안만 두고, 이 기능 전에 끝난 작업 · 기록이 상한을 넘은 작업은 남지 않습니다" };
+  }
+  return { ...base, resumable: true, why: null };
 }
 
 /**

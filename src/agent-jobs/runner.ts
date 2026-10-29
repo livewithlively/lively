@@ -89,13 +89,24 @@ export interface RunnerJob {
   tailMax: number;
   resultMax: number;
   stderrMax: number;
+  /**
+   * #5101 API 키 작업만 — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다 먼저). 그 작업의 빈 설정 폴더는
+   *  끝나면 지워져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면 올리지 않는다. 없으면(구독 작업 — 대화가 홈에 남는다 ·
+   *  관리자가 보관을 끔) 올리지 않는다.
+   */
+  transcriptMax?: number;
+  /** 대화 기록 묶음을 풀 때 상한(바이트 — 압축 폭탄 막기 · 올리기 전 크기 재기). */
+  transcriptRawMax?: number;
+  /** #5101 이어받는 API 키 작업 — 앞 작업의 대화 기록 묶음(conv = 이을 대화 id · gz = gzip 의 base64). 판이 빈 설정 폴더에 되돌려 놓는다. */
+  transcript?: { conv: string; gz: string };
 }
 
 /**
  * ② 본체 — `new Function("job","require", RUNNER_SOURCE)(job, require)` 로 돈다(ES2020 · 노드 내장만).
  *  하는 일: 프롬프트·MCP 설정을 컨테이너 /tmp 의 0700 폴더에 쓰고 → 하네스를 stdin=프롬프트로 띄우고 → stream-json 을 줄마다 읽어
  *  대화 id·마지막 result·진행 꼬리를 모으고 → tickMs 마다 박동(게이트웨이가 cancel 이면 끊는다) → 시간 상한이면 끊고 →
- *  끝나면 결과를 올리고(못 올리면 다시 — 24번) → 폴더를 지우고 빠진다.
+ *  끝나면 (API 키 작업이면 대화 기록을 먼저 올리고 — #5101) 결과를 올리고(못 올리면 다시 — 24번) → 폴더를 지우고 빠진다.
+ *  이어받는 API 키 작업이면 하네스를 띄우기 전에 앞 대화 기록을 빈 설정 폴더에 되돌려 놓는다(#5101).
  *  ★ 결과를 올리는 동안에도 박동한다 — 박동을 먼저 멈추면 결과를 다시 보내는 동안 게이트웨이가 침묵(silent_sec)을 듣고, 일을 마친
  *   작업을 «응답 없음» 으로 끊어 결과가 사라진다(격리 리뷰). 결과가 받아들여진 뒤의 박동은 410 이라 해가 없다.
  *  끊기: SIGTERM, 10초 뒤 SIGKILL.
@@ -108,12 +119,13 @@ const GW = { host: "${RUNNER_GATEWAY.host}", port: ${RUNNER_GATEWAY.port} };
 // 박스 위 실행면(#5082)만 싣는 둘 — 포트 · 워크스페이스. 없으면 종전 그대로(매니지드는 브로커가 테넌트를 붙인다).
 if (process.env.${JOB_PORT_ENV}) GW.port = Number(process.env.${JOB_PORT_ENV});
 const WS = process.env.${JOB_WS_ENV} || "";
-function call(kind, body, tries) {
+// raw = { buf, type, headers } 면 JSON 대신 그 바이트를 그대로 보낸다(#5101 대화 기록 — gzip).
+function call(kind, body, tries, raw) {
   return new Promise((resolve) => {
     const once = (left) => {
-      const data = JSON.stringify(body);
+      const data = raw ? raw.buf : JSON.stringify(body);
       const q = http.request({ host: GW.host, port: GW.port, path: "/api/agent-jobs/" + encodeURIComponent(String(J.id)) + "/" + kind, method: "POST",
-        headers: Object.assign({ authorization: "Bearer " + J.secret, "content-type": "application/json", "content-length": Buffer.byteLength(data) }, WS ? { "x-lively-workspace": WS } : {}), timeout: 20000 }, (r) => {
+        headers: Object.assign({ authorization: "Bearer " + J.secret, "content-type": raw ? raw.type : "application/json", "content-length": Buffer.byteLength(data) }, raw ? raw.headers : {}, WS ? { "x-lively-workspace": WS } : {}), timeout: 20000 }, (r) => {
         let b = ""; r.setEncoding("utf8"); r.on("data", (d) => { b += d; });
         r.on("end", () => {
           if (r.statusCode === 200) { try { resolve(JSON.parse(b)); } catch (e) { resolve({}); } return; }
@@ -140,11 +152,88 @@ const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a 
 const env = Object.assign({}, process.env, J.env || {});
 delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV}; delete env.${JOB_PORT_ENV}; delete env.${JOB_WS_ENV};
 // 빈 설정 폴더 자리표(#4488 API 키 실행) — 하네스가 멤버 홈의 로그인을 읽지 않게 이 작업만의 설정 폴더를 만든다. 빈 값은 «그 변수를 지워라» 다.
+let cfgDir = null;
 for (const k of Object.keys(env)) {
-  if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; }
+  if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; cfgDir = c; }
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
 }
-let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null;
+let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null, tNote = "";
+// #5101 대화 기록 묶음 — 그 빈 설정 폴더의 projects/ 아래 파일 전부(대화 파일 · 큰 도구 결과 파일 <대화>/tool-results/* · 하위 에이전트 대화)를
+//  projects/ 기준 상대 경로 그대로 담는다: gzip(JSON {v:1, cfg:<이 작업의 설정 폴더>, files:[{p, d(base64)}]}). 큰 도구 결과는 대화 파일에
+//  «<설정 폴더>/projects/…/tool-results/x.txt 에 저장했다» 는 안내문으로만 남는다(collect-run-script 머리말 · 매니지드 실측 2026-10-16) — 그래서 파일까지
+//  담고, 되돌릴 때 대화 파일(.jsonl) 속 앞 작업의 설정 폴더 경로를 이 작업의 경로로 바꿔 쓴다(이어받은 AI 가 그 파일을 다시 읽을 수 있게).
+//  되돌린 대화 파일은 원래 자리(작업 폴더 이름의 폴더)에 놓인다 — claude 가 --resume <id> 를 그 자리에서 찾는다(다른 폴더에서도 찾지만 그 동작에 기대지 않는다).
+const zlib = require("zlib");
+const CONV_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SEG_RE = /^[A-Za-z0-9._-]{1,200}$/;
+const BUNDLE_FILES_MAX = 2000;
+const RAW_MAX = J.transcriptRawMax || 67108864;
+const projDir = () => path.join(cfgDir, "projects");
+const safeRel = (rel) => typeof rel === "string" && rel.length < 1024 && rel.split("/").every((s) => SEG_RE.test(s) && s !== "." && s !== "..");
+const listProjectFiles = () => {
+  const out = [];
+  const walk = (d, rel) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) walk(path.join(d, e.name), r);
+      else if (e.isFile() && safeRel(r)) out.push(r);
+      if (out.length > BUNDLE_FILES_MAX) throw new Error("파일이 너무 많다(" + BUNDLE_FILES_MAX + " 초과)");
+    }
+  };
+  walk(projDir(), "");
+  return out;
+};
+if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
+  try {
+    const b = JSON.parse(zlib.gunzipSync(Buffer.from(String(J.transcript.gz), "base64"), { maxOutputLength: RAW_MAX }).toString("utf8"));
+    if (!b || b.v !== 1) throw new Error("묶음 형식(v " + String(JSON.stringify(b && b.v)).slice(0, 40) + ")을 모른다");
+    const from = typeof b.cfg === "string" && b.cfg.length > 1 ? b.cfg + "/" : null;
+    const files = Array.isArray(b.files) ? b.files.slice(0, BUNDLE_FILES_MAX) : [];
+    //  전부 아니면 없음 — 먼저 다 바꿔 세고(경로를 바꿔 쓰면 늘 수 있다 · 짧은 앞 경로) 상한 안일 때만 쓴다. 반쯤 놓인 대화(큰 결과 파일 없이)로 잇지 않는다.
+    const put = [];
+    let found = false, written = 0;
+    for (const f of files) {
+      if (!f || !safeRel(f.p)) continue;
+      let data = Buffer.from(String(f.d || ""), "base64");
+      if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(cfgDir + "/"), "utf8");
+      if ((written += data.length) > RAW_MAX) throw new Error("되돌릴 크기가 상한(" + RAW_MAX + ")을 넘는다");
+      put.push([f.p, data]);
+      if (f.p.endsWith("/" + J.transcript.conv + ".jsonl")) found = true;
+    }
+    for (const [p, data] of put) {
+      const dest = path.join(projDir(), p);
+      fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(dest, data, { mode: 0o600 });
+    }
+    if (!found) tNote += "transcript restore: 그 대화 파일이 묶음에 없다\n";
+  } catch (e) {
+    tNote += "transcript restore: " + (e && e.message) + "\n";
+    //  쓰다가 실패했어도(디스크 가득 · 이름 겹침) 반쯤 놓인 것을 남기지 않는다 — 이 작업만의 빈 설정 폴더라 projects/ 를 통째로 비워도 된다.
+    try { fs.rmSync(projDir(), { recursive: true, force: true }); } catch (e2) {}
+  }
+}
+// #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
+//  읽기 전에 크기부터 잰다 — 너무 큰 기록을 메모리에 올리다 판이 죽으면 결과까지 잃는다(base64 · JSON 을 더해도 풀린 상한 안이어야 한다).
+//  못 올리면(되돌리지 못한 것도) 그 까닭을 결과 보고의 transcript_note 칸에 싣는다 — 게이트웨이가 작업 번호와 함께 경고 로그로 남긴다. 나중에 이어받기가
+//   «기록이 없습니다» 로 거절될 때 어느 상한이었는지 그 작업으로 찾는다(격리 리뷰). stderr_tail 에 섞지 않는다 — 실패 글은 그 끝 세 줄을 쓴다.
+const skipTranscript = (why) => { tNote += "transcript skipped: " + why + "\n"; };
+const saveTranscript = async () => {
+  if (!cfgDir || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
+  let gz = null;
+  try {
+    const files = listProjectFiles();
+    if (!files.some((r) => r.endsWith("/" + conv + ".jsonl"))) return skipTranscript("대화 파일(" + conv + ".jsonl)이 없다");
+    let total = 0;
+    for (const r of files) total += fs.statSync(path.join(projDir(), r)).size;
+    if (total > RAW_MAX * 0.7) return skipTranscript("풀린 크기 " + total + " > " + Math.floor(RAW_MAX * 0.7));
+    const bundle = { v: 1, cfg: cfgDir, files: files.map((r) => ({ p: r, d: fs.readFileSync(path.join(projDir(), r)).toString("base64") })) };
+    gz = zlib.gzipSync(Buffer.from(JSON.stringify(bundle), "utf8"));
+  } catch (e) { return skipTranscript(String(e && e.message)); }
+  if (gz.length > J.transcriptMax) return skipTranscript("압축 " + gz.length + " > " + J.transcriptMax);
+  const r = await call("transcript", null, 3, { buf: gz, type: "application/gzip", headers: { "x-lvly-conversation": conv } });
+  if (!r || r.status) tNote += "transcript upload: " + (r ? r.status : "연결 실패") + "\n";
+  else if (r.stored === false) tNote += "transcript upload: 새로 받지 않았다(이미 받았거나 받을 일이 없다고 답함)\n";
+};
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
 const onLine = (line) => {
@@ -183,7 +272,8 @@ const finish = async (code, signal) => {
     cost_usd: typeof last.total_cost_usd === "number" ? last.total_cost_usd : null,
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
-  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n") }, 24);
+  await saveTranscript();
+  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null }, 24);
   clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   process.exit(0);
@@ -222,6 +312,9 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *    ⚠ user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 구독 실행이면 그 구성원의 홈이라 같은 계정으로 도는 작업 AI 가 거기에 쓸 수 있다.
  *     «지시는 판으로만 바뀐다» 는 앱 폴더에 대한 보장이다. API 키 · 홈 없는 실행은 빈 설정 폴더라 user 도 비어 있다.
  *     #5081 공용 시트 실행은 그 홈을 구성원 모두가 함께 쓴다 — 한 사람의 작업 AI 가 쓴 글이 다른 사람의 작업에 읽힐 수 있다(#5123 공용 시트 홈 격리).
+ *  · 이어받기는 늘 갈라서 잇는다(`--fork-session` · #5101) — 앞 작업의 대화 파일은 그대로 두고 새 대화 id 로 이어 쓴다. 같은 대화를 잇는 작업이 둘 겹쳐도
+ *    한 파일에 같이 쓰지 않고, 앞 실행에서 몇 번이든 다시 갈라 이을 수 있다(실측 2026-10-29 · claude 2.1.312: 새 id · 앞 파일 내용 그대로 ·
+ *    요청에 앞 대화가 다 실림 — 빈 설정 폴더에 되돌려 놓은 기록에서도 같다).
  */
 export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
@@ -234,6 +327,6 @@ export function claudeJobArgv(o: { model?: string | null; resume?: string | null
     ...(o.mcp ? ["--mcp-config", MCP_CONFIG_PLACEHOLDER] : []),
     ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER, "--setting-sources", "user"] : []),
     ...(o.model ? ["--model", o.model] : []),
-    ...(o.resume ? ["--resume", o.resume] : []),
+    ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];
 }

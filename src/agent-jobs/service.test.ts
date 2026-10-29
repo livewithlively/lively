@@ -4,14 +4,16 @@
 //   store.pg-test.mjs 가 실제 Postgres 에서 잰다. 여기선 흐름이 그 조건을 **부르는가**(배선)를 본다.
 import assert from "node:assert/strict";
 import { HttpError } from "../http-error.js";
+import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
+import zlibSync from "node:zlib";
 import {
-  submitAgentJob, onBoot, onBootFailed, onTick, onResult, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
+  submitAgentJob, onBoot, onBootFailed, onTick, onResult, onTranscript, transcriptGate, sweepAgentJobs, cancelAgentJobFor, getAgentJobFor, listAgentJobsFor, canSeeJob, reapJob, pruneAgentJobRecords,
   assertSharedSeatJob,
   enqueueAgentJob, publicJob,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
-import { planClaims } from "./plan.js";
+import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX } from "./plan.js";
 import { MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE, SYSTEM_PROMPT_PLACEHOLDER } from "./runner.js";
 import { hashJobSecret, secretMatches, type AgentJobRow, type NewAgentJob } from "./store.js";
 import { DEFAULT_AGENT_JOB_POLICY, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
@@ -71,6 +73,9 @@ interface World {
   projects: Set<string>;   // `${member}:${project}` — 그 프로젝트 폴더에서 셸을 띄울 수 있다
   /** 보존 정리(#4828)가 저장소에 넘긴 보존 일수들. */
   prunedWith: number[];
+  /** #5101 API 키 작업의 대화 기록(COLS 밖 칸 — 행 모양에 없다) · 기록 정리가 넘긴 보존 일수들. */
+  transcripts: Map<number, { conv: string; gz: Buffer; raw: number }>;
+  prunedTranscriptsWith: number[];
   drain(maxMs?: number): Promise<void>;
 }
 /** 가짜 작업 토큰 해시 — 진짜처럼 64자 16진(작업 토큰 판별이 앞자리로 대조한다). */
@@ -121,7 +126,7 @@ function world(): World {
       });
     },
     async getAgentJob(id) { const r = rows.get(id); return r ? { ...r } : null; },
-    async getAgentJobAuth(id) { const r = rows.get(id); return r ? { id: r.id, status: r.status, boot_hash: r.boot_hash, fail_hash: r.fail_hash, secret_hash: r.secret_hash } : null; },
+    async getAgentJobAuth(id) { const r = rows.get(id); return r ? { id: r.id, status: r.status, boot_hash: r.boot_hash, fail_hash: r.fail_hash, secret_hash: r.secret_hash, account_kind: r.account_kind } : null; },
     async requeueAgentJob(id, why, maxAttempts) {
       const r = rows.get(id);
       if (!r || r.status !== "starting" || r.cancel_requested || r.attempts >= maxAttempts) return false;
@@ -209,11 +214,28 @@ function world(): World {
       if (w.policyRowError) throw new Error("db 가 잠깐 막혔다");
       return { ...w.policy };
     },
+    //  #5101 실 SQL(store.setAgentJobTranscript)의 조건을 흉내 낸다 — 도는 API 키 작업만 · 한 번만(조건 자체는 store.pg-test 블록 TR).
+    async setAgentJobTranscript(id, conv, gz, raw) {
+      const r = rows.get(id);
+      if (!r || r.status !== "running" || r.account_kind !== "api_key" || w.transcripts.has(id)) return false;
+      w.transcripts.set(id, { conv, gz, raw });
+      return true;
+    },
+    async agentJobTranscript(id) { const x = w.transcripts.get(id); return x ? { conv: x.conv, gz: x.gz } : null; },
+    async agentJobTranscriptConv(id) { return w.transcripts.get(id)?.conv ?? null; },
+    async pruneAgentJobTranscripts(days, batch = 1000) {
+      w.prunedTranscriptsWith.push(days);
+      if (!(days >= 0)) return 0;
+      const old = [...rows.values()].filter((r) => w.transcripts.has(r.id) && ended(r.status) && r.ended_at && now - +r.ended_at >= days * 86_400_000).slice(0, batch);
+      for (const r of old) w.transcripts.delete(r.id);
+      return old.length;
+    },
   };
   Object.assign(w, {
     rows, launched: [], killed: [], minted: [], revoked: [], later: [], failLaunch: false, killError: false, revokeError: false,
     mintError: null, onMint: null, beforeFinish: null, beforeFailBoot: null, policyRowError: false, claims: 0, claimSeats: [], inserted: [], sharedSeats: new Set<string>(), listening: 0, bootRace: false, available: true,
     policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(), prunedWith: [],
+    transcripts: new Map(), prunedTranscriptsWith: [],
     setNow: (ms: number) => { now = ms; },
   });
   w.deps = {
@@ -536,6 +558,26 @@ await t("X2 결과 — 끝 상태와 답을 적고, 걷기는 조금 뒤(kill ·
   assert.equal(w.rows.get(id)!.reaped, true);
   assert.equal(w.rows.get(second.id as number)!.status, "starting", "자리가 나서 다음 작업이 떴다");
   await assert.rejects(onResult(id, job.secret, {}, w.deps), httpErr(410));   // 두 번째 보고는 끝난 작업
+});
+
+await t("X1b(#5101) 결과 보고의 대화 기록 까닭(transcript_note) — 작업 번호와 함께 경고 로그 · 작업은 그대로 done · 오류 글에 섞이지 않는다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  const warned: unknown[][] = [];
+  const orig = logger.warn;
+  (logger as unknown as { warn: (...a: unknown[]) => void }).warn = (...a: unknown[]) => { warned.push(a); };
+  try {
+    const out = await onResult(id, job.secret, {
+      exit_code: 0, conversation_id: "0a1b2c3d-0000-4000-8000-000000000003", result: { text: "답", is_error: false },
+      stderr_tail: "", tail: "", transcript_note: "transcript skipped: 압축 9437184 > 8388608\n",
+    }, w.deps);
+    assert.equal(out.status, "done");
+  } finally { (logger as unknown as { warn: typeof orig }).warn = orig; }
+  const hit = warned.find((a) => /대화 기록/.test(String(a[1])));
+  assert.ok(hit, "경고 로그가 남는다(관측 장치 확인)");
+  assert.deepEqual(hit![0], { job: id, note: "transcript skipped: 압축 9437184 > 8388608\n" }, "작업 번호와 그 까닭");
+  assert.equal(w.rows.get(id)!.error, null, "끝난 작업의 오류 칸은 그대로 비어 있다");
 });
 
 await t("X2 결과 — 판이 끊은 보고는 그 사유로(timeout · canceled), 자격 문제는 «AI 연결 필요»", async () => {
@@ -1108,11 +1150,11 @@ await t("Z1 보존 정리(#4828) — 정책 보존 일수(기본 90일)를 저�
   const w = world();
   const old = await endedJob(w, "91일 전에 끝남", 91);
   const fresh = await endedJob(w, "10일 전에 끝남", 10);
-  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 1, keep_days: 90 });
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 1, keep_days: 90, transcripts: 0, transcript_keep_days: 14 });
   assert.deepEqual(w.prunedWith, [90], "기본 보존 일수는 90일(상민 2026-10-19)");
   assert.ok(!w.rows.has(old) && w.rows.has(fresh), "보존 기간이 지난 것만 지운다");
   w.policy = { ...w.policy, keep_days: 0 };
-  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0 });
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0, transcripts: 0, transcript_keep_days: 14 });
   assert.deepEqual(w.prunedWith, [90], "0(무기한)이면 저장소를 부르지 않는다");
 });
 
@@ -1125,7 +1167,7 @@ await t("Z2 보존 기간 설정을 못 읽으면 지우지 않고 던진다 —
   assert.deepEqual(w.prunedWith, [], "저장소의 지우기를 부르지 않는다");
   assert.ok(w.rows.has(old));
   w.policyRowError = false;
-  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0 }, "읽히면 저장된 0(무기한)을 따른다");
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0, transcripts: 0, transcript_keep_days: 14 }, "읽히면 저장된 0(무기한)을 따른다");
   assert.ok(w.rows.has(old));
 });
 
@@ -1133,9 +1175,9 @@ await t("Z3 꽉 찬 판이 이어지면 한 번의 정비에서 여러 판을 �
   const w = world();
   for (let i = 0; i < 7; i++) await endedJob(w, `밀린 ${i}`, 100 + i);
   const fresh = await endedJob(w, "어제 끝남", 1);
-  assert.deepEqual(await pruneAgentJobRecords(w.deps, { batch: 2, maxRounds: 3 }), { deleted: 6, keep_days: 90 });
+  assert.deepEqual(await pruneAgentJobRecords(w.deps, { batch: 2, maxRounds: 3 }), { deleted: 6, keep_days: 90, transcripts: 0, transcript_keep_days: 14 });
   assert.equal(w.prunedWith.length, 3, "꽉 찬 판 셋 — 상한에서 멈춘다");
-  assert.deepEqual(await pruneAgentJobRecords(w.deps, { batch: 2, maxRounds: 3 }), { deleted: 1, keep_days: 90 });
+  assert.deepEqual(await pruneAgentJobRecords(w.deps, { batch: 2, maxRounds: 3 }), { deleted: 1, keep_days: 90, transcripts: 0, transcript_keep_days: 14 });
   assert.equal(w.prunedWith.length, 4, "덜 찬 판이 나오면 멈춘다");
   assert.ok(w.rows.has(fresh), "보존 기간 안의 것은 남는다");
 });
@@ -1319,6 +1361,137 @@ await t("SS3 공용 시트 재판정(#5081 assertSharedSeatJob) — 시트의 �
   const shape = loaders();
   await assert.rejects(assertSharedSeatJob({ ...job, project_id: 3, cwd: "/work/shared/project/3" }, shape.l), httpErr(409, /프로젝트 폴더/));
   assert.deepEqual(shape.seen.app, []);
+});
+
+// ══ #5101 API 키 작업의 대화 기록 — 첫 말이 돌려준다(B1~B3) · 받기 전 문(G1) · 판이 올린다(T5~T8) · 정리(P1) — 태스크 #5101 · 지식 app-ai-run-resume-asbuilt-5101 ══
+//  이게 틀리면: API 키 작업의 이어받기 · 형식 재시도가 «대화 없음» 으로 죽거나, 남의 대화가 되살아나거나, 구독 작업의 기록이 게이트웨이에 쌓이거나,
+//  아무나 큰 본문 · 압축 폭탄으로 게이트웨이를 붙잡는다.
+const CONV_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", CONV_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+/** 프로젝트 폴더의 API 키(또는 구독) 작업 하나를 넣고 띄운다 — 앞 작업(resumeJobId)과 그 대화를 이어받을 수도 있다. */
+async function keyJob(w: World, o: { account?: "api_key" | "subscription"; resumeJobId?: number | null; resumeConv?: string | null } = {}): Promise<{ id: number; boot: string }> {
+  const account = o.account ?? "api_key";
+  const row = await enqueueAgentJob({
+    requester: "alice", accountKind: account, accountMember: account === "subscription" ? "alice" : null, appId: null, projectId: 1, cwd: "/work/shared/project/1",
+    harness: "claude", model: null, label: null, prompt: "일", resumeConversation: o.resumeConv ?? null, resumeJobId: o.resumeJobId ?? null, timeoutSec: 900,
+    homeless: false, sharedSeat: false,
+  }, w.policy, w.deps);
+  await w.drain(0);
+  return { id: row.id, boot: w.launched.find((x) => x.id === row.id)!.boot };
+}
+const gz = (s: string): Buffer => zlibSync.gzipSync(Buffer.from(s, "utf8"));
+
+await t("B1(#5101) 이어받는 API 키 작업 — 첫 말에 앞 작업의 대화 기록(같은 대화) · 올리기 켜짐(상한) · --resume <대화> --fork-session", async () => {
+  const w = world();
+  const first = await keyJob(w);
+  const fj = await onBoot(first.id, first.boot, w.deps);
+  assert.equal(fj.transcriptMax, TRANSCRIPT_GZ_MAX, "API 키 작업은 끝에 대화 기록을 올린다");
+  assert.equal(fj.transcript, undefined, "새 대화는 되돌릴 기록이 없다");
+  assert.ok(!fj.argv.includes("--resume") && !fj.argv.includes("--fork-session"));
+  w.transcripts.set(first.id, { conv: CONV_A, gz: gz('{"type":"user"}\n'), raw: 16 });
+  await w.deps.store.finishAgentJob(first.id, { status: "done", error: null, conversationId: CONV_A });
+  const next = await keyJob(w, { resumeJobId: first.id, resumeConv: CONV_A });
+  const nj = await onBoot(next.id, next.boot, w.deps);
+  assert.equal(nj.transcript?.conv, CONV_A);
+  assert.equal(zlibSync.gunzipSync(Buffer.from(nj.transcript!.gz, "base64")).toString("utf8"), '{"type":"user"}\n', "보관한 그대로");
+  assert.equal(nj.transcriptRawMax, TRANSCRIPT_RAW_MAX);
+  const i = nj.argv.indexOf("--resume");
+  assert.ok(i > 0 && nj.argv[i + 1] === CONV_A && nj.argv[i + 2] === "--fork-session", "앞 대화를 갈라서 잇는다");
+  assert.equal(w.rows.get(next.id)!.status, "running");
+});
+
+await t("B2(#5101) 이어받는 API 키 작업 — 기록이 없거나 다른 대화의 기록이면 돌리지 않는다(실패로 끝남 · 토큰 회수 · 걷기)", async () => {
+  for (const kind of ["없음", "다른 대화"] as const) {
+    const w = world();
+    const first = await keyJob(w);
+    await onBoot(first.id, first.boot, w.deps);
+    if (kind === "다른 대화") w.transcripts.set(first.id, { conv: CONV_B, gz: gz("x"), raw: 1 });
+    await w.deps.store.finishAgentJob(first.id, { status: "done", error: null, conversationId: CONV_A });
+    const next = await keyJob(w, { resumeJobId: first.id, resumeConv: CONV_A });
+    await assert.rejects(onBoot(next.id, next.boot, w.deps), httpErr(410), kind);
+    const row = w.rows.get(next.id)!;
+    assert.equal(row.status, "failed", kind); assert.match(row.error!, /이어받을 대화 기록이 없습니다/, kind);
+    assert.ok(w.revoked.includes(tokHash(next.id)), `${kind} — 방금 만든 작업 토큰은 버린다`);
+    await w.drain(0);
+    assert.ok(w.killed.includes(row.session_id!), `${kind} — 걷는다`);
+  }
+});
+
+await t("B3(#5101) 구독 작업 — 대화는 그 사람의 홈에 남는다: 올리기 꺼짐 · 되돌리기 없음 · 이어받기는 --fork-session", async () => {
+  const w = world();
+  const first = await keyJob(w, { account: "subscription" });
+  const fj = await onBoot(first.id, first.boot, w.deps);
+  assert.equal(fj.transcriptMax, undefined); assert.equal(fj.transcript, undefined);
+  await w.deps.store.finishAgentJob(first.id, { status: "done", error: null, conversationId: CONV_A });
+  const next = await keyJob(w, { account: "subscription", resumeJobId: first.id, resumeConv: CONV_A });
+  const nj = await onBoot(next.id, next.boot, w.deps);
+  assert.equal(nj.transcript, undefined, "게이트웨이 기록을 찾지 않는다");
+  assert.ok(nj.argv.includes("--fork-session"));
+  assert.equal(w.rows.get(next.id)!.status, "running");
+});
+
+await t("T5~T8(#5101) 판의 대화 기록 보고 — 비밀 틀림 401 · gzip 아님/대화 id 없음/풀면 상한 초과 400 · 끝난 작업 410 · 구독 작업은 안 적음 · 정상은 적는다(풀린 크기)", async () => {
+  const w = world();
+  const job = await keyJob(w);
+  const b = await onBoot(job.id, job.boot, w.deps);
+  const body = gz('{"a":1}\n{"b":2}\n');
+  await assert.rejects(onTranscript(job.id, "wrong", body, CONV_A, w.deps), httpErr(401));
+  await assert.rejects(onTranscript(job.id, b.secret, Buffer.from("not gzip"), CONV_A, w.deps), httpErr(400, /gzip/));
+  await assert.rejects(onTranscript(job.id, b.secret, { a: 1 }, CONV_A, w.deps), httpErr(400, /gzip/), "JSON 으로 읽힌 본문");
+  await assert.rejects(onTranscript(job.id, b.secret, body, undefined, w.deps), httpErr(400, /대화 id/));
+  await assert.rejects(onTranscript(job.id, b.secret, body, "../../etc/passwd", w.deps), httpErr(400, /대화 id/));
+  const bomb = zlibSync.gzipSync(Buffer.alloc(TRANSCRIPT_RAW_MAX + 1, 0x61));
+  assert.ok(bomb.length < TRANSCRIPT_GZ_MAX, "압축하면 작다(폭탄)");
+  await assert.rejects(onTranscript(job.id, b.secret, bomb, CONV_A, w.deps), httpErr(400, /풀 수 없습니다/));
+  await assert.rejects(onTranscript(job.id, b.secret, Buffer.concat([Buffer.from([0x1f, 0x8b]), Buffer.alloc(TRANSCRIPT_GZ_MAX)]), CONV_A, w.deps), httpErr(413));
+  assert.equal(w.transcripts.size, 0, "거절은 적지 않는다");
+  assert.deepEqual(await onTranscript(job.id, b.secret, body, [CONV_A.toUpperCase()], w.deps), { ok: true, stored: true });
+  assert.deepEqual(w.transcripts.get(job.id), { conv: CONV_A, gz: body, raw: 16 }, "대화 id(소문자) · 본문 그대로 · 풀린 크기");
+  assert.deepEqual(await onTranscript(job.id, b.secret, gz("다른 것"), CONV_A, w.deps), { ok: true, stored: false }, "한 번만 받는다(되풀이해 큰 본문을 다시 쓰게 하지 않는다)");
+  assert.deepEqual(w.transcripts.get(job.id)!.gz, body, "처음 것 그대로");
+  const sub = await keyJob(w, { account: "subscription" });
+  const sb = await onBoot(sub.id, sub.boot, w.deps);
+  assert.deepEqual(await onTranscript(sub.id, sb.secret, body, CONV_A, w.deps), { ok: true, stored: false }, "구독 작업은 게이트웨이에 안 둔다");
+  await w.deps.store.finishAgentJob(job.id, { status: "done", error: null });
+  await assert.rejects(onTranscript(job.id, b.secret, body, CONV_A, w.deps), httpErr(410));
+});
+
+await t("P1(#5101) 대화 기록 정리 — transcript_keep_days(기본 14)로 기록만 비운다 · keep_days 0(행 무기한)이어도 돈다 · 0(보관 안 함)이면 끝난 작업의 기록을 다 비운다", async () => {
+  const w = world();
+  const old = await endedJob(w, "20일 전", 20);
+  const fresh = await endedJob(w, "3일 전", 3);
+  w.transcripts.set(old, { conv: CONV_A, gz: gz("x"), raw: 1 }); w.transcripts.set(fresh, { conv: CONV_B, gz: gz("y"), raw: 1 });
+  w.policy = { ...w.policy, keep_days: 0 };
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0, transcripts: 1, transcript_keep_days: 14 });
+  assert.deepEqual(w.prunedTranscriptsWith, [14]);
+  assert.ok(!w.transcripts.has(old) && w.transcripts.has(fresh), "지난 기록만");
+  assert.ok(w.rows.has(old), "행은 남는다");
+  w.policy = { ...w.policy, transcript_keep_days: 0 };
+  assert.deepEqual(await pruneAgentJobRecords(w.deps), { deleted: 0, keep_days: 0, transcripts: 1, transcript_keep_days: 0 });
+  assert.deepEqual(w.prunedTranscriptsWith, [14, 0], "0 은 «보관 안 함» — 남은 기록을 비운다");
+  assert.ok(!w.transcripts.has(fresh) && w.rows.has(fresh), "3일 된 기록도 비우고 행은 남긴다");
+});
+
+await t("G1(#5101) 대화 기록 받기 전 문 — 비밀 틀림 401 · 끝난 작업 410 · 구독 작업 · 이미 받음 · 보관 꺼짐(0)이면 받지 않음(풀지도 않음) · 첫 말도 올리기를 끈다", async () => {
+  const w = world();
+  w.policy = { ...w.policy, max_running: 5, max_running_per_member: 5 };   // 한 사람의 작업 셋이 함께 돈다(기본 상한 2)
+  const job = await keyJob(w);
+  const b = await onBoot(job.id, job.boot, w.deps);
+  await assert.rejects(transcriptGate(job.id, "wrong", w.deps), httpErr(401));
+  assert.deepEqual(await transcriptGate(job.id, b.secret, w.deps), { take: true });
+  const sub = await keyJob(w, { account: "subscription" });
+  const sb = await onBoot(sub.id, sub.boot, w.deps);
+  assert.deepEqual(await transcriptGate(sub.id, sb.secret, w.deps), { take: false }, "구독 작업");
+  w.policy = { ...w.policy, transcript_keep_days: 0 };
+  assert.deepEqual(await transcriptGate(job.id, b.secret, w.deps), { take: false }, "보관 꺼짐");
+  assert.deepEqual(await onTranscript(job.id, b.secret, gz("x"), CONV_A, w.deps), { ok: true, stored: false });
+  assert.equal(w.transcripts.size, 0);
+  const off = await keyJob(w);
+  assert.equal((await onBoot(off.id, off.boot, w.deps)).transcriptMax, undefined, "보관이 꺼지면 판이 올리지 않는다");
+  w.policy = { ...w.policy, transcript_keep_days: 14 };
+  await onTranscript(job.id, b.secret, gz("x"), CONV_A, w.deps);
+  assert.deepEqual(await transcriptGate(job.id, b.secret, w.deps), { take: false }, "이미 받음");
+  await w.deps.store.finishAgentJob(job.id, { status: "done", error: null });
+  await assert.rejects(transcriptGate(job.id, b.secret, w.deps), httpErr(410));
 });
 
 console.log(`# ${pass} pass`);

@@ -5614,7 +5614,7 @@
   "rest": [
    "POST /api/ui/ai-runs"
   ],
-  "input_hash": "94d5a03914ef816d"
+  "input_hash": "ab6178e8ac14eee6"
  },
  {
   "name": "app_ai_run_get",
@@ -5704,7 +5704,7 @@
   "rest": [
    "POST /api/ui/ai-run-limits"
   ],
-  "input_hash": "8d6eea919f231c8c"
+  "input_hash": "86ac9143180abdef"
  },
  {
   "name": "app_job_start",
@@ -5754,7 +5754,7 @@
   "rest": [
    "POST /api/ui/agent-jobs"
   ],
-  "input_hash": "362bb170315aad34"
+  "input_hash": "9add423ffeb85ac7"
  },
  {
   "name": "agent_job_get",
@@ -5804,7 +5804,7 @@
   "rest": [
    "POST /api/ui/agent-job-limits"
   ],
-  "input_hash": "a194765c67ee9921"
+  "input_hash": "9e450f33d1ebf86f"
  },
  {
   "name": "browser_status",

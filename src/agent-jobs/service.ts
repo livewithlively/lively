@@ -36,7 +36,7 @@ import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
   LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
   jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
-  PRUNE_BATCH, PRUNE_ROUNDS_MAX,
+  PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
 import { BROKER_GATEWAY, type PaneView } from "./surface.js";
@@ -47,7 +47,8 @@ type Store = typeof import("./store.js");
 export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
-    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat">;
+    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat"
+    | "setAgentJobTranscript" | "agentJobTranscript" | "agentJobTranscriptConv" | "pruneAgentJobTranscripts">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 판을 띄울 수 있는 배포인가(매니지드 브로커 · 셀프호스트 박스 위 실행면 — surface.ts). */
   available(): Promise<boolean>;
@@ -339,7 +340,7 @@ export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
  * 판의 콜백 인증 — 대조에 필요한 칸만 읽는다(비밀을 모르는 요청에 프롬프트·결과를 읽지 않는다).
  *  비밀이 맞지 않으면(없는 작업 포함) 상태와 무관하게 401 — 순차 id 로 «있나 · 끝났나» 를 엿볼 수 없게. 맞는데 끝난 작업이면 410.
  */
-async function authed(id: number, presented: string, which: "boot" | "fail" | "secret", d: AgentJobDeps): Promise<AgentJobAuthRow> {
+async function authed(id: number, presented: string, which: "boot" | "fail" | "secret", d: Pick<AgentJobDeps, "store">): Promise<AgentJobAuthRow> {
   const row = await d.store.getAgentJobAuth(id);
   const hash = row ? (which === "boot" ? row.boot_hash : which === "fail" ? row.fail_hash : row.secret_hash) : null;
   if (!row || !d.store.secretMatches(hash, presented)) throw new HttpError(401, "작업 비밀이 맞지 않습니다");
@@ -376,13 +377,23 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //  #4488 — 하네스에 더 줄 env(API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 못 만들면 그 작업은 돌지 않는다(신원과 같은 규칙).
   //  #5082 — 판이 보는 자리(작업 폴더 · 게이트웨이 주소 · 워크스페이스)도 실행면이 준다. 박스 위 판은 작업 폴더가 박스 위 경로이고 게이트웨이가
   //   그 박스의 루프백 포트다 — MCP 와 LLM 프록시가 둘 다 그 아래다(자리를 먼저 구해 env 에 넘긴다).
+  //  #5101 — API 키 작업이 앞 대화를 이어받으면(형식 재시도 · 앱의 이어받기) 게이트웨이가 보관한 그 대화 기록을 돌려준다(판이 빈 설정 폴더에 되돌려
+  //   놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말). 없거나 다른 대화의 기록이면 돌리지 않는다(하네스가 «대화 없음» 으로 곧바로 죽는 것보다 까닭이 분명하다).
   //  #5082 — 앱 판 지시(ai.instructions — 작업 행에 실린 글)도 여기서 읽는다. 못 읽으면 신원 · env 와 같은 규칙(돌리지 않는다).
   let env: Record<string, string> = {};
   let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
+  let transcript: { conv: string; gz: string } | null = null;
   let system: string | null = null;
   try {
     if (d.paneView) view = await d.paneView(booted);
     env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
+    if (booted.account_kind === "api_key" && booted.resume_job_id != null && booted.resume_conversation) {
+      const kept = await d.store.agentJobTranscript(booted.resume_job_id);
+      if (!kept || convIdOf(kept.conv) !== convIdOf(booted.resume_conversation)) {
+        throw new Error("이어받을 대화 기록이 없습니다 — API 키 작업의 대화 기록은 보관 기간(agent_job_limits 의 transcript_keep_days) 동안만 남습니다");
+      }
+      transcript = { conv: convIdOf(kept.conv)!, gz: kept.gz.toString("base64") };
+    }
     system = d.jobSystem ? await d.jobSystem(booted) : null;
   } catch (e) {
     const why = String((e as Error)?.message ?? e);
@@ -402,7 +413,57 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
+    //  #5101 API 키 작업만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더가 끝나면 지워진다 · 관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면
+    //   앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
+    ...(booted.account_kind === "api_key" && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
+    ...(booted.account_kind === "api_key" ? { transcriptRawMax: TRANSCRIPT_RAW_MAX } : {}),
+    ...(transcript ? { transcript } : {}),
   };
+}
+
+/** #5101 API 키 작업의 대화 기록을 보관하나(정책 transcript_keep_days > 0) — 0 이면 판이 올리지 않고 게이트웨이도 받지 않는다. */
+async function transcriptKept(d: Pick<AgentJobDeps, "policy">): Promise<boolean> {
+  return (await d.policy()).transcript_keep_days > 0;
+}
+
+/**
+ * #5101 대화 기록을 받기 전 문 — **본문을 읽기 전에** 콜백 비밀 · 도는 작업(401 · 410) · API 키 작업 · 보관 켜짐 · 아직 안 받음을 본다. 비밀을 모르는
+ *  요청이 8MiB 본문을 읽히지 못하고, 받을 일이 없는 보고(구독 작업 · 두 번째 보고)는 풀어 보지도 않는다(격리 리뷰). 받을 일이 없으면 take false —
+ *  판에는 200 으로 답한다(판은 곧바로 결과로 넘어간다).
+ */
+export async function transcriptGate(id: number, presented: string, d: Pick<AgentJobDeps, "store" | "policy">): Promise<{ take: boolean }> {
+  const auth = await authed(id, presented, "secret", d);
+  if (auth.account_kind !== "api_key" || !(await transcriptKept(d))) return { take: false };
+  return { take: (await d.store.agentJobTranscriptConv(auth.id)) === null };
+}
+
+/**
+ * 판의 대화 기록 보고(#5101) — API 키 작업의 하네스 대화 파일(gzip 본문 · 머리 x-lvly-conversation 에 대화 id)을 그 작업 행에 보관한다.
+ *  판은 결과(onResult)보다 **먼저** 올린다 — 결과가 곧바로 형식 재시도(같은 대화를 잇는 작업)를 낳으면 그 작업의 첫 말이 이 기록을 읽는다.
+ *  콜백 비밀로 연다(박동 · 결과와 같은 문) · 도는 API 키 작업만 적는다(구독 작업의 대화는 그 사람의 홈에 남는다 — store 조건).
+ *  보고는 작업 AI 와 같은 uid 에서 온다(runner.ts 머리말 «무엇을 믿지 않나») — 제 대화를 제가 적는 것이라 새 권한은 아니다. 그래도 gzip 인지 ·
+ *  풀었을 때 상한(TRANSCRIPT_RAW_MAX) 안인지 풀어 보고 적는다(풀기는 스레드풀에서 — 압축 폭탄이 게이트웨이를 붙잡지 않게).
+ */
+export async function onTranscript(id: number, presented: string, body: unknown, conversation: unknown, d: AgentJobDeps): Promise<{ ok: true; stored: boolean }> {
+  //  문(transcriptGate)이 본문 전에 본 것을 다시 본다 — 이 함수만 불려도 같은 판정(받을 일이 없으면 풀지 않고 false).
+  if (!(await transcriptGate(id, presented, d)).take) return { ok: true, stored: false };
+  if (!Buffer.isBuffer(body) || body.length < 2 || body[0] !== 0x1f || body[1] !== 0x8b) throw new HttpError(400, "대화 기록은 gzip 본문이어야 합니다");
+  if (body.length > TRANSCRIPT_GZ_MAX) throw new HttpError(413, `대화 기록이 상한(${TRANSCRIPT_GZ_MAX} 바이트)을 넘습니다`);
+  const conv = convIdOf(Array.isArray(conversation) ? conversation[0] : conversation);
+  if (!conv) throw new HttpError(400, "대화 id(x-lvly-conversation)가 없습니다");
+  //  풀린 글은 모으지 않고 세기만 한다 — 64MB 를 통째로 메모리에 풀지 않는다(게이트웨이는 여러 워크스페이스가 함께 쓴다).
+  const zlib = await import("node:zlib");
+  const raw = await new Promise<number>((resolve, reject) => {
+    const z = zlib.createGunzip();
+    let n = 0;
+    z.on("data", (c: Buffer) => { n += c.length; if (n > TRANSCRIPT_RAW_MAX) z.destroy(new Error("상한 초과")); });
+    z.on("end", () => resolve(n));
+    z.on("error", reject);
+    z.end(body);
+  }).catch(() => { throw new HttpError(400, `대화 기록을 풀 수 없습니다(손상 · 풀면 ${TRANSCRIPT_RAW_MAX} 바이트 초과)`); });
+  const stored = await d.store.setAgentJobTranscript(id, conv, body, raw);
+  logger.info({ job: id, gz: body.length, raw, stored }, "[agent-job] 대화 기록");
+  return { ok: true, stored };
 }
 
 /**
@@ -449,6 +510,8 @@ export async function onResult(id: number, presented: string, body: unknown, d: 
   });
   if (!ended) throw new HttpError(410, "끝난 작업입니다");
   logger.info({ job: id, status: out.status }, "[agent-job] 결과");
+  //  #5101 판이 대화 기록을 되돌리거나 올리지 못했으면 그 까닭(크기 · 파일 수 · 형식 · 4xx) — 나중에 이어받기가 «기록이 없습니다» 로 거절될 때 작업 번호로 찾는다.
+  if (rep.transcript_note) logger.warn({ job: id, note: rep.transcript_note }, "[agent-job] 대화 기록을 되돌리거나 올리지 못했다");
   d.later(() => reapJob(ended, d), REAP_DELAY_MS);
   d.later(() => dispatchAgentJobs(d), 0);
   return { ok: true, status: out.status };
@@ -561,21 +624,25 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
  *  ★ 정책은 캐시(d.policy)를 거치지 않고 DB 에서 바로 읽는다 — 캐시는 읽기가 실패하면 기본값(90일)을 준다. 배차 · 감시엔 무해하지만 지우기는
  *   되돌릴 수 없어, 0(무기한)이나 더 긴 기간을 정해 둔 워크스페이스를 기본값으로 지울 수 있다. 못 읽으면 던진다 — 정비 틀이 «테넌트 스윕
  *   실패(비치명)» 로 남기고 다음 판에 다시 한다(격리 리뷰 · 보안 기본값은 닫힌 쪽).
+ *  #5101 같은 정비가 API 키 작업의 대화 기록(이어받기용)도 비운다 — 끝난 지 transcript_keep_days(기본 14일 · 0 = 보관 안 함)가 지나면 기록만(행은 keep_days 까지).
  */
 export async function pruneAgentJobRecords(
   d: Pick<AgentJobDeps, "store">, o: { batch?: number; maxRounds?: number } = {},
-): Promise<{ deleted: number; keep_days: number }> {
+): Promise<{ deleted: number; keep_days: number; transcripts: number; transcript_keep_days: number }> {
   const p = resolveAgentJobPolicy(await d.store.agentJobPolicyRow());
-  if (!(p.keep_days > 0)) return { deleted: 0, keep_days: p.keep_days };
   const batch = o.batch ?? PRUNE_BATCH, rounds = o.maxRounds ?? PRUNE_ROUNDS_MAX;
-  let deleted = 0;
-  for (let i = 0; i < rounds; i++) {
-    const n = await d.store.pruneAgentJobs(p.keep_days, batch);
-    deleted += n;
-    if (n < batch) break;
-  }
+  const drain = async (step: () => Promise<number>): Promise<number> => {
+    let total = 0;
+    for (let i = 0; i < rounds; i++) { const n = await step(); total += n; if (n < batch) break; }
+    return total;
+  };
+  const deleted = p.keep_days > 0 ? await drain(() => d.store.pruneAgentJobs(p.keep_days, batch)) : 0;
   if (deleted > 0) logger.info({ deleted, keepDays: p.keep_days }, "[agent-job] 보존 기간이 지난 작업 기록을 지웠다");
-  return { deleted, keep_days: p.keep_days };
+  //  #5101 — API 키 작업의 대화 기록(이어받기용)은 작업 행보다 짧게 둔다(transcript_keep_days · 0 = 보관 안 함 — 끝난 작업의 기록을 모두 비운다).
+  //   행은 그대로 둔다. keep_days 가 0(행 무기한)이어도 돈다.
+  const transcripts = await drain(() => d.store.pruneAgentJobTranscripts(p.transcript_keep_days, batch));
+  if (transcripts > 0) logger.info({ transcripts, keepDays: p.transcript_keep_days }, "[agent-job] 보관 기간이 지난 대화 기록을 비웠다");
+  return { deleted, keep_days: p.keep_days, transcripts, transcript_keep_days: p.transcript_keep_days };
 }
 
 // ── 사람·앱이 쓰는 조회·취소 ──────────────────────────────────────────────────

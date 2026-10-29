@@ -54,6 +54,8 @@ export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapS
   //  #4488 — 앱 AI 실행(prompt 최대 10만 자)의 이름표. 작업 컨테이너와 같은 규칙.
   app_ai_run: {
     label: { limit: 120, policy: "clamp", effect: "실행 이름이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(실행은 그대로 보냈습니다)." },
+    //  #5101 이어받는 까닭 — 실행 기록의 이름표(AI 에게 가는 글은 prompt). ai-runs/plan.RESUME_REASON_MAX 와 같은 수.
+    reason: { limit: 300, policy: "clamp", effect: "이어받는 까닭이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(실행은 그대로 보냈습니다)." },
   },
   knowledge_save: {
     // ⚠ 안내는 **실제로 존재하는 싼 경로**를 가리켜야 한다: knowledge_save 는 body_md 가 필수라 "title 만 다시

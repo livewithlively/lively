@@ -224,6 +224,65 @@ try {
     rollErr === null && (rollList ?? []).length >= 3 && (rollList ?? []).every((r) => r.shared_seat === false) && rollMark === false && plainInsert?.id > 0 && sharedInsert?.code === "42703",
     JSON.stringify({ err: rollErr?.message, rows: (rollList ?? []).map((r) => [r.id, r.shared_seat]), rollMark, plain: plainInsert?.id, code: sharedInsert?.code }));
 
+  // ── T17 이어받기 줄(#5101) — 이어받은 실행만 넷을 적는다 · 따로 읽는다(COLS 밖) · 한 질문(root)의 이어받기를 갈래까지 센다 ──
+  const q0 = await st.insertAiRun(base({ prompt: "처음 질문" }));
+  const q1 = await st.insertAiRun(base({ prompt: "근거가 틀렸다", resume: { of: q0.id, root: q0.id, depth: 1, reason: "인용 불일치" } }));
+  const q2 = await st.insertAiRun(base({ prompt: "또", resume: { of: q1.id, root: q0.id, depth: 2, reason: null } }));
+  const q3 = await st.insertAiRun(base({ prompt: "갈래", resume: { of: q0.id, root: q0.id, depth: 1, reason: null } }));
+  const other = await st.insertAiRun(base({ prompt: "다른 질문" }));
+  const l1 = await st.aiRunResumeLink(q1.id), l2 = await st.aiRunResumeLink(q2.id);
+  const r0 = await row(q0.id);
+  chk("T17 이어받기 줄 — 넣은 그대로(of · root · depth · reason) · 새 질문은 null · depth 0 · 없는 id null · 행 읽기(COLS)엔 그 칸이 없다",
+    JSON.stringify(l1) === JSON.stringify({ of: q0.id, root: q0.id, depth: 1, reason: "인용 불일치" }) && JSON.stringify(l2) === JSON.stringify({ of: q1.id, root: q0.id, depth: 2, reason: null })
+      && (await st.aiRunResumeLink(q0.id)) === null && r0.resume_depth === 0 && r0.resume_of === null && (await st.aiRunResumeLink(2 ** 40)) === null
+      && !Object.keys(await st.getAiRun(q1.id)).includes("resume_of") && !Object.keys(q1).includes("resume_root"),
+    JSON.stringify({ l1, l2, depth0: r0.resume_depth }));
+  chk("T17b 한 질문의 이어받기 수 — 갈래까지 셋 · 다른 질문 0 · 이어받은 실행을 root 로 물으면 0",
+    (await st.resumeCountOfRoot(q0.id)) === 3 && (await st.resumeCountOfRoot(other.id)) === 0 && (await st.resumeCountOfRoot(q1.id)) === 0 && q3.id > 0);
+  //  T17c 칸이 아직 없을 때(롤 창) — 줄 읽기 null · 세기 0(던지지 않음) · 보통 접수 · 행 읽기 · 끝내기는 돈다 · 이어받은 실행 접수만 42703. 끝나면 칸 · 색인을 되돌린다(같은 DDL).
+  await itemsPool.query(`ALTER TABLE org_app_ai_run DROP COLUMN IF EXISTS resume_of, DROP COLUMN IF EXISTS resume_root, DROP COLUMN IF EXISTS resume_depth, DROP COLUMN IF EXISTS resume_reason`);
+  let rl = null, rc = null, plainR = null, resumedR = null, finR = null;
+  try {
+    rl = await st.aiRunResumeLink(q1.id); rc = await st.resumeCountOfRoot(q0.id);
+    plainR = await st.insertAiRun(base({ prompt: "칸 없을 때 새 질문" }));
+    finR = await st.finishAiRun(plainR.id, { status: "done", result: { text: "답" }, error: null });
+    try { await st.insertAiRun(base({ prompt: "칸 없을 때 이어받기", resume: { of: q0.id, root: q0.id, depth: 1, reason: null } })); } catch (e) { resumedR = e; }
+  } finally {
+    await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_of BIGINT`);
+    await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_root BIGINT`);
+    await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_depth INT NOT NULL DEFAULT 0`);
+    await itemsPool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_reason TEXT`);
+    await itemsPool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_resume_root_idx ON org_app_ai_run(resume_root) WHERE resume_root IS NOT NULL`);
+  }
+  chk("T17c 이어받기 칸이 없을 때 — 줄 null · 세기 0 · 새 질문 접수 · 끝내기 됨 · 이어받기 접수만 42703",
+    rl === null && rc === 0 && plainR?.id > 0 && finR?.status === "done" && resumedR?.code === "42703",
+    JSON.stringify({ rl, rc, plain: plainR?.id, fin: finR?.status, code: resumedR?.code }));
+
+  // ── T18 넣는 순간의 셈(#5101 · 격리 리뷰) — 같은 질문을 동시에 여덟 번 이어도 상한(3)만큼만 들어간다 · 띄우지 못한 작업(작업 행 없이 실패)은 세지 않는다 ──
+  const qc = await st.insertAiRun(base({ prompt: "동시 질문" }));
+  const link = (reason) => ({ of: qc.id, root: qc.id, depth: 1, reason });
+  const resumeRace = await Promise.all(Array.from({ length: 8 }, (_, i) => st.insertResumedAiRun(base({ prompt: `동시 ${i}`, resume: link(`r${i}`) }), 3)));
+  const inRows = resumeRace.filter((r) => "row" in r), limited = resumeRace.filter((r) => "limit" in r);
+  chk("T18 동시 여덟 번 — 셋만 들어가고(행 · 줄) 다섯은 상한(limit 3) · 센 수 3",
+    inRows.length === 3 && limited.length === 5 && limited.every((r) => r.limit === 3) && (await st.resumeCountOfRoot(qc.id)) === 3
+      && (await Promise.all(inRows.map((r) => st.aiRunResumeLink(r.row.id)))).every((l) => l?.root === qc.id && l?.of === qc.id),
+    JSON.stringify(resumeRace.map((r) => ("row" in r ? `row ${r.row.id}` : `limit ${r.limit}`))));
+  const qf = await st.insertAiRun(base({ prompt: "띄우기 실패 질문" }));
+  const lf = { of: qf.id, root: qf.id, depth: 1, reason: null };
+  const launchFail = (await st.insertResumedAiRun(base({ prompt: "대기열 꽉 참", executor: "job", status: "queued", kind: "agent", resume: lf }), 2)).row;
+  await st.finishAiRun(launchFail.id, { status: "failed", result: null, error: "대기열이 찼습니다" });
+  const queuedNoJob = (await st.insertResumedAiRun(base({ prompt: "띄우는 중", executor: "job", status: "queued", kind: "agent", resume: lf }), 2)).row;
+  const afterQueued = await st.resumeCountOfRoot(qf.id);
+  const ranFail = (await st.insertResumedAiRun(base({ prompt: "돌다 실패", executor: "job", status: "queued", kind: "agent", resume: lf }), 2));
+  chk("T18b 작업 행 없이 실패한 이어받기는 세지 않는다 — 띄우는 중(작업 행 아직 없음)은 센다 · 셋째는 들어가 둘이 된다",
+    launchFail?.id > 0 && queuedNoJob?.id > 0 && afterQueued === 1 && !("limit" in ranFail) && (await st.resumeCountOfRoot(qf.id)) === 2,
+    JSON.stringify({ afterQueued, third: "row" in ranFail ? ranFail.row.id : ranFail }));
+  await st.setAiRunJob(queuedNoJob.id, 778);
+  await st.finishAiRun(queuedNoJob.id, { status: "failed", result: null, error: "돌다 실패" });
+  const fourth = await st.insertResumedAiRun(base({ prompt: "넷째", resume: lf }), 2);
+  chk("T18c 띄운 뒤 실패(작업 행 있음)는 센다 — 상한 2 에서 넷째는 limit",
+    "limit" in fourth && fourth.limit === 2 && (await st.resumeCountOfRoot(qf.id)) === 2, JSON.stringify(fourth));
+
   // ── T14 공용 시트 지정 도구(app_ai_service_seat_set) — 실제 구성원 표 · 설정 칸 · 감사 ──
   const { upsertMember } = await import(`${DIST}/org/store/members.js`);
   const people = [["adm", ["items", "context", "memory", "admin"]], ["seat", ["items", "context", "memory"]], ["ali", ["items", "context", "memory"]], ["dev", ["items", "context", "memory", "code"]]];

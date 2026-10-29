@@ -60,6 +60,8 @@ const run = (d: AppFrontApiDeps, method: string, path: unknown, body?: unknown, 
     //  #4488 AI 실행(F1) — 입구 하나 + 둘레. 본문의 app_id 는 버리고 목록은 쿼리(status · limit)로 좁힌다.
     ["GET", "/ai/targets", undefined, "app_ai_targets", {}],
     ["POST", "/ai/runs", { prompt: "요약", schema: { type: "object" }, job: "summarize", wait: 5, app_id: "남의앱", bogus: 1 }, "app_ai_run", { prompt: "요약", schema: { type: "object" }, job: "summarize", wait: 5 }],
+    //  #5101 이어받기 — 앱 서버가 검사해 되돌릴 때 앞 실행 번호와 까닭을 싣는다(두 칸이 그대로 넘어간다 · 남의 앱 칸은 여전히 걸러진다).
+    ["POST", "/ai/runs", { prompt: "근거 id 를 다시 확인해", resume_run_id: 17, reason: "인용한 근거 id 3 이 조회 결과에 없다", app_id: "남의앱" }, "app_ai_run", { prompt: "근거 id 를 다시 확인해", resume_run_id: 17, reason: "인용한 근거 id 3 이 조회 결과에 없다" }],
     ["GET", "/ai/runs?status=done&limit=5&app_id=x", undefined, "app_ai_runs", { status: "done", limit: 5 }],
     ["GET", "/ai/runs", undefined, "app_ai_runs", {}],
     ["GET", "/ai/runs/42", undefined, "app_ai_run_get", { id: 42 }],

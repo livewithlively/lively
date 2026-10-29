@@ -4,6 +4,7 @@
 //  앱 코드는 구성원 누구나 고친다(app_save). 앱이 돌면서 LLM 을 끝없이 부르면 워크스페이스 API 키의 돈이 새고, 구독이면 그 사람의 한도가 다른 일에
 //  남지 않는다. 숫자(이 태스크가 정한 시작값): 사람당 동시 2 · 앱당 분당 30 · 워크스페이스 단발 동시 4 · 단발 120초 · 출력 8,192 토큰 ·
 //  앱당 하루 500만 토큰(0 = 끔). 에이전트 작업(작업 컨테이너)의 동시·대기열은 agent-job-policy 가 따로 센다.
+//  #5101 한 질문당 이어받기 3번(0 = 끔) — 앱 서버가 답을 검사하고 되돌리는 횟수의 끝.
 //
 // 왜 DB 인가(agent-job-policy 와 같은 교리): 배포 없이 바꾼다 — 관리 도구(app_ai_limits_set)가 단일 창구, env 는 시드. DB > env 시드 > 코드 기본값.
 import { tenantTtlCache } from "../tenant-ttl-cache.js";
@@ -22,6 +23,11 @@ export interface AiRunPolicy {
   max_output_tokens: number;
   /** 한 앱이 하루(UTC)에 쓸 수 있는 토큰(입력+출력 · 프록시 경로만 센다). 0 = 끔. */
   daily_tokens_per_app: number;
+  /**
+   * #5101 한 질문(처음 실행)을 이어받을 수 있는 횟수 — 앱 서버가 답을 검사하고 사유를 붙여 다시 시키는 것(resume_run_id)의 게이트웨이 상한.
+   *  몇 번 다시 시킬지는 앱이 정하고, 이 값이 끝을 막는다(검사가 늘 실패하는 앱이 끝없이 돌지 않게). 0 = 이어받기 끔.
+   */
+  max_resumes: number;
 }
 
 export const DEFAULT_AI_RUN_POLICY: AiRunPolicy = {
@@ -31,6 +37,7 @@ export const DEFAULT_AI_RUN_POLICY: AiRunPolicy = {
   single_timeout_sec: 120,
   max_output_tokens: 8_192,
   daily_tokens_per_app: 5_000_000,
+  max_resumes: 3,
 };
 
 export const AI_RUN_POLICY_RANGE: { readonly [K in keyof AiRunPolicy]: readonly [min: number, max: number] } = {
@@ -40,6 +47,7 @@ export const AI_RUN_POLICY_RANGE: { readonly [K in keyof AiRunPolicy]: readonly 
   single_timeout_sec: [10, 600],
   max_output_tokens: [256, 64_000],
   daily_tokens_per_app: [0, 1_000_000_000],
+  max_resumes: [0, 20],
 };
 
 const R = AI_RUN_POLICY_RANGE;
@@ -52,6 +60,7 @@ const policy = definePolicy<AiRunPolicy>({
     single_timeout_sec: { env: "LIVELY_AI_RUN_SINGLE_TIMEOUT_SEC", min: R.single_timeout_sec[0], max: R.single_timeout_sec[1] },
     max_output_tokens: { env: "LIVELY_AI_RUN_MAX_OUTPUT_TOKENS", min: R.max_output_tokens[0], max: R.max_output_tokens[1] },
     daily_tokens_per_app: { env: "LIVELY_AI_RUN_DAILY_TOKENS_PER_APP", min: R.daily_tokens_per_app[0], max: R.daily_tokens_per_app[1] },
+    max_resumes: { env: "LIVELY_AI_RUN_MAX_RESUMES", min: R.max_resumes[0], max: R.max_resumes[1] },
   },
 });
 

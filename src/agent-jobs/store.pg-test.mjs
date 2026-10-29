@@ -290,7 +290,7 @@ try {
     const id = await running("l1");
     await st.finishAgentJob(id, { status: "done", result: { text: "가".repeat(1000) }, tail: "꼬리", from: ["running"] });
     const a = await st.getAgentJobAuth(id);
-    chk("I1 콜백 대조는 다섯 칸만 읽는다(비밀 셋 — 부트 · 실패 보고 #4829 · 콜백)", a && Object.keys(a).sort().join(",") === "boot_hash,fail_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
+    chk("I1 콜백 대조는 여섯 칸만 읽는다(비밀 셋 — 부트 · 실패 보고 #4829 · 콜백 · 실행 계정 종류 #5101 — 기록 받는 문이 본문 전에 본다)", a && Object.keys(a).sort().join(",") === "account_kind,boot_hash,fail_hash,id,secret_hash,status", JSON.stringify(a && Object.keys(a)));
     chk("I1 없는 작업은 null", (await st.getAgentJobAuth(987654321)) === null);
     const [l] = await st.listAgentJobs({ requester: `${REQ}l1`, limit: 5 });
     const leaked = ["prompt", "result", "output_tail", "boot_hash", "fail_hash", "secret_hash", "mcp_token_hash"].filter((k) => k in l);
@@ -472,6 +472,209 @@ try {
         JSON.stringify({ read, claimed: claimed.map((g) => g.row.id), again: again?.id, code: sharedInsert?.code }));
     } finally {
       await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+    }
+    await cleanup();
+  }
+
+  // ── TR. API 키 작업의 대화 기록(#5101) — 도는 API 키 작업만 적힌다 · 바이트 그대로 · 정리는 끝난 지 N일 지난 기록만(행은 남음) · 칸이 아직 없을 때(롤 창) ──
+  {
+    await cleanup();
+    const CONV = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const bytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00, 0x01, 0x02]);   // 아무 바이트(저장소는 내용을 보지 않는다 — 풀어 보기는 서비스 몫)
+    const keyRunning = async (who) => {
+      const r = await st.insertAgentJob(job(who, { accountKind: "api_key", accountMember: null }), ROOMY);
+      const c = (await claimAll()).find((x) => x.row.id === r.row.id);
+      await st.bootAgentJob(r.row.id, c.row.boot_hash, "a".repeat(64));
+      return r.row.id;
+    };
+    const k1 = await keyRunning("tr1");
+    const s1 = await running("tr2");                                   // 구독 작업(도는 중)
+    const q1 = (await st.insertAgentJob(job("tr3", { accountKind: "api_key", accountMember: null }), ROOMY)).row.id;   // 기다리는 API 키 작업
+    chk("TR1 도는 API 키 작업만 적힌다 — 구독 작업 · 기다리는 작업은 false · 한 작업에 한 번만(두 번째 보고는 false · 첫 기록 그대로 — 격리 리뷰)",
+      (await st.setAgentJobTranscript(k1, CONV, bytes, 123)) === true && (await st.setAgentJobTranscript(s1, CONV, bytes, 1)) === false
+        && (await st.setAgentJobTranscript(q1, CONV, bytes, 1)) === false && (await st.agentJobTranscript(s1)) === null
+        && (await st.setAgentJobTranscript(k1, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", Buffer.from("두 번째"), 7)) === false
+        && (await st.agentJobTranscriptConv(k1)) === CONV && Buffer.compare((await st.agentJobTranscript(k1)).gz, bytes) === 0);
+    const got = await st.agentJobTranscript(k1);
+    const r1 = await row(k1);
+    chk("TR2 읽기 — 대화 id · 바이트 그대로 · 풀린 크기 칸 · 대화 id 만 읽기 · 없는 id 는 null",
+      got?.conv === CONV && Buffer.compare(got.gz, bytes) === 0 && r1.transcript_bytes === 123 && (await st.agentJobTranscriptConv(k1)) === CONV
+        && (await st.agentJobTranscriptConv(2 ** 40)) === null && (await st.agentJobTranscript(2 ** 40)) === null,
+      JSON.stringify({ conv: got?.conv, bytes: r1.transcript_bytes }));
+    chk("TR2b 행 읽기(COLS)는 기록 칸을 싣지 않는다 — 감시 · 목록이 큰 본문을 읽지 않게 · 롤 창에서 «없는 칸» 으로 깨지지 않게",
+      !("transcript" in (await st.getAgentJob(k1))) && !("transcript_conv" in (await st.getAgentJob(k1))));
+    await st.finishAgentJob(k1, { status: "done", error: null, from: ["running"] });
+    chk("TR3 끝난 작업엔 더 적히지 않는다(늦은 보고) · 앞 기록은 그대로", (await st.setAgentJobTranscript(k1, CONV, Buffer.from("늦은 것"), 9)) === false
+      && Buffer.compare((await st.agentJobTranscript(k1)).gz, bytes) === 0);
+    //  정리 — 끝난 지 20일 · 3일 · 도는 중(기록 있음) 셋에 14일로.
+    const k2 = await keyRunning("tr4");
+    await st.setAgentJobTranscript(k2, CONV, bytes, 8);
+    const k3 = await keyRunning("tr5");
+    await st.setAgentJobTranscript(k3, CONV, bytes, 8);
+    await st.finishAgentJob(k2, { status: "done", error: null, from: ["running"] });
+    await itemsPool.query(`UPDATE org_agent_job SET ended_at = now() - interval '20 days' WHERE id=$1`, [k1]);
+    await itemsPool.query(`UPDATE org_agent_job SET ended_at = now() - interval '3 days' WHERE id=$1`, [k2]);
+    const cleared = await st.pruneAgentJobTranscripts(14);
+    const after1 = await row(k1);
+    chk("TR4 정리 — 끝난 지 14일 지난 기록만 비운다(세 칸 모두) · 행은 남는다 · 3일 된 것 · 도는 작업의 기록은 그대로",
+      cleared === 1 && after1 && after1.transcript === null && after1.transcript_conv === null && after1.transcript_bytes === null
+        && (await st.agentJobTranscript(k2)) !== null && (await st.agentJobTranscript(k3)) !== null,
+      JSON.stringify({ cleared, row: !!after1, t: after1?.transcript }));
+    const negative = await st.pruneAgentJobTranscripts(-1);
+    const zero = await st.pruneAgentJobTranscripts(0);
+    chk("TR4b 정리 — 음수 일수는 아무것도 안 한다 · 0(보관 안 함)은 끝난 작업의 기록을 모두 비운다(3일 된 것도) · 도는 작업의 기록은 그대로",
+      negative === 0 && zero === 1 && (await st.agentJobTranscript(k2)) === null && (await st.agentJobTranscript(k3)) !== null,
+      JSON.stringify({ negative, zero }));
+    //  TR6 이어받을 대화가 있나(ai-runs/live.resumeTargetOf) — 작업 행의 대화 · 게이트웨이가 보관한 기록으로 판정한다(실제 DB · 격리 리뷰 «시험 없음»).
+    const { resumeTargetOf } = await import(`${DIST}/ai-runs/live.js`);
+    const CONV2 = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    const endWith = (id, conv) => st.finishAgentJob(id, { status: "done", error: null, conversationId: conv, from: ["running"] });
+    const kOk = await keyRunning("tr6a"); await st.setAgentJobTranscript(kOk, CONV, bytes, 8); await endWith(kOk, CONV);
+    const kNone = await keyRunning("tr6b"); await endWith(kNone, CONV);
+    const kOther = await keyRunning("tr6c"); await st.setAgentJobTranscript(kOther, CONV2, bytes, 8); await endWith(kOther, CONV);
+    const kSub = await running("tr6d"); await endWith(kSub, CONV);
+    const kNoConv = await keyRunning("tr6e"); await endWith(kNoConv, null);
+    const [tOk, tNone, tOther, tSub, tNoConv, tGone] = await Promise.all([kOk, kNone, kOther, kSub, kNoConv, 2 ** 40].map((id) => resumeTargetOf(id)));
+    chk("TR6 이어받을 대화 — API 키 작업은 보관한 기록의 대화가 그 작업의 대화일 때만 · 구독 작업은 기록 없이 · 대화 없는 작업은 안 됨 · 없는 작업은 null",
+      tOk?.resumable === true && tOk.conversation === CONV && tOk.projectId === 1 && tOk.why === null
+        && tNone?.resumable === false && /transcript_keep_days/.test(String(tNone.why)) && tOther?.resumable === false
+        && tSub?.resumable === true && tSub.conversation === CONV && tNoConv?.resumable === false && tNoConv.conversation === null && tGone === null,
+      JSON.stringify({ tOk, tNone: tNone?.resumable, tOther: tOther?.resumable, tSub: tSub?.resumable, tNoConv: tNoConv?.resumable, tGone }));
+
+    //  TR7 기록 받는 입구(POST /api/agent-jobs/:id/transcript) — 게이트웨이와 같은 꼴(전역 JSON 파서 1MB 뒤에 이 경로)로 띄워 진짜 요청으로 두드린다.
+    const express = (await import("express")).default;
+    const http = await import("node:http");
+    const { registerAgentJobRoutes } = await import(`${DIST}/agent-jobs/routes.js`);
+    const { TRANSCRIPT_GZ_MAX } = await import(`${DIST}/agent-jobs/plan.js`);
+    const zlib = await import("node:zlib");
+    const app = express();
+    app.use(express.json({ limit: "1mb" }));
+    registerAgentJobRoutes(app);
+    const srv = await new Promise((res) => { const x = app.listen(0, "127.0.0.1", () => res(x)); });
+    const port = srv.address().port;
+    //  declare 를 주면 본문을 그만큼이라고 밝히고 일부만 보낸다(끝내지 않는다) — 입구가 본문을 읽기 전에 답하면 답이 오고, 본문을 기다리면 3초 뒤 «timeout».
+    //  답이 안 오면 o.wait(기본 3초) 뒤 우리가 끊는다(«timeout») · 게이트웨이가 먼저 끊으면 «reset».
+    const post = (id, o) => new Promise((resolve) => {
+      const body = o.body ?? Buffer.alloc(0);
+      let done = false;
+      const fin = (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
+      const req = http.request({ host: "127.0.0.1", port: o.port ?? port, method: "POST", path: `/api/agent-jobs/${id}/transcript`, headers: {
+        ...(o.secret ? { authorization: `Bearer ${o.secret}` } : {}), "content-type": o.type ?? "application/gzip",
+        ...(o.conv ? { "x-lvly-conversation": o.conv } : {}), "content-length": String(o.declare ?? body.length) } }, (res) => {
+        let b = ""; res.setEncoding("utf8"); res.on("data", (c) => { b += c; });
+        res.on("end", () => { req.destroy(); let j = null; try { j = JSON.parse(b); } catch { /* 글 */ } fin({ status: res.statusCode, json: j }); });
+      });
+      const timer = setTimeout(() => { fin({ status: "timeout" }); req.destroy(); }, o.wait ?? 3000);
+      req.on("error", () => fin({ status: "reset" }));
+      if (o.declare) req.write(body); else req.end(body);
+    });
+    const keyWith = async (who, accountKind = "api_key") => {
+      const r = await st.insertAgentJob(job(who, accountKind === "api_key" ? { accountKind, accountMember: null } : {}), ROOMY);
+      const c = (await claimAll()).find((x) => x.row.id === r.row.id);
+      const cb = st.newJobSecret();
+      await st.bootAgentJob(r.row.id, c.row.boot_hash, cb.hash);
+      return { id: r.row.id, secret: cb.secret };
+    };
+    try {
+      const a = await keyWith("tr7a"), sub7 = await keyWith("tr7b", "subscription"), big = await keyWith("tr7c"), js = await keyWith("tr7d"), fin = await keyWith("tr7e");
+      const gz = zlib.gzipSync(Buffer.from(JSON.stringify({ v: 1, cfg: "/x/cfg", files: [] })));
+      const before = await post(a.id, { secret: "wrong-secret", body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX });
+      const noId = await post(2 ** 40, { secret: a.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX });
+      const subR = await post(sub7.id, { secret: sub7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX });
+      const okR = await post(a.id, { secret: a.secret, body: gz, conv: CONV });
+      const again = await post(a.id, { secret: a.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX });
+      const tooBig = await post(big.id, { secret: big.secret, body: Buffer.concat([Buffer.from([0x1f, 0x8b]), Buffer.alloc(TRANSCRIPT_GZ_MAX)]), conv: CONV });
+      const jsonR = await post(js.id, { secret: js.secret, type: "application/json", body: Buffer.from(JSON.stringify({ v: 1 })), conv: CONV });
+      await st.finishAgentJob(fin.id, { status: "done", error: null, from: ["running"] });
+      const endedR = await post(fin.id, { secret: fin.secret, body: gz, conv: CONV });
+      const stored = await st.agentJobTranscript(a.id);
+      chk("TR7 기록 받는 입구 — 비밀 틀림 · 없는 작업은 본문을 읽기 전에 401 · 구독 작업 · 이미 받은 작업은 본문 전에 200 stored:false · 정상은 stored:true(바이트 그대로)",
+        before.status === 401 && noId.status === 401 && subR.status === 200 && subR.json?.stored === false
+          && okR.status === 200 && okR.json?.stored === true && stored?.conv === CONV && Buffer.compare(stored.gz, gz) === 0
+          && again.status === 200 && again.json?.stored === false,
+        JSON.stringify({ before, noId, subR, okR, again }));
+      chk("TR7b 상한(8MiB)을 넘는 본문 413 · JSON 본문(전역 파서가 읽음)은 400 · 끝난 작업 410 · 그 작업들엔 아무것도 안 적힘",
+        tooBig.status === 413 && jsonR.status === 400 && endedR.status === 410
+          && (await st.agentJobTranscript(big.id)) === null && (await st.agentJobTranscript(js.id)) === null && (await st.agentJobTranscript(fin.id)) === null,
+        JSON.stringify({ tooBig: tooBig.status, jsonR, endedR }));
+      //  TR7c 같은 작업의 보고가 겹치면(격리 리뷰 — 저장 전에 8MiB 를 N 개 겹쳐 메모리를 쥐게 하기) — 먼저 온 것이 본문을 받는 동안 둘째는 본문 전에
+      //   200 stored:false · 먼저 것이 끊기면(연결 닫힘) 다시 받는다.
+      const c7 = await keyWith("tr7f");
+      const hold = post(c7.id, { secret: c7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX, wait: 4000 });   // 본문을 다 보내지 않고 쥔다(4초 뒤 끊음)
+      await new Promise((r) => setTimeout(r, 1000));   // 먼저 것이 문을 지나 본문을 기다릴 때까지(느린 CI 를 넉넉히)
+      const second = await post(c7.id, { secret: c7.secret, body: gz, conv: CONV });
+      const held = await hold;
+      await new Promise((r) => setTimeout(r, 300));
+      const third = await post(c7.id, { secret: c7.secret, body: gz, conv: CONV });
+      chk("TR7c 겹친 보고 — 먼저 것이 본문을 받는 동안 둘째는 200 stored:false(본문을 안 읽음) · 먼저 것이 끊긴 뒤엔 받는다(stored:true)",
+        held.status === "timeout" && second.status === 200 && second.json?.stored === false && third.status === 200 && third.json?.stored === true
+          && Buffer.compare((await st.agentJobTranscript(c7.id))?.gz ?? Buffer.alloc(0), gz) === 0,
+        JSON.stringify({ held, second, third }));
+      //  TR7d 문을 기다리는 사이 끊긴 보고(격리 리뷰 — 잡으면 close 가 이미 지나가 자리가 영영 남는다) — 문이 표를 읽는 동안 옆 연결이 표를 잠가 붙잡아 두고,
+      //   그 사이 끊는다. 잠금이 풀려 문이 마저 돌아도 끊긴 요청은 자리를 잡지 않는다 → 다음 보고는 받는다.
+      const d7 = await keyWith("tr7g");
+      const locker = await itemsPool.connect();
+      let dropped = null;
+      try {
+        await locker.query("BEGIN");
+        await locker.query("LOCK TABLE org_agent_job IN ACCESS EXCLUSIVE MODE");
+        dropped = await post(d7.id, { secret: d7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX, wait: 300 });
+        await new Promise((r) => setTimeout(r, 200));
+      } finally { await locker.query("COMMIT").catch(() => undefined); locker.release(); }
+      await new Promise((r) => setTimeout(r, 500));   // 붙잡혔던 문이 마저 돈다
+      const afterDrop = await post(d7.id, { secret: d7.secret, body: gz, conv: CONV });
+      chk("TR7d 문을 기다리는 사이 끊긴 보고는 자리를 잡지 않는다 — 다음 보고는 받는다(stored:true)",
+        dropped?.status === "timeout" && afterDrop.status === 200 && afterDrop.json?.stored === true, JSON.stringify({ dropped, afterDrop }));
+      //  TR7e 멈춘 본문 — 본문 상한 시간(시험 0.5초 · 운영 120초)이 지나면 게이트웨이가 끊고 자리를 푼다 → 다음 보고는 받는다.
+      const app2 = express();
+      app2.use(express.json({ limit: "1mb" }));
+      registerAgentJobRoutes(app2, { transcriptBodyMs: 500 });
+      const srv2 = await new Promise((res) => { const x = app2.listen(0, "127.0.0.1", () => res(x)); });
+      try {
+        const e7 = await keyWith("tr7h");
+        const t0 = Date.now();
+        const stalled = await post(e7.id, { port: srv2.address().port, secret: e7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX, wait: 5000 });
+        const ms = Date.now() - t0;
+        const next = await post(e7.id, { port: srv2.address().port, secret: e7.secret, body: gz, conv: CONV });
+        chk("TR7e 멈춘 본문은 상한 시간 뒤 게이트웨이가 끊는다(우리 5초 전에) · 자리를 풀어 다음 보고는 받는다",
+          stalled.status === "reset" && ms < 3000 && next.status === 200 && next.json?.stored === true, JSON.stringify({ stalled, ms, next }));
+        //  TR7f 느려도 오고 있으면 끊지 않는다(조각마다 다시 잰다 · 격리 리뷰) — 상한 0.5초에 0.2초마다 조각을 보내 1초 넘게 걸려도 받는다.
+        const f7 = await keyWith("tr7i");
+        const step = Math.ceil(gz.length / 7);
+        const parts = [];
+        for (let i = 0; i < gz.length; i += step) parts.push(gz.subarray(i, i + step));
+        const t1 = Date.now();
+        const slow = await new Promise((resolve) => {
+          const req = http.request({ host: "127.0.0.1", port: srv2.address().port, method: "POST", path: `/api/agent-jobs/${f7.id}/transcript`,
+            headers: { authorization: `Bearer ${f7.secret}`, "content-type": "application/gzip", "x-lvly-conversation": CONV, "content-length": String(gz.length) } }, (res) => {
+            let b = ""; res.setEncoding("utf8"); res.on("data", (c) => { b += c; });
+            res.on("end", () => { let j = null; try { j = JSON.parse(b); } catch { /* 글 */ } resolve({ status: res.statusCode, json: j }); });
+          });
+          req.on("error", (e) => resolve({ status: "reset", err: e.message }));
+          let i = 0;
+          const tick = () => { if (i < parts.length - 1) { req.write(parts[i++]); setTimeout(tick, 200); } else req.end(parts[i]); };
+          tick();
+        });
+        const took = Date.now() - t1;
+        chk("TR7f 느린 업로드(0.2초마다 조각 · 상한 0.5초)는 끊지 않는다 — 받는다(stored:true)",
+          parts.length >= 5 && took > 800 && slow.status === 200 && slow.json?.stored === true, JSON.stringify({ parts: parts.length, took, slow }));
+      } finally { await new Promise((r) => srv2.close(r)); }
+    } finally { await new Promise((r) => srv.close(r)); }
+    await cleanup();
+    //  TR5 칸이 아직 없을 때(롤 창) — 적기 false · 읽기 null · 정리 0(던지지 않음) · 보통 접수 · 자리 주기 · 행 읽기 · 끝내기는 돈다. 끝나면 칸을 되돌린다(같은 DDL).
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS transcript, DROP COLUMN IF EXISTS transcript_conv, DROP COLUMN IF EXISTS transcript_bytes`);
+    try {
+      const k = await keyRunning("roll");
+      const wrote = await st.setAgentJobTranscript(k, CONV, bytes, 8);
+      const read = await st.agentJobTranscript(k), readConv = await st.agentJobTranscriptConv(k), pruned = await st.pruneAgentJobTranscripts(14);
+      const fin = await st.finishAgentJob(k, { status: "done", error: null, from: ["running"] });
+      chk("TR5 칸이 없을 때 — 적기 false · 읽기 null · 정리 0 · 접수 · 자리 주기 · 끝내기는 돈다",
+        wrote === false && read === null && readConv === null && pruned === 0 && fin?.status === "done",
+        JSON.stringify({ wrote, read, readConv, pruned, fin: fin?.status }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript BYTEA`);
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_conv TEXT`);
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_bytes INT`);
     }
     await cleanup();
   }
