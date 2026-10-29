@@ -118,3 +118,70 @@ test("스킬 트리 심링크 → content_hash 단계에서 거부(R2-3)", async
   await assert.rejects(() => loadAppPackage(d), /심링크/);
   await rm(d, { recursive: true });
 });
+
+// ── #5082 작업별 앱 지시 파일 — 설치 · 판 저장 때 확정(엣지 표 L1~L4) ──
+const AI = (file: string) => ({ ai: { jobs: [{ name: "answer" }], instructions: { answer: file } } });
+
+test("L4 ai.instructions 파일이 묶음 안에 있고 상한 이하 UTF-8 이면 통과", async () => {
+  const d = await stage({ "lively-app.json": MANIFEST(AI("ai/answer.md")), "ai/answer.md": "정책 표를 조회해 답한다\n" });
+  const loaded = await loadAppPackage(d);
+  assert.deepEqual(loaded.manifest.ai?.instructions, { answer: "ai/answer.md" });
+  await rm(d, { recursive: true });
+});
+
+test("L1 ai.instructions 파일이 없으면 · 폴더면 로드 실패(작업을 띄울 때에야 알지 않게)", async () => {
+  const d = await stage({ "lively-app.json": MANIFEST(AI("ai/missing.md")) });
+  await assert.rejects(() => loadAppPackage(d), /ai\.instructions\.answer 의 지시 파일이 없습니다/);
+  await rm(d, { recursive: true });
+  const d2 = await stage({ "lively-app.json": MANIFEST(AI("ai")), "ai/x.md": "x" });
+  await assert.rejects(() => loadAppPackage(d2), /ai\.instructions\.answer 가 파일이 아닙니다/);
+  await rm(d2, { recursive: true });
+});
+
+test("L2·L3 ai.instructions 파일이 64KiB 를 넘거나 UTF-8 이 아니거나 NUL 이 있으면 로드 실패", async () => {
+  const big = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")), "ai/a.md": "a".repeat(64 * 1024 + 1) });
+  await assert.rejects(() => loadAppPackage(big), /너무 큽니다/);
+  await rm(big, { recursive: true });
+  const bin = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")) });
+  await mkdir(path.join(bin, "ai"), { recursive: true });
+  await writeFile(path.join(bin, "ai", "a.md"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
+  await assert.rejects(() => loadAppPackage(bin), /UTF-8 글\(NUL 없이\)이 아닙니다/);
+  await rm(bin, { recursive: true });
+  const nul = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")) });
+  await mkdir(path.join(nul, "ai"), { recursive: true });
+  await writeFile(path.join(nul, "ai", "a.md"), Buffer.from([0x61, 0x00, 0x62, 0x00]));
+  await assert.rejects(() => loadAppPackage(nul), /NUL 없이/, "NUL 이 든 글은 설치 · 판 저장에서 거절(작업 행 글 칸이 못 담는다)");
+  await rm(nul, { recursive: true });
+});
+
+test("L5 ai.instructions 지시 파일이 비었거나 빈칸뿐이면 로드 실패(«지시를 실었다» 가 아니다 · 격리 리뷰 N1)", async () => {
+  for (const body of ["", "  \n\t \n"]) {
+    const d = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")), "ai/a.md": body });
+    await assert.rejects(() => loadAppPackage(d), /비어 있습니다/, JSON.stringify(body));
+    await rm(d, { recursive: true });
+  }
+});
+
+test("L6 ai.instructions 의 뜻 — 선언한 작업 이름만 · 묶음 안 상대 경로만(모양만 보는 parseAppManifest 대신 설치 · 판 저장이 본다 · 격리 리뷰 N4)", async () => {
+  const other = await stage({ "lively-app.json": MANIFEST({ ai: { jobs: [{ name: "answer" }], instructions: { other: "ai/a.md" } } }), "ai/a.md": "x" });
+  await assert.rejects(() => loadAppPackage(other), /ai\.instructions\.other.*ai\.jobs 에 선언한 작업 이름이 아닙니다/);
+  await rm(other, { recursive: true });
+  const nojobs = await stage({ "lively-app.json": MANIFEST({ ai: { instructions: { answer: "ai/a.md" } } }), "ai/a.md": "x" });
+  await assert.rejects(() => loadAppPackage(nojobs), /ai\.jobs 에 선언한 작업 이름이 아닙니다/, "작업 선언 없이 지시만 두면 거절");
+  await rm(nojobs, { recursive: true });
+  for (const bad of ["/etc/passwd", "../x.md", "ai/../../x.md", "ai//x.md", "./ai/x.md", "ai/.", "a\\b.md", "ai/x\n.md", "ai/x\u0000.md", "", `ai/${"a".repeat(510)}.md`]) {
+    const d = await stage({ "lively-app.json": MANIFEST(AI(bad)), "ai/x.md": "x" });
+    await assert.rejects(() => loadAppPackage(d), /ai\.instructions\.answer.*상대 경로/, JSON.stringify(bad));
+    await rm(d, { recursive: true });
+  }
+});
+
+test("L1b ai.instructions 가 링크로 묶음 밖 파일을 가리키면 거절(묶음 안 링크는 패키지 해시 단계가 모두 거절한다)", async () => {
+  const outside = await stage({ "secret.txt": "묶음 밖 글" });
+  const d = await stage({ "lively-app.json": MANIFEST(AI("ai/answer.md")) });
+  await mkdir(path.join(d, "ai"), { recursive: true });
+  await symlink(path.join(outside, "secret.txt"), path.join(d, "ai", "answer.md"));
+  await assert.rejects(() => loadAppPackage(d), /심링크/);
+  await rm(d, { recursive: true });
+  await rm(outside, { recursive: true });
+});
