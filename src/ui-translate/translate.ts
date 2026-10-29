@@ -123,6 +123,13 @@ export interface TranslateDeps {
   model(): string;
   /** 기억을 나누는 칸 — 테넌트(워크스페이스). 한 프로세스가 여러 테넌트를 받아도 한쪽이 오염시킨 번역이 남에게 나가지 않게(격리 리뷰 6). */
   scope(): string;
+  /** 오래 남는 기억(DB) — 메모리 다음 · 모델 앞. 없거나 고장 나면 건너뛴다(번역은 막지 않는다). */
+  store?: TranslateStore;
+}
+
+export interface TranslateStore {
+  lookup(target: string, texts: string[]): Promise<Map<string, string>>;
+  save(target: string, pairs: Array<[string, string]>): Promise<void>;
 }
 
 export interface TranslateResult {
@@ -152,7 +159,22 @@ export async function translateTexts(texts: string[], target: TranslateTarget, d
     if (hit !== undefined) { out[i] = hit; cached++; return; }
     if (!firstAt.has(t)) { firstAt.set(t, i); todo.push(i); }
   });
-  if (!todo.length) return { translations: out, cached, translated: 0, failed: 0 };
+  //  메모리에 없던 글은 오래 남는 기억(DB)에서 — 배포·재시작 뒤에도, 다른 구성원이 먼저 본 글도 바로 나간다.
+  if (todo.length && d.store) {
+    let hits = new Map<string, string>();
+    try { hits = await d.store.lookup(target, todo.map((i) => texts[i])); } catch { /* 저장소 고장 — 모델로 간다 */ }
+    if (hits.size) {
+      for (let k = todo.length - 1; k >= 0; k--) {
+        const i = todo[k], v = hits.get(texts[i]);
+        if (v === undefined) continue;
+        out[i] = v; d.cache.set(ck, texts[i], v); cached++; todo.splice(k, 1);
+      }
+    }
+  }
+  if (!todo.length) {
+    texts.forEach((t, i) => { if (out[i] === null && firstAt.has(t)) out[i] = out[firstAt.get(t)!]; });
+    return { translations: out, cached, translated: 0, failed: 0 };
+  }
 
   const key = await d.apiKey();
   if (!key) throw new NoApiKeyError();
@@ -178,11 +200,13 @@ export async function translateTexts(texts: string[], target: TranslateTarget, d
       await Promise.all([run(ids.slice(0, h)), run(ids.slice(h))]);
       return;
     }
+    const fresh: Array<[string, string]> = [];
     ids.forEach((i, k) => {
       const v = parsed?.[k] ?? null;
-      if (v) { d.cache.set(ck, texts[i], v); translated++; } else failed++;
+      if (v) { d.cache.set(ck, texts[i], v); fresh.push([texts[i], v]); translated++; } else failed++;
       out[i] = v;
     });
+    if (fresh.length && d.store) { try { await d.store.save(target, fresh); } catch { /* 남기지 못해도 이번 답은 나간다 */ } }
     if (!r.ok) error = r.error ?? "번역 호출이 실패했습니다";
     else if (!parsed) error ??= "번역 응답을 읽지 못했습니다";
   };
@@ -199,7 +223,7 @@ export class NoApiKeyError extends Error {
 }
 
 let liveDeps: TranslateDeps | null = null;
-/** 살아 있는 의존 — 워크스페이스 API 키(자격 금고) · Anthropic 단발 · 프로세스 메모리. */
+/** 살아 있는 의존 — 워크스페이스 API 키(자격 금고) · Anthropic 단발 · 프로세스 메모리 · DB 기억. */
 export async function liveTranslateDeps(): Promise<TranslateDeps> {
   if (liveDeps) return liveDeps;
   const live = await import("../ai-runs/live.js");
@@ -221,6 +245,33 @@ export async function liveTranslateDeps(): Promise<TranslateDeps> {
     cache: new TranslateCache(),
     model: translateModel,
     scope: () => currentTenant()?.id ?? "",
+    store: dbTranslateStore(),
   };
   return liveDeps;
+}
+
+/** 원문 → 저장소 키. 원문은 남기지 않는다(지식 본문이 번역 표에 복제되지 않게). */
+export function srcHash(s: string): string { return crypto.createHash("sha256").update(s).digest("base64url"); }
+
+/** DB 기억(ui_translate_cache) — 테넌트 격리는 표의 정책이 한다(요청 컨텍스트의 app.tenant_id). */
+function dbTranslateStore(): TranslateStore {
+  const pool = async () => (await import("../db/client.js")).itemsPool;
+  return {
+    lookup: async (target, texts) => {
+      const byHash = new Map(texts.map((t) => [srcHash(t), t]));
+      const r = await (await pool()).query(
+        "SELECT src_hash, translated FROM ui_translate_cache WHERE target=$1 AND src_hash = ANY($2::text[])", [target, [...byHash.keys()]]);
+      const out = new Map<string, string>();
+      for (const row of r.rows) { const t = byHash.get(String(row.src_hash)); if (t !== undefined) out.set(t, String(row.translated)); }
+      return out;
+    },
+    save: async (target, pairs) => {
+      const hs = pairs.map(([s]) => srcHash(s)), vs = pairs.map(([, v]) => v);
+      await (await pool()).query(
+        `INSERT INTO ui_translate_cache(target, src_hash, translated, model)
+           SELECT $1, h, v, $4 FROM unnest($2::text[], $3::text[]) AS x(h, v)
+           WHERE NOT EXISTS (SELECT 1 FROM ui_translate_cache c WHERE c.target=$1 AND c.src_hash=x.h)`,
+        [target, hs, vs, translateModel()]);
+    },
+  };
 }

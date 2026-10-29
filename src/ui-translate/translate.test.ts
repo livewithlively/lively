@@ -1,4 +1,4 @@
-// 화면 글 영어 보기(#5141) — 서버 쪽 엣지 표 E1~E23. 가짜 모델로. 실행: npm run build && node dist/ui-translate/translate.test.js
+// 화면 글 영어 보기(#5141) — 서버 쪽 엣지 표 E1~E26. 가짜 모델로. 실행: npm run build && node dist/ui-translate/translate.test.js
 //  이게 틀리면: 같은 글로 모델을 거듭 불러 키를 태우거나, 답 자리가 어긋나 엉뚱한 버튼에 엉뚱한 영어가 붙거나, 모델 실패가 화면 전체를 깬다.
 import assert from "node:assert/strict";
 import {
@@ -245,6 +245,40 @@ const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
   await translateTexts(["나"], "en", f.d);
   assert.equal(f.calls[1].thinking, undefined, "생각을 끌 수 없는 모델엔 보내지 않는다(400)");
   ok("E23 Haiku 는 생각 끔 · 토큰 바닥 2048");
+}
+
+// E24 저장소에 있는 글 — 모델을 안 부르고 저장소에서(배포·재시작 뒤에도 바로 · 구성원끼리 공유)
+{
+  const f = fakeDeps(echoEn);
+  const saved = new Map<string, string>([["en|가", "STORED(가)"]]);
+  f.d.store = { lookup: async (t, xs) => new Map(xs.filter((x) => saved.has(`${t}|${x}`)).map((x) => [x, saved.get(`${t}|${x}`)!])), save: async () => {} };
+  const r = await translateTexts(["가", "나"], "en", f.d);
+  assert.deepEqual(r.translations, ["STORED(가)", "EN(나)"]);
+  assert.deepEqual(sent(f.calls, 0), ["나"], "저장소에 없는 글만 모델에");
+  assert.equal(r.cached, 1);
+  const r2 = await translateTexts(["가"], "en", f.d);
+  assert.equal(r2.cached, 1);
+  assert.equal(f.calls.length, 1, "저장소에서 꺼낸 글은 메모리에도 남는다");
+  ok("E24 저장소 기억은 모델보다 먼저");
+}
+
+// E25 모델이 번역한 글은 저장소에 남긴다 — 실패한 자리는 남기지 않는다
+{
+  const f = fakeDeps(() => ({ ok: true, text: '["Alpha", ""]', error: null }));
+  const put: Array<[string, string]> = [];
+  f.d.store = { lookup: async () => new Map(), save: async (_t, pairs) => { put.push(...pairs); } };
+  await translateTexts(["가", "나"], "en", f.d);
+  assert.deepEqual(put, [["가", "Alpha"]]);
+  ok("E25 새 번역만 저장소에 남긴다");
+}
+
+// E26 저장소가 고장 나도 번역은 된다(읽기 · 쓰기 둘 다)
+{
+  const f = fakeDeps(echoEn);
+  f.d.store = { lookup: async () => { throw new Error("db down"); }, save: async () => { throw new Error("db down"); } };
+  const r = await translateTexts(["가"], "en", f.d);
+  assert.deepEqual(r.translations, ["EN(가)"]);
+  ok("E26 저장소 고장은 번역을 막지 않는다");
 }
 
 console.log(`\n${pass} passed`);
