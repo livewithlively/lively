@@ -419,17 +419,22 @@ export interface ResumeRefusal { status: number; code: string; message: string }
 
 /**
  * (순수) 이 실행을 이어받을 수 있나 — 안 되면 거절, 되면 null.
- *  순서: 없음 · 남이 보낸 실행 · 다른 앱의 실행(404 — 있는지 드러내지 않는다 · 관리자 · 구독 주인도 남의 실행은 못 잇는다) → 꺼짐(정책 0)
+ *  순서: 없음 · 남이 보낸 실행 · 다른 앱의 실행(404 — 있는지 드러내지 않는다 · 관리자 · 구독 주인도 남의 실행은 못 잇는다)
+ *   → 다른 자리(앱 화면에서 시작한 대화를 앱 서버가 · 그 거꾸로 — 대화가 돈 자리 · 홈이 달라진다) → 꺼짐(정책 0)
  *   → 아직 끝나지 않음 → 취소됨 · 이을 대화가 없음 → 한 질문당 상한.
  *  conversation = 이을 대화가 남아 있나(단발 프록시면 앞 답 글 · 작업이면 작업 행의 대화 id 와 — API 키 작업이면 — 게이트웨이가 보관한 대화 기록).
  *  noConversationWhy = 대화가 없을 때 덧붙일 까닭(예: API 키 작업의 대화 기록 보존 기간).
  */
 export function resumeRefusal(
-  parent: { status: string; app_id: string; requester: string } | null,
-  o: { requester: string; appId: string; conversation: boolean; noConversationWhy?: string | null; resumesOfRoot: number; maxResumes: number },
+  parent: { status: string; app_id: string; requester: string; requester_kind: string } | null,
+  o: { requester: string; requesterKind: string; appId: string; conversation: boolean; noConversationWhy?: string | null; resumesOfRoot: number; maxResumes: number },
 ): ResumeRefusal | null {
   if (!parent || parent.requester !== o.requester || parent.app_id !== o.appId) {
     return { status: 404, code: "resume_not_found", message: "이어받을 실행이 없습니다 — 이 앱에서 내가 보낸 실행만 이어받을 수 있어요" };
+  }
+  if (parent.requester_kind !== o.requesterKind) {
+    return { status: 409, code: "resume_not_resumable",
+      message: "앱 화면에서 시작한 대화는 앱 화면에서, 앱 서버가 시작한 대화는 앱 서버에서만 이어받을 수 있습니다(대화가 돈 자리가 달라집니다) — 새 실행으로 보내세요" };
   }
   if (!(o.maxResumes > 0)) {
     return { status: 409, code: "resume_disabled", message: "이 워크스페이스는 이어받기를 껐습니다(app_ai_limits 의 max_resumes 가 0) — 새 실행으로 보내세요" };
@@ -443,10 +448,13 @@ export function resumeRefusal(
   if (!o.conversation) {
     return { status: 409, code: "resume_not_resumable", message: `이어받을 대화가 남아 있지 않습니다${o.noConversationWhy ? `(${o.noConversationWhy})` : ""} — 새 실행으로 보내세요` };
   }
-  if (o.resumesOfRoot >= o.maxResumes) {
-    return { status: 409, code: "resume_limit", message: `이 질문은 이미 ${o.resumesOfRoot}번 이어받았습니다(한 질문당 상한 ${o.maxResumes}번 — app_ai_limits 의 max_resumes) — 새 실행으로 보내세요` };
-  }
+  if (o.resumesOfRoot >= o.maxResumes) return resumeLimitRefusal(o.resumesOfRoot, o.maxResumes);
   return null;
+}
+
+/** 한 질문당 상한에 닿았을 때의 거절 — 접수 전 미리 보기(resumeRefusal)와 넣는 순간의 판정(store.insertResumedAiRun)이 같은 말을 한다. */
+export function resumeLimitRefusal(count: number, max: number): ResumeRefusal {
+  return { status: 409, code: "resume_limit", message: `이 질문은 이미 ${count}번 이어받았습니다(한 질문당 상한 ${max}번 — app_ai_limits 의 max_resumes) — 새 실행으로 보내세요` };
 }
 
 /**
@@ -475,10 +483,11 @@ export function resumeInputError(
   return null;
 }
 
-/** (순수) 이어받은 실행의 기본 이름표 — 앞 실행 이름표 끝의 «(이어받기 n)» 은 떼고 새 번호를 붙인다. */
+/** (순수) 이어받은 실행의 기본 이름표 — 앞 실행 이름표 끝의 «(이어받기 n)» 은 떼고 새 번호를 붙인다. 길면 앞 이름표를 줄인다(번호는 남긴다). */
 export function resumeLabel(parentLabel: string | null, rootId: number, depth: number): string {
+  const suffix = ` (이어받기 ${depth})`;
   const base = (parentLabel ?? "").replace(/\s*\(이어받기 \d+\)\s*$/, "").trim() || `AI 실행 #${rootId}`;
-  return `${base} (이어받기 ${depth})`.slice(0, LABEL_MAX);
+  return base.slice(0, LABEL_MAX - suffix.length) + suffix;
 }
 
 /** 단발(프록시) 대화 한 칸 — Anthropic Messages 의 messages 한 줄. */

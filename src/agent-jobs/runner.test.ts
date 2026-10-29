@@ -29,19 +29,32 @@ process.stdin.on("data", (d) => { stdin += d; });
 process.stdin.on("end", () => {
   const i = process.argv.indexOf("--mcp-config");
   const mcpFile = i > 0 ? process.argv[i + 1] : null;
-  //  #5101 — 설정 폴더(CLAUDE_CONFIG_DIR)에 판이 되돌려 놓은 앞 대화가 있나 보고, 제 대화 파일을 남긴다(진짜 claude 처럼 projects/<폴더>/<대화 id>.jsonl).
+  //  #5101 — 설정 폴더(CLAUDE_CONFIG_DIR)에 판이 되돌려 놓은 앞 대화가 있나 보고(projects/ 아래 어느 폴더든 · 그 안의 «저장한 파일» 안내가 가리키는
+  //   파일이 실제로 있나), 진짜 claude 처럼 제 대화 파일 · 큰 도구 결과 파일을 남긴다(projects/<폴더>/<대화 id>.jsonl · <대화 id>/tool-results/*.txt).
   const path = require("path");
   const cfg = process.env.CLAUDE_CONFIG_DIR || null;
-  let restored = null;
+  let restored = null, restoredRef = null, strays = null;
   if (process.env.FAKE_TRANSCRIPT && cfg) {
-    const rf = path.join(cfg, "projects", "lvly-resume", (process.env.FAKE_RESUME_CONV || "none") + ".jsonl");
-    restored = fs.existsSync(rf) ? fs.readFileSync(rf, "utf8") : null;
-    const d = path.join(cfg, "projects", "-fake-cwd");
-    fs.mkdirSync(d, { recursive: true });
-    fs.writeFileSync(path.join(d, "0a1b2c3d-0000-4000-8000-000000000001.jsonl"), process.env.FAKE_BIG ? require("crypto").randomBytes(65536) : "line1\\nline2\\n");
+    const pj = path.join(cfg, "projects");
+    const conv = process.env.FAKE_RESUME_CONV || "none";
+    for (const sub of fs.existsSync(pj) ? fs.readdirSync(pj) : []) {
+      const rf = path.join(pj, sub, conv + ".jsonl");
+      if (fs.existsSync(rf)) restored = fs.readFileSync(rf, "utf8");
+    }
+    const m = restored && /saved to (\\/[^ \\n]+)/.exec(restored);
+    restoredRef = m ? (fs.existsSync(m[1]) ? fs.readFileSync(m[1], "utf8") : "없음:" + m[1]) : null;
+    strays = fs.readdirSync(path.dirname(cfg)).filter((n) => n !== "cfg" && n !== "prompt.txt" && n !== "mcp.json");
+    const d = path.join(pj, "-fake-cwd");
+    const sid = "0a1b2c3d-0000-4000-8000-000000000001";
+    fs.mkdirSync(path.join(d, sid, "tool-results"), { recursive: true });
+    if (process.env.FAKE_BIG) fs.writeFileSync(path.join(d, sid + ".jsonl"), require("crypto").randomBytes(65536));
+    else {
+      fs.writeFileSync(path.join(d, sid, "tool-results", "big.txt"), "큰 결과");
+      fs.writeFileSync(path.join(d, sid + ".jsonl"), "line1 Output has been saved to " + path.join(d, sid, "tool-results", "big.txt") + " end\\n");
+    }
   }
   fs.writeFileSync(rec, JSON.stringify({
-    cfg, restored,
+    cfg, restored, restoredRef, strays,
     argv: process.argv.slice(2), stdin, cwd: process.cwd(),
     env: { boot: process.env.${JOB_BOOT_ENV} ?? null, id: process.env.${JOB_ID_ENV} ?? null, extra: process.env.EXTRA ?? null,
       port: process.env.${JOB_PORT_ENV} ?? null, ws: process.env.${JOB_WS_ENV} ?? null },
@@ -350,10 +363,15 @@ await t("#5082 F2 포트 env 만(워크스페이스 없음) — 그 포트로 �
   } finally { await g.close(); }
 });
 
-// ── #5101 API 키 작업의 대화 기록 — 판이 올리고(T1 · T2 · T4) · 되돌려 놓는다(T3) — 사양 scratchpad spec-5101.md ──
+// ── #5101 API 키 작업의 대화 기록 묶음 — 판이 올리고(T1 · T2 · T4) · 되돌려 놓는다(T3) — 태스크 #5101 · 지식 app-ai-run-resume-asbuilt-5101 ──
 const KEY_ENV = { CLAUDE_CONFIG_DIR: CONFIG_DIR_PLACEHOLDER, FAKE_TRANSCRIPT: "1" };
+const SID = "0a1b2c3d-0000-4000-8000-000000000001";
+type Bundle = { v: number; cfg: string; files: Array<{ p: string; d: string }> };
+const unbundle = (gz: Buffer): Bundle => JSON.parse(zlib.gunzipSync(gz).toString("utf8")) as Bundle;
+const bundleB64 = (b: Bundle): string => zlib.gzipSync(Buffer.from(JSON.stringify(b), "utf8")).toString("base64");
+const b64 = (t: string): string => Buffer.from(t, "utf8").toString("base64");
 
-await t("T1(#5101) API 키 작업 — 끝나면 대화 파일을 gzip 으로 결과보다 먼저 올린다(콜백 비밀 · 대화 id 머리) · 설정 폴더는 지운다", async () => {
+await t("T1(#5101) API 키 작업 — 끝나면 설정 폴더 projects/ 아래 파일 전부(대화 파일 · 큰 도구 결과 파일)를 묶어 결과보다 먼저 올린다(콜백 비밀 · 대화 id 머리) · 설정 폴더는 지운다", async () => {
   const record = path.join(tmp, "t1.json");
   const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: KEY_ENV, bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000 } });
   try {
@@ -361,17 +379,21 @@ await t("T1(#5101) API 키 작업 — 끝나면 대화 파일을 gzip 으로 결
     assert.equal(g.seen.transcripts.length, 1, "한 번");
     const tr = g.seen.transcripts[0]!;
     assert.equal(tr.auth, "Bearer CALLBACK-SECRET"); assert.equal(tr.type, "application/gzip");
-    assert.equal(tr.conv, "0a1b2c3d-0000-4000-8000-000000000001", "하네스가 밝힌 대화 id");
-    assert.equal(zlib.gunzipSync(tr.body).toString("utf8"), "line1\nline2\n", "하네스가 남긴 대화 파일 그대로");
+    assert.equal(tr.conv, SID, "하네스가 밝힌 대화 id");
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    const b = unbundle(tr.body);
+    assert.equal(b.v, 1); assert.equal(b.cfg, h.cfg, "이 작업의 설정 폴더 경로(되돌릴 때 바꿔 쓸 앞자리)");
+    const files = Object.fromEntries(b.files.map((f) => [f.p, Buffer.from(f.d, "base64").toString("utf8")]));
+    assert.deepEqual(Object.keys(files).sort(), [`-fake-cwd/${SID}.jsonl`, `-fake-cwd/${SID}/tool-results/big.txt`], "projects/ 기준 상대 경로 · 큰 도구 결과 파일까지");
+    assert.match(files[`-fake-cwd/${SID}.jsonl`]!, /saved to \//); assert.equal(files[`-fake-cwd/${SID}/tool-results/big.txt`], "큰 결과");
     assert.equal(g.seen.results.length, 1);
     assert.ok(tr.at <= g.seen.resultAt[0]!, "결과보다 먼저(결과가 곧바로 같은 대화를 잇는 작업을 낳을 수 있다)");
-    const h = JSON.parse(fs.readFileSync(record, "utf8"));
     assert.ok(typeof h.cfg === "string" && h.cfg !== CONFIG_DIR_PLACEHOLDER, "자리표가 이 작업만의 폴더로 바뀌었다");
     assert.ok(!fs.existsSync(h.cfg), "끝나면 설정 폴더를 지운다");
   } finally { await g.close(); }
 });
 
-await t("T2(#5101) 올리기가 꺼진 작업(구독 — 대화는 홈에 남는다) — 설정 폴더에 대화가 있어도 올리지 않는다 · 결과는 그대로", async () => {
+await t("T2(#5101) 올리기가 꺼진 작업(구독 — 대화는 홈에 남는다 · 보관 꺼짐) — 설정 폴더에 대화가 있어도 올리지 않는다 · 결과는 그대로", async () => {
   const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t2.json"), envExtra: KEY_ENV });
   try {
     assert.equal(await runBoot(g.port), 0);
@@ -380,43 +402,61 @@ await t("T2(#5101) 올리기가 꺼진 작업(구독 — 대화는 홈에 남는
   } finally { await g.close(); }
 });
 
-await t("T3(#5101) 이어받는 작업 — 받은 앞 대화 기록을 하네스를 띄우기 전에 설정 폴더 projects/ 아래에 되돌려 놓는다 · 대화 id 꼴이 아니면 안 놓는다 · 풀면 상한을 넘으면 안 놓는다", async () => {
+await t("T3(#5101) 이어받는 작업 — 받은 묶음을 하네스를 띄우기 전에 설정 폴더 projects/ 아래 원래 자리에 되돌리고, 대화 파일 속 앞 작업의 설정 폴더 경로를 이 작업의 것으로 바꾼다 · 위험한 경로 · 꼴 밖 대화 id · 풀면 상한 초과는 안 놓는다", async () => {
   const CONV_R = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
-  const gzB64 = (s: string): string => zlib.gzipSync(Buffer.from(s, "utf8")).toString("base64");
+  const OLD = "/tmp/lvly-job-OLD123/cfg";
+  const prev: Bundle = { v: 1, cfg: OLD, files: [
+    { p: `-fake-cwd/${CONV_R}.jsonl`, d: b64(`앞 대화 Output has been saved to ${OLD}/projects/-fake-cwd/${CONV_R}/tool-results/r.txt end\n`) },
+    { p: `-fake-cwd/${CONV_R}/tool-results/r.txt`, d: b64("앞 작업의 큰 결과") },
+    { p: "../../evil.txt", d: b64("밖으로") },
+    { p: "-fake-cwd/../../../evil2.txt", d: b64("밖으로") },
+  ] };
   const r1 = path.join(tmp, "t3.json");
   const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: r1, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
-    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 1_000_000, transcript: { conv: CONV_R, gz: gzB64("앞 대화 한 줄\n") } } });
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 1_000_000, transcript: { conv: CONV_R, gz: bundleB64(prev) } } });
   try {
     assert.equal(await runBoot(g.port), 0);
-    assert.equal(JSON.parse(fs.readFileSync(r1, "utf8")).restored, "앞 대화 한 줄\n", "하네스가 뜰 때 그 대화 파일이 있다");
+    const h = JSON.parse(fs.readFileSync(r1, "utf8"));
+    assert.ok(typeof h.restored === "string" && h.restored.startsWith("앞 대화"), "하네스가 뜰 때 그 대화 파일이 있다");
+    assert.ok(!h.restored.includes(OLD) && h.restored.includes(`${h.cfg}/projects/-fake-cwd/${CONV_R}/tool-results/r.txt`), "앞 작업의 경로를 이 작업의 경로로 바꿔 썼다");
+    assert.equal(h.restoredRef, "앞 작업의 큰 결과", "안내가 가리키는 큰 결과 파일이 그 자리에 있다(이어받은 AI 가 다시 읽는다)");
+    assert.deepEqual(h.strays, [], "위험한 경로(..)는 설정 폴더 밖에 아무것도 쓰지 않는다");
     assert.equal(g.seen.results.length, 1);
+    //  이어받은 작업이 올리는 묶음엔 되돌린 앞 대화 · 큰 결과도 담긴다(손자 작업이 같은 길로 잇는다).
+    const up = unbundle(g.seen.transcripts[0]!.body).files.map((f) => f.p).sort();
+    assert.ok(up.includes(`-fake-cwd/${CONV_R}.jsonl`) && up.includes(`-fake-cwd/${CONV_R}/tool-results/r.txt`) && up.includes(`-fake-cwd/${SID}.jsonl`), JSON.stringify(up));
   } finally { await g.close(); }
   const r2 = path.join(tmp, "t3b.json");
-  const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r2, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: "../../evil" },
-    bootExtra: { transcriptMax: 1_000_000, transcript: { conv: "../../evil", gz: gzB64("x") } } });
+  const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r2, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcript: { conv: "../../evil", gz: bundleB64(prev) } } });
   try {
     assert.equal(await runBoot(g2.port), 0);
-    const h = JSON.parse(fs.readFileSync(r2, "utf8"));
-    assert.equal(h.restored, null, "대화 id 꼴이 아니면 안 놓는다");
+    assert.equal(JSON.parse(fs.readFileSync(r2, "utf8")).restored, null, "대화 id 꼴이 아니면 묶음을 풀지 않는다");
     assert.equal(g2.seen.results.length, 1, "그래도 하네스는 돌고 결과를 올린다(하네스가 «대화 없음» 을 낼 것이다)");
   } finally { await g2.close(); }
   const r3 = path.join(tmp, "t3c.json");
   const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r3, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
-    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 5, transcript: { conv: CONV_R, gz: gzB64("열 바이트가 넘는 글") } } });
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 50, transcript: { conv: CONV_R, gz: bundleB64(prev) } } });
   try {
     assert.equal(await runBoot(g3.port), 0);
-    assert.equal(JSON.parse(fs.readFileSync(r3, "utf8")).restored, null, "풀면 상한을 넘는 기록(압축 폭탄)은 안 놓는다");
+    assert.equal(JSON.parse(fs.readFileSync(r3, "utf8")).restored, null, "풀면 상한을 넘는 묶음(압축 폭탄)은 안 놓는다");
     assert.match(String((g3.seen.results[0] as Record<string, unknown>).stderr_tail), /transcript restore/, "까닭을 결과에 남긴다");
   } finally { await g3.close(); }
 });
 
-await t("T4(#5101) 압축한 대화가 상한을 넘으면 — 올리지 않는다 · 결과는 올린다", async () => {
+await t("T4(#5101) 압축한 묶음이 상한을 넘거나 · 풀린 크기가 상한에 가까우면(읽기 전에 잰다) — 올리지 않는다 · 결과는 올린다", async () => {
   const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4.json"), envExtra: { ...KEY_ENV, FAKE_BIG: "1" }, bootExtra: { transcriptMax: 1_000 } });
   try {
     assert.equal(await runBoot(g.port), 0);
-    assert.equal(g.seen.transcripts.length, 0);
+    assert.equal(g.seen.transcripts.length, 0, "압축 상한");
     assert.equal(g.seen.results.length, 1);
   } finally { await g.close(); }
+  const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4b.json"), envExtra: { ...KEY_ENV, FAKE_BIG: "1" }, bootExtra: { transcriptMax: 10_000_000, transcriptRawMax: 50_000 } });
+  try {
+    assert.equal(await runBoot(g2.port), 0);
+    assert.equal(g2.seen.transcripts.length, 0, "64KB 대화 > 풀린 상한 50KB 의 70% — 읽지 않고 건너뛴다");
+    assert.equal(g2.seen.results.length, 1);
+  } finally { await g2.close(); }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

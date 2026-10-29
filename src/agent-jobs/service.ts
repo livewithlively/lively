@@ -48,7 +48,7 @@ export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
     | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat"
-    | "setAgentJobTranscript" | "agentJobTranscript" | "pruneAgentJobTranscripts">;
+    | "setAgentJobTranscript" | "agentJobTranscript" | "agentJobTranscriptConv" | "pruneAgentJobTranscripts">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 판을 띄울 수 있는 배포인가(매니지드 브로커 · 셀프호스트 박스 위 실행면 — surface.ts). */
   available(): Promise<boolean>;
@@ -337,7 +337,7 @@ export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
  * 판의 콜백 인증 — 대조에 필요한 칸만 읽는다(비밀을 모르는 요청에 프롬프트·결과를 읽지 않는다).
  *  비밀이 맞지 않으면(없는 작업 포함) 상태와 무관하게 401 — 순차 id 로 «있나 · 끝났나» 를 엿볼 수 없게. 맞는데 끝난 작업이면 410.
  */
-async function authed(id: number, presented: string, which: "boot" | "fail" | "secret", d: AgentJobDeps): Promise<AgentJobAuthRow> {
+async function authed(id: number, presented: string, which: "boot" | "fail" | "secret", d: Pick<AgentJobDeps, "store">): Promise<AgentJobAuthRow> {
   const row = await d.store.getAgentJobAuth(id);
   const hash = row ? (which === "boot" ? row.boot_hash : which === "fail" ? row.fail_hash : row.secret_hash) : null;
   if (!row || !d.store.secretMatches(hash, presented)) throw new HttpError(401, "작업 비밀이 맞지 않습니다");
@@ -407,10 +407,28 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd,
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
-    //  #5101 API 키 작업만 — 끝에 대화 기록을 올린다(빈 설정 폴더가 끝나면 지워진다) · 이어받는 작업이면 앞 기록을 되돌려 놓는다.
-    ...(booted.account_kind === "api_key" ? { transcriptMax: TRANSCRIPT_GZ_MAX, transcriptRawMax: TRANSCRIPT_RAW_MAX } : {}),
+    //  #5101 API 키 작업만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더가 끝나면 지워진다 · 관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면
+    //   앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
+    ...(booted.account_kind === "api_key" && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
+    ...(booted.account_kind === "api_key" ? { transcriptRawMax: TRANSCRIPT_RAW_MAX } : {}),
     ...(transcript ? { transcript } : {}),
   };
+}
+
+/** #5101 API 키 작업의 대화 기록을 보관하나(정책 transcript_keep_days > 0) — 0 이면 판이 올리지 않고 게이트웨이도 받지 않는다. */
+async function transcriptKept(d: Pick<AgentJobDeps, "policy">): Promise<boolean> {
+  return (await d.policy()).transcript_keep_days > 0;
+}
+
+/**
+ * #5101 대화 기록을 받기 전 문 — **본문을 읽기 전에** 콜백 비밀 · 도는 작업(401 · 410) · API 키 작업 · 보관 켜짐 · 아직 안 받음을 본다. 비밀을 모르는
+ *  요청이 8MiB 본문을 읽히지 못하고, 받을 일이 없는 보고(구독 작업 · 두 번째 보고)는 풀어 보지도 않는다(격리 리뷰). 받을 일이 없으면 take false —
+ *  판에는 200 으로 답한다(판은 곧바로 결과로 넘어간다).
+ */
+export async function transcriptGate(id: number, presented: string, d: Pick<AgentJobDeps, "store" | "policy">): Promise<{ take: boolean }> {
+  const auth = await authed(id, presented, "secret", d);
+  if (auth.account_kind !== "api_key" || !(await transcriptKept(d))) return { take: false };
+  return { take: (await d.store.agentJobTranscriptConv(auth.id)) === null };
 }
 
 /**
@@ -421,7 +439,8 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
  *  풀었을 때 상한(TRANSCRIPT_RAW_MAX) 안인지 풀어 보고 적는다(풀기는 스레드풀에서 — 압축 폭탄이 게이트웨이를 붙잡지 않게).
  */
 export async function onTranscript(id: number, presented: string, body: unknown, conversation: unknown, d: AgentJobDeps): Promise<{ ok: true; stored: boolean }> {
-  const auth = await authed(id, presented, "secret", d);
+  //  문(transcriptGate)이 본문 전에 본 것을 다시 본다 — 이 함수만 불려도 같은 판정(받을 일이 없으면 풀지 않고 false).
+  if (!(await transcriptGate(id, presented, d)).take) return { ok: true, stored: false };
   if (!Buffer.isBuffer(body) || body.length < 2 || body[0] !== 0x1f || body[1] !== 0x8b) throw new HttpError(400, "대화 기록은 gzip 본문이어야 합니다");
   if (body.length > TRANSCRIPT_GZ_MAX) throw new HttpError(413, `대화 기록이 상한(${TRANSCRIPT_GZ_MAX} 바이트)을 넘습니다`);
   const conv = convIdOf(Array.isArray(conversation) ? conversation[0] : conversation);
@@ -436,8 +455,8 @@ export async function onTranscript(id: number, presented: string, body: unknown,
     z.on("error", reject);
     z.end(body);
   }).catch(() => { throw new HttpError(400, `대화 기록을 풀 수 없습니다(손상 · 풀면 ${TRANSCRIPT_RAW_MAX} 바이트 초과)`); });
-  const stored = await d.store.setAgentJobTranscript(auth.id, conv, body, raw);
-  logger.info({ job: auth.id, gz: body.length, raw, stored }, "[agent-job] 대화 기록");
+  const stored = await d.store.setAgentJobTranscript(id, conv, body, raw);
+  logger.info({ job: id, gz: body.length, raw, stored }, "[agent-job] 대화 기록");
   return { ok: true, stored };
 }
 
@@ -597,7 +616,7 @@ export async function sweepAgentJobs(d: AgentJobDeps): Promise<{ ended: number; 
  *  ★ 정책은 캐시(d.policy)를 거치지 않고 DB 에서 바로 읽는다 — 캐시는 읽기가 실패하면 기본값(90일)을 준다. 배차 · 감시엔 무해하지만 지우기는
  *   되돌릴 수 없어, 0(무기한)이나 더 긴 기간을 정해 둔 워크스페이스를 기본값으로 지울 수 있다. 못 읽으면 던진다 — 정비 틀이 «테넌트 스윕
  *   실패(비치명)» 로 남기고 다음 판에 다시 한다(격리 리뷰 · 보안 기본값은 닫힌 쪽).
- *  #5101 같은 정비가 API 키 작업의 대화 기록(이어받기용)도 비운다 — 끝난 지 transcript_keep_days(기본 14일)가 지나면 기록만(행은 keep_days 까지).
+ *  #5101 같은 정비가 API 키 작업의 대화 기록(이어받기용)도 비운다 — 끝난 지 transcript_keep_days(기본 14일 · 0 = 보관 안 함)가 지나면 기록만(행은 keep_days 까지).
  */
 export async function pruneAgentJobRecords(
   d: Pick<AgentJobDeps, "store">, o: { batch?: number; maxRounds?: number } = {},
@@ -611,8 +630,9 @@ export async function pruneAgentJobRecords(
   };
   const deleted = p.keep_days > 0 ? await drain(() => d.store.pruneAgentJobs(p.keep_days, batch)) : 0;
   if (deleted > 0) logger.info({ deleted, keepDays: p.keep_days }, "[agent-job] 보존 기간이 지난 작업 기록을 지웠다");
-  //  #5101 — API 키 작업의 대화 기록(이어받기용)은 작업 행보다 짧게 둔다(transcript_keep_days · 0 = 행이 남는 동안). 행은 그대로 둔다.
-  const transcripts = p.transcript_keep_days > 0 ? await drain(() => d.store.pruneAgentJobTranscripts(p.transcript_keep_days, batch)) : 0;
+  //  #5101 — API 키 작업의 대화 기록(이어받기용)은 작업 행보다 짧게 둔다(transcript_keep_days · 0 = 보관 안 함 — 끝난 작업의 기록을 모두 비운다).
+  //   행은 그대로 둔다. keep_days 가 0(행 무기한)이어도 돈다.
+  const transcripts = await drain(() => d.store.pruneAgentJobTranscripts(p.transcript_keep_days, batch));
   if (transcripts > 0) logger.info({ transcripts, keepDays: p.transcript_keep_days }, "[agent-job] 보관 기간이 지난 대화 기록을 비웠다");
   return { deleted, keep_days: p.keep_days, transcripts, transcript_keep_days: p.transcript_keep_days };
 }

@@ -258,10 +258,10 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("P12~P14 하루 상한 · 작업 상태 대응 · wait 접기");
 }
 
-// ── PR1~PR4 #5101 이어받기 판정(순수) — 사양 scratchpad spec-5101.md 엣지 표 R2c/R2d · R7 · R8 · N1 ──
+// ── PR1~PR4 #5101 이어받기 판정(순수) — 태스크 #5101 · 지식 app-ai-run-resume-asbuilt-5101 엣지 표 R2c/R2d · R7 · R8 · R15 · N1 ──
 {
-  const p = { status: "done", app_id: "crm", requester: "alice" };
-  const base = { requester: "alice", appId: "crm", conversation: true, resumesOfRoot: 0, maxResumes: 3 };
+  const p = { status: "done", app_id: "crm", requester: "alice", requester_kind: "member" };
+  const base = { requester: "alice", requesterKind: "member", appId: "crm", conversation: true, resumesOfRoot: 0, maxResumes: 3 };
   const code = (r: ReturnType<typeof resumeRefusal>): string | null => r?.code ?? null;
   assert.equal(resumeRefusal(p, base), null);
   assert.equal(code(resumeRefusal(null, base)), "resume_not_found");
@@ -270,6 +270,12 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(resumeRefusal(null, base)!.status, 404);
   //  순서 — 남의 실행이면 다른 사실(꺼짐 · 상한 · 대화)이 무엇이든 404(있는지 드러내지 않는다).
   assert.equal(code(resumeRefusal({ ...p, status: "running" }, { ...base, requester: "bob", maxResumes: 0, conversation: false })), "resume_not_found");
+  //  다른 자리 — 앱 화면(member)에서 시작한 대화를 앱 서버가 · 그 거꾸로(409 — 같은 사람이라 있는지는 감추지 않는다). 404 가 먼저다.
+  const ch = resumeRefusal(p, { ...base, requesterKind: "app_server" })!;
+  assert.equal(ch.code, "resume_not_resumable"); assert.equal(ch.status, 409); assert.match(ch.message, /앱 서버가 시작한 대화는 앱 서버에서만/);
+  assert.equal(code(resumeRefusal({ ...p, requester_kind: "app_server" }, base)), "resume_not_resumable");
+  assert.equal(resumeRefusal({ ...p, requester_kind: "app_server" }, { ...base, requesterKind: "app_server" }), null, "같은 자리면 받는다");
+  assert.equal(code(resumeRefusal(p, { ...base, requester: "bob", requesterKind: "app_server" })), "resume_not_found", "남의 실행이면 자리를 보기 전에 404");
   assert.equal(code(resumeRefusal(p, { ...base, maxResumes: 0 })), "resume_disabled");
   assert.equal(code(resumeRefusal({ ...p, status: "queued" }, base)), "resume_not_ended");
   assert.equal(code(resumeRefusal({ ...p, status: "running" }, base)), "resume_not_ended");
@@ -310,7 +316,8 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(resumeLabel("정책 질문", 12, 1), "정책 질문 (이어받기 1)");
   assert.equal(resumeLabel("정책 질문 (이어받기 1)", 12, 2), "정책 질문 (이어받기 2)");
   assert.equal(resumeLabel("  ", 12, 3), "AI 실행 #12 (이어받기 3)");
-  assert.equal(resumeLabel("가".repeat(200), 1, 1).length, LABEL_MAX, "이름표 상한");
+  const long = resumeLabel("가".repeat(200), 1, 12);
+  assert.equal(long.length, LABEL_MAX, "이름표 상한"); assert.ok(long.endsWith(" (이어받기 12)"), "길면 앞 이름표를 줄이고 번호는 남긴다");
   ok("PR3 resumeLabel — 빈 이름표 · 번호 갈기 · 상한");
 
   const sc = { type: "object" };

@@ -35,10 +35,21 @@ export function registerAgentJobRoutes(app: express.Express): void {
     res.setHeader("Cache-Control", "no-store");
     res.json(await onResult(idOf(req), bearer(req), req.body, await deps()));
   }));
-  //  #5101 API 키 작업의 대화 기록(gzip 바이트 그대로) — 전역 JSON 파서(1MB)는 이 본문을 읽지 않는다(application/json 이 아니다). 상한은 그 수 그대로.
-  //   비밀을 모르는 요청이 큰 본문을 읽히지 않게 머리글부터 본다(브라우저 답 입구 /api/ui/browser/host/reply 와 같은 꼴).
+  //  #5101 API 키 작업의 대화 기록 묶음(gzip 바이트 그대로) — 전역 JSON 파서(1MB)는 이 본문을 읽지 않는다(application/json 이 아니다). 상한은 그 수 그대로.
+  //   본문을 읽기 **전에** 문(service.transcriptGate)이 콜백 비밀 · 도는 API 키 작업 · 보관 켜짐 · 아직 안 받음을 본다 — 비밀을 모르는 요청 · 받을 일이 없는
+  //   보고가 8MiB 를 읽히지 못한다(받을 일이 없으면 200 {stored:false} · 비밀이 틀리면 401 · 끝난 작업 410).
   app.post("/api/agent-jobs/:id/transcript",
-    (req, res, next) => { if (bearer(req)) next(); else res.status(401).json({ error: "작업 비밀이 맞지 않습니다" }); },
+    (req, res, next) => {
+      void (async () => {
+        const { transcriptGate } = await import("./service.js");
+        if ((await transcriptGate(idOf(req), bearer(req), await deps())).take) { next(); return; }
+        res.setHeader("Cache-Control", "no-store");
+        res.json({ ok: true, stored: false });
+      })().catch((e) => {
+        const status = e instanceof HttpError ? e.status : 500;
+        res.status(status).json({ error: status === 500 ? "internal_error" : (e as Error).message });
+      });
+    },
     express.raw({ type: () => true, limit: TRANSCRIPT_GZ_MAX }),
     wrap(async (req, res) => {
       const { onTranscript } = await import("./service.js");

@@ -39,9 +39,10 @@ const aiRunInput = {
   timeout_min: z.number().int().positive().optional().describe("에이전트 작업의 실행 시간 상한(분)"),
   wait: z.number().int().min(0).max(WAIT_MAX_SEC).optional().describe(`끝날 때까지 기다릴 초(최대 ${WAIT_MAX_SEC}) — 단발은 보통 몇 초라 한 번에 결과를 받는다. 안 끝나면 지금 상태를 돌려준다(app_ai_run_get 으로 다시)`),
   resume_run_id: z.number().int().positive().optional().describe(
-    "이 끝난 실행(done · failed)의 대화를 이어받아 prompt(고칠 점 · 사유)로 다시 시킨다 — 새 실행이 생기고 앞 실행은 그대로 남는다. 같은 앱 · 같은 요청자만. " +
-    "실행 계정 · 작업 종류 · 작업 폴더 · 작업 이름 · system 은 앞 실행 것(schema 는 안 주면 앞 실행 것 · model 은 바꿀 수 있다). 한 질문당 상한 max_resumes(app_ai_limits) — 넘으면 409 resume_limit"),
-  reason: z.string().optional().describe(`이어받는 까닭 — 실행 기록(resume.reason)에 남는 짧은 이름표(선택 · AI 에게는 prompt 가 간다). ${softCapHint(SOFT_CAPS.app_ai_run!.reason!)}`),
+    "이 끝난 실행(done · failed)의 대화를 이어받아 prompt(고칠 점 · 사유)로 다시 시킨다 — 새 실행이 생기고 앞 실행은 그대로 남는다. 같은 앱 · 같은 요청자 · 같은 자리" +
+    "(앱 화면에서 시작한 대화는 앱 화면에서, 앱 서버가 시작한 대화는 앱 서버에서)만. 실행 계정 · 작업 종류 · 작업 폴더 · 작업 이름 · system 은 앞 실행 것" +
+    "(schema 는 안 주면 앞 실행 것 · model 은 바꿀 수 있다). 한 질문(처음 실행)당 상한 max_resumes(app_ai_limits · 갈래 포함) — 넘으면 409 resume_limit"),
+  reason: z.string().optional().describe(`이어받는 까닭 — 실행 기록(resume.reason)에 남는 짧은 이름표(선택 · 안 주면 null — 사유 원문은 그 실행의 prompt). AI 에게는 prompt 가 간다. ${softCapHint(SOFT_CAPS.app_ai_run!.reason!)}`),
 };
 const AI_RUN_KEYS = Object.keys(aiRunInput);
 

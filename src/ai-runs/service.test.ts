@@ -47,6 +47,10 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     resumeLinks: new Map(), jobTranscripts: new Set(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
+  const countedResumes = (root: number): number => [...w.resumeLinks.entries()].filter(([id, l]) => {
+    const r = w.runs.get(id);
+    return l.root === root && !(r && r.executor === "job" && r.job_id == null && r.status === "failed");
+  }).length;
   const d: AiRunDeps = {
     store: {
       async insertAiRun(n: NewAiRun) {
@@ -61,7 +65,13 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       },
       async aiRunSharedSeat(id) { return w.runShared.get(id) === true; },
       async aiRunResumeLink(id) { const l = w.resumeLinks.get(id); return l ? { ...l } : null; },
-      async resumeCountOfRoot(root) { return [...w.resumeLinks.values()].filter((l) => l.root === root).length; },
+      //  SQL(store.RESUME_COUNTED)과 같은 뜻 — 그 질문의 이어받기 중 띄우지도 못한 시도(작업 실행 · 작업 행 없음 · 실패)는 빼고 센다(실 Postgres 는 store.pg-test T18).
+      async resumeCountOfRoot(root) { return countedResumes(root); },
+      async insertResumedAiRun(n, max) {
+        const counted = countedResumes(n.resume.root);
+        if (counted >= max) return { limit: counted };
+        return { row: await d.store.insertAiRun(n) };
+      },
       async getAiRun(id) { const r = w.runs.get(id); return r ? { ...r } : null; },
       async getAiRunByToken(h) { const r = [...w.runs.values()].find((x) => x.proxy_token_hash === h && !ended(x.status)); return r ? { ...r } : null; },
       async getAiRunByJob(j) { const r = [...w.runs.values()].find((x) => x.job_id === j); return r ? { ...r } : null; },
@@ -94,7 +104,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     resumeTarget: async (id) => {
       const j = w.jobs.get(id);
       if (!j) return null;
-      const base = { projectId: j.project_id, model: j.model };
+      const base = { projectId: j.project_id, model: j.model, conversation: j.conversation_id };
       if (!j.conversation_id) return { ...base, resumable: false, why: "대화 없음" };
       if ((j as { account_kind?: string }).account_kind === "api_key" && !w.jobTranscripts.has(id)) return { ...base, resumable: false, why: "API 키 작업의 대화 기록이 없습니다" };
       return { ...base, resumable: true, why: null };
@@ -572,7 +582,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   ok("S24 wait — 한 번에 결과");
 }
 
-// ══ #5101 이어받기(resume_run_id) — 엣지 표 R1~R14 · N1(사양 scratchpad spec-5101.md · 지식 app-ai-run-resume-asbuilt-5101) ══
+// ══ #5101 이어받기(resume_run_id) — 엣지 표 R1~R17 · N1(태스크 #5101 · 지식 app-ai-run-resume-asbuilt-5101) ══
 //  이게 틀리면: 남의 대화 · 다른 앱의 실행을 이어받거나, 끝나지 않은 대화에 끼어들거나, 상한 없이 끝없이 다시 묻거나, 이어받은 실행이 다른 실행 계정 ·
 //  작업 폴더에서 돌아 앞 대화가 없거나, 앞 대화 없이 사유만 받은 AI 가 엉뚱한 답을 낸다.
 const doneJob = (w: World, id: number, conv: string, text = "답"): void => { Object.assign(w.jobs.get(id)!, { status: "done", conversation_id: conv, result: { text } }); };
@@ -581,14 +591,16 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
 // ── R1 단발 이어받기 — 새 실행 · 앞 대화를 엮어 보낸다 · system · schema 는 앞 실행 것 · 앞 실행은 그대로 ──
 {
   const { w, d } = world({ llmReply: (_i, n) => okText(n === 1 ? '{"n": 1}' : '{"n": 2}') });
-  const first = await submitRun({ prompt: "질문", system: "정책 위키 비서", schema }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  //  수요의 흐름 그대로 — 앱 서버가 사람(alice) 대리로 묻고, 검사해 어긋나면 같은 자리(앱 서버)에서 잇는다(보낸 자리가 다르면 409 — R15).
+  const srv = member("alice", { appId: "crm", appServer: true });
+  const first = await submitRun({ prompt: "질문", system: "정책 위키 비서", schema }, srv, { source: "rest" }, d);
   await settle();
   assert.equal(first.resume, null, "새 질문은 resume null");
   assert.equal(w.runs.get(1)!.status, "done");
-  const r = await submitRun({ prompt: "근거 id 7 은 조회 결과에 없습니다 — 다시", reason: "인용 불일치" }, member("alice", { appId: "crm", appServer: true }), { source: "rest" }, d)
+  const r = await submitRun({ prompt: "근거 id 7 은 조회 결과에 없습니다 — 다시", reason: "인용 불일치" }, srv, { source: "rest" }, d)
     .catch((e) => e);
   assert.ok(!(r instanceof Error), "resume_run_id 없이 보내면 새 질문이다(아래에서 이어받기로 다시)");
-  const r2 = await submitRun({ prompt: "근거 id 7 은 조회 결과에 없습니다 — 다시", reason: "인용 불일치", resume_run_id: 1 }, member("alice", { appId: "crm", appServer: true }), { source: "rest" }, d);
+  const r2 = await submitRun({ prompt: "근거 id 7 은 조회 결과에 없습니다 — 다시", reason: "인용 불일치", resume_run_id: 1 }, srv, { source: "rest" }, d);
   await settle();
   assert.equal(r2.id, 3, "새 실행 행");
   assert.deepEqual(r2.resume, { of: 1, root: 1, depth: 1, reason: "인용 불일치" });
@@ -771,7 +783,8 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   w.settings = {};   // 이제 앱의 실행 계정은 API 키(키가 있으니)
   const r = await submitRun({ prompt: "고쳐", resume_run_id: 1 }, u, { source: "app-ui" }, d);
   assert.deepEqual(r.account, { kind: "subscription", member: "alice" }, "대화가 있는 계정 그대로"); assert.equal(r.executor, "job");
-  await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, member("alice", { appId: "crm", appServer: true }), { source: "rest" }, d), 403, /구독은 사람이 보낸 요청에만/, "account_unavailable");
+  //  앱 서버는 앱 화면에서 시작한 구독 대화를 못 잇는다 — 보낸 자리가 다르면 계정 판정 전에 409(종전 403 «구독은 사람이 보낸 요청에만» 보다 앞 · R15).
+  await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, member("alice", { appId: "crm", appServer: true }), { source: "rest" }, d), 409, /앱 화면에서 시작한 대화는 앱 화면에서/, "resume_not_resumable");
 
   const seat = { admin: { by: "root", at: "t" }, member: { at: "t" } };
   const s = world({ settings: { default: { kind: "subscription", member: "seat1" }, service_seats: { seat1: seat } }, key: null });
@@ -789,7 +802,7 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   await submitRun({ prompt: "Q" }, u, { source: "app-ui" }, k.d); await settle();
   k.w.key = null;
   await fails(submitRun({ prompt: "x", resume_run_id: 1 }, u, { source: "app-ui" }, k.d), 409, /API 키인데 등록된 키가 없습니다/, "account_unavailable");
-  ok("R9 계정 — 앞 실행 것 · 판정은 지금(앱 서버 → 구독 403 · 시트 거둠 403 · 키 없음 409) · 시트 대화는 시트 자리");
+  ok("R9 계정 — 앞 실행 것 · 판정은 지금(앱 서버 → 앱 화면 구독 대화 409 · 시트 거둠 403 · 키 없음 409) · 시트 대화는 시트 자리");
 }
 
 // ── R10 홈 없는 작업(앱 서버 · API 키 에이전트)의 이어받기 — 다시 홈 없는 자리 · 사람이 프로젝트 폴더에서 돌린 대화는 앱 서버가 못 잇는다 ──
@@ -804,13 +817,21 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   assert.equal(w.submitted[1]!.homeless, true, "홈 없는 자리 그대로"); assert.equal(w.submitted[1]!.projectId, null);
   assert.equal(w.submitted[1]!.model, null, "앞 작업에 모델이 없으면 없다(하네스 기본)");
 
+  //  사람이 앱 화면에서 프로젝트 폴더로 돌린 대화는 앱 서버가 못 잇는다 — 보낸 자리가 달라 409(R15) 가 먼저다.
   const p = world();
   await submitRun({ prompt: "Q", agent: true, project_id: 77 }, appUser("alice", "crm"), { source: "app-ui" }, p.d);
   doneJob(p.w, 101, C1); p.w.jobTranscripts.add(101);
   await syncRun(p.w.runs.get(1)!, p.d);
-  await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, srv, { source: "rest" }, p.d), 400, /프로젝트 폴더에서 돌았습니다/);
+  await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, srv, { source: "rest" }, p.d), 409, /앱 화면에서 시작한 대화는 앱 화면에서/, "resume_not_resumable");
   assert.equal(p.w.runs.size, 1);
-  ok("R10 홈 없는 작업 이어받기 — 홈 없는 자리 그대로 · 프로젝트 폴더 대화는 앱 서버가 못 잇는다");
+  //  같은 자리(앱 서버)여도 앞 작업이 프로젝트 폴더에서 돌았다면(지금 접수로는 생기지 않는 행 — 막이 하나 더) 홈 없는 자리로 잇지 않는다(400).
+  const q = world();
+  await submitRun({ prompt: "Q", agent: true }, srv, { source: "rest" }, q.d);
+  doneJob(q.w, 101, C1); q.w.jobTranscripts.add(101); q.w.jobs.get(101)!.project_id = 77;
+  await syncRun(q.w.runs.get(1)!, q.d);
+  await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, srv, { source: "rest" }, q.d), 400, /프로젝트 폴더에서 돌았습니다/);
+  assert.equal(q.w.runs.size, 1); assert.equal(q.w.submitted.length, 1);
+  ok("R10 홈 없는 작업 이어받기 — 홈 없는 자리 그대로 · 사람의 프로젝트 폴더 대화는 앱 서버가 못 잇는다(409 자리 · 400 폴더)");
 }
 
 // ── R11 모델을 바꿔 다시 시키기 · 이름표 · 까닭(NUL 뺌 · 300자) ──
@@ -862,6 +883,63 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, u, { source: "app-ui" }, d), 429, /이미 1개 돌고 있습니다/);
   assert.equal(w.runs.size, 2);
   ok("R14 이어받기도 상한(사람당 동시 429)");
+}
+
+// ── R15 다른 자리 — 앱 화면에서 시작한 대화를 앱 서버가 · 앱 서버가 시작한 대화를 앱 화면이 이으면 409(대화가 돈 자리 · 홈이 달라진다) ──
+{
+  const { w, d } = world();
+  const ui = appUser("alice", "crm"), srv = member("alice", { appId: "crm", appServer: true });
+  await submitRun({ prompt: "화면 질문" }, ui, { source: "app-ui" }, d); await settle();
+  await submitRun({ prompt: "서버 질문", agent: true }, srv, { source: "rest" }, d);
+  doneJob(w, 101, C1); w.jobTranscripts.add(101);
+  await syncRun(w.runs.get(2)!, d);
+  await fails(submitRun({ prompt: "x", resume_run_id: 1 }, srv, { source: "rest" }, d), 409, /앱 화면에서 시작한 대화는 앱 화면에서/, "resume_not_resumable");
+  await fails(submitRun({ prompt: "x", resume_run_id: 2 }, ui, { source: "app-ui" }, d), 409, /앱 서버가 시작한 대화는 앱 서버에서만/, "resume_not_resumable");
+  assert.equal(w.runs.size, 2); assert.equal(w.submitted.length, 1, "홈 없는 대화를 사람 홈에서 띄우지 않는다");
+  const same = await submitRun({ prompt: "x", resume_run_id: 2 }, srv, { source: "rest" }, d);
+  assert.equal(w.submitted[1]!.homeless, true, "같은 자리면 그 자리 그대로"); assert.equal((same.resume as { of: number }).of, 2);
+  ok("R15 다른 자리 409 — 화면 ↔ 서버 · 같은 자리는 받는다");
+}
+
+// ── R16 띄우지도 못한 시도는 한 질문당 몫을 깎지 않는다 — 대기열이 차 세 번 429 뒤에도(상한 3) 이어받는다 ──
+{
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null, policy: { ...DEFAULT_AI_RUN_POLICY, max_resumes: 3 } });
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "Q" }, u, { source: "app-ui" }, d);
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  w.submitThrows = new HttpError(429, "작업 대기열이 찼습니다");
+  for (let i = 0; i < 3; i++) await fails(submitRun({ prompt: "고쳐", resume_run_id: 1 }, u, { source: "app-ui" }, d), 429, /대기열이 찼습니다/);
+  assert.equal(w.runs.size, 4, "실패한 시도도 기록은 남는다(failed)"); assert.ok([2, 3, 4].every((id) => w.runs.get(id)!.status === "failed"));
+  w.submitThrows = undefined;
+  const r = await submitRun({ prompt: "고쳐", resume_run_id: 1 }, u, { source: "app-ui" }, d);
+  assert.equal((r.resume as { of: number }).of, 1, "상한(3)에 걸리지 않고 받는다 — 앞 세 시도는 돌지 않았다");
+  ok("R16 띄우지 못한 시도(작업 행 없이 실패)는 세지 않는다 — 429 세 번 뒤에도 상한 안");
+}
+
+// ── R17 끝은 넣는 순간에 막는다 — 미리 보기 셈이 낡아도(동시에 보낸 다른 시도가 그 사이 들어감) 상한을 넘지 않는다 ──
+{
+  const { w, d } = world({ policy: { ...DEFAULT_AI_RUN_POLICY, max_resumes: 1 } });
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "Q" }, u, { source: "app-ui" }, d); await settle();
+  await submitRun({ prompt: "첫 이어받기", resume_run_id: 1 }, u, { source: "app-ui" }, d); await settle();
+  d.store.resumeCountOfRoot = async () => 0;   // 미리 보기가 낡았다(그 사이 다른 요청이 넣음)
+  await fails(submitRun({ prompt: "둘째", resume_run_id: 1 }, u, { source: "app-ui" }, d), 409, /이미 1번 이어받았습니다/, "resume_limit");
+  assert.equal(w.runs.size, 2, "넣지 않는다");
+  ok("R17 넣는 순간의 셈이 끝을 막는다(미리 보기가 낡아도)");
+}
+
+// ── R18 상한에 닿은 질문은 다른 거절보다 먼저 resume_limit — 이어받은 실행(2)을 또 이어도 그 질문(1)으로 센다 · 키가 빠진 뒤에도 같은 까닭 ──
+//  앱이 «다시 묻기를 그만» 을 늘 같은 코드로 알아본다(그 사이 키 · 설정이 바뀌어 다른 409 로 갈리지 않게).
+{
+  const { w, d } = world({ policy: { ...DEFAULT_AI_RUN_POLICY, max_resumes: 1 } });
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "Q" }, u, { source: "app-ui" }, d); await settle();
+  await submitRun({ prompt: "첫 이어받기", resume_run_id: 1 }, u, { source: "app-ui" }, d); await settle();
+  w.key = null;
+  await fails(submitRun({ prompt: "둘째", resume_run_id: 2 }, u, { source: "app-ui" }, d), 409, /이미 1번 이어받았습니다/, "resume_limit");
+  assert.equal(w.runs.size, 2); assert.equal(w.llm.length, 2);
+  ok("R18 상한은 다른 거절보다 먼저 — 이어받은 실행을 또 이어도 처음 질문으로 센다(키가 빠져도 resume_limit)");
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);

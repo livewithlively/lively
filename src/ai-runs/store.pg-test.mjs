@@ -258,6 +258,31 @@ try {
     rl === null && rc === 0 && plainR?.id > 0 && finR?.status === "done" && resumedR?.code === "42703",
     JSON.stringify({ rl, rc, plain: plainR?.id, fin: finR?.status, code: resumedR?.code }));
 
+  // ── T18 넣는 순간의 셈(#5101 · 격리 리뷰) — 같은 질문을 동시에 여덟 번 이어도 상한(3)만큼만 들어간다 · 띄우지 못한 작업(작업 행 없이 실패)은 세지 않는다 ──
+  const qc = await st.insertAiRun(base({ prompt: "동시 질문" }));
+  const link = (reason) => ({ of: qc.id, root: qc.id, depth: 1, reason });
+  const resumeRace = await Promise.all(Array.from({ length: 8 }, (_, i) => st.insertResumedAiRun(base({ prompt: `동시 ${i}`, resume: link(`r${i}`) }), 3)));
+  const inRows = resumeRace.filter((r) => "row" in r), limited = resumeRace.filter((r) => "limit" in r);
+  chk("T18 동시 여덟 번 — 셋만 들어가고(행 · 줄) 다섯은 상한(limit 3) · 센 수 3",
+    inRows.length === 3 && limited.length === 5 && limited.every((r) => r.limit === 3) && (await st.resumeCountOfRoot(qc.id)) === 3
+      && (await Promise.all(inRows.map((r) => st.aiRunResumeLink(r.row.id)))).every((l) => l?.root === qc.id && l?.of === qc.id),
+    JSON.stringify(resumeRace.map((r) => ("row" in r ? `row ${r.row.id}` : `limit ${r.limit}`))));
+  const qf = await st.insertAiRun(base({ prompt: "띄우기 실패 질문" }));
+  const lf = { of: qf.id, root: qf.id, depth: 1, reason: null };
+  const launchFail = (await st.insertResumedAiRun(base({ prompt: "대기열 꽉 참", executor: "job", status: "queued", kind: "agent", resume: lf }), 2)).row;
+  await st.finishAiRun(launchFail.id, { status: "failed", result: null, error: "대기열이 찼습니다" });
+  const queuedNoJob = (await st.insertResumedAiRun(base({ prompt: "띄우는 중", executor: "job", status: "queued", kind: "agent", resume: lf }), 2)).row;
+  const afterQueued = await st.resumeCountOfRoot(qf.id);
+  const ranFail = (await st.insertResumedAiRun(base({ prompt: "돌다 실패", executor: "job", status: "queued", kind: "agent", resume: lf }), 2));
+  chk("T18b 작업 행 없이 실패한 이어받기는 세지 않는다 — 띄우는 중(작업 행 아직 없음)은 센다 · 셋째는 들어가 둘이 된다",
+    launchFail?.id > 0 && queuedNoJob?.id > 0 && afterQueued === 1 && !("limit" in ranFail) && (await st.resumeCountOfRoot(qf.id)) === 2,
+    JSON.stringify({ afterQueued, third: "row" in ranFail ? ranFail.row.id : ranFail }));
+  await st.setAiRunJob(queuedNoJob.id, 778);
+  await st.finishAiRun(queuedNoJob.id, { status: "failed", result: null, error: "돌다 실패" });
+  const fourth = await st.insertResumedAiRun(base({ prompt: "넷째", resume: lf }), 2);
+  chk("T18c 띄운 뒤 실패(작업 행 있음)는 센다 — 상한 2 에서 넷째는 limit",
+    "limit" in fourth && fourth.limit === 2 && (await st.resumeCountOfRoot(qf.id)) === 2, JSON.stringify(fourth));
+
   // ── T14 공용 시트 지정 도구(app_ai_service_seat_set) — 실제 구성원 표 · 설정 칸 · 감사 ──
   const { upsertMember } = await import(`${DIST}/org/store/members.js`);
   const people = [["adm", ["items", "context", "memory", "admin"]], ["seat", ["items", "context", "memory"]], ["ali", ["items", "context", "memory"]], ["dev", ["items", "context", "memory", "code"]]];

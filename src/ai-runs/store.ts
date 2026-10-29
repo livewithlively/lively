@@ -56,19 +56,26 @@ export interface NewAiRun {
   resume?: ResumeLink | null;
 }
 
-export async function insertAiRun(n: NewAiRun): Promise<AiRunRow> {
+/** 실행 행 하나를 넣는 SQL(insertAiRun · insertResumedAiRun 이 같은 글을 쓴다). */
+function insertRunSql(n: NewAiRun): { sql: string; args: unknown[] } {
   //  #5081 shared_seat 칸은 공용 시트 실행일 때만 적는다 — RUN_SHARED_SEAT_COL 머리말(롤 창에서 다른 실행의 접수가 «없는 칸» 으로 깨지지 않게).
   //  #5101 이어받기 칸 넷도 같은 까닭으로 이어받은 실행일 때만 적는다(RUN_RESUME_COLS 머리말).
   const shared = n.sharedSeat === true;
   const rs = n.resume ?? null;
   const extraCols = `${shared ? `, ${RUN_SHARED_SEAT_COL}` : ""}${rs ? `, ${RUN_RESUME_COLS.join(", ")}` : ""}`;
   const extraVals = `${shared ? ", true" : ""}${rs ? ", $16, $17, $18, $19" : ""}`;
-  const r = await itemsPool.query(
-    `INSERT INTO org_app_ai_run(status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, model, label, prompt,
+  return {
+    sql: `INSERT INTO org_app_ai_run(status, app_id, requester, requester_kind, source, job_name, kind, account_kind, account_member, executor, model, label, prompt,
                                 system_prompt, schema, started_at${extraCols})
      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, CASE WHEN $1='running' THEN now() ELSE NULL END${extraVals}) RETURNING ${COLS}`,
-    [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
-      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, ...(rs ? [rs.of, rs.root, rs.depth, rs.reason] : [])]);
+    args: [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
+      n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, ...(rs ? [rs.of, rs.root, rs.depth, rs.reason] : [])],
+  };
+}
+
+export async function insertAiRun(n: NewAiRun): Promise<AiRunRow> {
+  const { sql, args } = insertRunSql(n);
+  const r = await itemsPool.query(sql, args);
   return norm(r.rows[0])!;
 }
 
@@ -95,15 +102,36 @@ export async function aiRunResumeLink(id: number): Promise<ResumeLink | null> {
   }
 }
 
-/** 한 질문(처음 실행 rootId)을 이어받은 실행 수 — 갈래까지 다 센다(한 질문당 상한 · plan.resumeRefusal). */
+/**
+ * 한 질문(처음 실행)을 이어받은 수를 세는 조건 — 갈래까지 다 센다. 띄우지도 못한 시도(작업 실행인데 작업 행 없이 실패 — 대기열이 참 · 작업 컨테이너가
+ *  없는 배포)는 뺀다 — 한 번도 돌지 않은 시도가 앱의 다시 묻기 몫을 깎지 않게(격리 리뷰). 아직 작업을 달기 전인 열린 시도는 센다(동시에 보내도 넘지 않게).
+ */
+const RESUME_COUNTED = `resume_root=$1 AND NOT (executor='job' AND job_id IS NULL AND status='failed')`;
+
+/** 한 질문(처음 실행 rootId)을 이어받은 수(RESUME_COUNTED) — 접수 전 미리 보기(plan.resumeRefusal). 끝을 막는 것은 insertResumedAiRun 이다. */
 export async function resumeCountOfRoot(rootId: number): Promise<number> {
   try {
-    const r = await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_ai_run WHERE resume_root=$1`, [rootId]);
+    const r = await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_ai_run WHERE ${RESUME_COUNTED}`, [rootId]);
     return Number(r.rows[0]?.n ?? 0);
   } catch (e) {
     if (isUndefinedColumn(e)) return 0;   // 마이그레이션 전 — 칸이 없으면 이어받은 실행도 없다
     throw e;
   }
+}
+
+/**
+ * 이어받은 실행을 넣는다 — 그 질문(root)의 잠금 안에서 세고(RESUME_COUNTED) 상한 아래일 때만 넣는다. 같은 질문을 동시에 여럿 이어도 상한을 넘지 않는다
+ *  (세고 → 넣기가 따로면 동시에 보낸 만큼 다 받는다 — 격리 리뷰 실측 8/8). 상한에 닿았으면 { limit: 센 수 }.
+ *  ⚠ 칸이 아직 없으면(롤 창) 42703 을 그대로 던진다 — 부르는 쪽이 503 으로 바꾼다.
+ */
+export async function insertResumedAiRun(n: NewAiRun & { resume: ResumeLink }, maxResumes: number): Promise<{ row: AiRunRow } | { limit: number }> {
+  return withTx(async (c) => {
+    await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('lvly-ai-resume:' || $1::text, 0))`, [String(n.resume.root)]);
+    const counted = Number((await c.query(`SELECT count(*)::int AS n FROM org_app_ai_run WHERE ${RESUME_COUNTED}`, [n.resume.root])).rows[0]?.n ?? 0);
+    if (counted >= maxResumes) return { limit: counted };
+    const { sql, args } = insertRunSql(n);
+    return { row: norm((await c.query(sql, args)).rows[0])! };
+  });
 }
 
 export async function getAiRun(id: number): Promise<AiRunRow | null> {

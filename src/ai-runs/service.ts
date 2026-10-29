@@ -26,7 +26,7 @@ import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, RESUME_REASON_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
-  resolveAccount, resumeHistory, resumeInputError, resumeLabel, resumeRefusal, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction,
+  resolveAccount, resumeHistory, resumeInputError, resumeLabel, resumeLimitRefusal, resumeRefusal, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction,
   seatShared, serviceSeatConsented, subscriptionRefusal, waitSecOf,
   type AiAccount, type AiAccountSettings, type ChatTurn, type ResumeLink, type RunKind, type SeatTerms, type SessionTie,
 } from "./plan.js";
@@ -62,13 +62,13 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
   };
 }
 
-/** 이어받을 작업의 사실(#5101) — 작업 폴더 · 모델 · 이을 대화가 남았나(대화 id 와, API 키 작업이면 게이트웨이가 보관한 기록) · 없으면 그 까닭. */
-export interface ResumeTarget { projectId: number | null; model: string | null; resumable: boolean; why: string | null }
+/** 이어받을 작업의 사실(#5101) — 작업 폴더 · 모델 · 그 대화 id · 이을 대화가 남았나(대화 id 와, API 키 작업이면 게이트웨이가 보관한 기록) · 없으면 그 까닭. */
+export interface ResumeTarget { projectId: number | null; model: string | null; conversation: string | null; resumable: boolean; why: string | null }
 
 export interface AiRunDeps {
   store: Pick<Store, "insertAiRun" | "getAiRun" | "getAiRunByToken" | "getAiRunByJob" | "setAiRunJob" | "setAiRunProxyToken" | "markAiRunRunning" | "retryAiRun"
     | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "aiRunSharedSeat"
-    | "aiRunResumeLink" | "resumeCountOfRoot">;
+    | "aiRunResumeLink" | "resumeCountOfRoot" | "insertResumedAiRun">;
   /** #5101 이어받을 작업(앞 실행의 작업 행)의 사실 — 작업 행이 없으면(보존 정리로 지워짐) null. */
   resumeTarget(jobId: number): Promise<ResumeTarget | null>;
   policy(): Promise<AiRunPolicy>;
@@ -207,7 +207,7 @@ interface ResumeCtx { parent: AiRunRow; target: ResumeTarget | null; link: Resum
  * #5101 resume_run_id 를 읽고 판정한다(plan.resumeRefusal · resumeInputError) — 없으면 null(새 질문). 안 되면 던진다(400 · 404 · 409 + body.code).
  *  남이 보낸 실행 · 다른 앱의 실행이면 대화 · 작업 행을 읽지 않고 404 다(있는지도 드러내지 않는다).
  */
-async function resumeOf(input: SubmitInput, who: { member: string }, appId: string, maxResumes: number, d: AiRunDeps): Promise<ResumeCtx | null> {
+async function resumeOf(input: SubmitInput, who: { member: string; kind: string }, appId: string, maxResumes: number, d: AiRunDeps): Promise<ResumeCtx | null> {
   if (input.resume_run_id === undefined || input.resume_run_id === null || input.resume_run_id === "") return null;
   const id = Number(input.resume_run_id);
   if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "resume_run_id 형식이 아닙니다");
@@ -225,9 +225,9 @@ async function resumeOf(input: SubmitInput, who: { member: string }, appId: stri
       why = target ? target.why : "그 실행의 작업 기록이 보존 기간(agent_job_limits 의 keep_days)이 지나 지워졌습니다";
     }
   }
-  //  한 질문당 상한은 세고 → 넣는 두 단계라 같은 질문을 동시에 여럿 이으면 조금 넘길 수 있다 — 소프트 상한이다(앱당 분당 · 사람당 동시 상한이 폭을 막는다).
+  //  한 질문당 상한 — 여기서는 미리 보기다(행을 넣기 전에 까닭을 알린다). 끝을 막는 것은 넣는 순간의 잠금 안 셈이다(store.insertResumedAiRun).
   const refusal = resumeRefusal(parent, {
-    requester: who.member, appId, conversation, noConversationWhy: why, maxResumes,
+    requester: who.member, requesterKind: who.kind, appId, conversation, noConversationWhy: why, maxResumes,
     resumesOfRoot: mine && conversation && maxResumes > 0 ? await d.store.resumeCountOfRoot(root) : 0,
   });
   if (refusal) throw new HttpError(refusal.status, refusal.message, { body: { code: refusal.code } });
@@ -372,7 +372,8 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     prompt, systemPrompt: resume ? resume.parent.system_prompt : system, schema: runSchema,
     status: executor === "proxy" ? "running" : "queued", sharedSeat, resume: resume?.link ?? null,
   };
-  const row = await d.store.insertAiRun(n).catch((e) => {
+  //  #5101 이어받은 실행은 그 질문의 잠금 안에서 세고 넣는다(store.insertResumedAiRun — 동시에 여럿 이어도 한 질문당 상한을 넘지 않는다).
+  const put = await (resume ? d.store.insertResumedAiRun({ ...n, resume: resume.link }, p.max_resumes) : d.store.insertAiRun(n).then((row) => ({ row }))).catch((e) => {
     //  #5081 롤 창 — 새 게이트웨이가 공용 DB 마이그레이션보다 먼저 받는 몇 분 동안 공용 시트 실행은 «없는 칸»(42703)으로 실패한다
     //   (store.RUN_SHARED_SEAT_COL 머리말). 막힌 게 아니라 아직 준비 중이니 다시 보내라고 말한다. #5101 이어받기(store.RUN_RESUME_COLS)도 같다.
     if ((sharedSeat || resume) && (e as { code?: string })?.code === "42703") {
@@ -380,6 +381,11 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     }
     throw e;
   });
+  if ("limit" in put) {
+    const r = resumeLimitRefusal(put.limit, p.max_resumes);
+    throw new HttpError(r.status, r.message, { body: { code: r.code } });
+  }
+  const row = put.row;
   logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor, ...(resume ? { resumeOf: resume.link.of, depth: resume.link.depth } : {}) }, "[ai-run] 접수");
 
   if (executor === "proxy") {
