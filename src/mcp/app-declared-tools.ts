@@ -177,6 +177,15 @@ export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra:
   const name = (member.use_nickname && nick ? nick : String(member.display_name ?? "").trim()) || member.id;
   const tokenScopes = [...(user.scopes ?? [])];
   const signal = (extra as { signal?: AbortSignal } | undefined)?.signal;
+  //  진행 알림 — 부른 쪽이 progressToken 을 실었을 때만(MCP 진행 규약). 무상태 /mcp 는 답을 SSE 로 흘리므로 기다리는 동안 알림이 먼저 나간다.
+  const { _meta: reqMeta, sendNotification } = (extra ?? {}) as { _meta?: { progressToken?: unknown }; sendNotification?: (n: unknown) => Promise<void> };
+  const progressToken = reqMeta?.progressToken;
+  const progress = (typeof progressToken === "string" || typeof progressToken === "number") && typeof sendNotification === "function"
+    ? async (p: { progress: number; total?: number; message?: string }): Promise<void> => {
+      await sendNotification({ method: "notifications/progress", params: { progressToken, progress: p.progress, ...(p.total !== undefined ? { total: p.total } : {}),
+        ...(p.message ? { message: wellFormedText(p.message) } : {}) } }).catch(() => undefined);   // 부른 쪽이 떠났다 — 실행기는 그대로 간다
+    }
+    : undefined;
   try {
     const out = await executor.call({
       app: { id: installed.id, title: seen.app.title, view: seen.view, variant, content_hash: seen.app.content_hash },
@@ -190,9 +199,11 @@ export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra:
         ...(user.tokenHashPrefix ? { tokenHashPrefix: user.tokenHashPrefix } : {}),
       },
       ...(signal ? { signal } : {}),
+      ...(progress ? { progress } : {}),
     });
-    const r = renderToolResultText(out?.data);
-    return { content: [{ type: "text", text: r.text }], ...(r.truncated ? { _meta: { "lively/truncated": true, "lively/bytes": r.bytes } } : {}) };
+    const r = renderToolResultText(out?.data, undefined, out?.truncatedFrom);
+    const meta = { ...(out?.meta ?? {}), ...(r.truncated ? { "lively/truncated": true, "lively/bytes": r.bytes } : {}) };
+    return { content: [{ type: "text", text: r.text }], ...(Object.keys(meta).length ? { _meta: meta } : {}) };
   } catch (e) {
     if (e instanceof HttpError) return toolError(e.message, typeof e.body?.code === "string" ? e.body.code : `http_${e.status}`);
     logger.error({ app: ref.appId, tool: ref.name, kind: decl.run.kind, err: (e as Error)?.message, stack: (e as Error)?.stack }, "앱 선언 도구 실행 실패(#5050)");

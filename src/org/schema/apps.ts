@@ -317,6 +317,43 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_app_idx ON org_app_job(app_id, id DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_requester_idx ON org_app_job(requester, id DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_ended_idx ON org_app_job(ended_at) WHERE ended_at IS NOT NULL;`);
+  //  #5053 scope_ceiling — 앱 선언 MCP 도구 부르기에서 비롯된 작업(server 실행기의 background · 그 부르기나 그런 작업 안에서 앱이 시작한 작업)의
+  //   권한 상한(부른 연결의 권한 ∩ 그 사람의 앱 동의 — 앱이 시작한 작업은 시작한 주체의 권한을 물려받는다). 다른 작업은 NULL.
+  //   돌기 신원을 풀 때 source 'mcp-tool' 인 작업만 이 칸을 따로 읽는다(apps/app-jobs.ts resolveJobRunPrincipal — 칸 묶음 밖이라 롤 창에도 다른 작업이 안 깨진다).
+  await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS scope_ceiling TEXT[];`);
+  //  org_app_call(#5053 앱 v2-42) — 게이트웨이가 앱 서버의 라우트 하나를 **동기로** 부른 한 건(지금은 앱이 선언한 MCP 도구 · run.kind "server").
+  //   흐름: dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원) → done · failed
+  //   (게이트웨이가 답을 다 받았을 때 · 하우스키핑이 끝맺지 못한 줄을 닫는다). 판정은 apps/app-server-call-plan.ts · 흐름은 apps/app-server-call.ts.
+  //   ⚠ 비밀 **값**은 없다 — sha256 만. 인자 · 답도 적지 않는다(누가 · 어느 앱의 · 어느 도구를 · 어느 판으로 · 언제 · 어떻게 끝났나만).
+  //   scopes = 부른 연결(토큰)의 권한 ∩ 그 사람의 앱 동의 — 돌기 신원이 그보다 넓어지지 않게. 끝난 지 7일(CALL_KEEP_DAYS)이 지나면 행째 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_call(
+      id BIGSERIAL PRIMARY KEY,
+      app_id TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      tool TEXT,
+      requester TEXT NOT NULL,
+      requester_name TEXT,
+      variant TEXT NOT NULL CHECK (variant IN ('pub','draft')),
+      alias TEXT NOT NULL CHECK (alias IN ('cur','pub')),
+      function_name TEXT NOT NULL,
+      level TEXT NOT NULL CHECK (level IN ('L0','L1')),
+      scopes TEXT[] NOT NULL DEFAULT '{}',
+      timeout_s INT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'dispatched' CHECK (status IN ('dispatched','running','done','failed')),
+      call_hash TEXT,
+      run_hash TEXT,
+      status_code INT,
+      error TEXT,
+      duration_ms INT,
+      bytes INT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      claimed_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_call_open_idx ON org_app_call(id) WHERE status IN ('dispatched','running');`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_call_ended_idx ON org_app_call(ended_at) WHERE ended_at IS NOT NULL;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).
   await pool.query(`ALTER TABLE org_app_server_build ADD COLUMN IF NOT EXISTS keep_until TIMESTAMPTZ;`);
   //  #4801 org_app_server_build.zip_version — 빌드가 올린 zip 의 S3 판 번호(버킷이 판 번호를 켰을 때). Lambda 가 코드를 복사하지 않고 이 판을

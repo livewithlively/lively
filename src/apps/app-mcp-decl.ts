@@ -284,11 +284,21 @@ export function appConsentUrl(base: string | null, appId: string, variant: "pub"
   return `${base.replace(/\/+$/, "")}/ui/#/app-grant/${encodeURIComponent(appId)}?${new URLSearchParams({ v: variant, from: "mcp" }).toString()}`;
 }
 
-/** 결과 → 도구 결과 글. 글자는 그대로, 그 밖은 JSON 한 줄(짝 없는 대리 글자는 U+FFFD 로). 상한을 넘으면 UTF-8 경계에서 자르고 끝에 잘림 표시를 붙인다. */
-export function renderToolResultText(data: unknown, max = APP_MCP_RESULT_MAX_BYTES): { text: string; truncated: boolean; bytes: number } {
+/**
+ * 결과 → 도구 결과 글. 글자는 그대로, 그 밖은 JSON 한 줄(짝 없는 대리 글자는 U+FFFD 로). 상한을 넘으면 UTF-8 경계에서 자르고 끝에 잘림 표시를 붙인다.
+ *  truncatedFrom — 실행기가 이미 앞부분만 넘긴 답의 원래 크기(apps/app-mcp-executors AppMcpToolResult) — 주면 상한 안이어도 잘림으로 알리고 그 크기를 적는다.
+ */
+export function renderToolResultText(data: unknown, max = APP_MCP_RESULT_MAX_BYTES, truncatedFrom?: number): { text: string; truncated: boolean; bytes: number } {
   const text = wellFormedText(typeof data === "string" ? data : (JSON.stringify(data === undefined ? null : data) ?? "null"));
   const buf = Buffer.from(text, "utf8");
-  if (buf.length <= max) return { text, truncated: false, bytes: buf.length };
+  const from = typeof truncatedFrom === "number" && Number.isFinite(truncatedFrom) ? truncatedFrom : 0;
+  if (buf.length <= max && !from) return { text, truncated: false, bytes: buf.length };
+  const total = Math.max(buf.length, from);
+  if (buf.length <= max) {
+    //  실행기가 이미 앞부분만 넘겼다(예 server 실행기의 작업 결과는 앞 64KB) — 틀의 상한이 아니라 받은 만큼과 원래 크기를 적는다.
+    const kept = text.replace(/\uFFFD+$/, "");
+    return { text: `${kept}\n…(결과가 커서 앞 ${Buffer.byteLength(kept, "utf8")}바이트만 받았습니다 — 전체 ${total}바이트)`, truncated: true, bytes: total };
+  }
   const cut = buf.subarray(0, max).toString("utf8").replace(/\uFFFD+$/, "");
-  return { text: `${cut}\n…(결과가 ${Math.round(max / 1024)}KiB 를 넘어 여기서 잘렸습니다 — 전체 ${buf.length}바이트)`, truncated: true, bytes: buf.length };
+  return { text: `${cut}\n…(결과가 ${Math.round(max / 1024)}KiB 를 넘어 여기서 잘렸습니다 — 전체 ${total}바이트)`, truncated: true, bytes: total };
 }

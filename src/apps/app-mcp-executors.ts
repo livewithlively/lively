@@ -5,8 +5,8 @@
 //  선언의 `run.kind` 가 실행기 이름이다. 이 코어가 모르는 kind 는 설치 · 저장이 400 으로 막고(app-mcp-decl assertAppMcpToolsInstallable),
 //  이미 저장된 매니페스트(새 코어에서 깔고 이 코어로 되돌린 앱)의 그 도구는 목록에 올리지 않는다.
 //
-//  지금 등록된 실행기는 없다 — 첫 실제 실행기는 server(#5053 앱 v2-42 · 앱 서버 라우트를 사람 대리 신원으로), 그다음 sql(#5104 앱 v2-46).
-//  실행기를 더하는 쪽은 부팅 때 registerAppMcpExecutor 를 한 번 부른다. 시험은 가짜 실행기를 등록했다가 돌려받은 함수로 걷는다.
+//  첫 실제 실행기는 server(#5053 앱 v2-42 · apps/app-mcp-server-executor.ts — 앱 서버 라우트를 사람 대리 신원으로), 그다음 sql(#5104 앱 v2-46).
+//  실행기를 더하는 쪽은 부팅 때 registerAppMcpExecutor 를 한 번 부른다(server 는 index.ts). 시험은 가짜 실행기를 등록했다가 돌려받은 함수로 걷는다.
 import type { AppMcpToolDecl } from "./app-mcp-decl.js";
 
 /** 실행기가 받는 «누가 불렀나» — 전부 게이트웨이가 토큰 · 구성원 · 동의에서 채운다(입력으로 바꿀 수 없다). */
@@ -45,10 +45,23 @@ export interface AppMcpToolCall {
   caller: AppMcpCaller;
   /** 부른 쪽이 끊으면 걸린다(MCP 요청 취소 · 연결 끊김). */
   signal?: AbortSignal;
+  /**
+   * 진행 알림(MCP notifications/progress) — 부른 쪽이 진행을 받겠다고 했을 때(요청의 progressToken)만 있다. 오래 걸리는 실행기가 기다리는 동안 보낸다
+   *  (Claude Code 는 이것을 활동으로 세어 5분 무소식 끊기를 미룬다 · #5053 server 실행기의 background). 보내다 실패해도 던지지 않는다.
+   */
+  progress?: (p: { progress: number; total?: number; message?: string }) => Promise<void>;
 }
 
-/** 실행기의 결과 — data 는 JSON 으로 옮길 수 있는 값(글자면 그대로 · 그 밖은 JSON 한 줄). 틀이 크기 상한을 걸어 잘린 표시를 붙인다. */
-export interface AppMcpToolResult { data: unknown }
+/**
+ * 실행기의 결과 — data 는 JSON 으로 옮길 수 있는 값(글자면 그대로 · 그 밖은 JSON 한 줄). 틀이 크기 상한을 걸어 잘린 표시를 붙인다.
+ *  truncatedFrom — 실행기가 원래 답을 이미 앞부분만 받아 넘겼으면 그 원래 크기(바이트 · 앱 서버 답의 앞 256KiB 만 모은 server 실행기). 틀이 그 크기로 잘림을 알린다.
+ */
+export interface AppMcpToolResult {
+  data: unknown;
+  truncatedFrom?: number;
+  /** 도구 결과의 _meta 에 더할 표지(lively/* — 예: 아직 도는 작업 번호 lively/job_id). 틀의 잘림 표지가 이긴다. */
+  meta?: Record<string, unknown>;
+}
 
 /**
  * 실행기. 오류는 던진다 — HttpError 면 그 글과 body.code 가 도구 오류(isError)로 그대로 가고, 그 밖의 예외는 글을 감추고 기록만 남긴다.

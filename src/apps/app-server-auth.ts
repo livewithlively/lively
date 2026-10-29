@@ -9,7 +9,8 @@
 //  ② 사람 신원 토큰 — 앞단이 서명한 X-Lively-Identity(app-identity). 앱 서버가 받은 것을 그대로 다시 싣는다.
 //
 // ── 판정 ─────────────────────────────────────────────────────────────────────────────────
-//  ① 만으로는 아무것도 못 한다(사람 없는 호출 = 앱 자체 주체는 v2-12). ②대신 «작업 돌기 신원»(#4486 lvjr1.…)이 오면 그 작업을 시작한 사람으로 같은 판정을 한다.
+//  ① 만으로는 아무것도 못 한다(사람 없는 호출 = 앱 자체 주체는 v2-12). ②대신 «작업 돌기 신원»(#4486 lvjr1.…)이 오면 그 작업을 시작한 사람으로,
+//  «도구 부르기 돌기 신원»(#5053 lvsr1.…)이 오면 그 도구를 부른 사람으로 같은 판정을 한다.
 //  ①+② 가 같은 (테넌트, 앱)이고, 그 구성원이 활성이고
 //  그 워크스페이스에 들어올 수 있고, 그 앱에 동의(grant)했을 때만 주체가 **그 구성원 ∩ 그 사람의 앱 동의** 가 된다 —
 //  앱 화면에서 사람이 누른 요청과 같은 권한(설계 §6 «사람 대리»). 그 뒤는 기존 앱 도구 게이트(requireAppTool)가 그대로 돈다.
@@ -27,6 +28,7 @@ import { appSqlTenantId } from "./app-sql-exec.js";
 import { verifyAppIdentity, type VerifyAppIdentityOpts } from "./app-identity.js";
 import { appServerUserId, parseAppServerUserId } from "./app-server-id.js";
 import { looksLikeJobCredential } from "./app-jobs-plan.js";
+import { looksLikeCallCredential } from "./app-server-call-plan.js";
 import { openJobPins } from "./app-jobs-store.js";
 
 export { appServerUserId, parseAppServerUserId };
@@ -109,6 +111,8 @@ export async function resolveAppServerPrincipal(user: LivelyUser, header: string
   }
   //  #4486 백그라운드 작업 — 함수 안 검사 층이 넘긴 «돌기 신원» 이면 그 작업을 시작한 사람 ∩ 그 사람의 앱 동의(작업이 도는 동안만 · apps/app-jobs.ts).
   if (looksLikeJobCredential(raw)) return (await import("./app-jobs.js")).resolveJobRunPrincipal(user, raw);
+  //  #5053 AI 도구 동기 부르기 — 검사 층이 넘긴 «돌기 신원» 이면 도구를 부른 사람 ∩ 그 사람의 앱 동의 ∩ 부른 연결의 권한(부르기가 도는 동안만 · apps/app-server-call.ts).
+  if (looksLikeCallCredential(raw)) return (await import("./app-server-call.js")).resolveCallRunPrincipal(user, raw);
   const claims = verifyAppIdentity(raw, { ws: tenantId, app: bound.appId }, deps.identity);
   const member = await getMember(claims.sub);
   if (!member || member.state !== "active") throw new HttpError(403, "신원의 구성원이 이 워크스페이스에서 활성 상태가 아닙니다");

@@ -3,6 +3,8 @@
 //  자격은 둘을 함께: ① 그 함수에 구운 앱 서버 토큰(Authorization: Bearer — 이 워크스페이스 · 이 앱의 것) ② 작업 비밀 —
 //   claim 은 부르기 비밀(x-lively-job-secret · 한 번만 넘긴다), tick · result 는 claim 이 준 돌기 신원(x-lively-job-run).
 //  판정 · 흐름은 apps/app-jobs.ts(onJobClaim · onJobTick · onJobResult). 작업 컨테이너 판의 콜백(/api/agent-jobs/:id/*)과 같은 꼴이다.
+//  #5053 AI 도구 동기 부르기의 시작 확인(/api/app-calls/:id/claim)도 여기 — 같은 자격(앱 서버 토큰 + 부르기 비밀 x-lively-call-secret).
+//   박동 · 결과 보고는 없다(게이트웨이가 답을 곧바로 흘려 받는다). 판정 · 흐름은 apps/app-server-call.ts(onCallClaim).
 import type express from "express";
 import { wrap, HttpError } from "../http/rest-util.js";
 import type { BearerVerifier } from "../auth/bearer.js";
@@ -39,5 +41,10 @@ export function registerAppJobRoutes(app: express.Express, verifier: BearerVerif
     res.setHeader("Cache-Control", "no-store");
     const svc = await import("./app-jobs.js");
     res.json(await svc.onJobResult(idOf(req), await callerOf(req), header(req, "x-lively-job-run"), req.body));
+  }));
+  app.post("/api/app-calls/:id/claim", wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const svc = await import("./app-server-call.js");
+    res.json(await svc.onCallClaim(idOf(req), await callerOf(req), header(req, "x-lively-call-secret")));
   }));
 }

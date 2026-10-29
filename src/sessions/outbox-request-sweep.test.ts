@@ -225,8 +225,10 @@ t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   //   박동)에 얹는 것뿐이다. DB 행과 함수 비동기 부르기만 한다(함수 안에서 도는 작업을 멈추지 않는다 — 파괴적 동작 없음).
   //  #5043 — 원격 PC 하네스 종료 규칙(node-stop-rule)이 테넌트 정비로 하나 늘었다. 노드 스냅샷·장부·정책이 그 워크스페이스 것이고,
   //   시계가 분 단위(완료 기본 30분)라 CP 틱(5분)만으로는 거칠다 — 위 하네스 종료 규칙과 같은 파괴적 예외의 같은 판단([G4b]).
-  assert.equal(perTenant.length, 22, "테넌트 정비 스물둘(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존)");
-  assert.equal(SWEEP_JOBS.length, 23, "전역 하나(task-dispatch)가 더 있다");
+  //  #5053 — 앱 서버 동기 부르기 기록 정리(app-call-sweep)가 테넌트 정비로 하나 늘었다. 부르기 행이 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만
+  //   닫고 지울 수 있다. DB 행만 바꾼다(파괴적 동작 없음).
+  assert.equal(perTenant.length, 23, "테넌트 정비 스물셋(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 앱 서버 동기 부르기 기록)");
+  assert.equal(SWEEP_JOBS.length, 24, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -257,6 +259,7 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "job-record-prune": SIX_HOURS_MS,                // #4828 — 새 정비. 일 단위 보존이라 세션 기록 정리(session-log-reap)와 같은 6시간
     "app-job-sweep": STOP_RULE_SWEEP_MS,             // #4486 — 새 정비. 박동 없음 상한(90초)보다 짧아야 끊긴 작업이 제때 끝나고, 기다린 작업이 30초 안에 불린다
     "app-job-prune": SIX_HOURS_MS,                   // #4486 — 새 정비. 일 단위 보존(30일)이라 작업 기록 보존 정리(job-record-prune)와 같은 6시간
+    "app-call-sweep": TEN_MIN_MS,                    // #5053 — 새 정비. 끝맺지 못한 부르기를 닫는 기록 정리(신원 수명은 판정이 따로 막는다)라 10분이면 넉넉하다
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -421,8 +424,8 @@ t("[I5] 테넌트가 둘이면 **각각** 시드된다 — 전역 디바운스�
 // ── H1~H3 · 하우스키핑이 도는 배포에도 거는 정비 (#5082) ─────────────────────────────
 //  이 표는 셀프호스트 · registry 에서 무동작이다(maybeSweep) — 박스 위 작업(LIVELY_AGENT_JOBS=host)의 감시 · 보존 · 앱 AI 실행 정비가
 //   거기서 돌 길은 하우스키핑뿐이다(격리 리뷰 · 막을 것). 표시(housekeeping)와 하우스키핑의 배선을 함께 본다.
-t("[H1] 하우스키핑에도 거는 정비는 셋 — 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비", () => {
-  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "job-record-prune"]);
+t("[H1] 하우스키핑에도 거는 정비는 넷 — 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비 · 앱 도구 부르기 정비(#5053)", () => {
+  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "app-call-sweep", "job-record-prune"]);
   for (const j of SWEEP_JOBS.filter((x) => x.housekeeping)) assert.equal(j.scope ?? "tenant", "tenant", `${j.key} 은 워크스페이스마다 돈다`);
 });
 
@@ -436,9 +439,9 @@ t("[H2] 하우스키핑은 표시가 붙은 정비를 그 표의 정의 · 그 �
   assert.match(body, /setInterval\(\(\) => \{ void run\(\); \}, every\)/, "주기마다 돈다");
 });
 
-t("[H3] 하우스키핑에 그 셋을 따로 또 걸지 않는다 — 두 번 돌지 않는다", () => {
+t("[H3] 하우스키핑에 그 넷을 따로 또 걸지 않는다 — 두 번 돌지 않는다", () => {
   const hk = readFileSync("src/boot/housekeeping.ts", "utf8");
-  for (const k of ["agent-job-sweep", "job-record-prune", "ai-run-sweep", "sweepAgentJobs", "pruneAgentJobRecords", "sweepAiRuns"]) {
+  for (const k of ["agent-job-sweep", "job-record-prune", "ai-run-sweep", "app-call-sweep", "sweepAgentJobs", "pruneAgentJobRecords", "sweepAiRuns", "sweepAppCalls"]) {
     assert.ok(!hk.includes(`"${k}"`) && !hk.includes(`.${k}(`), `하우스키핑이 ${k} 를 따로 부른다`);
   }
 });

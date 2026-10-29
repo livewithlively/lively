@@ -15,8 +15,8 @@
 //
 //  앱이 받는 머리글(계약): x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(한글 id 도 실리게 · SDK livelyMember 가 푼다) ·
 //   x-lively-variant(pub | draft) · x-lively-identity(신원 원문 — SDK 가 게이트웨이 호출에 다시 싣는다) · x-lively-job(백그라운드 작업이면 그 작업 번호 —
-//   #4486 · 없으면 사람이 보낸 요청) · x-lively-guard-key(#4487 자가호스팅 컨테이너만 — 검사 층을 거쳤다는 표지 · SDK livelyMember 가 env 의 같은 값과
-//   대조한다). 들어온 그 밖의 x-lively-* 는 지운다.
+//   #4486 · 없으면 사람이 보낸 요청 · AI 도구 부르기) · x-lively-guard-key(#4487 자가호스팅 컨테이너만 — 검사 층을 거쳤다는 표지 · SDK livelyMember 가
+//   env 의 같은 값과 대조한다). 들어온 그 밖의 x-lively-* 는 지운다.
 //
 //  #4486 앱 v2-7 백그라운드 작업(결정 상민 2026-10-20 — 태스크 #4486 댓글 539):
 //   · 게이트웨이가 함수를 비동기로 부를 때 이벤트의 X-Lively-Identity 에 «부르기 신원»(lvjc1.<작업>.<한 번 쓰는 비밀>)을 싣는다. 이 문은 그것을 받으면
@@ -28,6 +28,12 @@
 //     함수의 응답을 끝낸다(응답을 끝내면 Lambda 가 환경을 얼려 보고가 못 나간다). 이 응답은 비동기 호출이라 아무도 받지 않는다.
 //   · 사람 요청은 이제 함수 시간(작업 시간 15분)보다 짧은 LIVELY_REQUEST_TIMEOUT_S(요청 상한 · 기본 30초)에서 이 문이 끊는다 — 앞머리 전이면 504(x-lively-guard: timeout),
 //     흘려 보내는 중이면 연결을 끊는다(잘린 응답 — 게이트웨이가 «덜 끝난 응답» 으로 넘긴다). 그 전엔 Lambda 함수 시간이 같은 일을 했다.
+//  #5053 앱 v2-42 AI 도구 동기 부르기(결정 상민 2026-10-28 — #5052 ① (나) claim):
+//   · 앱이 선언한 MCP 도구(run.kind "server")를 사람이 부르면 게이트웨이가 함수를 **흘려 받기(동기)** 로 부르고, 이벤트의 X-Lively-Identity 에 «부르기 신원»
+//     (lvsc1.<부르기>.<한 번 쓰는 비밀>)을 싣는다. 이 문은 앱 코드보다 먼저 게이트웨이에 «이 부르기 시작»(POST /api/app-calls/<부르기>/claim · 앱 서버 토큰 +
+//     그 비밀)을 확인받는다 — 작업과 같은 claim 이라 공개 키를 쓰지 않는다. 아니면 앱에 닿기 전에 401 · 409(위조 · 재전송 · 늦게 닿음 · 동의 철회).
+//   · 넘기면 «돌기 신원»(lvsr1.…)과 부른 사람을 받아 사람 요청과 같은 머리글로 앱에 넘기고(x-lively-job 은 없다), 앱의 답을 사람 요청처럼 그대로 흘려 보낸다
+//     (박동 · 결과 보고 없음 — 게이트웨이가 답을 곧바로 받는다). 요청 시간도 사람 요청과 같다(claim 을 받은 시간까지 넣어 센다).
 //  ⚠ guardMain 은 `.toString()` 으로 글이 되어 Lambda 안 node 에서 돈다 — **바깥 이름(import · 이 파일의 상수)을 쓰면 안 된다**(빌더와 같은 규율).
 //   검사 규칙은 src/apps/app-identity.ts verifyAppIdentity 와 같아야 한다 — 시험(app-server-guard.test)이 같은 토큰 표로 둘을 대조한다.
 import crypto from "node:crypto";
@@ -36,7 +42,7 @@ import { crc32 } from "../util/crc32.js";
 declare const require: (id: string) => unknown;   // guardMain 이 Lambda 안에서 CommonJS 로 돌 때의 require — 이 모듈(ESM) 자체는 부르지 않는다
 
 /** 문 판 — 레이어 설명에 들어간다(사람이 보는 표지 · 실제 같고 다름은 내용 지문으로 가른다). */
-export const GUARD_VERSION = 4;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토) · 4 = 백그라운드 작업 · 사람 요청 시간 끊기(#4486)
+export const GUARD_VERSION = 5;   // 2 = 구성원 id 도 퍼센트 인코딩 · 처리 전체를 감싼다 · 3 = 앱의 잘못된 응답도 502 로(#4485 격리 리뷰 · 재검토) · 4 = 백그라운드 작업 · 사람 요청 시간 끊기(#4486) · 5 = AI 도구 동기 부르기(#5053)
 /** 문이 받는 포트(웹 어댑터 AWS_LWA_PORT) — 앱은 $PORT(8080)에서 받는다. */
 export const GUARD_PORT = 8099;
 export const APP_PORT = 8080;
@@ -77,6 +83,9 @@ function guardMain(): void {
   const GUARD_KEY = String(env.LIVELY_GUARD_KEY || "");
   const JOB_CALL_RE = /^lvjc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
   const JOB_RESULT_MAX = 64 * 1024, JOB_BODY_MAX = 2 * 1024 * 1024;
+  //  #5053 AI 도구 동기 부르기 — app-server-call-plan.ts 의 같은 값(CALL_PREFIX · CALL_BODY_MAX).
+  const CALL_RE = /^lvsc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
+  const CALL_BODY_MAX = 1024 * 1024;
   //  이번 호출의 마감 — 웹 어댑터가 앱 쪽에 넘기는 x-amzn-lambda-context 의 deadline(epoch ms · 2026-10-20 실측: 함수 시간 30초에 받은 순간 29,775ms 남음).
   //   함수 시간(작업 시간 15분)이 먼저 끝나면 Lambda 가 환경째 멈춰 결과를 못 알린다 — 작업은 JOB_REPORT_MARGIN_MS 앞에서 끊고 «시간 초과» 를 보고하고,
   //   사람 요청은 REQ_MARGIN_MS 앞에서 끊는다. 머리가 없거나 못 읽으면 0(마감을 모른다 — 종전대로 작업 · 요청 시간만).
@@ -181,6 +190,9 @@ function guardMain(): void {
     const rawId = String((Array.isArray(req.headers["x-lively-identity"]) ? req.headers["x-lively-identity"][0] : req.headers["x-lively-identity"]) ?? "").trim();
     const jm = JOB_CALL_RE.exec(rawId);
     if (jm) { handleJob(req, res, url, Number(jm[1]), jm[2]!); return; }
+    //  #5053 AI 도구 동기 부르기 — 부르기 신원이면 게이트웨이 확인을 받은 뒤 사람 요청처럼 넘긴다(아래 handleCall).
+    const cm = CALL_RE.exec(rawId);
+    if (cm) { handleCall(req, res, url, Number(cm[1]), cm[2]!); return; }
     const v = verify(req.headers["x-lively-identity"], Math.floor(Date.now() / 1000));
     if ("why" in v) {
       const now = Date.now();
@@ -206,17 +218,23 @@ function guardMain(): void {
     headers["x-lively-member-name"] = enc(v.claims.name);
     headers["x-lively-variant"] = v.claims.var;
     if (GUARD_KEY) headers["x-lively-guard-key"] = GUARD_KEY;
+    forward(req, res, url, headers, null, REQ_TIMEOUT_MS);
+  }
+
+  //  앱으로 넘기고 답을 그대로 흘려 보낸다 — 사람 요청(위)과 #5053 AI 도구 부르기(runCall)가 같이 쓴다. body 가 null 이면 들어온 본문을 흘려 넘기고,
+  //   있으면(부르기 — claim 전에 다 받아 둔 본문) 그것을 보낸다. limitMs = 요청 시간(0 = 없음).
+  function forward(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, url: string, headers: Record<string, string | string[]>, body: Buffer | null, limitMs: number): void {
     //  #4486 사람 요청 시간 — 함수 시간은 작업 시간(15분)이라 사람 요청은 이 문이 끊는다. 끊은 뒤엔 앱의 늦은 답 · 오류가 응답을 다시 건드리지 않는다(cut).
     //   함수 마감이 더 이르면(관리자가 요청 시간 = 함수 시간으로 맞춘 때) 그보다 조금 앞에서 끊는다 — Lambda 오류 대신 504 를 돌려주게.
     let cut = false;
     const reqDeadline = lambdaDeadlineOf(req.headers["x-amzn-lambda-context"]);
-    const cutMs = REQ_TIMEOUT_MS > 0 && reqDeadline ? Math.max(1, Math.min(REQ_TIMEOUT_MS, reqDeadline - Date.now() - REQ_MARGIN_MS)) : REQ_TIMEOUT_MS;
+    const cutMs = limitMs > 0 && reqDeadline ? Math.max(1, Math.min(limitMs, reqDeadline - Date.now() - REQ_MARGIN_MS)) : limitMs;
     const timer = cutMs > 0 ? setTimeout(() => {
       cut = true;
       try {
         if (!res.headersSent) {
           for (const h of res.getHeaderNames()) res.removeHeader(h);
-          sendJson(res, 504, "timeout", { error: "app_timeout", message: `앱 서버가 제때 답하지 않았습니다 — 요청 하나는 ${REQ_TIMEOUT_MS / 1000}초까지입니다. 더 긴 일은 백그라운드 작업(SDK livelyJobs().start · POST /api/ui/app-jobs)으로 넘기세요` });
+          sendJson(res, 504, "timeout", { error: "app_timeout", message: `앱 서버가 제때 답하지 않았습니다 — 요청 하나는 ${Math.ceil(limitMs / 1000)}초까지입니다. 더 긴 일은 백그라운드 작업(SDK livelyJobs().start · POST /api/ui/app-jobs)으로 넘기세요` });
         } else res.destroy();   // 흘려 보내는 중이었다 — 잘린 응답으로 끝낸다(게이트웨이가 «덜 끝난 응답» 으로 넘긴다)
       } catch { res.destroy(); }
       preq.destroy();
@@ -258,7 +276,8 @@ function guardMain(): void {
       else res.destroy();
     });
     res.on("close", () => { if (!res.writableFinished) preq.destroy(); });
-    req.pipe(preq);
+    if (!body) { req.pipe(preq); return; }
+    try { preq.end(body); } catch (e) { preq.destroy(); badApp((e as Error)?.message ?? String(e)); }
   }
 
   // ── #4486 백그라운드 작업 ──────────────────────────────────────────────────────────────
@@ -390,6 +409,56 @@ function guardMain(): void {
     if (r.status !== 200) console.error(`[lively-guard] 작업 ${id} 결과 보고 실패(${r.status}) — 게이트웨이 감시가 끝낸다`);
     sendJson(res, 200, "job-done", { job: id, outcome, reported: r.status === 200 });
   }
+  // ── #5053 AI 도구 동기 부르기 ──────────────────────────────────────────────────────────
+  function handleCall(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, url: string, id: number, secret: string): void {
+    //  요청 시간은 이 문이 받은 때부터 센다(claim 왕복도 사람이 기다리는 시간이다).
+    const t0 = Date.now();
+    //  본문을 먼저 다 받는다 — 게이트웨이 확인(claim)이 끝나야 앱으로 넘길 수 있다(도구 인자는 작다 · 상한 CALL_BODY_MAX).
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (c: Buffer) => { size += c.length; if (size <= CALL_BODY_MAX) chunks.push(c); });
+    req.on("end", () => {
+      if (size > CALL_BODY_MAX) { sendJson(res, 413, "denied", { error: "call_body_too_large" }); return; }
+      runCall(req, res, url, id, secret, Buffer.concat(chunks), t0).catch((e) => {
+        console.error("[lively-guard] 도구 부르기 처리 실패", (e as Error)?.message ?? e);
+        if (!res.headersSent) sendJson(res, 500, "error", { error: "guard_error" }); else res.destroy();
+      });
+    });
+  }
+
+  async function runCall(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, url: string, id: number, secret: string, body: Buffer, t0: number): Promise<void> {
+    if (!API || !APP_TOKEN) { sendJson(res, 401, "denied", { error: "call_unconfigured", message: "이 함수엔 라이블리 주소 · 앱 서버 토큰이 없어 도구 부르기를 확인할 수 없습니다" }); return; }
+    //  ① 시작 확인 — 게이트웨이가 한 번만 넘긴다. 아니면 앱에 닿기 전에 끝(위조 · 재전송 · 늦게 닿음 · 동의 철회).
+    //   사람이 기다리는 부르기라 짧게 묻는다(두 번까지 · 한 번 5초 — 작업은 네 번 · 10초).
+    const c = await callApiRetry(`/api/app-calls/${id}/claim`, { "x-lively-call-secret": secret }, {}, 2, 5_000);
+    const run = c.json && typeof c.json.run === "string" ? c.json.run : "";
+    if (c.status !== 200 || !run) {
+      const why = c.json && typeof c.json.reason === "string" ? c.json.reason : String(c.status);
+      console.error(`[lively-guard] 도구 부르기 ${id} 시작 확인 거부(${why})`);
+      const status = c.status === 409 ? 409 : c.status === 401 || c.status === 403 || c.status === 404 ? 401 : 503;
+      sendJson(res, status, status === 503 ? "error" : "denied", { error: status === 409 ? "call_replayed" : status === 401 ? "call_identity_invalid" : "call_claim_unavailable", reason: why });
+      return;
+    }
+    const j = c.json!;
+    //  ② 앱으로 — 사람 요청과 같은 머리글(검사한 사람 · 판 · 돌기 신원). 들어온 x-lively-* 는 지운다(부르기 신원도 앱에 가지 않는다).
+    const headers: Record<string, string | string[]> = {};
+    for (const [k, val] of Object.entries(req.headers)) {
+      if (val === undefined || HOP.has(k) || k === "content-length") continue;
+      if (k.startsWith("x-lively-")) continue;
+      headers[k] = val;
+    }
+    headers["x-lively-identity"] = run;
+    headers["x-lively-member"] = enc(String(j.member ?? ""));
+    headers["x-lively-member-name"] = enc(String(j.member_name ?? ""));
+    headers["x-lively-variant"] = j.variant === "draft" ? "draft" : "pub";
+    if (GUARD_KEY) headers["x-lively-guard-key"] = GUARD_KEY;   // #4487 자가호스팅 컨테이너 — 사람 요청 · 작업과 같은 표지
+    headers["content-length"] = String(body.length);
+    //  요청 시간 — 게이트웨이가 준 값(claim 의 timeout_s — 관리자가 바꾼 상한이 다시 올리지 않은 함수에도 듣는다)과 이 함수의 값 중 짧은 쪽. 받은 때부터 센다.
+    const t = Math.floor(Number(j.timeout_s));
+    const limit = t >= 1 && t <= 900 ? (REQ_TIMEOUT_MS > 0 ? Math.min(REQ_TIMEOUT_MS, t * 1000) : t * 1000) : REQ_TIMEOUT_MS;
+    forward(req, res, url, headers, body, limit > 0 ? Math.max(1, limit - (Date.now() - t0)) : 0);
+  }
+
   server.keepAliveTimeout = 60_000;
   server.on("clientError", (_e, socket) => { try { socket.destroy(); } catch { /* 이미 닫혔다 */ } });
   server.listen(GUARD_PORT, LISTEN_HOST);
