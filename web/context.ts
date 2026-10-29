@@ -113,13 +113,15 @@ const STAGES: CtxStage[] = [
 ];
 
 // ── 화면 조립 — 한 탭 = 한 화면. 여러 패널을 세로로 쌓는다(각자 실패는 자기 자리에서). ──────────
+//  패널은 **함께** 그린다(#5147) — 자리(host)를 먼저 순서대로 세워 두므로 늦게 끝난 패널도 제자리에 선다.
+//   종전엔 한 패널이 다 그려져야 다음 패널이 읽기 시작해, 화면 시간이 패널 시간의 합이었다.
 async function stack(b: HTMLElement, parts: Array<(h: HTMLElement) => Promise<void> | void>): Promise<void> {
   const hosts = parts.map(() => el('div', { class: 'ctx-stacked' }));
   b.replaceChildren(...hosts);
-  for (let i = 0; i < parts.length; i++) {
-    try { await parts[i](hosts[i]); }
+  await Promise.all(parts.map(async (part, i) => {
+    try { await part(hosts[i]); }
     catch (e) { hosts[i].replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + (e as Error).message }))); }
-  }
+  }));
 }
 
 /** 수집기 — 목록 하나. 「새 소스 만들기」(직접 정의하는 방식)는 만들기 흐름 안의 링크로만 들어간다(#3830 — 비개발자

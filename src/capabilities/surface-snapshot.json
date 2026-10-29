@@ -2234,7 +2234,7 @@
   "rest": [
    "GET /api/ui/categories"
   ],
-  "input_hash": "6c9f16e97bc4049d"
+  "input_hash": "e9396155eda223ce"
  },
  {
   "name": "category_get",

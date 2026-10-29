@@ -50,21 +50,25 @@ function sourceFace(system: string, container: string | null): { label: string; 
 }
 
 // ── 표지: 흐름 지도 ─────────────────────────────────────────────────────────
-export async function renderContextMap(box: HTMLElement): Promise<void> {
+export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLElement | null>): Promise<void> {
   box.replaceChildren(skeleton('맥락 현황을 읽는 중'));
-  let d: any = null;
-  try { d = await api('/api/ui/org/pipeline'); } catch (e) {
-    box.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '현황을 불러오지 못했습니다 — ' + (e as Error).message })));
-    return;
-  }
+  //  #5147 — 수치(/org/pipeline)와 장식 다섯을 **함께** 읽는다. 종전엔 수치를 다 받은 뒤에야 장식을 읽기 시작했다.
+  const pipeP = api('/api/ui/org/pipeline');
+  pipeP.catch(() => { /* 아래 await 가 처리한다 — 처리 안 된 거부 경고만 막는다 */ });
   // 장식 데이터(실물 미니어처) — 실패해도 지도는 선다.
-  const [colD, treeD, knowD, secD, sessD] = await Promise.all([
+  const decoP = Promise.all([
     api('/api/ui/org/collectors').catch(() => null),
     api('/api/ui/sources/tree').catch(() => null),
     api('/api/ui/knowledge?' + new URLSearchParams({ limit: '3', orderBy: 'updated_at', light: '1', lifecycle: 'active,pending', injection: 'recalled' })).catch(() => null),
     api('/api/ui/org/sections').catch(() => null),
     api('/api/ui/terminal/sessions?includeProjects=1').catch(() => null),
   ]);
+  let d: any = null;
+  try { d = await pipeP; } catch (e) {
+    box.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '현황을 불러오지 못했습니다 — ' + (e as Error).message })));
+    return;
+  }
+  const [colD, treeD, knowD, secD, sessD] = await decoP;
   const st = (d && d.stages) || {};
   const gates = (d && d.gates) || {};
   const lv = stageHealthLevels(d);
@@ -172,7 +176,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   //   주입규칙은 거를 기록이 없어 종전처럼 그 탭으로 간다.
   const machine = (o: { href: string; name: string; s: string; pill: string; k: 'ok' | 'warn' | 'dn'; live: boolean; sched: string; extra?: HTMLElement | null; filter?: 'c' | 'd' }) =>
     el(o.filter ? 'button' : 'a', o.filter
-      ? { type: 'button', class: 'cxm-mc is-' + o.filter, 'aria-pressed': 'false', title: o.name + ' 기록을 아래에서 보기 — 한 번 더 누르면 전체' }
+      ? { type: 'button', class: 'cxm-mc is-' + o.filter, 'aria-pressed': 'false', title: o.name + ' 기록을 아래에서 보기 — 한 번 더 누르면 전체 · 두 번 빠르게 누르면 ' + o.name + ' 설정으로 갑니다' }
       : { class: 'cxm-mc', href: o.href },
       el('span', { class: 'cxm-mc-n' }, lineIcon('gear', 'cxm-mc-ic'), el('span', { text: o.name })),
       el('span', { class: 'cxm-mc-s', text: o.s }),
@@ -182,12 +186,15 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
       o.filter ? el('span', { class: 'cxm-mc-hint', text: '누르면 아래에서' }) : null);
   const jobLine = (job: any) => !job ? '자동 실행 없음' : (!job.any_enabled ? '자동 실행 꺼짐' : intervalText(job.interval_sec) + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행'));
   const collectOn = Number(st.collect?.enabled || 0) > 0 && !!st.collect?.job?.any_enabled;
-  const mcCollect = machine({ href: '#/context/sources', name: '수집기', s: fmt(st.collect?.configured) + ' · 켜짐 ' + fmt(st.collect?.enabled),
+  const mcCollectHref = '#/context/sources', mcDistillHref = '#/context/distill';
+  const mcCollect = machine({ href: mcCollectHref, name: '수집기', s: fmt(st.collect?.configured) + ' · 켜짐 ' + fmt(st.collect?.enabled),
     pill: collectOn ? '켜짐' : '꺼짐', k: collectOn ? 'ok' : 'dn', live: collectOn, sched: jobLine(st.collect?.job), filter: 'c' });
   const distillOn = Number(st.distill?.enabled || 0) > 0 && !!st.distill?.job?.any_enabled;
-  const mcDistill = machine({ href: '#/context/distill', name: '증류기', s: fmt(st.distill?.configured) + ' · 켜짐 ' + fmt(st.distill?.enabled),
+  const mcDistill = machine({ href: mcDistillHref, name: '증류기', s: fmt(st.distill?.configured) + ' · 켜짐 ' + fmt(st.distill?.enabled),
     pill: pending ? '승인 ' + fmt(pending) + ' 대기' : (distillOn ? '켜짐' : '꺼짐'), k: pending ? 'warn' : (distillOn ? 'ok' : 'dn'), live: distillOn, sched: jobLine(st.distill?.job),
-    extra: blindEl, filter: 'd' });
+    filter: 'd' });
+  //  사각지대 배지는 다 읽히면 제자리(안내 문구 앞)에 선다 — 그 수를 세는 데 시간이 걸려도 지도는 먼저 선다(#5147).
+  void blind?.then((b) => { if (b && mcDistill.isConnected) mcDistill.insertBefore(b, mcDistill.querySelector('.cxm-mc-hint')); });
   const mcInject = machine({ href: '#/context/deliver', name: '주입규칙', s: (startDocs !== null ? '시작 문서 ' + fmt(startDocs) + ' · ' : '') + '검색', pill: '켜짐', k: 'ok', live: true, sched: '세션 시작마다' });
 
   // ── 관(선로) — 기계가 도는 구간만 흐른다 ──
@@ -220,31 +227,35 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   };
   mcCollect.addEventListener('click', pick('c'));
   mcDistill.addEventListener('click', pick('d'));
+  //  #5147(원준 2026-10-29) — 한 번 누르면 아래 기록을 거르고(그대로), **두 번 빠르게 누르면 그 기계의 설정 탭**으로 간다.
+  //   두 번 누르는 동안 click 도 두 번 와서 거름이 켜졌다 꺼지지만, 곧바로 화면을 떠나므로 그대로 둔다.
+  //   (한 번 누름을 늦춰 두 번 누름과 가르면 한 번 누름이 그만큼 굼떠진다 — 자주 쓰는 쪽을 늦추지 않는다.)
+  mcCollect.addEventListener('dblclick', () => { location.hash = mcCollectHref; });
+  mcDistill.addEventListener('dblclick', () => { location.hash = mcDistillHref; });
   const fillWarn = distillFillWarn(fill?.job, fillN);
   if (fillWarn) panel.root.querySelector('.cxr-sched')?.append(fillWarn);
 
   root.append(
     el('p', { class: 'cxm-cap' }, el('b', { text: '흐름 지도' }),
-      el('span', { text: '자료가 지식이 되어 AI 에 닿기까지 — 흰 카드는 장소, 어두운 칩은 그 사이에서 도는 기계입니다. 선이 흐르면 그 기계가 돌고 있는 것이고, 기계를 누르면 아래에 그 기계의 기록이 나옵니다' })),
+      el('span', { text: '자료가 지식이 되어 AI 에 닿기까지 — 흰 카드는 장소, 어두운 칩은 그 사이에서 도는 기계입니다. 선이 흐르면 그 기계가 돌고 있는 것이고, 기계를 누르면 아래에 그 기계의 기록이 나오고, 두 번 누르면 그 기계의 설정으로 갑니다' })),
     lane,
     panel.root);
   box.replaceChildren(root);
 }
 
-let blindEl: HTMLElement | null = null;
-// 사각지대 — 어느 증류기에도 안 걸리는 자료. 있으면 증류기 칩 발치에 한 줄(renderContextMap 이 그리기 전에 준비).
-async function prepareBlindspot(): Promise<void> {
-  blindEl = null;
+// 사각지대 — 어느 증류기에도 안 걸리는 자료. 있으면 증류기 칩 발치에 한 줄.
+//  #5147 — 종전엔 이 수를 다 센 뒤에야 지도를 그렸다(/org/distillers 실측 3초 = 표지가 3초 동안 빈 화면). 이제 지도와 함께 읽기 시작하고,
+//   지도가 먼저 선 뒤 수가 오면 칩에 붙인다.
+async function loadBlindspot(): Promise<HTMLElement | null> {
   try {
     const r: any = await api('/api/ui/org/distillers');
     const n = Number(r?.coverage?.uncovered || 0);
-    if (n > 0) blindEl = el('span', { class: 'cxm-mc-x', title: '어느 증류기에도 안 걸리는 자료 — 이대로 두면 영영 지식이 되지 않습니다', text: '사각지대 ' + fmtNum(n) });
-  } catch { blindEl = null; }
+    return n > 0 ? el('span', { class: 'cxm-mc-x', title: '어느 증류기에도 안 걸리는 자료 — 이대로 두면 영영 지식이 되지 않습니다', text: '사각지대 ' + fmtNum(n) }) : null;
+  } catch { return null; }
 }
-// renderContextMap 을 감싸 사각지대를 먼저 준비한다 — 셸은 이 이름 하나만 부른다.
+// 셸은 이 이름 하나만 부른다.
 export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
-  await prepareBlindspot();
-  await renderContextMap(box);
+  await renderContextMap(box, loadBlindspot());
 }
 
 /**

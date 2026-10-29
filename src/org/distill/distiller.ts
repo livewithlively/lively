@@ -16,6 +16,7 @@ import { normList, normText, sanitizePromptSections } from "../store/ingest.js";
 import { sourceVisSql, resolveSourceViewer, S_LIST_SEL, AUD_KEY_SQL } from "../../v6/source-store.js";
 import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 import { isAutoDisabledLane } from "./lanes.js";
+import { bumpCoverageVersion } from "./coverage-version.js";
 
 export interface DistillerRow {
   id: number;
@@ -523,6 +524,7 @@ export async function markStrandedSeen(sourceIds: number[], taskId: number | str
 export async function clearDistillerSeen(distillerId: number): Promise<number> {
   if (!distillerId) return 0;
   const r = await itemsPool.query(`DELETE FROM org_distiller_seen WHERE distiller_id=$1`, [distillerId]);
+  bumpCoverageVersion();   // 판정 기록을 비우면 잔량이 되살아난다 — 커버리지 캐시의 옛 숫자를 버린다(#5147)
   return r.rowCount ?? 0;
 }
 
@@ -826,6 +828,19 @@ export interface DistillerCoverage {
   uncovered_channels: Array<{ channel: string | null; n: number }>;
 }
 
+const COVERAGE_CONCURRENCY = 4;
+
+/** 순서를 지키며 최대 limit 개씩 동시에 돌린다(결과 배열은 입력 순서 그대로). */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) { const i = next++; out[i] = await fn(items[i]); }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 // 커버리지 — 증류기별 잔량 + **어느 증류기에도 안 걸리는 자료**(그대로 두면 영영 증류 안 되는 사각지대).
 //  관리탭이 이걸 그대로 보여준다: "증류기를 켰는데 왜 안 줄지?" 를 묻기 전에 사각지대가 먼저 보이도록.
 export async function distillerCoverage(): Promise<DistillerCoverage> {
@@ -833,22 +848,21 @@ export async function distillerCoverage(): Promise<DistillerCoverage> {
   //  폴백(scheduler/actions/distill.pickDistillerBatch)과 같은 «맡은 레인» 집합 — 아래 사각지대 정의를 공유하는 이유와 같다.
   const enabled = all.filter((d) => d.enabled || isAutoDisabledLane(d));
 
-  const totalRows = await q(itemsPool,
+  const totalP = q(itemsPool,
     `SELECT count(*)::int AS n FROM source s
       WHERE s.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)`);
-  const total = Number(totalRows[0]?.n ?? 0);
 
-  const distillers = [];
-  for (const d of all) {
-    distillers.push({
-      id: d.id, key: d.key, label: d.label, enabled: d.enabled, priority: d.priority,
-      //  자동 정지 레인의 잔량도 센다 — 그 몫은 사각지대에도 다른 레인 잔량에도 안 잡히므로(맡은 레인), 0 으로 두면
-      //   붙잡힌 자료가 화면에서 통째로 사라진다(«0건 켜면 읽음»). 사람이 끈 레인은 몫을 넘기므로 종전대로 0.
-      backlog: (d.enabled || isAutoDisabledLane(d)) ? await countDistillerBacklog(d, all) : 0,
-      // 잔량이 준 이유를 가른다 — 증류돼서(지식 생김) vs 보고 버려서(seen). 둘을 못 가르면 '왜 줄었지?'를 못 답한다.
-      reviewed: await countDistillerSeen(d.id),
-    });
-  }
+  //  레인별 잔량·판정 수는 서로 독립이라 동시에 센다(#5147) — 종전엔 레인 27개를 한 줄로 세어 응답이 3초를 넘었다.
+  //   동시 수는 COVERAGE_CONCURRENCY 로 묶는다. 공용 풀(max 20)을 이 화면 하나가 다 차지하면 다른 요청이 줄을 선다.
+  const distillers = await mapLimit(all, COVERAGE_CONCURRENCY, async (d) => ({
+    id: d.id, key: d.key, label: d.label, enabled: d.enabled, priority: d.priority,
+    //  자동 정지 레인의 잔량도 센다 — 그 몫은 사각지대에도 다른 레인 잔량에도 안 잡히므로(맡은 레인), 0 으로 두면
+    //   붙잡힌 자료가 화면에서 통째로 사라진다(«0건 켜면 읽음»). 사람이 끈 레인은 몫을 넘기므로 종전대로 0.
+    backlog: (d.enabled || isAutoDisabledLane(d)) ? await countDistillerBacklog(d, all) : 0,
+    // 잔량이 준 이유를 가른다 — 증류돼서(지식 생김) vs 보고 버려서(seen). 둘을 못 가르면 '왜 줄었지?'를 못 답한다.
+    reviewed: await countDistillerSeen(d.id),
+  }));
+  const total = Number((await totalP)[0]?.n ?? 0);
 
   // 사각지대 — **폴백이 실제로 집을 자료**와 같은 정의를 써야 한다.
   //  ⚠ 종전엔 여기서 distillerScopeSql 전체 술어를 다시 조립했다. 그래서 buildStrandedQuery(담당 축만 +
@@ -856,15 +870,15 @@ export async function distillerCoverage(): Promise<DistillerCoverage> {
   //   지표와 동작이 갈리면 사각지대를 줄이는 판단 자체가 불가능해지므로 빌더를 공유한다(단일 출처).
   const p = new Params();
   const strandedWhere = strandedWhereSql(enabled, p, null);
-  const uncoveredRows = await q(itemsPool,
-    `SELECT count(*)::int AS n FROM source s WHERE ${strandedWhere}`, p.values);
-
   const p2 = new Params();
   const strandedWhere2 = strandedWhereSql(enabled, p2, null);
-  const chRows = await q(itemsPool,
-    `SELECT s.fields->>'container_name' AS channel, count(*)::int AS n FROM source s
-      WHERE ${strandedWhere2}
-      GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, p2.values);
+  const [uncoveredRows, chRows] = await Promise.all([
+    q(itemsPool, `SELECT count(*)::int AS n FROM source s WHERE ${strandedWhere}`, p.values),
+    q(itemsPool,
+      `SELECT s.fields->>'container_name' AS channel, count(*)::int AS n FROM source s
+        WHERE ${strandedWhere2}
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 20`, p2.values),
+  ]);
 
   //  «사각지대 0» 의 뜻을 가른다 — 판정 기록을 빼고 세므로, 폴백이 보고 버린 자료도 0 에 기여한다.
   //   레인 쪽은 backlog(잔량)와 reviewed(판정)를 이미 갈라 놓았다("왜 줄었지?"를 답할 수 있게).

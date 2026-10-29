@@ -10,7 +10,7 @@ import {
 } from "../../org/store.js"; // #1289 자료 증류기 CRUD
 // #1289 자료 증류기 — 스코프(배타 배정)·커버리지·프롬프트 조립. CRUD 는 store, 이건 읽기·판정 계층.
 import {
-  listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, distillerCoverage, listSourceChannels, buildDistillerPrompt,
+  listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, listSourceChannels, buildDistillerPrompt,
   distillerSectionViews, measureFilterImpact, mergeDraftDistiller,
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
@@ -18,7 +18,8 @@ import { actorOf, restRead, restWork } from "./shared.js";
 import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
 // #4194 — 증류기의 두 번째 레인(카테고리 붙이기). 목록만 여기서 함께 준다 — 쓰기는 org_distiller_category_*(delivery/classifiers.ts).
 import { assertLaneFields } from "../../org/distill/lanes.js";
-import { listClassifiers, getClassifier, classifierCoverage } from "../../org/store/classifiers.js";
+import { listClassifiers, getClassifier } from "../../org/store/classifiers.js";
+import { cachedCoverage } from "../../org/distill/coverage-cache.js";   // #5147 커버리지 짧은 캐시
 import { ensureFigmaCommentsDistiller, FIGMA_DISTILLER_KEY } from "../../org/distill/figma-preset.js";   // #1881 L3
 import { ensureZoteroPapersDistiller, ZOTERO_DISTILLER_KEY } from "../../org/distill/zotero-preset.js";
 
@@ -144,21 +145,21 @@ export const ingestDistillersCapabilities: Capability[] = [
     "이미 붙은 카테고리가 틀린 것(재분류)은 증류기가 아니라 점검(관리기 «분류 어긋남 보정»)이 한다.",
     [{ method: "GET", paths: ["/api/ui/org/distillers"], parse: () => ({}) }],
     async () => {
-      const [distillers, cov] = await Promise.all([listDistillers(), distillerCoverage()]);
+      //  #5147 — 커버리지(잔량·사각지대)는 짧은 캐시에서 온다(coverage-cache.ts: 30초 안이면 그대로, 10분 안이면 옛 값 + 뒤에서 다시 셈).
+      //   레인 목록은 매번 새로 읽는다 — 켜고 끈 결과는 곧바로 보여야 한다. 넷을 함께 기다린다(종전엔 카테고리 붙이기 쪽이 뒤에 줄을 섰다).
       //  ⚠ 카테고리 붙이기 쪽 실패가 자료 레인 목록까지 500 으로 만들지 않게 가둔다(#4194 적대검증) — 이 GET 은
       //   컨트롤플레인의 memory 스코프 프로브이기도 해서(provisioner), 500 이면 멀쩡한 테넌트에 bootstrap 을 다시 돌린다.
       //   못 읽었으면 null — 빈 배열([])과 구분해야 화면이 «레인 없음» 이라고 거짓말하지 않는다.
-      let knowledge_lanes: unknown[] | null = null;
-      let knowledge: Record<string, unknown> | null = null;
-      try {
-        const [lanes, kcov] = await Promise.all([listClassifiers(), classifierCoverage()]);
-        knowledge_lanes = lanes.map((c) => ({ ...c, input: "knowledge" }));
-        knowledge = { total_unclassified: kcov.total_unclassified, uncovered: kcov.uncovered, lanes: kcov.classifiers };
-      } catch { /* null 로 둔다 — 자료 레인 목록은 그대로 준다 */ }
+      const [distillers, cov, lanes] = await Promise.all([
+        listDistillers(), cachedCoverage(), listClassifiers().catch(() => null),
+      ]);
+      const kcov = cov.knowledge;
+      const knowledge_lanes = lanes && kcov ? lanes.map((c) => ({ ...c, input: "knowledge" })) : null;
+      const knowledge = lanes && kcov ? { total_unclassified: kcov.total_unclassified, uncovered: kcov.uncovered, lanes: kcov.classifiers } : null;
       return {
         distillers: distillers.map((d) => ({ ...d, input: "source", scope_text: describeScope(d) })),
         knowledge_lanes,
-        coverage: { ...cov, knowledge },
+        coverage: { ...cov.source, knowledge },
       };
     }),
   restWork("org_distiller_upsert", "증류기 저장(자료 레인)",

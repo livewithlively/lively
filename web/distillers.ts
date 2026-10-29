@@ -73,7 +73,7 @@ export async function distillersPanel(detail, data) {
   busy(detail, el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
 
   let res; let catRes: any = null; let runs: RunsByMachine = new Map();
-  try { [res, catRes, runs] = await Promise.all([api('/api/ui/org/distillers'), api('/api/ui/categories').catch(() => null), fetchRecentRuns()]); }
+  try { [res, catRes, runs] = await Promise.all([api('/api/ui/org/distillers'), api('/api/ui/categories?light=1').catch(() => null), fetchRecentRuns()]); }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message }))); return; }
   const catName = categoryNames(catRes);
 
@@ -563,7 +563,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
   if (v('target_category')) { catIn.append(el('option', { value: v('target_category'), text: v('target_category') })); catIn.value = v('target_category'); }
   void (async () => {
     try {
-      const r = await api('/api/ui/categories');
+      const r = await api('/api/ui/categories?light=1');
       const cur = catIn.value;
       const seen = new Set(['']);
       for (const c of ((r && r.categories) || [])) {
