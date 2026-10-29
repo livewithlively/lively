@@ -849,7 +849,8 @@ await t("S4b 확인 글의 답 읽기(parseClaudePrep) · 덮을 자리 거르�
   for (const n of ["projects", "sessions", "daemon", "todos", "shell-snapshots", "file-history", "session-env", "ide", "debug", "plans", "backups", "paste-cache", "image-cache"]) {
     assert.ok((JOB_CLAUDE_HIDE_ALWAYS as readonly string[]).includes(n), `ALWAYS ${n}`);
   }
-  for (const n of ["feedback", "feedback-bundles", "remote-control", "remote", "startup-perf", "dump-prompts", "shares", "telemetry", "traces", "usage-data", "jobs", "tasks", "channels"]) {
+  for (const n of ["feedback", "feedback-bundles", "remote-control", "remote", "startup-perf", "dump-prompts", "shares", "telemetry", "traces", "usage-data", "jobs", "tasks", "channels",
+    "agent-memory", "agent-memory-local", "agent-memory-project"]) {
     assert.ok((JOB_CLAUDE_HIDE_IF_DIR as readonly string[]).includes(n), `IF_DIR ${n}`);
   }
   assert.ok((JOB_CLAUDE_HIDE_FILES as readonly string[]).includes("history.jsonl"));

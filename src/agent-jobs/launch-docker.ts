@@ -133,6 +133,8 @@ export type ClaudeDirState = "ok" | "missing" | "link" | "foreign" | "inner" | "
  * 구독 작업이 붙이는 Claude 설정 폴더 안에서 작업마다 덮는 자리(#5082 · #5123) — 앞 작업 · 사람 세션의 대화 · 파일 내용이 남는 곳이다(claude 2.1.312 가
  *  «이 기계의 상태» 로 묶는 이름 중 내용이 남는 것). 로그인 파일(.credentials.json)과 갱신 잠금(.oauth_refresh.lock)은 사람 세션 · 다른 작업과 나눠야
  *  하므로 덮지 않는다 — 설정 폴더째 붙이는 까닭이다(빈 설정 폴더에 로그인 파일만 붙이면 잠금이 갈려 동시 갱신이 로그인을 깰 수 있다).
+ *  고른 곳: claude 2.1.312 실행 파일의 «이 기계의 상태» 이름 집합(`ZKn` · 49개) 중 내용이 남는 기록 자리 — 판을 올릴 때 그 집합과 다시 대조한다.
+ *   덮지 않는 나머지는 캐시(cache · state · statsig · mcp-discovery-cache …) · 설정 · 코드(plugins · cowork_plugins · local-settings …)다.
  *  · ALWAYS — claude 2.1.312 가 폴더로 쓰는 자리: 없으면 띄우기 전에 그 계정 권한으로 만들어 두고 늘 빈 tmpfs 로 덮는다(뒤에 다른 작업 · 사람 세션이
  *    만들어도 이 작업엔 안 보인다). sessions/ 는 작업의 claude 가 스스로 만든다(박스 실측) · daemon/ 은 상주 판의 제어 열쇠(control.key) · 토큰(auth/)이 든다.
  *  · IF_DIR — 폴더인지 판마다 다를 수 있는 자리: 띄울 때 폴더로 있으면 덮는다(만들지 않는다 — 파일 자리에 폴더를 만들어 그 사람의 claude 를 깨지 않게).
@@ -142,7 +144,7 @@ export type ClaudeDirState = "ok" | "missing" | "link" | "foreign" | "inner" | "
  */
 export const JOB_CLAUDE_HIDE_ALWAYS = ["projects", "todos", "shell-snapshots", "file-history", "plans", "session-env", "ide", "debug", "backups", "paste-cache", "image-cache", "sessions", "daemon"] as const;
 export const JOB_CLAUDE_HIDE_IF_DIR = ["tasks", "teams", "logs", "jobs", "shares", "uploads", "downloads", "file-transfers", "scratch", "api-dumps", "dump-prompts", "telemetry", "traces", "usage-data",
-  "feedback", "feedback-bundles", "remote-control", "remote", "channels", "startup-perf"] as const;
+  "feedback", "feedback-bundles", "remote-control", "remote", "channels", "startup-perf", "agent-memory", "agent-memory-local", "agent-memory-project"] as const;
 export const JOB_CLAUDE_HIDE_FILES = ["history.jsonl"] as const;
 const HIDE_NAMES: ReadonlySet<string> = new Set([...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR, ...JOB_CLAUDE_HIDE_FILES]);
 const HIDE_FILE_NAMES: ReadonlySet<string> = new Set(JOB_CLAUDE_HIDE_FILES);
