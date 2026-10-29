@@ -149,6 +149,28 @@ test("L2·L3 ai.instructions 파일이 64KiB 를 넘거나 UTF-8 이 아니면 �
   await rm(bin, { recursive: true });
 });
 
+test("L5 ai.instructions 지시 파일이 비었거나 빈칸뿐이면 로드 실패(«지시를 실었다» 가 아니다 · 격리 리뷰 N1)", async () => {
+  for (const body of ["", "  \n\t \n"]) {
+    const d = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")), "ai/a.md": body });
+    await assert.rejects(() => loadAppPackage(d), /비어 있습니다/, JSON.stringify(body));
+    await rm(d, { recursive: true });
+  }
+});
+
+test("L6 ai.instructions 의 뜻 — 선언한 작업 이름만 · 묶음 안 상대 경로만(모양만 보는 parseAppManifest 대신 설치 · 판 저장이 본다 · 격리 리뷰 N4)", async () => {
+  const other = await stage({ "lively-app.json": MANIFEST({ ai: { jobs: [{ name: "answer" }], instructions: { other: "ai/a.md" } } }), "ai/a.md": "x" });
+  await assert.rejects(() => loadAppPackage(other), /ai\.instructions\.other.*ai\.jobs 에 선언한 작업 이름이 아닙니다/);
+  await rm(other, { recursive: true });
+  const nojobs = await stage({ "lively-app.json": MANIFEST({ ai: { instructions: { answer: "ai/a.md" } } }), "ai/a.md": "x" });
+  await assert.rejects(() => loadAppPackage(nojobs), /ai\.jobs 에 선언한 작업 이름이 아닙니다/, "작업 선언 없이 지시만 두면 거절");
+  await rm(nojobs, { recursive: true });
+  for (const bad of ["/etc/passwd", "../x.md", "ai/../../x.md", "ai//x.md", "./ai/x.md", "ai/.", "a\\b.md", "ai/x\n.md", "ai/x\u0000.md", "", `ai/${"a".repeat(510)}.md`]) {
+    const d = await stage({ "lively-app.json": MANIFEST(AI(bad)), "ai/x.md": "x" });
+    await assert.rejects(() => loadAppPackage(d), /ai\.instructions\.answer.*상대 경로/, JSON.stringify(bad));
+    await rm(d, { recursive: true });
+  }
+});
+
 test("L1b ai.instructions 가 링크로 묶음 밖 파일을 가리키면 거절(묶음 안 링크는 패키지 해시 단계가 모두 거절한다)", async () => {
   const outside = await stage({ "secret.txt": "묶음 밖 글" });
   const d = await stage({ "lively-app.json": MANIFEST(AI("ai/answer.md")) });

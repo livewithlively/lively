@@ -17,6 +17,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import type { OrgApp } from "../org/store/apps.js";
+import type { Viewer } from "../apps/visibility.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
@@ -44,6 +45,11 @@ export interface SubmitJobInput {
    *  필수다 — 접수하는 자리(첫 접수 · 형식 재시도)가 하나라도 빠뜨리면 물은 사람의 작업이 시트 계정의 이름 · 권한으로 돈다.
    */
   sharedSeat: boolean;
+  /**
+   * #5082 앱 판 지시(ai.instructions)의 글 — 작업 행에 함께 적어 판이 하네스 시스템 지시로 싣는다(작업 폴더 지시는 읽지 않는다). 없으면 null.
+   *  필수다 — 형식 재시도가 빠뜨리면 그 턴은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다.
+   */
+  appInstructions: string | null;
 }
 
 /**
@@ -54,7 +60,7 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
   return {
     requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
     harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
-    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat, appInstructions: j.appInstructions,
   };
 }
 
@@ -78,9 +84,11 @@ export interface AiRunDeps {
   singleShot(apiKey: string, i: SingleShotInput, signal: AbortSignal): Promise<SingleShotOutput>;
   /** 프록시 토큰 — 값은 돌려주고 해시만 적는다. */
   newProxyToken(): { token: string; hash: string };
-  /** #5082 앱 판 지시 — 그 실행의 작업 이름이 ai.instructions 를 선언했으면 «부른 사람의 판» 파일의 글(apps/app-job-instructions). 선언이 없으면 null ·
-   *  선언했는데 못 읽으면 던진다(지시 없이 돌리지 않는다). 없으면(시험) 앱 판 지시를 쓰지 않는다. */
-  instructions?(run: Pick<AiRunRow, "app_id" | "requester" | "job_name">): Promise<string | null>;
+  /** #5082 앱 판 지시 — 그 작업 이름이 ai.instructions 를 선언했으면 «부른 사람(주소)의 판» 파일의 글(apps/app-job-instructions.resolveJobInstructions).
+   *  선언이 없으면 null · 선언했는데 못 읽으면 던진다(지시 없이 돌리지 않는다). 없으면(시험) 앱 판 지시를 쓰지 않는다. */
+  instructions?(app: OrgApp, who: Viewer, job: string): Promise<string | null>;
+  /** #5082 그 작업 행에 실린 앱 판 지시(agent-jobs/store.agentJobAppInstructions) — 형식 재시도가 같은 글을 싣는다. 없으면 null. */
+  jobInstructions?(jobId: number): Promise<string | null>;
   /** 지금 열린 프록시 호출 수를 세는 자리(워크스페이스 동시 상한). */
   inflight: { take(key: string, max: number): boolean; release(key: string): void; count(key: string): number };
   rate: RateWindow;
@@ -145,6 +153,11 @@ function requesterOf(user: LivelyUser): { member: string; kind: "member" | "app_
   const member = memberOf(user);
   if (!member) throw new HttpError(401, "인증이 필요합니다");
   return { member, kind: user.appServer ? "app_server" : "member" };
+}
+
+/** 판을 고르는 사람 — 앱 주소 · 앱 서버로 들어온 호출은 그 주소의 판(capabilities/app-store 의 viewerOf 와 같은 자 · #5082 앱 판 지시). */
+function viewerOf(user: LivelyUser, who: { member: string }): Viewer {
+  return { userId: who.member, scopes: user.scopes ?? [], ...(user.appAddress ? { address: user.appAddress } : {}) };
 }
 
 /** 매니페스트 ai.jobs — 선언 목록(없으면 빈 배열). 저장된 매니페스트를 읽는 자리라 던지지 않는다. */
@@ -257,10 +270,6 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //  #5081 — 공용 시트의 홈은 구성원 모두가 함께 쓴다(대화 기록 · 홈의 파일이 다음 작업에 남는다). 프로젝트 폴더(사람 경계)를 그 자리에 붙이지 않는다.
   if (sharedSeat && projectId != null) throw new HttpError(400, "공용 시트로 도는 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요(시트 계정의 홈은 구성원 모두가 함께 씁니다)");
 
-  //  #5082 — 작업 이름이 앱 판 지시를 선언했으면 지금 한 번 읽어 본다(그 판에 파일이 없으면 접수에서 409 — 작업을 띄운 뒤에야 실패하지 않게).
-  //   실제로 싣는 글은 돌 때 다시 읽는다(단발 runProxy · 작업 bootSystemForJob).
-  if (jobName && d.instructions) await d.instructions({ app_id: appId, requester: who.member, job_name: jobName });
-
   // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
   const p = await d.policy();
   const tenant = d.tenant();
@@ -275,6 +284,11 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   if (executor === "proxy" && d.inflight.count(tenant) >= p.max_inflight) {
     throw new HttpError(429, `이 워크스페이스의 AI 호출이 동시에 ${p.max_inflight}개 돌고 있습니다 — 잠시 뒤 다시 보내세요`);
   }
+
+  //  #5082 — 작업 이름이 앱 판 지시를 선언했으면 지금 그 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 한 번 읽는다(표 · 도구와 같은 판 — viewerOf).
+  //   실행은 이 글로 돈다 — 단발은 곧바로 쓰고, 작업은 작업 행에 함께 적어 판이 받는다(접수 뒤 판이 바뀌어도 · 형식 재시도도 같은 글 · 격리 리뷰 B1 · N2).
+  //   한도(429)를 다 본 뒤에 읽는다 — 돌려보낼 요청이 판 행을 읽지 않게(격리 리뷰 N5). 선언했는데 못 읽으면 409 · 앱을 볼 수 없으면 404.
+  const instructions = jobName && d.instructions ? await d.instructions(app, viewerOf(user, who), jobName) : null;
 
   const n: NewAiRun = {
     appId, requester: who.member, requesterKind: who.kind, source: ctx.source ?? null, jobName, kind,
@@ -291,18 +305,20 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor }, "[ai-run] 접수");
 
   if (executor === "proxy") {
-    d.later(() => runProxy(row, p, d), 0);
+    d.later(() => runProxy(row, p, d, instructions), 0);
   } else {
     try {
       const job = await d.submitJob({
         requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model, label: label ?? `AI 실행 #${row.id}`,
         prompt: jobPrompt(row, input.files), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single", resumeJobId: null,
-        homeless, sharedSeat,
+        homeless, sharedSeat, appInstructions: instructions,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
       await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `작업 컨테이너에 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);
+      //  #5082 롤 창 — 공용 DB 마이그레이션 전이면 작업 행에 지시 칸이 없다(agent-jobs/store APP_INSTRUCTIONS_COL). 막힌 게 아니라 준비 중이다.
+      if (instructions && (e as { code?: string })?.code === "42703") throw new HttpError(503, "앱 지시를 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요");
       throw e;
     }
   }
@@ -342,23 +358,22 @@ function proxyResult(o: { text: string; json: unknown; model: string | null; usa
   return { text: o.text, ...(o.json !== undefined ? { json: o.json } : {}), model: o.model, usage: o.usage, duration_ms: o.durationMs, retries: o.retries, stop_reason: o.stopReason, truncated: o.truncated };
 }
 
-/** (순수) 단발의 시스템 지시 — 앱 판 지시(앞) + 부른 쪽 system(뒤). 둘 다 없으면 null. */
-export function composeSystem(instructions: string | null, system: string | null): string | null {
-  const parts = [instructions, system].filter((x): x is string => typeof x === "string" && x.trim() !== "");
+/**
+ * (순수) 단발의 시스템 지시 — 부른 쪽 system(앞) + 앱 판 지시(뒤). 둘 다 없으면 null.
+ *  앱 판 지시를 뒤에 둔다 — 에이전트 작업에선 앱 판 지시가 하네스 시스템 지시이고 부른 쪽 system 은 사용자 말(jobPrompt)이라 앱 판 지시가 앞선다.
+ *  단발도 같은 쪽으로 기울게 나중 글로 둔다(부른 쪽이 끝에 붙인 글로 앱 지시를 뒤집기 어렵게 · 격리 리뷰 N6).
+ */
+export function composeSystem(system: string | null, instructions: string | null): string | null {
+  const parts = [system, instructions].filter((x): x is string => typeof x === "string" && x.trim() !== "");
   return parts.length ? parts.join("\n\n") : null;
 }
 
-export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Promise<void> {
+/** 단발 한 번 — instructions 는 접수 때 읽은 앱 판 지시(submitRun · 없으면 null). */
+export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps, instructions: string | null = null): Promise<void> {
   const tenant = d.tenant();
   const key = await d.apiKey();
   if (!key) { await d.store.finishAiRun(row.id, { status: "failed", result: null, error: "워크스페이스 API 키가 없습니다" }); return; }
-  //  #5082 앱 판 지시 — 못 읽으면 지시 없이 부르지 않는다(실패로 끝낸다).
-  let system: string | null;
-  try { system = composeSystem(d.instructions ? await d.instructions(row) : null, row.system_prompt); }
-  catch (e) {
-    await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `앱 지시를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`.slice(0, 600) });
-    return;
-  }
+  const system = composeSystem(row.system_prompt, instructions);
   if (!d.inflight.take(tenant, p.max_inflight)) {
     await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `이 워크스페이스의 AI 호출이 동시에 ${p.max_inflight}개 돌고 있습니다 — 잠시 뒤 다시 보내세요` });
     return;
@@ -470,6 +485,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
         //  #5081 — 공용 시트 표시도 이 실행 것을 그대로(지금 설정으로 다시 고르지 않는다 — 그 사이 지정을 거뒀으면 재시도는 띄우기 직전에 멈춘다).
         homeless: job.homeless === true, sharedSeat: await d.store.aiRunSharedSeat(run.id),
+        //  #5082 — 앱 판 지시도 원래 작업의 것 그대로(지금 판으로 다시 고르지 않는다 · 하네스도 이어받은 대화의 첫 시스템 지시를 그대로 쓴다).
+        appInstructions: d.jobInstructions ? await d.jobInstructions(job.id) : null,
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {
@@ -498,15 +515,6 @@ export async function sweepAiRuns(d: AiRunDeps): Promise<{ synced: number; stale
     if (await d.store.finishAiRun(r.id, { status: "failed", result: null, error: "게이트웨이가 실행을 끝맺지 못했습니다(재기동) — 다시 보내세요" })) stale++;
   }
   return { synced, stale };
-}
-
-// ── 작업 판의 시스템 지시(agent-jobs onBoot 가 묻는다 · #5082 앱 판 지시) ──
-/** 그 작업에 붙은 AI 실행의 작업 이름이 앱 판 지시를 선언했을 때만 그 글. AI 실행이 아닌 작업(agent_job_run) · 작업 이름 없는 실행은 null. 못 읽으면 던진다. */
-export async function bootSystemForJob(job: Pick<AgentJobRow, "id">, d: AiRunDeps): Promise<string | null> {
-  if (!d.instructions) return null;
-  const run = await d.store.getAiRunByJob(job.id);
-  if (!run || !run.job_name) return null;
-  return d.instructions(run);
 }
 
 // ── API 키 에이전트 작업의 판 환경(agent-jobs onBoot 가 묻는다) ──

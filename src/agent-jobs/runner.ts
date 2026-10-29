@@ -216,8 +216,11 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *  · `--strict-mcp-config` — 멤버가 등록한 MCP 서버를 싣지 않는다. 라이블리 MCP 는 작업용 토큰(앱 작업이면 앱 토큰)으로만 붙인다.
  *  · 대화를 남긴다(--no-session-persistence 를 쓰지 않는다) — 같은 대화를 이어받는 작업(--resume)이 그 기록을 읽는다.
  *  · #5082 앱 판 지시(system) — 게이트웨이가 «부른 사람의 판» 에서 읽은 지시 파일을 시스템 지시로 싣고(파일 — 명령줄에 글이 남지 않게),
- *    작업 폴더(앱 데이터 폴더 — 구성원 · 작업 AI 가 고칠 수 있다)의 CLAUDE.md · .claude/skills · 설정은 읽지 않는다(`--setting-sources user`).
- *    실측(2026-10-29, claude 2.1.312): 제한이 없으면 작업 폴더의 CLAUDE.md · 스킬이 요청에 실리고, user 만 주면 둘 다 빠지며, 지시 파일은 system 에 실린다.
+ *    작업 폴더(앱 데이터 폴더 — 구성원 · 작업 AI 가 고칠 수 있다)의 CLAUDE.md · .claude/(skills · agents · commands · settings)는 읽지 않는다
+ *    (`--setting-sources user`). 실측(2026-10-29, claude 2.1.312): 제한이 없으면 작업 폴더의 CLAUDE.md · 스킬이 요청에 실리고, user 만 주면
+ *    둘 다 빠지며, 지시 파일은 system 에 실린다(격리 리뷰: settings · agents · commands 도 빠진다).
+ *    ⚠ user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 구독 실행이면 그 구성원의 홈이라 같은 계정으로 도는 작업 AI 가 거기에 쓸 수 있다.
+ *     «지시는 판으로만 바뀐다» 는 앱 폴더에 대한 보장이다. API 키 · 홈 없는 실행은 빈 설정 폴더라 user 도 비어 있다.
  */
 export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);

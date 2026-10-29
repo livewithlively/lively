@@ -622,6 +622,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  #5081 shared_seat — 공용 시트로 도는 작업(앱 AI 실행이 접수). 자리(홈 · Claude 로그인)는 시트 계정 · 작업 AI 의 라이블리 신원은 보낸 사람.
   //   접수 때 정해지고 바뀌지 않는다. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts SHARED_SEAT_COL).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+  //  #5082 app_instructions — 앱 판 지시(ai.instructions)의 글. 앱 AI 실행이 접수 때 부른 사람(주소)의 판에서 읽어 작업 행과 함께 적고, 판이 받아
+  //   하네스 시스템 지시로 싣는다(작업 폴더 지시는 읽지 않는다). 접수 때 정해지고 바뀌지 않는다 — 형식 재시도도 같은 글을 싣는다.
+  //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts APP_INSTRUCTIONS_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_instructions TEXT`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).

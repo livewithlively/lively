@@ -123,13 +123,15 @@ const aiJobSchema = z.object({
 }).strict();
 //  #5082 — 작업별 지시 파일(ai.instructions — 작업 이름 → 앱 묶음 안 파일 경로). 그 작업 이름으로 도는 AI 실행에 게이트웨이가 «부른 사람의 판» 의 그 파일을
 //   시스템 지시로 싣는다(apps/app-job-instructions.ts). 앱 데이터 폴더(작업 폴더)에 둔 지시는 구성원 · 작업 AI 가 고칠 수 있어, 판으로 검수된 지시가 필요한
-//   앱은 이 자리를 쓴다 — 지시를 실은 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/skills · 설정을 읽지 않는다(runner.claudeJobArgv).
+//   앱은 이 자리를 쓴다 — 지시를 실은 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(runner.claudeJobArgv).
 //   ★ ai.jobs[] 안이 아니라 ai 바로 아래에 둔다 — ai.jobs[] 는 strict 라, 이 칸을 모르는 옛 코어로 되돌리면 그 앱의 매니페스트를 아예 못 읽는다
-//    (ai 는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다 — web.root 와 같은 까닭). 파일이 묶음 안에 있는지 · 크기는 설치 · 판 저장 때 loader 가 본다.
+//    (ai 는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다 — web.root 와 같은 까닭).
+//   ★ 여기는 모양(글 → 글)만 본다. 뜻(선언한 작업 이름인가 · 묶음 안 상대 경로인가 · 파일 · 크기 · 글자)은 설치 · 판 저장 때 loader 가 본다 —
+//    저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 많아, 옛 코어가 저장한 매니페스트 하나로 그 자리들이 400 으로 막히지 않게(격리 리뷰 N4 · #5050 과 같다).
 const aiSchema = z.object({
   jobs: z.array(aiJobSchema).max(32).default([]),
-  instructions: z.record(z.string(), z.string().min(1).max(512)).optional()
-    .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 UTF-8). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람의 판에서 그 파일을 시스템 지시로 싣는다 — 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/skills 를 읽지 않는다"),
+  instructions: z.record(z.string(), z.string()).optional()
+    .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"),
 }).passthrough().optional();
 
 const uiPageSchema = z.object({
@@ -528,15 +530,6 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
     }
   }
   assertUniqueKeys("sections", m.sections.map((s) => s.key));
-
-  // #5082 작업별 지시 파일 — 선언한 작업 이름만 · 묶음 안 상대 경로만(파일이 있는지 · 크기는 loader 가 설치 · 판 저장 때 본다).
-  if (m.ai?.instructions) {
-    const names = new Set(m.ai.jobs.map((j) => j.name));
-    for (const [job, file] of Object.entries(m.ai.instructions)) {
-      if (!names.has(job)) throw new HttpError(400, `매니페스트 오류 [ai.instructions.${job}]: ai.jobs 에 선언한 작업 이름이 아닙니다`);
-      if (!isPackageRelPath(file)) throw new HttpError(400, `매니페스트 오류 [ai.instructions.${job}]: 앱 묶음 안 상대 경로여야 합니다(예: ai/${job}.md)`);
-    }
-  }
 
   // 잡 run 은 prompt_asset 또는 prompt 중 하나가 있어야 한다.
   for (const j of m.jobs) {

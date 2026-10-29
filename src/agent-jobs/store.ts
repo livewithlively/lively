@@ -103,6 +103,11 @@ export interface NewAgentJob {
    *  필수다(homeless 와 같은 까닭 — 빠지면 물은 사람의 작업이 시트 계정의 이름 · 권한으로 돈다).
    */
   sharedSeat: boolean;
+  /**
+   * #5082 앱 판 지시 — 판이 하네스 시스템 지시로 싣는 글(앱 AI 실행이 접수 때 읽어 준다). 있으면 작업 폴더의 지시 · 설정을 읽지 않는다
+   *  (runner.claudeJobArgv). 없으면 null · 생략.
+   */
+  appInstructions?: string | null;
 }
 
 /**
@@ -120,13 +125,17 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     const room = p.max_queued > 0 ? queued < p.max_queued : running < p.max_running && queued === 0;
     if (!room) return { full: { queued, running } };
     //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
+    //  #5082 app_instructions 칸도 같은 까닭으로 지시가 있을 때만 적는다(APP_INSTRUCTIONS_COL 머리말).
     const shared = j.sharedSeat === true;
+    const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instr != null ? `, ${APP_INSTRUCTIONS_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${instr != null ? ", $16" : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless${shared ? `, ${SHARED_SEAT_COL}` : ""})
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15${shared ? ", true" : ""}) RETURNING ${COLS}`,
+                                 resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15${extraVals}) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, ...(instr != null ? [instr] : [])]);
     return { row: norm(rows[0])! };
   });
 }
@@ -146,6 +155,24 @@ export async function agentJobSharedSeat(id: number): Promise<boolean> {
     return r[0]?.shared === true;
   } catch (e) {
     if ((e as { code?: string })?.code === "42703") return false;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * #5082 앱 판 지시(org_agent_job.app_instructions)도 COLS 에 넣지 않고 따로 읽는다(agentJobAppInstructions) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  지시가 있는 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 지시를 실은 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 부르는 쪽(ai-runs/service.submitRun)이 503 으로 다시 보내라고 한다.
+ */
+export const APP_INSTRUCTIONS_COL = "app_instructions";
+export async function agentJobAppInstructions(id: number): Promise<string | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await q(itemsPool, `SELECT ${APP_INSTRUCTIONS_COL} AS t FROM org_agent_job WHERE id=$1`, [id]);
+    const t = r[0]?.t;
+    return typeof t === "string" && t !== "" ? t : null;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
     throw e;
   }
 }

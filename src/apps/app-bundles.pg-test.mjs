@@ -17,6 +17,8 @@
 //  D12 관리자 설치도 판 파일을 설치 **전에** 둔다 — 상한에 걸리면 413 이고 앱이 안 생긴다 · 되는 설치는 판 1개 · 앱 주소가 그 판을 낸다
 //  D13 정리가 S3 실패를 연달아 만나면 그 바퀴를 접는다(후보마다 한 번만 · 잠금을 오래 안 붙든다) · 실패한 줄은 이 프로세스에선 건너뛰고
 //      (늘 실패하는 줄이 앞줄을 막지 않게) 나머지를 지운다 · 재기동 뒤엔 그 줄도 지운다
+//  D14 #5082 작업별 지시 파일(ai.instructions) — 진짜 읽기 길(viewAppFor · 판 묶음)로: 공개 판 · 초안 · 앱 주소의 판(격리 리뷰 B1 · N10) ·
+//      판으로 안 남은 상태는 409(N3) · 화면 한 장 앱도 관리자 설치가 판을 남긴다(N3)
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import pg from "pg";
 import crypto from "node:crypto";
@@ -321,6 +323,42 @@ try {
     STREAK === 3 && gcFail.checked === STREAK && gcFail.failed === STREAK && gcFail.removed === 0 && callsFail === STREAK && leftFail === 5
       && gcOk.checked === 5 - STREAK && gcOk.removed === 5 - STREAK && leftOk === STREAK && gcAfterRestart.removed === STREAK && leftEnd === 0,
     JSON.stringify({ gcFail, callsFail, leftFail, gcOk, leftOk, gcAfterRestart, leftEnd }));
+
+  // D14
+  const { resolveJobInstructions } = await import(`${D}/apps/app-job-instructions.js`);
+  const aiFiles = (id, say) => [
+    { path: "lively-app.json", content: JSON.stringify({
+      id, title: "지시 앱", version: "0.1.0", permissions: { scopes: [], tools: [] }, data: { tables: [] },
+      ui: { pages: [{ key: "main", title: "지시 앱", entry: "ui/index.html" }] },
+      ai: { jobs: [{ name: "answer" }], instructions: { answer: "ai/answer.md" } },
+    }) },
+    { path: "ui/index.html", content: "<p>지시 앱</p>" },
+    { path: "ai/answer.md", content: say },
+  ];
+  const vw = (u, address) => ({ userId: u.userId, scopes: u.scopes, ...(address ? { address } : {}) });
+  const said = async (appId, viewer) => { try { return await resolveJobInstructions(await appStore.getApp(appId), viewer, "answer"); } catch (e) { return `ERR ${e?.status}`; } };
+  await call("app_save", { files: aiFiles("aiapp", "공개 지시") }, alice);
+  await call("app_visibility_set", { app_id: "aiapp", visibility: "all" }, alice);
+  await call("app_save", { files: aiFiles("aiapp", "초안 지시") }, alice);
+  const a14 = await appStore.getApp("aiapp");
+  const seen = {
+    bob: await said("aiapp", vw(bob)), alice: await said("aiapp", vw(alice)), alicePub: await said("aiapp", vw(alice, "pub")),
+    aliceDraft: await said("aiapp", vw(alice, "draft")), bobDraft: await said("aiapp", vw(bob, "draft")),
+  };
+  //  판으로 안 남은 상태(설치된 해시가 판 행과 다름) — 초안을 보는 사람은 409 · 공개 판을 보는 사람은 그대로.
+  await q(`UPDATE org_app SET content_hash='pgt-off-the-books' WHERE id='aiapp'`);
+  const offBooks = { alice: await said("aiapp", vw(alice)), bob: await said("aiapp", vw(bob)) };
+  //  관리자 설치(화면 한 장 · web.root 없음)도 지시를 선언하면 판을 남긴다 — 종전엔 판이 없어 모든 실행이 409 였다.
+  const i14 = await call("org_app_install", { source: { kind: "inline", files: aiFiles("aiadmin", "관리자 설치 지시") } }, boss);
+  const ver14 = await q(`SELECT version_no, (bundle IS NOT NULL) AS has_bundle FROM org_app_version WHERE app_id='aiadmin'`);
+  const adm = await appStore.getApp("aiadmin");
+  const admSaid = await said("aiadmin", vw(bob));
+  chk("D14 지시 파일 — 공개 판 · 초안 · 주소의 판을 진짜 읽기 길로 · 판으로 안 남은 상태 409 · 화면 한 장 관리자 설치도 판을 남긴다",
+    a14?.draft_by === "pgt-alice" && a14?.published_version_no != null
+      && seen.bob === "공개 지시" && seen.alice === "초안 지시" && seen.alicePub === "공개 지시" && seen.aliceDraft === "초안 지시" && seen.bobDraft === "ERR 404"
+      && offBooks.alice === "ERR 409" && offBooks.bob === "공개 지시"
+      && i14.created === true && ver14.length === 1 && ver14[0].has_bundle === true && adm?.current_version_no === ver14[0].version_no && admSaid === "관리자 설치 지시",
+    JSON.stringify({ draft_by: a14?.draft_by, pub: a14?.published_version_no, seen, offBooks, i14: i14.created, ver14, cur: adm?.current_version_no, admSaid }));
 } finally {
   console.log(`\n${pass} passed, ${fail} failed`);
   await itemsPool.end().catch(() => {});

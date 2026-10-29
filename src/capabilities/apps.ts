@@ -9,6 +9,7 @@ import * as store from "../org/store/apps.js";
 import { parseAppManifest } from "../apps/manifest.js";
 import { resolveGrant } from "../apps/grant.js";
 import { loadAppPackage } from "../apps/loader.js";
+import { declaresAiInstructions } from "../apps/app-job-instructions.js";   // #5082 지시 파일을 선언한 앱은 판 묶음을 남긴다
 import { stageAppSource, parseAppSource } from "../apps/install-source.js";
 import { installLoadedApp } from "../apps/install-run.js";
 import { clearAppContextCache } from "../apps/app-context.js";   // #5100 공개하면 맥락 범위 기억 비우기
@@ -190,7 +191,8 @@ async function currentPackageFiles(app: store.OrgApp): Promise<{ files: AppFile[
 async function snapshotCurrentVersion(app: store.OrgApp, savedBy: string | null, note: string): Promise<number> {
   const { files, from } = await currentPackageFiles(app);
   //  #4481 여러 파일 앱은 DB 에 매니페스트·entry HTML 만 남는다 — 거기서 되살린 판은 dist/ 를 잃은 «깨진 판» 이다. 떠 두지 않고 알린다.
-  if (from === "db" && webRootOf(app.manifest) !== null) {
+  //  #5082 작업별 지시 파일(ai.instructions)을 선언한 앱도 같다 — 지시 파일은 판 묶음에만 있다.
+  if (from === "db" && (webRootOf(app.manifest) !== null || declaresAiInstructions(app.manifest))) {
     throw new HttpError(409, `「${app.title || app.id}」 의 지금 상태를 판으로 떠 둘 파일 묶음이 없습니다 — 앱 폴더에서 다시 저장해 주세요(app_save {dir})`);
   }
   return recordVersion(app.id, {
@@ -670,7 +672,8 @@ const appInstall: Capability = {
       //  #4481 여러 파일 앱(web.root)은 화면 파일이 판 묶음에만 있다(설치는 매니페스트·entry HTML 만 보존한다) — 관리자 설치도 판으로 적어
       //   앱 주소가 그 판을 낸다. 파일은 **설치 전에** 저장소에 둔다 — 상한(413)·저장소 실패가 설치를 반쯤 해 둔 채(화면 파일 없는 여러 파일 앱)
       //   끝나지 않게. 화면 한 장 앱(v1)은 종전 그대로(판 이력은 처음 고칠 때 생긴다).
-      const bundled = webRootOf(loaded.manifest) !== null ? await storeVersionBundle(await bundleFromDir(staged.dir)) : null;
+      //   #5082 작업별 지시 파일(ai.instructions)을 선언한 앱도 판으로 적는다 — 지시는 판 파일에서만 읽는다(app-job-instructions · 격리 리뷰 N3).
+      const bundled = webRootOf(loaded.manifest) !== null || declaresAiInstructions(loaded.manifest) ? await storeVersionBundle(await bundleFromDir(staged.dir)) : null;
       const outcome = await store.withAppInstallLock(loaded.manifest.id, async () => {
         const before = await store.getApp(loaded.manifest.id);
         //  같은 id 의 남의 나만 보는 앱 위에는 깔지 않는다 — 관리자 목록엔 그 앱이 서지 않으니 덮는 줄 모르고 남의 앱 코드를 바꾸게 된다(격리 리뷰 2-1).
@@ -926,7 +929,7 @@ const appPull: Capability = {
     const base = row ? null : await currentPackageFiles(installed);
     const from = row ? "version" as const : (base as { from: "version" | "folder" | "folder+db" | "db" }).from;
     //  #4481 여러 파일 앱인데 판 묶음이 없다 — DB 로 되살리면 dist/ 가 빠진 묶음을 사본·고치기 재료로 주게 된다.
-    if (from === "db" && webRootOf(installed.manifest) !== null) {
+    if (from === "db" && (webRootOf(installed.manifest) !== null || declaresAiInstructions(installed.manifest))) {
       throw new HttpError(409, `「${installed.title || id}」 의 파일 묶음을 찾지 못했습니다 — 앱 폴더에서 다시 저장한 뒤 내려받으세요`);
     }
     const app = pub ? asPublished(installed, pub) : installed;

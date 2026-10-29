@@ -390,19 +390,20 @@ test("#5100 M10 최상위 모르는 칸은 context 와 함께여도 종전대로
 });
 
 // ── #5082 작업별 앱 지시(ai.instructions) ── 엣지 표 I1~I4
-test("I1·I3 ai.instructions — 선언한 작업 이름 → 묶음 안 상대 경로만 받는다(그대로 보존)", () => {
+//  parseAppManifest 는 모양(작업 이름 글 → 경로 글)만 본다 — 뜻(선언한 작업 · 상대 경로 · 파일)은 설치 · 판 저장 때 loader 가 본다(loader.test L1~L6).
+//   저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 옛 코어가 남긴 매니페스트로 400 이 되지 않게(격리 리뷰 N4).
+test("I1·I3 ai.instructions — 작업 이름 → 경로 글을 그대로 보존 · 선언이 없으면 없다", () => {
   const m = parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }, { name: "sum-up" }], instructions: { answer: "ai/answer.md", "sum-up": "prompts/s.txt" } } });
   assert.deepEqual(m.ai?.instructions, { answer: "ai/answer.md", "sum-up": "prompts/s.txt" });
   assert.equal(parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } }).ai?.instructions, undefined, "선언이 없으면 없다(종전 매니페스트 무회귀)");
-  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: { other: "ai/o.md" } } }), /ai\.instructions\.other.*ai\.jobs 에 선언한 작업 이름이 아닙니다/);
-  assert.throws(() => parseAppManifest({ ...base(), ai: { instructions: { answer: "ai/a.md" } } }), /ai\.jobs 에 선언한 작업 이름이 아닙니다/, "작업 선언 없이 지시만 두면 거절");
 });
 
-test("I2 ai.instructions 경로 — 앞 / · \\ · 빈 마디 · . · .. · 제어 글자 · 빈 값은 거절", () => {
-  for (const bad of ["/etc/passwd", "../x.md", "ai/../../x.md", "ai//x.md", "./ai/x.md", "ai/.", "a\\b.md", "ai/x\n.md", "ai/x\u0000.md"]) {
-    assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: { answer: bad } } }), /ai\.instructions\.answer/, JSON.stringify(bad));
+test("I2 다시 읽기는 뜻을 따지지 않는다 — 선언 안 한 작업 이름 · 묶음 밖 경로도 저장된 그대로 읽힌다(설치 · 판 저장에서 막는다) · 모양이 틀리면 거절", () => {
+  const stored = parseAppManifest({ ...base(), ai: { jobs: [], instructions: { gone: "../x.md" } } });
+  assert.deepEqual(stored.ai?.instructions, { gone: "../x.md" });
+  for (const bad of [{ answer: 3 }, ["ai/a.md"], "ai/a.md"]) {
+    assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: bad } }), /ai\.instructions/, JSON.stringify(bad));
   }
-  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: { answer: "" } } }), /ai\.instructions/);
 });
 
 test("I4 지시는 ai 바로 아래 자리다 — ai.jobs[] 안(strict)에 두면 거절(이 칸을 모르는 옛 코어가 ai 바로 아래는 무시한다 · 롤백 안전)", () => {

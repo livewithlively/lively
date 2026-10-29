@@ -13,7 +13,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
-import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, type LivelyAppManifest } from "./manifest.js";
+import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, type LivelyAppManifest, isPackageRelPath } from "./manifest.js";
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
 import { assertAppMcpToolsInstallable } from "./app-mcp-decl.js";
 import { hashAppPackage } from "./package-hash.js";
@@ -97,17 +97,26 @@ async function readRuntimeEntry(m: LivelyAppManifest, root: string): Promise<Loa
   return { entry: m.runtime.entry, code, code_hash: createHash("sha256").update(code).digest("hex") };
 }
 
-/** #5082 작업별 지시 파일 — 패키지 안의 파일 · 상한 이하 · UTF-8 글. 경로 꼴(상대 경로 · 마디)은 parseAppManifest 가 먼저 본다. */
+/**
+ * #5082 작업별 지시 파일 — 선언한 작업 이름(ai.jobs)만 · 묶음 안 상대 경로만 · 패키지 안의 파일 · 상한 이하 · 비지 않은 UTF-8 글.
+ *  뜻은 여기(설치 · 판 저장)서만 본다 — parseAppManifest 는 모양만 본다(저장된 매니페스트를 다시 읽는 자리를 막지 않게 · manifest.ts aiSchema 머리말).
+ */
 async function checkAiInstructions(m: LivelyAppManifest, root: string): Promise<void> {
+  const names = new Set((m.ai?.jobs ?? []).map((j) => j.name));
   for (const [job, rel] of Object.entries(m.ai?.instructions ?? {})) {
     const where = `ai.instructions.${job}`;
+    if (!names.has(job)) throw new HttpError(400, `매니페스트 오류 [${where}]: ai.jobs 에 선언한 작업 이름이 아닙니다`);
+    if (rel.length > 512 || !isPackageRelPath(rel)) throw new HttpError(400, `매니페스트 오류 [${where}]: 앱 묶음 안 상대 경로여야 합니다(예: ai/${job}.md)`);
     const abs = path.resolve(root, rel);
     if (!abs.startsWith(root + path.sep)) throw new HttpError(400, `${where} 가 패키지 밖을 가리킵니다: ${rel}`);
     let st;
     try { st = await stat(abs); } catch { throw new HttpError(400, `${where} 의 지시 파일이 없습니다: ${rel}`); }
     if (!st.isFile()) throw new HttpError(400, `${where} 가 파일이 아닙니다: ${rel}`);
     if (st.size > AI_INSTRUCTIONS_MAX_BYTES) throw new HttpError(400, `${where} 의 지시 파일이 너무 큽니다(${rel}, ${st.size}B > ${AI_INSTRUCTIONS_MAX_BYTES}B)`);
-    if (instructionsText(await readFile(abs)) === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글이 아닙니다: ${rel}`);
+    const text = instructionsText(await readFile(abs));
+    if (text === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글이 아닙니다: ${rel}`);
+    //  빈 지시는 «지시를 실었다» 가 아니다 — 비어도 선언이 있으면 작업 폴더 지시를 안 읽는 쪽으로 돌지만 단발엔 아무것도 안 실려 두 길이 갈린다(격리 리뷰 N1).
+    if (!text.trim()) throw new HttpError(400, `${where} 의 지시 파일이 비어 있습니다: ${rel}`);
   }
 }
 

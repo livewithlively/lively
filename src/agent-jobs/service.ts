@@ -72,8 +72,8 @@ export interface AgentJobDeps {
   /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
    *  at — 판이 보는 게이트웨이 주소와 실을 워크스페이스(#5082 paneView — 프록시도 그 아래 · 그 워크스페이스로). */
   jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
-  /** 하네스의 시스템 지시(#5082 앱 판 지시 — 그 작업에 붙은 AI 실행의 작업 이름이 ai.instructions 를 선언했으면 그 판 파일의 글). 없으면 null.
-   *  던지면 그 작업은 돌지 않는다(선언한 지시 없이 돌리지 않는다). */
+  /** 하네스의 시스템 지시(#5082 앱 판 지시 — 작업 행에 실린 글 · 앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적는다). 없으면 null.
+   *  던지면 그 작업은 돌지 않는다(실린 지시를 못 읽은 채 돌리지 않는다). */
   jobSystem?(job: AgentJobRow): Promise<string | null>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
@@ -376,7 +376,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //  #4488 — 하네스에 더 줄 env(API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 못 만들면 그 작업은 돌지 않는다(신원과 같은 규칙).
   //  #5082 — 판이 보는 자리(작업 폴더 · 게이트웨이 주소 · 워크스페이스)도 실행면이 준다. 박스 위 판은 작업 폴더가 박스 위 경로이고 게이트웨이가
   //   그 박스의 루프백 포트다 — MCP 와 LLM 프록시가 둘 다 그 아래다(자리를 먼저 구해 env 에 넘긴다).
-  //  #5082 — 앱 판 지시(ai.instructions)도 여기서 구한다. 못 구하면 신원 · env 와 같은 규칙(돌리지 않는다).
+  //  #5082 — 앱 판 지시(ai.instructions — 작업 행에 실린 글)도 여기서 읽는다. 못 읽으면 신원 · env 와 같은 규칙(돌리지 않는다).
   let env: Record<string, string> = {};
   let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
   let system: string | null = null;

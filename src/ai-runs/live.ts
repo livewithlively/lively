@@ -99,8 +99,9 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     },
     singleShot: async (key, i, signal) => (await import("./anthropic.js")).singleShot(key, i, signal),
     newProxyToken,
-    //  #5082 앱 판 지시 — 부른 사람의 판에서 그 작업 이름의 지시 파일(apps/app-job-instructions).
-    instructions: async (run) => (await import("../apps/app-job-instructions.js")).readJobInstructions(run.app_id, run.requester, run.job_name),
+    //  #5082 앱 판 지시 — 부른 사람(주소)의 판에서 그 작업 이름의 지시 파일(apps/app-job-instructions) · 형식 재시도는 원래 작업 행에 실린 글.
+    instructions: async (app, who, job) => (await import("../apps/app-job-instructions.js")).resolveJobInstructions(app, who, job),
+    jobInstructions: async (jobId) => (await import("../agent-jobs/store.js")).agentJobAppInstructions(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,
