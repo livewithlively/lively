@@ -1,90 +1,100 @@
-// admin-injection.ts — [세션 주입] 지도 패널 (#1313 R39, admin.ts 에서 분리).
-//  ⚠ 이 파일의 내부 구조는 **의도적으로 그대로 뒀다**. injectionMap 안의 조립 함수 대부분은 지역
-//   rc(runtimeConfig) · hooks · canEdit · data 를 클로저로 캡처한다. 그 캡처를 인자로 펴는 일(진짜 승격)은
-//   **별도 항목**이다 — 이동과 같은 커밋에서 하면 "옮기기만 했다"를 diff 로 확인할 수 없게 된다.
-//   이번엔 **캡처가 하나도 없는 조각만** 모듈 최상위로 올렸다(동작이 안 바뀜이 자명한 범위):
-//     HANDLED · jump · momentBlock · previewExpander · guideKey · SECTION_HINT · subPieceRow.
-//   나머지(saveRuntime·momentToggle·guideInjectToggle·customList·listEditor·pullToolsEditor·writebackEditor·
-//   openGuideViewer·openSectionEditor·reloadSections·orderedSections·moveSection·deleteSectionUi·paintSections)는
-//   캡처를 그대로 유지한 채 injectionMap 안에 남는다.
-import { api, busy, el, errorNote, renderMarkdown, state, toast, uiText } from './core.js';
-import { field, overlay } from './ui-primitives.js';
-import { sectionHead } from './admin-widgets.js';
+// admin-injection.ts — [세션 주입] 패널 (#1313 R39, admin.ts 에서 분리 · #5159 세부 페이지로 재조판).
+//  ⚠ injectionMap 안의 조립 함수 대부분은 지역 rc(runtimeConfig) · hooks · canEdit · data 를 클로저로 캡처한다.
+//   그 캡처를 인자로 펴는 일(진짜 승격)은 **별도 항목**이다. 캡처가 하나도 없는 조각만 모듈 최상위에 있다:
+//     HANDLED · jump · openPreview · guideKey · SECTION_HINT · tokenRow · hookRow · injectionStatus.
+//
+//  #5159(원준 2026-10-29) — "세로로 쭉 늘어져 있다 · 스크롤 안 해도 되게 · 레이아웃을 다시". 다섯 시점을 한 판에
+//   세로로 쌓던 것(실측 1440 폭에서 이 패널만 2,900px)을 **시점 하나 = 세부 페이지 하나**로 갈랐다. 왼쪽 목차는
+//   context-deliver.ts 가 그리고, 여기는 `only` 로 받은 시점 하나만 2단으로 그린다. 저장 경로·필드는 그대로다.
+import { api, busy, el, errorNote, renderMarkdown, replaceKids, state, toast, uiText } from './core.js';
+import { overlay } from './ui-primitives.js';
+import { dlvBox, dlvHead, dlvSwitch, dlvTitleN } from './lib/dlv.js';
 // 변경 이력(#1562) — 위키 문서 패널을 그대로 쓴다. 섹션은 knowledge 행이라 같은 엔드포인트가 덮고,
 //  서버가 org_section 축 감사까지 합쳐 준다(관리탭에서 한 편집과 위키에서 한 편집이 한 타임라인에 온다).
 import { openKnHistory } from './wiki-history.js';
 
-// 위 3시점(SessionStart·PostToolUse·Stop) — 이 목록 밖의 이벤트는 '기타 이벤트' 블록으로 모은다.
+// 위 3시점(SessionStart·PostToolUse·Stop) — 이 목록 밖의 이벤트는 '기타 이벤트' 페이지로 모은다.
 const HANDLED = ['SessionStart', 'PostToolUse', 'Stop'];
+
+/** 세부 페이지 키 — URL `#/context/deliver/<key>` 와 같다. */
+export type InjectionMoment = 'start' | 'work' | 'stop' | 'events' | 'kit';
 
 // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
 //  (#837 병합 후 필요해졌다: '커스텀 훅 편집 →'이 [스킬·훅] 화면엔 가지만 **스킬 탭**에 떨어지면
 //   사용자는 훅을 못 찾는다 — 링크가 가리킨 곳과 도착지가 달라진다.)
-const jump = (label, hash, tab?) => el('button', { class: 'btn btn-ghost btn-sm', text: label, onclick: () => {
+const jump = (label, hash, tab?) => el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: label, onclick: () => {
   if (tab) { state.admin.tab = state.admin.tab || {}; state.admin.tab[tab.section] = tab.key; }
   location.hash = hash;
 } });
+const HOOKS_TAB = { section: 'agent-assets', key: 'hooks' };
 
-function momentBlock(title, when, toggleEl, ...children) {
-  return el('div', { class: 'inj-moment' },
-    el('div', { class: 'inj-moment-head' },
-      el('div', { class: 'inj-moment-h' }, el('h3', { class: 'inj-moment-title', text: title }), el('div', { class: 'admin-hint inj-sub' }, ...uiText(when))),
-      toggleEl || el('span', {})),
-    ...children.filter(Boolean));
-}
-
-// ── 훅 주입 미리보기(V4-P5 J절) — 설치된 3 세션 훅이 각자 세션에 실제로 주입하는 최종 메시지를 보여준다. ──
+// ── 훅 주입 미리보기(V4-P5 J절) — 세션 시작 훅이 실제로 주입하는 최종 메시지. ──
 //  데이터 출처: GET /api/ui/org/hooks/preview (scope null = 인증만, REST 전용). 읽기 전용.
 //  보안: 모든 데이터 텍스트는 textContent(el text:)/renderMarkdown(createElement+textContent) 로만 — innerHTML 데이터주입 0.
-//  드리프트 정직성: 서버가 fidelity(exact/approximate)와 source 를 함께 주므로 그대로 표기(근사면 사유 명시).
-// 실제 주입 전문 미리보기(SessionStart) — 게이트웨이 조립물(byte-identical) 펼침.
-function previewExpander() {
-  const box = el('div', { class: 'inj-preview' }); box.style.display = 'none';
-  const btn = el('button', { class: 'btn btn-ghost btn-sm', text: '실제 주입되는 전문 미리보기 ▾' });
-  let loaded = false, open = false;
-  btn.addEventListener('click', async () => {
-    open = !open; box.style.display = open ? 'block' : 'none'; btn.textContent = open ? '미리보기 접기 ▴' : '실제 주입되는 전문 미리보기 ▾';
-    if (open && !loaded) {
-      loaded = true; busy(box, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
-      try {
-        const r = await api('/api/ui/org/hooks/preview');
-        const sp = ((r && r.hooks) || []).find((h) => h.id === 'session-preload');
-        box.replaceChildren(sp && sp.message
-          ? el('div', { class: 'md-rendered admin-md-box', style: 'max-height:340px; overflow:auto' }, renderMarkdown(sp.message))
-          : el('p', { class: 'admin-hint' }, ...uiText('미리볼 내용이 없습니다.')));
-      } catch (e) { box.replaceChildren(errorNote(e, '미리보기를 불러오지 못했습니다(서버 재시작 후 제공)')); }
-    }
-  });
-  return el('div', {}, el('div', { class: 'admin-actions' }, btn), box);
+//  #5159 — 펼침(본문 안 340px 상자)에서 창으로 옮겼다. 펼치면 페이지가 그만큼 길어지는데, 이 전문은 «가끔 확인»하는 것이다.
+function openPreview() {
+  const box = el('div', { class: 'md-rendered admin-md-box dlv-preview' });
+  busy(box, el('p', { class: 'admin-hint' }, ...uiText('주입 전문을 불러오는 중…')));
+  overlay('세션 시작에 주입되는 전문', el('div', { class: 'mem-modal' },
+    el('p', { class: 'admin-hint' }, ...uiText('게이트웨이가 지금 조립하는 내용 그대로입니다. 구성원 다음 세션에 이 글이 들어갑니다.')), box));
+  void (async () => {
+    try {
+      const r = await api('/api/ui/org/hooks/preview');
+      const sp = ((r && r.hooks) || []).find((h) => h.id === 'session-preload');
+      replaceKids(box, sp && sp.message ? renderMarkdown(sp.message) : el('p', { class: 'admin-hint' }, ...uiText('미리볼 내용이 없습니다.')));
+    } catch (e) { replaceKids(box, errorNote(e, '미리보기를 불러오지 못했습니다(서버 재시작 후 제공)')); }
+  })();
 }
 
-// 세션 시작 조각(#335) — 항상-주입 '섹션 문서'(injection='always' 행)를 N개 관리(추가/편집/삭제/재정렬). sort 순으로 조립.
+// 세션 시작 문서(#335) — 항상-주입 '섹션 문서'(injection='always' 행)를 N개 관리(추가/편집/삭제/재정렬). sort 순으로 조립.
 //  실제 순서(publish.ts): 조직 헤더(자동) → [섹션들 sort 순]. 각 섹션 본문의 ${team}/${categories}/${wiki} 는 매 세션 실데이터로 치환.
 const guideKey = 'context-ontology-guide';
 const SECTION_HINT = {
   'org-defaults': '회사 배경 + 항상 지킬 규칙 + AI 말투 (회사 소개·규칙·성격)',
   // #1245 — 제품 소유(잠금): 본문은 코드 단일 출처라 편집 불가, 릴리스마다 자동 갱신. org 는 주입 여부만 정한다.
-  'context-ontology-guide': 'LLM 이 라이블리 시스템(맥락·카테고리·프로젝트·지식) 사용법을 이해하는 핵심 문서 — 제품이 관리하며 업데이트마다 자동 갱신됩니다. 편집 불가, 주입 여부만 선택.',
+  'context-ontology-guide': 'AI 가 라이블리(맥락·카테고리·프로젝트·지식) 쓰는 법을 익히는 문서 — 제품이 관리하며 업데이트마다 자동 갱신됩니다.',
 };
-const subPieceRow = (token, label, sub, btn) => el('div', { class: 'inj-piece inj-subpiece' },
-  el('code', { class: 'inj-token', text: token }),
-  el('div', { class: 'inj-piece-body' },
-    el('div', { class: 'inj-piece-label', text: label }),
-    sub ? el('div', { class: 'admin-hint inj-sub' }, ...uiText(sub)) : null),
-  btn || el('span', {}));
+const tokenRow = (token, label, sub, btn?) => el('div', { class: 'dlv-token' },
+  el('code', { class: 'dlv-token-k', text: token }),
+  el('div', { class: 'dlv-token-b' }, el('b', { text: label }), el('span', { text: sub })),
+  btn || null);
 
-// ── 런타임 · 훅 (훅 on/off · work-roots · 너지 문구) — admin 전용 ──
-// 섹션(org-defaults·context-ontology-guide) 편집은 WIKI 지식 페이지(#/k/<name>)로 일원화(2026-06-26) — 모달 editSectionModal 폐기.
-//  이 섹션들은 injection=always knowledge 레코드라 WIKI 상세에서 직접 편집(openKnowledgeEditor). 섹션단위 미리보기도 불필요(허브 통합 미리보기로 충분).
+// 커스텀 훅 한 줄 — 이름(모노) · 하네스 · 매처. withEvent 면 이벤트 이름을 앞에 단다(기타 이벤트 페이지).
+function hookRow(h, withEvent = false) {
+  const meta = [withEvent ? h.event : null, h.harness || 'all', h.matcher || null].filter(Boolean).join(' · ');
+  return el('div', { class: 'dlv-hook' + (h.enabled === false ? ' off' : '') },
+    el('code', { class: 'dlv-hook-id', text: h.id }),
+    el('span', { class: 'dlv-hook-m', text: meta }),
+    h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null);
+}
+
+/** 왼쪽 목차의 상태 — 시점마다 켜짐 여부와 개수. 저장이 일어나면 context-deliver 가 다시 부른다. */
+export function injectionStatus(data): Record<InjectionMoment, { on: boolean | null; meta: string }> {
+  const rc = data.runtimeConfig || data.injectionConfig;
+  const hooks = (rc && rc.hooks) || {};
+  const orgHooks = data.orgHooks || [];
+  const n = (ev) => orgHooks.filter((h) => h.event === ev).length;
+  const hk = (k) => (k ? ' · 훅 ' + k : '');
+  return {
+    start: { on: hooks.session_preload !== false, meta: '문서 ' + Object.keys(data.sections || {}).length + hk(n('SessionStart')) },
+    work: { on: hooks.work_flag !== false, meta: hk(n('PostToolUse')).slice(3) },
+    stop: { on: hooks.stop_writeback_gate !== false, meta: hk(n('Stop')).slice(3) },
+    events: { on: null, meta: '훅 ' + orgHooks.filter((h) => !HANDLED.includes(h.event)).length },
+    kit: { on: hooks.self_update !== false, meta: '' },
+  };
+}
 
 // ════════════════════════════════════════════════════════════════════
-// 세션 주입 지도(2026-06-26) — 구 '훅' 그룹(개요·런타임 토글·주입 미리보기)을 흡수한 단일 허브.
+// 세션 주입(2026-06-26) — 구 '훅' 그룹(개요·런타임 토글·주입 미리보기)을 흡수한 단일 허브.
 //  AI가 매 세션 자동으로 [무엇을·언제] 받고 수행하나를 주입 시점(SessionStart·PostToolUse·Stop·기타)별로 모은다.
 //  맥락 조각의 편집은 정식 집(규칙·소개 섹션 / WIKI 탭)으로 딥링크 — 새 진실 출처를 만들지 않는다(맥락의 집은 그대로).
 //  여기서 인라인 편집하는 건 '전달' 설정뿐: 시점 ON/OFF · writeback 너지 · work-roots · 기록인정 툴.
 //  allowlist(SSRF) 는 'AI 도구'·'DB 데이터소스' 화면 안(allowlistCard)으로, 임의 코드 훅은 '커스텀 훅'으로 분리.
+//
+//  only 를 주면 그 시점 하나만 그린다(#5159 세부 페이지). 안 주면 다섯 시점을 차례로 쌓는다(옛 관리탭 자리 호환).
+//  onChange 는 켜고 끄기가 저장된 뒤 불린다 — 목차의 켜짐 점을 맞추는 데 쓴다.
 // ════════════════════════════════════════════════════════════════════
-function injectionMap(detail, data) {
+function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: () => void } = {}) {
   //  #4135(원준 2026-09-25) — 워크스페이스 안에서는 모두 같은 권한. 주입 설정은 구성원 누구나(org_injection_update · injectionConfig),
   //   관리자 몫은 구성원 컴퓨터에 닿는 둘뿐이다: 키트 자동 업데이트(self_update) · work_roots(디렉터리 경로).
   const isAdmin = !!data.canEdit;                // org_overview: canEdit = admin
@@ -103,58 +113,65 @@ function injectionMap(detail, data) {
     toast(okMsg || '저장됨 — 구성원 다음 세션부터 반영');
   }
 
-  // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존. label 을 주면 '주입' 외 토글(예: 자동 업데이트)에도 쓴다.
-  function momentToggle(hookKey, label?, onMsg?, offMsg?) {
-    const chk = el('input', { type: 'checkbox' }); chk.checked = hooks[hookKey] !== false; chk.disabled = !canEdit || (hookKey === 'self_update' && !isAdmin);
-    chk.addEventListener('change', async () => {
+  // 시점 ON/OFF — hooks JSON 전체를 보내 다른 시점 값 보존. what = 스위치가 켜고 끄는 것(스크린리더 이름).
+  function momentToggle(hookKey, what, onMsg, offMsg) {
+    const sw = dlvSwitch(hooks[hookKey] !== false, what, !canEdit || (hookKey === 'self_update' && !isAdmin));
+    sw.input.addEventListener('change', async () => {
+      const on = sw.input.checked;
       try {
-        await saveRuntime({ hooks: { ...hooks, [hookKey]: chk.checked } }, chk.checked ? (onMsg || '주입 켜짐') : (offMsg || '주입 꺼짐'));
-        hooks[hookKey] = chk.checked;
-      } catch (e) { toast(e.message, true); chk.checked = hooks[hookKey] !== false; }
+        await saveRuntime({ hooks: { ...hooks, [hookKey]: on } }, on ? onMsg : offMsg);
+        hooks[hookKey] = on;
+        // 구성원 저장은 injectionConfig 만 새로 오므로, 목차가 읽는 hooks 도 같은 객체로 맞춰 둔다.
+        if (rc && rc.hooks !== hooks) rc.hooks = hooks;
+        opts.onChange?.();
+      } catch (e) { toast(e.message, true); sw.set(hooks[hookKey] !== false); }
     });
-    return el('label', { class: 'admin-check inj-toggle' }, chk, label || ' 주입 켜기');
+    return sw.wrap;
   }
 
   // #1245 — 제품 소유 가이드(context-ontology-guide) 주입 토글. 본문은 코드 단일 출처(편집 불가)라 org 는 이것만 정한다.
   //  상태 소스: runtimeConfig(admin) 우선, 없으면 org_sections 의 injectOntologyGuide(read-only 표시용).
   function guideInjectToggle() {
     const cur = (rc ? rc.inject_ontology_guide : data.injectOntologyGuide) !== false;
-    const chk = el('input', { type: 'checkbox' }); chk.checked = cur; chk.disabled = !canEdit;
-    chk.addEventListener('change', async () => {
+    const sw = dlvSwitch(cur, '라이블리 사용 가이드 주입', !canEdit);
+    sw.input.addEventListener('change', async () => {
+      const on = sw.input.checked;
       try {
-        await saveRuntime({ inject_ontology_guide: chk.checked },
-          chk.checked ? '가이드 주입 켜짐 — 구성원 다음 세션부터' : '가이드 주입 꺼짐 — AI 가 라이블리 사용법(맥락·카테고리·지식 기록) 안내를 받지 못합니다');
-        if (rc) rc.inject_ontology_guide = chk.checked;
-        data.injectOntologyGuide = chk.checked;
-      } catch (e) { toast(e.message, true); chk.checked = !chk.checked; }
+        await saveRuntime({ inject_ontology_guide: on },
+          on ? '가이드 주입 켜짐 — 구성원 다음 세션부터' : '가이드 주입 꺼짐 — AI 가 라이블리 사용법(맥락·카테고리·지식 기록) 안내를 받지 못합니다');
+        if (rc) rc.inject_ontology_guide = on;
+        data.injectOntologyGuide = on;
+      } catch (e) { toast(e.message, true); sw.set(!on); }
     });
-    return el('label', { class: 'admin-check inj-toggle', title: '이 가이드를 매 세션 주입할지 여부' }, chk, ' 주입 켜기');
+    return sw.wrap;
   }
 
-  // 커스텀 훅 요약(읽기 전용) + 편집 딥링크.
-  function customList(ev) {
+  // 커스텀 훅(읽기 전용) + 편집 딥링크 — 시점 페이지 오른쪽 칸.
+  function hookBox(ev) {
     const list = customFor(ev);
-    const wrap = el('div', { class: 'inj-custom' });
-    if (list.length) wrap.append(el('div', { class: 'admin-hint' }, ...uiText('커스텀 훅')));
-    for (const h of list) wrap.append(el('div', { class: 'inj-custom-row' },
-      el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
-      el('span', { class: 'mini-meta', text: (h.harness || 'all') + (h.matcher ? ' · ' + h.matcher : '') })));
-    wrap.append(el('div', { class: 'admin-actions' }, jump(list.length ? '커스텀 ' + ev + ' 훅 편집 →' : '+ 커스텀 ' + ev + ' 훅', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
-    return wrap;
+    return dlvBox(dlvTitleN('커스텀 훅', list.length), '이 시점에 함께 도는, 코드로 정의한 훅입니다.',
+      list.length ? el('div', { class: 'dlv-hooks' }, ...list.map((h) => hookRow(h))) : el('p', { class: 'dlv-empty', text: '이 시점의 커스텀 훅은 없습니다.' }),
+      el('div', { class: 'dlv-box-acts' }, jump(list.length ? '훅 편집 →' : '+ 훅 추가', '#/system/agent-assets', HOOKS_TAB)));
   }
 
-  // 줄 단위 텍스트리스트 인라인 편집(work-roots / write_tools). hint 를 주면 라벨 아래 보조 설명으로 분리.
-  function listEditor(labelText, initial, fieldKey, ph, hint?) {
-    const ta = el('textarea', { rows: '3', placeholder: ph || '' }); ta.value = (initial || []).join('\n'); ta.disabled = !canEdit;
-    const btn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' }); if (!canEdit) btn.disabled = true;
+  // 저장 버튼 줄 — 상태 글자 + [저장]. canEdit 가 아니면 안 그린다.
+  function saveRow(onSave, ...extra) {
+    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '저장' });
     const st = el('span', { class: 'admin-status' });
     btn.addEventListener('click', async () => {
       btn.disabled = true;
-      try { await saveRuntime({ [fieldKey]: ta.value.split('\n').map((l) => l.trim()).filter(Boolean) }); st.textContent = '저장됨'; }
+      try { st.textContent = (await onSave()) || '저장됨'; }
       catch (e) { toast(e.message, true); }
       btn.disabled = false;
     });
-    return field(labelText, el('div', {}, hint ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText(hint)) : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
+    return { row: el('div', { class: 'dlv-box-acts' }, st, ...extra, btn), st };
+  }
+  const lines = (ta) => ta.value.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  // 줄 단위 텍스트리스트 인라인 편집(work-roots / write_tools).
+  function listEditor(title, hint, initial, fieldKey, ph) {
+    const ta = el('textarea', { rows: '4', placeholder: ph || '', 'aria-label': title }); ta.value = (initial || []).join('\n'); ta.disabled = !canEdit;
+    return dlvBox(title, hint, ta, canEdit ? saveRow(async () => { await saveRuntime({ [fieldKey]: lines(ta) }); }).row : null);
   }
 
   // #906/#959 pull_tools 전용 편집기 — 게이트웨이 프록시 MCP는 '+추가' 칩(org_mcp tools_snapshot에서 발견)으로,
@@ -163,32 +180,25 @@ function injectionMap(detail, data) {
   //  textarea = 전체 pull_tools 의 편집 가능한 단일 소스. 칩은 prefix 를 '추가'만(제거는 textarea에서).
   function pullToolsEditor() {
     const proxyServers = (data.mcpServers || []).filter((s) => s.mode === 'proxy' && s.enabled !== false);
-    const ta = el('textarea', { rows: '3', placeholder: 'mcp__lively__ext__   (비우면 이 기능 꺼짐)' });
+    const ta = el('textarea', { rows: '3', placeholder: 'mcp__lively__ext__   (비우면 이 기능 꺼짐)', 'aria-label': '외부 맥락 툴 접두어' });
     ta.value = ((rc && rc.pull_tools) || []).join('\n'); ta.disabled = !canEdit;
     const addPrefix = (p) => {
-      const lines = ta.value.split('\n').map((l) => l.trim()).filter(Boolean);
-      if (lines.includes(p)) { toast(p + ' 는 이미 있습니다'); return; }
-      lines.push(p); ta.value = lines.join('\n'); toast(p + ' 추가됨 — [저장]으로 확정');
+      const cur = lines(ta);
+      if (cur.includes(p)) { toast(p + ' 는 이미 있습니다'); return; }
+      cur.push(p); ta.value = cur.join('\n'); toast(p + ' 추가됨 — [저장]으로 확정');
     };
-    const chips = el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:4px 0' });
-    chips.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 전체 프록시 (mcp__lively__ext__)', onclick: () => addPrefix('mcp__lively__ext__') }));
-    for (const s of proxyServers) {
-      const n = (s.tools_snapshot || []).length;
-      chips.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ ' + s.name + (n ? ' (' + n + '개)' : ''), onclick: () => addPrefix('mcp__lively__ext__' + s.name + '__') }));
-    }
-    const btn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' }); if (!canEdit) btn.disabled = true;
-    const st = el('span', { class: 'admin-status' });
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      try { await saveRuntime({ pull_tools: ta.value.split('\n').map((l) => l.trim()).filter(Boolean) }); st.textContent = '저장됨'; }
-      catch (e) { toast(e.message, true); }
-      btn.disabled = false;
-    });
-    return field('외부 인입 툴(pull_tools) — 외부 맥락을 가져온 세션에 기록 너지',
-      el('div', {},
-        el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText('이 MCP 툴 prefix 로 시작하는 툴을 쓰면 "외부 맥락을 가져왔다"로 보고, 라이블리에 기록 없이 세션을 끝내면 너지합니다. 비우면 이 기능이 꺼집니다.')),
-        canEdit ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText('아래 버튼으로 게이트웨이에 등록된 외부 MCP(프록시)를 추가하세요. 게이트웨이 밖의 자체설치 MCP(예: 구성원이 직접 붙인 Notion MCP)는 그 툴이름 prefix(예: mcp__notion__)를 아래 칸에 직접 적으면 세션 시작 훅이 자동으로 매처를 배선해 커버합니다(#959) — 게이트웨이에 다시 설치할 필요 없습니다.')) : null,
-        canEdit ? chips : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
+    const chip = (text, p) => el('button', { class: 'dlv-chip', type: 'button', text, onclick: () => addPrefix(p) });
+    const chips = el('div', { class: 'dlv-chips' },
+      chip('+ 전체 프록시', 'mcp__lively__ext__'),
+      ...proxyServers.map((s) => {
+        const n = (s.tools_snapshot || []).length;
+        return chip('+ ' + s.name + (n ? ' ' + n : ''), 'mcp__lively__ext__' + s.name + '__');
+      }));
+    // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 힌트에 명시. 값이 곧 on/off + 범위다.
+    return dlvBox('외부 맥락 툴', '이 접두어로 시작하는 MCP 툴을 쓰고 기록 없이 끝내면 기록을 권합니다. 비우면 꺼집니다.',
+      canEdit ? chips : null, ta,
+      canEdit ? el('p', { class: 'dlv-note' }, ...uiText('게이트웨이 밖에서 직접 붙인 MCP 는 그 툴 접두어(예: mcp__notion__)를 그대로 적습니다 — 세션 시작 훅이 알아서 배선합니다(#959).')) : null,
+      canEdit ? saveRow(async () => { await saveRuntime({ pull_tools: lines(ta) }); }).row : null);
   }
 
   // 세션종료 너지 문구 — 기본값(서버 단일소스 data.writebackNoticeDefault)을 실제로 보여준다(숨은 파일 기본값 X).
@@ -196,24 +206,26 @@ function injectionMap(detail, data) {
   function writebackEditor() {
     const def = (data.writebackNoticeDefault || '').trim();
     const cur = (rc && rc.writeback_notice) || '';
-    const ta = el('textarea', { rows: '12', placeholder: def }); ta.value = cur || def; ta.disabled = !canEdit;
-    const btn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' }); if (!canEdit) btn.disabled = true;
-    const resetBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '기본값으로 되돌리기' }); if (!canEdit) resetBtn.disabled = true;
-    const st = el('span', { class: 'admin-status', text: cur ? '커스텀 너지 사용 중' : '기본값 사용 중' });
-    resetBtn.addEventListener('click', () => { ta.value = def; st.replaceChildren(...uiText('기본값을 불러왔어요 — [저장]으로 확정')); });
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      const v = ta.value.trim();
-      const payload = (!v || v === def) ? null : v; // 비었거나 기본값과 동일 → null(기본값 사용)
-      try { await saveRuntime({ writeback_notice: payload }); if (rc) rc.writeback_notice = payload; st.textContent = payload ? '저장됨 · 커스텀 너지' : '저장됨 · 기본값 사용'; }
-      catch (e) { toast(e.message, true); }
-      btn.disabled = false;
-    });
-    return field('세션 종료 너지 문구 — 기본값이 채워져 있음(비우거나 기본값과 같으면 기본값 사용)',
-      el('div', {}, ta, el('div', { class: 'admin-actions' }, btn, resetBtn, st)));
+    const ta = el('textarea', { class: 'dlv-ta-tall', rows: '14', placeholder: def, 'aria-label': '기록을 권하는 문구' }); ta.value = cur || def; ta.disabled = !canEdit;
+    const tag = el('span', { class: 'dlv-n', text: cur ? '직접 쓴 문구' : '기본 문구' });
+    let row: any = null;
+    if (canEdit) {
+      const resetBtn = el('button', { class: 'btn btn-text', type: 'button', text: '기본 문구로 되돌리기' });
+      const sr = saveRow(async () => {
+        const v = ta.value.trim();
+        const payload = (!v || v === def) ? null : v; // 비었거나 기본값과 동일 → null(기본값 사용)
+        await saveRuntime({ writeback_notice: payload });
+        if (rc) rc.writeback_notice = payload;
+        tag.textContent = payload ? '직접 쓴 문구' : '기본 문구';
+        return '저장됨';
+      }, resetBtn);
+      resetBtn.addEventListener('click', () => { ta.value = def; sr.st.replaceChildren(...uiText('기본 문구를 불러왔습니다 — [저장]으로 확정')); });
+      row = sr.row;
+    }
+    return dlvBox([el('span', { text: '기록을 권하는 문구' }), tag], '비우거나 기본 문구와 같게 저장하면 기본 문구를 씁니다.', ta, row);
   }
 
-  // ── 블록 조립 ── (섹션 조각의 상수·순수 조립기 guideKey·SECTION_HINT·subPieceRow 는 모듈 최상위)
+  // ── 세션 시작 문서 목록 ── (상수·순수 조립기 guideKey·SECTION_HINT·tokenRow 는 모듈 최상위)
   // #1245 — 제품 소유 가이드 읽기 전용 뷰어. 본문은 sectionsPayload 가 항상 코드 기본값으로 채워 보낸다(실주입과 동일).
   function openGuideViewer(name) {
     const cur = (data.sections && data.sections[name]) || { body_md: '' };
@@ -240,27 +252,27 @@ function injectionMap(detail, data) {
   }
 
   // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
-  function openSectionEditor(name, opts) {
-    opts = opts || {};
-    const isNew = !!opts.isNew;
+  function openSectionEditor(name, sopts) {
+    sopts = sopts || {};
+    const isNew = !!sopts.isNew;
     if (!isNew && name === guideKey) { openGuideViewer(name); return; } // #1245 — 잠금 섹션은 편집기 대신 뷰어(서버도 409 로 차단)
     const cur = (data.sections && data.sections[name]) || { body_md: '' };
-    const nameIn = el('input', { type: 'text', value: name || '', placeholder: '섹션 키 (소문자·숫자·하이픈, 예: company-policy)' });
+    const nameIn = el('input', { type: 'text', value: name || '', placeholder: '문서 키 (소문자·숫자·하이픈, 예: company-policy)' });
     if (!isNew) nameIn.disabled = true;
     const ta = el('textarea', { class: 'mem-edit-ta', rows: '18', placeholder: 'markdown 본문 — ${team}/${categories}/${wiki} 치환 가능' });
     ta.value = cur.body_md || '';
     const st = el('span', { class: 'admin-status' });
-    const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
+    const saveBtn = el('button', { class: 'btn btn-primary', type: 'button', text: isNew ? '추가' : '저장' });
+    const label = (t) => el('label', { class: 'field-label', text: t });
     const root = el('div', { class: 'mem-modal' },
-      isNew ? field('섹션 키', nameIn) : null,
-      name === guideKey ? el('p', { class: 'admin-hint' }, ...uiText('⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.')) : null,
-      field('본문 (markdown)', ta),
+      isNew ? el('div', { class: 'field' }, label('문서 키'), nameIn) : null,
+      el('div', { class: 'field' }, label('본문 (markdown)'), ta),
       // 기존 섹션에만 이력 — 아직 만들지 않은 문서에는 되돌아갈 버전이 없다.
       el('div', { class: 'admin-actions' }, saveBtn, isNew ? null : historyBtn(name, cur, canEdit), st));
-    const back = overlay(isNew ? '섹션 추가' : ('섹션 편집 · ' + name), root);
+    const back = overlay(isNew ? '주입 문서 추가' : ('주입 문서 편집 · ' + name), root);
     saveBtn.onclick = async () => {
       const section = (isNew ? nameIn.value : name).trim().toLowerCase();
-      if (!section) { toast('섹션 키를 입력하세요', true); return; }
+      if (!section) { toast('문서 키를 입력하세요', true); return; }
       saveBtn.disabled = true; st.textContent = '저장 중…';
       try {
         await api('/api/ui/org/section', { method: 'POST', body: JSON.stringify({ section, body_md: ta.value }) });
@@ -271,6 +283,7 @@ function injectionMap(detail, data) {
   async function reloadSections() {
     try { const r = await api('/api/ui/org'); if (r && r.sections) data.sections = r.sections; } catch (_) { /* 유지 */ }
     paintSections();
+    opts.onChange?.();
   }
   function orderedSections() {
     return Object.entries(data.sections || {}).map(([name, s]) => ({ name, ...(s as any) }))
@@ -287,98 +300,129 @@ function injectionMap(detail, data) {
   async function deleteSectionUi(s) {
     // #1245 — 가이드 행 삭제는 이제 무영향(본문은 코드 소유·행 무시)이라 특수 경고 불요. 가이드 행엔 삭제 버튼 자체를 안 그린다.
     //  #3778 — 이 말이 이제 참이다: 서버가 지식과 같은 길로 지워 휴지통 ▸ 지식 탭에 선다(종전엔 말만 하고 휴지통에 안 섰다).
-    if (!confirm("'" + s.name + "' 섹션을 삭제할까요?\n\n매 세션 주입에서 사라집니다. 휴지통 ▸ 지식 탭에서 되살릴 수 있어요(되살리면 다시 주입됩니다).")) return;
+    if (!confirm("'" + s.name + "' 문서를 삭제할까요?\n\n매 세션 주입에서 사라집니다. 휴지통 ▸ 지식 탭에서 되살릴 수 있어요(되살리면 다시 주입됩니다).")) return;
     try { await api('/api/ui/org/section/delete', { method: 'POST', body: JSON.stringify({ section: s.name }) }); toast('삭제됨'); await reloadSections(); }
     catch (e) { toast(e.message, true); }
   }
-  const sectionsWrap = el('div', { class: 'inj-pieces' });
+  const ib = (text, title, onclick, disabled = false) => {
+    const b = el('button', { class: 'dlv-ib', type: 'button', text, title, 'aria-label': title, onclick });
+    b.disabled = disabled; return b;
+  };
+  const sectionsWrap = el('div', { class: 'dlv-list' });
+  const docCount = el('span', { class: 'dlv-n' });
   function paintSections() {
     const entries = orderedSections();
+    docCount.textContent = String(entries.length);   // 조직 헤더(자동)는 세지 않는다 — 목차의 「문서 n」과 같은 수
     const rows = entries.map((s, i) => {
       const isGuide = s.name === guideKey;
       const acts: any[] = [];
-      if (isGuide) {
-        // #1245 — 제품 소유(잠금): 편집·삭제 없음. [보기] + 주입 토글만. 재정렬(▲▼)은 실제 DB 행이 있을 때만
-        //  의미가 있다(행 없으면 말미 렌더라 sort 대상이 없다 — sections/order 가 만질 행도 없다).
-        const view = el('button', { class: 'btn btn-ghost btn-sm', text: '보기' }); view.onclick = () => openGuideViewer(s.name);
-        if (canEdit && (s.version || 0) > 0) {
-          const up = el('button', { class: 'btn btn-ghost btn-sm', text: '▲', title: '위로' }); up.disabled = i === 0; up.onclick = () => moveSection(i, -1);
-          const down = el('button', { class: 'btn btn-ghost btn-sm', text: '▼', title: '아래로' }); down.disabled = i === entries.length - 1; down.onclick = () => moveSection(i, +1);
-          acts.push(up, down);
-        }
-        acts.push(view, guideInjectToggle());
-      } else if (canEdit) {
-        const up = el('button', { class: 'btn btn-ghost btn-sm', text: '▲', title: '위로' }); up.disabled = i === 0; up.onclick = () => moveSection(i, -1);
-        const down = el('button', { class: 'btn btn-ghost btn-sm', text: '▼', title: '아래로' }); down.disabled = i === entries.length - 1; down.onclick = () => moveSection(i, +1);
-        const ed = el('button', { class: 'btn btn-ghost btn-sm', text: '편집' }); ed.onclick = () => openSectionEditor(s.name, {});
-        const del = el('button', { class: 'btn btn-ghost btn-sm', text: '삭제' }); del.onclick = () => deleteSectionUi(s);
-        acts.push(up, down, ed, del);
+      //  재정렬(▲▼) — 가이드는 실제 DB 행이 있을 때만 의미가 있다(행 없으면 말미 렌더라 sort 대상이 없다).
+      if (canEdit && (!isGuide || (s.version || 0) > 0)) {
+        acts.push(ib('↑', '위로', () => moveSection(i, -1), i === 0), ib('↓', '아래로', () => moveSection(i, +1), i === entries.length - 1));
       }
-      return el('div', { class: 'inj-piece' },
-        el('span', { class: 'inj-n', text: String(i + 1) }),
-        el('div', { class: 'inj-piece-body' },
-          el('div', { class: 'inj-piece-label' }, s.name, isGuide ? el('span', { class: 'pill', title: '제품 소유 — 코드 단일 출처, 업데이트마다 자동 갱신 (편집 불가)', text: ' 제품 소유 · 자동 갱신' }) : null),
-          el('div', { class: 'admin-hint inj-sub', text: SECTION_HINT[s.name] || ('v' + (s.version || 1) + ' · 갱신 ' + (s.updated_by || '—')) })),
-        el('div', { class: 'admin-actions' }, ...acts));
+      if (isGuide) {
+        // #1245 — 제품 소유(잠금): 편집·삭제 없음. [보기] + 주입 토글만.
+        acts.push(el('button', { class: 'btn btn-text', type: 'button', text: '보기', onclick: () => openGuideViewer(s.name) }), guideInjectToggle());
+      } else if (canEdit) {
+        acts.push(el('button', { class: 'btn btn-text', type: 'button', text: '편집', onclick: () => openSectionEditor(s.name, {}) }),
+          el('button', { class: 'btn btn-text btn-text-danger', type: 'button', text: '삭제', onclick: () => deleteSectionUi(s) }));
+      }
+      return el('div', { class: 'dlv-row' },
+        el('span', { class: 'dlv-row-n', text: String(i + 1) }),
+        el('div', { class: 'dlv-row-b' },
+          el('div', { class: 'dlv-row-t' }, el('span', { text: s.name }), isGuide ? el('span', { class: 'pill', title: '제품 소유 — 코드 단일 출처, 업데이트마다 자동 갱신 (편집 불가)', text: '제품 소유' }) : null),
+          el('div', { class: 'dlv-row-s', text: SECTION_HINT[s.name] || ('v' + (s.version || 1) + ' · 갱신 ' + (s.updated_by || '—')) })),
+        el('div', { class: 'dlv-row-a' }, ...acts));
     });
-    sectionsWrap.replaceChildren(
-      ...rows,
-      canEdit ? el('div', { class: 'admin-actions inj-add' }, el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 섹션 추가', onclick: () => openSectionEditor('', { isNew: true }) })) : el('span', {}),
-      el('div', { class: 'inj-subpieces' },
-        el('div', { class: 'admin-hint inj-sub' }, ...uiText('└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):')),
-        subPieceRow('${team}', '우리 팀', '보는 구성원이 속한 팀 이름 — 자동', null),
-        subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동', null),
-        subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) — 자동', jump('WIKI 인덱스 →', '#/knowledge?indexed=1'))));
+    replaceKids(sectionsWrap,
+      el('div', { class: 'dlv-row dlv-row-auto' },
+        el('span', { class: 'dlv-row-n', text: '0' }),
+        el('div', { class: 'dlv-row-b' }, el('div', { class: 'dlv-row-t', text: '조직 헤더' }), el('div', { class: 'dlv-row-s', text: '조직 이름 · 지금 접속한 사람 — 자동으로 맨 앞에 붙습니다.' }))),
+      ...rows);
   }
   paintSections();
 
-  const ssBlock = momentBlock('세션 시작 — SessionStart', '세션이 시작될 때 조직 컨텍스트를 자동으로 주입합니다 — 맨 위 조직 헤더(자동) 다음에 아래 섹션 문서들이 sort 순으로 조립됩니다. 추가/편집/삭제/재정렬 가능.',
-    momentToggle('session_preload'),
-    sectionsWrap,
-    previewExpander(),
-    customList('SessionStart'));
+  // ── 시점별 세부 페이지 ──
+  const pages: Record<InjectionMoment, () => HTMLElement> = {
+    start: () => el('div', { class: 'dlv-page' },
+      dlvHead('세션 시작', '세션이 열릴 때 조직 헤더 다음에 아래 문서들을 순서대로 넣습니다.', {
+        event: 'SessionStart',
+        right: momentToggle('session_preload', '세션 시작 주입', '주입 켜짐', '주입 꺼짐 — 구성원 세션이 조직 맥락 없이 시작합니다'),
+      }),
+      el('div', { class: 'dlv-grid' },
+        el('div', { class: 'dlv-col' },
+          dlvBox([el('span', { text: '주입 문서' }), docCount], null, sectionsWrap,
+            el('div', { class: 'dlv-box-acts' },
+              el('button', { class: 'btn btn-text', type: 'button', text: '실제 주입 전문 보기', onclick: openPreview }),
+              canEdit ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 문서 추가', onclick: () => openSectionEditor('', { isNew: true }) }) : null)),
+          dlvBox('자동으로 채워지는 값', '문서 본문의 ${ } 자리에 매 세션 실제 데이터가 들어갑니다.',
+            el('div', { class: 'dlv-tokens' },
+              tokenRow('${team}', '우리 팀', '보는 사람이 속한 팀 이름'),
+              tokenRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록'),
+              tokenRow('${wiki}', 'WIKI 인덱스', '핀 꽂은 지식의 제목·소환키(본문 제외)',
+                el('a', { class: 'dlv-link', href: '#/knowledge?indexed=1', text: '핀 보기 →' }))))),
+        el('div', { class: 'dlv-col' }, hookBox('SessionStart')))),
 
-  const ptuBlock = momentBlock('작업 중 — PostToolUse', '도구 사용 후 라이블리 작업 세션인지 플래그를 남긴다(주입 없음 · 종료 너지 판정에 사용).',
-    momentToggle('work_flag', ' 감지 켜기', '감지 켜짐', '감지 꺼짐'),
-    canEdit && isAdmin ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
-    canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 사용한 세션에는 종료 너지를 보내지 않습니다 · 비우면 기본 목록 사용', rc.write_tools, 'write_tools', 'knowledge_save') : null,
-    // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 라벨에 명시. 값이 곧 on/off + 범위다.
-    pullToolsEditor(),
-    customList('PostToolUse'));
+    work: () => el('div', { class: 'dlv-page' },
+      dlvHead('작업 중', '도구를 쓸 때마다 라이블리 작업 세션인지 표시합니다. 주입은 없고, 세션 종료 때 기록을 권할지 판단하는 데 씁니다.', {
+        event: 'PostToolUse',
+        right: momentToggle('work_flag', '작업 감지', '감지 켜짐', '감지 꺼짐'),
+      }),
+      el('div', { class: 'dlv-grid dlv-grid-2' },
+        canEdit && isAdmin ? listEditor('작업 폴더 (work-roots)', '이 폴더에서 켠 세션을 라이블리 작업으로 봅니다. 한 줄에 절대경로 하나.', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
+        canEdit ? listEditor('기록으로 치는 툴 (write_tools)', '이 lively 툴을 쓴 세션에는 종료 때 기록을 권하지 않습니다. 비우면 기본 목록을 씁니다.', rc.write_tools, 'write_tools', 'knowledge_save') : null,
+        pullToolsEditor(),
+        hookBox('PostToolUse'))),
 
-  const stopBlock = momentBlock('세션 종료 — Stop', '작업했는데 기록이 없으면(조건 충족 시 1회) 기록을 권하는 너지 문구를 표시합니다.',
-    momentToggle('stop_writeback_gate', ' 너지 켜기', '너지 켜짐', '너지 꺼짐'),
-    canEdit ? writebackEditor() : null,
-    customList('Stop'));
+    stop: () => el('div', { class: 'dlv-page' },
+      dlvHead('세션 종료', '작업했는데 라이블리에 남긴 기록이 없으면, 끝날 때 한 번 기록을 권합니다.', {
+        event: 'Stop',
+        right: momentToggle('stop_writeback_gate', '기록 권유', '기록 권유 켜짐', '기록 권유 꺼짐'),
+      }),
+      el('div', { class: 'dlv-grid' },
+        el('div', { class: 'dlv-col' }, writebackEditor()),
+        el('div', { class: 'dlv-col' },
+          dlvBox('언제 뜨나', null, el('ol', { class: 'dlv-steps' },
+            el('li', { text: '[작업 중] 감지가 이 세션을 라이블리 작업으로 표시했고' }),
+            el('li', { text: '기록으로 치는 툴을 한 번도 쓰지 않았으면' }),
+            el('li', { text: '세션이 끝날 때 위 문구를 한 번 보여 줍니다.' }))),
+          hookBox('Stop')))),
 
-  // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 지도에 둔다.
-  //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).
-  const updBlock = momentBlock('키트 자동 업데이트 — SessionStart(백그라운드)',
-    '구성원 컴퓨터의 라이블리 키트(훅 코드·연결 설정)를 게이트웨이 최신본과 동기화합니다. 세션 시작 시 버전만 비교하고, 다르면 백그라운드로 내려받아 재설치합니다 → 다음 세션부터 적용(현재 세션은 방해하지 않음). 회사 맥락·스킬은 이 토글과 무관하게 매 세션 자동으로 적용됩니다.',
-    momentToggle('self_update', ' 자동 업데이트 켜기', '자동 업데이트 켜짐 — 구성원 다음 세션부터', '자동 업데이트 꺼짐 — 구성원이 직접 업데이트 명령을 실행해야 합니다'),
-    el('p', { class: 'admin-hint inj-sub' }, ...uiText('끄면 훅 코드·연결 설정 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 설정합니다.')),
-    isAdmin ? null : el('p', { class: 'admin-hint inj-sub' }, ...uiText('이 스위치는 구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다.')));
+    // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 목차에 둔다.
+    //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).
+    kit: () => el('div', { class: 'dlv-page' },
+      dlvHead('키트 자동 업데이트', '구성원 컴퓨터의 라이블리 키트(훅 코드·연결 설정)를 게이트웨이 최신본에 맞춥니다.', {
+        event: 'SessionStart · 백그라운드',
+        right: momentToggle('self_update', '키트 자동 업데이트', '자동 업데이트 켜짐 — 구성원 다음 세션부터', '자동 업데이트 꺼짐 — 구성원이 직접 업데이트 명령을 실행해야 합니다'),
+      }),
+      el('div', { class: 'dlv-grid dlv-grid-2' },
+        dlvBox('켜 두면', null, el('ol', { class: 'dlv-steps' },
+          el('li', { text: '세션이 시작될 때 키트 버전만 비교합니다.' }),
+          el('li', { text: '다르면 백그라운드로 내려받아 다시 설치합니다 — 지금 세션은 방해하지 않습니다.' }),
+          el('li', { text: '다음 세션부터 새 훅·연결 설정이 적용됩니다.' }))),
+        dlvBox('꺼 두면', null,
+          el('p', { class: 'dlv-p' }, ...uiText('훅 코드·연결 설정 변경이 구성원에게 전달되지 않습니다. 구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 합니다.')),
+          el('p', { class: 'dlv-note' }, ...uiText('회사 맥락·스킬은 이 스위치와 무관하게 매 세션 적용됩니다. 구성원 한 사람만 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 씁니다.')),
+          isAdmin ? null : el('p', { class: 'dlv-note' }, ...uiText('구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다.'))))),
 
-  // 기타 이벤트 — 위 3시점 외 커스텀 훅.
-  const otherHooks = orgHooks.filter((h) => !HANDLED.includes(h.event));
-  const otherBlock = el('div', { class: 'inj-moment' },
-    el('div', { class: 'inj-moment-head' }, el('div', { class: 'inj-moment-h' },
-      el('h3', { class: 'inj-moment-title', text: '기타 이벤트' }),
-      el('div', { class: 'admin-hint inj-sub' }, ...uiText('UserPromptSubmit · Pre/PostToolUse 매처 · SubagentStop · Notification 등 — 코드로 정의하는 커스텀 훅.')))),
-    otherHooks.length
-      ? el('div', { class: 'inj-custom' }, ...otherHooks.map((h) => el('div', { class: 'inj-custom-row' },
-          el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
-          el('span', { class: 'mini-meta', text: h.event + ' · ' + (h.harness || 'all') }))))
-      : null,
-    el('div', { class: 'admin-actions' }, jump((data.orgHooks || []).length ? '커스텀 훅 전체 관리 →' : '+ 커스텀 훅 정의', '#/system/agent-assets', { section: 'agent-assets', key: 'hooks' })));
+    // 기타 이벤트 — 위 3시점 외 커스텀 훅. 이벤트 순으로 묶어 두 칸에 흘린다.
+    events: () => {
+      const other = orgHooks.filter((h) => !HANDLED.includes(h.event))
+        .slice().sort((a, b) => String(a.event).localeCompare(String(b.event)) || String(a.id).localeCompare(String(b.id)));
+      return el('div', { class: 'dlv-page' },
+        dlvHead('기타 이벤트', 'UserPromptSubmit · PreToolUse · SubagentStop · Notification 처럼 세 시점 밖에서 도는, 코드로 정의한 훅입니다.', {
+          right: jump(orgHooks.length ? '커스텀 훅 관리 →' : '+ 커스텀 훅 정의', '#/system/agent-assets', HOOKS_TAB),
+        }),
+        other.length
+          ? el('div', { class: 'dlv-box dlv-hooks dlv-hooks-2' }, ...other.map((h) => hookRow(h, true)))
+          : el('div', { class: 'dlv-box' }, el('p', { class: 'dlv-empty', text: '세 시점 밖의 커스텀 훅은 없습니다. 필요하면 [스킬 · 훅]에서 정의합니다.' })));
+    },
+  };
 
-  // 바깥 박스 제거(#req): 각 .inj-moment 가 이미 테두리 있는 '구획'이라 .card 하나로 더 감싸면 박스-속-박스다.
-  //  me-logins 처럼 제목(sectionHead)은 박스 밖, 구획들은 스택(admin-stack)으로 바로 나열한다.
-  detail.replaceChildren(
-    sectionHead('세션 주입', '이 조직의 AI가 매 세션을 시작할 때 무엇을 자동으로 읽는지 정합니다.'),
-    el('div', { class: 'admin-stack' },
-      !rc ? el('p', { class: 'admin-hint' }, ...uiText('※ 주입 설정을 불러오지 못해 보기 전용입니다. 아래는 편집 위치로의 이동만 동작합니다.')) : null,
-      el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, updBlock, otherBlock)));
+  const order: InjectionMoment[] = ['start', 'work', 'stop', 'kit', 'events'];
+  replaceKids(detail,
+    !rc ? el('p', { class: 'admin-warn' }, ...uiText('주입 설정을 불러오지 못해 보기 전용입니다. 편집 위치로의 이동만 동작합니다.')) : null,
+    ...(opts.only ? [pages[opts.only]()] : order.map((k) => pages[k]())));
 }
 
 export {
