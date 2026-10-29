@@ -191,7 +191,7 @@ export async function callAppDeclaredTool(ref: CallRef, rawArgs: unknown, extra:
       },
       ...(signal ? { signal } : {}),
     });
-    const r = renderToolResultText(out?.data);
+    const r = renderToolResultText(out?.data, undefined, out?.truncatedFrom);
     return { content: [{ type: "text", text: r.text }], ...(r.truncated ? { _meta: { "lively/truncated": true, "lively/bytes": r.bytes } } : {}) };
   } catch (e) {
     if (e instanceof HttpError) return toolError(e.message, typeof e.body?.code === "string" ? e.body.code : `http_${e.status}`);

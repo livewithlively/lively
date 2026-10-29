@@ -252,7 +252,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
   registerAppFrontRoutes(app);
   // ── 앱 백그라운드 작업의 콜백(#4486 v2-7) — /api/app-jobs/:id/{claim,tick,result}. 함수 안 검사 층이 부른다(사람 로그인이 아니라
-  //  그 함수의 앱 서버 토큰 + 작업 비밀). 본문은 apps/app-jobs-routes.ts.
+  //  그 함수의 앱 서버 토큰 + 작업 비밀). #5053 AI 도구 동기 부르기의 시작 확인 /api/app-calls/:id/claim 도 같은 자격. 본문은 apps/app-jobs-routes.ts.
   registerAppJobRoutes(app, verifier);
 
   // IdP 로 로그인한 세션이면 redirect(IdP 로그아웃 문)를 함께 준다 — 브라우저가 그리로 가야 IdP 세션까지 끝난다.

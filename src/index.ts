@@ -44,6 +44,7 @@ import { readStageSync } from "./ops/stage-sync-status.js";   // #2116 — dev �
 import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy, diskThresholds } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
+import { registerServerExecutor } from "./apps/app-mcp-server-executor.js";   // #5053 앱 선언 MCP 도구의 server 실행기
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
 import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
 import { loadEnterprise } from "./enterprise/load.js";
@@ -254,6 +255,8 @@ app.use(oauthAuthorizationServer());
 
 // MCP 전송 계층 — /mcp POST/GET/DELETE + 요청별 서버 조립(무상태/sessioned). 본문·불변식은 boot/mcp-transport.ts.
 registerMcpTransport(app, auth);
+// 앱이 선언한 MCP 도구의 실행기(#5050 틀 · #5053 server) — 설치 검사 · 목록 · 부르기가 이 등록부를 본다(한 번만).
+registerServerExecutor();
 
 // 멤버 설치 — 토큰게이트 curl 모델(git clone 대체). 인증된 멤버 토큰이면 그 조직의 발행 아티팩트를
 //  tar.gz 로 동적 생성해 스트림한다(kit generator 의 buildKitBundle 을 in-process 로 불러 부트스트랩만 조립 → tar —

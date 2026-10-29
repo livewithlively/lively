@@ -176,6 +176,11 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 작업 행은 그 워크스페이스 것이다(RLS).
   { key: "app-job-prune", intervalMs: SIX_HOURS_MS,
     run: () => import("../apps/app-jobs.js").then((m) => m.pruneAppJobRecords()) },
+  // 앱 서버 동기 부르기 기록(#5053 앱 v2-42 — 앱이 선언한 MCP 도구) — 게이트웨이가 끝맺지 못한 부르기(답을 기다리다 교대 · 재시작)를 닫고,
+  //  끝난 지 7일(CALL_KEEP_DAYS)이 지난 행을 지운다. 돌기 신원은 그 전에도 수명 판정이 막는다 — 이것은 기록 정리다. DB 행만(파괴적 동작 없음).
+  //  ⚠ 테넌트 스코프 — 부르기 행은 그 워크스페이스 것이다(RLS).
+  { key: "app-call-sweep", intervalMs: TEN_MIN_MS,
+    run: () => import("../apps/app-server-call.js").then((m) => m.sweepAppCalls()) },
   // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,

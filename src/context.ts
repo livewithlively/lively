@@ -31,6 +31,9 @@ export interface LivelyUser {
   // 앱 백그라운드 작업 안에서 온 호출이면 그 작업 번호(#4486) — 앱의 SDK 가 «돌기 신원» 을 실어 부른 것(apps/app-jobs.ts resolveJobRunPrincipal).
   //  그때 userId 는 작업을 시작한 사람이고 appServer 도 true 다. 작업이 시작하는 다음 작업은 이 번호를 부모로 적는다(깊이 상한).
   appJobId?: number;
+  // 앱이 선언한 MCP 도구를 게이트웨이가 앱 서버로 부른 동안의 호출이면 그 부르기 번호(#5053) — 앱의 SDK 가 «돌기 신원» 을 실어 부른 것
+  //  (apps/app-server-call.ts resolveCallRunPrincipal). 그때 userId 는 도구를 부른 사람이고 appServer 도 true 다.
+  appCallId?: number;
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

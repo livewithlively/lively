@@ -144,21 +144,29 @@ export function jobAdmissionError(p: AppJobPolicy, have: { queuedApp: number; da
 export function jobInvokeEvent(j: { id: number; route: string; body: string; attempts: number }, credential: string, host: string, now: number): Record<string, unknown> {
   //  본문은 늘 JSON(최소 «{}» — encodeJobBody) — 빈 글이면 본문을 읽지 않은 가벼운 줄을 잘못 넘긴 것이다. 조용히 빈 본문으로 부르지 않는다(격리 리뷰).
   if (!j.body) throw new Error(`작업 ${j.id} 의 본문이 없습니다(가벼운 줄로 부르려 했다)`);
-  const i = j.route.indexOf("?");
-  const rawPath = i < 0 ? j.route : j.route.slice(0, i);
-  const rawQueryString = i < 0 ? "" : j.route.slice(i + 1);
+  return routePostEvent({ route: j.route, body: j.body, credential, host, now, requestId: `job-${j.id}-${j.attempts}`, userAgent: "lively-job/1" });
+}
+
+/**
+ * 게이트웨이가 앱 서버 라우트 하나를 POST(JSON 본문)로 부르는 이벤트 — 백그라운드 작업(위)과 AI 도구 동기 부르기(#5053 app-server-call-plan)가 같이 쓴다.
+ *  우리 머리글은 신원(credential) 하나뿐이다 — 그 밖의 x-lively-* · 쿠키는 싣지 않는다(검사 층이 확인한 값으로 앱에 다시 쓴다).
+ */
+export function routePostEvent(e: { route: string; body: string; credential: string; host: string; now: number; requestId: string; userAgent: string }): Record<string, unknown> {
+  const i = e.route.indexOf("?");
+  const rawPath = i < 0 ? e.route : e.route.slice(0, i);
+  const rawQueryString = i < 0 ? "" : e.route.slice(i + 1);
   const headers: Record<string, string> = {
-    host, "x-forwarded-host": host, "x-forwarded-proto": "https", "content-type": "application/json", "user-agent": "lively-job/1",
-    "x-lively-identity": credential,
+    host: e.host, "x-forwarded-host": e.host, "x-forwarded-proto": "https", "content-type": "application/json", "user-agent": e.userAgent,
+    "x-lively-identity": e.credential,
   };
   return {
     version: "2.0", routeKey: "$default", rawPath, rawQueryString, headers,
     requestContext: {
-      accountId: "anonymous", apiId: "lively", domainName: host, domainPrefix: host.split(".")[0] ?? host,
-      http: { method: "POST", path: rawPath, protocol: "HTTP/1.1", sourceIp: "127.0.0.1", userAgent: "lively-job/1" },
-      requestId: `job-${j.id}-${j.attempts}`, routeKey: "$default", stage: "$default", time: new Date(now).toUTCString(), timeEpoch: now,
+      accountId: "anonymous", apiId: "lively", domainName: e.host, domainPrefix: e.host.split(".")[0] ?? e.host,
+      http: { method: "POST", path: rawPath, protocol: "HTTP/1.1", sourceIp: "127.0.0.1", userAgent: e.userAgent },
+      requestId: e.requestId, routeKey: "$default", stage: "$default", time: new Date(e.now).toUTCString(), timeEpoch: e.now,
     },
-    body: Buffer.from(j.body, "utf8").toString("base64"), isBase64Encoded: true,
+    body: Buffer.from(e.body, "utf8").toString("base64"), isBase64Encoded: true,
   };
 }
 
