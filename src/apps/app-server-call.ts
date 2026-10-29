@@ -24,11 +24,13 @@ import { startHttpStream, lambdaErrorOf, type Complete } from "./app-server-stre
 import { acquireInflight, recordAppServerCall } from "./app-server-usage.js";
 import * as st from "./app-server-store.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
-import { jobCallerOf, type JobCaller } from "./app-jobs.js";
-import { jobSecretMatches, newJobSecret } from "./app-jobs-store.js";
+import { jobCallerOf, liveAppJobDeps, startAppJob, MCP_TOOL_JOB_SOURCE, type AppJobDeps, type JobCaller } from "./app-jobs.js";
+import { getAppJob, jobSecretMatches, newJobSecret } from "./app-jobs-store.js";
+import { JOB_GUARD_MIN, isJobEnded } from "./app-jobs-plan.js";
 import * as cs from "./app-server-call-store.js";
 import {
-  CALL_BODY_MAX, CALL_GUARD_MIN, CALL_KEEP_DAYS, CALL_RUN_GRACE_SEC, callCredential, callInvokeEvent, parseCallCredential, type ServerCallReply,
+  BG_PROGRESS_SEC, BG_WAIT_SEC, CALL_BODY_MAX, CALL_GUARD_MIN, CALL_KEEP_DAYS, CALL_RUN_GRACE_SEC, callCredential, callInvokeEvent, jobToolReplyOf, parseCallCredential,
+  type ServerCallReply, type ToolReply,
 } from "./app-server-call-plan.js";
 
 /** 시험이 바꿔 끼우는 자리 — 앱 서버 설정 · 함수 실행면 · 서버 줄 · 상한 · 앱 도메인 · 슬러그 · 시계 · 호출 셈. */
@@ -41,6 +43,10 @@ export interface ServerCallDeps {
   slug(): string | null;
   now(): number;
   record(appId: string, r: { billedMs?: number | null; error?: boolean; rejected?: boolean }): void;
+  /** 30초 넘는 도구(background) — 백그라운드 작업의 의존 · 대신 기다리는 시간 · 진행 알림 간격(초). */
+  jobDeps(): AppJobDeps;
+  bgWaitSec: number;
+  bgProgressSec: number;
 }
 /** 시험이 끼우는 의존(가짜 함수 실행면 · 설정 · 시계) — 운영에서는 비어 있다(app-server-deploy setServerDepsForTest 와 같은 꼴). */
 let testDeps: Partial<ServerCallDeps> = {};
@@ -55,6 +61,9 @@ export function liveServerCallDeps(): ServerCallDeps {
     slug: () => tenantSlug(),
     now: () => Date.now(),
     record: recordAppServerCall,
+    jobDeps: () => liveAppJobDeps(),
+    bgWaitSec: BG_WAIT_SEC,
+    bgProgressSec: BG_PROGRESS_SEC,
     ...testDeps,
   };
 }
@@ -78,26 +87,35 @@ const fail = (status: number, code: string, message: string): HttpError => new H
 const timeoutText = (s: number): string => `앱 서버가 제때 답하지 않았습니다 — 도구 하나는 ${s}초까지입니다. 더 긴 일은 앱이 백그라운드 작업으로 넘겨야 합니다`;
 
 /**
- * 앱 서버 라우트 하나를 동기로 부르고 답을 모은다. 앱이 답했으면(상태와 무관) 그 답, 못 했으면 HttpError(body.code — 도구 오류 코드):
- *  app_server_off · app_server_not_deployed · app_server_outdated · app_server_stopped · app_server_busy(429) · app_server_throttled · app_server_missing ·
- *  app_server_timeout(504) · app_server_unavailable · app_server_error. 앱에 닿기 전에 막힌 것은 부르기 행도 만들지 않는다.
+ * 이 앱 서버를 지금 부를 수 있나 — 꺼짐 · 미배포 · 옛 판(검사 층 minGuard 판 미만 · 함수 토큰 없음) · 멈춤이면 HttpError(body.code). 부를 수 있으면 설정 · 줄 · 별칭.
+ *  동기 부르기는 검사 층 5 판(부르기 신원), background 는 4 판(작업 신원)부터.
  */
-export async function callAppServerRoute(i: ServerCallInput, deps: ServerCallDeps = liveServerCallDeps()): Promise<{ reply: ServerCallReply; timeoutS: number }> {
+async function serverTargetOf(app: { id: string; view: "installed" | "published" }, minGuard: number, deps: ServerCallDeps): Promise<{ env: AppServerEnv; row: st.ServerRow; alias: st.AliasName }> {
   const env = deps.env();
   if (!env) throw fail(503, "app_server_off", "이 워크스페이스는 앱 서버 실행이 꺼져 있어 이 도구를 부를 수 없습니다");
-  if (Buffer.byteLength(i.body, "utf8") > CALL_BODY_MAX) throw fail(413, "bad_args", `도구 인자가 너무 큽니다(${CALL_BODY_MAX / 1024 / 1024}MB 까지) — 큰 자료는 앱 폴더나 파일 주소에 두고 경로만 넘기세요`);
-  const alias: st.AliasName = i.app.view === "published" ? "pub" : "cur";
-  const row = await deps.getServerRow(i.app.id);
+  const alias: st.AliasName = app.view === "published" ? "pub" : "cur";
+  const row = await deps.getServerRow(app.id);
   const version = alias === "pub" ? row?.pub_lambda_version : row?.cur_lambda_version;
   if (!row || !version) {
     throw fail(503, "app_server_not_deployed", "이 앱의 서버가 아직 올라가지 않았습니다 — 앱을 만든 사람이 「이대로 넣기」 또는 app_server_deploy 로 서버를 올리면 이 도구를 쓸 수 있습니다");
   }
-  if (!(alias === "pub" ? row.pub_token_hash : row.cur_token_hash) || ((alias === "pub" ? row.pub_guard : row.cur_guard) ?? 0) < CALL_GUARD_MIN) {
+  if (!(alias === "pub" ? row.pub_token_hash : row.cur_token_hash) || ((alias === "pub" ? row.pub_guard : row.cur_guard) ?? 0) < minGuard) {
     throw fail(503, "app_server_outdated", "이 앱의 서버는 AI 도구를 받기 전에 올라간 판입니다 — 앱을 만든 사람이 서버를 다시 올리면(app_server_deploy · 「이대로 넣기」) 이 도구를 쓸 수 있습니다");
   }
   if (row.stopped_at) {
     throw fail(503, "app_server_stopped", `앱 서버가 멈춰 있습니다${row.stop_reason ? `(까닭: ${row.stop_reason})` : ""} — 관리자(손으로 멈췄으면 책임자)가 다시 켜면 이 도구를 쓸 수 있습니다`);
   }
+  return { env, row, alias };
+}
+
+/**
+ * 앱 서버 라우트 하나를 동기로 부르고 답을 모은다. 앱이 답했으면(상태와 무관) 그 답, 못 했으면 HttpError(body.code — 도구 오류 코드):
+ *  app_server_off · app_server_not_deployed · app_server_outdated · app_server_stopped · app_server_busy(429) · app_server_throttled · app_server_missing ·
+ *  app_server_timeout(504) · app_server_unavailable · app_server_error. 앱에 닿기 전에 막힌 것은 부르기 행도 만들지 않는다.
+ */
+export async function callAppServerRoute(i: ServerCallInput, deps: ServerCallDeps = liveServerCallDeps()): Promise<{ reply: ServerCallReply; timeoutS: number }> {
+  if (Buffer.byteLength(i.body, "utf8") > CALL_BODY_MAX) throw fail(413, "bad_args", `도구 인자가 너무 큽니다(${CALL_BODY_MAX / 1024 / 1024}MB 까지) — 큰 자료는 앱 폴더나 파일 주소에 두고 경로만 넘기세요`);
+  const { env, row, alias } = await serverTargetOf(i.app, CALL_GUARD_MIN, deps);
   const policy = await deps.policy();
   const slot = acquireInflight(i.app.id, { workspace: policy.max_inflight_workspace, app: policy.max_inflight_app });
   if (typeof slot !== "function") {
@@ -190,6 +208,54 @@ export async function callAppServerRoute(i: ServerCallInput, deps: ServerCallDep
     throw e;
   } finally {
     slot();
+  }
+}
+
+// ── 30초 넘는 도구(run.background) ─────────────────────────────────────────────────────
+export interface ServerJobInput {
+  app: { id: string; view: "installed" | "published"; variant: "pub" | "draft" };
+  tool: string;
+  route: string;
+  args: Record<string, unknown>;
+  /** 부른 사람 — 작업을 시작하는 사람이고, 작업의 돌기 신원은 scopes(부른 연결의 권한 ∩ 동의)를 넘지 않는다. */
+  caller: { userId: string; scopes: string[]; tokenScopes: string[]; tokenHashPrefix?: string };
+  signal?: AbortSignal;
+  progress?: (p: { progress: number; total?: number; message?: string }) => Promise<void>;
+}
+
+/**
+ * 그 라우트를 부른 사람의 백그라운드 작업(#4486 — 함수 비동기 · claim 신원 · 최대 15분)으로 돌리고 bgWaitSec 까지 대신 기다린다(bgProgressSec 마다 진행 알림).
+ *  끝나면 {done, reply}(작업 결과 → 도구 결과), 못 끝나면 {done:false, jobId}(작업은 그대로 돈다 — 부른 사람이 app_job_get 으로 받는다).
+ *  부른 쪽이 끊으면(signal) 기다리기만 그만둔다(작업은 취소하지 않는다 — 다시 와서 받을 수 있다).
+ */
+export async function runServerToolJob(i: ServerJobInput, deps: ServerCallDeps = liveServerCallDeps()): Promise<{ done: true; reply: ToolReply } | { done: false; jobId: number; waitedSec: number }> {
+  await serverTargetOf(i.app, JOB_GUARD_MIN, deps);
+  const user: LivelyUser = { userId: i.caller.userId, email: "", scopes: [...i.caller.tokenScopes], projects: ["*"], ...(i.caller.tokenHashPrefix ? { tokenHashPrefix: i.caller.tokenHashPrefix } : {}) };
+  let view: Record<string, unknown>;
+  try {
+    view = await startAppJob({ app_id: i.app.id, route: i.route, body: i.args, label: `AI 도구 ${i.tool}` }, user,
+      { source: MCP_TOOL_JOB_SOURCE, scopeCeiling: [...i.caller.scopes] }, deps.jobDeps());
+  } catch (e) {
+    //  작업 상한(대기 줄 · 하루 수) · 그 밖의 거절 — 사람이 읽을 글은 그대로, 코드만 단다(위 판정을 지난 뒤라 서버 상태의 거절은 드물다).
+    if (e instanceof HttpError && !e.body?.code) throw fail(e.status, e.status === 429 ? "app_jobs_limit" : "app_job_refused", e.message);
+    throw e;
+  }
+  const id = Number(view.id);
+  const t0 = Date.now();
+  const waitMs = deps.bgWaitSec * 1000, tickMs = Math.max(1, deps.bgProgressSec) * 1000;
+  let nextTick = t0 + tickMs;
+  for (;;) {
+    const j = await getAppJob(id);
+    if (!j) throw fail(502, "app_job_failed", `도구의 작업 #${id} 을(를) 찾지 못했습니다`);
+    if (isJobEnded(j.status)) return { done: true, reply: jobToolReplyOf((await getAppJob(id, { view: true })) ?? j) };
+    const elapsed = Date.now() - t0;
+    if (elapsed >= waitMs || i.signal?.aborted) return { done: false, jobId: id, waitedSec: Math.round(elapsed / 1000) };
+    if (i.progress && Date.now() >= nextTick) {
+      nextTick += tickMs;
+      const sec = Math.round(elapsed / 1000);
+      await i.progress({ progress: sec, total: deps.bgWaitSec, message: `도구의 작업 #${id} 이(가) 도는 중입니다(${sec}초)` });
+    }
+    await new Promise((ok) => setTimeout(ok, Math.min(1000, Math.max(1, waitMs - elapsed))));
   }
 }
 

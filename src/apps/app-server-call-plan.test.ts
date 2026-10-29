@@ -4,7 +4,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  CALL_GUARD_MIN, callCredential, callInvokeEvent, looksLikeCallCredential, parseCallCredential, serverToolRouteOf, toolReplyOf, type ServerCallReply,
+  BG_PROGRESS_SEC, BG_WAIT_SEC, CALL_GUARD_MIN, callCredential, callInvokeEvent, jobToolReplyOf, looksLikeCallCredential, parseCallCredential, pendingJobText,
+  serverToolRouteOf, toolReplyOf, type ServerCallReply,
 } from "./app-server-call-plan.js";
 import { looksLikeJobCredential, parseJobCredential, JOB_ROUTE_MAX } from "./app-jobs-plan.js";
 import { GUARD_VERSION } from "./app-server-guard.js";
@@ -156,4 +157,52 @@ test("C7 앱의 4xx · 5xx → 도구 오류 app_error(앱의 상태 그대로) 
 test("C8 앱의 3xx(다른 곳으로 보냄) → 도구 오류 app_error — 도구 라우트는 직접 답해야 한다", () => {
   const t = toolReplyOf(reply({ status: 302, headers: { location: "/login" }, text: "" }), 30);
   assert.ok(!t.ok && t.code === "app_error" && /HTTP 302/.test(t.message), JSON.stringify(t));
+});
+
+// ── 30초 넘는 도구(background) — 끝난 작업 → 도구 결과(사양 엣지 표 F1~F6) ──
+const job = (o: Record<string, unknown>) => ({ id: 77, status: "done", error: null, result: null, ...o }) as Parameters<typeof jobToolReplyOf>[0];
+const res = (o: Record<string, unknown>) => ({ status_code: 200, content_type: "application/json", truncated: false, bytes: 10, ...o });
+
+test("F1 ★ 끝난 작업(done) — 결과 JSON → 값 · 글 → 글 · 결과 본문 없음 → 빈 글", () => {
+  assert.deepEqual(jobToolReplyOf(job({ result: res({ json: { answer: "15일" } }) })), { ok: true, data: { answer: "15일" } });
+  assert.deepEqual(jobToolReplyOf(job({ result: res({ content_type: "text/plain", text: "답" }) })), { ok: true, data: "답" });
+  assert.deepEqual(jobToolReplyOf(job({ result: res({}) })), { ok: true, data: "" }, "결과는 있는데 본문이 없다(204 등)");
+  assert.deepEqual(jobToolReplyOf(job({ result: null })), { ok: true, data: "" });
+});
+
+test("F2 ★ 작업 결과가 64KB 에서 잘렸다(truncated) → 글과 원래 크기(truncatedFrom) — 틀이 잘림 표시를 붙인다", () => {
+  const t = jobToolReplyOf(job({ result: res({ content_type: "text/plain", text: "가".repeat(10), truncated: true, bytes: 300_000 }) }));
+  assert.deepEqual(t, { ok: true, data: "가".repeat(10), truncatedFrom: 300_000 });
+  const notCut = jobToolReplyOf(job({ result: res({ content_type: "text/plain", text: "a", truncated: false, bytes: 1 }) }));
+  assert.deepEqual(notCut, { ok: true, data: "a" }, "안 잘렸으면 truncatedFrom 없음");
+});
+
+test("F3 끝난 작업의 결과가 글이 아니다(base64) → app_bad_result(종류를 말한다)", () => {
+  const t = jobToolReplyOf(job({ result: res({ content_type: "image/png", base64: "iVBO" }) }));
+  assert.ok(!t.ok && t.code === "app_bad_result" && /image\/png/.test(t.message), JSON.stringify(t));
+});
+
+test("F4 실패한 작업 — 앱이 4xx · 5xx 로 답함(결과 있음) → app_error(앱의 상태 · 글) · 3xx 는 502 / 끝맺지 못함(결과 없음) → app_job_failed(작업의 까닭)", () => {
+  const nf = jobToolReplyOf(job({ status: "failed", error: "앱 라우트가 404 로 답했습니다", result: res({ status_code: 404, json: { message: "그런 정책은 없습니다" } }) }));
+  assert.ok(!nf.ok && nf.status === 404 && nf.code === "app_error" && /그런 정책은 없습니다/.test(nf.message) && /HTTP 404/.test(nf.message), JSON.stringify(nf));
+  const er = jobToolReplyOf(job({ status: "failed", result: res({ status_code: 500, content_type: "text/plain", text: "서버 오류" }) }));
+  assert.ok(!er.ok && er.status === 500 && /서버 오류/.test(er.message), JSON.stringify(er));
+  const rd = jobToolReplyOf(job({ status: "failed", result: res({ status_code: 302 }) }));
+  assert.ok(!rd.ok && rd.status === 502 && rd.code === "app_error", JSON.stringify(rd));
+  const cut = jobToolReplyOf(job({ status: "failed", error: "작업 시간 상한(900초)을 넘어 검사 층이 끊었습니다", result: null }));
+  assert.ok(!cut.ok && cut.code === "app_job_failed" && /#77/.test(cut.message) && /작업 시간 상한/.test(cut.message), JSON.stringify(cut));
+});
+
+test("F5 취소한 작업 → app_job_canceled", () => {
+  const t = jobToolReplyOf(job({ status: "canceled", error: "취소했습니다" }));
+  assert.ok(!t.ok && t.code === "app_job_canceled" && /#77/.test(t.message), JSON.stringify(t));
+});
+
+test("F6 못 끝난 작업의 안내 — 작업 번호 · 기다린 시간 · app_job_get 부르는 꼴(번호 · wait 25) / 기다리는 시간은 claude.ai 의 240초 안 · 진행 알림은 5분보다 자주", () => {
+  const t = pendingJobText(77, 200);
+  assert.match(t, /#77/);
+  assert.match(t, /200초/);
+  assert.match(t, /app_job_get \{"id": 77, "wait": 25\}/);
+  assert.ok(BG_WAIT_SEC > 0 && BG_WAIT_SEC < 240, "claude.ai · 데스크톱 커넥터가 240초에서 끊는다");
+  assert.ok(BG_PROGRESS_SEC > 0 && BG_PROGRESS_SEC < 300 && BG_PROGRESS_SEC < BG_WAIT_SEC, "Claude Code 는 5분 무소식이면 끊는다");
 });

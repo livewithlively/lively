@@ -7,6 +7,8 @@
 //   다시 부른다 → 답이 도구 결과가 된다. DB 는 행 격리 정책을 켠 채 앱 역할(NOSUPERUSER · NOBYPASSRLS)로 붙는다(#5050 pg 시험과 같은 꼴).
 //  사양 엣지 표(spec-5053) E1~E13 — 태스크 엣지 표 8행: ① 동의 없음(E1) ② 초안 도구(E2) ③ 인자(E3) ④ 앱이 받는 머리글(E13 · 검사 층 단위 시험 D1) ⑤ 같은 비밀 두 번(E5)
 //   ⑥ 30초 넘김(E6) ⑦ 응답 상한(E7) ⑧ 서버 꺼짐 · 미배포(E8) + 돌기 신원 주체(E10) · #5081 이 읽는 모양(E11) · 정비(E12).
+//  BG1~BG7 30초 넘는 도구(run.background — 결정 상민 2026-10-29): 백그라운드 작업(#4486)으로 돌리고 대신 기다림 — 가짜 Lambda 의 비동기 부르기가 이벤트를
+//   **진짜 검사 층의 작업 길**(claim · 결과 보고)로 넘긴다 · 진행 알림 · 못 끝나면 작업 번호 → app_job_get · 작업의 권한 상한(부른 연결의 권한).
 import "../../scripts/test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로
 import pg from "pg";
 import crypto from "node:crypto";
@@ -88,6 +90,8 @@ try {
   const { GUARD_JS } = await import(`${D}/apps/app-server-guard.js`);
   const { HTTP_INTEGRATION_CT } = await import(`${D}/apps/app-server-stream.js`);
   const { acquireInflight, resetInflightForTest } = await import(`${D}/apps/app-server-usage.js`);
+  const { resolveJobRunPrincipal } = await import(`${D}/apps/app-jobs.js`);
+  const { appServerPolicy } = await import(`${D}/apps/app-server-store.js`);
   const { setAppServerPolicy } = await import(`${D}/apps/app-server-store.js`);
   const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
   const { SINGLE_TENANT_ID } = await import(`${D}/db/tenant-column.js`);
@@ -139,6 +143,10 @@ try {
     return {
       list: async () => (await c.listTools()).tools,
       call: async (name, args = {}) => { try { return await c.callTool({ name, arguments: args }); } catch (e) { return { thrown: String(e?.message ?? e) }; } },
+      //  진행 알림을 받겠다고 하고 부른다(SDK 가 progressToken 을 싣는다 · 진행이 오면 기다림을 늘린다).
+      callWithProgress: async (name, args, onprogress) => {
+        try { return await c.callTool({ name, arguments: args }, undefined, { onprogress, timeout: 120_000, resetTimeoutOnProgress: true }); } catch (e) { return { thrown: String(e?.message ?? e) }; }
+      },
       close: () => c.close().catch(() => undefined),
     };
   };
@@ -156,6 +164,9 @@ try {
     S("ask_policy", "POST /api/tools/ask?src=mcp", { input: { type: "object", properties: { q: { type: "string", description: "물을 말" }, n: { type: "integer" } }, required: ["q"] } }),
     S("big_answer", "/api/tools/big"), S("slow_tool", "/api/tools/slow"), S("fail_tool", "/api/tools/fail"), S("png_tool", "/api/tools/png"),
     S("after_tool", "/api/tools/after"), S("propose_tool", "/api/tools/ask", { level: "L1" }),
+    S("ask_bg", "POST /api/tools/ask", { level: "L1", input: { type: "object", properties: { q: { type: "string" } }, required: ["q"] }, run: { kind: "server", route: "POST /api/tools/ask", background: true } }),
+    S("slow_bg", "/api/tools/slow", { level: "L1", run: { kind: "server", route: "/api/tools/slow", background: true } }),
+    S("fail_bg", "/api/tools/fail", { level: "L1", run: { kind: "server", route: "/api/tools/fail", background: true } }),
   ];
   const badInstall = await errOf(cap("org_app_install").handler({ source: { kind: "inline", files: [{ path: "lively-app.json", content: J({ id: "nosrv", title: "서버 없음", version: "0.1.0", mcp_tools: [S("x_q", "/x")] }) }] } }, P("boss", true), ctx));
   chk("B3 설치 — 서버를 선언하지 않은 판의 server 도구는 400(자리와 까닭)", badInstall?.status === 400 && /\[mcp_tools\.0\]/.test(badInstall.message) && /web\.server/.test(badInstall.message), String(badInstall?.message));
@@ -266,7 +277,22 @@ try {
   const records = [];
   const FAKE_ENV = { region: "ap-northeast-2", execRoleArn: "arn:aws:iam::111122223333:role/lvly-app-exec", awsAccountId: "111122223333", layerArn: "x", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" };
   let envOn = true;
-  callSvc.setServerCallDepsForTest({ env: () => (envOn ? FAKE_ENV : null), api: () => fakeApi, domain: () => null, slug: () => "ws", record: (appId, r) => records.push({ appId, ...r }) });
+  //  백그라운드 작업 — 비동기 부르기는 받아 두고(202) 따로 돈다: 이벤트를 진짜 검사 층에 넘기고(작업 길: claim · 앱 · 결과 보고) 기다리지 않는다.
+  const asyncInvokes = [];
+  const jobDeps = {
+    policy: () => appServerPolicy(),
+    env: () => (envOn ? FAKE_ENV : null),
+    invokeAsync: async (_env, name, qualifier, payload) => {
+      asyncInvokes.push({ name, qualifier, payload });
+      void toGuard(payload).catch(() => undefined);
+    },
+    domain: () => null,
+    slug: () => "ws",
+    now: () => Date.now(),
+  };
+  const BASE_DEPS = { env: () => (envOn ? FAKE_ENV : null), api: () => fakeApi, domain: () => null, slug: () => "ws", record: (appId, r) => records.push({ appId, ...r }),
+    jobDeps: () => jobDeps, bgWaitSec: 30, bgProgressSec: 1 };
+  callSvc.setServerCallDepsForTest(BASE_DEPS);
   //  id 는 BIGSERIAL — 날 쿼리에선 글자로 온다(저장 모듈은 번호로 고친다). 대조하려고 번호로.
   const callRows = async () => (await itemsPool.query(`SELECT * FROM org_app_call ORDER BY id`)).rows.map((x) => ({ ...x, id: Number(x.id) }));
   const sortedJ = (o) => J(Object.fromEntries(Object.entries(o ?? {}).sort(([a], [b]) => (a < b ? -1 : 1))));
@@ -411,6 +437,15 @@ try {
   chk("E5b claim — 위조 비밀 401 · 남의 앱 토큰 404 · 맞으면 돌기 신원 · 사람 · 이름 · 판 · 요청 시간 · 두 번째는 409 claimed",
     forged?.status === 401 && foreign?.status === 404 && parseCallCredential(claimed.run)?.kind === "run" && claimed.member === "alice" && claimed.member_name === "앨리스"
       && claimed.variant === "pub" && claimed.timeout_s === 30 && twice?.status === 409 && twice?.body?.reason === "claimed", J({ forged: forged?.status, foreign: foreign?.status, claimed, twice: twice?.body }));
+  //  «한 번만» 은 DB 조건(status='dispatched' · 그 비밀 · 60초 창)이 정한다 — 판정 함수를 거치지 않고 저장 모듈로 두 번 넘겨 본다.
+  const twin = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "t", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 30 });
+  const twinHash = (await itemsPool.query(`SELECT call_hash FROM org_app_call WHERE id=$1`, [twin.row.id])).rows[0].call_hash;
+  const [c1, c2] = [await cs.claimAppCall(twin.row.id, twinHash, "a".repeat(64)), await cs.claimAppCall(twin.row.id, twinHash, "b".repeat(64))];
+  const twin2 = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "t", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 30 });
+  const wrongHash = await cs.claimAppCall(twin2.row.id, "0".repeat(64), "c".repeat(64));
+  await cs.endAppCall(twin2.row.id, { status: "failed", error: "시험" });
+  chk("E5f DB 조건 — 같은 부르기를 두 번 넘기면 둘째는 null(먼저 단 돌기 신원 그대로) · 다른 비밀 지문으로는 못 넘긴다",
+    c1?.status === "running" && c2 === null && (await cs.getAppCall(twin.row.id))?.run_hash === "a".repeat(64) && wrongHash === null, J({ c1: c1?.status, c2 }));
   const stale = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "ask_policy", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 30 });
   await itemsPool.query(`UPDATE org_app_call SET created_at = now() - interval '61 seconds' WHERE id=$1`, [stale.row.id]);
   const lateClaim = await errOf(callSvc.onCallClaim(stale.row.id, jobCallerOf(fnUser), stale.secret));
@@ -448,6 +483,69 @@ try {
   chk("E10e 도는 동안 동의를 거두면 403 · 떠난(비활성) 사람 403 · 부르기가 끝나면 401",
     revoked?.status === 403 && disabled?.status === 403 && ended?.status === 401, J({ revoked: revoked?.message, disabled: disabled?.message, ended: ended?.message }));
 
+  // ── BG 30초 넘는 도구(run.background) ──
+  const jobRows = async () => (await itemsPool.query(`SELECT id, status, source, label, requester, scope_ceiling, error FROM org_app_job ORDER BY id`)).rows.map((x) => ({ ...x, id: Number(x.id) }));
+  const nAsync = asyncInvokes.length;
+  const rb1 = await A.call("ask_bg", { q: "긴 질문" });
+  const ob1 = (() => { try { return JSON.parse(textOf(rb1)); } catch { return null; } })();
+  const jb1 = (await jobRows()).at(-1);
+  const seenB1 = appSeen.at(-1);
+  chk("BG1 ★ background 도구 — 백그라운드 작업으로 돌고(비동기 부르기 · 진짜 검사 층의 작업 길) 게이트웨이가 기다려 답을 도구 결과로 · 작업 행 source mcp-tool · 부른 사람",
+    !rb1.isError && ob1?.answer === "연차는 15일" && sortedJ(ob1?.got) === sortedJ({ q: "긴 질문" }) && asyncInvokes.length === nAsync + 1 && asyncInvokes.at(-1)?.qualifier === "6"
+      && jb1?.status === "done" && jb1?.source === "mcp-tool" && jb1?.requester === "alice" && /ask_bg/.test(jb1?.label ?? "") && seenB1?.headers["x-lively-job"] === String(jb1?.id),
+    J({ rb1, jb1, q: asyncInvokes.at(-1)?.qualifier, job: seenB1?.headers["x-lively-job"] }));
+  chk("BG1b 작업 안의 앱이 작업 돌기 신원으로 다시 부르면 — 부른 사람(앨리스) · appServer · 그 작업 번호 · 권한은 상한(부른 연결의 권한 ∩ 동의) 안 · 작업 행에 상한이 적혔다",
+    ob1?.me?.status === 200 && ob1.me.body?.userId === "alice" && ob1.me.body?.appServer === true && ob1.me.body?.appJobId === jb1?.id
+      && Array.isArray(jb1?.scope_ceiling) && ob1.me.body.scopes.every((x) => jb1.scope_ceiling.includes(x)), J({ me: ob1?.me, ceiling: jb1?.scope_ceiling }));
+  await cap("me_app_grant").handler({ app_id: "wiki" }, P("carol"), ctx);   // E5e 가 거둔 동의를 되돌린다
+  const Cb = await mcp(tok.carol);
+  const rb2 = await Cb.call("ask_bg", { q: "좁은 토큰" });
+  const ob2 = (() => { try { return JSON.parse(textOf(rb2)); } catch { return null; } })();
+  chk("BG2 ★ 좁은 토큰(memory 하나)으로 background 도구 — 작업의 돌기 신원도 memory 를 넘지 않는다(동기 길과 같은 상한 · 구성원 · 동의가 더 넓어도)",
+    !rb2.isError && ob2?.me?.body?.userId === "carol" && J(ob2?.me?.body?.scopes) === J(["memory"]) && J((await jobRows()).at(-1)?.scope_ceiling) === J(["memory"]), J({ rb2, me: ob2?.me }));
+  await Cb.close();
+  const prog = [];
+  const tb3 = Date.now();
+  const rb3 = await A.callWithProgress("slow_bg", {}, (p) => prog.push({ ...p, at: Date.now() - tb3 }));
+  chk("BG3 ★ 기다리는 동안 진행 알림(progressToken 을 실은 요청) — 1초마다 · 작업 번호와 경과 · 끝나면 결과(앱은 4.5초)",
+    !rb3.isError && J(JSON.parse(textOf(rb3) || "null")) === "{}" && prog.length >= 3 && prog.every((p) => typeof p.progress === "number" && /도구의 작업 #\d+/.test(p.message ?? "")) && Date.now() - tb3 >= 4000,
+    J({ rb3, prog }));
+  callSvc.setServerCallDepsForTest({ ...BASE_DEPS, bgWaitSec: 2 });
+  const rb4 = await A.call("slow_bg", {});
+  callSvc.setServerCallDepsForTest(BASE_DEPS);
+  const jobId4 = rb4._meta?.["lively/job_id"];
+  chk("BG4 ★ 기다림(여기선 2초) 안에 못 끝나면 — 오류가 아니라 작업 번호 · app_job_get 안내 · _meta lively/job_id · lively/pending",
+    !rb4.isError && rb4._meta?.["lively/pending"] === true && Number.isSafeInteger(jobId4) && textOf(rb4).includes(`app_job_get {"id": ${jobId4}, "wait": 25}`), J(rb4));
+  const rb4b = await A.call("app_job_get", { id: jobId4, wait: 25 });
+  const ob4b = (() => { try { return JSON.parse(textOf(rb4b)); } catch { return null; } })();
+  chk("BG4b 안내대로 app_job_get 을 부르면 — 그 사람의 작업이라 결과까지(done · 라우트 답)", ob4b?.id === jobId4 && ob4b?.status === "done" && ob4b?.result?.status_code === 200, J(ob4b));
+  const rb5 = await A.call("fail_bg", {});
+  chk("BG5 background 라우트가 4xx 로 답하면 — 도구 오류 app_error(앱의 글 · 상태) · 작업 failed",
+    rb5.isError && codeOf(rb5) === "app_error" && /그런 정책은 없습니다/.test(textOf(rb5)) && /HTTP 404/.test(textOf(rb5)) && (await jobRows()).at(-1)?.status === "failed", J(rb5));
+  const nJobs = (await jobRows()).length;
+  await setSrv(`pub_lambda_version=NULL`);
+  const rb6 = await A.call("ask_bg", { q: "x" });
+  await setSrv(SRV_OK);
+  chk("BG6 서버가 없으면 background 도 같은 안내 오류(app_server_not_deployed) · 작업을 만들지 않는다", rb6.isError && codeOf(rb6) === "app_server_not_deployed" && (await jobRows()).length === nJobs, J(rb6));
+  await setSrv(`pub_guard=4`);
+  const rb7 = await A.call("ask_bg", { q: "옛 검사 층" });
+  const rs7 = await A.call("ask_policy", { q: "옛 검사 층" });
+  await setSrv(SRV_OK);
+  chk("BG7 검사 층 4 판 함수 — background 는 된다(작업 길은 4 판부터) · 동기 도구는 다시 올리라고 한다(5 판부터)",
+    !rb7.isError && rs7.isError && codeOf(rs7) === "app_server_outdated", J({ rb7: rb7.isError ? rb7 : "ok", rs7 }));
+  //  상한 칸이 비어 있는 mcp-tool 작업(있으면 안 되는 상태) — 돌기 신원에 아무 권한도 주지 않는다(닫힘).
+  const { jobCredential } = await import(`${D}/apps/app-jobs-plan.js`);
+  const runSecret = "Q".repeat(43);
+  const runHash = crypto.createHash("sha256").update(runSecret, "utf8").digest("hex");
+  const bad = (await itemsPool.query(`INSERT INTO org_app_job(app_id, requester, variant, alias, function_name, lambda_version, route, body, timeout_s, source, status, run_hash, claimed_at)
+     VALUES('wiki','alice','pub','pub','lvly-app-wiki-ws','6','/x','{}',60,'mcp-tool','running',$1,now()) RETURNING id`, [runHash])).rows[0];
+  const pBad = await resolveJobRunPrincipal(fnUser, jobCredential("run", Number(bad.id), runSecret));
+  await itemsPool.query(`UPDATE org_app_job SET source='app-server' WHERE id=$1`, [bad.id]);
+  const pOther = await resolveJobRunPrincipal(fnUser, jobCredential("run", Number(bad.id), runSecret));
+  chk("BG8 상한 칸이 빈 mcp-tool 작업의 돌기 신원은 권한 0(닫힘) · 다른 작업(source 가 다름)은 종전대로 사람 ∩ 동의",
+    J(pBad.scopes) === "[]" && pOther.scopes.length > 0, J({ bad: pBad.scopes, other: pOther.scopes }));
+  await itemsPool.query(`UPDATE org_app_job SET status='done', ended_at=now() WHERE id=$1`, [bad.id]);
+
   // ── E12 정비 ──
   const st1 = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "t", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 3 });
   await itemsPool.query(`UPDATE org_app_call SET status='running', claimed_at = now() - interval '40 seconds' WHERE id=$1`, [st1.row.id]);
@@ -461,7 +559,8 @@ try {
       && sw.expired >= 2 && sw.pruned === 1, J({ sw, st1: after.get(st1.row.id)?.status, st2: after.get(st2.row.id)?.status, stale: after.get(stale.row.id)?.status }));
 
   chk("G2 배선 — 가짜 Lambda 가 실제로 불렸고 · 진짜 검사 층이 실제 claim 을 불렀고 · 앱 서버 문이 실제로 주체를 풀었다",
-    invokes.length >= 8 && appSeen.length >= 6 && whoSeen.length >= 3 && whoSeen.every((u) => u?.appServer === true), J({ invokes: invokes.length, app: appSeen.length, who: whoSeen.length }));
+    invokes.length >= 8 && appSeen.length >= 6 && whoSeen.length >= 3 && whoSeen.every((u) => u?.appServer === true) && asyncInvokes.length >= 5,
+    J({ invokes: invokes.length, app: appSeen.length, who: whoSeen.length, async: asyncInvokes.length }));
   callSvc.setServerCallDepsForTest({});
   resetInflightForTest();
   offServer();

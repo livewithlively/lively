@@ -49,6 +49,8 @@ export function jobSecretMatches(hash: string | null | undefined, presented: str
 export interface NewAppJob {
   appId: string; requester: string; variant: "pub" | "draft"; alias: "cur" | "pub"; functionName: string; lambdaVersion: string; tokenHash: string | null;
   route: string; body: string; bodyBytes: number; label: string | null; timeoutS: number; source: string | null; parentId: number | null; depth: number;
+  /** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(부른 연결의 권한 ∩ 그 사람의 앱 동의) — 돌기 신원이 그보다 넓어지지 않게. 다른 작업은 없다(NULL). */
+  scopeCeiling?: string[] | null;
 }
 
 /**
@@ -67,7 +69,10 @@ export async function insertAppJob(j: NewAppJob, admit: (have: { queuedApp: numb
       `INSERT INTO org_app_job(app_id, requester, variant, alias, function_name, lambda_version, token_hash, route, body, body_bytes, label, timeout_s, source, parent_id, depth)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING ${LIGHT}`,
       [j.appId, j.requester, j.variant, j.alias, j.functionName, j.lambdaVersion, j.tokenHash, j.route, j.body, j.bodyBytes, j.label, j.timeoutS, j.source, j.parentId, j.depth]);
-    return { row: norm(r.rows[0] as Record<string, unknown>)! };
+    const row = norm(r.rows[0] as Record<string, unknown>)!;
+    //  #5053 권한 상한은 그 칸을 쓰는 작업만 따로 적는다 — 위 INSERT · 칸 묶음(LIGHT)은 그대로라, 이 칸이 생기기 전(롤 창)에도 다른 작업은 깨지지 않는다.
+    if (j.scopeCeiling) await c.query(`UPDATE org_app_job SET scope_ceiling=$2::text[] WHERE id=$1`, [row.id, j.scopeCeiling]);
+    return { row };
   });
 }
 
@@ -76,6 +81,13 @@ export async function getAppJob(id: number, o: { view?: boolean } = {}): Promise
   if (!Number.isSafeInteger(id) || id < 1) return null;
   const r = await itemsPool.query(`SELECT ${o.view ? VIEW : LIGHT} FROM org_app_job WHERE id=$1`, [id]);
   return norm(r.rows[0] as Record<string, unknown> | undefined);
+}
+
+/** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(없으면 null). 칸 묶음(LIGHT) 밖이라 따로 읽는다 — 그 작업의 돌기 신원을 풀 때만. */
+export async function jobScopeCeiling(id: number): Promise<string[] | null> {
+  const r = await itemsPool.query(`SELECT scope_ceiling FROM org_app_job WHERE id=$1`, [id]);
+  const v = (r.rows[0] as { scope_ceiling?: unknown } | undefined)?.scope_ceiling;
+  return Array.isArray(v) ? v.map(String) : null;
 }
 
 /** 목록 — 결과 본문은 싣지 않는다(작업 하나에 64KB 까지라 목록이 무거워진다 — app_job_get 으로 본다). */

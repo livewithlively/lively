@@ -56,13 +56,15 @@ const SWEEP_PAGE_SIZE = 200, SWEEP_MAX_PAGES = 25;
 
 const actorSource = (user: LivelyUser, source?: string): string =>
   user.appServer ? (user.appJobId ? "app-job" : "app-server") : source ?? (user.appId ? "app-ui" : "person");
+/** #5053 앱 선언 MCP 도구(server 실행기의 background)가 시작한 작업의 source — 돌기 신원을 풀 때 권한 상한(scope_ceiling)을 함께 본다. */
+export const MCP_TOOL_JOB_SOURCE = "mcp-tool";
 
 /**
  * 작업 하나를 받는다 — 앱 서버 · 앱 화면 · 사람(MCP) 공용. 줄을 세우고 곧바로 부를 수 있으면 부른다. 돌려주는 것은 작업 보기(+ wait 초 동안 끝나기를 기다림).
  *  막는 것: 작업 종류(agent 는 AI 실행 입구로) · 라우트 · 시간 상한(15분 너머는 작업 컨테이너로) · 본문 상한 · 앱(보임 · 켜짐 · 동의) · 서버(올라감 · 이 판의
  *  검사 층 · 멈춤) · 작업이 시작한 작업의 깊이 · 앱 대기 줄 · 하루 수.
  */
-export async function startAppJob(input: Record<string, unknown>, user: LivelyUser, ctx: { source?: string } = {}, deps: AppJobDeps = liveAppJobDeps()): Promise<Record<string, unknown>> {
+export async function startAppJob(input: Record<string, unknown>, user: LivelyUser, ctx: { source?: string; scopeCeiling?: string[] } = {}, deps: AppJobDeps = liveAppJobDeps()): Promise<Record<string, unknown>> {
   if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
   const typeErr = jobTypeError(input.type);
   if (typeErr) throw new HttpError(400, typeErr);
@@ -114,7 +116,7 @@ export async function startAppJob(input: Record<string, unknown>, user: LivelyUs
   const out = await js.insertAppJob({
     appId, requester: user.userId, variant, alias, functionName: row.function_name, lambdaVersion: version, tokenHash,
     route: String(input.route), body: enc.json, bodyBytes: enc.bytes, label: jobLabelOf(input.label), timeoutS: to.timeout,
-    source: actorSource(user, ctx.source), parentId, depth,
+    source: actorSource(user, ctx.source), parentId, depth, ...(ctx.scopeCeiling ? { scopeCeiling: ctx.scopeCeiling } : {}),
   }, (have) => jobAdmissionError(policy, have)?.error ?? null);
   if ("denied" in out) throw new HttpError(429, out.denied);
   logger.info({ app: appId, job: out.row.id, alias, version, source: out.row.source }, "[app-jobs] 작업을 받았다(#4486)");
@@ -346,8 +348,10 @@ export async function resolveJobRunPrincipal(user: LivelyUser, raw: string): Pro
   const grant = await getActiveGrant(j.app_id, member.id);
   if (!grant) throw new HttpError(403, `작업을 시작한 사람이 앱 '${j.app_id}' 사용 동의를 거두었습니다`);
   const allowed = new Set(member.scopes.filter(isScope));
+  //  #5053 앱 선언 MCP 도구가 시작한 작업은 부른 연결의 권한까지만(동기 부르기의 돌기 신원과 같은 상한). 상한을 못 찾으면 아무 권한도 주지 않는다(닫힘).
+  const ceiling = j.source === MCP_TOOL_JOB_SOURCE ? new Set((await js.jobScopeCeiling(j.id)) ?? []) : null;
   return {
-    userId: member.id, email: member.email ?? "", scopes: grant.scopes.filter((s) => isScope(s) && allowed.has(s)), projects: ["*"],
+    userId: member.id, email: member.email ?? "", scopes: grant.scopes.filter((s) => isScope(s) && allowed.has(s) && (!ceiling || ceiling.has(s))), projects: ["*"],
     tokenSource: "db", tokenHashPrefix: user.tokenHashPrefix, appId: j.app_id, appServer: true, appAddress: j.variant, appJobId: j.id,
   };
 }

@@ -26,6 +26,15 @@ test("B3b run 의 모르는 칸은 400(오타가 곧 다른 뜻) — 칸 이름�
   assert.ok(e instanceof HttpError && e.status === 400 && /모르는 칸/.test(e.message) && /timeout_s/.test(e.message) && /mode/.test(e.message), String(e?.message));
 });
 
+test("B3g background — true · false 는 받고, 그 밖(글자 «true» · 1 · null)은 400", () => {
+  assert.equal(validate({ route: "/x", background: true }), null);
+  assert.equal(validate({ route: "/x", background: false }), null);
+  for (const v of ["true", 1, null]) {
+    const e = validate({ route: "/x", background: v });
+    assert.ok(e instanceof HttpError && e.status === 400 && /background/.test(e.message), `${JSON.stringify(v)} → ${e?.message}`);
+  }
+});
+
 test("B3c 라우트가 없거나 틀리면 400 — 라우트 판정의 까닭 그대로", () => {
   for (const [route, re] of [[undefined, /필요합니다/], ["GET /x", /POST 로만/], ["/_lively/x", /라이블리 자리/], ["x", /\/ 로 시작/]] as const) {
     const e = validate(route === undefined ? {} : { route });

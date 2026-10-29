@@ -2415,7 +2415,10 @@ for (const id of ["hl-ok", "hl-st", "hl-gap", "hl-lost", "hl-brk", "hl-nozip", "
   await call("app_save", { files: files({ server: "require('http').createServer((q,s)=>s.end('j1')).listen(Number(process.env.PORT));" }) }, alice, aliceCtx);
   const dj1 = await call("app_server_deploy", { app_id: ID, wait_s: 120 }, alice, aliceCtx);
   const rj1 = await rowOf(ID);
-  chk("J6 별칭에 검사 층 판(4) — 백그라운드 작업이 이 판부터 받는다", dj1.status === "deployed" && rj1?.cur_guard === 4, JSON.stringify({ s: dj1.status, g: rj1?.cur_guard }));
+  //  #5053 — 검사 층이 5 판(AI 도구 동기 부르기)이 됐다. 배포는 늘 지금 판을 적는다(작업은 4 판부터 · 도구는 5 판부터 받는다).
+  const { GUARD_VERSION } = await import(`${D}/apps/app-server-guard.js`);
+  chk("J6 별칭에 검사 층 판(지금 판 · 4 이상) — 백그라운드 작업이 4 판부터 받는다", dj1.status === "deployed" && rj1?.cur_guard === GUARD_VERSION && GUARD_VERSION >= 4,
+    JSON.stringify({ s: dj1.status, g: rj1?.cur_guard, now: GUARD_VERSION }));
   const FNJ = rj1.function_name;
   const pinnedVer = rj1.cur_lambda_version;
   const pinnedTok = rj1.cur_token_hash;

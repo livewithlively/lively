@@ -45,13 +45,23 @@ export interface AppMcpToolCall {
   caller: AppMcpCaller;
   /** 부른 쪽이 끊으면 걸린다(MCP 요청 취소 · 연결 끊김). */
   signal?: AbortSignal;
+  /**
+   * 진행 알림(MCP notifications/progress) — 부른 쪽이 진행을 받겠다고 했을 때(요청의 progressToken)만 있다. 오래 걸리는 실행기가 기다리는 동안 보낸다
+   *  (Claude Code 는 이것을 활동으로 세어 5분 무소식 끊기를 미룬다 · #5053 server 실행기의 background). 보내다 실패해도 던지지 않는다.
+   */
+  progress?: (p: { progress: number; total?: number; message?: string }) => Promise<void>;
 }
 
 /**
  * 실행기의 결과 — data 는 JSON 으로 옮길 수 있는 값(글자면 그대로 · 그 밖은 JSON 한 줄). 틀이 크기 상한을 걸어 잘린 표시를 붙인다.
  *  truncatedFrom — 실행기가 원래 답을 이미 앞부분만 받아 넘겼으면 그 원래 크기(바이트 · 앱 서버 답의 앞 256KiB 만 모은 server 실행기). 틀이 그 크기로 잘림을 알린다.
  */
-export interface AppMcpToolResult { data: unknown; truncatedFrom?: number }
+export interface AppMcpToolResult {
+  data: unknown;
+  truncatedFrom?: number;
+  /** 도구 결과의 _meta 에 더할 표지(lively/* — 예: 아직 도는 작업 번호 lively/job_id). 틀의 잘림 표지가 이긴다. */
+  meta?: Record<string, unknown>;
+}
 
 /**
  * 실행기. 오류는 던진다 — HttpError 면 그 글과 body.code 가 도구 오류(isError)로 그대로 가고, 그 밖의 예외는 글을 감추고 기록만 남긴다.

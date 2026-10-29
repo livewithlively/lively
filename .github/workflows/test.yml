@@ -617,6 +617,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/mcp/app-declared-tools.pg-test.mjs
+      # #5053 server 실행기 — 진짜 /mcp(OAuth) → 동기 부르기(부르기 행 · claim · 돌기 신원) → 진짜 검사 층(GUARD_JS) → 가짜 앱 · background(작업 길 · 진행 알림)
+      - name: 앱 선언 MCP 도구 server 실행기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-server-call.pg-test.mjs
       # ⑤-o 카나리 실행 경로(#1306) — 목으로는 못 보는 것: **직전 상태를 canary_result 에서 어떻게 읽나**. 판정 함수가 맞아도
       #    실행 경로가 configured 행만 보고 직전 상태를 정하면, 설정을 걷어낸 뒤 매 회전 «복구» 경보가 다시 나간다.
       - name: 카나리 실행 경로 PG 통합 테스트

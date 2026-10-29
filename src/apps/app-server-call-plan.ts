@@ -9,7 +9,7 @@
 //  ★ 작업 신원(lvj*)과는 앞머리로 갈린다 — 검사 층은 부르기 신원만, 게이트웨이는 돌기 신원만 받는다(돌기 신원으로 함수를 직접 불러 다시 시작하지 못하게).
 //   DB 에는 비밀의 sha256 만 둔다(org_app_call · app-server-call-store).
 //  이 파일은 DB · AWS · HTTP 를 모른다 — app-server-call.ts 가 사실을 모아 여기 묻는다.
-import { JOB_ROUTE_MAX, routePostEvent } from "./app-jobs-plan.js";
+import { JOB_ROUTE_MAX, routePostEvent, type JobResultView } from "./app-jobs-plan.js";
 
 /** 부르기 신원 — 게이트웨이가 함수를 부를 때 싣는다(검사 층만 쓴다 · claim 한 번). */
 export const CALL_PREFIX = "lvsc1";
@@ -131,4 +131,49 @@ export function toolReplyOf(r: ServerCallReply, timeoutS: number): ToolReply {
   if (r.bytes > r.body.length) return { ok: true, data: text, truncatedFrom: r.bytes };
   if (!isJsonType(ct) || !text.trim()) return { ok: true, data: text };
   try { return { ok: true, data: JSON.parse(text) }; } catch { return { ok: true, data: text }; }
+}
+
+// ── 30초 넘는 도구(run.background — 결정 상민 2026-10-29) ──────────────────────────────────
+//  그 라우트를 백그라운드 작업(#4486 · 함수 비동기 · 최대 15분)으로 돌리고 게이트웨이가 BG_WAIT_SEC 까지 대신 기다린다(진행 알림을 보내며).
+//  끝나면 작업의 결과(라우트 답의 앞 64KB)가 도구 결과, 못 끝나면 작업 번호와 «app_job_get 으로 결과 받기» 안내를 돌려준다(작업은 그대로 돈다).
+/** 대신 기다리는 시간(초) — claude.ai · 데스크톱 커넥터는 도구 한 번을 240초에서 끊는다(진행 알림으로 안 늘어난다 · claude.com/docs/connectors/building). 그 안에 답한다. */
+export const BG_WAIT_SEC = 200;
+/** 기다리는 동안 진행 알림 간격(초) — Claude Code 는 5분 동안 소식이 없으면 끊고 진행 알림을 활동으로 센다(code.claude.com/docs/en/mcp). */
+export const BG_PROGRESS_SEC = 10;
+
+/** 앱이 실패로 답한 작업의 글 — 결과 JSON 의 message · error, 아니면 글 앞부분(1,000자). */
+function jobAppMessage(r: JobResultView | null): string {
+  if (!r) return "";
+  const j = r.json as { message?: unknown; error?: unknown } | undefined;
+  const m = j && typeof j === "object" ? (typeof j.message === "string" ? j.message : typeof j.error === "string" ? j.error : null) : null;
+  return (m ?? r.text ?? "").trim().slice(0, 1000);
+}
+
+/**
+ * 끝난 작업(보기 칸 — 상태 · 오류 · 결과) → 도구 결과. done = 라우트가 2xx 로 답함(JSON 이면 값 · 글이면 글 · 잘렸으면 글과 원래 크기 · 글이 아니면 app_bad_result).
+ *  failed 에 결과가 있으면 앱이 3xx · 4xx · 5xx 로 답한 것(app_error · 앱의 상태와 글), 결과가 없으면 작업이 끝맺지 못한 것(app_job_failed · 작업의 까닭).
+ */
+export function jobToolReplyOf(j: { id: number; status: string; error: string | null; result: JobResultView | null }): ToolReply {
+  const r = j.result;
+  if (j.status === "done") {
+    if (!r) return { ok: true, data: "" };
+    if (r.base64 !== undefined) {
+      return { ok: false, status: 502, code: "app_bad_result", message: `앱 서버가 글이 아닌 답(${String(r.content_type ?? "").split(";")[0]!.trim().slice(0, 80)})을 보냈습니다 — 도구 라우트는 JSON 이나 글로 답해야 합니다` };
+    }
+    if (r.json !== undefined) return { ok: true, data: r.json };
+    const text = r.text ?? "";
+    return r.truncated && typeof r.bytes === "number" ? { ok: true, data: text, truncatedFrom: r.bytes } : { ok: true, data: text };
+  }
+  if (j.status === "canceled") return { ok: false, status: 409, code: "app_job_canceled", message: `도구의 작업 #${j.id} 을(를) 취소했습니다` };
+  if (r && typeof r.status_code === "number") {
+    const msg = jobAppMessage(r);
+    return { ok: false, status: r.status_code >= 400 ? r.status_code : 502, code: "app_error", message: `앱 서버가 오류로 답했습니다(HTTP ${r.status_code})${msg ? `: ${msg}` : ""}` };
+  }
+  return { ok: false, status: 502, code: "app_job_failed", message: `도구의 작업 #${j.id} 이(가) 끝맺지 못했습니다${j.error ? ` — ${j.error}` : ""}` };
+}
+
+/** 기다리는 동안 못 끝난 작업 — AI 에게 줄 안내(작업은 그대로 돈다). */
+export function pendingJobText(id: number, waitedSec: number): string {
+  return `도구의 작업 #${id} 이(가) 아직 돌고 있습니다(${waitedSec}초 기다림). 작업은 계속 돕니다 — app_job_get {"id": ${id}, "wait": 25} 로 결과를 받으세요` +
+    "(status 가 done 이면 result 에 답이 있습니다 · 아직이면 다시 부르면 됩니다).";
 }

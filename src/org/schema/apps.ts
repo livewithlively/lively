@@ -317,6 +317,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_app_idx ON org_app_job(app_id, id DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_requester_idx ON org_app_job(requester, id DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_job_ended_idx ON org_app_job(ended_at) WHERE ended_at IS NOT NULL;`);
+  //  #5053 scope_ceiling — 앱 선언 MCP 도구(server 실행기의 background)가 시작한 작업의 권한 상한(부른 연결의 권한 ∩ 그 사람의 앱 동의). 다른 작업은 NULL.
+  //   돌기 신원을 풀 때 source 'mcp-tool' 인 작업만 이 칸을 따로 읽는다(apps/app-jobs.ts resolveJobRunPrincipal — 칸 묶음 밖이라 롤 창에도 다른 작업이 안 깨진다).
+  await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS scope_ceiling TEXT[];`);
   //  org_app_call(#5053 앱 v2-42) — 게이트웨이가 앱 서버의 라우트 하나를 **동기로** 부른 한 건(지금은 앱이 선언한 MCP 도구 · run.kind "server").
   //   흐름: dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원) → done · failed
   //   (게이트웨이가 답을 다 받았을 때 · 하우스키핑이 끝맺지 못한 줄을 닫는다). 판정은 apps/app-server-call-plan.ts · 흐름은 apps/app-server-call.ts.
