@@ -513,7 +513,21 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   assert.ok(!Object.values(env).includes("sk-ws"), "워크스페이스 키는 컨테이너에 안 들어간다");
   assert.deepEqual(await bootEnvForJob({ id: 101, account_kind: "subscription" }, d), {});
   await fails(bootEnvForJob({ id: 999, account_kind: "api_key" }, d), 409);
+  assert.ok(!("ANTHROPIC_CUSTOM_HEADERS" in env), "G3 자리를 안 주면(매니지드) 머리를 더 싣지 않는다 — 세션 루프백이 테넌트를 싣는다");
   ok("S22 판 환경 — 키 대신 프록시 주소 + 실행 토큰 + 빈 설정 폴더");
+}
+
+// ── G2 박스 위 판(#5082) — 프록시는 판이 보는 게이트웨이 아래 · 그 워크스페이스 머리를 Claude Code 가 싣는다 ──
+{
+  const { d } = world();
+  await submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  const env = await bootEnvForJob({ id: 101, account_kind: "api_key" }, d, { gateway: "http://127.0.0.1:18080", workspace: "acme" });
+  assert.equal(env.ANTHROPIC_BASE_URL, "http://127.0.0.1:18080/api/llm/anthropic");
+  assert.equal(env.ANTHROPIC_CUSTOM_HEADERS, "x-lively-workspace: acme");
+  const single = await bootEnvForJob({ id: 101, account_kind: "api_key" }, d, { gateway: "http://127.0.0.1:8080", workspace: null });
+  assert.equal(single.ANTHROPIC_BASE_URL, PROXY_BASE_IN_CONTAINER);
+  assert.ok(!("ANTHROPIC_CUSTOM_HEADERS" in single), "단일 워크스페이스(primary)면 머리 없음");
+  ok("G2 박스 위 판 — 그 게이트웨이 · 그 워크스페이스로");
 }
 
 // ── S23 취소 — 작업 실행은 작업을 끊는다 · 프록시는 행만 끝낸다 ──

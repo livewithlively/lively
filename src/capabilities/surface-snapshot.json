@@ -5794,7 +5794,7 @@
   "rest": [
    "POST /api/ui/agent-job-limits"
   ],
-  "input_hash": "72bc81d7bb5ff6ce"
+  "input_hash": "a194765c67ee9921"
  },
  {
   "name": "browser_status",

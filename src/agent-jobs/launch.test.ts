@@ -93,7 +93,7 @@ await t("K3 걷기 — 확답이 아닌 실패(중계 시간 초과 · 목록을
 });
 
 await t("F1 확보 단계의 실패는 전부 일시(transient) — 대기열로 되돌려 다시 한다(시도 상한까지) · 문장에 단계와 사유", () => {
-  const steps: LaunchStep[] = ["os-user", "workdir", "ensure", "home", "pane"];
+  const steps: LaunchStep[] = ["os-user", "workdir", "ensure", "home", "memory", "pane"];
   for (const step of steps) {
     const e = stepFailure(step, new Error("노드 자리 없음"));
     assert.ok(e instanceof JobLaunchError, step);
@@ -170,7 +170,11 @@ await t("SW1 공용 시트 배선(#5081 · live.ts) — 띄울 때 표시를 넘
   //  판정 자체는 plan.test G1 · service.test SS3 가 잰다 — 여기서는 «부르는 자리» 와 «사실의 출처» 가 그대로인지만 본다
   //   (배선이 빠지면 공용 시트 작업이 시트 계정의 동의로 돌거나 시트 홈에 키트가 심긴다).
   const live = readFileSync(new URL("../../src/agent-jobs/live.ts", import.meta.url), "utf8");
-  assert.match(live, /launch: async \(job, boot\) => launch\.launchJobContainer\(job, boot, \{ sharedSeat: await sharedSeatJob\(job\) \}\),/);
+  assert.match(live, /launch: async \(job, boot\) => surface\.launch\(job, boot, \{ sharedSeat: await sharedSeatJob\(job\) \}\),/);
+  //  #5082 실행면 — 두 갈래 모두 표시를 넘긴다(매니지드 launch.ts · 박스 위 launch-host.ts)
+  const surf = readFileSync(new URL("../../src/agent-jobs/surface.ts", import.meta.url), "utf8");
+  assert.match(surf, /launch: \(job, boot, o\) => launch\.launchJobContainer\(job, boot, o\),/);
+  assert.match(surf, /launch: \(job, boot, o\) => kind === "host" \? host\.launchHostJob\(job, boot, undefined, o\)/);
   assert.match(live, /if \(await sharedSeatJob\(job\)\) return assertSharedSeatJobAllowed\(job\);\n\s*if \(job\.app_id\) await assertAppUsableFor\(\{ userId: m\.id/,
     "공용 시트 판정이 시트 계정의 앱 동의보다 먼저 · 대신");
   const fn = live.slice(live.indexOf("async function assertSharedSeatJobAllowed("), live.indexOf("let cached: AgentJobDeps | null"));

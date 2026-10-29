@@ -16,7 +16,7 @@ const t = (name: string, fn: () => void): void => {
   console.log(`ok  ${name}`);
 };
 const ENV = ["LIVELY_AGENT_JOB_MAX_RUNNING", "LIVELY_AGENT_JOB_MAX_RUNNING_PER_MEMBER", "LIVELY_AGENT_JOB_MAX_QUEUED", "LIVELY_AGENT_JOB_DEFAULT_TIMEOUT_MIN", "LIVELY_AGENT_JOB_MAX_TIMEOUT_MIN",
-  "LIVELY_AGENT_JOB_KEEP_DAYS"];
+  "LIVELY_AGENT_JOB_KEEP_DAYS", "LIVELY_AGENT_JOB_MEMORY_MAX_MB"];
 const withEnv = <T>(vals: Record<string, string>, fn: () => T): T => {
   const old = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
   for (const k of ENV) delete process.env[k];
@@ -24,10 +24,10 @@ const withEnv = <T>(vals: Record<string, string>, fn: () => T): T => {
   try { return fn(); } finally { for (const k of ENV) { if (old[k] === undefined) delete process.env[k]; else process.env[k] = old[k]; } }
 };
 
-t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초 · 보존 90일(2026-10-19 결정)", () => withEnv({}, () => {
+t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초 · 보존 90일(2026-10-19 결정) · 작업 메모리 3072MB(2026-10-28 결정 #5082)", () => withEnv({}, () => {
   assert.deepEqual(resolveAgentJobPolicy({}), {
     max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 2, max_queued: 20, queue_wait_min: 30,
-    default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180, keep_days: 90,
+    default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180, keep_days: 90, memory_max_mb: 3072,
   });
   assert.deepEqual(resolveAgentJobPolicy(null), D);
 }));
@@ -36,7 +36,7 @@ t("Q2 범위 — 정확히 경계는 그대로 · 밖이면 경계로 접고 · 
   for (const k of Object.keys(R) as Array<keyof typeof R>) {
     const [lo, hi] = R[k];
     //  사람당 동시는 축 사이 관계(≤ 워크스페이스 동시 2)가 뒤따라 접으므로 따로 본다(Q3).
-    if (k === "max_running_per_member" || k === "max_running_per_service_seat") continue;   // #5081 공용 시트 상한도 같은 관계(Q9)
+    if (k === "max_running_per_member" || k === "max_running_per_service_seat") continue;   // #5081 공용 시트 상한도 같은 관계(Q10)
     assert.equal(normalizeAgentJobPolicy({ [k]: lo })[k], lo, `${k} 최소 ${lo}`);
     assert.equal(normalizeAgentJobPolicy({ [k]: lo - 1 })[k], lo, `${k} 최소 밑은 최소로`);
     if (k !== "default_timeout_min") assert.equal(normalizeAgentJobPolicy({ [k]: hi + 1 })[k], hi, `${k} 최대 위는 최대로`);
@@ -100,7 +100,21 @@ t("Q8 보존 일수(#4828) — 0 은 무기한(유효한 선택) · 범위 0~365
   assert.equal(agentJobPolicyPatchError({ keep_days: 3650 }), null, "다른 축과 관계가 없다");
 }));
 
-t("Q9 공용 시트 상한(#5081) — 기본 2 · 범위 1~20 · ≤ 워크스페이스 동시(읽을 때 접고 · 고칠 때 거절) · 같아도 된다(경계)", () => withEnv({}, () => {
+t("Q9 작업 메모리 상한(#5082) — 0 은 상한 없음(유효한 선택) · 범위 0~65536 · env 시드 · DB 가 이긴다 · 다른 축과 엮이지 않는다", () => withEnv({}, () => {
+  assert.equal(normalizeAgentJobPolicy({ memory_max_mb: 0 }).memory_max_mb, 0, "0 = 상한 없음");
+  assert.deepEqual([R.memory_max_mb[0], R.memory_max_mb[1]], [0, 65536]);
+  assert.equal(normalizeAgentJobPolicy({ memory_max_mb: 2048 }).memory_max_mb, 2048);
+  assert.equal(normalizeAgentJobPolicy({ memory_max_mb: 65536 }).memory_max_mb, 65536, "최대 그대로");
+  assert.equal(normalizeAgentJobPolicy({ memory_max_mb: 65537 }).memory_max_mb, 65536, "최대 위는 최대로");
+  withEnv({ LIVELY_AGENT_JOB_MEMORY_MAX_MB: "4096" }, () => {
+    assert.equal(resolveAgentJobPolicy({}).memory_max_mb, 4096, "env 시드");
+    assert.equal(resolveAgentJobPolicy({ memory_max_mb: 0 }).memory_max_mb, 0, "DB 의 0(상한 없음)이 env 를 이긴다");
+  });
+  assert.equal(agentJobPolicyPatchError({ memory_max_mb: 0 }), null, "다른 축과 관계가 없다");
+  assert.equal(agentJobPolicySource({ memory_max_mb: 1024 }), "db", "관리자가 적은 값은 관리 설정 출처");
+}));
+
+t("Q10 공용 시트 상한(#5081) — 기본 2 · 범위 1~20 · ≤ 워크스페이스 동시(읽을 때 접고 · 고칠 때 거절) · 같아도 된다(경계)", () => withEnv({}, () => {
   assert.equal(D.max_running_per_service_seat, 2);
   assert.deepEqual(R.max_running_per_service_seat, [1, 20]);
   assert.equal(resolveAgentJobPolicy({ max_running: 3, max_running_per_service_seat: 7 }).max_running_per_service_seat, 3, "읽을 때 워크스페이스 동시로 접는다");

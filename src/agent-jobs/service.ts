@@ -39,6 +39,7 @@ import {
   PRUNE_BATCH, PRUNE_ROUNDS_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
+import { BROKER_GATEWAY, type PaneView } from "./surface.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
 
 type Store = typeof import("./store.js");
@@ -48,8 +49,13 @@ export interface AgentJobDeps {
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
     | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat">;
   policy(): Promise<AgentJobPolicy>;
-  /** 작업 컨테이너를 띄울 수 있는 배포인가(매니지드). */
+  /** 작업 판을 띄울 수 있는 배포인가(매니지드 브로커 · 셀프호스트 박스 위 실행면 — surface.ts). */
   available(): Promise<boolean>;
+  /** 못 띄울 때 접수가 돌려줄 문장(501 — 무엇을 켜면 되는지). 없으면 일반 문장. */
+  unavailableMessage?(): string;
+  /** 판의 첫 말에 줄 자리 — 작업 폴더(판의 자리 기준) · 게이트웨이 주소 · 실을 워크스페이스(surface.paneView). 없으면 행의 작업 폴더와 매니지드 루프백.
+   *  던지면 그 작업은 돌지 않는다. */
+  paneView?(job: AgentJobRow): Promise<PaneView>;
   /** 띄운다. 일시 실패(컨테이너 확보가 막힘)는 `transient: true` 인 오류로 던진다(launch.JobLaunchError). */
   launch(job: AgentJobRow, bootSecret: string): Promise<unknown>;
   /** 걷는다 — 이미 없다는 확답이면 조용히, 그 밖의 실패는 던진다(launch.killJobContainer). */
@@ -63,8 +69,9 @@ export interface AgentJobDeps {
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
   mintMcpToken(job: AgentJobRow): Promise<{ token: string; tokenHash: string } | null>;
-  /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다. */
-  jobEnv?(job: AgentJobRow): Promise<Record<string, string>>;
+  /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
+   *  at — 판이 보는 게이트웨이 주소와 실을 워크스페이스(#5082 paneView — 프록시도 그 아래 · 그 워크스페이스로). */
+  jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   /**
@@ -187,7 +194,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   const me = memberOf(user);
   if (!me) throw new HttpError(401, "인증이 필요합니다");
   await assertMaySubmit(user, via, d);
-  if (!(await d.available())) throw new HttpError(501, "작업 컨테이너는 매니지드 워크스페이스에서만 돕니다");
+  if (!(await d.available())) throw new HttpError(501, d.unavailableMessage?.() ?? "이 배포에서는 에이전트 작업을 띄울 수 없습니다");
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
   if (!prompt) throw new HttpError(400, "prompt 가 비었습니다");
   if (prompt.length > PROMPT_MAX) throw new HttpError(400, `prompt 가 너무 깁니다(${PROMPT_MAX.toLocaleString()}자 이하)`);
@@ -364,8 +371,14 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     throw new HttpError(410, "끝난 작업입니다");
   }
   //  #4488 — 하네스에 더 줄 env(API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 못 만들면 그 작업은 돌지 않는다(신원과 같은 규칙).
+  //  #5082 — 판이 보는 자리(작업 폴더 · 게이트웨이 주소 · 워크스페이스)도 실행면이 준다. 박스 위 판은 작업 폴더가 박스 위 경로이고 게이트웨이가
+  //   그 박스의 루프백 포트다 — MCP 와 LLM 프록시가 둘 다 그 아래다(자리를 먼저 구해 env 에 넘긴다).
   let env: Record<string, string> = {};
-  try { env = d.jobEnv ? await d.jobEnv(booted) : {}; } catch (e) {
+  let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
+  try {
+    if (d.paneView) view = await d.paneView(booted);
+    env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
+  } catch (e) {
     const why = String((e as Error)?.message ?? e);
     logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
     await d.revokeToken(t.tokenHash).catch(() => undefined);
@@ -375,13 +388,13 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   }
   const slug = d.workspaceSlug();
   //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
-  const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: "http://127.0.0.1:8080/mcp",
+  const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: `${view.gateway}/mcp`,
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
   logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind }, "[agent-job] 판이 섰다");
   return {
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
     argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare }),
-    prompt: booted.prompt, mcp, env, cwd: booted.cwd,
+    prompt: booted.prompt, mcp, env, cwd: view.cwd,
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
   };
 }

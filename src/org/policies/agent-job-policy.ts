@@ -48,6 +48,12 @@ export interface AgentJobPolicy {
    *  0 = 무기한(지우지 않는다). 지운 작업은 목록 · 조회 · 이어받기에서 사라진다.
    */
   keep_days: number;
+  /**
+   * 작업 하나의 메모리 상한(MB) — 브로커 없는 박스(셀프호스트 · 박스 위 실행면 #5082)에서 그 판의 cgroup MemoryMax 로 건다. 0 = 상한 없음.
+   *  넘으면 그 판 안에서 하네스가 먼저 끊긴다(박스 전체가 메모리 압박에 들기 전에 — 게이트웨이 · 저장소를 지킨다).
+   *  ⚠ 매니지드는 이 값을 쓰지 않는다 — 작업 컨테이너도 사람 세션과 같은 세션 메모리 정책으로 잡힌다(launch.ts · 종전 그대로).
+   */
+  memory_max_mb: number;
 }
 
 export type AgentJobPolicyPatch = Partial<AgentJobPolicy>;
@@ -63,6 +69,8 @@ export const DEFAULT_AGENT_JOB_POLICY: AgentJobPolicy = {
   silent_sec: 90,
   start_timeout_sec: 180,
   keep_days: 90,
+  //  상민 2026-10-28 결정(#5082) — 램 16GB 박스 · 동시 2 기준 작업당 약 3GiB, 관리자가 바꾼다.
+  memory_max_mb: 3072,
 };
 
 // 관리 설정·검증에 쓰는 범위 — capability(zod·patch 블록)와 같은 상수를 쓴다(드리프트 금지).
@@ -77,6 +85,7 @@ export const AGENT_JOB_POLICY_RANGE: { readonly [K in keyof AgentJobPolicy]: rea
   silent_sec: [30, 900],
   start_timeout_sec: [30, 900],
   keep_days: [0, 3650],
+  memory_max_mb: [0, 65536],
 };
 
 const R = AGENT_JOB_POLICY_RANGE;
@@ -93,6 +102,7 @@ const policy = definePolicy<AgentJobPolicy>({
     silent_sec: { env: "LIVELY_AGENT_JOB_SILENT_SEC", min: R.silent_sec[0], max: R.silent_sec[1] },
     start_timeout_sec: { env: "LIVELY_AGENT_JOB_START_TIMEOUT_SEC", min: R.start_timeout_sec[0], max: R.start_timeout_sec[1] },
     keep_days: { env: "LIVELY_AGENT_JOB_KEEP_DAYS", min: R.keep_days[0], max: R.keep_days[1] },
+    memory_max_mb: { env: "LIVELY_AGENT_JOB_MEMORY_MAX_MB", min: R.memory_max_mb[0], max: R.memory_max_mb[1] },
   },
   //  축 사이 관계 셋 — 사람당 · 공용 시트 상한이 워크스페이스 상한보다 크면 의미가 없고, 기본 시간이 최대 시간보다 길면 기본값이 최대를 뚫는다.
   invariant: (o) => {
