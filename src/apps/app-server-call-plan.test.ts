@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  BG_PROGRESS_SEC, BG_WAIT_SEC, CALL_GUARD_MIN, callCredential, callInvokeEvent, jobToolReplyOf, looksLikeCallCredential, parseCallCredential, pendingJobText,
+  BG_PROGRESS_SEC, BG_WAIT_QUIET_SEC, BG_WAIT_SEC, CALL_GUARD_MIN, callCredential, callInvokeEvent, jobToolReplyOf, looksLikeCallCredential, parseCallCredential, pendingJobText,
   serverToolRouteOf, toolReplyOf, type ServerCallReply,
 } from "./app-server-call-plan.js";
 import { looksLikeJobCredential, parseJobCredential, JOB_ROUTE_MAX } from "./app-jobs-plan.js";
@@ -205,4 +205,15 @@ test("F6 못 끝난 작업의 안내 — 작업 번호 · 기다린 시간 · ap
   assert.match(t, /app_job_get \{"id": 77, "wait": 25\}/);
   assert.ok(BG_WAIT_SEC > 0 && BG_WAIT_SEC < 240, "claude.ai · 데스크톱 커넥터가 240초에서 끊는다");
   assert.ok(BG_PROGRESS_SEC > 0 && BG_PROGRESS_SEC < 300 && BG_PROGRESS_SEC < BG_WAIT_SEC, "Claude Code 는 5분 무소식이면 끊는다");
+});
+
+test("F7 진행 알림을 못 받는 요청의 기다림 — 흔한 MCP 클라이언트(TS SDK)의 기본 요청 시한 60초보다 짧고 진행 알림 기다림보다 길지 않다 · 운영 의존이 두 값을 그대로 쓴다", async () => {
+  assert.ok(BG_WAIT_QUIET_SEC > 0 && BG_WAIT_QUIET_SEC < 60, String(BG_WAIT_QUIET_SEC));
+  assert.ok(BG_WAIT_QUIET_SEC <= BG_WAIT_SEC);
+  //  흐름 모듈은 부를 때만 DB · 함수 실행면을 쓴다 — 의존을 만들기만 해서는 아무것도 열지 않는다.
+  const { liveServerCallDeps } = await import("./app-server-call.js");
+  const d = liveServerCallDeps();
+  assert.equal(d.bgQuietWaitSec, BG_WAIT_QUIET_SEC);
+  assert.equal(d.bgWaitSec, BG_WAIT_SEC);
+  assert.equal(d.bgProgressSec, BG_PROGRESS_SEC);
 });

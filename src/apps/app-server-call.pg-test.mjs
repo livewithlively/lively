@@ -640,6 +640,25 @@ try {
   chk("BG10b 넓은 토큰(앨리스)이면 물려받은 상한도 넓다 — 동의 범위(memory · items) 그대로(상한이 권한을 더 깎지 않는다)",
     !ra10.isError && J([...(meOf(ca10)?.scopes ?? [])].sort()) === J(["items", "memory"]), J({ ca10: meOf(ca10) }));
 
+  //  롤 창 — 매니지드 롤은 새 게이트웨이가 마이그레이션보다 몇 분 먼저 받는다(2026-10-20 사고). scope_ceiling 칸이 아직 없을 때: 보통 작업의
+  //   접수 · claim · 돌기 신원 · 결과는 그대로 돌고(칸 묶음 LIGHT · VIEW 밖), 상한이 필요한 도구 작업만 접수가 실패해 행을 남기지 않는다(닫힘). 끝나면 같은 DDL 로 되돌린다.
+  const openJobs = async () => Number((await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_job WHERE status IN ('queued','dispatched','running')`)).rows[0].n);
+  for (let i = 0; i < 100 && (await openJobs()) > 0; i++) await sleep(100);
+  const nJobsR = Number((await itemsPool.query(`SELECT count(*)::int AS n FROM org_app_job`)).rows[0].n);
+  let rollPlain = null, rollTool = null, rollRows = [];
+  await dbc.query(`ALTER TABLE org_app_job DROP COLUMN IF EXISTS scope_ceiling`);
+  try {
+    rollPlain = await startAppJob({ app_id: "wiki", route: "/api/tools/ask", body: { q: "롤 창" }, wait: 10 }, P("alice"), {}, jobDeps).catch((e) => ({ err: String(e?.message ?? e) }));
+    rollTool = await A.call("ask_bg", { q: "롤 창 도구" });
+    rollRows = (await itemsPool.query(`SELECT id, status, source FROM org_app_job ORDER BY id`)).rows;
+  } finally {
+    await dbc.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS scope_ceiling TEXT[]`);
+  }
+  chk("R1 롤 창(scope_ceiling 칸이 아직 없음) — 보통 작업은 접수 · claim · 돌기 신원 · 결과까지 그대로 · 상한이 필요한 도구 작업은 접수가 실패하고 행을 남기지 않는다(닫힘)",
+    rollPlain?.status === "done" && rollPlain?.result?.json?.me?.status === 200 && rollPlain?.result?.json?.me?.body?.userId === "alice"
+      && rollTool?.isError === true && codeOf(rollTool) === "executor_failed" && rollRows.length === nJobsR + 1 && rollRows.at(-1)?.source === "person",
+    J({ rollPlain: rollPlain?.err ?? { s: rollPlain?.status, me: rollPlain?.result?.json?.me?.status }, rollTool: codeOf(rollTool), n: [nJobsR, rollRows.length], last: rollRows.at(-1) }));
+
   // ── E12 정비 ──
   const st1 = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "t", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 3 });
   await itemsPool.query(`UPDATE org_app_call SET status='running', claimed_at = now() - interval '40 seconds' WHERE id=$1`, [st1.row.id]);
