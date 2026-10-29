@@ -14,6 +14,8 @@ export const MAX_TEXT_CHARS = 2000;
 export const MAX_TOTAL_CHARS = 24_000;
 /** 메모리에 남기는 번역 수 — 넘으면 오래된 것부터 버린다(Map 의 넣은 차례). */
 export const CACHE_MAX = 20_000;
+/** 깨진 답이 오면 묶음을 반씩 쪼개 다시 묻는다 — 한 요청에서 모델을 부르는 횟수의 상한(1 + 2 + 4: 세 층까지). */
+export const SPLIT_CALLS_MAX = 7;
 
 /** 기본 모델 — 짧은 글 번역이라 작은 모델로 충분하다. LIVELY_UI_TRANSLATE_MODEL 로 바꾼다. */
 export const DEFAULT_TRANSLATE_MODEL = "claude-haiku-5-5";
@@ -38,6 +40,7 @@ export function systemPrompt(target: TranslateTarget): string {
     `You translate user-interface text of Lively (a team knowledge / AI workspace product) from Korean to ${lang}.`,
     `You get a JSON array of strings. Reply with ONLY a JSON array of the same length, in the same order — item i is the translation of input i.`,
     `Rules: keep it short and natural, like real app UI. Keep numbers, dates, times, emoji, symbols (· — → «» # @ / ⌘), code, file paths, URLs, IDs, product and people's names as they are (romanize Korean person names). Keep leading/trailing punctuation. If an item has no Korean, return it unchanged. Never add notes.`,
+    `The reply must be valid JSON. Inside a translation never write a straight double quote (") — keep 「」 «» as they are, or use “ ”.`,
     `Use these terms consistently: ${GLOSSARY.map(([k, v]) => `${k}=${v}`).join(", ")}.`,
   ].join("\n");
 }
@@ -49,10 +52,28 @@ export function parseReply(text: string, n: number): Array<string | null> | null
   const s = String(text ?? "");
   const a = s.indexOf("["), b = s.lastIndexOf("]");
   if (a < 0 || b <= a) return null;
+  const raw = s.slice(a, b + 1);
   let v: unknown;
-  try { v = JSON.parse(s.slice(a, b + 1)); } catch { return null; }
+  //  모델이 「」 를 곧은 따옴표로 옮기며 이스케이프를 빠뜨리면 JSON 이 깨진다(매니지드 실측) — 한 번 고쳐 읽는다.
+  try { v = JSON.parse(raw); } catch { try { v = JSON.parse(repairStringArray(raw)); } catch { return null; } }
   if (!Array.isArray(v) || v.length !== n) return null;
   return v.map((x) => (typeof x === "string" && x.trim() ? x : null));
+}
+
+/** (순수) 글 배열 JSON 의 문자열 안 «"» · 날 줄바꿈을 이스케이프한다. 문자열 안의 «"» 는 뒤에 «]» 나 «, "» 가 올 때만 끝으로 본다. */
+export function repairStringArray(raw: string): string {
+  const END = /\s*(?:\]|,\s*")/y;
+  let out = "", inStr = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (!inStr) { out += c; if (c === '"') inStr = true; continue; }
+    if (c === "\\") { out += c + (raw[i + 1] ?? ""); i++; continue; }
+    if (c === "\n") { out += "\\n"; continue; }
+    if (c !== '"') { out += c; continue; }
+    END.lastIndex = i + 1;
+    if (END.test(raw)) { out += c; inStr = false; } else out += '\\"';
+  }
+  return out;
 }
 
 /** (순수) 받은 입력 → 정리된 글 목록 · 거절 사유. 빈 글 · 글이 아닌 것은 빼지 않고 그대로 둔다(자리 맞추기는 부르는 쪽 몫이 아니다). */
@@ -90,7 +111,7 @@ export interface TranslateDeps {
   apiKey(): Promise<string | null>;
   workspaceId(): Promise<string | null>;
   /** 모델 한 번 — ok:false 면 error 를 싣는다(키는 싣지 않는다). */
-  call(apiKey: string, i: { model: string; system: string; prompt: string; maxTokens: number; workspaceId: string | null }): Promise<{ ok: boolean; text: string; error: string | null }>;
+  call(apiKey: string, i: { model: string; system: string; prompt: string; maxTokens: number; workspaceId: string | null }): Promise<{ ok: boolean; text: string; error: string | null; stopReason?: string | null }>;
   cache: TranslateCache;
   model(): string;
   /** 기억을 나누는 칸 — 테넌트(워크스페이스). 한 프로세스가 여러 테넌트를 받아도 한쪽이 오염시킨 번역이 남에게 나가지 않게(격리 리뷰 6). */
@@ -107,7 +128,7 @@ export interface TranslateResult {
 }
 
 /**
- * 글 묶음 번역 — 한글이 없는 글은 그대로 · 메모리에 있는 글은 메모리에서 · 나머지만 모델 한 번.
+ * 글 묶음 번역 — 한글이 없는 글은 그대로 · 메모리에 있는 글은 메모리에서 · 나머지만 모델 한 번(답이 깨지면 쪼개 몇 번 더).
  *  모델이 실패해도 던지지 않는다: 그 자리들을 null 로 돌려주고 error 에 까닭을 적는다(화면은 한글을 그대로 보여 준다).
  *  키가 없으면 501 성격의 오류를 던진다 — 부르는 쪽(능력)이 사람이 읽을 문장으로 바꾼다.
  */
@@ -128,26 +149,40 @@ export async function translateTexts(texts: string[], target: TranslateTarget, d
 
   const key = await d.apiKey();
   if (!key) throw new NoApiKeyError();
-  const batch = todo.map((i) => texts[i]);
-  const total = batch.reduce((n, t) => n + t.length, 0);
-  const r = await d.call(key, {
-    model: d.model(), system: systemPrompt(target), prompt: userPrompt(batch),
-    //  영어는 한국어보다 글자가 늘어난다 — 넉넉히. 짧은 묶음도 바닥 1024.
-    maxTokens: Math.min(8_000, Math.max(512, Math.ceil(total * 1.5) + batch.length * 16)),
-    workspaceId: await d.workspaceId(),
-  });
-  const parsed = r.ok ? parseReply(r.text, batch.length) : null;
-  let translated = 0, failed = 0;
-  todo.forEach((i, k) => {
-    const v = parsed?.[k] ?? null;
-    if (v) { d.cache.set(ck, texts[i], v); translated++; } else failed++;
-    out[i] = v;
-  });
+  const system = systemPrompt(target), model = d.model(), workspaceId = await d.workspaceId();
+  let calls = 0, translated = 0, failed = 0;
+  let error: string | undefined;
+  //  묶음 하나를 한 번에 — 답이 깨졌거나 잘렸으면 반씩 쪼개 다시 묻는다(긴 글 하나가 묶음 전체를 실패시키지 않게, 매니지드 실측).
+  //  호출 자체의 실패(과부하 등)는 쪼개지 않는다 — 같은 오류를 여러 번 부를 뿐이다.
+  const run = async (ids: number[]): Promise<void> => {
+    calls++;
+    const batch = ids.map((i) => texts[i]);
+    const total = batch.reduce((n, t) => n + t.length, 0);
+    const r = await d.call(key, {
+      model, system, prompt: userPrompt(batch),
+      //  영어는 한국어보다 글자가 늘어난다 — 넉넉히. 짧은 묶음도 바닥 512.
+      maxTokens: Math.min(8_000, Math.max(512, Math.ceil(total * 1.5) + batch.length * 16)),
+      workspaceId,
+    });
+    const parsed = r.ok && r.stopReason !== "max_tokens" ? parseReply(r.text, batch.length) : null;
+    if (!parsed && r.ok && ids.length > 1 && calls + 2 <= SPLIT_CALLS_MAX) {
+      const h = Math.ceil(ids.length / 2);
+      await Promise.all([run(ids.slice(0, h)), run(ids.slice(h))]);
+      return;
+    }
+    ids.forEach((i, k) => {
+      const v = parsed?.[k] ?? null;
+      if (v) { d.cache.set(ck, texts[i], v); translated++; } else failed++;
+      out[i] = v;
+    });
+    if (!r.ok) error = r.error ?? "번역 호출이 실패했습니다";
+    else if (!parsed) error ??= "번역 응답을 읽지 못했습니다";
+  };
+  await run(todo);
   //  같은 글의 나머지 자리도 채운다.
   texts.forEach((t, i) => { if (out[i] === null && firstAt.has(t)) out[i] = out[firstAt.get(t)!]; });
   const res: TranslateResult = { translations: out, cached, translated, failed };
-  if (!r.ok) res.error = r.error ?? "번역 호출이 실패했습니다";
-  else if (!parsed) res.error = "번역 응답을 읽지 못했습니다";
+  if (error) res.error = error;
   return res;
 }
 
@@ -170,7 +205,7 @@ export async function liveTranslateDeps(): Promise<TranslateDeps> {
       const t = setTimeout(() => ac.abort(), 90_000);
       try {
         const r = await singleShot(apiKey, { model: i.model, system: i.system, prompt: i.prompt, maxTokens: i.maxTokens, workspaceId: i.workspaceId }, ac.signal);
-        return { ok: r.ok, text: r.text, error: r.error };
+        return { ok: r.ok, text: r.text, error: r.error, stopReason: r.stopReason };
       } catch (e) {
         return { ok: false, text: "", error: ac.signal.aborted ? "번역 호출이 90초 안에 끝나지 않았습니다" : String((e as Error)?.message ?? e).slice(0, 200) };
       } finally { clearTimeout(t); }
