@@ -638,6 +638,26 @@ try {
         const next = await post(e7.id, { port: srv2.address().port, secret: e7.secret, body: gz, conv: CONV });
         chk("TR7e 멈춘 본문은 상한 시간 뒤 게이트웨이가 끊는다(우리 5초 전에) · 자리를 풀어 다음 보고는 받는다",
           stalled.status === "reset" && ms < 3000 && next.status === 200 && next.json?.stored === true, JSON.stringify({ stalled, ms, next }));
+        //  TR7f 느려도 오고 있으면 끊지 않는다(조각마다 다시 잰다 · 격리 리뷰) — 상한 0.5초에 0.2초마다 조각을 보내 1초 넘게 걸려도 받는다.
+        const f7 = await keyWith("tr7i");
+        const step = Math.ceil(gz.length / 7);
+        const parts = [];
+        for (let i = 0; i < gz.length; i += step) parts.push(gz.subarray(i, i + step));
+        const t1 = Date.now();
+        const slow = await new Promise((resolve) => {
+          const req = http.request({ host: "127.0.0.1", port: srv2.address().port, method: "POST", path: `/api/agent-jobs/${f7.id}/transcript`,
+            headers: { authorization: `Bearer ${f7.secret}`, "content-type": "application/gzip", "x-lvly-conversation": CONV, "content-length": String(gz.length) } }, (res) => {
+            let b = ""; res.setEncoding("utf8"); res.on("data", (c) => { b += c; });
+            res.on("end", () => { let j = null; try { j = JSON.parse(b); } catch { /* 글 */ } resolve({ status: res.statusCode, json: j }); });
+          });
+          req.on("error", (e) => resolve({ status: "reset", err: e.message }));
+          let i = 0;
+          const tick = () => { if (i < parts.length - 1) { req.write(parts[i++]); setTimeout(tick, 200); } else req.end(parts[i]); };
+          tick();
+        });
+        const took = Date.now() - t1;
+        chk("TR7f 느린 업로드(0.2초마다 조각 · 상한 0.5초)는 끊지 않는다 — 받는다(stored:true)",
+          parts.length >= 5 && took > 800 && slow.status === 200 && slow.json?.stored === true, JSON.stringify({ parts: parts.length, took, slow }));
       } finally { await new Promise((r) => srv2.close(r)); }
     } finally { await new Promise((r) => srv.close(r)); }
     await cleanup();

@@ -538,6 +538,20 @@ await t("T3d(#5101) 되돌리기 — 모르는 묶음 형식(v 1 이 아님)은 
     assert.equal(h3.restored, null, "첫 파일(대화)도 놓지 않았다");
     assert.match(String(g3.seen.results[0]!.transcript_note), /되돌릴 크기가 상한\(20000\)/);
   } finally { await g3.close(); }
+  //  쓰다가 실패해도(이름 겹침 — 파일 x 아래에 x/y.txt · 디스크 가득과 같은 자리) 반쯤 놓인 것을 남기지 않는다(격리 리뷰) — 앞서 쓴 대화 파일까지 지운다.
+  const r4 = path.join(tmp, "t3e4.json");
+  const clash: Bundle = { v: 1, cfg: "/old/cfg", files: [
+    { p: `-fake-cwd/${CONV_R}.jsonl`, d: b64("앞 대화\n") },
+    { p: "-fake-cwd/x", d: b64("파일") },
+    { p: "-fake-cwd/x/y.txt", d: b64("파일 아래") },
+  ] };
+  const g4 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r4, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcript: { conv: CONV_R, gz: bundleB64(clash) } } });
+  try {
+    assert.equal(await runBoot(g4.port), 0);
+    assert.equal(JSON.parse(fs.readFileSync(r4, "utf8")).restored, null, "앞서 쓴 대화 파일도 지웠다");
+    assert.match(String(g4.seen.results[0]!.transcript_note), /transcript restore: /);
+  } finally { await g4.close(); }
 });
 
 await t("T4(#5101) 압축한 묶음이 상한을 넘거나 · 풀린 크기가 상한에 가까우면(읽기 전에 잰다) — 올리지 않는다 · 결과는 올린다", async () => {

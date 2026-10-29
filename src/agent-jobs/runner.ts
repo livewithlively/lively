@@ -206,7 +206,11 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
       fs.writeFileSync(dest, data, { mode: 0o600 });
     }
     if (!found) tNote += "transcript restore: 그 대화 파일이 묶음에 없다\n";
-  } catch (e) { tNote += "transcript restore: " + (e && e.message) + "\n"; }
+  } catch (e) {
+    tNote += "transcript restore: " + (e && e.message) + "\n";
+    //  쓰다가 실패했어도(디스크 가득 · 이름 겹침) 반쯤 놓인 것을 남기지 않는다 — 이 작업만의 빈 설정 폴더라 projects/ 를 통째로 비워도 된다.
+    try { fs.rmSync(projDir(), { recursive: true, force: true }); } catch (e2) {}
+  }
 }
 // #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
 //  읽기 전에 크기부터 잰다 — 너무 큰 기록을 메모리에 올리다 판이 죽으면 결과까지 잃는다(base64 · JSON 을 더해도 풀린 상한 안이어야 한다).

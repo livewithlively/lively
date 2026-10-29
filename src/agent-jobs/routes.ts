@@ -8,7 +8,10 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { TRANSCRIPT_GZ_MAX } from "./plan.js";
 
-/** #5101 대화 기록 본문을 다 받기까지의 상한 — 멈춘 보고가 그 작업의 자리(receiving)를 쥐고 있지 못하게(판의 요청 상한 20초 · 8MiB 를 넉넉히 넘는다). */
+/**
+ * #5101 대화 기록 본문이 멈춘 뒤(마지막 조각부터) 이만큼 지나면 끊고 자리(receiving)를 푼다 — 멈춘 보고가 그 작업의 자리를 쥐고 있지 못하게.
+ *  느려도 오고 있으면 끊지 않는다(조각마다 다시 잰다 — 업로드 정지 상한 terminal/upload-file · #1272 와 같은 뜻). 판의 소켓 무활동 상한(20초)보다 넉넉하다.
+ */
 const TRANSCRIPT_BODY_MS = 120_000;
 
 export function registerAgentJobRoutes(app: express.Express, o: { transcriptBodyMs?: number } = {}): void {
@@ -53,8 +56,11 @@ export function registerAgentJobRoutes(app: express.Express, o: { transcriptBody
         //  문을 기다리는 사이 연결이 끊겼으면(res.destroyed) 자리를 잡지 않는다 — close 는 이미 지나가 다시 오지 않는다(격리 리뷰: 잡으면 영영 남는다).
         if ((await transcriptGate(id, bearer(req), await deps())).take && !receiving.has(id) && !res.destroyed) {
           receiving.add(id);
-          const stall = setTimeout(() => req.destroy(), o.transcriptBodyMs ?? TRANSCRIPT_BODY_MS);
-          res.on("close", () => { clearTimeout(stall); receiving.delete(id); });   // 답을 보냈거나 연결이 끊겼다
+          const bodyMs = o.transcriptBodyMs ?? TRANSCRIPT_BODY_MS;
+          let stall = setTimeout(() => req.destroy(), bodyMs);
+          const rearm = (): void => { clearTimeout(stall); stall = setTimeout(() => req.destroy(), bodyMs); };
+          req.on("data", rearm);   // next() 앞에 단다 — 본문 파서도 같은 틱에 붙어 조각을 다 받는다
+          res.on("close", () => { clearTimeout(stall); req.off("data", rearm); receiving.delete(id); });   // 답을 보냈거나 연결이 끊겼다
           next();
           return;
         }
