@@ -12,6 +12,7 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
 type Call = { prompt: string };
 function fakeDeps(reply: (texts: string[]) => { ok: boolean; text: string; error: string | null }, key: string | null = "sk-test") {
   const calls: Call[] = [];
+  const scope = { v: "t1" };
   let keyLookups = 0;
   const d: TranslateDeps = {
     apiKey: async () => { keyLookups++; return key; },
@@ -19,8 +20,9 @@ function fakeDeps(reply: (texts: string[]) => { ok: boolean; text: string; error
     call: async (_k, i) => { calls.push({ prompt: i.prompt }); return reply(JSON.parse(i.prompt) as string[]); },
     cache: new TranslateCache(),
     model: () => "m",
+    scope: () => scope.v,
   };
-  return { d, calls, keyLookups: () => keyLookups };
+  return { d, calls, keyLookups: () => keyLookups, scope };
 }
 const echoEn = (texts: string[]) => ({ ok: true, text: JSON.stringify(texts.map((t) => `EN(${t})`)), error: null });
 const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
@@ -142,6 +144,20 @@ const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
   assert.equal(c.get("en", "a"), "A");
   assert.equal(c.get("en", "c"), "C");
   ok("E13 기억은 상한에서 오래 안 쓴 것부터 버린다");
+}
+
+// E15 기억은 테넌트마다 따로 — 한쪽이 받은 번역을 다른 테넌트에 내주지 않는다
+{
+  const f = fakeDeps(echoEn);
+  await translateTexts(["삭제"], "en", f.d);
+  f.scope.v = "t2";
+  const r = await translateTexts(["삭제"], "en", f.d);
+  assert.equal(r.cached, 0, "다른 테넌트는 기억을 못 본다");
+  assert.equal(f.calls.length, 2);
+  f.scope.v = "t1";
+  const r1 = await translateTexts(["삭제"], "en", f.d);
+  assert.equal(r1.cached, 1, "같은 테넌트는 기억에서");
+  ok("E15 번역 기억은 테넌트마다 따로");
 }
 
 // E14 답 모양 — 코드 울타리 · 앞뒤 말 · 깨진 JSON

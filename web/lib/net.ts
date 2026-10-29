@@ -108,8 +108,19 @@ function wsKey(base: string): string {
 const REVALIDATE_MAX = 24;
 const revalidated = new Map<string, { etag: string; text: string }>();
 
+// ── 보내기 전 검사(#5141) — 등록된 검사가 문장을 돌려주면 그 요청은 **보내지 않고** 409 로 던진다. ──
+//  화면 영어 보기(lib/screen-lang)가 쓴다: 켜져 있는 동안 화면에 보여 준 영어 문장이 쓰기 요청 본문에 들어 있으면
+//  (편집기가 화면 글을 통째로 읽어 저장 · 이름 바꾸기 칸이 화면 글로 채워짐 등) 번역이 데이터로 새는 것이다.
+//  이 모듈은 leaf 라 검사 쪽을 import 하지 않는다 — 401 처리기와 같은 역전(등록하는 쪽이 정한다).
+let requestGuard: ((path: string, method: string, body: unknown) => string | null) | null = null;
+function setRequestGuard(fn: typeof requestGuard): void { requestGuard = fn; }
+
 // ── fetch 헬퍼 — 401 은 토큰 폐기 + 주입된 처리기, 그 외 비정상은 {error} 메시지로 throw ──
 async function api(path: string, opts: any = {}): Promise<any> {
+  if (requestGuard) {
+    const why = requestGuard(String(path), String(opts.method || 'GET').toUpperCase(), opts.body);
+    if (why) { const e: any = new Error(why); e.status = 409; e.guard = 'screen-lang'; throw e; }
+  }
   const token = localStorage.getItem(TOKEN_KEY);
   const headers: any = Object.assign({}, opts.headers);
   if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -222,6 +233,7 @@ adoptWorkspaceFromUrl();
 export {
   TOKEN_KEY,
   api,
+  setRequestGuard,
   apiUrl,
   appUrl,
   setUnauthorizedHandler,

@@ -93,6 +93,8 @@ export interface TranslateDeps {
   call(apiKey: string, i: { model: string; system: string; prompt: string; maxTokens: number; workspaceId: string | null }): Promise<{ ok: boolean; text: string; error: string | null }>;
   cache: TranslateCache;
   model(): string;
+  /** 기억을 나누는 칸 — 테넌트(워크스페이스). 한 프로세스가 여러 테넌트를 받아도 한쪽이 오염시킨 번역이 남에게 나가지 않게(격리 리뷰 6). */
+  scope(): string;
 }
 
 export interface TranslateResult {
@@ -111,13 +113,14 @@ export interface TranslateResult {
  */
 export async function translateTexts(texts: string[], target: TranslateTarget, d: TranslateDeps): Promise<TranslateResult> {
   const out: Array<string | null> = texts.map(() => null);
+  const ck = `${d.scope()}|${target}`;
   const todo: number[] = [];
   let cached = 0;
   //  같은 글이 여러 번 오면(«열기» 버튼 열 개) 모델에는 한 번만 보낸다.
   const firstAt = new Map<string, number>();
   texts.forEach((t, i) => {
     if (!needsTranslation(t)) { out[i] = t; return; }
-    const hit = d.cache.get(target, t);
+    const hit = d.cache.get(ck, t);
     if (hit !== undefined) { out[i] = hit; cached++; return; }
     if (!firstAt.has(t)) { firstAt.set(t, i); todo.push(i); }
   });
@@ -130,14 +133,14 @@ export async function translateTexts(texts: string[], target: TranslateTarget, d
   const r = await d.call(key, {
     model: d.model(), system: systemPrompt(target), prompt: userPrompt(batch),
     //  영어는 한국어보다 글자가 늘어난다 — 넉넉히. 짧은 묶음도 바닥 1024.
-    maxTokens: Math.min(16_000, Math.max(1024, Math.ceil(total * 1.5) + batch.length * 16)),
+    maxTokens: Math.min(8_000, Math.max(512, Math.ceil(total * 1.5) + batch.length * 16)),
     workspaceId: await d.workspaceId(),
   });
   const parsed = r.ok ? parseReply(r.text, batch.length) : null;
   let translated = 0, failed = 0;
   todo.forEach((i, k) => {
     const v = parsed?.[k] ?? null;
-    if (v) { d.cache.set(target, texts[i], v); translated++; } else failed++;
+    if (v) { d.cache.set(ck, texts[i], v); translated++; } else failed++;
     out[i] = v;
   });
   //  같은 글의 나머지 자리도 채운다.
@@ -157,6 +160,7 @@ let liveDeps: TranslateDeps | null = null;
 export async function liveTranslateDeps(): Promise<TranslateDeps> {
   if (liveDeps) return liveDeps;
   const live = await import("../ai-runs/live.js");
+  const { currentTenant } = await import("../org/tenant-context.js");
   const { singleShot } = await import("../ai-runs/anthropic.js");
   liveDeps = {
     apiKey: live.workspaceApiKey,
@@ -173,6 +177,7 @@ export async function liveTranslateDeps(): Promise<TranslateDeps> {
     },
     cache: new TranslateCache(),
     model: translateModel,
+    scope: () => currentTenant()?.id ?? "",
   };
   return liveDeps;
 }
