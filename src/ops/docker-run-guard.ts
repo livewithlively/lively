@@ -17,7 +17,7 @@ export interface DockerRunPolicy {
    *  targets 를 주면 컨테이너 쪽 자리가 그 꼴이어야 한다 · source 를 주면 원본이 정확히 그 경로여야 한다(뿌리 안의 다른 자리를 붙이지 않게 — #5082).
    */
   binds: Array<{ root: string; rw: boolean; targets?: RegExp; source?: string }>;
-  /** --user 로 받는 «uid:gid»(정확히 이 목록) — 없으면 비-root 숫자 꼴만 본다(#5082 작업 컨테이너는 그 박스의 정해진 계정만). */
+  /** --user 로 받는 «uid:gid»(정확히 이 목록) — 없으면 비-root 숫자 꼴만 본다(#5082 작업 컨테이너는 그 작업의 계정 하나만). */
   users?: string[];
   /** --tmpfs 를 둘 수 있는 컨테이너 자리. */
   tmpfs?: string[];

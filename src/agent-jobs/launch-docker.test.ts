@@ -13,7 +13,7 @@ import path from "node:path";
 import {
   DEFAULT_JOB_UID, DockerBoxError, JOB_BARE_HOME, JOB_CLAUDE_DIR_ENV, JOB_CLAUDE_TARGET, JOB_CONTAINER_PRELUDE, JOB_LOCALE,
   claudeDirProbeScript, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus, dockerUnavailableMessage, ensureImageOnce, envFileText,
-  gatewayClaudeDirState, jobContainerArgs, jobContainerEnv,
+  gatewayClaudeDirState, hideBoxPaths, invalidateDockerBox, jobContainerArgs, jobContainerEnv,
   jobContainerName, jobContainerPolicy, jobIdentities, jobPlacement, killDockerJob, launchDockerJob, liveDockerDeps, probeDockerBox, resetDockerProbesForTest, workDirState,
   type DockerBox, type DockerLaunchDeps, type JobPlacement, type MemberFacts,
 } from "./launch-docker.js";
@@ -22,6 +22,7 @@ import { JobLaunchError } from "./launch.js";
 import { BOOT_SOURCE } from "./runner.js";
 import { HOMELESS_OS_USER } from "./plan.js";
 import { computeExecTopology, parseAgentJobs } from "../exec-topology.js";
+import { logger } from "../log.js";
 import { assertSafeDockerRun, DockerRunRejected, type DockerRunPolicy } from "../ops/docker-run-guard.js";
 import type { AgentJobRow } from "./store.js";
 import type { LivelyUser } from "../context.js";
@@ -32,6 +33,16 @@ const t = async (name: string, fn: () => Promise<void> | void): Promise<void> =>
   pass++;
   console.log(`ok  ${name}`);
 };
+
+/** fn 동안 게이트웨이 로그의 warn 줄을 모은다(로그로만 남기는 원문 · 한 번만 적기를 잰다). */
+async function warnsDuring(fn: () => Promise<void>): Promise<Array<{ obj: Record<string, unknown>; msg: string }>> {
+  const seen: Array<{ obj: Record<string, unknown>; msg: string }> = [];
+  const l = logger as unknown as { warn: unknown };
+  const keep = l.warn;
+  l.warn = (obj: Record<string, unknown>, msg: string): void => { seen.push({ obj, msg }); };
+  try { await fn(); } finally { l.warn = keep; }
+  return seen;
+}
 
 const SECRET = "bootSecret_Dk9-0123456789abcdefghijklmnopqrstuv";
 const SID = "job-42-0a1b2c3d";
@@ -548,6 +559,26 @@ await t("C9 작업 폴더가 링크(다른 앱 폴더를 가리킴) · 폴더가
   }
 });
 
+await t("C10 작업 폴더 확인(workDirState) — 실제 폴더 ok · 링크 · 뿌리 위 링크는 괜찮다(실제 경로로 잰다) · 뿌리 밖 자리 · 없음", async () => {
+  const tr = realTree();
+  try {
+    assert.equal(await workDirState({ abs: tr.work, base: tr.apps }), "ok");
+    const alias = path.join(tr.root, "apps-alias");
+    fs.symlinkSync(tr.apps, alias);
+    assert.equal(await workDirState({ abs: path.join(alias, "policy-bot"), base: alias }), "ok", "뿌리 자체가 링크인 것(맥 /var)은 괜찮다");
+    fs.symlinkSync(tr.other, path.join(tr.apps, "linked"));
+    assert.equal(await workDirState({ abs: path.join(tr.apps, "linked"), base: tr.apps }), "link");
+    assert.equal(await workDirState({ abs: tr.other, base: tr.work }), "link", "뿌리 밖");
+    assert.equal(await workDirState({ abs: path.join(tr.apps, "none"), base: tr.apps }), "missing");
+    //  뿌리 안 중간 자리가 링크(shared/project → 다른 곳) — 끝 자리는 실제 폴더라 lstat 으로는 안 보인다 · 실제 경로로 잰다.
+    const elsewhere = path.join(tr.root, "elsewhere");
+    fs.mkdirSync(path.join(elsewhere, "7"), { recursive: true });
+    fs.rmSync(path.join(tr.shared, "project"), { recursive: true, force: true });
+    fs.symlinkSync(elsewhere, path.join(tr.shared, "project"));
+    assert.equal(await workDirState({ abs: path.join(tr.shared, "project", "7"), base: tr.shared }), "link", "중간 링크");
+  } finally { tr.done(); }
+});
+
 await t("C11 만든 뒤 확인을 지난 작업 폴더를 이미지 받는 사이 링크로 바꿔치기 — 띄우기 바로 앞 확인이 거절한다(일시 아님) · docker run 없음 · env 파일은 지운다 · 작업 오류에 박스 위 경로가 없다", async () => {
   const tr = realTree();
   try {
@@ -568,24 +599,44 @@ await t("C11 만든 뒤 확인을 지난 작업 폴더를 이미지 받는 사�
   } finally { tr.done(); }
 });
 
-await t("C10 작업 폴더 확인(workDirState) — 실제 폴더 ok · 링크 · 뿌리 위 링크는 괜찮다(실제 경로로 잰다) · 뿌리 밖 자리 · 없음", async () => {
-  const tr = realTree();
-  try {
-    assert.equal(await workDirState({ abs: tr.work, base: tr.apps }), "ok");
-    const alias = path.join(tr.root, "apps-alias");
-    fs.symlinkSync(tr.apps, alias);
-    assert.equal(await workDirState({ abs: path.join(alias, "policy-bot"), base: alias }), "ok", "뿌리 자체가 링크인 것(맥 /var)은 괜찮다");
-    fs.symlinkSync(tr.other, path.join(tr.apps, "linked"));
-    assert.equal(await workDirState({ abs: path.join(tr.apps, "linked"), base: tr.apps }), "link");
-    assert.equal(await workDirState({ abs: tr.other, base: tr.work }), "link", "뿌리 밖");
-    assert.equal(await workDirState({ abs: path.join(tr.apps, "none"), base: tr.apps }), "missing");
-    //  뿌리 안 중간 자리가 링크(shared/project → 다른 곳) — 끝 자리는 실제 폴더라 lstat 으로는 안 보인다 · 실제 경로로 잰다.
-    const elsewhere = path.join(tr.root, "elsewhere");
-    fs.mkdirSync(path.join(elsewhere, "7"), { recursive: true });
-    fs.rmSync(path.join(tr.shared, "project"), { recursive: true, force: true });
-    fs.symlinkSync(elsewhere, path.join(tr.shared, "project"));
-    assert.equal(await workDirState({ abs: path.join(tr.shared, "project", "7"), base: tr.shared }), "link", "중간 링크");
-  } finally { tr.done(); }
+await t("H1 박스 위 자리 가리기(hideBoxPaths) — 아는 자리를 긴 것부터 · 자리 이름 중간에서 끊지 않는다 · 끝 / 는 같은 자리 · 문장 끝 마침표 · 모르는 자리 · 컨테이너 자리는 그대로", () => {
+  const known = ["/srv/lively/apps", "/srv/lively/apps/policy-bot/", "/home/box_kim", "", "/", "rel/x"];
+  assert.equal(hideBoxPaths("mkdir '/srv/lively/apps/policy-bot': EACCES", known), "mkdir '<박스 경로>': EACCES");
+  assert.equal(hideBoxPaths("open /srv/lively/apps/other/x.txt", known), "open <박스 경로>/other/x.txt");
+  assert.equal(hideBoxPaths("/srv/lively/appsX · /home/box_kimchi · /srv/lively/apps.bak", known), "/srv/lively/appsX · /home/box_kimchi · /srv/lively/apps.bak");
+  assert.equal(hideBoxPaths("bind source path does not exist: /home/box_kim/.claude", known), "bind source path does not exist: <박스 경로>/.claude");
+  assert.equal(hideBoxPaths("mkdir /srv/lively/apps/policy-bot. 다시", known), "mkdir <박스 경로>. 다시");
+  assert.equal(hideBoxPaths("작업 폴더(/work/apps/policy-bot) · /opt/lively-job/bin/claude · /var/lib/x", known), "작업 폴더(/work/apps/policy-bot) · /opt/lively-job/bin/claude · /var/lib/x");
+  assert.equal(hideBoxPaths("a /home/box_kim, b [/home/box_kim]", known), "a <박스 경로>, b [<박스 경로>]");
+  assert.equal(hideBoxPaths("x(y) [z]", ["/a(b", "/[c"]), "x(y) [z]", "자리 글의 정규식 글자는 글자 그대로");
+  assert.equal(hideBoxPaths("x", []), "x");
+});
+
+await t("C12 띄우기 실패 글(앱이 받는다)에 박스 위 자리가 없다 — 만들기 · 확인 · env 파일 · docker run 원문 · 검사기 사유 · 자리 불일치 모두 · 오류 종류 · 일시 표시는 그대로 · 원문은 로그에", async () => {
+  const claude = (tr: Tree): string => path.join(tr.home, ".claude");
+  const cases: Array<[string, (tr: Tree) => Partial<DockerLaunchDeps>, boolean]> = [
+    ["작업 폴더 만들기", (tr) => ({ mkdirWork: async () => { throw new Error(`mkdir: cannot create directory '${tr.work}': Permission denied`); } }), true],
+    ["작업 폴더 확인", (tr) => ({ checkWork: async () => { throw new Error(`EACCES: permission denied, lstat '${tr.work}'`); } }), true],
+    ["env 파일(런타임 폴더는 처음부터 가린다)", (tr) => ({ writeEnvFile: async (name) => { throw new Error(`EACCES: permission denied, open '${path.join(tr.run, `${name}.env`)}'`); } }), true],
+    ["docker run 원문", (tr) => ({ run: async () => { throw new Error(`docker: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: ${claude(tr)}`); } }), true],
+    ["검사기 사유", (tr) => ({ run: async () => { throw new DockerRunRejected(`마운트 원본 ${claude(tr)} → ${claude(tr)}(쓰기) 는 받지 않습니다`); } }), false],
+    ["자리 불일치(형제)", (tr) => ({ resolveWork: async () => ({ abs: tr.other, base: tr.apps }) }), false],
+  ];
+  for (const [why, over, transient] of cases) {
+    const tr = realTree();
+    try {
+      const { d } = fakeDeps(tr, { boxRoots: () => [tr.run], ...over(tr) });
+      const w = await warnsDuring(async () => {
+        await failsWith(launchDockerJob(row(), SECRET, d), (e) => {
+          assert.equal(e.transient, transient, why);
+          assert.ok(!e.message.includes(tr.root), `${why}: ${e.message}`);
+          assert.ok(!e.message.includes(SECRET), why);
+        });
+      });
+      //  원문(박스 위 자리)은 게이트웨이 로그에 남는다 — 관리자가 «로그를 보라» 를 따라가면 까닭이 있다.
+      assert.ok(w.some((x) => JSON.stringify(x.obj).includes(tr.root)), `${why}: 로그에 원문이 없다 — ${JSON.stringify(w).slice(0, 300)}`);
+    } finally { tr.done(); }
+  }
 });
 
 // ── K. 걷기 · 판의 자리 ────────────────────────────────────────────────────────
@@ -930,6 +981,41 @@ await t("B3 관리자 보기 — 못 씀 · 상한 0 · 스왑 상한 못 걺은
     const { d } = fakeDeps(tr, { box: async () => box({ swapLimit: false, claudeBin: tr.bin }) });
     await failsWith(launchDockerJob(row(), SECRET, d), (e) => assert.equal(e.transient, false));
   } finally { tr.done(); }
+});
+
+await t("B4 판정 실패 로그 — 같은 까닭 · 같은 원문은 한 번 · 원문만 바뀌어도(권한 → 데몬 꺼짐) 새로 적는다 · 된다 판정 뒤 같은 실패는 다시 적는다 · 원문은 로그의 detail 에", async () => {
+  resetDockerProbesForTest();
+  let now = 9_000_000, detail = "permission denied", ok = false;
+  const probe = async (): Promise<DockerBox> => { if (ok) return box(); throw new DockerBoxError("도커에 닿지 못했습니다", detail); };
+  const w = await warnsDuring(async () => {
+    await dockerBoxCheck({ probe, now: () => now });
+    now += 16_000; await dockerBoxCheck({ probe, now: () => now });
+    detail = "daemon not running"; now += 16_000; await dockerBoxCheck({ probe, now: () => now });
+    ok = true; now += 16_000; await dockerBoxCheck({ probe, now: () => now });
+    ok = false; now += 61_000; await dockerBoxCheck({ probe, now: () => now });
+  });
+  assert.deepEqual(w.filter((x) => /도커 실행면을 지금 쓸 수 없다/.test(x.msg)).map((x) => x.obj.detail), ["permission denied", "daemon not running", "daemon not running"]);
+  resetDockerProbesForTest();
+});
+
+await t("B5 판정 잊기(invalidateDockerBox) — 기억한 판정만 잊는다: 묻는 중인 판정은 함께 받고(한 번만 묻는다) · 잊은 뒤엔 다시 묻는다", async () => {
+  resetDockerProbesForTest();
+  let n = 0;
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((r) => { release = r; });
+  const slow = async (): Promise<DockerBox> => { n++; await gate; return box(); };
+  const p1 = dockerBoxCheck({ probe: slow });
+  invalidateDockerBox();
+  const p2 = dockerBoxCheck({ probe: slow });
+  release();
+  await Promise.all([p1, p2]);
+  assert.equal(n, 1, "묻는 중인 판정을 버리지 않는다");
+  await dockerBoxCheck({ probe: slow });
+  assert.equal(n, 1, "기억한 판정");
+  invalidateDockerBox();
+  await dockerBoxCheck({ probe: slow });
+  assert.equal(n, 2, "잊은 뒤엔 다시 묻는다");
+  resetDockerProbesForTest();
 });
 
 // ── R. 실행면 배선(진짜 jobSurface · 자식 프로세스 — 토폴로지는 부팅에 언다) ─────────────

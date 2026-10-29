@@ -18,7 +18,8 @@
 //   · ~/.claude 는 띄우기 전에 그 계정 권한으로 «링크 아님 · 그 계정 소유 폴더» 를 보고(memberFacts · 비격리는 게이트웨이가 lstat), 컨테이너 안에서도
 //     판 머리(JOB_CONTAINER_PRELUDE)가 붙은 자리가 그 uid 소유 폴더인지 한 번 더 본다(사이에 바꿔치기해도 남의 폴더면 판이 서지 않는다).
 //   · 작업 폴더는 게이트웨이가 «링크 아님 · 실제 경로가 그 자리» 를 본다(checkWork) — 만든 뒤 한 번, docker run 바로 앞에서 한 번 더
-//     (그 사이 이미지 받기가 길 수 있다 · 검사기는 같은 뿌리 안 형제를 가리키는 링크를 원본 글로는 못 가린다).
+//     (그 사이 이미지 받기가 길 수 있다 · 검사기는 같은 뿌리 안 형제를 가리키는 링크를 원본 글로는 못 가린다). 긴 틈을 좁힐 뿐이다 — 확인과
+//     도커가 마운트를 잡는 사이의 짧은 틈은 apps 뿌리를 같은 그룹이 쓰는 한 남는다(뿌리에서 남의 이름을 못 바꾸게 하는 것은 설치 쪽 일).
 //   · 원본은 `--mount type=bind` 로 붙인다 — 원본이 없으면 도커가 실패한다(-v 는 없는 원본을 root 소유 폴더로 만들어 그 자리 주인의 폴더를 망가뜨린다).
 //  막이(jobContainerArgs — 꼴 하나 · 띄우기 직전 검사기 ops/docker-run-guard 가 jobContainerPolicy 로 한 번 더 거른다 — docker 그룹은 사실상 root):
 //   · 루트 읽기 전용 · /tmp 와 HOME 만 tmpfs(exec — 도커 기본 noexec 면 npx 등이 홈에 받은 실행 파일을 못 돌린다 · 작업 폴더는 원래 실행이 된다) ·
@@ -39,6 +40,7 @@
 //   이미지가 박스에 없으면 첫 작업이 받는다(같은 때 여럿이 물어도 한 번) — 받는 시간도 시작 상한(180초 · 자리를 받은 때부터) 안에 든다.
 //   느린 박스는 관리자가 처음 켤 때 docker pull 로 받아 둔다(deploy/env.example).
 //  컨테이너는 판이 빠지면 끝나고 스스로 지워진다(--rm). 걷기는 `docker rm -f` 한 번이다 — 이미 없다(· 지우는 중이다)는 확답만 삼킨다.
+//  띄우기 실패 글은 앱이 받으므로(job.error) 박스 위 자리를 가리고 원문은 게이트웨이 로그에 남긴다(launchDockerJob · hideBoxPaths).
 //  다른 실행면과 다른 점(관리자가 알아 둘 것):
 //   · 판이 보는 작업 폴더는 컨테이너 자리(/work/apps/<앱> — 매니지드와 같고 박스 위 /srv/... 와 다르다). 하네스는 대화를 작업 폴더별로 두므로 박스 위에서
 //     만든 구독 대화를 도커 작업이 이어받으면 못 찾을 수 있다. 실행면을 host 에서 docker 로 바꾸기 전에 도는 작업을 비운다(남은 박스 위 판은 «이미 없음» 으로 걷힌다).
@@ -270,7 +272,8 @@ export function jobContainerArgs(p: JobContainerPlan): string[] {
   ];
 }
 
-const exact = (s: string): RegExp => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const exact = (s: string): RegExp => new RegExp(`^${esc(s)}$`);
 
 /**
  * (순수) 작업 컨테이너의 검사 정책 — 인자를 지은 값이 아니라 자리의 사실로 짓는다(머리말 «막이»): 작업 폴더는 그 자리(apps · shared) 뿌리 아래의
@@ -334,6 +337,8 @@ export interface DockerLaunchDeps {
   tz(): Promise<string>;
   slug(): string | null;
   port(): number;
+  /** 작업 오류 글에서 처음부터 가릴 박스 위 자리(런타임 폴더 · 홈 뿌리 · 프로필 뿌리 · 게이트웨이 홈) — 없으면 띄우며 알게 된 자리만 가린다. */
+  boxRoots?(): string[];
 }
 
 const WORK_REFUSAL: Readonly<Record<Exclude<WorkDirState, "ok" | "missing">, string>> = {
@@ -341,13 +346,50 @@ const WORK_REFUSAL: Readonly<Record<Exclude<WorkDirState, "ok" | "missing">, str
   notdir: "작업 폴더 자리에 폴더가 아닌 것이 있어 작업 컨테이너에 붙이지 않습니다",
 };
 
+/** 작업 오류 글에서 박스 위 자리를 바꿔 쓰는 글. */
+const BOX_PATH_MARK = "<박스 경로>";
+
+/** 자리 이름이 끝나는 곳 — 끝 · / · 빈칸 · 따옴표 · 닫는 괄호 · 쉼표 · 쌍점 · 쌍반점, 또는 문장을 맺는 마침표(뒤가 끝 · 빈칸). */
+const PATH_END = "(?=$|[/\\s'\"`),:;\\]]|\\.(?:$|\\s))";
+
+/**
+ * (순수) 작업 오류 글에서 박스 위 자리를 가린다 — 아는 자리마다(긴 것부터) BOX_PATH_MARK 로. 자리 이름 중간에서 끊지 않는다
+ *  (/srv/a 는 /srv/ab · /srv/a.bak 을 가리지 않는다). 모르는 자리 · 컨테이너 자리(/work/... · /opt/lively-job/...)는 그대로 둔다.
+ */
+export function hideBoxPaths(msg: string, paths: Iterable<string>): string {
+  const ps = [...new Set([...paths].map((p) => String(p ?? "").replace(/\/+$/, "")).filter((p) => p.length > 1 && p.startsWith("/")))]
+    .sort((a, b) => b.length - a.length);
+  let out = msg;
+  for (const p of ps) out = out.replace(new RegExp(esc(p) + PATH_END, "g"), BOX_PATH_MARK);
+  return out;
+}
+
 /**
  * 작업 컨테이너를 띄운다 — 도커 · 하네스 → 메모리 상한 → 자리(누구로 · 무엇을 붙이나) → 작업 폴더(만들고 · 확인) → 이미지 → env 파일 → docker run.
  *  다시 해도 안 될 것(세션 id · 홈 없는 작업의 조건 · 실행 계정 · 작업 폴더 꼴 · 상한을 걸 수 없음 · 붙일 수 없는 Claude 폴더 · 작업 폴더가 링크 ·
  *  검사기 거절)은 JobLaunchError, 인프라가 잠깐 막힌 것(도커 · OS 계정 · 작업 폴더 · 이미지 · 띄우기)은 일시 실패다(launch.stepFailure).
+ *  실패 글은 앱이 받는다(배차가 job.error 로 남기고 앱 AI 실행 오류로 돌려준다) — 띄우는 동안 알게 된 박스 위 자리(폴더 · 홈 · 실행 파일 · env 파일)는
+ *  가리고(hideBoxPaths), 원문은 게이트웨이 로그에만 남긴다. 오류의 종류 · 일시 표시는 그대로 둔다(글만 바꾼다).
  */
 export async function launchDockerJob(
   job: AgentJobRow, bootSecret: string, deps?: DockerLaunchDeps, o: { sharedSeat?: boolean } = {},
+): Promise<{ container: string }> {
+  const known: string[] = [];
+  try { return await launchDockerJobIn(job, bootSecret, deps, o, known); }
+  catch (e) {
+    if (e instanceof Error) {
+      const shown = hideBoxPaths(e.message, known);
+      if (shown !== e.message) {
+        logger.warn({ job: job.id, err: e.message }, "[agent-job] 작업 컨테이너를 띄우지 못했다 — 원문(작업 오류 글에는 박스 위 자리를 가렸다)");
+        e.message = shown;
+      }
+    }
+    throw e;
+  }
+}
+
+async function launchDockerJobIn(
+  job: AgentJobRow, bootSecret: string, deps: DockerLaunchDeps | undefined, o: { sharedSeat?: boolean }, known: string[],
 ): Promise<{ container: string }> {
   const sid = job.session_id;
   if (!sid || !JOB_SESSION_ID_RE.test(sid)) throw new JobLaunchError("세션 id 가 없는 작업입니다");
@@ -359,8 +401,10 @@ export async function launchDockerJob(
   const dir = hostJobDir(job.cwd);
   if (!dir) throw new JobLaunchError(`작업 폴더 꼴이 아닙니다: ${JSON.stringify(String(job.cwd).slice(0, 120))}`);
   const d = deps ?? (await liveDockerDeps());
+  known.push(...(d.boxRoots?.() ?? []));
   let box: DockerBox;
   try { box = await d.box(); } catch (e) { throw stepFailure("ensure", e); }
+  known.push(box.claudeBin, box.gateway.home);
   const policyMb = await d.memoryMaxMb().catch((e) => { throw stepFailure("memory", e); });
   if (policyMb > 0 && !box.swapLimit) {
     throw new JobLaunchError(`작업 메모리 상한(${policyMb}MB)을 걸 수 없어 띄우지 않습니다 — 이 박스의 도커가 스왑 상한을 걸지 못합니다(docker info SwapLimit=false). ${DOCKER_CAP_FIX}`);
@@ -374,30 +418,30 @@ export async function launchDockerJob(
     try { osUser = await d.ensureOsUser(user); } catch (e) { throw stepFailure("os-user", e); }
     if (!osUser) throw stepFailure("os-user", `실행 계정 ${seat} 의 OS 계정을 만들지 못했습니다(게이트웨이 계정으로는 띄우지 않는다)`);
     try { member = await d.memberFacts(osUser, subscription); } catch (e) { throw stepFailure("os-user", e); }
+    known.push(member.home);
   }
   let profile: ProfileFacts | null = null;
   if (!box.isolated && subscription && !homeless) {
     try { profile = await d.profileDir(user); } catch (e) { throw stepFailure("home", e); }
+    known.push(profile.dir, profile.root);
   }
   let place: JobPlacement;
   try { place = jobPlacement({ homeless, subscription, box, member, profile }); }
   catch (e) { throw new JobLaunchError(String((e as Error)?.message ?? e)); }
-  let work: { abs: string; base: string };
-  try { work = await d.resolveWork(user, dir, box.isolated ? (osUser ?? HOMELESS_OS_USER) : null); }
-  catch (e) { throw stepFailure("workdir", e); }
+  const work = await d.resolveWork(user, dir, box.isolated ? (osUser ?? HOMELESS_OS_USER) : null).catch((e) => { throw stepFailure("workdir", e); });
+  known.push(work.abs, work.base);
   //  박스 위 자리가 행의 작업 폴더(그 앱 · 그 프로젝트)와 맞아야 한다 — 검사기 정책의 원본이 이 값이라, 형제 폴더를 고르는 잘못은 여기서만 걸린다.
-  //   작업 오류(앱이 받는다)에는 박스 위 경로를 싣지 않는다 — 행의 작업 폴더로 말하고, 박스 위 자리는 게이트웨이 로그에만 남긴다.
+  //   거절 글은 행의 작업 폴더로 말하고, 박스 위 자리는 게이트웨이 로그에만 남긴다.
   if (path.relative(work.base, work.abs) !== dir.sub) {
     logger.warn({ job: job.id, work: work.abs, base: work.base }, "[agent-job] 작업 폴더 자리가 행의 작업 폴더와 맞지 않는다");
     throw new JobLaunchError(`작업 폴더 자리가 행의 작업 폴더(${job.cwd})와 맞지 않습니다`);
   }
-  const resolved = work;
   //  작업 폴더 확인 — 만든 뒤 한 번, docker run 바로 앞에서 한 번 더(머리말 «붙이는 원본은 링크면 안 된다»).
   const assertWork = async (): Promise<void> => {
     let st: WorkDirState;
-    try { st = await d.checkWork(resolved); } catch (e) { throw stepFailure("workdir", e); }
+    try { st = await d.checkWork(work); } catch (e) { throw stepFailure("workdir", e); }
     if (st === "ok") return;
-    logger.warn({ job: job.id, work: resolved.abs, state: st }, "[agent-job] 작업 폴더를 작업 컨테이너에 붙이지 않는다");
+    logger.warn({ job: job.id, work: work.abs, state: st }, "[agent-job] 작업 폴더를 작업 컨테이너에 붙이지 않는다");
     if (st === "missing") throw stepFailure("workdir", `작업 폴더(${job.cwd})가 만든 뒤에도 없습니다`);
     throw new JobLaunchError(`${WORK_REFUSAL[st]} (${job.cwd})`);
   };
@@ -410,6 +454,7 @@ export async function launchDockerJob(
   try {
     env = await d.writeEnvFile(name, envFileText(jobContainerEnv({ jobId: job.id, bootSecret, port: d.port(), slug, tz: await d.tz(), place })));
   } catch (e) { throw stepFailure("pane", redactSecret(String((e as Error)?.message ?? e), bootSecret)); }
+  known.push(env.file, env.root);
   const memoryMb = dockerMemoryMb(policyMb, box.memMb);
   const labels: Record<string, string> = { [JOB_CONTAINER_LABEL]: "1", [`${JOB_CONTAINER_LABEL}.id`]: String(job.id), ...(slug ? { "lvly.tenant": slug } : {}) };
   try {
@@ -423,7 +468,8 @@ export async function launchDockerJob(
       image: box.image, work: { root: work.base, source: work.abs, target: job.cwd }, claude: claudeFacts,
       claudeBin: box.claudeBin, envRoot: env.root, home: place.home, users: ids.users, groups: ids.groups,
     });
-    //  이미지 받기 · env 파일 사이에 작업 폴더 이름을 링크로 바꿔치기했을 수 있다 — 붙이기 바로 앞에서 다시 본다.
+    //  이미지 받기 · env 파일 사이에 작업 폴더 이름을 링크로 바꿔치기했을 수 있다 — 붙이기 바로 앞에서 다시 본다(긴 틈을 좁힌다 —
+    //   확인과 도커가 마운트를 잡는 사이의 짧은 틈은 남는다 · 머리말 «붙이는 원본은 링크면 안 된다»).
     await assertWork();
     await d.run(args, policy);
   } catch (e) {
@@ -750,5 +796,6 @@ export async function liveDockerDeps(): Promise<DockerLaunchDeps> {
     tz: async () => (await import("../org/timezone.js")).orgTimezone(),
     slug: () => tenantSlug(),
     port: () => execTopology().agentJobsPort,
+    boxRoots: () => [runDir, profiles.MEMBER_HOME_BASE, profiles.PROFILES_ROOT, os.homedir()],
   };
 }
