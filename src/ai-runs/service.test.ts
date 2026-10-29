@@ -10,7 +10,8 @@ import { DEFAULT_AI_RUN_POLICY, type AiRunPolicy } from "../org/policies/ai-run-
 import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js";
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings, ResumeLink } from "./plan.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import type { Viewer } from "../apps/visibility.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, cancelRunFor, composeSystem, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -347,13 +348,16 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
 // ── S5c 작업 접수 → 작업 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다) ──
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7 };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   const homeless = agentJobOfRun({ ...base, homeless: true, sharedSeat: false }, o);
   assert.deepEqual(homeless, {
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
     model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true, sharedSeat: false,
+    appInstructions: null,
   });
+  //  #5082 — 앱 판 지시도 그대로 옮긴다(빠지면 그 작업은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다).
+  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appInstructions: "판 지시" }, o).appInstructions, "판 지시");
   assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false }, o).homeless, false);
   //  #5081 — 공용 시트 표시도 그대로 옮긴다(빠지면 물은 사람의 작업이 시트 계정의 이름으로 돈다).
   assert.equal(agentJobOfRun({ ...base, accountKind: "subscription", accountMember: "seat", homeless: false, sharedSeat: true }, o).sharedSeat, true);
@@ -940,6 +944,164 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   await fails(submitRun({ prompt: "둘째", resume_run_id: 2 }, u, { source: "app-ui" }, d), 409, /이미 1번 이어받았습니다/, "resume_limit");
   assert.equal(w.runs.size, 2); assert.equal(w.llm.length, 2);
   ok("R18 상한은 다른 거절보다 먼저 — 이어받은 실행을 또 이어도 처음 질문으로 센다(키가 빠져도 resume_limit)");
+}
+
+// ── #5082 앱 판 지시(ai.instructions) — 엣지 표 G · S1~S8 ──
+//  가짜 지시 읽기: 작업 이름 summarize 만 지시를 선언(«판 지시»). missing 이면 409(그 판에 파일 없음)를 던진다. 부른 것(앱 · 판을 고르는 사람 · 작업)을 적는다.
+type Asked = { app: string; who: Viewer; job: string };
+function withInstructions(d: AiRunDeps, o: { missing?: boolean } = {}): Asked[] {
+  const asked: Asked[] = [];
+  d.instructions = async (app, who, job) => {
+    asked.push({ app: app.id, who, job });
+    if (job !== "summarize") return null;
+    if (o.missing) throw new HttpError(409, "작업 'summarize' 의 앱 지시 파일(ai/s.md)을 그 판에서 찾지 못했습니다");
+    return "판 지시";
+  };
+  return asked;
+}
+
+{
+  assert.equal(composeSystem(null, null), null);
+  assert.equal(composeSystem(null, "판 지시"), "판 지시");
+  assert.equal(composeSystem("앱 system", null), "앱 system");
+  assert.equal(composeSystem("앱 system", "판 지시"), "앱 system\n\n판 지시", "부른 쪽 system 이 앞 · 앱 판 지시가 뒤(나중 글)");
+  assert.equal(composeSystem("앱 system", "  "), "앱 system", "빈 지시는 싣지 않는다");
+  ok("G 단발 시스템 지시 합치기 — 부른 쪽 system(앞) + 앱 판 지시(뒤)");
+}
+
+{
+  const { w, d } = world();
+  const asked = withInstructions(d);
+  await submitRun({ prompt: "요약해", job: "summarize", system: "앱 system" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  assert.equal(w.runs.get(1)!.status, "done");
+  assert.equal(w.llm[0]!.system, "앱 system\n\n판 지시", "단발 호출의 system 에 앱 판 지시가 실린다(뒤)");
+  assert.equal(w.runs.get(1)!.system_prompt, "앱 system", "행에는 부른 쪽 system 만");
+  assert.equal(asked.length, 1, "접수 때 한 번만 읽는다(돌 때 다시 고르지 않는다)");
+  assert.deepEqual(asked[0], { app: "crm", who: { userId: "alice", scopes: ["context"] }, job: "summarize" }, "부른 사람의 판(주소 없음 · 그 토큰의 권한)");
+  ok("S2 단발 — 접수 때 읽은 앱 판 지시를 시스템 지시로(부른 쪽 system 은 앞)");
+}
+
+{
+  const { w, d } = world();
+  const asked = withInstructions(d);
+  await submitRun({ prompt: "요약해", system: "앱 system" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  assert.equal(w.llm[0]!.system, "앱 system", "작업 이름이 없으면 종전 그대로");
+  assert.equal(w.submitted[0]!.appInstructions, null, "작업 이름 없는 에이전트 작업도 지시 없음");
+  assert.equal(asked.length, 0, "작업 이름 없는 실행은 판을 읽지 않는다");
+  ok("S2b 작업 이름이 없는 실행 — 앱 판 지시 없음 · 읽지도 않음(종전 그대로)");
+}
+
+{
+  const { w, d } = world();
+  withInstructions(d, { missing: true });
+  await fails(submitRun({ prompt: "요약해", job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d), 409, /앱 지시 파일/);
+  assert.equal(w.runs.size, 0, "행을 만들지 않는다");
+  assert.equal(w.llm.length + w.submitted.length, 0, "LLM · 작업 컨테이너 모두 부르지 않는다");
+  ok("S1 접수 — 선언한 지시 파일을 그 판에서 못 읽으면 409 · 행 없음");
+}
+
+{
+  const { w, d } = world({ policy: { ...DEFAULT_AI_RUN_POLICY, max_running_per_member: 0 } });
+  const asked = withInstructions(d, { missing: true });
+  await fails(submitRun({ prompt: "요약해", job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d), 429, /돌고 있습니다/);
+  assert.equal(asked.length, 0, "한도로 돌려보낼 요청은 판을 읽지 않는다(409 보다 429 가 먼저)");
+  assert.equal(w.runs.size, 0);
+  ok("S3 한도(429)를 먼저 본다 — 돌려보낼 요청은 판 행을 읽지 않는다");
+}
+
+{
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  withInstructions(d);
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  assert.equal(w.submitted.length, 1, "작업 컨테이너로 보냈다");
+  assert.equal(w.submitted[0]!.appInstructions, "판 지시", "작업 행에 앱 판 지시를 함께 적는다(판이 뜰 때 실행 행을 찾지 않는다)");
+  assert.ok(!w.submitted[0]!.prompt.includes("판 지시"), "앱 판 지시는 사용자 말(프롬프트)에 섞지 않는다");
+  ok("S4 에이전트 작업 — 접수 때 읽은 앱 판 지시를 작업 행에 싣는다");
+}
+
+{
+  //  B1 — 앱 주소 · 앱 서버로 들어온 호출은 그 주소의 판(표 · 도구와 같은 viewerOf). 초안을 고친 사람도 공개 주소면 공개 판의 지시.
+  const { d } = world();
+  const asked = withInstructions(d);
+  await submitRun({ prompt: "x", job: "summarize" }, { ...appUser("alice", "crm"), appAddress: "pub" } as LivelyUser, { source: "app-front" }, d);
+  await submitRun({ prompt: "x", job: "summarize" }, { ...appUser("alice", "crm"), appServer: true, appAddress: "draft" } as LivelyUser, { source: "app-server" }, d);
+  await settle();
+  assert.deepEqual(asked.map((a) => a.who), [{ userId: "alice", scopes: ["context"], address: "pub" }, { userId: "alice", scopes: ["context"], address: "draft" }]);
+  ok("S5 앱 주소 · 앱 서버 — 그 주소의 판으로 고른다(격리 리뷰 B1)");
+}
+
+{
+  //  N7 — 형식 재시도는 원래 작업 행에 실린 지시를 그대로 싣는다(지금 판으로 다시 고르지 않는다).
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  const asked = withInstructions(d);
+  const fromJob: number[] = [];
+  d.jobInstructions = async (id) => { fromJob.push(id); return id === 101 ? "원래 작업의 판 지시" : null; };
+  await submitRun({ prompt: "요약", job: "summarize", agent: true, schema }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  const j1 = w.jobs.get(101)!; j1.status = "done"; j1.conversation_id = "conv-1"; j1.result = { text: "형식 밖 글" };
+  const mid = (await syncRun(w.runs.get(1)!, d))!;
+  assert.equal(mid.retries, 1, "재시도가 나갔다(관측 장치 확인)");
+  assert.deepEqual(fromJob, [101], "원래 작업 행에서 읽었다");
+  assert.equal(w.submitted[1]!.appInstructions, "원래 작업의 판 지시");
+  assert.equal(asked.length, 1, "재시도는 판을 다시 고르지 않는다");
+  ok("S6 형식 재시도 — 원래 작업 행의 앱 판 지시를 그대로");
+}
+
+{
+  //  롤 창 — 작업 행에 지시 칸이 아직 없으면(42703) 503(다시 보내라) · 실행은 실패로 끝낸다. 지시 없는 실행은 그대로 받는다.
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  withInstructions(d);
+  w.submitThrows = Object.assign(new HttpError(500, "column \"app_instructions\" does not exist"), { code: "42703" });
+  await fails(submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d), 503, /배포 중/);
+  assert.equal(w.runs.get(1)!.status, "failed");
+  assert.match(w.runs.get(1)!.error ?? "", /배포 중/, "실행 행에도 그 까닭(DB 원문이 아니라)");
+  assert.ok(!/does not exist/.test(w.runs.get(1)!.error ?? ""), w.runs.get(1)!.error ?? "");
+  await fails(submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, d), 500, /does not exist/);
+  ok("S7 롤 창 — 지시를 실은 작업만 503(다시 보내라) · 지시 없는 실행의 다른 실패는 그대로");
+}
+
+{
+  //  지시 읽기를 배선하지 않은 배포(시험 · 옛 배선)는 앱 판 지시를 쓰지 않는다.
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  assert.equal(w.submitted[0]!.appInstructions, null);
+  ok("S8 지시 읽기가 없으면 지시 없음");
+}
+
+// ── R19 · R20 이어받기 × 앱 판 지시(#5101 × #5082) ──
+//  이게 틀리면: 이어받은 작업이 앱 지시 없이 돌거나(--resume 은 시스템 지시를 대화에서 되살리지 않는다 — 판이 매번 싣는다), 같은 대화가 중간에 다른 판의 지시로 바뀐다.
+{
+  //  R19 이어받는 작업 — 앞 작업 행에 실린 지시 그대로(형식 재시도 S6 과 같다) · 지금 판은 다시 읽지 않는다.
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  const asked = withInstructions(d);
+  const fromJob: number[] = [];
+  d.jobInstructions = async (id) => { fromJob.push(id); return id === 101 ? "앞 작업의 판 지시" : null; };
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "요약", job: "summarize", agent: true }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[0]!.appInstructions, "판 지시", "새 질문은 지금 판에서 읽는다");
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  await submitRun({ prompt: "근거가 틀렸다 — 다시", resume_run_id: 1 }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[1]!.resumeJobId, 101, "앞 작업의 대화를 잇는다(관측 장치 확인)");
+  assert.equal(w.submitted[1]!.appInstructions, "앞 작업의 판 지시", "앞 작업 행의 글 그대로");
+  assert.deepEqual(fromJob, [101]);
+  assert.equal(asked.length, 1, "이어받는 작업은 판을 다시 읽지 않는다");
+  ok("R19 이어받는 작업 — 앞 작업에 실린 앱 판 지시 그대로(지금 판을 다시 읽지 않음)");
+}
+{
+  //  R20 이어받는 단발 — 앞 실행은 지시를 남기지 않는다 → 지금 판에서 다시 읽는다(작업 이름은 앞 실행 것) · system = 앞 실행 system + 판 지시.
+  const { w, d } = world({ llmReply: (_i, n) => okText(`답${n}`) });
+  const asked = withInstructions(d);
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "요약해", job: "summarize", system: "앱 system" }, u, { source: "app-ui" }, d); await settle();
+  await submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, d); await settle();
+  assert.equal(w.runs.get(2)!.status, "done");
+  assert.equal(w.llm[1]!.system, "앱 system\n\n판 지시", "앞 실행의 system 뒤에 지금 판의 지시");
+  assert.deepEqual(w.llm[1]!.messages!.map((m) => m.content), ["요약해", "답1", "다시"], "앞 대화를 엮은 채로");
+  assert.equal(asked.length, 2); assert.equal(asked[1]!.job, "summarize", "작업 이름은 앞 실행 것");
+  ok("R20 이어받는 단발 — 지금 판의 앱 판 지시를 다시 읽어 앞 system 뒤에(작업 이름은 앞 실행 것)");
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);

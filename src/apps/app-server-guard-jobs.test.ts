@@ -432,3 +432,16 @@ test("P3 새로 도입한 env 부재 — LIVELY_REQUEST_TIMEOUT_S 가 없으면(
     assert.equal(slow.status, 200);
   } finally { await r.done(); }
 });
+
+test("4487-K2j 작업 길의 열쇠 — LIVELY_GUARD_KEY 가 있으면 앱에 x-lively-guard-key(밖에서 온 것은 지우고 제 값) · 없으면 싣지 않는다", async () => {
+  const keyed = await rig({}, { LIVELY_GUARD_KEY: "k-job" });
+  try {
+    assert.equal((await jobReq(keyed.g.port, "/api/jobs/x", {}, undefined, { "x-lively-guard-key": "forged" })).status, 200);
+    assert.equal(keyed.app.seen[0]!.headers["x-lively-guard-key"], "k-job");
+  } finally { await keyed.done(); }
+  const plain = await rig();
+  try {
+    assert.equal((await jobReq(plain.g.port, "/api/jobs/x", {}, undefined, { "x-lively-guard-key": "forged" })).status, 200);
+    assert.equal(plain.app.seen[0]!.headers["x-lively-guard-key"], undefined);
+  } finally { await plain.done(); }
+});

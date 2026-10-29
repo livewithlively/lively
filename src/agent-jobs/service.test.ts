@@ -13,7 +13,7 @@ import {
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
 import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX } from "./plan.js";
-import { MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE } from "./runner.js";
+import { MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE, SYSTEM_PROMPT_PLACEHOLDER } from "./runner.js";
 import { hashJobSecret, secretMatches, type AgentJobRow, type NewAgentJob } from "./store.js";
 import { DEFAULT_AGENT_JOB_POLICY, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
@@ -468,6 +468,43 @@ await t("G1b 실행면이 자리를 안 주면(매니지드 기본) — 판 env 
   const job = await onBoot(id, boot, w.deps);
   assert.deepEqual(envAt, [{ gateway: "http://127.0.0.1:8080", workspace: null }]);
   assert.equal((job.mcp as any).mcpServers.lively.url, "http://127.0.0.1:8080/mcp");
+});
+
+await t("J1 #5082 앱 판 지시가 있으면 — 판이 받는 job 에 system · 하네스 인자에 지시 파일 자리표와 작업 폴더 설정 끔(--setting-sources user)", async () => {
+  const w = world();
+  const asked: number[] = [];
+  w.deps.jobSystem = async (job) => { asked.push(job.id); return "정책 표를 조회해 답하라"; };
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.deepEqual(asked, [id], "그 작업으로 한 번 묻는다");
+  assert.equal(job.system, "정책 표를 조회해 답하라");
+  const at = job.argv.indexOf("--append-system-prompt-file");
+  assert.ok(at > 0, JSON.stringify(job.argv));
+  assert.equal(job.argv[at + 1], SYSTEM_PROMPT_PLACEHOLDER, "글은 명령줄에 싣지 않고 판이 쓴 파일 경로 자리표만");
+  assert.equal(job.argv[job.argv.indexOf("--setting-sources") + 1], "user", "작업 폴더의 CLAUDE.md · .claude/skills · 설정을 읽지 않는다");
+  assert.ok(!job.argv.includes("정책 표를 조회해 답하라"));
+});
+
+await t("J2 앱 판 지시가 없으면(null · 묻는 자리 없음) — system 칸 · 지시 인자 · 설정 끔 모두 없다(매니지드 · 종전 작업 무회귀)", async () => {
+  for (const sys of [undefined, async () => null]) {
+    const w = world();
+    if (sys) w.deps.jobSystem = sys;
+    const { id, boot } = await startedJob(w);
+    const job = await onBoot(id, boot, w.deps);
+    assert.ok(!("system" in job), "system 칸이 없다");
+    assert.ok(!job.argv.includes("--append-system-prompt-file") && !job.argv.includes("--setting-sources"), JSON.stringify(job.argv));
+  }
+});
+
+await t("J3 앱 판 지시를 못 구하면(던짐) 그 작업은 돌지 않는다 — 실패(사유) · 방금 만든 토큰 폐기 · 410", async () => {
+  const w = world();
+  w.deps.jobSystem = async () => { throw new Error("작업 'answer' 의 앱 지시 파일(ai/answer.md)을 그 판에서 찾지 못했습니다(가짜)"); };
+  const { id, boot } = await startedJob(w);
+  await assert.rejects(onBoot(id, boot, w.deps), httpErr(410));
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /실행 환경을 만들지 못했습니다: 작업 'answer' 의 앱 지시 파일/);
+  assert.deepEqual(w.revoked, [tokHash(id)], "판에 안 간 토큰은 바로 버린다");
 });
 
 await t("B2i 판이 볼 자리를 못 구하면(실행면이 던짐) 그 작업은 돌지 않는다 — 실패(사유) · 방금 만든 토큰 폐기 · 410", async () => {

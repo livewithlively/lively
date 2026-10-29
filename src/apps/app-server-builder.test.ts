@@ -15,7 +15,12 @@ import zlib from "node:zlib";
 import { BUILDER_VERSION, BUILD_RESULT_MARK, SERVER_BUILDER_JS, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
 
 let pass = 0;
-const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+//  SKIP=A0b — 그 행을 건너뛴다(빌더 글을 일부러 바꿔 다른 행이 잡는지 보는 변이 시험용 · 지문 행이 먼저 멈추지 않게).
+const SKIP = new Set((process.env.SKIP ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+const t = async (name: string, fn: () => void | Promise<void>): Promise<void> => {
+  if (SKIP.has(name.split(" ")[0]!)) { console.log(`skip ${name}`); return; }
+  await fn(); pass++; console.log(`ok  ${name}`);
+};
 
 // ── 표본 앱 ──
 const PKG = (extra: Record<string, unknown> = {}): string => JSON.stringify({ name: "s", version: "1.0.0", private: true, scripts: { start: "node server.js", build: "node build.js" }, ...extra });
@@ -156,9 +161,12 @@ const memFile = (mb: number): string => {
 await t("A0b 빌더 글이 바뀌면 빌더 판(BUILDER_VERSION)도 올린다 — 빌드 지문에 들어가는 판이라 안 올리면 같은 코드가 옛 빌더의 zip 을 재사용한다", () => {
   //  빌더를 고쳤으면: BUILDER_VERSION 을 올리고 아래 표에 새 판의 지문을 적는다(지문 = 아래 실패 글의 actual). TypeScript 판이 바뀌어 글이 바뀌어도 같다.
   //   줄 전체가 주석인 줄은 빼고 잰다 — 주석만 고친 것은 빌드 결과가 같으니 판을 올릴(= 전 앱 재빌드) 까닭이 아니다.
-  const PIN: Record<number, string> = { 2: "1ac92efd5981f7e20a6262ff5358cf86a7db5d1e6919affffc1b441ff546ab6b" };
+  //   같은 판에 지문을 더하는 것은 «같은 입력이면 zip 이 바이트까지 같은» 고침뿐이다 — 그 사실을 시험이 보이게 한다(예: 아래 A2b).
+  //   2 의 둘째 글(#4487) — file: 주소면 /out 에 쓰는 갈래만 더했다(HTTP 로 올리는 zip 과 바이트가 같다 — A2b). 전 앱 재빌드를 부르지 않는다.
+  const PIN: Record<number, string[]> = { 2: ["1ac92efd5981f7e20a6262ff5358cf86a7db5d1e6919affffc1b441ff546ab6b", "f25fd52cf81a1d08b286dd0e349fbc16af12de3d2f3d3e0e3d33bb7bc5202265"] };
   const codeOnly = SERVER_BUILDER_JS.split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
-  assert.equal(crypto.createHash("sha256").update(codeOnly).digest("hex"), PIN[BUILDER_VERSION], `빌더 글이 바뀌었다 — BUILDER_VERSION(${BUILDER_VERSION})을 올리고 지문을 적으세요`);
+  const got = crypto.createHash("sha256").update(codeOnly).digest("hex");
+  assert.ok((PIN[BUILDER_VERSION] ?? []).includes(got), `빌더 글이 바뀌었다 — BUILDER_VERSION(${BUILDER_VERSION})을 올리고 지문을 적으세요(지문 ${got})`);
 });
 
 await t("A0 결과 표식이 빌더 안의 상수와 같다(바깥 이름을 못 쓰는 함수라 두 벌이다)", () => {
@@ -200,6 +208,21 @@ await t("A1 · A16 성공 — 설치 · 빌드 · 정리 · zip · 올림 · 지
 await t("A2 같은 입력이면 같은 zip(바이트 단위)", async () => {
   const again = await runBuilder(baseApp());
   assert.equal(again.res?.zip?.sha256_hex, baseline.res!.zip!.sha256_hex);
+});
+
+await t("A2b · 4487 file: 주소 — 결과 zip 을 그 자리에 쓴다(자가호스팅 빌드 컨테이너의 /out) · 올리기 0 · HTTP 로 올린 zip 과 바이트까지 같다", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "out-"));
+  try {
+    const dst = path.join(dir, "sub", "k.zip");
+    const r = await runBuilder(baseApp(), { upload_url: `file://${dst}` });
+    assert.equal(r.code, 0, r.stderr.slice(-800));
+    assert.equal(r.res?.ok, true, JSON.stringify(r.res));
+    assert.equal(r.uploads, 0, "HTTP 로 올렸다");
+    const z = fs.readFileSync(dst);
+    assert.equal(r.res!.zip!.bytes, z.length);
+    assert.equal(r.res!.zip!.sha256_hex, crypto.createHash("sha256").update(z).digest("hex"));
+    assert.ok(z.equals(baseline.zip!), "같은 입력인데 HTTP 로 올린 zip 과 바이트가 다르다(그러면 빌더 판을 올려야 한다)");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 await t("A3 package.json 없음 → detect · 올리지 않음", async () => {

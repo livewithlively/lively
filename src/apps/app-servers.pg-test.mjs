@@ -58,7 +58,7 @@ process.env.ITEMS_DATABASE_URL = dsnFor(DB);
 //  지역 · 스위치 · 레이어 · 런타임도 지운다 — 기대값(ap-northeast-2 · 기본 레이어 · nodejs22.x)이 그 셸의 env 에 흔들리지 않게(#4790 재검토 6).
 for (const k of ["LIVELY_APP_DDL_DATABASE_URL", "LIVELY_OWNER_DATABASE_URL", "LIVELY_APP_DB_ROLE", "LIVELY_APP_TABLE_FUSE", "LIVELY_APP_BUNDLE_BUCKET", "LIVELY_APP_BUNDLE_POLICY", "LIVELY_APP_SERVER_POLICY", "LIVELY_APP_SERVER_PREFIX",
   "AWS_REGION", "LIVELY_APP_SERVER_REGION", "LIVELY_APP_BUNDLE_REGION", "LIVELY_APP_SERVER_TENANTS", "LIVELY_APP_SERVER_LAYER", "LIVELY_APP_SERVER_RUNTIME",
-  "LIVELY_APP_SERVER_CODE_STORAGE"]) delete process.env[k];
+  "LIVELY_APP_SERVER_CODE_STORAGE", "LIVELY_APP_SERVER_HOST"]) delete process.env[k];
 const ROLE = "arn:aws:iam::111122223333:role/lvly-app-exec";
 process.env.LIVELY_APP_SERVER_EXEC_ROLE = ROLE;
 //  #4485 — 검사 층이 볼 신원 공개 키(시험 키 쌍) · 앱 서버가 부를 라이블리 주소.

@@ -58,6 +58,7 @@ import { markSchemaBoot, schemaBootPhase } from "./boot-state.js";   // #2578 �
 // 스케줄러 게이트 단일 판정(#1313 R17) — 종전 인라인 `process.env.LIVELY_NO_SCHEDULER !== "1"` 6곳을 한 곳으로.
 //  배경(왜 게이트인가)은 'scheduler' 스텝 원문 주석 참조.
 const schedulerEnabled = (): boolean => process.env.LIVELY_NO_SCHEDULER !== "1";
+import { appServerHostKind } from "../apps/app-server-config.js";
 
 // ── registry 모드 스키마 초기화 자식(#1750 S1) — 소유자 자격으로 DDL 을 치는 별도 프로세스. ──
 //  이 프로세스(앱 role)는 스키마를 소유하지 않는다. 자식은 boot/schema-init-child.js 를 소유자 DSN 으로
@@ -472,6 +473,23 @@ function startBackgroundSweeps(): void {
     () => import("../apps/app-bundle-migrate.js").then((m) => m.runAppBundleHousekeeping()));
   setTimeout(() => { void appBundles(); }, 240_000).unref();
   setInterval(() => { void appBundles(); }, 10 * 60_000).unref();
+
+  // #4487 — 자가호스팅 앱 서버(LIVELY_APP_SERVER_HOST=local · 이 박스의 Docker). 매니지드는 같은 함수를 요청 정비표(app-job-sweep · app-job-prune —
+  //  sessions/outbox-request-sweep.ts)와 CP 틱(web.ts step app-servers)이 부른다 — 이 타이머는 요청별 테넌시에선 걸리지 않으니 둘이 겹치지 않는다.
+  //  · 백그라운드 작업 감시 30초(대기 초과 · 시작 없음 · 박동 없음 · 시간 초과 · 줄 밀기) · 작업 기록 보존 6시간 — 매니지드의 주기 그대로.
+  //  · 앱 서버 정비 5분(자동 멈춤 · 죽은 빌드 · 옛 빌드 정리 · 고아 · 서버 선언을 뺀 앱 · 코드 크기 · 하루 한 번 상태 점검) — CP 틱 주기 그대로.
+  //  · 재우기 1분(한가한 지 idle_sleep_min 이 지난 컨테이너를 내린다 · 첫 판이 게이트웨이를 다시 띄우기 전에 떠 있던 컨테이너를 표에 다시 넣는다).
+  if (appServerHostKind() === "local") {
+    const appJobSweep = () => perTenant("app-job-sweep", () => import("../apps/app-jobs.js").then((m) => m.sweepAppJobs()));
+    const appJobPrune = () => perTenant("app-job-prune", () => import("../apps/app-jobs.js").then((m) => m.pruneAppJobRecords()));
+    const appServers = () => perTenant("app-servers", () => import("../apps/app-server-watch.js").then((m) => m.runAppServerHousekeeping()));
+    const appServerSleep = () => perTenant("app-server-sleep", () => import("../apps/app-server-local.js").then((m) => m.sleepIdleLocalServers()));
+    setTimeout(() => { void appServerSleep(); }, 60_000).unref();
+    setInterval(() => { void appJobSweep(); }, 30_000).unref();
+    setInterval(() => { void appServerSleep(); }, 60_000).unref();
+    setInterval(() => { void appServers(); }, 5 * 60_000).unref();
+    setInterval(() => { void appJobPrune(); }, 6 * 60 * 60_000).unref();
+  }
 
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.

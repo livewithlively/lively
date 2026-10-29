@@ -28,10 +28,11 @@
 //   · 오류: Drizzle 은 드라이버 오류를 DrizzleQueryError("Failed query: …") 로 감싼다. 게이트웨이가 준 안내(무엇 대신 무엇을 쓸지)는
 //     그 안의 cause 에 있다 — livelyErrorOf(err) 로 꺼낸다: `catch (e) { const le = livelyErrorOf(e); res.status(le?.status ?? 500).json({ error: le?.message ?? String(e) }) }`
 import { AsyncLocalStorage } from "node:async_hooks";
+import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/pg-proxy";
 
-export const LIVELY_DB_SDK_VERSION = "2";   // 2 = livelyJobs · livelyMember(req).job(#4486)
+export const LIVELY_DB_SDK_VERSION = "3";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487)
 const IDENTITY_HEADER = "x-lively-identity";
 
 /** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · index(묶음에서 몇 번째 문장인지, 0부터). */
@@ -62,6 +63,8 @@ export function livelyIdentity() {
  * 이 요청의 사람 — 앱 서버 함수 앞의 검사 층(#4485)이 신원을 검사한 뒤 붙인 머리글을 풀어 준다: {id, name, variant}. 없으면 null.
  *  x-lively-member(구성원 id) · x-lively-member-name(이름)은 퍼센트 인코딩이다(한글 id «윤상민» 도 머리글에 실리게) — 그대로 쓰지 말고 이것으로 읽는다.
  *  ⚠ 라이블리 앱 서버 함수 안에서만 믿을 수 있다(검사 층이 들어온 같은 이름 머리글을 지우고 다시 쓴다). 그 밖에서 돌리면 누구나 이 머리글을 붙일 수 있다.
+ *  자가호스팅 박스(#4487)에서는 박스 위 다른 프로세스가 컨테이너의 앱 포트로 검사 층을 건너뛰고 보낼 수 있다 — 검사 층이 싣는 열쇠(x-lively-guard-key)가
+ *   env LIVELY_GUARD_KEY 와 같을 때만 사람으로 읽는다(다르면 null). 그래서 사람은 머리글을 직접 읽지 말고 늘 이 함수로 읽는다.
  */
 export function livelyMember(req) {
   const h = req?.headers ?? {};
@@ -70,6 +73,11 @@ export function livelyMember(req) {
     ? (k) => { const v = h.get(k); return typeof v === "string" ? v.split(",")[0].trim() : null; }
     : (k) => { const v = Array.isArray(h[k]) ? h[k][0] : h[k]; return typeof v === "string" ? v : null; };
   const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+  const key = typeof process !== "undefined" ? String(process.env.LIVELY_GUARD_KEY ?? "") : "";
+  if (key) {
+    const got = Buffer.from(String(one("x-lively-guard-key") ?? ""), "utf8"), want = Buffer.from(key, "utf8");
+    if (got.length !== want.length || !timingSafeEqual(got, want)) return null;
+  }
   const id = one("x-lively-member");
   if (!id) return null;
   //  job — 백그라운드 작업이면 그 작업 번호(#4486 — 검사 층이 게이트웨이에 «이 작업 시작» 을 확인받은 뒤 붙인다), 사람이 보낸 요청이면 null.

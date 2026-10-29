@@ -19,15 +19,16 @@
 //     새 판을 고정해 별칭을 옮긴다(배포와 같은 길). 알림은 판이 실제로 멈췄을 때와 못 고쳤을 때만(책임자 + 관리자). 쉬는 판(오래 안 불려 Inactive ·
 //     원본 멀쩡)은 건드리지 않는다 — 첫 호출 한 번이 실패하고 AWS 가 스스로 되살린다(그 재시도는 v2-6 앞단 몫 · #4485 메모).
 import { logger } from "../log.js";
-import { appBundleS3Config } from "./app-blob-store.js";
 import { appServerEnv, serverDeclOf } from "./app-server-config.js";
+import { appServerApi, appServerZipStore } from "./app-server-host.js";
 import { autoStopReason, codeBytesOf, type AppServerPolicy } from "./app-server-policy.js";
 import * as st from "./app-server-store.js";
-import { codeErrorOf, deployBuildToAliases, isServerChangedError, isServerLockedError, publicError, realLambdaApi, withDeps, type LambdaApi } from "./app-server-deploy.js";
+import { appServerUnavailable, codeErrorOf, deployBuildToAliases, isServerChangedError, isServerLockedError, publicError, withDeps } from "./app-server-deploy.js";
+import type { LambdaApi } from "./app-server-host.js";
 import { usableBuild } from "./app-server-build.js";
 import { removeServer, retireServer, stopServer } from "./app-server-lifecycle.js";
 import { AwsError } from "../net/aws/aws-json.js";
-import { S3Error, s3Delete, s3Head } from "../net/aws/s3-lite.js";
+import { S3Error } from "../net/aws/s3-lite.js";
 import { HttpError } from "../http-error.js";
 import { appServerUsage5m, pruneAppServerUsage } from "./app-server-usage.js";
 import { notifyAppInstaller } from "./notify.js";
@@ -113,11 +114,11 @@ export async function watchAppServers(policy: AppServerPolicy, deps: WatchDeps =
  *  되풀이하지 않게(규모가 커지면 Lambda 제어면 호출 몫 · 재검토). 지울 후보만 잠금을 쥐고 새로 읽는다.
  */
 export async function pruneServerBuilds(deps: WatchDeps = {}, limit = 50, scanMax = 500, pageSize = 50): Promise<number> {
-  const s3 = appBundleS3Config();
+  const store = appServerZipStore();
   //  zip 지우기 — 시험이 끼운 고리(deps · 앱 지우기 removeServer 와 같은 setServerDepsForTest 고리) · 운영은 비어 있어 S3 를 지운다.
   const deleteZip = deps.deleteZip ?? withDeps().deleteZip;
   const env = appServerEnv();
-  const api = deps.api ?? (env ? realLambdaApi(env.region) : null);
+  const api = deps.api ?? (env ? appServerApi(env) : null);
   /** 그 함수의 남은 판들이 읽는 코드 지문 — null = 못 읽었다(지우지 않는다). 함수가 AWS 에 없으면 빈 묶음(읽는 판도 없다). */
   const liveShas = async (fn: string): Promise<Set<string> | null> => {
     if (!api) return null;
@@ -137,7 +138,7 @@ export async function pruneServerBuilds(deps: WatchDeps = {}, limit = 50, scanMa
   };
   const drop = async (b: st.PruneCandidate): Promise<void> => {
     if (b.zip_key && deleteZip) await deleteZip(b.zip_key);
-    else if (b.zip_key && s3) await s3Delete(s3, b.zip_key, { attempts: 1, timeoutMs: 10_000 });
+    else if (b.zip_key && store) await store.remove(b.zip_key);
     await st.deleteServerBuild(b.app_id, b.build_key);
   };
   /** 후보 하나 — 지웠으면 true. */
@@ -229,7 +230,7 @@ export async function retireUnusedServers(policy: AppServerPolicy, deps: WatchDe
 export async function refreshUnknownCodeBytes(deps: WatchDeps = {}, limit = 20): Promise<number> {
   const env = appServerEnv();
   if (!env) return 0;
-  const api = deps.api ?? realLambdaApi(env.region);
+  const api = deps.api ?? appServerApi(env);
   let n = 0;
   for (const r of await st.serverRowsWithoutCodeSize(limit)) {
     let done = false;
@@ -312,16 +313,16 @@ export async function checkServerHealth(policy: AppServerPolicy, deps: WatchDeps
   const out = { checked: 0, moved: [] as string[], unfixed: [] as string[], deferred: 0, raced: 0, budget_hit: false };
   const env = appServerEnv();
   if (!env) return out;
-  const api = deps.api ?? realLambdaApi(env.region);
+  const api = deps.api ?? appServerApi(env);
   const sd = withDeps();
-  const s3 = appBundleS3Config();
+  const store = appServerZipStore();
   const clock = deps.now ?? Date.now;
   const started = clock();
   //  그 zip 판이 아직 있나 — 시험 고리(headZip) · 운영은 S3 HEAD ?versionId=(박스 역할 GetObjectVersion · ListBucket 이 있어 지운 판은 404). 저장소를 못 보는 배포면 모름.
   const headVersion = async (key: string, v: string): Promise<boolean | null> => {
     if (sd.headZip) return !!(await sd.headZip(key, v));
-    if (!s3) return null;
-    return !!(await s3Head(s3, key, { attempts: 1, timeoutMs: 5_000 }, { versionId: v }));
+    if (!store) return null;
+    return !!(await store.head(key, { attempts: 1, timeoutMs: 5_000, versionId: v }));
   };
   const notify = deps.notify ?? defaultNotify;
   const defer = async (row: st.ServerRow, why: string): Promise<void> => {
@@ -457,7 +458,8 @@ export async function checkServerHealth(policy: AppServerPolicy, deps: WatchDeps
 
 /** 하우스키핑 한 번 — 매니지드 테넌트 틱(web.ts step "app-servers")이 부른다. 앱 서버가 꺼진 배포면 아무것도 안 한다. */
 export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Record<string, unknown>> {
-  if (!appServerEnv()) return { skipped: "disabled" };
+  //  #4487 꺼진 까닭을 함께 — 실행면 이름(LIVELY_APP_SERVER_HOST)을 틀리면 감시 · 상태 점검까지 조용히 멈추므로 틱 결과에서 보이게(격리 리뷰).
+  if (!appServerEnv()) { const why = appServerUnavailable(); return { skipped: "disabled", ...(why ? { why } : {}) }; }
   const out: Record<string, unknown> = {};
   out.stale_builds = await st.failStaleServerBuilds().catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   const policy = await st.appServerPolicy();
@@ -467,6 +469,10 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   out.pruned = await pruneServerBuilds(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.usage_pruned = await pruneAppServerUsage(USAGE_KEEP_DAYS).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  //  #4487 자가호스팅 — 주인 없는 컨테이너 · 남은 빌드 컨테이너 · 지난 env 파일(재우기는 1분 타이머가 따로 — boot/housekeeping).
+  if (appServerEnv()?.host === "local") {
+    out.local = await (await import("./app-server-local.js")).localHousekeeping(policy.build_timeout_s).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  }
   //  ⑦ 은 맨 끝 — 다시 올리기가 느릴 수 있어 앞 단계(자동 멈춤 · 정리)를 밀지 않게(시간 예산 안에서만 돈다).
   out.health = await checkServerHealth(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;

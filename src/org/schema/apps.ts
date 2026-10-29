@@ -267,6 +267,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   (작업 신원 확인 · 사람 요청 시간 끊기 · 함수 시간 15분) — 그 전 판(빈 칸)이면 다시 올리라고 말한다(app_server_outdated 와 같은 안내).
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS cur_guard INT;`);
   await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS pub_guard INT;`);
+  //  #4487(v2-8) idle_sleep_min — 자가호스팅 박스에서 이 앱의 서버 컨테이너를 재우기까지의 한가한 시간(분 · 0 = 안 재움 · NULL = 워크스페이스 기본
+  //   app_server_policy.idle_sleep_min). 책임자 · 관리자가 app_server_idle_set 으로 정한다. 매니지드(Lambda)는 쓰지 않는다.
+  await pool.query(`ALTER TABLE org_app_server ADD COLUMN IF NOT EXISTS idle_sleep_min INT CHECK (idle_sleep_min IS NULL OR (idle_sleep_min >= 0 AND idle_sleep_min <= 1440));`);
   //  org_app_job(#4486 앱 v2-7) — 앱 백그라운드 작업 한 건: 앱 서버의 라우트 하나를 게이트웨이가 함수에 비동기로 맡긴 것(함수 시간 15분까지).
   //   흐름: queued(줄) → dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원)
   //   → done · failed · canceled(검사 층의 결과 보고 · 감시). 판정은 apps/app-jobs-plan.ts · 흐름은 apps/app-jobs.ts.

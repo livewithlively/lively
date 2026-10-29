@@ -24,6 +24,8 @@ export const RUNNER_GATEWAY = { host: "127.0.0.1", port: 8080 } as const;
 export const RUNNER_GATEWAY_URL = `http://${RUNNER_GATEWAY.host}:${RUNNER_GATEWAY.port}`;
 /** 하네스 인자 안에서 «판이 만든 MCP 설정 파일 경로» 로 바꿔 넣을 자리표. */
 export const MCP_CONFIG_PLACEHOLDER = "{{LVLY_MCP_CONFIG}}";
+/** 하네스 인자 안에서 «판이 만든 시스템 지시 파일 경로» 로 바꿔 넣을 자리표(#5082 앱 판 지시 — 명령줄에 지시 글이 남지 않게 파일로 넘긴다). */
+export const SYSTEM_PROMPT_PLACEHOLDER = "{{LVLY_SYSTEM_PROMPT}}";
 /** env 값 자리표 — 판이 이 작업만의 빈 설정 폴더를 만들어 바꿔 넣는다(#4488 API 키 실행 · ai-runs/service.CONFIG_DIR_PLACEHOLDER 와 같은 글자). */
 export const CONFIG_DIR_PLACEHOLDER = "{{LVLY_CONFIG_DIR}}";
 /** 판(부트)이 받는 env 이름 — 작업 id 와 일회용 부트 비밀. 부트가 읽자마자 지운다(하네스에 안 물려준다). */
@@ -76,6 +78,8 @@ export interface RunnerJob {
   prompt: string;
   /** 하네스에 줄 MCP 설정({mcpServers}) — 없으면 MCP 없이 돈다(--strict-mcp-config). */
   mcp: Record<string, unknown> | null;
+  /** 하네스의 시스템 지시(#5082 앱 판 지시 · ai.instructions) — 판이 파일로 써서 SYSTEM_PROMPT_PLACEHOLDER 자리에 넣는다. 없으면 이 칸이 없다. */
+  system?: string;
   /** 하네스에 더 줄 env — 지금은 늘 비어 있다(service.onBoot). API 키 갈래(v2-9)의 프록시 주소·실행 토큰이 들어올 자리다. */
   env: Record<string, string>;
   /** 작업 폴더(컨테이너 경로). */
@@ -142,7 +146,9 @@ const promptPath = path.join(dir, "prompt.txt");
 fs.writeFileSync(promptPath, J.prompt, { mode: 0o600 });
 let mcpPath = null;
 if (J.mcp) { mcpPath = path.join(dir, "mcp.json"); fs.writeFileSync(mcpPath, JSON.stringify(J.mcp), { mode: 0o600 }); }
-const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a)).filter((a) => a !== null);
+let sysPath = null;
+if (J.system) { sysPath = path.join(dir, "system.md"); fs.writeFileSync(sysPath, J.system, { mode: 0o600 }); }
+const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a === "${SYSTEM_PROMPT_PLACEHOLDER}" ? sysPath : a)).filter((a) => a !== null);
 const env = Object.assign({}, process.env, J.env || {});
 delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV}; delete env.${JOB_PORT_ENV}; delete env.${JOB_WS_ENV};
 // 빈 설정 폴더 자리표(#4488 API 키 실행) — 하네스가 멤버 홈의 로그인을 읽지 않게 이 작업만의 설정 폴더를 만든다. 빈 값은 «그 변수를 지워라» 다.
@@ -283,11 +289,18 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *    한 턴 더 끌고 가고, 대화 매핑 훅이 엉뚱한 세션을 덮는다. 실측(2026-10-16, claude 2.1.301): 끄면 hook 이벤트 0 · 켜면 4.
  *  · `--strict-mcp-config` — 멤버가 등록한 MCP 서버를 싣지 않는다. 라이블리 MCP 는 작업용 토큰(앱 작업이면 앱 토큰)으로만 붙인다.
  *  · 대화를 남긴다(--no-session-persistence 를 쓰지 않는다) — 같은 대화를 이어받는 작업(--resume)이 그 기록을 읽는다.
+ *  · #5082 앱 판 지시(system) — 게이트웨이가 «부른 사람의 판» 에서 읽은 지시 파일을 시스템 지시로 싣고(파일 — 명령줄에 글이 남지 않게),
+ *    작업 폴더(앱 데이터 폴더 — 구성원 · 작업 AI 가 고칠 수 있다)의 CLAUDE.md · .claude/(skills · agents · commands · settings)는 읽지 않는다
+ *    (`--setting-sources user`). 실측(2026-10-29, claude 2.1.312): 제한이 없으면 작업 폴더의 CLAUDE.md · 스킬이 요청에 실리고, user 만 주면
+ *    둘 다 빠지며, 지시 파일은 system 에 실린다(격리 리뷰: settings · agents · commands 도 빠진다).
+ *    ⚠ user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 구독 실행이면 그 구성원의 홈이라 같은 계정으로 도는 작업 AI 가 거기에 쓸 수 있다.
+ *     «지시는 판으로만 바뀐다» 는 앱 폴더에 대한 보장이다. API 키 · 홈 없는 실행은 빈 설정 폴더라 user 도 비어 있다.
+ *     #5081 공용 시트 실행은 그 홈을 구성원 모두가 함께 쓴다 — 한 사람의 작업 AI 가 쓴 글이 다른 사람의 작업에 읽힐 수 있다(#5123 공용 시트 홈 격리).
  *  · 이어받기는 늘 갈라서 잇는다(`--fork-session` · #5101) — 앞 작업의 대화 파일은 그대로 두고 새 대화 id 로 이어 쓴다. 같은 대화를 잇는 작업이 둘 겹쳐도
  *    한 파일에 같이 쓰지 않고, 앞 실행에서 몇 번이든 다시 갈라 이을 수 있다(실측 2026-10-29 · claude 2.1.312: 새 id · 앞 파일 내용 그대로 ·
  *    요청에 앞 대화가 다 실림 — 빈 설정 폴더에 되돌려 놓은 기록에서도 같다).
  */
-export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean }): string[] {
+export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
   return [
     "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
@@ -296,6 +309,7 @@ export function claudeJobArgv(o: { model?: string | null; resume?: string | null
     //  #4488 단발 — 도구 없이 글만(`--tools ""` = 내장 도구 전부 끔 · 실측 2026-10-16 claude 2.1.301: init 이벤트 tools []). 파일 · 셸에 닿지 않는다.
     ...(o.bare ? ["--tools", ""] : []),
     ...(o.mcp ? ["--mcp-config", MCP_CONFIG_PLACEHOLDER] : []),
+    ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER, "--setting-sources", "user"] : []),
     ...(o.model ? ["--model", o.model] : []),
     ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];

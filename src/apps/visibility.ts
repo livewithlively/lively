@@ -91,9 +91,16 @@ export type AppView = "none" | "installed" | "published";
 export function appViewFor(app: AppVisState, who: Viewer): AppView {
   if (who.address) return addressViewFor(app, who, who.address);   // #4482 앱 주소로 들어온 호출 — 주소의 판
   if (!canSeeApp(app, who)) return "none";
-  if (appVisibilityOf(app) === "me") return "installed";
-  if (!app.draft_by || app.published_version_no == null) return "installed";
+  if (!hasPendingDraft(app)) return "installed";
   return app.draft_by === who.userId ? "installed" : "published";
+}
+
+/**
+ * 공개 앱에 초안이 걸려 있나 — 이때만 설치된 상태(초안)와 따로 공개 판을 보는 사람이 있다(appViewFor · addressViewFor 의 'published').
+ *  판을 고르는 규칙 바깥에서 «공개 판을 따로 볼 수 있나» 를 묻는 자리(#5082 앱 판 지시의 미리 거르기)도 이 술어를 쓴다 — 두 벌이면 한쪽만 고쳐진다.
+ */
+export function hasPendingDraft(app: Pick<AppVisState, "visibility" | "draft_by" | "published_version_no">): boolean {
+  return appVisibilityOf(app) === "all" && !!app.draft_by && app.published_version_no != null;
 }
 
 /**
@@ -104,7 +111,7 @@ export function appViewFor(app: AppVisState, who: Viewer): AppView {
  */
 export function addressViewFor(app: AppVisState, who: Viewer, variant: "pub" | "draft"): AppView {
   if (!canSeeApp(app, who)) return "none";
-  const pending = appVisibilityOf(app) === "all" && !!app.draft_by && app.published_version_no != null;
+  const pending = hasPendingDraft(app);
   if (variant === "draft") return pending && app.draft_by !== who.userId ? "none" : "installed";
   return pending ? "published" : "installed";
 }

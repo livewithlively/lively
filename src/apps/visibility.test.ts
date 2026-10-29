@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  addressVariantFor, addressViewFor, appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, enabledDenial, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
+  addressVariantFor, addressViewFor, appViewFor, appVisibilityOf, canSeeApp, declaredTableNames, draftAppIdFrom, draftByAfterInstall, enabledDenial, hasPendingDraft, isAppOwner, isEmptyDraftApp, isOthersPendingVersion, listsAppFor,
   publishDenial, tablesGoneAtPublish, tablesUsableNow, unpublishDenial, type AppVisState,
 } from "./visibility.js";
 import { APP_ID_RE } from "./manifest.js";
@@ -15,6 +15,21 @@ const app = (o: Partial<AppVisState> & { title?: string } = {}): AppVisState & {
 const maker = { userId: "maker", scopes: ["memory"] };
 const other = { userId: "other", scopes: ["memory"] };
 const admin = { userId: "boss", scopes: ["memory", "admin"] };
+
+test("E0 공개 판을 따로 볼 수 있나(hasPendingDraft) — 공개 앱 + 초안 + 공개 판 번호일 때만 · 그때만 누군가에게 'published' 가 나온다(#5082 미리 거르기와 같은 술어)", () => {
+  const who = [{ userId: "bob", scopes: [] }, { userId: "maker", scopes: [] }, { userId: "boss", scopes: ["admin"] }];
+  const viewsOf = (a: AppVisState) => who.flatMap((w) => [appViewFor(a, w), appViewFor(a, { ...w, address: "pub" }), appViewFor(a, { ...w, address: "draft" })]);
+  const cases: Array<[AppVisState, boolean]> = [
+    [app({ draft_by: "maker", published_version_no: 2 }), true],
+    [app({ draft_by: "maker", published_version_no: null }), false],
+    [app({ draft_by: null, published_version_no: 2 }), false],
+    [app({ visibility: "me", draft_by: "maker", published_version_no: 2 }), false],
+  ];
+  for (const [a, pending] of cases) {
+    assert.equal(hasPendingDraft(a), pending, JSON.stringify(a));
+    assert.equal(viewsOf(a).includes("published"), pending, `술어와 판 고르기가 같은 답: ${JSON.stringify(a)}`);
+  }
+});
 
 test("E1 책임자가 있으면 그 사람만 책임자 — 관리자도 책임자는 아니다", () => {
   assert.equal(isAppOwner(app(), maker), true);

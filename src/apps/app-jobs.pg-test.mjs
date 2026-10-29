@@ -17,7 +17,7 @@ await su.query(`CREATE DATABASE ${DB}`);
 const dbc = new pg.Client({ connectionString: dsnFor(DB) }); await dbc.connect();
 await dbc.query("CREATE EXTENSION IF NOT EXISTS vector").catch(() => { /* pgvector 없는 로컬 PG */ });
 process.env.ITEMS_DATABASE_URL = dsnFor(DB);
-for (const k of ["LIVELY_APP_SERVER_POLICY", "LIVELY_APP_SERVER_TENANTS", "LIVELY_APP_SERVER_PREFIX", "LIVELY_APP_DOMAIN", "AWS_REGION", "LIVELY_APP_SERVER_REGION"]) delete process.env[k];
+for (const k of ["LIVELY_APP_SERVER_POLICY", "LIVELY_APP_SERVER_TENANTS", "LIVELY_APP_SERVER_PREFIX", "LIVELY_APP_DOMAIN", "AWS_REGION", "LIVELY_APP_SERVER_REGION", "LIVELY_APP_SERVER_HOST"]) delete process.env[k];
 process.env.LIVELY_APP_SERVER_EXEC_ROLE = "arn:aws:iam::111122223333:role/lvly-app-exec";
 const D = new URL("../../dist", import.meta.url).href.replace(/\/$/, "");
 const { initAllSchemas } = await import(`${D}/boot/schemas.js`);

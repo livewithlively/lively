@@ -15,7 +15,8 @@
 //
 //  앱이 받는 머리글(계약): x-lively-member(구성원 id) · x-lively-member-name(이름) — 둘 다 퍼센트 인코딩(한글 id 도 실리게 · SDK livelyMember 가 푼다) ·
 //   x-lively-variant(pub | draft) · x-lively-identity(신원 원문 — SDK 가 게이트웨이 호출에 다시 싣는다) · x-lively-job(백그라운드 작업이면 그 작업 번호 —
-//   #4486 · 없으면 사람이 보낸 요청). 들어온 그 밖의 x-lively-* 는 지운다.
+//   #4486 · 없으면 사람이 보낸 요청) · x-lively-guard-key(#4487 자가호스팅 컨테이너만 — 검사 층을 거쳤다는 표지 · SDK livelyMember 가 env 의 같은 값과
+//   대조한다). 들어온 그 밖의 x-lively-* 는 지운다.
 //
 //  #4486 앱 v2-7 백그라운드 작업(결정 상민 2026-10-20 — 태스크 #4486 댓글 539):
 //   · 게이트웨이가 함수를 비동기로 부를 때 이벤트의 X-Lively-Identity 에 «부르기 신원»(lvjc1.<작업>.<한 번 쓰는 비밀>)을 싣는다. 이 문은 그것을 받으면
@@ -69,6 +70,11 @@ function guardMain(): void {
   const API = String(env.LIVELY_API_URL || "").replace(/\/+$/, "");
   const APP_TOKEN = String(env.LIVELY_APP_TOKEN || "");
   const REQ_TIMEOUT_MS = Math.max(0, Math.floor(Number(env.LIVELY_REQUEST_TIMEOUT_S) || 0)) * 1000;
+  //  #4487 자가호스팅 컨테이너 — 문이 받을 자리(Docker 가 박스의 127.0.0.1 포트를 컨테이너의 이 자리로 잇는다 · Lambda 는 비워 둬 127.0.0.1).
+  //   열쇠(LIVELY_GUARD_KEY · 컨테이너를 띄울 때마다 새로) — 앱으로 넘기는 요청에 x-lively-guard-key 로 싣는다. 박스 위 다른 프로세스가 컨테이너 IP 의 앱 포트로
+  //   바로 보낸 요청엔 이 값이 없어 SDK livelyMember 가 «사람 없음» 으로 읽는다(네트워크로 막는 것은 #5108). Lambda 는 비워 둔다(앱에 닿는 다른 길이 없다).
+  const LISTEN_HOST = String(env.LIVELY_GUARD_HOST || "127.0.0.1");
+  const GUARD_KEY = String(env.LIVELY_GUARD_KEY || "");
   const JOB_CALL_RE = /^lvjc1\.([1-9][0-9]{0,15})\.([A-Za-z0-9_-]{32,128})$/;
   const JOB_RESULT_MAX = 64 * 1024, JOB_BODY_MAX = 2 * 1024 * 1024;
   //  이번 호출의 마감 — 웹 어댑터가 앱 쪽에 넘기는 x-amzn-lambda-context 의 deadline(epoch ms · 2026-10-20 실측: 함수 시간 30초에 받은 순간 29,775ms 남음).
@@ -199,6 +205,7 @@ function guardMain(): void {
     headers["x-lively-member"] = enc(v.claims.sub);
     headers["x-lively-member-name"] = enc(v.claims.name);
     headers["x-lively-variant"] = v.claims.var;
+    if (GUARD_KEY) headers["x-lively-guard-key"] = GUARD_KEY;
     //  #4486 사람 요청 시간 — 함수 시간은 작업 시간(15분)이라 사람 요청은 이 문이 끊는다. 끊은 뒤엔 앱의 늦은 답 · 오류가 응답을 다시 건드리지 않는다(cut).
     //   함수 마감이 더 이르면(관리자가 요청 시간 = 함수 시간으로 맞춘 때) 그보다 조금 앞에서 끊는다 — Lambda 오류 대신 504 를 돌려주게.
     let cut = false;
@@ -330,6 +337,7 @@ function guardMain(): void {
     headers["x-lively-member-name"] = enc(String(j.member_name ?? ""));
     headers["x-lively-variant"] = j.variant === "draft" ? "draft" : "pub";
     headers["x-lively-job"] = String(id);
+    if (GUARD_KEY) headers["x-lively-guard-key"] = GUARD_KEY;
     headers["content-length"] = String(body.length);
     //  작업 시간 상한 — 함수 마감이 더 이르면(작업 시간 = 함수 시간 15분이 기본) 결과를 보고할 여유를 두고 그 앞에서 끊는다(격리 리뷰).
     const fnDeadline = lambdaDeadlineOf(req.headers["x-amzn-lambda-context"]);
@@ -384,7 +392,7 @@ function guardMain(): void {
   }
   server.keepAliveTimeout = 60_000;
   server.on("clientError", (_e, socket) => { try { socket.destroy(); } catch { /* 이미 닫혔다 */ } });
-  server.listen(GUARD_PORT, "127.0.0.1");
+  server.listen(GUARD_PORT, LISTEN_HOST);
   process.on("uncaughtException", (e) => { console.error("[lively-guard]", (e as Error)?.message ?? e); });
 }
 

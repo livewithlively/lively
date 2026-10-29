@@ -231,6 +231,21 @@ test("S13 livelyMember — 백그라운드 작업이면 job(작업 번호 · #44
   for (const bad of ["0", "-3", "1.5", "abc", "", "99999999999999999999"]) assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-job": bad })).job, null, `x-lively-job ${bad}`);
 });
 
+test("S15 · 4487-K3 livelyMember — 검사 층 열쇠(#4487 자가호스팅): env 열쇠 없음 → 종전대로 · 있음+맞음 → 사람 · 틀림 · 길이 다름 · 없음 → null", () => {
+  const h = (o) => ({ headers: o });
+  const keep = process.env.LIVELY_GUARD_KEY;
+  try {
+    delete process.env.LIVELY_GUARD_KEY;
+    assert.equal(livelyMember(h({ "x-lively-member": "m" })).id, "m", "Lambda(열쇠 없음)는 종전대로");
+    process.env.LIVELY_GUARD_KEY = "k-1";
+    assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-guard-key": "k-1" })).id, "m");
+    assert.equal(livelyMember({ headers: new Headers({ "x-lively-member": "m", "x-lively-guard-key": "k-1" }) }).id, "m", "Fetch Headers");
+    assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-guard-key": "k-2" })), null, "틀린 열쇠");
+    assert.equal(livelyMember(h({ "x-lively-member": "m", "x-lively-guard-key": "k-1x" })), null, "길이가 달라도 던지지 않고 null");
+    assert.equal(livelyMember(h({ "x-lively-member": "m" })), null, "열쇠 없음(검사 층을 건너뛴 요청)");
+  } finally { if (keep === undefined) delete process.env.LIVELY_GUARD_KEY; else process.env.LIVELY_GUARD_KEY = keep; }
+});
+
 test("S14 livelyJobs — 앱 서버 토큰 + 들어온 신원으로 /api/ui/app-jobs 를 부른다 · 시작 · 보기(wait) · 목록 · 취소 · 기다리기 · 거절은 LivelyDbError", async () => {
   const calls = [];
   const replies = [];

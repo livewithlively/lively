@@ -42,6 +42,9 @@ export interface AppServerPolicy {
   job_wait_s: number;               // 기다리는 시간 상한(초) — 넘으면 «대기 시간 초과» 로 끝낸다
   job_body_kb: number;              // 작업에 넘기는 본문 상한(KB) — 비동기 호출 한 번의 한도(1MB)가 이벤트(본문은 base64 로 ⁴⁄₃)까지 담아야 한다
   job_keep_days: number;            // 끝난 작업 기록(결과 본문에 앱 데이터가 실린다) 보존(일) — 지나면 행째 지운다(작업 컨테이너 keep_days 와 같은 자리 · 격리 리뷰)
+  //  #4487 v2-8 자가호스팅(LIVELY_APP_SERVER_HOST=local · 결정 #5052 ④ · 상민 2026-10-28 «워크스페이스 관리자가 바꿀 수 있게»). 매니지드(Lambda)는 쓰지 않는다.
+  idle_sleep_min: number;           // 한가한 지 이만큼(분) 지나면 앱 서버 컨테이너를 재운다 — 0 = 안 재움. 앱별 값(app_server_idle_set)이 있으면 그것
+  local_memory_mb: number;          // 이 워크스페이스의 깨어 있는 앱 서버 컨테이너 메모리 합(MB) — 박스 천장(env LIVELY_APP_SERVER_LOCAL_MEMORY_MAX_MB)까지만 쓴다
 }
 export type AppServerPolicyPatch = Partial<AppServerPolicy>;
 
@@ -52,6 +55,7 @@ export const APP_SERVER_POLICY_DEFAULT: AppServerPolicy = {
   workspace_functions_max: 20, workspace_code_mb: 5 * 1024, unused_retire_days: 7,
   job_timeout_s: 900, memory_max_mb: 10_240, jobs_running_workspace: 10, jobs_running_app: 5, jobs_queued_app: 100, jobs_daily_app: 1000,
   job_wait_s: 1800, job_body_kb: 256, job_keep_days: 30,
+  idle_sleep_min: 10, local_memory_mb: 2048,
 };
 
 /** 바닥 — 설정이 이 밑으로 못 간다(0 · 음수 · 잡값은 바닥이 아니라 «그 값 없음» = 기본값으로 읽는다). */
@@ -62,6 +66,7 @@ export const APP_SERVER_POLICY_MIN: AppServerPolicy = {
   workspace_functions_max: 1, workspace_code_mb: 100, unused_retire_days: 1,
   job_timeout_s: 60, memory_max_mb: 128, jobs_running_workspace: 1, jobs_running_app: 1, jobs_queued_app: 1, jobs_daily_app: 1,
   job_wait_s: 60, job_body_kb: 1, job_keep_days: 1,
+  idle_sleep_min: 0, local_memory_mb: 256,
 };
 /**
  * 천장 — 설정·env 가 넘지 못한다. 시간 60초는 앞단(CloudFront 최대 60초)·라우터 시한 너머가 의미 없어서 · 빌드 30분 · 메모리 10GB(Lambda 의 끝 — #4486 전엔 4GB).
@@ -77,6 +82,8 @@ export const APP_SERVER_POLICY_MAX: AppServerPolicy = {
   //   비동기 호출 한 번의 한도 1MB 에 base64(⁴⁄₃) · 머리글 · 이벤트 틀이 드는 끝.
   job_timeout_s: 900, memory_max_mb: 10_240, jobs_running_workspace: 200, jobs_running_app: 100, jobs_queued_app: 1000, jobs_daily_app: 100_000,
   job_wait_s: 86_400, job_body_kb: 700, job_keep_days: 3650,
+  //  #4487 재우기 하루 · 예산 1TiB(실제 끝은 박스 천장 env — 박스마다 달라 여기서 정하지 않는다).
+  idle_sleep_min: 1440, local_memory_mb: 1_048_576,
 };
 
 export const APP_SERVER_POLICY_KEYS = Object.keys(APP_SERVER_POLICY_DEFAULT) as Array<keyof AppServerPolicy>;

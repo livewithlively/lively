@@ -614,6 +614,39 @@ try {
     await cleanup();
   }
 
+  // ── I. 앱 판 지시(#5082) — 지시가 있을 때만 적고 따로 읽는다 · 칸이 아직 없을 때(롤 창) ──────────────────
+  {
+    await cleanup();
+    const withInstr = (who, t) => job(who, { appId: "crm", projectId: null, cwd: "/work/apps/crm", appInstructions: t });
+    const i1 = await st.insertAgentJob(withInstr("alice", "정책 표만 근거로 답한다"), ROOMY);
+    const i0 = await st.insertAgentJob(job("plain"), ROOMY);
+    const iEmpty = await st.insertAgentJob(withInstr("empty", ""), ROOMY);
+    chk("AI1 앱 판 지시 — 넣은 글 그대로 읽힌다 · 보통 작업 · 빈 글 · 없는 id 는 null(빈 글은 칸에 적지도 않는다)",
+      (await st.agentJobAppInstructions(i1.row.id)) === "정책 표만 근거로 답한다" && (await row(i1.row.id)).app_instructions === "정책 표만 근거로 답한다"
+        && (await st.agentJobAppInstructions(i0.row.id)) === null && (await row(i0.row.id)).app_instructions === null
+        && (await st.agentJobAppInstructions(iEmpty.row.id)) === null && (await row(iEmpty.row.id)).app_instructions === null
+        && (await st.agentJobAppInstructions(2 ** 40)) === null);
+    chk("AI1b 행 읽기(COLS)는 지시 칸을 싣지 않는다 — 롤 창에서 «없는 칸» 으로 깨지지 않게", !("app_instructions" in i1.row) && !("app_instructions" in (await st.getAgentJob(i1.row.id))),
+      JSON.stringify(Object.keys(i1.row)));
+    const both = await st.insertAgentJob(job("both", { accountMember: `${REQ}seat`, appId: "crm", projectId: null, cwd: "/work/apps/crm", sharedSeat: true, appInstructions: "공용 시트 지시" }), ROOMY);
+    chk("AI1c 공용 시트 표시와 지시를 함께 넣어도 자리(값 번호)가 맞는다", (await st.agentJobSharedSeat(both.row.id)) === true && (await st.agentJobAppInstructions(both.row.id)) === "공용 시트 지시");
+    await cleanup();
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS app_instructions`);
+    try {
+      const p0 = await st.insertAgentJob(job("roll"), ROOMY);
+      const read = await st.agentJobAppInstructions(p0.row.id);
+      let instrInsert = null;
+      try { await st.insertAgentJob(withInstr("x", "지시"), ROOMY); } catch (e) { instrInsert = e; }
+      const claimed = await st.claimAgentJobs(WIDE, mint);
+      chk("AI2 칸이 없을 때 — 지시 읽기 null · 보통 접수 · 자리 주기는 돈다 · 지시를 실은 접수만 42703",
+        read === null && claimed.some((g) => g.row.id === p0.row.id) && instrInsert?.code === "42703",
+        JSON.stringify({ read, claimed: claimed.map((g) => g.row.id), code: instrInsert?.code }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_instructions TEXT`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;

@@ -95,7 +95,7 @@ t("B6 배포 설정 — 실행 역할 없음 · 모양 틀림이면 null(앱 서
 
 t("B7 배포 설정 — 지역 순서 · 레이어 · 접두 · 런타임 기본", () => {
   const e = appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE })!;
-  assert.deepEqual(e, { region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" });
+  assert.deepEqual(e, { host: "lambda", region: "ap-northeast-2", execRoleArn: ROLE, awsAccountId: ROLE.split(":")[4], layerArn: "arn:aws:lambda:ap-northeast-2:753240598075:layer:LambdaAdapterLayerArm64:30", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" });
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1" })!.region, "us-east-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, AWS_REGION: "us-east-1", LIVELY_APP_BUNDLE_REGION: "ap-northeast-1" })!.region, "ap-northeast-1");
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_BUNDLE_REGION: "ap-northeast-1", LIVELY_APP_SERVER_REGION: "eu-west-1" })!.region, "eu-west-1");
@@ -488,6 +488,16 @@ t("J5 작업 상한 — 기본(함수 900초 · 메모리 천장 10GB · 동시 
   assert.deepEqual([d.job_keep_days, APP_SERVER_POLICY_MIN.job_keep_days, APP_SERVER_POLICY_MAX.job_keep_days], [30, 1, 3650]);
   assert.equal(normalizeAppServerPolicy({ job_keep_days: 0 }).job_keep_days, 30);
   assert.equal(normalizeAppServerPolicy({ job_keep_days: 99_999 }).job_keep_days, 3650);
+});
+
+t("C5 자가호스팅 상한(#4487) — 재우기 기본 10분 · 0(안 재움) 허용 · 하루 천장 / 메모리 예산 기본 2048 · 바닥 256 · 0 은 «값 없음»", () => {
+  const d = APP_SERVER_POLICY_DEFAULT;
+  assert.deepEqual([d.idle_sleep_min, d.local_memory_mb], [10, 2048]);
+  assert.equal(normalizeAppServerPolicy({ idle_sleep_min: 0 }).idle_sleep_min, 0, "0 = 안 재움(값 없음으로 읽지 않는다)");
+  assert.equal(normalizeAppServerPolicy({ idle_sleep_min: 5000 }).idle_sleep_min, 1440);
+  assert.equal(normalizeAppServerPolicy({ idle_sleep_min: -1 }).idle_sleep_min, 10);
+  assert.equal(normalizeAppServerPolicy({ local_memory_mb: 100 }).local_memory_mb, 256);
+  assert.equal(normalizeAppServerPolicy({ local_memory_mb: 0 }).local_memory_mb, 2048);
 });
 
 //  S7 재사용 판정이 기대는 이음매 — 실제 어댑터의 getFunction 이 판(Qualifier)을 실어 보내고 Code(코드 자리)를 그대로 돌려주는가(격리 리뷰).

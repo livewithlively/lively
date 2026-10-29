@@ -73,6 +73,9 @@ export interface AgentJobDeps {
   /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
    *  at — 판이 보는 게이트웨이 주소와 실을 워크스페이스(#5082 paneView — 프록시도 그 아래 · 그 워크스페이스로). */
   jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
+  /** 하네스의 시스템 지시(#5082 앱 판 지시 — 작업 행에 실린 글 · 앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적는다). 없으면 null.
+   *  던지면 그 작업은 돌지 않는다(실린 지시를 못 읽은 채 돌리지 않는다). */
+  jobSystem?(job: AgentJobRow): Promise<string | null>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   /**
@@ -376,9 +379,11 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //   그 박스의 루프백 포트다 — MCP 와 LLM 프록시가 둘 다 그 아래다(자리를 먼저 구해 env 에 넘긴다).
   //  #5101 — API 키 작업이 앞 대화를 이어받으면(형식 재시도 · 앱의 이어받기) 게이트웨이가 보관한 그 대화 기록을 돌려준다(판이 빈 설정 폴더에 되돌려
   //   놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말). 없거나 다른 대화의 기록이면 돌리지 않는다(하네스가 «대화 없음» 으로 곧바로 죽는 것보다 까닭이 분명하다).
+  //  #5082 — 앱 판 지시(ai.instructions — 작업 행에 실린 글)도 여기서 읽는다. 못 읽으면 신원 · env 와 같은 규칙(돌리지 않는다).
   let env: Record<string, string> = {};
   let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
   let transcript: { conv: string; gz: string } | null = null;
+  let system: string | null = null;
   try {
     if (d.paneView) view = await d.paneView(booted);
     env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
@@ -389,6 +394,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
       }
       transcript = { conv: convIdOf(t.conv)!, gz: t.gz.toString("base64") };
     }
+    system = d.jobSystem ? await d.jobSystem(booted) : null;
   } catch (e) {
     const why = String((e as Error)?.message ?? e);
     logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
@@ -401,11 +407,11 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
   const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: `${view.gateway}/mcp`,
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
-  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind }, "[agent-job] 판이 섰다");
+  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0 }, "[agent-job] 판이 섰다");
   return {
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
-    argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare }),
-    prompt: booted.prompt, mcp, env, cwd: view.cwd,
+    argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system }),
+    prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
     //  #5101 API 키 작업만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더가 끝나면 지워진다 · 관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면
     //   앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).

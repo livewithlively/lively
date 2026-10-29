@@ -8,7 +8,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
-import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
+import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, SYSTEM_PROMPT_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -43,7 +43,7 @@ process.stdin.on("end", () => {
     }
     const m = restored && /saved to (\\/[^ \\n]+)/.exec(restored);
     restoredRef = m ? (fs.existsSync(m[1]) ? fs.readFileSync(m[1], "utf8") : "없음:" + m[1]) : null;
-    strays = fs.readdirSync(path.dirname(cfg)).filter((n) => n !== "cfg" && n !== "prompt.txt" && n !== "mcp.json");
+    strays = fs.readdirSync(path.dirname(cfg)).filter((n) => n !== "cfg" && n !== "prompt.txt" && n !== "mcp.json" && n !== "system.md");
     const d = path.join(pj, "-fake-cwd");
     const sid = "0a1b2c3d-0000-4000-8000-000000000001";
     fs.mkdirSync(path.join(d, sid, "tool-results"), { recursive: true });
@@ -53,6 +53,8 @@ process.stdin.on("end", () => {
       fs.writeFileSync(path.join(d, sid + ".jsonl"), "line1 Output has been saved to " + path.join(d, sid, "tool-results", "big.txt") + " end\\n");
     }
   }
+  const si = process.argv.indexOf("--append-system-prompt-file");
+  const sysFile = si > 0 ? process.argv[si + 1] : null;
   fs.writeFileSync(rec, JSON.stringify({
     cfg, restored, restoredRef, strays,
     argv: process.argv.slice(2), stdin, cwd: process.cwd(),
@@ -60,6 +62,9 @@ process.stdin.on("end", () => {
       port: process.env.${JOB_PORT_ENV} ?? null, ws: process.env.${JOB_WS_ENV} ?? null },
     mcp: mcpFile && fs.existsSync(mcpFile) ? fs.readFileSync(mcpFile, "utf8") : null,
     mcpMode: mcpFile && fs.existsSync(mcpFile) ? (fs.statSync(mcpFile).mode & 0o777) : null,
+    sys: sysFile && fs.existsSync(sysFile) ? fs.readFileSync(sysFile, "utf8") : null,
+    sysMode: sysFile && fs.existsSync(sysFile) ? (fs.statSync(sysFile).mode & 0o777) : null,
+    sysFile,
   }));
   const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
   out({ type: "system", subtype: "init", session_id: "0a1b2c3d-0000-4000-8000-000000000001", model: "fake-model" });
@@ -90,6 +95,8 @@ async function gateway(o: {
   bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
   /** #5101 부트 응답에 더할 칸(transcriptMax · transcript …) · 하네스 env 에 더할 것(CLAUDE_CONFIG_DIR 자리표 · 가짜 하네스 모드). */
   bootExtra?: Record<string, unknown>; envExtra?: Record<string, string>;
+  /** #5082 앱 판 지시 — 주면 부트 응답에 system 과 지시 파일 자리표 인자를 싣는다. */
+  system?: string;
 }): Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
   const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [], ws: [], transcripts: [] };
   let resultCalls = 0;
@@ -108,7 +115,8 @@ async function gateway(o: {
         if (o.bootRaw !== undefined) { res.writeHead(200, { "content-type": "text/html" }); res.end(o.bootRaw); return; }
         return json(200, {
           id: 1, secret: "CALLBACK-SECRET", code: o.runnerCode ?? RUNNER_SOURCE.replace(/port: 8080/, `port: ${port}`),
-          argv: [process.execPath, FAKE, "--mcp-config", MCP_CONFIG_PLACEHOLDER, "--flag"],
+          argv: [process.execPath, FAKE, "--mcp-config", MCP_CONFIG_PLACEHOLDER, ...(o.system !== undefined ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER] : []), "--flag"],
+          ...(o.system !== undefined ? { system: o.system } : {}),
           prompt: "프롬프트 — 한글과 \"따옴표\"\n둘째 줄", mcp: { mcpServers: { lively: { type: "http", url: "x" } } },
           env: { EXTRA: "1", FAKE_MODE: o.mode, FAKE_RECORD: o.record, ...(o.envExtra ?? {}) }, cwd: tmp,
           timeoutMs: o.timeoutMs, tickMs: 150, tailMax: 4000, resultMax: 1000, stderrMax: 500, ...(o.bootExtra ?? {}),
@@ -200,6 +208,34 @@ await t("R2 정상 — 박동 · 결과 한 번(답·대화 id·종료코드) ·
     assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
     assert.equal(h.mcpMode, 0o600);
     assert.ok(!fs.existsSync(h.argv[1]), "판이 끝나면 임시 폴더(프롬프트·MCP 파일)를 지운다");
+  } finally { await g.close(); }
+});
+
+await t("#5082 U1 앱 판 지시 — 판이 지시 글을 작업 폴더(0700) 안 0600 파일로 쓰고 자리표를 그 경로로 · 하네스가 같은 글을 읽는다 · 끝나면 폴더째 지운다", async () => {
+  const record = path.join(tmp, "u1.json");
+  const sys = "정책 표를 조회해 답하라 — 한글과 \"따옴표\"\n둘째 줄";
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, system: sys });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    const at = h.argv.indexOf("--append-system-prompt-file");
+    assert.ok(at >= 0 && h.argv[at + 1] !== SYSTEM_PROMPT_PLACEHOLDER, JSON.stringify(h.argv));
+    assert.equal(h.sys, sys, "하네스가 읽은 지시 = 받은 지시");
+    assert.equal(h.sysMode, 0o600);
+    assert.equal(path.basename(path.dirname(h.sysFile)).startsWith("lvly-job-"), true, "판의 임시 작업 폴더 안");
+    assert.ok(!fs.existsSync(h.sysFile), "끝나면 지운다");
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
+});
+
+await t("#5082 U2 앱 판 지시가 없으면 — 지시 파일을 만들지 않고 인자도 그대로(종전 작업 무회귀)", async () => {
+  const record = path.join(tmp, "u2.json");
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.ok(!h.argv.includes("--append-system-prompt-file"));
+    assert.equal(h.sysFile, null);
   } finally { await g.close(); }
 });
 
@@ -312,6 +348,15 @@ await t("claudeJobArgv — 훅 끔 · 멤버 MCP 안 실음 · MCP 자리표 · 
   assert.equal(c[c.indexOf("--tools") + 1], "", "빈 문자열 인자 하나로 도구를 끈다");
   assert.ok(!c.includes("--mcp-config"));
   for (const bad of ["--dangerously-x", "-p", "a b", "x;rm"]) assert.throws(() => claudeJobArgv({ model: bad, mcp: false }), bad);
+  //  #5082 앱 판 지시 — 지시 파일 자리표 · 작업 폴더 설정 끔(user 만). 없으면 둘 다 없다(단발 · MCP 작업 모두).
+  for (const o of [{ mcp: true }, { mcp: false, bare: true }]) {
+    const s = claudeJobArgv({ ...o, system: true });
+    assert.equal(s[s.indexOf("--append-system-prompt-file") + 1], SYSTEM_PROMPT_PLACEHOLDER, JSON.stringify(o));
+    assert.equal(s[s.indexOf("--setting-sources") + 1], "user", JSON.stringify(o));
+    const n = claudeJobArgv({ ...o, system: false });
+    assert.ok(!n.includes("--append-system-prompt-file") && !n.includes("--setting-sources"), JSON.stringify(o));
+  }
+  assert.ok(!a.includes("--setting-sources"), "지시가 없으면 종전 그대로(작업 폴더 설정을 읽는다)");
 });
 
 await t("R6 결과를 올리는 동안에도 박동한다 — 게이트웨이가 결과를 늦게 받아도 «응답 없음» 으로 끊기지 않게", async () => {

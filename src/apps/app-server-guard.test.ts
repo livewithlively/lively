@@ -374,3 +374,44 @@ test("bootstrap — 검사 층을 먼저(백그라운드) 띄우고 핸들러(�
   const iExec = lines.findIndex((l) => l.startsWith("exec ") && l.includes("${LAMBDA_TASK_ROOT}/${_HANDLER}"));
   assert.ok(iGuard > 0 && iExec > iGuard, GUARD_BOOTSTRAP_SH);
 });
+
+// ── #4487 자가호스팅 컨테이너 — 받을 자리 · 열쇠(사양 엣지 표 F: K1 · K2) ──
+
+const canConnect = (host: string, port: number): Promise<boolean> => new Promise((r) => {
+  const s = net.connect({ host, port });
+  s.once("connect", () => { s.destroy(); r(true); });
+  s.once("error", () => r(false));
+});
+
+test("4487-K1 문이 받을 자리 — LIVELY_GUARD_HOST 가 없으면 127.0.0.1 만(Lambda 그대로) · 있으면 그 자리(컨테이너는 0.0.0.0)", async (t) => {
+  const v6 = await new Promise<boolean>((r) => { const s = net.createServer(); s.once("error", () => r(false)); s.listen(0, "::1", () => s.close(() => r(true))); });
+  const appPort = await freePort();
+  const app = await startApp(appPort);
+  const a = await startGuard(appPort);
+  let b: ChildProcess | null = null;
+  try {
+    assert.equal((await req(a.port, GUARD_READY_PATH)).status, 200);
+    if (!v6) { t.diagnostic("이 기계에 ::1 이 없어 «다른 자리» 쪽은 건너뛴다"); return; }
+    assert.equal(await canConnect("::1", a.port), false, "기본인데 127.0.0.1 밖에서 받는다");
+    const port = await freePort();
+    b = spawn(process.execPath, ["-e", GUARD_JS], { stdio: ["ignore", "ignore", "ignore"], env: {
+      PATH: process.env.PATH ?? "", PORT: String(appPort), LIVELY_GUARD_PORT: String(port), LIVELY_GUARD_HOST: "::1", LIVELY_TENANT_ID: WS, LIVELY_APP_ID: APP,
+      LIVELY_APP_IDENTITY_PUBKEYS: JSON.stringify({ k1: key.publicKeyB64 }) } });
+    for (let i = 0; i < 200 && !(await canConnect("::1", port)); i++) await new Promise((r) => setTimeout(r, 25));
+    assert.equal(await canConnect("::1", port), true, "LIVELY_GUARD_HOST 자리에서 받지 않는다");
+    assert.equal(await canConnect("127.0.0.1", port), false, "LIVELY_GUARD_HOST 를 주었는데 127.0.0.1 에서도 받는다");
+  } finally { a.stop(); b?.kill("SIGKILL"); await app.close(); }
+});
+
+test("4487-K2 열쇠 — LIVELY_GUARD_KEY 가 있으면 앱에 x-lively-guard-key(밖에서 온 같은 머리글은 지우고 제 값) · 없으면 싣지 않는다", async () => {
+  const appPort = await freePort();
+  const app = await startApp(appPort);
+  const keyed = await startGuard(appPort, { LIVELY_GUARD_KEY: "k-123" });
+  const plain = await startGuard(appPort);
+  try {
+    assert.equal((await req(keyed.port, "/x", { "x-lively-identity": tok(), "x-lively-guard-key": "forged" })).status, 207);
+    assert.equal(app.seen.at(-1)!.headers["x-lively-guard-key"], "k-123");
+    assert.equal((await req(plain.port, "/x", { "x-lively-identity": tok(), "x-lively-guard-key": "forged" })).status, 207);
+    assert.equal(app.seen.at(-1)!.headers["x-lively-guard-key"], undefined, "열쇠 env 가 없는데 머리글이 앱에 닿았다(밖에서 온 것을 안 지웠다)");
+  } finally { keyed.stop(); plain.stop(); await app.close(); }
+});

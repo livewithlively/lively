@@ -249,6 +249,16 @@ function builderMain(): void {
     fs.createReadStream(file).on("data", (d) => h.update(d as Buffer)).on("error", reject).on("end", () => resolve(h.digest()));
   });
   const upload = (url: string, file: string, size: number): Promise<void> => new Promise((resolve, reject) => {
+    //  #4487 자가호스팅 — 빌드 컨테이너는 결과 폴더(/out)를 받는다. file: 주소면 그 자리에 복사한다(게이트웨이가 zip 저장소로 옮긴다).
+    if (url.startsWith("file:")) {
+      try {
+        const dst = (require("node:url") as typeof import("node:url")).fileURLToPath(url);
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(file, dst);
+        resolve();
+      } catch (e) { reject(e); }
+      return;
+    }
     const u = new URL(url);
     const mod = (u.protocol === "http:" ? require("node:http") : require("node:https")) as typeof import("node:https");
     const rq = mod.request(u, { method: "PUT", headers: { "content-length": String(size) }, timeout: 120_000 }, (rs) => {
