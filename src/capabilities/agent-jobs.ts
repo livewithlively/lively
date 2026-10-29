@@ -35,7 +35,7 @@ const agentJobRun: Capability = {
   description:
     "에이전트 작업을 별도 작업 컨테이너에서 돌린다(사람 세션이 없어도 돈다) — **보낸 사람 본인으로**(본인 Claude 구독·홈) 돈다. 작업 폴더는 project_id 또는 app_id(앱 화면이면 그 앱 폴더). " +
     "곧바로 {id,status} 를 돌려준다 — 결과는 agent_job_get. 동시 상한을 넘으면 기다리고 대기열이 차면 429. " +
-    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드와, 관리자가 켠 셀프호스트 박스(LIVELY_AGENT_JOBS=host)에서 돈다 — 그 밖은 501.",
+    "앱 서버·앱 토큰·작업 안에서는 보낼 수 없다. 매니지드와, 관리자가 켠 셀프호스트 박스(LIVELY_AGENT_JOBS=docker · host)에서 돈다 — 그 밖은 501.",
   scope: "context",
   input: agentJobRunInput,
   expose: {

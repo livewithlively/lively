@@ -4,7 +4,8 @@
 //   판을 세우고 걷는 자리뿐이라, 그 자리를 실행면 하나로 묶는다:
 //   · broker — 매니지드. 세션 컨테이너 확보 훅(브로커)이 job- 컨테이너를 확보하고 그 안 tmux 에 판을 띄운다(launch.ts #4490 — 종전 그대로).
 //   · host   — 브로커가 없는 박스(셀프호스트). 이 박스의 tmux 에 판을 띄운다 — 사람 세션과 같은 OS 계정 · 홈 규칙(launch-host.ts).
-//   · none   — 띄우지 않는다(접수 501). 셀프호스트는 관리자가 게이트웨이 env 에 LIVELY_AGENT_JOBS=host 를 넣고 다시 띄워 켠다.
+//   · docker — 브로커가 없는 박스(셀프호스트 2단계). 작업마다 이 박스의 Docker 컨테이너를 띄운다 — 작업 폴더와 하네스가 쓰는 것만 붙인다(launch-docker.ts).
+//   · none   — 띄우지 않는다(접수 501). 셀프호스트는 관리자가 게이트웨이 env 에 LIVELY_AGENT_JOBS=docker(또는 host)를 넣고 다시 띄워 켠다.
 //  실행면이 바꾸는 것은 다섯이다: 띄울 수 있나(available) · 못 띄울 때의 까닭(unavailableMessage — 접수 501) · 띄우기(launch = OS 계정 ·
 //   메모리 상한 · 작업 폴더 · 홈 · 판) · 걷기(kill) · 판이 보는 자리(paneView — 작업 폴더 · 게이트웨이 주소 · 실을 워크스페이스).
 //   매니지드 판정은 그대로다 — 확보 훅이 있는 배포는 스위치와 무관하게 늘 broker 다(박스 위로 새지 않는다).
@@ -12,7 +13,7 @@ import type { ExecTopology } from "../exec-topology.js";
 import { RUNNER_GATEWAY_URL } from "./runner.js";
 import type { AgentJobRow } from "./store.js";
 
-export type JobSurfaceKind = "broker" | "host" | "none";
+export type JobSurfaceKind = "broker" | "host" | "docker" | "none";
 
 type SurfaceTopology = Pick<ExecTopology, "hooks" | "sessionHost" | "agentJobs">;
 
@@ -29,11 +30,21 @@ export function hostSurfaceBlocker(t: SurfaceTopology): string | null {
 }
 
 /**
+ * (순수) 이 박스에 작업 컨테이너(도커)를 띄울 수 없는 까닭 — 없으면 null. 이 프로세스가 노드 에이전트이거나 세션이 중계 너머(매니지드 꼴)면
+ *  여기는 셀프호스트 게이트웨이 박스가 아니다. 세션 spawn 훅은 보지 않는다 — 도커 판은 사람 세션 길(tmux · 그 훅)을 지나지 않는다.
+ */
+export function dockerSurfaceBlocker(t: SurfaceTopology): string | null {
+  if (t.sessionHost !== "local") return "이 프로세스는 셀프호스트 게이트웨이 박스가 아닙니다(노드 에이전트 · 중계 배포) — 이 박스에 작업 컨테이너를 띄우지 않습니다";
+  return null;
+}
+
+/**
  * (순수) 이 배포의 실행면. 확보 훅(매니지드)이 먼저다 — 그 배포는 LIVELY_AGENT_JOBS 를 보지 않는다.
- *  훅이 없으면 박스 위에 판을 세울 수 있을 때(hostSurfaceBlocker 없음)만 스위치를 본다.
+ *  훅이 없으면 스위치를 보되, 그 실행면을 세울 수 없는 배포면(dockerSurfaceBlocker · hostSurfaceBlocker) none 이다.
  */
 export function jobSurfaceKind(t: SurfaceTopology): JobSurfaceKind {
   if (t.hooks.sessionEnsure) return "broker";
+  if (t.agentJobs === "docker") return dockerSurfaceBlocker(t) ? "none" : "docker";
   if (hostSurfaceBlocker(t)) return "none";
   return t.agentJobs === "host" ? "host" : "none";
 }
@@ -70,10 +81,10 @@ export const BROKER_GATEWAY = RUNNER_GATEWAY_URL;
 /** (순수) 못 띄우는 배포에서 접수가 돌려줄 문장(501) — 사람(관리자)이 무엇을 켜면 되는지, 켤 수 없으면 왜인지 말한다. */
 export function jobsUnavailableMessage(kind: JobSurfaceKind, t?: SurfaceTopology): string {
   if (kind !== "none") return "지금은 에이전트 작업을 띄울 수 없습니다 — 이 워크스페이스의 작업 컨테이너 자리를 확인하지 못했습니다";
-  const blocker = t ? hostSurfaceBlocker(t) : null;
+  const blocker = t ? (t.agentJobs === "docker" ? dockerSurfaceBlocker(t) : hostSurfaceBlocker(t)) : null;
   return blocker
     ? `이 배포에서는 에이전트 작업을 띄울 수 없습니다 — ${blocker}`
-    : "이 배포에서는 에이전트 작업을 띄울 수 없습니다 — 자체 호스팅 박스는 관리자가 게이트웨이 설정(.env)에 LIVELY_AGENT_JOBS=host 를 넣고 게이트웨이를 다시 띄우면 켜집니다";
+    : "이 배포에서는 에이전트 작업을 띄울 수 없습니다 — 자체 호스팅 박스는 관리자가 게이트웨이 설정(.env)에 LIVELY_AGENT_JOBS=docker(작업마다 컨테이너 — Docker 필요) 또는 LIVELY_AGENT_JOBS=host(박스 위) 를 넣고 게이트웨이를 다시 띄우면 켜집니다";
 }
 
 let cached: JobSurface | null = null;
@@ -94,6 +105,19 @@ export async function jobSurface(): Promise<JobSurface> {
       launch: (job, boot, o) => launch.launchJobContainer(job, boot, o),
       kill: (sid) => launch.killJobContainer(sid),
       paneView: async (job) => ({ cwd: job.cwd, gateway: BROKER_GATEWAY, workspace: null }),
+    };
+    return cached;
+  }
+  if (kind === "docker") {
+    const docker = await import("./launch-docker.js");
+    cached = {
+      kind,
+      //  도커에 닿고 하네스 실행 파일이 있어야 띄운다(기억한 판정 — 못 띄우면 접수 501 · 대기 작업은 배차되지 않는다).
+      available: async () => (await docker.dockerBoxCheck()).ok,
+      unavailableMessage: () => docker.dockerUnavailableMessage(),
+      launch: (job, boot, o) => docker.launchDockerJob(job, boot, undefined, o),
+      kill: (sid) => docker.killDockerJob(sid),
+      paneView: async (job) => docker.dockerPaneView(job, { port: topo.agentJobsPort, slug: (await import("../terminal/catalog.js")).tenantSlug() }),
     };
     return cached;
   }
@@ -120,14 +144,15 @@ export interface JobSurfaceView {
   available: boolean;
   /** 못 띄울 때 그 까닭(접수 501 문장과 같다) — 띄울 수 있으면 null. */
   unavailable: string | null;
-  /** 박스 위 판이 어느 계정으로 도나 — 구성원 OS 계정(격리 박스) · 게이트웨이 계정(격리 꺼짐 · 맥). 박스 위가 아니면 null. */
+  /** 박스 위 판 · 작업 컨테이너가 어느 계정으로 도나 — 구성원 OS 계정(격리 박스) · 게이트웨이 계정(격리 꺼짐 · 맥). 셀프호스트 실행면이 아니거나 모르면 null. */
   runs_as: "member" | "gateway" | null;
   memory_cap: { mb: number; enforced: boolean; note: string };
 }
 
 /**
  * 관리자에게 보일 실행면 상태(agent_job_limits) — 어느 실행면인가 · 지금 띄울 수 있나(아니면 왜) · 어느 계정으로 도나 · 작업 메모리 상한이 실제로 걸리나.
- *  상한은 박스 위 실행에서만 이 정책 칸(memory_max_mb)으로 건다 — 격리 박스(구성원 OS 계정)에서 cgroup 래퍼(box-cgspawn)를 sudo 로 쓸 수 있을 때.
+ *  상한은 셀프호스트 실행면에서만 이 정책 칸(memory_max_mb)으로 건다 — 박스 위는 격리 박스(구성원 OS 계정)에서 cgroup 래퍼(box-cgspawn)를 sudo 로
+ *  쓸 수 있을 때, 도커는 컨테이너 메모리(스왑 없이 — 도커가 스왑 상한을 걸 수 있을 때).
  */
 export async function describeJobSurface(memoryMaxMb: number): Promise<JobSurfaceView> {
   const s = await jobSurface();
@@ -135,6 +160,10 @@ export async function describeJobSurface(memoryMaxMb: number): Promise<JobSurfac
   const unavailable = available ? null : s.unavailableMessage();
   if (s.kind === "broker") return { kind: s.kind, available, unavailable, runs_as: null, memory_cap: { mb: memoryMaxMb, enforced: false, note: "매니지드 작업 컨테이너는 세션 메모리 정책으로 잡힌다(이 칸은 쓰지 않는다)" } };
   if (s.kind === "none") return { kind: s.kind, available, unavailable, runs_as: null, memory_cap: { mb: memoryMaxMb, enforced: false, note: s.unavailableMessage() } };
+  if (s.kind === "docker") {
+    const st = await (await import("./launch-docker.js")).dockerSurfaceStatus(memoryMaxMb);
+    return { kind: s.kind, available, unavailable, runs_as: st.runsAs, memory_cap: { mb: memoryMaxMb, enforced: st.enforced, note: st.note } };
+  }
   const { hostMemoryCapStatus, hostRunsAs } = await import("./launch-host.js");
   return { kind: s.kind, available, unavailable, runs_as: await hostRunsAs(), memory_cap: { mb: memoryMaxMb, ...(await hostMemoryCapStatus(memoryMaxMb)) } };
 }

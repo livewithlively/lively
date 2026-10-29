@@ -152,7 +152,7 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //   (service.reapJob 의 JOB_SESSION_ID_RE), 사람 세션(`box-`)엔 닿지 않는다. 작업 컨테이너의 수명 주인은 이 흐름이다(#4490).
   //  사람이 아무도 없어도 돈다: CP 가 60초마다 테넌트를 부르고, 도는 작업의 판은 5초마다 박동한다(둘 다 요청이라 이 정비를 깨운다).
   //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
-  //  #5082 — 박스 위 실행면(셀프호스트 LIVELY_AGENT_JOBS=host)도 이 감시가 끝내고 걷는다 → 하우스키핑에도 건다(housekeeping).
+  //  #5082 — 셀프호스트 실행면(LIVELY_AGENT_JOBS=docker · host)도 이 감시가 끝내고 걷는다 → 하우스키핑에도 건다(housekeeping).
   { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS, housekeeping: true,
     run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).sweepAgentJobs(await m.liveAgentJobDeps())) },
   // 작업 기록 보존 정리(#4828 앱 v2-29) — 끝났고 걷은 작업 행을 보존 기간(agent_job_policy.keep_days · 기본 90일 · 0 = 무기한)이 지나면 행째 지운다.

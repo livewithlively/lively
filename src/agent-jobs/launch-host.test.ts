@@ -40,7 +40,8 @@ await t("B3·B4 훅 없는 로컬 배포 — 스위치가 host 면 host, 아니�
   assert.equal(jobSurfaceKind(computeExecTopology({ LIVELY_AGENT_JOBS: " host " })), "host");
   assert.equal(jobSurfaceKind(computeExecTopology({})), "none");
   assert.equal(jobSurfaceKind(computeExecTopology({ LIVELY_AGENT_JOBS: "Host" })), "none");
-  assert.equal(jobSurfaceKind(computeExecTopology({ LIVELY_AGENT_JOBS: "docker" })), "none", "아직 없는 값은 꺼짐");
+  assert.equal(jobSurfaceKind(computeExecTopology({ LIVELY_AGENT_JOBS: "docker" })), "docker", "도커 실행면(2단계 — launch-docker.test 가 그 갈래를 본다)");
+  assert.equal(jobSurfaceKind(computeExecTopology({ LIVELY_AGENT_JOBS: "hosts" })), "none", "모르는 값은 꺼짐");
 });
 
 await t("B5·B6 노드 에이전트 프로세스 · 중계 tmux 배포(훅 없음)는 스위치와 무관하게 none — 판을 세울 자리가 아니다", () => {
