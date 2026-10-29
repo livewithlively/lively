@@ -21,6 +21,14 @@ export const STDERR_TAIL_MAX = 8_000;
 export const TICK_MS = 5_000;
 /** 라벨 상한(문자). */
 export const LABEL_MAX = 120;
+/**
+ * #5101 API 키 작업의 대화 기록(하네스 대화 파일 · gzip) 상한 — 판이 끝에 올리고(/transcript) 게이트웨이가 보관했다가 그 대화를 이어받는 작업의 첫 말에
+ *  돌려준다. API 키 작업은 이 작업만의 빈 설정 폴더에서 돌고(멤버 홈의 로그인을 읽지 않게) 그 폴더는 끝나면 지워져, 보관하지 않으면 이어받기 · 형식
+ *  재시도가 «No conversation found» 로 실패한다(실측 2026-10-29 · claude 2.1.312). 넘으면 보관하지 않는다(그 작업은 이어받을 수 없다).
+ *  GZ = 올리는 본문(압축) · RAW = 풀었을 때(압축 폭탄을 막는다 — 게이트웨이 확인 · 판 복원 둘 다 이 값으로 끊는다).
+ */
+export const TRANSCRIPT_GZ_MAX = 8 * 1024 * 1024;
+export const TRANSCRIPT_RAW_MAX = 64 * 1024 * 1024;
 
 /** 앱 id 규칙(코어 manifest APP_ID_RE · 브로커 sessionapps.APP_ID_RE 와 같은 자) — 앱 폴더 경로 조각으로 안전하다. */
 export const APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;

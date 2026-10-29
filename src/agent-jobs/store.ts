@@ -150,6 +150,68 @@ export async function agentJobSharedSeat(id: number): Promise<boolean> {
   }
 }
 
+/**
+ * #5101 API 키 작업의 대화 기록(org_agent_job.transcript · transcript_conv · transcript_bytes) — 판이 끝에 올린 하네스 대화 파일(gzip)과 그 대화 id.
+ *  그 대화를 이어받는 API 키 작업의 첫 말(onBoot)에 돌려준다(빈 설정 폴더에 되돌려 놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말).
+ *  SHARED_SEAT_COL 과 같은 까닭(롤 창)으로 COLS 에 넣지 않고 따로 읽고 쓴다 — 칸이 아직 없으면(42703) 적지 않고(false) · 없는 것으로 읽는다(null).
+ *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남으므로 적지 않는다(account_kind 조건). 도는 중일 때만 적는다(판은 결과보다 먼저 올린다).
+ */
+const undefinedColumn = (e: unknown): boolean => (e as { code?: string })?.code === "42703";
+export async function setAgentJobTranscript(id: number, conv: string, gz: Buffer, rawBytes: number): Promise<boolean> {
+  try {
+    const r = await q(itemsPool,
+      `UPDATE org_agent_job SET transcript=$2, transcript_conv=$3, transcript_bytes=$4, updated_at=now()
+        WHERE id=$1 AND status='running' AND account_kind='api_key' RETURNING id`, [id, gz, conv, rawBytes]);
+    return r.length > 0;
+  } catch (e) {
+    if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+/** 그 작업의 대화 기록 — 없으면 null. 대화 id(conv)는 판이 올릴 때 밝힌 것이다(이어받는 쪽이 자기 resume_conversation 과 견준다). */
+export async function agentJobTranscript(id: number): Promise<{ conv: string; gz: Buffer } | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await q(itemsPool, `SELECT transcript, transcript_conv FROM org_agent_job WHERE id=$1 AND transcript IS NOT NULL`, [id]);
+    const x = r[0];
+    return x && Buffer.isBuffer(x.transcript) && typeof x.transcript_conv === "string" ? { conv: x.transcript_conv, gz: x.transcript } : null;
+  } catch (e) {
+    if (undefinedColumn(e)) return null;
+    throw e;
+  }
+}
+/** 대화 기록이 있으면 그 대화 id(본문은 읽지 않는다 — 이어받을 수 있나만 볼 때). 없으면 null. */
+export async function agentJobTranscriptConv(id: number): Promise<string | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await q(itemsPool, `SELECT transcript_conv FROM org_agent_job WHERE id=$1 AND transcript IS NOT NULL`, [id]);
+    return typeof r[0]?.transcript_conv === "string" ? r[0].transcript_conv as string : null;
+  } catch (e) {
+    if (undefinedColumn(e)) return null;
+    throw e;
+  }
+}
+/**
+ * 보존 기간(정책 transcript_keep_days)이 지난 대화 기록을 비운다 — 행은 남는다(행째 지우기는 keep_days · pruneAgentJobs). 돌려주는 것: 비운 행 수.
+ *  끝난 작업만(도는 작업 · 그 작업을 이어받으려 기다리는 작업의 앞 기록은 끝난 지 days 가 지나야 비워진다).
+ */
+export async function pruneAgentJobTranscripts(keepDays: number, batch: number = PRUNE_BATCH): Promise<number> {
+  const days = Math.floor(keepDays);
+  if (!(days >= 1)) return 0;
+  try {
+    const r = await itemsPool.query(
+      `UPDATE org_agent_job SET transcript=NULL, transcript_conv=NULL, transcript_bytes=NULL WHERE id IN (
+         SELECT id FROM org_agent_job
+          WHERE transcript IS NOT NULL AND status IN ('done','failed','timeout','canceled') AND ended_at < now() - make_interval(days => $1)
+          ORDER BY ended_at LIMIT $2)`,
+      [days, Math.max(1, Math.floor(batch))]);
+    return r.rowCount ?? 0;
+  } catch (e) {
+    if (undefinedColumn(e)) return 0;
+    throw e;
+  }
+}
+
 /** 이 테넌트의 대기열 잠금(트랜잭션 끝에 풀린다) — 셈과 자리 주기를 한 줄로 세운다. 테넌트 GUC 가 없으면(단일 테넌트) 상수 열쇠. */
 async function lockTenantQueue(c: Parameters<Parameters<typeof withTx>[0]>[0]): Promise<void> {
   await c.query(`SELECT pg_advisory_xact_lock(hashtextextended('lvly-agent-job:' || COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), '-'), 0))`);

@@ -38,6 +38,10 @@ const aiRunInput = {
   agent: z.boolean().optional().describe("true 면 파일을 안 줘도 에이전트 작업(도구 있음)으로 돈다"),
   timeout_min: z.number().int().positive().optional().describe("에이전트 작업의 실행 시간 상한(분)"),
   wait: z.number().int().min(0).max(WAIT_MAX_SEC).optional().describe(`끝날 때까지 기다릴 초(최대 ${WAIT_MAX_SEC}) — 단발은 보통 몇 초라 한 번에 결과를 받는다. 안 끝나면 지금 상태를 돌려준다(app_ai_run_get 으로 다시)`),
+  resume_run_id: z.number().int().positive().optional().describe(
+    "이 끝난 실행(done · failed)의 대화를 이어받아 prompt(고칠 점 · 사유)로 다시 시킨다 — 새 실행이 생기고 앞 실행은 그대로 남는다. 같은 앱 · 같은 요청자만. " +
+    "실행 계정 · 작업 종류 · 작업 폴더 · 작업 이름 · system 은 앞 실행 것(schema 는 안 주면 앞 실행 것 · model 은 바꿀 수 있다). 한 질문당 상한 max_resumes(app_ai_limits) — 넘으면 409 resume_limit"),
+  reason: z.string().optional().describe(`이어받는 까닭 — 실행 기록(resume.reason)에 남는 짧은 이름표(선택 · AI 에게는 prompt 가 간다). ${softCapHint(SOFT_CAPS.app_ai_run!.reason!)}`),
 };
 const AI_RUN_KEYS = Object.keys(aiRunInput);
 
@@ -48,7 +52,8 @@ const appAiRun: Capability = {
     "앱의 AI 작업 입구 하나(/_lively/ai/runs). 프롬프트(+결과 스키마 · 파일 · 작업 이름)를 보내면 게이트웨이가 실행 계정(작업별 > 앱별 > 워크스페이스 기본값 — API 키 또는 본인 구독)과 자리를 고른다: " +
     "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만 — 앱 서버 · 자동화는 API 키. " +
     "공용 시트(관리자 승인 + 그 계정 본인 동의 — app_ai_service_seat_set)로 지정된 구독은 워크스페이스 구성원 누구의 요청이든 받는다(앱 서버가 사람 신원을 실어 보낸 요청 포함 · 앱 폴더에서만 · 작업 AI 의 라이블리 신원은 물은 사람). " +
-    "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits).",
+    "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits). " +
+    "이어받기: 앱이 답을 검사하고 어긋나면 resume_run_id + prompt(사유)로 그 대화를 잇는 새 실행을 보낸다(응답 resume{of,root,depth,reason}).",
   scope: null,
   input: aiRunInput,
   expose: {
@@ -65,7 +70,8 @@ const appAiRun: Capability = {
 const appAiRunGet: Capability = {
   name: "app_ai_run_get",
   title: "앱 AI 실행 보기",
-  description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · result(text · json · model · usage · duration_ms · retries) · error. 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
+  description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · result(text · json · model · usage · duration_ms · retries) · error · " +
+    "resume(이어받은 실행이면 {of: 이어받은 실행 · root: 처음 실행 · depth: 몇 번째 · reason}, 아니면 null). 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
   scope: null,
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-runs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },
@@ -272,7 +278,7 @@ async function limitsSnapshot(): Promise<Record<string, unknown>> {
 const appAiLimits: Capability = {
   name: "app_ai_limits",
   title: "앱 AI 실행 상한 보기",
-  description: "앱 AI 실행의 워크스페이스 상한 — max_running_per_member(사람당 동시) · app_per_minute(앱당 분당) · max_inflight(워크스페이스 동시 LLM 호출) · single_timeout_sec · max_output_tokens · daily_tokens_per_app(0=끔). 고치기는 관리자 app_ai_limits_set. 구성원 누구나.",
+  description: "앱 AI 실행의 워크스페이스 상한 — max_running_per_member(사람당 동시) · app_per_minute(앱당 분당) · max_inflight(워크스페이스 동시 LLM 호출) · single_timeout_sec · max_output_tokens · daily_tokens_per_app(0=끔) · max_resumes(한 질문당 이어받기 횟수 · 0=이어받기 끔). 고치기는 관리자 app_ai_limits_set. 구성원 누구나.",
   scope: null,
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-run-limits"], parse: () => ({}) }] },

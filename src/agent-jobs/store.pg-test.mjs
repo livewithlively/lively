@@ -476,6 +476,68 @@ try {
     await cleanup();
   }
 
+  // ── TR. API 키 작업의 대화 기록(#5101) — 도는 API 키 작업만 적힌다 · 바이트 그대로 · 정리는 끝난 지 N일 지난 기록만(행은 남음) · 칸이 아직 없을 때(롤 창) ──
+  {
+    await cleanup();
+    const CONV = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const bytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0x00, 0x01, 0x02]);   // 아무 바이트(저장소는 내용을 보지 않는다 — 풀어 보기는 서비스 몫)
+    const keyRunning = async (who) => {
+      const r = await st.insertAgentJob(job(who, { accountKind: "api_key", accountMember: null }), ROOMY);
+      const c = (await claimAll()).find((x) => x.row.id === r.row.id);
+      await st.bootAgentJob(r.row.id, c.row.boot_hash, "a".repeat(64));
+      return r.row.id;
+    };
+    const k1 = await keyRunning("tr1");
+    const s1 = await running("tr2");                                   // 구독 작업(도는 중)
+    const q1 = (await st.insertAgentJob(job("tr3", { accountKind: "api_key", accountMember: null }), ROOMY)).row.id;   // 기다리는 API 키 작업
+    chk("TR1 도는 API 키 작업만 적힌다 — 구독 작업 · 기다리는 작업은 false",
+      (await st.setAgentJobTranscript(k1, CONV, bytes, 123)) === true && (await st.setAgentJobTranscript(s1, CONV, bytes, 1)) === false
+        && (await st.setAgentJobTranscript(q1, CONV, bytes, 1)) === false && (await st.agentJobTranscript(s1)) === null);
+    const got = await st.agentJobTranscript(k1);
+    const r1 = await row(k1);
+    chk("TR2 읽기 — 대화 id · 바이트 그대로 · 풀린 크기 칸 · 대화 id 만 읽기 · 없는 id 는 null",
+      got?.conv === CONV && Buffer.compare(got.gz, bytes) === 0 && r1.transcript_bytes === 123 && (await st.agentJobTranscriptConv(k1)) === CONV
+        && (await st.agentJobTranscriptConv(2 ** 40)) === null && (await st.agentJobTranscript(2 ** 40)) === null,
+      JSON.stringify({ conv: got?.conv, bytes: r1.transcript_bytes }));
+    chk("TR2b 행 읽기(COLS)는 기록 칸을 싣지 않는다 — 감시 · 목록이 큰 본문을 읽지 않게 · 롤 창에서 «없는 칸» 으로 깨지지 않게",
+      !("transcript" in (await st.getAgentJob(k1))) && !("transcript_conv" in (await st.getAgentJob(k1))));
+    await st.finishAgentJob(k1, { status: "done", error: null, from: ["running"] });
+    chk("TR3 끝난 작업엔 더 적히지 않는다(늦은 보고) · 앞 기록은 그대로", (await st.setAgentJobTranscript(k1, CONV, Buffer.from("늦은 것"), 9)) === false
+      && Buffer.compare((await st.agentJobTranscript(k1)).gz, bytes) === 0);
+    //  정리 — 끝난 지 20일 · 3일 · 도는 중(기록 있음) 셋에 14일로.
+    const k2 = await keyRunning("tr4");
+    await st.setAgentJobTranscript(k2, CONV, bytes, 8);
+    const k3 = await keyRunning("tr5");
+    await st.setAgentJobTranscript(k3, CONV, bytes, 8);
+    await st.finishAgentJob(k2, { status: "done", error: null, from: ["running"] });
+    await itemsPool.query(`UPDATE org_agent_job SET ended_at = now() - interval '20 days' WHERE id=$1`, [k1]);
+    await itemsPool.query(`UPDATE org_agent_job SET ended_at = now() - interval '3 days' WHERE id=$1`, [k2]);
+    const cleared = await st.pruneAgentJobTranscripts(14);
+    const after1 = await row(k1);
+    chk("TR4 정리 — 끝난 지 14일 지난 기록만 비운다(세 칸 모두) · 행은 남는다 · 3일 된 것 · 도는 작업의 기록은 그대로",
+      cleared === 1 && after1 && after1.transcript === null && after1.transcript_conv === null && after1.transcript_bytes === null
+        && (await st.agentJobTranscript(k2)) !== null && (await st.agentJobTranscript(k3)) !== null,
+      JSON.stringify({ cleared, row: !!after1, t: after1?.transcript }));
+    chk("TR4b 정리 — 0 · 음수 일수는 아무것도 안 한다", (await st.pruneAgentJobTranscripts(0)) === 0 && (await st.pruneAgentJobTranscripts(-1)) === 0 && (await st.agentJobTranscript(k2)) !== null);
+    await cleanup();
+    //  TR5 칸이 아직 없을 때(롤 창) — 적기 false · 읽기 null · 정리 0(던지지 않음) · 보통 접수 · 자리 주기 · 행 읽기 · 끝내기는 돈다. 끝나면 칸을 되돌린다(같은 DDL).
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS transcript, DROP COLUMN IF EXISTS transcript_conv, DROP COLUMN IF EXISTS transcript_bytes`);
+    try {
+      const k = await keyRunning("roll");
+      const wrote = await st.setAgentJobTranscript(k, CONV, bytes, 8);
+      const read = await st.agentJobTranscript(k), readConv = await st.agentJobTranscriptConv(k), pruned = await st.pruneAgentJobTranscripts(14);
+      const fin = await st.finishAgentJob(k, { status: "done", error: null, from: ["running"] });
+      chk("TR5 칸이 없을 때 — 적기 false · 읽기 null · 정리 0 · 접수 · 자리 주기 · 끝내기는 돈다",
+        wrote === false && read === null && readConv === null && pruned === 0 && fin?.status === "done",
+        JSON.stringify({ wrote, read, readConv, pruned, fin: fin?.status }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript BYTEA`);
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_conv TEXT`);
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_bytes INT`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;

@@ -85,13 +85,23 @@ export interface RunnerJob {
   tailMax: number;
   resultMax: number;
   stderrMax: number;
+  /**
+   * #5101 API 키 작업만 — 끝에 하네스 대화 파일을 gzip 으로 올린다(/transcript · 결과보다 먼저). 그 작업의 빈 설정 폴더는 끝나면 지워져, 올리지 않으면
+   *  그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면 올리지 않는다. 없으면(구독 작업 — 대화가 홈에 남는다) 올리지 않는다.
+   */
+  transcriptMax?: number;
+  /** 대화 기록을 풀 때 상한(바이트 — 압축 폭탄 막기). */
+  transcriptRawMax?: number;
+  /** #5101 이어받는 API 키 작업 — 앞 작업의 대화 기록(conv = 대화 id · gz = gzip 의 base64). 판이 빈 설정 폴더에 되돌려 놓는다. */
+  transcript?: { conv: string; gz: string };
 }
 
 /**
  * ② 본체 — `new Function("job","require", RUNNER_SOURCE)(job, require)` 로 돈다(ES2020 · 노드 내장만).
  *  하는 일: 프롬프트·MCP 설정을 컨테이너 /tmp 의 0700 폴더에 쓰고 → 하네스를 stdin=프롬프트로 띄우고 → stream-json 을 줄마다 읽어
  *  대화 id·마지막 result·진행 꼬리를 모으고 → tickMs 마다 박동(게이트웨이가 cancel 이면 끊는다) → 시간 상한이면 끊고 →
- *  끝나면 결과를 올리고(못 올리면 다시 — 24번) → 폴더를 지우고 빠진다.
+ *  끝나면 (API 키 작업이면 대화 기록을 먼저 올리고 — #5101) 결과를 올리고(못 올리면 다시 — 24번) → 폴더를 지우고 빠진다.
+ *  이어받는 API 키 작업이면 하네스를 띄우기 전에 앞 대화 기록을 빈 설정 폴더에 되돌려 놓는다(#5101).
  *  ★ 결과를 올리는 동안에도 박동한다 — 박동을 먼저 멈추면 결과를 다시 보내는 동안 게이트웨이가 침묵(silent_sec)을 듣고, 일을 마친
  *   작업을 «응답 없음» 으로 끊어 결과가 사라진다(격리 리뷰). 결과가 받아들여진 뒤의 박동은 410 이라 해가 없다.
  *  끊기: SIGTERM, 10초 뒤 SIGKILL.
@@ -104,12 +114,13 @@ const GW = { host: "${RUNNER_GATEWAY.host}", port: ${RUNNER_GATEWAY.port} };
 // 박스 위 실행면(#5082)만 싣는 둘 — 포트 · 워크스페이스. 없으면 종전 그대로(매니지드는 브로커가 테넌트를 붙인다).
 if (process.env.${JOB_PORT_ENV}) GW.port = Number(process.env.${JOB_PORT_ENV});
 const WS = process.env.${JOB_WS_ENV} || "";
-function call(kind, body, tries) {
+// raw = { buf, type, headers } 면 JSON 대신 그 바이트를 그대로 보낸다(#5101 대화 기록 — gzip).
+function call(kind, body, tries, raw) {
   return new Promise((resolve) => {
     const once = (left) => {
-      const data = JSON.stringify(body);
+      const data = raw ? raw.buf : JSON.stringify(body);
       const q = http.request({ host: GW.host, port: GW.port, path: "/api/agent-jobs/" + encodeURIComponent(String(J.id)) + "/" + kind, method: "POST",
-        headers: Object.assign({ authorization: "Bearer " + J.secret, "content-type": "application/json", "content-length": Buffer.byteLength(data) }, WS ? { "x-lively-workspace": WS } : {}), timeout: 20000 }, (r) => {
+        headers: Object.assign({ authorization: "Bearer " + J.secret, "content-type": raw ? raw.type : "application/json", "content-length": Buffer.byteLength(data) }, raw ? raw.headers : {}, WS ? { "x-lively-workspace": WS } : {}), timeout: 20000 }, (r) => {
         let b = ""; r.setEncoding("utf8"); r.on("data", (d) => { b += d; });
         r.on("end", () => {
           if (r.statusCode === 200) { try { resolve(JSON.parse(b)); } catch (e) { resolve({}); } return; }
@@ -134,11 +145,39 @@ const argv = J.argv.map((a) => (a === "${MCP_CONFIG_PLACEHOLDER}" ? mcpPath : a)
 const env = Object.assign({}, process.env, J.env || {});
 delete env.${JOB_ID_ENV}; delete env.${JOB_BOOT_ENV}; delete env.${JOB_PORT_ENV}; delete env.${JOB_WS_ENV};
 // 빈 설정 폴더 자리표(#4488 API 키 실행) — 하네스가 멤버 홈의 로그인을 읽지 않게 이 작업만의 설정 폴더를 만든다. 빈 값은 «그 변수를 지워라» 다.
+let cfgDir = null;
 for (const k of Object.keys(env)) {
-  if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; }
+  if (env[k] === "${CONFIG_DIR_PLACEHOLDER}") { const c = path.join(dir, "cfg"); fs.mkdirSync(c, { mode: 0o700 }); env[k] = c; cfgDir = c; }
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
 }
 let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null;
+// #5101 그 빈 설정 폴더에는 앞 대화가 없다 — 이어받는 작업이면 게이트웨이가 보관한 앞 대화 기록을 되돌려 놓는다. claude 는 --resume <id> 의 파일을
+//  설정 폴더 projects/ 아래 어느 폴더에서든 찾는다(실측 2026-10-29 · claude 2.1.312 — 작업 폴더 이름의 폴더가 아니어도 된다). 못 하면 하네스가 «대화 없음» 으로 끝난다.
+const zlib = require("zlib");
+const CONV_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
+  try {
+    const pd = path.join(cfgDir, "projects", "lvly-resume");
+    fs.mkdirSync(pd, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(pd, J.transcript.conv + ".jsonl"), zlib.gunzipSync(Buffer.from(String(J.transcript.gz), "base64"), { maxOutputLength: J.transcriptRawMax || 67108864 }), { mode: 0o600 });
+  } catch (e) { errTail += "transcript restore: " + (e && e.message) + "\n"; }
+}
+// #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
+const saveTranscript = async () => {
+  if (!cfgDir || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
+  let file = null;
+  try {
+    for (const sub of fs.readdirSync(path.join(cfgDir, "projects"))) {
+      const f = path.join(cfgDir, "projects", sub, conv + ".jsonl");
+      if (fs.existsSync(f)) { file = f; break; }
+    }
+  } catch (e) { return; }
+  if (!file) return;
+  let gz = null;
+  try { gz = zlib.gzipSync(fs.readFileSync(file)); } catch (e) { return; }
+  if (gz.length > J.transcriptMax) return;
+  await call("transcript", null, 3, { buf: gz, type: "application/gzip", headers: { "x-lvly-conversation": conv } });
+};
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
 const onLine = (line) => {
@@ -177,6 +216,7 @@ const finish = async (code, signal) => {
     cost_usd: typeof last.total_cost_usd === "number" ? last.total_cost_usd : null,
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
+  await saveTranscript();
   await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n") }, 24);
   clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
@@ -209,6 +249,9 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *    한 턴 더 끌고 가고, 대화 매핑 훅이 엉뚱한 세션을 덮는다. 실측(2026-10-16, claude 2.1.301): 끄면 hook 이벤트 0 · 켜면 4.
  *  · `--strict-mcp-config` — 멤버가 등록한 MCP 서버를 싣지 않는다. 라이블리 MCP 는 작업용 토큰(앱 작업이면 앱 토큰)으로만 붙인다.
  *  · 대화를 남긴다(--no-session-persistence 를 쓰지 않는다) — 같은 대화를 이어받는 작업(--resume)이 그 기록을 읽는다.
+ *  · 이어받기는 늘 갈라서 잇는다(`--fork-session` · #5101) — 앞 작업의 대화 파일은 그대로 두고 새 대화 id 로 이어 쓴다. 같은 대화를 잇는 작업이 둘 겹쳐도
+ *    한 파일에 같이 쓰지 않고, 앞 실행에서 몇 번이든 다시 갈라 이을 수 있다(실측 2026-10-29 · claude 2.1.312: 새 id · 앞 파일 내용 그대로 ·
+ *    요청에 앞 대화가 다 실림 — 빈 설정 폴더에 되돌려 놓은 기록에서도 같다).
  */
 export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
@@ -220,6 +263,6 @@ export function claudeJobArgv(o: { model?: string | null; resume?: string | null
     ...(o.bare ? ["--tools", ""] : []),
     ...(o.mcp ? ["--mcp-config", MCP_CONFIG_PLACEHOLDER] : []),
     ...(o.model ? ["--model", o.model] : []),
-    ...(o.resume ? ["--resume", o.resume] : []),
+    ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];
 }

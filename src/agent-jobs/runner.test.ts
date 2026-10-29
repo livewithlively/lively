@@ -7,7 +7,8 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
+import zlib from "node:zlib";
+import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, claudeJobArgv } from "./runner.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -28,7 +29,19 @@ process.stdin.on("data", (d) => { stdin += d; });
 process.stdin.on("end", () => {
   const i = process.argv.indexOf("--mcp-config");
   const mcpFile = i > 0 ? process.argv[i + 1] : null;
+  //  #5101 — 설정 폴더(CLAUDE_CONFIG_DIR)에 판이 되돌려 놓은 앞 대화가 있나 보고, 제 대화 파일을 남긴다(진짜 claude 처럼 projects/<폴더>/<대화 id>.jsonl).
+  const path = require("path");
+  const cfg = process.env.CLAUDE_CONFIG_DIR || null;
+  let restored = null;
+  if (process.env.FAKE_TRANSCRIPT && cfg) {
+    const rf = path.join(cfg, "projects", "lvly-resume", (process.env.FAKE_RESUME_CONV || "none") + ".jsonl");
+    restored = fs.existsSync(rf) ? fs.readFileSync(rf, "utf8") : null;
+    const d = path.join(cfg, "projects", "-fake-cwd");
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, "0a1b2c3d-0000-4000-8000-000000000001.jsonl"), process.env.FAKE_BIG ? require("crypto").randomBytes(65536) : "line1\\nline2\\n");
+  }
   fs.writeFileSync(rec, JSON.stringify({
+    cfg, restored,
     argv: process.argv.slice(2), stdin, cwd: process.cwd(),
     env: { boot: process.env.${JOB_BOOT_ENV} ?? null, id: process.env.${JOB_ID_ENV} ?? null, extra: process.env.EXTRA ?? null,
       port: process.env.${JOB_PORT_ENV} ?? null, ws: process.env.${JOB_WS_ENV} ?? null },
@@ -53,6 +66,8 @@ interface Seen {
   ws: Array<{ url: string; ws: string | string[] | undefined }>;
   /** 시작 실패 보고(#4829 boot-failed) — 비밀 · 본문. */
   failed: Array<{ auth: string | undefined; body: Record<string, unknown> }>;
+  /** #5101 대화 기록 보고 — 받은 시각 · 비밀 · 내용 형식 · 대화 id 머리 · 본문(바이트). */
+  transcripts: Array<{ at: number; auth: string | undefined; type: string | undefined; conv: string | string[] | undefined; body: Buffer }>;
 }
 
 /** 가짜 게이트웨이 — 시나리오별 응답. */
@@ -60,14 +75,17 @@ async function gateway(o: {
   mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
   /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기 · 머리만 주고 멈추기. */
   bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
+  /** #5101 부트 응답에 더할 칸(transcriptMax · transcript …) · 하네스 env 에 더할 것(CLAUDE_CONFIG_DIR 자리표 · 가짜 하네스 모드). */
+  bootExtra?: Record<string, unknown>; envExtra?: Record<string, string>;
 }): Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
-  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [], ws: [] };
+  const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [], ws: [], transcripts: [] };
   let resultCalls = 0;
   const srv = http.createServer((req, res) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (d) => { body += d; });
+    const chunks: Buffer[] = [];
+    req.on("data", (d: Buffer) => { chunks.push(d); });
     req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      const body = raw.toString("utf8");
       seen.auth.push(`${req.url} ${req.headers.authorization}`);
       seen.ws.push({ url: String(req.url), ws: req.headers["x-lively-workspace"] });
       const json = (status: number, v: unknown): void => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(v)); };
@@ -79,8 +97,8 @@ async function gateway(o: {
           id: 1, secret: "CALLBACK-SECRET", code: o.runnerCode ?? RUNNER_SOURCE.replace(/port: 8080/, `port: ${port}`),
           argv: [process.execPath, FAKE, "--mcp-config", MCP_CONFIG_PLACEHOLDER, "--flag"],
           prompt: "프롬프트 — 한글과 \"따옴표\"\n둘째 줄", mcp: { mcpServers: { lively: { type: "http", url: "x" } } },
-          env: { EXTRA: "1", FAKE_MODE: o.mode, FAKE_RECORD: o.record }, cwd: tmp,
-          timeoutMs: o.timeoutMs, tickMs: 150, tailMax: 4000, resultMax: 1000, stderrMax: 500,
+          env: { EXTRA: "1", FAKE_MODE: o.mode, FAKE_RECORD: o.record, ...(o.envExtra ?? {}) }, cwd: tmp,
+          timeoutMs: o.timeoutMs, tickMs: 150, tailMax: 4000, resultMax: 1000, stderrMax: 500, ...(o.bootExtra ?? {}),
         });
       }
       if (req.url === "/api/agent-jobs/1/boot-failed") {
@@ -93,6 +111,10 @@ async function gateway(o: {
         seen.ticks.push(JSON.parse(body || "{}"));
         seen.tickAt.push(Date.now());
         return json(200, { cancel: o.cancelAfterTicks !== undefined && seen.ticks.length >= o.cancelAfterTicks });
+      }
+      if (req.url === "/api/agent-jobs/1/transcript") {
+        seen.transcripts.push({ at: Date.now(), auth: req.headers.authorization, type: req.headers["content-type"], conv: req.headers["x-lvly-conversation"], body: raw });
+        return json(200, { ok: true, stored: true });
       }
       if (req.url === "/api/agent-jobs/1/result") {
         resultCalls++;
@@ -266,9 +288,11 @@ await t("claudeJobArgv — 훅 끔 · 멤버 MCP 안 실음 · MCP 자리표 · 
   assert.equal(a[a.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
   assert.equal(a[a.indexOf("--model") + 1], "sonnet");
   assert.equal(a[a.indexOf("--resume") + 1], "0a1b2c3d-0000-4000-8000-000000000001");
+  assert.equal(a[a.indexOf("--resume") + 2], "--fork-session", "#5101 이어받기는 늘 갈라서 — 앞 대화 파일은 그대로");
   assert.ok(!a.includes("--no-session-persistence"), "이어받기를 위해 대화를 남긴다");
   const b = claudeJobArgv({ mcp: false });
   assert.ok(b.includes("--strict-mcp-config") && !b.includes("--mcp-config") && !b.includes("--model") && !b.includes("--resume"));
+  assert.ok(!b.includes("--fork-session"), "이어받지 않으면 가르지도 않는다");
   assert.ok(!a.includes("--tools") && !b.includes("--tools"), "단발이 아니면 도구를 끄지 않는다");
   //  #4488 단발(bare) — 내장 도구 전부 끔(`--tools ""`) · MCP 없음.
   const c = claudeJobArgv({ mcp: false, bare: true });
@@ -323,6 +347,75 @@ await t("#5082 F2 포트 env 만(워크스페이스 없음) — 그 포트로 �
     assert.equal(await runBootEnv({ [JOB_PORT_ENV]: String(g.port) }), 0);
     assert.equal(g.seen.results.length, 1);
     assert.ok(g.seen.ws.every((x) => x.ws === undefined), JSON.stringify(g.seen.ws));
+  } finally { await g.close(); }
+});
+
+// ── #5101 API 키 작업의 대화 기록 — 판이 올리고(T1 · T2 · T4) · 되돌려 놓는다(T3) — 사양 scratchpad spec-5101.md ──
+const KEY_ENV = { CLAUDE_CONFIG_DIR: CONFIG_DIR_PLACEHOLDER, FAKE_TRANSCRIPT: "1" };
+
+await t("T1(#5101) API 키 작업 — 끝나면 대화 파일을 gzip 으로 결과보다 먼저 올린다(콜백 비밀 · 대화 id 머리) · 설정 폴더는 지운다", async () => {
+  const record = path.join(tmp, "t1.json");
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: KEY_ENV, bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000 } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.seen.transcripts.length, 1, "한 번");
+    const tr = g.seen.transcripts[0]!;
+    assert.equal(tr.auth, "Bearer CALLBACK-SECRET"); assert.equal(tr.type, "application/gzip");
+    assert.equal(tr.conv, "0a1b2c3d-0000-4000-8000-000000000001", "하네스가 밝힌 대화 id");
+    assert.equal(zlib.gunzipSync(tr.body).toString("utf8"), "line1\nline2\n", "하네스가 남긴 대화 파일 그대로");
+    assert.equal(g.seen.results.length, 1);
+    assert.ok(tr.at <= g.seen.resultAt[0]!, "결과보다 먼저(결과가 곧바로 같은 대화를 잇는 작업을 낳을 수 있다)");
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.ok(typeof h.cfg === "string" && h.cfg !== CONFIG_DIR_PLACEHOLDER, "자리표가 이 작업만의 폴더로 바뀌었다");
+    assert.ok(!fs.existsSync(h.cfg), "끝나면 설정 폴더를 지운다");
+  } finally { await g.close(); }
+});
+
+await t("T2(#5101) 올리기가 꺼진 작업(구독 — 대화는 홈에 남는다) — 설정 폴더에 대화가 있어도 올리지 않는다 · 결과는 그대로", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t2.json"), envExtra: KEY_ENV });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.seen.transcripts.length, 0);
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
+});
+
+await t("T3(#5101) 이어받는 작업 — 받은 앞 대화 기록을 하네스를 띄우기 전에 설정 폴더 projects/ 아래에 되돌려 놓는다 · 대화 id 꼴이 아니면 안 놓는다 · 풀면 상한을 넘으면 안 놓는다", async () => {
+  const CONV_R = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const gzB64 = (s: string): string => zlib.gzipSync(Buffer.from(s, "utf8")).toString("base64");
+  const r1 = path.join(tmp, "t3.json");
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: r1, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 1_000_000, transcript: { conv: CONV_R, gz: gzB64("앞 대화 한 줄\n") } } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(JSON.parse(fs.readFileSync(r1, "utf8")).restored, "앞 대화 한 줄\n", "하네스가 뜰 때 그 대화 파일이 있다");
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
+  const r2 = path.join(tmp, "t3b.json");
+  const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r2, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: "../../evil" },
+    bootExtra: { transcriptMax: 1_000_000, transcript: { conv: "../../evil", gz: gzB64("x") } } });
+  try {
+    assert.equal(await runBoot(g2.port), 0);
+    const h = JSON.parse(fs.readFileSync(r2, "utf8"));
+    assert.equal(h.restored, null, "대화 id 꼴이 아니면 안 놓는다");
+    assert.equal(g2.seen.results.length, 1, "그래도 하네스는 돌고 결과를 올린다(하네스가 «대화 없음» 을 낼 것이다)");
+  } finally { await g2.close(); }
+  const r3 = path.join(tmp, "t3c.json");
+  const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r3, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 5, transcript: { conv: CONV_R, gz: gzB64("열 바이트가 넘는 글") } } });
+  try {
+    assert.equal(await runBoot(g3.port), 0);
+    assert.equal(JSON.parse(fs.readFileSync(r3, "utf8")).restored, null, "풀면 상한을 넘는 기록(압축 폭탄)은 안 놓는다");
+    assert.match(String((g3.seen.results[0] as Record<string, unknown>).stderr_tail), /transcript restore/, "까닭을 결과에 남긴다");
+  } finally { await g3.close(); }
+});
+
+await t("T4(#5101) 압축한 대화가 상한을 넘으면 — 올리지 않는다 · 결과는 올린다", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4.json"), envExtra: { ...KEY_ENV, FAKE_BIG: "1" }, bootExtra: { transcriptMax: 1_000 } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.seen.transcripts.length, 0);
+    assert.equal(g.seen.results.length, 1);
   } finally { await g.close(); }
 });
 

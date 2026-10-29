@@ -42,6 +42,14 @@ export async function initAiRuns(pool: Pool): Promise<void> {
   //  #5081 공용 시트로 돈 실행 — 시트 계정(구독 주인)의 «내 실행» 이 아니다(ai-runs/service.isOwnRun). 접수 때 정해지고 안 바뀐다.
   //   ⚠ 롤 창 — 이 칸은 ai-runs/store 의 COLS 에 넣지 않는다(store.RUN_SHARED_SEAT_COL 머리말).
   await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+  //  #5101 이어받기 — 이 실행이 끝난 실행 하나의 대화를 이어받았으면: resume_of(이어받은 실행) · resume_root(그 질문의 처음 실행 — 한 질문당 상한을 센다) ·
+  //   resume_depth(몇 번째 이어받기 · 1부터) · resume_reason(앱이 준 까닭 이름표). 새 질문이면 넷 다 비어 있다(depth 0). 접수 때 정해지고 안 바뀐다.
+  //   ⚠ 롤 창 — 이 칸들은 ai-runs/store 의 COLS 에 넣지 않는다(store.RUN_RESUME_COLS 머리말).
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_of BIGINT`);
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_root BIGINT`);
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_depth INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS resume_reason TEXT`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_resume_root_idx ON org_app_ai_run(resume_root) WHERE resume_root IS NOT NULL`);
   //  그 앱의 기록(최근 것부터) · 내 기록 · 열린 실행(동시 상한 셈 · 정비) · 작업 행 → 실행 행 · 프록시 토큰 → 실행 행.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_app_idx ON org_app_ai_run(app_id, id DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_requester_idx ON org_app_ai_run(requester, id DESC)`);

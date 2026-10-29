@@ -7,6 +7,7 @@
 //   · 구독은 «그 사람 본인(그 세션의 AI 포함) · 그 사람 세션에 초대받아 함께 보는 사람» 의 요청에만(#4423 · 상민 2026-10-19) — subscriptionRefusal.
 //     예외 하나 — 공용 시트(#5081 · 상민 2026-10-28): 관리자가 지정하고 그 계정 본인이 동의한 구독은 워크스페이스 구성원 누구의 요청이든 받는다.
 //   · 결과 형식: 스키마를 보내면 프롬프트 끝에 형식 지시 → 끝난 출력 규칙 검사 → 어긋나면 «형식에 맞게 다시» 1회 → 그래도 어긋나면 원문 붙여 실패.
+//   · 이어받기(#5101): 앱이 끝난 실행 하나의 대화를 이어받아 다시 시킨다(새 실행 행) — resumeRefusal · resumeInputError · resumeHistory(맨 아래).
 export type AiRunStatus = "queued" | "running" | "done" | "failed" | "canceled";
 export const isEndedRun = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
 
@@ -399,4 +400,99 @@ export function waitSecOf(v: unknown): number {
   const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.min(Math.floor(n), WAIT_MAX_SEC);
+}
+
+// ── 이어받기(#5101 앱 v2-44 · 상민 2026-10-28 «A — app_ai_run 에 resume_run_id») ──
+//  앱 서버가 끝난 답을 결정적으로 검사하고(인용한 근거 id 가 조회 결과에 있나 · 숫자가 원문에 있나) 어긋나면 그 대화를 이어받아 사유를 붙여 다시 시킨다.
+//  이어받은 실행은 **새 실행 행**이다(앞 실행의 결과는 그대로 남는다) — 어느 실행을 이어받았나(of) · 그 질문의 처음 실행(root) · 몇 번째인가(depth) · 까닭(reason).
+//  실행 계정 · 작업 종류 · 실행 자리 · 작업 폴더 · 작업 이름 · system 은 앞 실행 것을 그대로 쓴다(대화가 그 자리에 있다). 횟수는 앱이 정하고(다시 보낼지),
+//  게이트웨이는 한 질문(root)당 상한(정책 max_resumes)을 건다. 작업 컨테이너는 앞 대화를 갈라서 잇는다(--fork-session — 앞 대화 파일은 그대로).
+
+/** 이어받는 까닭(실행 기록의 이름표) 상한 — capabilities/soft-cap 의 app_ai_run.reason 과 같은 수. */
+export const RESUME_REASON_MAX = 300;
+
+/** 이 실행이 이어받은 실행(of) · 그 질문의 처음 실행(root) · 몇 번째 이어받기인가(depth ≥ 1) · 까닭(앱이 준 이름표 · 없으면 null). */
+export interface ResumeLink { of: number; root: number; depth: number; reason: string | null }
+
+/** 이어받기 거절 — HTTP 상태 · 짧은 코드(응답 body.code) · 사람이 읽을 문장. */
+export interface ResumeRefusal { status: number; code: string; message: string }
+
+/**
+ * (순수) 이 실행을 이어받을 수 있나 — 안 되면 거절, 되면 null.
+ *  순서: 없음 · 남이 보낸 실행 · 다른 앱의 실행(404 — 있는지 드러내지 않는다 · 관리자 · 구독 주인도 남의 실행은 못 잇는다) → 꺼짐(정책 0)
+ *   → 아직 끝나지 않음 → 취소됨 · 이을 대화가 없음 → 한 질문당 상한.
+ *  conversation = 이을 대화가 남아 있나(단발 프록시면 앞 답 글 · 작업이면 작업 행의 대화 id 와 — API 키 작업이면 — 게이트웨이가 보관한 대화 기록).
+ *  noConversationWhy = 대화가 없을 때 덧붙일 까닭(예: API 키 작업의 대화 기록 보존 기간).
+ */
+export function resumeRefusal(
+  parent: { status: string; app_id: string; requester: string } | null,
+  o: { requester: string; appId: string; conversation: boolean; noConversationWhy?: string | null; resumesOfRoot: number; maxResumes: number },
+): ResumeRefusal | null {
+  if (!parent || parent.requester !== o.requester || parent.app_id !== o.appId) {
+    return { status: 404, code: "resume_not_found", message: "이어받을 실행이 없습니다 — 이 앱에서 내가 보낸 실행만 이어받을 수 있어요" };
+  }
+  if (!(o.maxResumes > 0)) {
+    return { status: 409, code: "resume_disabled", message: "이 워크스페이스는 이어받기를 껐습니다(app_ai_limits 의 max_resumes 가 0) — 새 실행으로 보내세요" };
+  }
+  if (!isEndedRun(parent.status)) {
+    return { status: 409, code: "resume_not_ended", message: `아직 끝나지 않은 실행입니다(지금 ${parent.status}) — 끝난 뒤 이어받으세요` };
+  }
+  if (parent.status === "canceled") {
+    return { status: 409, code: "resume_not_resumable", message: "취소된 실행은 이어받을 수 없습니다 — 새 실행으로 보내세요" };
+  }
+  if (!o.conversation) {
+    return { status: 409, code: "resume_not_resumable", message: `이어받을 대화가 남아 있지 않습니다${o.noConversationWhy ? `(${o.noConversationWhy})` : ""} — 새 실행으로 보내세요` };
+  }
+  if (o.resumesOfRoot >= o.maxResumes) {
+    return { status: 409, code: "resume_limit", message: `이 질문은 이미 ${o.resumesOfRoot}번 이어받았습니다(한 질문당 상한 ${o.maxResumes}번 — app_ai_limits 의 max_resumes) — 새 실행으로 보내세요` };
+  }
+  return null;
+}
+
+/**
+ * (순수) 이어받기 요청이 앞 실행과 어긋나나 — 어긋나면 400 문장, 맞으면 null. 이어받기는 앞 실행의 대화 자리를 그대로 쓴다:
+ *  작업 이름(실행 계정을 고르는 열쇠) · system(대화의 시스템 지시) · 작업 종류(단발 대화를 에이전트로 바꾸지 않는다) · 작업 폴더(대화 기록이 그 자리에 있다).
+ *  같은 값을 다시 보내는 것은 받는다(앱 서버가 같은 요청 꼴에 resume_run_id 만 더해 보내도 되게).
+ */
+export function resumeInputError(
+  input: { job?: unknown; system?: unknown; files?: unknown; project_id?: unknown; cwd?: unknown; agent?: unknown },
+  parent: { job_name: string | null; system_prompt: string | null; kind: RunKind },
+  parentProjectId: number | null,
+): string | null {
+  const given = (v: unknown): boolean => v !== undefined && v !== null && v !== "";
+  if (given(input.job) && String(input.job).trim() !== (parent.job_name ?? "")) {
+    return "job 은 이어받는 실행과 같아야 합니다(이어받기는 앞 실행의 작업 이름 · 실행 계정을 그대로 씁니다) — job 을 빼세요";
+  }
+  if (typeof input.system === "string" && input.system.trim() && input.system.trim() !== (parent.system_prompt ?? "")) {
+    return "system 은 바꿀 수 없습니다(이어받는 대화는 처음 실행의 시스템 지시를 그대로 씁니다) — 고칠 점은 prompt 에 적으세요";
+  }
+  if (parent.kind === "single" && runKindOf(input) === "agent") {
+    return "단발 실행은 에이전트 작업으로 이어받을 수 없습니다 — files · project_id · agent 를 빼세요(에이전트로 다시 하려면 새 실행으로)";
+  }
+  if (given(input.project_id) && Number(input.project_id) !== parentProjectId) {
+    return "이어받기는 앞 실행의 작업 폴더에서 돕니다 — project_id 를 빼세요";
+  }
+  return null;
+}
+
+/** (순수) 이어받은 실행의 기본 이름표 — 앞 실행 이름표 끝의 «(이어받기 n)» 은 떼고 새 번호를 붙인다. */
+export function resumeLabel(parentLabel: string | null, rootId: number, depth: number): string {
+  const base = (parentLabel ?? "").replace(/\s*\(이어받기 \d+\)\s*$/, "").trim() || `AI 실행 #${rootId}`;
+  return `${base} (이어받기 ${depth})`.slice(0, LABEL_MAX);
+}
+
+/** 단발(프록시) 대화 한 칸 — Anthropic Messages 의 messages 한 줄. */
+export interface ChatTurn { role: "user" | "assistant"; content: string }
+/**
+ * (순수) 단발 실행을 이어받을 때 앞 대화 — 처음 실행부터 이어받는 실행까지 차례로 «보낸 지시(+형식 지시) → 받은 답» 두 칸씩.
+ *  답 글이 없는 실행이 끼면 null(이을 대화가 없다). 형식 재시도(«형식에 맞게 다시») 칸은 넣지 않는다 — 각 실행의 마지막 답이 앱이 검사한 답이다.
+ */
+export function resumeHistory(chain: ReadonlyArray<{ prompt: string; schema: Record<string, unknown> | null; result: Record<string, unknown> | null }>): ChatTurn[] | null {
+  const out: ChatTurn[] = [];
+  for (const r of chain) {
+    const text = typeof r.result?.text === "string" ? r.result.text : "";
+    if (!text.trim()) return null;
+    out.push({ role: "user", content: r.prompt + (r.schema ? schemaInstruction(r.schema) : "") }, { role: "assistant", content: text });
+  }
+  return out.length ? out : null;
 }

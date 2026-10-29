@@ -4,6 +4,9 @@
 //   → 상한(앱당 빈도 · 사람당 동시 · 워크스페이스 동시 · 앱당 하루 토큰) → 실행 행 → 프록시면 뒤에서 LLM 한 번(runProxy) · 작업이면 작업 컨테이너 접수
 //   → 결과 형식 판정(스키마 — 어긋나면 «형식에 맞게 다시» 1회) → 끝.
 //  작업 컨테이너에 붙은 실행은 그 작업 행의 상태를 따라간다(syncRun — 작업이 끝나면 걷기(agent-jobs reapJob)가 알리고, 정비(sweepAiRuns)와 읽기(getRun)도 맞춘다).
+//  이어받기(#5101 · 상민 2026-10-28 «A»): 앱이 끝난 답을 검사하고 어긋나면 resume_run_id + 사유(prompt)로 다시 보낸다 — 그 대화를 잇는 **새 실행**이다.
+//   같은 앱 · 같은 요청자만 · 실행 계정 · 자리 · 작업 폴더는 앞 실행 것 · 한 질문당 상한(max_resumes). 단발은 앞 대화를 엮어 보내고(resumeHistory),
+//   작업은 앞 작업의 대화를 갈라 잇는다(API 키 작업은 게이트웨이가 보관한 대화 기록을 판이 되돌려 놓는다 — agent-jobs/plan.TRANSCRIPT_GZ_MAX).
 //
 //  누가 보내나: 앱 화면(app-ui · app-front — runAppTool 의 같은 판정) · 앱 서버(앱 서버 토큰 + 사람 신원 — 능력 REST) · 사람(도구 호출 · app_id 지정).
 //   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보내면 그 사람의 자리(홈)에서,
@@ -22,9 +25,10 @@ import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
-  DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
-  resolveAccount, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction, seatShared, serviceSeatConsented, subscriptionRefusal, waitSecOf,
-  type AiAccount, type AiAccountSettings, type RunKind, type SeatTerms, type SessionTie,
+  DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, RESUME_REASON_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
+  resolveAccount, resumeHistory, resumeInputError, resumeLabel, resumeRefusal, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction,
+  seatShared, serviceSeatConsented, subscriptionRefusal, waitSecOf,
+  type AiAccount, type AiAccountSettings, type ChatTurn, type ResumeLink, type RunKind, type SeatTerms, type SessionTie,
 } from "./plan.js";
 import type { SingleShotInput, SingleShotOutput, Usage } from "./anthropic.js";
 import type { AiRunRow, AiRunSummaryRow, NewAiRun } from "./store.js";
@@ -58,9 +62,15 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
   };
 }
 
+/** 이어받을 작업의 사실(#5101) — 작업 폴더 · 모델 · 이을 대화가 남았나(대화 id 와, API 키 작업이면 게이트웨이가 보관한 기록) · 없으면 그 까닭. */
+export interface ResumeTarget { projectId: number | null; model: string | null; resumable: boolean; why: string | null }
+
 export interface AiRunDeps {
   store: Pick<Store, "insertAiRun" | "getAiRun" | "getAiRunByToken" | "getAiRunByJob" | "setAiRunJob" | "setAiRunProxyToken" | "markAiRunRunning" | "retryAiRun"
-    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "aiRunSharedSeat">;
+    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "aiRunSharedSeat"
+    | "aiRunResumeLink" | "resumeCountOfRoot">;
+  /** #5101 이어받을 작업(앞 실행의 작업 행)의 사실 — 작업 행이 없으면(보존 정리로 지워짐) null. */
+  resumeTarget(jobId: number): Promise<ResumeTarget | null>;
   policy(): Promise<AiRunPolicy>;
   accountSettings(): Promise<AiAccountSettings>;
   /** 워크스페이스 Anthropic API 키(org_credential anthropic_api_key) — 없으면 null. 값은 LLM 호출 헤더에만 쓴다. */
@@ -113,6 +123,8 @@ const memberOf = (u: LivelyUser | undefined): string => String(u?.userId || "");
 export interface SubmitInput {
   app_id?: unknown; prompt?: unknown; system?: unknown; schema?: unknown; job?: unknown; model?: unknown; label?: unknown;
   files?: unknown; project_id?: unknown; cwd?: unknown; agent?: unknown; timeout_min?: unknown; max_tokens?: unknown; wait?: unknown;
+  /** #5101 이 끝난 실행의 대화를 이어받는다(prompt = 고칠 점 · 사유) · reason = 실행 기록에 남길 까닭 이름표(선택). */
+  resume_run_id?: unknown; reason?: unknown;
 }
 
 // ── 공개 모양 ──
@@ -125,12 +137,16 @@ function head(r: AiRunRow | AiRunSummaryRow): Record<string, unknown> {
     created_at: r.created_at, started_at: r.started_at, ended_at: r.ended_at,
   };
 }
-/** 앱이 보는 실행 — 답·지시는 보낸 사람(own)에게만. */
-export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean }): Record<string, unknown> {
+/**
+ * 앱이 보는 실행 — 답·지시는 보낸 사람(own)에게만.
+ *  resume(#5101) — 이 실행이 이어받은 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭). 준 자리(접수 · 하나 보기)에만 싣는다 — 까닭은 지시처럼 보낸 사람에게만.
+ */
+export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null }): Record<string, unknown> {
   return {
     ...head(r),
     ...(o.own ? { result: r.result, session_note: r.session_note } : { has_result: r.result !== null }),
     ...(o.own && o.withPrompt ? { prompt: r.prompt, system: r.system_prompt, schema: r.schema } : {}),
+    ...(o.resume !== undefined ? { resume: o.resume ? { of: o.resume.of, root: o.resume.root, depth: o.resume.depth, ...(o.own ? { reason: o.resume.reason } : {}) } : null } : {}),
   };
 }
 export function publicRunSummary(r: AiRunSummaryRow, o: { own: boolean }): Record<string, unknown> {
@@ -184,9 +200,66 @@ export async function seatTermsOf(settings: AiAccountSettings, account: AiAccoun
   return { facts: { consented: true, active: seat.active, elevated: seat.elevated }, requesterActive: requester.active };
 }
 
+/** #5101 이어받기 접수의 재료 — 앞 실행 · 그 작업 행의 사실(작업 실행일 때) · 새 실행에 남길 줄. */
+interface ResumeCtx { parent: AiRunRow; target: ResumeTarget | null; link: ResumeLink }
+
 /**
- * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절)
- *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 행 → 띄움.
+ * #5101 resume_run_id 를 읽고 판정한다(plan.resumeRefusal · resumeInputError) — 없으면 null(새 질문). 안 되면 던진다(400 · 404 · 409 + body.code).
+ *  남이 보낸 실행 · 다른 앱의 실행이면 대화 · 작업 행을 읽지 않고 404 다(있는지도 드러내지 않는다).
+ */
+async function resumeOf(input: SubmitInput, who: { member: string }, appId: string, maxResumes: number, d: AiRunDeps): Promise<ResumeCtx | null> {
+  if (input.resume_run_id === undefined || input.resume_run_id === null || input.resume_run_id === "") return null;
+  const id = Number(input.resume_run_id);
+  if (!Number.isSafeInteger(id) || id < 1) throw new HttpError(400, "resume_run_id 형식이 아닙니다");
+  const parent = await d.store.getAiRun(id);
+  const mine = !!parent && parent.requester === who.member && parent.app_id === appId;
+  const parentLink = mine ? await d.store.aiRunResumeLink(parent.id) : null;
+  const root = parentLink?.root ?? id;
+  //  이을 대화 — 단발(프록시)은 앞 답 글이 대화다(처음 실행부터 다시 엮는다 · resumeHistory) · 작업은 작업 행의 대화(API 키면 게이트웨이가 보관한 기록까지).
+  let conversation = false, why: string | null = null, target: ResumeTarget | null = null;
+  if (mine && isEndedRun(parent.status) && parent.status !== "canceled") {
+    if (parent.executor === "proxy") conversation = typeof parent.result?.text === "string" && parent.result.text.trim() !== "";
+    else if (parent.job_id != null) {
+      target = await d.resumeTarget(parent.job_id);
+      conversation = !!target?.resumable;
+      why = target ? target.why : "그 실행의 작업 기록이 보존 기간(agent_job_limits 의 keep_days)이 지나 지워졌습니다";
+    }
+  }
+  //  한 질문당 상한은 세고 → 넣는 두 단계라 같은 질문을 동시에 여럿 이으면 조금 넘길 수 있다 — 소프트 상한이다(앱당 분당 · 사람당 동시 상한이 폭을 막는다).
+  const refusal = resumeRefusal(parent, {
+    requester: who.member, appId, conversation, noConversationWhy: why, maxResumes,
+    resumesOfRoot: mine && conversation && maxResumes > 0 ? await d.store.resumeCountOfRoot(root) : 0,
+  });
+  if (refusal) throw new HttpError(refusal.status, refusal.message, { body: { code: refusal.code } });
+  const bad = resumeInputError(input, parent!, target?.projectId ?? null);
+  if (bad) throw new HttpError(400, bad);
+  const reason = typeof input.reason === "string" ? input.reason.replace(/\u0000/g, "").trim().slice(0, RESUME_REASON_MAX) : "";
+  return { parent: parent!, target, link: { of: id, root, depth: (parentLink?.depth ?? 0) + 1, reason: reason || null } };
+}
+
+/** 이어받기 줄을 거슬러 오르는 상한 — 정책 max_resumes 의 범위 끝(20)을 넉넉히 넘는다(고리가 있을 수 없지만 끝을 둔다). */
+const RESUME_CHAIN_MAX = 32;
+/**
+ * #5101 단발 실행의 대화 — 처음 실행부터 이 실행까지(이어받기 줄을 거슬러 오른다). 줄이 끊겼으면(앞 실행이 없다) 빈 배열 — 부르는 쪽이 «대화 없음» 이다.
+ */
+async function resumeChainOf(parent: AiRunRow, d: Pick<AiRunDeps, "store">): Promise<AiRunRow[]> {
+  const chain = [parent];
+  let cur = parent;
+  for (let i = 0; i < RESUME_CHAIN_MAX; i++) {
+    const l = await d.store.aiRunResumeLink(cur.id);
+    if (!l) return chain;
+    const prev = l.of < cur.id ? await d.store.getAiRun(l.of) : null;   // 앞 실행은 늘 더 이르다
+    if (!prev) return [];
+    chain.unshift(prev);
+    cur = prev;
+  }
+  return [];
+}
+
+/**
+ * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 이어받기(#5101 — 404 · 409 resume_* · 400 어긋난 입력) → 작업 이름(400)
+ *  → 실행 계정(409 account_unavailable · 403 구독 거절) → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501)
+ *  → 상한(429) → (이어받는 단발) 앞 대화(409) → 행(롤 창 503) → 띄움.
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
 export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string; session?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -212,8 +285,11 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   const label = rawLabel ? rawLabel.slice(0, LABEL_MAX) : null;
   const model = typeof input.model === "string" && input.model.trim() ? input.model.trim() : null;
   if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model 이름 형식이 아닙니다");
-  let jobName: string | null = null;
-  if (input.job !== undefined && input.job !== null && input.job !== "") {
+  //  #5101 이어받기 — 앞 실행이 대화 자리를 정한다(작업 이름 · 작업 종류 · 작업 폴더 · 실행 계정 · system · 안 주면 schema). 한 질문당 상한(정책)이 필요해 정책을 먼저 읽는다.
+  const p = await d.policy();
+  const resume = await resumeOf(input, who, appId, p.max_resumes, d);
+  let jobName: string | null = resume ? resume.parent.job_name : null;
+  if (!resume && input.job !== undefined && input.job !== null && input.job !== "") {
     jobName = String(input.job).trim();
     if (!JOB_NAME_RE.test(jobName)) throw new HttpError(400, "job(작업 이름) 형식이 아닙니다 — 소문자·숫자·_·- 1~64자");
     const declared = declaredAiJobs(app);
@@ -221,41 +297,50 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       throw new HttpError(400, `작업 '${jobName}' 은 이 앱 매니페스트(ai.jobs)에 없습니다 — 선언한 것: ${declared.map((j) => j.name).join(", ")}`);
     }
   }
-  const kind: RunKind = runKindOf(input);
-  let projectId: number | null = null;
-  if (input.project_id !== undefined && input.project_id !== null && input.project_id !== "") {
+  const kind: RunKind = resume ? resume.parent.kind : runKindOf(input);
+  let projectId: number | null = resume ? resume.target?.projectId ?? null : null;
+  if (!resume && input.project_id !== undefined && input.project_id !== null && input.project_id !== "") {
     const n = Number(input.project_id);
     if (!Number.isSafeInteger(n) || n < 1) throw new HttpError(400, "project_id 형식이 아닙니다");
     projectId = n;
   }
   if (typeof input.cwd === "string" && input.cwd.trim()) throw new HttpError(400, "cwd 는 아직 받지 않습니다 — 앱 폴더(기본) 또는 project_id 를 쓰세요");
 
-  // 실행 계정 — 작업별 > 앱별 > 워크스페이스 기본값 > (있으면) API 키.
+  // 실행 계정 — 작업별 > 앱별 > 워크스페이스 기본값 > (있으면) API 키. 이어받기는 앞 실행의 계정 그대로(대화가 그 자리에 있다) — 아래 판정은 지금 다시 탄다.
   const [settings, key] = await Promise.all([d.accountSettings(), d.apiKey()]);
-  const picked = resolveAccount(settings, appId, jobName, !!key);
-  if (!picked) {
-    throw new HttpError(409, "실행 계정이 없습니다 — 관리자가 워크스페이스 API 키(org_credential_set kind=anthropic_api_key)를 등록하거나, 구성원이 자기 구독을 기본 실행 계정으로 걸어야 합니다(app_ai_account_set)",
-      { body: { code: ACCOUNT_UNAVAILABLE } });
+  let account: AiAccount;
+  if (resume) {
+    account = resume.parent.account_kind === "subscription" ? { kind: "subscription", member: resume.parent.account_member ?? "" } : { kind: "api_key" };
+  } else {
+    const picked = resolveAccount(settings, appId, jobName, !!key);
+    if (!picked) {
+      throw new HttpError(409, "실행 계정이 없습니다 — 관리자가 워크스페이스 API 키(org_credential_set kind=anthropic_api_key)를 등록하거나, 구성원이 자기 구독을 기본 실행 계정으로 걸어야 합니다(app_ai_account_set)",
+        { body: { code: ACCOUNT_UNAVAILABLE } });
+    }
+    account = picked.account;
   }
-  const account = picked.account;
   //  #5081 공용 시트 — 지정(두 동의)이 있으면 시트 계정과 보낸 사람의 사실을 모은다. 켜져 있으면(plan.seatShared) 본인 · 초대 조건 대신 «활성 구성원» 을 본다.
   const seat = await seatTermsOf(settings, account, who, d);
   const refusal = subscriptionRefusal(account, who, await sessionTieOf(ctx, who, account, d), seat);
   if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
   if (account.kind === "api_key" && !key) throw new HttpError(409, "이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   const executor = executorFor(kind, account);
+  if (resume && executor !== resume.parent.executor) {
+    throw new HttpError(409, "이어받을 실행의 자리가 맞지 않습니다 — 새 실행으로 보내세요", { body: { code: "resume_not_resumable" } });
+  }
   const sharedSeat = account.kind === "subscription" && !!seat && seatShared(seat.facts);
   //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
   //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 위에서 이미 거절됐다(앱 서버는 사람이 아니다) — 한 겹 더 본다.
   //   #5081 예외 — 공용 시트는 앱 서버의 사람 대리 요청도 시트 계정의 홈(Claude 로그인)에서 돈다(홈 없는 자리엔 구독 로그인이 없다 · 상민 2026-10-28).
   const homeless = executor === "job" && who.kind === "app_server" && !sharedSeat;
   if (homeless && account.kind !== "api_key") throw new HttpError(403, "앱 서버가 보낸 에이전트 작업은 워크스페이스 API 키로만 돕니다", { body: { code: ACCOUNT_UNAVAILABLE } });
-  if (homeless && projectId != null) throw new HttpError(400, "앱 서버가 보낸 에이전트 작업은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
+  //  이어받기는 앞 실행의 작업 폴더를 그대로 쓴다 — 사람이 프로젝트 폴더에서 돌린 대화를 앱 서버가 · 공용 시트로 잇지 못한다(그 자리는 앱 폴더뿐이다).
+  const projectGap = resume ? "이 실행은 프로젝트 폴더에서 돌았습니다 — 이 자리(앱 서버 · 공용 시트)에서는 그 대화를 이어받을 수 없습니다(앱 폴더 실행만)" : null;
+  if (homeless && projectId != null) throw new HttpError(400, projectGap ?? "앱 서버가 보낸 에이전트 작업은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
   //  #5081 — 공용 시트의 홈은 구성원 모두가 함께 쓴다(대화 기록 · 홈의 파일이 다음 작업에 남는다). 프로젝트 폴더(사람 경계)를 그 자리에 붙이지 않는다.
-  if (sharedSeat && projectId != null) throw new HttpError(400, "공용 시트로 도는 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요(시트 계정의 홈은 구성원 모두가 함께 씁니다)");
+  if (sharedSeat && projectId != null) throw new HttpError(400, projectGap ?? "공용 시트로 도는 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요(시트 계정의 홈은 구성원 모두가 함께 씁니다)");
 
   // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
-  const p = await d.policy();
   const tenant = d.tenant();
   if (!d.rate.take(`${tenant}\0${appId}`, d.now())) throw new HttpError(429, `이 앱이 AI 실행을 너무 자주 보내고 있습니다(분당 ${p.app_per_minute}회) — 요청을 모아 한 번에 보내세요`);
   //  세고 → 넣는 두 단계라 같은 사람이 동시에 여럿 보내면 상한을 조금 넘길 수 있다 — 소프트 상한이다(앱당 분당 상한이 먼저 걸려 폭이 작다 · 격리 리뷰 note).
@@ -269,27 +354,43 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     throw new HttpError(429, `이 워크스페이스의 AI 호출이 동시에 ${p.max_inflight}개 돌고 있습니다 — 잠시 뒤 다시 보내세요`);
   }
 
+  //  #5101 단발 이어받기 — 앞 대화(처음 실행부터)를 엮는다. 줄이 끊겼으면 이을 대화가 없다(행을 넣기 전에 거절).
+  let history: ChatTurn[] | null = null;
+  if (resume && executor === "proxy") {
+    history = resumeHistory(await resumeChainOf(resume.parent, d));
+    if (!history) throw new HttpError(409, "이어받을 대화가 남아 있지 않습니다(앞 실행의 답이 없습니다) — 새 실행으로 보내세요", { body: { code: "resume_not_resumable" } });
+  }
+
+  //  이어받기 — schema 는 안 주면 앞 실행 것(같은 모양의 답을 다시 받는다) · model 은 주면 바꾼다(더 센 모델로 다시 시키기) · 안 주면 앞 실행 것.
+  const runSchema = resume && (input.schema === undefined || input.schema === null) ? resume.parent.schema : schema;
+  const runModel = model ?? (resume ? (executor === "proxy" ? resume.parent.model : resume.target?.model ?? null) : null);
   const n: NewAiRun = {
     appId, requester: who.member, requesterKind: who.kind, source: ctx.source ?? null, jobName, kind,
     accountKind: account.kind, accountMember: account.kind === "subscription" ? account.member : null, executor,
-    model: model ?? (executor === "proxy" ? settings.default_model ?? DEFAULT_MODEL : null), label, prompt, systemPrompt: system, schema,
-    status: executor === "proxy" ? "running" : "queued", sharedSeat,
+    model: runModel ?? (executor === "proxy" ? settings.default_model ?? DEFAULT_MODEL : null),
+    label: label ?? (resume ? resumeLabel(resume.parent.label, resume.link.root, resume.link.depth) : null),
+    prompt, systemPrompt: resume ? resume.parent.system_prompt : system, schema: runSchema,
+    status: executor === "proxy" ? "running" : "queued", sharedSeat, resume: resume?.link ?? null,
   };
   const row = await d.store.insertAiRun(n).catch((e) => {
     //  #5081 롤 창 — 새 게이트웨이가 공용 DB 마이그레이션보다 먼저 받는 몇 분 동안 공용 시트 실행은 «없는 칸»(42703)으로 실패한다
-    //   (store.RUN_SHARED_SEAT_COL 머리말). 막힌 게 아니라 아직 준비 중이니 다시 보내라고 말한다.
-    if (sharedSeat && (e as { code?: string })?.code === "42703") throw new HttpError(503, "공용 시트 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요");
+    //   (store.RUN_SHARED_SEAT_COL 머리말). 막힌 게 아니라 아직 준비 중이니 다시 보내라고 말한다. #5101 이어받기(store.RUN_RESUME_COLS)도 같다.
+    if ((sharedSeat || resume) && (e as { code?: string })?.code === "42703") {
+      throw new HttpError(503, `${resume ? "이어받기를" : "공용 시트 실행을"} 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요`);
+    }
     throw e;
   });
-  logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor }, "[ai-run] 접수");
+  logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor, ...(resume ? { resumeOf: resume.link.of, depth: resume.link.depth } : {}) }, "[ai-run] 접수");
 
   if (executor === "proxy") {
-    d.later(() => runProxy(row, p, d), 0);
+    d.later(() => runProxy(row, p, d, history), 0);
   } else {
     try {
       const job = await d.submitJob({
-        requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model, label: label ?? `AI 실행 #${row.id}`,
-        prompt: jobPrompt(row, input.files), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single", resumeJobId: null,
+        requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model: n.model, label: n.label ?? `AI 실행 #${row.id}`,
+        prompt: jobPrompt(row, input.files, { resumed: !!resume }), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single",
+        //  #5101 — 앞 실행의 마지막 작업(형식 재시도가 있었으면 그 작업)의 대화를 갈라 잇는다(runner.claudeJobArgv --fork-session).
+        resumeJobId: resume ? resume.parent.job_id : null,
         homeless, sharedSeat,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
@@ -301,7 +402,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   }
   const waitSec = waitSecOf(input.wait);
   const latest = waitSec > 0 ? await waitForRun(row.id, waitSec, d) : await d.store.getAiRun(row.id);
-  return publicRun(latest ?? row, { own: true });
+  return publicRun(latest ?? row, { own: true, resume: resume?.link ?? null });
 }
 
 /** 끝날 때까지 기다린다(상한 안) — 끝나지 않으면 지금 상태 그대로. */
@@ -316,10 +417,13 @@ async function waitForRun(id: number, sec: number, d: AiRunDeps): Promise<AiRunR
   return row;
 }
 
-/** 작업 컨테이너에 보내는 프롬프트 — 시스템 지시 · 관련 파일 · 형식 지시를 한 글로(하네스는 stdin 프롬프트 하나). */
-export function jobPrompt(row: Pick<AiRunRow, "prompt" | "system_prompt" | "schema">, files: unknown): string {
+/**
+ * 작업 컨테이너에 보내는 프롬프트 — 시스템 지시 · 관련 파일 · 형식 지시를 한 글로(하네스는 stdin 프롬프트 하나).
+ *  resumed(#5101 이어받기) — 시스템 지시는 다시 싣지 않는다(앞 대화의 첫 말에 이미 있다 · 실행 행에는 기록으로 남긴다).
+ */
+export function jobPrompt(row: Pick<AiRunRow, "prompt" | "system_prompt" | "schema">, files: unknown, o: { resumed?: boolean } = {}): string {
   const parts: string[] = [];
-  if (row.system_prompt) parts.push(`[시스템 지시]\n${row.system_prompt}\n`);
+  if (row.system_prompt && !o.resumed) parts.push(`[시스템 지시]\n${row.system_prompt}\n`);
   parts.push(row.prompt);
   if (Array.isArray(files) && files.length) {
     const list = files.filter((f) => typeof f === "string" && f.trim()).slice(0, 50).map((f) => `- ${String(f).trim()}`);
@@ -335,7 +439,8 @@ function proxyResult(o: { text: string; json: unknown; model: string | null; usa
   return { text: o.text, ...(o.json !== undefined ? { json: o.json } : {}), model: o.model, usage: o.usage, duration_ms: o.durationMs, retries: o.retries, stop_reason: o.stopReason, truncated: o.truncated };
 }
 
-export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Promise<void> {
+/** 단발 한 번 — history(#5101 이어받기)는 앞 대화(처음 실행부터 · plan.resumeHistory) — 그 뒤에 이번 지시를 잇는다. 새 질문이면 null. */
+export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps, history: ChatTurn[] | null = null): Promise<void> {
   const tenant = d.tenant();
   const key = await d.apiKey();
   if (!key) { await d.store.finishAiRun(row.id, { status: "failed", result: null, error: "워크스페이스 API 키가 없습니다" }); return; }
@@ -352,6 +457,7 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
   const model = row.model ?? DEFAULT_MODEL;
   const maxTokens = p.max_output_tokens;
   const prompt = row.prompt + (row.schema ? schemaInstruction(row.schema) : "");
+  const first: ChatTurn[] | undefined = history ? [...history, { role: "user", content: prompt }] : undefined;
   const workspaceId = (await d.apiWorkspaceId?.()) ?? null;   // 워크스페이스에 묶이지 않은 키의 anthropic-workspace-id
   const call = async (i: SingleShotInput): Promise<SingleShotOutput> => {
     const t0 = d.now();
@@ -370,7 +476,7 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
     return out;
   };
   try {
-    let out = await call({ model, prompt, system: row.system_prompt, maxTokens });
+    let out = await call({ model, prompt, system: row.system_prompt, maxTokens, ...(first ? { messages: first } : {}) });
     if (!out.ok) {
       await d.store.finishAiRun(row.id, { status: "failed", result: null, error: out.error ?? "LLM 호출 실패", inputTokens: total.input_tokens, outputTokens: total.output_tokens });
       return;
@@ -381,7 +487,7 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
       retries = 1;
       const retry = await call({
         model, prompt, system: row.system_prompt, maxTokens,
-        messages: [{ role: "user", content: prompt }, { role: "assistant", content: out.text || "(빈 답)" }, { role: "user", content: retryInstruction(judged.errors, row.schema) }],
+        messages: [...(first ?? [{ role: "user" as const, content: prompt }]), { role: "assistant", content: out.text || "(빈 답)" }, { role: "user", content: retryInstruction(judged.errors, row.schema) }],
       });
       if (retry.ok) { out = retry; judged = judgeOutput(out.text, row.schema); }
     }
@@ -441,7 +547,10 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
   }
   const judged = judgeOutput(text, run.schema);
   if (judged.ok) return finish({ status: "done", result: { ...base, ...(judged.json !== undefined ? { json: judged.json } : {}) }, error: null });
-  if (run.retries === 0 && run.schema && job.conversation_id) {
+  //  #5101 — API 키 작업의 대화는 게이트웨이가 보관한 기록뿐이다(빈 설정 폴더는 끝나면 지워진다). 기록이 없으면(올리지 못함 · 상한 초과) 다시 묻지 않고
+  //   원문을 붙여 실패한다 — 띄워 봐야 하네스가 «대화 없음» 으로 끝나 원문 대신 그 오류가 남는다.
+  const resumable = !!job.conversation_id && (run.account_kind !== "api_key" || !!(await d.resumeTarget(job.id).catch(() => null))?.resumable);
+  if (run.retries === 0 && run.schema && resumable) {
     try {
       const retry = await d.submitJob({
         requester: run.requester, accountKind: run.account_kind, accountMember: run.account_member, appId: run.app_id, projectId: job.project_id,
@@ -539,7 +648,7 @@ export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Pro
   const shared = row ? await sharedSeatRunFor(row, user, d) : false;
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true });
+  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true, resume: await d.store.aiRunResumeLink(row.id) });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {

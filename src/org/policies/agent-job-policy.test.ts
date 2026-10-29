@@ -24,10 +24,10 @@ const withEnv = <T>(vals: Record<string, string>, fn: () => T): T => {
   try { return fn(); } finally { for (const k of ENV) { if (old[k] === undefined) delete process.env[k]; else process.env[k] = old[k]; } }
 };
 
-t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초 · 보존 90일(2026-10-19 결정) · 작업 메모리 3072MB(2026-10-28 결정 #5082)", () => withEnv({}, () => {
+t("Q1 기본값 — 상민 2026-10-16 결정(동시 2 · 대기 20 · 대기 30분 · 실행 15/60분 · 무응답 90초) + 시작 상한 180초 · 보존 90일(2026-10-19 결정) · 작업 메모리 3072MB(2026-10-28 결정 #5082) · API 키 대화 기록 14일(#5101)", () => withEnv({}, () => {
   assert.deepEqual(resolveAgentJobPolicy({}), {
     max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 2, max_queued: 20, queue_wait_min: 30,
-    default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180, keep_days: 90, memory_max_mb: 3072,
+    default_timeout_min: 15, max_timeout_min: 60, silent_sec: 90, start_timeout_sec: 180, keep_days: 90, transcript_keep_days: 14, memory_max_mb: 3072,
   });
   assert.deepEqual(resolveAgentJobPolicy(null), D);
 }));

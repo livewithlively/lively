@@ -622,6 +622,13 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  #5081 shared_seat — 공용 시트로 도는 작업(앱 AI 실행이 접수). 자리(홈 · Claude 로그인)는 시트 계정 · 작업 AI 의 라이블리 신원은 보낸 사람.
   //   접수 때 정해지고 바뀌지 않는다. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts SHARED_SEAT_COL).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+  //  #5101 transcript — API 키 작업의 하네스 대화 기록(gzip). API 키 작업은 이 작업만의 빈 설정 폴더에서 돌고 그 폴더는 끝나면 지워져, 그 대화를
+  //   이어받는 작업(형식 재시도 · 앱의 이어받기)이 읽을 기록이 남지 않는다 — 판이 끝에 올리고 이어받는 작업의 첫 말이 돌려받는다(agent-jobs/plan.TRANSCRIPT_GZ_MAX).
+  //   transcript_conv = 그 기록의 대화 id · transcript_bytes = 풀었을 때 크기. 보존은 정책 transcript_keep_days(지나면 비운다 · 행은 남는다).
+  //   ⚠ 이 칸들도 COLS 에 넣지 않는다(agent-jobs/store.setAgentJobTranscript 머리말 — 롤 창).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript BYTEA`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_conv TEXT`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_bytes INT`);
   //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
   //  내 작업 · 그 앱의 작업 목록(최근 것부터).
