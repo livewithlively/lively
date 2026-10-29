@@ -11,7 +11,7 @@
 import { HttpError } from "../http-error.js";
 import type { OrgApp } from "../org/store/apps.js";
 import type { AppFile } from "./app-versions.js";
-import type { Viewer } from "./visibility.js";
+import { hasPendingDraft, type Viewer } from "./visibility.js";
 
 /** 지시 파일 하나의 상한 — 시스템 지시 한 장이다. */
 export const AI_INSTRUCTIONS_MAX_BYTES = 64 * 1024;
@@ -31,10 +31,16 @@ export function declaresAiInstructions(manifest: unknown): boolean {
   return !!map && typeof map === "object" && !Array.isArray(map) && Object.values(map).some((v) => typeof v === "string" && v !== "");
 }
 
-/** (순수) 지시 파일의 글 — 상한을 넘거나 UTF-8 글이 아니면 null(부르는 쪽이 까닭을 붙여 거절한다). 빈 글인지는 부르는 쪽이 따로 본다. */
+/**
+ * (순수) 지시 파일의 글 — 상한을 넘거나 UTF-8 글이 아니거나 NUL 글자가 있으면 null(부르는 쪽이 까닭을 붙여 거절한다). 빈 글인지는 부르는 쪽이 따로 본다.
+ *  NUL 을 막는 까닭: 글을 작업 행(org_agent_job.app_instructions)에 적는데 PostgreSQL 글 칸은 NUL 을 못 담는다(22021) — 그 작업 이름의 접수가
+ *  까닭 없는 500 이 되지 않게 설치 · 판 저장(400)과 읽기(409)에서 이유를 보인다(격리 리뷰 · prompt 의 NUL 400 과 같은 자).
+ */
 export function instructionsText(bytes: Uint8Array): string | null {
   if (bytes.byteLength > AI_INSTRUCTIONS_MAX_BYTES) return null;
-  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; }
+  let text: string;
+  try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; }
+  return text.includes("\u0000") ? null : text;
 }
 
 /** 판의 파일 하나를 바이트로(utf8 · base64). */
@@ -56,7 +62,7 @@ export interface InstructionsDeps {
  */
 export async function resolveJobInstructions(app: OrgApp, who: Viewer, job: string | null | undefined, deps?: InstructionsDeps): Promise<string | null> {
   if (!job) return null;
-  if (!instructionsPathOf(app.manifest, job) && !(app.draft_by && app.published_version_no != null)) return null;
+  if (!instructionsPathOf(app.manifest, job) && !hasPendingDraft(app)) return null;
   const d = deps ?? (await liveInstructionsDeps());
   const { view, app: shown } = await d.viewAppFor(app, who);
   if (view === "none") throw new HttpError(404, `앱 없음: ${app.id}`);
@@ -69,7 +75,7 @@ export async function resolveJobInstructions(app: OrgApp, who: Viewer, job: stri
   }
   if (!got.file) throw new HttpError(409, `작업 '${job}' 의 앱 지시 파일(${file})을 그 판에서 찾지 못했습니다 — 앱을 다시 저장하세요`);
   const text = instructionsText(appFileBytes(got.file));
-  if (text === null) throw new HttpError(409, `작업 '${job}' 의 앱 지시 파일(${file})이 ${AI_INSTRUCTIONS_MAX_BYTES / 1024}KiB 이하의 UTF-8 글이 아닙니다`);
+  if (text === null) throw new HttpError(409, `작업 '${job}' 의 앱 지시 파일(${file})이 ${AI_INSTRUCTIONS_MAX_BYTES / 1024}KiB 이하의 UTF-8 글(NUL 없이)이 아닙니다`);
   if (!text.trim()) throw new HttpError(409, `작업 '${job}' 의 앱 지시 파일(${file})이 비어 있습니다 — 지시를 적거나 ai.instructions 에서 빼세요`);
   return text;
 }

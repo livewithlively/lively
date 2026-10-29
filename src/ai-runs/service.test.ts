@@ -666,6 +666,8 @@ function withInstructions(d: AiRunDeps, o: { missing?: boolean } = {}): Asked[] 
   w.submitThrows = Object.assign(new HttpError(500, "column \"app_instructions\" does not exist"), { code: "42703" });
   await fails(submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d), 503, /배포 중/);
   assert.equal(w.runs.get(1)!.status, "failed");
+  assert.match(w.runs.get(1)!.error ?? "", /배포 중/, "실행 행에도 그 까닭(DB 원문이 아니라)");
+  assert.ok(!/does not exist/.test(w.runs.get(1)!.error ?? ""), w.runs.get(1)!.error ?? "");
   await fails(submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, d), 500, /does not exist/);
   ok("S7 롤 창 — 지시를 실은 작업만 503(다시 보내라) · 지시 없는 실행의 다른 실패는 그대로");
 }

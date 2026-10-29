@@ -221,6 +221,7 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *    둘 다 빠지며, 지시 파일은 system 에 실린다(격리 리뷰: settings · agents · commands 도 빠진다).
  *    ⚠ user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 구독 실행이면 그 구성원의 홈이라 같은 계정으로 도는 작업 AI 가 거기에 쓸 수 있다.
  *     «지시는 판으로만 바뀐다» 는 앱 폴더에 대한 보장이다. API 키 · 홈 없는 실행은 빈 설정 폴더라 user 도 비어 있다.
+ *     #5081 공용 시트 실행은 그 홈을 구성원 모두가 함께 쓴다 — 한 사람의 작업 AI 가 쓴 글이 다른 사람의 작업에 읽힐 수 있다(#5123 공용 시트 홈 격리).
  */
 export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);

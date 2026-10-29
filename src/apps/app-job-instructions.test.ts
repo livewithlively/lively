@@ -80,6 +80,7 @@ await t("T 지시 글 — 상한 이하 UTF-8 만(넘거나 깨진 글은 null) 
   assert.equal(instructionsText(new Uint8Array(AI_INSTRUCTIONS_MAX_BYTES).fill(0x61))?.length, AI_INSTRUCTIONS_MAX_BYTES, "상한과 같으면 받는다");
   assert.equal(instructionsText(new Uint8Array(AI_INSTRUCTIONS_MAX_BYTES + 1).fill(0x61)), null, "상한을 넘으면 거절");
   assert.equal(instructionsText(Uint8Array.from([0xff, 0xfe, 0x00])), null, "UTF-8 이 아니면 거절");
+  assert.equal(instructionsText(Uint8Array.from([0x61, 0x00, 0x62, 0x00])), null, "NUL 이 든 글(UTF-16 으로 쓴 글 등)은 거절 — 작업 행 글 칸이 못 담는다");
   assert.deepEqual([...appFileBytes({ content: Buffer.from("가").toString("base64"), encoding: "base64" })], [...Buffer.from("가")]);
   assert.deepEqual([...appFileBytes({ content: "가" })], [...Buffer.from("가")]);
 });
@@ -141,10 +142,11 @@ await t("R7 앱을 볼 수 없다 — 404(나만 보는 앱 · 남)", async () =
   assert.equal(await resolveJobInstructions(app, who("owner"), "answer", d), "초안 지시", "책임자는 설치된 상태");
 });
 
-await t("R8 판의 파일이 상한을 넘거나 UTF-8 이 아니다 — 409", async () => {
+await t("R8 판의 파일이 상한을 넘거나 UTF-8 이 아니거나 NUL 이 있다 — 409", async () => {
   const big = { content: "a".repeat(AI_INSTRUCTIONS_MAX_BYTES + 1) };
   const broken = { content: Buffer.from([0xff, 0xfe]).toString("base64"), encoding: "base64" as const };
-  for (const f of [big, broken]) {
+  const nul = { content: "지시\u0000끝" };
+  for (const f of [big, broken, nul]) {
     const { app, d } = world({ files: { "2:ai/answer.md": f } });
     await assert.rejects(resolveJobInstructions(app, who("bob"), "answer", d), httpErr(409, /UTF-8/));
   }

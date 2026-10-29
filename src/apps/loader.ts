@@ -114,7 +114,7 @@ async function checkAiInstructions(m: LivelyAppManifest, root: string): Promise<
     if (!st.isFile()) throw new HttpError(400, `${where} 가 파일이 아닙니다: ${rel}`);
     if (st.size > AI_INSTRUCTIONS_MAX_BYTES) throw new HttpError(400, `${where} 의 지시 파일이 너무 큽니다(${rel}, ${st.size}B > ${AI_INSTRUCTIONS_MAX_BYTES}B)`);
     const text = instructionsText(await readFile(abs));
-    if (text === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글이 아닙니다: ${rel}`);
+    if (text === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글(NUL 없이)이 아닙니다: ${rel}`);
     //  빈 지시는 «지시를 실었다» 가 아니다 — 비어도 선언이 있으면 작업 폴더 지시를 안 읽는 쪽으로 돌지만 단발엔 아무것도 안 실려 두 길이 갈린다(격리 리뷰 N1).
     if (!text.trim()) throw new HttpError(400, `${where} 의 지시 파일이 비어 있습니다: ${rel}`);
   }

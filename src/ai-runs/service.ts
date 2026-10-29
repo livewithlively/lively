@@ -1,7 +1,8 @@
 // 앱 AI 실행 — 흐름 (#4488 앱 v2-9). 입구 하나 `/_lively/ai/runs`(= 능력 app_ai_run).
 //
 //  접수(submitRun) → 실행 계정(작업별 > 앱별 > 워크스페이스 기본값 · plan.resolveAccount) → 실행 자리(단발+API 키 = 프록시 · 그 밖 = 작업 컨테이너)
-//   → 상한(앱당 빈도 · 사람당 동시 · 워크스페이스 동시 · 앱당 하루 토큰) → 실행 행 → 프록시면 뒤에서 LLM 한 번(runProxy) · 작업이면 작업 컨테이너 접수
+//   → 상한(앱당 빈도 · 사람당 동시 · 워크스페이스 동시 · 앱당 하루 토큰) → 앱 판 지시(#5082 — 그 사람 · 주소의 판에서 한 번)
+//   → 실행 행 → 프록시면 뒤에서 LLM 한 번(runProxy) · 작업이면 작업 컨테이너 접수(지시는 작업 행에 함께)
 //   → 결과 형식 판정(스키마 — 어긋나면 «형식에 맞게 다시» 1회) → 끝.
 //  작업 컨테이너에 붙은 실행은 그 작업 행의 상태를 따라간다(syncRun — 작업이 끝나면 걷기(agent-jobs reapJob)가 알리고, 정비(sweepAiRuns)와 읽기(getRun)도 맞춘다).
 //
@@ -202,7 +203,8 @@ export async function seatTermsOf(settings: AiAccountSettings, account: AiAccoun
 
 /**
  * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절)
- *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 행 → 띄움.
+ *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 앱 판 지시(404 · 409 — #5082)
+ *  → 행 → 띄움(대기열 429 · 501 · 롤 창 503).
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
  */
 export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { source?: string; session?: string }, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -315,10 +317,13 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
+      //  #5082 롤 창 — 공용 DB 마이그레이션 전이면 작업 행에 지시 칸이 없다(agent-jobs/store APP_INSTRUCTIONS_COL). 막힌 게 아니라 준비 중이다 —
+      //   실행 행에도 DB 원문(«column … does not exist») 대신 그 까닭을 적는다.
+      const rollGap = !!instructions && (e as { code?: string })?.code === "42703";
+      const notReady = "앱 지시를 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요";
       const why = e instanceof Error ? e.message : String(e);
-      await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `작업 컨테이너에 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);
-      //  #5082 롤 창 — 공용 DB 마이그레이션 전이면 작업 행에 지시 칸이 없다(agent-jobs/store APP_INSTRUCTIONS_COL). 막힌 게 아니라 준비 중이다.
-      if (instructions && (e as { code?: string })?.code === "42703") throw new HttpError(503, "앱 지시를 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요");
+      await d.store.finishAiRun(row.id, { status: "failed", result: null, error: rollGap ? notReady : `작업 컨테이너에 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);
+      if (rollGap) throw new HttpError(503, notReady);
       throw e;
     }
   }
@@ -485,7 +490,7 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
         //  #5081 — 공용 시트 표시도 이 실행 것을 그대로(지금 설정으로 다시 고르지 않는다 — 그 사이 지정을 거뒀으면 재시도는 띄우기 직전에 멈춘다).
         homeless: job.homeless === true, sharedSeat: await d.store.aiRunSharedSeat(run.id),
-        //  #5082 — 앱 판 지시도 원래 작업의 것 그대로(지금 판으로 다시 고르지 않는다 · 하네스도 이어받은 대화의 첫 시스템 지시를 그대로 쓴다).
+        //  #5082 — 앱 판 지시도 원래 작업의 것 그대로 싣는다(지금 판으로 다시 고르지 않는다 · 같은 글이라 잠금도 같이 걸린다).
         appInstructions: d.jobInstructions ? await d.jobInstructions(job.id) : null,
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }

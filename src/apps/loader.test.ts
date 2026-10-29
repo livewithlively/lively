@@ -138,15 +138,20 @@ test("L1 ai.instructions 파일이 없으면 · 폴더면 로드 실패(작업�
   await rm(d2, { recursive: true });
 });
 
-test("L2·L3 ai.instructions 파일이 64KiB 를 넘거나 UTF-8 이 아니면 로드 실패", async () => {
+test("L2·L3 ai.instructions 파일이 64KiB 를 넘거나 UTF-8 이 아니거나 NUL 이 있으면 로드 실패", async () => {
   const big = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")), "ai/a.md": "a".repeat(64 * 1024 + 1) });
   await assert.rejects(() => loadAppPackage(big), /너무 큽니다/);
   await rm(big, { recursive: true });
   const bin = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")) });
   await mkdir(path.join(bin, "ai"), { recursive: true });
   await writeFile(path.join(bin, "ai", "a.md"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
-  await assert.rejects(() => loadAppPackage(bin), /UTF-8 글이 아닙니다/);
+  await assert.rejects(() => loadAppPackage(bin), /UTF-8 글\(NUL 없이\)이 아닙니다/);
   await rm(bin, { recursive: true });
+  const nul = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")) });
+  await mkdir(path.join(nul, "ai"), { recursive: true });
+  await writeFile(path.join(nul, "ai", "a.md"), Buffer.from([0x61, 0x00, 0x62, 0x00]));
+  await assert.rejects(() => loadAppPackage(nul), /NUL 없이/, "NUL 이 든 글은 설치 · 판 저장에서 거절(작업 행 글 칸이 못 담는다)");
+  await rm(nul, { recursive: true });
 });
 
 test("L5 ai.instructions 지시 파일이 비었거나 빈칸뿐이면 로드 실패(«지시를 실었다» 가 아니다 · 격리 리뷰 N1)", async () => {

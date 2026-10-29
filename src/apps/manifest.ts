@@ -131,7 +131,7 @@ const aiJobSchema = z.object({
 const aiSchema = z.object({
   jobs: z.array(aiJobSchema).max(32).default([]),
   instructions: z.record(z.string(), z.string()).optional()
-    .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"),
+    .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글 · NUL 없이). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"),
 }).passthrough().optional();
 
 const uiPageSchema = z.object({

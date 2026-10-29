@@ -98,7 +98,6 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     },
     //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체. #5082 — 프록시 주소는 판이 보는 게이트웨이 아래.
     jobEnv: async (job, at) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps(), at); },
-    //  #5082 — 앱 판 지시(그 작업에 붙은 AI 실행의 작업 이름 → ai.instructions → 부른 사람의 판 파일). AI 실행이 아닌 작업은 null.
     //  #5082 앱 판 지시 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적었다 · 판이 뜰 때 다시 고르지 않는다).
     jobSystem: async (job) => (await import("./store.js")).agentJobAppInstructions(job.id),
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
