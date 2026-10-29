@@ -1,8 +1,8 @@
-// 화면 글 영어 보기(#5141) — 서버 쪽 엣지 표 E1~E14. 가짜 모델로. 실행: npm run build && node dist/ui-translate/translate.test.js
+// 화면 글 영어 보기(#5141) — 서버 쪽 엣지 표 E1~E21. 가짜 모델로. 실행: npm run build && node dist/ui-translate/translate.test.js
 //  이게 틀리면: 같은 글로 모델을 거듭 불러 키를 태우거나, 답 자리가 어긋나 엉뚱한 버튼에 엉뚱한 영어가 붙거나, 모델 실패가 화면 전체를 깬다.
 import assert from "node:assert/strict";
 import {
-  MAX_TEXTS, MAX_TEXT_CHARS, MAX_TOTAL_CHARS, NoApiKeyError, TranslateCache, needsTranslation, parseReply, systemPrompt,
+  MAX_TEXTS, MAX_TEXT_CHARS, MAX_TOTAL_CHARS, NoApiKeyError, SPLIT_CALLS_MAX, TranslateCache, needsTranslation, parseReply, systemPrompt,
   translateTexts, validateTexts, type TranslateDeps,
 } from "./translate.js";
 
@@ -10,7 +10,8 @@ let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
 
 type Call = { prompt: string };
-function fakeDeps(reply: (texts: string[]) => { ok: boolean; text: string; error: string | null }, key: string | null = "sk-test") {
+type Reply = { ok: boolean; text: string; error: string | null; stopReason?: string | null };
+function fakeDeps(reply: (texts: string[]) => Reply, key: string | null = "sk-test") {
   const calls: Call[] = [];
   const scope = { v: "t1" };
   let keyLookups = 0;
@@ -93,9 +94,9 @@ const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
   ok("E6 모델 실패는 그 자리 null · 다음에 다시 시도");
 }
 
-// E7 답 길이 불일치 — 전부 null
+// E7 답 길이 불일치 — 쪼개 다시 물어도 계속 어긋나면 전부 null
 {
-  const f = fakeDeps(() => ({ ok: true, text: '["Only one"]', error: null }));
+  const f = fakeDeps((t) => ({ ok: true, text: JSON.stringify([...t, "extra"]), error: null }));
   const r = await translateTexts(["가", "나"], "en", f.d);
   assert.deepEqual(r.translations, [null, null]);
   assert.ok(r.error);
@@ -168,6 +169,62 @@ const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
   assert.equal(parseReply("[1,2", 2), null);
   assert.match(systemPrompt("en"), /지식=knowledge/, "용어표가 지시에 들어간다");
   ok("E14 답 앞뒤에 말이 붙어도 배열을 읽는다");
+}
+
+// E16 모델이 「」 를 곧은 따옴표로 바꾸고 이스케이프를 빠뜨린 답 — 고쳐 읽는다(실측: 매니지드에서 긴 본문 묶음이 통째로 실패했다)
+{
+  assert.deepEqual(parseReply('["Hyperspell ("Your Company Brain", closed)", "B"]', 2), ['Hyperspell ("Your Company Brain", closed)', "B"]);
+  assert.deepEqual(parseReply('[""What makes you different" is the core", "x"]', 2), ['"What makes you different" is the core', "x"]);
+  assert.deepEqual(parseReply('["say "hi" now"]', 1), ['say "hi" now']);
+  assert.deepEqual(parseReply('["line1\nline2"]', 1), ["line1\nline2"], "문자열 안 날 줄바꿈도 읽는다");
+  ok("E16 이스케이프 빠진 따옴표 · 날 줄바꿈을 고쳐 읽는다");
+}
+
+// E17 멀쩡한 답은 고치지 않는다 — 이스케이프된 따옴표 · 역슬래시 그대로
+{
+  assert.deepEqual(parseReply(JSON.stringify(['a "b" c', "d\\e", "f]g"]), 3), ['a "b" c', "d\\e", "f]g"]);
+  ok("E17 올바른 JSON 은 그대로 읽는다");
+}
+
+// E18 한 글이 묶음 답을 깨면 — 반씩 쪼개 다시 물어 나머지는 살린다
+{
+  const bad = "독";
+  const f = fakeDeps((t) => (t.includes(bad) && t.length > 1 ? { ok: true, text: "[broken", error: null } : echoEn(t)));
+  const r = await translateTexts(["가", "나", "독", "라"], "en", f.d);
+  assert.deepEqual(r.translations, ["EN(가)", "EN(나)", "EN(독)", "EN(라)"]);
+  assert.equal(r.failed, 0);
+  assert.equal(r.error, undefined);
+  assert.ok(f.calls.length <= SPLIT_CALLS_MAX);
+  ok("E18 깨진 묶음은 반씩 쪼개 다시 묻는다");
+}
+
+// E19 답이 max_tokens 로 잘렸으면 — 읽혀도 믿지 않고 쪼갠다
+{
+  let first = true;
+  const f = fakeDeps((t) => { if (first) { first = false; return { ok: true, text: JSON.stringify(t.map(() => "x")), error: null, stopReason: "max_tokens" }; } return echoEn(t); });
+  const r = await translateTexts(["가", "나"], "en", f.d);
+  assert.deepEqual(r.translations, ["EN(가)", "EN(나)"]);
+  ok("E19 잘린 답은 버리고 쪼개 다시 묻는다");
+}
+
+// E20 늘 깨진 답 — 부르는 횟수는 상한까지만, 전부 null
+{
+  const f = fakeDeps(() => ({ ok: true, text: "nope", error: null }));
+  const r = await translateTexts(Array.from({ length: 40 }, (_, i) => "가" + i), "en", f.d);
+  assert.equal(f.calls.length, SPLIT_CALLS_MAX);
+  assert.equal(r.failed, 40);
+  assert.ok(r.error);
+  ok("E20 쪼개기는 상한까지만 — 키를 태우지 않는다");
+}
+
+// E21 호출 자체가 실패(과부하 등) — 쪼개지 않는다(같은 오류를 여러 번 부를 뿐)
+{
+  const f = fakeDeps(() => ({ ok: false, text: "", error: "overloaded_error: busy" }));
+  const r = await translateTexts(["가", "나", "다"], "en", f.d);
+  assert.equal(f.calls.length, 1);
+  assert.match(String(r.error), /overloaded/);
+  assert.match(systemPrompt("en"), /straight double quote/, "지시가 곧은 따옴표를 막는다");
+  ok("E21 호출 실패는 쪼개지 않는다");
 }
 
 console.log(`\n${pass} passed`);
