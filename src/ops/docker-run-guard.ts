@@ -21,6 +21,8 @@ export interface DockerRunPolicy {
   users?: string[];
   /** --tmpfs 를 둘 수 있는 컨테이너 자리. */
   tmpfs?: string[];
+  /** tmpfs 에 exec 를 줄 수 있는 자리(없으면 exec 를 받지 않는다 — 도커 기본 noexec 그대로 · #5082 작업 컨테이너는 /tmp · HOME). */
+  tmpfsExec?: string[];
   /** 이름 없는 볼륨(--mount type=volume,dst=…)을 둘 수 있는 자리 — 컨테이너를 지우면 함께 사라지는 쓰기 자리(빌드의 /tmp). */
   volumes?: string[];
   /** 띄울 수 있는 이미지(정확히 같은 글). */
@@ -131,6 +133,7 @@ export function assertSafeDockerRun(args: readonly string[], policy: DockerRunPo
         if (!(policy.tmpfs ?? []).includes(at)) no(`tmpfs 자리 ${at.slice(0, 40)} 는 받지 않습니다`);
         for (const o of opts ? opts.split(",") : []) {
           if (!/^(rw|nosuid|nodev|noexec|exec|size=\d+[kmg]?|mode=[0-7]{3,4}|uid=\d{1,10}|gid=\d{1,10})$/.test(o)) no(`tmpfs 선택 ${o.slice(0, 30)} 는 받지 않습니다`);
+          if (o === "exec" && !(policy.tmpfsExec ?? []).includes(at)) no(`tmpfs ${at.slice(0, 40)} 에는 exec 를 주지 않습니다(정책에 적은 자리만)`);
           //  임자(uid · gid)는 컨테이너 사용자(--user)와 같을 때만 — 끝에서 맞춰 본다(남의 · root 소유 자리를 만들지 않게).
           const own = /^(uid|gid)=(\d+)$/.exec(o);
           if (own) tmpfsOwners.push({ key: own[1] as "uid" | "gid", value: own[2]! });
@@ -186,15 +189,15 @@ export function assertSafeDockerRun(args: readonly string[], policy: DockerRunPo
         if (new Set(pairs.map(([k]) => k)).size !== pairs.length) no(`--mount 에 같은 선택이 두 번 있습니다: ${value.slice(0, 80)}`);
         const kv = new Map(pairs);
         //  같은 뜻의 이름(dst · destination · target / src · source)을 둘 적으면 이 검사기와 도커가 다른 값을 읽을 수 있다 — 하나만 받는다.
-        const one = (names: string[]): string => {
+        const pick = (names: string[]): string => {
           const have = names.filter((n) => kv.has(n));
           if (have.length !== 1) no(`--mount 에는 ${names.join(" · ")} 중 하나만 적습니다: ${value.slice(0, 80)}`);
           return kv.get(have[0]!)!;
         };
-        const dst = one(["dst", "destination", "target"]);
+        const dst = pick(["dst", "destination", "target"]);
         if (kv.get("type") === "bind") {
           //  #5082 — 원본이 없으면 도커가 만들지 않고 실패하는 바인드(-v 는 없는 원본을 root 소유 폴더로 만들어 그 자리 주인의 폴더를 망가뜨린다).
-          const src = one(["src", "source"]);
+          const src = pick(["src", "source"]);
           const extra = [...kv.keys()].filter((k) => !["type", "src", "source", "dst", "destination", "target", "readonly"].includes(k));
           if (extra.length) no(`--mount bind 선택 ${extra[0]!.slice(0, 20)} 는 받지 않습니다`);
           const roRaw = kv.get("readonly");

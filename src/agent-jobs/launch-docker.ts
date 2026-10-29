@@ -17,15 +17,17 @@
 //   (부모 폴더의 막이를 건너뛴다 · apps 자리는 lively-shared 가 쓰는 2775 라 구성원이 이름을 바꿔치기할 수 있다). 그래서:
 //   · ~/.claude 는 띄우기 전에 그 계정 권한으로 «링크 아님 · 그 계정 소유 폴더» 를 보고(memberFacts · 비격리는 게이트웨이가 lstat), 컨테이너 안에서도
 //     판 머리(JOB_CONTAINER_PRELUDE)가 붙은 자리가 그 uid 소유 폴더인지 한 번 더 본다(사이에 바꿔치기해도 남의 폴더면 판이 서지 않는다).
-//   · 작업 폴더는 게이트웨이가 «링크 아님 · 실제 경로가 그 자리» 를 본다(checkWork).
+//   · 작업 폴더는 게이트웨이가 «링크 아님 · 실제 경로가 그 자리» 를 본다(checkWork) — 만든 뒤 한 번, docker run 바로 앞에서 한 번 더
+//     (그 사이 이미지 받기가 길 수 있다 · 검사기는 같은 뿌리 안 형제를 가리키는 링크를 원본 글로는 못 가린다).
 //   · 원본은 `--mount type=bind` 로 붙인다 — 원본이 없으면 도커가 실패한다(-v 는 없는 원본을 root 소유 폴더로 만들어 그 자리 주인의 폴더를 망가뜨린다).
 //  막이(jobContainerArgs — 꼴 하나 · 띄우기 직전 검사기 ops/docker-run-guard 가 jobContainerPolicy 로 한 번 더 거른다 — docker 그룹은 사실상 root):
 //   · 루트 읽기 전용 · /tmp 와 HOME 만 tmpfs(exec — 도커 기본 noexec 면 npx 등이 홈에 받은 실행 파일을 못 돌린다 · 작업 폴더는 원래 실행이 된다) ·
 //     메모리 = 메모리+스왑(스왑 없음 — 1단계 실측의 «스왑으로 빠진다») · pids 상한 · cap 전부 빼기 · no-new-privileges · --init(신호 · 좀비 정리) ·
 //     다시 띄우지 않음 · 박스 메모리가 모자라면 작업이 먼저 끊기게(--oom-score-adj 1000) · umask 002(판 머리 — 공유 · 앱 폴더에 남는 파일 · 폴더를
 //     lively-shared 가 고치고 지울 수 있게. 도커 기본 022 면 홈 없는 작업(uid 65532)이 만든 하위 폴더를 아무도 비우지 못한다).
-//   · 정책은 지은 인자가 아니라 자리의 사실로 짓는다 — 작업 폴더 · ~/.claude · 하네스 실행 파일은 정확한 원본, 계정은 그 박스의 정해진 계정
-//     (그 계정 · 전용 uid · 게이트웨이), 그룹은 lively-shared 만. 인자를 짓는 코드가 틀리면 검사기가 걸러 띄우지 않는다.
+//   · 정책은 지은 인자가 아니라 자리의 사실로 짓는다 — 작업 폴더 · ~/.claude · 하네스 실행 파일은 정확한 원본, 계정은 그 작업의 계정 하나
+//     (그 계정 · 홈 없는 작업의 전용 uid · 비격리면 게이트웨이), 그룹은 lively-shared 만, tmpfs 의 exec 는 /tmp · HOME 만.
+//     인자를 짓는 코드가 틀리면 검사기가 걸러 띄우지 않는다.
 //   · 네트워크는 host — 판이 이 박스 게이트웨이의 루프백(LIVELY_AGENT_JOBS_PORT)에 닿아야 한다(MCP · LLM 프록시가 그 아래).
 //     ⚠ 그래서 파일 자리는 막아도 이 박스 루프백에서 인증 없이 듣는 것(앞단 Caddy 의 관리 API · 임베딩 곁프로세스 등)에는 닿는다 — 1단계 판 · 사람 세션과
 //     같은 한계다(#5142). 앱 서버 컨테이너에 바로 닿는 길도 1단계와 같다(#5108).
@@ -34,7 +36,8 @@
 //     부트는 한 번만 받으므로 읽어도 얻는 것은 그 작업을 «시작 실패» 로 끝내는 것뿐이다(runner 머리말 · boot-failed).
 //  하네스 실행 파일은 게이트웨이 계정의 리눅스 claude(네이티브 설치 — 한 파일 실행 파일)를 읽기 전용으로 붙인다(LIVELY_AGENT_JOB_CLAUDE_BIN 이 먼저).
 //   이미지는 node 가 든 이미지(판 부트 · 본체가 node 로 돈다 — LIVELY_AGENT_JOB_IMAGE · 기본 앱 서버 이미지 node:22-bookworm-slim · git · python 없음).
-//   이미지는 박스 판정이 처음 된 때 뒤에서 받아 둔다(첫 작업이 받는 시간을 덜 기다리게 — 그래도 받는 중이면 그 작업은 받기를 기다린다).
+//   이미지가 박스에 없으면 첫 작업이 받는다(같은 때 여럿이 물어도 한 번) — 받는 시간도 시작 상한(180초 · 자리를 받은 때부터) 안에 든다.
+//   느린 박스는 관리자가 처음 켤 때 docker pull 로 받아 둔다(deploy/env.example).
 //  컨테이너는 판이 빠지면 끝나고 스스로 지워진다(--rm). 걷기는 `docker rm -f` 한 번이다 — 이미 없다(· 지우는 중이다)는 확답만 삼킨다.
 //  다른 실행면과 다른 점(관리자가 알아 둘 것):
 //   · 판이 보는 작업 폴더는 컨테이너 자리(/work/apps/<앱> — 매니지드와 같고 박스 위 /srv/... 와 다르다). 하네스는 대화를 작업 폴더별로 두므로 박스 위에서
@@ -181,12 +184,13 @@ export function jobPlacement(f: {
 }
 
 /**
- * (순수) 이 박스에서 작업 컨테이너가 돌 수 있는 계정 · 더할 수 있는 그룹 — 검사기 정책의 사실(자리 판정과 따로 짓는다).
- *  격리 박스: 그 작업의 OS 계정(있으면) · 홈 없는 작업의 전용 uid(lively-shared) / 그룹은 lively-shared 만. 비격리 박스: 게이트웨이 계정 / 그룹 없음.
+ * (순수) 이 작업 컨테이너가 돌 수 있는 계정(정확히 하나) · 더할 수 있는 그룹 — 검사기 정책의 사실(자리 판정과 따로 짓는다).
+ *  격리 박스: 그 작업의 OS 계정(member) — 없으면(홈 없는 작업) 전용 uid:lively-shared / 그룹은 lively-shared 만. 비격리 박스: 게이트웨이 계정 / 그룹 없음.
+ *  lively-shared 가 없는 격리 박스의 홈 없는 작업은 계정이 없다(검사기가 어느 --user 도 받지 않는다 — 자리 판정이 먼저 거절한다).
  */
 export function jobIdentities(box: Pick<DockerBox, "isolated" | "sharedGid" | "gateway" | "jobUid">, member: Pick<MemberFacts, "uid" | "gid"> | null): { users: string[]; groups: number[] } {
   if (!box.isolated) return { users: [`${box.gateway.uid}:${box.gateway.gid}`], groups: [] };
-  const users = [...(member ? [`${member.uid}:${member.gid}`] : []), ...(box.sharedGid != null ? [`${box.jobUid}:${box.sharedGid}`] : [])];
+  const users = member ? [`${member.uid}:${member.gid}`] : box.sharedGid != null ? [`${box.jobUid}:${box.sharedGid}`] : [];
   return { users, groups: box.sharedGid != null ? [box.sharedGid] : [] };
 }
 
@@ -271,7 +275,7 @@ const exact = (s: string): RegExp => new RegExp(`^${s.replace(/[.*+?^${}()|[\]\\
 /**
  * (순수) 작업 컨테이너의 검사 정책 — 인자를 지은 값이 아니라 자리의 사실로 짓는다(머리말 «막이»): 작업 폴더는 그 자리(apps · shared) 뿌리 아래의
  *  정확한 원본을 행의 작업 폴더 자리에, Claude 설정 폴더는 그 홈(프로필 뿌리) 아래의 정확한 원본 하나를, 하네스 실행 파일은 그 파일 하나를 읽기
- *  전용으로, env 파일은 작업 런타임 폴더 아래만, tmpfs 는 /tmp 와 HOME 만, 계정 · 그룹은 jobIdentities 의 것만.
+ *  전용으로, env 파일은 작업 런타임 폴더 아래만, tmpfs(exec 포함)는 /tmp 와 HOME 만, 계정 · 그룹은 jobIdentities 의 것만.
  */
 export function jobContainerPolicy(f: {
   image: string;
@@ -282,7 +286,7 @@ export function jobContainerPolicy(f: {
   if (!WORK_TARGET_RE.test(f.work.target)) throw new Error(`작업 폴더 꼴이 아닙니다: ${f.work.target.slice(0, 80)}`);
   return {
     networks: ["host"], images: [f.image], readOnly: true, publish: false,
-    tmpfs: ["/tmp", f.home],
+    tmpfs: ["/tmp", f.home], tmpfsExec: ["/tmp", f.home],
     binds: [
       { root: f.work.root, rw: true, targets: exact(f.work.target), source: f.work.source },
       ...(f.claude ? [{ root: f.claude.root, rw: true, targets: exact(f.claude.target), source: f.claude.source }] : []),
@@ -382,14 +386,23 @@ export async function launchDockerJob(
   try { work = await d.resolveWork(user, dir, box.isolated ? (osUser ?? HOMELESS_OS_USER) : null); }
   catch (e) { throw stepFailure("workdir", e); }
   //  박스 위 자리가 행의 작업 폴더(그 앱 · 그 프로젝트)와 맞아야 한다 — 검사기 정책의 원본이 이 값이라, 형제 폴더를 고르는 잘못은 여기서만 걸린다.
-  if (path.relative(work.base, work.abs) !== dir.sub) throw new JobLaunchError(`작업 폴더 자리가 행의 작업 폴더와 맞지 않습니다: ${work.abs}`);
-  let workState: WorkDirState;
-  try {
-    await d.mkdirWork(osUser, work.abs, box.isolated && !osUser);
-    workState = await d.checkWork(work);
-  } catch (e) { throw stepFailure("workdir", e); }
-  if (workState === "missing") throw stepFailure("workdir", `${work.abs} 가 만든 뒤에도 없습니다`);
-  if (workState !== "ok") throw new JobLaunchError(`${WORK_REFUSAL[workState]}: ${work.abs}`);
+  //   작업 오류(앱이 받는다)에는 박스 위 경로를 싣지 않는다 — 행의 작업 폴더로 말하고, 박스 위 자리는 게이트웨이 로그에만 남긴다.
+  if (path.relative(work.base, work.abs) !== dir.sub) {
+    logger.warn({ job: job.id, work: work.abs, base: work.base }, "[agent-job] 작업 폴더 자리가 행의 작업 폴더와 맞지 않는다");
+    throw new JobLaunchError(`작업 폴더 자리가 행의 작업 폴더(${job.cwd})와 맞지 않습니다`);
+  }
+  const resolved = work;
+  //  작업 폴더 확인 — 만든 뒤 한 번, docker run 바로 앞에서 한 번 더(머리말 «붙이는 원본은 링크면 안 된다»).
+  const assertWork = async (): Promise<void> => {
+    let st: WorkDirState;
+    try { st = await d.checkWork(resolved); } catch (e) { throw stepFailure("workdir", e); }
+    if (st === "ok") return;
+    logger.warn({ job: job.id, work: resolved.abs, state: st }, "[agent-job] 작업 폴더를 작업 컨테이너에 붙이지 않는다");
+    if (st === "missing") throw stepFailure("workdir", `작업 폴더(${job.cwd})가 만든 뒤에도 없습니다`);
+    throw new JobLaunchError(`${WORK_REFUSAL[st]} (${job.cwd})`);
+  };
+  try { await d.mkdirWork(osUser, work.abs, box.isolated && !osUser); } catch (e) { throw stepFailure("workdir", e); }
+  await assertWork();
   try { await d.ensureImage(box.image); } catch (e) { throw stepFailure("ensure", e); }
   const name = jobContainerName(sid);
   const slug = d.slug();
@@ -410,6 +423,8 @@ export async function launchDockerJob(
       image: box.image, work: { root: work.base, source: work.abs, target: job.cwd }, claude: claudeFacts,
       claudeBin: box.claudeBin, envRoot: env.root, home: place.home, users: ids.users, groups: ids.groups,
     });
+    //  이미지 받기 · env 파일 사이에 작업 폴더 이름을 링크로 바꿔치기했을 수 있다 — 붙이기 바로 앞에서 다시 본다.
+    await assertWork();
     await d.run(args, policy);
   } catch (e) {
     //  검사기 거절 · 짓지 못하는 인자는 인자를 지은 코드 탓이다 — 다시 해도 같다.
@@ -443,11 +458,12 @@ export async function killDockerJob(sessionId: string, deps?: Pick<DockerLaunchD
 
 /**
  * 박스 판정 실패 — message 는 접수 501 · 관리자 보기(구성원 누구나 · 앱도 MCP 로 본다)에 싣는 글이라 박스 안 정보(경로 · 계정 이름 · 도커 원문)를
- *  싣지 않고, detail 은 게이트웨이 로그에만 남긴다.
+ *  싣지 않고, detail 은 게이트웨이 로그에만 남긴다. 판정 중 이것이 아닌 오류(파일 · 실행 오류 원문)는 공개 글을 BOX_UNKNOWN 으로 바꾼다(dockerBoxCheck).
  */
 export class DockerBoxError extends Error {
   constructor(message: string, readonly detail: string = "") { super(message); this.name = "DockerBoxError"; }
 }
+const BOX_UNKNOWN = "이 박스의 도커 · 하네스 실행 파일을 확인하지 못했습니다 — 관리자가 확인해야 합니다";
 const SEE_LOG = "자세한 까닭은 게이트웨이 로그의 [agent-job] 도커 실행면 줄에 있습니다";
 
 /** 박스 판정을 기억하는 동안 — 된다는 1분, 안 된다는 15초(관리자가 고치면 곧 따라오게). 판정이 끝난 때부터 잰다. 묻는 중인 판정은 함께 받는다. */
@@ -456,7 +472,7 @@ const BOX_NO_MS = 15_000;
 type BoxCheck = { ok: true; box: DockerBox } | { ok: false; why: string };
 let boxProbe: { at: number; result: BoxCheck } | null = null;
 let boxInflight: Promise<BoxCheck> | null = null;
-let lastLoggedWhy = "";
+let lastLogged = "";
 
 /** 이 박스에서 도커 실행면을 쓸 수 있나 — 기억한 판정(없으면 묻는다). o 는 시험이 바꿔 끼운다. */
 export async function dockerBoxCheck(o: { probe?: () => Promise<DockerBox>; now?: () => number } = {}): Promise<BoxCheck> {
@@ -467,20 +483,27 @@ export async function dockerBoxCheck(o: { probe?: () => Promise<DockerBox>; now?
     const result: BoxCheck = await (o.probe ?? probeDockerBox)()
       .then((box) => ({ ok: true as const, box }))
       .catch((e) => {
-        const why = String((e as Error)?.message ?? e);
-        if (why !== lastLoggedWhy) logger.warn({ detail: e instanceof DockerBoxError ? e.detail : undefined }, `[agent-job] 도커 실행면을 지금 쓸 수 없다 — ${why}`);
-        lastLoggedWhy = why;
+        //  공개 글은 DockerBoxError 의 글만 — 그 밖의 원문(경로가 든 파일 오류 등)은 로그에만(DockerBoxError 머리말).
+        const why = e instanceof DockerBoxError ? e.message : BOX_UNKNOWN;
+        const detail = e instanceof DockerBoxError ? e.detail : String((e as Error)?.message ?? e);
+        //  같은 까닭이 이어지면 한 번만 적는다 — 공개 글이 같아도 원문이 바뀌면(권한 → 데몬 꺼짐) 새로 적는다.
+        const key = `${why}\0${detail}`;
+        if (key !== lastLogged) logger.warn({ detail }, `[agent-job] 도커 실행면을 지금 쓸 수 없다 — ${why}`);
+        lastLogged = key;
         return { ok: false as const, why };
       });
-    if (result.ok) lastLoggedWhy = "";
+    if (result.ok) lastLogged = "";
     boxProbe = { at: now(), result };
     return result;
   })().finally(() => { boxInflight = null; });
   return boxInflight;
 }
 
-/** 시험 · 판정 다시 하기 — 기억한 박스 판정을 잊는다. */
-export function resetDockerProbesForTest(): void { boxProbe = null; boxInflight = null; lastLoggedWhy = ""; }
+/** 기억한 박스 판정을 잊는다 — 다음 판정이 다시 묻는다(묻는 중인 판정은 그대로 함께 받는다). */
+export function invalidateDockerBox(): void { boxProbe = null; }
+
+/** 시험 — 박스 판정 기억 · 묻는 중 · 로그 기억을 모두 잊는다. */
+export function resetDockerProbesForTest(): void { boxProbe = null; boxInflight = null; lastLogged = ""; }
 
 /** 지금 못 띄울 때의 까닭(마지막 판정) — 접수 501 문장. */
 export function dockerUnavailableMessage(): string {
@@ -491,7 +514,7 @@ export function dockerUnavailableMessage(): string {
 /** 관리자에게 보일 도커 실행면 상태 — 누구로 도나 · 작업 메모리 상한이 실제로 걸리나(agent_job_limits surface). 띄우기와 같은 판정. */
 export async function dockerSurfaceStatus(memoryMaxMb: number, o: { check?: typeof dockerBoxCheck } = {}): Promise<{ runsAs: "member" | "gateway" | null; enforced: boolean; note: string }> {
   const c = await (o.check ?? dockerBoxCheck)();
-  if (!c.ok) return { runsAs: null, enforced: false, note: `지금은 작업 컨테이너를 띄울 수 없습니다 — ${c.why}` };
+  if (!c.ok) return { runsAs: null, enforced: false, note: `지금은 작업 컨테이너를 띄울 수 없습니다 — ${c.why}. ${SEE_LOG}` };
   const runsAs = c.box.isolated ? "member" : "gateway";
   if (!(Number.isFinite(memoryMaxMb) && memoryMaxMb > 0)) {
     return { runsAs, enforced: false, note: `memory_max_mb 가 0 이라 작업 컨테이너는 도커 메모리 전체(${c.box.memMb}MB)까지 씁니다` };
@@ -543,12 +566,19 @@ async function resolveClaudeBin(): Promise<string> {
   if (!found) throw new DockerBoxError(`작업 컨테이너에 넣을 claude 를 게이트웨이 계정에서 찾지 못했습니다 — ${CLAUDE_FIX}`, "PATH 에 claude 없음");
   const real = await fsp.realpath(found).catch(() => { throw new DockerBoxError(`작업 컨테이너에 넣을 claude 를 찾지 못했습니다 — ${CLAUDE_FIX}`, `realpath 실패: ${found}`); });
   const head = Buffer.alloc(4);
-  const fh = await fsp.open(real, "r");
-  try { await fh.read(head, 0, 4, 0); } finally { await fh.close(); }
+  let mode: number;
+  try {
+    const fh = await fsp.open(real, "r");
+    try { await fh.read(head, 0, 4, 0); } finally { await fh.close(); }
+    mode = (await fsp.stat(real)).mode;
+  } catch (e) {
+    throw new DockerBoxError("게이트웨이 계정이 claude 실행 파일을 읽지 못했습니다 — 관리자가 그 파일의 권한(게이트웨이 · 다른 계정이 읽고 실행)을 확인해야 합니다",
+      `${real}: ${(e as Error)?.message ?? e}`);
+  }
   if (!(head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46)) {
     throw new DockerBoxError(`게이트웨이 계정의 claude 가 리눅스 실행 파일(ELF)이 아닙니다(npm 설치 · 맥 실행 파일은 컨테이너에서 돌지 않는다) — ${CLAUDE_FIX}`, `ELF 아님: ${real}`);
   }
-  if (((await fsp.stat(real)).mode & 0o005) !== 0o005) {
+  if ((mode & 0o005) !== 0o005) {
     throw new DockerBoxError("게이트웨이 계정의 claude 를 다른 계정이 실행할 수 없습니다(권한 — 작업 컨테이너는 게이트웨이가 아닌 계정으로 돈다)", `권한: ${real}`);
   }
   return real;
@@ -577,7 +607,7 @@ export async function probeDockerBox(o: { isolated?: boolean; getent?: string } 
   const { localImage, LOCAL_IMAGE_RE } = await import("../apps/app-server-config.js");
   const claudeBin = await resolveClaudeBin();
   const info = await exec(dockerBin(), ["info", "--format", "{{.MemTotal}} {{.SwapLimit}}"], 20_000)
-    .catch((e) => { throw new DockerBoxError(`${SEE_LOG}. 이 박스의 도커에 닿지 못했습니다 — 관리자가 Docker 설치와 게이트웨이 계정의 docker 그룹을 확인해야 합니다`, String((e as Error)?.message ?? e)); });
+    .catch((e) => { throw new DockerBoxError("이 박스의 도커에 닿지 못했습니다 — 관리자가 Docker 설치와 게이트웨이 계정의 docker 그룹을 확인해야 합니다", String((e as Error)?.message ?? e)); });
   const [mem, swap] = info.trim().split(/\s+/);
   const named = String(process.env.LIVELY_AGENT_JOB_IMAGE ?? "").trim();
   const image = named && LOCAL_IMAGE_RE.test(named) ? named : localImage();
@@ -626,9 +656,9 @@ export async function workDirState(work: { abs: string; base: string }): Promise
   return (await fsp.realpath(work.abs)) === path.join(await fsp.realpath(work.base), rel) ? "ok" : "link";
 }
 
-/** 이미지 받기 — 이미지마다 한 번(같은 때 여럿이 물어도 한 번 받는다). 실패하면 잊어 다음에 다시 받는다. */
+/** 이미지 받기 — 박스에 없을 때만(«No such image») · 이미지마다 한 번(같은 때 여럿이 물어도 한 번 받는다). 실패하면 잊어 다음에 다시 받는다. */
 const images = new Map<string, Promise<void>>();
-function ensureImageOnce(image: string): Promise<void> {
+export function ensureImageOnce(image: string): Promise<void> {
   let p = images.get(image);
   if (!p) {
     p = (async () => {
@@ -661,10 +691,8 @@ export async function liveDockerDeps(): Promise<DockerLaunchDeps> {
     box: async () => {
       let c = await dockerBoxCheck();
       //  기억하는 동안 하네스가 새 판으로 바뀌어 옛 실행 파일이 지워졌으면 다시 판정한다(검사기가 없는 원본을 거절해 그 작업이 영영 실패하지 않게).
-      if (c.ok && !fs.existsSync(c.box.claudeBin)) { resetDockerProbesForTest(); c = await dockerBoxCheck(); }
+      if (c.ok && !fs.existsSync(c.box.claudeBin)) { invalidateDockerBox(); c = await dockerBoxCheck(); }
       if (!c.ok) throw new Error(c.why);
-      //  이미지를 뒤에서 받아 둔다 — 띄우기는 같은 받기를 기다린다(ensureImage).
-      void ensureImageOnce(c.box.image).catch((e) => logger.warn({ image: c.ok ? c.box.image : "", err: (e as Error)?.message }, "[agent-job] 작업 이미지를 받지 못했다"));
       return c.box;
     },
     accountUser: (m) => launch.accountUser(m),
