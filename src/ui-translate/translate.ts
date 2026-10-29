@@ -20,6 +20,11 @@ export const SPLIT_CALLS_MAX = 7;
 /** 기본 모델 — 짧은 글 번역이라 작은 모델로 충분하다. LIVELY_UI_TRANSLATE_MODEL 로 바꾼다. */
 export const DEFAULT_TRANSLATE_MODEL = "claude-haiku-5-5";
 export function translateModel(): string { return (process.env.LIVELY_UI_TRANSLATE_MODEL ?? "").trim() || DEFAULT_TRANSLATE_MODEL; }
+/**
+ * 번역에 생각은 필요 없다 — Haiku 는 기본이 적응형 생각이라 숨은 생각이 max_tokens 를 먹어 답이 잘렸다(실측: 글 한 줄에 823 토큰).
+ *  Haiku 는 기본 노력(medium)에서 생각 끄기를 받는다. 끌 수 없는 모델(Opus 5.5 · Sonnet 5.5 — 400)엔 아무것도 보내지 않는다.
+ */
+export function thinkingFor(model: string): { type: "disabled" } | undefined { return /^claude-haiku-/.test(model) ? { type: "disabled" } : undefined; }
 
 /** 한글(음절 · 자모)이 들어 있나 — 없으면 번역할 것이 없다. */
 export const HANGUL_RE = /[ᄀ-ᇿ㄰-㆏가-힣]/;
@@ -73,6 +78,8 @@ export function repairStringArray(raw: string): string {
     END.lastIndex = i + 1;
     if (END.test(raw)) { out += c; inStr = false; } else out += '\\"';
   }
+  //  마지막 글을 “ ” 로 닫고 곧은 따옴표를 빠뜨린 답(실측) — 끝 «]» 앞에서 닫아 준다.
+  if (inStr) { const k = out.lastIndexOf("]"); if (k > 0) out = out.slice(0, k) + '"' + out.slice(k); }
   return out;
 }
 
@@ -111,7 +118,7 @@ export interface TranslateDeps {
   apiKey(): Promise<string | null>;
   workspaceId(): Promise<string | null>;
   /** 모델 한 번 — ok:false 면 error 를 싣는다(키는 싣지 않는다). */
-  call(apiKey: string, i: { model: string; system: string; prompt: string; maxTokens: number; workspaceId: string | null }): Promise<{ ok: boolean; text: string; error: string | null; stopReason?: string | null }>;
+  call(apiKey: string, i: { model: string; system: string; prompt: string; maxTokens: number; workspaceId: string | null; thinking?: { type: "disabled" } }): Promise<{ ok: boolean; text: string; error: string | null; stopReason?: string | null }>;
   cache: TranslateCache;
   model(): string;
   /** 기억을 나누는 칸 — 테넌트(워크스페이스). 한 프로세스가 여러 테넌트를 받아도 한쪽이 오염시킨 번역이 남에게 나가지 않게(격리 리뷰 6). */
@@ -149,7 +156,7 @@ export async function translateTexts(texts: string[], target: TranslateTarget, d
 
   const key = await d.apiKey();
   if (!key) throw new NoApiKeyError();
-  const system = systemPrompt(target), model = d.model(), workspaceId = await d.workspaceId();
+  const system = systemPrompt(target), model = d.model(), thinking = thinkingFor(model), workspaceId = await d.workspaceId();
   let calls = 0, translated = 0, failed = 0;
   let error: string | undefined;
   //  묶음 하나를 한 번에 — 답이 깨졌거나 잘렸으면 반씩 쪼개 다시 묻는다(긴 글 하나가 묶음 전체를 실패시키지 않게, 매니지드 실측).
@@ -160,9 +167,10 @@ export async function translateTexts(texts: string[], target: TranslateTarget, d
     const total = batch.reduce((n, t) => n + t.length, 0);
     const r = await d.call(key, {
       model, system, prompt: userPrompt(batch),
-      //  영어는 한국어보다 글자가 늘어난다 — 넉넉히. 짧은 묶음도 바닥 512.
-      maxTokens: Math.min(8_000, Math.max(512, Math.ceil(total * 1.5) + batch.length * 16)),
+      //  영어는 한국어보다 글자가 늘어난다 — 넉넉히. 상한은 쓴 만큼만 과금되니 바닥 2048(생각을 못 끄는 모델의 생각 몫까지).
+      maxTokens: Math.min(16_000, Math.max(2_048, Math.ceil(total * 1.5) + batch.length * 16)),
       workspaceId,
+      ...(thinking ? { thinking } : {}),
     });
     const parsed = r.ok && r.stopReason !== "max_tokens" ? parseReply(r.text, batch.length) : null;
     if (!parsed && r.ok && ids.length > 1 && calls + 2 <= SPLIT_CALLS_MAX) {
@@ -204,7 +212,7 @@ export async function liveTranslateDeps(): Promise<TranslateDeps> {
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 90_000);
       try {
-        const r = await singleShot(apiKey, { model: i.model, system: i.system, prompt: i.prompt, maxTokens: i.maxTokens, workspaceId: i.workspaceId }, ac.signal);
+        const r = await singleShot(apiKey, { model: i.model, system: i.system, prompt: i.prompt, maxTokens: i.maxTokens, workspaceId: i.workspaceId, thinking: i.thinking }, ac.signal);
         return { ok: r.ok, text: r.text, error: r.error, stopReason: r.stopReason };
       } catch (e) {
         return { ok: false, text: "", error: ac.signal.aborted ? "번역 호출이 90초 안에 끝나지 않았습니다" : String((e as Error)?.message ?? e).slice(0, 200) };
