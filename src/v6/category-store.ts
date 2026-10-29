@@ -113,7 +113,13 @@ const auditCategory = (entityKey: string, op: string, before: unknown, after: un
 //  카테고리 행 자체는 거르지 않는다(분류체계는 조직의 뼈대 — 가시성 주체가 아니다). 잠기는 건 그 안의 지식이고,
 //  그래서 위 집계만 뷰어 기준으로 센다(materialize.categoryMapForIndex 와 같은 판단).
 //  정렬: 교차관심사 먼저(여러 축에 걸친 것이 위) → 이름. 종전의 space 우선 정렬은 축과 함께 사라졌다.
-export async function listCategories(viewer?: Viewer): Promise<CategoryRow[]> {
+//  light(#5147) — 행 칸만 준다(지식 수·어긋남·확신도 집계 없음). 이름표만 쓰는 화면(증류기 · 검토 규칙의 카테고리 고르기)용이다.
+//   어긋남 집계가 카테고리마다 벡터 거리를 재서 실측 1.2초가 걸렸는데, 그 화면들은 key → 이름만 읽는다.
+export async function listCategories(viewer?: Viewer, opts?: { light?: boolean }): Promise<CategoryRow[]> {
+  if (opts?.light) {
+    return q(itemsPool,
+      `SELECT ${CATEGORY_COLS} FROM category WHERE state<>'merged' ORDER BY cross_cutting DESC, name NULLS LAST, key`);
+  }
   const params: unknown[] = [];
   const sel = categorySel(await knowledgeVisWhere(viewer, params));
   return q(itemsPool,

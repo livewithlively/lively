@@ -7,6 +7,7 @@
 //  만드는 순간 둘이 같은 지식을 동시에 분류해 서로의 제안을 덮는다.
 import { itemsPool, q } from "../../db/client.js";
 import { audit } from "./audit.js";
+import { bumpCoverageVersion } from "../distill/coverage-version.js";   // #5147 레인 쓰기 → 커버리지 캐시 무효화
 import { isClaimingLane } from "../distill/lanes.js";
 
 export interface ClassifierRow {
@@ -296,6 +297,7 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
     cur ? { key: cur.key, enabled: cur.enabled, priority: cur.priority, target: cur.target } : null,
     { key: row.key, enabled: row.enabled, priority: row.priority, target: row.target }, actor, source);
 
+  bumpCoverageVersion();
   return (await getClassifier(id))!;
 }
 
@@ -304,6 +306,7 @@ export async function removeClassifier(id: number, actor?: string, source?: stri
   if (!cur) return;
   // seen 은 FK CASCADE 로 함께 사라진다. 이미 만들어진 분류 제안은 남는다(지식의 자산이지 분류기의 것이 아니다).
   await itemsPool.query(`DELETE FROM org_classifier WHERE id=$1`, [id]);
+  bumpCoverageVersion();
   await audit("org_classifier", String(id), "delete", { key: cur.key, enabled: cur.enabled }, null, actor, source);
 }
 

@@ -4,6 +4,7 @@ import { itemsPool } from "../../db/client.js";
 import { HttpError } from "../../http-error.js";
 import { invalidateIngestPolicyCache } from "../ingest/ingest-policy-load.js";   // #783 정책 쓰기 → 캐시 즉시 무효화(스위치가 곧바로 먹게)
 import { audit } from "./audit.js";
+import { bumpCoverageVersion } from "../distill/coverage-version.js";   // #5147 레인 쓰기 → 커버리지 캐시 무효화
 import { keepDrawerTarget } from "../liv/lane-skeleton.js";   // #1631 — 서랍 레인의 목적지를 잃지 않는다
 
 // ════════ 자동 인입 허용선 정책 — org_ingest_policy (프로젝트 #638) ════════
@@ -362,6 +363,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness,
        input.enabled !== undefined && Boolean(input.enabled) !== Boolean(before.enabled)]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
+    bumpCoverageVersion();
     await ensureJobForEnabled(r.rows[0], actor);
     return r.rows[0];
   }
@@ -383,6 +385,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
      vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
      vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness]);
   await audit("org_distiller", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
+  bumpCoverageVersion();
   await ensureJobForEnabled(r.rows[0], actor);
   return r.rows[0];
 }
@@ -395,6 +398,7 @@ export async function removeDistiller(idOrKey: number | string, actor?: string, 
   const row = cur.rows[0];
   if (!row) return;
   await itemsPool.query(`DELETE FROM org_distiller WHERE id=$1`, [row.id]);
+  bumpCoverageVersion();
   await audit("org_distiller", String(row.id), "delete", row, null, actor, source);
 }
 

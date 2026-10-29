@@ -25,7 +25,9 @@ const GROUP_NOTE = "묶음(group)은 **화면에서 카테고리를 갈라 보�
 // ⚠ 2026-09-02(#1631) space(business|product|system) 폐기 — 분류축 위에 **고정 서랍장**을 하나 더 두지 않는다.
 //  그 셋은 소프트웨어 회사의 분류지 쓰는 사람의 분류가 아니었다. 옛 클라이언트가 space 를 보내오면 조용히 무시한다
 //  (400 이 아니다 — 서버가 먼저 나가고 번들이 뒤따르는 배포 순서에서 그 사이 요청을 깨뜨리지 않는다).
-const categoryListInput = {};
+const categoryListInput = {
+  light: z.boolean().optional().describe("true 면 이름표만(key·name·정의 등 행 칸) — 지식 수·어긋남 집계를 빼서 빠르다"),
+};
 type CategoryListInput = z.infer<z.ZodObject<typeof categoryListInput>>;
 const categoryList: Capability = {
   name: "category_list",
@@ -36,13 +38,14 @@ const categoryList: Capability = {
   input: categoryListInput,
   expose: {
     mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/categories"], parse: () => ({}) }],
+    rest: [{ method: "GET", paths: ["/api/ui/categories"],
+      parse: (req) => (req.query?.light === "1" || req.query?.light === "true" ? { light: true } : {}) }],
   },
   // 공개범위(#1291) — 카테고리 행은 전원 공개(분류체계는 조직의 뼈대)지만, 행에 실린 **지식 카운트**는 뷰어 기준이다.
   //  group(#1631)은 group_key 를 그대로 다시 싣는 이름이다 — 화면·에이전트가 쓰기(category_update.group)와 **같은 말**로
   //  읽게 하려는 것뿐이고, 컬럼(group_key)도 그대로 둔다(기존 소비자 무변화).
-  handler: async (_input: CategoryListInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
-    categories: (await listCategories(ctx?.viewer ?? null)).map((c) => ({ ...c, group: c.group_key ?? null })),
+  handler: async (input: CategoryListInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
+    categories: (await listCategories(ctx?.viewer ?? null, { light: input.light === true })).map((c) => ({ ...c, group: c.group_key ?? null })),
   }),
 };
 
