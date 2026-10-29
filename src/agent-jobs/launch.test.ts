@@ -101,6 +101,8 @@ await t("F1 확보 단계의 실패는 전부 일시(transient) — 대기열로
     assert.match(e.message, /노드 자리 없음$/, step);
   }
   assert.equal(stepFailure("ensure", "").message, "작업 컨테이너를 확보하지 못했습니다");
+  //  #5082 — 박스 위 메모리 단계는 «확인하지 못했다» 가 아니다(옛 래퍼는 판정이 된 것이다 · 배포 틈).
+  assert.equal(stepFailure("memory", "옛 판").message, "작업 메모리 상한을 지금 걸 수 없습니다: 옛 판");
 });
 
 await t("F2 다시 해도 안 될 것(세션 id 없음 · 실행 계정 없음)은 일시가 아니다 — 그 작업을 바로 끝낸다", async () => {

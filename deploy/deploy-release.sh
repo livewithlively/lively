@@ -305,6 +305,14 @@ main() {
   # per-color PORT env(실제 env → .env PORT 를 이긴다). LANG 은 유닛 Environment 로도 박혀 있으나 명시.
   printf 'PORT=%s\n' "$idle_port" | sudo tee "$root/color-env/$idle.env" >/dev/null
   render_bluegreen_unit                         # 템플릿 유닛 렌더(멱등) — common.sh
+  #  #5082 cgroup 래퍼(box-cgspawn)만은 flip **앞에** 새 판으로 놓는다. 새 코어는 작업 판에 값을 더 넘기는데 옛 래퍼는 그 값을 몰라,
+  #   flip 뒤 격리 인프라 리프레시(아래 phase 4 끝)까지 메모리 상한을 둔 작업이 일시 실패로 밀린다(agent-jobs/launch-host cgspawnCheck — ALB 가
+  #   느리면 그 틈이 재시도 예산을 넘을 수 있다 · 격리 리뷰). 새 래퍼는 옛 코어의 세 값 호출을 종전과 똑같이 받으므로(deploy/box-cgspawn.test C1)
+  #   먼저 놓아도 old 서빙은 그대로다. 실패해도 배포는 계속한다(phase 4 의 리프레시가 다시 놓는다).
+  if [ -x /opt/lively/libexec/box-cgspawn ] && [ -f "$RELEASE_DIR/deploy/linux/box-cgspawn" ]; then
+    sudo install -m 0755 -o root -g root "$RELEASE_DIR/deploy/linux/box-cgspawn" /opt/lively/libexec/box-cgspawn \
+      || warn "cgroup 래퍼 선반영 실패 — flip 뒤 격리 인프라 리프레시가 다시 놓는다(그 사이 메모리 상한을 둔 작업은 기다린다)"
+  fi
 
   phase "2/4 idle($idle) 기동 + 로컬 ${HEALTH_PATH} 대기(ALB 넣기 전 자가 게이트)"
   assert_idle_port_free "$idle_port" "lively-gateway@$idle"   # 선점(구유닛 잔재) 검사 — false-positive flip 차단
