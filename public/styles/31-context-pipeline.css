@@ -1278,3 +1278,153 @@ a.cxc-name:hover { color: var(--blue); }
 .rvp-one-t { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .rvp-one-d { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
 .rvp-one-sp { flex: 1; }
+
+/* ── AI 주입 설정(#5159) — 왼쪽 목차 + 오른쪽 세부 페이지 하나 ───────────────────────────────
+ *  고치기 전 실측(1440×900): 다섯 시점 + 의미 검색 + 공개범위 둘을 한 판에 세로로 쌓아 5,577px.
+ *  목차가 층위를 맡고(세션 주입 ▸ 시작 → 작업 중 → 종료 · 키트 · 기타 / 검색 · 공개범위), 오른쪽은 고른
+ *  페이지 하나만 2단으로 그려 한 화면에 들인다. 토큰만 쓴다. radius 6/8/12/999. */
+.dlv { display: grid; grid-template-columns: 228px minmax(0, 1fr); gap: 28px; align-items: start; }
+
+/* 목차 — 선택은 면(--bg-sel) + 왼쪽 3px 레일. 줄마다 점(상태) + 이름 + 낱말·개수 한 줄. */
+.dlv-nav { position: sticky; top: 12px; display: flex; flex-direction: column; gap: 18px; }
+.dlv-nav-g { display: flex; flex-direction: column; gap: 2px; }
+.dlv-nav-h { padding: 0 10px 6px; font-size: 12px; font-weight: 800; color: var(--muted-head); }
+.dlv-nav-i { position: relative; display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 6px 10px;
+  border-radius: 8px; color: var(--ink-sub); text-decoration: none; transition: background-color 120ms ease; }
+.dlv-nav-i:hover { background: var(--bg-tint); color: var(--ink); }
+.dlv-nav-i.on { background: var(--bg-sel); color: var(--ink); box-shadow: inset 3px 0 0 var(--blue); }
+.dlv-nav-i:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.dlv-nav-b { display: flex; flex-direction: column; min-width: 0; }
+.dlv-nav-t { font-size: 14px; font-weight: 700; line-height: 1.35; word-break: keep-all; }
+.dlv-nav-i.on .dlv-nav-t { font-weight: 800; }
+.dlv-nav-m { font-size: 12px; font-weight: 600; color: var(--muted-head); line-height: 1.4; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 상태 점 — 켜짐 민트 · 꺼짐 빈 점 · 상태 없음(기타 이벤트·공개범위)은 옅은 점. 색만으로 말하지 않게 옆에 낱말이 선다. */
+.dlv-dot { position: relative; z-index: 1; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3-line); }
+.dlv-dot.on { background: var(--mint); box-shadow: 0 0 0 3px var(--bg-success); }
+.dlv-dot.off { background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--muted); }
+/* 세션 시작 → 작업 중 → 세션 종료 — 점을 세로 선으로 이어 «한 세션의 순서»를 보인다. */
+.dlv-nav-i.flow + .dlv-nav-i.flow::before { content: ""; position: absolute; left: 13.5px; top: -25px; height: 44px; width: 1px; background: var(--line-net); }
+
+/* 세부 페이지 */
+.dlv-panel { min-width: 0; }
+.dlv-page { display: flex; flex-direction: column; gap: 16px; }
+.dlv-page + .dlv-page { margin-top: 32px; }   /* 옛 자리(only 없이)에서 다섯 시점을 쌓을 때 */
+.dlv-ph { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.dlv-ph-main { min-width: 0; }
+.dlv-ph-t { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.3px; color: var(--ink); }
+.dlv-ev { padding: 1px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-tint);
+  font: 600 12px/1.6 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink-sub); letter-spacing: 0; }
+.dlv-ph-hint { margin: 5px 0 0; font-size: 13.5px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-ph-right { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.dlv-sw { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 700; color: var(--ink); white-space: nowrap; cursor: pointer; }
+.dlv-sw .cxc-sw { margin: 0; }
+.dlv-sw-w { min-width: 2.2em; }
+
+/* 2단 — 넓은 칸 + 곁 칸(320). grid-2 는 반반. */
+.dlv-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.dlv-grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.dlv-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* 상자 — 헤어라인 + radius 12, 그림자 없음. */
+.dlv-box { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.dlv-box-h { display: flex; align-items: baseline; gap: 8px; margin: 0 0 4px; font-size: 14.5px; font-weight: 800; color: var(--ink); }
+.dlv-box-h:only-child { margin: 0; }
+.dlv-box-hint { margin: 0 0 10px; font-size: 13px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-n { padding: 0 7px; border-radius: 999px; background: var(--bg-tint-2); font-size: 11.5px; font-weight: 700; color: var(--ink-sub); font-variant-numeric: tabular-nums; line-height: 1.6; }
+.dlv-box-acts { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.dlv-box-acts > .admin-status, .dlv-box-acts > .dlv-n { margin-right: auto; }
+.dlv-box textarea { display: block; width: 100%; box-sizing: border-box; min-height: 84px;
+  font: 500 13px/1.55 "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+.dlv-box textarea.dlv-ta-tall { min-height: 320px; font-family: inherit; font-size: 13.5px; }
+.dlv-p { margin: 0; font-size: 13.5px; color: var(--ink); word-break: keep-all; }
+.dlv-note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-empty { margin: 0; padding: 6px 0; font-size: 13px; color: var(--ink-sub); }
+.dlv-link { font-size: 12.5px; font-weight: 700; color: var(--blue); text-decoration: none; white-space: nowrap; }
+.dlv-link:hover { text-decoration: underline; }
+.dlv-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; color: var(--ink); word-break: keep-all; }
+
+/* 주입 문서 목록 — 상자 안의 행. 0번 = 조직 헤더(자동). */
+.dlv-list { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.dlv-row { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-top: 1px solid var(--line-row); }
+.dlv-row:first-child { border-top: 0; }
+.dlv-row:hover { background: var(--bg-tint); }
+.dlv-row-auto, .dlv-row-auto:hover { background: var(--bg-tint); }
+.dlv-row-n { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--bg-tint-2); font-size: 12px; font-weight: 800; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
+.dlv-row-b { flex: 1 1 auto; min-width: 0; }
+.dlv-row-t { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.dlv-row-s { margin-top: 1px; font-size: 12.5px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-row-a { flex: none; display: flex; align-items: center; gap: 2px; }
+.dlv-row-a .dlv-sw { margin-left: 6px; }
+.dlv-ib { width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--ink-sub); font-size: 14px; font-weight: 700; cursor: pointer; }
+.dlv-ib:hover:not(:disabled) { border-color: var(--line); color: var(--blue); background: var(--bg); }
+.dlv-ib:disabled { opacity: .35; cursor: default; }
+
+/* 자동으로 채워지는 값 — 토큰 칩 + 이름·뜻 한 줄. */
+.dlv-tokens { display: flex; flex-direction: column; gap: 8px; }
+.dlv-token { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dlv-token-k { flex: none; min-width: 104px; padding: 1px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-tint);
+  font: 700 12px/1.6 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink-note); }
+.dlv-token-b { flex: 1; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; font-size: 13px; color: var(--ink-sub); }
+.dlv-token-b b { color: var(--ink); font-weight: 700; }
+
+/* 커스텀 훅 — 모노 이름 + 하네스·매처. 기타 이벤트 페이지는 두 칸으로 흘린다. */
+.dlv-hooks { display: flex; flex-direction: column; }
+.dlv-hooks-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; padding-top: 6px; padding-bottom: 6px; }
+.dlv-hook { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; padding: 7px 0; border-top: 1px solid var(--line-row); min-width: 0; }
+.dlv-hooks > .dlv-hook:first-child { border-top: 0; }
+.dlv-hooks-2 > .dlv-hook:nth-child(2) { border-top: 0; }
+.dlv-hook-id { font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
+.dlv-hook-m { font-size: 12px; color: var(--muted-head); overflow-wrap: anywhere; }
+.dlv-hook.off .dlv-hook-id { color: var(--ink-sub); }
+
+/* 외부 맥락 툴 — 접두어 추가 칩 */
+.dlv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.dlv-chip { height: 26px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  font-size: 12.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.dlv-chip:hover { border-color: var(--blue); color: var(--blue); }
+
+/* 의미 검색 폼 — 라벨 + 칸 + 힌트, 짧은 칸은 한 줄에 둘·셋. */
+.dlv-f { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0 0 12px; }
+.dlv-f-l { font-size: 13px; font-weight: 700; color: var(--ink); }
+.dlv-f-h { font-size: 12px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-f input, .dlv-f select { width: 100%; box-sizing: border-box; }
+.dlv-frow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.dlv-frow-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dlv-more { margin: 2px 0 0; border-top: 1px solid var(--line-row); padding-top: 10px; }
+.dlv-more > summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--ink-sub); list-style: revert; }
+.dlv-more[open] > summary { margin-bottom: 10px; }
+.dlv-stat-n { font-size: 26px; font-weight: 800; letter-spacing: -0.6px; color: var(--ink); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.dlv-stat-n small { font-size: 15px; font-weight: 600; color: var(--muted-head); letter-spacing: 0; }
+.dlv-stat-l { margin-top: 2px; font-size: 12.5px; color: var(--ink-sub); }
+.dlv-stat .admin-hint, .dlv-stat .admin-warn { margin-top: 8px; font-size: 12.5px; }
+
+/* 공개범위 — 두 패널을 머리·카드 없이 상자 안에. */
+.vax-list-bare { margin-top: 0; }
+.vax-list-bare .vax-row { padding: 9px 4px; border-radius: 0; }
+.svp-bare .svp-actions { margin-top: 12px; }
+
+@media (max-width: 1100px) {
+  .dlv-grid { grid-template-columns: minmax(0, 1fr); }
+}
+/* ≤960 — 목차가 위로 올라가 가로로 흐른다(기능은 그대로, 줄만 바뀐다). */
+@media (max-width: 960px) {
+  .dlv { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .dlv-nav { position: static; gap: 6px; }
+  /* 묶음 하나 = 가로 한 줄(넘치면 그 줄만 가로로 굴러간다). 묶음 이름은 줄 앞머리에 선다. */
+  .dlv-nav-g { flex-direction: row; align-items: center; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+  .dlv-nav-h { flex: none; padding: 0 6px 0 0; }
+  .dlv-nav-i { flex: none; min-height: 40px; }
+  .dlv-nav-t, .dlv-nav-m { white-space: nowrap; }
+  .dlv-nav-i.flow + .dlv-nav-i.flow::before { display: none; }
+  .dlv-grid-2, .dlv-hooks-2 { grid-template-columns: minmax(0, 1fr); }
+  .dlv-hooks-2 > .dlv-hook:nth-child(2) { border-top: 1px solid var(--line-row); }
+}
+@media (max-width: 640px) {
+  .dlv-ph { flex-wrap: wrap; }
+  .dlv-frow, .dlv-frow-3 { grid-template-columns: minmax(0, 1fr); }
+  .dlv-row { flex-wrap: wrap; row-gap: 4px; }
+  .dlv-row-b { flex-basis: calc(100% - 34px); }
+  .dlv-row-a { width: 100%; justify-content: flex-end; }
+}

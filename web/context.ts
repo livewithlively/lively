@@ -28,11 +28,9 @@ import { renderCollectors } from './context-collectors.js';
 import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
-import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — AI 전달 ▸ 접근 권한에 함께 선다
+import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 수집기 ▸ 자료를 볼 사람 (AI 주입 설정 ▸ 공개범위에도 선다)
 import { ingestPolicyPanel } from './review.js';                       // 지식 검토 정책(#638) — 증류기 화면의 「사람 승인」 절
-import { injectionMap } from './admin-injection.js';                   // 세션 주입 — 항상 주입되는 조직 정체성
-import { embeddingsEditor } from './admin-embeddings.js';              // 의미 검색 — 임베딩 provider·백필(기본 off)
-import { visibilityAxesPanel } from './visibility-axes.js';            // 공개범위 — 유형별 축 on/off
+import { DELIVER_ALIAS, DELIVER_PAGES, renderDeliver } from './context-deliver.js';   // #5159 AI 주입 설정 — 왼쪽 목차 + 세부 페이지
 import { loadAdmin } from './admin-rerender.js';
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
@@ -103,9 +101,10 @@ const STAGES: CtxStage[] = [
     items: [{ key: 'managers', label: CTX_TAB.checks, draw: (b) => checksScreen(b) }],
   },
   {
+    //  #5159 — 세부 페이지마다 항목 하나(세션 시작 · 작업 중 · … · 공개범위). 목차는 화면(context-deliver)이 그린다.
     key: 'deliver', label: CTX_TAB.deliver,
     hint: '지식을 AI 세션에 넣는 방법을 정합니다. 세션 주입, 의미 검색, 접근 권한을 설정합니다.',
-    items: [{ key: 'injection', label: CTX_TAB.deliver, draw: (b) => deliverScreen(b) }],
+    items: DELIVER_PAGES.map((p) => ({ key: p.key, label: p.label, adminOnly: !!p.admin, draw: (b) => renderDeliver(b, p.key) })),
   },
 ];
 
@@ -151,18 +150,6 @@ async function checksScreen(b: HTMLElement): Promise<void> {
     el('p', { class: 'admin-hint', text: '지식이 낡거나 서로 어긋나는 것을 AI 가 스스로 찾아 고치는 점검이 이 자리에 하나씩 붙습니다.' })));
 }
 
-/** AI 전달 — 세션 주입 + (관리자) 의미 검색 · 공개 범위 · 자료를 볼 사람. 접근 권한을 한 자리에. */
-async function deliverScreen(b: HTMLElement): Promise<void> {
-  const data = await adminData();
-  const parts: Array<(h: HTMLElement) => Promise<void> | void> = [async (h) => { await injectionMap(h, data); }];
-  if (hasScope('admin')) {
-    parts.push(async (h) => { await embeddingsEditor(h, data); });
-    parts.push(async (h) => { await visibilityAxesPanel(h); });
-    parts.push(async (h) => { await sourceVisPolicyPanel(h); });
-  }
-  await stack(b, parts);
-}
-
 /** 옛 주소 → 새 자리. 북마크·문서·화면 안 링크가 살아 있어야 한다(#1841 방식 승계). */
 const LEGACY_STAGE: Record<string, string> = {
   //  topics · classify(옛 카테고리 단계 이름)는 여기 없다. #4233 에서 분류체계 앱이 됐고 renderContext 초입이 그리로 보낸다.
@@ -198,6 +185,8 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
     return;
   }
   if (sub === 'checks' && sub2 === 'findings') { location.replace('#/context/inbox'); return; }
+  //  #5159 — AI 주입 설정의 옛 화면 키(#1618: injection · embeddings · visibility)는 세부 페이지로 넘긴다.
+  if (sub === 'deliver' && sub2 && DELIVER_ALIAS[sub2]) { location.replace('#/context/deliver/' + DELIVER_ALIAS[sub2]); return; }
   const stage = STAGES.find((s) => s.key === sub) ?? STAGES[0];
   // adminOnly 화면(#1618)은 비-admin 에게 **주소로도** 열리지 않는다 — 그 탭의 첫 볼 수 있는 화면으로 떨군다.
   const canSee = (i: CtxItem) => !i.adminOnly || hasScope('admin');
@@ -209,7 +198,8 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
   const body = el('div', { class: 'ctx-body' },
     //  현황·수집기·증류기는 화면이 자기 머리(제목 + 한 줄 설명)를 갖고 있어 정의 한 줄이 두 번 선다(#3830) — 거기선 뺀다.
-    ['home', 'sources', 'distill', 'runs'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
+    //  AI 주입 설정(#5159)도 세부 페이지마다 자기 머리를 갖는다.
+    ['home', 'sources', 'distill', 'runs', 'deliver'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
     host);
   view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));

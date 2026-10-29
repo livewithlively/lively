@@ -9,7 +9,7 @@
 //     (슬랙 신원 매핑이 없어 자동 연결이 불가능하다 — 실측 0/66명). 안 그러면 "채널 멤버면 보이겠지"로 오해한다.
 //   ② **규칙은 앞으로 수집되는 것에 적용된다.** 이미 쌓인 자료는 소급 적용(백필)을 눌러야 한다. 이걸 안 보이게
 //     하면 "정책을 켰는데 옛 자료가 그대로 보인다"가 된다.
-import { api, busy, el, errorNote, toast } from './core.js';
+import { api, busy, el, errorNote, replaceKids, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 // ⚠ 배럴(./projects.js)에서 가져오면 프로젝트 모듈 그래프 전체를 끌고 와 admin ↔ projects ↔ terminal
 //  **import 순환**이 생긴다(CI check-imports 가 419건을 잡았다). 프리미티브가 실제로 사는 모듈에서 직접 가져온다.
@@ -17,11 +17,13 @@ import { compactPicker } from './projects/popover.js';
 import { memberPicker } from './projects/files.js';
 import { sectionHead } from './admin-widgets.js';
 
-export async function sourceVisPolicyPanel(detail): Promise<void> {
-  const reload = () => sourceVisPolicyPanel(detail);
-  const head = () => sectionHead('자료 공개범위',
-    '슬랙·지메일 같은 커넥터로 수집되는 자료를 누가 볼 수 있는지 정합니다. 채널별로 예외를 둘 수 있어요.');
-  busy(detail, el('div', {}, head(), el('div', { class: 'card' }, skeleton('정책을 불러오는 중'))));
+//  bare(#5159) — [AI 주입 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 머리·카드 없이 안쪽만 그린다.
+export async function sourceVisPolicyPanel(detail, opts: { bare?: boolean; onChange?: () => void } = {}): Promise<void> {
+  const reload = () => { opts.onChange?.(); return sourceVisPolicyPanel(detail, opts); };
+  const head = () => (opts.bare ? null : sectionHead('자료 공개범위',
+    '슬랙·지메일 같은 커넥터로 수집되는 자료를 누가 볼 수 있는지 정합니다. 채널별로 예외를 둘 수 있어요.'));
+  const wrap = (...kids) => (opts.bare ? el('div', { class: 'svp-bare' }, ...kids) : el('div', { class: 'card' }, ...kids));
+  busy(detail, el('div', {}, head(), wrap(skeleton('정책을 불러오는 중'))));
 
   let data: any, targets: any;
   try { [data, targets] = await Promise.all([api('/api/ui/source-vis-policy'), api('/api/ui/source-vis-policy/targets')]); }
@@ -33,7 +35,7 @@ export async function sourceVisPolicyPanel(detail): Promise<void> {
           el('b', { text: '이 배포에는 자료 공개범위 정책 기능이 없어요' }),
           el('span', { text: String(e.message ?? '') }))
       : errorNote(e, '정책을 불러오지 못했습니다');
-    detail.replaceChildren(el('div', {}, head(), el('div', { class: 'card' }, body)));
+    replaceKids(detail, el('div', {}, head(), wrap(body)));
     return;
   }
 
@@ -51,11 +53,11 @@ export async function sourceVisPolicyPanel(detail): Promise<void> {
   const backfillBtn = el('button', { class: 'btn', type: 'button', text: '기존 자료에 소급 적용' });
   backfillBtn.onclick = () => openBackfill(reload);
 
-  detail.replaceChildren(el('div', {},
+  replaceKids(detail, el('div', {},
     head(),
-    el('div', { class: 'card' },
+    wrap(
       axisWarn,
-      el('p', { class: 'muted', text:
+      opts.bare ? null : el('p', { class: 'muted', text:
         '규칙은 앞으로 수집되는 자료에 적용됩니다. 채널을 지정한 규칙이 커넥터 전체 규칙보다 우선해요. ' +
         '이미 쌓인 자료에도 적용하려면 [기존 자료에 소급 적용]을 누르세요.' }),
       rules.length ? el('div', { class: 'svp-list' }, ...rules.map((r) => ruleRow(r, targets, reload)))

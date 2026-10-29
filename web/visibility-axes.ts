@@ -9,15 +9,17 @@
 import { api, busy, el, errorNote, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 
-export async function visibilityAxesPanel(detail): Promise<void> {
-  const reload = () => visibilityAxesPanel(detail);
-  busy(detail, el('div', { class: 'card' }, skeleton('맥락 공개범위 설정을 불러오는 중')));
+//  bare(#5159) — [AI 주입 설정 ▸ 공개범위] 페이지는 자기 상자·제목을 그린다. 그때는 행 목록만 그린다.
+export async function visibilityAxesPanel(detail, opts: { bare?: boolean; onChange?: () => void } = {}): Promise<void> {
+  const reload = () => { opts.onChange?.(); return visibilityAxesPanel(detail, opts); };
+  busy(detail, el('div', { class: opts.bare ? '' : 'card' }, skeleton('맥락 공개범위 설정을 불러오는 중')));
 
   let axes: any[];
   try { axes = (await api('/api/ui/vis/axes')).axes || []; }
-  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '설정을 불러오지 못했습니다'))); return; }
+  catch (e) { detail.replaceChildren(el('div', { class: opts.bare ? '' : 'card' }, errorNote(e, '설정을 불러오지 못했습니다'))); return; }
 
   const rows = axes.map((a) => axisRow(a, reload));
+  if (opts.bare) { detail.replaceChildren(el('div', { class: 'vax-list vax-list-bare' }, ...rows)); return; }
 
   detail.replaceChildren(el('div', {},
     el('div', { class: 'section-title' }, el('h2', { text: '맥락 공개범위' })),
