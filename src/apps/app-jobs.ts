@@ -72,7 +72,7 @@ export async function startAppJob(input: Record<string, unknown>, user: LivelyUs
   if (!appId) throw new HttpError(400, "app_id 가 필요합니다(앱 화면 · 앱 서버에서 부르면 생략)");
   if (user.appId && input.app_id !== undefined && input.app_id !== user.appId) throw new HttpError(403, "다른 앱의 작업은 시작할 수 없습니다");
   const env = deps.env();
-  if (!env) throw new HttpError(501, "이 워크스페이스는 앱 서버 실행이 꺼져 있어 백그라운드 작업을 돌릴 수 없습니다(자가호스팅 박스는 v2-8 에서)");
+  if (!env) throw new HttpError(501, "이 워크스페이스는 앱 서버 실행이 꺼져 있어 백그라운드 작업을 돌릴 수 없습니다");
   const policy = await deps.policy();
   const to = jobTimeoutOf(input.timeout_s, policy);
   if ("error" in to) throw new HttpError(400, to.error);
