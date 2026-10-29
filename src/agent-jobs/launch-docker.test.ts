@@ -1,8 +1,9 @@
-// 도커 실행면(launch-docker.ts)과 실행면 고르기의 도커 갈래 — 사양 엣지 표의 A · P · G · C · K · L · S 행 (#5082 2단계).
+// 도커 실행면(launch-docker.ts)과 실행면 고르기의 도커 갈래 — 사양 엣지 표의 A · P · G · C · K · S · L · B · R 행 (#5082 2단계).
 //  자리 판정(jobPlacement) · 인자(jobContainerArgs) · 정책(jobContainerPolicy)은 순수 함수라 표로 재고, 정책은 **진짜 검사기**(ops/docker-run-guard)에
-//  진짜 폴더(임시)로 대 본다 — 붙는 원본이 뿌리 밖이면 거절되는지가 이 실행면의 경계다.
-//  띄우기는 바꿔 끼운 의존(DockerLaunchDeps)으로 돌려 **무엇이 불렸나**(순서 · env 파일 글 · 인자)를 기록으로 단언하고,
-//  판 머리(JOB_CONTAINER_PRELUDE) · ~/.claude 확인 글(claudeDirProbeScript)은 진짜 셸로, 살아 있는 의존의 docker 부르기는 가짜 docker 실행 파일로 돌린다.
+//  진짜 폴더(임시)로 대 본다 — 붙는 원본이 그 자리가 아니면 거절되는지가 이 실행면의 경계다.
+//  띄우기(C)도 진짜 임시 폴더 · 진짜 작업 폴더 확인 · 진짜 검사기를 거친다 — 바꿔 끼운 것은 도커 · 계정 · DB 뿐이고, launchDockerJob 이 정책에
+//   어느 사실을 넣었나(뿌리 · 원본 · 계정 · 그룹 · env 뿌리)를 그대로 단언한다(격리 리뷰 B2 — 기록만 하던 정책을 아무도 보지 않았다).
+//  판 머리(JOB_CONTAINER_PRELUDE) · ~/.claude 확인 글(claudeDirProbeScript)은 진짜 셸로, 살아 있는 의존의 docker · getent 부르기는 가짜 실행 파일로 돌린다.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -10,8 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   DEFAULT_JOB_UID, JOB_BARE_HOME, JOB_CLAUDE_DIR_ENV, JOB_CLAUDE_TARGET, JOB_CONTAINER_PRELUDE, JOB_LOCALE,
-  claudeDirProbeScript, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus, envFileText, jobContainerArgs, jobContainerEnv,
-  jobContainerName, jobContainerPolicy, jobPlacement, killDockerJob, launchDockerJob, liveDockerDeps, probeDockerBox, resetDockerProbesForTest,
+  claudeDirProbeScript, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus, envFileText, gatewayClaudeDirState, jobContainerArgs, jobContainerEnv,
+  jobContainerName, jobContainerPolicy, jobIdentities, jobPlacement, killDockerJob, launchDockerJob, liveDockerDeps, probeDockerBox, resetDockerProbesForTest, workDirState,
   type DockerBox, type DockerLaunchDeps, type JobPlacement, type MemberFacts,
 } from "./launch-docker.js";
 import { jobSurfaceKind, jobsUnavailableMessage, dockerSurfaceBlocker } from "./surface.js";
@@ -19,7 +20,7 @@ import { JobLaunchError } from "./launch.js";
 import { BOOT_SOURCE } from "./runner.js";
 import { HOMELESS_OS_USER } from "./plan.js";
 import { computeExecTopology, parseAgentJobs } from "../exec-topology.js";
-import { assertSafeDockerRun, DockerRunRejected } from "../ops/docker-run-guard.js";
+import { assertSafeDockerRun, DockerRunRejected, type DockerRunPolicy } from "../ops/docker-run-guard.js";
 import type { AgentJobRow } from "./store.js";
 import type { LivelyUser } from "../context.js";
 
@@ -46,6 +47,7 @@ const box = (over: Partial<DockerBox> = {}): DockerBox => ({
   isolated: true, sharedGid: SHARED_GID, gateway: GW, jobUid: DEFAULT_JOB_UID, ...over,
 });
 const kim: MemberFacts = { uid: 200401, gid: 200401, home: "/home/box_kim", claude: "ok" };
+const okProfile = { dir: "/home/lively/.lively/profiles/kim/claude", root: "/home/lively/.lively/profiles", state: "ok" as const };
 
 // ── A. 실행면 고르기 · 스위치 ────────────────────────────────────────────────────
 
@@ -76,7 +78,7 @@ await t("A3 못 띄우는 배포의 501 문장 — 스위치가 없으면 docker
   assert.doesNotMatch(m, /넣고 게이트웨이를 다시 띄우면/);
 });
 
-// ── P. 누구로 · 무엇을 붙이나(jobPlacement) ──────────────────────────────────────
+// ── P. 누구로 · 무엇을 붙이나(jobPlacement) · 정책의 계정(jobIdentities) ─────────────
 
 await t("P1 격리 박스 · 홈 없는 작업 — 박스에 없는 전용 uid + lively-shared(주 그룹) · 홈 없음 · 설정 폴더 없음", () => {
   const p = jobPlacement({ homeless: true, subscription: false, box: box(), member: null, profile: null });
@@ -110,17 +112,19 @@ await t("P5 격리 박스인데 lively-shared 그룹이 없다 · 사람 작업�
 });
 
 await t("P6 비격리 박스 · 구독 — 게이트웨이 uid:gid · 그 사람의 프로필 설정 폴더를 같은 자리에(뿌리 = 프로필 뿌리) · CLAUDE_CONFIG_DIR 로 알린다", () => {
-  const p = jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false, sharedGid: null }), member: null, profile: { dir: "/home/lively/.lively/profiles/kim/claude", root: "/home/lively/.lively/profiles" } });
+  const p = jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false, sharedGid: null }), member: null, profile: okProfile });
   assert.deepEqual(p, {
     uid: 1001, gid: 1001, groups: [], home: JOB_BARE_HOME,
-    claude: { host: "/home/lively/.lively/profiles/kim/claude", target: "/home/lively/.lively/profiles/kim/claude", root: "/home/lively/.lively/profiles", configDirEnv: true }, runsAs: "gateway",
+    claude: { host: okProfile.dir, target: okProfile.dir, root: okProfile.root, configDirEnv: true }, runsAs: "gateway",
   });
 });
 
-await t("P7 비격리 박스 · 구독 · 단일 계정(프로필 없음) — 게이트웨이 ~/.claude(뿌리 = 게이트웨이 홈) · API 키 · 홈 없는 작업은 설정 폴더 없음", () => {
+await t("P7 비격리 박스 · 구독 — 설정 폴더가 없음 · 링크 · 남의 것이면 붙이지 않는다(단일 계정 스위치의 게이트웨이 ~/.claude 포함 — 도커가 그 자리를 root 로 만들지 않게 · 리뷰 B1) · 사실이 없으면 던진다", () => {
   const b = box({ isolated: false, sharedGid: null });
-  assert.deepEqual(jobPlacement({ homeless: false, subscription: true, box: b, member: null, profile: null }).claude,
-    { host: "/home/lively/.claude", target: "/home/lively/.claude", root: "/home/lively", configDirEnv: true });
+  for (const [state, re] of [["missing", /로그인 폴더가 없습니다/], ["link", /링크라/], ["foreign", /소유의 폴더가 아니라/]] as const) {
+    assert.throws(() => jobPlacement({ homeless: false, subscription: true, box: b, member: null, profile: { dir: "/home/lively/.claude", root: "/home/lively", state } }), re, state);
+  }
+  assert.throws(() => jobPlacement({ homeless: false, subscription: true, box: b, member: null, profile: null }), /확인하지 못했습니다/);
   for (const [homeless, subscription] of [[false, false], [true, false]] as const) {
     const p = jobPlacement({ homeless, subscription, box: b, member: null, profile: null });
     assert.equal(p.claude, null);
@@ -131,6 +135,12 @@ await t("P7 비격리 박스 · 구독 · 단일 계정(프로필 없음) — �
 
 await t("P8 비격리 박스의 게이트웨이가 root(uid 0) — 띄우지 않는다(컨테이너 안은 root 가 아닌 계정)", () => {
   assert.throws(() => jobPlacement({ homeless: false, subscription: false, box: box({ isolated: false, gateway: { uid: 0, gid: 0, home: "/root" } }), member: null, profile: null }), /root/);
+});
+
+await t("P9 정책의 계정 · 그룹(jobIdentities) — 격리: 그 계정(있으면) · 전용 uid:lively-shared / 그룹 lively-shared 만 · 비격리: 게이트웨이 계정만 / 그룹 없음", () => {
+  assert.deepEqual(jobIdentities(box(), kim), { users: ["200401:200401", `${DEFAULT_JOB_UID}:${SHARED_GID}`], groups: [SHARED_GID] });
+  assert.deepEqual(jobIdentities(box(), null), { users: [`${DEFAULT_JOB_UID}:${SHARED_GID}`], groups: [SHARED_GID] });
+  assert.deepEqual(jobIdentities(box({ isolated: false, sharedGid: null }), kim), { users: ["1001:1001"], groups: [] });
 });
 
 // ── G. 인자 · 정책 · 진짜 검사기 ─────────────────────────────────────────────────
@@ -165,7 +175,7 @@ await t("G3 env — 부트 넷(비밀 · id · 포트 · 워크스페이스) · 
   const bare = jobContainerEnv({ jobId: 42, bootSecret: SECRET, port: 8080, slug: null, tz: "UTC", place: jobPlacement({ homeless: true, subscription: false, box: box(), member: null, profile: null }) });
   for (const k of ["LVLY_JOB_WS", "LVLY_TENANT_SLUG", JOB_CLAUDE_DIR_ENV, "CLAUDE_CONFIG_DIR"]) assert.equal(bare[k], undefined, k);
   assert.equal(bare.HOME, JOB_BARE_HOME);
-  const gw = jobContainerEnv({ jobId: 42, bootSecret: SECRET, port: 8080, slug: null, tz: "UTC", place: jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false }), member: null, profile: null }) });
+  const gw = jobContainerEnv({ jobId: 42, bootSecret: SECRET, port: 8080, slug: null, tz: "UTC", place: jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false }), member: null, profile: { dir: "/home/lively/.claude", root: "/home/lively", state: "ok" } }) });
   assert.equal(gw.CLAUDE_CONFIG_DIR, "/home/lively/.claude");
   assert.equal(gw[JOB_CLAUDE_DIR_ENV], "/home/lively/.claude");
 });
@@ -176,33 +186,40 @@ await t("G4 env 파일 글 — KEY=VALUE 한 줄씩 · 줄바꿈 · CR · NUL �
   for (const k of ["1A", "A-B", "", "A B"]) assert.throws(() => envFileText({ [k]: "1" }), /넘길 수 없습니다/, k);
 });
 
-/** 진짜 폴더 한 벌 — 검사기가 실제 경로(realpath)로 본다. */
-function realTree(): { root: string; apps: string; work: string; homeRoot: string; home: string; bin: string; run: string; envFile: string; done: () => void } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-"));
-  const apps = path.join(root, "apps"), work = path.join(apps, "policy-bot");
+/** 진짜 폴더 한 벌 — 검사기 · 작업 폴더 확인이 실제 경로(realpath)로 본다. */
+interface Tree { root: string; apps: string; work: string; other: string; shared: string; project: string; homeRoot: string; home: string; profiles: string; profile: string; bin: string; run: string; done: () => void }
+function realTree(): Tree {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-")));
+  const apps = path.join(root, "apps"), work = path.join(apps, "policy-bot"), other = path.join(apps, "other-app");
+  const shared = path.join(root, "shared"), project = path.join(shared, "project", "7");
   const homeRoot = path.join(root, "home"), home = path.join(homeRoot, "box_kim");
-  const bin = path.join(root, "bin", "claude"), run = path.join(root, "run"), envFile = path.join(run, "lvly-job-42-0a1b2c3d.env");
-  for (const d of [work, path.join(home, ".claude"), path.dirname(bin), run]) fs.mkdirSync(d, { recursive: true });
+  const profiles = path.join(root, "profiles"), profile = path.join(profiles, "kim", "claude");
+  const bin = path.join(root, "bin", "claude"), run = path.join(root, "run");
+  for (const d of [work, other, project, path.join(home, ".claude"), profile, path.dirname(bin), run]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(other, "secret.txt"), "OTHER");
   fs.writeFileSync(bin, "\x7fELF", { mode: 0o755 });
-  fs.writeFileSync(envFile, "A=1\n", { mode: 0o600 });
-  return { root, apps, work, homeRoot, home, bin, run, envFile, done: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, apps, work, other, shared, project, homeRoot, home, profiles, profile, bin, run, done: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-/** 한 벌의 자리로 인자 · 정책을 짓는다. */
-function argsAndPolicy(tr: ReturnType<typeof realTree>, place: Pick<JobPlacement, "uid" | "gid" | "groups" | "home" | "claude">, over: { workHost?: string; workdir?: string } = {}): { args: string[]; policy: ReturnType<typeof jobContainerPolicy> } {
+/** 한 벌의 자리로 인자 · 정책을 짓는다(정책 사실은 자리 — 원본 · 계정 · 그룹). */
+function argsAndPolicy(tr: Tree, place: Pick<JobPlacement, "uid" | "gid" | "groups" | "home" | "claude">, over: { workHost?: string; workdir?: string; ids?: { users: string[]; groups: number[] } } = {}): { args: string[]; policy: DockerRunPolicy } {
   const workdir = over.workdir ?? "/work/apps/policy-bot";
+  const envFile = path.join(tr.run, "lvly-job-42-0a1b2c3d.env");
+  fs.writeFileSync(envFile, "A=1\n", { mode: 0o600 });
   const args = jobContainerArgs({
     name: "lvly-job-42-0a1b2c3d", image: "node:22-bookworm-slim", labels: { "lvly.agent-job": "1", "lvly.agent-job.id": "42" }, place, memoryMb: 3072,
-    workHost: over.workHost ?? tr.work, workdir, claudeBin: tr.bin, envFile: tr.envFile,
+    workHost: over.workHost ?? tr.work, workdir, claudeBin: tr.bin, envFile,
   });
+  const ids = over.ids ?? { users: [`${place.uid}:${place.gid}`], groups: place.groups };
   const policy = jobContainerPolicy({
-    image: "node:22-bookworm-slim", workRoot: tr.apps, workdir: "/work/apps/policy-bot", claude: place.claude ? { root: place.claude.root, target: place.claude.target } : null,
-    claudeBin: tr.bin, envRoot: tr.run, home: place.home, groups: place.groups,
+    image: "node:22-bookworm-slim", work: { root: tr.apps, source: tr.work, target: "/work/apps/policy-bot" },
+    claude: place.claude ? { root: place.claude.root, source: place.claude.host, target: place.claude.target } : null,
+    claudeBin: tr.bin, envRoot: tr.run, home: place.home, users: ids.users, groups: ids.groups,
   });
   return { args, policy };
 }
 
-const subPlace = (tr: ReturnType<typeof realTree>): JobPlacement => jobPlacement({ homeless: false, subscription: true, box: box(), member: { ...kim, home: tr.home }, profile: null });
+const subPlace = (tr: Tree): JobPlacement => jobPlacement({ homeless: false, subscription: true, box: box(), member: { ...kim, home: tr.home }, profile: null });
 
 await t("G5 세 자리(격리 구독 · 격리 홈 없음 · 비격리 구독) 모두 진짜 검사기를 지난다 — 이미지 · 판 머리 · 부트가 끝에 그대로", () => {
   const tr = realTree();
@@ -210,7 +227,7 @@ await t("G5 세 자리(격리 구독 · 격리 홈 없음 · 비격리 구독) �
     const places: JobPlacement[] = [
       subPlace(tr),
       jobPlacement({ homeless: true, subscription: false, box: box(), member: null, profile: null }),
-      jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false }), member: null, profile: { dir: path.join(tr.home, ".claude"), root: tr.homeRoot } }),
+      jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false }), member: null, profile: { dir: tr.profile, root: tr.profiles, state: "ok" } }),
     ];
     for (const pl of places) {
       const { args, policy } = argsAndPolicy(tr, pl);
@@ -221,7 +238,7 @@ await t("G5 세 자리(격리 구독 · 격리 홈 없음 · 비격리 구독) �
   } finally { tr.done(); }
 });
 
-await t("G6 인자의 막이 — 분리 · 끝나면 지움 · host 네트워크 · 루트 읽기 전용 · 메모리 = 메모리+스왑 · cap 전부 빼기 · no-new-privileges · --init · 그 사용자 · 비밀 없음", () => {
+await t("G6 인자의 막이 — 분리 · 끝나면 지움 · host 네트워크 · 루트 읽기 전용 · 메모리 = 메모리+스왑 · oom 먼저 · cap 전부 빼기 · no-new-privileges · --init · 그 사용자 · 없는 원본은 실패하는 바인드 셋뿐 · tmpfs exec · 비밀 없음", () => {
   const tr = realTree();
   try {
     const { args } = argsAndPolicy(tr, subPlace(tr));
@@ -230,6 +247,7 @@ await t("G6 인자의 막이 — 분리 · 끝나면 지움 · host 네트워크
     assert.deepEqual(val("--network"), ["host"]);
     assert.deepEqual(val("--memory"), ["3072m"]);
     assert.deepEqual(val("--memory-swap"), ["3072m"]);
+    assert.deepEqual(val("--oom-score-adj"), ["1000"]);
     assert.deepEqual(val("--cap-drop"), ["ALL"]);
     assert.deepEqual(val("--security-opt"), ["no-new-privileges"]);
     assert.deepEqual(val("--user"), ["200401:200401"]);
@@ -237,69 +255,95 @@ await t("G6 인자의 막이 — 분리 · 끝나면 지움 · host 네트워크
     assert.deepEqual(val("--restart"), ["no"]);
     assert.deepEqual(val("--workdir"), ["/work/apps/policy-bot"]);
     assert.ok(Number(val("--pids-limit")[0]) > 0);
-    //  HOME 은 그 사용자의 빈 tmpfs(0700) · /tmp 도 tmpfs.
-    assert.ok(val("--tmpfs").some((v) => v.startsWith(`${tr.home}:`) && v.includes("mode=0700") && v.includes("uid=200401") && v.includes("gid=200401")));
-    assert.ok(val("--tmpfs").some((v) => v.startsWith("/tmp:")));
-    //  붙는 것은 셋뿐 — 작업 폴더(쓰기) · ~/.claude(쓰기) · 하네스 실행 파일(읽기 전용).
-    assert.deepEqual(val("--volume").sort(), [`${tr.work}:/work/apps/policy-bot`, `${path.join(tr.home, ".claude")}:${path.join(tr.home, ".claude")}`, `${tr.bin}:${JOB_CLAUDE_TARGET}:ro`].sort());
-    assert.deepEqual(val("--env-file"), [tr.envFile]);
+    //  HOME 은 그 사용자의 빈 tmpfs(0700) · /tmp 도 tmpfs · 둘 다 exec(도커 기본 noexec 를 푼다).
+    const home = val("--tmpfs").find((v) => v.startsWith(`${tr.home}:`)) ?? "";
+    assert.ok(home.includes("mode=0700") && home.includes("uid=200401") && home.includes("gid=200401") && home.split(",").includes("exec"), home);
+    assert.ok(val("--tmpfs").some((v) => v.startsWith("/tmp:") && v.split(",").includes("exec")));
+    //  붙는 것은 셋뿐 — 작업 폴더(쓰기) · ~/.claude(쓰기) · 하네스 실행 파일(읽기 전용) — 모두 --mount type=bind(-v 는 없는 원본을 root 로 만든다).
+    assert.equal(val("--volume").length, 0, "-v 를 쓰지 않는다");
+    assert.deepEqual(val("--mount").sort(), [
+      `type=bind,src=${tr.work},dst=/work/apps/policy-bot`,
+      `type=bind,src=${path.join(tr.home, ".claude")},dst=${path.join(tr.home, ".claude")}`,
+      `type=bind,src=${tr.bin},dst=${JOB_CLAUDE_TARGET},readonly`,
+    ].sort());
+    assert.ok(val("--env-file")[0]!.startsWith(tr.run));
     assert.ok(!args.join("\n").includes("bootSecret"), "부트 비밀은 인자에 없다");
     assert.ok(!args.some((a) => a === "-e" || a === "--env"), "env 는 파일로만");
+    //  쉼표 · 따옴표가 든 경로는 --mount 에 못 싣는다 — 짓지 않는다(다시 해도 같다).
+    assert.throws(() => jobContainerArgs({ name: "lvly-job-42-0a1b2c3d", image: "i", labels: {}, place: subPlace(tr), memoryMb: 1, workHost: "/srv/a,b", workdir: "/work/apps/policy-bot", claudeBin: tr.bin, envFile: "/e" }),
+      (e: unknown) => e instanceof JobLaunchError && !e.transient && /쉼표/.test(e.message));
   } finally { tr.done(); }
 });
 
-await t("G7 정책이 막는 것 — 뿌리 밖 작업 폴더 · 행과 다른 작업 폴더 자리 · 홈 밖 설정 폴더 · 하네스 쓰기 마운트 · 다른 이미지 · 정책 밖 그룹 · 홈이 아닌 tmpfs", () => {
+await t("G7 정책이 막는 것 — 뿌리 밖 · 형제 앱 폴더 · 행과 다른 자리 · 홈 밖 설정 폴더 · 하네스 쓰기 · 다른 이미지 · 정책 밖 그룹 · 정책 밖 계정(gid 0 포함) · 홈이 아닌 tmpfs · docker 소켓", () => {
   const tr = realTree();
   try {
     const pl = subPlace(tr);
-    const reject = (args: string[], policy: ReturnType<typeof jobContainerPolicy>, re: RegExp, why: string): void => {
+    const reject = (args: string[], policy: DockerRunPolicy, re: RegExp, why: string): void => {
       assert.throws(() => assertSafeDockerRun(args, policy), (e: unknown) => e instanceof DockerRunRejected && re.test(e.message), why);
     };
-    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-out-"));
+    const base = argsAndPolicy(tr, pl);
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-out-")));
     try {
-      reject(argsAndPolicy(tr, pl, { workHost: outside }).args, argsAndPolicy(tr, pl).policy, /마운트 원본/, "apps 뿌리 밖의 폴더를 작업 폴더로");
-      reject(argsAndPolicy(tr, pl, { workdir: "/work/apps/other-app" }).args, argsAndPolicy(tr, pl).policy, /마운트 원본/, "행의 작업 폴더가 아닌 자리에");
-      //  링크로 뿌리 밖을 가리켜도 실제 경로로 본다.
+      reject(argsAndPolicy(tr, pl, { workHost: outside }).args, base.policy, /마운트 원본/, "apps 뿌리 밖의 폴더를 작업 폴더로");
+      reject(argsAndPolicy(tr, pl, { workHost: tr.other }).args, base.policy, /마운트 원본/, "같은 뿌리 안의 형제 앱 폴더(리뷰 NB1)");
+      reject(argsAndPolicy(tr, pl, { workHost: tr.apps }).args, base.policy, /마운트 원본/, "apps 뿌리 자체");
+      reject(argsAndPolicy(tr, pl, { workdir: "/work/apps/other-app" }).args, base.policy, /마운트 원본/, "행의 작업 폴더가 아닌 자리에");
       const link = path.join(tr.apps, "sneaky");
       fs.symlinkSync(outside, link);
-      reject(argsAndPolicy(tr, pl, { workHost: link }).args, argsAndPolicy(tr, pl).policy, /마운트 원본/, "뿌리 안 링크 → 밖");
+      reject(argsAndPolicy(tr, pl, { workHost: link }).args, base.policy, /마운트 원본/, "뿌리 안 링크 → 밖");
     } finally { fs.rmSync(outside, { recursive: true, force: true }); }
-    const { args, policy } = argsAndPolicy(tr, pl);
-    const swap = (from: string, to: string): string[] => args.map((a) => (a === from ? to : a));
-    reject(swap(`${path.join(tr.home, ".claude")}:${path.join(tr.home, ".claude")}`, `${tr.root}:${path.join(tr.home, ".claude")}`), policy, /마운트 원본/, "홈 밖을 설정 폴더 자리에");
-    reject(swap(`${tr.bin}:${JOB_CLAUDE_TARGET}:ro`, `${tr.bin}:${JOB_CLAUDE_TARGET}`), policy, /마운트 원본/, "하네스 실행 파일을 쓰기로");
+    const { args, policy } = base;
+    const swap = (from: string, to: string): string[] => { assert.ok(args.includes(from), from); return args.map((a) => (a === from ? to : a)); };
+    const claudeMount = `type=bind,src=${path.join(tr.home, ".claude")},dst=${path.join(tr.home, ".claude")}`;
+    reject(swap(claudeMount, `type=bind,src=${tr.root},dst=${path.join(tr.home, ".claude")}`), policy, /마운트 원본/, "홈 밖을 설정 폴더 자리에");
+    reject(swap(claudeMount, `type=bind,src=${tr.home},dst=${path.join(tr.home, ".claude")}`), policy, /마운트 원본/, "홈 전체를 설정 폴더 자리에(리뷰 NB1)");
+    reject(swap(`type=bind,src=${tr.bin},dst=${JOB_CLAUDE_TARGET},readonly`, `type=bind,src=${tr.bin},dst=${JOB_CLAUDE_TARGET}`), policy, /마운트 원본/, "하네스 실행 파일을 쓰기로");
     reject(swap("node:22-bookworm-slim", "evil:latest"), policy, /이미지/, "다른 이미지");
     reject(swap(String(SHARED_GID), "27"), policy, /group-add/, "정책 밖 그룹(sudo 등)");
-    reject(swap(`${pl.home}:rw,nosuid,nodev,size=256m,mode=0700,uid=200401,gid=200401`, `/etc:rw,nosuid,nodev,size=256m,mode=0700,uid=200401,gid=200401`), policy, /tmpfs 자리/, "홈이 아닌 tmpfs");
-    reject([...args.slice(0, 1), "--volume", "/var/run/docker.sock:/var/run/docker.sock", ...args.slice(1)], policy, /docker 소켓/, "docker 소켓");
+    reject(swap("200401:200401", "200402:200401"), policy, /돌 수 있는 계정이 아닙니다/, "정책 밖 계정");
+    reject(swap("200401:200401", "200401:0"), policy, /돌 수 있는 계정이 아닙니다/, "gid 0");
+    reject(swap(`${pl.home}:rw,exec,nosuid,nodev,size=256m,mode=0700,uid=200401,gid=200401`, "/etc:rw,exec,nosuid,nodev,size=256m,mode=0700,uid=200401,gid=200401"), policy, /tmpfs 자리/, "홈이 아닌 tmpfs");
+    reject([...args.slice(0, 1), "--mount", "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock", ...args.slice(1)], policy, /docker 소켓/, "docker 소켓");
   } finally { tr.done(); }
 });
 
 await t("G8 정책 — 행의 작업 폴더가 두 꼴(앱 폴더 · 프로젝트 폴더) 밖이면 짓지 않는다", () => {
-  for (const bad of ["/work/apps/policy-bot/sub", "/work/apps/../etc", "/srv/lively/apps/x", "/work/shared/project/0", "/work/shared"]) {
-    assert.throws(() => jobContainerPolicy({ image: "i", workRoot: "/srv", workdir: bad, claude: null, claudeBin: "/b", envRoot: "/r", home: JOB_BARE_HOME, groups: [] }), /꼴이 아닙니다/, bad);
-  }
-  assert.doesNotThrow(() => jobContainerPolicy({ image: "i", workRoot: "/srv", workdir: "/work/shared/project/12", claude: null, claudeBin: "/b", envRoot: "/r", home: JOB_BARE_HOME, groups: [] }));
+  const mk = (target: string): DockerRunPolicy => jobContainerPolicy({ image: "i", work: { root: "/srv", source: "/srv/x", target }, claude: null, claudeBin: "/b", envRoot: "/r", home: JOB_BARE_HOME, users: ["1:1"], groups: [] });
+  for (const bad of ["/work/apps/policy-bot/sub", "/work/apps/../etc", "/srv/lively/apps/x", "/work/shared/project/0", "/work/shared"]) assert.throws(() => mk(bad), /꼴이 아닙니다/, bad);
+  assert.doesNotThrow(() => mk("/work/shared/project/12"));
 });
 
-// ── C. 띄우기(바꿔 끼운 의존) ────────────────────────────────────────────────────
+// ── C. 띄우기(진짜 폴더 · 진짜 작업 폴더 확인 · 진짜 검사기 — 바꿔 끼운 것은 도커 · 계정 · DB) ──
 
-interface Rec { calls: string[]; envText: string | null; args: string[] | null; policy: unknown; removedEnv: string[] }
-function fakeDeps(over: Partial<DockerLaunchDeps> = {}, rec: Rec = { calls: [], envText: null, args: null, policy: null, removedEnv: [] }): { d: DockerLaunchDeps; rec: Rec } {
+interface Rec { calls: string[]; envText: string | null; args: string[] | null; policy: DockerRunPolicy | null; guard: string | null; removedEnv: string[] }
+function fakeDeps(tr: Tree, over: Partial<DockerLaunchDeps> = {}): { d: DockerLaunchDeps; rec: Rec } {
+  const rec: Rec = { calls: [], envText: null, args: null, policy: null, guard: null, removedEnv: [] };
   const c = (s: string): void => { rec.calls.push(s); };
   const d: DockerLaunchDeps = {
-    box: async () => { c("box"); return box(); },
+    box: async () => { c("box"); return box({ claudeBin: tr.bin }); },
     accountUser: async (m) => { c(`accountUser:${m}`); return { userId: m, scopes: [] } as unknown as LivelyUser; },
     ensureOsUser: async (u) => { c(`ensureOsUser:${u.userId}`); return `box_${u.userId}`; },
-    memberFacts: async (osUser, want) => { c(`memberFacts:${osUser}:${want}`); return { ...kim, claude: want ? "ok" : null }; },
-    profileDir: async (u) => { c(`profileDir:${u.userId}`); return { dir: `/home/lively/.lively/profiles/${u.userId}/claude`, root: "/home/lively/.lively/profiles" }; },
-    resolveWork: async (_u, dir, osUser) => { c(`resolveWork:${dir.root}/${dir.sub}:${osUser}`); return { abs: `/srv/lively/${dir.root}/${dir.sub}`, base: `/srv/lively/${dir.root}` }; },
-    mkdirWork: async (osUser, abs, shared) => { c(`mkdirWork:${osUser}:${abs}:${shared}`); },
+    memberFacts: async (osUser, want) => { c(`memberFacts:${osUser}:${want}`); return { ...kim, home: tr.home, claude: want ? "ok" : null }; },
+    profileDir: async (u) => { c(`profileDir:${u.userId}`); return { dir: tr.profile, root: tr.profiles, state: "ok" }; },
+    resolveWork: async (_u, dir, osUser) => {
+      c(`resolveWork:${dir.root}/${dir.sub}:${osUser}`);
+      const base = dir.root === "apps" ? tr.apps : tr.shared;
+      return { abs: path.join(base, dir.sub), base };
+    },
+    mkdirWork: async (osUser, abs, shared) => { c(`mkdirWork:${osUser}:${path.relative(tr.root, abs)}:${shared}`); },
+    checkWork: async (work) => { c("checkWork"); return workDirState(work); },
     memoryMaxMb: async () => { c("memoryMaxMb"); return 3072; },
     ensureImage: async (image) => { c(`ensureImage:${image}`); },
-    writeEnvFile: async (name, text) => { c(`writeEnvFile:${name}`); rec.envText = text; return { file: `/data/agent-jobs/run/${name}.env`, root: "/data/agent-jobs/run" }; },
-    removeEnvFile: async (file) => { c("removeEnvFile"); rec.removedEnv.push(file); },
-    run: async (args, policy) => { c("run"); rec.args = args; rec.policy = policy; },
+    writeEnvFile: async (name, text) => {
+      c(`writeEnvFile:${name}`); rec.envText = text;
+      const file = path.join(tr.run, `${name}.env`);
+      fs.writeFileSync(file, text, { mode: 0o600 });
+      return { file, root: tr.run };
+    },
+    removeEnvFile: async (file) => { c("removeEnvFile"); rec.removedEnv.push(file); fs.rmSync(file, { force: true }); },
+    //  진짜 검사기를 거친다 — launchDockerJob 이 지은 인자와 정책이 서로 맞는지가 여기서 갈린다.
+    run: async (args, policy) => { c("run"); rec.args = args; rec.policy = policy; assertSafeDockerRun(args, policy); rec.guard = "ok"; },
     remove: async (name) => { c(`remove:${name}`); },
     tz: async () => "Asia/Seoul",
     slug: () => null,
@@ -314,73 +358,108 @@ const failsWith = async (p: Promise<unknown>, test: (e: JobLaunchError) => void)
   assert.ok(err instanceof JobLaunchError, `JobLaunchError 여야 한다: ${String(err)}`);
   test(err as JobLaunchError);
 };
+const mounts = (args: string[]): string[] => args.flatMap((a, i) => (a === "--mount" ? [args[i + 1]!] : []));
+const userOf = (args: string[]): string => args[args.indexOf("--user") + 1]!;
 
-await t("C1 격리 박스 · 구독 — 도커 → 상한 → 그 계정 → ~/.claude 확인 → 작업 폴더(그 계정이 만든다) → 이미지 → env 파일 → 띄움 → env 파일 지움(순서) · 이름 = lvly-<세션>", async () => {
-  const { d, rec } = fakeDeps();
-  const r = await launchDockerJob(row(), SECRET, d);
-  assert.equal(r.container, "lvly-job-42-0a1b2c3d");
-  assert.deepEqual(rec.calls, [
-    "box", "memoryMaxMb", "accountUser:kim", "ensureOsUser:kim", "memberFacts:box_kim:true",
-    "resolveWork:apps/policy-bot:box_kim", "mkdirWork:box_kim:/srv/lively/apps/policy-bot:false", "ensureImage:node:22-bookworm-slim",
-    "writeEnvFile:lvly-job-42-0a1b2c3d", "run", "removeEnvFile",
-  ]);
-  assert.ok(rec.envText!.includes(`LVLY_JOB_BOOT=${SECRET}\n`));
-  assert.ok(!rec.args!.join("\n").includes(SECRET), "비밀은 인자에 없다");
-  assert.ok(rec.args!.includes("/srv/lively/apps/policy-bot:/work/apps/policy-bot"));
-  assert.ok(rec.args!.includes("/home/box_kim/.claude:/home/box_kim/.claude"));
-  assert.deepEqual(rec.removedEnv, ["/data/agent-jobs/run/lvly-job-42-0a1b2c3d.env"]);
+await t("C1 격리 박스 · 구독 — 순서(도커 → 상한 → 그 계정 → ~/.claude → 작업 폴더 만들고 확인 → 이미지 → env → 띄움 → env 지움) · 진짜 검사기 통과 · 정책 사실(원본 · 계정 · 그룹 · env 뿌리)", async () => {
+  const tr = realTree();
+  try {
+    const { d, rec } = fakeDeps(tr);
+    const r = await launchDockerJob(row(), SECRET, d);
+    assert.equal(r.container, "lvly-job-42-0a1b2c3d");
+    assert.deepEqual(rec.calls, [
+      "box", "memoryMaxMb", "accountUser:kim", "ensureOsUser:kim", "memberFacts:box_kim:true",
+      "resolveWork:apps/policy-bot:box_kim", "mkdirWork:box_kim:apps/policy-bot:false", "checkWork", "ensureImage:node:22-bookworm-slim",
+      "writeEnvFile:lvly-job-42-0a1b2c3d", "run", "removeEnvFile",
+    ]);
+    assert.equal(rec.guard, "ok", "진짜 검사기를 지났다");
+    assert.ok(rec.envText!.includes(`LVLY_JOB_BOOT=${SECRET}\n`));
+    assert.ok(!rec.args!.join("\n").includes(SECRET), "비밀은 인자에 없다");
+    const p = rec.policy!;
+    assert.deepEqual(p.binds.map((b) => [b.root, b.source, b.rw]), [[tr.apps, tr.work, true], [tr.home, path.join(tr.home, ".claude"), true], [tr.bin, tr.bin, false]]);
+    assert.deepEqual(p.users, ["200401:200401", `${DEFAULT_JOB_UID}:${SHARED_GID}`]);
+    assert.deepEqual(p.groupAdds, [SHARED_GID]);
+    assert.deepEqual(p.envFiles, [tr.run]);
+    assert.deepEqual(p.tmpfs, ["/tmp", tr.home]);
+    assert.equal(userOf(rec.args!), "200401:200401");
+    assert.deepEqual(rec.removedEnv, [path.join(tr.run, "lvly-job-42-0a1b2c3d.env")]);
+    assert.equal(fs.readdirSync(tr.run).length, 0, "env 파일이 남지 않는다");
+  } finally { tr.done(); }
 });
 
-await t("C2 격리 박스 · 홈 없는 작업 — 그 사람의 계정 · 홈을 쓰지 않는다(OS 계정 · 계정 사실 · 실행 계정 조회 없음) · 앱 자리는 전용 계정 기준 · 폴더는 게이트웨이가 2775 로 · 전용 uid", async () => {
-  const { d, rec } = fakeDeps();
-  await launchDockerJob(row({ homeless: true, account_kind: "api_key", account_member: null, requester: "app-srv-member" } as Partial<AgentJobRow>), SECRET, d);
-  assert.ok(!rec.calls.some((c) => c.startsWith("ensureOsUser") || c.startsWith("memberFacts") || c.startsWith("accountUser") || c.startsWith("profileDir")), rec.calls.join(" "));
-  assert.ok(rec.calls.includes(`resolveWork:apps/policy-bot:${HOMELESS_OS_USER}`));
-  assert.ok(rec.calls.includes("mkdirWork:null:/srv/lively/apps/policy-bot:true"));
-  const at = rec.args!.indexOf("--user");
-  assert.equal(rec.args![at + 1], `${DEFAULT_JOB_UID}:${SHARED_GID}`);
-  assert.ok(!rec.args!.some((a) => a.includes(".claude")), "설정 폴더를 붙이지 않는다");
+await t("C2 격리 박스 · 홈 없는 작업 — 그 사람의 계정 · 홈을 쓰지 않는다 · 앱 자리는 전용 계정 기준 · 폴더는 게이트웨이가 2775 로 · 전용 uid · 정책 계정은 전용 uid 하나", async () => {
+  const tr = realTree();
+  try {
+    const { d, rec } = fakeDeps(tr);
+    await launchDockerJob(row({ homeless: true, account_kind: "api_key", account_member: null, requester: "app-srv-member" } as Partial<AgentJobRow>), SECRET, d);
+    assert.ok(!rec.calls.some((c) => c.startsWith("ensureOsUser") || c.startsWith("memberFacts") || c.startsWith("accountUser") || c.startsWith("profileDir")), rec.calls.join(" "));
+    assert.ok(rec.calls.includes(`resolveWork:apps/policy-bot:${HOMELESS_OS_USER}`));
+    assert.ok(rec.calls.includes("mkdirWork:null:apps/policy-bot:true"));
+    assert.equal(rec.guard, "ok");
+    assert.equal(userOf(rec.args!), `${DEFAULT_JOB_UID}:${SHARED_GID}`);
+    assert.deepEqual(rec.policy!.users, [`${DEFAULT_JOB_UID}:${SHARED_GID}`]);
+    assert.deepEqual(rec.policy!.groupAdds, [SHARED_GID], "정책 그룹은 박스 사실(lively-shared) — 자리 판정의 그룹이 아니다");
+    assert.ok(!mounts(rec.args!).some((a) => a.includes(".claude")), "설정 폴더를 붙이지 않는다");
+    assert.equal(rec.policy!.binds.length, 2);
+  } finally { tr.done(); }
 });
 
-await t("C3 비격리 박스 · 구독 — OS 계정을 만들지 않고 그 사람의 프로필 폴더를 붙인다 · 게이트웨이 uid · 폴더는 게이트웨이가", async () => {
-  const { d, rec } = fakeDeps({ box: async () => { rec.calls.push("box"); return box({ isolated: false, sharedGid: null }); } });
-  await launchDockerJob(row(), SECRET, d);
-  assert.ok(!rec.calls.some((c) => c.startsWith("ensureOsUser") || c.startsWith("memberFacts")));
-  assert.ok(rec.calls.includes("profileDir:kim"));
-  assert.ok(rec.calls.includes("resolveWork:apps/policy-bot:null"));
-  assert.ok(rec.calls.includes("mkdirWork:null:/srv/lively/apps/policy-bot:false"));
-  assert.ok(rec.envText!.includes("CLAUDE_CONFIG_DIR=/home/lively/.lively/profiles/kim/claude\n"));
-  assert.equal(rec.args![rec.args!.indexOf("--user") + 1], "1001:1001");
+await t("C3 비격리 박스 · 구독 — OS 계정을 만들지 않고 그 사람의 프로필 폴더를 붙인다 · 게이트웨이 uid · 정책의 설정 폴더 = 프로필 뿌리 아래 그 폴더 하나", async () => {
+  const tr = realTree();
+  try {
+    const { d, rec } = fakeDeps(tr, { box: async () => box({ isolated: false, sharedGid: null, claudeBin: tr.bin }) });
+    await launchDockerJob(row(), SECRET, d);
+    assert.ok(!rec.calls.some((c) => c.startsWith("ensureOsUser") || c.startsWith("memberFacts")));
+    assert.ok(rec.calls.includes("profileDir:kim"));
+    assert.ok(rec.calls.includes("resolveWork:apps/policy-bot:null"));
+    assert.ok(rec.calls.includes("mkdirWork:null:apps/policy-bot:false"));
+    assert.ok(rec.envText!.includes(`CLAUDE_CONFIG_DIR=${tr.profile}\n`));
+    assert.equal(rec.guard, "ok");
+    assert.equal(userOf(rec.args!), "1001:1001");
+    assert.deepEqual(rec.policy!.users, ["1001:1001"]);
+    assert.deepEqual(rec.policy!.groupAdds, []);
+    assert.deepEqual(rec.policy!.binds[1]!.root, tr.profiles);
+    assert.deepEqual(rec.policy!.binds[1]!.source, tr.profile);
+  } finally { tr.done(); }
 });
 
 await t("C4 상한 0 — 도커 메모리 전체로 건다(검사기는 --memory 를 꼭 받는다) · 스왑 상한을 못 거는 박스여도 상한 0 이면 띄운다", async () => {
-  const { d, rec } = fakeDeps({ memoryMaxMb: async () => 0, box: async () => box({ swapLimit: false, memMb: 5000 }) });
-  await launchDockerJob(row(), SECRET, d);
-  assert.equal(rec.args![rec.args!.indexOf("--memory") + 1], "5000m");
-  assert.equal(rec.args![rec.args!.indexOf("--memory-swap") + 1], "5000m");
+  const tr = realTree();
+  try {
+    const { d, rec } = fakeDeps(tr, { memoryMaxMb: async () => 0, box: async () => box({ swapLimit: false, memMb: 5000, claudeBin: tr.bin }) });
+    await launchDockerJob(row(), SECRET, d);
+    assert.equal(rec.args![rec.args!.indexOf("--memory") + 1], "5000m");
+    assert.equal(rec.args![rec.args!.indexOf("--memory-swap") + 1], "5000m");
+  } finally { tr.done(); }
 });
 
 await t("C5 다시 해도 안 될 것 — 부수효과(작업 폴더 · env 파일 · 띄우기) 없이 JobLaunchError(일시 아님)", async () => {
-  const cases: Array<[string, Partial<AgentJobRow>, Partial<DockerLaunchDeps>, RegExp]> = [
-    ["세션 id 없음", { session_id: null } as Partial<AgentJobRow>, {}, /세션 id/],
-    ["세션 id 꼴 밖", { session_id: "box-kim-1" } as Partial<AgentJobRow>, {}, /세션 id/],
-    ["홈 없는 작업 · 구독", { homeless: true } as Partial<AgentJobRow>, {}, /API 키/],
-    ["홈 없는 작업 · 프로젝트", { homeless: true, account_kind: "api_key", project_id: 7, cwd: "/work/shared/project/7" } as Partial<AgentJobRow>, {}, /프로젝트/],
-    ["실행 계정 없음", { account_member: null } as Partial<AgentJobRow>, {}, /실행 계정/],
-    ["작업 폴더 꼴 밖", { cwd: "/work/apps/policy-bot/../../etc" } as Partial<AgentJobRow>, {}, /작업 폴더 꼴/],
-    ["스왑 상한 못 걺 · 상한 있음", {}, { box: async () => box({ swapLimit: false }) }, /스왑 상한/],
-    ["~/.claude 링크", {}, { memberFacts: async () => ({ ...kim, claude: "link" }) }, /링크/],
-    ["lively-shared 없음", {}, { box: async () => box({ sharedGid: null }) }, /lively-shared/],
-    ["검사기 거절", {}, { run: async () => { throw new DockerRunRejected("모르는 깃발입니다: --privileged"); } }, /컨테이너 인자를 거절/],
+  const cases: Array<[string, Partial<AgentJobRow>, (tr: Tree) => Partial<DockerLaunchDeps>, RegExp]> = [
+    ["세션 id 없음", { session_id: null } as Partial<AgentJobRow>, () => ({}), /세션 id/],
+    ["세션 id 꼴 밖", { session_id: "box-kim-1" } as Partial<AgentJobRow>, () => ({}), /세션 id/],
+    ["홈 없는 작업 · 구독", { homeless: true } as Partial<AgentJobRow>, () => ({}), /API 키/],
+    ["홈 없는 작업 · 프로젝트", { homeless: true, account_kind: "api_key", project_id: 7, cwd: "/work/shared/project/7" } as Partial<AgentJobRow>, () => ({}), /프로젝트/],
+    ["실행 계정 없음", { account_member: null } as Partial<AgentJobRow>, () => ({}), /실행 계정/],
+    ["작업 폴더 꼴 밖", { cwd: "/work/apps/policy-bot/../../etc" } as Partial<AgentJobRow>, () => ({}), /작업 폴더 꼴/],
+    ["스왑 상한 못 걺 · 상한 있음", {}, (tr) => ({ box: async () => box({ swapLimit: false, claudeBin: tr.bin }) }), /스왑 상한/],
+    ["~/.claude 링크", {}, (tr) => ({ memberFacts: async () => ({ ...kim, home: tr.home, claude: "link" }) }), /링크/],
+    ["lively-shared 없음", {}, (tr) => ({ box: async () => box({ sharedGid: null, claudeBin: tr.bin }) }), /lively-shared/],
+    ["비격리 · 게이트웨이 설정 폴더 없음(리뷰 B1)", {}, (tr) => ({ box: async () => box({ isolated: false, sharedGid: null, claudeBin: tr.bin }), profileDir: async () => ({ dir: path.join(tr.root, "gw-home", ".claude"), root: path.join(tr.root, "gw-home"), state: "missing" }) }), /로그인 폴더가 없습니다/],
+    ["작업 폴더 자리가 행과 다름(형제 · 리뷰 NB1)", {}, (tr) => ({ resolveWork: async () => ({ abs: tr.other, base: tr.apps }) }), /맞지 않습니다/],
+    ["작업 폴더 자리가 뿌리 밖", {}, (tr) => ({ resolveWork: async () => ({ abs: "/etc", base: tr.apps }) }), /맞지 않습니다/],
+    ["검사기 거절", {}, () => ({ run: async () => { throw new DockerRunRejected("모르는 깃발입니다: --privileged"); } }), /컨테이너 인자를 거절/],
   ];
   for (const [why, over, dover, re] of cases) {
-    const { d, rec } = fakeDeps(dover);
-    await failsWith(launchDockerJob(row(over), SECRET, d), (e) => {
-      assert.equal(e.transient, false, why);
-      assert.match(e.message, re, why);
-    });
-    if (why !== "검사기 거절") assert.ok(!rec.calls.some((c) => c.startsWith("mkdirWork") || c.startsWith("writeEnvFile") || c === "run"), `${why}: ${rec.calls.join(" ")}`);
-    else assert.deepEqual(rec.removedEnv.length, 1, "거절돼도 env 파일은 지운다");
+    const tr = realTree();
+    try {
+      const { d, rec } = fakeDeps(tr, dover(tr));
+      await failsWith(launchDockerJob(row(over), SECRET, d), (e) => {
+        assert.equal(e.transient, false, why);
+        assert.match(e.message, re, why);
+      });
+      if (why !== "검사기 거절") assert.ok(!rec.calls.some((c) => c.startsWith("mkdirWork") || c.startsWith("writeEnvFile") || c === "run"), `${why}: ${rec.calls.join(" ")}`);
+      else assert.equal(rec.removedEnv.length, 1, "거절돼도 env 파일은 지운다");
+    } finally { tr.done(); }
   }
 });
 
@@ -392,34 +471,84 @@ await t("C6 인프라가 잠깐 막힘 — 일시(transient) 실패 · 단계 �
     ["OS 계정 던짐", { ensureOsUser: boom("useradd 실패") }, /OS 계정을 준비하지 못했습니다/],
     ["OS 계정 null", { ensureOsUser: async () => null }, /게이트웨이 계정으로는 띄우지 않는다/],
     ["계정 사실", { memberFacts: boom("id 실패") }, /OS 계정을 준비하지 못했습니다/],
-    ["작업 폴더", { mkdirWork: boom("EACCES") }, /작업 폴더를 만들지 못했습니다/],
+    ["작업 폴더 자리", { resolveWork: boom("EACCES") }, /작업 폴더를 만들지 못했습니다/],
+    ["작업 폴더 만들기", { mkdirWork: boom("EACCES") }, /작업 폴더를 만들지 못했습니다/],
+    ["작업 폴더 확인", { checkWork: boom("EACCES") }, /작업 폴더를 만들지 못했습니다/],
+    ["작업 폴더가 만든 뒤에도 없음", { checkWork: async () => "missing" as const }, /만든 뒤에도 없습니다/],
     ["이미지", { ensureImage: boom("pull 실패") }, /작업 컨테이너를 확보하지 못했습니다: pull/],
     ["띄우기", { run: boom(`docker run 실패: Command failed: docker run ... LVLY_JOB_BOOT=${SECRET}`) }, /작업 컨테이너를 확보하지 못했습니다/],
   ];
   for (const [why, over, re] of cases) {
-    const { d, rec } = fakeDeps(over);
-    await failsWith(launchDockerJob(row(), SECRET, d), (e) => {
-      assert.equal(e.transient, true, why);
-      assert.match(e.message, re, why);
-      assert.ok(!e.message.includes(SECRET), `${why}: 비밀이 글에 남았다`);
-    });
-    if (why === "띄우기") assert.equal(rec.removedEnv.length, 1, "띄우기 실패여도 env 파일을 지운다");
+    const tr = realTree();
+    try {
+      const { d, rec } = fakeDeps(tr, over);
+      await failsWith(launchDockerJob(row(), SECRET, d), (e) => {
+        assert.equal(e.transient, true, why);
+        assert.match(e.message, re, why);
+        assert.ok(!e.message.includes(SECRET), `${why}: 비밀이 글에 남았다`);
+      });
+      if (why === "띄우기") { assert.equal(rec.removedEnv.length, 1, "띄우기 실패여도 env 파일을 지운다"); assert.equal(fs.readdirSync(tr.run).length, 0); }
+    } finally { tr.done(); }
   }
 });
 
 await t("C7 비활성 실행 계정 — accountUser 가 던진 JobLaunchError 를 그대로(일시 아님) · OS 계정을 만들지 않는다", async () => {
-  const { d, rec } = fakeDeps({ accountUser: async () => { throw new JobLaunchError("실행 계정(kim)이 활성 사람 구성원이 아닙니다"); } });
-  await failsWith(launchDockerJob(row(), SECRET, d), (e) => { assert.equal(e.transient, false); assert.match(e.message, /활성 사람 구성원/); });
-  assert.ok(!rec.calls.some((c) => c.startsWith("ensureOsUser")));
+  const tr = realTree();
+  try {
+    const { d, rec } = fakeDeps(tr, { accountUser: async () => { throw new JobLaunchError("실행 계정(kim)이 활성 사람 구성원이 아닙니다"); } });
+    await failsWith(launchDockerJob(row(), SECRET, d), (e) => { assert.equal(e.transient, false); assert.match(e.message, /활성 사람 구성원/); });
+    assert.ok(!rec.calls.some((c) => c.startsWith("ensureOsUser")));
+  } finally { tr.done(); }
 });
 
-await t("C8 프로젝트 폴더 작업(격리 · API 키) — 공유 자리의 project/<n> 을 그 계정이 만들고 같은 자리(/work/shared/project/<n>)에 붙인다 · ~/.claude 는 보지 않는다", async () => {
-  const { d, rec } = fakeDeps();
-  await launchDockerJob(row({ account_kind: "api_key", account_member: null, project_id: 7, cwd: "/work/shared/project/7" } as Partial<AgentJobRow>), SECRET, d);
-  assert.ok(rec.calls.includes("memberFacts:box_kim:false"));
-  assert.ok(rec.calls.includes("resolveWork:shared/project/7:box_kim"));
-  assert.ok(rec.args!.includes("/srv/lively/shared/project/7:/work/shared/project/7"));
-  assert.equal(rec.args![rec.args!.indexOf("--workdir") + 1], "/work/shared/project/7");
+await t("C8 프로젝트 폴더 작업(격리 · API 키) — 공유 자리의 project/<n> 을 그 계정이 만들고 같은 자리(/work/shared/project/<n>)에 붙인다 · ~/.claude 는 보지 않는다 · 정책 뿌리 = 공유 자리", async () => {
+  const tr = realTree();
+  try {
+    const { d, rec } = fakeDeps(tr);
+    await launchDockerJob(row({ account_kind: "api_key", account_member: null, project_id: 7, cwd: "/work/shared/project/7" } as Partial<AgentJobRow>), SECRET, d);
+    assert.ok(rec.calls.includes("memberFacts:box_kim:false"));
+    assert.ok(rec.calls.includes("resolveWork:shared/project/7:box_kim"));
+    assert.equal(rec.guard, "ok");
+    assert.ok(mounts(rec.args!).includes(`type=bind,src=${tr.project},dst=/work/shared/project/7`));
+    assert.deepEqual([rec.policy!.binds[0]!.root, rec.policy!.binds[0]!.source], [tr.shared, tr.project]);
+    assert.equal(rec.args![rec.args!.indexOf("--workdir") + 1], "/work/shared/project/7");
+  } finally { tr.done(); }
+});
+
+await t("C9 작업 폴더가 링크(다른 앱 폴더를 가리킴) · 폴더가 아님 — 붙이지 않는다(일시 아님) · env 파일 · 띄우기 없음", async () => {
+  for (const kind of ["link", "file"] as const) {
+    const tr = realTree();
+    try {
+      fs.rmSync(tr.work, { recursive: true, force: true });
+      if (kind === "link") fs.symlinkSync(tr.other, tr.work); else fs.writeFileSync(tr.work, "x");
+      const { d, rec } = fakeDeps(tr);
+      await failsWith(launchDockerJob(row(), SECRET, d), (e) => {
+        assert.equal(e.transient, false, kind);
+        assert.match(e.message, kind === "link" ? /링크이거나 실제 경로가 그 자리가 아니라/ : /폴더가 아닌 것/);
+      });
+      assert.ok(!rec.calls.some((c) => c.startsWith("writeEnvFile") || c === "run"), rec.calls.join(" "));
+    } finally { tr.done(); }
+  }
+});
+
+await t("C10 작업 폴더 확인(workDirState) — 실제 폴더 ok · 링크 · 뿌리 위 링크는 괜찮다(실제 경로로 잰다) · 뿌리 밖 자리 · 없음", async () => {
+  const tr = realTree();
+  try {
+    assert.equal(await workDirState({ abs: tr.work, base: tr.apps }), "ok");
+    const alias = path.join(tr.root, "apps-alias");
+    fs.symlinkSync(tr.apps, alias);
+    assert.equal(await workDirState({ abs: path.join(alias, "policy-bot"), base: alias }), "ok", "뿌리 자체가 링크인 것(맥 /var)은 괜찮다");
+    fs.symlinkSync(tr.other, path.join(tr.apps, "linked"));
+    assert.equal(await workDirState({ abs: path.join(tr.apps, "linked"), base: tr.apps }), "link");
+    assert.equal(await workDirState({ abs: tr.other, base: tr.work }), "link", "뿌리 밖");
+    assert.equal(await workDirState({ abs: path.join(tr.apps, "none"), base: tr.apps }), "missing");
+    //  뿌리 안 중간 자리가 링크(shared/project → 다른 곳) — 끝 자리는 실제 폴더라 lstat 으로는 안 보인다 · 실제 경로로 잰다.
+    const elsewhere = path.join(tr.root, "elsewhere");
+    fs.mkdirSync(path.join(elsewhere, "7"), { recursive: true });
+    fs.rmSync(path.join(tr.shared, "project"), { recursive: true, force: true });
+    fs.symlinkSync(elsewhere, path.join(tr.shared, "project"));
+    assert.equal(await workDirState({ abs: path.join(tr.shared, "project", "7"), base: tr.shared }), "link", "중간 링크");
+  } finally { tr.done(); }
 });
 
 // ── K. 걷기 · 판의 자리 ────────────────────────────────────────────────────────
@@ -438,7 +567,7 @@ await t("K2 판의 첫 말 자리 — 작업 폴더는 행의 작업 폴더 그�
   assert.deepEqual(dockerPaneView({ cwd: "/work/shared/project/7" }, { port: 8080, slug: null }), { cwd: "/work/shared/project/7", gateway: "http://127.0.0.1:8080", workspace: null });
 });
 
-// ── S. 진짜 셸 — 판 머리 · ~/.claude 확인 글 ─────────────────────────────────────
+// ── S. 진짜 셸 — 판 머리 · 설정 폴더 확인 ──────────────────────────────────────────
 
 function sh(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; err: string }> {
   return new Promise((resolve) => {
@@ -449,22 +578,19 @@ function sh(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number | nu
     p.on("close", (code) => { clearTimeout(kill); resolve({ code, out, err }); });
   });
 }
-//  판 머리 뒤의 «부트» 자리에 넣을 작은 node 글 — 설정 폴더 확인 env 가 지워졌는지 찍는다.
-const PROBE_BOOT = `process.stdout.write("booted:" + (process.env.${JOB_CLAUDE_DIR_ENV} === undefined ? "clean" : "leaked"))`;
-const envFor = (over: Record<string, string>): NodeJS.ProcessEnv => {
-  const e: NodeJS.ProcessEnv = { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, ...over };
-  return e;
-};
+//  판 머리 뒤의 «부트» 자리에 넣을 작은 node 글 — 설정 폴더 확인 env 가 지워졌는지 · umask 를 찍는다.
+const PROBE_BOOT = `process.stdout.write("booted:" + (process.env.${JOB_CLAUDE_DIR_ENV} === undefined ? "clean" : "leaked") + ":umask=" + process.umask().toString(8))`;
+const envFor = (over: Record<string, string>): NodeJS.ProcessEnv => ({ PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, ...over });
 
-await t("S1 판 머리 — 붙인 설정 폴더가 없으면(API 키 · 홈 없음) 곧바로 부트 · 이 계정 소유 폴더면 부트 · 확인 env 는 부트에 넘기지 않는다", async () => {
+await t("S1 판 머리 — 붙인 설정 폴더가 없으면(API 키 · 홈 없음) 곧바로 부트 · 이 계정 소유 폴더면 부트 · 확인 env 는 부트에 넘기지 않는다 · umask 002(리뷰 NB2)", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-c-"));
   try {
     const a = await sh(["-c", JOB_CONTAINER_PRELUDE, "lvly-job", PROBE_BOOT], envFor({}));
     assert.equal(a.code, 0, a.err);
-    assert.equal(a.out, "booted:clean");
+    assert.equal(a.out, "booted:clean:umask=2");
     const b = await sh(["-c", JOB_CONTAINER_PRELUDE, "lvly-job", PROBE_BOOT], envFor({ [JOB_CLAUDE_DIR_ENV]: dir }));
     assert.equal(b.code, 0, b.err);
-    assert.equal(b.out, "booted:clean");
+    assert.equal(b.out, "booted:clean:umask=2");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -506,84 +632,130 @@ await t("S4 ~/.claude 확인 글(그 계정 권한으로 돈다) — 폴더 ok �
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-// ── L. 살아 있는 의존 — 가짜 docker 실행 파일로 ───────────────────────────────────
+await t("S5 게이트웨이가 보는 설정 폴더(비격리 · 리뷰 B1) — 그 계정 소유 폴더 ok · 없음 · 링크 · 파일 · 남의 소유(/)", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-g-"));
+  try {
+    const ok = path.join(dir, "claude"), link = path.join(dir, "link"), file = path.join(dir, "file");
+    fs.mkdirSync(ok); fs.symlinkSync(ok, link); fs.writeFileSync(file, "x");
+    assert.equal(await gatewayClaudeDirState(ok), "ok");
+    assert.equal(await gatewayClaudeDirState(path.join(dir, "none")), "missing");
+    assert.equal(await gatewayClaudeDirState(link), "link");
+    assert.equal(await gatewayClaudeDirState(file), "foreign");
+    if (process.getuid?.() !== 0) assert.equal(await gatewayClaudeDirState("/"), "foreign");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
-/** 가짜 docker — 받은 인자를 파일에 적고, 정해진 끝 · stderr 로 답한다. */
-function fakeDocker(dir: string, script: string): string {
-  const bin = path.join(dir, "docker");
-  fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${path.join(dir, "calls")}"\n${script}\n`, { mode: 0o755 });
+// ── L. 살아 있는 의존 — 가짜 docker · getent 실행 파일로 ──────────────────────────────
+
+/** 가짜 실행 파일 — 받은 인자를 파일에 적고, 정해진 끝 · stderr 로 답한다. */
+function fakeBin(dir: string, name: string, script: string): string {
+  const bin = path.join(dir, name);
+  fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${path.join(dir, `${name}.calls`)}"\n${script}\n`, { mode: 0o755 });
   return bin;
 }
+const withEnv = async (over: Record<string, string | undefined>, fn: () => Promise<void>): Promise<void> => {
+  const keep: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(over)) { keep[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  try { await fn(); } finally { for (const [k, v] of Object.entries(keep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+};
 
-await t("L1 지우기 — `docker rm -f <이름>` · «No such container» 는 조용히 · 그 밖의 실패는 던진다", async () => {
+await t("L1 지우기 — `docker rm -f <이름>` · «No such container» · «이미 지우는 중»(--rm 이 지우는 중 · 리뷰 NB6)은 조용히 · 그 밖의 실패는 던진다", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-bin-"));
-  const keep = process.env.LIVELY_DOCKER_BIN;
   try {
-    process.env.LIVELY_DOCKER_BIN = fakeDocker(dir, `echo "Error response from daemon: No such container: $3" >&2; exit 1`);
-    const d = await liveDockerDeps();
-    await d.remove("lvly-job-42-0a1b2c3d");
-    assert.equal(fs.readFileSync(path.join(dir, "calls"), "utf8").trim(), "rm -f lvly-job-42-0a1b2c3d");
-    process.env.LIVELY_DOCKER_BIN = fakeDocker(dir, `echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1`);
-    await assert.rejects((await liveDockerDeps()).remove("lvly-job-42-0a1b2c3d"), /permission denied/);
-  } finally {
-    if (keep === undefined) delete process.env.LIVELY_DOCKER_BIN; else process.env.LIVELY_DOCKER_BIN = keep;
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `echo "Error response from daemon: No such container: $3" >&2; exit 1`) }, async () => {
+      await (await liveDockerDeps()).remove("lvly-job-42-0a1b2c3d");
+    });
+    assert.equal(fs.readFileSync(path.join(dir, "docker.calls"), "utf8").trim(), "rm -f lvly-job-42-0a1b2c3d");
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `echo "Error response from daemon: removal of container $3 is already in progress" >&2; exit 1`) }, async () => {
+      await (await liveDockerDeps()).remove("lvly-job-42-0a1b2c3d");
+    });
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1`) }, async () => {
+      await assert.rejects((await liveDockerDeps()).remove("lvly-job-42-0a1b2c3d"), /permission denied/);
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 await t("L2 띄우기 — 검사기가 먼저다: 거절하면 docker 를 부르지 않는다 · 지나면 그 인자 그대로 docker 에", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-bin-"));
   const tr = realTree();
-  const keep = process.env.LIVELY_DOCKER_BIN;
   try {
-    process.env.LIVELY_DOCKER_BIN = fakeDocker(dir, "exit 0");
-    const d = await liveDockerDeps();
-    const { args, policy } = argsAndPolicy(tr, subPlace(tr));
-    await assert.rejects(d.run(["run", "--privileged", ...args.slice(1)], policy), DockerRunRejected);
-    assert.equal(fs.existsSync(path.join(dir, "calls")), false, "거절된 인자로 docker 를 부르지 않았다");
-    await d.run(args, policy);
-    assert.match(fs.readFileSync(path.join(dir, "calls"), "utf8"), /^run -d --rm --name lvly-job-42-0a1b2c3d /);
-  } finally {
-    if (keep === undefined) delete process.env.LIVELY_DOCKER_BIN; else process.env.LIVELY_DOCKER_BIN = keep;
-    fs.rmSync(dir, { recursive: true, force: true });
-    tr.done();
-  }
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", "exit 0") }, async () => {
+      const d = await liveDockerDeps();
+      const { args, policy } = argsAndPolicy(tr, subPlace(tr));
+      await assert.rejects(d.run(["run", "--privileged", ...args.slice(1)], policy), DockerRunRejected);
+      assert.equal(fs.existsSync(path.join(dir, "docker.calls")), false, "거절된 인자로 docker 를 부르지 않았다");
+      await d.run(args, policy);
+      assert.match(fs.readFileSync(path.join(dir, "docker.calls"), "utf8"), /^run -d --rm --name lvly-job-42-0a1b2c3d /);
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); tr.done(); }
 });
 
-await t("L3 박스 사실 — 하네스 실행 파일은 ELF · 다른 계정 실행 가능이어야 한다(아니면 까닭 · 고칠 길) · docker info 의 메모리 · 스왑 상한을 읽는다 · 도커에 못 닿으면 까닭", async () => {
+await t("L3 박스 사실 — 하네스 실행 파일은 ELF · 다른 계정 실행 가능이어야 한다(아니면 까닭 · 고칠 길) · docker info 의 메모리 · 스왑 상한 · 도커에 못 닿으면 까닭(도커 원문 · 경로는 공개 글에 없다 — 리뷰 NB8)", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-box-"));
-  const keep = { bin: process.env.LIVELY_DOCKER_BIN, claude: process.env.LIVELY_AGENT_JOB_CLAUDE_BIN, image: process.env.LIVELY_AGENT_JOB_IMAGE };
   try {
     const elf = path.join(dir, "claude-elf"), text = path.join(dir, "claude-js"), priv = path.join(dir, "claude-priv");
     fs.writeFileSync(elf, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1]), { mode: 0o755 });
     fs.writeFileSync(text, "#!/usr/bin/env node\n", { mode: 0o755 });
     fs.writeFileSync(priv, Buffer.from([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o700 });
-    process.env.LIVELY_DOCKER_BIN = fakeDocker(dir, `[ "$1" = info ] && echo "8178892800 true"; exit 0`);
-    process.env.LIVELY_AGENT_JOB_IMAGE = "registry.local/node:22-bookworm-slim";
-    process.env.LIVELY_AGENT_JOB_CLAUDE_BIN = elf;
-    const b = await probeDockerBox();
-    assert.equal(b.claudeBin, fs.realpathSync(elf));
-    assert.equal(b.memMb, 7800);
-    assert.equal(b.swapLimit, true);
-    assert.equal(b.image, "registry.local/node:22-bookworm-slim");
-    assert.equal(b.gateway.uid, process.getuid?.());
-    process.env.LIVELY_AGENT_JOB_CLAUDE_BIN = text;
-    await assert.rejects(probeDockerBox(), /ELF.*install\.sh/s);
-    process.env.LIVELY_AGENT_JOB_CLAUDE_BIN = priv;
-    await assert.rejects(probeDockerBox(), /다른 계정이 실행할 수 없습니다/);
-    process.env.LIVELY_AGENT_JOB_CLAUDE_BIN = path.join(dir, "none");
-    await assert.rejects(probeDockerBox(), /찾지 못했습니다/);
-    process.env.LIVELY_AGENT_JOB_CLAUDE_BIN = elf;
-    process.env.LIVELY_DOCKER_BIN = fakeDocker(dir, `echo "Cannot connect to the Docker daemon" >&2; exit 1`);
-    await assert.rejects(probeDockerBox(), /도커에 닿지 못했습니다.*docker 그룹/s);
-    process.env.LIVELY_DOCKER_BIN = fakeDocker(dir, `[ "$1" = info ] && echo "8178892800 false"; exit 0`);
-    assert.equal((await probeDockerBox()).swapLimit, false);
-  } finally {
-    for (const [k, v] of [["LIVELY_DOCKER_BIN", keep.bin], ["LIVELY_AGENT_JOB_CLAUDE_BIN", keep.claude], ["LIVELY_AGENT_JOB_IMAGE", keep.image]] as const) {
-      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    const okDocker = fakeBin(dir, "docker", `[ "$1" = info ] && echo "8178892800 true"; exit 0`);
+    await withEnv({ LIVELY_DOCKER_BIN: okDocker, LIVELY_AGENT_JOB_IMAGE: "registry.local/node:22-bookworm-slim", LIVELY_AGENT_JOB_CLAUDE_BIN: elf }, async () => {
+      const b = await probeDockerBox({ isolated: false });
+      assert.equal(b.claudeBin, fs.realpathSync(elf));
+      assert.equal(b.memMb, 7800);
+      assert.equal(b.swapLimit, true);
+      assert.equal(b.image, "registry.local/node:22-bookworm-slim");
+      assert.equal(b.gateway.uid, process.getuid?.());
+    });
+    for (const [bin, re] of [[text, /ELF.*install\.sh/s], [priv, /다른 계정이 실행할 수 없습니다/], [path.join(dir, "none"), /찾지 못했습니다/]] as const) {
+      await withEnv({ LIVELY_DOCKER_BIN: okDocker, LIVELY_AGENT_JOB_CLAUDE_BIN: bin }, async () => {
+        await assert.rejects(probeDockerBox({ isolated: false }), (e: unknown) => re.test((e as Error).message) && !(e as Error).message.includes(dir), String(bin));
+      });
     }
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock-SECRETPATH" >&2; exit 1`), LIVELY_AGENT_JOB_CLAUDE_BIN: elf }, async () => {
+      await assert.rejects(probeDockerBox({ isolated: false }), (e: unknown) => {
+        const m = (e as Error).message, detail = (e as { detail?: string }).detail ?? "";
+        return /도커에 닿지 못했습니다.*docker 그룹/s.test(m) && !m.includes("SECRETPATH") && detail.includes("SECRETPATH");
+      });
+    });
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `[ "$1" = info ] && echo "8178892800 false"; exit 0`), LIVELY_AGENT_JOB_CLAUDE_BIN: elf }, async () => {
+      assert.equal((await probeDockerBox({ isolated: false })).swapLimit, false);
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+await t("L4 격리 박스 판정(리뷰 NB4) — lively-shared gid · 전용 uid 가 비었으면 된다 · 그룹 없음(끝 2) · uid 를 박스 계정이 씀 · getent 의 다른 실패는 닫힌 쪽(던진다) · 공개 글에 계정 이름 없음", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-ge-"));
+  try {
+    const elf = path.join(dir, "claude");
+    fs.writeFileSync(elf, Buffer.from([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o755 });
+    const env = { LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `[ "$1" = info ] && echo "8178892800 true"; exit 0`), LIVELY_AGENT_JOB_CLAUDE_BIN: elf, LIVELY_AGENT_JOB_UID: undefined };
+    const ge = (group: string, passwd: string): string => fakeBin(dir, `getent-${Math.random().toString(16).slice(2, 8)}`, `case "$1" in group) ${group};; passwd) ${passwd};; esac`);
+    await withEnv(env, async () => {
+      const b = await probeDockerBox({ isolated: true, getent: ge(`echo "lively-shared:x:1500:box_kim"; exit 0`, "exit 2") });
+      assert.deepEqual([b.isolated, b.sharedGid, b.jobUid], [true, 1500, DEFAULT_JOB_UID]);
+      await assert.rejects(probeDockerBox({ isolated: true, getent: ge("exit 2", "exit 2") }), /lively-shared 그룹이 없습니다/);
+      await assert.rejects(probeDockerBox({ isolated: true, getent: ge(`echo "lively-shared:x:1500:"; exit 0`, `echo "secretuser:x:65532:65532::/home/secretuser:/bin/sh"; exit 0`) }),
+        (e: unknown) => /uid\(LIVELY_AGENT_JOB_UID\)를 박스 계정이 씁니다/.test((e as Error).message) && !(e as Error).message.includes("secretuser"));
+      await assert.rejects(probeDockerBox({ isolated: true, getent: ge(`echo "lively-shared:x:1500:"; exit 0`, "exit 1") }), /계정 정보를 읽지 못했습니다/, "passwd 판정 실패를 «겹침 없음» 으로 읽지 않는다");
+      await assert.rejects(probeDockerBox({ isolated: true, getent: ge("exit 3", "exit 2") }), /계정 정보를 읽지 못했습니다/, "group 판정 실패");
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+await t("L5 기억한 판정 동안 하네스가 새 판으로 바뀌어 옛 실행 파일이 지워졌다(리뷰 NB5) — box() 가 다시 판정해 새 파일을 준다", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-up-"));
+  try {
+    const v1 = path.join(dir, "v1"), v2 = path.join(dir, "v2"), link = path.join(dir, "claude");
+    for (const f of [v1, v2]) fs.writeFileSync(f, Buffer.from([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o755 });
+    fs.symlinkSync(v1, link);
+    await withEnv({ LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `[ "$1" = info ] && echo "8178892800 true"; exit 0`), LIVELY_AGENT_JOB_CLAUDE_BIN: link, LIVELY_MEMBER_ISOLATION: "off" }, async () => {
+      resetDockerProbesForTest();
+      const d = await liveDockerDeps();
+      assert.equal((await d.box()).claudeBin, fs.realpathSync(v1));
+      fs.rmSync(link); fs.rmSync(v1); fs.symlinkSync(v2, link);
+      assert.equal((await d.box()).claudeBin, fs.realpathSync(v2), "옛 판(v1)을 기억한 채 주지 않는다");
+    });
+  } finally { resetDockerProbesForTest(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 // ── B. 박스 판정 기억 · 관리자 보기 ─────────────────────────────────────────────
@@ -606,7 +778,21 @@ await t("B1 박스 판정 기억 — 된다 1분 · 안 된다 15초 · 지나�
   resetDockerProbesForTest();
 });
 
-await t("B2 관리자 보기 — 못 씀 · 상한 0 · 스왑 상한 못 걺은 «안 걸림» 과 까닭 · 된다면 «걸림» · 계정은 격리 판정 그대로(띄우기와 같은 판정)", async () => {
+await t("B2 판정 시각은 판정이 끝난 때(리뷰 NB7) — 20초 걸린 실패도 그 뒤 15초는 다시 묻지 않는다", async () => {
+  resetDockerProbesForTest();
+  let now = 5_000_000, m = 0;
+  const slowBad = async (): Promise<DockerBox> => { m++; now += 20_000; throw new Error("도커가 답하지 않습니다"); };
+  await dockerBoxCheck({ probe: slowBad, now: () => now });
+  now += 10_000;
+  await dockerBoxCheck({ probe: slowBad, now: () => now });
+  assert.equal(m, 1, "끝난 지 10초 — 기억한 판정");
+  now += 6_000;
+  await dockerBoxCheck({ probe: slowBad, now: () => now });
+  assert.equal(m, 2);
+  resetDockerProbesForTest();
+});
+
+await t("B3 관리자 보기 — 못 씀 · 상한 0 · 스왑 상한 못 걺은 «안 걸림» 과 까닭 · 된다면 «걸림» · 계정은 격리 판정 그대로(띄우기와 같은 판정)", async () => {
   const check = (r: Awaited<ReturnType<typeof dockerBoxCheck>>) => async () => r;
   const down = await dockerSurfaceStatus(3072, { check: check({ ok: false, why: "도커에 닿지 못했습니다" }) });
   assert.deepEqual([down.runsAs, down.enforced], [null, false]);
@@ -620,8 +806,44 @@ await t("B2 관리자 보기 — 못 씀 · 상한 0 · 스왑 상한 못 걺은
   const ok = await dockerSurfaceStatus(3072, { check: check({ ok: true, box: box() }) });
   assert.deepEqual([ok.runsAs, ok.enforced], ["member", true]);
   //  띄우기와 같은 판정 — 스왑 상한을 못 거는 박스 · 상한 있음이면 띄우기도 거절한다(C5).
-  const { d } = fakeDeps({ box: async () => box({ swapLimit: false }) });
-  await failsWith(launchDockerJob(row(), SECRET, d), (e) => assert.equal(e.transient, false));
+  const tr = realTree();
+  try {
+    const { d } = fakeDeps(tr, { box: async () => box({ swapLimit: false, claudeBin: tr.bin }) });
+    await failsWith(launchDockerJob(row(), SECRET, d), (e) => assert.equal(e.transient, false));
+  } finally { tr.done(); }
+});
+
+// ── R. 실행면 배선(진짜 jobSurface · 자식 프로세스 — 토폴로지는 부팅에 언다) ─────────────
+
+await t("R1 스위치를 켠 프로세스(docker) — jobSurface 가 도커 실행면 · 관리자 보기(kind · 띄울 수 있음 · 계정 · 상한 걸림) · 판의 자리(포트 · 행의 작업 폴더)", async () => {
+  const { isolationInfraReady } = await import("../terminal/terminal-isolation.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-r-"));
+  try {
+    const elf = path.join(dir, "claude");
+    fs.writeFileSync(elf, Buffer.from([0x7f, 0x45, 0x4c, 0x46]), { mode: 0o755 });
+    const env: NodeJS.ProcessEnv = {
+      ...process.env, LIVELY_AGENT_JOBS: "docker", LIVELY_AGENT_JOBS_PORT: "18123",
+      LIVELY_DOCKER_BIN: fakeBin(dir, "docker", `[ "$1" = info ] && echo "8178892800 true"; exit 0`), LIVELY_AGENT_JOB_CLAUDE_BIN: elf,
+    };
+    for (const k of ["LIVELY_SESSION_ENSURE", "LIVELY_SESSION_SPAWN", "LIVELY_TMUX_EXEC", "LIVELY_NODE_TOKEN", "LIVELY_SESSION_EXEC", "TMUX", "TMUX_PANE"]) delete env[k];
+    const url = new URL("./surface.js", import.meta.url).href;
+    const code = `import(${JSON.stringify(url)}).then(async (m) => { const v = await m.describeJobSurface(3072); const s = await m.jobSurface(); const pv = await s.paneView({ cwd: "/work/apps/x" }); process.stdout.write(JSON.stringify({ v, kind: s.kind, pv }), () => process.exit(0)); })`;
+    const out = await new Promise<string>((resolve, reject) => {
+      const p = spawn(process.execPath, ["--input-type=module", "-e", code], { env, stdio: ["ignore", "pipe", "pipe"] });
+      let o = "", e = "";
+      p.stdout.on("data", (x) => { o += x; }); p.stderr.on("data", (x) => { e += x; });
+      p.on("close", (c) => (c === 0 ? resolve(o) : reject(new Error(`자식 프로세스 ${c}: ${e.slice(0, 400)}`))));
+    });
+    const { v, kind, pv } = JSON.parse(out);
+    assert.equal(kind, "docker");
+    assert.equal(v.kind, "docker");
+    assert.equal(v.available, true, JSON.stringify(v));
+    assert.equal(v.unavailable, null);
+    assert.equal(v.runs_as, isolationInfraReady() ? "member" : "gateway");
+    if (!isolationInfraReady()) assert.equal(v.memory_cap.enforced, true, JSON.stringify(v.memory_cap));
+    assert.equal(pv.cwd, "/work/apps/x");
+    assert.equal(pv.gateway, "http://127.0.0.1:18123");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 console.log(`\n${pass} passed`);

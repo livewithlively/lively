@@ -120,8 +120,8 @@ const agentJobLimits: Capability = {
     "max_running_per_service_seat(공용 시트 하나로 동시 — #5081 · 안 적으면 기본값을 max_running 으로 접는다) · max_queued(대기열) · queue_wait_min(대기 상한) · " +
     "default_timeout_min · max_timeout_min(실행 시간) · silent_sec(판 무응답) · start_timeout_sec(시작 상한) · keep_days(끝난 작업 기록 보존 일수 — 지나면 행째 지움 · 0 = 무기한 · 앱 AI 실행 기록은 따로 남음) · " +
     "transcript_keep_days(API 키 작업의 대화 기록 보관 일수 — 앱 AI 실행 이어받기 · 형식 재시도용 · 그 작업 AI 가 읽은 글이 다 들어 있다 · 지나면 기록만 비움 · 0 = 보관 안 함) · " +
-    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트 격리 박스에서 cgroup 으로 건다 · 걸 수 없으면 그 작업을 띄우지 않는다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
-    "surface 는 이 배포의 실행면(broker 매니지드 · host 셀프호스트 박스 위 · none 못 띄움 — unavailable 에 까닭) · 박스 위 판의 계정(runs_as member · gateway) · 메모리 상한을 실제로 거는지다. " +
+    "memory_max_mb(작업 하나의 메모리 상한 MB — 셀프호스트에서 건다: 박스 위는 격리 박스의 cgroup · 도커는 컨테이너 메모리(스왑 없이) · 걸 수 없으면 그 작업을 띄우지 않는다 · 0 = 상한 없음 · 매니지드는 세션 메모리 정책). " +
+    "surface 는 이 배포의 실행면(broker 매니지드 · docker 셀프호스트 작업마다 컨테이너 · host 셀프호스트 박스 위 · none 못 띄움 — unavailable 에 까닭) · 셀프호스트 작업의 계정(runs_as member · gateway) · 메모리 상한을 실제로 거는지다. " +
     "고치기는 관리자 agent_job_limits_set. 구성원 누구나.",
   scope: null,
   input: {},

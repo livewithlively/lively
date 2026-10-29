@@ -174,5 +174,53 @@ t("G20 tmpfs 임자 uid · gid(#5082) — 컨테이너 사용자(--user)와 같�
   rejects(withTmp("/tmp:rw,gid=0"), appPolicy, /tmpfs gid=0/, "다른 gid");
 });
 
+// ── #5082 2단계(도커 작업 컨테이너)가 쓰는 꼴 ─────────────────────────────────────
+
+const jobRoot = path.join(root, "apps"), jobSrc = path.join(jobRoot, "policy-bot"), jobOther = path.join(jobRoot, "other-app");
+fs.mkdirSync(jobSrc, { recursive: true });
+fs.mkdirSync(jobOther, { recursive: true });
+const bindPolicy: DockerRunPolicy = { ...appPolicy, binds: [...appPolicy.binds, { root: jobRoot, rw: true, targets: /^\/work\/apps\/[a-z-]+$/ }] };
+
+t("G21 --mount type=bind(#5082) — 정책 안 원본 · 자리는 통과(쓰기 · 읽기 전용) · 뿌리 밖 · 읽기 전용 뿌리에 쓰기 · 모르는 선택 · readonly=false · 같은 뜻 두 이름 · 같은 선택 두 번 · docker 소켓은 거절", () => {
+  const m = (v: string): string[] => withFlag(okApp, "--mount", v);
+  assert.equal(assertSafeDockerRun(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot`), bindPolicy).image, IMAGE);
+  assert.equal(assertSafeDockerRun(m(`type=bind,source=${code},target=/var/task,readonly`), bindPolicy).image, IMAGE, "읽기 전용 뿌리에 읽기 전용");
+  assert.equal(assertSafeDockerRun(m(`type=bind,src=${code},dst=/var/task,readonly=true`), bindPolicy).image, IMAGE);
+  rejects(m(`type=bind,src=${os.tmpdir()},dst=/work/apps/policy-bot`), bindPolicy, /마운트 원본/, "뿌리 밖");
+  rejects(m(`type=bind,src=${code},dst=/var/task`), bindPolicy, /마운트 원본/, "읽기 전용 뿌리에 쓰기");
+  rejects(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot,bind-propagation=shared`), bindPolicy, /bind 선택 bind-propagation/, "전파 선택");
+  rejects(m(`type=bind,src=${code},dst=/var/task,readonly=false`), bindPolicy, /readonly 는 값 없이/, "readonly=false");
+  rejects(m(`type=bind,src=${jobSrc},source=${os.tmpdir()},dst=/work/apps/policy-bot`), bindPolicy, /src · source 중 하나만/, "원본 두 이름");
+  rejects(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot,target=/etc`), bindPolicy, /dst · destination · target 중 하나만/, "자리 두 이름");
+  rejects(m(`type=bind,src=${jobSrc},src=${jobSrc},dst=/work/apps/policy-bot`), bindPolicy, /같은 선택이 두 번/, "같은 선택 두 번");
+  rejects(m("type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock"), { ...bindPolicy, binds: [...bindPolicy.binds, { root: "/var/run", rw: true }] }, /docker 소켓/, "소켓");
+  rejects(m(`type=bind,src=${jobSrc}`), bindPolicy, /중 하나만/, "자리 없음");
+  rejects(m("type=volume,dst=/tmp,target=/etc"), { ...bindPolicy, volumes: ["/tmp"] }, /중 하나만/, "볼륨 자리 두 이름");
+});
+
+t("G22 바인드 정책의 source(#5082) — 원본이 정확히 그 경로일 때만(같은 뿌리 안의 형제 · 뿌리 자체는 거절) · -v 도 같다", () => {
+  const p: DockerRunPolicy = { ...appPolicy, binds: [...appPolicy.binds, { root: jobRoot, rw: true, targets: /^\/work\/apps\/policy-bot$/, source: jobSrc }] };
+  assert.equal(assertSafeDockerRun(withFlag(okApp, "--mount", `type=bind,src=${jobSrc},dst=/work/apps/policy-bot`), p).image, IMAGE);
+  assert.equal(assertSafeDockerRun(withFlag(okApp, "--volume", `${jobSrc}:/work/apps/policy-bot`), p).image, IMAGE);
+  rejects(withFlag(okApp, "--mount", `type=bind,src=${jobOther},dst=/work/apps/policy-bot`), p, /마운트 원본/, "형제");
+  rejects(withFlag(okApp, "--mount", `type=bind,src=${jobRoot},dst=/work/apps/policy-bot`), p, /마운트 원본/, "뿌리 자체");
+  rejects(withFlag(okApp, "--volume", `${jobOther}:/work/apps/policy-bot`), p, /마운트 원본/, "-v 형제");
+});
+
+t("G23 --user 허용 목록(#5082) — 정책에 목록이 있으면 그 «uid:gid» 만 · 없으면 종전(비-root 숫자 꼴)", () => {
+  assert.equal(assertSafeDockerRun(okApp, { ...appPolicy, users: ["501:20", "1002:1006"] }).image, IMAGE);
+  rejects(okApp, { ...appPolicy, users: ["1002:1006"] }, /--user 501:20 는 이 컨테이너가 돌 수 있는 계정이 아닙니다/, "목록 밖");
+  rejects(swap(okApp, "--user", "501:0"), { ...appPolicy, users: ["501:20"] }, /돌 수 있는 계정이 아닙니다/, "gid 만 바꿈");
+  assert.equal(assertSafeDockerRun(swap(okApp, "--user", "501:0"), appPolicy).image, IMAGE, "목록이 없으면 종전대로(uid 만 본다)");
+});
+
+t("G24 tmpfs 선택 exec(#5082 — 작업 컨테이너의 /tmp · HOME 은 도커 기본 noexec 를 푼다)", () => {
+  const i = okApp.indexOf("--tmpfs");
+  const a = [...okApp]; a[i + 1] = "/tmp:rw,exec,nosuid,nodev,size=64m,mode=1777";
+  assert.equal(assertSafeDockerRun(a, appPolicy).image, IMAGE);
+  a[i + 1] = "/tmp:rw,suid";
+  rejects(a, appPolicy, /tmpfs 선택 suid/, "suid");
+});
+
 fs.rmSync(root, { recursive: true, force: true });
 console.log(`\ndocker-run-guard: ${pass} 통과`);
