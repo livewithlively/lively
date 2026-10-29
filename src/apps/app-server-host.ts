@@ -14,12 +14,21 @@ import * as lam from "../net/aws/lambda-lite.js";
 import { s3Delete, s3Head, s3PresignUrl, type S3Config, type S3Deps } from "../net/aws/s3-lite.js";
 import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
 import { appBundleS3Config } from "./app-blob-store.js";
-import { appServerHostKind, appServerHostUnavailable, type AppServerHostKind } from "./app-server-config.js";
+import { appServerHostKind, type AppServerHostKind } from "./app-server-config.js";
+import { localLambdaApi, localZipStore } from "./app-server-local.js";
 
 /**
- * 함수 실행면 — Lambda API 와 같은 꼴. 시험이 갈아 끼운다(setServerDepsForTest api). 실행면마다 구현이 하나씩이다(lambda = lambda-lite).
- *  흐름이 기대는 것: 만든 함수는 판을 고정할 때까지 $LATEST · 판은 바뀌지 않는다 · 별칭은 판을 가리킨다 · 동시 실행 0 이면 부르기가 곧바로 거절된다 ·
- *  흘려 받기는 «HTTP 통합 응답» 틀(app-server-stream) · 비동기 부르기는 받아 두기만 한다(결과는 함수 안 검사 층이 게이트웨이에 보고한다).
+ * 함수 실행면 — Lambda API 와 같은 꼴. 시험이 갈아 끼운다(setServerDepsForTest api). 실행면마다 구현이 하나씩이다(lambda = lambda-lite · local = app-server-local).
+ *  흐름이 기대는 약속(새 구현은 이것을 지켜야 한다 — 흐름이 이 글 · 칸으로 가른다):
+ *   · 함수: 만든 함수는 판을 고정할 때까지 $LATEST · 판은 바뀌지 않는다 · 별칭은 판을 가리킨다 · Tags["lvly:tenant"] 가 그 워크스페이스(주인 확인).
+ *     설정 칸 State(Active · Inactive · Failed) · LastUpdateStatus(Successful · InProgress · Failed) · CodeSha256(zip 의 sha256 base64) · CodeSize(zip 바이트) ·
+ *     Code.ResolvedS3Object(REFERENCE 일 때만) · Code.Error(코드를 못 읽을 때).
+ *   · 없는 함수: getFunction · getFunctionConfiguration 은 null · 그 밖은 AwsError ResourceNotFoundException(404). 같은 이름 만들기는 ResourceConflictException(409).
+ *   · zip 이 없으면 만들기 · 코드 고치기가 app-server-deploy ZIP_MISSING_RE 에 맞는 글의 AwsError(그 빌드를 무효로 적고 다시 빌드한다).
+ *   · 동시 실행 0(멈춤)이면 부르기가 곧바로 AwsError TooManyRequestsException(429) · 응답을 다 받기 전에 opts.timeoutMs 가 지나면 AwsError Timeout.
+ *   · 흘려 받기는 «HTTP 통합 응답» 틀(app-server-stream — 앞머리 JSON + NUL 8 + 본문 · contentType HTTP_INTEGRATION_CT) · 앱이 응답 전에 죽으면
+ *     octet-stream 의 Lambda 오류 JSON({errorType}) · 끝의 complete.log 에 REPORT 줄(Billed Duration · Status: error|timeout — parseReport).
+ *   · 비동기 부르기는 받아 두기만 한다(202 · 결과는 함수 안 검사 층이 게이트웨이에 보고한다).
  */
 export interface LambdaApi {
   /** qualifier — 그 판의 설정 · 코드 자리(#4801 재사용 판정). 없으면 $LATEST. */
@@ -68,10 +77,13 @@ export function realLambdaApi(region: string): LambdaApi {
   };
 }
 
-/** 이 실행면의 함수 실행면 — 흐름은 늘 이것으로 부른다(시험 고리 deps.api 가 있으면 그것이 먼저다). */
+/** 이 실행면의 함수 실행면 — 흐름은 늘 이것으로 부른다(시험 고리 deps.api 가 있으면 그것이 먼저다). 실행면을 더하면 아래 never 가 빌드를 막는다. */
 export function appServerApi(env: { host: AppServerHostKind; region: string }): LambdaApi {
-  if (env.host === "lambda") return realLambdaApi(env.region);
-  throw new HttpError(503, appServerHostUnavailable({ LIVELY_APP_SERVER_HOST: env.host }) ?? "앱 서버 실행면이 없습니다");
+  switch (env.host) {
+    case "lambda": return realLambdaApi(env.region);
+    case "local": return localLambdaApi();
+    default: { const never: never = env.host; throw new HttpError(503, `앱 서버 실행면 ${String(never)} 이 이 판에 없습니다`); }
+  }
 }
 
 // ── zip 저장소 ───────────────────────────────────────────────────────────────────────────
@@ -111,9 +123,13 @@ export function s3ZipStore(cfg: S3Config & { prefix: string }, base: S3Deps = {}
   };
 }
 
-/** 이 배포의 zip 저장소 — lambda 실행면은 판 묶음 버킷(없으면 null — 배포가 «버킷 없음» 을 말한다). */
+/** 이 배포의 zip 저장소 — lambda 실행면은 판 묶음 버킷(없으면 null — 배포가 «버킷 없음» 을 말한다) · local 은 이 박스 디스크(늘 있다) · 모르는 이름은 null. */
 export function appServerZipStore(env: NodeJS.ProcessEnv = process.env): ZipStore | null {
-  if (appServerHostKind(env) !== "lambda") return null;
-  const s3 = appBundleS3Config(env);
-  return s3 ? s3ZipStore(s3) : null;
+  const kind = appServerHostKind(env);
+  switch (kind) {
+    case null: return null;
+    case "lambda": { const s3 = appBundleS3Config(env); return s3 ? s3ZipStore(s3) : null; }
+    case "local": return localZipStore(env);
+    default: { const never: never = kind; return never; }
+  }
 }

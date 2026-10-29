@@ -30,7 +30,10 @@ export interface BuildInput {
   decl: AppServerDecl;
   env: AppServerEnv;
   policy: AppServerPolicy;
-  seat: BuildSeat;
+  /** 빌드할 세션(lambda 실행면 · 그 판을 저장한 사람의 세션). 로컬 실행면(#4487)은 null — 자격 없는 일회용 컨테이너에서 빌드한다. */
+  seat: BuildSeat | null;
+  /** 빌드 기록의 built_by — 세션이 있으면 그 사람, 없으면 배포를 부른 사람. */
+  by: string;
 }
 
 export interface BuildDeps {
@@ -129,7 +132,7 @@ export async function ensureServerBuild(input: BuildInput, deps: BuildDeps = {})
   const have = await usableBuild(await getServerBuild(input.appId, key), deps);
   if (have) return { build: have, reused: true, key };
   const claim = await claimServerBuild(input.appId, key, {
-    version_no: input.versionNo, built_by: input.seat.memberId, session_id: input.seat.sessionId, leaseSec: LEASE_SEC,
+    version_no: input.versionNo, built_by: input.seat?.memberId ?? input.by, session_id: input.seat?.sessionId ?? null, leaseSec: LEASE_SEC,
   });
   if (!claim.claimed) {
     if (claim.row?.status === "ok") return { build: claim.row, reused: true, key };
@@ -198,67 +201,89 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     const store = appServerZipStore();
     if (!store && !deps.presignPut) return await fail("setup", "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 빌드 결과를 둘 곳이 없습니다");
     const zipKey = zipKeyFor(store?.prefix ?? "", blobTenant(), input.appId, key);
-    const deadlineMs = now() + input.policy.build_timeout_s * 1000;
-    const uploadUrl = deps.presignPut ? await deps.presignPut(zipKey, input.policy.build_timeout_s + 600) : await store!.uploadUrl(zipKey, input.policy.build_timeout_s + 600);
-    const files = input.bundle.files.filter((f) => !ZIP_EXCLUDE.includes(f.p));
-    const header: BuildHeader = {
-      v: 1, deadline_ms: deadlineMs, files: files.map((f) => [f.p, f.s]),
-      build: input.decl.build, start: input.decl.start, dir: input.decl.dir,
-      unzipped_max: (250 - 5) * 1024 * 1024,   // Lambda 풀린 크기 250MB 에서 웹 어댑터 레이어(약 2MB)와 여유를 뺀다
-      mem_floor_mb: input.policy.build_mem_floor_mb, heap_mb: input.policy.build_heap_mb, upload_url: uploadUrl,
-    };
-    let child: ChildProcess;
-    try { child = await (deps.spawnInSession ?? defaultSpawnInSession)(input.seat, ["node", "-e", SERVER_BUILDER_JS]); }
-    catch (e) { return await fail("session", `빌드할 세션에서 프로그램을 띄우지 못했습니다: ${(e as Error)?.message ?? e}`); }
-    //  stdout 은 조각을 모았다가 한 번에 푼다 — 조각마다 글자로 바꾸면 경계에 걸린 한글이 깨진다(#4135 stream-text 와 같은 까닭).
-    const outParts: Buffer[] = [];
-    let outBytes = 0;
-    const ring = tailRing();
-    child.stdout?.on("data", (d: Buffer) => { if (outBytes < STDOUT_MAX) { outParts.push(d); outBytes += d.length; } });
-    child.stderr?.on("data", (d: Buffer) => { ring.push(d); const l = ring.lastLine(); if (l) live.set(lk, { startedAt: live.get(lk)?.startedAt ?? now(), last: l }); });
-    const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-      child.on("close", (code, signal) => resolve({ code, signal: signal ?? null }));
-      child.on("error", (e) => { ring.push(Buffer.from(`\n[중계 오류] ${e.message}\n`)); resolve({ code: null, signal: null }); });
-    });
-    child.stdin?.on("error", () => { /* 빌더가 먼저 끝나 파이프가 닫힌 것 — 결과 줄이 말한다 */ });
-    const beat = setInterval(() => { void touchServerBuild(input.appId, key, LEASE_SEC).catch(() => { /* 다음 박동에서 */ }); }, 30_000);
-    //  빌더도 deadline 에 스스로 멈추지만, 중계가 매달리면 우리가 끊는다(빌더 상한 + 2분).
-    const hard = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* 이미 끝 */ } }, input.policy.build_timeout_s * 1000 + 120_000);
-    let pumpErr: unknown = null;
-    if (child.stdin) {
-      await pump(child.stdin, encodeBuildHeader(header), files, (h) => (deps.readBlob ?? getBlob)(input.store, h)).catch((e) => {
-        pumpErr = e;
-        try { child.kill("SIGKILL"); } catch { /* 이미 끝 */ }
-      });
-    }
-    const ex = await exited;
-    clearInterval(beat);
-    clearTimeout(hard);
-    const log = ring.text();
-    if (pumpErr) return await fail("input", `판 파일을 빌더에 넘기지 못했습니다: ${(pumpErr as Error)?.message ?? pumpErr}`, log);
-    const res: BuildResult | null = parseBuildResult(Buffer.concat(outParts).toString("utf8"));
-    if (!res) {
-      if (ex.code === RELAY_NO_CONTAINER) return await fail("session", "빌드할 세션이 꺼져 있습니다 — 그 세션을 다시 열고(또는 그 세션의 AI 가) 다시 빌드하세요", log);
-      return await fail("crash", `빌더가 결과를 남기지 못하고 끝났습니다(종료 ${ex.code ?? ex.signal ?? "?"}) — 세션 메모리가 모자랐거나 연결이 끊겼을 수 있습니다`, log);
-    }
-    const detail = { steps: res.steps, warnings: res.warnings, mem: res.mem, ms: res.ms, install: res.install, build_cmd: res.build_cmd, start_cmd: res.start_cmd };
-    if (!res.ok || !res.zip) return await fail(res.stage ?? "build", res.error ?? "빌드가 실패했습니다", log, detail);
-    //  올라왔는지 직접 본다 — 빌더의 말만 믿고 함수를 고치지 않는다(크기가 다르면 올리기가 잘렸다).
-    const head = deps.headZip ? await deps.headZip(zipKey) : await store!.head(zipKey).catch(() => null);
-    if (!head || head.size !== res.zip.bytes) {
-      return await fail("upload", `빌드 결과(zip)가 저장소에 ${head ? `다른 크기(${head.size} ≠ ${res.zip.bytes})로` : "없이"} 남았습니다 — 다시 빌드하세요`, log, detail);
-    }
-    //  #4801 지금 판 번호를 함께 적는다 — 함수가 이 판을 바로 읽는다(REFERENCE). 빌더가 말한 판이 아니라 우리가 본 판이다.
-    const row = await finishServerBuild(input.appId, key, {
-      ok: true, zip: { key: zipKey, bytes: res.zip.bytes, sha256_b64: res.zip.sha256_b64, unzipped: res.zip.unzipped, entries: res.zip.entries, version: head.versionId ?? null },
-      log_tail: tailText(log, 16 * 1024), detail,
-    });
-    if (!row) {
-      //  빌드하는 동안 앱(과 그 빌드 기록)이 지워졌다 — 방금 올린 zip 은 주인이 없다. 지운다(best-effort · 남으면 버킷 수명 규칙이 걷는다).
-      await (deps.deleteZip ? deps.deleteZip(zipKey) : store ? store.remove(zipKey) : Promise.resolve()).catch(() => { /* best-effort */ });
-      throw new HttpError(409, "빌드하는 동안 앱이 지워졌습니다");
-    }
-    return row;
+    //  #4487 빌드 자리 — lambda 실행면은 그 판을 저장한 사람의 세션 컨테이너(결과는 S3 서명 주소로) · local 은 자격 없는 일회용 컨테이너(결과는 파일로 받아
+    //   zip 저장소로 옮긴다 · app-server-local localBuildRunner).
+    const runner = input.env.host === "local"
+      ? await (await import("./app-server-local.js")).localBuildRunner({ appId: input.appId, buildKey: key, zipKey, image: input.env.runtime })
+      : null;
+    try {
+      if (!runner && !input.seat) return await fail("session", "빌드할 세션이 없습니다 — 그 판을 저장한 사람의 세션에서 빌드합니다");
+      const deadlineMs = now() + input.policy.build_timeout_s * 1000;
+      const uploadUrl = runner ? runner.uploadUrl
+        : deps.presignPut ? await deps.presignPut(zipKey, input.policy.build_timeout_s + 600) : await store!.uploadUrl(zipKey, input.policy.build_timeout_s + 600);
+      const files = input.bundle.files.filter((f) => !ZIP_EXCLUDE.includes(f.p));
+      const header: BuildHeader = {
+        v: 1, deadline_ms: deadlineMs, files: files.map((f) => [f.p, f.s]),
+        build: input.decl.build, start: input.decl.start, dir: input.decl.dir,
+        unzipped_max: (250 - 5) * 1024 * 1024,   // Lambda 풀린 크기 250MB 에서 웹 어댑터 레이어(약 2MB)와 여유를 뺀다
+        mem_floor_mb: runner ? runner.memFloorMb : input.policy.build_mem_floor_mb, heap_mb: input.policy.build_heap_mb, upload_url: uploadUrl,
+      };
+      //  박동은 띄우기 전부터 — 로컬은 박스의 빌드 자리(한 번에 하나)를 기다릴 수 있다(그동안 빌드 줄이 «죽은 빌드» 로 걷히지 않게).
+      const beat = setInterval(() => { void touchServerBuild(input.appId, key, LEASE_SEC).catch(() => { /* 다음 박동에서 */ }); }, 30_000);
+      try {
+        let child: ChildProcess;
+        try { child = runner ? await runner.spawn(["node", "-e", SERVER_BUILDER_JS]) : await (deps.spawnInSession ?? defaultSpawnInSession)(input.seat!, ["node", "-e", SERVER_BUILDER_JS]); }
+        catch (e) { return await fail("session", `${runner ? "빌드 컨테이너를" : "빌드할 세션에서 프로그램을"} 띄우지 못했습니다: ${(e as Error)?.message ?? e}`); }
+        //  stdout 은 조각을 모았다가 한 번에 푼다 — 조각마다 글자로 바꾸면 경계에 걸린 한글이 깨진다(#4135 stream-text 와 같은 까닭).
+        const outParts: Buffer[] = [];
+        let outBytes = 0;
+        const ring = tailRing();
+        child.stdout?.on("data", (d: Buffer) => { if (outBytes < STDOUT_MAX) { outParts.push(d); outBytes += d.length; } });
+        child.stderr?.on("data", (d: Buffer) => { ring.push(d); const l = ring.lastLine(); if (l) live.set(lk, { startedAt: live.get(lk)?.startedAt ?? now(), last: l }); });
+        const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
+          child.on("close", (code, signal) => resolve({ code, signal: signal ?? null }));
+          child.on("error", (e) => { ring.push(Buffer.from(`\n[중계 오류] ${e.message}\n`)); resolve({ code: null, signal: null }); });
+        });
+        child.stdin?.on("error", () => { /* 빌더가 먼저 끝나 파이프가 닫힌 것 — 결과 줄이 말한다 */ });
+        //  빌더도 deadline 에 스스로 멈추지만, 중계가 매달리면 우리가 끊는다(빌더 상한 + 2분). 로컬은 컨테이너째 걷는다(docker CLI 만 죽이면 컨테이너가 남는다).
+        const killAll = (): void => { try { child.kill("SIGKILL"); } catch { /* 이미 끝 */ } void runner?.kill(); };
+        const hard = setTimeout(killAll, input.policy.build_timeout_s * 1000 + 120_000);
+        let pumpErr: unknown = null;
+        if (child.stdin) {
+          await pump(child.stdin, encodeBuildHeader(header), files, (h) => (deps.readBlob ?? getBlob)(input.store, h)).catch((e) => {
+            pumpErr = e;
+            killAll();
+          });
+        }
+        const ex = await exited;
+        clearTimeout(hard);
+        const log = ring.text();
+        if (pumpErr) return await fail("input", `판 파일을 빌더에 넘기지 못했습니다: ${(pumpErr as Error)?.message ?? pumpErr}`, log);
+        const res: BuildResult | null = parseBuildResult(Buffer.concat(outParts).toString("utf8"));
+        if (!res) {
+          if (!runner && ex.code === RELAY_NO_CONTAINER) return await fail("session", "빌드할 세션이 꺼져 있습니다 — 그 세션을 다시 열고(또는 그 세션의 AI 가) 다시 빌드하세요", log);
+          return await fail("crash", `빌더가 결과를 남기지 못하고 끝났습니다(종료 ${ex.code ?? ex.signal ?? "?"}) — ` +
+            (runner ? "빌드 컨테이너 메모리(env LIVELY_APP_SERVER_BUILD_MEMORY_MB · 기본 2048MB)가 모자랐거나 Docker 가 컨테이너를 끝냈을 수 있습니다"
+              : "세션 메모리가 모자랐거나 연결이 끊겼을 수 있습니다"), log);
+        }
+        const detail = { steps: res.steps, warnings: res.warnings, mem: res.mem, ms: res.ms, install: res.install, build_cmd: res.build_cmd, start_cmd: res.start_cmd };
+        if (!res.ok || !res.zip) return await fail(res.stage ?? "build", res.error ?? "빌드가 실패했습니다", log, detail);
+        //  로컬 — 빌더가 /out 에 쓴 zip 을 검사해서(보통 파일 · 상한 안 · 심링크 안 따라감) zip 저장소로 옮긴다. 크기 · 지문은 코어가 직접 잰 값으로(빌더의 말이 아니라 · #4487 격리 리뷰).
+        //   lambda 는 세션이 S3 로 올리므로 빌더가 말한 값을 그대로 쓰고 아래에서 저장소 크기로 다시 확인한다.
+        let zipBytes = res.zip.bytes, zipSha = res.zip.sha256_b64;
+        if (runner) {
+          //  collect 는 박스 경로가 든 fs 오류를 안전한 글로 바꿔 던지므로(app-server-local) e.message 를 그대로 사용자에게 보여도 된다.
+          try { const got = await runner.collect(); zipBytes = got.bytes; zipSha = got.sha256_b64; }
+          catch (e) { return await fail("upload", `빌드 결과(zip)를 받지 못했습니다: ${(e as Error)?.message ?? e}`, log, detail); }
+        }
+        //  올라왔는지 직접 본다 — 빌더의 말만 믿고 함수를 고치지 않는다(크기가 다르면 올리기가 잘렸다).
+        const head = deps.headZip ? await deps.headZip(zipKey) : await store!.head(zipKey).catch(() => null);
+        if (!head || head.size !== zipBytes) {
+          return await fail("upload", `빌드 결과(zip)가 저장소에 ${head ? `다른 크기(${head.size} ≠ ${zipBytes})로` : "없이"} 남았습니다 — 다시 빌드하세요`, log, detail);
+        }
+        //  #4801 지금 판 번호를 함께 적는다 — 함수가 이 판을 바로 읽는다(REFERENCE). 빌더가 말한 판이 아니라 우리가 본 판이다.
+        const row = await finishServerBuild(input.appId, key, {
+          ok: true, zip: { key: zipKey, bytes: zipBytes, sha256_b64: zipSha, unzipped: res.zip.unzipped, entries: res.zip.entries, version: head.versionId ?? null },
+          log_tail: tailText(log, 16 * 1024), detail,
+        });
+        if (!row) {
+          //  빌드하는 동안 앱(과 그 빌드 기록)이 지워졌다 — 방금 올린 zip 은 주인이 없다. 지운다(best-effort · 남으면 버킷 수명 규칙이 걷는다).
+          await (deps.deleteZip ? deps.deleteZip(zipKey) : store ? store.remove(zipKey) : Promise.resolve()).catch(() => { /* best-effort */ });
+          throw new HttpError(409, "빌드하는 동안 앱이 지워졌습니다");
+        }
+        return row;
+      } finally { clearInterval(beat); }
+    } finally { await runner?.cleanup(); }
   } catch (e) {
     logger.warn({ err: e, appId: input.appId, key }, "앱 서버 빌드 실패(#4484)");
     return await fail("internal", `빌드를 진행하지 못했습니다: ${(e as Error)?.message ?? e}`);

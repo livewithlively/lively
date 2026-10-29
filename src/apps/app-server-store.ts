@@ -68,7 +68,7 @@ export async function listServerBuilds(appId: string, limit = 5): Promise<Server
  * 이 지문의 빌드를 잡는다 — 없거나 · 실패했거나 · 잡은 빌드가 죽었으면(lease 지남) 'building' 으로 다시 세우고 true.
  *  이미 성공했거나 남이 빌드 중이면 false(그 줄을 돌려준다). 한 문장이라 두 요청이 동시에 와도 한쪽만 잡는다.
  */
-export async function claimServerBuild(appId: string, key: string, info: { version_no: number; built_by: string; session_id: string; leaseSec: number }): Promise<{ claimed: boolean; row: ServerBuildRow | null }> {
+export async function claimServerBuild(appId: string, key: string, info: { version_no: number; built_by: string; session_id: string | null; leaseSec: number }): Promise<{ claimed: boolean; row: ServerBuildRow | null }> {
   const r = await itemsPool.query(
     `INSERT INTO org_app_server_build(app_id, build_key, version_no, status, built_by, session_id, started_at, lease_until)
      VALUES ($1, $2, $3, 'building', $4, $5, now(), now() + make_interval(secs => $6))
@@ -196,6 +196,8 @@ export interface ServerRow {
   /** #4887 마지막 상태 점검 결과(별칭마다) · 그 시각 — 하루 한 번. */
   health: ServerHealth | null;
   health_checked_at: string | null;
+  /** #4487 자가호스팅 — 이 앱의 재우기 시간(분 · 0 = 안 재움 · null = 워크스페이스 기본 idle_sleep_min). 책임자 · 관리자가 app_server_idle_set 으로. */
+  idle_sleep_min?: number | null;   // 칸을 더하기 전(공용 DB 마이그레이션 전)의 줄엔 없다
   created_at: string; updated_at: string;
 }
 
@@ -370,6 +372,11 @@ export async function setServerAlias(appId: string, alias: AliasName, v: { versi
     if ((err as { code?: unknown })?.code !== "42703") throw err;   // undefined_column — 마이그레이션 전
     logger.warn({ app: appId, alias: c }, "검사 층 판 칸이 아직 없다(공용 DB 마이그레이션 전) — 비워 둔다(#4486)");
   });
+}
+/** #4487 앱별 재우기 시간(분 · 0 = 안 재움 · null = 워크스페이스 기본) — 줄이 있으면 true(서버가 한 번은 올라가야 줄이 있다). */
+export async function setServerIdle(appId: string, minutes: number | null): Promise<boolean> {
+  const r = await itemsPool.query(`UPDATE org_app_server SET idle_sleep_min=$2, updated_at=now() WHERE app_id=$1`, [appId, minutes]);
+  return (r.rowCount ?? 0) > 0;
 }
 export async function setServerError(appId: string, error: string | null): Promise<void> {
   await itemsPool.query(`UPDATE org_app_server SET last_error=$2, updated_at=now() WHERE app_id=$1`, [appId, error ? error.slice(0, 4000) : null]);

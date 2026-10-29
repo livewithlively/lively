@@ -19,7 +19,8 @@ import { tailText } from "../apps/app-server-config.js";
 import {
   APP_SERVER_POLICY_KEYS, APP_SERVER_POLICY_MAX, APP_SERVER_POLICY_MIN, envAppServerPolicy, mbOf, normalizeAppServerPolicy, type AppServerPolicy,
 } from "../apps/app-server-policy.js";
-import { appServerPolicy, appServerPolicyRow, countServerRows, getServerRow, setAppServerPolicy, sumServerCodeBytes } from "../apps/app-server-store.js";
+import { appServerPolicy, appServerPolicyRow, countServerRows, getServerRow, setAppServerPolicy, setServerIdle, sumServerCodeBytes } from "../apps/app-server-store.js";
+import { appServerEnv } from "../apps/app-server-config.js";
 import { appServerUnavailable, deployInstalled, installedTarget, type DeployOutcome, type InstalledTarget } from "../apps/app-server-deploy.js";
 import { resumeServer, serverStatus, stopServer } from "../apps/app-server-lifecycle.js";
 import type { BuildSeat } from "../apps/app-server-build.js";
@@ -74,7 +75,9 @@ const appServerDeploy: Capability = {
     "올린 뒤 GET / 로 한 번 불러 서버가 뜨는지 본다(안 뜨면 기록과 함께 실패 · 앱 주소는 그대로). 그 판을 **저장한 사람**의 세션에서만 빌드한다 — 남이 저장한 판은 이미 빌드됐을 때만 올라간다. " +
     "빌드는 몇 분 걸릴 수 있어 wait_s(기본 50초) 안에 안 끝나면 status 'running' 으로 돌아오고 뒤에서 이어 간다 — app_server_status 로 본다(실패하면 이 세션에 기록이 들어온다). " +
     "공개(app_visibility_set 'all' · publish:true)는 그 판이 빌드된 뒤에만 된다. 앱 주소의 /_lively/* 밖 경로는 이 함수가 답한다(v2-6 — 게이트웨이가 부르고 · 사람 신원은 함수 안 검사 층이 확인해 x-lively-member 로 넘긴다). " +
-    "status 'deployed' 여도 warnings 가 있으면 읽는다(예: 로그 그룹을 못 맞춤 — 그 함수 기록이 CloudWatch 에 안 남을 수 있다 · 다시 넣으면 다시 맞춘다).",
+    "status 'deployed' 여도 warnings 가 있으면 읽는다(예: 로그 그룹을 못 맞춤 — 그 함수 기록이 CloudWatch 에 안 남을 수 있다 · 다시 넣으면 다시 맞춘다). " +
+    "자가호스팅 박스(실행면 local · #4487)는 Lambda 대신 이 박스의 Docker 컨테이너(앱 × 판)로 돈다 — 빌드는 자격 없는 일회용 컨테이너(세션 불요 · 누가 눌러도 됨) · " +
+    "처음 부를 때 컨테이너를 띄우고 한가하면 재운다(app_server_idle_set) · 앱 전용 주소는 없고 백그라운드 작업 · 도구 호출 길로 부른다.",
   scope: null,
   input: {
     app_id: z.string(),
@@ -102,14 +105,16 @@ const appServerDeploy: Capability = {
     let job = jobs.get(jk);
     const started = !job;
     const seat = await seatFor(t, who, ctx as { session?: string } | undefined);
+    //  #4487 자가호스팅(local) — 빌드는 자격 없는 일회용 컨테이너에서 하므로 세션이 필요 없다(누가 눌러도 그 판을 빌드한다).
+    const local = appServerEnv()?.host === "local";
     if (!job) {
-      if (!seat && t.savedBy === who.userId) {
+      if (!seat && t.savedBy === who.userId && !local) {
         //  빌드가 이미 있으면 자리 없이도 올라간다(deployInstalled 가 본다) — 없을 때만 이 안내가 의미 있다.
         const st0 = await serverStatus(app).catch(() => null);
         const built = (st0?.installed as { build?: { status?: string } } | null)?.build?.status === "ok";
         if (!built) throw new HttpError(409, "빌드할 세션이 없습니다 — 이 앱을 만드는 세션의 AI 에게 app_server_deploy 를 부탁하거나, 앱 만들기 화면에서 「이대로 넣기」 를 누르세요(세션이 꺼져 있으면 먼저 여세요)");
       }
-      job = deployInstalled(t, seat, policy).finally(() => { jobs.delete(jk); });
+      job = deployInstalled(t, seat, policy, {}, { by: who.userId }).finally(() => { jobs.delete(jk); });
       jobs.set(jk, job);
     }
     const waitMs = Math.max(0, Number(input.wait_s ?? 50)) * 1000;
@@ -184,6 +189,32 @@ const appServerResume: Capability = {
   },
 };
 
+const appServerIdleSet: Capability = {
+  name: "app_server_idle_set",
+  title: "앱 서버 재우기 시간",
+  description: "자가호스팅 박스(실행면 local)에서 이 앱의 서버 컨테이너를 재우기까지의 한가한 시간(분)을 정한다 — 0 = 안 재움(늘 깨어 있음 · 박스 메모리 예산을 그만큼 늘 쓴다) · " +
+    "null = 워크스페이스 기본(app_server_limits idle_sleep_min · 기본 10분). 잠든 앱은 다음 요청 · 작업 때 다시 뜬다(차가운 시작 몇 초). " +
+    "책임자 · 관리자만. 서버가 한 번 올라간 앱에만 정할 수 있다. 매니지드(Lambda)에는 재우기가 없다.",
+  scope: null,
+  input: {
+    app_id: z.string(),
+    idle_sleep_min: z.number().int().min(0).max(1440).nullable().describe("분(0 = 안 재움 · null = 워크스페이스 기본)"),
+  },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/apps/:id/server/idle"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, idle_sleep_min: (req.body as Record<string, unknown>)?.idle_sleep_min ?? null }) }] },
+  handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+    const who = viewerOf(user);
+    const app = await requireVisibleApp(appIdOf(input.app_id), who);
+    if (!isAppOwner(app, who) && !isAdminViewer(who)) throw new HttpError(403, "앱 서버 재우기 시간은 책임자와 관리자만 정합니다");
+    if (appServerEnv()?.host !== "local") throw new HttpError(409, "이 워크스페이스의 앱 서버는 자가호스팅 실행면(local)이 아니라 재우기 설정이 없습니다(매니지드 Lambda 는 스스로 재운다)");
+    const raw = input.idle_sleep_min;
+    const n = raw === null || raw === undefined ? null : Number(raw);
+    if (n !== null && (!Number.isInteger(n) || n < 0 || n > 1440)) throw new HttpError(400, "idle_sleep_min 은 0~1440 정수이거나 null(워크스페이스 기본)입니다");
+    if (!(await setServerIdle(app.id, n))) throw new HttpError(404, "이 앱은 아직 서버가 올라가지 않았습니다 — app_server_deploy 로 한 번 올린 뒤 정하세요");
+    const policy = await appServerPolicy();
+    return { ok: true, app_id: app.id, idle_sleep_min: n, effective_min: n ?? policy.idle_sleep_min, workspace_default_min: policy.idle_sleep_min };
+  },
+};
+
 async function limitsSnapshot(): Promise<Record<string, unknown>> {
   const [policy, row, functions, code] = await Promise.all([appServerPolicy(), appServerPolicyRow(), countServerRows(), sumServerCodeBytes()]);
   return {
@@ -202,6 +233,8 @@ const appServerLimits: Capability = {
     "max_inflight_workspace · max_inflight_app 동시 처리 상한 — 워크스페이스 · 앱마다 지금 처리 중인 요청 수, 넘으면 함수를 부르지 않고 429 · 앱 값은 워크스페이스 값까지만 쓴다 · " +
     "#4486 백그라운드 작업: job_timeout_s 함수 시간 = 작업 하나의 시간(사람 요청은 timeout_s 에서 검사 층이 끊는다) · memory_max_mb 앱이 web.server.memory_mb 로 고를 수 있는 천장 · " +
     "jobs_running_workspace · jobs_running_app 동시에 도는 작업 수(넘으면 줄을 선다) · jobs_queued_app 앱의 대기 줄 · jobs_daily_app 앱의 최근 24시간 작업 수 · job_wait_s 대기 시간 · job_body_kb 작업 본문 · job_keep_days 끝난 작업 기록 보존 일수) · " +
+    "#4487 자가호스팅(실행면 local)만: idle_sleep_min 한가한 앱 서버 컨테이너를 재우기까지의 분(0 = 안 재움 · 앱별 값은 app_server_idle_set) · " +
+    "local_memory_mb 이 워크스페이스의 깨어 있는 앱 서버 컨테이너 메모리 합(박스 천장 env LIVELY_APP_SERVER_LOCAL_MEMORY_MAX_MB 까지만 쓴다 — 넘으면 오래 쉰 것부터 재우고, 그래도 넘으면 띄우지 않는다) · " +
     "workspace_setting(저장한 값) · platform_default · min · ceiling · usage(functions 지금 함수 수 · code_mb 지금 코드 저장). 구성원 누구나.",
   scope: null,
   input: {},
@@ -253,4 +286,4 @@ const appServerLimitsSet: Capability = {
   },
 };
 
-export const appServerCapabilities: Capability[] = [appServerDeploy, appServerStatus, appServerStop, appServerResume, appServerLimits, appServerLimitsSet];
+export const appServerCapabilities: Capability[] = [appServerDeploy, appServerStatus, appServerStop, appServerResume, appServerIdleSet, appServerLimits, appServerLimitsSet];

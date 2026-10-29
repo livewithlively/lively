@@ -15,6 +15,7 @@ import {
 import { AwsError } from "../net/aws/aws-json.js";
 import type { OrgApp } from "../org/store/apps.js";
 import { endJobsForApp } from "./app-jobs.js";
+import { localContainersOf } from "./app-server-local.js";
 
 /**
  * 멈춤 — 동시 실행 0. 이미 멈춘 함수면 아무것도 바꾸지 않는다(changed:false — 자동 멈춤 · 남의 멈춤 기록을 덮지 않는다).
@@ -189,9 +190,14 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
       }
     } catch (e) { installed = { error: (e as Error)?.message ?? String(e) }; }
   }
+  //  #4487 자가호스팅 — 깨어 있는 컨테이너(판 · 마지막으로 쓴 때 · 처리 중) · 재우기 시간(앱별 값 · 실제로 쓰는 값).
+  const local = env?.host === "local" && row
+    ? { containers: localContainersOf(row.function_name), idle_sleep_min: row.idle_sleep_min ?? null, idle_sleep_effective_min: row.idle_sleep_min ?? (await st.appServerPolicy()).idle_sleep_min }
+    : null;
   return {
     app_id: app.id, server_declared: !!decl, ...(decl ? { decl } : {}),
     available: env ? null : appServerUnavailable(),
+    host: env?.host ?? null,
     installed,
     function: row ? {
       name: row.function_name,
@@ -207,6 +213,7 @@ export async function serverStatus(app: OrgApp, deps0: ServerDeps = {}): Promise
       //  #4887 하루 한 번 별칭 판 점검 — checked_at(끝낸 시각) · 별칭마다 ok · idle(쉬는 판) · moved(옛 zip 판 · 원본 잃음을 옮김) · repaired(멈췄던 판을
       //   다시 올림) · unfixed · failed · deferred(이번에 못 본 까닭 · 연속 횟수). 별칭을 옮기면 비고 다음 틱에 다시 본다.
       health: row.health ?? null,
+      ...(local ? { local } : {}),
     } : null,
     builds: builds.map((b) => ({
       build_key: b.build_key, version_no: b.version_no, status: b.status, stage: b.stage, error: b.error, built_by: b.built_by,

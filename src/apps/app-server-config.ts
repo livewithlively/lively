@@ -82,11 +82,10 @@ export function appServerHostKind(env: NodeJS.ProcessEnv = process.env): AppServ
 export function appServerHostUnavailable(env: NodeJS.ProcessEnv = process.env): string | null {
   const kind = appServerHostKind(env);
   if (!kind) return `앱 서버 실행면 이름(LIVELY_APP_SERVER_HOST=${String(env.LIVELY_APP_SERVER_HOST ?? "").trim().slice(0, 40)})을 모릅니다 — lambda 또는 local 입니다`;
-  if (kind === "local") return "이 판의 코어에는 자가호스팅 실행면(LIVELY_APP_SERVER_HOST=local)이 아직 없습니다(#4487)";
   return null;
 }
 
-/** 배포 설정(env) — 실행 역할이 없으면 null(= 이 배포는 앱 서버를 돌리지 않는다 · 자가호스팅은 v2-8). */
+/** 배포 설정(env) — 매니지드(lambda)는 실행 역할이 없으면 null(= 이 배포는 앱 서버를 돌리지 않는다) · 자가호스팅(local)은 실행 역할 없이 켜진다(#4487). */
 export interface AppServerEnv {
   /** 실행면(#4487) — 흐름은 이 값으로 함수 실행면 · zip 저장소를 고른다(app-server-host appServerApi). */
   host: AppServerHostKind;
@@ -100,7 +99,8 @@ export interface AppServerEnv {
   /** 함수 이름 앞자리 — IAM 정책이 lvly-app-* 만 허락한다. 한 계정을 여러 배포가 나눠 쓰면 배포마다 다르게(예 lvly-app-dev-). */
   prefix: string;
   runtime: string;
-  arch: "arm64";
+  /** Lambda 는 늘 arm64 · 로컬(#4487)은 이 박스의 Docker 와 같은 아키텍처(빌드한 네이티브 모듈이 맞게 — 빌드 지문에 들어간다). */
+  arch: "arm64" | "x86_64";
   /**
    * 함수 코드를 어디에 두나(#4801 · env LIVELY_APP_SERVER_CODE_STORAGE) — REFERENCE(기본) = Lambda 가 우리 판 묶음 버킷의 zip 을 그 판 번호로 바로 읽는다
    *  (계정 코드 저장 300GiB 를 쓰지 않는다) · COPY = Lambda 가 제 저장소로 복사한다(#4484 방식). REFERENCE 는 인프라(lively-infra app-bundles.tf 버킷 정책 ·
@@ -131,8 +131,10 @@ export function appServerEnabledFor(slug: string | null | undefined, env: NodeJS
 
 /** 이 요청(워크스페이스)의 앱 서버 설정 — 실행 역할이 없거나 · 모양이 틀렸거나 · 워크스페이스 스위치 밖이면 null(= 앱 서버 꺼짐). */
 export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string | null | undefined = currentTenant()?.slug): AppServerEnv | null {
-  //  #4487 실행면 — 이 판에서는 lambda 만 돈다(local 은 다음 단계 · 모르는 이름은 끈다 · 까닭은 appServerHostUnavailable).
-  if (appServerHostKind(env) !== "lambda") return null;
+  //  #4487 실행면 — 모르는 이름은 끈다(까닭은 appServerHostUnavailable) · local 은 이 박스의 Docker(app-server-local).
+  const kind = appServerHostKind(env);
+  if (!kind) return null;
+  if (kind === "local") return localAppServerEnv(env, slug);
   const execRoleArn = String(env.LIVELY_APP_SERVER_EXEC_ROLE ?? "").trim();
   const role = ROLE_RE.exec(execRoleArn);
   if (!role) return null;
@@ -146,6 +148,33 @@ export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string 
   //  모르는 값은 기본(REFERENCE)으로 — «copy» 라고 또렷이 적었을 때만 복사한다.
   const codeStorage = String(env.LIVELY_APP_SERVER_CODE_STORAGE ?? "").trim().toLowerCase() === "copy" ? "COPY" : "REFERENCE";
   return { host: "lambda", region, execRoleArn, awsAccountId: role[1]!, layerArn, prefix, runtime, arch: "arm64", codeStorage };
+}
+
+/**
+ * 자가호스팅 박스의 설정(#4487 · LIVELY_APP_SERVER_HOST=local) — 실행 역할 · 레이어 · 계정 칸은 Lambda 꼴을 맞추는 자리 표시다(로컬 실행면은 읽지 않는다).
+ *  runtime = 실행 · 빌드 이미지(env LIVELY_APP_SERVER_IMAGE · 기본 node:22-bookworm-slim — 빌드 지문에 들어가 이미지를 바꾸면 다시 빌드한다) ·
+ *  arch = 이 박스의 아키텍처 · 코드 자리 = COPY(함수가 zip 을 제 폴더로 복사한다 — 판 번호가 없다). 워크스페이스 스위치(LIVELY_APP_SERVER_TENANTS)는 같다.
+ */
+function localAppServerEnv(env: NodeJS.ProcessEnv, slug: string | null | undefined): AppServerEnv | null {
+  if (!appServerEnabledFor(slug, env)) return null;
+  const p = String(env.LIVELY_APP_SERVER_PREFIX ?? "").trim();
+  return {
+    host: "local", region: "local", execRoleArn: "lively-local:role", awsAccountId: "000000000000", layerArn: LOCAL_ADAPTER_LAYER_ARN,
+    prefix: p && PREFIX_RE.test(p) ? p : "lvly-app-",
+    runtime: localImage(env),
+    arch: process.arch === "arm64" ? "arm64" : "x86_64",
+    codeStorage: "COPY",
+  };
+}
+/** 로컬 실행면의 웹 어댑터 레이어 자리(app-server-local LOCAL_ADAPTER_LAYER 와 같은 값 — 마운트하지 않는다). */
+export const LOCAL_ADAPTER_LAYER_ARN = "lively-local:adapter";
+/** 자가호스팅 실행 · 빌드 이미지 기본값 · 이름 꼴 — 컨테이너 인자 검사기는 이 값만 허락한다(app-server-docker 정책). */
+export const DEFAULT_LOCAL_IMAGE = "node:22-bookworm-slim";
+export const LOCAL_IMAGE_RE = /^[a-z0-9][a-z0-9._/:@-]{0,199}$/;
+/** 실행 · 빌드 이미지(env LIVELY_APP_SERVER_IMAGE) — 꼴이 틀리면 기본값. */
+export function localImage(env: NodeJS.ProcessEnv = process.env): string {
+  const v = String(env.LIVELY_APP_SERVER_IMAGE ?? "").trim();
+  return v && LOCAL_IMAGE_RE.test(v) ? v : DEFAULT_LOCAL_IMAGE;
 }
 
 /**
@@ -286,6 +315,11 @@ export const LAMBDA_HANDLER = RUN_SCRIPT;
 export function appServerApiUrl(slug: string | null | undefined, profileUrl: string | null, env: NodeJS.ProcessEnv = process.env): string | null {
   const s = String(slug ?? "").trim().toLowerCase();
   const clean = (u: string): string | null => { try { const x = new URL(u); return x.protocol === "https:" || x.protocol === "http:" ? `${x.protocol}//${x.host}` : null; } catch { return null; } };
+  //  #4487 자가호스팅 — 앱 서버는 이 박스의 컨테이너 안에서 게이트웨이를 부른다. 워크스페이스 주소에 슬러그를 붙이는 규칙(매니지드)은 쓰지 않는다:
+  //   env LIVELY_APP_SERVER_API_URL(컨테이너에서 닿는 주소 — 예 http://host.docker.internal:8080) > 조직 정보의 게이트웨이 주소 > PUBLIC_URL.
+  if (appServerHostKind(env) === "local") {
+    return clean(String(env.LIVELY_APP_SERVER_API_URL ?? "").trim()) ?? (profileUrl ? clean(profileUrl) : null) ?? clean(String(env.PUBLIC_URL ?? "").trim());
+  }
   const prof = profileUrl ? clean(profileUrl) : null;
   if (s && prof && new URL(prof).host.startsWith(`${s}.`)) return prof;
   const pub = clean(String(env.PUBLIC_URL ?? "").trim());

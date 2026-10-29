@@ -490,6 +490,16 @@ t("J5 작업 상한 — 기본(함수 900초 · 메모리 천장 10GB · 동시 
   assert.equal(normalizeAppServerPolicy({ job_keep_days: 99_999 }).job_keep_days, 3650);
 });
 
+t("C5 자가호스팅 상한(#4487) — 재우기 기본 10분 · 0(안 재움) 허용 · 하루 천장 / 메모리 예산 기본 2048 · 바닥 256 · 0 은 «값 없음»", () => {
+  const d = APP_SERVER_POLICY_DEFAULT;
+  assert.deepEqual([d.idle_sleep_min, d.local_memory_mb], [10, 2048]);
+  assert.equal(normalizeAppServerPolicy({ idle_sleep_min: 0 }).idle_sleep_min, 0, "0 = 안 재움(값 없음으로 읽지 않는다)");
+  assert.equal(normalizeAppServerPolicy({ idle_sleep_min: 5000 }).idle_sleep_min, 1440);
+  assert.equal(normalizeAppServerPolicy({ idle_sleep_min: -1 }).idle_sleep_min, 10);
+  assert.equal(normalizeAppServerPolicy({ local_memory_mb: 100 }).local_memory_mb, 256);
+  assert.equal(normalizeAppServerPolicy({ local_memory_mb: 0 }).local_memory_mb, 2048);
+});
+
 //  S7 재사용 판정이 기대는 이음매 — 실제 어댑터의 getFunction 이 판(Qualifier)을 실어 보내고 Code(코드 자리)를 그대로 돌려주는가(격리 리뷰).
 {
   const urls: string[] = [];

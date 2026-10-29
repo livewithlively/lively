@@ -5477,6 +5477,16 @@
   "input_hash": "eeaa30c0ba805f7f"
  },
  {
+  "name": "app_server_idle_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/server/idle"
+  ],
+  "input_hash": "8eee1089d76366b2"
+ },
+ {
   "name": "app_server_limits",
   "scope": null,
   "mcp": true,
@@ -5494,7 +5504,7 @@
   "rest": [
    "POST /api/ui/app-server-limits"
   ],
-  "input_hash": "0135e126e888b26a"
+  "input_hash": "63b7f236cae904ea"
  },
  {
   "name": "app_folder_limit_set",

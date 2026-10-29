@@ -66,7 +66,7 @@ export function appServerUnavailable(env: NodeJS.ProcessEnv = process.env): stri
   //  #4487 실행면 이름이 틀렸거나 이 판에 없는 실행면이면 그 까닭이 먼저다(아래 «켜져 있지 않음» 보다 고칠 자리가 또렷하다).
   const host = appServerHostUnavailable(env);
   if (host) return `${host} — 화면(web.root)은 그대로 됩니다`;
-  if (!appServerEnv(env)) return "이 워크스페이스는 앱 서버 실행이 아직 켜져 있지 않습니다(자가호스팅 박스는 v2-8 에서) — 화면(web.root)은 그대로 됩니다";
+  if (!appServerEnv(env)) return "이 워크스페이스는 앱 서버 실행이 아직 켜져 있지 않습니다 — 화면(web.root)은 그대로 됩니다";
   if (!appServerZipStore(env) && !testDeps.bucket) return "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 앱 서버를 올릴 수 없습니다";
   return null;
 }
@@ -263,7 +263,9 @@ export async function deployBuildToAliases(i: {
   if (!fn) throw nameTooLong(i.app.id);
   //  #4485 — 검사 층이 볼 신원 공개 키 · 앱 서버가 부를 라이블리 주소. 없으면 함수를 만들어도 모든 요청이 거부되거나 라이블리를 못 부른다 — 지금 멈춘다.
   //   함수 줄을 잡기 전에 본다 — 줄을 잡은 뒤 여기서 멈추면 함수 없는 빈 줄이 함수 수 상한(#4792)의 한 칸을 차지한다.
-  const identityPubkeys = deps.identityPubkeys ?? identityPubkeysForFunctions();
+  //   #4487 자가호스팅(결정 #5052 ① claim · ② 1판엔 앱 주소 없음) — 서명 신원은 쓰지 않으니 공개 키 없이 «{}» 로 굽는다(검사 층은 서명 신원 요청을 모두 401 ·
+  //   작업 신원(claim)은 게이트웨이에 확인받아 공개 키를 쓰지 않는다). 박스에 공개 키가 있으면 그것을 굽는다.
+  const identityPubkeys = deps.identityPubkeys ?? identityPubkeysForFunctions() ?? (env.host === "local" ? "{}" : null);
   if (!identityPubkeys) throw new HttpError(503, "사람 신원 공개 키(LIVELY_APP_IDENTITY_PUBKEYS)가 이 게이트웨이에 없어 앱 서버를 올리지 않습니다 — 운영 설정(앱 주소 앞단 신원 서명 키)을 먼저 하세요");
   const apiUrl = deps.apiUrl ?? appServerApiUrl(slug, await gatewayUrl().catch(() => null));
   if (!apiUrl) throw new HttpError(503, "이 워크스페이스의 라이블리 주소(LIVELY_API_URL)를 정하지 못해 앱 서버를 올리지 않습니다 — 조직 정보의 게이트웨이 주소 · PUBLIC_URL 을 보세요");
@@ -571,7 +573,10 @@ export interface DeployOutcome {
  * 지금 판을 빌드(필요하면 그 판을 저장한 사람의 세션에서)하고 cur(+ 공개 판이면 pub)에 올린다.
  *  seat — 빌드할 자리. 그 판을 저장한 사람이 아니면 null 로 넘긴다(빌드가 이미 있을 때만 올린다).
  */
-export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null, policy: AppServerPolicy, deps0: ServerDeps = {}): Promise<DeployOutcome> {
+/**
+ *  by — 이 배포를 부른 구성원(빌드 기록의 built_by). 로컬 실행면(#4487)은 자격 없는 일회용 컨테이너에서 빌드하므로 «저장한 사람의 세션» 이 필요 없다(seat 없이 빌드).
+ */
+export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null, policy: AppServerPolicy, deps0: ServerDeps = {}, opts: { by?: string } = {}): Promise<DeployOutcome> {
   const deps = withDeps(deps0);
   const env = deps.env ?? appServerEnv();
   if (!env) throw new HttpError(503, appServerUnavailable() ?? "앱 서버 설정이 없습니다");
@@ -582,13 +587,13 @@ export async function deployInstalled(t: InstalledTarget, seat: BuildSeat | null
   if (full) throw new HttpError(409, full);
   const key = buildKeyFor({ bundle: t.bundle.bundle, decl: t.decl, env });
   const have = await usableBuild(await st.getServerBuild(t.app.id, key), deps);
-  if (!have && !seat) {
+  if (!have && !seat && env.host !== "local") {
     throw new HttpError(409, `${t.versionNo}판의 서버가 아직 빌드되지 않았습니다 — 이 판은 ${t.savedBy ?? "다른 사람"} 님이 저장해서 그 사람의 세션에서 빌드해야 합니다` +
       "(그 사람이 「이대로 넣기」 또는 app_server_deploy). 남이 저장한 코드를 내 세션에서 돌리지 않습니다");
   }
   const built = have
     ? { build: have, reused: true, key }
-    : await ensureServerBuild({ appId: t.app.id, versionNo: t.versionNo, bundle: t.bundle.bundle, store: t.bundle.kind, decl: t.decl, env, policy, seat: seat! }, deps);
+    : await ensureServerBuild({ appId: t.app.id, versionNo: t.versionNo, bundle: t.bundle.bundle, store: t.bundle.kind, decl: t.decl, env, policy, seat, by: seat?.memberId ?? opts.by ?? t.savedBy ?? "app-server" }, deps);
   const b = built.build;
   const detail = (b.detail ?? {}) as { ms?: number; mem?: unknown; warnings?: unknown };
   const buildView = { key, status: b.status, reused: built.reused, stage: b.stage, error: b.error, log_tail: b.status === "failed" ? b.log_tail : null, ms: detail.ms ?? null, mem: detail.mem ?? null, warnings: detail.warnings ?? [] };

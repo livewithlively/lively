@@ -5,10 +5,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appServerEnv, appServerHostKind, appServerHostUnavailable } from "./app-server-config.js";
+import { LOCAL_ADAPTER_LAYER_ARN, appServerApiUrl, appServerEnv, appServerHostKind, appServerHostUnavailable } from "./app-server-config.js";
 import { appServerApi, appServerZipStore, s3ZipStore } from "./app-server-host.js";
 import { appServerUnavailable } from "./app-server-deploy.js";
-import { HttpError } from "../http-error.js";
 
 let pass = 0;
 const tests: Array<[string, () => void | Promise<void>]> = [];
@@ -45,16 +44,47 @@ t("E1 lambda + 실행 역할 → 설정의 실행면 칸 = lambda", () => {
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_SERVER_HOST: "lambda" })?.host, "lambda");
 });
 
-t("E2 local + 실행 역할 → 이 판에선 앱 서버 꺼짐", () => {
-  assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_SERVER_HOST: "local" }), null);
+t("E2 · C1 local → 실행 역할 없이 켜짐(실행면 local · 런타임 = 이미지 · 아키텍처 = 이 박스 · COPY)", () => {
+  //  #4487 2단계 — 1단계에선 이 판에서 꺼져 있었다(E2). 자가호스팅 박스엔 실행 역할 · 버킷이 없다.
+  for (const extra of [{}, { LIVELY_APP_SERVER_EXEC_ROLE: ROLE }]) {
+    const e = appServerEnv({ LIVELY_APP_SERVER_HOST: "local", ...extra }, "acme");
+    assert.equal(e?.host, "local");
+    assert.equal(e?.runtime, "node:22-bookworm-slim");
+    assert.equal(e?.arch, process.arch === "arm64" ? "arm64" : "x86_64");
+    assert.equal(e?.codeStorage, "COPY");
+    assert.equal(e?.layerArn, LOCAL_ADAPTER_LAYER_ARN);
+    assert.equal(e?.prefix, "lvly-app-");
+  }
+  assert.equal(appServerEnv({ LIVELY_APP_SERVER_HOST: "local", LIVELY_APP_SERVER_IMAGE: "registry.example/node:22@sha256:abc" }, "acme")?.runtime, "registry.example/node:22@sha256:abc");
+});
+
+t("C2 local + 워크스페이스 스위치 밖 → 꺼짐 · 안 → 켜짐", () => {
+  assert.equal(appServerEnv({ LIVELY_APP_SERVER_HOST: "local", LIVELY_APP_SERVER_TENANTS: "other" }, "acme"), null);
+  assert.equal(appServerEnv({ LIVELY_APP_SERVER_HOST: "local", LIVELY_APP_SERVER_TENANTS: "other, acme" }, "acme")?.host, "local");
+});
+
+t("C3 이미지 env 꼴이 틀리면 기본 이미지(검사기가 그 값만 허락한다)", () => {
+  for (const bad of ["Node:22", "node 22", "--privileged", "a".repeat(201), "node:22;rm -rf /"]) {
+    assert.equal(appServerEnv({ LIVELY_APP_SERVER_HOST: "local", LIVELY_APP_SERVER_IMAGE: bad }, "acme")?.runtime, "node:22-bookworm-slim", bad);
+  }
+});
+
+t("C4 local 의 게이트웨이 주소(LIVELY_API_URL) — env > 조직 게이트웨이 주소 > PUBLIC_URL · 슬러그를 붙이지 않는다", () => {
+  const L = { LIVELY_APP_SERVER_HOST: "local", PUBLIC_URL: "https://box.example.com/x" };
+  assert.equal(appServerApiUrl("acme", "https://gw.example.com/ui", { ...L, LIVELY_APP_SERVER_API_URL: "http://host.docker.internal:8080/" }), "http://host.docker.internal:8080");
+  assert.equal(appServerApiUrl("acme", "https://gw.example.com/ui", L), "https://gw.example.com");
+  assert.equal(appServerApiUrl("acme", null, L), "https://box.example.com", "acme.box.example.com 으로 붙이지 않는다");
+  assert.equal(appServerApiUrl("acme", null, { ...L, LIVELY_APP_SERVER_API_URL: "ftp://x" }), "https://box.example.com", "http(s) 아닌 env 는 버린다");
+  //  매니지드(lambda)는 종전대로 슬러그를 붙인다
+  assert.equal(appServerApiUrl("acme", null, { PUBLIC_URL: "https://lvly.io" }), "https://acme.lvly.io");
 });
 
 t("E3 ★ 모르는 이름 + 실행 역할 → 꺼짐(조용히 Lambda 로 가지 않는다)", () => {
   assert.equal(appServerEnv({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_SERVER_HOST: "locl" }), null);
 });
 
-t("U1~U5 못 켜는 까닭 — local · 모르는 이름 · 역할 없음 · 버킷 없음 · 다 있음", () => {
-  assert.match(appServerUnavailable({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_SERVER_HOST: "local", ...BUCKET }) ?? "", /자가호스팅 실행면/);
+t("U1~U5 못 켜는 까닭 — local(켜짐 · 버킷 없이) · 모르는 이름 · 역할 없음 · 버킷 없음 · 다 있음", () => {
+  assert.equal(appServerUnavailable({ LIVELY_APP_SERVER_HOST: "local" }), null, "자가호스팅은 실행 역할 · 버킷 없이 켜진다(#4487 2단계)");
   assert.match(appServerUnavailable({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE, LIVELY_APP_SERVER_HOST: "docker", ...BUCKET }) ?? "", /LIVELY_APP_SERVER_HOST=docker/);
   assert.match(appServerUnavailable({ ...BUCKET }) ?? "", /앱 서버 실행이 아직 켜져 있지 않습니다/);
   assert.match(appServerUnavailable({ LIVELY_APP_SERVER_EXEC_ROLE: ROLE }) ?? "", /판 묶음 버킷\(LIVELY_APP_BUNDLE_BUCKET\)이 없어/);
@@ -69,8 +99,9 @@ t("A1 함수 실행면 — lambda 면 흐름이 부르는 열일곱 동작이 �
   for (const m of API_METHODS) assert.equal(typeof api[m], "function", m);
 });
 
-t("A2 함수 실행면 — local 은 이 판에서 503", () => {
-  assert.throws(() => appServerApi({ host: "local", region: "ap-northeast-2" }), (e: unknown) => e instanceof HttpError && e.status === 503);
+t("A2 함수 실행면 — local 도 열일곱 동작이 다 있다(로컬 컨테이너 실행면)", () => {
+  const api = appServerApi({ host: "local", region: "local" }) as unknown as Record<string, unknown>;
+  for (const m of API_METHODS) assert.equal(typeof api[m], "function", m);
 });
 
 t("Z1 · Z4 zip 저장소 — lambda + 버킷 → 버킷 이름 · 앞자리(설정 없으면 빈 글 · 있으면 끝에 / 하나)", () => {
@@ -85,8 +116,12 @@ t("Z2 zip 저장소 — 버킷 없음 → 없음", () => {
   assert.equal(appServerZipStore({}), null);
 });
 
-t("Z3 zip 저장소 — local(버킷이 있어도) · 모르는 이름 → 없음", () => {
-  assert.equal(appServerZipStore({ ...BUCKET, LIVELY_APP_SERVER_HOST: "local" }), null);
+t("Z3 zip 저장소 — local 은 박스 디스크(버킷이 있어도 · 없어도) · 모르는 이름 → 없음", () => {
+  for (const extra of [{}, BUCKET]) {
+    const z = appServerZipStore({ ...extra, LIVELY_APP_SERVER_HOST: "local" });
+    assert.equal(z?.bucket, "lively-local");
+    assert.equal(z?.prefix, "");
+  }
   assert.equal(appServerZipStore({ ...BUCKET, LIVELY_APP_SERVER_HOST: "nope" }), null);
 });
 

@@ -576,6 +576,14 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/apps/app-jobs.pg-test.mjs
+      # ⑤-m2c 자가호스팅 앱 서버(#4487 앱 v2-8) — LIVELY_APP_SERVER_HOST=local 에서 세션 없는 일회용 빌드(진짜 빌더) → 로컬 zip · 진짜 로컬 실행면(판 폴더 ·
+      #    별칭 · 재우기)으로 배포 · 공개 · 재우기 설정 권한 · 백그라운드 작업(진짜 콜백 경로 — claim · 결과 · 재전송 409) · 멈춤 · 판 코드 잃음 → 상태 점검 ·
+      #    정비 · 앱 지우기. 컨테이너 겉면만 이 러너의 프로세스(검사 층 + 앱)다 — 인자는 운영과 같은 검사기를 지난다.
+      - name: 자가호스팅 앱 서버(로컬 실행면 · 일회용 빌드 · 작업 · 재우기) PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/apps/app-servers-local.pg-test.mjs
       # ⑤-n3 앱 폴더 보관(#4778) — 앱을 지우는 모든 입구(관리자 제거 · 나만 보는 앱 지우기 · 기본 앱 은퇴 · 빈 예약 거두기)가 앱 폴더를
       #    보관으로 옮기는지, 같은 id 로 새로 만들 때 남은 폴더를 먼저 옮겨 새 앱이 빈 폴더로 시작하는지(옛 파일 서명 주소 404 · 탐색기 빈 목록),
       #    보관 기간이 지나면 지우는지, 관리자 목록 · 비우기 · 되돌리기 · 고아 옮기기가 기록 표와 실제 폴더를 같이 맞추는지는 진짜 DB · 폴더에서만 보인다.

@@ -469,6 +469,10 @@ export async function runAppServerHousekeeping(deps: WatchDeps = {}): Promise<Re
   out.pruned = await pruneServerBuilds(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.orphans = await sweepOrphanServers(deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   out.usage_pruned = await pruneAppServerUsage(USAGE_KEEP_DAYS).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  //  #4487 자가호스팅 — 주인 없는 컨테이너 · 남은 빌드 컨테이너 · 지난 env 파일(재우기는 1분 타이머가 따로 — boot/housekeeping).
+  if (appServerEnv()?.host === "local") {
+    out.local = await (await import("./app-server-local.js")).localHousekeeping(policy.build_timeout_s).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
+  }
   //  ⑦ 은 맨 끝 — 다시 올리기가 느릴 수 있어 앞 단계(자동 멈춤 · 정리)를 밀지 않게(시간 예산 안에서만 돈다).
   out.health = await checkServerHealth(policy, deps).catch((e) => ({ error: String((e as Error)?.message ?? e) }));
   return out;
