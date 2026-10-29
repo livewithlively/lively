@@ -60,7 +60,7 @@ elif [ "${5:-}" = "--" ]; then
 elif [ "${6:-}" = "--" ]; then
   memswap="$4"; oompolicy="$5"; shift 6
 else
-  die "missing '--' separator (got '${4:-}')"
+  die "expected '--' after <osUser> <memHigh> <memMax> [<memSwapMax> [<oomPolicy>]] (got '${4:-}' '${5:-}' '${6:-}')"
 fi
 [ "$#" -gt 0 ] || die "no command after '--'"
 
@@ -112,7 +112,8 @@ if command -v systemd-run >/dev/null 2>&1 && [ "$(stat -fc %T /sys/fs/cgroup 2>/
   if [ -n "$memswap" ] && [ "$memswap" != infinity ]; then props+=( --property=MemorySwapMax="$memswap" ); fi
   #  OOMPolicy — scope 는 systemd 253 부터 받는다(머리말). 판 번호를 못 읽으면 걸지 않는다(종전).
   if [ -n "$oompolicy" ]; then
-    sdver="$(systemctl --version 2>/dev/null | awk 'NR==1 {print $2}')"; sdver="${sdver%%[!0-9]*}"
+    #  set -euo pipefail 아래라 systemctl 이 실패하거나 없으면 파이프가 래퍼를 죽인다 — || true 로 «판 번호 모름» 으로 받는다(격리 리뷰).
+    sdver="$(systemctl --version 2>/dev/null | awk 'NR==1 {print $2}' || true)"; sdver="${sdver%%[!0-9]*}"
     if [ -n "$sdver" ] && [ "$sdver" -ge 253 ]; then props+=( --property=OOMPolicy="$oompolicy" ); fi
   fi
   # --expand-environment=no: systemd 254+ 에만 있는 옵션. argv 의 '$' 를 systemd 가 확장하지 않게(우리 argv 는

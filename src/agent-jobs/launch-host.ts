@@ -291,7 +291,7 @@ export async function cgspawnCheck(o: { infraReady?: () => boolean; wrapper?: st
   //   그때 들어온 작업은 실패시키지 않고 다시 기다리게 한다. 다시 놓기가 실패해 그대로면 시도를 다 쓰고 고칠 길과 함께 실패한다(service).
   let text: string;
   try { text = await (o.readWrapper ?? (async (p: string) => (await import("node:fs/promises")).readFile(p, "utf8")))(wrapper); }
-  catch (e) { return { ok: false, transient: true, why: `cgroup 래퍼(${wrapper})를 읽지 못했습니다: ${String((e as Error)?.message ?? e)}` }; }
+  catch (e) { return { ok: false, transient: true, why: `cgroup 래퍼(${wrapper})를 읽지 못했습니다: ${String((e as Error)?.message ?? e)} — 래퍼는 root 소유 0755 여야 합니다(그대로면 ${CAP_FIX})` }; }
   if (!CGSPAWN_JOB_CAPS_RE.test(text)) {
     return { ok: false, transient: true, why: `cgroup 래퍼(${wrapper})가 작업 상한 값(스왑 없음 · 넘친 프로세스만 끊기)을 모르는 옛 판입니다(배포가 래퍼를 새로 놓는 중이면 곧 풀립니다 — 그대로면 ${CAP_FIX})` };
   }
