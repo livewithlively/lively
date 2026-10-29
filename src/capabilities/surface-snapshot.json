@@ -5707,6 +5707,16 @@
   "input_hash": "86ac9143180abdef"
  },
  {
+  "name": "ui_translate",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/translate"
+  ],
+  "input_hash": "68ee53f43db168e1"
+ },
+ {
   "name": "app_job_start",
   "scope": null,
   "mcp": true,
