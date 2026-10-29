@@ -30,6 +30,7 @@ import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.j
 import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
+import { initScreenLang } from './lib/screen-lang.js';   // #5141 화면 영어 보기 — 켜져 있으면 셸·액자 모두 영어로
 import { takeShellSwitch, uiMode } from './lib/state.js';
 import { mountDesktopUpdate } from './desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
 import { mountClassicCtx } from './classic-ctx.js';   // #3784 클래식 화면 우클릭 메뉴
@@ -293,6 +294,8 @@ async function boot() {
   //   모듈이 실릴 때 한 번 계산되므로(net.ts wsKey), 지우기만 하고 그대로 가면 옛 키로 이번 판을 마저 돈다.
   if (claimLocalOwner(String(state.me.userId))) { location.reload(); return; }
   hideGate();
+  //  #5141 — 화면 영어 보기. 셸을 고르기 전에 건다: 새 셸 · 클래식 · 액자(embed) 어느 판이든 같은 스위치(lv:screen-lang)를 따른다.
+  initScreenLang();
   // ── 화면 셸 선택(#1719) ──
   //  ?embed=1 : 새 셸이 클래식 페이지를 iframe 에 '앱'으로 실을 때. 클래식 셸을 그대로 쓰되 크롬(상단바·탭·배너·푸터)만
   //             body.embed 로 걷는다(40-v2.css). 임베드는 항상 클래식이다(안 그러면 셸 안에 셸이 뜬다).

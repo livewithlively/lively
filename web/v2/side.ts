@@ -72,6 +72,7 @@ import { openMeModal } from './me-modal.js';   // 발치 [나] 행이 여는 내
 import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { omniKeyHint } from '../lib/omni-chord.js';   // #4530 단축키 이름 한 벌(우클릭 메뉴와 같은 이름)
 import { NO_PROJECT_NAME } from '../lib/proj-none.js';
+import { onScreenLang, toggleScreenLang } from '../lib/screen-lang.js';   // #5141 화면 영어 보기 — 맨 윗줄 «EN» 알약
 import { LIV_BUCKET_NAME, isLooseLivWork, livWorkName, livWorkNote, sideProjectId } from '../lib/liv-work.js';   // #4551 — 위탁 워커 줄 = 리브가 한 일   // #4551 — 프로젝트에 안 붙은 세션 묶음의 이름 한 자리
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
@@ -3044,6 +3045,24 @@ function navArrow(dir: 'back' | 'fwd', on: boolean, run?: () => void): HTMLEleme
     onclick: () => run?.() },
     sv('svg', { viewBox: '0 0 24 24', class: 'v2-navb-ic', 'aria-hidden': 'true' }, sv('path', { d })));
 }
+/** #5141 화면 영어 보기 — 맨 윗줄 오른쪽 «EN» 알약. 켜면 지금 화면(액자 포함)의 한국어 글을 영어로 바꿔 보여 준다(저장된 내용은 그대로).
+ *  상태는 lib/screen-lang 이 쥔다 — 이 단추는 누르면 바꾸고, 바뀌면(다른 문서 · 번역 중) 제 얼굴만 고친다. 사이드바가 다시 그려져도 듣는 이는 하나만 남는다. */
+let screenLangOff: (() => void) | null = null;
+function screenLangBtn(): HTMLElement {
+  const b = el('button', {
+    class: 'v2-navb v2-langtg', type: 'button', translate: 'no',
+    onclick: () => toggleScreenLang() }, el('span', { class: 'v2-langtg-t', text: 'EN' })) as HTMLButtonElement;
+  screenLangOff?.();
+  screenLangOff = onScreenLang((s) => {
+    b.classList.toggle('on', s.on);
+    b.classList.toggle('busy', s.busy);
+    b.setAttribute('aria-pressed', String(s.on));
+    //  title 은 영어로 둔다 — 켜면 이 글도 번역 대상이 되므로, 처음부터 두 말로 적어 두면 바꿀 것이 없다.
+    b.title = s.on ? 'Showing this screen in English — click for Korean (원래 한국어로)' + (s.error ? ` · ${s.error}` : '') : 'Show this screen in English (화면을 영어로 보기 · 저장된 내용은 그대로)';
+    b.setAttribute('aria-label', s.on ? 'Show in Korean' : 'Show in English');
+  });
+  return b;
+}
 function navRow(): HTMLElement {
   const st = hooks.navState ? hooks.navState() : { back: true, forward: true };
   // 표기는 플랫폼을 따른다 — 맥이 아닌데 ⌘K 라고 적어 두면 눌러도 안 열린다(같은 키를 두 이름으로 배우게 된다).
@@ -3077,7 +3096,8 @@ function navRow(): HTMLElement {
         sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
       el('span', { class: 'v2-omnib-t', text: '검색' }),
       el('kbd', { class: 'v2-omnib-k', text: omniKeyHint(mac) }))),
-    el('span', { class: 'v2-nav-sp v2-nav-sp--r', 'aria-hidden': 'true' }));
+    el('span', { class: 'v2-nav-sp v2-nav-sp--r', 'aria-hidden': 'true' }),
+    screenLangBtn());
 }
 /** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게. */
 export function markNav(st: { back: boolean; forward: boolean }): void {
