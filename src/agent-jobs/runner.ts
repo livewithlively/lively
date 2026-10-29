@@ -95,7 +95,11 @@ export interface RunnerJob {
    *  올리지 않는다. 없으면(그 밖의 구독 작업 — 대화가 홈에 남는다 · 관리자가 보관을 끔) 올리지 않는다.
    */
   transcriptMax?: number;
-  /** 대화 기록 묶음을 풀 때 상한(바이트 — 압축 폭탄 막기 · 올리기 전 크기 재기). */
+  /**
+   * 대화 기록 묶음을 풀 때 상한(바이트 — 압축 폭탄 막기 · 올리기 전 크기 재기). 게이트웨이가 대화를 묶음으로 잇는 작업에만 싣는다(보관을 꺼도) —
+   *  빈 설정 폴더가 없는 작업(#5082 도커 실행면의 구독 작업)이면 «실행면이 projects/ 를 덮었다» 는 약속이라, 판은 그 자리가 덮여 있지 않으면 하네스를
+   *  띄우지 않는다.
+   */
   transcriptRawMax?: number;
   /** #5101 이어받는 API 키 작업 — 앞 작업의 대화 기록 묶음(conv = 이을 대화 id · gz = gzip 의 base64). 판이 빈 설정 폴더에 되돌려 놓는다. */
   transcript?: { conv: string; gz: string };
@@ -158,16 +162,18 @@ for (const k of Object.keys(env)) {
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
 }
 let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null, tNote = "";
-// #5082 도커 실행면의 구독 작업 — 하네스는 그 계정의 설정 폴더를 그대로 쓰고(로그인 파일 · 갱신 잠금을 사람 세션과 나눈다), 그 안의 projects/ 만
-//  실행면이 덮은 이 작업만의 빈 자리다. 게이트웨이가 묶음 칸(transcriptMax · transcript)을 실으면 그 projects/ 로 API 키 작업과 같이 올리고 되돌린다.
-//  ★ projects/ 가 따로 붙은 자리(설정 폴더와 다른 장치)일 때만 — 아니면 그 사람의 진짜 대화 폴더이니 읽지도 비우지도 않는다(까닭은 transcript_note).
+// #5082 도커 실행면의 구독 작업 — 하네스는 그 계정의 설정 폴더를 그대로 쓰고(로그인 파일 · 갱신 잠금을 사람 세션과 나눈다), 그 안의 projects/ 등
+//  기록 자리는 실행면이 덮은 이 작업만의 빈 자리다. 게이트웨이가 구독 작업의 대화를 묶음으로 잇는 것(transcriptRawMax)은 그런 실행면뿐이라
+//  (service.bundledTranscript · surface.subscriptionTranscripts) — 그 projects/ 로 API 키 작업과 같이 올리고 되돌린다.
+//  ★ projects/ 가 따로 붙은 자리(설정 폴더와 다른 장치)가 아니면 하네스를 띄우지 않는다 — 덮인다고 믿은 자리가 그 사람의 진짜 대화 폴더라는 뜻이고,
+//   그대로 돌면 작업 AI 가 앞 작업 · 사람 세션의 대화를 읽는다(격리 리뷰). 여기서 던지면 부트가 boot-failed 로 그 까닭을 알리고 작업이 끝난다.
 let convCfg = cfgDir;
-if (!convCfg && (J.transcriptMax > 0 || J.transcript)) {
+if (!convCfg && J.transcriptRawMax > 0) {
   const c = env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), ".claude");
   let own = false;
   try { own = fs.statSync(path.join(c, "projects")).dev !== fs.statSync(c).dev; } catch (e) {}
-  if (own) convCfg = c;
-  else tNote += "transcript: 설정 폴더의 projects/ 가 이 작업만의 자리가 아니라 대화 기록을 올리거나 되돌리지 않는다\n";
+  if (!own) { fs.rmSync(dir, { recursive: true, force: true }); throw new Error("설정 폴더의 대화 자리(projects/)가 이 작업만의 자리로 덮여 있지 않아 하네스를 띄우지 않습니다"); }
+  convCfg = c;
 }
 // #5101 대화 기록 묶음 — 그 빈 설정 폴더의 projects/ 아래 파일 전부(대화 파일 · 큰 도구 결과 파일 <대화>/tool-results/* · 하위 에이전트 대화)를
 //  projects/ 기준 상대 경로 그대로 담는다: gzip(JSON {v:1, cfg:<이 작업의 설정 폴더>, files:[{p, d(base64)}]}). 큰 도구 결과는 대화 파일에

@@ -187,4 +187,18 @@ await t("SW1 공용 시트 배선(#5081 · live.ts) — 띄울 때 표시를 넘
   assert.match(fn, /await assertAppUsableFor\(\{ userId: member, scopes:/, "앱 동의는 판정이 넘긴 사람(보낸 사람)의 것으로");
 });
 
+await t("SW2(#5082) 구독 작업의 대화 묶음 배선 — 실행면마다 적은 판정(surface.subscriptionTranscripts — 브로커 · 박스 위 false · 도커 true)을 작업 배선(live.ts)과 앱 AI 실행의 이어받을 판정(ai-runs/live.resumeTargetOf)이 같이 읽는다", () => {
+  //  도커 실행면의 값은 launch-docker.test R1 이 진짜 jobSurface 로 잰다 — 여기서는 «부르는 자리» 가 그 하나를 읽는지만 본다(따로 kind 를 다시 재면 새 실행면이 한쪽만 고친다).
+  const surf = readFileSync(new URL("../../src/agent-jobs/surface.ts", import.meta.url), "utf8");
+  const vals = [...surf.matchAll(/subscriptionTranscripts: (true|false),/g)].map((m) => m[1]);
+  assert.deepEqual(vals, ["false", "true", "false"], "브로커 · 도커 · 박스 위 차례");
+  const live = readFileSync(new URL("../../src/agent-jobs/live.ts", import.meta.url), "utf8");
+  assert.match(live, /subscriptionTranscripts: surface\.subscriptionTranscripts,/);
+  assert.doesNotMatch(live, /kind === "docker"/);
+  const ai = readFileSync(new URL("../../src/ai-runs/live.ts", import.meta.url), "utf8");
+  assert.match(ai, /o\.subscriptionTranscripts \?\? \(j\.account_kind === "subscription" && \(await \(await import\("\.\.\/agent-jobs\/surface\.js"\)\)\.jobSurface\(\)\)\.subscriptionTranscripts\)/);
+  assert.match(ai, /resumeTarget: \(id\) => resumeTargetOf\(id\),/);
+  assert.doesNotMatch(ai, /kind === "docker"/);
+});
+
 console.log(`# ${pass} pass`);

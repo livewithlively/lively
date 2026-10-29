@@ -14,6 +14,8 @@
 //     자리(projects/ 등 — JOB_CLAUDE_HIDE_*)는 작업마다 빈 tmpfs(입력 기록 파일은 /dev/null)로 덮는다 — 앞 작업(공용 시트면 다른 구성원의 질문) ·
 //     사람 세션의 대화를 작업 AI 가 못 읽게(#5123). 그래서 이 실행면의 구독 작업도 대화를 게이트웨이 묶음으로 잇는다(형식 재시도 · 이어받기 —
 //     runner · service.bundledTranscript). 로그인 파일 · 갱신 잠금은 덮지 않는다(사람 세션 · 다른 작업과 나눈다).
+//     ⚠ 덮지 않는 설정 자리(settings.json 의 훅 · plugins · skills · CLAUDE.md …)는 작업이 고칠 수 있고, 그 계정의 다음 작업 · 박스 위 사람 세션이
+//      그것을 읽고 돈다 — 심은 훅 · 지시로 뒤 작업의 질문을 덮지 않은 자리에 옮겨 둘 수 있다(#5153 — 설정 자리 읽기 전용).
 //   · 비격리 박스(격리 꺼짐 · 맥) — 게이트웨이 계정 uid:gid. 구독 작업은 그 사람의 Claude 설정 폴더(멀티프로필 · 단일 계정이면 게이트웨이 ~/.claude)를
 //     같은 경로에 붙이고 CLAUDE_CONFIG_DIR 로 알린다(1단계 · 사람 세션과 같은 자리). 그래도 게이트웨이의 .env · DB 자격은 컨테이너에 없다.
 //  ★ 붙이는 원본은 링크면 안 된다 — 도커(root)는 원본 경로의 링크를 따라가서, 링크 하나로 남의 0700 홈 아래 폴더 · 다른 앱 폴더를 그 uid 로 열 수 있다
@@ -124,20 +126,23 @@ export interface DockerBox {
   jobUid: number;
 }
 
-/** Claude 설정 폴더의 상태 — 폴더(그 계정 소유) · 없음 · 링크 · 그 밖(파일 · 남의 소유) · 안의 세션 기록 자리가 링크. */
-export type ClaudeDirState = "ok" | "missing" | "link" | "foreign" | "inner";
+/** Claude 설정 폴더의 상태 — 폴더(그 계정 소유) · 없음 · 링크 · 그 밖(파일 · 남의 소유) · 안의 세션 기록 자리가 링크 · 덮을 자리를 만들지 못함. */
+export type ClaudeDirState = "ok" | "missing" | "link" | "foreign" | "inner" | "unwritable";
 
 /**
  * 구독 작업이 붙이는 Claude 설정 폴더 안에서 작업마다 덮는 자리(#5082 · #5123) — 앞 작업 · 사람 세션의 대화 · 파일 내용이 남는 곳이다(claude 2.1.312 가
  *  «이 기계의 상태» 로 묶는 이름 중 내용이 남는 것). 로그인 파일(.credentials.json)과 갱신 잠금(.oauth_refresh.lock)은 사람 세션 · 다른 작업과 나눠야
  *  하므로 덮지 않는다 — 설정 폴더째 붙이는 까닭이다(빈 설정 폴더에 로그인 파일만 붙이면 잠금이 갈려 동시 갱신이 로그인을 깰 수 있다).
- *  · ALWAYS — 폴더임이 확실한 자리: 없으면 띄우기 전에 그 계정 권한으로 만들어 두고 늘 빈 tmpfs 로 덮는다(뒤에 다른 작업이 만들어도 이 작업엔 안 보인다).
+ *  · ALWAYS — claude 2.1.312 가 폴더로 쓰는 자리: 없으면 띄우기 전에 그 계정 권한으로 만들어 두고 늘 빈 tmpfs 로 덮는다(뒤에 다른 작업 · 사람 세션이
+ *    만들어도 이 작업엔 안 보인다). sessions/ 는 작업의 claude 가 스스로 만든다(박스 실측) · daemon/ 은 상주 판의 제어 열쇠(control.key) · 토큰(auth/)이 든다.
  *  · IF_DIR — 폴더인지 판마다 다를 수 있는 자리: 띄울 때 폴더로 있으면 덮는다(만들지 않는다 — 파일 자리에 폴더를 만들어 그 사람의 claude 를 깨지 않게).
+ *    claude 가 스스로 오래된 것을 지우는 기록 자리(feedback · feedback-bundles · remote-control · startup-perf …)를 포함한다.
  *  · FILES — 파일로 있으면 빈 파일(/dev/null)로 덮는다(입력 기록).
  *  projects/ 의 대화는 덮인 자리에 남고 끝나면 사라진다 — 형식 재시도 · 이어받기는 게이트웨이가 보관한 묶음으로 잇는다(runner · service.bundledTranscript).
  */
-export const JOB_CLAUDE_HIDE_ALWAYS = ["projects", "todos", "shell-snapshots", "file-history", "plans", "session-env", "ide", "debug", "backups", "paste-cache", "image-cache"] as const;
-export const JOB_CLAUDE_HIDE_IF_DIR = ["sessions", "tasks", "teams", "logs", "jobs", "shares", "uploads", "downloads", "file-transfers", "scratch", "api-dumps", "dump-prompts", "telemetry", "traces", "usage-data"] as const;
+export const JOB_CLAUDE_HIDE_ALWAYS = ["projects", "todos", "shell-snapshots", "file-history", "plans", "session-env", "ide", "debug", "backups", "paste-cache", "image-cache", "sessions", "daemon"] as const;
+export const JOB_CLAUDE_HIDE_IF_DIR = ["tasks", "teams", "logs", "jobs", "shares", "uploads", "downloads", "file-transfers", "scratch", "api-dumps", "dump-prompts", "telemetry", "traces", "usage-data",
+  "feedback", "feedback-bundles", "remote-control", "remote", "channels", "startup-perf"] as const;
 export const JOB_CLAUDE_HIDE_FILES = ["history.jsonl"] as const;
 const HIDE_NAMES: ReadonlySet<string> = new Set([...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR, ...JOB_CLAUDE_HIDE_FILES]);
 const HIDE_FILE_NAMES: ReadonlySet<string> = new Set(JOB_CLAUDE_HIDE_FILES);
@@ -175,13 +180,17 @@ const CLAUDE_DIR_REFUSAL: Readonly<Record<Exclude<ClaudeDirState, "ok">, string>
   link: "실행 계정의 ~/.claude 가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
   foreign: "실행 계정의 ~/.claude 가 그 계정 소유의 폴더가 아니라 작업 컨테이너에 붙이지 않습니다",
   inner: "실행 계정의 ~/.claude 안 대화 · 세션 기록 자리가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
+  unwritable: "실행 계정의 ~/.claude 안에 작업마다 덮을 자리를 만들지 못해 작업 컨테이너에 붙이지 않습니다 — 그 계정이 ~/.claude 에 쓸 수 있는지(디스크 · 권한) 확인하세요",
 };
 const GATEWAY_CLAUDE_REFUSAL: Readonly<Record<Exclude<ClaudeDirState, "ok">, string>> = {
   missing: "게이트웨이 계정에 Claude 로그인 폴더가 없습니다 — 이 박스에서 그 계정으로 한 번 로그인해야 구독으로 돕니다",
   link: "게이트웨이 계정의 Claude 설정 폴더가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
   foreign: "게이트웨이 계정의 Claude 설정 폴더가 그 계정 소유의 폴더가 아니라 작업 컨테이너에 붙이지 않습니다",
   inner: "게이트웨이 계정의 Claude 설정 폴더 안 대화 · 세션 기록 자리가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
+  unwritable: "게이트웨이 계정의 Claude 설정 폴더 안에 작업마다 덮을 자리를 만들지 못해 작업 컨테이너에 붙이지 않습니다 — 그 폴더에 쓸 수 있는지(디스크 · 권한) 확인하세요",
 };
+/** 대화 자리(projects/)를 덮지 못하면 붙이지 않는다 — 덮지 않은 설정 폴더는 앞 작업 · 사람 세션의 대화를 그대로 보인다. */
+const PROJECTS_UNHIDDEN = "Claude 설정 폴더의 대화 자리(projects)가 폴더가 아니라 작업마다 덮지 못해 작업 컨테이너에 붙이지 않습니다 — 그 자리를 실제 폴더로 두세요";
 
 /** (순수) 덮을 자리 목록을 거른다 — 정한 이름만 · 한 번씩(띄우기 전 확인의 답을 그대로 믿지 않는다). */
 export function hideList(names: readonly string[] | undefined): string[] {
@@ -207,8 +216,10 @@ export function jobPlacement(f: {
     const groups = m.gid === box.sharedGid ? [] : [box.sharedGid];
     if (!f.subscription) return { uid: m.uid, gid: m.gid, groups, home: JOB_BARE_HOME, claude: null, runsAs: "member" };
     if (m.claude !== "ok") throw new Error(CLAUDE_DIR_REFUSAL[m.claude ?? "missing"]);
+    const hide = hideList(m.hide);
+    if (!hide.includes("projects")) throw new Error(`실행 계정의 ${PROJECTS_UNHIDDEN}`);
     const dir = path.join(m.home, ".claude");
-    return { uid: m.uid, gid: m.gid, groups, home: m.home, claude: { host: dir, target: dir, root: m.home, configDirEnv: false, hide: hideList(m.hide) }, runsAs: "member" };
+    return { uid: m.uid, gid: m.gid, groups, home: m.home, claude: { host: dir, target: dir, root: m.home, configDirEnv: false, hide }, runsAs: "member" };
   }
   const g = box.gateway;
   if (g.uid === 0) throw new Error("게이트웨이가 root 로 돌고 있어 작업 컨테이너를 띄우지 않습니다(컨테이너 안은 root 가 아닌 계정으로 돈다)");
@@ -216,7 +227,9 @@ export function jobPlacement(f: {
   const p = f.profile;
   if (!p) throw new Error("게이트웨이 계정의 Claude 설정 폴더를 확인하지 못했습니다");
   if (p.state !== "ok") throw new Error(GATEWAY_CLAUDE_REFUSAL[p.state]);
-  return { uid: g.uid, gid: g.gid, groups: [], home: JOB_BARE_HOME, claude: { host: p.dir, target: p.dir, root: p.root, configDirEnv: true, hide: hideList(p.hide) }, runsAs: "gateway" };
+  const hide = hideList(p.hide);
+  if (!hide.includes("projects")) throw new Error(`게이트웨이 계정의 ${PROJECTS_UNHIDDEN}`);
+  return { uid: g.uid, gid: g.gid, groups: [], home: JOB_BARE_HOME, claude: { host: p.dir, target: p.dir, root: p.root, configDirEnv: true, hide }, runsAs: "gateway" };
 }
 
 /**
@@ -727,8 +740,10 @@ export async function probeDockerBox(o: { isolated?: boolean; getent?: string } 
 /**
  * 그 계정 홈의 ~/.claude 를 보고 덮을 자리를 마련한다 — 그 계정 권한으로 돈다(게이트웨이는 0700 홈 안을 못 본다). 경로는 우리가 지은 값(따옴표 안 ·
  *  꼴을 먼저 본다) · 이름은 정한 목록(JOB_CLAUDE_HIDE_*)뿐이다.
- *  답: `link` · `missing` · `foreign` · `inner`(안의 덮을 자리가 링크) · `ok <덮을 이름…>`. ALWAYS 자리는 없으면 만들어 둔다(0700 — 도커가 없는 자리를
- *  root 소유로 만들지 않게 · 다른 작업이 뒤에 만들어도 이 작업엔 덮여 있게). 만들지 못하면 foreign(그 계정이 제 설정 폴더에 못 쓰면 로그인 갱신도 못 한다).
+ *  답: `link` · `missing` · `foreign` · `inner`(안의 덮을 자리가 링크) · `unwritable`(ALWAYS 자리를 만들지 못함) · `ok <덮을 이름…>`.
+ *  ALWAYS 자리는 없으면 만들어 둔다(0700 — 도커가 없는 자리를 root 소유로 만들지 않게 · 다른 작업이 뒤에 만들어도 이 작업엔 덮여 있게).
+ *  ★ 같은 계정의 작업 둘이 함께 뜨면 같은 이름을 함께 만든다 — 진 쪽의 mkdir 은 «이미 있음» 이라 실패한다. 그 사이 생긴 자리면(폴더든 링크든) 통과하고
+ *   링크 검사를 만든 뒤에 한다(그 사이 생긴 링크도 inner 로 걸린다 · 격리 리뷰 — 종전엔 진 쪽이 foreign 으로 실패했다).
  */
 export function claudeDirPrepScript(dir: string): string {
   if (!/^\/[A-Za-z0-9._/-]{1,250}$/.test(dir)) throw new Error(`Claude 설정 폴더 경로 꼴 밖: ${JSON.stringify(dir.slice(0, 80))}`);
@@ -738,8 +753,8 @@ export function claudeDirPrepScript(dir: string): string {
     `if [ -L "$c" ]; then echo link; exit 0; fi`,
     `if [ ! -e "$c" ]; then echo missing; exit 0; fi`,
     `if [ ! -d "$c" ] || [ ! -O "$c" ]; then echo foreign; exit 0; fi`,
+    `for n in ${JOB_CLAUDE_HIDE_ALWAYS.join(" ")}; do if [ ! -e "$c/$n" ] && [ ! -L "$c/$n" ]; then mkdir -m 0700 "$c/$n" 2>/dev/null || [ -d "$c/$n" ] || [ -L "$c/$n" ] || { echo unwritable; exit 0; }; fi; done`,
     `for n in ${all}; do if [ -L "$c/$n" ]; then echo inner; exit 0; fi; done`,
-    `for n in ${JOB_CLAUDE_HIDE_ALWAYS.join(" ")}; do [ -e "$c/$n" ] || mkdir -m 0700 "$c/$n" 2>/dev/null || { echo foreign; exit 0; }; done`,
     `o=ok`,
     `for n in ${[...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR].join(" ")}; do if [ -d "$c/$n" ]; then o="$o $n"; fi; done`,
     `for n in ${JOB_CLAUDE_HIDE_FILES.join(" ")}; do if [ -f "$c/$n" ]; then o="$o $n"; fi; done`,
@@ -752,7 +767,7 @@ export function parseClaudePrep(out: string): { state: ClaudeDirState; hide: str
   const words = out.trim().split(/\s+/);
   const head = words[0] ?? "";
   if (head === "ok") return { state: "ok", hide: hideList(words.slice(1)) };
-  if (words.length === 1 && (head === "link" || head === "missing" || head === "foreign" || head === "inner")) return { state: head, hide: [] };
+  if (words.length === 1 && (head === "link" || head === "missing" || head === "foreign" || head === "inner" || head === "unwritable")) return { state: head, hide: [] };
   throw new Error(`~/.claude 상태를 읽지 못했습니다: ${out.trim().slice(0, 80)}`);
 }
 
@@ -764,11 +779,12 @@ export async function gatewayClaudeDirPrep(dir: string): Promise<{ state: Claude
   if (!st) return { state: "missing", hide: [] };
   if (st.isSymbolicLink()) return { state: "link", hide: [] };
   if (!(st.isDirectory() && st.uid === process.getuid?.())) return { state: "foreign", hide: [] };
-  for (const n of HIDE_NAMES) if ((await lst(path.join(dir, n)))?.isSymbolicLink()) return { state: "inner", hide: [] };
+  //  만든 뒤에 링크를 본다 — 함께 뜬 작업이 먼저 만든 자리(«이미 있음»)는 통과 · 그 사이 생긴 링크도 inner 로 걸린다(claudeDirPrepScript 와 같은 차례).
   for (const n of JOB_CLAUDE_HIDE_ALWAYS) {
     if (await lst(path.join(dir, n))) continue;
-    try { await fsp.mkdir(path.join(dir, n), { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") return { state: "foreign", hide: [] }; }
+    try { await fsp.mkdir(path.join(dir, n), { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") return { state: "unwritable", hide: [] }; }
   }
+  for (const n of HIDE_NAMES) if ((await lst(path.join(dir, n)))?.isSymbolicLink()) return { state: "inner", hide: [] };
   const hide: string[] = [];
   for (const n of [...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR]) if ((await lst(path.join(dir, n)))?.isDirectory()) hide.push(n);
   for (const n of JOB_CLAUDE_HIDE_FILES) if ((await lst(path.join(dir, n)))?.isFile()) hide.push(n);

@@ -1488,6 +1488,28 @@ await t("B4(#5082) 도커 실행면의 구독 작업 — projects/ 를 작업마
   assert.deepEqual(await onTranscript(off.id, ob.secret, gz("x"), CONV_A, w.deps), { ok: true, stored: false });
 });
 
+await t("V1b(#5082) 사람 도구의 이어받기 — 구독 작업의 기록 자리를 덮는 실행면(도커)이면 게이트웨이가 보관한 그 대화 기록이 있어야 접수한다(없거나 다른 대화면 409 — 띄운 뒤 부트에서야 실패하지 않게) · 끄면 종전대로(대화가 홈에 남는다)", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  w.policy = { ...w.policy, max_running: 5, max_running_per_member: 5 };
+  w.deps.subscriptionTranscripts = true;
+  const a = await submitAgentJob({ prompt: "처음" }, appUser("alice", "memo"), w.deps, UI);
+  const id = a.id as number;
+  Object.assign(w.rows.get(id)!, { status: "done", conversation_id: CONV_A });
+  const before = w.rows.size;
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI), httpErr(409, /이어받을 대화 기록이 없습니다.*transcript_keep_days/));
+  w.transcripts.set(id, { conv: CONV_B, gz: gz("x"), raw: 1 });
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI), httpErr(409, /이어받을 대화 기록이 없습니다/));
+  assert.equal(w.rows.size, before, "접수하지 않았다(행 없음)");
+  w.transcripts.set(id, { conv: CONV_A, gz: gz("x"), raw: 1 });
+  const b = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(b.id as number)!.resume_job_id, id);
+  w.deps.subscriptionTranscripts = false;
+  w.transcripts.delete(id);
+  const c = await submitAgentJob({ prompt: "또", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(c.id as number)!.resume_conversation, CONV_A, "끄면 기록 없이 접수(종전)");
+});
+
 await t("P1(#5101) 대화 기록 정리 — transcript_keep_days(기본 14)로 기록만 비운다 · keep_days 0(행 무기한)이어도 돈다 · 0(보관 안 함)이면 끝난 작업의 기록을 다 비운다", async () => {
   const w = world();
   const old = await endedJob(w, "20일 전", 20);

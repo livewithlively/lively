@@ -227,6 +227,11 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     const prev = Number.isSafeInteger(rid) && rid > 0 ? await d.store.getAgentJob(rid) : null;
     if (!prev || prev.requester !== me || (callerApp && prev.app_id !== callerApp)) throw new HttpError(404, "이어받을 작업이 없습니다");
     if (prev.status !== "done" || !prev.conversation_id) throw new HttpError(409, "이어받을 수 있는 작업이 아닙니다(끝난 작업의 대화가 있어야 합니다)");
+    //  #5082 — 구독 작업의 기록 자리를 덮는 실행면(도커)은 대화가 홈에 남지 않는다 — 게이트웨이가 보관한 그 대화 기록이 있어야 잇는다. 접수 때 본다
+    //   (띄운 뒤 부트에서야 실패하지 않게 · 격리 리뷰). 앱 AI 실행의 이어받기는 ai-runs resumeTargetOf 가 같은 판정을 한다.
+    if (bundledTranscript("subscription", d) && (await d.store.agentJobTranscriptConv(prev.id)) !== prev.conversation_id) {
+      throw new HttpError(409, "이어받을 대화 기록이 없습니다 — 이 배포는 작업의 대화를 게이트웨이가 보관한 기록으로 잇고, 그 기록은 끝난 뒤 transcript_keep_days 동안만 남습니다");
+    }
     appId = prev.app_id; projectId = prev.project_id; resumeConv = prev.conversation_id; resumeJobId = prev.id;
   } else {
     if (input.app_id !== undefined && input.app_id !== null && input.app_id !== "") {

@@ -592,25 +592,71 @@ await t("T4c(#5101) 파일이 상한(2000)보다 많으면 올리지 않는다 �
   } finally { await g3.close(); }
 });
 
-await t("T6(#5082) 묶음을 실은 작업인데 자리표(API 키의 빈 설정 폴더)가 없다(구독 작업) — 설정 폴더의 projects/ 가 따로 붙은 자리(도커 실행면이 덮은 tmpfs)가 아니면 그 사람의 진짜 대화 폴더다: 되돌리지도 · 올리지도 · 비우지도 않고 까닭을 결과에", async () => {
-  const cfg = path.join(tmp, "t6-claude");
-  const other = path.join(cfg, "projects", "-other-cwd");
-  fs.mkdirSync(other, { recursive: true });
-  fs.writeFileSync(path.join(other, "앞 사람의 대화.jsonl".replace(/ /g, "_")), "앞 사람의 질문");
-  const record = path.join(tmp, "t6.json");
-  //  되돌릴 묶음 — 꼴은 맞다(T3 와 같은 모양). 따로 붙은 자리가 아니니 놓으면 안 된다(놓다 실패하면 projects/ 를 비우는 길이 그 사람의 대화를 지운다).
+await t("T6(#5082) 구독 작업의 대화를 묶음으로 잇는 작업(transcriptRawMax · 빈 설정 폴더 자리표 없음)인데 설정 폴더의 projects/ 가 따로 붙은 자리(도커 실행면이 덮은 tmpfs)가 아니다 — 그 사람의 진짜 대화 폴더다: 하네스를 띄우지 않고(stage runner · 5) · 되돌리지도 · 비우지도 않는다(보관을 꺼 올리기 칸이 없어도 같다) / 묶음 칸이 없는 구독 작업은 종전대로 돈다", async () => {
+  //  되돌릴 묶음 — 꼴은 맞다(T3 와 같은 모양). 따로 붙은 자리가 아니니 놓으면 안 된다(놓다 실패하면 비우는 길이 그 사람의 대화를 지운다).
   const prev: Bundle = { v: 1, cfg: "/old/cfg", files: [{ p: `-fake-cwd/${SID}.jsonl`, d: b64("앞 대화") }] };
-  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPT: "1", FAKE_RESUME_CONV: SID },
-    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000, transcript: { conv: SID, gz: bundleB64(prev) } } });
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["resume", { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000, transcript: { conv: SID, gz: bundleB64(prev) } }],
+    ["keep0", { transcriptRawMax: 10_000_000 }],
+  ];
+  for (const [k, extra] of cases) {
+    const cfg = path.join(tmp, `t6-${k}-claude`);
+    const other = path.join(cfg, "projects", "-other-cwd");
+    fs.mkdirSync(other, { recursive: true });
+    fs.writeFileSync(path.join(other, "앞_사람의_대화.jsonl"), "앞 사람의 질문");
+    const record = path.join(tmp, `t6-${k}.json`);
+    const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPT: "1", FAKE_RESUME_CONV: SID }, bootExtra: extra });
+    try {
+      assert.equal(await runBoot(g.port), 5, k);
+      assert.equal(g.seen.failed.length, 1, k);
+      assert.equal(g.seen.failed[0]!.body.stage, "runner", k);
+      assert.match(String(g.seen.failed[0]!.body.message), /대화 자리\(projects\/\)가 이 작업만의 자리로 덮여 있지 않아/, k);
+      assert.ok(!fs.existsSync(record), `${k}: 하네스를 띄우지 않았다`);
+      assert.equal(g.seen.transcripts.length + g.seen.results.length + g.seen.ticks.length, 0, k);
+      assert.equal(fs.readFileSync(path.join(other, "앞_사람의_대화.jsonl"), "utf8"), "앞 사람의 질문", `${k}: 그 사람의 대화를 지우지 않는다`);
+      assert.deepEqual(fs.readdirSync(path.join(cfg, "projects")), ["-other-cwd"], `${k}: 되돌리지 않았다`);
+    } finally { await g.close(); fs.rmSync(cfg, { recursive: true, force: true }); }
+  }
+  //  묶음 칸이 없는 구독 작업(매니지드 · 박스 위 — 대화가 홈에 남는다)은 종전대로 돌고, 그 projects/ 를 올리지 않는다.
+  const cfg3 = path.join(tmp, "t6-home-claude");
+  fs.mkdirSync(path.join(cfg3, "projects", "-other-cwd"), { recursive: true });
+  fs.writeFileSync(path.join(cfg3, "projects", "-other-cwd", "a.jsonl"), "앞 사람의 질문");
+  const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t6-home.json"), envExtra: { CLAUDE_CONFIG_DIR: cfg3, FAKE_TRANSCRIPT: "1" } });
   try {
-    assert.equal(await runBoot(g.port), 0);
-    const h = JSON.parse(fs.readFileSync(record, "utf8"));
-    assert.equal(h.restored, null, "되돌리지 않았다");
-    assert.equal(g.seen.transcripts.length, 0, "올리지 않았다(그 폴더엔 앞 사람의 대화가 있다)");
-    assert.match(String(g.seen.results[0]!.transcript_note), /projects\/ 가 이 작업만의 자리가 아니라/);
-    assert.equal(fs.readFileSync(path.join(other, "앞_사람의_대화.jsonl"), "utf8"), "앞 사람의 질문", "그 사람의 대화를 지우지 않는다");
-    assert.ok(fs.existsSync(cfg), "그 사람의 설정 폴더는 판의 임시 폴더가 아니다(지우지 않는다)");
-  } finally { await g.close(); fs.rmSync(cfg, { recursive: true, force: true }); }
+    assert.equal(await runBoot(g3.port), 0);
+    assert.equal(g3.seen.results.length, 1);
+    assert.equal(g3.seen.transcripts.length, 0);
+    assert.equal(fs.readFileSync(path.join(cfg3, "projects", "-other-cwd", "a.jsonl"), "utf8"), "앞 사람의 질문");
+  } finally { await g3.close(); fs.rmSync(cfg3, { recursive: true, force: true }); }
+});
+
+await t("T7(#5082) 도커 실행면이 덮은 projects/(설정 폴더와 다른 장치 — 리눅스 /dev/shm 으로 흉내) — 구독 작업도 받은 묶음을 그 자리에 되돌리고 끝에 그 자리를 올린다 · 그 계정의 설정 폴더는 지우지 않는다", async () => {
+  if (process.platform !== "linux" || !fs.existsSync("/dev/shm")) { console.log("  (건너뜀 — 리눅스 /dev/shm 이 없다 · CI 가 잰다)"); return; }
+  const cfg = path.join(tmp, "t7-claude");
+  fs.mkdirSync(cfg, { recursive: true });
+  const shm = fs.mkdtempSync("/dev/shm/lvly-t7-");
+  fs.symlinkSync(shm, path.join(cfg, "projects"));
+  try {
+    if (fs.statSync(path.join(cfg, "projects")).dev === fs.statSync(cfg).dev) { console.log("  (건너뜀 — /dev/shm 이 설정 폴더와 같은 장치)"); return; }
+    const CONV_R = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const prev: Bundle = { v: 1, cfg: "/old/cfg", files: [{ p: `-fake-cwd/${CONV_R}.jsonl`, d: b64("앞 대화 R7\n") }] };
+    const record = path.join(tmp, "t7.json");
+    const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPT: "1", FAKE_RESUME_CONV: CONV_R },
+      bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000, transcript: { conv: CONV_R, gz: bundleB64(prev) } } });
+    try {
+      assert.equal(await runBoot(g.port), 0);
+      const h = JSON.parse(fs.readFileSync(record, "utf8"));
+      assert.ok(typeof h.restored === "string" && h.restored.startsWith("앞 대화 R7"), "하네스가 뜰 때 앞 대화가 그 자리에 있다");
+      assert.equal(g.seen.transcripts.length, 1, "끝에 올렸다");
+      const up = unbundle(g.seen.transcripts[0]!.body);
+      assert.equal(up.cfg, cfg, "이 작업의 설정 폴더(다음 작업이 되돌릴 때 바꿔 쓸 앞자리)");
+      const ps = up.files.map((f) => f.p).sort();
+      assert.ok(ps.includes(`-fake-cwd/${CONV_R}.jsonl`) && ps.includes(`-fake-cwd/${SID}.jsonl`), JSON.stringify(ps));
+      assert.equal(g.seen.results.length, 1);
+      assert.equal(g.seen.results[0]!.transcript_note, null);
+      assert.ok(fs.existsSync(path.join(cfg, "projects")), "그 계정의 설정 폴더는 지우지 않는다");
+    } finally { await g.close(); }
+  } finally { fs.rmSync(cfg, { recursive: true, force: true }); fs.rmSync(shm, { recursive: true, force: true }); }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

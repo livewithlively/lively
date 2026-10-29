@@ -73,6 +73,12 @@ export interface JobSurface {
   kill(sessionId: string): Promise<void>;
   /** 판의 첫 말(boot)에 줄 자리 — 띄울 때와 같은 자로 다시 구한다. */
   paneView(job: AgentJobRow): Promise<PaneView>;
+  /**
+   * #5082 · #5123 구독 작업의 그 계정 Claude 설정 폴더 안 기록 자리(projects/ 등)를 작업마다 덮나 — 덮으면 대화가 홈에 남지 않아 형식 재시도 ·
+   *  이어받기를 게이트웨이가 보관한 묶음으로 잇는다(service.bundledTranscript · ai-runs resumeTargetOf · 판은 덮인 자리가 아니면 띄우지 않는다).
+   *  실행면마다 적는다 — 판정을 한 곳에 두어, 새 실행면이 한쪽만 고치는 일이 없게(격리 리뷰).
+   */
+  readonly subscriptionTranscripts: boolean;
 }
 
 /** 매니지드 판의 게이트웨이 주소 — 컨테이너 안 세션 루프백(runner.RUNNER_GATEWAY). MCP(/mcp)는 종전 service.onBoot 가 박아 두던 값 그대로다. */
@@ -105,6 +111,7 @@ export async function jobSurface(): Promise<JobSurface> {
       launch: (job, boot, o) => launch.launchJobContainer(job, boot, o),
       kill: (sid) => launch.killJobContainer(sid),
       paneView: async (job) => ({ cwd: job.cwd, gateway: BROKER_GATEWAY, workspace: null }),
+      subscriptionTranscripts: false, // 구독 작업의 대화는 그 사람의 홈(세션 컨테이너)에 남는다
     };
     return cached;
   }
@@ -118,6 +125,7 @@ export async function jobSurface(): Promise<JobSurface> {
       launch: (job, boot, o) => docker.launchDockerJob(job, boot, undefined, o),
       kill: (sid) => docker.killDockerJob(sid),
       paneView: async (job) => docker.dockerPaneView(job, { port: topo.agentJobsPort, slug: (await import("../terminal/catalog.js")).tenantSlug() }),
+      subscriptionTranscripts: true, // 그 계정 ~/.claude 안 기록 자리를 작업마다 덮는다(launch-docker 머리말)
     };
     return cached;
   }
@@ -131,6 +139,7 @@ export async function jobSurface(): Promise<JobSurface> {
     //  꺼진 박스도 걷기는 박스 위 tmux 로 한다 — 스위치를 끈 뒤에 남은 판이 있을 수 있다(없으면 «이미 없다» 확답이라 조용하다).
     kill: (sid) => host.killHostJob(sid),
     paneView: (job) => host.hostPaneView(job),
+    subscriptionTranscripts: false, // 박스 위 판은 그 사람의 홈에서 돈다 — 대화가 홈에 남는다
   };
   return cached;
 }

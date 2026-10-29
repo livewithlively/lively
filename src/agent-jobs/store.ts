@@ -191,7 +191,7 @@ export async function setAgentJobTranscript(id: number, conv: string, gz: Buffer
     //  구독 작업은 o.subscription(#5082 도커 실행면 — 대화가 홈에 남지 않는다)일 때만 적는다.
     const r = await q(itemsPool,
       `UPDATE org_agent_job SET transcript=$2, transcript_conv=$3, transcript_bytes=$4, updated_at=now()
-        WHERE id=$1 AND status='running' AND (account_kind='api_key' OR $5::boolean) AND transcript IS NULL RETURNING id`, [id, gz, conv, rawBytes, o.subscription === true]);
+        WHERE id=$1 AND status='running' AND (account_kind='api_key' OR (account_kind='subscription' AND $5::boolean)) AND transcript IS NULL RETURNING id`, [id, gz, conv, rawBytes, o.subscription === true]);
     return r.length > 0;
   } catch (e) {
     if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)
