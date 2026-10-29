@@ -76,6 +76,11 @@ export interface CgroupLimit {
   maxMb?: number;
   /** #2120 — 스케줄링 예약치(MB). 세션 spawn 훅을 쓰는 배포에서 노드 용량 심사가 쓴다(캡과 별개). */
   requestMb?: number;
+  /**
+   * #5082 — 스왑 상한(MB · MemorySwapMax). 0 = 스왑 없음. 주면 box-cgspawn 에 네 번째 값으로 넘긴다(없으면 종전 세 값 — 사람 세션 무회귀).
+   *  MemoryMax 만 걸면 넘친 만큼 스왑으로 빠져 상한이 RAM 에만 걸린다(실측 2026-10-29 Ubuntu 24.04 · 스왑 8G: 상한 512MiB 작업이 스왑 1,696MiB).
+   */
+  swapMaxMb?: number;
 }
 
 export interface WrapOptions {
@@ -135,7 +140,9 @@ export function sessionSpawnArgv(osUser: string, argv: string[], cwd: string | u
 //  결과: ["sudo","-n","--",BOX_CGSPAWN, osUser, <high>, <max>, "--", BOX_SPAWN, ("--cwd",cwd)?, ...argv]
 export function cgspawnArgv(osUser: string, argv: string[], cwd: string | undefined, cg: CgroupLimit): string[] {
   const pre = cwd ? ["--cwd", cwd] : [];
-  return ["sudo", "-n", "--", BOX_CGSPAWN, osUser, memArg(cg.highMb), memArg(cg.maxMb), "--", BOX_SPAWN, ...pre, ...argv];
+  //  스왑 값은 «0 = 스왑 없음» 이다(MemoryHigh · Max 의 «0 = 무제한» 과 뜻이 다르다 — box-cgspawn 머리말).
+  const swap = typeof cg.swapMaxMb === "number" && Number.isFinite(cg.swapMaxMb) && cg.swapMaxMb >= 0 ? [cg.swapMaxMb > 0 ? `${Math.round(cg.swapMaxMb)}M` : "0"] : [];
+  return ["sudo", "-n", "--", BOX_CGSPAWN, osUser, memArg(cg.highMb), memArg(cg.maxMb), ...swap, "--", BOX_SPAWN, ...pre, ...argv];
 }
 
 // OS 유저 존재 확인(= 프로비저닝됨). Linux: `id -u <user>` 성공. 실패/미존재/비Linux(맥 등) → false(공유 폴백).

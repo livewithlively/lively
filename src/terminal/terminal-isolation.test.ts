@@ -66,6 +66,17 @@ t("cgspawnArgv: 0/미지정 한도 → '0'(무제한 — box-cgspawn 이 그 축
   );
 });
 
+t("cgspawnArgv(#5082 스왑 상한): swapMaxMb 를 주면 네 번째 값 — 0 = 스왑 없음(«0»), 양수 = «<n>M» · 안 주면 종전 세 값(사람 세션 무회귀)", () => {
+  assert.deepEqual(
+    cgspawnArgv("box_x", ["node"], "/srv/lively/apps/a", { highMb: 0, maxMb: 3072, requestMb: 0, swapMaxMb: 0 }),
+    ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "3072M", "0", "--", BOX_SPAWN, "--cwd", "/srv/lively/apps/a", "node"],
+  );
+  assert.deepEqual(cgspawnArgv("box_x", [], undefined, { maxMb: 2048, swapMaxMb: 1024.4 }), ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "2048M", "1024M", "--", BOX_SPAWN]);
+  for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.deepEqual(cgspawnArgv("box_x", [], undefined, { maxMb: 2048, swapMaxMb: bad }), ["sudo", "-n", "--", BOX_CGSPAWN, "box_x", "0", "2048M", "--", BOX_SPAWN], `${bad} 는 싣지 않는다(종전)`);
+  }
+});
+
 t("wrapAsMember(cg 지정): cgroup 인프라 미설치 박스면 종전 sudo -u 경로로 폴백(cap-gated 무회귀)", () => {
   // box_test 로컬엔 /opt/lively/libexec/box-cgspawn 이 없어 cgroupInfraReady()=false → 폴백 기대.
   //  인프라가 있는 박스(EC2 등)면 cgspawn 경유 — 그 경우만 positive shape 를 확인(환경 의존이라 조건부).
