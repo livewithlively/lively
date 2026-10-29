@@ -966,7 +966,7 @@ function issueMeta(r: Record<string, unknown>, f: Record<string, unknown>): stri
   ];
 }
 
-function digestLine(r: Record<string, unknown>): { head: string; body: string; truncated: boolean } {
+function digestLine(r: Record<string, unknown>, lockEnforced = true): { head: string; body: string; truncated: boolean } {
   const f = (r.fields ?? {}) as Record<string, unknown>;
   const s = (v: unknown): string => (v === null || v === undefined ? "" : String(v));
   const when = s(r.occurred_at ?? r.updated_at).slice(0, 19).replace("T", " ");
@@ -976,7 +976,9 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
   // #4824 — 잠긴 자료(볼 수 있는 사람만)는 머리줄에 그 사실을 단다. 안 알려주면 증류기가 그 내용을 더 넓게 보이는
   //  기존 지식에 합치려 한다(서버가 거절하지만, 미리 알아야 처음부터 새 지식으로 따로 쓴다). 판정은 자료의 공개범위 하나다 —
   //  #1881 의 «개인 폴더(올린 사람만 봄)» 는 #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 사실이 아니어서 자리만 남긴다.
-  const lock = s(r.visibility) === "members" ? "잠김(볼 수 있는 사람만 봄)" : "";
+  //  지식 축이 꺼진 조직(lockEnforced=false)에선 합쳐도 거절되지 않고 지식도 좁혀지지 않는다 — 표시를 달면 증류기가
+  //   매핑된 기존 문서 대신 새 지식을 따로 만들어 문서가 쪼개진다(절차 ③ 의 같은 조건 참조).
+  const lock = lockEnforced && s(r.visibility) === "members" ? "잠김(볼 수 있는 사람만 봄)" : "";
   const priv = s(f.root) === "personal" ? "개인 폴더" : "";
   const meta = [when, who && `@${who}`, ch && `#${ch}`, priv, lock, tid && `thread=${tid}`, ...issueMeta(r, f)].filter(Boolean).join(" · ");
   const raw = s(r.body_md);
@@ -990,13 +992,13 @@ function digestLine(r: Record<string, unknown>): { head: string; body: string; t
 
 // 자료 본문 동봉부 — 서버가 배치를 고르며 이미 읽은 행을 그대로 싣는다(재조회 제거).
 //  ⚠ 본문을 프롬프트에 직접 넣는 순간 **주입 표면이 넓어진다** — 경고를 본문 **직전**에 두고 울타리로 감싼다.
-export function buildSourceDigest(rows: Record<string, unknown>[]): string {
+export function buildSourceDigest(rows: Record<string, unknown>[], lockEnforced = true): string {
   if (!rows.length) return "";
   const out: string[] = [];
   let used = 0, dropped = 0;
   const cut: number[] = [];
   for (const r of rows) {
-    const { head, body, truncated } = digestLine(r);
+    const { head, body, truncated } = digestLine(r, lockEnforced);
     const chunk = `${head}\n${body || "(본문 없음)"}`;
     const n = bytes(chunk);
     if (used + n > DIGEST_TOTAL_BYTES && out.length) { dropped++; continue; }
@@ -1048,9 +1050,9 @@ export function buildThreadKnowledgeBlock(kn: Record<string, unknown>[]): string
   ].join("\n");
 }
 
-export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, unknown>[], threadKnowledge: Record<string, unknown>[] = []): string {
+export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, unknown>[], threadKnowledge: Record<string, unknown>[] = [], lockEnforced = true): string {
   const ids = rows.map((r) => Number(r.id)).filter(Number.isFinite);
-  const digest = buildSourceDigest(rows);
+  const digest = buildSourceDigest(rows, lockEnforced);
   return [
     `대상 자료 id(이것만 다뤄, 목록을 새로 조회하지 마 — 서버가 이 증류기 스코프[${describeScope(d)}]로 이미 골라 배정한 것이다): ${ids.join(",")}.`,
     `⚠ source_undistilled 를 부르지 마 — 그건 조직 전체 미증류 목록이라 이 증류기의 담당 범위를 벗어난다(다른 증류기 몫을 침범한다).`,
@@ -1069,9 +1071,9 @@ export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, un
  *   스코프 밖)로 고른 id 를 '판정함'으로 기록한다. 두 집합이 다르므로 에이전트가 보지도 않은 자료가
  *   판정 기록돼 인박스에서 영구히 빠진다(유실). 대상을 못박아 두 집합을 일치시킨다.
  *  ⚠ 레인 몫 침범도 같이 막는다 — 전역 목록에는 켜진 레인이 담당하는 자료가 섞여 있다. */
-export function buildStrandedTargeting(rows: Record<string, unknown>[]): string {
+export function buildStrandedTargeting(rows: Record<string, unknown>[], lockEnforced = true): string {
   const ids = rows.map((r) => Number(r.id)).filter(Number.isFinite);
-  const digest = buildSourceDigest(rows);
+  const digest = buildSourceDigest(rows, lockEnforced);
   return [
     "대상 자료 id(이것만 다뤄, 목록을 새로 조회하지 마 — 서버가 '켜진 어느 레인 스코프에도 안 드는 자료'로 "
       + `이미 골라 배정한 것이다): ${ids.join(",")}.`,
@@ -1118,7 +1120,10 @@ export interface PromptSectionView { id: PromptSectionId; label: string; def: st
 export const distillerDisplayName = (d: DistillerRow): string => d.label || d.key || "(이름 없음)";
 
 // 각 조각의 **기본값**. 관리탭이 이걸 그대로 보여준다 — 무엇을 덮어쓰는지 모르면 덮어쓸 수 없다.
-export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o: { count: number; policySummary: string }): string {
+/** lockEnforced = 잠긴 자료를 공개 지식에 합치는 저장을 서버가 거절하는가(derivedEnforced — 자료·지식 축 둘 다 켜짐). 생략 시 true. */
+export interface SectionOpts { count: number; policySummary: string; lockEnforced?: boolean }
+
+export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o: SectionOpts): string {
   const name = distillerDisplayName(d);
   switch (id) {
     case "intro":
@@ -1153,8 +1158,11 @@ export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o:
         + "source_artifact(source_id)로 원본을 받아 그 path 를 Read 해 내용을 확보한다(unavailable=삭제/이동이면 skip).",
         "② 위 기준에 걸리면 knowledge_similar 로 중복을 먼저 확인한다 — 이미 있으면 새로 만들지 말고 그 지식을 갱신한다.",
         "③ knowledge_save 로 저장한다(위 형식 규칙대로) — **derived_from: [이 지식이 나온 자료 id 전부]** 를 꼭 실어라. 저장과 자료↔지식 연결을 서버가 한 번에 한다"
-        + "(source_link_knowledge 를 따로 부르지 마라 — 이 배치에서 derived_from 없는 저장은 거절된다). "
-        + "머리줄에 «잠김(볼 수 있는 사람만 봄)» 이 붙은 자료는 그 자료를 볼 수 있는 사람만 보는 지식이 된다 — 그 내용을 잠기지 않은(더 넓게 보이는) 기존 지식에 합치지 말고 새 지식으로 따로 써라(합치려 하면 서버가 409 로 거절한다).",
+        + "(source_link_knowledge 를 따로 부르지 마라 — 이 배치에서 derived_from 없는 저장은 거절된다)."
+        //  축이 꺼진 조직에선 409 도 좁히기도 없다 — 이 문장이 남으면 증류기가 있지도 않은 거절을 피하려고
+        //   매핑된 기존 문서 대신 새 지식을 만들거나 skip 한다.
+        + (!(o.lockEnforced ?? true) ? ""
+          : " 머리줄에 «잠김(볼 수 있는 사람만 봄)» 이 붙은 자료는 그 자료를 볼 수 있는 사람만 보는 지식이 된다 — 그 내용을 잠기지 않은(더 넓게 보이는) 기존 지식에 합치지 말고 새 지식으로 따로 써라(합치려 하면 서버가 409 로 거절한다)."),
         `④ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정한다. ${o.policySummary} `
         + "lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리된다(승인 전엔 검색·주입에 안 뜸). drop 이면 저장하지 않는다(skip).",
         "⑤ 기준에 안 걸리면 skip 한다(저장도 연결도 하지 마). skip 도 판정으로 기록돼 그 자료는 다음 배치에 다시 올라오지 않는다(원문이 고쳐지면 그때 다시 본다).",
@@ -1178,7 +1186,7 @@ const SECTION_LABEL: Record<PromptSectionId, string> = {
 };
 
 // 관리탭용 — 조각별 기본값·현재 덮어쓴 값을 함께 낸다(B6).
-export function distillerSectionViews(d: DistillerRow, o: { count: number; policySummary: string }): PromptSectionView[] {
+export function distillerSectionViews(d: DistillerRow, o: SectionOpts): PromptSectionView[] {
   return PROMPT_SECTIONS.map((id) => ({
     id, label: SECTION_LABEL[id], editable: true as const,
     def: distillerSectionDefault(id, d, o),
@@ -1191,15 +1199,17 @@ export function buildDistillerPrompt(o: {
   rows: Record<string, unknown>[];
   policySummary: string;
   threadKnowledge?: Record<string, unknown>[];
+  lockEnforced?: boolean;
 }): string {
   const d = o.distiller;
-  const opt = { count: o.rows.length, policySummary: o.policySummary };
+  const lockEnforced = o.lockEnforced ?? true;
+  const opt: SectionOpts = { count: o.rows.length, policySummary: o.policySummary, lockEnforced };
   const lines: string[] = [];
 
   // 도입부 + 대상 지정(불변) — 순서 고정.
   const intro = sectionOverride(d, "intro") ?? distillerSectionDefault("intro", d, opt);
   if (intro) lines.push(intro);
-  lines.push(buildDistillerTargeting(d, o.rows, o.threadKnowledge ?? []));
+  lines.push(buildDistillerTargeting(d, o.rows, o.threadKnowledge ?? [], lockEnforced));
 
   for (const id of ["criteria", "format", "thread", "procedure"] as PromptSectionId[]) {
     const text = sectionOverride(d, id) ?? distillerSectionDefault(id, d, opt);
