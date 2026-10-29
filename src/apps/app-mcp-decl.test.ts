@@ -272,9 +272,13 @@ await t("T6 #5053 실행기가 앞부분만 넘긴 답(truncatedFrom) — 상한
   assert.equal(over.bytes, 300_000, "전체 크기는 실행기가 본 원래 크기");
   assert.ok(over.text.startsWith("x".repeat(100) + "\n…(결과가"), over.text.slice(0, 120));
   assert.match(over.text, /전체 300000바이트/);
+  assert.match(over.text, /넘어 여기서 잘렸습니다/, "틀이 상한에서 자른 것");
   const under = renderToolResultText("x".repeat(50), 100, 300_000);
   assert.equal(under.truncated, true, "앞부분이 상한 안이어도 원래 답이 더 컸으면 잘린 것");
+  assert.ok(under.text.startsWith("x".repeat(50) + "\n…("), under.text.slice(0, 80));
+  assert.match(under.text, /앞 50바이트만 받았습니다/, "실행기가 넘긴 만큼을 말한다");
   assert.match(under.text, /전체 300000바이트/);
+  assert.doesNotMatch(under.text, /KiB 를 넘어/, "틀의 상한에서 자른 것처럼 말하지 않는다(받은 것은 상한보다 작다)");
   const none = renderToolResultText("x".repeat(100), 100, undefined);
   assert.equal(none.truncated, false, "truncatedFrom 이 없으면 종전(경계 = 상한은 자르지 않는다)");
   const zero = renderToolResultText("x".repeat(10), 100, 0);

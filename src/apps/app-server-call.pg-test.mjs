@@ -89,8 +89,8 @@ try {
   const { registerAppJobRoutes } = await import(`${D}/apps/app-jobs-routes.js`);
   const { GUARD_JS } = await import(`${D}/apps/app-server-guard.js`);
   const { HTTP_INTEGRATION_CT } = await import(`${D}/apps/app-server-stream.js`);
-  const { acquireInflight, resetInflightForTest } = await import(`${D}/apps/app-server-usage.js`);
-  const { resolveJobRunPrincipal } = await import(`${D}/apps/app-jobs.js`);
+  const { acquireInflight, inflightNow, resetInflightForTest } = await import(`${D}/apps/app-server-usage.js`);
+  const { resolveJobRunPrincipal, startAppJob } = await import(`${D}/apps/app-jobs.js`);
   const { appServerPolicy } = await import(`${D}/apps/app-server-store.js`);
   const { setAppServerPolicy } = await import(`${D}/apps/app-server-store.js`);
   const { AwsError } = await import(`${D}/net/aws/aws-json.js`);
@@ -112,6 +112,11 @@ try {
   registerAppJobRoutes(gw, verifier);
   const whoSeen = [];
   gw.get("/api/test/whoami", sessionOrBearer(verifier, { appServer: true }), (req, res) => { const u = req.auth?.extra; whoSeen.push(u); res.json(u); });
+  //  앱 코드가 작업을 시작하는 문(SDK livelyJobs().start · POST /api/ui/app-jobs 와 같은 startAppJob) — 가짜 함수 실행면(jobDeps)으로.
+  let spawnDeps = null;
+  gw.post("/api/test/app-jobs", sessionOrBearer(verifier, { appServer: true }), async (req, res) => {
+    try { res.json(await startAppJob(req.body, req.auth?.extra, {}, spawnDeps)); } catch (e) { res.status(e?.status ?? 500).json({ message: String(e?.message ?? e) }); }
+  });
   registerMcpTransport(gw, bearerWithResourceMetadata(verifier));
   gwServer = http.createServer(gw);
   await new Promise((r) => gwServer.listen(0, "127.0.0.1", r));
@@ -167,6 +172,8 @@ try {
     S("ask_bg", "POST /api/tools/ask", { level: "L1", input: { type: "object", properties: { q: { type: "string" } }, required: ["q"] }, run: { kind: "server", route: "POST /api/tools/ask", background: true } }),
     S("slow_bg", "/api/tools/slow", { level: "L1", run: { kind: "server", route: "/api/tools/slow", background: true } }),
     S("fail_bg", "/api/tools/fail", { level: "L1", run: { kind: "server", route: "/api/tools/fail", background: true } }),
+    S("spawn_tool", "/api/tools/spawn", { level: "L1" }),
+    S("spawn_bg", "/api/tools/spawn", { level: "L1", run: { kind: "server", route: "/api/tools/spawn", background: true } }),
   ];
   const badInstall = await errOf(cap("org_app_install").handler({ source: { kind: "inline", files: [{ path: "lively-app.json", content: J({ id: "nosrv", title: "서버 없음", version: "0.1.0", mcp_tools: [S("x_q", "/x")] }) }] } }, P("boss", true), ctx));
   chk("B3 설치 — 서버를 선언하지 않은 판의 server 도구는 400(자리와 까닭)", badInstall?.status === 400 && /\[mcp_tools\.0\]/.test(badInstall.message) && /web\.server/.test(badInstall.message), String(badInstall?.message));
@@ -206,6 +213,14 @@ try {
         const me = await callBack(id);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(J({ answer: "연차는 15일", got: body ? JSON.parse(body) : null, query: u.search, me }));
+        return;
+      }
+      if (u.pathname === "/api/tools/spawn") {
+        //  받은 돌기 신원으로 작업 하나를 시작하고(그 작업은 /api/tools/ask — 작업 돌기 신원으로 whoami) 끝날 때까지 기다려 그대로 돌려준다.
+        const r = await fetch(`${GW}/api/test/app-jobs`, { method: "POST", headers: { authorization: `Bearer ${fn.token}`, "x-lively-identity": id, "content-type": "application/json" },
+          body: J({ route: "/api/tools/ask", body: { q: "자식" }, wait: 10 }) });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(J({ child: { status: r.status, body: await r.json().catch(() => null) } }));
         return;
       }
       if (u.pathname === "/api/tools/big") { res.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); res.end("가".repeat(100_000)); return; }   // 300,000바이트
@@ -271,11 +286,15 @@ try {
       invokes.push({ name, qualifier, ev });
       if (lambdaMode === "throttle") throw new AwsError(429, "TooManyRequestsException", "Rate exceeded");
       if (lambdaMode === "timeout") throw new AwsError(0, "Timeout", "lambda 시간 초과");
+      //  이벤트가 claim 창(60초)이 지나 함수에 닿았다 — 검사 층이 게이트웨이의 409 expired 를 받아 앱에 닿기 전에 거절한다(E5g).
+      if (lambdaMode === "late") await itemsPool.query(`UPDATE org_app_call SET created_at = now() - interval '61 seconds' WHERE id=$1`, [parseCallCredential(ev.headers["x-lively-identity"])?.id]);
+      //  흐름이 첫 조각에서 깨진다 — 게이트웨이 쪽 뜻밖의 예외(E7b).
+      if (lambdaMode === "boom") return { status: 200, executedVersion: "x", contentType: HTTP_INTEGRATION_CT, events: (async function* () { throw new Error("흐름이 깨졌다(시험)"); })() };
       return streamOf(await toGuard(ev));
     },
   };
   const records = [];
-  const FAKE_ENV = { region: "ap-northeast-2", execRoleArn: "arn:aws:iam::111122223333:role/lvly-app-exec", awsAccountId: "111122223333", layerArn: "x", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" };
+  const FAKE_ENV = { host: "lambda", region: "ap-northeast-2", execRoleArn: "arn:aws:iam::111122223333:role/lvly-app-exec", awsAccountId: "111122223333", layerArn: "x", prefix: "lvly-app-", runtime: "nodejs22.x", arch: "arm64", codeStorage: "REFERENCE" };
   let envOn = true;
   //  백그라운드 작업 — 비동기 부르기는 받아 두고(202) 따로 돈다: 이벤트를 진짜 검사 층에 넘기고(작업 길: claim · 앱 · 결과 보고) 기다리지 않는다.
   const asyncInvokes = [];
@@ -291,7 +310,8 @@ try {
     now: () => Date.now(),
   };
   const BASE_DEPS = { env: () => (envOn ? FAKE_ENV : null), api: () => fakeApi, domain: () => null, slug: () => "ws", record: (appId, r) => records.push({ appId, ...r }),
-    jobDeps: () => jobDeps, bgWaitSec: 30, bgProgressSec: 1 };
+    jobDeps: () => jobDeps, bgWaitSec: 30, bgQuietWaitSec: 30, bgProgressSec: 1 };
+  spawnDeps = jobDeps;
   callSvc.setServerCallDepsForTest(BASE_DEPS);
   //  id 는 BIGSERIAL — 날 쿼리에선 글자로 온다(저장 모듈은 번호로 고친다). 대조하려고 번호로.
   const callRows = async () => (await itemsPool.query(`SELECT * FROM org_app_call ORDER BY id`)).rows.map((x) => ({ ...x, id: Number(x.id) }));
@@ -310,10 +330,15 @@ try {
   chk("E3 ★ 입력 스키마 위반(빠진 칸 · 틀린 형) — 부르기 전에 거절 · 앱 서버 호출 0 · 부르기 행 0",
     (r3a.isError === true || !!r3a.thrown) && (r3b.isError === true || !!r3b.thrown) && invokes.length === 0 && (await callRows()).length === 0, J({ r3a, r3b }));
 
+  //  처리 중 자리 — 부르기가 어떻게 끝나든(성공 · 앱 오류 · 검사 층 거절 · 시간 넘김 · 조절 · 뜻밖의 예외) 돌려준다(E8c).
+  const slots = [];
+  const noteSlot = (label) => slots.push({ label, app: inflightNow("wiki").app, ws: inflightNow().workspace });
+
   // ── E13 · E4 · E9 · E10 · E11 — 한 줄 끝까지 ──
   const t13 = Date.now();
   const r13 = await A.call("ask_policy", { q: "휴가 규정", n: 2, extra: "버려질 칸" });
   const ms13 = Date.now() - t13;
+  noteSlot("ok");
   const out13 = (() => { try { return JSON.parse(textOf(r13)); } catch { return null; } })();
   const seen13 = appSeen.at(-1);
   const inv13 = invokes.at(-1);
@@ -376,6 +401,7 @@ try {
 
   // ── 앱의 오류 · 글이 아닌 답 ──
   const rf = await A.call("fail_tool", {});
+  noteSlot("app-4xx");
   const rp = await A.call("png_tool", {});
   chk("E13b 앱이 4xx 로 답하면 도구 오류 app_error(앱의 글) · 그림을 보내면 app_bad_result",
     rf.isError && codeOf(rf) === "app_error" && /그런 정책은 없습니다/.test(textOf(rf)) && /HTTP 404/.test(textOf(rf)) && rp.isError && codeOf(rp) === "app_bad_result", J({ rf, rp }));
@@ -385,6 +411,7 @@ try {
   const t6 = Date.now();
   const r6 = await A.call("slow_tool", {});
   const ms6 = Date.now() - t6;
+  noteSlot("guard-504");
   const row6 = (await callRows()).at(-1);
   chk("E6 ★ 30초(여기선 정책 3초)를 넘기면 검사 층이 끊고(504) → 도구 오류 app_server_timeout · 시간을 말한다 · 행 failed · 셈은 오류",
     r6.isError && codeOf(r6) === "app_server_timeout" && /3초/.test(textOf(r6)) && ms6 >= 2800 && ms6 < 4400 && row6?.status === "failed" && row6?.status_code === 504
@@ -392,11 +419,33 @@ try {
   await setAppServerPolicy({}, { actor: "pgt" });
   lambdaMode = "timeout";
   const r6b = await A.call("ask_policy", { q: "x" });
+  noteSlot("lambda-timeout");
   lambdaMode = "throttle";
   const r6c = await A.call("ask_policy", { q: "x" });
+  noteSlot("throttle");
   lambdaMode = "ok";
   chk("E6b 함수 부르기 자체가 시간을 넘기면 app_server_timeout · 조절(429)이면 app_server_throttled — 둘 다 행 failed",
     codeOf(r6b) === "app_server_timeout" && codeOf(r6c) === "app_server_throttled" && (await callRows()).slice(-2).every((x) => x.status === "failed"), J({ r6b, r6c }));
+
+  // ── E5g 검사 층이 앱에 닿기 전에 거절 · E7b 뜻밖의 예외 · E8c 자리 반납 ──
+  const nSeen5g = appSeen.length;
+  lambdaMode = "late";
+  const r5g = await A.call("ask_policy", { q: "늦게 닿음" });
+  noteSlot("guard-denied");
+  const rec5g = records.at(-1);
+  lambdaMode = "boom";
+  const r7b = await A.call("ask_policy", { q: "깨진 흐름" });
+  noteSlot("boom");
+  lambdaMode = "ok";
+  const [row5g, row7b] = (await callRows()).slice(-2);
+  chk("E5g 함수에 늦게 닿은 이벤트(claim 409 expired) — 검사 층이 앱 전에 거절 → 도구 오류 app_server_identity · 행 failed(guard:denied · 시작 안 함) · 앱 오류로 세지 않는다",
+    r5g.isError && codeOf(r5g) === "app_server_identity" && appSeen.length === nSeen5g && row5g?.status === "failed" && row5g?.error === "guard:denied"
+      && row5g?.status_code === 409 && row5g?.claimed_at === null && rec5g?.error === false, J({ r5g, row5g: row5g && { s: row5g.status, e: row5g.error, c: row5g.status_code }, rec5g }));
+  chk("E7b 게이트웨이 쪽 뜻밖의 예외 — 도구 오류 executor_failed(속사정 감춤) · 행 failed(gateway) · 셈은 오류",
+    r7b.isError && codeOf(r7b) === "executor_failed" && !/깨졌다/.test(textOf(r7b)) && row7b?.status === "failed" && row7b?.error === "gateway" && records.at(-1)?.error === true,
+    J({ r7b, row7b: row7b && { s: row7b.status, e: row7b.error } }));
+  chk("E8c 처리 중 자리 — 성공 · 앱 4xx · 검사 층 504 · 함수 시간 넘김 · 조절 · 검사 층 거절 · 뜻밖의 예외 뒤 모두 돌려준다(앱 0 · 워크스페이스 0)",
+    slots.length === 7 && slots.every((x) => x.app === 0 && x.ws === 0), J(slots));
 
   // ── E8 서버 꺼짐 · 미배포 · 옛 판 · 멈춤 · 바쁨(엣지 표 8) ──
   const e8 = [];
@@ -482,6 +531,20 @@ try {
   const ended = await errOf(resolveAppServerPrincipal(fnUser, run));
   chk("E10e 도는 동안 동의를 거두면 403 · 떠난(비활성) 사람 403 · 부르기가 끝나면 401",
     revoked?.status === 403 && disabled?.status === 403 && ended?.status === 401, J({ revoked: revoked?.message, disabled: disabled?.message, ended: ended?.message }));
+  //  도는 동안 동의 범위 · 구성원 권한이 «줄면» — 다시 부를 때마다 지금의 동의 · 구성원 권한과 다시 겹친다(행에 적힌 권한을 그대로 믿지 않는다).
+  const wide = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "ask_policy", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: ["memory", "items"], timeoutS: 30 });
+  const wideRun = (await callSvc.onCallClaim(wide.row.id, jobCallerOf(fnUser), wide.secret)).run;
+  const s0 = (await resolveAppServerPrincipal(fnUser, wideRun)).scopes;
+  const g0 = (await itemsPool.query(`SELECT scopes FROM org_app_grant WHERE app_id='wiki' AND member_id='alice' AND revoked_at IS NULL`)).rows[0]?.scopes;
+  await itemsPool.query(`UPDATE org_app_grant SET scopes='["memory"]'::jsonb WHERE app_id='wiki' AND member_id='alice' AND revoked_at IS NULL`);
+  const sGrant = (await resolveAppServerPrincipal(fnUser, wideRun)).scopes;
+  await itemsPool.query(`UPDATE org_app_grant SET scopes=$1::jsonb WHERE app_id='wiki' AND member_id='alice' AND revoked_at IS NULL`, [J(g0)]);
+  await upsertMember({ id: "alice", display_name: "앨리스", state: "active", scopes: MEMBER_SCOPES.filter((x) => x !== "memory") }, "pgt");
+  const sMember = (await resolveAppServerPrincipal(fnUser, wideRun)).scopes;
+  await upsertMember({ id: "alice", display_name: "앨리스", state: "active", scopes: MEMBER_SCOPES }, "pgt");
+  await cs.endAppCall(wide.row.id, { status: "done" });
+  chk("E10f 도는 동안 동의 범위가 줄면(memory 만) 주체도 memory 만 · 구성원 권한에서 memory 가 빠지면 주체에서도 빠진다",
+    J([...s0].sort()) === J(["items", "memory"]) && J(sGrant) === J(["memory"]) && J(sMember) === J(["items"]), J({ s0, g0, sGrant, sMember }));
 
   // ── BG 30초 넘는 도구(run.background) ──
   const jobRows = async () => (await itemsPool.query(`SELECT id, status, source, label, requester, scope_ceiling, error FROM org_app_job ORDER BY id`)).rows.map((x) => ({ ...x, id: Number(x.id) }));
@@ -519,6 +582,18 @@ try {
   const rb4b = await A.call("app_job_get", { id: jobId4, wait: 25 });
   const ob4b = (() => { try { return JSON.parse(textOf(rb4b)); } catch { return null; } })();
   chk("BG4b 안내대로 app_job_get 을 부르면 — 그 사람의 작업이라 결과까지(done · 라우트 답)", ob4b?.id === jobId4 && ob4b?.status === "done" && ob4b?.result?.status_code === 200, J(ob4b));
+  //  같은 4.5초 작업 — 진행 알림을 받을 수 없는 요청(progressToken 없음)은 짧게, 실은 요청은 길게 기다린다.
+  callSvc.setServerCallDepsForTest({ ...BASE_DEPS, bgWaitSec: 8, bgQuietWaitSec: 2 });
+  const tq9 = Date.now();
+  const rq9 = await A.call("slow_bg", {});
+  const msq9 = Date.now() - tq9;
+  const tp9 = Date.now();
+  const rp9 = await A.callWithProgress("slow_bg", {}, () => undefined);
+  const msp9 = Date.now() - tp9;
+  callSvc.setServerCallDepsForTest(BASE_DEPS);
+  chk("BG9 진행 알림을 받을 수 없는 요청(progressToken 없음)은 짧게(여기선 2초) 기다리고 작업 번호 — 실은 요청은 길게(여기선 8초까지) 기다려 결과",
+    !rq9.isError && rq9._meta?.["lively/pending"] === true && msq9 < 4000 && !rp9.isError && rp9._meta?.["lively/pending"] !== true && J(JSON.parse(textOf(rp9) || "null")) === "{}" && msp9 >= 4000,
+    J({ rq9: rq9._meta, msq9, rp9: rp9._meta, msp9 }));
   const rb5 = await A.call("fail_bg", {});
   chk("BG5 background 라우트가 4xx 로 답하면 — 도구 오류 app_error(앱의 글 · 상태) · 작업 failed",
     rb5.isError && codeOf(rb5) === "app_error" && /그런 정책은 없습니다/.test(textOf(rb5)) && /HTTP 404/.test(textOf(rb5)) && (await jobRows()).at(-1)?.status === "failed", J(rb5));
@@ -545,6 +620,25 @@ try {
   chk("BG8 상한 칸이 빈 mcp-tool 작업의 돌기 신원은 권한 0(닫힘) · 다른 작업(source 가 다름)은 종전대로 사람 ∩ 동의",
     J(pBad.scopes) === "[]" && pOther.scopes.length > 0, J({ bad: pBad.scopes, other: pOther.scopes }));
   await itemsPool.query(`UPDATE org_app_job SET status='done', ended_at=now() WHERE id=$1`, [bad.id]);
+
+  //  상한을 물려준다 — 좁은 토큰(memory 하나)으로 부른 도구 안에서 앱이 작업을 시작해도, 그 작업(과 background 작업 안의 작업)은 memory 까지만.
+  const childOf = (r) => { try { return JSON.parse(textOf(r)).child; } catch { return null; } };
+  const meOf = (child) => child?.body?.result?.json?.me?.body;
+  const Cc = await mcp(tok.carol);
+  const rs10 = await Cc.call("spawn_tool", {});
+  const rb10 = await Cc.call("spawn_bg", {});
+  await Cc.close();
+  const ra10 = await A.call("spawn_tool", {});
+  const [cs10, cb10, ca10] = [childOf(rs10), childOf(rb10), childOf(ra10)];
+  const rowOf = async (id) => (await itemsPool.query(`SELECT source, scope_ceiling, parent_id FROM org_app_job WHERE id=$1`, [id])).rows[0];
+  const [js10, jb10] = [await rowOf(cs10?.body?.id), await rowOf(cb10?.body?.id)];
+  chk("BG10 ★ 좁은 토큰으로 부른 도구 안에서 앱이 작업을 시작하면 — 그 작업도 memory 까지만(동기 부르기 · background 작업 안 둘 다 · 상한을 물려받고 mcp-tool 로 적힌다)",
+    !rs10.isError && !rb10.isError && cs10?.body?.status === "done" && cb10?.body?.status === "done"
+      && meOf(cs10)?.userId === "carol" && J(meOf(cs10)?.scopes) === J(["memory"]) && J(meOf(cb10)?.scopes) === J(["memory"])
+      && js10?.source === "mcp-tool" && J(js10?.scope_ceiling) === J(["memory"]) && jb10?.source === "mcp-tool" && J(jb10?.scope_ceiling) === J(["memory"]) && jb10?.parent_id != null,
+    J({ cs10: cs10?.body?.status ?? cs10, cb10: cb10?.body?.status ?? cb10, me: [meOf(cs10)?.scopes, meOf(cb10)?.scopes], js10, jb10 }));
+  chk("BG10b 넓은 토큰(앨리스)이면 물려받은 상한도 넓다 — 동의 범위(memory · items) 그대로(상한이 권한을 더 깎지 않는다)",
+    !ra10.isError && J([...(meOf(ca10)?.scopes ?? [])].sort()) === J(["items", "memory"]), J({ ca10: meOf(ca10) }));
 
   // ── E12 정비 ──
   const st1 = await cs.insertAppCall({ appId: "wiki", purpose: "mcp_tool", tool: "t", requester: "alice", requesterName: null, variant: "pub", alias: "pub", functionName: "f", level: "L0", scopes: [], timeoutS: 3 });

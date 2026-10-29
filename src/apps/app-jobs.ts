@@ -56,7 +56,10 @@ const SWEEP_PAGE_SIZE = 200, SWEEP_MAX_PAGES = 25;
 
 const actorSource = (user: LivelyUser, source?: string): string =>
   user.appServer ? (user.appJobId ? "app-job" : "app-server") : source ?? (user.appId ? "app-ui" : "person");
-/** #5053 앱 선언 MCP 도구(server 실행기의 background)가 시작한 작업의 source — 돌기 신원을 풀 때 권한 상한(scope_ceiling)을 함께 본다. */
+/**
+ * #5053 앱 선언 MCP 도구 부르기에서 비롯된 작업의 source — server 실행기의 background 가 시작한 작업, 그리고 그 부르기 · 그런 작업 안에서
+ *  앱 코드가 시작한 작업. 돌기 신원을 풀 때 권한 상한(scope_ceiling = 부른 연결의 권한 ∩ 동의)을 함께 본다.
+ */
 export const MCP_TOOL_JOB_SOURCE = "mcp-tool";
 
 /**
@@ -105,18 +108,24 @@ export async function startAppJob(input: Record<string, unknown>, user: LivelyUs
   //  작업이 시작한 작업 — 같은 사람 · 같은 앱이고 깊이 상한 안에서만(끝없이 이어지지 않게).
   let parentId: number | null = null;
   let depth = 0;
+  let parentCapped = false;
   if (user.appJobId) {
     const parent = await js.getAppJob(user.appJobId);
     if (!parent || parent.app_id !== appId) throw new HttpError(403, "작업 신원이 이 앱의 것이 아닙니다");
     depth = parent.depth + 1;
     parentId = parent.id;
+    parentCapped = parent.source === MCP_TOOL_JOB_SOURCE;
     if (depth > JOB_DEPTH_MAX) throw new HttpError(409, `작업이 시작한 작업은 ${JOB_DEPTH_MAX}단계까지입니다 — 더 나누려면 한 작업이 여러 작업을 나란히 시작하세요`);
   }
+  //  #5053 권한 상한을 물려준다 — 앱 선언 MCP 도구 부르기(돌기 신원) 안이나 상한이 있는 작업 안에서 앱이 시작한 작업도 그 주체의 권한
+  //   (부른 연결의 권한 ∩ 동의)까지만 돈다. 앱 코드가 작업 하나로 그 상한을 넘지 못하게.
+  const inherited = user.appServer === true && (user.appCallId !== undefined || parentCapped) ? [...user.scopes] : undefined;
+  const scopeCeiling = ctx.scopeCeiling ?? inherited;
   const tokenHash = (alias === "pub" ? row.pub_token_hash : row.cur_token_hash) ?? null;
   const out = await js.insertAppJob({
     appId, requester: user.userId, variant, alias, functionName: row.function_name, lambdaVersion: version, tokenHash,
     route: String(input.route), body: enc.json, bodyBytes: enc.bytes, label: jobLabelOf(input.label), timeoutS: to.timeout,
-    source: actorSource(user, ctx.source), parentId, depth, ...(ctx.scopeCeiling ? { scopeCeiling: ctx.scopeCeiling } : {}),
+    source: scopeCeiling ? MCP_TOOL_JOB_SOURCE : actorSource(user, ctx.source), parentId, depth, ...(scopeCeiling ? { scopeCeiling } : {}),
   }, (have) => jobAdmissionError(policy, have)?.error ?? null);
   if ("denied" in out) throw new HttpError(429, out.denied);
   logger.info({ app: appId, job: out.row.id, alias, version, source: out.row.source }, "[app-jobs] 작업을 받았다(#4486)");

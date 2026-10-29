@@ -196,7 +196,7 @@ t("W1 배선 — 흐름 파일들은 Lambda · S3 를 직접 부르지 않는다
   //  dist/apps/<이 파일>.js → 소스 src/apps 로(시험은 빌드한 뒤 돈다).
   const here = path.dirname(fileURLToPath(import.meta.url));
   const src = path.resolve(here, "../../src/apps");
-  const flows = ["app-server-deploy.ts", "app-server-lifecycle.ts", "app-server-watch.ts", "app-server-build.ts", "app-front-server.ts", "app-jobs.ts"];
+  const flows = ["app-server-deploy.ts", "app-server-lifecycle.ts", "app-server-watch.ts", "app-server-build.ts", "app-front-server.ts", "app-jobs.ts", "app-server-call.ts"];
   const banned = [/\brealLambdaApi\(/, /\bappBundleS3Config\(/, /\bs3Head\(/, /\bs3Delete\(/, /\bs3PresignUrl\(/];
   for (const f of flows) {
     const text = fs.readFileSync(path.join(src, f), "utf8");

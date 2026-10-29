@@ -2,6 +2,7 @@
 // 실행: npm run build && node --test dist/apps/app-mcp-server-executor.test.js
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { serverExecutor, registerServerExecutor } from "./app-mcp-server-executor.js";
 import { appMcpExecutor, appMcpExecutorKinds } from "./app-mcp-executors.js";
 import { assertAppMcpToolsInstallable, type AppMcpToolDecl } from "./app-mcp-decl.js";
@@ -72,4 +73,12 @@ test("B3e 틀의 설치 검사와 이어진다 — 등록하면 kind 'server' �
 test("B3f 같은 실행기를 두 번 등록하면 던진다(둘이 같은 선언을 다르게 실행하지 않게)", () => {
   const off = registerServerExecutor();
   try { assert.throws(() => registerServerExecutor(), /이미 등록/); } finally { off(); }
+});
+
+test("B3h 배선 — 코어가 뜰 때 server 실행기를 등록한다(index.ts · 이 한 줄이 없으면 설치가 «모르는 실행기» 400 · 도구 목록 0개)", () => {
+  //  dist/apps/<이 파일>.js → 소스 src/index.ts(시험은 빌드한 뒤 돈다 · auth/http-auth-gate.test G4 와 같은 방식).
+  const IDX = readFileSync(new URL("../../src/index.ts", import.meta.url), "utf8");
+  assert.ok(IDX.length > 1000, "index.ts 를 읽지 못했다");
+  assert.match(IDX, /^import \{ registerServerExecutor \} from "\.\/apps\/app-mcp-server-executor\.js";/m);
+  assert.equal(IDX.match(/^registerServerExecutor\(\);/gm)?.length ?? 0, 1, "줄 맨 앞에서 한 번(주석 · 조건 안이 아니게)");
 });

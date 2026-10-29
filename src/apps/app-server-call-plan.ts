@@ -140,6 +140,11 @@ export function toolReplyOf(r: ServerCallReply, timeoutS: number): ToolReply {
 export const BG_WAIT_SEC = 200;
 /** 기다리는 동안 진행 알림 간격(초) — Claude Code 는 5분 동안 소식이 없으면 끊고 진행 알림을 활동으로 센다(code.claude.com/docs/en/mcp). */
 export const BG_PROGRESS_SEC = 10;
+/**
+ * 진행 알림을 받을 수 없는 요청(progressToken 없음)은 이만큼만 기다린다 — 흔한 MCP 클라이언트(TS SDK)의 기본 요청 시한이 60초라 그 전에
+ *  작업 번호로 답한다(먼저 끊기면 번호를 못 받고, 다시 부르면 같은 일이 두 번 돈다). 진행 알림을 실은 요청은 BG_WAIT_SEC 까지.
+ */
+export const BG_WAIT_QUIET_SEC = 50;
 
 /** 앱이 실패로 답한 작업의 글 — 결과 JSON 의 message · error, 아니면 글 앞부분(1,000자). */
 function jobAppMessage(r: JobResultView | null): string {

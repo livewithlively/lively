@@ -294,6 +294,11 @@ export function renderToolResultText(data: unknown, max = APP_MCP_RESULT_MAX_BYT
   const from = typeof truncatedFrom === "number" && Number.isFinite(truncatedFrom) ? truncatedFrom : 0;
   if (buf.length <= max && !from) return { text, truncated: false, bytes: buf.length };
   const total = Math.max(buf.length, from);
+  if (buf.length <= max) {
+    //  실행기가 이미 앞부분만 넘겼다(예 server 실행기의 작업 결과는 앞 64KB) — 틀의 상한이 아니라 받은 만큼과 원래 크기를 적는다.
+    const kept = text.replace(/\uFFFD+$/, "");
+    return { text: `${kept}\n…(결과가 커서 앞 ${Buffer.byteLength(kept, "utf8")}바이트만 받았습니다 — 전체 ${total}바이트)`, truncated: true, bytes: total };
+  }
   const cut = buf.subarray(0, max).toString("utf8").replace(/\uFFFD+$/, "");
   return { text: `${cut}\n…(결과가 ${Math.round(max / 1024)}KiB 를 넘어 여기서 잘렸습니다 — 전체 ${total}바이트)`, truncated: true, bytes: total };
 }

@@ -3,7 +3,9 @@
 //  선언: { name, description, input, level, run: { kind: "server", route: "POST /api/tools/<이름>", background?: true } } — 라우트는 «/경로» 또는 «POST /경로»
 //   (늘 POST · 인자가 JSON 본문). 설치 · 판 저장 때(validate) 라우트 꼴 · background 꼴과 그 판의 서버 선언(web.server)을 본다. run 의 다른 칸은 받지 않는다.
 //  ★ 30초 넘는 도구(결정 상민 2026-10-29) — background:true 면 그 라우트를 부른 사람의 백그라운드 작업(#4486 · 최대 15분)으로 돌리고 게이트웨이가 200초까지
-//   대신 기다린다(진행 알림). 끝나면 작업의 결과(라우트 답의 앞 64KB)가 도구 결과, 못 끝나면 작업 번호와 «app_job_get 으로 결과 받기» 안내(app-server-call runServerToolJob).
+//   대신 기다린다(진행 알림 · 진행 알림을 못 받는 요청은 50초까지). 끝나면 작업의 결과(라우트 답의 앞 64KB)가 도구 결과, 못 끝나면 작업 번호와
+//   «app_job_get 으로 결과 받기» 안내(app-server-call runServerToolJob).
+//   ⚠ 답의 보존이 다르다 — 동기 도구는 인자 · 답을 어디에도 적지 않지만, background 는 작업 길이라 답의 앞 64KB 가 작업 행에 보존 기간(job_keep_days) 동안 남는다.
 //  L0(조회)은 막지 않는다(결정 상민 2026-10-29 «앱이 적은 대로 믿기») — level 은 앱 작성자의 자기 신고이고 readOnlyHint 는 안내다.
 //  부르기: 틀(mcp/app-declared-tools)이 동의 · 구성원 · 인자를 확인한 뒤 → 게이트웨이가 함수를 흘려 받기로 부르고(app-server-call callAppServerRoute — 사람 요청과
 //   같은 별칭 · 30초 · 처리 중 상한 · 호출 셈) → 함수 안 검사 층(5 판)이 claim 을 받은 뒤 앱에 x-lively-member · x-lively-member-name · x-lively-variant ·

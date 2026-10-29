@@ -19,7 +19,7 @@ import { parseReport } from "../net/aws/lambda-lite.js";
 import { canSeeApp } from "./visibility.js";
 import { appDomain, appHost } from "./app-address.js";
 import { appServerEnv, type AppServerEnv } from "./app-server-config.js";
-import { realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
+import { appServerApi, type LambdaApi } from "./app-server-host.js";
 import { startHttpStream, lambdaErrorOf, type Complete } from "./app-server-stream.js";
 import { acquireInflight, recordAppServerCall } from "./app-server-usage.js";
 import * as st from "./app-server-store.js";
@@ -29,7 +29,7 @@ import { getAppJob, jobSecretMatches, newJobSecret } from "./app-jobs-store.js";
 import { JOB_GUARD_MIN, isJobEnded } from "./app-jobs-plan.js";
 import * as cs from "./app-server-call-store.js";
 import {
-  BG_PROGRESS_SEC, BG_WAIT_SEC, CALL_BODY_MAX, CALL_GUARD_MIN, CALL_KEEP_DAYS, CALL_RUN_GRACE_SEC, callCredential, callInvokeEvent, jobToolReplyOf, parseCallCredential,
+  BG_PROGRESS_SEC, BG_WAIT_QUIET_SEC, BG_WAIT_SEC, CALL_BODY_MAX, CALL_GUARD_MIN, CALL_KEEP_DAYS, CALL_RUN_GRACE_SEC, callCredential, callInvokeEvent, jobToolReplyOf, parseCallCredential,
   type ServerCallReply, type ToolReply,
 } from "./app-server-call-plan.js";
 
@@ -43,9 +43,10 @@ export interface ServerCallDeps {
   slug(): string | null;
   now(): number;
   record(appId: string, r: { billedMs?: number | null; error?: boolean; rejected?: boolean }): void;
-  /** 30초 넘는 도구(background) — 백그라운드 작업의 의존 · 대신 기다리는 시간 · 진행 알림 간격(초). */
+  /** 30초 넘는 도구(background) — 백그라운드 작업의 의존 · 대신 기다리는 시간(진행 알림을 받는 요청 · 못 받는 요청) · 진행 알림 간격(초). */
   jobDeps(): AppJobDeps;
   bgWaitSec: number;
+  bgQuietWaitSec: number;
   bgProgressSec: number;
 }
 /** 시험이 끼우는 의존(가짜 함수 실행면 · 설정 · 시계) — 운영에서는 비어 있다(app-server-deploy setServerDepsForTest 와 같은 꼴). */
@@ -54,7 +55,7 @@ export function setServerCallDepsForTest(d: Partial<ServerCallDeps>): void { tes
 export function liveServerCallDeps(): ServerCallDeps {
   return {
     env: () => appServerEnv(),
-    api: (env) => realLambdaApi(env.region),
+    api: (env) => appServerApi(env),
     getServerRow: (id) => st.getServerRow(id),
     policy: () => st.appServerPolicy(),
     domain: () => appDomain(),
@@ -63,6 +64,7 @@ export function liveServerCallDeps(): ServerCallDeps {
     record: recordAppServerCall,
     jobDeps: () => liveAppJobDeps(),
     bgWaitSec: BG_WAIT_SEC,
+    bgQuietWaitSec: BG_WAIT_QUIET_SEC,
     bgProgressSec: BG_PROGRESS_SEC,
     ...testDeps,
   };
@@ -187,8 +189,10 @@ export async function callAppServerRoute(i: ServerCallInput, deps: ServerCallDep
     }
     const rep = complete ? parseReport(complete.log) : null;
     const appFailed = !complete || !!complete.errorCode || (rep !== null && rep.status !== "ok");
-    //  검사 층이 요청 시간에서 끊었다(504 · x-lively-guard: timeout) — 답은 왔지만 앱의 실패로 센다(사람 요청과 같다 · app-front-server).
-    const guardTimeout = start.prelude.headers["x-lively-guard"] === "timeout";
+    //  검사 층이 직접 답했다(x-lively-guard) — 요청 시간에서 끊었으면(timeout) 앱의 실패로 센다(사람 요청과 같다 · app-front-server).
+    //   그 밖(denied · error · app-unreachable · app-bad-response)은 앱이 끝까지 돌지 못한 부르기라 행은 failed 로 적되, 앱 오류로 세지는 않는다.
+    const guard = start.prelude.headers["x-lively-guard"];
+    const guardTimeout = guard === "timeout";
     count({ billedMs: rep?.billedMs ?? Date.now() - t0, error: appFailed || guardTimeout });
     const status = start.prelude.statusCode;
     if (appFailed) {
@@ -197,7 +201,7 @@ export async function callAppServerRoute(i: ServerCallInput, deps: ServerCallDep
       if (rep?.status === "timeout") throw fail(504, "app_server_timeout", timeoutText(policy.timeout_s));
       throw fail(502, "app_server_error", "앱 서버 응답이 중간에 끊겼습니다 — 잠시 뒤 다시 하세요");
     }
-    await end(guardTimeout ? { status: "failed", error: "timeout", statusCode: status, bytes } : { status: "done", statusCode: status, bytes });
+    await end(guard ? { status: "failed", error: guardTimeout ? "timeout" : `guard:${String(guard).slice(0, 40)}`, statusCode: status, bytes } : { status: "done", statusCode: status, bytes });
     return { reply: { status, headers: start.prelude.headers, body: Buffer.concat(parts), bytes }, timeoutS: policy.timeout_s };
   } catch (e) {
     if (!(e instanceof HttpError)) {
@@ -225,6 +229,7 @@ export interface ServerJobInput {
 
 /**
  * 그 라우트를 부른 사람의 백그라운드 작업(#4486 — 함수 비동기 · claim 신원 · 최대 15분)으로 돌리고 bgWaitSec 까지 대신 기다린다(bgProgressSec 마다 진행 알림).
+ *  진행 알림을 받을 수 없는 요청(progress 없음)은 bgQuietWaitSec 까지만 — 클라이언트의 요청 시한에 먼저 끊기지 않게(BG_WAIT_QUIET_SEC).
  *  끝나면 {done, reply}(작업 결과 → 도구 결과), 못 끝나면 {done:false, jobId}(작업은 그대로 돈다 — 부른 사람이 app_job_get 으로 받는다).
  *  부른 쪽이 끊으면(signal) 기다리기만 그만둔다(작업은 취소하지 않는다 — 다시 와서 받을 수 있다).
  */
@@ -242,7 +247,8 @@ export async function runServerToolJob(i: ServerJobInput, deps: ServerCallDeps =
   }
   const id = Number(view.id);
   const t0 = Date.now();
-  const waitMs = deps.bgWaitSec * 1000, tickMs = Math.max(1, deps.bgProgressSec) * 1000;
+  const waitSec = i.progress ? deps.bgWaitSec : Math.min(deps.bgWaitSec, deps.bgQuietWaitSec);
+  const waitMs = waitSec * 1000, tickMs = Math.max(1, deps.bgProgressSec) * 1000;
   let nextTick = t0 + tickMs;
   for (;;) {
     const j = await getAppJob(id);
