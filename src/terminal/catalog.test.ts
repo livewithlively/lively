@@ -117,20 +117,21 @@ test("★ {slug} 없는 템플릿은 무시한다(전 테넌트 공유가 되면
 // ★ registry 의 primary — 요청은 이름 없이 오고(tenant-middleware) 정비 타이머는 이름 «primary» 를 달고 온다(tenant-fanout).
 //  둘이 같은 폴더를 봐야 한다(#5082 실측: 정비가 다시 띄운 작업이 ~/lively/workspaces/primary/apps 를 만들려다 실패).
 test("★ registry 에선 이름 «primary» 도 종전 경로다 — 다른 워크스페이스는 그대로 제 자리 · registry 가 아니면 종전 그대로", () => {
-  const saved = { m: process.env.LIVELY_TENANCY_MODE, t: process.env.LIVELY_TENANT_ROOT_TEMPLATE, s: process.env.TERMINAL_ROOT_SHARED, a: process.env.TERMINAL_ROOT_APPS };
+  const saved = { m: process.env.LIVELY_TENANCY_MODE, t: process.env.LIVELY_TENANT_ROOT_TEMPLATE, s: process.env.TERMINAL_ROOT_SHARED, a: process.env.TERMINAL_ROOT_APPS, i: process.env.LIVELY_APPS_DIR };
   let who: string | null = null;
   installTenantSlugResolver(() => who);
   try {
     process.env.LIVELY_TENANCY_MODE = "registry";
     process.env.TERMINAL_ROOT_SHARED = "/srv/ws";
     process.env.TERMINAL_ROOT_APPS = "/srv/apps";
+    process.env.LIVELY_APPS_DIR = "/srv/iso-apps";
     delete process.env.LIVELY_TENANT_ROOT_TEMPLATE;
     const apps = () => roots().find((r) => r.key === "apps")!;
     for (const primary of [null, "primary"]) {
       who = primary;
       assert.equal(sharedRoot().base, "/srv/ws", `primary(${primary}) 의 공유 자리`);
       assert.equal(apps().base, "/srv/apps", `primary(${primary}) 의 앱 폴더`);
-      assert.equal(apps().isolatedBase, process.env.LIVELY_APPS_DIR || "/srv/lively/apps", `primary(${primary}) 의 격리 앱 폴더`);
+      assert.equal(apps().isolatedBase, "/srv/iso-apps", `primary(${primary}) 의 격리 앱 폴더`);
     }
     who = "acme-1a2b";
     assert.equal(sharedRoot().base, path.join(os.homedir(), "lively", "workspaces", "acme-1a2b", "shared"), "다른 워크스페이스는 제 자리");
@@ -146,7 +147,7 @@ test("★ registry 에선 이름 «primary» 도 종전 경로다 — 다른 워
     who = "primary"; assert.equal(sharedRoot().base, "/t/primary/shared");
   } finally {
     installTenantSlugResolver(() => null);
-    for (const [k, v] of [["LIVELY_TENANCY_MODE", saved.m], ["LIVELY_TENANT_ROOT_TEMPLATE", saved.t], ["TERMINAL_ROOT_SHARED", saved.s], ["TERMINAL_ROOT_APPS", saved.a]] as const) {
+    for (const [k, v] of [["LIVELY_TENANCY_MODE", saved.m], ["LIVELY_TENANT_ROOT_TEMPLATE", saved.t], ["TERMINAL_ROOT_SHARED", saved.s], ["TERMINAL_ROOT_APPS", saved.a], ["LIVELY_APPS_DIR", saved.i]] as const) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
   }

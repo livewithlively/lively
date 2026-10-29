@@ -93,14 +93,17 @@ export function tenantSlug(): string | null {
   return s && SAFE_SLUG.test(s) ? s : null;
 }
 
+/** registry 의 primary 워크스페이스 이름 — `org/tenancy/registry.PRIMARY_SLUG` 와 같아야 한다(번들 경계로 import 하지 못한다 · catalog.test 가 맞춘다). */
+export const REGISTRY_PRIMARY_SLUG = "primary";
+
 /**
  * 테넌트별 루트의 base 디렉터리. 템플릿에 `{slug}` 를 넣어 쓴다
  * (예: `LIVELY_TENANT_ROOT_TEMPLATE=/var/lib/lvly/tenants/{slug}/work`).
- * 템플릿이 없거나 컨텍스트가 없으면 null → 종전 경로.
+ * 템플릿이 없거나 컨텍스트가 없거나 registry 의 primary 면 null → 종전 경로.
  */
 function tenantRootBase(): string | null {
   // 셀프호스트 registry(#1750 S3) — 템플릿 미설정이면 홈 아래 기본 자리로 워크스페이스별 파일루트를 가른다.
-  //  primary 는 slug 가 없어 여기 안 걸린다(= 종전 경로 그대로, 기존 파일 무회귀). DB 만 갈라지고 파일이
+  //  primary 는 종전 경로 그대로다(기존 파일 무회귀) — 요청에선 slug 가 없고, 정비가 이름 «primary» 를 달고 오면 아래 가드가 받는다. DB 만 갈라지고 파일이
   //  섞이면 파일 탐색기에서 곧바로 남의 파일이 보인다 — 그래서 기본값이 있어야 한다(옵트인이 아니라).
   //  ⚠ #2599 T3 — 이 술어의 **정본은 `org/tenancy/state.registryModeActive()`** 이고, 다른 인라인
   //   재구현 3곳은 그 호출로 접었다. 여기만 남긴 이유는 «못 접어서» 가 아니라 **번들 경계** 다:
@@ -120,9 +123,6 @@ function tenantRootBase(): string | null {
   if (registry && slug === REGISTRY_PRIMARY_SLUG) return null;
   return tpl.replace("{slug}", slug);
 }
-
-/** registry 의 primary 워크스페이스 이름 — `org/tenancy/registry.PRIMARY_SLUG` 와 같아야 한다(번들 경계로 import 하지 못한다 · catalog.test 가 맞춘다). */
-export const REGISTRY_PRIMARY_SLUG = "primary";
 
 /** 앱 폴더 자리의 키(#4671 ② · #4673) — 주소 `apps/<앱>/…` 의 첫 조각과 같은 말. */
 export const APPS_ROOT_KEY = "apps";
