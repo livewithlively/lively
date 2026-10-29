@@ -17,7 +17,7 @@ import { connectVariant } from "../org/delivery/connect-skills.js";
 import { decideConnectNext, type ConnectNext } from "../org/connect-next.js";
 import { slackCollectState } from "./slack-connect.js";
 import { notionCollectState } from "./notion-connect.js";
-import { googleCollectState } from "./google-connect.js";
+import { googleCollectState, memberGoogleConnection } from "./google-connect.js";
 import {
   clickupCollectCapabilities, figmaCollectCapabilities, githubCollectCapabilities, gitlabCollectCapabilities,
   linearCollectCapabilities, outlookCollectCapabilities, zoteroCollectCapabilities,
@@ -80,18 +80,29 @@ export function githubSlotKindOf(rows: ReadonlyArray<GithubRow>): "app" | "token
   return slot ? (isGithubAppToken(slot) ? "app" : "token") : null;
 }
 
+/** 켜져 있는데 켠 사람의 키가 금고에 없다 — «모으는 중» 대신 이 한 줄을 보인다(collector-orphans.ts). */
+export function orphanNote(runner: string | null, callerId: string): string {
+  return runner && runner !== callerId
+    ? `수집기는 켜져 있지만 켠 사람(${runner})의 연결이 지워져 모으지 못하고 있습니다 — 내 연결로 다시 켜면 이어서 모읍니다`
+    : "수집기는 켜져 있지만 연결이 지워져 모으지 못하고 있습니다 — 다시 연결하면 이어서 모읍니다";
+}
+
 /** makeMemberTokenCollect 가 만든 상태 도구(org_<앱>_collect)를 그대로 부른다 — 상태 계산을 여기서 다시 하지 않는다. */
-function memberCollectProbe(caps: Capability[], system: string): (user: LivelyUser) => Promise<Probe> {
+export function memberCollectProbe(caps: Capability[], system: string): (user: LivelyUser) => Promise<Probe> {
   const get = caps.find((c) => c.name === `org_${system}_collect`);
   if (!get) throw new Error(`org_${system}_collect 가 없다`);
   return async (user) => {
-    const s = await get.handler({}, user) as { enabled?: boolean; me_connected?: boolean; app_ready?: boolean; needs_scope?: boolean; member?: string | null };
+    const s = await get.handler({}, user) as { enabled?: boolean; me_connected?: boolean; app_ready?: boolean; needs_scope?: boolean; member?: string | null; member_connected?: boolean | null };
+    const runner = typeof s.member === "string" && s.member ? s.member : null;
+    //  켜진 깃발이 아니라 «켠 사람이 아직 키를 쥐고 있나» 로 모으는 중을 판정한다 — 키가 지워진 수집기를 «모으는 중» 이라 하지 않게.
+    const orphaned = !!s.enabled && s.member_connected === false;
     return {
       app_ready: s.app_ready === undefined ? true : !!s.app_ready,
       me_connected: !!s.me_connected,
-      collecting: !!s.enabled,
-      runner: typeof s.member === "string" && s.member ? s.member : null,
-      note: s.enabled && s.needs_scope ? "수집은 켜져 있지만 모을 범위가 비어 있습니다" : null,
+      collecting: !!s.enabled && !orphaned,
+      runner,
+      note: orphaned ? orphanNote(runner, user.userId)
+        : s.enabled && s.needs_scope ? "수집은 켜져 있지만 모을 범위가 비어 있습니다" : null,
     };
   };
 }
@@ -102,10 +113,13 @@ export const CONNECT_APPS: readonly AppSpec[] = [
     app: "slack", label: "슬랙", needsApp: true, registerBy: "admin", routes: { app: true, aiApp: "slack" },
     probe: async (user) => {
       const s = await slackCollectState(user.userId);
-      const collecting = s.search.enabled || s.bot.enabled;
+      //  검색 수집기는 켠 사람의 연결로 돈다 — 그 연결이 지워졌으면 모으는 중이 아니다(봇 수집기는 봇 토큰이 따로 지킨다).
+      const searchOrphaned = s.search.enabled && s.search.member_connected === false;
+      const collecting = (s.search.enabled && !searchOrphaned) || s.bot.enabled;
       return {
         app_ready: s.app_ready, me_connected: s.me_connected, collecting,
-        note: collecting && !s.bot.available ? "봇이 아직 설치되지 않아, 공개 채널만 모읍니다" : null,
+        note: searchOrphaned && !s.bot.enabled ? orphanNote(s.search.member, user.userId)
+          : collecting && !s.bot.available ? "봇이 아직 설치되지 않아, 공개 채널만 모읍니다" : null,
       };
     },
   },
@@ -138,7 +152,19 @@ export const CONNECT_APPS: readonly AppSpec[] = [
     app: "google", label: "구글", needsApp: true, registerBy: "admin", routes: { app: true, aiApp: "gmail" },
     probe: async (user) => {
       const s = await googleCollectState(user.userId);
-      return { app_ready: s.ready, me_connected: !!s.connected, collecting: s.collectors.some((c) => c.enabled) };
+      //  켜진 수집기마다 그 token_source 의 사람이 아직 구글 연결을 쥐고 있나 — 지워졌으면 모으는 중이 아니다.
+      const on = s.collectors.filter((c) => c.enabled);
+      const live = await Promise.all(on.map(async (c) => {
+        const m = c.token_source?.startsWith("member:") ? c.token_source.slice("member:".length) : null;
+        if (!m) return true;
+        return m === user.userId ? !!s.connected : !!(await memberGoogleConnection(m).catch(() => null));
+      }));
+      const collecting = live.some(Boolean);
+      const orphanOf = on.find((_, i) => !live[i])?.token_source?.slice("member:".length) ?? null;
+      return {
+        app_ready: s.ready, me_connected: !!s.connected, collecting,
+        note: !collecting && on.length ? orphanNote(orphanOf, user.userId) : null,
+      };
     },
   },
   { app: "outlook", label: "아웃룩", needsApp: true, registerBy: "admin", routes: { app: true }, probe: memberCollectProbe(outlookCollectCapabilities, "outlook") },

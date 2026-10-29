@@ -116,7 +116,17 @@ export async function deleteMemberSecret(owner: string, kindRaw: unknown, scopeK
   const kind = normalizeKind(kindRaw);
   const scopeKey = normalizeScopeKey(scopeKeyRaw);
   const r = await itemsPool.query("DELETE FROM member_secret WHERE owner=$1 AND kind=$2 AND scope_key=$3", [owner, kind, scopeKey]);
-  return (r.rowCount ?? 0) > 0;
+  const deleted = (r.rowCount ?? 0) > 0;
+  //  그 칸으로 돌던 수집기를 끈다 — 안 그러면 키가 사라져도 «모으는 중» 깃발이 남는다(collector-orphans.ts).
+  //   지우는 길이 여럿(내 자격·관리자·OAuth 끊기)이라 여기 한 자리에서 한다. 동적 import 는 금고 ↔ 수집기 저장소 순환을 끊으려고.
+  //   best-effort — 끄기 실패가 삭제를 되돌리면 안 된다(그래도 상태 계산이 키 유무를 직접 보므로 화면은 맞다).
+  if (deleted) {
+    try {
+      const { stopOrphanedCollectors } = await import("./collector-orphans.js");
+      await stopOrphanedCollectors(owner, kind);
+    } catch (e) { console.warn(`stopOrphanedCollectors 실패(무시) owner=${owner} kind=${kind}: ${(e as Error).message}`); }
+  }
+  return deleted;
 }
 
 // 내부 — 복호 포함 조회(단일 owner). last_used_at 갱신(best-effort). 커넥터 주입 전용.
