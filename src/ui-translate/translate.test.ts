@@ -1,4 +1,4 @@
-// 화면 글 영어 보기(#5141) — 서버 쪽 엣지 표 E1~E21. 가짜 모델로. 실행: npm run build && node dist/ui-translate/translate.test.js
+// 화면 글 영어 보기(#5141) — 서버 쪽 엣지 표 E1~E26. 가짜 모델로. 실행: npm run build && node dist/ui-translate/translate.test.js
 //  이게 틀리면: 같은 글로 모델을 거듭 불러 키를 태우거나, 답 자리가 어긋나 엉뚱한 버튼에 엉뚱한 영어가 붙거나, 모델 실패가 화면 전체를 깬다.
 import assert from "node:assert/strict";
 import {
@@ -9,21 +9,22 @@ import {
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
 
-type Call = { prompt: string };
+type Call = { prompt: string; maxTokens: number; thinking?: unknown };
 type Reply = { ok: boolean; text: string; error: string | null; stopReason?: string | null };
 function fakeDeps(reply: (texts: string[]) => Reply, key: string | null = "sk-test") {
   const calls: Call[] = [];
   const scope = { v: "t1" };
+  const model = { v: "claude-haiku-5-5" };
   let keyLookups = 0;
   const d: TranslateDeps = {
     apiKey: async () => { keyLookups++; return key; },
     workspaceId: async () => null,
-    call: async (_k, i) => { calls.push({ prompt: i.prompt }); return reply(JSON.parse(i.prompt) as string[]); },
+    call: async (_k, i) => { calls.push({ prompt: i.prompt, maxTokens: i.maxTokens, thinking: i.thinking }); return reply(JSON.parse(i.prompt) as string[]); },
     cache: new TranslateCache(),
-    model: () => "m",
+    model: () => model.v,
     scope: () => scope.v,
   };
-  return { d, calls, keyLookups: () => keyLookups, scope };
+  return { d, calls, keyLookups: () => keyLookups, scope, model };
 }
 const echoEn = (texts: string[]) => ({ ok: true, text: JSON.stringify(texts.map((t) => `EN(${t})`)), error: null });
 const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
@@ -225,6 +226,59 @@ const sent = (c: Call[], i: number) => JSON.parse(c[i].prompt) as string[];
   assert.match(String(r.error), /overloaded/);
   assert.match(systemPrompt("en"), /straight double quote/, "지시가 곧은 따옴표를 막는다");
   ok("E21 호출 실패는 쪼개지 않는다");
+}
+
+// E22 실측 원답 그대로 — 닫는 곧은 따옴표 없이 “ ” 로 끝난 문자열(매니지드 · claude-haiku-5-5)
+{
+  const raw = '[": 「A system that pulls knowledge out of all these fragmented sources. It\'s a living map of how a company works」 → Nearly the same sentence as “context store + team AI setup.”]';
+  assert.deepEqual(parseReply(raw, 1), [": 「A system that pulls knowledge out of all these fragmented sources. It's a living map of how a company works」 → Nearly the same sentence as “context store + team AI setup.”"]);
+  ok("E22 닫는 따옴표가 빠진 마지막 글도 읽는다");
+}
+
+// E23 Haiku 는 생각을 끄고, 토큰 상한은 생각 몫까지 넉넉히(짧은 글에 512 를 줬더니 숨은 생각 823 토큰에 잘렸다)
+{
+  const f = fakeDeps(echoEn);
+  await translateTexts(["가"], "en", f.d);
+  assert.deepEqual(f.calls[0].thinking, { type: "disabled" });
+  assert.ok(f.calls[0].maxTokens >= 2048, `짧은 글도 바닥 2048 — 받은 값 ${f.calls[0].maxTokens}`);
+  f.model.v = "claude-opus-5-5";
+  await translateTexts(["나"], "en", f.d);
+  assert.equal(f.calls[1].thinking, undefined, "생각을 끌 수 없는 모델엔 보내지 않는다(400)");
+  ok("E23 Haiku 는 생각 끔 · 토큰 바닥 2048");
+}
+
+// E24 저장소에 있는 글 — 모델을 안 부르고 저장소에서(배포·재시작 뒤에도 바로 · 구성원끼리 공유)
+{
+  const f = fakeDeps(echoEn);
+  const saved = new Map<string, string>([["en|가", "STORED(가)"]]);
+  f.d.store = { lookup: async (t, xs) => new Map(xs.filter((x) => saved.has(`${t}|${x}`)).map((x) => [x, saved.get(`${t}|${x}`)!])), save: async () => {} };
+  const r = await translateTexts(["가", "나"], "en", f.d);
+  assert.deepEqual(r.translations, ["STORED(가)", "EN(나)"]);
+  assert.deepEqual(sent(f.calls, 0), ["나"], "저장소에 없는 글만 모델에");
+  assert.equal(r.cached, 1);
+  const r2 = await translateTexts(["가"], "en", f.d);
+  assert.equal(r2.cached, 1);
+  assert.equal(f.calls.length, 1, "저장소에서 꺼낸 글은 메모리에도 남는다");
+  ok("E24 저장소 기억은 모델보다 먼저");
+}
+
+// E25 모델이 번역한 글은 저장소에 남긴다 — 실패한 자리는 남기지 않는다
+{
+  const f = fakeDeps(() => ({ ok: true, text: '["Alpha", ""]', error: null }));
+  const put: Array<[string, string]> = [];
+  f.d.store = { lookup: async () => new Map(), save: async (_t, pairs) => { put.push(...pairs); } };
+  await translateTexts(["가", "나"], "en", f.d);
+  assert.deepEqual(put, [["가", "Alpha"]]);
+  ok("E25 새 번역만 저장소에 남긴다");
+}
+
+// E26 저장소가 고장 나도 번역은 된다(읽기 · 쓰기 둘 다)
+{
+  const f = fakeDeps(echoEn);
+  f.d.store = { lookup: async () => { throw new Error("db down"); }, save: async () => { throw new Error("db down"); } };
+  const r = await translateTexts(["가"], "en", f.d);
+  assert.deepEqual(r.translations, ["EN(가)"]);
+  ok("E26 저장소 고장은 번역을 막지 않는다");
 }
 
 console.log(`\n${pass} passed`);
