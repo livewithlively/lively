@@ -6,6 +6,7 @@ import { q, one } from "../db/client.js";
 import { auditOrgContent, type WriteCtx, restoreSnapshot } from "./content-audit.js";
 import { effectiveViewer, hiddenProjects, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
+import { readScopeFor, sourceKindsSql } from "./read-scope.js";   // #5100 앱 맥락 범위
 import { knowledgeVisWhere } from "./knowledge-store.js";
 import { SOURCE_GROUP_CASE, sourceGroupWhere, type SourceGroup, type SourceGroupFilter } from "./source-group.js";   // #4233 들어온 길
 import { parseQueryTerms, termPatterns } from "./query-terms.js";   // #4530 검색어 낱말 규칙 한 벌
@@ -27,8 +28,20 @@ export async function resolveSourceViewer(viewer: Viewer | undefined): Promise<s
   return await effectiveViewer(viewer);
 }
 
-/** 자료 읽기 쿼리에 이어붙일 술어. 규약은 knowledgeVisWhere 와 동일(undefined=미배선·null=특권·"TRUE" 반환 가능). */
+/**
+ * 자료 읽기 쿼리에 이어붙일 술어. 규약은 knowledgeVisWhere 와 동일(undefined=미배선·null=특권·"TRUE" 반환 가능).
+ *  앱 맥락 범위(#5100)도 같다 — 앱 토큰 요청이고 그 앱이 범위를 선언했으면 자료 종류(source_kinds)를 AND 로 더한다(구성원 뷰어에만 · read-scope.ts).
+ */
 export async function sourceVisWhere(viewer: Viewer | undefined, params: unknown[]): Promise<string> {
+  const scope = await readScopeFor(viewer);
+  const scoped = scope ? sourceKindsSql(scope.sourceKinds, params, "s") : null;
+  const base = await sourceVisBase(viewer, params);
+  if (scoped === null) return base;
+  return base === "TRUE" ? scoped : `(${base} AND ${scoped})`;
+}
+
+/** 공개범위만(앱 맥락 범위 없이) — sourceVisWhere 의 몸통. 밖에서 부르지 마라(범위가 빠진다). */
+async function sourceVisBase(viewer: Viewer | undefined, params: unknown[]): Promise<string> {
   if (!(await axisOn("source"))) return "TRUE";   // 축 꺼짐(#1291) — 자료는 종전처럼 전원 공개
   if (viewer === undefined) return "TRUE";
   const eff = await effectiveViewer(viewer);

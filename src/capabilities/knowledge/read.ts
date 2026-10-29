@@ -15,13 +15,16 @@ import {
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
 import type { SimilarDiag } from "../../v6/knowledge-search.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
-import { assertKnowledgeVisible } from "./shared.js";
+import { assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
 
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
 const knowledgeListInput = {
   categoryId: z.number().int().positive().optional(),
+  //  #5100 — 검색 도구(grep · search · similar)와 같은 category 인자(key 또는 id). 세션 안내가 «knowledge_list category=» 로 부르라고 하는데
+  //   종전엔 MCP 입력에 없어 말없이 버려졌다(전체 목록이 나왔다). categoryId 와 함께 주면 둘이 같아야 한다(다르면 400). REST 는 종전대로 ?category= 가 categoryId 다.
+  category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
   uncategorized: z.boolean().optional().describe("true 면 미분류(rejected 아닌 카테고리 매핑이 0건)인 지식만 — categoryId 와 배타(#1091). 본문 포함 목록이라 인박스 포인터만 필요하면 knowledge_unmapped."),
   light: z.boolean().optional().describe("true 면 본문(body_md)을 뺀 경량 행 — 제목·메타만 필요한 목록/트리용(#1091). 본문이 필요하면 knowledge_get."),
   injection: z.enum(["always", "recalled"]).optional(),
@@ -70,9 +73,15 @@ export const knowledgeList: Capability = {
     const { limit, offset } = clampPage(input, 200, 500);
     // 공개범위(#1291) — 목록과 총계에 **같은 뷰어**를 준다(다르면 has_more 가 영원히 true 인 페이지가 나온다).
     const viewer = ctx?.viewer ?? null;
+    const { category, ...rest } = input;
+    const fromArg = category ? (await categoryArg(category))?.[0] : undefined;
+    if (fromArg != null && rest.categoryId != null && rest.categoryId !== fromArg) {
+      throw new HttpError(400, `category('${category}')와 categoryId(${rest.categoryId})가 다른 카테고리를 가리킵니다 — 하나만 주세요`);
+    }
+    const filter = fromArg != null ? { ...rest, categoryId: fromArg } : rest;
     const [entries, total] = await Promise.all([
-      listKnowledge({ ...input, limit, offset }, viewer),
-      countKnowledge(input, viewer),
+      listKnowledge({ ...filter, limit, offset }, viewer),
+      countKnowledge(filter, viewer),
     ]);
     return { entries, total, limit, offset, has_more: offset + entries.length < total };
   },
@@ -87,6 +96,7 @@ const knowledgeGrepInput = {
   mode: z.enum(["snippets", "names", "count"]).optional().describe("snippets(기본)=매치 줄 스니펫 / names=name·title만 / count=총건수만"),
   context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄 포함(기본 0, ripgrep -C)"),
   plain: z.boolean().optional().describe("true 면 정규식으로 읽지 않고 글자 그대로 — 낱말마다 «그대로 또는 끝 조사를 뗀 꼴» 이 들어 있으면 맞음(AND), \"큰따옴표\" 는 구절. 화면 검색(⌘K)이 쓴다"),
+  category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
 };
 type KnowledgeGrepInput = z.infer<z.ZodObject<typeof knowledgeGrepInput>>;
 export const knowledgeGrep: Capability = {
@@ -116,19 +126,21 @@ export const knowledgeGrep: Capability = {
           mode: query.mode ? String(query.mode) : undefined,
           context: query.context ? Number(query.context) : undefined,
           ...(query.plain === "1" || query.plain === "true" ? { plain: true } : {}),
+          category: query.category ? String(query.category) : undefined,
         };
       } }],
   },
   handler: async (input: KnowledgeGrepInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
     const viewer = ctx?.viewer ?? null;   // 공개범위(#1291) — 스니펫도 본문 조각이라 목록보다 더 셀 수 없다
     const plain = input.plain === true;   // #4530 화면 검색 — 글자 그대로(정규식 아님 · 조사 · 구절)
+    const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(없는 카테고리는 400)
     if (input.mode === "count") {
-      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain }, viewer) };
+      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain, categories }, viewer) };
     }
     return {
       mode: input.mode ?? "snippets",
       entries: await searchKnowledge(input.q, {
-        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain,
+        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories,
       }, viewer),
     };
   },
@@ -144,6 +156,7 @@ const knowledgeSearchInput = {
   limit: z.number().int().min(1).max(100).optional(),
   mode: z.enum(["snippets", "names"]).optional().describe("snippets(기본)=스니펫 / names=name·title만"),
   context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄(grep 채널 매치 시, ripgrep -C)"),
+  category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
 };
 type KnowledgeSearchInput = z.infer<z.ZodObject<typeof knowledgeSearchInput>>;
 export const knowledgeSearch: Capability = {
@@ -176,13 +189,15 @@ export const knowledgeSearch: Capability = {
           limit: query.limit ? Number(query.limit) : undefined,
           mode: query.mode ? String(query.mode) : undefined,
           context: query.context ? Number(query.context) : undefined,
+          category: query.category ? String(query.category) : undefined,
         };
       } }],
   },
   handler: async (input: KnowledgeSearchInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     const viewer = ctx?.viewer ?? null;
+    const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(두 채널 모두 후보부터)
     const entries = await hybridSearchKnowledge(input.q, {
-      injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
+      injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, categories,
     }, viewer);
     //  #4213 T12 #4744 검색 실패 보조 안내 — 결과가 없거나 약하면 «가져올 곳»(아직 지식이 안 된 원문 자료 → 그것도 없으면 질문한 사람이
     //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
@@ -224,6 +239,7 @@ const knowledgeSimilarInput = {
   min_score: z.number().min(0).max(1).optional().describe("이 코사인 유사도(0~1) 이상만(기본 0)"),
   injection: z.enum(["always", "recalled"]).optional(),
   provenance: z.enum(["authored", "observed"]).optional(),
+  category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
 };
 type KnowledgeSimilarInput = z.infer<z.ZodObject<typeof knowledgeSimilarInput>>;
 export const knowledgeSimilar: Capability = {
@@ -251,20 +267,24 @@ export const knowledgeSimilar: Capability = {
           min_score: query.min_score != null && query.min_score !== "" ? Number(query.min_score) : undefined,
           injection: query.injection ? String(query.injection) : undefined,
           provenance: query.provenance ? String(query.provenance) : undefined,
+          category: query.category ? String(query.category) : undefined,
         };
       } }],
   },
-  handler: async (input: KnowledgeSimilarInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: KnowledgeSimilarInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     if (!input.name && !input.text) throw new Error("name 또는 text 중 하나가 필요합니다");
     const viewer = ctx?.viewer ?? null;
     // 기준 문서(name)도 볼 수 있어야 한다 — 안 보이는 문서의 임베딩으로 이웃을 훑는 건 그 문서를 지렛대 삼아
     //  "무엇에 대한 문서인가"를 역추적하는 우회로다(recall 훅이 매 세션 때리는 경로라 특히).
+    //  #5100 — 앱 맥락 범위 밖 문서를 기준으로 삼는 것도 같은 우회로다: 거절하고 기록한다(knowledge_get 과 같은 판정).
+    if (input.name) await assertKnowledgeInAppContext(input.name, viewer, user, ctx, "knowledge_similar");
     await assertKnowledgeVisible(input.name, viewer);
+    const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(후보부터)
     //  빈 결과의 까닭을 함께 싣는다(#4530) — embeddings:"off"(꺼짐) · degraded:true(이번엔 못 물어봄). 없으면 «관련 없음».
     const diag: SimilarDiag = {};
     const entries = await findSimilarKnowledge({
       name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
-      injection: input.injection, provenance: input.provenance,
+      injection: input.injection, provenance: input.provenance, categories,
     }, viewer, diag);
     return { entries, ...diag };
   },
@@ -336,7 +356,9 @@ export const knowledgeGet: Capability = {
         limit: req.query?.limit ? Number(req.query.limit) : undefined,
       }) }],
   },
-  handler: async (input: KnowledgeGetInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: KnowledgeGetInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    //  #5100 앱 맥락 범위 — 공개범위로는 보이는데 이 앱이 선언한 범위 밖이면 거절하고 기록한다(«없음» 과 다른 문구 — 범위를 잘못 적었는지 알게).
+    await assertKnowledgeInAppContext(String(input.name), ctx?.viewer ?? null, user, ctx, "knowledge_get");
     // 공개범위(#1291) — 전문을 돌려주는 자리라 **본문을 읽기 전에** 막는다(없는 문서와 같은 문구 = 존재 은닉).
     if (!(await canSeeKnowledge(String(input.name), ctx?.viewer ?? null))) throw new Error(`지식 '${input.name}' 없음`);
     const knowledge = await getKnowledge(input.name, ctx?.viewer ?? null);

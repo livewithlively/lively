@@ -15,6 +15,7 @@ import { makeDeployDeps } from "./deploy.js";
 import { isOverrideSource, newTablesForOverride } from "./app-versions.js";
 import { declaredTableNames } from "./visibility.js";   // 매니페스트의 data.tables 이름(모양이 어긋나도 던지지 않는다)
 import { archiveLeftoverAppFolder } from "./app-folder-archive.js";   // #4778 새 앱은 빈 앱 폴더로 시작
+import { assertContextInstallable, clearAppContextCache } from "./app-context.js";   // #5100 맥락 범위의 카테고리 key 확인 · 설치 뒤 기억 비우기
 import { assertMcpToolNamesFree, withMcpToolNamesLock } from "./app-mcp-store.js";
 import { declaresMcpTools } from "./app-mcp-decl.js";
 
@@ -67,6 +68,9 @@ async function installLoadedAppNow(loaded: LoadedApp, source: unknown, ctx: Writ
   // 앱 데이터 테이블(D6) — 스키마는 누가 구조의 주인인가로 가른다(store-ddl.appSchemaName, #4223).
   const builtin = isBuiltinSource(source);
   const schema = appSchemaFor(builtin);
+  //  #5100 맥락 범위 — 선언한 카테고리 key 가 이 워크스페이스에 있어야 한다(오타 하나로 범위가 통째로 닫히지 않게). 아무것도 바꾸기 전에 본다.
+  //   기본 앱(시더)은 건너뛴다 — 카테고리는 워크스페이스마다 달라, 여기서 던지면 시딩 전체가 보상된다. 덮어쓴 빌트인은 구성원이 고친 것이라 본다.
+  if (!builtin || isOverrideSource(source)) await assertContextInstallable(loaded.manifest);
   //  #5050 앱이 선언한 MCP 도구 이름 — 다른 앱 · 조직 도구가 이미 쓰면 아무것도 바꾸기 전에 거절(409). 기본 앱의 도구는 목록에 안 오르니 보지 않는다.
   if (!builtin && declaresMcpTools(loaded.manifest)) await assertMcpToolNamesFree(id, loaded.manifest);
   //  #4778 새 앱 — 같은 id 의 앱 폴더가 남아 있으면(지운 앱의 것) 아무것도 만들기 전에 보관으로 옮긴다(못 보면 503 — 새 앱은 늘 빈 앱 폴더로 시작한다).
@@ -116,6 +120,7 @@ async function installLoadedAppNow(loaded: LoadedApp, source: unknown, ctx: Writ
   }
 
   const components = await runInstall(meta, loaded.items, deps);
+  clearAppContextCache();   // #5100 — 새 판의 맥락 범위가 이 게이트웨이에선 곧바로 걸리게(좁힌 저장이 5초 동안 옛 범위로 읽히지 않게)
 
   // UI entry HTML 보존(PR5) — 설치가 active 로 저널된 뒤. best-effort: 실패해도 앱(하네스·principal)은 유효하고
   //  다음 설치/시드가 재보존한다. seed 의 skip 경로도 같은 헬퍼로 백필한다(마이그레이션 — 기존 설치 앱).

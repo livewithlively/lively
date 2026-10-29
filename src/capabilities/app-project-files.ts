@@ -13,6 +13,7 @@ import { listAttachedApps, sessionCanEnter, sessionOwnerOf } from "../apps/sessi
 import { RateWindow } from "../apps/app-chat-send.js";
 import { PROJECT_FILES_PER_MINUTE, PROJECT_FILE_READ_MAX, listProjectFiles, readProjectFile, type ProjectFilesDeps, type ProjectRef } from "../apps/app-project-files.js";
 import { appSqlTenantId } from "../apps/app-sql-exec.js";
+import { outsideReadScope } from "../v6/read-scope.js";   // #5100 — 파일 권한은 맥락 범위 1판 밖
 
 const rate = new RateWindow(PROJECT_FILES_PER_MINUTE);
 const madeCache = new Map<string, { at: number; paths: string[] }>();
@@ -52,9 +53,11 @@ const liveDeps: ProjectFilesDeps = {
     return { content, size: st.size, mtime: st.mtime };
   },
   //  전체 자료(#4629) — 목록은 자료 색인에서(자료 공개범위는 그 조회가 건다), 프로젝트는 id 로 다시 찾는다(지워진 것은 없다).
+  //  #5100 — 파일 권한(project_files · workspace_files)은 앱 맥락 범위 1판이 다루지 않는다(그 권한이 경계 · 폴더 범위는 다음 판 — 결정 ②).
+  //   색인이 자료 표(local_file)에 있어 범위의 자료 종류에 걸리지 않게 범위 밖에서 읽는다(read-scope.ts outsideReadScope 의 쓰임 ⓑ).
   workspaceIndex: async (memberId, exts, opts) => {
     const { listProjectFileIndex } = await import("../v6/source-store.js");
-    return listProjectFileIndex({ exts, q: opts.q, limit: opts.limit }, memberId);
+    return outsideReadScope(() => listProjectFileIndex({ exts, q: opts.q, limit: opts.limit }, memberId));
   },
   //  앱은 열려 있는 동안 목록을 주기적으로 다시 읽는다 — 표시용 조회라 30초 묵혀 쓴다(색인이 파일보다 늦는 폭보다 짧다).
   sessionMade: async (project, sessionId, memberId, exts) => {
@@ -62,7 +65,8 @@ const liveDeps: ProjectFilesDeps = {
     const hit = madeCache.get(key), now = Date.now();
     if (hit && now - hit.at < 30_000) return hit.paths;
     const { listProjectFileIndex } = await import("../v6/source-store.js");
-    const paths = (await listProjectFileIndex({ exts, limit: 500, projectId: project.id, session: sessionId }, memberId)).map((r) => r.path);
+    //  범위 밖에서 읽는다(위 workspaceIndex 와 같은 까닭) — 이 기억은 범위를 키에 넣지 않으니 결과가 범위에 따라 달라지면 안 된다.
+    const paths = (await outsideReadScope(() => listProjectFileIndex({ exts, limit: 500, projectId: project.id, session: sessionId }, memberId))).map((r) => r.path);
     if (madeCache.size > 500) madeCache.clear();
     madeCache.set(key, { at: now, paths });
     return paths;

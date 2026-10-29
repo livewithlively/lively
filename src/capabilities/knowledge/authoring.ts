@@ -231,7 +231,7 @@ export const knowledgeSave: Capability = {
     //  #1631 중복 증류 알림 — 두 번 호출 시절 source_link_knowledge 에만 있던 것을 이 길에도 싣는다(커밋 뒤에 잰다).
     const dupWarning = async (name: string): Promise<Record<string, unknown>> => {
       const notes = new Set<string>();
-      for (const id of derivedIds) { const n = await derivedDupNote(id, name).catch(() => null); if (n) notes.add(n); }
+      for (const id of derivedIds) { const n = await derivedDupNote(id, name, ctx?.viewer ?? null).catch(() => null); if (n) notes.add(n); }
       return notes.size ? { warning: [...notes].join(" ") } : {};
     };
 

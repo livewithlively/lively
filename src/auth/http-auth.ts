@@ -11,6 +11,7 @@ import { parseSessionCookie, userFromSession } from "./sessions.js";
 import { resourceIds } from "./resource-id.js";
 import { isAppServerToken, resolveAppServerPrincipal } from "../apps/app-server-auth.js";
 import { APP_IDENTITY_HEADER } from "../apps/app-identity.js";
+import { runWithAppReadScope } from "../apps/app-context.js";   // #5100 앱 맥락 범위 — 문을 지난 앱 토큰 요청은 그 앱의 읽기 범위를 물려받는다
 
 // ── 앱 서버 토큰(#4483) ─────────────────────────────────────────────────────────────────
 //  멤버 없는 앱 토큰은 **능력 REST 마운트(web.ts mwCap)에서만** 받는다 — 거기서 사람 신원(X-Lively-Identity)을 검증해 «그 구성원 ∩
@@ -33,12 +34,18 @@ export function appPrincipalGate(user: LivelyUser | undefined, mode: AppPrincipa
   if (user?.appServer === true) return mode === "deny" ? "deny" : "next";
   return "next";
 }
+//  #5100 — 앱 토큰 요청은 여기서 그 앱의 읽기 범위 안으로 들어간다(v6/read-scope.ts). 능력 어댑터 밖의 맨 라우트(터미널 파일 · 프로젝트 ·
+//   자료 원본 /sources/:id/original 등)도 공개범위 술어를 지나면 범위가 걸린다 — 어댑터 셋만 감싸던 1차 판에선 새 길이 기본으로 열렸다(격리 리뷰 N1).
+//   next() 는 그 자리에서 다음 미들웨어 · 핸들러를 부르므로 그 뒤의 비동기 이어짐이 이 범위를 물려받는다. 앱 토큰이 아니면 그대로 부른다.
+const nextInAppScope = (user: LivelyUser | undefined, next: express.NextFunction): void => {
+  void runWithAppReadScope(user, () => { next(); return Promise.resolve(); });
+};
 function appServerGate(mode: AppPrincipalGateMode): (req: express.Request, res: express.Response, next: express.NextFunction) => void {
   return (req, res, next) => {
     const r = req as AuthedReq;
     const user = (r.auth as { extra?: unknown } | undefined)?.extra as LivelyUser | undefined;
     const verdict = appPrincipalGate(user, mode);
-    if (verdict === "next") { next(); return; }
+    if (verdict === "next") { nextInAppScope(user, next); return; }
     if (verdict === "deny") {
       res.status(403).json({ error: user?.appServer === true
         ? "앱 작업 토큰은 앱 도구(능력 API · MCP)에서만 씁니다"
@@ -47,7 +54,7 @@ function appServerGate(mode: AppPrincipalGateMode): (req: express.Request, res: 
     }
     resolveAppServerPrincipal(user!, req.headers[APP_IDENTITY_HEADER]).then((p) => {
       (r.auth as { extra?: unknown }).extra = p;          // bearer 가 막 채운 자리 — 주체만 사람으로 바꾼다
-      next();
+      nextInAppScope(p, next);
     }, (e: { status?: number; message?: string }) => {
       //  401·403 은 판정 그대로, 그 밖(DB 오류 등)은 503 — 401 로 뭉개면 클라이언트가 토큰을 버리고 다시 받으려 한다.
       const st = e?.status === 403 ? 403 : e?.status === 401 ? 401 : 503;

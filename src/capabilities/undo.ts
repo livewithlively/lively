@@ -177,11 +177,11 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
   link_source: async (r, d, ctx) => {
     const t = rec(r.after ?? r.before);
     if (d === "before") await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
-    else await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true });
+    else await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true, viewer: undefined });   // 되돌리기 — 알림을 답에 안 싣는다
   },
   unlink_source: async (r, d, ctx) => {
     const t = rec(r.before ?? r.after);
-    if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true });
+    if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true, viewer: undefined });   // 되돌리기 — 알림을 답에 안 싣는다
     else await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
   },
   // link_category(#1563) — 스토어가 교체 직전 매핑을 before 에 실으면서 되돌릴 수 있게 됐다.

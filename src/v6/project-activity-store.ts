@@ -1,6 +1,7 @@
 // 프로젝트 타임라인 — v6 테이블(activity·session_project·activity_knowledge·activity_touch·repo)만 조인하는
 //  프로젝트 축 조회. (#1313 R18) 구 org/store.ts 말미의 이질 구간을 v6 로 이동(org 도메인 아님) — 소비자 직결.
 import { itemsPool } from "../db/client.js";
+import { appScopeKnowledgeWhere } from "./knowledge-common.js";   // #5100 앱 맥락 범위 — 지식 참조
 
 // ── 프로젝트 타임라인 — 이 프로젝트 팀원들이 한 작업(activity). authorPerson 지정 시 그 사람만. ──
 //  activity 는 itemsPool 동일 DB(지식참조=activity_knowledge→knowledge FK). project_member.member_id ↔ activity.author_person 조인.
@@ -66,10 +67,15 @@ export async function listProjectActivities(
   // 공용 렌더러(web activityTimelineRow)가 프로젝트 상세에서도 본문·참조를 그린다. tasks 는 이 프로젝트 자신이라 생략.
   const ids = rows.map((row) => row.id);
   const [refRes, touchRes] = await Promise.all([
-    itemsPool.query(
-      `SELECT ak.activity_id, ak.name, ak.relation, k.title
-         FROM activity_knowledge ak LEFT JOIN knowledge k ON k.name = ak.name
-        WHERE ak.activity_id = ANY($1) ORDER BY ak.created_at`, [ids]),
+    //  #5100 — 앱 맥락 범위가 걸린 요청(프로젝트 라우트도 인증 문에서 범위를 물려받는다)은 범위 밖 지식 참조를 싣지 않는다.
+    (async () => {
+      const p: unknown[] = [ids];
+      const inScope = await appScopeKnowledgeWhere(undefined, p, "k");
+      return itemsPool.query(
+        `SELECT ak.activity_id, ak.name, ak.relation, k.title
+           FROM activity_knowledge ak LEFT JOIN knowledge k ON k.name = ak.name
+          WHERE ak.activity_id = ANY($1) AND ${inScope} ORDER BY ak.created_at`, p);
+    })(),
     itemsPool.query(
       `SELECT activity_id, COUNT(*)::int AS n FROM activity_touch
         WHERE activity_id = ANY($1) GROUP BY activity_id`, [ids]),

@@ -6,6 +6,7 @@ import { itemsPool } from "../client.js";
 import { SELF_SOURCE } from "./self-source.js";
 import { selfRlsReady } from "./self-rls.js";
 import { activeBreakGlass } from "../../v6/visibility.js";
+import { currentReadScope } from "../../v6/read-scope.js";   // #5100 앱 맥락 범위
 
 // #1291 — 내장 self 소스는 콘텐츠 테이블(project·knowledge·activity…)을 SQL 로 직접 읽는 창이다.
 //  여기가 열려 있으면 `SELECT * FROM project` 한 줄로 다른 표면의 공개범위가 전부 무의미해진다.
@@ -31,6 +32,12 @@ export async function requireSelfSourceAllowed(
   user: { scopes: string[]; userId?: string }, source: string,
 ): Promise<void> {
   if (source !== SELF_SOURCE) return;
+  //  #5100 — 맥락 범위(context)를 선언한 앱 토큰은 self 소스를 못 쓴다. 행 보안은 지식 · 자료 본문을 범위로도 가리지만(self-rls hiddenSets 가
+  //   공개범위 술어를 지난다), 이름 · 연결을 담은 표(knowledge_category · knowledge_link · project_knowledge …)는 정책 밖이라 범위 밖 문서의
+  //   이름이 그대로 읽힌다. 범위를 선언한 앱은 지식 · 자료를 knowledge_* · source_* 도구로 읽는다(그 길은 범위를 탄다).
+  if (await currentReadScope()) {
+    throw new Error("self 소스는 맥락 범위(매니페스트 context)를 선언한 앱에서 조회할 수 없습니다 — 지식·자료는 knowledge_* · source_* 도구로 읽으세요. 다른 등록 소스는 종전대로 조회 가능합니다.");
+  }
   // #1291 v3 — 행 단위 필터(RLS)가 준비됐으면 **전면 차단을 하지 않는다.** 잠긴 행만 빠지고 나머지는 그대로
   //  조회된다. v2 의 전면 차단은 "리스트 하나 잠갔더니 조직 전체가 SQL 조회를 잃는" 상태를 만들었다(고객사 A 실측).
   //  RLS 준비에 실패한 배포에서만 아래 v2 동작으로 폴백한다.

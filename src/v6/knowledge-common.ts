@@ -6,6 +6,7 @@
 import { auditOrgContent, type WriteCtx } from "./content-audit.js";
 import { visibleListIds, effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
+import { readScopeFor, currentReadScope, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 앱 맥락 범위
 import { itemsPool } from "../db/client.js";
 import type pg from "pg";
 
@@ -38,8 +39,30 @@ export const knowledgeVisSql = (p: number, visibleLists: Set<number> | null, a =
  *    생성된 SQL 을 치환해 쓰지 마라 — 그 사본이 v1 에서 잠금을 흘린 그 결함이다.
  *  ⚠ 파라미터는 호출부의 params 배열에 **여기서 push** 한다 → 반드시 그 쿼리의 다른 파라미터를 다 넣은 시점이나
  *   그 앞에서 부르고, 반환된 문자열을 그 쿼리에만 써라(배열을 공유하는 다른 쿼리에 재사용하면 자리번호가 어긋난다).
+ *  · 앱 맥락 범위(#5100) — 앱 토큰 요청이고 그 앱이 범위를 선언했으면 공개범위에 그 범위를 AND 로 더한다(read-scope.ts 머리말).
+ *    구성원 뷰어에만 건다. 축이 꺼져도 · 긴급 열람이 열려도 범위는 그대로다(앱이 스스로 좁힌 선언이라 사람의 문이 넓히지 않는다).
  */
 export async function knowledgeVisWhere(viewer: Viewer | undefined, params: unknown[], alias = "k"): Promise<string> {
+  const scope = await readScopeFor(viewer);
+  const scoped = scope ? knowledgeInCategoriesSql(scope.knowledgeCategoryIds, params, alias) : null;
+  const base = await knowledgeVisBase(viewer, params, alias);
+  if (scoped === null) return base;
+  return base === "TRUE" ? scoped : `(${base} AND ${scoped})`;
+}
+
+/**
+ * 앱 맥락 범위만(#5100 — 공개범위 없이) — 지식 참조를 곁들이는 자리 가운데 **공개범위가 아직 배선되지 않은** 곳(활동 기록의 지식 참조 ·
+ *  프로젝트의 필요 · 산출 지식)이 범위 밖 지식의 이름 · 제목을 앱에 싣지 않게(격리 리뷰 N2). 범위가 없으면 "TRUE" — 사람 요청은 종전 그대로다.
+ *  viewer 를 받지 않는 저장소 함수도 쓰게 undefined 에도 건다(특권 null 만 뺀다 — 그 함수들은 요청한 사람을 위해서만 돈다).
+ *  ⚠ 공개범위를 대신하지 않는다 — 그 자리들에 knowledgeVisWhere 를 거는 것(잠긴 지식 제목이 새는 기존 빈틈)은 별도 과제다. 새 자리는 knowledgeVisWhere 를 써라.
+ */
+export async function appScopeKnowledgeWhere(viewer: Viewer | undefined, params: unknown[], alias = "k"): Promise<string> {
+  const scope = viewer === null ? null : await currentReadScope();
+  return scope ? knowledgeInCategoriesSql(scope.knowledgeCategoryIds, params, alias) : "TRUE";
+}
+
+/** 공개범위만(앱 맥락 범위 없이) — knowledgeVisWhere 의 몸통. 밖에서 부르지 마라(범위가 빠진다). */
+async function knowledgeVisBase(viewer: Viewer | undefined, params: unknown[], alias: string): Promise<string> {
   if (viewer === undefined) return "TRUE";
   if (!(await axisOn("knowledge"))) return "TRUE";   // 축 꺼짐(#1291) — 지식은 종전처럼 전원 공개
 

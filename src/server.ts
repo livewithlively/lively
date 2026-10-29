@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerDbTools } from "./tools/db.js";
 import { registerMcpCapabilities } from "./capabilities/index.js";
-import { resolveUser } from "./context.js";
+import { resolveUser, type LivelyUser } from "./context.js";
+import { runWithAppReadScope } from "./apps/app-context.js";
 import { logToolCall, toolResultFailure, TOOL_APP_META_KEY } from "./org/policies/tool-log.js";
 
 // memory_* 폐기(2026-06-24) — knowledge_*(v6)로 통일(ctx_* 가 간 길). org_memory 웹 표면('WIKI 인덱스')은 delivery REST(/api/ui/org/memory) 유지.
@@ -23,15 +24,18 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null,
     const started = Date.now();
     let actor: string | null = null;
     let app: string | null = toolApp ?? null;
+    let user: LivelyUser | null = null;
     try {
-      const u = resolveUser(extra);
-      actor = u?.userId ?? null;
-      app = u?.appId ?? app;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 이면 그 앱 id 로 귀속(관측 전용)
+      user = resolveUser(extra);
+      actor = user?.userId ?? null;
+      app = user?.appId ?? app;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 이면 그 앱 id 로 귀속(관측 전용)
     } catch {
       // 인증 컨텍스트 해석 실패 → actor 미상으로 기록(/mcp 는 bearer 필수라 보통 도달 안 함)
     }
     try {
-      const out = await handler(args, extra);
+      //  #5100 앱 맥락 범위 — 앱 토큰이면 이 호출을 그 앱의 읽기 범위 안에서 돌린다(capability · db · dynamic 모든 MCP 도구가 여기를 지난다).
+      //   앱 토큰이 아니면 그대로 부른다(apps/app-context.ts runWithAppReadScope).
+      const out = await runWithAppReadScope(user, () => handler(args, extra));
       const failure = toolResultFailure(out); // 정상 반환이어도 isError:true 면 실패로 적재(#1653)
       logToolCall({
         tool: name, harness: harness ?? null, actor, app, args,

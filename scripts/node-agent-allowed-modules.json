@@ -26,8 +26,8 @@
   "dist/node/rpc-error.js",
   "dist/node/state-freshness.js",
   "dist/node/stop-step.js",
-  "dist/node/tasks.js",
   "dist/node/task-secrets.js",
+  "dist/node/tasks.js",
   "dist/ops/build-cache.js",
   "dist/ops/disk-guard.js",
   "dist/ops/health.js",
@@ -151,6 +151,7 @@
   "dist/terminal/write-cap.js",
   "dist/v6/embedding-provider.js",
   "dist/v6/execution-session-store.js",
+  "dist/v6/read-scope.js",
   "dist/v6/visibility-axes.js",
   "dist/v6/visibility.js"
 ]

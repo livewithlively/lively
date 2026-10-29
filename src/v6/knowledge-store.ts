@@ -523,6 +523,13 @@ export async function upsertKnowledge(
   return wikilinks ? { ...after, wikilinks } : after;
 }
 
+// 지금 knowledge 행이 있는 이름만(#5100 — 지운 문서의 남은 행(감사 이력 · 수정 제안)을 앱 맥락 범위에서 가른다).
+export async function existingKnowledgeNames(names: readonly string[]): Promise<Set<string>> {
+  if (!names.length) return new Set();
+  const rows = await q(itemsPool, `SELECT name FROM knowledge WHERE name = ANY($1::text[])`, [[...names]]);
+  return new Set(rows.map((r) => String(r.name)));
+}
+
 // 얕은 게이트 필드 조회 — lifecycle 가드용(#783 자가승인 차단 · #638 미러 복원 금지).
 //  getKnowledge 는 카테고리·링크·트리까지 조인해 무겁다.
 export async function getKnowledgeGateFields(name: string): Promise<{ lifecycle?: string; provenance?: string; external_system?: string | null }> {
