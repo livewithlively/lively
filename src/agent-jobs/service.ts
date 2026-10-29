@@ -83,6 +83,12 @@ export interface AgentJobDeps {
    *  못 읽으면 빈 묶음으로 센다(시트 계정 하나로 세는 종전 셈 — 더 좁다).
    */
   sharedSeats?(): Promise<ReadonlySet<string>>;
+  /**
+   * #5082 구독 작업의 대화도 묶음으로 잇나 — 도커 실행면은 그 계정 설정 폴더의 projects/ 를 작업마다 빈 자리로 덮어(앞 작업 · 사람 세션의 대화를
+   *  못 보게), 대화가 홈에 남지 않는다. 그래서 API 키 작업처럼 판이 끝에 올린 기록을 보관하고 이어받는 작업(형식 재시도 · 앱의 이어받기)에 돌려준다.
+   *  없거나 false 면 종전대로(구독 작업의 대화는 홈에 남는다).
+   */
+  subscriptionTranscripts?: boolean;
   revokeToken(tokenHash: string): Promise<void>;
   /** 그 프로젝트 폴더에서 이 사람이 셸을 띄울 수 있나(사람 세션과 같은 판정 — 안 되면 던진다). */
   assertProjectCwd(user: LivelyUser, projectId: number): Promise<void>;
@@ -387,10 +393,10 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   try {
     if (d.paneView) view = await d.paneView(booted);
     env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
-    if (booted.account_kind === "api_key" && booted.resume_job_id != null && booted.resume_conversation) {
+    if (bundledTranscript(booted.account_kind, d) && booted.resume_job_id != null && booted.resume_conversation) {
       const kept = await d.store.agentJobTranscript(booted.resume_job_id);
       if (!kept || convIdOf(kept.conv) !== convIdOf(booted.resume_conversation)) {
-        throw new Error("이어받을 대화 기록이 없습니다 — API 키 작업의 대화 기록은 보관 기간(agent_job_limits 의 transcript_keep_days) 동안만 남습니다");
+        throw new Error("이어받을 대화 기록이 없습니다 — 작업의 대화 기록은 보관 기간(agent_job_limits 의 transcript_keep_days) 동안만 남습니다");
       }
       transcript = { conv: convIdOf(kept.conv)!, gz: kept.gz.toString("base64") };
     }
@@ -413,17 +419,22 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
-    //  #5101 API 키 작업만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더가 끝나면 지워진다 · 관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면
-    //   앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
-    ...(booted.account_kind === "api_key" && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
-    ...(booted.account_kind === "api_key" ? { transcriptRawMax: TRANSCRIPT_RAW_MAX } : {}),
+    //  #5101 API 키 작업(#5082 도커 실행면이면 구독 작업도)만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더 · 덮은 projects/ 가 끝나면 사라진다 ·
+    //   관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면 앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
+    ...(bundledTranscript(booted.account_kind, d) && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
+    ...(bundledTranscript(booted.account_kind, d) ? { transcriptRawMax: TRANSCRIPT_RAW_MAX } : {}),
     ...(transcript ? { transcript } : {}),
   };
 }
 
-/** #5101 API 키 작업의 대화 기록을 보관하나(정책 transcript_keep_days > 0) — 0 이면 판이 올리지 않고 게이트웨이도 받지 않는다. */
+/** #5101 작업의 대화 기록을 보관하나(정책 transcript_keep_days > 0) — 0 이면 판이 올리지 않고 게이트웨이도 받지 않는다. */
 async function transcriptKept(d: Pick<AgentJobDeps, "policy">): Promise<boolean> {
   return (await d.policy()).transcript_keep_days > 0;
+}
+
+/** 이 작업의 대화가 묶음(게이트웨이 보관)으로 이어지나 — API 키 작업은 늘, 구독 작업은 실행면이 projects/ 를 작업마다 덮을 때(#5082 도커). */
+export function bundledTranscript(kind: AgentJobRow["account_kind"], d: Pick<AgentJobDeps, "subscriptionTranscripts">): boolean {
+  return kind === "api_key" || (kind === "subscription" && d.subscriptionTranscripts === true);
 }
 
 /**
@@ -431,16 +442,17 @@ async function transcriptKept(d: Pick<AgentJobDeps, "policy">): Promise<boolean>
  *  요청이 8MiB 본문을 읽히지 못하고, 받을 일이 없는 보고(구독 작업 · 두 번째 보고)는 풀어 보지도 않는다(격리 리뷰). 받을 일이 없으면 take false —
  *  판에는 200 으로 답한다(판은 곧바로 결과로 넘어간다).
  */
-export async function transcriptGate(id: number, presented: string, d: Pick<AgentJobDeps, "store" | "policy">): Promise<{ take: boolean }> {
+export async function transcriptGate(id: number, presented: string, d: Pick<AgentJobDeps, "store" | "policy" | "subscriptionTranscripts">): Promise<{ take: boolean }> {
   const auth = await authed(id, presented, "secret", d);
-  if (auth.account_kind !== "api_key" || !(await transcriptKept(d))) return { take: false };
+  if (!bundledTranscript(auth.account_kind, d) || !(await transcriptKept(d))) return { take: false };
   return { take: (await d.store.agentJobTranscriptConv(auth.id)) === null };
 }
 
 /**
  * 판의 대화 기록 보고(#5101) — API 키 작업의 하네스 대화 파일(gzip 본문 · 머리 x-lvly-conversation 에 대화 id)을 그 작업 행에 보관한다.
  *  판은 결과(onResult)보다 **먼저** 올린다 — 결과가 곧바로 형식 재시도(같은 대화를 잇는 작업)를 낳으면 그 작업의 첫 말이 이 기록을 읽는다.
- *  콜백 비밀로 연다(박동 · 결과와 같은 문) · 도는 API 키 작업만 적는다(구독 작업의 대화는 그 사람의 홈에 남는다 — store 조건).
+ *  콜백 비밀로 연다(박동 · 결과와 같은 문) · 도는 API 키 작업만 적는다(구독 작업의 대화는 그 사람의 홈에 남는다 — store 조건). #5082 도커 실행면이면
+ *  구독 작업도 적는다(그 실행면은 projects/ 를 작업마다 덮어 대화가 홈에 남지 않는다 — subscriptionTranscripts).
  *  보고는 작업 AI 와 같은 uid 에서 온다(runner.ts 머리말 «무엇을 믿지 않나») — 제 대화를 제가 적는 것이라 새 권한은 아니다. 그래도 gzip 인지 ·
  *  풀었을 때 상한(TRANSCRIPT_RAW_MAX) 안인지 풀어 보고 적는다(풀기는 스레드풀에서 — 압축 폭탄이 게이트웨이를 붙잡지 않게).
  */
@@ -461,7 +473,7 @@ export async function onTranscript(id: number, presented: string, body: unknown,
     z.on("error", reject);
     z.end(body);
   }).catch(() => { throw new HttpError(400, `대화 기록을 풀 수 없습니다(손상 · 풀면 ${TRANSCRIPT_RAW_MAX} 바이트 초과)`); });
-  const stored = await d.store.setAgentJobTranscript(id, conv, body, raw);
+  const stored = await d.store.setAgentJobTranscript(id, conv, body, raw, { subscription: d.subscriptionTranscripts === true });
   logger.info({ job: id, gz: body.length, raw, stored }, "[agent-job] 대화 기록");
   return { ok: true, stored };
 }

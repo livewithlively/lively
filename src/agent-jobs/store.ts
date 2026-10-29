@@ -181,15 +181,17 @@ export async function agentJobAppInstructions(id: number): Promise<string | null
  * #5101 API 키 작업의 대화 기록(org_agent_job.transcript · transcript_conv · transcript_bytes) — 판이 끝에 올린 하네스 대화 파일(gzip)과 그 대화 id.
  *  그 대화를 이어받는 API 키 작업의 첫 말(onBoot)에 돌려준다(빈 설정 폴더에 되돌려 놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말).
  *  SHARED_SEAT_COL 과 같은 까닭(롤 창)으로 COLS 에 넣지 않고 따로 읽고 쓴다 — 칸이 아직 없으면(42703) 적지 않고(false) · 없는 것으로 읽는다(null).
- *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남으므로 적지 않는다(account_kind 조건). 도는 중일 때만 · 한 번만 적는다(판은 결과보다 먼저 한 번
+ *  구독 작업은 대화 파일이 그 사람(시트)의 홈에 남으므로 적지 않는다(account_kind 조건) — #5082 도커 실행면은 그 계정의 projects/ 를 작업마다 덮어
+ *  대화가 홈에 남지 않으니 부르는 쪽이 o.subscription 으로 알린다. 도는 중일 때만 · 한 번만 적는다(판은 결과보다 먼저 한 번
  *  올린다 — 같은 비밀로 되풀이해 큰 본문을 다시 쓰게 하지 않는다 · 격리 리뷰).
  */
 const undefinedColumn = (e: unknown): boolean => (e as { code?: string })?.code === "42703";
-export async function setAgentJobTranscript(id: number, conv: string, gz: Buffer, rawBytes: number): Promise<boolean> {
+export async function setAgentJobTranscript(id: number, conv: string, gz: Buffer, rawBytes: number, o: { subscription?: boolean } = {}): Promise<boolean> {
   try {
+    //  구독 작업은 o.subscription(#5082 도커 실행면 — 대화가 홈에 남지 않는다)일 때만 적는다.
     const r = await q(itemsPool,
       `UPDATE org_agent_job SET transcript=$2, transcript_conv=$3, transcript_bytes=$4, updated_at=now()
-        WHERE id=$1 AND status='running' AND account_kind='api_key' AND transcript IS NULL RETURNING id`, [id, gz, conv, rawBytes]);
+        WHERE id=$1 AND status='running' AND (account_kind='api_key' OR $5::boolean) AND transcript IS NULL RETURNING id`, [id, gz, conv, rawBytes, o.subscription === true]);
     return r.length > 0;
   } catch (e) {
     if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)

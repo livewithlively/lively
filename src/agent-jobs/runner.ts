@@ -90,9 +90,9 @@ export interface RunnerJob {
   resultMax: number;
   stderrMax: number;
   /**
-   * #5101 API 키 작업만 — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다 먼저). 그 작업의 빈 설정 폴더는
-   *  끝나면 지워져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면 올리지 않는다. 없으면(구독 작업 — 대화가 홈에 남는다 ·
-   *  관리자가 보관을 끔) 올리지 않는다.
+   * #5101 API 키 작업(과 #5082 도커 실행면의 구독 작업) — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다
+   *  먼저). 그 작업의 빈 설정 폴더(구독 작업은 덮은 projects/)는 끝나면 사라져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면
+   *  올리지 않는다. 없으면(그 밖의 구독 작업 — 대화가 홈에 남는다 · 관리자가 보관을 끔) 올리지 않는다.
    */
   transcriptMax?: number;
   /** 대화 기록 묶음을 풀 때 상한(바이트 — 압축 폭탄 막기 · 올리기 전 크기 재기). */
@@ -158,6 +158,17 @@ for (const k of Object.keys(env)) {
   else if (env[k] === "" && (J.env || {})[k] === "") delete env[k];
 }
 let buf = "", events = 0, conv = null, model = null, last = null, errTail = "", stopped = null, tNote = "";
+// #5082 도커 실행면의 구독 작업 — 하네스는 그 계정의 설정 폴더를 그대로 쓰고(로그인 파일 · 갱신 잠금을 사람 세션과 나눈다), 그 안의 projects/ 만
+//  실행면이 덮은 이 작업만의 빈 자리다. 게이트웨이가 묶음 칸(transcriptMax · transcript)을 실으면 그 projects/ 로 API 키 작업과 같이 올리고 되돌린다.
+//  ★ projects/ 가 따로 붙은 자리(설정 폴더와 다른 장치)일 때만 — 아니면 그 사람의 진짜 대화 폴더이니 읽지도 비우지도 않는다(까닭은 transcript_note).
+let convCfg = cfgDir;
+if (!convCfg && (J.transcriptMax > 0 || J.transcript)) {
+  const c = env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), ".claude");
+  let own = false;
+  try { own = fs.statSync(path.join(c, "projects")).dev !== fs.statSync(c).dev; } catch (e) {}
+  if (own) convCfg = c;
+  else tNote += "transcript: 설정 폴더의 projects/ 가 이 작업만의 자리가 아니라 대화 기록을 올리거나 되돌리지 않는다\n";
+}
 // #5101 대화 기록 묶음 — 그 빈 설정 폴더의 projects/ 아래 파일 전부(대화 파일 · 큰 도구 결과 파일 <대화>/tool-results/* · 하위 에이전트 대화)를
 //  projects/ 기준 상대 경로 그대로 담는다: gzip(JSON {v:1, cfg:<이 작업의 설정 폴더>, files:[{p, d(base64)}]}). 큰 도구 결과는 대화 파일에
 //  «<설정 폴더>/projects/…/tool-results/x.txt 에 저장했다» 는 안내문으로만 남는다(collect-run-script 머리말 · 매니지드 실측 2026-10-16) — 그래서 파일까지
@@ -168,7 +179,7 @@ const CONV_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SEG_RE = /^[A-Za-z0-9._-]{1,200}$/;
 const BUNDLE_FILES_MAX = 2000;
 const RAW_MAX = J.transcriptRawMax || 67108864;
-const projDir = () => path.join(cfgDir, "projects");
+const projDir = () => path.join(convCfg, "projects");
 const safeRel = (rel) => typeof rel === "string" && rel.length < 1024 && rel.split("/").every((s) => SEG_RE.test(s) && s !== "." && s !== "..");
 const listProjectFiles = () => {
   const out = [];
@@ -183,7 +194,7 @@ const listProjectFiles = () => {
   walk(projDir(), "");
   return out;
 };
-if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
+if (convCfg && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
   try {
     const b = JSON.parse(zlib.gunzipSync(Buffer.from(String(J.transcript.gz), "base64"), { maxOutputLength: RAW_MAX }).toString("utf8"));
     if (!b || b.v !== 1) throw new Error("묶음 형식(v " + String(JSON.stringify(b && b.v)).slice(0, 40) + ")을 모른다");
@@ -195,7 +206,7 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
     for (const f of files) {
       if (!f || !safeRel(f.p)) continue;
       let data = Buffer.from(String(f.d || ""), "base64");
-      if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(cfgDir + "/"), "utf8");
+      if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(convCfg + "/"), "utf8");
       if ((written += data.length) > RAW_MAX) throw new Error("되돌릴 크기가 상한(" + RAW_MAX + ")을 넘는다");
       put.push([f.p, data]);
       if (f.p.endsWith("/" + J.transcript.conv + ".jsonl")) found = true;
@@ -208,8 +219,9 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
     if (!found) tNote += "transcript restore: 그 대화 파일이 묶음에 없다\n";
   } catch (e) {
     tNote += "transcript restore: " + (e && e.message) + "\n";
-    //  쓰다가 실패했어도(디스크 가득 · 이름 겹침) 반쯤 놓인 것을 남기지 않는다 — 이 작업만의 빈 설정 폴더라 projects/ 를 통째로 비워도 된다.
-    try { fs.rmSync(projDir(), { recursive: true, force: true }); } catch (e2) {}
+    //  쓰다가 실패했어도(디스크 가득 · 이름 겹침) 반쯤 놓인 것을 남기지 않는다 — 이 작업만의 자리(빈 설정 폴더 · 덮은 tmpfs)라 projects/ 안을
+    //   비워도 된다. 자리 자체는 남긴다(덮은 자리는 지울 수 없다).
+    try { for (const n of fs.readdirSync(projDir())) fs.rmSync(path.join(projDir(), n), { recursive: true, force: true }); } catch (e2) {}
   }
 }
 // #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
@@ -218,7 +230,7 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
 //   «기록이 없습니다» 로 거절될 때 어느 상한이었는지 그 작업으로 찾는다(격리 리뷰). stderr_tail 에 섞지 않는다 — 실패 글은 그 끝 세 줄을 쓴다.
 const skipTranscript = (why) => { tNote += "transcript skipped: " + why + "\n"; };
 const saveTranscript = async () => {
-  if (!cfgDir || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
+  if (!convCfg || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
   let gz = null;
   try {
     const files = listProjectFiles();
@@ -226,7 +238,7 @@ const saveTranscript = async () => {
     let total = 0;
     for (const r of files) total += fs.statSync(path.join(projDir(), r)).size;
     if (total > RAW_MAX * 0.7) return skipTranscript("풀린 크기 " + total + " > " + Math.floor(RAW_MAX * 0.7));
-    const bundle = { v: 1, cfg: cfgDir, files: files.map((r) => ({ p: r, d: fs.readFileSync(path.join(projDir(), r)).toString("base64") })) };
+    const bundle = { v: 1, cfg: convCfg, files: files.map((r) => ({ p: r, d: fs.readFileSync(path.join(projDir(), r)).toString("base64") })) };
     gz = zlib.gzipSync(Buffer.from(JSON.stringify(bundle), "utf8"));
   } catch (e) { return skipTranscript(String(e && e.message)); }
   if (gz.length > J.transcriptMax) return skipTranscript("압축 " + gz.length + " > " + J.transcriptMax);

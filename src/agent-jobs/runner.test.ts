@@ -592,5 +592,26 @@ await t("T4c(#5101) 파일이 상한(2000)보다 많으면 올리지 않는다 �
   } finally { await g3.close(); }
 });
 
+await t("T6(#5082) 묶음을 실은 작업인데 자리표(API 키의 빈 설정 폴더)가 없다(구독 작업) — 설정 폴더의 projects/ 가 따로 붙은 자리(도커 실행면이 덮은 tmpfs)가 아니면 그 사람의 진짜 대화 폴더다: 되돌리지도 · 올리지도 · 비우지도 않고 까닭을 결과에", async () => {
+  const cfg = path.join(tmp, "t6-claude");
+  const other = path.join(cfg, "projects", "-other-cwd");
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, "앞 사람의 대화.jsonl".replace(/ /g, "_")), "앞 사람의 질문");
+  const record = path.join(tmp, "t6.json");
+  //  되돌릴 묶음 — 꼴은 맞다(T3 와 같은 모양). 따로 붙은 자리가 아니니 놓으면 안 된다(놓다 실패하면 projects/ 를 비우는 길이 그 사람의 대화를 지운다).
+  const prev: Bundle = { v: 1, cfg: "/old/cfg", files: [{ p: `-fake-cwd/${SID}.jsonl`, d: b64("앞 대화") }] };
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, envExtra: { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPT: "1", FAKE_RESUME_CONV: SID },
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 10_000_000, transcript: { conv: SID, gz: bundleB64(prev) } } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.equal(h.restored, null, "되돌리지 않았다");
+    assert.equal(g.seen.transcripts.length, 0, "올리지 않았다(그 폴더엔 앞 사람의 대화가 있다)");
+    assert.match(String(g.seen.results[0]!.transcript_note), /projects\/ 가 이 작업만의 자리가 아니라/);
+    assert.equal(fs.readFileSync(path.join(other, "앞_사람의_대화.jsonl"), "utf8"), "앞 사람의 질문", "그 사람의 대화를 지우지 않는다");
+    assert.ok(fs.existsSync(cfg), "그 사람의 설정 폴더는 판의 임시 폴더가 아니다(지우지 않는다)");
+  } finally { await g.close(); fs.rmSync(cfg, { recursive: true, force: true }); }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`# ${pass} pass`);

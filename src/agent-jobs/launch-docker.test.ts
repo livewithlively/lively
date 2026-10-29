@@ -4,16 +4,17 @@
 //  띄우기(C)도 진짜 임시 폴더 · 진짜 작업 폴더 확인 · 진짜 검사기를 거친다 — 바꿔 끼운 것은 도커 · 계정 · DB 뿐이고, launchDockerJob 이 정책에
 //   어느 사실을 넣었나(뿌리 · 원본 · 자리 · 계정 · 그룹 · env 뿌리 · 네트워크 · 이미지)를 그대로 단언한다 — 정책을 단언하지 않으면 인자를 짓는 코드와
 //   정책이 함께 느슨해져도 검사기는 둘이 맞는다고만 본다.
-//  판 머리(JOB_CONTAINER_PRELUDE) · ~/.claude 확인 글(claudeDirProbeScript)은 진짜 셸로, 살아 있는 의존의 docker · getent 부르기는 가짜 실행 파일로 돌린다.
+//  판 머리(JOB_CONTAINER_PRELUDE) · ~/.claude 확인 · 마련 글(claudeDirPrepScript)은 진짜 셸로, 살아 있는 의존의 docker · getent 부르기는 가짜 실행 파일로 돌린다.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  DEFAULT_JOB_UID, DockerBoxError, JOB_BARE_HOME, JOB_CLAUDE_DIR_ENV, JOB_CLAUDE_TARGET, JOB_CONTAINER_PRELUDE, JOB_LOCALE,
-  claudeDirProbeScript, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus, dockerUnavailableMessage, ensureImageOnce, envFileText,
-  gatewayClaudeDirState, hideBoxPaths, invalidateDockerBox, jobContainerArgs, jobContainerEnv,
+  DEFAULT_JOB_UID, DockerBoxError, JOB_BARE_HOME, JOB_CLAUDE_DIR_ENV, JOB_CLAUDE_HIDE_ALWAYS, JOB_CLAUDE_HIDE_FILES, JOB_CLAUDE_HIDE_IF_DIR, JOB_CLAUDE_TARGET,
+  JOB_CONTAINER_PRELUDE, JOB_LOCALE, claudeDirPrepScript, claudeHideTargets, dockerBoxCheck, dockerMemoryMb, dockerPaneView, dockerSurfaceStatus,
+  dockerUnavailableMessage, ensureImageOnce, envFileText, gatewayClaudeDirPrep, hideBoxPaths, hideList, invalidateDockerBox, jobContainerArgs, jobContainerEnv,
+  parseClaudePrep,
   jobContainerName, jobContainerPolicy, jobIdentities, jobPlacement, killDockerJob, launchDockerJob, liveDockerDeps, probeDockerBox, resetDockerProbesForTest, workDirState,
   type DockerBox, type DockerLaunchDeps, type JobPlacement, type MemberFacts,
 } from "./launch-docker.js";
@@ -102,14 +103,17 @@ await t("P2 격리 박스 · 구독 — 그 계정 uid:gid + lively-shared 더�
   const p = jobPlacement({ homeless: false, subscription: true, box: box(), member: kim, profile: null });
   assert.deepEqual(p, {
     uid: 200401, gid: 200401, groups: [SHARED_GID], home: "/home/box_kim",
-    claude: { host: "/home/box_kim/.claude", target: "/home/box_kim/.claude", root: "/home/box_kim", configDirEnv: false }, runsAs: "member",
+    claude: { host: "/home/box_kim/.claude", target: "/home/box_kim/.claude", root: "/home/box_kim", configDirEnv: false, hide: [] }, runsAs: "member",
   });
+  //  덮을 자리는 그 계정 확인이 돌려준 것 중 정한 이름만 · 한 번씩.
+  assert.deepEqual(jobPlacement({ homeless: false, subscription: true, box: box(), member: { ...kim, hide: ["projects", "../etc", "todos", "projects", "history.jsonl"] }, profile: null }).claude?.hide,
+    ["projects", "todos", "history.jsonl"]);
   //  주 그룹이 이미 lively-shared 면 더하지 않는다.
   assert.deepEqual(jobPlacement({ homeless: false, subscription: true, box: box(), member: { ...kim, gid: SHARED_GID }, profile: null }).groups, []);
 });
 
-await t("P3 격리 박스 · 구독 — ~/.claude 가 링크 · 없음 · 남의 것이면 붙이지 않고 까닭을 말한다(상태를 모르면 «없음» 으로 본다)", () => {
-  for (const [claude, re] of [["link", /링크/], ["missing", /없습니다/], ["foreign", /소유의 폴더가 아니라/], [null, /없습니다/]] as const) {
+await t("P3 격리 박스 · 구독 — ~/.claude 가 링크 · 없음 · 남의 것 · 안의 기록 자리가 링크면 붙이지 않고 까닭을 말한다(상태를 모르면 «없음» 으로 본다)", () => {
+  for (const [claude, re] of [["link", /링크/], ["missing", /없습니다/], ["foreign", /소유의 폴더가 아니라/], ["inner", /기록 자리가 링크/], [null, /없습니다/]] as const) {
     assert.throws(() => jobPlacement({ homeless: false, subscription: true, box: box(), member: { ...kim, claude }, profile: null }), re, String(claude));
   }
 });
@@ -128,13 +132,13 @@ await t("P6 비격리 박스 · 구독 — 게이트웨이 uid:gid · 그 사람
   const p = jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false, sharedGid: null }), member: null, profile: okProfile });
   assert.deepEqual(p, {
     uid: 1001, gid: 1001, groups: [], home: JOB_BARE_HOME,
-    claude: { host: okProfile.dir, target: okProfile.dir, root: okProfile.root, configDirEnv: true }, runsAs: "gateway",
+    claude: { host: okProfile.dir, target: okProfile.dir, root: okProfile.root, configDirEnv: true, hide: [] }, runsAs: "gateway",
   });
 });
 
 await t("P7 비격리 박스 · 구독 — 설정 폴더가 없음 · 링크 · 남의 것이면 붙이지 않는다(단일 계정 스위치의 게이트웨이 ~/.claude 포함 — 도커가 그 자리를 root 로 만들지 않게) · 사실이 없으면 던진다", () => {
   const b = box({ isolated: false, sharedGid: null });
-  for (const [state, re] of [["missing", /로그인 폴더가 없습니다/], ["link", /링크라/], ["foreign", /소유의 폴더가 아니라/]] as const) {
+  for (const [state, re] of [["missing", /로그인 폴더가 없습니다/], ["link", /링크라/], ["foreign", /소유의 폴더가 아니라/], ["inner", /기록 자리가 링크/]] as const) {
     assert.throws(() => jobPlacement({ homeless: false, subscription: true, box: b, member: null, profile: { dir: "/home/lively/.claude", root: "/home/lively", state } }), re, state);
   }
   assert.throws(() => jobPlacement({ homeless: false, subscription: true, box: b, member: null, profile: null }), /확인하지 못했습니다/);
@@ -227,7 +231,7 @@ function argsAndPolicy(tr: Tree, place: Pick<JobPlacement, "uid" | "gid" | "grou
   const ids = over.ids ?? { users: [`${place.uid}:${place.gid}`], groups: place.groups };
   const policy = jobContainerPolicy({
     image: "node:22-bookworm-slim", work: { root: tr.apps, source: tr.work, target: "/work/apps/policy-bot" },
-    claude: place.claude ? { root: place.claude.root, source: place.claude.host, target: place.claude.target } : null,
+    claude: place.claude ? { root: place.claude.root, source: place.claude.host, target: place.claude.target, hide: place.claude.hide } : null,
     claudeBin: tr.bin, envRoot: tr.run, home: place.home, users: ids.users, groups: ids.groups,
   });
   return { args, policy };
@@ -328,6 +332,32 @@ await t("G8 정책 — 행의 작업 폴더가 두 꼴(앱 폴더 · 프로젝�
   assert.doesNotThrow(() => mk("/work/shared/project/12"));
 });
 
+await t("G9 설정 폴더 안 기록 자리 덮기 — 격리 · 비격리 구독 모두 진짜 검사기를 지난다 · 덮는 tmpfs 에 exec · 정한 자리 밖 tmpfs · 로그인 파일 자리 · 박스 파일에 빈 파일 바인드는 거절", () => {
+  const tr = realTree();
+  try {
+    const hide = ["projects", "file-history", "history.jsonl"];
+    const iso = jobPlacement({ homeless: false, subscription: true, box: box(), member: { ...kim, home: tr.home, hide }, profile: null });
+    const gw = jobPlacement({ homeless: false, subscription: true, box: box({ isolated: false }), member: null, profile: { dir: tr.profile, root: tr.profiles, state: "ok", hide } });
+    for (const pl of [iso, gw]) {
+      const { args, policy } = argsAndPolicy(tr, pl);
+      assert.equal(assertSafeDockerRun(args, policy).image, "node:22-bookworm-slim");
+      const cl = pl.claude!.target;
+      const tmpfs = args.flatMap((a, i) => (a === "--tmpfs" ? [args[i + 1]!] : []));
+      assert.deepEqual(tmpfs.filter((v) => v.startsWith(`${cl}/`)).map((v) => v.split(":")[0]), [path.join(cl, "projects"), path.join(cl, "file-history")]);
+      assert.ok(args.flatMap((a, i) => (a === "--mount" ? [args[i + 1]!] : [])).includes(`type=bind,src=/dev/null,dst=${path.join(cl, "history.jsonl")}`));
+      const reject = (a: string[], re: RegExp, why: string): void => {
+        assert.throws(() => assertSafeDockerRun(a, policy), (e: unknown) => e instanceof DockerRunRejected && re.test(e.message), why);
+      };
+      const proj = tmpfs.find((v) => v.startsWith(`${path.join(cl, "projects")}:`))!;
+      const swapArg = (from: string, to: string): string[] => args.map((a) => (a === from ? to : a));
+      reject(swapArg(proj, proj.replace("noexec", "exec")), /exec 를 주지 않습니다/, "덮는 자리에 실행");
+      reject(swapArg(proj, proj.replace(path.join(cl, "projects"), path.join(cl, ".credentials.json"))), /tmpfs 자리/, "로그인 파일 자리를 tmpfs 로");
+      reject(swapArg(`type=bind,src=/dev/null,dst=${path.join(cl, "history.jsonl")}`, `type=bind,src=/dev/null,dst=${path.join(cl, ".credentials.json")}`), /마운트 원본/, "로그인 파일을 빈 파일로");
+      reject(swapArg(`type=bind,src=/dev/null,dst=${path.join(cl, "history.jsonl")}`, `type=bind,src=/etc/hosts,dst=${path.join(cl, "history.jsonl")}`), /마운트 원본/, "박스 파일을 입력 기록 자리에");
+    }
+  } finally { tr.done(); }
+});
+
 // ── C. 띄우기(진짜 폴더 · 진짜 작업 폴더 확인 · 진짜 검사기 — 바꿔 끼운 것은 도커 · 계정 · DB) ──
 
 interface Rec { calls: string[]; envText: string | null; args: string[] | null; policy: DockerRunPolicy | null; guard: string | null; removedEnv: string[] }
@@ -338,7 +368,8 @@ function fakeDeps(tr: Tree, over: Partial<DockerLaunchDeps> = {}): { d: DockerLa
     box: async () => { c("box"); return box({ claudeBin: tr.bin }); },
     accountUser: async (m) => { c(`accountUser:${m}`); return { userId: m, scopes: [] } as unknown as LivelyUser; },
     ensureOsUser: async (u) => { c(`ensureOsUser:${u.userId}`); return `box_${u.userId}`; },
-    memberFacts: async (osUser, want) => { c(`memberFacts:${osUser}:${want}`); return { ...kim, home: tr.home, claude: want ? "ok" : null }; },
+    //  구독이면 그 계정 확인이 덮을 자리도 돌려준다(정한 이름 · 폴더 둘 + 입력 기록 파일 — claudeDirPrepScript).
+    memberFacts: async (osUser, want) => { c(`memberFacts:${osUser}:${want}`); return { ...kim, home: tr.home, claude: want ? "ok" : null, ...(want ? { hide: ["projects", "todos", "history.jsonl"] } : {}) }; },
     profileDir: async (u) => { c(`profileDir:${u.userId}`); return { dir: tr.profile, root: tr.profiles, state: "ok" }; },
     resolveWork: async (_u, dir, osUser) => {
       c(`resolveWork:${dir.root}/${dir.sub}:${osUser}`);
@@ -390,17 +421,27 @@ await t("C1 격리 박스 · 구독 — 순서(도커 → 상한 → 그 계정 
     assert.ok(rec.envText!.includes(`LVLY_JOB_BOOT=${SECRET}\n`));
     assert.ok(!rec.args!.join("\n").includes(SECRET), "비밀은 인자에 없다");
     const p = rec.policy!;
-    assert.deepEqual(p.binds.map((b) => [b.root, b.source, b.rw]), [[tr.apps, tr.work, true], [tr.home, path.join(tr.home, ".claude"), true], [tr.bin, tr.bin, false]]);
+    const cl = path.join(tr.home, ".claude");
+    assert.deepEqual(p.binds.map((b) => [b.root, b.source, b.rw]), [[tr.apps, tr.work, true], [tr.home, cl, true], ["/dev/null", "/dev/null", true], [tr.bin, tr.bin, false]]);
     //  자리는 정확히 그 하나 — 다른 앱 · 홈 · 하네스 자리 · 루트는 꼴 밖.
-    const [workBind, claudeBind, binBind] = p.binds;
+    const [workBind, claudeBind, nullBind, binBind] = p.binds;
+    assert.deepEqual([path.join(cl, "history.jsonl"), path.join(cl, ".credentials.json"), "/etc/passwd"].map((s) => nullBind!.targets!.test(s)), [true, false, false], "빈 파일은 입력 기록 자리에만");
     assert.deepEqual(["/work/apps/policy-bot", "/work/apps/other-app", "/work/apps", "/", path.join(tr.home, ".claude")].map((s) => workBind!.targets!.test(s)), [true, false, false, false, false]);
     assert.deepEqual([path.join(tr.home, ".claude"), tr.home, "/work/apps/policy-bot", "/"].map((s) => claudeBind!.targets!.test(s)), [true, false, false, false]);
     assert.deepEqual([JOB_CLAUDE_TARGET, "/usr/local/bin/claude", "/"].map((s) => binBind!.targets!.test(s)), [true, false, false]);
     assert.deepEqual(p.users, ["200401:200401"]);
     assert.deepEqual(p.groupAdds, [SHARED_GID]);
     assert.deepEqual(p.envFiles, [tr.run]);
-    assert.deepEqual(p.tmpfs, ["/tmp", tr.home]);
+    //  설정 폴더 안 기록 자리는 작업마다 빈 tmpfs(실행 안 됨 · 그 계정 소유 0700) · 입력 기록은 /dev/null — 로그인 파일 · 갱신 잠금은 덮지 않는다.
+    assert.deepEqual(p.tmpfs, ["/tmp", tr.home, path.join(cl, "projects"), path.join(cl, "todos")]);
     assert.deepEqual(p.tmpfsExec, ["/tmp", tr.home]);
+    const tmpfsArgs = rec.args!.flatMap((a, i) => (a === "--tmpfs" ? [rec.args![i + 1]!] : []));
+    for (const n of ["projects", "todos"]) {
+      const v = tmpfsArgs.find((x) => x.startsWith(`${path.join(cl, n)}:`)) ?? "";
+      assert.ok(v.split(",").includes("noexec") && v.includes("mode=0700") && v.includes("uid=200401") && v.includes("gid=200401"), v);
+    }
+    assert.ok(mounts(rec.args!).includes(`type=bind,src=/dev/null,dst=${path.join(cl, "history.jsonl")}`));
+    assert.ok(!rec.args!.some((a) => a.includes(".credentials.json") || a.includes(".oauth_refresh.lock")), "로그인 파일 · 갱신 잠금은 덮지 않는다");
     assert.deepEqual(p.networks, ["host"]);
     assert.deepEqual(p.images, ["node:22-bookworm-slim"]);
     assert.equal(p.readOnly, true);
@@ -703,34 +744,90 @@ await t("S3 판 머리 — 남의 소유 폴더(/ 는 root 소유)면 3(시험 �
   assert.equal(r.out, "");
 });
 
-await t("S4 ~/.claude 확인 글(그 계정 권한으로 돈다) — 폴더 ok · 링크 link(폴더를 가리켜도) · 없음 missing · 파일 foreign · 남의 소유 foreign · 꼴 밖 경로는 짓지 않는다", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-h-"));
+/** 확인 · 마련(S4 · S5)이 같은 판정을 내는지 함께 재는 한 벌 — 설정 폴더 하나에 덮을 자리의 여러 모양을 심는다. */
+function prepTree(): { dir: string; cl: string; done: () => void } {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-p-")));
+  const cl = path.join(dir, ".claude");
+  fs.mkdirSync(path.join(cl, "projects", "-work-apps-a"), { recursive: true });
+  fs.writeFileSync(path.join(cl, "projects", "-work-apps-a", "old.jsonl"), "{}");
+  fs.mkdirSync(path.join(cl, "sessions"));                 // IF_DIR · 폴더로 있다 → 덮는다
+  fs.writeFileSync(path.join(cl, "tasks"), "x");            // IF_DIR · 파일로 있다 → 그대로(덮지도 바꾸지도 않는다)
+  fs.writeFileSync(path.join(cl, "todos"), "x");            // ALWAYS 인데 파일로 있다 → 그대로(덮지 않는다)
+  fs.writeFileSync(path.join(cl, "history.jsonl"), "{\"display\":\"앞 사람의 질문\"}\n");
+  fs.writeFileSync(path.join(cl, ".credentials.json"), "{}", { mode: 0o600 });
+  return { dir, cl, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+/** 마련 뒤의 기대 — ALWAYS 는 (파일로 있던 todos 를 빼고) 모두 폴더로 생겨 덮이고, IF_DIR 는 폴더로 있던 sessions 만, 파일은 입력 기록. */
+const prepExpected = (): string[] => [...JOB_CLAUDE_HIDE_ALWAYS.filter((n) => n !== "todos"), "sessions", "history.jsonl"];
+
+await t("S4 ~/.claude 확인 · 마련 글(그 계정 권한으로 돈다) — ok 와 덮을 자리(ALWAYS 는 없으면 0700 으로 만든다 · 파일 자리는 그대로) · 링크 · 없음 · 파일 · 남의 소유 · 안의 기록 자리가 링크면 inner · 꼴 밖 경로는 짓지 않는다", async () => {
+  const tr = prepTree();
   try {
-    const ok = path.join(dir, "ok"), link = path.join(dir, "link"), file = path.join(dir, "file");
-    fs.mkdirSync(ok);
-    fs.symlinkSync(ok, link);
-    fs.writeFileSync(file, "x");
-    const run = async (p: string): Promise<string> => (await sh(["-c", claudeDirProbeScript(p)], envFor({}))).out.trim();
-    assert.equal(await run(ok), "ok");
+    const run = async (p: string): Promise<string> => (await sh(["-c", claudeDirPrepScript(p)], envFor({}))).out.trim();
+    const r = parseClaudePrep(await run(tr.cl));
+    assert.equal(r.state, "ok");
+    assert.deepEqual([...r.hide].sort(), prepExpected().sort());
+    //  새로 만든 자리는 0700(있던 projects 는 그대로 — 마련은 있는 것을 바꾸지 않는다).
+    for (const n of JOB_CLAUDE_HIDE_ALWAYS.filter((x) => x !== "todos" && x !== "projects")) {
+      const st = fs.lstatSync(path.join(tr.cl, n));
+      assert.ok(st.isDirectory() && (st.mode & 0o777) === 0o700, `${n} ${(st.mode & 0o777).toString(8)}`);
+    }
+    assert.equal(fs.readFileSync(path.join(tr.cl, "todos"), "utf8"), "x", "파일 자리에 폴더를 만들지 않는다");
+    assert.equal(fs.readFileSync(path.join(tr.cl, "tasks"), "utf8"), "x");
+    assert.ok(!r.hide.includes("tasks") && !r.hide.includes("todos"));
+    assert.ok(fs.existsSync(path.join(tr.cl, "projects", "-work-apps-a", "old.jsonl")), "마련은 지우지 않는다");
+    assert.equal(parseClaudePrep(await run(tr.cl)).hide.length, r.hide.length, "다시 돌려도 같다");
+    //  상태 넷.
+    const link = path.join(tr.dir, "link"); fs.symlinkSync(tr.cl, link);
+    const file = path.join(tr.dir, "file"); fs.writeFileSync(file, "x");
     assert.equal(await run(link), "link");
-    assert.equal(await run(path.join(dir, "none")), "missing");
+    assert.equal(await run(path.join(tr.dir, "none")), "missing");
     assert.equal(await run(file), "foreign");
     if (process.getuid?.() !== 0) assert.equal(await run("/usr"), "foreign");
-    for (const bad of ["/home/x'; rm -rf /", "relative/.claude", "/home/$(id)/.claude", ""]) assert.throws(() => claudeDirProbeScript(bad), /꼴 밖/, bad);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    //  안의 기록 자리가 링크 — 도커가 그 링크를 따라 덮으면 엉뚱한 자리가 덮인다 · 붙이지 않는다(만들기 전에 본다).
+    for (const n of ["projects", "sessions", "history.jsonl"]) {
+      const t2 = prepTree();
+      try {
+        fs.rmSync(path.join(t2.cl, n), { recursive: true, force: true });
+        fs.symlinkSync(t2.dir, path.join(t2.cl, n));
+        assert.equal(await run(t2.cl), "inner", n);
+      } finally { t2.done(); }
+    }
+    for (const bad of ["/home/x'; rm -rf /", "relative/.claude", "/home/$(id)/.claude", ""]) assert.throws(() => claudeDirPrepScript(bad), /꼴 밖/, bad);
+  } finally { tr.done(); }
 });
 
-await t("S5 게이트웨이가 보는 설정 폴더(비격리) — 그 계정 소유 폴더 ok · 없음 · 링크 · 파일 · 남의 소유(/)", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lvly-dk-g-"));
+await t("S4b 확인 글의 답 읽기(parseClaudePrep) · 덮을 자리 거르기(hideList) · 컨테이너 경로(claudeHideTargets) — 정한 이름만 · 한 번씩 · 모르는 답은 던진다", () => {
+  assert.deepEqual(parseClaudePrep("ok projects ../etc todos projects history.jsonl .credentials.json\n"), { state: "ok", hide: ["projects", "todos", "history.jsonl"] });
+  assert.deepEqual(parseClaudePrep("ok"), { state: "ok", hide: [] });
+  for (const st of ["link", "missing", "foreign", "inner"]) assert.deepEqual(parseClaudePrep(` ${st}\n`), { state: st, hide: [] });
+  for (const bad of ["", "okay", "inner projects", "Permission denied", "link link"]) assert.throws(() => parseClaudePrep(bad), /읽지 못했습니다/, JSON.stringify(bad));
+  assert.deepEqual(hideList(["sessions", "SESSIONS", "../x", "sessions", ".oauth_refresh.lock", ".credentials.json", "settings.json"]), ["sessions"]);
+  assert.deepEqual(claudeHideTargets("/home/box_k/.claude", ["projects", "history.jsonl", "evil"]), { dirs: ["/home/box_k/.claude/projects"], files: ["/home/box_k/.claude/history.jsonl"] });
+  //  덮는 이름에 로그인 파일 · 갱신 잠금 · 설정은 없다(사람 세션과 나눠야 한다).
+  for (const n of [".credentials.json", ".oauth_refresh.lock", "settings.json", "CLAUDE.md"]) {
+    assert.ok(![...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR, ...JOB_CLAUDE_HIDE_FILES].includes(n as never), n);
+  }
+});
+
+await t("S5 게이트웨이가 보고 마련하는 설정 폴더(비격리) — 확인 글(S4)과 같은 판정 · 같은 덮을 자리 · 남의 소유(/)", async () => {
+  const tr = prepTree();
   try {
-    const ok = path.join(dir, "claude"), link = path.join(dir, "link"), file = path.join(dir, "file");
-    fs.mkdirSync(ok); fs.symlinkSync(ok, link); fs.writeFileSync(file, "x");
-    assert.equal(await gatewayClaudeDirState(ok), "ok");
-    assert.equal(await gatewayClaudeDirState(path.join(dir, "none")), "missing");
-    assert.equal(await gatewayClaudeDirState(link), "link");
-    assert.equal(await gatewayClaudeDirState(file), "foreign");
-    if (process.getuid?.() !== 0) assert.equal(await gatewayClaudeDirState("/"), "foreign");
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    const r = await gatewayClaudeDirPrep(tr.cl);
+    assert.equal(r.state, "ok");
+    assert.deepEqual([...r.hide].sort(), prepExpected().sort());
+    assert.ok(fs.lstatSync(path.join(tr.cl, "projects")).isDirectory() && fs.lstatSync(path.join(tr.cl, "plans")).isDirectory());
+    assert.equal(fs.readFileSync(path.join(tr.cl, "todos"), "utf8"), "x");
+    const link = path.join(tr.dir, "link"); fs.symlinkSync(tr.cl, link);
+    const file = path.join(tr.dir, "file"); fs.writeFileSync(file, "x");
+    assert.deepEqual(await gatewayClaudeDirPrep(link), { state: "link", hide: [] });
+    assert.deepEqual(await gatewayClaudeDirPrep(path.join(tr.dir, "none")), { state: "missing", hide: [] });
+    assert.deepEqual(await gatewayClaudeDirPrep(file), { state: "foreign", hide: [] });
+    if (process.getuid?.() !== 0) assert.deepEqual(await gatewayClaudeDirPrep("/"), { state: "foreign", hide: [] });
+    fs.rmSync(path.join(tr.cl, "sessions"), { recursive: true });
+    fs.symlinkSync(tr.dir, path.join(tr.cl, "sessions"));
+    assert.deepEqual(await gatewayClaudeDirPrep(tr.cl), { state: "inner", hide: [] });
+  } finally { tr.done(); }
 });
 
 // ── L. 살아 있는 의존 — 가짜 docker · getent 실행 파일로 ──────────────────────────────
@@ -874,10 +971,12 @@ await t("L6 비격리 · 단일 계정 스위치(LIVELY_MULTIPROFILE=0)의 설�
       const d = await liveDockerDeps();
       const u = { userId: "kim", scopes: [] } as unknown as LivelyUser;
       const dir = path.join(home, ".claude");
-      assert.deepEqual(await d.profileDir(u), { dir, root: home, state: "missing" });
+      assert.deepEqual(await d.profileDir(u), { dir, root: home, state: "missing", hide: [] });
       assert.equal(fs.existsSync(dir), false, "없는 자리를 만들지 않는다(만들면 로그인하지 않은 계정이 빈 설정으로 돈다)");
       fs.mkdirSync(dir);
-      assert.equal((await d.profileDir(u)).state, "ok");
+      const okFacts = await d.profileDir(u);
+      assert.equal(okFacts.state, "ok");
+      assert.ok(okFacts.hide?.includes("projects") && fs.lstatSync(path.join(dir, "projects")).isDirectory(), "있는 설정 폴더 안의 기록 자리는 마련한다(게이트웨이 소유)");
       fs.rmSync(dir, { recursive: true });
       fs.symlinkSync(os.tmpdir(), dir);
       assert.equal((await d.profileDir(u)).state, "link");

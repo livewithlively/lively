@@ -495,6 +495,15 @@ try {
         && (await st.setAgentJobTranscript(q1, CONV, bytes, 1)) === false && (await st.agentJobTranscript(s1)) === null
         && (await st.setAgentJobTranscript(k1, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", Buffer.from("두 번째"), 7)) === false
         && (await st.agentJobTranscriptConv(k1)) === CONV && Buffer.compare((await st.agentJobTranscript(k1)).gz, bytes) === 0);
+    //  #5082 도커 실행면 — 부르는 쪽이 o.subscription 을 실으면 도는 구독 작업도 적는다(그 실행면은 projects/ 를 작업마다 덮어 대화가 홈에 남지 않는다).
+    //   기다리는 작업 · 두 번째 보고는 그대로 false.
+    const s2 = await running("tr2b");
+    const q2 = (await st.insertAgentJob(job("tr3b"), ROOMY)).row.id;   // 기다리는 구독 작업
+    chk("TR1b 구독 작업은 o.subscription 일 때만 적힌다 — 도는 작업만 · 한 번만 · 실지 않으면 false(종전)",
+      (await st.setAgentJobTranscript(s2, CONV, bytes, 9, { subscription: false })) === false
+        && (await st.setAgentJobTranscript(s2, CONV, bytes, 9, { subscription: true })) === true && (await st.agentJobTranscriptConv(s2)) === CONV
+        && (await st.setAgentJobTranscript(s2, CONV, Buffer.from("두 번째"), 7, { subscription: true })) === false
+        && (await st.setAgentJobTranscript(q2, CONV, bytes, 9, { subscription: true })) === false);
     const got = await st.agentJobTranscript(k1);
     const r1 = await row(k1);
     chk("TR2 읽기 — 대화 id · 바이트 그대로 · 풀린 크기 칸 · 대화 id 만 읽기 · 없는 id 는 null",

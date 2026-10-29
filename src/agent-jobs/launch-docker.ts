@@ -10,7 +10,10 @@
 //  누구로 도나(jobPlacement):
 //   · 격리 박스(구성원마다 OS 계정) — 홈 없는 작업은 위 전용 uid, 그 밖은 실행 계정(구독) · 보낸 사람(API 키)의 OS 계정 uid:gid + lively-shared
 //     (--user uid:gid 는 박스 계정의 보조 그룹을 가져오지 않는다 — 공유 · 앱 폴더(setgid 2775)에 쓰려면 그룹을 더해야 한다).
-//     구독 작업은 그 계정 홈의 ~/.claude 하나만 쓰기로 붙인다(HOME 은 빈 tmpfs — ~/.claude.json 은 작업마다 새로 생긴다).
+//     구독 작업은 그 계정 홈의 ~/.claude 하나만 쓰기로 붙인다(HOME 은 빈 tmpfs — ~/.claude.json 은 작업마다 새로 생긴다). 그 안의 대화 · 세션 기록
+//     자리(projects/ 등 — JOB_CLAUDE_HIDE_*)는 작업마다 빈 tmpfs(입력 기록 파일은 /dev/null)로 덮는다 — 앞 작업(공용 시트면 다른 구성원의 질문) ·
+//     사람 세션의 대화를 작업 AI 가 못 읽게(#5123). 그래서 이 실행면의 구독 작업도 대화를 게이트웨이 묶음으로 잇는다(형식 재시도 · 이어받기 —
+//     runner · service.bundledTranscript). 로그인 파일 · 갱신 잠금은 덮지 않는다(사람 세션 · 다른 작업과 나눈다).
 //   · 비격리 박스(격리 꺼짐 · 맥) — 게이트웨이 계정 uid:gid. 구독 작업은 그 사람의 Claude 설정 폴더(멀티프로필 · 단일 계정이면 게이트웨이 ~/.claude)를
 //     같은 경로에 붙이고 CLAUDE_CONFIG_DIR 로 알린다(1단계 · 사람 세션과 같은 자리). 그래도 게이트웨이의 .env · DB 자격은 컨테이너에 없다.
 //  ★ 붙이는 원본은 링크면 안 된다 — 도커(root)는 원본 경로의 링크를 따라가서, 링크 하나로 남의 0700 홈 아래 폴더 · 다른 앱 폴더를 그 uid 로 열 수 있다
@@ -46,8 +49,10 @@
 //     만든 구독 대화를 도커 작업이 이어받으면 못 찾을 수 있다. 실행면을 host 에서 docker 로 바꾸기 전에 도는 작업을 비운다(남은 박스 위 판은 «이미 없음» 으로 걷힌다).
 //   · 컨테이너에는 git 자격 · 키트 토큰 · 게이트웨이 env 가 없다(의도한 격리 — 작업에서 git push 같은 일은 이 실행면에서 안 된다).
 //   · 판 머리가 멈춘 까닭(붙은 폴더가 남의 것)은 컨테이너와 함께 사라지고 시작 상한(180초) 문장만 남는다 — 띄우기 전 확인이 보통의 경우를 먼저 거른다.
-//  ⚠ 남는 한계 — 구독 작업은 그 계정의 ~/.claude 를 쓰기로 붙인다(로그인 갱신이 거기 쓴다). 작업 AI 가 거기 쓴 설정 · 지시(settings.json 훅 ·
-//   CLAUDE.md)는 그 사람의 다음 사람 세션이 읽는다 — «구독 실행은 본인 세션과 같은 신뢰»(v2-11 결정 ③) 그대로다. 공용 시트 홈은 #5123.
+//  ⚠ 남는 한계 — 구독 작업은 그 계정의 ~/.claude 를 쓰기로 붙인다(로그인 갱신이 거기 쓴다). 작업 AI 는 로그인 파일을 읽을 수 있고, 거기 쓴 설정 ·
+//   지시(settings.json 훅 · CLAUDE.md)는 그 사람의 다음 사람 세션이 읽는다 — «구독 실행은 본인 세션과 같은 신뢰»(v2-11 결정 ③) 그대로다(공용 시트의
+//   로그인 파일은 #5123 에서 상민님 판단 중). 덮는 자리는 정한 목록뿐이라 claude 가 새 판에서 다른 이름에 기록을 남기면 그 자리는 덮이지 않는다
+//   (판을 올릴 때 목록을 다시 본다). 비격리 박스는 설정 폴더(CLAUDE_CONFIG_DIR) 안의 .claude.json 도 그대로 보인다(게이트웨이 계정 하나를 나눈다).
 //   앱 폴더를 다른 길이 2755 로 먼저 만들었으면 다른 계정의 작업(홈 없는 작업 포함)은 읽기만 된다(1단계와 같다).
 //   프로젝트 폴더에서 도는 앱 작업은 그 앱 폴더가 작업 폴더 안(.lively/apps/<앱>)에 붙지 않는다(1단계와 같다 — 프로젝트 폴더만 붙인다).
 import path from "node:path";
@@ -119,17 +124,36 @@ export interface DockerBox {
   jobUid: number;
 }
 
-/** Claude 설정 폴더의 상태 — 폴더(그 계정 소유) · 없음 · 링크 · 그 밖(파일 · 남의 소유). */
-export type ClaudeDirState = "ok" | "missing" | "link" | "foreign";
+/** Claude 설정 폴더의 상태 — 폴더(그 계정 소유) · 없음 · 링크 · 그 밖(파일 · 남의 소유) · 안의 세션 기록 자리가 링크. */
+export type ClaudeDirState = "ok" | "missing" | "link" | "foreign" | "inner";
 
-/** 격리 박스 그 계정의 사실 — uid · gid · 홈 · 홈의 ~/.claude 상태(구독 작업만 본다 — 그 계정 권한으로). */
+/**
+ * 구독 작업이 붙이는 Claude 설정 폴더 안에서 작업마다 덮는 자리(#5082 · #5123) — 앞 작업 · 사람 세션의 대화 · 파일 내용이 남는 곳이다(claude 2.1.312 가
+ *  «이 기계의 상태» 로 묶는 이름 중 내용이 남는 것). 로그인 파일(.credentials.json)과 갱신 잠금(.oauth_refresh.lock)은 사람 세션 · 다른 작업과 나눠야
+ *  하므로 덮지 않는다 — 설정 폴더째 붙이는 까닭이다(빈 설정 폴더에 로그인 파일만 붙이면 잠금이 갈려 동시 갱신이 로그인을 깰 수 있다).
+ *  · ALWAYS — 폴더임이 확실한 자리: 없으면 띄우기 전에 그 계정 권한으로 만들어 두고 늘 빈 tmpfs 로 덮는다(뒤에 다른 작업이 만들어도 이 작업엔 안 보인다).
+ *  · IF_DIR — 폴더인지 판마다 다를 수 있는 자리: 띄울 때 폴더로 있으면 덮는다(만들지 않는다 — 파일 자리에 폴더를 만들어 그 사람의 claude 를 깨지 않게).
+ *  · FILES — 파일로 있으면 빈 파일(/dev/null)로 덮는다(입력 기록).
+ *  projects/ 의 대화는 덮인 자리에 남고 끝나면 사라진다 — 형식 재시도 · 이어받기는 게이트웨이가 보관한 묶음으로 잇는다(runner · service.bundledTranscript).
+ */
+export const JOB_CLAUDE_HIDE_ALWAYS = ["projects", "todos", "shell-snapshots", "file-history", "plans", "session-env", "ide", "debug", "backups", "paste-cache", "image-cache"] as const;
+export const JOB_CLAUDE_HIDE_IF_DIR = ["sessions", "tasks", "teams", "logs", "jobs", "shares", "uploads", "downloads", "file-transfers", "scratch", "api-dumps", "dump-prompts", "telemetry", "traces", "usage-data"] as const;
+export const JOB_CLAUDE_HIDE_FILES = ["history.jsonl"] as const;
+const HIDE_NAMES: ReadonlySet<string> = new Set([...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR, ...JOB_CLAUDE_HIDE_FILES]);
+const HIDE_FILE_NAMES: ReadonlySet<string> = new Set(JOB_CLAUDE_HIDE_FILES);
+/** 덮는 tmpfs 하나의 크기(MB) — projects/ 는 이어받은 대화 · 큰 도구 결과까지 담는다(쓰는 만큼 작업 메모리 상한에 든다). */
+const JOB_CLAUDE_HIDE_MB = 512;
+
+/** 격리 박스 그 계정의 사실 — uid · gid · 홈 · 홈의 ~/.claude 상태와 덮을 자리(구독 작업만 본다 — 그 계정 권한으로). */
 export interface MemberFacts {
   uid: number; gid: number; home: string;
   claude: ClaudeDirState | null;
+  /** ~/.claude 안에서 덮을 자리(JOB_CLAUDE_HIDE_* 중 띄울 때 있는 것 — claudeDirPrepScript). */
+  hide?: string[];
 }
 
-/** 비격리 박스 구독 작업의 Claude 설정 폴더 — 자리 · 검사기 뿌리 · 상태(게이트웨이가 lstat 으로 본다). */
-export interface ProfileFacts { dir: string; root: string; state: ClaudeDirState }
+/** 비격리 박스 구독 작업의 Claude 설정 폴더 — 자리 · 검사기 뿌리 · 상태 · 덮을 자리(게이트웨이가 lstat 으로 본다 — gatewayClaudeDirPrep). */
+export interface ProfileFacts { dir: string; root: string; state: ClaudeDirState; hide?: string[] }
 
 /** 컨테이너를 누구로 · 무엇을 붙여 띄우나(jobPlacement). */
 export interface JobPlacement {
@@ -138,8 +162,11 @@ export interface JobPlacement {
   groups: number[];
   /** 컨테이너 HOME(빈 tmpfs). */
   home: string;
-  /** 구독 작업의 Claude 설정 폴더 — 박스 위 자리 · 컨테이너 안 자리 · 검사기 뿌리 · CLAUDE_CONFIG_DIR 로 알려야 하나. 없으면 붙이지 않는다. */
-  claude: { host: string; target: string; root: string; configDirEnv: boolean } | null;
+  /**
+   * 구독 작업의 Claude 설정 폴더 — 박스 위 자리 · 컨테이너 안 자리 · 검사기 뿌리 · CLAUDE_CONFIG_DIR 로 알려야 하나 · 그 안에서 작업마다 덮을 자리.
+   *  없으면 붙이지 않는다.
+   */
+  claude: { host: string; target: string; root: string; configDirEnv: boolean; hide: string[] } | null;
   runsAs: "member" | "gateway" | "job";
 }
 
@@ -147,12 +174,19 @@ const CLAUDE_DIR_REFUSAL: Readonly<Record<Exclude<ClaudeDirState, "ok">, string>
   missing: "실행 계정의 홈에 Claude 로그인 폴더(~/.claude)가 없습니다 — 그 사람이 사람 세션에서 한 번 로그인해야 구독으로 돕니다",
   link: "실행 계정의 ~/.claude 가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
   foreign: "실행 계정의 ~/.claude 가 그 계정 소유의 폴더가 아니라 작업 컨테이너에 붙이지 않습니다",
+  inner: "실행 계정의 ~/.claude 안 대화 · 세션 기록 자리가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
 };
 const GATEWAY_CLAUDE_REFUSAL: Readonly<Record<Exclude<ClaudeDirState, "ok">, string>> = {
   missing: "게이트웨이 계정에 Claude 로그인 폴더가 없습니다 — 이 박스에서 그 계정으로 한 번 로그인해야 구독으로 돕니다",
   link: "게이트웨이 계정의 Claude 설정 폴더가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
   foreign: "게이트웨이 계정의 Claude 설정 폴더가 그 계정 소유의 폴더가 아니라 작업 컨테이너에 붙이지 않습니다",
+  inner: "게이트웨이 계정의 Claude 설정 폴더 안 대화 · 세션 기록 자리가 링크라 작업 컨테이너에 붙이지 않습니다 — 링크를 걷고 실제 폴더로 두세요",
 };
+
+/** (순수) 덮을 자리 목록을 거른다 — 정한 이름만 · 한 번씩(띄우기 전 확인의 답을 그대로 믿지 않는다). */
+export function hideList(names: readonly string[] | undefined): string[] {
+  return [...new Set((names ?? []).filter((n) => HIDE_NAMES.has(n)))];
+}
 
 /**
  * (순수) 컨테이너를 누구로 · 무엇을 붙여 띄우나 — 머리말 «누구로 도나». 띄울 수 없는 자리면 까닭과 함께 던진다(다시 해도 안 된다).
@@ -174,7 +208,7 @@ export function jobPlacement(f: {
     if (!f.subscription) return { uid: m.uid, gid: m.gid, groups, home: JOB_BARE_HOME, claude: null, runsAs: "member" };
     if (m.claude !== "ok") throw new Error(CLAUDE_DIR_REFUSAL[m.claude ?? "missing"]);
     const dir = path.join(m.home, ".claude");
-    return { uid: m.uid, gid: m.gid, groups, home: m.home, claude: { host: dir, target: dir, root: m.home, configDirEnv: false }, runsAs: "member" };
+    return { uid: m.uid, gid: m.gid, groups, home: m.home, claude: { host: dir, target: dir, root: m.home, configDirEnv: false, hide: hideList(m.hide) }, runsAs: "member" };
   }
   const g = box.gateway;
   if (g.uid === 0) throw new Error("게이트웨이가 root 로 돌고 있어 작업 컨테이너를 띄우지 않습니다(컨테이너 안은 root 가 아닌 계정으로 돈다)");
@@ -182,7 +216,7 @@ export function jobPlacement(f: {
   const p = f.profile;
   if (!p) throw new Error("게이트웨이 계정의 Claude 설정 폴더를 확인하지 못했습니다");
   if (p.state !== "ok") throw new Error(GATEWAY_CLAUDE_REFUSAL[p.state]);
-  return { uid: g.uid, gid: g.gid, groups: [], home: JOB_BARE_HOME, claude: { host: p.dir, target: p.dir, root: p.root, configDirEnv: true }, runsAs: "gateway" };
+  return { uid: g.uid, gid: g.gid, groups: [], home: JOB_BARE_HOME, claude: { host: p.dir, target: p.dir, root: p.root, configDirEnv: true, hide: hideList(p.hide) }, runsAs: "gateway" };
 }
 
 /**
@@ -247,9 +281,20 @@ function bindMount(src: string, dst: string, readonly: boolean): string[] {
   return ["--mount", `type=bind,src=${src},dst=${dst}${readonly ? ",readonly" : ""}`];
 }
 
+/** 덮는 파일의 원본 — 비어 있고 쓰면 버려지는 박스의 /dev/null. */
+const HIDE_FILE_SOURCE = "/dev/null";
+
+/** (순수) Claude 설정 폴더 안에서 덮을 자리의 컨테이너 경로 — 폴더(tmpfs) · 파일(/dev/null 바인드)로 가른다. */
+export function claudeHideTargets(target: string, hide: readonly string[]): { dirs: string[]; files: string[] } {
+  const names = hideList(hide);
+  return { dirs: names.filter((n) => !HIDE_FILE_NAMES.has(n)).map((n) => path.join(target, n)), files: names.filter((n) => HIDE_FILE_NAMES.has(n)).map((n) => path.join(target, n)) };
+}
+
 /** (순수) 작업 컨테이너 인자(docker run …) — 정해진 꼴 하나(머리말 «막이»). */
 export function jobContainerArgs(p: JobContainerPlan): string[] {
   const { place } = p;
+  //  설정 폴더(바인드) 안의 대화 · 세션 기록 자리는 작업마다 빈 자리로 덮는다(도커는 얕은 자리부터 붙인다 — 바인드 뒤에 덮인다).
+  const hidden = place.claude ? claudeHideTargets(place.claude.target, place.claude.hide) : { dirs: [], files: [] };
   return [
     "run", "-d", "--rm", "--name", p.name,
     ...Object.entries(p.labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
@@ -264,6 +309,8 @@ export function jobContainerArgs(p: JobContainerPlan): string[] {
     "--init", "--restart", "no",
     ...bindMount(p.workHost, p.workdir, false),
     ...(place.claude ? bindMount(place.claude.host, place.claude.target, false) : []),
+    ...hidden.dirs.flatMap((d) => ["--tmpfs", `${d}:rw,noexec,nosuid,nodev,size=${JOB_CLAUDE_HIDE_MB}m,mode=0700,uid=${place.uid},gid=${place.gid}`]),
+    ...hidden.files.flatMap((f) => bindMount(HIDE_FILE_SOURCE, f, false)),
     ...bindMount(p.claudeBin, JOB_CLAUDE_TARGET, true),
     "--env-file", p.envFile,
     "--workdir", p.workdir, "--stop-timeout", "10",
@@ -283,16 +330,18 @@ const exact = (s: string): RegExp => new RegExp(`^${esc(s)}$`);
 export function jobContainerPolicy(f: {
   image: string;
   work: { root: string; source: string; target: string };
-  claude: { root: string; source: string; target: string } | null;
+  claude: { root: string; source: string; target: string; hide: readonly string[] } | null;
   claudeBin: string; envRoot: string; home: string; users: string[]; groups: number[];
 }): DockerRunPolicy {
   if (!WORK_TARGET_RE.test(f.work.target)) throw new Error(`작업 폴더 꼴이 아닙니다: ${f.work.target.slice(0, 80)}`);
+  const hidden = f.claude ? claudeHideTargets(f.claude.target, f.claude.hide) : { dirs: [], files: [] };
   return {
     networks: ["host"], images: [f.image], readOnly: true, publish: false,
-    tmpfs: ["/tmp", f.home], tmpfsExec: ["/tmp", f.home],
+    tmpfs: ["/tmp", f.home, ...hidden.dirs], tmpfsExec: ["/tmp", f.home],
     binds: [
       { root: f.work.root, rw: true, targets: exact(f.work.target), source: f.work.source },
       ...(f.claude ? [{ root: f.claude.root, rw: true, targets: exact(f.claude.target), source: f.claude.source }] : []),
+      ...hidden.files.map((t) => ({ root: HIDE_FILE_SOURCE, rw: true, targets: exact(t), source: HIDE_FILE_SOURCE })),
       { root: f.claudeBin, rw: false, targets: exact(JOB_CLAUDE_TARGET), source: f.claudeBin },
     ],
     envFiles: [f.envRoot],
@@ -461,8 +510,8 @@ async function launchDockerJobIn(
     const args = jobContainerArgs({ name, image: box.image, labels, place, memoryMb, workHost: work.abs, workdir: job.cwd, claudeBin: box.claudeBin, envFile: env.file });
     //  정책의 사실 — 자리 판정(place)이 아니라 박스 · 그 계정 · 프로필 사실에서 따로 짓는다(머리말 «막이»).
     const claudeFacts = !subscription || homeless ? null
-      : box.isolated ? (member ? { root: member.home, source: path.join(member.home, ".claude"), target: path.join(member.home, ".claude") } : null)
-        : (profile ? { root: profile.root, source: profile.dir, target: profile.dir } : null);
+      : box.isolated ? (member ? { root: member.home, source: path.join(member.home, ".claude"), target: path.join(member.home, ".claude"), hide: hideList(member.hide) } : null)
+        : (profile ? { root: profile.root, source: profile.dir, target: profile.dir, hide: hideList(profile.hide) } : null);
     const ids = jobIdentities(box, member);
     const policy = jobContainerPolicy({
       image: box.image, work: { root: work.base, source: work.abs, target: job.cwd }, claude: claudeFacts,
@@ -675,19 +724,55 @@ export async function probeDockerBox(o: { isolated?: boolean; getent?: string } 
   };
 }
 
-/** 그 계정 홈의 ~/.claude 상태 — 그 계정 권한으로 본다(게이트웨이는 0700 홈 안을 못 본다). 경로는 우리가 지은 값(따옴표 안 · 꼴을 먼저 본다). */
-export function claudeDirProbeScript(dir: string): string {
+/**
+ * 그 계정 홈의 ~/.claude 를 보고 덮을 자리를 마련한다 — 그 계정 권한으로 돈다(게이트웨이는 0700 홈 안을 못 본다). 경로는 우리가 지은 값(따옴표 안 ·
+ *  꼴을 먼저 본다) · 이름은 정한 목록(JOB_CLAUDE_HIDE_*)뿐이다.
+ *  답: `link` · `missing` · `foreign` · `inner`(안의 덮을 자리가 링크) · `ok <덮을 이름…>`. ALWAYS 자리는 없으면 만들어 둔다(0700 — 도커가 없는 자리를
+ *  root 소유로 만들지 않게 · 다른 작업이 뒤에 만들어도 이 작업엔 덮여 있게). 만들지 못하면 foreign(그 계정이 제 설정 폴더에 못 쓰면 로그인 갱신도 못 한다).
+ */
+export function claudeDirPrepScript(dir: string): string {
   if (!/^\/[A-Za-z0-9._/-]{1,250}$/.test(dir)) throw new Error(`Claude 설정 폴더 경로 꼴 밖: ${JSON.stringify(dir.slice(0, 80))}`);
-  return `c='${dir}'; if [ -L "$c" ]; then echo link; elif [ ! -e "$c" ]; then echo missing; elif [ ! -d "$c" ] || [ ! -O "$c" ]; then echo foreign; else echo ok; fi`;
+  const all = [...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR, ...JOB_CLAUDE_HIDE_FILES].join(" ");
+  return [
+    `c='${dir}'`,
+    `if [ -L "$c" ]; then echo link; exit 0; fi`,
+    `if [ ! -e "$c" ]; then echo missing; exit 0; fi`,
+    `if [ ! -d "$c" ] || [ ! -O "$c" ]; then echo foreign; exit 0; fi`,
+    `for n in ${all}; do if [ -L "$c/$n" ]; then echo inner; exit 0; fi; done`,
+    `for n in ${JOB_CLAUDE_HIDE_ALWAYS.join(" ")}; do [ -e "$c/$n" ] || mkdir -m 0700 "$c/$n" 2>/dev/null || { echo foreign; exit 0; }; done`,
+    `o=ok`,
+    `for n in ${[...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR].join(" ")}; do if [ -d "$c/$n" ]; then o="$o $n"; fi; done`,
+    `for n in ${JOB_CLAUDE_HIDE_FILES.join(" ")}; do if [ -f "$c/$n" ]; then o="$o $n"; fi; done`,
+    `echo "$o"`,
+  ].join("\n");
 }
 
-/** 게이트웨이가 직접 보는 Claude 설정 폴더 상태(비격리 박스 — 그 폴더는 게이트웨이 소유여야 한다). */
-export async function gatewayClaudeDirState(dir: string): Promise<ClaudeDirState> {
+/** (순수) claudeDirPrepScript 의 답을 읽는다 — 모르는 답은 던진다(판정 실패 — 일시). */
+export function parseClaudePrep(out: string): { state: ClaudeDirState; hide: string[] } {
+  const words = out.trim().split(/\s+/);
+  const head = words[0] ?? "";
+  if (head === "ok") return { state: "ok", hide: hideList(words.slice(1)) };
+  if (words.length === 1 && (head === "link" || head === "missing" || head === "foreign" || head === "inner")) return { state: head, hide: [] };
+  throw new Error(`~/.claude 상태를 읽지 못했습니다: ${out.trim().slice(0, 80)}`);
+}
+
+/** 게이트웨이가 직접 보고 마련하는 Claude 설정 폴더(비격리 박스 — 그 폴더는 게이트웨이 소유여야 한다) — claudeDirPrepScript 와 같은 판정. */
+export async function gatewayClaudeDirPrep(dir: string): Promise<{ state: ClaudeDirState; hide: string[] }> {
   const fsp = await import("node:fs/promises");
-  const st = await fsp.lstat(dir).catch((e: NodeJS.ErrnoException) => { if (e.code === "ENOENT") return null; throw e; });
-  if (!st) return "missing";
-  if (st.isSymbolicLink()) return "link";
-  return st.isDirectory() && st.uid === process.getuid?.() ? "ok" : "foreign";
+  const lst = (p: string) => fsp.lstat(p).catch((e: NodeJS.ErrnoException) => { if (e.code === "ENOENT") return null; throw e; });
+  const st = await lst(dir);
+  if (!st) return { state: "missing", hide: [] };
+  if (st.isSymbolicLink()) return { state: "link", hide: [] };
+  if (!(st.isDirectory() && st.uid === process.getuid?.())) return { state: "foreign", hide: [] };
+  for (const n of HIDE_NAMES) if ((await lst(path.join(dir, n)))?.isSymbolicLink()) return { state: "inner", hide: [] };
+  for (const n of JOB_CLAUDE_HIDE_ALWAYS) {
+    if (await lst(path.join(dir, n))) continue;
+    try { await fsp.mkdir(path.join(dir, n), { mode: 0o700 }); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") return { state: "foreign", hide: [] }; }
+  }
+  const hide: string[] = [];
+  for (const n of [...JOB_CLAUDE_HIDE_ALWAYS, ...JOB_CLAUDE_HIDE_IF_DIR]) if ((await lst(path.join(dir, n)))?.isDirectory()) hide.push(n);
+  for (const n of JOB_CLAUDE_HIDE_FILES) if ((await lst(path.join(dir, n)))?.isFile()) hide.push(n);
+  return { state: "ok", hide };
 }
 
 /** 작업 폴더 상태 — 링크가 아니고, 실제 경로가 «뿌리의 실제 경로 + 그 안 자리» 와 같아야 한다(뿌리 위의 링크 · 맥 /var 는 괜찮다). */
@@ -749,20 +834,19 @@ export async function liveDockerDeps(): Promise<DockerLaunchDeps> {
       if (!Number.isSafeInteger(uid) || uid <= 0 || !Number.isSafeInteger(gid) || gid < 0) throw new Error(`OS 계정 ${osUser} 의 uid · gid 를 읽지 못했습니다`);
       const home = path.join(profiles.MEMBER_HOME_BASE, osUser);
       if (!wantClaude) return { uid, gid, home, claude: null };
-      const s = (await mfs.memberShOut(osUser, claudeDirProbeScript(path.join(home, ".claude")))).trim();
-      if (s !== "ok" && s !== "missing" && s !== "link" && s !== "foreign") throw new Error(`~/.claude 상태를 읽지 못했습니다: ${s.slice(0, 80)}`);
-      return { uid, gid, home, claude: s };
+      const prep = parseClaudePrep(await mfs.memberShOut(osUser, claudeDirPrepScript(path.join(home, ".claude"))));
+      return { uid, gid, home, claude: prep.state, hide: prep.hide };
     },
     profileDir: async (u) => {
       //  비격리 박스 — 사람 세션 · 1단계와 같은 자리(멀티프로필 #346 · #1014). 멀티프로필이면 그 사람의 프로필을 만들어 두고(사람 세션도 만든다),
       //   단일 계정 스위치면 게이트웨이 ~/.claude 를 만들지 않고 본다(없으면 그 계정이 로그인하지 않은 것이다 — 도커가 그 자리를 root 로 만들지 않게).
       if (process.env.LIVELY_MULTIPROFILE === "0") {
         const dir = path.join(os.homedir(), ".claude");
-        return { dir, root: os.homedir(), state: await gatewayClaudeDirState(dir) };
+        return { dir, root: os.homedir(), ...(await gatewayClaudeDirPrep(dir)) };
       }
       const dir = profiles.profileConfigDir(u);
       await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
-      return { dir, root: profiles.PROFILES_ROOT, state: await gatewayClaudeDirState(dir) };
+      return { dir, root: profiles.PROFILES_ROOT, ...(await gatewayClaudeDirPrep(dir)) };
     },
     resolveWork: (u, dir, osUser) => profiles.resolveRootPath(u, dir.root, dir.sub, osUser),
     mkdirWork: async (osUser, abs, shared) => {
