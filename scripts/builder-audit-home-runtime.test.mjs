@@ -86,6 +86,7 @@ window.fetch = async (u, init) => {
       app("old", "명함", { build_session: "box-old2", manifest: put() }),          // N2 — 세션이 셸 목록 밖 · 이 브라우저 기록에 있다
       app("far", "원격", { build_session: "box-far", manifest: put() }),           // N2 — 세션이 셸 목록 밖 · 기록도 없다(서버에 물어 앱빌더 세션)
       app("week", "주간", { visibility: "all", owner_member: null, published_version_no: 1, manifest: put() }),
+      app("rec2", "녹음", { visibility: "all", published_version_no: 12, current_version_no: 13, manifest: put() }),   // U7b — 초안 없음 · 공개 번호가 낡았다(같은 내용 마무리 두 번)
       app("empty1", "새 앱", { empty: true, made_by: "left-user", installed_by: "left-user", owner_member: null, build_session: "box-empty", current_version_no: null }),
       ...(p === "/api/ui/apps" ? [app("memo-wonjoon-jang", "메모 · 원준", { manifest: put("both") })] : []),
     ];
@@ -150,6 +151,8 @@ async function PAGE_MAIN() {
   const memoTeam = cardIn(/^팀원이 만든 앱/, "메모");
   R.u7 = { small: txt(memoTeam && memoTeam.querySelector(".hd small")), chips: memoTeam ? [...memoTeam.querySelectorAll(".v2-bld-chip")].map(txt) : null };
   R.u3 = { chips: R.u7.chips };
+  const rec2 = [...document.querySelectorAll(".v2-bld-card")].find((c) => txt(c.querySelector("b")) === "녹음");
+  R.u7b = { small: txt(rec2 && rec2.querySelector(".hd small")) };
   // U2 — 카드를 고르면 깜빡이지 않는다
   let flashed = false;
   const mo = new MutationObserver(() => { if (/불러오는 중/.test(txt(host.querySelector(".v2-bld-list")) || "")) flashed = true; });
@@ -289,6 +292,7 @@ same(R.h5, { card: true, rec: true, goneCard: false, goneRec: false }, "H5 · H5
 same(R.u5, true, "U5 사본 기록이 열려 있으면 «만드는 중»");
 check(R.drafts && !R.drafts.includes("새 앱"), "U6 만든 사람이 떠난 빈 예약은 「만들던 앱」 에 안 선다", R.drafts);
 check(R.u7 && R.u7.small && /^공개 V3 · 내 버전 V5/.test(R.u7.small) && !/둘 다/.test(R.u7.small) && R.u7.chips.filter((c) => c === "둘 다").length === 1, "U7 카드 작은 줄 «공개 V3 · 내 버전 V5» · 쓰는 자리는 칩 하나만", R.u7);
+check(R.u7b && /^V13/.test(R.u7b.small || ""), "U7b 초안이 없으면 카드는 지금 판 번호(배포 설정 「지금 쓰는 버전」 과 같은 번호)", R.u7b);
 check(R.u3 && R.u3.chips && R.u3.chips.includes("윤상민 만듦") && !R.u3.chips.some((c) => /sangmin-yoon/.test(c)), "U3 카드에 계정 아이디 대신 표시 이름", R.u3);
 same(R.u2, { flashed: false, refetch: 0, on: true }, "U2 카드를 고르면 목록이 비지 않고 앱 목록을 다시 받지 않는다");
 check(R.h7 && !R.h7.del && /관리자가 맡고 있어요/.test(R.h7.owner || ""), "H7 · U3 관리자가 아니면 공개 앱에 「앱 지우기」 없음 · 책임자 없음 «관리자가 맡고 있어요»", R.h7);
