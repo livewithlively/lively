@@ -18,10 +18,16 @@ export interface AgentJobPolicy {
   /** 이 워크스페이스에서 동시에 도는(띄우는 중 포함) 작업 컨테이너 수. 넘는 작업은 대기열에서 기다린다. */
   max_running: number;
   /**
-   * 같은 실행 계정(구독 주인 멤버)으로 동시에 도는 작업 수. 워크스페이스 상한보다 클 수 없다(불변식).
+   * 같은 실행 계정(구독 주인 멤버 · API 키면 보낸 사람)으로 동시에 도는 작업 수. 워크스페이스 상한보다 클 수 없다(불변식).
    *  한 사람 구독의 한도(분당 토큰)를 작업 여럿이 한꺼번에 먹지 않게 — 설계 §12 ④ «사람당 동시».
+   *  #5081 공용 시트의 작업은 **보낸 사람**으로 센다(시트 전체는 max_running_per_service_seat — agent-jobs/plan.claimAxes).
    */
   max_running_per_member: number;
+  /**
+   * #5081 공용 시트 하나로 동시에 도는 작업 수 — 공용 시트의 작업은 사람당 상한을 **보낸 사람**으로 세므로(구성원마다 따로), 시트 전체는 이 칸이 막는다.
+   *  워크스페이스 상한보다 클 수 없다(불변식). 시트 하나의 구독 한도(5시간 사용량)를 여럿이 한꺼번에 먹지 않게.
+   */
+  max_running_per_service_seat: number;
   /** 기다리는 작업 수 상한. 넘으면 접수를 거절한다(429). 0 = 대기열 없음(자리가 없으면 바로 거절). */
   max_queued: number;
   /** 이만큼(분) 기다려도 자리가 안 나면 실패로 끝낸다 — 앱이 영원히 «대기 중» 을 보지 않게. */
@@ -55,6 +61,7 @@ export type AgentJobPolicyPatch = Partial<AgentJobPolicy>;
 export const DEFAULT_AGENT_JOB_POLICY: AgentJobPolicy = {
   max_running: 2,
   max_running_per_member: 2,
+  max_running_per_service_seat: 2,
   max_queued: 20,
   queue_wait_min: 30,
   default_timeout_min: 15,
@@ -70,6 +77,7 @@ export const DEFAULT_AGENT_JOB_POLICY: AgentJobPolicy = {
 export const AGENT_JOB_POLICY_RANGE: { readonly [K in keyof AgentJobPolicy]: readonly [min: number, max: number] } = {
   max_running: [1, 20],
   max_running_per_member: [1, 20],
+  max_running_per_service_seat: [1, 20],
   max_queued: [0, 500],
   queue_wait_min: [1, 1440],
   default_timeout_min: [1, 240],
@@ -86,6 +94,7 @@ const policy = definePolicy<AgentJobPolicy>({
   fields: {
     max_running: { env: "LIVELY_AGENT_JOB_MAX_RUNNING", min: R.max_running[0], max: R.max_running[1] },
     max_running_per_member: { env: "LIVELY_AGENT_JOB_MAX_RUNNING_PER_MEMBER", min: R.max_running_per_member[0], max: R.max_running_per_member[1] },
+    max_running_per_service_seat: { env: "LIVELY_AGENT_JOB_MAX_RUNNING_PER_SERVICE_SEAT", min: R.max_running_per_service_seat[0], max: R.max_running_per_service_seat[1] },
     max_queued: { env: "LIVELY_AGENT_JOB_MAX_QUEUED", min: R.max_queued[0], max: R.max_queued[1] },
     queue_wait_min: { env: "LIVELY_AGENT_JOB_QUEUE_WAIT_MIN", min: R.queue_wait_min[0], max: R.queue_wait_min[1] },
     default_timeout_min: { env: "LIVELY_AGENT_JOB_DEFAULT_TIMEOUT_MIN", min: R.default_timeout_min[0], max: R.default_timeout_min[1] },
@@ -95,9 +104,10 @@ const policy = definePolicy<AgentJobPolicy>({
     keep_days: { env: "LIVELY_AGENT_JOB_KEEP_DAYS", min: R.keep_days[0], max: R.keep_days[1] },
     memory_max_mb: { env: "LIVELY_AGENT_JOB_MEMORY_MAX_MB", min: R.memory_max_mb[0], max: R.memory_max_mb[1] },
   },
-  //  축 사이 관계 둘 — 사람당 상한이 워크스페이스 상한보다 크면 의미가 없고, 기본 시간이 최대 시간보다 길면 기본값이 최대를 뚫는다.
+  //  축 사이 관계 셋 — 사람당 · 공용 시트 상한이 워크스페이스 상한보다 크면 의미가 없고, 기본 시간이 최대 시간보다 길면 기본값이 최대를 뚫는다.
   invariant: (o) => {
     if (o.max_running_per_member > o.max_running) o.max_running_per_member = o.max_running;
+    if (o.max_running_per_service_seat > o.max_running) o.max_running_per_service_seat = o.max_running;
     if (o.default_timeout_min > o.max_timeout_min) o.default_timeout_min = o.max_timeout_min;
   },
 });
@@ -117,11 +127,16 @@ export function resolveAgentJobPolicy(dbRaw: unknown): AgentJobPolicy {
  *  next = 이번에 적을 값(이미 저장된 값 + 이번 입력). 안 적은 칸은 지금 쓰는 값(env 시드 · 기본값)으로 견준다.
  *  ⚠ 조용히 접지 않는다 — 접으면(사람당 5 → 2) 그 값이 저장돼, 나중에 동시 상한을 올려도 되살아나지 않는다(격리 리뷰).
  *   읽을 때의 불변식(invariant)은 env 시드가 바뀌는 경우의 안전망으로 남는다.
+ *  공용 시트 상한(#5081)은 **적었을 때만** 견준다 — 이 칸이 생기기 전에 동시 상한을 1 로 적어 둔 워크스페이스가 다른 칸(보존 일수 등)을
+ *   고칠 때마다 «기본값 2 > 1» 로 거절되지 않게. 안 적었으면 읽을 때 불변식이 동시 상한으로 접는다(저장하지 않으니 되살아남 문제가 없다).
  */
 export function agentJobPolicyPatchError(next: Partial<AgentJobPolicy>): string | null {
   const want = { ...resolveAgentJobPolicy({}), ...next };
   if (want.max_running_per_member > want.max_running) {
     return `max_running_per_member(${want.max_running_per_member})는 max_running(${want.max_running}) 이하여야 합니다 — 둘을 함께 주세요`;
+  }
+  if (next.max_running_per_service_seat !== undefined && want.max_running_per_service_seat > want.max_running) {
+    return `max_running_per_service_seat(${want.max_running_per_service_seat})는 max_running(${want.max_running}) 이하여야 합니다 — 둘을 함께 주세요`;
   }
   if (want.default_timeout_min > want.max_timeout_min) {
     return `default_timeout_min(${want.default_timeout_min})은 max_timeout_min(${want.max_timeout_min}) 이하여야 합니다 — 둘을 함께 주세요`;

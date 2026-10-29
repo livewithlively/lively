@@ -430,6 +430,52 @@ try {
     chk("P4 다시 돌리면 지울 것이 없다(멱등)", (await st.pruneAgentJobs(90)) === 0);
   }
 
+  // ── S. 공용 시트(#5081) — 표시는 넣을 때만 적고 따로 읽는다 · 실 SQL 자리 주기 · 칸이 아직 없을 때(롤 창) ──────────────────
+  {
+    await cleanup();
+    const seat = `${REQ}seat`;
+    const shared = (who) => job(who, { accountMember: seat, appId: "crm", projectId: null, cwd: "/work/apps/crm", sharedSeat: true });
+    const s1 = await st.insertAgentJob(shared("alice"), ROOMY);
+    const s0 = await st.insertAgentJob(job("plain"), ROOMY);
+    chk("S1 공용 시트 표시 — 넣으면 true · 보통 작업은 false · 없는 id 는 false",
+      (await st.agentJobSharedSeat(s1.row.id)) === true && (await row(s1.row.id)).shared_seat === true
+        && (await st.agentJobSharedSeat(s0.row.id)) === false && (await row(s0.row.id)).shared_seat === false && (await st.agentJobSharedSeat(2 ** 40)) === false);
+    chk("S1b 행 읽기(COLS)는 그 칸을 싣지 않는다 — 롤 창에서 «없는 칸» 으로 깨지지 않게", !("shared_seat" in s1.row) && !("shared_seat" in (await st.getAgentJob(s1.row.id))),
+      JSON.stringify(Object.keys(s1.row)));
+    await cleanup();
+    //  S2 실 SQL 자리 주기 — 시트 묶음에 든 주인의 구독 작업은 보낸 사람당 1 · 시트 전체 2 · 다른 계정 작업은 따로.
+    for (const who of ["a", "b", "c"]) await st.insertAgentJob(shared(who), ROOMY);
+    await st.insertAgentJob(job("d"), ROOMY);
+    const P2 = { max_running: 10, max_running_per_member: 1, max_running_per_service_seat: 2 };
+    const got = await st.claimAgentJobs(P2, mint, { sharedSeats: new Set([seat]) });
+    const reqs = got.map((g) => g.row.requester.slice(REQ.length)).sort();
+    chk("S2 실 SQL — 시트 작업은 둘만(사람 셋 중) · 다른 계정 작업은 선다", JSON.stringify(reqs) === JSON.stringify(["a", "b", "d"]), JSON.stringify(reqs));
+    const more = await st.claimAgentJobs(P2, mint, { sharedSeats: new Set([seat]) });
+    chk("S2b 경계 — 시트에 이미 2(상한)가 돌면 셋째는 기다린다", more.length === 0, JSON.stringify(more.map((g) => g.row.id)));
+    await cleanup();
+    for (const who of ["a", "b"]) await st.insertAgentJob(shared(who), ROOMY);
+    const plainClaim = await st.claimAgentJobs(P2, mint);
+    chk("S2c 시트 묶음을 안 주면 — 구독 주인 하나로 센다(종전 · 하나만)", plainClaim.length === 1, String(plainClaim.length));
+    await cleanup();
+    //  S3 칸이 아직 없을 때(매니지드 롤이 새 게이트웨이를 마이그레이션보다 먼저 띄우는 몇 분) — 표시 읽기는 false(던지지 않음),
+    //   보통 접수 · 자리 주기 · 행 읽기는 그대로 돈다, 공용 시트 접수만 «없는 칸» 으로 실패한다. 끝나면 칸을 되돌린다(같은 DDL).
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS shared_seat`);
+    try {
+      const p0 = await st.insertAgentJob(job("roll"), ROOMY);
+      const read = await st.agentJobSharedSeat(p0.row.id);
+      let sharedInsert = null;
+      try { await st.insertAgentJob(shared("x"), ROOMY); } catch (e) { sharedInsert = e; }
+      const claimed = await st.claimAgentJobs(WIDE, mint, { sharedSeats: new Set([seat]) });
+      const again = await st.getAgentJob(p0.row.id);
+      chk("S3 칸이 없을 때 — 표시 읽기 false · 보통 접수 · 자리 주기 · 행 읽기는 돈다 · 공용 시트 접수만 42703",
+        read === false && claimed.some((g) => g.row.id === p0.row.id) && again?.id === p0.row.id && sharedInsert?.code === "42703",
+        JSON.stringify({ read, claimed: claimed.map((g) => g.row.id), again: again?.id, code: sharedInsert?.code }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;
@@ -463,6 +509,17 @@ try {
     chk("J5 보존 일수(keep_days)를 고친다 — 기본 90 · 0(무기한)은 받고 3651 은 400",
       r4.policy.keep_days === 90 && r5.policy.keep_days === 0 && r5.workspace_setting.keep_days === 0 && tooLong?.status === 400,
       JSON.stringify({ before: r4.policy.keep_days, after: r5.workspace_setting, status: tooLong?.status }));
+    //  J6 #5081 — 공용 시트 칸이 생기기 전에 동시 1 로 적어 둔 워크스페이스. 다른 칸을 고쳐도 «공용 시트 기본 2 > 동시 1» 로 거절하지 않고,
+    //   읽을 때 동시 1 로 접는다. 공용 시트 칸을 직접 2 로 적으면 그때는 거절한다.
+    await set.handler({ reset: true }, admin, ctx);
+    await itemsPool.query(`UPDATE org_runtime_config SET agent_job_policy=$1::jsonb WHERE id=1`, [JSON.stringify({ max_running: 1, max_running_per_member: 1 })]);
+    let j6err = null, r6 = null;
+    try { r6 = await set.handler({ keep_days: 30 }, admin, ctx); } catch (e) { j6err = e; }
+    let j6seat = null;
+    try { await set.handler({ max_running_per_service_seat: 2 }, admin, ctx); } catch (e) { j6seat = e; }
+    chk("J6 옛 설정(동시 1)에서 다른 칸 고치기는 된다 · 공용 시트 상한은 읽을 때 1 · 직접 2 로 적으면 400",
+      j6err === null && r6?.workspace_setting.keep_days === 30 && r6?.policy.max_running_per_service_seat === 1 && j6seat?.status === 400,
+      JSON.stringify({ err: j6err?.message, setting: r6?.workspace_setting, seat: r6?.policy.max_running_per_service_seat, status: j6seat?.status }));
   }
 } catch (e) {
   bad("예외", String((e && e.stack) || e));

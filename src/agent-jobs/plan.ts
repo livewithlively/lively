@@ -71,11 +71,22 @@ export function jobSeatMember(job: { account_kind: string; account_member: strin
 export const HOMELESS_OS_USER = "box_lvly_job";
 
 /**
+ * (순수) 작업 AI 의 라이블리 신원(#5081) — 보통은 자리의 구성원(jobSeatMember)이고, 공용 시트로 도는 작업은 **보낸 사람**이다.
+ *  자리(홈 · Claude 로그인)는 시트 계정 것을 쓰지만, 앱 표에 남는 제안자와 보이는 범위는 물은 사람 것이어야 한다(상민 2026-10-28 · #1576
+ *  «제안자 = 질문한 사람» · «그 사람이 못 보는 표 · 지식은 작업에서도 못 본다»). 시트 계정 이름으로 굽으면 물은 사람이 시트 계정의 권한을 빌린다.
+ */
+export function jobIdentityMember(job: { account_kind: string; account_member: string | null; requester: string }, sharedSeat: boolean): string | null {
+  return sharedSeat ? job.requester : jobSeatMember(job);
+}
+
+/**
  * (순수) 작업 AI 의 앱 토큰 옵션 — 작업 상한만큼 살고(ttlSec), 홈 없는 작업(#4891)이면 주체를 앱 서버 급으로: 능력 API · /mcp 에서만 통하고
  *  무조건 통과 도구가 꺼진다(auth/http-auth · apps/principal). 그 AI 를 부린 것은 앱 서버 코드라 사람 이름으로 세션 · 파일 · 계정 길을 열지 않게.
+ *  #5081 공용 시트 작업도 앱 서버 급이다 — 물은 사람의 이름으로 굽지만 그 사람의 홈이 아니라 함께 쓰는 시트 홈에서 돈다. 그 자리에서 물은 사람의
+ *   이름으로 세션(그 사람의 홈이 붙는다) · 파일 · 계정 길을 열지 않게.
  */
-export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number): { ttlSec: number; appServerPrincipal?: true } {
-  return job.homeless === true ? { ttlSec, appServerPrincipal: true } : { ttlSec };
+export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number, sharedSeat = false): { ttlSec: number; appServerPrincipal?: true } {
+  return job.homeless === true || sharedSeat ? { ttlSec, appServerPrincipal: true } : { ttlSec };
 }
 
 /**
@@ -91,6 +102,37 @@ export function homelessJobRefusal(job: { homeless?: boolean; account_kind: stri
   return null;
 }
 
+/** #5081 공용 시트 작업을 아직 돌려도 되나의 사실 — live 가 설정 · 구성원 표에서 모은다(보낸 사람이 그 앱을 쓸 수 있나는 따로 잰다). */
+export interface SharedSeatJobFacts {
+  /** 시트 지정(관리자 승인 + 본인 동의)이 그대로인가. */
+  consented: boolean;
+  /** 시트 계정 — 이 워크스페이스의 활성 사람 구성원인가 · 기본 권한 밖의 권한이 있나(ai-runs/plan.seatElevated). */
+  seat: { active: boolean; elevated: boolean };
+  /** 보낸 사람이 이 워크스페이스의 활성 사람 구성원인가. */
+  requesterActive: boolean;
+}
+
+/**
+ * (순수) 공용 시트 작업을 아직 돌려도 되나(#5081) — 접수 때(ai-runs/service.submitRun)와 같은 자로 다시 잰다: 모양(구독 · 앱 작업 · 프로젝트 없음 ·
+ *  작업 폴더가 그 앱 폴더) · 시트 지정 · 시트 계정(활성 · 기본 권한뿐 — ai-runs/plan.seatShared) · 보낸 사람(활성). 어기면 사유, 맞으면 null.
+ *  배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다(live.assertJobAllowed).
+ */
+export function sharedSeatJobRefusal(
+  job: { account_kind: string; account_member: string | null; requester: string; app_id: string | null; project_id: number | null; cwd: string },
+  f: SharedSeatJobFacts,
+): string | null {
+  const seat = job.account_member ?? "?";
+  if (job.account_kind !== "subscription" || !job.account_member) return "공용 시트 작업은 구독 실행만 됩니다";
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "공용 시트 작업은 앱 작업이어야 합니다";
+  if (job.project_id != null) return "공용 시트 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "공용 시트 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  if (!f.consented) return `공용 시트(${seat}) 지정이 풀렸습니다`;
+  if (!f.seat.active) return `공용 시트 계정(${seat})이 활성 사람 구성원이 아닙니다`;
+  if (f.seat.elevated) return `공용 시트 계정(${seat})이 높은 권한(관리자 · 실행 · DB · 코드)을 가져 공용으로 쓰지 않습니다`;
+  if (!f.requesterActive) return `보낸 사람(${job.requester})이 이 워크스페이스의 활성 구성원이 아닙니다`;
+  return null;
+}
+
 /** (순수) 요청한 실행 시간(분) → 초. 없으면 기본, 넘으면 최대로 접는다(거절하지 않는다 — 앱이 상한을 몰라도 돈다). */
 export function timeoutSecOf(requestedMin: unknown, p: Pick<AgentJobPolicy, "default_timeout_min" | "max_timeout_min">): number {
   const n = typeof requestedMin === "number" && Number.isFinite(requestedMin) ? Math.floor(requestedMin) : NaN;
@@ -98,28 +140,42 @@ export function timeoutSecOf(requestedMin: unknown, p: Pick<AgentJobPolicy, "def
   return min * 60;
 }
 
-export interface ClaimCandidate { id: number; account_member: string | null }
+export interface ClaimCandidate { id: number; requester: string; account_kind: string; account_member: string | null }
+
+/**
+ * (순수) 자리 주기의 두 축(#5081) — 사람당 상한을 누구로 세나(who) · 공용 시트 상한을 어느 시트로 세나(seat, 공용 시트가 아니면 null).
+ *  보통은 자리의 구성원(jobSeatMember — 구독 주인 · API 키면 보낸 사람)으로 센다. 지금 공용 시트로 켜진 구독의 작업은 **보낸 사람**으로 세고
+ *  그 시트 전체를 따로 센다 — 시트 하나가 모두의 몫을 사람당 상한(기본 2) 하나로 나눠 쓰지 않게.
+ */
+export function claimAxes(j: ClaimCandidate, sharedSeats: ReadonlySet<string>): { who: string | null; seat: string | null } {
+  if (j.account_kind === "subscription" && j.account_member && sharedSeats.has(j.account_member)) return { who: j.requester || null, seat: j.account_member };
+  return { who: jobSeatMember({ account_kind: j.account_kind, account_member: j.account_member, requester: j.requester }), seat: null };
+}
 
 /**
  * (순수) 이번에 자리를 줄 대기 작업을 고른다 — 먼저 온 것부터, 워크스페이스 상한과 실행 계정(사람)당 상한을 지킨다.
  *  live = 지금 띄우는 중·도는 작업(starting·running). queued = 기다리는 작업(먼저 온 순서로 받는다).
  *  ⚠ 사람당 상한에 걸린 작업은 **건너뛰고** 다음 사람의 작업을 본다 — 한 사람이 대기열 앞을 다 차지해도 남의 작업이 선다.
+ *  #5081 공용 시트(sharedSeats — 지금 켜진 시트 계정들)의 작업은 보낸 사람당 상한 + 시트 전체 상한(max_running_per_service_seat)을 함께 지킨다(claimAxes).
  */
 export function planClaims(
-  live: readonly ClaimCandidate[], queued: readonly ClaimCandidate[], p: Pick<AgentJobPolicy, "max_running" | "max_running_per_member">,
+  live: readonly ClaimCandidate[], queued: readonly ClaimCandidate[],
+  p: Pick<AgentJobPolicy, "max_running" | "max_running_per_member" | "max_running_per_service_seat">, sharedSeats: ReadonlySet<string> = new Set(),
 ): number[] {
   let free = p.max_running - live.length;
   if (free <= 0) return [];
   const perMember = new Map<string, number>();
-  for (const j of live) if (j.account_member) perMember.set(j.account_member, (perMember.get(j.account_member) ?? 0) + 1);
+  const perSeat = new Map<string, number>();
+  const bump = (m: Map<string, number>, k: string | null): void => { if (k) m.set(k, (m.get(k) ?? 0) + 1); };
+  for (const j of live) { const a = claimAxes(j, sharedSeats); bump(perMember, a.who); bump(perSeat, a.seat); }
   const out: number[] = [];
   for (const j of queued) {
     if (free <= 0) break;
-    const who = j.account_member ?? "";
-    const n = perMember.get(who) ?? 0;
-    if (who && n >= p.max_running_per_member) continue;
+    const a = claimAxes(j, sharedSeats);
+    if (a.who && (perMember.get(a.who) ?? 0) >= p.max_running_per_member) continue;
+    if (a.seat && (perSeat.get(a.seat) ?? 0) >= p.max_running_per_service_seat) continue;
     out.push(j.id);
-    if (who) perMember.set(who, n + 1);
+    bump(perMember, a.who); bump(perSeat, a.seat);
     free--;
   }
   return out;

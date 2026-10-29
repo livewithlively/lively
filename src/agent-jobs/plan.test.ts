@@ -3,10 +3,11 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, HOMELESS_OS_USER, JOB_SESSION_ID_RE, TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX,
-  type RunnerReport, type SweepFacts,
+  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, sharedSeatJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE,
+  TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
+import { seatShared } from "../ai-runs/plan.js";
 import { DEFAULT_AGENT_JOB_POLICY as P } from "../org/policies/agent-job-policy.js";
 
 let pass = 0;
@@ -16,27 +17,104 @@ const t = (name: string, fn: () => void): void => {
   console.log(`ok  ${name}`);
 };
 
-const q = (id: number, who: string | null) => ({ id, account_member: who });
+//  자리의 구성원(who)으로 세는 보통 작업 — 구독이고 보낸 사람 = 구독 주인(#5081 전과 같은 셈).
+const q = (id: number, who: string | null) => ({ id, requester: who ?? "r", account_kind: "subscription", account_member: who });
 
 // ── 자리 주기 ────────────────────────────────────────────────────────────────
 t("C1 상한 2 · 도는 것 0 · 대기 A·A·B → 먼저 온 둘(A, A)", () => {
-  assert.deepEqual(planClaims([], [q(1, "a"), q(2, "a"), q(3, "b")], { max_running: 2, max_running_per_member: 2 }), [1, 2]);
+  assert.deepEqual(planClaims([], [q(1, "a"), q(2, "a"), q(3, "b")], { max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 20 }), [1, 2]);
 });
 t("C2 사람당 1 · 대기 A·A·B → A 하나 건너뛰고 B", () => {
-  assert.deepEqual(planClaims([], [q(1, "a"), q(2, "a"), q(3, "b")], { max_running: 2, max_running_per_member: 1 }), [1, 3]);
+  assert.deepEqual(planClaims([], [q(1, "a"), q(2, "a"), q(3, "b")], { max_running: 2, max_running_per_member: 1, max_running_per_service_seat: 20 }), [1, 3]);
 });
 t("C3 도는 것 = 상한 → 0건 · 넘은 경우도 0건", () => {
-  assert.deepEqual(planClaims([q(9, "x"), q(8, "y")], [q(1, "a")], { max_running: 2, max_running_per_member: 2 }), []);
-  assert.deepEqual(planClaims([q(9, "x"), q(8, "y"), q(7, "z")], [q(1, "a")], { max_running: 2, max_running_per_member: 2 }), []);
+  assert.deepEqual(planClaims([q(9, "x"), q(8, "y")], [q(1, "a")], { max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 20 }), []);
+  assert.deepEqual(planClaims([q(9, "x"), q(8, "y"), q(7, "z")], [q(1, "a")], { max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 20 }), []);
 });
 t("C4 도는 것 1(A) · 사람당 1 · 대기 A·B → B", () => {
-  assert.deepEqual(planClaims([q(9, "a")], [q(1, "a"), q(2, "b")], { max_running: 3, max_running_per_member: 1 }), [2]);
+  assert.deepEqual(planClaims([q(9, "a")], [q(1, "a"), q(2, "b")], { max_running: 3, max_running_per_member: 1, max_running_per_service_seat: 20 }), [2]);
 });
 t("C5 대기 0 → 0건", () => {
-  assert.deepEqual(planClaims([], [], { max_running: 2, max_running_per_member: 2 }), []);
+  assert.deepEqual(planClaims([], [], { max_running: 2, max_running_per_member: 2, max_running_per_service_seat: 20 }), []);
 });
 t("C6 실행 계정 없음(null) 은 사람당 상한과 무관 — 워크스페이스 상한만", () => {
-  assert.deepEqual(planClaims([q(9, null)], [q(1, null), q(2, null), q(3, null)], { max_running: 3, max_running_per_member: 1 }), [1, 2]);
+  assert.deepEqual(planClaims([q(9, null)], [q(1, null), q(2, null), q(3, null)], { max_running: 3, max_running_per_member: 1, max_running_per_service_seat: 20 }), [1, 2]);
+});
+
+// ── #5081 공용 시트 — 보낸 사람당 + 시트 전체(엣지 표 D1~D7 · E · G — 지식 app-service-seat-asbuilt-5081 §9) ──
+//  sub(id, 보낸 사람, 구독 주인) · key(id, 보낸 사람) — 시트 묶음(SEAT)에 든 주인의 구독 작업이 공용 시트 작업이다.
+const sub = (id: number, requester: string, owner: string) => ({ id, requester, account_kind: "subscription", account_member: owner });
+const key = (id: number, requester: string) => ({ id, requester, account_kind: "api_key", account_member: null });
+const SEAT = new Set(["seat"]);
+const pol = (o: Partial<{ max_running: number; max_running_per_member: number; max_running_per_service_seat: number }>) =>
+  ({ max_running: 10, max_running_per_member: 1, max_running_per_service_seat: 2, ...o });
+t("D1 공용 시트 · 보낸 사람 둘 · 사람당 1 · 시트 2 → 둘 다(시트 주인 하나로 세지 않는다)", () => {
+  assert.deepEqual(planClaims([], [sub(1, "alice", "seat"), sub(2, "bob", "seat")], pol({}), SEAT), [1, 2]);
+  //  같은 대기열을 시트 묶음 없이(공용 시트가 아니면) — 주인 하나로 세어 하나만.
+  assert.deepEqual(planClaims([], [sub(1, "alice", "seat"), sub(2, "bob", "seat")], pol({}), new Set()), [1]);
+});
+t("D2 공용 시트 · 사람 셋 · 시트 2 → 둘만 · 뒤의 다른 계정 작업은 선다", () => {
+  assert.deepEqual(planClaims([], [sub(1, "alice", "seat"), sub(2, "bob", "seat"), sub(3, "carol", "seat"), key(4, "dave")], pol({}), SEAT), [1, 2, 4]);
+});
+t("D3 공용 시트 · 같은 사람 둘 · 사람당 1 → 하나", () => {
+  assert.deepEqual(planClaims([], [sub(1, "alice", "seat"), sub(2, "alice", "seat"), sub(3, "bob", "seat")], pol({}), SEAT), [1, 3]);
+});
+t("D3b 공용 시트 작업과 같은 사람의 API 키 작업은 한 사람으로 센다(사람당 상한은 사람마다 하나)", () => {
+  assert.deepEqual(planClaims([], [sub(1, "alice", "seat"), key(2, "alice"), key(3, "bob")], pol({}), SEAT), [1, 3]);
+});
+t("D4 안 켜진 구독 — 초대받은 사람의 작업도 구독 주인으로 센다(종전)", () => {
+  assert.deepEqual(planClaims([], [sub(1, "bob", "alice"), sub(2, "carol", "alice")], pol({}), SEAT), [1]);
+});
+t("D5 API 키 작업 — 보낸 사람으로 센다(종전)", () => {
+  assert.deepEqual(planClaims([], [key(1, "alice"), key(2, "alice"), key(3, "bob")], pol({}), SEAT), [1, 3]);
+});
+t("D6 경계 — 시트에 이미 상한(2)만큼 돌면 그 시트 작업은 0 · 상한보다 하나 적으면 하나", () => {
+  assert.deepEqual(planClaims([sub(8, "x", "seat"), sub(9, "y", "seat")], [sub(1, "alice", "seat"), key(2, "bob")], pol({}), SEAT), [2]);
+  assert.deepEqual(planClaims([sub(9, "y", "seat")], [sub(1, "alice", "seat"), sub(2, "bob", "seat")], pol({}), SEAT), [1]);
+  //  도는 쪽의 사람당 셈도 보낸 사람이다 — y 가 이미 돌고 있으면 y 의 다음 시트 작업은 사람당 상한에 걸린다.
+  assert.deepEqual(planClaims([sub(9, "y", "seat")], [sub(1, "y", "seat"), sub(2, "z", "seat")], pol({}), SEAT), [2]);
+});
+t("D7 시트 묶음을 안 주면(기본) 종전 셈 — 구독 주인으로", () => {
+  assert.deepEqual(planClaims([], [sub(1, "alice", "seat"), sub(2, "bob", "seat")], pol({})), [1]);
+});
+t("E1 작업 AI 신원 — 공용 시트는 보낸 사람 · 구독은 주인 · API 키는 보낸 사람", () => {
+  assert.equal(jobIdentityMember({ account_kind: "subscription", account_member: "seat", requester: "alice" }, true), "alice");
+  assert.equal(jobIdentityMember({ account_kind: "subscription", account_member: "seat", requester: "alice" }, false), "seat");
+  assert.equal(jobIdentityMember({ account_kind: "api_key", account_member: null, requester: "alice" }, false), "alice");
+});
+t("E2 토큰 옵션 — 공용 시트 · 홈 없음은 앱 서버 급 · 둘 다 아니면 없음", () => {
+  assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900, true), { ttlSec: 900, appServerPrincipal: true });
+  assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900, false), { ttlSec: 900, appServerPrincipal: true });
+  assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900, false), { ttlSec: 900 });
+});
+t("G1 공용 시트 작업을 아직 돌려도 되나 — 모양(구독 · 앱 · 프로젝트 없음 · 그 앱 폴더) · 지정 · 시트(활성 · 기본 권한뿐) · 보낸 사람(활성)", () => {
+  type J = Parameters<typeof sharedSeatJobRefusal>[0];
+  const job: J = { account_kind: "subscription", account_member: "seat", requester: "alice", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  const f: SharedSeatJobFacts = { consented: true, seat: { active: true, elevated: false }, requesterActive: true };
+  assert.equal(sharedSeatJobRefusal(job, f), null);
+  const rows: Array<[Partial<J>, Partial<SharedSeatJobFacts>, RegExp]> = [
+    [{ account_kind: "api_key", account_member: null }, {}, /구독 실행만/],
+    [{ account_member: null }, {}, /구독 실행만/],
+    [{ app_id: null }, {}, /앱 작업이어야/],
+    [{ app_id: "Bad_Id" }, {}, /앱 작업이어야/],
+    [{ project_id: 3, cwd: "/work/shared/project/3" }, {}, /프로젝트 폴더/],
+    [{ cwd: "/work/apps/other" }, {}, /그 앱 폴더/],
+    [{ cwd: "/work/apps/crm/sub" }, {}, /그 앱 폴더/],
+    [{}, { consented: false }, /지정이 풀렸습니다/],
+    [{}, { seat: { active: false, elevated: false } }, /활성 사람 구성원이 아닙니다/],
+    [{}, { seat: { active: true, elevated: true } }, /높은 권한/],
+    [{}, { requesterActive: false }, /보낸 사람\(alice\)/],
+  ];
+  for (const [o, fo, re] of rows) assert.match(sharedSeatJobRefusal({ ...job, ...o }, { ...f, ...fo }) ?? "", re, JSON.stringify([o, fo]));
+  //  모양이 먼저다 — 사실을 몰라도(다 «아님») 모양 거절 문장이 나온다(사실 조회가 실패해도 모양이 틀린 작업은 같은 까닭으로 끝난다).
+  assert.match(sharedSeatJobRefusal({ ...job, project_id: 3 }, { consented: false, seat: { active: false, elevated: true }, requesterActive: false }) ?? "", /프로젝트 폴더/);
+});
+t("G2 두 판정은 한 뜻 — 모양이 맞는 작업에서 «재판정 통과» ⇔ «접수 때 공용 시트(ai-runs/plan.seatShared)» 이고 보낸 사람이 활성", () => {
+  const job = { account_kind: "subscription", account_member: "seat", requester: "alice", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  for (const consented of [true, false]) for (const active of [true, false]) for (const elevated of [true, false]) for (const requesterActive of [true, false]) {
+    const passed = sharedSeatJobRefusal(job, { consented, seat: { active, elevated }, requesterActive }) === null;
+    assert.equal(passed, seatShared({ consented, active, elevated }) && requesterActive, JSON.stringify({ consented, active, elevated, requesterActive }));
+  }
 });
 
 // ── 감시 ─────────────────────────────────────────────────────────────────────

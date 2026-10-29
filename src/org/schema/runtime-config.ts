@@ -246,7 +246,7 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS allow_member_ai_connectors BOOLEAN NOT NULL DEFAULT TRUE;
   `);
-  // ── org_runtime_config 확장(#4490 앱 v2-11): 작업 컨테이너 상한 — 워크스페이스 동시 · 실행 계정당 동시 · 대기열 · 대기 상한 · 실행 시간 ·
+  // ── org_runtime_config 확장(#4490 앱 v2-11): 작업 컨테이너 상한 — 워크스페이스 동시 · 실행 계정당 동시 · 공용 시트당 동시(#5081) · 대기열 · 대기 상한 · 실행 시간 ·
   //  판 무응답 · 시작 상한. 비면 '{}' = env 시드 → 코드 기본값(org/policies/agent-job-policy.ts — 상민 2026-10-16 동시 2 · 대기 20 · 30분 ·
   //  15/60분 · 90초). 관리자 도구 agent_job_limits_set 이 이 칸만 쓴다(앱 판 상한과 같은 꼴).
   await pool.query(`
@@ -254,7 +254,8 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   `);
   // ── org_runtime_config 확장(#4488 앱 v2-9): 앱 AI 실행 — 상한(app_ai_policy: 사람당 동시 · 앱당 빈도 · 워크스페이스 동시 · 단발 시간 ·
   //  출력 토큰 · 앱당 하루 토큰 — org/policies/ai-run-policy.ts) · 실행 계정(app_ai_account: 워크스페이스 기본 실행 계정 + 앱별·작업별 덮어쓰기 ·
-  //  기본 모델 — ai-runs/plan.ts AiAccountSettings). 비면 '{}'. 관리 도구 app_ai_limits_set · app_ai_account_set 이 이 두 칸만 쓴다.
+  //  기본 모델 · 공용 시트 지정 service_seats(#5081) — ai-runs/plan.ts AiAccountSettings). 비면 '{}'. 관리 도구 app_ai_limits_set · app_ai_account_set ·
+  //  app_ai_service_seat_set 이 이 두 칸만 쓴다(app_ai_account 는 읽고 고쳐 쓰기를 한 트랜잭션 · 행 잠금으로 — ai-runs/store.updateAiAccountRow).
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS app_ai_account JSONB NOT NULL DEFAULT '{}'::jsonb;

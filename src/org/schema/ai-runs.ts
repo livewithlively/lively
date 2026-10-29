@@ -39,6 +39,9 @@ export async function initAiRuns(pool: Pool): Promise<void> {
       ended_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
+  //  #5081 공용 시트로 돈 실행 — 시트 계정(구독 주인)의 «내 실행» 이 아니다(ai-runs/service.isOwnRun). 접수 때 정해지고 안 바뀐다.
+  //   ⚠ 롤 창 — 이 칸은 ai-runs/store 의 COLS 에 넣지 않는다(store.RUN_SHARED_SEAT_COL 머리말).
+  await pool.query(`ALTER TABLE org_app_ai_run ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
   //  그 앱의 기록(최근 것부터) · 내 기록 · 열린 실행(동시 상한 셈 · 정비) · 작업 행 → 실행 행 · 프록시 토큰 → 실행 행.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_app_idx ON org_app_ai_run(app_id, id DESC)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ai_run_requester_idx ON org_app_ai_run(requester, id DESC)`);

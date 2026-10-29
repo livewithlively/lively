@@ -162,7 +162,27 @@ await t("H4 띄우기 배선 — 판정은 OS 계정 · 확보 앞 · 확보 뒤
   assert.equal(body.split("prepareMemberHome(").length - 1, 1, "멤버 홈 준비는 한 자리");
   assert.equal(body.split("ensureMemberOsUser(").length - 1, 1, "OS 계정 준비는 한 자리");
   assert.match(body, /if \(user\) \{\n\s*const \{ ensureMemberOsUser \}/, "OS 계정 준비는 사람 자리만");
-  assert.match(body, /if \(user\) \{\n\s*const \{ prepareMemberHome \} = await import\(/, "멤버 홈 준비는 사람 자리만");
+  //  #5081 — 공용 시트 작업은 시트 홈에 키트 · git 자격을 심지 않는다(그 홈은 구성원 누구의 지시든 닿는 자리).
+  assert.match(body, /if \(user && !o\.sharedSeat\) \{\n\s*const \{ prepareMemberHome \} = await import\(/, "멤버 홈 준비는 사람 자리 · 공용 시트 작업이 아닐 때만");
+});
+
+await t("SW1 공용 시트 배선(#5081 · live.ts) — 띄울 때 표시를 넘기고 · 배차 직전 · 감시 재판정은 공용 시트면 그 판정으로 · 그 판정(service.assertSharedSeatJob)에 진짜 출처를 잇는다", () => {
+  //  판정 자체는 plan.test G1 · service.test SS3 가 잰다 — 여기서는 «부르는 자리» 와 «사실의 출처» 가 그대로인지만 본다
+  //   (배선이 빠지면 공용 시트 작업이 시트 계정의 동의로 돌거나 시트 홈에 키트가 심긴다).
+  const live = readFileSync(new URL("../../src/agent-jobs/live.ts", import.meta.url), "utf8");
+  assert.match(live, /launch: async \(job, boot\) => surface\.launch\(job, boot, \{ sharedSeat: await sharedSeatJob\(job\) \}\),/);
+  //  #5082 실행면 — 두 갈래 모두 표시를 넘긴다(매니지드 launch.ts · 박스 위 launch-host.ts)
+  const surf = readFileSync(new URL("../../src/agent-jobs/surface.ts", import.meta.url), "utf8");
+  assert.match(surf, /launch: \(job, boot, o\) => launch\.launchJobContainer\(job, boot, o\),/);
+  assert.match(surf, /launch: \(job, boot, o\) => kind === "host" \? host\.launchHostJob\(job, boot, undefined, o\)/);
+  assert.match(live, /if \(await sharedSeatJob\(job\)\) return assertSharedSeatJobAllowed\(job\);\n\s*if \(job\.app_id\) await assertAppUsableFor\(\{ userId: m\.id/,
+    "공용 시트 판정이 시트 계정의 앱 동의보다 먼저 · 대신");
+  const fn = live.slice(live.indexOf("async function assertSharedSeatJobAllowed("), live.indexOf("let cached: AgentJobDeps | null"));
+  assert.ok(fn.length > 0, "assertSharedSeatJobAllowed 자리");
+  assert.match(fn, /return assertSharedSeatJob\(job, \{/);
+  assert.match(fn, /seatConsented: async \(member\) => serviceSeatConsented\(parseAccountSettings\(await aiAccountRow\(\)\), member\),/, "지정은 설정 칸에서");
+  assert.match(fn, /memberFacts: memberFactsOf,/, "사실은 구성원 표에서(ai-runs/live.memberFactsOf)");
+  assert.match(fn, /await assertAppUsableFor\(\{ userId: member, scopes:/, "앱 동의는 판정이 넘긴 사람(보낸 사람)의 것으로");
 });
 
 console.log(`# ${pass} pass`);

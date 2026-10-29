@@ -7,6 +7,7 @@
 //   ② 작업 폴더 — 행의 작업 폴더는 컨테이너 경로(/work/apps/<앱> · /work/shared/project/<n>)다. 그 사람이 보는 박스 위 자리로 옮긴다
 //      (hostJobDir → profiles.resolveRootPath — 사람 세션 · 탐색기와 같은 자). 판이 받는 작업 폴더(paneView)도 같은 자로 다시 구한다.
 //   ③ 홈 준비 — 격리 판만 prepareMemberHome(사람 세션의 비컨테이너 격리 분기와 같은 자리 · 키트 · safe.directory · git 자격).
+//      #5081 공용 시트 작업은 건너뛴다 — 그 홈은 구성원 누구의 지시든 닿는 자리라 키트(라이블리 토큰) · git 자격을 새로 심지 않는다(launch.ts 와 같다).
 //   ④ 판 — `tmux new-session -d -s job-…` 에 판 머리(PANE_PRELUDE) + 부트. 격리면 sudo box-spawn 으로 내려가고, 비격리면 tmux -c 와 그 사람의
 //      Claude 설정 폴더(CLAUDE_CONFIG_DIR). 사람 세션 목록 · 복원은 `box-` 만 보므로 이 판은 안 뜬다(plan.jobSessionId 머리말).
 //   ⑤ 메모리 상한 — 작업 정책의 memory_max_mb(기본 3072)를 격리 판의 cgroup MemoryMax 로 건다(box-cgspawn — 사람 세션과 래퍼는 같고 값의
@@ -138,7 +139,9 @@ let warnedGatewayAccount = false;
  * 박스 위 판을 띄운다 — OS 계정 → 메모리 상한 → 작업 폴더 → 홈 준비 → 비밀 파일 → 판. 실패는 JobLaunchError(단계 실패는 일시 — launch.stepFailure).
  *  다시 해도 안 될 것(세션 id 없음 · 홈 없는 작업 · 실행 계정 없음 · 작업 폴더 꼴 밖 · 상한을 걸 수 없음)은 작업 폴더 · 비밀 파일 앞에서 끝낸다.
  */
-export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?: HostLaunchDeps): Promise<{ container: string }> {
+export async function launchHostJob(
+  job: AgentJobRow, bootSecret: string, deps?: HostLaunchDeps, o: { sharedSeat?: boolean } = {},
+): Promise<{ container: string }> {
   const sid = job.session_id;
   if (!sid || !JOB_SESSION_ID_RE.test(sid)) throw new JobLaunchError("세션 id 가 없는 작업입니다");
   if (job.homeless === true) throw new JobLaunchError("이 박스의 작업 실행면은 사람 홈 없는 작업을 띄우지 않습니다(앱 서버가 보낸 API 키 에이전트 작업)");
@@ -171,7 +174,7 @@ export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?:
     hostCwd = await d.resolveDir(user, dir, osUser);
     await d.mkdir(osUser, hostCwd);
   } catch (e) { throw stepFailure("workdir", e); }
-  if (osUser) { try { await d.prepareHome(user, osUser); } catch (e) { throw stepFailure("home", e); } }
+  if (osUser && !o.sharedSeat) { try { await d.prepareHome(user, osUser); } catch (e) { throw stepFailure("home", e); } }
   const profileDir = osUser ? null : await d.profileDir(user).catch((e) => { throw stepFailure("home", e); });
   let secretFile: string;
   try { secretFile = await d.writeSecret(osUser, bootSecret); } catch (e) { throw stepFailure("pane", redactSecret(String((e as Error)?.message ?? e), bootSecret)); }
@@ -185,7 +188,7 @@ export async function launchHostJob(job: AgentJobRow, bootSecret: string, deps?:
     await d.removeSecret(osUser, secretFile).catch(() => undefined);
     throw stepFailure("pane", redactSecret((e as Error)?.message ?? String(e), bootSecret).slice(0, 400));
   }
-  logger.info({ job: job.id, session: sid, osUser: osUser ?? "(게이트웨이 계정)", cwd: hostCwd, memoryMaxMb: cg?.maxMb ?? 0 }, "[agent-job] 박스 위 판을 띄웠다");
+  logger.info({ job: job.id, session: sid, osUser: osUser ?? "(게이트웨이 계정)", cwd: hostCwd, memoryMaxMb: cg?.maxMb ?? 0, sharedSeat: o.sharedSeat === true }, "[agent-job] 박스 위 판을 띄웠다");
   return { container: sid };
 }
 

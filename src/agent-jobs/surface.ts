@@ -44,6 +44,12 @@ export function jobSurfaceKind(t: SurfaceTopology): JobSurfaceKind {
  */
 export interface PaneView { cwd: string; gateway: string; workspace: string | null }
 
+/**
+ * 띄울 때 실행면에 넘기는 것(#5081). 필수다 — 빠뜨린 자리가 공용 시트 작업의 시트 홈에 키트 · git 자격을 심지 않게.
+ *  sharedSeat = 공용 시트로 도는 작업(그 홈은 구성원 누구의 지시든 닿는 자리라 사람 세션용 준비를 하지 않는다 — launch.ts · launch-host.ts).
+ */
+export interface JobLaunchOpts { sharedSeat: boolean }
+
 export interface JobSurface {
   readonly kind: JobSurfaceKind;
   /** 이 배포에서 지금 띄울 수 있나 — 아니면 접수가 501 이고 대기 작업은 배차되지 않는다. */
@@ -51,7 +57,7 @@ export interface JobSurface {
   /** 못 띄울 때 접수가 돌려줄 문장(501). */
   unavailableMessage(): string;
   /** 띄운다. 일시 실패(확보 단계)는 transient 인 JobLaunchError 로 던진다(launch.stepFailure). */
-  launch(job: AgentJobRow, bootSecret: string): Promise<{ container: string }>;
+  launch(job: AgentJobRow, bootSecret: string, o: JobLaunchOpts): Promise<{ container: string }>;
   /** 걷는다 — 이미 없다는 확답이면 조용히, 그 밖은 던진다(부르는 쪽이 다음 감시에 다시 걷는다). */
   kill(sessionId: string): Promise<void>;
   /** 판의 첫 말(boot)에 줄 자리 — 띄울 때와 같은 자로 다시 구한다. */
@@ -85,7 +91,7 @@ export async function jobSurface(): Promise<JobSurface> {
       kind,
       available: () => launch.jobContainersAvailable(),
       unavailableMessage: () => unavailable,
-      launch: (job, boot) => launch.launchJobContainer(job, boot),
+      launch: (job, boot, o) => launch.launchJobContainer(job, boot, o),
       kill: (sid) => launch.killJobContainer(sid),
       paneView: async (job) => ({ cwd: job.cwd, gateway: BROKER_GATEWAY, workspace: null }),
     };
@@ -96,7 +102,7 @@ export async function jobSurface(): Promise<JobSurface> {
     kind,
     available: async () => kind === "host",
     unavailableMessage: () => unavailable,
-    launch: (job, boot) => kind === "host" ? host.launchHostJob(job, boot)
+    launch: (job, boot, o) => kind === "host" ? host.launchHostJob(job, boot, undefined, o)
       : Promise.reject(new launch.JobLaunchError(unavailable)),
     //  꺼진 박스도 걷기는 박스 위 tmux 로 한다 — 스위치를 끈 뒤에 남은 판이 있을 수 있다(없으면 «이미 없다» 확답이라 조용하다).
     kill: (sid) => host.killHostJob(sid),

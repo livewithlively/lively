@@ -7,6 +7,7 @@ import { api, busy, cardHead, el, errorNote, memberCombo, secretInput, secretRow
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { serviceSeatAdminCard } from './lib/ai-service-seat.js';   // #5081 앱 AI 공용 시트
 
 // git 자격 관리 오버레이(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. scope='me'(본인 자가등록) | 'gateway'(조직 머신계정·admin).
 //  SSH 는 박스가 키페어를 만들고 **공개키만** 보여준다(사용자가 GitHub 에 등록 — 개인키는 박스 밖으로 안 나감). HTTPS 는 토큰 저장.
@@ -225,6 +226,8 @@ async function credentialsEditor(detail) {
     catalogStatusCard(catalog.catalog || [], mcpServers.servers || []),
     credVaultCard('org', '통합 자격', '개인 로그인이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인입니다. 쓰기·외부 발신·민감정보 접근에는 쓰이지 않습니다 — 이 작업들에는 개인 로그인이 필요합니다.', (org.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)),
     awsRoleCard(awsRoles.credentials || [], () => credentialsEditor(detail)),
+    //  #5081 앱 AI 공용 시트 — 워크스페이스 Anthropic API 키(통합 자격)와 같은 «앱 AI 실행 계정» 자리라 그 옆에 둔다.
+    serviceSeatAdminCard(),
   ];
   detail.replaceChildren(...cards.filter(Boolean));   // encReady 면 위 항목이 null → 'null' 텍스트 렌더 방지(#req)
 }

@@ -30,15 +30,26 @@ export interface ReclaimDeps {
   stopWorkers(memberId: string): Promise<number>;
   /** #4684 — 그 사람이 붙여 둔 세션들의 앱 폴더를 다시 맞춘다(동의가 사라졌으니 빠진다). 없으면 건너뛴다. 기다리지 않는다. */
   resyncAppFolders?(memberId: string): void;
+  /**
+   * #5081 — 그 계정의 앱 AI 공용 시트 지정(관리자 승인 + 본인 동의)을 지운다. 앱 동의와 같은 까닭 — 남겨 두면 다시 활성화되거나 같은 id 로
+   *  다시 만들어질 때 두 동의가 되살아난다. 지운 줄이 있으면 true. 없으면 건너뛴다.
+   */
+  dropServiceSeat?(memberId: string): Promise<boolean>;
 }
 
-export interface ReclaimResult { grants: number; workers: number; sessions: string[]; failed: string[]; apps_transferred?: string[] }
+export interface ReclaimResult { grants: number; workers: number; sessions: string[]; failed: string[]; apps_transferred?: string[]; service_seat_dropped?: true }
 
 /** 순수 오케스트레이션 — 한 세션의 회수 실패가 나머지를 막지 않는다(failed 에 모아 돌려준다). */
 export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimDeps): Promise<ReclaimResult> {
   const grants = await deps.revokeGrants(memberId);
   const workers = await deps.stopWorkers(memberId);
   deps.resyncAppFolders?.(memberId);
+  //  #5081 — 공용 시트 지정 지우기는 회수와 따로 실패한다(로그만) — 세션 회수가 막히지 않게. 못 지운 줄은 관리자가 지운다(app_ai_service_seat_set off).
+  let seatDropped = false;
+  if (deps.dropServiceSeat) {
+    try { seatDropped = await deps.dropServiceSeat(memberId); }
+    catch (err) { logger.warn({ err, member: memberId }, "member deactivation: service seat drop failed"); }
+  }
   //  #4667 — 책임자 이관은 회수와 따로 실패한다(로그만) — 세션 회수가 이관 실패에 막히지 않게.
   let appsTransferred: string[] | undefined;
   if (deps.transferApps) {
@@ -65,7 +76,7 @@ export async function reclaimMemberAppFootprint(memberId: string, deps: ReclaimD
       logger.warn({ err, member: memberId, session: s.id, node: s.node_id ?? null }, "member deactivation: app session reclaim failed");
     }
   }
-  return { grants, workers, sessions, failed, ...(appsTransferred ? { apps_transferred: appsTransferred } : {}) };
+  return { grants, workers, sessions, failed, ...(appsTransferred ? { apps_transferred: appsTransferred } : {}), ...(seatDropped ? { service_seat_dropped: true as const } : {}) };
 }
 
 export function defaultReclaimDeps(): ReclaimDeps {
@@ -90,6 +101,7 @@ export function defaultReclaimDeps(): ReclaimDeps {
     },
     transferApps: transferOwnedAppsToAdmins,
     notifyAdmins: notifyAdminsOfTransfer,
+    dropServiceSeat: async (memberId) => (await import("../ai-runs/live.js")).dropServiceSeatOf(memberId),
   };
 }
 
@@ -117,7 +129,7 @@ export async function notifyAdminsOfTransfer(memberId: string, apps: Array<{ id:
 export function armMemberDeactivationHook(deps: ReclaimDeps = defaultReclaimDeps()): void {
   onMemberDeactivated(async (memberId, reason, actor) => {
     const r = await reclaimMemberAppFootprint(memberId, deps);
-    if (r.grants || r.workers || r.sessions.length || r.failed.length) {
+    if (r.grants || r.workers || r.sessions.length || r.failed.length || r.service_seat_dropped) {
       logger.info({ member: memberId, reason, actor, ...r }, "member deactivated — app grants revoked, app sessions reclaimed");
     }
   });

@@ -9,6 +9,9 @@
 //   구독 실행은 그 구성원 본인이 앱 화면에서 보낸 것만(plan.subscriptionRefusal). API 키 에이전트 작업은 사람이 보내면 그 사람의 자리(홈)에서,
 //   앱 서버가 보내면 «홈 없는 작업 컨테이너»(#4891 — 전용 계정 · 빈 홈 · 앱 폴더만)에서 돈다 — 앱 서버 코드가 사람의 홈(자격 · 토큰)을 쓰는
 //   작업을 띄우지 못하게(agent-jobs/launch.ts 머리말).
+//  공용 시트(#5081 · 상민 2026-10-28): 관리자가 지정하고 그 계정 본인이 동의한 구독은 워크스페이스 구성원 누구의 요청이든 받는다 — 앱 서버가 사람
+//   신원을 실어 보낸 요청도. 그 실행은 시트 계정의 홈(Claude 로그인)에서 돌고(홈 없는 자리가 아니다), 작업 AI 의 라이블리 신원은 **물은 사람**이다
+//   (제안자 = 물은 사람 · 그 사람이 못 보는 것은 작업도 못 본다 — agent-jobs/live.mintMcpToken). 시트 홈은 구성원 모두가 함께 쓰므로 앱 폴더에서만 돈다.
 //  관리자는 남의 실행의 상태·오류만 본다(지시·답은 보낸 사람 것 — 작업 컨테이너와 같은 규칙).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
@@ -20,8 +23,8 @@ import { RUNNER_GATEWAY_URL } from "../agent-jobs/runner.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import {
   DEFAULT_MODEL, JOB_NAME_RE, LABEL_MAX, MODEL_RE, PROMPT_MAX, SYSTEM_MAX, executorFor, isEndedRun, judgeOutput, overDailyBudget,
-  resolveAccount, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction, subscriptionRefusal, waitSecOf,
-  type AiAccount, type AiAccountSettings, type RunKind, type SessionTie,
+  resolveAccount, retryInstruction, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction, seatShared, serviceSeatConsented, subscriptionRefusal, waitSecOf,
+  type AiAccount, type AiAccountSettings, type RunKind, type SeatTerms, type SessionTie,
 } from "./plan.js";
 import type { SingleShotInput, SingleShotOutput, Usage } from "./anthropic.js";
 import type { AiRunRow, AiRunSummaryRow, NewAiRun } from "./store.js";
@@ -36,23 +39,28 @@ export interface SubmitJobInput {
    *  필수다 — 접수하는 자리(첫 접수 · 형식 재시도)가 하나라도 빠뜨리면 앱 서버의 에이전트 작업이 사람 홈에서 돈다(격리 리뷰).
    */
   homeless: boolean;
+  /**
+   * #5081 공용 시트로 도는 실행 — 시트 계정의 홈(로그인)에서 돌되 작업 AI 의 라이블리 신원은 보낸 사람(requester)이다. 앱 폴더에서만(projectId 는 null).
+   *  필수다 — 접수하는 자리(첫 접수 · 형식 재시도)가 하나라도 빠뜨리면 물은 사람의 작업이 시트 계정의 이름 · 권한으로 돈다.
+   */
+  sharedSeat: boolean;
 }
 
 /**
- * (순수) AI 실행의 작업 접수 → 작업 컨테이너 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다).
- *  작업 폴더 · 이어받을 대화 · 시간 상한은 부르는 쪽(live.submitJob)이 정한다.
+ * (순수) AI 실행의 작업 접수 → 작업 컨테이너 행(#4891) — 홈 없는 표시 · 공용 시트 표시(#5081)를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이
+ *  사람 홈에서 돌거나, 물은 사람의 작업이 시트 계정의 이름으로 돈다). 작업 폴더 · 이어받을 대화 · 시간 상한은 부르는 쪽(live.submitJob)이 정한다.
  */
 export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConversation: string | null; timeoutSec: number }): NewAgentJob {
   return {
     requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
     harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
-    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat,
   };
 }
 
 export interface AiRunDeps {
   store: Pick<Store, "insertAiRun" | "getAiRun" | "getAiRunByToken" | "getAiRunByJob" | "setAiRunJob" | "setAiRunProxyToken" | "markAiRunRunning" | "retryAiRun"
-    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp">;
+    | "finishAiRun" | "openJobRuns" | "staleProxyRuns" | "openRunCountOf" | "listAiRuns" | "appConversations" | "insertLlmCall" | "tokensUsedTodayByApp" | "aiRunSharedSeat">;
   policy(): Promise<AiRunPolicy>;
   accountSettings(): Promise<AiAccountSettings>;
   /** 워크스페이스 Anthropic API 키(org_credential anthropic_api_key) — 없으면 null. 값은 LLM 호출 헤더에만 쓴다. */
@@ -85,6 +93,11 @@ export interface AiRunDeps {
   isAdmin(user: LivelyUser): boolean;
   /** 이 토큰이 작업 컨테이너의 작업 토큰인가(agent-jobs store.isAgentJobToken) — 작업이 작업을 낳지 않게(#4490 규칙과 같다). */
   isJobToken(tokenHashPrefix: string): Promise<boolean>;
+  /**
+   * #5081 구성원의 사실 — 이 워크스페이스의 활성 사람 구성원인가(구성원 표 state · kind + 워크스페이스 소속) · 기본 권한 밖의 권한이 있나(plan.seatElevated).
+   *  없는 사람(앱 서버 id 포함)은 { active: false, elevated: false }. 공용 시트 판정(시트 계정 · 보낸 사람)이 쓴다.
+   */
+  memberFacts(member: string): Promise<{ active: boolean; elevated: boolean }>;
 }
 
 export const ACCOUNT_UNAVAILABLE = "account_unavailable";
@@ -161,6 +174,17 @@ async function sessionTieOf(ctx: { session?: string }, who: { member: string; ki
 }
 
 /**
+ * 공용 시트 판정의 입력(plan.SeatTerms) — 구독 실행일 때만, 그 계정이 두 동의를 다 받았을 때만 구성원 표를 읽는다(지정이 없으면 null → 종전 판정).
+ *  보낸 사람의 사실은 보낸 사람이 시트 계정 자신이면 다시 읽지 않는다. 구성원 표를 못 읽으면 던진다(공용으로 열지 않는다 — 부르는 쪽이 500).
+ */
+export async function seatTermsOf(settings: AiAccountSettings, account: AiAccount | null, who: { member: string }, d: Pick<AiRunDeps, "memberFacts">): Promise<SeatTerms | null> {
+  if (!account || account.kind !== "subscription" || !serviceSeatConsented(settings, account.member)) return null;
+  const seat = await d.memberFacts(account.member);
+  const requester = who.member === account.member ? seat : await d.memberFacts(who.member);
+  return { facts: { consented: true, active: seat.active, elevated: seat.elevated }, requesterActive: requester.active };
+}
+
+/**
  * 실행을 받는다 — 순서: 신원 → 앱(동의) → 입력(400) → 작업 이름(400) → 실행 계정(409 account_unavailable · 403 구독 거절)
  *  → 자리(앱 서버 에이전트 작업 + project_id 400 — 작업 컨테이너가 없는 배포면 띄울 때 501) → 상한(429) → 행 → 띄움.
  *  `wait` 초를 주면 끝날 때까지(상한 WAIT_MAX_SEC) 기다렸다 답한다 — 단발은 보통 몇 초라 앱이 한 번에 받는다.
@@ -214,15 +238,21 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       { body: { code: ACCOUNT_UNAVAILABLE } });
   }
   const account = picked.account;
-  const refusal = subscriptionRefusal(account, who, await sessionTieOf(ctx, who, account, d));
+  //  #5081 공용 시트 — 지정(두 동의)이 있으면 시트 계정과 보낸 사람의 사실을 모은다. 켜져 있으면(plan.seatShared) 본인 · 초대 조건 대신 «활성 구성원» 을 본다.
+  const seat = await seatTermsOf(settings, account, who, d);
+  const refusal = subscriptionRefusal(account, who, await sessionTieOf(ctx, who, account, d), seat);
   if (refusal) throw new HttpError(403, refusal, { body: { code: ACCOUNT_UNAVAILABLE } });
   if (account.kind === "api_key" && !key) throw new HttpError(409, "이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   const executor = executorFor(kind, account);
+  const sharedSeat = account.kind === "subscription" && !!seat && seatShared(seat.facts);
   //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
   //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 위에서 이미 거절됐다(앱 서버는 사람이 아니다) — 한 겹 더 본다.
-  const homeless = executor === "job" && who.kind === "app_server";
+  //   #5081 예외 — 공용 시트는 앱 서버의 사람 대리 요청도 시트 계정의 홈(Claude 로그인)에서 돈다(홈 없는 자리엔 구독 로그인이 없다 · 상민 2026-10-28).
+  const homeless = executor === "job" && who.kind === "app_server" && !sharedSeat;
   if (homeless && account.kind !== "api_key") throw new HttpError(403, "앱 서버가 보낸 에이전트 작업은 워크스페이스 API 키로만 돕니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   if (homeless && projectId != null) throw new HttpError(400, "앱 서버가 보낸 에이전트 작업은 앱 폴더에서만 돕니다 — project_id 를 빼세요");
+  //  #5081 — 공용 시트의 홈은 구성원 모두가 함께 쓴다(대화 기록 · 홈의 파일이 다음 작업에 남는다). 프로젝트 폴더(사람 경계)를 그 자리에 붙이지 않는다.
+  if (sharedSeat && projectId != null) throw new HttpError(400, "공용 시트로 도는 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요(시트 계정의 홈은 구성원 모두가 함께 씁니다)");
 
   // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
   const p = await d.policy();
@@ -243,9 +273,14 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
     appId, requester: who.member, requesterKind: who.kind, source: ctx.source ?? null, jobName, kind,
     accountKind: account.kind, accountMember: account.kind === "subscription" ? account.member : null, executor,
     model: model ?? (executor === "proxy" ? settings.default_model ?? DEFAULT_MODEL : null), label, prompt, systemPrompt: system, schema,
-    status: executor === "proxy" ? "running" : "queued",
+    status: executor === "proxy" ? "running" : "queued", sharedSeat,
   };
-  const row = await d.store.insertAiRun(n);
+  const row = await d.store.insertAiRun(n).catch((e) => {
+    //  #5081 롤 창 — 새 게이트웨이가 공용 DB 마이그레이션보다 먼저 받는 몇 분 동안 공용 시트 실행은 «없는 칸»(42703)으로 실패한다
+    //   (store.RUN_SHARED_SEAT_COL 머리말). 막힌 게 아니라 아직 준비 중이니 다시 보내라고 말한다.
+    if (sharedSeat && (e as { code?: string })?.code === "42703") throw new HttpError(503, "공용 시트 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요");
+    throw e;
+  });
   logger.info({ run: row.id, app: appId, requester: who.member, kind, account: account.kind, executor }, "[ai-run] 접수");
 
   if (executor === "proxy") {
@@ -255,7 +290,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       const job = await d.submitJob({
         requester: who.member, accountKind: account.kind, accountMember: n.accountMember, appId, projectId, model, label: label ?? `AI 실행 #${row.id}`,
         prompt: jobPrompt(row, input.files), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single", resumeJobId: null,
-        homeless,
+        homeless, sharedSeat,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
@@ -413,7 +448,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         model: job.model, label: `${run.label ?? `AI 실행 #${run.id}`} (형식 다시)`, prompt: retryInstruction(judged.errors, run.schema),
         timeoutMin: Math.max(1, Math.round(job.timeout_sec / 60)), bare: run.kind === "single", resumeJobId: job.id,
         //  #4891 — 재시도는 원래 작업의 자리를 그대로 탄다(홈 없는 작업의 재시도가 사람 홈에서 돌지 않게 — 격리 리뷰).
-        homeless: job.homeless === true,
+        //  #5081 — 공용 시트 표시도 이 실행 것을 그대로(지금 설정으로 다시 고르지 않는다 — 그 사이 지정을 거뒀으면 재시도는 띄우기 직전에 멈춘다).
+        homeless: job.homeless === true, sharedSeat: await d.store.aiRunSharedSeat(run.id),
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {
@@ -472,23 +508,38 @@ export async function bootEnvForJob(
 }
 
 // ── 조회 · 취소 · 대상 ──
-/** 내 실행인가 — 보낸 사람, 또는 (구독 실행이면) 그 구독의 주인(초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 실행 — 격리 리뷰 non-blocking 3). */
-export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser): boolean {
+/**
+ * 내 실행인가 — 보낸 사람, 또는 (구독 실행이면) 그 구독의 주인(초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 실행 — 격리 리뷰 non-blocking 3).
+ *  #5081 공용 시트로 돈 실행(sharedSeat — 실행 행의 shared_seat 표시)은 구독 주인의 것이 아니다 — 시트 계정은 구성원 누구의 지시든 받는 자리일 뿐이고
+ *   지시 · 답은 물은 사람 것이다(시트 계정으로 로그인한 사람이 남의 질문 · 답을 읽거나 끊지 않게). 지정을 거둔 뒤에도 그 실행은 그대로 남의 것이다.
+ *   sharedSeat 는 필수다 — 빠뜨린 자리가 기본값(«공용 시트 아님»)으로 남의 실행을 열지 않게.
+ */
+export function isOwnRun(r: Pick<AiRunRow, "requester" | "account_kind" | "account_member">, user: LivelyUser, sharedSeat: boolean): boolean {
   const me = memberOf(user);
-  return r.requester === me || (r.account_kind === "subscription" && r.account_member === me);
+  return r.requester === me || (!sharedSeat && r.account_kind === "subscription" && r.account_member === me);
 }
-export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps): boolean {
+export function canSeeRun(r: AiRunRow, user: LivelyUser, d: AiRunDeps, sharedSeat: boolean): boolean {
   if (d.isAdmin(user) && !user.appId) return true;
-  if (!isOwnRun(r, user)) return false;
+  if (!isOwnRun(r, user, sharedSeat)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;
+}
+/**
+ * 이 실행이 공용 시트로 돌았나(#5081 — 실행 행의 표시 · store.aiRunSharedSeat) — 구독 주인 가지만이 판정을 가를 때만 읽는다(그 밖엔 답이 같다).
+ *  작업 행을 보지 않는다 — 작업 행이 없거나(접수 실패) 지워져도(보존 정리) 실행 행의 표시는 남는다.
+ */
+async function sharedSeatRunFor(r: Pick<AiRunRow, "id" | "requester" | "account_kind" | "account_member">, user: LivelyUser, d: Pick<AiRunDeps, "store">): Promise<boolean> {
+  const me = memberOf(user);
+  if (r.requester === me || r.account_kind !== "subscription" || r.account_member !== me) return false;
+  return d.store.aiRunSharedSeat(r.id);
 }
 
 export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   let row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
-  if (!row || !canSeeRun(row, user, d)) throw new HttpError(404, "없는 실행입니다");
+  const shared = row ? await sharedSeatRunFor(row, user, d) : false;
+  if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: isOwnRun(row, user), withPrompt: true });
+  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
@@ -497,15 +548,16 @@ export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit
   const admin = d.isAdmin(user) && !user.appId;
   const appId = user.appId ? user.appId : (typeof f.app_id === "string" && f.app_id ? f.app_id : null);
   const me = memberOf(user);
-  //  requester 필터는 «내 실행»(보낸 것 + 내 구독으로 도는 것)이다 — store.listAiRuns 의 SQL 조건과 isOwnRun 이 한 뜻.
+  //  requester 필터는 «내 실행»(보낸 것 + 공용 시트가 아닌 내 구독으로 도는 것)이다 — store.listAiRuns 의 SQL 조건과 isOwnRun 이 한 뜻.
   const rows = await d.store.listAiRuns({ appId, requester: admin ? null : me, status, limit });
-  return { runs: rows.map((r) => publicRunSummary(r, { own: isOwnRun(r, user) })), limit };
+  return { runs: rows.map((r) => publicRunSummary(r, { own: isOwnRun(r, user, r.shared_seat === true) })), limit };
 }
 
 export async function cancelRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
-  if (!row || !canSeeRun(row, user, d)) throw new HttpError(404, "없는 실행입니다");
-  const own = isOwnRun(row, user);
+  const shared = row ? await sharedSeatRunFor(row, user, d) : false;
+  if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
+  const own = isOwnRun(row, user, shared);
   if (isEndedRun(row.status)) return publicRun(row, { own });
   if (row.executor === "job" && row.job_id != null) {
     await d.cancelJob(row.job_id, user);
@@ -537,9 +589,13 @@ export async function targetsFor(user: LivelyUser, input: { app_id?: unknown }, 
   const describe = async (a: AiAccount | null, from: string | null): Promise<Record<string, unknown>> => {
     if (!a) return { kind: null, available: false, reason: "실행 계정이 없습니다 — 워크스페이스 API 키 또는 구독을 설정하세요", from };
     if (a.kind === "api_key") return { kind: "api_key", available: !!key, reason: key ? null : "워크스페이스 API 키가 등록되지 않았습니다", from };
-    const refusal = subscriptionRefusal(a, who, await tieOnce(a));
+    //  #5081 공용 시트 — 접수와 같은 판정. 구성원 표를 못 읽으면 «쓸 수 없음» 으로(대상 보기는 던지지 않는다).
+    const seat = await seatTermsOf(settings, a, who, d).catch(() => undefined);
+    if (seat === undefined) return { kind: "subscription", member: a.member, shared_seat: false, available: false, logged_in: null, reason: "실행 계정을 확인하지 못했습니다 — 잠시 뒤 다시 보세요", from };
+    const shared = !!seat && seatShared(seat.facts);
+    const refusal = subscriptionRefusal(a, who, await tieOnce(a), seat);
     const loggedIn = refusal ? null : await d.subscriptionLoggedIn(a.member).catch(() => null);
-    return { kind: "subscription", member: a.member, available: !refusal && loggedIn !== false, logged_in: loggedIn, reason: refusal ?? (loggedIn === false ? "AI 연결 필요 — 그 구성원이 Claude 에 로그인해야 합니다" : null), from };
+    return { kind: "subscription", member: a.member, shared_seat: shared, available: !refusal && loggedIn !== false, logged_in: loggedIn, reason: refusal ?? (loggedIn === false ? (shared ? "AI 연결 필요 — 공용 시트 계정이 Claude 에 로그인해야 합니다" : "AI 연결 필요 — 그 구성원이 Claude 에 로그인해야 합니다") : null), from };
   };
   const def = resolveAccount(settings, appId, null, !!key);
   const jobs = await Promise.all(declaredAiJobs(app).map(async (j) => {

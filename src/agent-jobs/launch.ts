@@ -7,6 +7,8 @@
 //  걷기는 tmux kill-session 한 번이다 — 브로커가 그 결과를 «끝났다» 신호로 받아 안이 비면 곧바로 철거한다(신호 +1초, 실측 p50 2.2초).
 //  #4891 홈 없는 작업(앱 서버가 보낸 API 키 에이전트 작업)은 ①의 확보를 «홈 없음» 으로 하고(전용 계정 · 앱 폴더 작업 폴더 · 브로커가 빈 홈을
 //   컨테이너 안에 만든다) ②를 건너뛴다 — 앱 서버 코드가 사람의 홈(자격 · 토큰 · 키트)을 쓰는 작업을 띄우지 못하게.
+//  #5081 공용 시트 작업은 시트 계정의 홈(Claude 로그인)으로 ①을 하되 ②를 건너뛴다 — 그 홈은 구성원 누구의 지시든 닿는 자리라 시트 계정의
+//   라이블리 토큰(키트) · git 자격을 새로 심지 않는다. 작업에는 필요 없다(훅은 끄고 · MCP 는 작업 토큰만 · 작업 폴더는 앱 폴더 — runner.claudeJobArgv).
 //
 //  ⚠ 셀프호스트(컨테이너 확보 훅 없음)는 이 길이 없다 — 그 박스는 박스 위 실행면(launch-host.ts #5082)을 쓴다. 어느 쪽인지는 surface.ts 가 고른다.
 import type { LivelyUser } from "../context.js";
@@ -112,7 +114,7 @@ export function redactSecret(msg: string, secret: string): string {
  * 작업 컨테이너를 띄운다 — 확보 → 멤버 홈 준비 → 판. 실패는 JobLaunchError 로 던진다(부르는 쪽이 작업을 실패로 끝내고 걷는다).
  *  ⚠ 판이 뜬 뒤의 일(부트 · 하네스 · 결과)은 판이 콜백으로 알린다 — 여기서 기다리지 않는다.
  */
-export async function launchJobContainer(job: AgentJobRow, bootSecret: string): Promise<{ container: string }> {
+export async function launchJobContainer(job: AgentJobRow, bootSecret: string, o: { sharedSeat?: boolean } = {}): Promise<{ container: string }> {
   const sid = job.session_id;
   if (!sid) throw new JobLaunchError("세션 id 가 없는 작업입니다");
   //  #4891 — 홈 없는 작업의 조건(API 키 · 앱 작업 · 앱 폴더 작업 폴더)은 부수효과 앞에서 본다. 어기면 다시 해도 안 된다.
@@ -155,12 +157,13 @@ export async function launchJobContainer(job: AgentJobRow, bootSecret: string): 
     throw stepFailure("ensure", e);
   }
   //  어느 자리(컨테이너)에 앉았나 — 브로커 저널(철거 줄은 컨테이너 이름만 싣는다)과 이 작업을 잇는 유일한 단서다.
-  logger.info({ job: job.id, session: sid, container: made.container, created: made.created, homeless }, "[agent-job] 작업 컨테이너 확보");
+  logger.info({ job: job.id, session: sid, container: made.container, created: made.created, homeless, sharedSeat: o.sharedSeat === true }, "[agent-job] 작업 컨테이너 확보");
   //  #4891 — 홈 없이 만들었다는 브로커의 답이 없으면(이 칸을 모르는 옛 브로커 — 멤버 홈 자리를 붙였다) 그 컨테이너에 판을 띄우지 않는다.
   //   일시 실패로 되돌린다(노드 브로커가 새 판으로 바뀌는 중일 수 있다). 판이 없으면 tmux 도 없어 브로커의 닻 없음 안전망이 걷는다.
   const skew = homelessEnsureMismatch(homeless, made);
   if (skew) throw stepFailure("ensure", skew);
-  if (user) {
+  //  #5081 — 공용 시트 작업은 시트 홈에 키트 · git 자격을 심지 않는다(머리말).
+  if (user && !o.sharedSeat) {
     const { prepareMemberHome } = await import("../terminal/sessions.js");
     try { await prepareMemberHome(user, { osUser, sessionId: sid }); }
     catch (e) { throw stepFailure("home", e); }

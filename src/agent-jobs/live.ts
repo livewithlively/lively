@@ -10,12 +10,42 @@
 //  #4891 홈 없는 작업(앱 서버가 보낸 API 키 에이전트 작업)은 다르다: 그 사람의 홈 · OS 계정을 붙이지 않고(launch.ts — 전용 계정 · 빈 홈),
 //   작업 AI 의 토큰도 앱 서버 급 주체다(plan.jobAppTokenOpts — 능력 API · /mcp 에서만 · 무조건 통과 도구 없음). 그 AI 를 부린 것은 앱 서버
 //   코드라, 사람 이름으로 세션을 열거나(홈이 붙는다) 파일 · 계정 길을 쓰는 것을 토큰 층에서도 막는다(격리 리뷰 — 마운트 층만으로는 모자랐다).
+//  #5081 공용 시트 작업은 또 다르다: 자리는 시트 계정의 홈(Claude 로그인이 거기 있다 — 상민 2026-10-28), 작업 AI 의 토큰은 **보낸 사람** ∩ 앱 동의
+//   (앱 서버 급 — plan.jobIdentityMember · jobAppTokenOpts). 시트 홈에 키트(라이블리 토큰 · 훅)와 git 자격을 새로 심지 않는다(launch.ts) — 그 홈은
+//   구성원 누구의 지시든 닿는 자리다. 시트 계정이 사람 세션을 열어 둔 적이 있으면 그 홈엔 이미 시트의 토큰이 있다 — 그래서 시트는 기본 권한
+//   (items · context · memory)만 가진 전용 계정이어야 한다(ai-runs/plan.seatShared).
 import crypto from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
-import { MCP_TOKEN_SLACK_SEC, type AgentJobDeps } from "./service.js";
-import { jobAppTokenOpts, jobSeatMember } from "./plan.js";
+import { MCP_TOKEN_SLACK_SEC, assertSharedSeatJob, type AgentJobDeps } from "./service.js";
+import { jobAppTokenOpts, jobIdentityMember, jobSeatMember } from "./plan.js";
+import type { AgentJobRow } from "./store.js";
+
+/** 이 작업이 공용 시트로 도는 작업인가(#5081) — 구독 작업만 표시를 읽는다(API 키 작업은 그 표시가 생기지 않는다). */
+async function sharedSeatJob(job: Pick<AgentJobRow, "id" | "account_kind">): Promise<boolean> {
+  if (job.account_kind !== "subscription") return false;
+  return (await import("./store.js")).agentJobSharedSeat(job.id);
+}
+
+/**
+ * #5081 공용 시트 작업을 아직 돌려도 되나 — 판정은 service.assertSharedSeatJob(시트 계정 · 보낸 사람의 사실 → plan.sharedSeatJobRefusal → 보낸 사람의
+ *  앱 동의). 여기서는 그 사실의 출처(설정 칸 · 구성원 표 · 앱 판정)만 잇는다.
+ */
+async function assertSharedSeatJobAllowed(job: Pick<AgentJobRow, "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">): Promise<void> {
+  const { memberFactsOf } = await import("../ai-runs/live.js");
+  const { parseAccountSettings, serviceSeatConsented } = await import("../ai-runs/plan.js");
+  const { aiAccountRow } = await import("../ai-runs/store.js");
+  const { getMember } = await import("../org/store/members.js");
+  return assertSharedSeatJob(job, {
+    seatConsented: async (member) => serviceSeatConsented(parseAccountSettings(await aiAccountRow()), member),
+    memberFacts: memberFactsOf,
+    assertAppUsable: async (member, appId) => {
+      const r = await getMember(member);
+      await assertAppUsableFor({ userId: member, scopes: Array.isArray(r?.scopes) ? r!.scopes : [] } as LivelyUser, appId);
+    },
+  });
+}
 
 let cached: AgentJobDeps | null = null;
 /** 이 프로세스가 판의 말을 듣기 시작한 시각 — 재기동 직후의 무응답 판정 보류 기준(plan.sweepDecision listeningSince). */
@@ -45,16 +75,26 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     policy: () => pol.effectiveAgentJobPolicy(async () => pol.resolveAgentJobPolicy(await store.agentJobPolicyRow())),
     available: () => surface.available(),
     unavailableMessage: () => surface.unavailableMessage(),
-    launch: (job, boot) => surface.launch(job, boot),
+    //  #5081 — 공용 시트 작업이면 실행면이 시트 홈에 키트 · git 자격을 심지 않는다(매니지드 launch.ts · 박스 위 launch-host.ts 둘 다).
+    launch: async (job, boot) => surface.launch(job, boot, { sharedSeat: await sharedSeatJob(job) }),
     kill: (sid) => surface.kill(sid),
     paneView: (job) => surface.paneView(job),
     assertJobAllowed: async (job) => {
       //  실행 계정 멤버가 아직 활성인가(모든 작업) · 앱 작업이면 그 사람의 지금 권한으로 그 앱을 쓸 수 있나(접수 때와 같은 판정).
+      //   #5081 공용 시트 작업은 앱을 쓰는 사람이 보낸 사람이다 — 시트 계정의 동의 대신 보낸 사람의 동의를 본다(assertSharedSeatJobAllowed).
       const { getMember } = await import("../org/store/members.js");
       const seat = jobSeatMember(job);
       const m = seat ? await getMember(seat) : null;
       if (!m || m.state !== "active") throw new HttpError(409, `실행 계정(${seat ?? "?"})이 활성 구성원이 아닙니다`);
+      if (await sharedSeatJob(job)) return assertSharedSeatJobAllowed(job);
       if (job.app_id) await assertAppUsableFor({ userId: m.id, scopes: Array.isArray(m.scopes) ? m.scopes : [] } as LivelyUser, job.app_id);
+    },
+    //  #5081 — 자리 주기가 공용 시트의 작업을 보낸 사람당 · 시트 전체로 센다. 지정(두 동의)만 본다 — 시트 계정이 높은 권한을 얻었으면 띄우기 직전에 멈춘다.
+    sharedSeats: async () => {
+      const { parseAccountSettings, serviceSeatConsented } = await import("../ai-runs/plan.js");
+      const { aiAccountRow } = await import("../ai-runs/store.js");
+      const s = parseAccountSettings(await aiAccountRow());
+      return new Set(Object.keys(s.service_seats ?? {}).filter((m) => serviceSeatConsented(s, m)));
     },
     //  #4488 — API 키 실행의 판 환경(프록시 주소 · 실행 토큰 · 빈 설정 폴더). 구독 실행은 빈 객체. #5082 — 프록시 주소는 판이 보는 게이트웨이 아래.
     jobEnv: async (job, at) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps(), at); },
@@ -62,19 +102,22 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {
       const ttlSec = job.timeout_sec + MCP_TOKEN_SLACK_SEC;
-      const seat = jobSeatMember(job);
-      if (job.app_id && seat) {
+      //  #5081 공용 시트 작업은 보낸 사람의 이름으로 굽는다(plan.jobIdentityMember) — 시트 계정 이름이면 물은 사람이 시트의 권한을 빌린다.
+      const shared = await sharedSeatJob(job);
+      if (shared && !job.app_id) return null;   // 공용 시트는 앱 작업만(접수가 이미 거른다 — 신원 없이 돌릴 작업은 없다)
+      const who = jobIdentityMember(job, shared);
+      if (job.app_id && who) {
         //  앱 작업 — 앱 토큰(구성원 권한 ∩ 앱 동의 · 도구도 그 앱 동의 목록으로 좁혀진다 — principal.requireAppTool). 배선이지 경계가 아니다(머리말).
         //   동의를 거뒀거나 앱이 꺼졌으면 던진다 → 그 작업은 돌지 않는다(service.onBoot).
         const { mintAppToken } = await import("../apps/principal.js");
-        //   #4891 — 홈 없는 작업은 앱 서버 급 주체(plan.jobAppTokenOpts) — 사람 이름의 세션 · 파일 · 계정 길을 열지 않는다.
-        const t = await mintAppToken(seat, job.app_id, "agent-job", jobAppTokenOpts(job, ttlSec));
+        //   #4891 — 홈 없는 작업 · #5081 공용 시트 작업은 앱 서버 급 주체(plan.jobAppTokenOpts) — 사람 이름의 세션 · 파일 · 계정 길을 열지 않는다.
+        const t = await mintAppToken(who, job.app_id, "agent-job", jobAppTokenOpts(job, ttlSec, shared));
         return { token: t.token, tokenHash: t.tokenHash };
       }
-      if (!seat) return null;
+      if (!who) return null;
       //  사람이 직접 시킨 작업 — 그 사람의 세션 토큰과 같은 급(멤버 권한을 따라간다 · 작업 상한만큼만 산다).
       const { getMember } = await import("../org/store/members.js");
-      const m = await getMember(seat);
+      const m = await getMember(who);
       if (!m || m.state !== "active") return null;
       const { mintToken } = await import("../org/store/tokens.js");
       const t = await mintToken({

@@ -24,6 +24,8 @@
 //  동의를 거두거나 앱이 꺼지거나 실행 계정이 비활성이 되면: 기다리는 작업은 띄우지 않고(배차 직전 재판정) · 도는 작업은 감시가 멈춘다
 //  (사유를 남겨 다음 박동에 끊김 · 띄우는 중이면 바로 끝내고 걷는다).
 //  관리자는 남의 작업의 상태·오류만 본다 — 프롬프트·답·진행 꼬리는 보낸 사람 것이다(작업은 그 사람의 홈·지식으로 돈다).
+//  #5081 공용 시트 작업(앱 AI 실행이 접수 — ai-runs)은 예외다: 자리(홈 · Claude 로그인)는 시트 계정, 작업 AI 의 라이블리 신원은 보낸 사람(앱 서버 급)이다.
+//   시트 지정을 거두거나 시트 계정이 높은 권한을 얻거나 보낸 사람이 구성원이 아니게 되면 위와 같이 띄우지 않고 · 멈춘다(live.assertJobAllowed).
 //
 //  ⚠ 청/녹 두 슬롯이 같은 작업을 볼 수 있다 — 상태 전이는 전부 store 의 «지금 상태가 이것일 때만» 쓰기로 한 번만 넘어간다.
 import { HttpError } from "../http-error.js";
@@ -33,7 +35,7 @@ import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agen
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
   LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
-  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
   PRUNE_BATCH, PRUNE_ROUNDS_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
@@ -45,7 +47,7 @@ type Store = typeof import("./store.js");
 export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
-    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow">;
+    | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 판을 띄울 수 있는 배포인가(매니지드 브로커 · 셀프호스트 박스 위 실행면 — surface.ts). */
   available(): Promise<boolean>;
@@ -62,7 +64,7 @@ export interface AgentJobDeps {
    * 이 작업을 아직 돌려도 되나 — 실행 계정이 활성 구성원이고, 앱 작업이면 그 사람이 그 앱을 쓸 수 있나(보임 · 켜짐 · 동의).
    *  «안 된다» 는 HttpError 로 던진다(띄우기 직전 · 도는 동안 감시). 그 밖의 던짐은 «판정을 못 했다»(DB 가 잠깐 막힘)다.
    */
-  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester">): Promise<void>;
+  assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
@@ -72,6 +74,11 @@ export interface AgentJobDeps {
   jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
+  /**
+   * #5081 지금 공용 시트로 켜진 계정들(관리자 승인 + 본인 동의) — 자리 주기가 그 시트의 작업을 보낸 사람당 · 시트 전체로 센다(plan.planClaims).
+   *  못 읽으면 빈 묶음으로 센다(시트 계정 하나로 세는 종전 셈 — 더 좁다).
+   */
+  sharedSeats?(): Promise<ReadonlySet<string>>;
   revokeToken(tokenHash: string): Promise<void>;
   /** 그 프로젝트 폴더에서 이 사람이 셸을 띄울 수 있나(사람 세션과 같은 판정 — 안 되면 던진다). */
   assertProjectCwd(user: LivelyUser, projectId: number): Promise<void>;
@@ -97,6 +104,31 @@ export const MAX_LAUNCH_ATTEMPTS = 5;
  *  시도 상한이 몇 초 만에 다 닳는다(증분 재검토). 감시 주기와 같은 30초 — 시도 5번이면 적어도 2분.
  */
 export const LAUNCH_RETRY_GAP_SEC = 30;
+/** #5081 공용 시트 재판정이 읽는 사실의 출처 — live 가 설정 · 구성원 표 · 앱 판정을 잇는다(시험은 가짜로). */
+export interface SharedSeatJobLoaders {
+  /** 그 계정의 공용 시트 지정(관리자 승인 + 본인 동의)이 그대로인가. */
+  seatConsented(member: string): Promise<boolean>;
+  /** 그 구성원이 이 워크스페이스의 활성 사람 구성원인가 · 기본 권한 밖의 권한이 있나(ai-runs/live.memberFactsOf). */
+  memberFacts(member: string): Promise<{ active: boolean; elevated: boolean }>;
+  /** 그 사람이 그 앱을 지금 쓸 수 있나(보임 · 켜짐 · 동의) — 안 되면 HttpError 를 던진다. */
+  assertAppUsable(member: string, appId: string): Promise<void>;
+}
+
+/**
+ * #5081 공용 시트 작업을 아직 돌려도 되나 — 시트 계정의 사실은 account_member 로, 보낸 사람의 사실은 requester 로 읽어 plan.sharedSeatJobRefusal 로 재고,
+ *  통과하면 **보낸 사람**의 앱 동의를 본다(시트 계정의 동의가 아니다 — 앱을 쓰는 사람은 물은 사람이다). 접수 때(ai-runs/service.submitRun)와 같은 자다.
+ *  «안 된다» 는 HttpError(409 · 403 · 404) — 배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다(live.assertJobAllowed).
+ */
+export async function assertSharedSeatJob(
+  job: Pick<AgentJobRow, "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">, l: SharedSeatJobLoaders,
+): Promise<void> {
+  const seat = job.account_member ?? "";
+  const [consented, seatFacts, requesterFacts] = await Promise.all([l.seatConsented(seat), l.memberFacts(seat), l.memberFacts(job.requester)]);
+  const why = sharedSeatJobRefusal(job, { consented, seat: seatFacts, requesterActive: requesterFacts.active });
+  if (why) throw new HttpError(409, why);
+  await l.assertAppUsable(job.requester, job.app_id!);
+}
+
 /** 더 돌릴 수 없게 돼(동의 철회 · 앱 꺼짐 · 실행 계정 비활성) 감시가 멈춘 작업의 오류 문장 — 판정이 낸 사유를 붙인다. */
 export function stoppedReason(why: string): string {
   return `더 돌릴 수 없게 돼 멈췄습니다 — ${why}`.slice(0, 600);
@@ -211,6 +243,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     resumeConversation: resumeConv, resumeJobId,
     timeoutSec: timeoutSecOf(input.timeout_min, p),
     homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
+    sharedSeat: false, // 이 길은 본인 구독뿐이다(#5081 공용 시트는 앱 AI 실행 — ai-runs — 으로만 생긴다)
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
@@ -259,8 +292,12 @@ const isTransient = (e: unknown): boolean => !!e && typeof e === "object" && (e 
 export async function dispatchAgentJobs(d: AgentJobDeps): Promise<number> {
   if (!(await d.available())) return 0;
   const p = await d.policy();
+  const sharedSeats = d.sharedSeats ? await d.sharedSeats().catch((e) => {
+    logger.warn({ err: (e as Error)?.message }, "[agent-job] 공용 시트 목록을 못 읽었다 — 이번 배차는 시트 계정 하나로 센다");
+    return new Set<string>();
+  }) : new Set<string>();
   const claimed = await d.store.claimAgentJobs(p, (id) => ({ sessionId: jobSessionId(id, d.hex8()), boot: d.store.newJobSecret() }),
-    { retryGapSec: LAUNCH_RETRY_GAP_SEC });
+    { retryGapSec: LAUNCH_RETRY_GAP_SEC, sharedSeats });
   for (const { row, bootSecret } of claimed) {
     logger.info({ job: row.id, session: row.session_id }, "[agent-job] 자리 받음 — 컨테이너를 띄운다");
     d.later(async () => {
@@ -537,20 +574,30 @@ export async function pruneAgentJobRecords(
 
 // ── 사람·앱이 쓰는 조회·취소 ──────────────────────────────────────────────────
 
-/** 이 사람(이 앱)이 이 작업을 볼 수 있나 — 관리자는 다 · 앱 화면은 제 앱의 제 작업만 · 사람은 제 작업만. */
-export function canSeeJob(r: AgentJobRow, user: LivelyUser): boolean {
+/**
+ * 이 사람(이 앱)이 이 작업을 볼 수 있나 — 관리자는 다 · 앱 화면은 제 앱의 제 작업만 · 사람은 제 작업만.
+ *  sharedSeat = 공용 시트로 도는 작업인가(#5081) — 그 작업은 시트 계정(구독 주인)의 것이 아니다(ai-runs/service.isOwnRun 과 같은 규칙).
+ *   필수다 — 빠뜨린 자리가 기본값(«공용 시트 아님»)으로 남의 작업을 열지 않게.
+ */
+export function canSeeJob(r: AgentJobRow, user: LivelyUser, sharedSeat: boolean): boolean {
   if (isAdmin(user) && !user.appId) return true;
   const me = memberOf(user);
   //  구독 실행의 주인(account_member)도 본다 — 초대받은 사람이 내 세션에서 보내 내 구독·내 자리로 도는 작업(#4488 · 격리 리뷰). 취소도 같은 판정.
   //  단 이 표면(agent_job_*)에서 own(지시·답·진행 꼬리)은 보낸 사람 기준 그대로 — 주인은 상태·오류만. 지시·답까지 보는 길은 앱 AI 실행(app_ai_run_get · isOwnRun)이다.
-  if (r.requester !== me && !(r.account_kind === "subscription" && r.account_member === me)) return false;
+  if (r.requester !== me && !(!sharedSeat && r.account_kind === "subscription" && r.account_member === me)) return false;
   if (user.appId && r.app_id !== user.appId) return false;
   return true;
+}
+/** 이 작업이 공용 시트로 도나(#5081) — 구독 주인 가지만이 판정을 가를 때만 표시를 읽는다(store.agentJobSharedSeat). */
+async function sharedSeatJobFor(r: AgentJobRow, user: LivelyUser, d: AgentJobDeps): Promise<boolean> {
+  const me = memberOf(user);
+  if (r.requester === me || r.account_kind !== "subscription" || r.account_member !== me) return false;
+  return d.store.agentJobSharedSeat(r.id);
 }
 
 export async function getAgentJobFor(id: number, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
-  if (!row || !canSeeJob(row, user)) throw new HttpError(404, "없는 작업입니다");
+  if (!row || !canSeeJob(row, user, await sharedSeatJobFor(row, user, d))) throw new HttpError(404, "없는 작업입니다");
   const position = row.status === "queued" ? await d.store.queuePosition(row.id).catch(() => null) : null;
   return publicJob(row, { own: row.requester === memberOf(user), withPrompt: true, position });
 }
@@ -568,7 +615,7 @@ export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; 
 /** 취소 — 대기 중이면 바로 끝내고, 띄우는 중이면 끝내고 걷고, 도는 중이면 판의 다음 박동이 받아 하네스를 끊는다. */
 export async function cancelAgentJobFor(id: number, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
-  if (!row || !canSeeJob(row, user)) throw new HttpError(404, "없는 작업입니다");
+  if (!row || !canSeeJob(row, user, await sharedSeatJobFor(row, user, d))) throw new HttpError(404, "없는 작업입니다");
   const own = row.requester === memberOf(user);
   if (isEnded(row.status)) return publicJob(row, { own });
   const asked = await d.store.requestCancelAgentJob(id);

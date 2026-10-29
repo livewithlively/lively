@@ -247,6 +247,16 @@ await t("C1 격리 박스 — 그 구성원 계정 · 상한을 걸 수 있는�
   assert.deepEqual(rec.mkdirs, [["box_alice", "/srv/lively/apps/memo"]]);
 });
 
+await t("SS1 공용 시트 작업(#5081) — 격리 박스에서도 시트 홈에 키트 · git 자격을 심지 않는다(홈 준비 없음) · 나머지 순서는 같다 · 자리는 시트 계정", async () => {
+  const { d, rec } = fakeDeps();
+  await launchHostJob(job({ requester: "bob", account_member: "seat" }), SECRET, d, { sharedSeat: true });
+  assert.deepEqual(rec.calls, ["account:seat", "os-user", "cgroup", "dir:apps/memo", "mkdir", "secret", "tmux"], "home 이 없다");
+  //  공용 시트가 아니면(표시 false · 생략) 종전대로 홈을 준비한다
+  const plain = fakeDeps();
+  await launchHostJob(job({ requester: "bob", account_member: "seat" }), SECRET, plain.d, { sharedSeat: false });
+  assert.ok(plain.rec.calls.includes("home"));
+});
+
 await t("V1 판의 첫 말 자리 — 띄울 때 만든 폴더와 같은 경로(앱 · 공유 × 격리 · 비격리) · 게이트웨이 = 그 루프백 포트 · 워크스페이스 = 판에 넘긴 값", async () => {
   for (const [o, j] of [
     [{}, job()], [{ osUser: null, isolationReady: false }, job()],
