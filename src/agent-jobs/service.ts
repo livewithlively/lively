@@ -388,11 +388,11 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     if (d.paneView) view = await d.paneView(booted);
     env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
     if (booted.account_kind === "api_key" && booted.resume_job_id != null && booted.resume_conversation) {
-      const t = await d.store.agentJobTranscript(booted.resume_job_id);
-      if (!t || convIdOf(t.conv) !== convIdOf(booted.resume_conversation)) {
+      const kept = await d.store.agentJobTranscript(booted.resume_job_id);
+      if (!kept || convIdOf(kept.conv) !== convIdOf(booted.resume_conversation)) {
         throw new Error("이어받을 대화 기록이 없습니다 — API 키 작업의 대화 기록은 보관 기간(agent_job_limits 의 transcript_keep_days) 동안만 남습니다");
       }
-      transcript = { conv: convIdOf(t.conv)!, gz: t.gz.toString("base64") };
+      transcript = { conv: convIdOf(kept.conv)!, gz: kept.gz.toString("base64") };
     }
     system = d.jobSystem ? await d.jobSystem(booted) : null;
   } catch (e) {

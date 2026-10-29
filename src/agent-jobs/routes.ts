@@ -5,6 +5,7 @@
 //  (로그인 판 /api/login-jobs/:id/* 과 같은 꼴 — terminal/routes.ts.)
 import express from "express";
 import { wrap, HttpError } from "../http/rest-util.js";
+import { logger } from "../log.js";
 import { TRANSCRIPT_GZ_MAX } from "./plan.js";
 
 export function registerAgentJobRoutes(app: express.Express): void {
@@ -38,15 +39,25 @@ export function registerAgentJobRoutes(app: express.Express): void {
   //  #5101 API 키 작업의 대화 기록 묶음(gzip 바이트 그대로) — 전역 JSON 파서(1MB)는 이 본문을 읽지 않는다(application/json 이 아니다). 상한은 그 수 그대로.
   //   본문을 읽기 **전에** 문(service.transcriptGate)이 콜백 비밀 · 도는 API 키 작업 · 보관 켜짐 · 아직 안 받음을 본다 — 비밀을 모르는 요청 · 받을 일이 없는
   //   보고가 8MiB 를 읽히지 못한다(받을 일이 없으면 200 {stored:false} · 비밀이 틀리면 401 · 끝난 작업 410).
+  //   같은 작업의 보고를 동시에 여럿 받지 않는다(receiving — 이 프로세스에서 작업마다 본문 하나) — 콜백 비밀을 쥔 쪽이 저장 전에 8MiB 를 N 개 겹쳐 보내
+  //   게이트웨이 메모리를 N 배 쥐게 하지 못한다(격리 리뷰). 겹친 보고는 받지 않음(200 {stored:false})이고, 판은 한 번만 보낸다.
+  const receiving = new Set<number>();
   app.post("/api/agent-jobs/:id/transcript",
     (req, res, next) => {
       void (async () => {
+        const id = idOf(req);
         const { transcriptGate } = await import("./service.js");
-        if ((await transcriptGate(idOf(req), bearer(req), await deps())).take) { next(); return; }
+        if ((await transcriptGate(id, bearer(req), await deps())).take && !receiving.has(id)) {
+          receiving.add(id);
+          res.on("close", () => receiving.delete(id));   // 답을 보냈거나 연결이 끊겼다
+          next();
+          return;
+        }
         res.setHeader("Cache-Control", "no-store");
         res.json({ ok: true, stored: false });
       })().catch((e) => {
         const status = e instanceof HttpError ? e.status : 500;
+        if (status >= 500) logger.error({ err: (e as Error)?.message, path: req.path }, "[agent-job] 대화 기록 문에서 실패했다");
         res.status(status).json({ error: status === 500 ? "internal_error" : (e as Error).message });
       });
     },

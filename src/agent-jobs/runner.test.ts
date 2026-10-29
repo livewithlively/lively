@@ -51,6 +51,11 @@ process.stdin.on("end", () => {
     else {
       fs.writeFileSync(path.join(d, sid, "tool-results", "big.txt"), "큰 결과");
       fs.writeFileSync(path.join(d, sid + ".jsonl"), "line1 Output has been saved to " + path.join(d, sid, "tool-results", "big.txt") + " end\\n");
+      //  묶음에 실리면 안 되는 것 — 설정 폴더 밖을 가리키는 링크(파일 · 폴더 — 따라가면 판의 임시 폴더를 돌며 지시 원문까지 싣는다) · 꼴 밖 이름(공백 · 한글).
+      fs.symlinkSync(path.join(path.dirname(cfg), "prompt.txt"), path.join(d, "link.jsonl"));
+      fs.symlinkSync(path.dirname(cfg), path.join(d, "linkdir"));
+      fs.writeFileSync(path.join(d, "공백 이름.txt"), "꼴 밖");
+      if (process.env.FAKE_MANY) { fs.mkdirSync(path.join(d, "many")); for (let i = 0; i < 2001; i++) fs.writeFileSync(path.join(d, "many", "f" + i + ".txt"), "x"); }
     }
   }
   const si = process.argv.indexOf("--append-system-prompt-file");
@@ -97,6 +102,8 @@ async function gateway(o: {
   bootExtra?: Record<string, unknown>; envExtra?: Record<string, string>;
   /** #5082 앱 판 지시 — 주면 부트 응답에 system 과 지시 파일 자리표 인자를 싣는다. */
   system?: string;
+  /** #5101 대화 기록 보고에 이 상태로 답한다(4xx — 판은 다시 보내지 않는다) · 또는 받지 않음(200 stored:false). */
+  transcriptStatus?: number; transcriptNotStored?: boolean;
 }): Promise<{ port: number; seen: Seen; close: () => Promise<void> }> {
   const seen: Seen = { boot: 0, ticks: [], results: [], auth: [], tickAt: [], resultAt: [], failed: [], ws: [], transcripts: [] };
   let resultCalls = 0;
@@ -135,7 +142,8 @@ async function gateway(o: {
       }
       if (req.url === "/api/agent-jobs/1/transcript") {
         seen.transcripts.push({ at: Date.now(), auth: req.headers.authorization, type: req.headers["content-type"], conv: req.headers["x-lvly-conversation"], body: raw });
-        return json(200, { ok: true, stored: true });
+        if (o.transcriptStatus) return json(o.transcriptStatus, { error: "거절" });
+        return json(200, { ok: true, stored: !o.transcriptNotStored });
       }
       if (req.url === "/api/agent-jobs/1/result") {
         resultCalls++;
@@ -429,12 +437,14 @@ await t("T1(#5101) API 키 작업 — 끝나면 설정 폴더 projects/ 아래 �
     const b = unbundle(tr.body);
     assert.equal(b.v, 1); assert.equal(b.cfg, h.cfg, "이 작업의 설정 폴더 경로(되돌릴 때 바꿔 쓸 앞자리)");
     const files = Object.fromEntries(b.files.map((f) => [f.p, Buffer.from(f.d, "base64").toString("utf8")]));
-    assert.deepEqual(Object.keys(files).sort(), [`-fake-cwd/${SID}.jsonl`, `-fake-cwd/${SID}/tool-results/big.txt`], "projects/ 기준 상대 경로 · 큰 도구 결과 파일까지");
+    assert.deepEqual(Object.keys(files).sort(), [`-fake-cwd/${SID}.jsonl`, `-fake-cwd/${SID}/tool-results/big.txt`],
+      "projects/ 기준 상대 경로 · 큰 도구 결과 파일까지 — 링크(파일 · 폴더) · 꼴 밖 이름은 싣지 않는다");
     assert.match(files[`-fake-cwd/${SID}.jsonl`]!, /saved to \//); assert.equal(files[`-fake-cwd/${SID}/tool-results/big.txt`], "큰 결과");
     assert.equal(g.seen.results.length, 1);
     assert.ok(tr.at <= g.seen.resultAt[0]!, "결과보다 먼저(결과가 곧바로 같은 대화를 잇는 작업을 낳을 수 있다)");
     assert.ok(typeof h.cfg === "string" && h.cfg !== CONFIG_DIR_PLACEHOLDER, "자리표가 이 작업만의 폴더로 바뀌었다");
     assert.ok(!fs.existsSync(h.cfg), "끝나면 설정 폴더를 지운다");
+    assert.doesNotMatch(String(g.seen.results[0]!.stderr_tail), /transcript (skipped|upload)/, "올렸으면 까닭 줄이 없다");
   } finally { await g.close(); }
 });
 
@@ -485,8 +495,33 @@ await t("T3(#5101) 이어받는 작업 — 받은 묶음을 하네스를 띄우�
   try {
     assert.equal(await runBoot(g3.port), 0);
     assert.equal(JSON.parse(fs.readFileSync(r3, "utf8")).restored, null, "풀면 상한을 넘는 묶음(압축 폭탄)은 안 놓는다");
-    assert.match(String((g3.seen.results[0] as Record<string, unknown>).stderr_tail), /transcript restore/, "까닭을 결과에 남긴다");
+    const why3 = String((g3.seen.results[0] as Record<string, unknown>).stderr_tail);
+    assert.match(why3, /transcript restore/, "까닭을 결과에 남긴다");
+    assert.doesNotMatch(why3, /되돌릴 크기/, "푸는 도중에 멈춘다 — 다 풀어 메모리에 올린 뒤 세지 않는다(쓰는 총량 상한은 그 뒤의 둘째 막이)");
   } finally { await g3.close(); }
+});
+
+await t("T3d(#5101) 되돌리기 — 모르는 묶음 형식(v 1 이 아님)은 안 놓는다 · 경로를 바꿔 쓰며 늘어난 총량이 풀린 상한을 넘으면 거기서 멈춘다(까닭은 결과에)", async () => {
+  const CONV_R = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  const r1 = path.join(tmp, "t3d.json");
+  const v2: Bundle = { v: 2, cfg: "/old/cfg", files: [{ p: `-fake-cwd/${CONV_R}.jsonl`, d: b64("앞 대화\n") }] };
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: r1, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcript: { conv: CONV_R, gz: bundleB64(v2) } } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(JSON.parse(fs.readFileSync(r1, "utf8")).restored, null, "모르는 형식은 놓지 않는다");
+    assert.match(String(g.seen.results[0]!.stderr_tail), /transcript restore: 묶음 형식\(v 2\)을 모른다/);
+  } finally { await g.close(); }
+  //  앞 설정 폴더 경로가 짧으면(«/a») 바꿔 쓸 때마다 수십 배로 는다 — 3천 바이트 상한에서 «/a/» 300 번(900 바이트)은 넘친다.
+  const r2 = path.join(tmp, "t3e.json");
+  const grow: Bundle = { v: 1, cfg: "/a", files: [{ p: `-fake-cwd/${CONV_R}.jsonl`, d: b64("/a/".repeat(300)) }] };
+  const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: r2, envExtra: { ...KEY_ENV, FAKE_RESUME_CONV: CONV_R },
+    bootExtra: { transcriptMax: 1_000_000, transcriptRawMax: 3000, transcript: { conv: CONV_R, gz: bundleB64(grow) } } });
+  try {
+    assert.equal(await runBoot(g2.port), 0);
+    assert.equal(JSON.parse(fs.readFileSync(r2, "utf8")).restored, null, "넘치는 파일은 쓰지 않는다");
+    assert.match(String(g2.seen.results[0]!.stderr_tail), /transcript restore: 되돌릴 크기가 상한\(3000\)을 넘는다/);
+  } finally { await g2.close(); }
 });
 
 await t("T4(#5101) 압축한 묶음이 상한을 넘거나 · 풀린 크기가 상한에 가까우면(읽기 전에 잰다) — 올리지 않는다 · 결과는 올린다", async () => {
@@ -495,13 +530,35 @@ await t("T4(#5101) 압축한 묶음이 상한을 넘거나 · 풀린 크기가 �
     assert.equal(await runBoot(g.port), 0);
     assert.equal(g.seen.transcripts.length, 0, "압축 상한");
     assert.equal(g.seen.results.length, 1);
+    assert.match(String(g.seen.results[0]!.stderr_tail), /transcript skipped: 압축 \d+ > 1000/, "까닭을 결과에 한 줄(격리 리뷰)");
   } finally { await g.close(); }
   const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4b.json"), envExtra: { ...KEY_ENV, FAKE_BIG: "1" }, bootExtra: { transcriptMax: 10_000_000, transcriptRawMax: 50_000 } });
   try {
     assert.equal(await runBoot(g2.port), 0);
     assert.equal(g2.seen.transcripts.length, 0, "64KB 대화 > 풀린 상한 50KB 의 70% — 읽지 않고 건너뛴다");
     assert.equal(g2.seen.results.length, 1);
+    assert.match(String(g2.seen.results[0]!.stderr_tail), /transcript skipped: 풀린 크기 \d+ > 35000/);
   } finally { await g2.close(); }
+});
+
+await t("T4c(#5101) 파일이 상한(2000)보다 많으면 올리지 않는다 · 게이트웨이가 보고를 거절하거나(4xx · 다시 보내지 않음) 받지 않으면 그 까닭을 결과에 남긴다", async () => {
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4c.json"), envExtra: { ...KEY_ENV, FAKE_MANY: "1" }, bootExtra: { transcriptMax: 1_000_000 } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    assert.equal(g.seen.transcripts.length, 0);
+    assert.match(String(g.seen.results[0]!.stderr_tail), /transcript skipped: 파일이 너무 많다\(2000 초과\)/);
+  } finally { await g.close(); }
+  const g2 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4d.json"), envExtra: KEY_ENV, bootExtra: { transcriptMax: 1_000_000 }, transcriptStatus: 400 });
+  try {
+    assert.equal(await runBoot(g2.port), 0);
+    assert.equal(g2.seen.transcripts.length, 1, "4xx 는 다시 보내지 않는다");
+    assert.match(String(g2.seen.results[0]!.stderr_tail), /transcript upload: 400/);
+  } finally { await g2.close(); }
+  const g3 = await gateway({ mode: "ok", timeoutMs: 20_000, record: path.join(tmp, "t4e.json"), envExtra: KEY_ENV, bootExtra: { transcriptMax: 1_000_000 }, transcriptNotStored: true });
+  try {
+    assert.equal(await runBoot(g3.port), 0);
+    assert.match(String(g3.seen.results[0]!.stderr_tail), /transcript upload: 게이트웨이가 받지 않았다/);
+  } finally { await g3.close(); }
 });
 
 fs.rmSync(tmp, { recursive: true, force: true });

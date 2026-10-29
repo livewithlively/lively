@@ -594,6 +594,19 @@ try {
         tooBig.status === 413 && jsonR.status === 400 && endedR.status === 410
           && (await st.agentJobTranscript(big.id)) === null && (await st.agentJobTranscript(js.id)) === null && (await st.agentJobTranscript(fin.id)) === null,
         JSON.stringify({ tooBig: tooBig.status, jsonR, endedR }));
+      //  TR7c 같은 작업의 보고가 겹치면(격리 리뷰 — 저장 전에 8MiB 를 N 개 겹쳐 메모리를 쥐게 하기) — 먼저 온 것이 본문을 받는 동안 둘째는 본문 전에
+      //   200 stored:false · 먼저 것이 끊기면(연결 닫힘) 다시 받는다.
+      const c7 = await keyWith("tr7f");
+      const hold = post(c7.id, { secret: c7.secret, body: Buffer.alloc(1024), declare: TRANSCRIPT_GZ_MAX });   // 본문을 다 보내지 않고 쥔다(3초 뒤 끊음)
+      await new Promise((r) => setTimeout(r, 400));
+      const second = await post(c7.id, { secret: c7.secret, body: gz, conv: CONV });
+      const held = await hold;
+      await new Promise((r) => setTimeout(r, 300));
+      const third = await post(c7.id, { secret: c7.secret, body: gz, conv: CONV });
+      chk("TR7c 겹친 보고 — 먼저 것이 본문을 받는 동안 둘째는 200 stored:false(본문을 안 읽음) · 먼저 것이 끊긴 뒤엔 받는다(stored:true)",
+        held.status === "timeout" && second.status === 200 && second.json?.stored === false && third.status === 200 && third.json?.stored === true
+          && Buffer.compare((await st.agentJobTranscript(c7.id))?.gz ?? Buffer.alloc(0), gz) === 0,
+        JSON.stringify({ held, second, third }));
     } finally { await new Promise((r) => srv.close(r)); }
     await cleanup();
     //  TR5 칸이 아직 없을 때(롤 창) — 적기 false · 읽기 null · 정리 0(던지지 않음) · 보통 접수 · 자리 주기 · 행 읽기 · 끝내기는 돈다. 끝나면 칸을 되돌린다(같은 DDL).

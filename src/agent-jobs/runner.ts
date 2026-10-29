@@ -177,7 +177,7 @@ const listProjectFiles = () => {
       const r = rel ? rel + "/" + e.name : e.name;
       if (e.isDirectory()) walk(path.join(d, e.name), r);
       else if (e.isFile() && safeRel(r)) out.push(r);
-      if (out.length > BUNDLE_FILES_MAX) throw new Error("파일이 너무 많다");
+      if (out.length > BUNDLE_FILES_MAX) throw new Error("파일이 너무 많다(" + BUNDLE_FILES_MAX + " 초과)");
     }
   };
   walk(projDir(), "");
@@ -186,15 +186,18 @@ const listProjectFiles = () => {
 if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
   try {
     const b = JSON.parse(zlib.gunzipSync(Buffer.from(String(J.transcript.gz), "base64"), { maxOutputLength: RAW_MAX }).toString("utf8"));
+    if (!b || b.v !== 1) throw new Error("묶음 형식(v " + (b && b.v) + ")을 모른다");
     const from = typeof b.cfg === "string" && b.cfg.length > 1 ? b.cfg + "/" : null;
     const files = Array.isArray(b.files) ? b.files.slice(0, BUNDLE_FILES_MAX) : [];
-    let found = false;
+    let found = false, written = 0;
     for (const f of files) {
       if (!f || !safeRel(f.p)) continue;
       const dest = path.join(projDir(), f.p);
-      fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
       let data = Buffer.from(String(f.d || ""), "base64");
       if (from && f.p.endsWith(".jsonl")) data = Buffer.from(data.toString("utf8").split(from).join(cfgDir + "/"), "utf8");
+      //  경로를 바꿔 쓰면 늘 수 있다(짧은 앞 경로) — 되돌려 쓰는 총량도 풀린 상한 안이어야 한다.
+      if ((written += data.length) > RAW_MAX) throw new Error("되돌릴 크기가 상한(" + RAW_MAX + ")을 넘는다");
+      fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 });
       fs.writeFileSync(dest, data, { mode: 0o600 });
       if (f.p.endsWith("/" + J.transcript.conv + ".jsonl")) found = true;
     }
@@ -203,20 +206,24 @@ if (cfgDir && J.transcript && CONV_RE.test(String(J.transcript.conv))) {
 }
 // #5101 끝난 대화를 올린다(API 키 작업 — 빈 설정 폴더는 끝나면 지운다). 결과보다 먼저 — 결과가 곧바로 같은 대화를 잇는 작업(형식 재시도)을 낳을 수 있다.
 //  읽기 전에 크기부터 잰다 — 너무 큰 기록을 메모리에 올리다 판이 죽으면 결과까지 잃는다(base64 · JSON 을 더해도 풀린 상한 안이어야 한다).
+//  못 올리면 그 까닭을 결과의 stderr_tail 에 한 줄 남긴다 — 나중에 이어받기가 «기록이 없습니다» 로 거절될 때 어느 상한이었는지 그 작업만 보면 안다(격리 리뷰).
+const skipTranscript = (why) => { errTail += "transcript skipped: " + why + "\n"; };
 const saveTranscript = async () => {
   if (!cfgDir || !conv || !CONV_RE.test(conv) || !(J.transcriptMax > 0)) return;
   let gz = null;
   try {
     const files = listProjectFiles();
-    if (!files.some((r) => r.endsWith("/" + conv + ".jsonl"))) return;
+    if (!files.some((r) => r.endsWith("/" + conv + ".jsonl"))) return skipTranscript("대화 파일(" + conv + ".jsonl)이 없다");
     let total = 0;
     for (const r of files) total += fs.statSync(path.join(projDir(), r)).size;
-    if (total > RAW_MAX * 0.7) return;
+    if (total > RAW_MAX * 0.7) return skipTranscript("풀린 크기 " + total + " > " + Math.floor(RAW_MAX * 0.7));
     const bundle = { v: 1, cfg: cfgDir, files: files.map((r) => ({ p: r, d: fs.readFileSync(path.join(projDir(), r)).toString("base64") })) };
     gz = zlib.gzipSync(Buffer.from(JSON.stringify(bundle), "utf8"));
-  } catch (e) { return; }
-  if (gz.length > J.transcriptMax) return;
-  await call("transcript", null, 3, { buf: gz, type: "application/gzip", headers: { "x-lvly-conversation": conv } });
+  } catch (e) { return skipTranscript(String(e && e.message)); }
+  if (gz.length > J.transcriptMax) return skipTranscript("압축 " + gz.length + " > " + J.transcriptMax);
+  const r = await call("transcript", null, 3, { buf: gz, type: "application/gzip", headers: { "x-lvly-conversation": conv } });
+  if (!r || r.status) errTail += "transcript upload: " + (r ? r.status : "연결 실패") + "\n";
+  else if (r.stored === false) errTail += "transcript upload: 게이트웨이가 받지 않았다\n";
 };
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
