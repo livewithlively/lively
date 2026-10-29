@@ -118,3 +118,43 @@ test("스킬 트리 심링크 → content_hash 단계에서 거부(R2-3)", async
   await assert.rejects(() => loadAppPackage(d), /심링크/);
   await rm(d, { recursive: true });
 });
+
+// ── #5082 작업별 앱 지시 파일 — 설치 · 판 저장 때 확정(엣지 표 L1~L4) ──
+const AI = (file: string) => ({ ai: { jobs: [{ name: "answer" }], instructions: { answer: file } } });
+
+test("L4 ai.instructions 파일이 묶음 안에 있고 상한 이하 UTF-8 이면 통과", async () => {
+  const d = await stage({ "lively-app.json": MANIFEST(AI("ai/answer.md")), "ai/answer.md": "정책 표를 조회해 답한다\n" });
+  const loaded = await loadAppPackage(d);
+  assert.deepEqual(loaded.manifest.ai?.instructions, { answer: "ai/answer.md" });
+  await rm(d, { recursive: true });
+});
+
+test("L1 ai.instructions 파일이 없으면 · 폴더면 로드 실패(작업을 띄울 때에야 알지 않게)", async () => {
+  const d = await stage({ "lively-app.json": MANIFEST(AI("ai/missing.md")) });
+  await assert.rejects(() => loadAppPackage(d), /ai\.instructions\.answer 의 지시 파일이 없습니다/);
+  await rm(d, { recursive: true });
+  const d2 = await stage({ "lively-app.json": MANIFEST(AI("ai")), "ai/x.md": "x" });
+  await assert.rejects(() => loadAppPackage(d2), /ai\.instructions\.answer 가 파일이 아닙니다/);
+  await rm(d2, { recursive: true });
+});
+
+test("L2·L3 ai.instructions 파일이 64KiB 를 넘거나 UTF-8 이 아니면 로드 실패", async () => {
+  const big = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")), "ai/a.md": "a".repeat(64 * 1024 + 1) });
+  await assert.rejects(() => loadAppPackage(big), /너무 큽니다/);
+  await rm(big, { recursive: true });
+  const bin = await stage({ "lively-app.json": MANIFEST(AI("ai/a.md")) });
+  await mkdir(path.join(bin, "ai"), { recursive: true });
+  await writeFile(path.join(bin, "ai", "a.md"), Buffer.from([0xff, 0xfe, 0x00, 0x01]));
+  await assert.rejects(() => loadAppPackage(bin), /UTF-8 글이 아닙니다/);
+  await rm(bin, { recursive: true });
+});
+
+test("L1b ai.instructions 가 링크로 묶음 밖 파일을 가리키면 거절(묶음 안 링크는 패키지 해시 단계가 모두 거절한다)", async () => {
+  const outside = await stage({ "secret.txt": "묶음 밖 글" });
+  const d = await stage({ "lively-app.json": MANIFEST(AI("ai/answer.md")) });
+  await mkdir(path.join(d, "ai"), { recursive: true });
+  await symlink(path.join(outside, "secret.txt"), path.join(d, "ai", "answer.md"));
+  await assert.rejects(() => loadAppPackage(d), /심링크/);
+  await rm(d, { recursive: true });
+  await rm(outside, { recursive: true });
+});

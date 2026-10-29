@@ -10,7 +10,7 @@ import { DEFAULT_AI_RUN_POLICY, type AiRunPolicy } from "../org/policies/ai-run-
 import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js";
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings } from "./plan.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, cancelRunFor, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, bootSystemForJob, cancelRunFor, composeSystem, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -550,6 +550,93 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   const r = await submitRun({ prompt: "x", wait: 5 }, appUser("alice", "crm"), { source: "app-ui" }, d);
   assert.equal(r.status, "done"); assert.equal((r.result as { text: string }).text, "기다린 답");
   ok("S24 wait — 한 번에 결과");
+}
+
+// ── #5082 앱 판 지시(ai.instructions) — 엣지 표 S1~S4 ──
+//  가짜 지시 읽기: 작업 이름 summarize 만 지시를 선언(«판 지시»). missing 이면 409(그 판에 파일 없음)를 던진다. 부른 것을 적는다.
+function withInstructions(d: AiRunDeps, o: { missing?: boolean } = {}): Array<Pick<AiRunRow, "app_id" | "requester" | "job_name">> {
+  const asked: Array<Pick<AiRunRow, "app_id" | "requester" | "job_name">> = [];
+  d.instructions = async (run) => {
+    asked.push({ app_id: run.app_id, requester: run.requester, job_name: run.job_name });
+    if (run.job_name !== "summarize") return null;
+    if (o.missing) throw new HttpError(409, "작업 'summarize' 의 앱 지시 파일(ai/s.md)을 그 판에서 찾지 못했습니다");
+    return "판 지시";
+  };
+  return asked;
+}
+
+{
+  assert.equal(composeSystem(null, null), null);
+  assert.equal(composeSystem("판 지시", null), "판 지시");
+  assert.equal(composeSystem(null, "앱 system"), "앱 system");
+  assert.equal(composeSystem("판 지시", "앱 system"), "판 지시\n\n앱 system", "앱 판 지시가 앞 · 부른 쪽 system 이 뒤");
+  assert.equal(composeSystem("  ", "앱 system"), "앱 system", "빈 지시는 싣지 않는다");
+  ok("G 단발 시스템 지시 합치기 — 앱 판 지시(앞) + 부른 쪽 system(뒤)");
+}
+
+{
+  const { w, d } = world();
+  const asked = withInstructions(d);
+  await submitRun({ prompt: "요약해", job: "summarize", system: "앱 system" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  assert.equal(w.runs.get(1)!.status, "done");
+  assert.equal(w.llm[0]!.system, "판 지시\n\n앱 system", "단발 호출의 system 에 앱 판 지시가 실린다");
+  assert.equal(w.runs.get(1)!.system_prompt, "앱 system", "행에는 부른 쪽 system 만(판 지시는 돌 때 판에서 다시 읽는다)");
+  assert.deepEqual(asked, [{ app_id: "crm", requester: "alice", job_name: "summarize" }, { app_id: "crm", requester: "alice", job_name: "summarize" }], "접수 때 한 번(미리 읽기) · 돌 때 한 번 — 부른 사람의 판");
+  ok("S2 단발 — 작업 이름의 앱 판 지시를 시스템 지시로(부른 쪽 system 은 뒤에)");
+}
+
+{
+  const { w, d } = world();
+  const asked = withInstructions(d);
+  await submitRun({ prompt: "요약해", system: "앱 system" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  assert.equal(w.llm[0]!.system, "앱 system", "작업 이름이 없으면 종전 그대로");
+  assert.deepEqual(asked.filter((a) => a.job_name), [], "작업 이름 없는 실행은 판을 읽지 않는다");
+  ok("S2b 작업 이름이 없는 실행 — 앱 판 지시 없음(종전 그대로)");
+}
+
+{
+  const { w, d } = world();
+  withInstructions(d, { missing: true });
+  await fails(submitRun({ prompt: "요약해", job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d), 409, /앱 지시 파일/);
+  assert.equal(w.runs.size, 0, "행을 만들지 않는다");
+  assert.equal(w.llm.length + w.submitted.length, 0, "LLM · 작업 컨테이너 모두 부르지 않는다");
+  ok("S1 접수 — 선언한 지시 파일을 그 판에서 못 읽으면 409 · 행 없음");
+}
+
+{
+  const { w, d } = world();
+  let n = 0;
+  d.instructions = async (run) => { if (run.job_name !== "summarize") return null; n++; if (n >= 2) throw new HttpError(409, "그 판에서 지시 파일이 사라졌다(가짜)"); return "판 지시"; };
+  await submitRun({ prompt: "요약해", job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  await settle();
+  const row = w.runs.get(1)!;
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /앱 지시를 읽지 못했습니다: 그 판에서 지시 파일이 사라졌다/);
+  assert.equal(w.llm.length, 0, "지시 없이 LLM 을 부르지 않는다");
+  assert.equal(w.inflightCount, 0, "동시 셈을 잡지 않는다");
+  ok("S3 단발 — 돌 때 지시를 못 읽으면 실패로 끝낸다(LLM 안 부름 · 동시 셈 안 잡음)");
+}
+
+{
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  const asked = withInstructions(d);
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  const jobId = w.runs.get(1)!.job_id!;
+  assert.ok(jobId, "작업 컨테이너로 보냈다");
+  assert.equal(await bootSystemForJob({ id: jobId }, d), "판 지시");
+  assert.equal(await bootSystemForJob({ id: 999 }, d), null, "AI 실행이 아닌 작업(agent_job_run)은 null");
+  await submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  const before = asked.length;
+  assert.equal(await bootSystemForJob({ id: w.runs.get(2)!.job_id! }, d), null, "작업 이름 없는 실행은 null");
+  assert.equal(asked.length, before, "작업 이름 없는 실행은 판을 읽으러 가지 않는다");
+  delete d.instructions;
+  assert.equal(await bootSystemForJob({ id: jobId }, d), null, "지시 읽기가 없으면(시험 · 옛 배선) null");
+  assert.ok(asked.length >= 2);
+  withInstructions(d, { missing: true });
+  await fails(bootSystemForJob({ id: jobId }, d), 409, /앱 지시 파일/);
+  ok("S4 작업 판의 시스템 지시 — 그 작업에 붙은 실행의 작업 이름이 선언했을 때만 · 못 읽으면 던진다");
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);

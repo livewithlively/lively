@@ -17,6 +17,7 @@ import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, typ
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
 import { assertAppMcpToolsInstallable } from "./app-mcp-decl.js";
 import { hashAppPackage } from "./package-hash.js";
+import { AI_INSTRUCTIONS_MAX_BYTES, instructionsText } from "./app-job-instructions.js";
 import type { DeployItem } from "./install.js";
 
 export interface LoadedUiAsset { page_key: string; kind: "page" | "widget"; title: string; entry: string; html: string }
@@ -58,6 +59,8 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   // runtime.entry 는 실행 시점이 아니라 설치 시점에 패키지 안의 실제 파일로 확정한다.
   // 스테이지가 사라진 뒤에야 "파일 없음"을 발견하면 active 앱이 실행 불능이 되므로 앞에서 거부한다.
   const runtimeAsset = await readRuntimeEntry(manifest, root);
+  //  #5082 작업별 지시 파일(ai.instructions)도 같은 까닭으로 여기서 확정한다 — 작업을 띄울 때 «파일 없음» 을 처음 알면 그 작업이 실패로 끝난다.
+  await checkAiInstructions(manifest, root);
 
   // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
   const declared = planDeclaredComponents(manifest);
@@ -92,6 +95,20 @@ async function readRuntimeEntry(m: LivelyAppManifest, root: string): Promise<Loa
   }
   const code = await readFile(abs);
   return { entry: m.runtime.entry, code, code_hash: createHash("sha256").update(code).digest("hex") };
+}
+
+/** #5082 작업별 지시 파일 — 패키지 안의 파일 · 상한 이하 · UTF-8 글. 경로 꼴(상대 경로 · 마디)은 parseAppManifest 가 먼저 본다. */
+async function checkAiInstructions(m: LivelyAppManifest, root: string): Promise<void> {
+  for (const [job, rel] of Object.entries(m.ai?.instructions ?? {})) {
+    const where = `ai.instructions.${job}`;
+    const abs = path.resolve(root, rel);
+    if (!abs.startsWith(root + path.sep)) throw new HttpError(400, `${where} 가 패키지 밖을 가리킵니다: ${rel}`);
+    let st;
+    try { st = await stat(abs); } catch { throw new HttpError(400, `${where} 의 지시 파일이 없습니다: ${rel}`); }
+    if (!st.isFile()) throw new HttpError(400, `${where} 가 파일이 아닙니다: ${rel}`);
+    if (st.size > AI_INSTRUCTIONS_MAX_BYTES) throw new HttpError(400, `${where} 의 지시 파일이 너무 큽니다(${rel}, ${st.size}B > ${AI_INSTRUCTIONS_MAX_BYTES}B)`);
+    if (instructionsText(await readFile(abs)) === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글이 아닙니다: ${rel}`);
+  }
 }
 
 const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가정 — 초과는 거부).

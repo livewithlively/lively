@@ -78,6 +78,9 @@ export interface AiRunDeps {
   singleShot(apiKey: string, i: SingleShotInput, signal: AbortSignal): Promise<SingleShotOutput>;
   /** 프록시 토큰 — 값은 돌려주고 해시만 적는다. */
   newProxyToken(): { token: string; hash: string };
+  /** #5082 앱 판 지시 — 그 실행의 작업 이름이 ai.instructions 를 선언했으면 «부른 사람의 판» 파일의 글(apps/app-job-instructions). 선언이 없으면 null ·
+   *  선언했는데 못 읽으면 던진다(지시 없이 돌리지 않는다). 없으면(시험) 앱 판 지시를 쓰지 않는다. */
+  instructions?(run: Pick<AiRunRow, "app_id" | "requester" | "job_name">): Promise<string | null>;
   /** 지금 열린 프록시 호출 수를 세는 자리(워크스페이스 동시 상한). */
   inflight: { take(key: string, max: number): boolean; release(key: string): void; count(key: string): number };
   rate: RateWindow;
@@ -254,6 +257,10 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //  #5081 — 공용 시트의 홈은 구성원 모두가 함께 쓴다(대화 기록 · 홈의 파일이 다음 작업에 남는다). 프로젝트 폴더(사람 경계)를 그 자리에 붙이지 않는다.
   if (sharedSeat && projectId != null) throw new HttpError(400, "공용 시트로 도는 실행은 앱 폴더에서만 돕니다 — project_id 를 빼세요(시트 계정의 홈은 구성원 모두가 함께 씁니다)");
 
+  //  #5082 — 작업 이름이 앱 판 지시를 선언했으면 지금 한 번 읽어 본다(그 판에 파일이 없으면 접수에서 409 — 작업을 띄운 뒤에야 실패하지 않게).
+  //   실제로 싣는 글은 돌 때 다시 읽는다(단발 runProxy · 작업 bootSystemForJob).
+  if (jobName && d.instructions) await d.instructions({ app_id: appId, requester: who.member, job_name: jobName });
+
   // 상한 — 앱당 빈도 · 사람당 동시 · (프록시) 워크스페이스 동시 · (API 키) 앱당 하루 토큰.
   const p = await d.policy();
   const tenant = d.tenant();
@@ -335,10 +342,23 @@ function proxyResult(o: { text: string; json: unknown; model: string | null; usa
   return { text: o.text, ...(o.json !== undefined ? { json: o.json } : {}), model: o.model, usage: o.usage, duration_ms: o.durationMs, retries: o.retries, stop_reason: o.stopReason, truncated: o.truncated };
 }
 
+/** (순수) 단발의 시스템 지시 — 앱 판 지시(앞) + 부른 쪽 system(뒤). 둘 다 없으면 null. */
+export function composeSystem(instructions: string | null, system: string | null): string | null {
+  const parts = [instructions, system].filter((x): x is string => typeof x === "string" && x.trim() !== "");
+  return parts.length ? parts.join("\n\n") : null;
+}
+
 export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Promise<void> {
   const tenant = d.tenant();
   const key = await d.apiKey();
   if (!key) { await d.store.finishAiRun(row.id, { status: "failed", result: null, error: "워크스페이스 API 키가 없습니다" }); return; }
+  //  #5082 앱 판 지시 — 못 읽으면 지시 없이 부르지 않는다(실패로 끝낸다).
+  let system: string | null;
+  try { system = composeSystem(d.instructions ? await d.instructions(row) : null, row.system_prompt); }
+  catch (e) {
+    await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `앱 지시를 읽지 못했습니다: ${e instanceof Error ? e.message : String(e)}`.slice(0, 600) });
+    return;
+  }
   if (!d.inflight.take(tenant, p.max_inflight)) {
     await d.store.finishAiRun(row.id, { status: "failed", result: null, error: `이 워크스페이스의 AI 호출이 동시에 ${p.max_inflight}개 돌고 있습니다 — 잠시 뒤 다시 보내세요` });
     return;
@@ -370,7 +390,7 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
     return out;
   };
   try {
-    let out = await call({ model, prompt, system: row.system_prompt, maxTokens });
+    let out = await call({ model, prompt, system, maxTokens });
     if (!out.ok) {
       await d.store.finishAiRun(row.id, { status: "failed", result: null, error: out.error ?? "LLM 호출 실패", inputTokens: total.input_tokens, outputTokens: total.output_tokens });
       return;
@@ -380,7 +400,7 @@ export async function runProxy(row: AiRunRow, p: AiRunPolicy, d: AiRunDeps): Pro
     if (!judged.ok && row.schema) {
       retries = 1;
       const retry = await call({
-        model, prompt, system: row.system_prompt, maxTokens,
+        model, prompt, system, maxTokens,
         messages: [{ role: "user", content: prompt }, { role: "assistant", content: out.text || "(빈 답)" }, { role: "user", content: retryInstruction(judged.errors, row.schema) }],
       });
       if (retry.ok) { out = retry; judged = judgeOutput(out.text, row.schema); }
@@ -478,6 +498,15 @@ export async function sweepAiRuns(d: AiRunDeps): Promise<{ synced: number; stale
     if (await d.store.finishAiRun(r.id, { status: "failed", result: null, error: "게이트웨이가 실행을 끝맺지 못했습니다(재기동) — 다시 보내세요" })) stale++;
   }
   return { synced, stale };
+}
+
+// ── 작업 판의 시스템 지시(agent-jobs onBoot 가 묻는다 · #5082 앱 판 지시) ──
+/** 그 작업에 붙은 AI 실행의 작업 이름이 앱 판 지시를 선언했을 때만 그 글. AI 실행이 아닌 작업(agent_job_run) · 작업 이름 없는 실행은 null. 못 읽으면 던진다. */
+export async function bootSystemForJob(job: Pick<AgentJobRow, "id">, d: AiRunDeps): Promise<string | null> {
+  if (!d.instructions) return null;
+  const run = await d.store.getAiRunByJob(job.id);
+  if (!run || !run.job_name) return null;
+  return d.instructions(run);
 }
 
 // ── API 키 에이전트 작업의 판 환경(agent-jobs onBoot 가 묻는다) ──

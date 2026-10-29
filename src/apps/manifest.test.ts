@@ -388,3 +388,23 @@ test("#5100 M10 최상위 모르는 칸은 context 와 함께여도 종전대로
   assert.deepEqual(m.future_key, { x: 1 });
   assert.deepEqual((m.context as { knowledge_categories: string[] }).knowledge_categories, ["a1"]);
 });
+
+// ── #5082 작업별 앱 지시(ai.instructions) ── 엣지 표 I1~I4
+test("I1·I3 ai.instructions — 선언한 작업 이름 → 묶음 안 상대 경로만 받는다(그대로 보존)", () => {
+  const m = parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }, { name: "sum-up" }], instructions: { answer: "ai/answer.md", "sum-up": "prompts/s.txt" } } });
+  assert.deepEqual(m.ai?.instructions, { answer: "ai/answer.md", "sum-up": "prompts/s.txt" });
+  assert.equal(parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } }).ai?.instructions, undefined, "선언이 없으면 없다(종전 매니페스트 무회귀)");
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: { other: "ai/o.md" } } }), /ai\.instructions\.other.*ai\.jobs 에 선언한 작업 이름이 아닙니다/);
+  assert.throws(() => parseAppManifest({ ...base(), ai: { instructions: { answer: "ai/a.md" } } }), /ai\.jobs 에 선언한 작업 이름이 아닙니다/, "작업 선언 없이 지시만 두면 거절");
+});
+
+test("I2 ai.instructions 경로 — 앞 / · \\ · 빈 마디 · . · .. · 제어 글자 · 빈 값은 거절", () => {
+  for (const bad of ["/etc/passwd", "../x.md", "ai/../../x.md", "ai//x.md", "./ai/x.md", "ai/.", "a\\b.md", "ai/x\n.md", "ai/x\u0000.md"]) {
+    assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: { answer: bad } } }), /ai\.instructions\.answer/, JSON.stringify(bad));
+  }
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: { answer: "" } } }), /ai\.instructions/);
+});
+
+test("I4 지시는 ai 바로 아래 자리다 — ai.jobs[] 안(strict)에 두면 거절(이 칸을 모르는 옛 코어가 ai 바로 아래는 무시한다 · 롤백 안전)", () => {
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer", instructions: "ai/answer.md" }] } }), /ai\.jobs\.0/);
+});
