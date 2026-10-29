@@ -29,7 +29,7 @@ import { appErrorHtml, loadAppScripts, type AppScripts } from "./app-front-page.
 import { addVary, docInjector, documentRequestHeaders, gzipDocResponse, gzipStream, injectableResponse, isDocumentRequest, scriptModeFor, sdkTags, type DocInjector, type GzipStream } from "./app-server-page.js";
 import { appDomain, appHost } from "./app-address.js";
 import { appServerEnv } from "./app-server-config.js";
-import { realLambdaApi, type LambdaApi } from "./app-server-deploy.js";
+import { appServerApi, type LambdaApi } from "./app-server-host.js";
 import { startHttpStream, lambdaErrorOf, type Complete, type HttpPrelude } from "./app-server-stream.js";
 import { APP_IDENTITY_HEADER, appIdentityKeysFromEnv, verifyAppIdentity } from "./app-identity.js";
 import { acquireInflight, recordAppServerCall } from "./app-server-usage.js";
@@ -273,7 +273,7 @@ export async function serveAppServer(req: express.Request, res: express.Response
       method: req.method, headers: doc ? documentRequestHeaders(reqHeaders) : reqHeaders, path, host, identity, body,
       requestId: crypto.randomUUID(), now,
     });
-    const api = deps.api ?? realLambdaApi(env.region);
+    const api = deps.api ?? appServerApi(env);
     let out;
     try {
       out = await api.invokeStream(row.function_name, alias, JSON.stringify(event), { timeoutMs: policy.timeout_s * 1000 + 5_000, logTail: true });

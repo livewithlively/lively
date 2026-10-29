@@ -66,8 +66,30 @@ const dirOf = (v: unknown): string | null => {
   return !s || s === "." || s.length > 200 ? null : s;
 };
 
+/**
+ * 앱 서버 실행면(#4487 앱 v2-8 · app-server-host) — lambda(매니지드 · AWS Lambda) · local(자가호스팅 박스의 Docker 컨테이너 — 다음 단계).
+ *  env LIVELY_APP_SERVER_HOST · 비면 lambda · 모르는 이름이면 null(앱 서버를 켜지 않는다 — 글자를 틀렸는데 조용히 Lambda 로 가지 않게).
+ *  LIVELY_APP_SERVER_RUNTIME 은 이미 Lambda 런타임 이름(아래 appServerEnv)이라 실행면 이름으로 쓰지 않는다.
+ */
+export type AppServerHostKind = "lambda" | "local";
+export function appServerHostKind(env: NodeJS.ProcessEnv = process.env): AppServerHostKind | null {
+  const raw = String(env.LIVELY_APP_SERVER_HOST ?? "").trim().toLowerCase();
+  if (!raw || raw === "lambda") return "lambda";
+  if (raw === "local") return "local";
+  return null;
+}
+/** 실행면을 못 켜는 까닭(사람에게 그대로) — 켤 수 있으면 null. */
+export function appServerHostUnavailable(env: NodeJS.ProcessEnv = process.env): string | null {
+  const kind = appServerHostKind(env);
+  if (!kind) return `앱 서버 실행면 이름(LIVELY_APP_SERVER_HOST=${String(env.LIVELY_APP_SERVER_HOST ?? "").trim().slice(0, 40)})을 모릅니다 — lambda 또는 local 입니다`;
+  if (kind === "local") return "이 판의 코어에는 자가호스팅 실행면(LIVELY_APP_SERVER_HOST=local)이 아직 없습니다(#4487)";
+  return null;
+}
+
 /** 배포 설정(env) — 실행 역할이 없으면 null(= 이 배포는 앱 서버를 돌리지 않는다 · 자가호스팅은 v2-8). */
 export interface AppServerEnv {
+  /** 실행면(#4487) — 흐름은 이 값으로 함수 실행면 · zip 저장소를 고른다(app-server-host appServerApi). */
+  host: AppServerHostKind;
   region: string;
   /** 함수 실행 역할(lively-infra app-servers.tf lvly-app-exec) — 제 함수의 로그 그룹에만 쓰기(#4790). */
   execRoleArn: string;
@@ -109,6 +131,8 @@ export function appServerEnabledFor(slug: string | null | undefined, env: NodeJS
 
 /** 이 요청(워크스페이스)의 앱 서버 설정 — 실행 역할이 없거나 · 모양이 틀렸거나 · 워크스페이스 스위치 밖이면 null(= 앱 서버 꺼짐). */
 export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string | null | undefined = currentTenant()?.slug): AppServerEnv | null {
+  //  #4487 실행면 — 이 판에서는 lambda 만 돈다(local 은 다음 단계 · 모르는 이름은 끈다 · 까닭은 appServerHostUnavailable).
+  if (appServerHostKind(env) !== "lambda") return null;
   const execRoleArn = String(env.LIVELY_APP_SERVER_EXEC_ROLE ?? "").trim();
   const role = ROLE_RE.exec(execRoleArn);
   if (!role) return null;
@@ -121,7 +145,7 @@ export function appServerEnv(env: NodeJS.ProcessEnv = process.env, slug: string 
   const runtime = String(env.LIVELY_APP_SERVER_RUNTIME ?? "").trim() || DEFAULT_RUNTIME;
   //  모르는 값은 기본(REFERENCE)으로 — «copy» 라고 또렷이 적었을 때만 복사한다.
   const codeStorage = String(env.LIVELY_APP_SERVER_CODE_STORAGE ?? "").trim().toLowerCase() === "copy" ? "COPY" : "REFERENCE";
-  return { region, execRoleArn, awsAccountId: role[1]!, layerArn, prefix, runtime, arch: "arm64", codeStorage };
+  return { host: "lambda", region, execRoleArn, awsAccountId: role[1]!, layerArn, prefix, runtime, arch: "arm64", codeStorage };
 }
 
 /**

@@ -10,15 +10,14 @@ import { logger } from "../log.js";
 import { HttpError } from "../http-error.js";
 import type { AppBundle } from "./app-bundle.js";
 import { BUNDLE_READ_CONCURRENCY } from "./app-bundle.js";
-import { appBundleS3Config, blobTenant, getBlob, type BlobStoreKind } from "./app-blob-store.js";
+import { blobTenant, getBlob, type BlobStoreKind } from "./app-blob-store.js";
 import { SERVER_BUILDER_JS, ZIP_EXCLUDE, encodeBuildHeader, parseBuildResult, type BuildHeader, type BuildResult } from "./app-server-builder.js";
 import { buildKeyOf, tailText, zipKeyFor, type AppServerDecl, type AppServerEnv } from "./app-server-config.js";
 import type { AppServerPolicy } from "./app-server-policy.js";
 import {
   claimServerBuild, finishServerBuild, getServerBuild, invalidateServerBuild, setServerBuildZipBytes, setServerBuildZipVersion, touchServerBuild, type ServerBuildRow,
 } from "./app-server-store.js";
-import { s3Delete, s3Head, s3PresignUrl, type S3Config } from "../net/aws/s3-lite.js";
-import { resolveGatewayBaseCredsWithin } from "../net/aws/aws-broker.js";
+import { appServerZipStore } from "./app-server-host.js";
 
 /** 빌드할 자리 — 그 판을 저장한 사람과 그 사람의 세션(컨테이너가 떠 있어야 한다). */
 export interface BuildSeat { memberId: string; sessionId: string }
@@ -73,14 +72,6 @@ async function defaultSpawnInSession(seat: BuildSeat, argv: string[]): Promise<C
   if (!osUser) throw new HttpError(503, "빌드할 세션의 OS 계정을 찾지 못했습니다");
   const full = execAtArgv({ osUser, sessionId: seat.sessionId }, argv);
   return spawn(full[0]!, full.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
-}
-
-async function defaultPresignPut(cfg: S3Config, key: string, expiresSec: number): Promise<string> {
-  const got = await resolveGatewayBaseCredsWithin(expiresSec * 1000);
-  if (!got) throw new HttpError(503, "S3 자격이 없어 빌드 결과를 올릴 주소를 만들지 못했습니다");
-  //  자격이 먼저 끝나면 주소도 그때 죽는다 — 그 시각까지로 줄인다(빌더가 받은 주소로 403 을 보며 헤매지 않게 · 그래도 1분은 둔다).
-  const left = got.expiresAtMs ? Math.floor((got.expiresAtMs - Date.now()) / 1000) - 30 : expiresSec;
-  return s3PresignUrl(cfg, key, { method: "PUT", expiresSec: Math.max(60, Math.min(expiresSec, left)), creds: got.creds, now: new Date() });
 }
 
 /** 판 파일을 차례로 꺼내 빌더 stdin 에 흘린다 — 앞의 몇 개를 미리 읽어 두고(동시 BUNDLE_READ_CONCURRENCY), 쓰기는 받는 쪽 속도를 따른다. */
@@ -158,10 +149,10 @@ export async function usableBuild(row: ServerBuildRow | null, deps: BuildDeps = 
   if (!row || row.status !== "ok" || !row.zip_key || !row.zip_sha256) return null;
   let head: { size: number; versionId?: string | null } | null;
   try {
-    const s3 = appBundleS3Config();
-    if (!deps.headZip && !s3) return row;
+    const store = appServerZipStore();
+    if (!deps.headZip && !store) return row;
     //  공개 확인은 앱 설치 락 안에서 부른다 — 한 번 · 5초만(s3-lite «잠근 채 부르는 일은 attempts:1» 관례). 못 보면 아래에서 있다고 본다.
-    head = deps.headZip ? await deps.headZip(row.zip_key) : await s3Head(s3!, row.zip_key, { attempts: 1, timeoutMs: 5_000 });
+    head = deps.headZip ? await deps.headZip(row.zip_key) : await store!.head(row.zip_key, { attempts: 1, timeoutMs: 5_000 });
   } catch (e) {
     logger.warn({ err: e, appId: row.app_id, key: row.build_key }, "빌드 zip 을 확인하지 못했다 — 있다고 보고 진행(#4484)");
     return row;
@@ -204,11 +195,11 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     return row ?? ({ app_id: input.appId, build_key: key, status: "failed", stage, error } as ServerBuildRow);
   };
   try {
-    const s3 = appBundleS3Config();
-    if (!s3 && !deps.presignPut) return await fail("setup", "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 빌드 결과를 둘 곳이 없습니다");
-    const zipKey = zipKeyFor(s3?.prefix ?? "", blobTenant(), input.appId, key);
+    const store = appServerZipStore();
+    if (!store && !deps.presignPut) return await fail("setup", "판 묶음 버킷(LIVELY_APP_BUNDLE_BUCKET)이 없어 빌드 결과를 둘 곳이 없습니다");
+    const zipKey = zipKeyFor(store?.prefix ?? "", blobTenant(), input.appId, key);
     const deadlineMs = now() + input.policy.build_timeout_s * 1000;
-    const uploadUrl = deps.presignPut ? await deps.presignPut(zipKey, input.policy.build_timeout_s + 600) : await defaultPresignPut(s3!, zipKey, input.policy.build_timeout_s + 600);
+    const uploadUrl = deps.presignPut ? await deps.presignPut(zipKey, input.policy.build_timeout_s + 600) : await store!.uploadUrl(zipKey, input.policy.build_timeout_s + 600);
     const files = input.bundle.files.filter((f) => !ZIP_EXCLUDE.includes(f.p));
     const header: BuildHeader = {
       v: 1, deadline_ms: deadlineMs, files: files.map((f) => [f.p, f.s]),
@@ -253,7 +244,7 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     const detail = { steps: res.steps, warnings: res.warnings, mem: res.mem, ms: res.ms, install: res.install, build_cmd: res.build_cmd, start_cmd: res.start_cmd };
     if (!res.ok || !res.zip) return await fail(res.stage ?? "build", res.error ?? "빌드가 실패했습니다", log, detail);
     //  올라왔는지 직접 본다 — 빌더의 말만 믿고 함수를 고치지 않는다(크기가 다르면 올리기가 잘렸다).
-    const head = deps.headZip ? await deps.headZip(zipKey) : await s3Head(s3!, zipKey).catch(() => null);
+    const head = deps.headZip ? await deps.headZip(zipKey) : await store!.head(zipKey).catch(() => null);
     if (!head || head.size !== res.zip.bytes) {
       return await fail("upload", `빌드 결과(zip)가 저장소에 ${head ? `다른 크기(${head.size} ≠ ${res.zip.bytes})로` : "없이"} 남았습니다 — 다시 빌드하세요`, log, detail);
     }
@@ -264,7 +255,7 @@ async function runBuild(input: BuildInput, key: string, deps: BuildDeps): Promis
     });
     if (!row) {
       //  빌드하는 동안 앱(과 그 빌드 기록)이 지워졌다 — 방금 올린 zip 은 주인이 없다. 지운다(best-effort · 남으면 버킷 수명 규칙이 걷는다).
-      await (deps.deleteZip ? deps.deleteZip(zipKey) : s3 ? s3Delete(s3, zipKey, { attempts: 1, timeoutMs: 10_000 }) : Promise.resolve()).catch(() => { /* best-effort */ });
+      await (deps.deleteZip ? deps.deleteZip(zipKey) : store ? store.remove(zipKey) : Promise.resolve()).catch(() => { /* best-effort */ });
       throw new HttpError(409, "빌드하는 동안 앱이 지워졌습니다");
     }
     return row;
