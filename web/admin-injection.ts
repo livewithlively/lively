@@ -1,7 +1,7 @@
 // admin-injection.ts — [세션 주입] 패널 (#1313 R39, admin.ts 에서 분리 · #5159 세부 페이지로 재조판).
 //  ⚠ injectionMap 안의 조립 함수 대부분은 지역 rc(runtimeConfig) · hooks · canEdit · data 를 클로저로 캡처한다.
 //   그 캡처를 인자로 펴는 일(진짜 승격)은 **별도 항목**이다. 캡처가 하나도 없는 조각만 모듈 최상위에 있다:
-//     HANDLED · jump · openPreview · guideKey · SECTION_HINT · tokenRow · hookRow · injectionStatus.
+//     WORK_EVENTS · HANDLED · EVENT_LABEL · jump · openPreview · guideKey · SECTION_HINT · tokenRow · hookRow · hookOrder · injectionStatus.
 //
 //  #5159(원준 2026-10-29) — "세로로 쭉 늘어져 있다 · 스크롤 안 해도 되게 · 레이아웃을 다시". 다섯 시점을 한 판에
 //   세로로 쌓던 것(실측 1440 폭에서 이 패널만 2,900px)을 **시점 하나 = 세부 페이지 하나**로 갈랐다. 왼쪽 목차는
@@ -13,8 +13,17 @@ import { dlvBox, dlvHead, dlvSwitch, dlvTitleN } from './lib/dlv.js';
 //  서버가 org_section 축 감사까지 합쳐 준다(관리탭에서 한 편집과 위키에서 한 편집이 한 타임라인에 온다).
 import { openKnHistory } from './wiki-history.js';
 
-// 위 3시점(SessionStart·PostToolUse·Stop) — 이 목록 밖의 이벤트는 '기타 이벤트' 페이지로 모은다.
-const HANDLED = ['SessionStart', 'PostToolUse', 'Stop'];
+// 시점 페이지가 맡는 이벤트 — 세션 시작(SessionStart) · 작업 중(메시지마다 · 도구 직전 · 도구 직후) · 세션 종료(Stop).
+//  #5159 후속(원준 2026-10-30) — "커스텀 훅이 엄청 많았는데 왜 4·4·2 개밖에 안 보이나". 종전엔 작업 중이 PostToolUse
+//   하나만 맡아, 일하는 동안 도는 UserPromptSubmit(12)·PreToolUse(4)가 「기타 이벤트」로 빠져 있었다. 셋 다 «작업 중»이다.
+//   이 목록 밖의 이벤트(SubagentStop · Notification …)만 '기타 이벤트' 페이지로 간다 — 없으면 목차에서 숨는다.
+const WORK_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PostToolUse'];
+const HANDLED = ['SessionStart', ...WORK_EVENTS, 'Stop'];
+// 이벤트 → 사람 말. 훅 목록의 묶음 제목이 이걸 쓴다(이벤트 이름은 옆에 그대로 붙인다 — 검색·대조용).
+const EVENT_LABEL: Record<string, string> = {
+  SessionStart: '세션이 열릴 때', UserPromptSubmit: '메시지를 보낼 때마다', PreToolUse: '도구를 쓰기 직전',
+  PostToolUse: '도구를 쓴 직후', Stop: '턴이 끝날 때',
+};
 
 /** 세부 페이지 키 — URL `#/context/deliver/<key>` 와 같다. */
 export type InjectionMoment = 'start' | 'work' | 'stop' | 'events' | 'kit';
@@ -59,13 +68,31 @@ const tokenRow = (token, label, sub, btn?) => el('div', { class: 'dlv-token' },
   el('div', { class: 'dlv-token-b' }, el('b', { text: label }), el('span', { text: sub })),
   btn || null);
 
-// 커스텀 훅 한 줄 — 이름(모노) · 하네스 · 매처. withEvent 면 이벤트 이름을 앞에 단다(기타 이벤트 페이지).
-function hookRow(h, withEvent = false) {
-  const meta = [withEvent ? h.event : null, h.harness || 'all', h.matcher || null].filter(Boolean).join(' · ');
-  return el('div', { class: 'dlv-hook' + (h.enabled === false ? ' off' : '') },
-    el('code', { class: 'dlv-hook-id', text: h.id }),
-    el('span', { class: 'dlv-hook-m', text: meta }),
-    h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null);
+// 커스텀 훅 한 줄 — 이름(모노) · 하는 일 한 줄 · 조건(매처·하네스) · 출처 배지(제품 기본/조직 정의) · 켜짐/꺼짐.
+//  locked = 제품이 시딩한 훅(코드가 단일 출처 — lockedHookIds). withEvent 면 이벤트 이름을 조건 앞에 단다(기타 이벤트 페이지).
+function hookRow(h, locked: Set<string>, withEvent = false) {
+  const off = h.enabled === false;
+  const what = h.summary || (h.label && h.label !== h.id ? h.label : '');
+  const cond = [withEvent ? h.event : null, h.matcher ? '도구 ' + h.matcher : null, h.harness && h.harness !== 'all' ? h.harness + ' 전용' : null]
+    .filter(Boolean).join(' · ');
+  return el('div', { class: 'dlv-hook' + (off ? ' off' : '') },
+    el('div', { class: 'dlv-hook-b' },
+      el('div', { class: 'dlv-hook-t' },
+        el('code', { class: 'dlv-hook-id', text: h.id }),
+        cond ? el('span', { class: 'dlv-hook-m', text: cond, title: cond }) : null),
+      what ? el('div', { class: 'dlv-hook-s' }, ...uiText(what)) : null),
+    el('div', { class: 'dlv-hook-a' },
+      el('span', { class: 'dlv-tag', text: locked.has(h.id) ? '제품 기본' : '조직 정의',
+        title: locked.has(h.id) ? '라이블리가 넣은 훅 — 본문은 코드가 관리합니다(켜고 끄기만 가능)' : '이 조직이 직접 정의한 훅' }),
+      el('span', { class: 'dlv-hook-st' + (off ? ' off' : ''), text: off ? '꺼짐' : '켜짐' })));
+}
+// 목록 순서 — 켜진 것 먼저, 그다음 정의 순(sort) · 이름순.
+const hookOrder = (a, b) => (a.enabled === false ? 1 : 0) - (b.enabled === false ? 1 : 0)
+  || (Number(a.sort) || 0) - (Number(b.sort) || 0) || String(a.id).localeCompare(String(b.id));
+
+/** 세 시점 밖 이벤트의 훅 수 — 0 이면 목차가 「기타 이벤트」를 숨긴다(빈 페이지로 안내하지 않는다). */
+export function otherHookCount(data): number {
+  return (data.orgHooks || []).filter((h) => !HANDLED.includes(h.event)).length;
 }
 
 /** 왼쪽 목차의 상태 — 시점마다 켜짐 여부와 개수. 저장이 일어나면 context-deliver 가 다시 부른다. */
@@ -73,13 +100,13 @@ export function injectionStatus(data): Record<InjectionMoment, { on: boolean | n
   const rc = data.runtimeConfig || data.injectionConfig;
   const hooks = (rc && rc.hooks) || {};
   const orgHooks = data.orgHooks || [];
-  const n = (ev) => orgHooks.filter((h) => h.event === ev).length;
+  const n = (...evs) => orgHooks.filter((h) => evs.includes(h.event)).length;
   const hk = (k) => (k ? ' · 훅 ' + k : '');
   return {
     start: { on: hooks.session_preload !== false, meta: '문서 ' + Object.keys(data.sections || {}).length + hk(n('SessionStart')) },
-    work: { on: hooks.work_flag !== false, meta: hk(n('PostToolUse')).slice(3) },
+    work: { on: hooks.work_flag !== false, meta: hk(n(...WORK_EVENTS)).slice(3) },
     stop: { on: hooks.stop_writeback_gate !== false, meta: hk(n('Stop')).slice(3) },
-    events: { on: null, meta: '훅 ' + orgHooks.filter((h) => !HANDLED.includes(h.event)).length },
+    events: { on: null, meta: '훅 ' + otherHookCount(data) },
     kit: { on: hooks.self_update !== false, meta: '' },
   };
 }
@@ -102,7 +129,7 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
   const canEdit = !!(data.canManage ?? data.canEdit) && !!rc;
   const hooks = (rc && rc.hooks) || {};
   const orgHooks = data.orgHooks || [];
-  const customFor = (ev) => orgHooks.filter((h) => h.event === ev);
+  const locked = new Set<string>(data.lockedHookIds || []);
 
   // 런타임 설정 부분 저장 — 서버가 patch 병합(제공 필드만 갱신)하므로 바뀐 것만 보낸다.
   async function saveRuntime(patch, okMsg?) {
@@ -146,11 +173,21 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
     return sw.wrap;
   }
 
-  // 커스텀 훅(읽기 전용) + 편집 딥링크 — 시점 페이지 오른쪽 칸.
-  function hookBox(ev) {
-    const list = customFor(ev);
-    return dlvBox(dlvTitleN('커스텀 훅', list.length), '이 시점에 함께 도는, 코드로 정의한 훅입니다.',
-      list.length ? el('div', { class: 'dlv-hooks' }, ...list.map((h) => hookRow(h))) : el('p', { class: 'dlv-empty', text: '이 시점의 커스텀 훅은 없습니다.' }),
+  // 커스텀 훅(읽기 전용) + 편집 딥링크 — 시점 페이지 맨 아래, 전체 폭으로 끝까지 편다.
+  //  #5159 후속(원준 2026-10-30) — "왼쪽에 조그맣게 보여주지 말고 1열 아래쪽 카드에 이어 붙여서 아래까지 쭉".
+  //  이벤트가 둘 이상이면(작업 중) 이벤트마다 묶음 제목을 단다. 분류 규칙(어느 이벤트의 훅인가)을 상자 머리에 적어 둔다.
+  function hookBox(events: string[]) {
+    const list = orgHooks.filter((h) => events.includes(h.event));
+    const groups = events.map((ev) => ({ ev, hs: list.filter((h) => h.event === ev).sort(hookOrder) })).filter((g) => g.hs.length);
+    const multi = events.length > 1;
+    return dlvBox(dlvTitleN('커스텀 훅', list.length),
+      '하네스가 이 시점에 자동으로 실행하는 훅입니다 — AI 가 고르지 않습니다. 이벤트 ' + events.join(' · ') + ' 에 걸린 훅을 모두 보여 줍니다.',
+      list.length
+        ? el('div', { class: 'dlv-hooks' }, ...groups.flatMap((g) => [
+          multi ? el('h5', { class: 'dlv-hooks-g' },
+            el('span', { text: EVENT_LABEL[g.ev] || g.ev }), el('code', { class: 'dlv-ev', text: g.ev }), el('span', { class: 'dlv-n', text: String(g.hs.length) })) : null,
+          ...g.hs.map((h) => hookRow(h, locked))]))
+        : el('p', { class: 'dlv-empty', text: '이 시점의 커스텀 훅은 없습니다.' }),
       el('div', { class: 'dlv-box-acts' }, jump(list.length ? '훅 편집 →' : '+ 훅 추가', '#/system/agent-assets', HOOKS_TAB)));
   }
 
@@ -349,8 +386,7 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
         event: 'SessionStart',
         right: momentToggle('session_preload', '세션 시작 주입', '주입 켜짐', '주입 꺼짐 — 구성원 세션이 조직 맥락 없이 시작합니다'),
       }),
-      el('div', { class: 'dlv-grid' },
-        el('div', { class: 'dlv-col' },
+      el('div', { class: 'dlv-col' },
           dlvBox([el('span', { text: '주입 문서' }), docCount], null, sectionsWrap,
             el('div', { class: 'dlv-box-acts' },
               el('button', { class: 'btn btn-text', type: 'button', text: '실제 주입 전문 보기', onclick: openPreview }),
@@ -360,33 +396,33 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
               tokenRow('${team}', '우리 팀', '보는 사람이 속한 팀 이름'),
               tokenRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록'),
               tokenRow('${wiki}', 'WIKI 인덱스', '핀 꽂은 지식의 제목·소환키(본문 제외)',
-                el('a', { class: 'dlv-link', href: '#/knowledge?indexed=1', text: '핀 보기 →' }))))),
-        el('div', { class: 'dlv-col' }, hookBox('SessionStart')))),
+                el('a', { class: 'dlv-link', href: '#/knowledge?indexed=1', text: '핀 보기 →' })))),
+          hookBox(['SessionStart']))),
 
     work: () => el('div', { class: 'dlv-page' },
-      dlvHead('작업 중', '도구를 쓸 때마다 라이블리 작업 세션인지 표시합니다. 주입은 없고, 세션 종료 때 기록을 권할지 판단하는 데 씁니다.', {
+      dlvHead('작업 중', '메시지를 받고 도구를 쓰는 동안 도는 것들입니다. 스위치는 작업 감지 — 도구를 쓸 때마다 라이블리 작업 세션인지 표시해 두고, 세션 종료 때 기록을 권할지 판단합니다.', {
         event: 'PostToolUse',
         right: momentToggle('work_flag', '작업 감지', '감지 켜짐', '감지 꺼짐'),
       }),
-      el('div', { class: 'dlv-grid dlv-grid-2' },
-        canEdit && isAdmin ? listEditor('작업 폴더 (work-roots)', '이 폴더에서 켠 세션을 라이블리 작업으로 봅니다. 한 줄에 절대경로 하나.', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
-        canEdit ? listEditor('기록으로 치는 툴 (write_tools)', '이 lively 툴을 쓴 세션에는 종료 때 기록을 권하지 않습니다. 비우면 기본 목록을 씁니다.', rc.write_tools, 'write_tools', 'knowledge_save') : null,
-        pullToolsEditor(),
-        hookBox('PostToolUse'))),
+      el('div', { class: 'dlv-col' },
+        el('div', { class: 'dlv-grid dlv-grid-2' },
+          canEdit && isAdmin ? listEditor('작업 폴더 (work-roots)', '이 폴더에서 켠 세션을 라이블리 작업으로 봅니다. 한 줄에 절대경로 하나.', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
+          canEdit ? listEditor('기록으로 치는 툴 (write_tools)', '이 lively 툴을 쓴 세션에는 종료 때 기록을 권하지 않습니다. 비우면 기본 목록을 씁니다.', rc.write_tools, 'write_tools', 'knowledge_save') : null,
+          pullToolsEditor()),
+        hookBox(WORK_EVENTS))),
 
     stop: () => el('div', { class: 'dlv-page' },
       dlvHead('세션 종료', '작업했는데 라이블리에 남긴 기록이 없으면, 끝날 때 한 번 기록을 권합니다.', {
         event: 'Stop',
         right: momentToggle('stop_writeback_gate', '기록 권유', '기록 권유 켜짐', '기록 권유 꺼짐'),
       }),
-      el('div', { class: 'dlv-grid' },
-        el('div', { class: 'dlv-col' }, writebackEditor()),
-        el('div', { class: 'dlv-col' },
-          dlvBox('언제 뜨나', null, el('ol', { class: 'dlv-steps' },
-            el('li', { text: '[작업 중] 감지가 이 세션을 라이블리 작업으로 표시했고' }),
-            el('li', { text: '기록으로 치는 툴을 한 번도 쓰지 않았으면' }),
-            el('li', { text: '세션이 끝날 때 위 문구를 한 번 보여 줍니다.' }))),
-          hookBox('Stop')))),
+      el('div', { class: 'dlv-col' },
+        dlvBox('언제 뜨나', null, el('ol', { class: 'dlv-steps dlv-steps-row' },
+          el('li', { text: '[작업 중] 감지가 이 세션을 라이블리 작업으로 표시했고' }),
+          el('li', { text: '기록으로 치는 툴을 한 번도 쓰지 않았으면' }),
+          el('li', { text: '세션이 끝날 때 아래 문구를 한 번 보여 줍니다.' }))),
+        writebackEditor(),
+        hookBox(['Stop']))),
 
     // 키트 자동 업데이트(#858) — 주입이 아니라 '전달' 축이지만, 발화 시점이 세션 시작이라 같은 목차에 둔다.
     //  켜져 있으면 구성원은 업데이트 명령을 손으로 돌릴 필요가 없다(새 훅·배선까지 자동으로 따라온다).
@@ -405,16 +441,16 @@ function injectionMap(detail, data, opts: { only?: InjectionMoment; onChange?: (
           el('p', { class: 'dlv-note' }, ...uiText('회사 맥락·스킬은 이 스위치와 무관하게 매 세션 적용됩니다. 구성원 한 사람만 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 씁니다.')),
           isAdmin ? null : el('p', { class: 'dlv-note' }, ...uiText('구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다.'))))),
 
-    // 기타 이벤트 — 위 3시점 외 커스텀 훅. 이벤트 순으로 묶어 두 칸에 흘린다.
+    // 기타 이벤트 — 위 3시점 외 커스텀 훅. 이벤트 순으로 한 줄씩.
     events: () => {
       const other = orgHooks.filter((h) => !HANDLED.includes(h.event))
         .slice().sort((a, b) => String(a.event).localeCompare(String(b.event)) || String(a.id).localeCompare(String(b.id)));
       return el('div', { class: 'dlv-page' },
-        dlvHead('기타 이벤트', 'UserPromptSubmit · PreToolUse · SubagentStop · Notification 처럼 세 시점 밖에서 도는, 코드로 정의한 훅입니다.', {
+        dlvHead('기타 이벤트', 'SubagentStop · Notification 처럼 세 시점 밖에서 도는, 코드로 정의한 훅입니다.', {
           right: jump(orgHooks.length ? '커스텀 훅 관리 →' : '+ 커스텀 훅 정의', '#/system/agent-assets', HOOKS_TAB),
         }),
         other.length
-          ? el('div', { class: 'dlv-box dlv-hooks dlv-hooks-2' }, ...other.map((h) => hookRow(h, true)))
+          ? el('div', { class: 'dlv-box dlv-hooks' }, ...other.map((h) => hookRow(h, locked, true)))
           : el('div', { class: 'dlv-box' }, el('p', { class: 'dlv-empty', text: '세 시점 밖의 커스텀 훅은 없습니다. 필요하면 [스킬 · 훅]에서 정의합니다.' })));
     },
   };
