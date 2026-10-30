@@ -12,10 +12,17 @@ import path from "node:path";
 export interface DockerRunPolicy {
   /** 허용하는 --network 값(예 ["lvly-apps"] · 작업 컨테이너는 ["host"]). --network 가 없으면 거절한다. */
   networks: string[];
-  /** 바인드 마운트(-v 원본:자리[:opts]) — 원본은 이 뿌리 아래만. rw:false 면 :ro 만 받는다 · targets 를 주면 컨테이너 쪽 자리가 그 꼴이어야 한다. */
-  binds: Array<{ root: string; rw: boolean; targets?: RegExp }>;
+  /**
+   * 바인드 마운트(-v 원본:자리[:opts] · --mount type=bind,src=,dst=[,readonly]) — 원본은 이 뿌리 아래만. rw:false 면 읽기 전용만 받는다 ·
+   *  targets 를 주면 컨테이너 쪽 자리가 그 꼴이어야 한다 · source 를 주면 원본이 정확히 그 경로여야 한다(뿌리 안의 다른 자리를 붙이지 않게 — #5082).
+   */
+  binds: Array<{ root: string; rw: boolean; targets?: RegExp; source?: string }>;
+  /** --user 로 받는 «uid:gid»(정확히 이 목록) — 없으면 비-root 숫자 꼴만 본다(#5082 작업 컨테이너는 그 작업의 계정 하나만). */
+  users?: string[];
   /** --tmpfs 를 둘 수 있는 컨테이너 자리. */
   tmpfs?: string[];
+  /** tmpfs 에 exec 를 줄 수 있는 자리(없으면 exec 를 받지 않는다 — 도커 기본 noexec 그대로 · #5082 작업 컨테이너는 /tmp · HOME). */
+  tmpfsExec?: string[];
   /** 이름 없는 볼륨(--mount type=volume,dst=…)을 둘 수 있는 자리 — 컨테이너를 지우면 함께 사라지는 쓰기 자리(빌드의 /tmp). */
   volumes?: string[];
   /** 띄울 수 있는 이미지(정확히 같은 글). */
@@ -64,6 +71,12 @@ function cleanAbs(p: string): string | null {
   return "/" + segs.join("/");
 }
 const inside = (a: string, r: string): boolean => a === r || a.startsWith(r === "/" ? "/" : r + "/");
+
+/** 바인드의 원본 · 자리 · 쓰기가 정책 안인가 — -v 와 --mount type=bind 가 같은 판정을 쓴다(정책의 source 가 있으면 원본이 정확히 그 경로). */
+function bindOk(policy: DockerRunPolicy, src: string, dst: string, ro: boolean): boolean {
+  return policy.binds.some((b) => underRoot(src, b.root) && (b.rw || ro) && (!b.targets || b.targets.test(dst))
+    && (b.source === undefined || (cleanAbs(src) !== null && cleanAbs(src) === cleanAbs(b.source))));
+}
 
 /**
  * 원본 경로가 뿌리 안인가 — 다듬은 글로 보고, 실제 경로(심링크를 푼 것)로도 본다(뿌리 안의 링크가 밖을 가리키지 않게).
@@ -119,7 +132,8 @@ export function assertSafeDockerRun(args: readonly string[], policy: DockerRunPo
         const at = c < 0 ? value : value.slice(0, c), opts = c < 0 ? "" : value.slice(c + 1);
         if (!(policy.tmpfs ?? []).includes(at)) no(`tmpfs 자리 ${at.slice(0, 40)} 는 받지 않습니다`);
         for (const o of opts ? opts.split(",") : []) {
-          if (!/^(rw|nosuid|nodev|noexec|size=\d+[kmg]?|mode=[0-7]{3,4}|uid=\d{1,10}|gid=\d{1,10})$/.test(o)) no(`tmpfs 선택 ${o.slice(0, 30)} 는 받지 않습니다`);
+          if (!/^(rw|nosuid|nodev|noexec|exec|size=\d+[kmg]?|mode=[0-7]{3,4}|uid=\d{1,10}|gid=\d{1,10})$/.test(o)) no(`tmpfs 선택 ${o.slice(0, 30)} 는 받지 않습니다`);
+          if (o === "exec" && !(policy.tmpfsExec ?? []).includes(at)) no(`tmpfs ${at.slice(0, 40)} 에는 exec 를 주지 않습니다(정책에 적은 자리만)`);
           //  임자(uid · gid)는 컨테이너 사용자(--user)와 같을 때만 — 끝에서 맞춰 본다(남의 · root 소유 자리를 만들지 않게).
           const own = /^(uid|gid)=(\d+)$/.exec(o);
           if (own) tmpfsOwners.push({ key: own[1] as "uid" | "gid", value: own[2]! });
@@ -145,6 +159,7 @@ export function assertSafeDockerRun(args: readonly string[], policy: DockerRunPo
         const m = /^(\d{1,10}):(\d{1,10})$/.exec(value);
         if (!m) no("--user 는 숫자 uid:gid 입니다");
         if (Number(m![1]) === 0) no("컨테이너 안은 root 가 아닌 사용자로 돕니다(uid 0 거절)");
+        if (policy.users && !policy.users.includes(value)) no(`--user ${value.slice(0, 24)} 는 이 컨테이너가 돌 수 있는 계정이 아닙니다`);
         break;
       }
       case "--restart":
@@ -166,13 +181,33 @@ export function assertSafeDockerRun(args: readonly string[], policy: DockerRunPo
         const optSet = new Set(opts ? opts.split(",") : []);
         for (const o of optSet) if (!["ro", "rw", "z", "Z"].includes(o)) no(`-v 선택 ${o.slice(0, 20)} 는 받지 않습니다`);
         const ro = optSet.has("ro");
-        const ok = policy.binds.some((b) => underRoot(src, b.root) && (b.rw || ro) && (!b.targets || b.targets.test(dst)));
-        if (!ok) no(`마운트 원본 ${src.slice(0, 120)} → ${dst.slice(0, 60)}${ro ? "(읽기 전용)" : "(쓰기)"} 는 받지 않습니다`);
+        if (!bindOk(policy, src, dst, ro)) no(`마운트 원본 ${src.slice(0, 120)} → ${dst.slice(0, 60)}${ro ? "(읽기 전용)" : "(쓰기)"} 는 받지 않습니다`);
         break;
       }
       case "--mount": {
-        const kv = new Map(value.split(",").map((p) => { const k = p.indexOf("="); return k < 0 ? [p, ""] : [p.slice(0, k), p.slice(k + 1)]; }));
-        const dst = kv.get("dst") ?? kv.get("destination") ?? kv.get("target") ?? "";
+        const pairs = value.split(",").map((p): [string, string] => { const k = p.indexOf("="); return k < 0 ? [p, ""] : [p.slice(0, k), p.slice(k + 1)]; });
+        if (new Set(pairs.map(([k]) => k)).size !== pairs.length) no(`--mount 에 같은 선택이 두 번 있습니다: ${value.slice(0, 80)}`);
+        const kv = new Map(pairs);
+        //  같은 뜻의 이름(dst · destination · target / src · source)을 둘 적으면 이 검사기와 도커가 다른 값을 읽을 수 있다 — 하나만 받는다.
+        const pick = (names: string[]): string => {
+          const have = names.filter((n) => kv.has(n));
+          if (have.length !== 1) no(`--mount 에는 ${names.join(" · ")} 중 하나만 적습니다: ${value.slice(0, 80)}`);
+          return kv.get(have[0]!)!;
+        };
+        const dst = pick(["dst", "destination", "target"]);
+        if (kv.get("type") === "bind") {
+          //  #5082 — 원본이 없으면 도커가 만들지 않고 실패하는 바인드(-v 는 없는 원본을 root 소유 폴더로 만들어 그 자리 주인의 폴더를 망가뜨린다).
+          const src = pick(["src", "source"]);
+          const extra = [...kv.keys()].filter((k) => !["type", "src", "source", "dst", "destination", "target", "readonly"].includes(k));
+          if (extra.length) no(`--mount bind 선택 ${extra[0]!.slice(0, 20)} 는 받지 않습니다`);
+          const roRaw = kv.get("readonly");
+          if (roRaw !== undefined && roRaw !== "" && roRaw !== "true") no("--mount bind 의 readonly 는 값 없이(또는 true)만 받습니다");
+          const ro = roRaw !== undefined;
+          if (/docker\.sock/.test(src) || /docker\.sock/.test(dst)) no("docker 소켓은 마운트하지 않습니다");
+          if (cleanAbs(dst) !== dst || dst === "/") no(`마운트 자리가 틀렸습니다: ${dst.slice(0, 80)}`);
+          if (!bindOk(policy, src, dst, ro)) no(`마운트 원본 ${src.slice(0, 120)} → ${dst.slice(0, 60)}${ro ? "(읽기 전용)" : "(쓰기)"} 는 받지 않습니다`);
+          break;
+        }
         const keys = [...kv.keys()].filter((k) => !["type", "dst", "destination", "target"].includes(k));
         if (kv.get("type") !== "volume" || keys.length || !(policy.volumes ?? []).includes(dst)) no(`--mount 는 이름 없는 볼륨만(${(policy.volumes ?? []).join(" · ") || "없음"}): ${value.slice(0, 80)}`);
         break;

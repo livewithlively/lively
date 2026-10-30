@@ -495,6 +495,15 @@ try {
         && (await st.setAgentJobTranscript(q1, CONV, bytes, 1)) === false && (await st.agentJobTranscript(s1)) === null
         && (await st.setAgentJobTranscript(k1, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", Buffer.from("두 번째"), 7)) === false
         && (await st.agentJobTranscriptConv(k1)) === CONV && Buffer.compare((await st.agentJobTranscript(k1)).gz, bytes) === 0);
+    //  #5082 도커 실행면 — 부르는 쪽이 o.subscription 을 실으면 도는 구독 작업도 적는다(그 실행면은 projects/ 를 작업마다 덮어 대화가 홈에 남지 않는다).
+    //   기다리는 작업 · 두 번째 보고는 그대로 false.
+    const s2 = await running("tr2b");
+    const q2 = (await st.insertAgentJob(job("tr3b"), ROOMY)).row.id;   // 기다리는 구독 작업
+    chk("TR1b 구독 작업은 o.subscription 일 때만 적힌다 — 도는 작업만 · 한 번만 · 실지 않으면 false(종전)",
+      (await st.setAgentJobTranscript(s2, CONV, bytes, 9, { subscription: false })) === false
+        && (await st.setAgentJobTranscript(s2, CONV, bytes, 9, { subscription: true })) === true && (await st.agentJobTranscriptConv(s2)) === CONV
+        && (await st.setAgentJobTranscript(s2, CONV, Buffer.from("두 번째"), 7, { subscription: true })) === false
+        && (await st.setAgentJobTranscript(q2, CONV, bytes, 9, { subscription: true })) === false);
     const got = await st.agentJobTranscript(k1);
     const r1 = await row(k1);
     chk("TR2 읽기 — 대화 id · 바이트 그대로 · 풀린 크기 칸 · 대화 id 만 읽기 · 없는 id 는 null",
@@ -540,6 +549,17 @@ try {
         && tNone?.resumable === false && /transcript_keep_days/.test(String(tNone.why)) && tOther?.resumable === false
         && tSub?.resumable === true && tSub.conversation === CONV && tNoConv?.resumable === false && tNoConv.conversation === null && tGone === null,
       JSON.stringify({ tOk, tNone: tNone?.resumable, tOther: tOther?.resumable, tSub: tSub?.resumable, tNoConv: tNoConv?.resumable, tGone }));
+    //  TR6b(#5082) 구독 작업의 기록 자리를 덮는 실행면(도커) — 구독 작업도 보관한 기록의 대화가 그 작업의 대화일 때만 잇는다(홈에 남지 않는다).
+    //   실행면 판정은 o.subscriptionTranscripts 로 준다(이 시험 박스는 도커 실행면이 아니다 — 격리 리뷰 «도커 갈래를 시험이 못 본다»).
+    const kSubKept = await running("tr6f"); await st.setAgentJobTranscript(kSubKept, CONV, bytes, 8, { subscription: true }); await endWith(kSubKept, CONV);
+    const kSubOther = await running("tr6g"); await st.setAgentJobTranscript(kSubOther, CONV2, bytes, 8, { subscription: true }); await endWith(kSubOther, CONV);
+    const dk = { subscriptionTranscripts: true };
+    const [dSub, dKept, dOther, dKey, dKeyNone] = await Promise.all([kSub, kSubKept, kSubOther, kOk, kNone].map((id) => resumeTargetOf(id, dk)));
+    const [hKept] = await Promise.all([kSubKept].map((id) => resumeTargetOf(id, { subscriptionTranscripts: false })));
+    chk("TR6b 도커 실행면의 구독 작업 — 보관한 기록의 대화가 그 작업의 대화일 때만 · 기록 없음 · 다른 대화는 안 됨 / API 키 작업은 그대로 / 다른 실행면은 기록 없이",
+      dSub?.resumable === false && /transcript_keep_days/.test(String(dSub.why)) && dKept?.resumable === true && dKept.conversation === CONV
+        && dOther?.resumable === false && dKey?.resumable === true && dKeyNone?.resumable === false && hKept?.resumable === true,
+      JSON.stringify({ dSub: dSub?.resumable, dKept: dKept?.resumable, dOther: dOther?.resumable, dKey: dKey?.resumable, dKeyNone: dKeyNone?.resumable, hKept: hKept?.resumable }));
 
     //  TR7 기록 받는 입구(POST /api/agent-jobs/:id/transcript) — 게이트웨이와 같은 꼴(전역 JSON 파서 1MB 뒤에 이 경로)로 띄워 진짜 요청으로 두드린다.
     const express = (await import("express")).default;

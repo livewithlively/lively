@@ -716,6 +716,21 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   ok("R6 API 키 작업 — 대화 기록 없으면 이어받기 409 · 형식 재시도 생략 / 있으면 둘 다 돈다");
 }
 
+// ── R6b(#5082) 구독 작업도 형식 재시도 전에 이을 판정(resumeTarget)을 묻는다 — 도커 실행면은 대화가 홈에 남지 않아 «기록 없음» 이면 띄우지 않는다 ──
+{
+  const u = appUser("alice", "crm");
+  for (const resumable of [false, true]) {
+    const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+    if (!resumable) d.resumeTarget = async (id) => ({ projectId: null, model: null, conversation: w.jobs.get(id)?.conversation_id ?? null, resumable: false, why: "작업의 대화 기록이 없습니다" });
+    await submitRun({ prompt: "조사", agent: true, schema }, u, { source: "app-ui" }, d);
+    doneJob(w, 101, C1, "형식 아님");
+    const fin = (await syncRun(w.runs.get(1)!, d))!;
+    if (resumable) { assert.equal(fin.retries, 1, "이을 수 있으면 구독 작업도 형식 재시도를 띄운다"); assert.equal(w.submitted[1]!.resumeJobId, 101); }
+    else { assert.equal(fin.status, "failed", "이을 기록이 없으면 띄우지 않는다"); assert.match(fin.error!, /형식에 맞지 않습니다/); assert.equal(w.submitted.length, 1); }
+  }
+  ok("R6b 구독 작업 — 형식 재시도도 이을 판정을 따른다(도커 실행면 · 기록 없음이면 생략)");
+}
+
 // ── R7 거절 — 남의 실행 · 다른 앱 · 관리자 · 구독 주인(보낸 사람 아님) · 없는 id = 404 / 형식 400 / 안 끝남 · 취소 · 답 없음 · 꺼짐 = 409 ──
 {
   const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null, sessions: { s1: { owner: "alice", members: ["bob"] } } });

@@ -600,8 +600,9 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
   const judged = judgeOutput(text, run.schema);
   if (judged.ok) return finish({ status: "done", result: { ...base, ...(judged.json !== undefined ? { json: judged.json } : {}) }, error: null });
   //  #5101 — API 키 작업의 대화는 게이트웨이가 보관한 기록뿐이다(빈 설정 폴더는 끝나면 지워진다). 기록이 없으면(올리지 못함 · 상한 초과) 다시 묻지 않고
-  //   원문을 붙여 실패한다 — 띄워 봐야 하네스가 «대화 없음» 으로 끝나 원문 대신 그 오류가 남는다.
-  const resumable = !!job.conversation_id && (run.account_kind !== "api_key" || !!(await d.resumeTarget(job.id).catch(() => null))?.resumable);
+  //   원문을 붙여 실패한다 — 띄워 봐야 하네스가 «대화 없음» 으로 끝나 원문 대신 그 오류가 남는다. 구독 작업도 이어받을 판정(resumeTarget)에 묻는다 —
+  //   #5082 도커 실행면은 구독 작업의 대화도 보관한 기록뿐이다(그 밖의 실행면은 대화 id 만 보고 «된다» 고 답한다).
+  const resumable = !!job.conversation_id && !!(await d.resumeTarget(job.id).catch(() => null))?.resumable;
   if (run.retries === 0 && run.schema && resumable) {
     try {
       const retry = await d.submitJob({

@@ -1,6 +1,6 @@
 // docker run 인자 검사기(#4487 · #5082 와 같이 씀) 단위 시험 — 코어가 짓는 꼴은 통과 · 박스를 내주는 인자는 거절.
 // 실행: npm run build && node dist/ops/docker-run-guard.test.js
-//  행 이름 G1~G20 은 사양 엣지 표(#4487 PR 2 A절 · G18~G20 은 #5082 요청)의 행 번호다.
+//  행 이름 G1~G24 는 사양 엣지 표(#4487 PR 2 A절 · G18~G24 는 #5082 요청)의 행 번호다.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -172,6 +172,64 @@ t("G20 tmpfs 임자 uid · gid(#5082) — 컨테이너 사용자(--user)와 같�
   rejects(withTmp("/tmp:rw,uid=0"), appPolicy, /tmpfs uid=0 는 컨테이너 사용자/, "root 소유");
   rejects(withTmp("/tmp:rw,uid=502"), appPolicy, /tmpfs uid=502/, "다른 uid");
   rejects(withTmp("/tmp:rw,gid=0"), appPolicy, /tmpfs gid=0/, "다른 gid");
+});
+
+// ── #5082 2단계(도커 작업 컨테이너)가 쓰는 꼴 ─────────────────────────────────────
+
+const jobRoot = path.join(root, "apps"), jobSrc = path.join(jobRoot, "policy-bot"), jobOther = path.join(jobRoot, "other-app");
+fs.mkdirSync(jobSrc, { recursive: true });
+fs.mkdirSync(jobOther, { recursive: true });
+const bindPolicy: DockerRunPolicy = { ...appPolicy, binds: [...appPolicy.binds, { root: jobRoot, rw: true, targets: /^\/work\/apps\/[a-z-]+$/ }] };
+
+t("G21 --mount type=bind(#5082) — 정책 안 원본 · 자리는 통과(쓰기 · 읽기 전용) · 뿌리 밖 · 읽기 전용 뿌리에 쓰기 · 모르는 선택 · readonly=false · 같은 뜻 두 이름 · 같은 선택 두 번 · docker 소켓은 거절", () => {
+  const m = (v: string): string[] => withFlag(okApp, "--mount", v);
+  assert.equal(assertSafeDockerRun(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot`), bindPolicy).image, IMAGE);
+  assert.equal(assertSafeDockerRun(m(`type=bind,source=${code},target=/var/task,readonly`), bindPolicy).image, IMAGE, "읽기 전용 뿌리에 읽기 전용");
+  assert.equal(assertSafeDockerRun(m(`type=bind,src=${code},dst=/var/task,readonly=true`), bindPolicy).image, IMAGE);
+  rejects(m(`type=bind,src=${os.tmpdir()},dst=/work/apps/policy-bot`), bindPolicy, /마운트 원본/, "뿌리 밖");
+  rejects(m(`type=bind,src=${code},dst=/var/task`), bindPolicy, /마운트 원본/, "읽기 전용 뿌리에 쓰기");
+  rejects(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot,bind-propagation=shared`), bindPolicy, /bind 선택 bind-propagation/, "전파 선택");
+  rejects(m(`type=bind,src=${code},dst=/var/task,readonly=false`), bindPolicy, /readonly 는 값 없이/, "readonly=false");
+  rejects(m(`type=bind,src=${jobSrc},source=${os.tmpdir()},dst=/work/apps/policy-bot`), bindPolicy, /src · source 중 하나만/, "원본 두 이름");
+  rejects(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot,target=/etc`), bindPolicy, /dst · destination · target 중 하나만/, "자리 두 이름");
+  rejects(m(`type=bind,src=${jobSrc},src=${jobSrc},dst=/work/apps/policy-bot`), bindPolicy, /같은 선택이 두 번/, "같은 선택 두 번");
+  rejects(m("type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock"), { ...bindPolicy, binds: [...bindPolicy.binds, { root: "/var/run", rw: true }] }, /docker 소켓/, "소켓");
+  rejects(m(`type=bind,src=${jobSrc}`), bindPolicy, /중 하나만/, "자리 없음");
+  rejects(m("type=volume,dst=/tmp,target=/etc"), { ...bindPolicy, volumes: ["/tmp"] }, /중 하나만/, "볼륨 자리 두 이름");
+  //  자리 꼴 — 자리 꼴(targets)이 없는 정책에서도 컨테이너 루트 · 다듬지 않은 자리는 거절한다(자리 판정을 정책에만 맡기지 않는다).
+  const anyTarget: DockerRunPolicy = { ...appPolicy, binds: [...appPolicy.binds, { root: jobRoot, rw: true }] };
+  for (const dst of ["/", "/work/apps/../policy-bot", "/work/apps/policy-bot/", "/work//apps", "work/apps/x"]) {
+    rejects(m(`type=bind,src=${jobSrc},dst=${dst}`), anyTarget, /마운트 자리가 틀렸습니다/, `자리 ${dst}`);
+  }
+  assert.equal(assertSafeDockerRun(m(`type=bind,src=${jobSrc},dst=/work/apps/policy-bot`), anyTarget).image, IMAGE, "다듬은 자리는 통과");
+});
+
+t("G22 바인드 정책의 source(#5082) — 원본이 정확히 그 경로일 때만(같은 뿌리 안의 형제 · 뿌리 자체는 거절) · -v 도 같다", () => {
+  const p: DockerRunPolicy = { ...appPolicy, binds: [...appPolicy.binds, { root: jobRoot, rw: true, targets: /^\/work\/apps\/policy-bot$/, source: jobSrc }] };
+  assert.equal(assertSafeDockerRun(withFlag(okApp, "--mount", `type=bind,src=${jobSrc},dst=/work/apps/policy-bot`), p).image, IMAGE);
+  assert.equal(assertSafeDockerRun(withFlag(okApp, "--volume", `${jobSrc}:/work/apps/policy-bot`), p).image, IMAGE);
+  rejects(withFlag(okApp, "--mount", `type=bind,src=${jobOther},dst=/work/apps/policy-bot`), p, /마운트 원본/, "형제");
+  rejects(withFlag(okApp, "--mount", `type=bind,src=${jobRoot},dst=/work/apps/policy-bot`), p, /마운트 원본/, "뿌리 자체");
+  rejects(withFlag(okApp, "--volume", `${jobOther}:/work/apps/policy-bot`), p, /마운트 원본/, "-v 형제");
+});
+
+t("G23 --user 허용 목록(#5082) — 정책에 목록이 있으면 그 «uid:gid» 만 · 없으면 종전(비-root 숫자 꼴)", () => {
+  assert.equal(assertSafeDockerRun(okApp, { ...appPolicy, users: ["501:20", "1002:1006"] }).image, IMAGE);
+  rejects(okApp, { ...appPolicy, users: ["1002:1006"] }, /--user 501:20 는 이 컨테이너가 돌 수 있는 계정이 아닙니다/, "목록 밖");
+  rejects(swap(okApp, "--user", "501:0"), { ...appPolicy, users: ["501:20"] }, /돌 수 있는 계정이 아닙니다/, "gid 만 바꿈");
+  assert.equal(assertSafeDockerRun(swap(okApp, "--user", "501:0"), appPolicy).image, IMAGE, "목록이 없으면 종전대로(uid 만 본다)");
+});
+
+t("G24 tmpfs 선택 exec(#5082) — 정책이 적은 자리(tmpfsExec)만 · 앱 서버 정책은 받지 않는다(도커 기본 noexec 그대로) · noexec 는 언제나 · 모르는 선택 거절", () => {
+  const i = okApp.indexOf("--tmpfs");
+  const a = [...okApp]; a[i + 1] = "/tmp:rw,exec,nosuid,nodev,size=64m,mode=1777";
+  rejects(a, appPolicy, /exec 를 주지 않습니다/, "앱 서버 정책 — exec 자리 없음");
+  assert.equal(assertSafeDockerRun(a, { ...appPolicy, tmpfsExec: ["/tmp"] }).image, IMAGE, "정책에 적은 자리");
+  rejects(a, { ...appPolicy, tmpfs: ["/tmp", "/home/x"], tmpfsExec: ["/home/x"] }, /exec 를 주지 않습니다/, "다른 자리에만 exec");
+  a[i + 1] = "/tmp:rw,noexec,nosuid,nodev";
+  assert.equal(assertSafeDockerRun(a, appPolicy).image, IMAGE, "noexec");
+  a[i + 1] = "/tmp:rw,suid";
+  rejects(a, appPolicy, /tmpfs 선택 suid/, "suid");
 });
 
 fs.rmSync(root, { recursive: true, force: true });

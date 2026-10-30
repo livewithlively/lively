@@ -79,6 +79,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     launch: async (job, boot) => surface.launch(job, boot, { sharedSeat: await sharedSeatJob(job) }),
     kill: (sid) => surface.kill(sid),
     paneView: (job) => surface.paneView(job),
+    //  #5082 — 구독 작업의 기록 자리를 작업마다 덮는 실행면(도커)이면 그 대화를 묶음으로 잇는다(surface.subscriptionTranscripts).
+    subscriptionTranscripts: surface.subscriptionTranscripts,
     assertJobAllowed: async (job) => {
       //  실행 계정 멤버가 아직 활성인가(모든 작업) · 앱 작업이면 그 사람의 지금 권한으로 그 앱을 쓸 수 있나(접수 때와 같은 판정).
       //   #5081 공용 시트 작업은 앱을 쓰는 사람이 보낸 사람이다 — 시트 계정의 동의 대신 보낸 사람의 동의를 본다(assertSharedSeatJobAllowed).

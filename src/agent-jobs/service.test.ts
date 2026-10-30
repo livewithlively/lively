@@ -214,10 +214,10 @@ function world(): World {
       if (w.policyRowError) throw new Error("db 가 잠깐 막혔다");
       return { ...w.policy };
     },
-    //  #5101 실 SQL(store.setAgentJobTranscript)의 조건을 흉내 낸다 — 도는 API 키 작업만 · 한 번만(조건 자체는 store.pg-test 블록 TR).
-    async setAgentJobTranscript(id, conv, gz, raw) {
+    //  #5101 실 SQL(store.setAgentJobTranscript)의 조건을 흉내 낸다 — 도는 API 키 작업만(#5082 o.subscription 이면 구독 작업도) · 한 번만(조건 자체는 store.pg-test 블록 TR).
+    async setAgentJobTranscript(id, conv, gz, raw, o) {
       const r = rows.get(id);
-      if (!r || r.status !== "running" || r.account_kind !== "api_key" || w.transcripts.has(id)) return false;
+      if (!r || r.status !== "running" || (r.account_kind !== "api_key" && o?.subscription !== true) || w.transcripts.has(id)) return false;
       w.transcripts.set(id, { conv, gz, raw });
       return true;
     },
@@ -1453,6 +1453,61 @@ await t("T5~T8(#5101) 판의 대화 기록 보고 — 비밀 틀림 401 · gzip 
   assert.deepEqual(await onTranscript(sub.id, sb.secret, body, CONV_A, w.deps), { ok: true, stored: false }, "구독 작업은 게이트웨이에 안 둔다");
   await w.deps.store.finishAgentJob(job.id, { status: "done", error: null });
   await assert.rejects(onTranscript(job.id, b.secret, body, CONV_A, w.deps), httpErr(410));
+});
+
+await t("B4(#5082) 도커 실행면의 구독 작업 — projects/ 를 작업마다 덮어 대화가 홈에 남지 않는다: 올리기 켜짐 · 이어받으면 보관한 기록을 돌려준다 · 없으면 돌리지 않는다 · 받는 문은 구독 작업도 받는다", async () => {
+  const w = world();
+  w.deps.subscriptionTranscripts = true;
+  const first = await keyJob(w, { account: "subscription" });
+  const fj = await onBoot(first.id, first.boot, w.deps);
+  assert.equal(fj.transcriptMax, TRANSCRIPT_GZ_MAX, "구독 작업도 끝에 대화 기록을 올린다");
+  assert.equal(fj.transcriptRawMax, TRANSCRIPT_RAW_MAX);
+  assert.equal(fj.transcript, undefined, "새 대화는 되돌릴 기록이 없다");
+  assert.deepEqual(await transcriptGate(first.id, fj.secret, w.deps), { take: true }, "받는 문이 구독 작업도 받는다");
+  assert.deepEqual(await onTranscript(first.id, fj.secret, gz('{"type":"user"}\n'), CONV_A, w.deps), { ok: true, stored: true });
+  await w.deps.store.finishAgentJob(first.id, { status: "done", error: null, conversationId: CONV_A });
+  const next = await keyJob(w, { account: "subscription", resumeJobId: first.id, resumeConv: CONV_A });
+  const nj = await onBoot(next.id, next.boot, w.deps);
+  assert.equal(nj.transcript?.conv, CONV_A, "형식 재시도 · 앱의 이어받기는 보관한 그 대화를 되돌려 잇는다");
+  assert.equal(zlibSync.gunzipSync(Buffer.from(nj.transcript!.gz, "base64")).toString("utf8"), '{"type":"user"}\n');
+  const i = nj.argv.indexOf("--resume");
+  assert.ok(i > 0 && nj.argv[i + 1] === CONV_A && nj.argv[i + 2] === "--fork-session");
+  //  기록이 없으면 — 홈에도 없으니 돌리지 않는다(하네스가 «대화 없음» 으로 죽기 전에 까닭을 남긴다).
+  const lone = await keyJob(w, { account: "subscription" });
+  await onBoot(lone.id, lone.boot, w.deps);
+  await w.deps.store.finishAgentJob(lone.id, { status: "done", error: null, conversationId: CONV_B });
+  const orphan = await keyJob(w, { account: "subscription", resumeJobId: lone.id, resumeConv: CONV_B });
+  await assert.rejects(onBoot(orphan.id, orphan.boot, w.deps), httpErr(410));
+  assert.match(w.rows.get(orphan.id)!.error!, /이어받을 대화 기록이 없습니다/);
+  //  끄면 종전 그대로(B3 와 같다) — 받는 문도 구독 작업은 안 받는다.
+  w.deps.subscriptionTranscripts = false;
+  const off = await keyJob(w, { account: "subscription" });
+  const ob = await onBoot(off.id, off.boot, w.deps);
+  assert.equal(ob.transcriptMax, undefined);
+  assert.deepEqual(await transcriptGate(off.id, ob.secret, w.deps), { take: false });
+  assert.deepEqual(await onTranscript(off.id, ob.secret, gz("x"), CONV_A, w.deps), { ok: true, stored: false });
+});
+
+await t("V1b(#5082) 사람 도구의 이어받기 — 구독 작업의 기록 자리를 덮는 실행면(도커)이면 게이트웨이가 보관한 그 대화 기록이 있어야 접수한다(없거나 다른 대화면 409 — 띄운 뒤 부트에서야 실패하지 않게) · 끄면 종전대로(대화가 홈에 남는다)", async () => {
+  const w = world();
+  w.usable.add("alice:memo");
+  w.policy = { ...w.policy, max_running: 5, max_running_per_member: 5 };
+  w.deps.subscriptionTranscripts = true;
+  const a = await submitAgentJob({ prompt: "처음" }, appUser("alice", "memo"), w.deps, UI);
+  const id = a.id as number;
+  Object.assign(w.rows.get(id)!, { status: "done", conversation_id: CONV_A });
+  const before = w.rows.size;
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI), httpErr(409, /이어받을 대화 기록이 없습니다.*transcript_keep_days/));
+  w.transcripts.set(id, { conv: CONV_B, gz: gz("x"), raw: 1 });
+  await assert.rejects(submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI), httpErr(409, /이어받을 대화 기록이 없습니다/));
+  assert.equal(w.rows.size, before, "접수하지 않았다(행 없음)");
+  w.transcripts.set(id, { conv: CONV_A, gz: gz("x"), raw: 1 });
+  const b = await submitAgentJob({ prompt: "이어서", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(b.id as number)!.resume_job_id, id);
+  w.deps.subscriptionTranscripts = false;
+  w.transcripts.delete(id);
+  const c = await submitAgentJob({ prompt: "또", resume_job_id: id }, appUser("alice", "memo"), w.deps, UI);
+  assert.equal(w.rows.get(c.id as number)!.resume_conversation, CONV_A, "끄면 기록 없이 접수(종전)");
 });
 
 await t("P1(#5101) 대화 기록 정리 — transcript_keep_days(기본 14)로 기록만 비운다 · keep_days 0(행 무기한)이어도 돈다 · 0(보관 안 함)이면 끝난 작업의 기록을 다 비운다", async () => {

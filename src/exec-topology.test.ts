@@ -707,8 +707,9 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
   });
 });
 
-test("§7 에이전트 작업 실행면 스위치(#5082 A1·A2) — 정확히 `host` 만 켠다(앞뒤 공백만 벗긴다)", () => {
-  for (const [raw, want] of [["host", "host"], [" host ", "host"], ["\thost\n", "host"], ["Host", "off"], ["HOST", "off"], ["hosts", "off"], ["host1", "off"], ["on", "off"], ["1", "off"], ["true", "off"], ["", "off"], ["   ", "off"], [undefined, "off"]] as const) {
+test("§7 에이전트 작업 실행면 스위치(#5082 A1·A2) — 정확히 `host` · `docker` 만 켠다(앞뒤 공백만 벗긴다)", () => {
+  for (const [raw, want] of [["host", "host"], [" host ", "host"], ["\thost\n", "host"], ["Host", "off"], ["HOST", "off"], ["hosts", "off"], ["host1", "off"], ["on", "off"], ["1", "off"], ["true", "off"], ["", "off"], ["   ", "off"], [undefined, "off"],
+    ["docker", "docker"], [" docker\t", "docker"], ["Docker", "off"], ["dockerd", "off"], ["host,docker", "off"]] as const) {
     assert.equal(parseAgentJobs(raw), want, JSON.stringify(raw));
     assert.equal(computeExecTopology(E(raw === undefined ? {} : { LIVELY_AGENT_JOBS: raw })).agentJobs, want, `토폴로지 ${JSON.stringify(raw)}`);
   }

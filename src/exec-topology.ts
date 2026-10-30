@@ -160,8 +160,9 @@ export interface ExecTopology {
    * 브로커가 없는 박스의 에이전트 작업 실행면(`LIVELY_AGENT_JOBS`, #5082) — 앱 AI 에이전트 작업(`claude -p` 판)을 어디서 띄우나.
    *  · `off`(기본) = 띄우지 않는다(종전 — 접수가 501).
    *  · `host` = 이 박스의 tmux 에 판을 띄운다 — 사람 세션과 같은 OS 계정 · 홈 규칙(agent-jobs/launch-host.ts).
+   *  · `docker` = 작업마다 이 박스의 Docker 컨테이너를 띄운다 — 작업 폴더와 하네스가 쓰는 것만 붙인다(agent-jobs/launch-docker.ts · 2단계).
    *  ⚠ 세션 컨테이너 확보 훅이 있는 배포(매니지드)는 이 값을 보지 않는다 — 늘 브로커 길이다(agent-jobs/surface.ts).
-   *  ⚠ 값은 **정확히** `host`(앞뒤 공백만 벗긴다). 켜는 스위치는 관대하게 읽지 않는다(`LIVELY_TMUX_ROUTE` 와 같은 규율).
+   *  ⚠ 값은 **정확히** `host` · `docker`(앞뒤 공백만 벗긴다). 켜는 스위치는 관대하게 읽지 않는다(`LIVELY_TMUX_ROUTE` 와 같은 규율).
    */
   agentJobs: AgentJobsMode;
   /**
@@ -172,11 +173,12 @@ export interface ExecTopology {
 }
 
 /** `LIVELY_AGENT_JOBS` 의 값(#5082) — `agentJobs` 필드 머리말 참조. */
-export type AgentJobsMode = "off" | "host";
+export type AgentJobsMode = "off" | "host" | "docker";
 
-/** `LIVELY_AGENT_JOBS` 파서(순수) — **정확히** `host` 만 켠다(앞뒤 공백만 벗긴다). 그 밖(빈 값 · 대소문자 · 오타)은 off. */
+/** `LIVELY_AGENT_JOBS` 파서(순수) — **정확히** `host` · `docker` 만 켠다(앞뒤 공백만 벗긴다). 그 밖(빈 값 · 대소문자 · 오타)은 off. */
 export function parseAgentJobs(raw: string | undefined): AgentJobsMode {
-  return (raw ?? "").trim() === "host" ? "host" : "off";
+  const v = (raw ?? "").trim();
+  return v === "host" || v === "docker" ? v : "off";
 }
 
 /** `LIVELY_AGENT_JOBS_PORT` 파서(순수) — 1~65535 의 정수만. 그 밖(빈 값 포함)은 8080. */
