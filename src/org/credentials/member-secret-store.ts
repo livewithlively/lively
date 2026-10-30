@@ -8,13 +8,13 @@
 //  두 축(read/write)이 아니라 '호출자가 그 작업의 성격으로 allowFallback 을 정한다'가 규약.
 import { itemsPool } from "../../db/client.js";
 import { encryptSecret, decryptSecret } from "./secret-box.js";
+import { KIND_RE, SCOPE_RE } from "./member-secret-rules.js";
 
 export const GATEWAY_OWNER = "gateway";
 export function memberOwner(memberId: string): string { return `member:${memberId}`; }
 
 // kind/scope_key 표면 위생 — 인젝션/키오염 방지(영숫자·._:-, 소문자 정규화). kind 는 필수, scope_key 는 ''(단일) 허용.
-const KIND_RE = /^[a-z0-9_]{1,40}$/;
-const SCOPE_RE = /^[A-Za-z0-9._:-]{0,120}$/;
+//  정규식은 입구 판정(member-secret-rules.ts)과 한 벌이다.
 export function normalizeKind(kind: unknown): string {
   const k = String(kind ?? "").trim().toLowerCase();
   if (!KIND_RE.test(k)) throw new Error(`자격 kind 형식 오류(소문자·숫자·_ 1~40자): ${k}`);

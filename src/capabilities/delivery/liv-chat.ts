@@ -247,9 +247,9 @@ export const livChatCapabilities: Capability[] = [
       const ask = cur.secret_ask ?? null;
       if (!ask) return { ask: null, dismissed: false };
       // 무엇을 접었는지 남긴다 — 안 남기면 다음 턴의 리브가 같은 걸 또 묻고, 그게 잔소리가 된다.
-      // kind 별로 식별자가 다르다(객관식=key · 자격=field · 올리기=없음). 셋 다 같은 모양의 키로 접는다.
-      const a = ask as unknown as { kind?: string; key?: string; field?: string };
-      const key = `ask.${a.kind ?? "secret"}.${a.key ?? a.field ?? ""}`.replace(/\.$/, "");
+      // kind 별로 식별자가 다르다(객관식=key · 자격=field 또는 본인 금고 kind · 올리기=없음). 셋 다 같은 모양의 키로 접는다.
+      const a = ask as unknown as { kind?: string; key?: string; field?: string; vault_kind?: string };
+      const key = `ask.${a.kind ?? "secret"}.${a.key ?? a.field ?? a.vault_kind ?? ""}`.replace(/\.$/, "");
       await appendLivProfile(userId, {
         declined: { at: new Date().toISOString(), key, why: "지금은 안 하겠다고 화면에서 접음" },
       });

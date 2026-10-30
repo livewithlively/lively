@@ -286,7 +286,7 @@ export interface LivDeclined { at: string; key: string; why?: string }
  * 리브가 **지금 사람에게 받아야 하는 자격 하나**(#1631).
  *
  * ⚠ 여기 담기는 것은 "무엇이 필요한가"뿐이다 — **값은 절대 담기지 않는다.** 값은 화면이 받아
- *  곧바로 금고(수집기 secrets)로 보내고, 이 요청은 지워진다. 리브는 값을 보지 못한다.
+ *  곧바로 금고(수집기 secrets 또는 본인 개인 금고)로 보내고, 이 요청은 지워진다. 리브는 값을 보지 못한다.
  *
  * 왜 프로필에 얹었나: 이건 지식이 아니라 **일시 상태**라 원래는 남의 자리다. 그럼에도 여기 둔 이유는
  *  ① 사람 축으로 정확히 하나이고 ② 새로고침을 견뎌야 하며(사람이 창을 다시 열 수 있다)
@@ -295,9 +295,15 @@ export interface LivDeclined { at: string; key: string; why?: string }
 export interface LivSecretAsk {
   at: string;
   kind?: "secret";
-  /** 어디에 넣을 것인가 — 지금은 수집기뿐이다(collector.id + 그 프리셋의 시크릿 필드 key). */
-  collector_id: number;
-  field: string;
+  /**
+   * 어디에 넣을 것인가 — 수집기(collector.id + 그 프리셋의 시크릿 필드 key) 또는 요청자 본인 금고 칸(kind + scope).
+   *  ⚠ target 이 없으면 수집기다 — 금고 대상이 생기기 전에 저장된 요청이 그 모양이고, 읽는 쪽은 askTargetOf 로 가른다.
+   */
+  target?: "collector" | "vault";
+  collector_id?: number;
+  field?: string;
+  vault_kind?: string;
+  vault_scope?: string;
   /** 사람에게 보일 것. label = 칸 이름, why = 왜 필요한지 한 줄. */
   label: string;
   why?: string;
