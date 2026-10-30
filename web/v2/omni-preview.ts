@@ -84,7 +84,7 @@ const IC = {
 const iso = (v: unknown): number => { const t = typeof v === 'string' ? Date.parse(v) : NaN; return Number.isFinite(t) ? t : 0; };
 const short = (s: unknown, n: number): string => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n).trimEnd() + '…' : t; };
 const dateOnly = (v: unknown): string => { const t = iso(v); if (!t) return ''; const d = new Date(t); return `${d.getMonth() + 1}월 ${d.getDate()}일`; };
-const SYS_LABEL: Record<string, string> = { slack: 'Slack', github: 'GitHub', gitlab: 'GitLab', notion: 'Notion', google: 'Google', gdrive: 'Google Drive', gmail: 'Gmail', linear: 'Linear', clickup: 'ClickUp', figma: 'Figma', outlook: 'Outlook', local: '올린 파일' };
+const SYS_LABEL: Record<string, string> = { slack: 'Slack', github: 'GitHub', gitlab: 'GitLab', notion: 'Notion', google: 'Google', gdrive: 'Google Drive', gmail: 'Gmail', linear: 'Linear', clickup: 'ClickUp', figma: 'Figma', outlook: 'Outlook', zotero: 'Zotero', local: '올린 파일' };
 const PRIO_LABEL: Record<string, string> = { urgent: '긴급', high: '높음', normal: '보통', low: '낮음' };
 
 export function createPreview(deps: PvDeps): Preview {

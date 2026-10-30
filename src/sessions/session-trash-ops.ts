@@ -40,7 +40,8 @@ export async function stopForPurge(u: LivelyUser, me: string, id: string, nodeId
     }
   }
   if (await sessionGone(id).catch(() => true)) return true;
-  try { await killSession(u, id, { preserveState: true }); return true; }
+  //  #4783 — 완전 삭제 직전에 멈춘 것도 **사람이 멈춘 것**이다(끝난 사유). 행은 곧 지워지지만, 지우기가 실패해 남으면 그 판은 사람이 끝낸 판이다.
+  try { await killSession(u, id, { preserveState: true, end: { why: "stop", by: me } }); return true; }
   catch (e) { return `돌고 있는 세션을 멈추지 못했어요 — ${(e as Error)?.message ?? e}`; }
 }
 

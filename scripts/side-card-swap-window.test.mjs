@@ -19,14 +19,12 @@
 //       끌어서 바꾼 자리(적어 둔 «왼쪽»)는 되살릴 때 그대로 산다(좁은 격자의 상한 폭 49% > 46%)
 //   SW6 side-swap: 놓을 때(byHand) · 끄는 중 예고만 좁은 격자 문턱. 되살릴 때 · 격자 폭이 바뀔 때 · 켜기 · 첫 측정은 종전 문턱
 //   SR3 panes: 물러나는 동안 다시 끌어 놓으면 늦게 온 앞 판정은 버린다(마지막으로 놓은 것만 적는다)
-//   (stage 판: T4 없음)
 //   T4 터미널: 치는 중(한글 조합 · 1초 안 입력)에는 재맞춤을 미룬다(재캡처가 입력 사이에 끼지 않게)
 //   SR1 panes: 카드 구간에서 덜 넘겨 놓아도 자리바꿈을 판정하고 폭을 적는다(카드가 물러난 뒤)
 //   SR2 side-card: 덜 넘겨 놓으면 물러나는 움직임이 끝나고(판이 살아 있을 때만) back 을 부른다. 카드가 될 때는 부르지 않는다
 //   V1 side-card: 카드의 자리 · 크기 셈은 창 크기(vw · vh)로 한다. 사이드바 폭 셈은 격자(bw)
 //   V2 side-card: 창 크기가 바뀌면 카드를 창 안으로 다시 넣는다(destroy 가 걷는다)
 //   V3 CSS: 카드는 position: fixed, z-index 는 레일 · 사이드바(≤ 45) 위 · 레일 메뉴(60) 아래
-//   (stage 판: T1~T3 없음 — 카드 비침 연동이 stage 에 없다)
 //   T1 터미널: 카드인 동안(glassOn) 크기를 새로 알렸으면 크기가 멈춘 뒤 한 번 화면을 다시 맞춘다(forceRedraw = 화면 복구의 재캡처)
 //   T2 터미널: 카드가 되거나 풀릴 때도 같은 재맞춤을 건다(풀릴 때는 glassOn 이 이미 꺼져 있다)
 //   T3 터미널: 재맞춤은 디바운스(끄는 동안 여러 번 바뀌어도 한 번) · 연결이 열려 있을 때만
@@ -135,7 +133,15 @@ const css40 = read("public/styles/40-v2.css");
 const wsMenuZ = Number((css40.match(/\.v2-ws-menu \{[^}]*z-index:\s*(\d+)/) || [])[1]);
 ok(z > 45 && wsMenuZ > 0 && z < wsMenuZ, "V3b CSS: 카드 z-index 는 사이드바(45) 위 · 레일 메뉴 아래", `card ${z} · ws-menu ${wsMenuZ}`);
 
-// ── ② 터미널 — stage 에는 카드 비침(glass) 연동이 없어 이 판에는 옮기지 않았다(main 판에만 T1~T3) ──
+// ── ② 터미널 ──
+const term = code(read("web/standalone/terminal.ts"));
+const applyFit = (() => { const i = term.indexOf("export function applyFit("); return i < 0 ? "" : term.slice(i, term.indexOf("\n}\n", i)); })();
+ok(/ws\.send\(JSON\.stringify\(\{ t: 'r'[^\n]*\n\s*if \(glassOn\) settleRedrawSoon\(\);/.test(applyFit), "T1 터미널 applyFit: 카드인 동안 새 크기를 알렸으면 재맞춤을 건다", applyFit.slice(-260));
+const setGlass = (() => { const i = term.indexOf("function setGlass("); return i < 0 ? "" : term.slice(i, term.indexOf("\n}\n", i)); })();
+ok(/settleRedrawSoon\(\);\s*$/.test(setGlass), "T2 터미널 setGlass: 카드가 되거나 풀릴 때도 재맞춤을 건다", setGlass.slice(-160));
+const settle = (() => { const i = term.indexOf("function settleRedrawSoon("); return i < 0 ? "" : term.slice(i, term.indexOf("\n}\n", i)); })();
+ok(/clearTimeout\(settleRedrawTimer\)/.test(settle) && /setTimeout\(/.test(settle) && /if \(ws && ws\.readyState === 1\) forceRedraw\(\)/.test(settle), "T3 터미널: 재맞춤은 디바운스 · 연결이 열려 있을 때만 forceRedraw");
+ok(/if \(imeComposing \|\| Date\.now\(\) - lastInputAt < SETTLE_QUIET_MS\) \{ settleRedrawSoon\(\); return; \}/.test(settle) && /function emitInput\(d: string\): void \{\s*lastInputAt = Date\.now\(\);/.test(term), "T4 터미널: 치는 중(조합 · 1초 안 입력)에는 재맞춤을 미룬다");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

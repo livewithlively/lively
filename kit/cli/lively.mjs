@@ -96,11 +96,28 @@ const inlineSandboxProcessAllowed = ({ command, args = [], options = {} }) => {
   }
   return false;
 };
+// loopback 하한 = 그 기계의 임시 포트 범위 시작(gVisor 16000) · 10000 아래로는 안 내림 · 못 읽으면 32768 — 공용 경계
+//  (kit/setup/host-effects.mjs sandboxPortLowerBound · sandboxPortMin)의 사본이다. 근거는 그쪽 머리말(#5029).
+//  처음 물을 때 한 번 읽는다(sandbox 판정만 쓴다 — 사람이 부르는 CLI 가 뜰 때마다 /proc 를 읽지 않게).
+const inlineSandboxPortLowerBound = (rangeText) => {
+  const m = /^\s*(\d+)/.exec(String(rangeText ?? ""));
+  const lo = m ? Number(m[1]) : 32768;
+  return lo < 32768 ? Math.max(lo, 10000) : 32768;
+};
+let inlineSandboxPortMinMemo = null;
+const inlineSandboxPortMin = () => {
+  if (inlineSandboxPortMinMemo === null) {
+    let text = "";
+    try { text = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8"); } catch { /* macOS·Windows */ }
+    inlineSandboxPortMinMemo = inlineSandboxPortLowerBound(text);
+  }
+  return inlineSandboxPortMinMemo;
+};
 const inlineSandboxNetworkAllowed = (input) => {
   try {
     const u = new URL(typeof input === "string" ? input : input?.url);
     const port = Number(u.port);
-    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= 32768 && port <= 65535;
+    return ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname) && port >= inlineSandboxPortMin() && port <= 65535;
   } catch { return false; }
 };
 const hostEffectGuard = (kind, operation, detail) => {
@@ -180,6 +197,18 @@ const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
 const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
 // 배선 신호는 **통째로 우리 소유**인 훅 배선 파일이다(user-install.mjs installGrok 이 심는다).
 const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
+// cursor(#4927) — 훅·MCP·자산은 ~/.cursor 고정(env 오버라이드 없음 — 번들 실측). ⚠ hooks.json 은 **사용자와 공유**라 파일
+//  존재만으로는 배선 신호가 약하다 — 우리 어댑터(cursor-adapter.mjs)를 가리키는 command 가 있어야 배선이다.
+const CURSOR_DIR = join(HOME, ".cursor");
+const CURSOR_HOOKS_JSON = join(CURSOR_DIR, "hooks.json");
+const CURSOR_MCP_JSON = join(CURSOR_DIR, "mcp.json");
+const CURSOR_ADAPTER_RE = /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/;   // 설치기·제거기와 같은 판정(cursor-wiring C19)
+const cursorWired = () => { try { return CURSOR_ADAPTER_RE.test(readFileSync(CURSOR_HOOKS_JSON, "utf8")); } catch { return false; } };
+// Cursor 를 이 홈에서 쓰는가 — ~/.cursor(IDE·CLI 가 첫 실행에 만든다) 또는 ~/.cursor-server(#5041: 윈도우 Cursor 가 WSL 로 이
+//  리눅스에 붙을 때 까는 원격 서버 — 그때 Cursor 는 이 홈의 ~/.cursor/mcp.json 을 읽는다(포럼 직원 답변). SSH 원격도 같은 자리에
+//  서버를 깔지만 SSH 에서 이 홈 설정을 읽는지는 확인하지 않았다 — 읽지 않아도 배선은 무해하다. ~/.cursor 는 첫 에이전트 대화 전엔
+//  없을 수 있다). self-update.mjs harnessState 와 **같은 판정**이어야 한다(두 판정이 갈리면 그게 결함).
+const cursorPresent = () => existsSync(CURSOR_DIR) || existsSync(join(HOME, ".cursor-server"));
 // 자산 충족 판정 — status 색상·조치 힌트·doctor 체크가 **한 산식**을 공유한다(표면끼리 어긋나면 그게 이 판정의 결함).
 //  collision = 같은 이름의 멤버 자산이 이겨서 조직 사본을 안 깐 것(정상). null = 판정 불가 → 보수적으로 결손 취급하고
 //  불확실성은 문구로 밝힌다(아는 척 초록불로 덮지 않는다).
@@ -652,6 +681,10 @@ function detectHarnesses() {
   // grok: 바이너리 이름이 그대로 grok 이다(#1701). 배선 신호는 우리 소유 훅 파일(lively-grok.json).
   if (has("grok")) out.add("grok");
   try { if (existsSync(GROK_HOOKS_JSON)) out.add("grok"); } catch { /* */ }
+  // cursor(#4927): CLI 바이너리는 cursor-agent(`agent` 별칭은 너무 일반적이라 안 본다). ⚠ IDE 만 쓰는 사람은 PATH 에 그게 없다 —
+  //  ~/.cursor 나 ~/.cursor-server(cursorPresent)가 있으면 쓰는 하네스로 본다. 배선 신호는 hooks.json 속 우리 어댑터 엔트리.
+  if (has("cursor-agent")) out.add("cursor");
+  try { if (cursorPresent() || cursorWired()) out.add("cursor"); } catch { /* */ }
   return [...out];
 }
 
@@ -1119,6 +1152,54 @@ export function installTarget(want, harnesses = []) {
   return !t || harnesses.includes(t) ? "" : t;
 }
 
+/** (순수) 설치 끝 안내의 «무엇을 켜면» — 배선한 하네스를 사람이 켜는 이름으로. 종전엔 claude(+codex)로 고정이라
+ *  Cursor·grok 만 쓰는 사람에게 «claude 를 켜면» 이라고 말했다(#4927 격리 리뷰). 모르는 id 는 그대로, 비면 claude. */
+const LAUNCH_NAME = { claude: "claude", codex: "codex", opencode: "opencode", antigravity: "agy", grok: "grok", cursor: "Cursor" };
+export function launchNames(harnesses = []) {
+  const names = [...new Set(harnesses.map((h) => LAUNCH_NAME[h] || h).filter(Boolean))];
+  return names.length ? names : ["claude"];
+}
+
+// ── WSL 안내(#5041) — 윈도우에 깐 라이블리는 WSL 안의 AI 가 쓰지 않는다 ─────────────────────────
+//  WSL 의 Cursor·Claude Code 는 리눅스 홈(~/.cursor·~/.claude)을 읽는다. 윈도우의 Cursor 로 WSL 폴더를 열어도 Cursor 는
+//  WSL 쪽 ~/.cursor/mcp.json 을 읽고 MCP 를 WSL 안에서 띄운다(Cursor 포럼 직원 답변 2026-05-08, 3.3.12 편집기 창). 고객 PC 가
+//  바로 그 모양이었다(윈도우 쪽 Cursor 로 켜면 붙고 WSL 에서 켜면 안 붙음). 그래서 윈도우 설치 끝·status 에서 WSL 배포판이
+//  보이면 WSL 터미널에서 리눅스 설치 한 줄을 한 번 더 치라고 알린다.
+//  배포판 목록은 레지스트리(HKCU\…\Lxss)에서 읽는다 — `wsl.exe` 를 부르면 WSL 서비스·VM 이 깨어난다(부작용 없는 쪽을 고른다).
+//  도구가 만드는 배포판(docker-desktop · rancher-desktop · podman-machine)은 사람이 AI 를 켜는 자리가 아니라 뺀다.
+const WSL_TOOL_DISTRO = /^(docker-desktop|rancher-desktop|podman-machine)/i;
+/** (순수) `reg query …\Lxss /s /v DistributionName` 출력 → 사람이 쓰는 배포판 이름(등장 순, 중복 없음). */
+export function parseWslDistros(regOut) {
+  const names = [];
+  for (const line of String(regOut || "").split(/\r?\n/)) {
+    const m = line.match(/^\s*DistributionName\s+REG_\w+\s+(.+?)\s*$/);
+    if (m && !WSL_TOOL_DISTRO.test(m[1]) && !names.includes(m[1])) names.push(m[1]);
+  }
+  return names;
+}
+export function wslDistros() {
+  if (!WIN) return [];
+  try {
+    // reg.exe 는 절대경로로 — 맨 이름이면 PATH(그리고 윈도우는 현재 폴더부터)를 뒤진다(cmd-node.mjs 의 schtasks 와 같은 규약).
+    const reg = join(process.env.SystemRoot || "C:\\Windows", "System32", "reg.exe");
+    const r = spawnSync(reg, ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss", "/s", "/v", "DistributionName"],
+      { encoding: "utf8", windowsHide: true, timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    return r.status === 0 ? parseWslDistros(r.stdout) : [];   // 키가 없으면(WSL 미설치) exit 1 → 빈 목록
+  } catch { return []; }
+}
+/** (순수) WSL 안내 — 배포판이 없거나 주소를 모르면 null. cmd 는 WSL 터미널에 붙여 넣을 리눅스 설치 한 줄. */
+export function wslHint(gw, distros) {
+  if (!gw || !Array.isArray(distros) || !distros.length) return null;
+  return {
+    distros,
+    cmd: `curl -fsSL ${String(gw).replace(/\/+$/, "")}/cli | sh`,
+    lines: [
+      `이 PC 에 WSL 배포판(${distros.join(", ")})이 있습니다. WSL 안에서 켠 Cursor·Claude Code 는 이 설치를 쓰지 않습니다.`,
+      "윈도우의 Cursor 로 WSL 폴더를 열어 쓸 때도 그렇습니다. WSL 터미널에서 아래 한 줄을 한 번 더 실행하세요.",
+    ],
+  };
+}
+
 async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = null }) {
   //  우선순위: 명시(`--harness`·LIVELY_INSTALL_HARNESS) > 온보딩에서 고른 것 > 종전 규약(아무것도 없으면 claude).
   //  명시가 있으면 서버에 묻지 않는다 — 사람이 방금 말한 것보다 저장된 값을 앞세울 이유가 없다.
@@ -1191,6 +1272,38 @@ async function offerHarnessInstall({ want = "", harnesses = [], bundleRoot = nul
 }
 
 // ── 8. 설치/업데이트의 단일 코드 경로 ───────────────────────────────────────
+// 설치 직후 조직 자산 미리 받기(#5013) — 스킬·서브에이전트·커맨드는 원래 **대화 시작 훅**(sync-harness-assets)만 내려받는다.
+//  그런데 codex·cursor·opencode·antigravity 는 스킬 목록을 대화 시작 때 한 번만 읽어서(harness-registry reloadAssets:false)
+//  그 훅이 받은 것이 **다음 대화부터** 보인다 → 설치 직후 첫 대화(= 처음 설정의 «외부 앱 연결 도와줘»)엔 라이블리 스킬이 없었다
+//  (테스트 컨테이너 cursor-agent 실측 2026-10-23: 설치 직후 ~/.cursor/skills 가 비어 있다가 sessionStart 를 쏘자 37개).
+//  그래서 배선을 마친 자리에서 그 훅을 하네스마다 한 번 돌린다 — 대화 시작 훅과 결과가 같도록 **같은 스크립트**를 쓴다.
+//  ⚠ 하나씩 차례로 돈다: 받은 목록(managed-harness-assets.json)을 모든 하네스가 같이 읽고 다시 쓴다. 동시에 돌리면
+//   나중에 끝난 쪽이 먼저 끝난 쪽 몫을 지우고, 몫이 지워진 파일은 다음 sync 가 «멤버 파일»로 보고 비켜선다(영영 갱신 안 됨).
+//  실패는 설치를 막지 않는다(스크립트가 fail-open) — 못 받은 건 다음 대화 시작 훅이 다시 받는다.
+export async function preloadHarnessAssets(harnesses, { timeoutMs = 15000 } = {}) {
+  const script = join(LIVELY, "hooks", "sync-harness-assets.mjs");
+  if (!harnesses.length || !existsSync(script)) return [];
+  const results = [];
+  for (const h of harnesses) {
+    const outcome = await new Promise((done) => {
+      let p;
+      // 토큰·주소는 CLI 정본을 **짝으로** 명시 주입한다 — 라이블리가 띄운 창(LIVELY_SESSION_ID)에선 스크립트가 env 를 먼저 보므로,
+      //  안 넘기면 셸의 스테일 값이 이긴다(#916 계열). 토큰만 넘기면 새 토큰이 옛 주소로 나간다.
+      //  stdio 는 ignore 여야 한다 — claude 몫은 stdout 에 재로드 JSON 을 내는데, 물려주면 앱의 NDJSON 이벤트 줄에 섞인다.
+      //  --preload: 이건 세션이 아니다 — 받기 스크립트가 기록 범위 판정을 건너뛴다(#5016, 작업 폴더 밖에서 설치해도 미리 받는다).
+      try { p = spawn(process.execPath, [script, "--harness", h, "--preload"], { env: { ...process.env, LIVELY_TOKEN: token(), LIVELY_GATEWAY_URL: gateway() }, stdio: "ignore", windowsHide: true }); }
+      catch { done({ code: -1 }); return; }
+      const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* 이미 끝남 */ } done({ code: -1, timedOut: true }); }, timeoutMs);
+      p.on("error", () => { clearTimeout(timer); done({ code: -1 }); });
+      p.on("close", (code) => { clearTimeout(timer); done({ code: code ?? -1 }); });
+    });
+    results.push({ harness: h, ...outcome });
+  }
+  // 받은 수는 받은 목록에서 센다 — 스크립트는 무슨 일이 있어도 exit 0 이라 종료코드로는 받았는지 모른다.
+  let man = {}; try { man = JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { /* 없으면 0 */ }
+  return results.map((r) => ({ ...r, skills: Object.values(man[r.harness] || {}).filter((e) => e?.kind === "skill").length }));
+}
+
 //  install 과 update 는 같은 일을 한다(멱등). 다른 건 문구와, install 이 claude 부재 시 설치를 제안한다는 것뿐.
 async function syncKit({ label, offerHarness, want = "" }) {
   if (!gateway()) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
@@ -1229,6 +1342,14 @@ async function syncKit({ label, offerHarness, want = "" }) {
     //   token() 이 정본(파일)을 이미 풀었으니 그 값을 그대로 물려준다 — process.env 전역을 덮지 않는 이유는 afterLogin 주석 참조.
     run(process.execPath, [join(root, "setup", "user-install.mjs"), "--allow-host-effects", "--clone-root", root, "--harness", harnesses.join(",")],
       { env: { LIVELY_TOKEN: token() } });
+    // 조직 자산 미리 받기(#5013) — 설치 직후 첫 대화에도 라이블리 스킬이 보이게(preloadHarnessAssets 머리말).
+    //  하네스당 몇 초(게이트웨이가 느리면 스크립트가 ~5초에 스스로 끊는다)라 시작을 먼저 알린다.
+    say(dim("  조직 스킬 받는 중…"));
+    const pre = await preloadHarnessAssets(harnesses);
+    if (pre.length) {
+      say(dim(`  조직 스킬: ${pre.map((x) => `${x.harness} ${x.skills}개`).join(" · ")}`
+        + (pre.some((x) => !x.skills) ? "  (0개인 곳은 대화를 시작할 때 다시 받습니다)" : "")));
+    }
 
     step("kit-install", "설치 중", "done", 2);
     say(dim("  [3/3] MCP 등록 중…"));
@@ -1239,9 +1360,18 @@ async function syncKit({ label, offerHarness, want = "" }) {
 
     say("");
     say(green(bold("=== 끝! ===")));
-    say(`  이제 아무 폴더에서든 ${bold("claude")}${harnesses.includes("codex") ? " · " + bold("codex") : ""} 를 켜면 회사 맥락이 따라옵니다.`);
+    say(`  이제 아무 폴더에서든 ${launchNames(harnesses).map(bold).join(" · ")} 를 켜면 회사 맥락이 따라옵니다.`);
     say(dim("  (훅은 세션 시작에 스냅샷됩니다 — 이미 켜 둔 세션이 있으면 껐다 켜세요.)"));
     say(dim("  상태 확인: ") + bold("lively status") + dim("    문제 진단: ") + bold("lively doctor"));
+    // WSL(#5041) — 윈도우에서 install·setup 할 때만(자동·수동 update 마다 되풀이하지 않는다 — status 가 흐린 한 줄로 늘 보여 준다).
+    //  warn·evNotice 로 내야 데스크톱 앱(--json-events)으로 설치한 사람에게도 notice 로 간다. 명령은 복사하기 좋게 따로 한 줄.
+    const wsl = offerHarness ? wslHint(gateway(), wslDistros()) : null;
+    if (wsl) {
+      say("");
+      warn(wsl.lines.join(" "));
+      say("      " + bold(wsl.cmd));
+      evNotice("info", wsl.cmd);
+    }
     return version;
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1262,19 +1392,53 @@ const s256 = (verifier) => crypto.createHash("sha256").update(verifier).digest("
 //  안 열려도 로그인은 막히지 않는다 — URL·코드는 호출부가 화면에 **먼저** 찍고, 승인은 어느 브라우저에서 해도 된다.
 //  빈 문자열은 '안 켬'으로 본다(테스트가 LIVELY_TOKEN:"" 로 끄는 관례와 같다).
 const NO_BROWSER = !!(process.env.LIVELY_NO_BROWSER || process.env.CI);
+
+// WSL 판정(#5041) — kit/cli/bootstrap.sh is_wsl 과 같은 순서: LIVELY_WSL(1|0 — 시험·사람이 강제) > 리눅스가 아니면 아님 >
+//  WSL 이 프로세스마다 거는 WSL_DISTRO_NAME > 커널 이름의 microsoft(`su -` 처럼 env 를 지운 셸). 커널 이름은 WSL2 커널 위의
+//  컨테이너(도커 데스크톱·dev container)도 같으니 컨테이너 표식이 있으면 그 갈래는 WSL 로 치지 않는다(is-wsl 패키지와 같은 판단).
+//  순수 — 시험이 env·플랫폼·커널 이름·컨테이너 여부를 넣는다.
+export function isWsl({
+  env = process.env, platform = process.platform,
+  osrelease = () => readFileSync("/proc/sys/kernel/osrelease", "utf8"),
+  inContainer = () => existsSync("/.dockerenv") || existsSync("/run/.containerenv"),
+} = {}) {
+  const forced = String(env.LIVELY_WSL ?? "").trim();
+  if (forced === "1") return true;
+  if (forced === "0") return false;
+  if (platform !== "linux") return false;
+  if (env.WSL_DISTRO_NAME) return true;
+  try { return !inContainer() && /microsoft/i.test(osrelease()); } catch { return false; }
+}
+
+// 승인 주소를 열 명령(순수) — null 이면 안 연다(주소·코드는 호출부가 이미 화면에 찍었다).
+//  WSL(#5041): 리눅스 쪽엔 보통 브라우저가 없다(xdg-open 이 없거나, 있어도 열 것이 없다) → **윈도우 기본 브라우저**로 연다.
+//   윈도우의 주소 처리기 `rundll32.exe url.dll,FileProtocolHandler <주소>` 를 WSL 상호운용으로 부른다(기본 브라우저로 넘긴다).
+//   explorer.exe 는 쓰지 않는다 — `=` 가 든 주소를 브라우저가 아니라 문서 폴더로 연다는 보고가 있고 그 보고가 고친 길이 이
+//   rundll32 다(xdg-utils 이슈 242). 승인 주소가 바로 `…/activate?code=…` 다. cmd.exe start 는 상호운용이 인자를 다시 이을 때
+//   `&` 를 명령 구분자로 읽는다.
+//   DISPLAY 를 보지 않는다 — WSLg 가 없어도 윈도우 브라우저는 열린다. 다만 윈도우 경로를 PATH 에 안 붙였거나(appendWindowsPath
+//   =false) 상호운용을 끈 WSL 이면 rundll32.exe 가 없다 — 그때 WSLg(DISPLAY·WAYLAND_DISPLAY)가 있으면 xdg-open 으로 물러선다(fallback).
+//  주소는 http(s) 만 연다 — 주소는 게이트웨이 응답에서 오고, 여는 명령들은 파일·다른 프로토콜도 연다(격리 리뷰 #5041).
+export function browserCommand(url, { platform = process.platform, env = process.env, wsl = isWsl({ env, platform }) } = {}) {
+  if (!/^https?:\/\//i.test(String(url || ""))) return null;
+  const linuxGui = !!(env.DISPLAY || env.WAYLAND_DISPLAY);
+  if (wsl) return { cmd: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url], fallback: linuxGui ? { cmd: "xdg-open", args: [url] } : null };
+  if (platform === "darwin") return { cmd: "open", args: [url] };
+  if (platform === "win32") return { cmd: "cmd", args: ["/c", "start", "", url] };
+  if (!linuxGui) return null; // 헤드리스 — URL 만 표시(위에서 이미 출력)
+  return { cmd: "xdg-open", args: [url] };
+}
 function openBrowser(url) {
   if (NO_BROWSER) return;
-  try {
-    let cmd, args;
-    if (process.platform === "darwin") { cmd = "open"; args = [url]; }
-    else if (WIN) { cmd = "cmd"; args = ["/c", "start", "", url]; }
-    else {
-      if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return; // 헤드리스 — URL 만 표시(위에서 이미 출력)
-      cmd = "xdg-open"; args = [url];
-    }
-    const c = spawn(cmd, args, { detached: true, stdio: "ignore" });
-    c.on("error", () => { /* 브라우저 없음 등 — 무시 */ });
+  const launch = (bc, onFail) => {
+    const c = spawn(bc.cmd, bc.args, { detached: true, stdio: "ignore" });
+    c.on("error", () => { try { onFail?.(); } catch { /* 브라우저 없음 등 — 무시 */ } });
     c.unref();
+  };
+  try {
+    const bc = browserCommand(url);
+    if (!bc) return;
+    launch(bc, bc.fallback ? () => launch(bc.fallback) : null);
   } catch { /* best-effort */ }
 }
 
@@ -1540,23 +1704,56 @@ export function planTmuxGlobalEnvFix({ showOutput = "", gw, tok, sessionId = "",
   return out;
 }
 
+// ── 노드 tmux 세대 소켓 (#4931) — 노드가 새 세션을 띄우는 판별 전용 서버들(`tmux -L lively-mux-<판>`). ──
+//  기본 소켓만 보는 CLI 자리(로그인 뒤 전역 env 교정 · reclaim 의 «작업 중 세션» 보호)가 이 서버들을 빠뜨리면, 거기 사는 세션의
+//  env 가 옛 신원으로 남거나 빌드 중인 폴더의 파생물이 지워진다.
+//  ⚠ 소켓 폴더 규칙은 src/node/mux-install.ts `muxSocketDir` 와 같다(tmux 자신의 규칙 — TMUX_TMPDIR 가 실제로 있으면 그것, 아니면
+//   /tmp 의 실경로). 키트는 src 를 import 할 수 없어 한 벌 더 둔다 — 두 벌이 같은 답을 내는지는 kit/cli/mux-sockets.test.mjs 가 잰다.
+/** (테스트 seam) 그 폴더의 우리 세대 소켓 이름들(이름순). 윈도우·폴더 없음은 빈 목록. */
+export function livelyMuxSockets(env = process.env, uid = typeof process.getuid === "function" ? process.getuid() : 0) {
+  if (WIN) return [];
+  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+  const base = (env.TMUX_TMPDIR ? real(env.TMUX_TMPDIR) : null) ?? real("/tmp") ?? "/tmp";
+  try {
+    return readdirSync(join(base, `tmux-${uid}`), { withFileTypes: true })
+      .filter((e) => e.name.startsWith("lively-mux-") && e.isSocket()).map((e) => e.name).sort();
+  } catch { return []; }
+}
+/** 이 PC 의 tmux 서버들에 말할 argv 접두 — 기본 소켓(플래그 없음) + 세대 소켓마다 `-L`. PATH 에 tmux 가 없으면 고정판으로 말한다. */
+function tmuxServersCli() {
+  if (WIN) return { bin: null, servers: [] };
+  let bin = has("tmux") ? "tmux" : null;
+  if (!bin) {
+    try {
+      const dir = join(HOME, ".lively", "bin");
+      const pins = readdirSync(dir).filter((n) => /^tmux-[A-Za-z0-9._-]+$/.test(n)).sort().reverse();
+      bin = pins.map((n) => join(dir, n, "tmux")).find((p) => existsSync(p)) || null;
+    } catch { /* 없음 */ }
+  }
+  return { bin, servers: [[], ...livelyMuxSockets().map((s) => ["-L", s])] };
+}
+
 function syncTmuxGlobalEnv(gw, tok) {
   if (WIN) return;
   try {
-    if (!has("tmux")) return;
-    const cur = run("tmux", ["show-environment", "-g"], { quiet: true, allowFail: true });
-    if (cur.code !== 0) return;                                            // 안전선 ② (서버 없음 — 새로 띄우지 않는다)
-    const plan = planTmuxGlobalEnvFix({
-      showOutput: cur.out, gw, tok,
-      sessionId: process.env.LIVELY_SESSION_ID, normalizeGw: normGw,
-    });
-    const fixed = [];
-    for (const [name, want] of plan) {
-      const r = run("tmux", ["set-environment", "-g", name, want], { quiet: true, allowFail: true });
-      if (r.code === 0) fixed.push(name);
+    const { bin, servers } = tmuxServersCli();
+    if (!bin) return;
+    const fixed = new Set();
+    //  #4931 — 기본 소켓만이 아니라 노드의 세대 서버마다 같은 규칙으로(안전선 셋은 서버마다 그대로).
+    for (const flags of servers) {
+      const cur = run(bin, [...flags, "show-environment", "-g"], { quiet: true, allowFail: true });
+      if (cur.code !== 0) continue;                                        // 안전선 ② (서버 없음 — 새로 띄우지 않는다)
+      const plan = planTmuxGlobalEnvFix({
+        showOutput: cur.out, gw, tok,
+        sessionId: process.env.LIVELY_SESSION_ID, normalizeGw: normGw,
+      });
+      for (const [name, want] of plan) {
+        const r = run(bin, [...flags, "set-environment", "-g", name, want], { quiet: true, allowFail: true });
+        if (r.code === 0) fixed.add(name);
+      }
     }
     // 값은 안 찍는다 — 토큰이 섞여 있다. 무엇을 고쳤는지와 '새 pane 부터'라는 한계만 말한다.
-    if (fixed.length) info(`tmux 전역 env 를 새 로그인으로 맞췄습니다(${fixed.join(" · ")}) — 지금부터 여는 창에 적용됩니다.`);
+    if (fixed.size) info(`tmux 전역 env 를 새 로그인으로 맞췄습니다(${[...fixed].join(" · ")}) — 지금부터 여는 창에 적용됩니다.`);
   } catch { /* 로그인은 이것 때문에 실패하지 않는다 */ }
 }
 
@@ -1589,6 +1786,9 @@ async function afterLogin(gw, tok) {
     const { nodeCommands } = await import(new URL("./cmd-node.mjs", import.meta.url));
     await nodeCommands(cliCtx()).nodeRebindForGateway(gw);
   } catch (e) {
+    //  새 PC 의 첫 `setup` 은 키트를 깔기 **전에** 로그인한다 — 부트스트랩은 lively.mjs 만 놓으므로 cmd-node.mjs 가 아직 없고,
+    //  등록된 노드(node-agent.env)도 없어 옮길 것이 없다. 그 경우까지 경고하면 처음 설치마다 앱에 노란 경고가 뜬다(2026-10-23 실측).
+    if (e?.code === "ERR_MODULE_NOT_FOUND" && !existsSync(join(LIVELY, "node-agent.env"))) return;
     warn(`노드를 새 게이트웨이로 옮기지 못했습니다 — ${e.message}`);
     info("그 PC 에서 `lively node --daemon` 을 다시 실행하면 지금 로그인한 곳으로 등록됩니다.");
   }
@@ -1791,6 +1991,10 @@ async function gatherStatus() {
       // grok(#1701) — configOk = 우리 훅 배선 파일(lively-grok.json)이 JSON 으로 파싱되는가. grok 은 깨진 훅
       //  파일을 **조용히 건너뛰므로**(fail-open) 깨짐 = 우리 훅이 통째로 소리 없이 빠진 상태 — 그걸 여기서 드러낸다.
       grok: { installed: has("grok"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // cursor(#4927) — 설치 = CLI(cursor-agent) **또는** ~/.cursor·~/.cursor-server(cursorPresent — IDE 만 쓰는 사람은 PATH 에
+      //  CLI 가 없다). configOk = Cursor 가 ~/.cursor/hooks.json 을 받아 주는 형태인가 — 한 군데만 어긋나도 **사용자 훅까지 파일
+      //  전체**를 버린다(번들 실측).
+      cursor: { installed: has("cursor-agent") || cursorPresent(), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
     // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
@@ -1942,6 +2146,28 @@ async function gatherStatus() {
       }
     } catch { /* 파일은 있는데 못 읽음 — null 유지(모름) */ }
   }
+  // cursor(#4927) — 배선·config 유효·MCP 등록 전부 **파일**에서 읽는다(비용 0 · 부작용 0). 연결(mcpConnected)은 null —
+  //  `cursor-agent mcp list` 는 로그인 없이 돌지만(실측) IDE 만 쓰는 사람에겐 CLI 가 없고, 진단이 하네스를 띄우지 않는다는 규칙.
+  {
+    const cu = st.harness.cursor;
+    try {
+      const raw = readFileSync(CURSOR_HOOKS_JSON, "utf8");
+      cu.wired = CURSOR_ADAPTER_RE.test(raw);
+      // Cursor 가 받아 주는 형태: JSON 객체 + version 숫자 + 문자열 속 `//` 없음(Cursor 의 주석 제거가 순진해 URL 한 줄이 파일을 죽인다).
+      let ok = false;
+      try { const j = JSON.parse(raw); ok = !!j && typeof j === "object" && !Array.isArray(j) && typeof j.version === "number" && !raw.includes("//"); } catch { ok = false; }
+      cu.configOk = ok;
+    } catch { /* 파일 없음 — wired=false · configOk=null(모름) */ }
+    try {
+      if (!existsSync(CURSOR_MCP_JSON)) cu.mcp = false;     // 파일 자체가 없다 = 등록한 적 없다(확정)
+      else {
+        const m = JSON.parse(readFileSync(CURSOR_MCP_JSON, "utf8"));
+        const e = m && m.mcpServers && m.mcpServers.lively;
+        cu.mcp = !!(e && typeof e === "object" && typeof e.command === "string");
+        cu.transport = cu.mcp ? "stdio" : null;              // command 형(stdio 프록시)만 설치한다
+      }
+    } catch { /* 못 읽음 — null 유지(모름) */ }
+  }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -1971,7 +2197,7 @@ async function gatherStatus() {
     //  경보를 숨기지도, 모르는 걸 정상이라 우기지도 않는다. 구분이 필요한 소비자는 --json 의 null 을 본다.
     let placementFor = null;
     try { ({ placementFor } = await import(new URL("../hooks/harness-registry.mjs", import.meta.url).href)); } catch { /* 발행 배치가 다르면 생략 */ }
-    for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1701 — grok 도 같은 자산 축
+    for (const h of ["claude", "codex", "opencode", "antigravity", "grok", "cursor"]) {   // #1701 — grok · #4927 — cursor 도 같은 자산 축
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
@@ -2162,6 +2388,18 @@ async function cmdStatus(opts) {
       : "";
     say(`  grok          ${mark(gk.installed)} 설치   ${gkWired}${gkMcp}${connOf(gk)}${assetsOf(gk)}`);
   }
+  // cursor(#4927) — 배선 신호는 hooks.json 속 우리 엔트리, configOk 는 Cursor 가 그 파일을 받아 주는가.
+  const cu = st.harness.cursor;
+  if (cu.installed || cu.wired) {
+    const cuWired = cu.configOk === false ? `${red("✘")} 배선 ${red("(~/.cursor/hooks.json 을 Cursor 가 못 읽음 — 사용자 훅까지 통째로 안 돕니다)")}` : `${mark(cu.wired)} 배선`;
+    const cuMcp = cu.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(cu.mcp)} MCP 등록${cu.mcp && cu.transport ? dim(`(${cu.transport})`) : ""}`;
+    say(`  cursor        ${mark(cu.installed)} 설치   ${cuWired}${cuMcp}${connOf(cu)}${assetsOf(cu)}`);
+  }
+  // WSL(#5041) — 윈도우에서만. 사람용 출력에만 둔다(--json 은 앱이 폴링하니 reg 를 매번 부르지 않는다).
+  //  흐린 정보 한 줄이다 — 윈도우에선 WSL 안에 이미 깔았는지 알 수 없고(알려면 VM 을 깨워야 한다), 배포판을 도커용으로만 쓰는
+  //  사람에겐 할 일이 없다. 경고색으로 매번 재촉하지 않는다(격리 리뷰 #5041).
+  const wsl = wslHint(gateway(), wslDistros());
+  if (wsl) say(dim(`  WSL           ${wsl.distros.join(", ")}   WSL 안의 AI 는 이 설치를 쓰지 않습니다 — WSL 에서도 쓰려면 WSL 터미널에서: ${wsl.cmd}`));
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
   if (st.node?.registered) {
@@ -2178,10 +2416,11 @@ async function cmdStatus(opts) {
   else if (st.harness.opencode.configOk === false) say(dim("  → opencode 가 opencode.json 을 못 읽습니다(그 파일의 MCP·플러그인이 전부 무효): ") + bold("lively update"));
   else if (st.harness.antigravity.configOk === false) say(dim("  → antigravity 플러그인 JSON 이 깨졌습니다(그 파일의 훅/MCP 만 조용히 빠짐): ") + bold("lively update"));
   else if (st.harness.grok.configOk === false) say(dim("  → grok 훅 파일(lively-grok.json)이 깨졌습니다(우리 훅만 조용히 빠짐): ") + bold("lively update"));
+  else if (st.harness.cursor.configOk === false) say(dim("  → Cursor 가 ~/.cursor/hooks.json 을 못 읽습니다(version 누락·모르는 이벤트·문자열 속 // — 사용자 훅까지 전부 무효). 파일을 고친 뒤: ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && !assetsSatisfied(st.harness[h].assets)); // #1701 — grok 포함 · 충돌분 제외
+    const short = ["claude", "codex", "opencode", "antigravity", "grok", "cursor"].filter((h) => st.harness[h].assets && !assetsSatisfied(st.harness[h].assets)); // #1701 — grok 포함 · 충돌분 제외
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -2313,9 +2552,24 @@ async function cmdDoctor(opts) {
         st.harness.grok.mcp ? `lively 등록됨${st.harness.grok.transport ? ` (${st.harness.grok.transport})` : ""}` : "미등록", "lively update");
     }
   }
+  // cursor(#4927) — 배선(hooks.json 속 우리 어댑터 엔트리)·config 유효(Cursor 가 그 파일을 받아 주는 형태)·MCP 등록(mcp.json).
+  //  연결(mcpConnected)은 null 이라 체크를 만들지 않는다(진단이 하네스를 띄우지 않는다는 규칙 — 위 gather 주석).
+  if (st.harness.cursor.installed || st.harness.cursor.wired) {
+    chk("Cursor 배선", st.harness.cursor.wired,
+      st.harness.cursor.wired ? "~/.cursor/hooks.json 에 lively 엔트리 있음" : "훅 미배선 — 맥락 주입·조직 훅·기록 게이트가 하나도 안 돕니다", "lively update");
+    if (st.harness.cursor.configOk !== null) {
+      chk("Cursor 훅 파일 유효", st.harness.cursor.configOk,
+        st.harness.cursor.configOk ? "Cursor 가 읽는 형태" : "~/.cursor/hooks.json 을 Cursor 가 못 읽습니다(JSON·version 숫자·문자열 속 // 금지) — 사용자 훅까지 전부 안 돕니다",
+        "파일을 고친 뒤 lively update");
+    }
+    if (st.harness.cursor.mcp !== null) {
+      chk("Cursor MCP 등록", st.harness.cursor.mcp,
+        st.harness.cursor.mcp ? `lively 등록됨${st.harness.cursor.transport ? ` (${st.harness.cursor.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
   // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.
   //  ⚠ 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 → 업데이트 직후엔 정상적으로 어긋날 수 있다(해결 문구에 그 사실을 담는다).
-  for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
+  for (const h of ["claude", "codex", "opencode", "antigravity", "grok", "cursor"]) {   // #4927 cursor · #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
     const a = st.harness[h].assets;
     if (!a) continue;
     const kept = a.collision || 0;   // 같은 이름의 내 로컬 자산이 있어 조직 사본을 안 깐 것 = 정상(비파괴 정책)
@@ -2476,14 +2730,16 @@ function modeEnv(mode) {
   return {};
 }
 
-// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity|grok] [하네스 인자…]]`
+// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity|grok|cursor] [하네스 인자…]]`
 //  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
 //  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
 //  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
 async function cmdRun(rest0) {
   const syncedDefault = hasExplicitMode(rest0) ? defaultMode() : await syncDefaultMode();
   const { mode, rest } = extractMode(rest0, syncedDefault);
-  const env = { ...process.env, ...modeEnv(mode) };
+  //  LIVELY_RUN=1 — `lively run` 으로 띄운 세션은 «라이블리가 띄운 세션» 이다(#5016, 상민님 2026-10-26): 사람이 라이블리로 켜겠다고
+  //   고른 것이라 폴더와 무관하게 기록 범위 안이다(hooks/record-scope.mjs 판정 ①). 모드(--readonly·--incognito)는 그대로 따른다.
+  const env = { ...process.env, ...modeEnv(mode), LIVELY_RUN: "1" };
   const badge = mode === "normal" ? "" : dim(` [${mode}]`);
   const onExit = (child) => child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
   // 프로젝트# → work.mjs (종전 동작 보존, 모드 env 만 추가)
@@ -2497,10 +2753,12 @@ async function cmdRun(rest0) {
   // 프로젝트# 없음 → 하네스 직접 실행. --harness <name> 로 선택(기본 claude), 나머지는 하네스에 그대로 넘긴다.
   let harness = "claude"; const args = [];
   for (let i = 0; i < rest.length; i++) { if (rest[i] === "--harness") harness = rest[++i] || harness; else args.push(rest[i]); }
-  if (!has(harness)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
+  // 하네스 id ≠ 바이너리 이름인 칸(#4927): antigravity=agy · cursor=cursor-agent(harness-registry 의 bin 축과 같은 값).
+  const bin = ({ antigravity: "agy", cursor: "cursor-agent" })[harness] || harness;
+  if (!has(bin)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
   say(dim(`${harness} 실행`) + badge);
   // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형) — 셸 경유이므로 명령·인자를 **둘 다** 인용한다(#1087).
-  const [hc, ha] = WIN ? winSpawnArgs(harness, args) : [harness, args];
+  const [hc, ha] = WIN ? winSpawnArgs(bin, args) : [bin, args];
   onExit(spawn(hc, ha, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) }));
 }
 
@@ -2530,6 +2788,100 @@ async function cmdMode(rest) {
   const hint = m === "incognito" ? "  (주입·읽기·쓰기 모두 off — 클린룸)" : m === "readonly" ? "  (읽기 O · 쓰기 X)" : "  (주입·읽기·쓰기 모두 on)";
   say(green(`디폴트 실행 모드 → ${bold(m)}`) + dim(hint));
   if (!synced) say(dim("  웹 설정 동기화는 다음 온라인 실행 때 다시 시도합니다."));
+}
+
+// ── 기록 범위(#5016) — `lively scope` · `lively work-root` ─────────────────────
+//  이 컴퓨터에서 라이블리를 «작업 폴더에서만(기본)» 켤지 «어디서나» 켤지, 그리고 작업 폴더 목록을 다룬다.
+//  판정·사본 파일 규칙은 hooks/record-scope.mjs 하나다(설치 자리 ~/.lively/hooks/ — 이 파일은 ~/.lively/lib/ 에서 ../hooks 로 찾는다).
+//  바꾸면 서버(정본)에 먼저 올리고, 못 닿으면 사본에 pending 으로 쌓는다 — 다음 세션 시작 훅이 올린다(lively mode 와 같은 규약).
+//  열려 있는 세션에도 바로 닿는다: MCP 프록시가 사본을 주기적으로 다시 읽고, 훅은 매번 사본을 읽는다.
+async function loadRecordScope() {
+  try { return await import(new URL("../hooks/record-scope.mjs", import.meta.url).href); }
+  catch { die("이 설치엔 기록 범위 모듈이 없습니다 — `lively update` 로 키트를 최신으로 받으세요."); }
+}
+const SCOPE_LABEL = { work_folders: "작업 폴더에서만", anywhere: "어디서나" };
+// 등록·삭제 결과를 서버에 올렸는지 한 줄로 — 못 올렸으면 언제 다시 하는지까지 말한다.
+const syncNote = (synced) => synced ? "" : dim("\n  지금은 서버에 못 닿아 이 컴퓨터에만 저장했습니다 — 다음 세션 시작 때 서버(웹 설정)에도 올립니다.");
+
+// `lively scope [work-folders|anywhere]` — 이 컴퓨터의 기록 범위 조회/설정.
+// «지금 폴더» 는 훅과 같은 함수로 정한다 — 갈리면 `work-root list` 의 켜짐/꺼짐이 실제 세션과 다르게 보인다.
+const sessionFolderOf = (rs) => rs.sessionDirOf({ env: process.env, cwd: process.cwd() });
+
+async function cmdScope(rest) {
+  const rs = await loadRecordScope();
+  const arg = String(rest[0] || "").trim().toLowerCase().replace(/-/g, "_");
+  const s = rs.effectiveSettings(LIVELY);
+  if (!arg) {
+    say(`이 컴퓨터의 기록 범위: ${bold(SCOPE_LABEL[s?.scope || rs.DEFAULT_SCOPE])}${s ? "" : dim(" (서버에서 아직 받아 오지 않았습니다 — 지금은 종전처럼 어디서나 켜집니다)")}`);
+    say(dim("  변경: lively scope work-folders | anywhere   ·   작업 폴더 목록: lively work-root"));
+    return;
+  }
+  if (!rs.SCOPES.includes(arg)) die("기록 범위는 work-folders 또는 anywhere 중 하나여야 합니다.", 2);
+  const r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), scope: arg });
+  say(green(`기록 범위 → ${bold(SCOPE_LABEL[arg])}`) + dim(arg === "anywhere"
+    ? "  (어느 폴더에서 켠 AI 든 라이블리에 연결됩니다)"
+    : "  (작업 폴더·라이블리 프로젝트 폴더에서 켠 AI 만 연결됩니다 — 목록: lively work-root)") + syncNote(r.synced));
+}
+
+// `lively work-root [list | add [경로] | remove [경로]]` — 이 컴퓨터의 작업 폴더 목록. 경로를 빼면 지금 세션 폴더다.
+//  `/lively-connect`(클로드)·`/prompts:lively-connect`(코덱스)가 부르는 것이 `add` 다.
+async function cmdWorkRoot(rest) {
+  const rs = await loadRecordScope();
+  const sub = rest[0] || "list";
+  const s = rs.effectiveSettings(LIVELY);
+  const synced = s?.work_roots || [];
+  const legacy = rs.legacyRoots(LIVELY);
+  if (sub === "list") {
+    say(`이 컴퓨터의 기록 범위: ${bold(SCOPE_LABEL[s?.scope || rs.DEFAULT_SCOPE])}${s ? "" : dim(" (서버에서 아직 받아 오지 않았습니다 — 지금은 종전처럼 어디서나 켜집니다)")}`);
+    say("작업 폴더:");
+    if (!synced.length && !legacy.length) say(dim("  (없음)"));
+    for (const r of synced) say(`  ${r}`);
+    for (const r of legacy) say(`  ${r}${dim("  (~/.lively/work-roots 파일)")}`);
+    say(dim("  라이블리 프로젝트 폴더(.lively/project.json)와 라이블리가 띄운 세션은 등록하지 않아도 켜집니다."));
+    const here = sessionFolderOf(rs);
+    const d = rs.decideRecordScope({ env: process.env, dir: here, lively: LIVELY });
+    say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(" — 등록: lively work-root add")}`);
+    return;
+  }
+  if (sub !== "add" && sub !== "remove") die("사용법: lively work-root [list | add [경로] | remove [경로]]", 2);
+  const target = resolve(rest[1] ? rs.expandHome(String(rest[1]), HOME) : sessionFolderOf(rs));
+  const key = (p) => rs.rootKey(p, HOME);
+  if (sub === "add") {
+    if (!existsSync(target) || !statSync(target).isDirectory()) die(`폴더가 없습니다: ${target}`, 2);
+    //  루트(/)나 홈 전체를 등록하면 사실상 «어디서나» 다 — 조용히 받지 않고 그 설정을 쓰게 한다(개인 폴더가 홈 아래에 있다).
+    if (key(target) === key("/") || key(target) === key(HOME) || /^[A-Za-z]:[\\/]?$/.test(target)) {
+      die(`${target} 를 통째로 등록하면 그 아래 모든 폴더에서 라이블리가 켜집니다. 그걸 원하면 \`lively scope anywhere\` 를 쓰세요.`, 2);
+    }
+    if (synced.some((r) => key(r) === key(target)) || legacy.some((r) => key(r) === key(target))) {
+      say(green(`이미 작업 폴더입니다: ${target}`));
+      return;
+    }
+    const r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), add: [target] });
+    say(green(`✓ 작업 폴더로 등록했습니다: ${bold(target)}`));
+    say(dim("  이 폴더와 그 아래에서 연 AI 는 라이블리에 연결됩니다. 지금 열려 있는 세션은 다음 메시지부터 연결됩니다.") + syncNote(r.synced));
+    if ((r.settings?.scope || s?.scope) === "anywhere") say(dim("  (이 컴퓨터는 지금 «어디서나» 라서 다른 폴더에서도 이미 켜져 있습니다.)"));
+    return;
+  }
+  // remove — 목록에 그 경로 그대로 있어야 지운다. 위 폴더 등록·프로젝트 표식으로 켜진 거라면 무엇 때문인지 알려 준다.
+  const inSynced = synced.find((r) => key(r) === key(target));
+  const inLegacy = legacy.find((r) => key(r) === key(target));
+  if (!inSynced && !inLegacy) {
+    const d = rs.decideRecordScope({ env: { ...process.env, LIVELY_SESSION_ID: "" }, dir: target, lively: LIVELY });
+    if (d.reason === "work_root") say(yellow(`이 폴더는 등록된 ${bold(d.root)} 아래라서 켜져 있습니다 — 끄려면: lively work-root remove "${d.root}"`));
+    else if (d.reason === "project") say(yellow(`이 폴더는 라이블리 프로젝트 폴더(${d.root})라서 켜져 있습니다 — 목록에서 뺄 것이 없습니다.`));
+    else say(`작업 폴더 목록에 없습니다: ${target}`);
+    return;
+  }
+  let r = { synced: true };
+  if (inSynced) r = await rs.changeScopeSettings({ lively: LIVELY, gw: gateway(), token: token(), send: fetch, machineId: localMachineId(), remove: [inSynced] });
+  if (inLegacy) {
+    const file = join(LIVELY, "work-roots");
+    const lines = readFileSync(file, "utf8").split(/\r?\n/).filter((l) => !(l.trim() && !l.trim().startsWith("#") && key(l.trim()) === key(inLegacy)));
+    writeFileSync(file, lines.join("\n"));
+  }
+  say(green(`✓ 작업 폴더에서 뺐습니다: ${bold(target)}`) + dim("\n  이 폴더에서 연 AI 는 이제 라이블리에 연결되지 않습니다(열려 있는 세션도 곧 도구가 내려갑니다).") + syncNote(r.synced));
+  //  ~/.lively/work-roots 의 줄은 설치·업데이트가 조직 목록에서 다시 채울 수 있다(seedWorkRoots — 빠진 줄을 더한다).
+  if (inLegacy) say(dim("  (~/.lively/work-roots 파일에서 뺀 줄입니다 — 조직 설정에서 온 줄이면 다음 업데이트 때 다시 들어올 수 있습니다. 그럴 땐 관리자에게 조직 목록에서 빼 달라고 하세요.)"));
 }
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
@@ -2644,9 +2996,17 @@ async function cmdReclaim(rest) {
   // 이 워크트리에서 **작업 중인 세션**이 있으면 회수를 통째로 막는다(빌드 중인 node_modules 를 지우면 그 세션이 깨진다).
   //  서버는 세션 레지스트리를 보지만 이 PC 엔 그게 없다 — tmux pane 들의 현재 경로 + 지금 이 셸의 cwd 를 쓴다.
   //  tmux 가 없거나 실패하면 빈 목록이 되는데, 그래도 코어의 나머지 안전선(gitignored∩allow-list·보호목록)은 그대로다.
+  //  #4931 — 노드는 새 세션을 판별 전용 서버(`tmux -L lively-mux-<판>`)에 띄운다. 기본 소켓만 보면 그 세션들의 폴더를 놓쳐 «작업 중»
+  //   보호가 빠진다 — 서버마다 묻는다.
   const paneDirs = (() => {
-    const r = run("tmux", ["list-panes", "-a", "-F", "#{pane_current_path}"], { quiet: true, allowFail: true });
-    return r.code === 0 ? String(r.out).split("\n").map((x) => x.trim()).filter(Boolean) : [];
+    const { bin, servers } = tmuxServersCli();
+    if (!bin) return [];
+    const dirs = [];
+    for (const flags of servers) {
+      const r = run(bin, [...flags, "list-panes", "-a", "-F", "#{pane_current_path}"], { quiet: true, allowFail: true });
+      if (r.code === 0) dirs.push(...String(r.out).split("\n").map((x) => x.trim()).filter(Boolean));
+    }
+    return dirs;
   })();
   const activeSessionDirs = [...new Set([...paneDirs, process.cwd()])];
 
@@ -2826,10 +3186,10 @@ ${bold("시작하기")}
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
       --harness <name>   ${dim("내가 쓸 AI — 이 컴퓨터에 없으면 동의를 받고 깔아 줍니다")}
-                         ${dim("claude · codex · opencode · antigravity · grok  (생략하면: 하나도 없을 때만 claude 를 제안)")}
+                         ${dim("claude · codex · opencode · antigravity · grok · cursor  (생략하면: 하나도 없을 때만 claude 를 제안)")}
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
-  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|all")}
+  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|cursor|all")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
@@ -2843,10 +3203,12 @@ ${bold("작업")}
       --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
   run [<프로젝트번호>]    프로젝트 열기 / ${bold("인자 없으면 하네스 바로 실행")}  ${dim("예: lively run 864  ·  lively run --readonly")}
       --readonly         이 세션만 읽기전용(라이블리 읽기 O · 쓰기 X) ${dim("· --incognito(주입·읽기·쓰기 all off) · --normal · --mode <m>")}
-      --harness <name>   무인자 실행 때 하네스 선택 ${dim("(기본 claude)")}
+      --harness <name>   무인자 실행 때 하네스 선택 ${dim("(기본 claude) · -h/--help 는 이 도움말이다(하네스 자체 도움말은 claude --help 로)")}
       ${dim("레포를 못 가져와도(자격·네트워크 등) 세션은 그대로 시작하고, 무엇이 왜 실패했는지 사람·AI 에게 함께 알립니다.")}
       --require-repo     ${dim("반대로 레포 준비 실패 시 실행을 중단(자동화·프로비저닝 스크립트용)")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
+  scope [<work-folders|anywhere>]     이 컴퓨터의 기록 범위 조회/설정 ${dim("(기본 work-folders — 작업 폴더 밖에서 켠 AI 는 라이블리가 꺼짐)")}
+  work-root [list|add|remove] [경로]  작업 폴더 목록 조회·등록·삭제 ${dim("(경로 생략 = 지금 폴더 · /lively-connect 가 부르는 것)")}
   workspace              지금 매여 있는 워크스페이스 + 이 PC 노드가 같은 곳을 보고 있는지
       switch             다른 워크스페이스로 옮기기 ${dim("(다시 로그인 — 노드·MCP 도 함께 따라갑니다)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
@@ -2862,6 +3224,9 @@ ${bold("작업")}
   repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
   repo worktree <레포>   워크트리 생성(코드 작업면) — 프로젝트면 그 폴더의 <레포> 자리 ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
   reclaim [<경로>]       재생성 가능한 파생물 회수(node_modules·dist…) — ${dim("기본 dry-run  ·  --apply 로 실제 삭제  ·  --remove-worktree")}
+  file address <경로>     세션 안 경로 → 파일 주소 + 링크 ${dim("(shared/project/<번호>/… · apps/<앱>/… — 매니지드는 /work/ 를 뗀 것)")}
+  file path <주소>        파일 주소 → 이 세션 안 경로 ${dim("(이 세션에 안 붙은 곳이면 까닭을 알려 줍니다)")}
+  file url <주소>         받기 서명 주소(15분) ${dim("--put 올리기 주소  ·  --ttl <초>  ·  --json")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
@@ -2870,10 +3235,87 @@ ${bold("옵션")}
   --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
                          ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
   -v, --version          버전
-  -h, --help             이 도움말
+  -h, --help             이 도움말 ${dim("· `lively <명령> --help` · `lively help <명령>` = 그 명령의 도움말(명령은 실행하지 않음)")}
 
 ${dim("업데이트는 보통 자동입니다 — 세션을 켜면 키트가 알아서 최신이 됩니다.")}
 ${dim("`lively update` 는 지금 당장 맞추거나, 관리자가 MCP 서버를 추가했을 때 씁니다.")}`;
+
+// ── 도움말 가드(#5028) ────────────────────────────────────────────────────────
+//  종전엔 `-h/--help` 가 **명령이 없을 때만** 도움말이었다. `lively delegate --help` 는 «--help» 라는 지시의
+//  실제 위탁을 만들고 배치를 기다렸고(AI 세션들이 사용법을 보려다 반복해서 밟았다), `uninstall --help` 는 제거를,
+//  `logout --help` 는 로그아웃을, `onboarding --help` 는 «--help» 프롬프트로 claude 를 띄웠다.
+//  원칙(일반적인 CLI 관례): `--` 앞 어디에든 `-h`/`--help` 가 있으면 **어떤 명령도 실행하지 않고** 그 명령의 도움말만 낸다.
+//   · `lively help <명령>` 도 같은 자리로 온다. 하위 명령이 있는 명령은 `lively <명령> help` 도 받는다.
+//   · `--` 뒤는 명령의 몫이다(예: `lively delegate -- "--help 옵션 설명해"` 는 그대로 위탁).
+const CMD_ALIASES = { upgrade: "update", remove: "uninstall" };
+// 첫 인자가 하위 명령 자리인 명령 — 여기선 `help` 낱말을 하위 명령으로 읽는다(`lively repo help`).
+//  run·onboarding 은 아니다: 그 뒤는 하네스·프롬프트로 넘기는 자리라 `help` 가 정당한 값일 수 있다.
+const HELP_WORD_COMMANDS = new Set(["delegate", "repo", "workspace", "file", "node", "mode"]);
+
+/** argv 가 도움말 요청이면 `{ topic }`(topic=명령 이름 · 없으면 null = 전체 도움말), 아니면 null. 순수 — 테스트 seam. */
+function helpRequest(argv) {
+  const args = argv.map(String);
+  const dd = args.indexOf("--");
+  const head = dd < 0 ? args : args.slice(0, dd);
+  const pos = parse(head)._;
+  const cmd = pos[0] || null;
+  if (cmd === "help") return { topic: pos[1] || null };
+  if (head.some((a) => a === "-h" || a === "--help")) return { topic: cmd };
+  if (cmd && HELP_WORD_COMMANDS.has(cmd) && pos[1] === "help") return { topic: cmd };
+  return null;
+}
+
+/**
+ * 한 명령의 도움말 텍스트(없는 명령이면 null).
+ *  delegate·node 는 각자 모듈의 상세 사용법을, 나머지는 전체 HELP 에서 그 명령 줄(+ 들여 쓴 이어지는 줄)을 잘라 쓴다 —
+ *  HELP 가 정본이라 명령별 문구를 따로 두면 생기는 드리프트가 없다.
+ */
+async function commandHelp(topic) {
+  const cmd = CMD_ALIASES[topic] || topic;
+  // 형제 모듈은 부트스트랩 직후엔 없을 수 있다(lively.mjs 한 파일만 내려받는 단계) — 없으면 HELP 절로 폴백한다.
+  const fromModule = { delegate: ["./cmd-delegate.mjs", "delegateUsage"], node: ["./cmd-node.mjs", "nodeUsage"] }[cmd];
+  if (fromModule) {
+    try { return (await import(new URL(fromModule[0], import.meta.url)))[fromModule[1]](); } catch { /* 폴백 */ }
+  }
+  const lines = HELP.split("\n");
+  const picked = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^  (\S+)/.exec(stripAnsi(lines[i]));
+    if (!m || m[1] !== cmd) continue;
+    picked.push(lines[i]);
+    while (i + 1 < lines.length && /^ {4,}\S/.test(stripAnsi(lines[i + 1]))) picked.push(lines[++i]);
+  }
+  if (!picked.length) {
+    // 하네스가 띄우는 stdio 서버 — 사람이 칠 일이 없어 HELP 에 없다. 그래도 «알 수 없는 명령» 이라고 하면 거짓이다.
+    if (cmd === "mcp" || cmd === "mcp-local") return `사용법: lively ${cmd}   ${dim(`(${cmd === "mcp" ? "게이트웨이 MCP 의 로컬 stdio 프록시" : "로컬 조작 stdio MCP 서버"} — 하네스가 세션마다 띄웁니다. 직접 실행할 일 없음)`)}`;
+    if (cmd === "version") return `사용법: lively version   ${dim("(= lively -v · --version)")}`;
+    if (cmd === "help") return `사용법: lively help [<명령>]   ${dim("(= lively <명령> --help)")}`;
+    return null;
+  }
+  return `${bold("사용법")}: lively ${cmd} …\n\n${picked.join("\n")}\n\n${dim("전체 명령: lively --help")}`;
+}
+
+// 부른 도움말은 stdout 으로(관례 — `lively delegate --help | head` 가 되게). 이벤트 모드에선 stdout 이 NDJSON 이라 stderr 로.
+//  잘못 쳐서 나오는 사용법(모르는 명령·옵션)은 종전대로 stderr 다.
+//  색은 stderr 기준으로 정해지므로 stdout 이 터미널이 아니면(파이프) 걷어 낸다.
+const helpOut = (s) => { if (EV) say(s); else process.stdout.write((process.stdout.isTTY ? s : stripAnsi(s)) + "\n"); };
+async function cmdHelp(topic) {
+  if (!topic) { helpOut(HELP); return; }
+  const text = await commandHelp(topic);
+  if (text) { helpOut(text); return; }
+  say(red(`알 수 없는 명령: ${topic}\n`));
+  say(HELP);
+  process.exit(2);
+}
+
+// 공통 파서(parse)의 옵션만 받는 명령 — 여기에 모르는 `-x`/`--xyz` 가 오면 실행하지 않는다.
+//  종전엔 조용히 버려져 `lively uninstall --dryrun`(오타) 이 **실제 제거**가 됐다. 나머지 명령은 인자 원형을
+//  각자 해석한다(delegate·node·run 등 — 그쪽 규칙은 그 모듈에).
+const PARSE_ONLY_COMMANDS = new Set(["setup", "login", "logout", "install", "update", "upgrade", "uninstall", "remove", "status", "doctor", "selfcheck", "version"]);
+function unknownFlags(cmd, o) {
+  if (!PARSE_ONLY_COMMANDS.has(cmd)) return [];
+  return o._.slice(1).filter((t) => /^--?[A-Za-z]/.test(t));
+}
 
 function parse(argv) {
   const o = { _: [] };
@@ -2911,6 +3353,63 @@ async function cmdBackfill(args) {
 async function cmdShare(args) {
   const { sessionCommands } = await import(new URL("./cmd-session.mjs", import.meta.url));
   return sessionCommands(cliCtx()).cmdShare(args);
+}
+
+// lively file address <경로> · file path <주소> · file url <주소> [--put] [--ttl 초] [--json] — 파일 주소(#4673).
+//  판정 · 변환의 정본은 게이트웨이(capabilities/files.ts — MCP 도구 file_address · file_path · file_url 와 같은 handler)이고 여기는 겉이다.
+//  이 명령을 부른 세션(LIVELY_SESSION_ID)을 함께 싣는다 — 「이 세션 안 경로」 를 서버가 그 세션의 작업 폴더 · 붙은 앱으로 푼다.
+//  사람용 안내는 stderr, 결과 한 줄(주소 · 경로 · url)은 stdout — 스크립트가 `$(lively file path …)` 로 받게.
+async function cmdFile(args) {
+  const sub = args[0] || "";
+  const rest = args.slice(1);
+  const json = rest.includes("--json");
+  const ti = rest.indexOf("--ttl");
+  const ttl = ti >= 0 ? Number(rest[ti + 1]) : undefined;
+  const target = rest.filter((a, i) => !a.startsWith("--") && !(ti >= 0 && i === ti + 1)).join(" ").trim();   // 빈칸 든 경로를 따옴표 없이 줘도
+  if (!["address", "path", "url"].includes(sub) || !target) {
+    say("사용법: lively file address <경로> · lively file path <주소> · lively file url <주소> [--put] [--ttl 초] [--json]");
+    process.exit(2);
+  }
+  const gw = gateway(), tok = token();
+  if (!gw) die("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.");
+  if (!tok) die("로그인이 필요합니다 — `lively login` 을 먼저 실행하세요.");
+  //  상대경로는 지금 폴더 기준 절대경로로 — 그 자리에 파일 · 폴더가 있을 때만(주소 `shared/…` 를 경로로 잘못 읽지 않게).
+  let arg = target;
+  if (sub === "address" && !isAbsolute(arg) && existsSync(resolve(process.cwd(), arg))) arg = resolve(process.cwd(), arg);
+  //  address · path 는 읽기(GET ?path= · ?address=), url 은 발급(POST 본문).
+  const isUrl = sub === "url";
+  const route = sub === "address" ? `/api/ui/files/address?path=${encodeURIComponent(arg)}`
+    : sub === "path" ? `/api/ui/files/path?address=${encodeURIComponent(arg)}` : "/api/ui/files/url";
+  const body = isUrl ? { address: arg, method: rest.includes("--put") ? "PUT" : "GET", ...(Number.isFinite(ttl) ? { expires_in: ttl } : {}) } : null;
+  const headers = { authorization: `Bearer ${tok}`, ...(isUrl ? { "content-type": "application/json" } : {}) };
+  const sess = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (sess) headers["x-lively-session"] = sess;
+  //  세션 모드(#1007+) — MCP 프록시와 같은 헤더를 싣는다. 읽기전용 세션이면 게이트웨이가 올리기 주소를 주지 않는다.
+  const mode = (process.env.LIVELY_MODE || "").trim().toLowerCase();
+  if (mode) headers["x-lively-mode"] = mode;
+  let r, j = null;
+  try { r = await fetch(gw + route, { method: isUrl ? "POST" : "GET", headers, ...(isUrl ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
+  catch (e) { die(`게이트웨이에 닿지 못했습니다 — ${e?.cause?.code || e?.message || e}`); }
+  try { j = await r.json(); } catch { /* 본문 없음 */ }
+  if (!r.ok) die((j && j.error) || `게이트웨이 오류 ${r.status}`);
+  if (json) { process.stdout.write(JSON.stringify(j) + "\n"); return; }
+  if (sub === "address") {
+    if (!j.address) { say(red(j.reason || "주소가 없습니다")); process.exit(1); }
+    process.stdout.write(j.address + "\n");
+    if (j.link) say(dim(j.link));
+    return;
+  }
+  //  #4822 — 옛 주소였으면(웹에서 이름을 바꾸거나 옮긴 파일) 지금 자리로 답했다는 것을 stderr 로 알린다(stdout 은 경로 · url 한 줄 그대로).
+  const movedNote = () => { if (j.moved_from) say(dim(`옮겨진 파일 — 옛 주소 ${j.moved_from} → 지금 ${j.address}`)); };
+  if (sub === "path") {
+    if (!j.path) { say(red(j.reason || "이 세션엔 없는 자리입니다")); process.exit(1); }
+    process.stdout.write(j.path + "\n");
+    movedNote();
+    return;
+  }
+  process.stdout.write(j.url + "\n");
+  movedNote();
+  say(dim(`${j.method === "PUT" ? "올리기" : "받기"} · ${j.expires_at} 까지 — ${j.method === "PUT" ? "curl -fsS -T <파일> '<url>'" : "curl -fsSL -o <파일> '<url>'"}`));
 }
 
 // lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
@@ -2962,7 +3461,9 @@ function endEvents(okFlag, code) {
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
-  const cmd = o._[0] || (o.version ? "version" : o.help ? "help" : "status");
+  // 도움말 요청이 **모든 명령보다 세다**(#5028) — 아무것도 실행하지 않고 도움말만 낸다.
+  const helpReq = helpRequest(argv);
+  const cmd = helpReq ? "help" : (o._[0] || (o.version ? "version" : "status"));
   if (!o.jsonEvents) return dispatch(cmd, o, argv);
   startEvents(cmd);
   // end 는 **모든 경로**에서 정확히 한 번 나가야 한다(앱이 그 한 줄로 성공·실패를 판정한다):
@@ -2979,6 +3480,12 @@ async function main() {
 }
 
 async function dispatch(cmd, o, argv) {
+  const bad = unknownFlags(cmd, o);
+  if (bad.length) {
+    say(red(`알 수 없는 옵션: ${bad.join(" ")} — 아무것도 실행하지 않았습니다.\n`));
+    say((await commandHelp(cmd)) || HELP);
+    process.exit(2);
+  }
   switch (cmd) {
     case "setup": return cmdSetup(o);
     case "login": { await cmdLogin(o); return; }
@@ -2996,6 +3503,8 @@ async function dispatch(cmd, o, argv) {
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
     // mode — 디폴트 실행 모드(normal|readonly|incognito) 조회/설정(#1007+). lively run 이 이걸 읽는다.
     case "mode": return cmdMode(argv.slice(argv.indexOf("mode") + 1));
+    case "scope": return cmdScope(argv.slice(argv.indexOf("scope") + 1));
+    case "work-root": return cmdWorkRoot(argv.slice(argv.indexOf("work-root") + 1));
     // workspace — 지금 어느 워크스페이스에 매여 있나 + 전환(#2215). 계정 하나가 여러 워크스페이스에 속한다.
     case "workspace": return cmdWorkspace(argv.slice(argv.indexOf("workspace") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
@@ -3015,8 +3524,10 @@ async function dispatch(cmd, o, argv) {
     // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.
     case "backfill": return cmdBackfill(argv.slice(argv.indexOf("backfill") + 1));
     case "share": return cmdShare(argv.slice(argv.indexOf("share") + 1));
+    // file — 파일 주소(#4673): 세션 안 경로 ↔ 주소 · 서명 주소. 나머지 인자 원형 보존(빈칸 든 경로).
+    case "file": return cmdFile(argv.slice(argv.indexOf("file") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
-    case "help": say(HELP); return;
+    case "help": return cmdHelp(helpRequest(argv)?.topic ?? null);
     default:
       say(red(`알 수 없는 명령: ${cmd}\n`));
       say(HELP);
@@ -3032,5 +3543,5 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, helpRequest, commandHelp, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, hasExplicitMode, modeEnv, defaultMode, syncDefaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용

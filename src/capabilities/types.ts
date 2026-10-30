@@ -16,12 +16,12 @@ export interface CapabilityCtx {
   session?: string;         // 작업이 이뤄진 터미널 세션(tmux box) — 접속 헤더 x-lively-session 으로 식별(#852). 형식만 검증됨(권한은 소비처가)
   tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
   ip?: string;              // 요청 IP
-  readOnly?: boolean;       // 읽기전용 세션(#1007+) — 이 요청이 read-only 모드인가(x-lively-mode=readonly 파생). 강제는 어댑터가 하고, 여기선 관측용(me 가 반환).
+  readOnly?: boolean;       // 읽기전용 세션(#1007+) — 이 요청이 read-only 모드인가(x-lively-mode=readonly 파생). 쓰기 capability 의 강제는 어댑터가 한다. 쓰기 아닌 capability 의 쓰기 갈래는 핸들러가 이 값으로 막는다(file_url PUT #4673). me 가 반환.
   incognito?: boolean;      // 인코그니토 세션(#1007+) — 이 요청이 incognito 모드인가(x-lively-mode=incognito 파생). incognito = lively 툴 0개+전체 차단(읽기·쓰기 모두). 관측용.
   // 맥락 가시성(#1291) — 이 요청의 **열람 신원**. 문자열=그 멤버로 필터, null=특권(admin·내부 경로, 필터 없음).
   //  actor 와 값은 같지만 의미가 다르다: actor 는 '누가 썼나'(감사), viewer 는 '누가 보나'(접근통제).
   //  admin 은 어댑터에서 null 로 정규화된다 — 그래서 핸들러는 admin 분기를 따로 쓰지 않는다.
-  //  두 어댑터(capabilities/index.ts, web.ts)가 이 한 필드를 채우므로 MCP·REST 가 자동으로 같은 규칙을 탄다.
+  //  두 어댑터(capabilities/index.ts, web.ts)와 앱 화면 다리(app-tool-call.ts runAppTool)가 이 한 필드를 채우므로 MCP·REST·앱 화면이 같은 규칙을 탄다.
   viewer?: string | null;
 }
 
@@ -32,6 +32,11 @@ export interface RestMount {
   paths: string[];
   parse(req: express.Request): Record<string, unknown>;
 }
+
+/** MCP 결과 한 조각 — 글 또는 그림(#4993 브라우저 스크린샷). REST 는 이 모양을 쓰지 않고 handler 의 JSON 그대로다. */
+export type McpContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 
 export interface Capability {
   name: string;
@@ -65,6 +70,10 @@ export interface Capability {
   //  예: { "anthropic/alwaysLoad": true } = Claude Code 가 이 툴을 deferred 안 시키고 상시 로드(v2.1.121+). 관리탭에서 per-tool 토글(#187).
   //  ⚠ anthropic/ 네임스페이스라 Claude 전용 — Codex 는 서버측 _meta deferral 미지원(전부 upfront 주입)이라 무효과.
   meta?: Record<string, unknown>;
+  // MCP 결과를 글 한 덩어리(JSON) 대신 조각으로 낼 때(#4993 — 스크린샷은 그림으로 줘야 모델이 본다).
+  //  handler 결과를 받아 조각 배열을 돌려주면 MCP 어댑터가 그대로 싣고, null 이면 종전대로 JSON 글이다.
+  //  REST 는 이 훅을 타지 않는다 — 같은 handler 결과를 JSON 으로(그림은 base64 필드로) 그대로 낸다(표면 동일성 유지).
+  mcpContent?: (out: unknown) => McpContent[] | null;
   // canonical JSON 반환. 도메인 에러는 plain Error throw —
   // REST 는 wrap() 의 한국어 부분문자열 매핑('없음'→404 등), MCP 는 SDK isError 로 변환된다.
   // 입력은 어댑터 경계에서 검증되므로 레지스트리 차원에선 넓게 받는다(각 op 파일에서 좁혀 캐스팅).

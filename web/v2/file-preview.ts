@@ -22,8 +22,6 @@ export interface PreviewKit {
   watch: (box: HTMLElement, path: string, kind: string, size: number, mtime?: number) => void;
   /** 다시 그린 **뒤에** 부른다 — 화면에서 떨어져 나간 상자의 «종이 맞춤» 항목만 잊는다(살아남은 카드는 칸 폭이 바뀌면 계속 다시 잰다). */
   prune: () => void;
-  /** (stage 판 전용) 다시 그리기 **전에** 부른다 — 격자를 통째로 새로 그리는 옛 뷰어 목록(panes-parts)이 쓴다. */
-  reset: () => void;
   destroy: () => void;
 }
 
@@ -331,7 +329,6 @@ export function createPreviewKit(o: { fileUrl: (path: string) => string; dead: (
     //  제자리 되그리기(panes-files render)로 살아남은 카드의 종이는 계속 다시 재야 한다. 종전의 «통째로 비우기(reset)» 는
     //  카드가 늘 새 노드일 때만 맞았다. 그래서 다시 그린 **뒤에** 부른다(붙어 있나가 그때 정해진다).
     prune: () => { for (let i = fits.length - 1; i >= 0; i--) if (!fits[i][0].isConnected) fits.splice(i, 1); },
-    reset: () => { fits.length = 0; },
     //  그림 주소(blob)는 페이지 보관함의 것이라 여기서 거두지 않는다 — 다음에 여는 칸이 그대로 쓴다(예산을 넘으면 보관함이 거둔다).
     destroy: () => { io?.disconnect(); ro?.disconnect(); own.forEach((u) => URL.revokeObjectURL(u)); },
   };

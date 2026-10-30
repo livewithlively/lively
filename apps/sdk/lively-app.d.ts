@@ -1,13 +1,38 @@
 // 라이블리 앱 SDK 타입 — 앱 UI 안에서 쓰는 `window.lively` (#1780).
 //  런타임은 **호스트가 iframe 에 자동 주입**한다(설치·번들 불요 — 앱 UI 는 CSP 로 외부 스크립트가 막혀 있다).
 //  이 파일은 타입만 준다: 앱을 TypeScript 로 쓸 때 `/// <reference path="./lively-app.d.ts" />` 하거나 tsconfig include.
-//  ⚠ 앱 화면은 `sandbox="allow-scripts"` 라 **폼 제출이 막힌다** — submit 이벤트조차 안 온다(onsubmit 핸들러가 안 불린다).
-//   입력은 버튼 click · 입력칸 keydown(Enter — 한글 조합 중 e.isComposing 이면 넘긴다)으로 받는다(#4225 실측).
+//  #4482 앱 v2-3 — 앱 화면은 평범한 웹처럼 돈다: 폼 제출(onsubmit) · alert/confirm/print · 내려받기가 되고(종전 «폼 금지 · click/keydown 으로» 규칙은
+//   없어졌다), 앱 주소(<앱>-<워크스페이스>.lvly.app)를 새 탭 · 폰 홈 화면으로 열어도 같은 SDK 가 같은 주소의 /_lively/* 로 돈다(standalone).
+//   한글 입력은 여전히 조합 중 Enter(e.isComposing)를 넘긴다 — 브라우저 규칙이다(플랫폼 규칙이 아니다).
+//   마이크 · 카메라 · 클립보드 읽기 · 위치는 매니페스트 `web.devices: ["microphone", …]` 에 선언한 앱의 iframe 에만 위임된다.
 declare global {
   interface Window { lively: LivelyApp }
 }
 
-/** 앱 UI ↔ 라이블리 호스트 다리. 모든 호출은 **그 앱의 grant 범위 안에서만** 서버가 재판정해 실행한다. */
+/**
+ * SDK 가 reject 하는 실패(모든 호출 공통). 앱은 글(message)이 아니라 `reason` 으로 가른다.
+ *  #4848 — 라이블리 안(다리) · 맨몸(새 탭 · 폰 — 같은 주소 `/_lively/*`) 어디서든 같은 모양이다.
+ *  · 본문 거절 넷(`busy` · `body_timeout` · `body_too_large` · `bad_body`)의 message 는 사람이 읽을 말이라 그대로 보여도 된다.
+ *  · 맨몸에서 앞단이 «붐빔»(503 `busy`)으로 거절한 요청은 SDK 가 `retry-after` 만큼 쉬고 **한 번** 다시 보낸다(본문을 다 받기 전의 거절이라
+ *    쓰기가 겹치지 않는다). 그래도 붐비면 `reason: "busy"` 로 실패한다 — 잠시 뒤 사람이 다시 누르게 한다.
+ *  · `body_too_large` — 한 번에 1MB 까지다. 나눠 보내거나, 큰 파일은 `lively.files.url` 의 서명 주소로 올린다.
+ *    서버가 제 글을 준 413(개인 설정 16KB · 파일 읽기 8MB · SQL 결과 상한)은 `reason` 이 null 이고 글은 서버의 것 그대로다(그 글이 맞는 안내다).
+ *  · 서버의 답을 받지 못하면(연결 끊김 · 오프라인) `code` -32000 · `status` · `reason` null — 새 탭 · 폰(맨몸)에선 원래 오류가 `cause` 에 있다
+ *    (라이블리 안에선 호스트가 받은 브라우저 글 그대로). 서버가 쓰기를 마친 뒤 답만 잃었을 수도 있다 — 다시 보내기 전에 표를 다시 읽어 본다.
+ */
+export interface LivelyError extends Error {
+  /** JSON-RPC 코드(종전 그대로) — -32001 권한 밖 · -32602 인자 · -32601 못 하는 자리 · -32000 그 밖. */
+  code: number;
+  /** 서버가 거절했으면 그 HTTP 상태(413 · 503 …). 서버까지 가지 않은 거절(붙은 세션 없음 등)은 null. */
+  status: number | null;
+  /**
+   * 서버가 준 짧은 코드 — 없으면 null. 본문: `busy`(입구가 붐빔) · `body_timeout`(보내는 데 너무 오래) · `body_too_large`(1MB 넘음) ·
+   *  `bad_body`(JSON 이 아님). 그 밖: `consent_required`(이 앱 사용 동의 없음) · `login_required`(앱 주소 로그인이 끝남) 등.
+   */
+  reason: string | null;
+}
+
+/** 앱 UI ↔ 라이블리 호스트 다리. 모든 호출은 **그 앱의 grant 범위 안에서만** 서버가 재판정해 실행한다. 실패는 {@link LivelyError} 로 reject 한다. */
 export interface LivelyApp {
   readonly version: 1;
   /** 이 UI 를 띄운 앱 id (ready 이후 채워진다). */
@@ -18,8 +43,27 @@ export interface LivelyApp {
   readonly page: string | null;
   /** 이 화면이 붙은 세션 id — 세션 오른쪽 앱 칸에서 열렸을 때(#4225). 그 세션의 AI 도 이 앱의 데이터를 쓴다. 아니면 null. */
   readonly session: string | null;
-  /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. */
-  readonly ready: Promise<{ host: string; app: string; instance: string | null; page: string | null; session: string | null; capabilities: { tools: boolean } }>;
+  /** 핸드셰이크 완료 — 앱 시작 시 한 번 await 하면 app/page/session 이 채워져 있다. 맨몸(standalone)이면 host 는 null · session 은 늘 null. */
+  readonly ready: Promise<{ host: string | null; app: string; instance: string | null; page: string | null; session: string | null; standalone?: boolean;
+    capabilities: { tools: boolean; menu?: boolean; chrome?: boolean; expand?: boolean; files_all?: boolean; chat?: boolean; me?: boolean; grant?: boolean; standalone?: boolean } }>;
+  /**
+   * #4482 라이블리 화면 밖(앱 주소를 새 탭 · 폰 홈 화면으로 연 맨몸)인가. 맨몸이면 SDK 가 같은 주소의 `/_lively/*` 로 돈다 —
+   *  표(store) · 도구(tools) · 개인 설정(prefs) · 앱 폴더(files.url) · me 는 그대로 되고, 세션에 붙는 기능(chat.send · files.list/read ·
+   *  ui.chrome/openMenu/expand)은 reject 한다(-32602 · -32601). 바깥 변경 알림(store.onChange)은 화면이 다시 보일 때 `{source:'visibility'}` 로 온다.
+   *  브라우저 저장소(localStorage · 쿠키)는 자리마다 따로다(라이블리 안 iframe 과 새 탭은 서로 못 본다) — 자리 사이에 이어야 할 것은 표 · prefs 에.
+   */
+  readonly standalone: boolean;
+  /**
+   * #4482 보는 사람 · 워크스페이스 · 이 앱 · 붙은 세션. 도구 선언 없이 쓴다. 세션은 세션에 붙은 앱 칸에서 연 화면만(새 탭 · 폰은 늘 null).
+   *  같은 내용을 SDK 없이 받으려면 `fetch('/_lively/me')`(앱 주소에서만 — 이때 session 은 늘 null).
+   */
+  me(): Promise<{ member: { id: string; name: string; email: string | null }; workspace: { slug: string | null }; app: { id: string; variant: "pub" | "draft" | null }; session: string | null }>;
+  /**
+   * #4482 이 앱 사용 동의를 청한다 — SDK 의 도구 호출은 동의가 없으면 저절로 묻지만, `/_lively/*` 를 fetch 로 직접 부르다 403 `consent_required` 를
+   *  받았을 때 쓴다. 라이블리 안이면 그 자리 동의 창(사람이 누른 동작 안에서만 — 아니면 -32001) → `{ granted }`. 맨몸이면 라이블리의 동의 화면으로
+   *  갔다가 이 화면으로 돌아온다(약속은 풀리지 않는다).
+   */
+  requestConsent(): Promise<{ granted: boolean }>;
 
   tools: {
     /** 라이블리 도구 호출. 매니페스트 permissions.tools 안 + 사용자 grant 안이어야 한다(아니면 code -32001 로 reject). */
@@ -28,17 +72,37 @@ export interface LivelyApp {
 
   /** 이 앱 전용 데이터 테이블(app.<앱id>__<표>) — 매니페스트 data.tables 로 선언한 것만. 테넌트 격리는 서버가 한다. */
   store: {
-    tables(): Promise<Array<{ name: string; columns: Array<{ name: string; type: string }> }>>;
+    tables(): Promise<Array<{ name: string; columns: Array<{ name: string; type: string }>; indexes?: Array<{ columns: string[]; unique?: boolean }> }>>;
     query<T = Record<string, unknown>>(table: string, opts?: { match?: Record<string, unknown>; limit?: number }): Promise<T[]>;
     insert(table: string, row: Record<string, unknown>): Promise<{ id: string | number | null }>;
+    /** match 에는 선언한 칸과 시스템 칸 `id` · `created_at` 을 쓸 수 있다 — 한 행만 고치려면 `{ id }`(insert 가 돌려준 값). set 에는 선언한 칸만. */
     update(table: string, match: Record<string, unknown>, set: Record<string, unknown>): Promise<{ changed: number }>;
     /** ⚠ match 는 필수다(전량 삭제 방지). */
     delete(table: string, match: Record<string, unknown>): Promise<{ deleted: number }>;
     /**
+     * SQL 한 문장(#4226) — SELECT·INSERT·UPDATE·DELETE. 테이블은 매니페스트에 선언한 이름 그대로(`FROM contacts`),
+     *  값은 `$1`·`$2` … 자리에 params 로 넘긴다(문자열을 이어 붙이지 마라). 매니페스트 permissions.tools 에 `store_sql` 이 있어야 한다.
+     *  받지 않는 것: 표·칸 만들기(매니페스트로) · 조건 없는 UPDATE/DELETE · 주석 · 세미콜론 · 백슬래시 · 스키마 붙인 이름.
+     *  결과는 최대 5,000행·5MB(넘으면 truncated), 문장 5초. 워크스페이스가 만든 앱에서만(기본 앱은 안 된다).
+     *  원래 id 로 넣기(시드·다른 DB 에서 옮기기)는 `INSERT … OVERRIDING SYSTEM VALUE` — id 시퀀스는 라이블리가 맞춘다(#5172).
+     */
+    sql<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<{
+      kind: "select" | "insert" | "update" | "delete";
+      columns: string[];
+      rows: T[];
+      row_count: number;
+      truncated: boolean;
+      /** 쓰기가 바꾼 행 수(SELECT 는 null). */
+      changed: number | null;
+      ms: number;
+    }>;
+    /**
      * 이 앱의 데이터가 바뀌었다(#4225) — 세션에 붙은 AI 가 썼거나 다른 화면에서 썼다. 받으면 필요한 표를 다시 읽는다.
-     *  source 는 누가 썼나의 표면(mcp = 세션의 AI · app-ui = 앱 화면 · web = 스크립트). 돌려주는 함수를 부르면 끊는다.
-     *  ⚠ 이걸 걸지 않은 앱은 바깥에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(입력 중인 글·스크롤이 처음으로 돌아간다).
-     *   화면 상태를 지키려면 걸고 스스로 다시 읽어라.
+     *  source 는 누가 썼나의 표면(mcp = 세션의 AI · app-ui = 라이블리 안의 앱 화면 · app-front = 앱 주소의 같은 주소 API(/_lively/*, #4482) ·
+     *  web = 스크립트 · visibility = 맨몸 화면이 다시 보였다). 돌려주는 함수를 부르면 끊는다.
+     *  ⚠ 이걸 걸지 않은 앱은 바깥(세션의 AI · 다른 사람)에서 데이터가 바뀌면 호스트가 화면을 **다시 불러온다**(입력 중인 글·스크롤이 처음으로 돌아간다).
+     *   앱 화면이 쓴 것(app-ui · app-front — 다른 창 · 새 탭 · 폰에서 쓴 것도)으로는 다시 불러오지 않는다 — 그것까지 세션 칸에 따라오게 하려면,
+     *   그리고 화면 상태를 지키려면 이걸 걸고 스스로 다시 읽어라.
      */
     onChange(cb: (ev: { table: string | null; op: "insert" | "update" | "delete" | null; source: string | null; session: string | null }) => void): () => void;
   };
@@ -46,6 +110,91 @@ export interface LivelyApp {
   ui: {
     /** 새 탭으로 연다 — 샌드박스 안에선 앱이 직접 못 하는 일을 호스트가 대신한다(http/https 만). */
     openExternal(url: string): Promise<{ opened: boolean }>;
+    /**
+     * 사람이 앱 탭의 ⋯ 메뉴에서 「표시 설정」을 눌렀다(#4601) — 앱이 설정 패널을 연다. 돌려주는 함수를 부르면 끊는다.
+     *  설정 값 자체는 lively.prefs 에 두면 다른 기기에서 열어도 그대로다.
+     */
+    onPrefsOpen(cb: () => void): () => void;
+    /**
+     * 호스트가 이 앱 위에 그리는 머리줄(앱 이름 · 판 · ⋯)을 접거나(`{ head: false }`) 다시 편다(#4592). 제 머리줄이 있는 앱이 두 줄이 되지 않게.
+     *  접으면 그 ⋯ 메뉴(고치기 · 판 이력 · 크게 보기 · 떼기)에 닿을 길이 앱 쪽에 있어야 한다 — 아래 openMenu 로 앱의 ⋯ 가 대신 연다.
+     *  인사(`await lively.ready`)의 `capabilities.chrome` 이 true 인 자리(세션의 앱 칸)에서만 먹는다. 새 문서(다시 불러옴)는 다시 청해야 한다.
+     */
+    chrome(opts: { head: boolean }): Promise<{ ok: boolean }>;
+    /**
+     * 호스트의 앱 메뉴를 그 자리(이 화면 기준 x · y)에 연다. items 는 그 메뉴 맨 위에 서는 앱의 항목(글자뿐 · 12개까지 · 라벨 60자).
+     *  사람이 앱의 항목을 고르면 `{ picked: id }`, 호스트의 것을 고르거나 닫으면 `{ picked: null }`.
+     *  인사의 `capabilities.menu` 가 false 인 자리(앱 찾기에서 연 화면 · 크게 보기)에서는 reject(code -32601) — 앱이 제 메뉴를 낸다.
+     */
+    openMenu(items: Array<{ id: string; label: string }>, at: { x: number; y: number }): Promise<{ picked: string | null }>;
+    /** 이 앱을 화면 가득(사이드바 없이) 띄운다. 인사의 `capabilities.expand` 가 true 인 자리(세션의 앱 칸)에서만 — 못 하는 자리면 reject(-32601). */
+    expand(): Promise<{ ok: boolean }>;
+    /**
+     * 호스트가 이 화면의 가장자리를 가리는 폭(px) — 지금은 세션 사이드바 아래의 독이 바닥을 가릴 때 bottom 이 선다(#4592).
+     *  같은 값이 CSS 변수 `--lively-inset-top` · `-right` · `-bottom` · `-left` 로도 심긴다. 바닥에 붙인 단추와 스크롤의 끝을 그만큼 올리면
+     *  가려지지 않는다: `padding-bottom: calc(12px + var(--lively-inset-bottom, 0px))`. 호스트가 알린 적이 없으면 전부 0.
+     */
+    insets: { top: number; right: number; bottom: number; left: number };
+    /** 가려진 폭이 바뀌었다(독을 옮겼다 · 크기를 바꿨다). 돌려주는 함수를 부르면 끊는다. CSS 변수만 쓰면 구독하지 않아도 된다. */
+    onInsets(cb: (i: { top: number; right: number; bottom: number; left: number }) => void): () => void;
+  };
+
+  /**
+   * 이 화면이 붙은 세션의 **프로젝트 자료**(사이드바 「자료」 — 프로젝트 공유 폴더)에서 파일 읽기(#4592). 읽기뿐이다(쓰기는 앱 표 store_* 로).
+   *  · 매니페스트에 읽을 확장자를 선언한다: `permissions.project_files: ["html"]`(점 없이 소문자 · 동의 창에 「프로젝트 자료 읽기」로 보인다).
+   *  · 세션에 붙어 열린 화면에서만 된다(lively.session 이 있을 때). 붙은 세션이 없으면 reject(code -32602).
+   *  · 세션이 프로젝트에 속해 있지 않거나 그 사람이 그 프로젝트를 볼 수 없으면 빈 목록 — 오류가 아니다.
+   *  · 숨김 파일(점으로 시작)과 git 레포 폴더 안은 목록에 없다.
+   *
+   * **전체 자료**(#4629) — `scope: "all"` 은 붙은 세션의 프로젝트 밖, 그 사람이 볼 수 있는 **모든 프로젝트의 자료**를 본다.
+   *  · 더 넓은 능력이라 따로 선언한다: `permissions.workspace_files: ["html"]`(동의 창에 「전체 자료 읽기」로 따로 보인다).
+   *  · 줄마다 `project_id` · `project_name` 이 실린다 — 읽을 때 `read(path, { project: project_id })`.
+   *  · 호스트가 할 수 있으면 인사(ready)의 `capabilities.files_all` 이 true 다(세션에 붙은 화면에서만).
+   *  · 답에 `scope: "all"` 이 없으면 옛 호스트다(붙은 프로젝트의 목록이 왔다) — 그 목록을 전체 자료로 쓰지 않는다.
+   *  · `q` 는 파일 이름 · 경로에서 찾는 말(낱말끼리 AND). 색인에 오른 파일만 나온다(방금 만든 파일은 조금 뒤에 보일 수 있다).
+   */
+  files: {
+    /** 선언한 확장자의 파일들, **최신순**. ext 로 선언한 것 가운데 고르고(생략 = 전부), limit 기본 200 · 최대 500. */
+    list(opts?: { ext?: string[]; limit?: number; scope?: "project" | "all"; q?: string }): Promise<{ project_id: number | null; files: Array<{ path: string; name: string; size: number; mtime: string; project_id?: number; project_name?: string }>; truncated: boolean; scope?: "all" }>;
+    /** 한 파일의 글 내용(UTF-8). path 는 list 가 준 상대경로. 선언하지 않은 확장자는 reject(-32001), 8MB 초과 · 없는 파일도 reject. */
+    read(path: string, opts?: { project?: number }): Promise<{ path: string; content: string; size: number; mtime: string }>;
+    /**
+     * 이 앱의 **앱 폴더**(워크스페이스 `apps/<앱>/`)에 올리고(PUT) 받는(GET) 짧은 수명 서명 주소(#4673 · 기본 15분 · 최대 3600초).
+     *  · 매니페스트에 `permissions.app_folder: true` 를 선언하고(동의 창에 「앱 폴더」로 보인다) 사람이 동의해야 한다. 남의 앱 폴더 · 공유 폴더는 안 된다.
+     *  · address 는 `apps/<이 앱 id>/<경로>`. 받은 `url` 에 쿠키 · 토큰 없이 `fetch(url, { method, body })` 하면 된다 — PUT 은 통째 덮어쓰기 · 1GB 까지 ·
+     *    위 폴더는 저절로 생긴다. GET 은 늘 내려받기(attachment)로 오고, 그림 · 소리 · 영상은 `<img src=url>` 처럼 바로 쓸 수 있다.
+     *  · 앱 서버(Lambda)는 같은 일을 REST 로 한다: `POST $LIVELY_API_URL/api/ui/files/url {address, method}`(앱 서버 토큰 + X-Lively-Identity).
+     *  · 그 앱이 붙은 세션은 같은 파일을 `<작업 폴더>/.lively/apps/<앱>/` 에서 폴더로 본다.
+     */
+    url(address: string, opts?: { method?: "GET" | "PUT"; expires_in?: number }): Promise<{ address: string; method: "GET" | "PUT"; url: string; headers: Record<string, string>; expires_at: string; expires_in: number; max_bytes?: number; link: string }>;
+  };
+
+  /** 이 화면이 붙은 세션과 말하기(#4594). 세션 오른쪽 앱 칸에서 열렸을 때만(lively.session 이 있을 때) 된다. */
+  chat: {
+    /**
+     * 붙은 세션에 글을 **바로 보낸다**(채우기가 아니다 — 사람이 Enter 를 치지 않는다). 서버가 글 앞에 「(앱 「제목」에서 보냄)」 한 줄을 붙여
+     *  대화 기록에서 사람이 친 말과 구별되고, 세션의 AI 는 그 표식으로 이 앱의 지침을 다시 받는다.
+     *  · 긴 내용은 앱 표(store_*)에 두고 **한 줄**만 보낸다(4,000자 · 앱마다 분당 20회).
+     *  · 앱은 매니페스트에 `permissions.chat_send: true` 를 선언해야 하고(동의 창에 「세션에 글 보내기」로 보인다), 사람이 그 범위에 동의해야 한다.
+     *  · **사람이 누른 동작(click·keydown) 안에서만** 보낼 수 있다 — 타이머나 데이터 변경 콜백에서 부르면 reject(code -32001).
+     *  · 세션이 멈춰 있으면 reject 하지 않고 `{ sent:false, draft }` — draft=true 면 호스트가 그 세션 화면의 입력칸에 글을 넣어 두었다
+     *    (사람이 보내면 세션이 깨어난다), false 면 그 세션 화면이 떠 있지 않아 못 넣었다(앱이 「세션 화면을 열고 다시」 라고 말하면 된다).
+     *  · 붙은 세션이 없으면 reject(code -32602).
+     */
+    send(text: string): Promise<{ sent: boolean; session: string; transport?: string | null; draft?: boolean }>;
+  };
+
+  /**
+   * 이 앱 × **보는 사람**의 작은 설정(#4601 — 배치 2열/2행 · 글자 크기 · 접기 · 마지막으로 보던 장). 다른 사람은 자기 설정을 본다.
+   *  왜 여기인가: 자리(라이블리 안 · 새 탭 · 폰)마다 브라우저 저장소가 따로라 localStorage 로는 이어지지 않고(종전 srcdoc 화면에선 아예 막힌다),
+   *   앱 표에 두면 사람마다 가르는 칸을 앱이 만들어야 한다. 이건 그 사람의 설정이 어디서 열든 그대로다.
+   *  16KB 상한 — 설정이지 데이터가 아니다(문서·행은 store_* 에).
+   */
+  prefs: {
+    /** 없으면 {}. */
+    get<T extends Record<string, unknown> = Record<string, unknown>>(): Promise<T>;
+    /** 얕은 병합 — patch 의 키만 바뀐다. 값이 null 인 키는 지운다(「기본값으로」). 병합 뒤 전체를 돌려준다. 16KB 초과면 reject. */
+    set<T extends Record<string, unknown> = Record<string, unknown>>(patch: Record<string, unknown>): Promise<T>;
   };
 }
 

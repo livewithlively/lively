@@ -16,31 +16,23 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const code = (rel) => readFileSync(path.join(ROOT, rel), "utf8")
   .split("\n").filter((l) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
 const PICK = code("web/v2/notion-pick.ts");
-const ONB = code("web/v2/onboarding.ts");
 const CON = code("web/v2/connect.ts");
 const M = await import(pathToFileURL(path.join(ROOT, "public/app/v2/notion-pick.js")).href);
 
-test("배선 · 소스 세 벌과 빌드된 모듈을 실제로 읽었다(vacuous 방지)", () => {
-  assert.ok(PICK.length > 200 && ONB.length > 10000 && CON.length > 10000);
+test("배선 · 소스 두 벌과 빌드된 모듈을 실제로 읽었다(vacuous 방지)", () => {
+  //  (#4970) 처음 설정의 «앱 연결» 장면(노션 고르기 목업)은 걷혔다 — 노션 안내는 이제 [외부 앱 연결] 한 화면이 쓴다.
+  assert.ok(PICK.length > 200 && CON.length > 10000);
   assert.equal(typeof M.notionCollectedPages, "function");
   assert.equal(typeof M.notionCollectedLine, "function");
 });
 
-test("① 안내 문장은 한 벌이다 — 두 화면이 notion-pick.ts 의 NOTION_PICK_TIP 을 가져다 쓴다", () => {
+test("① 안내 문장은 한 벌이다 — 화면이 notion-pick.ts 의 NOTION_PICK_TIP 을 가져다 쓴다", () => {
   assert.equal(M.NOTION_PICK_TIP, "노션 화면엔 «전체 선택»이 없어요. 사이드바 맨 위 페이지만 검색해서 고르면 그 아래 페이지는 전부 함께 들어옵니다.",
     "승인된 안내 문장이 바뀌었다");
-  for (const [name, src] of [["onboarding.ts", ONB], ["connect.ts", CON]]) {
+  for (const [name, src] of [["connect.ts", CON]]) {
     assert.match(src, /import \{[^}]*\bNOTION_PICK_TIP\b[^}]*\} from '\.\/notion-pick\.js'/, `${name} 가 안내 문장을 가져오지 않는다`);
     assert.ok((src.match(/\bNOTION_PICK_TIP\b/g) || []).length >= 2, `${name} 가 안내 문장을 화면에 쓰지 않는다`);
     assert.ok(!src.includes("사이드바 맨 위 페이지만 검색해서"), `${name} 에 문장이 복제돼 있다 — 한 벌에서 가져와야 두 화면의 말이 갈라지지 않는다`);
-  }
-});
-
-test("② 처음 설정 목업은 실제 노션 화면이다 — 체크박스 목록을 그리지 않는다", () => {
-  assert.ok(!ONB.includes("☑ 회사 위키"), "체크박스 목록 목업이 되살아났다 — 노션 선택 화면엔 체크박스 목록이 없다");
-  assert.ok(ONB.includes('class="ob-npick"'), "노션 선택 화면 목업(ob-npick)이 없다");
-  for (const s of ["페이지와 데이터베이스 추가", "페이지 및 데이터베이스 검색", "Recents"]) {
-    assert.ok(ONB.includes(s), `실제 화면의 «${s}» 가 목업에 없다`);
   }
 });
 
@@ -74,8 +66,8 @@ test("③ 문장 — 1개 이상이면 수를, 0 이면 «아직 하나도 못 �
   assert.ok(!M.notionCollectedLine(0).includes("0개"), "0 을 «0개를 모았어요»로 말한다");
 });
 
-test("③ 배선 — 두 화면이 모은 페이지 수와 그 문장을 실제로 쓴다", () => {
-  for (const [name, src] of [["onboarding.ts", ONB], ["connect.ts", CON]]) {
+test("③ 배선 — 화면이 모은 페이지 수와 그 문장을 실제로 쓴다", () => {
+  for (const [name, src] of [["connect.ts", CON]]) {
     assert.match(src, /notionCollectedPages\(/, `${name} 가 모은 페이지 수를 쓰지 않는다`);
     assert.match(src, /notionCollectedLine\(/, `${name} 가 모은 페이지 수 문장을 쓰지 않는다`);
   }

@@ -43,17 +43,21 @@ const projPatch = (s: Record<string, any>) => ({
 });
 const isTaskLevel = (s: Record<string, any>) => s.level === "task" || s.level === "subtask";
 
+const UNDO_REASON = "라이블리에서 직전 변경을 실행 취소했습니다";
+
 const PROJECT_OPS: Record<string, Apply> = {
   set_status: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
     const id = Number(r.entity_key);
-    if (isTaskLevel(s)) await updateTaskStatus(id, String(s.status), ctx);
-    else await updateProjectStatus(id, String(s.status), ctx, s.status_raw ?? null);
+    // 되돌리기로 다시 닫히면 외부 PM 에 닫힘 근거 코멘트가 나간다 — 까닭이 비지 않게 적어 둔다.
+    const why = { ...ctx, reason: UNDO_REASON };
+    if (isTaskLevel(s)) await updateTaskStatus(id, String(s.status), why);
+    else await updateProjectStatus(id, String(s.status), why, s.status_raw ?? null);
   },
   update: async (r, d, ctx) => {
     const s = rec(d === "before" ? r.before : r.after);
     const id = Number(r.entity_key);
-    if (isTaskLevel(s)) await updateTask(id, { ...projPatch(s), status: s.status }, ctx);
+    if (isTaskLevel(s)) await updateTask(id, { ...projPatch(s), status: s.status }, { ...ctx, reason: UNDO_REASON });
     else await updateProject(id, projPatch(s), ctx);
   },
   set_folder: async (r, d, ctx) => {
@@ -168,14 +172,16 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
     if (d === "before") await linkKnowledge(String(r.entity_key), String(t.to_name), String(t.relation), ctx);
     else await unlinkKnowledge(String(r.entity_key), String(t.to_name), String(t.relation), ctx);
   },
+  //  #4824 — 되돌리기가 연결을 되살릴 때는 «지금 보는 사람이 줄면 거절» 을 받지 않는다(allowNarrow): 원래 있던 연결이고,
+  //   그 연결의 내용은 이미 지식에 들어 있다. 거절하면 잠긴 자료의 내용이 넓게 남는다 — 좁히는 쪽이 맞다.
   link_source: async (r, d, ctx) => {
     const t = rec(r.after ?? r.before);
     if (d === "before") await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
-    else await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
+    else await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true, viewer: undefined });   // 되돌리기 — 알림을 답에 안 싣는다
   },
   unlink_source: async (r, d, ctx) => {
     const t = rec(r.before ?? r.after);
-    if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
+    if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx, { allowNarrow: true, viewer: undefined });   // 되돌리기 — 알림을 답에 안 싣는다
     else await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
   },
   // link_category(#1563) — 스토어가 교체 직전 매핑을 before 에 실으면서 되돌릴 수 있게 됐다.

@@ -28,12 +28,22 @@ import { runClickupSync } from "./clickup/sync.js";
 import { CURSOR_EPSILON_MS, planCursorWrite } from "./sync-cursor.js";
 import { bindCollector, collectorClaimKey, collectorInstanceKey } from "./config.js";
 import { logger } from "../log.js";
+import { installOrphanGuard, type OrphanGuard } from "./orphan-guard.js";
 
 const name = process.argv[2];
 const fullFlag = process.argv.includes("--full");
 // --collector <id> (#1419 T1) — 이 실행이 대리하는 수집기 인스턴스. 없으면 레거시 단일 인스턴스 모드.
 const collectorArgIdx = process.argv.indexOf("--collector");
 const collectorId = collectorArgIdx >= 0 ? Number(process.argv[collectorArgIdx + 1]) : 0;
+// --run <id> (#3994 T2-a) — 이 실행을 기록하는 connector_run 행. 생존 증거(heartbeat)를 **자식이 직접** 찍는다.
+//  종전엔 부모(게이트웨이)가 자식 stdout 을 읽어 1.5초마다 찍었다. 그래서 부모가 재시작하면 하트비트가
+//  멈추고, 수집 자식은 부모와 함께 죽지 않으므로 «살아서 긁는 실행» 이 유령으로 판정돼 error 로 닫혔다.
+//  번호를 못 받으면(옛 부모·수동 실행) 자기기록을 건너뛴다 — 종전 동작 그대로.
+const runArgIdx = process.argv.indexOf("--run");
+const runRowId = runArgIdx >= 0 ? Number(process.argv[runArgIdx + 1]) : 0;
+// 부모(게이트웨이)를 잃었을 때의 뒷일(#5012) — 파이프 오류를 삼키고, 그 뒤 로그·끝 기록을 run 행에 직접 남긴다.
+//  부모가 살아 있는 동안은 아무것도 하지 않는다. 상세 orphan-guard.ts 머리말.
+let orphan: OrphanGuard | null = null;
 
 // 이름 검증은 **수집기 바인딩 뒤로** 미룬다(#1419 T2) — 커스텀 프리셋(http/rss/webhook)은 코드 레지스트리에
 //  없는 이름이라 여기서 거르면 범용 수집기가 영영 못 뜬다. 프리셋 카탈로그를 봐야 판정할 수 있고,
@@ -57,6 +67,20 @@ if (!name) {
 await loadEnterprise();
 
 await initAllSchemas({ quiet: true });
+
+// 자기기록 — 유령 판정 임계보다 충분히 짧은 주기로 자기 생존을 적는다(#3994 T2-a).
+//  unref: 이 타이머가 프로세스 종료를 막지 않는다. 실패는 삼킨다 — 기록이 안 된다고 수집을 멈추지 않는다.
+if (Number.isFinite(runRowId) && runRowId > 0) {
+  const { HEARTBEAT_STALE_MS } = await import("./run-tracker.js");
+  const { childHeartbeatMs } = await import("./sync-outcome.js");
+  const beat = setInterval(() => {
+    void itemsPool.query(`UPDATE connector_run SET heartbeat_at=now() WHERE id=$1 AND status='running'`, [runRowId])
+      .catch(() => { /* 비치명 — 다음 주기에 다시 */ });
+  }, childHeartbeatMs(HEARTBEAT_STALE_MS));
+  beat.unref();
+  const { LOG_CAP } = await import("./run-tracker.js");
+  orphan = installOrphanGuard({ runId: runRowId, write: (q, p) => itemsPool.query(q, p), logCap: LOG_CAP });
+}
 
 // ── 수집기 바인딩(#1419 T1) — **첫 설정 해소보다 먼저.** 이 뒤로 모든 resolveConnectorConfig 는 이 인스턴스의
 //  config/secrets 를 본다(커넥터 모듈은 그 사실을 모른 채 종전 코드 그대로 돈다). 바인딩 실패는 치명이다 —
@@ -110,6 +134,7 @@ if (name !== "clickup" && !activeConnector) {
 //  lossless_full_done)과 전진 조건(fetch 실패 집계·full 승격)이 generic 시간커서와 달라 훅으로 흡수하지 않았다.
 //  구현은 커넥터 모듈(clickup/sync.ts)에 있으므로 '커넥터 추가=모듈 1개'는 성립 — 여기 남은 건 이 진입 한 줄뿐이다.
 const failed = name === "clickup" ? await runClickupSync({ fullFlag }) : await runGenericSync(name, activeConnector);
+await orphan?.finish(failed ? 1 : 0);
 process.exit(failed ? 1 : 0);
 
 // ── generic 증분 — clickup 외 모든 커넥터(slack/discord/notion/…). 커넥터 SPI backfill({since}) 를 커서로 몰아 증분화. ──
@@ -162,7 +187,11 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
     await flush();
     await flushProjectEmbeds(itemsPool).catch(() => {}); // #624 이름/설명 바뀐 미러 프로젝트만 재임베딩(배치 후·best-effort)
   } catch (err) {
+    //  실패 전에 받은 것은 적재한다 — 커넥터가 «멀쩡한 부분은 다 주고 끝에 실패를 알리는» 경우(Zotero: 라이브러리 하나만 막힘)
+    //   마지막 묶음(<200건)이 버려지면, 그 실패가 이어지는 동안 멀쩡한 쪽도 영영 덜 들어온다. 적재는 멱등이고 커서는 그대로 묶인다.
+    await flush().catch(() => {});
     logger.error({ err: (err as Error)?.message ?? String(err), system }, "generic 싱크 실패 — 커서 동결(다음 run 재수집)");
+    orphan?.note(JSON.stringify({ level: 50, err: (err as Error)?.message ?? String(err), system, msg: "generic 싱크 실패 — 커서 동결(다음 run 재수집)" }));
     return true;
   }
 
@@ -175,10 +204,12 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
   const plan = planCursorWrite({ prevIso, prevMs, maxMs, mirrorFailures, prevRetry, post });
   if (plan.freeze) return true; // 훅이 요구한 동결 — 커서 미기록 + run 실패(적재분은 멱등 보존)
   if (plan.write) await setConnectorState(system, instance, plan.write);
-  logger.info({
+  const summary = {
     system, mode: incremental ? "incremental" : "full",
     ingested, mirrorFailures, cursorIso: plan.advance ? new Date(maxMs).toISOString() : (typeof prevIso === "string" ? prevIso : null),
     cursorAdvanced: plan.advance, retryPending: post?.retryIds?.length ?? 0,
-  }, "generic 싱크 완료");
+  };
+  logger.info(summary, "generic 싱크 완료");
+  orphan?.note(JSON.stringify({ level: 30, ...summary, msg: "generic 싱크 완료" })); // 부모를 잃었으면 pino 줄은 사라진다 — 요약은 여기로
   return mirrorFailures > 0;
 }

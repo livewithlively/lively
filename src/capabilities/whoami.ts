@@ -12,7 +12,8 @@ import { getMember, getOrgProfile, getUiSurface } from "../org/store.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { memberTeams } from "../v6/team-store.js";
 import { visAxes } from "../v6/visibility-axes.js";
-import { registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along
+import { managedMode, registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along · #4480 매니지드 판정
+import { appDomainFor } from "../apps/app-address.js"; // #4480 v2-1 — 앱 주소 도메인(LIVELY_APP_DOMAIN · 워크스페이스 단위 스위치 LIVELY_APP_DOMAIN_TENANTS)
 import { getWorkspaceBySlug, PRIMARY_SLUG } from "../org/tenancy/registry.js"; // 스위처 버튼 이름·종류(registry 가 이름의 SoT)
 import { currentTenant } from "../org/tenant-context.js";
 import { memberWelcomeState } from "../org/delivery/first-run.js"; // #2039·#2171 — 처음 설정(#/welcome) 노출 판정은 서버가 한다
@@ -40,9 +41,9 @@ const me: Capability = {
           getOrgProfile().catch(() => null),     // 상단 워드마크 태그라인('for <조직명>') — 미설정이면 태그라인 자체를 숨긴다
           getUiSurface(),                        // #1454 S2~S5 — 매니지드 표면 노브 4종(자체 fail-open: 실패=기본값)
           // #2039·#2171 — 아래 first_run·welcome_pending. 모르면 홈(둘 다 false)
-          memberWelcomeState(memberId).catch(() => ({ firstRun: false, pending: false })),
+          memberWelcomeState(memberId).catch(() => ({ firstRun: false, pending: false, lockSession: null })),
         ])
-      : [[], null, null, null, { firstRun: false, pending: false }];
+      : [[], null, null, null, { firstRun: false, pending: false, lockSession: null }];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
       display_name: member?.display_name ?? null,
@@ -75,6 +76,8 @@ const me: Capability = {
       first_run: !!(welcome as { firstRun?: boolean }).firstRun,
       // #2171 — 보여는 줬는데 아직 안 끝냈나. 홈(web/v2/views.ts)이 «처음 설정 이어서 하기» 줄을 그린다.
       welcome_pending: !!(welcome as { pending?: boolean }).pending,
+      // #5058 — 처음 설정이 아직 리브 대화 안에서 이어지는 중이면 그 세션 id. 화면이 그 세션으로 데려가고 사이드바를 잠근다(first-run.ts onboardingLockSession).
+      onboarding_session: (welcome as { lockSession?: string | null }).lockSession ?? null,
       // #1750 — 이 워크스페이스의 종류(personal|team)와 계정 허브 URL. 좌상단 스위처(web/v2/switcher.ts)가 배지·동선을 정한다.
       //  기본 team·null = 기존 셀프호스트 박스(무설정) — 스위처는 '이 팀 워크스페이스 + 연결한 팀' 만 보인다.
       workspace: { kind: ui?.workspace_kind ?? "team", hub_url: ui?.workspace_hub_url ?? null },
@@ -94,6 +97,10 @@ const me: Capability = {
         return { active, managed, current: slug, name: row?.name ?? null, kind: row?.kind ?? null };
       })(),
       incognito: ctx?.incognito ?? false,
+      // #4480 v2-1 — 앱 주소(<앱>-<워크스페이스>.<이 값>)가 켜진 워크스페이스인가. 화면(web/v2/app-ui.ts)이 앱을 앱 주소 iframe 으로
+      //  띄울지 이것으로 정한다(null = 종전 srcdoc). 매니지드에서 그 워크스페이스 컨텍스트가 있을 때만 — 주소에 슬러그가 들어간다.
+      //  워크스페이스 단위 스위치(LIVELY_APP_DOMAIN_TENANTS) 밖이면 null — 그 워크스페이스는 종전 srcdoc 그대로다.
+      app_domain: managedMode() && currentTenant() ? appDomainFor(currentTenant()?.slug) : null,
     };
   },
 };
@@ -154,6 +161,9 @@ const whoami: Capability = {
         system: i.system, instance: i.instance ?? null, external_id: i.external_id,
         email: i.email ?? null, display_name: i.display_name ?? null,
       })),
+      // ── 얼굴(#4769) — 앱 화면이 라이블리 프로필(아바타 · 글자 · 색)을 그대로 쓰게. **앱 principal 에만** 준다 —
+      //  하네스의 whoami 는 늘 로드되는 배관이라 base64 그림을 실으면 세션 컨텍스트를 잡아먹는다(me 를 MCP 에 안 여는 이유와 같다).
+      ...(isApp ? { avatar: member?.avatar ?? null, avatar_char: member?.avatar_char ?? null, avatar_color: member?.avatar_color ?? null } : {}),
       // ── 소속 ── (#4233: 팀별 소유/이해관계 카테고리는 분류 담당 개념과 함께 걷었다)
       teams: isApp ? [] : teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       // ── 이 요청의 접속 신원(게이트웨이가 헤더에서 본 것이 권위 — 자기보고 아님) ──

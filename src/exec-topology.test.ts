@@ -35,6 +35,12 @@ import {
   tmuxArgvFor,
   unfreezeExecTopology,
   parseTmuxRoute,
+  parseSessionHarnesses,
+  parseMuxPin,
+  parseAgentJobs,
+  parseAgentJobsPort,
+  MUX_PIN_DEFAULT,
+  nodeMuxGenerationsApply,
   type ExecTopology,
 } from "./exec-topology.js";
 
@@ -54,6 +60,8 @@ const TOPO_KEYS = [
   "LIVELY_BOX_CGSPAWN",
   "LIVELY_ATTACH_WORKER_K",
   "LIVELY_TMUX_ROUTE", "LVLY_TMUX_SOCK_TEMPLATE",   // #2600 T3-a — 허브 env(URL·비밀)는 토폴로지가 더는 안 읽는다
+  "LIVELY_SESSION_HARNESSES",   // #4067 — 세션 이미지의 하네스 목록
+  "LIVELY_AGENT_JOBS", "LIVELY_AGENT_JOBS_PORT",   // #5082 — 브로커 없는 박스의 에이전트 작업 실행면 · 판이 부를 루프백 포트
 ] as const;
 
 /** 시험용 env 한 벌 — 적지 않은 키는 «미설정»이다. */
@@ -685,9 +693,41 @@ test("★ §7 설정이 아무것도 없는 배포의 값 한 벌 — 종전과 
     nodeToken: "",
     attachWorkerK: 0,
     //  #2600 T2 (d) d2 — 새 축 둘. 설정 없음 = 꺼짐·길 없음(셀프호스트엔 브로커가 없다).
+    //  #3797 T7 — 목록 범위. 기본은 `cluster`(종전 동작) — 세션 호스트 env 만 `node` 로 좁힌다.
+    tmuxListScope: "cluster",
     tmuxRoute: "off",
     broker: null,
+    //  #4067 — 세션 이미지 하네스 목록. 설정 없음 = 모름(호출부가 실물을 본다).
+    sessionHarnesses: null,
+    //  #4931 — 노드 tmux 세대 스위치. 설정 없음 = 기본값 auto(2단계 — MUX_PIN_DEFAULT · 쓰는 자리는 노드뿐).
+    muxPin: "auto",
+    //  #5082 — 브로커 없는 박스의 에이전트 작업 실행면. 설정 없음 = 꺼짐(종전 — 접수 501) · 판이 부를 루프백 포트는 고정 진입점 8080.
+    agentJobs: "off",
+    agentJobsPort: 8080,
   });
+});
+
+test("§7 에이전트 작업 실행면 스위치(#5082 A1·A2) — 정확히 `host` · `docker` 만 켠다(앞뒤 공백만 벗긴다)", () => {
+  for (const [raw, want] of [["host", "host"], [" host ", "host"], ["\thost\n", "host"], ["Host", "off"], ["HOST", "off"], ["hosts", "off"], ["host1", "off"], ["on", "off"], ["1", "off"], ["true", "off"], ["", "off"], ["   ", "off"], [undefined, "off"],
+    ["docker", "docker"], [" docker\t", "docker"], ["Docker", "off"], ["dockerd", "off"], ["host,docker", "off"]] as const) {
+    assert.equal(parseAgentJobs(raw), want, JSON.stringify(raw));
+    assert.equal(computeExecTopology(E(raw === undefined ? {} : { LIVELY_AGENT_JOBS: raw })).agentJobs, want, `토폴로지 ${JSON.stringify(raw)}`);
+  }
+});
+
+test("§7 판이 부를 루프백 포트(#5082 A3·A4) — 1~65535 정수만 그 값 · 그 밖은 8080", () => {
+  for (const [raw, want] of [["1", 1], ["65535", 65535], ["18080", 18080], [" 9000 ", 9000], ["0", 8080], ["65536", 8080], ["99999", 8080], ["80a", 8080], ["-1", 8080], ["8080.5", 8080], ["1e3", 8080], ["0x50", 8080], ["", 8080], [undefined, 8080]] as const) {
+    assert.equal(parseAgentJobsPort(raw), want, JSON.stringify(raw));
+    assert.equal(computeExecTopology(E(raw === undefined ? {} : { LIVELY_AGENT_JOBS_PORT: raw })).agentJobsPort, want, `토폴로지 ${JSON.stringify(raw)}`);
+  }
+});
+
+test("§7 실행면 스위치는 다른 축을 바꾸지 않는다(#5082) — 매니지드 env 에 얹어도 값만 실리고 나머지가 같다", () => {
+  const base = computeExecTopology(E(MANAGED));
+  const withHost = computeExecTopology(E({ ...MANAGED, LIVELY_AGENT_JOBS: "host", LIVELY_AGENT_JOBS_PORT: "9001" }));
+  assert.equal(withHost.agentJobs, "host", "값은 그대로 싣는다 — 매니지드에서 안 쓰는 것은 실행면 고르기(agent-jobs/surface)의 몫이다");
+  assert.equal(withHost.agentJobsPort, 9001);
+  assert.deepEqual({ ...withHost, agentJobs: base.agentJobs, agentJobsPort: base.agentJobsPort }, base);
 });
 
 test("★ §7 멤버 uid 강하 wrapper·cgroup wrapper 의 기본 설치 경로 문자열이 같다", () => {
@@ -761,6 +801,17 @@ test("§T3a-2 on·off 는 그대로 — 세션 호스트가 쓰는 코어 경로
   assert.equal("tmuxShadowSample" in t, false, "🔴 걷힌 표본 비율 칸이 토폴로지에 남아 있다");
 });
 
+test("★ §T7-1 tmuxListScope — **정확히** `node` 만 좁힌다 · 그 밖은 전부 cluster(게이트웨이 무회귀)", () => {
+  //  관대하게 읽으면 게이트웨이가 조용히 노드 범위로 좁아져 다른 노드 세션이 목록에서 사라진다.
+  const scope = (v: string | undefined): string => computeExecTopology(E({ LIVELY_TMUX_LIST_SCOPE: v })).tmuxListScope;
+  assert.equal(scope("node"), "node");
+  assert.equal(scope(" NODE "), "node", "트림·대소문자는 관대하게(값 자체는 우리가 쓴다)");
+  assert.equal(scope(undefined), "cluster");
+  assert.equal(scope(""), "cluster");
+  assert.equal(scope("cluster"), "cluster");
+  assert.equal(scope("nodes"), "cluster", "비슷한 값은 «좁힘» 이 아니다");
+});
+
 test("§d2-2 broker — 중계 배포에서만 있다: 셀프호스트는 허브 env 가 있어도 null", () => {
   assert.equal(computeExecTopology(E({})).broker, null);
   assert.equal(computeExecTopology(E({ LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s" })).broker, null, "중계가 없으면 브로커도 없다");
@@ -789,4 +840,74 @@ test("§d2-4 새 필드가 종전 필드를 흔들지 않는다 — 같은 env �
   const a = computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "4" }));
   const b = computeExecTopology(E({ ...MANAGED, LIVELY_ATTACH_WORKER_K: "4", LIVELY_TMUX_ROUTE: "on", LVLY_HUB_URL: "http://h:9093", LVLY_HUB_SECRET: "s" }));
   for (const k of ["sessionHost", "tmux", "isolation", "storage", "hooks", "nodeToken", "attachWorkerK"] as const) assert.deepEqual(b[k], a[k], k);
+});
+
+// ── #4067 세션 이미지 하네스 목록(K32) — «설치돼 있나» 를 세션 컨테이너 없이 답하는 근거 ─────────────────
+test("★ K32 LIVELY_SESSION_HARNESSES — 부재·빈·공백은 모름(null) · 칸 하나라도 형식 밖이면 통째로 모름 · 중복은 한 번", () => {
+  const table: Array<[string | undefined, readonly string[] | null]> = [
+    [undefined, null],
+    ["", null],
+    ["   ", null],
+    [",,", null],
+    ["claude", ["claude"]],
+    [" claude , codex,antigravity,grok ", ["claude", "codex", "antigravity", "grok"]],
+    ["claude,,codex,", ["claude", "codex"]],
+    ["claude,claude,codex", ["claude", "codex"]],
+    ["claude,Codex", null],
+    ["claude,co dex", null],
+    ["claude,../x", null],
+    ["claude,$(id)", null],
+    ["claude,-codex", null],
+    ["claude," + "a".repeat(33), null],
+    ["a".repeat(32), ["a".repeat(32)]],
+  ];
+  for (const [raw, want] of table) {
+    assert.deepEqual(parseSessionHarnesses(raw), want, JSON.stringify(raw));
+    assert.deepEqual(computeExecTopology(E({ LIVELY_SESSION_HARNESSES: raw })).sessionHarnesses, want, `토폴로지: ${JSON.stringify(raw)}`);
+  }
+  const v = parseSessionHarnesses("claude,codex")!;
+  assert.ok(Object.isFrozen(v), "읽는 쪽이 목록을 바꾸지 못한다");
+});
+
+test("K32 목록은 다른 축을 바꾸지 않는다 — 매니지드 env 에 얹어도 나머지 값이 같다", () => {
+  const managed = { LIVELY_SESSION_ENSURE: "ensure {slug}", LIVELY_TMUX_EXEC: "relay {slug}", LIVELY_MEMBER_EXEC: "mx", LIVELY_SESSION_EXEC: "sx {slug}" };
+  const a = computeExecTopology(E(managed));
+  const b = computeExecTopology(E({ ...managed, LIVELY_SESSION_HARNESSES: "claude,codex" }));
+  assert.deepEqual({ ...b, sessionHarnesses: null }, a);
+  assert.deepEqual(b.sessionHarnesses, ["claude", "codex"]);
+});
+
+test("K33 LIVELY_MUX_PIN — 정확히 auto·bin·off 만 그 값, 나머지(빈 값·대소문자·오타)는 기본값 auto (#4931 2단계)", () => {
+  assert.equal(MUX_PIN_DEFAULT, "auto", "2단계 — 세대를 아는 번들(1단계)이 되돌림의 바닥으로 깔린 뒤 기본값을 켰다");
+  const table: Array<[string | undefined, string]> = [
+    [undefined, "auto"], ["", "auto"], ["auto", "auto"], [" auto ", "auto"], ["off", "off"], [" off\n", "off"], ["bin", "bin"], ["\tbin\n", "bin"],
+    ["AUTO", "auto"], ["Auto", "auto"], ["on", "auto"], ["true", "auto"], ["1", "auto"], ["BIN", "auto"], ["pinned", "auto"],
+    //  끄는 값도 **정확히** off 만 — 대소문자를 봐주지 않는다(같은 파일의 다른 스위치와 같은 규율 · 키트는 이 셋만 env 파일에 쓴다).
+    ["OFF", "auto"], ["Off", "auto"], ["0", "auto"], ["false", "auto"],
+  ];
+  for (const [raw, want] of table) {
+    assert.equal(parseMuxPin(raw), want, JSON.stringify(raw));
+    assert.equal(computeExecTopology(E({ LIVELY_MUX_PIN: raw })).muxPin, want, `토폴로지: ${JSON.stringify(raw)}`);
+  }
+});
+
+test("K34 LIVELY_MUX_PIN 은 다른 축을 바꾸지 않는다 — 노드 env 에 얹어도 나머지 값이 같다 (#4931)", () => {
+  const node = { LIVELY_NODE_TOKEN: "lvk_x" };
+  const a = computeExecTopology(E(node));
+  const b = computeExecTopology(E({ ...node, LIVELY_MUX_PIN: "off" }));
+  assert.deepEqual({ ...b, muxPin: MUX_PIN_DEFAULT }, a);
+  assert.equal(b.muxPin, "off");
+});
+
+test("K35 노드 tmux 세대를 쓸 수 있는 자리 — 노드 · 기본 소켓 배치 · 비윈도우만 (#4931)", () => {
+  const node = computeExecTopology(E({ LIVELY_NODE_TOKEN: "lvk_x" }));
+  assert.equal(nodeMuxGenerationsApply(node, "darwin"), true, "멤버 PC 노드(맥)");
+  assert.equal(nodeMuxGenerationsApply(node, "linux"), true, "멤버 PC 노드(리눅스)");
+  assert.equal(nodeMuxGenerationsApply(node, "win32"), false, "윈도우(psmux)는 다음 단계");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E()), "darwin"), false, "게이트웨이(셀프호스트)");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E({ LIVELY_TMUX_EXEC: "relay {slug}" })), "linux"), false, "매니지드 게이트웨이(중계)");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E({ LIVELY_NODE_TOKEN: "lvk_x", LIVELY_TMUX_EXEC: "relay {slug}" })), "linux"), false,
+    "세션 호스트(노드 박스) — 노드지만 tmux 가 중계 너머");
+  assert.equal(nodeMuxGenerationsApply(computeExecTopology(E({ LIVELY_NODE_TOKEN: "lvk_x", LIVELY_TENANCY_MODE: "registry" })), "linux"), false,
+    "registry 전용 소켓 배치 — 이미 소켓이 정해진 자리");
 });

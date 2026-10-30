@@ -1,5 +1,8 @@
 // 크론 액션: 커넥터 sync/push·위키 push — R16 에서 scheduler runJob if-체인 본문을 원문 이동.
 import { itemsPool, q } from "../../db/client.js";
+import { connectorChildEnv, startConnectorRun, RunCapacityError } from "../../connectors/run-tracker.js";
+import { childTail, childDrainSummary, syncBatchStatus } from "../../connectors/sync-outcome.js";
+import { PUSH_CHILD_TIMEOUT_MS } from "../../connectors/push-budget.js";
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
 //  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
@@ -43,7 +46,6 @@ async function resolveSyncTargets(params: Record<string, unknown>): Promise<Arra
 export async function runConnectorSync(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   // #586 run-tracker 경유 — 실행이 connector_run 엔티티로 기록되고(상태·로그·통계) 웹에서 관찰 가능.
   //  크론은 완주를 기다려 잡 상태에 결과를 남긴다(타임아웃·중복 가드는 tracker 내부).
-  const { startConnectorRun } = await import("../../connectors/run-tracker.js");
   const targets = await resolveSyncTargets(params);
   const out: unknown[] = [];
   for (const t of targets) {
@@ -53,7 +55,11 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
       if (run.alreadyRunning) { out.push({ system: t.system, collector: t.label, ok: true, skipped: "already_running", run_id: run.runId }); continue; }
       const r = await run.done;
       out.push({ system: t.system, collector: t.label, ok: r.ok, run_id: run.runId, exit_code: r.exitCode });
-    } catch (e) { out.push({ system: t.system, collector: t.label, ok: false, error: (e as Error)?.message ?? String(e) }); }
+    } catch (e) {
+      //  #3994 T3 — 판 자리 없음은 실패가 아니라 배압이다(행을 안 만들었고, 도는 수집이 끝나면 다음 주기에 선다).
+      if (e instanceof RunCapacityError) { out.push({ system: t.system, collector: t.label, ok: true, skipped: "capacity", reason: e.message }); continue; }
+      out.push({ system: t.system, collector: t.label, ok: false, error: (e as Error)?.message ?? String(e) });
+    }
   }
   // #669 sync 완료 후 임베딩 잔량 스윕(백그라운드·중복 자체 거부) — 미러가 남긴 pending(신규·제목/본문 변경 리셋)을
   //  10분 주기 스윕을 기다리지 않고 곧바로 흡수. 실패는 삼킨다(다음 주기/다음 sync 가 또 돈다).
@@ -63,7 +69,10 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
   //   «수집은 됐는데 지식이 안 는다» 로 보이고, 그 사이를 설명할 방법이 없다(실측: 자료 12건이 그대로).
   //   비용은 안 든다 — 미증류가 0이면 증류 잡은 배치를 아예 안 만들고 DB 질의 한 번으로 끝난다.
   void nudgeDistillNow();
-  return { status: "ok", summary: { systems: out } };
+  //  ★ 결과를 사실대로 적는다(#3994 T2-a) — 종전엔 타깃 실패를 summary 에 담고도 무조건 "ok" 였다.
+  //   그 값이 org_cron.last_status 가 되고 연속실패 서킷브레이커는 status 로만 판정하므로 영원히
+  //   트립하지 않았다. 15분마다 강제 종료되는 수집기가 무기한 초록불이던 자리(파이프라인 화면 포함).
+  return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
 /**
@@ -84,6 +93,8 @@ async function nudgeDistillNow(): Promise<void> {
 
 export async function runConnectorPush(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   // 아웃바운드 — external_outbox(우리 편집) 드레인 → 외부 PM 미러. connector_sync 와 대칭(검증된 run-push CLI 서브프로세스).
+  //  🔴 자식 환경은 **인바운드와 같은 조립기**로 넘긴다(connectorChildEnv) — 종전엔 부모 환경을 그냥 상속시켜
+  //   테넌트 바인딩이 빠졌다. 왜 그게 치명인지는 connectors/child-env.ts 머리말이 정본이다.
   //  우리 DB=master 라 push 는 additive(외부 미러 생성/갱신) — 우리 데이터엔 무영향. params.system 없으면 active 전체.
   const { execFile } = await import("node:child_process");
   const { promisify } = await import("node:util");
@@ -93,11 +104,16 @@ export async function runConnectorPush(params: Record<string, unknown>): Promise
   for (const sys of systems) {
     try {
       const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-push.js", sys],
-        { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
-      out.push({ system: sys, ok: true, tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" });
-    } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
+        { timeout: PUSH_CHILD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv(sys) });
+      //  tail 은 사람이 읽는 한 줄이고, drain 은 감시(ops/outbox-watch.ts)가 읽는 구조화 값이다.
+      //   같은 정보를 문자열에서 다시 파싱하게 두면 감시가 로그 포맷 변경에 깨진다.
+      out.push({ system: sys, ok: true, tail: childTail(r.stdout), drain: childDrainSummary(r.stdout) });
+      //  실패에도 tail 을 담는다 — message 만 담으면 `Command failed: …` 한 줄이라 원인이 사라진다(childTail 머리말).
+    } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e), tail: childTail(e) }); }
   }
-  return { status: "ok", summary: { systems: out } };
+  //  수집과 같은 규율(#3994 T2-a) — 아웃바운드 실패도 잡 상태에 올린다. 종전엔 여기도 무조건 "ok" 라
+  //   push 가 매번 죽어도 크론은 정상으로 보였다(같은 병이 이 파일에 두 군데 있었다).
+  return { status: syncBatchStatus(out), summary: { systems: out } };
 }
 
 export async function runWikiPush(): Promise<{ status: string; summary: unknown }> {
@@ -108,7 +124,7 @@ export async function runWikiPush(): Promise<{ status: string; summary: unknown 
   const execFileP = promisify(execFile);
   try {
     const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-wiki-push.js"],
-      { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
-    return { status: "ok", summary: { tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" } };
-  } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
+      { timeout: PUSH_CHILD_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, env: connectorChildEnv("wiki") });
+    return { status: "ok", summary: { tail: childTail(r.stdout) } };
+  } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), tail: childTail(e) } }; }
 }

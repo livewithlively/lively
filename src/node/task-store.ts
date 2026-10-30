@@ -10,6 +10,8 @@ export interface DelegateTask {
   prompt: string; harness: string; subpath: string; repo: string | null; git_ref: string | null; flags: Record<string, string>;
   need_cpu: number | null; need_ram_mb: number | null; need_disk_mb: number | null;
   needs_docker: boolean; node_pref: string | null; env_lease: boolean;
+  /** #4012 T3 — 실행 프로필('context' = 기본 제공 맥락 잡). 없으면 종전 위탁. 구 스키마 행은 undefined 다. */
+  exec_profile?: string | null;
   status: DelegateStatus; node_id: string | null; session_id: string | null; task_dir: string | null;
   attempt: number; max_attempts: number; timeout_sec: number;
   node_lost_at: string | null; result: Record<string, unknown> | null; error: string | null;
@@ -24,17 +26,22 @@ export async function createTask(input: {
   repo?: string | null; gitRef?: string | null;
   flags?: Record<string, string>; needCpu?: number | null; needRamMb?: number | null; needDiskMb?: number | null;
   needsDocker?: boolean; nodePref?: string | null; timeoutSec?: number; maxAttempts?: number;
+  // #4012 T3 — 실행 프로필('context'). 비우면 컬럼을 안 쓴다(harness 와 같은 규율 — 구 호출자 SQL 무변경).
+  execProfile?: string | null;
 }): Promise<DelegateTask> {
   const harness = (input.harness ?? "").trim();   // 빈 값은 컬럼을 아예 안 써서 DB DEFAULT 가 살아 있게 한다
+  const execProfile = (input.execProfile ?? "").trim();
+  const extraCols = [...(harness ? ["harness"] : []), ...(execProfile ? ["exec_profile"] : [])];
+  const extraVals = [...(harness ? [harness] : []), ...(execProfile ? [execProfile] : [])];
   const r = await itemsPool.query(
     `INSERT INTO org_task(requester, requester_session, prompt, subpath, repo, git_ref, flags, need_cpu, need_ram_mb, need_disk_mb,
-                          needs_docker, node_pref, timeout_sec, max_attempts${harness ? ", harness" : ""})
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14${harness ? ",$15" : ""}) RETURNING *`,
+                          needs_docker, node_pref, timeout_sec, max_attempts${extraCols.map((c) => `, ${c}`).join("")})
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14${extraVals.map((_, i) => `,$${15 + i}`).join("")}) RETURNING *`,
     [input.requester, input.requesterSession ?? null, input.prompt, input.subpath ?? "", input.repo ?? null, input.gitRef ?? null,
      JSON.stringify(input.flags ?? {}), input.needCpu ?? null, input.needRamMb ?? null, input.needDiskMb ?? null,
      !!input.needsDocker, input.nodePref ?? null,
      Math.min(Math.max(60, input.timeoutSec ?? 3600), 6 * 3600), Math.min(Math.max(1, input.maxAttempts ?? 2), 5),
-     ...(harness ? [harness] : [])],
+     ...extraVals],
   );
   return r.rows[0] as DelegateTask;
 }
@@ -68,12 +75,31 @@ export async function runningCountByNode(): Promise<Map<string, number>> {
   return new Map((r.rows as Array<{ node_id: string; n: number }>).map((x) => [x.node_id, x.n]));
 }
 
-export async function markRunning(id: number, nodeId: string, sessionId: string, taskDir: string): Promise<void> {
+/**
+ * 실행 중인 태스크 수 — 의뢰자·하네스·작업 폴더 접두로 좁힌다(#4012 T2: 같은 멤버의 codex 샌드박스 판은 한 번에 하나).
+ *  `except` 는 지금 배정하려는 태스크 자신(재시도 중인 행이 자기를 세지 않게).
+ */
+export async function runningCountFor(o: { requester: string; harness: string; taskDirPrefix: string; except?: number }): Promise<number> {
+  const like = `${o.taskDirPrefix.replace(/[\\%_]/g, "\\$&")}/%`;
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM org_task
+      WHERE status='running' AND requester=$1 AND harness=$2 AND task_dir LIKE $3 ESCAPE '\\' AND id <> $4`,
+    [o.requester, o.harness, like, o.except ?? 0]);
+  return Number((r.rows[0] as { n?: number } | undefined)?.n ?? 0);
+}
+
+/**
+ * 배정한 판을 running 으로 기록한다. **행이 아직 queued 일 때만** 쓰고, 썼는지를 돌려준다.
+ *  false = 다른 게이트웨이 프로세스가 먼저 running 으로 기록했거나 그 사이 취소됐다 — 호출부가 방금 띄운 판을 거둔다.
+ *  ⚠ 조건 없이 쓰면 두 번째 기록이 첫 판의 좌표를 덮어 그 판이 고아가 되고, 취소된 행이 running 으로 뒤집힌다.
+ */
+export async function markRunning(id: number, nodeId: string, sessionId: string, taskDir: string): Promise<boolean> {
   const r = await itemsPool.query(
     `UPDATE org_task SET status='running', node_id=$2, session_id=$3, task_dir=$4,
-        attempt=attempt+1, started_at=now(), node_lost_at=NULL, updated_at=now() WHERE id=$1
+        attempt=attempt+1, started_at=now(), node_lost_at=NULL, updated_at=now() WHERE id=$1 AND status='queued'
       RETURNING tenant_id`,
     [id, nodeId, sessionId, taskDir]);
+  if (!r.rows.length) return false;
   // #1631 — 위탁 세션을 **그 태스크의 워크스페이스에 묶는다.** 사람 세션은 라우트(recordSessionTenant)가 묶지만 위탁은
   //  노드가 띄우고 여기서 처음 세션 id 를 알게 된다. 안 묶으면 그 세션의 MCP 호출(x-lively-session → gw_session_map)이
   //  primary 로 떨어져, 증류 배치가 **다른 워크스페이스의 자료 id·분류 key 를 보고 저장을 거부**한다
@@ -87,21 +113,65 @@ export async function markRunning(id: number, nodeId: string, sessionId: string,
         .catch((e) => console.warn(`[task-store] 위탁 세션 워크스페이스 바인딩 실패(task ${id}, ${sessionId}): ${(e as Error)?.message ?? e}`));
     }
   }
+  return true;
 }
 export async function markFinished(id: number, ok: boolean, result: Record<string, unknown>, error?: string | null): Promise<void> {
   //  저장 직전 가림(#4422) — 결과·실패 문장은 delegate_status·delegate_list·크론 화면으로 그대로 읽힌다. 배정 실패 기록(last_assign)을
   //   옮겨 싣는 자리(대기 상한)도 여기를 지나므로, 가림이 들어가기 전에 쌓인 옛 행의 원문도 이 겹에서 걸러진다.
   //   규칙은 redactTaskResult 한 곳 — last_assign 은 전체, AI 가 쓴 요약은 토큰 모양만(산문을 망가뜨리지 않게).
-  await itemsPool.query(
-    `UPDATE org_task SET status=$2, result=$3::jsonb, error=$4, finished_at=now(), updated_at=now() WHERE id=$1`,
-    [id, ok ? "done" : "failed", JSON.stringify(redactTaskResult(result)), error == null ? null : redactTaskText(error)]);
+  const safeError = error == null ? null : redactTaskText(error);
+  const r = await itemsPool.query(
+    `UPDATE org_task SET status=$2, result=$3::jsonb, error=$4, finished_at=now(), updated_at=now() WHERE id=$1
+      RETURNING requester_session`,
+    [id, ok ? "done" : "failed", JSON.stringify(redactTaskResult(result)), safeError]);
+  // 크론 되먹임 — 이 태스크를 낸 잡이 있으면 **실제 결과**를 org_cron 에 적는다(cron-task-feedback 머리말:
+  //  헤드리스 액션은 «접수 성공»을 ok 로 반환하므로, 이 되먹임이 없으면 죽은 잡이 계속 정상으로 보인다).
+  //  이 자리인 이유: 종결 경로(정상·타임아웃·무출력 stall·노드 유실·자격 없음·대기 초과)가 전부 여길 지난다.
+  //  동적 import — 스케줄러는 게이트웨이 쪽 모듈이고 이 파일은 노드 경계 가까이에 있다(같은 파일의 관례).
+  //  ⚠ 실패 문장은 **가린 것**(safeError)만 넘긴다 — 되먹임은 org_cron.last_summary(크론 화면)와 경보 웹훅(조직 밖 채널)으로
+  //   나간다. 원문을 넘기면 위 #4422 가림을 이 길로 우회해 토큰이 새어 나간다.
+  const row = r.rows[0] as { requester_session?: string | null } | undefined;
+  try {
+    const { cronJobIdOf, recordCronTaskOutcome } = await import("../scheduler/cron-task-feedback.js");
+    const jobId = cronJobIdOf(row?.requester_session);
+    if (jobId) await recordCronTaskOutcome({ jobId, taskId: id, ok, error: safeError });
+  } catch { /* 되먹임은 관측일 뿐 — 실패해도 태스크 종결은 유효하다 */ }
   // #1289 증류 배치가 실패하면 '판정함' 기록을 되돌린다 — 안 그러면 그 자료들이 아무도 안 본 채로 인박스에서
   //  영구히 빠진다(유실). 배치를 낸 시점에 기록하는 대가로 여기서 되돌려 균형을 맞춘다.
   //  증류와 무관한 위탁이면 지울 행이 없어 no-op. 테이블 부재(구버전 스키마)는 삼킨다.
   if (!ok) {
     try { await itemsPool.query(`DELETE FROM org_distiller_seen WHERE task_id=$1`, [id]); }
     catch { /* 테이블 없음 등 — 무해 */ }
+    //  방치 배치의 기록도 같은 이유로 되돌린다 — 레인이 없어 별 테이블에 남기므로 위 DELETE 가 못 지운다.
+    try { await itemsPool.query(`DELETE FROM org_stranded_seen WHERE task_id=$1`, [id]); }
+    catch { /* 테이블 없음 등 — 무해 */ }
+    //  분류기 표식도 같은 축이다(#3994 T5 · #968) — 종전엔 이 되돌리기가 없어서, 실패한 분류 배치의
+    //   지식이 «봤음» 으로 남아 인박스에서 영구히 빠졌다(실측 942건이 미분류인데 backlog 0).
+    try { await itemsPool.query(`DELETE FROM org_classifier_seen WHERE task_id=$1`, [id]); }
+    catch { /* 테이블 없음 등 — 무해 */ }
   }
+}
+
+/**
+ * 배정이 왜 안 됐는지를 그 태스크에 적어 둔다(#3994 T5 · #968).
+ *
+ * 대기 상한으로 죽을 때 사람이 보는 문장은 «적합 노드 없음» 한 줄이었다 — 정작 마지막 시도가
+ *  «하네스를 보고한 노드 없음» 이었는지 «스폰 예외» 였는지는 **어디에도 안 남았다**. 실패 문장이
+ *  원인을 못 담으면 사람은 10분마다 같은 추측을 반복한다.
+ *
+ * queued 인 동안만 덮어쓴다 — 이미 끝난 태스크의 결과를 뒤늦은 시도 기록으로 덮지 않는다.
+ */
+export async function noteAssignFailure(id: number, code: string | null, reason: string | null): Promise<void> {
+  //  in_flight 는 다른 경로가 이 태스크를 띄우는 중이라 못 간 이유가 아니다 — 적으면 이미 running 인 행의 result 에 미배정 사유가 끼어든다.
+  if (code === "in_flight") return;
+  //  #4422 — 이 문장은 스폰 오류 원문이다(Node execFile 의 "Command failed: <argv 전체>"). 스폰 쪽이 이미 가렸어도 **저장 직전에
+  //   한 번 더** 가린다: 구 번들 노드는 가리지 않은 원문을 RPC 로 돌려준다(2026-09-22 윈도우 노드 — 토큰이 여기 평문으로 저장됐다).
+  const mark = JSON.stringify({ last_assign: { code, reason: reason == null ? null : redactTaskText(reason), at: new Date().toISOString() } });
+  try {
+    await itemsPool.query(
+      `UPDATE org_task SET result = COALESCE(result,'{}'::jsonb) || $2::jsonb, updated_at=now()
+       WHERE id=$1 AND status='queued'`, [id, mark]);
+  } catch { /* 비치명 — 배정 자체를 막지 않는다 */ }
 }
 /**
  * 재큐 — 노드 유실 등으로 다른 노드에 다시 배정한다.

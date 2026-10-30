@@ -82,13 +82,14 @@ t("14 모델이 낼 수 있는 모든 id 를 실행부가 안다(어긋나면 �
 });
 
 // ── 배선(main.mjs 소스 검사) ────────────────────────────────────────────────
-t("15 main.mjs 가 리스너를 webview 조기 return 앞에 단다 + 모델·clipboard 로 실행", () => {
+t("15 main.mjs 가 리스너를 서피스 분기(조기 return) 앞에 단다 + 모델·clipboard 로 실행", () => {
   const src = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
   const hook = src.indexOf('app.on("web-contents-created"');
   const menu = src.indexOf('wc.on("context-menu"', hook);
-  const guest = src.indexOf('wc.getType() === "webview"', hook);
+  //  서피스 분기 = webview 게스트 + 그 팝업 창(#5025 — 판정이 isSurfaceContents 로 옮겨 갔다)
+  const guest = src.indexOf("if (isSurfaceContents(wc))", hook);
   assert.ok(hook >= 0 && menu > hook, "web-contents-created 안에 context-menu 리스너가 있어야 한다");
-  assert.ok(guest > menu, "리스너가 webview 게스트 분기(조기 return)보다 앞이어야 서피스에서도 메뉴가 뜬다");
+  assert.ok(guest > menu, "리스너가 서피스 분기(조기 return)보다 앞이어야 서피스에서도 메뉴가 뜬다");
   assert.match(src, /runContextMenuAction\(m\.id, params, wc, clipboard\)/, "실행부가 모델 id·clipboard 로 배선돼야 한다");
 });
 

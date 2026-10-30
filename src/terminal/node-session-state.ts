@@ -11,10 +11,12 @@
 // 이 모듈은 **게이트웨이 전용**이다 — node/registry(WS 서버)를 import 하므로 노드 에이전트 번들에 들어가면 안 된다
 //  (sessions.ts 가 이걸 import 하지 않는 이유. routes 가 부른다).
 import type { CreateInput, SessionInfo } from "./catalog.js";
+import { carriedLabelSource } from "../sessions/session-label-source.js";
 import { upsertSessionState, insertDiscoveredSessionState, getSessionStates, clearSelfNodeSessionRows, type SessionStateInput } from "../sessions/session-state.js";
 import { liveNodes, onNodeSessions, onSelfNodeJudged, isSelfNode } from "../node/registry.js";
 import { selfNodeMessage } from "../node/self-node.js";
 import { listNodes } from "../node/store.js";
+import { createNodeSessionTokenBackfill } from "./node-session-token-backfill.js";   // #4135 — 토큰 없이 뜬 노드 세션에 자격을 나중에 심는다
 import { logger } from "../log.js";
 
 /**
@@ -39,8 +41,20 @@ export function nodeSessionStateInput(session: SessionInfo, nodeId: string, inpu
     created: session.created || Math.floor(Date.now() / 1000), last_busy: null,
     node_id: nodeId,
     app_id: input.appId || null,
+    //  #4418 — 세션의 종류(#2162). 종전엔 이 칸을 안 실어 노드 세션은 전부 human 으로 적혔다 — 노드 앱 세션을 되살리면(복원은 이 값을
+    //   되살린다) 사람 세션으로 떠서 이름짓기 안내까지 받았다. 중앙 createSession 은 처음부터 싣는다(sessions.ts desiredRow).
+    kind: input.kind,
+    //  #4632 — 사람이 준 이름(input.label)으로 만든 세션은 그 이름이 **사람 것**이다. 중앙 createSession 과 같은 판정(sessions.ts labelSource).
+    //   종전엔 이 칸을 안 실어 노드 세션은 'rule' 로 읽혔다 — 만들 때 준 이름도 AI 의 session_rename(agent)이 걸쇠를 이겨 덮는다.
+    //   앱빌더가 세션 이름 «"이름" 앱 제작» 을 만들 때 싣게 되면서(「회의록 기획카드」 로 덮인 것, 원준 2026-10-15) 이 구멍이 드러났다.
+    //   이름을 안 줬으면 종전 그대로(칸 없음).
+    //  #4418 — 복원·전환은 저장된 이름과 함께 원래 출처를 싣고 온다(input.labelSource) — 그대로 잇는다(규칙 이름이 사람 이름으로 굳지 않게).
+    ...withLabelSource(carriedLabelSource(String(input.label ?? "").replace(/[\t\n\r]/g, " "), input.labelSource)),
   };
 }
+
+/** 출처가 정해졌을 때만 칸을 싣는다 — 안 실으면 행의 출처는 비어 있고(rule 로 읽힌다) 그 이름은 노드가 지은 것이다. */
+const withLabelSource = (src: ReturnType<typeof carriedLabelSource>): Pick<SessionStateInput, "label_source"> => (src ? { label_source: src } : {});
 
 /** 노드 create 릴레이 직후 — 행을 쓴다(best-effort). 실패해도 세션은 떠 있다(로그만). */
 export async function mirrorNodeSession(session: SessionInfo, nodeId: string, input: CreateInput, ownerId: string): Promise<void> {
@@ -105,7 +119,20 @@ export async function discoverNodeSessions(nodeId: string, sessions: SessionInfo
 
 /** 부팅 때 한 번 — 노드 상태 push 를 구독한다(registry 는 DB 를 모르므로 이쪽에서 건다). */
 export function armNodeSessionDiscovery(): void {
-  onNodeSessions((nodeId, sessions) => { void discoverNodeSessions(nodeId, sessions); });
+  // #4135 — 같은 스냅샷으로 «토큰 없는 살아 있는 세션» 도 본다(registry 의 구독자는 하나라 여기서 함께 부른다).
+  const backfill = createNodeSessionTokenBackfill();
+  //  이 구독이 **실제로 불리는지** 를 로그로 남긴다 — 노드마다 부팅 뒤 첫 호출 한 번(2026-09-28: 매니지드에서 되채우기가 조용히
+  //   안 도는데, 구독이 안 불리는 것인지 불려서 건너뛰는 것인지 가를 기록이 없었다).
+  const firstCall = new Set<string>();
+  onNodeSessions((nodeId, sessions) => {
+    if (!firstCall.has(nodeId)) {
+      firstCall.add(nodeId);
+      logger.info({ node: nodeId, sessions: sessions.length, no_token: sessions.filter((x) => x?.hasSessionToken === false).length },
+        "노드 세션 스냅샷 구독 — 부팅 뒤 첫 호출");
+    }
+    void discoverNodeSessions(nodeId, sessions);
+    void backfill.run(nodeId, sessions).catch((e) => logger.warn({ err: e, node: nodeId }, "노드 세션 토큰 되채우기 실패(비치명)"));
+  });
   // #2592 — 판정이 **새로 설 때** 그 노드 이름으로 쌓인 거짓 좌표를 치운다. 부팅 훅이 아닌 이유: 판정은
   //  관측이라(같은 tmux 를 봐야 성립) 부팅 시점엔 아직 없다. 멱등이라 게이트웨이가 재배포될 때마다 다시 돌아도 무해.
   onSelfNodeJudged((nodeId) => cleanupSelfNodeRows(nodeId));

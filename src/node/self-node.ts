@@ -32,9 +32,16 @@
  * 세션이 0 인 노드를 후보에서 빼는 근거는 sharesGatewayTmux 와 같다 — 볼 것이 없으면 판정이 아니라 보류다.
  */
 export function hasSelfProbeCandidate(
-  candidates: Iterable<{ key: string; sessionCount: number }>, judged: ReadonlySet<string>,
+  candidates: Iterable<{ key: string; sessionCount: number; declared?: boolean }>, judged: ReadonlySet<string>,
 ): boolean {
-  for (const c of candidates) if (!judged.has(c.key) && c.sessionCount > 0) return true;
+  //  ★ **선언된 세션 호스트는 후보가 아니다** (#2600 T2 d4, 2026-09-08 계수 실측).
+  //   면제는 원래 `probeSelfNodes` 의 **루프 안**(shouldMarkSelfNode)에 있었다. 그러면 그 노드는 판정을
+  //   받지 않으므로 `judged` 에 영원히 안 들어가고 → **영원히 후보로 남아** 매 `SELF_PROBE_MS` 마다
+  //   게이트웨이가 `list-sessions` 를 한 번 치고서야 «면제» 한다. 계수가 그 낭비를 이름으로 짚었다:
+  //   카나리아 테넌트에서 `sessions:210<registry:240` = **2~5회/분**(그 테넌트 tmux 호출의 수 %).
+  //  ⇒ 면제는 **tmux 를 묻기 전에** 성립해야 한다. 판정 규칙(sharesGatewayTmux)은 손대지 않는다 —
+  //   «의도한 공유»와 «사고인 공유»를 가르는 일은 여전히 **선언**이 하고, 선언은 admin 만 할 수 있다.
+  for (const c of candidates) if (!c.declared && !judged.has(c.key) && c.sessionCount > 0) return true;
   return false;
 }
 
@@ -57,6 +64,200 @@ export function sharesGatewayTmux(
  */
 export function declaredSessionHost(n: { session_host?: boolean } | null | undefined): boolean {
   return n?.session_host === true;
+}
+
+/**
+ * 게이트웨이가 이 테넌트의 세션 목록을 **자기 tmux 로 만들지 말아야 하나** (#2600 T2 d4).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * 멤버 PC 노드 세션은 게이트웨이가 tmux 를 한 번도 안 부른다 — op 를 그 노드로 넘긴다(`NODE_OPS`,
+ *  «정책=게이트웨이, 실행=노드»). 매니지드만 예외였던 이유는 **그 세션의 주인 프로세스가 노드에 없어서**다.
+ *  선언된 세션 호스트가 그 자리에 서면 예외가 사라져야 하는데, 오늘 `mergeSessionViews` 는 `local`(게이트웨이
+ *  tmux)이 이기고 `remote`(노드 스냅샷)에서 **좌표만** 물려받는다 — 그래서 호스트가 있어도 카드의 메타는
+ *  계속 게이트웨이가 만들고, attach 만 호스트로 간다(반쪽). 이 술어가 그 반쪽을 닫는다.
+ *
+ * ── 세 조건이 **다** 참일 때만 손을 뗀다 (fail-closed) ─────────────────────────
+ *  · `declared` — 선언된 세션 호스트만. 멤버 PC 노드(선언 없음)는 이 축을 건드리지 않는다.
+ *  · `online`   — 주인이 붙어 있어야 한다. 죽은 주인에게 목록을 맡기면 그 테넌트가 통째로 빈다.
+ *  · 스냅샷이 **신선**해야 한다 — 붙어 있어도 아직 아무것도 못 봤거나(`null`) 낡았으면 그 답을 정본으로
+ *    쓸 수 없다. 「모르면 넘기지 않는다」가 이 자리의 규율이다(#835 와 같은 방향).
+ *
+ * ⚠ 하나라도 모르면 **false** — 게이트웨이가 종전대로 답한다. 이 술어가 참이 되는 배포는 오늘
+ *  «선언된 세션 호스트를 띄운 매니지드 테넌트» 뿐이고, 셀프호스트·멤버 PC 배포는 한 줄도 안 바뀐다.
+ */
+/**
+ * 노드 스냅샷에서 세션을 모은다(순수) — 「모든 주인」을 봐야 하는 자리용 (#2600 T2 d4).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * 「답 기다림」 알림 스윕(`sweepAwaitingNotifications`, 30초 주기·테넌트 순회)이 게이트웨이 tmux 를
+ *  `listSessionsRaw()` 로 읽는다. 계수 실측(2026-09-08): 그 스윕이 게이트웨이 tmux 호출의 **64%** 였다
+ *  — 세션이 0개인 빈 시험 테넌트까지 테넌트당 정확히 16/창이었다(사용량과 무관한 고정 주기라는 증거).
+ *  세션의 주인이 노드로 옮겨간 테넌트에서는 그 답을 **노드 스냅샷**에서 읽으면 된다.
+ *
+ * ── 규율 ──────────────────────────────────────────────────────────────────────
+ *  · **온라인이고 신선한** 노드만. 오프라인·미보고(`null`)·낡은 노드의 세션은 넣지 않는다 — 낡은 근거로
+ *    「답을 기다려요」를 울리면 아무도 없는 세션에 알림이 간다.
+ *  · 신선도 경계는 **포함**(`<= staleMs`)이고, `gatewayDefersToSessionHost` 와 **같은 자**를 쓴다.
+ *    둘이 갈리면 「목록은 호스트가 답하는데 알림은 게이트웨이가 본다」는 어긋남이 생긴다.
+ *  · 자격 노드가 여럿이면 이어붙인다.
+ *  · **가시성 필터를 걸지 않는다.** 이 자리는 모든 주인의 세션을 보고 각 세션의 주인에게만 알린다.
+ *
+ * ── `declaredOnly` — 왜 손잡이가 됐나 (#3741, 2026-09-09) ─────────────────────
+ * 처음(#2600 T2 d4)엔 **선언된 세션 호스트만** 넣었다. 이유는 폭풍이었다: 이 자리는 «게이트웨이
+ *  tmux 가 보던 것» 을 갈아끼우는 것이고 그건 매니지드 세션 컨테이너뿐이었는데, 선언 없는 노드까지
+ *  넣으면 여태 이 스윕에 **원래 없던** 멤버 PC 세션 수백 개가 한꺼번에 들어오고
+ *  (`listSessionsRaw` 는 게이트웨이 자기 tmux 만 읽는다), 그때 `pickAwaitingTransitions` 가
+ *  **처음 보는 세션이 `awaiting` 이면 곧바로 알림**을 냈다 — 사람에게 알림 폭풍.
+ *
+ * #3741 이 그 폭풍을 **원인 쪽에서** 막았다(`pickAwaitingTransitions` 의 첫 관측 유예 — 처음 보는
+ *  세션은 «최근에 움직였을 때만» 알린다). 그래서 이제 선언 없는 노드를 넣어도 폭풍이 안 나고,
+ *  넣어야 한다 — 그 세션들이 이 알림을 **한 번도 받은 적이 없다**(실측 `lively-46e3`: 456 중 442).
+ * ⚠ 그러니 이 손잡이를 `true` 로 되돌릴 때는 **왜 그 세션들을 도로 제외하는지**를 적어라. 기본값이
+ *  `false` 인 것은 «전부 본다» 가 이 함수의 뜻이기 때문이고, `true` 는 목록 소유 판정
+ *  (`gatewayDefersToSessionHost`)처럼 **선언이 곧 근거인** 자리 전용이다.
+ */
+export function nodeSnapshotSessions<T>(
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
+  staleMs: number,
+  declaredOnly = false,
+): T[] {
+  const out: T[] = [];
+  //  조건을 여기 다시 쓰지 않는다 — 판정은 `nodeSnapshotVerdict` 한 벌이다(그 머리말).
+  for (const n of nodes) if (nodeSnapshotVerdict(n, staleMs, declaredOnly).take) out.push(...n.sessions);
+  return out;
+}
+
+/** 노드 하나가 스냅샷에서 빠진 **사유** — 좁혀 가는 순서로 하나만 답한다. */
+export type NodeSnapshotWhy = "ok" | "undeclared" | "offline" | "no-state" | "stale";
+
+/**
+ * 이 노드의 세션을 스냅샷에 실을 것인가, 안 실으면 **왜인가** (순수) — #3741 후속 계기.
+ *
+ * ── 왜 사유가 필요한가 (2026-09-09 실측) ─────────────────────────────────────
+ * #3741 배포 뒤 카나리아 테넌트에서 **설명 안 되는 격차**가 남았다: 노드 스냅샷 합계는 29개인데
+ *  알림 스윕의 `observed` 는 최대 12였다. 가설을 둘 세웠는데 하나(12초 신선도 게이트)는 재보니
+ *  **틀렸고**(노드는 3초마다 민다 — `agent.ts:151`; 내가 잰 15~25초는 DB 쓰기 스로틀이었다),
+ *  나머지 하나는 밖에서 확인할 수단이 없었다. **불리언은 «왜 빠졌나» 를 말하지 않는다.**
+ *  이 프로젝트는 같은 자리에서 두 번 그랬다 — d4 의 tmux 계수도, d6 의 소유 판정 계수도
+ *  추론이 틀린 뒤에 계기가 풀었다. 그래서 여기서도 추론 대신 **사유를 답하게** 한다.
+ *
+ * ── 순서가 곧 사양이다 ────────────────────────────────────────────────────────
+ *  · `declaredOnly` 가 켜졌으면 **선언이 첫 관문**이다(그 손잡이를 쓰는 자리는 «선언이 곧 근거» 인 곳).
+ *  · ★ `no-state` 는 반드시 `stale` **앞**이다 — JS 에서 `null <= staleMs` 는 **참**이라, 뒤에 두면
+ *    «스냅샷 없음» 이 «가장 신선함» 으로 통과한다(같은 함정을 시험 N3 가 지키고 있다).
+ *  · 신선도 경계는 **포함**(`<= staleMs`) — `gatewayDefersToSessionHost` 와 같은 자다.
+ *  · ⚠ 선언은 **면제가 아니다.** 선언된 세션 호스트라도 오프라인·낡음이면 빠진다.
+ */
+export function nodeSnapshotVerdict(
+  n: { declared: boolean; online: boolean; stateAgeMs: number | null },
+  staleMs: number,
+  declaredOnly = false,
+): { take: boolean; why: NodeSnapshotWhy } {
+  if (declaredOnly && !n.declared) return { take: false, why: "undeclared" };
+  if (!n.online) return { take: false, why: "offline" };
+  if (n.stateAgeMs === null) return { take: false, why: "no-state" };
+  if (!(n.stateAgeMs <= staleMs)) return { take: false, why: "stale" };
+  return { take: true, why: "ok" };
+}
+
+export function gatewayDefersToSessionHost(
+  hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
+  staleMs: number,
+  deadMs = SESSION_HOST_DEAD_MS,
+): boolean {
+  return sessionHostVerdict(hosts, staleMs, deadMs).owns;
+}
+
+/**
+ * 이만큼 소식이 없는 선언 호스트는 **없는 것으로 본다**(#3797 T7).
+ *
+ * ── 왜 필요한가 ───────────────────────────────────────────────────────────────
+ * T7 이 판정을 «선언한 호스트가 **전부** 자격일 때만» 으로 바꿨다. 그 규칙만 두면 회수된 노드의
+ *  `sesshost-*` 행 하나가 남는 순간 그 테넌트의 소유가 **영영** 안 넘어간다 — 노드는 ASG 가 갈아치우므로
+ *  그 행은 시간이 갈수록 쌓인다(실측 2026-09-08: `nodes` 3행 중 2행이 48시간 안에 생겼다).
+ *  «시간이 갈수록 악화하는» 부류라 지평선을 둔다: 하루 넘게 박동이 없는 노드에 기다릴 커버리지는 없다.
+ * ★ 값은 브로커의 주인 없는 라우트 정리(`sessionroute.ROUTE_ORPHAN_MS` = 24h)와 **같은 판단·같은 자**다.
+ * ⚠ 이건 «지운다» 가 아니라 «판정에서 뺀다» 이다. 죽은 노드 좌표의 실제 정리는 별건이다
+ *  ([[sesshost-node-scalein-orphan-3776]] §6 후속 ②).
+ */
+export const SESSION_HOST_DEAD_MS = 24 * 60 * 60 * 1000;
+
+/** 판정이 «왜» 그렇게 났나 — 계수·진단용 사유. `ok` 만 참이고 나머지는 전부 거짓의 이유다. */
+export type SessionHostWhy = "no-hosts" | "undeclared" | "offline" | "stale" | "ok";
+
+/**
+ * 위 술어에 **사유를 붙인 판**(순수) — 답은 `owns` 로 같고, `why` 가 «어느 조건에서 멈췄나» 를 말한다 (#2600 T2 d6).
+ *
+ * ── 왜 필요한가 (2026-09-08 실측) ────────────────────────────────────────────
+ * 같은 술어가 **두 자리에서 다르게 답하는 것**이 계수에 잡혔다: 카나리아 테넌트에서 알림 스윕은 참(그 자리
+ *  tmux 호출 0)인데 목록 라우트는 거짓이라 계속 `list-sessions` 를 쳤다(5~8/분). 불리언 하나로는 그
+ *  어긋남의 이유를 물을 수가 없다 — 선언이 없는 건지, 오프라인인지, 스냅샷이 낡은 건지, 애초에 그 스코프에
+ *  노드가 없는 건지가 전부 같은 `false` 로 보인다.
+ *
+ * ── 사유 순서(먼저 걸리는 것이 답) ──────────────────────────────────────────
+ *  `no-hosts`(스코프에 노드 0) → `undeclared`(선언한 노드 없음) → `offline`(선언한 호스트 중 끊긴 것이 있음)
+ *  → `stale`(선언·온라인인데 스냅샷이 낡음/없음) → `ok`.
+ * 이 순서는 **좁혀 가는 순서**다: 앞엣것이 참이면 뒤엣것은 물어볼 것도 없다.
+ *
+ * ── ★★ some → every 로 뒤집혔다 (#3797 T7, 2026-09-09) ─────────────────────
+ * 종전 규칙은 «자격 있는 호스트가 **하나라도** 있으면 놓는다» 였고, 그건 옳았다 — 그때 세션 호스트
+ *  하나는 **클러스터 전역** 목록을 주장했기 때문이다(브로커 `GET /lvly/sessions` 가 다른 산 노드로
+ *  팬아웃한다 — #3689). 하나가 답하면 그 하나가 전부를 답했다.
+ * T7 이 축을 (노드, 테넌트)로 옮기면서 각 호스트를 **자기 노드로** 좁혔다(`LIVELY_TMUX_LIST_SCOPE=node`).
+ *  그 순간 스냅샷은 **부분 관측**이 된다 — 하나가 낡거나 끊기면 그 노드의 세션이 목록에서 통째로
+ *  빠지는데, 게이트웨이는 이미 «누가 답했으니 됐다» 로 손을 뗀 뒤다. 그래서 **선언한 호스트가 전부
+ *  자격일 때만** 놓는다. 아니면 종전대로 게이트웨이가 답한다(fail-closed — 이 자리의 일관된 규율).
+ * ⚠ 대가: 회수된 노드의 `sesshost-*` 행이나 옛 축의 잔재가 남아 있으면 그 행이 영영 오프라인이라
+ *  소유가 안 넘어간다(= 종전 동작으로 되돌아갈 뿐, 목록이 비지는 않는다). 그 행의 이름은
+ *  `session-host-provision.foreignSessionHostNodes` 가 로그에 남기고, 사유는 이 계수(`why=offline`)에 뜬다.
+ *  죽은 노드 좌표의 자가 정리는 별건이다([[sesshost-node-scalein-orphan-3776]] §6 후속 ②).
+ */
+export function sessionHostVerdict(
+  hosts: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null }>,
+  staleMs: number,
+  deadMs: number = SESSION_HOST_DEAD_MS,
+): { owns: boolean; why: SessionHostWhy } {
+  if (!hosts.length) return { owns: false, why: "no-hosts" };
+  //  ⚠ **선언한 노드만** 자격을 묻는다. 미선언 노드(멤버 PC)까지 보면 그 PC 하나가 꺼진 순간
+  //   소유가 영영 안 넘어간다 — 이 판정의 대상이 아니다.
+  //  ⚠ 그리고 **죽은 호스트는 뺀다**(SESSION_HOST_DEAD_MS 머리말) — 회수된 노드의 행 하나가
+  //   그 테넌트의 소유를 영영 붙들지 않게. 「낡음」과 「죽음」은 다른 사실이다.
+  const declared = hosts.filter((h) => h.declared && !(h.stateAgeMs !== null && h.stateAgeMs > deadMs));
+  if (!declared.length) return { owns: false, why: "undeclared" };
+  if (!declared.every((h) => h.online)) return { owns: false, why: "offline" };
+  if (!declared.every((h) => h.stateAgeMs !== null && h.stateAgeMs <= staleMs)) return { owns: false, why: "stale" };
+  return { owns: true, why: "ok" };
+}
+
+/**
+ * 소유가 넘어간 테넌트의 **중앙(박스) 세션 목록** — 선언된 세션 호스트 스냅샷의 합(순수) (#2600 T2 d6).
+ *  `rows` 가 null 이면 «tmux 대신 쓸 수 없다» 이고, 호출부는 종전대로 게이트웨이 tmux 를 본다.
+ *
+ * ── 왜 필요한가 (2026-09-11 계수 실측) ────────────────────────────────────────
+ * 전 테넌트 켜기(#3749) 뒤에도 게이트웨이는 그 테넌트에 분당 ~70번 tmux 를 쳤다. 목록 라우트·알림 스윕은
+ *  d4 에서 이미 호스트 스냅샷으로 옮겼는데, **같은 질문(«지금 중앙 tmux 에 무엇이 있나»)을 다른 이름으로
+ *  묻는 자리**가 남아 있었다 — 자기노드 판정(30초마다 전 세션 capture-pane 까지)·CP idle 이 60초마다 부르는
+ *  관리자 세션 뷰·desired 백필. 셋 다 «게이트웨이 tmux 목록» 을 원하는데, 소유가 넘어간 테넌트에서 그 목록의
+ *  정본은 이미 호스트 스냅샷이다(목록 라우트가 그걸 사람에게 보여 준다).
+ *
+ * ── 규율 ──────────────────────────────────────────────────────────────────────
+ *  · 소유 판정(`sessionHostVerdict`)이 **ok 일 때만** 쓴다 — 선언된 호스트가 전부 온라인·신선할 때다.
+ *    그래서 합에 드는 호스트 집합이 곧 판정이 본 집합이다(`declaredOnly` — 멤버 PC 세션은 중앙 목록이 아니다).
+ *  · ★ **합이 비면 null** 이다. 세션 호스트는 그 노드에 그 테넌트 세션이 있을 때만 선다(배치 게이트) —
+ *    그러니 «자격 있는 호스트가 있는데 중앙 세션이 0» 은 정상 상태가 아니라 «아직 못 덮은 순간» 이다
+ *    (새 노드에 호스트가 서기 전의 창 · T3 착수 조건 ②). 그 모름을 «0개» 로 답하면 가장 비싼 소비자
+ *    (CP idle 의 정지 판정)가 «바쁜 세션 없음» 으로 읽는다. 모르면 종전 경로가 답한다(fail-closed).
+ *  · 신선도·죽음 지평선은 판정과 **같은 자**를 받는다(인자로 — 여기서 숫자를 다시 쓰지 않는다).
+ */
+export function hostOwnedSnapshot<T>(
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly T[] }>,
+  staleMs: number,
+  deadMs: number = SESSION_HOST_DEAD_MS,
+): { rows: T[] | null; why: SessionHostWhy | "empty" } {
+  const v = sessionHostVerdict(nodes, staleMs, deadMs);
+  if (!v.owns) return { rows: null, why: v.why };
+  const rows = nodeSnapshotSessions(nodes, staleMs, true);
+  return rows.length ? { rows, why: v.why } : { rows: null, why: "empty" };
 }
 
 /**
@@ -187,6 +388,90 @@ export function sameTmuxCoordinate(o: {
   isSessionHost: (id: string) => boolean;
 }): (id: string) => boolean {
   return o.boxRow ? (id: string): boolean => o.isSelf(id) || o.isSessionHost(id) : o.isSelf;
+}
+
+/**
+ * 이 세션이 **정말 다른 기계의 것인가**(순수) — 노드 좌표를 **스냅샷에서** 되찾은 자리용 (#2600 T2 d6).
+ *  답이 노드 id 면 그 기계로 물러나고(대화창 409 `node` · 감시 안 함), null 이면 이 게이트웨이의 세션으로 다룬다.
+ *
+ * ── 왜 필요한가 (2026-09-11 계수 실측) ────────────────────────────────────────
+ * 대화창(`chat-routes` gateRead)과 대화 파일 감시자(`transcript-watch` start)가 «좌표가 있으면 게이트웨이
+ *  tmux 에 `has-session` 을 물어, 있으면 이 박스 것» 이라는 #2055 의 방어를 쓴다. 전 테넌트에 세션 호스트가
+ *  서자 **모든 매니지드 세션에 호스트 좌표가 붙었고**, 그 방어가 대화창을 열 때마다 tmux 를 쳤다(분당 10).
+ *
+ * ── 판정(좁혀 가는 순서) ─────────────────────────────────────────────────────
+ *  ① 좌표가 없다 → null.
+ *  ② 좌표가 **선언된 세션 호스트** → null. 그 호스트는 자기 노드의 세션 컨테이너만 보고하므로 그 스냅샷에서
+ *     되찾은 세션은 정의상 이 게이트웨이의 박스 세션이고, 같은 tmux 에 닿는다(#3745 `sameTmuxCoordinate`
+ *     와 같은 판단). ⚠ 그쪽이 `boxRow` 를 함께 보는 이유는 좌표가 **화면·DB** 에서도 오기 때문이다 —
+ *     여기서는 좌표의 출처가 그 호스트의 스냅샷 자체라 행을 물을 필요가 없다(DB 왕복도 없다).
+ *  ③ 그 밖의 좌표(멤버 PC)는 «정말 저쪽인가» 를 확인한다 — 셀프 노드가 중앙 세션을 가로챈 모양(#2055)을
+ *     걸러야 해서다. 소유가 넘어간 테넌트면(`centralIds` 가 있으면) **중앙 세션 집합**으로 답하고 tmux 를
+ *     안 묻는다. 아니면 종전대로 `gone`(게이트웨이 tmux 의 «없다» 확답)에 묻는다.
+ *  ⚠ `gone` 이 던지면 «모른다» 다 — 종전 호출부들이 그랬듯 **이 박스 것으로 접는다**(null). 저쪽이라고
+ *   단정하면 대화창이 빈 중앙 기록으로 물러나고, 그게 #2055 가 막으려던 증상이다.
+ */
+export async function remoteNodeCoordinate(o: {
+  sessionId: string;
+  /** 스냅샷에서 되찾은 좌표(`registry.nodeOfSession` — 셀프 노드는 이미 접혀 온다) */
+  nodeId: string | null;
+  isSessionHost: (id: string) => boolean;
+  /** 소유가 넘어간 테넌트의 중앙 세션 id 집합 — 넘어가지 않았으면 null */
+  centralIds: ReadonlySet<string> | null;
+  /** 게이트웨이 tmux 의 «그 세션 없음» 확답 */
+  gone: (id: string) => Promise<boolean>;
+}): Promise<string | null> {
+  const nodeId = String(o.nodeId ?? "").trim();
+  if (!nodeId) return null;
+  if (o.isSessionHost(nodeId)) return null;
+  if (o.centralIds) return o.centralIds.has(o.sessionId) ? null : nodeId;
+  let gone = false;
+  try { gone = await o.gone(o.sessionId); } catch { gone = false; }
+  return gone ? nodeId : null;
+}
+
+/** `sessionHostTarget` 이 맡기지 않은 이유 — 소유 판정 계수에 `session:<사유>` 로 센다. */
+export type SessionHostTargetWhy = "ok" | "no-coordinate" | "not-host" | "unqualified" | "absent" | "unsupported";
+
+/**
+ * 이 세션의 일(하네스 활동 보고 등)을 **어느 세션 호스트에 맡길까**(순수) — 맡길 호스트 id, 아니면 null (#2600 T2 d6).
+ *  null 이면 호출부는 종전대로 게이트웨이가 직접 한다(같은 tmux 에 중계로 닿는다).
+ *
+ * ── 왜 필요한가 (2026-09-14 계수 실측) ────────────────────────────────────────
+ * 하네스 훅의 활동 보고(`POST …/active`)가 매니지드 세션마다 게이트웨이 tmux 를 세 번 쳤다(show-options @box_state ·
+ *  set-option @box_state · set-option @box_last_busy) — 카나리아에서 분당 10, 그 테넌트에 남은 호출의 절반이다.
+ *  같은 tmux 를 **그 세션의 호스트**가 자기 노드에서 바로 만질 수 있고, 그 op(`markActive`)는 멤버 PC 노드에
+ *  이미 쓰던 것이다(«정책=게이트웨이, 실행=노드»).
+ *
+ * ── 판정(좁혀 가는 순서) ─────────────────────────────────────────────────────
+ *  ① 스냅샷 좌표가 없다 → null(no-coordinate).
+ *  ② 좌표가 선언된 세션 호스트가 아니다(멤버 PC) → null(not-host). 멤버 PC 세션은 desired 행이 좌표를 가져
+ *     호출부의 노드 갈래가 따로 받는다 — 이 판정은 중앙(박스) 세션만 다룬다.
+ *  ③ 그 호스트가 지금 자격이 없다(끊김·낡음 — 목록 소유와 같은 술어) → null(unqualified).
+ *  ④ 그 호스트의 관측에 그 세션이 없다 → null(absent). 옛 스냅샷에 남은 좌표를 믿고 맡기면 호스트가 «그런 세션 없다» 로 실패한다.
+ *     ⚠ 방금 만든 세션의 3초 창은 여기가 아니라 ①(no-coordinate)이다(#3773 재검증) — registry 는 좌표(`nodeOfSession`)와
+ *      관측(`sessionHostLiveIds`)을 **같은 스냅샷 항목**에서 동기로 읽으므로, 스냅샷에 아직 없는 세션은 좌표부터 없다.
+ *      그래서 그 창은 자가호스팅의 모든 세션(좌표 없음)과 같은 사유로 보인다. 이 칸은 두 재료가 어긋난 입력에 대한 방어다(시험 A5).
+ *  ⑤ 그 호스트가 그 op 를 모른다(구 번들) → null(unsupported). 보내면 `unknown op` 문자열이 돌아온다(#905 C4).
+ */
+export function sessionHostTarget(o: {
+  sessionId: string;
+  /** 스냅샷에서 되찾은 좌표(`registry.nodeOfSession`) */
+  nodeId: string | null;
+  isSessionHost: (id: string) => boolean;
+  /** 그 호스트가 자격이 있으면 지금 본 세션 id, 아니면 null(`registry.sessionHostLiveIds`) */
+  liveIds: (id: string) => readonly string[] | null;
+  /** 그 호스트가 이 op 를 아나(`registry.nodeSupports`) */
+  supports: (id: string) => boolean;
+}): { host: string | null; why: SessionHostTargetWhy } {
+  const nodeId = String(o.nodeId ?? "").trim();
+  if (!nodeId) return { host: null, why: "no-coordinate" };
+  if (!o.isSessionHost(nodeId)) return { host: null, why: "not-host" };
+  const ids = o.liveIds(nodeId);
+  if (!ids) return { host: null, why: "unqualified" };
+  if (!ids.includes(o.sessionId)) return { host: null, why: "absent" };
+  if (!o.supports(nodeId)) return { host: null, why: "unsupported" };
+  return { host: nodeId, why: "ok" };
 }
 
 /**

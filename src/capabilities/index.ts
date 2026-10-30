@@ -6,8 +6,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { viewerOf } from "./principal.js";
+import { assertRequestEnumParity } from "../http/rest-util.js";
 import { requireAppTool, requireAppToolMcp, appMcpHidden } from "../apps/principal.js";
+import { assertAppContextSafeTool } from "../apps/app-context.js";   // #5100 앱 맥락 범위 — 범위를 못 지키는 도구
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
+import { requireSessionWriter } from "../sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
@@ -26,6 +29,18 @@ import { appCapabilities } from "./apps.js";
 import { appToolCallCapabilities } from "./app-tool-call.js";
 import { appStoreCapabilities } from "./app-store.js";
 import { sessionAppsCapabilities } from "./session-apps.js";
+import { appChatSendCapabilities } from "./app-chat-send.js";
+import { appProjectFilesCapabilities } from "./app-project-files.js";
+import { appBundleCapabilities } from "./app-bundles.js";
+import { appServerCapabilities } from "./app-servers.js";
+import { appFolderCapabilities } from "./app-folders.js";
+import { appPrefsCapabilities } from "./app-prefs.js";
+import { appLaunchCapabilities } from "./app-launch.js";
+import { fileCapabilities } from "./files.js";
+import { agentJobCapabilities } from "./agent-jobs.js";
+import { aiRunCapabilities } from "./ai-runs.js";
+import { uiTranslateCapabilities } from "./ui-translate.js";
+import { appJobCapabilities } from "./app-jobs.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { shellPrefsCapabilities } from "./shell-prefs.js";
@@ -46,6 +61,9 @@ import { managedSessionCapabilities } from "./managed-session.js";
 import { sessionProjectCapabilities } from "./session-project.js";
 import { sessionRenameCapabilities } from "./session-rename.js";
 import { sessionTaskCapabilities } from "./session-task.js";
+import { collectRunCapabilities } from "./collect-run.js";
+import { collectUnitCapabilities } from "./collect-units.js";
+import { memberAiConnectorCapabilities } from "./member-ai-connectors.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -59,13 +77,17 @@ import { slackConnectCapabilities } from "./slack-connect.js";
 import { notionConnectCapabilities } from "./notion-connect.js";
 import { githubConnectCapabilities } from "./github-connect.js";
 import { googleConnectCapabilities } from "./google-connect.js";
+import { connectStatusCapabilities } from "./connect-status.js";
+import { connectRegisterCapabilities } from "./connect-register.js";
 import { memberCollectAppCapabilities } from "./member-collect-apps.js";
 import { orgAppTools, orgAppToolsSetWrite } from "./app-tools.js";
 import { appInstanceCapabilities } from "./app-instances.js";
 import { appNotificationCapabilities } from "./app-notifications.js";
+import { linkPreviewCapabilities } from "./link-preview.js";   // #4769 링크 미리보기 — 앱 화면이 붙인 링크의 카드 재료를 서버가 읽는다
 import { channelPolicyCapabilities } from "./channel-policy.js";
 import { brokerCapabilities } from "./broker.js";
 import { meCapabilities, whoamiCapabilities } from "./whoami.js";
+import { browserCapabilities } from "./browser.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "../mcp/mcp-surface.js";
@@ -120,6 +142,9 @@ const all: Capability[] = [
   ...sessionProjectCapabilities, // 세션↔프로젝트 변경(MCP+REST) + 실행 세션 동적 문맥(REST 전용). cwd가 아니라 x-lively-session/DB를 쓴다.
   ...sessionRenameCapabilities,  // #1979 세션 이름 짓기 — 세션이 자기 이름을 짓는다(헤드리스 스폰 없음). 세션당 1회 걸쇠.
   ...sessionTaskCapabilities,    // #4084 세션 = 태스크 — 이 세션이 맡은 태스크 조회·완료 처리(id 없이).
+  ...collectRunCapabilities,     // #4213 T11 수집 실행 — 내 Claude 커넥터를 읽는 `claude -p` 한 판(작은 세션 컨테이너) · 상태.
+  ...collectUnitCapabilities,    // #4213 T10 수집 단위 표 — 단위·볼 수 있는 구성원(담당 후보)·지금 담당·읽은 위치 · 고치기·쪼개기·내 목록 반영 · 수집기 이관.
+  ...memberAiConnectorCapabilities, // #4213 T6 구성원 Claude 커넥터 — 누가 무엇을 연결했나(보기) · 내 것 새로 확인 · 워크스페이스 정책(관리자).
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
@@ -138,14 +163,30 @@ const all: Capability[] = [
   orgAppTools, orgAppToolsSetWrite, // #2243 3차: 앱 상세가 «AI가 내 계정으로 하는 일»을 읽기/쓰기 동사로 보여 주는 창구(org_tool.level=L2 가 쓰기).
   ...memberCollectAppCapabilities, // #2247: 피그마·ClickUp "모아 두기" — org_{figma,clickup}_collect(상태)/set(admin 토글). 켠 사람의 금고 토큰(figma_token·clickup_token)을 token_source=member:<나> 로 가리키는 수집기 인스턴스(lively-member). 피그마는 범위(파일 링크/팀 id) 없이는 needs_scope 로 켜지 않는다.
   ...googleConnectCapabilities, // #1881 G5: 구글 "팀 자료로 모으기" — org_google_collect(상태)/set(토글=동의 시작)/connect(범위 넓히기)/oauth_complete(CP 릴레이). 수집기는 token_source=member:<켠 관리자> 로 그 사람의 연결을 가리킨다(구글엔 봇 개념이 없어 조직 토큰이라는 게 없다). ★Gmail 은 제한범위라 명시적으로 골라야 켜진다 — 안 쓰는 서비스를 끼우면 미검증 100명 한도를 되돌릴 수 없게 태운다.
+  ...connectRegisterCapabilities, // #4970: 외부 앱 «앱 등록» 값을 한 곳에서 저장 — org_connect_register. 앱마다 기존 저장(금고·슬랙 창구·GitHub App)을 그대로 부른다.
+  ...connectStatusCapabilities, // #4970: 외부 앱 연결 상태를 한 번에 — org_connect_status. 앱마다 기존 상태 함수를 그대로 부르고 길·상태·권하는 길은 org/connect-routes.ts 한 곳이 정한다(옛 next 는 connect-next.ts). 연결 스킬(liv-connect)과 [외부 앱 연결] 화면의 첫 걸음.
   ...appInstanceCapabilities, // #1780 v2.1: package와 분리된 실행 인스턴스 + nullable 프로젝트 맥락. REST-only 셸 배관.
   ...appNotificationCapabilities, // #1891: 앱이 쏘는 알림(권한 fail-closed) + 내 알림 이력·읽음. inbox 앱이 소비한다.
+  ...linkPreviewCapabilities, // #4769 link_preview — 링크 카드(unfurl) 재료. 앱 토큰도 부른다(permissions.tools 선언).
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
   ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null)·install/remove/activity/ui.
   ...appToolCallCapabilities, // #1780 PR5b: 앱 UI 브리지 tools/call(org_app_tool_call, REST 전용) — 앱 UI 의 도구 호출을 앱 principal 로 재판정 실행.
   ...appStoreCapabilities, // #1780 D6: 앱 데이터 store_*(insert/query/tables) — 앱이 자기 app 스키마 테이블을 RLS 격리 하에 읽고 쓴다.
   ...sessionAppsCapabilities, // #4225 세션에 앱 붙이기·떼기 — 붙어 있는 동안 그 세션의 AI 가 그 앱 테이블을 store_* 로 쓴다.
+  ...appProjectFilesCapabilities, // #4592 붙은 앱 화면이 그 세션 프로젝트의 자료에서 파일 목록 · 내용을 읽는다(org_app_project_files · org_app_project_file, REST 전용 · 읽기만).
+  ...appBundleCapabilities, // #4481 앱 판 파일 상한 보기(구성원) · 고치기(관리자) — 배포 없이 바뀌는 판·파일·워크스페이스 상한.
+  ...appServerCapabilities, // #4484 앱 서버 — 빌드·배포(app_server_deploy, 그 판을 저장한 사람의 세션에서 빌드 → Lambda) · 상태 · 멈춤 · 다시 켜기 · 상한.
+  ...appFolderCapabilities, // #4785 앱 폴더 상한 — 바꾸기(책임자 · 관리자) · CP 쿼터 정비가 읽는 상한 목록 · 잰 사용량 받기(80% · 100% 알림).
+  ...appChatSendCapabilities, // #4594 붙은 앱 화면이 그 세션에 글을 바로 보낸다(org_app_chat_send, REST 전용) — 서버가 「(앱 「제목」에서 보냄)」 표식을 붙인다.
+  ...appPrefsCapabilities, // #4601 앱 × 보는 사람 개인 설정(app_prefs_get/set, REST 전용) — 샌드박스 앱 화면은 localStorage 가 없고 SDK 에 신원이 없어 서버가 든다.
+  ...appLaunchCapabilities, // #4480 v2-1 앱 주소(<앱>-<워크스페이스>.lvly.app)로 들어갈 일회용 코드(org_app_launch, REST 전용) — 사람 구성원 본인만.
+  ...fileCapabilities, // #4673 파일 주소 — file_url(짧은 수명 서명 주소 GET·PUT, 받는 곳 /api/files/s/<토큰>) · file_address(세션 안 경로 → 주소) · file_path(주소 → 이 세션 안 경로). MCP+REST(/api/ui/files/*).
+  ...aiRunCapabilities, // #4488 앱 AI 실행 — app_ai_run(입구 하나 · 단발+API 키=프록시 · 그 밖=작업 컨테이너) · get/runs/cancel/targets(scope null · 앱 동의) · app_ai_account(_set) · app_ai_limits(_set admin). MCP+REST(/api/ui/ai-runs* · /api/ui/ai-targets · /api/ui/ai-account · /api/ui/ai-run-limits).
+  ...uiTranslateCapabilities, // #5141 화면 영어 보기 — ui_translate(REST 만 · POST /api/ui/translate · 로그인한 사람 · 워크스페이스 API 키 단발).
+  ...appJobCapabilities, // #4486 앱 백그라운드 작업 — app_job_start(앱 서버 라우트를 함수에 비동기로 · 15분) · app_job_get · app_jobs · app_job_cancel(scope null · 앱 동의 — web.server 가 함의). MCP+REST(/api/ui/app-jobs*).
+  ...agentJobCapabilities, // #4490 작업 컨테이너 — agent_job_run/get/list/cancel(scope=context, 보낸 사람 본인 구독 · 앱 화면은 다리로) · agent_job_limits(보기)/_set(admin). MCP+REST(/api/ui/agent-jobs*).
+  ...browserCapabilities, // #4993 AI 와 사람이 같이 쓰는 브라우저 — browser_status/tabs/navigate/screenshot/act/read/fill/text/eval/console/handoff(scope=null). 게이트웨이가 데스크톱 앱 화면의 <webview> 로 중계(src/browser/relay.ts). MCP+REST(/api/ui/browser/*).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
@@ -251,11 +292,19 @@ export function registerMcpCapabilities(
         if (cap.scope) requireScope(u, cap.scope);
         requireAppToolMcp(u, cap.name);    // #1780 v2.1: 앱 토큰이 EXEMPT 배관 도구를 MCP 로 부르면 403(REST 배관은 별도 어댑터)
         await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
+        await assertAppContextSafeTool(u, cap.name, "mcp");   // #5100: 맥락 범위를 선언한 앱이면 범위를 못 지키는 도구는 403(기록은 instrument)
         // 작업자(AI) — 게이트웨이가 접속 신원(x-lively-harness 헤더 우선, 없으면 User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.
         const session = sessionFromExtra(extra) ?? undefined;
-        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra), viewer: viewerOf(u) }));
+        // #4135 — 기록의 주인은 **세션을 연 사람**이다(원준 2026-09-28). 이 요청이 말한 세션의 주인과 토큰의 사람이 다르면
+        //  쓰는 도구는 거절한다 — 공용 컴퓨터에 깔린 로그인으로 남의 세션의 기록이 남던 것(session-identity-guard 머리말).
+        //  읽기전용 판정과 같은 집합(isReadOnlyBlocked)이라 «무엇이 쓰기인가» 가 두 벌이 되지 않는다.
+        if (session && isReadOnlyBlocked(cap)) await requireSessionWriter(u.userId, session);
+        const out = await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra), viewer: viewerOf(u) });
+        // #4993 — 그림(스크린샷)이 든 결과는 조각으로 낸다. 훅이 없거나 null 이면 종전대로 JSON 글 한 덩어리.
+        const parts = cap.mcpContent ? cap.mcpContent(out) : null;
+        return parts && parts.length ? { content: parts } : json(out);
       },
     );
   }
@@ -281,7 +330,7 @@ export function resolveToolMeta(
 }
 
 // capability.input(zod raw shape) → JSON Schema(하네스가 tools/list 에서 보는 입력 표면). 변환 실패 시 빈 객체 스키마.
-function toInputSchema(input: unknown): unknown {
+export function toInputSchema(input: unknown): unknown {
   try {
     return zodToJsonSchema(z.object((input ?? {}) as z.ZodRawShape), { $refStrategy: "none" });
   } catch { return { type: "object", properties: {} }; }
@@ -308,11 +357,27 @@ export function buildToolCandidates(): ToolCandidate[] {
 }
 
 // REST 어댑터 입력 — web.ts 가 순회하며 동일 경로(+alias)에 마운트한다.
+//  parse 산출은 여기서 한 번 더 zod input 의 enum 선언에 비춰 검증한다(assertEnumParity) — MCP 는 SDK 가
+//  z.object(cap.input) 로 이미 거르는 판정이라, 이 자리가 REST 쪽 짝이다. 마운트 전 공용 지점에 두는 게
+//  핵심이다: 각 parse 의 손베낀 화이트리스트에 맡기면 새 enum 필드가 그 목록에서 빠지는 걸 아무도 못 막는다
+//  (실측 갭 ~100 필드 — knowledge_save.type 은 DB 제약까지 새어 500 이 나갔다).
 export function restMounts(): { cap: Capability; mount: RestMount }[] {
   const out: { cap: Capability; mount: RestMount }[] = [];
   for (const cap of registry.values()) {
     if (!cap.expose.rest) continue;
-    for (const mount of cap.expose.rest) out.push({ cap, mount });
+    for (const mount of cap.expose.rest) out.push({ cap, mount: guardEnumParity(cap, mount) });
   }
   return out;
+}
+
+/** mount.parse 를 감싸 산출을 cap.input(zod) 의 enum 선언으로 검증한다. 원 mount 는 불변(테스트·R4 관측이 원본을 본다). */
+function guardEnumParity(cap: Capability, mount: RestMount): RestMount {
+  return {
+    ...mount,
+    parse: (req) => {
+      const input = mount.parse(req);
+      assertRequestEnumParity(cap.input ?? {}, req, input);
+      return input;
+    },
+  };
 }

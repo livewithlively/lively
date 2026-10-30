@@ -8,6 +8,7 @@ import { pjvPopover } from '../projects/popover.js';
 import { openMySessionsModal } from '../sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
 import { skeleton } from '../learn.js';
 import { confirmDialog } from '../admin.js';
+import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «상태 못 봄» 은 실패와 다르게 센다
 import { startTour } from '../tour.js';
 import {
   TSESS_PERIOD_OPTS, TSESS_SCOPE_OPTS, TSESS_SECTIONS, TSESS_STATE_OPTS, TSESS_STATUS,
@@ -19,6 +20,7 @@ import { openGridPicker, openSessionSelectPicker, termUrl } from './select-bar.j
 import { loginBannerEl, openNodeManager, openTermCreateForm, setTerminalRerender } from './session-form.js';
 import { buildSessProjFilter, openGlobalPromptSearch, tsessColHead, tsessRow } from './session-list.js';
 import { notTrashed, retireSessions, retiredToastText } from '../session-actions.js';
+import { isTrySessionRow } from '../lib/builder-flow.js';   // #4632 앱빌더 시험 세션은 세우지 않는다
 
 // 폼·다이얼로그(session-form)가 끝난 뒤 목록을 다시 그리게 등록 — 이 방향(위→아래)이라야 순환이 안 생긴다.
 setTerminalRerender(renderTerminal);
@@ -41,7 +43,7 @@ async function renderTerminal(view) {
       api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
     ]);
   } catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
-  const sessions = notTrashed<any>((data && data.sessions) || []);   // 휴지통에 있는 세션은 이 목록에 서지 않는다(#3778)
+  const sessions = notTrashed<any>((data && data.sessions) || []).filter((s: any) => !isTrySessionRow(s));   // 휴지통에 있는 세션 · 앱빌더 시험 세션(#4632)은 이 목록에 서지 않는다(#3778)
   const projName = new Map<any, string>((projects || []).map((p) => [p.id, p.name]));
   // '내 프로젝트'(칩 강조용) = 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 전체 목록에서 그대로 판정.
   const meIdNow = (state.me && state.me.userId) || '';
@@ -302,11 +304,18 @@ async function renderTerminal(view) {
     });
     if (!ok) return;
     btn.disabled = true;
-    let done = 0, fail = 0;
+    let done = 0, fail = 0, unknown = 0;
     for (const s of items) { // 순차 — 세션 생성은 tmux 를 띄우는 일이라 한꺼번에 몰지 않는다.
-      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' }); done++; } catch { fail++; }
+      //  #3870 — «상태를 못 봤다» 는 실패와 다르다. 여기서 force 를 대신 고르지는 않는다(그건 «옛 것이 살아
+      //   있을 수도 있음을 알고 새로 만든다» 는 선언이라 건별로 사람이 골라야 한다) — 대신 **몇 건이 그랬는지와
+      //   어디서 고를 수 있는지**를 말한다. 종전엔 전부 '실패'로 뭉쳐져 다시 시도할 길이 안 보였다.
+      try { await api(restorePath(s.id), { method: 'POST', body: '{}' }); done++; }
+      catch (e) { if (canForceRestore(e)) unknown++; else fail++; }
     }
-    toast(fail ? (done + '개 복원 · ' + fail + '개 실패') : (done + '개 세션을 복원했습니다 — 대화를 이어받았어요'), fail > 0);
+    toast(fail || unknown
+      ? [done + '개 복원', unknown ? unknown + '개 상태 확인 못함' : '', fail ? fail + '개 실패' : ''].filter(Boolean).join(' · ')
+        + (unknown ? ' — 확인 못한 건 그 세션을 열어 [강제로 되살리기] 하세요' : '')
+      : (done + '개 세션을 복원했습니다 — 대화를 이어받았어요'), fail > 0 || unknown > 0);
     sel.mode = false; sel.ids.clear();
     reRender();
   }
@@ -337,8 +346,8 @@ async function renderTerminal(view) {
   // ── 머리 3층(#1841, 프로젝트 탭 pjv-board-header 동형) — ① 빵부스러기(앱 이름) ② 뷰 탭 ③ 툴바. 그 아래 표 하나.
   const crumbBar = el('div', { class: 'pjv-crumbbar' },
     el('nav', { class: 'pjv-crumbs', 'aria-label': '현재 위치' },
-      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: 'AI 세션' })),
-      el('span', { class: 'tsess-crumb-sub', text: '박스와 노드에서 도는 AI 세션 전체' })));
+      el('span', { class: 'pjv-crumb is-leaf tsess-crumb' }, tsessNodeIcon('pjv-crumb-ic'), el('span', { class: 'pjv-crumb-label', text: '세션 관리' })),
+      el('span', { class: 'tsess-crumb-sub', text: '새 세션 만들기 · 노드 연결 · 여러 세션 한꺼번에 종료·복원' })));
   const viewTabs = el('div', { class: 'pjv-vtabs', role: 'tablist', 'aria-label': '뷰' },
     el('button', { class: 'pjv-vtab active', type: 'button', role: 'tab', 'aria-selected': 'true' }, pjvTabIcon('list'), el('span', { text: '리스트' })));
   const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, viewTabs, toolbar);

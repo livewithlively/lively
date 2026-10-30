@@ -28,7 +28,7 @@ w("lively-app.json", JSON.stringify({
   title: id,
   version: "0.1.0",
   // 권한 상한 — 설치·동의 때 사람이 이 목록을 그대로 본다. 필요한 것만 남겨라.
-  permissions: { scopes: [], tools: ["store_insert", "store_query", "store_update", "store_delete", "store_tables"] },
+  permissions: { scopes: [], tools: ["store_insert", "store_query", "store_update", "store_delete", "store_sql", "store_tables"] },
   // 이 앱 전용 표(app.<앱id>__notes) — 테넌트 격리는 서버가 한다.
   data: { tables: [{ name: "notes", columns: [{ name: "body", type: "text" }, { name: "done", type: "bool" }] }] },
   ui: { pages: [{ key: "main", title: id, entry: "ui/index.html" }] },

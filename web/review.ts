@@ -170,7 +170,7 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, 'AI가 쓴 지식 확인 설정을 불러오지 못했습니다'))); return; }
   const [obs, cats] = await Promise.all([
     api('/api/ui/org/ingest-observability?days=30').catch(() => null),
-    api('/api/ui/categories').catch(() => null),
+    api('/api/ui/categories?light=1').catch(() => null),
   ]);
   const catName = new Map<string, string>(((cats && cats.categories) || []).map((c: any) => [String(c.key), String(c.name || c.key)] as [string, string]));
 
@@ -398,7 +398,7 @@ export async function openIngestPolicyForm(pol: any, reload: () => void): Promis
 
   let cats: any[] = [];
   try {
-    cats = await api('/api/ui/categories').then((d: any) => (d && d.categories) || []);
+    cats = await api('/api/ui/categories?light=1').then((d: any) => (d && d.categories) || []);
   } catch { cats = []; }
 
   const actSel = sel(CREATE_ACTS, (pol && pol.action) || 'confirm');

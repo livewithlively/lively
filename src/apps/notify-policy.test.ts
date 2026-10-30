@@ -2,8 +2,9 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {
-  NOTIFY_DEDUPE_COOLDOWN_MS, NOTIFY_TITLE_MAX,
-  decideNotifyAllowed, normalizeNotification, pickAwaitingTransitions, safeHref, shouldSuppressDuplicate,
+  INBOX_HIDDEN_KINDS, NOTIFY_DEDUPE_COOLDOWN_MS, NOTIFY_KINDS, NOTIFY_TITLE_MAX,
+  decideNotifyAllowed, inInbox, normalizeActor, normalizeKind, normalizeNotification, normalizeScope, pickAwaitingTransitions, safeHref, shouldSuppressDuplicate,
+  NOTIFY_APP_ID_RE, isAppMutedByMember, normalizeAppMutes,
 } from "./notify-policy.js";
 
 const allow = (patch: Partial<Parameters<typeof decideNotifyAllowed>[0]> = {}) =>
@@ -124,8 +125,9 @@ test("N18 awaiting 이 풀리는 것은 알림이 아니다", () => {
 
 test("N19 풀렸다가 다시 서면 그건 새 전이다 — 두 번 알린다", () => {
   let state = new Map<string, boolean>();
+  //  첫 걸음이 «첫 관측» 이라 나이를 명시한다(#3741) — 이 시험이 보는 것은 전이 규칙이지 첫 관측 유예가 아니다.
   const step = (awaiting: boolean) => {
-    const r = pickAwaitingTransitions(state, [{ id: "s1", awaiting }]);
+    const r = pickAwaitingTransitions(state, [{ id: "s1", awaiting, lastActive: 1_000 }], 1_000);
     state = r.next;
     return r.notify;
   };
@@ -143,9 +145,73 @@ test("N20 ★관측에서 사라진 세션은 알림도 아니고 상태도 지�
   assert.deepEqual(again.notify, [], "잠깐 안 보였다고 같은 대기를 다시 알리면 안 된다");
 });
 
-test("N21 처음 보는 세션이 이미 awaiting 이면 알린다 — 사용자가 놓친 알림이다", () => {
-  const r = T([], [["새세션", true]]);
+test("N21 처음 보는 세션이 **최근에 움직였고** awaiting 이면 알린다 — 사용자가 놓친 알림이다", () => {
+  //  #3741 로 조건이 하나 붙었다. 종전엔 나이를 안 봤는데, 그러면 노드 세션 442개가 한꺼번에
+  //   들어오는 순간 그게 전부 «놓친 알림» 이 된다(P3). 의도(재기동 중 놓친 알림 복구)는 그대로다.
+  const r = pickAwaitingTransitions(new Map(), [{ id: "새세션", awaiting: true, lastActive: 990 }], 1_000);
   assert.deepEqual(r.notify, ["새세션"]);
+});
+
+// ── D-2. 첫 관측 유예 (#3741) — 엣지 표 `spec-3741.md` P1~P12 ──
+//
+//  왜 이 시험들이 있나: 이 스윕이 노드 스냅샷까지 보게 되면 여태 한 번도 안 들어오던 멤버 PC 세션이
+//   한꺼번에 들어온다(실측 `lively-46e3`: 456 중 **442**). 그것들은 며칠씩 대기 상태로 앉아 있어서,
+//   유예가 없으면 **배포 직후 첫 스윕에 수백 건이** 사람에게 간다. 그 폭풍을 막는 것이 이 규칙이고,
+//   동시에 «게이트웨이가 죽어 있던 동안 놓친 알림» 은 계속 살려야 한다 — 두 요구가 이 표에서 갈린다.
+const NOW = 1_000_000;
+const P = (prev: Array<[string, boolean]>, obs: { id: string; awaiting: boolean; lastActive?: number }) =>
+  pickAwaitingTransitions(new Map(prev), [obs], NOW, 1_800).notify;
+
+test("P1 ★ 전이는 나이와 무관하게 알린다 — 지금 막 대기가 됐다", () => {
+  //  이 행이 없으면 «오래 돌던 세션이 방금 질문을 던진» 정상 경우가 조용해진다. 유예는 첫 관측 전용이다.
+  assert.deepEqual(P([["s1", false]], { id: "s1", awaiting: true, lastActive: NOW - 999_999 }), ["s1"]);
+});
+
+test("P2 첫 관측 + 최근이면 알린다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 60 }), ["s1"]);
+});
+
+test("P3 ★★ 첫 관측 + 오래됐으면 안 알린다 — 노드 세션 442개가 여기 걸린다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 1_801 }), []);
+});
+
+test("P4 ★ 첫 관측 + 나이를 모르면(undefined) 안 알린다", () => {
+  //  새로 도입한 재료(lastActive)의 **부재** 행. 노드 스냅샷 세션은 이 값이 비어 올 수 있다.
+  assert.deepEqual(P([], { id: "s1", awaiting: true }), []);
+});
+
+test("P5 ★ 첫 관측 + lastActive=0 이면 안 알린다 — 0 은 «한 번도 안 움직였다»", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: 0 }), []);
+});
+
+test("P6 첫 관측인데 awaiting 이 아니면 알림이 아니다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: false, lastActive: NOW }), []);
+});
+
+test("P9 ★ 창 경계는 포함이다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 1_800 }), ["s1"], "경계 안");
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW - 1_801 }), [], "경계 밖");
+});
+
+test("P10 ★ 미래 시각(시계 어긋남)은 «최근» 으로 본다 — 음수 나이로 정상 세션을 죽이지 않는다", () => {
+  assert.deepEqual(P([], { id: "s1", awaiting: true, lastActive: NOW + 5_000 }), ["s1"]);
+});
+
+test("P12 ★ 유예로 안 알린 세션도 기억엔 남는다 — 다음 스윕이 이걸 새 전이로 읽으면 안 된다", () => {
+  const first = pickAwaitingTransitions(new Map(), [{ id: "s1", awaiting: true, lastActive: 1 }], NOW, 1_800);
+  assert.deepEqual(first.notify, [], "이번엔 조용하다");
+  assert.equal(first.next.get("s1"), true, "그래도 awaiting 이었다는 기억은 남는다");
+  const second = pickAwaitingTransitions(first.next, [{ id: "s1", awaiting: true, lastActive: 1 }], NOW, 1_800);
+  assert.deepEqual(second.notify, [], "다음 스윕에서도 조용해야 한다(폭풍이 한 틱 늦게 오면 안 고친 것이다)");
+});
+
+test("P-mass ★ 대량 유입 시나리오 — 오래된 대기 442개가 들어와도 알림 0, 최근 것만 나간다", () => {
+  //  이 프로젝트가 실제로 겪을 배포 첫 스윕을 그대로 흉내 낸다.
+  const flood = Array.from({ length: 442 }, (_, i) => ({ id: `node-${i}`, awaiting: true, lastActive: NOW - 86_400 }));
+  const fresh = { id: "방금-대기", awaiting: true, lastActive: NOW - 30 };
+  const r = pickAwaitingTransitions(new Map(), [...flood, fresh], NOW, 1_800);
+  assert.deepEqual(r.notify, ["방금-대기"]);
+  assert.equal(r.next.size, 443, "알리지 않은 442개도 전부 기억엔 들어간다");
 });
 
 // ── 파생 규칙(#1891, dev 실측으로 발견) ────────────────────────────────────
@@ -203,4 +269,76 @@ test("N27 빌트인이어도 권한 선언이 없으면 거부한다 — 빌트�
   assert.equal(decideNotifyAllowed({
     appId: "browser", declaresNotifications: false, hasActiveGrant: true, isBuiltin: true,
   }), "notify-permission-missing");
+});
+
+// ── E. 종류(kind)와 렌즈(scope) — #4180 「확인할 것」에서 세션 알림을 뺀다 ──
+//  회의(2026-09-21): 세션 대기·완료 알림은 확인할 것에서 빼고, 댓글·언급·리브의 답·앱 알림만 남긴다. 배너는 전부 본다.
+
+// ── M. 사람이 앱마다 끈 알림(#4769) — 사양 표 M1~M6(스크래치 spec-notify-recent.md) ──
+
+test("M1 ★ 저장할 꼴 — false 인 앱 id 만 남긴다(true · 글자 · 앱 id 꼴이 아닌 키는 버린다)", () => {
+  assert.deepEqual(normalizeAppMutes({ talk: false, memo: true, "Bad Id": false, x: "no", " deck ": false }), { talk: false, deck: false });
+});
+
+test("M2 객체가 아니면 빈 표 — null · 글자 · 배열 · 없음", () => {
+  for (const v of [null, undefined, "talk", ["talk"], 7]) assert.deepEqual(normalizeAppMutes(v), {});
+});
+
+test("M3 ★ 끈 앱이면 true", () => {
+  assert.equal(isAppMutedByMember({ talk: false }, "talk"), true);
+});
+
+test("M4 다른 앱 · 빈 표 · 표 없음은 안 끈 것", () => {
+  assert.equal(isAppMutedByMember({ talk: false }, "memo"), false);
+  assert.equal(isAppMutedByMember({}, "talk"), false);
+  assert.equal(isAppMutedByMember(null, "talk"), false);
+  assert.equal(isAppMutedByMember(undefined, "talk"), false);
+  assert.equal(isAppMutedByMember({ talk: true }, "talk"), false);
+});
+
+test("M5 ★ 빌트인(제품 자신)은 앱 끔에 걸리지 않는다 — 종류 토글이 맡는다", () => {
+  assert.equal(isAppMutedByMember({ "ai-session": false }, "ai-session", true), false);
+});
+
+test("M6 앱 id 경계 — 64자 통과 · 65자 거부 · 대문자 · 첫 글자 하이픈 거부", () => {
+  assert.equal(NOTIFY_APP_ID_RE.test("a".repeat(64)), true);
+  assert.equal(NOTIFY_APP_ID_RE.test("a".repeat(65)), false);
+  assert.equal(NOTIFY_APP_ID_RE.test("Talk"), false);
+  assert.equal(NOTIFY_APP_ID_RE.test("-talk"), false);
+  assert.deepEqual(normalizeAppMutes({ ["b".repeat(64)]: false, ["c".repeat(65)]: false }), { ["b".repeat(64)]: false });
+});
+
+test("K1 세션 알림만 「확인할 것」에서 빠진다 — 댓글·언급·리브·앱은 선다", () => {
+  assert.deepEqual([...INBOX_HIDDEN_KINDS], ["session"]);
+  assert.equal(inInbox("session"), false);
+  for (const k of ["app", "liv", "comment", "mention"]) assert.equal(inInbox(k), true, `${k} 가 확인할 것에서 빠진다`);
+});
+
+test("K2 모르는 종류는 'app' 으로 — 앱 토큰 경로가 종류를 못 정한다(서버 코드만 정한다)", () => {
+  assert.equal(normalizeKind("session"), "session");
+  assert.equal(normalizeKind("liv"), "liv");
+  assert.equal(normalizeKind("bogus"), "app");
+  assert.equal(normalizeKind(undefined), "app");
+  assert.equal(normalizeKind(42), "app");
+  for (const k of NOTIFY_KINDS) assert.equal(normalizeKind(k), k);
+});
+
+test("K3 모르는 렌즈는 좁은 쪽(inbox) — 넓은 렌즈(all)는 명시해야 한다", () => {
+  assert.equal(normalizeScope("all"), "all");
+  assert.equal(normalizeScope("inbox"), "inbox");
+  assert.equal(normalizeScope(undefined), "inbox");
+  assert.equal(normalizeScope("everything"), "inbox");
+});
+
+test("K4 모르는 종류를 «확인할 것에 보인다» 로 두면 새 종류가 조용히 숨지 않는다", () => {
+  //  기본이 «보인다» 여야 새로 생긴 종류(예: 앱이 정한 것)가 사람 눈에 먼저 닿는다 — 숨김은 목록에 적어야만 된다.
+  assert.equal(inInbox("something-new"), true);
+});
+
+test("K5 actor 다듬기 — 빈 값은 null, 길면 자른다", () => {
+  assert.equal(normalizeActor(""), null);
+  assert.equal(normalizeActor("   "), null);
+  assert.equal(normalizeActor(undefined), null);
+  assert.equal(normalizeActor(" jang "), "jang");
+  assert.equal(normalizeActor("x".repeat(200))?.length, 120);
 });

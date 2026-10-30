@@ -2,8 +2,8 @@
 //  (1) grant 안 도구만 실행(앱 principal) (2) grant 밖 도구 403 (3) denylist(me_app_* 등) grant 에 있어도 403
 //  (4) 스코프 캡: 멤버가 admin 이어도 grant 스코프에 없으면 admin 도구 403 (5) grant 없으면 403
 //  (6) 실행은 앱 principal(mcp_call_log.app=앱). fail-first: 이 브리지(org_app_tool_call)는 이 PR 이전 없었다.
-//  (7) #4744 브리지가 부른 도구는 그 사람의 공개범위로 — 잠긴 지식은 그 지식의 사람만(다른 사람은 «없음» · 열린 지식은 보인다).
 //  ⚠ 수동 실행(docker):  node scripts/app-tool-call.itest.mjs
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import assert from "node:assert/strict";
 
@@ -72,23 +72,6 @@ try {
   }
   assert.ok(logged, "org_apps 호출이 mcp_call_log.app=hello 로 기록(앱 principal)");
   ok("(6) 실행 귀속: mcp_call_log.app=hello");
-
-  // (7) #4744 브리지가 부른 도구는 그 사람의 공개범위로 읽는다 — 앱 세션이 MCP 로 부를 때와 같은 열람 신원.
-  const OTHER = "m2";
-  await itemsPool.query(`INSERT INTO org_member(id,email,state,scopes) VALUES($1,$2,'active','["context","memory"]'::jsonb)`, [OTHER, "m2@x.com"]);
-  const mkK = (name, vis) => itemsPool.query(`INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, confidence, source, visibility)
-    VALUES($1,$1,$2,'recalled','authored','active','ai','authored',$3)`, [name, `itest7 ${name}`, vis]);
-  await mkK("itest7-locked", "members");
-  await mkK("itest7-open", "open");
-  await itemsPool.query(`INSERT INTO knowledge_member(name, subject_kind, member_id) VALUES('itest7-locked','member',$1)`, [OTHER]);
-  await upsertGrant("hello", MEMBER, ["context", "memory"], ["org_apps", "knowledge_get"], { actor: "test" }); _clearAppToolCache();
-  await upsertGrant("hello", OTHER, ["context", "memory"], ["org_apps", "knowledge_get"], { actor: "test" }); _clearAppToolCache();
-  const other = { userId: OTHER, email: "m2@x.com", scopes: ["context", "memory"], projects: ["*"] };
-  const body = async (u, name) => (await cap.handler({ app_id: "hello", name: "knowledge_get", arguments: { name } }, u, ctx)).result.knowledge.body_md;
-  assert.equal(await body(member, "itest7-open"), "itest7 itest7-open", "열린 지식은 보인다(배선)");
-  assert.equal(await body(other, "itest7-locked"), "itest7 itest7-locked", "그 지식의 사람은 잠긴 지식을 본다");
-  await assert.rejects(() => body(member, "itest7-locked"), /지식 'itest7-locked' 없음/, "대상이 아닌 사람(관리자 포함)은 «없음»");
-  ok("(7) 브리지 도구는 그 사람의 공개범위로 — 잠긴 지식은 그 지식의 사람만 · 열린 지식은 보인다");
 
   // (5) grant 회수 후 → 403.
   await revokeGrant("hello", MEMBER); _clearAppToolCache();

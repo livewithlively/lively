@@ -12,6 +12,7 @@ import { nodeOpenTo } from "../node/node-access.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
+import { delegateRunNext } from "../node/assign-outcome.js";
 import { HEADLESS_KEYS, resolveHeadlessHarness } from "../node/headless-harness.js"; // #1884 실행 하네스
 import { originSessionOf } from "../node/task-origin.js";   // #4551 — 시킨 세션을 적어 둔다(목록이 그 세션의 프로젝트 아래에 워커를 세운다)
 
@@ -94,8 +95,9 @@ const run: Capability = {
     });
     // 요청→즉답 계약: 지금 배치 가능한지 그 자리에서 판정한다(스케줄러 tick 안 기다림).
     const r = await tryAssignNow(task);
-    if (!r.assigned) {
-      if (!input.queue) {
+    const next = delegateRunNext(r, !!input.queue);
+    if (next !== "proceed") {
+      if (next === "cancel") {
         // 큐잉 안 함(기본) — 가용 노드 없음을 즉시 알린다. 하네스는 로컬에서 직접 실행하면 된다.
         await markCanceled(task.id);
         return { no_capacity: true, reason: r.reason, hint: "지금 위탁 가능한 노드가 없습니다 — 로컬에서 직접 실행하거나, queue:true 로 대기 등록하세요." };
@@ -103,14 +105,18 @@ const run: Capability = {
       return { task: await getTask(task.id), queued: true, reason: r.reason, hint: `대기 등록됨 — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
     }
     // 배치됨. wait=false 면 즉시 반환, 기본은 완료까지 대기(상한 내).
-    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId}). 진행: delegate_status ${task.id}` };
+    if (input.wait === false) return { task: await getTask(task.id), hint: `실행 시작(node=${r.nodeId ?? "배정 중"}). 진행: delegate_status ${task.id}` };
     const deadline = Date.now() + (input.wait_sec ?? DEFAULT_WAIT_SEC) * 1000;
     while (Date.now() < deadline) {
       await sleep(2000);
       const cur = await getTask(task.id);
       if (cur && ["done", "failed", "canceled"].includes(cur.status)) return { task: cur, done: true };
     }
-    return { task: await getTask(task.id), still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
+    const last = await getTask(task.id);
+    //  in_flight 로 들어왔는데 선점한 쪽(tick)이 못 띄웠으면 행은 아직 queued 다 — «실행 중» 이라 하면 거짓이다.
+    //   대기 상한까지 tick 이 다시 시도하므로 위의 대기 등록 응답과 같은 결로 답한다(queue:false 계약 자체는 여기서 바꾸지 않는다).
+    if (last?.status === "queued") return { task: last, queued: true, hint: `아직 배정 전(대기 중) — 적합 노드가 나면 자동 시작(상한 초과 시 no_capacity 실패). delegate_status ${task.id}` };
+    return { task: last, still_running: true, hint: `아직 실행 중 — 백그라운드로 계속됩니다. delegate_status ${task.id} 로 확인하세요(또는 wait_sec 를 늘리세요).` };
   },
 };
 
@@ -176,7 +182,17 @@ const logs: Capability = {
       return { status: t.status, pending: t.status === "queued", chunk: "", next: from, done: false, exit: null };
     }
     let tail: TailResult;
-    if (t.node_id === CENTRAL_NODE_ID) tail = await tailTask(t.task_dir, from);
+    if (t.node_id === CENTRAL_NODE_ID) {
+      const { isSandboxTaskDir } = await import("../node/sandbox-task.js");
+      if (isSandboxTaskDir(t.task_dir)) {
+        //  샌드박스 판(#4012)의 폴더는 게이트웨이가 **직접** 읽는다 — 멤버 경계 감옥에는 그 자리가 없다.
+        tail = await tailTask(t.task_dir, from, null);
+      } else {
+        //  중앙 작업 폴더는 **요청자의 격리 경계**로 읽는다(저장소 분리 배포의 게이트웨이는 그 폴더를 직접 못 본다).
+        const { ensureMemberOsUser } = await import("../terminal/profiles.js");
+        tail = await tailTask(t.task_dir, from, await ensureMemberOsUser({ userId: t.requester } as never).catch(() => null));
+      }
+    }
     else if (nodeOnline(t.node_id)) tail = await nodeRpc<TailResult>(t.node_id, "tailTask", { taskDir: t.task_dir, from });
     else tail = { chunk: "", next: from, done: false, exit: null }; // 노드 오프라인 — 스케줄러 grace 가 처리, CLI 는 계속 폴링
     // DB 상 종결(스케줄러가 이미 수집)이면 tail 이 놓쳐도 done 을 확정한다(경합 방지).
@@ -201,7 +217,12 @@ const cancel: Capability = {
     if (t.requester !== uid(user) && !isAdmin(user)) throw new HttpError(403, "본인 위탁만 취소할 수 있습니다");
     if (t.status === "done" || t.status === "failed" || t.status === "canceled") throw new HttpError(409, `이미 종결됨(${t.status})`);
     if (t.status === "running" && t.session_id && t.node_id) {
-      if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* noop */ });
+      if (t.node_id === CENTRAL_NODE_ID) {
+        //  샌드박스 판(#4012)은 op 에 멈춤을 맡긴다 — 토큰 회수·폴더 정리는 실패 세션 회수기가 한다(취소 행도 그 대상이다).
+        const { isSandboxTaskDir, stopSandboxTask } = await import("../node/sandbox-task.js");
+        if (isSandboxTaskDir(t.task_dir)) await stopSandboxTask(String(t.task_dir)).catch(() => { /* noop */ });
+        else await killTaskSession(t.session_id).catch(() => { /* noop */ });
+      }
       else if (nodeOnline(t.node_id)) await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* noop */ });
     }
     await markCanceled(t.id);

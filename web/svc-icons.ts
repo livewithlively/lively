@@ -16,6 +16,7 @@ const SVC_BRAND: Record<string, string> = {
   notion: '#191919',
   linear: '#5E6AD2',
   slack: '#4A154B',
+  discord: '#5865F2',
   google: '#4285F4', // #1881 G5 — 접힌 구글 타일. 아래 구 키 3개는 기존 화면 호환으로 남긴다.
   'google-gmail': '#EA4335',
   'google-drive': '#0F9D58',
@@ -25,6 +26,7 @@ const SVC_BRAND: Record<string, string> = {
   gitlab: '#FC6D26',
   clickup: '#7B68EE',
   figma: '#F24E1E',
+  zotero: '#CC2936',
   prometheus: '#E6522C',
   'claude-headless': '#D97757',
 };

@@ -27,6 +27,8 @@ export interface NotionRunStats {
   /** 가속 full 에서 원장 일치로 스킵(미방출)했지만 관측한 항목 — run-sync 가 last_synced_at 을 일괄 갱신(스윕 오탐 방지). */
   observedIds: string[];
   assets: number; assetFailures: number; requests: number;
+  /** #5012 크기 상한·디스크 하한으로 받지 않은 첨부 — 실패가 아니다(커서를 묶지 않는다). */
+  assetSkipped?: number;
   /** 받은 첨부 바이트(이 run 누적) — 진행 신호다(progressTick). run 마다 새로 0 에서 센다 — 모듈 전역에 두면 게이트웨이 안에서 도는
    *  수집기 미리보기(org_collector_preview)끼리 섞인다(#4031 계열). */
   assetBytes: number;

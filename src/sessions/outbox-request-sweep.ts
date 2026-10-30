@@ -44,9 +44,19 @@ export interface SweepJob {
    *  `schedulerTargets()` 로 하고 각각을 `withTenant` 로 감싼다(`scheduler/tenant-fanout.ts`).
    */
   readonly scope?: "tenant" | "global";
+  /**
+   * 하우스키핑이 도는 배포(셀프호스트 · registry)에서도 **이 정의 그대로** 건다(#5082) — `boot/housekeeping` 의 `startBackgroundSweeps` 가
+   * 이 표시가 붙은 정비를 같은 run · 같은 주기(jobIntervalMs)로 워크스페이스마다 돌린다. 이 표는 그 배포에서 무동작이라(maybeSweep) 표시가 없으면
+   * 그 정비는 거기서 한 번도 안 돈다. 하우스키핑에 제 타이머가 따로 있는 종전 정비는 표시하지 않는다(두 번 돈다).
+   */
+  readonly housekeeping?: true;
   /** 실제 정비. **여기서 새로 정의하지 않고** 원래 함수를 그대로 부른다(복제하면 한쪽만 고쳐진다). */
   readonly run: () => Promise<unknown>;
 }
+
+/** 표식 되채우기 정비 주기(#3892). 되채우기 쿨다운(`META_HEAL_COOLDOWN_MS`)과 **같은 자**다 — 더 잦으면 쿨다운에 걸려 헛돌고,
+ *  더 드물면 표식이 빈 판이 «중단됨» 으로 서 있는 창이 길어진다(그동안 사람이 보내는 말은 403 으로 막힌다). */
+export const META_HEAL_SWEEP_MS = 60_000;
 
 /** 원래 하우스키핑이 쓰던 주기 그대로 — 새 정책을 만들지 않는다(`background-sweeps` 의 setInterval 값). */
 export const TEN_MIN_MS = 10 * 60_000;
@@ -54,6 +64,13 @@ export const SIX_HOURS_MS = 6 * 60 * 60_000;
 /** 대화 검색 색인 정비 주기(#4517). 업로드 직후 색인이 따로 있어 이건 **밀린 것**(배포 직후 옛 기록 · 놓친 업로드)을 줍는 몫이다 —
  *  한 판에 SWEEP_MAX_BYTES 까지만 풀므로 1분마다 돌면 한 사람 몫(실측 2GB 대)이 십여 분 안에 따라잡힌다. */
 export const CONV_INDEX_SWEEP_MS = 60_000;
+/** 하네스 종료 규칙(#4695 T5) 판정 주기. 시계가 분 단위(N 기본 3분)라 «N분 ± 이 주기» 가 실제 끄는 시각이 된다 — 대기 알림과 같은 30초. */
+export const STOP_RULE_SWEEP_MS = 30_000;
+/**
+ * 원격 PC 하네스 종료 규칙(#5043) 판정 주기(정본 — 셀프호스트 boot/housekeeping.ts 의 타이머도 같은 값). 시계가 분 단위(완료 기본 30분)라
+ *  «N분 ± 1분» 이면 충분하고, 컴퓨터마다 RPC 를 묻는 판이라 매니지드(30초)보다 느슨하게 둔다.
+ */
+export const NODE_STOP_RULE_SWEEP_MS = 60_000;
 
 export const SWEEP_JOBS: readonly SweepJob[] = [
   // 아웃박스 — 좀비 회수 + 끝난 행 청소 + 대기 세션 재-kick. RLS 가 이 테넌트로 스코프한다.
@@ -96,6 +113,14 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 이게 없으면 그 세션들은 **회수 면역이면서 죽으면 복원도 안 된다**(고객사 A 실측: 38건 중 19건).
   { key: "session-state-backfill", intervalMs: SWEEP_MIN_INTERVAL_MS,
     run: () => import("./session-state-backfill.js").then((m) => m.backfillSessionStates()) },
+  // 표식 되채우기 — 세션 호스트 스냅샷(#3892 후속). 목록 소유가 세션 호스트로 넘어간 테넌트에선 게이트웨이 `collectSessions`
+  //  의 되채우기가 안 불린다. 호스트엔 DB 가 없어 표식(@box_owner)이 빈 판은 주인에게도 안 보이고 «중단됨» 으로 선다
+  //  (실측 2026-09-11 box-sangmin-yoon-d78e541c). ⚠ 반드시 테넌트 스코프 — 스냅샷도 DB 행도 그 테넌트로 좁혀야 한다.
+  //  ⓘ 셀프호스트·registry 하우스키핑(`startBackgroundSweeps` 의 perTenant)에는 **일부러 안 싣는다** — 세션 호스트 선언은
+  //   매니지드 브로커의 프로비저닝(`session-host-provision`)만 만든다. 그러니 셀프호스트에선 목록이 늘 게이트웨이
+  //   `collectSessions` 이고 그쪽 되채우기가 이미 돈다(요청별 테넌시 = 매니지드일 때만 이 표가 돈다).
+  { key: "session-meta-heal", intervalMs: META_HEAL_SWEEP_MS,
+    run: () => import("./session-meta-heal-sweep.js").then((m) => m.sweepSessionMetaHeal()) },
   // 위탁 배차(#869 P2) — **전역**이다. 실측(2026-08-31): `org_task` 3건이 queued·attempt=0·node_id 없이
   //  **3~4일** 방치돼 있었다. 크론은 도는데(CP 가 굴린다) 배차가 한 번도 안 됐다 — 그중 둘이
   //  «미분류 지식 12건 분류»·«자료 증류» 로 **맥락 파이프라인의 본체**다.
@@ -116,6 +141,47 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ 테넌트 스코프 — 묶음·카테고리·구성원 전부 그 워크스페이스 것이다.
   { key: "category-group-backfill", intervalMs: TEN_MIN_MS,
     run: () => import("../org/liv/group-backfill.js").then((m) => m.backfillCategoryGroups()) },
+  // 로그인 판 정리(#4067) — 사람이 떠났거나 응답이 끊긴 CP 로그인 판을 멈추고, 끝난 판의 폴더를 치운다
+  //  (상민님 2026-09-17: «끝나거나 오래 진행이 없으면 꺼서 CP 에 남기지 말 것»). 판 자신의 박동도 요청이라
+  //  판이 도는 한 이 정비가 깨어난다. 판이 없는 배포(셀프호스트)에선 그 함수가 곧바로 돌아간다.
+  //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보인다.
+  { key: "login-job-reap", intervalMs: META_HEAL_SWEEP_MS,
+    run: () => import("../terminal/login-job.js").then((m) => m.sweepLoginJobs()) },
+  // 작업 컨테이너 감시(#4490 앱 v2-11) — 대기 초과 · 시작 못 함 · 판 무응답 · 시간 초과를 끝내고, 끝났는데 안 걷은 작업을 걷고, 자리가 나면 띄운다.
+  //  ⚠ 컨테이너를 걷는 정비다(하네스 종료 규칙 다음 두 번째 예외 · [G4c]) — 그러나 걷는 것은 이 흐름이 띄운 `job-` 컨테이너뿐이고
+  //   (service.reapJob 의 JOB_SESSION_ID_RE), 사람 세션(`box-`)엔 닿지 않는다. 작업 컨테이너의 수명 주인은 이 흐름이다(#4490).
+  //  사람이 아무도 없어도 돈다: CP 가 60초마다 테넌트를 부르고, 도는 작업의 판은 5초마다 박동한다(둘 다 요청이라 이 정비를 깨운다).
+  //  ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
+  //  #5082 — 셀프호스트 실행면(LIVELY_AGENT_JOBS=docker · host)도 이 감시가 끝내고 걷는다 → 하우스키핑에도 건다(housekeeping).
+  { key: "agent-job-sweep", intervalMs: STOP_RULE_SWEEP_MS, housekeeping: true,
+    run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).sweepAgentJobs(await m.liveAgentJobDeps())) },
+  // 작업 기록 보존 정리(#4828 앱 v2-29) — 끝났고 걷은 작업 행을 보존 기간(agent_job_policy.keep_days · 기본 90일 · 0 = 무기한)이 지나면 행째 지운다.
+  //  일 단위 보존이라 6시간이면 넉넉하다(세션 기록 정리 session-log-reap 과 같은 박자). 한 판에 1,000 행씩 10 판까지 — 더 밀리면 다음 정비가 잇는다.
+  //  DB 행만 지운다(컨테이너 · 토큰은 감시 agent-job-sweep 이 먼저 걷는다 — 걷기 전 행은 지우지 않는다). 보존 기간을 못 읽으면 이 정비만 실패한다.
+  //  ⚠ 테넌트 스코프 — 작업 행도 보존 기간 설정도 그 워크스페이스 것이다(RLS). #5082 — 하우스키핑에도 건다(위 감시와 짝).
+  { key: "job-record-prune", intervalMs: SIX_HOURS_MS, housekeeping: true,
+    run: () => import("../agent-jobs/live.js").then(async (m) => (await import("../agent-jobs/service.js")).pruneAgentJobRecords(await m.liveAgentJobDeps())) },
+  // 앱 AI 실행 정비(#4488 앱 v2-9) — 작업 컨테이너에 붙은 열린 실행을 작업 상태에 맞추고(결과 형식 판정 · 재시도), 게이트웨이가 죽어 끝맺지 못한 단발(프록시)
+  //  실행을 끝낸다. 파괴적 동작 없음(DB 행만). ⚠ 테넌트 스코프 — 실행 행은 RLS 로 그 워크스페이스 것만 보인다.
+  //  #5082 — 하우스키핑에도 건다: 셀프호스트도 단발(프록시) 실행이 돌고(끝맺지 못한 행을 닫는 길이 이것뿐) 박스 위 작업에 붙은 실행을 맞춘다.
+  { key: "ai-run-sweep", intervalMs: STOP_RULE_SWEEP_MS, housekeeping: true,
+    run: () => import("../ai-runs/live.js").then(async (m) => (await import("../ai-runs/service.js")).sweepAiRuns(await m.liveAiRunDeps())) },
+  // 앱 백그라운드 작업 감시(#4486 앱 v2-7) — 대기 초과 · 부른 뒤 시작 없음(다시 부름) · 박동 없음 · 시간 초과를 끝내고, 자리가 나면 기다린 작업을 함수에 비동기로 부른다.
+  //  파괴적 동작 없음(DB 행 · 함수 부르기만 — 함수 안에서 도는 작업을 멈추지는 못한다). 사람이 없어도 돈다(CP 가 60초마다 테넌트를 부르고, 도는 작업의
+  //  검사 층이 20초마다 박동한다 — 둘 다 요청이라 이 정비를 깨운다). ⚠ 테넌트 스코프 — 작업 행은 RLS 로 그 워크스페이스 것만 보이고, 동시 상한도 워크스페이스마다다.
+  { key: "app-job-sweep", intervalMs: STOP_RULE_SWEEP_MS,
+    run: () => import("../apps/app-jobs.js").then((m) => m.sweepAppJobs()) },
+  // 앱 백그라운드 작업 기록 보존(#4486) — 끝난 지 job_keep_days(기본 30일 · 관리자 조정)가 지난 작업 행(결과에 앱 데이터가 실린다)을 행째 지운다.
+  //  일 단위라 6시간이면 넉넉하다. 보존 기간을 못 읽으면 이 정비만 실패한다(지우지 않는다).
+  //  ⚠ 테넌트 스코프 — 작업 행은 그 워크스페이스 것이다(RLS).
+  { key: "app-job-prune", intervalMs: SIX_HOURS_MS,
+    run: () => import("../apps/app-jobs.js").then((m) => m.pruneAppJobRecords()) },
+  // 앱 서버 동기 부르기 기록(#5053 앱 v2-42 — 앱이 선언한 MCP 도구) — 게이트웨이가 끝맺지 못한 부르기(답을 기다리다 교대 · 재시작)를 닫고,
+  //  끝난 지 7일(CALL_KEEP_DAYS)이 지난 행을 지운다. 돌기 신원은 그 전에도 수명 판정이 막는다 — 이것은 기록 정리다. DB 행만(파괴적 동작 없음).
+  //  ⚠ 테넌트 스코프 — 부르기 행은 그 워크스페이스 것이다(RLS).
+  //  자가호스팅(#4487 · #5102)이 이 기능의 주 사용처라 하우스키핑에도 건다(housekeeping) — 함수 실행면을 부르지 않는 DB 정비라 실행면과 무관하다.
+  { key: "app-call-sweep", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../apps/app-server-call.js").then((m) => m.sweepAppCalls()) },
   // 대화 검색 색인(#4517) — 중앙 세션 기록에서 사람 말·AI 말을 풀어 ⌘K 가 찾을 표(session_msg)에 담는다. 밀린 세션을 최근 것부터.
   //  ⚠ 테넌트 스코프 — 세션 기록도 색인도 그 워크스페이스 것이다(RLS). 같은 테넌트의 판이 겹치면 뒤 판은 그냥 돌아간다.
   { key: "conv-index", intervalMs: CONV_INDEX_SWEEP_MS,
@@ -127,6 +193,26 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  ⚠ **`reapIdleSessions`(#1059 F)는 일부러 빼 뒀다** — tmux 세션을 **죽인다.** 정책 기본이 0(끔)이라
   //   당장은 no-op 이지만, 파괴적 동작을 이 표에 얹는 것은 #2148(매니지드 유휴 회수)의 판단이다.
   //   그 짝인 위 백필은 올린다 — 원래 주석이 "회수 **전에** 백필한다"고 못 박았고 백필 자체는 안전하다.
+  // 하네스 종료 규칙(#4695 T5) — 완료+안 봄 N분(3) · 질의+안 봄 M분(60) 이면 하네스를 끈다(쪽지를 남기고 tmux 종료 — 행 보존).
+  //  ⚠ 위 «파괴적 동작은 이 표에 얹지 않는다» 의 예외다 — 그 판단의 주인(프로젝트 #4690 «세션 회수·복구 재설계», 상민님 2026-10-15 규칙 확정)이
+  //   이 규칙을 정했고, 이 규칙의 시계는 분 단위라 CP 틱(5분)만으로는 N=3 이 3~8분이 된다. 판정은 «모르면 안 끈다» 로 닫혀 있다
+  //   (관측 못 한 행 · 보는지 모름 · 예약 모름 · 프로세스 판정 실패 · 끄기 직전 화면이 바뀜 — session-stop-rule.ts 머리말).
+  //  ⓘ 요청이 없는 테넌트를 위해 그 모듈이 다음 마감에 스스로 깨운다(armStopTimer) — 이 표는 «요청이 올 때 한 판 더» 다.
+  //  ⚠ 테넌트 스코프 — 세션 목록·장부·얼굴 줄 전부 그 워크스페이스 것이다.
+  { key: "session-stop-rule", intervalMs: STOP_RULE_SWEEP_MS,
+    run: () => import("./session-stop-rule.js").then((m) => m.sweepSessionStopRule()) },
+  // 원격 PC 하네스 종료 규칙(#5043) — 위 규칙을 구성원이 연결한 컴퓨터(노드)의 세션에도. 컴퓨터마다 켜고(기본 꺼짐) 분을 정한다(org_node.stop_rule).
+  //  ⚠ 위와 같은 파괴적 예외의 같은 판단(그 규칙의 주인 #4690 의 후속 #5043 — 상민님 2026-10-27 «원격 PC 도 매니지드처럼»). 판정은 «모르면 안 끈다» 로
+  //   닫혀 있다(그 PC 터미널 클라이언트를 못 가르면 그 컴퓨터를 통째로 건너뜀 · 다시 열 수 없는 세션 제외 — node-stop-rule.ts 머리말).
+  //  ⓘ 컴퓨터마다 RPC 를 묻는 판이라 1분 — 시계(기본 30분)엔 넉넉하다. 마감 깨움은 그 모듈이 스스로 건다.
+  //  ⚠ 테넌트 스코프 — 노드 스냅샷·장부·정책 전부 그 워크스페이스 것이다.
+  { key: "node-stop-rule", intervalMs: NODE_STOP_RULE_SWEEP_MS,
+    run: () => import("./node-stop-rule.js").then((m) => m.sweepNodeStopRule()) },
+  // 앱 폴더 주기 재조정(#4786) — 사건(붙이기 · 떼기 · 앱 끄기 · 동의 회수 …)으로 맞추다 실패한 세션(브로커 무응답 · 시간초과 · 노드 재기동)을
+  //  다시 맞춘다. 대상 고르기 · 동시 수 · 고친 횟수는 apps/session-app-folders.ts 의 «주기 재조정» 절. 요약(대상 · 고침 · 실패 …)이 이 로그에 찍힌다.
+  //  ⚠ 테넌트 스코프 — 세션 · 붙은 앱 · 맞춘 기록 전부 그 워크스페이스 것이고(RLS), 브로커 중계도 tenantSlug() 로 그 워크스페이스에 간다.
+  { key: "app-folders", intervalMs: SWEEP_MIN_INTERVAL_MS,
+    run: () => import("../apps/session-app-folders.js").then((m) => m.sweepAppFolders()) },
 ];
 
 //  ⚠ 인메모리다. 게이트웨이가 재기동하면 비는데, **그게 맞다**: 재기동이야말로 배달 루프를 죽여

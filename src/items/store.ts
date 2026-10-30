@@ -40,6 +40,11 @@ export interface RawItem {
   updated_at?: string;
   fields?: Record<string, unknown>;
   raw?: unknown;
+  /**
+   * 이 자료를 볼 구성원(member id) — 태어날 때 한 번 잠근다(자료 공개범위 축이 켜져 있을 때만 효력). 커넥터가 «이건 그 사람 것»을
+   *  확실히 알 때만 싣는다(Zotero 개인 라이브러리 = 수집기를 켠 그 사람). 비우면 조직의 커넥터 정책이 정한다(종전 그대로).
+   */
+  audience?: string[];
 }
 
 export async function initItemSchema(): Promise<void> {

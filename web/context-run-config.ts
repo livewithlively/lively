@@ -80,7 +80,7 @@ export function runConfig(cur: Partial<RunConfigValue> | null, style: string): R
     hint.textContent = harnessSel.value
       ? `비워 두면 ${h?.label || harnessSel.value} 의 자동화 기본값으로 돕니다` +
         (AUTO_LABEL[harnessSel.value] ? ` — ${AUTO_LABEL[harnessSel.value].model} · ${AUTO_LABEL[harnessSel.value].effort}.` : '.')
-      : '제공자가 «자동» 이면 의뢰자가 로그인한 AI 중에서 고릅니다(클로드 우선). 모델·추론강도도 그 AI 의 자동화 기본값으로 정해집니다.';
+      : '제공자가 «자동» 이면 실행 계정이 로그인한 AI 중에서 고릅니다(클로드 우선). 모델·추론강도도 그 AI 의 자동화 기본값으로 정해집니다.';
   };
 
   // 제공자 칸 — 카탈로그가 오기 전에도 현재 값은 서 있어야 한다(비동기 사이에 사람이 저장할 수 있다).

@@ -21,9 +21,14 @@
 //  중앙 박스의 AI 세션은 **셸을 가진다** — API 를 막아도 `ls`/`cat` 은 그대로 된다(설계 R4-#1). 여기서 닫는 것은
 //  웹·MCP 표면이고, 진짜 경계는 §4.7 OS 강제(setfacl)가 따로 닫는다. 그렇다고 이 층이 무의미하진 않다:
 //  대시보드 위젯의 '클릭 두 번' 노출과 MCP 를 통한 AI 의 무심한 열람·반출이 실제 사고 경로였다.
+//  #4687 — 셸이 **뜨는 순간**에 작업 폴더를 판정한다: 세션을 새로 열거나 다시 열 때(복원·복제·이어받기 — 모두
+//  createSession)와 중앙에서 위탁 워커를 띄울 때(spawnTaskSession), 작업 폴더가 안 보이거나 그 아래에 못 보는 곳이
+//  있으면 띄우지 않는다(sessionCwdRefusal · 게이트웨이 능력 assertSessionCwdVisible). 띄우는 순간의 판정이라 그 뒤의
+//  변화(공개범위 변경 등)는 이 판정이 다루지 않는다. 노드(사람 컴퓨터) 세션은 그 컴퓨터의 경로라 대상이 아니다.
 import { itemsPool } from "../db/client.js";
 import { q, withTx } from "../db/client.js";
 import { HttpError } from "../http-error.js";
+import { logger } from "../log.js";
 import { PROJECT_SUBDIR, LEGACY_SUBDIR, folderVariants } from "../project/project-fs.js";
 import { effectiveViewer, hiddenProjects, PUBLIC_VIEWER, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
@@ -68,6 +73,57 @@ export function projectFolderOf(rel: string): string | null {
   return `${segs[0]}/${segs[1]}`;
 }
 
+/**
+ * 프로젝트 폴더를 **담는 자리 자체**인가 — `project` · `legacy-project` 와 그 바로 아래 한 칸(`project/<id>`). (#4688)
+ *  홈 탐색기는 이 이름을 바꾸지 않는다 — 프로젝트의 폴더 자리다(DB project.folder · 자료 좌표 `project:<id>/…` · 공개범위 판정이 이 경로를
+ *  기준으로 한다. 프로젝트 이름 바꾸기는 폴더를 옮기지 않는다). 그 안의 파일·폴더(`project/<id>/…`)는 바꿀 수 있다.
+ *  모양만 본다 — 더 깊게 적힌 프로젝트 폴더는 isProjectFolderOrAncestor 가 DB 로 본다. 이상한 경로는 false(부르는 쪽 경로 해소가 이미 걸었다).
+ */
+export function isProjectContainerPath(rel: string): boolean {
+  let segs: string[];
+  try { segs = normalizeSharedPath(rel).split("/").filter(Boolean); } catch { return false; }
+  return (segs.length === 1 || segs.length === 2) && (segs[0] === PROJECT_SUBDIR || segs[0] === LEGACY_SUBDIR);
+}
+
+/**
+ * 이 경로가 어느 프로젝트의 폴더(DB project.folder)이거나 그 조상인가(#4688) — 모양 판정이 못 덮는 자리(project/ 아래 더 깊게 적힌
+ *  폴더 `project/a/b` 와 그 조상)를 덮는다. project/ ↔ legacy-project/ 양형으로 본다(게이트와 같은 이유 — DB 값이 옛 접두일 수 있다).
+ *  판정을 못 하면(DB 장애) 던진다 — 이름 바꾸기를 하지 않는 쪽이다.
+ */
+export async function isProjectFolderOrAncestor(rel: string): Promise<boolean> {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return false; }
+  if (!norm) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM project p, unnest($1::text[]) AS v(x)
+      WHERE p.folder IS NOT NULL AND p.folder <> ''
+        AND (trim(both '/' from p.folder) = v.x OR starts_with(trim(both '/' from p.folder), v.x || '/'))
+      LIMIT 1`, [folderVariants(norm)]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 순수 — p 가 folders 중 하나이거나 그 조상인가('/' 경계 — `project/1` 이 `project/12` 를 잡지 않는다). */
+export function isFolderOrAncestorOf(p: string, folders: readonly string[]): boolean {
+  let norm: string;
+  try { norm = normalizeSharedPath(p); } catch { return false; }
+  if (!norm) return false;
+  return folders.some((f) => f === norm || f.startsWith(norm + "/"));
+}
+
+/**
+ * 이 폴더 **아래**(자기 제외)에 DB 로 적힌 프로젝트 폴더들 — 이 폴더의 꼴(project/ · legacy-project/)로 맞춰 돌려준다(#4688).
+ *  프로젝트 자료 화면의 이름 바꾸기·묶음 옮기기가 항목마다 DB 를 묻지 않게 요청마다 한 번 읽는다(대개 빈 목록 — 프로젝트 폴더는 평평하다).
+ */
+export async function projectFoldersUnder(rel: string): Promise<string[]> {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return []; }
+  if (!norm) return [];
+  const r = await itemsPool.query(
+    `SELECT DISTINCT trim(both '/' from p.folder) AS f, v.x AS under FROM project p, unnest($1::text[]) AS v(x)
+      WHERE p.folder IS NOT NULL AND starts_with(trim(both '/' from p.folder), v.x || '/')`, [folderVariants(norm)]);
+  return (r.rows as Array<{ f: string; under: string }>).map((row) => norm + String(row.f).slice(String(row.under).length));
+}
+
 /** 프로젝트 상속 구간이라 여기서 ACL 을 설정하면 안 되는 경로인가(설정 UI·API 가 이걸로 거절한다). */
 export function isProjectManagedPath(rel: string): boolean {
   const segs = normalizeSharedPath(rel).split("/").filter(Boolean);
@@ -90,9 +146,42 @@ export interface SharedFolderGate {
    *  프로젝트 폴더 축은 여기 안 들어온다 — restrictedProjectFolders() 가 따로 준다(판정 소스가 다르다).
    */
   restricted(rel: string): boolean;
+  /**
+   * 이 폴더를 **통째로** 넘겨도 되나(#4687) — 자기가 보이고(ok), 그 **아래**에도 이 뷰어가 못 보는 곳이 하나도 없어야 참.
+   *  세션 작업 폴더 판정용이다: 세션 셸은 작업 폴더 아래를 전부 파일로 보는데, ok 는 그 폴더 하나(자기·조상)만 본다.
+   */
+  subtreeOk(rel: string): boolean;
+  /**
+   * `rel` **아래**(자기는 빼고)에서 이 뷰어가 못 보는 자리들(공유 자리 기준 경로) — 숨은 프로젝트 폴더(project/ ↔ legacy-project/ 양형)와
+   *  막힌 ACL 경로. 같은 이름 후보 찾기(#4672)가 그 안으로 들어가지 않게 넘긴다 — 들어가면 못 보는 자리의 같은 이름이 후보 상한을 먼저 채운다.
+   *  보이는지의 판정은 여전히 ok 가 한다(이것은 걷는 양을 줄이는 몫). 게이트마다 반드시 답한다 — 빠뜨리면 못 보는 자리가 다시
+   *  후보 상한을 채우는데 아무 데서도 드러나지 않는다(전부 통과 · 앱 폴더 게이트는 빈 목록).
+   */
+  hiddenWithin(rel: string): string[];
 }
 
-const ALLOW_ALL: SharedFolderGate = { ok: () => true, restricted: () => false };
+const ALLOW_ALL: SharedFolderGate = { ok: () => true, restricted: () => false, subtreeOk: () => true, hiddenWithin: () => [] };
+
+/**
+ * `rel` **아래**(자기 포함)에 못 보는 프로젝트 폴더나 막힌 ACL 경로가 있는가 — 없으면 참(순수, #4687).
+ *  자기·조상 판정은 ok 의 몫이라 여기선 보지 않는다(게이트의 subtreeOk 가 둘을 합친다).
+ *  ⚠ 프로젝트 폴더는 project/ ↔ legacy-project/ 양형으로 본다(ok ① 과 같은 이유 — DB folder 값이 옛 prefix 일 수 있다).
+ *  ⚠ 담김은 `rel + "/"` 로 잰다 — startsWith(rel) 만 쓰면 이름이 겹치는 형제(`project/1` 아래를 물었는데 `project/12`)가 잡힌다.
+ */
+function subtreeFullyVisible(rel: string, hiddenFolders: ReadonlySet<string>, blocked: ReadonlySet<string>): boolean {
+  let norm: string;
+  try { norm = normalizeSharedPath(rel); } catch { return false; }   // 이상한 경로는 통과시키지 않는다
+  const within = (p: string): boolean => norm === "" || p === norm || p.startsWith(norm + "/");
+  for (const f of hiddenFolders) {
+    for (const v of folderVariants(f)) {
+      let nv: string;
+      try { nv = normalizeSharedPath(v); } catch { continue; }   // DB 의 folder 값은 서버가 만든 것이라 여기 올 일은 없다
+      if (within(nv)) return false;
+    }
+  }
+  for (const b of blocked) if (within(b)) return false;
+  return true;
+}
 
 /**
  * 뷰어별 게이트 생성.
@@ -121,26 +210,95 @@ export async function sharedFolderGate(viewer: Viewer): Promise<SharedFolderGate
 
   const locked = new Set<string>(rows.map((r) => String(r.path)));
   const blocked = new Set<string>(rows.filter((r) => !r.granted).map((r) => String(r.path)));
+  return gateFromSets({ hiddenFolders: hidden.folders, locked, blocked });
+}
 
+/**
+ * 판정기 본체(순수) — DB 에서 읽은 세 집합으로 만든다. sharedFolderGate 가 쓰고, 시험은 DB 없이 이걸로 엣지를 잰다.
+ *  hiddenFolders = 이 뷰어에게 안 보이는 프로젝트 폴더 · locked = 'members' ACL 경로 전부 · blocked = 그중 이 뷰어가 못 보는 것.
+ *  이름 붙인 인자로 받는다 — 같은 타입 셋이라 자리가 바뀌어도 컴파일러가 못 잡는다.
+ */
+export function gateFromSets(sets: { hiddenFolders: ReadonlySet<string>; locked: ReadonlySet<string>; blocked: ReadonlySet<string> }): SharedFolderGate {
+  const { hiddenFolders, locked, blocked } = sets;
+  const ok = (rel: string): boolean => {
+    let norm: string;
+    try { norm = normalizeSharedPath(rel); } catch { return false; }   // 이상한 경로는 통과시키지 않는다
+    // ① 프로젝트 축 — 자기나 조상 중 하나가 숨은 프로젝트 폴더면 안 보인다(project/ ↔ legacy-project/ 양형 확인:
+    //   완료 프로젝트는 폴더가 legacy-project/ 로 옮겨지는데 DB 의 folder 값이 아직 옛 prefix 일 수 있다).
+    //   «project/<x> 두 조각» 을 가정하지 않는다 — DB 는 project/ 아래 더 깊은 경로도 folder 로 받으므로, 숨은 폴더가
+    //   `project/a/b` 처럼 적혀 있어도 그 안까지 같은 답을 준다(#4687).
+    if (hiddenFolders.size) {
+      for (const anc of selfAndAncestors(norm)) if (anc && folderVariants(anc).some((v) => hiddenFolders.has(v))) return false;
+    }
+    // ② ACL 축 — 자기 자신 또는 조상 중 하나라도 막혀 있으면 차단(단조 축소 AND).
+    if (blocked.size) for (const anc of selfAndAncestors(norm)) if (blocked.has(anc)) return false;
+    return true;
+  };
   return {
-    ok(rel: string): boolean {
-      let norm: string;
-      try { norm = normalizeSharedPath(rel); } catch { return false; }   // 이상한 경로는 통과시키지 않는다
-      // ① 프로젝트 축 — 그 프로젝트가 이 뷰어에게 안 보이면 폴더도 안 보인다(project/ ↔ legacy-project/ 양형 확인:
-      //   완료 프로젝트는 폴더가 legacy-project/ 로 옮겨지는데 DB 의 folder 값이 아직 옛 prefix 일 수 있다).
-      const pf = projectFolderOf(norm);
-      if (pf && folderVariants(pf).some((v) => hidden.folders.has(v))) return false;
-      // ② ACL 축 — 자기 자신 또는 조상 중 하나라도 막혀 있으면 차단(단조 축소 AND).
-      if (blocked.size) for (const anc of selfAndAncestors(norm)) if (blocked.has(anc)) return false;
-      return true;
-    },
+    ok,
     restricted(rel: string): boolean {
       if (!locked.size) return false;
       let norm: string;
       try { norm = normalizeSharedPath(rel); } catch { return false; }
       return selfAndAncestors(norm).some((a) => locked.has(a));
     },
+    subtreeOk: (rel: string): boolean => ok(rel) && subtreeFullyVisible(rel, hiddenFolders, blocked),
+    hiddenWithin(rel: string): string[] {
+      let norm: string;
+      try { norm = normalizeSharedPath(rel); } catch { return []; }
+      //  담김은 subtreeFullyVisible 과 같은 자(`rel + "/"`) — 자기 자신은 빼고(자기가 안 보이면 ok 가 이미 막았다).
+      const under = (p: string): boolean => (norm === "" ? p !== "" : p.startsWith(norm + "/"));
+      const out = new Set<string>();
+      for (const f of hiddenFolders) {
+        for (const v of folderVariants(f)) {
+          let nv: string;
+          try { nv = normalizeSharedPath(v); } catch { continue; }
+          if (under(nv)) out.add(nv);
+        }
+      }
+      for (const b of blocked) if (under(b)) out.add(b);
+      return [...out].sort();
+    },
   };
+}
+
+// ── 셸 작업 폴더 판정(#4687) ─────────────────────────────────────────────────
+//  셸은 작업 폴더 아래를 통째로 본다 — 그래서 띄우는 순간 «폴더 자체 + 그 아래 전부» 를 판정한다(머리말 «이 잠금의 한계»).
+//  자리(root)별 규칙:
+//   · shared   — 판정한다.
+//   · personal — 판정하지 않는다. 멤버별로 갈린 폴더라 잠글 대상이 없다(terminal-files SHARED_ROOT_KEY 와 같은 판단).
+//   · 그 밖    — 거절한다. 자리 목록(terminal/catalog roots)에 새 자리가 생기면(예: #4689 apps) 그 자리의 규칙을 여기 정하기
+//                전까지 셸을 띄우지 않는다 — 모르는 자리를 조용히 통과시키지 않는다.
+const SESSION_SHARED_ROOT_KEY = "shared";
+const SESSION_UNGATED_ROOT_KEYS: ReadonlySet<string> = new Set(["personal"]);
+
+/**
+ * 이 작업 폴더로 셸을 띄우면 안 되는 까닭(순수) — 띄워도 되면 null.
+ *  - 폴더 자체가 안 보이면 404 — 존재를 숨긴다(탐색 라우트 assertBrowseVisible 과 같은 답).
+ *  - 폴더는 보이지만 그 아래에 못 보는 곳이 있으면 403 — 무엇이 어디 있는지는 말하지 않는다. 문구는 새로 열기 · 복원 ·
+ *    복제 · 위탁 어느 길에서 받아도 할 일이 같도록 «더 안쪽 폴더에서 새 세션» 으로 적는다.
+ */
+export function sessionCwdRefusal(gate: SharedFolderGate, rootKey: string, subpath: string): HttpError | null {
+  if (SESSION_UNGATED_ROOT_KEYS.has(rootKey)) return null;
+  if (rootKey !== SESSION_SHARED_ROOT_KEY) return new HttpError(400, "이 자리에서는 세션을 열 수 없습니다.");
+  if (!gate.ok(subpath)) return new HttpError(404, "경로를 찾을 수 없습니다");
+  if (!gate.subtreeOk(subpath)) return new HttpError(403, "이 폴더에서는 세션을 열 수 없습니다. 더 안쪽 폴더에서 새 세션을 여세요.");
+  return null;
+}
+
+/**
+ * 게이트웨이 능력 `assertSessionCwdVisible`(LivelyUser 를 받는다)의 본체 — 열람 신원(viewer)으로 판정한다.
+ *  세션 만들기(createSession)와 중앙 위탁 워커(spawnTaskSession)가 작업 폴더를 정한 뒤 · 폴더를 만들기 전에 부른다.
+ *  관리자도 우회하지 않는다(v2) — 긴급열람(effectiveViewer)만 sharedFolderGate 안에서 통과한다.
+ *  판정 불가(DB 장애)면 sharedFolderGate 가 던진다 → 셸을 안 띄운다(fail-closed, 위 게이트와 같은 자세).
+ *  거절은 남긴다(라우트의 wrap 은 4xx 를 안 남긴다) — «왜 세션이 안 열리나» 를 따라갈 수 있게. 숨은 이름은 남기지 않는다.
+ */
+export async function assertSessionCwdVisibleTo(viewer: Viewer, rootKey: string, subpath: string): Promise<void> {
+  const gate = rootKey === SESSION_SHARED_ROOT_KEY ? await sharedFolderGate(viewer) : ALLOW_ALL;   // 공유 자리만 DB 를 탄다
+  const refusal = sessionCwdRefusal(gate, rootKey, subpath);
+  if (!refusal) return;
+  logger.info({ viewer, rootKey, subpath, status: refusal.status }, "[#4687] 셸 작업 폴더 판정 — 거절");
+  throw refusal;
 }
 
 // ── 프로젝트 폴더의 '일부공개' 표시(배지 전용) ───────────────────────────────

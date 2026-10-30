@@ -12,6 +12,8 @@
 //  · 표에 없는 kind 는 'unsupported' — 저장은 정상이고 확인만 건너뛴다(모르는 것을 실패로 보이게 하지 않는다).
 //  · 진단 문구는 **다음 행동**까지 말한다("다시 만들 때 그 항목을 켜 주세요"). 증상만 말하면 사용자는 멈춘다.
 
+import { CODEX_AUTH_KIND, describeCodexAuth, parseCodexAuth } from "./codex-auth.js";
+
 export interface VerifyResult {
   /** true=상류가 이 토큰을 받아들였다. false=거부. null=확인 경로가 없는 kind(=건너뜀). */
   ok: boolean | null;
@@ -53,6 +55,8 @@ interface Verifier {
   /** 200 응답 → 표시할 계정 이름(없으면 null). */
   who: (body: unknown) => string | null;
   diagnose: (status: number, text: string) => string;
+  /** 200 이어도 사람이 알아야 할 것(예: Zotero 키에 노트 권한이 꺼짐) — 있으면 연결 문장 뒤에 붙는다. */
+  caveat?: (body: unknown) => string | null;
 }
 
 // 확장 지점 — kind 를 늘릴 땐 여기 한 줄. ⚠ 실제로 쳐 보고 넣어라(문서만 보고 넣으면 이 기능이 거짓말을 한다).
@@ -80,6 +84,37 @@ export function diagnoseClickup(status: number, text: string): string {
   if (status === 429) return "ClickUp 이 잠시 요청을 제한하고 있어요 — 잠깐 뒤 다시 시도해 주세요.";
   return `ClickUp 이 응답을 거부했어요(${status}). 토큰을 다시 확인해 주세요.`;
 }
+/** Zotero 응답 → 사람 말. 실측(2026-10-26): 틀린 키·지운 키는 /keys/current 가 403 «Forbidden» 이다(401 이 아니다). */
+export function diagnoseZotero(status: number, _text: string): string {
+  if (status === 403 || status === 401) {
+    return "키가 거부됐어요 — 지웠거나 앞뒤가 잘린 키입니다. zotero.org/settings/keys 에서 새 키를 만들어 다시 붙여넣어 주세요.";
+  }
+  if (status === 429) return "Zotero 가 잠시 요청을 제한하고 있어요 — 잠깐 뒤 다시 시도해 주세요.";
+  return `Zotero 가 응답을 거부했어요(${status}). 키를 다시 확인해 주세요.`;
+}
+/** 키 권한 중 수집에 빠지면 안 되는 것 — 노트 읽기(키를 만들 때 따로 켜는 칸이다). 개인 라이브러리가 열려 있을 때만 본다. */
+export function zoteroCaveat(body: unknown): string | null {
+  const a = ((body ?? {}) as { access?: { user?: { library?: unknown; notes?: unknown }; groups?: Record<string, unknown> } }).access ?? {};
+  const lib = !!a.user?.library;
+  const groups = Object.keys(a.groups ?? {}).length > 0;
+  if (!lib && !groups) return "다만 이 키로는 읽을 수 있는 라이브러리가 없어요 — 키를 만들 때 «Allow library access» 나 그룹 읽기 권한을 켜 주세요.";
+  if (lib && a.user?.notes !== true) return "다만 이 키에 «Allow notes access» 가 꺼져 있어 노트는 못 읽어요 — 노트도 모으려면 키 설정에서 켜 주세요.";
+  return null;
+}
+VERIFIERS.zotero_token = {
+  label: "Zotero",
+  url: "https://api.zotero.org/keys/current",   // 키의 주인·권한 — 읽기 전용·부작용 없음(zotero/dataserver Key::toJSON)
+  headers: (t) => ({ "Zotero-API-Key": t, "Zotero-API-Version": "3" }),
+  who: (b) => {
+    const o = (b ?? {}) as { username?: unknown; displayName?: unknown };
+    const name = typeof o.displayName === "string" && o.displayName ? o.displayName : null;
+    const user = typeof o.username === "string" && o.username ? o.username : null;
+    if (name && user && name !== user) return `${name} (${user})`;
+    return name ?? user;
+  },
+  diagnose: diagnoseZotero,
+  caveat: zoteroCaveat,
+};
 VERIFIERS.clickup_token = {
   label: "ClickUp",
   url: "https://api.clickup.com/api/v2/user",   // 토큰의 주인 — 읽기 전용·부작용 없음
@@ -94,8 +129,17 @@ VERIFIERS.clickup_token = {
   diagnose: diagnoseClickup,
 };
 
+/**
+ * 네트워크 없이 확인하는 종류(#4012 T2). codex 로그인 파일은 «어느 계정인지» 가 파일 안(토큰 페이로드)에 있고,
+ *  상류에 물어볼 공개 확인 경로가 없다 — 파일을 해석해 계정·만료를 말해 준다.
+ */
+const LOCAL_VERIFIERS: Record<string, (token: string) => VerifyResult> = {
+  [CODEX_AUTH_KIND]: (token) => describeCodexAuth(parseCodexAuth(token)),
+};
+
 export function verifierExists(kind: string): boolean {
-  return Object.prototype.hasOwnProperty.call(VERIFIERS, String(kind ?? "").toLowerCase());
+  const k = String(kind ?? "").toLowerCase();
+  return Object.prototype.hasOwnProperty.call(VERIFIERS, k) || Object.prototype.hasOwnProperty.call(LOCAL_VERIFIERS, k);
 }
 
 /**
@@ -103,6 +147,9 @@ export function verifierExists(kind: string): boolean {
  *  "우리가 못 물어본 것"을 "토큰이 틀린 것"으로 말하면 사용자가 멀쩡한 토큰을 지운다.
  */
 export async function verifyCredential(kind: string, token: string): Promise<VerifyResult> {
+  const local = Object.prototype.hasOwnProperty.call(LOCAL_VERIFIERS, String(kind ?? "").toLowerCase())
+    ? LOCAL_VERIFIERS[String(kind).toLowerCase()] : undefined;
+  if (local) return token ? local(token) : { ok: false, message: "저장된 토큰이 없어요." };
   const v = VERIFIERS[String(kind ?? "").toLowerCase()];
   if (!v) return { ok: null, message: "이 종류는 자동 확인을 지원하지 않아요 — 저장은 정상입니다." };
   if (!token) return { ok: false, message: "저장된 토큰이 없어요." };
@@ -119,5 +166,7 @@ export async function verifyCredential(kind: string, token: string): Promise<Ver
   }
   const body = await res.json().catch(() => null);
   const who = v.who(body);
-  return { ok: true, who, message: who ? `${who} 계정으로 연결됐어요.` : `${v.label} 에 연결됐어요.` };
+  const caveat = v.caveat?.(body) ?? null;
+  const base = who ? `${who} 계정으로 연결됐어요.` : `${v.label} 에 연결됐어요.`;
+  return { ok: true, who, message: caveat ? `${base} ${caveat}` : base };
 }

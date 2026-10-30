@@ -92,7 +92,9 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "③-i 멈춘 세션에 보내면 되살리기 경로로 간다");
   //  ⚠ 순서가 계약이다 — 되살리기 → **말 전달** → 라우팅. 옮겨 간 뒤에 보내면 이 컴포넌트는 destroy 된
   //   뒤라 실패해도 아무도 모른다. beforeRoute 훅이 그 순서를 강제한다.
-  ok(/if \(beforeRoute\) await beforeRoute\(nextId\);[\s\S]{0,200}?opts\.onResumed\(nextId\)/.test(chat),
+  //  #4996 — 같은 id 로 되살린 화면(stayIfSame)은 옮겨 가지 않는다 — 그때도 말 전달이 먼저고(beforeRoute(nextId, true)) 그 뒤엔 라우팅이 없다.
+  ok(/if \(beforeRoute\) await beforeRoute\(nextId, false\);[\s\S]{0,200}?opts\.onResumed\(nextId\)/.test(chat)
+    && /if \(hint\?\.stayIfSame && nextId === target\.id && !moved\) \{\s*\n\s*if \(beforeRoute\) await beforeRoute\(nextId, true\);\s*\n\s*return true;/.test(chat),
     "③-j 되살린 세션에 말을 넣는 일이 화면 이동보다 먼저다");
   ok(/rememberFirstPrompt\(newId, text\)/.test(chat) && /export function rememberFirstPrompt/.test(read("web/v2/quick-session.ts")),
     "③-k 방금 친 말이 옮겨 간 화면에서도 보이게 첫 지시로 등록된다");
@@ -130,7 +132,7 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   //   메타(has-session 확답)로 «중단됨» 을 받아 배너를 띄운다 — 사람이 보는 것은 그 배너 한 줄뿐이었다
   //   (대화도, 말 걸 입력창도, 이 화면의 안내 setNote 도 액자에 가린다).
   //  ⚠ 그러면서 **얼지는 않아야 한다**(2026-09-08 교훈) — 아래 세 줄이 그 균형을 지킨다.
-  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore\)/.test(chat),
+  ok(/function dropTermFrame\(/.test(chat) && /dropTermFrame\(!!m\.canRestore[,)]/.test(chat),   // #4783 — 둘째 인자(끝난 사실)가 붙었다
     "③-l ★ 프레임이 '박스 없음'을 알리면 액자를 걷는다(대화·입력창이 배너에 가리지 않게)");
   ok(/goneByFrame = true;[\s\S]{0,500}setMode\('chat'\)/.test(chat),
     "③-m 액자를 걷은 뒤 대화 화면으로 내려앉는다");
@@ -142,12 +144,15 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
     "③-p 사람이 터미널을 고르면 그 자리에서 걸쇠가 풀린다(수기 전환의 문은 늘 열려 있다)");
   ok(/termGoneN < 2 && mode === 'chat'/.test(chat),
     "③-q 자동 되돌리기는 한 번만 다시 시도한다 — blip 출구는 남기고 터미널↔대화 왕복은 막는다");
-  ok(/setMode\(chatHome\(\) \|\| target\.raw\?\.observed === false \? 'chat' : 'term'\)/.test(chat),
+  //  #3891 이 같은 줄에 «전달 못 한 글을 들고 왔으면 대화로» 를 한 항 더 붙였다 — 재는 것은 observed:false 항이 살아 있나다.
+  //  #4794 가 그 조건을 chatFirstView 로 꺼내고 «말을 보낸 직후(warmFirst — 대화창에 머물며 터미널을 숨겨 붙인다)» 를 더했다.
+  //   observed:false 는 여전히 «대화가 첫 화면» 조건 안에 있어야 한다.
+  ok(/const chatFirstView = chatHome\(\) \|\| target\.raw\?\.observed === false( \|\| draftBack)?;[\s\S]{0,600}setMode\(chatFirstView( \|\| warmFirst)? \? 'chat' : 'term'\)/.test(chat),
     "③-r 서버가 '관측 못 함'(#2544 observed:false)이라 한 세션은 터미널이 아니라 대화로 연다");
   // 액자 안에서 복원하면 **액자인 채로** 옮겨야 한다 — embed 를 빠뜨리면 레거시 터미널 크롬이 액자 안에 또 뜬다.
   {
     const term = read("web/standalone/terminal.ts");
-    const rs = term.slice(term.indexOf("async function restoreThisSession()"));
+    const rs = term.slice(term.indexOf("async function restoreThisSession("));
     ok(/location\.replace\([\s\S]{0,400}EMBED \? '&embed=1' : ''/.test(rs),
       "③-s 복원으로 옮겨 갈 때 embed=1 을 이고 간다(액자 안 레거시 상단바 이중 표시 방지)");
   }
@@ -212,7 +217,9 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
 {
   const chat = read("web/session-chat.ts");
   const i = chat.indexOf("async function resumeSession(");
-  const blk = chat.slice(i, i + 2200);   // #2231 로 이 함수에 이정표(movedTo) 처리가 들어와 길어졌다 — 창을 넓힌다
+  //  창은 **함수 본문**으로 자른다(#3891) — 종전 고정 2200자 창은 #2231(이정표)·#3891(끊김 재시도) 로 함수가 길어질
+  //   때마다 배선이 멀쩡한데 빨개졌다. 재는 것은 «이 함수 안에 둘 다 있나» 다.
+  const blk = chat.slice(i, chat.indexOf("\n  }\n", i));
   ok((blk.match(/rememberCreated\(/g) || []).length >= 2,
     "⑤복원·이어받기 둘 다 생성 응답을 created-cache 에 남긴다(새 id 로 옮긴 직후의 '세션을 찾을 수 없어요' 방지)");
 }
@@ -243,6 +250,152 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const blk = chat.slice(i, i + 1200);
   ok(blk.indexOf("movedHopAllowed()") > 0 && blk.indexOf("movedHopAllowed()") < blk.indexOf("이어진 세션으로 옮겼습니다"),
     "⑦-b 프레임발 자동 이동이 옮기기 **전에** 상한을 묻는다");
+}
+
+// ── ⑧ 살아 있는 세션을 «복원 가능» 으로 답하지 않는다 — 그리고 already 는 새로고침이 아니다 ────────
+//  실측 2026-09-09: admin 계정으로 **남의 살아있는 세션** 링크를 열면 화면이 '연결 준비 중…' 과 새로고침만
+//  반복했다. 원인은 판정이 두 자리에서 갈린 것 — 메타 라우트는 canAttach 실패(권한 없음)를 deadSessionMeta 로
+//  흘려 restorable 을 냈고(admin 은 소유자와 같은 축이라 kind:"ok"), 복원 라우트는 같은 tmux 를 보고
+//  already:true 를 냈으며, 화면은 그 답에 location.reload() 로 응답했다. 셋이 맞물려 무한 루프가 됐다.
+//  두 자리를 함께 잠근다: ⓐ 살아 있다는 확답이면 복원 신호를 만들지 않는다 ⓑ already 는 문서를 다시 받지 않는다.
+{
+  const src = read("src/terminal/routes.ts");
+  const i = src.indexOf('app.get("/api/ui/terminal/sessions/:id"');
+  const blk = src.slice(i, src.indexOf("app.get(", i + 10));
+  const attach = blk.indexOf("await canAttach(");
+  ok(i > 0 && attach > 0, "⑧-a0 메타 라우트와 그 안의 canAttach 게이트를 찾았다 — 못 찾으면 아래 가드가 공허하게 통과한다");
+  const after = blk.slice(attach);
+  ok(after.indexOf("deadSessionMeta(") === -1,
+    "⑧-a canAttach 실패 갈래는 복원 신호를 만들지 않는다 — 그 자리에 온 이유는 죽음이 아니라 권한이다. 살아 있는 세션에 복원을 약속하면 부팅 게이트가 복원으로 가고 already 가 돌아온다(무한 새로고침)");
+
+  const term = read("web/standalone/terminal.ts");
+  const rs = term.slice(term.indexOf("async function restoreThisSession("));
+  const alreadyAt = rs.indexOf("r.already");
+  ok(alreadyAt > 0, "⑧-b0 restoreThisSession 의 already 분기를 찾았다");
+  const already = rs.slice(alreadyAt, rs.indexOf("\n", alreadyAt));   // 그 한 줄만 — 거리 창은 다음 분기까지 새어 오판한다
+  ok(!/location\.reload\(/.test(already),
+    "⑧-b already 응답에 새로고침으로 답하지 않는다 — 같은 부팅 게이트로 돌아가 제자리를 돈다");
+  const alive = term.slice(term.indexOf("function resumeAlive()"));
+  const aliveBody = alive.slice(0, alive.indexOf("\n}"));   // 함수 본문만 — 거리 상한(길이에 취약)이 아니라 블록으로 자른다
+  ok(/resumeAlive\(\)/.test(already) && /connectNow\(\)/.test(aliveBody),
+    "⑧-c already 는 그 자리에서 재연결한다(살아 있다면 할 일은 붙는 것뿐 — 못 붙으면 WS 가 4403/4410 로 사유를 준다)");
+  ok(/sessionEnded = false/.test(aliveBody),
+    "⑧-d 재연결 전에 종료 확정 플래그를 되돌린다 — 안 되돌리면 connectNow 가 즉시 반환해 화면이 영원히 '이어서 여는 중…' 이다");
+}
+
+// ── ⑨ 4403(입장 거부) 재시도 상한이 실제로 찬다 — «열렸다» 는 허가의 반증이 아니다 ────────────
+//  실측 2026-09-09: 남의 세션을 열면 「연결 확인 중… (14회째)」 로 6초 간격 무한 재시도가 돌았다.
+//  서버는 조용히 끊지 않으려 handleUpgrade 로 핸드셰이크를 완료한 뒤 close(4403) 하므로(#835) 거부에서도
+//  onopen 이 뜨는데, onopen 이 denyRetries 를 0 으로 되돌리고 있어 MAX_DENY_RETRIES 가 영영 안 찼다.
+{
+  const term = read("web/standalone/terminal.ts");
+  const openAt = term.indexOf("sock.onopen = () => {");
+  ok(openAt > 0, "⑨-0 onopen 핸들러를 찾았다");
+  const openBody = term.slice(openAt, term.indexOf("\n  };", openAt));
+  ok(!/^\s*[^/\n]*denyRetries\s*=\s*0/m.test(openBody),
+    "⑨-a onopen 이 denyRetries 를 되돌리지 않는다 — 4403 은 open 뒤에 오므로 여기서 되돌리면 상한이 영영 안 찬다");
+  const msgAt = term.indexOf("sock.onmessage = (e) => {");
+  const msgBody = term.slice(msgAt, term.indexOf("\n  };", msgAt));
+  ok(/denyRetries = 0/.test(msgBody),
+    "⑨-b 대신 첫 수신 바이트에서 되돌린다 — 서버가 보낸 바이트만이 입장 허가의 증거다");
+}
+
+// ── ⑩ 복원이 **도중에 끊겨도** 보낸 말을 잃지 않고, 다시 불러도 같은 대화를 둘로 만들지 않는다 (#3891) ─────────
+//  실측(2026-09-11 08:45:00Z 매니지드, 상민님 신고): 회수된 세션 대화창에서 보냈는데 복원 요청이 롤 교대에 잘렸다 —
+//   게이트웨이 SIGTERM 15ms 뒤 새 세션(d78e541c)의 메타 relay 가 죽었다. 새 세션은 떠 있었고 옛 행은 이정표 없이
+//   남아 사이드바에 같은 세션이 두 줄 섰다. 화면은 실패를 삼키고(resumeSession 이 오류를 안 돌려줬다) 제자리 ·
+//   보낸 말은 한 번도 전송되지 않았다. 새 줄을 누르면 이미 Claude Code 가 떠 있었고, 그 순간 두 줄이 하나로 접히며
+//   대화창 쪽이 사라졌다(훅이 새 세션의 대화 id 를 보고해 목록이 접었다).
+//  배선 넷(화면) + 셋(서버) — 판정 값은 restore-retry.test.mjs · src/terminal/restore-adopt.test.ts 가 잰다.
+{
+  const chat = read("web/session-chat.ts");
+  const resume = chat.slice(chat.indexOf("async function resumeSession("));
+  const resumeBody = resume.slice(0, resume.indexOf("\n  }\n"));
+  // C1 — 복원 요청만 다시 묻는다. 이어보기(v6 resume)는 멱등이 아니라(부를 때마다 «이어보기» 세션이 선다) 안 건다.
+  const wr = resumeBody.indexOf("withRetry(");
+  ok(wr > 0 && /\/restore`/.test(resumeBody.slice(wr, resumeBody.indexOf(");", resumeBody.indexOf("/restore`", wr)) + 2)),
+    "⑩-C1a ★ 복원 요청(/restore)은 끊김 재시도(withRetry)를 거친다 — 롤 교대에 잘린 요청을 제자리에서 다시 묻는다");
+  const v6 = resumeBody.split("\n").filter((l) => l.includes("/api/ui/v6/sessions/") && l.includes("/resume?node="));
+  ok(v6.length === 1 && !/withRetry/.test(v6[0]),
+    "⑩-C1b 이어보기(v6 …/resume)는 다시 묻지 않는다 — 응답만 잃었으면 세션이 하나 더 선다");
+  // C2 — 옮겨 갔는지를 돌려주고, 말로 되살리던 쪽이 실패를 제자리에서 마감한다(입력칸에 글 돌려주기).
+  ok(/async function resumeSession\([^\n]*\): Promise<boolean> \{/.test(chat)
+    && /opts\.onResumed\(nextId\);\s*\n\s*else location\.hash = [^\n]*\n\s*return true;/.test(resumeBody)
+    && /btn\.textContent = orig \|\| '이어서 대화하기'; \}\s*\n\s*return false;/.test(resumeBody),
+    "⑩-C2a resumeSession 이 옮겨 갔나(true/false)를 돌려준다 — 종전엔 실패를 삼켜 부른 쪽이 몰랐다");
+  const revive = chat.slice(chat.indexOf("async function reviveWithPrompt("), chat.indexOf("async function resumeSession("));
+  ok(/routed = await resumeSession\(/.test(revive) && /if \(routed \|\| destroyed\) return;/.test(revive)
+    && /view\.input\.value = text;/.test(revive.slice(revive.indexOf("if (routed || destroyed) return;"))),
+    "⑩-C2b ★ 끝내 못 열면 말풍선을 마감하고 친 글을 입력칸에 돌려준다(«이어서 여는 중…» 에 멈추지 않는다)");
+  // C3 — 복원은 됐는데 말 전달만 실패해도 옮겨 간다. 그 글은 옮겨 간 화면의 입력칸으로.
+  //  훅 본문은 **resumeSession 호출이 끝나는 자리**(finally)까지로 자른다 — 첫 `});` 로 자르면 api 호출 줄에서 끊겨
+  //   catch 안의 throw 를 못 본다(뮤테이션으로 확인한 공허).
+  const hook = revive.slice(revive.indexOf("async (newId, stay) =>"), revive.indexOf("} finally { reviving = false; }"));
+  ok(/try \{\s*\n\s*(?:const r = )?await api\(`\/api\/ui\/terminal\/sessions\/\$\{encodeURIComponent\(newId\)\}\/prompt`/.test(hook)
+    && /takeFirstPrompt\(newId\);/.test(hook) && /rememberUnsentDraft\(newId, text\);/.test(hook) && hook.length > 0 && !/\bthrow\b/.test(hook),
+    "⑩-C3a ★ 말 전달 실패가 라우팅을 막지 않는다 — 제자리에 남으면 두 줄·갇힘이 그대로다(글은 새 화면 입력칸으로)");
+  ok(/draft: takeUnsentDraft\(s\.id\)/.test(read("web/v2/views.ts")) && /if \(opts\.draft && !view\.input\.value\) \{\s*\n\s*view\.input\.value = opts\.draft;/.test(chat),
+    "⑩-C3b 옮겨 간 화면이 못 간 글을 입력칸에 되돌려 둔다(보낸 척 그리지 않는다)");
+  //  #4794 — 두 줄 사이에 «대화가 첫 화면인 조건(chatFirstView)» 이 끼었다. 재는 것은 그대로: 못 간 글을 들고 왔으면 대화가 첫 화면이다.
+  ok(/const draftBack = !!opts\.draft && view\.input\.value === opts\.draft;\s*\n\s*if \(draftBack\) modeChosen = true;[\s\S]{0,600}const chatFirstView = [^\n]*\|\| draftBack;[\s\S]{0,400}setMode\(chatFirstView[^\n]*\? 'chat' : 'term'\);/.test(chat),
+    "⑩-C3c ★ 그 글이 **보이는** 대화로 연다 — 터미널이 첫 화면이면 입력칸이 숨어 «입력칸에 넣어 두었어요» 가 거짓말이 된다");
+  // C4 — 되살리는 중 또 보내면 복원을 하나 더 띄우지 않는다.
+  const guardAt = revive.indexOf("if (reviving) {");
+  ok(guardAt > 0 && guardAt < revive.indexOf("addPending(text)") && /reviving = true;/.test(revive) && /finally \{ reviving = false; \}/.test(revive),
+    "⑩-C4 되살리는 중의 재전송은 두 번째 복원을 띄우지 않는다(친 글은 입력칸으로)");
+}
+{
+  const src = read("src/terminal/routes.ts");
+  const i = src.indexOf('app.post("/api/ui/terminal/sessions/:id/restore"');
+  assert.ok(i > 0, "복원 라우트를 찾지 못했습니다");
+  //  라우트 끝은 `})));` 다(restoreSerial.wrap 이 한 겹 더 감쌌다) — 못 찾으면 다음 라우트까지 새어 오판하므로 멈춘다.
+  const end = src.indexOf("\n  })));", i);
+  assert.ok(end > i, "복원 라우트의 끝(restoreSerial.wrap 로 감싼 `})));`)을 찾지 못했습니다");
+  const blk = src.slice(i, end);
+  // S4 — 같은 세션의 복원은 한 줄로 돈다. 뒤 요청은 **줄 안에서** 행을 다시 읽는다(줄 밖에서 읽으면 낡은 판정으로 만든다).
+  const head = src.slice(i, src.indexOf("\n", i));
+  ok(/wrap\(restoreSerial\.wrap\(\(req: express\.Request\) => `\$\{currentTenant\(\)\?\.id \?\? ""\}\|\$\{req\.params\.id\}`, async \(req: express\.Request, res: express\.Response\) => \{/.test(head)
+    && blk.indexOf("const st = await getSessionState(id);") > 0,
+    "⑩-S4 ★ 같은 세션(테넌트·id)의 복원 요청은 한 줄로 서고, 줄 안에서 행을 읽는다 — 동시에 두 번 불려도 둘 다 «아무도 안 만들었다» 를 보지 않는다");
+  ok(/const restoreSerial = createKeyedSerializer\(\);/.test(src), "⑩-S4b 줄은 모듈에 하나다(요청마다 새로 만들면 아무것도 안 막는다)");
+  // S5 — 후보를 못 물었으면 «없다» 가 아니라 «모른다»(만들지 않는다).
+  //  #3870 — 그 409 를 만드는 자리가 stateUnknownRestore 헬퍼로 모였다(«모름» 409 셋이 같은 문구·같은
+  //   canForce 를 내야 해서 — 화면이 어디서든 [강제로 되살리기] 를 그릴 수 있게). 계약은 그대로다.
+  ok(/conversationPeers\(id, mappedId, st\.owner\)\.catch\(\(\) => null\);\s*\n\s*if \(peers === null && !force\) \{\s*\n\s*throw stateUnknownRestore\(/.test(blk),
+    "⑩-S5 같은 대화 후보 조회가 실패하면 새로 만들지 않고 409(force 면 사람이 고른 대로)");
+  // S1 — 박스 복원: 옛 id 생존(already) 판정 뒤, createSession 앞에서 «이미 이 대화를 도는 세션» 을 묻는다.
+  const oldAlive = blk.indexOf("await sessionGoneVerdict(id)");
+  const adopt = blk.indexOf("adoptVerdict(");
+  const create = blk.indexOf("await createSession(owner");
+  ok(oldAlive > 0 && adopt > oldAlive && create > adopt,
+    "⑩-S1a ★ 박스 복원이 새로 만들기 **전에** 같은 대화를 도는 산 세션을 찾는다(옛 id 생존 판정 뒤)", `oldAlive=${oldAlive} adopt=${adopt} create=${create}`);
+  const adoptBlk = blk.slice(adopt, create);
+  ok(/conversationPeers\(id, mappedId, st\.owner\)/.test(blk.slice(0, adopt)) && /sessionGoneVerdict\(p\.id\)/.test(blk.slice(0, adopt)),
+    "⑩-S1b 후보는 같은 주인·같은 대화 행이고, 생사는 확답(has-session)으로 묻는다");
+  //  #3870 — 여기 409 도 stateUnknownRestore 헬퍼가 만든다(위 S5 와 같은 이유).
+  ok(/adopt\.kind === "unknown"[\s\S]{0,80}throw stateUnknownRestore\(/.test(adoptBlk) && /settleInterruptedRestore\(id, st, adopt\.id/.test(adoptBlk)
+    && /movedTo: adopt\.id/.test(adoptBlk),
+    "⑩-S1c 모르면 만들지 않고(409), 이으면 뒷정리를 채우고 이정표 갈래와 같은 모양(movedTo)으로 답한다");
+  // S3 — 복원이 새 세션에 이 대화를 태어날 때부터 싣는다.
+  ok(/carryConv: \{ convId: mappedId, transcriptPath: st\.transcript_path \?\? null \}/.test(blk.slice(create)),
+    "⑩-S3 복원이 createSession 에 이어받는 대화를 넘긴다(끊겨도 그 세션이 대화로 찾아지게)");
+  const settle = src.slice(src.indexOf("async function settleInterruptedRestore("));
+  const settleBody = settle.slice(0, settle.indexOf("\n}\n"));
+  ok(/recordSessionTenant\(newId\)\.catch/.test(settleBody) && !/killSession/.test(settleBody) && /markSessionSuperseded\(oldId, newId\)/.test(settleBody)
+    && /carryOutbox\(oldId, newId\)/.test(settleBody),
+    "⑩-S1d 이어 붙인 세션의 뒷정리는 세션을 죽이지 않는다(사람이 이미 쓰고 있을 수 있다) · 이정표와 대기 지시를 옮긴다");
+}
+{
+  const src = read("src/terminal/sessions.ts");
+  // S2 — desired 행이 서는 두 자리 모두에서 곧바로 대화를 적는다. 노드에선 안 한다(DB 가 없다).
+  ok(/if \(mirrored\) await carryConvNow\(\);/.test(src) && /if \(upserted\) await carryConvNow\(\);/.test(src),
+    "⑩-S2a ★ desired 행이 선 **그 자리**(새 경로 · 옛 경로)에서 이어받는 대화를 적는다");
+  const fn = src.slice(src.indexOf("const carryConvNow = async"));
+  ok(/onNode\(\)/.test(fn.slice(0, fn.indexOf("};"))) && /setClaudeSessionId\(id, c\.convId, ownerId\(user\)/.test(fn.slice(0, fn.indexOf("};"))),
+    "⑩-S2b 대화 선기록은 게이트웨이에서만, 그 세션 주인 이름으로 적는다");
+  const inside = src.indexOf("if (mirrored) await carryConvNow();");
+  const ensure = src.indexOf("await ensureSessionContainerViaRelay(");
+  ok(inside > 0 && ensure > inside, "⑩-S2c 새 경로는 컨테이너·판을 띄우기 **전에** 적는다(그 뒤에서 끊겨도 찾아진다)");
 }
 
 console.log(`\n${pass}건 통과`);

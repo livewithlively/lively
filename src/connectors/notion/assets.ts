@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { notionFetch, paginate, PAGE_SIZE, sleep } from "./client.js";
 import type { Rec } from "./client.js";
 import type { NotionRunStats, Traversal } from "./state.js";
+import { AssetSkip, assetMaxBytes, diskRoom, writeSkipMarker, type StatFs } from "../asset-limits.js";
 
 // ── 자산(asset) 다운로드 ──────────────────────────────────────────────────────
 //  ⚠ 화면·로그에 내보내는 말은 **'첨부 파일'** 이다(#859) — '자산'은 관리탭에서 스킬·서브에이전트·커맨드를
@@ -88,7 +89,10 @@ const ASSET_ATTEMPT_CAP_MS = 60 * 60_000;
  *  무출력 정체 킬(15분)에 멀쩡한 run 이 끊기지 않는다(state.ts progressTick).
  * @returns 응답 상태 — 2xx 가 아니면 본문을 버리고 상태만 돌려준다(재발급 판단은 호출부).
  */
-async function saveBody(url: string, dest: string, idleMs: number, stats: Pick<NotionRunStats, "assetBytes">): Promise<number> {
+/** #5012 받기 한도 — 파일당 상한과 디스크 하한. */
+export interface AssetLimits { maxBytes: number; statfs?: StatFs }
+
+async function saveBody(url: string, dest: string, idleMs: number, stats: Pick<NotionRunStats, "assetBytes">, limits: AssetLimits): Promise<number> {
   const ac = new AbortController();
   let idle: NodeJS.Timeout | undefined;
   const arm = (): void => {
@@ -102,10 +106,21 @@ async function saveBody(url: string, dest: string, idleMs: number, stats: Pick<N
     const res = await fetch(url, { signal: ac.signal });
     if (!res.ok) { await res.body?.cancel().catch(() => {}); return res.status; }
     if (!res.body) throw new Error("빈 응답");
+    // #5012 — 크기를 알면 받기 전에 거른다(상한 · 디스크 하한). 모르면 받는 도중 상한을 넘는 순간 끊는다.
+    const len = Number(res.headers.get("content-length") ?? NaN);
+    if (Number.isFinite(len) && len > limits.maxBytes) { await res.body.cancel().catch(() => {}); throw new AssetSkip("too_large", len, limits.maxBytes); }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
+    if (!diskRoom(path.dirname(dest), Number.isFinite(len) ? len : 0, limits.statfs).ok) {
+      await res.body.cancel().catch(() => {});
+      throw new AssetSkip("disk_floor", Number.isFinite(len) ? len : null, limits.maxBytes);
+    }
     let got = 0;
     const count = new Transform({
-      transform(chunk: Uint8Array, _enc, cb) { arm(); got += chunk.length; stats.assetBytes += chunk.length; cb(null, chunk); },
+      transform(chunk: Uint8Array, _enc, cb) {
+        arm(); got += chunk.length; stats.assetBytes += chunk.length;
+        if (got > limits.maxBytes) { ac.abort(new AssetSkip("too_large", null, limits.maxBytes)); cb(); return; }
+        cb(null, chunk);
+      },
     });
     await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), count, fs.createWriteStream(tmp), { signal: ac.signal });
     if (!got) throw new Error("빈 응답");
@@ -121,7 +136,8 @@ async function saveBody(url: string, dest: string, idleMs: number, stats: Pick<N
   }
 }
 
-export async function downloadAsset(t: Traversal, job: AssetJob, dir: string, opts: { idleMs?: number } = {}): Promise<void> {
+export async function downloadAsset(t: Traversal, job: AssetJob, dir: string, opts: { idleMs?: number; maxBytes?: number; statfs?: StatFs } = {}): Promise<void> {
+  const limits: AssetLimits = { maxBytes: opts.maxBytes ?? assetMaxBytes(undefined), statfs: opts.statfs };
   const dest = path.join(dir, job.file);
   let url = job.url;
   // 선제 재발급 — 만료시각(expiry_time)이 지났으면 죽은 요청을 시도조차 하지 않는다(대형 워크스페이스 기본 경로).
@@ -131,7 +147,7 @@ export async function downloadAsset(t: Traversal, job: AssetJob, dir: string, op
   let refreshed = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const status = await saveBody(url, dest, opts.idleMs ?? ASSET_IDLE_MS, t.stats);
+      const status = await saveBody(url, dest, opts.idleMs ?? ASSET_IDLE_MS, t.stats, limits);
       if (status >= 200 && status < 300) return;
       // 403/400 = 서명 만료(수집~다운로드 사이 1h 초과) — 소유 객체 재조회로 새 URL 발급 후 재시도.
       if ((status === 403 || status === 400) && !refreshed) {
@@ -141,6 +157,11 @@ export async function downloadAsset(t: Traversal, job: AssetJob, dir: string, op
       }
       throw new Error(`HTTP ${status}`);
     } catch (err) {
+      // #5012 상한·하한은 재시도할 실패가 아니다 — 크기 상한이면 «일부러 안 받음» 표시를 남겨 다음 실행이 다시 긁지 않게 한다.
+      if (err instanceof AssetSkip) {
+        writeSkipMarker(dir, job.file, err, job.pageId ? `https://www.notion.so/${job.pageId.replace(/-/g, "")}` : null);
+        throw err;
+      }
       if (attempt === 2) throw err;
       await sleep(500 * (attempt + 1));
     }

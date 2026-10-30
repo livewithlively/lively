@@ -16,7 +16,9 @@ import {
 import { authNodeTokenDetailed, getNode, touchNode, appendNodeLinkEvent, type OrgNode } from "./store.js";
 import { denialMessage, denialKey, shouldLogDenial, type NodeAuthOutcome } from "./auth-denial.js";   // #2161
 import { loadNodeStates, saveNodeState, sessionsDigest, shouldPersist } from "./node-state-store.js";
-import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, selfNodeMessage, SELF_NODE_REASON } from "./self-node.js";
+import { beatRefreshes } from "./state-freshness.js";   // #2600 T2 d6 — 박동은 스냅샷이 있을 때만 나이를 되돌린다
+import { sharesGatewayTmux, hasSelfProbeCandidate, shouldMarkSelfNode, declaredSessionHost, nodeSnapshotSessions, nodeSnapshotVerdict, sessionHostVerdict, hostOwnedSnapshot, remoteNodeCoordinate, sessionHostTarget, selfNodeMessage, SELF_NODE_REASON, type SessionHostTargetWhy } from "./self-node.js";
+import { makeTmuxCallCensus, censusSite } from "../terminal/tmux-call-census.js";   // #2600 T2 d6 — 판정 계수(같은 세 칸: 슬러그·축·호출부)
 import { selfNodePossible } from "../exec-topology.js";   // #2599 T2 — 「이 판정이 성립하는 배포인가」의 선결 조건
 import { currentTenant, withTenant, type TenantContext } from "../org/tenant-context.js";
 import { scopeKey, nodeUpgradeTenant } from "./registry-scope.js";
@@ -139,6 +141,51 @@ export function liveNodes(): NodePublic[] {
 export function nodeOnline(id: string): boolean { return conns.has(keyOf(id)); }
 
 /**
+ * 이 테넌트의 노드들을 «게이트웨이가 세션 목록의 소유를 놓아도 되나» 의 입력 모양으로 (#2600 T2 d4).
+ *  판정 자체는 순수 술어 `self-node.gatewayDefersToSessionHost` 가 한다 — 여기는 **재료만** 모은다.
+ *
+ * ⚠ 선언은 **상태 스냅샷**에서 읽는다(연결이 아니라). `NodeState.sessionHost` 머리말의 그 이유와 같다 —
+ *  연결에서 읽으면 부팅 직후처럼 연결이 없는 순간에 선언이 안 보인다. 그리고 스냅샷이 아직 없는 노드는
+ *  이 목록에 **안 들어간다** = 그 노드로는 소유를 놓지 않는다(fail-closed).
+ */
+export function sessionHostsInScope(now: number = Date.now()): Array<{ declared: boolean; online: boolean; stateAgeMs: number | null }> {
+  return scopeNodeFacts(now).map(({ declared, online, stateAgeMs }) => ({ declared, online, stateAgeMs }));
+}
+
+/**
+ * 이 스코프 노드들의 판정 재료 한 벌 — 선언·온라인·스냅샷 나이·세션 (#3892 리뷰).
+ *  `sessionHostsInScope`·`nodeSessionsInScope`·`sessionHostSnapshotSessions` 가 같은 루프를 각자 들고 있었다 — 재료에 칸이
+ *  늘면(`nodeSnapshotVerdict` 가 볼 값) 사본 중 하나만 고쳐지는 모양이 된다(#789 가 알림 스윕 사본 하나만 고쳐 겪은 그것). 여기 한 곳만 고친다.
+ */
+function scopeNodeFacts(now: number): Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> {
+  const out: Array<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly SessionInfo[] }> = [];
+  for (const [id, st] of inScope(states)) {
+    out.push({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(keyOf(id)), stateAgeMs: now - st.ts, sessions: st.sessions });
+  }
+  return out;
+}
+
+/**
+ * 이 노드의 세션 호스트 **선언을 메모리에서 내린다** — 브로커가 «내렸다» 고 알려 올 때. (#2600 T2 d5-b)
+ *
+ * ★ DB(`org_node.session_host`)만 내리면 부족하다. 목록 소유 판정이 읽는 것은 **상태 스냅샷**이고
+ *  (`sessionHostsInScope` → `st.sessionHost`), 그 값은 이 프로세스 메모리에 산다. 거기를 안 내리면
+ *  게이트웨이가 재시작할 때까지 그 행이 계속 «선언» 으로 남아 `every()` 를 깨뜨린다 — 고치려던 그
+ *  증상이 그대로다.
+ *
+ * ⚠ 스냅샷 자체는 **지우지 않는다.** 세션 목록은 다른 자리(`nodeSnapshotSessions`)도 쓰고, 그 노드가
+ *  아직 무언가를 들고 있을 수 있다. 여기서 내리는 것은 «주인 노릇» 한 가지뿐이다.
+ *
+ * @returns 실제로 내렸나(이미 선언이 아니거나 스냅샷이 없으면 false — 멱등)
+ */
+export function undeclareSessionHostState(nodeId: string, t?: TenantContext | null): boolean {
+  const k = keyOf(nodeId, t);
+  const st = states.get(k);
+  if (!st || !st.sessionHost) return false;
+  states.set(k, { ...st, sessionHost: false });
+  return true;
+}
+
 /**
  * 이 노드 **하나**가 선언된 세션 호스트인가 — 좌표 접기(`self-node.sameTmuxCoordinate`)가 쓰는 재료 (#3745).
  *
@@ -155,6 +202,236 @@ export function isSessionHostNode(nodeId: string): boolean {
   const id = String(nodeId ?? "").trim();
   if (!id) return false;
   return declaredSessionHost({ session_host: states.get(keyOf(id))?.sessionHost });
+}
+
+/** 신선 임계 — 목록 소유 판정도 attach 정책과 **같은 자**를 쓴다(둘이 갈리면 «붙을 수는 있는데 목록엔 없다»가 난다). */
+export const NODE_STATE_STALE_MS = STATE_STALE_MS;
+/** RPC 한 번의 상한(`nodeRpc`) — 아웃박스 한 행이 sending 에 머무는 상한의 합(`sessions/outbox-exec.test` E15)이 이 값을 센다. */
+export const NODE_RPC_TIMEOUT_MS = RPC_TIMEOUT_MS;
+
+/**
+ * 판정 계수 창 — 이 값마다 «어느 테넌트에서, 어떤 사유로, 어느 호출부가» 물었는지 표로 낸다 (#2600 T2 d6).
+ *  ⚠ 이 계수기는 tmux 호출용으로 만들었지만 세는 모양이 `(슬러그, 축, 호출부)` 라 그대로 쓴다 —
+ *   여기서 «축» 은 동사가 아니라 **판정 사유**(`sessionHostVerdict.why`)다.
+ */
+const DEFERS_CENSUS_EVERY = 200;
+const defersCensus = makeTmuxCallCensus(DEFERS_CENSUS_EVERY);
+
+/**
+ * **이 자리에서 게이트웨이가 세션 목록 소유를 놓나** — 스코프 수집 + 판정을 한 번에 (#2600 T2 d6).
+ *
+ * ── 왜 함수로 모았나 ─────────────────────────────────────────────────────────
+ * `gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS)` 라는 **똑같은 한 줄이 세 곳**에
+ *  있었다(목록 라우트·프로젝트 라우트·알림 스윕). 세 벌이면 하나만 고쳐지고 나머지가 남는다 — 이 프로젝트가
+ *  이미 그 사고를 한 번 겪었다(#789 가 알림 스윕의 한 사본만 고쳤다).
+ *
+ * ── 그리고 계기가 필요하다 ──────────────────────────────────────────────────
+ * 실측(2026-09-08): 같은 술어가 **알림 스윕에서는 참**(그 자리 tmux 호출 0)인데 **목록 라우트에서는 거짓**이라
+ *  `list-sessions` 를 5~8/분 쳤다. 불리언만으로는 이유를 못 묻는다. 여기서 사유(`why`)와 **호출부**(스택)를
+ *  함께 세면 그 어긋남이 로그에 그대로 나온다 — 「호출부 칸」이 tmux 계수에서 한 일과 같은 방식이다.
+ *  계수가 실패해도 판정은 그대로 간다(비치명).
+ */
+export function gatewayDefersHere(now: number = Date.now()): boolean {
+  const v = sessionHostVerdict(sessionHostsInScope(now), STATE_STALE_MS);
+  recordDefers(v.why);
+  return v.owns;
+}
+
+/** 판정 계수 한 칸 — 소유 판정을 묻는 자리는 전부 여기로 센다(호출부는 스택에서 뽑는다). 비치명. */
+function recordDefers(why: string): void {
+  try {
+    const rows = defersCensus.record(currentTenant()?.slug, why, censusSite(new Error().stack));
+    if (rows) logger.info({ defersCensus: { window: DEFERS_CENSUS_EVERY, rows } }, "세션 호스트 소유 판정 계수(창)");
+  } catch { /* 계수 때문에 판정이 흔들리면 안 된다 */ }
+}
+
+/**
+ * 이 테넌트의 **중앙(박스) 세션** — 소유가 넘어갔으면 선언된 세션 호스트 스냅샷의 합, 아니면 null (#2600 T2 d6).
+ *  판정·합·«비면 모름» 규율은 순수 함수 `self-node.hostOwnedSnapshot` 이 하고, 여기는 **재료만** 모은다.
+ *
+ * ⚠ 판정과 합이 **같은 순간의 같은 재료**를 보게 한 번에 모은다(동기 — 그 사이에 스냅샷이 바뀔 틈이 없다).
+ * ⚠ 사유는 소유 판정 계수에 같이 센다 — 소비자가 계속 tmux 를 친다면 «왜 못 넘겼나» 가 거기 나온다
+ *  (`empty` = 판정은 ok 인데 호스트들이 본 세션이 0 — 모름으로 접었다).
+ */
+export function hostOwnedCentralSessions(now: number = Date.now()): SessionInfo[] | null {
+  //  재료는 `scopeNodeFacts` 한 벌이다(#3892 리뷰 — 루프 사본이 늘면 칸이 늘 때 하나만 고쳐진다).
+  const r = hostOwnedSnapshot(scopeNodeFacts(now), STATE_STALE_MS);
+  recordDefers(r.why);
+  return r.rows;
+}
+
+/**
+ * **중앙(박스) 세션 목록**의 출처 한 곳 — 소유가 넘어갔으면 세션 호스트 스냅샷, 아니면 게이트웨이 tmux (#2600 T2 d6).
+ *
+ * ── 왜 한 곳인가 ─────────────────────────────────────────────────────────────
+ * «지금 중앙 tmux 에 무엇이 있나» 를 묻는 자리가 이름만 다르게 여럿이다 — 자기노드 판정(`probeSelfNodes`)·
+ *  관리자 세션 뷰(CP idle 이 60초마다)·desired 백필. 셋이 각자 `listSessionsRaw()` 를 부르면 d4 가 목록 라우트와
+ *  알림 스윕을 옮긴 뒤에도 그 테넌트에 분당 ~50번 tmux 가 남는다(2026-09-11 계수 실측). 출처를 여기 하나로 두면
+ *  «소유가 넘어간 테넌트에서 게이트웨이는 tmux 를 안 묻는다» 가 그 셋에 한 번에 선다(가드 S14).
+ *
+ * ⚠ 행은 호스트가 **같은 함수**(`listSessionsRaw({strict})`)로 만든 것 그대로다 — 필드가 같다.
+ * ⚠ `strict` 는 종전 경로로 떨어질 때만 뜻이 있다. 호스트 스냅샷은 애초에 strict 관측만 올라온다(가드 S11).
+ */
+export async function listCentralSessions(opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  const owned = hostOwnedCentralSessions();
+  if (owned) return owned;
+  const { listSessionsRaw } = await import("../terminal/sessions.js");
+  return listSessionsRaw(opts);
+}
+
+/**
+ * 이 세션 호스트가 **지금 본** 세션 id — 그 노드 하나의 관측 (#2600 T2 d6, 세션 장부의 `live`).
+ *  null = 이 스코프에 그 id 의 선언된 호스트가 없거나 · 끊겼거나 · 스냅샷이 없거나 낡았다(호출부는 종전 tmux).
+ *  자격 판정은 목록 소유·알림 스윕과 **같은 술어**(`nodeSnapshotVerdict`, 선언 필수)다 — 자를 다시 쓰지 않는다.
+ */
+export function sessionHostLiveIds(nodeId: string, now: number = Date.now()): string[] | null {
+  const k = keyOf(nodeId);
+  const st = states.get(k);
+  if (!st) return null;
+  const v = nodeSnapshotVerdict({ declared: declaredSessionHost({ session_host: st.sessionHost }), online: conns.has(k), stateAgeMs: now - st.ts }, STATE_STALE_MS, true);
+  return v.take ? st.sessions.map((s) => s.id) : null;
+}
+
+/**
+ * 이 세션의 일을 맡을 **세션 호스트** — 호스트 id, 아니면 null(호출부는 종전 게이트웨이 경로) (#2600 T2 d6).
+ *  판정은 순수 함수 `self-node.sessionHostTarget` 이 하고, 여기는 재료(스냅샷 좌표·선언·자격 관측·op 지원)만 모은다.
+ *  사유는 소유 판정 계수에 `session:<사유>` 로 센다 — 맡기지 못하는 이유가 프로덕션 로그에 그대로 나온다.
+ *  ⚠ 방금 만든 세션의 보고가 스냅샷보다 빠르면 `session:absent` 가 아니라 **`session:no-coordinate`** 로 센다(#3773 재검증) —
+ *   좌표(`nodeOfSession`)와 관측(`sessionHostLiveIds`)이 같은 스냅샷 항목을 동기로 읽으므로 스냅샷에 없는 세션은 좌표부터 없다.
+ *   그래서 그 창은 자가호스팅의 모든 세션(좌표 없음)과 같은 사유로 보인다 — 가르려면 `gatewayDefersHere()` 를 함께 본다.
+ */
+export function sessionHostFor(sessionId: string, op: NodeOp, now: number = Date.now()): string | null {
+  return sessionHostTargetFor(sessionId, op, now).host;
+}
+
+/**
+ * `sessionHostFor` 의 형제 — 호스트와 **맡기지 못한 사유**를 함께 돌려준다 (#2600 T2 d6 · #3773).
+ *  사유로 갈라야 하는 호출부가 쓴다: 아웃박스는 `no-coordinate` ∧ 소유가 넘어간 테넌트면 새 세션의 좌표를 잠깐 기다린다(`sessions/outbox-exec`).
+ *  판정·계수는 **이 한 곳**이다 — 두 함수가 각자 판정하면 같은 물음이 두 벌이 되고 계수도 두 번 센다.
+ */
+export function sessionHostTargetFor(sessionId: string, op: NodeOp, now: number = Date.now()): { host: string | null; why: SessionHostTargetWhy } {
+  const r = sessionHostTarget({
+    sessionId,
+    nodeId: nodeOfSession(sessionId),
+    isSessionHost: isSessionHostNode,
+    liveIds: (id) => sessionHostLiveIds(id, now),
+    supports: (id) => nodeSupports(id, op),
+  });
+  recordDefers(`session:${r.why}`);
+  return r;
+}
+
+/**
+ * 이 세션이 **정말 다른 기계의 것인가** — 노드 id 면 그 기계, null 이면 이 게이트웨이의 세션 (#2600 T2 d6).
+ *  판정은 순수 함수 `self-node.remoteNodeCoordinate` 가 하고, 여기는 재료(스냅샷 좌표·선언·중앙 세션)만 모은다.
+ *  대화창(`chat-routes`)과 대화 파일 감시자(`transcript-watch`)가 **같은 이 함수**를 부른다 — 두 벌이면 한쪽만 고쳐진다.
+ * @param gone 게이트웨이 tmux 의 «그 세션 없음» 확답(소유가 안 넘어간 테넌트에서만 불린다 — 시험 seam 이 이걸 바꿔 끼운다)
+ */
+export async function remoteNodeOfSession(sessionId: string, gone: (id: string) => Promise<boolean>): Promise<string | null> {
+  const nodeId = nodeOfSession(sessionId);
+  if (!nodeId) return null;   // 좌표가 없다 — 중앙 세션 집합을 모을 이유도 없다(계수도 안 센다)
+  const owned = isSessionHostNode(nodeId) ? null : hostOwnedCentralSessions();
+  return remoteNodeCoordinate({
+    sessionId, nodeId, isSessionHost: isSessionHostNode,
+    centralIds: owned ? new Set(owned.map((s) => s.id)) : null,
+    gone,
+  });
+}
+
+/**
+ * 이 테넌트의 노드들이 올린 세션 스냅샷 전량 — **가시성 필터 없이** (#2600 T2 d4).
+ *  판정(무엇을 넣나)은 순수 술어 `self-node.nodeSnapshotSessions` 가 하고, 여기는 **재료만** 모은다.
+ *
+ * ⚠ 「모든 주인」을 봐야 하는 자리 전용이다(「답 기다림」 알림 스윕처럼) — 사람에게 보여 줄 목록에는
+ *  쓰지 마라. 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다.
+ */
+export function nodeSessionsInScope(now: number = Date.now()): SessionInfo[] {
+  const nodes = scopeNodeFacts(now);
+  //  ★ 사유별 **세션 수**를 센다(아래 머리말) — 비치명이라 실패해도 목록은 그대로 나간다.
+  try { recordSnapshotCensus(nodes, STATE_STALE_MS); } catch { /* 계수 때문에 목록이 흔들리면 안 된다 */ }
+  return nodeSnapshotSessions(nodes, STATE_STALE_MS);
+}
+
+/**
+ * 이 테넌트의 **선언된 세션 호스트**가 올린 세션 스냅샷 — 가시성 필터 없이 (#3892).
+ *
+ *  표식 되채우기 정비(`sessions/session-meta-heal-sweep.ts`) 전용이다. 세션 호스트엔 DB 가 없어 표식이 빈 판을 스스로
+ *   못 고치고, 소유자 표식이 비면 `nodeSessionsFor(viewer)` 가 주인에게서도 그 행을 거른다 — 그래서 **가시성 필터 전**을 봐야 한다.
+ *  ⚠ **선언된 호스트만**(`declaredOnly`) — 되채우기는 게이트웨이 tmux 경로로 나가는데, 그 길로 닿는 판은 매니지드 세션
+ *   컨테이너뿐이다. 멤버 PC 노드의 판은 그 컴퓨터의 tmux 에 있어 게이트웨이가 칠 수 없다.
+ *  ⚠ `nodeSessionsInScope` 를 거치지 않는다 — 그 안의 사유별 계수는 알림 스윕의 계기라 여기서 세면 숫자가 오염된다.
+ */
+export function sessionHostSnapshotSessions(now: number = Date.now()): SessionInfo[] {
+  const nodes = scopeNodeFacts(now);
+  return nodeSnapshotSessions(nodes, STATE_STALE_MS, true);
+}
+
+/** #5043 — 노드 하나의 스냅샷 재료(원격 PC 하네스 종료 규칙 전용). */
+export interface NodeSnapshotFacts {
+  nodeId: string;
+  online: boolean;
+  /** 마지막 상태 보고 뒤 지난 ms */
+  stateAgeMs: number;
+  /** 선언된 세션 호스트인가(매니지드 세션 컨테이너 — 그 세션은 중앙 규칙이 맡는다) */
+  declared: boolean;
+  /** 게이트웨이 자신이 도는 박스인가(같은 tmux — 그 세션은 중앙 경로가 맡는다, #2592) */
+  self: boolean;
+  sessions: readonly SessionInfo[];
+}
+
+/**
+ * 이 테넌트의 노드별 스냅샷 — **가시성 필터 없이**, 노드 id 와 함께 (#5043 원격 PC 하네스 종료 규칙).
+ *  `nodeSessionsInScope` 는 노드를 지우고 세션만 펼쳐 준다 — 끄기는 «그 세션이 어느 컴퓨터의 tmux 에 있나» 를 알아야 해서 따로 둔다.
+ *  ⚠ 정비 전용이다(사람에게 보여 줄 목록에 쓰지 마라 — 그쪽은 `nodeSessionsFor(viewer)` 가 가시성을 판정한다).
+ *  ⚠ 거르지 않는다 — 오프라인·낡음·세션 호스트·셀프 노드를 가르는 일은 부르는 쪽 판정(sessions/node-stop-rule.ts)이 사유와 함께 한다.
+ */
+/** #5043 — 이 노드가 마지막 스냅샷에서 «중앙 세션 호스트» 를 선언했나(모르면 false). 화면의 «적용 안 됨» 까닭에 쓴다 — 세션은 싣지 않는다. */
+export function nodeDeclaresSessionHost(id: string): boolean {
+  const st = states.get(keyOf(id));
+  return !!st && declaredSessionHost({ session_host: st.sessionHost });
+}
+
+export function nodeSnapshotsInScope(now: number = Date.now()): NodeSnapshotFacts[] {
+  const out: NodeSnapshotFacts[] = [];
+  for (const [id, st] of inScope(states)) {
+    out.push({
+      nodeId: id, online: conns.has(keyOf(id)), stateAgeMs: now - st.ts,
+      declared: declaredSessionHost({ session_host: st.sessionHost }), self: isSelfNode(id), sessions: st.sessions,
+    });
+  }
+  return out;
+}
+
+/**
+ * 스냅샷에서 **빠진 세션이 어느 사유로 빠졌나** 를 창 단위로 남긴다 (#3741 후속).
+ *
+ * ── 왜 (2026-09-09) ──────────────────────────────────────────────────────────
+ * #3741 배포 뒤 카나리아에서 노드 스냅샷 합계 **29** 인데 스윕의 `observed` 는 최대 **12** 였다.
+ *  «어디로 갔나» 를 밖에서 알 길이 없었다 — `nodeSnapshotSessions` 는 불리언으로 거르고 조용히
+ *  버린다. 그래서 판정이 사유를 답하게 하고(`nodeSnapshotVerdict`), 여기서 그 사유별로 **세션 수**를
+ *  누적한다. 노드 수가 아니라 **세션 수**인 이유가 질문 그 자체다: «29 중 17이 어디로 갔나».
+ *
+ * ⚠ 계수기는 tmux 계수·소유 판정 계수와 **같은 것**을 쓴다(세 칸: 슬러그·축·호출부). 축은 여기서
+ *  «판정 사유» 이고, 세션 하나가 한 건이다. 창이 닫힐 때만 로그하고 그때 비운다 — 누적을 내면
+ *  «지금도 빠지고 있나» 를 못 읽는다(그 사연은 `tmux-call-census` 머리말).
+ */
+const SNAPSHOT_CENSUS_EVERY = 500;
+const snapshotCensus = makeTmuxCallCensus(SNAPSHOT_CENSUS_EVERY);
+function recordSnapshotCensus(
+  nodes: ReadonlyArray<{ declared: boolean; online: boolean; stateAgeMs: number | null; sessions: readonly unknown[] }>,
+  staleMs: number,
+): void {
+  const slug = currentTenant()?.slug;
+  const site = censusSite(new Error().stack);
+  let rows: ReturnType<typeof snapshotCensus.record> = null;
+  for (const n of nodes) {
+    const why = nodeSnapshotVerdict(n, staleMs).why;
+    //  세션이 0개인 노드도 **한 건은** 센다 — 그래야 «그 노드가 있었는데 세션이 없었다» 가 보인다.
+    //   (없는 것을 지어내지 않되, 노드의 존재 자체는 사실이다.)
+    const times = n.sessions.length || 1;
+    for (let i = 0; i < times; i++) rows = snapshotCensus.record(slug, why, site) ?? rows;
+  }
+  if (rows) logger.info({ snapshotCensus: { window: SNAPSHOT_CENSUS_EVERY, rows } }, "노드 스냅샷 채택 사유 계수(창)");
 }
 
 /**
@@ -185,7 +462,7 @@ export function forgetNode(nodeId: string): void {
   const c = conns.get(k);
   if (c) {
     conns.delete(k);
-    for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(new Error("node-offline")); }
+    for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(Object.assign(new Error("node-offline"), { sent: true })); }   // 보낸 뒤 끊겼다 — 갔을 수 있다(#3773, nodeRpc 머리말)
     c.pending.clear();
     for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
     c.chans.clear();
@@ -221,11 +498,22 @@ export function forgetNode(nodeId: string): void {
 const selfNodes = new Set<string>();          // states 와 같은 스코프 키
 
 const SELF_PROBE_MS = 30_000;
+/**
+ * 판정 한 판이 목록 조회를 기다리는 상한 (#4135, 2026-09-28). 넘기면 그 판은 «판정 불가» 로 완결한다(tmux 를 못 본 것과 같은 갈래).
+ *  왜: 판정의 약속은 프로세스에 하나(`selfProbing`)이고 applyState 는 그 약속이 끝난 뒤에야 스냅샷 구독자(발견 기록 · 세션 신원
+ *  되채우기)를 부른다. 목록 조회가 한 번 안 끝나면 그 뒤의 **모든 노드의 모든 스냅샷**이 같은 약속에 매달려 구독자가 재시작 전까지
+ *  안 불린다. 판정은 양성일 때만 표시하므로 상한으로 끊어도 거짓 판정은 생기지 않는다 — 다음 판(SELF_PROBE_MS 뒤)이 다시 본다.
+ */
+const SELF_PROBE_CAP_MS = 8_000;
 let selfProbeAt = 0;
 let selfProbing: Promise<void> | null = null;
+const SELF_PROBE_TIMEOUT = "self-probe-timeout";
 /** 지금 states 에 있는 것들을 판정 후보 형태로 — 순수 판정(hasSelfProbeCandidate)이 쓸 최소 형태만 넘긴다. */
-function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number }> {
-  for (const [k, st] of states) yield { key: k, sessionCount: st.sessions.length };
+function* selfProbeCandidates(): Generator<{ key: string; sessionCount: number; declared: boolean }> {
+  //  `declared` 를 함께 넘긴다 — 선언된 세션 호스트는 후보가 아니다(면제가 tmux 를 묻기 **전에** 성립해야 한다).
+  for (const [k, st] of states) {
+    yield { key: k, sessionCount: st.sessions.length, declared: declaredSessionHost({ session_host: st.sessionHost }) };
+  }
 }
 /**
  * 판정을 한 판 돌린다. **반환 프로미스는 «지금 낼 수 있는 판정이 다 났다»는 뜻**이다(#2592) —
@@ -244,8 +532,17 @@ function probeSelfNodes(): Promise<void> {
   const run = (async () => {
     try {
       // strict — tmux 가 **답해서** 준 목록일 때만 쓴다. '못 봤다'를 빈 목록으로 접으면 판정 근거가 사라진다.
-      const { listSessionsRaw } = await import("../terminal/sessions.js");
-      const mine = new Set((await listSessionsRaw({ strict: true })).map((s) => s.id));
+      //  #2600 T2 d6 — «게이트웨이 tmux 목록» 은 소유가 넘어간 테넌트면 선언된 세션 호스트 스냅샷의 합이다
+      //   (listCentralSessions). 판정(sharesGatewayTmux)은 한 글자도 안 바뀐다 — **입력만** 같은 사실의 다른 출처다.
+      //   ⚠ 이 판정을 `selfNodePossible()` 로 건너뛰지 않는다: 매니지드에서도 실제로 잡았다(2026-09-10 06:52Z, 선언이
+      //    거둬졌는데 아직 붙어 있던 세션 호스트 둘). 종전엔 멤버 PC 가 영원히 후보라 30초마다 전 세션을 capture-pane 까지
+      //    훑었다(2026-09-11 실측 분당 34 — 그 테넌트 tmux 호출의 절반).
+      let cap: ReturnType<typeof setTimeout> | undefined;
+      const listed = await Promise.race([
+        listCentralSessions({ strict: true }),
+        new Promise<never>((_, rej) => { cap = setTimeout(() => rej(new Error(SELF_PROBE_TIMEOUT)), SELF_PROBE_CAP_MS); cap.unref?.(); }),
+      ]).finally(() => clearTimeout(cap));
+      const mine = new Set(listed.map((s) => s.id));
       for (const [k, st] of states) {
         // #2600 T2 — **선언된 세션 호스트는 면제한다.** 그 노드는 게이트웨이와 같은 tmux 를 보는 것이
         //  정상이다(매니지드 세션 호스트는 같은 브로커 소켓으로 그 tmux 에 닿는다 — 그게 존재 이유다).
@@ -273,7 +570,12 @@ function probeSelfNodes(): Promise<void> {
         if (c) maybeCleanSelfNode(c);
         dropSelfNodeConn(k);
       }
-    } catch { /* tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 */ }
+    } catch (e) {
+      //  tmux 를 못 봤다 = 판정 불가. 양성일 때만 표시하므로 조용히 넘어간다 — 단 **상한을 넘긴 판**은 적는다(구독자가 그만큼 늦게 불렸다).
+      if ((e as Error)?.message === SELF_PROBE_TIMEOUT) {
+        logger.warn({ waited_ms: SELF_PROBE_CAP_MS }, "셀프 노드 판정 — 세션 목록 조회가 상한 안에 끝나지 않았다. 이번 판은 판정 불가로 닫는다");
+      }
+    }
     finally { selfProbing = null; }
   })();
   selfProbing = run;
@@ -287,6 +589,8 @@ function probeSelfNodes(): Promise<void> {
  *  (2026-09-03 dev 라이브 검증): 부팅 경로에서 `hydrateNodeStates` 가 **구독이 걸리기 전에** 판정을 내면
  *  그 판정은 sticky 라 두 번 다시 서지 않고, 정리는 영원히 안 돈다. hello 는 그 뒤 반드시 지나는 자리다.
  *  (정리 자체는 멱등이지만 10초마다 SQL·tmux 를 때릴 이유가 없어 프로세스당 한 번으로 접는다.)
+ *  #4135 이후 구독은 listen 직후(LISTEN_STEPS)에 걸려 hydrate 보다 늘 앞선다 — 그 순서 문제는 사라졌지만,
+ *  hello 자리는 **정리가 실패했을 때의 재시도**(selfNodeCleaned.delete)로 여전히 필요하다.
  *
  * 왜 «구독 시점에 이미 선 판정을 재생» 이 아닌가: 재생에는 그 노드의 **테넌트 컨텍스트**가 없다(연결만이
  *  들고 있다). 컨텍스트 없이 부르면 공유 게이트웨이에서 RLS 가 조용히 0행을 만든다 — 돌았는데 아무 일도
@@ -410,19 +714,24 @@ export function nodeSupports(nodeId: string, op: NodeOp): boolean {
 }
 
 // 타입드 RPC — 노드에 op 실행을 위임하고 결과를 기다린다. 노드 미연결이면 즉시 실패.
+//  ★ 실패에는 **«보냈나»(`sent`)** 가 새겨져 있다 (#2600 T2 d6 · #3773). 같은 `node-offline` 이 반대 두 사실이었다 —
+//   연결이 없어 **보내지 않았다**(아래 첫 줄)와 보낸 뒤 **끊겼다**(응답 대기 중 연결 해제·노드 삭제). 다시 해도 무해한 op 면
+//   상관없지만, 치기(아웃박스)는 다시 보내면 같은 지시가 두 번 간다. 그래서 «안 갔다» 가 확실한 자리만 false 다:
+//   연결 없음 · 미지원 op · ws.send 가 던짐 = false / 시간 초과 · 응답 전 끊김 · 노드가 실행하다 실패 = true.
+//  ⚠ **메시지는 그대로다** — 호출부(deliver-prompt·routes·rpc-error·task-scheduler)가 문자열로 가른다. 읽는 쪽은 `rpc-error.rpcMaybeSent`.
 export async function nodeRpc<T = unknown>(nodeId: string, op: NodeOp, args?: Record<string, unknown>): Promise<T> {
   const c = conns.get(keyOf(nodeId));
-  if (!c) throw new Error("node-offline");
+  if (!c) throw Object.assign(new Error("node-offline"), { sent: false });
   // 🔴 미지원 노드엔 **보내지 않는다**(#905 C4). 보내면 구 노드가 `unknown op: <op>` 라는 **문자열**을 돌려주고,
   //  호출자는 그걸 "실패"와 구별하지 못한다 — 기능이 없는 건지 하다 터진 건지 모른 채 재시도·오진이 쌓인다.
   //  여기가 단일 관문이라 모든 호출자가 자동으로 보호된다. 에러코드는 기계가 분기할 수 있게 고정 문자열.
-  if (!c.caps.has(op)) throw new Error(`node-unsupported-op:${op}`);
+  if (!c.caps.has(op)) throw Object.assign(new Error(`node-unsupported-op:${op}`), { sent: false });
   const id = c.nextReq++;
   const msg: GwToNodeMsg = { t: "req", id, op, args };
   return await new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => { c.pending.delete(id); reject(new Error("node-rpc-timeout")); }, RPC_TIMEOUT_MS);
+    const timer = setTimeout(() => { c.pending.delete(id); reject(Object.assign(new Error("node-rpc-timeout"), { sent: true })); }, RPC_TIMEOUT_MS);
     c.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-    try { c.ws.send(JSON.stringify(msg)); } catch (e) { clearTimeout(timer); c.pending.delete(id); reject(e as Error); }
+    try { c.ws.send(JSON.stringify(msg)); } catch (e) { clearTimeout(timer); c.pending.delete(id); reject(Object.assign(e instanceof Error ? e : new Error(String(e)), { sent: false })); }
   });
 }
 
@@ -504,6 +813,42 @@ export function nodeRelayAttach(nodeId: string, sessionId: string, browser: WebS
 
 // ⚠ 노드 id 가 아니라 **연결**을 받는다(#2044) — 스코프(테넌트)를 연결이 들고 있고, 상태 push 는 요청 밖(WS
 //  이벤트)이라 currentTenant() 로는 알 수 없다. 두 호출부 모두 연결이 있는 자리다.
+/**
+ * 박동 적용 — 이 노드의 스냅샷 나이만 되돌린다 (#2600 T2 d6).
+ *
+ * ⚠ **스냅샷이 없으면 아무것도 하지 않는다**(`state-freshness.beatRefreshes`). 박동은 «지난번에 보낸 그 목록이
+ *  지금도 그대로» 라는 뜻이라, 보낸 적이 없으면 가리킬 목록이 없다. 그때 새 항목을 만들면 «본 적 없는 노드»가
+ *  세션 0개짜리 신선한 스냅샷을 가진 것이 되고, 목록 소유 판정이 그 빈 스냅샷으로 소유를 넘긴다.
+ */
+function applyBeat(c: NodeConn): void {
+  const k = keyOf(c.node.id, c.tenant);
+  const prev = states.get(k);
+  if (!beatRefreshes(prev)) return;
+  states.set(k, { ...prev!, ts: Date.now() });
+  replaySnapshotOnBeat(c.node.id, k, prev!.sessions);
+}
+
+/**
+ * 박동에도 스냅샷 구독자를 부른다 — 노드마다 `BEAT_REPLAY_MS` 에 한 번 (#4135, 2026-09-28).
+ *
+ * 왜: 노드는 세션 목록이 **바뀔 때만** 전체 상태를 보내고 그 밖에는 박동만 보낸다. 구독자(세션 신원 되채우기)의 «10분 뒤 다시 판정» ·
+ *  «실패 뒤 다시 시도» 는 다음 전체 상태가 와야 돌았다 — 목록이 안 바뀌는 컴퓨터에서는 그 «다음» 이 오지 않는다.
+ *  매니지드 실측: 게이트웨이가 다시 뜬 뒤 공용 맥미니의 세션 12개가 신원 없이 37분을 돌았다. 누군가 세션에 붙어 목록이 바뀐 뒤에야 심겼다.
+ * 구독자는 기억(이미 본 세션 · 방금 판정한 세션)으로 거르므로 바뀐 것이 없는 판은 DB 도 노드 RPC 도 부르지 않는다.
+ * 판정(probeSelfNodes)을 기다린 뒤에 부르는 순서는 applyState 와 같다.
+ */
+const BEAT_REPLAY_MS = 30_000;
+const beatReplayAt = new Map<string, number>();
+function replaySnapshotOnBeat(nodeId: string, k: string, sessions: SessionInfo[]): void {
+  if (!nodeSessionsHandler) return;
+  const now = Date.now();
+  if (now - (beatReplayAt.get(k) ?? 0) < BEAT_REPLAY_MS) return;
+  beatReplayAt.set(k, now);
+  void probeSelfNodes().then(() => {
+    if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 박동을 막지 않는다 */ } }
+  });
+}
+
 function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | null): NodeState {
   const nodeId = c.node.id;
   const k = keyOf(nodeId, c.tenant);
@@ -520,12 +865,14 @@ function applyState(c: NodeConn, sessions: SessionInfo[], res?: NodeResources | 
     sessionHost: declaredSessionHost(c.node) || prev?.sessionHost === true,
   };
   states.set(k, st);
+  beatReplayAt.set(k, st.ts);   // 전체 상태가 구독자를 부른다 — 박동의 되부르기는 여기서부터 다시 센다
   // #2022 — 처음 보는 세션이 있으면 그 자리에서 기억한다(구독자가 판단·기록, 여기선 알리기만).
   //  best-effort: 실패해도 스냅샷 반영은 그대로 간다(이 함수는 라이브 목록의 정본을 세우는 자리다).
   //  ★ #2592 — **판정(probeSelfNodes)이 끝난 뒤에** 부른다. 종전엔 둘을 나란히 띄웠는데, 판정은 tmux 왕복이라
   //   늘 늦게 끝나서 **셀프 노드의 첫 스냅샷이 판정 전에 DB 로 들어갔다**(dev 실측 org_session_state 의 셀프
   //   discovered 행 286개의 출처 중 하나가 이 순서다 — 게이트웨이가 재배포될 때마다 그 창이 다시 열린다).
   //   판정은 후보가 없거나 스로틀이면 즉시 완결하므로(probeSelfNodes 반환값의 계약) 정상 경로의 비용은 0 이다.
+  //  판정이 **끝나지 않는** 일은 없다 — probeSelfNodes 가 목록 조회에 상한(SELF_PROBE_CAP_MS)을 두고, 넘기면 «판정 불가» 로 완결한다.
   void probeSelfNodes().then(() => {   // #2108 — 이 노드가 게이트웨이 자신인가(스로틀·비치명, 위 주석)
     if (nodeSessionsHandler) { try { void nodeSessionsHandler(nodeId, sessions); } catch { /* 구독자 사고가 스냅샷을 막지 않는다 */ } }
   });
@@ -606,13 +953,20 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
     c.pending.delete(m.id);
     clearTimeout(p.timer);
     if (m.ok) p.resolve(m.data);
-    else p.reject(new Error(m.error || "node-op-failed"));
+    else p.reject(Object.assign(new Error(m.error || "node-op-failed"), { sent: true }));   // 노드가 받아 실행하다 실패했다 — 갔다(#3773)
     return;
   }
   if (m.t === "state") {
     applyState(c, Array.isArray(m.sessions) ? m.sessions : [], m.res ?? null);
     const now = Date.now();
     if (now - c.lastTouch > TOUCH_MIN_MS) { c.lastTouch = now; void touchNode(c.node.id).catch(() => { /* 비치명 */ }); }
+    return;
+  }
+  //  박동 — «봤는데 지난번 그대로다» (#2600 T2 d6). 스냅샷의 **나이만** 되돌린다(내용은 그대로다).
+  //   정본(org_node_state)에는 쓰지 않는다: 정본의 쓸모는 재부팅 복구인데, 게이트웨이가 다시 뜨면 노드가
+  //   곧바로 재접속해 force push 를 하므로 그 자리를 박동으로 메울 이유가 없다.
+  if (m.t === "beat") {
+    applyBeat(c);
     return;
   }
   if (m.t === "hello") {
@@ -632,7 +986,7 @@ function onNodeControlMsg(c: NodeConn, m: NodeToGwMsg): void {
     if (isSelfNode(c.node.id)) {
       try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); } catch { /* noop */ }
       logger.warn({ node: c.node.id, agentVer: m.agentVer }, `노드 연결 거부 — ${selfNodeMessage(c.node.id)}`);
-      maybeCleanSelfNode(c);   // 부팅 판정(hydrate)이 구독보다 빨랐던 경우의 유일한 재시도 자리 — 위 머리말
+      maybeCleanSelfNode(c);   // 정리가 실패했던 경우의 재시도 자리(구독은 #4135 이후 늘 hydrate 보다 먼저 걸린다) — 위 머리말
       try { c.ws.close(CLOSE_SELF_NODE, SELF_NODE_REASON); } catch { /* noop */ }
       return;
     }
@@ -703,7 +1057,7 @@ function onNodeDisconnected(c: NodeConn): void {
   const k = keyOf(c.node.id, c.tenant);
   if (conns.get(k) !== c) return; // 이미 새 연결로 교체됨(재연결 레이스) — 새 연결을 건드리지 않는다
   conns.delete(k);
-  for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(new Error("node-offline")); }
+  for (const p of c.pending.values()) { clearTimeout(p.timer); p.reject(Object.assign(new Error("node-offline"), { sent: true })); }   // 보낸 뒤 끊겼다 — 갔을 수 있다(#3773, nodeRpc 머리말)
   c.pending.clear();
   for (const { browser } of c.chans.values()) { try { browser.close(CLOSE_NODE_OFFLINE, "node-offline"); } catch { /* noop */ } }
   c.chans.clear();

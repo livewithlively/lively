@@ -11,9 +11,12 @@ import { createHash } from "node:crypto";
 import { readdir, lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
+import { APP_BUNDLE_POLICY_MAX } from "./app-bundle-policy.js";
 
-const MAX_FILES = 5000;      // 앱 패키지 파일 수 상한(폭주 방어)
-const MAX_TOTAL_BYTES = 128 * 1024 * 1024; // 128MB 상한
+//  #4481 — 폭주 방어선은 판 묶음 상한의 **천장**과 같게(실제 상한은 워크스페이스 설정 app_bundle_limits 가 판 저장에서 본다).
+//   종전 5,000개 · 128MB 는 여러 파일 앱(빌드 산출물 · 판 250MB 기본)을 해시 단계에서 먼저 막았다.
+const MAX_FILES = APP_BUNDLE_POLICY_MAX.files_max;                    // 앱 패키지 파일 수 상한(폭주 방어)
+const MAX_TOTAL_BYTES = APP_BUNDLE_POLICY_MAX.version_max_mb * 1024 * 1024; // 판 하나 천장
 
 /**
  * 스테이지 디렉터리의 content_hash 를 계산한다(전체 sha256 hex).

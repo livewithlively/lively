@@ -79,6 +79,7 @@ const payload = (event, sessionID, extra) => JSON.stringify({
 });
 
 // 조직 커스텀 훅 러너(run-custom) — 이벤트는 argv, 페이로드는 stdin(claude·codex 와 같은 계약).
+// 15000 = harness-registry 의 runnerCapMs — 러너가 이보다 앞서 끝내도록 예산을 잡는다(#5034). 바꾸면 함께 바꾼다.
 const runner = (event, sessionID, extra, timeout = 15000) =>
   runScript("run-custom.mjs", [event, "--harness", HARNESS], payload(event, sessionID, extra), timeout);
 

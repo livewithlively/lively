@@ -45,17 +45,49 @@ const src = read("src/terminal/sessions.ts");
   ok(busyAt > obsAt && busyAt < firstGate, "WR3 마지막 작업 시각 갱신은 관측 뒤 · 가시성 관문 앞(뷰어 무관)이다(E29)");
 
   const needAt = blk.indexOf("needsMetaHeal(", resolveAt);
-  const healAt = blk.indexOf("metaHealCmds(p.name, row)", resolveAt);
-  const healLine = needAt > 0 ? blk.slice(needAt - 200, blk.indexOf("\n    }", needAt)) : "";
+  const healAt = blk.indexOf('healSessionMeta(p.name, row, "list")', resolveAt);
   ok(needAt > resolveAt && needAt < firstGate, "WR4-a 되채우기 판정(needsMetaHeal)은 해소 뒤 · 가시성 관문 앞이다(E30)");
   ok(/needsMetaHeal\(\{\s*harnessRaw:\s*p\.harnessRaw,\s*row,\s*managed:\s*p\.managed\s*\}\)/.test(blk), "WR4-b 판정 재료는 tmux 원시 하네스 · DB 행 · 상시세션 표식이다(E30)");
-  ok(/metaHealGate\(p\.name,/.test(healLine), "WR4-c 쿨다운 문지기(metaHealGate)를 거친다(E30)");
-  ok(healAt > needAt && healAt < firstGate && /void tmuxBatchQuiet\(metaHealCmds\(p\.name, row\)\)/.test(blk), "WR4-d 되채우기는 DB 행으로 만든 명령을 삼키는 묶음으로 떼어 보낸다(응답을 막지 않는다)(E30)");
+  ok(healAt > needAt && healAt < firstGate, "WR4-c 보내는 것은 공용 창구 healSessionMeta(…, \"list\") 이고 가시성 관문 앞이다(E30·E50)");
+  ok(!/tmuxBatchQuiet\(metaHealCmds\(/.test(code(blk)), "WR4-d collectSessions 가 되채움 명령을 **직접** 보내지 않는다 — 창구가 둘이면 쿨다운이 갈린다(E50)");
 
   const pushAt = blk.indexOf("rows.push({", firstGate);
   const push = pushAt > 0 ? code(blk.slice(pushAt, blk.indexOf("});", pushAt))) : "";
   ok(pushAt > 0 && /\boffline,\s*busy,\s*shellWorking,\s*lastBusy\b/.test(push) && /\breportedFresh\b/.test(push), "WR5-a 행에 담는 관측값은 2차에서 잰 값이다(E31)");
   ok(!/p\.(offline|busy|shellWorking|reportedFresh|lastBusy)\b/.test(push), "WR5-b 1차 객체의 옛 관측 필드를 싣지 않는다(E31)");
+}
+
+// ── 공용 창구 healSessionMeta (E51) ──────────────────────────────────────────────
+{
+  const i = src.indexOf("export function healSessionMeta(");
+  assert.ok(i > 0, "healSessionMeta 를 찾지 못했습니다");
+  const body = src.slice(i, src.indexOf("\n}\n", i));
+  const gateAt = body.indexOf("if (!metaHealGate(id, Date.now())) return false;");
+  const warnAt = body.indexOf("logger.warn(");
+  const sendAt = body.indexOf("void tmuxBatchQuiet(metaHealCmds(id, row));");
+  ok(gateAt > 0 && warnAt > gateAt && sendAt > warnAt, "WR10 창구는 쿨다운 → 로그 → 삼키는 묶음을 떼어 보냄 순서다(쿨다운에 걸리면 로그도 안 남긴다)(E51)");
+  ok(/DB desired 행으로 되채운다/.test(body) && /via/.test(body), "WR10-b 로그에 갈래(via)를 싣는다 — 목록·스냅샷 중 누가 찾았나(E51)");
+}
+
+// ── 세션 호스트 스냅샷 정비 (E52~E54) ─────────────────────────────────────────────
+{
+  const reg = read("src/node/registry.ts");
+  const i = reg.indexOf("export function sessionHostSnapshotSessions(");
+  assert.ok(i > 0, "sessionHostSnapshotSessions 를 찾지 못했습니다");
+  const body = code(reg.slice(i, reg.indexOf("\n}\n", i)));
+  ok(/return nodeSnapshotSessions\(nodes, STATE_STALE_MS, true\);/.test(body), "WR11-a 선언된 세션 호스트만(declaredOnly=true) — 멤버 PC 노드 판은 게이트웨이 tmux 로 칠 수 없다(E52)");
+  ok(!/recordSnapshotCensus\(|nodeSessionsInScope\(/.test(body), "WR11-b 알림 스윕의 사유 계수를 거치지 않는다(계기 오염 금지)(E52)");
+
+  const sweep = read("src/sessions/outbox-request-sweep.ts");
+  const jobAt = sweep.indexOf('key: "session-meta-heal"');
+  const job = jobAt > 0 ? sweep.slice(jobAt, sweep.indexOf("},", jobAt)) : "";
+  ok(jobAt > 0 && /intervalMs: META_HEAL_SWEEP_MS/.test(job) && /sweepSessionMetaHeal\(\)/.test(job), "WR12-a 요청 정비표에 session-meta-heal 이 있고 sweepSessionMetaHeal 을 부른다(E53)");
+  ok(!/scope:\s*"global"/.test(job), "WR12-b 테넌트 스코프다 — 스냅샷·DB 행을 그 테넌트로 좁혀야 한다(E53)");
+  ok(/export const META_HEAL_SWEEP_MS = 60_000;/.test(sweep), "WR12-c 주기는 되채우기 쿨다운과 같은 60초다(E53)");
+
+  const mod = code(read("src/sessions/session-meta-heal-sweep.ts"));
+  ok(/sessionHostSnapshotSessions\(\)/.test(mod) && /loadDesired: loadDesiredMap/.test(mod) && /healSessionMeta\(id, row, "snapshot"\)/.test(mod),
+    "WR13 기본 배선: 선언 호스트 스냅샷 · DB 한 번 조회 · 공용 창구(snapshot 갈래)(E54)");
 }
 
 // ── createSession ───────────────────────────────────────────────────────────────
@@ -69,10 +101,12 @@ const src = read("src/terminal/sessions.ts");
   ok(tryAt > metaAt, "WR6-b 표식 묶음은 try 안에서 보낸다 — 실패를 그냥 던지지 않는다(E32)");
   const catchBody = tryAt > 0 ? blk.slice(tryAt, blk.indexOf("\n  }\n", tryAt)) : "";
   const killAt = catchBody.indexOf('"kill-session", "-t", id');
-  const delAt = catchBody.indexOf("deleteSessionState(id)");
+  const delAt = catchBody.indexOf("dropOwnRow()");
   ok(killAt > 0, "WR6-c 실패하면 방금 만든 판을 kill 한다(E32)");
-  ok(delAt > killAt && /if \(gone && inside && mirrored\) await deleteSessionState\(id\)/.test(catchBody),
-    "WR6-d ★ DB 행은 판이 사라진 게 확인됐고(gone) 이번 호출이 먼저 쓴 행(inside·mirrored)일 때만 지운다(E32)");
+  //  #4694 — «이번 호출이 먼저 쓴 행» 판정은 dropOwnRow 한 자리에 모였다(mirrored && !reuseId — 같은 id 복원의 행은 남긴다).
+  ok(delAt > killAt && /if \(gone && inside\) await dropOwnRow\(\)/.test(catchBody)
+    && /const dropOwnRow = \(\): Promise<void> => \(mirrored && !reuseId \? deleteSessionState\(id\)/.test(blk),
+    "WR6-d ★ DB 행은 판이 사라진 게 확인됐고(gone) 이번 호출이 먼저 쓴 행(inside·mirrored, 같은 id 복원 아님)일 때만 지운다(E32·#4694)");
   ok(/isSessionGoneError\(/.test(catchBody), "WR6-e «사라졌다» 는 kill 성공 또는 «그런 세션 없음» 확답이다(E32)");
   ok(/throw new HttpError\(503,/.test(catchBody) && catchBody.indexOf("throw new HttpError(503,") > delAt, "WR6-f 되돌린 뒤 503 으로 알린다(E32)");
   ok(/await tmuxBatchQuiet\(sessionWindowCmds\(id,/.test(blk), "WR7 창·기록 범위 옵션도 한 벌 빌더(sessionWindowCmds)에서 온다(E33)");

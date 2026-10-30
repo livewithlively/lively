@@ -107,8 +107,8 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "**맥락(Context)** 은 일할 때 알아야 할 조직의 모든 것이다. 세 축으로 본다.",
   "",
-  "- **카테고리 — 분류축.** 맥락을 *어디에 두는지*. 이 조직이 자기 일에서 뽑아낸 서랍들이고, 위에 고정된 상위 분류는 없다(무엇이 축이 될지는 조직마다 다르다). 각 축은 **정의(should)** — 무엇을 담고 무엇을 담지 않는지 — 를 갖는다. 코드가 붙는 축이면 거기에 구현·의존(**is**)과 둘의 갭(**debt**), 축 간 관계(엣지)가 더 붙어 **도메인맵**을 이룬다.",
-  "- **지식 — 맥락의 *기록*(정적).** 지속되는 사실·결정·설계·런북. 카테고리 1개(단일 home)에 속한다 — 교차주제는 복수 카테고리 태깅이 아니라 `knowledge_link`(지식↔지식)로 잇는다(`knowledge_link_category`는 append 가 아니라 교체 시맨틱). 두 직교 속성 — **injection**(`always`=항상 주입되는 규칙·페르소나 / `recalled`=검색 소환), **provenance**(`authored`=저작 / `observed`=외부 미러).",
+  "- **카테고리 — 분류축.** 맥락을 *어디에 두는지*. 이 조직이 자기 일에서 뽑아낸 분류들이고, 위에 고정된 상위 분류는 없다(무엇이 축이 될지는 조직마다 다르다). 각 축은 **정의(should)** — 무엇을 담고 무엇을 담지 않는지 — 를 갖는다. 코드가 붙는 축이면 거기에 구현·의존(**is**)과 둘의 갭(**debt**), 축 간 관계(엣지)가 더 붙어 **도메인맵**을 이룬다.",
+  "- **지식 — 맥락의 *기록*(정적).** 지속되는 사실·결정·설계·런북. 카테고리 1개(단일 home)에 속한다 — 교차주제는 복수 카테고리 태깅이 아니라 `knowledge_link`(지식↔지식)로 잇는다(`knowledge_link_category`는 append 가 아니라 교체 시맨틱). **provenance**(`authored`=저작 / `observed`=외부 미러)로 출처를 가른다. 주입 방식은 저작자가 정하지 않는다 — 지식은 항상 `recalled`(검색 소환)이고, 세션마다 항상 깔리는 규칙·페르소나는 지식이 아니라 세션 주입 섹션 문서다(#335).",
   "- **프로젝트 — 맥락의 *변화*(동적).** 맥락을 바꾸는 일. **project ▸ task ▸ subtask** 위계. 카테고리 1개(단일 home)에 속한다 — 프로젝트 간 관계는 `project_link_project_v6`(선후속 등)로 잇는다. **필요지식**(required)을 요구하고 **산출지식**(produced)을 만든다. 진척은 **작업(activity)** 으로 기록되고, 작업 중 **커밋은 도메인의 is**를, **비커밋(결정·리뷰 등)은 should**를 바꾼다.",
   "",
   "## 카테고리 (주제 — 검색으로 소환)",
@@ -126,8 +126,9 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "- 라이브 데이터(코드·DB): `db_query`(admin이면 별도 등록 없이 내장 `self` 소스로 이 라이블리 DB=지식·프로젝트·카테고리·도메인맵을 읽기전용 SQL 조회) · `context_overview`.",
   "- **외부 자료 미러**: 슬랙·메일·드라이브 등에서 커넥터가 끌어온 **원문**은 지식이 아니라 자료로 있다 — `source_list` · `source_get` · `source_undistilled`(아직 지식이 안 된 것). 노션·클릭업은 지식·프로젝트로 바로 들어와 있어 위 경로로 잡힌다.",
   "- **⚠ 사람의 초기 맥락은 라이블리 밖에 있을 수 있다** — 노션·클릭업·슬랙·메일에 먼저 쓰고 여기로 흘러온다. 그러니 \"라이블리에 없다 = 조직에 없다\"가 아니다. 커넥터가 덮는 범위는 위 경로로 이미 들어와 있으니 **먼저 라이블리에서 찾고**, 거기 없을 때만 외부를 직접 본다(`ext__*` 프록시 툴 — 개인·미공유 페이지, 커넥터 없는 툴, 방금 쓴 것). **끌어온 건 반드시 남긴다 → 아래 기록.**",
-  // #1242(고객사 A: claude.ai 슬랙 커넥터 사용) — 코드 폴백만 고치면 섹션을 편집한 org 엔 안 닿는다(#537). 라이블리 org DB 행에도 같은 불릿을 반영해 양쪽을 같게 유지할 것.
-  "- **⚠ 외부 서비스 MCP 는 라이블리 `ext__*` 가 기본이다(조직 통제)** — 같은 서비스(슬랙·노션·드라이브·메일 등)가 라이블리 프록시(`ext__*`)와 개인 커넥터(claude.ai 연동·자체 설치 MCP) 양쪽에 보이면 **반드시 `ext__*` 를 쓴다**. `ext__*` 는 조직이 관리하는 커넥터·자격·감사 경로로 나가고, 개인 커넥터는 개인 자격으로 그 통제를 우회한다. \"이미 로드돼 있어서\"·\"이름이 먼저 보여서\"는 선택 근거가 아니다. 그 서비스 커넥터가 라이블리에 없거나 실패할 때만 개인 커넥터로 폴백하고, 폴백했음을 답변에 밝힌다.",
+  // #1242(고객사 A: claude.ai 슬랙 커넥터 사용) → #4427(#4213 T6): 이 줄은 워크스페이스 정책(allow_member_ai_connectors)에 따라
+  //  두 벌 중 하나로 채워진다(아래 MEMBER_AI_CONNECTORS_GUIDE). 같은 서비스가 양쪽에 있으면 ext__ 우선은 두 벌 모두 같다.
+  "${member_ai_connectors}",
   "",
   // #4220·#4219(2026-09-30, 윤상민 확정) — «생기면 즉시 knowledge_save» 가 기록을 한 건씩 흩어 메인을 멈추게 했다(knowledge_save 1건
   //  메인 멈춤 p50 46초 · 세션당 쓰기 에피소드 p50 4개). 그래서 «그 턴 안, 보고 직전에» 로 바꾸고, Claude Code 대화형은 대화 전체를 물려받는
@@ -136,7 +137,7 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   //  (record-nudge.test.mjs 가 대조한다). codex fork 는 툴 결과를 물려받지 않아(spawn.rs keep_forked_rollout_item) 메인이 바로 쓴다.
   "**기록 — 지속될 맥락은 그 턴 안에서 남긴다(세션 끝으로 미루지 않는다).**",
   "- **언제·누가**: 기록할 것이 생긴 턴은 사람에게 보고하기 직전에 남긴다. **Claude Code 대화형 세션**에선 메인이 본문을 쓰지 말고, 기록 전용 fork 하나를 이 호출 그대로 띄운 뒤 곧바로 보고한다 — `Agent{subagent_type:\"fork\", description:\"기록: <주제>\", prompt:\"기록 전용 fork 다. 마지막 기록 이후 대화에서 라이블리에 남길 것을 네가 판단해 직접 기록하라(기존 지식은 append, 대화에 없는 사실은 쓰지 않는다, fork 를 다시 띄우지 않는다). 끝나면 저장한 이름·id 만 한 줄씩 남겨라.\"}`. fork 는 대화 전체를 물려받아 무엇을 쓸지 스스로 정한다 — 메인은 쓸 목록·요지를 지시문에 적지 않는다(적으면 fork 로 아끼는 시간이 사라진다). fork 는 턴당 하나. 한두 줄짜리 기록(상태 변경·짧은 작업 기록)과 곧바로 id 가 필요한 생성은 메인이 바로 한다. 그 밖의 하네스(codex 등)와 사람이 대화하지 않는 실행(`claude -p` 등)은 메인이 바로 쓴다.",
-  "- 지식: 연구·결정·설계·런북은 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
+  "- 지식: 연구·결정·설계·런북은 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다. 주입 방식은 서버가 정한다 — 지식은 항상 `recalled`(검색 소환)이고, **세션마다 항상 깔려야 하는 규칙·페르소나는 지식이 아니라 세션 주입 섹션 문서**(관리 ▸ 세션 주입 · `org_update_section` — 관리자)로 쓴다.",
   "- **MCP 도구는 대부분 REST로도 열려 있다 (`/api/ui/*`) — 같은 bearer 토큰·같은 scope.** 그래서 **코드로 짜서 호출하거나 대량 마이그레이션 같은 기계적 방식**이 나을 땐, 건별 MCP 대신 REST를 반복 호출하는 스크립트로 처리할 수 있다(거의 모든 쓰기 툴에 대응 REST 존재). 예: `POST /api/ui/knowledge`(=knowledge_save)·`POST /api/ui/knowledge/:name/category`(연결)·`POST /api/ui/sources`·`POST /api/ui/v6/projects[/:id/tasks]`·`POST /api/ui/activity`(=activity_log). 게이트웨이 주소는 org 프로필 `gateway_url`.",
   "- WIKI 인덱스 핀: 어떤 지식이 **모두가 항상 인덱스에서 봐야 할 만큼** 중요하면 `knowledge_set_wiki`로 핀한다 — 핀된 지식의 제목·소환키가 아래 **WIKI 인덱스**에 항상 노출되어 전원이 발견한다(본문은 여전히 `knowledge_get`/검색으로 소환).",
   "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다 — type 은 작업의 성격(feature·fix·decision·docs·research·review·chore·other). 커밋은 유형이 아니라 commit_sha 로 표현하고(어떤 유형이든 동반 가능), author_agent(어떤 AI)는 게이트웨이가 접속 신원으로 자동 식별하니 넘기지 않아도 된다. 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",
@@ -156,6 +157,24 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "",
   "${wiki}",
 ].join("\n");
+
+// ── 외부 서비스 MCP 줄 — 구성원 AI 계정(Claude) 커넥터 정책(#4213 T6 #4427)에 따라 두 벌 중 하나 ──
+//  허용(기본 — 상민 2026-10-16): 조직 연결이 있으면 그것, 없으면 그 구성원 본인의 Claude 커넥터가 1순위다(연결·수집 To-Be 의
+//   기본 연결이 구성원 Claude 커넥터다). 종전 #1242 문구의 «폴백 + 폴백했음을 밝힌다» 는 이 경로가 허용된 경로가 되면서 걷었다.
+//  막음(관리자가 끔): ext__ 만 쓴다. 라이블리가 띄우는 claude 세션에는 claude.ai 커넥터 자체가 안 실린다
+//   (terminal/catalog.ts harnessSettingsArgv 의 ENABLE_CLAUDEAI_MCP_SERVERS) — 이 줄은 그게 닿지 않는 자리(구성원 PC 의 CLI 등)를 위한 것이다.
+//  ⚠ 두 벌 모두 «같은 서비스가 양쪽에 보이면 반드시 ext__» 는 같다(#1242 의 조직 통제 — 금융 고객이 계기였다).
+//  #4213 T12 #4744 — 허용 줄 끝의 «가져올 곳이 있으면 그 커넥터로 직접 찾는다» 가 검색 실패 보조 안내의 세션 쪽 한 줄이다(약한 권유 —
+//   정상 주기라면 새로 얻을 것은 마지막 수집 이후의 새 글 정도다). 막은 워크스페이스는 «가져올 곳» 단위를 아예 싣지 않는다(unit-find).
+export const MEMBER_AI_CONNECTORS_GUIDE = {
+  allowed: "- **⚠ 외부 서비스 MCP — 조직 연결(`ext__*`)이 먼저, 없으면 구성원 본인의 Claude 커넥터** — 같은 서비스(슬랙·노션·드라이브·메일 등)가 라이블리 프록시(`ext__*`)와 개인 커넥터(claude.ai 연동 `mcp__claude_ai_*`·자체 설치 MCP) 양쪽에 보이면 **반드시 `ext__*` 를 쓴다** — 조직이 관리하는 커넥터·자격·감사 경로다. \"이미 로드돼 있어서\"·\"이름이 먼저 보여서\"는 선택 근거가 아니다. 그 서비스가 라이블리에 연결돼 있지 않거나 실패하면 **이 구성원 본인의 Claude 커넥터(`mcp__claude_ai_*`)를 1순위로 쓴다** — 이 워크스페이스가 허용한 경로라 따로 양해를 구하지 않는다. 그렇게 읽은 것도 아래 «외부에서 끌어온 건 남긴다» 를 따른다. **가져올 곳이 있으면 그 커넥터로 직접 찾는다** — 지식이 약하면 `knowledge_search` 응답에 `collect_hint` 가 붙는다: `sources`(아직 지식이 안 된 원문 자료)면 먼저 `source_get` 으로 보고, `units`(마지막 수집 시각이 적힌 채널·메일함·페이지)면 그 뒤 새 글이 필요할 때 그 커넥터로 한번 찾아본다(주제로 단위를 고르려면 `collect_unit_find`).",
+  blocked: "- **⚠ 외부 서비스 MCP 는 라이블리 `ext__*` 만 쓴다(관리자 정책)** — 이 워크스페이스는 구성원 개인 커넥터(claude.ai 연동 `mcp__claude_ai_*`·자체 설치 MCP)로 슬랙·노션·드라이브·메일 같은 외부 서비스를 읽지 않는다. 라이블리가 띄운 세션에는 claude.ai 커넥터가 실리지 않으며, 다른 자리에서 개인 커넥터 도구가 보여도 쓰지 않는다. 그 서비스가 `ext__*` 에 없거나 실패하면 개인 커넥터로 대신하지 말고, 사람에게 [외부 앱 연결]에서 라이블리에 연결해 달라고 하거나 관리자에게 알린다.",
+} as const;
+
+/** (순수) 템플릿의 `${member_ai_connectors}` 자리를 정책에 맞는 줄로 채운다. 관리 화면(sectionsPayload)이 원본 대신 이걸 보여 준다 — 화면 = 실제 주입. */
+export function fillMemberAiConnectorsLine(template: string, allowed: boolean): string {
+  return String(template ?? "").replace(/\$\{member_ai_connectors\}/g, () => (allowed ? MEMBER_AI_CONNECTORS_GUIDE.allowed : MEMBER_AI_CONNECTORS_GUIDE.blocked));
+}
 
 // 가이드 섹션 키(단일) — 웹 관리 '세션 주입' 탭에 보이는 제품 소유 문서. (#1245) 편집 불가 — 코드가 단일 출처.
 export const CONTEXT_ONTOLOGY_GUIDE_SECTION = "context-ontology-guide";
@@ -249,7 +268,7 @@ function buildWikiBlock(units: KnowledgeRow[], wikiCats: Map<string, string>): s
   return out.join("\n").trimEnd() + "\n\n";
 }
 
-// 동적 블록 치환 — ${team}/${categories}/${wiki}. (#335 ${rules} 폐기: 항상-주입은 섹션 문서뿐.)
+// 동적 블록 치환 — ${team}/${categories}/${wiki} + ${member_ai_connectors}(#4427 정책 한 줄). (#335 ${rules} 폐기: 항상-주입은 섹션 문서뿐.)
 //  단일 소스: 섹션 조립(publish.buildSectionBlocks)·가이드 미리보기(org_guide_preview) 공용. 함수형 replacement($ 특수해석 회피).
 //  consumedTeam.v 는 ${team} 가 실제 치환됐는지 호출자에 알린다(어느 섹션도 안 쓰면 팀블록 말미 폴백 부착용).
 export function substituteBlocks(
@@ -257,9 +276,11 @@ export function substituteBlocks(
   opts: {
     team?: string; categoryMap?: CategoryMapEntry[]; wikiUnits?: KnowledgeRow[];
     wikiCats?: Map<string, string>; consumedTeam?: { v: boolean };
+    /** #4427 — 구성원 AI 계정 커넥터 정책(org_runtime_config.allow_member_ai_connectors). 생략 = 허용(기본값과 같은 쪽). */
+    memberAiConnectorsAllowed?: boolean;
   } = {},
 ): string {
-  const assembled = (typeof template === "string" ? template : "")
+  const assembled = fillMemberAiConnectorsLine(typeof template === "string" ? template : "", opts.memberAiConnectorsAllowed !== false)
     .replace(/\$\{team\}/g, () => { if (opts.consumedTeam) opts.consumedTeam.v = true; return (opts.team ?? "").trim(); })
     .replace(/\$\{categories\}/g, () => buildCategoryBlock(opts.categoryMap ?? []))
     .replace(/\$\{wiki\}/g, () => buildWikiBlock(opts.wikiUnits ?? [], opts.wikiCats ?? new Map()))
@@ -275,9 +296,10 @@ export function buildKnowledgeIndex(
   categoryMap: CategoryMapEntry[] = [],
   guideTemplate?: string,
   wikiCats: Map<string, string> = new Map(),
+  opts: { memberAiConnectorsAllowed?: boolean } = {},   // #4427 — 생략 = 허용(substituteBlocks 와 같은 기본)
 ): string {
   const tpl = (typeof guideTemplate === "string" && guideTemplate.trim()) ? guideTemplate : DEFAULT_CONTEXT_ONTOLOGY_GUIDE;
-  return substituteBlocks(tpl, { categoryMap, wikiUnits: units, wikiCats }) + "\n";
+  return substituteBlocks(tpl, { categoryMap, wikiUnits: units, wikiCats, memberAiConnectorsAllowed: opts.memberAiConnectorsAllowed }) + "\n";
 }
 
 // YAML 스칼라 안전화 — load-bindings 미니 파서는 "..."/'...' 인용 스칼라를 받지만 \" 언이스케이프는 안 한다.
@@ -344,7 +366,10 @@ export async function materializeOrgContent(): Promise<Materialized> {
   // R 전문이 있거나(규칙) 카테고리 지도가 있으면 인덱스 발행(쓰기 가이드는 템플릿에 항상 동반). 둘 다 없어도 가이드는
   //  의미가 있으나, 완전 빈 DB 에선 인덱스를 생략한다(기존 관례 — knowledge.length 가드).
   if (guideOn && (activeKnowledgeCount || categoryMap.length)) {
-    await writeFile(join(dir, "memory", "knowledge-index.md"), buildKnowledgeIndex(wikiPins, categoryMap, undefined, await wikiCategoryMap()));
+    //  #4427 — 발행물도 라이브 주입과 같은 정책 줄을 싣는다(조회 실패는 허용 — memberAiConnectorsAllowed 머리말).
+    const { memberAiConnectorsAllowed } = await import("../store/member-ai-connectors.js");
+    await writeFile(join(dir, "memory", "knowledge-index.md"), buildKnowledgeIndex(wikiPins, categoryMap, undefined, await wikiCategoryMap(),
+      { memberAiConnectorsAllowed: await memberAiConnectorsAllowed() }));
   }
 
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)

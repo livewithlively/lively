@@ -26,6 +26,7 @@ for (const k of ["LIVELY_MEMBER_EXEC", "LIVELY_MEMBER_ISOLATION", "LIVELY_TENANT
 const S = await import("./project-storage.js");
 const { manifestFiles } = await import("./project-manifest.js");
 const { fileOpsAtMemberBoundary } = await import("../terminal/terminal-isolation.js");
+const { taskFsIsMember } = await import("../node/tasks.js");
 const { RULES_MARK, GENERATED_BANNER, agentsMdHeader } = await import("../v6/agents-md-rules.js");
 
 after(() => { delete process.env.LIVELY_MEMBER_EXEC; fs.rmSync(TMP, { recursive: true, force: true }); });
@@ -90,9 +91,10 @@ const OS_USER = "box_tester";
 
 // ═══ S1 자리 고르기 ═══════════════════════════════════════════════════════════
 
-test("S1g 고르는 규칙은 하나 — 격리 사용자 && 저장소 분리일 때만 멤버 경계", () => {
+test("S1g 고르는 규칙은 하나 — 격리 사용자 && 저장소 분리일 때만 멤버 경계, 위탁 폴더와 같은 답", () => {
   for (const [u, d, want] of [["box_a", true, true], ["box_a", false, false], [null, true, false], [undefined, false, false], ["", true, false]] as const) {
     assert.equal(fileOpsAtMemberBoundary(u, d), want, `osUser=${String(u)} detached=${d}`);
+    assert.equal(taskFsIsMember(u, d), want, "위탁 폴더와 프로젝트 폴더가 다른 답을 내면 한쪽만 고쳐진다");
   }
   relayOff();
   assert.equal(fileOpsAtMemberBoundary("box_a"), false, "기본값은 지금 배포를 따른다(저장소 붙음)");
@@ -673,7 +675,7 @@ test("W1·W2 파일 라우트는 전부 요청자 권한의 저장소(projStore)
   const routes = src("./project-routes.ts");
   for (const head of [
     "app.get(`${prefix}/:id/files`", "app.get(`${prefix}/:id/file`", "app.put(`${prefix}/:id/file`",
-    "app.post(`${prefix}/:id/folder`", "app.post(`${prefix}/:id/rename`", "app.post(`${prefix}/:id/move`",
+    "app.post(`${prefix}/:id/folder`", "app.post(`${prefix}/:id/file/rename`", "app.post(`${prefix}/:id/move`",
     "app.delete(`${prefix}/:id/file`", "app.get(`${prefix}/:id/shared/manifest`",
     "app.get(`${prefix}/:id/rules`", "app.post(`${prefix}/:id/rules`", "app.get(`${prefix}/:id/agents`",
   ]) {
@@ -685,16 +687,18 @@ test("W1·W2 파일 라우트는 전부 요청자 권한의 저장소(projStore)
   assert.match(routeBody(routes, "app.put(`${prefix}/:id/file`"), /osUser: store\.osUser/, "업로드 마무리가 바이트가 놓인 경계를 모른다");
 });
 
-test("W3 생성기·주입·자료 원본이 게이트웨이 로컬 경로로 파일을 만지지 않는다", () => {
-  //  stage 판 — 노드 업로드 정본(#3787)·첫 지시 첨부 옮기기가 stage 에 아직 없다(그 자리는 main 판 시험이 잠근다).
-  for (const rel of ["../v6/agents-md.ts", "../terminal/session-project-routes.ts", "../ingest/local-file.ts", "../terminal/terminal-files.ts"]) {
+test("W3 생성기·주입·자료 원본·노드 업로드 정본·첫 지시 첨부가 게이트웨이 로컬 경로로 파일을 만지지 않는다", () => {
+  for (const rel of ["../v6/agents-md.ts", "../terminal/session-project-routes.ts", "../ingest/local-file.ts", "./attach-relocate.ts", "../terminal/terminal-files.ts"]) {
     assert.doesNotMatch(src(rel), /projectAbsPath/, `${rel} 이 게이트웨이 로컬 경로를 직접 푼다`);
   }
   const agents = src("../v6/agents-md.ts");
   assert.match(agents, /await st\.writeText\(file, content\)/, "AGENTS.md 를 저장소로 쓰지 않는다");
   assert.match(agents, /nextClaudeMd\(await st\.readText\(claude\), found\.from\)/, "CLAUDE.md 를 사람 글 보존 판정 없이 쓴다");
+  assert.match(src("../terminal/terminal-files.ts"), /await gw\.store\.writeBuffer\(absGw, bodyBuf\)/, "노드 업로드 정본이 저장소를 안 지난다");
+  assert.match(src("../terminal/terminal-files.ts"), /osUser: gw\.store\.osUser/, "노드 업로드 마무리가 경계를 모른다");
   assert.match(src("../terminal/session-project-routes.ts"), /projectStorage\(project\.folder, \{ user: u \}, /, "주입이 요청자 권한 저장소를 안 연다");
   assert.match(src("../ingest/local-file.ts"), /projectStorage\(row\.folder, /, "자료 원본이 저장소를 안 연다");
+  assert.match(src("./attach-relocate.ts"), /projectStorage\(o\.folder, \{ memberId: o\.memberId \}, \{ id: o\.projectId, name: o\.projectName \?\? null \}\)/, "첫 지시 첨부가 저장소를 안 연다");
 });
 
 test("W4 곁칸 숨김 목록에 AGENTS.md·CLAUDE.md 가 없다(잡음 파일은 계속 숨긴다)", () => {
@@ -719,7 +723,7 @@ test("W7 ★ 목록 라우트도 목록을 읽기 **전에** 멤버 모드 링�
   const list = body.indexOf("await store.list(abs)");
   assert.ok(jail > 0, "목록 라우트에 봉쇄가 없다 — 세션이 심은 링크로 폴더 밖 목록이 곁칸에 나간다");
   assert.ok(list > jail, "봉쇄가 목록을 읽은 뒤에 오면 소용없다");
-  for (const head of ["app.get(`${prefix}/:id/file`", "app.post(`${prefix}/:id/rename`", "app.post(`${prefix}/:id/move`", "app.delete(`${prefix}/:id/file`"]) {
+  for (const head of ["app.get(`${prefix}/:id/file`", "app.post(`${prefix}/:id/file/rename`", "app.post(`${prefix}/:id/move`", "app.delete(`${prefix}/:id/file`"]) {
     assert.match(routeBody(src("./project-routes.ts"), head), /await jailIfMember\(store, /, `${head} 에 봉쇄가 없다`);
   }
   for (const head of ["app.put(`${prefix}/:id/file`", "app.post(`${prefix}/:id/folder`"]) {
@@ -736,11 +740,11 @@ test("W9 기본 소유 확인은 이 워크스페이스 자료 표에서 그 프
   assert.match(src("../v6/agents-md.ts"), /\{ id: p\.id, name: p\.name \?\? null \}/);
   assert.match(src("../terminal/session-project-routes.ts"), /projectStorage\(project\.folder, \{ user: u \}, \{ id: project\.id, name: project\.name \}\)/);
   assert.match(src("../ingest/local-file.ts"), /\{ id: row\.id, name: row\.name \}/);
-  //  stage 판 — 노드 업로드 정본(terminal-files)은 stage 에 아직 없다.
+  assert.match(src("../terminal/terminal-files.ts"), /projectStorage\(row\.folder, \{ memberId \}, \{ id: pid, name: row\.name \}\)/);
 });
 
-test("W10·W11 기본 이름 이력은 이 워크스페이스 감사 기록의 before/after 이름이다", () => {
-  //  stage 판 — 첫 지시 첨부 옮기기(routes → relocateAttachmentsToProject)가 stage 에 아직 없다(main 판 시험이 잠근다).
+test("W10·W11 첫 지시 첨부도 프로젝트 이름을 넘긴다 · 기본 이름 이력은 이 워크스페이스 감사 기록의 before/after 이름이다", () => {
+  assert.match(src("../terminal/routes.ts"), /relocateAttachmentsToProject\(\{[^}]*projectName: made\.name,/, "첫 지시 첨부가 이름 없이 저장소를 연다");
   assert.match(src("./first-prompt-project.ts"), /return \{ id: project\.id, folder, name: row\?\.name \?\? null \};/);
   const store = src("./project-storage.ts");
   //  그 시각에 유효하던 이름(가장 늦은 행 하나) + 창 안에서 붙인 이름(상한) — 이력 전체를 받으면 사전 대조 길이 열린다

@@ -159,6 +159,53 @@ export interface ContradictionCandidate {
   a: string; a_title: string | null; b: string; b_title: string | null; similarity: number;
 }
 
+// 후보 = 스코프 지식 k 마다 HNSW 최근접 이웃 CONTRADICTION_NEIGHBORS 개 중 임계 이상인 쌍.
+//  ⚠ 전쌍 자기조인(JOIN ... ON 거리 <= 임계)으로 되돌리지 마라 — 거리 술어는 인덱스를 못 타 n² 스캔이 되고,
+//   임베딩 수천 건 규모에서 statement timeout 으로 관리기가 통째로 실패했다.
+//  LATERAL 안의 ORDER BY 는 관례상 인덱스 열을 왼쪽에 둔다(`o.embedding_vector <=> k.embedding_vector`) —
+//   테스트가 이 모양을 못박는다.
+//  한계(근사): 임계 이상 유사 쌍이 k 의 이웃 N개 밖에 있으면 빠진다(닮은 문서가 N개 넘게 몰린 군집).
+//   o.name > k.name 을 바깥에서 거르므로 쌍 (A,B) 는 A 의 이웃 목록에서만 살아남는다 — B 의 목록에 A 가 있어도
+//   B 가 스코프 밖이거나 이름이 커서 그 쪽 행은 버려진다. 또 HNSW 는 근사라 이웃 순위 자체가 정확하지 않을 수 있다.
+//   o 쪽 술어(lifecycle·폴더)는 인덱스가 뽑은 뒤 걸러지므로 비활성·폴더가 이웃 자리를 차지하면 N 보다 적게 남는다.
+//  N=40 과 ef_search=100: 인덱스 스캔은 hnsw.ef_search(기본 40)개보다 많이 돌려주지 않고(iterative scan 기본 꺼짐),
+//   LIMIT 을 ef_search 와 같게 두면 후보 목록 꼬리(30~40위)의 리콜이 가장 나쁘다. 자기 행·비활성·폴더가 그 자리를
+//   먹은 뒤 남는 게 꼬리라 손실이 겹친다. 그래서 탐색 폭은 100 으로 넓히고 쓰는 이웃은 40 으로 둔다
+//   (pgvector 권장 ef_search > LIMIT). ef_search 는 트랜잭션 안 SET LOCAL 로만 건다 — 세션 SET 은 풀 커넥션에 샌다.
+//  플래너는 이 LATERAL 에서 HNSW 경로를 만들긴 하지만 비용 추정에서 «순차 스캔 + top-N 정렬» 에 진다(지식 수천 건이면
+//   HNSW 시작 비용 추정이 순차 스캔 전체 비용보다 크다). 그래서 대체 경로(seqscan·bitmapscan·sort)를 SET LOCAL 로 끈다.
+//   끄지 않으면 행마다 테이블 전체를 훑어 수천 건에서 수 분이 걸린다 — prod EXPLAIN ANALYZE(2026-10-11)에서 행당
+//   33ms(순차) 대 1.2ms(HNSW), 전체 6.3초. 끄는 설정은 «금지» 가 아니라 «비용 가산» 이라 다른 경로가 없으면 그대로 쓰인다
+//   (바깥 ORDER BY similarity 의 정렬처럼). 검증: 같은 SQL 을 이 SET LOCAL 아래 EXPLAIN 해 Index Scan using
+//   knowledge_embedding_hnsw 가 보이는지.
+export const CONTRADICTION_NEIGHBORS = 40;
+export const CONTRADICTION_EF_SEARCH = 100;
+export const CONTRADICTION_PLANNER_OFF = ["enable_seqscan", "enable_bitmapscan", "enable_sort"] as const;
+
+/** 후보 SQL 조립(순수) — 술어 보존을 테스트가 문자열로 못박는다. conds 는 scopeConds(…,"k") 결과. */
+export function contradictionCandidateSql(conds: string[], distP: string, limP: string): string {
+  return `
+    SELECT k.name AS a, k.title AS a_title, o.name AS b, o.title AS b_title,
+           (1 - o.dist) AS similarity
+      FROM knowledge k
+     CROSS JOIN LATERAL (
+       SELECT o.name, o.title, (o.embedding_vector <=> k.embedding_vector) AS dist
+         FROM knowledge o
+        WHERE o.lifecycle='active' AND o.embedding_vector IS NOT NULL
+          AND COALESCE(o.is_folder,false) = false
+          AND o.name <> k.name
+        ORDER BY o.embedding_vector <=> k.embedding_vector
+        LIMIT ${CONTRADICTION_NEIGHBORS}
+     ) o
+     WHERE ${conds.join(" AND ")}
+       AND k.embedding_vector IS NOT NULL
+       AND COALESCE(k.is_folder,false) = false
+       AND o.name > k.name
+       AND o.dist <= ${distP}
+     ORDER BY similarity DESC
+     LIMIT ${limP}`;
+}
+
 export async function findContradictionCandidates(m: ManagerRow, limit: number): Promise<ContradictionCandidate[]> {
   const params: unknown[] = [];
   const conds = scopeConds(m, params, "k");
@@ -168,19 +215,30 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
   params.push(limit);
   const limP = `$${params.length}`;
 
-  const rows = await q(itemsPool, `
-    SELECT k.name AS a, k.title AS a_title, o.name AS b, o.title AS b_title,
-           (1 - (k.embedding_vector <=> o.embedding_vector)) AS similarity
-      FROM knowledge k
-      JOIN knowledge o
-        ON o.lifecycle='active' AND o.embedding_vector IS NOT NULL
-       AND o.name > k.name
-       AND (k.embedding_vector <=> o.embedding_vector) <= ${distP}
-     WHERE ${conds.join(" AND ")}
-       AND k.embedding_vector IS NOT NULL
-       AND COALESCE(k.is_folder,false) = false AND COALESCE(o.is_folder,false) = false
-     ORDER BY similarity DESC
-     LIMIT ${limP}`, params);
+  const client = await itemsPool.connect();
+  let rows: Record<string, unknown>[];
+  let broken: Error | undefined;
+  //  ⚠ 체크아웃해 쥔 동안 커넥션이 끊기면(DB 재시작·장애조치·pg_terminate_backend) pg 클라이언트가 'error' 를 낸다.
+  //   리스너가 없으면 Node 가 그걸 uncaughtException 으로 바꿔 게이트웨이가 통째로 재기동한다(열린 터미널이 전부
+  //   끊긴다). pool.query 는 이 리스너를 스스로 달지만 connect() 로 받은 클라이언트엔 없다 — 후보 쿼리는 수 초가
+  //   걸려 그 창이 넓다. 받은 오류는 broken 에 남겨 아래 release(err) 로 그 커넥션을 폐기한다.
+  //   (실측 2026-10-14: 쿼리 도중 백엔드를 끊으면 리스너 없이는 프로세스가 죽고, 있으면 거부로 끝난다.)
+  const onError = (e: Error): void => { broken ??= e; };
+  client.on("error", onError);
+  try {
+    await client.query("BEGIN");
+    await client.query(`SET LOCAL hnsw.ef_search = ${CONTRADICTION_EF_SEARCH}`);
+    for (const g of CONTRADICTION_PLANNER_OFF) await client.query(`SET LOCAL ${g} = off`);
+    rows = (await client.query(contradictionCandidateSql(conds, distP, limP), params)).rows as Record<string, unknown>[];
+    await client.query("COMMIT");
+  } catch (e) {
+    //  ROLLBACK 마저 실패하면 커넥션이 죽은 것이다 — 풀에 돌려보내지 않고 폐기한다(release(err)).
+    await client.query("ROLLBACK").catch((re: Error) => { broken ??= re; });
+    throw e;
+  } finally {
+    client.removeListener("error", onError);
+    client.release(broken);
+  }
 
   return rows.map((r) => ({
     a: String(r.a), a_title: (r.a_title ?? null) as string | null,
@@ -198,6 +256,54 @@ export async function findContradictionCandidates(m: ManagerRow, limit: number):
 export interface CodeDriftCandidate {
   category_id: number; key: string; name: string | null; should: string;
   repos: string[]; unit_count: number; should_updated: string | null; code_updated: string | null;
+}
+
+/**
+ * 코드 괴리 후보 — **지식 쪽**(#3579).
+ *
+ * ⚠ 왜 따로 필요한가: 위 `findCodeDriftCandidates` 는 **도메인 정의(category.should)** 만 후보로 낸다.
+ *  그런데 이 판정기의 종류 이름은 «지식 ↔ 코드 비교» 이고, 관리기 설정도 지식 필터(match_types)로 쓰이고
+ *  있었다 — 즉 **설정이 약속하는 것과 구현이 보는 것이 갈라져 있었다.** 그래서 «지식이 «이 함수가 X 를
+ *  막는다» 고 적었는데 그 심볼이 코드에 없다» 는 자리를 **아무도 안 보고 있었다.**
+ *
+ *  실측(#3579, 2026-09-07): 2026-08-28 지식이 `defaultWorkspaceId()` 로 고쳤다고 적어 뒀는데 그 심볼은
+ *  전 브랜치 어디에도 커밋된 적이 없었다. 지식만 «고쳤다» 고 말하고 코드엔 없는 상태가 열흘 갔고,
+ *  그 사이 같은 버그를 #3564 가 처음부터 다시 진단했다. 이 후보 경로가 있었으면 기계가 먼저 물었을 것이다.
+ *
+ *  후보 조건: 활성 지식 + 관리기 스코프(scopeConds) + **레포가 연결된 도메인에 속할 것**.
+ *  레포를 요구하는 이유는 category 쪽과 같다 — 읽을 코드가 어디 있는지 모르면 AI 가 추측한다(#1419 T8).
+ */
+export interface CodeDriftKnowledgeCandidate {
+  name: string; title: string | null; type: string | null;
+  repos: string[]; category_keys: string[]; updated_at: string | null;
+}
+
+export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
+  const params: unknown[] = [];
+  const conds = scopeConds(m, params, "k");
+  params.push(limit);
+  const limP = `$${params.length}`;
+  try {
+    const rows = await q(itemsPool, `
+      SELECT k.name, k.title, k.type, k.updated_at,
+             ARRAY_AGG(DISTINCT c.key)   AS category_keys,
+             ARRAY_AGG(DISTINCT cr.repo) AS repos
+        FROM knowledge k
+        JOIN knowledge_category kc ON kc.name = k.name AND kc.state <> 'rejected'
+        JOIN category c            ON c.id = kc.category_id
+        JOIN category_repo cr      ON cr.category_id = c.id
+       WHERE ${conds.join(" AND ")}
+       GROUP BY k.name, k.title, k.type, k.updated_at
+       ORDER BY k.updated_at DESC
+       LIMIT ${limP}`, params);
+    return rows.map((r) => ({
+      name: String(r.name), title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
+      repos: (r.repos as string[]) ?? [], category_keys: (r.category_keys as string[]) ?? [],
+      updated_at: r.updated_at ? String(r.updated_at) : null,
+    }));
+  } catch {
+    return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
+  }
 }
 
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {

@@ -18,13 +18,14 @@ import {
   STALL_MS_MIN, STALL_MS_MAX, KEEP_FAILED_MIN, KEEP_FAILED_MAX, FAILED_TTL_MIN_MIN, FAILED_TTL_MIN_MAX,
   type DelegatePolicyPatch,
 } from "../../org/policies/delegate-policy.js"; // #1101 위탁 무출력 stall 상한 · #1675 실패 뒤처리
+import type { ContextJobPolicyPatch } from "../../org/policies/context-job-policy.js"; // #4012 T1 맥락관리 잡 실행 신원
 import {
   type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES, KNOWN_HARNESSES, RETENTION_MAX_DAYS
 } from "../../sessions/session-share.js";
 import { kitVersion } from "../../org/delivery/publish.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../../org/delivery/hook-defaults.js";
 import {
-  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision,
+  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision, type OrgRuntimeConfig,
   type UiNavConfig, type UiAnnouncement, type UiProfile, // #1454 S2~S5 — 매니지드 표면 노브
 } from "../../org/store.js";
 import { listAutoApproveToolIds } from "../../org/delivery/auto-approve.js";
@@ -51,6 +52,7 @@ function publicOidc(s: OidcSettings): OidcSettingsPublic {
     client_secret_set: !!s.client_secret_enc,
     allowed_domains: s.allowed_domains, label: s.label,
     trust_unverified_email: s.trust_unverified_email,
+    idp_logout: s.idp_logout,
     source,
     env_present: !!env,
     // ★ #1601 — 설정은 갖춰졌는데 Enterprise 모듈이 없어 **실제로는 안 켜지는** 상태. source 만으로는
@@ -58,6 +60,17 @@ function publicOidc(s: OidcSettings): OidcSettingsPublic {
     //  관리자는 issuer·시크릿을 계속 고치며 헤맨다 — 그래서 '설정이 있을 때만' 참으로 둔다.
     enterprise_required: source !== "none" && !ee().sso,
   };
+}
+
+/**
+ * 기본 실행 멤버로 앉혀도 되는 구성원인가(#4052) — 안 되면 사람에게 보일 이유, 되면 null.
+ *  운영 계정(system)·AI 구성원·나간 사람은 사람의 AI 자격이 없다 — 그 이름으로 돌면 아무도 모르게 실패한다.
+ */
+export function runnerFillRefusal(id: string, m: { state?: string | null; kind?: string | null } | null): string | null {
+  if (!m) return `구성원 '${id}' 가 없습니다`;
+  if (m.state !== "active") return `'${id}' 는 활성 구성원이 아닙니다`;
+  if (m.kind !== "human") return `'${id}' 는 사람 구성원이 아닙니다(${m.kind ?? "종류 모름"})`;
+  return null;
 }
 
 export const runtimeConfigCapabilities: Capability[] = [
@@ -104,7 +117,7 @@ export const runtimeConfigCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/runtime-config"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const patch: {
-        hooks?: Record<string, boolean>; writeback_notice?: string | null; work_roots?: string[];
+        hooks?: Partial<OrgRuntimeConfig["hooks"]>; writeback_notice?: string | null; work_roots?: string[];
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
         allowed_internal_hosts?: string[];
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
@@ -115,6 +128,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         session_memory_policy?: SessionMemoryPolicyPatch;
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         delegate_policy?: DelegatePolicyPatch;
+        context_job_policy?: ContextJobPolicyPatch;
         worker_policy?: WorkerPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
@@ -285,6 +299,37 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(n) || n < RECLAIM_RELEASE_MARGIN_MIN || n > RECLAIM_RELEASE_MARGIN_MAX) throw new HttpError(400, `session_reclaim_policy.pressure_release_margin_pct 는 ${RECLAIM_RELEASE_MARGIN_MIN}~${RECLAIM_RELEASE_MARGIN_MAX} 정수(%p)여야 합니다 (0=임계 바로 밑에서 정지)`);
           patchIn.pressure_release_margin_pct = Math.floor(n);
         }
+        //  #4694 — 같은 id 복원(매니지드 전용 스위치). ⚠ 위 축들과 같은 함정: 여기와 아래 zod **둘 다**에 있어야 값이 산다.
+        if (s.restore_same_id !== undefined) patchIn.restore_same_id = Boolean(s.restore_same_id);
+        //  #4695 T5 — 하네스 종료 규칙의 N(완료 뒤)·M(질의 뒤) 분. ⚠ 위 축들과 같은 함정: 여기와 아래 zod **둘 다**에 있어야 값이 산다.
+        if (s.stop_done_minutes !== undefined) {
+          const n = Number(s.stop_done_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.stop_done_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=완료 세션을 끄지 않음)`);
+          patchIn.stop_done_minutes = Math.floor(n);
+        }
+        if (s.stop_asking_minutes !== undefined) {
+          const n = Number(s.stop_asking_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.stop_asking_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=질의 중인 세션을 끄지 않음)`);
+          patchIn.stop_asking_minutes = Math.floor(n);
+        }
+        //  #5043 — 원격 PC(멤버 노드) 규칙의 워크스페이스 기본값. 컴퓨터별 값은 /api/ui/nodes/:id/stop-rule 이 따로 받는다.
+        //   ⚠ 위 축들과 같은 함정: 여기와 아래 zod **둘 다**에 있어야 값이 산다.
+        if (s.node_stop_enabled !== undefined) patchIn.node_stop_enabled = Boolean(s.node_stop_enabled);
+        if (s.node_stop_done_minutes !== undefined) {
+          const n = Number(s.node_stop_done_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_done_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=완료 세션을 끄지 않음)`);
+          patchIn.node_stop_done_minutes = Math.floor(n);
+        }
+        if (s.node_stop_asking_minutes !== undefined) {
+          const n = Number(s.node_stop_asking_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_asking_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=질의 중인 세션을 끄지 않음)`);
+          patchIn.node_stop_asking_minutes = Math.floor(n);
+        }
+        if (s.node_stop_unknown_minutes !== undefined) {
+          const n = Number(s.node_stop_unknown_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.node_stop_unknown_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=상태를 모르는 세션을 끄지 않음)`);
+          patchIn.node_stop_unknown_minutes = Math.floor(n);
+        }
         patch.session_reclaim_policy = patchIn;
       }
       // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
@@ -313,12 +358,38 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (s.auth_fail_stop_cron !== undefined) patchIn.auth_fail_stop_cron = Boolean(s.auth_fail_stop_cron);
         patch.delegate_policy = patchIn;
       }
+      // 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 **누구 자격으로** 돌리나.
+      //  ⚠ null 을 받는다: «지웠다»(실행 멤버 해제)는 유효한 상태이고, 그걸 «안 건드렸다» 와 가르지 않으면
+      //   env 시드가 되살아나 사람이 끈 것이 안 꺼진다(store 의 normalize 가 그 구분을 지킨다).
+      //  존재 확인은 여기서 하지 않는다 — 멤버가 나중에 합류·개명할 수 있고, 자격 부재는 접수 단계가 말한다(T2).
+      if (input.context_job_policy !== undefined) {
+        const raw = input.context_job_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "context_job_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const patchIn: ContextJobPolicyPatch = {};
+        if (s.runner_member !== undefined) {
+          if (s.runner_member !== null && typeof s.runner_member !== "string") {
+            throw new HttpError(400, "context_job_policy.runner_member 는 멤버 id 문자열이거나 null(해제)이어야 합니다");
+          }
+          patchIn.runner_member = s.runner_member as string | null;
+        }
+        patch.context_job_policy = patchIn;
+      }
       if (input.hooks !== undefined) {
         const h = input.hooks;
         if (typeof h !== "object" || h === null || Array.isArray(h)) throw new HttpError(400, "hooks 는 객체여야 합니다");
-        patch.hooks = {};
-        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update"]) {
-          if (k in (h as Record<string, unknown>)) patch.hooks[k] = Boolean((h as Record<string, unknown>)[k]);
+        const next: Partial<OrgRuntimeConfig["hooks"]> = {};
+        const nextFlags = next as Record<string, unknown>;
+        for (const k of ["session_preload", "work_flag", "stop_writeback_gate", "self_update", "concurrent"]) {
+          if (k in (h as Record<string, unknown>)) nextFlags[k] = Boolean((h as Record<string, unknown>)[k]);
+        }
+        patch.hooks = next;
+        // #5034 — 실행 방식은 boolean 이 아니라 두 값 중 하나다. 모르는 값을 조용히 기본으로 접지 않고 거부한다(되돌리기 스위치라
+        //  «process 로 바꿨다» 고 믿었는데 오타로 안 바뀌어 있으면 그게 사고다).
+        if ("runtime" in (h as Record<string, unknown>)) {
+          const v = (h as Record<string, unknown>).runtime;
+          if (v !== "worker" && v !== "process") throw new HttpError(400, `hooks.runtime 은 "worker" 또는 "process" 여야 합니다`);
+          next.runtime = v;
         }
       }
       // (#1245) 온톨로지 가이드(제품 소유 섹션) 주입 토글 — 본문은 코드 단일 출처(편집 불가), org 는 이것만 정한다.
@@ -510,6 +581,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (o.allowed_domains !== undefined) p.allowed_domains = normalizeDomains(o.allowed_domains);
         if (o.label !== undefined) p.label = o.label === null ? null : str(o.label, "oidc_config.label", 100);
         if (o.trust_unverified_email !== undefined) p.trust_unverified_email = o.trust_unverified_email === true;
+        if (o.idp_logout !== undefined) p.idp_logout = o.idp_logout === true;
         if (o.client_secret !== undefined) {
           const plain = o.client_secret === null ? "" : str(o.client_secret, "oidc_config.client_secret", 1000).trim();
           if (!plain) p.client_secret_enc = null;
@@ -614,7 +686,10 @@ export const runtimeConfigCapabilities: Capability[] = [
       return { runtimeConfig: await updateRuntimeConfig(patch, actorOf(user), ctx?.source ?? "web",
         { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null }) };
     }, {
-      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean() }).partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트)"),
+      hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean(),
+        concurrent: z.boolean().describe("직접 만든 커스텀 훅도 sort 가 같으면 러너가 동시에 돌린다(기본 꺼짐 = 하나씩 · 제품 시드 훅끼리는 이 값과 무관하게 겹친다). 같은 sort 의 훅끼리 같은 파일을 쓰거나 서로의 결과에 기대면 켜기 전에 sort 를 나눠라"),
+        runtime: z.enum(["worker", "process"]).describe("커스텀 훅 실행 방식 — worker(기본: 제품 기본 훅을 러너 안의 스레드로 실행해 훅마다 프로세스를 새로 띄우지 않는다. 직접 만든 훅은 본문에 lively-hook-runtime: worker 가 있을 때만 스레드) | process(전부 종전처럼 훅마다 node 프로세스 — 스레드에서 문제가 생긴 조직의 되돌리기용)") })
+        .partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트 · concurrent=직접 만든 훅의 같은 sort 동시 실행 · runtime=훅 실행 방식)"),
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
       // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──
       ui_nav: z.object({ tabs: z.record(z.boolean()).optional().describe("탭 슬러그(data-tab) → 노출 여부. **명시적 false 만** 숨김") })
@@ -678,6 +753,13 @@ export const runtimeConfigCapabilities: Capability[] = [
         pressure_priority: z.number().int().min(RECLAIM_PRIORITY_MIN).max(RECLAIM_PRIORITY_MAX).optional().describe("전역 압박 회수에서 이 워크스페이스의 순번 — 낮을수록 먼저 걷힌다(#2509). 기본 100. 압박 축은 박스 전역이라(물리·스왑은 워크스페이스마다 다르지 않다) 임계를 넘으면 회수가 박스 단위로 한 번 돈다 — 그때 «어느 워크스페이스부터»를 정하는 값이다. 실서비스 200 · 개발용 50 처럼 두면 개발용이 먼저 걷힌다. ⚠ 참가 여부가 아니다(그건 pressure_used_pct/pressure_swap_pct 가 정한다). 전부 같으면 순수 RSS 내림차순"),
         pressure_max_reap: z.number().int().min(RECLAIM_MAX_REAP_MIN).max(RECLAIM_MAX_REAP_MAX).optional().describe("한 tick 에 이 워크스페이스에서 걷을 최대 세션 수(#2509). 0=무제한(기본). 회수는 되돌릴 수 없어 폭발반경 상한이 필요하다 — RSS 측정 실패로 목표 판정이 영영 안 서는 경우가 실제로 있는데, 그때 한 워크스페이스를 통째로 비우지 않게 막는다"),
         pressure_release_margin_pct: z.number().int().min(RECLAIM_RELEASE_MARGIN_MIN).max(RECLAIM_RELEASE_MARGIN_MAX).optional().describe("압박 회수의 정지 여유(%p) — 임계보다 이만큼 더 내려갈 때까지 걷는다(#2509). 0=종전(임계 바로 밑에서 정지). 정지선이 임계에 붙어 있으면 회수 직후 다음 tick 이 또 발동해 세션이 계속 걷힌다 — 히스테리시스다. ⚠ 임계를 낮추는 것과 다르다: 발동은 원래 임계로 하고 정지만 더 내려간다"),
+        restore_same_id: z.boolean().optional().describe("복원을 같은 세션 id 로 한다(#4694) — 세션 컨테이너 배포(매니지드)에서만 본다. 기본 켬. 같은 id 면 주소·장부 행·이름·핀·소속·미전달 지시가 그대로 이어진다. false 면 종전(새 id + 옛 행 이정표). ⚠ 브로커의 «자리 이름»(#4693)을 전제한다 — 브로커를 그 이전으로 되돌릴 때는 끈다(같은 id 의 옛 컨테이너가 철거와 겹친다). 셀프호스트는 이 값과 무관하게 늘 같은 id 다"),
+        stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("하네스 종료 규칙(#4695) — 턴이 끝나고(질의 아님 · 백그라운드 작업·예약 깨움 없음) 아무도 안 보는 채 이 분이 지나면 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 3. 세션 컨테이너 배포(매니지드)에서만 돈다"),
+        stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("하네스 종료 규칙(#4695) — 하네스가 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다. 끄기 전에 그 질문·선택지를 남겨 다시 열 때 대화창에 보여 준다. 0=끔. 기본 60"),
+        node_stop_enabled: z.boolean().optional().describe("원격 PC 하네스 종료 규칙(#5043) — 구성원이 연결한 컴퓨터(노드)의 세션에도 위 규칙을 적용할지의 워크스페이스 기본값. 기본 끔. 컴퓨터마다 따로 켜고 끌 수 있다(/api/ui/nodes/:id/stop-rule — 비운 칸은 이 값을 따른다)"),
+        node_stop_done_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 턴이 끝나고 아무도 안 보는 채 이 분이 지나면 그 컴퓨터의 하네스를 끈다(대화는 남아 다시 열면 이어진다). 0=끔. 기본 30"),
+        node_stop_asking_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 승인·선택을 묻는 채 아무도 안 보고 이 분이 지나면 끈다(질문은 남겨 다시 열 때 보여 준다). 0=끔. 기본 180"),
+        node_stop_unknown_minutes: z.number().int().min(0).max(43_200).optional().describe("원격 PC 하네스 종료 규칙(#5043) — 상태를 모르는 세션(턴 끝 보고에 예약 셈이 없음 · 마지막 보고가 작업 중에서 멈춤)의 안전망. 마지막 활동·안 보기 시작 뒤 이 분이 지나면 끈다(살아 있는 셸 작업·도는 턴·질문은 집행 직전에 다시 재서 지킨다). 0=끔. 기본 1440"),
       }).optional().describe("idle 세션 자동 회수(#1059 F) + 메모리 압박 회수(#1220) — 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택). ⚠ 두 축은 스코프가 다르다(#2509): 유휴는 워크스페이스별로, 압박은 박스 전역으로 한 번 돈다 — pressure_* 를 켠다는 것은 «박스가 벼랑에 서면 이 워크스페이스 세션도 걷어도 좋다»는 동의다"),
       delegate_policy: z.object({
         stall_ms: z.number().int().min(STALL_MS_MIN).max(STALL_MS_MAX).optional().describe("위탁 워커가 시작 후 한 바이트도 못 낸 채 이 ms 를 넘기면 조기 종결(#1101). 0=가드 끔. 0 초과인데 60000 미만이면 60000 으로 올린다 — 너무 짧으면 멀쩡한 작업을 죽인다"),
@@ -685,6 +767,9 @@ export const runtimeConfigCapabilities: Capability[] = [
         failed_session_ttl_min: z.number().int().min(FAILED_TTL_MIN_MIN).max(FAILED_TTL_MIN_MAX).optional().describe("남겨둔 실패 세션도 이 분을 넘기면 회수(#1675 ①). 0=무제한(개수 상한만). 검시는 사고 직후에 하지 이틀 뒤에 하지 않는다"),
         auth_fail_stop_cron: z.boolean().optional().describe("자격(인증) 실패를 감지하면 그 위탁을 낸 크론을 자동 정지할지(#1675 ③). 기본 켬. 끄면 알림만 가고 크론은 계속 돌아 같은 실패를 반복한다"),
       }).optional().describe("위탁 태스크 정책(#1101) — 무출력 stall 상한. 자격 부재로 claude -p 가 hang 하면 종전엔 timeout(1h)까지 무출력으로 매달렸다. 레포 준비가 느린 박스는 늘리고, 배치 드레인은 줄여 빨리 실패를 본다"),
+      context_job_policy: z.object({
+        runner_member: z.string().nullable().optional().describe("「수집 · 증류」의 자동 실행 잡(증류: 자료 → 지식 · 카테고리 붙이기, 그리고 관리 등 LLM 잡)을 **이 멤버의 자격으로** 돌린다(#4012 T1). 멤버 id(또는 이메일). null=해제 → 종전 동작(잡 params.requester > created_by). 사람이 안 보는 자리에서 도는 잡의 과금·귀속이 «누가 마지막으로 그 잡을 저장했나» 로 정해지지 않게 하는 자리다. 레인·잡이 자기 requester 를 명시했으면 그쪽이 이긴다(더 구체적인 지정)"),
+      }).optional().describe("「수집 · 증류」 자동 실행 잡의 실행 신원(#4012 T1 · #3994 D1). 워크스페이스가 정한 멤버 한 명의 자격으로 증류·관리를 돌린다. 그 멤버의 Claude/Codex 자격(claude_setup_token)이 등록돼 있어야 실제로 선다"),
       // #1780 Stage B — 앱 worker 조직 예산. 각 값 0 = 무제한/감시 끔.
       //  상한은 WORKER_POLICY_MAX 를 그대로 쓴다(스키마·핸들러·store clamp 가 한 상수를 공유 — 드리프트 금지).
       worker_policy: z.object({
@@ -714,8 +799,41 @@ export const runtimeConfigCapabilities: Capability[] = [
         allowed_domains: z.union([z.array(z.string()), z.string()]).optional().describe("자동 가입 허용 이메일 도메인(배열 또는 쉼표 구분). 비우면 자동 가입 없음 = 미리 등록된 구성원만 로그인"),
         label: z.string().nullable().optional().describe("로그인 버튼 문구. 비우면 issuer 로 추정(구글이면 'Google 계정으로 로그인')"),
         trust_unverified_email: z.boolean().optional().describe("⚠ IdP 가 email_verified 를 아예 안 줄 때만 켠다 — 켜면 미검증 이메일로도 구성원에 매칭된다"),
+        idp_logout: z.boolean().optional().describe("로그아웃하면 IdP(회사 SSO) 세션도 끝낸다(RP-Initiated Logout, 기본 꺼짐) — IdP 가 로그아웃 주소를 줄 때만 동작하고(구글은 안 줌), IdP 허용 목록에 <게이트웨이>/ui/ 를 로그아웃 후 이동 주소로 등록해야 한다. 같은 IdP 를 쓰는 다른 앱에서도 나가게 된다"),
       }).optional().describe("회사 계정(OIDC) 웹 로그인 설정(#1520) — DB 우선, 비면 .env(OIDC_*) 시드. 리디렉션 URI 는 <게이트웨이>/api/ui/auth/oidc/callback"),
     }),
+  // #4052 — 워크스페이스 실행 멤버(D1)를 **정해진 적 없을 때만** 채운다. 매니지드 CP 가 새 워크스페이스의 오너를
+  //  기본 실행 계정으로 앉히는 자리다(증류·분류 자동 실행을 켠 채로 시작하는데, 계정이 비면 운영 계정 이름으로 돌아
+  //  아무도 모르게 실패한다). org_runtime_update 로는 못 한다 — 그건 무조건 덮어쓰고, «읽고 → 쓰면» 그 사이
+  //  관리자가 정한 값을 덮는다. 판정·쓰기를 한 문장으로 하는 store.fillContextJobRunnerIfUnset(#4051)을 그대로 쓴다.
+  //  에이전트 표면(MCP)에는 안 연다 — 사람이 정할 값은 org_runtime_update 가 이미 받는다.
+  {
+    name: "org_context_job_runner_fill",
+    title: "기본 실행 멤버 채우기(비어 있을 때만)",
+    description: "「수집 · 증류」 자동 실행 잡(증류·관리)의 워크스페이스 실행 멤버(context_job_policy.runner_member)가 **한 번도 정해진 적 없을 때만** " +
+      "이 구성원으로 채운다. 관리자가 비워 둔 것(명시적 null)·이미 정해진 것·env 시드는 건드리지 않는다. 활성 사람 구성원만 받는다.",
+    scope: "admin",
+    input: {
+      member: z.string().describe("기본 실행 멤버로 앉힐 구성원 id(활성 사람 구성원)"),
+    },
+    expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/context-job-runner/fill"], parse: (req) => req.body ?? {} }] },
+    handler: async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = str(input.member, "member", 128).trim();
+      if (!id) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+      const { getMember } = await import("../../org/store/members.js");
+      const m = await getMember(id);
+      const refusal = runnerFillRefusal(id, m);
+      if (refusal || !m) throw new HttpError(400, `${refusal} — 기본 실행 멤버로 정할 수 없습니다`);
+      const { fillContextJobRunnerIfUnset, getContextJobPolicySource } = await import("../../org/store/runtime-config.js");
+      const filled = await fillContextJobRunnerIfUnset(m.id, actorOf(user), "context-job-runner-fill");
+      const c = await getRuntimeConfig();
+      return {
+        filled,
+        runner_member: c.context_job_policy?.runner_member ?? null,
+        source: await getContextJobPolicySource(),
+      };
+    },
+  },
   // #4135 — **AI 전달(세션 주입) 설정만** 받는 구성원용 저장. 원준 2026-09-25: "워크스페이스 자체를 수정하는 기능(초대,
   //  내보내기 등) 말고는 워크스페이스 안에서 모든 사람의 권한이 같음". 종전엔 주입 켜기·너지 문구·기록 인정 툴까지
   //  org_runtime_update(admin) 한 op 에 보안 필드(허용 목록·OIDC·임베딩 자격)와 묶여 있어 구성원은 AI 전달을 못 고쳤다.
@@ -741,7 +859,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if ("self_update" in hr && Boolean(hr.self_update) !== (cur.hooks?.self_update !== false)) {
           throw new HttpError(403, "키트 자동 업데이트(self_update)는 구성원 컴퓨터의 키트를 바꾸는 설정이라 관리자만 바꿉니다");
         }
-        const merged: Record<string, boolean> = { ...(cur.hooks || {}) } as Record<string, boolean>;
+        const merged: Record<string, unknown> = { ...(cur.hooks || {}) };
         for (const k of MEMBER_HOOK_KEYS) if (k in hr) merged[k] = Boolean(hr[k]);
         out.hooks = merged;
       }
@@ -767,7 +885,8 @@ export function injectionView(c: Awaited<ReturnType<typeof getRuntimeConfig>>): 
   hooks: Record<string, boolean>; inject_ontology_guide: boolean; writeback_notice: string | null; write_tools: string[]; pull_tools: string[];
 } {
   return {
-    hooks: { ...(c.hooks || {}) } as Record<string, boolean>,
+    // on/off 스위치만 싣는다 — runtime(#5034 실행 방식)은 값이 문자열인 관리자 설정이라 구성원 주입 화면의 몫이 아니다.
+    hooks: Object.fromEntries(Object.entries(c.hooks || {}).filter(([, v]) => typeof v === "boolean")) as Record<string, boolean>,
     inject_ontology_guide: c.inject_ontology_guide !== false,
     writeback_notice: c.writeback_notice ?? null,
     write_tools: c.write_tools || [],

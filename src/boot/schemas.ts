@@ -12,8 +12,10 @@ import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initActivitySchema } from "../activity/schema.js";
 import { initV6Schema } from "../v6/schema.js";
-import { ensureTenantColumn, pinIdentityGlobalTenant } from "../db/tenant-column.js";
+import { initConnectorRunSchema } from "../connectors/run-schema.js";
+import { ensureTenantColumn, pinIdentityGlobalTenant, refreshTenantDefault } from "../db/tenant-column.js";
 import { reconcilePersonalUploadVisibilitySafe } from "../v6/vis-personal-unlock.js"; // #4007 — 개인 업로드 자동 잠금 소급 해제(멱등)
+import { migrateDistillerPresetTextSafe } from "../org/distill/preset-text-migrate.js"; // #4824 — 프리셋 레인의 저장된 문구 이관(멱등)
 import { logger } from "../log.js";
 
 // 직렬 체인 — 멱등(부팅마다·단독 CLI 신규 DB 에서도 성립). quiet: run-sync CLI 는 종전대로 무로그(부팅 로그는 유지).
@@ -46,10 +48,27 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   note("activity schema ready");
   await initV6Schema();
   note("v6 schema ready");
+  // #5012 — 수집 실행 기록(connector_run). 종전엔 run-tracker 가 첫 사용 때만 만들어, 처음부터 registry 로 설치한
+  //  박스(앱 role 은 DDL 불가)에서는 영영 안 생겨 수집기가 전부 실패했다. 소유자가 치는 이 체인에서 만들고,
+  //  ensureTenantColumn **앞**이라 같은 체인에서 tenant_id·격리 정책이 붙는다. 상세 connectors/run-schema.ts.
+  await initConnectorRunSchema();
+  note("connector_run schema ready");
   // #1437 — `tenant_id` 와 복합 UNIQUE 보장. **모든 스키마가 만들어진 뒤**여야 한다(카탈로그를 읽으므로).
   //  단일 테넌트에서는 값이 상수라 동작이 달라지지 않는다 — SQL 방언을 하나로 유지하기 위한 것이다.
   const tc = await ensureTenantColumn();
   if (tc.ddl) note(`tenant column ready (테이블 ${tc.tables} · DDL ${tc.ddl})`);
+  //  ensureTenantColumn 은 컬럼이 **없는** 표에만 손대므로, 기본값 식을 고쳐도 이미 컬럼이 붙은 표는
+  //  옛 식을 그대로 물고 있다. 여기서 따라잡는다(멱등 — 이미 맞는 표는 건드리지 않는다).
+  //  pin 과의 순서는 무관하다 — 신원 전역 표는 상수 기본값이라 이 조회(current_setting 기반만)에 안 잡힌다.
+  //  ensureTenantColumn 바로 뒤에 두는 건 «컬럼 이야기» 를 한자리에 모으려는 것뿐이다.
+  //  ⚠ 실패해도 부팅은 계속한다 — 못 따라잡은 DB 는 이 단계 전과 같은 상태일 뿐이다(더 나빠지지 않는다).
+  //   판정용 임시 표를 못 만드는 DB(TEMP 권한 회수) 하나 때문에 게이트웨이·수집 CLI 가 안 뜨면 안 된다.
+  try {
+    const td = await refreshTenantDefault();
+    if (td.refreshed.length) note(`tenant default refreshed (${td.refreshed.length}표)`);
+  } catch (e) {
+    logger.warn({ err: String(e) }, "tenant default refresh 실패 — 부팅은 계속한다(다음 부팅에 다시 시도)");
+  }
   // #1879 — 신원 전역 표(사람·세션·토큰·자격)는 컬럼은 두되 값을 primary 로 **못박는다**. 기본값이
   //  컨텍스트를 따라가면 정책이 없어도 계정행이 워크스페이스마다 갈라진다(그러면 감사 서브쿼리가
   //  2행을 받아 org 쓰기가 전부 500 이 되고, tenant 없는 조회가 아무 행이나 돌려준다).
@@ -69,4 +88,7 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   //  (테넌트별로 정책 유무를 가리므로). 멱등이고, 로컬 대상 정책이 생긴 테넌트에서는 아무것도 하지 않는다.
   //  비치명 — 이 조정이 실패해도 부팅은 계속된다(다음 부팅에 다시 시도).
   await reconcilePersonalUploadVisibilitySafe();
+  //  #4824 — 프리셋 레인(내 컴퓨터·GitHub·피그마)에 저장된 옛 문구(«source_link_knowledge 를 건다» 등)를 글자 그대로 같을 때만
+  //   새 문구로 옮긴다(사람이 고친 줄은 그대로). 멱등 · 비치명.
+  await migrateDistillerPresetTextSafe();
 }

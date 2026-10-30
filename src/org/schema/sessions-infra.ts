@@ -97,11 +97,24 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
        '관리탭 등록 레포를 이 호스트 workspace/repos 에 없으면 clone·있으면 FF — 워크트리 셀프서비스(lively_local_repo_worktree)의 최신 원본을 무인 보장. 도메인맵 스캐너 클론(refresh_all, stateDir/repos)과 대상이 다르다.'),
       ('map-unmapped-domains','미매핑 코드유닛 LLM 분류 (상시 세션 주입)','map_unmapped',1800,false,
        '상시 LLM 세션(라이블리 시드, 팀플랜 과금)에 분류 태스크를 tmux send-keys 로 주입 → 세션이 도메인 should+DDD 로 분류(propose+근거→audit). 활성화 전 params.session 에 타깃 세션 id 설정 필요 → 기본 enabled=false.'),
-      ('classify-unmapped-knowledge','미분류 지식 LLM 분류 (상시 세션 주입, #982)','classify_knowledge',3600,false,
-       'map_unmapped 의 지식판 — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리 전체에서 골라 분류(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
+      ('classify-unmapped-knowledge','카테고리 붙이기 (상시 세션 주입, #982)','classify_knowledge',3600,false,
+       '증류기의 카테고리 붙이기(옛 분류) — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리 전체에서 골라 붙인다(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
       ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
        'enabled 상시 세션(org_managed_session)의 tmux 세션을 보장 — 죽었으면 격리 워크스페이스에 재생성. 등록된 상시 세션 없으면 no-op.')
     ON CONFLICT DO NOTHING;
+  `);
+  // #4194 — 옛 «분류» 기본 이름을 새 말(증류기의 카테고리 붙이기)로. **옛 기본값 그대로일 때만** 바꾼다 — 사람이 고친
+  //  이름·설명은 안 건드린다. 잡 id·action 은 그대로다(컨트롤플레인이 이 id 로 심고, 옛 이미지로 롤백해도 행이 유효해야 한다).
+  //  이름만 바꾸는 것이라 롤백해도 해가 없다(옛 화면이 새 이름을 보일 뿐).
+  await pool.query(`
+    UPDATE org_cron SET label='카테고리 붙이기 (미분류 지식→카테고리, 헤드리스)'
+     WHERE id='classify-knowledge-headless' AND label='미분류 지식 분류 (헤드리스)';
+    UPDATE org_cron SET note='켜진 카테고리 붙이기 증류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 켜진 것이 없으면 전 지식 공통 기본 기준.'
+     WHERE id='classify-knowledge-headless' AND note IN (
+       '켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류.',
+       '켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류. 새 워크스페이스는 켠 채로 시작(#4052).');
+    UPDATE org_cron SET label='카테고리 붙이기 (상시 세션 주입, #982)'
+     WHERE id='classify-unmapped-knowledge' AND label='미분류 지식 LLM 분류 (상시 세션 주입, #982)';
   `);
   // #177 아웃바운드 푸시 잡 — external_outbox(우리 편집)→ClickUp. 우리 DB=master 반영. params.system='clickup'(run-push 는 clickup 전용).
   //  검증 전이라 기본 enabled=false — 수동 run-push 1회 확인 후 관리탭/DB 로 활성화. 별도 INSERT(params 컬럼 포함).
@@ -229,6 +242,11 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  ⚠ 그래서 이 행은 '보이게' 하되 '되살릴 수 있다'고 말하지 않는다 — 복원이 좌표를 추측하면(root_key||'shared')
   //   그 세션이 **엉뚱한 폴더에서** 되살아난다. 복원 경로가 이 표식을 보고 거절한다(terminal/routes.ts).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS discovered BOOLEAN NOT NULL DEFAULT false;`);
+  // #4418 — 좌표(root_key)를 아는 발견 행은 **게이트웨이가 만든 세션**이다: root_key 를 쓰는 자리는 생성·복원 기록(upsertSessionState)
+  //  하나뿐인데, 노드의 상태 보고가 그보다 먼저 닿으면 발견 표식이 남았다(그 기록이 표식을 안 거뒀다 — 지금은 거둔다). 그 표식이 남은
+  //  행은 이어서 열기·토큰 되채우기·주인 확인에서 «그 컴퓨터에서 직접 띄운 세션» 으로 잘못 다뤄진다. 멱등(이미 거둔 행엔 안 맞는다).
+  //  이름 출처는 되살리지 못한다(누가 지었는지 모른다 — 비어 있는 채로 둔다).
+  await pool.query(`UPDATE org_session_state SET discovered=false WHERE discovered AND root_key IS NOT NULL;`);
   // #2231 — **이 세션은 어느 새 세션으로 이어졌나**(복원 성공 시 새 id). NULL = 아직 이어지지 않은 살아있는 desired-state.
   //  왜: 종전엔 복원이 성공하면 옛 행을 **지웠다**. 그러면 그 옛 id 는 서버에서 통째로 모르는 값이 되어, 이미 열려 있던
   //   화면·탭·북마크·다른 칸이 그 id 를 계속 가리킨 채 "중단된 세션이에요 — 이어받을 수 있어요"를 띄우고, 누르면
@@ -238,6 +256,29 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //   가시성), 옛 id 로 오는 복원·메타 조회는 이 값을 따라가 새 세션으로 **안내**한다. 행 하나는 수백 바이트라 남겨 두는
   //   비용보다 '옛 링크가 영원히 산다'는 값이 크다(그래서 만료 삭제도 두지 않는다).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS superseded_by TEXT;`);
+  // #4695 T5 — **하네스를 끄기 전에 남긴 쪽지**(하네스 종료 규칙 — 완료+안 봄 N분 · 질의+안 봄 M분). JSON 하나:
+  //  { at(끈 시각 epoch초) · why(done|asking|exited) · harness · draft?(하네스 입력창에 쓰다 만 글) · question?(답을 기다리던 질문·선택지) }.
+  //  왜 DB 인가: 끄는 순간 그 화면(tmux)이 사라진다. 질문은 대화 파일에도 안 남는다(실측 claude 2.1.300 3/3 — 질문 창이 떠 있을 때 끄면
+  //   그 AI 메시지가 파일에 없다). 다음에 열 때 대화창이 이 쪽지로 입력칸을 채우고 답을 기다리던 질문을 다시 보여 준다.
+  //  수명: 끌 때 쓰고(덮어쓴다) · 다음 턴이 돌기 시작하면(훅 busy 보고) 지운다. NULL = 쪽지 없음.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS stop_note JSONB;`);
+  // #4783 — **이 판이 왜 끝났나**(sessions/session-end.ts). JSON 하나: { v:1(판 시작 표식) · at · why(reclaim|stop|harness_exit|
+  //  harness_crash|launch_fail|lost) · code?(하네스 종료코드) · by?(멈춘 사람) · seen?(끌 때 안 본 결과가 남았나) }.
+  //  왜: 사유를 남기는 자리가 셋뿐이라(T5 쪽지 · /exit 의 exited_at · 셀프호스트 OOM) 나머지는 전부 사유 없는 «중단됨» 이 됐고,
+  //   화면은 «사람이 끝냄 / 시스템이 끔 / 고장» 을 가를 수 없었다. 수명: 판이 설 때(생성·같은 id 복원) {v:1} · 끝낸 자리가 why 를 적는다(첫 사실이 이긴다).
+  //  NULL = 이 칸 이전에 태어난 판(사유를 모른다 — 화면은 종전처럼 그린다).
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS end_note JSONB;`);
+
+  // #4783 후속(상민님 2026-10-16 «사유 모름이 왜 이렇게 많냐 — 유저 행동이 필요한 세션을 숨기는 꼴») —
+  //  **마지막으로 관측한 실행 상태**. { at(관측 epoch초) · run(working|done|asking|bg|scheduled) }.
+  //  왜: end_note 는 끝낸 **자리가 적는다**(사람 /exit · 시스템 회수 · 런처 종료코드). 그런데 세션은 그 세 자리를 안 거치고도 꺼진다
+  //   (노드 죽음 · 게이트웨이·노드 재시작 · PC 꺼짐 · 고장 · 브로커 정리). 그때 end_note 가 비어 화면이 «사유 모름» 으로 떨어졌고,
+  //   그 안에 **답을 기다리던 세션·작업 도중 끊긴 세션**이 숨었다(실측: unknown 205 — 사람이 끝낸 게 아니다).
+  //  해결: 종료 규칙 sweep(session-stop-rule)이 매 틱 **관측한** 세션마다 그 순간의 실행 상태를 여기 적는다. 세션이 어떤 길로 꺼지든
+  //   이 칸은 마지막 관측값으로 남아, 화면이 «꺼질 때 무슨 상태였나» 를 그린다(working 에서 끊김=고장 · asking=확인 필요 · done=완료).
+  //  수명: sweep 이 관측할 때마다 덮어쓴다(관측 못 한 세션은 **안 건드린다** — 모름을 덮으면 안다가 모름이 된다). 판이 새로 서면(upsert) 지운다.
+  //  우선순위: end_note.why 가 있으면 그게 이긴다(끝낸 자리가 적은 확정 사실). 이 칸은 end_note 가 빌 때의 폴백이다. NULL = 아직 한 번도 관측 못 함.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS last_run_state JSONB;`);
 
   // ── org_session_trash — 세션 휴지통(#1851). ──
   //  왜: 새 셸의 '지난 세션'에서 ×(완전 삭제)를 누르면 desired-state 행이 곧바로 사라졌다 — 되돌릴 길이 없고, 중앙 기록(uuid)
@@ -419,6 +460,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     --  그래서 #2592 의 겹침 판정(셀프 노드)에서 **면제**된다 — 사고로 생긴 셀프 노드와 갈리는 유일한 근거가
     --  이 선언이다. 그러므로 **관리자만** 켠다(routes 의 admin 게이트). 기본은 false = 종전 그대로.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS session_host BOOLEAN NOT NULL DEFAULT false;
+    -- #5043 — 이 컴퓨터의 하네스 종료 규칙 값({enabled, done_minutes, asking_minutes, unknown_minutes}). NULL·빈 칸 = 워크스페이스 기본값
+    --  (session_reclaim_policy.node_stop_*)을 따른다. 판정은 sessions/node-stop-rule-policy.ts 한 곳이다.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS stop_rule JSONB;
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로
@@ -472,6 +516,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // 레포 자동 provision(#869 P2 후속) — 기존 org_task 테이블에도 소급(CREATE IF NOT EXISTS 는 컬럼 추가 안 함).
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS repo TEXT`);
   await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS git_ref TEXT`);
+  // #4012 T3 — 실행 프로필. 'context' = 기본 제공 맥락 잡(증류·분류·관리). 샌드박스 op 가 있는 박스(매니지드)에서는
+  //  이 표지가 붙은 태스크만 중앙 샌드박스로 가고, 멤버 PC·워커 노드로 나가지 않는다(상민님 2026-09-16 결정).
+  //  NULL = 종전 위탁(사람의 delegate_run 등).
+  await pool.query(`ALTER TABLE org_task ADD COLUMN IF NOT EXISTS exec_profile TEXT`);
   // #1675 리뷰 — '내 로그인' 화면이 매 렌더마다 그 사람의 마지막 자격 실패를 찾는다(lastAuthFailureFor).
   //  org_task 는 지우는 경로가 없어 계속 자라는 테이블이라(증류 크론만으로 하루 ~1,300행), 인덱스 없이
   //  seq scan 하면 그 조회가 곧 부하다 — 이미 Postgres 타임아웃을 겪은 박스에서는 특히.
@@ -480,4 +528,116 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   // #4551 — 세션 목록이 판마다 «이 세션이 위탁 워커인가» 를 session_id 로 찾는다(src/node/task-origin.ts taskOriginsBySession).
   //  위와 같은 사유로 인덱스 없이는 그 조회가 곧 부하다. 배정 전 행(session_id NULL)은 찾을 일이 없어 뺀다.
   await pool.query(`CREATE INDEX IF NOT EXISTS org_task_session_idx ON org_task(session_id) WHERE session_id IS NOT NULL`);
+
+  // ── org_login_job — 하네스 로그인 **판**(#4012 T13 · #4067). CP 일시 유닛이 CLI 를 돌리고 이 행으로 게이트웨이와 주고받는다.
+  //  청/녹 교대·다른 슬롯이 받아도 같은 작업을 보게 DB 에 둔다(게이트웨이 메모리에 두면 교대 한 번에 작업이 사라진다).
+  //  ⚠ 자격 **값**은 여기에 없다 — secret_hash 는 판의 일회용 비밀의 sha256, paste 는 사람이 넣은 일회용 코드(암호화)이고
+  //   판이 가져가는 즉시 지운다. screen 은 판과 게이트웨이가 두 번 가린 화면이다(login-job-script.redactSecrets).
+  //  admin_basis — 헤드리스 결과는 사용자 토큰 없이(판의 콜백으로) 도착한다. 시작 요청의 토큰으로 «관리자 판정의 근거» 를
+  //   적어 두고 결과 때 그 근거로 잰다(headless-connect.headlessAdminBasis — 정적·앱 토큰은 none).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_login_job(
+      id BIGSERIAL PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      harness TEXT NOT NULL,
+      purpose TEXT NOT NULL CHECK (purpose IN ('login','headless')),
+      status TEXT NOT NULL DEFAULT 'starting' CHECK (status IN ('starting','running','done','failed','cancelled','expired')),
+      secret_hash TEXT NOT NULL,
+      admin_basis TEXT NOT NULL DEFAULT 'none' CHECK (admin_basis IN ('none','token','member')),
+      screen TEXT NOT NULL DEFAULT '',
+      exit_code INT,
+      paste TEXT,
+      error TEXT,
+      unit TEXT,
+      reaped BOOLEAN NOT NULL DEFAULT false,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ui_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      unit_seen_at TIMESTAMPTZ,
+      finished_at TIMESTAMPTZ);
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_login_job_member_idx ON org_login_job(member_id, purpose, harness, id DESC)`);
+  //  정리 감시가 보는 것 — 아직 도는 작업과 판 폴더를 안 치운 작업만(끝나고 치운 행은 안 본다).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_login_job_open_idx ON org_login_job(id) WHERE status IN ('starting','running') OR reaped = false`);
+
+  // ── org_agent_job — 작업 컨테이너의 작업(#4490 앱 v2-11 · #3994 1단계 공동). 작업 1건 = 세션 노드 gVisor 컨테이너 1개(세션 id `job-…`).
+  //  청/녹 교대·다른 슬롯이 받아도 같은 작업을 보게 DB 에 둔다. 대기열 = status 'queued' 행 — 워크스페이스 동시 상한은 배차가
+  //  테넌트 잠금 안에서 센다(agent-jobs/store.claimAgentJobs).
+  //  ⚠ 비밀 **값**은 여기 없다 — boot_hash 는 판 첫 말의 일회용 비밀(쓰면 지운다), secret_hash 는 판 콜백 비밀, mcp_token_hash 는 작업 AI 에 준
+  //   라이블리 토큰(끝나면 폐기)의 sha256 이다. prompt 는 보낸 사람이 쓴 지시 원문 그대로다(기록 — 상민 2026-10-16 «프롬프트 원문은 작업 기록에»).
+  //   API 로는 보낸 사람 본인만 본다(관리자는 상태·오류만) · 도구 호출 기록(mcp_call_log)에도 지시 값은 남기지 않는다(길이만).
+  //  account_kind: 'subscription'(보낸 사람 본인 구독) · 'api_key'(워크스페이스 키 — #4488 v2-9: 보낸 사람 자리에서 돌되 하네스는 빈 설정 폴더 + 우리 프록시 토큰).
+  //  bare(#4488): 단발 실행 — 도구 없이(`--tools ""` · MCP 없음) 글만 받는다.
+  //  attempts: 자리를 받은 횟수(띄우기 시도) — 일시 실패로 되돌릴 때 상한(service.MAX_LAUNCH_ATTEMPTS)을 본다.
+  //  cancel_reason: 사람이 아닌 쪽이 멈춘 사유(앱 동의를 거둠 등) — 취소로 끝날 때 오류 문장이 된다(없으면 «취소했습니다»).
+  //  reaped: «걷기를 마쳤다» = 종료 신호(kill-session 성공 또는 이미 없다는 확답)를 보냈고 작업 토큰을 폐기했다. 컨테이너 철거 자체는
+  //   브로커(#4696 — 안이 비면 곧바로)가 한다 — reaped 는 철거를 증명하지 않는다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_agent_job(
+      id BIGSERIAL PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','starting','running','done','failed','timeout','canceled')),
+      requester TEXT NOT NULL,
+      account_kind TEXT NOT NULL DEFAULT 'subscription' CHECK (account_kind IN ('subscription','api_key')),
+      account_member TEXT,
+      app_id TEXT,
+      project_id BIGINT,
+      cwd TEXT NOT NULL,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      model TEXT,
+      label TEXT,
+      prompt TEXT NOT NULL,
+      resume_conversation TEXT,
+      resume_job_id BIGINT,
+      timeout_sec INT NOT NULL,
+      session_id TEXT,
+      boot_hash TEXT,
+      secret_hash TEXT,
+      mcp_token_hash TEXT,
+      conversation_id TEXT,
+      output_tail TEXT NOT NULL DEFAULT '',
+      result JSONB,
+      exit_code INT,
+      error TEXT,
+      cancel_requested BOOLEAN NOT NULL DEFAULT false,
+      cancel_reason TEXT,
+      attempts INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      claimed_at TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      last_tick_at TIMESTAMPTZ,
+      ended_at TIMESTAMPTZ,
+      reaped BOOLEAN NOT NULL DEFAULT false,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+  //  새 칸이 CREATE 뒤에 생긴 것이라 이미 만든 표에도 붙인다(같은 표 정의를 두 번 적는 것은 다른 표들과 같은 규약).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS cancel_reason TEXT`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS bare BOOLEAN NOT NULL DEFAULT false`);
+  //  #4829 fail_hash — 판의 시작 실패 보고(boot-failed)를 여는 비밀의 sha256. 부트 비밀과 같은 값이라 자리 줄 때 함께 달고, 부트가 지워도
+  //   남는다 — 첫 말의 응답을 못 받은 판(401)도 실패를 알릴 수 있게. 첫 박동 · 되돌리기 · 끝내기가 지운다(store.failBootAgentJob — 박동한 판은 못 끝낸다).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS fail_hash TEXT`);
+  //  #4891 homeless — 사람 홈 없는 작업 컨테이너에서 도는 작업(앱 서버가 보낸 API 키 에이전트 작업). 그 작업 폴더는 앱 폴더뿐이고
+  //   브로커는 멤버 홈을 붙이지 않는다(agent-jobs/launch.ts). 접수 때 정해지고 바뀌지 않는다.
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS homeless BOOLEAN NOT NULL DEFAULT false`);
+  //  #5081 shared_seat — 공용 시트로 도는 작업(앱 AI 실행이 접수). 자리(홈 · Claude 로그인)는 시트 계정 · 작업 AI 의 라이블리 신원은 보낸 사람.
+  //   접수 때 정해지고 바뀌지 않는다. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts SHARED_SEAT_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS shared_seat BOOLEAN NOT NULL DEFAULT false`);
+  //  #5082 app_instructions — 앱 판 지시(ai.instructions)의 글. 앱 AI 실행이 접수 때 부른 사람(주소)의 판에서 읽어 작업 행과 함께 적고, 판이 받아
+  //   하네스 시스템 지시로 싣는다(작업 폴더 지시는 읽지 않는다). 접수 때 정해지고 바뀌지 않는다 — 형식 재시도도 같은 글을 싣는다.
+  //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts APP_INSTRUCTIONS_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_instructions TEXT`);
+  //  #5101 transcript — API 키 작업의 하네스 대화 기록(gzip). API 키 작업은 이 작업만의 빈 설정 폴더에서 돌고 그 폴더는 끝나면 지워져, 그 대화를
+  //   이어받는 작업(형식 재시도 · 앱의 이어받기)이 읽을 기록이 남지 않는다 — 판이 끝에 올리고 이어받는 작업의 첫 말이 돌려받는다(agent-jobs/plan.TRANSCRIPT_GZ_MAX).
+  //   transcript_conv = 그 기록의 대화 id · transcript_bytes = 풀었을 때 크기. 보존은 정책 transcript_keep_days(지나면 비운다 · 행은 남는다).
+  //   ⚠ 이 칸들도 COLS 에 넣지 않는다(agent-jobs/store.setAgentJobTranscript 머리말 — 롤 창).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript BYTEA`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_conv TEXT`);
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS transcript_bytes INT`);
+  //  감시가 보는 것 — 열린 작업과, 끝났는데 아직 걷지 않은 작업만.
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_open_idx ON org_agent_job(id) WHERE status IN ('queued','starting','running') OR reaped = false`);
+  //  내 작업 · 그 앱의 작업 목록(최근 것부터).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_requester_idx ON org_agent_job(requester, id DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_app_idx ON org_agent_job(app_id, id DESC) WHERE app_id IS NOT NULL`);
+  //  #4828 보존 정리가 보는 것 — 걷기를 마친 작업을 끝난 때 순으로(agent-jobs/store.pruneAgentJobs).
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_agent_job_ended_idx ON org_agent_job(ended_at) WHERE reaped = true`);
 }

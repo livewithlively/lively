@@ -26,7 +26,9 @@ const blk = raw.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\
 
 // ① 노드 칸이 있다.
 ok(blk.includes("sc-run-node"), "① 머리줄이 노드 칸(sc-run-node)을 그린다");
-ok(/target\.node\s*\?/.test(blk), "① 노드 값의 출처는 target.node 다");
+//  #4904 — 출처는 행의 노드 좌표에서 **세션 호스트만 접은** 값(remoteNode — web/lib/node-coord.ts)이다. 매니지드 행엔 세션 호스트
+//   좌표(`sesshost-…`)가 실리는데 그건 «도는 컴퓨터» 가 아니다(중앙과 같다) — 인스턴스 id 를 머리줄에 내지 않는다. 멤버 PC 는 그대로 실린다.
+ok(/remoteNode\(\)\s*\?\?/.test(blk), "① 노드 값의 출처는 remoteNode() 다(행의 노드 좌표 — 세션 호스트만 접는다)");
 
 // ② ★ 알약을 **통째로 끄고 나가는 이른 반환이 없다**. 그게 #1870 의 회귀 형태다.
 //   '윗줄이 이미 말한 축은 되풀이하지 않는다' 판정은 남아 있어야 한다 — 없애는 게 아니라 **좁히는** 것이다.

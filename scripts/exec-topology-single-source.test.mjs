@@ -36,6 +36,12 @@ const TOPOLOGY_ENV = [
   //  #2600 T3-a — 허브 전송을 걷어 `LVLY_HUB_*` 는 이제 소유자(exec-topology)도 안 읽는다(중계 .cjs 만 읽는다). 그래도 목록에 둔다 —
   //   코어의 다른 자리가 허브 env 를 다시 읽기 시작하면 걷힌 전송이 조용히 되살아나는 것이므로 여기서 막는다.
   "LIVELY_TMUX_ROUTE", "LVLY_HUB_URL", "LVLY_HUB_SECRET", "LVLY_TMUX_SOCK_TEMPLATE",
+  //  #4067 — 세션 이미지의 하네스 목록(«설치돼 있나» 를 세션 컨테이너 없이 답하는 근거).
+  "LIVELY_SESSION_HARNESSES",
+  //  #4931 — 노드 tmux 세대 스위치(새 세션을 고정판 전용 소켓에 띄우나 · 종전 기본 소켓으로 되돌리나).
+  "LIVELY_MUX_PIN",
+  //  #5082 — 브로커 없는 박스의 에이전트 작업 실행면 스위치 · 그 판이 부를 루프백 포트(«작업 판이 어디서 도나»).
+  "LIVELY_AGENT_JOBS", "LIVELY_AGENT_JOBS_PORT",
 ];
 
 // 테넌시/DB·경로 축이 계속 소유하는 자리(토폴로지가 아니다). 이 목록 밖에서 읽으면 실패한다.

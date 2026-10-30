@@ -12,6 +12,7 @@ import { EMBEDDED } from './v2/embed.js';
 import { btnOf, errBox, fitHeight, ibtnOf, ico, leftPanel, paneHead, sessionLink, setBtnLabel, skelRows, type PaneHead } from './sessions-kit.js';
 // #1850 완전 삭제 — 확인창·실행·토스트는 session-actions 의 단일 정의를 쓴다(#1582 규약: 같은 동작은 한 정의).
 import { confirmSessionTrash, eulReul, sessionTrashOp } from './session-actions.js';
+import { isTrySessionRow } from './lib/builder-flow.js';   // #4632 앱빌더 시험 세션은 세우지 않는다
 
 interface SessRow {
   node_id: string; session_id: string; harness: string | null; title: string | null;
@@ -53,7 +54,8 @@ export function parseSel(): { sid: string; node: string; q: string; ln: string }
 // 세션 목록을 컨테이너에 렌더 — 페이지네이션 + 빈 세션(0바이트) 방어적 제외. onGo: 행 진입 시 콜백(모달 닫기 등).
 export function renderSessionListInto(container: any, sessions: SessRow[], emptyMsg: string, onGo?: () => void): void {
   //  휴지통에 있는 세션은 뺀다(#3778) — 서버가 trashed_at 을 얹어 준다. 되돌리기·완전 삭제는 휴지통 화면의 몫이다.
-  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => (s.bytes || 0) > 0 && !(s as SessRow & { trashed_at?: string | null }).trashed_at);
+  //  앱빌더 시험 세션도 뺀다(#4632 — 앱빌더 안에서만 산다 · lib/builder-flow isTrySessionRow).
+  const rows = (Array.isArray(sessions) ? sessions : []).filter((s) => (s.bytes || 0) > 0 && !(s as SessRow & { trashed_at?: string | null }).trashed_at).filter((s) => !isTrySessionRow(s as any));
   if (!rows.length) { container.replaceChildren(el('p', { class: 'admin-hint', text: emptyMsg })); return; }
   let page = 0;
   const listBox = el('div');

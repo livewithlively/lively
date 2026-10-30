@@ -5,6 +5,7 @@
 //  - 완료 감지 = exit 파일 등장(폴링) — 화면 파싱보다 견고(F5).
 //  - v1 제약: 워크스페이스는 공유 루트(rootKey=shared)만 — 격리(700) 개인 홈엔 게이트웨이/에이전트가 파일을 못 쓴다.
 import { SESSION_KIND_ENV } from "../sessions/session-kind.js";
+import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #4687 — 작업 폴더 공개범위 판정(게이트웨이에서만 등록)
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
@@ -15,14 +16,16 @@ import type { LivelyUser } from "../context.js";
 import {
   TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, profileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal/terminal-sessions.js";
-import { wrapAsMember, isolationInfraReady } from "../terminal/terminal-isolation.js";
-import { memberRm, memberWriteSecretFile } from "../terminal/terminal-member-fs.js";   // #4422 — 격리 워커 uid 소유 자격 파일
+import { wrapAsMember, isolationInfraReady, memberExecConfigured, fileOpsAtMemberBoundary } from "../terminal/terminal-isolation.js";
+import { ensureProfileKitWired } from "../terminal/profile-kit-seed.js";   // #4135 — 프로필 dir 은 mkdir 만으론 빈 껍데기다
+import { memberRm, memberWriteFile, memberWriteSecretFile, memberNodeJson } from "../terminal/terminal-member-fs.js";   // 저장소 분리 배포의 작업 폴더 op(아래 TaskFs)
 import { LEASE_ENV_NAME, redactTaskError, taskSecretValues } from "./task-secrets.js";   // #4422 — 리스 값은 명령줄·오류 문장에 안 싣는다
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project/project-provision.js";
 // 공유폴더 그룹쓰기 계약(2770/660) — 위탁 작업 폴더도 격리 워커(box_<멤버>)가 써야 하므로 같은 계약을 적용한다.
 import { grantSharedGroupWrite, SHARED_FILE_MODE } from "../project/project-fs.js";
 import type { NodeResources } from "./protocol.js";
 import { deriveWriteCap } from "../terminal/terminal-sessions.js";
+import { muxGenerationsActive, muxTmux } from "../terminal/mux-generations.js";   // #4931 — 노드 tmux 세대
 import { memAvailableMb } from "../ops/host-mem.js"; // #1059 공용 메모리 지표(백필 게이트와 단일 소스)
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +40,9 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 async function tmux(args: string[]): Promise<string> {
+  //  #4931 — 노드(멤버 PC)면 세대 규칙으로: 새 위탁 세션은 고정판 전용 소켓에, 옛 세션 정리는 그 세션이 사는 서버로.
+  //   게이트웨이(중앙 위탁)에선 거짓이라 종전 그대로다.
+  if (muxGenerationsActive()) return muxTmux(args, { timeoutMs: 8000, env: TMUX_ENV });
   const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 8000, env: TMUX_ENV });
   return stdout;
 }
@@ -114,6 +120,35 @@ export interface RunTaskInput {
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
   //  중앙(게이트웨이 내장 노드) 실행 시엔 미설정 — 거기선 DB 를 직접 읽는 게 정상이다.
   repoAuth?: RepoProvisionAuth;
+  // ★ 이 위탁을 낸 **게이트웨이의 주소·워크스페이스** (#4012 T5). 판 안의 하네스·MCP·훅이 **어디에 붙을지**다.
+  //  왜 필요(2026-09-16 실사고): 한 박스에 게이트웨이가 둘 있거나(맥미니 olddev + 매니지드 노드) 앱 로그인이 다른
+  //   곳을 가리키면, 판이 `~/.lively/gateway-url` 을 읽어 **남의 워크스페이스에 붙었다** — olddev 의 83개 테넌트
+  //   증류 배치가 운영 워크스페이스 자료를 읽고 지식을 썼다. 대화형 세션은 이미 LVLY_TENANT_SLUG 를 싣는데
+  //   위탁 판만 둘 다 빠져 있었다.
+  //  ⚠ 노드엔 DB 가 없으므로 여기서 조회하지 않는다 — **보낸 쪽(게이트웨이)이 안다.** 없으면 안 싣는다(구 게이트웨이 무회귀).
+  gatewayUrl?: string | null;
+  tenantSlug?: string | null;
+}
+
+//  주소 모양 — `src/gateway-url.ts` 의 SAFE_GATEWAY_URL 과 같은 자. 그 모듈은 DB 를 끌어와 노드 번들에 못 들인다.
+const TASK_GW_URL = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?$/;
+//  슬러그 모양 — `terminal/catalog.ts` 의 SAFE_SLUG 와 같은 자.
+const TASK_TENANT_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * 위탁 판에 싣는 «어디에 붙나» env (#4012 T5) — 순수 함수.
+ *
+ * 이 값은 tmux 명령줄(`-e K=V`)에 그대로 펼쳐지므로 **모양이 아니면 싣지 않는다**(조용히 뺀다 — 그러면 판은
+ *  종전처럼 로컬 설정으로 간다. 이상한 값을 실어 명령줄을 여는 것보다 낫다).
+ * 끝의 `/` 는 다듬는다 — 훅들이 base 에 경로를 이어 붙인다.
+ */
+export function taskGatewayEnvArgs(gatewayUrl: string | null | undefined, tenantSlug: string | null | undefined): string[] {
+  const out: string[] = [];
+  const u = typeof gatewayUrl === "string" ? gatewayUrl.trim().replace(/\/+$/, "") : "";
+  if (u && TASK_GW_URL.test(u)) out.push("-e", `LIVELY_GATEWAY_URL=${u}`);
+  const s = typeof tenantSlug === "string" ? tenantSlug.trim() : "";
+  if (s && TASK_TENANT_SLUG.test(s)) out.push("-e", `LVLY_TENANT_SLUG=${s}`);
+  return out;
 }
 export interface RunTaskResult { sessionId: string; taskDir: string; workspace: string }
 
@@ -201,7 +236,7 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
   },
   codex: {
     // exec = codex 의 헤드리스 서브커맨드. `--json` 이 진행 이벤트를 JSONL 로 뱉고, 프롬프트는 stdin 으로 받는다
-    //  ("instructions are read from stdin" — --help). 승인 우회는 세션의 --yolo 가 아니라 이 플래그다.
+    //  ("instructions are read from stdin" — --help). 승인 우회는 대화형 세션 플래그와 별개로 이 플래그다.
     run: (bin, f, p, bypass) => `${bin} exec --json${bypass} ${f} < "${p}"`,
     bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
     extract: (j) => lastMatch(j, (ev) => {
@@ -244,12 +279,20 @@ export interface TaskScriptOpts {
   /** 자격 리스 env **이름**(#4422) — 값은 작업 폴더의 자격 파일(taskLeaseFile)에 있다. 스크립트가 읽어 하네스 env 로 올리고 지운다.
    *  비었거나 없으면 종전 스크립트와 바이트 동일하다. 이름은 스크립트에 그대로 박히므로 LEASE_ENV_NAME 밖이면 던진다. */
   leaseEnv?: readonly string[];
+  /** spawn 마다 새로 뽑는 1회용 값(SPAWN_NONCE) — 주면 자격 파일 이름에 붙는다(taskLeaseFile). 쓰는 쪽과 **같은 값**이어야 한다. */
+  spawnNonce?: string;
 }
 
-/** 자격 파일 자리(#4422) — 작업 폴더 바로 아래, 이름 하나에 파일 하나(값을 가공 없이 그대로 담는다 — 셸 인용이 필요 없다). */
-export function taskLeaseFile(taskDir: string, name: string): string {
-  return path.join(taskDir, `.lease-${name}`);
+/** 자격 파일 자리(#4422) — 작업 폴더 바로 아래, 이름 하나에 파일 하나(값을 가공 없이 그대로 담는다 — 셸 인용이 필요 없다).
+ *  tag = spawn 마다 새로 뽑는 1회용 값(spawnNonce). 같은 태스크를 두 판이 함께 띄우면(두 게이트웨이가 겹치는 배포 구간) 둘이 같은 작업 폴더를
+ *  쓰는데, 태그가 없으면 같은 파일 하나를 두고 한쪽이 읽고 지운 뒤 다른 쪽이 «cat: 없음» 으로 죽는다. */
+export function taskLeaseFile(taskDir: string, name: string, tag?: string): string {
+  return path.join(taskDir, tag !== undefined ? `.lease-${tag}-${name}` : `.lease-${name}`);
 }
+/** spawnNonce 규칙 — 스크립트 문자열에 그대로 박히므로 소문자 16진수만. */
+export const SPAWN_NONCE = /^[0-9a-f]{8,32}$/;
+/** 이보다 오래된 자격 파일은 읽힐 일이 없다 — 정상 판은 뜨자마자(수 초 안에) 읽고 지운다. 남은 것은 판 안의 첫 명령이 죽은 잔재다. */
+export const LEASE_STALE_MS = 10 * 60_000;
 
 /**
  * 자격 파일을 **워커 uid 소유 0600** 으로 쓴다(#4422). 워커만 읽는다 — 다른 멤버도 여는 공유 작업 폴더라 그룹 권한(660)이면 안 된다.
@@ -259,6 +302,7 @@ export function taskLeaseFile(taskDir: string, name: string): string {
  *  둘 다 **추측할 수 없는 임시 이름을 새로 만들고(O_EXCL) rename** 한다 — 작업 폴더는 남도 쓰는 곳이라, 같은 이름을 미리 심어 둔
  *   파일·링크에 비밀을 쓰는 일이 없게(memberWriteSecretFile 머리말).
  */
+//  ⚠ 임시 이름은 p 뒤에 붙인다(`.lease-….<hex>.tmp`) — `.lease-` 로 시작해야 쓰다 죽은 잔재까지 sweepStaleLeases 가 치운다.
 export async function writeTaskSecret(p: string, value: string, osUser?: string | null): Promise<void> {
   if (osUser) { await memberWriteSecretFile(osUser, p, value); return; }
   const tmp = `${p}.${crypto.randomBytes(12).toString("hex")}.tmp`;
@@ -295,10 +339,144 @@ export function taskScript(harnessKey: string, bin: string, flags: string[], tas
   //  ⚠ `$(…)` 는 끝 개행을 떨어뜨린다 — 토큰 값엔 없고, 있었다면 인증을 깨는 쪽이었다.
   const names = opts?.leaseEnv ?? [];
   for (const n of names) if (!LEASE_ENV_NAME.test(n)) throw new Error(`자격 리스 이름이 규칙 밖입니다: ${JSON.stringify(n)}`);
-  const leaseAt = (n: string): string => taskLeaseFile(taskDir, n);   // 쓰는 쪽(spawnTaskSession)과 **같은 함수** — 둘이 갈리면 모든 위탁이 «cat: 없음» 으로 죽는다
+  const tag = opts?.spawnNonce;
+  if (tag !== undefined && !SPAWN_NONCE.test(tag)) throw new Error(`자격 리스 spawnNonce 가 규칙 밖입니다: ${JSON.stringify(tag)}`);
+  const leaseAt = (n: string): string => taskLeaseFile(taskDir, n, tag);   // 쓰는 쪽(spawnTaskSession)과 **같은 함수** — 둘이 갈리면 모든 위탁이 «cat: 없음» 으로 죽는다
   const load = names.map((n) => `${n}=$(cat "${leaseAt(n)}" 2> "${taskDir}/stderr.log") && export ${n} && rm -f "${leaseAt(n)}" && `).join("");
   const unload = names.length ? `rm -f ${names.map((n) => `"${leaseAt(n)}"`).join(" ")}; unset ${names.join(" ")}; ` : "";
   return `cd "$LIVELY_TASK_WS" && ${load}${spec.run(bin, f, `${taskDir}/prompt.txt`, bypass)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; ${unload}exec "\${SHELL:-sh}"`;
+}
+
+// ── 작업 폴더 파일 op 의 자리 — 게이트웨이 fs 냐, 멤버 경계냐 ─────────────────────────────────
+//  ★ 저장소 분리 배포(매니지드 = LIVELY_MEMBER_EXEC)에서는 **게이트웨이가 멤버 파일을 직접 만질 수 없다.**
+//   격리 사용자의 공유 루트는 `/work/shared`(세션 컨테이너 안 경로)로 풀리는데, 게이트웨이가 도는 CP 호스트의
+//   `/work/shared` 는 **비어 있는 다른 디렉터리**다([[worktree-admin-isolation-shared-base-3678]] 실측).
+//   그래서 종전처럼 `fsp.mkdir` 로 작업 폴더를 만들면 중앙 위탁이 시작도 못 했고
+//   (`ENOENT: mkdir '/work/shared/delegated'` — 2026-09-12 lively-46e3 · 2026-09-14 soltimal-adce 첫 증류),
+//   만들기만 고쳐도 종료 파일·로그를 `fsp.readFile` 로 읽으면 **워커가 끝나도 못 봐서** 타임아웃까지 매달린다
+//   (2026-07-30 #1289 와 같은 무증상 모양).
+//  세션 파일 API(terminal-files·upload·sessions)는 이미 격리면 멤버 seam 으로 간다 — 작업 폴더만 그 규약에서 빠져 있었다.
+//  고르는 규칙은 **하나**다: 격리 사용자 && 저장소 분리 → 멤버 경계. 그 밖(자체 호스팅 격리 박스·노드 에이전트·비격리)은
+//   종전 로컬 fs 그대로다 — 거기선 게이트웨이가 그 폴더를 실제로 보고, 7월에 고친 그룹쓰기 계약이 이미 지킨다.
+export interface TaskReadReq { key: string; path: string; max: number; from?: number; tail?: boolean }
+export interface TaskRead { size: number; buf: Buffer }
+export interface TaskFs {
+  /** 작업 폴더를 **다른 위탁자도** 쓸 수 있게 만든다 — 만든 폴더부터 공유 루트 직전까지 2770(grantSharedGroupWrite 와 같은 규칙). */
+  mkdirp(dir: string, sharedBase: string): Promise<void>;
+  writeFile(p: string, data: string): Promise<void>;
+  rm(p: string): Promise<void>;
+  /** 여러 파일을 **한 번에** 읽는다. 없으면 그 키는 null. ⚠ 멤버 경계는 호출마다 프로세스 왕복이고 스케줄러가 틱마다 부른다. */
+  readMany(reqs: TaskReadReq[]): Promise<Record<string, TaskRead | null>>;
+  exists(paths: string[]): Promise<boolean[]>;
+  /** 작업 폴더 바로 아래의 `.lease-*` 중 mtime 이 olderThanMs 보다 오래된 것만 지우고 지운 수를 돌려준다.
+   *  ⚠ 오래된 것만 — 막 쓴 파일을 지우면 함께 뜬 다른 판의 자격을 지워 «cat: 없음» 경합이 되살아난다. */
+  sweepStaleLeases(dir: string, olderThanMs: number): Promise<number>;
+}
+
+/** (순수) 멤버 경계로 보낼 자리인가 — 격리 사용자 && 저장소 분리. */
+export function taskFsIsMember(osUser: string | null | undefined, detached: boolean): boolean {
+  return fileOpsAtMemberBoundary(osUser, detached);   // 프로젝트 폴더 저장소와 한 벌(#4064)
+}
+
+// 읽기 범위 규칙 — 로컬·멤버가 **같은 식**을 쓴다(task-fs.test 가 두 구현을 같은 파일에 대조한다).
+//  tail = 끝에서 max 바이트, 아니면 from(파일 길이로 클램프)부터 max 바이트.
+export const localTaskFs: TaskFs = {
+  async mkdirp(dir, sharedBase) {
+    await fsp.mkdir(dir, { recursive: true, mode: 0o770 });
+    // chmod 는 umask 와 무관 — mkdir 이 깎인 만큼을 여기서 되돌린다. 체인 전체(sharedBase 미포함)를 훑으므로
+    //  이전 배포가 남긴 750 폴더도 다음 실행에서 자가 복구된다(멱등·best-effort).
+    await grantSharedGroupWrite(dir, sharedBase, "dir");
+  },
+  async writeFile(p, data) {
+    await fsp.writeFile(p, data, { mode: 0o660 });
+    await fsp.chmod(p, SHARED_FILE_MODE).catch(() => { /* best-effort */ });
+  },
+  async rm(p) { await fsp.rm(p, { force: true }); },
+  async readMany(reqs) {
+    const out: Record<string, TaskRead | null> = {};
+    for (const r of reqs) {
+      try {
+        const fh = await fsp.open(r.path, "r");
+        try {
+          const size = (await fh.stat()).size;
+          const from = r.tail ? Math.max(0, size - r.max) : Math.max(0, Math.min(r.from ?? 0, size));
+          const len = Math.max(0, Math.min(size - from, r.max));
+          const buf = Buffer.alloc(len);
+          let off = 0;
+          while (off < len) { const { bytesRead } = await fh.read(buf, off, len - off, from + off); if (!bytesRead) break; off += bytesRead; }
+          out[r.key] = { size, buf: buf.subarray(0, off) };
+        } finally { await fh.close(); }
+      } catch { out[r.key] = null; }
+    }
+    return out;
+  },
+  async exists(paths) {
+    return Promise.all(paths.map((p) => fsp.access(p).then(() => true, () => false)));
+  },
+  async sweepStaleLeases(dir, olderThanMs) {
+    const cutoff = Date.now() - olderThanMs;
+    let n = 0;
+    for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
+      if (!name.startsWith(".lease-")) continue;
+      const p = path.join(dir, name);
+      try {
+        const st = await fsp.lstat(p);
+        if (st.isFile() && st.mtimeMs < cutoff) { await fsp.rm(p, { force: true }); n++; }
+      } catch (e) {
+        //  그 사이 사라진 것(ENOENT)만 조용히 넘긴다 — 권한 등으로 못 지운 자격 파일은 그대로 남아 있으니 흔적을 남긴다
+        //   (이 파일엔 logger 가 없다 — 노드 번들 공용이라 console 로). 지우기 판정·반환 수는 종전과 같다.
+        if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") console.warn(`[tasks] 오래된 자격 파일을 치우지 못했다(${p}): ${(e as Error)?.message ?? e}`);
+      }
+    }
+    return n;
+  },
+};
+
+// 멤버 경계에서 도는 한 줄들 — **고정 리터럴**, 값은 전부 stdin JSON(memberNodeJson 계약: 인젝션 표면 없음).
+export const TASK_READ_JS =
+  "const fs=require('fs');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
+  "const o={};for(const r of JSON.parse(d||'[]')){try{const fd=fs.openSync(r.path,'r');try{const size=fs.fstatSync(fd).size;" +
+  "const from=r.tail?Math.max(0,size-r.max):Math.max(0,Math.min(r.from||0,size));const len=Math.max(0,Math.min(size-from,r.max));" +
+  "const b=Buffer.alloc(len);let off=0;while(off<len){const n=fs.readSync(fd,b,off,len-off,from+off);if(!n)break;off+=n;}" +
+  "o[r.key]={size:size,b64:b.subarray(0,off).toString('base64')};}finally{fs.closeSync(fd);}}catch(e){o[r.key]=null;}}" +
+  "process.stdout.write(JSON.stringify(o));});";
+//  sweepStaleLeases 의 멤버 경계판 — localTaskFs 와 **같은 규칙**(task-lease-tag.test 행위 7·8 이 두 구현을 같은 폴더에 대조한다).
+//   못 지운 파일의 경고는 여기선 내지 않는다 — 성공 종료면 memberNodeJson 이 stderr 를 버린다.
+export const TASK_SWEEP_LEASES_JS =
+  "const fs=require('fs'),path=require('path');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
+  "const q=JSON.parse(d);const cut=Date.now()-q.olderThanMs;let n=0;let names=[];try{names=fs.readdirSync(q.dir);}catch(e){}" +
+  "for(const name of names){if(!name.startsWith('.lease-'))continue;const p=path.join(q.dir,name);" +
+  "try{const st=fs.lstatSync(p);if(st.isFile()&&st.mtimeMs<cut){fs.rmSync(p,{force:true});n++;}}catch(e){}}" +
+  "process.stdout.write(JSON.stringify(n));});";
+export const TASK_EXISTS_JS =
+  "const fs=require('fs');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
+  "process.stdout.write(JSON.stringify(JSON.parse(d||'[]').map(p=>{try{fs.accessSync(p);return true;}catch(e){return false;}})));});";
+//  mkdir -p 다음 grantSharedGroupWrite 와 **같은 규칙**: 만든 폴더부터 공유 루트(미포함) 직전까지 2770, 실패(남의 소유)는 조용히.
+//  ★ 이게 없으면 **첫 위탁자가 `delegated/` 의 주인**이 되고 umask 로 그룹 쓰기가 빠져, 두 번째 사람부터 EACCES 다.
+export const TASK_MKDIR_JS =
+  "const fs=require('fs'),path=require('path');let d='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{" +
+  "const q=JSON.parse(d);fs.mkdirSync(q.dir,{recursive:true,mode:0o770});const stop=path.resolve(q.base);let cur=path.resolve(q.dir);" +
+  "while(cur!==stop&&cur.startsWith(stop+path.sep)){try{fs.chmodSync(cur,0o2770);}catch(e){}cur=path.dirname(cur);}" +
+  "process.stdout.write('true');});";
+
+export function memberTaskFs(osUser: string): TaskFs {
+  return {
+    mkdirp: async (dir, sharedBase) => { await memberNodeJson<boolean>(osUser, TASK_MKDIR_JS, { dir, base: sharedBase }); },
+    writeFile: (p, data) => memberWriteFile(osUser, p, data, SHARED_FILE_MODE),
+    rm: (p) => memberRm(osUser, p),
+    async readMany(reqs) {
+      const raw = await memberNodeJson<Record<string, { size: number; b64: string } | null>>(osUser, TASK_READ_JS, reqs);
+      const out: Record<string, TaskRead | null> = {};
+      for (const r of reqs) { const v = raw?.[r.key]; out[r.key] = v ? { size: v.size, buf: Buffer.from(v.b64, "base64") } : null; }
+      return out;
+    },
+    exists: (paths) => memberNodeJson<boolean[]>(osUser, TASK_EXISTS_JS, paths),
+    sweepStaleLeases: (dir, olderThanMs) => memberNodeJson<number>(osUser, TASK_SWEEP_LEASES_JS, { dir, olderThanMs }),
+  };
+}
+
+export function taskFsFor(osUser: string | null | undefined): TaskFs {
+  return taskFsIsMember(osUser, memberExecConfigured()) ? memberTaskFs(osUser as string) : localTaskFs;
 }
 
 // 위탁 작업 폴더(.lively-task/<id>) 준비 — 워커가 결과를 쓸 수 있는 상태로 만든다. 테스트 seam(tasks.test).
@@ -313,16 +491,18 @@ export function taskScript(harnessKey: string, bin: string, flags: string[], tas
 //  헤드리스 위탁이 **한 번도 성공한 적이 없었다**. 크론 요약의 status=ok 는 '접수 성공'이라 실패가 조용히 묻혔다.
 //  공유폴더(createProjectFolder)·프로젝트 경로는 이미 같은 이유로 2770 을 별도 chmod 로 보장하는데
 //  (project-fs.ts — "chmod 는 umask 에 안 깎이게 별도") 위탁 경로만 그 계약에서 빠져 있었다.
-export async function prepareTaskDir(baseWs: string, sharedBase: string, taskId: number | string, prompt: string): Promise<string> {
+export async function prepareTaskDir(
+  baseWs: string, sharedBase: string, taskId: number | string, prompt: string, osUser?: string | null,
+): Promise<string> {
+  const tfs = taskFsFor(osUser);   // 저장소 분리 배포면 멤버 경계 — 위 TaskFs 머리말
   const taskDir = path.join(baseWs, ".lively-task", String(taskId));
-  await fsp.mkdir(taskDir, { recursive: true, mode: 0o770 });
-  // chmod 는 umask 와 무관 — mkdir 이 깎인 만큼을 여기서 되돌린다. 체인 전체(sharedBase 미포함)를 훑으므로
-  //  이전 배포가 남긴 750 폴더도 다음 실행에서 자가 복구된다(멱등·best-effort).
-  await grantSharedGroupWrite(taskDir, sharedBase, "dir");
+  await tfs.mkdirp(taskDir, sharedBase);
+  //  판 안의 첫 명령이 죽어 읽히지 못한 자격 파일을 치운다 — 이름이 spawn 마다 달라 재시도가 덮어쓰지 않는다. 실패해도 진행한다.
+  await tfs.sweepStaleLeases(taskDir, LEASE_STALE_MS)
+    .catch((e) => console.warn(`[tasks] 오래된 자격 파일 정리 실패(${taskDir}): ${(e as Error)?.message ?? e}`));
   // 재시도(같은 taskId 재큐) 대비 — 이전 시도의 종결 파일이 남아 있으면 즉시 '가짜 완료'로 오감지된다.
-  for (const f of ["exit", "stream.jsonl", "stderr.log"]) await fsp.rm(path.join(taskDir, f), { force: true }).catch(() => { /* noop */ });
-  await fsp.writeFile(path.join(taskDir, "prompt.txt"), prompt, { mode: 0o660 });
-  await fsp.chmod(path.join(taskDir, "prompt.txt"), SHARED_FILE_MODE).catch(() => { /* best-effort */ });
+  for (const f of ["exit", "stream.jsonl", "stderr.log"]) await tfs.rm(path.join(taskDir, f)).catch(() => { /* noop */ });
+  await tfs.writeFile(path.join(taskDir, "prompt.txt"), prompt);
   return taskDir;
 }
 
@@ -370,6 +550,10 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   const osUser = await ensureMemberOsUser(user).catch(() => null);
   const sub = (input.subpath || "").trim() || `delegated/task-${input.taskId}`;
   const { base: sharedBase, abs: baseWs } = await resolveRootPath(user, input.rootKey, sub, osUser ?? null);
+  // #4687 — 위탁 워커도 작업 폴더 아래를 보는 셸이다. createSession 을 안 타는 «두 번째 문»이라 같은 작업 폴더 판정을 여기서 건다.
+  //  레포 준비·작업 폴더 만들기 **전**에 본다. 게이트웨이 능력이라 노드에는 등록이 없어 건너뛴다(노드 위탁의 subpath 는 그 컴퓨터 경로).
+  const assertCwdVisible = gatewayCapability("assertSessionCwdVisible");
+  if (assertCwdVisible) await assertCwdVisible(user, input.rootKey, sub);
   // 레포 지정(#458 재사용) — 공유 base clone→worktree 자동 provision, 워커 cwd=worktree. .lively-task 는 worktree 밖(baseWs)에
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;
@@ -385,7 +569,7 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
       input.repoAuth,   // 노드 실행이면 게이트웨이가 실어 보낸 주입(없으면 중앙 실행 → DB 직접 읽기)
     );
   }
-  const taskDir = await prepareTaskDir(baseWs, sharedBase, input.taskId, input.prompt);
+  const taskDir = await prepareTaskDir(baseWs, sharedBase, input.taskId, input.prompt, osUser);
 
   // 플래그 화이트리스트(--model/--effort, 카탈로그 choices 만) — createSession 과 동일 원칙. **그 하네스의 표**로
   //  검사하고(#1710), 그 하네스의 argv 문법으로 옮긴다(codex 의 --effort → --config, harnessFlagArgs 주석 참조).
@@ -400,8 +584,7 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   if (input.systemPrompt) {
     if (harness.key === "claude") {
       const sp = path.join(taskDir, "system.md");
-      await fsp.writeFile(sp, input.systemPrompt, { mode: 0o660 });
-      await fsp.chmod(sp, SHARED_FILE_MODE).catch(() => { /* best-effort */ });
+      await taskFsFor(osUser).writeFile(sp, input.systemPrompt);
       flags.push("--append-system-prompt-file", `"${sp}"`);
     } else {
       // 다른 하네스의 대응 플래그는 실측하지 않았다 — 추측해 넣지 않되 **조용히 버리지도 않는다**(#1884). 이 파일엔
@@ -420,6 +603,8 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   //  이 경로의 AI 는 **항상 전체 공개로** 기록했다(잠긴 프로젝트를 위탁해도 마찬가지였다).
   //  세션 id 를 실어야 게이트웨이가 캡을 조회할 수 있고, 캡은 tmux 옵션(아래)이 권위다.
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
+  // #4012 T5 — 이 판이 붙을 게이트웨이·워크스페이스. 안 실으면 판이 `~/.lively/gateway-url` 을 읽어 남의 워크스페이스에 붙는다.
+  args.push(...taskGatewayEnvArgs(input.gatewayUrl, input.tenantSlug));
   // 자격 리스(§8-3) — setup-token 등. 리스가 없으면 노드 로컬 프로필/자격 폴백(중앙=box_ 홈, 멤버 PC=본인 ~/.claude).
   //  ★ 값은 **명령줄에 싣지 않는다**(#4422). 종전엔 `-e K=V` 로 펼쳤고, 그래서 ① 판 생성이 실패하면 execFile 오류 문장
   //   ("Command failed: <argv 전체>")에 토큰이 통째로 실려 last_assign·위탁 응답·게이트웨이 로그로 샜다(2026-09-22 윈도우 노드
@@ -429,7 +614,8 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   //  ⓘ 값이 env 로 sudo 를 건너지 않으므로 격리 박스의 sudoers env_keep(session-env-contract «자격 리스»)에 더는 기대지 않는다 —
   //   워커 uid 안에서 읽는다. 그 선언을 거두는 건 sudoers 재생성이 따르는 별건이라 여기서 건드리지 않는다(남아 있어도 무해).
   const lease = Object.entries(input.env ?? {}).filter((kv): kv is [string, string] => LEASE_ENV_NAME.test(kv[0]) && typeof kv[1] === "string");
-  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions, leaseEnv: lease.map(([k]) => k) });
+  const spawnNonce = crypto.randomBytes(8).toString("hex");
+  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions, leaseEnv: lease.map(([k]) => k), spawnNonce });
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {
@@ -442,6 +628,7 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
     if (isolationInfraReady() && process.env.LIVELY_MULTIPROFILE !== "0") {
       const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+      await ensureProfileKitWired(profileDir);   // #4135 — 빈 프로필이면 워커 세션도 훅(업싱크·단계 보고) 없이 돈다. sessions.ts 와 같은 자리.
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     } else {
       const profileDir = await resolveProfileConfigDir(user);
@@ -452,10 +639,10 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
   //  자격 파일은 **판을 띄우기 직전에** 쓴다 — 그 앞 단계(프로필 준비 등)가 실패해도 파일이 남지 않게. 스폰이 실패로 끝나면
   //   (판 생성이든 그 뒤 set-option 이든) 아래 catch 가 지운다 — 스크립트가 못 돈 판의 파일은 아무도 안 지운다.
   //  ⚠ 스폰은 성공했는데 판 안의 첫 명령(sudo·중계)이 죽으면 스크립트가 못 돌아 파일이 남는다 — 워커 uid 0600 이라 그 멤버만 읽고,
-  //   같은 위탁의 재시도가 덮어쓴다.
+  //   이름이 spawn 마다 달라 재시도가 덮어쓰지 않으므로 다음 prepareTaskDir 가 오래된 것을 치운다(sweepStaleLeases).
   const leaseFiles: string[] = [];
   try {
-    for (const [k, v] of lease) { const p = taskLeaseFile(taskDir, k); leaseFiles.push(p); await writeTaskSecret(p, v, osUser); }
+    for (const [k, v] of lease) { const p = taskLeaseFile(taskDir, k, spawnNonce); leaseFiles.push(p); await writeTaskSecret(p, v, osUser); }
     await tmux(args);
     const ownerId = user.userId || user.email || "";
     await tmux(["set-option", "-t", id, "@box_owner", ownerId]);
@@ -488,15 +675,16 @@ async function spawnTaskSessionUnguarded(input: RunTaskInput): Promise<RunTaskRe
 // ── 완료 감지·수집 — exit 파일 등장 = 종결. 결과는 상한(8KB)으로 잘라 보고(전문은 taskDir 에 남는다). ──
 //  harness — 결과 스키마가 하네스마다 다르므로 **무엇으로 돌렸는지**를 함께 들고 다녀야 최종 텍스트를 뽑을 수 있다(#1710).
 //  구 레코드(값 없음)는 claude 로 본다 — 그때는 claude 전용이었으므로 그게 사실이다.
-export interface TaskWatch { taskId: number; sessionId: string; taskDir: string; harness?: string }
+//  osUser — 작업 폴더를 읽을 경계. 격리 사용자면 넘긴다(저장소 분리 배포에선 게이트웨이가 그 폴더를 직접 못 본다).
+export interface TaskWatch { taskId: number; sessionId: string; taskDir: string; harness?: string; osUser?: string | null }
 export interface TaskOutcome { taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
 
-const SUMMARY_CAP = 8 * 1024;
+export const SUMMARY_CAP = 8 * 1024;
 
 // 진행 스트림에서 최종 텍스트를 뽑는다 — **하네스별 스키마**(HEADLESS.extract)로(#1710).
 //  종전엔 claude 의 `type=result` 하나만 알아서, 다른 하네스로 돌린 위탁은 요약이 통째로 빈 값이 됐다.
 //  못 찾으면 마지막 비어있지 않은 줄(진행 중 크래시 등) — 요약 목적이라 근사로 충분.
-function extractResult(streamJsonl: string, harnessKey?: string): string {
+export function extractResult(streamJsonl: string, harnessKey?: string): string {
   const spec = HEADLESS[harnessKey || "claude"] ?? HEADLESS.claude;
   const got = spec.extract(streamJsonl);
   if (got) return got;
@@ -505,41 +693,90 @@ function extractResult(streamJsonl: string, harnessKey?: string): string {
 }
 
 export async function checkTask(w: TaskWatch): Promise<TaskOutcome | null> {
-  let exitRaw: string;
-  try { exitRaw = (await fsp.readFile(path.join(w.taskDir, "exit"), "utf8")).trim(); }
-  catch { return null; } // 아직 실행 중
+  const tfs = taskFsFor(w.osUser);
+  // 두 단계로 읽는다 — 실행 중인 틱마다 스트림 전체를 끌어오지 않게(멤버 경계면 그게 곧 왕복 크기다).
+  //  조회 자체가 실패하면(중계 장애) «아직 실행 중» 으로 둔다 — 끝났다고 단정하면 멀쩡한 작업을 실패로 확정한다.
+  let first: Record<string, TaskRead | null>;
+  try { first = await tfs.readMany([{ key: "exit", path: path.join(w.taskDir, "exit"), max: 64 }]); }
+  catch { return null; }
+  if (!first.exit) return null; // 아직 실행 중
+  const exitRaw = first.exit.buf.toString("utf8").trim();
   const exit = Number.parseInt(exitRaw, 10);
   const code = Number.isFinite(exit) ? exit : null;
-  let stream = "";
-  try { stream = await fsp.readFile(path.join(w.taskDir, "stream.jsonl"), "utf8"); } catch { /* 결과 없음 */ }
+  const rest = await tfs.readMany([
+    { key: "stream", path: path.join(w.taskDir, "stream.jsonl"), max: Number.MAX_SAFE_INTEGER },
+    { key: "stderr", path: path.join(w.taskDir, "stderr.log"), max: 16 * 1024, tail: true },
+  ]).catch(() => ({} as Record<string, TaskRead | null>));   // 결과 없음 — 종결 판정은 이미 섰다
+  const stream = rest.stream ? rest.stream.buf.toString("utf8") : "";
   const summary = extractResult(stream, w.harness).slice(0, SUMMARY_CAP);
   if (code === 0) return { taskId: w.taskId, ok: true, exit: code, summary };
-  let err = "";
-  try { err = (await fsp.readFile(path.join(w.taskDir, "stderr.log"), "utf8")).slice(-2048); } catch { /* noop */ }
+  const err = rest.stderr ? rest.stderr.buf.toString("utf8").slice(-2048) : "";
   return { taskId: w.taskId, ok: false, exit: code, summary, error: err || `exit=${exitRaw}` };
+}
+
+/** buf 끝에서 잘린 UTF-8 문자(멀티바이트 선두만 있고 뒤가 안 온 것)를 뺀 길이. 온전하면 buf.length.
+ *  tailTask 는 바이트 상한(256KB)·쓰기 도중 시점으로 자르므로 한글(3바이트)이 경계에 걸리면, 조각마다 디코드할 때
+ *  양쪽 조각에 U+FFFD 가 박혀 이어 붙여도 원문이 복원되지 않는다. 잘린 문자는 이번 조각에서 빼고 next 를 그 앞에 두면 다음 조각이 문자를 통째로 가져간다. */
+export function utf8CompleteLength(buf: Uint8Array): number {
+  const len = buf.length;
+  for (let k = 1; k <= Math.min(3, len); k++) {
+    const b = buf[len - k];
+    if ((b & 0xc0) === 0x80) continue;                 // 이어지는 바이트 — 선두를 더 찾는다
+    if (b < 0x80) return len;                          // ASCII 로 끝남 — 온전
+    const need = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+    return k >= need ? len : len - k;                  // 선두 뒤 바이트가 모자라면 선두부터 뺀다
+  }
+  return len;                                          // 이어지는 바이트만 3개 — 4바이트 문자가 온전하거나 깨진 입력(그대로 둔다)
+  // 깨진 입력을 잘라 내지 마라 — 끝 ≤3바이트만 보류해야 바이트가 하나라도 더 오면 풀린다. 더 넓게 자르면 next 가 from 에 묶여 tail 이 멈춘다.
 }
 
 // 진행 로그 tail(§11) — stream.jsonl 을 from 바이트부터 읽어 청크 반환. done=exit 파일 존재.
 //  중앙(로컬)·원격(노드 RPC 릴레이) 공용. 파일 미존재(claude 시작 전)면 빈 청크.
 export interface TailResult { chunk: string; next: number; done: boolean; exit: number | null }
-export async function tailTask(taskDir: string, from: number): Promise<TailResult> {
-  const p = path.join(taskDir, "stream.jsonl");
-  let chunk = "", next = from;
+export async function tailTask(taskDir: string, from: number, osUser?: string | null): Promise<TailResult> {
+  let chunk = "", next = from, exit: number | null = null, done = false;
+  let got: Record<string, TaskRead | null>;
+  //  스트림 조각과 종료 파일을 **한 번에** — 화면·CLI 가 초 단위로 부르는 자리다.
   try {
-    const fh = await fsp.open(p, "r");
-    try {
-      const st = await fh.stat();
-      if (st.size > from) {
-        const buf = Buffer.allocUnsafe(Math.min(st.size - from, 256 * 1024)); // 청크 상한 256KB
-        const { bytesRead } = await fh.read(buf, 0, buf.length, from);
-        chunk = buf.subarray(0, bytesRead).toString("utf8");
-        next = from + bytesRead;
-      } else { next = st.size < from ? st.size : from; } // 재시도로 파일이 짧아졌으면 리셋
-    } finally { await fh.close(); }
-  } catch { /* 아직 파일 없음 */ }
-  let exit: number | null = null, done = false;
-  try { const e = (await fsp.readFile(path.join(taskDir, "exit"), "utf8")).trim(); done = true; exit = Number.isFinite(Number(e)) ? Number(e) : null; } catch { /* 실행 중 */ }
+    //  ⚠ exit 를 **먼저** 읽는다(readMany 는 차례로 읽는다) — exit 는 하네스가 끝난 뒤에 생기므로 먼저 봤으면 뒤에 읽는 스트림은 최종본이다.
+    //   거꾸로면 스트림을 읽은 직후 끝난 판에서 낡은 size 로 atFinalEof 가 서서 잘린 문자를 그대로 내준다.
+    got = await taskFsFor(osUser).readMany([
+      { key: "exit", path: path.join(taskDir, "exit"), max: 64 },
+      { key: "stream", path: path.join(taskDir, "stream.jsonl"), from, max: 256 * 1024 },   // 청크 상한 256KB
+    ]);
+  } catch { return { chunk, next, done, exit }; }   // 조회 실패 = 모름(실행 중으로 둔다)
+  const s = got.stream;
+  if (s) {
+    if (s.size > from) {
+      // 파일 끝까지 다 읽었고 종료 파일이 있으면 더 올 바이트가 없다 — 깨진 꼬리라도 그대로 내줘야 소비자가 멈추지 않는다.
+      const atFinalEof = !!got.exit && from + s.buf.length >= s.size;
+      const n = atFinalEof ? s.buf.length : utf8CompleteLength(s.buf);
+      chunk = s.buf.subarray(0, n).toString("utf8"); next = from + n;
+    }
+    else next = s.size < from ? s.size : from;        // 재시도로 파일이 짧아졌으면 리셋
+  }
+  if (got.exit) { const e = got.exit.buf.toString("utf8").trim(); done = true; exit = Number.isFinite(Number(e)) ? Number(e) : null; }
   return { chunk, next, done, exit };
+}
+
+/** 작업 폴더의 작은 파일 하나(턴의 `session` 표지 등). 없거나 못 읽으면 null. */
+export async function readTaskText(taskDir: string, name: string, osUser?: string | null, max = 4096): Promise<string | null> {
+  try {
+    const g = await taskFsFor(osUser).readMany([{ key: "f", path: path.join(taskDir, name), max }]);
+    return g.f ? g.f.buf.toString("utf8") : null;
+  } catch { return null; }
+}
+
+/** 작업 폴더에 작은 표지 파일을 쓴다(턴의 `session` 등) — 읽기(readTaskText)와 **같은 경계**로. */
+export async function writeTaskText(taskDir: string, name: string, data: string, osUser?: string | null): Promise<void> {
+  await taskFsFor(osUser).writeFile(path.join(taskDir, name), data);
+}
+
+/** 그 작업이 끝났나 — null = 폴더가 없다(관측 불가) · false = 실행 중 · true = exit 파일이 있다. */
+export async function taskDirDone(taskDir: string, osUser?: string | null): Promise<boolean | null> {
+  const [dirOk, exitOk] = await taskFsFor(osUser).exists([taskDir, path.join(taskDir, "exit")]).catch(() => [false, false]);
+  if (!dirOk) return null;
+  return exitOk;
 }
 
 // 세션 강제 종료(수집 후 정리·타임아웃·취소). 없는 세션은 무시.

@@ -10,6 +10,7 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit
 import { embeddingInputText } from "./embedding-provider.js";
 import { markEmbeddingPending, CATEGORY_TARGET } from "./embedding-backfill.js";
 import { knowledgeVisWhere } from "./knowledge-store.js";
+import { forgetClassifierSeen } from "./knowledge-common.js";
 import { resolveGroupKey } from "./category-group-store.js";
 import type { Viewer } from "./visibility.js";
 
@@ -112,7 +113,13 @@ const auditCategory = (entityKey: string, op: string, before: unknown, after: un
 //  카테고리 행 자체는 거르지 않는다(분류체계는 조직의 뼈대 — 가시성 주체가 아니다). 잠기는 건 그 안의 지식이고,
 //  그래서 위 집계만 뷰어 기준으로 센다(materialize.categoryMapForIndex 와 같은 판단).
 //  정렬: 교차관심사 먼저(여러 축에 걸친 것이 위) → 이름. 종전의 space 우선 정렬은 축과 함께 사라졌다.
-export async function listCategories(viewer?: Viewer): Promise<CategoryRow[]> {
+//  light(#5147) — 행 칸만 준다(지식 수·어긋남·확신도 집계 없음). 이름표만 쓰는 화면(증류기 · 검토 규칙의 카테고리 고르기)용이다.
+//   어긋남 집계가 카테고리마다 벡터 거리를 재서 실측 1.2초가 걸렸는데, 그 화면들은 key → 이름만 읽는다.
+export async function listCategories(viewer?: Viewer, opts?: { light?: boolean }): Promise<CategoryRow[]> {
+  if (opts?.light) {
+    return q(itemsPool,
+      `SELECT ${CATEGORY_COLS} FROM category WHERE state<>'merged' ORDER BY cross_cutting DESC, name NULLS LAST, key`);
+  }
   const params: unknown[] = [];
   const sel = categorySel(await knowledgeVisWhere(viewer, params));
   return q(itemsPool,
@@ -389,12 +396,18 @@ export async function deleteCategory(id: number, ctx?: WriteCtx): Promise<{ dele
   //   같은 행에 FOR KEY SHARE 를 잡으므로, 잠금은 진행 중인 쓰기가 끝나길 기다리고 그 뒤의 쓰기는 이 트랜잭션이 끝날 때까지 막는다.
   //   잠근 뒤의 검사는 새 스냅샷이라 방금 커밋된 매핑도 센다. 검사와 지우기를 따로 돌리면(또는 NOT EXISTS 를 붙인 DELETE 한 문장도)
   //   그 사이에 커밋된 매핑이 CASCADE 로 조용히 사라진다(격리 리뷰 #1106).
-  await withTx(async (db) => {
+  const orphaned = await withTx(async (db) => {
     const locked = await one(db, `SELECT id FROM category WHERE id=$1 FOR UPDATE`, [id]);
     if (!locked) throw new HttpError(404, `카테고리 #${id} 없음`);
     await assertDeletable(db, id, String(before.name || before.key));
+    //  #4194. 지우면 매핑이 CASCADE 로 사라진다. #4233 부터는 위 검사 때문에 남는 매핑이 rejected 뿐이라 지식이 카테고리를 잃는
+    //   일은 없지만, 이름을 받아 두었다가 '봤다' 기록 정리를 부르는 자리는 그대로 둔다(forgetClassifierSeen 은 카테고리가 남은
+    //   지식의 기록은 안 지운다. classifier-lanes.pg-test ④-b).
+    const names = (await q(db, `SELECT name FROM knowledge_category WHERE category_id=$1`, [id])).map((r) => String(r.name));
     await db.query(`DELETE FROM category WHERE id=$1`, [id]); // FK CASCADE: 매핑·엣지·정션 동반 삭제
+    return names;
   });
+  await forgetClassifierSeen(orphaned);
   await auditCategory(before.key, "delete", before, null, ctx);
   return { deleted: true, id };
 }

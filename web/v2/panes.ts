@@ -23,17 +23,23 @@
 //  서랍에서 세션을 갈아 끼울 때 이 셸은 다시 그리지 않는다(자료·지식·문패가 그대로 산다) — 주소만 바뀐다.
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
-import { anchoredPopover, api, apiUrl, el, personFace, sv, toast, TOKEN_KEY } from '../core.js';
+import { anchoredPopover, api, apiUrl, el, sv, toast, TOKEN_KEY } from '../core.js';
 import { deviceStore } from './shell-prefs.js';   // #2460 — 곁칸 배치는 이 창의 사실
 import { canOpenInAside, openInAside } from './aside-slot.js';
 import { makeSplitter } from './split.js';
 import { mountSideSwap, type SideSwapHandle } from './side-swap.js';   // 곁칸이 절반을 넘으면 자리를 바꾼다(#1819)
 import { mountSideCard, type SideCardHandle } from './side-card.js';   // #3870: 사이드바가 화면을 다 차지하면 세션이 카드가 된다
+import { SIDE_DEF } from '../lib/side-card-geom.js';   // 곁칸 기본 폭 — 카드를 제자리로 돌릴 때도 이 폭으로 물러난다(한 값)
 import { sideLabels } from '../lib/side-label.js';   // 곁칸의 화면 이름. 자리바꿈으로 왼쪽에 서면 «우측» 이라 부르지 않는다(#4233)
 import { HANDSET_MQ, MOBILE_MQ } from './mobile.js';   // 좁은 폭(≤900)의 접힌 배치 — side-swap 과 같은 문턱을 읽는다(#4088 후속) · 폰 · 눕힌 폰(#4443 독을 안 세운다)
 import { PART_DEFS, makePart, openInWebPart, partDef, pnIcon, type Part, type PartCtx, type PartType } from './panes-parts.js';
+import { PANE_ACT_KEY, SESSAPP_TAB, SHOW_SESSAPP_EVT, attachAppToSession, sessAppDoorIcon, sessAppTabFace, sessAppTabTitle, watchSessionApps } from './session-app-pane.js';   // #4225 붙은 앱 = 곁칸의 파생 탭
+import type { SessAppDoor } from '../session-chat.js';   // #4443 세션 머리줄 [붙은 앱] 배선의 모양
 import { dockTile, mountDock, type DockApp, type DockHandle } from './pane-dock.js';   // #4443 곁칸 독 — 곁칸에 띄울 앱의 문(macOS 독)
 import { openAppDrawer, type DrawerItem } from './pane-drawer.js';               // #4443 탭 줄 [＋] = 앱 서랍(독 ⊞ 와 같은 판 · 같은 타일)
+import { listSessionApps } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
+import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { appColor } from '../lib/pane-dock.js';                              // #4443 앱마다 한 색 — 탭과 독이 같은 앱으로 읽히게
 import { VIEWER_EVT, VIEWER_TO_EVT, ctxMenu, kindOf, pnIconName, rememberViewerPath, rememberedViewerPath, slotStoreKey } from './panes-kit.js';
 import { bindCtx, bindCtxSurface } from './ctx-registry.js';   // #3784 곁칸 빈 자리 우클릭
@@ -41,12 +47,11 @@ import { type CtxRow } from './ctx-menu.js';
 //  ★ 탭 = 부품의 **인스턴스**(#762) — 배치가 드는 것은 '종류'가 아니라 '탭 열쇠'다(lib/tab-key 머리말).
 import { isTabKey, nextTabKey, tabBase, tabNum, type TabKey } from '../lib/tab-key.js';
 //  #3870 «곁칸 탭 관리» — 닫은 뒤 갈 곳 · 한꺼번에 닫기 · 끌어 옮길 자리 · 폭 · 닫은 탭 다시 열기(규칙은 lib, 끌기 손은 v2/pane-tabdrag).
-import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
+import { bottomShown, bulkTargets, dropAppsTab, foldBottom, landZone, landingAfterClose, normalizePins, placeKey, planTabs, popClosed, pushClosed, seedConsoleTab, showZone, stripRoom, touchRecent, unparkBottom, type BulkKind, type ClosedTab } from '../lib/pane-tabs.js';
 import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDragHost } from './pane-tabdrag.js';
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
-import { onViewers, viewersOf } from './presence.js';           // #2116 — 지금 이 세션을 보고 있는 사람
-import { openSharePopover, shareSessOf } from './share-session.js';   // #2116 — 문패 [공유]
+import { onTabEvent, slotOfKey, tabsOfSession } from './browser-tabs.js';   // #4993 AI 가 쓰는 탭 → 그 세션의 웹 칸
 import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -58,7 +63,7 @@ import { type Sess, type V2Data } from './views.js';
 import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
-import { glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
+import { appGlyphName, glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
 
 export interface PanesOpts {
   data: () => V2Data;
@@ -70,7 +75,7 @@ export interface PanesOpts {
   /** 서랍에서 세션을 갈아 끼웠다 — 셸을 다시 그리지 않고 주소만 그 세션 것으로. */
   onSessionPicked?: (sid: string | null) => void;
   /** 세션 화면(대화창·터미널·상단바) 통째를 붙이는 배선 — main.ts 가 준다. */
-  mountSession?: (host: HTMLElement, sid: string, o?: { trail?: TimelineHandle | null; openFiles?: () => void; filesLabel?: string }) => { destroy(): void } | null;
+  mountSession?: (host: HTMLElement, sid: string, o?: { trail?: TimelineHandle | null; openFiles?: () => void; filesLabel?: string; appDoor?: SessAppDoor }) => { destroy(): void } | null;
   /** 새 세션 자리에서 세션을 방금 만들었다 — 셸이 그 전문을 세션 목록에 즉시 끼워 넣는다(v2/panes-parts spawn). */
   onSessionCreated?: (row: any) => void;
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
@@ -81,10 +86,17 @@ export interface PanesOpts {
   onMoveSession?: (sid: string) => void;
   /** 그 세션을 옮길 수 있나 — 내 세션만(남의 세션은 [⋯] 에도 이 줄이 없다). 없으면 단추를 안 단다. */
   canMoveSession?: (sid: string) => boolean;
+  /** 문패 [세션 복제](#4135) — 지금 보는 세션의 대화를 아는 새 세션을 하나 더 만든다. 확인 창·실행은 main.ts 가 쥔다(anchor = 누른 단추). */
+  onForkSession?: (sid: string, anchor: HTMLElement) => void;
+  /** 그 세션을 복제할 수 있나 — 내 세션 · 살아 있음 · 복제 수단이 있는 AI. 없으면 단추를 안 단다. */
+  canForkSession?: (sid: string) => boolean;
   /** 좁은 폭(≤900)에서 곁칸을 **서랍으로 연다/닫는다** — 셸(main.ts)의 모바일 크롬이 맡는다(#4088 후속, 2026-09-23).
    *  파일을 열었는데 서랍이 닫혀 있으면 «눌렀는데 아무 일도 없다» 가 된다 — 곁칸에 무언가를 켤 때마다 부른다. */
   onOpenDrawer?: () => void;
   onCloseDrawer?: () => void;
+  /** 이 셸이 그리는 세션이 **리브 세션**이다(#4970 «리브 = 세션 하나» — 셸이 리브 좌표로 알아본다). 프로젝트 없는 세션 화면의 곁칸 맨 앞에
+   *  «리브» 칸(지금 손볼 것 · 외부 앱 연결 상태)을 켜서 세운다. 다른 세션엔 세우지 않는다. */
+  livSession?: boolean;
 }
 export interface PanesHandle {
   destroy(): void;
@@ -118,9 +130,10 @@ const LAYOUT_KEY_V1 = 'lively_panes_layout_v1'; // 전역 한 벌이던 옛 판 
 //  #4443(원준 2026-10-01) — **아래 칸은 비워 둔다**. 종전엔 타임라인을 닫힌 아래 칸에 넣어 두어, [＋] › «아래 칸 열기» 를
 //   누르면 넣은 적 없는 타임라인이 터미널 밑에 있었다. 타임라인은 독에서 누르면 곁칸에 열린다. 저장된 옛 기본은 unparkBottom.
 //  #4443(원준 10-05) — «앱» 탭도 뺀다. 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 맡는다. 저장된 것은 dropAppsTab.
+//  #4876(원준 2026-10-19) — 첫 탭은 «콘솔»(세션 조작 · 다녀온 사이 · 남긴 것). 자료는 둘째. 저장된 배치는 seedConsoleTab 이 한 번만 앞에 세운다.
 const DEF_LAYOUT = (): Layout => ({
-  main: ['sessions'], side: ['files', 'tasks', 'knowledge'], bottom: [],
-  act: { main: 'sessions', side: 'files', bottom: null },
+  main: ['sessions'], side: ['console', 'files', 'tasks', 'knowledge'], bottom: [],
+  act: { main: 'sessions', side: 'console', bottom: null },
   sideOn: true, bottomOn: false, pin: [],
 });
 const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
@@ -130,10 +143,17 @@ const ALL = new Set<string>(PART_DEFS.map((d) => d.type));
  *  탭도 ×도 없어 **뺄 방법이 사라지고**, 그 칸에 세션만 남으면 탭 줄 자체가 숨어 ＋ 마저 없어진다
  *  (원준 2026-08-20 신고: "세션이 어디 열린 건지도 모르겠고 닫을 수도 없어 골머리"). 넣는 길을 막고(addBtn·moveTab),
  *  이미 그렇게 저장된 배치는 여기서 되돌린다 — 갇힌 사람은 새로고침 한 번으로 풀린다. */
-/** 한꺼번에 닫기·되살리기에서 빼는 탭(main 판: 붙은 앱 탭 #4225). stage 판엔 붙은 앱 탭이 없어 비어 있다 — 탭 줄 코드를
- *  main 과 같은 모양으로 두려고 자리만 남긴다(#3870 곁칸 탭 관리 stage 이식). */
-const DERIVED_TABS: ReadonlySet<string> = new Set<string>();
+/** #4225 — **배치에 저장하지 않는 탭**. 붙은 앱 탭은 지금 보는 세션에서 나온다(session-app-pane.ts 머리말) —
+ *  저장하면 앱이 안 붙은 세션을 열 때 빈 탭이 한 번 떴다 사라진다. 읽을 때도 쓸 때도 걷는다. */
+const DERIVED_TABS: ReadonlySet<string> = new Set([SESSAPP_TAB]);
+function stripDerived(lay: Layout): Layout {
+  const keep = (k: TabKey | null): boolean => !!k && !DERIVED_TABS.has(tabBase(k));
+  const out: Layout = { ...lay, main: lay.main.filter(keep), side: lay.side.filter(keep), bottom: lay.bottom.filter(keep), act: { ...lay.act }, pin: (lay.pin || []).filter(keep) };
+  for (const z of ['main', 'side', 'bottom'] as const) if (!keep(out.act[z])) out.act[z] = out[z][0] || null;
+  return out;
+}
 function normalizeLayout(lay: Layout): Layout {
+  lay = stripDerived(lay);
   //  같은 열쇠가 두 칸에 있으면 부품이 두 몸을 갖고 서로를 덮는다 — 먼저 나온 것만 남긴다.
   const seen = new Set<TabKey>();
   for (const z of ['main', 'side', 'bottom'] as const) {
@@ -188,7 +208,8 @@ function seedLayoutStore(): void {
     const r = seedTasksTab(layoutStore());
     const u = unparkBottom(r.store);             // #4443 — 닫힌 아래 칸에 숨겨 둔 옛 기본 타임라인을 한 번만 걷는다
     const a = dropAppsTab(u.store);              // #4443 — «앱» 탭(옛 기본에서 물려받은 것)을 한 번만 걷는다
-    if (r.changed || u.changed || a.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(a.store));
+    const c = seedConsoleTab(a.store);           // #4876 — «콘솔» 탭을 곁칸 맨 앞에 한 번만 세운다(자료는 둘째로)
+    if (r.changed || u.changed || a.changed || c.changed) localStorage.setItem(LAYOUT_KEY, JSON.stringify(c.store));
   } catch (_) { /* 저장소를 못 쓰는 문맥 — 기억만 못 할 뿐 */ }
 }
 /** 이 프로젝트의 배치 — 없으면 마지막으로 쓰던 것, 그것도 없으면 옛 전역 한 벌, 끝으로 기본.
@@ -216,6 +237,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  #4088 후속(2026-09-23): 프로젝트가 없어도 **세션 작업 폴더**는 있다 — 그 파일을 보고 내려받는 자리(sessfiles)와 발자취를 곁칸에 둔다.
   //   데스크톱은 종전대로 접어 둔다(펴는 손잡이·머리줄 [세션 파일]로 편다). 좁은 폭에선 서랍이 이걸 든다.
   if (loose) { lay = { ...lay, side: ['sessfiles', 'timeline'], bottom: [], act: { ...lay.act, side: 'sessfiles', bottom: null }, bottomOn: false, sideOn: false, pin: [] }; }
+  //  #4970 — 리브 세션이면 곁칸을 펴고 «리브» 칸을 맨 앞에 켠다(지금 손볼 것 · 외부 앱 연결 상태). 자투리 화면의 임시 배치라 저장하지 않는다(위 loose 규칙).
+  if (loose && opts.livSession) { lay = { ...lay, side: ['livdesk', 'sessfiles', 'timeline'], act: { ...lay.act, side: 'livdesk' }, sideOn: true }; }
 
   // 칸 하나 = 탭 줄 + 본문(만드는 곳은 아래 makePane). **이 두 줄은 함수 맨 앞이어야 한다** —
   //  curSession() 이 `panes` 를 읽는데, actKey() → applySessionAct() 로 이어지는 그 길을 마운트가
@@ -277,8 +300,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     try {
       const st = layoutStore();
       const map = st.p && typeof st.p === 'object' ? st.p : {};
-      map[String(id)] = lay;
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...st, last: lay, p: map }));   // ...st — 표식(seeded)을 지우지 않는다
+      const saved = stripDerived(lay);             // #4225 붙은 앱 탭은 세션에서 나온다 — 배치엔 안 적는다
+      map[String(id)] = saved;
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify({ ...st, last: saved, p: map }));   // ...st — 표식(seeded)을 지우지 않는다
     } catch (_) { /* noop */ }
   }
   saveLayout();   // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게
@@ -288,7 +312,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  새 세션도 그 세트를 그대로 물려받는다. 하지만 **그중 무엇을 켜 두고 일하는가**는 세션마다 다르다:
   //  이 세션은 웹을 띄워 두고, 저 세션은 타임라인을 본다. 그걸 매번 다시 고르게 하지 않는다.
   //  기록은 이 브라우저에(칸 배치와 같은 급의 보기 취향), 세션 id 로 — 없으면 공용 기본값(lay.act)으로 떨어진다.
-  const ACT_KEY = 'pn_act_by_sess';
+  const ACT_KEY = PANE_ACT_KEY;   // 열쇠는 session-app-pane.ts 한 곳(앱빌더가 «앱 탭으로 열기» 를 미리 적는다 · #4632)
   //  ⚠ **`opts.sessionId` 를 쓰면 안 된다**(원준 2026-09-03 신고의 한 갈래) — 서랍에서 세션을 갈아 끼울 때
   //   이 셸은 다시 그리지 않으므로 그 값은 **처음 연 세션에 굳는다**. 그러면 '세션마다 기억한다'가 실은
   //   '이 창을 처음 연 세션에 전부 덮어쓴다'가 된다. 지금 보는 세션은 curSession() 만이 안다.
@@ -334,7 +358,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   '마지막으로 쓰던 값'을 물려주면 방금 스쳐 본 세션의 폭이 다음 세션으로 새어 나가 독립이 깨진다.
   //   #1719 가 걱정한 '설정할 게 많다'는 **기본값이 늘 쓸 만한 자리**(곁칸 340)라는 것으로 답한다.
   const VIEW_KEY = 'pn_view_by_sess';
-  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean; card?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762) · card = 세션이 카드(#3870)
+  type View = { sideW?: number; bottomH?: number; sideOn?: boolean; bottomOn?: boolean; sideLeft?: boolean; card?: boolean; cardFold?: boolean; cardPick?: boolean };   // sideLeft = 곁칸이 왼쪽(자리바꿈, #762) · card = 세션이 카드(#3870) · cardFold · cardPick = 카드의 최소화 · 고름(2026-10-10)
   function readViews(): Record<string, View> {
     try { const m = JSON.parse(localStorage.getItem(VIEW_KEY) || '{}'); return m && typeof m === 'object' ? m as Record<string, View> : {}; }
     catch (_) { return {}; }
@@ -376,11 +400,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  ⚠ 도구가 준 경로는 절대·상대가 섞여 온다. 세션 폴더(row.dir) 기준으로 상대화해야 파일 API 가 연다.
   //  ⚠ any 로 두지 않는다 — 종전의 `row.dir`(목록 행에 없는 필드)이 any 라서 조용히 '' 로 컴파일됐다. Sess 면 없는 필드는 빌드가 막는다.
   const sessRow = (sid: string): Sess | null => opts.data().sessions.find((x) => x.id === sid) ?? null;
-  /** 주소가 기록 uuid 로 온 경우까지 받아 **박스 행**을 찾는다 — 문패의 얼굴·공유는 박스 id 를 축으로 돈다(#2116). */
-  const boxRow = (sid: string | null): any => {
-    if (!sid) return null;
-    return sessRow(sid) || opts.data().sessions.find((x: any) => x.logId === sid) || null;
-  };
   /** 세션 폴더 기준 상대경로. 그 밖(다른 폴더의 절대경로)이면 null — 열 수 없는 것에 버튼을 달지 않기 위해서다. */
   /** 경로 구분자 무관 정규화 — 노드가 윈도우면 `C:\Users\…\project\3966` 처럼 온다(src/terminal/node-upload-coord.ts 와 같은 규칙). */
   //  (slash · isAbs 는 lib/path-open 의 것 — 터미널 경로 열기와 한 벌이다.)
@@ -482,12 +501,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   // 세션에 딸린 칸들(타임라인·웹·편집기)에게 '보는 세션이 바뀌었다'를 알린다 — 각자 자기 것을 그 세션 것으로 갈아입는다.
   const sessSubs = new Set<(sid: string | null) => void>();
+  //  #4225 붙은 앱 탭의 구독(syncSessApps) — announceSession 이 부르므로 **그보다 먼저** 선언한다(아래에 두면 마운트 중
+  //   세션이 바뀌는 길이 생기는 순간 TDZ 로 화면이 통째로 죽는다 — panes 선언 머리말과 같은 함정).
+  let sessAppOff: (() => void) | null = null;
+  let sessAppSid: string | null = null;
   function curSession(): string | null {
     const sp = panes.get('main')?.parts.get('sessions');
     return sp && sp.currentSession ? sp.currentSession() : (opts.sessionId || null);
   }
   function announceSession(sid: string | null): void {
     for (const fn of [...sessSubs]) { try { fn(sid); } catch (_) { /* 한 칸이 넘어져도 나머지는 간다 */ } }
+    syncSessApps();
   }
 
   const ctx: PartCtx = {
@@ -505,11 +529,14 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     onSessionPicked: (sid) => { trailFor(sid); announceSession(sid); opts.onSessionPicked?.(sid); applySessionAct(); applyView(); paintAll(); },
     // 세션 화면을 붙일 때 **그 세션의 발자취 그릇**을 함께 넘긴다 — 대화가 읽히는 대로 타임라인 칸이 자란다.
     //  머리줄 [자료](#4088 후속) — 자료 칸(프로젝트 없는 세션은 세션 폴더 칸)을 보이게 한다. 배선만 넘긴다(무엇을 켤지는 셸이 안다).
-    mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid), openFiles: () => showPart(loose ? 'sessfiles' : 'files'), filesLabel: loose ? '세션 파일' : '자료' }) : undefined,
+    //  #4443 머리줄 [붙은 앱]: 이 세션에 붙은 앱 목록(탭과 같은 한 벌)과 그 앱 탭을 여는 함수(곁칸 [앱]을 다시 눌렀을 때와 같은 openSessAppTab).
+    mountSession: opts.mountSession ? (host, sid) => opts.mountSession!(host, sid, { trail: trailFor(sid), openFiles: () => showPart(loose ? 'sessfiles' : 'files'), filesLabel: loose ? '세션 파일' : '자료',
+      appDoor: { watch: (fn) => watchSessionApps(sid, (apps) => fn(apps.length ? { title: sessAppTabTitle(apps), count: apps.length, icon: sessAppDoorIcon(apps, 'sc-act-ic') } : null)), open: () => openSessAppTab() } }) : undefined,
     onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
     curSession: () => curSession(),
     onSession: (fn) => { sessSubs.add(fn); return () => { sessSubs.delete(fn); }; },
     trailHost: () => trailHost,
+    trailItems: () => (trailW ? trailW.items() : []),   // #4876 콘솔 — 발자취 재료를 읽기만(그릇은 타임라인 칸의 것)
     // 세션에 딸린 값(웹 주소·편집 중인 파일)의 저장 열쇠. 세션이 없을 때만 프로젝트로 떨어진다(새 세션 자리).
     memKey: () => curSession() || 'p' + id,
     // 부품끼리의 신호가 도는 **울타리**. 아래 wrap 은 이 객체보다 나중에 만들어지지만, 부르는 것은 늘
@@ -530,7 +557,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   bindCtxSurface(wrap, (hit, ev) => {
     //  어디서 불러도 곁칸에 넣는다 — 가운데 칸(세션)은 세션만, 아래 칸에는 새로 열지 않는다(#4443 원준 10-05 «아래칸에 여는거 우리 안하기로»).
     const zone: Zone = 'side';
-    const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions' && d.type !== 'apps').map((d) => ({
+    const adds: CtxRow[] = PART_DEFS.filter((d) => d.type !== 'sessions' && d.pickable !== false).map((d) => ({
       //  #4233: 탭 · [+] 고르기와 같은 그림(PART_DEFS.icon). 종전엔 여기서 따로 고르다 「프로젝트」만 묶음 그림(layers)으로 떨어졌다.
       label: d.name, icon: pnIconName(glyphAt(d.icon, 15)),
       hint: d.hint, run: () => { openZone(zone); addPart(zone, d.type); },
@@ -726,7 +753,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   let sideHide: HTMLElement | null = null;   // 곁칸 머리의 접기 단추(paintPane 이 새로 만들 때마다 바꿔 든다)
   let releaseSeq = 0;   // 곁칸 손잡이를 놓은 차례(늦게 온 판정이 새 판정을 덮지 않게)
   const splitX = makeSplitter({
-    axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220,
+    axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: SIDE_DEF, min: 220,
     max: () => swap?.maxSideW() ?? 620,
     grow: () => (body.classList.contains('sw-left') ? 1 : -1),
     label: sideLabels(false).width,
@@ -758,7 +785,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const v = loose ? {} : (readViews()[actKey()] || {});
     //  상한으로 깎지 않는다(#3870). 상한은 그릴 때 CSS 가 맞춘다(--pn-side-fit). 여기서 깎으면 화면을 여는 도중의
     //  좁은 격자 폭이 이 세션의 폭을 줄인다. 말이 안 되는 값(옛 결함이 적은 아주 큰 수)만 거른다.
-    const w = Math.max(220, Math.min(4000, Number(v.sideW) || 340));
+    const w = Math.max(220, Math.min(4000, Number(v.sideW) || SIDE_DEF));
     const h = Math.max(120, Math.min(560, Number(v.bottomH) || 240));
     body.style.setProperty('--pn-side-w', w + 'px');
     colMain.style.setProperty('--pn-bottom-h', h + 'px');
@@ -771,7 +798,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  세션 카드도 이 세션의 것이다(#3870). 자리 · 크기는 브라우저 하나에 하나(사람마다), 카드인지 아닌지는 세션마다.
     //  되살린 카드는 «카드가 되기 전 자리» 를 모른다. 앞 세션의 값이 남아 자리바꿈 안내가 엉뚱하게 뜨지 않게 안내 없음으로 둔다.
     leftBeforeCard = true;
-    card?.restore(v.card === true);
+    //  최소화 · 고름도 이 세션의 것이다 — 새로고침해도 그대로(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»).
+    card?.restore(v.card === true, { fold: v.cardFold === true, pick: typeof v.cardPick === 'boolean' ? v.cardPick : undefined });
   }
   colMain.append(mainPane.root, splitY, bottomPane.root);
   // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
@@ -799,7 +827,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  사이드바가 상한 폭일 때의 자리를 조용히 정한다. 절반을 넘으므로 자리바꿈이 켜져 있으면 세션이 설 자리는 오른쪽이다.
     //  미끄러짐도 안내도 없다(그 순간 사이드바가 세션 열을 덮고 있어 자리가 바뀌는 것이 보이지 않는다).
     settle: (px) => swap?.restore(px),
-    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; } });
+    onLeft: () => { if (swap?.swapped() && !leftBeforeCard) swap.introOnce(); leftBeforeCard = true; },
+    //  세션 열이 지금 왼쪽에 서 있나 — 카드가 처음 뜨는 모서리(세션이 줄어든 쪽)를 고른다. 자리바꿈이면 세션은 오른쪽이다.
+    sessionLeft: () => !swap?.swapped(),
+    onState: (s) => saveView({ cardFold: s.fold, cardPick: s.pick }) });
 
   /** 곁칸을 부르는 글을 지금 선 쪽에 맞춘다. 탭 메뉴는 열 때마다 isLeft() 로 새로 고른다. */
   function paintSideLabels(left: boolean = isLeft()): void {
@@ -813,6 +844,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   // ── 탭 ──
   //  탭이 스스로 단 이름(뷰어=파일명·웹=사이트) — 열쇠마다 하나. 부품이 setTabTitle 로 적는다(#762).
   const tabTitles = new Map<TabKey, string>();
+  //  탭이 스스로 단 얼굴(#4592) — 앱 아이콘 이름 하나가 그림과 색을 함께 정한다. 붙은 앱 탭이 쓴다(setTabFace). 없으면 종류의 기본.
+  const tabFaces = new Map<TabKey, string>();
   /** 그 탭 앞으로 만든 ctx — 셸이 쥔 한 벌에 **이 탭의 정체**만 얹는다. */
   function ctxFor(slot: TabKey): PartCtx {
     return {
@@ -826,6 +859,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         if (next) tabTitles.set(slot, next); else tabTitles.delete(slot);
         //  띠만 다시 그린다 — paintAll 이면 부품이 통째로 다시 서서 보던 자리가 튄다.
         for (const z of ['main', 'side', 'bottom'] as Zone[]) if (zoneTabs(z).includes(slot)) paintTabs(z);
+      },
+      setTabFace: (icon: string | null) => {
+        const next = String(icon || '');
+        if ((tabFaces.get(slot) || '') === next) return;
+        if (next) tabFaces.set(slot, next); else tabFaces.delete(slot);
+        for (const z of ['main', 'side', 'bottom'] as Zone[]) if (zoneTabs(z).includes(slot)) paintTabs(z);
+        dock?.sync();                                   // 독 아이콘도 같은 얼굴이다
       },
     };
   }
@@ -907,6 +947,32 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     bringUp(z, key);
   };
   wrap.addEventListener('pn:open-web', onOpenWeb);
+  // #4993 — AI 가 이 세션의 브라우저 탭을 쓰기 시작했다(또는 사람에게 부탁했다) → 그 웹 칸을 켜서 사람이 보게 한다.
+  //  탭 열쇠의 번호가 곧 웹 칸의 번호다(첫 탭 = 'web', 둘째 = 'web#2' — browser-tabs slotOfKey). 이 세션을 보는 곁칸만 듣는다.
+  const liveBrowser = hasBrowserSurface() && !EMBEDDED;
+  const offReveal = liveBrowser ? onTabEvent((ev) => {
+    if (ev.type !== 'reveal' || dead || (curSession() || '') !== ev.session) return;
+    const slot = ev.slot as TabKey;
+    const z = (['side', 'main', 'bottom'] as Zone[]).find((zz) => lay[zz].includes(slot));
+    if (!z) { addTab('side', slot); return; }
+    bringUp(z, slot);
+  }) : null;
+  /** 이 세션을 보러 왔는데 AI 가 최근(30분)에 쓴 탭이 있다 — 그 웹 칸이 배치에 없으면 **켜지 않고** 탭만 들인다(사람이 보던 칸을 뺏지 않는다). */
+  const seatAiTabs = (sid: string | null): void => {
+    if (!liveBrowser || !sid || dead) return;
+    let changed = false;
+    for (const t of tabsOfSession(sid)) {
+      if (!t.aiAt || Date.now() - t.aiAt > 30 * 60_000) continue;
+      const slot = slotOfKey(t.key) as TabKey;
+      if (allKeys().includes(slot)) continue;
+      lay.side.push(slot);
+      if (!lay.act.side) lay.act.side = slot;
+      changed = true;
+    }
+    if (changed) { saveLayout(); paintAll(); }
+  };
+  sessSubs.add(seatAiTabs);
+  queueMicrotask(() => seatAiTabs(curSession()));
   // 자료 칸에서 파일을 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
   //  ⚠ 이미 뷰어가 있으면 **또 만들지 않고 그 칸을 켠다**(부품은 칸마다 한 벌이라 두 곳에 생기면 둘이 따로 논다).
   //   접혀 있던 칸이면 펴 준다 — 신호를 보냈는데 아무 일도 안 일어난 것처럼 보이면 안 된다.
@@ -922,19 +988,30 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     for (const z of zones) { const k = lay[z].find((x) => tabBase(x) === type); if (k) return { zone: z, key: k }; }
     return null;
   }
-  // 자료 칸에서 파일을 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
-  //  ★ 뷰어는 여럿 뜰 수 있다(#762, 원준 2026-09-05). **어느 탭에 펼지는 여기서 정한다**: 기본은 보고 있던
-  //   뷰어에, `newTab` 이면 새 탭에. 정한 뒤 그 탭의 열쇠로 기억을 적고(새로 만들어지는 뷰어는 신호를 놓치므로)
-  //   slot 을 실어 알린다 — 그래야 뷰어 셋이 떠 있어도 엉뚱한 칸이 갈아입지 않는다.
-  //  sid 가 실리면 **세션 작업 폴더의 파일**이다(타임라인 산출물 · 세션 폴더 칸) — 뷰어가 세션 파일 API 로 읽는다(#4088 후속).
-  type ViewerOpen = { path?: string; newTab?: boolean; sid?: string | null; node?: string | null };
+  // 자료 칸에서 파일을 두 번 누르면 뷰어 탭으로 (#762, 원준 2026-09-04) — 웹 칸과 같은 길이다.
+  //  ★ **파일마다 뷰어 하나**(#4135, 원준 2026-09-25: "다른 거 한 번 클릭하면 이전 꺼 뷰어에서 보이던 거 없애고 새로 선택한
+  //   게 뜨는데 그러지 말고 새 창으로 뜨도록. 이전에 떠 있던 파일 뷰어 보존되게"). 그 파일이 **이미 떠 있는 탭**이 있으면
+  //   그 탭으로 가고, 없으면 새 탭을 만든다 — 보고 있던 뷰어는 절대 갈아입지 않는다. 뷰어는 [+] 목록에 없으므로
+  //   (PART_DEFS pickable:false) 이 길이 뷰어가 생기는 유일한 길이다.
+  //  ⚠ 옛 판에서 같은 파일을 두 탭에 펴 두었던 기억이 남아 있으면 첫 탭을 고른다(둘째는 그대로 — 사람이 닫는다).
+  //   파일 이름을 바꾸면 옛 이름을 기억한 탭은 404 를 받아 빈 화면으로 돌아가고(viewerPart showFail), 새 이름은 새 탭.
+  //  ⚠ «이미 떠 있나» 는 탭마다 적어 둔 기억(rememberedViewerPath)으로 본다 — 뷰어가 지금 무엇을 펴 놓았는지 셸이
+  //   달리 알 길이 없고, 그 기억은 뷰어가 열 때마다 제 열쇠로 적는다(panes-parts viewerPart remember).
+  //  sid 가 실리면 **세션 작업 폴더의 파일**이다(타임라인 산출물 · 세션 폴더 칸) — 기억하지 않으므로 늘 새 탭.
+  type ViewerOpen = { path?: string; sid?: string | null; node?: string | null };
+  function viewerTabs(): Array<{ zone: Zone; key: TabKey }> {
+    const out: Array<{ zone: Zone; key: TabKey }> = [];
+    for (const z of ['side', 'main', 'bottom'] as Zone[]) for (const k of lay[z]) if (tabBase(k) === 'editor') out.push({ zone: z, key: k });
+    return out;
+  }
   function openViewerAt(d: ViewerOpen | undefined): void {
-    const found = d?.newTab ? null : findTab('editor');
+    const path = String(d?.path || '');
+    const found = path && !d?.sid ? viewerTabs().find((t) => rememberedViewerPath(ctx.memKey(), t.key) === path) ?? null : null;
     //  새 탭은 **이미 뷰어가 사는 칸**에 나란히 세운다(뷰어가 하나도 없으면 곁칸) — 단 아래 칸에는 새로 세우지 않는다
-    //   (lib/pane-tabs landZone · 원준 10-05 «아래칸에 여는거 우리 안하기로»). 보던 뷰어에 펴면 그 탭을 켠다 —
+    //   (lib/pane-tabs landZone · 원준 10-05 «아래칸에 여는거 우리 안하기로»). 그 파일의 뷰어가 이미 있으면 그 탭을 켠다 —
     //   열린 아래 칸에 있으면 거기서, 닫힌 아래 칸이면 펼치지 않고 곁칸으로 데려온다(원준 10-01 «밑에서 나오는거 없게» · showZone).
     const zone: Zone = found ? showZone(found.zone, { bottomOn: lay.bottomOn, narrow: narrow() }) : landZone(findTab('editor')?.zone ?? 'side');
-    //  ⚠ **열쇠를 먼저 잡고 기억을 적은 뒤에** 탭을 만든다 — 순서가 뒤면 갓 만들어진 뷰어가 빈 목록을
+    //  ⚠ **열쇠를 먼저 잡고 기억을 적은 뒤에** 탭을 만든다 — 순서가 뒤면 갓 만들어진 뷰어가 빈 화면을
     //   한 번 그렸다가 신호를 받고 다시 그린다(화면이 깜빡인다).
     const key = found ? found.key : nextTabKey('editor', allKeys());
     //  세션 폴더의 파일(sid)은 기억하지 않는다 — 다시 열 때 프로젝트 자료 경로로 읽혀 «못 읽었어요» 가 된다.
@@ -944,8 +1021,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     revealZone(zone);
     activate(zone, key);
     paintAll();
-    //  이미 있던 칸은 이 신호로 갈아입는다(방금 만든 칸은 기억에서 이미 읽었다 — 두 번 열어도 같은 파일이라 무해).
-    if (d?.path) wrap.dispatchEvent(new CustomEvent(VIEWER_TO_EVT, { detail: { id, path: d.path, slot: key, sid: d.sid || null, node: d.node || null } }));
+    //  이미 있던 탭은 이 신호로 그 파일을 편다(같은 파일이라 다시 그리지 않는다 — viewerPart open 의 첫 줄).
+    if (path) wrap.dispatchEvent(new CustomEvent(VIEWER_TO_EVT, { detail: { id, path, slot: key, sid: d?.sid || null, node: d?.node || null } }));
   }
   const onOpenViewer = (e: Event): void => openViewerAt((e as CustomEvent).detail as ViewerOpen | undefined);
   wrap.addEventListener(VIEWER_EVT, onOpenViewer);
@@ -1078,7 +1155,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //   · 켜진 탭을 닫으면 가장 최근에 보던 탭으로(자료에서 파일을 열어 보고 닫으면 자료로 돌아간다 — lib/pane-tabs).
   //   · 끌어서 같은 줄 안 순서를 바꾸고, 다른 칸 줄에 놓으면 그 자리에 끼운다(v2/pane-tabdrag).
   function removeTab(zone: Zone, key: TabKey): void {
-    //  (main 판은 여기서 붙은 앱 탭의 «떼기»(#4225)를 먼저 따른다 — stage 판엔 붙은 앱 탭이 없다.)
+    //  #4225 — 부품이 × 의 뜻을 따로 가지면(붙은 앱 탭 = 이 세션에서 떼기) 그것만 한다. 탭은 떼기가 끝나 붙은 목록이
+    //   비었을 때 syncSessApps 가 걷는다 — 떼기가 실패하면 탭이 남아 있어야 하므로 여기서 먼저 빼지 않는다.
+    for (const pane of panes.values()) { const p = pane.parts.get(key); if (p?.onTabClose) { p.onTabClose(); return; } }
+    //  붙은 앱 탭인데 아직 한 번도 안 켰다 — 부품이 없으니 어느 앱을 뗄지 모른다. 걷기만 하면 syncSessApps 가 곧 되살린다
+    //   (아무 일도 안 한 것). 그러니 먼저 켜서 무엇이 붙어 있는지 보이고, 떼기는 거기서(× 는 켜진 앱 탭에만 선다 — tabEl).
     if (DERIVED_TABS.has(tabBase(key))) { const z = zoneOf(key) || zone; revealZone(z); activate(z, key); return; }
     recordClosed([key]);
     dropTab(zone, key);
@@ -1113,6 +1194,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  부품은 **그려진 칸**에 산다 — 접힌 탭은 아래 칸의 열쇠라도 곁칸에 서 있다. 어디 있든 걷는다.
     for (const pane of panes.values()) dropPartFrom(pane, key);
     tabTitles.delete(key);
+    tabFaces.delete(key);
     //  켜진 탭을 닫았으면 **가장 최근에 보던 탭**으로 — 기록이 없으면 오른쪽 이웃(크롬), 그것도 없으면 왼쪽(lib/pane-tabs).
     //   종전엔 늘 왼쪽 이웃이었다: 자료에서 파일을 열어 보고 닫으면 자료가 아니라 그 앞에 열어 둔 다른 파일이 켜졌다.
     //  ⚠ 여기서 saveAct 를 부르지 않는다 — dropTab 은 세션을 갈아 끼울 때도 불린다(syncSessApps 가 옛 세션의 앱 탭을 걷는다).
@@ -1126,7 +1208,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function moveTab(key: TabKey, from: Zone, to: Zone, at?: number): void {
     if (from === to) { activate(to, key); return; }
     if (tabBase(key) === 'sessions' && to !== 'main') return;   // 세션은 가운데 칸 밖으로 나가지 않는다(위 불변식)
-    //  ⚠ removeTab 이 아니라 dropTab — removeTab 은 «사람이 × 를 눌렀다» 라 [닫은 탭 다시 열기] 더미에 쌓는다. 옮기기는 닫기가 아니다.
+    //  ⚠ removeTab 이 아니라 dropTab — removeTab 은 «사람이 × 를 눌렀다» 라 부품의 뜻(붙은 앱 탭 = 떼기)을 따른다.
+    //   옮기기는 닫기가 아니다: 거기로 가면 앱이 떨어지고 탭은 두 칸에 겹쳐 선다(#4225 격리 리뷰가 잡았다).
     const wasPinned = isPinned(key);
     dropTab(from, key, { paint: false });
     if (wasPinned) lay.pin = [...lay.pin, key];                  // 고정은 따라간다(크롬: 고정 탭을 다른 창으로 옮겨도 고정)
@@ -1165,12 +1248,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     thawAll();
     saveLayout(); paintAll();
     if (keys.length > 1) toast(`탭 ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
-  }
-  /** 뷰어 탭들(어느 칸에 있든) — 되살릴 파일이 이미 떠 있나 볼 때. (main 판은 #4135 의 openViewerAt 이 같은 함수를 쓴다.) */
-  function viewerTabs(): Array<{ zone: Zone; key: TabKey }> {
-    const out: Array<{ zone: Zone; key: TabKey }> = [];
-    for (const z of ['side', 'main', 'bottom'] as Zone[]) for (const k of lay[z]) if (tabBase(k) === 'editor') out.push({ zone: z, key: k });
-    return out;
   }
   /** [닫은 탭 다시 열기] — 가장 최근에 닫은 묶음을 닫기 전 자리에 되살린다. 뷰어는 펴 두었던 파일로 돌아온다.
    *  늘 곁칸으로 — 아래 칸에서 닫은 탭은 곁칸 맨 끝에 선다(아래 칸은 새 탭을 받지 않는다 · lib/pane-tabs landZone). */
@@ -1226,6 +1303,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   /** 탭 아이콘 — 뷰어는 **파일 종류**로 그린다(그림 · 문서 · 코드 · 시안 · 영상). 종전엔 뷰어가 전부 같은 눈 아이콘이라
    *  접힌 줄에서 서로를 가릴 길이 아이콘 어깨의 작은 번호뿐이었다(그 번호가 아이콘을 한쪽으로 치우쳐 보이게 했다 — 원준 신고). */
   function tabIcon(key: TabKey): string {
+    const face = tabFaces.get(key);
+    if (face) return appGlyphName(face);               // 붙은 앱 = 그 앱의 그림(앱 찾기와 같은 그림)
     const d = partDef(tabBase(key) as PartType);
     if (tabBase(key) !== 'editor') return d.icon;
     const nm = tabTitles.get(key) || rememberedViewerPath(ctx.memKey(), key);
@@ -1233,6 +1312,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const k = kindOf(nm);
     return k.kind === 'img' ? 'img' : k.kind === 'video' || k.kind === 'audio' ? 'play' : k.kind === 'page' ? 'window' : k.type === '코드' ? 'code' : 'doc';
   }
+  /** 탭의 색 토큰 이름(--gi-c-<이름>) — 탭이 단 얼굴이 있으면 그 앱의 색, 없으면 종류의 색(lib/pane-dock appColor). */
+  const tabColor = (key: TabKey): string => tabFaces.get(key) || appColor(tabBase(key));
   /** 탭 툴팁 — 이름이 줄어 있거나 아이콘만 남았을 때 여기서 온전한 이름을 읽는다. */
   function tabTip(key: TabKey): string {
     const d = partDef(tabBase(key) as PartType);
@@ -1252,7 +1333,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       //  우클릭 = 이 탭을 어떻게 할까(#762 · #3870) — 닫기 · 한꺼번에 닫기 · 고정 · 다른 칸으로 보내기 · 다시 열기.
       oncontextmenu: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); tabMenu(e, zone, key); },
     }, el('span', { class: 'pn-tab-lead', 'data-ic': ic }, pnIcon(glyphAt(ic, 14), 'pn-i sm')), el('span', { class: 'pn-tab-t', text: nm })) as HTMLElement;
-    const detachX = DERIVED_TABS.has(tabBase(key));   // #4225 붙은 앱 탭의 × 는 «닫기» 가 아니라 «이 세션에서 떼기»
+    const detachX = tabBase(key) === SESSAPP_TAB;   // #4225 붙은 앱 탭의 × 는 «닫기» 가 아니라 «이 세션에서 떼기»
     //  × 는 아이콘 자리에 겹쳐 선다(CSS: 마우스를 올리면 아이콘이 × 로 바뀐다). 고정 탭은 × 가 없다(크롬) — 메뉴로 닫는다.
     //  tabindex -1: 키보드는 탭 위에서 Delete 로 닫는다(× 마다 초점이 서면 탭 사이를 옮겨 다니기가 두 배로 길어진다).
     //  붙은 앱 탭은 **켜졌을 때만** × — 떼기는 그 앱 화면이 서 있어야 어느 앱인지 안다(removeTab 머리의 같은 사정).
@@ -1265,7 +1346,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     }, pnIcon('x', 'pn-i xs'));
     //  #4443 — 앱마다 한 색(--ac): 아이콘 칩의 선 · 켜진 탭의 옅은 물. 독 아이콘과 같은 토큰이라 같은 앱으로 읽힌다(lib/pane-dock appColor).
     //   단추에도 건다 — 끌 때 뜨는 조각(pane-tabdrag 의 고스트)은 단추만 복제한다.
-    const ac = `--ac: var(--gi-c-${appColor(tabBase(key))})`;
+    const ac = `--ac: var(--gi-c-${tabColor(key)})`;
     b.setAttribute('style', ac);
     const w = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') + (pinned ? ' pinned' : ''), 'data-tab': key, style: ac, role: 'presentation' }, b, x) as HTMLElement;
     //  휠 클릭 = 닫기(크롬·사파리). 누를 때 브라우저의 자동 스크롤이 뜨지 않게 mousedown 도 막는다.
@@ -1313,7 +1394,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       [
         ...(derived ? [] : [{ label: pinned ? '고정 해제' : '탭 고정', icon: 'pin', hint: pinned ? '' : '아이콘만 남기고 맨 앞에', run: () => togglePin(zone, key) }]),
         //  하나 더 — 아래 칸의 옛 탭에서 불러도 새 탭은 곁칸에 선다(landZone).
-        ...(d.multi ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(landZone(zone), type); } }] : []),
+        ...(d.multi && d.pickable !== false ? [{ label: `${d.name} 하나 더`, icon: 'plus', run: () => { addPart(landZone(zone), type); } }] : []),
         //  #4443(원준 10-05 «아래칸에 여는거 우리 안하기로 했잖음») — 아래 칸으로는 보내지 않는다. 아래 칸에 남은 옛 탭은 곁칸으로 보낼 수 있다.
         ...(['side'] as Zone[]).filter(canGo).map((z) => ({
           label: `${toZone[z]} 보내기`, icon: 'moveto', run: () => { openZone(z); moveTab(key, zone, z); },
@@ -1408,19 +1489,38 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   function openPicker(anchor: HTMLElement, zone: Zone): void {
     //  ★ 이미 있어도 **multi 부품이면 하나 더** 낼 수 있다(#762) — 셸은 그 선언만 본다(부품 이름이 여기 안 박힌다).
     const has = (t: PartType): boolean => zoneTabs(zone).some((k) => tabBase(k) === t);
-    //  «앱» 칸은 탭으로 열지 않는다(원준 10-05 «애초에 어떻게 앱을 +해서 탭으로») — stage 판엔 부품의 pickable 이 없어 이름으로 거른다.
-    const rest = PART_DEFS.filter((d) => d.type !== 'apps' && (d.multi || !has(d.type))
+    //  «앱» 칸은 pickable:false — 세션에 앱을 붙이는 일은 아래 «이 세션에 붙이기» 묶음이 한다(원준 10-05 «애초에 어떻게 앱을 +해서 탭으로»).
+    const rest = PART_DEFS.filter((d) => d.pickable !== false && (d.multi || !has(d.type))   // pickable:false(뷰어 · 앱) — 파일에서만 · 묶음으로 연다
       && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
-      && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));
+      && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')));   // 뷰어는 세션 폴더 파일도 열므로 남긴다
     const side: DrawerItem[] = rest.map((d) => ({ id: d.type, name: d.name, hint: d.hint, more: has(d.type), ic: () => dockTile(d.icon, d.type), pick: () => { addPart(zone, d.type); } }));
-    //  stage 판엔 «이 세션에 붙이기»(#4225 붙은 앱)가 아직 없다 — 묶음은 «사이드바 앱» 하나. main 은 둘.
-    openAppDrawer(anchor, {
+    const sid = curSession();
+    const attachSec = (apps: Awaited<ReturnType<typeof listSessionApps>> | null) => ({
+      title: '이 세션에 붙이기', note: sid ? 'AI 도 같이 써요 · 누르면 사이드바에 붙어요' : '세션을 열면 붙일 수 있어요',
+      //  독 ⊞ 와 같은 표 — 화면이 있거나 AI 가 쓸 데이터가 있는 설치 앱(시스템 앱 · 이 세션 앱 자신 제외)
+      items: apps === null ? null : apps.filter((a) => a.id !== 'ai-session' && !a.system && (hasAppScreen(a) || a.tables.length > 0)).map((a): DrawerItem => ({
+        id: a.id, name: a.title, off: !sid, ic: () => appGlassIcon(installedAppFace({ id: a.id, hasUi: hasAppScreen(a), icon: a.icon })),
+        hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요 — AI 도 같은 화면을 씁니다.` : '세션을 열면 붙일 수 있어요',
+        pick: () => { void attachApp({ id: a.id, title: a.title }); },
+      })),
+    });
+    const h = openAppDrawer(anchor, {
       label: '사이드바에 열 앱', placeholder: '앱 찾기',
-      sections: [{ title: '사이드바 앱', note: '누르면 사이드바에 탭으로 열려요', items: side }],
-      // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — 되돌리기를 이 발치에 둔다.
-      //  #4443 — «아래 칸 열기» 는 걷었다(아래 칸에는 새로 열지 않는다).
+      sections: [{ title: '사이드바 앱', note: '누르면 사이드바에 탭으로 열려요', items: side }, attachSec(null)],
+      // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를 고르는 자리는 여기뿐이라
+      //  되돌리기를 이 발치에 둔다. #4443 — «아래 칸 열기» 는 걷었다(아래 칸에는 새로 열지 않는다).
       foot: [{ label: '기본 배치로', title: '기본 배치로 되돌리기 — 이 프로젝트의 탭 배치를 처음처럼', icon: 'undo', run: () => resetLayout() }],
     });
+    void listSessionApps().then((apps) => h.setSection(1, attachSec(apps))).catch(() => h.setSection(1, attachSec([])));
+  }
+  /** 이 세션에 앱을 붙인다 — 붙으면 셸이 «새로 붙음»을 보고 그 앱 탭을 세워 켠다. 독 ⊞ · [＋] 앱 서랍이 같은 길로 부른다. */
+  async function attachApp(a: { id: string; title: string }): Promise<void> {
+    const sid = curSession();
+    if (!sid) return;
+    if (await attachAppToSession(sid, a.id, a.title)) {
+      wrap.dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
+      toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
+    }
   }
 
 
@@ -1524,6 +1624,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const lead = b?.querySelector('.pn-tab-lead') as HTMLElement | null;
       const ic = tabIcon(key);
       if (lead && lead.dataset.ic !== ic) { lead.dataset.ic = ic; lead.replaceChildren(pnIcon(glyphAt(ic, 14), 'pn-i sm')); }
+      //  얼굴이 바뀌면 색도 같이 바뀐다(붙은 앱이 바뀌었다) — 단추와 감싼 칸 둘 다(끌 때 뜨는 조각은 단추만 복제한다).
+      const ac = `--ac: var(--gi-c-${tabColor(key)})`;
+      if (b && b.getAttribute('style') !== ac) { b.setAttribute('style', ac); wrapEl.style.setProperty('--ac', `var(--gi-c-${tabColor(key)})`); }
       wrapEl.classList.toggle('on', key === act);
     }
     fit(pane);
@@ -1547,38 +1650,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     paintDoor();
   }
 
-  // ⭐ 문패의 얼굴 줄은 '이 프로젝트의 구성원'이 아니라 **지금 이 세션을 보고 있는 사람**이다(#2116).
-  //  구성원 명단은 [프로젝트 상세]가 이미 갖고 있고, 문패에서 사람이 알고 싶은 건 "지금 여기 누가 있나"다
-  //  — 구글 문서의 얼굴 줄과 같은 질문. 그래서 자리도 같다: **[공유] 바로 왼쪽에 상주**한다.
-  //  ⚠ 혼자일 때 숨기지 않는다(원준 2026-08-26). 내 얼굴 하나는 정보가 적어 보이지만, 얼굴 줄이 **늘 그 자리에
-  //   있다**는 사실 자체가 "여기 사람이 보인다"를 말한다 — 있다 없다 하면 아무도 그 자리를 안 쳐다본다.
-  const FACE_MAX = 3;   // 넘으면 접는다 — 네 번째부터는 이름이 아니라 '몇 명 더'가 알고 싶은 것이다
-  function facesNode(row: any): HTMLElement | null {
-    const vs = viewersOf(row && row.id);
-    if (!vs.length) return null;                 // 도장이 아직 없다(막 열렸거나 멈춘 세션) — 빈 자리를 그리지 않는다
-    const shown = vs.slice(0, FACE_MAX);
-    const rest = vs.length - shown.length;
-    return el('span', { class: 'pn-faces', title: '지금 보고 있는 사람 — ' + vs.map((v) => v.name).join(', ') },
-      ...shown.map((v) => personFace(v.id, 'pn-face', v.name)),
-      rest > 0 ? el('span', { class: 'pn-face pn-face-more', text: '+' + rest }) : null);
-  }
-
-  // 공유(#2116) — 지금 보고 있는 **세션**을 함께 볼 사람을 고른다(초대는 세션 단위다).
-  //  열어 둔 세션이 없으면(새 세션 자리) 공유할 대상이 없으므로 단추도 없다 — 눌러서 "무엇을?"이 되지 않게.
-  function shareNode(row: any): HTMLElement | null {
-    const sh = shareSessOf(row);
-    if (!sh) return null;
-    const b = el('button', {
-      class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button',
-      title: sh.owned ? '이 세션을 함께 볼 사람을 고릅니다' : '이 세션을 누가 볼 수 있는지 봅니다',
-      onclick: () => openSharePopover(b as HTMLElement, sh, (invites) => {
-        const cur = sessRow(sh.id);
-        if (cur && cur.raw) cur.raw.invites = invites;   // 다음 폴링 전까지 화면이 방금 정한 사실을 들고 있게
-        paintDoor();
-      }),
-    }, pnIcon('share', 'pn-i sm'), el('span', { text: '공유' }));
-    return b as HTMLElement;
-  }
+  // (#3778 — 여기 있던 얼굴 줄·공유 단추 두 함수는 session-chat.ts 의 sc-head 로 옮겼다. 문패는 프로젝트만 말한다.)
+  //  ⚠ 옛 이름을 여기 적지 않는다: 이 레포 웹 빌드는 주석을 안 지워서, 그 이름으로 «걷혔나» 를 재는 검사가 오탐한다(#835).
 
   // ── 문패 ──
   //  ⭐ 한 줄이다(원준 2026-08-26: "너무 높이 많이 차지해"). 종전엔 눈썹줄(#id · 상태 · 세션 n · 할 일 x/y · 지식 n)이
@@ -1593,9 +1666,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     titleEdit.paid();
     const p = pj();
     const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
-    // ⚠ 주소의 id 는 **박스 id 일 수도, 중앙 기록 uuid 일 수도** 있다(main.ts findSess 와 같은 사정).
-    //  얼굴 줄도 공유도 축은 박스 id 다(열람 도장이 그 id 로 찍힌다) — 여기서 한 번 맞춰 두면 둘 다 바로 선다.
-    const doorRow = boxRow(curSession());
     // ── [세션 옮기기] (#3778, 원준 2026-09-19: «[⋯] 안에만 있지 말고 밖에도 빼놓은 버튼이 있고 싶다») ──
     //  자리는 꼬리표(#번호 · 상태) 바로 뒤다 — 그 꼬리표가 곧 «이 세션이 지금 어디 있나» 이고, 단추는 그걸 바꾼다.
     //  ⚠ 이름에 **«세션»** 을 넣는다: 이 줄은 프로젝트를 말하는 줄이라 «바꾸기» 만 두면 «프로젝트를 바꾼다(다른
@@ -1608,6 +1678,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           onclick: () => opts.onMoveSession!(sid) },
           icon('sessMove', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))   // #4233 — 칸 옮기기(moveto)와 나눈다
       : null;
+    // ── [세션 복제] (#4135, 원준 2026-09-27: «세션 옮기기 버튼 … 비슷한 느낌으로, 이 세션 내용을 아는 새로운 세션») ──
+    //  [세션 옮기기] 와 같은 꼴·같은 자리 규칙(내 세션에만). 옮기기보다 **앞**에 선다 — 둘 다 «이 세션» 에 하는 일이고,
+    //  하나 더 만드는 일이 자리를 바꾸는 일보다 먼저 읽히는 편이 순서에 맞다(만든 뒤에 옮긴다).
+    const fork = sid && opts.onForkSession && opts.canForkSession?.(sid)
+      ? el('button', { class: 'pn-move pn-fork', type: 'button', 'aria-label': '이 세션을 복제하기',
+          title: '지금까지의 대화를 아는 새 세션을 하나 더 만듭니다. 이 세션은 그대로 남습니다.',
+          onclick: (e: MouseEvent) => opts.onForkSession!(sid, e.currentTarget as HTMLElement) },
+          icon('copy', 'pn-i sm'), el('span', { class: 'pn-move-t', text: '세션 복제' }))
+      : null;
+    // 세션을 보는 중인지 표시한다. 데스크톱 문패 크기는 프로젝트 화면과 같고, 폰에서만 이 표식으로 문패를 접는다(50-mobile.css).
+    door.classList.toggle('in-sess', !!sid);
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
         // ⭐ 순서는 **이름 › 번호 › 상태**(원준 2026-09-03: "프로젝트 이름이 제일 왼쪽으로 가야 밸런스가 맞는다").
@@ -1619,17 +1700,19 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
           loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }),
-          move)),
+          fork, move)),
       el('div', { class: 'pn-door-r' },
-        facesNode(doorRow),
-        shareNode(doorRow),
+        // ⭐ #3778 — 얼굴 줄과 [공유] 는 여기 없다. **세션의 머리줄**(session-chat.ts sc-head)로 내려갔다.
+        //  이 줄의 왼쪽은 프로젝트 이름인데 그 둘만 세션에 작용해서, 한 줄이 «프로젝트 → 세션 → 프로젝트» 로
+        //  주체를 번갈아 말했다 — 사람이 「공유」를 프로젝트 공유로 읽었다(원준 2026-09-09). 세션은 이미 자기
+        //  머리줄을 갖고 있다(이름·하네스·⋯ 가 다 거기 있다) — 새 자리를 만든 게 아니라 제 집으로 보낸 것이다.
+        //  이제 이 줄은 프로젝트만 말한다.
         // ── 문패의 두 버튼 (원준 2026-08-20 "거의 안 보인다") ─────────────────────────
         //  자리는 그대로 둔다 — 대상(프로젝트)의 오른쪽 위는 그 대상에 대한 동작이 사는 관습적인 자리이고,
         //  옮기면 시선이 제목에서 멀어질 뿐이다. 문제는 위치가 아니라 **무게**였다: 둘 다 ghost(배경·테두리 없음)라
         //  흰 문패 위에서 회색 글자로 흩어졌고, 나란히 있으니 무엇이 주된 동작인지도 말하지 않았다.
         //  그래서 **크기·글자크기는 그대로 두고 채움만** 바꾼다 — 이 칸에서 사람이 제일 자주 하는 일(세션 열기)은
         //  칠한 버튼, 가끔 보는 것(상세)은 테두리 버튼. 위계가 색으로 먼저 읽힌다.
-        el('span', { class: 'pn-door-sep', 'aria-hidden': 'true' }),
         swap ? swap.button() : null,
         el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('sessNew', 'pn-i sm'), el('span', { text: '세션' })),   // #4233 — 새 세션 = 말풍선과 더하기
         // 이름은 '정보'가 아니라 **프로젝트 상세** — 개요 부품을 없앤 뒤로 본문·할 일·상태를 보는 유일한 입구다.
@@ -1733,6 +1816,46 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     } catch (_) { /* 다음 틱에 다시 시도한다 */ }
   }
 
+  // ── 붙은 앱 탭(#4225) — 지금 보는 세션에 앱이 붙어 있으면 곁칸에 세우고, 없으면 걷는다 ──────────────
+  //  «새로 붙음»(목록에 없던 앱이 생겼다 — 사람이 [앱]에서 붙였거나 AI 가 붙였다)이면 곁칸을 펴고(폰은 서랍) 그 탭을 켠다.
+  //  세션을 갈아 끼워 원래 붙어 있던 앱이 보이는 것은 새로 붙은 게 아니다 — 탭만 세우고, 이 세션에서 마지막에 그 탭을
+  //  보고 있었으면 그때만 켠다(sessionAct 규칙과 같다). 목록은 탭 부품과 한 벌을 나눠 본다(watchSessionApps).
+  function syncSessApps(): void {
+    if (dead) return;
+    const sid = curSession();
+    if (sid === sessAppSid && sessAppOff) return;
+    sessAppOff?.(); sessAppOff = null; sessAppSid = sid;
+    //  세션이 바뀌면 옛 세션의 탭부터 걷는다 — 새 세션에 붙은 앱이 이미 받아 둔 판에 있으면 아래 구독이 **같은 틱에** 다시 세운다.
+    //   안 걷으면 새 목록이 올 때까지 옛 앱 탭이 남아 있고, 그 몸은 이미 «붙은 앱이 없어요» 를 그려 서로 다른 말을 한다.
+    { const z = zoneOf(SESSAPP_TAB); if (z) dropTab(z, SESSAPP_TAB); }
+    if (!sid) return;
+    sessAppOff = watchSessionApps(sid, (apps, added) => {
+      if (dead || sid !== sessAppSid) return;
+      const had = zoneOf(SESSAPP_TAB);
+      if (!apps.length) { if (had) dropTab(had, SESSAPP_TAB); return; }
+      if (!had) lay.side.push(SESSAPP_TAB);
+      const z = zoneOf(SESSAPP_TAB)!;
+      //  탭 이름 — 부품은 켜질 때 서므로, 한 번도 안 켠 탭은 기본 이름(«붙은 앱»)으로 남는다. 목록으로 셸이 먼저 건다.
+      tabTitles.set(SESSAPP_TAB, sessAppTabTitle(apps));
+      //  얼굴도 같은 때에 — 하나면 그 앱의 아이콘, 여럿이면 기본 그림(부품이 서면 보이는 앱의 것으로 다시 건다).
+      { const f = sessAppTabFace(apps); if (f) tabFaces.set(SESSAPP_TAB, f); else tabFaces.delete(SESSAPP_TAB); }
+      if (added.length) { bringUp(z, SESSAPP_TAB); return; }
+      if (!had) {
+        const mine = readActs()[actKey()];
+        if (mine && mine[z] === SESSAPP_TAB) lay.act[z] = SESSAPP_TAB;
+        paintAll();
+      } else paintTabs(z);
+    });
+  }
+  //  곁칸 [앱]에서 이미 붙은 앱을 다시 눌렀다. 그 탭을 켠다(없으면 곧 올 목록이 «새로 붙음»으로 켠다). 세션 머리줄 [붙은 앱](#4443)도 이 함수를 부른다.
+  function openSessAppTab(): void {
+    const z = zoneOf(SESSAPP_TAB);
+    if (!z) return;
+    bringUp(z, SESSAPP_TAB);
+  }
+  const onShowSessApp = (): void => openSessAppTab();
+  wrap.addEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
+
   // ── 라이브 틱 — 보이는 부품만 제자리 갱신(서명이 같으면 DOM 을 안 건드린다) ──
   const timer = window.setInterval(() => {
     if (dead) return;
@@ -1758,8 +1881,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const dockApps = (): DockApp[] => PART_DEFS.filter((d) => d.type !== 'sessions').map((d) => ({
     type: d.type, name: d.name, glyph: d.icon, hint: d.hint, multi: !!d.multi,
     //  프로젝트 없는 세션 화면엔 공유 폴더·지식·할 일·리브가 없다([+] 목록과 같은 규칙).
-    //  stage 판의 PartDef 엔 pickable 이 없다(main #4135 에서 생김) — 없으면 고를 수 있는 것으로 본다.
-    pickable: (d as { pickable?: boolean }).pickable !== false && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')),
+    pickable: d.pickable !== false && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv')),
   }));
   dock = mountDock({
     pane: sidePane.root,
@@ -1768,6 +1890,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     act: () => panes.get('side')?.act ?? null,
     recent: () => [...recent.side, ...recent.bottom],
     title: (k) => tabName(k),
+    face: (k) => tabFaces.get(k) ?? null,
     //  독은 곁칸의 문 — 닫힌 아래 칸(터미널 밑)에 있던 탭이면 아래 칸을 펼치지 않고 곁칸으로 옮겨 켠다(원준 10-01:
     //   «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와» — 옛 기본 배치가 타임라인을 닫힌 아래 칸에 두었다. 지금 기본은 비어 있다).
     show: (k) => bringUp(zoneOf(k) || 'side', k),
@@ -1782,7 +1905,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (keys.length > 1) toast(`${partDef(type as PartType).name} ${keys.length}개를 닫았어요. 탭 줄을 우클릭해 [닫은 탭 다시 열기]로 되살릴 수 있어요.`);
     },
     curSession: () => curSession(),
-    //  [더보기]의 «이 세션에 붙이기»(#4225)는 이 판(stage)에 없다 — attach 를 안 넘기면 독이 그 구획을 안 세운다.
+    //  [더보기]의 «이 세션에 붙이기» — [＋] 앱 서랍과 같은 길(attachApp).
+    attach: (a) => attachApp(a),
     //  이음매(원준 10-01: 기본은 4안 «이음매 독») = 세션 열과 곁칸 사이 분할선. 좁은 폭(서랍) · 곁칸 접힘 · 카드 모드(곁칸이 격자 전체,
     //   분할선 display:none)엔 이음매가 없다 — 독은 곁칸 아래로 선다. 자리바꿈(sw-left)이면 분할선이 곁칸 오른쪽에 있다(독이 스스로 읽는다).
     seam: () => (narrow() || !lay.sideOn || body.classList.contains('cm') ? null : splitX),
@@ -1793,6 +1917,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
 
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
   paintAll();
+  syncSessApps();       // #4225 — 이 세션에 붙은 앱이 있으면 곁칸에 그 탭을 세운다(목록이 오면)
   if (!loose && !detail) void refreshDetail();
 
   // [보관한 세션]에서 [탭에 꺼내기]를 누르면 이 줄을 그 자리에서 다시 그린다(8초 틱을 기다리지 않게).
@@ -1806,9 +1931,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   }
   const onViewChanged = (): void => { if (!dead) paintPane('main'); };
   window.addEventListener('pn:sessions-view', onViewChanged);
-  // #2116 — 얼굴 줄이 바뀌면 문패만 다시 그린다. **지금 보고 있는 세션의 것일 때만** — 다른 탭의 얼굴이
-  //  바뀌었다고 이 문패를 다시 그릴 이유가 없다(presence.setViewers 가 이미 '바뀐 것'만 알려준다).
-  const offViewers = onViewers((sid) => { if (!dead && sid === boxRow(curSession())?.id) paintDoor(); });
   //  문턱(≤900)을 넘나들면 접힌 배치를 다시 그린다 — 접힌 탭의 부품은 한 벌만(반대쪽 칸의 것을 걷는다: moveTab 과 같은 규칙, 부품은 다시 선다).
   const onNarrow = (): void => {
     if (dead) return;
@@ -1825,12 +1947,14 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     destroy(): void {
       if (typeof narrowMq.removeEventListener === 'function') narrowMq.removeEventListener('change', onNarrow); else (narrowMq as any).removeListener(onNarrow);
       wrap.removeEventListener('pn:open-web', onOpenWeb);
+      offReveal?.();   // #4993
+      wrap.removeEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
       wrap.removeEventListener(VIEWER_EVT, onOpenViewer);
       window.removeEventListener('message', onMsg);
       dead = true;
-      offViewers();
       window.removeEventListener('pn:sessions-view', onViewChanged);
       window.clearInterval(timer);
+      sessAppOff?.(); sessAppOff = null;
       cancelTabDrag(); thawAll();   // #3870 — 끄는 중이던 탭 · 얼림 감시(window pointermove)를 걷는다
       dock?.destroy(); dock = null;   // #4443
       card?.destroy();

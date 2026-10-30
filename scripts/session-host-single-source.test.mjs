@@ -8,7 +8,7 @@
 //
 //  실행: node scripts/session-host-single-source.test.mjs
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -45,6 +45,7 @@ const HOST = "src/terminal/session-host.ts";
 const OPS = "src/terminal/session-ops.ts";
 const FD_ADAPTER = "src/terminal/attach-worker-entry.ts";   // 같은 호스트 — fd 이관
 const WS_ADAPTER = "src/node/agent.ts";                     // 다른 호스트 — WS 중계
+const REGISTRY = "src/node/registry.ts";                    // 게이트웨이 — 노드 연결·스냅샷 캐시
 const GW_INPROC = "src/terminal/terminal-pty-upgrade.ts";   // 게이트웨이 인프로세스(워커 실패 시 폴백)
 //  ⚠ 이 파일은 «구현이 한 곳인가» 만 본다. «그 구현이 노드에 실제로 실려 나가는가» 는 다른 가드의 몫이다
 //   (`scripts/node-agent-allowed-modules.json` + `scripts/node-agent-bundle-boundary.test.mjs`, 그리고
@@ -84,11 +85,12 @@ t("[S3] 어댑터는 PTY 일괄 회수(killAttachedPtys)를 직접 부르지 않
 //  아니라 «정책 경로» 라 이 표의 대상이 아니다. 여기서 막는 것은 **전송 어댑터**가 op 를 다시 구현하는 것이다.
 //  ⚠ `listSessionsRaw` 는 **일부러 뺐다** — 세션 op(`list`)의 구현이면서 동시에 WS 중계 어댑터가
 //   3초 상태 push(`pushState`)에 **정당하게** 쓴다. 넣으면 그 정당한 사용까지 빨간불이 된다.
-//   나머지 11 종은 어댑터가 부를 이유가 없다.
+//   나머지 12 종은 어댑터가 부를 이유가 없다(`runOutboxStep` — #3773 아웃박스 걸음).
 const OP_IMPLS = [
   "createSession", "killSession", "editSession", "applyValidatedInvites",
   "sendKeysToSession", "injectFirstPrompt", "applySessionProject",
   "markSessionActive", "markSessionSeen", "getSessionLabel", "sessionGone",
+  "runOutboxStep",
 ];
 
 t("[S4] WS 중계 어댑터가 세션 op 를 다시 구현하지 않는다", () => {
@@ -180,4 +182,344 @@ t("[S9] WS 중계 어댑터의 shutdown() 은 종료 경로에서만 불린다",
   }
 });
 
-console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1)`);
+// ── S10: 「답 기다림」 알림 스윕의 **목록 출처**를 호출부가 정하지 않는다 (#2600 T2 d4) ──
+//  실측 사고(2026-09-08): 이 스윕은 **두 자리에서** 돈다 — 하우스키핑 30초 타이머와 매니지드의 요청
+//   정비표(`sessions/outbox-request-sweep.ts`, 같은 30초 간격). 「세션 호스트가 있으면 노드 스냅샷에서
+//   읽는다」를 **호출부에** 심었더니 한 자리만 고쳐졌고, 나머지가 종전대로 게이트웨이 tmux 를 계속 읽었다.
+//   계수는 줄지 않았는데 커밋 메시지에는 «64% 가 사라진다» 고 적혀 있었다.
+//  ⇒ 규칙: 출처 판정은 `sweepAwaitingNotifications` **안**에 있고, 호출부는 인자를 안 넘긴다.
+//   (시험은 `deps` 로 주입한다 — 그래서 `*.test.ts` 는 대상이 아니다.)
+const NOTIFIER = "src/sessions/awaiting-notifier.ts";
+
+t("[S10] 알림 스윕의 목록 출처 판정이 스윕 안에 있다", () => {
+  const src = code(NOTIFIER);
+  assert.match(src, /gatewayDefersHere\(/,
+    `${NOTIFIER} 가 출처를 스스로 정하지 않는다 — 그러면 호출부마다 판정이 갈린다`);
+});
+
+// ── S10c: «놓나» 판정의 **조립**도 한 곳이다 (#2600 T2 d6) ──────────────────
+//  `gatewayDefersToSessionHost(sessionHostsInScope(), NODE_STATE_STALE_MS)` 라는 똑같은 한 줄이 세 곳에
+//   있었다(목록 라우트·프로젝트 라우트·알림 스윕). 술어가 순수해도 **재료를 모으는 줄이 세 벌이면** 신선도
+//   자를 하나만 바꿔도 셋이 갈린다. 그래서 조립은 `registry.gatewayDefersHere()` 한 곳이고, 거기서만
+//   순수 술어를 부른다(그 자리가 판정 계수도 함께 낸다 — 어긋남을 로그로 볼 수 있어야 한다).
+t("[S10c] 판정 조립(술어 + 스코프 수집)은 registry 한 곳뿐이다", () => {
+  const files = readdirSync(join(ROOT, "src"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map((f) => join("src", f));
+  //  술어 이름이 둘이다(`gatewayDefersToSessionHost` = 불리언 · `sessionHostVerdict` = 사유 포함) —
+  //   둘 중 어느 것에 `sessionHostsInScope()` 를 물리든 그게 «조립» 이다.
+  //  ⚠ 여기서 `code()` 를 쓰면 **안 된다**(실측 2026-09-08): 그 헬퍼는 블록주석을 먼저 지우는데
+  //   `terminal/routes.ts` 안의 문자열에 `/*` 가 있어 그 뒤 코드가 통째로 먹혔고, 이 시험이 **변이를
+  //   통과시켰다**(장식이 될 뻔했다 — 일부러 되돌려 보고 잡았다). 그래서 **줄 단위**로 본다:
+  //   주석으로 시작하는 줄만 빼면 이 패턴에는 충분하다(한 줄짜리 표현식이다).
+  const assemble = /\b(gatewayDefersToSessionHost|sessionHostVerdict)\s*\(\s*sessionHostsInScope\s*\(/;
+  const assemblesIn = (rel) => read(rel).split("\n")
+    .some((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && assemble.test(l));
+  const assemblers = files.filter(assemblesIn);
+  assert.deepEqual(assemblers, ["src/node/registry.ts"],
+    `조립이 여러 곳이다: ${assemblers.join(", ") || "(한 곳도 없다 — 이름이 바뀌었나)"}`);
+});
+
+t("[S10b] 알림 스윕 호출부는 출처를 안 넘긴다(호출부가 둘 이상이다)", () => {
+  const files = readdirSync(join(ROOT, "src"), { recursive: true, encoding: "utf8" })
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
+    .map((f) => join("src", f))
+    .filter((f) => f !== NOTIFIER);
+  const callers = [];
+  for (const f of files) {
+    const src = code(f);
+    for (const m of src.matchAll(/\bsweepAwaitingNotifications\s*\(([^)]*)/g)) {
+      callers.push(f);
+      assert.equal(m[1].trim(), "",
+        `${f} 가 알림 스윕에 출처를 넘긴다 — 판정이 호출부로 새면 다른 호출부가 조용히 옛 경로로 남는다`);
+    }
+  }
+  assert.ok(callers.length >= 2,
+    `호출부를 ${callers.length}곳밖에 못 찾았다 — 이 시험이 지키려는 «두 자리» 가 사라졌거나 이름이 바뀌었다`);
+});
+
+// ── S11: 세션 호스트의 스냅샷은 «못 봤다» 를 «없다» 로 올리지 않는다 (#2600 T2 d6) ────────
+//  왜: 게이트웨이가 «이 테넌트를 이 호스트에게 맡겨도 되나» 를 **선언·온라인·신선한 스냅샷** 셋으로 판정한다
+//   (`gatewayDefersToSessionHost`). 그런데 `listSessionsRaw()` 를 strict 없이 부르면 `collectSessions` 가
+//   «못 봤다»(중계 끊김·소켓 부재·타임아웃)를 **빈 배열로 접어** 올리고, 게이트웨이는 그 빈 스냅샷을
+//   «신선하다» 고 읽어 목록 소유를 넘긴다 — 그 순간 그 테넌트 목록이 통째로 빈다.
+//  ⇒ strict 여야 «못 봤다» 가 예외로 떨어져 **아무것도 안 올리고**, 스냅샷이 낡아 게이트웨이가 소유를 되찾는다.
+//   (서버 부재 = «확답으로 없음» 은 strict 여도 빈 배열이라, 세션이 정말 0개인 노드는 종전 그대로다.)
+//  ⚠ `code()` 를 안 쓴다 — 그 헬퍼는 문자열 속 `/*` 에 걸려 뒤쪽 코드를 통째로 먹는다(오늘 S10c 가 그래서
+//   장식이 될 뻔했다). 줄 단위로 본다.
+t("[S11] 노드 에이전트의 상태 push 는 strict 로 센다(«못 봤다» 를 빈 목록으로 올리지 않는다)", () => {
+  const line = read(WS_ADAPTER).split("\n")
+    .find((l) => !/^\s*(\/\/|\*|\/\*)/.test(l) && /listSessionsRaw\s*\(/.test(l));
+  assert.ok(line, `${WS_ADAPTER} 에 상태 push 의 listSessionsRaw 호출이 없다 — 이름이 바뀌었나`);
+  assert.match(line, /strict:\s*true/,
+    `${WS_ADAPTER} 의 상태 push 가 strict 가 아니다 — «못 봤다» 가 빈 스냅샷으로 올라가면 `
+    + "게이트웨이가 그 테넌트 목록 소유를 빈 호스트에게 넘긴다");
+});
+
+// ── S12: 관측에 성공한 주기는 **침묵하지 않는다** (#2600 T2 d6) ──────────────
+//  왜: 게이트웨이의 목록 소유 판정은 스냅샷의 **나이**를 본다(`STATE_STALE_MS` 12초). 종전 에이전트는 세션
+//   목록이 지난번과 같으면 아무것도 보내지 않아, 한가한 테넌트에서는 그 나이가 늘 12초를 넘겼다 —
+//   카나리아 실측(2026-09-09): 게이트웨이가 살아 있고 호스트도 붙어 있는데 정본이 133초째 멈춰 있었고
+//   판정 인구조사는 `stale` 5 · `ok` 0 이었다. 그래서 «봤는데 그대로다» 는 박동으로 보낸다.
+//  ⇒ 이 가드가 지키는 것은 «보낼 내용이 없으면 안 보낸다» 로 되돌아가지 않는 것이다.
+//  ⚠ 줄 단위로 본다(S11 과 같은 이유 — `code()` 는 문자열 속 `/*` 에 걸린다).
+t("[S12] 상태 push 는 변화가 없어도 박동을 보낸다(관측한 주기에 침묵하지 않는다)", () => {
+  const lines = read(WS_ADAPTER).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(lines.some((l) => /statePushKind\s*\(/.test(l)),
+    `${WS_ADAPTER} 가 statePushKind 를 안 쓴다 — 무엇을 보낼지 판정이 인라인으로 돌아왔나`);
+  assert.ok(lines.some((l) => /t:\s*"beat"/.test(l)),
+    `${WS_ADAPTER} 가 박동을 안 보낸다 — 한가한 테넌트에서 스냅샷이 12초 만에 낡아 목록 소유가 영영 안 넘어간다`);
+  assert.ok(!lines.some((l) => /if\s*\(!skip\)/.test(l)),
+    `${WS_ADAPTER} 에 «보낼 게 없으면 안 보낸다» 조건이 되살아났다 — 그게 정확히 이 결함이다`);
+});
+
+// ── S13: 박동은 **스냅샷이 있을 때만** 나이를 되돌린다 (#2600 T2 d6) ─────────
+//  왜: 박동은 «지난번에 보낸 그 목록이 지금도 그대로» 라는 뜻이다. 보낸 적이 없는 노드에 항목을 새로 만들면
+//   «본 적 없는 노드»가 세션 0개짜리 신선한 스냅샷을 갖게 되고, 판정이 그 빈 스냅샷으로 소유를 넘긴다 —
+//   S11 이 막는 사고와 같은 모양이라 여기서도 같은 술어(`beatRefreshes`)로 fail-closed 를 박아 둔다.
+t("[S13] 게이트웨이는 박동을 받아 나이만 되돌리고, 스냅샷이 없으면 무시한다", () => {
+  const lines = read(REGISTRY).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(lines.some((l) => /m\.t === "beat"/.test(l)),
+    `${REGISTRY} 가 박동을 처리하지 않는다 — 에이전트가 보내도 나이가 안 되돌아온다`);
+  assert.ok(lines.some((l) => /beatRefreshes\s*\(/.test(l)),
+    `${REGISTRY} 의 박동 처리가 fail-closed 술어(beatRefreshes)를 안 부른다 — 빈 스냅샷이 신선해질 수 있다`);
+});
+
+// ── S14: «지금 중앙 tmux 에 무엇이 있나» 의 출처는 `listCentralSessions` 한 곳이다 (#2600 T2 d6) ────────
+//  왜: 2026-09-11 계수 — 목록 라우트·알림 스윕을 호스트 스냅샷으로 옮긴 뒤에도 같은 질문을 **다른 이름으로** 묻는
+//   자리 셋이 그 테넌트에 분당 ~50번 tmux 를 쳤다(자기노드 판정 34 · CP idle 의 관리자 세션 뷰 12 · 백필 3.4).
+//   셋 중 하나라도 `listSessionsRaw()` 로 되돌아가면 «소유가 넘어간 테넌트에 tmux 0» 이 조용히 깨진다.
+//  ⚠ 줄 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const codeLines = (rel) => read(rel).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+const BACKFILL = "src/sessions/session-state-backfill.ts";
+const TERM_ROUTES = "src/terminal/routes.ts";
+
+t("[S14] 자기노드 판정·관리자 세션 뷰·백필은 중앙 세션을 listCentralSessions 로 읽는다", () => {
+  const src = read(REGISTRY);
+  const at = src.indexOf("function probeSelfNodes(");
+  assert.ok(at >= 0, `${REGISTRY} 에서 probeSelfNodes 를 못 찾았다 — 이름이 바뀌었나`);
+  const body = src.slice(at, src.indexOf("\n}\n", at)).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(body.length > 10, `probeSelfNodes 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.ok(body.some((l) => /listCentralSessions\s*\(/.test(l)),
+    `probeSelfNodes 가 listCentralSessions 를 안 부른다 — 30초마다 전 세션 capture-pane 이 돌아온다`);
+  assert.ok(!body.some((l) => /listSessionsRaw\s*\(/.test(l)),
+    `probeSelfNodes 가 listSessionsRaw 를 직접 부른다 — 소유가 넘어간 테넌트에서도 tmux 를 친다`);
+
+  const routes = codeLines(TERM_ROUTES);
+  assert.ok(routes.some((l) => /listCentralSessions\s*\(/.test(l)), `${TERM_ROUTES} 의 관리자 세션 뷰가 listCentralSessions 를 안 부른다`);
+  assert.ok(!routes.some((l) => /listSessionsRaw\s*\(/.test(l)),
+    `${TERM_ROUTES} 에 listSessionsRaw 호출이 되살아났다 — CP idle 이 60초마다 그 테넌트 tmux 를 친다`);
+
+  const backfill = codeLines(BACKFILL);
+  assert.ok(backfill.some((l) => /deps\?\.listLive\s*\?\?\s*\(\(\)\s*=>\s*listCentralSessions\(\)\)/.test(l)),
+    `${BACKFILL} 의 기본 출처가 listCentralSessions 가 아니다 — 판정이 불리는 함수 안에 있어야 두 호출부가 같이 옮겨간다`);
+  assert.ok(!backfill.some((l) => /\blistSessionsRaw\b/.test(l)), `${BACKFILL} 가 listSessionsRaw 를 직접 쓴다`);
+});
+
+// ── S15: 장부 `live` 는 그 브로커 노드의 세션 호스트 관측을 먼저 본다 (#2600 T2 d6) ──────────────────
+//  왜: 브로커가 노드마다·테넌트마다 회수 틱마다 장부를 부르고, 종전엔 그때마다 게이트웨이가 list-sessions 를 쳤다
+//   (노드 5 × 테넌트 6 = 분당 35). 출처 판정(`ledgerLiveFrom`)을 우회해 tmux 를 곧바로 물으면 그게 돌아온다.
+const LEDGER = "src/terminal/session-ledger.ts";
+t("[S15] 장부 라우트의 live 는 ledgerLiveFrom 을 지난다(tmux 직행 금지)", () => {
+  const lines = codeLines(LEDGER);
+  assert.ok(lines.some((l) => /listLive:\s*ledgerLiveFrom\s*\(/.test(l)), `${LEDGER} 라우트가 ledgerLiveFrom 을 안 쓴다`);
+  assert.ok(!lines.some((l) => /listLive:\s*\(\)\s*=>\s*listLiveSessionIds/.test(l)),
+    `${LEDGER} 라우트가 live 를 tmux 로 직행한다 — 세션 호스트가 서 있어도 분당 35번 list-sessions 가 돌아온다`);
+});
+
+// ── S16: «이 좌표가 정말 다른 기계인가» 는 `remoteNodeOfSession` 한 곳이다 (#2600 T2 d6) ────────────────
+//  왜 둘인가: ① 대화창·감시자가 좌표가 있으면 매번 has-session 을 쳤다(전 테넌트 켜기 뒤 매니지드 세션 **전부**에
+//   호스트 좌표가 붙어 분당 10). ② ★ 대화창 키 라우트는 `nodeOfSession(id)` 만 보고 409 를 냈다 — 호스트 좌표가
+//   붙은 순간 매니지드 세션의 승인·거부·중단이 전부 막힌다. 둘 다 «좌표가 있다» 를 «저쪽 기계다» 로 읽은 같은 실수다.
+const CHAT = "src/terminal/chat-routes.ts";
+const WATCH = "src/terminal/transcript-watch.ts";
+t("[S16] 대화창·키 라우트·대화 감시자는 remoteNodeOfSession 으로 «저쪽 기계인가» 를 묻는다", () => {
+  const chat = codeLines(CHAT);
+  assert.ok(chat.filter((l) => /remoteNodeOfSession\s*\(/.test(l)).length >= 2,
+    `${CHAT} 의 gateRead·키 라우트 중 remoteNodeOfSession 을 안 쓰는 자리가 있다`);
+  assert.ok(!chat.some((l) => /if\s*\(\s*nodeOfSession\s*\(\s*id\s*\)\s*\)\s*throw/.test(l)),
+    `${CHAT} 에 «좌표가 있으면 409» 가 되살아났다 — 세션 호스트가 서면 매니지드 세션의 키 입력이 전부 막힌다`);
+  assert.ok(!chat.some((l) => /await\s+sessionGone\s*\(\s*id\s*\)/.test(l)),
+    `${CHAT} 가 좌표 판정을 위해 tmux 를 직접 묻는다`);
+  const watch = codeLines(WATCH);
+  assert.ok(watch.some((l) => /remoteNodeOfSession\s*\(\s*id\s*,\s*deps\.sessionGone\s*\)/.test(l)),
+    `${WATCH} 가 remoteNodeOfSession(seam 을 거친 판정) 을 안 쓴다`);
+  assert.ok(!watch.some((l) => /\bnodeOfSession\s*\(/.test(l)), `${WATCH} 가 좌표만으로 저쪽 기계를 판정한다`);
+});
+
+// ── S17: 말 배달·명령·전환도 «정말 저쪽 기계인가» 로 가른다 (#2600 T2 d6 후속) ─────────────────────────────
+//  왜: S16 과 같은 실수가 세 자리에 더 있었다(2026-09-11 프로덕션 실측).
+//   ① `POST …/prompt` — 호스트 좌표를 노드로 읽어 매니지드 세션의 말이 **아웃박스를 건너뛰고** 호스트 send-keys 로 갔다
+//      (응답이 `queued·outbox_id` 가 아니라 `{ok:true}`). 로그인·대화상자에 멈춘 세션이면 글자가 조용히 사라지는 경로다.
+//   ② `POST …/runtime` — 모델·추론강도 슬래시 명령이 같은 길을 탔다.
+//   ③ `POST …/handoff` — 호스트를 새 세션을 만들 노드로 골라 **403 «본인이 등록한 노드가 아니고 공유 노드도 아닙니다»**.
+//   그리고 `deliverPrompt` 는 좌표를 안 받으면 스스로 되찾는다(리브 2턴) — 판정이 **불리는 함수 안에도** 있어야 한다.
+//  ⚠ 줄 단위·핸들러 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const DELIVER = "src/terminal/deliver-prompt.ts";
+t("[S17] 프롬프트·런타임·전환 라우트와 deliverPrompt 는 remoteNodeOfSession 으로 저쪽 기계를 가른다", () => {
+  const src = read(TERM_ROUTES);
+  const handler = (sig) => {
+    const at = src.indexOf(sig);
+    assert.ok(at >= 0, `${TERM_ROUTES} 에서 ${sig} 를 못 찾았다 — 경로가 바뀌었나`);
+    const next = src.indexOf("\n  app.", at + sig.length);
+    return src.slice(at, next < 0 ? undefined : next).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  };
+  //  프롬프트 라우트는 판정 + 배달을 `deliverPromptForMember`(deliver-prompt.ts) 한 벌에 넘긴다(#4594 — 앱 화면의 chat-send 도 같은 함수를 탄다).
+  //   그래서 라우트에서는 «그 함수를 부르나 · 좌표만으로 가르는 옛 판정이 없나» 를, 판정 자체는 그 함수 안에서 본다(아래).
+  {
+    const body = handler('app.post("/api/ui/terminal/sessions/:id/prompt"');
+    assert.ok(body.some((l) => /deliverPromptForMember\s*\(\s*req\.params\.id\s*,\s*uid\s*,\s*text\s*\)/.test(l)),
+      "프롬프트 라우트가 deliverPromptForMember(req.params.id, uid, text) 를 안 부른다 — 판정 한 벌(remoteNodeOfSession)을 건너뛴다");
+    assert.ok(!body.some((l) => /\bdeliverPrompt\s*\(/.test(l)),
+      "프롬프트 라우트가 deliverPrompt 를 직접 부른다 — 접근 판정(canAttach·nodeCanAttach) 없이 배달된다");
+    assert.ok(!body.some((l) => /\bnodeOfSession\s*\(\s*(req\.params\.id|id)\s*\)/.test(l)),
+      "프롬프트 라우트에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(…) 이 남아 있다");
+  }
+  for (const [name, sig] of [
+    ["런타임", 'app.post("/api/ui/terminal/sessions/:id/runtime"'],
+    ["전환", 'app.post("/api/ui/terminal/sessions/:id/handoff"'],
+  ]) {
+    const body = handler(sig);
+    assert.ok(body.length > 5, `${name} 라우트 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+    assert.ok(body.some((l) => /remoteNodeOfSession\s*\(/.test(l)),
+      `${name} 라우트가 remoteNodeOfSession 을 안 쓴다 — 세션 호스트 좌표를 저쪽 기계로 읽는다`);
+    assert.ok(!body.some((l) => /\bnodeOfSession\s*\(\s*(req\.params\.id|id)\s*\)/.test(l)),
+      `${name} 라우트에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(…) 이 남아 있다`);
+  }
+  const deliver = codeLines(DELIVER);
+  //  좌표 되찾기는 두 자리다 — 사람 요청(deliverPromptForMember: 접근 판정까지) · 좌표를 안 준 내부 호출(deliverPrompt: 리브 2턴).
+  assert.ok(deliver.filter((l) => /remoteNodeOfSession\s*\(\s*sessionId\s*,\s*sessionGone\s*\)/.test(l)).length >= 2,
+    `${DELIVER} 의 좌표 되찾기 두 자리(deliverPromptForMember · deliverPrompt) 중 remoteNodeOfSession 이 아닌 곳이 있다 — 말이 아웃박스를 건너뛴다`);
+  //  deliverPromptForMember 본문만 잘라 본다 — 노드면 nodeCanAttach, 아니면 canAttach, 그 뒤에 배달.
+  {
+    const srcD = read(DELIVER);
+    const at = srcD.indexOf("export async function deliverPromptForMember(");
+    assert.ok(at >= 0, `${DELIVER} 에 deliverPromptForMember 가 없다`);
+    const end = srcD.indexOf("\nexport async function deliverPrompt(", at);
+    const fn = srcD.slice(at, end < 0 ? undefined : end);
+    assert.ok(/remoteNodeOfSession\s*\(\s*sessionId\s*,\s*sessionGone\s*\)/.test(fn), "deliverPromptForMember 가 remoteNodeOfSession 으로 저쪽 기계를 가르지 않는다");
+    assert.ok(/nodeCanAttach\s*\(\s*nodeId\s*,\s*sessionId\s*,\s*memberId\s*\)/.test(fn), "deliverPromptForMember 가 노드 세션의 접근을 nodeCanAttach 로 판정하지 않는다");
+    assert.ok(/canAttach\s*\(\s*sessionId\s*,\s*memberId\s*\)/.test(fn), "deliverPromptForMember 가 중앙 세션의 접근을 canAttach 로 판정하지 않는다");
+    assert.ok(/deliverPrompt\s*\(\s*sessionId\s*,\s*text\s*,\s*\{\s*owner:\s*memberId\s*,\s*nodeId\s*\}\s*\)/.test(fn), "deliverPromptForMember 가 판정한 nodeId 를 배달에 넘기지 않는다(다시 되찾으면 판정이 갈린다)");
+  }
+  assert.ok(!deliver.some((l) => /\bnodeOfSession\s*\(\s*sessionId\s*\)/.test(l)),
+    `${DELIVER} 에 좌표만으로 저쪽 기계를 가르는 nodeOfSession(sessionId) 이 남아 있다`);
+});
+
+// ── S18: 하네스 활동 보고는 그 세션의 호스트에 맡기고, 회수기 목록은 중앙 목록 한 곳에서 (#2600 T2 d6 3판) ──────────
+//  왜: 2026-09-14 계수 — 카나리아 `lively-46e3` 에 남은 게이트웨이 tmux 22/분 중 `/active` 가 10(단계 읽기·쓰기·활동 시각)
+//   · 전이 알림의 라벨 재조회 1.1 · 유휴 회수기 목록 1.5+ 였다. 라우트가 `markSessionActive` 를 직접 부르면 호스트가
+//   서 있어도 세 번이 돌아오고, 회수기가 `listSessionsRaw` 로 돌아가면 전 세션 capture-pane 이 돌아온다.
+//  ⚠ 줄 단위·핸들러 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const RELAY = "src/terminal/session-activity-relay.ts";
+const REAPER = "src/sessions/session-reaper.ts";
+t("[S18] /active 는 reportSessionActivity 로 맡기고 알림 이름은 st.label · 회수기 목록은 listCentralSessions", () => {
+  const src = read(TERM_ROUTES);
+  const sig = 'app.post("/api/ui/terminal/sessions/:id/active"';
+  const at = src.indexOf(sig);
+  assert.ok(at >= 0, `${TERM_ROUTES} 에서 ${sig} 를 못 찾았다 — 경로가 바뀌었나`);
+  const next = src.indexOf("\n  app.", at + sig.length);
+  const body = src.slice(at, next < 0 ? undefined : next).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+  assert.ok(body.length > 10, `/active 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+  //  #4588 — 뒤에 deps·bg(턴 끝의 열린 백그라운드 작업 수)가 붙을 수 있다. 지키는 것은 «맡길 곳 판정을 거친다» 하나다.
+  assert.ok(body.some((l) => /reportSessionActivity\s*\(\s*id\s*,\s*phase\s*[,)]/.test(l)),
+    `/active 가 reportSessionActivity 를 안 부른다 — 세션 호스트가 서 있어도 게이트웨이가 tmux 를 세 번 친다`);
+  assert.ok(!body.some((l) => /\bmarkSessionActive\s*\(/.test(l)),
+    `/active 가 markSessionActive 를 직접 부른다 — 맡길 곳 판정을 건너뛴다`);
+  assert.ok(body.some((l) => /notifyPhaseChange\s*\(\s*id\s*,\s*me\s*,\s*change\s*,\s*st\.label/.test(l)),
+    `/active 중앙 갈래의 전이 알림이 st.label 을 이름으로 안 준다 — 전이마다 tmux 로 라벨을 다시 읽는다`);
+
+  const reaper = codeLines(REAPER);
+  assert.equal(reaper.filter((l) => /deps\?\.listLive\s*\?\?\s*listCentralSessions\b/.test(l)).length, 2,
+    `${REAPER} 의 유휴·압박 회수기 둘 다 기본 목록이 listCentralSessions 여야 한다`);
+  assert.ok(!reaper.some((l) => /\?\?\s*listSessionsRaw\b/.test(l)),
+    `${REAPER} 에 listSessionsRaw 기본 목록이 남아 있다 — 소유가 넘어간 테넌트에서도 전 세션 capture-pane 을 친다`);
+
+  const relay = codeLines(RELAY);
+  assert.ok(relay.some((l) => /sessionHostFor\s*\(\s*sid\s*,\s*"markActive"\s*\)/.test(l)),
+    `${RELAY} 의 기본 호스트 판정이 sessionHostFor 를 안 지난다 — 맡길 곳 판정이 두 벌이 된다`);
+});
+
+// ── S19a: 아웃박스 걸음은 강제 상태 push 를 끌고 오지 않는다 (#2600 T2 d6 · #3773 PR1) ──────────────────────
+//  왜: 에이전트는 성공한 RPC 마다 상태를 전량 push 한다(strict 세션 목록 + 자원 표본). 아웃박스 걸음은 준비 판정의 폴(500ms)
+//   단위로 오므로, 응답 줄에서 면제(`pushesStateAfter`)가 빠지면 걸음마다 목록 관측 한 판이 따라붙는다. 술어 시험
+//   (`state-freshness.test`)은 값만 재고 배선은 못 잰다 — 그래서 응답 줄을 본다.
+//  ⚠ 줄 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+t("[S19a] 에이전트의 성공 응답 뒤 강제 push 는 pushesStateAfter(req.op) 로 거른다", () => {
+  const res = codeLines(WS_ADAPTER).filter((l) => /t:\s*"res"[^\n]*ok:\s*true/.test(l));
+  assert.equal(res.length, 1, `${WS_ADAPTER} 에서 성공 응답 줄을 ${res.length}곳 찾았다 — 이 가드가 무엇을 보는지 모른다`);
+  assert.match(res[0], /if\s*\(\s*pushesStateAfter\s*\(\s*req\.op\s*\)\s*\)\s*void\s+pushState\s*\(\s*true\s*\)/,
+    `${WS_ADAPTER} 의 성공 응답 뒤 강제 push 가 op 를 가리지 않는다 — 아웃박스 폴마다 전량 push 가 따라붙는다`);
+});
+
+// ── S19b: 아웃박스 걸음 모듈 — DB 표면 0 · 키 argv 는 send-keys 의 계획 함수에서 (#2600 T2 d6 · #3773 PR1) ─────────
+//  왜 둘인가: ① 이 모듈은 세션 호스트(DB 자격 없는 노드 박스·멤버 PC)에서 돈다. 그런데 번들 허용목록에 `dist/db/client.js` 가
+//   이미 있어서, 여기에 DB import 가 새로 생겨도 번들 경계 가드는 **울지 않는다.** ② 키의 모양은 mux 마다 다르다(psmux 는
+//   키 이름을 모른다 — send-keys.ts 머리말 ③). 여기서 `["send-keys", …]` 를 손으로 지으면 윈도우 노드에서만 조용히 틀린 키가 간다.
+const OUTBOX_STEP = "src/terminal/outbox-host-step.ts";
+t("[S19b] 아웃박스 걸음 모듈은 DB 표면을 import 하지 않고, 키 argv 를 손으로 짓지 않는다", () => {
+  const lines = codeLines(OUTBOX_STEP);
+  const imports = lines.filter((l) => /^import\s/.test(l));
+  assert.ok(imports.length > 0, `${OUTBOX_STEP} 의 import 를 못 찾았다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.deepEqual(imports.filter((l) => /["']\.\.\/(db|items|v6|org|sessions)\//.test(l)), [],
+    `${OUTBOX_STEP} 가 DB 표면을 끌어왔다 — 세션 호스트에는 DB 가 없다`);
+  assert.ok(!lines.some((l) => /["']send-keys["']/.test(l)),
+    `${OUTBOX_STEP} 가 send-keys argv 를 손으로 짓는다 — psmux 노드에서 틀린 키가 간다`);
+  //  flush 지연(`injectFlushMs`)은 치기 순서와 함께 `runSendKeysPlan` 이 싣는다(#3773 PR1 후속 — 순서 한 벌, 아래 S19c).
+  for (const fn of ["sendKeysPlan", "sendKeyPlan", "sendDownPlan", "runSendKeysPlan"]) {
+    assert.ok(lines.some((l) => new RegExp(`\\b${fn}\\s*\\(`).test(l)), `${OUTBOX_STEP} 가 ${fn} 을 안 쓴다 — 키 규약이 두 벌이 된다`);
+  }
+});
+
+// ── S19: 아웃박스는 게이트웨이 tmux 를 직접 치지 않고 실행 자리를 지난다 (#2600 T2 d6 · #3773 PR2) ─────────────────────────────
+//  왜: 아웃박스는 준비 판정의 폴마다 화면을 읽고(tmux 둘) 신뢰 키·send-keys 를 게이트웨이 tmux 로 쳤다 — d6 «그 테넌트 tmux 0» 에
+//   남은 큰 자리였다. 배달 루프의 한 자리라도 tmux 로 직행하면 세션 호스트가 서 있어도 그 자리가 돌아온다. 호스트를 고르는 op 가
+//   `outboxStep` 이 아니면 옛 호스트를 거르는 관문(`nodeSupports`)이 엉뚱한 op 로 판정한다. 그리고 호스트 재료는 부팅이 registry 한 곳의
+//   것을 꽂는다 — 아웃박스는 노드 번들에 부채로 실려 있어 registry 를 import 하면 번들에 모듈 12개가 들어온다.
+//  ⚠ 줄 단위로 본다(`code()` 는 문자열 속 `/*` 에 걸린다 — S10c 머리말).
+const OUTBOX = "src/sessions/session-outbox.ts";
+const OUTBOX_EXEC = "src/sessions/outbox-exec.ts";
+t("[S19] 아웃박스는 tmux·send-keys 를 직접 부르지 않고 실행 자리를 지난다 · 호스트 판정 op 는 outboxStep · 부팅이 registry 의 재료를 꽂는다", () => {
+  const outbox = codeLines(OUTBOX);
+  assert.ok(outbox.length > 100, `${OUTBOX} 를 ${outbox.length}줄밖에 못 읽었다 — 이 가드가 아무것도 안 보고 있다`);
+  assert.deepEqual(outbox.filter((l) => /\b(tmux|sendKeysToSession|sendKeyToSession)\s*\(/.test(l)), [],
+    `${OUTBOX} 가 게이트웨이 tmux 로 직행한다 — 세션 호스트가 서 있어도 그 자리는 게이트웨이가 친다`);
+  assert.ok(outbox.some((l) => /=\s*await\s+outboxExecFor\s*\(\s*sessionId\s*\)/.test(l)), `${OUTBOX} 의 배달 루프가 실행 자리를 고르지 않는다`);
+  for (const [what, re] of [
+    ["준비 판정의 보기", /await\s+exec\.peek\s*\(\s*\)/],
+    ["신뢰 대화상자 키", /acceptTrustDialog\s*\(\s*sessionId\s*,\s*seen\.pane\s*,\s*exec\.trustKeys\s*\(\s*\)\s*\)/],
+    ["치기", /await\s+exec\.type\s*\(\s*row\.text\s*[,)]/],   // #4818 — 둘째 인자로 붙여넣기 선택을 싣는다(send-keys 규약 ⑤)
+    ["미제출 방어 Enter", /await\s+exec\.enter\s*\(\s*\)/],
+  ]) assert.ok(outbox.some((l) => re.test(l)), `${OUTBOX} 의 ${what} 가 실행 자리를 안 지난다`);
+
+  const exec = codeLines(OUTBOX_EXEC);
+  assert.ok(exec.some((l) => /hostPick\s*\(\s*sessionId\s*,\s*"outboxStep"\s*\)/.test(l)), `${OUTBOX_EXEC} 의 호스트 고르기가 outboxStep 으로 묻지 않는다`);
+  assert.ok(exec.some((l) => /\.rpc\s*\(\s*host\s*,\s*"outboxStep"\s*,/.test(l)), `${OUTBOX_EXEC} 가 호스트에 outboxStep 이 아닌 op 를 보낸다`);
+  assert.ok(!exec.some((l) => /from\s+["']\.\.\/node\/registry\.js["']/.test(l)),
+    `${OUTBOX_EXEC} 가 registry 를 import 한다 — 노드 번들에 노드 연결·스토어 모듈이 들어온다`);
+
+  const index = codeLines("src/index.ts");
+  assert.ok(index.some((l) => /outboxHost:\s*\{\s*pick:\s*sessionHostTargetFor\s*,\s*rpc:\s*nodeRpc\s*,\s*defersHere:\s*gatewayDefersHere\s*\}/.test(l)),
+    "게이트웨이 부팅이 아웃박스 호스트 재료를 registry 한 곳(sessionHostTargetFor·nodeRpc·gatewayDefersHere)에서 꽂지 않는다");
+});
+
+// ── S19c: 치기 순서는 한 함수 (#3773 PR1 후속) ─────────────────────────────────────────────────────────────────────────
+//  왜: 확인 → 글자 → flush → Enter 순서가 게이트웨이(`sendKeysToSession`)와 세션 호스트(아웃박스 치기)에 두 벌로 있었다. 한쪽만 고치면
+//   (예: flush 를 Enter 뒤로) 같은 지시가 호스트로 갈 때와 게이트웨이로 갈 때 다르게 들어간다.
+const fnBody = (rel, sig) => {
+  const src = read(rel);
+  const at = src.indexOf(sig);
+  assert.ok(at >= 0, `${rel} 에서 ${sig} 를 못 찾았다 — 이름이 바뀌었나`);
+  const end = src.indexOf("\n}\n", at);
+  return src.slice(at, end < 0 ? undefined : end).split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+};
+t("[S19c] 치기 순서는 runSendKeysPlan 한 곳 — 게이트웨이 sendKeysToSession 과 호스트 치기가 둘 다 그걸 부르고 순서를 손으로 짓지 않는다", () => {
+  for (const [rel, sig] of [["src/terminal/send-keys.ts", "export async function sendKeysToSession("], [OUTBOX_STEP, "async function typeText("]]) {
+    const body = fnBody(rel, sig);
+    assert.ok(body.length >= 3, `${rel} 의 ${sig} 본문을 ${body.length}줄밖에 못 잘랐다 — 이 가드가 아무것도 안 보고 있다`);
+    assert.ok(body.some((l) => /\brunSendKeysPlan\s*\(/.test(l)), `${rel} 의 치기가 runSendKeysPlan 을 안 부른다 — 순서가 두 벌이 된다`);
+    assert.ok(!body.some((l) => /"has-session"/.test(l)), `${rel} 의 치기가 세션 확인을 손으로 친다 — 순서를 다시 짓고 있다`);
+  }
+});
+
+console.log(`\n${pass} passed — 세션 호스트 단일 출처(#2600 T1·T2 d4·d6)`);

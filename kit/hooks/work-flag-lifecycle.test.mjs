@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @lively-test exclusive — 훅의 보고 요청은 1.2초에 끊긴다 · 가짜 게이트웨이가 그 안에 받아야 한다(혼자 돈다, scripts/test-runner-schedule.mjs).
 // work-flag 세션 라이프사이클 보고 유닛테스트 (#1059) — 훅을 실제 프로세스로 띄우고, 스텁 게이트웨이가 받은
 //  HTTP POST(부작용)로 단언한다. 로그 문자열이 아니라 **무엇이 어디로 나갔나**를 본다.
 //   - SessionEnd(reason=prompt_input_exit·logout) → POST …/exited (정상종료 표시 → 복원목록 '종료됨' 구분)
@@ -52,7 +53,7 @@ function runHook(input, env = {}) {
     const cp = spawn(process.execPath, [HOOK], {
       env: {
         ...process.env, ...sandboxEnv({ home: HOME, tmp: TMP }),
-        LIVELY_OFF: "", LIVELY_HOOKS_OFF: "",
+        LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: "", LIVELY_READONLY: "", LIVELY_INCOGNITO: "",
         LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: GW,
         LIVELY_SESSION_ID: BOX,
         ...env,
@@ -244,6 +245,16 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
   fresh();
   const r4 = await runHook({ session_id: `ph${++n}`, hook_event_name: "Stop", prompt: "x" });
   lp(r4).length === 0 ? ok("E13b 다른 이벤트에선 보내지 않는다(UserPromptSubmit 만)") : bad("E13b other-event", `실제=${JSON.stringify(lp(r4))}`);
+  //  #5048 — 읽기전용·인코그니토(신·구 env)는 친 말을 보내지 않는다(서버에 저장되는 줄). 단계 보고(/active)는 내용이 없어 그대로 간다.
+  for (const env of [{ LIVELY_MODE: "readonly" }, { LIVELY_MODE: "incognito" }, { LIVELY_MODE: " ReadOnly " }, { LIVELY_READONLY: "1" }, { LIVELY_INCOGNITO: "1" }]) {
+    fresh();
+    const r = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt: "기밀 지시" }, env);
+    lp(r).length === 0 ? ok(`E13b ${JSON.stringify(env)} → /last-prompt 안 보냄`) : bad("E13b readonly", `${JSON.stringify(env)} 실제=${JSON.stringify(lp(r))}`);
+    states(r).length === 1 ? ok(`E13b ${JSON.stringify(env)} → /active 는 그대로`) : bad("E13b readonly active", `${JSON.stringify(env)} 실제=${JSON.stringify(states(r))}`);
+  }
+  fresh();
+  const r5 = await runHook({ session_id: `ph${++n}`, hook_event_name: "UserPromptSubmit", prompt: "평소 지시" }, { LIVELY_MODE: "normal" });
+  lp(r5)[0] === "평소 지시" ? ok("E13b 대조 — LIVELY_MODE=normal 은 종전대로 보낸다") : bad("E13b normal", `실제=${JSON.stringify(lp(r5))}`);
 }
 
 // ── E14: 턴 종료(Stop) → idle. **전이는 스로틀에 막히면 안 된다** ─────────────────────
@@ -334,6 +345,78 @@ const states = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui
   const noBg = [r4, r5, r6, r7].map((r) => bodies(r));
   noBg.every((b) => b.length === 1 && !("bg" in b[0]))
     ? ok("E18 못 세면 bg 를 싣지 않는다(경로 없음 · 없는 파일 · codex · 도는 턴)") : bad("E18 noBg", `실제=${JSON.stringify(noBg)}`);
+}
+
+// ── E19(#4695 T5): 턴 끝 보고엔 **예약 깨움·반복 예약**도 함께 싣는다(wake=다음 깨움 epoch초 · 0=없음/지남 · cron=열린 예약 수) ──────
+//  하네스 종료 규칙은 이 둘이 있으면 «완료» 로 보지 않는다(끄면 깨움이 영영 안 온다). 셈을 못 믿으면(결과 없는 예약 호출) 싣지 않는다 —
+//  서버는 예약 칸이 없는 claude 보고를 «모른다» 로 읽어 끄지 않는다.
+{
+  const bodies = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/active`)
+    .map((x) => { try { return JSON.parse(x.body); } catch { return null; } });
+  const conv = join(SANDBOX, "conv-sched.jsonl");
+  const now = Date.now();
+  const wakeLines = (id, sf) => JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "ScheduleWakeup", input: { delaySeconds: 1200, prompt: "/loop x" } }] } }) + "\n"
+    + JSON.stringify({ type: "user", timestamp: new Date(now).toISOString(), message: { content: [{ type: "tool_result", tool_use_id: id, content: "Next wakeup scheduled for 09:00:00 (in 1200s)." }] }, toolUseResult: { scheduledFor: sf } }) + "\n";
+  writeFileSync(conv, wakeLines("tw1", now + 1_200_000));
+  fresh();
+  const sid = `sc${++n}`;
+  const b1 = bodies(await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }));
+  b1.length === 1 && b1[0].state === "idle" && b1[0].bg === 0 && b1[0].wake === Math.floor((now + 1_200_000) / 1000) && b1[0].cron === 0
+    ? ok("E19 Stop → {state:idle, bg:0, wake:<깨움 epoch초>, cron:0}") : bad("E19 wake", `실제=${JSON.stringify(b1)}`);
+  //  깨움이 바뀐 idle 은 스로틀을 뚫는다 · 이미 지난 깨움은 0 으로 싣는다(받는 쪽이 «기다림» 으로 읽지 않게)
+  appendFileSync(conv, wakeLines("tw2", now - 60_000));
+  const b2 = bodies(await runHook({ session_id: sid, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }));
+  b2.length === 1 && b2[0].wake === 0 && b2[0].cron === 0
+    ? ok("E19 깨움이 바뀐 idle 은 스로틀에 안 걸린다 · 지난 깨움은 wake=0") : bad("E19 지난 깨움", `실제=${JSON.stringify(b2)}`);
+  //  결과를 못 받은 예약 호출이 남으면 예약 칸을 싣지 않는다(bg 는 그대로 싣는다)
+  appendFileSync(conv, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tw3", name: "ScheduleWakeup", input: { delaySeconds: 60 } }] } }) + "\n");
+  fresh();
+  const b3 = bodies(await runHook({ session_id: `sc${++n}`, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }));
+  b3.length === 1 && b3[0].bg === 0 && !("wake" in b3[0]) && !("cron" in b3[0])
+    ? ok("E19 예약 셈을 못 믿으면 wake·cron 을 싣지 않는다(bg 는 싣는다)") : bad("E19 sched 모름", `실제=${JSON.stringify(b3)}`);
+  //  codex 는 예약 도구가 없다 — 싣지 않는다
+  writeFileSync(conv, wakeLines("tw1", now + 1_200_000));
+  fresh();
+  const b4 = bodies(await runHook({ session_id: `sc${++n}`, hook_event_name: "Stop", stop_hook_active: false, transcript_path: conv }, { LIVELY_HARNESS: "codex" }));
+  b4.length === 1 && !("wake" in b4[0]) && !("cron" in b4[0])
+    ? ok("E19 claude 가 아니면 예약 칸이 없다") : bad("E19 codex", `실제=${JSON.stringify(b4)}`);
+}
+
+// ── E20(#4821 ②): API 오류로 끝난 턴(StopFailure)도 턴 종료 — Stop 과 같은 idle 보고 ─────────────────────────────
+// Claude Code 는 API 오류(사용 한도·없는 모델 …)로 턴이 끝나면 Stop 대신 StopFailure 만 띄운다(2.1.301 실측: error=model_not_found ·
+//  last_assistant_message · prompt_id). 이게 «턴 종료» 로 안 읽히면 턴 시작의 busy 만 남아 «작업 중» 으로 10분 서 있다가 «모름» 이 되고,
+//  한도로 막힌 턴이 하네스 안에서 자동 이어감을 기다리는 동안 하네스 종료 규칙이 그 대기를 못 본다(옛 회수 시계가 걷는다).
+//   🔴 StopFailure 를 무시하면 — busy 다음 아무 보고도 안 나간다(이번 틈 그대로).
+//   🔴 오류 종류로 거르면 — 한도 오류만 고치고 다른 오류로 끝난 턴은 여전히 «작업 중» 으로 남는다(턴이 끝난 것은 같다).
+{
+  const bodies = (r) => r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/active`)
+    .map((x) => { try { return JSON.parse(x.body); } catch { return null; } });
+  const conv = join(SANDBOX, "conv-sf.jsonl");
+  writeFileSync(conv, JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } }) + "\n");
+  fresh();
+  const sid = `sf${++n}`;
+  const r0 = await runHook({ session_id: sid, hook_event_name: "UserPromptSubmit", prompt: "긴 작업 해 줘", transcript_path: conv });
+  const r1 = await runHook({ session_id: sid, hook_event_name: "StopFailure", error: "rate_limit", error_details: "usage_limit_reached",
+    last_assistant_message: "You've hit your session limit · resets 4:10pm (Asia/Seoul)", transcript_path: conv });
+  const b0 = bodies(r0), b1 = bodies(r1);
+  b0.length === 1 && b0[0].state === "busy" && b1.length === 1 && b1[0].state === "idle" && b1[0].bg === 0 && b1[0].wake === 0 && b1[0].cron === 0
+    ? ok("E20 busy 뒤 StopFailure(rate_limit) → {state:idle, bg:0, wake:0, cron:0} — Stop 과 같은 턴 끝 보고(전이는 스로틀을 뚫는다)")
+    : bad("E20 rate_limit", `busy=${JSON.stringify(b0)} idle=${JSON.stringify(b1)}`);
+  const r2 = await runHook({ session_id: sid, hook_event_name: "StopFailure", error: "rate_limit", transcript_path: conv });
+  bodies(r2).length === 0 ? ok("E20 같은 idle 의 반복은 60초 스로틀(Stop 과 같다)") : bad("E20 스로틀", `실제=${JSON.stringify(bodies(r2))}`);
+  for (const ev of [{ error: "model_not_found" }, { error: "unknown" }, {}]) {
+    fresh();
+    const s2 = `sf${++n}`;
+    await runHook({ session_id: s2, hook_event_name: "UserPromptSubmit", prompt: "x" });
+    const b = bodies(await runHook({ session_id: s2, hook_event_name: "StopFailure", ...ev }));
+    b.length === 1 && b[0].state === "idle"
+      ? ok(`E20 오류 종류와 무관하게 턴 종료(${JSON.stringify(ev)})`) : bad("E20 오류 종류", `${JSON.stringify(ev)} → ${JSON.stringify(b)}`);
+  }
+  fresh();
+  const s3 = `sf${++n}`;
+  await runHook({ session_id: s3, hook_event_name: "UserPromptSubmit", prompt: "x" });
+  const b3 = bodies(await runHook({ session_id: s3, hook_event_name: "Stop", stop_hook_active: false }));
+  b3.length === 1 && b3[0].state === "idle" ? ok("E20 Stop 은 그대로 idle(회귀)") : bad("E20 Stop 회귀", `실제=${JSON.stringify(b3)}`);
 }
 
 server.close();

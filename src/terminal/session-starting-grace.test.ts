@@ -198,3 +198,21 @@ test("[4065-B15] ★ 배선 — 목록 두 곳은 켜고, 휴지통 묶음은 �
   assert.doesNotMatch(read("capabilities/projects-v6.ts"), /startingGraceMs/,
     "휴지통 묶음이 유예를 켰다 — 도는 세션을 «지난 세션» 에서 뺄 수 없게 된다");
 });
+
+//  #4695 T5 — 하네스를 끄기 전에 남긴 쪽지(보내지 않은 글 · 질문)는 **주인에게만** 싣는다. 초대받은 사람도 이 행을 받지만(가시성)
+//   보내지 않은 글은 주인만의 것이다(격리 리뷰 — 목록 응답만 열어도 남이 쓰다 만 글이 보였다). 갓 만든(시작 중) 행엔 싣지 않는다.
+const NOTE = { at: NOW_S - 600, why: "done", harness: "claude", draft: "보내지 않은 글" };
+test("[4695-N1] 주인의 중단된 행엔 쪽지가 실린다", async () => {
+  const s = await one(row({ created: NOW_S - 3600, stop_note: NOTE }));
+  assert.deepEqual(s.stopNote, NOTE);
+});
+test("[4695-N2] 초대받은 사람이 받는 같은 행엔 쪽지가 없다", async () => {
+  const s = await one(row({ owner: "lee", invites: [ME], created: NOW_S - 3600, stop_note: NOTE }));
+  assert.equal(s.owned, false, "[배선] 남의 행을 초대로 보고 있다");
+  assert.equal(s.stopNote, undefined);
+});
+test("[4695-N3] 시작 중인 행엔 쪽지가 없다(끈 세션이 아니라 갓 만든 세션)", async () => {
+  const s = await one(row({ created: NOW_S - 5, stop_note: NOTE }));
+  assert.equal(s.starting, true);
+  assert.equal(s.stopNote, undefined);
+});

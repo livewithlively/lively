@@ -17,12 +17,13 @@ const TABLE: Array<[SessionKind, work: boolean, machine: boolean, why: string]> 
   ["managed", false, true,  "★상시 세션 — 크론이 프롬프트를 주입한다. 종전엔 어느 가드에도 안 걸렸다"],
   ["app",     false, false, "앱 세션 — 사람이 열지만 소속이 인스턴스 축에 따로 있다(#1780)"],
   ["login",   false, false, "로그인 절차용 — 사람이 열지만 작업 세션이 아니다(#1516)"],
+  ["collect", false, true,  "★수집 실행(#4213 T11) — 서버가 러너 한 판을 돌리려고 연다. 프로젝트·이름짓기 대상이 아니다"],
 ];
 for (const [kind, work, machine, why] of TABLE) {
   assert.equal(isWorkSession(kind), work, `isWorkSession(${kind}) — ${why}`);
   assert.equal(isMachineSession(kind), machine, `isMachineSession(${kind}) — ${why}`);
 }
-ok(`정책 표 ${TABLE.length}행 — 작업세션은 human 뿐 · 기계는 task·managed`);
+ok(`정책 표 ${TABLE.length}행 — 작업세션은 human 뿐 · 기계는 task·managed·collect`);
 
 // 배선 확인 — 표가 한쪽으로만 나오면 아무것도 안 가르는 것이다.
 {
@@ -43,6 +44,11 @@ ok(`정책 표 ${TABLE.length}행 — 작업세션은 human 뿐 · 기계는 tas
 
 // ── 표 B — 요청 → 종류. **경계 매핑은 여기 한 곳뿐**이다(라우트에 인라인으로 두면 아무도 못 본다). ──
 assert.equal(sessionKindFromRequest({}), "human");
+//  ★ collect 는 **요청으로 못 만든다** — 서버(collect-run.ts)만 연다. 요청으로 열리면 러너 없는 판이 목록 밖에서 컨테이너를 붙든다.
+for (const b of [{ kind: "collect" }, { collectRun: { dir: "/home/x/.cache/lvly-collect/cr-20261016000000-abcdef" } }] as Array<Record<string, unknown>>) {
+  assert.notEqual(sessionKindFromRequest(b as { loginFor?: unknown; appId?: unknown }), "collect", `요청 ${JSON.stringify(b)} 가 collect 가 되면 안 된다`);
+}
+ok("collect 는 요청으로 못 만든다");
 assert.equal(sessionKindFromRequest({ appId: "hello" }), "app");
 assert.equal(sessionKindFromRequest({ loginFor: "claude" }), "login");
 // 우선순위 — 로그인 세션은 앱보다 먼저다(로그인은 그 하네스를 아예 못 띄우는 상태에서 도는 절차다).
@@ -63,6 +69,7 @@ for (const v of [undefined, null, "", "   ", "아무거나", "HUMAN_X"]) {
 }
 assert.equal(normalizeSessionKind(" TASK "), "task", "트림·소문자 정규화");
 assert.equal(normalizeSessionKind("Managed"), "managed");
+assert.equal(normalizeSessionKind("collect"), "collect", "저장된 collect 는 그대로 되살아난다(복원 가드는 createSession 이 진다)");
 assert.notEqual(normalizeSessionKind(null), "task", "구 행이 기계로 오인되면 사람 세션이 기능을 잃는다");
 ok("정규화 — 미상·구 행은 human(안전한 쪽이 아니라 기능을 잃지 않는 쪽)");
 

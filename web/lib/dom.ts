@@ -56,9 +56,20 @@ function el(tag: string, attrs?: any, ...children: any[]): any {
   return n;
 }
 
-/** replaceChildren 의 안전판 — Node 아닌 인자(특히 `조건 ? el(...) : null` 의 null)를 **문자열로 박지 않는다**.
- *  DOM 의 replaceChildren 은 Node 가 아닌 것을 String() 으로 바꿔 넣어, 이 레포의 그 관용이 화면에 «null» 을 찍었다
- *  (#3784/#863 — 원준님이 얼굴 스택 «[장] null [＋]» 로 신고). main 에서 이 자리로 가져온다(stage 정합). */
+/**
+ * host 의 자식을 통째로 갈아 끼운다 — **el() 의 자식 규칙 그대로**(중첩 배열 평탄화 · null/undefined 스킵 ·
+ *  노드 아닌 값은 텍스트로).
+ *
+ * ⚠ **DOM 의 `replaceChildren` 을 직접 부르지 마라.** 그건 Node 가 아닌 인자를 **문자열로 바꿔 넣는다** —
+ *  이 레포가 el() 에서 온 화면 어디서나 쓰는 `조건 ? el(...) : null` 관용이 거기서는 화면에 글자 «null» 로
+ *  찍힌다. 실측(원준님 2026-09-10 신고): 세션 머리줄 얼굴 스택이 「[장] null [＋]」 로 나왔다 — 보는 사람이
+ *  셋 이하라 «몇 명 더» 칩이 null 이 된 자리였다. 게다가 그 텍스트 노드는 .sc-face 의 겹침 마진(-6px)을
+ *  안 받아 뒤따르는 [＋] 가 그 위로 올라타 **겹쳐 보이기까지** 했다.
+ *
+ * 같은 함정이 같은 날 전 web/ 에서 5자리 발견됐다(얼굴 스택 · 내 프로필 4자리 · 증류기 · 자료 공개범위 ·
+ *  분류 대기). 증상이 «조건이 맞을 때만» 나와서 눈으로 안 잡히는 것이 이 결함의 성질이다 — 그래서 자리를
+ *  고치는 데 그치지 않고 **입구를 하나로** 만든다. el() 을 쓰던 손이 그대로 와도 안전한 자리가 여기다.
+ */
 function replaceKids(host: any, ...children: any[]): any {
   const out: any[] = [];
   for (const c of children.flat(Infinity)) {

@@ -78,6 +78,11 @@ export async function initOrgCore(pool: Pool): Promise<void> {
     -- 웹에서 바꾸면 CLI 가 **하네스를 띄우기 전에** pull 해 ~/.lively/mode 에 반영한다. incognito 는 세션훅을
     -- 끄므로 harness_local_pref 경로에 섞으면 웹에서 다시 켤 수 없다 — 그래서 훅과 독립된 CLI preflight 설정이다.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS local_mode_pref JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- local_scope_pref = 이 멤버의 컴퓨터별 기록 범위(#5016). 형태:
+    --   { "<machine_id>": { "scope": "work_folders"|"anywhere", "work_roots": ["<경로>", …], "updated_at": "<iso>" } }
+    -- 없는 머신은 기본값(work_folders · 빈 목록). 세션 시작 훅이 매 세션 당겨 ~/.lively/record-scope.json 에 굳히고,
+    -- 훅·MCP 프록시가 «작업 폴더 밖에서 켠 AI 면 라이블리를 끈다» 를 그 사본으로 판정한다(kit/hooks/record-scope.mjs).
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS local_scope_pref JSONB NOT NULL DEFAULT '{}'::jsonb;
     -- harness_machine_alias = 머신별 사용자 지정 별명(#893 후속). 형태: { "<machine_id>": "집 맥북" }.
     --  관측(host)과 별개다 — 세션 report 는 host 만 관측하고 이 별명은 안 건드린다(사용자가 직접 지정, 리포트에 안 실림).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_machine_alias JSONB NOT NULL DEFAULT '{}'::jsonb;

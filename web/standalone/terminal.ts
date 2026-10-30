@@ -11,6 +11,11 @@ import { el, renderMarkdown } from './md.js';
 import { liteMenu } from './ctx-lite.js';   // #3784 터미널 우클릭 메뉴(의존 0 — 이 번들은 셸 밖에서 뜬다)
 import { isTerminalOmniChord, OMNI_MSG, OMNI_CLOSED_MSG } from './omni-chord.js';   // #4530 ⌘K 판정 — 한글 자판에서도(정본 web/lib/omni-chord.ts 의 사본)
 import { decideKey, UndoStack, countTyped, SEQ, nativeUndoOk } from './line-edit.js'; // #3778 입력줄 선택·되돌리기(순수 판정) · #3864 앱 되돌리기 판 판정
+import {                                  // #4406 Claude Code 입력칸 선택 — 범위는 웹, 지우기는 앱(순수 판정)
+  findBox, move, rangeCells, cellsToRange, selText as appSelText, dragSeq, clickSeq, pressPlan, highlightMatches, scanHighlight,
+  boxFingerprint, cmpPos as asCmp, lineEnd, decideAppSelKey, isTypingKey, versionAtLeast, APP_SELECT_MIN, // asCmp — #1155 의 cmpPos({x,y})와 다른 자리 모양({row,col})
+} from './app-select.js';
+import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -485,7 +490,8 @@ declare global {
   }
 }
 const TOKEN_KEY = 'lively_ui_token';
-const PREFS_KEY = 'lively_term_prefs';
+//  #4707 — 세션 대화창이 같은 키를 읽고 쓴다(web/lib/term-prefs.ts TERM_PREFS_KEY) — 패리티 시험이 맞대려고 export 한다.
+export const PREFS_KEY = 'lively_term_prefs';
 const SESSION_ID = new URLSearchParams(location.search).get('session') || '';
 // 세션 라벨 — 입장 링크가 ?label= 로 실어 보낸다(프로젝트/팀 세션은 개인 /sessions 목록에 없어 API 폴백이 못 찾음).
 const SESSION_LABEL = new URLSearchParams(location.search).get('label') || '';
@@ -542,7 +548,9 @@ function whenTermUi(fn: () => void) { if (termUiDone) fn(); else termUiWaiters.p
 
 // 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
 // 어떤 글꼴을 골라도 한글은 D2Coding 으로 또렷하게 렌더된다(#279 한글 가독성). @font-face=terminal.html.
-const FONTS = [
+//  #4707 — 세션 대화창도 이 목록·아래 THEMES 를 그대로 쓴다(web/lib/term-prefs.ts 의 사본). 둘이 갈라지지 않게
+//   scripts/term-prefs-parity.test.mjs 가 이 모듈의 값과 맞대어 잠근다 — 그래서 export 한다.
+export const FONTS = [
   { v: "'JetBrains Mono', 'D2Coding', monospace", label: 'JetBrains Mono' },
   { v: "'D2Coding', monospace", label: 'D2Coding · 한글 코딩' },
   { v: "'Fira Code', 'D2Coding', monospace", label: 'Fira Code' },
@@ -651,6 +659,58 @@ export function resolveTheme(key) {
   if (t.auto) return appIsDark() ? APP_DARK : APP_LIGHT;
   return t.theme;
 }
+// ── 비침(원준 2026-09-30) ─────────────────────────────────────────────────────
+//  세션이 사이드바 위에 뜬 카드일 때 부모(v2/side-card.ts)가 {cmd:'glass', on} 을 보낸다. 켜지면 xterm 바탕을 비워
+//  카드의 반투명 바탕과 그 뒤의 흐린 사이드바가 보이게 한다. 바탕을 칠할지는 카드가 정한다(또렷할 땐 카드가 불투명).
+//  ⚠ 바탕은 **색은 그대로, 알파만 0** 으로 비운다 — xterm 은 이 값으로 OSC 11(배경색 질의)에 답한다. rgba(0,0,0,0) 으로
+//   비우면 그 사이 새로 뜬 TUI 가 «배경이 검다» 로 읽고 어두운 테마를 고른다.
+//  ⚠ 캔버스·WebGL 은 allowTransparency 를 켜야 바탕을 비운다. 켜 두면 글자가 회색조 안티에일리어싱으로 그려져서
+//   카드일 때만 켠다.
+//  ⚠ 비치는 동안은 **앱 테마의 색**(APP_LIGHT/APP_DARK)을 쓴다(리뷰 지적). 뒤에 비치는 것은 앱이다 — Dracula 같은
+//   이름 있는 테마의 흰 글씨를 밝은 앱 위 반투명 카드에 올리면 읽히지 않는다. 문서의 color-scheme 도 앱을 따른다.
+//   터미널 테마(data-theme)를 따르면 밝기가 앱과 다를 때 브라우저가 액자에 불투명한 바탕을 칠해 비침이 죽는다.
+let glassOn = false;
+//  비치는 카드에서 사람이 카드를 고르지 않았다(곁칸을 골랐다) — 셸이 glass 메시지의 idle 로 알린다. 이때는 연결(첫 연결 · 재연결)
+//   때 스스로 초점을 가져가지 않는다. 가져가면 셸이 «사람이 카드를 골랐다» 로 읽어 카드가 불투명해지고, 새로고침할 때마다
+//   비치던 카드가 불투명으로 바뀌었다(원준 2026-10-10 «새로고침하면 상태가 계속 달라짐»). idle 이 없는 옛 셸이면 종전대로.
+let glassIdle = false;
+/** 그 색의 알파만 0 으로. 읽지 못하는 꼴이면 투명한 흰색. */
+export function clearOf(c: string): string {
+  const s = String(c || '').trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s);
+  if (m) { const [r, g, b] = m[1].split('').map((x) => parseInt(x + x, 16)); return `rgba(${r}, ${g}, ${b}, 0)`; }
+  m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(s);
+  if (m) { const n = parseInt(m[1], 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, 0)`; }
+  m = /^rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/i.exec(s);
+  if (m) return `rgba(${m[1]}, ${m[2]}, ${m[3]}, 0)`;
+  return 'rgba(255, 255, 255, 0)';
+}
+/** xterm 에 입힐 테마 — 비침이 켜져 있으면 앱 테마의 색에서 바탕만 비운다. xterm 의 theme 을 바꾸는 자리는 전부 이것을 쓴다. */
+function themeFor(key) {
+  if (!glassOn) return resolveTheme(key);
+  const th = resolveTheme('auto');                 // = 앱 테마(APP_LIGHT/APP_DARK) — 뒤에 비치는 것이 앱이라서
+  return Object.assign({}, th, { background: clearOf(th.background) });
+}
+/** 비침 동안 문서의 color-scheme 을 앱과 같게. 끄면 되돌린다(스타일시트 기본으로). */
+function applyGlassScheme(): void {
+  document.documentElement.style.colorScheme = glassOn ? (appIsDark() ? 'dark' : 'light') : '';
+}
+function setGlass(on: boolean): void {
+  if (glassOn === on) return;
+  glassOn = on;
+  document.documentElement.classList.toggle('term-glass', on);   // 문서 바탕 걷기(terminal.html)
+  applyGlassScheme();
+  if (!term) return;                                               // 아직 안 떴다 — 만들 때 glassOn 을 읽는다
+  try { term.options.allowTransparency = on; term.options.theme = themeFor(prefs().theme); } catch (_) { /* 렌더러 준비 전 */ }
+  //  카드가 되거나 풀리면 크기가 크게 바뀐다. 카드에서 풀릴 때는 glassOn 이 이미 꺼져 applyFit 이 부르지 않으므로 여기서 건다.
+  settleRedrawSoon();
+}
+/** 앱 테마가 바뀌었다 — 비치는 중이면 이름 있는 테마를 고른 사람도 앱 색을 따라간다(syncAppTheme 은 auto 만 본다). */
+function syncGlassTheme(): void {
+  if (!glassOn) return;
+  applyGlassScheme();
+  try { if (term) term.options.theme = themeFor(prefs().theme); } catch (_) { /* 아직 term 이 없다 */ }
+}
 /** 그 테마가 어두운 판인가(문서 크롬 data-theme 용). */
 function themeIsDark(key) {
   const t = THEMES[key] || THEMES.auto;
@@ -664,7 +724,8 @@ function withKR(ff) {
   if (/,?\s*monospace\s*$/i.test(ff)) return ff.replace(/,?\s*monospace\s*$/i, ", 'D2Coding', monospace");
   return ff + ", 'D2Coding', monospace";
 }
-function prefs() {
+//  #4707 — 대화창의 parseTermPrefs 가 이 해석을 옮겨 적었다(기본값·이관·한글 폴백). 둘이 갈라지지 않게 시험이 맞대려고 export 한다.
+export function prefs() {
   let p: any = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   // 폰트 기본값·mobileDock 은 main 의 모바일 대응(IS_MOBILE), theme 기본값 'auto' 는 #1683 — 둘 다 살린다.
@@ -697,14 +758,29 @@ function applyChrome(themeKey) {
 function syncAppTheme() {
   const p = prefs();
   if (p.theme !== 'auto') return;                 // 이름 있는 테마를 고른 사람의 선택이 이긴다
-  const th = resolveTheme('auto');
-  try { if (term) term.options.theme = th; } catch (_) { /* 아직 term 이 없다 */ }
+  try { if (term) term.options.theme = themeFor('auto'); } catch (_) { /* 아직 term 이 없다 */ }
   applyChrome('auto');
   try { doResize(); } catch (_) { /* 레이아웃 준비 전 */ }
 }
+//  #4707 — 세션 대화창(부모 문서)의 [⋯ ▸ 화면] 이 같은 설정을 바꿨다. 저장은 저쪽이 이미 했으니 **화면에만** 반영한다
+//   (applyPrefsNow 는 다시 저장한다 — 같은 값이라 신호가 돌지는 않지만, 남의 저장을 덮어쓸 이유가 없다).
+function adoptPrefs() {
+  if (!term) return;
+  const np = prefs();
+  const prevFamily = term.options.fontFamily;
+  term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
+  term.options.theme = themeFor(np.theme);
+  scrollSpeed = Math.max(1, Math.min(12, Number(np.scrollSpeed) || 3));
+  padGain = Math.max(0.5, Math.min(6, Number(np.padGain) || 3));
+  applyChrome(np.theme); doResize();
+  if (np.fontFamily !== prevFamily) remeasureAfterFonts(np.fontFamily);
+}
 function watchAppTheme() {
-  window.addEventListener('storage', (e) => { if (!e.key || e.key === 'lv:theme') syncAppTheme(); });
-  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncAppTheme); } catch (_) { /* 구형 */ }
+  window.addEventListener('storage', (e) => {
+    if (!e.key || e.key === 'lv:theme') { syncGlassTheme(); syncAppTheme(); }
+    if (e.key === PREFS_KEY) { try { adoptPrefs(); } catch (_) { /* 렌더러 준비 전 — 다음 부팅이 저장값을 읽는다 */ } }
+  });
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { syncGlassTheme(); syncAppTheme(); }); } catch (_) { /* 구형 */ }
 }
 
 // ── API 베이스(#1091·#1169 를 이 페이지에도) — 프리뷰 서브패스(/preview/<id>/)에서 뜬 화면은 API 도 그 프리뷰로 가야 한다. ──
@@ -1113,10 +1189,37 @@ export function paneMouseKnown(st) {
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
 //  순수 함수(전역 의존 없음). 드리프트 가드에서만 쓴다.
 export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.test(String(d || '')); }
+/**
+ * #4783 — 이 입력이 **사람이 친 것이 아니라** 터미널이 저절로 내보낸 것인가(순수).
+ *  xterm(5.5.0)은 키 입력뿐 아니라 ① 마우스 위치 보고(앱이 마우스 추적을 켜면 — Claude Code 는 any-motion 을 켠다, 실측
+ *  `mouse_any_flag=1`) ② 초점 보고(ESC[I · ESC[O — 앱이 1004 를 켜면) ③ 앱의 질의에 대한 자동 응답(장치 속성·커서 위치·모드·색 보고)을
+ *  **같은 onData 로** 낸다(CoreService.triggerDataEvent 는 wasUserInput 과 무관하게 onData 를 쏜다). 그래서 «이 탭에서 조작했다»
+ *  (userTyped)를 onData 로 세면 **마우스가 터미널 위를 지나가기만 해도** «조작함» 이 됐다 — 그 탭에서 세션이 꺼지면
+ *  «직접 종료한 것이면 그대로 두시면 됩니다» 라는 거짓 배너가 떴다(상민님 2026-10-16 신고, #4783).
+ *  ⚠ 수정자 F3(ESC[1;2R)이 커서 위치 보고와 모양이 같다 — 그 키 하나를 «조작» 으로 못 세는 쪽으로 틀린다(안전한 쪽).
+ */
+export function isAutoReply(d) {
+  const x = String(d || '');
+  if (!x) return false;
+  if (isMouseReport(x)) return true;
+  if (x === '\x1b[I' || x === '\x1b[O') return true;                                   // 초점 보고
+  if (/^\x1b\[[?>=]?[0-9;]*c$/.test(x)) return true;                                  // 장치 속성(DA1·DA2·DA3)
+  if (/^\x1b\[\??[0-9;]*[nR]$/.test(x)) return true;                                  // 상태·커서 위치 보고(DSR·CPR·DECXCPR)
+  if (/^\x1b\[\??[0-9;]*\$y$/.test(x)) return true;                                  // 모드 보고(DECRPM)
+  if (/^\x1b\[[0-9;]*t$/.test(x)) return true;                                        // 창 보고(크기·위치)
+  if (/^\x1b\][0-9]+;[^\x07\x1b]*(\x07|\x1b\\)$/.test(x)) return true;                 // OSC 응답(색·제목 질의)
+  if (/^\x1bP[\s\S]*\x1b\\$/.test(x)) return true;                                   // DCS 응답(DECRQSS·XTGETTCAP)
+  return false;
+}
 // 클라 xterm 상태를 tmux pane 실상태에 맞춘다. 모든 쓰기는 '실제 불일치일 때만'(가드) — 일치하면 no-op.
 export function applyPaneState(st) {
   if (!term || !st) return;
   lastKnownState = st;   // 소비되지 않는 사본 — forceRedraw 가 '캡처를 걸어도 되나'를 판단하는 근거
+  //  #4135 — **이 pane 에서 지금 무엇이 도는가**를 부모(세션 화면)에게 알린다. 목록 행의 모드 값은 낡을 수 있고
+  //   (노드 스냅샷이 옛 번들이면 «app-server» 라고 말한다), 그 값만 믿으면 멀쩡히 코덱스가 도는 터미널 위에
+  //   «여기 친 말은 Codex 에게 가지 않습니다» 라는 **거짓 경고**가 선다(원준님 실측 2026-09-25).
+  //   여기서 보는 것은 추측이 아니라 tmux 가 말한 포그라운드 명령이다 — 그것이 목록을 이긴다.
+  try { postPaneCmd(String(st.cmd || '')); } catch (_) { /* 부모가 없다(단독 탭) */ }
   pendingPaneState = st; // 바로 뒤따르는 백필의 커서 복원용
   lastStateAt = Date.now();
   // alt-screen 동기화 — 추측(옛 #252)이 아니라 tmux 실상태로. 앱 alt인데 클라 normal → 진입(#252 재접속 보정),
@@ -1205,7 +1308,28 @@ export function applyFit() {
     lastCols = term.cols; lastRows = term.rows;
     dlog('fit', term.cols + 'x' + term.rows);
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
+    if (glassOn) settleRedrawSoon();
   }
+}
+// ── 카드에서 크기가 바뀐 뒤 화면을 다시 맞춘다(원준 2026-10-07 «창으로 띄워서 대화할 때 커서가 랙걸려서 새로고침·화면복구를 해야 한다») ──
+//  카드가 되면 터미널이 한 번에 크게 줄고(세션 열 ~45줄 → 카드 ~11줄), 카드 크기를 끌거나 접었다 펴도 크기가 바뀐다.
+//  크기가 바뀌는 순간 xterm 은 제 버퍼를 새 폭으로 다시 접고, 서버 쪽 tmux 는 제 방식으로 다시 접는다. 둘이 어긋나면
+//  그 뒤의 커서 이동이 엉뚱한 줄을 지워 입력줄 · 커서가 제자리에 안 선다. [화면 복구]가 그것을 푸는 것은 tmux 의 화면을
+//  다시 받아 오기 때문이다 — 사람이 누르기 전에 같은 일을 한다. 크기가 멈춘 뒤 한 번만(끄는 동안 여러 번 바뀌어도).
+//  카드에서만 한다(glassOn = 카드인 동안 부모가 켠다). 세션 열의 터미널은 크기가 드물게 바뀌어 종전대로 둔다.
+//  ⚠ 치는 중에는 미룬다(격리 리뷰): 재캡처는 화면을 지우고 다시 받는다 — 한글 조합 중이거나 방금(1초 안) 친 글자가 있으면
+//   그 사이에 끼어 커서를 오히려 흔든다. 손이 멈출 때까지 다시 건다.
+const SETTLE_REDRAW_MS = 800;
+const SETTLE_QUIET_MS = 1000;
+let settleRedrawTimer: ReturnType<typeof setTimeout> | null = null;
+let lastInputAt = 0;   // 사람이 마지막으로 친 때(emitInput) — 재맞춤을 미룰지 가른다
+function settleRedrawSoon(): void {
+  if (settleRedrawTimer) clearTimeout(settleRedrawTimer);
+  settleRedrawTimer = setTimeout(() => {
+    settleRedrawTimer = null;
+    if (imeComposing || Date.now() - lastInputAt < SETTLE_QUIET_MS) { settleRedrawSoon(); return; }
+    if (ws && ws.readyState === 1) forceRedraw();
+  }, SETTLE_REDRAW_MS);
 }
 // 창 드래그 중 리사이즈 폭주 방지 — 디바운스.
 function doResize() { clearTimeout(resizeTimer); resizeTimer = setTimeout(applyFit, 130); }
@@ -1462,11 +1586,15 @@ function trackAppMouse(d) {
     const isUp = m[4] === 'm';
     if (b >= 64) continue;                                    // 휠 — 선택과 무관
     if (b >= 32) { if (!isUp && (b & 3) !== 3 && dragPress) dragMoved = true; continue; } // 눌린 채 이동(호버 3 제외)
-    if (!isUp) { dragPress = m[2] + ',' + m[3]; dragMoved = false; }
-    else {
+    if (!isUp) {
+      dragPress = m[2] + ',' + m[3]; dragMoved = false;
+      lastPress = { row: Number(m[3]) - 1, col: Number(m[2]) - 1, at: Date.now() }; // #4406 앱이 본 누름 — 합성 누름이 더블클릭으로 안 읽히게
+    } else {
       const pos = m[2] + ',' + m[3];
       const now = Date.now();
       if (dragPress && (dragMoved || dragPress !== pos)) {     // ① 드래그 — 연타 이력과는 무관한 새 선택
+        const [pc, pr] = dragPress.split(',').map(Number);   // #4406 사람이 끈 방향 — Shift+화살표가 이어받을 때 앵커 쪽
+        lastUserDrag = { press: { row: pr - 1, col: pc - 1 }, release: { row: Number(m[3]) - 1, col: Number(m[2]) - 1 }, at: now };
         appDragSelect = true; clickRun = 0; clickAt = 0; clickPos = '';
       } else {                                                 // ② 제자리 클릭 — 연타면 앱이 단어·줄을 선택한다
         clickRun = (clickPos === pos && now - clickAt <= MULTI_CLICK_MS) ? clickRun + 1 : 1;
@@ -1562,7 +1690,7 @@ const scheduleMouseFrame = (typeof requestAnimationFrame === 'function')
 export function flushMouseReports(): void {
   if (!mouseReportBuf) return;
   const d = mouseReportBuf; mouseReportBuf = ''; mouseFlushArmed = false;
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  emitInput(d); // #4406 — 합성 선택 op 와 섞이지 않게 같은 문으로
   // 드리프트 가드(#1302) — 리포트가 '실제로 나가는' 이 순간에만, 마지막 상태동기가 낡았을 때만 물어본다.
   if (Date.now() - lastStateAt > 8000 && Date.now() - lastMouseProbeAt > 8000) {
     lastMouseProbeAt = Date.now();
@@ -1570,7 +1698,9 @@ export function flushMouseReports(): void {
   }
 }
 export function handleTermData(d) {
-  userTyped = true;       // #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지)
+  //  #1059 — 이 탭에서 입력이 있었다 = 세션이 죽으면 '내가 끝냈을 수 있다'(자동 복원 금지).
+  //  ⚠ #4783 — 터미널이 저절로 내보낸 것(마우스·초점·자동 응답)은 세지 않는다(isAutoReply 머리말 — 마우스만 지나가도 «조작함» 이었다).
+  if (!isAutoReply(d)) userTyped = true;
   // 사파리 IME 어댑터의 삼킴(#1300) — beforeinput 이 예약한 '그 이벤트의 xterm 유출' 1회만 걸러낸다.
   if (imeSwallow !== null && d === imeSwallow) { imeSwallow = null; dlog('ime', 'swallow ' + diagPreview(d, 8)); return; }
   // 실제 전송 바이트 트레이스(IME 트레이스와 짝) — 마우스 리포트는 제외(링버퍼 오염 방지).
@@ -1579,7 +1709,7 @@ export function handleTermData(d) {
   //  Enter(\r)는 «보냈다» = 입력칸이 비었다는 뜻이라 스택을 통째로 비운다(안 비우면 새 프롬프트에 옛 글이 들어간다).
   if (!undoBusy) {
     if (d === '\r') undoStack.reset();
-    else { const n = countTyped(d); if (n === null) undoStack.breakRun(); else undoStack.type(n); }
+    else { const n = countTyped(d); if (n === null) undoStack.breakRun(); else undoStack.typeText(d); }
   }
   trackAppMouse(d);       // 앱 드래그 선택 관측(#1117 버그C — Cmd+C 브리지 발동 조건, 일반 타이핑 시 해제)
   spamGuard(d);           // 동일 청크 반복 전송 감지 → textarea 자가치유 + 진단(#1117 버그A 안전망)
@@ -1594,7 +1724,7 @@ export function handleTermData(d) {
   }
   // 비-마우스 입력 — 버퍼된 마우스를 먼저 비워 순서를 지키고(마우스→키), 즉시 보낸다(에코 지연 0).
   flushMouseReports();
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
+  emitInput(d); // #4406 — 선택을 지우는 중에 친 글자는 ⌫ 뒤로(순서 보존)
 }
 // 복사 경로는 셋 — ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭 ③ 앱(Claude Code)의 OSC52 복사 신호.
 //  · [#972] copy-on-select(드래그 놓는 즉시 자동복사, #252)는 되살리지 않는다 — 미세한 클릭드래그(4px)에도
@@ -1614,7 +1744,11 @@ export function setupOscClipboard() {
         if (b64 && b64 !== '?') {
           let text = '';
           try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
-          if (text) {
+          if (text && Date.now() < swallowOscUntil) {
+            // #4406 — 우리가 지우려고 세운 합성 선택에 앱이 붙이는 자동복사. 선택만으로 클립보드를 덮지 않는다(잘라내기는 우리가 쓴다).
+            swallowOscUntil = 0;
+            dlog('osc52', 'swallow synth len=' + text.length);
+          } else if (text) {
             dlog('osc52', 'len=' + text.length);
             lastOsc52At = Date.now();
             cancelBridgeMissHint(); // 앱 복사 신호 도착 — 브리지는 성공했다(안내 취소·이미 뜬 안내는 철회, 성공은 무음)
@@ -1630,11 +1764,7 @@ export function setupOscClipboard() {
   } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
-let pendingEnter: { timer: any } | null = null;   // 폰 보내기가 화면 확인을 기다리며 미뤄 둔 Enter(enterAfterEcho)
-function sendInput(d) {
-  if (pendingEnter) fireEnter('before next input');   // 폰 보내기가 Enter 를 미뤄 둔 사이의 입력 — Enter 가 먼저다(#4990)
-  if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } }
-}
+function sendInput(d) { emitInput(d); } // #4406 — 선택 지우기(op)가 도는 동안은 줄 선다(emitInput)
 // 붙여넣기 위생(#1117 버그B) — 클립보드가 어디서 왔든(타 터미널 화면·웹페이지·앱) '보이는 텍스트'만 넣는다.
 //  · CR/CRLF/유니코드 줄구분자(U+2028/29) → \n 정규화 — 터미널에서 \r 은 Enter 로 해석돼 의도치 않은 '제출'이 된다.
 //  · ESC 시퀀스(CSI/OSC/DCS/…)·C0 제어문자(탭·개행 제외)·C1 제거 — ① 화면캡처 유래 제어 바이트(커서이동·삭제·색)가
@@ -1658,9 +1788,14 @@ export function pasteText(t) {
   t = sanitizePasteText(t);
   if (!t) return;
   dlog('paste', 'len=' + t.length + (/\n/.test(t) ? ' multiline' : ''));
+  if (/\n/.test(t)) {
+    pastedTextNo++;
+    toast('[붙여넣은 텍스트 #' + pastedTextNo + ' +' + (t.split('\n').length - 1) + '줄]');
+  }
   if (/\n/.test(t)) sendInput('\x1b[200~' + t + '\x1b[201~');
   else sendInput(t);
 }
+let pastedTextNo = 0;
 // 자동 전송 — 프로젝트 '클로드로 실행'이 만든 세션이면, 부팅이 끝나 클로드가 입력을 받을 때 프롬프트를 1회 주입.
 //  ?autosend=1 + localStorage 핸드오프(같은 브라우저). 재연결엔 재전송 안 함(autosendDone).
 //  ⚠ 트리거는 '출력 1.6s 침묵/12s 하드캡'으로 '시작'하되, 그것만 믿고 blind Enter 하지 않는다 — 인증 MCP·SessionStart 훅이
@@ -1866,6 +2001,7 @@ let selEls: any[] = [];
 let selBusy: { y: number; x0: number; y1: number; x1: number; curAtEnd: boolean } | null = null; // 걷는 중 — 그동안 선택 모양은 이것으로 고정
 const undoStack = new UndoStack();
 let undoBusy = false; // 되돌리기가 스스로 만든 입력을 다시 기록하지 않게
+let inputSelectArmed = false; // 빈 입력에서도 두 번째 ⌘A는 터미널 전체 선택으로 승격한다.
 const SEL_MAX_ROWS = 40;      // 이보다 멀리 벌어진 선택은 입력칸이 아니다(스크롤백까지 번진 것) — 선택 없음으로 본다
 const PROMPT_GLYPH = /^[›❯>]$/; // Codex «›» · Claude Code «❯» · 셸류 «>» — 입력의 첫 행 머리
 
@@ -1971,6 +2107,7 @@ function clearSel(why?: string): void {
   if (selBusy) return; // 걷는 중엔 거두지 않는다 — 끝나면 스스로 거둔다
   if (selAnchor && why) dlog('sel-off', why);
   selAnchor = null;
+  inputSelectArmed = false;
   removeSelEls();
 }
 function removeSelEls(): void {
@@ -2106,6 +2243,344 @@ function extendSel(seq: string, cross?: number): void {
   else if (cross && cross > 0 && c.x >= rowEnd(c.y) && rowEnd(c.y + 1) > 2 && blankCh(cellAt(c.y + 1, 0)) && blankCh(cellAt(c.y + 1, 1))) seq = SEQ.right + seq;
   sendInput(seq);
 }
+function isTerminalInputFocused(): boolean {
+  try { return !!term && (document.activeElement === term.textarea || !!(term.element && term.element.contains(document.activeElement))); } catch (_) { return false; }
+}
+/** ⌘A 첫 번: 앱이 아는 Home/End로 현재 입력줄만 선택한다. 출력·대화 이력은 절대 포함하지 않는다. */
+function selectCurrentInput(): void {
+  clearSel('select-input');
+  inputSelectArmed = true;
+  sendInput(SEQ.home);
+  // Home의 결과는 PTY 왕복 뒤 xterm 버퍼에 반영된다. 그 실제 커서 자리를 앵커로 삼아 End까지 넓힌다.
+  setTimeout(() => { if (inputSelectArmed && isTerminalInputFocused()) extendSel(SEQ.end); }, 45);
+}
+function selectWholeTerminal(): void {
+  clearSel('select-all');
+  try { term.selectAll(); } catch (_) { /* noop */ }
+}
+
+// ── 마우스는 pane 의 것이다 (#4406) ────────────────────────────────────────────────
+//  누름·끌기·놓기를 여기서 가로채지 않는다. 웹이 하는 일은 하나 — 사람이 마우스를 쓰기 시작하면 키보드로 세운 우리
+//  선택(Shift+방향키, 위 selAnchor)을 거둔다. 그 뒤의 선택은 마우스를 받은 쪽이 그린다.
+//   · 앱이 마우스를 켠 pane(Claude Code 전체화면 — 1003+SGR): 입력칸 클릭 = 그 글자 앞으로 커서 · 끌기 = 선택 ·
+//     선택한 채 Backspace/Delete = 그 글자만 지우기 — **앱이 스스로 한다**(2.1.283 바이너리: 입력칸 onClick 이 글자 폭을
+//     재어 커서를 옮기고, 선택 삭제는 useInputSelectionBridge). 실측(격리 tmux): «반갑습니다» 를 끌고 Backspace → 그 다섯 글자만.
+//     목록(권한 질문 등)도 항목 클릭을 앱이 받는다 — 그때는 포커스 항목이 커서를 쥐므로 «커서 행» 은 입력줄이 아닐 수 있다.
+//   · 마우스를 안 켠 pane(Codex 0.157.1 실측 any=0 · 셸): xterm 이 스스로 선택한다(끌기 = 선택, ⌘C 복사).
+//  ⚠ 되살리지 말 것 — 입력줄 끌기를 가로채 «누른 칸 수만큼 ←/→» 로 앱 커서를 끌고 다니던 판(d39e1ba4)은 ① 한글은 글자
+//   하나가 두 칸이라 두 배를 갔고 ② PTY 왕복을 기다리지 않고 18ms 마다 다시 보내 넘치고 되돌아오기를 반복했다.
+//   실측(그 알고리즘을 실제 Claude Code 에 재생): «반» 을 한 번 누르자 방향키 38개가 나가 앵커가 줄 맨 앞에 박혔고,
+//   «다» 까지 끌어 두면 커서가 19↔23 칸을 끝없이 오갔다 — 원준님 신고 «이상한 곳이 선택되고 계속 바뀐다» 그대로다.
+//   가로챈 누름은 앱에 닿지 않아 입력칸 클릭·끌기·선택 지우기까지 함께 죽었다. 되살리려면 먼저 이 머리말의 실측을 이겨야 한다.
+export function wireInputLineMouse(host: HTMLElement): void {
+  host.addEventListener('mousedown', () => { clearSel('mouse'); clearAppSel('mouse'); }, true);
+}
+
+// ── Claude Code 입력칸 선택 (#4406 후속) ────────────────────────────────────────────
+//  원준님 2026-09-28: «⌘↓·↑↓ 로 윗줄 아랫줄까지 선택이 안 되고 ⌘X 가 여전히 안 된다». #3778 의 합성 선택은 줄을 못 넘는다
+//  (글자 수를 화면에서 셀 수 없어서 — app-select.ts 머리말). Claude Code 는 **자기 화면 선택을 지우는 법**을 스스로 안다.
+//  그래서 이 판에서는 — ① 선택하는 동안은 앱에 아무것도 안 보내고 웹이 글자 단위로 범위를 정해 칠한다(끌 때 튀던 d39e1ba4 의
+//  «방향키로 앱 커서 끌기» 가 없다) ② 지우기·잘라내기·덮어쓰기 순간에만 합성 끌기로 그 범위를 앱에 선택시키고, **앱이 정확히
+//  그 칸들을 칠한 것을 화면에서 확인한 뒤** Backspace 한 번 ③ 확인이 안 되면 지우지 않는다. 그동안 친 글자는 줄 세웠다가 뒤에 보낸다.
+//  적용: 서버가 appMouse(Claude Code)라 답했고 · 마우스 보고가 켜져 있고(전체화면) · 커서가 입력칸 안일 때. 그 밖은 #3778 그대로.
+type AppSel = { a: AsPos; f: AsPos; goal: number | null; fp: string; top: number };
+let asel: AppSel | null = null;
+let aselEls: HTMLElement[] = [];
+let lastPress: { row: number; col: number; at: number } | null = null; // 앱이 본 마지막 누름(사람·합성) — 더블클릭 오인 방지
+let lastUserDrag: { press: AsPos; release: AsPos; at: number } | null = null; // 사람이 끈 방향 — 이어받을 때 앵커 쪽
+let opBusy = false;              // 합성 선택 → 확인 → ⌫ 가 도는 중 — 그동안 나가는 입력은 줄 세운다(순서 보존)
+const opQueue: string[] = [];
+let swallowOscUntil = 0;         // 합성 선택에 앱이 붙이는 자동복사(OSC52)는 클립보드에 안 쓴다(선택만으로 클립보드를 덮지 않는다)
+
+function appSelActive(): boolean {
+  try {
+    if (prefs().lineSelect === false) return false;
+    if (!TERM_UI.appMouse) return false;
+    const m = term.modes && term.modes.mouseTrackingMode;
+    if (!m || m === 'none') return false;
+    if (term.buffer.active.type !== 'alternate') return false;
+    // 판을 알 때(네이티브 설치 = 실행 파일 이름이 판)는 실측한 판 이상만. 모르면(매니지드 box-spawn·node) 켠다.
+    const cmd = lastKnownState ? String(lastKnownState.cmd || '') : '';
+    if (/^\d+\.\d+\.\d+$/.test(cmd) && !versionAtLeast(cmd, APP_SELECT_MIN)) return false;
+    return true;
+  } catch (_) { return false; }
+}
+/** 지금 화면(앱의 활성 페이지)을 순수 모듈이 읽는 모양으로. 행 = 화면 행(SGR 좌표와 같은 축). */
+function termScreen(): AsScreen | null {
+  let b: any;
+  try { b = term.buffer.active; } catch (_) { return null; }
+  const cols = term.cols, rows = term.rows, base = b.baseY, cache = new Map<number, any[]>();
+  return {
+    cols, rows,
+    row(r: number) {
+      if (r < 0 || r >= rows) return null;
+      const hit = cache.get(r);
+      if (hit) return hit;
+      const line = b.getLine(base + r);
+      if (!line) return null;
+      const out: any[] = [];
+      let c: any;
+      for (let x = 0; x < cols; x++) {
+        c = line.getCell(x, c);
+        if (!c) { out.push({ ch: ' ', w: 1, bg: false, dim: false }); continue; }
+        out.push({ ch: c.getChars() || ' ', w: c.getWidth(), bg: !c.isBgDefault() || !!c.isInverse(), dim: !!c.isDim() });
+      }
+      cache.set(r, out);
+      return out;
+    },
+  };
+}
+function aselGeom(): { s: AsScreen; b: AsBox; caret: AsPos } | null {
+  if (!appSelActive()) return null;
+  const s = termScreen();
+  if (!s) return null;
+  const buf = term.buffer.active;
+  const caret = { row: buf.cursorY, col: buf.cursorX };
+  const b = findBox(s, caret);
+  return b ? { s, b, caret } : null;
+}
+/** 세워 둔 선택을 지금 화면 좌표로. 입력칸 글자가 바뀌었으면(앱이 다시 그렸다) 낡은 선택이다 — 거둔다. */
+function aselNow(g: { s: AsScreen; b: AsBox }): { a: AsPos; f: AsPos } | null {
+  if (!asel) return null;
+  if (boxFingerprint(g.s, g.b) !== asel.fp) { clearAppSel('stale'); return null; }
+  const d = g.b.top - asel.top;
+  return { a: { row: asel.a.row + d, col: asel.a.col }, f: { row: asel.f.row + d, col: asel.f.col } };
+}
+function clearAppSel(why?: string): void {
+  if (asel && why) dlog('asel-off', why);
+  asel = null;
+  drawAppSel();
+}
+/** 칠하기 — #3778 과 같은 반투명 파랑(.term-sel). 줄을 넘는 선택은 그 줄 끝 한 칸을 더 칠해 «줄바꿈도 들었다» 를 보인다. */
+function drawAppSel(): void {
+  const g = asel ? aselGeom() : null;
+  const r = g ? aselNow(g) : null;
+  const segs: { row: number; x0: number; x1: number }[] = [];
+  if (g && r && asCmp(r.a, r.f) !== 0) {
+    const s = asCmp(r.a, r.f) < 0 ? r.a : r.f, e = asCmp(r.a, r.f) < 0 ? r.f : r.a;
+    for (let row = s.row; row <= e.row; row++) {
+      const x0 = row === s.row ? s.col : g.b.start;
+      const x1 = row === e.row ? e.col : Math.min(g.s.cols, lineEnd(g.s, g.b, row, g.caret) + 1);
+      if (x1 > x0) segs.push({ row, x0, x1 });
+    }
+  }
+  let scr: any = null;
+  try { scr = (term.element && term.element.querySelector('.xterm-screen')) || null; } catch (_) { /* noop */ }
+  while (aselEls.length > segs.length) { const d = aselEls.pop(); try { d && d.remove(); } catch (_) { /* noop */ } }
+  if (!scr || !segs.length) return;
+  const rect = scr.getBoundingClientRect(), cw = rect.width / term.cols, ch = rect.height / term.rows;
+  let view = 0;
+  try { view = term.buffer.active.baseY - term.buffer.active.viewportY; } catch (_) { /* noop */ }
+  segs.forEach((sg, i) => {
+    let d = aselEls[i];
+    if (!d) { d = el('div', { class: 'term-sel' }); scr.appendChild(d); aselEls[i] = d; }
+    d.style.left = (sg.x0 * cw) + 'px';
+    d.style.top = ((sg.row + view) * ch) + 'px';
+    d.style.width = ((sg.x1 - sg.x0) * cw) + 'px';
+    d.style.height = ch + 'px';
+  });
+}
+let pendingEnter: { timer: any } | null = null;   // 폰 보내기가 화면 확인을 기다리며 미뤄 둔 Enter(enterAfterEcho)
+/** 모든 PTY 입력의 한 문 — op 가 도는 동안은 줄 세운다(⌫ 보다 먼저 친 글자가 나가면 엉뚱한 자리에 들어간다). */
+function emitInput(d: string): void {
+  lastInputAt = Date.now();
+  if (pendingEnter) fireEnter('before next input');   // 폰 보내기가 Enter 를 미뤄 둔 사이의 입력 — Enter 가 먼저다(#4990)
+  if (opBusy) { opQueue.push(d); return; }
+  rawInput(d);
+}
+function rawInput(d: string): void { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d })); } catch (_) { /* noop */ } } }
+let opWatchdog: any = null;
+/** op 시작 — 입력을 줄 세운다. 어떤 이유로든 끝이 안 불리면 3초 뒤 스스로 푼다(입력이 영영 막히면 그게 가장 큰 사고다). */
+function beginOp(): void {
+  opBusy = true;
+  clearTimeout(opWatchdog);
+  opWatchdog = setTimeout(() => { if (opBusy) { dlog('asel-op', 'watchdog'); endOp(); } }, 3000);
+}
+function endOp(): void {
+  clearTimeout(opWatchdog); opWatchdog = null;
+  opBusy = false;
+  while (opQueue.length && !opBusy) rawInput(opQueue.shift() as string);
+}
+/** 합성 누름을 보낸다 — 더블클릭 판정 창을 피해 기다린 뒤(pressPlan), 그 사이 입력칸이 바뀌었으면 그만둔다. */
+function sendPress(seq: (press: 'first' | 'last') => string, first: AsPos, lastCell: AsPos, fp: string, then: (ok: boolean) => void): void {
+  const plan = pressPlan(lastPress, first, lastCell, Date.now());
+  const go = (): void => {
+    const g = aselGeom();
+    if (!g || boxFingerprint(g.s, g.b) !== fp) { then(false); return; }
+    const p = plan.press === 'first' ? first : lastCell;
+    rawInput(seq(plan.press));
+    lastPress = { row: p.row, col: p.col, at: Date.now() };
+    then(true);
+  };
+  if (plan.wait > 0) setTimeout(go, plan.wait); else go();
+}
+/** 앱이 우리 범위를 칠했는지 화면에서 확인한다(최대 ~0.9초 — 매니지드 왕복 중앙값 30ms, 최대 64ms 실측의 넉넉한 배수). */
+function waitHighlight(first: AsPos, lastCell: AsPos, top: number, done: (ok: boolean) => void): void {
+  const until = Date.now() + 900;
+  const tick = (): void => {
+    let lit = false;
+    try { const g = aselGeom(); lit = !!(g && g.b.top === top && highlightMatches(g.s, g.b, first, lastCell)); } catch (_) { /* 아래 시간 끝 */ }
+    if (lit) { done(true); return; }
+    if (Date.now() > until) { done(false); return; }
+    setTimeout(tick, 16);
+  };
+  tick();
+}
+/**
+ * 지우기·잘라내기·덮어쓰기 — 합성 끌기로 앱에 선택시키고, 앱이 그 칸들을 칠한 걸 확인한 뒤 ⌫ 하나.
+ *  from/to 는 캐럿 자리(칸 사이). 이미 앱이 그 범위를 칠해 둔 경우(마우스 선택 이어받기)엔 끌기를 건너뛴다.
+ */
+function runAppSelOp(kind: 'del' | 'cut' | 'replace', from: AsPos, to: AsPos, g: { s: AsScreen; b: AsBox; caret: AsPos }, alreadyLit = false): void {
+  const cells = rangeCells(from, to);
+  if (!cells) { clearAppSel('empty'); return; }
+  const text = appSelText(g.s, g.b, asCmp(from, to) < 0 ? from : to, asCmp(from, to) < 0 ? to : from, g.caret);
+  if (kind === 'cut') copyText(text, false, true); // 제스처 안(키 입력) — 사파리도 동기 복사가 된다
+  const fp = boxFingerprint(g.s, g.b), top = g.b.top;
+  clearAppSel(kind);
+  beginOp();
+  const finish = (ok: boolean): void => {
+    if (ok) {
+      rawInput('\x7f');                       // 앱: 선택한 채 Backspace = 그 범위를 입력칸에서 지운다(tryDelete)
+      undoStack.push({ k: 'text', text });    // 합성 되돌리기(판을 모를 때)는 이 글자를 제자리에 다시 넣는다
+      dlog('asel-' + kind, 'chars=' + Array.from(text).length);
+      endOp();
+      return;
+    }
+    // 앱이 다른 곳을 칠했거나 안 칠했다 — 지우지 않는다. 앱에 남은(어긋난) 선택은 캐럿 클릭으로 거둔다:
+    //  남겨 두면 사람이 이어 누르는 Backspace 가 앱에서 **그 어긋난 범위**를 지운다.
+    dlog('asel-abort', kind);
+    toast(kind === 'cut' ? '선택이 화면과 맞지 않아 지우지는 않았어요 — 클립보드엔 복사됐어요' : '선택이 화면과 맞지 않아 지우지 않았어요 — 다시 선택해 주세요', true);
+    const g2 = aselGeom();
+    if (g2 && !alreadyLit) sendPress(() => clickSeq(g2.caret), g2.caret, g2.caret, boxFingerprint(g2.s, g2.b), () => endOp());
+    else endOp();
+  };
+  if (alreadyLit) { finish(true); return; }
+  sendPress((press) => { swallowOscUntil = Date.now() + 1500; return dragSeq(cells.first, cells.last, press, g.s.cols); },
+    cells.first, cells.last, fp, (sent) => { if (!sent) { finish(false); return; } waitHighlight(cells.first, cells.last, top, finish); });
+}
+/** 캐럿을 p 로(합성 클릭) — 앱은 입력칸 클릭을 «그 글자 앞으로» 받는다(글자 폭 인지). 이미 거기면 보내지 않는다. */
+function moveCaretTo(p: AsPos, g: { s: AsScreen; b: AsBox; caret: AsPos }): void {
+  clearAppSel('caret');
+  if (p.row === g.caret.row && p.col === g.caret.col) return;
+  beginOp();
+  sendPress(() => clickSeq(p), p, p, boxFingerprint(g.s, g.b), () => endOp());
+}
+/** 사람이 끌어 둔 앱 선택(입력칸 안)을 이어받는다 — 앵커는 사람이 누른 쪽. 앱의 칠함은 캐럿 클릭으로 거둔다(두 겹 방지). */
+function adoptAppHighlight(g: { s: AsScreen; b: AsBox; caret: AsPos }): { a: AsPos; f: AsPos } | null {
+  const h = scanHighlight(g.s, g.b);
+  if (!h) return null;
+  const r = cellsToRange(g.s, h.first, h.last);
+  const pressedLast = !!(lastUserDrag && Date.now() - lastUserDrag.at < 120000
+    && lastUserDrag.press.row === h.last.row && Math.abs(lastUserDrag.press.col - h.last.col) <= 1);
+  return pressedLast ? { a: r.to, f: r.from } : { a: r.from, f: r.to };
+}
+/** 키 하나를 이 판의 규칙으로 처리했으면 true(= keydown 끝). 덮어쓰기는 지우기를 걸고 false(= 글자는 흘러가 줄 선다). */
+function handleAppSelKey(e: any): boolean {
+  if (selBusy) return false; // #1155 가 여러 행 선택을 지우려고 커서를 걷는 중 — 그쪽 보호(키 삼킴)에 맡긴다
+  if (!appSelActive()) { if (asel) clearAppSel('inactive'); return false; }
+  // 화면은 필요할 때만 읽는다 — 선택이 없으면 판정에 필요 없고, 타이핑 한 글자마다 입력칸을 훑을 이유가 없다.
+  let g = asel ? aselGeom() : null;
+  const cur = g ? aselNow(g) : null;
+  const hasSel = !!(cur && asCmp(cur.a, cur.f) !== 0);
+  const act = decideAppSelKey(e, { mac: IS_MAC, hasSel });
+  if (act.k === 'pass') {
+    // 마우스로 끌어 둔 입력칸 선택(앱 선택) 위에 글자를 치면 갈아치운다 — 앱은 선택을 거두고 캐럿 자리에 넣기만 한다.
+    //  앱 선택을 관측했을 때(appDragSelect)만 화면을 읽는다 — 평소 타이핑엔 비용이 없다.
+    if (!hasSel && appDragSelect && !opBusy && isTypingKey(e)) {
+      const g2 = aselGeom();
+      const h = g2 ? scanHighlight(g2.s, g2.b) : null;
+      if (g2 && h) { const r = cellsToRange(g2.s, h.first, h.last); runAppSelOp('replace', r.from, r.to, g2, true); }
+    }
+    return false;
+  }
+  // 앞 op(합성 끌기 → 확인 → ⌫)가 도는 중이면 선택을 바꾸는 키는 받지 않는다 — 두 번째 합성 누름이 첫 op 의 칠함 위에서
+  //  시작되면 확인이 엇갈린다(격리 리뷰 지적). 글자는 위에서 이미 흘러 줄 선다(op 뒤에 나간다).
+  if (opBusy && act.k !== 'clear' && act.k !== 'replace') { e.preventDefault(); return true; }
+  if (!g) g = aselGeom();
+  if (!g) { if (asel) clearAppSel('no-box'); return false; } // 입력칸이 아니다(목록·대화상자) — 종전 그대로
+  if (act.k === 'clear') { clearAppSel('key:' + (e.key || '?')); return false; }
+  if (act.k === 'replace') {
+    // 지우기를 걸고 키는 흘린다 — 그 키가 낼 글자(IME 음절 포함)는 op 가 끝날 때까지 줄 선다. preventDefault 금지(#1300 계열).
+    if (cur) runAppSelOp('replace', cur.a, cur.f, g);
+    return false;
+  }
+  e.preventDefault(); // #633 계열: return false 는 xterm 자체 처리만 막는다 — 브라우저 기본동작도 막는다
+  if (act.k === 'extend') {
+    let base = cur;
+    if (!base) {
+      const adopted = adoptAppHighlight(g);
+      if (adopted) {
+        base = adopted;
+        beginOp(); // 앱의 칠함을 거두는 클릭 — 그동안 친 것은 뒤로
+        sendPress(() => clickSeq(g.caret), g.caret, g.caret, boxFingerprint(g.s, g.b), () => endOp());
+      } else {
+        const c = { row: g.caret.row, col: g.caret.col };
+        base = { a: c, f: c };
+      }
+    }
+    const mv = move(g.s, g.b, base.f, act.m as AsMotion, asel ? asel.goal : null, g.caret);
+    asel = { a: base.a, f: mv.pos, goal: mv.goal, fp: boxFingerprint(g.s, g.b), top: g.b.top };
+    dlog('asel', act.m + ' a=' + base.a.row + ':' + base.a.col + ' f=' + mv.pos.row + ':' + mv.pos.col);
+    drawAppSel();
+    return true;
+  }
+  if (act.k === 'caret') {
+    const t = move(g.s, g.b, g.caret, act.m, null, g.caret).pos;
+    moveCaretTo(t, g);
+    return true;
+  }
+  if (act.k === 'collapse' && cur) {
+    const s = asCmp(cur.a, cur.f) < 0 ? cur.a : cur.f, en = asCmp(cur.a, cur.f) < 0 ? cur.f : cur.a;
+    moveCaretTo(act.to === 'start' ? s : en, g);
+    return true;
+  }
+  if (act.k === 'selectInput') {
+    const a = move(g.s, g.b, g.caret, 'inputStart', null, g.caret).pos, f = move(g.s, g.b, g.caret, 'inputEnd', null, g.caret).pos;
+    asel = { a, f, goal: null, fp: boxFingerprint(g.s, g.b), top: g.b.top };
+    drawAppSel();
+    return true;
+  }
+  if (act.k === 'selectTerminal') { clearAppSel('select-all'); selectWholeTerminal(); return true; }
+  if (act.k === 'copy' && cur) {
+    const s = asCmp(cur.a, cur.f) < 0 ? cur.a : cur.f, en = asCmp(cur.a, cur.f) < 0 ? cur.f : cur.a;
+    copyText(appSelText(g.s, g.b, s, en, g.caret), false, true);
+    return true;
+  }
+  if (act.k === 'del' && cur) { runAppSelOp('del', cur.a, cur.f, g); return true; }
+  if (act.k === 'cut') {
+    if (cur && hasSel) { runAppSelOp('cut', cur.a, cur.f, g); return true; }
+    // 우리 선택이 없으면 앱이 칠해 둔 선택(마우스)을 자른다 — 이미 칠해져 있으니 끌기 없이 ⌫ 만.
+    const h = scanHighlight(g.s, g.b);
+    if (h) { const r = cellsToRange(g.s, h.first, h.last); runAppSelOp('cut', r.from, r.to, g, true); return true; }
+    if (appDragSelect) { toast('입력칸 안의 글자만 잘라낼 수 있어요 — 대화 글은 ⌘C 로 복사하세요', true); return true; }
+    return false; // 자를 게 없다 — 키는 종전대로(Windows Ctrl+X 는 앱의 단축키일 수 있다)
+  }
+  return false;
+}
+/**
+ * 선택 표시·마우스 배선 한 벌 — boot() 와 런타임 시험(scripts/term-input-select-runtime.test.mjs)이 **같은 함수**를 건다.
+ *  입력줄 선택 표시(#3778)는 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
+ */
+export function wireInputSelection(host: HTMLElement): void {
+  try { term.onRender(drawSel); } catch (_) { /* noop */ }
+  try { term.onScroll(drawSel); } catch (_) { /* noop */ }
+  try { term.onRender(drawAppSel); } catch (_) { /* noop */ }
+  try { term.onScroll(drawAppSel); } catch (_) { /* noop */ }
+  wireInputLineMouse(host);
+}
+/** 사람이 붙여넣을 때 선택이 서 있으면 먼저 지운다(편집기 관례 — 붙여넣기는 선택을 갈아치운다). */
+function pasteReplacingSel(t: string): void {
+  if (t && !opBusy && (asel || appDragSelect)) {
+    const g = aselGeom();
+    const cur = g && asel ? aselNow(g) : null;
+    if (g && cur && asCmp(cur.a, cur.f) !== 0) runAppSelOp('replace', cur.a, cur.f, g);
+    else if (g && appDragSelect) { // 마우스로 끌어 둔 입력칸 선택 — ⌘X 와 같은 길(앱 칠함을 읽어 그대로 ⌫)
+      const h = scanHighlight(g.s, g.b);
+      if (h) { const r = cellsToRange(g.s, h.first, h.last); runAppSelOp('replace', r.from, r.to, g, true); }
+    }
+  }
+  pasteText(t);
+}
 function doUndo(): void {
   // 앱이 되돌리기를 스스로 가진 판이면 앱의 것을 부르고 합성은 보내지 않는다(#3864 — 둘 다 보내면 두 번 되돌아간다).
   //  판은 가장 최근에 받은 pane 상태의 포그라운드 명령으로 판정한다(nativeUndoOk). 모르면 아래 합성.
@@ -2126,12 +2601,30 @@ function doUndo(): void {
   } finally { setTimeout(() => { undoBusy = false; }, 0); }
   dlog('undo', e.k + (e.k === 'typed' ? ' n=' + e.n : ''));
 }
+function doRedo(): void {
+  // Claude의 네이티브 undo는 그 앱의 자체 이력을 쓰므로 웹이 안전하게 역연산할 근거가 없다.
+  // Codex와 구 Claude의 웹 합성 경로는 아래에서 실제 텍스트를 재적용한다.
+  if (nativeUndoOk(lastKnownState ? lastKnownState.cmd : '')) { toast('이 버전의 Claude 입력창은 다시하기를 제공하지 않아요', true); return; }
+  const next = undoStack.peekRedo();
+  if (!next) { toast('다시할 것이 없어요'); return; }
+  if (next.k === 'yank' || (next.k === 'typed' && !next.text)) { toast('이 삭제는 안전하게 다시할 수 없어요', true); return; }
+  const e = undoStack.redo();
+  if (!e) return;
+  undoBusy = true;
+  try {
+    if (e.k === 'typed') sendInput(e.text || '');
+    else if (e.k === 'text') sendInput(SEQ.back.repeat(Array.from(e.text).length));
+  } finally { setTimeout(() => { undoBusy = false; }, 0); }
+  dlog('redo', e.k + (e.k === 'typed' ? ' n=' + e.n : ''));
+}
 /** 이 키를 line-edit 규칙으로 처리했으면 true(= keydown 을 여기서 끝낸다). */
 function handleLineEditKey(e: any): boolean {
+  // #4406 — Claude Code 입력칸(앱이 선택을 그리는 화면)이면 그 판의 규칙이 먼저다. 아니면 아래 #3778 그대로.
+  if (handleAppSelKey(e)) return true;
   const p = prefs();
   // 여러 행 선택을 지우려고 앱 커서를 걷는 동안(walkDeleteSel)엔 키를 받지 않는다 — 걷는 중 친 글자는 중간 자리에 박힌다.
   if (selBusy) { e.preventDefault(); return true; }
-  const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange(), select: p.lineSelect !== false });
+  const act = decideKey(e, { mac: IS_MAC, hasSel: !!selRange() || inputSelectArmed, select: p.lineSelect !== false, inputActive: isTerminalInputFocused() });
   if (act.k === 'pass') return false;
   if (act.k === 'clear') { clearSel('key:' + (e.key || '?')); return false; }
   if (act.k === 'delThenPass') {
@@ -2152,7 +2645,11 @@ function handleLineEditKey(e: any): boolean {
   }
   e.preventDefault(); // #633 계열: return false 는 xterm 자체 처리만 막고 브라우저 기본동작은 안 막는다
   if (act.k === 'undo') { doUndo(); return true; }
+  if (act.k === 'redo') { doRedo(); return true; }
   if (act.k === 'copy') { copySel(); return true; }
+  if (act.k === 'cut') { copySel(); deleteSel(); return true; }
+  if (act.k === 'selectInput') { selectCurrentInput(); return true; }
+  if (act.k === 'selectAll') { selectWholeTerminal(); return true; }
   if (act.k === 'del') { deleteSel(); return true; }
   if (act.k === 'send') {
     clearSel('send');
@@ -2222,7 +2719,7 @@ export function setupClipboard() {
       //  보내면 음절보다 앞서 커서가 움직여 '야바보'가 되므로, setTimeout(0)로 미뤄 '음절 → 단어이동' 순서를 맞춘다.
       if (e.isComposing) return false; // ① 조합 중 keydown: IME 자연확정 방해 금지(아무 동작 안 함)
       const dSeq = wordSeq;            // ② 비조합 keydown: 단어이동을 한 틱 미뤄(비동기 음절 전송 뒤로) 보냄
-      setTimeout(() => { if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: dSeq })); } catch (_) { /* noop */ } } }, 0);
+      setTimeout(() => emitInput(dSeq), 0);
       return false;
     }
     // Alt/Option + Backspace = 커서 앞 '단어' 삭제(^W). Windows 크롬은 Ctrl+W 를 '탭 닫기'로 가로채 단어삭제로
@@ -2230,7 +2727,7 @@ export function setupClipboard() {
     //  셸·Claude 입력 모두 backward-kill-word 로 동작(Mac 은 Option+Backspace).
     if (e.altKey && !e.ctrlKey && !e.metaKey && e.key === 'Backspace') {
       e.preventDefault(); // #633: 같은 이유 — Alt+Backspace 브라우저 기본 'textarea 단어삭제'가 IME 상태를 깨뜨린다(우리 ^W 는 그대로 전송).
-      if (ws && ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'i', d: '\x17' })); } catch (_) { /* noop */ } }
+      emitInput('\x17');
       return false;
     }
     const mod = e.ctrlKey || e.metaKey;
@@ -2249,8 +2746,13 @@ export function setupClipboard() {
       //  [#1117 버그C] 단, '무조건 브리지'는 사고를 냈다 — 선택이 없을 때 Cmd+C 를 누르면 앱엔 취소(^C)라서,
       //  두 번 누르면 Claude 가 종료됐다(복사하려다 앱을 죽임). 그래서 '앱 화면에서 드래그 선택이 실제로 관측된
       //  경우'(appDragSelect — onData 로 나가는 SGR 마우스 리포트를 trackAppMouse 가 추적)에만 브리지하고,
-      //  아니면 아무 것도 보내지 않고 안내만 띄운다. Ctrl+C 는 게이팅하지 않는다(중단 기능이 본래 의미).
-      if (e.metaKey && !e.ctrlKey) {
+      //  아니면 아무 것도 보내지 않고 안내만 띄운다. Windows Ctrl+C도 관측된 선택일 때만 같은 브리지를 쓴다.
+      const macCopy = e.metaKey && !e.ctrlKey;
+      // Windows의 Ctrl+C는 선택이 없으면 본래의 중단 키다. 단, 앱이 관리하는 마우스 선택을 방금 관측했을
+      // 때만 macOS의 Cmd+C와 같은 복사 브리지로 소비한다. 이 조건이 없으면 Ctrl+C를 복사로 오인해 앱을
+      // 취소·종료시키거나, 반대로 선택 없는 중단을 막게 된다.
+      const windowsObservedCopy = !IS_MAC && e.ctrlKey && !e.metaKey && mouseOn && appDragSelect;
+      if (macCopy || windowsObservedCopy) {
         if (mouseOn) {
           // ⚠ 관측은 '1회용'이다(#1117 후속, 사파리 실기기 사고): 앱(CC)은 복사 후·출력 후 선택을 스스로 잃는데
           //  우리는 그걸 볼 수 없다. 관측을 소비하지 않으면 Cmd+C 연타의 2번째부터가 선택 없는 ^C(= 취소,
@@ -2353,9 +2855,9 @@ function schedulePasteFallback() {
       for (const it of its) {
         const t = (it.types || []).find((x) => x.startsWith('image/'));
         if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
-        else if (!textDone && (it.types || []).includes('text/plain')) { textDone = true; pasteText(await (await it.getType('text/plain')).text()); }
+        else if (!textDone && (it.types || []).includes('text/plain')) { textDone = true; pasteReplacingSel(await (await it.getType('text/plain')).text()); }
       }
-    }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
+    }).catch(() => navigator.clipboard.readText().then((t) => pasteReplacingSel(t)).catch(() => { /* noop */ }));
   }, 60);
 }
 // 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
@@ -2374,7 +2876,7 @@ export function setupPaste() {
       return;
     }
     const text = dt.getData('text/plain') || dt.getData('text') || '';
-    if (text) { e.preventDefault(); e.stopImmediatePropagation(); cancelPasteFallback(); dlog('paste-src', 'native'); pasteText(text); }
+    if (text) { e.preventDefault(); e.stopImmediatePropagation(); cancelPasteFallback(); dlog('paste-src', 'native'); pasteReplacingSel(text); }
   }, true);
 }
 
@@ -2386,6 +2888,38 @@ function cellHeightPx() {
   } catch (_) { return 17; }
 }
 
+/**
+ * 휠 한 번 → 몇 줄(normal buffer 의 로컬 스크롤) · 앱에 보낼 SGR 휠 틱 수(alt-screen + 앱 마우스모드). 순수 함수다 —
+ *  세션 대화창(web/lib/term-prefs.ts termWheelTicks)이 같은 셈을 옮겨 적어 터미널과 같은 줄 수로 굴러가고(#4797),
+ *  scripts/term-prefs-parity.test.mjs 가 이 함수와 맞댄다. acc 는 트랙패드 픽셀 잔차(px)와 그 시각(at)이다.
+ *  · 마우스(이산 노치) — 종전 공식 그대로: 픽셀 근사 × scrollSpeed 줄 · 앱에는 이벤트당 round(scrollSpeed) 틱 고정.
+ *  · 트랙패드(연속 픽셀) — 손가락 이동 × padGain 을 칸 높이로 나눈 정수 줄(잔차 이월) · 앱에는 그 줄 수만큼(최대 12).
+ */
+export function wheelStep(e: { deltaY: number; deltaMode: number; timeStamp?: number }, notch: boolean, speed: number, gain: number,
+  cellPx: number, rows: number, acc: { px: number; at: number }): { lines: number; reps: number } {
+  let lines;
+  if (e.deltaMode === 2) {                         // page 단위(드묾)
+    lines = e.deltaY * rows;
+  } else if (notch) {
+    acc.px = 0;                                    // 입력원이 바뀌었다 — 남은 픽셀 잔차는 버린다
+    const approx = e.deltaMode === 1 ? e.deltaY : (Math.trunc(e.deltaY / 18) || (e.deltaY > 0 ? 1 : -1));
+    lines = approx * Math.max(1, Math.round(speed));
+  } else {
+    const now = e.timeStamp || 0;
+    if (acc.px && (Math.sign(acc.px) !== Math.sign(e.deltaY) || now - acc.at > 300)) acc.px = 0; // 방향전환·묵은 잔차는 리셋
+    acc.at = now;
+    acc.px += e.deltaY * Math.max(0.2, gain);
+    lines = Math.trunc(acc.px / cellPx);
+    acc.px -= lines * cellPx;                      // 소수 잔차는 남겨 다음 이벤트로 이월(픽셀 정확)
+  }
+  const n = Math.trunc(lines);
+  //  앱(Claude Code 등)에 보낼 틱. 마우스는 종전처럼 '이벤트당 scrollSpeed 틱' 고정이어야 한다 —
+  //   맥 가속으로 한 칸의 deltaY 가 4~161px 로 널뛰므로(실측) 픽셀 비례로 보내면 같은 한 칸이 최대 4배 빨라진다.
+  //   트랙패드는 반대로 픽셀 누적으로 찬 줄 수만큼 보낸다(잔차는 다음 이벤트로 이월).
+  const reps = notch ? Math.min(Math.max(1, Math.round(speed)), 12) : Math.min(Math.abs(n), 12);
+  return { lines: n, reps };
+}
+
 // 휠 처리 — 마우스 휠(이산 노치)과 트랙패드(연속 픽셀)를 서로 다른 단위로 다룬다(#1168).
 //  종전에는 한 배수(scrollSpeed)를 두 입력에 똑같이 곱하고 픽셀 잔차를 버렸다(`trunc(dy/18) || ±1` → 최소 1줄 강제).
 //  트랙패드는 1~10px 델타가 17ms 간격으로 오므로(실측 307건: median 5px·17ms) 손가락 이동량과 무관하게 '이벤트 수'만큼
@@ -2393,6 +2927,7 @@ function cellHeightPx() {
 //  · 마우스 휠 = 종전 공식 그대로(회귀 방지): 픽셀 근사 × scrollSpeed.
 //  · 트랙패드 = 손가락 이동 픽셀을 실측 셀높이로 나눠 줄로 환산하고 소수 잔차는 다음 이벤트로 이월 × padGain(1이면 1:1).
 //  분기는 종전과 같다: normal buffer=로컬 스크롤백 / alt+앱 마우스모드=SGR 휠 전달 / alt 만=xterm 기본.
+//  줄·틱 셈은 위 wheelStep 한 자리다(대화창이 같은 셈을 옮겨 적는다).
 function setupWheel() {
   if (!term.attachCustomWheelEventHandler) return; // 구버전 xterm — 네이티브 휠(스크롤백 미사용 시 무동작)
   const NOTCH_MIN_PX = 100; // wheelDeltaY 를 안 주는 브라우저용 폴백 임계 — 이보다 큰 픽셀 점프는 노치로 본다
@@ -2416,7 +2951,7 @@ function setupWheel() {
     if (typeof wdy === 'number' && wdy !== 0) return Math.abs(wdy) % 120 === 0;
     return Math.abs(e.deltaY) >= NOTCH_MIN_PX;       // wheelDeltaY 없는 브라우저(파이어폭스 트랙패드 등) 폴백
   };
-  let accPx = 0, accAt = 0;                          // 연속 입력의 픽셀 잔차(그리고 그 시각)
+  const acc = { px: 0, at: 0 };                      // 연속 입력의 픽셀 잔차(그리고 그 시각)
   term.attachCustomWheelEventHandler((e) => {
     cancelPromptSeek(true); // 질문 위치 자동 탐색 중 사용자가 직접 휠을 굴리면 즉시 중단(#967)
     let alt = false, mouseOn = false;
@@ -2424,29 +2959,10 @@ function setupWheel() {
     try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
     const notch = isNotch(e);
     if (alt && mouseOn && notch && scrollSpeed <= 1) return true; // 1칸=1줄이면 xterm 의 검증된 전달 그대로(회귀 없음)
-    // 이 이벤트가 몇 줄인지 산출 — 마우스는 종전 공식, 트랙패드는 실측 셀높이로 픽셀→줄 환산.
-    let lines;
-    if (e.deltaMode === 2) {                         // page 단위(드묾)
-      lines = e.deltaY * term.rows;
-    } else if (notch) {
-      accPx = 0;                                     // 입력원이 바뀌었다 — 남은 픽셀 잔차는 버린다
-      const approx = e.deltaMode === 1 ? e.deltaY : (Math.trunc(e.deltaY / 18) || (e.deltaY > 0 ? 1 : -1));
-      lines = approx * Math.max(1, Math.round(scrollSpeed));
-    } else {
-      const now = e.timeStamp || 0;
-      if (accPx && (Math.sign(accPx) !== Math.sign(e.deltaY) || now - accAt > 300)) accPx = 0; // 방향전환·묵은 잔차는 리셋
-      accAt = now;
-      accPx += e.deltaY * Math.max(0.2, padGain);
-      const h = cellHeightPx();
-      lines = Math.trunc(accPx / h);
-      accPx -= lines * h;                            // 소수 잔차는 남겨 다음 이벤트로 이월(픽셀 정확)
-    }
-    const n = Math.trunc(lines);
+    // 이 이벤트가 몇 줄인지 산출 — 마우스는 종전 공식, 트랙패드는 실측 셀높이로 픽셀→줄 환산(wheelStep).
+    const { lines: n, reps } = wheelStep(e, notch, scrollSpeed, padGain, cellHeightPx(), term.rows, acc);
     if (alt && mouseOn) {
-      // 앱(Claude Code 등)에 SGR 휠을 직접 보낸다. 마우스는 종전처럼 '이벤트당 scrollSpeed 틱' 고정이어야 한다 —
-      //  맥 가속으로 한 칸의 deltaY 가 4~161px 로 널뛰므로(실측) 픽셀 비례로 보내면 같은 한 칸이 최대 4배 빨라진다.
-      //  트랙패드는 반대로 픽셀 누적으로 찬 줄 수만큼 보낸다(잔차는 다음 이벤트로 이월).
-      const reps = notch ? Math.min(Math.max(1, Math.round(scrollSpeed)), 12) : Math.min(Math.abs(n), 12);
+      // 앱(Claude Code 등)에 SGR 휠을 직접 보낸다(틱 수는 wheelStep 머리말).
       if (!reps) return false;                       // 아직 한 줄이 안 찼다(미세 스와이프) — 잔차만 쌓고 대기
       const c = cellFromEvent(e);
       const btn = n < 0 ? 64 : 65;                   // 64=휠↑ 65=휠↓ (SGR 1006)
@@ -2595,7 +3111,7 @@ function paintSend() { if (msendEl && mcompEl) msendEl.classList.toggle('on', !!
 //   글 꼬리가 화면에 **새로** 보이면 앱이 글을 이미 읽은 것이라 뒤따르는 Enter 는 혼자 읽혀 제출이 된다(앱이 1.2초 멈춘 판도 실측 통과).
 //   짧은 글은 종전대로 곧바로 Enter — 한 덩어리여도 제출되고, 기다리면 왕복 한 번만큼 늦을 뿐이다.
 //   끝내 못 보면(입력을 그리지 않는 화면) ECHO_WAIT_MS 뒤 그냥 보낸다(= 종전 동작). 기다리는 동안 다른 입력이 오면 Enter 를
-//   먼저 보낸다(sendInput) — 누른 순서가 «글 · Enter · 그 입력» 그대로다.
+//   먼저 보낸다(emitInput) — 누른 순서가 «글 · Enter · 그 입력» 그대로다.
 //   여러 줄 글은 붙여넣기 표지로 감싸 보내므로 한 덩어리로 읽혀도 첫 Enter 에 제출된다(#4818 실측) — 종전대로 곧바로 Enter.
 export const ECHO_WAIT_MIN = 40;   // 이 길이(UTF-16) 이상만 기다린다 — 64자 경계보다 낮게: 앞서 못 읽힌 입력이 같은 덩어리에 섞일 여유
 let ECHO_WAIT_MS = 3000;
@@ -3132,31 +3648,31 @@ const isTextLike = (name) => MD_RE.test(name) || TEXT_RE.test(name) || TEXT_NAME
 //   web/standalone 이고, 산출물 경로를 바꾸면 dist/standalone 을 직접 import 하는 테스트가 깨진다). 그래서 공용
 //   렌더러(lib/file-preview)를 **복제하지 않고 위임**한다:
 //    · 여기서 인라인으로 보여주는 것 = 터미널 문맥에 맞는 것뿐(이미지 · md 렌더 · 텍스트/코드).
-//    · pdf·표·음성·영상 등 나머지 = [⛶ 전체화면]으로 공용 렌더러(#/f)에 넘긴다.
+//    · pdf·표·음성·영상 등 나머지 = [↗ 자료 보기]로 자료 보기 화면(#/f — 공용 렌더러 · #4672)에 넘긴다.
 //   종전엔 그 자리에 '그래도 미리보기'가 있어 **바이너리를 텍스트로 뿌렸다**(깨진 글자 화면) — 선택지처럼 보이지만
 //   쓸 수 있는 답이 아니었다. 이제 실제로 볼 수 있는 곳으로 보낸다.
-//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 전체화면 버튼을 안 만든다.
+//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 자료 보기 버튼을 안 만든다.
 async function openPreview(p, name, shareRel?) {
   const id = 'file:' + p;
   const body = el('div', { class: 'preview-body' }, el('div', { class: 'gate-msg', text: '불러오는 중…' }));
-  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(전체화면·링크·다운로드).
+  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(자료 보기·링크·다운로드).
   const bar = el('div', { class: 'preview-bar' },
     el('span', { class: 'preview-bar-nm', title: name, text: name }),
     el('span', { class: 'preview-bar-sp' }),
-    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '전체화면(새 탭)', text: '⛶ 전체화면' }) : null,
+    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' }) : null,
     shareRel ? el('button', { class: 'tbtn', text: '🔗 링크', title: '링크 복사', onclick: () => copyShareLink(shareRel, false) }) : null,
     el('button', { class: 'tbtn', text: '⬇ 다운로드', onclick: () => downloadFile(p, name) }));
   const pane = el('div', { class: 'preview-pane' }, bar, body);
   addPane(id, name, true, pane);
   if (IMG_RE.test(name)) { renderImage(body, p, name); return; }
   if (isTextLike(name)) { renderTextPreview(body, p, MD_RE.test(name)); return; }
-  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(전체화면)으로 보낸다.
+  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(자료 보기 화면)으로 보낸다.
   body.replaceChildren(el('div', { class: 'unsupported' },
     el('div', { class: 'unsupported-card' },
-      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 전체화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
-      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 전체화면 미리보기가 렌더합니다.' : name }),
+      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 자료 보기 화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
+      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 자료 보기 화면(새 탭)이 보여 줍니다.' : name }),
       el('div', { class: 'unsupported-actions' },
-        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면으로 열기' }) : null,
+        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '↗ 자료 보기로 열기' }) : null,
         el('button', { class: 'tbtn', text: '다운로드', onclick: () => downloadFile(p, name) })))));
 }
 async function renderImage(body, p, name) {
@@ -3216,7 +3732,7 @@ function mSheet(title, body) {
 }
 function applyPrefsNow(np, prevFamily) {
   term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
-  term.options.theme = resolveTheme(np.theme);
+  term.options.theme = themeFor(np.theme);
   scrollSpeed = np.scrollSpeed; padGain = np.padGain;
   savePrefs(np); applyChrome(np.theme); doResize();
   // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
@@ -3301,7 +3817,7 @@ function openSettings() {
   const apply = () => {
     const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked, lineSelect: !!selI.checked };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
-    term.options.theme = resolveTheme(np.theme);
+    term.options.theme = themeFor(np.theme);
     scrollSpeed = np.scrollSpeed; padGain = np.padGain;
     savePrefs(np); applyChrome(np.theme); doResize();
     // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
@@ -3619,6 +4135,15 @@ async function loadSessionMeta() {
 //  (프레임 안 로직을 세션 화면으로 복제하지 않는다 — 복제하면 두 벌이 갈린다).
 //  연결 상태는 반대 방향으로 흘려보낸다: statusEl 은 재연결·종료 등 여러 곳에서 바뀌므로 **값을 관측**한다
 //   (호출부마다 손으로 알리면 언젠가 한 군데를 빠뜨린다).
+//  #4135 — 프레임이 마지막으로 본 pane 포그라운드 명령. 부모에게 보내는 상태에 함께 실린다.
+let lastPaneCmd = '';
+let paneCmdPost: (() => void) | null = null;
+function postPaneCmd(cmd: string): void {
+  if (cmd === lastPaneCmd) return;   // 값이 바뀔 때만 — 상태 마커는 재접속마다 온다
+  lastPaneCmd = cmd;
+  if (paneCmdPost) paneCmdPost();
+}
+
 // ── 새 판 자가 적용 (#4562 원준 10-05 «이전에 열었던 세션에서도 적용되게») ─────────────────────────────
 //  셸에는 낡은 화면 자가복구(web/gen-watch.ts)가 있지만 **이 터미널 프레임엔 없었다** — 배포 전에 연 세션은 페이지를 통째로
 //  새로고침하기 전까지 옛 터미널 코드(링크 판정 등)로 돌았다. 그래서 이 프레임이 스스로 묻고 다시 싣는다.
@@ -3669,17 +4194,106 @@ function setupEmbedBridge() {
     else if (m.cmd === 'help') openHelp();
     else if (m.cmd === 'prompts') openMyPrompts();
     else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
+    //  세션이 사이드바 위 카드가 됐다/풀렸다(v2/side-card.ts) — 바탕을 비우거나 되돌린다.
+    else if (m.cmd === 'glass') { setGlass(m.on === true); glassIdle = m.on === true && m.idle === true; }
     //  #4135 곁칸 «프로젝트» 앱의 [본문 넣기] — 입력칸에 **붙여넣기만** 한다(Enter 없음). 여러 줄은 pasteText 가 bracketed paste 로 감싼다.
     else if (m.cmd === 'paste' && typeof m.text === 'string') { pasteText(m.text); try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
   });
   const post = () => {
     try {
       window.parent.postMessage({ type: 'lively-term-status', text: statusEl.textContent || '',
-        cls: String(statusEl.className || '').replace('status', '').trim() }, location.origin);
+        cls: String(statusEl.className || '').replace('status', '').trim(),
+        //  #4135 — 지금 이 pane 에서 도는 것(빈 문자열 = 모름). 세션 화면이 «여기는 셸이다» 안내를 그릴지 말지를
+        //   목록 행이 아니라 **이 값**으로 정한다. 목록은 낡을 수 있고, 이건 tmux 가 방금 말한 사실이다.
+        //  판정도 여기서 한다(isShellCmd 는 이 파일의 지식이다) — 부모가 같은 목록을 다시 짓지 않게.
+        paneCmd: lastPaneCmd, paneShell: lastPaneCmd ? isShellCmd(lastPaneCmd) : null }, location.origin);
     } catch (_) { /* 부모가 없거나 닫혔다 */ }
   };
+  paneCmdPost = post;   // applyPaneState 가 값이 바뀔 때 다시 부른다
   try { new MutationObserver(post).observe(statusEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (_) { /* 미지원 — 첫 값만 */ }
   post();
+}
+
+/**
+ * #4695 T5 — 이 창이 **세션 화면 밖에서** 열렸으면(격자 보기 public/terminal-grid.html · 주소로 직접 연 창) 스스로 «보는 중» 도장을 찍는다.
+ *  하네스 종료 규칙은 «아무도 안 보는» 세션만 끄는데, 그 «보는 중» 의 출처는 웹 셸의 도장(web/v2/main.ts markViewedSessionSeen)뿐이었다.
+ *  그래서 이 창으로만 보는 세션은 보는 중인데도 «안 봄» 으로 읽혀 꺼질 수 있었다. 세션 화면 안의 액자(embed=1)는 바깥 셸이 이미 찍는다 — 두 번 찍지 않는다.
+ *  주기·규칙은 셸과 같다: 보이는 동안 15초마다(8초 틱에 얹는다) · 숨은 창은 안 찍는다 · 창을 닫을 때 떠남(/leave)을 알린다.
+ *  실패는 삼킨다 — 못 찍은 최악의 결과는 «보는 중» 이 TTL(45초) 뒤 풀리는 것이고, 그건 이 변경 전과 같다.
+ */
+function startSeenStamp(): void {
+  const SEEN_EVERY_MS = 15_000;
+  let sentAt = 0;
+  const post = (suffix: string, keepalive = false): Promise<unknown> =>
+    fetchAuth(sUrl(suffix), Object.assign({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, keepalive ? { keepalive: true } : {}));
+  const tick = (): void => {
+    if (document.hidden) return;
+    const now = Date.now();
+    if (now - sentAt < SEEN_EVERY_MS) return;
+    sentAt = now;
+    void post('/seen').catch(() => { sentAt = 0; });   // 못 찍었으면 다음 틱에 다시
+  };
+  tick();
+  setInterval(tick, 8_000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { sentAt = 0; tick(); } });
+  window.addEventListener('pagehide', () => { void post('/leave', true).catch(() => { /* 비치명 — TTL 이 늦게라도 걷는다 */ }); });
+}
+
+/**
+ * #4794 — 하네스가 **처음 화면을 그렸다**고 세션 화면에 한 번 알린다(lively-term-painted).
+ *  세션 화면(web/session-chat.ts termWarm)은 말을 보내 되살린 세션을 열 때 이 액자를 숨긴 채 먼저 붙여 두고,
+ *  이 신호가 오면 그때 터미널로 넘긴다. 종전엔 넘긴 뒤 하네스가 뜰 때까지 2~3초 빈 터미널이 보였다(상민님 2026-10-16).
+ *  «그렸다» = 보이는 줄에 공백 아닌 글자가 생겼다. 하네스가 뜨기 전 pane 은 비어 있다 — 런처(catalog.ts LAUNCH_STOP_SH)는
+ *  정상 길에선 아무것도 안 찍는다. ⚠ 드문 길 하나: 이어 열 대화를 못 찾아 새 대화로 다시 띄울 때(런처 ②)는 안내 한 줄을 먼저 찍는다 —
+ *  그땐 그 줄로 넘어가 새 하네스가 그리기 전 잠깐 빈칸이 보인다(종전과 같다).
+ *  그 뒤 출력이 멎을 때까지 조금 더 기다린다(firstPaintDelay) — 첫 조각만 그린 화면으로 넘기지 않게.
+ *  액자 안(embed=1)에서만 보낸다. 신호를 못 보내면(구 xterm) 세션 화면은 상한(25초) 뒤에야 넘긴다 — 그 경우 터미널이 종전보다 늦게 보인다.
+ */
+export const FIRST_PAINT_QUIET_MS = 300;
+export const FIRST_PAINT_MAX_MS = 1500;
+/** 화면에 무언가 그려졌나 — 공백·빈 줄뿐이면 아직 아무것도 안 그린 화면이다. 순수. */
+export function screenHasInk(screen: string): boolean {
+  return /\S/.test(String(screen || ''));
+}
+/** 첫 글자를 본 뒤 알리기까지 기다릴 ms — 출력이 quiet 만큼 멎으면, 늦어도 첫 글자부터 max 뒤(스피너처럼 쉬지 않고 다시 그리는 화면). 순수. */
+export function firstPaintDelay(firstInkAt: number, now: number, quietMs = FIRST_PAINT_QUIET_MS, maxMs = FIRST_PAINT_MAX_MS): number {
+  return Math.max(0, Math.min(quietMs, firstInkAt + maxMs - now));
+}
+export function watchFirstPaint(): void {
+  if (!(EMBED && window.parent !== window)) return;
+  let inkAt = 0;
+  let sent = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const send = (): void => {
+    if (sent) return;
+    sent = true;
+    try { window.parent.postMessage({ type: 'lively-term-painted', id: SESSION_ID }, location.origin); } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  };
+  //  출력 한 묶음을 다 풀 때마다(onWriteParsed) 본다 — 그리기(onRender)는 숨은 액자에서 미뤄질 수 있지만 버퍼는 늘 지금이다.
+  const onParsed = (): void => {
+    if (sent) return;
+    if (!inkAt) {
+      if (!screenHasInk(autosendReadScreen())) return;
+      inkAt = Date.now();
+    }
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(send, firstPaintDelay(inkAt, Date.now()));
+  };
+  try { if (term.onWriteParsed) term.onWriteParsed(onParsed); } catch (_) { /* 구 xterm — 세션 화면이 상한 뒤 넘긴다 */ }
+}
+/**
+ * #4794 — 이 액자가 지금 사람 눈에 안 보이나. 세션 화면이 숨긴 채 먼저 붙여 둔 액자(36-chat.css .sc-term-warm — visibility:hidden · inert)다.
+ *  그런 액자는 붙자마자 제 터미널에 초점을 주면 안 된다 — 사람은 대화창 입력칸에 쓰는 중일 수 있다.
+ *  ⚠ inert 만으로는 못 막는다: 액자 안 스크립트의 focus() 는 inert 조상·visibility:hidden 아래에서도 초점을 가져간다
+ *   (실측 2026-10-16 Chromium 151, 같은 출처 — 부모의 activeElement 가 액자로 옮겨 갔다). 그래서 여기서 스스로 묻는다.
+ *  같은 출처라 frameElement 를 읽을 수 있다. 못 읽으면(다른 출처·단독 창) «보인다» 로 본다 — 종전 동작.
+ */
+export function frameHiddenNow(): boolean {
+  try {
+    const fe = window.frameElement as HTMLElement | null;
+    if (!fe) return false;
+    return !!fe.closest('[inert]') || getComputedStyle(fe).visibility === 'hidden';
+  } catch (_) { return false; }
 }
 
 export async function boot() {
@@ -3738,6 +4352,7 @@ export async function boot() {
   // #1820 — 메타는 어차피 제목·프로젝트 링크 때문에 받는다. 그 값으로 **붙기 전에** '되살릴 세션인가'를 판정한다
   //  (아래 connectNow 직전에서 await). 여기서 await 하지 않는 이유: 화면 구성·폰트 로드를 1 RTT 만큼 늦추지 않으려고.
   const metaAtBoot = loadSessionMeta();
+  if (!EMBED) startSeenStamp();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
   try {
@@ -3758,7 +4373,7 @@ export async function boot() {
   //  tmux 전체 재그림이 아니라 pane 출력만 받으므로 구조적으로 발생하지 않는다. 렌더러는 WebGL(폴백 Canvas).
   term = new Terminal({
     fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true,
-    theme: resolveTheme(p.theme), scrollback: 10000, allowProposedApi: true,
+    theme: themeFor(p.theme), allowTransparency: glassOn, scrollback: 10000, allowProposedApi: true,
     // OSC 8 하이퍼링크(#1541) — TUI(claude 등)가 표시 텍스트와 별개의 URI 를 심는 형식. 핸들러가 없으면 xterm 은
     //  아무것도 안 한다(죽은 링크). 열기 규칙은 한 곳(openLinkFromTerminal) — 트래킹 pane 에선 클릭이 pty 로 가서
     //  이 핸들러까지 안 오는 경우가 있는데, 그 축은 아래 캡처 경로(urlAtColumn)가 표시 텍스트로 커버한다.
@@ -3810,10 +4425,7 @@ export async function boot() {
   }
   term.open(host);
   wireTermCtxMenu(host);   // #3784 — 우클릭 메뉴(복사·붙여넣기·전체 선택·주소 열기·화면 지우기·글자 크기·설정)
-  // 입력줄 선택 표시(#3778) — 앱이 다시 그릴 때마다 좌표로 새로 계산한다(우리가 위치를 «기억» 하지 않으므로 어긋나지 않는다).
-  try { term.onRender(drawSel); } catch (_) { /* noop */ }
-  try { term.onScroll(drawSel); } catch (_) { /* noop */ }
-  try { host.addEventListener('mousedown', () => clearSel('mouse'), true); } catch (_) { /* noop */ }
+  try { wireInputSelection(host); } catch (_) { /* noop */ } // 입력줄 선택 표시(#3778) · 입력칸 선택(#4406) · 마우스
   // 휠 폴백 래치 끊기(#1943 후속 — wheelResyncAction 머리말). 관측만 하고 이벤트는 건드리지 않는다(passive).
   //  xterm 의 휠 처리보다 먼저 보도록 capture 로 단다 — 판정은 이 시점의 버퍼·모드로 한다.
   let lastWheelProbeAt = 0;
@@ -3881,6 +4493,7 @@ export async function boot() {
   // 입력 핸들러는 '한 번만' 등록(재연결마다 붙이면 키 입력이 중복 전송됨). 본체는 handleTermData(최상위) —
   //  회귀 테스트가 실제 배선 그대로 직접 호출할 수 있게 분리(#1117). userTyped(#1059)·드리프트 가드(#1302)도 본체에.
   term.onData(handleTermData);
+  watchFirstPaint();   // #4794 — 액자 안이면 하네스가 처음 그린 순간을 세션 화면에 알린다(그때 터미널로 넘긴다)
   // 탭이 백그라운드→포그라운드로 돌아올 때: 끊겨 있으면 재연결, 연결돼 있으면 '이 탭'으로 창 크기를 다시 요구한다.
   //  서버는 window-size latest 라, 지금 보는 탭이 refresh-client 를 보내 '최근 활동'이 되면 pane 이 이 탭 크기로
   //  맞춰져 깨짐이 풀린다(다른 탭·잔존 연결이 더 큰 pane 을 잡고 있던 경우의 #252 증상 회복). forceRedraw =
@@ -3906,6 +4519,8 @@ export async function boot() {
 async function maybeRestoreOnOpen(meta) {
   if (!meta || !meta.restorable) return false;          // 살아 있다(또는 판정 근거 없음) — 종전대로 붙는다
   restoreTried = true;                                  // 이 화면의 복원 시도는 여기서 소진(4410 경로와 이중 실행 금지)
+  //  #4783 — 세션 화면 안의 액자는 끝난 세션에 대해 **정하지 않는다** — 이어졌으면 옮기고, 아니면 사실만 셸에 넘긴다(handOffToShell 머리말).
+  if (embeddedInShell()) { if (meta.movedTo) goToMoved(meta.movedTo); else handOffToShell(meta); return true; }
   // 방금 연 화면이라 '이 탭에서 조작함'(typed)은 언제나 false 다 — 그래서 판정표의 ask 행은 여기서 나오지 않는다.
   const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
   if (mode === 'moved') { goToMoved(meta.movedTo); return true; }   // #2231 — 이어진 세션으로 옮긴다
@@ -3925,24 +4540,50 @@ async function maybeRestoreOnOpen(meta) {
   startRestore(meta);
   return true;
 }
+/** 세션 화면(v2) 안에 실린 액자인가 — 끝난 세션의 처리를 부모(셸)에게 넘기는 조건(#1820 · #4783). */
+function embeddedInShell() { return EMBED && window.parent !== window; }
 /**
- * 세션 화면(v2) 안의 프레임이면 **복원을 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
+ * 끝난 판의 **사실**만 추린다(순수, #4783) — 셸이 대화창의 안내 문구를 고르고, 단독 창이 끝 배너의 말을 고르는 재료.
+ *  메타(GET …/sessions/:id)가 실어 온 것만 옮긴다 — 여기서 «누가 끝냈다» 를 단정하지 않는다(판정은 받는 쪽 한 곳).
+ */
+export function endFactsOf(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const n = m.endNote && typeof m.endNote === 'object' ? m.endNote : null;
+  return {
+    exitedByUser: !!m.exitedByUser,
+    oomKilled: !!m.oomKilled,
+    endWhy: n && typeof n.why === 'string' ? n.why : '',
+    endCode: n && typeof n.code === 'number' ? n.code : null,
+    stopWhy: typeof m.stopWhy === 'string' ? m.stopWhy : '',
+  };
+}
+/**
+ * 세션 화면(v2) 안의 프레임이면 **끝난 세션의 처리를 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
  *
  * 여기서 되살려 location 을 갈아타면 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 **프레임만
  *  새 세션**인 어긋난 화면이 된다 — #1808 에서 실제로 났던 사고다. 셸이 받으면 주소까지 함께 옮긴다.
  *  부모가 없거나(직접 embed URL로 열었거나) 안 듣더라도 사용자는 배너의 버튼으로 직접 되살릴 수 있다.
+ * ★ #4783 — **되살릴 때만이 아니라 언제나** 넘긴다. 종전엔 «되살릴 세션»(auto)만 넘기고 나머지(방금 끝남 · 남의 세션 · 곧 다시 끝남 ·
+ *  그냥 끝남)는 이 액자가 제 배너를 띄우고 입력을 막은 채 머물렀다 — 셸은 신호를 못 받아 액자를 못 걷었고(셸은 액자가 알려 와야
+ *  걷는다 — #3847), 사람은 그 세션에 돌아올 때마다 **조작할 수 없는 터미널**을 봤다(상민님 2026-10-16 신고). 무엇을 보여 줄지는 셸이
+ *  정한다 — 셸은 내 세션을 보기만 해서는 안 되살리고(#2439) 말을 걸면 이어 연다. «직접 끝낸 세션을 멋대로 안 살린다» 는 그대로다.
  */
 function handOffToShell(meta) {
-  if (!(EMBED && window.parent !== window)) return false;
+  if (!embeddedInShell()) return false;
+  const restorable = !!(meta && meta.restorable);
+  const canRestore = !!(meta && meta.canRestore);
   try {
-    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
+    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable, canRestore, end: endFactsOf(meta) }, location.origin);
   } catch (_) { /* 부모가 없거나 닫혔다 */ }
   sessionEnded = true;
+  try { term.options.disableStdin = true; } catch (_) { /* noop */ }
   //  ⚠ #3847 — «이어서 열고 있습니다» 라고 단정하지 않는다. 셸은 **일부러 기다리기도** 한다(#2439 «보기만
   //   해서는 안 되살린다» · 자동복원 연쇄 상한). 그때 이 배너만 남으면 사람은 오지 않을 «잠시만요» 를 계속 본다.
   //   지금 셸은 이 신호를 받으면 액자를 걷고 대화 화면으로 내려앉으므로(session-chat dropTermFrame) 이 배너는
   //   그 사이 잠깐이거나, 신호를 못 받는 옛 셸에서만 남는다 — 그 경우에도 읽고 누를 수 있는 정확한 말이어야 한다.
-  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  if (restorable && canRestore) showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '대화는 그대로 남아 있어요 — 아래에서 이어서 열 수 있습니다.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  else if (restorable) showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 여는 건 세션을 만든 사람만 할 수 있어요.' });
+  else showEndedBar({});
   return true;
 }
 /**
@@ -4001,6 +4642,25 @@ let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 �
 //  40회면 백오프 포함 약 3분이다. 그 뒤엔 멈추고 '다시 시도'를 사람 손에 넘긴다.
 const MAX_RECONNECT_ATTEMPTS = 40;
 let gaveUp = false;
+// ── 「연결이 섰다」 의 증거는 소켓이 열린 것이 아니라 **그 상태로 버틴 것**이다 (#3546) ──────────
+//  종전엔 onopen 에서 attempts·gaveUp·reconnectDelay 를 전부 되돌렸다. 그런데 **세션 컨테이너가
+//   사라진 판에서는 게이트웨이까지는 정상적으로 붙는다** — 붙고 나서 릴레이가 409
+//   (`Container … is not running`)를 내며 죽는다. 그래서 「붙었다 → 예산 초기화 → 죽는다 → 재연결」이
+//   영원히 돌았고, 화면은 그 409 문구로 도배돼 **죽기 직전 로그까지 스크롤백에서 밀려났다**
+//   (2026-09-04 실측: 16분간 멈추지 않았다. 간격 0.4초의 정체는 아래 onExit 의 `reconnectDelay = 400`).
+//  이제 예산은 **버틴 연결만** 되돌린다. 원인이 무엇이든 flap 은 예산을 쓰고, 다 쓰면 사람에게 넘어간다 —
+//   즉 이 결함의 «원인» 이 아니라 «부류» 를 막는다.
+let connProven = false, stableTimer = null;
+const CONN_STABLE_MS = 10_000;
+export function markConnProven() {
+  connProven = true;
+  attempts = 0; gaveUp = false; reconnectDelay = 1500;
+  //  #3870 — 포기 뒤에도 탭 복귀(visibilitychange)·[화면 복구]는 connectNow 를 직접 불러 다시 붙는다. 그렇게 붙어
+  //   버텼으면 «연결하지 못했습니다» 배너는 거짓이다(실측: 상단은 '연결됨'인데 배너가 남아 화면만 밀고 있었다).
+  //   onopen 이 아니라 여기서 걷는 이유 — gaveUp 이 풀리는 곳과 같아야 한다. 붙자마자 죽는 판(#3546)에서
+  //   배너만 먼저 걷히면, gaveUp 이 남아 재연결은 멈췄는데 '다시 시도' 출구도 없는 화면이 된다.
+  hideRetryBar();
+}
 // 화면 좌표 → 그 칸에 걸친 URL(없으면 null). 클릭 열기(#1541)와 우클릭 [복사]·[링크 열기](#4083)가 같은 판정을 쓴다.
 function linkAtPoint(host: HTMLElement, clientX: number, clientY: number): string | null {
   if (!term) return null;
@@ -4116,7 +4776,7 @@ function wireTermCtxMenu(host: HTMLElement): void {
       ...(plan.linkRow ? [{ label: '링크 복사', hint: shortLink(link), run: () => copyText(link, false, true) }] : []),
       ...(url ? [{ label: '링크 열기', hint: openHint, run: () => openLinkFromTerminal(url) }] : []),
       { label: '붙여넣기', hint: '⌘V', off: !secure, run: () => {
-        navigator.clipboard.readText().then((t) => { if (t) pasteText(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
+        navigator.clipboard.readText().then((t) => { if (t) pasteReplacingSel(t); }).catch(() => toast('붙여넣기를 못 읽었어요 — ⌘V 로 붙여넣어 주세요.', true));
       } },
       { label: '전체 선택', hint: '⌘A', run: () => { try { term.selectAll(); } catch (_) { /* noop */ } } },
       { sep: true, label: '' },
@@ -4234,7 +4894,9 @@ function showEndedBar(o) {
   const bar = el('div', { class: 'ended-bar' + (o.info ? ' info' : '') }, el('span', { class: 'ended-ic', text: o.icon || '⏹' }), txt);
   if (o.restoreBtn) { // 내가 /exit 로 끝낸 세션 — 되살릴지는 사용자가 정한다(자동 복원 안 함).
     const rb = el('button', { class: 'ended-cta', text: o.restoreLabel || '다시 열기' });
-    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(); };
+    //  #3870 — force 는 «옛 것이 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이라 **사람이 이 버튼을 누른 것**이
+    //   곧 그 확인이다(서버가 canForce 를 준 뒤에만 이 라벨로 선다 — 아래 restoreThisSession 의 catch).
+    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(o.restoreForce); };
     bar.append(rb);
   }
   bar.append(el('a', { class: 'ended-cta', href: apiUrl('/ui/#/terminal'), target: '_blank', rel: 'noopener', text: '세션 목록 열기 →' }));
@@ -4249,6 +4911,45 @@ function showEndedBar(o) {
 // 언제 판정하나 — 두 시점이 같은 표를 쓴다: ① 페이지가 뜰 때(메타가 restorable 이라고 하면 WS 를 붙이기 전에)
 //  ② 붙어 있다가 4410(세션 종료 확정)을 받았을 때. 순수 판정(scripts/terminal-restore-gate.test.mjs 가 표를 지킨다).
 //  'end'=종료 배너(되살릴 근거 없음) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원 · 'loop'=재복원 차단.
+/**
+ * 서버가 «이건 강제로 되살릴 수 있다» 고 말했나 (순수, #3870).
+ *
+ * ⚠ **web/lib/restore-force.ts 와 같은 규칙이다.** 사본이 둘인 이유는 이 번들이 SPA 와 분리된 tsconfig
+ *  (web/standalone/tsconfig.json — rootDir 가 이 폴더)라 web/lib 을 import 할 수 없어서다. 두 사본이 같은
+ *  답을 내는지는 scripts/restore-force.test.mjs 가 같은 표로 지킨다(갈리면 그 시험이 빨강).
+ * ⚠ 상태코드로 가르면 안 된다 — 복원 409 에는 force 로 **안** 풀리는 것(노드 오프라인·무응답·좌표 없음)이
+ *  섞여 있다. 그래서 서버가 풀리는 쪽에만 canForce 를 싣고(src/terminal/routes.ts stateUnknownRestore) 그것만 본다.
+ */
+export function canForceRestore(e) {
+  if (!e || typeof e !== 'object') return false;
+  if (Number(e.status) !== 409) return false;
+  const body = e.body;
+  if (!body || typeof body !== 'object') return false;
+  return body.canForce === true;   // 참값 흉내(문자열 'true'·1)는 승격하지 않는다
+}
+
+/** 서버가 «사람이 끝냈다» 고 적었나(순수, #4783) — 멈춤·/exit·하네스 정상 종료. 단독 창이 그 세션을 저절로 되살리지 않는 근거. */
+export function userEndedFacts(f) {
+  const x = f || {};
+  return !!x.exitedByUser || x.endWhy === 'stop' || x.endWhy === 'harness_exit';
+}
+/**
+ * 단독 창의 «방금 끝남»(ask) 배너 문구 — 서버가 적은 끝난 사유로 고른다(순수, #4783). 사유를 모르면 «누가» 를 말하지 않는다.
+ *  f = endFactsOf(meta). 사유 이름은 src/sessions/session-end.ts 의 SessionEndWhy 와 같다.
+ */
+export function askBannerCopy(f) {
+  const x = f || {};
+  const tail = ' 대화를 이어서 다시 열 수 있습니다.';
+  if (x.exitedByUser || x.endWhy === 'harness_exit' || x.endWhy === 'stop') return { title: '이 세션은 끝났습니다.', body: '직접 끝낸 세션이에요 —' + tail };
+  if (x.endWhy === 'harness_crash') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 오류로 끝났어요' + (typeof x.endCode === 'number' ? '(종료 코드 ' + x.endCode + ')' : '') + ' —' + tail };
+  if (x.endWhy === 'launch_fail') return { title: '이 세션이 비정상적으로 끝났습니다.', body: 'AI 가 뜨자마자 끝났어요 —' + tail };
+  if (x.endWhy === 'lost') return { title: '이 세션이 비정상적으로 끝났습니다.', body: '끝난 이유를 알 수 없어요 —' + tail };
+  if (x.oomKilled) return { title: '이 세션이 비정상적으로 끝났습니다.', body: '메모리가 모자라 멈췄어요 —' + tail };
+  if (x.stopWhy === 'asking') return { title: '이 세션은 꺼져 있습니다.', body: '답을 기다리다 자동으로 껐어요 —' + tail };
+  if (x.stopWhy === 'done') return { title: '이 세션은 꺼져 있습니다.', body: '작업이 끝나 자동으로 껐어요 —' + tail };
+  if (x.endWhy === 'reclaim') return { title: '이 세션은 꺼져 있습니다.', body: '시스템이 자동으로 껐어요 —' + tail };
+  return { title: '이 세션이 방금 끝났습니다.', body: tail.trim() };
+}
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
@@ -4276,13 +4977,28 @@ let restoreTried = false;
 //  거의 정확히 갈린다 — exit·Ctrl-D·kill 은 전부 입력을 수반한다.
 let userTyped = false;
 async function onSessionGone() {
+  //  #4783 — 세션 화면 안의 액자는 **어떤 끝이든** 셸에 넘긴다(handOffToShell 머리말). 이미 넘겼으면(sessionEnded) 아무것도 안 한다.
+  //   종전엔 아래 첫 줄(복원 시도를 이미 썼으면 그냥 끝 배너)이 먼저라, 한 번 되살린 화면에서 또 끝나면 셸이 아무것도 못 들었다.
+  if (embeddedInShell()) {
+    if (sessionEnded) return;
+    restoreTried = true;
+    clearTimeout(reconnectTimer);
+    let em = null;
+    try { em = await api(sUrl('')); } catch (_) { /* 403·기록 없음 — 셸은 «기록만» 으로 그린다 */ }
+    if (em && em.movedTo) { goToMoved(em.movedTo); return; }
+    handOffToShell(em);
+    return;
+  }
   if (sessionEnded || restoreTried) { endSession(); return; }
   restoreTried = true;
   clearTimeout(reconnectTimer);
   let meta = null;
   // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
   try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
-  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
+  //  #4783 — «되살리지 않음» 의 근거는 이 탭의 입력(typed)만이 아니다: 서버가 **사람이 끝냈다**(멈춤·/exit·하네스 정상 종료)고 적었으면
+  //   그것도 같은 뜻이다. 종전엔 마우스만 지나가도 typed 가 켜져 이 자리가 늘 ask 였는데, 이제 typed 가 키 입력만 세므로 사이드바 [종료]
+  //   같은 바깥 멈춤 뒤엔 auto(자동 복원)로 새어 사람이 끝낸 세션을 되살릴 수 있었다(격리 리뷰).
+  const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped || userEndedFacts(endFactsOf(meta)));
   if (mode === 'moved') { goToMoved(meta.movedTo); return; }   // #2231 — 붙어 있다 끊겼는데 그새 이어져 있었다
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {
@@ -4302,9 +5018,10 @@ async function onSessionGone() {
     // #1820 — ask 는 이제 **한 가지 상황**뿐이다: 이 탭에서 조작한 뒤 끝났다(typed). 종전엔 '과거에 exit 했음'과
     //  '셸·코덱스 하네스'도 여기로 왔는데, 그건 '여는 것'이지 '끝낸 것'이 아니라 auto 로 넘겼다(위 goneMode).
     //  직접 exit 한 것까지 되살리면 exit 가 안 먹히는 UX 가 되므로 이 자리만 남긴다.
-    endSession({ info: true, title: '이 세션이 방금 끝났습니다.',
-      body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
-      restoreBtn: true });
+    //  ⚠ #4783 — 말은 **서버가 적은 끝난 사유**로 고른다. 종전 문구는 «사람이 직접 끝냈다» 를 전제로 했는데,
+    //   하네스 종료 규칙(완료+안 봄 3분)이 끈 세션에도 그 말이 떴다 — 이 탭에서 키를 친 적이 있으면 무조건이었다.
+    const c = askBannerCopy(endFactsOf(meta));
+    endSession({ info: true, title: c.title, body: c.body, restoreBtn: true });
     return;
   }
   // 자동 복원 — 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).
@@ -4322,20 +5039,37 @@ function showRestoringBanner(meta) {
     body: why + ' 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
 }
 // 복원 실행 — 목록 카드 [복원] 과 같은 엔드포인트. 새 세션은 새 id 를 받으므로 그 주소로 갈아탄다(현재 URL 은 죽은 id).
-async function restoreThisSession() {
+async function restoreThisSession(force?) {
   try { if (ws && ws.readyState <= 1) ws.close(); } catch (_) { /* noop */ }
   let r = null;
-  try { r = await api(sUrl('/restore'), { method: 'POST', body: '{}' }); }
+  try { r = await api(sUrl('/restore') + (force ? '?force=1' : ''), { method: 'POST', body: '{}' }); }
   catch (e) {
     sessionEnded = true;
+    //  #3870 — 서버가 «상태를 모르겠다(force 로 풀린다)» 고 하면 그 선택지를 **이 배너에서** 준다. 종전엔 서버 문구를
+    //   그대로 body 에 실었는데, 그 문구는 «화면의 [강제로 되살리기] 를 눌러 주세요» 라고 대화창에만 있는 버튼을
+    //   지목한다 — 이 화면엔 없어서 «누르라는데 없다» 가 됐다(실측 2026-09-12, 원준님 신고).
+    //   force 로 한 번 더 눌렀는데도 같은 답이면(force 참) 되풀이하지 않고 사유만 남긴다.
+    if (canForceRestore(e) && !force) {
+      showEndedBar({
+        title: '상태를 확인하지 못했어요.',
+        body: '이 세션이 있는 곳이 끝난 건지 응답만 늦는 건지 모르는 상태예요. 잠시 뒤 다시 열어 보거나, 그대로 새로 열어 대화를 이어받을 수 있어요.',
+        icon: '❓', info: true, restoreBtn: true, restoreLabel: '강제로 되살리기', restoreForce: true,
+      });
+      return;
+    }
     showEndedBar({ title: '열지 못했습니다.', body: (e && e.message || String(e)) + ' — 세션 목록에서 다시 시도해 주세요.' });
     return;
   }
   // #2231 — 이 id 는 이미 이어졌다(다른 탭·다른 칸이 먼저 눌렀다). **새 세션으로 옮긴다** — 여기서 그냥
   //  새로고침하면 같은 옛 id 를 다시 열어 영원히 제자리다(아래 already 분기가 그 함정이었다).
   if (r && r.movedTo) { goToMoved(r.movedTo); return; }
-  // 라이브 경합: 그새 세션이 다시 떠 있으면 새로 만들지 않고 이 주소로 그대로 재연결한다.
-  if (r && r.already) { location.reload(); return; }
+  // 라이브 경합: 그새 세션이 다시 떠 있다 — 새로 만들지 않고 **그 자리에서** 다시 붙는다.
+  //  ⚠ 종전엔 location.reload() 였다. 그 새로고침은 같은 부팅 게이트(#1820)로 되돌아가는데, 메타가 그 세션을
+  //   다시 '복원 가능'이라 답하면 restore → already → reload 가 영원히 돈다(실측 2026-09-09: admin 계정으로
+  //   남의 살아있는 세션 링크를 열면 화면이 '연결 준비 중…' 과 새로고침만 반복했다. 그 메타 오답은 서버에서
+  //   함께 고쳤다 — routes.ts 의 canAttach 갈래). 살아 있다면 할 일은 붙는 것뿐이고, 못 붙으면 WS 가
+  //   4403/4410 으로 정확한 사유를 준다 — 어느 쪽이든 문서를 다시 받을 이유가 없다.
+  if (r && r.already) { resumeAlive(); return; }
   const ns = r && r.session;
   if (ns && ns.id) {
     // restored=1 — 이 표식이 있는 페이지는 다시 자동 복원하지 않는다(루프 차단, 위 goneMode).
@@ -4350,6 +5084,17 @@ async function restoreThisSession() {
   }
   sessionEnded = true;
   showEndedBar({ title: '열지 못했습니다.', body: '서버가 새 세션을 돌려주지 않았어요 — 세션 목록에서 다시 시도해 주세요.' });
+}
+/** 서버가 «이미 살아 있다»(already) 고 답했을 때 — 복원 화면을 걷고 그 자리에서 재연결한다. */
+function resumeAlive() {
+  sessionEnded = false;                                   // startRestore 가 세워 둔 종료 확정을 되돌린다(안 되돌리면 connectNow 가 즉시 반환)
+  restoreTried = true;                                    // 이 화면의 복원 시도는 소진 — 다시 복원으로 새지 않는다
+  try { term.options.disableStdin = false; } catch (_) { /* noop */ }
+  try { const b = document.querySelector('.ended-bar'); if (b) b.remove(); } catch (_) { /* noop */ }
+  try { document.title = document.title.replace(/^\(종료됨\) /, ''); } catch (_) { /* noop */ }   // endSession 이 붙인 접두사 — 되살아났으니 걷는다
+  try { statusEl.textContent = '연결 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
+  reconnectDelay = 400;
+  connectNow();
 }
 async function connectNow() {
   if (sessionEnded) return; // 종료 확정 세션 — 어떤 트리거(탭 복귀·포커스)로도 다시 붙지 않는다
@@ -4411,13 +5156,23 @@ async function connectNow() {
     // tmux control 스트림의 %exit — 이 attach 클라가 끝났다는 뜻일 뿐, '세션이 죽었다'는 뜻은 아니다
     //  (게이트웨이 재배포로 attach PTY 가 kill 돼도 %exit 이다). 그래서 여기서 종료를 단정하지 않고, 곧바로
     //  재연결해 서버에게 물어본다(살아있으면 그대로 붙고, 진짜 없으면 4410 이 와서 종료 배너). 짧은 지연으로 빠르게 판정.
-    onExit: () => { reconnectDelay = 400; try { sock.close(); } catch (_) { /* noop */ } },
+    //  ⚠ 400ms 빠른 재판정은 **버틴 연결에만** 준다(#3546). 안 그러면 붙자마자 죽는 판에서
+    //   이 값이 매번 400 으로 되돌아가 0.4초 간격 무한 루프가 된다(그게 실제로 났다).
+    onExit: () => { if (connProven) reconnectDelay = 400; try { sock.close(); } catch (_) { /* noop */ } },
   });
   sock.onopen = () => {
     dlog('ws', 'open');
+    //  ⚠ denyRetries 를 여기서 되돌리지 않는다 — 종전 주석은 «4403 은 open 전에 갈린다» 를 전제했는데
+    //   서버는 조용히 끊지 않으려고 `handleUpgrade` 로 핸드셰이크를 **완료한 뒤** `close(4403)` 한다(#835).
+    //   그래서 거부에서도 onopen 이 먼저 뜨고, 여기서 되돌리면 상한이 영영 차지 않아 6초 간격 무한 재시도가
+    //   된다(실측 2026-09-09: 「연결 확인 중… (14회째)」 — ws open → 16ms 뒤 close 4403 의 반복).
+    //   «열렸다» 는 입장 허가의 반증이 못 된다. 실제 반증은 **서버가 보낸 바이트**다 → onmessage 에서 되돌린다.
+    //  나머지(attempts·gaveUp·reconnectDelay)는 아래 stableTimer 가 «버텼다» 를 확인한 뒤에 되돌린다.
     if (didBackfill) void reloadIfNewBuild('재연결');   // 재연결 = 롤의 흔적일 수 있다(위 «새 판 자가 적용»)
-    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; gaveUp = false; // 붙었으면 입장 허용 확정 → 거부·포기 카운트 리셋
-    hideRetryBar(); // #3870 — 포기가 풀리는 이 자리에서 «연결하지 못했습니다» 배너도 걷는다(상단은 '연결됨'인데 배너가 남아 화면을 밀던 것)
+    connecting = false; wasConnected = true;
+    connProven = false;
+    clearTimeout(stableTimer);
+    stableTimer = setTimeout(markConnProven, CONN_STABLE_MS);
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
     nudgeTries = 0; needBackfill = !didBackfill; wantRedrawCap = false; // 넛지 상한·백필/재캡처 대기는 '연결 단위'
     lastKnownState = null;  // 백엔드·팬 상태는 이 연결에서 다시 관측한다(옛 연결 사본으로 캡처를 판정하지 않는다)
@@ -4426,12 +5181,13 @@ async function connectNow() {
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
     initialSettleRedraw(); // 첫 연결 1회: 폰트 준비 후 자동 화면복구(초기 어긋남 방지)
-    term.focus();
+    if (!glassIdle && !frameHiddenNow()) term.focus();   // 비치는(고르지 않은) 카드면 초점을 두고 간다 — 위 glassIdle · #4794 숨겨 붙인 액자도(보이게 되면 세션 화면이 focus 를 보낸다)
     if (AUTOSEND && !autosendDone) { autosendDeadline = Date.now() + 12000; autosendLastOut = Date.now(); scheduleAutosend(); }
   };
   sock.onmessage = (e) => {
     const bytes = (e.data instanceof ArrayBuffer) ? new Uint8Array(e.data) : (typeof e.data === 'string' ? new TextEncoder().encode(e.data) : null);
     if (!bytes) return;
+    denyRetries = 0;   // 서버가 실제로 바이트를 보냈다 = 입장 허가 확정(onopen 은 4403 거부에서도 뜬다 — 위 머리말)
     ctrl.feed(bytes);
     if (AUTOSEND && !autosendDone) autosendLastOut = Date.now();
     if (ctrl.isControl()) {
@@ -4447,11 +5203,12 @@ async function connectNow() {
   sock.onclose = (e) => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
     dlog('ws', 'close ' + ((e && e.code) || ''));
+    clearTimeout(stableTimer);   // 이 연결은 «버팀» 을 증명하지 못했다
     connecting = false;
     if (e && e.code === 4410) { onSessionGone(); return; } // 세션 종료 확정(#835) — 복원 가능하면 되살리고(#1059 E), 아니면 종료 배너
     if (e && e.code === 4403) { // 서버가 입장 거부. 단, 일시장애(재배포 직후 tmux 과부하)로 인한 '가짜 4403'일 수 있어(#687)
       //  바로 게이트를 띄우지 않고 MAX_DENY_RETRIES 만큼 재시도 — 일시장애면 곧 복구돼 붙고, 진짜 거부면 계속 4403 이라
-      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 성공 시 onopen 에서 denyRetries 리셋.
+      //  아래 게이트로 간다(무한 재연결은 여전히 막힘). 리셋은 onopen 이 아니라 **첫 수신 바이트**에서 한다(위 머리말).
       if (++denyRetries <= MAX_DENY_RETRIES) { scheduleReconnect('연결 확인 중…'); return; }
       clearTimeout(reconnectTimer);
       gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');
@@ -4477,4 +5234,3 @@ function toggleExplorer() {
   if (explorerEl.classList.contains('open') && !explorerLoaded) { explorerLoaded = true; loadDir(''); }
   setTimeout(doResize, 180); // 폭 변화 후 재맞춤(트랜지션 ~140ms)
 }
-

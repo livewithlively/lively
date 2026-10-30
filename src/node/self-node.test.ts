@@ -37,6 +37,19 @@ test("공유 게이트웨이 — 다른 멤버의 세션과 겹쳐도 같은 박
 });
 
 // 6) 경계 — 겹치는 것이 **마지막 원소 하나뿐**이어도 참이어야 한다. 첫 원소만 보는 구현을 여기서 잡는다.
+// ── #2600 T2 d4 — **선언된 세션 호스트는 후보가 아니다**(면제가 tmux 를 묻기 전에 성립해야 한다) ──
+//  계수 실측(2026-09-08): 면제가 루프 **안**에 있어서 그 노드는 `judged` 에 영원히 안 들어가고, 매
+//  SELF_PROBE_MS 마다 게이트웨이가 `list-sessions` 를 치고서야 면제했다(카나리아 2~5회/분).
+test("P1 선언된 세션 호스트뿐이면 판정을 시도하지 않는다 — tmux 를 묻지 않는다", () => {
+  assert.equal(hasSelfProbeCandidate([cand("t/sesshost", 5, true)], judged()), false);
+});
+test("P2 선언 노드와 미선언 노드가 섞이면 미선언 때문에 여전히 시도한다", () => {
+  assert.equal(hasSelfProbeCandidate([cand("t/sesshost", 5, true), cand("t/new", 2)], judged()), true);
+});
+test("P3 선언됐지만 세션이 0이어도 후보가 아니다(두 조건이 서로를 가리지 않는다)", () => {
+  assert.equal(hasSelfProbeCandidate([cand("t/sesshost", 0, true)], judged()), false);
+});
+
 test("겹치는 것이 마지막 하나뿐이어도 자기 자신", () => {
   assert.equal(sharesGatewayTmux(box(A, B, C), [C]), true);
 });
@@ -50,7 +63,8 @@ test("겹치는 것이 마지막 하나뿐이어도 자기 자신", () => {
 //
 //  → 그래서 "지금 판정할 값이 있나"를 **tmux 를 묻기 전에·최소간격을 쓰기 전에** 가른다.
 //  키는 실제로는 scopeKey(테넌트+노드id)라 구분자가 섞이지만, 이 판정은 문자열 동등성만 보므로 여기선 평문으로 쓴다.
-const cand = (key: string, sessionCount: number): { key: string; sessionCount: number } => ({ key, sessionCount });
+const cand = (key: string, sessionCount: number, declared = false): { key: string; sessionCount: number; declared: boolean } =>
+  ({ key, sessionCount, declared });
 const judged = (...ks: string[]): ReadonlySet<string> => new Set(ks);
 
 // 1) 부팅 직후 — 목록이 비어 있다. 여기서 참을 주면 그 헛시도가 최소간격을 먹는다(이 버그의 자리).

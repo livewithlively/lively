@@ -142,8 +142,9 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E23 ★ window 로 쏘면 모든 세션 탭의 뷰어가 같은 파일을 연다 — 웹 칸과 같은 뿌리");
   ok(/openInViewerPart\(ctx, f\.path/.test(FILES) && !/dispatchEvent\(new CustomEvent\('pn-viewer-open'/.test(FILES),
     "E24 자료 칸은 그 통로만 쓴다 — 사본을 두면 한쪽만 고쳐져 규율이 갈라진다");
-  ok(/localStorage\.setItem\(ED_PATH_KEY/.test(KIT) && /if \(EMBEDDED\) return;/.test(KIT),
-    "E24 ★ 펴 둔 파일은 이 세션 열쇠에만 적는다(끼워 넣은 판에서는 아예 안 적는다 — 바깥 사람 것을 덮는다)");
+  //  #4135 — 끼워 넣은 판은 저장소 대신 판 안의 Map 에 적는다(바깥 사람 것은 여전히 안 덮고, «이미 떠 있는 탭 찾기» 는 거기서도 선다).
+  ok(/localStorage\.setItem\(ED_PATH_KEY/.test(KIT) && /if \(EMBEDDED\) \{ embeddedViewerPaths\.set\(k, String\(path \|\| ''\)\); return; \}/.test(KIT),
+    "E24 ★ 펴 둔 파일은 이 세션 열쇠에만 적는다(끼워 넣은 판에서는 저장소에 안 적는다 — 바깥 사람 것을 덮는다)");
 
   const viewer = VIEWER_PART();
   ok(/paneRoot\(\)[\s\S]{0,120}addEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.addEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
@@ -175,6 +176,19 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E31 paintTabs 는 **이름과 켜짐만** 만진다 — 부품을 여기서 세우면 두 붓이 같은 일을 두 번 한다");
   ok(/paneRoot\(\)\.removeEventListener\(VIEWER_TO_EVT/.test(viewer) && !/window\.removeEventListener\(VIEWER_(TO_)?EVT/.test(viewer),
     "E25 달았던 그 자리에서 끊는다");
+}
+
+// ══ 뷰어 — 파일마다 창 하나(#4135) 의 두 레이스(정확성 리뷰에서 잡힘) ══════════════════════════
+//  갓 만든 뷰어는 기억(openRemembered)으로 한 번, 셸의 배달 신호로 또 한 번 open 에 온다 — 둘 다 같은 파일인데 첫 fetch 가
+//  끝나기 전이라 `shown` 이 비어 두 번 받았다. 그리고 옛 요청의 404 가 뒤늦게 와서 지금 보는 다른 파일의 화면·기억을 지웠다.
+{
+  const viewer = VIEWER_PART();
+  ok(/\(shown \|\| opening === p2\)/.test(viewer),
+    "E32 ★ 받는 중(opening)인 같은 파일은 다시 받지 않는다 — 기억과 셸 신호가 같은 틱에 와도 fetch 는 한 번");
+  ok(/function showFail\(r: Response \| null, p2: string\): void \{\s*\n\s*if \(path !== p2\) return;/.test(viewer),
+    "E32 ★ showFail 은 그 사이 다른 파일로 넘어갔으면 아무것도 지우지 않는다(404 분기가 path·기억을 비우기 전에)");
+  ok(/rememberedViewerPath\(ctx\.memKey\(\), t\.key\) === path/.test(PANES),
+    "E33 ★ 셸은 «이미 떠 있는 탭» 을 탭마다 적어 둔 기억으로 찾는다 — 파일마다 뷰어 하나, 보던 뷰어는 갈아입지 않는다");
 }
 
 

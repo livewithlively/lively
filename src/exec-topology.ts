@@ -45,6 +45,8 @@
  *  설명 안 된 불일치 0)이 끝나 게이트웨이가 표본 호출을 두 번 돌리는 비용만 남았기 때문이다.
  */
 export type TmuxRouteMode = "off" | "on";
+/** 브로커 세션 목록의 범위(#3797 T7) — 세션 호스트만 `node`. `ExecTopology.tmuxListScope` 머리말 참조. */
+export type TmuxListScope = "node" | "cluster";
 
 /**
  * `LIVELY_TMUX_ROUTE` 파서(순수). 정확히 `on`·`1`·`true` → on · 그 밖(대소문자·공백 섞임 포함)은 전부 off.
@@ -119,6 +121,16 @@ export interface ExecTopology {
    */
   tmuxRoute: TmuxRouteMode;
   /**
+   * 브로커 세션 목록의 **범위** — `node` 면 «이 노드 것만», `cluster`(기본)면 종전대로 클러스터 전역.
+   *
+   * ★ 세션 호스트만 `node` 다(#3797 T7). 세션 호스트는 (노드, 테넌트) 별로 하나이고 **자기 노드의
+   *  주인**이므로, 남의 노드 세션까지 자기 스냅샷에 실으면 그 세션의 좌표가 «컨테이너가 있는 노드» 가
+   *  아니라 «먼저 이긴 스냅샷» 이 된다(호스트가 둘이면 attach 가 엉뚱한 호스트로 간다).
+   * ⚠ 중앙 게이트웨이는 **cluster** 여야 한다 — 거기서 좁히면 다른 노드 세션이 목록에서 사라진다.
+   *  그래서 기본이 cluster 이고, 값을 넣는 것은 브로커가 쓰는 세션 호스트 env 파일 하나뿐이다.
+   */
+  tmuxListScope: TmuxListScope;
+  /**
    * 브로커에 닿는 길 — 중계 배포(`tmux.kind === "exec"`)에서만 있고, **테넌트 유닉스 소켓 템플릿 하나뿐**이다
    *  (`LVLY_TMUX_SOCK_TEMPLATE` — 노드 박스의 세션 호스트. 기본값은 `tmux-relay.cjs` 의 것). 셀프호스트(중계 없음)는 null.
    *  ⚠ 허브 전송(`LVLY_HUB_URL`+`LVLY_HUB_SECRET` — 중앙 게이트웨이 → 허브 → 노드 브로커)은 #2600 T3-a(2026-09-14)로 걷었다.
@@ -128,6 +140,98 @@ export interface ExecTopology {
    *   옛 경로로 조용히 폴백하지 않는 것이 의도다(그러면 오설정이 영영 안 보인다).
    */
   broker: { kind: "socket"; template: string } | null;
+  /**
+   * 세션 이미지에 설치된 하네스 키(`LIVELY_SESSION_HARNESSES`, #4067) — 배포자가 이미지와 함께 싣는 값이다
+   *  (lvly-cloud `deploy/lvly-gw.sh`, 그 값과 이미지의 일치는 lvly-cloud `sessionharness.test` 가 지킨다).
+   *  «그 AI 가 설치돼 있나» 를 **세션 컨테이너를 띄우지 않고** 답하는 근거다(profiles.aiLoginCheck).
+   *  null = 배포가 모른다(셀프호스트·구 배포) — 호출부는 종전대로 실물(자리)을 본다.
+   */
+  sessionHarnesses: readonly string[] | null;
+  /**
+   * 노드(멤버 PC)의 tmux 운용 방식(`LIVELY_MUX_PIN`, #4931) — 새 세션을 **어느 tmux 세대**에 띄우나.
+   *  · `auto`(기본) = 고정판(`terminal/mux-pin` 의 TMUX_PIN)을 판별 전용 소켓(`tmux -L lively-mux-<판>`)에서.
+   *  · `bin` = TMUX_BIN 을 그 판 이름의 전용 소켓에서(사람이 바이너리를 직접 고른 경우).
+   *  · `off` = 종전처럼 기본 소켓·TMUX_BIN(되돌리기 스위치). ⚠ off 여도 이미 전용 세대에 있는 세션은 계속 본다 —
+   *    스위치가 세션을 «사라지게» 하면 되돌리기가 아니라 또 하나의 사고다.
+   *  게이트웨이·매니지드 세션 호스트(중계)·윈도우 노드에선 읽기만 하고 쓰이지 않는다(`terminal/mux-generations` 의 켜짐 조건).
+   */
+  muxPin: MuxPinMode;
+  /**
+   * 브로커가 없는 박스의 에이전트 작업 실행면(`LIVELY_AGENT_JOBS`, #5082) — 앱 AI 에이전트 작업(`claude -p` 판)을 어디서 띄우나.
+   *  · `off`(기본) = 띄우지 않는다(종전 — 접수가 501).
+   *  · `host` = 이 박스의 tmux 에 판을 띄운다 — 사람 세션과 같은 OS 계정 · 홈 규칙(agent-jobs/launch-host.ts).
+   *  · `docker` = 작업마다 이 박스의 Docker 컨테이너를 띄운다 — 작업 폴더와 하네스가 쓰는 것만 붙인다(agent-jobs/launch-docker.ts · 2단계).
+   *  ⚠ 세션 컨테이너 확보 훅이 있는 배포(매니지드)는 이 값을 보지 않는다 — 늘 브로커 길이다(agent-jobs/surface.ts).
+   *  ⚠ 값은 **정확히** `host` · `docker`(앞뒤 공백만 벗긴다). 켜는 스위치는 관대하게 읽지 않는다(`LIVELY_TMUX_ROUTE` 와 같은 규율).
+   */
+  agentJobs: AgentJobsMode;
+  /**
+   * 그 판이 부를 이 박스 게이트웨이의 루프백 포트(`LIVELY_AGENT_JOBS_PORT`, #5082). 기본 8080 — 청/녹 박스에선 색이 바뀌어도 그대로인
+   *  고정 진입점이다(deploy/linux/lively-loopback.socket). 게이트웨이를 다른 포트로 띄운 개발 박스만 바꾼다.
+   */
+  agentJobsPort: number;
+}
+
+/** `LIVELY_AGENT_JOBS` 의 값(#5082) — `agentJobs` 필드 머리말 참조. */
+export type AgentJobsMode = "off" | "host" | "docker";
+
+/** `LIVELY_AGENT_JOBS` 파서(순수) — **정확히** `host` · `docker` 만 켠다(앞뒤 공백만 벗긴다). 그 밖(빈 값 · 대소문자 · 오타)은 off. */
+export function parseAgentJobs(raw: string | undefined): AgentJobsMode {
+  const v = (raw ?? "").trim();
+  return v === "host" || v === "docker" ? v : "off";
+}
+
+/** `LIVELY_AGENT_JOBS_PORT` 파서(순수) — 1~65535 의 정수만. 그 밖(빈 값 포함)은 8080. */
+export function parseAgentJobsPort(raw: string | undefined): number {
+  const s = (raw ?? "").trim();
+  const n = /^[0-9]{1,5}$/.test(s) ? Number(s) : NaN;
+  return n >= 1 && n <= 65535 ? n : 8080;
+}
+
+/** `LIVELY_MUX_PIN` 의 세 값(#4931) — `muxPin` 필드 머리말 참조. */
+export type MuxPinMode = "auto" | "bin" | "off";
+
+/**
+ * 값이 없을 때(또는 형식 밖일 때)의 `LIVELY_MUX_PIN` — **auto** 다(#4931 2단계).
+ *  ★ 1단계(PR #1481)는 off 를 기본으로 먼저 깔았다: 노드는 게이트웨이가 서빙하는 번들로 **자동으로 내려간다**(자가 갱신은 지문이
+ *   다르면 받는다 — 판 순서를 안 본다). 세대를 모르는 번들로 내려간 노드는 전용 세대의 세션을 못 봐서, 그 세션을 «죽었다» 로 답하고
+ *   화면은 그걸 자동 복원한다 — 같은 대화에 하네스가 둘 붙는다. 그래서 «세대를 아는 번들» 을 되돌림의 바닥으로 깐 뒤에 기본값을 켰다.
+ *   그보다 아래로 되돌리면 자가 갱신이 막는다(node/agent — 전용 세대에 세션이 살아 있으면 교체하지 않는다).
+ *  노드 하나만 끄려면 그 노드 env 에 `LIVELY_MUX_PIN=off`(`lively node` 가 env 파일을 다시 써도 남는다).
+ *  ⚠ 게이트웨이 박스 위의 노드(#2592) 판정은 이제 **게이트웨이가 만든 세션**으로만 선다(기본 소켓 — 노드의 레거시 세대가 같이 본다).
+ *   노드가 새로 만든 세션은 전용 소켓이라 게이트웨이 tmux 에 없다 — 판정이 그만큼 늦게 설 수 있지만, 한 세션이 두 길로 닿는 해악도
+ *   그 세션에선 없다.
+ */
+export const MUX_PIN_DEFAULT: MuxPinMode = "auto";
+
+/**
+ * `LIVELY_MUX_PIN` 파서(순수) — **정확히** `auto`·`bin`·`off`(앞뒤 공백만 벗긴다). 그 밖(빈 값·대소문자·오타)은 MUX_PIN_DEFAULT.
+ *  스위치를 켜는 값은 관대하게 읽지 않는다(`LIVELY_TMUX_ROUTE` 와 같은 규율) — 오타가 조용히 켜지거나 꺼지면 안 된다.
+ */
+export function parseMuxPin(raw: string | undefined): MuxPinMode {
+  const v = (raw ?? "").trim();
+  return v === "auto" || v === "bin" || v === "off" ? v : MUX_PIN_DEFAULT;
+}
+
+/**
+ * 노드 tmux 세대(#4931)를 **쓸 수 있는 자리**인가 — 노드 에이전트 · tmux 가 이 호스트의 기본 소켓 배치 · 윈도우가 아님.
+ *  매니지드 세션 호스트(중계 배치)는 거짓이다(세션이 노드 박스의 컨테이너에 산다). 윈도우(psmux)는 이름공간(`-L`)이 판마다
+ *  달라 실기기 확인 뒤 다음 단계에서 켠다. 이 질문의 답은 여기 하나다 — 켜는 쪽(node/mux-install)이 이걸 부른다.
+ */
+export function nodeMuxGenerationsApply(t: ExecTopology = execTopology(), platform: string = process.platform): boolean {
+  return t.sessionHost === "node" && t.tmux.kind === "socket" && t.tmux.socket === null && platform !== "win32";
+}
+
+/**
+ * `LIVELY_SESSION_HARNESSES` 파서(순수) — 쉼표 목록. 칸마다 앞뒤 공백을 벗기고 빈 칸은 버린다.
+ *  ⚠ 모양 밖의 칸이 **하나라도** 있으면 목록 전체를 모름(null)으로 본다 — 깨진 값의 일부만 믿으면
+ *   «설치됨» 이 조용히 줄거나 늘어난다. 모르면 호출부가 실물을 본다(느리지만 틀리지 않는다).
+ */
+export function parseSessionHarnesses(raw: string | undefined): readonly string[] | null {
+  const parts = String(raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  if (!parts.every((p) => /^[a-z][a-z0-9-]{0,31}$/.test(p))) return null;
+  return Object.freeze([...new Set(parts)]);
 }
 
 /**
@@ -146,6 +250,8 @@ export function parseWorkerK(raw: string | undefined): number {
 
 /** registry 모드의 테넌트 전용 소켓 이름 템플릿 — `tmux -L lvly-<slug>`(#1750 S3). */
 const TENANT_SOCKET = "lvly-{slug}";
+/** 그 소켓 이름의 앞머리(`lvly-`) — 소켓 폴더에서 «워크스페이스 전용 서버가 떠 있나» 를 볼 때 쓴다(#4940 tmux-exec localServerAbsentVerdict). */
+export const TENANT_SOCKET_PREFIX = TENANT_SOCKET.slice(0, TENANT_SOCKET.indexOf("{slug}"));
 
 /**
  * (순수) env 한 벌에서 토폴로지를 파생한다. **종전 판정과 바이트 단위로 같아야 한다** — 각 줄이
@@ -213,10 +319,23 @@ export function computeExecTopology(env: NodeJS.ProcessEnv = process.env): ExecT
   //  플래그는 **정확히** on·1·true(트림)만. 전송은 중계 배포에서만 있고 소켓 하나뿐이다(허브는 T3-a 로 걷었다 — `broker` 머리말).
   //  소켓 템플릿 기본값은 `tmux-relay.cjs` 의 것(`/lvly/tenants/{slug}/sock/session.sock`)이다 — 여기서 다른 값을 지어내면 두 벌이 된다.
   const { mode: tmuxRoute } = parseTmuxRoute(env.LIVELY_TMUX_ROUTE);
+  //  ⚠ **정확히** `node` 만 좁힌다 — 오타·빈 값은 종전(cluster)이다. 반대로 관대하게 읽으면
+  //   게이트웨이가 조용히 노드 범위로 좁아져 다른 노드 세션이 목록에서 사라진다.
+  const tmuxListScope: TmuxListScope = (env.LIVELY_TMUX_LIST_SCOPE || "").trim().toLowerCase() === "node" ? "node" : "cluster";
   const sockTemplate = (env.LVLY_TMUX_SOCK_TEMPLATE || "").trim() || "/lvly/tenants/{slug}/sock/session.sock";
   const broker: ExecTopology["broker"] = relayTmux ? { kind: "socket", template: sockTemplate } : null;
 
-  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, broker };
+  // ── sessionHarnesses (#4067) ──  세션 이미지의 하네스 목록. 없거나 깨졌으면 null(모름).
+  const sessionHarnesses = parseSessionHarnesses(env.LIVELY_SESSION_HARNESSES);
+
+  // ── muxPin (#4931) ──  노드 tmux 세대 스위치. 쓰이는 자리는 노드(소켓 배치·비윈도우)뿐이다.
+  const muxPin = parseMuxPin(env.LIVELY_MUX_PIN);
+
+  // ── agentJobs (#5082) ──  브로커 없는 박스의 에이전트 작업 실행면 스위치와 판이 부를 루프백 포트.
+  const agentJobs = parseAgentJobs(env.LIVELY_AGENT_JOBS);
+  const agentJobsPort = parseAgentJobsPort(env.LIVELY_AGENT_JOBS_PORT);
+
+  return { sessionHost, tmux, isolation, storage, hooks, nodeToken, attachWorkerK, tmuxRoute, tmuxListScope, broker, sessionHarnesses, muxPin, agentJobs, agentJobsPort };
 }
 
 let frozen: ExecTopology | null = null;

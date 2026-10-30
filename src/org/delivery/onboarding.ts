@@ -105,14 +105,14 @@ export function onboardingItems(f: OnboardingFacts): OnboardingItem[] {
         + (f.managed && f.people === 1 ? " 혼자 쓰는 워크스페이스라 더 챙길 것이 없습니다." : "")
         + " 웹으로만 쓰면 토큰이 없어도 되고, 로컬 설치(/install)에는 필요합니다.",
       href: "#/system/members" },
-    // 파이프라인 4단계를 **한 항목으로 접는다.** 넷을 다 펴면 체크리스트가 열 줄이 되어 처음 온 사람이
+    // 파이프라인 단계(수집·증류·관리 — #4194 에서 «분류» 는 증류의 카테고리 붙이기가 됐다)를 **한 항목으로 접는다.** 다 펴면 체크리스트가 길어져 처음 온 사람이
     //  안 읽는다 — 여기서 필요한 건 "돌고 있나"이고, 어디가 왜 막혔는지는 파이프라인 화면이 훨씬 잘 말한다.
-    { key: "pipeline", label: "맥락 파이프라인(수집→증류→분류→관리)",
+    { key: "pipeline", label: "맥락 파이프라인(수집→증류→관리)",
       done: f.pipelineStuck.length === 0,
       optional: !f.pipelineApplicable,
       how: f.pipelineStuck.length
         ? `멈춘 단계: ${f.pipelineStuck.join(" · ")}. 자동 실행을 켜지 않으면 자료가 지식이 되지 않고 쌓인 지식도 관리되지 않습니다.`
-        : f.pipelineApplicable ? "네 단계가 돌고 있습니다." : "아직 수집한 자료도 지식도 없어 확인할 단계가 없습니다.",
+        : f.pipelineApplicable ? "모든 단계가 돌고 있습니다." : "아직 수집한 자료도 지식도 없어 확인할 단계가 없습니다.",
       href: "#/context" },
     { key: "embeddings", label: "의미 검색(벡터)", done: f.embeddingsOn, optional: true,
       how: f.embeddingsOn

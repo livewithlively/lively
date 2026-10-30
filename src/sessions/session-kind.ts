@@ -35,10 +35,12 @@
  *  · `managed` 상시 세션(org_managed_session) — keep-alive 가 영속을 소유하고 크론이 프롬프트를 주입한다.
  *  · `app`     앱 세션(#1780) — 소속이 인스턴스 축에 따로 있어 프로젝트를 만들지 않는다.
  *  · `login`   로그인 절차용(#1516) — 하네스 TUI 가 아니라 로그인 명령을 셸에서 돌린다. 작업 세션이 아니다.
+ *  · `collect` 수집 실행(#4213 T11) — 판(pane)이 하네스 TUI 대신 수집 러너를 한 번 돌리고 끝난다(terminal/collect-run.ts).
+ *              서버만 연다(요청으로 못 만든다) · 사람이 들어가 볼 세션이 아니다 · 끝나면 서버가 바로 지운다.
  */
-export type SessionKind = "human" | "task" | "managed" | "app" | "login";
+export type SessionKind = "human" | "task" | "managed" | "app" | "login" | "collect";
 
-const ALL: readonly SessionKind[] = ["human", "task", "managed", "app", "login"];
+const ALL: readonly SessionKind[] = ["human", "task", "managed", "app", "login", "collect"];
 
 /** pane env 이름 — 훅이 읽는 유일한 종류 신호. 값은 SessionKind 그대로. */
 export const SESSION_KIND_ENV = "LIVELY_SESSION_KIND";
@@ -82,7 +84,7 @@ export function sessionKindFromRequest(b: { loginFor?: unknown; appId?: unknown 
 export function isWorkSession(kind: unknown): boolean {
   switch (normalizeSessionKind(kind)) {
     case "human": return true;
-    case "task": case "managed": case "app": case "login": return false;
+    case "task": case "managed": case "app": case "login": case "collect": return false;
   }
 }
 
@@ -94,7 +96,7 @@ export function isWorkSession(kind: unknown): boolean {
  */
 export function isMachineSession(kind: unknown): boolean {
   switch (normalizeSessionKind(kind)) {
-    case "task": case "managed": return true;
+    case "task": case "managed": case "collect": return true;
     case "human": case "app": case "login": return false;
   }
 }

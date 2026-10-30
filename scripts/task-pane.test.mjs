@@ -110,7 +110,7 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   eq(at("  seedLayoutStore();") > 0 && at("  seedLayoutStore();") < at("  let lay = loadLayout(id);"), true,
     "W1 배치를 읽기 **전에** 들인다 — 뒤에 부르면 첫 화면은 탭 없이 뜨고 다음에야 보인다");
   //  #4443(원준 10-05): «앱» 탭은 기본 배치에서 뺐다 — 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기».
-  eq(/side: \['files', 'tasks', 'knowledge'\]/.test(panes), true, "W2 기본 배치의 곁칸에 tasks 가 선다(자료 · 태스크 · 지식)");
+  eq(/side: \['console', 'files', 'tasks', 'knowledge'\]/.test(panes), true, "W2 기본 배치의 곁칸에 tasks 가 선다(콘솔 · 자료 · 태스크 · 지식)");
   eq(/JSON\.stringify\(\{ \.\.\.st, last: (lay|saved), p: map \}\)/.test(panes), true,   // #4225 — saved = 파생 탭(붙은 앱)을 걷은 사본
     "W3 배치를 저장할 때 표식(seeded)을 지우지 않는다 — 지우면 다음에 열 때 닫은 탭이 되살아난다");
   const parts = read("web/v2/panes-parts.ts");
@@ -123,8 +123,8 @@ const read = (p) => readFileSync(path.join(root, p), "utf8");
   // B11·B12 — 합치기·충돌의 **행위**는 실 SQL 로 잰다(src/v6/project-body-guard.pg-test.mjs). 여기선 REST 로 나가는 모양만 본다:
   //  화면은 상태코드로 가른다(409 = 덮지 않고 사람에게 묻는다). 500 으로 새면 «저장하지 못했어요» 만 뜨고 1.2초마다 되풀이한다.
   const cap = read("src/capabilities/projects-v6.ts");
-  eq(/if \(e instanceof ProjectBodyConflictError\)\s*\n\s*throw new HttpError\(409, /.test(cap), true,
-    "W9(B11) 본문 충돌은 409 로 나간다(stage: HttpError body 미지원 — 상태코드로만 가른다)");
+  eq(/if \(e instanceof ProjectBodyConflictError\)\s*\n\s*throw new HttpError\(409, [^\n]*\{ body: \{ conflict: "description" \} \}\)/.test(cap), true,
+    "W9(B11) 본문 충돌은 409 + conflict:\"description\" 로 나간다");
   eq(/if \(patch\.description_base !== undefined && patch\.description === undefined\)\s*\n\s*throw new HttpError\(400,/.test(cap), true,
     "W10(B12) 기준 글만 보내면(교체할 글 없이) 400 — 무엇을 합칠지 알 수 없다");
   eq(/if \("description_base" in b\) patch\.description_base = /.test(cap), true, "W11 REST 파서가 description_base 를 실어 보낸다(빠지면 가드가 조용히 꺼진다)");

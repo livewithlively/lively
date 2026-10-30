@@ -62,6 +62,9 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
   assert.ok((NODE_OPS as readonly string[]).includes("injectFirstPrompt"), "프로젝트 DB 바인딩 뒤 첫 지시를 넣는 노드 op가 필요하다");
   assert.ok((NODE_OPS as readonly string[]).includes("chatTranscript"), "원격 대화 UI가 하네스 응답 파일을 읽는 op가 필요하다");
   assert.ok(!(NODE_BASELINE_OPS as readonly string[]).includes("chatTranscript"), "구 노드가 못 하는 chatTranscript 를 기준선에 넣었다");
+  //  #3773 — 아웃박스 걸음(보기·누르기·치기)을 세션 호스트에 맡기는 op. 새 op 라 기준선이 아니다(선언 안 한 호스트엔 안 보낸다).
+  assert.ok((NODE_OPS as readonly string[]).includes("outboxStep"), "아웃박스 걸음(outboxStep)이 capability 목록에 없다");
+  assert.ok(!(NODE_BASELINE_OPS as readonly string[]).includes("outboxStep"), "구 노드가 못 하는 outboxStep 을 기준선에 넣었다");
   for (const op of ["stageWorkerChunk", "startWorker", "workerStatus", "stopWorker"]) {
     assert.ok((NODE_OPS as readonly string[]).includes(op), `worker op '${op}' 가 capability 목록에 없다`);
     assert.ok(!(NODE_BASELINE_OPS as readonly string[]).includes(op), `구 노드가 못 하는 worker op '${op}' 를 기준선에 넣었다`);

@@ -11,11 +11,12 @@
 //  · **빈 설정이 지시 공백이 되면 안 된다** — 조직 공통 기본으로 메운다. 배타인 두 지시를 동시에 보내지 않는다.
 import assert from "node:assert/strict";
 import {
-  Params, distillerScopeSql, distillerExclusiveSql, higherThan,
+  Params, distillerScopeSql, distillerExclusiveSql, higherThan, isAutoDisabledLane,
   buildDistillerPrompt, describeScope, composeDistillPrompt,
-  buildInboxQuery, buildBacklogQuery, markDistillerSeen,
+  buildInboxQuery, buildBacklogQuery, markDistillerSeen, buildStrandedQuery, markStrandedSeen, strandedWhereSql,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
-  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,} from "./distiller.js";
+  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,
+  oneAudienceGroup, audienceGroupKey,} from "./distiller.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -165,6 +166,20 @@ t("H2 꺼진 증류기는 배정 순서에서 빠진다(끄면 그 몫이 아래
   assert.deepEqual(higherThan(on, [off, on]).map((x) => x.id), []);
 });
 
+t("H2b 자격 실패로 자동 정지된 레인은 배정 순서에 남는다(그 몫이 아래 catch-all 로 새어 다른 기준으로 증류되면 안 된다)", () => {
+  const auto = mk({ id: 1, priority: 99, enabled: false, last_summary: { error: "x", auto_disabled: true } });
+  const on = mk({ id: 2, priority: 0 });
+  assert.deepEqual(higherThan(on, [auto, on]).map((x) => x.id), [1], "자동 정지 레인의 몫이 아래 레인으로 흘렀다");
+});
+
+t("H2c 자동 정지 판정 — 꺼져 있고 표식이 있을 때만", () => {
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: { auto_disabled: true } }), true);
+  assert.equal(isAutoDisabledLane({ enabled: true, last_summary: { auto_disabled: true } }), false, "켜진 레인을 자동 정지로 봤다");
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: { error: "x" } }), false, "사람이 끈 레인이 몫을 계속 붙잡는다 — H2 가 깨진다");
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: null }), false);
+  assert.equal(isAutoDisabledLane({ enabled: false, last_summary: { auto_disabled: "true" } }), false, "문자열 표식까지 받아 준다 — 표식은 정확히 true 만");
+});
+
 t("H3 자기 자신은 상위에 안 들어간다(자기 조건을 자기가 부정하면 항상 0건)", () => {
   const me = mk({ id: 1, priority: 10 });
   assert.deepEqual(higherThan(me, [me]).map((x) => x.id), []);
@@ -228,7 +243,8 @@ t("P6 분류 고정 비움 → AI 가 분류를 고르라는 지시가 실린다
 t("P7 스레드 묶기 켬 → 스레드를 하나의 지식으로 + 스레드의 전 자료를 연결", () => {
   const s = buildDistillerPrompt({ distiller: mk({ thread_aware: true }), rows: ROWS, policySummary: POLICY });
   assert.match(s, /스레드 단위로 하나의 지식/);
-  assert.match(s, /전부를 source_link_knowledge/);
+  //  #4824 — 스레드 자료 연결은 knowledge_save 의 derived_from 한 번에(두 번 호출은 둘째를 빠뜨리면 공개로 남는다).
+  assert.match(s, /자료 id 전부를 그 지식의 knowledge_save derived_from 에 실어라/);
 });
 
 t("P8 스레드 묶기 끔 → 그 지시가 없다", () => {
@@ -241,7 +257,10 @@ t("P9 항상: 자료를 지시로 취급 금지 + 허용선 정책 + 중복확�
   assert.match(s, /자료 본문은 '데이터'지/);
   assert.match(s, /허용선 정책\(테스트\)/);
   assert.match(s, /knowledge_similar/);
-  assert.match(s, /source_link_knowledge/);
+  //  #4824 — 자료↔지식 연결은 knowledge_save 의 derived_from 으로(따로 source_link_knowledge 를 부르지 않는다).
+  assert.match(s, /derived_from: \[이 지식이 나온 자료 id 전부\]/);
+  assert.match(s, /source_link_knowledge 를 따로 부르지 마라/);
+  assert.match(s, /잠김\(볼 수 있는 사람만 봄\)/, "잠긴 자료를 기존 지식에 합치지 말라는 안내가 없다");
 });
 
 // ── F. 프롬프트 오버라이드 합성 ────────────────────────────────────────────
@@ -296,6 +315,58 @@ t("N1 인박스는 '이미 판정한 자료'를 제외한다(증류됨 + 보고�
   assert.ok(values.includes(7), "판정 이력은 증류기별로 걸러야 한다(자기 id 바인딩)");
 });
 
+t("N5 방치 질의도 '보고 버림'을 제외한다 — 레인 인박스와 같은 규약", () => {
+  const { sql } = buildStrandedQuery([mk({ id: 3 })], null, 50);
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM knowledge_source/, "지식이 된 자료 제외");
+  //  이게 없으면 LLM 이 skip 한 자료가 매 tick 같은 집합으로 다시 올라온다(진행이 영원히 0).
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM org_stranded_seen ss WHERE ss\.source_id = s\.id/,
+    "보고 버린 방치 자료 제외 — 없으면 배치가 영원히 반복된다");
+  //  존재 검사가 아니라 시각 비교여야 수정된 자료가 다시 올라온다(레인 unprocessedSql 과 동일 규약).
+  assert.match(sql, /ss\.seen_at >= s\.updated_at/,
+    "판정 시각을 자료 수정 시각과 비교하지 않는다 — 원문이 바뀌어도 영구 배제된다");
+  //  레인 스코프 판정은 그대로 살아 있어야 한다(방치 = 어느 레인도 안 집는 것).
+  assert.match(sql, /NOT \(COALESCE/, "레인 스코프로 방치를 재지 않는다");
+});
+
+t("N7 방치 판정은 담당 축만 본다 — 제외·품질 필터를 뒤집어 방치로 만들지 않는다", () => {
+  //  🔴 종전 결함: buildStrandedQuery 가 NOT(담당 AND 제외 AND 품질) 을 써서, 운영자가 exclude 한 채널과
+  //   min_chars·lookback 미달분이 '아무도 안 집는 자료'로 뒤집혀 필터 없는 폴백으로 되돌아왔다.
+  //   폴백의 목적은 담당이 없어 굶는 자료를 구제하는 것이지(#1631) 제외·미달분을 되살리는 것이 아니다.
+  const lane = mk({ id: 3, include_channels: ["keep"], exclude_channels: ["drop"], min_chars: 200, lookback_days: 30 });
+  const own = buildStrandedQuery([lane], null, 50).sql;
+  //  담당 축은 살아 있어야 한다.
+  assert.match(own, /container_name' = ANY/, "담당(include) 판정이 사라졌다");
+  //  품질 축은 담당 판정에서 빠져야 한다 — 방치 질의 안에 길이·기간 술어가 있으면 미달분이 방치로 잡힌다.
+  assert.ok(!/length\(COALESCE\(s\.body_md/.test(own), "min_chars 가 방치 판정에 섞였다 — 짧은 자료가 방치로 뒤집힌다");
+  assert.ok(!/now\(\) - \(/.test(own), "lookback 이 방치 판정에 섞였다 — 창 밖 자료가 방치로 뒤집힌다");
+  //  제외는 '담당 판정'에서 빠지되(그래야 뒤집히지 않는다) **별도 절로 방치에서도 배제**돼야 한다.
+  assert.match(own, /<> ALL\(\$\d+::text\[\]\)/, "제외 채널이 방치 질의에서 배제되지 않는다 — 폴백이 주워 간다");
+});
+
+t("N11 화면 지표와 폴백이 같은 판정을 쓴다 — 갈리면 사각지대를 줄이는 판단이 불가능해진다", () => {
+  //  🔴 실측(2026-09-04): 폴백을 담당 축만 보게 고쳤는데 coverage 는 옛 전체 술어를 다시 조립하고 있어
+  //   화면이 말하는 사각지대와 폴백이 집는 집합이 갈렸다. 판정부는 단일 출처여야 한다.
+  const lane = mk({ id: 5, include_channels: ["keep"], exclude_channels: ["drop"], min_chars: 200 });
+  const p = new Params();
+  const where = strandedWhereSql([lane], p, null);
+  const batch = buildStrandedQuery([lane], null, 50).sql;
+  //  배치 질의는 그 판정부를 그대로 담고 있어야 한다(문자열 포함으로 공유를 못박는다).
+  assert.ok(batch.includes(where.split("\n")[0].trim()), "배치 질의가 공유 판정부를 쓰지 않는다");
+  //  판정부 자체에 담당·제외·seen 배제가 다 들어 있어야 한다.
+  assert.match(where, /container_name' = ANY/, "담당 판정이 없다");
+  assert.match(where, /org_stranded_seen ss/, "판정 기록 배제가 없다");
+  assert.match(where, /<> ALL\(\$\d+::text\[\]\)/, "제외 배제가 없다");
+  //  품질 축은 없어야 한다(있으면 미달분이 방치로 뒤집힌다).
+  assert.ok(!/length\(COALESCE\(s\.body_md/.test(where), "min_chars 가 판정부에 섞였다");
+  //  판정부에 LIMIT 이 없어야 coverage 가 전량을 셀 수 있다(있으면 "사각지대 50건"으로 굳는다).
+  assert.ok(!/LIMIT/i.test(where), "판정부에 LIMIT 이 있다 — 집계가 상한에 묶인다");
+});
+
+t("N10 봇 제외는 한 레인이라도 켜 두면 방치에서도 배제된다", () => {
+  const sql = buildStrandedQuery([mk({ id: 4, exclude_bots: true })], null, 50).sql;
+  assert.match(sql, /author_is_bot','false'\) <> 'true'/, "봇 자료가 방치로 흘러 폴백에 먹힌다");
+});
+
 t("N4 판정은 증류기별로 격리된다 — 다른 증류기 id 로는 안 걸린다", () => {
   const a = buildInboxQuery(mk({ id: 11 }), []);
   const b = buildInboxQuery(mk({ id: 22 }), []);
@@ -330,6 +401,10 @@ assert.equal(await markDistillerSeen(0, [1, 2], null), 0, "증류기 id 가 없�
 assert.equal(await markDistillerSeen(5, [], null), 0, "빈 목록이면 기록하지 않는다");
 assert.equal(await markDistillerSeen(5, [Number.NaN], null), 0, "유효하지 않은 id 만 있으면 기록하지 않는다");
 pass++; console.log("ok  N3 방어: 빈 목록·0번 증류기는 DB 접근 없이 0");
+
+assert.equal(await markStrandedSeen([], null), 0, "빈 목록이면 기록하지 않는다");
+assert.equal(await markStrandedSeen([Number.NaN], null), 0, "유효하지 않은 id 만 있으면 기록하지 않는다");
+pass++; console.log("ok  N6 방어: 방치 판정도 빈 목록·비정상 id 는 DB 접근 없이 0");
 
 
 // ── F. 사전 필터 레버 — LLM 에 먹이기 전 서버가 거른다 ─────────────────────────
@@ -1002,8 +1077,71 @@ t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) —
 {
   const one = buildSourceDigest([{ id: 7, title: '비밀.md', body_md: '내용', occurred_at: '2026-08-25T00:00:00Z',
     fields: { author_name: '윤상민', container_name: '개인메모', root: 'personal' } }]);
-  assert.ok(one.includes('개인 폴더(올린 사람만 봄)'), one.slice(0, 200));
+  assert.ok(one.includes('개인 폴더'), one.slice(0, 200));
+  //  #4824 — #4007 이 개인 업로드 자동 잠금을 걷어낸 뒤로 «올린 사람만 봄» 은 사실이 아니다(잠김 여부는 공개범위가 정한다).
+  assert.ok(!one.includes('올린 사람만 봄') && !one.includes('잠김'), one.slice(0, 200));
   const other = buildSourceDigest([{ id: 8, title: 'x', body_md: 'y', fields: { container_name: 'general' } }]);
   assert.ok(!other.includes('개인 폴더'), other.slice(0, 200));
   console.log('ok  #1881 digest: 개인 폴더 표시(로컬 자료만)');
+}
+
+// #4824 — 잠긴 자료(source.visibility='members')는 digest 머리줄에 «잠김» 이 붙는다(어느 커넥터든). 열린 자료는 그대로.
+{
+  const locked = buildSourceDigest([{ id: 9, title: 'DM', body_md: '내용', visibility: 'members', fields: { container_name: 'dm-a' } }]);
+  assert.ok(locked.includes('id=9') && locked.includes('잠김(볼 수 있는 사람만 봄)'), locked.slice(0, 300));
+  const open = buildSourceDigest([{ id: 10, title: 'x', body_md: 'y', visibility: 'open', fields: { container_name: 'general' } }]);
+  assert.ok(!open.includes('잠김'), open.slice(0, 300));
+  console.log('ok  #4824 digest: 잠긴 자료 표시');
+}
+
+// #5012 — 이슈 트래커 자료는 머리줄만 보고 «어느 이슈 · 어느 프로젝트 · 상태 · 라벨» 을 알 수 있어야 한다(개체 레인의 매핑표 재료).
+{
+  const head = (row: Record<string, unknown>): string => {
+    const line = buildSourceDigest([row]).split('\n').find((l) => l.startsWith('--- id='));
+    assert.ok(line, '머리줄이 없다'); return line;
+  };
+  // 1 리니어 이슈 — 키·프로젝트·상태(이름/유형)·라벨
+  const issue = head({ id: 3368, title: '무료 체험 정책', body_md: 'x', fields: { kind: 'issue', number: 'PLA-150',
+    container_name: 'Planning (PLA)', project: 'BM 리뉴얼', state: 'Done', state_type: 'completed', labels: ['Planning', '기획'] } });
+  for (const want of ['PLA-150', '프로젝트 BM 리뉴얼', '상태 Done/completed', '라벨 Planning·기획']) assert.ok(issue.includes(want), `${want} 없음: ${issue}`);
+  // 2 리니어 댓글 — 어느 이슈의 댓글인지 · 상태는 없다
+  const comment = head({ id: 2669, body_md: 'y', parent_external_id: 'DEV-725', fields: { kind: 'comment', number: 'DEV-725', container_name: 'Dev (DEV)' } });
+  assert.ok(comment.includes('댓글→DEV-725') && !comment.includes('상태'), comment);
+  // 3 깃랩 노트도 댓글이다
+  assert.ok(head({ id: 5, body_md: 'n', parent_external_id: 'g/r#3', fields: { kind: 'note', number: 3, container_name: 'g/r' } }).includes('댓글→g/r#3'));
+  // 4 깃허브 숫자 번호는 #n
+  assert.ok(head({ id: 1, body_md: 'z', fields: { kind: 'issue', number: 7, state: 'closed', container_name: 'o/r' } }).includes('#7 · 상태 closed'));
+  // 5 깃랩 project 는 채널(저장소)과 같아 다시 적지 않는다
+  assert.ok(!head({ id: 2, body_md: 'z', fields: { kind: 'issue', number: 3, project: 'g/r', container_name: 'g/r' } }).includes('프로젝트'));
+  // 6 마일스톤
+  assert.ok(head({ id: 6, body_md: 'z', fields: { kind: 'issue', number: 9, milestone: 'v2', container_name: 'o/r' } }).includes('마일스톤 v2'));
+  // 7 상태 이름과 유형이 같으면 한 번만
+  assert.ok(head({ id: 7, body_md: 'z', fields: { kind: 'issue', number: 'A-1', state: 'open', state_type: 'open' } }).includes('상태 open') &&
+    !head({ id: 7, body_md: 'z', fields: { kind: 'issue', number: 'A-1', state: 'open', state_type: 'open' } }).includes('open/open'));
+  // 8 라벨이 비었거나 배열이 아니면 라벨 칸이 없다
+  assert.ok(!head({ id: 8, body_md: 'z', fields: { kind: 'issue', number: 'A-2', labels: [] } }).includes('라벨'));
+  assert.ok(!head({ id: 8, body_md: 'z', fields: { kind: 'issue', number: 'A-2', labels: 'bug' } }).includes('라벨'));
+  // 9 슬랙 자료(이슈 칸 없음)는 머리줄이 종전과 글자 그대로
+  const slack = head({ id: 4, title: 't', body_md: 'm', occurred_at: '2026-10-01T00:00:00Z', fields: { container_name: 'general', author_name: 'a', ts: '1.2' } });
+  assert.equal(slack, '--- id=4 · t · 2026-10-01 00:00:00 · @a · #general · thread=1.2');
+  console.log('ok  #5012 digest: 이슈 키·프로젝트·상태·라벨');
+}
+
+// #4824 — 배치 하나 = 볼 수 있는 사람이 같은 자료(첫 행의 묶음). 대상이 다른 자료가 섞이면 derived_from 에서 잠긴 id 를
+//  빠뜨리기만 해도 그 내용이 공개 지식으로 나간다.
+{
+  const open1 = { id: 1, visibility: 'open', aud_key: null };
+  const open2 = { id: 2, visibility: 'open', aud_key: null };
+  const la = { id: 3, visibility: 'members', aud_key: 'member:a' };
+  const la2 = { id: 4, visibility: 'members', aud_key: 'member:a' };
+  const lb = { id: 5, visibility: 'members', aud_key: 'member:b' };
+  const ids = (rows: Array<{ id: number }>) => rows.map((r) => r.id).join(",");
+  assert.equal(ids(oneAudienceGroup([open1, la, open2, lb])), "1,2", "열린 자료로 시작하면 열린 자료만");
+  assert.equal(ids(oneAudienceGroup([la, open1, la2, lb])), "3,4", "잠긴 자료로 시작하면 같은 대상의 잠긴 자료만");
+  assert.equal(ids(oneAudienceGroup([lb, la])), "5", "대상이 다른 잠긴 자료는 다른 묶음");
+  assert.equal(ids(oneAudienceGroup([la])), "3");
+  assert.equal(ids(oneAudienceGroup([])), "");
+  assert.equal(audienceGroupKey({ visibility: 'members', aud_key: '' }), 'locked:', "대상 0 인 잠긴 자료도 잠긴 묶음(열린 묶음과 섞이지 않는다)");
+  assert.notEqual(audienceGroupKey({ visibility: 'members', aud_key: '' }), audienceGroupKey(open1));
+  console.log('ok  #4824 배치: 볼 수 있는 사람이 같은 자료끼리');
 }

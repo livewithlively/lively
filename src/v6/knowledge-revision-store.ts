@@ -223,18 +223,23 @@ export async function reviewQueueCounts(viewer?: Viewer): Promise<ReviewQueueCou
 // #968 카테고리별 검토 대기 카운트 — 검토 큐 사이드바(카테고리 트리)의 배지용.
 //  집합은 reviewQueueCounts 와 동일(pending 지식 ∪ pending 리비전) — 배지 합계와 큐 총계가 어긋나면 안 된다.
 //  카테고리는 목록과 같은 LATERAL LIMIT 1 규칙(단일 home) — key=null 은 미분류(주로 observed 미러).
-export async function reviewQueueCountsByCategory(): Promise<{ key: string | null; n: number }[]> {
+//  viewer 는 reviewQueueCounts 와 같은 판정(공개범위 · 앱 맥락 범위 — #5100) — 배지가 큐 총계보다 많이(안 보이는 것까지) 세지 않게.
+export async function reviewQueueCountsByCategory(viewer?: Viewer): Promise<{ key: string | null; n: number }[]> {
+  const params: unknown[] = [];
+  const visK = await knowledgeVisWhere(viewer, params);
+  const visR = await knowledgeVisWhere(viewer, params, "kk");
   const rows = await q(itemsPool, `
     SELECT cat.key, count(*)::int AS n FROM (
-      SELECT k.name FROM knowledge k WHERE k.lifecycle='pending'
+      SELECT k.name FROM knowledge k WHERE k.lifecycle='pending' AND ${visK}
       UNION ALL
-      SELECT r.name FROM knowledge_revision r WHERE r.status='pending'
+      SELECT r.name FROM knowledge_revision r
+       WHERE r.status='pending' AND EXISTS(SELECT 1 FROM knowledge kk WHERE kk.name=r.name AND ${visR})
     ) p
     LEFT JOIN LATERAL (
       SELECT c.key FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
        WHERE kc.name = p.name AND kc.state <> 'rejected' ORDER BY kc.category_id LIMIT 1
     ) cat ON true
-    GROUP BY cat.key ORDER BY n DESC`) as { key: string | null; n: number }[];
+    GROUP BY cat.key ORDER BY n DESC`, params) as { key: string | null; n: number }[];
   return rows.map((r) => ({ key: r.key ?? null, n: Number(r.n) }));
 }
 

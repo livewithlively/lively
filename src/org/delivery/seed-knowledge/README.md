@@ -1,24 +1,26 @@
-# seed-knowledge — 신규 게이트웨이에 시딩되는 지식의 본문 SoT
+# seed-knowledge — the source of truth for knowledge bodies seeded into new gateways
 
-여기 있는 `<name>.md`(+ `manifest.json` 메타)는 **코드가 이름으로 전제하는 런북**(#713)을 신규 고객
-게이트웨이에 시딩할 때 쓰는 **각색 본문의 원본(SoT)**이다. `seed-content.ts` 가 기동시 idempotent 하게
-심는다(신규=삽입, 손 안 댄 시드=갱신, 운영자 편집분=영구 보존).
+*[한국어](README.ko.md)*
 
-## 왜 WIKI DB 가 아니라 여기서 오나 (#846)
-예전엔 `capture-default-content.mjs` 가 라이블리 dev WIKI DB 의 지식 본문을 **그대로 스냅샷**했다. 그런데
-우리 WIKI 본문에는 내부 사고 이야기·`[[내부 링크]]`·사내 이슈번호·**타 고객사 이름**이 섞여 있어, 그게
-고객 박스로 새어 나갔다(v0.1.148~150 실측 유출: closeout 메타블록·타 고객사 도메인 구조). → 시딩 본문의
-SoT 를 이 디렉터리로 분리해 DB 캡처가 덮지 못하게 했다.
+The `<name>.md` files here (+ `manifest.json` metadata) are **the original (SoT) of the adapted bodies** used when seeding
+**the runbooks the code assumes by name** (#713) into a new customer gateway. `seed-content.ts` seeds them idempotently at
+startup (new = inserted, untouched seed = updated, operator edits = preserved permanently).
 
-## 편집 규칙
-1. **고객 맥락으로 각색한다.** 우리 내부 사고 서사·`[[위키 링크]]`·사내 이슈번호(#nnn 중 내부 프로젝트)·
-   사내 인물명·**타 고객사 이름**은 뺀다. 제품 기능 참조(예: MCP 인자 설명)는 남겨도 된다.
-2. 본문을 고쳤으면 **`node scripts/sync-seed-knowledge.mjs`** 로 `src/org/delivery/default-content.ts`(baked 런타임
-   시드)를 재생성하고 `git diff` 로 확인한다. (DB 필요한 전체 재생성은 `capture-default-content.mjs`.)
-3. `npm test`(seed-content.test) 가 default-content.ts ↔ 이 파일들의 바이트 일치 + 내부 흔적 부재를
-   강제한다. sync 를 빠뜨리거나 각색을 안 하면 테스트가 깨져 알려준다.
-4. 새 지식을 시딩 대상에 추가하려면: `manifest.json` 항목 + `<name>.md` 를 만들고,
-   `capture-default-content.mjs` 의 `KNOWLEDGE_NAMES`(코드가 그 이름을 knowledge_get 하는 근거)에도 더한다.
+## Why they come from here and not from the WIKI DB (#846)
+`capture-default-content.mjs` used to **snapshot the knowledge bodies from the Lively dev WIKI DB as-is**. But
+our WIKI bodies mix in internal incident stories, `[[internal links]]`, internal issue numbers, and **other customers' names**, and those
+leaked into customer boxes (leak observed in v0.1.148–150: a closeout metablock and another customer's domain structure). → The SoT for
+seeded bodies was split out into this directory so that a DB capture can't overwrite it.
 
-> ⚠ `src/org/delivery/default-content.ts` 의 지식 본문을 **직접 고치지 말 것** — 다음 재생성에 덮여 사라진다
-> (그게 #846 이 재오염된 경위다). 지식 본문은 언제나 이 디렉터리가 원본이다.
+## Editing rules
+1. **Adapt to the customer's context.** Remove our internal incident narratives, `[[wiki links]]`, internal issue numbers (the #nnn of internal projects),
+   names of our own people, and **other customers' names**. References to product features (e.g., explanations of MCP arguments) can stay.
+2. After editing a body, regenerate `src/org/delivery/default-content.ts` (the baked runtime seed) with
+   **`node scripts/sync-seed-knowledge.mjs`** and check it with `git diff`. (Full regeneration, which needs a DB, is `capture-default-content.mjs`.)
+3. `npm test` (seed-content.test) enforces a byte-for-byte match between default-content.ts and these files, plus the absence of internal traces.
+   If you skip the sync or the adaptation, the test breaks and tells you.
+4. To add a new piece of knowledge to the seed set: create a `manifest.json` entry + `<name>.md`, and
+   also add it to `KNOWLEDGE_NAMES` in `capture-default-content.mjs` (the evidence that the code calls knowledge_get on that name).
+
+> ⚠ **Don't edit the knowledge bodies in `src/org/delivery/default-content.ts` directly** — the next regeneration overwrites them
+> (that is how #846 got re-contaminated). This directory is always the original for knowledge bodies.

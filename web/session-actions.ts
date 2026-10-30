@@ -20,6 +20,7 @@ import { api, el, toast } from './core.js';
 // ⚠ confirmDialog 는 **정의처(ui-primitives)에서 직접** 가져온다 — admin.ts 배럴을 거치면 이 leaf 가
 //  페이지 모듈을 역방향으로 끌어와 순환이 된다(admin-collector-presets.ts 와 같은 이유).
 import { confirmDialog } from './ui-primitives.js';
+import { RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — 버튼 글자는 서버 안내 문구가 지목하는 그 이름
 
 // ── 세션 로그 정책(서버 = 단일 진실) ──
 export interface SessionLogPolicy { enabled: boolean; harnesses: string[]; retentionDays: number }
@@ -84,6 +85,24 @@ export async function confirmSessionEnd(opts: {
     note: keepNote(fate, policy),
     // 기록이 실제로 남는 경우에만 증거를 건넨다 — 안 남는데 링크를 주면 빈 목록이 약속을 배신한다.
     extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
+  });
+}
+
+// ── 강제로 되살리기(#3870) — 복원이 «모른다» 로 멈췄을 때 사람이 고르는 자리. ──
+//  여기 있는 다른 확인창과 성격이 다르다(파괴가 아니라 **생성**). 그래도 확인을 받는 이유는 #3752 ④ 의 규율이다:
+//  force 는 «옛 세션이 실은 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이라, 화면이 대신 골라 주지 않는다.
+//  잃는 것은 없다(대화는 이어지고 옛 세션도 안 죽인다) — 그래서 위험 색을 쓰지 않고, 생길 수 있는 일만 말한다.
+export async function confirmForceRestore(opts: { name?: string }): Promise<boolean> {
+  const who = opts.name ? `「${opts.name}」` : '이 세션';
+  return confirmDialog({
+    title: `${who}${eulReul(opts.name || '이 세션')} 강제로 되살릴까요?`,
+    confirmText: RESTORE_FORCE_LABEL, cancelText: '취소',
+    message: '서버가 이 세션이 있는 곳의 상태를 확인하지 못했어요 — 끝난 건지 응답만 늦는 건지 모르는 상태입니다.',
+    lines: [
+      '그대로 새 세션을 열고 대화를 이어받습니다. 지금까지의 대화는 그대로 따라옵니다.',
+      '옛 세션이 실은 살아 있었다면 잠시 둘이 되지만, 빈 쪽은 자동으로 걷힙니다.',
+    ],
+    note: '급하지 않으면 [취소] 하고 잠시 뒤 다시 열어 보세요 — 대개 그 사이에 상태를 다시 볼 수 있게 됩니다.',
   });
 }
 
@@ -628,4 +647,29 @@ export function purgedToast(r: PurgeResult): string {
   if (r.knowledge_revert_failed.length) parts.push(`⚠ 되돌릴 판을 못 찾은 지식 ${r.knowledge_revert_failed.length}건은 그대로예요`);
   if (r.localPending) parts.push(`⚠ ${r.localPending} 컴퓨터의 파일은 그대로입니다`);
   return parts.join(' · ');
+}
+
+// ── 초대받은 세션에서 나가기(#3870, 원준 2026-10-14) ───────────────────────────────────────────────
+//  «초대받은 뒤에 나갈 수가 있나? … 만든 사람은 나가는 경로 없어야 되고, 초대받은 사람에 한해서 나갈 수 있도록.»
+//  ⇒ 이 함수는 **초대받은 사람의 자리**에서만 부른다(부르는 쪽이 views.isInvitedSess 로 가른다) — 서버도 만든 사람의 요청은 거절한다.
+//  되돌리기는 내 손에 없다(다시 들어오려면 만든 사람이 다시 초대해야 한다) — 그래서 늘 묻는다.
+
+/** 신호 — 셸(v2/main.ts)이 받아 그 세션 창을 닫고 목록을 다시 받는다. */
+export const SESSION_LEFT_EVENT = 'lively:session-left';
+
+/** 묻고 나간다. 나갔으면 true. 실패는 토스트로 말하고 false. */
+export async function leaveInvitedSession(s: { id: string; label?: string | null }): Promise<boolean> {
+  const name = String(s.label || s.id);
+  const ok = await confirmDialog({
+    title: `「${name}」 세션에서 나갈까요?`, danger: true, confirmText: '나가기', cancelText: '취소',
+    message: '내 목록에서 빠지고, 이 세션을 더는 열 수 없어요.',
+    lines: ['다시 보려면 만든 사람에게 다시 초대해 달라고 하세요. 세션과 대화는 그대로 남아요.'],
+  });
+  if (!ok) return false;
+  try {
+    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/leave-invite', { method: 'POST', body: '{}' });
+  } catch (e: any) { toast(e?.message || '세션에서 나가지 못했어요.', true); return false; }
+  toast('세션에서 나왔어요.');
+  window.dispatchEvent(new CustomEvent(SESSION_LEFT_EVENT, { detail: { id: s.id } }));
+  return true;
 }

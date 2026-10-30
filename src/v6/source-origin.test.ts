@@ -188,10 +188,12 @@ test("W1 옛 네 줄이 사라지고 세 카드가 선다", () => {
   assert.match(SRC, /showsUploaderFilter\(/, "올린 사람 거르개가 없다");
 });
 
-test("W2 업로드 입구가 모두 들어온 길을 넘긴다(stage 판: 업로드 마무리 한 자리 · 첨부 옮기기가 아직 없다)", () => {
+test("W2 업로드 입구가 모두 들어온 길을 넘긴다", () => {
   const TF = read("src/terminal/terminal-files.ts");
-  assert.equal(TF.match(/entry: uploadEntryOf\(req\.headers\)/g)?.length, 1, "브라우즈 업로드");
+  assert.equal(TF.match(/entry: uploadEntryOf\(req\.headers\)/g)?.length, 3, "브라우즈 · 노드 세션 · 세션 업로드");
   assert.match(read("src/project/project-routes.ts"), /entry: uploadEntryOf\(req\.headers\)/, "프로젝트 업로드(up-sync 훅)");
+  assert.match(read("src/project/attach-relocate.ts"), /entry: PERSON_UPLOAD/, "세션 입력칸 첨부");
+  assert.match(read("src/ingest/upload-finish.ts"), /entry: o\.entry/);
   const ING = read("src/ingest/local-file.ts");
   assert.ok(ING.indexOf("keepEntry(") > 0 && ING.indexOf("keepEntry(") < ING.indexOf("await mirrorSourceV6("), "처음 적힌 길을 mirror 전에 읽어야 한다");
 });

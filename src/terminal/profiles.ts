@@ -17,6 +17,7 @@ import { memberSh, memberShOut, execAt, type ExecAt, type MemberExecAt } from ".
 import { sessionExecConfigured } from "./session-exec.js";   // #3668 T3 — 하네스 바이너리를 돌릴 자리가 세션 컨테이너인가
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — 세션 생성은 게이트웨이 능력이다(노드 번들에 로그인 러너를 안 싣는다)
 import { memberExecConfigured } from "./terminal-isolation.js";   // #2148 — 중계 배포에는 멤버 OS 계정이 없다(아래 memberOsStatus)
+import { execTopology } from "../exec-topology.js";   // #4067 — 세션 이미지의 하네스 목록(설치 판정을 자리 없이)
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
 import { loadDesiredOne } from "../sessions/session-desired.js";
@@ -34,7 +35,7 @@ export const memberOsUser = (memberId: string): string => osUsername(slug(member
 
 // 격리(#524) 루트 베이스 — 세션이 멤버 uid 로 돌면 작업 디렉터리도 그 uid 로 접근가능해야 한다.
 //  personal = 멤버 홈 하위(box_<slug> 소유), shared = lively-shared 그룹 공유 dir(게이트웨이·멤버 공동 rw).
-const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";              // useradd -m -d /home/box_<slug>
+export const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";       // useradd -m -d /home/box_<slug>
 const PERSONAL_SUBDIR = "box";                                                        // 멤버 홈/box = '개인 폴더'
 const SHARED_ISOLATED_BASE = process.env.LIVELY_SHARED_DIR || "/srv/lively/shared";   // root:lively-shared 2775(setgid)
 
@@ -48,7 +49,9 @@ export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath
   const iso = osUser === undefined ? await resolveMemberOsUser(userSlug(user)) : osUser;
   let base: string;
   if (iso) {
-    base = root.perUser ? path.join(MEMBER_HOME_BASE, iso, PERSONAL_SUBDIR) : SHARED_ISOLATED_BASE;
+    //  자리마다 격리 기준이 다를 수 있다(#4673 apps — 매니지드 세션 경로 `/work/apps` 는 없고 파일 작업 헬퍼가 `<테넌트>/apps` 를 본다).
+    //   isolatedBase 를 적지 않은 자리는 종전 규칙 그대로(공유 자리 하나).
+    base = root.perUser ? path.join(MEMBER_HOME_BASE, iso, PERSONAL_SUBDIR) : (root.isolatedBase ?? SHARED_ISOLATED_BASE);
   } else {
     base = root.base;
     if (root.perUser) base = path.join(base, userSlug(user));
@@ -106,7 +109,7 @@ export async function rootRelOf(user: LivelyUser, abs: string): Promise<{ root: 
 //    인증되는 구멍이었다(fail-open 임퍼스네이션). 그래서 공유 폴백을 폐기했다: 자기 dir 을 가리키면 claude /login
 //    자격도 lively MCP(멤버 토큰, provisionProfile 이 구움)도 이 멤버 dir 에만 격리된다.
 //    LIVELY_MULTIPROFILE=0 이면 전면 비활성(항상 공유) — 단일-유저 박스 전용 kill-switch(계정이 하나라 임퍼스네이션 위험 0).
-const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+export const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
 export function profileConfigDir(user: LivelyUser): string {
   return path.join(PROFILES_ROOT, userSlug(user), "claude");
 }
@@ -194,6 +197,15 @@ const SESSION_TOKEN_LABEL = "session-hooks:";
 //  훅은 세션 최소권한(admin/runtime 제외)이 맞고, MCP 는 사람이 세션에서 실제로 쓰는 표면이라 그 멤버가
 //  가진 만큼을 그대로 들어야 한다(오늘도 공유 파일 토큰으로 그만큼 쓰고 있다 — 다만 **남의 것**으로).
 const SESSION_MCP_TOKEN_LABEL = "session-mcp:";
+/** 살아 있는 세션 훅 토큰이 걸린 세션 id 들 — 노드 세션 되채우기(node-session-token-backfill)가 «이미 실어 준 세션인가» 를 이걸로 본다.
+ *  한 번에 통째로 읽는다(listTokens 는 표 전체다) — 호출부가 스냅샷 한 판에 한 번만 부른다. */
+export async function sessionHookTokenIds(): Promise<Set<string>> {
+  const out = new Set<string>();
+  for (const t of await listTokens()) {
+    if (!t.revoked_at && t.label && t.label.startsWith(SESSION_TOKEN_LABEL)) out.add(t.label.slice(SESSION_TOKEN_LABEL.length));
+  }
+  return out;
+}
 /** 라벨 하나에 걸린 살아있는 자격을 전부 회수 — 재생성 때 옛 것을 즉시 죽인다. 돌려주는 값 = **실제로 죽인 개수**. */
 async function revokeSessionTokensLabeled(labels: Set<string>, why: string): Promise<number> {
   let revoked = 0;
@@ -380,6 +392,24 @@ async function harnessSeat(user: LivelyUser, key: string, osUser: string): Promi
   return { osUser, sessionId: await seat.ensure(user, key) };
 }
 
+/**
+ * (#4067) 자리를 띄우지 않고 «설치됨» 을 답할 수 있으면 그 답 — 아니면 undefined(호출부가 종전대로 자리를 본다).
+ *
+ *  ⚠ 왜(실측 2026-09-17, 상민님 새 워크스페이스): 확인 한 번에 멤버 세션 컨테이너(노드 예약 1024MB)를 띄웠다.
+ *   붐비는 노드에선 그 확인조차 `LVLY_NODE_CAPACITY` 로 못 섰고, 로그인 판을 CP 로 옮긴 뒤에도 이 확인이 남으면
+ *   «로그인했어요» 한 번에 여전히 컨테이너가 뜬다. 설치 여부는 **이미지의 성질**이지 사람마다 다른 사실이 아니다 —
+ *   배포가 이미지와 함께 싣는 목록(execTopology.sessionHarnesses)으로 답한다.
+ *  · 자리를 쓰는 배포(세션 경계 중계 + 자리 능력)에서만 대신한다 — 그 밖은 원래 자리를 안 띄운다.
+ *  · 자격 **파일** 하네스만 — 프로브 하네스(agy)는 로그인 판정 자체가 그 자리에서 CLI 를 돌려야 해서 자리가 남는다(예외).
+ *  · 목록이 없거나 깨졌으면(null) 모름 → 종전 자리. 대리값을 지어내지 않는다.
+ */
+export function listedHarnessInstalled(key: string): boolean | undefined {
+  if (!harnessHasCredential(key)) return undefined;
+  if (!sessionExecConfigured() || !gatewayCapability("harnessSeat")) return undefined;
+  const listed = execTopology().sessionHarnesses;
+  return listed ? listed.includes(key) : undefined;
+}
+
 // `sh -c` 한 줄을 주어진 자리에서 돌린다. 자리가 있으면 그 경계(세션 컨테이너 또는 멤버 uid), 없으면 게이트웨이 로컬.
 //  ⚠ 경계로 나갈 때 HOME 을 **명시**한다: 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르고(memberLoggedInHarnesses
 //   머리말과 같은 함정), agy 는 자격을 HOME 기준으로 찾으므로 그 한 글자에 판정이 통째로 뒤집힌다.
@@ -408,6 +438,12 @@ async function runAtSeat(at: ExecAt | null, line: string): Promise<boolean | nul
   try { return await Promise.race([run, timer]); } finally { clearTimeout(t); }
 }
 
+/**
+ * (#4970) 게이트웨이 자리에서 `sh -c` 한 줄 — 셀프호스트 설치 확인(harness-installed.ts)이 runAtSeat 의 처방(stdin 닫기·상한·윈도우 모름)을
+ *  그대로 쓰게 내보낸다. 설치 확인 자체는 노드 번들 밖(게이트웨이 전용)에 둔다 — 노드 에이전트는 «DB 없음» 이 계약이라 딸려 오는 모듈을 늘리지 않는다.
+ */
+export function runAtGatewaySeat(line: string): Promise<boolean | null> { return runAtSeat(null, line); }
+
 /** 고른 AI 하나를 판정한다. 뜨거운 경로가 아니다 — 사람이 «로그인했어요» 를 누른 그 순간에만 부른다. */
 export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLoginCheck> {
   const h = HARNESSES.find((x) => x.key === key);
@@ -421,6 +457,15 @@ export async function aiLoginCheck(user: LivelyUser, key: string): Promise<AiLog
     harness: h.key, label: h.label, bin: h.bin,
     installed: null, loggedIn: null, how: "none", steps: h.loginSteps ?? [],
   };
+  // #4067 — 자리 없이 답할 수 있으면 자리를 띄우지 않는다(listedHarnessInstalled 머리말). 로그인은 ② 와 같은 판정이다.
+  const listed = osUser ? listedHarnessInstalled(h.key) : undefined;
+  if (listed !== undefined) {
+    out.installed = listed;
+    if (!listed) return out;
+    out.how = "file";
+    out.loggedIn = (await aiAccountStatus(user, osSt)).find((a) => a.key === h.key)?.loggedIn ?? null;
+    return out;
+  }
   // 하네스 바이너리를 돌릴 자리(#3668 T3) — 매니지드면 세션 컨테이너, 셀프호스트면 null(호출부가 종전 자리를 쓴다).
   //  자리를 못 얻으면 **모름**으로 끝낸다(installed=null) — 게이트웨이 자리로 접으면 아래 ① 의 거짓 «미설치» 다.
   let seat: MemberExecAt | null = null;
@@ -603,6 +648,11 @@ export interface AiAccountStatus {
    *   `POST /api/ui/me/ai-accounts/check` 로 그 행만 따로 묻는다.
    */
   how: "file" | "probe";
+  /**
+   * (#5031) 이 사람의 서버 개인 계정(격리 박스의 box_<사람>)이 **아직 없다** — 그래서 어느 AI 에도 로그인돼 있을 수 없다(false 가 사실이다).
+   *  처음 설정은 이 줄의 [연결]을 누를 때 계정을 만든다(login-seat-prep). 격리 박스가 아니거나 계정이 있으면 없다(생략).
+   */
+  pending?: boolean;
 }
 // macOS 키체인의 Claude 자격 존재 확인 — Claude Code 는 **맥에서 자격을 파일이 아니라 키체인**
 //  ("Claude Code-credentials")에 넣는다. 그래서 `.credentials.json` 부재를 '미로그인'으로 읽으면 거짓말이 된다
@@ -618,7 +668,9 @@ async function macClaudeKeychainHas(): Promise<boolean> {
   } catch { return false; }
 }
 //  osSt — 호출자가 방금 잰 OS 격리 상태를 넘기면 다시 재지 않는다(drop-priv 확인을 아낀다 — memberLoggedInHarnessesAny).
-export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): Promise<AiAccountStatus[]> {
+//  isMember — 계정을 만들 수 있는 사람인가(memberOsState 의 getMember 와 같은 축). 시험이 DB 없이 갈아 끼운다.
+export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus,
+  deps: { isMember?: (id: string) => Promise<boolean> } = {}): Promise<AiAccountStatus[]> {
   osSt ??= await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
   //  #2232 — 매니지드(중앙 게이트웨이 + 노드의 세션 컨테이너, LIVELY_MEMBER_EXEC 중계)에선 게이트웨이에 멤버 OS 유저가 없어
@@ -627,6 +679,16 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
   //   실측 2026-08-28(원준님): 로그인 창에서 /login 을 끝냈는데도 «아직 로그인이 안 보여요». 자격 파일은
   //   homes/box_<id>/.claude/.credentials.json 에 멀쩡히 있었다. 중계 배포도 멤버 축으로 본다.
   const relayed = !isolated && memberExecConfigured();
+  //  (#5031) 격리 박스인데 이 사람 계정이 아직 없다 — 종전엔 아래 프로필/공유 분기로 떨어져 **게이트웨이 공용 홈**의 자격을 그 사람 것처럼
+  //   «연결됨» 으로 보였다(그래서 처음 설정은 계정이 다 만들어질 때까지 목록을 숨겨야 했다). 계정이 없으면 그 사람 자격은 어디에도 없다 —
+  //   공용을 재지 않고 «연결 전» 으로 답한다. 계정은 [연결] 때 만든다. 판정은 memberOsState 의 absent 와 같은 축(격리 장치 · 사람 id ·
+  //   구성원) — 구성원이 아닌 주체(에이전트 토큰 등)는 계정이 만들어지지 않고 공용으로 돌므로 종전 판정 그대로다.
+  //   홈만 남은 계정(orphanHome — OS 유저는 지워졌는데 홈이 남음)은 다시 만들면 그 홈의 자격을 이어받을 수 있어 «모름»(null)이다.
+  const ownId = ownerId(user);
+  const isMember = deps.isMember ?? (async (id: string) => !!(await getMember(id)));
+  const pending = !isolated && !relayed && osSt.ready && !!ownId && await isMember(ownId).catch(() => false);
+  const pendingWhere = `내 격리 계정(${osSt.osUser}) — 아직 없어요. 이 서버에서 AI 를 연결할 때 만들어요`;
+  const pendingLogin: boolean | null = osSt.orphanHome ? null : false;
   const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
   for (const h of HARNESSES) {
@@ -639,6 +701,7 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
       //    «모름(null)» 으로 내보내고, 그 행이 궁금한 화면이 check 로 따로 묻는다. 모르는 것을 false 로
       //    접지 않는 것이 이 파일의 교리다(모르면서 «미로그인» 이라 하면 로그인한 사람을 막는다).
       if (!h.bin || !harnessLoginProbe(h.key)) continue;   // 셸 등 — 로그인 개념도 잴 방법도 없다
+      if (pending) { out.push({ key: h.key, label: h.label, scope: "isolated", where: pendingWhere, loggedIn: pendingLogin, canLogout: false, how: "probe", pending: true }); continue; }
       out.push({
         key: h.key, label: h.label,
         scope: isolated || relayed ? "isolated" : "shared",
@@ -650,6 +713,10 @@ export async function aiAccountStatus(user: LivelyUser, osSt?: MemberOsStatus): 
     }
     let scope: AiAccountStatus["scope"]; let where: string;
     let loggedIn: boolean | null;
+    if (pending) {
+      out.push({ key: h.key, label: h.label, scope: "isolated", where: pendingWhere, loggedIn: pendingLogin, canLogout: false, how: "file", pending: true });
+      continue;
+    }
     if (isolated || relayed) {
       scope = "isolated"; where = relayed ? `내 세션 홈(${osSt.osUser})의 ${rel}` : `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
       loggedIn = osSt.loggedInHarnesses.includes(h.key);   // memberOsStatus 가 같은 표(HARNESS_CRED)로 이미 drop-priv/중계 확인했다
@@ -748,15 +815,47 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
       try {
         if (!(await getMember(memberId))) return null;    // 에이전트/비-멤버 → 프로비저닝 안 함(비격리)
         await provisionMemberOs(memberId);                // useradd·홈700·그룹·키트(첫 세션만; 수 초)
+        provisionFailedAt.delete(memberId);
         return await resolveMemberOsUser(userSlug(user)); // 이제 box_ 존재 → 격리
       } catch (e) {
         console.warn(`[terminal] 구성원 OS 유저 lazy 프로비저닝 실패(${memberId}) — 비격리 폴백:`, (e as Error)?.message ?? e);
+        provisionFailedAt.set(memberId, Date.now());
         return null;
       } finally { inflightProvision.delete(memberId); }
     })();
     inflightProvision.set(memberId, p);
   }
   return p;
+}
+
+/** (#4970) 만들기가 실패한 시각 — 그 뒤 잠깐은 «실패» 로 답한다(화면이 몇 초마다 묻는데 그때마다 오래 걸리는 만들기를 다시 띄우지 않게). */
+const provisionFailedAt = new Map<string, number>();
+export const PROVISION_RETRY_MS = 5 * 60_000;
+/** 사람이 «다시 해 보기» 를 눌렀다 — 실패 표식을 지운다(다음 state 가 absent 가 되어 다시 만든다). */
+export function clearProvisionFailure(user: LivelyUser): void { const id = ownerId(user); if (id) provisionFailedAt.delete(id); }
+
+/** (#4970) 그 사람의 OS 계정을 **지금** 만드는 중이면 그 일(끝나면 OS 유저 이름 또는 null). 아니면 undefined.
+ *  ⚠ ensureMemberOsUser 의 빠른 길은 계정이 «있으면» 곧바로 돌아온다 — 그런데 계정(useradd)은 만들기 초반에 생기고, 걸리는 시간의
+ *   대부분은 그 뒤(키트 · 구성원 몫 claude·codex 설치)다. 그래서 «다 만들어질 때까지» 기다려야 하는 쪽(화면 안 로그인 시작)은 이걸 먼저 본다(격리 리뷰). */
+export function memberProvisioning(user: LivelyUser): Promise<string | null> | undefined {
+  const id = ownerId(user);
+  return id ? inflightProvision.get(id) : undefined;
+}
+
+/** (#4970) 그 사람의 OS 계정 상태 — 처음 설정 «AI 연결» 이 로그인 전에 묻는다.
+ *  none = 계정이 필요 없다(격리 박스가 아님 · 매니지드 중계 · 구성원이 아님) · absent = 아직 없다 · preparing = 만드는 중 ·
+ *  ready = 있다 · failed = 방금 만들다 실패했다(PROVISION_RETRY_MS 동안). */
+export type MemberOsState = "none" | "absent" | "preparing" | "ready" | "failed";
+export async function memberOsState(user: LivelyUser): Promise<MemberOsState> {
+  if (memberExecConfigured() || !isolationInfraReady()) return "none";
+  const id = ownerId(user);
+  if (!id) return "none";
+  if (inflightProvision.has(id)) return "preparing";
+  if (await resolveMemberOsUser(userSlug(user))) return "ready";
+  if (!(await getMember(id))) return "none";
+  const failed = provisionFailedAt.get(id);
+  if (failed !== undefined && Date.now() - failed < PROVISION_RETRY_MS) return "failed";
+  return "absent";
 }
 
 // 세션 owner 의 OS 계정(#524) — 파일 API 가 격리 홈(멤버 700)의 op 를 그 uid 로 내릴 때 쓴다.

@@ -32,7 +32,7 @@ export interface ShellTab {
   aside: HTMLElement;          // v2-aside 안의 이 탭 우패널
   rendered: boolean;           // 게으른 렌더 — 처음 활성화될 때 그린다
   noAside: boolean;            // 앱 프레임 탭은 우패널이 없다
-  chat: { id: string; destroy(): void; update(t: any): void; setFilesOn(on: boolean): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
+  chat: { id: string; destroy(): void; update(t: any): void; setFilesOn(on: boolean): void; viewMode?(): 'term' | 'chat'; reshown?(): void; revivedHere?(): boolean } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
   appInstanceId: string | null; // 이 탭이 연 AppInstance — 탭:인스턴스 = 1:1. legacy 화면은 null.
   appId: string | null;
   appView: { destroy(): void } | null; // generic 앱 iframe 등 탭별 정리 핸들
@@ -90,6 +90,8 @@ export function routeKey(route: string): string {
   if (p === 'taxonomy') return 'taxonomy';
   //  사용 가이드(#4179)도 한 창 안에서 문서를 오가는 앱이다. 문서마다 창이 새로 서지 않게 접는다.
   if (p === 'learn') return 'learn';
+  //  앱빌더(#4632)도 한 창 안에서 목록 · 새 앱 · 이어서 · 고치기를 오간다 — 만들 때마다 창이 새로 서지 않게 접는다.
+  if (p === 'builder') return 'builder';
   return 'raw:' + h;
 }
 
@@ -100,9 +102,17 @@ export function routeKey(route: string): string {
  *  아니다. 그런데 종전엔 그냥 탭으로 저장돼서, 자동 진입이 한 번 일어나면 그 탭이 저장본에 박히고
  *  **다음 부팅마다 서버 판정을 보지도 않고 복원**됐다(부팅 라우팅은 저장된 탭을 그대로 되살린다).
  *  즉 게이트가 아무리 정확해져도 그 뒤로는 무의미했다 — '시도때도없이 뜬다'의 실제 정체가 이것이다.
+ *
+ * #4480 — 앱 주소 경유(#/app-open/<앱>?…&state=…)와 크게 보기(#/full/<앱>)도 지나가는 자리다.
+ *  · 경유 탭은 한 번 쓰고 끝이다. 되살아나면 이미 쓴 state 로 다시 열어, 워크스페이스를 열었는데 앱 주소의
+ *    «로그인을 마치지 못했습니다» 로 넘어갔다(2026-10-14 상민님 실측, 사파리).
+ *  · 크게 보기는 앱을 셸 위에 덮는 따로 연 창이다. 되살아나면 다음에 라이블리를 열 때 앱이 셸을 덮고 선다.
+ * #4482 — 앱 동의 경유(#/app-grant/<앱>?v=…&next=…)도 같다. 앱 주소(새 탭)에서 동의를 받으러 왔다 돌아가는 자리라, 되살아나면
+ *  라이블리를 열었는데 동의 창이 뜨고 앱 주소로 넘어간다.
  */
 export function routeSticky(route: string): boolean {
-  return routeKey(route) !== 'raw:welcome';
+  const k = routeKey(route);
+  return k !== 'raw:welcome' && !/^raw:(app-open|app-grant|full|open)(\/|\?|$)/.test(k);   // open — #4769 설치한 앱의 문(인스턴스로 넘긴다)
 }
 
 export interface TabsApi {
@@ -157,7 +167,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify({
         //  draft(아직 안 보낸 지시)·seen(본 시각, #3890)은 있을 때만 싣는다 — 빈 값까지 적으면 저장본이 쓸데없이 커진다.
-        //  ⚠ 지나가는 화면(#/welcome)은 저장하지 않는다 — 되살아나면 서버 판정을 우회한다(routeSticky).
+        //  ⚠ 지나가는 화면(#/welcome · #/app-open · #/full)은 저장하지 않는다 — 되살아나면 서버 판정을 우회하거나 쓴 값으로 다시 연다(routeSticky).
         tabs: tabs.filter((t) => routeSticky(t.route)).map((t) => {
           const o = t.draft ? { route: t.route, title: t.title, draft: t.draft.slice(0, 8000) } : { route: t.route, title: t.title };
           return t.seenAt > 0 ? { ...o, seen: t.seenAt } : o;

@@ -1,0 +1,387 @@
+// 작업 컨테이너 — 판정만(순수). 무엇을 띄울지 · 언제 끝난 것으로 볼지 · 판의 보고를 어떤 상태로 적을지 (#4490 앱 v2-11)
+//
+//  작업 1건 = 세션 노드의 gVisor 컨테이너 1개(사람 세션과 같은 브로커·번들, 다른 인스턴스). 끝나면 결과를 적고 바로 걷는다.
+//  이 파일은 DB·브로커·tmux 를 모른다 — service.ts 가 사실을 모아 여기 묻고, 답대로 움직인다(엣지 표로 시험한다).
+import type { AgentJobPolicy } from "../org/policies/agent-job-policy.js";
+
+export type AgentJobStatus = "queued" | "starting" | "running" | "done" | "failed" | "timeout" | "canceled";
+export const LIVE_JOB_STATUSES: readonly AgentJobStatus[] = Object.freeze(["starting", "running"]);
+export const OPEN_JOB_STATUSES: readonly AgentJobStatus[] = Object.freeze(["queued", "starting", "running"]);
+export const isEnded = (s: string): boolean => s === "done" || s === "failed" || s === "timeout" || s === "canceled";
+
+/** 프롬프트 상한(문자) — 사람이 쓰는 지시와 앱이 붙이는 자료를 합쳐도 넉넉하고, DB 한 행·boot 응답 하나에 담긴다. */
+export const PROMPT_MAX = 100_000;
+/** 진행 꼬리 상한(문자) — 앱·사람이 «지금 무엇을 하나» 를 보는 요지. 전문은 하네스 대화 기록에 있다. */
+export const TAIL_MAX = 16_000;
+/** 최종 답 상한(문자) — 결과 JSON 한 칸. 넘으면 자르고 truncated 를 남긴다. */
+export const RESULT_TEXT_MAX = 200_000;
+/** 판이 보고하는 stderr 꼬리 상한. */
+export const STDERR_TAIL_MAX = 8_000;
+/** 판의 박동 간격 — silent_sec(기본 90초)의 1/18. 진행 꼬리도 이 간격으로 올라온다. */
+export const TICK_MS = 5_000;
+/** 라벨 상한(문자). */
+export const LABEL_MAX = 120;
+/**
+ * #5101 API 키 작업의 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 — 대화 파일 · 큰 도구 결과 파일 · gzip · runner.ts saveTranscript) 상한 —
+ *  판이 끝에 올리고(/transcript) 게이트웨이가 보관했다가 그 대화를 이어받는 작업의 첫 말에 돌려준다. API 키 작업은 이 작업만의 빈 설정 폴더에서
+ *  돌고(멤버 홈의 로그인을 읽지 않게) 그 폴더는 끝나면 지워져, 보관하지 않으면 이어받기 · 형식 재시도가 «No conversation found» 로 실패한다
+ *  (실측 2026-10-29 · claude 2.1.312). 넘으면 보관하지 않는다(그 작업은 이어받을 수 없다).
+ *  GZ = 올리는 본문(압축) · RAW = 풀었을 때(압축 폭탄을 막는다 — 게이트웨이 확인 · 판 복원 · 판의 올리기 전 크기 재기가 이 값으로 끊는다).
+ */
+export const TRANSCRIPT_GZ_MAX = 8 * 1024 * 1024;
+export const TRANSCRIPT_RAW_MAX = 64 * 1024 * 1024;
+/** #5101 판이 결과 보고에 싣는 «대화 기록을 못 되돌렸다 · 못 올렸다» 까닭의 상한(글자) — 게이트웨이는 작업 번호와 함께 경고 로그로 남긴다. */
+export const TRANSCRIPT_NOTE_MAX = 1000;
+
+/** 앱 id 규칙(코어 manifest APP_ID_RE · 브로커 sessionapps.APP_ID_RE 와 같은 자) — 앱 폴더 경로 조각으로 안전하다. */
+export const APP_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+/** 컨테이너 안 앱 폴더 자리(브로커 APP_FOLDER_CWD_ROOT · 파일 주소 체계 #4671 «프로젝트 없는 앱 에이전트 세션» 과 같은 값). */
+export const APP_FOLDER_ROOT = "/work/apps";
+/** 컨테이너 안 프로젝트 폴더 자리(세션 경로 표 `/work/shared` + project/<id>). */
+export const PROJECT_FOLDER_ROOT = "/work/shared/project";
+
+/** (순수) 앱 폴더 작업 폴더 — 앱 id 가 규칙 밖이면 던진다(경로를 만들지 않는다). */
+export function appFolderCwd(appId: string): string {
+  if (!APP_ID_RE.test(appId)) throw new Error(`앱 id 형식 밖: ${JSON.stringify(appId)}`);
+  return `${APP_FOLDER_ROOT}/${appId}`;
+}
+/** (순수) 프로젝트 폴더 작업 폴더. */
+export function projectFolderCwd(projectId: number): string {
+  if (!Number.isSafeInteger(projectId) || projectId < 1) throw new Error(`프로젝트 id 형식 밖: ${projectId}`);
+  return `${PROJECT_FOLDER_ROOT}/${projectId}`;
+}
+
+/**
+ * (순수) 작업 컨테이너의 세션 id — `job-<작업 id>-<16진 8>`.
+ *  ★ `box-` 로 시작하지 않는 것이 이 설계의 요점이다: 사람 세션 목록·복원 목록·MCP 세션 신원(`SESSION_ID_RE`)은 전부 `box-` 만
+ *   보므로 작업 컨테이너는 따로 막지 않아도 사람 화면에 안 뜬다(desired 행도 없다). 브로커 세션 id 규칙
+ *   (`^[a-z0-9][a-z0-9_-]{0,62}$`)과 tmux 해석기(SAFE)는 이 꼴을 받는다.
+ */
+export function jobSessionId(jobId: number, hex8: string): string {
+  if (!Number.isSafeInteger(jobId) || jobId < 1) throw new Error(`작업 id 형식 밖: ${jobId}`);
+  if (!/^[0-9a-f]{8}$/.test(hex8)) throw new Error(`꼬리 형식 밖: ${hex8}`);
+  return `job-${jobId}-${hex8}`;
+}
+export const JOB_SESSION_ID_RE = /^job-[1-9][0-9]{0,15}-[0-9a-f]{8}$/;
+
+/**
+ * (순수) 작업의 판정 · 권한 기준 구성원 — 구독 실행은 실행 계정 구성원, API 키 실행(#4488 v2-9)은 보낸 사람. 동시 상한 셈 · 활성 판정
+ *  (live.assertJobAllowed) · 작업 AI 토큰(live.mintMcpToken)이 이 사람으로 본다. 키는 어느 자리에도 들어가지 않고 하네스는 빈 설정 폴더 +
+ *  프록시 토큰으로 돈다(ai-runs/service.bootEnvForJob).
+ *  컨테이너의 자리(OS 계정 · 홈)는 이와 다를 수 있다: 홈 없는 작업(#4891 — 앱 서버가 보낸 API 키 에이전트 작업)은 이 사람의 홈을 붙이지 않고
+ *  전용 계정(HOMELESS_OS_USER)의 빈 홈에서 돈다(launch.ts).
+ */
+export function jobSeatMember(job: { account_kind: string; account_member: string | null; requester: string }): string | null {
+  return job.account_kind === "api_key" ? job.requester : job.account_member;
+}
+
+/**
+ * #4891 — 홈 없는 작업 컨테이너의 OS 계정(브로커 HOMELESS_OS_USER 와 같은 값). 구성원 계정은 `box_<slug>` 이고 slug 엔 `_` 가 없다
+ *  (terminal-isolation.memberSlug — [a-z0-9-]) → 어떤 구성원과도 겹치지 않는다. 브로커는 이 계정으로는 홈 없는 확보만 받는다.
+ */
+export const HOMELESS_OS_USER = "box_lvly_job";
+
+/**
+ * (순수) 작업 AI 의 라이블리 신원(#5081) — 보통은 자리의 구성원(jobSeatMember)이고, 공용 시트로 도는 작업은 **보낸 사람**이다.
+ *  자리(홈 · Claude 로그인)는 시트 계정 것을 쓰지만, 앱 표에 남는 제안자와 보이는 범위는 물은 사람 것이어야 한다(상민 2026-10-28 · #1576
+ *  «제안자 = 질문한 사람» · «그 사람이 못 보는 표 · 지식은 작업에서도 못 본다»). 시트 계정 이름으로 굽으면 물은 사람이 시트 계정의 권한을 빌린다.
+ */
+export function jobIdentityMember(job: { account_kind: string; account_member: string | null; requester: string }, sharedSeat: boolean): string | null {
+  return sharedSeat ? job.requester : jobSeatMember(job);
+}
+
+/**
+ * (순수) 작업 AI 의 앱 토큰 옵션 — 작업 상한만큼 살고(ttlSec), 홈 없는 작업(#4891)이면 주체를 앱 서버 급으로: 능력 API · /mcp 에서만 통하고
+ *  무조건 통과 도구가 꺼진다(auth/http-auth · apps/principal). 그 AI 를 부린 것은 앱 서버 코드라 사람 이름으로 세션 · 파일 · 계정 길을 열지 않게.
+ *  #5081 공용 시트 작업도 앱 서버 급이다 — 물은 사람의 이름으로 굽지만 그 사람의 홈이 아니라 함께 쓰는 시트 홈에서 돈다. 그 자리에서 물은 사람의
+ *   이름으로 세션(그 사람의 홈이 붙는다) · 파일 · 계정 길을 열지 않게.
+ */
+export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number, sharedSeat = false): { ttlSec: number; appServerPrincipal?: true } {
+  return job.homeless === true || sharedSeat ? { ttlSec, appServerPrincipal: true } : { ttlSec };
+}
+
+/**
+ * (순수) 홈 없는 작업이 될 수 있나(#4891) — API 키 실행 · 앱 작업 · 프로젝트 없음 · 작업 폴더가 그 앱 폴더. 어기면 사유, 맞으면 null.
+ *  구독은 그 사람의 로그인(홈)으로만 돌고, 프로젝트 폴더는 사람 경계(공개범위)라 홈 없는 자리에 붙이지 않는다. 홈 없는 작업이 아니면 null.
+ */
+export function homelessJobRefusal(job: { homeless?: boolean; account_kind: string; app_id: string | null; project_id: number | null; cwd: string }): string | null {
+  if (job.homeless !== true) return null;
+  if (job.account_kind !== "api_key") return "홈 없는 작업은 API 키 실행만 됩니다";
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "홈 없는 작업은 앱 작업만 됩니다";
+  if (job.project_id != null) return "홈 없는 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "홈 없는 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  return null;
+}
+
+/** #5081 공용 시트 작업을 아직 돌려도 되나의 사실 — live 가 설정 · 구성원 표에서 모은다(보낸 사람이 그 앱을 쓸 수 있나는 따로 잰다). */
+export interface SharedSeatJobFacts {
+  /** 시트 지정(관리자 승인 + 본인 동의)이 그대로인가. */
+  consented: boolean;
+  /** 시트 계정 — 이 워크스페이스의 활성 사람 구성원인가 · 기본 권한 밖의 권한이 있나(ai-runs/plan.seatElevated). */
+  seat: { active: boolean; elevated: boolean };
+  /** 보낸 사람이 이 워크스페이스의 활성 사람 구성원인가. */
+  requesterActive: boolean;
+}
+
+/**
+ * (순수) 공용 시트 작업을 아직 돌려도 되나(#5081) — 접수 때(ai-runs/service.submitRun)와 같은 자로 다시 잰다: 모양(구독 · 앱 작업 · 프로젝트 없음 ·
+ *  작업 폴더가 그 앱 폴더) · 시트 지정 · 시트 계정(활성 · 기본 권한뿐 — ai-runs/plan.seatShared) · 보낸 사람(활성). 어기면 사유, 맞으면 null.
+ *  배차 직전이면 그 작업의 끝, 도는 중이면 감시가 멈춘다(live.assertJobAllowed).
+ */
+export function sharedSeatJobRefusal(
+  job: { account_kind: string; account_member: string | null; requester: string; app_id: string | null; project_id: number | null; cwd: string },
+  f: SharedSeatJobFacts,
+): string | null {
+  const seat = job.account_member ?? "?";
+  if (job.account_kind !== "subscription" || !job.account_member) return "공용 시트 작업은 구독 실행만 됩니다";
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "공용 시트 작업은 앱 작업이어야 합니다";
+  if (job.project_id != null) return "공용 시트 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "공용 시트 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  if (!f.consented) return `공용 시트(${seat}) 지정이 풀렸습니다`;
+  if (!f.seat.active) return `공용 시트 계정(${seat})이 활성 사람 구성원이 아닙니다`;
+  if (f.seat.elevated) return `공용 시트 계정(${seat})이 높은 권한(관리자 · 실행 · DB · 코드)을 가져 공용으로 쓰지 않습니다`;
+  if (!f.requesterActive) return `보낸 사람(${job.requester})이 이 워크스페이스의 활성 구성원이 아닙니다`;
+  return null;
+}
+
+/** (순수) 요청한 실행 시간(분) → 초. 없으면 기본, 넘으면 최대로 접는다(거절하지 않는다 — 앱이 상한을 몰라도 돈다). */
+export function timeoutSecOf(requestedMin: unknown, p: Pick<AgentJobPolicy, "default_timeout_min" | "max_timeout_min">): number {
+  const n = typeof requestedMin === "number" && Number.isFinite(requestedMin) ? Math.floor(requestedMin) : NaN;
+  const min = Number.isNaN(n) || n < 1 ? p.default_timeout_min : Math.min(n, p.max_timeout_min);
+  return min * 60;
+}
+
+export interface ClaimCandidate { id: number; requester: string; account_kind: string; account_member: string | null }
+
+/**
+ * (순수) 자리 주기의 두 축(#5081) — 사람당 상한을 누구로 세나(who) · 공용 시트 상한을 어느 시트로 세나(seat, 공용 시트가 아니면 null).
+ *  보통은 자리의 구성원(jobSeatMember — 구독 주인 · API 키면 보낸 사람)으로 센다. 지금 공용 시트로 켜진 구독의 작업은 **보낸 사람**으로 세고
+ *  그 시트 전체를 따로 센다 — 시트 하나가 모두의 몫을 사람당 상한(기본 2) 하나로 나눠 쓰지 않게.
+ */
+export function claimAxes(j: ClaimCandidate, sharedSeats: ReadonlySet<string>): { who: string | null; seat: string | null } {
+  if (j.account_kind === "subscription" && j.account_member && sharedSeats.has(j.account_member)) return { who: j.requester || null, seat: j.account_member };
+  return { who: jobSeatMember({ account_kind: j.account_kind, account_member: j.account_member, requester: j.requester }), seat: null };
+}
+
+/**
+ * (순수) 이번에 자리를 줄 대기 작업을 고른다 — 먼저 온 것부터, 워크스페이스 상한과 실행 계정(사람)당 상한을 지킨다.
+ *  live = 지금 띄우는 중·도는 작업(starting·running). queued = 기다리는 작업(먼저 온 순서로 받는다).
+ *  ⚠ 사람당 상한에 걸린 작업은 **건너뛰고** 다음 사람의 작업을 본다 — 한 사람이 대기열 앞을 다 차지해도 남의 작업이 선다.
+ *  #5081 공용 시트(sharedSeats — 지금 켜진 시트 계정들)의 작업은 보낸 사람당 상한 + 시트 전체 상한(max_running_per_service_seat)을 함께 지킨다(claimAxes).
+ */
+export function planClaims(
+  live: readonly ClaimCandidate[], queued: readonly ClaimCandidate[],
+  p: Pick<AgentJobPolicy, "max_running" | "max_running_per_member" | "max_running_per_service_seat">, sharedSeats: ReadonlySet<string> = new Set(),
+): number[] {
+  let free = p.max_running - live.length;
+  if (free <= 0) return [];
+  const perMember = new Map<string, number>();
+  const perSeat = new Map<string, number>();
+  const bump = (m: Map<string, number>, k: string | null): void => { if (k) m.set(k, (m.get(k) ?? 0) + 1); };
+  for (const j of live) { const a = claimAxes(j, sharedSeats); bump(perMember, a.who); bump(perSeat, a.seat); }
+  const out: number[] = [];
+  for (const j of queued) {
+    if (free <= 0) break;
+    const a = claimAxes(j, sharedSeats);
+    if (a.who && (perMember.get(a.who) ?? 0) >= p.max_running_per_member) continue;
+    if (a.seat && (perSeat.get(a.seat) ?? 0) >= p.max_running_per_service_seat) continue;
+    out.push(j.id);
+    bump(perMember, a.who); bump(perSeat, a.seat);
+    free--;
+  }
+  return out;
+}
+
+export interface SweepFacts {
+  status: AgentJobStatus;
+  createdAt: number;
+  claimedAt: number | null;
+  startedAt: number | null;
+  lastTickAt: number | null;
+  timeoutSec: number;
+  cancelRequested: boolean;
+  /**
+   * 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작). 무응답은 «판이 조용했던 시간» 이지 «게이트웨이가 못 들은 시간» 이
+   *  아니다 — 게이트웨이가 내려가 있던 동안 판의 박동은 갈 곳이 없었다. 그래서 침묵은 이 시각 이후부터만 센다(재기동 직후 살아 있는
+   *  판을 한꺼번에 끊지 않게). 모르면(null) 접지 않는다.
+   */
+  listeningSince?: number | null;
+  /** 대기 중인 작업의 마지막 띄우기 실패 사유(일시 실패로 대기열에 되돌린 것) — 대기 상한으로 끝낼 때 문장에 붙인다. */
+  lastError?: string | null;
+}
+export type SweepAction =
+  | { act: "none" }
+  | { act: "end"; status: "failed" | "timeout" | "canceled"; error: string; kill: boolean };
+
+/** 시간 상한을 판이 스스로 끊은 뒤 보고까지 기다려 주는 여유(초) — 판은 상한에서 SIGTERM, 10초 뒤 SIGKILL, 그다음 보고한다. */
+export const TIMEOUT_GRACE_SEC = 120;
+
+/**
+ * (순수) 감시 — 열린 작업 하나를 지금 끝내야 하나. 끝내면 컨테이너를 걷을지(kill)도 함께 말한다.
+ *  · 대기 중: 취소 요청이면 취소 · 대기 상한을 넘기면 실패(«자리가 안 났다»).
+ *  · 띄우는 중(자리 받음, 판의 첫 말 없음): 상한을 넘기면 실패 — 컨테이너 확보·하네스 준비가 막혔다.
+ *  · 도는 중: 판 말이 silent_sec 넘게 없으면 끊김 · 실행 상한 + 여유를 넘기면 시간 초과(판이 스스로 못 끊은 것).
+ *  ⚠ 판정 시계는 관측된 시각만 쓴다 — 없는 시각(null)은 그 앞 단계 시각으로 접는다(모르는 것을 «오래됐다» 로 읽지 않는다).
+ */
+export function sweepDecision(f: SweepFacts, nowMs: number, p: Pick<AgentJobPolicy, "queue_wait_min" | "silent_sec" | "start_timeout_sec">): SweepAction {
+  if (f.status === "queued") {
+    if (f.cancelRequested) return { act: "end", status: "canceled", error: "대기 중에 취소했습니다", kill: false };
+    if (nowMs - f.createdAt > p.queue_wait_min * 60_000) {
+      const last = f.lastError ? ` — 마지막 띄우기 실패: ${f.lastError.slice(0, 300)}` : "";
+      return { act: "end", status: "failed", error: `자리가 ${p.queue_wait_min}분 안에 나지 않았습니다(워크스페이스 동시 상한) — 다시 보내 주세요${last}`, kill: false };
+    }
+    return { act: "none" };
+  }
+  if (f.status === "starting") {
+    const since = f.claimedAt ?? f.createdAt;
+    if (nowMs - since > p.start_timeout_sec * 1000) {
+      //  판이 실패를 알렸다면(#4829 boot-failed) 그 사유로 이미 끝났다 — 여기까지 온 것은 판이 게이트웨이에 한 번도 닿지 못한 경우다.
+      return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.start_timeout_sec}초 안에 시작하지 못했습니다 — 컨테이너가 뜨지 않았거나 게이트웨이에 닿지 못했습니다`, kill: true };
+    }
+    return { act: "none" };
+  }
+  if (f.status === "running") {
+    const started = f.startedAt ?? f.claimedAt ?? f.createdAt;
+    if (nowMs - started > (f.timeoutSec + TIMEOUT_GRACE_SEC) * 1000) {
+      return { act: "end", status: "timeout", error: `실행 시간 상한(${Math.round(f.timeoutSec / 60)}분)을 넘겼습니다`, kill: true };
+    }
+    const heard = Math.max(f.lastTickAt ?? started, f.listeningSince ?? Number.NEGATIVE_INFINITY);
+    if (nowMs - heard > p.silent_sec * 1000) {
+      return { act: "end", status: "failed", error: `작업 컨테이너가 ${p.silent_sec}초 동안 응답하지 않았습니다(노드·컨테이너가 사라졌을 수 있습니다)`, kill: true };
+    }
+    return { act: "none" };
+  }
+  return { act: "none" };
+}
+
+/** 보존 정리(#4828) — 한 판에 지우는 행 수 · 꽉 찬 판이 이어질 때 한 번의 정비에서 도는 판 수(밀린 것을 몇 주에 걸쳐 지우지 않게 — 격리 리뷰). */
+export const PRUNE_BATCH = 1000;
+export const PRUNE_ROUNDS_MAX = 10;
+
+/** 판의 시작 실패 보고(#4829 — runner.ts BOOT_SOURCE 의 boot-failed 본문): 어느 단계 · 게이트웨이가 준 상태 코드(못 닿았으면 0) · 짧은 말. */
+export interface BootFailure { stage: "boot" | "runner"; status: number | null; message: string }
+
+/** (순수) 시작 실패 보고를 거른다 — 판은 작업 AI 와 같은 uid 라 보고를 믿지 않고 칸마다 거르고 자른다(한 줄 · 300자). */
+export function parseBootFailure(body: unknown): BootFailure {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const status = typeof b.status === "number" && Number.isInteger(b.status) && b.status >= 0 && b.status < 1000 ? b.status : null;
+  const message = typeof b.message === "string" ? wellFormed(noNul(b.message).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300)) : "";
+  return { stage: b.stage === "runner" ? "runner" : "boot", status, message };
+}
+
+/**
+ * (순수) 시작 실패를 사람이 읽을 오류 문장으로(600자까지).
+ *  ★ 도는 중인 작업에 부트가 401 이면 게이트웨이는 시작을 받았는데 그 응답이 판에 못 닿은 것이다 — 부트 비밀은 한 번 쓰면 지워져
+ *   다시 물으면 401 이다(service.onBoot 머리말). «비밀이 틀렸다» 로 말하면 틀린 말이 된다.
+ */
+export function bootFailureError(f: BootFailure, jobStatus: AgentJobStatus): string {
+  const detail = f.message ? `: ${f.message}` : "";
+  const s = f.stage === "runner" ? `작업 컨테이너의 실행기가 시작하자마자 멈췄습니다${detail}`
+    : f.status === 401 && jobStatus === "running" ? "작업 컨테이너가 시작 응답을 받지 못했습니다(게이트웨이는 시작을 받았지만 응답이 컨테이너에 닿지 않았습니다)"
+      : f.status === 200 ? `작업 컨테이너가 게이트웨이의 시작 응답을 읽지 못했습니다${detail}`
+      : !f.status ? `작업 컨테이너가 게이트웨이에 닿지 못했습니다${detail}`
+        : `작업 컨테이너가 게이트웨이에서 시작 응답을 받지 못했습니다(${f.status})${detail}`;
+  return s.slice(0, 600);
+}
+
+/** 판이 보내는 마지막 보고(runner.ts 의 result 본문). */
+export interface RunnerReport {
+  exit_code: number | null;
+  signal: string | null;
+  /** 판이 스스로 끊었나 — 'timeout' | 'canceled' | null. */
+  stopped: string | null;
+  conversation_id: string | null;
+  model: string | null;
+  /** 하네스의 마지막 result 이벤트에서 고른 칸(없으면 null — 하네스가 답 없이 끝났다). */
+  result: { text: string | null; is_error: boolean; subtype: string | null; num_turns: number | null; duration_ms: number | null; cost_usd: number | null; usage: Record<string, unknown> | null } | null;
+  stderr_tail: string;
+  tail: string;
+  /** #5101 판이 대화 기록을 되돌리거나 올리지 못한 까닭(stderr_tail 과 따로 — 실패 글이 쓰는 끝 세 줄을 차지하지 않게). 없으면 null. */
+  transcript_note?: string | null;
+}
+
+/**
+ * 로그인이 안 된(자격이 없는) 하네스가 남기는 말 — 사람에게 «AI 연결 필요» 로 바꿔 말한다(설계 §12 ④ «파일 존재 ≠ 유효»).
+ *  ⚠ 맨 `/login` 은 넣지 않는다 — 작업이 고치던 파일 경로(`src/pages/login.tsx`)가 오류문에 실리면 «AI 연결 필요» 로 잘못 읽힌다(격리 리뷰 실측).
+ */
+export const AUTH_FAIL_RE = /(not logged in|please run \/login|invalid api key|authentication_error|oauth token (has )?expired|credit balance is too low)/i;
+
+/**
+ * (순수) 판의 마지막 보고 → 작업 상태·오류 문장.
+ *  · 판이 끊었으면 그 사유(시간 초과 · 취소).
+ *  · 하네스가 result 이벤트를 냈고 오류가 아니면 done — 종료코드가 0 이 아니어도 답이 있으면 답을 믿는다(하네스는 답을 내고 1 로 끝날 때가 있다).
+ *  · 그 밖은 failed — 자격 문제로 보이면 «AI 연결 필요», 아니면 종료코드와 stderr 꼬리.
+ */
+export function finalOutcome(r: RunnerReport): { status: "done" | "failed" | "timeout" | "canceled"; error: string | null } {
+  if (r.stopped === "canceled") return { status: "canceled", error: "취소했습니다" };
+  if (r.stopped === "timeout") return { status: "timeout", error: "실행 시간 상한을 넘겨 멈췄습니다" };
+  if (r.result && !r.result.is_error && typeof r.result.text === "string") return { status: "done", error: null };
+  const blob = `${r.result?.text ?? ""}\n${r.stderr_tail ?? ""}`;
+  if (AUTH_FAIL_RE.test(blob)) return { status: "failed", error: "AI 연결 필요 — 실행 계정의 Claude 로그인이 없거나 만료됐습니다" };
+  if (r.result?.is_error) return { status: "failed", error: `하네스가 오류로 끝났습니다(${r.result.subtype ?? "error"}): ${(r.result.text ?? "").slice(0, 300)}` };
+  const tail = (r.stderr_tail ?? "").trim().split("\n").slice(-3).join(" / ").slice(0, 400);
+  return { status: "failed", error: `하네스가 답 없이 끝났습니다(종료코드 ${r.exit_code ?? "?"}${r.signal ? ` · ${r.signal}` : ""})${tail ? `: ${tail}` : ""}` };
+}
+
+/** (순수) 보고 본문을 모양대로 고른다 — 판이 보낸 것은 컨테이너 안(작업 AI 가 닿는 자리)에서 왔으므로 칸마다 거르고 자른다. */
+export function parseRunnerReport(body: unknown): RunnerReport {
+  const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  const str = (v: unknown, max: number): string | null => (typeof v === "string" ? wellFormed(noNul(v).slice(0, max)) : null);
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const res = b.result && typeof b.result === "object" ? b.result as Record<string, unknown> : null;
+  const usage = res?.usage && typeof res.usage === "object" && !Array.isArray(res.usage) ? res.usage as Record<string, unknown> : null;
+  return {
+    exit_code: int32(b.exit_code),
+    signal: str(b.signal, 32),
+    stopped: b.stopped === "timeout" || b.stopped === "canceled" ? b.stopped : null,
+    conversation_id: convIdOf(b.conversation_id),
+    model: str(b.model, 120),
+    result: res ? {
+      text: str(res.text, RESULT_TEXT_MAX),
+      is_error: res.is_error === true,
+      subtype: str(res.subtype, 60),
+      num_turns: num(res.num_turns),
+      duration_ms: num(res.duration_ms),
+      cost_usd: num(res.cost_usd),
+      usage: usage ? numericFields(usage) : null,
+    } : null,
+    stderr_tail: str(b.stderr_tail, STDERR_TAIL_MAX) ?? "",
+    tail: str(b.tail, TAIL_MAX) ?? "",
+    transcript_note: str(b.transcript_note, TRANSCRIPT_NOTE_MAX) || null,
+  };
+}
+
+/**
+ * (순수) 글에서 NUL 을 뺀다 — Postgres text·jsonb 는 `\u0000` 을 받지 않는다. 그대로 두면 보고 한 번이 500 이 되고, 판이 다시 보내다
+ *  지쳐 빠지면 작업이 «응답 없음» 으로 끝나 결과가 사라진다.
+ */
+export function noNul(s: string): string {
+  return s.includes("\u0000") ? s.split("\u0000").join("") : s;
+}
+/**
+ * (순수) 짝 없는 서로게이트를 U+FFFD 로 — jsonb 는 `\ud83d` 같은 외톨이를 받지 않는다(«invalid input syntax for type json»).
+ *  답이 상한에서 잘리며 이모지 한 쌍이 갈라지면 생긴다 — NUL 과 같은 계열(보고 한 번이 500 → 판이 지쳐 빠지면 결과 유실). 재리뷰 실측.
+ */
+export function wellFormed(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+}
+/** 종료코드 — INT 칸에 들어가는 정수만(1.5 · 1e12 는 버린다). */
+function int32(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v >= -2147483648 && v <= 2147483647 ? v : null;
+}
+
+/** 사용량은 숫자 칸만 남긴다(토큰 수 등) — 이름은 짧은 영숫자, 칸은 많아야 24개. 중첩·문자열은 버린다. */
+function numericFields(o: Record<string, unknown>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (Object.keys(out).length >= 24) break;
+    if (/^[a-z0-9_]{1,64}$/i.test(k) && typeof v === "number" && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
+/** 하네스 대화 id 모양 — claude 는 UUID. 그 밖의 값은 버린다(이어받기 인자로 쓰이므로 argv 에 들어간다). */
+export const CONV_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function convIdOf(v: unknown): string | null {
+  return typeof v === "string" && CONV_ID_RE.test(v) ? v.toLowerCase() : null;
+}

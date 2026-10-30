@@ -183,8 +183,15 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
   //   "제품 도메인은 엄격히·사업 맥락은 느슨히", "이 팀 지식은 이 축들 안에서만" 같은 걸 표현할 데가 없었다.
   //   증류기가 같은 이유로 n개가 됐고(#1289: 전역 인박스 하나면 둘을 만들어도 같은 50건을 집는다), 분류도 같다.
   //
-  //  ⚠ 증류기와 직교한다 — 증류기는 **자료→지식**(없던 지식을 만든다), 분류기는 **지식→분류축**(있는 지식의
-  //   자리를 정한다). 파이프라인에서 증류 다음이 분류다.
+  //  ⚠ #4194 — 지금은 따로 선 단계가 아니라 **증류기의 «카테고리 붙이기» 레인**의 저장소다. 증류 = «지식을 완성시킨다»
+  //   (완성 = 본문·유형·카테고리 — upsertKnowledge 가 새 지식에 강제하는 불변식). 자료 레인은 자료에서 지식을 새로 쓰고,
+  //   이 레인은 그 불변식을 우회해 들어온 지식(지식 직행 미러·시드·카테고리 삭제·휴지통 복원·검토 반려)의 빈 카테고리만 채운다.
+  //   (종전 서술: «증류기와 직교 — 자료→지식 vs 지식→분류축, 증류 다음이 분류».)
+  //   ⚠ 그래도 테이블은 **합치지 않는다**: org_distiller 에 넣으면 이 컬럼을 모르는 옛 이미지(롤백)가 그 행을 스코프가 빈
+  //    자료 레인 = catch-all 로 읽어 모든 자료를 가로챈다. 게다가 컨트롤플레인이 새 테넌트마다 POST /api/ui/org/classifiers 로
+  //    "default" 를 심는데, 같은 테넌트에 자료 레인 "default" 도 있다(키 공간이 겹친다). 사람·에이전트가 보는 표면(화면·MCP·
+  //    파이프라인 API)만 증류기 하나로 합친다 — org/distill/lanes.ts.
+  //  ⚠ 재분류(target=low_confidence·both 의 절반)는 폐지 — 인박스가 빈다(store/classifiers.ts scopeWhere). CHECK 는 롤백 안전을 위해 둔다.
   //  ⚠ 산출 경로는 바꾸지 않는다 — 분류기가 만드는 것은 여전히 knowledge_propose_category 의 제안이고,
   //   사람 확정은 기존 [분류 검토 대기] 화면이 받는다. 새 진실 출처를 만들지 않는다(#837 불변식).
   //
@@ -236,6 +243,8 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS org_classifier_enabled_idx ON org_classifier(enabled, priority DESC, id);
     -- #1631: 분류축의 space 를 걷어냈으므로 '그 space 로 좁히기'도 걷는다. 좁히려면 candidate_categories 를 쓴다.
     ALTER TABLE org_classifier DROP COLUMN IF EXISTS match_spaces;
+    -- #4194: 컨트롤플레인이 심은 기본 레인의 옛 이름 «기본 분류» → 새 말. 옛 기본값 그대로일 때만(사람이 고친 이름은 안 건드린다).
+    UPDATE org_classifier SET label='기본 카테고리 붙이기' WHERE key='default' AND label='기본 분류';
   `);
 
   // ── org_classifier_seen — 분류기가 **이미 판정한** 지식(#1419 T4). org_distiller_seen 과 같은 이유로 존재한다. ──
@@ -479,6 +488,23 @@ export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
       PRIMARY KEY(distiller_id, source_id));
     CREATE INDEX IF NOT EXISTS org_distiller_seen_task_idx ON org_distiller_seen(task_id) WHERE task_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS org_distiller_seen_src_idx ON org_distiller_seen(source_id);
+  `);
+
+  // ── org_stranded_seen — 어느 레인 스코프에도 안 드는(방치) 자료의 판정 기록. ──
+  //  왜 별 테이블인가: org_distiller_seen 은 (distiller_id, source_id) 가 PK 이고 distiller_id 가
+  //  org_distiller 를 FK 로 참조한다. 방치 배치는 레인이 없어(distillerId=null) 그 테이블에 못 쓴다 —
+  //  그래서 판정 기록이 아예 없었고, LLM 이 skip 한 자료가 **매 tick 같은 50건으로 다시 올라왔다.**
+  //  레인 인박스는 org_distiller_seen 이 이 병을 막는데(실측 64% 재독), 방치 배치만 무방비였다.
+  //  실측(2026-09-04): 방치 배치가 증류 실행시간의 77% 를 쓰고 그중 41% 가 산출 0건 —
+  //  구성비 대부분이 '봤는데 안 만든' 자료의 재독이었고, 잔량(backlog)이 50 에서 줄지 않았다.
+  //  ⚠ seen_at 을 source.updated_at 과 비교하는 수렴 규약은 org_distiller_seen 과 동일하다(내용이
+  //   바뀌면 다시 올라오고, 재판정 배치가 seen_at 을 now() 로 갱신해 다음 배치엔 다시 빠진다).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_stranded_seen(
+      source_id INT PRIMARY KEY,
+      task_id BIGINT,
+      seen_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS org_stranded_seen_task_idx ON org_stranded_seen(task_id) WHERE task_id IS NOT NULL;
   `);
 
   // ── 사전 필터(#1289 후속) — LLM 에 먹이기 **전에** 서버가 스레드를 걸러낸다. ──

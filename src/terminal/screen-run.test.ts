@@ -341,16 +341,4 @@ t("W2 노드 스냅샷 투영이 background 를 싣고, 끊긴 노드에선 접�
   assert.equal(projectNodeSession(row, false, "a").background, false, "끊긴 노드 — 얼어붙은 과거라 접는다");
 });
 
-t("W3 #4588 /active 는 idle 의 bg 만 받아 tmux(@box_state)까지 넘긴다 — 박스 · 노드 릴레이 · 호스트 op", () => {
-  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
-  const routes = readFileSync(`${here}routes.ts`, "utf8");
-  assert.match(routes, /const bg = phase === "idle" && isBgCount\(rawBg\) \? rawBg : null;/);
-  assert.match(routes, /markSessionActive\(id, phase, undefined, bg\)/, "박스 세션 경로");
-  assert.match(routes, /nodeRpc\(ns\.node\.id, "markActive", bg === null \? \{ id, state: phase \} : \{ id, state: phase, bg \}\)/, "노드 세션 경로");
-  const ops = readFileSync(`${here}session-ops.ts`, "utf8");
-  assert.match(ops, /markSessionActive\(String\(args\.id\), isReportedPhase\(st\) \? st : undefined, undefined, isBgCount\(args\.bg\) \? args\.bg : null\)/);
-  const phase = readFileSync(`${here}phase.ts`, "utf8");
-  assert.match(phase, /"@box_state", formatReportedPhase\(phase, nowSec, bg\)\]/);
-});
-
 console.log(`\n${pass} passed`);

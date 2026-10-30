@@ -6,7 +6,7 @@ import { api, cardHead, el, setUiModeOverride, state, toast, uiModeOverride, uiT
 import { sectionHead } from './admin-widgets.js';
 import { CTX_APP_NAME } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
-const LABEL: Record<string, string> = { v2: '새 화면 (기본): 사이드바, 리브 대화, 앱(런치패드)', classic: '클래식: 상단 탭(홈, AI 세션, 프로젝트, WIKI, ' + CTX_APP_NAME + ', 설정)' };
+const LABEL: Record<string, string> = { v2: '새 화면 (기본): 사이드바, 리브 대화, 앱(런치패드)', classic: '클래식: 상단 탭(홈, 세션 목록, 프로젝트, WIKI, ' + CTX_APP_NAME + ', 설정)' };
 
 export function uiModeSection(detail: HTMLElement, data: any): void {
   const rc = data && data.runtimeConfig;   // admin 만 non-null

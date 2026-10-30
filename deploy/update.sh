@@ -111,6 +111,12 @@ wait_ready   # #2578 — 스키마 마이그레이션·(단일→registry) 자�
 #  기존 박스도 업데이트 때 신규 기본 커넥터를 수령. 삭제로 영구 제외하려면 disable(존재하면 보존).
 run_as_service node --env-file="$APP_DIR/.env" "$DIR/bootstrap-connectors.mjs" 2>&1 || warn "커넥터 시드 경고 — 수동: node --env-file=.env deploy/bootstrap-connectors.mjs"
 proxy_up   # LIVELY_DOMAIN(.env) 설정 시 Caddy 재적용/기동(미설정 시 no-op) — 도메인 추가/변경도 여기서 반영
+# 서버 AI 넷(#4970) — 기존 박스도 업데이트 때 빠진 AI 를 받는다(없는 것만 · 이미 있으면 조용히 · 실패는 경고 — common.sh ensure_server_ais).
+#  재시작 **뒤**에 — 1/3 이 dist 를 제자리에서 새로 빌드하므로, 재시작 전에 두면 첫 업데이트의 큰 다운로드(수백 MB~1GB) 동안 옛 프로세스가
+#   새 dist 를 지연 로드하는 구간이 그만큼 길어진다(격리 리뷰). 설치 확인은 요청 때마다 다시 보므로 재시작 뒤에 깔아도 곧 보인다.
+#  키트(--kit)보다는 먼저 — 키트가 게이트웨이 유저의 claude 에 MCP·훅을 단다. 이미 있는 AI 를 새 판으로 올리지는 않는다(각 AI 가 스스로 ·
+#   제미나이·그록은 FORCE=1).
+ensure_server_ais
 
 if [ "${1:-}" = "--kit" ]; then
   phase "3/3 중앙박스 키트 갱신(게이트웨이 유저 claude 훅/MCP/컨텍스트)"

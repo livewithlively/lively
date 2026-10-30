@@ -100,9 +100,9 @@ test("★ E5 안내는 «한 번만/계속» 을 함께 말한다 — 겁주기�
 // ── E6/E7 — 두 화면이 이 자리를 실제로 지나고, 매니지드 여부를 넘긴다 ────────
 //  «관측 장치가 죽어 있으면 시험은 통과하면서 아무것도 안 본다» — 위 E1~E5 는 판정 함수만 재므로,
 //  화면이 그 함수를 안 쓰거나 상수를 넘기면 위 넷은 전부 초록인 채로 사람은 그대로 겪는다.
+//  (#4970) 처음 설정의 «AI 연결» 로그인 화면은 걷혔다 — 처음 설정은 이제 AI 로그인을 묻지 않는다(인사 → 이름 → 외부 앱 연결).
 const WIRING: Array<[string, string, string]> = [
   ["web/v2/rail.ts", "aiLoginScopeHint", "만들기 패널"],
-  ["web/v2/onboarding.ts", "aiLoginScopeNote", "온보딩 «AI 연결» 로그인 화면"],
 ];
 
 for (const [rel, fn, what] of WIRING) {

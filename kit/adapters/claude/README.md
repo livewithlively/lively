@@ -1,36 +1,39 @@
-# Claude 하네스 배선
+# Claude harness wiring
 
-Claude Code 하네스용 설정을 emit 한다. **user-level 설치**가 주력(D2/D3): 한 번 설치하면 멤버가 어느 폴더에서 `claude` 를 켜든 조직 컨텍스트+리플렉스가 따라온다.
+*[한국어](README.ko.md)*
 
-> **정본은 `setup/user-install.mjs` 다.** 이 폴더에 있던 `install.mjs` 는 아무도 호출하지 않는 죽은 코드라
-> 삭제했다(#1475 — 그 존재가 "개선을 실배포 아닌 곳에 넣는" 사고를 코덱스 쪽에서 실제로 만들었다).
-> 제거기(`uninstall.mjs`)와 managed 예시는 여기 그대로다. 코덱스 쪽 대응 문서는 `../codex/README.md`.
+Emits the settings for the Claude Code harness. The main path is a **user-level install** (D2/D3): install once, and the organization's context + reflexes follow the member whichever folder they start `claude` in.
 
-## 심는 것 (전부 idempotent)
+> **The canonical installer is `setup/user-install.mjs`.** The `install.mjs` that used to live in this folder was dead code nobody called, so it
+> was deleted (#1475 — its existence actually caused an incident on the Codex side where "improvements went somewhere that isn't the real deployment").
+> The uninstaller (`uninstall.mjs`) and the managed example remain here. The matching Codex doc is `../codex/README.md`.
 
-| 산출물 | 내용 | 비고 |
+## What gets installed (all idempotent)
+
+| Output | Contents | Notes |
 |---|---|---|
-| `~/.lively/context.md` | 정적 org-context (`buildStaticContext`) | **토큰/시크릿 없음.** `session-preload` 가 읽어 SessionStart 에 주입 |
-| `~/.lively/hooks/*.mjs` | 공유 훅 3종 복사(chmod 755) | session-preload · work-flag · stop-writeback-gate |
-| `~/.claude/settings.json` | **user-level** 훅 블록 비파괴 머지 | 백업 먼저(`~/.lively/backups/settings.json.bak`); hooks 외 키 무수정 |
-| `~/.lively/work-roots` | 자가 게이팅 work-root 시드 | 없을 때만 생성, 기존 보존 |
+| `~/.lively/context.md` | Org context — seeded once at install from the gateway (`/api/ui/org/preview`), then refreshed every session by `session-preload` | **No tokens/secrets.** In sessions that can't reach the gateway, `session-preload` injects this cache at SessionStart |
+| `~/.lively/hooks/*` | Copies of the hook runtime (chmod 755) — the canonical list is `HOOK_SCRIPTS` in `setup/kit-manifest.mjs` | Wired hooks session-preload · sync-harness-assets · work-flag · stop-writeback-gate · run-custom + files that aren't wired (self-update · usage-report · harness adapters · shared modules) |
+| `~/.claude/settings.json` | Non-destructive merge of the **user-level** hook block (base hooks + a run-custom runner per event) + auto-approve (`permissions.allow`) reconcile | Backs up first (`~/.lively/backups/settings.json.bak`); keys other than hooks and `permissions.allow` are untouched (allow entries the member added are preserved). If `CLAUDE_CONFIG_DIR` is set, the settings.json inside it (per-profile account isolation, #346) |
+| `~/.lively/work-roots` | Seed of self-gating work roots | Adds only missing entries, preserves existing ones |
 
-MCP 등록은 **하지 않는다** — `setup/register-clients.sh`(`claude mcp add --scope user`)에 위임(중복 등록 방지).
+MCP registration is **not done here** — on member machines the last step of `lively install` (`claude mcp add --scope user`) handles it, and in box provisioning `setup/register-clients.sh` (→ `mcp-register.mjs`, which writes `~/.claude.json` directly) does (to avoid duplicate registration).
 
-## user-level vs project-dir 의 결정적 차이 (가장 큰 함정)
+## The decisive difference between user-level and project-dir (the biggest pitfall)
 
-- **project-dir 템플릿**(`hooks/settings-hooks.json`): command = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/<script>.mjs"`.
-  발행물(`<번들>/.claude/`)에 들어가 '번들 폴더에서 실행' 병행 경로에서만 동작. `$CLAUDE_PROJECT_DIR` 는 그 번들 루트로 해석됨.
-- **user-level**(이 어댑터가 emit): command = `node "$HOME/.lively/hooks/<script>.mjs"` — **절대경로**.
-  `$CLAUDE_PROJECT_DIR` 는 user-level 에서 미정의/실행 레포로 잘못 해석되므로 절대경로 필수.
-  command 문자열은 **단일 정규형($HOME 형)**으로 고정 — idempotency 키(command+matcher)가 안정되어 재설치 시 중복 entry 가 안 생긴다.
+- **Project-dir template** (`hooks/settings-hooks.json`): command = `node "$CLAUDE_PROJECT_DIR/.claude/hooks/<script>.mjs"`.
+  It goes into the published artifact (`<bundle>/.claude/`) and only works on the parallel "run from the bundle folder" path. `$CLAUDE_PROJECT_DIR` resolves to that bundle root.
+- **User-level** (emitted by `setup/user-install.mjs`): command = `"<node>" "$HOME/.lively/hooks/<script>.mjs"` — an **absolute path**.
+  `<node>` is the absolute path of the bundled runtime (`~/.lively/runtime/current/bin/node`) if present, otherwise `node` (#355). On Windows it is `node "<absolute path>"`.
+  At user level `$CLAUDE_PROJECT_DIR` is undefined or resolves to the wrong repo (the one being worked in), so an absolute path is required.
+  Because the command spelling can differ between install generations, the idempotency key is not the full command but the **script file name (+ args) + matcher** — older-spelling lively entries with the same key are replaced with the latest form on reinstall, leaving exactly one (`session-preload` also dedups by the same rule every session).
 
-`~/.claude/settings.json` 의 다른 Stop 훅(예: tmux)·env·permissions·enabledPlugins·theme 는 보존된다.
+Other Stop hooks (e.g. tmux), env, permissions, enabledPlugins, and theme in `~/.claude/settings.json` are preserved.
 
-## managed 강제층 (선택, D6)
+## Managed enforcement layer (optional, D6)
 
-`managed-settings.example.json` — 홈/managed 경로로 강제 규칙을 박고 싶을 때(규제 T3~T4). incognito(`LIVELY_OFF`)로도 안 꺼지는 계층이므로 "끄고 싶은 것"과 분리 설계.
+`managed-settings.example.json` — for when you want to pin enforced rules through the home/managed path (regulated T3–T4). This layer can't be turned off even with incognito (`LIVELY_OFF`), so it's designed separately from "things you may want to turn off".
 
-## 정적 컨텍스트 갱신
+## Refreshing the static context
 
-`context.md` 는 설치 시 1회 발행 — 조직콘텐츠가 바뀌면 `setup` 재실행(또는 re-publish)으로 갱신. 라이브 현황은 세션마다 자동 갱신.
+`context.md` is seeded once at install; after that, `session-preload` fetches organization context from the gateway every session, injects it, and refreshes this file (offline fallback cache) — edits in the admin web UI apply from the next session without reinstalling. Live status is also refreshed automatically every session.

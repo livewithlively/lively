@@ -20,12 +20,16 @@
 //  최소 규율이다. attach 만 공유하는 층은 `session-host.ts` 다 — 그래서 층이 둘이다.
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount,
+  sessionGone, getSessionLabel, markSessionActive, markSessionSeen, isReportedPhase, isBgCount, isReportedSched,
   type CreateInput,
 } from "./terminal-sessions.js";
-import { sendKeysToSession } from "./send-keys.js";
-import { injectFirstPrompt } from "./session-first-prompt.js";
+import { sendKeysToSession, sessionPastes } from "./send-keys.js";
+import { injectFirstPrompt, guardAfterSend } from "./session-first-prompt.js";
+import { runOutboxStep } from "./outbox-host-step.js";
 import { applySessionProject } from "./session-project.js";
+import { writeSessionTokens, removeSessionTokens } from "./session-token-file.js";   // #4135 — 살아 있는 세션에 자격을 나중에 심는 길
+import { sessionGoneOnNode } from "./tmux-exec.js";   // #4917 — 노드의 gone 답
+import { onNode } from "../exec-topology.js";
 import type { LivelyUser } from "../context.js";
 
 /**
@@ -34,7 +38,7 @@ import type { LivelyUser } from "../context.js";
  */
 export const SESSION_OPS = [
   "list", "create", "createAppSession", "kill", "edit", "gone", "label",
-  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen",
+  "sendKeys", "setProject", "injectFirstPrompt", "markActive", "markSeen", "outboxStep", "sessionTokens", "forkSession",
 ] as const;
 
 export type SessionOp = (typeof SESSION_OPS)[number];
@@ -63,7 +67,9 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       //  없으므로, 이 응답이 없으면 다른 곳에서 도는 세션만 실시간 알림에서 빠져 30초 폴링에 묶인다.
       //  구 게이트웨이는 이 필드를 모르고 무시한다(무회귀).
       //  #4588 — 턴 끝의 열린 백그라운드 작업 수(bg)도 함께 새긴다. 구 게이트웨이는 안 보내므로 undefined(=모른다).
-      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined, undefined, isBgCount(args.bg) ? args.bg : null);
+      //  #4695 T5 — 턴 끝의 예약(다음 깨움 시각·반복 예약 수)도 함께 새긴다. 구 게이트웨이는 안 보내므로 null(=모른다 — 그 세션은 안 끈다).
+      const sched = isReportedSched(args.sched) ? args.sched : null;
+      const change = await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined, undefined, isBgCount(args.bg) ? args.bg : null, sched);
       return { ok: true, change: change ?? null };
     }
 
@@ -75,8 +81,15 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
 
     // #1664 — 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와
     //  flush 지연 규약은 terminal/send-keys 안에 갇혀 있어 게이트웨이 로컬 주입과 **같은 코드**로 돈다.
+    //  #4818 — Claude Code 세션이면 붙여넣기로 싣는다(send-keys 규약 ⑤). 게이트웨이가 하네스를 실어 보내면 그것을, 옛 게이트웨이면
+    //   이 노드 tmux 의 @box_harness 를 본다(못 읽으면 종전대로 친다).
     case "sendKeys": {
-      await sendKeysToSession(String(args.id), String(args.text ?? ""));
+      const id = String(args.id);
+      const text = String(args.text ?? "");
+      const paste = await sessionPastes(id, typeof args.harness === "string" ? args.harness : null);
+      await sendKeysToSession(id, text, { paste });
+      //  #4852 — 넣은 뒤 입력칸을 지킨다(뒤에서 — RPC 응답을 막지 않는다 · 무엇을 지키나는 guardAfterSend 머리말).
+      void guardAfterSend(id, text, paste);
       return { ok: true };
     }
 
@@ -98,8 +111,19 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       return { ok: true };
     }
 
+    // #2600 T2 d6(#3773) — 아웃박스의 한 걸음(보기·누르기·치기). 준비 판정은 게이트웨이가 하고 여기는 실행만 한다.
+    //  ⚠ 거절·실패도 **값으로** 돌려준다 — 위 `sendKeys` 처럼 던지면 «한 글자도 안 쳤다» 가 오류 문자열로 뭉개진다.
+    case "outboxStep": return runOutboxStep(args);
+
+    // #4135 세션 복제 — 하는 일은 create 와 같다(createSession 이 input.fork 를 보고 하네스의 복제 argv 로 띄운다).
+    //  op 가 따로인 이유는 node/protocol.ts 머리말. 여기서는 **fork 가 빠진 봉투를 거절**한다 — 빠진 채 create 로 흘러가면
+    //  «복제» 라는 이름으로 빈 새 대화가 뜬다(그게 이 op 를 따로 둔 이유 그 자체다).
+    case "forkSession":
     case "create":
     case "createAppSession": {
+      if (op === "forkSession" && !String((args.input as CreateInput | undefined)?.fork ?? "").trim()) {
+        throw new Error("세션 복제: 복제할 대화 id 가 없습니다");
+      }
       const session = await createSession(user, args.input as CreateInput);
       // 초대는 게이트웨이가 구성원 디렉터리로 검증해 넘긴다 — 세션 호스트엔 DB 가 없어
       //  createSession 내부 검증이 빈 배열이 된다.
@@ -108,7 +132,22 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       return session;
     }
 
-    case "kill": await killSession(user, String(args.id)); return { ok: true };
+    case "kill": {
+      await killSession(user, String(args.id));
+      await removeSessionTokens(String(args.id));   // #4135 — 나중에 심은 세션 토큰 파일도 함께(회수는 게이트웨이가)
+      return { ok: true };
+    }
+
+    // #4135 — 이미 떠 있는 세션에 게이트웨이가 **나중에** 구운 세션 스코프 자격(훅·MCP)을 파일로 심는다. env 는 판을 띄울 때만
+    //  실리므로 살아 있는 세션은 이 길뿐이다. 훅·MCP 프록시가 매 호출 이 파일을 먼저 본다(session-token-file 머리말).
+    //  게이트웨이가 주인·소유를 다 판정한 뒤 보낸다 — 여기는 형식만 보고 쓴다(F7). 둘 다 비면 파일을 지운다.
+    case "sessionTokens": {
+      const wrote = await writeSessionTokens(String(args.id), {
+        hook: typeof args.hookToken === "string" ? args.hookToken : null,
+        mcp: typeof args.mcpToken === "string" ? args.mcpToken : null,
+      });
+      return { ok: true, wrote };
+    }
 
     case "edit": {
       const patch = (args.patch ?? {}) as { label?: string };
@@ -117,7 +156,8 @@ export async function runSessionOp(op: SessionOp, args: Record<string, unknown>)
       return { ok: true };
     }
 
-    case "gone": return sessionGone(String(args.id));
+    //  #4917 — 노드는 «tmux 서버가 없다» 를 끝남 확답으로 낸다(sessionGoneOnNode 머리말). 게이트웨이·세션 호스트는 종전 그대로.
+    case "gone": return onNode() ? sessionGoneOnNode(String(args.id)) : sessionGone(String(args.id));
     case "label": return getSessionLabel(String(args.id));
 
     // ⚠ 소진 검사 — 종전엔 이 switch 가 `node/agent.ts` 안에 있었고 끝에 `default: throw unknown op` 가

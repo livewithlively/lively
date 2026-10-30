@@ -26,6 +26,23 @@ export function takeFirstPrompt(sessionId: string): string | null {
   return t;
 }
 
+/**
+ * #3891 — 사람이 친 글인데 **그 세션에 전달하지 못한 것** — 그 세션 화면이 뜰 때 입력칸에 되돌려 둔다.
+ *  firstPrompt 와 반대 뜻이다: 저건 «보냈으니 도는 모양으로 먼저 그려라», 이건 «안 갔으니 다시 보낼 수 있게 돌려줘라».
+ *  멈춘 세션에 말을 걸어 되살렸는데(reviveWithPrompt) 말 전달만 실패하면, 화면은 새 세션으로 옮겨 가고 글은 여기로 온다
+ *  — 제자리에 남으면 사이드바에 같은 세션이 두 줄 서고 사람은 옛 대화창에 갇힌다(실측 2026-09-11). 같은 이유로 여기 한 곳에 둔다.
+ */
+const unsentDrafts = new Map<string, string>();
+export function rememberUnsentDraft(sessionId: string, text: string): void {
+  const t = String(text || '').trim();
+  if (sessionId && t) unsentDrafts.set(sessionId, t);
+}
+export function takeUnsentDraft(sessionId: string): string | null {
+  const t = unsentDrafts.get(sessionId) ?? null;
+  unsentDrafts.delete(sessionId);
+  return t;
+}
+
 // 이름은 **서버가 짓는다**(#1808, src/terminal/session-name.ts) — initialPrompt 를 넘기면 그 값으로 label 이 정해진다.
 //  종전엔 여기서 앞 27자를 잘라 label 로 같이 보냈는데, 그 규칙이 클라와 서버 두 곳에 있으면 반드시 갈라진다.
 
@@ -55,6 +72,8 @@ export interface SpawnOpts {
   /** #4135 — 태스크 **여러 개**를 이 순서대로 맡겨 연다(곁칸 «프로젝트» 앱의 [담기]). 1번이 taskId 와 같은 길로 이어지고,
    *  서버가 첫 지시 = 순서 안내 + 1번 본문 + 적은 말(있으면)로 짓는다. 지시를 비워도 된다. */
   taskIds?: number[] | null;
+  /** 세션 이름 — 주면 서버가 **사람이 지은 이름**으로 박는다(AI 의 session_rename 이 덮지 못한다). 앱빌더가 «"이름" 앱 제작» 을 싣는다(#4632). */
+  label?: string;
 }
 export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id: string; session: any } | null> {
   const t = String(text || '').trim();
@@ -79,6 +98,7 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
       method: 'POST',
       body: JSON.stringify({
         harness, flags, ...(t ? { initialPrompt: t } : {}),
+        ...(opts && opts.label && opts.label.trim() ? { label: opts.label.trim() } : {}),
         ...(taskIds.length ? { taskIds } : taskId > 0 ? { taskId } : {}),
         // [⚙] 기본값 넷(#3778) — run 이 없으면(구 호출자) 종전대로 기억된 자동 승인만.
         autoApprove: run ? run.autoApprove : !!p.autoApprove,
@@ -94,13 +114,17 @@ export async function spawnSession(text: string, opts?: SpawnOpts): Promise<{ id
       }),
     });
     const id = out && out.session && out.session.id ? String(out.session.id) : '';
-    if (!id) throw new Error('세션 id 를 받지 못했습니다');
+    if (!id) throw new Error('세션 번호를 받지 못했어요.');
     rememberCreated(out.session);   // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
-    if (t) firstPrompts.set(id, t);
+    //  #4906 — 기억할 첫 지시는 **서버가 넣을 글**(응답 initialPrompt — src/terminal/session-launch.ts launchReply)이다. 태스크에서 연 세션은
+    //   친 글이 비고(서버가 태스크로 채운다), 태스크 여러 개 · 첨부를 옮긴 홈 첫 지시는 서버가 글을 다시 짓는다. 친 글로 기억하면 세션 화면의
+    //   «다 쳤다» · 에코 맞추기가 빗나가고, 비었으면 숨겨 붙이기를 못 타 빈 터미널부터 보였다(#4794 §10-2). 옛 서버(필드 없음)면 종전대로 친 글.
+    const sent = typeof out.initialPrompt === 'string' && out.initialPrompt.trim() ? out.initialPrompt : t;
+    if (sent) firstPrompts.set(id, sent);
     await linkPredecessor(out.session, pid, opts && opts.predecessorId);
     return { id, session: out.session };
   } catch (e: any) {
-    toast('세션을 열지 못했습니다 — ' + (e && e.message ? e.message : e), true);
+    toast('세션을 열지 못했어요. ' + (e && e.message ? e.message : e), true);   // 해요체 · «—» 없이(점검 7-1) — 부르는 쪽은 null 만 보고 다시 알리지 않는다
     return null;
   } finally { creating = false; }
 }
@@ -120,7 +144,7 @@ async function linkPredecessor(session: any, pickedPid: number, pre?: number | n
   const made = Number(session && session.projectId) || 0;
   if (!to || pickedPid > 0 || !made || made === to) return;
   try { await api(`/api/ui/v6/projects/${made}/link`, { method: 'POST', body: JSON.stringify({ to, relation: 'follow_up' }) }); }
-  catch (e: any) { toast('선행 프로젝트는 못 걸었어요 — 프로젝트 상세에서 다시 걸 수 있어요. ' + (e && e.message ? e.message : ''), true); }
+  catch (e: any) { toast('선행 프로젝트는 못 걸었어요. 프로젝트 상세에서 다시 걸 수 있어요. ' + (e && e.message ? e.message : ''), true); }
 }
 
 export async function openQuickSession(text: string, opts?: SpawnOpts): Promise<boolean> {

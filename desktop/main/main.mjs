@@ -18,14 +18,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
-import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
+import { runBootstrap, bootstrapPreview, bootstrapManualHint } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { contextMenuModel, runContextMenuAction } from "./context-menu.mjs";
-import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
+import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { gatewayAdvice } from "./gateway-input.mjs";
-import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
-import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
+import { appReady, nodeStateOf, webUiUrl, webOrigin, openTargetFor, workspaceDriftFrom, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup, createHashNav } from "./web-shell.mjs";
+import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, OCCLUDED_WINDOW_SWITCH, surfaceNavTarget, surfaceWindowOpenTarget, surfacePopupWindowSpec, surfacePopupWebPreferences, createOpenLedger, surfacePopupTitle, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, updateCheckDelayMs, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, updateApplyReady, updateStagingNote, updateNotStagedNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
@@ -33,7 +33,7 @@ import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 import { APP_ID } from "./win-stale-install.mjs";
-import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, sessionHash, pickPersonEvents, planPersonBanners, rememberSeen, personLink, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX } from "./notify.mjs";
+import { NOTIFY_DEFAULTS, snapshotSessions, diffSessions, planBanners, bannerFor, pickPersonEvents, planPersonBanners, rememberSeen, streamEvent, parseSse, reconnectDelay, stableStream, SEEN_MAX, keepBanner, wsLabelOf, clickTarget, streamUrl, READ_WEB_WORKSPACE_JS } from "./notify.mjs";
 import { enrichPathFromLoginShell } from "./login-path.mjs";
 import { execFileSync } from "node:child_process";
 
@@ -85,7 +85,12 @@ async function refreshState({ deep = false } = {}) {
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
   // 매인 곳이 바뀌었으면(워크스페이스 이동) '이미 물어봤다' 기록을 버린다(#2215) — 안 그러면 되돌아왔을 때
   //  다시 어긋나 있는데도 영영 안 묻는다. 기록의 뜻이 "그 주소를 그때 물었다"가 아니라 "지금 기준에서 물었다"이므로.
-  if (next.gatewayUrl !== state.gatewayUrl) driftAsked.clear();
+  if (next.gatewayUrl !== state.gatewayUrl) {
+    driftAsked.clear();
+    // #4054 — 알림도 옛 곳을 놓는다: 열린 스트림은 끊길 때까지 **옛 주소**에 붙어 있어, 옛 워크스페이스 사건이
+    //  새 창에서 열리려다 실패한다. 기준선·커서도 옛 곳의 것이라 새 목록과 견주면 가짜 배너가 뜬다.
+    if (state.gatewayUrl) resetNotifyBinding();
+  }
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
   //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
@@ -590,34 +595,98 @@ let streamTimer = null;             // 재연결 예약
 const streamSeen = new Set();       // 이미 띄운 스트림 사건 key(재연결 직후 중복 방지)
 
 let notifyPrefsCache = { ...NOTIFY_DEFAULTS };   // 서버에서 마지막으로 받은 값. 받기 전엔 전부 켜짐.
+// 앱이 매인 워크스페이스의 표시(#4054) — 알림 피드가 싣는다. 폴링·사람 알림 배너의 윗줄이 된다(실시간 사건은 사건마다 싣는다).
+let boundWs = null;
+// 매인 곳의 세대(#4054) — 바뀔 때마다 올린다. 옛 곳으로 떠난 폴·스트림이 **초기화 뒤에** 돌아와 옛 기준선·커서·표시를
+//  되써 넣지 못하게, 자기가 떠난 세대와 지금 세대가 다르면 결과를 버린다(안 버리면 새 목록을 옛 기준선과 견줘 가짜 배너가 뜬다).
+let notifyGen = 0;
 
 /** 유형별 켜짐 — 서버 값. 아직 못 받았으면 기본값(전부 켜짐): 설정을 못 읽었다고 알림이 멎으면 안 된다. */
 function notifyPrefs() { return notifyPrefsCache; }
 
-/** 배너 한 장. 클릭하면 그 세션 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
-function showBanner({ title, body, event }) {
+// ★ 띄운 배너는 **여기서 쥔다**(#3896). 지역 변수로만 두면 GC 가 JS 객체를 가져가고, 그러면 네이티브 알림의 delegate 가
+//  끊겨(Electron v43.3.0 electron_api_notification.cc 소멸자 set_delegate(nullptr) → notification.cc NotificationClicked 는
+//  delegate 가 없으면 아무것도 안 한다) **그 뒤의 클릭이 조용히 버려진다.** 배너가 뜨고 바로 누르면 가고, 조금 있다 누르면
+//  안 가던 것("어떤 때는 넘어가고 어떤 때는 안 넘어간다")의 정체다 — 실측: 안 쥔 객체는 gc() 한 번에 사라졌다.
+//  놓는 때는 눌렀을 때와 상한 초과뿐이다. Windows 는 배너가 시간이 지나 알림 센터로 들어갈 때도 'close'(timedOut)를 내는데,
+//  거기서도 누를 수 있으므로 close 로 놓으면 같은 증상이 남는다.
+const liveBanners = new Set();
+// 알림 클릭이 웹 창을 어느 화면으로 보낼지 — 싣는 중이면 한 곳만 기억했다가 다 실린 뒤 보낸다(web-shell.mjs createHashNav).
+const hashNav = createHashNav();
+
+/** 배너 한 장. 클릭하면 그 사건의 화면으로 간다(묶음 배너는 갈 곳이 하나가 아니므로 앱만 띄운다). */
+function showBanner({ title, subtitle, body, event }) {
   try {
     if (!Notification.isSupported()) return;          // 리눅스 등 알림 데몬이 없는 환경 — 조용히 넘긴다
-    const n = new Notification({ title, body });
+    //  #4054 — 윗줄은 워크스페이스 이름이다(notify.bannerFor). subtitle 은 macOS 에서만 오고, 다른 OS 는 본문에 합쳐 온다.
+    const n = new Notification({ title, body, ...(subtitle ? { subtitle } : {}) });
     n.on("click", () => {
-      if (event && event.id) return openSessionInApp(event.id);        // 세션 알림 → 그 세션 화면
-      if (event && event.link) return openHashInApp(event.link);       // 사람 알림 → 그 프로젝트 화면
-      showMain();                                                      // 묶음 배너 — 갈 곳이 하나가 아니다
+      liveBanners.delete(n);                                           // 누른 배너는 OS 가 치운다 — 더 쥘 까닭이 없다
+      void openFromBanner(event);
     });
     n.show();
+    //  상한을 넘어 놓이는 배너에 close() 를 부르지 않는다 — 실측(Electron 43.3.0): close() 한 배너는 놓아도 GC 되지 않아 그대로 쌓인다.
+    keepBanner(liveBanners, n);
   } catch { /* OS 가 알림을 막았어도 앱은 계속 돈다 */ }
 }
 
+/**
+ * 배너 클릭 → 그 사건의 워크스페이스·화면으로 (#4054). 어디로 갈지는 notify.clickTarget 한 자리가 정한다(표로 검증):
+ *  지금 창의 해시 · 매인 곳을 다시 싣기(창이 다른 곳을 싣고 있거나, 셀프호스트에서 다른 워크스페이스를 골라 둔 경우) ·
+ *  계정 서버 입장 주소를 브라우저로(매니지드의 다른 워크스페이스) · 앱 창만(묶음).
+ *  종전엔 무엇이든 지금 창의 해시만 바꿔서, 다른 워크스페이스의 세션을 보고 있던 워크스페이스에서 열려다 실패했다.
+ */
+async function openFromBanner(event) {
+  try {
+    const ws = event ? wsLabelOf(event.ws) : null;
+    const wc = appWin && !appWin.isDestroyed() ? appWin.webContents : null;
+    const windowUrl = wc ? (wc.getURL() || null) : null;
+    let windowWs = null;
+    //  셀프호스트 다중만 — 창의 웹이 지금 고른 워크스페이스를 묻는다. 싣는 중이거나 못 읽으면 null(→ 주소로 다시 싣는다).
+    if (ws && ws.via === "header" && wc && !wc.isLoadingMainFrame()) {
+      const v = await wc.executeJavaScript(READ_WEB_WORKSPACE_JS).catch(() => null);
+      windowWs = typeof v === "string" ? v : null;
+    }
+    const t = clickTarget(event, { gatewayUrl: state.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins() });
+    if (t.how === "external") { await shell.openExternal(t.url); return; }
+    if (t.how === "hash") { openHashInApp(t.hash); return; }
+    if (t.how === "load") { loadInApp(t.url); return; }
+    showMain();                                                        // 묶음·갈 곳 없음
+  } catch { /* 클릭 처리 실패가 앱을 흔들지 않는다 */ }
+}
+/** 아는 계정 서버 출처 — 입장 주소를 브라우저로 열기 전에 대 본다(서버가 준 주소라도 그대로 믿지 않는다). */
+function cpOrigins() {
+  const out = new Set([webOrigin(DEFAULT_CLOUD_URL)]);
+  try { out.add(webOrigin(cloudUrl())); } catch { /* 개발용 덮어쓰기가 형식 오류 — 기본만 */ }
+  return [...out].filter(Boolean);
+}
 /** 알림 클릭 → 앱 창을 띄우고 그 화면으로. 이미 실려 있으면 해시만 바꾼다(전체 리로드는 보던 화면을 날린다). */
 function openHashInApp(hash) {
   const r = showApp();
   if (!r || !r.ok || !hash || !appWin || appWin.isDestroyed()) return;
-  const wc = appWin.webContents;
-  const go = () => { try { void wc.executeJavaScript(`location.hash = ${JSON.stringify(hash)}`).catch(() => {}); } catch { /* 창이 사라졌다 */ } };
-  if (wc.isLoading()) wc.once("did-finish-load", go); else go();
+  hashNav.open(appWin.webContents, hash);
 }
-/** 세션 알림 클릭 — id 형식을 먼저 본다(응답을 그대로 주소로 쓰지 않는다). */
-function openSessionInApp(id) { openHashInApp(sessionHash(id)); }
+/** 알림 클릭 → 앱 창에 그 주소를 새로 싣는다(매인 게이트웨이의 `/ui/…` 만 온다 — clickTarget). 기다리던 해시 이동은 버린다. */
+function loadInApp(url) {
+  const r = showApp();
+  if (!r || !r.ok || !url || !appWin || appWin.isDestroyed()) return;
+  hashNav.failed();   // 싣던 중에 눌러 둔 해시가 이 로드 뒤에 옛 화면으로 끌고 가지 않게(#3896 규약)
+  appWin.loadURL(url).catch(() => { /* did-fail-load 가 처리 */ });
+}
+/**
+ * 매인 워크스페이스가 바뀌었다(#4054) — 옛 곳의 기준선·커서·표시·설정을 버리고 스트림을 끊는다(finally 가 새 주소로 다시 붙는다).
+ *  설정도 버린다: 알림 켬·끔은 워크스페이스의 구성원 행에 산다 — 옛 곳의 값을 새 곳 사건에 쓰지 않는다.
+ *  새 곳의 기준선은 바로 한 번 잡는다(다음 30초 폴을 기다리지 않는다). ⚠ 호출자(refreshState)가 state 를 새 값으로 바꾼 **뒤에**
+ *  돌도록 한 틱 미룬다 — 지금 부르면 옛 주소를 읽는다.
+ */
+function resetNotifyBinding() {
+  notifyGen++;
+  notifySnapshot = null; personSeen = null; personSince = null; boundWs = null;
+  notifyPrefsCache = { ...NOTIFY_DEFAULTS };
+  streamSeen.clear();
+  if (streamCtl) { try { streamCtl.abort(); } catch { /* 이미 끝났다 */ } }
+  setTimeout(() => void pollNotifications(), 0);
+}
 
 /**
  * 실시간 스트림에 붙는다 (#1842). 게이트웨이가 하네스 훅 보고를 받는 **그 순간** 사건을 밀어 주므로,
@@ -631,9 +700,11 @@ async function connectNotifyStream() {
   if (!token) { scheduleStreamRetry(); return; }
   const ctl = new AbortController();
   streamCtl = ctl;
+  const gen = notifyGen;                                 // #4054 — 이 연결이 붙은 매인 곳의 세대
   let openedAt = 0;
   try {
-    const res = await fetch(`${gw}/api/ui/notify/stream`, {
+    //  #4054 — 다른 워크스페이스 사건까지 청한다(서버가 계정으로 확인한 것만 준다). 사건마다 워크스페이스 표시가 붙는다.
+    const res = await fetch(streamUrl(gw), {
       headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
       signal: ctl.signal,
     });
@@ -650,13 +721,14 @@ async function connectNotifyStream() {
       buf += dec.decode(value, { stream: true });
       const { events, rest } = parseSse(buf);
       buf = rest;
+      if (gen !== notifyGen) break;                      // 매인 곳이 바뀌었다 — 끊기 직전에 들어온 옛 곳의 사건은 띄우지 않는다
       const prefs = notifyPrefs();
       for (const ev of events) {
         const hit = streamEvent(ev, streamSeen, prefs);
         if (!hit) continue;
         streamSeen.add(hit.key);
         while (streamSeen.size > SEEN_MAX) streamSeen.delete(streamSeen.values().next().value);
-        showBanner({ ...bannerFor(hit), event: hit });
+        showBanner({ ...bannerFor(hit, process.platform), event: hit });
       }
     }
   } catch { /* 끊김·타임아웃·게이트웨이 재시작 — 아래에서 다시 붙는다 */ }
@@ -687,8 +759,9 @@ async function pollNotifications() {
   if (notifyPolling) return;
   const gw = String(state.gatewayUrl || "").replace(/\/+$/, "");
   const token = state.ready && gw ? readTrim(join(LIVELY_DIR, "token")) : "";
-  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
+  if (!token) { notifySnapshot = null; personSeen = null; personSince = null; boundWs = null; streamSeen.clear(); notifyPrefsCache = { ...NOTIFY_DEFAULTS }; return; }
   notifyPolling = true;
+  const gen = notifyGen;                                 // #4054 — 이 폴이 떠난 매인 곳의 세대
   try {
     const res = await fetch(`${gw}/api/ui/terminal/sessions`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -697,33 +770,42 @@ async function pollNotifications() {
     if (!res.ok) return;                               // 401 은 watchTokenRejection 이 따로 처리한다
     const data = await res.json();
     const next = snapshotSessions(data && data.sessions);
-    await pollPersonFeed(gw, token);                     // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    if (gen !== notifyGen) return;                       // 그 사이 매인 곳이 바뀌었다 — 옛 곳의 목록을 새 기준선으로 쓰지 않는다
+    await pollPersonFeed(gw, token, gen);                // 설정·사람 알림을 함께 받아 온다(설정이 아래 판정에 바로 쓰인다)
+    if (gen !== notifyGen) return;
     const prefs = notifyPrefs();
-    const events = diffSessions(notifySnapshot, next, prefs);
+    const events = diffSessions(notifySnapshot, next, prefs, boundWs);   // #4054 — 이 목록은 매인 워크스페이스의 것
     notifySnapshot = next;                               // ★ 기준선은 스트림 유무와 무관하게 늘 갱신한다 —
     //  연결이 끊기는 순간 폴링이 그 자리에서 이어받아야 하는데, 기준선이 낡아 있으면 그 사이 전이를 통째로
     //  놓치거나(오래된 스냅샷과 비교) 과거를 한꺼번에 다시 띄운다.
-    if (!streamAlive) for (const b of planBanners(events)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
+    if (!streamAlive) for (const b of planBanners(events, undefined, process.platform)) showBanner(b);   // 스트림이 살아 있으면 배너는 그쪽이 만든다
   } catch { /* 게이트웨이가 꺼졌거나 네트워크가 끊겼다 — 기준선을 남기고 다음 폴에서 이어 본다 */ }
-  finally { notifyPolling = false; }
+  finally {
+    notifyPolling = false;
+    //  옛 곳으로 떠난 폴이 막 끝났다 — 초기화가 부른 새 곳의 폴은 이 폴에 막혀 건너뛰었을 수 있으니 한 번 더 부른다.
+    if (gen !== notifyGen) setTimeout(() => void pollNotifications(), 0);
+  }
 }
 
 /**
  * 사람이 나를 부른 것(멘션·댓글·담당) — 판정은 서버가 한다(/api/ui/notify/feed). 앱은 커서를 들고 다니며
  *  새로 온 것만 띄운다. **커서 전진은 성공했을 때만** 한다 — 실패했는데 전진시키면 그 사이 알림이 영영 사라진다.
  */
-async function pollPersonFeed(gw, token) {
+async function pollPersonFeed(gw, token, gen) {
   const url = `${gw}/api/ui/notify/feed` + (personSince ? `?since=${encodeURIComponent(personSince)}` : "");
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15_000) });
   if (!res.ok) return;                                 // 구 게이트웨이엔 이 엔드포인트가 없다(404) — 조용히 넘긴다
   const data = await res.json();
+  if (gen !== notifyGen) return;                       // #4054 — 옛 곳의 설정·커서·표시를 초기화 뒤에 되써 넣지 않는다
   // 서버가 실어 보낸 알림 설정을 캐시에 반영한다(왕복을 하나 더 만들지 않는다).
   if (data && data.prefs && typeof data.prefs === "object") notifyPrefsCache = { ...NOTIFY_DEFAULTS, ...data.prefs };
-  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs());
+  //  #4054 — 매인 워크스페이스의 표시(이름). 구 게이트웨이는 안 싣는다 → 받던 값을 유지한다(없으면 종전 배너).
+  if (data && data.workspace) boundWs = wsLabelOf(data.workspace) || boundWs;
+  const events = pickPersonEvents(data && data.items, personSeen, notifyPrefs(), boundWs);
   if (!personSeen) personSeen = new Set();             // 첫 폴 = 기준선(위 pickPersonEvents 가 이미 빈 배열을 줬다)
   rememberSeen(personSeen, events);
   personSince = (data && data.now) || personSince;     // 서버 시계를 쓴다 — 앱 시계와 어긋나도 사건을 건너뛰지 않게
-  for (const b of planPersonBanners(events)) showBanner(b);
+  for (const b of planPersonBanners(events, undefined, process.platform)) showBanner(b);
 }
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
@@ -762,20 +844,30 @@ function showApp() {
       if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
       void reloadIfStale();   // #1841 — 창은 닫아도 안 죽는다. 다시 보일 때 낡았으면 스스로 다시 싣는다.
     });
-    appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; });
+    appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; hashNav.failed(); });
     appWin.on("moved", saveAppBounds);
     appWin.on("resized", saveAppBounds);
     // 못 실었으면(게이트웨이 다운·주소 오류·오프라인) 빈 창을 두지 않는다 — 마법사의 '라이블리 열기' 카드에 사유를 적고 거기서 다시 시도한다.
     //  -3(ERR_ABORTED)은 리다이렉트·중복 로드의 부수 신호라 오류가 아니다.
     appWin.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
       if (!isMainFrame || code === -3) return;
+      hashNav.failed();   // 못 실은 창으로 가려던 알림 클릭은 버린다 — 나중에 성공한 로드가 그 옛 클릭으로 끌고 가지 않게(#3896)
       webError = `라이블리 화면을 열지 못했습니다 — ${desc || code} (${failedUrl || url})`;
       appLoaded = { url: null, token: null };
       send(IPC.LOG, { stream: "raw", line: webError });
       if (appWin && !appWin.isDestroyed()) appWin.hide();
       showWindow(); void refreshState();
     });
-    appWin.webContents.on("did-finish-load", () => { if (webError) { webError = null; void refreshState(); } });
+    appWin.webContents.on("did-finish-load", () => {
+      if (appWin && !appWin.isDestroyed()) hashNav.loaded(appWin.webContents);   // 싣는 도중 누른 알림 — 다 실린 지금 그 화면으로(#3896)
+      if (webError) { webError = null; void refreshState(); }
+    });
+    // #4054 — did-finish-load 시점엔 isLoadingMainFrame() 이 **아직 참**이다(실측 43.3.0: finish 에서 참 → 곧이은 did-stop-loading 에서 거짓).
+    //  그 틈에 누른 클릭은 대기로 가는데 그 대기를 풀 did-finish-load 는 다시 오지 않는다 — 멈춘 순간에도 한 번 더 푼다(loaded 는 기다리는 것이 있을 때만 움직인다).
+    //  실패한 로드는 did-fail-load 가 먼저 대기를 버리므로 여기서 엉뚱한 화면으로 가지 않는다.
+    appWin.webContents.on("did-stop-loading", () => {
+      if (appWin && !appWin.isDestroyed()) hashNav.loaded(appWin.webContents);
+    });
     // 사람이 웹에서 **다른 워크스페이스로 옮겨 갔나**(#2215) — 웹뷰만 옮겨가고 이 PC 의 로컬(토큰·노드·MCP)은
     //  그대로라 조용히 어긋난다. 해시 라우팅이라 in-page 도 함께 듣는다(둘 다 같은 자리로 보낸다).
     appWin.webContents.on("did-navigate", (_e, navUrl) => void offerWorkspaceRebind(navUrl));
@@ -882,13 +974,72 @@ function browserSurfaceSession() {
   const s = session.fromPartition(BROWSER_SURFACE_PARTITION);
   if (!surfaceSessionReady) {
     surfaceSessionReady = true;
-    try { s.setUserAgent(cleanUserAgent(s.getUserAgent(), app.getName())); } catch { /* 비치명 — 표식이 남을 뿐이다 */ }
+    // UA 는 스톡 Electron UA 그대로 둔다(고쳐 쓰지 않는다) — #5023. UA 문자열을 재작성하면 Cloudflare Turnstile 이
+    //  600010 으로 막는다(UA 와 클라이언트 힌트가 어긋나 위장으로 읽힘). 상세·근거는 browser-surface.mjs 「UA」 머리말.
     // 요구를 조용히 삼키지 않고 거부한다. 사람이 허용하는 흐름이 생기면 surfacePermissionAllowed 를 그때 넓힌다.
     try { s.setPermissionRequestHandler((_wc, permission, cb) => cb(surfacePermissionAllowed(permission))); } catch { /* 비치명 */ }
     try { s.setPermissionCheckHandler((_wc, permission) => surfacePermissionAllowed(permission)); } catch { /* 비치명 */ }
     void reloadInstalledExtensions(s);   // ③ 저장해 둔 확장을 다시 건다 — Electron 은 확장을 기억하지 않는다
   }
   return s;
+}
+
+// 서피스 안의 webContents 인가 — `<webview>` 게스트, 그리고 **그 게스트가 연 팝업 창**(#5025).
+//  ⚠ 팝업 창은 getType() 이 "window" 라 webview 판정만 하면 웹 UI 규칙(openTargetFor)에 걸린다 — 게이트웨이 밖 이동을
+//   전부 시스템 브라우저로 던져서 구글 로그인 창이 첫 이동에서 죽는다. 그래서 **세션**으로 가른다: window.open 으로 연 창은
+//   opener 의 저장소에서 태어나고(opener 가 살려면 같은 브라우징 인스턴스여야 한다), opener 없이 새로 짓는 창엔
+//   surfacePopupWebPreferences 가 파티션을 준다. 세션이 아직 없으면 게스트도 팝업도 있을 수 없다 — 웹 UI 창마다 서피스 세션을 깨우지 않는다.
+function isSurfaceContents(wc) {
+  if (wc.getType() === "webview") return true;
+  return surfaceSessionReady && wc.session === browserSurfaceSession();
+}
+
+// 서피스 팝업 창 — **우리가 지은 것만** 센다(상한 판정). 페이지가 정할 수 있는 값(show 등)으로 세면 숨은 창으로 상한을 피한다.
+const surfacePopups = new Set();
+// 새 창 문의 기록 장부 — 탭 가족(웹 칸 탭 + 거기서 이어 열린 팝업) 단위. 팝업마다 따로 세면 팝업이 또 여는 사슬이 상한을 피한다.
+const surfaceLedger = createOpenLedger();
+
+// 서피스 webContents 의 주인 창 — 게스트면 그 게스트를 품은 앱 창, 팝업이면 그 팝업 창 자신.
+function surfaceOwnerWindow(wc) {
+  try {
+    const w = BrowserWindow.fromWebContents(wc.hostWebContents || wc);
+    return w && !w.isDestroyed() ? w : null;
+  } catch { return null; }
+}
+
+// 사람이 그 앱 창을 쓰고 있나 — 새 창 문의 첫 조건(뒤에 깔린 창·AI 혼자 도는 탭이 사람 화면에 창을 띄우지 않게).
+function surfaceHostFocused(wc) {
+  const owner = surfaceOwnerWindow(wc);
+  return !!owner && owner.isFocused();
+}
+
+// 서피스가 연 팝업 창을 **우리가** 짓는다(setWindowOpenHandler 의 createWindow). 페이지의 기능 문자열은 크기 말고는 버린다 —
+//  frame·modal·show·alwaysOnTop 같은 값을 그대로 받으면 남의 페이지가 «닫기 없는 모달 창» · «숨은 창» 을 만든다(surfacePopupWindowSpec).
+//  주인 창 위에 떠서 사람이 로그인 창을 뒤로 잃지 않는다. 제목 앞엔 실제 호스트 — 주소줄이 없는 창이라 어디인지 보이게.
+function createSurfacePopup(opener, url, options) {
+  const owner = surfaceOwnerWindow(opener);
+  const area = (owner ? screen.getDisplayMatching(owner.getBounds()) : screen.getPrimaryDisplay()).workArea;
+  const guest = options && options.webContents;
+  //  webPreferences 는 guest 가 있어도 다시 준다 — 기존 webContents 로 창을 지으면 Electron 이 이 값으로 설정을 **새로 덮는다**
+  //  (v43.3.0 CreateFromWebPreferences → SetFromDictionary: 비우고 다시 채움). 빼면 격리가 Electron 기본값으로 돌아간다.
+  const win = new BrowserWindow({
+    ...surfacePopupWindowSpec(options, area),
+    ...(owner ? { parent: owner } : {}),
+    webPreferences: surfacePopupWebPreferences(),
+    ...(guest ? { webContents: guest } : {}),
+  });
+  surfacePopups.add(win);
+  surfaceLedger.adopt(win.webContents, opener);   // 이 팝업이 또 여는 창도 같은 가족의 빈도로 센다
+  win.on("closed", () => surfacePopups.delete(win));
+  // 지은 뒤에도 페이지는 창을 못 옮기고·못 키우고(moveTo·resizeTo → content-bounds-updated) 닫기를 못 막는다(beforeunload).
+  win.webContents.on("content-bounds-updated", (e) => e.preventDefault());
+  win.webContents.on("will-prevent-unload", (e) => e.preventDefault());
+  const retitle = (u, t) => { if (!win.isDestroyed()) win.setTitle(surfacePopupTitle(u, t)); };
+  retitle(url, "");   // 첫 제목 전부터 출처를 보인다(빈 창에 쓴 거짓 제목 대비)
+  win.on("page-title-updated", (e, title) => { e.preventDefault(); retitle(win.webContents.getURL(), title); });
+  win.webContents.on("did-navigate", (_e, navUrl) => retitle(navUrl, win.webContents.getTitle()));
+  if (!guest) void win.loadURL(url).catch(() => { /* 못 연 주소 — 빈 창이 남고 사람이 닫는다 */ });
+  return win.webContents;
 }
 
 // ── 브라우저 확장(애드온) (#1829) ────────────────────────────────────────────
@@ -1032,8 +1183,8 @@ async function reloadInstalledExtensions(sess) {
 // 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — **두 규칙이 산다**:
 //  · 웹 UI(우리 페이지·자식 창): web-shell.openTargetFor — 같은 출처는 앱 안의 새 창으로(토큰이 같은 localStorage 라
 //    그대로 로그인 상태), 바깥은 시스템 브라우저로, 그 외(javascript: 등)는 열지 않는다. 자식 창에도 같은 preload·격리를 준다.
-//  · 브라우저 서피스 게스트(#1829): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
-//  그래서 게스트를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
+//  · 브라우저 서피스 게스트(#1829)와 그 팝업 창(#5025): browser-surface.surfaceNavTarget — **정반대다**(남의 사이트를 보는 게 목적).
+//  그래서 서피스를 **먼저** 가르고 빠져나간다. 순서가 뒤집히면 서피스가 죽는다(browser-surface.test.mjs F1).
 app.on("web-contents-created", (_e, wc) => {
   // ── 우클릭 메뉴(#1870) — 모든 webContents 공통(웹 UI·자식 창·서피스 게스트). 앱은 브라우저와 달리
   //  기본 우클릭 메뉴가 없어 링크 주소를 복사할 길이 없었다. 항목 판정은 context-menu.mjs(순수 모델)가 한다.
@@ -1045,22 +1196,35 @@ app.on("web-contents-created", (_e, wc) => {
       : { label: m.label, click: () => runContextMenuAction(m.id, params, wc, clipboard) }))).popup();
   });
 
-  // ── 브라우저 서피스 안(=`<webview>` 게스트)은 규칙이 정반대다 ───────────────────────────────────────
+  // ── 브라우저 서피스 안(=`<webview>` 게스트와 그 팝업 창)은 규칙이 정반대다 ───────────────────────────
   //  아래 웹 UI 규칙(openTargetFor)은 "남의 사이트를 앱에 들이지 않는다" 라 **게이트웨이 밖 이동을 전부 밖으로 던진다**.
   //  그걸 서피스에도 걸면 남의 사이트를 보려고 만든 화면이 첫 이동에서 통째로 시스템 브라우저로 튄다 — 기능이 죽는다.
-  //  게스트는 `getType() === "webview"` 로 갈린다(Electron 이 주는 신호라 우리가 표시를 붙일 필요가 없다).
-  if (wc.getType() === "webview") {
-    wc.setWindowOpenHandler(({ url }) => {
-      // 서피스 안에서 새 창(`target=_blank`·window.open)은 띄우지 않는다 — 서피스는 창이 아니라 화면 한 칸이라
-      //  떠도 사람이 닫을 크롬이 없다. 볼 수 있는 주소면 시스템 브라우저로 넘긴다(눌렀는데 아무 일도 없는 것보다 낫다).
-      if (surfaceNavTarget(url) !== "deny") shell.openExternal(url);
+  //  판정은 isSurfaceContents — 게스트는 `getType() === "webview"`, 팝업 창은 서피스 세션으로 갈린다.
+  if (isSurfaceContents(wc)) {
+    wc.setWindowOpenHandler(({ url, disposition, features }) => {
+      // 스크립트가 창 기능을 주고 연 팝업은 앱 안의 작은 창으로 — opener 가 살아 팝업 로그인(구글·애플·MS)이 결과를 돌려받는다.
+      //  그 밖(target=_blank 링크 · Shift+클릭 · 기능 없는 window.open)은 시스템 브라우저로. 판정 표는 surfaceWindowOpenTarget.
+      const t = surfaceWindowOpenTarget({ url, disposition, features, openPopups: surfacePopups.size });
+      if (t === "deny") return { action: "deny" };
+      // 크롬의 팝업 차단기 대신 — 사람이 그 앱 창을 쓰고 있을 때만, 그 탭 가족에서 10초에 3번·1분에 12번까지(surfaceOpenGate).
+      if (!surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) return { action: "deny" };
+      if (t === "popup") {
+        return {
+          action: "allow",
+          // 팝업 webContents 의 격리(페이지 기능 문자열보다 이긴다) + 창은 우리가 짓는다(createSurfacePopup).
+          overrideBrowserWindowOptions: { webPreferences: surfacePopupWebPreferences() },
+          createWindow: (options) => createSurfacePopup(wc, url, options),
+        };
+      }
+      shell.openExternal(url);
       return { action: "deny" };
     });
     wc.on("will-navigate", (e, url) => {
       const t = surfaceNavTarget(url);
       if (t === "allow") return;
       e.preventDefault();
-      if (t === "external") shell.openExternal(url);
+      // 밖으로 넘기는 것(mailto·DRM)도 같은 문 — location 을 돌려 대며 시스템 앱·브라우저를 쏟지 못하게.
+      if (t === "external" && surfaceLedger.check(wc, { hostFocused: surfaceHostFocused(wc), now: Date.now() })) shell.openExternal(url);
     });
     return;
   }
@@ -1081,7 +1245,9 @@ app.on("web-contents-created", (_e, wc) => {
     //  (게스트 session !== 우리 세션, UA·권한 핸들러 전부 미적용 = **격리가 통째로 무력**). `webPreferences` 로
     //  넣어야 붙는다. 값이 반영된 것처럼 보여서 코드만 읽으면 절대 안 보이는 함정이다 — 바꾸기 전에 실기기로 재라.
     webPreferences.partition = BROWSER_SURFACE_PARTITION;
-    params.allowpopups = false;   // 팝업의 실질 차단은 게스트의 setWindowOpenHandler 다(이건 겹겹이)
+    //  새 창도 같은 함정이다 — `params.allowpopups` 는 Electron 이 이 훅 **전에** webPreferences.disablePopups 로 바꿔 둔다
+    //  (v43.3.0 guest-view-manager.ts makeWebPreferences). 그래서 params 에 적어도 아무 일이 없다. 팝업은
+    //  WEBVIEW_FORCED_PREFS.disablePopups(=false)로 게스트의 setWindowOpenHandler 까지 오게 하고, 거기서 정한다(#5025).
   });
 
   wc.setWindowOpenHandler(({ url }) => {
@@ -1171,6 +1337,80 @@ async function start(kind, opts) {
 }
 
 /**
+ * 쓸 수 있는 CLI 를 손에 쥔다 (#1541 T3 · #3968) — **두 시작 경로가 같은 단계를 쓴다.**
+ *
+ * ★ 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
+ *  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
+ *  조용히 무시하고 exit 0 으로 끝낸다 → 앱은 이벤트를 하나도 못 받고 아무 설명 없이 멈춘다.
+ *  종전엔 '있으면 그대로 몬다' 라서 이 상태가 **영원히 안 풀렸다**(사람이 손으로 부트스트랩 한 줄을 쳐야 했다).
+ *
+ * ★ **어디서 받아오는지는 시작 경로가 정한다**(#3968): 주소 경로는 사람이 넣은 게이트웨이, 클라우드 경로는
+ *  라이블리 클라우드(app.lvly.io). 클라우드가 서빙하는 부트스트랩은 `MODE=cloud` 로 구워져 와서
+ *  `gateway-url` 을 **쓰지 않는다** — 그 값은 뒤이은 `setup --cloud` 의 로그인이 받아 온다(kit/cli/bootstrap.sh).
+ *  그래서 이 단계에 워크스페이스 주소가 필요 없다.
+ *
+ * @param {{url:string, cloud?:boolean}} src  부트스트랩을 받아올 주소와 그 성격
+ * @returns {Promise<{ok:true,cli:string}|{ok:false,error:string}>}
+ */
+async function ensureCli(src) {
+  const existing = locateCli(existsSync);
+  if (existing && state.cliOutdated === undefined) await refreshNodeStatus(existing);   // 아직 안 재봤으면 지금 잰다
+  if (existing && !state.cliOutdated && !state.cliBroken) return { ok: true, cli: existing };
+
+  // 새 PC(또는 계약을 모르는 구 CLI) — 그 주소가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
+  // 문구가 사실과 맞아야 한다 — 이미 있는 걸 갈아끼우는 중에 "설치 중" 이라고 하면 사람은 뭘 하는지 모른다.
+  const label = !existing ? "라이블리 CLI 설치 중"
+    : state.cliBroken ? "라이블리 CLI 다시 설치 중(설치된 CLI 를 실행할 수 없습니다)"
+      : "라이블리 CLI 업데이트 중(설치된 버전이 오래됐습니다)";
+  state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
+  progress = reduceProgress(null, { t: "start", cmd: "bootstrap" });
+  progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "start", i: 1, n: 2 });
+  send(IPC.PROGRESS, progress);
+  send(IPC.LOG, { stream: "raw", line: `$ ${bootstrapPreview(src.url) || ""}` });   // 무엇을 실행하는지 숨기지 않는다
+  const b = await runBootstrap({ gatewayUrl: src.url, onLine: (line) => send(IPC.LOG, { stream: "stderr", line }), timeoutMs: 15 * 60_000 });
+  // ★ 종료코드가 아니라 **CLI 가 실제로 생겼는지**로 판정한다 — `curl | sh` 는 curl 이 404 를 받아도 0 으로 끝난다.
+  const cli = locateCli(existsSync);
+  // ★ 업그레이드였다면 **실제로 말이 통하게 됐는지 다시 잰다.** 파일이 있다는 것만으로 넘어가면,
+  //  부트스트랩이 옛 키트를 그대로 남긴 경우(주소 오타로 404 등) 똑같은 침묵이 한 번 더 반복된다.
+  if (cli && existing) { state = { ...state, cliOutdated: undefined, cliBroken: null }; await refreshNodeStatus(cli); }
+  const stillBad = !cli || (existing && (state.cliOutdated || state.cliBroken));
+  if (stillBad) {
+    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
+    progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
+    state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
+    // CLI 가 아예 안 생겼으면(윈도우) 손으로 하는 한 줄을 붙인다 — 회사 정책·사내 프록시에 막힌 PC 의 출구다(bootstrap.mjs 머리 주석).
+    const note = b.error || bootstrapFailNote(src, cli);
+    const manual = cli ? null : bootstrapManualHint(src.url);
+    return { ok: false, error: manual ? `${note}\n${manual}` : note };
+  }
+  progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
+  send(IPC.PROGRESS, progress);
+  state = { ...state, busy: false, cliPath: cli, cliFound: true };
+  await refreshState();
+  return { ok: true, cli };
+}
+
+/** 부트스트랩이 끝났는데도 쓸 수 있는 CLI 가 없다 — **다음 행동**을 준다(경로마다 사람이 쥔 패가 다르다). */
+function bootstrapFailNote(src, cli) {
+  if (cli) {
+    return state.cliBroken
+      ? `CLI 를 다시 설치했는데도 실행할 수 없습니다(${state.cliBroken}).`
+      : `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${src.url}`;
+  }
+  // 클라우드 경로엔 사람이 고칠 '주소' 가 없다(그게 이 경로의 요지다) — 물을 게 없으니 **무엇이 막혔는지**를 말한다.
+  if (src.cloud) {
+    return `라이블리 클라우드에서 라이블리 CLI 를 받지 못했습니다: ${src.url}\n`
+      + "네트워크(사내 프록시·방화벽)가 이 주소를 막고 있지 않은지 확인한 뒤 다시 시도하세요. "
+      + "회사에 직접 설치한 라이블리라면 아래 «회사에 직접 설치했어요» 에 그 주소를 넣으세요.";
+  }
+  // ★ 여기서 "주소가 맞는지 확인하세요" 로 끝내면 사람은 **맞는 주소를 어디서 보는지**를 모른다(#2044).
+  //  매니지드에서 가장 흔한 원인이 그것이라(로그인 주소를 넣음) 다음 행동을 같이 준다.
+  return `이 주소에서 라이블리 CLI 를 받지 못했습니다: ${src.url}\n`
+    + "라이블리 클라우드라면 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에 있는 워크스페이스 주소를, "
+    + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요.";
+}
+
+/**
  * 온보딩 (#1541 T3) — 주소 입력 한 번으로 **끝까지** 간다: (없으면) CLI 부트스트랩 → `lively setup`.
  *
  * `setup` 은 CLI 안에서 로그인 + 설치를 순서대로 한다. 앱이 login·install 을 따로 부르지 않는 이유가 그거다 —
@@ -1185,52 +1425,8 @@ async function onboard(url) {
   try { argvFor("login", { gateway: advice.url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
   const gw = advice.url;
 
-  // ★ 부트스트랩 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
-  //  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
-  //  조용히 무시하고 exit 0 으로 끝낸다 → 앱은 이벤트를 하나도 못 받고 아무 설명 없이 멈춘다.
-  //  종전엔 '있으면 그대로 몬다' 라서 이 상태가 **영원히 안 풀렸다**(사람이 손으로 부트스트랩 한 줄을 쳐야 했다).
-  const existing = locateCli(existsSync);
-  if (existing && state.cliOutdated === undefined) await refreshNodeStatus(existing);   // 아직 안 재봤으면 지금 잰다
-  if (!existing || state.cliOutdated || state.cliBroken) {
-    // 새 PC(또는 계약을 모르는 구 CLI) — 게이트웨이가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
-    // 문구가 사실과 맞아야 한다 — 이미 있는 걸 갈아끼우는 중에 "설치 중" 이라고 하면 사람은 뭘 하는지 모른다.
-    const label = !existing ? "라이블리 CLI 설치 중"
-      : state.cliBroken ? "라이블리 CLI 다시 설치 중(설치된 CLI 를 실행할 수 없습니다)"
-        : "라이블리 CLI 업데이트 중(설치된 버전이 오래됐습니다)";
-    state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
-    progress = reduceProgress(null, { t: "start", cmd: "bootstrap" });
-    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "start", i: 1, n: 2 });
-    send(IPC.PROGRESS, progress);
-    send(IPC.LOG, { stream: "raw", line: `$ ${bootstrapPreview(gw) || ""}` });   // 무엇을 실행하는지 숨기지 않는다
-    const b = await runBootstrap({ gatewayUrl: gw, onLine: (line) => send(IPC.LOG, { stream: "stderr", line }), timeoutMs: 15 * 60_000 });
-    // ★ 종료코드가 아니라 **CLI 가 실제로 생겼는지**로 판정한다 — `curl | sh` 는 curl 이 404 를 받아도 0 으로 끝난다.
-    const cli = locateCli(existsSync);
-    // ★ 업그레이드였다면 **실제로 말이 통하게 됐는지 다시 잰다.** 파일이 있다는 것만으로 넘어가면,
-    //  부트스트랩이 옛 키트를 그대로 남긴 경우(주소 오타로 404 등) 똑같은 침묵이 한 번 더 반복된다.
-    if (cli && existing) { state = { ...state, cliOutdated: undefined, cliBroken: null }; await refreshNodeStatus(cli); }
-    const stillBad = !cli || (existing && (state.cliOutdated || state.cliBroken));
-    if (stillBad) {
-      progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
-      progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
-      state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
-      return {
-        ok: false,
-        error: b.error || (cli
-          ? (state.cliBroken
-            ? `CLI 를 다시 설치했는데도 실행할 수 없습니다(${state.cliBroken}).`
-            : `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${gw}`)
-          // ★ 여기서 "주소가 맞는지 확인하세요" 로 끝내면 사람은 **맞는 주소를 어디서 보는지**를 모른다(#2044).
-          //  매니지드에서 가장 흔한 원인이 그것이라(로그인 주소를 넣음) 다음 행동을 같이 준다.
-          : `이 주소에서 라이블리 CLI 를 받지 못했습니다: ${gw}\n`
-            + "라이블리 클라우드라면 app.lvly.io 홈의 «데스크톱 앱·CLI 로 연결» 에 있는 워크스페이스 주소를, "
-            + "회사에 직접 설치했다면 관리자에게 받은 주소를 넣으세요."),
-      };
-    }
-    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
-    send(IPC.PROGRESS, progress);
-    state = { ...state, busy: false, cliPath: cli, cliFound: true };
-    await refreshState();
-  }
+  const c = await ensureCli({ url: gw, cloud: false });
+  if (!c.ok) return c;
   // 로그인 + 키트 설치는 CLI 의 setup 이 통째로 한다(순서·조건은 거기가 정본).
   const r = await start("setup", { gateway: gw });
   if (!r.ok) return r;
@@ -1239,6 +1435,28 @@ async function onboard(url) {
   //  진행 UI 가 실패(예: tmux 안내)를 보여주고 '다시 시도'는 node-start 를 재시도한다(lastRun).
   if (nextAfterSetup(state)) return start("node-start", {});
   return r;
+}
+
+/**
+ * 클라우드 시작 (#2044 의 나머지 반쪽 — #3968) — **주소를 묻지 않는 경로도 CLI 가 없는 PC 에서 시작돼야 한다.**
+ *
+ * ★ 종전엔 이 버튼이 곧장 `start("setup-cloud")` 로 갔고, 거기 CLI 가드가
+ *   «라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.»
+ *  로 튕겼다. 그 문장은 이 버튼을 누른 사람에게 **알 수 없는 주소를 물어보는 것**이라, #2044 §0 이 없앤
+ *  닭-달걀(주소를 보려면 로그인해야 하고, 로그인하려면 주소가 필요하다)이 그대로 돌아온다.
+ *  매니지드 신규 설치는 **언제나 CLI 가 없는 PC** 라 이 경로는 첫 사용자에게 사실상 늘 막혀 있었다.
+ *
+ * ★ 설치의 끝은 주소 경로와 **같아야 한다**(노드까지) — 같은 앱에서 어떻게 시작했느냐로 결과가 갈리면 안 된다.
+ */
+async function onboardCloud(opts) {
+  if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
+  let url;
+  try { url = cloudUrl(); } catch (e) { return { ok: false, error: e.message }; }   // 개발용 덮어쓰기(env)의 형식 오류
+  const c = await ensureCli({ url, cloud: true });
+  if (!c.ok) return c;
+  const r = await start("setup-cloud", opts || {});
+  if (!r.ok) return r;
+  return nextAfterSetup(state) ? start("node-start", {}) : r;
 }
 
 /** prompt → 렌더러로 넘기고 답을 기다린다. device-code 는 통지형이라 답하지 않는다(undefined). */
@@ -1255,13 +1473,9 @@ function askUser(p) {
 // ── IPC ─────────────────────────────────────────────────────────────────────
 ipcMain.handle(IPC.GET_STATE, async () => ({ state: await refreshState(), progress }));
 ipcMain.handle(IPC.RUN, async (_e, { kind, opts }) => {
-  // 클라우드 설치(#2044)는 **온보딩과 같은 끝**을 가져야 한다: 설치가 끝나면 노드까지 선다.
+  // 클라우드 설치(#2044·#3968)는 **온보딩과 같은 흐름**이다: (없으면) CLI 부트스트랩 → setup → 노드까지.
   //  주소 경로(onboard)가 그렇게 하는데 이쪽만 안 하면, 같은 앱에서 어떻게 시작했느냐로 결과가 갈린다.
-  if (kind === "setup-cloud") {
-    const r = await start("setup-cloud", opts || {});
-    if (!r.ok) return r;
-    return nextAfterSetup(state) ? start("node-start", {}) : r;
-  }
+  if (kind === "setup-cloud") return onboardCloud(opts);
   return start(kind, opts || {});
 });
 ipcMain.handle(IPC.CANCEL, () => { running?.handle?.cancel(); return { ok: true }; });
@@ -1360,6 +1574,9 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
 });
 
 // ── 수명 ────────────────────────────────────────────────────────────────────
+// 가려진 창·다른 데스크톱 공간의 창도 숨김으로 치지 않는다 — 사람이 다른 공간에 있는 동안 AI 가 웹 칸에서 연 페이지가
+//  그려지고 찍히게(browser-surface OCCLUDED_WINDOW_SWITCH 머리말). 스위치는 앱이 준비되기 **전에** 걸어야 먹는다.
+app.commandLine.appendSwitch(OCCLUDED_WINDOW_SWITCH);
 // 두 번째 인스턴스는 창만 띄우고 죽는다 — 트레이 아이콘이 둘, CLI 가 동시에 둘 도는 걸 막는다.
 if (!app.requestSingleInstanceLock()) app.quit();
 else {

@@ -9,7 +9,7 @@
 //   크론만 `cron:<잡>[#<레인>]` 표식으로 썼다. 그 칸을 읽는 자리는 전부 `cron:` 접두만 본다(cronJobIdOf · 중첩 가드 ·
 //   자동 실행 기록), 그래서 세션 id 가 들어가도 그쪽은 종전과 같다.
 import { itemsPool } from "../db/client.js";
-import { cronJobIdFromMarker as cronJobIdOf } from "./task-failure.js";   // stage 판 — 같은 규칙(`cron:<잡>[#<레인>]`)
+import { cronJobIdOf } from "../scheduler/cron-task-feedback.js";
 import { EXECUTION_SESSION_ID_RE } from "../org/auth/agent-identity.js";
 
 /** 위탁 한 건의 출처. */

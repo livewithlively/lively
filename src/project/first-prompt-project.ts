@@ -21,7 +21,9 @@ import { getProjectRow } from "../v6/project-store.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 import { claimProjectName } from "../v6/project-store.js";
 import { countSessionsBoundToProject, executionSessionProject } from "../v6/execution-session-store.js";
+import { returnAttachmentsToPersonal, type RelocatedAttachment, type ReturnResult } from "./attach-relocate.js";
 import { logger } from "../log.js";
+import { redactTokenShapes } from "../org/ingest/redact.js";
 // 임시 이름을 짓는 규칙(#2031) — 훅 project-auto-bind 와 같은 계약이라 한 곳(v6/project-name.ts)에 둔다.
 import { projectNameFromHuman, shellNameFromPrompt } from "../v6/project-name.js";
 
@@ -141,7 +143,9 @@ export function unnamedShellProject(): ShellProjectSpec {
  *   짧은 제목은 정련(project-bind-nudge)이 고친다 — 되돌리기 싼 쪽이다.
  */
 export function shellProjectFromPrompt(promptRaw: string | null | undefined): ShellProjectSpec | null {
-  const prompt = String(promptRaw ?? "").trim();
+  // #4501 첫 지시에 붙여 넣은 토큰이 프로젝트 이름·본문으로 퍼지지 않게 **가린다**(막지 않는다 — 여긴 사람이 고르는
+  //  입구가 아니라 자동 생성이라, 막으면 세션의 작업면이 통째로 안 생긴다. 커넥터 미러와 같은 처리).
+  const prompt = redactTokenShapes(String(promptRaw ?? "").trim());
   if (!prompt) return null;
   if (prompt.startsWith("/") || prompt.startsWith("!") || prompt.startsWith("<")) return null;
   // 이름은 28자에서 자른다(#2031) — 종전 70자는 지시문 한 문장을 통째로 보드에 걸었다. 원문은 아래 본문에 남는다.
@@ -242,17 +246,18 @@ export function shellDiscardVerdict(o: { boundSessions: number | null; attachmen
   return o.attachmentsLeft > 0 ? "trash" : "delete";
 }
 
-//  stage 전용 — 이 브랜치엔 첫 지시 첨부 옮기기(#3787 attach-relocate)가 없다. 그래서 되돌릴 첨부도 없다(main 판은 moves 를 든다).
-export interface ShellHandle { projectId: number; actor: string }
+export interface ShellHandle { projectId: number; actor: string; moves?: RelocatedAttachment[] }
 
 export interface DiscardDeps {
   boundSessions(projectId: number): Promise<number>;
+  returnAttachments(moves: RelocatedAttachment[]): Promise<ReturnResult>;
   deleteProject(projectId: number, actor: string): Promise<unknown>;
   trashProject(projectId: number, actor: string): Promise<unknown>;
 }
 
 const discardDeps: DiscardDeps = {
   boundSessions: countSessionsBoundToProject,
+  returnAttachments: (moves) => returnAttachmentsToPersonal(moves),
   deleteProject: (id, actor) => deleteProject(id, { actor, source: "web" }),
   trashProject: (id, actor) => setProjectTrashed(id, true, { actor, source: "web" }),
 };
@@ -267,7 +272,7 @@ export async function discardShellProject(
       logger.warn({ projectId: shell.projectId, bound, reason }, "[first-prompt-project] 세션 띄우기 실패 — 세션이 이미 붙었거나 셀 수 없어 프로젝트를 남긴다");
       return "keep";
     }
-    const back = { returned: 0, failed: 0, left: [] as string[] };   // stage 전용 — 옮긴 첨부가 없다
+    const back = shell.moves?.length ? await deps.returnAttachments(shell.moves) : { returned: 0, failed: 0, left: [] };
     const verdict = shellDiscardVerdict({ boundSessions: bound, attachmentsLeft: back.failed });
     if (verdict === "delete") await deps.deleteProject(shell.projectId, shell.actor);
     else await deps.trashProject(shell.projectId, shell.actor);

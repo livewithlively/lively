@@ -32,10 +32,13 @@ export function appRank(a: AppSearchable, query: string): number {
 //  base = 라이블리에 기본으로 들어 있는 앱. workspace = 이 워크스페이스의 앱(세션이 만들었거나 관리자가 설치한 앱 · 대시보드).
 export type PadGroup = 'base' | 'workspace';
 
-/** 설치된 앱(org_app)이 서는 묶음. 제품에 실려 온 것(source.kind='builtin')만 기본 앱이고, 출처를 모르면 워크스페이스 앱이다 —
- *  남이 만든 앱을 «기본» 이라 부르는 쪽이 더 나쁜 거짓말이다. */
-export function padGroupOfInstalled(sourceKind: string | undefined | null): PadGroup {
-  return sourceKind === 'builtin' ? 'base' : 'workspace';
+/** 설치된 앱(org_app)이 서는 묶음. **제품에 실려 왔고(source.kind='builtin') 셸이 직접 그리는 앱(매니페스트 system)** 만 기본 앱이다.
+ *  출처를 모르면 워크스페이스 앱이다 — 남이 만든 앱을 «기본» 이라 부르는 쪽이 더 나쁜 거짓말이다.
+ *  #4592(원준 2026-10-07 «이런 장표 수정 앱은 … 워크스페이스 앱에도 나오게»): 제품에 실려 오더라도 **워크스페이스가 제 것처럼 고쳐 쓰는 앱**
+ *  (system 선언이 없는 빌트인 — 화면 코드가 앱 안에 있어 app_save 로 워크스페이스 판을 만들 수 있다. 「장표 수정」)은 워크스페이스 앱에 선다.
+ *  두 번째 인자가 그 구분이다: 셸이 그리는 앱(자료 · 확인할 것 · 웹 브라우저 …)은 고칠 화면 코드가 없어 제품의 일부로 남는다. */
+export function padGroupOfInstalled(sourceKind: string | undefined | null, shellRendered = false): PadGroup {
+  return sourceKind === 'builtin' && shellRendered ? 'base' : 'workspace';
 }
 
 /** 검색 중 Enter 로 열릴 칸 — 화면 순서로 늘어선 칸들의 rank(작을수록 잘 맞음) 가운데 가장 잘 맞은 칸의 자리. 동점은 앞 칸. 칸이 없으면 -1.

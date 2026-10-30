@@ -7,7 +7,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { HARNESSES } from "./catalog.js";
-import { harnessHasCredential, harnessLoginProbe } from "./profiles.js";
+import { harnessHasCredential, harnessLoginProbe, listedHarnessInstalled } from "./profiles.js";
+import { registerGatewayCapabilities } from "../sessions/gateway-capabilities.js";
+import { unfreezeExecTopology } from "../exec-topology.js";
 
 let pass = 0, fail = 0;
 const t = (name: string, fn: () => void): void => {
@@ -22,24 +24,21 @@ const ROUTES = srcOf("./routes.ts");
 const RUN = srcOf("./ai-login-run.ts");   // #3668 T3 — 하네스 자리(세션 컨테이너)를 러너와 프로브가 공유한다
 const INDEX = srcOf("../index.ts");      // #3668 T3 — 그 자리를 잇는 배선(게이트웨이 능력 등록)
 //  #1631 — «폴링은 싸게, 결정 지점은 정확하게» 를 지키려면 그 두 자리가 있는 파일도 봐야 한다.
+//   (#4970) 결정 지점은 리브 킥오프가 아니라 리브에게 일 맡기기(me_liv_open — 새로 열 때만 로그인을 잰다)다.
 const WELCOME = readFileSync(
   new URL("../capabilities/delivery/welcome.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
-// 웹은 dist 로 안 간다 — src/terminal 기준 상대경로로 레포 루트를 거슬러 올라간다.
-const ONBOARDING = readFileSync(
-  new URL("../../web/v2/onboarding.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+const CONNECT = readFileSync(
+  new URL("../capabilities/delivery/liv-chat.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
 
-/** 온보딩이 사람에게 **고르게 하는** AI → 하네스 key. 화면의 표를 그대로 읽는다(두 벌로 적지 않는다). */
+/** 사람에게 로그인하게 하는 AI 넷 → 하네스 key. (#4970) 처음 설정의 «AI 고르기» 표는 걷혔다 — 로그인은 [내 설정 ▸ AI 계정 연결]에서 하고,
+ *  외부 앱 연결 세션은 그중 로그인된 첫 번째로 뜬다. 이 넷이 «이어졌나» 를 답하지 못하면 연결 세션이 영영 «AI 없음» 으로 떨어진다. */
 function onboardingAiMap(): Record<string, string> {
-  const m = ONBOARDING.match(/const AI_HARNESS = \{([^}]*)\}/);
-  assert.ok(m, "온보딩에서 AI_HARNESS 표를 찾지 못했다 — 화면이 무엇을 고르게 하는지 알 수 없다");
-  const out: Record<string, string> = {};
-  for (const [, label, key] of m![1].matchAll(/'([^']+)'\s*:\s*'([^']+)'/g)) out[label] = key;
-  return out;
+  return { Claude: "claude", ChatGPT: "codex", Gemini: "antigravity", Grok: "grok" };
 }
 
 // ── 고르게 한 넷이 실제로 이어지는가 (이 프로젝트의 본론) ─────────────────────
 
-t("① 온보딩이 고르게 하는 넷은 전부 실재하는 하네스다", () => {
+t("① 로그인하게 하는 넷은 전부 실재하는 하네스다", () => {
   const map = onboardingAiMap();
   assert.deepEqual(Object.keys(map).sort(), ["ChatGPT", "Claude", "Gemini", "Grok"]);
   for (const [label, key] of Object.entries(map)) {
@@ -98,7 +97,7 @@ t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번
   //  ⚠ **주석은 빼고** 본다 — 이 자리엔 «왜 싼 쪽을 쓰는가» 를 설명하려고 비싼 쪽 이름이 글로 등장한다.
   //   글자를 세면 그 설명 자체가 위반으로 잡혀, 결국 사람이 주석을 지우게 만든다(가드가 문서를 이긴다).
   const snap = WELCOME.slice(WELCOME.indexOf("export async function welcomeSnapshot"),
-    WELCOME.indexOf("export async function kickoffLivAfterWelcome"))
+    WELCOME.indexOf("export type WelcomeSnapshot"))
     .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   assert.match(snap, /memberLoggedInHarnessesAny\(userId\)/, "폴링 스냅샷이 싼 판정을 안 쓴다");
   assert.doesNotMatch(snap, /memberUsableHarnesses/,
@@ -107,13 +106,12 @@ t("⑥ 프로브는 **뜨거운 경로에 없다** — /welcome 폴링이 매번
     "프로브를 돌리는 자리가 POST 가 아니다 — 부수효과 있는 조회를 GET 계약에 얹으면 캐시·프리페치가 붙는다");
 });
 
-t("⑥b 결정 지점(리브 킥오프)은 **정확한** 사실을 쓴다 — 제미나이만 이은 사람이 막히면 안 된다(#1631)", () => {
-  //  자격 파일이 없는 하네스(antigravity)는 파일 표에 구조적으로 못 든다. 게이트가 그 목록을 그대로 쓰면
-  //   화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 열어 주지 않는다.
-  const kick = WELCOME.slice(WELCOME.indexOf("export async function kickoffLivAfterWelcome"));
-  assert.match(kick, /memberUsableHarnesses/, "킥오프 게이트가 프로브까지 본 사실을 쓰지 않는다");
-  assert.match(kick, /planLivKickoff\(o\.priorSession, usable\)/, "게이트에 넘기는 값이 그 사실이 아니다");
-  assert.match(kick, /aiHarnesses: usable/, "1턴 프롬프트가 게이트와 다른 사실을 본다");
+t("⑥b 결정 지점(리브에게 일 맡기기 — 리브 세션을 새로 열 때)은 **정확한** 사실을 쓴다 — 제미나이만 이은 사람이 «AI 없음» 으로 막히면 안 된다(#1631 → #4970)", () => {
+  //  자격 파일이 없는 하네스(antigravity)는 파일 표에 구조적으로 못 든다. 결정 지점이 그 목록을 그대로 쓰면
+  //   제미나이로 로그인해 둔 사람에게 «로그인된 AI 가 없어요» 라고 하고 세션을 안 열어 준다.
+  const usable = CONNECT.slice(CONNECT.indexOf("usable: async (userId) =>"), CONNECT.indexOf("launchable: async () =>"));
+  assert.match(usable, /memberUsableHarnesses\(userId\)/, "리브를 여는 문의 AI 판정이 프로브까지 본 사실을 쓰지 않는다");
+  assert.doesNotMatch(usable, /memberLoggedInHarnessesAny/, "결정 지점이 폴링용(자격 파일만) 판정을 쓴다");
 });
 
 t("⑦b ★설치는 **새 세션이 뜰 자리**에서 잰다 — 게이트웨이 자신은 매니지드에서 하네스를 하나도 안 갖는다 (#3668 T3)", () => {
@@ -142,7 +140,10 @@ t("★T3 하네스 바이너리는 **파일 op 자리에서 안 돈다** — 그
     "프로브 자리가 «세션 자리 우선, 없으면 종전» 이 아니다");
   //  자리는 로그인 러너와 **같아야** 한다 — 갈리면 로그인은 세션 컨테이너에서 됐는데 판정은 다른 자리를 봐서 영영 «미로그인».
   assert.match(RUN, /export async function ensureHarnessSeat/, "러너의 자리가 공유 가능하게 열려 있지 않다");
-  assert.match(RUN, /const sid = await ensureHarnessSeat\(user, h\);/, "러너가 그 공유 자리를 안 쓴다");
+  assert.match(RUN, /const sid = await ensureHarnessSeat\(user, seatKey\);/, "러너가 그 공유 자리를 안 쓴다");
+  //  #4051 — 자리 키가 문자열이 됐다(헤드리스 발급은 `hl-<하네스>` 로 따로 앉는다). **대화형 로그인은 여전히 하네스 이름**을
+  //   키로 넘겨야 프로브(aiLoginCheck — ensureHarnessSeat(user, h.key))와 같은 자리를 본다.
+  assert.match(RUN, /spawnAt\(user \?\? null, osUser, h, loginStartSh\(/, "대화형 로그인의 자리 키가 하네스 이름이 아니다 — 프로브와 자리가 갈린다");
   //  ⚠ 배선은 **게이트웨이 능력**을 지난다(#2165) — profiles 가 ai-login-run 을 직접 물면 노드 에이전트 번들에
   //   로그인 러너·세션 생성이 통째로 실린다(esbuild 는 outfile 하나면 `await import()` 도 인라인한다).
   assert.match(PROFILES, /gatewayCapability\("harnessSeat"\)/, "판정이 러너 자리를 능력 이음매로 안 받는다");
@@ -213,52 +214,64 @@ t("⑨b 모름(null)을 미로그인으로 접지 않는다", () => {
 
 // ── 화면이 사람을 가두지 않는가 ──────────────────────────────────────────────
 
-t("⑩ 화면은 고른 AI **하나**를 묻는다 — «아무거나 하나» 로 «이어졌어요» 라고 하지 않는다", () => {
-  const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
-  assert.match(scene, /checkAi\(\)/, "고른 AI 판정을 부르지 않는다");
-  assert.doesNotMatch(scene, /WS\.ai_ready/,
-    "«아무 하네스나 하나» 인 ai_ready 로 이음 여부를 정하고 있다 — 그록을 고른 사람에게 claude 로그인을 근거로 «이어졌어요» 라고 하게 된다");
-});
-
-t("⑪ 막다른 길이 없다 — CLI 가 없어도 계속할 문이 있다", () => {
-  const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
-  assert.match(scene, /c\.installed === false/, "미설치 갈래가 없다 — 그 사람은 없는 명령을 치라는 안내를 받는다");
-  //  «그 AI 가 이 자리에 없다» 갈래에는 **두 길이 다 있어야** 한다: 다른 AI 로 갈아타거나, 그대로 다음으로.
-  //   그 갈래만 잘라서 본다 — 로그인 갈래는 버튼을 줄인 자리라(원준님 2026-08-31) 함께 재면 옳은 축소가 위반이 된다.
-  const missing = scene.slice(scene.indexOf("if (c.installed === false)"), scene.indexOf("// ── 있는데 아직 로그인 전"));
-  assert.match(missing, /data-other/, "다른 AI 를 고를 문이 없다");
-  assert.match(missing, /data-skip/, "그대로 다음으로 갈 문이 없다");
-  //  ⚠ 종전엔 `id="cKeep"` 를 못 박았다. 그건 **컨트롤 이름**이지 뜻이 아니다 — 지켜야 할 것은
-  //   «이미 이어진 AI 가 있으면 그것을 잃지 않고 계속한다» 이고, 그 책임은 지금 data-skip 핸들러가 진다.
-  //   이름을 박아 두면 컨트롤을 합치는 옳은 변경이 위반으로 잡힌다(실측 2026-08-31).
-  const bind = ONBOARDING.slice(ONBOARDING.indexOf("const skip = $('[data-skip]', el);"));
-  assert.match(bind.slice(0, 300), /if \(!S\.aiConnected && o\) mark\(AI_LABEL\[o\] \|\| o, o\);/,
-    "이미 이어진 다른 AI 로 계속할 때 그 사실을 잃는다");
-});
-
-t("⑬ ★화면이 «이어졌다» 를 지어내지 않는다 — 참으로 만드는 자리는 서버 확인 뒤 한 곳뿐", () => {
-  // 종전 replayChatTo 가 `S.aiConnected = S.ai !== '아직 없어요'` 로 **무조건 대입**했다(|| 폴백이 아니다).
-  //  그래서 AI 잇기를 건너뛴 사람도 채팅 단계에 닿는 순간 참이 됐고, AI 화면으로 돌아가면
-  //  «이어졌어요 · 로그인이 확인됐어요» 라고 말했다 — 서버는 그런 적이 없다.
-  //  #1813 이 걷어낸 «900ms 뒤 무조건 연결됐어요» 와 같은 모양의 잔재였다.
-  const sets = [...ONBOARDING.matchAll(/S\.aiConnected\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
-  assert.deepEqual(sets, ["true"],
-    `S.aiConnected 를 참으로 만드는 자리가 하나가 아니거나 서버 판정이 아니다: ${JSON.stringify(sets)}`);
-  // 그 한 곳은 checkAi() 결과나 «이대로 계속»(다른 AI 가 실제로 이어져 있음) 뒤여야 한다.
-  const scene = ONBOARDING.slice(ONBOARDING.indexOf("    claude: {"), ONBOARDING.indexOf("    terminal: {"));
-  assert.match(scene, /S\.aiConnected = true/, "이음 처리가 claude 장면(서버 판정 자리) 밖에 있다");
-});
-
-t("⑫ 화면이 CLI 이름을 박아 두지 않는다 — 하네스 표가 바뀌면 그 줄만 조용히 틀려진다", () => {
-  const map = ONBOARDING.match(/const AI_HARNESS = \{([^}]*)\}/)![1];
-  assert.doesNotMatch(map, /'agy'/, "고르기 표에 실행 파일 이름(agy)이 박혀 있다 — 여긴 하네스 key 자리다");
-  assert.match(ONBOARDING, /c\.bin/, "실행 파일 이름을 서버 답에서 읽지 않는다");
-});
-
 t("★ 프로브형(antigravity)도 중계 배포에선 **그 사람 자리**에서 돈다 — 게이트웨이 자리에서 돌면 늘 «미로그인» (#2232)", () => {
   const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function memberFileExists"));
   assert.match(fn, /const osUser = \(osSt\.ready && osSt\.provisioned\) \|\| memberExecConfigured\(\) \? osSt\.osUser : null/, "중계 배포에서 프로브 자리가 게이트웨이다");
   //  #3668 T3 — 그 «자리» 는 이제 세션 컨테이너다(위 ★T3). osUser 는 그 자리의 uid·HOME 을 정하는 재료로 남는다.
+});
+
+// ── #4067 설치 판정을 세션 자리 없이 (K20–K22) ────────────────────────────────────────────────
+t("★ K20–K22 설치는 배포가 싣는 목록으로 답한다 — 자리를 쓰는 배포 + 자격 파일 하네스만 · 목록이 없거나 깨졌으면 종전 자리 · agy 는 예외", () => {
+  const KEYS = ["LIVELY_SESSION_EXEC", "LIVELY_SESSION_HARNESSES", "LIVELY_NODE_TOKEN"] as const;
+  const keep = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+  const set = (k: string, v: string | undefined): void => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  const ensured: string[] = [];
+  const seat = { ensure: async (_u: unknown, k: string) => { ensured.push(k); return "sid"; }, drop: async () => undefined };
+  const quiet = console.error;
+  console.error = () => undefined;   // 능력 미등록 경고는 이 시험의 의도다
+  try {
+    for (const k of KEYS) set(k, undefined);
+    unfreezeExecTopology();
+    set("LIVELY_SESSION_HARNESSES", "claude,codex,antigravity,grok");
+    registerGatewayCapabilities({ harnessSeat: seat });
+    assert.equal(listedHarnessInstalled("claude"), undefined, "세션 경계가 없는 배포(셀프호스트)는 원래 자리를 안 띄운다 — 대신하지 않는다");
+    set("LIVELY_SESSION_EXEC", "node relay.cjs {slug}");
+    registerGatewayCapabilities({ harnessSeat: undefined });
+    assert.equal(listedHarnessInstalled("claude"), undefined, "자리 능력이 없는 프로세스(노드)도 대신하지 않는다");
+    registerGatewayCapabilities({ harnessSeat: seat });
+    assert.equal(listedHarnessInstalled("claude"), true);
+    assert.equal(listedHarnessInstalled("codex"), true);
+    assert.equal(listedHarnessInstalled("grok"), true);
+    assert.equal(listedHarnessInstalled("antigravity"), undefined, "K22 프로브 하네스는 판정 자체가 그 자리에서 돈다 — 예외");
+    assert.equal(listedHarnessInstalled("opencode"), undefined, "자격 파일이 없는 하네스는 대신하지 않는다");
+    set("LIVELY_SESSION_HARNESSES", "claude,antigravity");
+    assert.equal(listedHarnessInstalled("codex"), false, "목록에 없으면 «이 자리엔 없다»");
+    assert.equal(listedHarnessInstalled("claude"), true);
+    set("LIVELY_SESSION_HARNESSES", undefined);
+    assert.equal(listedHarnessInstalled("claude"), undefined, "K21 목록이 없으면(구 배포) 종전 자리");
+    set("LIVELY_SESSION_HARNESSES", "claude,Codex");
+    assert.equal(listedHarnessInstalled("claude"), undefined, "깨진 목록의 일부를 믿지 않는다");
+    assert.deepEqual(ensured, [], "판정이 자리를 만들지 않는다");
+  } finally {
+    console.error = quiet;
+    registerGatewayCapabilities({ harnessSeat: undefined });
+    for (const k of KEYS) set(k, keep[k]);
+    unfreezeExecTopology();
+  }
+});
+
+t("★ K20 aiLoginCheck — 목록 판정이 자리보다 **먼저**고, 답이 나오면 자리를 만들지 않고 끝난다(로그인은 파일 판정)", () => {
+  const fn = PROFILES.slice(PROFILES.indexOf("export async function aiLoginCheck"), PROFILES.indexOf("async function releaseSeat"))
+    .split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const listedAt = fn.indexOf("listedHarnessInstalled(h.key)");
+  const seatAt = fn.indexOf("harnessSeat(user, h.key, osUser)");
+  assert.ok(listedAt > 0 && seatAt > listedAt, "목록 판정이 자리 확보보다 앞이어야 한다");
+  const branch = fn.slice(fn.lastIndexOf("\n", listedAt) + 1, seatAt);
+  assert.match(branch, /const listed = osUser \? listedHarnessInstalled\(h\.key\) : undefined;/, "자리를 띄웠을 조건(osUser)에서만 대신한다");
+  assert.match(branch, /if \(listed !== undefined\) \{[\s\S]*return out;[\s\S]*\}/, "답이 나오면 거기서 끝난다");
+  assert.match(branch, /aiAccountStatus\(user, osSt\)/, "로그인은 종전 ② 와 같은 파일 판정");
+  assert.doesNotMatch(branch, /runAtSeat|releaseSeat/, "목록 판정 가지에서 자리를 만지지 않는다");
+  assert.match(branch, /if \(!listed\) return out;/, "없는 CLI 에 로그인을 묻지 않는다(⑦ 과 같은 규칙)");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

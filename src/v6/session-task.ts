@@ -11,7 +11,8 @@
 //       생겼다(나머지는 규칙 이름만 있고 AI 가 아직/영영 session_rename 을 안 부른 세션). 세션 생성은 서버가 반드시
 //       지나는 자리이므로 여기로 옮기면 모델 재량이 사라진다(원준님: "그 제목으로 하드하게 태스크를 만들도록").
 //      그 뒤 AI 가 더 나은 이름을 등록하면(relabelSession) **태스크 이름도 한 번 따라간다**(renameSessionTaskForLabel
-//       — 사람이 손대지 않은 태스크만). 프로젝트 이름 승계(renameShellProjectForSession)와 같은 문법이다.
+//       — 이 길로 만든 태스크만, 사람이 이름을 고치지 않았을 때만). 프로젝트 이름 승계(renameShellProjectForSession)와 같은
+//       문법이다(#4418 — 판정은 이름 글자가 아니라 태스크의 이름 출처 칸이다. claimTaskName 머리말).
 //      첫 지시가 없어 이름이 세션 id 그대로인 세션은 태스크도 안 생긴다 — 빈 태스크가 쌓이지 않는 이유다.
 //   ② 사람이 **태스크에서 세션을 연다**(프로젝트 세션 생성 요청의 taskId → bindSessionTask). 미리 적어 둔 태스크를
 //      그 세션이 처음부터 맡는다 — 새 태스크를 만들지 않는다. 원준님 결정(2026-09-19): 그냥 연 세션에서 AI 가 기존 태스크를
@@ -26,7 +27,7 @@
 //   턴만 길어진다(#1979 의 전제). 소속 없음·DB 오류는 전부 null 로 돌려주고 로그만 남긴다.
 import { itemsPool, one, q, withTx } from "../db/client.js";
 import { onNode } from "../exec-topology.js";
-import { createTask, updateTask, deleteTaskNode, getProjectRow, rootProjectIdOfTaskNode } from "./project-store.js";
+import { createTask, updateTask, claimTaskName, deleteTaskNode, getProjectRow, rootProjectIdOfTaskNode } from "./project-store.js";
 import { ensureAgentsMd } from "./agents-md.js";
 import { executionSessionProject } from "./execution-session-store.js";
 
@@ -108,8 +109,8 @@ export async function sessionTaskIdsFor(ids: string[]): Promise<Map<string, numb
 }
 
 /** 태스크 상태를 바꾸고 AGENTS.md 태스크 인덱스를 갱신한다. 커스텀 상태 키(status_raw)가 남아 있으면 비운다 — 안 비우면 보드가 옛 상태로 그린다. */
-async function writeStatus(taskId: number, status: SessionTaskStatus, actor: string, hadRaw: boolean, projectId: number): Promise<void> {
-  await updateTask(taskId, { status, ...(hadRaw ? { status_raw: null } : {}) }, { actor, source: "web" });
+async function writeStatus(taskId: number, status: SessionTaskStatus, actor: string, hadRaw: boolean, projectId: number, reason?: string | null): Promise<void> {
+  await updateTask(taskId, { status, ...(hadRaw ? { status_raw: null } : {}) }, { actor, source: "web", reason: reason ?? null });
   await ensureAgentsMd(projectId).catch(() => { /* 인덱스의 상태 표시일 뿐 — 다음 갱신이 채운다 */ });
 }
 
@@ -136,27 +137,26 @@ async function inheritedTaskId(sessionId: string, owner: string, projectId: numb
   return st && st.project_id === projectId ? st.id : null;   // 다른 프로젝트의 태스크는 안 물려받는다
 }
 
-/** 순수 — 자동으로 만든 태스크의 이름을 세션의 새 이름으로 바꿀 자리인가. 사람이 손댔으면(이름이 다르면) 물러난다. */
-export function shouldRenameSessionTask(current: string | null | undefined, expectName: string | null | undefined, next: string): boolean {
-  const cur = String(current ?? "").trim(), exp = String(expectName ?? "").trim(), nx = String(next ?? "").trim();
-  return !!cur && !!exp && !!nx && cur === exp && cur !== nx;
-}
-
 /**
- * 세션이 **이름을 새로 등록했다** — 그 세션이 맡은 태스크의 이름도 따라간다(한 번, 사람이 안 건드린 것만).
- *  expectName(직전 세션 이름)과 태스크 이름이 같을 때만 바꾼다 — 누가 태스크 이름을 손봤으면 그게 이긴다.
- *  프로젝트 이름 승계(shouldRenameShellProject 의 expectName)와 **같은 판정 문법**이다.
+ * 세션이 **이름을 새로 등록했다** — 그 세션이 맡은 태스크의 이름도 따라간다(한 번).
+ *
+ *  따라가는 건 **세션이 스스로 만든 태스크**(name_source='session')뿐이다 — 사람이 만든 태스크에서 연 세션·곁칸에서 담은
+ *   태스크·사람이 이름을 고친 태스크는 출처가 human(또는 비어 있음)이라 걸쇠(claimTaskName)가 그대로 둔다(#4418).
+ *  따라간 이름의 출처는 agent 다 — 같은 순위는 다시 못 덮으므로 «한 번» 이 표로 고정된다(세션 걸쇠와 같은 문법).
+ *  ⚠ 출처로 판정한다, 이름 글자로 하지 않는다 — 종전의 «태스크 이름 == 직전 세션 이름» 은 태스크에서 연 세션에선 늘 참이라
+ *   사람 이름을 덮었고, 세션이 만든 태스크에선 말줄임을 뗀 탓에 늘 거짓이라 따라가지 못했다(claimTaskName 머리말).
  */
 export async function renameSessionTaskForLabel(args: {
-  sessionId: string; owner: string; name: string; expectName?: string | null;
+  sessionId: string; owner: string; name: string;
 }): Promise<SessionTask | null> {
   if (onNode() || !args.sessionId || !args.owner) return null;
   try {
     const task = await sessionTaskOf(args.sessionId, args.owner);
-    if (!task || !shouldRenameSessionTask(task.name, args.expectName, args.name)) return null;
+    if (!task) return null;
     const name = tidyTaskName(args.name);
-    if (!name) return null;
-    const after = await updateTask(task.id, { name }, { actor: args.owner, source: "web" });
+    if (!name || name === task.name) return null;
+    const { applied, task: after } = await claimTaskName(task.id, name, "agent", { actor: args.owner, source: "web" });
+    if (!applied || !after) return null;
     await ensureAgentsMd(task.project_id).catch(() => { /* 인덱스는 다음 갱신이 채운다 */ });
     return { ...task, name: after.name };
   } catch (e) {
@@ -198,7 +198,8 @@ export async function ensureSessionTask(args: {
       }
     }
 
-    const task = await createTask({ projectId: pid, name: spec.name, description: spec.description }, { actor: args.owner, source: "web" });
+    //  #4418 — 세션이 만든 태스크라는 표시(name_source='session'). 이 세션의 AI 가 이름을 지으면 그 이름으로 한 번 따라간다.
+    const task = await createTask({ projectId: pid, name: spec.name, description: spec.description, name_source: "session" }, { actor: args.owner, source: "web" });
     // 잇기 — **비어 있을 때만**(또는 옛 프로젝트의 태스크일 때만) 이긴다. 같은 순간 두 길(이름짓기·태스크에서 열기)이
     //  겹치면 진 쪽이 방금 만든 태스크를 치운다 — 세션 하나에 태스크 둘이 매달린 채 하나가 고아로 남지 않게.
     const won = await itemsPool.query(
@@ -241,6 +242,10 @@ export async function bindSessionTask(args: {
     `UPDATE execution_session SET task_id=$3, updated_at=now() WHERE id=$1 AND owner=$2 RETURNING id`,
     [args.sessionId, args.owner, task.id]);
   if (!(r.rowCount ?? 0)) return null;
+  // #4418 — 사람이 **이름을 보고 고른** 태스크다(태스크에서 열기 · 곁칸 목록 · 붙이기). 다른 세션이 만들어 아직 그 세션 이름을
+  //  따라갈 수 있던 태스크(name_source='session')라도 이제는 사람이 고른 이름이다 — 이 세션의 이름짓기가 그 이름을 바꾸지 않게
+  //  출처를 human 으로 올린다. 이름은 그대로라 감사 기록은 남기지 않는다(출처는 이름 승계의 판정 재료일 뿐이다).
+  await itemsPool.query(`UPDATE project SET name_source='human' WHERE id=$1 AND name_source='session'`, [task.id]);
   // 순서 목록(#4135)이 있는 세션이면 이 태스크를 **맨 앞**으로 — «지금 하는 것 = 목록 맨 앞의 안 끝난 것» 이 어긋나지 않게.
   //  목록이 없는 세션(행 0)은 건드리지 않는다 — task_id 하나가 곧 목록이다.
   if (!args.keepOrder) await withTx(async (db) => {
@@ -261,16 +266,21 @@ export async function bindSessionTask(args: {
   return task;
 }
 
+/** 순수 — 세션이 닫을 때의 근거. 세션이 적어 준 게 있으면 그것, 없으면 «어느 세션이 끝냈다고 보고했는지»라도 남긴다. */
+export function sessionCloseReason(reason: string | null | undefined, sessionId: string): string {
+  return (reason ?? "").trim() || `AI 세션(${sessionId})이 맡은 작업을 끝냈다고 보고했습니다`;
+}
+
 /** 세션이 자기 태스크의 상태를 바꾼다(`session_task {status}`). 맡은 태스크가 없으면 null.
  *  끝냈고(done) 이 세션의 순서 목록에 **아직 안 끝난 다음 태스크**가 있으면 그리로 넘어간다(#4135) — `next` 로 돌려준다. */
 export async function setSessionTaskStatus(args: {
-  sessionId: string; owner: string; status: SessionTaskStatus;
+  sessionId: string; owner: string; status: SessionTaskStatus; reason?: string | null;
 }): Promise<(SessionTask & { next?: SessionTask | null }) | null> {
   const task = await sessionTaskOf(args.sessionId, args.owner);
   if (!task) return null;
   if (task.status !== args.status) {
     const raw = await one(itemsPool, `SELECT status_raw FROM project WHERE id=$1`, [task.id]);
-    await writeStatus(task.id, args.status, args.owner, raw?.status_raw != null, task.project_id);
+    await writeStatus(task.id, args.status, args.owner, raw?.status_raw != null, task.project_id, sessionCloseReason(args.reason, args.sessionId));
   }
   if (args.status !== "done") return { ...task, status: args.status };
   const list = await sessionTaskList(args.sessionId, args.owner);
@@ -402,7 +412,7 @@ export function sessionTaskSection(task: SessionTask | null, list?: Array<{ id: 
     ...(many
       ? list!.map((t, i) => `${i + 1}. [#${t.id}] ${t.name} (${t.status})${t.id === task.id ? " ← 지금 하는 것" : ""}`)
       : [`- [#${task.id}] ${task.name} (${task.status})`]),
-    "- 요청받은 일을 끝내면(검증까지 마치고) `session_task {status:\"done\"}` 로 완료 처리하세요. " +
+    "- 요청받은 일을 끝내면(검증까지 마치고) `session_task {status:\"done\"}` 로 완료 처리하세요 — `reason` 에 무엇을 끝냈는지 한 줄 적으면 ClickUp 미러 태스크에 코멘트로 남습니다. " +
       "같은 세션에서 후속 작업을 시작하면 `session_task {status:\"in_progress\"}` 로 되돌립니다.",
     ...(many ? ["- 이 세션은 위 태스크들을 **순서대로** 맡습니다. 하나를 완료 처리하면 다음 태스크가 «지금 하는 것»이 됩니다 — 그 본문은 `task_detail_v6` 로 읽고 이어서 진행하세요."] : []),
   ].join("\n");

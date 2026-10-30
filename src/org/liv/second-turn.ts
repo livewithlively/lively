@@ -12,7 +12,7 @@
 //  ── 낡은 실측 문제 ──
 //  1턴이 실은 숫자는 그 순간의 것이다. 2턴은 **다시 읽고** 시작하라고 못박는다(세션 관성 실측: classify-knowledge-stale-session-inertia).
 
-import { groupSetFor, groupSetPromptLines } from "../../v6/category-groups.js";
+import { GROUP_SETS, groupSetFor, groupSetPromptLines } from "../../v6/category-groups.js";
 
 export interface SecondTurnCollector { label: string; preset_key: string; enabled: boolean; ran: boolean }
 export interface SecondTurnInput {
@@ -26,7 +26,7 @@ export interface SecondTurnInput {
    */
   groups: Array<{ key: string; name: string; hint?: string | null }>;
   /**
-   * 묶음이 **없을 때** 리브가 먼저 만들 칸(3~5) — 이 사람의 무대·직무로 룰 테이블에서 고른 집합(groupSetFor). 묶음이 있으면 안 쓴다.
+   * 묶음이 **없을 때** 리브가 먼저 만들 세 칸 — 이 사람의 무대·직무로 룰 테이블에서 고른 집합(groupSetFor). 묶음이 있으면 안 쓴다.
    *  비었으면(판정 재료가 없었다) 기본 집합으로 간다 — 어느 경로로도 «묶음 없이 카테고리를 만들라» 는 지시가 나가지 않는다.
    */
   intended: Array<{ key: string; name: string; hint?: string | null }>;
@@ -36,11 +36,14 @@ export interface SecondTurnInput {
   firstOrder: string | null;
   collectors: SecondTurnCollector[];
   partial: boolean;          // 상한까지 기다렸는데 일부 수집이 아직 → 있는 것으로 시작
+  /** (#5060) 처음 설정에서 파일을 올렸나 · 그 올리기가 상한까지 안 끝났나. 둘 다 없으면 종전 지시문 그대로다. */
+  uploaded?: boolean;
+  uploading?: boolean;
   waitedMin: number;         // 온보딩 끝난 뒤 흐른 시간(분)
 }
 
 /**
- * 2턴이 묶음에 쓸 재료(순수, #1631) — 무대(welcome.stage)와 «무대 · 직무» 한 줄(work.asis)에서 직무를 되갈라 룰 테이블의 칸을 고른다.
+ * 2턴이 묶음에 쓸 재료(순수, #1631) — 무대(welcome.stage)와 «무대 · 직무» 한 줄(work.asis)에서 직무를 되갈라 룰 테이블의 세 칸을 고른다.
  *  ⚠ 무대를 넘긴다(2026-09-14) — 종전 받침은 무대를 null 로 넘겨, 직무를 건너뛴 학업 사용자가 회사 기본 이름을 받았다.
  *  ⚠ 구분자는 주입받는다(`WORK_ASIS_SEP`, org/store/members.ts) — 이 파일은 DB 모듈을 끌어오지 않는 순수 모듈이다.
  */
@@ -56,23 +59,23 @@ export function turnGroupInputs(input: { stage?: string | null; workAsis?: strin
 //  2026-09-14 실측(lively-agent-2-6a84): 묶음이 0개인 워크스페이스에서 이 단락이 통째로 빠졌고, 리브는 묶음 없는
 //   카테고리 4개를 에러 없이 만들었다 — 서버의 하드 규칙은 묶음이 **있어야** 켜지기 때문이다. 그래서:
 //  · 묶음이 있으면: 그 안에서 고른다(새로 만들지 않는다) — 종전 문구 그대로.
-//  · 없으면: 이 사람 자리의 칸(intended)을 **먼저** 만들게 한다 — 만드는 순간부터 하드 규칙이 켜진다.
+//  · 없으면: 이 사람 직무의 세 칸(intended)을 **먼저** 만들게 한다 — 만드는 순간부터 하드 규칙이 켜진다.
 //  · 묶음 밖 카테고리가 남아 있으면 이름을 싣고 0개로 끝내게 한다.
 function groupStepLines(i: SecondTurnInput): string[] {
   const has = i.groups.length > 0;
-  const set = has ? i.groups : (i.intended.length ? i.intended : groupSetFor(null, null));
+  const set = has ? i.groups : (i.intended.length ? i.intended : GROUP_SETS.default);
   const lines: string[] = has
     ? [
-      "   - **묶음도 함께 정한다.** 이 워크스페이스의 묶음은 아래가 전부이고, 이 사람 일 전체를 덮는다. `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). **새 묶음을 만들지 마라.** 「기타」 같은 칸을 새로 만들거나 그리로 미루지 마라 — 맞는 칸이 있으면 그 칸이 먼저다.",
+      "   - **묶음도 함께 정한다.** 이 워크스페이스의 묶음은 아래가 전부이고, 이 사람 일 전체를 덮는다. `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). **새 묶음을 만들지 마라.** 「기타」 같은 자리로 미루지도 마라 — 그런 묶음은 없다.",
       "     **이미 있는 카테고리를 쓰는데 묶음이 비어 있으면** 그 자리에서 `category_update` 로 묶음만 채운다(내용은 건드리지 않는다). 안 채우면 그 카테고리는 화면에서 «묶음을 정해 주세요» 에 남는다.",
     ]
     : [
-      "   - **묶음부터 만든다 — 이 워크스페이스엔 아직 묶음이 없다.** 카테고리를 만들기 **전에** 아래 칸들을 `category_group_upsert` 로 **key·이름·뜻을 그대로** 만든다(이름을 새로 짓지 않는다 — 이 사람의 직무에서 나온 룰베이스 집합이다). 만든 뒤 `category_group_list` 로 다 생겼는지 확인한다.",
-      "     그다음부터 카테고리는 **묶음도 함께 정한다.** `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). 「기타」 같은 칸을 새로 만들거나 그리로 미루지 마라 — 맞는 칸이 있으면 그 칸이 먼저다.",
+      "   - **묶음부터 만든다 — 이 워크스페이스엔 아직 묶음이 없다.** 카테고리를 만들기 **전에** 아래 세 칸을 `category_group_upsert` 로 **key·이름·뜻을 그대로** 만든다(이름을 새로 짓지 않는다 — 이 사람의 직무에서 나온 룰베이스 집합이다). 만든 뒤 `category_group_list` 로 셋이 다 생겼는지 확인한다.",
+      "     그다음부터 카테고리는 **묶음도 함께 정한다.** `category_create` 의 `group` 에 그 key 를 넣는다 — **안 넣으면 서버가 400 으로 막는다**(카테고리는 묶음 하나에 반드시 든다). 「기타」 같은 자리로 미루지 마라 — 그런 묶음은 없다.",
     ];
   lines.push(...groupSetPromptLines(set).map((l) => `  ${l}`));
   if (i.ungrouped.length) {
-    lines.push(`   - **묶음 밖 카테고리 ${i.ungrouped.length}개: ${i.ungrouped.map((c) => c.name).join(" · ")}** — 이 턴을 끝내기 전에 각각 \`category_update\` 로 위 칸 중 하나에 넣는다(내용은 건드리지 않는다). 묶음 밖 카테고리가 **0개**여야 이 단계가 끝난다.`);
+    lines.push(`   - **묶음 밖 카테고리 ${i.ungrouped.length}개: ${i.ungrouped.map((c) => c.name).join(" · ")}** — 이 턴을 끝내기 전에 각각 \`category_update\` 로 위 세 칸 중 하나에 넣는다(내용은 건드리지 않는다). 묶음 밖 카테고리가 **0개**여야 이 단계가 끝난다.`);
   }
   lines.push("     이미 묶음에 든 카테고리도 자료를 읽어 보니 칸이 안 맞으면 `category_update` 로 옮긴다 — 서버가 이름만 보고 넣어 둔 것일 수 있다.");
   return lines;
@@ -97,10 +100,13 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "",
     "## 먼저 — 1턴의 실측은 낡았다. **지금 상태를 다시 읽어라.**",
     "1턴에서 본 숫자를 믿지 마라. 아래 도구로 지금 것을 새로 읽고 시작한다:",
-    "- `source_list`(자료 — 종류·제목·건수) · `category_list`(카테고리 = 서랍) · `org_collectors`(수집기와 마지막 실행) · `org_distiller_list`(증류기) · `knowledge_list`(이미 있는 지식)",
-    `- 처음 설정 답: 일하는 형태·직무 ${i.work ? `"${i.work}"` : "없음"} · 서랍 ${i.drawers.length ? i.drawers.join(" · ") : "없음"} · 첫 지시 ${i.firstOrder ? `"${i.firstOrder}"` : "없음"}`,
+    "- `source_list`(자료 — 종류·제목·건수) · `category_list`(카테고리) · `org_collectors`(수집기와 마지막 실행) · `collect_units`(Claude 커넥터로 모으는 곳 — 수집 단위) · `org_distiller_list`(증류기) · `knowledge_list`(이미 있는 지식)",
+    `- 처음 설정 답: 일하는 형태·직무 ${i.work ? `"${i.work}"` : "없음"} · 카테고리 후보 ${i.drawers.length ? i.drawers.join(" · ") : "없음"} · 첫 지시 ${i.firstOrder ? `"${i.firstOrder}"` : "없음"}`,
     collectLine,
     ...(i.partial ? ["- ⚠ 일부 수집이 아직 안 끝났다. 자료가 부족해 보이면 **최대 1분** 기다렸다가 다시 읽고 시작하라. 그 뒤엔 있는 것으로 간다."] : []),
+    //  #5060 — 처음 설정에서 올린 파일(자료 kind=local_file). 첫 업로드 때 꺼진 채로 생긴 로컬 증류기(local-files)가 그 catch-all 이다.
+    ...(i.uploaded ? ["- 처음 설정에서 파일을 올렸다 — `source_list` 의 `local_file` 자료가 그것이다. 꺼진 채로 만들어 둔 «내 컴퓨터 자료» 증류기(`local-files`)가 있다 — catch-all 로 넓혀 쓰거나 서랍 레인의 입구에 붙이고, **켜서 끝낸다**(켜지 않으면 올린 파일은 지식이 되지 않는다)."] : []),
+    ...(i.uploading ? ["- ⚠ 올린 파일이 아직 다 올라오지 않았다(사람 화면에서 계속 올라가는 중일 수 있다). 지금 있는 것으로 시작한다 — 켜 둔 증류기가 나중에 올라온 파일도 이어서 정리한다."] : []),
     "",
     "## 목표 — 이 사람에게 맞는 카테고리·수집기·증류기를 세우고 첫 지식을 낸다",
     "",
@@ -108,12 +114,15 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     "   수집기 → **자료 가져오기**(외부 앱 연결 화면의 그 스위치) · 증류기 → **지식으로 정리하기**.",
    "   도구 이름(org_collector_upsert 등)은 그대로 쓰되, 요약·설명 문장에서는 위 말로 바꿔 말한다.",
     "   카테고리는 화면에 있는 말이라 사람에게도 **카테고리**라고 한다(«서랍»이라고 하지 않는다).",
+    "   «레인»·«catch-all»·«배치»·«뼈대»·«판정 단위»도 화면에 없는 말이다 — 사람에게는 쓰지 않는다.",
+    "⚠ **사람에게 묻는 문장(객관식 질문)은 이 대화를 처음 보는 사람도 알아들어야 한다.** 질문만 보고도 ① 무엇을 정하는지 ② 왜 지금 묻는지 ③ 고르면 각각 무슨 일이 생기는지가 보여야 한다.",
+    "   «첫 ○○», «이 정의로», «다시 실행» 처럼 앞 맥락을 알아야 뜻이 서는 말을 쓰지 않는다. 카테고리를 말할 때는 이름과 무엇을 담는지 한 줄을 함께 쓴다.",
+    "   선택지 이름은 하는 일을 그대로 말한다(예: «‘운영·인프라’ 카테고리로 옮겨 모으기» · «‘제품 개발’에 그대로 두기»).",
     `틀에 박힌 것을 찍어내지 마라. 같은 직무라도 사람마다 자료의 성격이 다르다 — **자료를 실제로 읽고** ${who}의 일하는 방식에 맞춰라.`,
     "",
     "## 먼저 `liv-distill` 스킬을 열어 그 절차대로 한다",
-    "이 스킬이 두뇌다 — 레인은 서랍 기준(자료 종류로 가르지 않는다), 표본 읽기 예산(자료 수의 2배), catch-all, 증류기 key `liv-<서랍 key>` 멱등, 물어도 되는 것 3종, 첫 지시 = 인수 시험, 첫 문장부터 한국어. 스킬이 없으면 아래 절차만으로 간다.",
+    "이 스킬이 두뇌다 — 레인은 카테고리 기준(자료 종류로 가르지 않는다), 표본 읽기 예산(자료 수의 2배), catch-all, 증류기 key `liv-<카테고리 key>` 멱등, 물어도 되는 것 3종, 첫 지시 = 인수 시험, 첫 문장부터 한국어. 스킬이 없으면 아래 절차만으로 간다.",
     "⚠ 아래 **절차 2(카테고리 만들기)는 스킬에 이 단계가 없어도 반드시 한다** — 워크스페이스에 따라 스킬이 이 단계가 생기기 전 판일 수 있다.",
-    "⚠ **묶음은 이 지시문이 정한다 — 칸 수·이름·«가르는 기준:» 줄이 스킬보다 우선한다**(자리마다 칸이 다르다). 스킬에 «누가 만들었나 · 첫째/둘째/셋째 칸»·«세 칸» 이 보이면 **그 문장들만** 옛 판이다 — 그 문장만 아래 칸 목록과 «가르는 기준:» 줄로 바꿔 읽고, **스킬의 나머지 절차(미리보기·증류 잡 확인·catch-all·첫 지시 규칙)는 그대로 따른다.** (자리를 모르거나 묶음이 예전에 심겼으면 «가르는 기준:» 줄 자체가 «누가 만들었나» 축일 수 있다 — 그때도 그 줄을 따른다.)",
     "",
     "## 절차",
     "1. **자료 표본을 실제로 읽는다** — 종류마다 3~5건 `source_get`. 결정이 오가는 곳인가, 반복 양식인가, 숫자인가, 남의 글을 모아 둔 것인가.",
@@ -125,14 +134,18 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
     ...groupStepLines(i),
     "   - **묻지 않고 만든다.** 사람은 나중에 화면에서 이름을 바꾸거나 치울 수 있다. 물을 것이 생겨도 카테고리를 다 만든 뒤에 묻는다(`lively-taxonomy` 스킬의 항목별 승인 절차는 여기서 쓰지 않는다).",
     "   - 만든 뒤 `category_list` 로 다시 읽어 실제로 생겼는지 확인한다. 만들기가 실패하면 오류 문구를 그대로 두고, 요약 첫 줄에 «카테고리를 만들지 못했다»와 그 이유를 쓴다.",
-    "3. **카테고리(서랍)마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
+    "3. **카테고리마다 증류기를 세운다** — `org_distiller_upsert`. 스코프(`match_kinds`·`include_channels`)·기준(`criteria_md`: 이 카테고리에서 지식이 되는 것은 무엇인가)·형식(`format_md`: 결과의 꼴)·`target_category`(그 카테고리 key). **catch-all 레인 하나를 반드시**(priority 낮게, 스코프 넓게) — 없으면 어느 증류기에도 안 걸린 자료가 조용히 사라진다. 자세한 규율은 `distiller-authoring` 스킬.",
     "4. **수집기 범위를 손본다** — `org_collector_upsert`. 자료를 읽어 보니 잡담 채널·알림 봇이 섞여 있으면 뺀다. 주기는 이 사람의 반복 주기에 맞춘다.",
-    "5. **첫 지시를 시도한다** — 첫 지시가 있으면 지금 있는 자료로 그 답을 낸다(지식으로 남기려면 `knowledge_save` 1건 — `source_link_knowledge` 는 **걸지 않는다**: 걸면 그 자료가 모든 레인에서 빠진다. 근거는 본문 출처 줄로 밝힌다). 자료가 모자라면 무엇이 모자란지 말한다.",
+    //  #4213 T13 — 처음 연결 대화(liv-connect)가 Claude 커넥터로 모은 곳은 수집기가 아니라 수집 단위다. 단위의 설명·성격·활동량은
+    //   «리브가 첫 수집 자료를 질적으로 읽은 뒤 쓴다»(설계 §3) — 1에서 표본을 읽은 이 턴이 그 자리다. [외부 앱 연결] 현황판이 보여 준다.
+    "   - **Claude 커넥터로 모으는 곳(수집 단위)은 `collect_unit_update` 로 손본다** — 모은 단위마다 1에서 읽은 자료로 `description`(이 단위에서 오가는 일 한두 문장)과 `meta`(character: 결정 많음·알림 봇 위주·잡담 위주 등 성격 / context: 연결된 프로젝트·카테고리·자주 나오는 사람)를 채운다 — 이 둘은 묻지 않는다. 활동량(`meta.activity`)과 읽는 주기는 서버가 수집 판마다 글 빈도로 재서 정한다(#4744) — 쓰지 않는다(`interval_sec` 를 주면 자동 주기가 멈춘다).",
+    "   - **모을지(`state`)와 공개범위(`visibility`)는 처음 연결 대화에서 사람이 정한 것이다 — 뒤집지 않는다.** 읽어 보니 잡음만 오가는 곳이 있으면 빼자고 `me_liv_ask_choice` 로 묻는다.",
+    "5. **첫 지시를 시도한다** — 첫 지시가 있으면 지금 있는 자료로 그 답을 낸다(지식으로 남기려면 `knowledge_save` 에 `derived_from:[그 답에 쓴 자료 id]` 를 실어 한 번에 — 저장과 원본 연결이 함께 된다). 자료가 모자라면 무엇이 모자란지 말한다.",
     "6. **남긴다** — 무엇을 왜 그렇게 세웠는지(카테고리를 그렇게 나눈 이유 포함) `me_liv_profile_set`(decision). 다음 세션의 리브가 오늘을 알아야 한다.",
     "",
     "## 규율",
     "- **멱등** — 이미 있는 카테고리·수집기·증류기는 다시 만들지 말고 쓰거나 갱신한다(같은 key 로 upsert). 이 지시가 두 번 와도 결과는 하나다.",
-    "- **물어야 할 때만 묻는다** — 자료를 본 뒤에도 정말 갈리는 것(예: 두 서랍 중 어디로, 어떤 채널을 뺄지)만 `me_liv_ask_choice`. 자격이 필요하면 `me_liv_ask_secret`, 파일이 더 필요하면 `me_liv_ask_upload`. 물었으면 그 턴은 거기서 끝난다 — 답이 오면 이어서 한다.",
+    "- **물어야 할 때만 묻는다** — 자료를 본 뒤에도 정말 갈리는 것(예: 두 카테고리 중 어디로, 어떤 채널을 뺄지)만 `me_liv_ask_choice`. 자격이 필요하면 `me_liv_ask_secret`, 파일이 더 필요하면 `me_liv_ask_upload`. 물었으면 그 턴은 거기서 끝난다 — 답이 오면 이어서 한다.",
     "- **되돌리기 어려운 것은 하지 않는다** — 자료·지식 삭제, 외부 전송, 남의 설정.",
     "- **끝나면 요약한다** — 만든 것(카테고리·수집기·증류기·지식 — 카테고리는 이름을 빠짐없이) · 바꾼 것 · 못 한 것과 이유. 그리고 턴을 끝낸다.",
   ].join("\n");
@@ -142,35 +155,133 @@ export function buildSecondTurnPrompt(i: SecondTurnInput): string {
 export interface SecondTurnState {
   welcome: { done_at?: string | null; session_id?: string | null; distill_at?: string | null; distill_gave_up_at?: string | null;
     /** 세션이 사라져 **다시 연** 시각(#1631). 한 번만 다시 연다 — 무한 재생성은 비용이고 유령 세션을 만든다. */
-    distill_reopened_at?: string | null } | null;
+    distill_reopened_at?: string | null;
+    /** 1턴 갈래(#4213 T13) — connect = 설치자의 «처음 연결» 대화 · join = 합류자(2턴 없음) · 비었으면 종전. */
+    flow?: string | null;
+    /** 리브가 «처음 연결·처음 수집 끝» 을 찍은 시각(connect 갈래의 2턴 신호). */
+    collect_done_at?: string | null;
+    /** (#5060) 처음 설정에서 시작한 백그라운드 올리기 — 시작·끝 시각. 시작만 있으면 끝나길 기다린다(상한까지). */
+    upload_started_at?: string | null; upload_done_at?: string | null } | null;
   /** 세션 관측(listSessionsRaw). null = 그 세션이 이 박스에 없다(회수·종료·노드). */
   session: { working?: boolean; agentState?: string | null } | null;
-  /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거. */
+  /** 아직 배달 안 된(또는 실패한) 아웃박스 항목 수 — 1턴이 들어갔는지의 근거.
+   *  ⚠ #4851 — 기록과 다시 대조한 목록(outbox-late-echo.listOutboxReconciled)으로 센다. 15초 창의 «미확인» 을 그대로 세면 기록에 이미 들어간
+   *   1턴을 «안 들어갔다» 로 읽어 2시간 뒤 turn1-never-delivered 로 포기한다(매니지드 실측 2026-09-19: 사람 턴 4개가 다 적힌 세션). */
   outboxPending: number;
   collectors: Array<{ enabled: boolean; lastRunAt: string | null }>;
   now: number;
 }
 export type SecondTurnDecision =
-  | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" }
-  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" }
+  | { action: "skip"; reason: "no-kickoff" | "already-fired" | "gave-up" | "join" }
+  | { action: "wait"; reason: "turn1-undelivered" | "turn1-running" | "collecting" | "session-offline" | "connecting" | "uploading" }
   //  세션이 사라졌지만 **일은 남아 있다** — 새 창구를 열어 거기로 배달한다(#1631). 딱 한 번.
-  | { action: "reopen"; reason: "session-gone" }
-  | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" }
+  //  (#5060) files — 파일만 올리고 외부 앱 연결을 미룬 사람. 열린 세션이 처음부터 없다 — 같은 길로 새로 연다(역시 딱 한 번).
+  | { action: "reopen"; reason: "session-gone" | "files" }
+  | { action: "giveup"; reason: "session-gone" | "session-gone-again" | "turn1-never-delivered" | "turn1-session-offline" | "stale" }
   | { action: "fire"; partial: boolean; waitedMin: number };
+
+// ── 어느 워크스페이스 안에서 하나(#4851) ──────────────────────────────────────────
+export interface TenantRef { id: string; slug: string }
+/**
+ * (순수) 후보 한 사람의 2턴 일 — 세션 보기 · 아웃박스 세기 · 2턴 넣기 · 표식(distill_at·distill_gave_up_at) — 을 **어느 워크스페이스 안에서** 하나.
+ *  ① 세션 등록부가 아는 워크스페이스(mapped — workspaceForSession: 자체호스팅 다중 워크스페이스).
+ *  ② 그 사람 welcome 이 사는 칸(welcomeWs — 후보 목록이 주는 by_workspace 키): 지금 요청의 워크스페이스면 그것, 아니면 등록부에서 이름을 찾는다.
+ *  ③ 배포 규칙의 기본값(registry.defaultWorkspaceId 와 같은 규칙) — 매니지드는 **지금 요청의 워크스페이스**, 자체호스팅은 primary.
+ *  ⚠ 종전엔 ① 이 없으면 곧바로 primary 였다. 매니지드는 등록부(gw_workspace)가 비어 있어 ① 이 **늘** 없다 — 그래서 늘 primary 로 떨어져
+ *   (실측 2026-10-17, 매니지드 로그 09-03~10-16): 포기·발사 표식이 «구성원 정보를 찾을 수 없습니다» 로 9,049번 실패해 같은 후보를 틱마다
+ *   다시 판정했고, 2턴 지시(«증류 지시 주입» 39줄)는 그 사람 워크스페이스가 아니라 primary 의 아웃박스에 쌓였다(배달 0). 매니지드의 구성원 표는
+ *   워크스페이스마다 갈려 있어(행 수준 격리) 틱이 보는 후보는 곧 그 틱 워크스페이스의 사람이다 — ③ 이 맞는 까닭이다.
+ *   slug 도 맞아야 한다 — 매니지드에선 세션 경로·컨테이너 이름에 들어간다(terminal/catalog tenantSlug).
+ */
+export function secondTurnTenant(i: {
+  mapped: TenantRef | null;
+  welcomeWs: string | null;
+  registry: readonly TenantRef[];
+  current: TenantRef | null;
+  managed: boolean;
+  primary: TenantRef;
+}): TenantRef | null {
+  if (i.mapped) return i.mapped;
+  if (i.welcomeWs) {
+    if (i.current && i.current.id === i.welcomeWs) return i.current;
+    const r = i.registry.find((w) => w.id === i.welcomeWs);
+    if (r) return r;
+    //  매니지드인데 welcome 칸이 지금 워크스페이스가 아니다 — 지금 것으로 덮으면 표식이 다른 칸에 찍혀 후보가 안 빠지고 매 틱 다시 판정된다
+    //   (고치려던 증상의 다른 입구 — 격리 리뷰). 행 수준 격리로 일어나지 않아야 하는 판이라, 건너뛰고 부른 쪽이 경고를 남긴다(null).
+    if (i.managed && i.current) return null;
+  }
+  if (i.managed && i.current) return i.current;
+  return i.primary;
+}
+
+/**
+ * (순수) 스윕 동시 실행 칸(#4851 — util/once-at-a-time slotOf). 매니지드는 워크스페이스마다 한 칸, 자체호스팅은 칸 하나.
+ *  자체호스팅을 나누지 않는 까닭: 타이머(컨텍스트 없음 — 모든 후보)와 틱(요청 컨텍스트)이 같은 후보를 함께 볼 수 있고, distill_at 은 배달 뒤에
+ *  찍혀 그 사이 겹치면 같은 세션에 2턴이 두 번 간다(그 가드가 생긴 이유 #1631).
+ */
+export function sweepSlot(managed: boolean, currentId: string | null | undefined): string {
+  return managed && currentId ? `ws:${currentId}` : "";
+}
 
 /** 수집 대기 상한 — 이 안에 첫 배치가 안 끝나면 있는 것으로 시작한다(영원히 안 쏘는 것이 최악이다). */
 export const SECOND_TURN_MAX_WAIT_MS = 20 * 60_000;
 /** 1턴 배달 상한 — 아웃박스 NOT_READY_TTL(2h)과 같다. 이 뒤에도 안 들어갔으면 사람이 세션을 안 연 것이다. */
 export const TURN1_DELIVERY_TTL_MS = 2 * 60 * 60_000;
+/**
+ * 2턴을 쏘는 상한(#4851) — 처음 설정이 끝난 지 이보다 오래면 쏘지 않고 포기한다(stale).
+ *  다시 열기(reopen)가 1턴 배달 상한 뒤엔 열지 않는 것과 같은 판단이다 — 한참 뒤에 증류 지시가 불쑥 들어오는 편이 더 나쁘다.
+ *  ⚠ 이 상한이 필요해진 까닭: 매니지드에서 스윕이 워크스페이스를 못 찾아 표식을 한 번도 못 찍던 후보(9월 온보딩 6명)가 #4851 로 풀린다.
+ *   그 사이 세션이 살아 있는 판이면 한 달 지난 세션에 2턴이 들어간다. 정상 흐름은 수집 대기 상한(20분) 안에 쏘므로 하루는 넉넉하다.
+ */
+export const SECOND_TURN_STALE_MS = 24 * 60 * 60_000;
+/**
+ * «처음 연결» 대화(connect 갈래, #4213 T13)를 기다리는 상한. 리브가 처음 수집 끝(collect_done_at)을 찍으면 그때 쏘고,
+ *  안 찍혀도 이 시간이 지나면 있는 것으로 쏜다(대화를 중간에 떠난 사람도 서랍·정리 규칙은 받는다 — 영원히 안 쏘는 것이 최악이다).
+ *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 그 사이에 세션이 사라졌으면 한 번 다시 여는 길(reopen)이 아직 열려 있다.
+ */
+export const CONNECT_FLOW_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) 처음 설정에서 시작한 백그라운드 올리기를 기다리는 상한. 화면이 다 올리면 upload_done_at 을 찍고 그때 쏜다.
+ *  안 찍혀도(탭을 닫았다 · 화면이 신호를 못 보냈다) 이 시간이 지나면 올라온 것으로 쏜다 — 켜 둔 증류기가 나중 것도 이어서 정리한다.
+ *  ⚠ 1턴 배달 상한(2h)보다 짧아야 한다 — 파일 갈래는 기다린 뒤 세션을 **새로 여는데**, 그 길(reopen)이 2h 뒤엔 닫힌다.
+ */
+export const UPLOAD_MAX_WAIT_MS = 90 * 60_000;
+/**
+ * (#5060) [연결할게요]를 눌렀는데 연결 대화가 아직 안 묶인 사이(me_liv_open from:"welcome" 이 몇 초 뒤 session_id 를 적는다)를 기다리는 유예.
+ *  이 안에서 새로 열면 곧 묶일 대화를 두고 세션이 하나 더 선다. 이 뒤에도 안 묶였으면(서버가 대화를 못 열었다 · 사람이 탭을 닫았다)
+ *  올린 파일이 있을 때 파일 갈래처럼 새로 연다 — 아니면 올린 파일이 영영 정리되지 않는다(격리 리뷰 2026-10-27).
+ */
+export const CONNECT_BIND_GRACE_MS = 10 * 60_000;
+
+/** (순수) 세션 없이 후보가 되는 갈래 — 파일 갈래, 그리고 대화가 끝내 안 묶인 «처음 연결» 갈래 중 파일을 올린 것. */
+export function opensFreshSession(w: { session_id?: string | null; flow?: string | null; upload_started_at?: string | null } | null | undefined): boolean {
+  return !!w && !w.session_id && (w.flow === "files" || (w.flow === "connect" && !!w.upload_started_at));
+}
 
 export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   const w = s.welcome;
-  if (!w?.session_id || !w.done_at) return { action: "skip", reason: "no-kickoff" };
+  //  (#5060) 파일 갈래는 세션 없이 온다 — 처음 설정을 끝냈으면 후보다(아래에서 기다렸다가 새로 연다).
+  if (!w?.done_at || (!w.session_id && !opensFreshSession(w))) return { action: "skip", reason: "no-kickoff" };
+  //  (#4213 T13) 합류자의 리브는 «빠진 앱 연결» 대화뿐이다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다.
+  if (w.flow === "join") return { action: "skip", reason: "join" };
   if (w.distill_at) return { action: "skip", reason: "already-fired" };
   if (w.distill_gave_up_at) return { action: "skip", reason: "gave-up" };
   const done = Date.parse(w.done_at);
   const waited = s.now - done;
+  //  (#4213 T13) 설치자의 «처음 연결» 대화 — 리브가 커넥터 확인·목록·범위 확인·처음 수집·첫 보고를 하는 동안엔 쏘지 않는다.
+  //   사람에게 물어 놓고 답을 기다리는 사이(세션은 쉬는 중)에 증류 지시가 끼어들면 대화가 엉킨다. 신호는 리브가 찍는 collect_done_at.
+  //  (#5060) 연결 대화가 아직 안 묶였다 — 곧 묶인다(유예). 유예 뒤엔 묶일 대화가 없으니 «처음 수집 끝» 도 오지 않는다(기다리지 않는다).
+  if (w.flow === "connect" && !w.session_id) { if (waited < CONNECT_BIND_GRACE_MS) return { action: "wait", reason: "connecting" }; }
+  else if (w.flow === "connect" && !w.collect_done_at && waited < CONNECT_FLOW_MAX_WAIT_MS) return { action: "wait", reason: "connecting" };
+  //  (#5060) 처음 설정에서 올리기를 시작했으면 다 올라오길 기다린다 — 반쯤 올라온 표본으로 카테고리를 짜면 나머지가 안 맞는다.
+  if (w.upload_started_at && !w.upload_done_at && waited < UPLOAD_MAX_WAIT_MS) return { action: "wait", reason: "uploading" };
   if (!s.session) {
+    //  (#5060) 파일 갈래(또는 끝내 안 묶인 연결 갈래) — 처음부터 열린 세션이 없다. «사라졌다» 가 아니라 «아직 안 열었다» 다. 같은 길(새로 열기)로 — 딱 한 번.
+    if (opensFreshSession(w)) {
+      if (w.distill_reopened_at) return { action: "giveup", reason: "session-gone-again" };
+      if (waited > TURN1_DELIVERY_TTL_MS) return { action: "giveup", reason: "stale" };
+      return { action: "reopen", reason: "files" };
+    }
     //  ★ #1631 실측(2026-08-31 dev): 1턴을 성공으로 끝낸 리브 세션이 **수집 대기 20분 사이에 사라졌다.**
     //   종전엔 그 자리에서 영구 포기했고(distill_gave_up_at·멱등 가드), 그 사람의 증류기 15개가 **영원히 꺼진 채**
     //   남아 온보딩을 완주하고도 지식을 하나도 못 얻었다. 세션이 왜 죽었는지는 게이트웨이 기록에 없다
@@ -184,6 +295,8 @@ export function decideSecondTurn(s: SecondTurnState): SecondTurnDecision {
   if (s.outboxPending > 0) {
     return waited > TURN1_DELIVERY_TTL_MS ? { action: "giveup", reason: "turn1-never-delivered" } : { action: "wait", reason: "turn1-undelivered" };
   }
+  //  #4851 — 하루가 지난 2턴은 쏘지 않는다(SECOND_TURN_STALE_MS 머리말). 세션이 살아 있어도(쉬는 중·일하는 중) 같다.
+  if (waited > SECOND_TURN_STALE_MS) return { action: "giveup", reason: "stale" };
   if (s.session.working || s.session.agentState === "busy") return { action: "wait", reason: "turn1-running" };
   // ★ 세션이 살아 있지 않으면 1턴은 **아직 한 글자도 안 나왔다.** 'busy 가 아님' 을 '끝났음' 으로 읽으면
   //  안 된다 — 실측(2026-08-30 dev): 세션이 안 뜬 채로 온보딩 31초 만에 2턴이 발사되고 distill_at 이

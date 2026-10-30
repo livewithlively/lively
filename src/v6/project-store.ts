@@ -8,8 +8,9 @@ import { getTaskTags, getTaskTime, getTaskAttachments } from "./task-detail-stor
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
 // 필요지식 추천(벡터검색 #172) — 카테고리 인지 유사 지식 회수. knowledge-store 는 project-store 를 import 안 함(무순환).
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
+import { appScopeKnowledgeWhere } from "./knowledge-common.js";   // #5100 앱 맥락 범위 — 필요 · 산출 지식
 // 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
-import { enqueueExternalPush } from "./external-outbox.js";
+import { enqueueExternalPush, closeNoteOf } from "./external-outbox.js";
 // 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
 import { toVectorLiteral } from "./embedding-provider.js";
 import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
@@ -382,10 +383,13 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
      WHERE p.id=$1`, [id]);
 
   // 필요/산출 지식(project_knowledge JOIN knowledge) — relation 으로 분리.
+  //  #5100 — 앱 맥락 범위가 걸린 요청은 범위 밖 지식을 싣지 않는다(공개범위 배선은 별도 — appScopeKnowledgeWhere 머리말).
+  const kParams: unknown[] = [id];
+  const kInScope = await appScopeKnowledgeWhere(viewer, kParams, "k");
   const kRows = await q(itemsPool,
     `SELECT pk.name, pk.relation, k.title, k.injection, k.provenance, k.lifecycle
      FROM project_knowledge pk JOIN knowledge k ON k.name=pk.name
-     WHERE pk.project_id=$1 ORDER BY pk.relation, pk.name`, [id]);
+     WHERE pk.project_id=$1 AND ${kInScope} ORDER BY pk.relation, pk.name`, kParams);
   const knowledge = {
     required: kRows.filter((r) => r.relation === "required"),
     produced: kRows.filter((r) => r.relation === "produced"),
@@ -588,7 +592,8 @@ export async function updateProjectStatus(id: number, status: string, ctx?: Writ
        draft = CASE WHEN $2='done' THEN false ELSE draft END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status), statusRaw ?? null, rawGiven]);
   await auditProject(String(id), "set_status", before, after, ctx);
-  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
+  // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
+  await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   return after;
 }
 
@@ -719,17 +724,48 @@ export async function claimProjectName(
   const before: ProjectRow | undefined = await one(itemsPool,
     `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level='project'`, [id]);
   if (!before) return { applied: false, project: null };
-  const RANK = "CASE $3 WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END";
-  const CUR = "CASE COALESCE(name_source,'human') WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END";
   const after: ProjectRow | undefined = await one(itemsPool,
     `UPDATE project SET name=$2, name_source=$3, updated_at=now()
-      WHERE id=$1 AND level='project' AND ($3='human' OR ${RANK} > ${CUR})
+      WHERE id=$1 AND level='project' AND ($3='human' OR ${nameRankSql("$3")} > ${nameRankSql("COALESCE(name_source,'human')")})
       RETURNING ${PROJECT_COLS}`, [id, name, source]);
   if (!after) return { applied: false, project: before };
   await auditProject(String(id), "update", before, after, ctx);
   await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
   if (after.name !== before.name) await markProjectEmbeddingPending(id);
   return { applied: true, project: after };
+}
+
+/** 이름 출처의 순위(SQL 식) — v6/project-name.ts 의 RANK 와 같은 값이어야 한다. 프로젝트·태스크 걸쇠가 같은 표를 쓴다. */
+const nameRankSql = (expr: string): string =>
+  `CASE ${expr} WHEN 'human' THEN 4 WHEN 'agent' THEN 3 WHEN 'session' THEN 2 ELSE 1 END`;
+
+// 태스크 이름 **걸쇠**(#4418) — claimProjectName 의 태스크 판. 같은 순위표, 같은 «한 문장 판정».
+//
+//  왜: 세션이 맡은 태스크의 이름을 세션 이름으로 따라 바꾸던 판정이 «태스크 이름 == 직전 세션 이름» 이었다. 그런데
+//   ⓐ **태스크에서 연 세션**은 세션 이름이 태스크 이름에서 오므로 두 값이 늘 같아, 사람이 지은 태스크 이름을 세션이 지은
+//     이름으로 오인해 덮었다(#4418 관측: 「앱 붙였다 떼기」).
+//   ⓑ 세션이 **스스로 만든** 태스크는 반대로 규칙 이름 끝의 말줄임(…)을 떼고 만들어 두 값이 늘 달라, 따라가야 할 때 못 갔다
+//     (보드에 첫 지시를 자른 이름이 그대로 남았다).
+//   이름 글자로 «누가 지었나» 를 추측해서 생긴 일이다 — 세션 이름 걸쇠(#1979)가 고친 것과 같은 병이라 같은 처방을 쓴다:
+//   출처를 칸(name_source)에 남기고 순위로 판정한다. 세션이 만든 태스크는 'session' 으로 태어나고(createTask), 사람이
+//   이름을 실제로 바꾸면 'human' 이 된다(updateTask). **출처가 비어 있으면 사람 이름으로 본다** — 이 칸 이전의 태스크와
+//   사람이 만든 태스크가 여기 온다(따라가지 않는 쪽이 안전하다).
+//  반환 applied=false 는 실패가 아니다(졌거나 없는 태스크) — 호출자는 그대로 두면 된다.
+export async function claimTaskName(
+  id: number, name: string, source: ProjectNameSource, ctx?: WriteCtx,
+): Promise<{ applied: boolean; task: ProjectRow | null }> {
+  const before: ProjectRow | undefined = await one(itemsPool,
+    `SELECT ${PROJECT_COLS} FROM project WHERE id=$1 AND level IN ('task','subtask')`, [id]);
+  if (!before) return { applied: false, task: null };
+  const after: ProjectRow | undefined = await one(itemsPool,
+    `UPDATE project SET name=$2, name_source=$3, updated_at=now()
+      WHERE id=$1 AND level IN ('task','subtask') AND ($3='human' OR ${nameRankSql("$3")} > ${nameRankSql("COALESCE(name_source,'human')")})
+      RETURNING ${PROJECT_COLS}`, [id, name, source]);
+  if (!after) return { applied: false, task: before };
+  await auditProject(String(id), "update", before, after, ctx);
+  await enqueueExternalPush(id, "upsert", ctx);   // 외부 푸시(name) — 드레인이 ClickUp PUT.
+  if (after.name !== before.name) await markProjectEmbeddingPending(id);
+  return { applied: true, task: after };
 }
 
 // ── 보드(프로젝트 목록) 커스텀 컬럼 ───────────────────────────────────────────
@@ -798,7 +834,10 @@ export async function listProjectMemberIds(projectId: number): Promise<string[]>
 
 // ── 작업(task/subtask) 쓰기 ───────────────────────────────────────────────
 export async function createTask(
-  input: { projectId: number; parentTaskId?: number; name: string; description?: string },
+  input: { projectId: number; parentTaskId?: number; name: string; description?: string;
+    /** #4418 이름의 출처 — 세션이 스스로 만든 태스크만 'session' 을 준다(세션이 처음 지은 이름으로 한 번 따라간다).
+     *  생략 = 비어 있음 = 사람이 지은 이름으로 본다(claimTaskName). */
+    name_source?: ProjectNameSource },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   // 부모 해석 — parentTaskId 있으면 그 작업(level='task' → 신규 subtask), 없으면 projectId(level='project' → 신규 task).
@@ -822,10 +861,10 @@ export async function createTask(
   // 네이티브 태스크 기본 상태 = 'todo'(다단계 상태 모델). project 의 active|done 와 구분 — 리스트뷰가 상태로 그룹.
   //  (클릭업 미러 태스크는 connector-mirror 가 'active' 로 적재 — 합집합 CHECK 가 둘 다 허용, schema.ts:5b 참조.)
   const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, parent_id, name, description, created_by, status, status_category, created_at, updated_at)
-     VALUES($1,$2,$3,$4,$5,'todo','unstarted',now(),now())
+    `INSERT INTO project(level, parent_id, name, description, created_by, status, status_category, name_source, created_at, updated_at)
+     VALUES($1,$2,$3,$4,$5,'todo','unstarted',$6,now(),now())
      RETURNING ${PROJECT_COLS}`,
-    [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null]);
+    [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null, input.name_source ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
   await markProjectEmbeddingPending(row.id); // #631/#1053 검색 임베딩 — pending 마킹(백그라운드 스윕이 채움)
@@ -840,7 +879,8 @@ export async function updateTaskStatus(id: number, status: string, ctx?: WriteCt
     `UPDATE project SET status=$2, status_category=$3, completed_at=CASE WHEN $2='done' THEN now() ELSE NULL END, updated_at=now()
      WHERE id=$1 RETURNING ${PROJECT_COLS}`, [id, status, categoryOf(status)]);
   await auditProject(String(id), "set_status", before, after, ctx);
-  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT.
+  // 외부 푸시(status) — 드레인이 ClickUp 상태 PUT. 닫힘 전이면 근거 노트를 실어 코멘트로 남긴다.
+  await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   return after;
 }
 
@@ -891,7 +931,14 @@ export async function updateTask(
   const sets: string[] = [];
   const vals: unknown[] = [];
   const set = (col: string, v: unknown) => { vals.push(v); sets.push(`${col}=$${vals.length}`); };
-  if (patch.name !== undefined) set("name", patch.name);
+  if (patch.name !== undefined) {
+    set("name", patch.name);
+    // #4418 — 이름을 **실제로 바꾸는** 패치는 사람의 개명이다(웹 인라인 편집 · 사람이 시켜 부르는 task_update_v6 · 되돌리기) —
+    //  출처를 human 으로 올려, 세션의 이름 승계(claimTaskName)가 그 이름을 덮지 못하게 한다(updateProject #2031 과 같은 뜻).
+    //  같은 이름을 다시 싣는 저장(폼 재전송)은 출처를 그대로 둔다 — 개명이 아닌데 승계를 막지 않게. SET 의 오른쪽은 바뀌기
+    //  전 값을 보므로 판정과 쓰기가 한 문장이다.
+    sets.push(`name_source = CASE WHEN name IS DISTINCT FROM $${vals.length} THEN 'human' ELSE name_source END`);
+  }
   if (patch.description !== undefined) set("description", patch.description);
   // append 모드 — 기존 본문 보존 후 끝에 이어붙인다(전체 교체 아님). SQL 원자적 concat: 빈/NULL 본문이면 구분자 없이,
   //  아니면 빈 줄(newline×2)로 문단 분리. description(교체)과는 상호배타(capability 게이트). project 본문과 동형(#357).
@@ -924,7 +971,8 @@ export async function updateTask(
   // 단일 assignee 변경 시 task_assignee n:n 동기(전환기 가산 섀도 일관성).
   if (patch.assignee !== undefined) await syncTaskAssignees(id, patch.assignee ? [patch.assignee] : []);
   await auditProject(String(id), "update", before, after, ctx);
-  await enqueueExternalPush(id, "upsert", ctx); // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT.
+  // 외부 푸시(name/desc/필드) — 드레인이 ClickUp PUT. 상태가 닫힘으로 넘어갔으면 근거 노트를 싣는다.
+  await enqueueExternalPush(id, "upsert", ctx, null, closeNoteOf(before.status_category, after.status_category, ctx));
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — before↔after 값 비교(필드 존재가 아니라). 상태·담당자·기간 인라인
   //  편집이 잦아도(웹 blur 저장 등) 텍스트가 안 바뀌면 스킵 → 임베딩 부하 = 실제 텍스트 변경 수로 상한. #624/#631
   if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
@@ -949,30 +997,49 @@ export async function rootProjectIdOfTaskNode(node: { level: string; parent_id: 
 //  카테고리(도메인)는 이제 **소속 리스트가 소유**(#541 후속) — 프로젝트 단위 매핑을 리스트 category_id 로 대체.
 //  아래 project 카테고리 툴들은 하위호환을 위해 **프로젝트가 속한 리스트의 카테고리**를 설정한다(형제 프로젝트 공유).
 //  프로젝트가 리스트에 없으면(미분류) no-op — 먼저 리스트에 넣어야 카테고리를 이을 수 있다.
-//  반환: { applied, listId, changed } — applied=리스트가 있어 반영 가능했는지(호출자 응답 정직성),
-//   changed=실제 값이 바뀌었는지(형제 AGENTS.md 재생성 트리거 판단), listId=영향받은 리스트(형제 열거용).
-export async function setListCategoryForProject(projectId: number, categoryId: number | null, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+//  반환: { applied, listId, changed, reason } — applied=리스트가 있어 반영 가능했는지(호출자 응답 정직성),
+//   changed=실제 값이 바뀌었는지(형제 AGENTS.md 재생성 트리거 판단), listId=영향받은 리스트(형제 열거용),
+//   reason=반영 못 한 사유(호출자가 404/409 를 갈라 쓰도록 — 예전엔 둘 다 listId=null 로 뭉개져 구분이 안 됐다).
+//  🔴 applied=false 를 성공으로 포장하지 마라 — 이 계층이 정직해도 핸들러가 이 값을 버리면 그대로
+//   silent false-success 가 된다(실제로 project_link_category_v6 가 무조건 {linked:true} 를 돌려줬다).
+export type CategoryApply = { applied: boolean; listId: number | null; changed: boolean; reason?: "no_project" | "no_list" | "no_category" | null };
+export async function setListCategoryForProject(projectId: number, categoryId: number | null, ctx?: WriteCtx): Promise<CategoryApply> {
   const row: { list_id: number | null; category_id: number | null } | undefined = await one(itemsPool,
     `SELECT p.list_id, pl.category_id FROM project p LEFT JOIN project_list pl ON pl.id=p.list_id WHERE p.id=$1`, [projectId]);
-  const listId = row?.list_id ?? null;
-  if (listId == null) return { applied: false, listId: null, changed: false }; // 미분류 프로젝트 — 소유할 리스트가 없어 no-op
-  const before = row?.category_id ?? null;
+  if (!row) return { applied: false, listId: null, changed: false, reason: "no_project" }; // 없는 id — 404 로 끊어야 할 건이지 no-op 이 아니다
   const next = categoryId != null && Number(categoryId) > 0 ? Number(categoryId) : null;
+  // 없는 카테고리는 여기서 끊는다 — 안 막으면 FK 위반이 HTTP status 없는 DatabaseError 로 새어
+  //  호출자는 500 과 제약조건 이름만 받는다(무엇을 잘못했는지도, 어떻게 고칠지도 모른다).
+  //  리스트 유무보다 **먼저** 본다: 틀린 id 는 리스트 상태와 무관하게 틀린 id 인데, 순서가 뒤면
+  //  #1631 의 자리 만들기(ensureListForCategory)가 없는 축에 대해 null 을 돌려준 뒤 «리스트가 없다»는
+  //  엉뚱한 409 로 나간다.
+  //  ⚠ 병합된 축(state='merged')은 **없는 것과 같이** 본다 — 이 술어가 ensureListForCategory 와 갈리면
+  //   같은 어긋남이 그대로 재현된다: 자리 만들기는 merged 를 못 찾아 null 을 돌려주는데 존재확인만
+  //   통과해서, 리스트 없는 프로젝트가 «리스트에 먼저 넣으세요»(409)를 받는다. 그 안내를 따라도 결과가
+  //   달라지지 않으니 틀린 대처법이다. merged 는 category_list·categoryByKey·도메인맵·임베딩이 전부
+  //   빼는 묘비 상태라(key 유니크 인덱스도 부분 인덱스다) 호출자 눈엔 애초에 존재하지 않는 id 다.
+  if (next != null && !(await one(itemsPool, `SELECT 1 AS ok FROM category WHERE id=$1 AND state<>'merged'`, [next])))
+    return { applied: false, listId: row.list_id ?? null, changed: false, reason: "no_category" };
+  const listId = row.list_id ?? null;
+  if (listId == null) return { applied: false, listId: null, changed: false, reason: "no_list" }; // 미분류 프로젝트 — 소유할 리스트가 없어 no-op
+  const before = row.category_id ?? null;
   if (before === next) return { applied: true, listId, changed: false }; // 무변경 — 허위 audit 방지
   await itemsPool.query(`UPDATE project_list SET category_id=$2, updated_at=now() WHERE id=$1`, [listId, next]);
   await auditOrgContent("project_list", String(listId), "set_category", { category_id: before }, { category_id: next }, ctx);
   return { applied: true, listId, changed: true };
 }
-export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+export async function linkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<CategoryApply> {
   return setListCategoryForProject(projectId, categoryId, ctx);
 }
 
-export async function unlinkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<{ applied: boolean; listId: number | null; changed: boolean }> {
+export async function unlinkProjectCategory(projectId: number, categoryId: number, ctx?: WriteCtx): Promise<CategoryApply> {
   // 해제 — 현재 리스트 카테고리가 그 값일 때만 NULL 로(다른 값이면 무시, 오삭제·허위 audit 방지).
   const row: { list_id: number | null; category_id: number | null } | undefined = await one(itemsPool,
     `SELECT p.list_id, pl.category_id FROM project p LEFT JOIN project_list pl ON pl.id=p.list_id WHERE p.id=$1`, [projectId]);
-  const listId = row?.list_id ?? null;
-  if (listId == null || row?.category_id == null || Number(row.category_id) !== Number(categoryId)) return { applied: listId != null, listId, changed: false };
+  if (!row) return { applied: false, listId: null, changed: false, reason: "no_project" };
+  const listId = row.list_id ?? null;
+  if (listId == null) return { applied: false, listId: null, changed: false, reason: "no_list" };
+  if (row.category_id == null || Number(row.category_id) !== Number(categoryId)) return { applied: true, listId, changed: false }; // 이미 그 카테고리가 아님 = 원하는 상태
   return setListCategoryForProject(projectId, null, ctx);
 }
 
@@ -1019,12 +1086,6 @@ export async function setProjectRepos(projectId: number, repos: string[], ctx?: 
 //    ① 리스트가 없어 반영 못 함(실패)   ② 리스트는 있고 카테고리를 해제함(성공)
 //  호출자는 그 둘을 구분할 수 없어 «툴이 고장났나» 로 읽는다 — 실제로 2026-09-01 에 그렇게 오진했고
 //  사용자에게 오보까지 나갔다. 빈 배열로 성공을 가장하지 않는 것은 옳았으나, **말하지 않는 no-op** 이었다.
-export type SetProjectCategoriesResult = {
-  categoryIds: number[];
-  applied: boolean;              // 반영할 자리가 있었나(= 소속 리스트가 있나)
-  listId: number | null;
-  reason: "no_list" | null;      // applied=false 의 사유. 지금은 한 가지뿐이지만 자리를 열어 둔다
-};
 // 리스트 없는 프로젝트에 카테고리를 정하면 **자리를 만들어 준다**(#1631).
 //
 //  왜: 카테고리는 리스트가 소유하고 프로젝트가 상속한다(#541). 그런데 세션이 자동 생성하는 프로젝트는
@@ -1035,7 +1096,7 @@ export type SetProjectCategoriesResult = {
 //
 //  같은 축을 고른 형제는 **같은 리스트를 공유한다**(새로 만들기 전에 먼저 찾는다) — #541 의 의도 그대로다.
 //  ⚠ 해제(빈 배열)는 리스트를 만들지 않는다. 없는 것을 지우려고 자리를 만들 이유가 없다.
-export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<SetProjectCategoriesResult> {
+export async function setProjectCategories(projectId: number, categoryIds: number[], ctx?: WriteCtx): Promise<CategoryApply & { categoryIds: number[] }> {
   const clean = [...new Set((categoryIds || []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0))];
   const catId = clean.length ? clean[0] : null;
 
@@ -1049,12 +1110,10 @@ export async function setProjectCategories(projectId: number, categoryIds: numbe
 
   const res = await setListCategoryForProject(projectId, catId, ctx);
   //  여기까지 왔는데도 리스트가 없으면(해제 요청이거나 축이 사라진 경우) 정직하게 빈 배열로 답한다.
-  return {
-    categoryIds: res.applied && catId != null ? [catId] : [],
-    applied: res.applied,
-    listId: res.listId,
-    reason: res.applied ? null : "no_list",
-  };
+  //  사유는 setListCategoryForProject 가 판정한 것을 그대로 올린다 — 여기서 "no_list" 로 덮으면
+  //  없는 프로젝트·없는 카테고리가 «리스트가 없다»로 뭉개져 핸들러가 404 를 못 만든다.
+  //  성공 경로엔 reason 을 **명시적 null** 로 둔다 — undefined 면 strict 비교로 사유를 읽는 호출자가 갈린다(#2474).
+  return { ...res, reason: res.reason ?? null, categoryIds: res.applied && catId != null ? [catId] : [] };
 }
 
 /** 이 카테고리를 소유한 리스트를 찾고, 없으면 축 이름으로 만든다. 축이 없으면 null(자리를 만들지 않는다). */

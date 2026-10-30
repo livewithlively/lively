@@ -1,4 +1,8 @@
-// org ▸ 맥락 파이프라인 현황 계산 — 수집→증류→분류→관리 4단계의 처리량·잔량·막힘.
+// org ▸ 맥락 파이프라인 현황 계산 — 수집→증류→관리 세 단계의 처리량·잔량·막힘 + 카테고리(기준표).
+//
+//  #4194 — 종전 넷째 단계 «분류» 는 증류기의 **카테고리 붙이기 레인**이 됐다(증류 = 지식을 완성시킨다 — 완성 =
+//   본문·유형·카테고리). 그래서 stages.classify 를 없애고 그 수치를 stages.distill.knowledge 로, 카테고리 칸 수·정의 빈 칸은
+//   단계가 아니라 증류·관리가 함께 보는 기준표라 최상위 taxonomy 로 옮겼다. 이미 붙은 카테고리를 고치는 일은 관리(점검)다.
 //
 //  ⚠ 왜 capabilities/ 가 아니라 여기인가(R9): 이 계산을 **온보딩(org/delivery/onboarding.ts)도** 읽어야
 //   하는데, 스토어 계층(org/·v6/)은 MCP 표면(capabilities/)을 상향 import 할 수 없다(check-imports 게이트).
@@ -8,6 +12,7 @@
 import { itemsPool, q } from "../../db/client.js";
 import { listCollectors } from "./collectors.js";
 import { classifierCoverage, listClassifiers } from "./classifiers.js";
+import { isActiveLane } from "../distill/lanes.js";
 import { managerOverview } from "./managers.js";
 import { PLACEHOLDER_MARK } from "../liv/lane-skeleton.js";
 
@@ -24,11 +29,20 @@ export interface PipelineJob {
 export interface PipelineOverview {
   stages: {
     collect: { configured: number; enabled: number; output: number; recent_24h: number; job: PipelineJob | null };
-    distill: { configured: number; draft: number; total: number; enabled: number; output: number; backlog: number; job: PipelineJob | null };
-    classify: { configured: number; enabled: number; categories: number; no_definition: number;
-      backlog: number; uncovered: number; pending_review: number; job: PipelineJob | null };
+    distill: { configured: number; draft: number; total: number; enabled: number; output: number; backlog: number; job: PipelineJob | null;
+      /** 카테고리 붙이기 레인 — 미분류 지식(backlog)을 채운다. 레인 0개면 기본 기준 하나로 돈다(configured 0 은 고장이 아니다). */
+      knowledge: { configured: number; enabled: number; backlog: number; uncovered: number; pending_review: number; job: PipelineJob | null } };
     manage: { configured: number; enabled: number; open: any; by_kind: any; job: PipelineJob | null };
+    /**
+     * ⚠ 옛 모양 별칭(#4194) — **다음 릴리스에서 뺀다.** 배포 중엔 옛 화면 탭이 새 게이트웨이를, 롤백 뒤엔 새 화면이 옛
+     *  게이트웨이를 읽는다(web-assets 스탬프 갱신·gen-watch 재적재). 없으면 옛 화면이 «미등록·꺼짐» · «검색 가능 = 전체» 로
+     *  거짓 초록을 그린다(적대검증). 값은 distill.knowledge + taxonomy 와 같은 수다.
+     */
+    classify?: { configured: number; enabled: number; categories: number; no_definition: number;
+      backlog: number; uncovered: number; pending_review: number; job: PipelineJob | null };
   };
+  /** 카테고리(분류체계) — 단계가 아니라 기준표. 증류가 고를 칸이고, 점검이 어긋남을 잴 잣대다. */
+  taxonomy: { categories: number; no_definition: number };
   gates: { knowledge_pending: number; classification_proposed: number };
 }
 
@@ -58,16 +72,18 @@ export async function computePipelineOverview(): Promise<PipelineOverview> {
       const isDraft = (d: Record<string, unknown>): boolean => String(d.criteria_md ?? "").includes(PLACEHOLDER_MARK);
       const draftCount = distillers.filter(isDraft).length;
 
-      // ── ③ 분류 ──
+      // ── ②-b 증류 · 카테고리 붙이기 레인(저장소 org_classifier — org/distill/lanes.ts) ──
       const classifiers = await listClassifiers().catch(() => []);
       const clsCov = await classifierCoverage().catch(() => ({ total_unclassified: 0, uncovered: 0, classifiers: [] }));
       const knowledgeTotal = await count(`SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active'`);
       const proposed = await count(
         `SELECT count(*)::int AS n FROM knowledge_category WHERE state='proposed'`);
-      const categories = await count(`SELECT count(*)::int AS n FROM category`);
-      const noDefinition = await count(`SELECT count(*)::int AS n FROM category WHERE COALESCE(should,'')=''`);
+      //  칸 수는 **살아 있는 칸**만 센다(#4194 적대검증) — 병합·비활성 축은 화면(/api/ui/categories)에서도 숨는다. 섞어 세면
+      //   «카테고리 12칸» 이라는데 목록엔 9칸인 모순이 된다. 0칸이면 새 지식을 아예 못 저장한다(upsertKnowledge 가 카테고리 필수).
+      const categories = await count(`SELECT count(*)::int AS n FROM category WHERE COALESCE(state,'active')='active'`);
+      const noDefinition = await count(`SELECT count(*)::int AS n FROM category WHERE COALESCE(state,'active')='active' AND COALESCE(should,'')=''`);
 
-      // ── ④ 관리 ──
+      // ── ③ 관리 ──
       const mgr = await managerOverview().catch(() => ({
         managers: 0, enabled: 0, open: { total: 0, high: 0, warn: 0, note: 0 }, by_kind: [],
       }));
@@ -93,6 +109,16 @@ export async function computePipelineOverview(): Promise<PipelineOverview> {
         };
       };
 
+      //  카테고리 붙이기 레인 한 벌 — «켜진 수» 는 **일하는** 레인만(isActiveLane: 폐지된 재분류 모드는 인박스가 빈다).
+      const fill = {
+        configured: classifiers.length,
+        enabled: classifiers.filter(isActiveLane).length,
+        backlog: clsCov.total_unclassified,
+        uncovered: clsCov.uncovered,
+        pending_review: proposed,
+        job: jobFor(["classify_knowledge_headless", "classify_knowledge"]),
+      };
+
       return {
         stages: {
           collect: {
@@ -112,15 +138,7 @@ export async function computePipelineOverview(): Promise<PipelineOverview> {
             output: knowledgeTotal,
             backlog: undistilled,
             job: jobFor(["distill_sources_headless", "distill_sources"]),
-          },
-          classify: {
-            configured: classifiers.length,
-            enabled: classifiers.filter((c) => c.enabled).length,
-            categories, no_definition: noDefinition,
-            backlog: clsCov.total_unclassified,
-            uncovered: clsCov.uncovered,
-            pending_review: proposed,
-            job: jobFor(["classify_knowledge_headless", "classify_knowledge"]),
+            knowledge: fill,
           },
           manage: {
             configured: mgr.managers,
@@ -129,7 +147,9 @@ export async function computePipelineOverview(): Promise<PipelineOverview> {
             by_kind: mgr.by_kind,
             job: jobFor(["run_managers"]),
           },
+          classify: { ...fill, categories, no_definition: noDefinition },   // ⚠ 옛 모양 별칭 — 타입 주석 참조
         },
+        taxonomy: { categories, no_definition: noDefinition },
         // 파이프라인 밖이지만 흐름을 막는 것 — 화면이 '검토 대기'로 표시한다.
         gates: { knowledge_pending: pendingReview, classification_proposed: proposed },
       };
@@ -154,8 +174,10 @@ export function stuckStages(o: PipelineOverview): string[] {
   if (s.collect.configured > 0 && s.collect.enabled === 0) stuck.push("수집");
   // 자료가 있는데 증류가 안 돈다 = 그 자료는 영원히 지식이 되지 않는다(고객사 A: 10,900건 중 13건).
   if (s.collect.output > 0 && !running(s.distill.job)) stuck.push("증류");
-  // 지식이 있는데 분류가 안 돈다 = 미분류는 recall 의 INNER JOIN 에서 소환되지 않는다.
-  if (hasKnowledge && !running(s.classify.job)) stuck.push("분류");
+  // 미분류 지식이 **있는데** 카테고리 붙이기가 안 돈다 = 그 지식은 recall 의 INNER JOIN 에서 소환되지 않는다.
+  //  (#4194 — 종전 «분류» 단계. 종전엔 «지식이 하나라도 있으면» 이었다 — 채울 게 없는 조직까지 멈춤으로 세어 화면과 온보딩이
+  //   서로 다른 말을 했다. 판정은 필요하다는 증거가 있을 때만 한다 — 이 함수 머리말의 원칙 그대로.)
+  if (s.distill.knowledge.backlog > 0 && !running(s.distill.knowledge.job)) stuck.push("카테고리 붙이기");
   // 지식이 있는데 관리가 없다/안 돈다 = 낡음·어긋남을 아무도 안 본다(dev 실측: 8일 정지).
   if (hasKnowledge && (s.manage.configured === 0 || !running(s.manage.job))) stuck.push("관리");
   return stuck;

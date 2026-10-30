@@ -8,8 +8,8 @@ Use GitHub's private vulnerability reporting instead:
 **Security → Report a vulnerability** on this repository. That channel is private between you
 and the maintainers until a fix is published.
 
-If private reporting is unavailable to you, contact the maintainers directly rather than filing
-a public issue.
+If private reporting is unavailable to you, email the maintainers at **lively@lvly.io** rather than
+filing a public issue.
 
 ### What to include
 

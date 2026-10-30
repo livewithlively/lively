@@ -36,6 +36,10 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   welcome: { kind: "os", why: "처음 설정(#1813) — 앱을 열 자격 자체를 만드는 화면이라 앱보다 앞선다. 인증·온보딩은 OS 몫." },
   i: { kind: "os", why: "AppInstance 를 싣는 OS 라우트다. 이 라우트가 앱을 열지, 이것이 앱인 것은 아니다." },
   p: { kind: "os", why: "프로젝트 주소는 그 방의 맨 위 세션으로 보내는 문일 뿐 자체 화면이 없다(원준 2026-08-20 — '주소는 늘 세션')." },
+  full: { kind: "os", why: "「크게 보기」 가 새 탭에 띄우는 그 앱의 화면 가득 액자(#/full/<앱>?s=<세션>) — i 와 같이 앱을 싣는 OS 라우트일 뿐 자체 화면이 없다(원준 2026-10-12 «크게보기를 누르면 바로 거기로 · 모달 띄우지 말고»)." },
+  "app-open": { kind: "os", why: "#4480 앱 주소(<앱>-<워크스페이스>.lvly.app)로 직접 들어온 사람을 로그인시킨 뒤 일회용 코드를 받아 앱 주소로 돌려보내는 인증 경유지 — 화면이 없다(«여는 중» 한 줄뿐)." },
+  "app-grant": { kind: "os", why: "#4482 앱 주소를 새 탭 · 폰으로 연 사람이 그 앱 사용 동의를 받으러 왔다가 앱 주소로 돌아가는 동의 경유지 — 화면이 없다(동의 창 · 결과 한 줄뿐). 동의 창은 셸의 것이라 앱이 소유할 수 없다." },
+  "open": { kind: "os", why: "#4769 설치한 앱의 문(#/open/<앱 id>?…) — 레일 · 홈 최근 줄 · 앱 알림의 href 가 오는 자리. 인스턴스를 확보해 #/i/<인스턴스> 로 넘기고 물음표 뒤 값을 인스턴스 state 로 싣는 라우팅 경유지 — 화면이 없다(«여는 중» 한 줄). 인스턴스 id 는 사람마다 달라 주소가 될 수 없어 앱 id 로 여는 문이 셸에 있어야 한다." },
 
   // ── 이미 앱인 것 ──
   s: { kind: "app", appId: "ai-session", note: "세션 딥링크. v2.2 §7 대로 #/s/<id> 를 정본으로 유지하고, AppInstance 는 subject 로 멱등 확보한다." },
@@ -44,8 +48,10 @@ export const SHELL_SURFACES: Record<string, ShellSurface> = {
   app: { kind: "todo", plan: "클래식 화면 iframe(#/app/<key>). APPS 표의 항목을 하나씩 builtin AppPackage(system.renderer)로 옮기고, 표가 비면 이 라우트도 없앤다." },
   taxonomy: { kind: "app", appId: "taxonomy", note: "분류체계(#4233). 옛 카테고리 탭을 앱으로 뺐다. 전체 지도(묶음 칸 · 분류마다 지식 수와 프로젝트 수) · 손볼 것 · 분류 상세(연결 그림 + 지식 · 프로젝트 목록). project=global·single 빌트인. 딥링크 #/taxonomy 와 분류 하나 #/taxonomy/<id> 가 정본이다." },
   sources: { kind: "app", appId: "sources", note: "자료(#2423) — 라이블리가 가진 원본을 출처별로 훑고 하나를 열어 원문을 본다. project=global·single 빌트인. 딥링크 #/sources 와 자료 하나 #/sources/<id> 가 정본이다." },
+  f: { kind: "app", appId: "sources", note: "자료 보기(#4672) — 파일 링크(#/f?root=&path=) 하나를 자료 앱의 한 화면으로 연다: 미리보기 · 정보(종류 · 크기 · 위치 · 주소 · 볼 수 있는 사람 · 올린 사람 · 여기서 나온 지식) · 속한 프로젝트 · 앱으로 가는 문 · 내려받기. 화면 코드는 web/filepage.ts 한 벌(클래식 셸도 같은 코드). 링크 주소는 #1436 그대로 정본이다(서버 자료 링크 · file_address 가 이 꼴을 준다)." },
   learn: { kind: "app", appId: "learn", note: "사용 가이드(#4179). 클래식 액자에서 셸이 직접 그리는 화면으로 옮겼다. 첫 화면 #/learn · 문서 #/learn/docs/<문서> · 절 ?h=<절>. project=global·single 빌트인. 원고는 web/docs-content.ts, 화면은 web/guide/." },
-  inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력 + 지금 답을 기다리는 세션(#1891). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
+  builder: { kind: "app", appId: "builder", note: "앱빌더(#4632). 내가 만든 앱 · 만들던 앱 · 새 앱 — 앱 만들기 여섯 단계(app-studio)가 이 안에 선다. project=global·single 빌트인. 딥링크 #/builder · #/builder/new · #/builder/s/<세션> · #/builder/app/<앱> 이 정본. 앱빌더 프로젝트(#/p/<id>)로 가는 길도 여기로 온다." },
+  inbox: { kind: "app", appId: "inbox", note: "받은 알림 이력(#1891 → #4180: 세션 대기·완료는 빠지고 댓글·언급·리브의 답·앱 알림만). 입구는 홈 머리줄의 종(notify-bell.ts). project=global·single-instance 빌트인. 딥링크 #/inbox 를 정본으로 유지한다(세션의 #/s/ 와 같은 규칙)." },
   liv: { kind: "todo", plan: "리브 — 대화하는 화면이라 가장 앱다운 축에 든다. session subject 를 갖는 builtin 후보." },
   archive: { kind: "todo", plan: "아카이브 — 콘텐츠 목록. trash 와 한 앱(보관함)으로 묶을지 둘로 둘지 이식 때 정한다." },
   trash: { kind: "todo", plan: "휴지통 — 위와 같음. ⚠ 클래식 표에도 'trash' 가 있어 라우터에서 이 분기가 먼저 서야 한다(WIKI 옛 휴지통과 다르다)." },
@@ -67,8 +73,9 @@ export const CLASSIC_BACKLOG = [
 export function activeNavKey(page: string, id?: string): string {
   if (page === "" || page === "dashboard") return "home";
   if (page === "p" || page === "s") return page + ":" + (id ?? "");
+  if (page === "f") return "sources";   // #4672 자료 보기는 자료 앱의 한 화면이다
   const s = SHELL_SURFACES[page];
   if (!s) return "";
   // OS 표면·앱화 대상 중 사이드바 도크에 자리가 있는 것만 활성 표시를 갖는다.
-  return ["inbox", "sources", "taxonomy", "learn", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
+  return ["inbox", "sources", "taxonomy", "learn", "builder", "connect", "archive", "trash", "liv"].includes(page) ? page : "";
 }

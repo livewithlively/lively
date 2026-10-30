@@ -19,7 +19,7 @@ execFileSync(
    "--outDir", out, "--module", "esnext", "--target", "es2022", "--skipLibCheck"],
   { stdio: "inherit" },
 );
-const { railLitKey } = await import(path.join(out, "lib/rail-lit.js"));
+const { railLitKey, installedRailEligible, installedRecentEligible } = await import(path.join(out, "lib/rail-lit.js"));
 
 let pass = 0, fail = 0;
 const ok  = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -44,13 +44,19 @@ check(lit("app:projects2", "proj") === "proj", "E8 구역과 같은 문(프로�
 check(lit("app:system") === "home", "E9 숨긴 앱(설정)은 레일에 칸이 없으니 구역이 남는다", lit("app:system"));
 check(lit("app:") === "home" && lit("") === "home", "E10 빈 키는 구역으로", `${lit("app:")} / ${lit("")}`);
 check(lit("taxonomy", "home", []) === "home", "E11 앱 목록이 비면 구역으로", lit("taxonomy", "home", []));
+//  #4632(원준 2026-10-17 «사이드바 내용까지가 하나의 앱이야») — 사이드바 주인(lib/side-owner)을 주면, 구역 목록이 아닌 화면에서 구역 칸을 켜지 않는다.
+const litO = (ak, owner, sec = "home") => railLitKey(ak, sec, LINKS, APPS, owner);
+check(litO("app:system", "none") === "" && litO("inbox", "none") === "" && litO("app:", "none") === "", "E12 ★ 레일에 칸이 없는 앱(설정 · 확인할 것 · 앱 인스턴스)에선 아무 칸도 안 켠다 — 「홈」 이 켜져 «홈에 있다» 로 읽히던 것", [litO("app:system", "none"), litO("inbox", "none")]);
+check(litO("taxonomy", "taxonomy") === "taxonomy" && litO("liv", "none") === "liv" && litO("app:learn", "none") === "learn", "E13 레일에 칸이 있는 앱 · 갈 곳은 그대로 그 칸", [litO("taxonomy", "taxonomy"), litO("app:learn", "none")]);
+check(litO("s:abc", "section") === "home" && litO("app:projects2", "section", "proj") === "proj" && litO("app:system", undefined) === "home", "E14 구역 목록 화면은 구역 · 주인을 안 주면 종전 그대로", [litO("s:abc", "section"), litO("app:system", undefined)]);
 
 // ───────────────────────── B. 배선 — 레일·구역 드롭다운이 이 잣대 하나를 쓴다
 const rail = code(readFileSync(path.join(root, "web/v2/rail.ts"), "utf8"));
 const mainTs = code(readFileSync(path.join(root, "web/v2/main.ts"), "utf8"));
+const appsTs = code(readFileSync(path.join(root, "web/v2/apps.ts"), "utf8"));
 const css = code(readFileSync(path.join(root, "public/styles/47-v2-rail.css"), "utf8"));
 
-const fnBody = (name) => { const i = rail.indexOf(`function ${name}(`); return i < 0 ? "" : rail.slice(i, rail.indexOf("\n}\n", i)); };
+const fnBody = (name, src = rail) => { const i = src.indexOf(`function ${name}(`); return i < 0 ? "" : src.slice(i, src.indexOf("\n}\n", i)); };
 check(/from '\.\.\/lib\/rail-lit\.js'/.test(rail) && /railLitKey\(/.test(rail)
     && /\blitKey\(\)/.test(fnBody("drawRail")) && /\blitKey\(\)/.test(fnBody("openSectionMenu")),
   "W1 ★ rail.ts 의 레일과 구역 드롭다운 둘 다 lib/rail-lit 의 railLitKey 로 켜짐을 정한다");
@@ -60,6 +66,32 @@ check(!/v2-rail-run/.test(rail) && !/v2-rail-run/.test(css),
   "W3 ★ 최근 앱의 '실행 중' 점이 그려지지도, 스타일도 남아 있지 않다");
 check(!/openApps/.test(rail) && !/openAppKeys/.test(mainTs),
   "W4 점을 위해서만 있던 훅(openApps·openAppKeys)도 걷혔다");
+
+// ───────────────────────── P. 설치 앱의 최근 칸 — 만드는 중인 앱은 서지 않는다 (#4878)
+//  원준 2026-10-19: «회의록 앱 아직 만들기 끝나지 않았는데 최근에 연 앱이나 사이드바에 바로 뜨는게 이해가 안가네» · «앱 아이콘까지도 떠».
+//  앱 찾기는 #4632 부터 만드는 중인 앱(lib/builder-flow isAppInProgress)을 앱으로 세우지 않는데, #4769 의 최근 줄 · 레일 최근 칸은 그 자를 안 봤다.
+const inst = (id, over = {}) => ({ id, hasUi: true, systemRoute: null, ...over });
+check(installedRailEligible([inst("meeting-notes", { inProgress: true })]).length === 0,
+  "P1 ★ 만드는 중인 앱(inProgress)은 최근 칸에 설 수 없다 — 회의록 꼴", JSON.stringify(installedRailEligible([inst("meeting-notes", { inProgress: true })])));
+check(installedRailEligible([inst("talk"), inst("meeting-notes", { inProgress: true }), inst("deck-edit", { inProgress: false })]).join() === "i:talk,i:deck-edit",
+  "P2 다 만든 앱은 그대로 선다 — inProgress 를 안 주거나 false 면 종전 그대로", installedRailEligible([inst("talk"), inst("meeting-notes", { inProgress: true }), inst("deck-edit", { inProgress: false })]).join());
+check(installedRailEligible([inst("x", { hasUi: false }), inst("sources", { systemRoute: "#/sources" })]).length === 0,
+  "P3 화면 없는 앱 · 정본 주소를 가진 빌트인은 종전처럼 빠진다");
+//  순수 자격(자격 + 만드는 중) — 매니지드 실측 꼴 그대로
+const ws = (over = {}) => ({ id: "talk", hasUi: true, systemRoute: null, visibility: "all", studio: null, ...over });
+check(installedRecentEligible(ws(), false) === true && installedRecentEligible(ws(), true) === true, "R1 공개한 앱(팀 채널)은 만들기 세션이 있어도 선다(#4769 그대로)");
+check(installedRecentEligible(ws({ id: "meeting-notes", visibility: "me" }), true) === false, "R2 ★ 나만 보는 앱 · 앱빌더가 새로 만드는 중(회의록 꼴)은 안 선다");
+check(installedRecentEligible(ws({ id: "report-check", visibility: "me" }), false) === true, "R3 나만 보는 앱이라도 만드는 중이 아니면(보통 AI 세션이 저장 · 고치는 중) 선다");
+check(installedRecentEligible(ws({ id: "meeting-notes", visibility: "me", studio: { put: true } }), true) === true, "R4 ⑤ 넣기를 지난 앱은 선다");
+check(installedRecentEligible(ws({ id: "sources", systemRoute: "#/sources" }), false) === false && installedRecentEligible(ws({ hasUi: false }), false) === false, "R5 정본 주소를 가진 빌트인 · 화면 없는 앱은 종전처럼 빠진다");
+check(/installedRecentEligible\(/.test(fnBody("installedRecentOk", appsTs)) && /buildingNow\(a\)/.test(fnBody("installedRecentOk", appsTs)) && !/export function noteInstalledApp\(/.test(appsTs),
+  "P4 ★ apps.ts 는 설치 앱의 최근 칸 자격을 한 자리(installedRecentOk — installedRecentEligible + buildingNow)에서 재고, 자를 거치지 않는 noteInstalledApp 은 없다");
+check(/installedRows\.filter\(installedRecentOk\)/.test(fnBody("installedAppDefs", appsTs)) && !/installedDefs\s*=/.test(appsTs),
+  "P6 ★ 설 수 있는지는 받아 둘 때가 아니라 **그릴 때마다**(installedAppDefs) 잰다 — 세션 목록이 레일보다 늦게 와도 · 넣기 · 공개 뒤에도 맞게");
+check(/fetchSessionApps\(\)/.test(fnBody("loadInstalled", appsTs)) && /catch\(\(\) => installedRows\)/.test(fnBody("noteInstalledAppOpened", appsTs)),
+  "P7 ★ 목록을 못 받으면 던지는 판(fetchSessionApps)을 써서 받아 둔 행을 지킨다 — 빈 목록으로 덮어 멀쩡한 앱을 지우지 않는다");
+check(!/noteInstalledApp\(/.test(mainTs) && /noteInstalledAppOpened\(/.test(mainTs) && !/noteAppUse\(installedRecentKey\(/.test(mainTs),
+  "P5 ★ main.ts 의 앱 인스턴스 화면(#/i/)은 자를 거친 한 길(noteInstalledAppOpened)로만 최근 기록을 적는다");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

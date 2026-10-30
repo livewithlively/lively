@@ -4,14 +4,23 @@
 import { getActiveGrant, getApp } from "../org/store/apps.js";
 import * as store from "../org/store/app-notifications.js";
 import { parseAppManifest } from "./manifest.js";
+import { getNotifyPrefs } from "../v6/notify-pref-store.js";   // #4769 사람이 앱마다 끈 알림
 import {
-  decideNotifyAllowed, normalizeNotification, shouldSuppressDuplicate, type NotifyDenial,
+  decideNotifyAllowed, isAppMutedByMember, normalizeActor, normalizeKind, normalizeNotification, shouldSuppressDuplicate, type NotifyDenial, type NotifyKind,
 } from "./notify-policy.js";
 
 export type NotifyResult =
   | { ok: true; notification: store.AppNotificationRow }
   | { ok: true; suppressed: true }                 // 중복 억제 — 실패가 아니다
+  | { ok: true; muted: true }                      // #4769 받는 사람이 [나 ▸ 알림] 에서 이 앱을 껐다 — 실패가 아니다(앱이 다시 보낼 일도 아니다)
   | { ok: false; denial: NotifyDenial | "notify-app-inactive" };
+
+/**
+ * 제품 자신이 보내는 알림의 app_id(#4180) — 댓글·언급·리브의 답은 어느 앱의 일도 아니다.
+ *  실제 앱 행이 아니므로 앱 관문(활성·매니페스트·grant)을 지나지 않는다 — 그 관문이 막는 것은 **남의 앱**이 사용자
+ *  이름으로 배너를 띄우는 일이고, 여기는 서버 코드만 부른다(앱 토큰 경로 app_notify 는 notifyMember 만 탄다).
+ */
+export const SYSTEM_NOTIFY_APP = "lively";
 
 /**
  * 앱이 한 멤버에게 알림을 보낸다.
@@ -24,6 +33,19 @@ export async function notifyMember(input: {
   memberId: string;
   title?: unknown; body?: unknown; href?: unknown; dedupe_key?: unknown;
   now?: number;
+  /**
+   * 같은 dedupe_key 를 다시 울리지 않는 간격(ms). 없으면 정책 기본값(60초 — 하네스 상태 떨림 방어).
+   *  #4051 — 주기 잡이 보내는 알림(«사람 없이 도는 작업이 멈췄어요»)은 10분마다 같은 사실을 되풀이하므로 길게 준다.
+   *  ⚠ **서버 코드만** 넘긴다 — 앱 토큰 경로(app_notify)는 이 값을 받지 않는다(앱이 억제를 풀 수 없게).
+   */
+  cooldownMs?: number;
+  /**
+   * 종류(#4180) — 「확인할 것」 렌즈가 이걸로 거른다. **서버 코드만** 넘긴다(앱 토큰 경로는 늘 'app'):
+   *  ai-session 스윕이 'session' 을 넘겨 대기 알림을 배너 전용으로 만든다. 모르는 값은 'app'.
+   */
+  kind?: NotifyKind;
+  /** 이 알림을 만든 사람(구성원 id) — 사람이 한 일(댓글·언급)에만. */
+  actor?: string | null;
 }): Promise<NotifyResult> {
   if (!input.appId) return { ok: false, denial: "notify-app-required" };
 
@@ -44,20 +66,73 @@ export async function notifyMember(input: {
   });
   if (denial) return { ok: false, denial };
 
+  //  #4769 받는 사람이 이 앱을 껐으면 저장하지 않는다 — 배너 · 확인할 것 · 이력 어디에도 남지 않는다(끈 사람에겐 «안 온다» 가 전부다).
+  //   설정을 못 읽으면 안 끈 것으로 본다(fail-open — 설정 조회 장애로 알림이 멎으면 안 된다 · notify-pref-store 머리말과 같은 규율).
+  if (!isBuiltin) {
+    const prefs = await getNotifyPrefs(input.memberId).catch(() => null);
+    if (prefs && isAppMutedByMember(prefs.apps, input.appId)) return { ok: true, muted: true };
+  }
+
   const norm = normalizeNotification(input);
   if (!norm.ok) return { ok: false, denial: norm.denial };
 
-  const now = input.now ?? Date.now();
-  if (norm.value.dedupeKey) {
-    const last = await store.lastSentAtMs(input.appId, input.memberId, norm.value.dedupeKey);
-    if (shouldSuppressDuplicate(norm.value.dedupeKey, last, now)) return { ok: true, suppressed: true };
-  }
+  return sendNormalized(input.appId, input.memberId, norm.value, {
+    kind: normalizeKind(input.kind), actor: normalizeActor(input.actor), now: input.now, cooldownMs: input.cooldownMs,
+  });
+}
 
+/**
+ * 제품 자신이 한 사람에게 알림을 보낸다(#4180) — 댓글·언급(사람이 나를 지목한 것)·리브의 답.
+ *  앱 관문은 없지만 **정규화·href 검증·중복 억제**는 앱 알림과 같은 길을 지난다 — 배너·화면이 같은 모양을 받아야 한다.
+ *  종류는 필수다(app·session 은 여기로 못 온다 — 그건 앱과 스윕의 것이다).
+ */
+export async function notifySystem(input: {
+  kind: Exclude<NotifyKind, "app" | "session">;
+  memberId: string;
+  title?: unknown; body?: unknown; href?: unknown; dedupe_key?: unknown;
+  actor?: string | null;
+  now?: number;
+  cooldownMs?: number;
+}): Promise<NotifyResult> {
+  if (!input.memberId) return { ok: false, denial: "notify-app-required" };
+  const norm = normalizeNotification(input);
+  if (!norm.ok) return { ok: false, denial: norm.denial };
+  return sendNormalized(SYSTEM_NOTIFY_APP, input.memberId, norm.value, {
+    kind: input.kind, actor: normalizeActor(input.actor), now: input.now, cooldownMs: input.cooldownMs,
+  });
+}
+
+/**
+ * 앱 설치가 사람에게 알릴 일이 생겼을 때(#4224) — 매니페스트에서 빠진 테이블에 데이터가 있어 보관했다 · 워크스페이스 퓨즈에 걸려
+ *  설치를 거절했다. 알리는 주체는 앱이 아니라 **설치 코어**라 앱 관문(선언·grant)을 지나지 않는다(앱이 알림 권한을 선언하지
+ *  않았어도 설치한 사람은 알아야 한다). 받는 사람 = 설치를 요청한 구성원. app_id 는 그 앱 — 「확인할 것」 에서 앱 알림으로 보인다.
+ */
+export async function notifyAppInstaller(input: {
+  appId: string; memberId: string;
+  title?: unknown; body?: unknown; href?: unknown; dedupe_key?: unknown;
+  now?: number;
+}): Promise<NotifyResult> {
+  if (!input.appId || !input.memberId) return { ok: false, denial: "notify-app-required" };
+  const norm = normalizeNotification(input);
+  if (!norm.ok) return { ok: false, denial: norm.denial };
+  return sendNormalized(input.appId, input.memberId, norm.value, { kind: "app", actor: null, now: input.now });
+}
+
+/** 두 발송 경로의 공통 꼬리 — 중복 억제 판정 뒤 저장. 여기가 유일한 INSERT 자리다. */
+async function sendNormalized(
+  appId: string, memberId: string,
+  v: { title: string; body: string | null; href: string | null; dedupeKey: string | null },
+  o: { kind: NotifyKind; actor: string | null; now?: number; cooldownMs?: number },
+): Promise<NotifyResult> {
+  const now = o.now ?? Date.now();
+  if (v.dedupeKey) {
+    const last = await store.lastSentAtMs(appId, memberId, v.dedupeKey);
+    if (shouldSuppressDuplicate(v.dedupeKey, last, now, o.cooldownMs)) return { ok: true, suppressed: true };
+  }
   return {
     ok: true,
     notification: await store.insertNotification({
-      appId: input.appId, memberId: input.memberId,
-      title: norm.value.title, body: norm.value.body, href: norm.value.href, dedupeKey: norm.value.dedupeKey,
+      appId, memberId, title: v.title, body: v.body, href: v.href, dedupeKey: v.dedupeKey, kind: o.kind, actor: o.actor,
     }),
   };
 }

@@ -7,6 +7,7 @@
 //   *.itest.mjs 라 run-tests(자동)에서 제외된다(schema-init.itest.mjs 와 동일 규약).
 //  왜 실-DB 인가: deploy.ts 의 kind→스토어 배선은 순수 유닛으로 못 잡는다(upsert 실제 컬럼·ON CONFLICT·조인).
 //   유닛(deploy.test.ts)은 디스패치 표만, 이 스모크는 실제 전개가 DB 에 착지하는지를 본다.
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import assert from "node:assert/strict";
 

@@ -1,6 +1,7 @@
 // 앱 UI 보존·서빙 실-DB 스모크 (#1780 PR5) — 설치가 entry HTML 을 org_app_ui_asset 에 보존하고,
 //  org_app_ui 가 그 HTML 을 서빙하며, 앱 제거 시 UI 자산 명시 삭제 로 사라지는지 본다. fail-first: UI 보존/서빙은 이 PR 이전 없었다.
 //  ⚠ 수동 실행(docker):  node scripts/app-ui.itest.mjs
+import "./test-apps-root.mjs";   // #4778 앱 폴더 자리를 임시 폴더로 — 앱을 만들고 지우는 시험이 실제 ~/apps 를 옮기지 않게
 import { execFileSync, execSync } from "node:child_process";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import os from "node:os";

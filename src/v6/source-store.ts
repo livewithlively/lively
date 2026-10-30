@@ -4,8 +4,9 @@
 import { itemsPool } from "../db/client.js";
 import { q, one } from "../db/client.js";
 import { auditOrgContent, type WriteCtx, restoreSnapshot } from "./content-audit.js";
-import { effectiveViewer, type Viewer } from "./visibility.js";
+import { effectiveViewer, hiddenProjects, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
+import { readScopeFor, sourceKindsSql } from "./read-scope.js";   // #5100 앱 맥락 범위
 import { knowledgeVisWhere } from "./knowledge-store.js";
 import { SOURCE_GROUP_CASE, sourceGroupWhere, type SourceGroup, type SourceGroupFilter } from "./source-group.js";   // #4233 들어온 길
 import { parseQueryTerms, termPatterns } from "./query-terms.js";   // #4530 검색어 낱말 규칙 한 벌
@@ -27,8 +28,20 @@ export async function resolveSourceViewer(viewer: Viewer | undefined): Promise<s
   return await effectiveViewer(viewer);
 }
 
-/** 자료 읽기 쿼리에 이어붙일 술어. 규약은 knowledgeVisWhere 와 동일(undefined=미배선·null=특권·"TRUE" 반환 가능). */
+/**
+ * 자료 읽기 쿼리에 이어붙일 술어. 규약은 knowledgeVisWhere 와 동일(undefined=미배선·null=특권·"TRUE" 반환 가능).
+ *  앱 맥락 범위(#5100)도 같다 — 앱 토큰 요청이고 그 앱이 범위를 선언했으면 자료 종류(source_kinds)를 AND 로 더한다(구성원 뷰어에만 · read-scope.ts).
+ */
 export async function sourceVisWhere(viewer: Viewer | undefined, params: unknown[]): Promise<string> {
+  const scope = await readScopeFor(viewer);
+  const scoped = scope ? sourceKindsSql(scope.sourceKinds, params, "s") : null;
+  const base = await sourceVisBase(viewer, params);
+  if (scoped === null) return base;
+  return base === "TRUE" ? scoped : `(${base} AND ${scoped})`;
+}
+
+/** 공개범위만(앱 맥락 범위 없이) — sourceVisWhere 의 몸통. 밖에서 부르지 마라(범위가 빠진다). */
+async function sourceVisBase(viewer: Viewer | undefined, params: unknown[]): Promise<string> {
   if (!(await axisOn("source"))) return "TRUE";   // 축 꺼짐(#1291) — 자료는 종전처럼 전원 공개
   if (viewer === undefined) return "TRUE";
   const eff = await effectiveViewer(viewer);
@@ -64,6 +77,11 @@ export const SOURCE_CATEGORIES_SQL = `COALESCE((
        JOIN knowledge_category kc ON kc.name = ks.name AND kc.state <> 'rejected'
        JOIN category c ON c.id = kc.category_id AND c.state <> 'merged'
       WHERE ks.source_id = s.id), '[]'::jsonb)`;
+
+// #4824 — 잠긴 자료의 «볼 수 있는 사람» 열쇠(같은 대상이면 같은 값 · 열린 자료는 NULL). 증류 배치를 같은 대상끼리 묶는 데 쓴다
+//  (org/distill/distiller.ts oneAudienceGroup). 's' 별칭 기준.
+export const AUD_KEY_SQL = `CASE WHEN s.visibility = 'members' THEN COALESCE((SELECT string_agg(sm.subject_kind || ':' || sm.member_id, ','
+    ORDER BY sm.subject_kind, sm.member_id) FROM source_member sm WHERE sm.source_id = s.id), '') END`;
 
 export const S_LIST_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_system, s.external_url, s.occurred_at, s.updated_at, s.fields, s.parent_external_id, s.visibility,
    EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id) AS has_knowledge,
@@ -191,6 +209,41 @@ export async function listSources(f: SourceFilter = {}, viewer?: Viewer): Promis
      ORDER BY ${titleHead}COALESCE(s.occurred_at, s.updated_at) DESC LIMIT ${limP} OFFSET ${offP}`, params);
 }
 
+// ── 프로젝트 자료 파일의 색인(#4629) — 앱 화면의 «전체 자료» 목록(apps/app-project-files.ts scope 'all')이 읽는다. ──
+//  프로젝트 폴더에 올리거나 세션이 만든 파일은 ingest/local-file 이 파일마다 자료 한 줄로 적는다(fields.root='project' · path · ext · bytes ·
+//  container_ref 'project:<id>'). 그래서 프로젝트마다 폴더를 훑지 않고 이 한 번의 조회로 «볼 수 있는 모든 프로젝트의 그 종류 파일» 이 선다.
+//  지워진 프로젝트의 파일은 뺀다. 자료 공개범위(viewer)도 **프로젝트 공개범위**도 여기 SQL 에서 건다 — LIMIT 뒤에 걸러 내면
+//  가려진 프로젝트의 파일이 자리를 차지해 보이는 파일이 밀려나고, «넘쳤다» 는 표시로 가려진 파일이 있다는 것이 샌다.
+//  session = 그 파일을 만든 세션(fields.entry_session — 세션의 AI 가 만든 파일에만 있다). 앱이 «이 세션이 만든 것» 을 가를 때 쓴다.
+export interface ProjectFileIndexRow { project_id: number; project_name: string; path: string; size: number; mtime: number; session: string }
+export async function listProjectFileIndex(f: { exts: string[]; q?: string; limit: number; projectId?: number; session?: string }, viewer?: Viewer): Promise<ProjectFileIndexRow[]> {
+  const exts = f.exts.map((x) => String(x).toLowerCase()).filter(Boolean);
+  if (!exts.length) return [];
+  const params: unknown[] = [exts];
+  const wh = [`s.lifecycle='active'`, `s.kind='local_file'`, `s.fields->>'root'='project'`, `lower(s.fields->>'ext') = ANY($1::text[])`,
+    `COALESCE(s.fields->>'path','') <> ''`];
+  //  그 사람에게 가려진 프로젝트(긴급열람 반영 · 15초 캐시 · 판정을 못 하면 throw = fail-closed).
+  const hidden = viewer === undefined ? [] : [...(await hiddenProjects(await effectiveViewer(viewer))).ids];
+  if (hidden.length) { params.push(hidden); wh.push(`p.id <> ALL($${params.length}::int[])`); }
+  if (f.projectId != null) { params.push(`project:${Number(f.projectId)}`); wh.push(`s.fields->>'container_ref' = $${params.length}`); }
+  if (f.session) { params.push(f.session); wh.push(`s.fields->>'entry_session' = $${params.length}`); }
+  //  찾는 말은 파일 이름 · 경로에서만(본문은 보지 않는다 — HTML 본문에는 어떤 말이든 스친다).
+  for (const term of String(f.q ?? "").replace(/\0/g, "").split(/\s+/).filter(Boolean).slice(0, 6)) {
+    params.push("%" + term.replace(/[\\%_]/g, "\\$&") + "%");
+    wh.push(`(s.fields->>'path') ILIKE $${params.length} ESCAPE '\\'`);
+  }
+  const vis = await sourceVisWhere(viewer, params);
+  params.push(Math.min(Math.max(Math.round(Number(f.limit)) || 200, 1), 501));
+  const rows = await q(itemsPool,
+    `SELECT p.id AS project_id, COALESCE(p.name,'') AS project_name, s.fields->>'path' AS path, s.fields->>'bytes' AS size,
+            COALESCE(s.fields->>'entry_session','') AS session, COALESCE(s.occurred_at, s.updated_at) AS at
+       FROM source s
+       JOIN project p ON s.fields->>'container_ref' = 'project:' || p.id::text AND p.level='project' AND p.trashed_at IS NULL
+      WHERE ${wh.join(" AND ")} AND ${vis}
+      ORDER BY COALESCE(s.occurred_at, s.updated_at) DESC LIMIT $${params.length}`, params) as Array<{ project_id: number; project_name: string; path: string; size: string | null; session: string; at: string | Date }>;
+  return rows.map((r) => ({ project_id: Number(r.project_id), project_name: String(r.project_name || ""), path: String(r.path), size: Number(r.size) || 0, mtime: Number(new Date(r.at)) || 0, session: String(r.session || "") }));
+}
+
 // ── 휴지통의 파일 자료(#3778) — 파일을 지워 `.lively/trash` 로 옮겨 둔 자료들(ingest/local-file.ts 의 도장 fields.trash). ──
 //  프로젝트를 가로질러 한 번에 읽는다(휴지통 「자료」 탭). 본문은 안 싣는다 — 목록 규약 그대로. 뷰어 술어를 태워
 //  안 보이는 자료는 휴지통에서도 안 보인다.
@@ -293,11 +346,13 @@ export async function listSourceUploaders(viewer?: Viewer): Promise<SourceUpload
 //  다음 조회에서 빠진다(멱등 수렴). 본문 미포함(source_get 으로 전문). #541.
 //  viewer(#1291): 증류 크론은 특권(null)으로 부른다 — 못 보면 그 자료는 영영 지식이 안 된다. 사람·에이전트가
 //   목록을 열 때는 자기 뷰어로 걸러 제목이 새지 않게 한다(listUnmappedKnowledge 와 같은 갈래).
-export async function listUndistilledSources(limit = 50, viewer?: Viewer): Promise<Record<string, unknown>[]> {
+//  withAudienceKey(#4824) — 증류 스케줄러만 켠다(배치를 같은 대상끼리 묶는 열쇠). 도구 응답(source_undistilled)에는 싣지 않는다 —
+//   열쇠가 «그 잠긴 자료를 누가 보나» 의 사람 id 목록이라, 비공개 채널 구성원 명단과 같은 급의 사생활이다.
+export async function listUndistilledSources(limit = 50, viewer?: Viewer, withAudienceKey = false): Promise<Record<string, unknown>[]> {
   const params: unknown[] = [Math.min(limit, 500)];
   const vis = await sourceVisWhere(viewer, params);
   return q(itemsPool,
-    `SELECT ${S_LIST_SEL} FROM source s
+    `SELECT ${S_LIST_SEL}${withAudienceKey ? `, ${AUD_KEY_SQL} AS aud_key` : ""} FROM source s
      WHERE s.lifecycle='active'
        AND NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = s.id)
        AND ${vis}
@@ -345,6 +400,47 @@ export async function getSource(id: number, viewer?: Viewer): Promise<(SourceRow
        ORDER BY COALESCE(s.occurred_at, s.updated_at) ASC LIMIT 200`, rParams);
   }
   return { ...(s as SourceRow), knowledge, parent, replies, reply_count: replies.length };
+}
+
+/** 자료 보기(#4672)가 파일 하나에 싣는 자료 요약 — 누가 · 언제 올렸고 거기서 어떤 지식이 나왔나. */
+export interface SourceFileSummary {
+  title: string | null;
+  /** 들어온 길(fields.entry — 'generated' = AI 세션이 만든 파일) */
+  entry: string | null;
+  uploaderId: string | null;
+  uploaderName: string | null;
+  /** 자료가 생긴 때(ISO — 밀리초까지) */
+  createdAt: string | null;
+  /** 이 자료에서 나온 지식(이 사람이 볼 수 있는 것만 · 한 지식은 관계가 여럿이어도 한 줄) */
+  knowledge: Array<{ name: string; title: string | null }>;
+}
+
+/**
+ * 자료 보기 화면(#4672)의 자료 요약 — getSource 의 가벼운 판. 링크를 열 때마다 도는 자리라 본문(body_md) · 분류 · 부모 · 답글은 읽지 않는다.
+ *  공개범위는 getSource 와 같은 두 술어(자료 sourceVisWhere · 지식 knowledgeVisWhere) — 자료가 안 보이면 undefined(호출부가 «자료 없음»).
+ */
+export async function getSourceFileSummary(id: number, viewer?: Viewer): Promise<SourceFileSummary | undefined> {
+  const params: unknown[] = [id];
+  const vis = await sourceVisWhere(viewer, params);
+  const s = await one(itemsPool,
+    `SELECT s.title, s.created_at, s.fields->>'entry' AS entry, s.fields->>'author_external_id' AS uploader_id, s.fields->>'author_name' AS uploader_name
+       FROM source s WHERE s.id=$1 AND ${vis}`, params) as Record<string, unknown> | undefined;
+  if (!s) return undefined;
+  const kParams: unknown[] = [id];
+  const kVis = await knowledgeVisWhere(viewer, kParams);
+  const knowledge = await q(itemsPool,
+    `SELECT DISTINCT ON (ks.name) ks.name, k.title FROM knowledge_source ks JOIN knowledge k ON k.name=ks.name
+      WHERE ks.source_id=$1 AND k.lifecycle='active' AND ${kVis} ORDER BY ks.name`, kParams) as Array<Record<string, unknown>>;
+  const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+  const at = s.created_at;
+  return {
+    title: str(s.title),
+    entry: str(s.entry),
+    uploaderId: str(s.uploader_id),
+    uploaderName: str(s.uploader_name),
+    createdAt: at instanceof Date ? at.toISOString() : at ? new Date(String(at)).toISOString() : null,
+    knowledge: knowledge.map((k) => ({ name: String(k.name), title: str(k.title) })),
+  };
 }
 
 export async function upsertSource(

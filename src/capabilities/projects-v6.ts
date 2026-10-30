@@ -6,6 +6,7 @@ import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from 
 import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
+import { assertKnowledgeInAppContext } from "./knowledge/shared.js";   // #5100 앱 맥락 범위 밖 이름 거절
 import { listSessions, listRestorableSessions } from "../terminal/terminal-sessions.js";
 import { listSessionsForProject } from "../v6/session-log-store.js";          // #1851 — 프로젝트 휴지통: 기록만 남은 세션까지 묶음으로
 import { bundleTrashedIds } from "../sessions/session-trash.js";
@@ -42,7 +43,7 @@ import {
   listProjects, getProject, getProjectRow, createProject, deleteProject, updateProjectStatus, updateProject, ProjectBodyConflictError, claimProjectName, setProjectArchived, setProjectTrashed, getBoardFields,
   upsertProjectFolderBinding, findProjectsByOriginKey,
   createTask, updateTaskStatus, updateTask, deleteTaskNode, reorderTasks, reorderProjects, rootProjectIdOfTaskNode, setProjectMembers, setProjectMemberStatus, isProjectMember,
-  linkProjectCategory, unlinkProjectCategory, setProjectCategories,
+  linkProjectCategory, unlinkProjectCategory, setProjectCategories, type CategoryApply,
   linkProjectKnowledge, unlinkProjectKnowledge, setProjectRepos,
   recommendKnowledgeForProject, projectsForKnowledge,
   linkProjectEdge, unlinkProjectEdge, getProjectListRow,
@@ -53,6 +54,8 @@ import {
   listTasksForProjects, // #1305 타임라인(간트) — 프로젝트 여러 개의 하위 작업 벌크 조회
   getNodeRow, listEdgesForNodes, rescheduleDependents, // #1308 의존선 — 노드(레벨 무관) 엣지·자동 재스케줄
 } from "../v6/project-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
+import { redactTokenShapes } from "../org/ingest/redact.js";
 
 const STATUSES = ["active", "done"] as const;
 // 프로젝트도 태스크 리스트처럼 할 일/진행 중/완료로 그룹핑(웹 보드) — 상태 쓰기에서 todo|in_progress 도 허용.
@@ -121,6 +124,29 @@ async function assertProjectVisible(rowId: number, ctx?: CapabilityCtx, label = 
   if (!(await canSeeProjectRow(Number(rowId), viewer))) throw new HttpError(404, `${label} #${rowId} 없음`);
 }
 
+// 카테고리 반영 실패를 에러로 끊는다 — 예전엔 스토어가 applied=false 로 정직하게 알려도 핸들러가 그걸
+//  버리고 {linked:true} 를 돌려줬다. 에이전트는 성공으로 믿고 넘어가고 카테고리는 안 붙는 silent
+//  false-success 였다(#3720 실측: linked:true → project_get 은 categories:[]). 반환값이 거짓말하면
+//  read-back 하지 않는 한 아무도 모른다.
+//  allowNoList = **해제** 요청(unlink · 빈 categoryIds). 리스트가 없으면 붙은 카테고리도 없으니
+//   원하는 상태가 이미 참이다 — 정리 코드에 잡음을 만들지 않게 통과시킨다. 없는 id 는 어느 쪽이든 404.
+function assertCategoryApplied(projectId: number, categoryId: number | null, r: CategoryApply, opts?: { allowNoList?: boolean }): void {
+  if (r.applied) return;
+  // switch + never — reason 이 늘면 컴파일이 막는다. 사슬형 if 였다면 새 사유가 마지막 409(리스트 없음)로
+  //  흘러 엉뚱한 메시지를 받는다. 실패 메시지가 틀리는 건 이 파일이 없애려는 결함과 같은 부류다.
+  switch (r.reason) {
+    case "no_project": throw new HttpError(404, `프로젝트 #${projectId} 없음`);
+    case "no_category": throw new HttpError(404, `카테고리 #${categoryId} 없음 — category_list 의 id 를 참조하세요.`);
+    case "no_list":
+    case null:
+    case undefined: {
+      if (opts?.allowNoList) return;
+      throw new HttpError(409, `프로젝트 #${projectId} 는 리스트에 속해 있지 않아 카테고리를 이을 수 없습니다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속합니다. project_list_index_v6 로 리스트를 고르고 project_set_list_v6 로 먼저 넣으세요.`);
+    }
+    default: { const _exhaustive: never = r.reason; throw new HttpError(500, `카테고리 반영 실패(${String(_exhaustive)})`); }
+  }
+}
+
 // 핸들러가 읽는 이름(REST 는 query 'category'→categoryId 매핑).
 const projectListV6Input = {
   categoryId: z.number().int().positive().optional(),
@@ -132,6 +158,9 @@ const projectListV6Input = {
   // #1851 휴지통 — 버린 프로젝트(trashed_at). 기본 제외. 버리기·복원은 project_trash_v6, 완전 삭제는 project_purge_v6.
   trashed: z.enum(["exclude", "include", "only"]).optional()
     .describe("휴지통에 버린 프로젝트 처리 — exclude(기본: 제외) · include(포함) · only(버린 것만)."),
+  // #4865 — 본문(description) 빼고 받기. 보드 첫 화면은 본문을 그리지 않는데, 실측(2026-10-17 · 1,299건) 응답 5.2MB 중
+  //  4.26MB(82%)가 본문이었다 — 「프로젝트를 불러오는 중」 이 길던 주된 이유. 본문이 필요한 화면(상세)은 /:id 로 따로 받는다.
+  slim: z.boolean().optional().describe("true 면 본문(description)을 빼고 준다 — 목록만 그릴 때. 본문은 project_get_v6."),
 };
 type ProjectListV6Input = z.infer<z.ZodObject<typeof projectListV6Input>>;
 const projectListV6: Capability = {
@@ -151,6 +180,7 @@ const projectListV6: Capability = {
           mine: query.mine === "1" || query.mine === "true",
           archived: query.archived === "include" || query.archived === "only" ? String(query.archived) as "include" | "only" : undefined,
           trashed: query.trashed === "include" || query.trashed === "only" ? String(query.trashed) as "include" | "only" : undefined,
+          slim: query.slim === "1" || query.slim === "true",
         };
       } }],
   },
@@ -179,6 +209,7 @@ const projectListV6: Capability = {
         for (const p of projects as any[]) p.my_session_count = byProj.get(Number(p.id)) || 0;
       } catch { /* 세션 조회 실패 → my_session_count 미부여(프론트는 0=비활성으로 처리) */ }
     }
+    if (input.slim) for (const p of projects as any[]) delete p.description;
     return { projects };
   },
 };
@@ -392,6 +423,15 @@ const projectCreateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectCreateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #4501 첫 지시 자동 생성(외부 하네스 훅 project-auto-bind 가 AUTO_CREATED_MARK 를 달아 보낸다)은 **막지 않고 가린다** —
+    //  사람이 고르는 입구가 아니라, 막으면 그 세션의 작업면이 통째로 안 생긴다(훅은 실패를 조용히 삼킨다). 서버 쪽 경로
+    //  (first-prompt-project.ts)와 같은 처리. 격리 리뷰가 잡았다 — 첫 판은 서버 경로만 가려 이 훅 경로가 400 이었다.
+    //  표식을 사람이 흉내 내도 결과는 «가려서 저장» 이라 시크릿이 남지 않는다.
+    if (typeof input.description === "string" && input.description.includes(AUTO_CREATED_MARK)) {
+      input.description = redactTokenShapes(input.description);
+      if (typeof input.name === "string") input.name = redactTokenShapes(input.name);
+    }
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단 — 맨 앞(생성·조회 전)
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 유효성 먼저(생성 전) — 잘못된 folder/list_id/follow_up 으로 고아 프로젝트가 안 생기게. 순수검사(folder)를
     //  DB 왕복(list_id/follow_up) 앞에 둔다.
@@ -434,8 +474,16 @@ const projectCreateV6: Capability = {
   },
 };
 
+// 닫는 근거 — 완료/취소로 넘어가는 쓰기에서만 쓰인다(외부 PM 미러면 그 태스크에 코멘트로 남는다). 다른 전이에선 무시.
+const closeReason = z.string().max(1000).optional()
+  .describe("완료(done)·취소로 닫을 때 **왜 닫는지** 한두 문장(예: 'MR !123 머지·배포 확인'). ClickUp 에 미러된 항목이면 그 태스크에 코멘트로 남아 ClickUp 쪽 사람이 경위를 안다 — 닫을 땐 적어라.");
+const parseReason = (b: Record<string, unknown>): string | undefined => {
+  const r = b.reason == null ? "" : String(b.reason).trim();
+  return r ? r.slice(0, 1000) : undefined;
+};
+
 // status = CHECK 유효 네이티브 투영(todo|in_progress|done|active). status_raw = 리스트 커스텀 상태 키(개방 어휘, null=해제).
-const projectSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES), status_raw: z.string().max(120).nullable().optional() };
+const projectSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(PROJECT_STATUSES), status_raw: z.string().max(120).nullable().optional(), reason: closeReason };
 type ProjectSetStatusV6Input = z.infer<z.ZodObject<typeof projectSetStatusV6Input>>;
 const projectSetStatusV6: Capability = {
   name: "project_set_status_v6",
@@ -450,11 +498,11 @@ const projectSetStatusV6: Capability = {
         const b = (req.body ?? {}) as Record<string, unknown>;
         const rawIn = b.status_raw;
         const status_raw = (rawIn == null || rawIn === "") ? null : String(rawIn).trim().slice(0, 120);
-        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status), status_raw };
+        return { id: parseId(req.params?.id), status: parseProjectStatus(b.status), status_raw, reason: parseReason(b) };
       } }],
   },
   handler: async (input: ProjectSetStatusV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: input.reason ?? null };
     await assertProjectVisible(input.id, ctx);
     const project = await updateProjectStatus(input.id, input.status, writeCtx, input.status_raw ?? null);
     await regenAgents(input.id);
@@ -731,6 +779,7 @@ const projectUpdateV6: Capability = {
       } }],
   },
   handler: async (input: ProjectUpdateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input, new Set(["description_base"]));   // #4501 — description_base 는 옛 본문(지우는 편집을 막지 않게)
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const { id, reschedule_dependents, ...patch } = input;
     // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.
@@ -749,7 +798,7 @@ const projectUpdateV6: Capability = {
     catch (e) {
       // 덮지 않았다 — 화면이 최신 본문을 다시 불러 사람에게 묻는다(곁칸 태스크 부품 · 프로젝트 설정).
       if (e instanceof ProjectBodyConflictError)
-        throw new HttpError(409, "본문이 다른 곳에서 바뀌었습니다 — 최신 본문을 불러와 다시 고쳐 주세요");   // stage: HttpError 에 body(#3870)가 아직 없다 — 화면은 상태코드(409)로 가른다
+        throw new HttpError(409, "본문이 다른 곳에서 바뀌었습니다 — 최신 본문을 불러와 다시 고쳐 주세요", { body: { conflict: "description" } });
       throw e;
     }
     const rescheduled = before ? await propagateReschedule(id, before, project, writeCtx) : [];
@@ -787,10 +836,20 @@ const projectRenameV6: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/v6/projects/:id/rename"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
+        //  ⚠ **파일 이름 변경 요청을 프로젝트 개명으로 삼키지 않는다**(#4114). 자료 칸의 이름 바꾸기는
+        //   `{path, name}` 을 보내는데, 종전엔 그 요청이 이 경로로 들어와 파일이 아니라 **프로젝트 이름**을
+        //   고치려 들었다(파일 라우트가 같은 경로에 등록돼 있었고 express 는 먼저 등록된 이쪽만 불렀다).
+        //   경로는 `POST …/:id/file/rename` 으로 갈라 놨지만, **배포 전에 열려 있던 탭**은 낡은 주소로
+        //   계속 쏜다 — 그때 이름이 자동으로 붙은 프로젝트라면 사람 몰래 프로젝트가 개명된다.
+        //   그 한 줄이 여기서 끝난다: path 가 실려 오면 프로젝트 개명이 아니다.
+        if (typeof b.path === "string") {
+          throw new HttpError(400, "파일·폴더 이름 변경은 POST /api/ui/v6/projects/:id/file/rename 입니다(이 경로는 프로젝트 이름짓기 전용) — 화면을 새로고침해 주세요.");
+        }
         return { id: parseId(req.params?.id), name: String(b.name ?? "") };
       } }],
   },
   handler: async (input: ProjectRenameV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     // 대상 결정 — 명시 id 우선, 없으면 이 세션의 소속(세션 자신이 부르는 표준 경로).
     let id = input.id ?? 0;
     if (!id) {
@@ -847,7 +906,7 @@ type ProjectSetCategoriesV6Input = z.infer<z.ZodObject<typeof projectSetCategori
 const projectSetCategoriesV6: Capability = {
   name: "project_set_categories_v6",
   title: "프로젝트 카테고리 설정(v6)",
-  description: "프로젝트가 **속한 리스트의 카테고리(분류축)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 미분류(리스트 없는) 프로젝트엔 no-op — 먼저 리스트에 넣어야 함. category_list 의 id 참조.",
+  description: "프로젝트가 **속한 리스트의 카테고리(분류축)**를 설정한다 — 카테고리는 리스트가 소유하고 소속 프로젝트가 상속(단일). categoryIds 는 하위호환 배열이나 첫 항목만 반영, 빈 배열=해제. 형제 프로젝트가 카테고리를 공유하게 된다. 리스트 없는 프로젝트엔 그 축의 리스트를 찾아 넣어 준다(#1631) — 축이 없으면 404, 넣을 자리를 못 만들면 409. category_list 의 id 참조.",
   scope: "memory",
   input: projectSetCategoriesV6Input,
   expose: {
@@ -862,14 +921,10 @@ const projectSetCategoriesV6: Capability = {
   handler: async (input: ProjectSetCategoriesV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    const r = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    const res = await setProjectCategories(input.id, input.categoryIds, writeCtx);
+    assertCategoryApplied(input.id, input.categoryIds[0] ?? null, res, { allowNoList: !input.categoryIds.length });
     await regenAgentsForList(await listIdOfProject(input.id)); // 형제 전부 상속 반영(F4)
-    // 반영이 안 됐으면 **그 이유와 다음 행동**을 함께 돌려준다(#2474) — 종전엔 빈 배열만 나가서
-    //  호출자가 "툴이 고장났다"로 읽었다(실측: 2026-09-01, AI 가 사용자에게 오보까지 했다).
-    return r.applied ? r : {
-      ...r,
-      note: "이 프로젝트는 리스트에 속해 있지 않아 카테고리를 정할 자리가 없습니다 — project_set_list_v6 로 먼저 리스트에 넣으세요(카테고리는 리스트가 소유하고 소속 프로젝트가 상속합니다).",
-    };
+    return { categoryIds: res.categoryIds };
   },
 };
 
@@ -1022,7 +1077,7 @@ type ProjectLinkCategoryV6Input = z.infer<z.ZodObject<typeof projectLinkCategory
 const projectLinkCategoryV6: Capability = {
   name: "project_link_category_v6",
   title: "프로젝트↔카테고리(v6)",
-  description: "프로젝트를 카테고리에 연결(또는 unlink=true 로 해제). 웹 전용.",
+  description: "프로젝트를 카테고리에 연결(또는 unlink=true 로 해제). 웹 전용. 카테고리는 **소속 리스트가 소유**하므로 리스트 없는 프로젝트면 409 — project_set_list_v6 로 먼저 리스트에 넣어야 함.",
   scope: "memory",
   input: projectLinkCategoryV6Input,
   expose: {
@@ -1036,9 +1091,16 @@ const projectLinkCategoryV6: Capability = {
       } }],
   },
   handler: async (input: ProjectLinkCategoryV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertProjectVisible(input.id, ctx, "프로젝트");
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    if (input.unlink) { const r = await unlinkProjectCategory(input.id, input.categoryId, writeCtx); await regenAgentsForList(r.listId); return { unlinked: true }; }
+    if (input.unlink) {
+      const r = await unlinkProjectCategory(input.id, input.categoryId, writeCtx);
+      assertCategoryApplied(input.id, input.categoryId, r, { allowNoList: true });
+      await regenAgentsForList(r.listId);
+      return { unlinked: true };
+    }
     const r = await linkProjectCategory(input.id, input.categoryId, writeCtx);
+    assertCategoryApplied(input.id, input.categoryId, r);
     await regenAgentsForList(r.listId); // 형제 전부 상속 반영(F4)
     return { linked: true };
   },
@@ -1130,7 +1192,11 @@ const knowledgeProjectsV6: Capability = {
         return { name };
       } }],
   },
-  handler: async (input: KnowledgeProjectsV6Input) => ({ projects: await projectsForKnowledge(input.name) }),
+  handler: async (input: KnowledgeProjectsV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    //  #5100 — 앱 맥락 범위 밖 지식의 이름으로 연결 프로젝트를 훑지 못하게(공개범위로는 보이는데 범위 밖이면 거절 + 기록 · 그 밖은 종전 그대로).
+    await assertKnowledgeInAppContext(input.name, ctx?.viewer ?? null, user, ctx, "knowledge_projects_v6");
+    return { projects: await projectsForKnowledge(input.name) };
+  },
 };
 
 // ── 작업(task/subtask) — :id 는 프로젝트. parent_task_id 주면 하위작업(subtask). ──
@@ -1164,6 +1230,7 @@ const taskCreateV6: Capability = {
       } }],
   },
   handler: async (input: TaskCreateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 부모가 안 보이면 그 밑에 태스크를 만들 수도 없다(#1291).
     //  ⚠ parentTaskId 를 먼저 본다 — createTask 는 그게 있으면 **그것만으로** 부모를 해소하고 projectId 는 무시한다.
@@ -1178,7 +1245,7 @@ const taskCreateV6: Capability = {
   },
 };
 
-const taskSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(STATUSES) };
+const taskSetStatusV6Input = { id: z.number().int().positive(), status: z.enum(STATUSES), reason: closeReason };
 type TaskSetStatusV6Input = z.infer<z.ZodObject<typeof taskSetStatusV6Input>>;
 const taskSetStatusV6: Capability = {
   name: "task_set_status_v6",
@@ -1191,12 +1258,12 @@ const taskSetStatusV6: Capability = {
     rest: [{ method: "POST", paths: ["/api/ui/v6/tasks/:id/status"],
       parse: (req) => {
         const b = (req.body ?? {}) as Record<string, unknown>;
-        return { id: parseId(req.params?.id), status: parseStatus(b.status) };
+        return { id: parseId(req.params?.id), status: parseStatus(b.status), reason: parseReason(b) };
       } }],
   },
   handler: async (input: TaskSetStatusV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
     await assertProjectVisible(input.id, ctx, "태스크");
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: input.reason ?? null };
     const task = await updateTaskStatus(input.id, input.status, writeCtx);
     const rootId = await rootProjectIdOfTaskNode(task);
     if (rootId) await regenAgents(rootId);  // 상태 변경 → AGENTS.md 태스크 인덱스 상태 갱신.
@@ -1224,6 +1291,7 @@ const taskUpdateV6Input = {
   due_date: z.string().nullable().optional(),
   // #1308 — 날짜가 움직였으면 depends_on 후행 체인도 같은 Δ 로 민다. 명시 opt-in(간트가 켠다).
   reschedule_dependents: z.boolean().optional(),
+  reason: closeReason,
 };
 type TaskUpdateV6Input = z.infer<z.ZodObject<typeof taskUpdateV6Input>>;
 const taskUpdateV6: Capability = {
@@ -1252,18 +1320,20 @@ const taskUpdateV6: Capability = {
         if ("start_date" in b) patch.start_date = parseDateOrNull(b.start_date);
         if ("due_date" in b) patch.due_date = parseDateOrNull(b.due_date);
         if (b.reschedule_dependents === true) patch.reschedule_dependents = true;
+        const reason = parseReason(b); if (reason) patch.reason = reason;
         return patch;
       } }],
   },
   handler: async (input: TaskUpdateV6Input, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input, new Set(["description_base"]));   // #4501
     await assertProjectVisible(input.id, ctx, "태스크");
-    const { id, reschedule_dependents, ...patch } = input;
+    const { id, reschedule_dependents, reason, ...patch } = input;
     // 본문은 교체(description)와 이어쓰기(append_description) 중 하나만 — 함께 오면 의도 모호(교체 후 append?)라 거부.
     if (patch.description !== undefined && patch.append_description !== undefined)
       throw new HttpError(400, "description(전체 교체)과 append_description(이어쓰기)은 함께 쓸 수 없습니다");
     if (patch.append_description !== undefined && !String(patch.append_description).trim())
       throw new HttpError(400, "append_description 는 비울 수 없습니다");
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web", reason: reason ?? null };
     // Δ 를 재려면 **바뀌기 전** 날짜가 필요하다 — updateTask 는 이전 행을 돌려주지 않는다(#1308).
     const before = reschedule_dependents ? await getNodeRow(id) : null;
     const task = await updateTask(id, patch, writeCtx);

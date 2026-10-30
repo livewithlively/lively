@@ -40,7 +40,7 @@ for (const k of kinds) ok(registered.has(k), `E1b data-ctx="${k}" 를 받는 reg
 // E2. 여섯 화면 전부에 표가 달렸다.
 ok(/'data-ctx-surface':\s*'home'/.test(src["web/v2/views.ts"]), "E2 홈 — 표면");
 ok(/'data-ctx':\s*'app'/.test(src["web/v2/views.ts"]), "E2 홈 — 최근 앱 타일");
-ok(/'data-ctx-surface':\s*'inbox'/.test(src["web/v2/views.ts"]) && /'data-ctx':\s*'session'/.test(src["web/v2/views.ts"]), "E2 확인할 것 — 표면 + 세션 행");
+ok(/'data-ctx-surface':\s*'inbox'/.test(src["web/v2/views.ts"]), "E2 확인할 것 — 표면(세션 행은 #4180 에서 걷었다 — 알림 이력만 그린다)");
 ok(/'data-ctx':\s*'noti'/.test(src["web/v2/notifications.ts"]), "E2 확인할 것 — 알림 행");
 ok(/'data-ctx':\s*'session'/.test(src["web/session-chat.ts"]) && /head\.dataset\.sid = t\.id/.test(src["web/session-chat.ts"]), "E2 AI 세션 — 머리줄(대상이 바뀌면 sid 도 바뀐다)");
 ok(/door\.dataset\.ctx = 'project'/.test(src["web/v2/panes.ts"]) && /bindCtxSurface\(wrap/.test(src["web/v2/panes.ts"]), "E2 프로젝트 — 문패 + 곁칸 표면");
@@ -49,7 +49,8 @@ ok(/'data-ctx':\s*'session'/.test(src["web/v2/side.ts"]) && /'data-ctx':\s*'inst
 ok(/'data-ctx':\s*'wikicat'/.test(src["web/v2/side.ts"]), "E2 위키 — 사이드바 분류");
 ok(/'data-ctx':\s*'wikidoc'/.test(src["web/wiki-side.ts"]) && /'wikidoc'/.test(src["web/wiki-table.ts"]) && /'data-ctx':\s*'wikipage'/.test(src["web/wiki-doc.ts"]), "E2 위키 — 트리 행·표 행·문서 본문");
 ok(/'data-ctx':\s*'pboard'/.test(src["web/projects/rows.ts"]) && /'data-ctx':\s*'ptask'/.test(src["web/projects/rows.ts"]), "E2 프로젝트 보드 — 프로젝트 행·작업 행");
-ok(/bindCtx\(para/.test(src["web/liv.ts"]) && /bindCtxSurface\(wrapEl/.test(src["web/liv.ts"]), "E2 리브 — 제안 문단 + 표면");
+//  (#4970) 리브 카드는 세 자리(세션 입력칸 위 · 곁칸 «리브» · 리브 화면)가 같이 쓰는 한 벌(web/liv-cards.ts)로 옮겼다 — 문단 메뉴는 거기, 표면은 리브 화면.
+ok(/bindCtx\(para/.test(src["web/liv-cards.ts"]) && /bindCtxSurface\(wrapEl/.test(src["web/liv.ts"]), "E2 리브 — 제안 문단 + 표면");
 ok(/bindCtx\(box/.test(src["web/chat-view.ts"]) && /bindCtx\(ask/.test(src["web/chat-view.ts"]), "E2 대화창 — AI 의 답 + 내 말");
 
 // E3. 곁칸 부품 — 지식·할 일·보관·미리보기·앱·웹·뷰어.

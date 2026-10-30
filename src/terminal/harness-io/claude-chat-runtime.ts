@@ -30,6 +30,7 @@ import { grokPromptLine } from "./grok-stream.js";
 import { perTurnTransport, stdioTransport, type ChatTransportConn } from "./chat-transport.js";
 import { ask, clearSessionTasks, emitSessionEvent, settleAll } from "./runtime-bus.js";
 import { askBridgeEnv } from "./ask-bridge.js";   // #2439 — 훅이 사람에게 되물어 오는 문
+import { CLAUDE_AI_CONNECTORS_OFF_ENV } from "../claude-ai-connectors-off.js";   // #4427 — 판(pane)의 claude 와 한 벌
 import type { SessionEvent } from "./session-event.js";
 
 /** 이 세션에서는 대화 런타임을 못 쓴다 — 호출자는 종전(send-keys) 경로로 폴백한다. */
@@ -55,6 +56,8 @@ export interface ClaudeChatOpts {
   /** 이어 열 대화(있으면 --resume). 없으면 새 대화. */
   convId?: string | null;
   model?: string | null;
+  /** #4427 — claude.ai 커넥터를 싣지 않는다(워크스페이스가 구성원 AI 계정 커넥터를 막았을 때). claude 에만 뜻이 있다. */
+  blockClaudeAiConnectors?: boolean;
   /** 테스트 seam — 프로세스를 갈아 끼운다(기본: 실제 spawn). */
   spawnFn?: (argv: string[], cwd: string) => ChildProcess;
 }
@@ -97,9 +100,21 @@ const live = new Map<string, Entry>();
  * (순수 — 테스트 seam) 이 하네스를 대화 런타임으로 띄울 argv. **표가 정본**이다(chat-adapters).
  *  여기 손으로 적으면 표와 갈리고, 갈리는 순간 «표엔 열린다는데 실제로는 다른 명령» 이 된다.
  */
-export function claudeChatArgv(o: { harness?: string; convId?: string | null; model?: string | null }): string[] {
-  const a = chatAdapter(o.harness ?? "claude");
-  return a?.argv ? a.argv(o) : [];
+export function claudeChatArgv(o: { harness?: string; convId?: string | null; model?: string | null; blockClaudeAiConnectors?: boolean }): string[] {
+  const harness = o.harness ?? "claude";
+  const a = chatAdapter(harness);
+  return chatArgvWithConnectorPolicy(harness, a?.argv ? a.argv(o) : [], o.blockClaudeAiConnectors);
+}
+
+/**
+ * (순수 — 테스트 seam) #4427 — 구성원 AI 계정(Claude) 커넥터를 막은 워크스페이스면 판(pane)의 claude 와 같은 값을 싣는다.
+ *  claude 에만 붙인다 — `--settings` 는 claude 의 플래그다(지금 표에서 argv 를 가진 하네스는 claude 하나지만, 다른 하네스가
+ *  표에 argv 를 얻는 날 그 하네스에 모르는 플래그가 붙어 즉사하지 않게). 대화 런타임은 표의 argv 에 --settings 가 없어 겹치지 않는다
+ *  (겹치면 머지되는지 미검증 — catalog.harnessSettingsArgv 머리말). 빈 argv(띄울 수 없음)는 그대로 둔다.
+ */
+export function chatArgvWithConnectorPolicy(harness: string, argv: string[], block: boolean | undefined): string[] {
+  if (!argv.length || harness !== "claude" || !block) return argv;
+  return [...argv, "--settings", JSON.stringify({ env: { ...CLAUDE_AI_CONNECTORS_OFF_ENV } })];
 }
 
 /**

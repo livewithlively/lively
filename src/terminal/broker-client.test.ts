@@ -15,7 +15,7 @@
 //  | T8  | start 가 업그레이드 대신 200                        | code 1 로 접힘 · 매달리지 않음                          |
 //  | T9  | timeoutMs 200 · 서버 무응답(create / 업그레이드 뒤 침묵) | 그 안에 code 1 로 끝남                             |
 //  | T10 | 배선 — 소스에 process.env · LIVELY_/LVLY_ 문자열 없음 | (정규식)                                              |
-//  #2600 T3-a(2026-09-14) — 허브 전송을 걷어 T2(허브 목록) 행을 함께 걷었다. 소켓 전송만 남는다.
+//  #2600 T3-a(2026-09-14) — 허브 전송을 걷어 T2(허브 목록)·T11(허브 세션 지목 #3708) 행을 함께 걷었다. 소켓 전송만 남는다.
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
@@ -89,9 +89,16 @@ async function startFake(): Promise<Fake> {
   server.on("connection", (s) => { sockets.add(s); s.on("close", () => sockets.delete(s)); });
   server.on("upgrade", async (req, sock, head) => {
     //  본문(Content-Length)은 head 로 같이 올 수 있다 — 브로커처럼 길이만큼 걷어낸 뒤 프레임을 쓴다(여기선 기록만).
+    //  ⚠ head 밖의 본문이 **어디로 오는지는 node 판마다 다르다** — 22 는 소켓으로, 26 은 req 로 준다(#3542).
+    //   소켓만 기다리면 26 에서 101 을 영영 못 쓰고 클라이언트가 타임아웃으로 끝난다(맥 로컬에서 T3~T9' 가 15초씩 죽던 원인). 둘 다 받는다.
     const want = Number(req.headers["content-length"] ?? 0);
-    let got = head;
-    while (got.length < want) { const d = await new Promise<Buffer | null>((r) => sock.once("data", r)); if (!d) break; got = Buffer.concat([got, d]); }
+    const got = await new Promise<Buffer>((resolve) => {
+      let buf = head;
+      if (buf.length >= want) { resolve(buf); return; }
+      const done = (): void => { sock.off("data", take); req.off("data", take); sock.off("close", done); resolve(buf); };
+      const take = (d: Buffer): void => { buf = Buffer.concat([buf, d]); if (buf.length >= want) done(); };
+      sock.on("data", take); req.on("data", take); sock.once("close", done);
+    });
     fake.log.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body: got.subarray(0, want).toString("utf8") });
     if (fake.hang) return;
     sock.on("error", () => undefined);
@@ -134,6 +141,46 @@ test("[T1] 소켓 전송 — listSessions 가 observed·sessions 를 그대로 �
     const c2 = makeBrokerClient(sockT(f));
     (f as { sessions: unknown }).sessions = "not json obj";
     await assert.rejects(c2.listSessions(), /sessions 배열이 없다/);
+  } finally { await f.close(); }
+});
+
+// ── T1b 목록 범위(#3797 T7) ───────────────────────────────────────────────────
+//  세션 호스트는 **자기 노드 것만** 보고해야 한다. 브로커의 `GET /lvly/sessions` 는 기본이 클러스터
+//   전역이고(다른 산 노드로 팬아웃 — #3689), 범위 헤더 `x-lvly-list-scope: node` 가 그걸 «이 노드 것만»
+//   으로 좁힌다(lvly-cloud sessionroute.LIST_SCOPE_HEADER / isNodeScoped 와 같은 이름·같은 값).
+//  ⚠ 값이 조금이라도 다르면 브로커의 `isNodeScoped` 가 거짓이 되어 **조용히 전역으로 되돌아간다** —
+//   그래서 여기서 헤더의 이름과 값을 문자열로 못박는다.
+test("[T1b] ★★ listScope:'node' 면 목록 요청에 `x-lvly-list-scope: node` 를 싣는다", async () => {
+  const f = await startFake();
+  try {
+    f.sessions = { observed: true, node: "n1", sessions: [] };
+    const c = makeBrokerClient(sockT(f), { listScope: "node" });
+    await c.listSessions();
+    assert.equal(f.log[0]!.headers["x-lvly-list-scope"], "node",
+      "🔴 범위 헤더가 없다/틀리다 — 세션 호스트가 클러스터 전역 목록을 자기 것이라 주장한다");
+  } finally { await f.close(); }
+});
+
+test("[T1c] ★ 기본(미지정)은 종전 그대로 — 범위 헤더를 안 싣는다(게이트웨이 무회귀)", async () => {
+  const f = await startFake();
+  try {
+    f.sessions = { observed: true, node: "n1", sessions: [] };
+    await makeBrokerClient(sockT(f)).listSessions();
+    assert.equal(f.log[0]!.headers["x-lvly-list-scope"], undefined,
+      "🔴 게이트웨이 요청까지 노드 범위로 좁혔다 — 다른 노드 세션이 목록에서 사라진다");
+  } finally { await f.close(); }
+});
+
+test("[T1d] ★ 범위 헤더는 **목록에만** — exec 요청에는 안 붙는다(브로커 라우팅은 세션 축이다)", async () => {
+  //  거기 실으면 «그 세션이 다른 노드에 있을 때» 를 우리가 모르게 막는다. 404(컨테이너 없음)로 한 왕복만
+  //   태워 재빨리 잰다 — 이 시험이 보는 것은 답이 아니라 **헤더**다.
+  const f = await startFake();
+  try {
+    f.onCreate = (res) => { res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ message: "No such container" })); };
+    const c = makeBrokerClient(sockT(f), { listScope: "node" });
+    const out = await c.execCapture("lvly-s-acme-box-a-11111111", ["tmux", "-V"]);
+    assert.equal(out.gone, true, "404 는 gone 규약이다(전제가 성립하는지부터 본다)");
+    assert.deepEqual(f.log.map((l) => l.headers["x-lvly-list-scope"]), [undefined], "🔴 exec 요청에 목록 범위 헤더가 실렸다");
   } finally { await f.close(); }
 });
 
@@ -308,9 +355,9 @@ test("[T10] 배선 — 구현 소스에 process.env 가 없고 LIVELY_/LVLY_ 문
   assert.doesNotMatch(src, /process\s*\.\s*env/, "🔴 broker-client 가 환경변수를 읽는다 — exec-topology 만 읽는다");
   assert.doesNotMatch(src, /\bLIVELY_[A-Z_]+/, "🔴 코어 env 이름이 박혀 있다");
   assert.doesNotMatch(src, /\bLVLY_[A-Z_]+/, "🔴 매니지드 env 이름이 박혀 있다");
-  //  #2600 T3-a — 허브 전송(HMAC 토큰·`/t/<slug>` 접두)을 걷었다. 되살아나면 코어가 다시 허브를 부른다.
+  //  #2600 T3-a — 허브 전송(HMAC 토큰·`/t/<slug>` 접두·세션 지목 헤더)을 걷었다. 되살아나면 코어가 다시 허브를 부른다.
   assert.doesNotMatch(src, /createHmac|x-lvly-channel-auth|kind:\s*"hub"/, "🔴 걷힌 허브 전송이 broker-client 에 되살아났다");
-  //  런타임 import 는 node 내장 하나뿐 · 코어 다른 모듈은 tmux-route 의 **타입만**.
+  //  런타임 import 는 node 내장 둘뿐 · 코어 다른 모듈은 tmux-route 의 **타입만**.
   const imports = [...src.matchAll(/^import\s+(type\s+)?.*?from\s+"([^"]+)"/gm)].map((m) => ({ typeOnly: !!m[1], from: m[2]! }));
   assert.deepEqual(imports.filter((i) => !i.typeOnly).map((i) => i.from).sort(), ["node:http"], "🔴 런타임 의존이 node 내장 밖으로 나갔다");
   if (isTs) assert.deepEqual(imports.filter((i) => i.typeOnly).map((i) => i.from), ["./tmux-route.js"]);

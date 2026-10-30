@@ -6,7 +6,7 @@
 //  둘 다 «띄웠다» 는 신호는 정상이었다. 그래서 그 두 자리를 계약으로 못박는다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { loginStartSh, ensureHarnessSeat, touchHarnessSeat, SEAT_RECHECK_MS, SEAT_TOUCH_MS } from "./ai-login-run.js";
+import { loginStartSh, ensureHarnessSeat, touchHarnessSeat, SEAT_RECHECK_MS, SEAT_TOUCH_MS, loginSlotKey, loginEnvFor } from "./ai-login-run.js";
 import { installTenantSlugResolver } from "./catalog.js";
 import type { LivelyUser } from "../context.js";
 import { aiLoginArgv, EXIT_MARK } from "./ai-login-flow.js";
@@ -207,6 +207,72 @@ t("★ 러너가 pid 를 남기고, 끝나면 지운다 — 남으면 영영 «�
   assert.equal(created.length, 4, "S7 도장은 자리를 만들지 않는다");
   pass++; console.log("ok  S7 사람 조작 도장은 기억한 자리에만 1분 간격으로 찍는다");
   installTenantSlugResolver(() => null);
+}
+
+// ── #4970 비격리 셀프호스트 — 로그인 자리를 사람마다 · claude 는 그 사람 프로필 폴더에 (설계 지식 onboarding-single-flow-connect-in-own-ai-4970 §16 · 표 = 아래 E 행) ─────────────
+//  실측(위시스트, 2026-10-23): 비격리 박스에서 화면 안 claude 로그인은 게이트웨이 홈의 공용 ~/.claude 에 자격을 떨궜고, 연결 확인은
+//  그 사람 프로필 폴더(~/.lively/profiles/<사람>/claude)를 본다 → 로그인을 끝내도 «확인하는 중» 이 끝나지 않는다. 자리도 모두 «solo» 하나였다.
+{
+  const who = (id: string): LivelyUser => ({ userId: id, email: "", scopes: [], projects: [] }) as unknown as LivelyUser;
+  const base = { harness: "claude" as const, profileDir: "/home/lively/.lively/profiles/a/claude", platform: "linux" };
+
+  t("E1 OS 사용자가 있으면 자리 열쇠는 그 사용자 — 종전 슬롯 이름 그대로", () => {
+    assert.equal(loginSlotKey("box_x", who("a")), "box_x");
+    assert.equal(loginSlotKey("box_x", null), "box_x");
+  });
+  t("E2·E3 비격리 — 사람마다 다른 자리 · 사람을 모르면 종전 «solo»", () => {
+    assert.notEqual(loginSlotKey(null, who("a")), loginSlotKey(null, who("b")), "★ 두 사람이 한 자리를 쓴다 — 서로의 코드를 덮는다");
+    assert.equal(loginSlotKey(null, null), "solo");
+    assert.equal(loginSlotKey(null, undefined), "solo");
+  });
+  t("E4 비격리 · claude · 리눅스 · 멀티프로필 — 그 사람 프로필 폴더를 CLAUDE_CONFIG_DIR 로", () => {
+    assert.deepEqual(loginEnvFor({ osUser: null, ...base, multiprofile: undefined }), { CLAUDE_CONFIG_DIR: base.profileDir });
+    const sh = loginStartSh({ home: "/home/lively", slotName: "s", argv: aiLoginArgv("claude"), env: { CLAUDE_CONFIG_DIR: base.profileDir } });
+    const ex = sh.indexOf(`export CLAUDE_CONFIG_DIR='${base.profileDir}'`), nh = sh.indexOf("nohup node");
+    assert.ok(ex > 0 && ex < nh, "★ 러너보다 먼저 export 해야 claude 가 그 폴더에 쓴다");
+    assert.match(sh.match(/mkdir -p ([^\n]*)/)![1]!, new RegExp(`'${base.profileDir}'`), "그 폴더를 먼저 만든다");
+  });
+  t("E5 격리·중계(OS 사용자 있음)는 손대지 않는다 — 그 홈의 ~/.claude 가 곧 자기 것", () => {
+    assert.deepEqual(loginEnvFor({ osUser: "box_a", ...base, multiprofile: undefined }), {});
+  });
+  t("E6 codex·grok 은 손대지 않는다", () => {
+    assert.deepEqual(loginEnvFor({ osUser: null, ...base, harness: "codex", multiprofile: undefined }), {});
+    assert.deepEqual(loginEnvFor({ osUser: null, ...base, harness: "grok", multiprofile: undefined }), {});
+  });
+  t("E7·E8 맥(키체인) · 멀티프로필을 끈 배포 · 프로필 폴더 모름은 손대지 않는다", () => {
+    assert.deepEqual(loginEnvFor({ osUser: null, ...base, platform: "darwin", multiprofile: undefined }), {});
+    assert.deepEqual(loginEnvFor({ osUser: null, ...base, multiprofile: "0" }), {});
+    assert.deepEqual(loginEnvFor({ osUser: null, ...base, profileDir: null, multiprofile: undefined }), {});
+  });
+  t("E9 값은 감싸고, 환경 변수 꼴이 아닌 이름은 버린다", () => {
+    const sh = loginStartSh({ home: "/h", slotName: "s", argv: aiLoginArgv("claude"), env: { CLAUDE_CONFIG_DIR: "/p/it's here", "bad-key": "x" } });
+    assert.ok(sh.includes(`export CLAUDE_CONFIG_DIR='/p/it'\\''s here'`), "따옴표를 안 감쌌다");
+    assert.ok(!sh.includes("bad-key"), "이상한 이름을 셸에 넣었다");
+  });
+  t("E10 환경이 없으면 셸이 종전과 한 글자도 같다", () => {
+    const a = loginStartSh({ home: "/home/box_x", slotName: "s", argv: aiLoginArgv("claude") });
+    const b = loginStartSh({ home: "/home/box_x", slotName: "s", argv: aiLoginArgv("claude"), env: {} });
+    assert.equal(b, a);
+    assert.ok(!a.includes("export "), "환경이 없는데 export 를 쓴다");
+  });
+  t("E11 읽기·붙여넣기·정리는 사람을 필수로 받는다 — 빠뜨린 호출이 컴파일되면 비격리에서 옛 공용 자리를 읽는다(격리 리뷰 N4)", () => {
+    const src = readFileSync(new URL("./ai-login-run.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+    for (const sig of [
+      /export async function readAiLogin\(osUser: string \| null, h: AiLoginHarness, user: LivelyUser \| null\)/,
+      /export async function pasteAiLogin\(osUser: string \| null, h: AiLoginHarness, code: string, user: LivelyUser \| null\)/,
+      /export async function cancelAiLogin\(osUser: string \| null, h: AiLoginHarness, user: LivelyUser \| null\)/,
+    ]) assert.match(src, sig, `사람이 선택 인자다 — ${sig.source.slice(22, 40)}`);
+  });
+  t("E 배선 — 띄우기·읽기·붙여넣기·정리가 같은 자리 열쇠를 쓰고, 띄우기가 환경을 싣고, 라우트가 사람을 넘긴다", () => {
+    const src = readFileSync(new URL("./ai-login-run.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+    const code = src.split("\n").filter((l: string) => !l.trim().startsWith("//") && !l.trim().startsWith("*")).join("\n");
+    assert.equal((code.match(/slot\(loginSlotKey\(osUser, user\), h\)/g) || []).length, 4, "네 갈래가 같은 열쇠를 안 쓴다");
+    assert.match(code, /const env = await loginEnvForUser\(osUser, h, user \?\? null\);[\s\S]*?loginStartSh\(\{[^}]*env \}\)/, "띄우기가 환경을 안 싣는다");
+    const routes = readFileSync(new URL("./routes.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+    assert.match(routes, /readAiLogin\(seat, h, userOf\(req\)\)/, "상태 조회가 사람을 안 넘긴다 — 남의 자리를 읽는다");
+    assert.match(routes, /pasteAiLogin\(await loginSeat\(req\), h, code, userOf\(req\)\)/, "붙여넣기가 사람을 안 넘긴다");
+    assert.equal((routes.match(/cancelAiLogin\((?:seat|await loginSeat\(req\)), h, userOf\(req\)\)/g) || []).length, 2, "정리가 사람을 안 넘긴다");
+  });
 }
 
 console.log(`\n${pass} passed`);

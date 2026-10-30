@@ -13,9 +13,11 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { HttpError } from "../http-error.js";
-import { parseAppManifest, assertInstallableManifest, appAssetId, type LivelyAppManifest } from "./manifest.js";
+import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, type LivelyAppManifest, isPackageRelPath } from "./manifest.js";
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
+import { assertAppMcpToolsInstallable } from "./app-mcp-decl.js";
 import { hashAppPackage } from "./package-hash.js";
+import { AI_INSTRUCTIONS_MAX_BYTES, instructionsText } from "./app-job-instructions.js";
 import type { DeployItem } from "./install.js";
 
 export interface LoadedUiAsset { page_key: string; kind: "page" | "widget"; title: string; entry: string; html: string }
@@ -44,6 +46,8 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   try {
     manifest = parseAppManifest(JSON.parse(await readFile(manifestPath, "utf8")));
     assertInstallableManifest(manifest); // 설치 경로에서만 — 재파싱(grant)은 버전 불문(롤백 안전)
+    //  #5050 앱이 선언한 MCP 도구 — 뜻 검사(모르는 칸 · 실행기 · 이름 · 입력 스키마)도 설치 · 판 저장 경로에서만(재파싱은 틀린 항목만 건너뛴다).
+    await assertAppMcpToolsInstallable(manifest);
   } catch (e) {
     if ((e as { code?: string }).code === "ENOENT") throw new HttpError(400, "lively-app.json 이 없습니다");
     if (e instanceof HttpError) throw e;
@@ -55,6 +59,8 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   // runtime.entry 는 실행 시점이 아니라 설치 시점에 패키지 안의 실제 파일로 확정한다.
   // 스테이지가 사라진 뒤에야 "파일 없음"을 발견하면 active 앱이 실행 불능이 되므로 앞에서 거부한다.
   const runtimeAsset = await readRuntimeEntry(manifest, root);
+  //  #5082 작업별 지시 파일(ai.instructions)도 같은 까닭으로 여기서 확정한다 — 작업을 띄울 때 «파일 없음» 을 처음 알면 그 작업이 실패로 끝난다.
+  await checkAiInstructions(manifest, root);
 
   // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
   const declared = planDeclaredComponents(manifest);
@@ -67,6 +73,7 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   for (const asset of await scanHarnessAssets(manifest, pluginRoot)) items.push(asset);
 
   // 3) UI entry HTML 보존 — ui.pages/widgets 의 entry 파일을 읽어 담는다(소스 무관 서빙 대비, PR5).
+  await checkWebRoot(manifest, root);
   const uiAssets = await readUiAssets(manifest, root);
 
   return { manifest, contentHash, items, uiAssets, runtimeAsset };
@@ -90,7 +97,48 @@ async function readRuntimeEntry(m: LivelyAppManifest, root: string): Promise<Loa
   return { entry: m.runtime.entry, code, code_hash: createHash("sha256").update(code).digest("hex") };
 }
 
+/**
+ * #5082 작업별 지시 파일 — 선언한 작업 이름(ai.jobs)만 · 묶음 안 상대 경로만 · 패키지 안의 파일 · 상한 이하 · 비지 않은 UTF-8 글.
+ *  뜻은 여기(설치 · 판 저장)서만 본다 — parseAppManifest 는 모양만 본다(저장된 매니페스트를 다시 읽는 자리를 막지 않게 · manifest.ts aiSchema 머리말).
+ */
+async function checkAiInstructions(m: LivelyAppManifest, root: string): Promise<void> {
+  const names = new Set((m.ai?.jobs ?? []).map((j) => j.name));
+  for (const [job, rel] of Object.entries(m.ai?.instructions ?? {})) {
+    const where = `ai.instructions.${job}`;
+    if (!names.has(job)) throw new HttpError(400, `매니페스트 오류 [${where}]: ai.jobs 에 선언한 작업 이름이 아닙니다`);
+    if (rel.length > 512 || !isPackageRelPath(rel)) throw new HttpError(400, `매니페스트 오류 [${where}]: 앱 묶음 안 상대 경로여야 합니다(예: ai/${job}.md)`);
+    const abs = path.resolve(root, rel);
+    if (!abs.startsWith(root + path.sep)) throw new HttpError(400, `${where} 가 패키지 밖을 가리킵니다: ${rel}`);
+    let st;
+    try { st = await stat(abs); } catch { throw new HttpError(400, `${where} 의 지시 파일이 없습니다: ${rel}`); }
+    if (!st.isFile()) throw new HttpError(400, `${where} 가 파일이 아닙니다: ${rel}`);
+    if (st.size > AI_INSTRUCTIONS_MAX_BYTES) throw new HttpError(400, `${where} 의 지시 파일이 너무 큽니다(${rel}, ${st.size}B > ${AI_INSTRUCTIONS_MAX_BYTES}B)`);
+    const text = instructionsText(await readFile(abs));
+    if (text === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글(NUL 없이)이 아닙니다: ${rel}`);
+    //  빈 지시는 «지시를 실었다» 가 아니다 — 비어도 선언이 있으면 작업 폴더 지시를 안 읽는 쪽으로 돌지만 단발엔 아무것도 안 실려 두 길이 갈린다(격리 리뷰 N1).
+    if (!text.trim()) throw new HttpError(400, `${where} 의 지시 파일이 비어 있습니다: ${rel}`);
+  }
+}
+
 const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가정 — 초과는 거부).
+
+/**
+ * #4481 여러 파일 앱의 화면 폴더(web.root) — 패키지 안의 폴더여야 하고, 화면 entry 는 전부 그 폴더 안이어야 한다(앱 주소가 그 폴더를 맨 앞(/)으로 낸다).
+ *  없으면(v1 앱) 아무것도 안 본다.
+ */
+async function checkWebRoot(m: LivelyAppManifest, root: string): Promise<void> {
+  if (m.web?.root === undefined) return;
+  const rel = webRootOf(m);
+  if (rel === null) throw new HttpError(400, `매니페스트 오류 [web.root]: 패키지 안의 상대 폴더여야 합니다(예: "dist" · 맨 위면 ".") — 받은 값: ${m.web.root}`);
+  const abs = path.resolve(root, rel);
+  let st;
+  try { st = await stat(abs); } catch { throw new HttpError(400, `web.root 폴더가 없습니다: ${m.web.root} — 빌드한 뒤(예: npm run build) 저장하세요`); }
+  if (!st.isDirectory()) throw new HttpError(400, `web.root 가 폴더가 아닙니다: ${m.web.root}`);
+  for (const e of [...m.ui.pages, ...m.ui.widgets]) {
+    const ea = path.resolve(root, e.entry);
+    if (abs !== root && !ea.startsWith(abs + path.sep)) throw new HttpError(400, `화면 entry '${e.entry}' 가 web.root('${m.web.root}') 밖에 있습니다 — entry 는 그 폴더 안이어야 합니다`);
+  }
+}
 
 // ui.pages/widgets 의 entry 파일을 읽는다. entry 는 패키지 밖을 가리킬 수 없고(경로탈출 거부), 파일이어야 하며 상한 이하.
 async function readUiAssets(m: LivelyAppManifest, root: string): Promise<LoadedUiAsset[]> {

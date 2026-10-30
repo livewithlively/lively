@@ -11,6 +11,7 @@
 //  | L2 | spawnTaskSession — 성공               | 리스 env 에 토큰                      | tmux 가 받은 명령줄에 토큰이 없다(근본)          |
 //  | L3 | spawnTaskSession — 성공               | 리스 env 에 토큰                      | 작업 폴더의 0600 파일 하나로만 간다              |
 //  | L4 | spawnTaskSession — 실패               | 리스 env 에 토큰                      | 실패 뒤 자격 파일이 남지 않는다                  |
+//  | L5 | noteAssignFailure(저장 직전)          | 구 노드가 돌려준 원문(토큰 포함)      | 저장값에 토큰이 없다                             |
 //  | L6 | markFinished(저장 직전)               | 옛 행에서 옮겨 온 last_assign·error   | 저장값에 토큰이 없다                             |
 //  | L7 | spawnTaskSession — 리스 없음/빈 리스  | env 없음 · {}                         | 자격 파일 0개, 스폰은 성공                       |
 //  | L8 | spawnTaskSession — 규칙 밖 이름       | `bad-key` · 소문자                    | 파일로도 명령줄로도 안 간다(종전처럼 버린다)     |
@@ -98,7 +99,7 @@ if (process.platform === "win32") {
   delete process.env.LIVELY_GATEWAY_URL;
 
   const { spawnTaskSession } = await import("./tasks.js");
-  const { markFinished } = await import("./task-store.js");   // stage 판 — noteAssignFailure(#3994 T5)는 아직 main 에만 있다
+  const { noteAssignFailure, markFinished } = await import("./task-store.js");
   const { itemsPool } = await import("../db/client.js");
 
   const base = { user: { userId: "t4422-probe" }, rootKey: "shared", subpath: "", prompt: "ping", harness: "claude" };
@@ -207,6 +208,14 @@ if (process.platform === "win32") {
     };
     //  구 노드가 돌려주는 원문 모양 그대로 — Node execFile 의 "Command failed: <argv>" + stderr.
     const RAW = `Command failed: psmux new-session -d -s box-x -e LANG=C.UTF-8 -e CLAUDE_CODE_OAUTH_TOKEN=${TOKEN} -c C:\\w sh -lc x\npsmux: create session failed`;
+    await t("L5 noteAssignFailure 는 저장 직전에 토큰을 가린다", async () => {
+      writes.length = 0;
+      await noteAssignFailure(1, "spawn_error", RAW);
+      assert.equal(writes.length, 1, "관측 장치 — 저장이 한 번 일어나야 한다");
+      const stored = JSON.stringify(writes[0]);
+      assert.ok(!stored.includes(TOKEN), "last_assign.reason 에 토큰이 평문으로 저장됐다");
+      assert.ok(stored.includes("psmux: create session failed"), "원인 문장은 남는다");
+    });
     await t("L6 markFinished 는 옮겨 온 last_assign·실패 문장에서도 토큰을 가린다", async () => {
       writes.length = 0;
       await markFinished(2, false, { reason: "no_capacity_timeout", last_assign: { code: "spawn_error", reason: RAW } }, `대기 시간 초과(10분) — ${RAW}`);
@@ -248,9 +257,9 @@ if (process.platform === "win32") {
 
     if (failed.length) {
       process.exitCode = 1;
-      console.log(`✗ task-secret-leak — ${pass}/11 통과, 실패: ${failed.map((f) => f.split(" ")[0]).join(", ")}`);
+      console.log(`✗ task-secret-leak — ${pass}/12 통과, 실패: ${failed.map((f) => f.split(" ")[0]).join(", ")}`);
     } else {
-      console.log(`✓ task-secret-leak — ${pass}/11 (리스 값이 명령줄·오류·저장값에 평문으로 남지 않는다)`);
+      console.log(`✓ task-secret-leak — ${pass}/12 (리스 값이 명령줄·오류·저장값에 평문으로 남지 않는다)`);
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

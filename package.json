@@ -10,7 +10,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-web.mjs && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs && node scripts/stamp-assets.mjs",
+    "build": "node --max-old-space-size=1600 node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/build-web.mjs && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs && node scripts/stamp-assets.mjs",
     "build:web": "node scripts/build-web.mjs",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
@@ -27,7 +27,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.19.0",
     "aws-ssl-profiles": "^1.1.2",
+    "compression": "^1.8.2",
     "express": "^4.19.2",
+    "libpg-query": "18.1.4",
     "mysql2": "^3.22.6",
     "node-pty": "1.2.0-beta.14",
     "node-sql-parser": "^5.3.0",
@@ -39,10 +41,12 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.9.0",
     "@types/pg": "^8.11.10",
     "@types/ws": "^8.18.1",
+    "drizzle-orm": "0.45.3",
     "esbuild": "^0.28.0",
     "mermaid": "11.17.2",
     "tsx": "^4.19.2",

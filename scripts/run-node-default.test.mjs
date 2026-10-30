@@ -256,8 +256,8 @@ for (const [f, why] of [["web/v2/views.ts", "홈"], ["web/v2/panes-parts.ts", "�
   eq(label([me], "central"), "중앙 컴퓨터", "K1f 중앙 줄");
   eq(label([me], "mac"), "🖥 Macbookui-MacBookAir.local", "K1g 켜진 노드는 이름만");
   eq(label([shared], "team"), "🖥 team-box (공유)", "K1h 공유 노드는 (공유)");
-  eq(label([off], "old"), "🖥 old-pc — 지금 꺼짐", "K1i 꺼진 노드는 그렇다고 적는다");
-  eq(label([noai], "sh"), "🖥 shell-box — AI 를 못 찾음", "K1j AI 를 못 띄우는 노드는 «못 찾음»(단정하지 않는다)");
+  eq(label([off], "old"), "🖥 old-pc (지금 꺼짐)", "K1i 꺼진 노드는 그렇다고 적는다");
+  eq(label([noai], "sh"), "🖥 shell-box (AI를 못 찾음)", "K1j AI 를 못 띄우는 노드는 «못 찾음»(단정하지 않는다)");
   eq(offOf([me], "mac"), false, "K2a 켜진 노드는 고를 수 있다");
   eq(offOf([off], "old"), true, "K2b 꺼진 노드는 잠근다 — 줄은 «지금 값» 이라 고른 곳과 열리는 곳이 달라지면 안 된다");
   eq(offOf([noai], "sh"), true, "K2c AI 를 못 띄우는 노드도 잠근다");

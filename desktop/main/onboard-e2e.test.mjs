@@ -31,7 +31,8 @@ if (!WIN) {
 // POSIX 에선 억제를 **끄고** 돌린다 — 그래야 ⑫ 의 '0건' 이 "억제 덕분" 이 아니라 "앱이 몰 때 CLI 는 안 연다"는
 //  증거가 된다(러너·CI 가 걸어 둔 값을 상속하지 않도록 명시적으로 비운다). 혹시 열어도 스텁이 받아 실 탭은 없다.
 //  윈도우는 cmd.exe 를 안 가로채므로 실기기 보호를 우선해 억제를 유지한다(그쪽 판정은 ⑫ 를 건너뛴다).
-const BROWSER_ENV = WIN ? noBrowserEnv() : { LIVELY_NO_BROWSER: "", CI: "" };
+// LIVELY_WSL=0 — WSL 개발 기기에선 CLI 가 윈도우 브라우저(rundll32.exe)로 열어 PATH 스텁이 못 가로챈다(#5041) → «리눅스» 로 고정.
+const BROWSER_ENV = WIN ? noBrowserEnv() : { LIVELY_NO_BROWSER: "", CI: "", LIVELY_WSL: "0" };
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };

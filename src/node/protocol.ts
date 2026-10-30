@@ -81,6 +81,16 @@ export interface HelloMsg {
   keepAwake?: KeepAwakeStatus;
 }
 export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
+/**
+ * 내용 없는 박동 — «봤는데 지난번 그대로다» (#2600 T2 d6).
+ *
+ * 스냅샷을 다시 실어 보낼 이유는 없지만, **관측했다는 사실**은 게이트웨이가 알아야 한다. 목록 소유 판정이
+ *  스냅샷의 나이를 보기 때문이다(`self-node.sessionHostVerdict` · `registry.STATE_STALE_MS` 12초).
+ *  판정 규율과 실측은 `state-freshness.ts` 머리말 — 그 침묵 때문에 한가한 테넌트에서 소유가 영영 안 넘어갔다.
+ *
+ * ⚠ **못 봤을 때는 보내지 않는다.** 박동은 관측의 결과이지 «살아 있다» 의 표시가 아니다(그건 WS ping 의 몫).
+ */
+export interface BeatMsg { t: "beat" }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }
 export interface OpenedMsg { t: "opened"; chan: number }
 export interface OpenFailMsg { t: "openfail"; chan: number; code: number; reason: string }
@@ -141,9 +151,23 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //   이 op 로 노드가 자기 자리에서 런타임을 돌리고, 그 사건을 chatEvent 로 게이트웨이에 올린다.
 //  chatAnswer = 그 런타임에 걸린 물음(승인·선택지)에 사람의 답을 돌려준다. chatSend 의 짝이다.
 //   ⚠ 둘이 갈리면 «카드는 뜨는데 눌러도 아무 데도 안 가는» 상태가 된다 — 같이 선언한다.
+//  outboxStep = 아웃박스(첫 지시·대화 입력 배달)의 **한 걸음** — 보기(peek)·누르기(keys)·치기(type) (#2600 T2 d6 · #3773).
+//   준비 판정은 게이트웨이가 이 걸음이 돌려준 화면으로 하고, 그 세션의 호스트는 실행만 한다(terminal/outbox-host-step 머리말).
+//   sendKeys 와 달리 실패도 **값으로** 답한다 — «한 글자도 안 쳤다» 가 오류 문자열로 뭉개지면 게이트웨이가 다시 쳐도 되는지 모른다.
+//   선언하지 않은 호스트엔 보내지 않는다(nodeRpc 관문 · sessionHostFor 의 unsupported) — 그 세션은 게이트웨이 경로에 남는다.
 //  chatTranscript = 노드 하네스가 로컬에 남긴 대화 기록을 제한 바이트 청크로 읽는다(#3982·#3870).
 //   임의 경로를 받지 않고 threadId만 받으며, 게이트웨이가 세션 매핑·인가·공통 ChatLine 파싱을 맡는다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript"] as const;
+//  sessionTokens(#4135) = 이미 떠 있는 세션에 게이트웨이가 나중에 구운 훅·MCP 토큰을 파일로 심는다(session-ops → session-token-file).
+//   선언하지 않은 노드(옛 번들)엔 보내지 않는다 — 그 노드의 살아 있는 세션은 번들이 갱신될 때까지 종전 신원으로 남는다.
+//  forkSession(#4135) = 세션 복제 — **그 대화를 아는 새 세션**을 띄운다(input.fork = 원래 세션의 하네스 대화 id). 하는 일은 create 와
+//   같은데 op 를 따로 둔 이유는 하나다: input.fork 를 모르는 옛 번들이 `create` 로 받으면 그 필드를 **조용히 무시하고 빈 새 대화**를
+//   연다 — 사람은 «복제했다» 는 답을 받았는데 아무것도 모르는 세션 앞에 앉는다. op 가 따로면 선언하지 않은 노드엔 아예 안 보낸다
+//   (게이트웨이가 «그 컴퓨터는 아직 복제를 모른다» 고 말한다 — session-fork.ts forkRefusal).
+//  stopStep(#5043) = 원격 PC 하네스 종료 규칙의 **한 걸음** — 그 PC 의 tmux·프로세스·대화 파일로만 답할 수 있는 재료를 준다:
+//   화면(색 포함 캡처) · 키 하나(질문 탭 넘기기) · 하네스가 띄운 작업 판정 · 그 PC 터미널에서 직접 붙은 클라이언트 · 한도 자동 이어감 대기 ·
+//   안 본 결과. 판정·정책은 게이트웨이가 하고(sessions/node-stop-rule.ts) 노드는 실행만 한다(F7). 선언하지 않은 옛 번들 노드엔 보내지 않는다 —
+//   그 노드의 세션은 이 규칙에서 빠진다(종전 그대로 아무도 안 끈다).
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "markSeen", "sendKeys", "setProject", "createAppSession", "stageWorkerChunk", "startWorker", "workerStatus", "stopWorker", "injectFirstPrompt", "chatSend", "chatAnswer", "chatTranscript", "outboxStep", "sessionTokens", "forkSession", "stopStep"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;
@@ -207,7 +231,7 @@ export function selfUpdateBlockedForever(code: string | null | undefined): boole
   return code === "EACCES" || code === "EPERM" || code === "EROFS";
 }
 
-export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg | ChatEventMsg;
+export type NodeToGwMsg = HelloMsg | StateMsg | BeatMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg | WorkerStateMsg | ChatEventMsg;
 export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {

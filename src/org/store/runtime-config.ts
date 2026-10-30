@@ -1,6 +1,7 @@
 // org_runtime_config — 런타임 설정 단일행(훅 on/off·화이트리스트·정책 seam 들).
 //  (#1313 R18) 구 org/store.ts 에서 verbatim 분리. ⚠ #688 '원본 재조회' 분기·정책 seam import 는 그대로(단순화 금지).
 import { itemsPool } from "../../db/client.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";   // #4051 — 조건부 UPDATE 를 이 워크스페이스 행으로 못박는다
 import { readOidcSettings, mergeOidcSettings, type OidcSettings, type OidcSettingsPatch } from "../../auth/oidc-config.js"; // #1520 외부 IdP 로그인 설정 seam
 // 임베딩(벡터검색 #172) config seam — embedding_config 정규화/병합(env 시드 + DB 우선). 무순환(provider 모듈은 store 미import).
 import {
@@ -35,12 +36,28 @@ import {
   type DelegatePolicy, type DelegatePolicyPatch, resolveDelegatePolicy, normalizeDelegatePolicy,
   delegatePolicySource, invalidateDelegatePolicyCache,
 } from "../policies/delegate-policy.js";
+// 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 누구 자격으로 돌리나. 같은 seam(DB 우선, 비면 env 시드).
+import {
+  type ContextJobPolicy, type ContextJobPolicyPatch, resolveContextJobPolicy, normalizeContextJobPolicy,
+  contextJobPolicySource,
+} from "../policies/context-job-policy.js";
 import { audit } from "./audit.js";
+// 수집 실행 세션 크기(#4213 T11) — «한 칸 전용 입구»(아래 getCollectSessionPolicy · setCollectSessionPolicy). 큰 SELECT 에 섞지 않는다.
+import {
+  type CollectSessionPolicy, type CollectSessionPolicyPatch, resolveCollectSessionPolicy, normalizeCollectSessionPolicy,
+  collectSessionPolicySource, invalidateCollectSessionPolicyCache,
+} from "../../sessions/session-memory-policy.js";
 
 // ════════ 런타임 설정(훅 on/off · work-roots · writeback 너지) — org_runtime_config 단일행 ════════
+/** 커스텀 훅 실행 방식(#5034) — worker(기본): 제품 시드 훅은 러너 안의 스레드, 직접 만든 훅은 본문 표식이 있을 때만 ·
+ *  process: 전부 훅마다 node 프로세스(종전, 되돌리기용). */
+export type HookRuntime = "worker" | "process";
 export interface OrgRuntimeConfig {
   // self_update(#858): 멤버 키트(훅 코드·배선) 자동 업데이트. 끄면 멤버는 수동 업데이트 명령이 유일한 경로.
-  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean };
+  // concurrent — 커스텀 훅 러너(run-custom)가 직접 만든 훅도 sort 가 같으면 동시에 돌려도 되는가. 기본 꺼짐(하나씩).
+  //  제품 시드 훅끼리는 이 값과 무관하게 같은 sort 를 겹쳐 돈다(#5034).
+  // runtime — 커스텀 훅 실행 방식(HookRuntime). 기본 worker.
+  hooks: { session_preload: boolean; work_flag: boolean; stop_writeback_gate: boolean; self_update: boolean; concurrent: boolean; runtime: HookRuntime };
   writeback_notice: string | null;
   work_roots: string[];
   allowed_auth_envs: string[]; // http_proxy 툴이 참조 가능한 환경변수 '이름' 화이트리스트(B15)
@@ -55,6 +72,7 @@ export interface OrgRuntimeConfig {
   call_log_policy: CallLogPolicy; // MCP 호출 감사로그 보관(#1082) — 보존일수. DB 우선, 비면 env 시드 → 90일. 0=무기한
   session_memory_policy: SessionMemoryPolicy; // per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). DB 우선, 비면 env 시드
   session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
+  context_job_policy: ContextJobPolicy; // 맥락관리 잡 실행 신원(#4012 T1 · #3994 D1) — 증류·분류·관리를 누구 자격으로. 미설정이면 종전 동작
   delegate_policy: DelegatePolicy; // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. DB 우선, 비면 env 시드 → 5분
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
   session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=true(#1752 — 명시 false 만 끔). 관리탭 ▸ 세션 공유.
@@ -138,7 +156,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -150,6 +168,11 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
       stop_writeback_gate: hooksRaw.stop_writeback_gate !== false,
       // 기존 org 행엔 이 키가 없다 — `!== false` 규약이 곧 '없으면 켜짐'이라 마이그레이션 없이 전원 활성.
       self_update: hooksRaw.self_update !== false,
+      // 이건 반대로 **명시적 true 만** 켠다 — 기존 행엔 키가 없고, 없으면 꺼짐(종전 동작)이어야 한다.
+      concurrent: hooksRaw.concurrent === true,
+      // #5034 — 훅 실행 방식. **명시적 "process" 만** 종전 방식(훅마다 프로세스)으로 되돌린다 — 없거나 잡값이면 스레드(새 기본).
+      //  기존 행엔 키가 없으므로 마이그레이션 없이 모든 조직이 새 기본을 받는다(고객 전부 — 사람 결정 2026-10-27).
+      runtime: hooksRaw.runtime === "process" ? "process" : "worker",
     },
     writeback_notice: (row?.writeback_notice as string) ?? null,
     work_roots: strArrSafe(row?.work_roots),
@@ -167,6 +190,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     call_log_policy: resolveCallLogPolicy(row?.call_log_policy), // #1082 — 구 DB(컬럼 부재)면 기본값(90일)
     session_memory_policy: resolveSessionMemoryPolicy(row?.session_memory_policy), // #1059 D — DB 우선, 비면 env 시드 → 0/0(무제한, 무회귀)
     session_reclaim_policy: resolveSessionReclaimPolicy(row?.session_reclaim_policy), // #1059 F — DB 우선, 비면 env 시드 → 0(회수 끔, 무회귀)
+    context_job_policy: resolveContextJobPolicy(row?.context_job_policy), // #4012 T1 — DB 우선, 비면 env 시드 → 미설정
     delegate_policy: resolveDelegatePolicy(row?.delegate_policy), // #1101 — DB 우선, 비면 env 시드 → 300000(5분)
     hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
     session_share: resolveSessionShare(row?.session_share), // #905 C1 — 구 DB(컬럼 부재)면 기본값(enabled=false)
@@ -206,6 +230,7 @@ export async function updateRuntimeConfig(
     session_memory_policy?: SessionMemoryPolicyPatch;
     session_reclaim_policy?: SessionReclaimPolicyPatch;
     delegate_policy?: DelegatePolicyPatch;
+    context_job_policy?: ContextJobPolicyPatch;
     hook_relay_decisions?: HookRelayDecision[];
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
@@ -317,6 +342,16 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT delegate_policy FROM org_runtime_config WHERE id=1`);
     delegatePolicy = (raw.rows[0] as { delegate_policy?: unknown } | undefined)?.delegate_policy ?? {};
   }
+  // 맥락관리 잡 실행 신원(#4012 T1) — 위와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**.
+  //  ⚠ before 를 병합의 바닥으로 쓰지 않는다 — before 는 env 시드가 섞인 resolved 값이라, 관리탭에서
+  //   실행 멤버를 **지운** 저장이 시드로 되살아난다(사람이 끈 것이 안 꺼진다). patch 를 그대로 정규화한다.
+  let contextJobPolicy: unknown;
+  if (patch.context_job_policy !== undefined) {
+    contextJobPolicy = normalizeContextJobPolicy(patch.context_job_policy);
+  } else {
+    const raw = await itemsPool.query(`SELECT context_job_policy FROM org_runtime_config WHERE id=1`);
+    contextJobPolicy = (raw.rows[0] as { context_job_policy?: unknown } | undefined)?.context_job_policy ?? {};
+  }
   // 세션 공유(#905 C1) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  건드리면 before(resolved) 위에 patch 를 얹어 정규화(잡값·미지원 하네스·범위초과 방어).
   let sessionShare: unknown;
@@ -334,8 +369,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -349,12 +384,13 @@ export async function updateRuntimeConfig(
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url, worker_policy=EXCLUDED.worker_policy,
+       context_job_policy=EXCLUDED.context_job_policy,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy)],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -418,6 +454,37 @@ export function getDelegatePolicySource(): Promise<"db" | "env" | "default"> {
   return policySourceOf("delegate_policy", delegatePolicySource);
 }
 
+// 맥락관리 잡 실행 신원(#4012 T1)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(미설정).
+export function getContextJobPolicySource(): Promise<"db" | "env" | "default"> {
+  return policySourceOf("context_job_policy", contextJobPolicySource);
+}
+
+/**
+ * #4051 — 실행 멤버가 **한 번도 정해진 적 없을 때만** 이 멤버로 채운다. 채웠으면 true.
+ *
+ *  «정해진 적 없음» = DB 원본에 `runner_member` 키가 없고 env 시드도 없다. 관리자가 비운 것(키가 있고 null)은 결정이라
+ *   건드리지 않는다(normalizeContextJobPolicy 머리말 — 비운 것이 되살아나면 사람이 끈 것이 안 꺼진다).
+ *  ⚠ 판정과 쓰기를 **한 문장**으로 한다(WHERE 에 조건). updateRuntimeConfig 로 «읽고 → 쓰면» 그 사이에 관리자가 정한
+ *   값을 덮을 수 있고, 두 사람이 동시에 연결하면 나중 사람이 이긴다 — 여기서는 먼저 쓴 사람만 남는다.
+ */
+export async function fillContextJobRunnerIfUnset(memberId: string, actor: string, source: string): Promise<boolean> {
+  const clean = normalizeContextJobPolicy({ runner_member: memberId }).runner_member;
+  if (!clean) return false;
+  if (contextJobPolicySource({}) === "env") return false;   // env 시드가 값이다 — 기본값 자리가 비어 있지 않다
+  const before = await getRuntimeConfig();
+  const r = await itemsPool.query(
+    `UPDATE org_runtime_config
+        SET context_job_policy = $1::jsonb, version = version + 1, updated_at = now(), updated_by = $2
+      WHERE id = 1 AND tenant_id = ${TENANT_DEFAULT_EXPR}
+        AND NOT (COALESCE(context_job_policy, '{}'::jsonb) ? 'runner_member')`,
+    [JSON.stringify({ runner_member: clean }), actor],
+  );
+  if (!r.rowCount) return false;
+  const after = await getRuntimeConfig();
+  await audit("org_runtime_config", "1", "update", before, after, actor, source);
+  return true;
+}
+
 // ── 매니지드 표면 노브 4종만 경량 조회(#1454 S2~S5) — /api/ui/me 전용. ──
 //  me 는 모든 화면이 부팅마다 부르는 핫패스라 getRuntimeConfig(정책 resolve 전량)를 태우지 않고 4컬럼만 읽는다.
 //  **fail-open**: 테이블/컬럼 부재(구 DB·부트스트랩 전)·조회 실패에도 me 는 살아야 하므로 기본값(= 기존 동작:
@@ -447,4 +514,47 @@ export async function getUiSurface(): Promise<UiSurfaceConfig> {
   } catch {
     return { ui_nav: {}, announcement: null, ui_profile: "full", usage_url: null, ui_mode: "v2", workspace_kind: "team", workspace_hub_url: null };
   }
+}
+
+// ── 수집 실행 세션 크기(#4213 T11) — org_runtime_config.collect_session_policy 한 칸 ─────────────────
+//  member-ai-connectors · app_bundle_policy 와 같은 «한 칸 전용 입구» 다: getRuntimeConfig 의 큰 SELECT · org_runtime_update 에 섞지 않는다.
+//   ① 이 칸만 바꾸는 관리 화면([수집 · 증류 ▸ 수집기 설정 ▸ Claude 커넥터 수집])이 보안 필드와 묶인 입구를 지나지 않게.
+//   ② 큰 SELECT 가 새 칸을 부르면 스키마보다 먼저 뜬 게이트웨이의 런타임 설정 읽기가 통째로 깨진다 — 여기서는 이 칸 읽기만 실패하고,
+//      세션 생성은 정책 캐시의 폴백(기본값)으로 뜬다.
+//  저장은 «안 건드린 칸은 그대로» 를 따로 지킬 필요가 없다 — 이 칸만 쓴다. null = 저장값을 비워 기본값으로 되돌리기.
+
+async function collectSessionPolicyRaw(): Promise<unknown> {
+  const r = await itemsPool.query(`SELECT collect_session_policy FROM org_runtime_config WHERE id=1`);
+  return (r.rows[0] as { collect_session_policy?: unknown } | undefined)?.collect_session_policy ?? null;
+}
+
+/** 유효 크기 — DB 우선, 비면 env 시드 → 1,024/640. 못 읽으면 **던진다**(세션 생성 쪽 캐시가 마지막 값 → 기본값으로 받는다). */
+export async function getCollectSessionPolicy(): Promise<CollectSessionPolicy> {
+  return resolveCollectSessionPolicy(await collectSessionPolicyRaw());
+}
+
+/** 화면 안내용 — 유효 크기 · 출처 · 되돌리면 될 값(env 시드가 있으면 그 값). */
+export async function getCollectSessionPolicyView(): Promise<CollectSessionPolicy & { source: "db" | "env" | "default"; reset_to: CollectSessionPolicy }> {
+  const raw = await collectSessionPolicyRaw();
+  return { ...resolveCollectSessionPolicy(raw), source: collectSessionPolicySource(raw), reset_to: resolveCollectSessionPolicy({}) };
+}
+
+/**
+ * 크기 저장 — 이 칸만 쓴다. patch 는 지금 유효 값 위에 얹어 정규화(예약 ≤ 상한)하고, null 이면 저장값을 비운다.
+ *  지금 값을 못 읽으면 던진다(못 읽음을 «기본값 위에 얹기» 로 접지 않는다). 감사에 남기고, 저장 즉시 다음 수집 실행이 새 크기를 본다.
+ */
+export async function setCollectSessionPolicy(
+  patch: CollectSessionPolicyPatch | null, ctx: { actor?: string; source?: string } = {},
+): Promise<CollectSessionPolicy> {
+  const beforeRaw = await collectSessionPolicyRaw();
+  const next = patch === null ? {} : normalizeCollectSessionPolicy({ ...resolveCollectSessionPolicy(beforeRaw), ...patch });
+  //  행이 없는 워크스페이스(처음 저장)도 있다 — 다른 칸은 전부 컬럼 기본값으로 선다.
+  await itemsPool.query(
+    `INSERT INTO org_runtime_config(id, collect_session_policy, updated_at, updated_by) VALUES(1, $1::jsonb, now(), $2)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET collect_session_policy=EXCLUDED.collect_session_policy,
+       version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+    [JSON.stringify(next), ctx.actor ?? null]);
+  invalidateCollectSessionPolicyCache();
+  await audit("org_runtime_config", "1", "collect_session_policy", beforeRaw ?? {}, next, ctx.actor, ctx.source);
+  return resolveCollectSessionPolicy(next);
 }

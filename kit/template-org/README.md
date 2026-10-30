@@ -1,6 +1,6 @@
 # template-org — 새 조직콘텐츠 골격 (제품 내장, 1회성 INIT 소스)
 
-이 디렉토리는 제품(`workflow-std`)에 내장된 **조직콘텐츠 골격**입니다. 새 조직을 시작할 때
+이 디렉토리는 제품(lively 레포의 `kit/` — 옛 이름 `workflow-std`)에 내장된 **조직콘텐츠 골격**입니다. 새 조직을 시작할 때
 `generator --init <dir>` 가 이 골격을 **새 독립 레포로 복사**합니다. 복사 이후 그 레포는 조직 소유이며,
 template-org 를 다시 당기지 않습니다(별개 레포 → git-pull 충돌이 구조적으로 0).
 
@@ -13,7 +13,7 @@ template-org 를 다시 당기지 않습니다(별개 레포 → git-pull 충돌
 |---|---|---|
 | `org/org-defaults.md` | 회사 맥락·페르소나·업무방식 | **필수**(생성기 합성 코어) |
 | `org/managed-policy.md` | 강제 규칙 템플릿(짧게) | 선택 |
-| `memory/MEMORY.md` | 빈 캐노니컬 메모리 인덱스 | 선택 |
+| `memory/knowledge-index.md` | 빈 캐노니컬 메모리 인덱스(생성기가 이 이름으로 읽는다) | 선택 |
 | `members/_template.md` | 멤버 프로필 견본(email=조인 키) | 권장 |
 | `members/_bindings.md` | 비인간 주체 바인딩 견본 | 선택 |
 | `gateway-url` | 사내 MCP 게이트웨이 주소 placeholder | 선택 |

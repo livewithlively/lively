@@ -40,9 +40,9 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionGone } from "./terminal-sessions.js";
 import { getSessionState, sessionConvsFor, dirSharedWithOtherSession, convsTakenByOtherSession, nodeSessionMapFor } from "../sessions/session-state.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
-import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, nodeSessionHarness } from "../node/registry.js";
+import { nodeOfSession, nodeCanAttach, nodeSupports, nodeRpc, remoteNodeOfSession, nodeSessionHarness } from "../node/registry.js";
 import { markSessionSeen } from "./phase.js";
-import { markViewing, viewersOf, leaveViewing, pushViewers, sweepPresence } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
+import { markViewing, viewersOf, terminalViewersOf, leaveViewing, pushViewers, sweepPresence } from "./session-presence.js";   // #2116 — "지금 보고 있는 사람"(구글 문서식 얼굴 줄)
 import { listMembers } from "../org/store.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
@@ -61,18 +61,18 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 async function gateRead(id: string, req: express.Request, allowRemoteNode = false): Promise<string | null> {
   const u = userOf(req); const uid = idOf(u);
   if (!uid) throw new HttpError(403, "사용자 신원이 없습니다");
-  const nodeId = nodeOfSession(id);
+  // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
+  //  등록돼 있으면 **이 박스의 로컬 세션까지** 노드 스냅샷에 잡힌다(applyLiveTheme·prompt 라우트가 이미 같은
+  //  함정을 겪었다). 그때 여기서 409 로 물러나면 화면은 중앙 기록으로 폴백하는데, 그 기록은 아직 비어 있어
+  //  **대화창이 통째로 빈 채로 남는다**. 이 박스의 세션이면 로컬 파일로 답한다.
+  //  #2600 T2 d6 — «정말 저쪽인가» 는 `remoteNodeOfSession` 한 곳이 답한다: 세션 호스트 좌표는 같은 tmux 라
+  //   묻지 않고, 소유가 넘어간 테넌트면 호스트 스냅샷으로 답한다(종전엔 대화창을 열 때마다 has-session — 분당 10).
+  const nodeId = await remoteNodeOfSession(id, sessionGone);
   if (nodeId) {
     const v = await nodeCanAttach(nodeId, id, uid);
     if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
-    // ⚠ '노드에 등록됨'과 '파일이 저쪽에 있음'은 다르다(#2055 실측 2026-08-26): 게이트웨이 박스가 노드로도
-    //  등록돼 있으면 **이 박스의 로컬 세션까지** 노드 스냅샷에 잡힌다(applyLiveTheme·prompt 라우트가 이미 같은
-    //  함정을 겪었다). 그때 여기서 409 로 물러나면 화면은 중앙 기록으로 폴백하는데, 그 기록은 아직 비어 있어
-    //  **대화창이 통째로 빈 채로 남는다**. 이 박스의 tmux 에 실제로 있으면 로컬 파일로 답한다.
-    if (await sessionGone(id)) {
-      if (allowRemoteNode) return nodeId;
-      throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
-    }
+    if (allowRemoteNode) return nodeId;
+    throw new HttpError(409, "node");   // 정말 저쪽 컴퓨터 것 — 중앙 기록으로
   }
   if (await canAttach(id, uid)) return null;
   const st = await getSessionState(id);
@@ -99,12 +99,21 @@ async function memberNames(): Promise<Map<string, string>> {
   if (m.size) nameMemo.set(ws, { at: Date.now(), m });   // 빈 결과(조회 실패)는 기억하지 않는다 — 1분 동안 이름을 잃는다
   return m;
 }
-async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name: string }>> {
+async function viewerFaces(sessionId: string): Promise<Array<{ id: string; name: string; term: boolean }>> {
   if (!viewersOf(sessionId).length) return [];
   const names = await memberNames();
   //  ⚠ 줄은 명부를 **기다린 뒤에** 읽는다(#3870) — 이 줄을 곧바로 밀기 때문이다. 기다리기 전에 읽으면 거의 동시에 온
   //   다른 도장·떠남이 새 줄을 민 뒤에 이 요청이 옛 줄을 다시 밀어, 얼굴이 잠깐 빠지거나 자리가 바뀐다.
-  return viewersOf(sessionId).map((id) => ({ id, name: names.get(id) || id }));
+  //  #4996 — term = 터미널로 보고 있고 손길이 있다(session-presence Stamp.term). 들어오는 사람의 화면이 이걸 보고 대화창으로 비켜 선다.
+  const onTerm = new Set(terminalViewersOf(sessionId));
+  return viewersOf(sessionId).map((id) => ({ id, name: names.get(id) || id, term: onTerm.has(id) }));
+}
+
+/** #4996 열람 도장이 실어 온 «터미널로 보나 · 손길이 있나». 안 실어 왔으면(구 화면) undefined — 그 사람의 값을 건드리지 않는다. */
+function termOfStamp(body: unknown): boolean | undefined {
+  const b = (body && typeof body === "object") ? body as Record<string, unknown> : {};
+  if (b.view !== "term" && b.view !== "chat") return undefined;
+  return b.view === "term" && b.active === true;
 }
 
 // 구 화면(Enter|Escape 키 이름)도 받는다 — 하위호환. 뜻은 claude 대화상자 기준(Enter=승인, Esc=중단)이었으므로 그대로 옮긴다.
@@ -215,7 +224,10 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const action = actionOf(body);
     if (!action) throw new HttpError(400, "action 은 approve|deny|interrupt 만 허용됩니다");
     const uid = idOf(userOf(req));
-    if (nodeOfSession(id)) throw new HttpError(409, "그 컴퓨터의 세션에는 아직 키를 보낼 수 없습니다 — 터미널에서 직접 눌러 주세요.");
+    //  ⚠ #2600 T2 d6 — «노드 좌표가 있다» 가 아니라 **«정말 저쪽 기계다»** 로 가른다(gateRead 와 같은 함수). 세션 호스트가
+    //   상주하면 매니지드 세션 **전부**에 호스트 좌표가 붙어(스냅샷에서 되찾는다), 종전 `nodeOfSession(id)` 검사는 이
+    //   게이트웨이의 세션에도 409 를 냈다 — 대화창의 승인·거부·중단이 전 테넌트 켜기(2026-09-11) 뒤로 전부 막히는 모양이다.
+    if (await remoteNodeOfSession(id, sessionGone)) throw new HttpError(409, "그 컴퓨터의 세션에는 아직 키를 보낼 수 없습니다 — 터미널에서 직접 눌러 주세요.");
     if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
     const st = await getSessionState(id);
     const harness = await harnessOf(id, st?.harness);
@@ -247,7 +259,7 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
       //  ⭐ 얼굴 줄(#2116)은 **게이트웨이가 기록한다** — 보고 있는 사람은 그 노드가 아니라 여기에 붙은 브라우저다.
       //   그래서 구 노드(markSeen 미지원)여도, 노드 왕복이 실패해도 얼굴은 정확하다.
-      markViewing(id, uid);
+      markViewing(id, uid, Date.now(), termOfStamp(req.body));
       const faces = await viewerFaces(id);
       pushViewers(id, faces);   // 노드 왕복보다 먼저 — 얼굴은 게이트웨이의 사실이라 노드가 느려도 늦출 이유가 없다
       if (!nodeSupports(nodeId, "markSeen")) { res.json({ ok: true, applied: false, reason: "node-old", viewers: faces }); return; }
@@ -256,10 +268,14 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
       return;
     }
     if (!(await canAttach(id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
-    markViewing(id, uid);
+    markViewing(id, uid, Date.now(), termOfStamp(req.body));
     const faces = await viewerFaces(id);
     pushViewers(id, faces);
     await markSessionSeen(id);
+    //  #4783 — 꺼진 세션이면 tmux 도장은 갈 곳이 없다(위 줄은 조용히 넘어간다). 대신 장부의 «안 본 결과가 남은 채 꺼졌다» 표시를 걷는다 —
+    //   화면이 꺼진 세션을 «작업 완료» 로 그리는 근거라, 열어 본 뒤에도 남으면 초록점이 영영 안 꺼진다. 살아 있는 세션엔 해당 행이 없어 아무 일도 없다.
+    const { markSessionEndSeen } = await import("../sessions/session-state.js");
+    await markSessionEndSeen(id).catch(() => false);
     res.json({ ok: true, applied: true, viewers: faces });
   }));
 
@@ -284,9 +300,13 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const id = String(req.params.id ?? "");
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
     await gateRead(id, req);
-    const { listOutbox } = await import("../sessions/session-outbox.js");
+    //  #4819 — 15초 창이 «미확인» 이라고만 한 말은 기록과 다시 대조해, 이미 들어가 있으면 빼고 준다. 안 그러면 답까지 끝난 말이
+    //   회수 뒤 다시 열 때 «보냈지만 세션 기록에서 확인되지 않았어요» 로 맨 아래에 또 그려진다(outbox-late-echo.ts 머리말).
+    //   ⚠ 그래서 이 GET 은 행을 고쳐 쓴다('delivered·echo-late') — 기록에서 도출되고 멱등이며, 읽는 사람도 같은 기록을 볼 수 있다.
+    //   대조는 2초까지만 기다리고 나머지는 뒤에서 마저 한다(3초 폴링이 중계 정체에 묶이지 않게).
+    const { listOutboxReconciled } = await import("../sessions/outbox-late-echo.js");
     res.setHeader("Cache-Control", "no-store");
-    res.json({ items: await listOutbox(id) });
+    res.json({ items: await listOutboxReconciled(id) });
   }));
   //  재시도·삭제는 **보내기와 동급 게이트**(canAttach) — 큐를 움직이는 건 세션에 입력하는 것과 같은 행동이다.
   app.post("/api/ui/terminal/sessions/:id/outbox/:oid/retry", auth, wrap(async (req, res) => {

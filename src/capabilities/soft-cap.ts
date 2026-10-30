@@ -47,6 +47,16 @@ export interface SoftCapReport {
 //  상한 값이 zod .max() 에 흩어져 있던 것을 여기 모은다 — capability 는 이 표에서 상한을 읽어 describe 를
 //  만들고(softCapHint) 핸들러에서 같은 표로 조정한다(applySoftCaps). #1442 가드가 읽는 표도 이것이다.
 export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapSpec>>>> = {
+  //  #4490 — 에이전트 작업(prompt 최대 10만 자)의 이름표. 목록에 보이는 짧은 이름이라 앞부분만 남겨도 뜻이 산다.
+  agent_job_run: {
+    label: { limit: 120, policy: "clamp", effect: "작업 이름이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(작업은 그대로 보냈습니다)." },
+  },
+  //  #4488 — 앱 AI 실행(prompt 최대 10만 자)의 이름표. 작업 컨테이너와 같은 규칙.
+  app_ai_run: {
+    label: { limit: 120, policy: "clamp", effect: "실행 이름이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(실행은 그대로 보냈습니다)." },
+    //  #5101 이어받는 까닭 — 실행 기록의 이름표(AI 에게 가는 글은 prompt). ai-runs/plan.RESUME_REASON_MAX 와 같은 수.
+    reason: { limit: 300, policy: "clamp", effect: "이어받는 까닭이 상한을 넘어 앞부분만 남기고 잘라 적었습니다(실행은 그대로 보냈습니다)." },
+  },
   knowledge_save: {
     // ⚠ 안내는 **실제로 존재하는 싼 경로**를 가리켜야 한다: knowledge_save 는 body_md 가 필수라 "title 만 다시
     //  보내라"가 성립하지 않는다(전문 재전송 = 이 정책이 없애려던 바로 그 낭비). 그래서 knowledge_set_title 을 뒀다.
@@ -68,6 +78,10 @@ export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapS
   knowledge_set_title: {
     title: { limit: 200, policy: "clamp",
       effect: "제목이 상한을 넘어 앞부분만 남기고 잘라 저장했습니다(제목은 한 줄 라벨입니다 — 긴 설명은 본문 첫 헤딩으로)." },
+    change_note: { limit: 600, policy: "clamp",
+      effect: "변경 요약이 상한을 넘어 잘라 기록했습니다(1~2문장이면 충분합니다)." },
+  },
+  knowledge_set_fields: {
     change_note: { limit: 600, policy: "clamp",
       effect: "변경 요약이 상한을 넘어 잘라 기록했습니다(1~2문장이면 충분합니다)." },
   },
@@ -99,6 +113,11 @@ export const HARD_CAP_OK: Readonly<Record<string, readonly string[]>> = {
     "external_system", "external_id", "external_url", "external_instance", // PM 미러 좌표 — 잘리면 링크가 깨진다
   ],
   delegate_run: ["subpath", "repo", "ref", "node", "harness"],             // 실행 좌표 — 잘린 경로·브랜치·하네스 키로 돌면 안 된다
+  store_sql: ["app_id"],                                                  // #4226 앱 id — 잘리면 다른 앱(또는 없는 앱)을 가리킨다
+  agent_job_run: ["model"],                                               // #4490 모델 이름 — 잘린 이름으로 돌면 엉뚱한 모델이거나 하네스가 즉사한다
+  app_ai_run: ["model", "job"],                                           // #4488 모델 이름 · 작업 이름(설정 칸의 열쇠) — 잘리면 다른 모델 · 다른 작업의 실행 계정을 가리킨다
+  browser_act: ["ref", "keys", "tab"],                                    // #4993 요소 ref(e12) · 키 조합(cmd+a) · 탭 번호 — 잘리면 다른 요소·다른 키·없는 탭을 누른다
+  browser_eval: ["tab"],                                                  // #4993 탭 번호 — 잘리면 다른 탭에서 코드가 돈다
 };
 
 /**

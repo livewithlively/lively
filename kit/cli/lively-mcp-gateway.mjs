@@ -60,6 +60,44 @@ const PROBE_TIMEOUT_MS = Number(process.env.LIVELY_MCP_PROBE_TIMEOUT_MS || 4_000
 // 상류 복구 감시 주기 — 상류가 죽어 있을 때만 돈다. 테스트가 짧게 줄여 쓴다.
 const WATCH_INTERVAL_MS = Number(process.env.LIVELY_MCP_WATCH_MS || 20_000);
 
+// ── 기록 범위(#5016) ──────────────────────────────────────────────────────────
+//  작업 폴더 밖에서 켠 세션이면 라이블리 도구를 0개로 세운다 — 상류(게이트웨이)에 아무것도 묻지 않는다(인코그니토와 같다).
+//  판정은 훅과 **같은 파일**(~/.lively/hooks/record-scope.mjs)로 한다 — 갈리면 «훅은 꺼졌는데 도구는 있는» 반쪽 세션이 된다.
+//  이 프로세스는 클로드가 세션 폴더에서 띄우고 CLAUDE_PROJECT_DIR 도 싣는다(2.1.310 실측) — 그래서 폴더를 안다.
+//  그 파일을 못 찾으면(부트스트랩만 된 CLI·구 설치) 종전 동작(켬)이다 — 그런 설치엔 판정하는 훅도 없다.
+//  세션 중간에 폴더를 등록하면(/lively-connect) 주기 검사가 바뀐 판정을 보고 tools/list_changed 로 목록을 다시 받게 한다.
+const SCOPE_WATCH_MS = Number(process.env.LIVELY_SCOPE_WATCH_MS || 2_000);
+export const OUTSIDE_TOOL_TEXT = "이 폴더는 라이블리 작업 폴더가 아니라서 라이블리가 꺼져 있습니다. "
+  + "여기서 쓰려면 /lively-connect(코덱스는 /prompts:lively-connect)나 셸의 `lively work-root add` 로 이 폴더를 등록하세요 — 다음 메시지부터 연결됩니다.";
+let scopeMod;   // undefined = 아직 안 불러옴 · null = 못 찾음(종전 동작)
+async function loadScopeModule() {
+  if (scopeMod !== undefined) return scopeMod;
+  try { scopeMod = await import(new URL("../hooks/record-scope.mjs", import.meta.url).href); }
+  catch { scopeMod = null; log("기록 범위 판정 모듈(../hooks/record-scope.mjs)을 못 찾아 판정하지 않습니다 — 키트를 다시 받으세요(lively update)."); }
+  return scopeMod;
+}
+// 이 프로세스가 세션 폴더를 믿을 만하게 아는가 — 클로드는 CLAUDE_PROJECT_DIR 를 싣고(2.1.310 실측) 코덱스는 세션 폴더에서 띄운다.
+//  그 밖의 하네스는 MCP 프로세스의 cwd 가 세션 자리라는 근거가 없다(어댑터 주석: 훅 프로세스 cwd 도 세션 자리가 아니었다).
+//  그런 데서 판정하면 작업 폴더에서도 도구가 사라지는 회귀가 되므로 판정하지 않는다 — 맥락 주입·기록은 훅이 따로 막는다.
+//  어댑터·설정이 LIVELY_SESSION_DIR(커서는 CURSOR_PROJECT_DIR)를 실어 주면 그때는 판정한다.
+export function scopeKnowsFolder(env = process.env) {
+  const h = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase().replace(/-code$/, "");
+  if (String(env.LIVELY_SESSION_DIR || "").trim()) return true;
+  if (h === "claude" || h === "codex") return true;
+  return h === "cursor" && !!String(env.CURSOR_PROJECT_DIR || "").trim();
+}
+let foldLogged = false;
+/** 지금 이 세션이 기록 범위 안인가 — 판정이 터지면 종전 동작(켬). */
+function scopeInNow() {
+  if (!scopeMod) return true;
+  if (!scopeKnowsFolder()) {
+    if (!foldLogged) { foldLogged = true; log(`이 하네스(${process.env.LIVELY_HARNESS || "?"})에선 세션 폴더를 알 수 없어 MCP 도구의 기록 범위를 판정하지 않습니다(훅은 판정합니다).`); }
+    return true;
+  }
+  try { return scopeMod.inScopeNow({ env: process.env, cwd: process.cwd(), lively: LIVELY }).inScope; }
+  catch { return true; }
+}
+
 const readLively = (n) => { try { return readFileSync(join(LIVELY, n), "utf8").trim(); } catch { return ""; } };
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
 // ⚠ **파일이 env 를 이긴다(#916 의 런타임 판).** 설치기가 codex 용으로 rc 에
@@ -83,8 +121,19 @@ const gateway = () => normGw(readLively("gateway-url") || process.env.LIVELY_GAT
 //   종전 http 직결 등록은 멤버 토큰을 프로필 .claude.json 에 구워 이 문제가 없었다 — #1079 의 프록시 전환이
 //   #346/#916 이 세운 프로필 격리를 MCP 에서 조용히 되돌린 것이라, 여기서 되돌린다.
 //  ⚠ 없으면 종전과 **글자 그대로 같다**(구 게이트웨이·격리 박스·개인 노트북) — 무회귀.
+//  ★ #4135 — 그리고 **세션 토큰 파일이 그 위다.** env 의 LIVELY_MCP_TOKEN 은 판을 띄울 때 한 번 실리는 스냅샷이고, 토큰 없이 뜬 세션
+//   (이 변경 전의 모든 노드 세션)엔 그것조차 없다. 게이트웨이가 살아 있는 세션 앞으로 나중에 구운 자격은 노드가
+//   `~/.lively/session-tokens/<세션id>.json` 에 심는다(terminal/session-token-file — kit/hooks/harness-registry sessionTokenFile 과 같은 자리).
+//   매 호출 그 파일을 먼저 본다 — 없으면 아래 종전 순서 그대로다(무회귀).
+const sessionFileToken = () => {
+  const sid = (process.env.LIVELY_SESSION_ID || "").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(sid)) return "";
+  try { const j = JSON.parse(readFileSync(join(LIVELY, "session-tokens", `${sid}.json`), "utf8")); return typeof j?.mcp === "string" ? j.mcp.trim() : ""; }
+  catch { return ""; }
+};
 const token = () => (
-  (process.env.LIVELY_MCP_TOKEN || "").trim()
+  sessionFileToken()
+  || (process.env.LIVELY_MCP_TOKEN || "").trim()
   || readLively("token")
   || (process.env.LIVELY_TOKEN || "").trim()
 ).trim();
@@ -170,6 +219,33 @@ function saveCache(gw, tools) {
 //                      **명시 stamp 가 필수**다(src/org/auth/agent-identity.ts — 헤더가 UA 보다 우선).
 //   · x-lively-session / x-lively-mode — 종전엔 하네스가 `${LIVELY_SESSION_ID:-}` 를 제 env 로 확장해 보냈다.
 //                      stdio 는 그 env 를 그대로 상속하므로 여기서 읽어 붙이면 같은 값이 된다.
+// x-lively-session 값. 라이블리가 띄운 창이 아니면(LIVELY_SESSION_ID 없음) 하네스 네이티브 id 로 떨어진다 —
+//  훅이 stdin session_id 로 만드는 `claude-<id>`·`codex-<id>`(kit/hooks/run-custom.mjs executionSessionId)와
+//  같은 값이어야 게이트웨이가 훅 호출과 툴 호출을 한 세션으로 묶는다. 어긋나면 session_rename·session_task 가
+//  "세션을 특정할 수 없습니다" 로 막힌다.
+//  🔴 Claude Code 가 자식 프로세스(이 stdio 서버)에 싣는 이름은 CLAUDE_CODE_SESSION_ID 다 — CLAUDE_SESSION_ID 는
+//   싣지 않는다(확인법: 떠 있는 `lively mcp` 프로세스의 /proc/<pid>/environ). 훅 stdin session_id 와 같은 값이라 먼저 보고,
+//   CLAUDE_SESSION_ID 는 호환용으로 뒤에 둔다(앞에 두면 셸에 남은 값이 훅과 다른 신원을 만든다).
+//  ⚠ 네이티브 id 는 **이 프록시를 띄운 하네스(LIVELY_HARNESS stamp) 것부터** 본다 — 훅도 LIVELY_HARNESS 로 고른다.
+//   codex 는 셸 도구 자식에 CODEX_THREAD_ID 를 싣는다. 그래서 코덱스가 셸로 띄운 claude 의 프록시는 부모의
+//   CODEX_THREAD_ID 와 자기 CLAUDE_CODE_SESSION_ID 를 함께 갖고, codex 를 고정으로 먼저 보면 자식 claude 의 툴 호출이
+//   부모 코덱스 세션으로 붙는다(session_rename 이 부모 세션 이름을 바꾼다). stamp 가 없으면 claude 다(x-lively-harness 기본값과 같다).
+//  ⚠ 알려진 한계 — `/clear` 뒤엔 이 값이 낡는다(실측 Claude Code 2.1.285: stdio MCP 서버는 /clear 에 재시작되지 않고,
+//   env 의 CLAUDE_CODE_SESSION_ID 는 **이전 대화** id 로 남는다. 훅은 stdin 의 새 id 를 쓴다). 그 뒤 툴 호출은 같은 사람의
+//   직전 대화 세션으로 붙는다. 라이블리가 띄운 창은 LIVELY_SESSION_ID(창 단위)라 영향이 없다. 고치려면 훅이 새 id 를
+//   프록시가 읽을 자리에 남겨야 한다(env 만으로는 알 길이 없다).
+export function sessionHeaderValue(env = {}) {
+  const direct = String(env.LIVELY_SESSION_ID || "").trim();
+  if (direct) return direct;
+  const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
+  const claude = String(env.CLAUDE_CODE_SESSION_ID || env.CLAUDE_SESSION_ID || "").trim();
+  const native = String(env.LIVELY_HARNESS || "").trim().toLowerCase() === "codex"
+    ? [["codex", codex], ["claude", claude]]
+    : [["claude", claude], ["codex", codex]];
+  const hit = native.find(([, id]) => id);
+  return hit ? `${hit[0]}-${hit[1]}` : "";
+}
+
 function upstreamHeaders() {
   const h = {
     "content-type": "application/json",
@@ -178,9 +254,7 @@ function upstreamHeaders() {
   };
   const tok = token();
   if (tok) h.authorization = `Bearer ${tok}`;
-  const sid = (process.env.LIVELY_SESSION_ID || "").trim()
-    || ((process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || "").trim() ? `codex-${(process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID).trim()}` : "")
-    || ((process.env.CLAUDE_SESSION_ID || "").trim() ? `claude-${process.env.CLAUDE_SESSION_ID.trim()}` : "");
+  const sid = sessionHeaderValue(process.env);
   if (sid) h["x-lively-session"] = sid;
   const mode = (process.env.LIVELY_MODE || "").trim();
   if (mode) h["x-lively-mode"] = mode;
@@ -272,6 +346,24 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   let lastTools = null;      // 하네스에 마지막으로 보여준 툴 목록(= list_changed 판정 기준)
   let upstreamDown = false;  // 마지막 상류 접촉이 실패했나 — 워처는 이때만 폴링한다
   let watcher = null;
+  const scopeReady = loadScopeModule();
+  let inScope = null;        // 마지막으로 하네스에 보여 준 기록 범위 판정(null = 아직 안 보여 줌)
+  let scopeWatch = null;
+  const scopeIn = () => (inScope = scopeInNow());
+  // 기록 범위 검사(#5016) — 판정이 바뀌면 목록을 다시 받게 한다. 로컬 파일만 본다(네트워크 0)라 주기를 짧게 둔다.
+  function ensureScopeWatch() {
+    if (scopeWatch || !(SCOPE_WATCH_MS > 0)) return;
+    scopeWatch = setInterval(() => {
+      if (scopeMod === undefined || inScope === null) return;   // 아직 목록을 안 보여 줬다 — 그때 판정한다
+      const now = scopeInNow();
+      if (now === inScope) return;
+      inScope = now;
+      lastTools = now ? null : [];
+      log(now ? "기록 범위 안으로 — 이 폴더가 작업 폴더로 등록됨. tools/list_changed 발신" : "기록 범위 밖으로 — 라이블리 도구를 내림. tools/list_changed 발신");
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    }, SCOPE_WATCH_MS);
+    if (typeof scopeWatch.unref === "function") scopeWatch.unref();
+  }
 
   // 상류가 살아나면(또는 툴이 바뀌면) 하네스에 목록 재조회를 요청한다.
   //  ⚠ 폴링은 **상류가 죽어 있을 때만** 돈다 — 정상 세션에 배경 트래픽을 만들지 않는다.
@@ -279,7 +371,7 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   function ensureWatcher() {
     if (watcher) return;
     watcher = setInterval(async () => {
-      if (!upstreamDown || probing) return;
+      if (!upstreamDown || probing || inScope === false) return;   // 기록 범위 밖이면 상류를 찾지도 않는다(#5016)
       probing = true;
       try { await probeOnce(); } finally { probing = false; }
     }, WATCH_INTERVAL_MS);
@@ -317,10 +409,20 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
           serverInfo: { name: "lively", version: readLively("kit-version") || "0.1.0" },
         });
         ensureWatcher();
+        ensureScopeWatch();
         return;
       }
       if (method && method.startsWith("notifications/")) return; // 알림 — 응답 없음
       if (method === "ping") { okr(id, {}); return; }
+
+      // 기록 범위 밖(#5016) — 상류에 묻지 않고 여기서 끝낸다: 목록은 0개, 부르면 왜 꺼졌는지와 켜는 법을 돌려준다.
+      await scopeReady;
+      if (!scopeIn()) {
+        if (method === "tools/list") { lastTools = []; okr(id, { tools: [] }); return; }
+        if (method === "tools/call") { okr(id, { content: [{ type: "text", text: OUTSIDE_TOOL_TEXT }], isError: true }); return; }
+        if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32603, message: OUTSIDE_TOOL_TEXT } });
+        return;
+      }
 
       if (method === "tools/list") {
         const gw = gateway();
@@ -375,7 +477,11 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
   });
   // stdin 이 닫히면(하네스 종료) 감시도 멈춘다 — 실제 프로세스는 곧 끝나지만, 한 프로세스가
   //  여러 서버를 띄우는 경우(테스트)에 죽은 인스턴스의 워처가 계속 도는 것을 막는다.
-  return new Promise((resolve) => rl.on("close", () => { if (watcher) { clearInterval(watcher); watcher = null; } resolve(); }));
+  return new Promise((resolve) => rl.on("close", () => {
+    if (watcher) { clearInterval(watcher); watcher = null; }
+    if (scopeWatch) { clearInterval(scopeWatch); scopeWatch = null; }
+    resolve();
+  }));
 }
 
 // 최상위 안전망 — 어떤 예외도 이 프로세스를 죽이지 못하게(stdio MCP 는 재시작이 없다).

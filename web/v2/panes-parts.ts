@@ -9,25 +9,30 @@
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
 import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
-import { confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 — 보관 칸의 × 는 휴지통으로
+import { confirmForceRestore, confirmSessionTrash, sessionNames, sessionTrashOp, eulReul } from '../session-actions.js';   // #1851 — 보관 칸의 × 는 휴지통으로 · #3870 강제 복원 확인
+import { canForceRestore, restorePath } from '../lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
 import { fmtSize } from '../projects/files.js';
 import { authDownload, upDropZone, upFromInput, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { hasBrowserSurface } from './browser-surface.js';
+import { remoteWebPart } from './remote-web.js';
 import { EMBEDDED } from './embed.js';
 import { normWebUrl } from './web-url.js';
+import { type BTab, answerHandoff, dockTab, ensureTab, getTab, onTabEvent, rememberUrl, setPaused } from './browser-tabs.js';   // #4993 AI 와 같이 쓰는 탭(데스크톱)
 import { filesPart } from './panes-files.js';
 import { sessFilesPart } from './panes-sessfiles.js';   // #4088 후속 — 세션 작업 폴더 칸(프로젝트 없는 세션의 «자료»)
 import { tasksPart } from './panes-tasks.js';
 import { knowledgePart } from './panes-knowledge.js';   // #4443 지식은 그 칸 안에서 읽는다(오른쪽 시트 없음)
-import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, authHeaders, kindOf, openInViewerPart, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
-import { createPreviewKit } from './file-preview.js';
-import { htmlFrame } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
+import { ED_PATH_KEY, NOISE_RE, TRASH_DIR, VIEWER_TO_EVT, WEB_OPEN_EVT, authHeaders, kindOf, pnIcon, seedSessName, sessNameCache } from './panes-kit.js';
+import { htmlFrame, mdImgFetch } from '../lib/file-preview.js';        // #4075 — 시안(HTML)은 공용 렌더러의 격리 프레임으로(자르지 않고 스크립트 허용)
 import { attachFrameBridge, withScrollKeeper } from '../lib/frame-bridge.js'; // #4075 — 격리 프레임 안 문서의 저장·복사·내려받기를 셸이 대신한다 · #4523 보던 자리
 import type { TabKey } from '../lib/tab-key.js';
 import { fetchTurns } from './sess-tail.js';   // 대화 꼬리 — 사이드바 둘째 줄(last-ask)과 같은 길, 집은 리프(sess-tail)
 import { composerAttach } from './compose-attach.js';
+import { consolePart } from './panes-console.js';   // #4876 곁칸 «콘솔»
+import { livDeskPart } from './panes-liv.js';   // #4970 리브 세션의 오른쪽 «리브» 칸
+import type { TlItem } from '../timeline.js';
 import { composerMention } from './compose-mention.js';
 import { composerTasks } from './compose-tasks.js';   // #4135 [담기]한 태스크 = 글칸의 번호 배지
 import { createRunPicker } from './run-picker.js';
@@ -35,10 +40,12 @@ import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import { openInstalledApp } from './app-instance.js';
-import { attachAppToSession, createSessionAppDock, SESSION_APPS_EVT } from './session-app-dock.js';   // #4225 세션 오른쪽 앱 칸
+import { attachAppToSession, openEditPolicyDialog, sessAppPart, SHOW_SESSAPP_EVT } from './session-app-pane.js';   // #4225 곁칸의 붙은 앱 탭 · 고치기 설정
 import { type Sess, type V2Data } from './views.js';
-import { bindCtx } from './ctx-registry.js';   // #3784 곁칸 부품 우클릭 메뉴
+import { bindCtx } from './ctx-registry.js';
+import { hasScope } from '../lib/state.js';   // #3784 곁칸 부품 우클릭 메뉴
 import { copyText } from './ctx-menu.js';
 
 // 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
@@ -53,7 +60,7 @@ function handIsElsewhere(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || a.isContentEditable;
 }
 
-export type PartType = 'sessions' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'archive' | 'web' | 'editor' | 'apps' | 'preview';
+export type PartType = 'sessions' | 'console' | 'files' | 'sessfiles' | 'knowledge' | 'tasks' | 'timeline' | 'liv' | 'livdesk' | 'archive' | 'web' | 'editor' | 'apps' | 'preview' | 'sessapp';
 
 export interface PartCtx {
   id: number;
@@ -82,6 +89,8 @@ export interface PartCtx {
   /** 지금 세션의 **발자취 위젯이 사는 자리**. 세션 화면(대화)이 트랜스크립트를 읽으며 여기를 채운다 —
    *  타임라인 칸은 이 자리를 자기 몸에 들이기만 한다(셸이 세션마다 새로 만들어 준다). */
   trailHost: () => HTMLElement;
+  /** 지금 세션의 발자취 **항목**(시간순 사본) — 그릇은 한 자리뿐이지만 재료는 여러 칸이 읽는다(#4876 콘솔). 세션이 없으면 빈 배열. */
+  trailItems: () => TlItem[];
   /** 그 세션에만 딸리는 값의 저장 열쇠 — 세션이 있으면 세션, 없으면(새 세션 자리) 프로젝트로 떨어진다. */
   memKey: () => string;
   /** **이 곁칸 한 벌의 뿌리**. 부품끼리의 신호는 여기서만 오간다 — `document` 에 뿌리면 열려 있는 **모든
@@ -98,6 +107,9 @@ export interface PartCtx {
   /** 탭에 걸릴 이름을 부품이 정한다(null = 부품 기본 이름). 뷰어는 파일 이름, 웹 칸은 사이트 이름을 건다 —
    *  같은 종류가 둘 이상 뜨는 순간 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 알 수 없다. */
   setTabTitle?: (t: string | null) => void;
+  /** 이 탭의 얼굴 — 앱 아이콘 이름(glass-icon APP_ICON_NAMES: 그림과 색이 한 이름). null 이면 종류의 기본 그림으로 돌아간다.
+   *  붙은 앱 탭이 쓴다(#4592): 종전엔 어느 앱이 붙든 탭 · 독이 «앱» 의 네모 넷이라 무슨 앱인지 그림으로는 알 수 없었다. */
+  setTabFace?: (icon: string | null) => void;
 }
 
 export interface Part {
@@ -108,6 +120,9 @@ export interface Part {
   selectSession?: (sid: string | null) => void;
   /** 세션 부품만 — 지금 보는 세션 id(탭 줄이 어느 탭을 켤지 안다). null = 새 세션 자리. */
   currentSession?: () => string | null;
+  /** 탭의 × 를 눌렀다 — 있으면 셸은 탭을 빼지 않고 이것만 부른다(#4225 붙은 앱 탭: × = 이 세션에서 떼기.
+   *  떼면 붙은 목록이 비고, 셸이 그걸 보고 탭을 걷는다). */
+  onTabClose?: () => void;
   /** 이미 켜진 탭을 또 눌렀다 — «처음으로»(iOS 탭 막대 · #4443 원준 10-01). 자료 = 맨 위 폴더. 없으면 셸은 종전대로 켠다. */
   reselect?: () => void;
 }
@@ -117,6 +132,9 @@ export interface PartDef {
   /** 이 칸에 **여럿** 띄울 수 있나(#762). 셸은 이 값만 보고 [+] 에 「하나 더」를 낸다 —
    *  부품 이름이 셸에 박히지 않게(뷰어만 예외로 두지 않으려고 만든 자리다). */
   multi?: boolean;
+  /** 사람이 고를 수 있나. `false` 면 [+] 고르기·「칸에 넣기」·「하나 더」에 **안 나온다**(#4135) — 다른 길(자료 칸에서 파일
+   *  두 번 누르기)로만 생기는 부품. 저장된 배치의 탭은 그대로 유효하다(parseLayout 은 PART_DEFS 전체를 본다). */
+  pickable?: boolean;
 }
 
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본.
@@ -124,7 +142,11 @@ export interface PartDef {
  *  지난 세션 = 사이드바 아래 줄의 그것, 앱 = 레일의 앱과 같은 그림을 쓴다. */
 export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
-  { type: 'files', name: '자료', icon: 'folder', multi: true, hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
+  // #4876(원준 2026-10-19) — 첫 탭. 세션을 열고 첫 답 전엔 «알려 줄 것» 점검표, 첫 답 뒤엔 «다녀온 사이 · 남긴 것». 조작(파일 넣기 · 지시 문장 · 멈추기)은 바닥 줄.
+  { type: 'console', name: '콘솔', icon: 'console', hint: '이 세션에 시키는 일을 돕고, 다른 세션에 갔다 돌아왔을 때 그 사이 생긴 것과 남긴 것을 보여 줍니다.' },
+  //  #4882(원준 2026-10-19 «세션 우측의 자료 위젯도 자료 앱에서 나온 위젯인걸로») — 자료 앱(apps.ts APPS 'sources')의 세션 위젯이다.
+  //   그림은 그 앱의 이름(src)을 써서 탭 · 독 · 앱 서랍이 런치패드의 자료 앱과 같은 얼굴(폴더 · 자료 색)로 선다. 칸 머리에 그 앱으로 가는 문이 있다(panes-files).
+  { type: 'files', name: '자료', icon: 'src', multi: true, hint: '자료 앱의 세션 위젯 — 이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   // #4088 후속(2026-09-23) — 세션이 만든 파일이 **프로젝트 폴더 밖**(프로젝트 없는 세션·개인 폴더)에 있으면 여기서 본다. 폰의 «자료로 바로 가기»가 이 칸을 연다.
   { type: 'sessfiles', name: '세션 파일', icon: 'sessfiles', hint: '지금 보는 세션의 작업 폴더입니다 — 세션이 만든 파일을 보고 내려받아요.' },
   { type: 'knowledge', name: '지식', icon: 'wiki', hint: '세션들이 쓰고 고치는 글입니다. 워크스페이스 전체가 함께 봐요.' },
@@ -133,14 +155,21 @@ export const PART_DEFS: PartDef[] = [
   //   그림은 프로젝트 과녁(#4233, 원준 2026-10-05). 그리는 자리의 크기에 맞춰 glyphAt() 이 13px 이하에선 작은 과녁으로 바꾼다.
   { type: 'tasks', name: '프로젝트', icon: 'proj', hint: '보고 있는 세션의 프로젝트 — 본문과, 이 세션이 할 태스크(순서대로), 나머지 태스크가 어느 세션에서 도는지.' },
   { type: 'timeline', name: '타임라인', icon: 'timeline', hint: '이 프로젝트에 남은 활동 기록입니다.' },
-  { type: 'liv', name: '리브', icon: 'liv', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
+  //  #4970 — 이름을 «리브» 에서 «프로젝트 대화» 로(상민님 2026-10-23 «이름만 구분가게»). «리브» 는 워크스페이스 담당자(아래 livdesk ·
+  //   레일 [리브] · 리브 세션)만 가리킨다. 종류 이름(type)은 그대로 둔다 — 저장된 배치가 이 이름으로 탭을 기억한다.
+  { type: 'liv', name: '프로젝트 대화', icon: 'liv', hint: '이 프로젝트를 아는 AI 와 대화합니다.' },
+  //  #4970 «리브 = 세션 하나» — 리브 세션의 오른쪽 칸(지금 손볼 것 · 외부 앱 연결 상태). [+] 로 넣지 않는다 — 리브 세션을 열면 셸이 맨 앞에 세운다.
+  { type: 'livdesk', name: '리브', icon: 'liv', pickable: false, hint: '워크스페이스 담당자 리브 — 지금 손볼 것과 외부 앱 연결 상태를 봅니다. 말은 대화에서 겁니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
   { type: 'archive', name: '지난 세션', icon: 'archive', hint: '박스가 멈춰 지금은 안 도는 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
   { type: 'web', name: '웹', icon: 'web', multi: true, hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'preview', name: '미리보기', icon: 'preview', hint: '띄워 둔 화면 목록입니다. 누르면 웹 칸에 그 화면이 실립니다.' },
-  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, hint: '자료의 파일을 골라 이 칸에서 봅니다 — 문서·그림·PDF·시안·영상. 여러 개를 띄워 나란히 볼 수 있어요.' },
-  //  #4443(원준 10-05) — [＋] · 빈 자리 메뉴로 탭을 못 연다(셸이 이름으로 거른다 — stage 판엔 부품의 pickable 이 없다).
-  { type: 'apps', name: '앱', icon: 'apps', hint: '앱을 누르면 지금 세션 오른쪽에 붙어요 — AI 도 그 앱을 같이 씁니다. × 로 떼면 세션만 남아요.' },
+  // #4135(원준 2026-09-25) — 뷰어는 [+] 로 열지 않는다. 자료 칸에서 파일을 두 번 누르면 **파일마다** 뷰어가 하나씩 뜬다.
+  { type: 'editor', name: '뷰어', icon: 'eye', multi: true, pickable: false, hint: '자료 칸에서 파일을 두 번 누르면 여기에 열립니다 — 문서·그림·PDF·시안·영상. 파일마다 뷰어가 하나씩.' },
+  //  #4443(원준 10-05) — 탭으로는 더 못 연다(pickable:false). 세션에 앱을 붙이는 일은 [＋] 앱 서랍 · 독 ⊞ 의 «이 세션에 붙이기» 가 한다.
+  { type: 'apps', name: '앱', icon: 'apps', pickable: false, hint: '앱을 누르면 지금 세션에 붙어 사이드바에 그 앱 탭이 생겨요 — AI 도 그 앱을 같이 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
+  // #4225 — 이 세션에 붙은 앱. [+] 로 넣지 않는다 — 앱을 붙이면 셸이 세우고 떼면 걷는다(배치에 저장하지 않는 탭, panes.ts DERIVED_TABS).
+  { type: 'sessapp', name: '붙은 앱', icon: 'apps', pickable: false, hint: '이 세션에 붙은 앱이에요 — AI 도 같은 화면을 씁니다. 탭의 × 로 떼면 세션만 남아요.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -212,13 +241,9 @@ function sessionsPart(ctx: PartCtx): Part {
   let retryTimer = 0;
 
   // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
+  //  (#4225 — 세션에 붙은 앱은 여기가 아니라 **곁칸의 탭**으로 선다: session-app-pane.ts 머리말)
   const stage = el('div', { class: 'pn-stage' });
-  // #4225 — 그 오른쪽에 **이 세션에 붙은 앱**. 붙은 게 없으면 칸이 없다(세션만 남는다). 세션을 바꾸면 그 세션의 앱으로.
-  const dock = createSessionAppDock(stage, {
-    paneRoot: () => ctx.paneRoot(),
-    canManage: (sid) => !!ctx.data().sessions.find((s) => s.id === sid)?.owned,
-  });
-  root.append(dock.row);
+  root.append(stage);
 
   // ── 새 세션 자리 = **홈 입력창과 같은 컴포저**(원준 2026-08-20) ──────────────────
   //  종전엔 칸 맨 아래에 붙은 한 줄짜리 입력칸이었다. 같은 '새 세션을 여는 자리'인데 홈과 생김새가 전혀 달라
@@ -291,7 +316,6 @@ function sessionsPart(ctx: PartCtx): Part {
 
   /** 위 자리를 이 세션으로 채운다. 같은 세션이면 아무것도 하지 않는다(대화·스크롤·터미널 보존). */
   function mountStage(): void {
-    dock.setSession(composing ? null : sel);   // 같은 세션이면 아무것도 안 한다(dock 쪽에서 거른다)
     if (composing || !sel) {
       if (mounted) { mounted.h?.destroy(); mounted = null; }
       // 칸을 **새로 세울 때만** 손을 옮긴다(원준 2026-08-25). paint() 는 주기 갱신마다 여기를 지나므로
@@ -393,7 +417,6 @@ function sessionsPart(ctx: PartCtx): Part {
     destroy: () => {
       if (retryTimer) { window.clearTimeout(retryTimer); retryTimer = 0; }
       if (mounted) { mounted.h?.destroy(); mounted = null; }
-      dock.destroy();
     },
     selectSession: (sid) => select(sid),
     currentSession: () => (composing ? null : sel),
@@ -462,19 +485,28 @@ function archivePart(ctx: PartCtx): Part {
     .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
   const canRestore = (s: Sess): boolean => !!(s.raw && s.raw.restorable);
 
-  async function restore(s: Sess): Promise<void> {
+  async function restore(s: Sess, force?: boolean): Promise<void> {
     if (workingId) return;
     workingId = s.id; sig = ''; paint();
     try {
-      const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST' });
+      const r: any = await api(restorePath(s.id, force), { method: 'POST' });
       toast('세션을 되살렸어요 — 대화가 이어집니다.');
       ctx.onChanged?.();
-      // #1820 — 되살린 세션은 **새 id** 를 받는다. 그 화면으로 데려가지 않으면 "되살렸다는데 어디 있지?"가 된다
-      //  (이 목록에서는 사라지고, 사용자는 사이드바를 뒤져야 했다). 생성 응답을 캐시에 남겨 라우트가 곧바로 그린다.
+      // #1820 — 되살린 세션의 화면으로 데려간다. 안 데려가면 "되살렸다는데 어디 있지?"가 된다(이 목록에서는 사라지고,
+      //  사용자는 사이드바를 뒤져야 했다). 생성 응답을 캐시에 남겨 라우트가 곧바로 그린다 — #4694 이후 대개 **같은 id** 라
+      //  목록에 «중단됨» 행이 아직 남아 있는데, 라우트(main.ts seedCreated)가 그 행을 이 응답으로 바꿔 끼운다.
       const ns = r && r.session;
       if (ns && ns.id) { rememberCreated(ns); location.hash = '#/s/' + encodeURIComponent(String(ns.id)); }
       else if (r && r.already) location.hash = '#/s/' + encodeURIComponent(s.id);
     } catch (e: any) {
+      //  #3870 — 서버가 «모름이라 멈췄다(force 로 풀린다)» 고 하면 그 선택지를 **여기서** 준다. 종전엔 서버 문구를
+      //   그대로 토스트했는데, 그 문구는 «화면의 [강제로 되살리기] 를 눌러 주세요» 라고 대화창에만 있는 버튼을
+      //   지목한다 — 이 화면엔 없어서 막다른 안내였다.
+      if (canForceRestore(e) && !force) {
+        workingId = ''; sig = ''; paint();
+        if (await confirmForceRestore({ name: s.label })) { await restore(s, true); return; }
+        return;
+      }
       toast('되살리지 못했어요 — ' + (e && e.message ? e.message : e), true);
     } finally { workingId = ''; sig = ''; paint(); }
   }
@@ -538,9 +570,6 @@ function archivePart(ctx: PartCtx): Part {
 //   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
 /** 웹 칸에 실린 주소의 저장 열쇠 — 세션마다 따로다(webPart 와 같은 규칙을 써야 서로 어긋나지 않는다). */
 const WEB_URL_KEY = 'pn_web_url';
-/** "이 주소를 웹 칸에 실어라" — 칸이 아직 없으면 셸(panes.ts)이 듣고 칸부터 켠다.
- *  ⚠ 이 신호는 **곁칸 한 벌 안에서만** 돈다(ctx.paneRoot). 문서 전체로 뿌리면 다른 세션 탭까지 물든다. */
-const WEB_OPEN_EVT = 'pn:open-web';
 /** 밖(다른 부품)에서 웹 칸에 주소를 싣는 유일한 통로.
  *  ⚠ 저장을 **먼저** 한 다음 알린다 — 칸이 아직 없으면 셸이 그때 만드는데, 새로 만들어진 웹 칸은
  *   이벤트를 이미 놓친 뒤라 저장된 값에서 주소를 읽는다(둘 중 하나만 하면 '처음 한 번'이 조용히 안 먹는다).
@@ -659,7 +688,13 @@ function makeZoom(o: ZoomOpts): Zoom {
   };
 }
 
-function webPart(ctx: PartCtx): Part {
+function webPart(ctx: PartCtx, frameOnly = false): Part {
+  //  데스크톱 앱(#1829 브라우저 서피스)이면 AI 와 같이 쓰는 탭으로 그린다(#4993) — webview 는 칸 안이 아니라 브라우저 층에 산다.
+  //   끼워 넣은 판(미리보기 안 라이블리)은 제외한다 — 거기엔 서피스가 없고(preload 가 없다) 탭 대장도 바깥 것이 아니다.
+  if (hasBrowserSurface() && !EMBEDDED) return liveWebPart(ctx);
+  //  웹 브라우저로 연 라이블리 — 그 사람의 데스크톱 앱이 켜져 있으면 그 앱 탭의 원격 화면(#4993 (A)), 아니면 아래 iframe 칸
+  //   (frameOnly = 원격 화면이 «데스크톱 없음» 일 때 이 칸을 그대로 쓰려고 부른 것).
+  if (!EMBEDDED && !frameOnly) return remoteWebPart(ctx, () => webPart(ctx, true));
   const root = el('div', { class: 'pn-part pn-web' });
   const KEY = WEB_URL_KEY;
   // 재우기 상태(아래 '안 보이면 재운다') — 주소를 싣는 모든 길(load·adopt·reload)이 이걸 만지므로 맨 위에 둔다.
@@ -919,6 +954,162 @@ function webPart(ctx: PartCtx): Part {
   };
 }
 
+// ══ 웹 — 데스크톱 앱: AI 와 사람이 같이 쓰는 탭 (#4993) ═══════════════════════════
+//  이 칸은 **자리(stage)와 주소줄만** 갖는다. 페이지(webview)는 브라우저 층(browser-tabs.ts)에 살고, 층이 그 webview 를
+//  이 자리 위에 겹쳐 맞춘다 — 사람이 다른 세션을 봐도 AI 는 그 탭에서 스크린샷·클릭을 계속할 수 있어야 하기 때문이다
+//  (칸 안의 webview 는 셸이 탭을 숨기는 순간 스크린샷이 영영 멈춘다 — browser-tabs 머리말의 실측).
+//  탭의 열쇠 = 이 칸의 저장 열쇠(slotKey) — 그래서 이 세션 AI 의 browser_* 툴이 여는 탭이 곧 이 칸이다.
+//  배율은 setZoomFactor 가 아니라 «배치 크기 ÷ 배율 + transform» 이다(층이 매 틀 scale() 을 읽는다).
+function liveWebPart(ctx: PartCtx): Part {
+  const root = el('div', { class: 'pn-part pn-web pn-web-live' });
+  const FIT_BASE = 1280;
+  let key = ctx.slotKey();
+  let release: (() => void) | null = null;
+  /** 이 칸이 자리에 붙여 둔 탭 — 대장의 그 열쇠 탭이 이것과 다르면(없어졌다가 다시 생겼다) 다시 붙인다. */
+  let docked: BTab | null = null;
+  let adopting = false;
+  let curZ = 1;
+  const stage = el('div', { class: 'pn-webstage' });
+  const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' }) as HTMLInputElement;
+  input.onfocus = () => input.select();
+  //  ⚠ 늘 «붙여 둔 탭» 을 쓴다 — 대장에서 탭이 없어졌다 다시 생기면(새 BTab) 그 탭은 자리가 없어 셸 뒤 투명도 1% 로 숨는다.
+  //   그대로 ensureTab 만 부르면 사람이 친 주소가 안 보이는 탭에 실렸다(#4993 격리 리뷰). 다르면 여기서 다시 붙인다.
+  const tab = (): BTab => {
+    if (!docked || getTab(key) !== docked) adopt();
+    return docked!;
+  };
+  const go = (raw?: string): void => {
+    const u = normWebUrl(raw ?? input.value);
+    if (!u) return;
+    if (!EMBEDDED) rememberUrl(key, u);
+    const t = tab();
+    t.url = u;
+    if (t.isReady) { try { t.view.loadURL(u).catch(() => { /* 실패는 did-fail-load 가 적는다 */ }); } catch { t.view.setAttribute('src', u); } }
+    else t.view.setAttribute('src', u);
+    sync();
+  };
+  input.onkeydown = (e: KeyboardEvent) => { if (!e.isComposing && e.key === 'Enter') { e.preventDefault(); go(); } };
+  const reload = (): void => { const t = tab(); try { if (t.isReady) t.view.reload(); else if (t.url) t.view.setAttribute('src', t.url); } catch { /* 아직 안 붙었다 */ } };
+  const backBtn = el('button', { class: 'pn-web-btn ic back', type: 'button', 'aria-label': '뒤로', title: '앞 화면으로 돌아갑니다.',
+    onclick: () => { const t = tab(); try { if (t.view.canGoBack()) t.view.goBack(); } catch { /* noop */ } } }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  const fwdBtn = el('button', { class: 'pn-web-btn ic', type: 'button', 'aria-label': '앞으로', title: '뒤로 오기 전 화면으로 갑니다.',
+    onclick: () => { const t = tab(); try { if (t.view.canGoForward()) t.view.goForward(); } catch { /* noop */ } } }, pnIcon('chev', 'pn-i sm')) as HTMLButtonElement;
+  const openTab = el('a', { class: 'pn-web-btn ic', target: '_blank', rel: 'noopener', title: '지금 주소를 새 탭(시스템 브라우저)에서 엽니다.', 'aria-label': '새 탭에서 열기', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
+  openTab.onclick = (e: Event) => { const u = tab().url; if (!u) { e.preventDefault(); return; } openTab.href = u; };
+  // AI 표시 — 이 탭을 AI 가 쓰고 있으면(최근 1분) 뜬다. 누르면 이 탭의 AI 조작을 멈추고, 다시 누르면 푼다.
+  const aiChip = el('button', { class: 'pn-web-ai', type: 'button', hidden: true }) as HTMLButtonElement;
+  aiChip.onclick = () => { const t = tab(); setPaused(t, !t.paused); sync(); toast(t.paused ? '이 탭의 AI 조작을 멈췄어요. 다시 누르면 풀립니다.' : 'AI 가 이 탭을 다시 쓸 수 있어요.'); };
+  // 사람에게 넘기기 — AI 가 부탁한 일(로그인·인증 등)을 사람이 끝내고 [완료]를 누른다.
+  const hoText = el('span', { class: 'pn-web-ho-t' });
+  const handoffBar = el('div', { class: 'pn-web-handoff', role: 'status', hidden: true },
+    el('span', { class: 'pn-web-ho-h', text: 'AI 의 부탁' }), hoText,
+    el('span', { class: 'pn-web-ho-acts' },
+      el('button', { class: 'pn-web-btn pri', type: 'button', text: '완료', title: '부탁한 일을 끝냈어요 — AI 가 이어서 합니다.', onclick: () => { const t = getTab(key); if (t) answerHandoff(t, true); sync(); } }),
+      el('button', { class: 'pn-web-btn', type: 'button', text: '못 해요', title: 'AI 에게 못 한다고 알립니다.', onclick: () => { const t = getTab(key); if (t) answerHandoff(t, false); sync(); } })));
+  const empty = el('div', { class: 'pn-web-empty' },
+    el('p', { class: 'pn-web-empty-h', text: '주소를 넣으면 이 칸에서 열립니다.' }),
+    el('p', { class: 'pn-web-empty-p', text: '이 세션의 AI 도 이 탭을 같이 씁니다. 사이트에 로그인해 두면 AI 가 그 로그인으로 일해요.' }));
+  bindCtx(root, () => {
+    const u = tab().url || input.value || '';
+    return {
+      title: u ? (u.length > 40 ? u.slice(0, 40) + '…' : u) : '웹 칸', sub: '웹',
+      rows: [
+        { label: '뒤로', icon: 'chevL', off: backBtn.disabled, run: () => backBtn.click() },
+        { label: '앞으로', icon: 'chevR', off: fwdBtn.disabled, run: () => fwdBtn.click() },
+        { label: '다시 불러오기', icon: 'refresh', hint: '⌘R', off: !u, run: () => reload() },
+        { sep: true, label: '' },
+        { label: '새 창에서 열기', icon: 'open', off: !u, run: () => window.open(u, '_blank', 'noopener') },
+        { label: '주소 복사', icon: 'copy', off: !u, run: () => void copyText(u).then((ok) => { if (ok) toast('주소를 복사했어요'); }) },
+        { label: '주소 입력', icon: 'pen', run: () => { input.focus(); input.select(); } },
+      ],
+    };
+  });
+  root.append(
+    el('div', { class: 'pn-web-bar' },
+      el('span', { class: 'pn-web-navs' }, backBtn, fwdBtn,
+        el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm'))),
+      input, aiChip, openTab),
+    handoffBar,
+    stage);
+  const zoom = makeZoom({ stage, keyOf: () => key, baseW: () => FIT_BASE, paint: (z) => { curZ = z; } });
+
+  /** 주소줄·단추·AI 표시·부탁 막대를 탭의 지금 상태에 맞춘다. */
+  function sync(): void {
+    const t = getTab(key);
+    if (!t) return;
+    if (document.activeElement !== input) input.value = t.url || '';
+    try { ctx.setTabTitle?.(t.url ? new URL(t.url).host.replace(/^www\./, '') : null); } catch (_) { ctx.setTabTitle?.(null); }
+    try { backBtn.disabled = !t.view.canGoBack(); fwdBtn.disabled = !t.view.canGoForward(); } catch (_) { backBtn.disabled = true; fwdBtn.disabled = true; }
+    const aiRecent = t.aiBusy > 0 || (t.aiAt > 0 && Date.now() - t.aiAt < 60_000);
+    aiChip.hidden = !aiRecent && !t.paused;
+    aiChip.classList.toggle('busy', t.aiBusy > 0);
+    aiChip.classList.toggle('paused', t.paused);
+    aiChip.textContent = t.paused ? 'AI 멈춤' : (t.aiBusy > 0 ? 'AI 조작 중' : 'AI');
+    aiChip.title = t.paused ? 'AI 조작을 멈춰 두었어요 — 누르면 다시 쓸 수 있게 합니다.' : 'AI 가 이 탭을 쓰고 있어요 — 누르면 AI 조작을 멈춥니다(사람은 계속 쓸 수 있어요).';
+    handoffBar.hidden = !t.handoff;
+    hoText.textContent = t.handoff ? t.handoff.message : '';
+    empty.hidden = !!t.url;
+  }
+  /** 이 칸이 보여 줄 탭을 지금 세션의 것으로 — 자리를 다시 쥐고, 배율 알약·빈 안내를 그 탭의 겹침 판으로 옮긴다. */
+  function adopt(): void {
+    if (adopting) return;   // ensureTab 이 내는 'tabs' 신호가 여기로 되돌아오는 것을 막는다
+    adopting = true;
+    try {
+      key = ctx.slotKey();
+      if (release) { release(); release = null; }
+      const t = ensureTab(key);
+      release = dockTab(key, stage, () => curZ);
+      docked = t;
+      //  알약·안내는 webview 위에 떠야 한다 — 칸 안 요소는 층의 webview 를 이길 수 없어(쌓임 맥락이 다르다) 겹침 판에 싣는다.
+      t.overlay.append(zoom.el, empty);
+      zoom.apply();
+    } finally { adopting = false; }
+    sync();
+  }
+  adopt();
+  const offSess = ctx.onSession(() => adopt());
+  //  탭 목록이 바뀌면(만들기·없애기) 내 탭이 아직 그 탭인지 본다 — 없어졌거나 갈렸으면 다시 붙인다(빈 자리로 남지 않게).
+  const offTabs = onTabEvent((ev) => {
+    if (ev.type === 'tabs') { if (!adopting && getTab(key) !== docked) adopt(); return; }
+    if ('key' in ev && ev.key === key && ev.type !== 'reveal') sync();
+  });
+  const aiTimer = window.setInterval(() => { const t = getTab(key); if (t && t.aiAt) sync(); }, 5_000);   // AI 표시가 1분 뒤 저절로 꺼지게
+  // ⌘R 은 이 칸만 — 마지막으로 만진 칸이 여기일 때(옛 웹 칸과 같은 규칙). webview 안을 누른 뒤의 키는 게스트 몫이라 여기 안 온다.
+  let mine = false;
+  const paneOf = (): HTMLElement => (root.closest('.pn-pane') as HTMLElement | null) || root;
+  const mark = (e: Event): void => { const t = e.target; mine = t instanceof Node && paneOf().contains(t); };
+  const onKey = (e: KeyboardEvent): void => {
+    if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+    if (String(e.key).toLowerCase() !== 'r' && e.code !== 'KeyR') return;
+    if (!mine || root.hidden || !root.offsetParent) return;
+    e.preventDefault();
+    reload();
+  };
+  document.addEventListener('pointerdown', mark, true);
+  document.addEventListener('focusin', mark, true);
+  window.addEventListener('keydown', onKey, true);
+  // 밖에서 부른 주소(미리보기 칸 → 이 칸) — 옛 웹 칸과 같은 신호를 받는다.
+  const onOpen = (e: Event): void => { const u = (e as CustomEvent).detail?.url; if (u) go(String(u)); };
+  const evtHost = ctx.paneRoot();
+  evtHost.addEventListener(WEB_OPEN_EVT, onOpen);
+  return {
+    root,
+    tick: () => sync(),
+    destroy: () => {
+      offSess(); offTabs();
+      window.clearInterval(aiTimer);
+      if (release) { release(); release = null; }
+      zoom.destroy();
+      zoom.el.remove();
+      empty.remove();
+      evtHost.removeEventListener(WEB_OPEN_EVT, onOpen);
+      document.removeEventListener('pointerdown', mark, true);
+      document.removeEventListener('focusin', mark, true);
+      window.removeEventListener('keydown', onKey, true);
+    },
+  };
+}
+
 // ══ 뷰어 — 자료의 파일을 이 칸에 띄워 본다 (#1819) ══════════════════════════════
 //  이름이 '파일 편집'이었을 땐 무엇을 하는 칸인지 이름에서 안 읽혔고(원준 2026-08-20 "뭔지 감이 안 온다"),
 //  실제로 고칠 수 있는 형식은 글 파일뿐이라 이름이 하는 약속이 대부분 거짓이었다. **보는 것**으로 좁힌다.
@@ -1001,22 +1192,20 @@ function viewerPart(ctx: PartCtx): Part {
   };
   let list: FlatFile[] = [];
   let path = '';
-  // #3784 우클릭 — 새 뷰어 탭 · 경로/이름 복사(펴 놓은 것이 있을 때)
+  // #3784 우클릭 — 경로/이름 복사(펴 놓은 것이 있을 때). «새 뷰어 탭»은 뺐다 — 파일마다 뷰어가 하나다(#4135).
   bindCtx(root, () => {
     const name = path ? path.split('/').pop() || path : '';
     return {
       title: name || '뷰어', sub: path ? path : '펴 놓은 파일 없음',
       rows: [
-        { label: '새 뷰어 탭에서 보기', icon: 'columns', off: !path, run: () => openInViewerPart(ctx, path, { newTab: true, sid: src?.sid, node: src?.node }) },
-        { sep: true, label: '' },
         { label: '경로 복사', icon: 'copy', off: !path, run: () => void copyText(path).then((ok) => { if (ok) toast('경로를 복사했어요'); }) },
         { label: '파일 이름 복사', icon: 'copy', off: !path, run: () => void copyText(name).then((ok) => { if (ok) toast('복사했어요'); }) },
       ],
     };
   });
-  let q = '';
   //  살아 있는 미리보기(아래) — open() 이 읽으므로 **그보다 앞에** 선언한다(마운트 중 TDZ 사고의 재발 방지).
-  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(목록 화면·아직 여는 중)
+  let shownStamp = '';          // 지금 그려 둔 파일의 도장(수정 시각:크기) — '' 이면 비교할 것이 없다(빈 화면·아직 여는 중)
+  let opening = '';             // 지금 받는 중인 경로 — 같은 경로를 겹쳐 받지 않는다(#4135 리뷰: 갓 만든 뷰어는 기억으로 한 번, 셸 신호로 또 한 번 open 에 와서 두 번 받았다)
   let unbridge: () => void = () => {};   // #4075 — 지금 떠 있는 시안 프레임의 검토 다리를 떼는 손잡이(다른 파일을 펼 때 뗀다)
   let checking = false;
   //  ── 고치기 (#762, 원준 2026-09-05: "뷰어 안에서 편집 버튼 누르면 편집도 가능하게") ────────────
@@ -1043,9 +1232,6 @@ function viewerPart(ctx: PartCtx): Part {
   const fileUrl = (p2: string): string => (src
     ? apiUrl('/api/ui/terminal/sessions/' + encodeURIComponent(src.sid) + '/file?path=' + encodeURIComponent(p2) + (src.node ? '&node=' + encodeURIComponent(src.node) : ''))
     : apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2)));
-  //  목록에도 **미리보기**를 세운다(#762, 원준 2026-09-04 "뷰어도 미리보기 필요함") — 자료 칸과 같은 기계다.
-  //  아이콘만 스무 줄이면 "그 파일이 어느 거였는지" 를 이름으로만 골라야 한다(자료 칸을 격자로 바꾼 것과 같은 이유).
-  const pv = createPreviewKit({ fileUrl, dead: () => ctx.dead() });
   // 무엇을 열어 두었나도 **세션마다** 따로 — 자료(파일 자체)는 프로젝트 공용이지만, '내가 지금 뭘 펴 놨나'는 내 세션의 것이다.
   const remember = (p2: string): void => {
     if (EMBEDDED) return;   // 끼워 넣은 판 — 바깥 사람이 펴 둔 파일을 덮어쓰지 않는다
@@ -1082,7 +1268,8 @@ function viewerPart(ctx: PartCtx): Part {
     if (!items.length && !emptyDirs.length) return;
     if (!(ctx.id > 0)) { toast('이 화면은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요.', true); return; }
     //  같은 이름이 이미 있으면 **묻고 나서** 덮는다 — 자료는 이 프로젝트의 모든 세션이 읽는 공용물이라
-    //  조용히 갈아 끼우면 남의 근거가 소리 없이 바뀐다.
+    //  조용히 갈아 끼우면 남의 근거가 소리 없이 바뀐다. 목록은 이때만 읽는다(#4135 — 뷰어는 목록을 그리지 않으므로 틱마다 안 받는다).
+    await loadList();
     const over = items.filter((u) => taken.has(u.rel));
     if (over.length && !(await confirmDialog({
       title: over.length === 1 ? `「${base(over[0].rel)}」를 덮어쓸까요?` : `이미 있는 자료 ${over.length}개를 덮어쓸까요?`,
@@ -1100,19 +1287,18 @@ function viewerPart(ctx: PartCtx): Part {
     if (ctx.dead()) return;
     upToast(r);
     await loadList();
-    // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다(여럿이면 목록 맨 위에 모여 있다).
+    // 올린 이유는 **보려고**다 — 방금 올라간 것 중 첫 파일을 그 자리에서 편다.
     const first = r.ok ? items.find((u) => list.some((f) => f.path === u.rel)) : null;
     if (first) { void go(first.rel); return; }
-    if (!path) paintPicker();
     paintBar();
   }
 
   function paintBar(): void {
     //  탭 이름은 **펴 둔 파일**이다(#762) — 뷰어가 둘 이상 뜨면 「뷰어」 「뷰어」 로는 어느 것이 무엇인지 모른다.
-    //   목록 화면(펴 둔 것 없음)이면 부품 기본 이름으로 돌아간다.
+    //   펴 둔 것이 없으면 부품 기본 이름으로 돌아간다.
     ctx.setTabTitle?.(path ? base(path) : null);
     if (!path) {
-      bar.replaceChildren(...(ctx.id > 0 ? [upBtn(true)] : []), el('span', { class: 'pn-fine', text: list.length ? list.length + '개 · 최근 먼저' : '' }));
+      bar.replaceChildren(el('span', { class: 'pn-fine', text: '펴 놓은 파일 없음' }), ...(ctx.id > 0 ? [upBtn(true)] : []));
       return;
     }
     //  고치는 중 — 막대도 그 일만 말한다(다시 불러오기·올리기·내려받기는 지금 할 일이 아니다).
@@ -1128,8 +1314,8 @@ function viewerPart(ctx: PartCtx): Part {
           onclick: () => { void save(); } }));
       return;
     }
+    //  «← 자료» 는 없다(#4135) — 이 칸은 목록을 그리지 않는다. 다른 파일은 자료 칸에서 두 번 눌러 제 뷰어로 연다.
     bar.replaceChildren(
-      el('button', { class: 'pn-web-btn', type: 'button', text: '← 자료', title: '파일 목록으로 돌아갑니다', onclick: () => void go('') }),
       el('b', { class: 'pn-ed-name ell', text: base(path), title: path }),
       //  고치기(#762, 원준 2026-09-05) — 브라우저가 고칠 수 있는 것(글·시안)에만 선다. 그림·PDF·영상엔 안 뜬다.
       ...(canEdit(path) ? [el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 고칩니다 — 저장하면 자료의 원본이 바뀝니다',
@@ -1137,7 +1323,7 @@ function viewerPart(ctx: PartCtx): Part {
       //  새로고침(#762, 원준 2026-09-04) — 같은 파일을 **다시 받아** 편다(세션이 방금 고친 시안·PDF 를 그 자리에서 본다).
       //  배율은 그대로다(세션마다 기억하는 값이라 다시 펴도 안 바뀐다). 웹 칸의 ↺ 와 같은 아이콘·같은 자리.
       el('button', { class: 'pn-web-btn ic', type: 'button', title: '이 파일을 다시 불러옵니다', 'aria-label': '다시 불러오기',
-        onclick: () => { void loadList().then(() => open(path, true, true)); } }, pnIcon('undo', 'pn-i sm')),
+        onclick: () => { void open(path, true, true); } }, pnIcon('undo', 'pn-i sm')),
       ...(src || !(ctx.id > 0) ? [] : [upBtn(false)]),
       //  내려받기는 **인증 fetch → blob** 이다(files-upload authDownload). 종전의 `<a href>` 는 토큰을 못 실어 쿠키 세션이
       //   없는 폰(PWA·새 기기)에서 로그인 화면이 떴고, iOS 는 새 탭 팝업을 막는다.
@@ -1216,7 +1402,7 @@ function viewerPart(ctx: PartCtx): Part {
     }))) return false;
     ed = null;
     if (path) await open(path, true, true);   // 방금 쓴 것이 그려진다(도장도 여기서 새로 잡힌다)
-    else paintPicker();
+    else paintEmpty();
     paintBar();
     return true;
   }
@@ -1231,50 +1417,29 @@ function viewerPart(ctx: PartCtx): Part {
     await open(p2);
   }
 
-  /** 자료 목록 — 이 칸이 '무엇을 열까'를 묻는 화면. 검색 한 칸 + 행 목록(종류·크기·시각). */
-  function paintPicker(): void {
-    const search = el('input', {
-      class: 'pn-ed-find', type: 'search', value: q, placeholder: '자료 찾기 — 이름 일부', 'aria-label': '자료 찾기',
-    }) as HTMLInputElement;
-    // 다시 그리면 IME 조합이 끊긴다 — 목록만 갈아 끼운다.
-    const rows = el('div', { class: 'pn-flist' });
-    const draw = (): void => {
-      const needle = q.trim().toLowerCase();
-      const hit = list.filter((f) => !needle || f.path.toLowerCase().includes(needle));
-      if (!hit.length) {
-        const noProject = !(ctx.id > 0);
-        rows.replaceChildren(el('div', { class: 'pn-empty' },
-          pnIcon(list.length ? 'doc' : noProject ? 'folder' : 'up', 'pn-i big'),
-          el('b', { text: list.length ? '찾는 자료가 없어요.' : noProject ? '이 화면은 프로젝트 자료가 없어요.' : '아직 자료가 없어요.' }),
-          el('p', { class: 'pn-fine', text: list.length
-            ? '이름 일부로 다시 찾아보세요.'
-            : noProject ? '세션이 만든 파일은 [세션 파일] 칸이나 타임라인의 산출물에서 여세요 — 여기서 보고 내려받을 수 있어요.'
-            : '파일을 이 칸에 끌어다 놓거나 [올리기]를 누르세요 — 올린 파일은 자료에도 그대로 쌓입니다.' }),
-          ...(list.length || noProject ? [] : [upBtn(true)])));
-        return;
-      }
-      rows.replaceChildren(...hit.slice(0, 300).map((f) => {
-        const k = kindOf(f.path);
-        const ic = el('span', { class: 'pn-fic pv ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
-          pnIcon(k.kind === 'page' ? 'note' : k.kind === 'img' || k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
-        if (k.kind !== 'file') pv.watch(ic, f.path, k.kind, f.size || 0);
-        return el('button', { class: 'pn-frow2 pv', type: 'button', title: f.path, onclick: () => void go(f.path) },
-          ic,
-          el('b', { class: 'pn-fname1', text: base(f.path) }),
-          el('span', { class: 'pn-fcol k', text: k.type }),
-          el('span', { class: 'pn-fcol s', text: fmtSize(f.size || 0) }),
-          el('span', { class: 'pn-fcol d', text: f.mtime ? relTime(new Date(f.mtime).toISOString()) : '' }));
-      }));
-    };
-    search.addEventListener('input', () => { q = search.value; draw(); });
-    pv.reset();
-    draw();
-    showPlain(el('div', { class: 'pn-ed-pick2' }, search, rows), true);
-    window.setTimeout(() => { if (q) search.focus(); }, 0);
+  /** 펴 둔 것이 없을 때 — 안내 한 장. 이 칸은 **목록을 그리지 않는다**(#4135, 원준 2026-09-25: "뷰어에서 목록을 보는 게 아닌 게
+   *  좋겠음"): 종전의 목록은 8초마다 통째로 다시 그려져 미리보기가 계속 깜빡였고, 자료 칸이 이미 그 목록이다. */
+  function paintEmpty(): void {
+    const noProject = !(ctx.id > 0);
+    showPlain(el('div', { class: 'pn-empty' },
+      pnIcon('eye', 'pn-i big'),
+      el('b', { text: '자료 칸에서 파일을 두 번 누르면 여기에 열려요.' }),
+      el('p', { class: 'pn-fine', text: noProject
+        ? '세션이 만든 파일은 [세션 파일] 칸이나 타임라인의 산출물에서 여세요 — 여기서 보고 내려받을 수 있어요.'
+        : '파일마다 뷰어가 하나씩 뜨고, 먼저 연 것은 그대로 남아요. 컴퓨터의 파일을 바로 보려면 [올리기].' }),
+      ...(noProject ? [] : [upBtn(true)])));
   }
 
-  /** 못 읽었다 — 너무 커서(413)면 «내려받기» 를 준다(미리보기 상한은 두 API 가 같다). 그 밖은 한 줄로 끝. */
+  /** 못 읽었다 — 너무 커서(413)면 «내려받기» 를 준다(미리보기 상한은 두 API 가 같다). 없어진 파일(404)이면 기억을 지우고
+   *  빈 화면으로(안 그러면 지운 파일의 «못 읽었어요» 가 그 탭에 영영 남는다). 그 밖은 한 줄로 끝. */
   function showFail(r: Response | null, p2: string): void {
+    if (path !== p2) return;   // 그 사이 다른 걸 골랐다 — 옛 요청의 실패로 지금 화면·기억을 지우지 않는다(리뷰 지적)
+    opening = '';              // 실패했으니 다시 누르면 다시 받는다
+    if (r && r.status === 404 && !src) {
+      remember(''); path = ''; shownStamp = '';
+      paintBar(); paintEmpty();
+      return;
+    }
     if (r && r.status === 413) {
       showPlain(el('div', { class: 'pn-empty' }, pnIcon('drop', 'pn-i big'), el('b', { text: '미리보기엔 너무 큰 파일이에요.' }),
         el('p', { class: 'pn-fine', text: '내려받아서 보세요.' }),
@@ -1287,13 +1452,14 @@ function viewerPart(ctx: PartCtx): Part {
    *  `quiet` 면 «여는 중…» 을 안 띄운다 — 살아 있는 미리보기가 다시 펼 때 화면이 깜빡이지 않게(옛 그림이 새 그림이 올 때까지 남는다). */
   async function open(p2: string, fresh = false, quiet = false): Promise<void> {
     //  ⚠ **같은 파일을 다시 그리지 않는다** — 그리면 프레임이 새로 서서 PDF·시안이 맨 위로 튄다.
-    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·8초 틱). 진짜 다시 그릴 때(fresh)만 통과시킨다.
-    if (p2 && p2 === path && shown && !fresh && shownSrc === srcKey()) { paintBar(); return; }
-    path = p2;
+    //   이 길로 오는 부름이 여럿이다(세션 알림·탭 전환·기억·셸의 배달 신호). 진짜 다시 그릴 때(fresh)만 통과시킨다.
+    //   «받는 중»(opening)도 같은 파일이다 — 다 받기 전에 온 두 번째 부름이 fetch 를 한 번 더 띄우지 않게.
+    if (p2 && p2 === path && (shown || opening === p2) && !fresh && shownSrc === srcKey()) { paintBar(); return; }
+    path = p2; opening = p2;
     shownSrc = srcKey();
     if (!src) remember(p2);
     paintBar();
-    if (!p2) { shownStamp = ''; paintPicker(); return; }
+    if (!p2) { shownStamp = ''; paintEmpty(); return; }
     //  다시 펼 때 보던 자리를 지킨다 — 무대(그림·글)는 우리가 굴리므로 되돌릴 수 있다.
     //   프레임 안의 자리는 우리 것이 아니다 — 시안(HTML)은 문서가 제 자리를 다리로 알려 스스로 되돌린다(#4523, withScrollKeeper).
     //   PDF 는 여전히 못 지킨다 → 그래서 아래 감시가 «다 쓴 뒤 한 번만» 편다.
@@ -1333,7 +1499,10 @@ function viewerPart(ctx: PartCtx): Part {
         show(f, 'scale', () => PAGE_BASE);
       } else if (/\.(md|markdown)$/i.test(p2)) {
         //  글은 제 폭이 없다(칸에 맞춰 스스로 흐른다) — 맞춤 = 100%. 단추를 누르면 글자가 커진다.
-        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000))), 'scale', () => 0);
+        show(el('div', { class: 'pn-md' }, renderMarkdown(txt.slice(0, 200_000), {
+          //  #4582 — md 의 상대경로 그림(`![](img/a.png)`)은 이 파일 폴더 기준으로 같은 파일 API 로 받는다.
+          imgFetch: mdImgFetch(p2, (p) => fetch(fileUrl(p), fetchOpts)),
+        })), 'scale', () => 0);
       } else {
         show(el('pre', { class: 'pn-ed-pre', text: txt.slice(0, 400_000) }), 'scale', () => 0);
       }
@@ -1367,11 +1536,16 @@ function viewerPart(ctx: PartCtx): Part {
     //   제 미리보기를 넣어 둔다). 같은 파일이 화면마다 다르게 열리지 않도록 판정·렌더는 lib/file-preview
     //   한 자리가 쥔다(#1436) — 이 칸도 그 자리에 붙는다.
     const { buildFilePreview } = await import('../lib/file-preview.js');
+    //  크기는 HEAD 로 묻는다(#4135 — 목록을 더는 받지 않으므로 list 는 비어 있다). 렌더러의 대용량 사전 차단(MEDIA_MAX)이 이 값을 본다.
+    //   세션 파일(src)엔 안 묻는다 — 그 API 는 HEAD 에 몸통까지 흘린다(출처 주석).
+    const head = src ? null : await fetch(fileUrl(p2), { method: 'HEAD', headers: authHeaders(), cache: 'no-store' }).catch(() => null);
+    if (path !== p2) return;
     const out = await buildFilePreview({
       name: base(p2),
-      size: list.find((f) => f.path === p2)?.size,
+      size: Number(head?.headers.get('x-file-size') || '') || list.find((f) => f.path === p2)?.size,
       fetchView: () => fetch(fileUrl(p2), fetchOpts),
       fetchDownload: () => fetch(fileUrl(p2) + '&download=1', fetchOpts),
+      path: p2, fetchRel: (p) => fetch(fileUrl(p), fetchOpts),
       cls: { img: 'pn-ed-img', pdf: 'pn-ed-pv' },   // 크기 규칙만 이 칸 것으로 덮는다(fp-* 가 기본)
       mkBtn: (label, onClick) => el('button', { class: 'pn-web-btn', type: 'button', text: label, onclick: onClick }),
     }).catch(() => null);
@@ -1396,21 +1570,20 @@ function viewerPart(ctx: PartCtx): Part {
     //   slot 이 없는 옛 신호는 첫 뷰어가 받는다(그 판엔 뷰어가 하나뿐이었다).
     if (d.slot ? d.slot !== ctx.slot : ctx.slot !== 'editor') return;
     if (d.sid) { void go(d.path, { sid: String(d.sid), node: d.node ? String(d.node) : null }); return; }   // 세션 폴더의 파일
-    if (!list.some((f) => f.path === d.path)) void loadList();
     void go(d.path);
   };
   // ⚠ window 가 아니라 **이 곁칸**에서 듣는다 — 창에 달면 열려 있는 모든 세션 탭의 뷰어가 같이 갈아입는다.
   ctx.paneRoot().addEventListener(VIEWER_TO_EVT, onSend);
 
+  //  기억한 파일을 그대로 편다 — 그 사이 지워졌으면 open 이 404 를 받아 빈 화면으로 돌아간다(showFail).
   const openRemembered = (): void => {
     src = null;
-    const last = remembered();
-    void open(last && list.some((f) => f.path === last) ? last : '');
+    void open(remembered() || '');
   };
   //  ⚠ 세션이 안 바뀌었으면 아무것도 하지 않는다 — 알림이 같은 세션으로 다시 와도 파일을 다시 그리면 자리가 튄다.
   let lastSid = ctx.memKey();
-  //  ⚠ 목록이 오기 전에 신호로 이미 무언가를 폈으면(갓 만들어진 뷰어가 세션 파일을 받는 길) 기억으로 덮지 않는다.
-  void loadList().then(() => { if (!path && !src) openRemembered(); });
+  //  ⚠ 신호로 이미 무언가를 폈으면(갓 만들어진 뷰어가 세션 파일을 받는 길) 기억으로 덮지 않는다.
+  if (!path && !src) openRemembered();
   // 세션을 갈아 끼우면 그 세션이 펴 두었던 파일로 — 단 **고치는 중이면 건드리지 않는다**(저장 안 한 글을 뺏지 않는다).
   const offSess = ctx.onSession(() => {
     const k = ctx.memKey();
@@ -1456,17 +1629,10 @@ function viewerPart(ctx: PartCtx): Part {
 
   return {
     root,
-    tick: () => {
-      void loadList().then(() => {
-        if (!path) paintPicker();
-        paintBar();
-        //  옛 서버 폴백 — 매니페스트의 도장으로도 같은 판정을 한다(새 서버에선 HEAD 가 먼저 잡아 여기선 이미 같다).
-        //  ⚠ 자(floor)가 서버 헤더와 **같아야** 한다 — 다르면 아무 일 없이도 매 틱 «바뀌었다»가 된다(#762 실측).
-        const f = path ? list.find((x) => x.path === path) : null;
-        if (f) reopenIfChanged(f.mtime + ':' + f.size);
-      });
-    },
-    destroy: () => { offSess(); zoom.destroy(); pv.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_TO_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
+    //  8초 틱에 할 일이 없다(#4135) — 목록을 안 그리고, 살아 있는 미리보기는 위 HEAD 감시(1.5초)가 맡는다. 종전엔 여기서
+    //  매니페스트를 받아 목록을 통째로 다시 그렸고(미리보기 전부 다시 받음), 그 요청이 서버의 AGENTS.md 재작성을 또 불렀다.
+    tick: () => { /* noop */ },
+    destroy: () => { offSess(); zoom.destroy(); window.clearInterval(watch); ctx.paneRoot().removeEventListener(VIEWER_TO_EVT, onSend); urls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 
@@ -1474,17 +1640,19 @@ function viewerPart(ctx: PartCtx): Part {
 //  #1780 v2.1 에선 화면 앱을 AppInstance 상단 탭(#/i/:id)으로, headless 앱을 앱 세션 탭으로만 열었다(앱 UI 를 이 칸에
 //  끼우면 한 실행이 top-level 앱이기도, 세션의 부품이기도 해서 앱 개념이 둘로 갈린다는 이유).
 //  #4225(9/21 회의) — 앱의 자리가 바뀌었다: **세션이 먼저 있고 앱은 그 세션에 붙는다.** 그래서 세션을 보고 있을 때
-//   화면·데이터가 있는 앱을 누르면 **지금 세션 오른쪽에 붙는다**(세션 부품의 앱 칸 — session-app-dock.ts). 이 칸은 여전히
-//   목록만 소유한다(화면은 세션 옆에 선다 — 곁칸 배치는 프로젝트 한 벌이라 세션마다 다른 앱을 못 담는다).
-//   새 세션 자리(세션이 없다)이거나 화면·데이터가 없는 앱(스킬 묶음)은 종전대로 상단 탭으로 연다. 우클릭엔 둘 다 있다.
+//   화면·데이터가 있는 앱을 누르면 **지금 세션에 붙고 곁칸에 그 앱 탭이 생겨 켜진다**(session-app-pane.ts). 이 칸은 여전히
+//   목록만 소유한다. 새 세션 자리(세션이 없다)이거나 화면·데이터가 없는 앱(스킬 묶음)은 종전대로 상단 탭으로 연다.
+//   우클릭: 붙이기 · 새 탭으로 열기 · (관리자) 고칠 수 있는 사람 — 앱은 그 워크스페이스가 바로 고쳐 쓰는 것이다(app_save).
 function appsPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-apps' });
   const attach = async (a: { id: string; title: string }): Promise<void> => {
     const sid = ctx.curSession();
     if (!sid) return;
+    //  붙으면 붙은 목록이 다시 읽히고, 셸이 «새로 붙음»을 보고 곁칸에 그 앱 탭을 세워 켠다(panes.ts syncSessApps).
+    //  이미 붙어 있던 앱이면 «새로 붙음»이 없다 — 그 탭을 보여 달라고 따로 말한다(누른 사람은 그 앱을 보려고 눌렀다).
     if (await attachAppToSession(sid, a.id, a.title)) {
-      ctx.paneRoot().dispatchEvent(new CustomEvent(SESSION_APPS_EVT, { detail: { sid, app_id: a.id } }));
-      toast(`「${a.title}」을(를) 이 세션 오른쪽에 붙였어요 — AI 도 이 앱을 같이 씁니다.`);
+      ctx.paneRoot().dispatchEvent(new CustomEvent(SHOW_SESSAPP_EVT, { detail: { app_id: a.id } }));
+      toast(`「${a.title}」을(를) 이 세션에 붙였어요 — 사이드바에서 AI 와 같이 씁니다.`);
     }
   };
 
@@ -1500,10 +1668,10 @@ function appsPart(ctx: PartCtx): Part {
       return;
     }
     root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
-      const hasUi = a.pages.length > 0 || a.system?.renderer === 'browser';
+      const hasUi = hasAppScreen(a) || a.system?.renderer === 'browser';
       const projectId = a.instances.project === 'global' ? null : ctx.id;
       //  붙일 수 있는 앱 = 세션 옆에 둘 화면이 있거나 AI 가 쓸 데이터가 있는 앱. 브라우저 같은 시스템 앱은 제 탭이 정본이다.
-      const attachable = (a.pages.length > 0 || a.tables.length > 0) && !a.system;
+      const attachable = (hasAppScreen(a) || a.tables.length > 0) && !a.system;
       const openTab = (): void => { if (hasUi) void openInstalledApp(a, projectId); else void openAppSession(a.id, { title: a.title, projectId }); };
       const tile = el('button', { class: 'pn-app', type: 'button',
         title: attachable ? '지금 보고 있는 세션 오른쪽에 붙입니다(세션이 없으면 상단 탭으로 열어요)' : hasUi ? '상단 탭에서 앱 화면을 엽니다' : '상단 탭에서 이 앱 전용 AI 세션을 엽니다',
@@ -1513,10 +1681,13 @@ function appsPart(ctx: PartCtx): Part {
         el('span', { class: 'pn-fine', text: attachable ? '세션에 붙이기' : hasUi ? '앱 탭' : '앱 세션 탭' }));
       // #3784 우클릭 — 붙이기 · 열기(앱 화면 / 앱 세션) · 이름 복사
       bindCtx(tile, () => ({
-        title: a.title, sub: hasUi ? '앱 화면' : 'AI 세션 앱',
+        title: a.title, sub: hasUi ? '앱 화면' : '세션 목록',
         rows: [
           ...(attachable && ctx.curSession() ? [{ label: '이 세션에 붙이기', icon: 'plus', run: () => void attach(a) }] : []),
           hasUi ? { label: '앱 화면 열기(새 탭)', icon: 'open', run: () => void openInstalledApp(a, projectId) } : { label: '앱 세션 열기', icon: 'chat', run: () => void openAppSession(a.id, { title: a.title, projectId }) },
+          //  #4225 — 누가 이 앱을 고칠 수 있나(기본 전원 · 앱마다 지정한 사람만). 관리자만, 기본 앱(빌트인)은 고칠 수 없어 없다.
+          ...(hasScope('admin') && a.source.kind !== 'builtin' ? [{ label: a.editMode === 'members' ? `고칠 수 있는 사람 — 지정한 ${a.editMembers.length}명` : '고칠 수 있는 사람 — 전원', icon: 'pen',
+            run: () => void openEditPolicyDialog({ id: a.id, title: a.title, editMode: a.editMode, editMembers: a.editMembers }, () => void list()) }] : []),
           { sep: true, label: '' },
           { label: '앱 이름 복사', icon: 'copy', run: () => void copyText(a.title).then((ok) => { if (ok) toast('복사했어요'); }) },
         ],
@@ -1601,6 +1772,7 @@ function previewPart(ctx: PartCtx): Part {
 
 export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'sessions') return sessionsPart(ctx);
+  if (type === 'console') return consolePart(ctx);
   if (type === 'archive') return archivePart(ctx);
   if (type === 'web') return webPart(ctx);
   if (type === 'preview') return previewPart(ctx);
@@ -1611,5 +1783,7 @@ export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'tasks') return tasksPart(ctx);
   if (type === 'timeline') return timelinePart(ctx);
   if (type === 'apps') return appsPart(ctx);
+  if (type === 'sessapp') return sessAppPart(ctx);
+  if (type === 'livdesk') return livDeskPart(ctx);
   return livPart(ctx);
 }

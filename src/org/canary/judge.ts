@@ -115,6 +115,16 @@ export function evaluateStreak(recent: boolean[], threshold: number): { state: C
 }
 
 /**
+ * 직전 회전의 상태 — 전이 판정의 기준점. **가장 최근 실행이 구성 미비면 unconfigured** 다.
+ *  연속실패 집계(recent)는 configured 행만 보므로, 이걸 빼면 설정을 걷어낸 뒤에도 과거 실패로 failing 이 남아
+ *  매 회전 failing→unconfigured 'clear' 가 다시 울린다(복구 알람이 크론 주기마다 반복된 사고).
+ */
+export function priorState(latestConfigured: boolean | null, recent: boolean[], threshold: number): { state: CanaryState; failStreak: number } {
+  if (latestConfigured === false) return { state: "unconfigured", failStreak: 0 };
+  return evaluateStreak(recent, threshold);
+}
+
+/**
  * 경보를 보낼지 — **상태가 바뀔 때만**. 같은 상태가 이어지면 조용하다(알림 피로가 곧 경보 무시로 이어진다).
  *  unknown 은 어느 쪽으로도 전이로 치지 않는다: 데이터가 없거나 판정 중인 것을 '변화'라고 알리면 소음이 된다.
  */

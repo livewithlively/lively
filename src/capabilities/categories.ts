@@ -13,35 +13,39 @@ import {
 import {
   listCategoryGroups, upsertCategoryGroup, removeCategoryGroup, groupKeyFrom,
 } from "../v6/category-group-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 const KEY_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 // 묶음(#1631) — 도구 설명마다 한 줄로 붙인다. 이걸 안 적으면 에이전트가 묶음을 **분류의 층**으로 오해하고
 //  «이 지식은 어느 묶음이냐» 를 묻기 시작한다(그런 질문은 성립하지 않는다 — 지식은 카테고리에만 속한다).
 const GROUP_NOTE = "묶음(group)은 **화면에서 카테고리를 갈라 보여 주는 상위 층**일 뿐이고 분류에는 쓰이지 않는다"
-  + "(분류기 후보·증류기 목적지·검색/소환 어디에도 안 들어간다 — 틀려도 지식은 한 건도 안 움직인다).";
+  + "(증류기의 카테고리 후보·목적지·검색/소환 어디에도 안 들어간다 — 틀려도 지식은 한 건도 안 움직인다).";
 
 // ⚠ 2026-09-02(#1631) space(business|product|system) 폐기 — 분류축 위에 **고정 서랍장**을 하나 더 두지 않는다.
 //  그 셋은 소프트웨어 회사의 분류지 쓰는 사람의 분류가 아니었다. 옛 클라이언트가 space 를 보내오면 조용히 무시한다
 //  (400 이 아니다 — 서버가 먼저 나가고 번들이 뒤따르는 배포 순서에서 그 사이 요청을 깨뜨리지 않는다).
-const categoryListInput = {};
+const categoryListInput = {
+  light: z.boolean().optional().describe("true 면 이름표만(key·name·정의 등 행 칸) — 지식 수·어긋남 집계를 빼서 빠르다"),
+};
 type CategoryListInput = z.infer<z.ZodObject<typeof categoryListInput>>;
 const categoryList: Capability = {
   name: "category_list",
   title: "카테고리 목록",
-  description: "분류축(카테고리) 전체 조회 — 이 워크스페이스의 지식이 어느 서랍들로 갈라져 있는지. "
+  description: "분류축(카테고리) 전체 조회 — 이 워크스페이스의 지식이 어느 카테고리들로 갈라져 있는지. "
     + `항목마다 속한 묶음(group)이 함께 온다 — ${GROUP_NOTE}`,
   scope: "context",
   input: categoryListInput,
   expose: {
     mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/categories"], parse: () => ({}) }],
+    rest: [{ method: "GET", paths: ["/api/ui/categories"],
+      parse: (req) => (req.query?.light === "1" || req.query?.light === "true" ? { light: true } : {}) }],
   },
   // 공개범위(#1291) — 카테고리 행은 전원 공개(분류체계는 조직의 뼈대)지만, 행에 실린 **지식 카운트**는 뷰어 기준이다.
   //  group(#1631)은 group_key 를 그대로 다시 싣는 이름이다 — 화면·에이전트가 쓰기(category_update.group)와 **같은 말**로
   //  읽게 하려는 것뿐이고, 컬럼(group_key)도 그대로 둔다(기존 소비자 무변화).
-  handler: async (_input: CategoryListInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
-    categories: (await listCategories(ctx?.viewer ?? null)).map((c) => ({ ...c, group: c.group_key ?? null })),
+  handler: async (input: CategoryListInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
+    categories: (await listCategories(ctx?.viewer ?? null, { light: input.light === true })).map((c) => ({ ...c, group: c.group_key ?? null })),
   }),
 };
 
@@ -125,7 +129,7 @@ const categoryCreate: Capability = {
     + `${GROUP_NOTE} `
     + "정의가 없으면 분류·소환이 축 이름의 어감으로만 판정한다. "
     + "⚠ 정의는 **주제 경계**만 적는다 — 민감정보·개인정보 정책(«계좌번호는 싣지 않는다» 류)은 쓰지 마라. "
-    + "분류기가 그 문장을 분류 기준으로 읽고, 실제 차단은 공개범위·마스킹 층이 하므로 여기 적어 둬도 한 줄도 막지 못한다.",
+    + "증류기가 그 문장을 카테고리를 고르는 기준으로 읽고, 실제 차단은 공개범위·마스킹 층이 하므로 여기 적어 둬도 한 줄도 막지 못한다.",
   scope: "context",
   input: categoryCreateInput,
   expose: {
@@ -150,6 +154,7 @@ const categoryCreate: Capability = {
       } }],
   },
   handler: async (input: CategoryCreateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { category: await createCategory(input, writeCtx) };
   },
@@ -202,6 +207,7 @@ const categoryUpdate: Capability = {
       } }],
   },
   handler: async (input: CategoryUpdateInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const { id, ...patch } = input;
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { category: await updateCategory(id, patch, writeCtx) };
@@ -331,6 +337,7 @@ const categoryGroupUpsert: Capability = {
       } }],
   },
   handler: async (input: CategoryGroupUpsertInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    assertNoContentSecrets(input);   // #4501
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     //  key 를 안 줬으면 이름에서 뽑는다 — 한글 이름이면 해시로 내려앉는다(사람이 읽는 것은 name 이다).
     const key = String(input.key ?? "").trim() || groupKeyFrom(input.name);

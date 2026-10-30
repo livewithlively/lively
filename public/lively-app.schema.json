@@ -107,6 +107,40 @@
                 "maxLength": 128
               },
               "default": []
+            },
+            "notifications": {
+              "type": "boolean",
+              "default": false
+            },
+            "chat_send": {
+              "type": "boolean",
+              "default": false
+            },
+            "project_files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]{1,8}$"
+              },
+              "maxItems": 8,
+              "default": []
+            },
+            "workspace_files": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9]{1,8}$"
+              },
+              "maxItems": 8,
+              "default": []
+            },
+            "app_folder": {
+              "type": "boolean",
+              "default": false
+            },
+            "ai_runs": {
+              "type": "boolean",
+              "default": false
             }
           },
           "additionalProperties": false,
@@ -228,6 +262,30 @@
           "additionalProperties": false,
           "default": {}
         },
+        "web": {
+          "type": "object",
+          "properties": {
+            "root": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "devices": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "microphone",
+                  "camera",
+                  "clipboard-read",
+                  "geolocation"
+                ]
+              },
+              "maxItems": 4
+            }
+          },
+          "additionalProperties": true
+        },
         "instances": {
           "type": "object",
           "properties": {
@@ -260,7 +318,12 @@
               "enum": [
                 "session",
                 "browser",
-                "classic"
+                "classic",
+                "inbox",
+                "sources",
+                "taxonomy",
+                "learn",
+                "builder"
               ]
             },
             "route": {
@@ -430,6 +493,58 @@
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 64
+                        },
+                        "not_null": {
+                          "type": "boolean"
+                        },
+                        "default": {},
+                        "default_expr": {
+                          "type": "string",
+                          "maxLength": 40
+                        },
+                        "unique": {
+                          "type": "boolean"
+                        },
+                        "check": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
+                        },
+                        "references": {
+                          "type": "object",
+                          "properties": {
+                            "table": {
+                              "type": "string",
+                              "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                            },
+                            "on_delete": {
+                              "type": "string",
+                              "enum": [
+                                "cascade",
+                                "set null",
+                                "restrict",
+                                "no action"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "table"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "minItems": 1,
+                          "maxItems": 200
+                        },
+                        "renamed_from": {
+                          "type": "string",
+                          "pattern": "^[a-z_][a-z0-9_]{0,62}$"
                         }
                       },
                       "required": [
@@ -439,6 +554,52 @@
                       "additionalProperties": false
                     },
                     "minItems": 1
+                  },
+                  "indexes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "columns": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                          },
+                          "minItems": 1,
+                          "maxItems": 8
+                        },
+                        "unique": {
+                          "type": "boolean",
+                          "default": false
+                        }
+                      },
+                      "required": [
+                        "columns"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 20,
+                    "default": []
+                  },
+                  "checks": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 1000
+                    },
+                    "maxItems": 20,
+                    "default": []
+                  },
+                  "drop_columns": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                    },
+                    "maxItems": 100,
+                    "default": []
                   }
                 },
                 "required": [
@@ -475,6 +636,148 @@
             "additionalProperties": false
           },
           "default": []
+        },
+        "agent": {
+          "type": "object",
+          "properties": {
+            "instructions": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "reinject_every": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 500,
+              "default": 40
+            }
+          },
+          "required": [
+            "instructions"
+          ],
+          "additionalProperties": false
+        },
+        "icon": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "pattern": "^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\\-\\s]+$",
+              "description": "SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"
+            },
+            "color": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"
+            },
+            "color_dark": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "description": "다크 테마의 선 색 #RRGGBB(없으면 color)"
+            }
+          },
+          "required": [
+            "path",
+            "color"
+          ],
+          "additionalProperties": false,
+          "description": "#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널)."
+        },
+        "ai": {
+          "type": "object",
+          "properties": {
+            "jobs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2000
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 32,
+              "default": []
+            },
+            "instructions": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글 · NUL 없이). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"
+            }
+          },
+          "additionalProperties": true
+        },
+        "context": {
+          "type": "object",
+          "properties": {
+            "knowledge_categories": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "maxItems": 50,
+              "default": [],
+              "description": "이 앱이 읽을 지식의 카테고리 key(category_list 의 key). 적은 카테고리에 든 지식만 읽힌다 — 연결선 · 묶음은 따라가지 않는다"
+            },
+            "source_kinds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "transcript",
+                  "minutes",
+                  "email",
+                  "slack",
+                  "discord",
+                  "notion_doc",
+                  "clickup_doc",
+                  "drive_file",
+                  "local_file",
+                  "figma_comment",
+                  "github_issue",
+                  "gitlab_issue",
+                  "linear_issue",
+                  "zotero_item",
+                  "other"
+                ]
+              },
+              "maxItems": 15,
+              "default": [],
+              "description": "이 앱이 읽을 자료의 종류. 적지 않으면 자료 도구(source_*)로는 하나도 못 읽는다 — 파일 권한(project_files · workspace_files · 앱 폴더)은 이 범위 밖이다(폴더 범위는 다음 판)"
+            },
+            "folders": {
+              "description": "다음 판 — 지금 적으면 저장을 거절한다"
+            }
+          },
+          "additionalProperties": false,
+          "description": "이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기(검색 · 목록 · 상세 · 링크)가 공개범위 ∩ 이 범위로 좁혀지고, 활동 · 프로젝트에 달린 지식 참조에서도 범위 밖은 빠진다. 범위 밖을 이름으로 열면 거절된다. 범위를 지킬 수 없는 도구(휴지통 · 실행 취소 · 내 사용 내역 · 맥락 파이프라인(수집 · 증류 · 카테고리 붙이기 · 관리기) · 새 토큰 발급 · 구성원 이름의 실행(위탁 · 브로커 · 예약 작업 · 프로젝트 대화 · 리브 · 처음 설정 분석) · self 소스 SQL)와 지운 문서의 이력은 쓸 수 없다. 범위를 적은 앱은 도구를 «전부»(permissions.tools · ext_tools 의 *)로 받을 수 없다 — 쓸 도구를 이름이나 좁은 꼴로 적는다. 항상-주입 문서(규칙 · 페르소나 섹션)는 범위와 무관하게 모든 세션에 들어간다. 범위는 실수를 막는 안전망이라 알려진 길을 막은 것이다 — 능력 밖 길(앱 세션의 터미널 세션 만들기 등)은 다음 판이다. 적지 않으면 실행한 사람이 보는 것 전부"
+        },
+        "mcp_tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "description": "이 앱이 구성원의 AI 대화창(라이블리 MCP)에 내놓는 도구 — 항목 { name, title?, description, input?, run: { kind, … }, level?: 'L0'|'L1' }. 앱 개발 가이드 «mcp_tools» 절"
         }
       },
       "required": [

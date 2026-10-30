@@ -1,6 +1,7 @@
 // v2 AppInstance 클라이언트(#1780 v2.1) — 상단 탭 하나가 이 실행 인스턴스 하나를 연다.
 // AppPackage 설치와 분리되어 같은 앱을 여러 번, 서로 다른 프로젝트 맥락으로 열 수 있다.
 import { api, el, toast } from '../core.js';
+import { josa } from '../lib/studio-flow.js';   // «을(를)» 대신 받침으로 고른 조사(점검 7-3)
 
 export interface AppWorkerRuntime {
   kind: 'worker';
@@ -57,6 +58,8 @@ export interface AppInstanceRecord {
     system: { renderer: 'session' | 'browser' | 'classic'; route?: string; home?: string } | null;
     runtime: AppWorkerRuntime | null;
     ui: { pages: Array<{ key: string; title: string; display: string[] }> };
+    server?: boolean;   // #4485 후속 — 서버가 화면을 만드는 앱(web.server · 옛 게이트웨이는 없다)
+    icon?: { path: string; color: string; color_dark?: string } | null;   // #4769 선언한 앱 아이콘
   };
 }
 
@@ -71,7 +74,8 @@ function remember(instance: AppInstanceRecord): AppInstanceRecord { cache.set(in
 export async function listAppInstances(): Promise<AppInstanceRecord[]> {
   //  #3855·#3857 — 보임 축의 나머지 반쪽(내가 치운 세션 id)을 **같은 왕복**에 받는다. 두 판을 따로 받으면
   //   한쪽만 도착한 틱에 «목록에 둠» 과 «치움» 이 서로 다른 시점의 사실로 섞인다.
-  const out: any = await api('/api/ui/app-instances?dismissed=1');
+  //  revalidate(#4989) — 셸이 8초마다 다시 묻는 목록이다. 같은 답이면 서버가 본문 없이 304 로 답한다(lib/net.ts 머리말).
+  const out: any = await api('/api/ui/app-instances?dismissed=1', { revalidate: true });
   const rows: AppInstanceRecord[] = Array.isArray(out?.instances) ? out.instances : [];
   for (const r of rows) if (r && r.id) remember(r);
   //  치운 세션 id 는 **그 판의 배열에 묶어** 돌려준다(dismissedRefsOf, #3870). 읽기는 겹쳐 뜬다 — 모듈 변수 하나에 두면
@@ -118,7 +122,7 @@ export async function listDismissedSessions(): Promise<DismissedSession[]> {
 
 export async function getAppInstance(id: string): Promise<AppInstanceRecord> {
   const out: any = await api('/api/ui/app-instances/' + encodeURIComponent(id));
-  if (!out?.instance?.id) throw new Error('앱 인스턴스를 받지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱 화면 정보를 받지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -143,7 +147,7 @@ export async function createAppInstance(appId: string, opts?: {
       ...(opts?.execution ? { execution: opts.execution } : {}),
     }),
   });
-  if (!out?.instance?.id) throw new Error('앱 인스턴스를 만들지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱 화면을 만들지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -167,7 +171,15 @@ export async function openInstalledApp(app: {
   pages?: Array<{ key: string }>;
   runtime?: AppWorkerRuntime | null;
   system?: { renderer?: string; home?: string } | null;
-}, projectId?: number | null): Promise<boolean> {
+}, projectId?: number | null, extra?: {
+  /** #4769 앱에 줄 값(#/open/<앱>?… 의 물음표 뒤) — 인스턴스 state 로 실어 앱이 lively.state 로 읽는다. */
+  state?: Record<string, unknown>;
+  /** 주소를 바꾸는 법 — 없으면 location.hash. 라우터 안에서 부르면 replace 로 넘겨 뒤로 가기에 자리를 남기지 않는다. */
+  go?: (hash: string) => void;
+  /** 열지 못했을 때(서버 오류 · 이상한 답) 까닭을 받는다 — 주면 여기서 알리지 않고 부른 쪽이 제 말로 알린다(앱빌더 ③ 「앱 화면을 열지 못했어요(까닭)」 · 점검 6-15).
+   *  사람이 동의 · 실행 자리를 거절한 것은 실패가 아니라 부르지 않는다. */
+  onError?: (why: string) => void;
+}): Promise<boolean> {
   try {
     if (app.runtime) {
       const { ensureAppGrant } = await import('./app-session.js');
@@ -176,12 +188,18 @@ export async function openInstalledApp(app: {
     const execution = app.runtime ? await chooseAppExecution(app.title, app.runtime) : undefined;
     if (app.runtime && !execution) return false;
     const page = app.pages && app.pages[0] ? app.pages[0].key : undefined;
-    const state = app.system?.renderer === 'browser' ? { url: app.system.home || 'https://www.google.com/' } : undefined;
-    const instance = await createAppInstance(app.id, { projectId: projectId ?? null, page, title: app.title, state, execution: execution ?? undefined });
-    location.hash = '#/i/' + encodeURIComponent(instance.id);
+    const state = app.system?.renderer === 'browser' ? { url: app.system.home || 'https://www.google.com/' } : extra?.state;
+    let instance = await createAppInstance(app.id, { projectId: projectId ?? null, page, title: app.title, state, execution: execution ?? undefined });
+    //  #4769 멱등 재열기(single · subject)는 옛 state 를 지킬 수 있다 — 이번에 줄 값이 있으면 그 값으로 덮는다(없으면 앱은 그냥 열린다).
+    if (extra?.state && JSON.stringify(instance.state ?? {}) !== JSON.stringify(extra.state)) {
+      try { instance = await updateAppInstance(instance.id, { state: extra.state }); } catch (_) { /* 값 없이도 앱은 열린다 */ }
+    }
+    const hash = '#/i/' + encodeURIComponent(instance.id);
+    if (extra?.go) extra.go(hash); else location.hash = hash;
     return true;
   } catch (e: any) {
-    toast('앱을 열지 못했어요 — ' + (e && e.message ? e.message : e), true);
+    const why = String(e && e.message ? e.message : e);
+    if (extra?.onError) extra.onError(why); else toast('앱을 열지 못했어요. ' + why, true);
     return false;
   }
 }
@@ -205,7 +223,7 @@ export async function closeAppInstance(id: string): Promise<void> {
 
 export async function restartAppInstance(id: string): Promise<AppInstanceRecord> {
   const out: any = await api('/api/ui/app-instances/' + encodeURIComponent(id) + '/restart', { method: 'POST', body: '{}' });
-  if (!out?.instance?.id) throw new Error('앱 worker를 다시 실행하지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱의 뒤에서 도는 코드를 다시 실행하지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -218,7 +236,7 @@ export async function updateAppInstance(id: string, patch: { title?: string | nu
       ...(patch.state ? { state: patch.state } : {}),
     }),
   });
-  if (!out?.instance?.id) throw new Error('앱 인스턴스를 갱신하지 못했습니다');
+  if (!out?.instance?.id) throw new Error('앱 화면 정보를 바꾸지 못했어요.');
   return remember(out.instance as AppInstanceRecord);
 }
 
@@ -260,17 +278,17 @@ function executionDialog(title: string, allowCentral: boolean, nodes: ExecutionN
     const choices: HTMLElement[] = [];
     if (allowCentral) choices.push(el('button', { class: 'v2-exec-opt', type: 'button', onclick: () => finish({ kind: 'central' }) },
       el('b', { text: '이 게이트웨이' }),
-      el('span', { text: '조직 서버에서 계속 실행합니다.' }),
+      el('span', { text: '조직 서버에서 계속 실행해요.' }),
       el('small', { text: '기본' })));
     for (const node of nodes) choices.push(el('button', { class: 'v2-exec-opt', type: 'button', onclick: () => finish({ kind: 'remote', node_id: node.id }) },
       el('b', { text: node.name }),
-      el('span', { text: '원격 노드에서 같은 worker 계약으로 실행합니다.' }),
+      el('span', { text: '원격 컴퓨터에서 같은 방식으로 실행해요.' }),
       el('small', { text: node.id })));
     const overlay = el('div', { class: 'v2-exec-ov', role: 'dialog', 'aria-modal': 'true', 'aria-label': title + ' 실행 위치 선택',
       onclick: (event: Event) => { if (event.target === overlay) finish(null); } },
       el('div', { class: 'v2-exec' },
-        el('h3', { text: '「' + title + '」을(를) 어디에서 실행할까요?' }),
-        el('p', { text: '앱 화면은 지금 탭에 열리고, 아래 선택은 앱의 worker 코드가 도는 컴퓨터입니다.' }),
+        el('h3', { text: josa('「' + title + '」', '을') + ' 어디에서 실행할까요?' }),
+        el('p', { text: '앱 화면은 지금 탭에 열려요. 아래에서 고르는 것은 앱의 뒤에서 도는 코드가 실행될 컴퓨터예요.' }),
         el('div', { class: 'v2-exec-list' }, ...choices),
         el('div', { class: 'v2-exec-actions' }, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => finish(null) }))));
     document.body.append(overlay);

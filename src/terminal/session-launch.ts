@@ -23,6 +23,7 @@ import { logger } from "../log.js";
 import { isWorkSession, sessionKindFromRequest } from "../sessions/session-kind.js";
 import { createSession, killSession, normalizeCap, type CreateInput, type SessionInfo } from "./terminal-sessions.js";
 import { normalizeTheme } from "./catalog.js";
+import { withPreissuedIdentity } from "./node-session-preissue.js";   // #4135 — 노드 세션의 id·훅·MCP 토큰은 relay 전에 게이트웨이가 굽는다
 import { autoTrustWorkspace } from "./session-create-guards.js";
 import { mirrorNodeSession } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { chatIoCaps } from "./harness-io/adapter.js";           // #1746 — 하네스별 대화창 능력(읽기·승인)
@@ -36,7 +37,7 @@ import type { NodeOp } from "../node/protocol.js";
 import { nodeOfflineNote } from "../node/offline-note.js";      // #1849 — 오프라인 원인 추정 한 문장
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { bindNodeSessionProjectOrKill, nodeProjectCreatePlan } from "../node/provision-remote.js";
-import { createAppInstance } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954)
+import { createAppInstance, sessionInstanceStatus } from "../org/store/app-instances.js";   // 세션의 앱 인스턴스 정체성(#1954) · #4694 같은 id 복원
 import { bindSessionTask, ensureSessionTask, setSessionTaskOrder } from "../v6/session-task.js";   // #4084 세션 = 태스크
 import { currentTenant } from "../org/tenant-context.js";
 import { PRIMARY_TENANT_ID, setSessionWorkspace } from "../org/tenancy/registry.js";   // #1750 후속 — 세션→워크스페이스 정본
@@ -90,6 +91,26 @@ export function sessionInputFromBody(headers: Record<string, unknown>, b: Record
 }
 
 /**
+ * 두 입구가 **같은 모양으로** 답하는 생성 응답 — 세션과 함께 **서버가 넣을 첫 지시**를 싣는다(#4906 — #4794 후속, 순수).
+ *
+ *  화면(web/v2/quick-session.ts spawnSession)은 이 글을 그 세션의 첫 지시로 기억한다 — 세션 화면이 그 말을 대기 말풍선으로 그리고,
+ *  터미널을 숨겨 붙였다가 하네스가 그렸고 **그 말이 실제로 제출된 뒤** 넘긴다(«다 쳤다» 알림의 머리 · 대화 기록 에코를 이 글과 맞춘다).
+ *  그런데 서버가 지시를 짓거나 고치는 길이 있어 친 글과 다를 수 있다 — 종전엔 화면이 친 글만 기억해 어긋났다:
+ *   · 태스크에서 연 세션 — 지시를 비워 보내면 «태스크 #id 진행해» + 본문으로 채운다(project-routes.ts). 화면은 기억할 글이 없어
+ *     숨겨 붙이기를 못 타고, 하네스가 뜨는 몇 초 동안 빈 터미널을 보였다(#4794 §10-2).
+ *   · 태스크 여러 개 — 순서 안내 + 1번 본문 + 친 글로 다시 짓는다. · 홈 첫 지시의 첨부를 프로젝트로 옮기면 좌표를 고친다(routes.ts).
+ *     둘 다 «다 쳤다» · 에코 맞추기가 빗나가 그린 뒤 8초 유예로 넘어갔다.
+ *  넣을 첫 지시가 없으면(빈 · 공백뿐) 싣지 않는다 — 화면은 종전대로 친 글(없으면 없음)을 쓴다. 옛 화면은 이 필드를 모른 채 무시한다.
+ *  ⚠ 셸 하네스 · 로그인 세션(loginFor)엔 서버가 첫 지시를 넣지 않는데(sessions.ts createSession) 여기선 그 조건을 다시 보지 않는다 —
+ *   화면에서 그 길로 첫 지시를 보내는 입구가 없다(run-picker 가 셸을 거르고, spawnSession 은 loginFor 를 안 보낸다). 종전에도 화면은
+ *   친 글을 같은 조건 없이 기억했다. 그 입구가 생기면 이 판정을 createSession 과 한 술어로 묶는다.
+ */
+export function launchReply<T>(session: T, input: { initialPrompt?: unknown }): { session: T; initialPrompt?: string } {
+  const p = input.initialPrompt;
+  return typeof p === "string" && p.trim() ? { session, initialPrompt: p } : { session };
+}
+
+/**
  * 세션이 섰다 — 그 세션의 **앱 인스턴스**를 세운다(#1954 후속 · #1780 v2.2 §2.5: 일반 세션 = ai-session 앱의 인스턴스).
  *  종전엔 웹에서 그 세션을 처음 열 때만 만들어져(lazy), CLI 로 띄우고 웹에서 안 연 세션은 인스턴스가 없었다 —
  *  그래서 좌측 목록이 '돌고 있는 세션'을 따로 훑어 그 구멍을 메워야 했다. 정체성은 세션이 태어날 때 정해진다.
@@ -103,6 +124,20 @@ export const registerSessionInstance = async (sessionId: string, owner: string, 
   await createAppInstance({ appId: opts.appId || "ai-session", owner, projectId: opts.projectId ?? null,
     subjectKind: "session", subjectRef: sessionId, title: opts.title || null })
     .catch((e) => logger.warn({ err: e, sessionId }, "앱 인스턴스 등록 실패(비치명) — 세션은 살아 있다"));
+};
+
+/**
+ * #4694 — **같은 id 로 되살린** 세션의 인스턴스. registerSessionInstance 를 그대로 부르면 안 된다 — 그 upsert 는 있는 행을
+ *  active 로 되살리며 상태 칸을 비운다(createAppInstanceTx): 사람이 «치움» 해 둔 세션이 일괄 복원으로 목록에 되올라오고(#3857 위반),
+ *  목록에 이미 있던 인스턴스는 화면 상태를 잃는다. 그래서 지금 상태로 가른다:
+ *   · 행 없음 → 세운다(목록에 서게) · 시스템이 닫은 행 → 다시 연다(세션이 다시 산다)
+ *   · active → 그대로 · 사람이 치운 행 → **그대로**(보임 축은 사람만 바꾼다 — 직접 열면 화면의 멱등 생성이 연다)
+ *  상태를 못 읽으면 아무것도 안 한다 — 모르는 채 세우면 치움을 풀 수 있다(목록은 열 때 화면이 다시 세운다).
+ */
+export const reviveSessionInstance = async (sessionId: string, owner: string, opts: { appId?: string | null; projectId?: number | null; title?: string | null }): Promise<void> => {
+  const state = await sessionInstanceStatus(opts.appId || "ai-session", owner, sessionId)
+    .catch((e) => { logger.warn({ err: e, sessionId }, "같은 id 복원: 인스턴스 상태를 못 읽었다(비치명) — 손대지 않는다"); return null; });
+  if (state === "none" || state === "closed") await registerSessionInstance(sessionId, owner, opts);
 };
 
 // 세션 → 워크스페이스 정본 기록(#1750 후속) — 헤더를 못 싣는 표면(SSE·iframe·WS·훅·구 kit)이
@@ -267,6 +302,11 @@ export interface LaunchOpts {
    *  중앙 세션은 쓰지 않는다 — createSession 이 input.invites 를 스스로 검증한다.
    */
   invites: string[];
+  /**
+   * 노드 갈래에서 create 대신 보낼 op(#4135 세션 복제 = "forkSession"). 없으면 종전대로 create / createAppSession.
+   *  ⚠ 호출자가 **그 노드가 이 op 를 선언했는지 먼저 확인**한다(session-fork.forkRefusal) — 여기는 보내기만 한다.
+   */
+  nodeOp?: NodeOp;
 }
 
 /** 생성 응답의 세션 한 장 — 노드 세션이면 그 좌표(node)가 붙는다. */
@@ -294,9 +334,12 @@ export async function launchSession(user: LivelyUser, input: CreateInput, opts: 
     await requireCreatableNode(me, nodeId);
     const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
     const remoteInput = await prepareRemoteAppSession(input, me);
-    const op: NodeOp = input.appId ? "createAppSession" : "create";
+    const op: NodeOp = opts.nodeOp ?? (input.appId ? "createAppSession" : "create");
     const plan = nodeProjectCreatePlan(remoteInput, !!input.projectId && nodeSupports(nodeId, "injectFirstPrompt"));
-    const session = await relayNodeOp<SessionInfo>(nodeId, op, { user: { userId: me }, input: { ...plan.createInput, invites: [], hostProfile }, invites: opts.invites });
+    //  #4135 — 세션 id·훅·MCP 토큰은 게이트웨이가 여기서 굽는다(노드는 DB 가 없다). user 객체는 relay 에 싣는 것과 같아야 한다(접두어).
+    const relayUser = { userId: me } as LivelyUser;
+    const session = await withPreissuedIdentity(relayUser, plan.createInput, (created) =>
+      relayNodeOp<SessionInfo>(nodeId, op, { user: relayUser, input: { ...created, invites: [], hostProfile }, invites: opts.invites }));
     await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
     await registerSessionInstance(session.id, me, { appId: input.appId, projectId: input.projectId, title: session.label });
     if (input.projectId && input.projectSrc !== "org") {

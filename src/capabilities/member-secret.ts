@@ -10,14 +10,28 @@ import {
   setMemberSecret, deleteMemberSecret, getMemberSecret,
 } from "../org/credentials/member-secret-store.js";
 import { verifyCredential, verifierExists } from "../org/credentials/credential-verify.js";
+import { CODEX_AUTH_KIND, CREDENTIAL_SECRET_MAX, parseCodexAuth } from "../org/credentials/codex-auth.js";
 import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 ③ 자격 건강 상태
+import { ensureHttpToolPresetGroup } from "../org/delivery/http-tool-preset-apply.js";
+import { logger } from "../log.js";
 
 // 알려진 kind — 표면 문서/검증용(스토어는 형식만 검증하므로 신규 커넥터가 kind 를 늘려도 되지만, 오타 방지 힌트).
 const KNOWN_KINDS = [
   "gitlab_pat", "github_pat", "slack_user_token", "google_oauth_refresh", "clickup_token",
-  "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token",
+  "notion_token", "aws_role_arn", "prometheus_bearer", "figma_token", "zotero_token", "claude_setup_token", CODEX_AUTH_KIND,
+  "anthropic_api_key",   // #4488 워크스페이스 LLM 키(owner=gateway · org_credential_set) — 앱 AI 실행의 기본 실행 계정 · LLM 프록시
 ];
 const KIND_DESC = `자격 종류(예: ${KNOWN_KINDS.join(", ")} — 신규 커넥터가 확장 가능)`;
+
+/** Zotero 키의 주인(userID·username) — 키 원문은 돌려받아도 버린다. 실패는 null(저장은 그대로 성공이다). */
+async function zoteroKeyOwner(key: string): Promise<{ user_id: string; username: string } | null> {
+  const res = await fetch("https://api.zotero.org/keys/current", {
+    headers: { "Zotero-API-Key": key, "Zotero-API-Version": "3" }, signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return null;
+  const b = (await res.json().catch(() => null)) as { userID?: unknown; username?: unknown } | null;
+  return b?.userID != null ? { user_id: String(b.userID), username: typeof b.username === "string" ? b.username : "" } : null;
+}
 
 function s(v: unknown, max = 4096): string {
   if (v === undefined || v === null) return "";
@@ -25,6 +39,24 @@ function s(v: unknown, max = 4096): string {
   if (t.length > max) throw new HttpError(400, `값이 ${max}자를 초과합니다`);
   return t;
 }
+/**
+ * 저장할 시크릿 검사(#4012 T2) — 없으면 null(=기존 유지). **자르지 않고 거절한다.**
+ *  · 상한은 CREDENTIAL_SECRET_MAX(16KB) — 다른 입력칸의 4096 자보다 넓다. codex 로그인 파일(auth.json)은
+ *    JWT 두 개가 들어가 4KB 를 넘을 수 있어, 종전 상한에서는 등록 자체가 막혔다.
+ *  · codex 자격은 **형식을 본다** — 다른 파일·잘린 JSON 을 저장해 두면 한참 뒤 판이 조용히 인증 실패로 멈춘다.
+ */
+export function validateMemberSecret(kind: string, secret: unknown): string | null {
+  if (secret === undefined || secret === null) return null;
+  const v = String(secret);
+  if (v.length > CREDENTIAL_SECRET_MAX) throw new HttpError(400, `시크릿이 ${CREDENTIAL_SECRET_MAX}자를 초과합니다`);
+  if (kind.trim().toLowerCase() === CODEX_AUTH_KIND && v.trim() && !parseCodexAuth(v)) {
+    throw new HttpError(400,
+      "codex 로그인 파일(auth.json)로 읽히지 않습니다 — `codex login` 뒤 `~/.codex/auth.json` 의 내용을 통째로 붙여넣으세요"
+      + "(ChatGPT 로그인이면 tokens 가, API 키 방식이면 OPENAI_API_KEY 가 있어야 합니다).");
+  }
+  return v;
+}
+
 function metaOf(v: unknown): Record<string, unknown> {
   if (v === undefined || v === null) return {};
   if (typeof v !== "object" || Array.isArray(v)) throw new HttpError(400, "meta 는 객체여야 합니다");
@@ -72,14 +104,31 @@ const meCredentialSet: Capability = {
     if (s(i.kind).toLowerCase() === "aws_role_arn") {
       throw new HttpError(403, "aws_role_arn 은 개인 자격으로 등록할 수 없습니다 — 관리자가 통합 자격(org)으로만 등록합니다. AWS 단기자격은 me_aws_credentials 로 발급받으세요.");
     }
-    if (i.secret !== undefined && s(i.secret) && !secretsEnabled()) {
+    //  ⚠ 형식·길이 검사가 **암호화 키 확인보다 먼저**다 — 틀린 값은 어떤 배포에서든 틀린 값이다.
+    const secret = validateMemberSecret(s(i.kind), i.secret);
+    if (secret !== null && secret.trim() && !secretsEnabled()) {
       throw new HttpError(400, "시크릿 암호화 키(CONNECTOR_SECRET_KEY) 미설정 — 자격을 저장할 수 없습니다");
     }
     const cred = await setMemberSecret(
       memberOwner(user.userId), i.kind, i.scope_key,
-      { secret: i.secret === undefined ? null : s(i.secret), meta: metaOf(i.meta), label: s(i.label, 200) || null },
+      { secret, meta: metaOf(i.meta), label: s(i.label, 200) || null },
       user.userId,
     );
+    //  키를 저장한 순간 그 키를 쓰는 AI 도구가 있게 한다 — Zotero 는 원격 MCP 가 없어 이 REST 묶음이 «내 계정으로 직접 사용»의 전부다.
+    //   없으면 키 칸은 수집에만 쓰이는 반쪽 표면이 된다(피그마 #1881 이 한 번 겪은 «토큰 칸은 있는데 도구 0개»).
+    //   Outlook 이 연결 직후 묶음을 심는 것(#4211)과 같은 함수 — 관리자가 꺼 둔 도구는 되살리지 않는다. best-effort.
+    if (s(i.kind).toLowerCase() === "zotero_token" && secret) {
+      try { await ensureHttpToolPresetGroup("zotero", { actor: user.userId, source: "zotero-key" }); }
+      catch (e) { logger.warn({ err: (e as Error)?.message }, "Zotero 도구 묶음 준비 실패(무시) — org_http_tool_preset_apply {key:'zotero'} 로 다시 심을 수 있다"); }
+      //  Zotero 도구는 개인 라이브러리를 userID 로 부른다(users/<id>/…). 그 id 를 아는 길은 `/keys/current` 뿐인데 그 응답엔
+      //   키 원문이 실려 도구로 낼 수 없다 — 그래서 저장하는 이 자리에서 한 번 물어 비밀 아닌 meta 에 id·이름만 남긴다.
+      const who = await zoteroKeyOwner(secret).catch(() => null);
+      if (who) {
+        const again = await setMemberSecret(memberOwner(user.userId), i.kind, i.scope_key,
+          { secret, meta: { ...metaOf(i.meta), user_id: who.user_id, username: who.username }, label: s(i.label, 200) || null }, user.userId);
+        return { credential: again };
+      }
+    }
     return { credential: cred };
   },
 };

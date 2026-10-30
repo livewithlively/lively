@@ -1,5 +1,6 @@
 // ClickUp HTTP·조회·쓰기 계층(#1313 R22 분할 — 구 clickup.ts 219·596-1054).
 import { resolveConnectorConfig } from "../config.js";
+import { CLICKUP_REQUEST_TIMEOUT_MS } from "../push-budget.js";
 import type {
   ClickUpComment, ClickUpCustomField, ClickUpFolder, ClickUpList, ClickUpSpace,
   ClickUpTag, ClickUpTask, ClickUpTeam, ClickUpTimeEntry, ClickUpView,
@@ -49,7 +50,7 @@ export async function clickupFetch<T>(path: string, init?: RequestInit): Promise
         },
         // 요청당 하드 타임아웃 — 응답 없는 fetch 가 무한 대기하면 워커가 침묵 정지(행)해 정체 감지 킬로 귀결된다
         //  (notion/client.ts 와 같은 방어). 60s 에 끊고 재시도 → 소진 시 throw(커서 동결로 다음 run 재수집).
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(CLICKUP_REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       // 멱등(GET) 요청만 재시도 — POST/PUT(createTask·createTaskComment·updateTask 등)은 타임아웃 시점에
@@ -102,7 +103,7 @@ export async function getTeam(): Promise<ClickUpTeam> {
   return team;
 }
 
-// 소문자 이메일 → 멤버 숫자 id. pm_task_create/assign 의 이메일 해소에 사용.
+// 소문자 이메일 → 멤버 숫자 id. 담당자 이메일을 ClickUp 멤버 id 로 해소할 때 쓴다(옛 pm_task_* 도구는 폐기).
 export async function getMembersEmailMap(teamId: string): Promise<Map<string, number>> {
   const team = await getTeam();
   if (team.id !== teamId) throw new Error(`ClickUp 워크스페이스 불일치: ${teamId}`);
@@ -142,20 +143,23 @@ export async function listFolderLists(folderId: string): Promise<ClickUpList[]> 
   return res.lists ?? [];
 }
 
+// 리스트 id 목록 — 쉼표·공백·줄바꿈 어느 것으로 구분해도 같은 뜻(#4970). [ClickUp 자료 가져오기] 토글(normalizeScopeInput)과
+//  웹 범위 저장은 고른 리스트를 **공백**으로 잇는데 여기는 쉼표로만 잘라, 둘 이상 고르면 "901 902" 한 덩어리가 되어
+//  어떤 리스트와도 맞지 않았다(허용 목록이면 아무것도 안 모이고, 제외 목록이면 아무것도 안 빠진다). id 에는 공백이 없다.
+export function parseListIds(raw: string | null | undefined): Set<string> {
+  return new Set(String(raw ?? "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean));
+}
+
 // 제외 리스트(env CLICKUP_EXCLUDE_LIST_IDS=쉼표구분) — ClickUp 샘플 리스트 등 노이즈 차단.
 export async function getExcludedListIds(): Promise<Set<string>> {
-  const raw = (await resolveConnectorConfig("clickup")).exclude_list_ids?.trim();
-  if (!raw) return new Set();
-  return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
+  return parseListIds((await resolveConnectorConfig("clickup")).exclude_list_ids);
 }
 
 // 허용(allow) 리스트(env CLICKUP_INCLUDE_LIST_IDS=쉼표구분). 설정 시 **이 리스트만** 싱크(나머지 전부 무시).
 //  우리 모델에선 컨테이너 List 의 top-level Task = project 라, 무관한 리스트의 태스크가 project 로 유입되는 걸 막는다.
 //  미설정이면 null(=종전 동작: 전체 - 제외목록). 툴 #2 의 per-connector 리스트 스코핑 config 의 ClickUp 구현.
 export async function getIncludedListIds(): Promise<Set<string> | null> {
-  const raw = (await resolveConnectorConfig("clickup")).include_list_ids?.trim();
-  if (!raw) return null;
-  const s = new Set(raw.split(",").map((x) => x.trim()).filter(Boolean));
+  const s = parseListIds((await resolveConnectorConfig("clickup")).include_list_ids);
   return s.size ? s : null;
 }
 
@@ -379,7 +383,7 @@ export async function enumerateHierarchy(
 
   const out: HierarchySpace[] = [];
   for (const spaceLite of await listSpaces(teamId)) {
-    // 스페이스 status set/피처 완전화(리스트 override_statuses=false 상속 판정).
+    // 스페이스 status set/피처 완전화(리스트 statuses 가 빈 경우의 폴백용).
     let space: ClickUpSpace = spaceLite;
     try { space = await getSpace(spaceLite.id); } catch (err) { console.error(`[clickup] 스페이스 ${spaceLite.id} 상세 실패:`, err); }
     let spaceFields: ClickUpCustomField[] = [];

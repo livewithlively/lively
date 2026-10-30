@@ -64,8 +64,8 @@
 .ob-q-prog i{flex:1; height:3px; border-radius:2px; background:var(--ghost)}
 .ob-q-prog i.ob-on,.ob-q-prog button.ob-on{background:var(--ink)}
 .ob-q-lead{font-size:14px; color:var(--ink-sub); margin-bottom:8px}
-.ob-q-title{font-size:26px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px}
-.ob-q-help{font-size:14px; color:var(--ink-sub); margin-bottom:26px}
+.ob-q-title{font-size:26px; font-weight:700; letter-spacing:-.01em; margin-bottom:6px; word-break:keep-all; text-wrap:balance}   /* 좁은 폭에서 «주세 / 요» 처럼 낱말 가운데서 끊지 않는다(#4970 — 인사 제목과 같은 규칙) */
+.ob-q-help{font-size:14px; color:var(--ink-sub); margin-bottom:26px; word-break:keep-all}
 /* 노션식 선택 카드 */
 .ob-opt-cards{display:flex; flex-direction:column; gap:10px}
 .ob-opt-card{display:flex; align-items:center; gap:12px; text-align:left; border:1px solid var(--line); border-radius:10px; padding:13px 15px; background:var(--card); transition:border-color .12s, box-shadow .12s}
@@ -88,6 +88,23 @@
 .ob-q-write{display:flex; gap:8px; margin-top:12px}
 .ob-q-write input{flex:1; border:1px solid var(--line); border-radius:8px; padding:9px 12px; outline:none}
 .ob-q-write input:focus{border-color:var(--blue); box-shadow:0 0 0 1px var(--blue)}
+/* (#4970) AI 연결 — 줄은 위 카드(.ob-opt-card) 모양을 빌리되 누르는 자리가 아니다(오른쪽 [연결]만 누른다).
+   줄 아래 로그인 칸은 [AI 계정 연결]과 같은 .aiacct-login(06-learn.css) — 여기서는 간격만 맞춘다. */
+.ob-ai .ob-ai-item{display:flex; flex-direction:column}
+.ob-ai .ob-ai-card{cursor:default}
+.ob-ai .ob-ai-card:not(.ob-on):hover{border-color:var(--line); box-shadow:none}
+.ob-ai .ob-oc-ic svg{width:20px; height:20px; display:block}
+.ob-ai .ob-ai-txt{min-width:0}
+.ob-ai .ob-ai-act{margin-left:auto; flex:none; display:flex; align-items:center}
+.ob-ai .ob-ai-act .ob-btn{margin-top:0; padding:7px 14px; font-size:13px}
+.ob-ai .ob-ai-ok{font-size:13px; font-weight:600; color:var(--ob-mint-ic); white-space:nowrap}
+.ob-ai .aiacct-login{margin-top:8px}
+.ob-ai .ob-ai-note{margin:10px 0 0}
+/* #5167 자동 정리 승인 칸 — 로그인을 마친 줄 바로 아래. 단추는 글 옆이 아니라 아래에 한 줄로 둔다(좁은 폭에서 접히지 않게). */
+.ob-ai .ob-ai-hl{margin:8px 0 0 12px; padding-left:12px; border-left:2px solid var(--line)}
+.ob-ai .ob-ai-hl .ob-q-help{margin:0}
+.ob-ai .ob-ai-hl .ob-btn{display:inline-block; width:auto; margin-top:8px; padding:7px 14px; font-size:13px}
+.ob-ai .ob-ai-hl-ok{font-size:13px; font-weight:600; color:var(--ob-mint-ic)}
 .ob-btn{display:block; width:100%; text-align:center; border-radius:8px; padding:10px 14px; font-weight:600; font-size:14px; margin-top:18px}
 .ob-btn-pri{background:var(--blue-fill); color:var(--ob-on-fill)}
 .ob-btn-pri:hover{background:var(--blue-fill-deep)}
@@ -180,6 +197,21 @@
   filter: blur(2.5px); opacity: .45; pointer-events: none; user-select: none; -webkit-user-select: none; }
 @media (prefers-reduced-motion: no-preference) {
   .v2-side, #v2-root > .v2-rail, #v2-root > .v2-topbar { transition: filter .28s ease, opacity .28s ease; } }
+/* #5058 처음 설정 잠금 띠 — 리브 대화(앱 연결)까지가 처음 설정이다. 흐린 맨윗줄 위에 떠서 «왜 잠겼나 · 어떻게 나가나» 를 말한다.
+   ⚠ #v2-root 의 직속 자식이라 유령 잠금(inert)에 걸리지 않는다. z-index 는 유령 셸·처음 설정 본문(35)보다 위, 셸의 창(60~)보다 아래. */
+.ob-lockbar { position: fixed; top: 6px; left: 50%; transform: translateX(-50%); z-index: 40; display: flex; align-items: center; gap: 10px;
+  max-width: calc(100vw - 32px); box-sizing: border-box; padding: 6px 8px 6px 14px; border: 1px solid var(--line); border-radius: 999px;
+  background: var(--bg); box-shadow: 0 6px 22px -10px rgba(0,0,0,.28); font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+.ob-lockbar-t { overflow: hidden; text-overflow: ellipsis; }
+.ob-lockbar-later { flex: none; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-tint); color: var(--ink);
+  font: inherit; font-size: 12px; padding: 4px 11px; cursor: pointer; }
+.ob-lockbar-later:hover { background: var(--bg-sel); }
+.ob-lockbar-later:disabled { opacity: .6; cursor: default; }
+.ob-lockbar-back { flex: none; color: var(--blue); font-weight: 600; text-decoration: none; padding-right: 2px; }
+.ob-lockbar-back:hover { text-decoration: underline; }
+/* 폰 — 윗줄(.v2-mbar: ☰ · 곁칸 단추) 바로 아래. 아래쪽은 대화 입력칸과 탭 막대(.v2-mtabs z 42 · 불투명)가 있어 띠가 가려지거나 입력칸을 덮는다(격리 리뷰). */
+@media (max-width: 900px) { .ob-lockbar { top: calc(var(--v2-tb-h, 48px) + env(safe-area-inset-top, 0px) + 6px); z-index: 43; white-space: normal; border-radius: 14px; width: calc(100vw - 32px); justify-content: space-between; }
+  #v2-root.ob-ghost > .v2-mtabs { filter: blur(2.5px); opacity: .45; pointer-events: none; } }
 /* ★ 막2·3 의 본문은 **창 전체의 가운데**에 선다(원준님 2026-09-13). 종전엔 셸의 가운데 열(레일·사이드바 오른쪽)
    안에서만 가운데였다 — 유령 셸이 왼쪽 398px(레일 76 + 사이드바 316 + 손잡이 6)을 먹은 채라 질문 기둥이 오른쪽으로
    치우쳐 보였다(실측 1440px 창: 기둥 중심 919px / 창 중심 720px). 유령을 흐려 두고 그 위에 얹는 구조이므로 기둥은
@@ -582,3 +614,10 @@
 @keyframes obInRun{0%{opacity:0; transform:translateX(0)} 20%{opacity:1} 80%{opacity:1} 100%{opacity:0; transform:translateX(100%)}}
 @keyframes obInLit{0%{border-color:var(--line); background:var(--surface); color:var(--muted)} 45%{border-color:var(--mint); background:var(--bg-success); color:var(--ob-mint-ic)}}
 @keyframes obInPop{from{opacity:0; transform:scale(.6)}}
+/* (#5060) 파일 올리기 장면 — 끌어다 놓는 자리 하나와 고르기 단추 둘. 고른 뒤엔 몇 개를 받았는지 한 줄(ob-up-stat). */
+.ob-up-drop{border:1.5px dashed var(--line); border-radius:12px; padding:22px 16px 18px; text-align:center; background:var(--card); transition:border-color .15s, background .15s}
+.ob-up-drop.drop-active{border-color:var(--blue); background:var(--blue-soft)}
+.ob-up-hint{margin:0; color:var(--ink-sub); font-size:13.5px}
+.ob-up-btns{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:12px}
+.ob-up-btns .ob-btn{margin-top:0}
+.ob-up-stat:empty{display:none}

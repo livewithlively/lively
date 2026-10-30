@@ -183,13 +183,18 @@ t("S1 셸 띄움 두 갈래는 출력 파일을 기억하고, 에이전트·Moni
 t("S2 heldFiles(리눅스) — /proc/<pid>/fd 링크가 가리키는 파일만 «쥐었다» · 못 읽는 프로세스는 건너뛴다 · /proc 이 없으면 모른다", () => {
   const root = mkdtempSync(join(tmpdir(), "bg-proc-"));
   try {
-    mkdirSync(join(root, "100", "fd"), { recursive: true });
-    symlinkSync("/tmp/a.output", join(root, "100", "fd", "1"));
-    symlinkSync("/dev/null", join(root, "100", "fd", "0"));
-    mkdirSync(join(root, "200"), { recursive: true });                // fd 를 못 읽는 프로세스
-    mkdirSync(join(root, "self", "fd"), { recursive: true });         // 숫자가 아닌 항목
-    symlinkSync("/tmp/b.output", join(root, "self", "fd", "1"));
-    assert.deepEqual([...heldFiles(["/tmp/a.output", "/tmp/b.output"], { platform: "linux", procRoot: root })], ["/tmp/a.output"]);
+    //  ⚠ 윈도우에서는 /proc 링크를 심볼릭 링크로 흉내 낼 수 없다 — node 가 절대경로 대상을 드라이브가 붙은 이름
+    //   (`\\?\D:\tmp\a.output`)으로 바꿔 저장해 readlink 가 «/tmp/a.output» 을 돌려주지 않는다(윈도우 CI 가 매번 빨갰다).
+    //   /proc 은 리눅스에만 있으니 이 단언은 리눅스·맥 러너가 잰다. 아래 «/proc 이 없으면 모른다» 는 링크가 필요 없어 어디서나 잰다.
+    if (process.platform !== "win32") {
+      mkdirSync(join(root, "100", "fd"), { recursive: true });
+      symlinkSync("/tmp/a.output", join(root, "100", "fd", "1"));
+      symlinkSync("/dev/null", join(root, "100", "fd", "0"));
+      mkdirSync(join(root, "200"), { recursive: true });                // fd 를 못 읽는 프로세스
+      mkdirSync(join(root, "self", "fd"), { recursive: true });         // 숫자가 아닌 항목
+      symlinkSync("/tmp/b.output", join(root, "self", "fd", "1"));
+      assert.deepEqual([...heldFiles(["/tmp/a.output", "/tmp/b.output"], { platform: "linux", procRoot: root })], ["/tmp/a.output"]);
+    }
     assert.equal(heldFiles(["/tmp/a.output"], { platform: "linux", procRoot: join(root, "nope") }), null);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -239,10 +244,10 @@ t("S5 countOpenJobs — 신고 세션 모양(완료 알림 없이 남은 대기 
 
 t("W1 work-flag 배선 — idle 보고(Stop · idle_prompt) · claude 에서만 세고, 못 세면 싣지 않으며, 작업 수가 바뀐 idle 은 스로틀에 안 걸린다", () => {
   const src = readFileSync(join(HERE, "work-flag.mjs"), "utf8");
-  assert.match(src, /import \{ countOpenJobs \} from "\.\/bg-jobs\.mjs";/);
-  assert.match(src, /const bg = phase === "idle" && HARNESS === "claude" && typeof input\?\.transcript_path === "string"\s*\? countOpenJobs\(input\.transcript_path, join\(FLAG_DIR, `\$\{sid\}\.bg-jobs\.json`\)\) : null;/);
-  assert.match(src, /const report = bg === null \? \{ state: phase \} : \{ state: phase, bg \};/);
-  assert.match(src, /const key = bg === null \? phase : `\$\{phase\} bg=\$\{bg\}`;/);
+  //  #4695 — 같은 셈이 예약(깨움·반복 예약)도 돌려준다(openWork). 보고 본문·스로틀은 훅을 실제로 띄워 받은 POST 로 본다
+  //   (work-flag-lifecycle.test.mjs E18 bg · E19 예약) — 여기선 «claude 의 idle 보고에서만 센다» 는 배선만 못박는다.
+  assert.match(src, /import \{ openWork \} from "\.\/bg-jobs\.mjs";/);
+  assert.match(src, /const work = phase === "idle" && HARNESS === "claude" && typeof input\?\.transcript_path === "string"\s*\? openWork\(input\.transcript_path, join\(FLAG_DIR, `\$\{sid\}\.bg-jobs\.json`\)\) : null;/);
   assert.match(src, /if \(last !== key \|\| !cooling\(stateFile, 60_000\)\) \{[\s\S]{0,200}writeFileSync\(stateFile, key\);\s*jobs\.push\(post\("\/active", report\)\);/);
   const manifest = readFileSync(join(HERE, "..", "setup", "kit-manifest.mjs"), "utf8");
   assert.match(manifest, /"bg-jobs\.mjs",/, "훅 디렉터리에 평평하게 같이 깔린다(빠지면 work-flag 가 import 로 죽는다)");

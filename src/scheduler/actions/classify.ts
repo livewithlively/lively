@@ -1,9 +1,12 @@
-// 크론 액션: 미분류 지식 분류(classify_knowledge·classify_knowledge_headless) — R16 원문 이동. map_unmapped 의 지식판.
+// 크론 액션: 증류기의 **카테고리 붙이기 레인**(classify_knowledge·classify_knowledge_headless) — R16 원문 이동. map_unmapped 의 지식판.
+//  #4194 — 옛 이름은 «분류기»였다. 지금은 증류기(= 지식을 완성시킨다)의 한 레인이다: 카테고리 행이 0건인 지식에 카테고리를
+//   제안한다(본문은 안 건드린다). 저장소(org_classifier)·액션 키·잡 id 는 그대로 — 까닭은 org/distill/lanes.ts 머리말.
 //  #1419 T4 — 분류기(org_classifier)가 생기면서 대상·기준·후보축이 **설정**이 됐다. 잡은 두 모드로 돈다:
 //   · params.classifier 지정 → 그 분류기 하나 · 미지정 → 켜진 분류기 전부(병렬 접수, 증류 잡과 동형)
 //   · 분류기가 하나도 없으면 **종전 전역 동작 그대로**(무중단 — listUnmappedKnowledge(50) + 기존 프롬프트)
-import { resolveSessionTmux, injectToSession, headlessRequester, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
+import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { listClassifiers, getClassifier, classifierInbox, markClassifierSeen, recordClassifierRun, type ClassifierRow } from "../../org/store/classifiers.js";
+import { isActiveLane, isAutoDisabledLane, isClaimingLane, laneMarker } from "../../org/distill/lanes.js";
 
 // #982 미분류 지식 분류 주입 — map_unmapped 의 지식판. 카테고리 0건 지식이 있을 때만 상시세션에 분류 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 분류는 세션이 수 분에 걸쳐 knowledge_propose_category 로 수행).
@@ -30,42 +33,73 @@ export async function runClassifyKnowledgeInject(params: Record<string, unknown>
 // #1061 classify_knowledge 의 헤드리스판 — 인박스(미분류 지식) 있을 때만, 매 배치 fresh claude -p 로 분류(관성 회피).
 //  buildClassifyKnowledgePrompt(세션판과 동일 — 관성 대응 '매 배치 should 재조회·근거 인용 강제' 포함) 재사용. 배치 50/수렴은 인박스가 담보(다음 주기가 잔여 드레인).
 export async function runClassifyKnowledgeHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
-  const requester = headlessRequester(params, createdBy);
-  if (!requester) return HEADLESS_REQUESTER_MISSING;
+  //  잡 수준 실행 계정(잡 params → 워크스페이스 실행 멤버 → 만든 사람). 분류기가 자기 계정을 정했으면 그쪽이 앞선다.
+  //  ⚠ #4052 — 여기서 곧바로 «미설정» 으로 끝내지 않는다. 종전엔 잡 수준이 비면 **자기 계정을 정한 분류기까지** 못 돌았다
+  //   (화면의 «실행 계정» 칸을 채워도 안 듣는 자리). 멈추는 판정은 아래에서 «돌릴 계정이 정말 하나도 없을 때» 만 한다.
+  const requester = await resolveJobRunner(params.requester, createdBy);
 
   // ── #1419 T4 — 분류기가 있으면 분류기별로 접수(배타 배정·기준·후보축이 분류기 설정에서 온다). ──
   //  분류기가 하나도 없으면 아래 레거시 전역 경로로 떨어진다(무중단).
   let targets: ClassifierRow[] = [];
+  //  «맡은» 레인 수 — 자격 실패로 자동 정지된 레인도 센다. 일하는 레인이 0이어도 이게 있으면 레거시 전역 폴백으로
+  //   떨어지지 않는다(그 몫을 잡 계정·기본 기준이 분류해 버리면 사람이 레인을 다시 켜도 되돌릴 수 없다).
+  let claiming = 0;
   try {
     if (params.classifier) {
       const one = await getClassifier(String(params.classifier));
+      //  자동 정지 레인은 오류가 아니라 대기다(증류 전용 잡과 같은 규칙 — scheduler/actions/distill.ts).
+      if (one && isAutoDisabledLane(one)) return { status: "ok", summary: { skipped: `카테고리 붙이기 레인 '${String(params.classifier)}' 이 실행 계정의 자격 실패로 자동 정지됨 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요` } };
       // 지정한 분류기가 꺼졌거나 사라졌으면 조용히 no-op — 잡이 헛돌지 않게(수집기 잡과 같은 규칙).
-      if (one?.enabled) targets = [one];
-      else return { status: "ok", summary: { skipped: `분류기 '${String(params.classifier)}' 가 없거나 꺼져 있음` } };
+      //  #4194 — 폐지된 재분류 모드 레인도 같다(인박스가 빈다 — lanes.ts isActiveLane).
+      if (one && isActiveLane(one)) targets = [one];
+      else return { status: "ok", summary: { skipped: `카테고리 붙이기 증류기 '${String(params.classifier)}' 가 없거나 꺼져 있음(또는 폐지된 재분류 모드)` } };
     } else {
-      targets = (await listClassifiers()).filter((c) => c.enabled);
+      //  #4194 — «켜진» 이 아니라 «일하는» 레인만(isActiveLane). 폐지된 재분류 레인을 세면 그 레인만 켜진 조직에서
+      //   아래 기본 기준 폴백이 영영 안 돌고, 계정이 없으면 할 일도 없는 잡이 REQUESTER_MISSING 으로 차단기를 올린다.
+      const all = await listClassifiers();
+      targets = all.filter(isActiveLane);
+      claiming = all.filter(isClaimingLane).length;
     }
   } catch { /* org_classifier 부재(구 배포) → 레거시 경로 */ }
 
+  if (!targets.length && claiming) {
+    return { status: "ok", summary: { skipped: "일하는 카테고리 붙이기 레인이 없고, 실행 계정의 자격 실패로 자동 정지된 레인이 그 몫을 맡고 있어 기본 기준 폴백을 돌리지 않음 — 계정을 다시 연결한 뒤 관리탭에서 레인을 켜세요" } };
+  }
+
   if (targets.length) {
+    // 어느 분류기도 돌릴 계정이 없으면 종전과 같은 실패 — 연속 실패 차단기(#1675 ④)가 세는 자리다.
+    if (!requester && !targets.some((c) => explicitRunner(c.requester))) return HEADLESS_REQUESTER_MISSING;
     const out: unknown[] = [];
     for (const c of targets) {
       try {
+        const runner = explicitRunner(c.requester) ?? requester;
+        if (!runner) { out.push({ classifier: c.key, ...HEADLESS_REQUESTER_MISSING.summary }); continue; }
         const inbox = await classifierInbox(c);
         if (!inbox.length) { out.push({ classifier: c.key, skipped: "인박스 비었음" }); continue; }
         const prompt = (typeof params.prompt === "string" && params.prompt.trim())
           ? params.prompt.trim()
           : buildClassifierPrompt(c, inbox);
         const r = await enqueueHeadlessTask({
-          prompt, requester: c.requester || requester, jobId,
+          prompt, requester: runner, jobId,
+          //  레인마다 중첩 방지 표식을 가른다(#4194) — 하나로 두면 앞 레인이 도는 동안 뒤 레인이 «진행 중» 으로 건너뛴다.
+          marker: laneMarker(jobId, c.key),
           // 제공자·모델·추론강도(#4008) — 분류기 설정 우선, 없으면 잡 params, 그래도 없으면 그 하네스의 자동화 기본값.
           harness: headlessHarness(params, c),
           ...headlessRun(c, params),
           extra: { classifier: c.key, unmapped: inbox.length },
+          execProfile: "context",   // #4012 T3 — 기본 제공 맥락 잡: 매니지드에선 중앙 샌드박스로만 간다
         });
         // '봤다'는 **배치를 낸 시점에** 기록한다(LLM 자기보고 아님 — #1289 교훈).
         //  이게 없으면 LLM 이 '못 정하겠다'고 넘긴 지식이 updated_at DESC 맨 앞에 영원히 남는다.
-        await markClassifierSeen(c.id, inbox.map((x) => x.name));
+        //  ⚠ 단 **접수된 배치만**이다(#3994 T5 · #968). 종전엔 결과와 무관하게 찍어서, 한 번도 실행되지
+        //   않은 배치의 지식 942건이 «봤음» 으로 숨고 인박스가 0 으로 보였다. 열쇠(task_id)를 함께 남겨
+        //   그 작업이 실패하면 markFinished 가 되돌린다.
+        const { acceptedTaskId } = await import("./headless-accept.js");
+        const acceptedId = acceptedTaskId(r);
+        if (acceptedId != null) {
+          const key = typeof acceptedId === "number" ? acceptedId : (Number(acceptedId) || null);
+          await markClassifierSeen(c.id, inbox.map((x) => x.name), key);
+        }
         await recordClassifierRun(c.id, r.status, r.summary);
         out.push({ classifier: c.key, ...(r.summary as object) });
       } catch (e) {
@@ -78,13 +112,14 @@ export async function runClassifyKnowledgeHeadless(params: Record<string, unknow
   }
 
   // ── 레거시 전역 경로 — 분류기가 하나도 없는 배포. 종전과 정확히 같다. ──
+  if (!requester) return HEADLESS_REQUESTER_MISSING;
   const { listUnmappedKnowledge } = await import("../../v6/knowledge-store.js");
   let inbox: Array<{ name: string }>;
   try { inbox = await listUnmappedKnowledge(50); }
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "미분류 지식 없음", unmapped: 0 } };
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildClassifyKnowledgePrompt(inbox.length);
-  return enqueueHeadlessTask({ prompt, requester, jobId, harness: headlessHarness(params), ...headlessRun({}, params), extra: { unmapped: inbox.length } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, harness: headlessHarness(params), ...headlessRun({}, params), extra: { unmapped: inbox.length }, execProfile: "context" });
 }
 
 /**
@@ -103,11 +138,11 @@ function buildClassifierPrompt(c: ClassifierRow, inbox: Array<{ name: string; ti
     ? `후보 카테고리는 **다음으로 제한**한다: ${c.candidate_categories.join(", ")}. 이 축들 중 맞는 게 정말 없으면 건너뛰어(억지로 넣지 마). `
     : `후보는 이 워크스페이스의 카테고리 전체다. `;
   const crit = c.criteria_md?.trim()
-    ? `이 분류기의 판단 기준: ${c.criteria_md.trim().replace(/\s+/g, " ")}. `
+    ? `이 레인의 판단 기준: ${c.criteria_md.trim().replace(/\s+/g, " ")}. `
     : "";
   const th = c.confirm_threshold;
-  return `지식 분류 배치 작업이야(분류기 '${c.label || c.key}'). ` +
-    `① 대상은 **아래 지식들로 이미 정해져 있다** — knowledge_unmapped 로 새로 가져오지 마(다른 분류기 몫을 침범한다): ${names}. ` +
+  return `카테고리 붙이기 배치 작업이야(증류기 레인 '${c.label || c.key}'). 카테고리가 비어 있는 지식에 알맞은 카테고리를 제안해 — 본문은 고치지 마. ` +
+    `① 대상은 **아래 지식들로 이미 정해져 있다** — knowledge_unmapped 로 새로 가져오지 마(다른 레인 몫을 침범한다): ${names}. ` +
     `② category_list 로 체계를 파악하고, 후보 카테고리는 **이번 배치에서 지금** category_get 으로 정의·범위(should)를 다시 읽어 기준으로 삼아 — 이전 판단·캐시·기억을 믿지 마(should 는 갱신됐을 수 있고 분류는 매번 '최신 정의' 대비여야 한다). ${cand}` +
     `③ 각 지식을 knowledge_get(name) 으로 제목·본문을 읽어 어떤 주제·능력에 속하는지 파악(부분읽기로 앞부분만 봐도 됨). ${crit}` +
     `④ knowledge_propose_category 호출: name, categoryId, evidence=근거(**방금 읽은 현재 should 의 어느 문장**↔지식 내용의 어느 신호를 인용, 필수). ` +

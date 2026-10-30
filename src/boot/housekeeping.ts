@@ -14,6 +14,7 @@ import { autoActivateWorkspaceRegistry } from "../org/tenancy/activate.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
 import { reapOAuth } from "../org/store/oauth.js";
+import { reapEndedSessionTokens } from "../auth/sessions.js";
 import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
@@ -46,6 +47,8 @@ import { sweepAwaitingNotifications } from "../sessions/awaiting-notifier.js"; /
 import { backfillSessionStates } from "../sessions/session-state-backfill.js"; // #1059 F 후속 — 레코드 없는 라이브 세션에 desired-state 미러
 import { ensureSharedCache } from "../ops/build-cache.js";
 import { startBoxWatch } from "../ops/box-watch.js";
+import { startCronWatch } from "../ops/cron-watch.js";
+import { startOutboxWatch } from "../ops/outbox-watch.js";
 import { sendBoxAlert } from "../ops/alerts.js";
 import { recoverOrphanConnectorRuns } from "../connectors/run-tracker.js";
 import { migrateConnectorsToCollectors } from "../org/store/collectors.js"; // #1419 T1 — 레거시 커넥터 → 수집기 승격(멱등)
@@ -55,6 +58,7 @@ import { markSchemaBoot, schemaBootPhase } from "./boot-state.js";   // #2578 �
 // 스케줄러 게이트 단일 판정(#1313 R17) — 종전 인라인 `process.env.LIVELY_NO_SCHEDULER !== "1"` 6곳을 한 곳으로.
 //  배경(왜 게이트인가)은 'scheduler' 스텝 원문 주석 참조.
 const schedulerEnabled = (): boolean => process.env.LIVELY_NO_SCHEDULER !== "1";
+import { appServerHostKind } from "../apps/app-server-config.js";
 
 // ── registry 모드 스키마 초기화 자식(#1750 S1) — 소유자 자격으로 DDL 을 치는 별도 프로세스. ──
 //  이 프로세스(앱 role)는 스키마를 소유하지 않는다. 자식은 boot/schema-init-child.js 를 소유자 DSN 으로
@@ -155,6 +159,18 @@ export const LISTEN_STEPS: BootStep[] = [
   //  않으므로 preview/routes.ts(라우트 핸들러)로는 원리적으로 못 받는다 → 프리뷰에서 웹터미널·노드 채널이
   //  **아무 응답 없이** 핸드셰이크 타임아웃 나던 자리. 위 두 핸들러 뒤에 둔다(shared-proxy 재-emit 이 그것들을 탄다).
   { name: "preview-ws", gate: "always", run: ({ server }) => setupPreviewWsUpgrade(server) },
+  // ── 순수 배선(동기·DB 무접근) 둘 — **여기(LISTEN_STEPS)여야 한다.** 종전엔 DB_BOOT_STEPS 끝에 있었는데, 그 체인은
+  //  요청별 테넌시(매니지드 중앙 게이트웨이)에서 **통째로 건너뛴다**(runBootHousekeeping · requestScopedTenancy 머리말).
+  //  그래서 매니지드에선 둘 다 한 번도 걸린 적이 없었다(#4135 실측 2026-09-25: lively-46e3 의 발견(discovered) 행이
+  //  9/1 이후 0건, 세션 토큰 되채우기도 0건 — 로그엔 «부팅 하우스키핑 건너뜀» 뿐). 둘 다 DB 를 안 만지고 컨텍스트도
+  //  구독자가 불릴 때(노드 연결·멤버 요청)의 것을 쓰므로, 체인 밖 동기 배선 자리가 정확히 맞다.
+  // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
+  //  members.ts 의 단일 슬롯에 건다. 요청이 들어오기 전에 걸려야 한다.
+  { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
+  // #2022 — 노드 상태 push 구독. 처음 보는 세션의 행을 적어, 노드가 꺼져도 그 세션이 목록에서 사라지지 않게.
+  //  #4135 — 같은 구독이 «토큰 없는 살아 있는 노드 세션» 되채우기도 부른다. node-upgrade(노드 WS 수신) 뒤·동기라
+  //  첫 스냅샷이 오기 전에 반드시 걸린다.
+  { name: "node-session-discovery", gate: "always", run: () => { armNodeSessionDiscovery(); } },
 ];
 
 // #2578 — 이 스텝까지 끝나면 «스키마가 섰다»: 마이그레이션(schemas)·정책(self-rls)·등록부 활성화(재기동 판정)가
@@ -213,11 +229,7 @@ export const DB_BOOT_STEPS: BootStep[] = [
   { name: "app-worker-recovery", gate: "always", tenancy: "per-tenant", run: () => armWorkerRecovery()
       .then((r) => { if (r.central.restarted || r.central.failed || r.remote.some((x) => x.restarted || x.failed)) logger.info(r, "앱 worker 복구"); })
       .catch((err) => logger.warn({ err }, "앱 worker 복구 실패(비치명 — 인스턴스 조회/노드 재연결이 재시도)")) },
-  // 멤버 비활성 전이 훅(#1780 v2 §7-1, 설계 R2-O8) — 비활성/삭제되는 멤버의 앱 동의 회수 + 앱 세션 즉시 회수를
-  //  members.ts 의 단일 슬롯에 건다. 순수 배선(동기·DB 무접근)이라 어디 붙어도 되지만, 요청이 들어오기 전에 걸려야 한다.
-  { name: "member-deactivation-hook", gate: "always", run: () => { armMemberDeactivationHook(); } },
-  // #2022 — 노드 상태 push 구독. 처음 보는 세션의 행을 적어, 노드가 꺼져도 그 세션이 목록에서 사라지지 않게.
-  { name: "node-session-discovery", gate: "always", run: () => { armNodeSessionDiscovery(); } },
+  // (멤버 비활성 전이 훅 · 노드 세션 발견 구독은 LISTEN_STEPS 로 옮겼다 — 요청별 테넌시에서 이 체인이 안 돌아서. 위 주석.)
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라
@@ -260,6 +272,11 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  로그는 아무도 안 본다. 웹훅 미설정이면 send 는 조용히 no-op(로그는 그대로 남는다).
   //  스케줄러와 같은 게이트(단일 프로세스 하우스키핑 — 두 인스턴스가 같은 경보를 중복 발송하면 안 된다).
   { name: "box-watch", gate: "scheduler", run: startBoxWatchStep },
+  // 크론 감시 + 경보 — 스케줄 잡이 실패로 넘어갈 때/복구될 때만 같은 채널로 밀어서 알린다.
+  //  박스 감시와 같은 게이트(scheduler): 크론이 도는 프로세스에서만 감시가 돌아야 두 인스턴스가 같은
+  //  경보를 중복 발송하지 않는다.
+  { name: "cron-watch", gate: "scheduler", run: () => startCronWatch({ send: async (a) => (await sendBoxAlert(a)).sent }) },
+  { name: "outbox-watch", gate: "scheduler", run: () => startOutboxWatch({ send: async (a) => (await sendBoxAlert(a)).sent }) },
   // 자동 pending 임베딩 백필(#669) — 부팅 30초 후 1회(배포/업데이트 직후 잔량 자가치유 — 30초는 사이드카
   //  Ollama 동시 부팅 박스의 헬스 확보 여유) + 10분 주기(미러 리셋·훅 실패 잔량 흡수; sync 완료 트리거의 폴백).
   //  provider off 면 설정 조회 후 no-op. 스케줄러와 같은 게이트 — 스모크 인스턴스(LIVELY_NO_SCHEDULER=1,
@@ -334,6 +351,8 @@ function startBackgroundSweeps(): void {
   setInterval(() => { void perTenant("device-auth-reap", () => reapDeviceAuth()); }, 600_000).unref();
   // #1473 T2 OAuth reaper — 만료된 인가요청·인가코드 정리. 리프레시는 회전 사슬(도난 탐지 근거)이라 더 오래 둔다.
   setInterval(() => { void perTenant("oauth-reap", () => reapOAuth()); }, 600_000).unref();
+  // SSO 로그아웃(#1356) — 만료·회수된 웹 세션에 남은 IdP id_token(암호문)을 지운다. 30일 만료 단위라 1시간 주기로 충분.
+  setInterval(() => { void perTenant("web-session-token-reap", () => reapEndedSessionTokens()); }, 60 * 60_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
   //  ⚠ 설정도 **그 워크스페이스 안에서** 읽어야 한다 — 보존기간은 워크스페이스마다 다르다.
@@ -401,17 +420,27 @@ function startBackgroundSweeps(): void {
       .then(() => reapPressureSessions())
       .catch((err) => logger.warn({ err }, "session-reaper tick 실패"));
   }, 5 * 60_000).unref();
+  // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 셀프호스트에도 구성원 컴퓨터가 붙는다 — 매니지드의 요청 정비표와 같은 1분.
+  //  컴퓨터마다 켜야 돈다(기본 꺼짐 · org_node.stop_rule). 노드가 없으면 곧바로 돌아간다(DB 무접촉).
+  //  ⚠ 부팅 직후엔 돌리지 않는다 — 노드가 다시 붙어 스냅샷을 올리기 전(그리고 보는 중 판정이 «모름» 인 45초)엔 판정할 재료가 없다.
+  setInterval(() => {
+    void perTenant("node-stop-rule", () => import("../sessions/node-stop-rule.js").then(({ sweepNodeStopRule }) => sweepNodeStopRule()));
+  }, 60_000).unref();
   // #1891 — "하네스가 작업을 마치고 유저의 액션을 필요로 하는 상태가 되면 알림".
   //  ⚠ 회수 스윕(5분)에 얹지 않고 따로 둔다 — 알림은 5분 뒤에 오면 알림이 아니다.
   //  전이에만 반응하므로(notify-policy.pickAwaitingTransitions) 자주 돌아도 같은 대기를 다시 울리지 않는다.
   setInterval(() => {
+    //  #2600 T2 d4 — **목록 출처(게이트웨이 tmux vs 노드 스냅샷)를 여기서 고르지 않는다.**
+    //   이 스윕은 두 자리에서 돈다(여기 타이머 + 매니지드의 요청 정비표 `sessions/outbox-request-sweep.ts`).
+    //   호출부에 판정을 심었더니 **한 자리만 고쳐졌고** 나머지가 종전대로 게이트웨이 tmux 를 계속 읽었다.
+    //   판정은 `sweepAwaitingNotifications` 안(`defaultSessionList`)에 한 벌로 있다 — 그 머리말이 근거다.
     void perTenant("awaiting-notify", () => sweepAwaitingNotifications());
   }, 30_000).unref();
   // #1631 — 리브 2턴: 처음 설정 직후 열린 리브 세션에, 첫 수집 배치가 돈 뒤 증류 지시를 넣는다.
   //  판정은 순수 함수(decideSecondTurn)·멱등(distill_at) — 1분 주기로 돌아도 같은 세션에 두 번 넣지 않는다.
   //  부팅 직후엔 돌리지 않는다(세션 목록·아웃박스 재개가 먼저).
-  //  ⚠ **순회하지 않는다** — 이 스윕은 워크스페이스를 **스스로** 해석한다(후보마다 `workspaceForSession`
-  //   으로 그 세션의 테넌트를 찾아 `withTenant` 로 감싼다). 여기서 또 감싸면 같은 전량 스윕이
+  //  ⚠ **순회하지 않는다** — 이 스윕은 워크스페이스를 **스스로** 해석한다(후보마다 `secondTurnTenant`(#4851)
+  //   로 그 사람의 워크스페이스를 골라 `withTenant` 로 감싼다). 여기서 또 감싸면 같은 전량 스윕이
   //   워크스페이스 수만큼 돈다.
   setInterval(() => {
     void import("../org/liv/second-turn-sweep.js")
@@ -425,6 +454,43 @@ function startBackgroundSweeps(): void {
   setTimeout(() => { void groupBackfill(); }, 120_000).unref();
   setInterval(() => { void groupBackfill(); }, 60 * 60_000).unref();
 
+  // #4226 — 앱 데이터 일일 떠 두기(7일 보관). 워크스페이스 스코프라 순회한다. 함수가 20시간 안에 뜬 앱을 건너뛰므로
+  //  1시간 주기로 돌아도 하루 한 번이다. 부팅 3분 뒤 1회 — 재기동이 잦아도 하루를 거르지 않게.
+  const appSnapshot = () => perTenant("app-data-snapshot",
+    () => import("../apps/app-snapshot.js").then((m) => m.runDailyAppSnapshots()));
+  setTimeout(() => { void appSnapshot(); }, 180_000).unref();
+  setInterval(() => { void appSnapshot(); }, 60 * 60_000).unref();
+
+  // #4778 — 보관으로 옮긴 앱 폴더 중 보관 기간이 지난 것 지우기. 기록 표만 보고 지울 것이 있을 때만 파일을 만진다(앱 데이터 떠 두기와 같은 1시간 주기).
+  const appFolderArchive = () => perTenant("app-folder-archive",
+    () => import("../apps/app-folder-archive.js").then((m) => m.pruneAppFolderArchives()));
+  setTimeout(() => { void appFolderArchive(); }, 200_000).unref();
+  setInterval(() => { void appFolderArchive(); }, 60 * 60_000).unref();
+
+  // #4481 — 앱 판 묶음(옛 판 옮기기 · 30일 지난 호환 사본 비우기 · 안 쓰는 파일 정리). 워크스페이스 스코프라 순회한다.
+  //  옮기기는 한 번에 조금씩이라 10분 주기 · 정리는 함수가 워크스페이스마다 6시간에 한 번으로 스스로 잠근다. 부팅 4분 뒤 1회.
+  const appBundles = () => perTenant("app-bundles",
+    () => import("../apps/app-bundle-migrate.js").then((m) => m.runAppBundleHousekeeping()));
+  setTimeout(() => { void appBundles(); }, 240_000).unref();
+  setInterval(() => { void appBundles(); }, 10 * 60_000).unref();
+
+  // #4487 — 자가호스팅 앱 서버(LIVELY_APP_SERVER_HOST=local · 이 박스의 Docker). 매니지드는 같은 함수를 요청 정비표(app-job-sweep · app-job-prune —
+  //  sessions/outbox-request-sweep.ts)와 CP 틱(web.ts step app-servers)이 부른다 — 이 타이머는 요청별 테넌시에선 걸리지 않으니 둘이 겹치지 않는다.
+  //  · 백그라운드 작업 감시 30초(대기 초과 · 시작 없음 · 박동 없음 · 시간 초과 · 줄 밀기) · 작업 기록 보존 6시간 — 매니지드의 주기 그대로.
+  //  · 앱 서버 정비 5분(자동 멈춤 · 죽은 빌드 · 옛 빌드 정리 · 고아 · 서버 선언을 뺀 앱 · 코드 크기 · 하루 한 번 상태 점검) — CP 틱 주기 그대로.
+  //  · 재우기 1분(한가한 지 idle_sleep_min 이 지난 컨테이너를 내린다 · 첫 판이 게이트웨이를 다시 띄우기 전에 떠 있던 컨테이너를 표에 다시 넣는다).
+  if (appServerHostKind() === "local") {
+    const appJobSweep = () => perTenant("app-job-sweep", () => import("../apps/app-jobs.js").then((m) => m.sweepAppJobs()));
+    const appJobPrune = () => perTenant("app-job-prune", () => import("../apps/app-jobs.js").then((m) => m.pruneAppJobRecords()));
+    const appServers = () => perTenant("app-servers", () => import("../apps/app-server-watch.js").then((m) => m.runAppServerHousekeeping()));
+    const appServerSleep = () => perTenant("app-server-sleep", () => import("../apps/app-server-local.js").then((m) => m.sleepIdleLocalServers()));
+    setTimeout(() => { void appServerSleep(); }, 60_000).unref();
+    setInterval(() => { void appJobSweep(); }, 30_000).unref();
+    setInterval(() => { void appServerSleep(); }, 60_000).unref();
+    setInterval(() => { void appServers(); }, 5 * 60_000).unref();
+    setInterval(() => { void appJobPrune(); }, 6 * 60 * 60_000).unref();
+  }
+
   // #2022 — 유령 세션 인스턴스 청소(세션은 없는데 좌측 목록에 남은 행). 부팅 90초 뒤 1회 + 6h 주기.
   //  느긋해도 되는 일이다(조용한 지 3일 지난 것만 본다) — 자주 돌 이유가 없고, 닫기는 되돌릴 수 있다.
   setTimeout(() => { void perTenant("ghost-instance-sweep", () => sweepGhostSessionInstances()); }, 90_000).unref();
@@ -432,6 +498,22 @@ function startBackgroundSweeps(): void {
 
   // 부팅 직후 1회 백필(회수는 하지 않는다 — 재부팅 복원과 겹쳐 갓 뜬 세션을 오판하지 않게). 40초 뒤: 스키마·tmux 안정 후.
   setTimeout(() => { void perTenant("session-state-backfill", () => backfillSessionStates()); }, 40_000).unref();
+
+  // #5082 — 에이전트 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비(요청 정비표에서 `housekeeping` 표시가 붙은 것). 매니지드는 그 표가 요청에 얹어
+  //  돌리는데 그 표는 여기(셀프호스트 · registry)서 무동작이라 이 자리가 유일한 길이다 — 없으면 셀프호스트 작업(LIVELY_AGENT_JOBS=docker · host)의 시작 상한 ·
+  //  무응답 · 시간 초과 · 걷기 재시도 · 기다린 작업 배차가 안 돌고, 끝맺지 못한 작업이 동시 상한을 영영 먹는다(격리 리뷰).
+  //  정의와 주기는 그 표의 것을 그대로 쓴다(두 벌이면 한쪽만 고쳐진다 · 주기 조정 env LIVELY_SWEEP_MS_<KEY> 도 같다). 작업을 안 띄우는 박스에선
+  //  열린 행이 없어 조회 한 번이다. 주기가 1분보다 길면(보존 정리 6시간) 부팅 2분 반 뒤 1회를 따로 둔다 — 재기동이 주기보다 잦은 박스에서도 돌게(위 아웃박스와 같은 까닭).
+  //  ⓘ 앱 백그라운드 작업(app-job-*)은 Lambda 함수 전용이라 싣지 않는다(셀프호스트 앱 서버 #4487 의 몫).
+  //  ⚠ 동적 import 다 — 그 모듈이 이 파일의 requestScopedTenancy 를 가져다 쓴다(정적으로 바꾸면 순환이 된다).
+  void import("../sessions/outbox-request-sweep.js").then((m) => {
+    for (const job of m.SWEEP_JOBS.filter((j) => j.housekeeping)) {
+      const run = () => perTenant(job.key, job.run);
+      const every = m.jobIntervalMs(job, process.env);
+      setInterval(() => { void run(); }, every).unref();
+      if (every > 60_000) setTimeout(() => { void run(); }, 150_000).unref();
+    }
+  }).catch((err) => logger.warn({ err }, "정비: 에이전트 작업 정비를 걸지 못했다(비치명 — 다음 재기동에 다시)"));
 }
 
 /**

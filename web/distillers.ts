@@ -20,16 +20,18 @@
 //   · **사각지대를 맨 위에** — "증류기를 켰는데 왜 안 줄지?"의 답이 목록보다 먼저 보인다.
 //   · **채널은 고르는 것** — 실재하는 채널 목록(건수·잔량 포함)에서 눌러 담는다(오타 원천 차단).
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
-import { api, busy, el, relTime, replaceKids, sv, toast } from './core.js';
+import { api, busy, el, personSelect, relTime, replaceKids, sv, toast } from './core.js';
 import { svcTile } from './svc-icons.js';
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 import { svcLogo } from './svc-logos.js';
 import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
+import { isWholeDistillJob } from './lib/stage-job-pick.js';
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 import { LIV_CARD, LIV_ROW, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
 import { countLiv } from './lib/liv-mark.js';
+import { fillLaneEditor, fillLaneRetired, renderFillJob } from './distill-fill.js';    // #4194 카테고리 붙이기(옛 「분류기」) — #4135 부터 따로 절을 두지 않고 같은 목록의 카드다
 import { type RunsByMachine, distillerToday, fetchRecentRuns, machineRuns, machineSum, recentLine } from './context-machine-runs.js';   // #4135 카드 안의 최근 실행
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 
@@ -71,7 +73,7 @@ export async function distillersPanel(detail, data) {
   busy(detail, el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
 
   let res; let catRes: any = null; let runs: RunsByMachine = new Map();
-  try { [res, catRes, runs] = await Promise.all([api('/api/ui/org/distillers'), api('/api/ui/categories').catch(() => null), fetchRecentRuns()]); }
+  try { [res, catRes, runs] = await Promise.all([api('/api/ui/org/distillers'), api('/api/ui/categories?light=1').catch(() => null), fetchRecentRuns()]); }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message }))); return; }
   const catName = categoryNames(catRes);
 
@@ -84,41 +86,56 @@ export async function distillersPanel(detail, data) {
   const on = distillers.filter((d) => d.enabled).sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
   const off = distillers.filter((d) => !d.enabled);
 
+  //  #4194 — 증류기는 «지식을 완성시킨다». #4135(9/22 회의 ③ «분류기는 증류기로 · 분류 현황 · 분류기 만들기 · 자동 실행 다 필요 없다»):
+  //   「카테고리 붙이기」를 따로 절로 두지 않는다. 그 증류기는 같은 목록의 카드 한 장이고(배지 «카테고리만 붙이기»),
+  //   만들 때는 설정 페이지 3단계의 «이 증류기가 하는 일»에서 고른다. 제목 수는 두 종류를 합친 수다.
+  const lanes: any[] = Array.isArray(res.knowledge_lanes) ? res.knowledge_lanes : [];
+  const laneCov = (res.coverage && res.coverage.knowledge && res.coverage.knowledge.lanes) || [];
+  const laneStat = (id) => laneCov.find((x) => x.id === id) || {};
+  const lanesOn = lanes.filter((c) => c.enabled && !fillLaneRetired(c)).sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+  const lanesOff = lanes.filter((c) => !lanesOn.includes(c));
   body.append(el('div', { class: 'cxc-head' },
     el('div', { class: 'cxc-head-main' },
-      //  #4233. 제목은 탭 이름과 같다(탭 「증류기 설정」). 제목이 «… 설정» 이라 옆의 수는 무엇을 센 것인지 적는다.
-      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.distill }), el('span', { class: 'cxc-title-n num', text: '증류기 ' + distillers.length + '개' }),
-        //  그 옆의 요약 — 이 가운데 몇 개를 리브가 세팅했나(리브 표시 1안).
-        livSum(distillers.length, countLiv(distillers, isLivMadeDistiller))),
-      el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고, 남길 가치가 있는 것만 골라 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다. 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
-    el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 증류기 만들기' }))));
+      //  #4233. 제목은 탭 이름과 같다(탭 「증류기 설정」). 옆의 수는 두 종류를 합친 증류기 수다.
+      //  그 옆의 요약 — 이 가운데 몇 개를 리브가 세팅했나(리브 표시 1안). 카테고리만 붙이는 증류기는 사람이 만든다.
+      el('h3', { class: 'cxc-title' }, el('span', { text: CTX_TAB.distill }), el('span', { class: 'cxc-title-n num', text: '증류기 ' + (distillers.length + lanes.length) + '개' }),
+        livSum(distillers.length + lanes.length, countLiv(distillers, isLivMadeDistiller))),
+      el('p', { class: 'cxc-lead', text: '증류기는 쌓인 자료를 읽고 남길 가치가 있는 것만 지식으로 씁니다. 자료 하나는 증류기 하나만 읽습니다. 위에서부터 조건에 맞는 첫 증류기가 읽고, 어느 것에도 맞지 않는 자료는 맨 아래 「안전망」이 읽습니다.' })),
+    el('div', { class: 'cxc-head-acts' }, el('a', { class: 'btn btn-primary', href: pageHref(NEW_KEY), text: '+ 자료 증류기 만들기' }))));
 
   body.append(statsStrip(coverage, on.length, distillers.length));
 
   if (!distillers.length) {
     body.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' },
-      el('p', { class: 'cxc-empty-t', text: '아직 증류기가 없습니다' }),
+      el('p', { class: 'cxc-empty-t', text: '아직 자료 증류기가 없습니다' }),
       el('p', { class: 'cxc-empty-d', text: '증류기가 하나도 없으면 모든 자료를 한 가지 공통 기준으로 읽습니다. 팀이나 채널마다 남길 기준을 다르게 하려면 하나 만드세요.' }))));
   } else {
-    body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length) })));
+    body.append(el('p', { class: 'cxc-sub cxc-group-t' }, el('span', { text: '돌고 있는 자료 증류기' }), el('span', { class: 'cxc-title-n num', text: String(on.length + lanesOn.length) })));
     const cards = el('div', { class: 'dsl-cards' });
-    if (!on.length) cards.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' }, el('p', { class: 'cxc-empty-d', text: '켜진 증류기가 없습니다 — 아래에서 하나를 켜세요.' }))));
+    if (!on.length && !lanesOn.length) cards.append(el('div', { class: 'cxc-list' }, el('div', { class: 'cxc-empty' }, el('p', { class: 'cxc-empty-d', text: '켜진 증류기가 없습니다 — 아래에서 하나를 켜세요.' }))));
     for (const d of on) cards.append(distillerCard(d, stat(d.id), catName, rerender, machineRuns(runs, 'd', 'src:' + d.id)));
+    //  카테고리만 붙이는 증류기 — 자료 증류기 뒤에 선다(입력이 다르다: 자료가 아니라 미분류 지식).
+    for (const c of lanesOn) cards.append(...fillLaneCard(c, laneStat(c.id), rerender, machineRuns(runs, 'd', 'cat:' + c.id)));
     body.append(cards);
 
-    if (off.length) {
+    if (off.length || lanesOff.length) {
       const fold = el('details', { class: 'cxc-fold' },
-        el('summary', {}, el('span', { class: 'cxc-sub' }, el('span', { text: '꺼 둔 증류기' }), el('span', { class: 'cxc-title-n num', text: String(off.length) })),
+        el('summary', {}, el('span', { class: 'cxc-sub' }, el('span', { text: '꺼 둔 자료 증류기' }), el('span', { class: 'cxc-title-n num', text: String(off.length + lanesOff.length) })),
           el('span', { class: 'cxc-fold-d', text: '리브가 카테고리마다 미리 준비해 둔 것이 대부분입니다 — 그런 자료가 들어오기 시작하면 켜세요.' })));
       const offList = el('div', { class: 'cxc-list' });
       for (const d of off) offList.append(distillerRowCompact(d, stat(d.id), catName, rerender));
+      for (const c of lanesOff) offList.append(...fillLaneCard(c, laneStat(c.id), rerender, machineRuns(runs, 'd', 'cat:' + c.id)));
       fold.append(offList);
       body.append(fold);
     }
   }
 
   body.append(await runJobCard(rerender));
+  //  카테고리 붙이기 자동 실행 — 접힌 한 줄(web/distill-fill.ts). 자기 자리만 다시 그린다.
+  const fillJob = el('div', { class: 'dsl-fill' });
+  body.append(fillJob);
   detail.replaceChildren(body);
+  await renderFillJob(fillJob, res, rerender);
 }
 
 /**
@@ -144,7 +161,7 @@ function categoryNames(catRes: any): (key: string | null | undefined) => string 
 }
 
 /** 리브가 만든 증류기인가 — 온보딩이 카테고리마다 세운 레인(`liv-` 접두)과 제품이 준비해 두는 프리셋 셋. */
-const PRESET_DISTILLERS = new Set(['local-files', 'figma-comments', 'issue-threads']);
+const PRESET_DISTILLERS = new Set(['local-files', 'figma-comments', 'issue-threads', 'zotero-papers']);
 function isLivMadeDistiller(d): boolean {
   return String(d.key || '').startsWith('liv-') || PRESET_DISTILLERS.has(String(d.key || ''));
 }
@@ -153,11 +170,11 @@ function isLivMadeDistiller(d): boolean {
 const KIND_LABEL: Record<string, string> = {
   slack: '슬랙', discord: '디스코드', email: '메일', transcript: '회의 전사록', minutes: '회의록', notion_doc: '노션 문서',
   clickup_doc: '클릭업 문서', drive_file: '드라이브 파일', local_file: '올린 파일', figma_comment: '피그마 코멘트',
-  github_issue: '깃허브 이슈', gitlab_issue: '깃랩 이슈', linear_issue: '리니어 이슈', other: '그 밖',
+  github_issue: '깃허브 이슈', gitlab_issue: '깃랩 이슈', linear_issue: '리니어 이슈', zotero_item: 'Zotero 논문', other: '그 밖',
 };
 const KIND_SVC: Record<string, string> = {
   slack: 'slack', notion_doc: 'notion', clickup_doc: 'clickup', drive_file: 'google-drive', figma_comment: 'figma',
-  github_issue: 'github', gitlab_issue: 'gitlab', linear_issue: 'linear', email: 'google-gmail',
+  github_issue: 'github', gitlab_issue: 'gitlab', linear_issue: 'linear', email: 'google-gmail', zotero_item: 'zotero',
 };
 export function kindFace(kind: string, cls = ''): HTMLElement {
   const svc = KIND_SVC[kind];
@@ -272,6 +289,59 @@ function distillerCard(d, st, catName, rerender, runs: import('./context-runs.js
   const recent = recentLine('src:' + d.id, runs);
   if (recent) card.append(recent);
   return card;
+}
+
+// ── 카테고리만 붙이는 증류기 — 같은 흐름 카드, 배지 하나(#4135 회의 ③). 설정은 카드 아래에서 연다. ──
+let laneEditing: string | null = null;
+function fillLaneCard(c, st, rerender, runs: import('./context-runs.js').AutoRun[] = []): HTMLElement[] {
+  const retired = fillLaneRetired(c);
+  const on = !!c.enabled && !retired;
+  const card = el('article', { class: 'dsl-card is-lane' + (on ? '' : ' is-off') });
+  const systems: string[] = Array.isArray(c.match_systems) ? c.match_systems.filter(Boolean) : [];
+  const main = el('div', { class: 'cxc-main' },
+    el('div', { class: 'cxc-t' },
+      el('span', { class: 'cxc-name', text: splitLabel(c.label || c.key)[0] }),
+      el('span', { class: 'cxc-tag is-mode', text: '카테고리만 붙이기' }),
+      el('span', { class: 'cxc-state' + (on ? ' is-on' : '') }, el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: on ? '켜짐' : '꺼짐' }))),
+    el('p', { class: 'cxc-desc', text: splitLabel(c.label || c.key)[1] || '지식으로 바로 들어온 문서에 카테고리만 붙입니다. 본문은 바꾸지 않습니다' }),
+    el('div', { class: 'cxc-m' },
+      el('span', { class: 'cxc-kind', text: (systems.length ? systems.join('·') : '미분류 지식') + ' 증류기' }),
+      el('span', { class: 'cxc-who', text: '직접 만듦' }),
+      el('span', { class: 'cxc-sep', 'aria-hidden': 'true', text: '·' }),
+      distillerToday(machineSum(runs), true) || el('span', { text: c.last_run_at ? `마지막 실행 ${relTime(c.last_run_at)}` : '아직 실행한 적 없음' })));
+  const acts = el('div', { class: 'cxc-acts' });
+  const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': `${c.label || c.key} 켜기` }) as HTMLInputElement;
+  sw.checked = !!c.enabled;
+  sw.addEventListener('change', async () => {
+    const next = sw.checked; sw.disabled = true;
+    //  ⚠ 쓰기는 /org/classifiers 로(distill-fill.ts 머리말 — 옛 코어와 섞여도 자료 증류기를 건드리지 않는다).
+    try { await api('/api/ui/org/classifiers', { method: 'POST', body: JSON.stringify({ id: c.id, enabled: next }) }); toast(next ? '켰습니다' : '껐습니다'); rerender(); }
+    catch (e) { toast(e.message, true); sw.checked = !next; sw.disabled = false; }
+  });
+  const edit = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: laneEditing === c.key ? '닫기' : '설정', 'aria-expanded': String(laneEditing === c.key) });
+  edit.addEventListener('click', () => { laneEditing = laneEditing === c.key ? null : c.key; rerender(); });
+  acts.append(sw, edit);
+  const face = el('span', { class: 'dsl-faces', 'aria-hidden': 'true' }, el('span', { class: 'svc-tile cxc-tile cxc-tile-machine' }, lineIcon('layers', 'cxc-tile-ic')));
+  card.append(el('div', { class: 'dsl-head' }, face, main, acts));
+
+  const station = (k: string, body: HTMLElement, foot: string | HTMLElement | null) =>
+    el('div', { class: 'dsl-st' }, el('span', { class: 'dsl-st-k', text: k }), el('div', { class: 'dsl-st-b' }, body),
+      foot ? el('div', { class: 'dsl-st-f' }, typeof foot === 'string' ? el('span', { text: foot }) : foot) : null);
+  const wire = () => el('span', { class: 'dsl-wire' + (on ? ' is-flow' : ''), 'aria-hidden': 'true' }, arrowIcon());
+  const readChips = el('div', { class: 'dsl-chips' });
+  if (systems.length) for (const x of systems.slice(0, 5)) readChips.append(el('span', { class: 'dsl-chip', text: x }));
+  else readChips.append(el('span', { class: 'dsl-chip is-all', text: '미분류 지식 전체' }));
+  const backlog = Number(st.backlog || 0);
+  const crit = criteriaExcerpt(c.criteria_md);
+  const cands: string[] = Array.isArray(c.candidate_categories) ? c.candidate_categories.filter(Boolean) : [];
+  card.append(el('div', { class: 'dsl-flow' },
+    station('읽는 곳', readChips, el('span', {}, el('b', { class: 'num', text: backlog.toLocaleString() + '건' }), el('span', { text: retired ? ' 맡는 지식 없음' : ' 카테고리 없음' }))), wire(),
+    station('하는 일', el('p', { class: 'dsl-crit' + (crit ? '' : ' is-default'), text: crit || '본문은 그대로 두고, 카테고리 정의를 읽어 가장 맞는 칸을 고릅니다. 확신이 낮으면 제안으로만 둡니다.' }), '본문은 바꾸지 않습니다'), wire(),
+    station('지식이 가는 곳', el('div', {}, el('p', { class: 'dsl-dest is-default', text: cands.length ? '후보 카테고리 ' + cands.length + '개 중에서' : '카테고리 정의에 맞는 곳' })), '확신도 ' + Number(c.confirm_threshold ?? 0.8) + ' 이상이면 바로 붙임')));
+  const recent = recentLine('cat:' + c.id, runs, true);
+  if (recent) card.append(recent);
+  if (laneEditing !== c.key) return [card];
+  return [card, fillLaneEditor(c, () => { laneEditing = null; rerender(); })];
 }
 
 // ── 꺼 둔 증류기 — 얇은 행. 켜면 위 카드로 올라간다. ──
@@ -493,7 +563,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
   if (v('target_category')) { catIn.append(el('option', { value: v('target_category'), text: v('target_category') })); catIn.value = v('target_category'); }
   void (async () => {
     try {
-      const r = await api('/api/ui/categories');
+      const r = await api('/api/ui/categories?light=1');
       const cur = catIn.value;
       const seen = new Set(['']);
       for (const c of ((r && r.categories) || [])) {
@@ -527,7 +597,8 @@ function editorPage(d, isNew: boolean): HTMLElement {
   const run = runConfig({ harness: v('harness'), model: v('model'), effort: v('effort') }, '');
   const { harnessSel, modelSel, effortSel } = run;
   for (const sel of [harnessSel, modelSel, effortSel]) sel.className = 'dst-in dst-in-sm';
-  const reqIn = el('input', { type: 'text', class: 'dst-in dst-in-sm', value: v('requester'), placeholder: '구성원 id — 비우면 자동 실행을 만든 사람' });
+  //  실행 계정(#4052) — 종전엔 «구성원 id» 를 치는 글자칸이었다(그 id 를 볼 화면이 없었다). 이름으로 찾아 고른다.
+  const reqPick = personSelect({ value: v('requester'), emptyText: '비워 두면 자동 실행에 정한 계정으로 돕니다', label: '실행 계정' });
 
   const collect = () => {
     const kw = rKw.value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -560,7 +631,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
       mode: modeSel.value,
       session_ref: (sessIn as HTMLInputElement).value.trim() || null,
       ...run.value(),
-      requester: (reqIn as HTMLInputElement).value.trim() || null,
+      requester: reqPick.value() || null,
       // 조각: 손대지 않은(빈) 칸은 **키를 아예 안 보낸다** — 미지정=기본값이고, 빈 문자열은 '그 조각을 뺀다'는
       //  다른 뜻이기 때문이다. 조각 UI 를 아직 안 불러왔으면 이 필드를 건드리지 않는다(기존 설정 보존).
       ...(sectionsLoaded.v ? { prompt_sections: (() => {
@@ -741,7 +812,26 @@ function editorPage(d, isNew: boolean): HTMLElement {
     F('남길 기준', '무엇이 남길 가치가 있고 무엇이 아닌지 그대로 적으세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn),
     F('지식 문서 모양', '제목을 어떻게 짓고 본문을 어떤 순서로 쓸지. 비워 두면 기본 모양(분명한 제목 + 나중에 동료가 그것만 읽고 일할 수 있는 본문)으로 씁니다.', fmtIn));
 
+  //  이 증류기가 하는 일(#4135 · 9/22 회의 ③ «그 증류기 안에 분류만 태깅 설정») — 「카테고리 붙이기」를 따로 만드는 단추가 없어지고
+  //   여기서 고른다. 저장소가 달라(자료 증류기 ≠ 카테고리 붙이기) 만든 뒤에는 바꿀 수 없다 — 그래서 새로 만들 때만 고른다.
+  const modeOpt = (value: string, title: string, desc: string, tag: string | null, on: boolean, disabled: boolean) => {
+    const r = el('input', { type: 'radio', name: 'dst-mode', value, ...(on ? { checked: true } : {}), ...(disabled ? { disabled: true } : {}) }) as HTMLInputElement;
+    const lab = el('label', { class: 'dst-mode-o' + (on ? ' is-on' : '') + (disabled ? ' is-dis' : '') }, r,
+      el('span', {}, el('b', {}, title, tag ? el('span', { class: 'cxc-tag is-mode', text: tag }) : null), el('span', { text: desc })));
+    return { r, lab };
+  };
+  const mSrc = modeOpt('source', '자료를 읽어 지식으로 씁니다', '남길 기준(2단계)대로 판단해 새 지식을 쓰거나 기존 지식을 고칩니다.', null, true, false);
+  const mCat = modeOpt('category', '카테고리만 붙입니다', '노션처럼 지식으로 바로 들어온 문서에 씁니다. 본문은 그대로 두고 카테고리 정의를 읽어 칸만 정합니다. 2단계는 접힙니다.', '카테고리만 붙이기', false, !isNew);
+  const modeBox = el('div', { class: 'dst-field dst-mode-f' },
+    el('p', { class: 'field-label', text: '이 증류기가 하는 일' }),
+    isNew ? null : el('p', { class: 'admin-hint', text: '만든 뒤에는 바꿀 수 없습니다. 카테고리만 붙이는 증류기는 [+ 자료 증류기 만들기]에서 새로 만들 때 고릅니다.' }),
+    el('div', { class: 'dst-mode', role: 'radiogroup', 'aria-label': '이 증류기가 하는 일' }, mSrc.lab, mCat.lab));
+  const catHost = el('div', { class: 'dst-cat-host', hidden: true });
+  const destFields = el('div', { class: 'dst-dest-fields' });
+
   const secDest = sec('3', '지식은 어디로 갈까요', '만들어진 지식이 들어갈 자리와 모양입니다. 보통은 그대로 두어도 됩니다.',
+    modeBox, catHost, destFields);
+  destFields.append(
     row2(
       F('카테고리', '만들어진 지식을 항상 이 카테고리에 넣습니다.', catIn),
       F('문서 유형', '지식이 어떤 종류의 문서인지.', typeSel)),
@@ -777,7 +867,7 @@ function editorPage(d, isNew: boolean): HTMLElement {
       row2(
         F('한 번에 읽을 대화 수', 'AI가 한 번에 읽는 대화 묶음 수입니다(자료 건수가 아닙니다). 2~3을 권합니다.', batchIn),
         F('한 번에 담을 메시지 상한', '대화를 담다가 이 수를 넘으면 멈춥니다. 첫 대화는 예외로 통째로 담습니다. 20~40을 권합니다.', batchMsgIn)),
-      F('실행 계정', '이 사람의 AI 계정으로 돌고, 비용도 그 계정에 붙습니다.', reqIn),
+      F('실행 계정', '이 사람의 AI 계정으로 돌고, 비용도 그 계정에 붙습니다.', reqPick.el),
       row2(
         F('실행 방식', '매번 새 세션에서 돌리면 이전 판단에 끌려가지 않습니다(권장).', modeSel),
         F('늘 켜 둔 세션 id', '「늘 켜 둔 AI 세션에 보내서」일 때만 필요합니다.', sessIn)),
@@ -833,8 +923,12 @@ function editorPage(d, isNew: boolean): HTMLElement {
 
   // ── 머리 ──────────────────────────────────────────────────────────────────
   const { nav: crumbNav, back } = crumb();
+  //  «카테고리만 붙입니다» 모드에서는 바깥(자료) 폼이 아니라 그 편집기를 본다 — 안 그러면 거기 쓴 글을 확인 없이 잃고,
+  //   ⌘/Ctrl+S 가 빈 자료 증류기를 만들어 버린다(리뷰 지적).
+  let catTouched = false;
+  const pageDirty = (): boolean => (mCat.r.checked ? catTouched : isDirty());
   back.addEventListener('click', (ev) => {
-    if (!isDirty()) return;   // 기본 동작(해시 이동)
+    if (!pageDirty()) return;   // 기본 동작(해시 이동)
     ev.preventDefault();
     void (async () => {
       const go = await confirmDialog({
@@ -864,18 +958,33 @@ function editorPage(d, isNew: boolean): HTMLElement {
     headActs);
 
   const form = el('div', { class: 'dst-form' }, secName, secRead, secKeep, secDest, adv);
+  //  «카테고리만 붙입니다» 를 고르면 자료 쪽 칸(이름 · 1단계 · 2단계 · 고급 · 오른쪽 미리보기 · 위 저장 단추)을 접고 그 증류기의 편집기를 편다.
+  const applyMode = (): void => {
+    const cat = mCat.r.checked;
+    mSrc.lab.classList.toggle('is-on', !cat); mCat.lab.classList.toggle('is-on', cat);
+    for (const x of [secName, secRead, secKeep, adv, destFields, reflect, saveBtn, dirtyBadge]) (x as HTMLElement).hidden = cat;
+    catHost.hidden = !cat;
+    if (cat && !catHost.firstChild) catHost.append(fillLaneEditor(null, () => { dirtyGuard = null; location.hash = LIST_HREF; }));
+  };
+  mSrc.r.addEventListener('change', applyMode); mCat.r.addEventListener('change', applyMode);
   page.append(crumbNav, head, el('div', { class: 'dst-grid dst-grid-2' }, form, reflect));
 
   // 입력 변경 → 디바운스 → 반사판 갱신. 타이핑마다 서버를 때리지 않는다.
-  const onEdit = () => { touched = true; paintDirty(); clearTimeout(timer); timer = setTimeout(refresh, 600); };
+  const onEdit = (ev?: Event) => {
+    if (mCat.r.checked) { if (ev && catHost.contains(ev.target as Node)) catTouched = true; return; }   // 자료 폼의 미리보기 · dirty 는 건드리지 않는다
+    touched = true; paintDirty(); clearTimeout(timer); timer = setTimeout(refresh, 600);
+  };
   page.addEventListener('input', onEdit);
   page.addEventListener('change', onEdit);
   // ⌘/Ctrl+S — ⑤ 지시문은 조각이 5개라 폼이 길다. 저장하려고 머리까지 스크롤해 올라가지 않아도 되게.
   page.addEventListener('keydown', (ev: KeyboardEvent) => {
-    if ((ev.metaKey || ev.ctrlKey) && (ev.key === 's' || ev.key === 'S')) { ev.preventDefault(); void save(); }
+    if (!((ev.metaKey || ev.ctrlKey) && (ev.key === 's' || ev.key === 'S'))) return;
+    ev.preventDefault();
+    if (mCat.r.checked) { (catHost.querySelector('.ctx-actions .btn-primary') as HTMLButtonElement | null)?.click(); return; }   // 그 편집기의 저장
+    void save();
   });
 
-  dirtyGuard = isDirty;
+  dirtyGuard = pageDirty;
   markClean();      // 방금 그린 값이 곧 저장된 값이다(조각이 실리면 paint 가 기준선을 한 번 더 잡는다)
   void refresh();   // 페이지를 열면 바로 지금 상태를 보여준다(버튼을 누르게 하지 않는다)
   return page;
@@ -889,13 +998,19 @@ function editorPage(d, isNew: boolean): HTMLElement {
 async function runJobCard(rerender) {
   return stageJobCard({
     stage: '증류',
+    title: '자료 → 지식 자동 실행',   // #4194 — 같은 탭 아래 「카테고리 붙이기 자동 실행」 카드와 가른다
     actions: ['distill_sources_headless', 'distill_sources'],
     create: {
       id: 'distill-sources-headless', label: '자료 증류 (수집된 원본→지식, 헤드리스)',
       action: 'distill_sources_headless', params: {}, interval_sec: 1800,
       note: '켜진 증류기별로 미증류 자료 배치를 헤드리스 AI 세션에 접수. 증류기가 없으면 전 자료 공통 기본 증류.',
     },
-    missingLine: '증류 자동 실행이 없습니다 — 증류기를 만들어도 자료가 지식이 되지 않습니다.',
+    //  #4052 — 종전 문장은 «증류기를 만들어도 자료가 지식이 되지 않습니다» 였는데, 증류기를 켜면 잡이 함께 생긴다(#2415).
+    //   사실인 부분만 남긴다.
+    missingLine: '증류 자동 실행이 없어 쌓인 자료가 지식이 되지 않습니다.',
+    //  #4052 후속 — 켜진 레인 전부를 접수하는 전체 잡을 대표로 보인다. 처음 설정이 심은 local-files 전용 잡(10분)이
+    //   목록 앞에 오면 카드가 그 주기로 말하고, 끌 때 그 잡만 꺼져 나머지 레인은 계속 돌았다.
+    prefer: isWholeDistillJob,
     // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
     unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
       ? '지금 등록된 증류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'

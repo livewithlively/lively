@@ -6,13 +6,14 @@
 //  그래서 Electron API 의존을 main.mjs 한 파일에 가두고, 판단이 있는 코드는 전부 이쪽에 둔다.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readdirSync, readFileSync, existsSync as existsSyncReal } from "node:fs";
+import { readdirSync, readFileSync, existsSync as existsSyncReal, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
-import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
+import { bootstrapCommand, bootstrapScriptUrl, bootstrapPreview, bootstrapManualHint, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
-import { argvFor, RUN_KINDS, IPC, IPC_WEB } from "./ipc-contract.mjs";
+import { argvFor, RUN_KINDS, IPC, IPC_WEB, cloudUrl, DEFAULT_CLOUD_URL } from "./ipc-contract.mjs";
 import { normalizeGatewayInput, gatewayAdvice, isControlPlane, CONTROL_PLANE_HOSTS } from "./gateway-input.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -24,7 +25,8 @@ import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
-import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream } from "./notify.mjs";
+import { NOTIFY, snapshotSessions, diffSessions, bannerFor, planBanners, sessionHash, pickPersonEvents, rememberSeen, personLink, planPersonBanners, SEEN_MAX, phaseEventKind, streamEvent, parseSse, reconnectDelay, stableStream, keepBanner, BANNER_KEEP_MAX, wsLabelOf, digestFor, clickTarget, enterUrlWith, tenantUrlWith, streamUrl, WEB_WORKSPACE_KEY, READ_WEB_WORKSPACE_JS, WS_NAME_MAX } from "./notify.mjs";
+import { createHashNav } from "./web-shell.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
 import { posix as pposix } from "node:path";
 
@@ -255,10 +257,25 @@ t("H1 플랫폼별 부트스트랩 명령 — 게이트웨이가 서빙하는 �
   const mac = bootstrapCommand("https://dev.lvly.io", "darwin");
   assert.equal(mac.cmd, "/bin/sh");
   assert.deepEqual(mac.args, ["-c", "curl -fsSL https://dev.lvly.io/cli | sh"]);
-  const win = bootstrapCommand("https://dev.lvly.io/", "win32");
+  // 윈도우는 그 스크립트를 받아 둔 파일로 돈다 — 받는 주소는 웹·CLI 가 사람에게 주는 한 줄과 같아야 한다.
+  assert.equal(bootstrapScriptUrl("https://dev.lvly.io/", "win32"), "https://dev.lvly.io/cli.ps1");
+  assert.ok(bootstrapOneLiner("https://dev.lvly.io/", "win32").includes(bootstrapScriptUrl("https://dev.lvly.io/", "win32")), "안내 한 줄과 받는 주소가 갈렸다");
+  assert.equal(bootstrapScriptUrl("https://dev.lvly.io", "darwin"), null, "맥·리눅스는 셸이 직접 받는다");
+  const win = bootstrapCommand("https://dev.lvly.io/", "win32", "C:\\T\\lively-bootstrap-x\\cli.ps1");
   assert.equal(win.cmd, "powershell.exe");
   assert.ok(win.args.includes("-NoProfile"), "프로필이 출력·PATH 를 오염시킨다");
-  assert.ok(win.args[win.args.length - 1] === "irm https://dev.lvly.io/cli.ps1 | iex");
+  assert.deepEqual(win.args.slice(-2), ["-File", "C:\\T\\lively-bootstrap-x\\cli.ps1"]);
+  assert.throws(() => bootstrapCommand("https://dev.lvly.io", "win32"), /스크립트/, "받아 둔 파일 없이 명령을 만들었다");
+});
+
+t("H1b ★ 윈도우 명령줄에 «내려받아 실행» 한 줄이 없다 — 디펜더가 Commando.A!ml 로 막는다(#4940)", () => {
+  const line = bootstrapCommand("https://dev.lvly.io", "win32", "C:\\T\\cli.ps1").args.join(" ");
+  assert.ok(!/\biex\b|Invoke-Expression|\birm\b|Invoke-RestMethod|Invoke-WebRequest|-Command\b|-EncodedCommand\b/i.test(line), `명령줄: ${line}`);
+  // 로그에 찍는 '지금 실행할 한 줄' 도 실제로 하는 일과 같아야 한다(숨기지 않는다).
+  assert.match(bootstrapPreview("https://dev.lvly.io", "win32"), /-File cli\.ps1/);
+  assert.ok(bootstrapPreview("https://dev.lvly.io/", "win32").includes(bootstrapScriptUrl("https://dev.lvly.io/", "win32")), "로그에 적은 주소와 실제로 받는 주소가 갈렸다");
+  assert.ok(!/\biex\b/.test(bootstrapPreview("https://dev.lvly.io", "win32")), "로그엔 여전히 irm | iex 를 실행한다고 적는다");
+  assert.equal(bootstrapPreview("https://dev.lvly.io", "darwin"), bootstrapOneLiner("https://dev.lvly.io", "darwin"));
 });
 
 t("H2 ★ 셸 문자열에 주소가 들어간다 — 셸 메타문자는 절대 통과시키지 않는다", () => {
@@ -269,6 +286,7 @@ t("H2 ★ 셸 문자열에 주소가 들어간다 — 셸 메타문자는 절대
     "", "   ",
   ]) {
     assert.throws(() => bootstrapCommand(bad, "darwin"), /형식/, `통과해버림: ${JSON.stringify(bad)}`);
+    assert.throws(() => bootstrapScriptUrl(bad, "win32"), /형식/, `윈도우가 받을 주소로 통과해버림: ${JSON.stringify(bad)}`);
   }
 });
 
@@ -279,7 +297,7 @@ await ta("H3 출력은 줄 단위로 흘리고, 실패는 실패로 보고한다
     c.stdout.emit("data", " 중…\n");
     c.emit("close", 1, null);
   });
-  const r = await runBootstrap({ gatewayUrl: "https://a.io", spawn: s.spawn, onLine: (l) => lines.push(l) });
+  const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "darwin", spawn: s.spawn, onLine: (l) => lines.push(l) });
   assert.deepEqual(lines, ["  ✓ Node 준비 완료", "  · lively 설치 중…"], "청크 경계에서 줄이 깨졌다");
   assert.equal(r.ok, false);
   assert.match(r.error, /실패/);
@@ -287,8 +305,189 @@ await ta("H3 출력은 줄 단위로 흘리고, 실패는 실패로 보고한다
 
 await ta("H4 stdio 는 파이프다 — TTY 를 주면 스크립트가 `lively setup` 으로 인계해 흐름이 갈라진다", async () => {
   const s = stubSpawn((c) => c.emit("close", 0, null));
-  await runBootstrap({ gatewayUrl: "https://a.io", spawn: s.spawn });
+  await runBootstrap({ gatewayUrl: "https://a.io", platform: "darwin", spawn: s.spawn });
   assert.deepEqual(s.calls[0].opts.stdio, ["ignore", "pipe", "pipe"]);
+});
+
+// ── C2-w. 윈도우 부트스트랩 — 받아서 파일로 실행(#4940) ──────────────────────
+//  관측 장치: 가짜 fetch 의 URL 로그 · 스텁 spawn 의 argv/opts · 띄운 순간의 파일 바이트 · 임시 루트의 남은 항목.
+const fakeFetch = (respond) => {
+  const urls = [];
+  return { urls, fn: async (url) => { urls.push(url); return respond(url); } };
+};
+const okBody = (body) => ({ ok: true, status: 200, text: async () => body });
+const bootRoot = () => mkdtempSync(join(tmpdir(), "lively-boot-test-"));
+// 스텁 spawn 이 띄우는 순간 `-File` 파일을 읽어 둔다(끝난 뒤엔 지워져 있어야 하므로 그때만 볼 수 있다).
+const winStub = (code = 0) => {
+  const seen = {};
+  const s = stubSpawn((c) => {
+    const args = s.calls[s.calls.length - 1].args;
+    seen.file = args[args.indexOf("-File") + 1];
+    seen.bytes = existsSyncReal(seen.file) ? readFileSync(seen.file) : null;
+    c.stdout.emit("data", "  ✓ lively CLI 준비 완료\n");
+    c.emit("close", code, null);
+  });
+  return { s, seen };
+};
+
+await ta("BW1 ★ 윈도우: 받은 스크립트를 BOM·UTF-8 출력으로 파일에 써서 -File 로 띄우고, 끝나면 그 폴더를 지운다", async () => {
+  const root = bootRoot();
+  try {
+    const body = "Write-Host '라이블리 설치'\nWrite-Host \"끝\"\n";
+    const f = fakeFetch(() => okBody(body));
+    const { s, seen } = winStub(0);
+    const env = { LIVELY_HOME: "C:\\sandbox", PATH: "x" };
+    const lines = [];
+    const r = await runBootstrap({ gatewayUrl: "https://acme.app.lvly.io/", platform: "win32", spawn: s.spawn, fetch: f.fn, tmpDir: root, env, onLine: (l) => lines.push(l) });
+    assert.deepEqual(f.urls, ["https://acme.app.lvly.io/cli.ps1"], "받는 주소가 안내 한 줄과 다르다");
+    assert.equal(s.calls.length, 1, "PowerShell 을 한 번 띄워야 한다");
+    const call = s.calls[0];
+    assert.equal(call.cli, "powershell.exe");
+    assert.ok(!call.args.some((a) => /\biex\b|\birm\b|-Command\b/i.test(a)), `명령줄에 내려받아 실행 한 줄이 남았다: ${call.args.join(" ")}`);
+    assert.equal(call.args[call.args.length - 2], "-File");
+    assert.deepEqual(call.opts.stdio, ["ignore", "pipe", "pipe"], "윈도우도 stdio 는 파이프여야 한다");
+    assert.equal(call.opts.windowsHide, true);
+    assert.equal(call.opts.env, env, "샌드박스 env 를 안 물려줬다");
+    // 띄운 순간의 파일 — BOM + (본문 앞) 출력 UTF-8 + 받은 본문 그대로.
+    assert.ok(seen.bytes, "띄운 순간 -File 파일이 없었다");
+    assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], "UTF-8 BOM 이 없다 — 5.1 이 ANSI 로 읽어 한글이 깨진다");
+    const text = seen.bytes.toString("utf8").slice(1);
+    const enc = text.search(/\[Console\]::OutputEncoding\s*=\s*\[System\.Text\.UTF8Encoding\]/);
+    assert.ok(enc >= 0 && enc < text.indexOf(body), "본문보다 앞에서 출력을 UTF-8 로 바꾸지 않는다");
+    assert.ok(text.endsWith(body), "받은 본문이 바뀌었다");
+    assert.ok(seen.file.startsWith(root), "임시 폴더 밖에 썼다");
+    // 끝난 뒤 — 임시 루트에 아무것도 안 남는다.
+    assert.deepEqual(readdirSync(root), [], "받아 둔 스크립트 폴더가 남았다");
+    assert.equal(r.ok, true);
+    assert.deepEqual(lines, ["  ✓ lively CLI 준비 완료"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("BW2 윈도우: 받은 본문이 BOM 으로 시작해도 파일의 BOM 은 하나다", async () => {
+  const root = bootRoot();
+  try {
+    const { s, seen } = winStub(0);
+    await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("\uFEFFWrite-Host 1\n")).fn, tmpDir: root });
+    assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    assert.ok(!seen.bytes.toString("utf8").slice(1).includes("\uFEFF"), "BOM 이 두 번 들어갔다 — 둘째 BOM 은 파서까지 간다");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("BW3 ★ 윈도우: 스크립트를 못 받으면 띄우지 않는다 — error 를 비워 호출자가 경로별 다음 행동을 말하게", async () => {
+  for (const [why, respond, reason] of [
+    ["404", () => ({ ok: false, status: 404, text: async () => "Not Found" }), /404/],
+    ["네트워크 예외", () => { throw Object.assign(new Error("fetch failed"), { cause: new Error("getaddrinfo ENOTFOUND a.io") }); }, /ENOTFOUND/],
+  ]) {
+    const root = bootRoot();
+    try {
+      const s = stubSpawn((c) => c.emit("close", 0, null));
+      const lines = [];
+      const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(respond).fn, tmpDir: root, onLine: (l) => lines.push(l) });
+      assert.equal(s.calls.length, 0, `${why}: 받지도 못했는데 PowerShell 을 띄웠다`);
+      assert.equal(r.ok, false, why);
+      assert.equal(r.error, null, `${why}: error 를 채우면 main 이 bootstrapFailNote(다음 행동) 대신 그걸 보인다`);
+      assert.equal(lines.length, 1, `${why}: 이유가 로그에 안 남았다`);
+      assert.ok(lines[0].includes("https://a.io/cli.ps1") && reason.test(lines[0]), `${why}: 로그 줄에 URL·이유가 없다: ${lines[0]}`);
+      assert.deepEqual(readdirSync(root), [], `${why}: 임시 폴더를 만들었다`);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
+await ta("BW4 윈도우: 실패로 끝나도·띄우지 못해도 받아 둔 폴더는 지운다", async () => {
+  const root = bootRoot();
+  try {
+    const { s } = winStub(1);
+    const r1 = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("x")).fn, tmpDir: root });
+    assert.equal(r1.ok, false);
+    assert.match(r1.error, /실패/);
+    assert.deepEqual(readdirSync(root), [], "실패 뒤 폴더가 남았다");
+    const throwing = () => { throw new Error("spawn EACCES"); };
+    const r2 = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: throwing, fetch: fakeFetch(() => okBody("x")).fn, tmpDir: root });
+    assert.equal(r2.ok, false);
+    assert.match(r2.error, /실행하지 못했습니다/);
+    assert.deepEqual(readdirSync(root), [], "띄우지 못한 뒤 폴더가 남았다");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("BW5 형식이 틀린 주소는 아무것도 받지 않는다 · 맥은 앱이 따로 받지 않는다", async () => {
+  const f = fakeFetch(() => okBody("x"));
+  const s = stubSpawn((c) => c.emit("close", 0, null));
+  const bad = await runBootstrap({ gatewayUrl: "https://a.io; rm -rf /", platform: "win32", spawn: s.spawn, fetch: f.fn });
+  assert.match(bad.error, /형식/);
+  await runBootstrap({ gatewayUrl: "https://a.io", platform: "darwin", spawn: s.spawn, fetch: f.fn });
+  assert.deepEqual(f.urls, [], "앱이 직접 받았다");
+  assert.equal(s.calls.length, 1);
+  assert.deepEqual([s.calls[0].cli, s.calls[0].args], ["/bin/sh", ["-c", "curl -fsSL https://a.io/cli | sh"]]);
+});
+
+await ta("BW6 윈도우: tmpDir·fetch 를 안 주면 OS 임시 폴더와 전역 fetch 를 쓴다(앱의 실제 호출 꼴)", async () => {
+  const realFetch = globalThis.fetch;
+  const f = fakeFetch(() => okBody("Write-Host 1\n"));
+  globalThis.fetch = f.fn;
+  try {
+    const { s, seen } = winStub(0);
+    const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn });
+    assert.deepEqual(f.urls, ["https://a.io/cli.ps1"], "전역 fetch 를 안 썼다");
+    assert.ok(seen.bytes, "띄운 순간 파일이 없었다");
+    assert.ok(seen.file.startsWith(join(tmpdir(), "lively-bootstrap-")), `OS 임시 폴더 밖: ${seen.file}`);
+    assert.equal(existsSyncReal(seen.file), false, "끝난 뒤 파일이 남았다");
+    assert.equal(r.ok, true);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+await ta("BW7 경계: 200 인데 빈 본문이어도 띄운다 — 성공 판정은 호출자가 'CLI 가 생겼나' 로 한다", async () => {
+  const root = bootRoot();
+  try {
+    const { s, seen } = winStub(0);
+    await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("")).fn, tmpDir: root });
+    assert.equal(s.calls.length, 1);
+    assert.deepEqual([...seen.bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+await ta("BW8 ★ 윈도우: 임시 폴더에 못 쓰면 던지지 않고 실패로 돌려준다 — 던지면 앱이 «진행 중» 에 멈춘다(main.ensureCli 는 await 만 한다)", async () => {
+  const root = bootRoot();
+  try {
+    const s = stubSpawn((c) => c.emit("close", 0, null));
+    let r = null, threw = null;
+    try {
+      r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", spawn: s.spawn, fetch: fakeFetch(() => okBody("x")).fn, tmpDir: join(root, "없는 폴더", "더 안") });
+    } catch (e) { threw = e; }
+    assert.equal(threw, null, `던졌다: ${threw?.message}`);
+    assert.equal(r.ok, false);
+    assert.ok(r.error, "error 가 비면 main 이 주소 안내(bootstrapFailNote)를 보인다 — 주소 문제가 아니다");
+    assert.equal(s.calls.length, 0, "스크립트 없이 PowerShell 을 띄웠다");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// BW9 — **실제** Windows PowerShell 로 돌린다(윈도우 러너·윈도우 PC 에서만). BW1 은 바이트만 본다 — «5.1 이 BOM 붙은 UTF-8 을
+//  읽는다»·«프렐류드가 파이프 출력을 UTF-8 로 만든다» 는 여기서만 실제로 확인된다. CI 러너는 코드페이지가 1252/437 이라
+//  둘 중 하나만 빠져도 한글이 깨져 빨간불이 난다(한국어판 949 에서도 깨지는 것을 실측했다 — bootstrap.mjs psScriptFile).
+if (process.platform === "win32") {
+  await ta("BW9 ★ 실제 powershell.exe — 받은 한글 스크립트가 앱 로그(UTF-8)에 그대로 나온다", async () => {
+    const root = bootRoot();
+    try {
+      const lines = [];
+      const r = await runBootstrap({ gatewayUrl: "https://a.io", platform: "win32", tmpDir: root, timeoutMs: 120_000,
+        fetch: fakeFetch(() => okBody('Write-Host "라이블리 설치 확인 한글"\nWrite-Output "둘째 줄"\n')).fn,
+        onLine: (l) => lines.push(l.replace(/\r$/, "")) });
+      assert.equal(r.ok, true, `종료 ${r.code} · ${r.error} · ${r.output}`);
+      assert.ok(lines.includes("라이블리 설치 확인 한글"), `한글이 깨졌다: ${JSON.stringify(lines)}`);
+      assert.ok(lines.includes("둘째 줄"), JSON.stringify(lines));
+      assert.deepEqual(readdirSync(root), [], "받아 둔 폴더가 남았다");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+} else console.log("skip BW9 실제 PowerShell 실행 — 윈도우에서만 돈다");
+
+t("BW10 윈도우에서 CLI 가 안 생기면 손으로 하는 한 줄을 붙인다 — 안내 문구와 같은 한 줄 · 맥·리눅스는 없음", () => {
+  const hint = bootstrapManualHint("https://acme.example.com/", "win32");
+  assert.ok(hint && hint.includes(bootstrapOneLiner("https://acme.example.com/", "win32")), `한 줄이 없다: ${hint}`);
+  assert.equal(bootstrapManualHint("https://acme.example.com", "darwin"), null);
+  assert.equal(bootstrapManualHint("https://acme.example.com", "linux"), null);
+  // 배선 — CLI 가 아예 안 생긴 실패에만 붙인다(있는데 옛 버전인 실패엔 그 한 줄이 답이 아니다).
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const ens = main.slice(main.indexOf("async function ensureCli("), main.indexOf("function bootstrapFailNote("));
+  assert.match(ens, /cli \? null : bootstrapManualHint\(src\.url\)/, "CLI 가 안 생긴 실패에 손 설치 한 줄을 안 붙인다");
 });
 
 // ── D. 진행 리듀서 ───────────────────────────────────────────────────────────
@@ -1439,6 +1638,430 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
 }
 
+// ── Z7. 윈도우 코드서명 (#3940 · win-signing.mjs) — «서명이 유효한가» 와 «설치된 앱이 다음 업데이트를 받아들이는가» ──────
+// 서명판부터 resources/app-update.yml 에 publisherName 이 박히고, electron-updater 는 **다음** 설치기의 서명자를 그 이름과
+//  대조한다. 비면 검사가 조용히 꺼지고, 틀리면 첫 서명판을 깐 사용자는 그 뒤 업데이트를 영영 못 받는다. 우리 CN 은 한글이라
+//  실제 대조는 Windows 러너에서 electron-updater 의 함수로 하고(verify), 여기선 판정 규칙과 배선을 못박는다.
+{
+  const { withAzureSigning, signatureProblems, publisherProblems, signingTargets, gateMode } = await import("../win-signing.mjs");
+  const wf = readFileSync(fileURLToPath(new URL("../../.github/workflows/release-desktop.yml", import.meta.url)), "utf8");
+  const WANT = "CN=라이블리, O=라이블리";
+  const CREDS = { AZURE_TENANT_ID: "tenant", AZURE_CLIENT_ID: "client", AZURE_CLIENT_SECRET: "secret" };
+  const SIGN = { WIN_SIGN_ENDPOINT: "https://krc.codesigning.azure.net", WIN_SIGN_ACCOUNT: "lively", WIN_SIGN_PROFILE: "livelydesktop", WIN_SIGN_PUBLISHER: WANT };
+  const basePkg = () => ({ name: "lively-desktop", version: "0.1.0", build: { appId: "io.lvly.desktop", productName: "Lively", win: { target: ["nsis"], signtoolOptions: {} }, nsis: { oneClick: true } } });
+
+  t("Z7a 설정 끼우기 — 자격이 전부 있을 때만, 값은 그대로, 입력은 안 건드린다", () => {
+    // A1 전부 있음 → 4필드가 값 그대로 · signtool 설정 빠짐 · 나머지 보존 · 입력 불변
+    const pkg = basePkg();
+    const before = JSON.stringify(pkg);
+    const next = withAzureSigning(pkg, { ...CREDS, ...SIGN });
+    assert.deepEqual(next.build.win.azureSignOptions, { endpoint: "https://krc.codesigning.azure.net", codeSigningAccountName: "lively", certificateProfileName: "livelydesktop", publisherName: WANT });
+    assert.ok(!("signtoolOptions" in next.build.win), "signtool 설정이 남았다 — azureSignOptions 와 같이 쓰지 않는다");
+    assert.deepEqual(next.build.win.target, ["nsis"], "win 의 다른 설정이 사라졌다");
+    assert.deepEqual(next.build.nsis, { oneClick: true }, "win 밖의 설정이 바뀌었다");
+    assert.equal(next.build.productName, "Lively");
+    assert.equal(JSON.stringify(pkg), before, "입력 package.json 을 바꿨다");
+    // A2 자격 env 자체가 없음(포크·로컬 빌드) → 끼우지 않는다
+    assert.equal(withAzureSigning(basePkg(), { ...SIGN }), null);
+    // A3 ★ GitHub 은 없는 시크릿을 빈 문자열로 넘긴다 — 빈 값·공백은 «없음» 이다
+    assert.equal(withAzureSigning(basePkg(), { AZURE_TENANT_ID: "", AZURE_CLIENT_ID: "", AZURE_CLIENT_SECRET: "  ", ...SIGN }), null);
+    // A4 일부만 → 실패(조용히 무서명으로 나가면 안 된다)
+    assert.throws(() => withAzureSigning(basePkg(), { ...CREDS, AZURE_CLIENT_SECRET: "", ...SIGN }), /일부만/);
+    // A5 자격은 있는데 서명 대상 설정이 빠짐 → 실패
+    assert.throws(() => withAzureSigning(basePkg(), { ...CREDS, ...SIGN, WIN_SIGN_PUBLISHER: "" }), /WIN_SIGN_PUBLISHER/);
+    assert.throws(() => withAzureSigning(basePkg(), { ...CREDS, ...SIGN, WIN_SIGN_ENDPOINT: undefined }), /WIN_SIGN_ENDPOINT/);
+    // A6 값을 정규화하지 않는다 — 들어온 그대로가 app-update.yml 에 박혀야 게이트가 차이를 본다
+    const nfd = WANT.normalize("NFD");
+    assert.equal(withAzureSigning(basePkg(), { ...CREDS, ...SIGN, WIN_SIGN_PUBLISHER: nfd }).build.win.azureSignOptions.publisherName, nfd);
+  });
+
+  t("Z7b 서명 판독 — Valid 이고 타임스탬프가 있어야 통과", () => {
+    const good = { Status: "Valid", StatusMessage: "Signature verified.", Timestamped: true };
+    assert.deepEqual(signatureProblems(good), []);                                                               // B1
+    assert.ok(signatureProblems({ Status: "NotSigned", StatusMessage: "", Timestamped: false }).length >= 1, "무서명을 통과시켰다");  // B2
+    assert.ok(signatureProblems({ ...good, Status: "HashMismatch" }).length >= 1, "해시 불일치를 통과시켰다");        // B3
+    // B4 ★ 타임스탬프가 없으면 막는다 — Artifact Signing 인증서는 3일짜리라 사흘 뒤 그 서명은 무효가 된다
+    const noTs = signatureProblems({ ...good, Timestamped: false });
+    assert.equal(noTs.length, 1, JSON.stringify(noTs));
+    assert.match(noTs[0], /타임스탬프/);
+    assert.ok(signatureProblems(null).length >= 1, "판독 실패를 통과시켰다");                                        // B5
+    assert.ok(signatureProblems({}).length >= 1, "상태가 빈 판독을 통과시켰다");
+  });
+
+  t("Z7c 게시자 이름 — 비었거나 끼운 값과 한 글자라도 다르면 막는다", () => {
+    assert.deepEqual(publisherProblems([WANT], WANT), []);                                                       // C1
+    assert.deepEqual(publisherProblems(WANT, WANT), [], "문자열 하나로 적혀도 같은 이름이다");                        // C2
+    // C3 ★ 비면 설치된 앱이 다음 업데이트의 서명을 **검사하지 않는다**(NsisUpdater: publisherName == null → 건너뜀)
+    assert.match(publisherProblems(undefined, WANT).join(" "), /검사하지 않는다/);
+    assert.ok(publisherProblems(null, WANT).length >= 1, "null 을 통과시켰다");
+    assert.ok(publisherProblems([], WANT).length >= 1, "빈 목록을 통과시켰다");                                        // C4
+    assert.ok(publisherProblems([""], WANT).length >= 1, "빈 이름을 통과시켰다");
+    assert.ok(publisherProblems(["CN=라이블리,O=라이블리"], WANT).length >= 1, "공백 차이를 같은 이름으로 봤다");         // C5
+    assert.ok(publisherProblems([WANT.normalize("NFD")], WANT).length >= 1, "NFD 자모 분리를 같은 이름으로 봤다");      // C6
+    assert.deepEqual(publisherProblems(["CN=옛 이름", WANT], WANT), [], "여러 이름 중 하나면 된다");                  // C7
+    assert.deepEqual(publisherProblems(["CN=아무거나"], ""), [], "끼운 값이 없으면 존재만 본다");                      // C8
+  });
+
+  t("Z7d 검사 대상 — 설치기와 앱 exe 를 보고, blockmap·언인스톨러·다른 제품은 섞지 않는다", () => {
+    const rel = ["Lively-Setup-0.1.0.exe", "Lively-Setup-0.1.0.exe.blockmap", "latest.yml", "__uninstaller-nsis-lively-desktop.exe", "Other-Setup-1.0.0.exe", "win-unpacked"];
+    assert.deepEqual(signingTargets(rel, ["Lively.exe", "resources", "ffmpeg.dll"], "Lively"), { installers: ["Lively-Setup-0.1.0.exe"], app: ["win-unpacked/Lively.exe"] });  // D1·D2
+    assert.deepEqual(signingTargets(rel, ["resources"], "Lively").app, [], "앱 exe 가 없는데 대상에 넣었다");          // D3
+    assert.deepEqual(signingTargets(undefined, undefined, "Lively"), { installers: [], app: [] });               // D4
+  });
+
+  t("Z7e 게이트 모드 — 자격은 있는데 설정이 안 끼워졌으면 통과시키지 않는다", () => {
+    const opts = { publisherName: WANT };
+    for (const clientId of [undefined, "", "   "]) {
+      assert.equal(gateMode({ clientId, azureSignOptions: undefined }), "skip", `clientId=${JSON.stringify(clientId)} 인데 건너뛰지 않았다`);  // E1
+    }
+    assert.equal(gateMode({ clientId: "client", azureSignOptions: opts }), "verify");                            // E2
+    assert.equal(gateMode({ clientId: "client", azureSignOptions: undefined }), "misconfigured", "무서명 설치본이 서명된 척 나간다");  // E3
+    assert.equal(gateMode({ clientId: undefined, azureSignOptions: opts }), "verify", "설정이 끼워졌으면 자격과 무관하게 본다");      // E4
+  });
+
+  t("Z7f ★ 배선 — 끼우기는 빌드 직전 같은 스텝, 게이트는 빌드 뒤·업로드 앞에서 실패하면 막는다", () => {
+    // F1 package.json 에 박으면 자격 없는 빌드(포크·로컬 dist:win)가 서명 단계에서 죽는다
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+    assert.ok(!(pkg.build.win && pkg.build.win.azureSignOptions), "package.json 에 azureSignOptions 가 박혀 있다");
+    // F2 ⚠ 존재를 먼저 단언한다 — 위치만 비교하면 스텝이 없을 때 indexOf 가 -1 이라 통과한다(CL5 교훈)
+    const at = (s) => { const i = wf.indexOf(s); assert.ok(i >= 0, `워크플로에 «${s}» 가 없다`); return i; };
+    const configureAt = at("node win-signing.mjs configure");
+    const buildAt = at("electron-builder --win");
+    const verifyAt = at("node win-signing.mjs verify");
+    const uploadAt = at("softprops/action-gh-release");
+    assert.ok(configureAt < buildAt && buildAt < verifyAt && verifyAt < uploadAt, "순서가 끼우기 → 빌드 → 게이트 → 업로드가 아니다");
+    assert.ok(!wf.slice(configureAt, buildAt).includes("- name:"), "끼우기가 빌드와 다른 스텝이다");
+    // F3 게이트 스텝은 실패를 삼키지 않는다
+    const gateStep = wf.slice(0, verifyAt).split("- name:").pop();
+    assert.match(gateStep, /^\s*서명 유효성 \(win\)/, "게이트가 «서명 유효성 (win)» 스텝에 있지 않다");
+    assert.ok(!/continue-on-error:\s*true/.test(gateStep), "게이트가 continue-on-error 라 실패해도 릴리스가 나간다");
+    // F4 빌드 스텝 env — 비밀 전달 · 엔드포인트는 계정 리전 · 게시자 이름은 인증서 주체의 CN·O 만
+    const buildStep = wf.slice(0, buildAt).split("- name:").pop();
+    assert.match(buildStep, /AZURE_CLIENT_SECRET:\s*\$\{\{\s*secrets\.AZURE_CLIENT_SECRET\s*\}\}/, "빌드 스텝에 서비스 주체 비밀이 안 간다");
+    assert.match(buildStep, /WIN_SIGN_ENDPOINT:\s*https:\/\/krc\.codesigning\.azure\.net\s*$/m, "엔드포인트가 계정 리전(Korea Central)과 다르다 — 403");
+    const pub = /WIN_SIGN_PUBLISHER:\s*"([^"]*)"/.exec(buildStep);
+    assert.ok(pub, "빌드 스텝에 WIN_SIGN_PUBLISHER 가 없다");
+    // 인증서 주체(Certificate Subject Preview)에서 옮긴 값이다. 바꾸려면 인증서 주체를 다시 확인하고 이 단언도 같이 바꿔라.
+    assert.equal(pub[1], WANT, "게시자 이름이 인증서 주체의 CN·O 와 다르다 — 서명판 사용자의 업데이트가 끊긴다");
+  });
+}
+{
+  const { powershellEnv } = await import("../win-signing.mjs");
+
+  t("Z7g PowerShell 판독 환경 — PSModulePath 를 물려주지 않는다(대소문자 무관), 나머지는 그대로", () => {
+    // 실측 run 34820230010: pwsh 스텝에서 powershell.exe(5.1)를 부르자 7 의 모듈 경로를 물려받아 Get-AuthenticodeSignature 를 못 실었다
+    const env = { PSModulePath: "C:\\Program Files\\PowerShell\\7\\Modules", Path: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" };
+    const before = JSON.stringify(env);
+    assert.deepEqual(powershellEnv(env), { Path: "C:\\Windows\\System32", SystemRoot: "C:\\Windows" });              // G1
+    assert.deepEqual(powershellEnv({ psmodulepath: "a", PSMODULEPATH: "b", Other: "z" }), { Other: "z" }, "대소문자가 다른 키가 남았다");  // G2
+    assert.equal(JSON.stringify(env), before, "입력 env 를 바꿨다");                                                  // G3
+    // G4 배선 — 함수만 있고 판독이 안 쓰면 CI 에서 같은 실패가 난다
+    const src = readFileSync(fileURLToPath(new URL("../win-signing.mjs", import.meta.url)), "utf8");
+    assert.match(src, /execFileSync\("powershell\.exe"[^)]*env:\s*powershellEnv\(process\.env\)/, "서명 판독이 PSModulePath 를 뺀 환경으로 powershell.exe 를 부르지 않는다");
+  });
+}
+
+// ── Z8. 첫 설치 SmartScreen 경고 (#4066) — «서명 없는 DLL 도 서명한다» 와 «첫 설치는 고정된 설치 도우미로 받는다» ──────
+// 버전별 설치 파일은 릴리스마다 바뀌어 SmartScreen 평판이 쌓이지 않는다(서명은 정상이었다). 첫 설치용 도우미는 한 번 만들어
+//  계속 쓰는 파일이고(installer-helper/Program.cs), 받은 설치 파일을 설치된 앱의 자동 업데이트와 **같은 기준**으로 확인한다.
+//  그 기준(서명자 DN 대조)은 C#(도우미)과 JS(서명 게이트) 두 벌이라, 같은 사례 표(selftest-cases.tsv)로 둘 다 묶는다.
+//  행 번호(A1…J5)는 사양 엣지 표의 행이다.
+{
+  const W = await import("../win-signing.mjs");
+  const { dibImage, icoFile } = await import("../ico.mjs");
+  const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const helperSrc = read("../installer-helper/Program.cs");
+  const helperProj = read("../installer-helper/LivelySetup.csproj");
+  const helperManifest = read("../installer-helper/app.manifest");
+  const cases = read("../installer-helper/selftest-cases.tsv");
+  const relWf = read("../../.github/workflows/release-desktop.yml");
+  const helperWf = read("../../.github/workflows/desktop-installer-helper.yml");
+  const WANT = "CN=라이블리, O=라이블리";
+
+  /** PE 머리 한 벌 — magic(PE32 0x10b / PE32+ 0x20b) · 데이터 디렉터리 수 · 인증서 테이블 크기 · PE 서명. */
+  const peHead = ({ magic = 0x20b, dirs = 16, secSize = 0, len = 1024, sig = "PE\0\0" } = {}) => {
+    const b = Buffer.alloc(len);
+    b.write("MZ", 0, "latin1");
+    const pe = 0x80;
+    b.writeUInt32LE(pe, 0x3c);
+    b.write(sig, pe, "latin1");
+    b.writeUInt16LE(magic, pe + 24);
+    const dirBase = pe + 24 + (magic === 0x10b ? 96 : 112);
+    b.writeUInt32LE(dirs, dirBase - 4);
+    b.writeUInt32LE(secSize ? 0x4000 : 0, dirBase + 32);
+    b.writeUInt32LE(secSize, dirBase + 36);
+    return b;
+  };
+
+  t("Z8a PE 서명 자리 판독 — 인증서 칸이 차 있으면 서명됨, 비었으면 서명 대상, PE 로 못 읽으면 모름", () => {
+    assert.equal(W.peHasSignature(peHead({ secSize: 15608 })), true);                                             // A1 (v0.1.369 설치기의 실제 크기)
+    assert.equal(W.peHasSignature(peHead()), false);                                                               // A2
+    assert.equal(W.peHasSignature(peHead({ magic: 0x10b, secSize: 8 })), true, "PE32(32비트) 머리를 잘못 읽었다"); // A3
+    assert.equal(W.peHasSignature(peHead({ magic: 0x10b })), false);
+    assert.equal(W.peHasSignature(peHead({ dirs: 4, secSize: 99 })), false, "데이터 디렉터리가 4개면 인증서 칸(5번째)이 없다");  // A4
+    assert.equal(W.peHasSignature(peHead({ dirs: 5, secSize: 99 })), true, "데이터 디렉터리가 5개면 인증서 칸이 있다");         // A5
+    for (const [why, buf] of [                                                                                    // A6
+      ["MZ 아님", Buffer.from("not a pe file at all, just some text bytes ......................")],
+      ["PE 서명 없음", peHead({ secSize: 99, sig: "NE\0\0" })],
+      ["모르는 magic", peHead({ magic: 0x107, secSize: 99 })],
+      ["잘린 머리", peHead({ secSize: 99 }).subarray(0, 0xa0)],
+      ["버퍼 아님", undefined],
+    ]) assert.equal(W.peHasSignature(buf), null, `${why} — 서명 여부로 판정했다`);
+  });
+
+  t("Z8b 서명할 DLL — 서명 자리가 빈 DLL 만, 이름순. 이미 서명된 것·exe·판독 불가는 넣지 않는다", () => {
+    // B1 Electron 43.3.0 win32-x64 배포본 실측(2026-09-17): DLL 8개 중 d3dcompiler_47·dxil 만 Microsoft 서명이 있다.
+    const dist = [
+      ["d3dcompiler_47.dll", true], ["dxcompiler.dll", false], ["dxil.dll", true], ["electron.exe", false],
+      ["ffmpeg.dll", false], ["libEGL.dll", false], ["libGLESv2.dll", false], ["vk_swiftshader.dll", false],
+      ["vulkan-1.dll", false], ["LICENSES.chromium.html", null], ["broken.dll", null],
+    ].map(([name, signed]) => ({ name, signed }));
+    assert.deepEqual(W.unsignedDlls(dist), ["dxcompiler.dll", "ffmpeg.dll", "libEGL.dll", "libGLESv2.dll", "vk_swiftshader.dll", "vulkan-1.dll"]);
+    assert.deepEqual(W.unsignedDlls([...dist].reverse()), W.unsignedDlls(dist), "읽은 순서에 따라 설정이 달라진다 — 이름순이 아니다");
+    const picked = W.unsignedDlls(dist);                                                                           // B2
+    for (const no of ["d3dcompiler_47.dll", "dxil.dll", "electron.exe", "broken.dll"]) assert.ok(!picked.includes(no), `${no} 를 넣었다`);
+    assert.deepEqual(W.unsignedDlls([{ name: "UPPER.DLL", signed: false }]), ["UPPER.DLL"], "대문자 확장자를 놓쳤다");  // B3
+    assert.deepEqual(W.unsignedDlls(null), []);                                                                    // B4
+    assert.deepEqual(W.unsignedDlls([null, { signed: false }]), []);
+  });
+
+  t("Z8c signExts 끼우기 — electron-builder 규칙으로 봐도 서명 없는 DLL 만 서명되고 Microsoft DLL 은 안 건드린다", () => {
+    const pkg = { name: "d", build: { productName: "Lively", win: { target: ["nsis"], azureSignOptions: { publisherName: WANT } }, nsis: { oneClick: true } } };
+    const before = JSON.stringify(pkg);
+    const names = ["ffmpeg.dll", "libEGL.dll"];
+    const next = W.withSignExts(pkg, names);
+    assert.deepEqual(next.build.win.signExts, names);
+    assert.deepEqual(next.build.win.azureSignOptions, { publisherName: WANT }, "서명 설정이 사라졌다");
+    assert.deepEqual(next.build.nsis, { oneClick: true });
+    assert.equal(W.withSignExts(null, names), null, "무서명 빌드에 끼웠다");                                        // C1
+    assert.equal(W.withSignExts(pkg, []), pkg, "이름이 없는데 바꿨다");                                               // C2
+    assert.equal(W.withSignExts(pkg, undefined), pkg, "이름 목록이 없는데 바꿨다");
+    const merged = W.withSignExts({ build: { win: { signExts: [".node", "ffmpeg.dll"] } } }, names);                 // C3
+    assert.deepEqual(merged.build.win.signExts, [".node", "ffmpeg.dll", "libEGL.dll"], "기존 항목을 지우거나 겹쳐 넣었다");
+    assert.equal(JSON.stringify(pkg), before, "입력을 바꿨다");                                                       // C4
+    // C5 app-builder-lib 26.16.1 winPackager.shouldSignFile 을 그대로 옮긴 참조 — 이름 전체를 «확장자» 자리에 넣어도 되는 근거.
+    const shouldSignFile = (file, signExts) => {
+      const isExe = file.endsWith(".exe");
+      if (!signExts?.length) return isExe;
+      if (signExts.some((ext) => file.endsWith(ext))) return true;
+      if (signExts.some((ext) => ext.startsWith("!") && file.endsWith(ext.substring(1)))) return false;
+      return isExe;
+    };
+    const exts = next.build.win.signExts;
+    assert.equal(shouldSignFile("ffmpeg.dll", exts), true);
+    assert.equal(shouldSignFile("libEGL.dll", exts), true);
+    assert.equal(shouldSignFile("d3dcompiler_47.dll", exts), false, "Microsoft 서명 DLL 을 우리 서명으로 갈아 끼운다");
+    assert.equal(shouldSignFile("dxil.dll", exts), false, "Microsoft 서명 DLL 을 우리 서명으로 갈아 끼운다");
+    assert.equal(shouldSignFile("Lively.exe", exts), true, "앱 exe 서명이 빠졌다");
+    // «.dll» 을 통째로 넣으면 이 규칙에선 긍정이 부정 패턴(!d3dcompiler_47.dll)보다 먼저라 막을 수 없다 — 이름으로 넣는 이유.
+    assert.equal(shouldSignFile("d3dcompiler_47.dll", [".dll", "!d3dcompiler_47.dll"]), true);
+  });
+
+  t("Z8d ★ 서명자 대조 — JS(서명 게이트)와 C#(설치 도우미)이 같은 사례 표를 같은 답으로 통과한다", () => {
+    const unescape = (s) => s.replace(/\\(.)/g, (_, c) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
+    const rows = cases.split("\n").filter((l) => l && !l.startsWith("#")).map((l) => l.split("\t").map(unescape));
+    const kinds = rows.reduce((m, r) => ({ ...m, [r[0]]: (m[r[0]] || 0) + 1 }), {});
+    // D2 표가 비거나 한 종류가 통째로 빠지면 양쪽 점검이 «0건 통과» 로 초록이 된다 — 개수를 먼저 못박는다.
+    assert.ok(kinds.dn >= 10 && kinds.manifest >= 8 && kinds.tag >= 5 && kinds.feed >= 5, `사례 표가 줄었다: ${JSON.stringify(kinds)}`);
+    assert.deepEqual(Object.keys(kinds).sort(), ["dn", "feed", "manifest", "tag"], "C# 자가 점검이 모르는 종류가 섞였다");
+    for (const kind of Object.keys(kinds)) assert.match(helperSrc, new RegExp(`case "${kind}":`), `C# 자가 점검이 «${kind}» 행을 돌리지 않는다`);
+    let checked = 0;
+    for (const [, subject, publisher, want, note] of rows.filter((r) => r[0] === "dn")) {                          // D1
+      assert.equal(String(W.subjectMatches(subject, publisher)), want, `${note} — ${subject} / ${publisher}`);
+      checked++;
+    }
+    assert.equal(checked, kinds.dn, "dn 행을 다 돌지 않았다");
+    assert.deepEqual([...W.parseDn('CN="라이블리, 주식회사", O=라이블리')], [["CN", "라이블리, 주식회사"], ["O", "라이블리"]]);
+    assert.equal(W.subjectMatches(null, WANT), false);                                                              // D3
+    assert.equal(W.subjectMatches("CN=라이블리", ""), false, "게시자 이름이 비었는데 맞다고 했다");
+  });
+
+  t("Z8e 서명 판정 — 도우미는 우리 서명·타임스탬프 필수, 앱 폴더는 전부 유효 + 우리 것은 타임스탬프", () => {
+    const ours = { Status: "Valid", Timestamped: true, Subject: "CN=라이블리, O=라이블리, L=구로구, S=Seoul, C=KR" };
+    assert.deepEqual(W.ownSignatureProblems(ours, WANT), []);                                                      // E1
+    assert.match(W.ownSignatureProblems({ ...ours, Subject: "CN=Other, O=Other" }, WANT).join(" "), /게시자/);     // E2
+    assert.match(W.ownSignatureProblems({ ...ours, Timestamped: false }, WANT).join(" "), /타임스탬프/);
+    assert.ok(W.ownSignatureProblems({ ...ours, Status: "NotSigned", Subject: "" }, WANT).length >= 2, "무서명·서명자 없음을 둘 다 잡지 않았다");
+    assert.ok(W.ownSignatureProblems(null, WANT).length >= 1);
+
+    const ms = { Status: "Valid", Timestamped: false, Subject: "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" };
+    const files = [
+      { file: "win-unpacked/Lively.exe", ...ours },
+      { file: "win-unpacked/ffmpeg.dll", ...ours },
+      { file: "win-unpacked/d3dcompiler_47.dll", ...ms },
+    ];
+    assert.deepEqual(W.appFilesProblems(files, WANT), [], "남의 유효한 서명(타임스탬프 없음)을 막았다");          // F1
+    const unsigned = W.appFilesProblems([...files, { file: "win-unpacked/vulkan-1.dll", Status: "NotSigned", Subject: "" }], WANT);
+    assert.equal(unsigned.length, 1);                                                                               // F2
+    assert.match(unsigned[0], /vulkan-1\.dll.*NotSigned/, "서명 없는 DLL 을 통과시켰다");
+    assert.match(W.appFilesProblems([{ file: "win-unpacked/libEGL.dll", ...ours, Timestamped: false }], WANT).join(" "), /libEGL\.dll: 타임스탬프/);  // F3
+    assert.match(W.appFilesProblems([{ file: "x.dll", ...ours, Status: "HashMismatch" }], WANT).join(" "), /HashMismatch/);  // F4
+    assert.equal(W.appFilesProblems([], WANT).length, 1, "PE 가 하나도 없는데 통과시켰다");                          // F5
+    assert.equal(W.appFilesProblems(undefined, WANT).length, 1);
+    assert.equal(W.appFilesProblems([null], WANT).length, 1, "판독 실패를 통과시켰다");                                // F6
+    assert.equal(W.isPeName("resources/app.node"), true);                                                          // F7
+    assert.equal(W.isPeName("LIVELY.EXE"), true);
+    assert.equal(W.isPeName("resources/app.asar"), false);
+  });
+
+  t("Z8f ★ 게이트 배선 — configure 가 서명 없는 DLL 을 끼우고, verify 가 앱 폴더를 전수로 막고, verify-files 가 있다", () => {
+    const src = read("../win-signing.mjs");
+    const between = (a, b) => {
+      const i = src.indexOf(a), j = src.indexOf(b);
+      assert.ok(i >= 0 && j > i, `win-signing.mjs 에서 «${a}» ~ «${b}» 구간을 못 찾았다`);
+      return src.slice(i, j);
+    };
+    const configure = between("function configure()", "function readSignatures(");                                // G1
+    assert.match(configure, /electronDistFiles\(\)/, "Electron 배포본을 읽지 않는다");
+    assert.match(configure, /withSignExts\(next,\s*dlls\)/, "서명 없는 DLL 을 signExts 에 끼우지 않는다");
+    assert.ok(configure.indexOf("withSignExts(") < configure.indexOf("writeFileSync(PKG"), "package.json 을 쓴 뒤에 끼운다");
+    assert.match(configure, /if \(!dist\)[^\n]*return 1/, "배포본이 없을 때 조용히 넘어간다");
+    const dist = between("function electronDistFiles()", "function configure()");
+    assert.match(dist, /join\(pkgDir, "dist"\)/);
+    assert.match(dist, /join\(HERE, "node_modules", "electron"\)/);
+    assert.match(dist, /peHasSignature\(/);
+    // Electron 43 은 npm ci 때 실행 파일을 받지 않는다(postinstall 없음) — 없으면 공식 install.js 로 받아야 한다(run 35188494233 실측).
+    assert.match(dist, /if \(!existsSync\(dist\) && existsSync\(join\(pkgDir, "install\.js"\)\)\)/, "배포본이 없을 때 받지 않는다 — 러너에서 configure 가 멈춘다");
+    assert.match(dist, /execFileSync\(process\.execPath, \[join\(pkgDir, "install\.js"\)\]/);
+    const iInstall = dist.indexOf("install.js\")]"), iReaddir = dist.indexOf("readdirSync(dist)");
+    assert.ok(iInstall >= 0 && iReaddir > iInstall, "받기 전에 폴더를 읽는다");
+    const verify = between("async function verify()", "function verifyFiles(");                                  // G2
+    assert.match(verify, /peFilesUnder\(unpacked\)/, "앱 폴더 전수 판독이 없다");
+    assert.match(verify, /appFilesProblems\(reports,\s*azure\.publisherName\)/, "앱 폴더 판독 결과로 막지 않는다");
+    assert.match(src, /cmd === "verify-files"\) process\.exit\(verifyFiles\(/, "도우미용 verify-files 가 없다");
+    assert.match(between("function verifyFiles(", "if (process.argv[1]"), /ownSignatureProblems\(report,\s*publisher\)/);
+  });
+
+  t("Z8g ★ 설치 도우미 — 게시자·저장소가 릴리스와 같고, 확인한 뒤에만 실행하고, 권한을 요구하지 않는다", () => {
+    const constant = (name) => {
+      const m = new RegExp(`const string ${name} = "([^"]*)"`).exec(helperSrc);
+      assert.ok(m, `Program.cs 에 ${name} 상수가 없다`);
+      return m[1];
+    };
+    // H1 게시자 — 설치된 앱이 업데이트를 받아들이는 이름(release-desktop 의 WIN_SIGN_PUBLISHER)과 같아야 한다.
+    const relPub = /WIN_SIGN_PUBLISHER:\s*"([^"]*)"/.exec(relWf);
+    const helperPub = /WIN_SIGN_PUBLISHER:\s*"([^"]*)"/.exec(helperWf);
+    assert.ok(relPub && helperPub, "워크플로에 WIN_SIGN_PUBLISHER 가 없다");
+    assert.equal(constant("Publisher"), relPub[1], "도우미의 게시자가 릴리스 서명과 다르다 — 도우미가 모든 설치 파일을 거부한다");
+    assert.equal(helperPub[1], relPub[1], "도우미 서명 확인의 게시자가 릴리스와 다르다");
+    // H2 저장소 — 앱이 업데이트를 받는 곳(package.json publish)과 같은 곳의 최신 릴리스에서 받는다.
+    const pub = JSON.parse(read("../package.json")).build.publish[0];
+    assert.equal(constant("Owner"), pub.owner);
+    assert.equal(constant("Repo"), pub.repo);
+    assert.match(helperSrc, /LatestUrl = RepoUrl \+ "\/releases\/latest"/, "최신 릴리스가 아닌 곳을 본다");
+    // H3 버전별 값이 없다 — 다시 빌드하지 않고 계속 쓰는 파일이다(주석은 빼고 본다).
+    assert.ok(!/Lively-Setup-\d/.test(helperSrc.replace(/^\s*\/\/.*$/gm, "")), "도우미 코드에 특정 버전의 설치 파일 이름이 박혀 있다");
+    // H8 최신 릴리스에 윈도우 자산이 아직 없으면(태그 직후 수 분) 직전 릴리스로 받는다 — 404 일 때만, 피드에서, 개수 상한을 두고.
+    assert.match(helperSrc, /FeedUrl = RepoUrl \+ "\/releases\.atom"/);
+    const fallback = helperSrc.slice(helperSrc.indexOf("static async Task<(string Tag, string Yml)> FetchManifestAsync"), helperSrc.indexOf("public static string NewWorkDir"));
+    assert.ok(fallback.length > 0, "직전 릴리스로 거슬러 가는 길이 없다 — 태그 직후 실행한 사람은 설치가 실패한다");
+    assert.match(fallback, /catch \(HttpStatusException first\) when \(first\.Status == 404\)/, "404 가 아닌 오류(망·서버)에서도 옛 판으로 간다");
+    assert.match(fallback, /Rules\.TagsFromFeed\(feed\.Body, latest\)/);
+    assert.match(fallback, /i < Config\.MaxFallbackReleases/, "거슬러 볼 개수에 상한이 없다");
+    assert.match(fallback, /when \(e\.Status == 404\)/);
+    assert.match(fallback, /\n\s+throw;\n/, "거슬러 볼 곳이 없을 때 처음 오류를 내지 않는다");
+    assert.match(helperSrc, /MaxFallbackReleases = [1-9];/);
+    assert.match(helperSrc.slice(helperSrc.indexOf("public static async Task<Prepared> PrepareAsync")), /await FetchManifestAsync\(fetcher, latest, log, ct\)/, "준비 단계가 거슬러 가는 길을 쓰지 않는다");
+    // H4 받기 → sha512 대조(다르면 멈춤) → 서명 확인. 실행은 준비가 끝난 뒤다.
+    const prepare = helperSrc.slice(helperSrc.indexOf("public static async Task<Prepared> PrepareAsync"), helperSrc.indexOf("public static string NewWorkDir"));
+    const iDownload = prepare.indexOf("fetcher.DownloadAsync(");
+    const iCompare = prepare.indexOf("string.Equals(sha, manifest.Sha512, StringComparison.Ordinal)");
+    const iCheck = prepare.indexOf("Authenticode.Check(file, Config.Publisher)");
+    assert.ok(iDownload >= 0 && iCompare > iDownload && iCheck > iCompare, `준비 순서가 받기 → 대조 → 서명 확인이 아니다: ${iDownload}/${iCompare}/${iCheck}`);
+    assert.match(prepare.slice(iCompare, iCheck), /throw new MismatchException/, "sha512 가 달라도 멈추지 않는다");
+    const start = helperSrc.slice(helperSrc.indexOf("async void Start()"), helperSrc.indexOf("void ShowError("));
+    const iPrepare = start.indexOf("Pipeline.PrepareAsync(");
+    const iNoInstall = start.indexOf("if (noInstall)");
+    const iRun = start.indexOf("Process.Start(");
+    assert.ok(iPrepare >= 0 && iNoInstall > iPrepare && iRun > iNoInstall, "확인 → 점검 모드 분기 → 실행 순서가 아니다");   // H4·H5
+    assert.match(start.slice(iNoInstall, iRun), /return;/, "점검 모드가 실행 전에 끝나지 않는다");
+    assert.match(start.slice(iRun), /UseShellExecute = false/, "설치 파일을 셸로 실행한다(CreateProcess 가 아니다)");     // H6
+    // H7 권한·형식·자가 점검 표·DLL 검색 범위
+    assert.match(helperManifest, /requestedExecutionLevel level="asInvoker"/, "관리자 권한을 요구하거나 설치 프로그램 추정(UAC)에 걸린다");
+    assert.match(helperProj, /<TargetFramework>net48<\/TargetFramework>/);
+    assert.match(helperProj, /<OutputType>WinExe<\/OutputType>/);
+    assert.match(helperProj, /<AssemblyName>Lively-Setup<\/AssemblyName>/);
+    assert.match(helperProj, /EmbeddedResource Include="selftest-cases\.tsv" LogicalName="selftest-cases\.tsv"/, "자가 점검 표가 exe 에 안 들어간다");
+    assert.match(helperSrc, /GetManifestResourceStream\("selftest-cases\.tsv"\)/);
+    assert.match(helperSrc, /\[assembly: DefaultDllImportSearchPaths\(DllImportSearchPath\.System32\)\]/, "옆에 놓인 DLL 을 실을 수 있다");
+    assert.match(helperSrc, /SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)/);
+  });
+
+  t("Z8h ★ 도우미 워크플로 — 수동 실행만, 덮어쓰기는 명시, 점검을 다 통과해야 사전 릴리스에 올린다", () => {
+    const on = helperWf.slice(helperWf.indexOf("\non:"), helperWf.indexOf("\npermissions:"));
+    assert.ok(on.length > 0, "on: 블록을 못 찾았다");
+    assert.match(on, /workflow_dispatch:/);                                                                         // I1
+    assert.ok(!/\n\s+(push|pull_request|pull_request_target|schedule|release|merge_group|workflow_run|repository_dispatch):/.test(on), "수동 실행 말고도 돈다 — 다시 빌드되면 평판이 0 이 된다");
+    assert.match(helperWf, /\n\s+RELEASE_TAG: win-installer\n/);                                                    // I2
+    assert.match(helperWf, /\n\s+ASSET_NAME: Lively-Setup\.exe\n/);
+    for (const k of ["WIN_SIGN_ENDPOINT", "WIN_SIGN_ACCOUNT", "WIN_SIGN_PROFILE"]) {                                // I3
+      const a = new RegExp(`${k}:\\s*(\\S+)`).exec(relWf), b = new RegExp(`${k}:\\s*(\\S+)`).exec(helperWf);
+      assert.ok(a && b && a[1] === b[1], `${k} 가 release-desktop 과 다르다: ${a && a[1]} ≠ ${b && b[1]}`);
+    }
+    const at = (s) => { const i = helperWf.indexOf(s); assert.ok(i >= 0, `도우미 워크플로에 «${s}» 가 없다`); return i; };
+    const steps = ["- name: 게시 자리 확인", "dotnet build", "'--self-test'", "Invoke-TrustedSigning", "verify-files", "'--dry-run'", "'--no-install'", "gh release upload", "- name: 게시 확인"];
+    const order = steps.map(at);                                                                                    // I4
+    assert.deepEqual([...order].sort((x, y) => x - y), order, "순서가 자리 확인 → 빌드 → 자가 점검 → 서명 → 서명 확인 → 받기 점검 → 화면 점검 → 게시 → 게시 확인이 아니다");
+    assert.ok(!/continue-on-error:\s*true/.test(helperWf.slice(0, at("gh release upload"))), "게시 전 점검 중 실패를 삼키는 스텝이 있다");  // I5
+    for (const probe of ["'--self-test'", "'--dry-run'", "'--no-install'"]) {
+      const step = helperWf.slice(at(probe), helperWf.indexOf("- name:", at(probe)));
+      assert.match(step, /ExitCode -ne 0\) \{ throw/, `${probe} 점검이 종료 코드로 막지 않는다`);
+    }
+    const guard = helperWf.slice(at("- name: 게시 자리 확인"), at("- name: 아이콘"));                                // I6
+    assert.match(guard, /if: inputs\.publish/);
+    assert.match(guard, /REPLACE" != "true" \][\s\S]*?exit 1/, "이미 있는 도우미를 replace 없이 덮는다");
+    const publish = helperWf.slice(at("- name: 게시 (사전 릴리스"), at("- name: 게시 확인"));
+    assert.match(publish, /if: inputs\.publish/);
+    assert.match(publish, /if \[ "\$REPLACE" = "true" \]; then clobber=\(--clobber\); fi/, "replace 가 아닌데도 덮을 수 있다");
+    assert.equal((publish.match(/--clobber/g) || []).length, 1, "clobber 가 조건 밖에서도 쓰인다");
+    const releaseCmds = [...publish.matchAll(/gh release (create|edit) [^\n]*/g)];                                  // I7
+    assert.equal(releaseCmds.length, 2, "create·edit 가 둘 다 있지 않다");
+    for (const m of releaseCmds) assert.match(m[0], /--prerelease/, `«최신 릴리스»가 될 수 있다: ${m[0]}`);
+    assert.match(helperWf.slice(at("- name: 서명 (Azure"), at("- name: 서명 확인")), /throw "서명 자격/, "서명 자격이 없어도 계속 간다");  // I8
+    assert.ok(!/installer-helper/.test(relWf), "태그 릴리스가 도우미를 건드린다");                                  // I9
+  });
+
+  t("Z8j ★ PR 마다 C# 판정 규칙도 본다 — 윈도우 CI 가 도우미를 빌드해 자가 점검하고, 서명·게시는 하지 않는다", () => {
+    const testWf = read("../../.github/workflows/test.yml");
+    const job = testWf.slice(testWf.indexOf("\n  test-windows:"));
+    assert.ok(testWf.indexOf("\n  test-windows:") > 0, "test.yml 에 test-windows 잡이 없다");
+    const i = job.indexOf("- name: 설치 도우미 빌드·자가 점검");
+    assert.ok(i >= 0, "윈도우 CI 가 도우미 자가 점검을 하지 않는다 — C#·JS 규칙이 갈라져도 PR 이 초록이 된다");       // I10
+    const next = job.indexOf("- name:", i + 1);
+    const step = job.slice(i, next < 0 ? undefined : next);
+    assert.match(step, /working-directory: desktop\/installer-helper/);
+    assert.match(step, /dotnet build/);
+    assert.match(step, /if \(\$LASTEXITCODE -ne 0\) \{ throw/, "빌드 실패를 막지 않는다");
+    assert.match(step, /'--self-test'/);
+    assert.match(step, /if \(\$p\.ExitCode -ne 0\) \{ throw/, "자가 점검 실패를 막지 않는다");
+    assert.ok(!/continue-on-error:\s*true/.test(step), "자가 점검 실패를 삼킨다");
+    assert.ok(!/Invoke-TrustedSigning|gh release|AZURE_|secrets\./.test(step), "PR CI 가 도우미를 서명하거나 게시한다");
+  });
+
+  t("Z8i 도우미 아이콘 — DIB 머리·픽셀 순서·마스크 경계, .ico 머리·항목·크기 경계", () => {
+    const rgba = Buffer.from([255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 0, 1, 2, 3, 4]);   // 2x2: 빨강·초록 / 파랑·기타
+    const dib = dibImage(2, rgba);
+    assert.deepEqual([dib.readUInt32LE(0), dib.readInt32LE(4), dib.readInt32LE(8), dib.readUInt16LE(12), dib.readUInt16LE(14)], [40, 2, 4, 1, 32], "DIB 머리(높이는 XOR+AND 두 배)");  // J1
+    assert.deepEqual([...dib.subarray(40, 48)], [255, 0, 0, 0, 3, 2, 1, 4], "아래 줄(원본 둘째 줄)부터 BGRA 가 아니다");
+    assert.deepEqual([...dib.subarray(48, 56)], [0, 0, 255, 255, 0, 255, 0, 128]);
+    assert.equal(dib.length, 40 + 2 * 2 * 4 + 4 * 2, "크기 2 의 AND 마스크가 줄마다 4바이트가 아니다");            // J2
+    assert.equal(dibImage(32, Buffer.alloc(32 * 32 * 4)).length, 40 + 32 * 32 * 4 + 4 * 32, "크기 32 경계");
+    assert.equal(dibImage(33, Buffer.alloc(33 * 33 * 4)).length, 40 + 33 * 33 * 4 + 8 * 33, "크기 33 은 줄마다 8바이트(32비트 경계를 넘는다)");
+    assert.throws(() => dibImage(3, rgba), /맞지 않는다/);                                                          // J3
+    const png = Buffer.from("89504e470d0a1a0a", "hex");
+    const ico = icoFile([{ size: 2, data: dib }, { size: 256, data: png }]);                                         // J4
+    assert.deepEqual([ico.readUInt16LE(0), ico.readUInt16LE(2), ico.readUInt16LE(4)], [0, 1, 2]);
+    assert.deepEqual([ico[6], ico[7], ico.readUInt16LE(10), ico.readUInt16LE(12), ico.readUInt32LE(14), ico.readUInt32LE(18)], [2, 2, 1, 32, dib.length, 6 + 32]);
+    assert.deepEqual([ico[22], ico[23], ico.readUInt32LE(30), ico.readUInt32LE(34)], [0, 0, png.length, 6 + 32 + dib.length], "256px 는 폭·높이 0 으로 적는다");
+    assert.deepEqual(ico.subarray(6 + 32, 6 + 32 + dib.length), dib);
+    assert.deepEqual(ico.subarray(6 + 32 + dib.length), png);
+    assert.throws(() => icoFile([]), /없다/);                                                                        // J5
+    assert.throws(() => icoFile([{ size: 0, data: png }]), /1~256/);
+    assert.throws(() => icoFile([{ size: 257, data: png }]), /1~256/);
+    assert.equal(icoFile([{ size: 1, data: png }])[6], 1, "크기 1 은 받아야 한다");
+  });
+}
+
 
 // ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
 {
@@ -1933,6 +2556,118 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(sessionHash("box-jang-8abcdb3b"), "#/s/box-jang-8abcdb3b");
     for (const bad of ["", null, "a b", "../../etc", "javascript:alert(1)", "x".repeat(200)]) assert.equal(sessionHash(bad), null, String(bad));
   });
+  // ── #3896 알림을 눌러도 그 화면으로 안 가던 두 자리 — 배너 수명(keepBanner) · 이동 대기(createHashNav) ──
+  //  실동작(GC·액자 로딩)은 Electron 이 있어야 재므로 verify-notify-click.mjs 가 대조군과 함께 잰다. 여기는 판정과 배선이다.
+  t("A14a ★ 배너를 쥔다 — 상한까지는 그대로, 넘으면 가장 먼저 쥔 것만 놓아 돌려준다(경계: 상한 · 상한+1)", () => {
+    const kept = new Set();
+    const a = { id: "a" }, b = { id: "b" }, c = { id: "c" };
+    assert.deepEqual(keepBanner(kept, a, 2), [], "K1 첫 배너에서 무언가를 놓았다");
+    assert.ok(kept.has(a), "K1 쥐지 않았다 — GC 가 가져가면 그 뒤의 클릭이 사라진다");
+    assert.deepEqual(keepBanner(kept, b, 2), [], "K2 크기가 상한과 같을 뿐인데 놓았다");
+    assert.deepEqual(keepBanner(kept, c, 2), [a], "K3 상한을 넘었는데 가장 먼저 쥔 것을 놓지 않았다");
+    assert.deepEqual([...kept], [b, c], "K3 방금 쥔 배너가 밀려났다");
+    assert.deepEqual(keepBanner(kept, c, 2), [], "K4 이미 쥔 배너를 다시 넣었더니 무언가를 놓았다");
+    assert.equal(kept.size, 2, "K4");
+  });
+  t("A14b 배너 쥐기 — 빈 입력엔 아무것도 안 하고, 이상한 상한은 기본 상한으로 본다(전부 놓아 버리지 않는다)", () => {
+    const kept = new Set();
+    assert.deepEqual(keepBanner(kept, null), [], "K5");
+    assert.equal(kept.size, 0, "K5 없는 배너를 쥐었다");
+    assert.deepEqual(keepBanner(null, { id: "x" }), [], "K5 쥘 자리가 없을 때");
+    for (const bad of [0, -1, NaN, 1.5, "3"]) {
+      const s = new Set([{ i: 1 }]);
+      assert.deepEqual(keepBanner(s, { i: 2 }, bad), [], `K6 상한 ${String(bad)} 에 쥔 배너를 놓았다`);
+      assert.equal(s.size, 2, `K6 상한 ${String(bad)}`);
+    }
+    const full = new Set(Array.from({ length: BANNER_KEEP_MAX }, (_, i) => ({ i })));
+    assert.equal(keepBanner(full, { i: "new" }).length, 1, "K6 기본 상한이 BANNER_KEEP_MAX 가 아니다");
+  });
+  //  가짜 webContents — 보낸 코드를 가짜 location 에 실제로 돌려 **창의 해시가 무엇이 되는지**로 단언한다(코드 문자열 모양을 보지 않는다).
+  const fakeWc = ({ loading = false, mainLoading = false, destroyed = false, noMainFrameApi = false, throws = false, rejects = false } = {}) => {
+    const wc = {
+      state: { loading, mainLoading, destroyed },
+      hashes: [],
+      isDestroyed: () => wc.state.destroyed,
+      isLoading: () => wc.state.loading,
+      executeJavaScript: (code) => {
+        const loc = { hash: "" };
+        new Function("location", code)(loc);
+        wc.hashes.push(loc.hash);
+        if (throws) throw new Error("창이 사라졌다");
+        return rejects ? Promise.reject(new Error("문서가 바뀌었다")) : Promise.resolve();
+      },
+    };
+    if (!noMainFrameApi) wc.isLoadingMainFrame = () => wc.state.mainLoading;
+    return wc;
+  };
+  t("A14c ★ 알림 클릭 이동 — 액자만 싣는 중이면 기다리지 않고 지금 간다(종전: 다시 오지 않을 did-finish-load 를 기다렸다)", () => {
+    const idle = fakeWc();
+    assert.equal(createHashNav().open(idle, "#/s/a"), "now", "N1");
+    assert.deepEqual(idle.hashes, ["#/s/a"], "N1 한가한 창인데 이동하지 않았다");
+    const frameOnly = fakeWc({ loading: true, mainLoading: false });
+    assert.equal(createHashNav().open(frameOnly, "#/s/b"), "now", "N2 액자만 싣는 중인데 기다리기로 했다");
+    assert.deepEqual(frameOnly.hashes, ["#/s/b"], "N2 이동하지 않았다");
+  });
+  t("A14d 본문을 싣는 중이면 한 곳만 기억했다가 다 실린 뒤 한 번 간다 — 여러 번 누르면 마지막 것", () => {
+    const nav = createHashNav();
+    const wc = fakeWc({ loading: true, mainLoading: true });
+    assert.equal(nav.open(wc, "#/s/a"), "pending", "N3");
+    assert.deepEqual(wc.hashes, [], "N3 싣는 도중에 보냈다 — 새 문서가 그 해시를 지운다");
+    assert.equal(nav.open(wc, "#/s/b"), "pending", "N4");
+    wc.state.loading = wc.state.mainLoading = false;
+    assert.equal(nav.loaded(wc), true, "N3 다 실렸는데 기다리던 이동을 하지 않았다");
+    assert.deepEqual(wc.hashes, ["#/s/b"], "N4 마지막 클릭 한 번만 가야 한다");
+    assert.equal(nav.loaded(wc), false, "N7 같은 클릭이 두 번 쓰였다");
+    assert.deepEqual(wc.hashes, ["#/s/b"], "N7");
+    assert.equal(createHashNav().loaded(wc), false, "N6 기다리는 게 없는데 이동했다");
+  });
+  t("A14e 기다리던 클릭은 로드 실패와 «지금 가는 클릭» 이 지운다 — 나중 로드가 옛 화면으로 끌고 가지 않는다", () => {
+    const nav = createHashNav();
+    const wc = fakeWc({ loading: true, mainLoading: true });
+    nav.open(wc, "#/s/old");
+    nav.failed();
+    wc.state.loading = wc.state.mainLoading = false;
+    assert.equal(nav.loaded(wc), false, "N5 실패한 로드의 클릭이 다음 로드에서 되살아났다");
+    assert.deepEqual(wc.hashes, [], "N5");
+    const nav2 = createHashNav();
+    const wc2 = fakeWc({ loading: true, mainLoading: true });
+    nav2.open(wc2, "#/s/old");
+    wc2.state.loading = wc2.state.mainLoading = false;
+    assert.equal(nav2.open(wc2, "#/s/new"), "now", "N8");
+    assert.equal(nav2.loaded(wc2), false, "N8 지금 간 뒤에 옛 클릭이 다시 튀어나왔다");
+    assert.deepEqual(wc2.hashes, ["#/s/new"], "N8");
+  });
+  t("A14f 알림 클릭 이동 — 입력이 이상하거나 창이 사라졌으면 아무것도 안 하고, 실패가 새어 나오지 않는다", () => {
+    const nav = createHashNav();
+    const wc = fakeWc({ loading: true, mainLoading: true });
+    for (const bad of ["", null, undefined]) assert.equal(nav.open(wc, bad), "skip", `N9 hash=${String(bad)}`);
+    assert.equal(nav.open(null, "#/s/a"), "skip", "N9 창 없음");
+    const gone = fakeWc({ destroyed: true });
+    assert.equal(nav.open(gone, "#/s/a"), "skip", "N9 파괴된 창");
+    wc.state.loading = wc.state.mainLoading = false;
+    assert.equal(nav.loaded(wc), false, "N9 건너뛴 클릭이 기다림으로 남았다");
+    assert.deepEqual([...wc.hashes, ...gone.hashes], [], "N9 이동이 일어났다");
+    assert.equal(createHashNav().open(fakeWc({ loading: true, noMainFrameApi: true }), "#/s/a"), "pending", "N10 isLoadingMainFrame 이 없으면 종전 판정(isLoading)으로 물러서야 한다");
+    assert.doesNotThrow(() => createHashNav().open(fakeWc({ throws: true }), "#/s/a"), "N11 executeJavaScript 예외가 새어 나왔다");
+    assert.doesNotThrow(() => createHashNav().open(fakeWc({ rejects: true }), "#/s/a"), "N11 거절이 새어 나왔다(처리 안 된 거절은 프로세스를 죽인다)");
+  });
+  t("A14g 배선 — 띄운 배너를 쥐고 누를 때만 놓으며, 창의 로드 이벤트가 이동 대기를 잇는다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const banner = main.slice(main.indexOf("function showBanner("), main.indexOf("function openHashInApp("));
+    assert.ok(/keepBanner\(liveBanners, n\)/.test(banner), "W1 띄운 배너를 쥐지 않는다 — GC 뒤의 클릭이 사라진다");
+    assert.ok(/n\.on\("click", \(\) => \{\s*liveBanners\.delete\(n\)/.test(banner), "W2 누른 배너를 놓지 않는다");
+    assert.ok(!/on\("close"/.test(banner), "W3 close 로 놓는다 — Windows 는 배너가 알림 센터로 들어갈 때도 close 를 낸다");
+    assert.ok(!/\.close\(\)/.test(banner), "W4 놓는 배너에 close() 를 부른다 — 실측(Electron 43.3.0): close() 한 배너는 GC 되지 않아 상한이 울타리 구실을 못 한다");
+    const open = main.slice(main.indexOf("function openHashInApp("), main.indexOf("function loadInApp("));
+    assert.ok(/hashNav\.open\(appWin\.webContents, hash\)/.test(open), "W5 알림 클릭 이동을 createHashNav 로 하지 않는다");
+    assert.ok(!/isLoading\(\)|once\("did-finish-load"/.test(open), "W5 종전 대기(isLoading → did-finish-load)가 남아 있다");
+    const on = (ev) => { const i = main.indexOf(`appWin.webContents.on("${ev}"`); return i < 0 ? "" : main.slice(i, main.indexOf("});", i)); };
+    assert.ok(/hashNav\.loaded\(/.test(on("did-finish-load")), "W6 다 실린 뒤 기다리던 이동을 하지 않는다");
+    assert.ok(/hashNav\.loaded\(/.test(on("did-stop-loading")), "W7 did-stop-loading 에서 기다리던 이동을 안 푼다 — did-finish-load 시점엔 본문이 아직 싣는 중으로 보여 그 틈의 클릭이 사라진다(#4054 실측)");
+    const fail = on("did-fail-load");
+    assert.ok(fail.indexOf("code === -3") >= 0 && fail.indexOf("hashNav.failed()") > fail.indexOf("code === -3"), "W6 본문 로드 실패(ERR_ABORTED 제외)에서 기다리던 클릭을 버리지 않는다");
+    assert.ok(/appWin\.on\("closed", \(\) => \{[^\n]*hashNav\.failed\(\)/.test(main), "W6 창이 닫혀도 기다리던 클릭이 남는다");
+  });
   t("A15 배선 — main.mjs 가 알림 폴러를 실제로 걸고 Notification 을 띄운다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     assert.ok(/from "\.\/notify\.mjs"/.test(main), "notify.mjs 를 쓰지 않는다");
@@ -1971,6 +2706,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
   t("A21 사람 알림 링크 — 해시 형태만 통과시킨다(서버가 준 값이라도 다시 본다)", () => {
     assert.equal(personLink("#/projects2/p/7"), "#/projects2/p/7");
+    assert.equal(personLink("#/open/talk?ch=5&m=30&t=1792563307441"), "#/open/talk?ch=5&m=30&t=1792563307441", "#4769 앱 알림은 물음표 뒤 값으로 자리를 가리킨다");
     for (const bad of ["", null, "https://evil.example/x", "javascript:alert(1)", "#/a b", "#/" + "x".repeat(300)]) {
       assert.equal(personLink(bad), null, String(bad));
     }
@@ -2027,7 +2763,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
   t("A28 배선 — 스트림이 살아 있으면 폴링은 배너를 만들지 않되 기준선은 늘 갱신한다", () => {
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-    assert.ok(/\/api\/ui\/notify\/stream/.test(main), "실시간 스트림에 붙지 않는다");
+    assert.ok(/fetch\(streamUrl\(gw\)/.test(main), "실시간 스트림에 붙지 않는다(주소는 notify.streamUrl — A45)");
     const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
     const snapAt = poll.indexOf("notifySnapshot = next;");
     const gateAt = poll.indexOf("if (!streamAlive)");
@@ -2049,6 +2785,251 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(!/streamAlive = true;\s*streamTries = 0;/.test(conn),
       "★붙는 순간 카운터를 0 으로 되돌린다 — 즉시 끊기는 서버에 초당 한 번씩 재접속한다(#2041 실측)");
     assert.ok(/stableStream\(/.test(conn), "안정연결 판정을 쓰지 않는다");
+  });
+
+  // ── #4054 알림의 워크스페이스 — 배너 윗줄(D1~D8) · 누르면 어디로 가나(K1~K12) ──────────────────
+  //  신고(상민님 2026-09-17): 보고 있지 않은 워크스페이스의 작업완료 알림을 누르면 전환되지 않고 지금 워크스페이스에서
+  //  세션을 열려다 실패한다 · 모든 알림 윗줄에 어느 워크스페이스인지 적어야 한다.
+  const CP_ORIGINS = ["https://app.lvly.io"];
+  const GW = "https://lively-46e3.app.lvly.io";
+  const WS_ID = "244ae282-255c-4cdb-843c-26c250e366a8";
+  const ENTER = `https://app.lvly.io/ws/${WS_ID}/enter`;
+  const HERE = { slug: "lively-46e3", name: "Lively", current: true, via: "same" };
+  const OTHER = { slug: "soltimal-adce", name: "NCEO", current: false, via: "enter", enter: ENTER };
+  const REG = (slug, name) => ({ slug, name, current: false, via: "header" });
+  t("A30 D1 ★ 이름을 알면 윗줄(제목)이 워크스페이스 — macOS 는 무슨 일을 부제로, 그 밖은 본문 앞에", () => {
+    const ev = { kind: NOTIFY.DONE, id: "box-a-1", name: "빌드 고치기", ws: OTHER };
+    assert.deepEqual(bannerFor(ev, "darwin"), { title: "NCEO", subtitle: "작업을 마쳤어요", body: "빌드 고치기" });
+    assert.deepEqual(bannerFor(ev, "win32"), { title: "NCEO", body: "작업을 마쳤어요 — 빌드 고치기" });
+    assert.deepEqual(bannerFor(ev, "linux"), { title: "NCEO", body: "작업을 마쳤어요 — 빌드 고치기" });
+    assert.ok(!("subtitle" in bannerFor(ev, "win32")), "부제는 macOS 전용이다 — 다른 OS 에선 버려져 무슨 일인지가 사라진다");
+  });
+  t("A31 D2 확인 대기 — 윗줄은 워크스페이스, 무슨 일은 «확인을 기다려요»", () => {
+    const ev = { kind: NOTIFY.WAITING, id: "box-a-2", name: "배포 승인", ws: HERE };
+    const mac = bannerFor(ev, "darwin");
+    assert.equal(mac.title, "Lively");
+    assert.equal(mac.subtitle, "확인을 기다려요");
+    assert.ok(mac.body.includes("배포 승인"));
+    assert.deepEqual(bannerFor(ev, "win32"), { title: "Lively", body: "확인을 기다려요 — 배포 승인" });
+  });
+  t("A32 D3·D8 이름이 없거나(구 게이트웨이) 공백뿐이면 종전 모양 그대로", () => {
+    const legacyDone = { title: "작업을 마쳤어요", body: "빌드" };
+    assert.deepEqual(bannerFor({ kind: NOTIFY.DONE, name: "빌드" }, "darwin"), legacyDone);
+    assert.deepEqual(bannerFor({ kind: NOTIFY.DONE, name: "빌드", ws: { ...HERE, name: "   " } }, "darwin"), legacyDone);
+    assert.deepEqual(bannerFor({ kind: NOTIFY.DONE, name: "빌드", ws: { slug: "Bad Slug", name: "X" } }, "darwin"), legacyDone, "형식 아닌 표시를 믿었다");
+    assert.deepEqual(bannerFor({ kind: NOTIFY.WAITING, name: "승인" }), { title: "확인을 기다려요", body: "승인 — 눌러서 이어가세요." });
+  });
+  t("A33 D4 사람 알림 — 윗줄 워크스페이스, 무슨 일 = 서버 제목, 본문 = 서버 본문(매인 워크스페이스 표시가 붙는다)", () => {
+    const items = [{ key: "p1", link: "#/projects2/p/7", text: { title: "장원준님이 댓글을 남겼어요", body: "확인 부탁드려요." } }];
+    const evs = pickPersonEvents(items, new Set(), undefined, HERE);
+    assert.deepEqual(evs[0].ws, HERE, "사람 알림에 매인 워크스페이스 표시가 안 붙었다");
+    const [b] = planPersonBanners(evs, undefined, "darwin");
+    assert.deepEqual({ title: b.title, subtitle: b.subtitle, body: b.body }, { title: "Lively", subtitle: "장원준님이 댓글을 남겼어요", body: "확인 부탁드려요." });
+    const [w] = planPersonBanners(evs, undefined, "win32");
+    assert.deepEqual({ title: w.title, body: w.body }, { title: "Lively", body: "장원준님이 댓글을 남겼어요 — 확인 부탁드려요." });
+    const [old] = planPersonBanners(pickPersonEvents(items, new Set()), undefined, "win32");
+    assert.deepEqual({ title: old.title, body: old.body }, { title: "장원준님이 댓글을 남겼어요", body: "확인 부탁드려요." }, "표시 없는 사람 알림이 종전 모양이 아니다");
+    // 폴링 사건에도 매인 워크스페이스 표시가 붙는다
+    const a = new Map([["s1", { id: "s1", name: "x", awaiting: false, working: true }]]);
+    const bb = new Map([["s1", { id: "s1", name: "x", awaiting: false, working: false }]]);
+    assert.deepEqual(diffSessions(a, bb, undefined, HERE)[0].ws, HERE);
+    assert.equal(diffSessions(a, bb)[0].ws, null);
+  });
+  t("A34 D5·D6 묶음 — 한 워크스페이스면 그 이름이 윗줄, 섞이면 «라이블리» + 워크스페이스 수", () => {
+    const ev = (i, ws) => ({ kind: NOTIFY.DONE, id: "s" + i, name: "세션" + i, ws });
+    const same = planBanners([1, 2, 3, 4].map((i) => ev(i, OTHER)), undefined, "darwin");
+    assert.equal(same.length, 1);
+    assert.deepEqual({ title: same[0].title, subtitle: same[0].subtitle, event: same[0].event }, { title: "NCEO", subtitle: "작업을 마쳤어요", event: null });
+    assert.match(same[0].body, /4개/);
+    const mixed = digestFor([ev(1, OTHER), ev(2, HERE), ev(3, OTHER), ev(4, HERE)], "darwin");
+    assert.equal(mixed.title, "라이블리");
+    assert.match(mixed.body, /워크스페이스 2곳/);
+    assert.match(mixed.body, /4개/);
+    // 사람 알림 묶음은 부제로 쓸 «무슨 일» 이 없다 — 빈 말(«라이블리»)을 부제로 올리지 않는다
+    const people = digestFor([1, 2, 3, 4].map((i) => ({ kind: NOTIFY.PERSON, key: "k" + i, title: "t", body: "b", ws: HERE })), "darwin");
+    assert.deepEqual(people, { title: "Lively", body: "새 알림이 4개 있어요." });
+    // 표시가 하나라도 없으면 종전 묶음 문구
+    assert.equal(digestFor([ev(1, OTHER), ev(2, null)], "darwin").title, "작업을 마쳤어요");
+  });
+  t("A35 D7 이름 상한 — 60자에서 자르고 한 줄로 접는다", () => {
+    const long = "가".repeat(WS_NAME_MAX + 5);
+    assert.equal(WS_NAME_MAX, 60);
+    assert.equal(bannerFor({ kind: NOTIFY.DONE, name: "x", ws: { ...HERE, name: long } }, "win32").title, "가".repeat(60));
+    assert.equal(wsLabelOf({ ...HERE, name: " 라이블리\n  팀 " }).name, "라이블리 팀");
+  });
+  t("A36 표시 검증(wsLabelOf) — slug 모양·가는 길 셋만, 입장 주소는 enter 일 때만 싣는다", () => {
+    for (const bad of [null, undefined, "x", 3, {}, { slug: "" }, { slug: "Has Space" }, { slug: "../x" }, { slug: "-a" }]) assert.equal(wsLabelOf(bad), null, JSON.stringify(bad));
+    assert.deepEqual(wsLabelOf({ slug: "A-1", name: "n", current: "yes", via: "weird", enter: ENTER }), { slug: "a-1", name: "n", current: false, via: "same" });
+    assert.deepEqual(wsLabelOf(OTHER), OTHER);
+    assert.equal(wsLabelOf({ ...HERE, url: "https://x.app.lvly.io/ui/" }).url, undefined, "same 표시에 주소를 실었다");
+    assert.equal(wsLabelOf({ ...OTHER, url: "https://soltimal-adce.app.lvly.io/ui/" }).url, "https://soltimal-adce.app.lvly.io/ui/");
+    assert.equal(wsLabelOf({ ...OTHER, enter: 42 }).enter, undefined);
+    assert.deepEqual(streamEvent({ type: "session", id: "box-a-1", name: "n", prev: "busy", phase: "idle", key: "k", ws: OTHER }, new Set()).ws, OTHER, "스트림 사건의 표시를 버렸다");
+    assert.equal(streamEvent({ type: "session", id: "box-a-1", name: "n", prev: "busy", phase: "idle", key: "k2" }, new Set()).ws, null);
+  });
+  t("A37 K1 갈 곳이 없으면(묶음·형식 아닌 id·바깥 링크) 앱 창만 연다", () => {
+    for (const ev of [null, undefined, { kind: NOTIFY.DONE, id: "a b", ws: HERE }, { kind: NOTIFY.PERSON, link: "https://evil.example", ws: OTHER }]) {
+      assert.deepEqual(clickTarget(ev, { gatewayUrl: GW, windowUrl: GW + "/ui/", cpOrigins: CP_ORIGINS }), { how: "app" }, JSON.stringify(ev));
+    }
+  });
+  t("A38 K2 표시 없는 사건(구 게이트웨이)은 종전처럼 지금 창의 해시", () => {
+    assert.deepEqual(clickTarget({ id: "box-a-1" }, { gatewayUrl: GW, windowUrl: "https://elsewhere.example/ui/", cpOrigins: CP_ORIGINS }), { how: "hash", hash: "#/s/box-a-1" });
+  });
+  t("A39 K3·K9 매인 워크스페이스 사건 + 창이 그 주소(또는 창 없음) → 해시", () => {
+    const ctx = { gatewayUrl: GW, cpOrigins: CP_ORIGINS };
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: GW + "/ui/#/home" }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: null }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget({ link: "#/projects2/p/7", ws: HERE }, { ...ctx, windowUrl: GW + "/ui/" }), { how: "hash", hash: "#/projects2/p/7" });
+  });
+  t("A40 K4·K11 ★ 창이 다른 출처를 싣고 있으면 해시를 거기 꽂지 않고 매인 곳을 다시 싣는다(스킴·포트만 달라도 다른 곳)", () => {
+    const ctx = { gatewayUrl: GW, cpOrigins: CP_ORIGINS };
+    const want = { how: "load", url: GW + "/ui/#/s/box-a-1" };
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: "https://soltimal-adce.app.lvly.io/ui/#/home" }), want);
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: "http://lively-46e3.app.lvly.io/ui/" }), want);
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: HERE }, { ...ctx, windowUrl: "https://lively-46e3.app.lvly.io:8443/ui/" }), want);
+  });
+  t("A41 K5 ★ 다른 워크스페이스(enter) → 앱 창은 두고 브라우저로 계정 서버 입장 주소 + 착지 해시", () => {
+    for (const windowUrl of [null, GW + "/ui/"]) {
+      assert.deepEqual(clickTarget({ id: "box-sangmin-yoon-b0b0", ws: OTHER }, { gatewayUrl: GW, windowUrl, cpOrigins: CP_ORIGINS }),
+        { how: "external", url: `${ENTER}?to=%23%2Fs%2Fbox-sangmin-yoon-b0b0` });
+    }
+    // 착지 해시는 사람 링크도 같다
+    assert.deepEqual(clickTarget({ link: "#/projects2/p/7", ws: OTHER }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }),
+      { how: "external", url: `${ENTER}?to=%23%2Fprojects2%2Fp%2F7` });
+  });
+  t("A41b K5b ★ 워크스페이스 웹 화면 주소가 있고 믿을 만하면 그것을 먼저 연다(브라우저 로그인이 없어도 게이트가 되돌려 준다)", () => {
+    const withUrl = { ...OTHER, url: "https://soltimal-adce.app.lvly.io/ui/" };
+    assert.deepEqual(clickTarget({ id: "box-sangmin-yoon-b0b0", ws: withUrl }, { gatewayUrl: GW, windowUrl: GW + "/ui/", cpOrigins: CP_ORIGINS }),
+      { how: "external", url: "https://soltimal-adce.app.lvly.io/ui/#/s/box-sangmin-yoon-b0b0" });
+    // 못 믿을 주소면 입장 주소로 물러난다
+    const bad = [
+      "https://evil.example/ui/", "https://soltimal-adce.app.lvly.io.evil.example/ui/", "https://other-ws.app.lvly.io/ui/",
+      "http://soltimal-adce.app.lvly.io/ui/", "https://soltimal-adce.app.lvly.io:8443/ui/", "https://soltimal-adce.app.lvly.io/ui/x",
+      "https://soltimal-adce.app.lvly.io/", "https://soltimal-adce.app.lvly.io/ui/?a=1", "https://soltimal-adce.app.lvly.io/ui/#/home",
+      "https://u:p@soltimal-adce.app.lvly.io/ui/", "https://soltimal-adce.lvly.io/ui/", "javascript:alert(1)", 42,
+    ];
+    for (const url of bad) {
+      assert.deepEqual(clickTarget({ id: "box-a-1", ws: { ...OTHER, url } }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }),
+        { how: "external", url: `${ENTER}?to=%23%2Fs%2Fbox-a-1` }, String(url));
+    }
+    // 매인 게이트웨이를 모르거나 상위 도메인이 한 칸이면 형제를 가를 수 없다 → 입장 주소
+    assert.equal(tenantUrlWith(withUrl.url, "soltimal-adce", "#/s/x", null), null);
+    assert.equal(tenantUrlWith("https://soltimal-adce.lvly.io/ui/", "soltimal-adce", "#/s/x", "https://lvly.io"), null);
+    // 매인 곳 자신을 다른 워크스페이스로 싣지 않는다
+    assert.equal(tenantUrlWith(GW + "/ui/", "lively-46e3", "#/s/x", GW), null);
+    assert.equal(tenantUrlWith(withUrl.url, "soltimal-adce", "#/a b", GW), null, "해시 모양이 아닌데 실었다");
+    assert.equal(tenantUrlWith(withUrl.url, "Bad Slug", "#/s/x", GW), null);
+    // 주소도 입장 주소도 못 믿으면 어디로도 안 보낸다
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: { ...OTHER, url: "https://evil.example/ui/", enter: "https://evil.example/ws/x/enter" } }, { gatewayUrl: GW, cpOrigins: CP_ORIGINS }), { how: "app" });
+  });
+  t("A42 K6·K10 입장 주소가 아는 계정 서버가 아니거나 형식이 아니면 어디로도 보내지 않고 앱 창만 연다", () => {
+    const bad = [
+      undefined, "", "nope",
+      `https://evil.example/ws/${WS_ID}/enter`,
+      `https://app.lvly.io.evil.example/ws/${WS_ID}/enter`,
+      `http://app.lvly.io/ws/${WS_ID}/enter`,
+      `https://app.lvly.io:444/ws/${WS_ID}/enter`,
+      `https://u:p@app.lvly.io/ws/${WS_ID}/enter`,
+      `${ENTER}?to=%23%2Fhome`,
+      `${ENTER}#/x`,
+      `https://app.lvly.io/ws/${WS_ID}/leave`,
+      `https://app.lvly.io/ws/${WS_ID.slice(1)}/enter`,
+      `javascript:alert(1)`,
+    ];
+    for (const enter of bad) {
+      assert.deepEqual(clickTarget({ id: "box-a-1", ws: { ...OTHER, enter } }, { gatewayUrl: GW, windowUrl: GW + "/ui/", cpOrigins: CP_ORIGINS }), { how: "app" }, String(enter));
+    }
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: OTHER }, { gatewayUrl: GW, cpOrigins: [] }), { how: "app" }, "아는 계정 서버가 없는데 열었다");
+    assert.equal(enterUrlWith(ENTER, "#/a b", CP_ORIGINS), null, "해시 모양이 아닌데 실었다");
+    assert.equal(enterUrlWith(ENTER, "#/s/x", CP_ORIGINS), `${ENTER}?to=%23%2Fs%2Fx`);
+    // 개발용 계정 서버(http) 는 그 출처를 아는 경우에만
+    assert.equal(enterUrlWith(`http://127.0.0.1:9000/ws/${WS_ID}/enter`, "#/s/x", ["http://127.0.0.1:9000"]), `http://127.0.0.1:9000/ws/${WS_ID}/enter?to=%23%2Fs%2Fx`);
+  });
+  t("A43 K7 셀프호스트 다중: 창이 고른 워크스페이스가 사건의 것과 같으면 해시(비었으면 primary)", () => {
+    const ctx = { gatewayUrl: "https://olddev.lvly.io", windowUrl: "https://olddev.lvly.io/ui/#/home", cpOrigins: CP_ORIGINS };
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...ctx, windowWs: "HARU " }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("primary", "본사") }, { ...ctx, windowWs: "" }), { how: "hash", hash: "#/s/box-a-1" });
+  });
+  t("A44 K8 ★ 셀프호스트 다중: 고른 것이 다르거나 모르면 매인 주소를 ?lvly_ws= 로 다시 싣는다", () => {
+    const base = { gatewayUrl: "https://olddev.lvly.io", cpOrigins: CP_ORIGINS };
+    const want = (slug) => ({ how: "load", url: `https://olddev.lvly.io/ui/?lvly_ws=${slug}#/s/box-a-1` });
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...base, windowUrl: "https://olddev.lvly.io/ui/", windowWs: "" }), want("haru"));
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...base, windowUrl: "https://olddev.lvly.io/ui/", windowWs: null }), want("haru"), "모르는데 해시로 꽂았다");
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("primary", "본사") }, { ...base, windowUrl: "https://olddev.lvly.io/ui/", windowWs: "haru" }), want("primary"));
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { ...base, windowUrl: "https://other.example/ui/", windowWs: "haru" }), want("haru"), "다른 출처의 선택값을 믿었다");
+    // 경로 접두가 있는 게이트웨이도 그 접두를 살린다
+    assert.deepEqual(clickTarget({ id: "box-a-1", ws: REG("haru", "하루") }, { gatewayUrl: "https://corp.example.com/lively", windowUrl: null, windowWs: null }),
+      { how: "load", url: "https://corp.example.com/lively/ui/?lvly_ws=haru#/s/box-a-1" });
+  });
+  t("A44b K13 경로 접두 게이트웨이 — 같은 출처의 다른 앱을 싣고 있으면 «이미 매인 곳» 으로 읽지 않는다(#4054 리뷰)", () => {
+    const gw = "https://corp.example.com/lively";
+    const own = { id: "box-a-1", ws: HERE };
+    assert.deepEqual(clickTarget(own, { gatewayUrl: gw, windowUrl: "https://corp.example.com/lively/ui/#/home" }), { how: "hash", hash: "#/s/box-a-1" });
+    assert.deepEqual(clickTarget(own, { gatewayUrl: gw, windowUrl: "https://corp.example.com/other-app/" }),
+      { how: "load", url: "https://corp.example.com/lively/ui/#/s/box-a-1" }, "같은 출처의 다른 앱에 해시를 꽂았다");
+    assert.deepEqual(clickTarget(own, { gatewayUrl: gw, windowUrl: "https://corp.example.com/lively-old/ui/" }),
+      { how: "load", url: "https://corp.example.com/lively/ui/#/s/box-a-1" }, "경로 접두의 경계(lively vs lively-old)를 못 갈랐다");
+    const reg = { id: "box-a-1", ws: REG("haru", "하루") };
+    assert.deepEqual(clickTarget(reg, { gatewayUrl: gw, windowUrl: "https://corp.example.com/other-app/", windowWs: "haru" }),
+      { how: "load", url: "https://corp.example.com/lively/ui/?lvly_ws=haru#/s/box-a-1" }, "다른 앱의 선택값을 믿었다");
+    assert.deepEqual(clickTarget(reg, { gatewayUrl: gw, windowUrl: "https://corp.example.com/lively/ui/", windowWs: "haru" }), { how: "hash", hash: "#/s/box-a-1" });
+  });
+  t("A45 K12 스트림은 다른 워크스페이스까지 청한다(all=1) · 웹이 고른 워크스페이스 저장소 키는 웹과 같다", () => {
+    assert.equal(streamUrl("https://gw.example/"), "https://gw.example/api/ui/notify/stream?all=1");
+    assert.equal(streamUrl(""), null);
+    const net = readFileSync(fileURLToPath(new URL("../../web/lib/net.ts", import.meta.url)), "utf8");
+    const key = /const WORKSPACE_KEY = '([^']+)'/.exec(net)?.[1];
+    assert.equal(key, WEB_WORKSPACE_KEY, "웹의 워크스페이스 선택 키가 바뀌었다 — 앱이 엉뚱한 값을 읽고 매번 다시 싣는다");
+    assert.ok(READ_WEB_WORKSPACE_JS.includes(JSON.stringify(WEB_WORKSPACE_KEY)));
+  });
+  t("A46 배선 — 스트림 주소·배너 모양·클릭 경로·매인 곳 이동 시 초기화가 main.mjs 에 실제로 걸려 있다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    assert.ok(/fetch\(streamUrl\(gw\)/.test(conn), "스트림이 다른 워크스페이스를 청하지 않는다");
+    assert.ok(/bannerFor\(hit, process\.platform\)/.test(conn), "실시간 배너에 플랫폼(부제 여부)을 안 넘긴다");
+    const banner = main.slice(main.indexOf("function showBanner("), main.indexOf("async function openFromBanner("));
+    assert.ok(/new Notification\(\{ title, body, \.\.\.\(subtitle \? \{ subtitle \} : \{\}\) \}\)/.test(banner), "부제(워크스페이스 아래 줄)를 버린다");
+    assert.ok(/void openFromBanner\(event\)/.test(banner), "클릭이 새 경로 판정을 안 탄다");
+    const open = main.slice(main.indexOf("async function openFromBanner("), main.indexOf("function cpOrigins("));
+    assert.ok(/clickTarget\(event, \{ gatewayUrl: state\.gatewayUrl, windowUrl, windowWs, cpOrigins: cpOrigins\(\) \}\)/.test(open), "클릭 판정에 창·매인 곳·계정 서버를 안 넘긴다");
+    assert.ok(/t\.how === "external"\) \{ await shell\.openExternal\(t\.url\)/.test(open), "다른 워크스페이스를 브라우저로 안 연다");
+    assert.ok(/t\.how === "load"\) \{ loadInApp\(t\.url\)/.test(open), "매인 곳을 다시 싣지 않는다");
+    assert.ok(/READ_WEB_WORKSPACE_JS/.test(open) && /ws\.via === "header"/.test(open), "셀프호스트 다중에서 창의 선택을 안 묻는다");
+    const load = main.slice(main.indexOf("function loadInApp("), main.indexOf("function resetNotifyBinding("));
+    assert.ok(load.indexOf("hashNav.failed()") >= 0 && load.indexOf("hashNav.failed()") < load.indexOf("loadURL(url)"), "다시 싣기 전에 기다리던 해시를 안 버린다");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    assert.ok(/diffSessions\(notifySnapshot, next, prefs, boundWs\)/.test(poll), "폴링 배너에 매인 워크스페이스 표시가 없다");
+    const feed = main.slice(main.indexOf("async function pollPersonFeed("));
+    const wsAt = feed.indexOf("boundWs = wsLabelOf(data.workspace)"), pickAt = feed.indexOf("pickPersonEvents(");
+    assert.ok(wsAt >= 0 && wsAt < pickAt, "피드의 워크스페이스 표시를 사람 알림보다 먼저 받지 않는다");
+    assert.ok(/pickPersonEvents\(data && data\.items, personSeen, notifyPrefs\(\), boundWs\)/.test(feed));
+    const refresh = main.slice(main.indexOf("async function refreshState("), main.indexOf("function syncWindows("));
+    assert.ok(/if \(state\.gatewayUrl\) resetNotifyBinding\(\)/.test(refresh), "매인 곳이 바뀌어도 옛 스트림·기준선을 안 버린다");
+    const reset = main.slice(main.indexOf("function resetNotifyBinding("), main.indexOf("async function connectNotifyStream("));
+    for (const k of ["notifyGen++", "notifySnapshot = null", "personSeen = null", "personSince = null", "boundWs = null",
+      "notifyPrefsCache = { ...NOTIFY_DEFAULTS }", "streamSeen.clear()", "streamCtl.abort()", "setTimeout(() => void pollNotifications(), 0)"]) {
+      assert.ok(reset.includes(k), `초기화에 ${k} 가 없다`);
+    }
+  });
+  t("A47 배선 — 옛 매인 곳으로 떠난 폴·스트림은 초기화 뒤에 상태를 되써 넣지 않는다(세대 가드, #4054)", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const poll = main.slice(main.indexOf("async function pollNotifications("), main.indexOf("async function pollPersonFeed("));
+    const genAt = poll.indexOf("const gen = notifyGen;");
+    const guards = [...poll.matchAll(/if \(gen !== notifyGen\) return;/g)].map((m) => m.index);
+    const snapAt = poll.indexOf("notifySnapshot = next;");
+    assert.ok(genAt >= 0 && genAt < poll.indexOf("await fetch("), "폴이 떠날 때의 세대를 쥐지 않는다");
+    assert.ok(guards.length >= 2 && guards.every((g) => g < snapAt), "기준선을 쓰기 전에 세대를 다시 보지 않는다(두 await 뒤 모두)");
+    assert.ok(/pollPersonFeed\(gw, token, gen\)/.test(poll), "사람 알림 폴에 세대를 넘기지 않는다");
+    assert.ok(/finally \{[\s\S]*?if \(gen !== notifyGen\) setTimeout\(\(\) => void pollNotifications\(\), 0\)/.test(poll),
+      "옛 폴이 끝난 뒤 새 곳 폴을 다시 부르지 않는다 — 초기화가 부른 폴이 이 폴에 막혀 건너뛰었을 수 있다");
+    const feed = main.slice(main.indexOf("async function pollPersonFeed("), main.indexOf("// ── 라이블리 화면 = 웹 UI 창"));
+    const fGuard = feed.indexOf("if (gen !== notifyGen) return;");
+    for (const k of ["notifyPrefsCache =", "boundWs = wsLabelOf", "rememberSeen(", "personSince ="]) {
+      assert.ok(fGuard >= 0 && fGuard < feed.indexOf(k), `사람 알림 폴이 세대를 보기 전에 ${k} 를 쓴다`);
+    }
+    const conn = main.slice(main.indexOf("async function connectNotifyStream("), main.indexOf("function scheduleStreamRetry("));
+    const sGen = conn.indexOf("const gen = notifyGen;"), sGuard = conn.indexOf("if (gen !== notifyGen) break;");
+    assert.ok(sGen >= 0 && sGen < conn.indexOf("await fetch(") && sGuard > 0 && sGuard < conn.indexOf("showBanner("), "끊기 직전 들어온 옛 곳 사건을 띄운다");
   });
 }
 
@@ -2200,19 +3181,120 @@ t("CL4 ★ 두 카드는 배타다 — 처음이면 클라우드 우선, 고칠 
   assert.match(html, /id="gw"[^>]*>/, "시작 카드의 주소칸이 없다");
 });
 
-t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다", () => {
+t("CL5 ★ 배선 — 클라우드 버튼이 실제로 그 작업을 부르고, 설치 끝에 노드까지 선다 [E6·E7]", () => {
   const app = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
   assert.match(app, /window\.lively\.run\("setup-cloud"\)/, "버튼이 아무것도 안 부른다");
   const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  // IPC 는 클라우드 경로를 **따로** 몰아야 한다 — 그냥 start() 로 보내면 CLI 가드에 걸린다(CL6).
   const h = main.slice(main.indexOf("ipcMain.handle(IPC.RUN"));
   const seg = h.slice(0, h.indexOf("ipcMain.handle(IPC.CANCEL"));
   assert.ok(seg.includes('"setup-cloud"'), "메인이 클라우드 경로를 따로 몰지 않는다");
-  assert.ok(seg.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
+  // 흐름의 정본은 onboardCloud 다 — 끝이 주소 경로(onboard)와 같아야 한다.
+  const fn = cloudFlow(main);
+  assert.ok(seg.includes("onboardCloud"), "IPC 가 그 흐름을 안 탄다");
+  assert.ok(fn.includes("nextAfterSetup"), "설치 끝에 노드를 안 세운다 — 주소 경로와 결과가 갈린다");
   // ⚠ 가드의 **존재**를 먼저 단언한다. 위치만 비교하면 가드를 통째로 지웠을 때 indexOf 가 -1 이라
   //  "-1 < n" 으로 통과한다 — 실측(mutation Pb): 없는 가드를 있다고 읽었다.
-  const guardAt = seg.indexOf("if (!r.ok) return r;");
+  const guardAt = fn.indexOf("if (!r.ok) return r;");
   assert.ok(guardAt >= 0, "설치 실패 가드가 없다 — 실패한 설치 위에 노드를 올린다");
-  assert.ok(guardAt < seg.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
+  assert.ok(guardAt < fn.indexOf("nextAfterSetup"), "실패했는데 노드를 세우려 한다");
+});
+
+// ── #3968 — 클라우드 경로가 **CLI 없는 PC** 에서 시작될 수 있어야 한다 ────────────
+// 실측(2026-09-14 · 매니지드 최초 설치 · 앱 0.1.367 · 키트 미설치): [라이블리 클라우드로 로그인] 을 누르면
+//  «라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.» 로 끝났다.
+//  start() 의 CLI 가드가 **모든** 작업에 걸려 있었고, 클라우드 경로만은 그 앞에서 CLI 를 쥐었어야 했다.
+//  #2044 가 없앤 닭-달걀(주소는 로그인해야 보이고, 로그인하려면 앱이 설치돼 있어야 한다)이 그대로 돌아온 자리다.
+//  ⚠ main.mjs 는 Electron 을 import 해 실행할 수 없다 — 이 파일 머리말의 원칙대로 **배선은 소스 구조로** 단언한다
+//   (기존 CL5·N2·GW15 와 같은 방식). 판단이 순수 모듈에 있는 축(E8~E12)은 아래에서 실제로 호출해 잰다.
+function cloudFlow(main) {
+  const at = main.indexOf("async function onboardCloud(");
+  assert.ok(at >= 0, "클라우드 흐름(onboardCloud)이 없다 — 버튼이 곧장 start() 로 가면 CLI 가드에 걸린다");
+  const end = main.indexOf("function askUser(", at);
+  assert.ok(end > at, "흐름의 끝을 못 찾았다(테스트가 보는 경계가 깨졌다)");
+  return main.slice(at, end);
+}
+
+t("CL6 ★ 클라우드 경로는 setup 전에 CLI 를 확보한다 — 주소를 묻는 막다른 길로 끝나지 않게 [E1·E4]", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const fn = cloudFlow(main);
+  const ensureAt = fn.indexOf("ensureCli(");
+  const startAt = fn.indexOf('start("setup-cloud"');
+  assert.ok(ensureAt >= 0, "CLI 확보 단계가 없다 — CLI 없는 PC(=모든 최초 설치)에서 이 버튼은 무조건 실패한다");
+  assert.ok(startAt >= 0, "클라우드 설치를 부르지 않는다");
+  assert.ok(ensureAt < startAt, "setup 을 먼저 몬다 — 그러면 CLI 가드가 먼저 튕긴다");
+  assert.match(fn, /if \(!c\.ok\) return c;/, "CLI 확보 실패에서 멈추지 않는다 — 없는 CLI 위에 setup 을 올린다");
+});
+
+t("CL7 ★ 클라우드 부트스트랩 출처는 클라우드다 — 새 PC 엔 저장된 게이트웨이 주소가 없다 [E1·E3]", () => {
+  const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+  const fn = cloudFlow(main);
+  assert.match(fn, /cloudUrl\(\)/, "클라우드 주소를 안 쓴다");
+  assert.match(fn, /ensureCli\(\{\s*url,\s*cloud:\s*true\s*\}\)/, "클라우드 출처가 명시되지 않았다");
+  assert.ok(!/state\.gatewayUrl/.test(fn), "저장된 게이트웨이 주소를 본다 — 새 PC 엔 그 값이 null 이라 제자리다");
+  // 확보 단계는 **한 벌**이어야 한다(두 벌이 되면 한쪽만 낡는다). 주소 경로도 같은 함수를 쓴다.
+  const on = main.slice(main.indexOf("async function onboard("), main.indexOf("async function onboardCloud("));
+  assert.ok(on.includes("ensureCli("), "주소 경로가 CLI 확보를 따로 구현한다 — 단계가 두 벌이 됐다");
+  assert.match(on, /ensureCli\(\{ url: gw, cloud: false \}\)/, "주소 경로가 사람이 넣은 주소를 안 쓴다 [E5]");
+  // '쓸 수 있는 CLI' 판정(P2)은 확보 단계 안에 한 자리로 있어야 한다.
+  //  ⚠ 함수 전체에서 낱말만 찾으면 **공허하다** — `cliOutdated` 는 라벨 계산·재측정에도 나온다(실측 mutation M3:
+  //   건너뛰기 조건을 `if (existing)` 으로 깎았는데 GREEN 이었다). 건너뛰는 **그 조건식**만 본다.
+  const ens = main.slice(main.indexOf("async function ensureCli("), main.indexOf("function bootstrapFailNote("));
+  const guard = /if \(([^)]*)\) return \{ ok: true, cli: existing \};/.exec(ens);
+  assert.ok(guard, "쓸 수 있는 CLI 가 있어도 매번 다시 받는다 [E2]");
+  assert.match(guard[1], /cliOutdated/, "구버전 CLI 를 그냥 쓴다 — 앱이 진행 상황을 하나도 못 듣는다 [E3]");
+  assert.match(guard[1], /cliBroken/, "못 띄우는 CLI 를 그냥 쓴다 [E3]");
+});
+
+t("CL8 ★ 클라우드 CLI 는 워크스페이스를 몰라도 받아진다 — 그 한 줄에 테넌트 주소가 없다 [E1·E8]", () => {
+  const prev = process.env.LIVELY_CLOUD_URL;
+  delete process.env.LIVELY_CLOUD_URL;
+  try {
+    assert.equal(cloudUrl(), DEFAULT_CLOUD_URL);
+    // 실제로 spawn 될 명령을 잰다(문구가 아니라 argv). 여기에 워크스페이스 주소가 들어갈 자리가 없다.
+    assert.deepEqual(bootstrapCommand(cloudUrl(), "darwin"),
+      { cmd: "/bin/sh", args: ["-c", "curl -fsSL https://app.lvly.io/cli | sh"] });
+    assert.equal(bootstrapScriptUrl(cloudUrl(), "win32"), "https://app.lvly.io/cli.ps1");
+    // env 미설정이면 argv 에도 주소를 안 붙인다 — CLI 의 기본값이 정본이다.
+    assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud"]);
+  } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
+});
+
+t("CL9 클라우드 기본 주소는 CLI 의 것과 같아야 한다 — 두 자리가 갈리면 로그인과 설치가 다른 곳을 본다 [E8]", () => {
+  // 앱은 kit/cli/lively.mjs 를 import 할 수 없다(패키징 경계) — HARNESS_IDS 와 같은 사정이라 글자로 대조한다.
+  const cli = readFileSync(fileURLToPath(new URL("../../kit/cli/lively.mjs", import.meta.url)), "utf8");
+  const m = /export const DEFAULT_CLOUD_URL = "([^"]+)"/.exec(cli);
+  assert.ok(m, "kit/cli/lively.mjs 에서 DEFAULT_CLOUD_URL 을 못 찾았다(이름이 바뀌었나)");
+  assert.equal(DEFAULT_CLOUD_URL, m[1], "앱과 CLI 의 클라우드 주소가 갈렸다");
+});
+
+t("CL10 env 덮어쓰기는 argv 와 부트스트랩이 **같은 값**을 본다 [E9·E10]", () => {
+  const prev = process.env.LIVELY_CLOUD_URL;
+  try {
+    process.env.LIVELY_CLOUD_URL = "http://127.0.0.1:9999";
+    assert.deepEqual(argvFor("setup-cloud", {}), ["setup", "--cloud", "http://127.0.0.1:9999"]);
+    assert.equal(cloudUrl(), "http://127.0.0.1:9999");
+    assert.deepEqual(bootstrapCommand(cloudUrl(), "darwin").args,
+      ["-c", "curl -fsSL http://127.0.0.1:9999/cli | sh"]);
+    // 말미 슬래시는 두 자리가 같게 다듬는다(주소 입력과 같은 규약).
+    process.env.LIVELY_CLOUD_URL = "http://127.0.0.1:9999/";
+    assert.equal(cloudUrl(), "http://127.0.0.1:9999");
+    for (const bad of ["--token", "https://a b", "https://a;rm", "file:///etc/passwd", "app.lvly.io"]) {
+      process.env.LIVELY_CLOUD_URL = bad;
+      assert.throws(() => cloudUrl(), /형식/, `통과해버림: ${bad}`);
+      assert.throws(() => argvFor("setup-cloud", {}), /형식/, `argv 만 통과해버림: ${bad}`);
+    }
+  } finally { if (prev === undefined) delete process.env.LIVELY_CLOUD_URL; else process.env.LIVELY_CLOUD_URL = prev; }
+});
+
+t("CL11 ★ CLI 를 못 찾았을 때의 안내가 **주소를 모르는 사람**에게 막다른 길이 아니다 [E11·E12]", () => {
+  const help = cliMissingHelp("", "darwin");
+  assert.match(help, /클라우드로 로그인/, "주소 없이 시작되는 문을 안 가리킨다 — 그게 닭-달걀을 되살린 문장이었다");
+  assert.ok(!/먼저 게이트웨이 주소를 입력하면/.test(help),
+    "옛 문장 그대로다 — 매니지드 셀프서브에겐 물어볼 수 없는 값을 묻는다");
+  assert.match(help, /회사에 직접 설치/, "자가호스팅 안내가 사라졌다");
+  // E12 무회귀 — 주소를 알면 종전대로 그 플랫폼의 한 줄을 준다(GW8 과 같은 축).
+  assert.match(cliMissingHelp("https://acme.app.lvly.io", "win32"), /irm https:\/\/acme\.app\.lvly\.io\/cli\.ps1 \| iex/);
 });
 
 console.log(`\n${pass} passed`);

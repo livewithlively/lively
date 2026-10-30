@@ -27,8 +27,9 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
-import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, claudeConfigDir } from "./harness-registry.mjs";
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, isForeignCursorInvocation, claudeConfigDir, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
+import { inScopeNow } from "./record-scope.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -43,7 +44,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(사본은 --harness 없이 돌아 claude 자리에 sync 하므로 grok 세션에서 무의미 + 이중 fetch).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 if (OFF) process.exit(0);
@@ -88,7 +90,8 @@ const pickCred = (envName, fileVal) => {
   const env = (process.env[envName] || "").trim();
   return (SPAWNED ? (env || fileVal) : (fileVal || env)) || "";
 };
-const TOKEN = pickCred("LIVELY_TOKEN", readLocal("token"));
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = sessionTokenFromFile("hook", HOME, (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", readLocal("token"));
 const GW = (pickCred("LIVELY_GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 
 // ── 대상 하네스별 자산 배치 규약 ──
@@ -106,7 +109,9 @@ function yamlValue(v) {
   return JSON.stringify(String(v ?? ""));
 }
 // provenance 한 줄(#932) — 이 파일은 중앙 asset 의 사본이라 손으로 만든 로컬 자산과 겉이 같다.
-const PROVENANCE = "라이블리가 materialize 한 사본입니다. 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다.";
+//  머리 문장(PROVENANCE_HEAD)은 «우리가 쓴 사본» 판정(isOurCopy, #5019)의 표식이기도 하다 — 바꾸면 이미 깔린 사본을 못 알아본다.
+const PROVENANCE_HEAD = "라이블리가 materialize 한 사본입니다.";
+const PROVENANCE = `${PROVENANCE_HEAD} 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다.`;
 
 // codex 서브에이전트 = **TOML**(md 아님). 필수 키 name·description·developer_instructions(본문=시스템 프롬프트).
 //  값은 전부 TOML basic 문자열(JSON.stringify) — 개행·따옴표·한글이 그대로 escape 된다. multi-line `"""` 를 쓰면
@@ -142,6 +147,8 @@ const COMPOSERS = {
   "antigravity-agent": composeAntigravityAgent,
   "antigravity-workflow": composeAntigravityWorkflow,
   "grok-agent": composeGrokAgent,
+  "cursor-agent": composeCursorAgent,
+  "cursor-command": composeCursorCommand,
 };
 // opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
 //  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
@@ -188,6 +195,28 @@ function composeGrokAgent(asset) {
   const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
   const name = fm.name != null ? String(fm.name) : String(asset.id || "");
   return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// cursor 서브에이전트(agents/<id>.md, #4927) — 파서는 단순 `key: value`(번들 실측: name·description·model·tools·readonly·
+//  is_background 를 읽고 모르는 키는 무시). claude 의 model 슬러그·tools 이름의 **백엔드 해석**은 미실측이라 다른 하네스와
+//  같은 판단으로 이식 최소셋(name·description·본문)만 넘긴다. ⚠ 본문이 비면 Cursor 가 그 파일을 건너뛴다(실측) — 본문은 그대로.
+function composeCursorAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// cursor 커맨드(commands/<id>.md, #4927) — ⚠ Cursor 는 frontmatter 를 **해석하지 않는다**: 파일 전문(trim)이 프롬프트이고
+//  **첫 줄이 제목**이다(번들 실측). claude 형 YAML 을 그대로 두면 제목이 `---` 로 보이고 YAML 이 프롬프트로 샌다.
+//  그래서 첫 줄 = 설명(사람이 고를 때 보는 제목), 그 뒤 provenance 주석, 그 뒤 본문. `$ARGUMENTS`·`$1` 치환은 Cursor 가
+//  claude 와 같은 규약으로 한다(실측) — 본문을 그대로 두면 된다. 설명이 없으면 본문 첫 줄이 곧 제목이 된다.
+function composeCursorCommand(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = String(asset.description != null ? asset.description : (fm.description ?? "")).replace(/\s+/g, " ").trim();
+  //  설명이 없으면 provenance 주석이 첫 줄(=제목)이 되지 않게 맨 끝으로 보낸다.
+  if (!desc) return `${asset.body || ""}\n\n<!-- ${PROVENANCE} -->\n`;
+  return `${desc}\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
 // 자산 body 는 **frontmatter 를 담지 않는다** — 파일의 frontmatter 는 composeFile 이 description 컬럼·frontmatter
@@ -248,8 +277,53 @@ function loadManifest() {
   try { const m = JSON.parse(readFileSync(MANIFEST, "utf8")); return (m && typeof m === "object") ? m : {}; }
   catch { return {}; }
 }
-function saveManifest(m) {
-  try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(MANIFEST, JSON.stringify(m, null, 2), { mode: 0o600 }); } catch { /* fail-soft */ }
+// 받은 목록 저장(#5019) — 다른 하네스의 받기와 겹쳐도 남의 몫을 지우지 않는다.
+//  종전엔 시작할 때 읽은 목록 전체를 그대로 덮어써서, 두 하네스의 받기가 겹치면(claude·cursor 대화 시작이 동시,
+//  열린 세션 옆의 `lively update`) 나중에 쓴 쪽이 먼저 쓴 쪽 몫을 지웠다(#5013 테스트에서 3/3 재현). 몫이 지워진 파일은
+//  다음 받기가 «멤버 파일»로 보고 비켜서 영영 갱신·회수되지 않았다.
+//  → 쓰기 직전에 다시 읽어 **이 하네스 몫만** 바꾸고, 임시 파일 → rename 으로 원자 저장한다(반쯤 쓴 목록이 안 보이게).
+//   다시 읽기~rename 은 잠금 안에서 한다. 잠금은 디렉터리 생성(mkdir — 모든 플랫폼에서 원자적)이고, 못 잡아도(1.5초)
+//   그냥 쓴다 — 세션 시작을 막지 않는다(fail-open). 죽은 잠금(10초 넘음 — 받기 한 번은 5초 안에 스스로 끝난다)은 치운다.
+//  ⚠ 막는 건 **하네스끼리**의 겹침이다. 같은 하네스 둘이 겹치면(두 프로필·`lively update` 와 대화 시작) 각자 시작 때 계산한
+//   자기 몫을 통째로 쓰므로 여전히 나중 쪽이 이긴다 — 같은 자산 목록이라 대개 같은 결과고, 빠진 몫은 isOurCopy 가 다음 받기에서
+//   되찾는다(단 그사이 회수된 자산의 파일은 고아로 남을 수 있다).
+const LOCK = MANIFEST + ".lock";
+const LOCK_WAIT_MS = 1500;
+const LOCK_STALE_MS = 10000;
+const sleepSync = (ms) => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* 못 자면 바로 재시도 */ } };
+function withManifestLock(fn) {
+  // 상한은 단조 시계로 잰다(벽시계가 뒤로 뛰어도 늘지 않게). 죽은 잠금 판정만 mtime 과 견주는 벽시계다.
+  const deadline = performance.now() + LOCK_WAIT_MS;
+  let held = false;
+  for (;;) {
+    try { mkdirSync(LOCK); held = true; break; }
+    catch (e) {
+      // 상한은 맨 앞에서 본다 — 어떤 갈래로 돌아도(치울 수 없는 잠금 자리 등) 1.5초를 넘기지 않는다.
+      if (e?.code !== "EEXIST" || performance.now() > deadline) break;
+      let age = 0; try { age = Date.now() - lstatSync(LOCK).mtimeMs; } catch { continue; } // 방금 풀림 → 다시 잡기
+      if (age > LOCK_STALE_MS) { try { rmdirSync(LOCK); continue; } catch { /* 다른 쪽이 먼저 치움 · 디렉터리가 아님 */ } }
+      sleepSync(25);
+    }
+  }
+  try { return fn(); }
+  finally { if (held) { try { rmdirSync(LOCK); } catch { /* 이미 없음 */ } } }
+}
+function saveManifestFor(key, entries) {
+  try {
+    mkdirSync(LIVELY, { recursive: true });
+    withManifestLock(() => {
+      const m = loadManifest();
+      m[key] = entries;
+      const text = JSON.stringify(m, null, 2);
+      const tmp = `${MANIFEST}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+      // 임시 파일은 어떤 실패로 끝나도 치운다 — 이름이 매번 달라 남으면 아무도 안 지운다.
+      try { writeFileSync(tmp, text, { mode: 0o600 }); }
+      catch { try { rmSync(tmp, { force: true }); } catch { /* */ } return; }
+      // rename 이 실패하면(윈도우는 대상을 누가 열고 있으면 EPERM 등) 직접 쓰기로 물러선다 — 그 한 번은 원자적이지 않다.
+      try { renameSync(tmp, MANIFEST); }
+      catch { try { writeFileSync(MANIFEST, text, { mode: 0o600 }); } catch { /* fail-soft */ } finally { try { rmSync(tmp, { force: true }); } catch { /* */ } } }
+    });
+  } catch { /* fail-soft */ }
 }
 
 // 경로가 root 아래인지(containment). 심링크 통과는 별도 lstat 로 거부.
@@ -267,6 +341,22 @@ function anySymlink(paths) {
   return false;
 }
 
+// 목록에 없는데 자리에 있는 파일이 **라이블리가 쓴 사본**인가(#5019) — 모든 composer 가 PROVENANCE 를 박는다(최초 공개부터 같은 문구).
+//  그런 파일은 받은 목록에서 몫이 지워졌거나(동시 저장 경합 — saveManifestFor 머리말) 자산을 쓴 뒤 목록 저장 전에 끊긴 고아 사본이다.
+//  멤버 파일로 보고 비켜서면 그 자산은 영영 갱신·회수되지 않으므로 다시 맡는다 — 이미 피해를 본 PC 도 다음 받기에서 풀린다.
+//  표식 없는 파일(멤버 본인 자산)은 종전대로 보존. 표식은 composer 가 넣는 **줄 머리 모양**(`<!-- …` · TOML `# …`)일 때만
+//  인정한다 — 멤버 스킬이 본문에서 이 문장을 인용만 해도 걸리지 않게. ⚠ 사본을 표식째 손으로 고친 것(다른 하네스 자리로
+//  복사해 고친 것 포함)은 덮이는데, 표식 문구가 곧 «직접 수정은 다음 sync 에 덮어써집니다» 라는 계약이다.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const OUR_COPY_RE = new RegExp("^(?:<!-- |# )" + escapeRe(PROVENANCE_HEAD), "m");
+function isOurCopy(file) {
+  try {
+    const st = lstatSync(file);
+    if (!st.isFile() || st.size > 2 * 1024 * 1024) return false;
+    return OUR_COPY_RE.test(readFileSync(file, "utf8"));
+  } catch { return false; }
+}
+
 // 자산 1개 materialize(변경 시에만 write). prevEntry=이전에 lively 가 심은 매니페스트 엔트리(있으면). 반환: {ok, changed, entry} | {ok:false}(skip).
 function writeAsset(asset, prevEntry) {
   const id = String(asset.id || "").trim().toLowerCase();
@@ -282,7 +372,7 @@ function writeAsset(asset, prevEntry) {
   // ★ 비파괴① — lively 가 심지 않은 기존 파일(멤버 본인 자산)은 절대 덮지 않는다. 슬러그 충돌(admin id == 멤버 로컬 스킬 id)
   //  시 org 자산을 그 멤버엔 미배포하고 멤버 파일을 보존한다(managed=매니페스트에 이 id 가 있었나 = lively 소유였나).
   const managed = !!prevEntry;
-  if (!managed && existsSync(file)) return { ok: false, collision: true, id };
+  if (!managed && existsSync(file) && !isOurCopy(file)) return { ok: false, collision: true, id };
 
   const content = composeFile(asset);
   const entry = { kind, hash: asset.content_hash || "", file };
@@ -472,6 +562,11 @@ async function applyLocalPref() {
 async function main() {
   if (hookDisabled()) return;
   if (!TOKEN) return;
+  // 기록 범위(#5016) — 작업 폴더 밖 세션은 인코그니토와 같다(자산 받기·인벤토리 보고 없음). 이미 깔린 스킬 파일은 그대로다 —
+  //  하네스가 시작할 때 사용자 폴더에서 읽는 것이라 훅으로는 숨길 수 없다. 판정은 record-scope.mjs 하나.
+  //  ⚠ 설치·업데이트가 «다음 세션 몫» 을 미리 받으려고 부를 때(--preload, lively.mjs preloadHarnessAssets)는 세션이 아니다 — 판정하지
+  //   않는다. 그 cwd 는 설치 명령을 친 자리일 뿐이라, 판정하면 작업 폴더 밖에서 설치한 컴퓨터는 미리 받기가 조용히 0이 된다.
+  if (!process.argv.includes("--preload") && !inScopeNow({ env: process.env, cwd: process.cwd(), harness: HARNESS, lively: LIVELY }).inScope) return;
   const assets = await Promise.race([fetchAssets(), new Promise((r) => setTimeout(() => r(null), HARD_MS))]);
   if (assets === null) return; // fetch 실패/타임아웃 → fail-OPEN(현상 유지, prune 안 함)
 
@@ -494,8 +589,7 @@ async function main() {
   for (const id of Object.keys(prev)) if (desiredIds.has(id) && !next[id]) next[id] = prev[id];
   // prune — 게이트웨이가 더는 원치 않는 것(회수/비활성/타깃 제외)만 제거. fetch 성공했을 때만 도달(fail-OPEN).
   for (const id of Object.keys(prev)) if (!desiredIds.has(id)) { removeAsset(prev[id]); delete next[id]; changed = true; }
-  manifest[HARNESS] = next;
-  saveManifest(manifest);
+  saveManifestFor(HARNESS, next);
   if (changed) emitReload();
 
   // 웹 토글 지시 반영(#891 슬라이스 2) — 이 머신에서 끄기로 한 로컬 파일을 .disabled rename(비파괴).

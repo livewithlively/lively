@@ -1,0 +1,187 @@
+name: desktop-installer-helper
+# 윈도우 첫 설치용 «설치 도우미»(desktop/installer-helper)를 빌드·서명·점검하고, 고정 릴리스에 올린다 (#4066).
+#
+# 왜 따로 있나 — 버전별 설치 파일(Lively-Setup-<버전>.exe)은 릴리스마다 바뀌어 SmartScreen 평판이 쌓이지 않는다.
+#  첫 설치는 내용이 바뀌지 않는 도우미 하나로 받게 해서 평판을 그 파일에 모은다(desktop/installer-helper/Program.cs 머리말).
+#
+# ⚠ **수동 실행 전용이다.** 도우미는 한 번 만들어 계속 쓰는 파일이다. 다시 빌드·서명하면 바이트가 달라져 쌓인 평판이
+#  0 으로 돌아간다. 그래서 태그·푸시로 돌지 않고, 이미 올라간 파일을 덮으려면 replace 를 켜야 한다.
+#  덮었으면 새 파일을 Microsoft 검토(Security Intelligence 제출)에 다시 넣는다.
+#
+# 올라가는 자리 — 사전 릴리스(prerelease) `win-installer` 의 `Lively-Setup.exe`:
+#  https://github.com/livewithlively/lively/releases/download/win-installer/Lively-Setup.exe
+#  사전 릴리스는 «최신 릴리스»가 될 수 없다. 그래서 설치된 앱의 자동 업데이트(electron-updater 는 allowPrerelease 가 꺼져
+#  있으면 /releases/latest 만 본다 — GitHubProvider.getLatestTagName)와, 온보딩·컨트롤플레인의 «앱 받기»(releases/latest API)가
+#  이 릴리스를 집지 않는다.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "고정 릴리스(win-installer)에 올린다"
+        type: boolean
+        default: false
+      replace:
+        description: "이미 올라간 도우미를 덮는다 — 쌓인 SmartScreen 평판이 0 으로 돌아간다"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write             # 사전 릴리스 만들기·자산 올리기
+
+concurrency:
+  group: desktop-installer-helper
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: win-installer
+  ASSET_NAME: Lively-Setup.exe
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 올리기 전에 먼저 막는다 — 이미 있는데 replace 가 아니면 빌드·서명도 하지 않는다(서명 한 번도 월 사용량이다).
+      - name: 게시 자리 확인
+        if: inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPLACE: ${{ inputs.replace }}
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$ASSET_NAME"; then
+            if [ "$REPLACE" != "true" ]; then
+              echo "::error::$RELEASE_TAG 에 $ASSET_NAME 가 이미 있다. 덮으면 쌓인 SmartScreen 평판이 0 으로 돌아간다 — 정말 바꿀 때만 replace 를 켠다"
+              exit 1
+            fi
+            echo "::warning::$ASSET_NAME 를 덮는다 — 새 파일을 Microsoft 검토에 다시 넣어야 한다"
+          fi
+
+      - name: 아이콘
+        working-directory: desktop
+        run: node tools-gen-icon.mjs
+
+      - name: 빌드
+        working-directory: desktop/installer-helper
+        run: dotnet build -c Release -o out
+
+      # 판정 규칙(태그·latest.yml·서명자 대조)을 사례 표로 점검한다 — desktop-core.test.mjs Z8 과 같은 표다.
+      - name: 자가 점검
+        working-directory: desktop/installer-helper
+        run: |
+          $p = Start-Process -FilePath .\out\Lively-Setup.exe -ArgumentList '--self-test', '--log', 'selftest.log' -Wait -PassThru
+          Get-Content selftest.log -Encoding utf8
+          if ($p.ExitCode -ne 0) { throw "자가 점검 실패 (종료 코드 $($p.ExitCode))" }
+
+      # release-desktop 의 electron-builder 와 같은 모듈·같은 인자로 서명한다(app-builder-lib 26.16.1 windowsSignAzureManager.js).
+      #  자격이 없으면 실패로 끝낸다 — 서명 없는 도우미는 이 일의 목적(평판을 쌓을 서명된 고정 파일)에 맞지 않는다.
+      - name: 서명 (Azure Artifact Signing)
+        working-directory: desktop/installer-helper
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          # 계정·프로필·엔드포인트는 release-desktop.yml 「빌드 (win)」과 같아야 한다(Z8 이 대조한다).
+          WIN_SIGN_ENDPOINT: https://krc.codesigning.azure.net
+          WIN_SIGN_ACCOUNT: lively
+          WIN_SIGN_PROFILE: livelydesktop
+        run: |
+          foreach ($k in 'AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET') {
+            if (-not [Environment]::GetEnvironmentVariable($k)) { throw "서명 자격 $k 가 없다 — 도우미는 서명 없이 내보내지 않는다" }
+          }
+          try { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null } catch { Write-Host "NuGet 공급자 설치 건너뜀: $_" }
+          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
+          $file = (Resolve-Path .\out\Lively-Setup.exe).Path
+          Invoke-TrustedSigning -Endpoint $env:WIN_SIGN_ENDPOINT -CertificateProfileName $env:WIN_SIGN_PROFILE -CodeSigningAccountName $env:WIN_SIGN_ACCOUNT -TimestampRfc3161 'http://timestamp.acs.microsoft.com' -TimestampDigest 'SHA256' -FileDigest 'SHA256' -Files $file
+
+      # 유효 · 타임스탬프 · 서명자가 게시자와 맞는지 — 도우미가 받은 설치 파일에 하는 대조와 같은 이름이다.
+      - name: 서명 확인
+        working-directory: desktop
+        env:
+          WIN_SIGN_PUBLISHER: "CN=라이블리, O=라이블리"
+        run: |
+          $file = (Resolve-Path installer-helper\out\Lively-Setup.exe).Path
+          node win-signing.mjs verify-files $file
+          if ($LASTEXITCODE -ne 0) { throw "서명 확인 실패" }
+
+      # 서명된 도우미로 받는 길 전체를 실제로 돈다 — 최신 릴리스 태그 → latest.yml → 설치 파일 받기 → sha512 → 서명·서명자.
+      - name: 받기·확인 점검 (화면 없음 · 설치하지 않음)
+        working-directory: desktop/installer-helper
+        run: |
+          $p = Start-Process -FilePath .\out\Lively-Setup.exe -ArgumentList '--dry-run', '--log', 'dryrun.log' -Wait -PassThru
+          Get-Content dryrun.log -Encoding utf8
+          if ($p.ExitCode -ne 0) { throw "받기·확인 점검 실패 (종료 코드 $($p.ExitCode))" }
+
+      # 화면 모드 — 창을 띄워 받기·확인까지 하고 설치하지 않고 스스로 닫힌다. 창이 안 뜨거나 멈추면 게시하지 않는다.
+      - name: 화면 점검 (설치하지 않음)
+        working-directory: desktop/installer-helper
+        run: |
+          $p = Start-Process -FilePath .\out\Lively-Setup.exe -ArgumentList '--no-install', '--log', 'ui.log' -PassThru
+          $null = $p.Handle    # 핸들을 먼저 잡아야 끝난 뒤 ExitCode 를 읽을 수 있다(-Wait 없이 -PassThru 만 쓸 때의 함정)
+          if (-not $p.WaitForExit(300000)) { Stop-Process -Id $p.Id -Force; Get-Content ui.log -Encoding utf8; throw "화면 점검이 5분 안에 끝나지 않았다" }
+          Get-Content ui.log -Encoding utf8
+          if ($p.ExitCode -ne 0) { throw "화면 점검 실패 (종료 코드 $($p.ExitCode))" }
+
+      - name: 해시
+        working-directory: desktop/installer-helper
+        run: |
+          $item = Get-Item .\out\Lively-Setup.exe
+          $hash = (Get-FileHash $item.FullName -Algorithm SHA256).Hash
+          Write-Host "SHA256 $hash · $($item.Length) 바이트"
+          "HELPER_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          @("### 설치 도우미", "- SHA256 ``$hash``", "- 크기 $($item.Length) 바이트") | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lively-installer-helper
+          path: |
+            desktop/installer-helper/out/Lively-Setup.exe
+            desktop/installer-helper/*.log
+          if-no-files-found: warn
+
+      - name: 게시 (사전 릴리스 win-installer)
+        if: inputs.publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPLACE: ${{ inputs.replace }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          notes="Windows 에서 라이블리를 처음 설치할 때 받는 설치 도우미입니다.
+
+          - 실행하면 최신 라이블리 설치 파일을 받아, 파일 해시와 서명자(라이블리)를 확인한 뒤 설치합니다.
+          - 버전이 바뀌어도 이 파일은 그대로입니다. SmartScreen 평판이 이 파일 하나에 쌓이게 하려고 고정해 둡니다.
+          - 앱 업데이트는 이 릴리스와 무관합니다. 설치된 앱이 최신 릴리스에서 직접 받습니다.
+
+          SHA256: \`${HELPER_SHA256}\`
+          빌드: ${RUN_URL} (커밋 ${GITHUB_SHA})"
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Windows 설치 도우미" --notes "$notes"
+          else
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false --notes "$notes"
+          fi
+          clobber=()
+          if [ "$REPLACE" = "true" ]; then clobber=(--clobber); fi
+          gh release upload "$RELEASE_TAG" "desktop/installer-helper/out/$ASSET_NAME" --repo "$GITHUB_REPOSITORY" ${clobber[@]+"${clobber[@]}"}
+
+      # 올라간 파일이 점검한 그 파일인지 — 공개 주소로 다시 받아 해시를 대조한다.
+      - name: 게시 확인
+        if: inputs.publish
+        run: |
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:ASSET_NAME"
+          $dest = Join-Path $env:RUNNER_TEMP 'published.exe'
+          Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+          $got = (Get-FileHash $dest -Algorithm SHA256).Hash
+          if ($got -ne $env:HELPER_SHA256) { throw "공개 주소의 파일이 점검한 파일과 다르다: $got ≠ $env:HELPER_SHA256" }
+          Write-Host "✓ 게시 확인 — $url · SHA256 $got"

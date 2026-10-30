@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    라이블리 Windows 설치 도우미 (#4066) — 왜 있는지는 Program.cs 머리말.
+    빌드·서명·게시는 .github/workflows/desktop-installer-helper.yml 이 한다(수동 실행 전용).
+
+    .NET Framework 4.8 을 고른 이유: Windows 10(1903 이후)·11 에 기본으로 들어 있다. 도우미가 런타임을 따로
+    받거나 품지 않아도 되고, exe 가 수십 KB 로 끝난다. 빌드는 .NET SDK 의 참조 어셈블리 패키지로 어느 OS 에서나 된다.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>10</LangVersion>
+    <AssemblyName>Lively-Setup</AssemblyName>
+    <RootNamespace>Lively.Setup</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon Condition="Exists('../build/installer-helper.ico')">../build/installer-helper.ico</ApplicationIcon>
+    <CodePage>65001</CodePage>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <DebugType>none</DebugType>
+    <!-- 배포물은 exe 하나다 — 곁 파일(.exe.config)을 만들지 않고, 파일 속성의 제품 버전에 커밋 해시를 붙이지 않는다. -->
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!-- 파일 속성(자세히)에 보이는 값. 버전은 도우미 자신의 것이다 — 앱 버전과 무관하다(Program.cs 머리말). -->
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>Lively</Product>
+    <Company>라이블리</Company>
+    <AssemblyTitle>라이블리 설치 도우미</AssemblyTitle>
+    <Description>라이블리 최신 설치 파일을 받아 확인한 뒤 실행합니다.</Description>
+    <Copyright>© 라이블리</Copyright>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <!-- 판정 사례 표 — 자가 점검 인자(self-test)가 읽는다. desktop-core.test.mjs Z8 도 같은 파일을 읽는다. -->
+    <EmbeddedResource Include="selftest-cases.tsv" LogicalName="selftest-cases.tsv" />
+  </ItemGroup>
+</Project>

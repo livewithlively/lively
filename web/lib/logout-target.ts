@@ -20,3 +20,16 @@ export function logoutRedirectTarget(loginRedirectUrl: string | null | undefined
   if (returnTo) door.searchParams.set('to', returnTo);
   return door.toString();
 }
+
+// IdP(SSO) 로그아웃 문 — 서버의 로그아웃 응답 {ok:true, redirect?} 에서 갈 곳을 꺼낸다.
+//  IdP 로 로그인한 세션이면 서버가 IdP 의 end_session 주소를 주고, 브라우저가 그리로 가야 IdP 세션까지 끝난다
+//  (안 가면 «SSO 로 로그인» 한 번에 묻지도 않고 같은 계정으로 돌아온다). 없거나 https 절대주소가 아니면 null — 종전 흐름.
+//  https 만 받는 이유: 이 주소의 쿼리에 id_token(개인정보)이 실린다 — 서버도 https 인 로그아웃 문만 쓴다(ee/auth/oidc.ts).
+export function ssoLogoutTarget(body: unknown): string | null {
+  const raw = body && typeof body === 'object' ? (body as { redirect?: unknown }).redirect : null;
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' ? u.toString() : null;
+  } catch { return null; }
+}

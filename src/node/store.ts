@@ -27,13 +27,20 @@ export interface OrgNode {
   platform: string | null; agent_ver: string | null; agent_caps: string[] | null; agent_harnesses: string[] | null; host: string | null;
   // #1849 — 노드가 hello 로 보고한 잠자기 억제 상태. NULL = **모름**(구 번들)이지 '안 걸림'이 아니다.
   keep_awake: KeepAwakeStatus | null;
+  // #5043 — 이 컴퓨터의 하네스 종료 규칙 값(sessions/node-stop-rule-policy.ts NodeStopRuleOverride). NULL·빈 칸 = 워크스페이스 기본값을 따른다.
+  //  읽는 쪽은 반드시 parseNodeStopRuleOverride 로 거른다(손으로 넣은 값·깨진 행이 끄는 시각을 흔들지 않게).
+  stop_rule?: unknown;
   last_seen: string | null; created_by: string | null; created_at: string; updated_at: string;
 }
 
-const ID_RE = /^[a-z0-9][a-z0-9-]{1,40}$/;
+//  ⚠ 상한은 **64자**다(#3797 T7 — 종전 41). 세션 호스트 id 가 `sesshost-<slug>-<node>` 로 노드 성분을
+//   갖게 되면서 실측 좌표(슬러그 26 + 노드 19)가 41 을 넘는다. 자르면 두 노드가 같은 행(=같은 토큰)을
+//   쓰게 되므로 자를 수 없고, 이 레포의 다른 id 규칙(capabilities/*.ts)이 이미 64자라 그 자로 맞춘다.
+//   ★ 상한을 **올리는** 변경이라 기존 id 는 한 건도 무효가 되지 않는다(컬럼은 TEXT).
+const ID_RE = /^[a-z0-9][a-z0-9-]{1,63}$/;
 export function normalizeNodeId(raw: string): string {
   const id = (raw || "").toLowerCase().trim().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  if (!ID_RE.test(id)) throw new HttpError(400, "노드 id 형식이 잘못되었습니다(소문자·숫자·하이픈 2~41자)");
+  if (!ID_RE.test(id)) throw new HttpError(400, "노드 id 형식이 잘못되었습니다(소문자·숫자·하이픈 2~64자)");
   return id;
 }
 
@@ -135,6 +142,11 @@ export async function setNodeShared(id: string, shared: boolean): Promise<void> 
   await itemsPool.query(`UPDATE org_node SET shared=$2, updated_at=now() WHERE id=$1`, [id, shared]);
 }
 
+/** #5043 — 이 컴퓨터의 하네스 종료 규칙 값. null = 전부 워크스페이스 기본값을 따른다. 합치기·검증은 부르는 쪽(node-stop-rule-policy.ts)이 끝냈다. */
+export async function setNodeStopRule(id: string, rule: Record<string, unknown> | null): Promise<void> {
+  await itemsPool.query(`UPDATE org_node SET stop_rule=$2::jsonb, updated_at=now() WHERE id=$1`, [id, rule === null ? null : JSON.stringify(rule)]);
+}
+
 /**
  * 세션 호스트 등록의 **주인과 선언을 맞춘다** (#2600 T2 d5). 호출부는 게이트웨이의 자기 프로비저닝
  *  한 곳뿐이다(node/session-host-provision.ts) — 사람이 부르는 REST 표면은 없다.
@@ -154,6 +166,23 @@ export async function setNodeOwnerAndSessionHost(id: string, owner: string): Pro
   );
   if (r.rowCount !== 1) throw new HttpError(404, `노드 없음: ${id}`);
   return r.rows[0] as OrgNode;
+}
+
+/**
+ * 이 노드의 **세션 호스트 선언만** 내린다 — 행·토큰은 그대로 둔다. (#2600 T2 d5-b)
+ *
+ * ⚠ 지우지 않는 이유: 같은 (노드, 테넌트)가 다시 켜지면 `ensureSessionHostNode` 가 그 행을 그대로
+ *  쓴다(id·토큰 연속성). 선언만 내리면 목록 소유 판정(`sessionHostVerdict`)의 `declared` 에서 빠지고,
+ *  다시 켤 때 `session_host=TRUE` 로 되돌아온다.
+ *
+ * @returns 실제로 내렸나(이미 false 이거나 행이 없으면 false — 멱등)
+ */
+export async function undeclareNodeSessionHost(id: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    `UPDATE org_node SET session_host=FALSE, updated_at=now() WHERE id=$1 AND session_host=TRUE`,
+    [id],
+  );
+  return r.rowCount === 1;
 }
 
 export async function deleteNode(id: string, actor?: string): Promise<{ deleted: boolean }> {

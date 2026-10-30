@@ -85,8 +85,8 @@ function runCli(args, home) {
       ...process.env, ...sandboxEnv({ home, tmp: home }),
       LIVELY_HOME: home, LIVELY_NO_BROWSER: "1", CI: "1",
       PATH: pathWith(join(home, "nobin"), ""),
-      // 샌드박스는 네트워크를 막지만 **고포트 loopback 만** 예외로 연다(host-effects.sandboxNetworkAllowed).
-      //  이 테스트의 스텁이 정확히 그것이다(listen(0) → 32768+). 바깥으로는 여전히 한 바이트도 못 나간다.
+      // 샌드박스는 네트워크를 막지만 **그 기계의 임시 포트 범위의 loopback 만** 예외로 연다(host-effects.sandboxNetworkAllowed ·
+      //  sandboxPortMin). 이 테스트의 스텁이 정확히 그것이다(listen(0)). 바깥으로는 여전히 한 바이트도 못 나간다.
       LIVELY_HOST_EFFECTS_TEST_MODE: "sandbox",
     };
     delete env.LIVELY_TOKEN; delete env.LIVELY_GATEWAY_URL;

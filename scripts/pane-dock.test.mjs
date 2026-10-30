@@ -223,8 +223,7 @@ check(!!bringUp && /showZone\(zone, \{ bottomOn: lay\.bottomOn, narrow: narrow\(
 check(/show: \(k\) => bringUp\(zoneOf\(k\) \|\| 'side', k\)/.test(PANES) && !/show: \(k\) => \{ const z = zoneOf\(k\) \|\| 'side'; revealZone\(z\)/.test(PANES),
   "W12b 독의 «보여 주기» 는 bringUp — 타임라인(옛 기본 배치에선 닫힌 아래 칸)을 눌러도 터미널 밑에서 튀어나오지 않는다");
 check(/if \(!found\) \{ addPart\('side', type\); return; \}\s*(?:if \(zoneVisible\(found\.zone\) && reselect\(found\.zone, found\.key\)\) return;\s*)?bringUp\(found\.zone, found\.key\);/.test(PANES) && /const key = lay\[z\]\.find\(\(k\) => tabBase\(k\) === 'web'\)!;\s*bringUp\(z, key\);/.test(PANES)
-  //  stage 판엔 붙은 앱(#4225) 감시가 없다 — 있을 때만 그 두 길도 본다.
-  && (!/watchSessionApps\(/.test(PANES) || (/if \(added\.length\) \{ bringUp\(z, SESSAPP_TAB\); return; \}/.test(PANES) && /if \(!z\) return;\s*bringUp\(z, SESSAPP_TAB\);/.test(PANES)))
+  && /if \(added\.length\) \{ bringUp\(z, SESSAPP_TAB\); return; \}/.test(PANES) && /if \(!z\) return;\s*bringUp\(z, SESSAPP_TAB\);/.test(PANES)
   && /const zone: Zone = found \? showZone\(found\.zone, \{ bottomOn: lay\.bottomOn, narrow: narrow\(\) \}\) : landZone\(findTab\('editor'\)\?\.zone \?\? 'side'\);/.test(PANES),   // #4443 10-05 — 새 뷰어는 아래 칸에 아예 안 선다(landZone)
   "W12c 머리줄 단추(showPart) · 웹 칸 · 붙은 앱(새로 붙음 · 다시 누름) · 파일 뷰어도 같은 길 — 닫힌 아래 칸을 펼치지 않는다");
 //  곁칸 아래 독은 내용 위에 떠 있다(원준 10-02 «뒤에 그냥 뭐 없이 둥둥 떠있게») — 본문을 올리지 않고, 목록은 끝에만 · 입력칸 앱은 앱 끝에 빈 자리.

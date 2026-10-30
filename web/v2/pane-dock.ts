@@ -36,11 +36,12 @@ import { shellPrefStore, shellPrefsPush } from './shell-prefs.js';
 import { ctxMenu, pnIcon, pnIconName } from './panes-kit.js';
 import { ctxIsOpen, type CtxRow } from './ctx-menu.js';
 import { bindCtx, type CtxResult } from './ctx-registry.js';
-import { iconPath } from '../lib/icon-paths.js';
+import { appGlyphName, iconPath } from '../lib/icon-paths.js';
 import { appMatches, appRank } from '../lib/app-match.js';
 import { openLaunchpad } from './apps.js';
-import { appGlassIcon, builtinAppIcon } from './glass-icon.js';
+import { appGlassIcon, installedAppFace } from './glass-icon.js';
 import { listSessionApps, type SessionApp } from './app-session.js';
+import { hasAppScreen } from '../lib/app-screen.js';   // #4485 후속 — 서버가 화면을 만드는 앱도 화면 앱
 import {
   DOCK_DEFAULTS, DOCK_METRICS, DOCK_MIN, MAG_GROW, SCALE_PRESETS, appColor, dockClick, dockInset, dockItems, dockPins, dockThickness, dragScale, effectiveHome, fitIconSize, floatAt, floatCenter, floatIconSize,
   magnify, movePinBefore, pinSlot, placeDock, readDockPrefs, scaledIcon, togglePin, writeDockPins, writeDockPrefs,
@@ -59,6 +60,8 @@ export interface DockHost {
   recent(): readonly string[];
   /** 탭 이름(뷰어 = 파일명 · 웹 = 사이트 · 붙은 앱 = 앱 이름). */
   title(key: string): string;
+  /** 그 탭이 단 얼굴(앱 아이콘 이름 — 그림과 색이 한 이름) 또는 null. 붙은 앱이 쓴다(#4592): 독의 그 칸이 «앱» 의 네모 넷이 아니라 그 앱의 아이콘으로 선다. */
+  face?(key: string): string | null;
   show(key: string): void;
   open(type: string): void;
   close(key: string): void;
@@ -260,7 +263,7 @@ export function mountDock(host: DockHost): DockHandle {
     floatW = minNow ? DOCK_MIN.len : floatWidth(n, size, extra + (host.narrow() ? 0 : HANDLE_FLOAT));
     const side = geom?.side ?? 'right';
     const s = [home, side, prefs.mag, size, act, host.narrow(), minNow,
-      ...items.map((i) => `${i.type}:${i.keys.join(',')}:${i.pinned ? 1 : 0}:${i.active ? 1 : 0}:${i.type === 'sessapp' ? host.title('sessapp') : ''}`)].join('|');
+      ...items.map((i) => `${i.type}:${i.keys.join(',')}:${i.pinned ? 1 : 0}:${i.active ? 1 : 0}:${i.type === 'sessapp' ? host.title('sessapp') + '/' + (host.face?.('sessapp') || '') : ''}`)].join('|');
     if (force || s !== sig) {
       sig = s;
       build(cat, side);
@@ -361,14 +364,17 @@ export function mountDock(host: DockHost): DockHandle {
 
   function itemBtn(it: DockItem, app: DockApp): HTMLElement {
     const name = it.type === 'sessapp' ? host.title('sessapp') : app.name;
+    //  붙은 앱은 제 얼굴로 선다 — 그림 · 색 둘 다 그 앱의 것(앱 찾기 · 탭과 같아야 한 앱으로 읽힌다).
+    const face = it.type === 'sessapp' ? host.face?.('sessapp') || null : null;
+    const color = face || appColor(it.type);
     const n = it.keys.length;
     const b = el('button', {
       class: 'pn-dock-it' + (it.active ? ' on' : '') + (n ? ' run' : '') + (it.pinned ? ' pin' : ''),
-      type: 'button', 'data-type': it.type, style: `--ac: var(--gi-c-${appColor(it.type)})`,
+      type: 'button', 'data-type': it.type, style: `--ac: var(--gi-c-${color})`,
       'aria-label': name + (n > 1 ? ` — 열린 창 ${n}개` : n ? ' — 열려 있음' : ''),
       'aria-pressed': String(it.active),
     },
-    el('span', { class: 'pn-dock-ic' }, tile(app.glyph, appColor(it.type))),
+    el('span', { class: 'pn-dock-ic' }, tile(face ? appGlyphName(face) : app.glyph, color)),
     el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' }, ...Array.from({ length: Math.min(3, n) }, () => el('i')))) as HTMLElement;
     b.dataset.name = name;
     b.addEventListener('click', (e) => onItemClick(e as MouseEvent, it, app));
@@ -958,11 +964,11 @@ export function mountDock(host: DockHost): DockHandle {
       }))) : null;
       //  ② 이 세션에 붙일 앱 — 화면이 있거나 AI 가 쓸 데이터가 있는 설치 앱(시스템 앱 제외). 붙으면 곁칸에 그 앱 탭이 선다.
       const sid = host.curSession();
-      const att = (sApps ?? []).filter((a) => a.id !== 'ai-session' && !a.system && (a.pages.length > 0 || a.tables.length > 0));
+      const att = (sApps ?? []).filter((a) => a.id !== 'ai-session' && !a.system && (hasAppScreen(a) || a.tables.length > 0));
       const attQ = byQ(att.map((a) => ({ ...a, desc: a.id })));
       const secAtt = !host.attach ? null : sApps === null ? section('이 세션에 붙이기', '불러오는 중…', [])
         : attQ.length ? section('이 세션에 붙이기', sid ? 'AI 도 같이 써요 · 누르면 사이드바에 붙어요' : '세션을 열면 붙일 수 있어요', attQ.map((a) => tileBtn({
-          ic: appGlassIcon(builtinAppIcon(a.id, a.pages.length > 0)), name: a.title, off: !sid,
+          ic: appGlassIcon(installedAppFace({ id: a.id, hasUi: hasAppScreen(a), icon: a.icon })), name: a.title, off: !sid,
           hint: sid ? `「${a.title}」을(를) 이 세션에 붙여요` : '세션을 열면 붙일 수 있어요',
           onClick: () => { close(); void host.attach?.({ id: a.id, title: a.title }); },
         }))) : null;

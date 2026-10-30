@@ -132,14 +132,38 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
   //   원인은 `chatFirst()` 가 두 뜻을 겸한 것 — «codex app-server 인가»(층을 붙일 근거)와
   //   «대화창이 본자리인가»(어느 탭으로 열지)를 한 함수가 답하고 있었다. chatMode 가 'tmux' 인
   //   claude 는 첫 뜻으로 거짓이라, 둘째 뜻까지 거짓이 되어 터미널이 기본이 됐다.
-  //  ★ #4135 — «코덱스는 무조건 터미널»(!isCodex())을 걷어냈다. 서버가 codex 를 tmux(TUI)로 띄우므로 그 세션은
-  //   chatMode='tmux' 라 이 식만으로 터미널이 본자리가 된다. 하네스 이름으로 덮으면 **화면만** 바뀌어,
-  //   pane 이 셸인 옛 app-server 세션에서 사람이 친 말이 zsh 로 간다(원준님 실측 2026-09-25).
-  ok(/const chatHome = \(\): boolean => chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
-    "㉚ ★ «대화창이 본자리인가» 는 세션의 모드가 정한다 — 하네스 이름으로 덮지 않는다");
+  //  ★★ #4135 — **코덱스는 언제나 터미널이 본자리다**(원준님 지시 2026-09-25). 한 번 걷어냈다가 되돌린 줄이다:
+  //   걷어낸 이유(«pane 이 셸인 app-server 세션을 터미널로 열면 친 말이 zsh 로 간다»)는 셸 안내줄 + [터미널로
+  //   넘기기] 가 이미 메웠다. 새 세션은 이 항이 없어도 터미널이고(chatMode='tmux'), 이 항이 실제로 가르는 것은
+  //   **이 변경 전에 태어난 app-server 세션**이다 — 거기서도 사람은 터미널을 먼저 본다.
+  ok(/const isCodex = \(\): boolean => String\(target\.raw\?\.harness \|\| ''\) === 'codex';/.test(chat),
+    "㉚ 코덱스 여부를 하네스 행으로 판정한다");
+  ok(/!isCodex\(\) && \(chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode/.test(chat),
+    "㉚-b ★ 코덱스는 app-server·대화 런타임 여부와 무관하게 터미널을 먼저 연다");
+  //  (#4970) 리브 세션은 이름 글자(livChat)가 아니라 셸이 리브 좌표로 알아본다. (#4940) 셸은 리브 세션에 chatHome 을 안 준다(일반 세션 보기) —
+  //   chatHome 은 화면이 명시로 대화를 요청한 자리 몫으로 남는다. 옛 킥오프만 이름(2턴과 함께 걷는다).
+  ok(/const chatHome = \(\): boolean => livKickoff\(\) \|\| !!opts\.chatHome/.test(chat),
+    "㉚-c 명시 요청(chatHome)·옛 킥오프는 코덱스여도 대화가 본자리다(그건 하네스 축이 아니다)");
+  //  ㉚-d #4632 앱빌더 시험 세션은 터미널로 바로 열린다(원준 2026-10-16 «그냥 한 방에 터미널로») — 대화 겹으로 바꿔 보면 앱빌더가 넣은 첫 지시는
+  //   사람 말로 그리지 않는다(«이거 안보여줄 수는 없나?»): 라이브(applyLine) · 되그리기(older) · 낙관 첫 말 · 되감기 넷 다.
+  ok(!/trySess\(\)/.test(chat), "㉚-d 시험 세션을 대화 보기로 붙잡지 않는다(터미널이 본자리)");
+  ok(/if \(isHiddenBrief\(text\)\) \{ cur = newRec\(null, o\.timestamp\); running = true; return; \}/.test(chat)
+    && /if \(isHiddenBrief\(ut\)\) \{ b = \{ text: null,/.test(chat)
+    && /opts\.firstPrompt && !isHiddenBrief\(String\(opts\.firstPrompt\)\)/.test(chat),
+    "㉚-d 시험 세션의 첫 지시는 라이브 · 되그리기 · 낙관 첫 말 어디서도 말풍선이 되지 않는다");
+  {
+    const trail = readFileSync(join(root, "web/session-trail.ts"), "utf8");
+    //  #4850 — 되감기의 제외 규칙(끊김·이어 가기·주입·시험 세션 첫 지시)을 notHumanSay 한 벌로 모았다(사람 말 줄 · 끼워 넣은 말 두 가지가 같이 쓴다).
+    ok(/export const isHiddenBrief = \(t: string\): boolean => isTrySessionTitle\(t\);/.test(trail)
+      && /export const notHumanSay = \(t: string\): boolean => [^\n]*\|\| isHiddenBrief\(t\);/.test(trail)
+      && /if \(o\.isMeta \|\| !text\.trim\(\) \|\| notHumanSay\(text\)\) continue;/.test(trail)
+      && /if \(!notHumanSay\(q\.text\)\) trailSay\(/.test(trail),
+      "㉚-d 되감기(발자취)도 시험 세션의 첫 지시를 사람 말로 세우지 않는다 — 판정은 시험 세션 첫 지시 머리(lib/builder-flow TRY_TITLE_RE)");
+  }
   //  ⚠ 항이 **더 붙는 것**은 막지 않는다 — #3847 이 «서버가 관측 못 한 세션(observed:false)은 대화로 연다» 를
   //   더했다. 여기서 재는 것은 «첫 화면의 축이 chatHome() 인가» 다(chatFirst() 로 정하면 claude 가 터미널로 열린다).
-  ok(/setMode\(chatHome\(\)[^;\n]{0,60}\? 'chat' : 'term'\)/.test(chat),
+  //  #4794 — 첫 화면 판정이 chatFirstView 로 꺼내졌다(그 뒤 «말을 보낸 직후» 가 붙는다). 그 축이 여전히 chatHome() 에서 시작하는지 잰다.
+  ok(/const chatFirstView = chatHome\(\)[^;\n]{0,80};[\s\S]{0,600}setMode\(chatFirstView[^;\n]{0,40}\? 'chat' : 'term'\)/.test(chat),
     "㉛ ★ 첫 화면을 그 축으로 정한다 — chatFirst() 로 정하면 claude 가 터미널로 열린다");
   ok(/!modeChosen && [^;\n]{0,24}mode === 'chat' && !chatHome\(\)/.test(chat),
     "㉜ tmux 라고 되돌리는 분기가 대화 런타임 세션을 되돌리지 않는다(두 줄이 서로 밀치면 화면이 깜빡인다)");
@@ -200,10 +224,22 @@ const V = await import(join(root, "public/app/session-surface-view.js"));
 {
   const sc = read("web/session-chat.ts");
   ok(/class: 'sc-shellbar'/.test(sc), "㉚ 셸 pane 안내줄을 그린다");
-  ok(/function paintShellBar\(\)/.test(sc) && /const shellPane = chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
-    "㉛ ★ 판정은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
+  ok(/function paintShellBar\(\)/.test(sc) && /chatFirst\(\) \|\| String\(target\.raw\?\.runtimeMode \|\| ''\) === 'chat'/.test(sc),
+    "㉛ ★ 판정의 바탕은 «pane 이 셸인가» 두 갈래다(codex app-server · 대화 런타임) — 모르면 안 띄운다");
   ok((sc.match(/paintShellBar\(\);/g) || []).length >= 2,
     "㉜ ★ setMode 와 목록 갱신 **둘 다** 다시 그린다 — 행이 늦게 오는 세션(방금 만든 것)이 안내를 놓치면 안 된다");
+  //  ★ #4135 — **프레임이 본 것이 목록을 이긴다.** 노드 스냅샷이 낡으면 목록은 «이 세션은 app-server» 라고
+  //   말하는데, 그 값만 믿으면 멀쩡히 코덱스가 도는 터미널 위에 «여기 친 말은 Codex 에게 안 갑니다» 라는
+  //   거짓 경고가 선다(원준님 실측 2026-09-25: «이건 왜 뜨는거야? 밑에서 입력 잘만 되는데?»).
+  ok(/paneShell !== false && \(chatFirst\(\)/.test(sc),
+    "㉝-b ★ pane 에서 셸이 아닌 것이 돌고 있으면 안내줄을 띄우지 않는다(거부권)");
+  ok(/m\.paneShell === true \|\| m\.paneShell === false/.test(sc),
+    "㉝-c 프레임이 보낸 판정만 받는다 — «모름»(null·없음)으로 덮지 않는다");
+  const term = read("web/standalone/terminal.ts");
+  ok(/paneShell: lastPaneCmd \? isShellCmd\(lastPaneCmd\) : null/.test(term),
+    "㉝-d 판정은 프레임이 한다 — 목록 두 벌을 만들지 않는다");
+  ok(/postPaneCmd\(String\(st\.cmd \|\| ''\)\)/.test(term),
+    "㉝-e pane 상태가 올 때마다 알린다(재접속·앱 교체에도 따라간다)");
   ok(/onclick: \(\) => void handoffToTerminal\(\)/.test(sc), "㉝ 안내줄의 단추가 넘기기에 배선돼 있다(죽은 단추 금지)");
   ok(/async function handoffToTerminal/.test(sc) && /codex-chat\/release/.test(sc),
     "㉞ 넘기기는 release 통로를 부른다");

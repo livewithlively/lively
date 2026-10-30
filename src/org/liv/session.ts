@@ -9,8 +9,9 @@
 //  보통 세션이 됐다(상민님 결정 2026-09-16).
 //
 //  ── 한 사람에 세션 하나 ──
-//  · 리브 탭 · 처음 설정 킥오프 · 증류 2턴이 **같은 세션**을 본다. 좌표는 liv_profile.liv_session(워크스페이스 층)이고,
-//    없으면 킥오프가 연 세션(welcome.session_id)이 폴백이다.
+//  · 레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘] · 증류 2턴이 **같은 세션**을 본다(#4970 «리브 = 세션 하나»,
+//    상민님 결정 2026-10-22 — 입구는 하나, 일감만 다르다: me_liv_open). 좌표는 liv_profile.liv_session(워크스페이스 층)이고,
+//    없으면 옛 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다.
 //  · 세션이 회수돼 복원되면 새 id 가 된다 — 좌표는 복원 이정표(resolveSessionSuccessor)를 따라가 읽고, 읽은 김에 고쳐 적는다.
 //  · 작업 폴더는 <개인 루트>/liv 다 — 리브 부팅 훅(org_hook liv-session-boot)의 게이트가 basename(cwd) === "liv" 다.
 //    이 폴더가 아니면 그 세션은 리브의 정체성·현황을 못 받는다.
@@ -27,8 +28,9 @@ import { LIV_SUBPATH } from "./folder.js";
 //  리브 폴더 이름은 잎 모듈(folder.ts)에 있다 — 세션 생성의 신뢰 판정도 같은 값을 본다.
 export { LIV_SUBPATH };
 /**
- * 리브 탭에서 첫 말로 연 세션의 이름. 화면(web/session-chat.ts)이 이 글자로 리브 세션을 알아보고 대화창으로 연다
- *  (liv-session.test 가 두 글자를 맞춘다). 킥오프 세션 이름은 kickoff.ts LIV_SESSION_LABEL 이다.
+ * 리브 세션의 이름(사람이 사이드바에서 보는 이름). (#4970) 화면은 이 글자로 리브 세션을 알아보지 않는다 — 셸이 리브 좌표
+ *  (liv_profile.liv_session)로 알아본다. 서버의 리브 답 알림(answer-notify)이 좌표를 못 읽을 때의 보조 단서로만 쓴다.
+ *  킥오프 세션 이름은 kickoff.ts LIV_SESSION_LABEL 이다.
  */
 export const LIV_CHAT_LABEL = "리브 — 대화";
 /** 첫 말 상한 — 사람이 채팅창에 치는 양이다(자료 본문은 올리기로 간다). */
@@ -100,25 +102,63 @@ export async function currentLivSessionId(userId: string, o: { heal?: boolean } 
 export interface OpenedLivSession { session_id: string; harness: string; label: string; session: LaunchedSession }
 
 /**
+ * (순수) 리브 세션을 띄울 하네스 — 지금 로그인이 확인된 것(usable) 가운데 세션으로 띄울 수 있는 것. 처음 설정 때 기억해 둔 것
+ *  (remembered — welcome.harnesses)이 그 안에 있으면 그것을 먼저 쓴다. 지금 로그인을 못 재면(usable 이 빔 — 중계 실패·프로브 실패) 기억해 둔 것.
+ *  둘 다 없으면 null — **claude 로 접지 않는다**(원준님 2026-10-30 «코덱스만 연결했는데 첫 AI 세션이 클로드로 됨»): 로그인 안 한 claude 로
+ *  열면 세션이 로그인 화면에 멈춰 첫 지시가 영영 안 들어간다. 헤드리스 잡의 «모르면 claude»(headless-harness.ts ③)를 여기선 쓰지 않는다.
+ */
+export function pickLivSessionHarness(i: { usable: readonly string[]; launchable: readonly string[]; remembered?: readonly string[] | null }): string | null {
+  const ok = (k: string): boolean => !!k && k !== "shell" && i.launchable.includes(k);
+  const usable = i.usable.filter(ok);
+  const remembered = (i.remembered ?? []).filter(ok);
+  if (usable.length) return remembered.find((k) => usable.includes(k)) ?? usable[0];
+  return remembered[0] ?? null;
+}
+
+/** 리브 세션 하네스를 정한다(pickLivSessionHarness 의 입력을 잰다). 못 정하면 던진다 — 부르는 쪽이 사유를 남긴다. */
+export async function resolveLivHarness(userId: string, remembered?: readonly string[] | null): Promise<string> {
+  const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
+  const { HARNESSES } = await import("../../terminal/catalog.js");
+  const usable = await memberUsableHarnesses(userId).catch((err) => {
+    logger.warn({ err, member: userId }, "리브 하네스 — 로그인 확인 실패(기억해 둔 하네스로 고른다)");
+    return [] as string[];
+  });
+  const picked = pickLivSessionHarness({ usable, launchable: HARNESSES.map((h) => h.key), remembered });
+  logger.info({ member: userId, usable, remembered: remembered ?? null, harness: picked }, "리브 세션 하네스 선택");
+  if (!picked) throw new Error("로그인한 AI 를 확인하지 못했습니다 — AI 를 연결한 뒤 다시 열어 주세요");
+  return picked;
+}
+
+/**
  * 리브 세션을 **새로** 연다 — 홈 입력창과 같은 문(launchSession: 세션 생성 → 워크스페이스 맵 → 앱 인스턴스).
  *  첫 지시는 initialPrompt 로 넘긴다(입력창이 뜨면 아웃박스가 넣는다 — 여기서 send-keys 를 치지 않는다).
  *  연 세션을 이 워크스페이스의 리브 좌표로 적는다. 실패는 던진다(부르는 쪽이 사람에게 이유를 말한다).
  */
-export async function openLivSession(user: LivelyUser, o: { prompt: string; label: string; harness?: string | null }): Promise<OpenedLivSession> {
+export async function openLivSession(user: LivelyUser, o: { prompt: string; label: string; harness?: string | null; remembered?: readonly string[] | null }): Promise<OpenedLivSession> {
   const userId = user?.userId;
   if (!userId) throw new Error("인증된 사용자가 아닙니다");
   const prompt = String(o.prompt ?? "").trim();
   if (!prompt) throw new Error("첫 지시가 비어 있습니다");
   // 동적 import — terminal/* 는 tmux·pty 를 끌고 오는 무거운 모듈이고 org/* 에서 정적으로 걸면 순환(check-imports) 위험.
-  const { resolveHeadlessHarness } = await import("../../node/headless-harness.js");
   const { launchSession } = await import("../../terminal/session-launch.js");
   //  하네스는 그 사람이 **로그인한 것**(claude 하드코딩 금지, #1884). 비용 주체 = 사용자.
-  const harness = await resolveHeadlessHarness(userId, o.harness ?? null);
+  //  (#4970) 부르는 쪽이 고른 하네스(me_liv_open — 로그인한 것 가운데 세션으로 띄울 수 있는 첫 번째)는 **그대로** 쓴다. 리브 세션은 보통
+  //   대화형 세션이라 헤드리스(위탁) 지원표로 거르지 않는다 — 거르면 그 표에 없는 하네스(opencode)로만 로그인한 사람에게 리브가 안 열린다(503).
+  //  고른 하네스가 없으면(처음 설정 2턴 스윕 · 리브 탭) 로그인한 것으로 정한다 — 모르면 claude 로 접지 않고 던진다(resolveLivHarness).
+  const harness = String(o.harness ?? "").trim() || await resolveLivHarness(userId, o.remembered);
+  //  (#4970) 모델·추론강도는 새 세션 화면의 기본과 같게 지정한다(catalog.sessionFlagDefaults) — 비우면 그 계정의 CLI 기본으로 떠서
+  //   무엇으로 도는지 라이블리가 말할 수 없었다. 사람이 보면서 하는 대화라 무인 자동화 기본(AUTOMATION_DEFAULTS)이 아니다.
+  //  (#5058 원준님 2026-10-27 «오토모드로») 리브 세션은 **오토모드**로 연다 — 그 하네스의 autoModeArgv(claude --permission-mode auto ·
+  //   codex --approve-for-me), 없으면 자동 승인(catalog.ts AUTO_MODE_FLAG). 리브는 처음 설정·앱 연결을 대신 하며 도구를 연달아 부른다.
+  //   승인 대기로 열면 Codex 는 도구마다 멈추고, 그 물음은 대화 칸에 안 떠 사람은 «진척이 안 된다» 만 본다(Codex 의 Shift+Tab 은 권한이 아니라
+  //   계획 모드 전환이라 사람이 풀 길도 없다). 전부 건너뛰는 자동 승인으로 하지 않는 이유: 리브는 노션·올린 파일 같은 남의 글을 읽는다 —
+  //   그 안의 지시가 승인·샌드박스 없이 돌면 안 된다(격리 리뷰). 사람이 만든 세션의 기본은 그대로다.
+  const { sessionFlagDefaults, AUTO_MODE_FLAG } = await import("../../terminal/catalog.js");
   const session = await launchSession(user, {
     kind: "task",
     label: o.label,
     rootKey: "personal", subpath: LIV_SUBPATH,
-    harness, flags: {}, autoApprove: false,
+    harness, flags: { ...sessionFlagDefaults(harness), [AUTO_MODE_FLAG]: "1" }, autoApprove: false,
     initialPrompt: prompt,
   }, { nodeId: "", invites: [] });
   const { setLivSession } = await import("../store.js");
@@ -150,20 +190,31 @@ export function serialByKey(): { run<T>(key: string, fn: () => Promise<T>): Prom
  */
 const opening = serialByKey();
 
-export interface EnsuredLivSession { session_id: string; created: boolean; session?: LaunchedSession }
+export interface EnsuredLivSession { session_id: string; created: boolean; session?: LaunchedSession; harness?: string }
+
+export interface EnsureLivOpts {
+  /**
+   * 새로 열 때만 부른다 — 그 세션을 띄울 하네스. null 이면 로그인한 AI 가 없다는 뜻이라 **열지 않고** null 을 돌려준다
+   *  (화면이 «쓰는 AI 에서 하기» 를 그린다). 생략하면 resolveLivHarness 로 정한다(모르면 claude 로 접지 않고 던진다).
+   *  로그인 확인은 비싸다(자격 파일이 없을 때 프로브 — 실측 4.3초·상한 25초) — 그래서 세션이 이미 있으면 묻지 않는다.
+   */
+  harness?: () => Promise<string | null>;
+}
 
 /**
- * 리브 탭의 첫 말 — 이미 리브 세션이 있으면 **그 세션을 돌려주고 말은 넣지 않는다**(화면이 그 세션 대화창에서 보낸다 —
- *  멈춘 세션이면 대화창이 되살리면서 보낸다). 없으면 그 말을 첫 지시로 새로 연다.
+ * 리브 세션을 확보한다 — 이미 있으면 **그 세션 id 만 돌려주고 말은 넣지 않는다**(넣는 것은 부르는 쪽 몫 — me_liv_open 이
+ *  세션에 넣는다). 없으면 그 말을 첫 지시로 새로 연다. 로그인한 AI 가 없으면(o.harness 가 null) null.
  */
-export async function ensureLivSession(user: LivelyUser, text: string): Promise<EnsuredLivSession> {
+export async function ensureLivSession(user: LivelyUser, text: string, o: EnsureLivOpts = {}): Promise<EnsuredLivSession | null> {
   const userId = user?.userId;
   if (!userId) throw new Error("인증된 사용자가 아닙니다");
   const { currentTenant } = await import("../tenant-context.js");
   return await opening.run(`${currentTenant()?.id ?? ""}|${userId}`, async () => {
     const cur = await currentLivSessionId(userId);
     if (cur) return { session_id: cur, created: false };
-    const made = await openLivSession(user, { prompt: text, label: LIV_CHAT_LABEL });
-    return { session_id: made.session_id, created: true, session: made.session };
+    const harness = o.harness ? await o.harness() : undefined;
+    if (harness === null) return null;
+    const made = await openLivSession(user, { prompt: text, label: LIV_CHAT_LABEL, harness });
+    return { session_id: made.session_id, created: true, session: made.session, harness: made.harness };
   });
 }

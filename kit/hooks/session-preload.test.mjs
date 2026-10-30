@@ -4,7 +4,7 @@
 //   ext 엔트리 = hook 명령이 sentinel 인자 `--ext-pull` 로 끝나는(=우리 소유) PostToolUse 엔트리.
 //   실행: node kit/hooks/session-preload.test.mjs  (exit 0=통과, 1=실패). 오프라인·순수(파일 I/O·네트워크 불요).
 //   ⚠ 구현을 재진술하지 않는다 — 관찰 가능한 입출력/상태변화만 단언한다(사양의 각 §행위·§엣지).
-import { reconcileExtPullWiring, applyExtPullWiring } from "./session-preload.mjs";
+import { reconcileExtPullWiring, applyExtPullWiring, claudeMcpMissing } from "./session-preload.mjs";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -329,6 +329,39 @@ run("main-guard: 직접 실행 시 main() 이 STATIC 을 주입(마커 출력)",
   rmSync(SB, { recursive: true, force: true });
   check("main-guard: exit 0", code === 0, `exit=${code}`);
   check("main-guard: main() 실행 입증(stdout 에 STATIC 마커)", out.includes(MARK), `stdout=${JSON.stringify(out.slice(0, 120))}`);
+});
+
+// ── claudeMcpMissing — 「버전이 같아도 봐야 하는 단 하나」의 판정 ──────────────
+//  ★ 이 판정이 틀리면 무슨 일이 나나: false 를 잘못 주면 MCP 등록이 날아간 멤버가 **세션을 다시 열어도
+//   영영 안 돌아온다**(2026-09-04 매니지드 실측 — 사람이 손으로 self-update 를 돌려야 했다).
+//   true 를 잘못 주면 매 세션 self-update 프로세스가 헛뜬다(reconcile 은 멱등이라 해는 없지만 낭비다).
+//  ⚠ 파손된 설정은 **판단 보류(false)** 다 — self-update 도 파손 파일은 안 건드린다(덮어써 날리지 않기 위해).
+run("claudeMcpMissing: 등록 상태별 판정", () => {
+  const SB = mkdtempSync(join(tmpdir(), "sp-mcp-"));
+  const restoreHome = applySandboxEnv({ home: SB });
+  const cfg = join(SB, ".claude.json");
+  const write = (o) => writeFileSync(cfg, typeof o === "string" ? o : JSON.stringify(o));
+  try {
+    check("설정 파일 자체가 없으면 무동작(false)", claudeMcpMissing() === false, "클로드를 안 쓰는 멤버까지 깨우면 안 된다");
+
+    write({ numStartups: 2, mcpServers: {} });
+    check("★ mcpServers 가 비면 true — 이 상태가 스스로 못 돌아오는 그 상태다", claudeMcpMissing() === true, "");
+
+    write({ numStartups: 87 });                       // 키 자체가 없는 경우(초기화 직후)
+    check("★ mcpServers 키가 아예 없어도 true", claudeMcpMissing() === true, "");
+
+    write({ mcpServers: { figma: { type: "http", url: "x" } } });
+    check("★ 남의 서버만 있고 lively 가 없으면 true", claudeMcpMissing() === true, "우리 등록이 없으면 툴이 0개다");
+
+    write({ mcpServers: { lively: { type: "stdio", command: "lively", args: ["mcp"] }, figma: {} } });
+    check("lively 가 있으면 false — 정상 세션은 여기서 끝난다", claudeMcpMissing() === false, "");
+
+    write("{ 이건 JSON 이 아니다");
+    check("파손된 설정은 판단 보류(false) — self-update 도 파손은 안 건드린다", claudeMcpMissing() === false, "");
+  } finally {
+    restoreHome();
+    rmSync(SB, { recursive: true, force: true });
+  }
 });
 
 console.log(`session-preload tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);

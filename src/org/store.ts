@@ -30,6 +30,8 @@ export {
   getHarnessMachineAlias, setHarnessMachineAlias,
   getHarnessLocalPref, setHarnessLocalPref,
   getLocalModePreferences, setLocalModePreference,
+  getLocalScopePreferences, getLocalScopePreference, updateLocalScopePreference, applyLocalScopeChange,
+  DEFAULT_RECORD_SCOPE, MAX_WORK_ROOTS, MAX_WORK_ROOT_LEN,
   getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats, setLivSession,
   setLivWelcomeProgress, listLivSecondTurnCandidates,
   memberIdByEmail, upsertMember, removeMember,
@@ -38,6 +40,7 @@ export type {
   MemberIdentity, OrgMember, ReportedStep,
   HarnessSnapshotAsset, HarnessSnapshot, HarnessSnapshots, HarnessMachineAlias, HarnessLocalPref,
   LocalSessionMode, LocalModePreference, LocalModePreferences,
+  RecordScope, LocalScopePreference, LocalScopePreferences, LocalScopeChange,
   LivWork, LivDecision, LivDeclined, LivProfile, LivSessionRef, LivWelcome, LivWelcomeProgress,
   MemberInput,
 } from "./store/members.js";
@@ -56,9 +59,9 @@ export {
   HOOK_RELAY_DECISIONS, DEFAULT_HOOK_RELAY_DECISIONS,
   getRuntimeConfig, updateRuntimeConfig, getUiSurface,
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
-  getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource,
+  getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource, getContextJobPolicySource,
 } from "./store/runtime-config.js";
-export type { OrgRuntimeConfig, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
+export type { OrgRuntimeConfig, HookRuntime, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
 
 // ── org_mcp_server(MCP 서버 레지스트리 + 프록시 스냅샷) ──
 export {
@@ -121,7 +124,7 @@ export type {
 
 // ── org_hook(커스텀 훅) ──
 export {
-  listOrgHooks, listEnabledHooks, getOrgHook, recordHookFailures, upsertOrgHook, removeOrgHook,
+  listOrgHooks, listEnabledHooks, getOrgHook, recordHookFailures, upsertOrgHook, removeOrgHook, moveOrgHookSort,
 } from "./store/hooks.js";
 export type { HookHarness, OrgHook, OrgHookHealth, OrgHookInput } from "./store/hooks.js";
 

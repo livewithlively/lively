@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 다중 이벤트 훅 — 배선(user-install)에 따라 PostToolUse·SessionStart·SessionEnd·UserPromptSubmit·Notification·Stop
-//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact))으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
+//  (+ #4217 SubagentStop · #4219 PreCompact·SessionStart(compact) · #4821 StopFailure)으로 불린다. #1221 에서 뒤의 셋이 붙어 **세션 실행 단계(작업 중·확인 필요·대기 중)를 하네스가 직접 보고**한다
 //  (종전엔 게이트웨이가 tmux 화면을 훔쳐보는 휴리스틱이었다 — reportedPhase 주석 참조). 이벤트별 동작:
 //  - SessionEnd (#1059)  → reason 이 **사용자 정상 종료**(prompt_input_exit=/exit·Ctrl-D, logout)면 게이트웨이에
 //      POST …/exited 로 보고 → 복원목록에서 '종료됨(대화 이어보기)'으로 구분(재부팅·강제kill 은 훅이 못 떠 미보고=중단됨).
@@ -27,10 +27,11 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 // 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
-import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName } from "./harness-registry.mjs";
+import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation, isForeignCursorInvocation, isShellEdit, recordForkLaunch, subagentIdOf, recordPendingFileName, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
 import { inlineWriteNudge, resetInlineTurn, preCompactInstructions, compactResumeContext } from "./record-nudge.mjs";
-import { countOpenJobs } from "./bg-jobs.mjs";
+import { openWork } from "./bg-jobs.mjs";
+import { inScopeNow } from "./record-scope.mjs";
 
 const fetch = (...args) => hostEffects.fetch(...args);
 
@@ -45,7 +46,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 camelCase 페이로드 오파싱 + 이중 기록).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 // 어드민 런타임 설정 — ~/.lively/hooks-config.json 의 hooks[name]===false 면 이 훅 비활성(fail-open: 못 읽으면 활성).
 function hookDisabled(name) {
@@ -75,8 +77,6 @@ const WRITE_TOOLS_DEFAULT = [
   // 본문 보강·댓글(#4217) — 텍스트를 가장 많이 쓰는 쓰기 툴인데 빠져 있어서, 이것만 부르고 끝낸 세션이
   //  «기록 없음»으로 막혔다(#4201 실측). 호출 수로도 knowledge_save 다음이다(project_update 275·task_update 210·task_comment 88).
   "project_update_v6", "task_update_v6", "task_comment_v6",
-  // 팀 공유 메모리
-  "memory_save",
   // 외부 원본 회수(#906) — ext MCP 등으로 끌어온 자료를 SoT 에 남긴 것도 '기록함'이다. 이게 없으면
   //  "노션 읽고 → source_save 로 남기고 종료"한 모범 세션이 기록 안 한 것으로 판정돼 너지를 맞는다.
   "source_save", "source_link_knowledge",
@@ -124,6 +124,9 @@ function effectivePullTools() {
 //   · PostToolUse      = 턴 진행 중(종전 활동 보고가 있던 자리 — 긴 턴의 신선도 유지도 겸한다).
 //   · Stop             = "Claude 가 응답을 마쳤다" → **턴 종료**. (Stop 게이트가 block 해서 턴이 이어지면 잠깐
 //     idle 로 어긋나지만, 게이트웨이 우선순위표가 스피너를 idle 보고 위에 둬서 곧바로 교정된다.)
+//   · StopFailure      = API 오류(사용 한도·인증·없는 모델 …)로 턴이 끝났다 — Claude Code 는 이때 Stop 대신 이것만 띄운다(2.1.301 실측:
+//     error=model_not_found). 이게 없으면 턴 시작의 busy 만 남아 «작업 중» 으로 10분 서 있다가 «모름» 이 되고, 사용 한도로 막힌 턴이
+//     하네스 안에서 자동 이어감을 기다리는 동안 하네스 종료 규칙이 그 대기를 못 본다(#4821 ②). 오류 종류와 무관하게 **턴 종료** 다.
 //   · Notification     = 승인 다이얼로그·MCP 입력요청·서브에이전트 입력대기 → **확인 필요**.
 //  ⚠ notification_type 은 비교적 최근 Claude Code 만 준다 — 없으면 message 문구로 판별한다(구버전에서도 작동).
 //   matcher 를 안 거는 이유도 같다: 타입 matcher 를 모르는 빌드에서 엔트리가 통째로 안 걸리면 조용히 죽는다.
@@ -133,7 +136,7 @@ function effectivePullTools() {
 //   (Claude 도 같은 이벤트를 갖지만 거기선 Notification 하나로 충분해 배선하지 않는다). 판정은 하네스 무관.
 function reportedPhase(input, event) {
   if (event === "UserPromptSubmit" || event === "PostToolUse") return "busy";
-  if (event === "Stop") return "idle";
+  if (event === "Stop" || event === "StopFailure") return "idle";
   if (event === "PermissionRequest") return "waiting";
   if (event !== "Notification") return null;
   const type = String(input?.notification_type ?? "");
@@ -165,6 +168,8 @@ try {
   const raw = await readStdin();
   let input;
   try { input = JSON.parse(raw); } catch { process.exit(0); }
+  // 기록 범위(#5016) — 작업 폴더 밖이면 인코그니토와 같다(기록 표식·넛지·세션 보고 전부 없음). 판정은 record-scope.mjs 하나.
+  if (!inScopeNow({ env: process.env, input, cwd: process.cwd(), harness: HARNESS, lively: join(homedir(), ".lively") }).inScope) process.exit(0);
   const sid = String(input?.session_id ?? "");
   const event = String(input?.hook_event_name ?? "");
 
@@ -183,7 +188,8 @@ try {
         // 자격·주소는 **env 가 이긴다** — 이 분기는 라이블리가 띄운 box pane(LIVELY_SESSION_ID=box-*)에서만 돈다. 거기 env 는
         //  띄운 쪽이 그 세션 주인 몫으로 실은 훅 토큰이고, 공유 홈의 파일은 키트를 깐 사람 것이다(#1719 · #959 리뷰).
         //  근거 전문은 hooks/session-preload.mjs 의 «훅의 자격·주소 우선순위» 주석.
-        const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
+        //  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+        const token = sessionTokenFromFile("hook", homedir(), (p) => readFileSync(p, "utf8")) || (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
         const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
         if (token) {
           const ctl = new AbortController();
@@ -290,7 +296,7 @@ try {
     const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
     // 자격·주소는 **env 가 이긴다** — 보고는 box pane(라이블리가 띄운 세션)에서만 나가고, 거기 env 는 그 세션 주인 몫이다
     //  (#1719 · #959 리뷰 — 위 SessionEnd 분기와 같은 이유).
-    const token = isBox ? ((process.env.LIVELY_TOKEN || "").trim() || readCfg("token")) : "";
+    const token = isBox ? (sessionTokenFromFile("hook", homedir(), (p) => readFileSync(p, "utf8")) || (process.env.LIVELY_TOKEN || "").trim() || readCfg("token")) : "";   // #4135 — 파일이 먼저(위 SessionEnd 분기와 같다)
     const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
     // 최근 N ms 안에 시도했나 — 실패를 영구화하지 않으면서 핫패스 스톨도 막는 쿨다운(플래그 mtime).
     const cooling = (flagPath, ms) => { try { return Date.now() - statSync(flagPath).mtimeMs < ms; } catch { return false; } };
@@ -336,11 +342,16 @@ try {
       //   어긋날 수 있다 — 서버는 이 수가 0 이면 그 화면으로 파란 점을 켜지 않는다. ⚠ Stop 에서만 세면 idle_prompt 의 bg 없는 idle 이
       //   서버의 bg=0 을 덮어 점이 되살아난다(격리 리뷰 지적 — 몇 시간 노는 세션은 반드시 이 알림을 거친다).
       //   대화 기록 문구가 Claude Code 의 것이라 claude 만 센다. 못 세면(null) 안 싣는다(=종전대로 화면을 믿는다).
-      const bg = phase === "idle" && HARNESS === "claude" && typeof input?.transcript_path === "string"
-        ? countOpenJobs(input.transcript_path, join(FLAG_DIR, `${sid}.bg-jobs.json`)) : null;
-      const report = bg === null ? { state: phase } : { state: phase, bg };
-      //  같은 보고의 반복만 스로틀한다 — 작업 수가 바뀐 idle 은 새 보고다.
-      const key = bg === null ? phase : `${phase} bg=${bg}`;
+      //  #4695 T5 — 같은 셈에서 **예약 깨움·반복 예약**도 함께 싣는다(bg-jobs.mjs «예약 깨움» 머리말). 하네스 종료 규칙은 이 둘이 있으면
+      //   «완료» 로 보지 않는다(끄면 깨움이 영영 안 온다). wake = 다음 깨움 시각(초, 0 = 없음) — 셈을 믿을 수 있을 때만(sched) 싣는다.
+      //   싣지 않은 보고는 서버가 «예약 모름» 으로 읽어 그 세션을 끄지 않는다(옛 훅·못 셈 — 안전한 쪽).
+      const work = phase === "idle" && HARNESS === "claude" && typeof input?.transcript_path === "string"
+        ? openWork(input.transcript_path, join(FLAG_DIR, `${sid}.bg-jobs.json`)) : null;
+      const bg = work ? work.bg : null;
+      const sched = work && work.sched ? { wake: work.wakeMs && work.wakeMs > Date.now() ? Math.floor(work.wakeMs / 1000) : 0, cron: work.cron } : null;
+      const report = { state: phase, ...(bg === null ? {} : { bg }), ...(sched ? { wake: sched.wake, cron: sched.cron } : {}) };
+      //  같은 보고의 반복만 스로틀한다 — 작업 수·예약이 바뀐 idle 은 새 보고다.
+      const key = [phase, ...(bg === null ? [] : [`bg=${bg}`]), ...(sched ? [`wake=${sched.wake}`, `cron=${sched.cron}`] : [])].join(" ");
       const stateFile = join(FLAG_DIR, `${boxId}.state`);
       let last = ""; try { last = readFileSync(stateFile, "utf8").trim(); } catch { /* 첫 보고 */ }
       if (last !== key || !cooling(stateFile, 60_000)) {
@@ -353,7 +364,11 @@ try {
     //  노드 세션은 기록이 턴 끝에만 중앙에 올라와 '방금 친 말'이 턴이 끝나야 보였다). 스로틀 없음 — 사람 손 속도다.
     //  페이로드 이름: claude 원조 `prompt` · 어댑터/구버전 `prompt_text`. 서버가 다시 다듬으므로(300자) 여긴 상한만 건다.
     //  /active 와 **나란히** 보낸다 — 이 훅은 프롬프트 처리 앞에서 도는 핫패스라 왕복을 직렬로 쌓지 않는다.
-    if (token && event === "UserPromptSubmit") {
+    //  #5048 — 읽기전용·인코그니토는 보내지 않는다. 이 줄은 org_session_state.last_prompt 에 **저장**된다(지시 앞 300자) —
+    //   «읽기전용은 기록하지 않음» 의 대상이다. /active(단계·시각)는 내용이 없어 그대로 보낸다. 서버도 그 세션의 모드로 거부한다.
+    const mode = String(process.env.LIVELY_MODE || "").trim().toLowerCase();
+    const quiet = mode === "readonly" || mode === "incognito" || process.env.LIVELY_READONLY === "1" || process.env.LIVELY_INCOGNITO === "1";
+    if (token && event === "UserPromptSubmit" && !quiet) {
       const p = String(input?.prompt ?? input?.prompt_text ?? "").replace(/\s+/g, " ").trim();
       if (p) jobs.push(post("/last-prompt", { prompt: Array.from(p).slice(0, 600).join("") }));
     }

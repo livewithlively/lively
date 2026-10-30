@@ -288,9 +288,13 @@ export async function postComment(taskId: number, text: string, ctx?: WriteCtx, 
     const ok = await one(itemsPool, `SELECT 1 AS x FROM task_comment WHERE id=$1 AND task_id=$2 AND reply_to IS NULL`, [parentId, taskId]);
     if (ok) parent = parentId;
   }
-  await itemsPool.query(
-    `INSERT INTO task_comment(task_id, author, body, reply_to, created_at) VALUES($1, $2, $3, $4, now())`,
+  const ins = await itemsPool.query(
+    `INSERT INTO task_comment(task_id, author, body, reply_to, created_at) VALUES($1, $2, $3, $4, now()) RETURNING id`,
     [taskId, ctx?.actor ?? null, body, parent]);
+  //  #4180 — 댓글이 써진 그 자리에서 받는 사람(언급·참여자)에게 「확인할 것」 알림을 남긴다. 응답을 막지 않는다(best-effort).
+  const cid = Number((ins.rows[0] as { id?: unknown } | undefined)?.id) || null;
+  void import("./comment-notify.js").then((m) => m.notifyTaskComment(taskId, { author: ctx?.actor ?? null, body }, cid))
+    .catch(() => { /* 알림은 댓글의 부수 효과 — 실패해도 댓글은 남았다 */ });
   return getTaskFeed(taskId);
 }
 

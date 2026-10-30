@@ -137,6 +137,12 @@ export async function workspacePersonIds(opts: { managed: boolean }): Promise<Se
   return new Set(r.rows.map((x) => String((x as { id: unknown }).id)));
 }
 
+/** 관리자인 사람(활성 · 사람 행 · scopes 에 admin) — #4667 앱 책임자가 «관리자» 로 넘어올 때 알릴 사람들. */
+export async function listActiveAdminIds(): Promise<string[]> {
+  const r = await itemsPool.query(`SELECT id FROM org_member WHERE state='active' AND kind='human' AND scopes ? 'admin' ORDER BY sort, id`);
+  return r.rows.map((x) => String((x as { id: unknown }).id));
+}
+
 export async function getMember(id: string): Promise<OrgMember | null> {
   //  ★ 지금 맥락으로 못박는다(#1879) — 접기가 남긴 짝이 있으면 tenant 없는 조회는 **아무 행이나**
   //   돌려준다. 상수(primary)로 박으면 매니지드에서 RLS 가 걸러 0행이 된다(실측) — 그래서 맥락식이다.
@@ -197,6 +203,26 @@ export interface LivWelcome {
   distill_at?: string | null; distill_gave_up_at?: string | null; distill_note?: string | null;
   /** 세션이 사라져 **다시 연** 시각(#1631). 딱 한 번만 다시 연다 — 이 값이 있으면 다음엔 포기한다. */
   distill_reopened_at?: string | null;
+  /**
+   * 리브 1턴의 갈래(#4213 T13). 비었으면 종전(#1631 «보고만 하는 1턴»)이다.
+   *  · connect — 설치자의 «처음 연결» 대화(Claude 커넥터로 목록·처음 수집). 2턴은 리브가 처음 수집 끝을 찍거나(collect_done_at)
+   *    상한이 지난 뒤에 나간다 — 대화 도중에 증류 지시가 끼어들지 않게(second-turn.ts).
+   *  · join — 합류자의 «빠진 앱 연결» 대화. 2턴이 없다(팀의 서랍·정리 규칙을 합류자가 바꾸지 않는다).
+   *  · files — (#5060) 처음 설정에서 파일을 올리고 외부 앱 연결은 [나중에 할게요] 한 사람. 열린 리브 세션이 없으므로(session_id 없음)
+   *    올리기가 끝나면 2턴 스윕이 리브 세션을 **새로 열어** 증류 지시를 첫 지시로 넣는다(second-turn.ts decideSecondTurn).
+   */
+  flow?: "connect" | "join" | "files" | null;
+  /** 리브가 «처음 연결·처음 수집을 끝냈다» 를 찍은 시각(me_liv_profile_set collect_done) — connect 갈래의 2턴 신호. */
+  collect_done_at?: string | null;
+  /** (#5060) 처음 설정에서 파일 올리기를 시작한 시각. 있고 upload_done_at 이 없으면 2턴은 올리기가 끝나길 기다린다(상한까지). */
+  upload_started_at?: string | null;
+  /** (#5060) 그 올리기가 끝난 시각 — 화면의 백그라운드 올리기가 다 비면 찍는다(me_liv_profile_set upload_done). */
+  upload_done_at?: string | null;
+  /** 처음 설정을 끝낼 때 로그인돼 있던 AI(하네스 key) — 2턴 스윕이 리브 세션을 새로 열 때 그 자리에서 로그인을 못 재도 이 AI 로 연다
+   *  (org/liv/session.ts resolveLivHarness). 없으면 지금 로그인한 것만 본다. */
+  harnesses?: string[] | null;
+  /** (#5058) 처음 설정을 [연결할게요]로 끝낸 시각 — 이어지는 리브 대화를 처음 설정의 일부로 지키는 근거(first-run.ts onboardingLockSession). */
+  connect_at?: string | null;
 }
 
 /**
@@ -206,6 +232,10 @@ export interface LivWelcome {
  * ⚠ welcome 은 #2265 이후 **워크스페이스 칸**(by_workspace)에 산다. 옛 최상위 자리도 아직 남아 있을 수
  *  있으므로(승계 전) 둘을 합쳐 본다 — 한쪽만 보면 그 사람들에게 2턴이 영영 안 간다.
  *  돌려주는 `workspace_id` 는 호출부가 **그 테넌트 컨텍스트 안에서** 표식을 찍는 데 쓴다(안 그러면 멱등이 깨져 반복 발사).
+ *  (#4213 T13) 합류자의 리브 세션(welcome.flow='join')은 2턴이 없다 — 후보에서 뺀다. 판정(decideSecondTurn)도 건너뛰지만,
+ *   여기서 안 빼면 영영 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지해 뒤에 온 진짜 후보가 밀려난다.
+ *  (#5060) 파일 갈래(welcome.flow='files')는 세션이 아직 없어도 후보다 — 올리기가 끝나면 스윕이 리브 세션을 새로 연다.
+ *   파일을 올린 «처음 연결» 갈래도 — 연결 대화가 끝내 안 묶이면(유예 뒤) 같은 길로 간다(second-turn.ts opensFreshSession).
  */
 export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string; display_name: string | null; welcome: LivWelcome; workspace_id: string | null }>> {
   const r = await itemsPool.query(
@@ -219,9 +249,11 @@ export async function listLivSecondTurnCandidates(): Promise<Array<{ id: string;
         WHERE m.state='active' AND m.kind='human' AND e.value ? 'welcome'
      )
      SELECT id, display_name, ws, welcome FROM cand
-      WHERE welcome->>'session_id' IS NOT NULL
+      WHERE (welcome->>'session_id' IS NOT NULL OR welcome->>'flow' = 'files'
+             OR (welcome->>'flow' = 'connect' AND welcome->>'upload_started_at' IS NOT NULL))
         AND welcome->>'distill_at' IS NULL
         AND welcome->>'distill_gave_up_at' IS NULL
+        AND COALESCE(welcome->>'flow', '') <> 'join'
       ORDER BY welcome->>'done_at' ASC LIMIT 200`);
   return r.rows.map((x) => ({
     id: String(x.id), display_name: (x.display_name as string | null) ?? null,
@@ -364,6 +396,9 @@ export interface LivProfile {
    *  '지금은 말고'지 '영영 말고'가 아니다.
    */
   welcome_deferred_at?: string | null;
+  /** (#5060) 처음 설정을 **데스크톱 앱 안에서** 마지막으로 연 시각. 브라우저에서 [앱 받기]를 누른 사람의 탭이 이 값을 보고
+   *  «앱에서 이어 하고 있어요» 로 접힌다(같은 처음 설정을 두 곳에서 하지 않게). 마지막 시각이 뜻이 있다(매번 갱신). */
+  desktop_seen_at?: string | null;
   /**
    * 이 워크스페이스에 **어떻게 들어왔나**(#1631, 원준 결정 2026-09-13) — 처음 설정의 갈래(주인 / 초대로 들어온 사람)와
    *  «터미널 → 내 컴퓨터 / 앱 받기» 장면을 보일지의 재료. 매니지드에선 계정 서버만 아는 사실이라, 처음 설정 현황(폴링 자리)이
@@ -376,7 +411,10 @@ export interface LivProfile {
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
   answers?: LivAnswer[];
-  /** 리브 탭이 붙는 세션(#4032). 없으면 첫 말이 새로 연다 — 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다. */
+  /**
+   * 리브 세션(#4032). 레일 [리브] · 처음 설정 [연결할게요] · [외부 앱 연결] [연결 도와줘]가 모두 이 세션으로 간다(#4970 «리브 = 세션 하나» —
+   *  me_liv_open). 없으면 그 문의 첫 말이 새로 연다 — 옛 처음 설정 킥오프가 연 세션(welcome.session_id)이 폴백이다.
+   */
   liv_session?: LivSessionRef | null;
 }
 
@@ -458,7 +496,7 @@ export async function livAnswerStats(): Promise<Array<{
 
 /** 워크스페이스마다 달라야 하는 키 — 이 표가 이 변경의 전부다.
  *  `join`(#1631) — 이 워크스페이스에 만든 사람으로 왔나 초대로 왔나. 워크스페이스마다 다르다.
- *  `liv_session`(#4032) — 리브 탭이 붙는 세션. 세션은 워크스페이스마다 따로 산다. */
+ *  `liv_session`(#4032) — 리브 세션. 세션은 워크스페이스마다 따로 산다. */
 export const WORKSPACE_SCOPED_KEYS = ["welcome", "welcome_progress", "onboarded_at", "decisions", "join", "liv_session"] as const;
 export type WorkspaceScopedKey = (typeof WORKSPACE_SCOPED_KEYS)[number];
 
@@ -622,13 +660,41 @@ export async function workspacePurposeStage(workspaceId: string | null | undefin
  * - `decision`·`declined` 는 **뒤에 쌓는다**. 같은 key 의 거절이 이미 있으면 갱신한다 —
  *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
  */
+/**
+ * (순수, #4213 T13) 리브의 «처음 수집 끝» 표식(me_liv_profile_set {collect_done:true}) — 처음 찍힌 시각을 지킨다(두 번 찍어도 2턴 판정의
+ *  근거가 밀리지 않게). 처음 설정을 끝낸 칸이 없으면 찍을 자리가 없다(그대로).
+ *  ⚠ 이 파일 안에 둔다 — 이 모듈은 노드 에이전트 번들에 딸려 들어가 있어(부채), 새 모듈을 import 하면 번들 경계 가드가 막는다(CI 실측 2026-10-17).
+ */
+export function withCollectDone(welcome: LivWelcome | null | undefined, at: Date): LivWelcome | null {
+  if (!welcome) return welcome ?? null;
+  if (welcome.collect_done_at) return welcome;
+  return { ...welcome, collect_done_at: at.toISOString() };
+}
+
+/**
+ * (순수, #5060) 처음 설정의 «올리기 끝» 표식 — 처음 찍힌 시각을 지킨다. 올리기를 시작한 적이 없는 칸(upload_started_at 없음)에는 찍지 않는다
+ *  (끝낼 올리기가 없다). withCollectDone 과 같은 이유로 이 파일 안에 둔다(노드 에이전트 번들 경계).
+ */
+export function withUploadDone(welcome: LivWelcome | null | undefined, at: Date): LivWelcome | null {
+  if (!welcome) return welcome ?? null;
+  if (!welcome.upload_started_at || welcome.upload_done_at) return welcome;
+  return { ...welcome, upload_done_at: at.toISOString() };
+}
+
 export async function appendLivProfile(
-  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean },
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined; welcome?: LivWelcome; onboarded?: boolean; welcomeSeen?: boolean; welcomeDeferred?: boolean; collectDone?: boolean; uploadDone?: boolean; desktopSeen?: boolean },
 ): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur };
   if (patch.work) next.work = { ...patch.work, at: patch.work.at ?? new Date().toISOString() };
   if (patch.welcome) next.welcome = patch.welcome;
+  // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호). 처음 설정을 끝낸 칸(welcome)이 있을 때만,
+  //  처음 찍힌 시각을 지킨다(같은 표식을 두 번 찍어도 2턴 판정의 근거가 밀리지 않게). welcome 이 없으면 찍을 자리가 없다(무시).
+  if (patch.collectDone && next.welcome) next.welcome = withCollectDone(next.welcome, new Date()) ?? next.welcome;
+  // #5060 — 처음 설정에서 시작한 백그라운드 올리기가 끝났다(2턴이 기다리던 신호). 시작 표식이 있는 칸에만, 처음 시각을 지킨다.
+  if (patch.uploadDone && next.welcome) next.welcome = withUploadDone(next.welcome, new Date()) ?? next.welcome;
+  // #5060 — 처음 설정을 데스크톱 앱 안에서 열었다. 마지막 시각(브라우저 탭이 «[앱 받기] 를 누른 뒤에 앱이 열렸나» 를 잰다).
+  if (patch.desktopSeen) next.desktop_seen_at = new Date().toISOString();
   // #2039 — 처음 설정을 끝냈다는 표식. 처음 찍힌 시각을 지킨다(다시 둘러봐도 '처음'이 뒤로 밀리지 않게).
   if (patch.onboarded && !cur.onboarded_at) next.onboarded_at = new Date().toISOString();
   // #2171 — 자동으로 처음 설정에 **보냈다**는 표식. 끝냈다는 뜻이 아니다(위와 별개 사실).
@@ -684,6 +750,7 @@ export async function removeHarnessMachine(id: string, machineId: string): Promi
         SET harness_snapshot      = COALESCE(harness_snapshot,'{}'::jsonb)      - $2::text,
             harness_local_pref    = COALESCE(harness_local_pref,'{}'::jsonb)    - $2::text,
             local_mode_pref       = COALESCE(local_mode_pref,'{}'::jsonb)       - $2::text,
+            local_scope_pref      = COALESCE(local_scope_pref,'{}'::jsonb)      - $2::text,
             harness_machine_alias = COALESCE(harness_machine_alias,'{}'::jsonb) - $2::text
       WHERE id=$1 RETURNING id`, [id, machineId]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -766,6 +833,97 @@ export async function setLocalModePreference(id: string, machineId: string, mode
   return pref;
 }
 
+// ── 기록 범위(#5016) — 머신별. «작업 폴더에서만(기본) | 어디서나» + 작업 폴더 목록 ──
+//  세션 시작 훅(kit/hooks/session-preload.mjs)이 매 세션 이 머신 값을 받아 ~/.lively/record-scope.json 에 굳히고,
+//  훅·MCP 프록시가 그 사본으로 «이 폴더에서 켠 AI 에 라이블리를 붙일까» 를 정한다(kit/hooks/record-scope.mjs).
+//  ⚠ local_mode_pref 와 달리 **훅이 당긴다** — 범위 밖 세션은 LIVELY_OFF 가 아니라 훅이 스스로 판정해 꺼지는 것이라,
+//   설정을 받아 오는 시작 훅은 범위 밖에서도 돈다. 그래야 웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다.
+//  저장이 없는 머신은 기본값(work_folders · 빈 목록)이다 — 행을 미리 만들지 않는다(기본값을 바꾸면 그대로 따라가게).
+export type RecordScope = "work_folders" | "anywhere";
+export const DEFAULT_RECORD_SCOPE: RecordScope = "work_folders";
+export interface LocalScopePreference { scope: RecordScope; work_roots: string[]; updated_at: string }
+export type LocalScopePreferences = Record<string, LocalScopePreference>;
+/** 한 번의 변경 — work_roots 는 통째 교체(웹), add·remove 는 낱개(CLI·훅의 pending). 순서: 교체 → 더하기 → 빼기. */
+export interface LocalScopeChange { scope?: RecordScope; work_roots?: string[]; add?: string[]; remove?: string[] }
+// 한 머신 목록의 상한 — kit/hooks/record-scope.mjs 의 MAX_ROOTS · MAX_ROOT_LEN 과 같은 값이어야 한다(사본이 같은 규칙으로 자른다).
+export const MAX_WORK_ROOTS = 200;
+export const MAX_WORK_ROOT_LEN = 1000;
+
+const isRecordScope = (v: unknown): v is RecordScope => v === "work_folders" || v === "anywhere";
+// 끝 구분자만 떼고 비교한다 — 경로 해석(~ 펴기·대소문자)은 그 컴퓨터만 안다(서버는 사람마다 다른 홈을 모른다).
+const rootKeyOf = (p: string) => (p.length > 1 ? p.replace(/[\\/]+$/, "") || p : p);
+function cleanRootList(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  const out: string[] = [];
+  for (const v of list) {
+    const s = String(v ?? "").trim();
+    if (!s || s.length > MAX_WORK_ROOT_LEN) continue;
+    if (!out.some((x) => rootKeyOf(x) === rootKeyOf(s))) out.push(s);
+  }
+  return out.slice(0, MAX_WORK_ROOTS);
+}
+function parseScopePref(raw: unknown): LocalScopePreference | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const row = raw as Record<string, unknown>;
+  if (!isRecordScope(row.scope)) return null;
+  return { scope: row.scope, work_roots: cleanRootList(row.work_roots), updated_at: typeof row.updated_at === "string" ? row.updated_at : "" };
+}
+const defaultScopePref = (): LocalScopePreference => ({ scope: DEFAULT_RECORD_SCOPE, work_roots: [], updated_at: "" });
+
+// 등록할 수 있는 꼴 — 절대경로(POSIX `/` · 윈도우 `C:\` · UNC `\\`) 또는 `~` 로 시작(그 컴퓨터 홈 기준, 펴는 건 그 컴퓨터가 한다).
+//  상대경로는 판정하는 쪽(훅·MCP 프록시)의 cwd 에 묶여 뜻이 흔들린다 — kit/hooks/record-scope.mjs isRootForm 과 같은 규칙.
+export const isWorkRootForm = (s: string) => s === "~" || s.startsWith("~/") || s.startsWith("~\\") || s.startsWith("/")
+  || /^[A-Za-z]:[\\/]/.test(s) || s.startsWith("\\\\");
+
+/** 순수 — 지금 값에 변경 하나를 얹는다(테스트가 직접 부른다). 등록(교체·더하기)엔 경로 꼴을 검사한다 — 빼기는 옛 쓰레기 줄도 걷게 검사하지 않는다. */
+export function applyLocalScopeChange(cur: LocalScopePreference, change: LocalScopeChange, now = new Date()): LocalScopePreference {
+  for (const s of [...cleanRootList(change.work_roots ?? []), ...cleanRootList(change.add ?? [])]) {
+    if (!isWorkRootForm(s)) throw new Error(`절대경로나 ~ 로 시작하는 경로만 작업 폴더로 등록할 수 있습니다: ${s}`);
+  }
+  let roots = change.work_roots !== undefined ? cleanRootList(change.work_roots) : [...cur.work_roots];
+  for (const a of cleanRootList(change.add ?? [])) if (!roots.some((x) => rootKeyOf(x) === rootKeyOf(a))) roots.push(a);
+  const drop = cleanRootList(change.remove ?? []).map(rootKeyOf);
+  roots = roots.filter((x) => !drop.includes(rootKeyOf(x)));
+  if (roots.length > MAX_WORK_ROOTS) throw new Error(`작업 폴더는 한 컴퓨터에 ${MAX_WORK_ROOTS}개까지입니다`);
+  return { scope: change.scope ?? cur.scope, work_roots: roots, updated_at: now.toISOString() };
+}
+
+export async function getLocalScopePreferences(id: string): Promise<LocalScopePreferences> {
+  const r = await itemsPool.query(`SELECT local_scope_pref FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.local_scope_pref as unknown;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: LocalScopePreferences = {};
+  for (const [machineId, raw] of Object.entries(v as Record<string, unknown>)) {
+    const p = parseScopePref(raw);
+    if (p) out[machineId] = p;
+  }
+  return out;
+}
+
+/** 한 머신 값 — 저장이 없으면 기본값(work_folders · 빈 목록). */
+export async function getLocalScopePreference(id: string, machineId: string): Promise<LocalScopePreference> {
+  return (await getLocalScopePreferences(id))[machineId] ?? defaultScopePref();
+}
+
+/** 한 머신 값을 바꾼다. 웹·CLI 가 같은 머신을 거의 동시에 고쳐도 한쪽이 사라지지 않게 그 행을 잠그고 읽어 고친다. */
+export async function updateLocalScopePreference(id: string, machineId: string, change: LocalScopeChange): Promise<LocalScopePreference> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("BEGIN");
+    const r = await client.query(`SELECT local_scope_pref->$2::text AS pref FROM org_member WHERE id=$1 FOR UPDATE`, [id, machineId]);
+    if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+    const next = applyLocalScopeChange(parseScopePref(r.rows[0].pref) ?? defaultScopePref(), change);
+    await client.query(
+      `UPDATE org_member SET local_scope_pref = COALESCE(local_scope_pref,'{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb) WHERE id=$1`,
+      [id, machineId, JSON.stringify(next)]);
+    await client.query("COMMIT");
+    return next;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => { /* 연결이 이미 깨졌으면 롤백할 것도 없다 */ });
+    throw e;
+  } finally { client.release(); }
+}
+
 // 주어진 id 중 **실재하는 활성 구성원**만 골라낸다(#1313 R45) — 공개범위 대상(audience) 검증 공용.
 //  오타 id 로 잠그면 아무도 못 여는 리스트/폴더가 되므로, 잠그기 전에 대상이 실재하는지 이걸로 확인한다.
 export async function activeMemberIdsAmong(ids: string[]): Promise<string[]> {
@@ -833,7 +991,9 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   //   ⚠ 로그인 판정(auth/local-accounts.ts verifyLogin)도 사람만 찾는다 — 두 겹이다.
   if (after && after.kind !== "human") {
     await itemsPool.query(`DELETE FROM member_credential WHERE member_id=$1`, [m.id]);
-    await itemsPool.query(`UPDATE web_session SET revoked_at=now() WHERE member_id=$1 AND revoked_at IS NULL`, [m.id]);
+    // 보관한 IdP 토큰도 회수와 같이 지운다 — 끝난 세션에 남길 이유가 없다(auth/sessions.ts revokeSession 과 같은 원칙).
+    await itemsPool.query(
+      `UPDATE web_session SET revoked_at=now(), sso_id_token_enc=NULL WHERE member_id=$1 AND revoked_at IS NULL`, [m.id]);
   }
   // person/person_identity 동기화 — UI 편집이 즉시 게이트웨이 신원 매칭에 반영(load-bindings 와 동일 계약).
   if (after) await syncMemberToPerson(after);

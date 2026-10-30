@@ -21,16 +21,16 @@ import { parseGuideRoute, renderGuideApp } from './guide/app.js';   // #4179 사
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { renderSessions } from './sessions-app.js'; // #/sessions — 세션 이력 앱(가로탭 셋, #4553) · #/sessions/<sid> 대화록(#905 C1)
-import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
+import { renderFilePage } from './filepage.js'; // #/f — 파일 링크의 «자료 보기»(#1436 → #4672): 상단바를 둔 채 미리보기 · 정보 · 내려받기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
-import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다.
-import { livChatCleanup } from './liv-chat.js'; // #4032 — 리브 칸 걷기(라우트 이동마다)
+import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다. (#4970) 대화는 리브 세션 화면이 한다 — 이 화면엔 대화 칸이 없다.
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
+import { initScreenLang } from './lib/screen-lang.js';   // #5141 화면 영어 보기 — 켜져 있으면 셸·액자 모두 영어로
 import { takeShellSwitch, uiMode } from './lib/state.js';
 import { mountDesktopUpdate } from './desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
 import { mountClassicCtx } from './classic-ctx.js';   // #3784 클래식 화면 우클릭 메뉴
@@ -107,7 +107,6 @@ async function route() {
   endTour();          // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
   dismissWikiPeek();
   wkRouteCleanup();   // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
-  livChatCleanup();   // 리브 칸의 세션 대화창(폴링·리스너)을 걷는다 — 안 걷으면 리브 탭을 드나들 때마다 쌓인다(#4032)
   // #804 열려 있던 상세 모달(프로젝트·태스크) 정리 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다.
   //  안 닫으면 새 페이지가 모달 뒤에 렌더되고 모달이 계속 덮어 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일).
   //  중첩(프로젝트 모달 위 태스크 모달)이라 위(태스크)부터. 편집 중 본문은 닫히며 flush(저장)된다.
@@ -185,9 +184,9 @@ async function route() {
       setActiveTab('');
       await renderActivate(view);
     } else if (page === 'f') {
-      // #/f?root=<shared|personal>&path=<rel> — 공유 링크의 착지 화면(#1436). **내비게이션이 없는** 전체 페이지로
-      //  파일 하나(또는 폴더 하나)만 보여준다: 링크를 받은 사람이 무엇을 봐야 하는지 찾지 않아도 되게.
-      //  셸(상단바·푸터) 숨김은 body[data-route="f"] CSS 가 한다(위에서 dataset.route 를 이미 세웠다).
+      // #/f?root=<shared|personal|apps>&path=<rel> — 파일 링크의 «자료 보기»(#1436 → #4672). 파일 하나(또는 폴더 하나)를
+      //  미리보기 · 정보 칸 · 내려받기로 보여 준다. 상단바는 둔다(워크스페이스 안 화면 — 다른 데로 갈 수 있게). 푸터만
+      //  body[data-route="f"] CSS 가 숨긴다(위에서 dataset.route 를 이미 세웠다). 새 셸은 이 주소를 셸이 직접 그린다(web/v2/main.ts).
       //  ⚠ 탭 활성 표시는 비운다 — 어느 탭에도 속하지 않는 화면이라 아무 탭이 켜져 있으면 거짓말이 된다.
       setActiveTab('');
       await renderFilePage(view, params);
@@ -295,6 +294,8 @@ async function boot() {
   //   모듈이 실릴 때 한 번 계산되므로(net.ts wsKey), 지우기만 하고 그대로 가면 옛 키로 이번 판을 마저 돈다.
   if (claimLocalOwner(String(state.me.userId))) { location.reload(); return; }
   hideGate();
+  //  #5141 — 화면 영어 보기. 셸을 고르기 전에 건다: 새 셸 · 클래식 · 액자(embed) 어느 판이든 같은 스위치(lv:screen-lang)를 따른다.
+  initScreenLang();
   // ── 화면 셸 선택(#1719) ──
   //  ?embed=1 : 새 셸이 클래식 페이지를 iframe 에 '앱'으로 실을 때. 클래식 셸을 그대로 쓰되 크롬(상단바·탭·배너·푸터)만
   //             body.embed 로 걷는다(40-v2.css). 임베드는 항상 클래식이다(안 그러면 셸 안에 셸이 뜬다).

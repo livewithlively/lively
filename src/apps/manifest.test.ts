@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { parseAppManifest, appAssetId, APP_ID_RE } from "./manifest.js";
+import { parseAppManifest, appAssetId, APP_ID_RE, webRootOf, webDevicesOf, APP_DEVICES } from "./manifest.js";
 import { assertAssetId } from "../org/asset-id.js";
 
 // 최소 유효 매니페스트(각 케이스가 이걸 얕게 변형).
@@ -37,6 +37,15 @@ const REJECTS: Array<{ what: string; patch: (m: Record<string, unknown>) => void
   { what: "permissions 알 수 없는 키(strict)", patch: (m) => { m.permissions = { bogus: 1 }; } },
   { what: "host 에 스킴 포함", patch: (m) => { m.permissions = { hosts: ["https://x.com"] }; } },
   { what: "ui.pages key 중복", patch: (m) => { m.ui = { pages: [{ key: "a", title: "A", entry: "a.html" }, { key: "a", title: "B", entry: "b.html" }] }; } },
+  // #4595 agent — AI 지침. 매 턴 맥락에 들어가는 글이라 상한이 있고, 중첩 미지 키는 다른 중첩과 같이 거부.
+  { what: "agent.instructions 4001자(경계-위)", patch: (m) => { m.agent = { instructions: "가".repeat(4001) }; } },
+  { what: "agent.instructions 빈 문자열(경계-아래)", patch: (m) => { m.agent = { instructions: "" }; } },
+  { what: "agent.reinject_every 4(경계-아래)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 4 }; } },
+  { what: "agent.reinject_every 501(경계-위)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 501 }; } },
+  { what: "agent.reinject_every 소수", patch: (m) => { m.agent = { instructions: "x", reinject_every: 10.5 }; } },
+  { what: "agent 알 수 없는 키(strict)", patch: (m) => { m.agent = { instructions: "x", foo: 1 }; } },
+  { what: "agent 가 문자열", patch: (m) => { m.agent = "HTML 을 만들면 올린다"; } },
+  { what: "agent 에 instructions 없음", patch: (m) => { m.agent = { reinject_every: 40 }; } },
   { what: "jobs key 중복", patch: (m) => { m.jobs = [{ key: "j", schedule: "* * * * *", run: { kind: "headless", prompt: "x" } }, { key: "j", schedule: "* * * * *", run: { kind: "headless", prompt: "y" } }]; } },
   { what: "job run 에 prompt 없음", patch: (m) => { m.jobs = [{ key: "j", schedule: "0 * * * *", run: { kind: "headless" } }]; } },
   { what: "잘못된 display 모드", patch: (m) => { m.ui = { pages: [{ key: "a", title: "A", entry: "a.html", display: ["giant"] }] }; } },
@@ -65,7 +74,18 @@ const ACCEPTS: Array<{ what: string; patch: (m: Record<string, unknown>) => void
   { what: "prerelease semver", patch: (m) => { m.version = "1.0.0-beta.1"; } },
   { what: "build semver", patch: (m) => { m.version = "1.0.0+2026"; } },
   { what: "ui page+widget", patch: (m) => { m.ui = { pages: [{ key: "main", title: "M", entry: "ui/i.html", display: ["inline", "fullscreen"] }], widgets: [{ key: "w", title: "W", entry: "ui/w.html", surfaces: ["home"] }] }; } },
+  { what: "agent.instructions 4000자(경계-최대)", patch: (m) => { m.agent = { instructions: "가".repeat(4000) }; } },
+  { what: "agent.reinject_every 5(경계-최소)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 5 }; } },
+  { what: "agent.reinject_every 500(경계-최대)", patch: (m) => { m.agent = { instructions: "x", reinject_every: 500 }; } },
 ];
+
+// ── agent — 세션에 붙었을 때 AI 에게 실리는 지침(#4595) ─────────────────────────
+test("M1 agent 없음 → undefined(기존 매니페스트 무회귀) · M2 instructions 만 → reinject_every 기본 40", () => {
+  assert.equal(parseAppManifest(base()).agent, undefined);
+  const m = parseAppManifest({ ...base(), agent: { instructions: "HTML 을 만들면 이 앱에 올린다" } });
+  assert.equal(m.agent?.instructions, "HTML 을 만들면 이 앱에 올린다");
+  assert.equal(m.agent?.reinject_every, 40);
+});
 
 for (const { what, patch } of ACCEPTS) {
   test(`통과: ${what}`, () => {
@@ -199,3 +219,193 @@ for (const [what, v] of [["0", 0], ["1.5", 1.5], ["'1'(문자열)", "1"]] as con
     assert.throws(() => parseAppManifest({ ...base(), schema_version: v }), (e: unknown) => e instanceof HttpError && e.status === 400);
   });
 }
+
+// ── #4483 칸 타입·제약·구조 변경 — 모양 검증(DB 없이). 뜻(검사 식의 칸·함수)은 설치 때 검사기가 본다 ─────────────
+const withTables = (tables: unknown[]): Record<string, unknown> => ({ ...base(), data: { tables } });
+const T = (columns: unknown[], extra: Record<string, unknown> = {}) => ({ name: "orders", columns, ...extra });
+
+test("#4483 받는 것 — 새 타입 · not_null · default(값·식) · unique · check · enum values · references · renamed_from · checks · drop_columns", () => {
+  const m = parseAppManifest(withTables([
+    { name: "contacts", columns: [{ name: "name", type: "text", not_null: true }, { name: "stage", type: "enum", values: ["lead", "won"], default: "lead" }] },
+    T([
+      { name: "contact_id", type: "bigint", references: { table: "contacts", on_delete: "cascade" } },
+      { name: "amount", type: "numeric(12,2)", not_null: true, default: 0, check: "amount >= 0" },
+      { name: "tags", type: "text[]", default: ["a"] },
+      { name: "made", type: "timestamp", default_expr: "now()" },
+      { name: "code", type: "varchar(20)", unique: true, renamed_from: "old_code" },
+    ], { checks: ["amount < 1000000"], drop_columns: ["legacy"] }),
+  ]));
+  const o = m.data.tables[1];
+  assert.deepEqual(o.checks, ["amount < 1000000"]);
+  assert.deepEqual(o.drop_columns, ["legacy"]);
+  assert.equal(o.columns[1].not_null, true);
+  assert.equal(parseAppManifest(withTables([T([{ name: "a", type: "text" }])])).data.tables[0].checks.length, 0);   // 기본값 []
+});
+
+const REJECTS_4483: Array<[string, unknown[]]> = [
+  ["허용 밖 타입", [T([{ name: "a", type: "money" }])]],
+  ["numeric 소수 자릿수 > 자릿수", [T([{ name: "a", type: "numeric(4,5)" }])]],
+  ["enum 인데 values 없음", [T([{ name: "a", type: "enum" }])]],
+  ["values 는 enum 에만", [T([{ name: "a", type: "text", values: ["x"] }])]],
+  ["values 중복", [T([{ name: "a", type: "enum", values: ["x", "x"] }])]],
+  ["default 와 default_expr 함께", [T([{ name: "a", type: "timestamp", default: "2026-01-01", default_expr: "now()" }])]],
+  ["default_expr 목록 밖", [T([{ name: "a", type: "timestamp", default_expr: "clock_timestamp()" }])]],
+  ["default_expr 상속 키 constructor", [T([{ name: "a", type: "timestamp", default_expr: "constructor" }])]],
+  ["default_expr 상속 키 __proto__", [T([{ name: "a", type: "timestamp", default_expr: "__proto__" }])]],
+  ["default_expr 상속 키 hasownproperty", [T([{ name: "a", type: "timestamp", default_expr: "hasOwnProperty" }])]],
+  ["배열 칸에 배열 아닌 default", [T([{ name: "a", type: "text[]", default: "x" }])]],
+  ["enum default 가 values 밖", [T([{ name: "a", type: "enum", values: ["x"], default: "y" }])]],
+  ["references 가 없는 표", [T([{ name: "a", type: "bigint", references: { table: "nope" } }])]],
+  ["references 칸이 정수가 아님", [{ name: "c", columns: [{ name: "n", type: "text" }] }, T([{ name: "a", type: "text", references: { table: "c" } }])]],
+  ["on_delete set null + not_null", [{ name: "c", columns: [{ name: "n", type: "text" }] }, T([{ name: "a", type: "bigint", not_null: true, references: { table: "c", on_delete: "set null" } }])]],
+  ["on_delete 목록 밖", [{ name: "c", columns: [{ name: "n", type: "text" }] }, T([{ name: "a", type: "bigint", references: { table: "c", on_delete: "explode" } }])]],
+  ["renamed_from 이 지금 선언한 칸", [T([{ name: "a", type: "text", renamed_from: "b" }, { name: "b", type: "text" }])]],
+  ["check 에 세미콜론", [T([{ name: "a", type: "int", check: "a > 0; DROP TABLE x" }])]],
+  ["drop_columns 가 선언한 칸", [T([{ name: "a", type: "text" }], { drop_columns: ["a"] })]],
+  ["drop_columns 가 시스템 칸", [T([{ name: "a", type: "text" }], { drop_columns: ["id"] })]],
+  ["같은 칸 이름 두 번", [T([{ name: "a", type: "text" }, { name: "a", type: "int" }])]],
+  ["칸에 모르는 속성", [T([{ name: "a", type: "text", nullable: false }])]],
+];
+for (const [what, tables] of REJECTS_4483) {
+  test(`#4483 거부 — ${what}`, () => {
+    assert.throws(() => parseAppManifest(withTables(tables)), /매니페스트 오류|허용되지 않은 컬럼 타입|default|형식|Unrecognized|unrecognized/, what);
+  });
+}
+
+// ── #4481 여러 파일 앱의 화면 폴더(web.root) — 최상위 칸이라 옛 코어(이 칸을 모름)로 되돌려도 매니페스트가 읽힌다 ─────────────
+test("#4481 web.root — 최상위 web 칸 · 정규 상대경로 · 맨 위는 \"\" · 틀린 꼴은 null", () => {
+  const m = parseAppManifest({ ...base(), web: { root: "./dist/" } });
+  assert.equal(webRootOf(m), "dist");
+  assert.equal(webRootOf(parseAppManifest({ ...base(), web: { root: "." } })), "", "패키지 맨 위");
+  assert.equal(webRootOf(parseAppManifest(base())), null, "web 없음 = 화면 한 장 앱(v1)");
+  for (const bad of ["../x", "/abs", "a\\b", "a/.hidden", "  "]) assert.equal(webRootOf({ web: { root: bad } }), null, bad);
+});
+test("#4481 web 안의 모르는 칸은 통과(다음 단계가 더한 칸 — 되돌려도 읽힘) · ui.root 는 없다(ui 는 strict)", () => {
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", server: { entry: "server.js" } } }));
+  assert.throws(() => parseAppManifest({ ...base(), ui: { root: "dist", pages: [] } }), /매니페스트/);
+  assert.throws(() => parseAppManifest({ ...base(), web: { root: "" } }), /매니페스트/, "빈 값");
+});
+
+// ── #4482 앱 주소 iframe 의 장치 권한 선언(web.devices) — 선언한 앱의 iframe 에만 위임된다(상민님 2026-10-16 «선언한 앱만») ─────────────
+//  이게 틀리면: 모르는 장치 이름이 저장돼 화면이 엉뚱한 권한을 위임하거나(allow 속성), 선언이 저장은 되는데 읽는 쪽이 못 읽어 위임이 안 된다.
+test("#4482 web.devices — 아는 장치만 저장 · 모르는 값 · 꼴 밖은 거절 · 읽을 땐 정해진 순서로 거른다", () => {
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { devices: ["microphone", "camera"] } }));
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), web: { root: "dist", devices: [] } }), "빈 목록 · root 와 함께");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: ["usb"] } }), /매니페스트/, "모르는 장치");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: "microphone" } }), /매니페스트/, "배열이 아님");
+  assert.throws(() => parseAppManifest({ ...base(), web: { devices: ["microphone; camera *"] } }), /매니페스트/, "지시문을 끼워 넣는 값");
+  assert.deepEqual(webDevicesOf({ web: { devices: ["camera", "usb", "microphone", "camera"] } }), ["microphone", "camera"], "읽을 땐 아는 것만 · 정해진 순서 · 한 번씩");
+  assert.deepEqual(webDevicesOf({ web: { devices: "microphone" } }), [], "배열 아님 → 없음");
+  assert.deepEqual(webDevicesOf(null), []);
+  assert.deepEqual([...APP_DEVICES], ["microphone", "camera", "clipboard-read", "geolocation"]);
+});
+
+// ── #4486 서버를 선언한 앱 → 백그라운드 작업 도구 넷 함의 ─────────────────────────────────────────────
+//  이게 틀리면: 서버 앱의 SDK livelyJobs() · 앱 주소 /_lively/jobs 가 «권한 밖» 으로 막히거나, 서버 없는 앱이 작업 도구를 얻는다.
+test("#4486 web.server(객체 · true) → app_job_* 넷 함의(중복 없음) · 서버 없음 · 배열 · 글은 없음", () => {
+  const JOB = ["app_job_start", "app_job_get", "app_jobs", "app_job_cancel"];
+  for (const server of [{}, { start: "node s.js" }, true]) {
+    const tools = parseAppManifest({ ...base(), web: { server }, permissions: { tools: ["app_jobs"] } }).permissions.tools;
+    for (const t of JOB) assert.ok(tools.includes(t), `${JSON.stringify(server)} ${t}`);
+    assert.equal(tools.filter((t) => t === "app_jobs").length, 1, "이미 적은 도구는 한 번만");
+  }
+  for (const server of [undefined, false, [], "node s.js", null]) {
+    const tools = parseAppManifest({ ...base(), ...(server === undefined ? {} : { web: { server } }) }).permissions.tools;
+    assert.ok(!tools.some((t) => t.startsWith("app_job")), `${JSON.stringify(server)} 에 작업 도구가 붙었다`);
+  }
+});
+
+// ── #4488 AI 실행 선언(permissions.ai_runs · ai.jobs) — M1~M2 ─────────────────────────────────────────────────────────────────────────
+//  이게 틀리면: 선언만 하고 도구가 grant 에 안 들어가 앱 주소 /_lively/ai/* 가 «권한 밖» 으로 막히거나, 작업 이름 꼴 밖 선언이 저장돼 설정 칸과 어긋난다.
+test("#4488 permissions.ai_runs → AI 실행 도구 다섯 함의(중복 없음) · 기본 false 면 없음 · ai.jobs 이름 꼴", () => {
+  const m = parseAppManifest({ ...base(), permissions: { ai_runs: true, tools: ["app_ai_run"] } });
+  const tools = m.permissions.tools;
+  for (const t of ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"]) assert.ok(tools.includes(t), t);
+  assert.equal(tools.filter((t) => t === "app_ai_run").length, 1, "이미 적은 도구는 한 번만");
+  const off = parseAppManifest(base());
+  assert.equal(off.permissions.ai_runs, false);
+  assert.ok(!off.permissions.tools.some((t) => t.startsWith("app_ai_")), "선언 없으면 도구 없음(fail-closed)");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "summarize", title: "요약", description: "d" }] } }));
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "Bad Name" }] } }), /매니페스트/, "이름 꼴 밖");
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "x", prompt: "y" }] } }), /매니페스트/, "jobs 안 미지 키는 거부");
+  assert.doesNotThrow(() => parseAppManifest({ ...base(), ai: { jobs: [], later: 1 } }), "ai 의 미지 키는 통과(전방호환)");
+});
+
+// ── #5100 앱 맥락 범위 — context 칸(저장 관문 · 사양 B) ─────────────────────────
+//  M1 없음 = 칸 없음(종전) · M2 {} = 두 목록 빈 것(닫힘) · M3 key 64자 통과 · 65자 400 · M4 key 꼴 · M5 50개 통과 · 51개 400
+//  M6 자료 종류 표준 / 모르는 값 · M7 folders 는 빈 배열이라도 400(context.folders) · M8 오타 칸 400 · M9 글 · 배열 · null 400
+//  M10 최상위 모르는 칸은 context 와 함께여도 종전대로 통과
+const withContext = (context: unknown): Record<string, unknown> => ({ ...base(), context });
+const rejects400 = (raw: Record<string, unknown>, where: RegExp): void => {
+  assert.throws(() => parseAppManifest(raw), (e: unknown) => (e as { status?: number }).status === 400 && where.test(String((e as Error).message)));
+};
+
+test("#5100 M1 context 없음 — 칸 없음(범위 없음 · 종전)", () => {
+  assert.equal(parseAppManifest(base()).context, undefined);
+});
+
+test("#5100 M2 context {} — 두 목록 모두 빈 것(선언했지만 비었다 = 닫힘)", () => {
+  assert.deepEqual(parseAppManifest(withContext({})).context, { knowledge_categories: [], source_kinds: [] });
+});
+
+test("#5100 M3 카테고리 key 64자 통과 · 65자 400", () => {
+  const k64 = "a" + "b".repeat(63);
+  assert.deepEqual(parseAppManifest(withContext({ knowledge_categories: [k64] })).context?.knowledge_categories, [k64]);
+  rejects400(withContext({ knowledge_categories: [k64 + "c"] }), /context\.knowledge_categories/);
+});
+
+test("#5100 M4 key 꼴 — 대문자 · 하이픈으로 시작 · 한글은 400", () => {
+  for (const bad of ["Policy", "-policy", "정책"]) rejects400(withContext({ knowledge_categories: [bad] }), /context\.knowledge_categories/);
+  assert.deepEqual(parseAppManifest(withContext({ knowledge_categories: ["d-156e8f8e77", "runtime-ops", "a_b"] })).context?.knowledge_categories, ["d-156e8f8e77", "runtime-ops", "a_b"]);
+});
+
+test("#5100 M5 카테고리 50개 통과 · 51개 400", () => {
+  const keys = (n: number) => Array.from({ length: n }, (_, i) => `k${i}`);
+  assert.equal(parseAppManifest(withContext({ knowledge_categories: keys(50) })).context?.knowledge_categories.length, 50);
+  rejects400(withContext({ knowledge_categories: keys(51) }), /context\.knowledge_categories/);
+});
+
+test("#5100 M6 자료 종류 — 표준 값 통과 · 모르는 값 400", () => {
+  assert.deepEqual(parseAppManifest(withContext({ source_kinds: ["slack", "local_file"] })).context?.source_kinds, ["slack", "local_file"]);
+  rejects400(withContext({ source_kinds: ["gmail"] }), /context\.source_kinds/);
+});
+
+test("#5100 M7 folders 는 빈 배열이라도 400 — 다음 판", () => {
+  rejects400(withContext({ folders: [] }), /context\.folders/);
+  rejects400(withContext({ knowledge_categories: ["a1"], folders: ["shared/x"] }), /context\.folders/);
+});
+
+test("#5100 M8 모르는 칸(오타) 400 — 좁히는 선언은 모르는 칸을 버리지 않는다", () => {
+  rejects400(withContext({ knowledge_category: ["a1"] }), /context/);
+});
+
+test("#5100 M9 context 가 글 · 배열 · null 이면 400", () => {
+  for (const bad of ["policy", ["policy"], null]) rejects400(withContext(bad), /context/);
+});
+
+test("#5100 M10 최상위 모르는 칸은 context 와 함께여도 종전대로 통과", () => {
+  const m = parseAppManifest({ ...withContext({ knowledge_categories: ["a1"] }), future_key: { x: 1 } }) as Record<string, unknown>;
+  assert.deepEqual(m.future_key, { x: 1 });
+  assert.deepEqual((m.context as { knowledge_categories: string[] }).knowledge_categories, ["a1"]);
+});
+
+// ── #5082 작업별 앱 지시(ai.instructions) ── 엣지 표 I1~I4
+//  parseAppManifest 는 모양(작업 이름 글 → 경로 글)만 본다 — 뜻(선언한 작업 · 상대 경로 · 파일)은 설치 · 판 저장 때 loader 가 본다(loader.test L1~L6).
+//   저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 옛 코어가 남긴 매니페스트로 400 이 되지 않게(격리 리뷰 N4).
+test("I1·I3 ai.instructions — 작업 이름 → 경로 글을 그대로 보존 · 선언이 없으면 없다", () => {
+  const m = parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }, { name: "sum-up" }], instructions: { answer: "ai/answer.md", "sum-up": "prompts/s.txt" } } });
+  assert.deepEqual(m.ai?.instructions, { answer: "ai/answer.md", "sum-up": "prompts/s.txt" });
+  assert.equal(parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } }).ai?.instructions, undefined, "선언이 없으면 없다(종전 매니페스트 무회귀)");
+});
+
+test("I2 다시 읽기는 뜻을 따지지 않는다 — 선언 안 한 작업 이름 · 묶음 밖 경로도 저장된 그대로 읽힌다(설치 · 판 저장에서 막는다) · 모양이 틀리면 거절", () => {
+  const stored = parseAppManifest({ ...base(), ai: { jobs: [], instructions: { gone: "../x.md" } } });
+  assert.deepEqual(stored.ai?.instructions, { gone: "../x.md" });
+  for (const bad of [{ answer: 3 }, ["ai/a.md"], "ai/a.md"]) {
+    assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }], instructions: bad } }), /ai\.instructions/, JSON.stringify(bad));
+  }
+});
+
+test("I4 지시는 ai 바로 아래 자리다 — ai.jobs[] 안(strict)에 두면 거절(이 칸을 모르는 옛 코어가 ai 바로 아래는 무시한다 · 롤백 안전)", () => {
+  assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer", instructions: "ai/answer.md" }] } }), /ai\.jobs\.0/);
+});

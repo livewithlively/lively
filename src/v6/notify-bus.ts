@@ -72,13 +72,17 @@ export interface NotifySessionEvent {
  */
 export interface NotifyAppEvent {
   type: "app";
-  kind: "attach" | "detach" | "data";
+  /** updated(#4600) — 앱의 **코드**가 바뀌었다(app_save 로 고침 · app_revert 로 되돌림). 세션 옆 앱 칸이 그 앱 화면을 다시 띄운다. */
+  kind: "attach" | "detach" | "data" | "updated";
   app_id: string;
-  /** 어느 세션의 일인가 — 붙이기·떼기는 늘, 데이터 변경은 세션에서 쓴 것일 때만(앱 화면에서 쓴 것은 null). */
+  /** 어느 세션의 일인가 — 붙이기·떼기는 늘, 데이터 변경은 세션에서 쓴 것일 때만(앱 화면에서 쓴 것은 null). updated 는 null. */
   session: string | null;
   /** data 일 때 — 바뀐 테이블과 종류. */
   table?: string;
   op?: "insert" | "update" | "delete";
+  /** updated 일 때 — 지금 서빙되는 판 번호와 그 판의 요지(되돌림이면 «되돌림 → N판»). */
+  version_no?: number;
+  note?: string | null;
   /** 누가 썼나의 표면(mcp·web·app-ui). 화면이 제 손으로 쓴 것에 스스로 다시 그리지 않게 가르는 재료. */
   source?: string;
   key: string;
@@ -93,8 +97,8 @@ export interface NotifyAppEvent {
 export interface NotifyPresenceEvent {
   type: "presence";
   session: string;
-  /** 도착 순 — 열람 도장(/seen)의 응답 `viewers` 와 같은 모양. */
-  viewers: Array<{ id: string; name: string }>;
+  /** 도착 순 — 열람 도장(/seen)의 응답 `viewers` 와 같은 모양. term(#4996) = 그 사람이 터미널로 보고 있고 손길이 있다. */
+  viewers: Array<{ id: string; name: string; term?: boolean }>;
   key: string;
   ts: number;
   ws?: NotifyWorkspace;

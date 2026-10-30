@@ -96,7 +96,7 @@ export const hooksCapabilities: Capability[] = [
         .optional()
         .describe("발화 라이프사이클 이벤트. Codex 는 SessionEnd·Notification 을 제외한 8개 지원(0.142 실측). 미전송=기존 유지(#970, 신규 훅은 필수)"),
       source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block. 미전송=기존 유지, 빈 문자열=지움(#970)"),
-      harness: z.enum(["claude", "codex", "openclaw", "opencode", "antigravity", "grok", "all"]).optional().describe("대상 하네스(기본 all). 미전송=기존 유지(#970)"),
+      harness: z.enum(["claude", "codex", "openclaw", "opencode", "antigravity", "grok", "cursor", "all"]).optional().describe("대상 하네스(기본 all). 미전송=기존 유지(#970)"),
       matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴. null/빈값=전체매칭, 미전송=기존 유지(#970)"),
       timeout_sec: z.number().int().min(1).max(120).optional().describe("실행 타임아웃 초(1~120, 기본 10)"),
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
@@ -104,7 +104,7 @@ export const hooksCapabilities: Capability[] = [
       note: z.string().optional().describe("메모"),
       summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
-      sort: z.number().optional().describe("정렬 순서"),
+      sort: z.number().optional().describe("실행 순서 — 러너는 sort 오름차순으로 돈다. 제품 기본(시드) 훅끼리는 sort 가 같으면 동시에 돌고, 직접 만든 훅은 조직이 동시 실행(runtime_config.hooks.concurrent)을 켜야 같은 sort 끼리 동시에 돈다. 다른 훅이 끝난 뒤에 돌아야 하면 더 큰 값을 준다"),
     }),
   restRuntime("org_hook_remove", "커스텀 훅 제거",
     "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
@@ -144,13 +144,23 @@ export const hooksCapabilities: Capability[] = [
       if (event) hooks = hooks.filter((h) => h.event === event);
       // relay_decisions(#892) — 러너가 PreToolUse 에서 하네스로 전파할 결정값. 이미 매 이벤트 오는 응답에
       //  얹으므로 왕복이 늘지 않는다. 구버전 러너는 이 필드를 무시하고, 신 러너는 필드가 없으면 자체 기본값을 쓴다.
-      const relay = (await getRuntimeConfig()).hook_relay_decisions;
+      const rc = await getRuntimeConfig();
+      const relay = rc.hook_relay_decisions;
       // 시드 훅은 코드 본문으로 덮어 내려준다(#1836) — 과거에 편집된 행이 남아 있어도 실행은 항상 최신 제품 코드다.
       //  content_hash 도 함께 덮이므로 런너의 무결성 게이팅은 그대로 성립한다.
       return { hooks: effectiveHooks(hooks).map((h) => ({
         id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
         content_hash: h.content_hash, timeout_sec: h.timeout_sec,
-      })), relay_decisions: relay };
+        // 동시 실행이 켜졌으면 러너가 sort 가 같은 훅을 한 묶음으로 동시에 돌린다. 구 러너는 이 필드를 무시하고 종전처럼 차례로 돈다.
+        sort: h.sort,
+        // seed — 제품이 배포하는 시드 훅인가(#5034). 러너는 시드 훅끼리는 조직 설정 없이도 같은 sort 를 겹쳐 돌린다(제품 코드라
+        //  서로의 결과에 기대지 않음을 우리가 보장한다). 구 러너는 무시한다.
+        seed: isSeedHook(h.id),
+        // concurrent — 조직 설정(runtime_config.hooks.concurrent, 기본 false). 켜면 직접 만든 훅도 같은 sort 끼리 겹친다.
+      })), relay_decisions: relay, concurrent: rc.hooks.concurrent === true,
+      // runtime — 훅 실행 방식(#5034). 기본 worker = 시드 훅은 러너 안의 스레드(직접 만든 훅은 본문 표식이 있을 때만) ·
+      //  process = 전부 종전처럼 훅마다 프로세스(되돌리기).
+      runtime: rc.hooks.runtime };
     },
     false, { harness: z.string().optional(), event: z.string().optional() }),   // #1403 — types.ts input 규약
 

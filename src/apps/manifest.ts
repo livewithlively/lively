@@ -13,6 +13,8 @@ import { createHash } from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { SCOPES_ALLOWED } from "../auth/scopes.js";
 import { STRICT_SLUG, assertAssetId } from "../org/asset-id.js";
+import { parseColumnType, defaultLiteralText, DEFAULT_EXPRS } from "./store-ddl.js";
+import { SOURCE_KINDS } from "../v6/source-kinds.js";   // #5100 맥락 범위의 자료 종류(잎 모듈 — DB 무접근)
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 
@@ -40,9 +42,28 @@ export const APP_INSTANCE_MULTIPLICITIES = ["single", "multiple"] as const;
 
 // OS가 직접 그리는 builtin 전용 renderer. 매니페스트에는 기록되지만, 소비자는 source.kind='builtin' 일 때만 신뢰한다.
 //  외부 앱이 같은 문자열을 선언해도 generic opaque iframe 경로를 벗어나지 못한다.
-export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn"] as const;
+export const APP_SYSTEM_RENDERERS = ["session", "browser", "classic", "inbox", "sources", "taxonomy", "learn", "builder"] as const;   // builder = 앱빌더(#4632)
 /** #1891 — 알림 권한이 함의하는 능력 이름. 이 이름이 바뀌면 파생도 같이 바뀌어야 한다. */
 export const NOTIFY_TOOL = "app_notify";
+/** #4594 — 「세션에 글 보내기」 권한(permissions.chat_send)이 함의하는 능력 이름. 앱 화면의 lively.chat.send 가 이 도구를 grant 에서 찾는다. */
+export const CHAT_SEND_TOOL = "app_chat_send";
+/** #4482 앱 주소 iframe 에 선언으로만 위임하는 장치 권한(권한 정책 이름 그대로). */
+export const APP_DEVICES = ["microphone", "camera", "clipboard-read", "geolocation"] as const;
+export type AppDevice = (typeof APP_DEVICES)[number];
+/** #4592 — 「붙은 세션의 프로젝트 자료에서 파일 읽기」 권한(permissions.project_files)이 함의하는 능력 이름. 앱 화면의 lively.files 가 이 도구를 grant 에서 찾는다. */
+export const PROJECT_FILES_TOOL = "app_project_files";
+/** #4629 — 「전체 자료에서 파일 읽기」 권한(permissions.workspace_files)이 함의하는 능력 이름. lively.files 의 scope 'all' 이 이 도구를 grant 에서 찾는다. */
+export const WORKSPACE_FILES_TOOL = "app_workspace_files";
+/** #4673 — 「이 앱의 앱 폴더에 파일을 올리고 받기」 권한(permissions.app_folder)이 함의하는 능력 이름. 앱 주체가 file_url 로 제 앱 폴더(apps/<앱>/…)의 서명 주소를 받는다. */
+export const FILE_URL_TOOL = "file_url";
+/** #4488 — 「AI 실행」 권한(permissions.ai_runs)이 함의하는 능력 이름들(capabilities/ai-runs.ts AI_RUN_TOOLS 와 같은 글자). 앱 주소 /_lively/ai/* · lively.ai.* 가 이 도구를 grant 에서 찾는다. */
+export const AI_RUN_TOOLS = ["app_ai_run", "app_ai_run_get", "app_ai_runs", "app_ai_run_cancel", "app_ai_targets"] as const;
+export const AI_RUN_TOOL = AI_RUN_TOOLS[0];
+/**
+ * #4486 — 서버를 선언한 앱(web.server)이 함의하는 «백그라운드 작업» 도구들(capabilities/app-jobs.ts 와 같은 글자). 앱 서버 SDK livelyJobs() · 앱 주소 /_lively/jobs ·
+ *  lively.jobs.* 가 이 도구를 grant 에서 찾는다. 작업은 그 앱의 서버 코드를 그 사람 이름으로 뒤에서(15분까지) 돌리는 것이라 동의 창에 «백그라운드 작업» 줄로 보인다.
+ */
+export const APP_JOB_TOOLS = ["app_job_start", "app_job_get", "app_jobs", "app_job_cancel"] as const;
 
 // ── zod 스키마 ────────────────────────────────────────────────────────────────
 
@@ -74,7 +95,44 @@ const permissionsSchema = z.object({
   // #1891 — 이 앱이 사용자에게 알림을 보낼 수 있나. 기본 false(fail-closed): 선언하지 않은 앱은 못 쏜다.
   //  선언만으로도 부족하고 그 멤버의 활성 grant 가 함께 있어야 한다(src/apps/notify-policy.ts).
   notifications: z.boolean().default(false),
+  // #4594 — 이 앱 화면이 **붙은 세션에 글을 바로 보낼** 수 있나(lively.chat.send). 기본 false(fail-closed). 그 사람의 AI 세션에 말이
+  //  들어가는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_chat_send 가 있어야 한다(apps/app-chat-send.ts).
+  chat_send: z.boolean().default(false),
+  // #4592 — 이 앱 화면이 **붙은 세션의 프로젝트 자료(공유 폴더)** 에서 읽을 수 있는 파일 확장자(점 없이 · 소문자). 빈 배열 = 못 읽는다(fail-closed).
+  //  목록(최신순)과 내용 읽기뿐이고 쓰기는 없다(lively.files.list / .read). 그 사람이 볼 수 있는 프로젝트의 파일이 앱으로 들어오는 능력이라
+  //  동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_project_files 가 있어야 한다(apps/app-project-files.ts).
+  project_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
+  // #4629 — 이 앱 화면이 **그 사람이 볼 수 있는 모든 프로젝트의 자료**에서 읽을 수 있는 파일 확장자(lively.files 의 scope 'all').
+  //  project_files 보다 넓은 능력이라 **따로** 선언하고 따로 동의받는다(app_workspace_files) — 붙은 세션의 프로젝트 밖 파일이 앱으로 들어온다.
+  //  읽기뿐이고, 여전히 세션에 붙은 앱 화면에서만 · 프로젝트 공개 범위 안에서만 닿는다(apps/app-project-files.ts).
+  workspace_files: z.array(z.string().regex(/^[a-z0-9]{1,8}$/, "확장자는 점 없이 소문자·숫자 1~8자")).max(8).default([]),
+  // #4673 — 이 앱(화면 · 서버)이 **제 앱 폴더**(워크스페이스 apps/<앱>/)에 파일을 올리고 받을 수 있나. 기본 false(fail-closed).
+  //  그 사람 이름으로 워크스페이스 저장소에 쓰는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 file_url 이 있어야 한다
+  //  (files/file-access.ts). 남의 앱 폴더 · 공유 폴더는 이 선언으로 열리지 않는다(프로젝트 파일 읽기는 project_files 그대로).
+  app_folder: z.boolean().default(false),
+  // #4488 — 이 앱이 **AI 를 실행**할 수 있나(/_lively/ai/runs · lively.ai.run). 기본 false(fail-closed). 워크스페이스 API 키의 돈을 쓰거나 그 사람 구독으로 작업을
+  //  돌리는 능력이라 동의 항목이다 — 선언만으로 부족하고 그 멤버의 활성 grant 에 app_ai_run 이 있어야 한다(ai-runs/service · 동의 창 web/v2/app-session.ts).
+  ai_runs: z.boolean().default(false),
 }).strict();
+
+// #4488 — AI 를 쓰는 작업 선언(ai.jobs). 이름으로 선언해 두면 워크스페이스 관리 도구(app_ai_account_set)에서 작업별 실행 계정을 따로 걸 수 있다(설계 §12 ④ 조건 ④).
+const aiJobSchema = z.object({
+  name: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "ai.jobs[].name 은 소문자·숫자·_·- 1~64자"),
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+}).strict();
+//  #5082 — 작업별 지시 파일(ai.instructions — 작업 이름 → 앱 묶음 안 파일 경로). 그 작업 이름으로 도는 AI 실행에 게이트웨이가 «부른 사람의 판» 의 그 파일을
+//   시스템 지시로 싣는다(apps/app-job-instructions.ts). 앱 데이터 폴더(작업 폴더)에 둔 지시는 구성원 · 작업 AI 가 고칠 수 있어, 판으로 검수된 지시가 필요한
+//   앱은 이 자리를 쓴다 — 지시를 실은 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(runner.claudeJobArgv).
+//   ★ ai.jobs[] 안이 아니라 ai 바로 아래에 둔다 — ai.jobs[] 는 strict 라, 이 칸을 모르는 옛 코어로 되돌리면 그 앱의 매니페스트를 아예 못 읽는다
+//    (ai 는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다 — web.root 와 같은 까닭).
+//   ★ 여기는 모양(글 → 글)만 본다. 뜻(선언한 작업 이름인가 · 묶음 안 상대 경로인가 · 파일 · 크기 · 글자)은 설치 · 판 저장 때 loader 가 본다 —
+//    저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 많아, 옛 코어가 저장한 매니페스트 하나로 그 자리들이 400 으로 막히지 않게(격리 리뷰 N4 · #5050 과 같다).
+const aiSchema = z.object({
+  jobs: z.array(aiJobSchema).max(32).default([]),
+  instructions: z.record(z.string(), z.string()).optional()
+    .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글 · NUL 없이). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"),
+}).passthrough().optional();
 
 const uiPageSchema = z.object({
   key: slugSchema,
@@ -145,14 +203,38 @@ const jobSchema = z.object({
   }).strict(),
 }).strict();
 
+const IDENT_RE = /^[a-z_][a-z0-9_]{0,62}$/;
+// #4483 칸 제약·구조 변경 — 전부 선택. 값 정합성은 DB 가 지킨다(앱 코드·AI 가 틀린 값을 넣어도 거부된다).
 const dataColumnSchema = z.object({
-  name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "컬럼명은 소문자 영숫자/_(소문자·_로 시작)"),
-  type: z.string().min(1).max(64),                   // 선언형 — DDL 생성기가 화이트리스트 검증(별도)
+  name: z.string().regex(IDENT_RE, "컬럼명은 소문자 영숫자/_(소문자·_로 시작)"),
+  type: z.string().min(1).max(64),                   // 선언형 — DDL 생성기가 화이트리스트 검증(store-ddl.parseColumnType)
+  not_null: z.boolean().optional(),
+  default: z.unknown().optional(),                   // 값 기본값(JSON) — 형에 맞는 리터럴로(store-ddl.defaultLiteralText)
+  default_expr: z.string().max(40).optional(),       // 식 기본값 — store-ddl.DEFAULT_EXPRS 만
+  unique: z.boolean().optional(),
+  check: z.string().min(1).max(1000).optional(),     // 검사 식 — 설치 때 검사기가 해석한다(그 표의 칸만 · 위험 함수 거부)
+  references: z.object({
+    table: z.string().regex(IDENT_RE, "references.table 은 같은 앱의 테이블 이름"),
+    on_delete: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
+  }).strict().optional(),
+  values: z.array(z.string().min(1).max(200)).min(1).max(200).optional(),   // type: enum 의 값
+  renamed_from: z.string().regex(IDENT_RE, "renamed_from 은 옛 칸 이름").optional(),
+}).strict();
+
+// #4226 인덱스 선언 — 테이블이 커지면 인덱스 없는 조회가 전체 훑기가 되어 자유 SQL 의 문장 시간 상한(5초)에 걸린다.
+//  칸은 선언한 칸 또는 시스템 칸(id·created_at)만(parseAppManifest 가 대조). unique 는 같은 값 두 번을 막는다.
+const dataIndexSchema = z.object({
+  columns: z.array(z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "인덱스 칸 이름은 소문자 영숫자/_")).min(1).max(8),
+  unique: z.boolean().default(false),
 }).strict();
 
 const dataTableSchema = z.object({
   name: z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "테이블명은 소문자 영숫자/_(소문자·_로 시작)"),
   columns: z.array(dataColumnSchema).min(1),
+  indexes: z.array(dataIndexSchema).max(20).default([]),
+  // #4483 여러 칸에 걸친 검사(예 `starts_at < ends_at`) · 지울 칸(데이터가 있으면 보관 스키마로 옮긴 뒤 지운다).
+  checks: z.array(z.string().min(1).max(1000)).max(20).default([]),
+  drop_columns: z.array(z.string().regex(IDENT_RE, "drop_columns 는 칸 이름")).max(100).default([]),
 }).strict();
 
 const sectionSchema = z.object({
@@ -160,8 +242,48 @@ const sectionSchema = z.object({
   file: z.string().min(1).max(512),                  // 패키지 내 상대경로(예: persona.md)
 }).strict();
 
+// #4595 — 앱이 **세션에 붙었을 때 그 세션의 AI 에게 실리는 지침**. 사람이 읽는 설명이 아니라 AI 의 행동 규칙이다
+//  («HTML 을 만들면 이 앱에 올려라» · «이런 글이 오면 표를 읽어 답을 적어라»). 붙은 앱 목록(session_apps)에 그대로 실리고,
+//  시드 훅 session-apps-inject 가 테이블 안내 뒤에 붙인다. 없던 때는 AI 가 테이블 이름만 보고 앱의 목적을 짐작해야 했다.
+//  reinject_every — 대화가 길어져 하네스가 앞부분을 요약하면 한 번 실린 안내가 흐려진다. 이 턴 수마다 같은 목록이어도
+//   다시 알린다(붙은 앱이 여럿이면 가장 작은 값). 4000자 상한은 매 턴 맥락에 들어가는 글이라 짧게 두라는 뜻이다.
+//  구성원 앱(app_save)도 가질 수 있다 — 지침은 그 세션 안에서만 읽히는 글이라 다른 사람에게 새는 것이 없다(member-app.ts 위반 아님).
+const agentSchema = z.object({
+  instructions: z.string().min(1).max(4000),
+  reinject_every: z.number().int().min(5).max(500).default(40),
+}).strict().optional();
+
+// #5100 앱 v2-43 — 앱이 **읽을 맥락의 범위**. 선언하면 이 앱 토큰(앱 세션 · 앱 작업 · 앱 서버 · 앱 화면)의 지식 · 자료 읽기가
+//  공개범위 ∩ 이 범위로 좁혀진다(v6/read-scope.ts). 선언하지 않으면 종전과 같다(실행 멤버가 보는 것 전부).
+//  · knowledge_categories — 읽을 지식의 카테고리 key(category_list 의 key). 적은 카테고리만 — 카테고리 사이 연결선(의존 관계)이나 화면 묶음은
+//    따라가지 않는다(상민 2026-10-28 결정 ①). 없는 key 는 설치 · 저장 때 거절한다(apps/app-context.ts assertContextInstallable).
+//  · source_kinds — 읽을 자료의 종류(v6/source-kinds.ts). **적지 않으면 자료는 하나도 못 읽는다**(닫힘 — 결정 ②).
+//  · folders — 다음 판이다. 지금 적으면 저장을 거절한다(적은 범위가 지켜지지 않는데 지켜진다고 믿게 두지 않는다).
+//  ★ strict — 최상위(passthrough)와 달리 오타를 거절한다: 좁히는 선언에서 모르는 칸을 버리면 앱 제작자는 좁혔다고 믿는데 실제로는
+//   안 좁혀진다(권한 선언 permissions 가 strict 인 것과 같은 까닭). 이 칸을 모르는 옛 코어로 되돌리면 범위 없이 읽힌다 — 롤백 메모.
+const contextSchema = z.object({
+  knowledge_categories: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "카테고리 key 는 소문자 슬러그(a-z0-9_-, 64자 이내) — category_list 의 key"))
+    .max(50).default([])
+    .describe("이 앱이 읽을 지식의 카테고리 key(category_list 의 key). 적은 카테고리에 든 지식만 읽힌다 — 연결선 · 묶음은 따라가지 않는다"),
+  source_kinds: z.array(z.enum(SOURCE_KINDS)).max(SOURCE_KINDS.length).default([])
+    .describe("이 앱이 읽을 자료의 종류. 적지 않으면 자료 도구(source_*)로는 하나도 못 읽는다 — 파일 권한(project_files · workspace_files · 앱 폴더)은 이 범위 밖이다(폴더 범위는 다음 판)"),
+  folders: z.unknown().optional().describe("다음 판 — 지금 적으면 저장을 거절한다"),
+}).strict().optional()
+  .describe("이 앱이 읽을 맥락의 범위(#5100). 적으면 이 앱 토큰의 지식 · 자료 읽기(검색 · 목록 · 상세 · 링크)가 공개범위 ∩ 이 범위로 좁혀지고, 활동 · 프로젝트에 달린 지식 참조에서도 범위 밖은 빠진다. 범위 밖을 이름으로 열면 거절된다. 범위를 지킬 수 없는 도구(휴지통 · 실행 취소 · 내 사용 내역 · 맥락 파이프라인(수집 · 증류 · 카테고리 붙이기 · 관리기) · 새 토큰 발급 · 구성원 이름의 실행(위탁 · 브로커 · 예약 작업 · 프로젝트 대화 · 리브 · 처음 설정 분석) · self 소스 SQL)와 지운 문서의 이력은 쓸 수 없다. 범위를 적은 앱은 도구를 «전부»(permissions.tools · ext_tools 의 *)로 받을 수 없다 — 쓸 도구를 이름이나 좁은 꼴로 적는다. 항상-주입 문서(규칙 · 페르소나 섹션)는 범위와 무관하게 모든 세션에 들어간다. 범위는 실수를 막는 안전망이라 알려진 길을 막은 것이다 — 능력 밖 길(앱 세션의 터미널 세션 만들기 등)은 다음 판이다. 적지 않으면 실행한 사람이 보는 것 전부");
+
 // 이 코어가 **설치**할 줄 아는 매니페스트 스키마 버전. 파싱은 어떤 버전이든 받는다(아래 주석) — 설치만 이 값으로 게이트.
 export const SUPPORTED_MANIFEST_SCHEMA = 1;
+
+// #4769 앱 아이콘 선언 — 선 그림(path d · 24 격자 · 2000자) + 색(#RRGGBB) · 다크 색(선택). strict: 모르는 칸은 거부.
+//  describe 글은 public/lively-app.schema.json(scripts/gen-app-schema.mjs 가 이 스키마로 만든다)의 편집기 설명이 된다.
+const appIconSchema = z.object({
+  path: z.string().min(1).max(2000).regex(/^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]+$/, "path 는 SVG path 명령 · 숫자 · 구분자만")
+    .describe("SVG path 명령 · 숫자 · 구분자만(24×24 격자 · 선 1.7)"),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "색은 #RRGGBB").describe("라이트 테마의 선 색 #RRGGBB(흰 타일 위 3:1 이상)"),
+  color_dark: z.string().regex(/^#[0-9a-fA-F]{6}$/, "다크 색은 #RRGGBB").describe("다크 테마의 선 색 #RRGGBB(없으면 color)").optional(),
+}).strict()
+  .describe("#4769 앱 아이콘 — 24 격자 선 그림(SVG path d) 하나와 색. 선언이 없으면 기본 그림(화면이 있는 앱은 펄스 점, 없는 앱은 터미널).")
+  .optional();
 
 // 매니페스트 전체.
 //  ★ 최상위는 **passthrough**(미지 키 통과), 중첩은 strict — #1780 v2 §7-1 전방호환(설계 R2-C4).
@@ -169,6 +291,8 @@ export const SUPPORTED_MANIFEST_SCHEMA = 1;
 //   저장된 매니페스트가 grant 시점에 다시 파싱된다(capabilities/apps.ts) — strict 면 거기서 400 → 동의 불가·
 //   빌트인 앱 failed. 최상위 미지 키는 "이 코어가 모르는 선언" 일 뿐 위험이 아니므로 통과시키고, 중첩(permissions 등)
 //   은 오타가 곧 권한 오해라 종전대로 거부한다. 미지 키는 값 그대로 보존된다(재저장 시 유실 없음).
+//  ⚠ export — scripts/gen-app-schema.mjs 가 이 스키마로 public/lively-app.schema.json 을 만든다(#4769 에서 export 가 위 아이콘 스키마로 옮겨 붙어
+//   생성기가 못 돌았다 — #5050 에서 되돌림).
 export const appManifestSchema = z.object({
   // 편집기 자동완성용 관례 키 — 값은 쓰지 않는다.
   //  앱 개발자가 "$schema": "<게이트웨이>/ui/lively-app.schema.json" 를 적으면 VS Code 등이 그 자리에서 검증해 준다.
@@ -193,6 +317,20 @@ export const appManifestSchema = z.object({
     http_tools: z.array(z.record(z.unknown())).default([]),  // org_tool 프리셋 형식(설치가 재검증)
   }).strict().default({}),
   ui: uiSchema.default({}),
+  //  #4481 앱 v2-2 — 여러 파일 앱의 화면 폴더(web.root — 패키지 안 상대경로 · 예: "dist" · 패키지 맨 위면 "."). 주면 그 폴더의 파일 **전부**를
+  //   앱 주소(<앱>-<워크스페이스>.lvly.app)에서 그 경로 그대로 낸다(빌드 산출물 · 이미지 · 폰트). 화면 entry 는 이 폴더 안이어야 한다.
+  //   없으면 종전(v1) — 화면은 entry HTML 한 장이고 앱 주소 맨 앞(/) 에만 선다. 판정은 webRootOf.
+  //   ★ 최상위 칸에 둔다(ui 안이 아니라) — ui 는 strict 라, 이 칸을 모르는 옛 코어로 되돌리면 여러 파일 앱의 매니페스트를 아예 못 읽는다.
+  //    최상위는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다(그 앱을 화면 한 장 앱으로 본다 — 격리 리뷰 롤백 메모).
+  //    web 안도 같은 까닭으로 passthrough — 다음 단계(v2-5 서버 등)가 web 에 칸을 더한 뒤 이 코어로 되돌려도 읽힌다.
+  //  #4482 앱 v2-3 — 앱 주소 iframe 에 넘길 장치 권한(web.devices). 선언한 앱의 iframe 에만 `allow` 로 위임한다(상민님 2026-10-16 «선언한 앱만»):
+  //   크롬 · 파이어폭스는 iframe 의 권한을 **맨 위 사이트(워크스페이스 주소) 이름**으로 받고 한 번 허용하면 같은 워크스페이스의 다른 앱 iframe 도
+  //   다시 묻지 않고 쓴다 — 늘 위임하면 한 앱에 준 마이크를 다른 앱이 몰래 쓴다. 클립보드 쓰기 · 전체 화면 · 공유는 늘 위임한다(사람이 누를 때만 돈다).
+  //   permissions(strict)가 아니라 web(passthrough)에 두는 까닭은 web.root 와 같다 — 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
+  web: z.object({
+    root: z.string().min(1).max(512).optional(),
+    devices: z.array(z.enum(APP_DEVICES)).max(APP_DEVICES.length).optional(),
+  }).passthrough().optional(),
   // 실행 인스턴스 정책. 기존 v1 앱은 optional+multiple 로 해석해 무회귀.
   instances: instancesSchema,
   // builtin/system app 만 소비하는 셸 renderer 선언. 설치 파서는 보존하고 실행 경계가 source.kind 로 제한한다.
@@ -202,9 +340,62 @@ export const appManifestSchema = z.object({
   jobs: z.array(jobSchema).default([]),
   data: z.object({ tables: z.array(dataTableSchema).default([]) }).strict().default({}),
   sections: z.array(sectionSchema).default([]),
+  agent: agentSchema,
+  //  #4769 앱 아이콘 — 구성원이 만든 앱도 제 그림을 갖는다. 24 격자 선 그림(path d)과 색 둘(라이트 · 다크). 선언이 없으면
+  //   화면이 있는 앱은 liv, 없는 앱은 term(web/v2/glass-icon.ts builtinAppIcon). 최상위 passthrough 라 이 칸을 모르는 옛 코어도 읽는다.
+  icon: appIconSchema,
+  //  #4488 AI 실행 작업 선언 — 최상위 passthrough 라 이 칸을 모르는 옛 코어로 되돌려도 매니페스트가 읽힌다.
+  ai: aiSchema,
+  //  #5100 읽을 맥락의 범위(위 contextSchema 머리말).
+  context: contextSchema,
+  //  #5050 앱이 구성원의 AI 에 **내놓는** 도구(앱 v2-40) — permissions.tools(앱이 쓰는 라이블리 도구) · tools.*(앱이 설치하는 프록시 도구)와 다른 말이다.
+  //   최상위 칸이다(tools 는 strict 라 거기 두면 이 칸을 모르는 옛 코어가 매니페스트를 통째로 못 읽는다 — web.root 와 같은 까닭).
+  //   여기서는 «객체의 배열» 만 본다(tools.mcp_servers 와 같은 규약 — 설치가 재검증): 항목의 뜻 검사는 설치 · 판 저장 때 apps/app-mcp-decl.ts
+  //   assertAppMcpToolsInstallable(loader 가 부른다)이, 저장된 것 읽기는 appMcpToolsOf(틀린 항목만 건너뜀)가 한다 — 새 코어가 항목에 칸을 더해도
+  //   이 코어의 재파싱(동의 · 표시)이 깨지지 않게. 선언이 없으면 칸도 만들지 않는다(기본값 없음 — 도구 목록의 DB 읽기가 이 칸이 있는 앱만 고른다).
+  mcp_tools: z.array(z.record(z.unknown()))
+    .describe("이 앱이 구성원의 AI 대화창(라이블리 MCP)에 내놓는 도구 — 항목 { name, title?, description, input?, run: { kind, … }, level?: 'L0'|'L1' }. 앱 개발 가이드 «mcp_tools» 절")
+    .optional(),
 }).passthrough();
 
 export type LivelyAppManifest = z.infer<typeof appManifestSchema>;
+
+/** #4769 앱 아이콘 선언 — 화면(SVG · CSS)에 그대로 들어가므로 글자를 좁게 받는다. path 는 SVG path 명령 · 숫자 · 구분자만, 색은 #RRGGBB. */
+export const APP_ICON_PATH_RE = /^[MmZzLlHhVvCcSsQqTtAa0-9eE.,\-\s]{1,2000}$/;
+export const APP_ICON_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export interface AppIconSpec { path: string; color: string; color_dark?: string }
+/** 저장된 매니페스트에서 아이콘 선언을 읽는다 — 모양이 틀리면 null(화면은 기본 그림). 던지지 않는다. */
+export function appIconSpecOf(manifest: unknown): AppIconSpec | null {
+  const raw = (manifest as { icon?: unknown } | null)?.icon;
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const path = typeof o.path === "string" ? o.path.trim() : "";
+  const color = typeof o.color === "string" ? o.color.trim() : "";
+  const dark = typeof o.color_dark === "string" ? o.color_dark.trim() : "";
+  if (!APP_ICON_PATH_RE.test(path) || !APP_ICON_COLOR_RE.test(color)) return null;
+  return dark && APP_ICON_COLOR_RE.test(dark) ? { path, color, color_dark: dark } : { path, color };
+}
+
+/** 선언한 장치 권한(중복 · 모르는 값은 버린다). 저장된 매니페스트를 읽는 자리라 던지지 않는다. */
+export function webDevicesOf(manifest: unknown): AppDevice[] {
+  const raw = (manifest as { web?: { devices?: unknown } } | null)?.web?.devices;
+  if (!Array.isArray(raw)) return [];
+  return APP_DEVICES.filter((d) => raw.includes(d));
+}
+
+/**
+ * #4481 여러 파일 앱의 화면 폴더 — 패키지 기준 정규 상대경로(맨 위면 ""). v1 앱(web.root 없음)이면 null. 모양이 틀리면 null(설치 관문은
+ *  loader 가 400 으로 막는다 — 여기는 저장된 매니페스트를 읽는 자리라 던지지 않는다).
+ */
+export function webRootOf(manifest: unknown): string | null {
+  const raw = (manifest as { web?: { root?: unknown } } | null)?.web?.root;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const s = raw.trim();
+  if (s.includes("\\") || s.includes("\0") || s.startsWith("/")) return null;
+  const parts = s.split("/").filter((x) => x !== "" && x !== ".");
+  if (parts.some((x) => x === ".." || x.startsWith("."))) return null;
+  return parts.join("/");
+}
 
 /**
  * 설치 게이트 — 파싱은 통과했지만 이 코어가 **설치**하기엔 너무 새로운 매니페스트를 거부한다(400).
@@ -240,6 +431,37 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   if (m.permissions.notifications && !m.permissions.tools.includes(NOTIFY_TOOL)) {
     m.permissions.tools = [...m.permissions.tools, NOTIFY_TOOL];
   }
+  // #4594 — `chat_send: true` 는 `app_chat_send` 도구를 함의한다(알림과 같은 규약 — 사람에게 보이는 권한은 「세션에 글 보내기」, 도구 이름은 배관).
+  if (m.permissions.chat_send && !m.permissions.tools.includes(CHAT_SEND_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, CHAT_SEND_TOOL];
+  }
+  // #4592 — `project_files: ["html"]` 은 `app_project_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「프로젝트 자료에서 파일 읽기」).
+  if (m.permissions.project_files.length && !m.permissions.tools.includes(PROJECT_FILES_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, PROJECT_FILES_TOOL];
+  }
+  // #4629 — `workspace_files: ["html"]` 은 `app_workspace_files` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「전체 자료에서 파일 읽기」).
+  if (m.permissions.workspace_files.length && !m.permissions.tools.includes(WORKSPACE_FILES_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, WORKSPACE_FILES_TOOL];
+  }
+  // #4673 — `app_folder: true` 는 `file_url` 도구를 함의한다(같은 규약 — 사람에게 보이는 권한은 「앱 폴더에 파일을 올리고 받기」).
+  // #4488 — `ai_runs: true` 는 AI 실행 도구 다섯을 함의한다(사람에게 보이는 권한은 「AI 실행」, 도구 이름은 배관).
+  if (m.permissions.ai_runs) {
+    for (const t of AI_RUN_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
+  }
+  if (m.permissions.app_folder && !m.permissions.tools.includes(FILE_URL_TOOL)) {
+    m.permissions.tools = [...m.permissions.tools, FILE_URL_TOOL];
+  }
+  // #4486 — 서버를 선언한 앱(web.server 가 객체이거나 true — apps/app-server-config.ts serverDeclOf 와 같은 판정)은 백그라운드 작업 도구 넷을 함의한다
+  //  (사람에게 보이는 권한은 「백그라운드 작업」 — 그 앱의 서버 코드를 내 이름으로 뒤에서 돌리기). web 은 passthrough 라 원문을 본다.
+  const srv = (m as { web?: { server?: unknown } }).web?.server;
+  if (srv === true || (!!srv && typeof srv === "object" && !Array.isArray(srv))) {
+    for (const t of APP_JOB_TOOLS) if (!m.permissions.tools.includes(t)) m.permissions.tools = [...m.permissions.tools, t];
+  }
+
+  // #5100 폴더 범위는 다음 판 — 적어 둔 범위가 지켜지지 않는데 지켜진다고 믿게 두지 않는다(결정 ②).
+  if (m.context && m.context.folders !== undefined) {
+    throw new HttpError(400, "매니페스트 오류 [context.folders]: 폴더 범위는 아직 지원하지 않습니다(다음 판) — 지금은 knowledge_categories · source_kinds 만 적을 수 있습니다");
+  }
 
   // scope 상한 — 허용 scope 안이면서 앱 금지 scope(admin·runtime)가 아니어야 한다.
   for (const s of m.permissions.scopes) {
@@ -258,6 +480,55 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
   assertUniqueKeys("ui.widgets", m.ui.widgets.map((w) => w.key));
   assertUniqueKeys("jobs", m.jobs.map((j) => j.key));
   assertUniqueKeys("data.tables", m.data.tables.map((t) => t.name));
+  // #4226 인덱스 칸은 그 테이블의 칸이어야 한다 — 없는 칸이면 설치 때 DDL 이 실패해 원인이 흐려진다.
+  // #4483 칸 타입·제약·구조 변경 — 모양만 여기서(DB 없이). 검사 식의 뜻(칸·함수)은 설치 때 검사기가 본다.
+  const tableNames = new Set(m.data.tables.map((t) => t.name));
+  for (const t of m.data.tables) {
+    const where = (c: string) => `매니페스트 오류 [data.tables.${t.name}.columns.${c}]`;
+    const names = new Set<string>();
+    for (const c of t.columns) {
+      if (names.has(c.name)) throw new HttpError(400, `${where(c.name)}: 같은 칸 이름이 두 번 있습니다`);
+      names.add(c.name);
+      const ty = parseColumnType(c.type);                                   // 400 — 허용 밖 타입·범위
+      if (ty.enum !== (c.values !== undefined)) throw new HttpError(400, `${where(c.name)}: enum 타입에는 values 를, values 는 enum 에만 씁니다`);
+      if (c.values && new Set(c.values).size !== c.values.length) throw new HttpError(400, `${where(c.name)}: values 에 같은 값이 두 번 있습니다`);
+      if (c.default !== undefined && c.default_expr !== undefined) throw new HttpError(400, `${where(c.name)}: default 와 default_expr 은 함께 쓸 수 없습니다`);
+      if (c.default_expr !== undefined && !Object.hasOwn(DEFAULT_EXPRS, c.default_expr.toLowerCase())) {
+        throw new HttpError(400, `${where(c.name)}: default_expr 은 ${Object.keys(DEFAULT_EXPRS).join(" · ")} 중 하나입니다(값은 default 에 JSON 으로)`);
+      }
+      if (c.default !== undefined) defaultLiteralText(c.default, ty);      // 400 — 형과 맞지 않는 기본값 모양
+      if (c.values && c.default !== undefined && c.default !== null && !c.values.includes(String(c.default))) {
+        throw new HttpError(400, `${where(c.name)}: default '${String(c.default)}' 가 values 에 없습니다`);
+      }
+      if (c.references) {
+        if (!tableNames.has(c.references.table)) throw new HttpError(400, `${where(c.name)}: references.table '${c.references.table}' 는 이 앱이 선언한 테이블이 아닙니다`);
+        if (!ty.integer) throw new HttpError(400, `${where(c.name)}: references 칸은 정수형(int · bigint · int4 · smallint)이어야 합니다 — 가리키는 표의 id 와 맞춥니다`);
+        if (c.references.on_delete === "set null" && c.not_null) throw new HttpError(400, `${where(c.name)}: on_delete 'set null' 과 not_null 은 함께 쓸 수 없습니다`);
+      }
+      if (c.renamed_from !== undefined && (c.renamed_from === c.name || t.columns.some((o) => o.name === c.renamed_from))) {
+        throw new HttpError(400, `${where(c.name)}: renamed_from '${c.renamed_from}' 는 지금 선언한 다른 칸과 겹칩니다`);
+      }
+      if (c.check !== undefined && /;/.test(c.check)) throw new HttpError(400, `${where(c.name)}: check 는 식 하나입니다(세미콜론 없이)`);
+    }
+    for (const d of t.drop_columns) {
+      if (names.has(d)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.drop_columns]: '${d}' 는 지금 선언한 칸입니다 — 지울 칸만 적으세요`);
+      if (["id", "created_at", "tenant_id"].includes(d)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.drop_columns]: 시스템 칸 '${d}' 는 지울 수 없습니다`);
+    }
+    for (const ck of t.checks) if (/;/.test(ck)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.checks]: 식 하나씩(세미콜론 없이)`);
+  }
+  for (const t of m.data.tables) {
+    const cols = new Set(["id", "created_at", ...t.columns.map((c) => c.name)]);
+    const seen = new Set<string>();
+    for (const ix of t.indexes) {
+      for (const c of ix.columns) {
+        if (!cols.has(c)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: '${c}' 는 이 테이블의 칸이 아닙니다`);
+      }
+      if (new Set(ix.columns).size !== ix.columns.length) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 칸을 두 번 적었습니다(${ix.columns.join(", ")})`);
+      const key = `${ix.unique ? "u" : "i"}:${ix.columns.join(",")}`;
+      if (seen.has(key)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 인덱스가 두 번 있습니다(${ix.columns.join(", ")})`);
+      seen.add(key);
+    }
+  }
   assertUniqueKeys("sections", m.sections.map((s) => s.key));
 
   // 잡 run 은 prompt_asset 또는 prompt 중 하나가 있어야 한다.
@@ -267,6 +538,12 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
     }
   }
   return m;
+}
+
+/** (순수) 앱 묶음 안 상대 경로 꼴인가 — 앞 «/» · «\\» · 빈 마디 · «.» · «..» 마디 · 제어 글자가 없다. */
+export function isPackageRelPath(p: string): boolean {
+  if (!p || p.startsWith("/") || p.includes("\\") || /[\x00-\x1f]/.test(p)) return false;
+  return p.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
 }
 
 function assertUniqueKeys(where: string, keys: string[]): void {

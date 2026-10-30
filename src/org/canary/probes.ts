@@ -124,6 +124,10 @@ export const HARNESS_INSTALLERS: InstallerProbeSpec[] = [
     marker: "x.ai/cli", why: "무결성 검증이 없는 설치기라(실측) 내용이 바뀌면 우리가 먼저 알아야 한다." },
   { id: "grok", os: "win", label: "Grok Build", url: "https://x.ai/cli/install.ps1",
     marker: "x.ai/cli", why: "위와 같음 — ps1 판도 체크섬을 안 본다." },
+  { id: "cursor", os: "posix", label: "Cursor CLI", url: "https://cursor.com/install",
+    marker: "downloads.cursor.com", why: "체크섬 없이 패키지를 받아 ~/.local/bin 에 심링크만 거는 설치기다(rc 는 안 건드린다 — 실측, #4927)." },
+  { id: "cursor", os: "win", label: "Cursor CLI", url: "https://cursor.com/install?win32=true",
+    marker: "downloads.cursor.com", why: "윈도우 자리는 %LOCALAPPDATA%\\cursor-agent — 표의 binDir 이 이 스크립트에서 왔다(User PATH 를 스스로 심는다)." },
 ];
 
 const installerProbes: CanaryProbe[] = HARNESS_INSTALLERS.map((s) => ({

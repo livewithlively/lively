@@ -92,8 +92,35 @@ function wsKey(base: string): string {
   return !ws || ws === 'primary' ? base : base + '@' + ws;
 }
 
+// ── 조건부 다시 받기(#4989) ─────────────────────────────────────────────────────
+//  셸은 사이드바 목록(세션 · 기록 · 앱 인스턴스 · 리스트)을 8초마다 다시 묻는데, 대부분의 판은 **바뀐 것이 없다**. 서버(Express)는
+//   응답마다 ETag 를 붙이고 If-None-Match 가 맞으면 본문 없이 304 로 답하는데, 화면이 그 질문을 한 번도 안 했다.
+//   1Mbps 폰 실측(상민님 2026-10-25): 그 갱신이 한 판에 약 1MB 라 회선이 갱신만으로 꽉 찼다.
+//  ⚠ 브라우저 캐시에 맡기지 않는다 — /api/ui 응답은 전부 no-store 다(토큰 평문이 실리는 응답도 있다, src/web.ts). 그 규칙은 그대로 두고
+//   **이 페이지의 메모리**에 마지막 본문(글자 그대로)과 ETag 를 쥔다. 304 가 오면 쥐고 있던 글자를 **새로 풀어** 준다(호출부가 고쳐 쓴
+//   객체가 다음 판으로 새지 않게 — 200 으로 같은 본문을 받은 것과 똑같은 값이다).
+//  ⚠ 조건 헤더를 실을 때는 cache: 'no-cache' 로 보낸다. 기본 모드로 실으면 fetch 표준은 모드를 no-store 로 바꾸며 `Cache-Control: no-cache` 를
+//   붙이고, 서버(Express fresh)는 그런 요청의 If-None-Match 를 무시해 200 전량을 준다 — 크로미움만 그 헤더를 안 붙여 304 를 받는다.
+//   실측(2026-10-25, 프로덕션 출처 · app-instances 309KB): 기본 모드 = 크로미움 304 · 웹킷(아이폰 사파리) 200 · 파이어폭스 200,
+//   no-cache 모드 = 셋 다 304. no-cache 는 `max-age=0` 을 붙여 서버가 조건을 보고, 저장된 응답이 없으니(no-store) 304 가 페이지로 그대로 온다.
+//  ⚠ 304 는 «보낼 본문이 쥐고 있던 것과 같다» 는 서버의 답이다 — 토큰 · 워크스페이스가 바뀌어도 틀린 값을 주지 않는다(본문이 다르면 ETag 도 다르다).
+//  ⚠ 부르는 쪽이 고른 GET 만 탄다({ revalidate: true }) — 큰 목록을 자주 다시 묻는 자리만.
+const REVALIDATE_MAX = 24;
+const revalidated = new Map<string, { etag: string; text: string }>();
+
+// ── 보내기 전 검사(#5141) — 등록된 검사가 문장을 돌려주면 그 요청은 **보내지 않고** 409 로 던진다. ──
+//  화면 영어 보기(lib/screen-lang)가 쓴다: 켜져 있는 동안 화면에 보여 준 영어 문장이 쓰기 요청 본문에 들어 있으면
+//  (편집기가 화면 글을 통째로 읽어 저장 · 이름 바꾸기 칸이 화면 글로 채워짐 등) 번역이 데이터로 새는 것이다.
+//  이 모듈은 leaf 라 검사 쪽을 import 하지 않는다 — 401 처리기와 같은 역전(등록하는 쪽이 정한다).
+let requestGuard: ((path: string, method: string, body: unknown) => string | null) | null = null;
+function setRequestGuard(fn: typeof requestGuard): void { requestGuard = fn; }
+
 // ── fetch 헬퍼 — 401 은 토큰 폐기 + 주입된 처리기, 그 외 비정상은 {error} 메시지로 throw ──
 async function api(path: string, opts: any = {}): Promise<any> {
+  if (requestGuard) {
+    const why = requestGuard(String(path), String(opts.method || 'GET').toUpperCase(), opts.body);
+    if (why) { const e: any = new Error(why); e.status = 409; e.guard = 'screen-lang'; throw e; }
+  }
   const token = localStorage.getItem(TOKEN_KEY);
   const headers: any = Object.assign({}, opts.headers);
   if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -118,14 +145,37 @@ async function api(path: string, opts: any = {}): Promise<any> {
   //  대소문자 변형을 전부 걷어내고 하나만 둔다(실측 2026-08-24, 세션 완전 삭제 선택이 서버에 안 닿던 원인).
   for (const k of Object.keys(headers)) if (k.toLowerCase() === 'content-type' && k !== 'Content-Type') { if (!('Content-Type' in headers)) headers['Content-Type'] = headers[k]; delete headers[k]; }
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
+  const url = apiUrl(path);
+  const cond = opts.revalidate && !opts.body && String(opts.method || 'GET').toUpperCase() === 'GET' ? url : '';
+  const kept = cond ? revalidated.get(cond) : undefined;
+  if (kept) headers['If-None-Match'] = kept.etag;
+  const init: any = Object.assign({}, opts, { headers }, kept ? { cache: 'no-cache' } : {});
+  delete init.revalidate;
+  const res = await fetch(url, init);
   if (res.status === 401) {
     localStorage.removeItem(TOKEN_KEY);   // 토큰은 이 모듈 소관 — 죽은 토큰을 다음 요청에 다시 싣지 않는다
     if (onUnauthorized) onUnauthorized(); // 배선돼 있으면 앱이 state 를 비우고 로그인 게이트를 띄운다
     const e: any = new Error('인증이 필요합니다'); e.status = 401; throw e;
   }
+  if (res.status === 304 && kept) {
+    revalidated.delete(cond); revalidated.set(cond, kept);   // 다시 넣어 '최근'으로 — 넘칠 때 오래된 것부터 버린다
+    return JSON.parse(kept.text);
+  }
   let data: any = null;
-  try { data = await res.json(); } catch (_) { /* 빈 바디 허용 */ }
+  if (!cond) {
+    try { data = await res.json(); } catch (_) { /* 빈 바디 허용 */ }
+  } else {
+    //  고른 호출만 글자로 읽는다 — 304 때 다시 풀 원본이 필요하다. 나머지는 종전 그대로(res.json).
+    let text = '';
+    try { text = await res.text(); } catch (_) { /* 본문을 못 읽었다 — 빈 바디로 다룬다 */ }
+    try { data = text ? JSON.parse(text) : null; } catch (_) { /* 빈 바디 · JSON 아닌 바디 허용 */ }
+    const etag = res.ok && data !== null ? res.headers.get('ETag') : null;
+    revalidated.delete(cond);
+    if (etag) {
+      revalidated.set(cond, { etag, text });
+      while (revalidated.size > REVALIDATE_MAX) revalidated.delete(revalidated.keys().next().value as string);
+    }
+  }
   // 선택한 워크스페이스가 사라졌다(보관·오타) — 갇히지 않게 선택을 지우고 primary 로 복귀한다(1회 리로드).
   //  루프 안전: 지운 뒤에는 헤더가 안 붙으므로 재발하지 않는다. 일반 404(자원 없음)와는 메시지로 가른다.
   if (res.status === 404 && ws && data && typeof data.message === 'string' && data.message.indexOf('워크스페이스') === 0) {
@@ -183,6 +233,7 @@ adoptWorkspaceFromUrl();
 export {
   TOKEN_KEY,
   api,
+  setRequestGuard,
   apiUrl,
   appUrl,
   setUnauthorizedHandler,

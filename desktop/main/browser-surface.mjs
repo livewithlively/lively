@@ -45,10 +45,24 @@ export const WEBVIEW_FORCED_PREFS = Object.freeze({
   allowRunningInsecureContent: false,
   experimentalFeatures: false,
   webviewTag: false, // 서피스 안에서 또 서피스를 열지 못하게(중첩으로 이 격리를 우회하는 길 차단)
+  // 새 창은 페이지(webview 의 allowpopups 속성)가 아니라 **메인의 setWindowOpenHandler** 가 정한다(#5025).
+  //  속성이 없으면 Electron 이 window.open 을 처리기에 넘기기도 전에 null 로 끝낸다(v43.3.0 electron_browser_client.cc
+  //  CanCreateWindow — disablePopups). 구글 «팝업 로그인» 이 눌러도 반응 없던 원인이다. 열지 말지는 surfaceWindowOpenTarget.
+  disablePopups: false,
 });
 
 /** assign 이 아니라 **지워야** 하는 것들 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다. */
 export const WEBVIEW_DROPPED_PREFS = Object.freeze(["preload", "preloadURL"]);
+
+/**
+ * 앱이 준비되기 **전에** 거는 Chromium 스위치 — 창이 가려지거나 다른 데스크톱 공간에 있어도 «숨김»으로 치지 않는다(#4993).
+ *  왜: AI 가 쓰는 웹 칸은 사람이 다른 공간에서 일할 때(전체 화면 게임 등) 돈다. 그 사이 새로 연 페이지는 창이 숨김으로 쳐져
+ *  한 번도 그려지지 않아 화면 찍기가 끝나지 않았다(실측 2026-10-25 상민님 앱). 같은 조건 13차 실측(Electron 43.3.0):
+ *  스위치 없이는 렌더러 capturePage · 메인 capturePage(stayHidden 포함) · CDP · 창/게스트 backgroundThrottling 끄기 **8가지 모두 실패**,
+ *  스위치를 걸면 8가지 모두 새 페이지가 22~461ms 에 찍혔다.
+ *  ⚠ 대가: 가려진 창도 «보임»이라 그동안 웹 UI 의 숨김 절전(document.hidden)이 안 걸린다. 트레이로 닫거나 최소화한 창은 그대로 숨김이다.
+ */
+export const OCCLUDED_WINDOW_SWITCH = "disable-backgrounding-occluded-windows";
 
 /**
  * 앱 안에서 열지 않고 **시스템 브라우저로 넘길** 서비스 — Widevine DRM 이 필요한 유료 스트리밍.
@@ -99,27 +113,174 @@ export function surfaceNavTarget(url) {
 }
 
 /**
- * UA 에서 **임베디드 표식**을 뗀다 — `Electron/43.4.1` 과 앱 이름 토큰(`Lively/0.1.0`). 남는 건 순정 Chrome UA 다.
- *  서피스 세션에만 건다(게이트웨이 세션은 그대로 — 우리 서버는 UA 로 판정하지 않는다).
- *
- *  ⚠ 이건 **보험이지 지금 고장난 것을 고치는 게 아니다.** 실측상 구글 로그인은 기본 UA(Electron 토큰 포함) 그대로도
- *   막히지 않았다 — accounts.google.com 정상 렌더, 실제 OAuth 동의 플로우도 통과, `disallowed_useragent` 는 한 번도
- *   안 나왔다. 그래도 떼는 이유: 판정은 구글 쪽 사정이라 언제든 바뀔 수 있고 떼는 비용이 0 이다.
- *   토큰 단위로만 지운다(정규식으로 문자열을 훑지 않는다 — UA 는 공백으로 갈리는 토큰열이라 이게 더 정확하다).
+ * 웹 칸이 동시에 띄울 수 있는 팝업 창 수. Electron 엔 크롬의 팝업 차단기(사람이 누르지 않은 팝업 거르기)가 없어서,
+ *  상한이 없으면 광고 페이지가 창을 끝없이 쏟을 수 있다. 로그인 팝업은 한 번에 하나라 넉넉하다.
  */
-export function cleanUserAgent(ua, appName) {
-  const name = String(appName || "").trim().toLowerCase();
-  const drop = (tok) => {
-    const low = tok.toLowerCase();
-    if (low.startsWith("electron/")) return true;
-    if (name && low.startsWith(name + "/")) return true;
-    return false;
-  };
-  return String(ua || "")
-    .split(" ")
-    .filter((tok) => tok && !drop(tok))
-    .join(" ");
+export const SURFACE_POPUP_LIMIT = 4;
+
+/**
+ * 웹 칸 안에서 **새 창**(window.open · target=_blank)을 어디서 열지 (#5025).
+ *   - "popup"    앱 안의 작은 창으로 연다 — **opener 관계가 산다**. 구글·애플·마이크로소프트의 «팝업 로그인» 은 그 창이
+ *                로그인 결과를 opener 로 돌려준다(postMessage). 시스템 브라우저로 넘기면 결과가 돌아올 길이 없다.
+ *   - "external" 시스템 브라우저로 넘긴다
+ *   - "deny"     열지 않는다
+ *
+ * 앱 안으로 들이는 건 **스크립트가 창 기능을 주고 연 팝업**뿐이다 — disposition "new-window" 에 기능 문자열이 있을 때.
+ *  Shift+클릭도 "new-window" 지만 기능이 비어 있고 opener 도 없어서(OpenURLFromTab) 앱 안에 열면 주소줄 없는 창만 남는다.
+ *  탭 성격(target=_blank 링크 · 기능 없는 window.open = "foreground-tab"/"background-tab")과 함께 시스템 브라우저로 보낸다
+ *  (웹 칸엔 탭 줄이 없다 — 웹 칸의 새 탭으로 받는 건 별건, #4993). 열지 말지의 빈도·포커스 판정은 surfaceOpenGate.
+ *  disposition 문자열은 Electron 이 준다(v43.3.0 electron_api_web_contents.cc — NEW_POPUP·NEW_WINDOW → "new-window").
+ *  빈 주소(about:blank)는 «창을 먼저 열고 주소는 나중에 넣는» 흔한 모양이라 팝업으로는 받고, 시스템 브라우저로는 안 보낸다.
+ */
+export function surfaceWindowOpenTarget({ url, disposition, features, openPopups = 0 } = {}) {
+  const raw = String(url || "").trim();
+  const blank = !raw || /^about:blank(?:[?#]|$)/i.test(raw);
+  if (disposition === "new-window" && String(features || "").trim()) {
+    const t = blank ? "allow" : surfaceNavTarget(raw);
+    if (t !== "allow") return t;
+    return openPopups >= SURFACE_POPUP_LIMIT ? "deny" : "popup";
+  }
+  return surfaceNavTarget(raw) === "deny" ? "deny" : "external";
 }
+
+/** 팝업 창의 최소 크기 — 이보다 작으면 사람이 못 보고 못 닫는다(1×1 창 같은 속임수). */
+export const SURFACE_POPUP_MIN_SIZE = Object.freeze({ width: 320, height: 240 });
+
+/**
+ * 팝업 창의 BrowserWindow 설정을 **우리가** 짓는다 (#5025). Electron 은 window.open 의 기능 문자열에서 frame·modal·show·
+ *  alwaysOnTop·skipTaskbar·closable·focusable·transparent·opacity·x·y·width·height·titleBarStyle 등을 읽어 창 설정에 섞는다
+ *  (v43.3.0 parse-features-string.ts allowedWindowOptions → guest-window-manager.ts). 그대로 쓰면 남의 페이지가 «닫기 없는
+ *  모달 창(주인 창이 막힌다)» · «보이지 않는 창» · «화면 밖·화면보다 큰 창» 을 만든다.
+ *  그래서 **기본 거부**다 — 받는 건 크기뿐이고 그것도 작업 영역 안으로 줄인다. 위치는 작업 영역 가운데. 나머지는 전부 고정값.
+ * @param {object} requested Electron 이 섞은 설정(페이지의 기능 문자열 포함)
+ * @param {{x:number,y:number,width:number,height:number}} area 주인 창이 있는 화면의 작업 영역
+ */
+export function surfacePopupWindowSpec(requested, area) {
+  const r = requested || {};
+  const a = area && area.width > 0 && area.height > 0 ? area : { x: 0, y: 0, width: 1280, height: 800 };
+  const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const width = Math.round(Math.min(Math.max(num(r.width, 800), SURFACE_POPUP_MIN_SIZE.width), a.width));
+  const height = Math.round(Math.min(Math.max(num(r.height, 600), SURFACE_POPUP_MIN_SIZE.height), a.height));
+  return {
+    width,
+    height,
+    x: Math.round(a.x + (a.width - width) / 2),
+    y: Math.round(a.y + (a.height - height) / 2),
+    show: true,
+    frame: true,          // 남의 사이트는 우리 타이틀바를 그리지 않는다 — 테두리를 걷으면 닫을 자리가 없다
+    thickFrame: true,
+    modal: false,         // parent 와 같이 오면 주인(라이블리) 창이 막힌다
+    alwaysOnTop: false,
+    skipTaskbar: false,
+    closable: true,
+    movable: true,
+    resizable: true,
+    focusable: true,
+    minimizable: true,
+    maximizable: true,
+    fullscreenable: true,
+    transparent: false,
+    opacity: 1,
+    hasShadow: true,
+    enableLargerThanScreen: false,
+    hiddenInMissionControl: false,
+    autoHideMenuBar: true,
+    backgroundColor: "#ffffff",
+  };
+}
+
+/**
+ * 팝업 창 webContents 의 격리 — 웹 칸과 같다. 부를 때마다 **새 객체**다(Electron 이 넘겨받은 값에 써 넣을 수 있다).
+ *  · setWindowOpenHandler 의 overrideBrowserWindowOptions.webPreferences 는 페이지가 못 바꾸는 쪽이다(기능 문자열 < 부모 < 이것).
+ *  · 파티션도 웹 칸 것 — window.open 으로 연 창은 opener 저장소에서 태어나지만, opener 없이 새로 만드는 창은 이 값이 없으면
+ *    **기본 파티션(우리 토큰이 든 저장소)** 에 남의 사이트가 뜬다.
+ *  · preload 키는 아예 두지 않는다 — 값이 undefined 여도 키가 있으면 Electron 이 그걸 쓴다(WEBVIEW_DROPPED_PREFS).
+ */
+export function surfacePopupWebPreferences() {
+  return { ...WEBVIEW_FORCED_PREFS, partition: BROWSER_SURFACE_PARTITION };
+}
+
+/** 새 창 문(surfaceOpenGate)의 정책값 — 10초 안 3번(구글 버튼 연타·두 번 누름은 통과) · 1분에 12번. */
+export const SURFACE_OPEN_BURST = 3;
+export const SURFACE_OPEN_BURST_MS = 10_000;
+export const SURFACE_OPEN_PER_MINUTE = 12;
+
+/**
+ * 새 창(앱 안 팝업이든 시스템 브라우저든)을 지금 열어도 되는가 (#5025).
+ *  Electron 엔 크롬의 팝업 차단기가 없고, 처리기엔 «사람이 눌렀나» 가 오지 않는다(HandlerDetails 에 없다 · input-event 는
+ *  주 프레임만 봐서 구글 버튼 같은 다른 출처 iframe 클릭을 못 센다). 그래서 그 대신 둘을 본다 —
+ *   ① 사람이 그 앱 창을 쓰고 있다(주인 창 포커스): 뒤에 깔린 창·AI 혼자 도는 탭이 사람 화면에 창을 띄우지 않는다.
+ *   ② 빈도: 10초 안 3번 · 1분에 12번까지 — 막 열어 대는 페이지가 창·시스템 브라우저 탭을 쏟지 못한다.
+ *  기록은 탭 가족 단위로 둔다(createOpenLedger) — 팝업마다 따로 세면 팝업이 또 여는 사슬이 상한을 피한다.
+ * @param {{hostFocused: boolean, recent?: number[], now: number}} p recent = 그 가족이 최근 연 시각들(앞 판정의 반환값)
+ * @returns {{ok: boolean, recent: number[]}} recent 는 1분 안의 기록만 남기고, 열었으면 now 를 더한다
+ */
+export function surfaceOpenGate({ hostFocused, recent, now } = {}) {
+  const t = Number(now);
+  const kept = (Array.isArray(recent) ? recent : []).filter((v) => typeof v === "number" && Number.isFinite(v) && v <= t && t - v < 60_000);
+  if (!hostFocused || !Number.isFinite(t)) return { ok: false, recent: kept };
+  const burst = kept.filter((v) => t - v < SURFACE_OPEN_BURST_MS).length;
+  if (burst >= SURFACE_OPEN_BURST || kept.length >= SURFACE_OPEN_PER_MINUTE) return { ok: false, recent: kept };
+  return { ok: true, recent: [...kept, t] };
+}
+
+/**
+ * 새 창 문의 기록 장부 — **탭 가족**(처음 연 웹 칸 탭 + 거기서 이어 열린 팝업들) 단위로 센다 (#5025 격리 리뷰).
+ *  팝업마다 따로 세면 팝업이 또 팝업을 여는 사슬이 매번 빈 기록으로 시작해 상한이 무력해진다(리뷰 모델: 60초에 80번).
+ *  열쇠는 webContents 객체(WeakMap) — 닫힌 창의 기록은 저절로 사라진다. webContents 가 아니면 열지 않는다(실패 닫힘).
+ */
+export function createOpenLedger() {
+  const familyOf = new WeakMap();
+  const history = new WeakMap();
+  const isKey = (wc) => !!wc && (typeof wc === "object" || typeof wc === "function");
+  const family = (wc) => {
+    let f = familyOf.get(wc);
+    if (!f) { f = {}; familyOf.set(wc, f); }
+    return f;
+  };
+  return {
+    /** child(팝업 webContents)를 parent(그 팝업을 연 webContents)의 가족으로 넣는다. */
+    adopt(child, parent) {
+      if (isKey(child) && isKey(parent)) familyOf.set(child, family(parent));
+    },
+    /** 지금 열어도 되는가 — 되면 그 가족의 기록에 남긴다. */
+    check(wc, { hostFocused, now } = {}) {
+      if (!isKey(wc)) return false;
+      const f = family(wc);
+      const g = surfaceOpenGate({ hostFocused, recent: history.get(f), now });
+      history.set(f, g.recent);
+      return g.ok;
+    },
+  };
+}
+
+/**
+ * 팝업 창 제목 — 앞에 **실제 출처(호스트)** 를 붙인다. 팝업엔 주소줄이 없어서, 남의 페이지가 그럴듯한 로그인 화면을 띄워도
+ *  어디인지 보이게 한다(크롬도 팝업엔 출처를 보인다). 빈 창(about:blank)은 «빈 창» 이라고만 붙인다 — 그 창을 누가 썼는지는
+ *  제목만으론 알 수 없다. opener(최상위 페이지)의 호스트를 빌리면, 믿을 만한 페이지 안의 남의 iframe 이 연 빈 창이 그 페이지
+ *  이름을 달고 선다(격리 리뷰 3차). 스크립트가 빈 창에 쓴 거짓 제목도 «빈 창 — …» 으로 서서 출처 없이 서지 않는다.
+ */
+export function surfacePopupTitle(url, title) {
+  let host = "";
+  try {
+    const x = new URL(String(url || ""));
+    if (x.protocol === "http:" || x.protocol === "https:") host = x.host;
+  } catch { /* 깨진 주소 — 호스트 없음 */ }
+  const label = host || "빈 창";
+  const t = String(title || "").trim();
+  return t && t !== label ? `${label} — ${t}` : label;
+}
+
+// ── UA — 스톡 Electron UA 를 그대로 둔다(고쳐 쓰지 않는다) ─────────────────────────────────
+//  #5023: 서피스 세션의 UA 문자열을 재작성하면(Electron·앱 토큰 제거) Cloudflare Turnstile 이 600010
+//   («Security check failed. Please try refreshing or using a different browser.») 으로 막는다 —
+//   UA 문자열과 클라이언트 힌트(sec-ch-ua)가 어긋나 위장으로 읽히기 때문이다. 네이티브 UA 그대로면 통과한다.
+//   외부 최소재현 2건이 같은 결론: akriaueno/electron-turnstile-repro("the UA string ... alone flips the
+//   outcome · native UA passes, any rewrite fails") · stablyai/orca#18749("Keep the stock Electron UA").
+//   같은 조사에서 window.chrome·navigator.webdriver 위장은 **그 자체가 봇 signature** 라 하지 않는다.
+//  그래서 예전 cleanUserAgent(보험용 토큰 제거)를 폐지하고 main.mjs 의 setUserAgent 호출을 뗐다.
+//  ⚠ 앞으로도 UA 를 바꾸지 말 것. 꼭 신원을 숨겨야 하면 UA 문자열만 바꾸지 말고 CDP(Network.setUserAgentOverride)로
+//   userAgentMetadata(sec-ch-ua)까지 함께 맞춰야 한다 — 안 그러면 Turnstile 이 다시 깨진다(orca#19927 가 그 역전으로 재발을 자인).
 
 /**
  * `<webview>` 를 붙여도 되는가 (will-attach-webview). src 가 열 수 없는 스킴이면 **붙이지 않는다** —

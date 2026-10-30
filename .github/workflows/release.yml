@@ -3,7 +3,7 @@ name: release
 #  번들 = dist + public + kit + deploy + package*.json + scripts/{backfill-embeddings,normalize-shared-filenames}.mjs
 #   (node_modules 미포함 = arch 무관). 운영자가 박스에서 바로 돌려야 하는 1회성 도구는 여기 넣는다.
 #  박스에선 bootstrap.sh 가 이 에셋을 받아 install.sh 실행 → npm ci --omit=dev 로 deps(node-pty) 설치.
-#  설치: curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+#  설치: curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… bash
 on:
   push:
     tags: ['v*']

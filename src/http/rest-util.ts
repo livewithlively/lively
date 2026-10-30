@@ -11,13 +11,28 @@ export { HttpError };
 
 type AsyncHandler = (req: express.Request, res: express.Response) => Promise<void>;
 
+/** wrap 의 선택. logPath — 로그에 남길 경로 이름(기본 req.path). 경로 자체가 자격인 라우트(서명 주소 #4673)는 고정 이름을 준다. */
+export interface WrapOptions { logPath?: string }
+
+/**
+ * store 의 plain Error 문구 → 상태 코드와 응답 글. wrap 과 앱 주소의 같은 주소 API(apps/app-front-api.ts apiErrorReply)가 함께 쓴다 —
+ *  같은 도구를 어느 길로 불러도 같은 상태가 나오게. 해당 없으면 null(부르는 쪽이 500 으로).
+ */
+export function domainErrorReply(msg: string): { status: 404 | 502 | 400; error: string } | null {
+  if (msg.includes("없음")) return { status: 404, error: msg };
+  if (msg.includes("domainmap")) return { status: 502, error: `domainmap 연결 실패 — ${msg}` };
+  if (/검증 실패|허용|필수|미지정|형식/.test(msg)) return { status: 400, error: msg };
+  return null;
+}
+
 // Express 4 는 async rejection 을 전파하지 않음 — 전 라우트에 적용하는 래퍼.
 // store 의 plain Error 메시지를 상태코드로 매핑: '없음'→404 · 'domainmap'→502 · 검증 문구→400 · 그 외→500.
 // 이 한국어 부분문자열 매핑은 load-bearing — 신규 에러 메시지는 토큰('없음'/'검증 실패' 등)을 포함해야 한다.
-export function wrap(fn: AsyncHandler): express.RequestHandler {
+export function wrap(fn: AsyncHandler, opts: WrapOptions = {}): express.RequestHandler {
   return (req, res) => {
     fn(req, res).catch((err: unknown) => {
       if (res.headersSent) return;
+      const where = opts.logPath ?? req.path;
       // HttpError 라도 **5xx 는 반드시 로그에 남긴다**(#1278) — 종전엔 여기서 바로 응답만 하고 끝나서
       //  `HttpError(500,"업로드 실패")` 같은 서버측 실패가 gateway.log 에 흔적이 0건이었다(원인 추적 불가).
       //  errno 는 message 가 아니라 cause 에 있으니 명시적으로 꺼내 싣는다(pino 버전별 cause 직렬화에 의존하지 않는다).
@@ -25,11 +40,13 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
         if (err.status >= 500) {
           const c = (err as { cause?: unknown }).cause;
           logger.error({
-            path: req.path, status: err.status, msg_out: err.message,
+            path: where, status: err.status, msg_out: err.message,
             cause: c instanceof Error ? { message: c.message, code: (c as NodeJS.ErrnoException).code } : c,
           }, "web ui request failed");
         }
-        res.status(err.status).json({ error: err.message });
+        //  #3870 — 구조화 정보(err.body)를 같이 싣는다. `error` 는 **뒤에** 펼쳐 message 가 이기게 한다:
+        //   body 가 실수로 error 를 들고 와도 사용자 안내문이 조용히 덮이지 않는다. body 가 없으면 종전과 바이트 동일.
+        res.status(err.status).json({ ...(err.body ?? {}), error: err.message });
         return;
       }
       const msg = err instanceof Error ? err.message : "";
@@ -38,7 +55,7 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
       //  ⚠ 순환 import 방지로 여기서 정규식을 직접 둔다(disk-guard 는 rest-util 의 HttpError 를 쓴다).
       if ((err as NodeJS.ErrnoException)?.code === "ENOSPC" || (err as NodeJS.ErrnoException)?.code === "EDQUOT"
           || /ENOSPC|no space left on device|quota exceeded/i.test(msg)) {
-        logger.error({ err, path: req.path }, "디스크 부족으로 실패");
+        logger.error({ err, path: where }, "디스크 부족으로 실패");
         res.status(507).json({ error: "디스크 공간이 부족합니다 — 관리 ▸ 저장소·로그 에서 워크스페이스를 정리하거나 디스크를 늘리세요." });
         return;
       }
@@ -47,14 +64,13 @@ export function wrap(fn: AsyncHandler): express.RequestHandler {
       //  mkdir 이 이걸로 죽었는데 500 «internal_error» 로 나가 사용자도 운영자도 원인을 몰랐다. 원인이 명확하니 그대로 말한다
       //  (503 — 일시적, 브로커가 판을 재생성하면 풀린다). #813 디스크 부족 매핑과 같은 자리·같은 규율.
       if ((err as NodeJS.ErrnoException)?.code === "ENOTCONN" || /Transport endpoint is not connected|\bENOTCONN\b/i.test(msg)) {
-        logger.error({ err, path: req.path }, "공유 저장소 연결 끊김(ENOTCONN)으로 실패");
+        logger.error({ err, path: where }, "공유 저장소 연결 끊김(ENOTCONN)으로 실패");
         res.status(503).json({ error: "공유 저장소 연결이 끊겼습니다 — 잠시 뒤 다시 시도하세요. 계속되면 이 워크스페이스의 세션 컨테이너를 다시 띄워야 합니다(관리자)." });
         return;
       }
-      if (msg.includes("없음")) { res.status(404).json({ error: msg }); return; }
-      if (msg.includes("domainmap")) { res.status(502).json({ error: `domainmap 연결 실패 — ${msg}` }); return; }
-      if (/검증 실패|허용|필수|미지정|형식/.test(msg)) { res.status(400).json({ error: msg }); return; }
-      logger.error({ err, path: req.path }, "web ui request failed");
+      const mapped = domainErrorReply(msg);
+      if (mapped) { res.status(mapped.status).json({ error: mapped.error }); return; }
+      logger.error({ err, path: where }, "web ui request failed");
       res.status(500).json({ error: "internal_error" });
     });
   };
@@ -138,3 +154,103 @@ export function clampPage(
 }
 
 // v6 은퇴(2026-06-24): qtype·MappingBody·parseMappingBody(구 item→domain 매핑 body 검증) 제거 — 매핑 서브시스템 폐기.
+
+// ── 어댑터 파리티(#1403 계열) — REST parse 산출의 enum 검증을 **선언(zod input)에서 파생**한다. ──
+//  왜 필요한가: MCP 는 SDK 가 z.object(cap.input) 로 호출 전에 검증하는데(허용값 밖이면 InvalidParams),
+//   REST 는 zod 를 안 타고 mount.parse 가 유일한 검증이라(types.ts) 각 parse 가 enum 화이트리스트를
+//   **손으로 베껴** 왔다. 베끼기를 빠뜨린 필드는 조용히 통과해 DB enum/check 제약까지 새고, wrap() 의
+//   메시지 매핑에도 안 걸려 500 "internal_error" 로 나간다 — 같은 입력을 MCP 로 보내면 안내가 나오는데
+//   REST 만 정체불명 500 이다(실측: POST /api/ui/knowledge type='incident'). 손베끼기 누락은 한 필드가
+//   아니라 클래스였다(레지스트리 전수 관측 ~100 필드).
+//  그래서 문구·허용값을 REST 쪽에 다시 적지 않고 zod 선언에서 읽는다 — 스키마가 단일 진실원천이라
+//   enum 옵션을 늘려도 REST 가 자동으로 따라온다.
+//  ⚠ 빈 문자열·null 은 '미전송'으로 보고 건너뛴다: REST parse 관례상 생략을 ""로 싣는 필드가 있어
+//   (me_liv_home.choice·task_checklist_v6.action·org_collect_scope_options.system) 여기서 막으면 '필드를
+//   안 보낸 요청'이 400 이 된다. 필수 여부 판정은 종전대로 각 parse·핸들러 몫이다.
+//   🔴 남는 갭(의도적): 그래서 ""·null 은 이 가드를 그냥 통과한다 — 레지스트리 전수로 130여 개 enum
+//   필드가 그 값을 하류로 흘린다(MCP 는 z.enum 이 거절하므로 그만큼 파리티가 아직 안 맞는다). 통로별로
+//   가르려면(query=생략 관례 / body=명시값) parse 산출이 통로를 잃어버려 정보가 모자라다 — 닫으려면
+//   parse 쪽 관례부터 정리해야 해서 이 커밋 범위 밖으로 둔다.
+type ZodDefLike = { typeName?: string; innerType?: unknown; schema?: unknown; values?: unknown; type?: unknown };
+const defOf = (zt: unknown): ZodDefLike | undefined => (zt as { _def?: ZodDefLike } | null | undefined)?._def;
+
+/** optional/nullable/default/effects/array 래핑을 벗겨 enum 선언(허용값 + 안내문)을 꺼낸다.
+ *  알 수 없는 래퍼는 null(=검증 안 함, fail-open) — 가드가 모르는 선언을 추측으로 막아 정상 트래픽을
+ *  깨뜨리지 않는 쪽이 안전하고, 그 누락은 파리티 테스트의 전수 스캔이 잡는다. */
+function enumSpecOf(zt: unknown, depth = 0): { values: string[]; description?: string } | null {
+  if (depth > 10) return null;
+  const def = defOf(zt);
+  if (!def) return null;
+  const description = (zt as { description?: string }).description;
+  const withDesc = (r: { values: string[]; description?: string } | null) =>
+    r && { values: r.values, description: r.description ?? description };
+  if (def.typeName === "ZodEnum") {
+    const values = (def.values ?? []) as string[];
+    return values.length ? { values, description } : null;
+  }
+  if (def.typeName === "ZodArray") return withDesc(enumSpecOf(def.type, depth + 1));
+  if (["ZodOptional", "ZodNullable", "ZodDefault", "ZodEffects"].includes(def.typeName ?? "")) {
+    return withDesc(enumSpecOf(def.innerType ?? def.schema, depth + 1));
+  }
+  return null;
+}
+
+/** 400 본문에 실을 안내문 — 스키마 `.describe()` 는 MCP 하네스용 툴 문서라 이슈번호·마크다운·긴 설명이
+ *  섞여 있다. 사람이 보는 에러 토스트로 통째 새면 소음이라 첫 문장·상한 길이로 자른다(허용값 목록이
+ *  이미 행동 지침이고, 안내문은 보조다). */
+function hintOf(description?: string): string {
+  if (!description) return "";
+  const first = description.split(/(?<=[.。])\s|\n/)[0].replace(/\*\*/g, "").trim();
+  return ` — ${first.length > 120 ? `${first.slice(0, 120)}…` : first}`;
+}
+
+/** 요청 원본(body·query)에서 enum 선언 필드의 값을 뽑는다 — parse **전** 판정용.
+ *  왜 parse 산출만으로 부족한가: 여러 parse 가 허용값 화이트리스트에 안 맞으면 `undefined` 로 **조용히
+ *  떨어뜨린다**(`b.state === "archived" || b.state === "active" ? b.state : undefined` 꼴 11곳). 그러면
+ *  산출엔 흔적이 없어 DB 까지 새지는 않지만, 호출자의 의도가 말없이 무시된다(오타 하나면 필터·상태 지정이
+ *  통째로 사라진다) — MCP 로 같은 값을 보내면 에러가 나는데 REST 만 무응답으로 삼키는 같은 비대칭이다.
+ *  키 이름이 같아도 capability 별로만 대조하므로 다른 표면의 동명 파라미터(예: terminal/browse 의
+ *  root=shared)와는 섞이지 않는다. */
+function rawEnumValues(shape: Record<string, unknown>, req: express.Request): {
+  body: Record<string, unknown>; query: Record<string, unknown>;
+} {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const query = (req.query ?? {}) as Record<string, unknown>;
+  const out = { body: {} as Record<string, unknown>, query: {} as Record<string, unknown> };
+  for (const key of Object.keys(shape)) {
+    if (body[key] !== undefined) out.body[key] = body[key];
+    else if (query[key] !== undefined) out.query[key] = query[key];
+  }
+  return out;
+}
+
+/** REST 어댑터의 enum 검증 — 요청 원본과 parse 산출 **양쪽**을 capability 의 zod input 선언에 비춘다. */
+export function assertRequestEnumParity(
+  shape: Record<string, unknown>, req: express.Request, parsed: Record<string, unknown>,
+): void {
+  const raw = rawEnumValues(shape, req);
+  assertEnumParity(shape, raw.body);
+  assertEnumParity(shape, raw.query);
+  assertEnumParity(shape, parsed);
+}
+
+/** 주어진 값 묶음을 capability 의 zod input shape 에 비춰 enum 값만 검증한다(위반 시 400).
+ *  검증 범위를 enum 으로 좁힌 이유: 문자열 길이·수치 범위 등은 각 parse 가 자기 문구로 이미 판정하고
+ *  있어 통째 z.object 검증을 얹으면 그 문구·상태코드가 통째로 바뀐다(byte-compat 파기). enum 은
+ *  '허용값 목록'이라 판정이 기계적이고 문구를 선언에서 그대로 만들 수 있다.
+ *  배열은 원소 단위로 본다 — 다중값 필드가 배열로도, 'a,b' 쉼표 문자열로도 오기 때문(REST 다중값 관례). */
+function assertEnumParity(shape: Record<string, unknown>, input: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === "") continue;
+    const spec = enumSpecOf(shape[key]);
+    if (!spec) continue;
+    const seen = Array.isArray(value)
+      ? value
+      : (typeof value === "string" && value.includes(",") ? value.split(",").map((s) => s.trim()) : [value]);
+    for (const v of seen) {
+      if (v === undefined || v === null || v === "") continue;
+      if (typeof v === "string" && spec.values.includes(v)) continue;
+      throw new HttpError(400, `${key} 은(는) ${spec.values.join("|")} 중 하나여야 합니다${hintOf(spec.description)}`);
+    }
+  }
+}

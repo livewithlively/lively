@@ -1,7 +1,7 @@
 // idle 세션 회수 결정 로직 테스트 (#1059 F) — 정당 세션 오kill 금지 안전 불변식(#687 교훈)이 핵심.
 //  주입 seam(deps)으로 tmux·DB 없이 결정만 검증한다. 엣지 표(스크래치패드 spec.md)의 모든 행 = 시나리오.
 import assert from "node:assert/strict";
-import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs } from "./session-reaper.js";
+import { reapIdleSessions, reapPressureSessions, resetPressureSweepDebounce, liveJobsFromView, resolveLiveJobs, resolveJobVerdicts, resolveContainerJobVerdicts, containerLiveJobs, UNKNOWN_HOLD_TICKS, CONTAINER_PROBE_CONCURRENCY } from "./session-reaper.js";
 import type { ProcEntry } from "./session-rss.js";
 import { invalidateSessionReclaimPolicyCache, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
@@ -32,8 +32,10 @@ async function run(opts: {
   busyIdle?: number;
   // ⑥ 에 «작업이 도는 세션» 으로 답할 id(기본 없음)
   jobs?: ReadonlySet<string>;
+  // #4697 T7 — 하네스 종료 규칙이 맡는 세션 판정. 안 주면 **기본 seam**(규칙 모듈)이 돈다 — 이 시험 면은 세션 컨테이너가 없어(셀프호스트) 빈 집합이다.
+  stopRuleIds?: NonNullable<Parameters<typeof reapIdleSessions>[0]>["stopRuleIds"];
 }): Promise<{ res: Awaited<ReturnType<typeof reapIdleSessions>>; reaped: string[] }> {
-  const { ttl = TTL, live = [], states, managed = [], reapThrows = new Set<string>(), attachIdle, busyIdle, jobs = new Set<string>() } = opts;
+  const { ttl = TTL, live = [], states, managed = [], reapThrows = new Set<string>(), attachIdle, busyIdle, jobs = new Set<string>(), stopRuleIds } = opts;
   // ⑥(#2652) 기본 stub — **이 러너는 실제 tmux·/proc 를 만지지 않는다.** 안 주면 기본 구현이 진짜
   //  `tmux list-panes` 를 부르고, tmux 가 없는 면(CI 리눅스 러너)에선 «못 봤다»로 후보를 전부 보호해
   //  이 파일의 회수 단언이 통째로 뒤집힌다. ⑥ 자체의 검증은 아래 D1·D2·D7 이 seam 을 직접 주입해 한다.
@@ -50,6 +52,7 @@ async function run(opts: {
     listManaged: async () => managed.map((id) => ({ session_id: id })),
     reap: async (id: string) => { if (reapThrows.has(id)) throw new Error("boom"); reaped.push(id); },
     liveJobs: async (ids) => new Set([...ids].filter((id) => jobs.has(id))),
+    ...(stopRuleIds ? { stopRuleIds } : {}),
     now,
   });
   return { res, reaped };
@@ -202,7 +205,7 @@ async function run(opts: {
   const states = live.filter((s) => s.id !== "s-nostate").map((s) => ({ id: s.id }));
   const { res, reaped } = await run({ live, states, managed: ["s-managed"] });
   assert.deepEqual(reaped, ["reap-me"]);
-  assert.deepEqual(res.skipReasons, { managed: 1, noState: 1, attached: 1, working: 1, recent: 1, failed: 0, target: 0, cap: 0, jobs: 0, unobserved: 0 },
+  assert.deepEqual(res.skipReasons, { managed: 1, noState: 1, attached: 1, working: 1, recent: 1, failed: 0, target: 0, cap: 0, jobs: 0, unobserved: 0, stopRule: 0, jobsUnknown: 0 },
     "skip 사유별 카운트가 정확해야 한다(noState 가 크면 백필 필요 신호). target·cap 은 압박 회수 전용이라 평시엔 0"
     + " · jobs 는 ⑥ 전용(여기선 프로브 미주입 = 기본 구현이 tmux 를 못 봐 0)");
 }
@@ -529,6 +532,10 @@ interface PressureOpts {
   swapTotalMb?: number; swapFreeMb?: number;
   memThrows?: boolean; swapThrows?: boolean; procThrows?: boolean;
   reapThrows?: Set<string>;
+  /** #4697 T7 — 하네스 종료 규칙이 맡는 세션(워크스페이스마다 불린다). 안 주면 기본 seam(셀프호스트 면 — 빈 집합). */
+  stopRuleIds?: (live: ReadonlyArray<SessionInfo>, states: ReadonlyArray<unknown>, managedIds: ReadonlySet<string>, policy: SessionReclaimPolicy) => ReadonlySet<string>;
+  /** ⑥ seam 이 받은 opts(축별 «판정 불가» 처분)를 적는 자리 */
+  jobOpts?: Array<unknown>;
 }
 
 async function runPressure(opts: PressureOpts): Promise<{
@@ -536,7 +543,7 @@ async function runPressure(opts: PressureOpts): Promise<{
   reaped: string[]; liveCalls: string[]; procCalls: number;
 }> {
   const { workspaces, single, usedPct = 0, totalMb = 1000, swapTotalMb = 0, swapFreeMb = 0,
-    memThrows = false, swapThrows = false, procThrows = false, reapThrows = new Set<string>() } = opts;
+    memThrows = false, swapThrows = false, procThrows = false, reapThrows = new Set<string>(), stopRuleIds, jobOpts } = opts;
   const single0: WsSpec = single ?? { slug: "(single)" };
   const list: WsSpec[] = workspaces === undefined || workspaces === null ? [single0] : workspaces;
   const bySlug = new Map(list.map((w) => [w.slug, w]));
@@ -570,7 +577,8 @@ async function runPressure(opts: PressureOpts): Promise<{
     swapUsage: async () => { if (swapThrows) throw new Error("swap 못 읽음"); return swapTotalMb > 0 ? { totalMb: swapTotalMb, freeMb: swapFreeMb } : null; },
     procTable: async () => { procCalls++; if (procThrows) throw new Error("/proc 못 읽음"); return new Map(); },
     sessionRss: async () => new Map(Object.entries(current.rss ?? {})),
-    liveJobs: async () => new Set<string>(),   // ⑥ 기본 stub — 위 `run` 과 같은 이유(실 tmux 무접촉)
+    liveJobs: async (_ids, _table, o) => { jobOpts?.push(o); return new Set<string>(); },   // ⑥ 기본 stub — 위 `run` 과 같은 이유(실 tmux 무접촉)
+    ...(stopRuleIds ? { stopRuleIds: async (live, states, managedIds, policy) => stopRuleIds(live, states, managedIds, policy) } : {}),
   });
   return { res, reaped, liveCalls, procCalls };
 }
@@ -1184,6 +1192,43 @@ const view = (panes: Array<[string, number[]]>) => ({ ok: true, panes: new Map(p
   assert.equal(calls, 0);
 }
 
+// F6 — #4695 하네스 종료 규칙용 세 갈래(resolveJobVerdicts): 판정 불가를 «작업 없음» 과 가른다. 회수기(resolveLiveJobs)는 위 F3·F4 그대로다.
+//  종료 규칙은 시계가 3분이라 판정 불가를 보호로 다룬다 — `nohup … &` 로 띄운 서버는 훅의 셈에 안 잡히고 이 판정이 유일한 보호다(격리 리뷰).
+{
+  const v = await resolveJobVerdicts(new Set(["box-throw", "box-empty", "box-nopane", "box-idle", "box-busy"]),
+    view([["box-throw", [28]], ["box-empty", [28]], ["box-idle", [28]], ["box-busy", [28]]]), gwOnly(),
+    async (sid) => {
+      if (sid === "box-throw") throw new Error("중계 타임아웃");
+      if (sid === "box-empty") return new Map();
+      return inContainer(sid === "box-busy");
+    });
+  assert.deepEqual([...v.jobs], ["box-busy"], "작업 있음");
+  assert.deepEqual([...v.unknown].sort(), ["box-empty", "box-nopane", "box-throw"], "프로브 실패 · 빈 표 · pane 없음 = 판정 불가");
+  const blind = await resolveJobVerdicts(new Set(["box-a", "box-b"]), { ok: false, panes: new Map() }, gwOnly(), async () => inContainer(true));
+  assert.deepEqual([blind.jobs.size, [...blind.unknown].sort()], [0, ["box-a", "box-b"]], "pane 목록을 못 봤으면 전부 판정 불가");
+  const none = await resolveJobVerdicts(new Set(), view([]), gwOnly(), async () => inContainer(true));
+  assert.deepEqual([none.jobs.size, none.unknown.size], [0, 0]);
+}
+
+// F7 — #4695 세션 컨테이너(매니지드)의 판정: 세션마다 그 세션을 지목해 pane pid 를 묻고, 그 컨테이너 안의 ps 표로만 본다.
+//  실측(2026-10-15 lively-46e3): 지목 없는 `list-panes -a` 가 세션당 컨테이너의 tmux 에 안 닿아 후보 전부가 «판정 불가» 였다.
+{
+  const asked: string[] = [];
+  const v = await resolveContainerJobVerdicts(new Set(["box-busy", "box-idle", "box-nopane", "box-throw", "box-empty"]),
+    async (sid) => { asked.push(sid); return sid === "box-nopane" ? null : [28]; },
+    async (sid) => {
+      if (sid === "box-throw") throw new Error("중계 타임아웃");
+      if (sid === "box-empty") return new Map();
+      return inContainer(sid === "box-busy");
+    });
+  assert.deepEqual(asked.sort(), ["box-busy", "box-empty", "box-idle", "box-nopane", "box-throw"], "후보마다 그 세션을 지목해 pane 을 묻는다");
+  assert.deepEqual([...v.jobs], ["box-busy"], "컨테이너 안의 표로 작업을 잡는다");
+  assert.deepEqual([...v.unknown].sort(), ["box-empty", "box-nopane", "box-throw"], "pane 못 물음 · 프로브 실패 · 빈 표 = 판정 불가");
+  //  게이트웨이 자기 표는 보지 않는다 — 컨테이너의 pane pid 28 이 게이트웨이의 다른 프로세스와 겹쳐도 엉뚱하게 «판정됨» 이 되지 않는다.
+  const v2 = await resolveContainerJobVerdicts(new Set(["box-x"]), async () => [28], async () => inContainer(true));
+  assert.deepEqual([...v2.jobs], ["box-x"]);
+}
+
 console.log("session-reaper(⑥ 컨테이너 프로브 경로 — 매니지드): all passed");
 
 // ── H. ⑥ 퇴화 신호 가드(#2652 후속) ──────────────────────────────────────────────────────────
@@ -1250,3 +1295,241 @@ const manyIdle = (n: number): SessionInfo[] =>
 }
 
 console.log("session-reaper(⑥ 퇴화 신호 가드): all passed");
+
+// ── T7(#4697) — 하네스 종료 규칙이 맡는 세션에서 옛 시계(유휴·붙음·작업 상한·압박)는 손을 뗀다 ───────────────────────────
+//  틀리면 티가 크다:
+//   🔴 맡는 세션을 옛 시계가 걷으면 — 규칙이 상한 없이 지키는 것(보는 중 · 예약 깨움 대기 · 백그라운드)이 240·480·120분에 죽는다.
+//   🔴 안 맡는 세션까지 손을 떼면 — grok·opencode·셸·옛 훅 세션을 아무도 안 끈다(옛 훅 claude 둘이 39시간 남은 실측 2026-10-16).
+//   🔴 판정이 던졌는데 걷으면 — 모르는 채로 사람이 보던 세션을 죽인다(«모르면 안 죽인다»).
+
+// T7-1 유휴 축: 맡는 세션은 10시간 놀아도 안 걷고 stopRule 로 센다 · 안 맡는 세션은 그대로 걷는다 · seam 재료가 그대로 간다
+{
+  const owned = sess({ id: "box-owned", lastActive: CUTOFF - 36_000 });
+  const free = sess({ id: "box-free", lastActive: CUTOFF - 36_000 });
+  const seen: Array<{ live: string[]; states: unknown[]; managed: string[]; done: unknown; asking: unknown }> = [];
+  const { res, reaped } = await run({
+    live: [owned, free],
+    states: [{ id: "box-owned", kind: "human", claude_session_id: "c-1" } as { id: string }, { id: "box-free" }],
+    managed: ["box-m"],
+    stopRuleIds: async (live, states, managedIds, policy) => {
+      seen.push({ live: live.map((s) => s.id), states: [...states], managed: [...managedIds], done: policy.stop_done_minutes, asking: policy.stop_asking_minutes });
+      return new Set(["box-owned"]);
+    },
+  });
+  assert.deepEqual(reaped, ["box-free"], "맡는 세션은 옛 시계가 안 걷는다 · 안 맡는 세션은 걷는다");
+  assert.equal(res.skipReasons?.stopRule, 1);
+  assert.equal(res.skipped, 1, "손 뗀 세션도 «건너뜀» 에 든다(scanned = 걷음 + 건너뜀)");
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0]!.live, ["box-owned", "box-free"]);
+  assert.deepEqual(seen[0]!.states, [{ id: "box-owned", kind: "human", claude_session_id: "c-1" }, { id: "box-free" }], "장부 행(종류·대화 id)을 그대로 넘긴다");
+  assert.deepEqual(seen[0]!.managed, ["box-m"]);
+  assert.deepEqual([seen[0]!.done, seen[0]!.asking], [3, 60], "정책은 이 워크스페이스의 정규화된 것(N·M 기본값 포함)");
+}
+
+// T7-2 붙음 상한(240)·작업 상한(480)도 맡는 세션엔 안 선다 — 보는 중·질의는 규칙이 판정한다
+{
+  const NOWS = NOW_SEC;
+  const viewing = sess({ id: "box-view", attached: true, lastAttached: NOWS - 300 * 60, lastActive: NOWS - 300 * 60 });
+  const asking = sess({ id: "box-ask", awaiting: true, agentState: "waiting", lastActive: NOWS - 600 * 60, lastViewed: NOWS - 600 * 60 } as Partial<SessionInfo>);
+  const { res, reaped } = await run({
+    ttl: 120, attachIdle: 240, busyIdle: 480, live: [viewing, asking],
+    stopRuleIds: async () => new Set(["box-view", "box-ask"]),
+  });
+  assert.deepEqual(reaped, [], "규칙이 맡은 붙음·질의 세션을 옛 상한이 걷지 않는다");
+  assert.equal(res.skipReasons?.stopRule, 2);
+  //  같은 두 세션을 규칙이 안 맡으면(셀프호스트) 종전대로 옛 상한이 걷는다 — 무회귀.
+  const before = await run({ ttl: 120, attachIdle: 240, busyIdle: 480, live: [viewing, asking], stopRuleIds: async () => new Set() });
+  assert.deepEqual(before.reaped.sort(), ["box-ask", "box-view"]);
+}
+
+// T7-3 압박 축도 맡는 세션은 안 걷는다(그 워크스페이스의 판정으로) — 판정 seam 에 그 워크스페이스의 목록·장부 행·상시 id·정책이 그대로 간다
+{
+  const seen: Array<{ live: string[]; states: unknown[]; managed: string[]; done: unknown; pct: unknown }> = [];
+  const { res, reaped } = await runPressure({
+    workspaces: [one({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE, stop_done_minutes: 5 }, [pSess("p-owned"), pSess("p-free"), pSess("p-m")], {
+      states: [{ id: "p-owned", kind: "human", claude_session_id: "c-1" } as { id: string }, { id: "p-free" }, { id: "p-m" }], managed: ["p-m"],
+    })], usedPct: 95,
+    stopRuleIds: (live, states, managedIds, policy) => {
+      seen.push({ live: live.map((s) => s.id), states: [...states], managed: [...managedIds], done: policy.stop_done_minutes, pct: policy.pressure_used_pct });
+      return new Set(["p-owned"]);
+    },
+  });
+  assert.deepEqual(reaped, ["p-free"]);
+  assert.equal(res.skipReasons.stopRule, 1);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0]!.live, ["p-owned", "p-free", "p-m"]);
+  assert.deepEqual(seen[0]!.states, [{ id: "p-owned", kind: "human", claude_session_id: "c-1" }, { id: "p-free" }, { id: "p-m" }], "장부 행(종류·대화 id)을 그대로 넘긴다 — 비면 규칙이 지키는 세션이 «행 없음» 으로 옛 시계에 넘어간다");
+  assert.deepEqual(seen[0]!.managed, ["p-m"]);
+  assert.deepEqual([seen[0]!.done, seen[0]!.pct], [5, 90], "그 워크스페이스의 정규화된 정책");
+}
+
+// T7-4 판정이 던지면 그 판은 한 세션도 안 걷는다(모르면 안 죽인다) — 두 축 모두
+{
+  const { res, reaped } = await run({
+    live: [sess({ id: "box-a", lastActive: CUTOFF - 999 })],
+    stopRuleIds: async () => { throw new Error("규칙 모듈 판정 실패"); },
+  });
+  assert.deepEqual(reaped, []);
+  assert.equal(res.skipReasons?.stopRule, 1);
+  const p = await runPressure({
+    workspaces: [one({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE }, [pSess("p-a")])], usedPct: 95,
+    stopRuleIds: () => { throw new Error("규칙 모듈 판정 실패"); },
+  });
+  assert.deepEqual(p.reaped, []);
+}
+
+// T7-5 기본 seam(규칙 모듈)은 세션 컨테이너가 없는 배포(셀프호스트 — 이 시험 면)에서 아무것도 안 맡는다 → 종전 그대로 걷는다
+//  ⓘ 매니지드였다면 규칙이 «끈다» 로 맡았을 세션이다(claude · 대화 id · 예약 칸 있는 턴 끝 보고 · 오래 놂) — 그래야 이 시험이 «배포를 가르는가» 를 본다.
+{
+  const { res, reaped } = await run({
+    live: [sess({ id: "box-self", lastActive: CUTOFF - 999, agentState: "idle", lastReport: { phase: "idle", at: CUTOFF - 999, bg: 0, wake: 0, cron: 0 } } as Partial<SessionInfo>)],
+    states: [{ id: "box-self", kind: "human", claude_session_id: "c-self" } as { id: string }],
+  });
+  assert.deepEqual(reaped, ["box-self"]);
+  assert.equal(res.skipReasons?.stopRule, 0);
+}
+
+// T7-6 ⑥ 매니지드 판정(containerLiveJobs) — «작업 있음» 만 보호하고, 판정 불가는 회수기 규율대로 걷는다(S5)
+{
+  const asked: string[] = [];
+  const { jobs, held } = await containerLiveJobs(new Set(["box-busy", "box-idle", "box-nopane", "box-throw", "box-empty"]),
+    async (sid) => { asked.push(sid); return sid === "box-nopane" ? null : [28]; },
+    async (sid) => {
+      if (sid === "box-throw") throw new Error("중계 타임아웃");
+      if (sid === "box-empty") return new Map();
+      return inContainer(sid === "box-busy");
+    });
+  assert.deepEqual(asked.sort(), ["box-busy", "box-empty", "box-idle", "box-nopane", "box-throw"], "후보마다 그 세션을 지목해 묻는다");
+  assert.deepEqual([...jobs], ["box-busy"], "판정 불가(pane 못 물음 · 프로브 실패 · 빈 표)는 보호하지 않는다 — 회수를 막지 않는다(S5)");
+  assert.equal(held.size, 0, "보류 없이(압박 축)는 보류분도 없다");
+}
+
+// T7-7 (배선) 매니지드 ⑥ 의 갈래는 행동으로 본다 — session-reaper-managed.test.ts RM2(세션 컨테이너 env 를 켜고 지목 판정·보류를 확인).
+//  종전 소스 문자열 검사는 구현 문자열을 얼리는 꼴이라 뺐다(격리 리뷰 B2 — 갈래를 `if (false)` 로 죽여도 초록이었다).
+
+// T7-8 목록이 비었으면 판정 seam 을 부르지 않는다(새 헬퍼의 빈 입력 — 규칙 모듈을 괜히 적재하지 않는다)
+{
+  let calls = 0;
+  const { res, reaped } = await run({ live: [], stopRuleIds: async () => { calls++; return new Set(); } });
+  assert.deepEqual([calls, reaped.length, res.skipReasons?.stopRule], [0, 0, 0]);
+}
+
+// T7-9 화면 도장(lastViewed)도 «방금까지 보고 있었다» — 대화창으로 보던(tmux 에 안 붙은) 세션을 옛 시계가 걷지 않는다
+{
+  const viewed = sess({ id: "box-viewed", lastActive: CUTOFF - 36_000, lastViewed: NOW_SEC - 60 } as Partial<SessionInfo>);
+  const stale = sess({ id: "box-stale", lastActive: CUTOFF - 36_000, lastViewed: CUTOFF - 60 } as Partial<SessionInfo>);
+  const { res, reaped } = await run({ live: [viewed, stale], stopRuleIds: async () => new Set() });
+  assert.deepEqual(reaped, ["box-stale"], "1분 전까지 보던 세션은 «최근» 이다 · TTL 넘게 안 본 세션은 걷는다");
+  assert.equal(res.skipReasons?.recent, 1);
+}
+
+// T7-10 ⑥ 축별 처분 — 유휴 축은 «판정 불가» 보류를 청하고(holdUnknown) 압박 축은 안 청한다
+{
+  const idleOpts: unknown[] = [];
+  invalidateSessionReclaimPolicyCache();
+  await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }), listLive: async () => [sess({ id: "box-i", lastActive: CUTOFF - 999 })],
+    listStates: async () => [{ id: "box-i" }], listManaged: async () => [], reap: async () => {}, now,
+    liveJobs: async (_ids, _t, o) => { idleOpts.push(o); return new Set(); }, stopRuleIds: async () => new Set(),
+  });
+  assert.deepEqual(idleOpts.map((o) => (o as { holdUnknown?: boolean }).holdUnknown), [true]);
+  assert.ok((idleOpts[0] as { held?: unknown }).held instanceof Set, "보류분을 받을 자리(held)를 함께 넘긴다");
+  const pOpts: unknown[] = [];
+  await runPressure({ workspaces: [one({ pressure_used_pct: 90, pressure_idle_minutes: P_IDLE }, [pSess("p-x")])], usedPct: 95, jobOpts: pOpts });
+  assert.deepEqual(pOpts.map((o) => (o as { holdUnknown?: boolean }).holdUnknown), [false]);
+}
+
+// T7-11 유휴 축의 «판정 불가» 보류 — 연달아 한도(UNKNOWN_HOLD_TICKS)번째에 접고 · 판정되면 연속이 끊기고 · 오래된 기록은 버린다
+{
+  assert.equal(UNKNOWN_HOLD_TICKS, 3);
+  let nowMs = 1_000_000;
+  const streak = new Map<string, { n: number; at: number }>();
+  const hold = { key: (sid: string) => `t\u0000${sid}`, now: () => nowMs, limit: UNKNOWN_HOLD_TICKS, streak };
+  const unknownFor = new Set(["box-u", "box-w"]);
+  const tick = async (): Promise<string[]> => {
+    const r = await containerLiveJobs(new Set(["box-u", "box-w", "box-n"]),
+      async (sid) => (unknownFor.has(sid) ? null : [28]),        // 판정 불가 = pane 을 못 물음
+      async () => inContainer(false), hold);
+    assert.equal(r.jobs.size, 0, "보류분은 «작업 있음» 에 섞지 않는다");
+    return [...r.held].sort();
+  };
+  assert.deepEqual(await tick(), ["box-u", "box-w"], "1번째 — 보류");
+  nowMs += 300_000;
+  assert.deepEqual(await tick(), ["box-u", "box-w"], "2번째 — 보류");
+  unknownFor.delete("box-w");                                   // box-w 는 이번엔 판정됐다(작업 없음) — 연속이 끊긴다
+  nowMs += 300_000;
+  assert.deepEqual(await tick(), [], "3번째 — box-u 는 접고(작업 없음) · box-w 는 판정돼 보호 안 함");
+  assert.equal(streak.has("t\u0000box-w"), false, "판정된 세션의 연속은 지운다");
+  unknownFor.add("box-w");
+  nowMs += 300_000;
+  assert.deepEqual(await tick(), ["box-w"], "box-w 는 다시 1번째부터 · box-u 는 계속 접는다");
+  nowMs += 61 * 60_000;                                         // 한 시간 넘게 안 갱신된 기록은 버린다
+  streak.set("t\u0000box-old", { n: 2, at: 0 });
+  await tick();
+  assert.equal(streak.has("t\u0000box-old"), false);
+  //  보류 없이(압박 축) — 판정 불가는 곧바로 «작업 없음»
+  const p = await containerLiveJobs(new Set(["box-u"]), async () => null, async () => inContainer(false));
+  assert.deepEqual([p.jobs.size, p.held.size], [0, 0]);
+}
+
+// T7-12~14 ★보류 × 퇴화 가드(재검토 차단) — 보류분은 가드가 세지 않고, 가드가 서도 걷지 않는다.
+//  실제 containerLiveJobs 를 ⑥ seam 으로 물린다(기본 조립 liveJobSessions 의 매니지드 갈래와 같은 모양 — 그 갈래 자체는 RM3 가 env 로 본다).
+async function holdRun(n: { jobs: number; unknown: number; none: number }): Promise<{ reaped: string[]; res: Awaited<ReturnType<typeof reapIdleSessions>> }> {
+  const ids = [
+    ...Array.from({ length: n.jobs }, (_, i) => `box-job-${i}`),
+    ...Array.from({ length: n.unknown }, (_, i) => `box-unk-${i}`),
+    ...Array.from({ length: n.none }, (_, i) => `box-none-${i}`),
+  ];
+  const hold = { key: (sid: string) => sid, now: () => 1, limit: UNKNOWN_HOLD_TICKS, streak: new Map<string, { n: number; at: number }>() };
+  const reaped: string[] = [];
+  invalidateSessionReclaimPolicyCache();
+  const res = await reapIdleSessions({
+    loadPolicy: async () => ({ idle_ttl_minutes: TTL }),
+    listLive: async () => ids.map((id) => sess({ id, lastActive: CUTOFF - 36_000 })),
+    listStates: async () => ids.map((id) => ({ id })), listManaged: async () => [],
+    reap: async (id) => { reaped.push(id); }, now, stopRuleIds: async () => new Set(),
+    liveJobs: async (cands, _t, o) => {
+      const r = await containerLiveJobs(cands, async (sid) => (sid.startsWith("box-unk") ? null : [28]),
+        async (sid) => inContainer(sid.startsWith("box-job")), o?.holdUnknown ? hold : undefined);
+      for (const h of r.held) o?.held?.add(h);
+      return r.jobs;
+    },
+  });
+  return { reaped, res };
+}
+{
+  //  T7-12 판정 불가 10개(대량 — 중계 장애의 모양) 첫 틱 → 하나도 안 걷는다(종전: 퇴화 가드가 «전부 작업 중» 으로 읽어 10개 다 걷었다)
+  const a = await holdRun({ jobs: 0, unknown: 10, none: 0 });
+  assert.deepEqual(a.reaped, [], "보류분은 퇴화 가드가 세지 않는다");
+  assert.deepEqual([a.res.skipReasons?.jobsUnknown, a.res.skipReasons?.jobs], [10, 0]);
+  assert.deepEqual([a.res.scanned, a.res.reaped.length, a.res.skipped], [10, 0, 10], "회계 — 스캔 = 걷음 + 건너뜀(보류분 포함)");
+  //  T7-13 작업 확인 6 + 판정 불가 6 → 0건(작업 확인 6은 ⑥ 이 지키고, 판정 불가 6은 보류). 종전 재현: 12개 모두 걷혔다.
+  const b = await holdRun({ jobs: 6, unknown: 6, none: 0 });
+  assert.deepEqual(b.reaped, []);
+  assert.deepEqual([b.res.skipReasons?.jobs, b.res.skipReasons?.jobsUnknown], [6, 6]);
+  //  T7-14 판정 불가 11 + 작업 없음 확정 1 → 확정된 1만 걷는다 · 작업 확인 12개 전부(진짜 퇴화)면 가드는 종전대로 선다
+  const c = await holdRun({ jobs: 0, unknown: 11, none: 1 });
+  assert.deepEqual(c.reaped, ["box-none-0"]);
+  const d = await holdRun({ jobs: 12, unknown: 0, none: 0 });
+  assert.equal(d.reaped.length, 12, "보류분이 없는 진짜 퇴화(후보 전부 작업 확인)는 종전대로 ⑥ 을 무시한다");
+  //  가드가 서면서 보류분도 있으면 — 정보 있는 후보(작업 10)는 종전 가드대로 걷고, 보류분(판정 불가 3)은 그대로 둔다
+  const e = await holdRun({ jobs: 10, unknown: 3, none: 0 });
+  assert.deepEqual(e.reaped.sort(), Array.from({ length: 10 }, (_, i) => `box-job-${i}`).sort(), "가드가 서도 보류분은 안 걷는다");
+  assert.equal(e.res.skipReasons?.jobsUnknown, 3);
+}
+
+// T7-15 세션 컨테이너 프로브는 동시에 CONTAINER_PROBE_CONCURRENCY 개까지만(후보가 많아도 프로세스가 수백 뜨지 않게) — 그래도 전부 판정한다
+{
+  let inFlight = 0, peak = 0;
+  const ids = new Set(Array.from({ length: 30 }, (_, i) => `box-c-${i}`));
+  const r = await containerLiveJobs(ids, async () => [28], async (sid) => {
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise((res) => setTimeout(res, 5));
+    inFlight--;
+    return inContainer(Number(sid.split("-")[2]) % 10 === 7);   // 7 · 17 · 27
+  });
+  assert.ok(peak <= CONTAINER_PROBE_CONCURRENCY && peak > 1, `동시 프로브 ${peak}개`);
+  assert.deepEqual([...r.jobs].sort(), ["box-c-17", "box-c-27", "box-c-7"], "줄을 세워도 전부 판정한다");
+}
+
+console.log("session-reaper(T7 #4697 — 하네스 종료 규칙과의 경계 · ⑥ 매니지드): all passed");

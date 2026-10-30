@@ -48,13 +48,14 @@ const OWNERS: Record<string, CronOwner> = {
     label: ctxTrail('distill'), href: '#/context/knowledge/distillers',
     why: '증류기마다 정한 기준과 밀린 자료를 함께 보면서 주기·의뢰자를 정할 수 있습니다.',
   },
+  //  #4194 — 옛 「분류기」 는 증류기의 카테고리 붙이기 레인이다. 그 절은 증류기 탭 아래에 있다.
   classify_knowledge: {
-    label: ctxTrail(undefined, '분류'), href: '#/context/topics/classifiers',
-    why: '분류기·분류축과 미분류 잔량을 함께 보면서 정할 수 있습니다.',
+    label: ctxTrail('distill', '카테고리 붙이기'), href: '#/context/distill',
+    why: '카테고리 붙이기 증류기와 미분류 지식 잔량을 함께 보면서 정할 수 있습니다.',
   },
   classify_knowledge_headless: {
-    label: ctxTrail(undefined, '분류'), href: '#/context/topics/classifiers',
-    why: '분류기·분류축과 미분류 잔량을 함께 보면서 정할 수 있습니다.',
+    label: ctxTrail('distill', '카테고리 붙이기'), href: '#/context/distill',
+    why: '카테고리 붙이기 증류기와 미분류 지식 잔량을 함께 보면서 정할 수 있습니다.',
   },
   run_managers: {
     label: ctxTrail('checks'), href: '#/context/checks/managers',

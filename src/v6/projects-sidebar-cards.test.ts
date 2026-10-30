@@ -158,10 +158,10 @@ test("P15 「N개 더」로 편 카드는 full", async () => {
 });
 
 test("W1 배선: renderProjects 가 카드 계획 · 줄 나누기 · 고정 줄 · 이름표를 쓰고, 접힘은 계정 저장소에 남는다 · 옛 들여쓰기 트리는 없다", () => {
-  const a = SIDE.indexOf("function renderProjTree(): void {");   // ⚠ stage 전용: 렌즈가 남은 브랜치라 붓 이름이 renderProjTree
+  const a = SIDE.indexOf("function renderProjects(): void {");
   const b = SIDE.indexOf("\n}\n", a);
   const body = a >= 0 && b > a ? SIDE.slice(a, b) : "";
-  assert.ok(body.length > 0, "renderProjTree 가 있다");
+  assert.ok(body.length > 0, "renderProjects 가 있다");
   assert.match(body, /planProjCards\(\{ lists, folders, openByList, noneN, favIds: favLists, sel: projScopeKey\(\), closed: foldClosed, more: projMore \}\)/);
   assert.match(body, /fitWikiList\(listEl, order, sizes, forced, build\)/);
   assert.match(body, /el\('nav', \{ class: 'v2-kviews', 'aria-label': '전체 · 즐겨찾기 · 기타' \}, \.\.\.fixed\)/);
@@ -296,7 +296,7 @@ test("A6 ★주소 판정: #/projects2/all → 'all' · 다른 스코프 주소�
 });
 
 test("A7 배선(셸): 「전체」 줄이 고정 줄 맨 앞에 서고, #/projects2/all 로 가며, 켜짐 · 수는 계획을 따른다 · 빈 안내는 전체 줄로 가려지지 않는다", () => {
-  const a = SIDE.indexOf("function renderProjTree(): void {");   // ⚠ stage 전용: W1 과 같은 이유(렌즈가 남은 브랜치)
+  const a = SIDE.indexOf("function renderProjects(): void {");
   const body = SIDE.slice(a, SIDE.indexOf("\n}\n", a));
   assert.match(body, /const allOn = plan\.onKey === 'all';/);
   assert.match(body, /href: '#\/projects2\/all'/);
@@ -313,7 +313,7 @@ test("A8 배선(보드 주소): 클래식 라우터가 /all 을 전체 스코프
 
 test("A9 배선(보드): 전체로 들어오면 스코프를 풀고(explicit 아님) 전체 보드 자신의 뷰를 쓰며 사이드바를 억지로 열지 않는다 · 전체 뷰도 기억한다", () => {
   const BOARD = readFileSync("web/projects/board.ts", "utf8");
-  const a = BOARD.indexOf("async function renderProjectV2Board(view, scopeKey?) {");
+  const a = BOARD.indexOf("async function renderProjectV2Board(view, scopeKey?");
   const head = BOARD.slice(a, a + 2400);
   assert.match(head, /if \(allScope\) \{ pjvSidebarSel\.key = '__all__'; pjvSidebarSel\.explicit = false; pjvApplyView\(pjvLoadScopeView\('__all__'\) \|\| pjvDefaultView\('__all__'\)\); \}\s*else if \(scopeKey\) \{ pjvSidebarSel\.key = scopeKey; pjvSidebarSel\.explicit = true; \}/);
   assert.match(head, /const picksScope = !!scopeKey && !allScope;/);

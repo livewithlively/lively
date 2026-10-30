@@ -174,6 +174,52 @@ async function main() {
       assert.equal(out.trim(), "");
       ok("cwd의 구 session project.json은 소속으로 읽지 않음");
     }
+    // ── 첨부 좌표 해석(#3787) ─────────────────────────────────────────────
+    //  컴포저는 `- <이름>  [lively:<ref>]` 를 적는다. 이 훅이 그 좌표를 **이 컴퓨터의 절대경로**로 펴 준다.
+    //  이 계열이 없으면 #3787 이 조용히 재발한다: 경로가 틀려도 화면엔 아무 표시가 없고, AI 만 엉뚱한 파일을 읽는다.
+    {
+      const proj = path.join(root, "p11"); await fsp.mkdir(proj, { recursive: true });
+      await fsp.writeFile(path.join(proj, "shot.png"), "PNG");
+      const s = sid("a1");
+      gw.states.set(s, { found: true, project_id: 11, revision: 1, binding_epoch: 1, folder: "project/11", folder_abs_path: proj });
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s },
+        { prompt: "이거 봐줘\n\n첨부한 자료:\n- shot.png  [lively:project:11/shot.png]" });
+      assert.ok(out.includes(path.join(proj, "shot.png")), "프로젝트 좌표를 이 노드 절대경로로 펴야 한다");
+      assert.ok(out.includes("이 컴퓨터 경로"), "있는 파일은 «여기 있다» 로 말해야 한다");
+      ok("A1 [lively:project:<id>/…] → 이 노드 절대경로");
+    }
+    {
+      const proj = path.join(root, "p11b"); await fsp.mkdir(proj, { recursive: true });
+      const s = sid("a2");
+      gw.states.set(s, { found: true, project_id: 11, revision: 1, binding_epoch: 1, folder: "project/11", folder_abs_path: proj });
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s },
+        { prompt: "이거 봐줘\n\n첨부한 자료:\n- 없는파일.png  [lively:project:11/없는파일.png]" });
+      assert.ok(out.includes("이 컴퓨터에 없습니다"), "없으면 **크게** 말해야 한다");
+      assert.ok(out.includes("근처의 다른 파일을 대신 읽지 마세요"), "무음 오답 금지 문구가 이 버그의 핵심 처방이다");
+      ok("A2 실물 없음 → 없다고 크게 말한다");
+    }
+    {
+      // 프로젝트 없는 세션(개인 폴더) — cwd 가 곧 개인 루트라 `<cwd>/<rel>` 이 **구성상** 그 자리다.
+      const home = path.join(root, "personal-cwd"); await fsp.mkdir(path.join(home, "uploads"), { recursive: true });
+      await fsp.writeFile(path.join(home, "uploads", "y.png"), "PNG");
+      const s = sid("a3");
+      gw.states.set(s, { found: true, project_id: null, revision: 0, binding_epoch: 0 });
+      const out = await runHook(home, gw.base, { LIVELY_SESSION_ID: s },
+        { prompt: "이거\n\n첨부한 자료:\n- y.png  [lively:personal:m1/uploads/y.png]" });
+      assert.ok(out.includes(path.join(home, "uploads", "y.png")), "개인 좌표는 cwd 기준으로 편다");
+      ok("A3 프로젝트 없는 세션의 개인 좌표 → cwd 기준");
+    }
+    {
+      // 구 클라이언트(브라우저 캐시) — 헤더에 괄호가 붙고 좌표 표기가 없다. 그래도 접혀야 한다.
+      const proj = path.join(root, "p11c"); await fsp.mkdir(proj, { recursive: true });
+      await fsp.writeFile(path.join(proj, "old.md"), "#");
+      const s = sid("a4");
+      gw.states.set(s, { found: true, project_id: 11, revision: 1, binding_epoch: 1, folder: "project/11", folder_abs_path: proj });
+      const out = await runHook(root, gw.base, { LIVELY_SESSION_ID: s },
+        { prompt: "이거\n\n첨부한 자료(프로젝트 #11 공유 폴더):\n- old.md" });
+      assert.ok(out.includes(path.join(proj, "old.md")), "구 판 헤더·맨 상대경로도 계속 접어야 한다");
+      ok("A4 구 클라이언트 표기 하위호환");
+    }
     assert.ok(gw.hits.length > 0 && gw.hits.every((h) => h.url.includes("/execution-sessions/")));
     console.log(`\n${pass} passed`);
   } finally {

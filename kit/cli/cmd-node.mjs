@@ -488,7 +488,10 @@ async function assertNotGatewayBox(tmuxPath) {
  */
 export function parseNodeArgv(rest = []) {
   const out = { action: "run", daemon: false, id: null, rest: [], error: null };
-  const args = (Array.isArray(rest) ? rest : []).map((a) => String(a));
+  // `--json-events` 는 모든 명령이 받는 앱↔CLI 전역 계약이고 main() 이 이미 소비했다 — 여기선 없는 셈 친다.
+  //  모르는 옵션으로 거부하면 데스크톱 앱의 «설치 끝 노드 자동 시작»(`node --daemon --json-events`)과 [노드 정지]가
+  //  늘 실패한다 — v0.1.369(#4006)부터 앱 설치가 «설치 완료» 아래 «실패 · 다시 시도» 로 끝났다(2026-10-23 윈도우 실기기 실측).
+  const args = (Array.isArray(rest) ? rest : []).map((a) => String(a)).filter((a) => a !== "--json-events");
   // 도움말이 가장 세다 — `--daemon --help` 처럼 섞여 와도 **아무것도 기동하지 않는다**(그게 이 가드의 요지다).
   if (args.some((a) => a === "--help" || a === "-h") || args[0] === "help") return { ...out, action: "help" };
   if (args[0] === "stop") return { ...out, action: "stop", rest: args.slice(1) };
@@ -612,8 +615,11 @@ async function cmdNode(rest) {
   //   그 '지금'이 로그인 셸이 아니라 GUI 의 최소 PATH 다** — 실측(#1541 맥): 트레이 [노드 시작] 뒤 모든 pane 이
   //   `claude: command not found`. 그래서 로그인 셸에 PATH 를 물어(bakedNodePath) 현재 PATH 와 합쳐 굽는다.
   //   (TMUX_BIN 절대경로는 tmux 자체 해석용, PATH 는 그 tmux 서버가 띄우는 pane 의 명령 해석용 — 둘 다 필요.)
+  //  #4931 — 노드 tmux 세대 스위치(LIVELY_MUX_PIN)는 **이 파일을 다시 써도 남아야 한다**(종전엔 통째로 다시 써서 사람이 넣은 줄이 사라졌다).
+  //   이번 실행의 env 가 있으면 그것(`LIVELY_MUX_PIN=off lively node --daemon` 으로 끈다 — 기본은 auto), 없으면 파일에 있던 값.
+  const muxPin = nodeMuxPinLine(process.env.LIVELY_MUX_PIN, readEnvFile(NODE_ENV_FILE, "LIVELY_MUX_PIN"));
   writeLively("node-agent.env",
-    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\nPATH=${bakedNodePath()}\n`, 0o600);
+    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\nPATH=${bakedNodePath()}\n${muxPin}`, 0o600);
 
   // 2) 에이전트 번들 내려받기(멤버 pull) → ~/.lively/node-agent/
   say(dim("· 노드 에이전트 내려받는 중…"));
@@ -646,7 +652,9 @@ async function cmdNode(rest) {
   say(green(`✓ 노드 '${nodeId}' 연결 — 웹 터미널 탭의 '실행 위치'에서 이 노드를 고르세요. (Ctrl-C 로 종료)`));
   const child = spawn(process.execPath, [agentJs], {
     stdio: "inherit",
-    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId, TMUX_BIN: tmuxPath },
+    env: { ...process.env, LIVELY_GATEWAY_URL: gw, LIVELY_NODE_TOKEN: nodeTok, LIVELY_NODE_ID: nodeId, TMUX_BIN: tmuxPath,
+      //  #4931 — 포그라운드는 env 파일을 안 읽으므로 세대 스위치를 여기서도 넘긴다(데몬과 같은 값).
+      ...(muxPin ? { LIVELY_MUX_PIN: muxPin.slice("LIVELY_MUX_PIN=".length).trim() } : {}) },
   });
   child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
 }
@@ -1370,6 +1378,18 @@ function nodeStop(o = {}) {
 function slugHost() {
   return (hostname().split(".")[0] || "node").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "node";
 }
+/**
+ * (순수 — 테스트 seam) env 파일에 쓸 `LIVELY_MUX_PIN` 줄 — 없으면 빈 문자열.
+ *  ⚠ 값은 **정확히** auto·bin·off 만 싣는다. 이 파일은 데몬이 `set -a; . 파일` 로 **셸이 읽는다** — 형식 밖 값(줄바꿈·`$(…)`)을
+ *   그대로 쓰면 데몬 기동 때 명령이 된다. 형식 밖이면 버린다(에이전트는 값이 없으면 기본값으로 간다).
+ * @param {string|undefined|null} fromEnv 이번 실행의 env 값  @param {string|undefined|null} fromFile 파일에 있던 값
+ */
+export function nodeMuxPinLine(fromEnv, fromFile) {
+  const ok = (v) => (["auto", "bin", "off"].includes(String(v ?? "").trim()) ? String(v).trim() : null);
+  const v = ok(fromEnv) ?? ok(fromFile);
+  return v ? `LIVELY_MUX_PIN=${v}\n` : "";
+}
+
 function readEnvFile(file, key) {
   try { const m = readFileSync(file, "utf8").match(new RegExp("^" + key + "=(.*)$", "m")); return m ? m[1].trim() : null; }
   catch { return null; }

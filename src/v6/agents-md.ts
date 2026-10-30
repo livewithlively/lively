@@ -38,7 +38,7 @@ const CLOSEOUT_SECTION = [
 const SESSION_TASK_RULE = [
   "## 세션 = 태스크",
   "이 프로젝트의 세션은 각자 **태스크 하나**를 맡는다 — 세션이 이름을 지으면 서버가 그 이름으로 만들고, 사람이 태스크에서 연 세션은 그 태스크를 맡는다.",
-  "내 세션의 태스크는 `session_task` 로 본다(번호 불필요). 요청받은 일을 끝내면(검증까지) `session_task {status:\"done\"}`, 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.",
+  "내 세션의 태스크는 `session_task` 로 본다(번호 불필요). 요청받은 일을 끝내면(검증까지) `session_task {status:\"done\"}`(`reason` 에 끝낸 내용 한 줄 — ClickUp 미러면 코멘트로 남는다), 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.",
 ].join("\n");
 
 // 코드 작업 진입 — 프로젝트 세션은 코드가 체크아웃되지 않은 폴더에서 뜬다(#918: 세션 생성이 워크트리를 만들지 않는다).
@@ -72,6 +72,14 @@ function buildProjectDigest(p: any): string {
   L.push(`- 전체/최신 조회: \`project_get_v6(${p.id})\` (lively MCP)`, "");
   L.push(...codeWorkSection(Array.isArray(p.repos) ? p.repos : []));
   if (p.description) L.push("## 개요", String(p.description), "");
+  // 선행 프로젝트(edges.outgoing — 이 프로젝트가 follow_up 하는 대상, #4876) — «이어받는 일» 을 세션이 처음부터 알고 시작한다.
+  //  남긴 지식 전문은 싣지 않는다(드리프트 최소) — 이름·상태만 적고, 산출 지식은 project_get_v6 로 읽게 한다.
+  const prior = ((p.edges && p.edges.outgoing) || []).filter((e: any) => e && (e.relation === "follow_up" || e.relation === "supersedes") && e.project_id);
+  if (prior.length) {
+    L.push("## 선행 프로젝트 (이 프로젝트가 이어받는 일 — 남긴 지식은 `project_get_v6(<id>)` 의 knowledge.produced)");
+    for (const e of prior) L.push(`- #${e.project_id} ${e.project_name || ""}${e.status ? ` (${e.status})` : ""}`);
+    L.push("");
+  }
   // 필요지식(required) — 이 프로젝트를 진행하기 전에 알아야 할 배경. AI 가 처음부터 무엇을 알아야 하는지 보고 시작한다(전문 X·드리프트 최소 → knowledge_get 포인터). 산출(produced)은 결과물이라 넣지 않는다.
   const reqK = ((p.knowledge && p.knowledge.required) || []) as any[];
   if (reqK.length) {

@@ -87,7 +87,14 @@ function newHome(name) {
   const bin = join(home, "stub-bin");
   mkdirSync(bin, { recursive: true });
   const log = join(home, "daemonctl.log");
-  for (const tool of ["launchctl", "systemctl", "loginctl", "pkill"]) {
+  // bash 도 가로챈다 — systemd 가 없는 리눅스(컨테이너 등)에서 `node --daemon` 은 nohup 폴백을 타
+  //  `spawn("bash", …)` 로 데몬을 띄운다. 스텁이 없으면 그 경로가 (ⓐ 진짜 데몬을 백그라운드로 남기거나
+  //  ⓑ CLI 샌드박스의 외부 실행 allowlist 에 걸려 exit 1) 이라 ① 이 환경에 따라 깨진다 —
+  //  실측 2026-09-08, systemd 없는 CI 컨테이너(node:22)에서 `denied external-cli: bash` 로 ① 실패.
+  //  스텁은 샌드박스 HOME 안에 있어 allowlist 를 통과하고, 인자만 로그에 적어 부작용이 없다.
+  //  (macOS·systemd 경로는 bash 를 PATH 로 부르지 않으므로 — plist 는 절대경로 /bin/bash,
+  //   systemd 는 systemctl — 이 스텁의 영향을 받지 않는다.)
+  for (const tool of ["launchctl", "systemctl", "loginctl", "pkill", "bash"]) {
     writeFileSync(join(bin, tool), `#!/bin/sh\nprintf '%s %s\\n' "${tool}" "$*" >> ${JSON.stringify(log)}\nexit 0\n`);
     chmodSync(join(bin, tool), 0o755);
   }

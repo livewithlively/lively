@@ -1,4 +1,6 @@
 // context-pipeline.ts — 맥락 파이프라인 개요(#1419 T6). [맥락 관리] 탭의 첫 화면.
+//  #4194 — 단계는 셋(수집·증류·관리)이다. 종전 «분류» 단계는 증류기의 카테고리 붙이기 레인이 됐고(distillHealth 가 두 레인을
+//   함께 판정한다), 카테고리 칸 자체의 건강(정의 빈 칸)은 단계가 아니라 기준표로 따로 잰다(taxonomyHealth).
 //
 //  이 화면이 답하는 질문 하나: **"지금 어디가 막혔나."**
 //  그래서 4단계를 가로로 나란히 놓는다 — 파이프라인의 요점은 단계 '내부'가 아니라 단계 '사이'이고,
@@ -34,39 +36,79 @@ function collectHealth(s: any): Health {
   return { level: 'ok', line: `최근 24시간에 ${fmtNum(s.recent_24h)}건이 새로 들어왔습니다.` };
 }
 
-function distillHealth(s: any): Health {
+/** 판정 등급의 무게 — 둘을 합칠 때 더 급한 쪽을 앞세운다(멈춤 > 확인 필요 > 참고 > 정상). */
+const WEIGHT: Record<Health['level'], number> = { off: 3, warn: 2, note: 1, ok: 0 };
+
+/**
+ * 증류 단계 = 자료 레인 + 카테고리 붙이기 레인(#4194 — 종전 «분류» 단계가 이 레인이 됐다).
+ *  두 판정 중 더 급한 쪽의 등급을 쓰고, 둘 다 할 말이 있으면 **급한 쪽 문장을 앞에** 이어 붙인다 —
+ *  하나만 말하면 다른 레인이 멈춘 사실이 화면에서 사라진다(탭 점·흐름 지도·확인할 것이 같은 잣대를 쓴다).
+ */
+function distillHealth(d: any): Health {
+  const s = (d && d.stages && d.stages.distill) || {};
+  const a = sourceLaneHealth(s);
+  const k = fillStage(d);
+  const b = k ? fillLaneHealth(k) : null;
+  if (!b || b.level === 'ok') return a;
+  if (a.level === 'ok') return b;
+  const [first, second] = WEIGHT[b.level] > WEIGHT[a.level] ? [b, a] : [a, b];
+  return { level: first.level, line: first.line + ' ' + second.line };
+}
+
+/** 자료 레인 — 자료가 지식이 되는 쪽. */
+function sourceLaneHealth(s: any): Health {
   const j = jobHealth(s.job, '지식으로 바꾸는');
   // 잡이 꺼졌는데 밀린 자료가 있으면 그게 가장 급한 사실이다 — 문구에 함께 싣는다.
   if (j) return { ...j, line: j.line + (s.backlog ? ` 들어온 자료 ${fmtNum(s.backlog)}건이 지식이 못 된 채 쌓여 있습니다.` : '') };
   if (!s.configured) return { level: 'note', line: '무엇을 지식으로 남길지 정해 둔 기준이 없어, 전 자료를 한 기준으로 봅니다. 채널·팀마다 다르게 하려면 기준을 만드세요.' };
-  if (!s.enabled) return { level: 'off', line: `지식으로 바꾸는 기준 ${s.configured}개가 모두 꺼져 있습니다.` };
+  //  전부 꺼 둔 것은 «멈춤» 이 아니다 — 켜진 증류기가 없으면 크론이 전 자료를 기본 기준 하나로 본다(distill.ts 폴백).
+  //   종전 «모두 꺼져 있습니다»(off)는 사실과 반대로 읽혔다(#4194 적대검증). 멈추려면 자동 실행을 끈다.
+  if (!s.enabled) return { level: 'note', line: `켜 둔 증류기가 없어 전 자료를 기본 기준 하나로 봅니다(만든 것 ${s.configured}개는 꺼짐). 채널·팀마다 다르게 하려면 켜세요 — 아예 멈추려면 자동 실행을 끄세요.` };
   if (s.backlog > 1000) return { level: 'warn', line: `자료 ${fmtNum(s.backlog)}건이 아직 지식이 되지 못했습니다.` };
   if (s.backlog) return { level: 'note', line: `자료 ${fmtNum(s.backlog)}건이 지식이 되기를 기다립니다.` };
   return { level: 'ok', line: '밀린 자료가 없습니다.' };
 }
 
-function classifyHealth(s: any): Health {
-  if (s.no_definition) {
-    // 정의 없는 갈래가 있으면 그게 먼저다 — 자동 배정은 정의를 기준으로 판단하므로 정의가 비면 판단 근거가 없다.
-    return { level: 'warn', line: `갈래 ${s.no_definition}개에 "무엇을 담는 갈래인지"가 비어 있습니다 — 설명이 없으면 AI 도 어디에 넣을지 알 수 없습니다.` };
+/** 카테고리 붙이기 수치 — 새 모양(stages.distill.knowledge), 없으면 옛 모양(stages.classify — 배포 중 옛 게이트웨이). */
+function fillStage(d: any): any {
+  const st = (d && d.stages) || {};
+  return (st.distill && st.distill.knowledge) || st.classify || null;
+}
+/** 카테고리 칸 수치 — 새 모양(taxonomy), 없으면 옛 모양(stages.classify 의 categories·no_definition). */
+function taxonomyOf(d: any): any {
+  if (d && d.taxonomy) return d.taxonomy;
+  const c = d && d.stages && d.stages.classify;
+  return c ? { categories: c.categories, no_definition: c.no_definition } : null;
+}
+
+/**
+ * 카테고리 붙이기 — 미분류 지식(노션 같은 지식 직행 수집 등)에 카테고리를 붙이는 쪽(#4194, 종전 «분류» 단계).
+ *  ⚠ 할 일이 없으면(미분류 지식 0) 증류기 0개·자동 실행 없음도 **말하지 않는다** — 대부분의 조직은 이 쪽이 쉴 일이 많고,
+ *   증류 탭 점이 늘 «참고» 로 켜져 있으면 점이 신호가 아니라 장식이 된다. 판정은 밀린 것이 있을 때 한다(온보딩 stuckStages 와 같은 조건).
+ */
+function fillLaneHealth(s: any): Health {
+  const n = Number(s.backlog || 0);
+  if (!n) return { level: 'ok', line: '' };
+  const rest = ` 미분류 지식 ${fmtNum(n)}건은 검색에도 안 잡힙니다.`;
+  const j = jobHealth(s.job, '카테고리를 붙이는');
+  if (j) return { ...j, line: j.line + rest };
+  // ⚠ 증류기 대수를 여기서 말해야 한다 — 종전 화면은 첫 화면에 "1시간마다 · 23분 전", 설정 화면에 "아직 분류기가 없습니다"가 동시에 떠
+  //  둘 다 사실인데 합쳐 읽으면 모순이었다(어니스트 실박스 지적). 켜진 것 0개는 고장이 아니라 설계된 폴백(기본 기준 하나)이다 —
+  //  **전부 꺼 둔 것도 같다**(classify.ts: 일하는 레인이 없으면 레거시 전역 경로). 종전 «모두 꺼져 있습니다 · 그대로 남습니다»(off)는 거짓이었다.
+  if (!s.enabled) return { level: 'note', line: `미분류 지식 ${fmtNum(n)}건에 기본 기준 하나로 카테고리를 붙이고 있습니다 — 출처·팀마다 기준을 나누려면 카테고리 붙이기 증류기를 만들거나 켜세요.` };
+  if (s.uncovered) return { level: 'warn', line: `켜진 카테고리 붙이기 증류기 어디에도 안 걸리는 지식이 ${fmtNum(s.uncovered)}건 있습니다 — 이대로면 영영 카테고리가 안 붙습니다.` };
+  return { level: 'note', line: `미분류 지식 ${fmtNum(n)}건에 카테고리가 붙기를 기다립니다.` };
+}
+
+/** 카테고리(기준표) — 단계가 아니라 증류가 고를 칸이자 점검의 잣대. 칸이 없으면 새 지식을 아예 저장할 수 없다(카테고리 필수). */
+function taxonomyHealth(t: any): Health {
+  if (t && Number(t.categories) === 0) {
+    return { level: 'warn', line: '카테고리가 하나도 없습니다 — 새 지식은 카테고리가 있어야 저장되므로, 증류기도 AI 도 지식을 남길 수 없습니다.' };
   }
-  const j = jobHealth(s.job, '갈래를 정하는');
-  if (j) return { ...j, line: j.line + (s.backlog ? ` 갈래가 없는 지식 ${fmtNum(s.backlog)}건은 검색에도 안 잡힙니다.` : '') };
-  const rest = s.backlog ? ` 갈래가 없는 지식 ${fmtNum(s.backlog)}건이 기다리고 있습니다.` : '';
-  // ⚠ 규칙 대수를 여기서 말해야 한다 — 이 두 줄이 없어서 첫 화면은 "1시간마다 · 23분 전"이라 하고
-  //  갈래 화면은 "아직 분류기가 없습니다"라고 했다. 둘 다 사실인데 합쳐 읽으면 모순이다(어니스트 실박스 지적).
-  if (!s.configured) {
-    // 규칙 0개는 '고장'이 아니다 — 기본 기준으로 떨어지는 게 설계된 폴백이다(무중단 계약 ④). 그래서 warn 이 아니라 note.
-    return { level: 'note',
-      line: `갈래를 자동으로 정하는 규칙이 없어 기본 기준 하나로 나눕니다 — 팀·주제마다 다르게 나누려면 규칙을 만드세요.${rest}` };
+  if (t && t.no_definition) {
+    return { level: 'warn', line: `카테고리 ${t.no_definition}개에 "무엇을 담는 칸인지"가 비어 있습니다 — 설명이 없으면 AI 도 어디에 넣을지 알 수 없습니다.` };
   }
-  if (!s.enabled) {
-    // 만들어 두고 다 꺼 둔 상태 — 일은 도는데 아무 규칙도 대상을 안 집는다(가장 헷갈리는 상태다).
-    return { level: 'off', line: `갈래 배정 규칙 ${s.configured}개가 모두 꺼져 있습니다 — 아무 지식도 갈래를 받지 못합니다.${rest}` };
-  }
-  if (s.uncovered) return { level: 'warn', line: `어느 규칙에도 안 걸리는 지식이 ${fmtNum(s.uncovered)}건 있습니다 — 이대로면 영영 갈래를 못 받습니다.` };
-  if (s.backlog) return { level: 'note', line: `갈래가 없는 지식 ${fmtNum(s.backlog)}건이 기다리고 있습니다.` };
-  return { level: 'ok', line: '갈래가 없는 지식이 없습니다.' };
+  return { level: 'ok', line: '모든 카테고리에 정의가 있습니다.' };
 }
 
 function manageHealth(s: any): Health {
@@ -79,32 +121,27 @@ function manageHealth(s: any): Health {
   return { level: 'ok', line: '처리할 것이 없습니다.' };
 }
 
-/** 네 단계의 판정 한 벌 — 현황 화면(context-home)이 '지금 할 일'을 만들 때 쓴다.
- *  ⚠ 판정 잣대는 이 파일의 *Health 함수 하나뿐이다 — 현황이 자기 임계를 따로 두면 두 화면이 서로 다른 말을 한다. */
-export function pipelineHealths(d: any): Array<{ key: 'collect' | 'distill' | 'classify' | 'manage'; label: string; level: Health['level']; line: string }> {
-  const s = (d && d.stages) || {};
-  const mk = (key: any, label: string, h: Health | null) => ({ key, label, level: (h ? h.level : 'note') as Health['level'], line: h ? h.line : '' });
-  return [
-    mk('collect', '가져오기', s.collect ? collectHealth(s.collect) : null),
-    mk('distill', '지식 만들기', s.distill ? distillHealth(s.distill) : null),
-    mk('classify', '갈래 정하기', s.classify ? classifyHealth(s.classify) : null),
-    mk('manage', '점검', s.manage ? manageHealth(s.manage) : null),
-  ];
+/** 판정 레벨만 — 상단 탭(#1841, context.ts)이 점 색으로 쓴다. 판정 잣대는 위 *Health 함수 한 벌(카드와 같은 눈). */
+export function stageHealthLevels(d: any): { collect: Health['level']; distill: Health['level']; taxonomy: Health['level']; manage: Health['level'] } {
+  const h = stageHealthDetails(d);
+  return { collect: h.collect.level, distill: h.distill.level, taxonomy: h.taxonomy.level, manage: h.manage.level };
 }
 
-/** 네 단계의 판정 레벨만 — 상단 단계 탭(#1841, context.ts)이 점 색으로 쓴다. 판정 잣대는 위 *Health 함수 한 벌(카드와 같은 눈). */
-export function stageHealthLevels(d: any): { collect: Health['level']; distill: Health['level']; classify: Health['level']; manage: Health['level'] } {
+/** 판정 등급 + **그 문장** — 탭 점의 툴팁이 쓴다(#4194 적대검증: 증류 점이 빨개도 그게 자료 쪽인지 카테고리 붙이기 쪽인지
+ *  화면 어디에도 안 나왔다 — 합친 판정의 문장은 살아 있는 화면에 닿지 않고 있었다). */
+export function stageHealthDetails(d: any): Record<'collect' | 'distill' | 'taxonomy' | 'manage', Health> {
   const s = (d && d.stages) || {};
-  const lv = (h: Health | null) => (h ? h.level : 'note');
+  const none: Health = { level: 'note', line: '' };
+  const tx = taxonomyOf(d);
   return {
-    collect: s.collect ? lv(collectHealth(s.collect)) : 'note',
-    distill: s.distill ? lv(distillHealth(s.distill)) : 'note',
-    classify: s.classify ? lv(classifyHealth(s.classify)) : 'note',
-    manage: s.manage ? lv(manageHealth(s.manage)) : 'note',
+    collect: s.collect ? collectHealth(s.collect) : none,
+    distill: s.distill ? distillHealth(d) : none,
+    taxonomy: tx ? taxonomyHealth(tx) : none,
+    manage: s.manage ? manageHealth(s.manage) : none,
   };
 }
 
 /** 파이프라인 개요를 host 에 그린다. onGoto = 스테이지 클릭 시 서브탭 전환(라우터 대신 인메모리 전환). */
 // ⚠ 옛 개요 UI(renderPipeline — 요약 배지 · 4단계 트랙 카드 · 게이트 · 자동 실행 줄)는 #1841 에서 **삭제**했다.
-//  대체: web/context-home.ts(현황) — 같은 데이터를 '아는 것 + 할 일'로 말한다. 이 파일에는 **판정 함수만** 남는다
+//  대체: 흐름 지도(web/context-map.ts, #762 — 그 사이의 web/context-home.ts 는 #4194 에서 지웠다). 이 파일에는 **판정 함수만** 남는다
 //  (한 벌의 잣대를 두 화면이 나눠 쓰던 구조는 유지 — 판정이 둘이 되면 화면끼리 다른 말을 한다).

@@ -137,6 +137,15 @@ t("Bash 승인 다이얼로그(Do you want to proceed?) → 대기", () => {
   assert.equal(detectAwaiting(pane), true);
 });
 
+t("Codex Action required 화면 → 대기", () => {
+  const pane = [
+    " Action required",
+    " Codex needs your decision before continuing.",
+    " Press enter to continue",
+  ].join("\n");
+  assert.equal(detectAwaiting(pane), true);
+});
+
 t("빈 pane → 대기 아님", () => {
   assert.equal(detectAwaiting(""), false);
 });
@@ -551,11 +560,16 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     const keys = HARNESSES.map((h) => h.key);
     ok2(keys.includes("opencode") && keys.includes("antigravity"), "E13a 배선된 4하네스가 모두 세션 선택지에 있다");
     const agy = HARNESSES.find((h) => h.key === "antigravity");
+    const codex = HARNESSES.find((h) => h.key === "codex");
     ok2(agy?.bin === "agy", "E13b antigravity 의 실행 파일은 agy(key 로 spawn 하면 ENOENT)");
     ok2(agy?.autoApproveFlag === "--dangerously-skip-permissions", "E13c 자동승인은 그 하네스가 실제로 받는 플래그");
+    ok2(codex?.autoApproveFlag === "--dangerously-bypass-approvals-and-sandbox", "E13c-b Codex 자동승인은 현재 CLI가 인식하는 완전 권한 플래그");
     ok2((agy?.flags.find((f) => f.name === "--effort")?.choices || []).join(",") === ",low,medium,high",
       "E13d agy 의 추론강도는 3단계 — 다른 하네스의 목록을 복사해 두면 고른 값이 거부된다");
     ok2(HARNESSES.find((h) => h.key === "opencode")?.autoApproveFlag === "--auto", "E13e opencode 자동승인은 --auto");
+    //  #5058 오토모드 — 승인을 하네스가 스스로 검토하되 샌드박스는 남는 자리(리브 세션이 쓴다). 실측: claude --help · codex-cli 0.164.0 --help.
+    ok2((HARNESSES.find((h) => h.key === "claude")?.autoModeArgv || []).join(" ") === "--permission-mode auto", "E13g Claude 오토모드는 --permission-mode auto");
+    ok2((codex?.autoModeArgv || []).join(" ") === "--approve-for-me", "E13h Codex 오토모드는 --approve-for-me(샌드박스 workspace-write 유지)");
     ok2(HARNESSES.every((h) => h.key === "shell" || !!h.bin), "E13f 셸 말고는 실행 파일이 반드시 있다");
     // 어느 하네스든 '하네스 기본'을 고를 수 있어야 낡은 모델 문자열에 사용자가 묶이지 않는다.
     const modelFlags = HARNESSES.flatMap((h) => h.flags.filter((f) => f.name === "--model"));
@@ -595,13 +609,21 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   //  실측에선 테스트가 돈 뒤 `__warm__` 보조 서버 프로세스까지 남아 있었다).
   //  · version: `tmux -V` 가 0 으로 끝났으면 그 출력, 아니면 null(tmux 없음)
   //  · probe:   전용 소켓으로 `list-sessions` 가 0 으로 끝났으면 그 출력, 아니면 null(= "no server running" — 격리된 새 소켓의 정상 응답)
-  function e12SkipReason(platform: NodeJS.Platform, version: () => string | null, probe: () => string | null): string | null {
+  //  · fgSeen: 대조군 — 런처 없이 가장 단순한 꼴(`sh -c 'set -m; sleep …; exit'`)로 띄운 자식을 tmux 가 **무엇으로** 보나(관측값).
+  //     이것조차 셸로 보이면 런처가 아니라 **커널**이 터미널의 전면 프로세스 그룹을 tmux 에 안 보여 주는 것이다 — gVisor
+  //     (중앙 박스 세션 컨테이너)는 set -m 으로 자식이 제 그룹을 갖는데도 tpgid 를 0 으로 보고한다(#5029 실측). 그 자리에선
+  //     E12 의 관측 자체가 성립하지 않는다(중앙 박스의 실제 세션은 box-spawn 컨테이너 너머라 이 판정에 기대지도 않는다).
+  //     ⚠ 셸 이름을 **봤을 때만** 건너뛴다 — 빈 값(tmux 가 안 떴다 · 죽었다)까지 커널 탓으로 돌리면 런처 회귀 시험(#1535)이
+  //      엉뚱한 이유를 달고 꺼진다. 그땐 E12 를 그대로 돌려 빨간불로 드러낸다.
+  function e12SkipReason(platform: NodeJS.Platform, version: () => string | null, probe: () => string | null, fgSeen: () => string): string | null {
     if (platform === "win32") return "윈도우 — 네이티브 mux(psmux)는 -S 소켓 격리가 없어 kill-server 가 PC 의 모든 세션을 죽인다";
     const v = version();
     if (v === null) return "tmux 없음(최소 컨테이너)";
     if (/psmux/i.test(v)) return "psmux — -S 소켓 격리를 무시한다(kill-server = 전 세션 종료)";
     const seen = probe();
     if (seen !== null && seen.trim() !== "") return "전용 소켓에서 이미 세션이 보인다 — 소켓 격리가 안 되는 mux 라 kill-server 를 칠 수 없다";
+    const seenFg = fgSeen();
+    if (SHELL_CMDS.has(seenFg)) return `이 커널은 터미널의 전면 프로세스 그룹을 tmux 에 보여 주지 않는다(대조군 set -m 자식이 '${seenFg}' 로 보인다 — gVisor)`;
     return null;
   }
   // 판정 픽스처 — 이 표가 틀리면 아래 실행이 개발자 PC 의 세션을 죽인다. 실행 여부와 무관하게 늘 검사한다.
@@ -609,13 +631,18 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     let spawned = 0;
     const V_TMUX = "tmux 3.4";
     const V_PSMUX = "tmux 3.3.7\npsmux 3.3.7 (05cc5d4 2026-07-20)";   // 실측(hammurabi)
-    ok2(e12SkipReason("win32", () => { spawned++; return V_PSMUX; }, () => { spawned++; return "box-yoon-1: 1 windows"; }) !== null, "E12g 윈도우는 무조건 건너뛴다");
+    const FG = () => "sleep";
+    ok2(e12SkipReason("win32", () => { spawned++; return V_PSMUX; }, () => { spawned++; return "box-yoon-1: 1 windows"; }, () => { spawned++; return "sleep"; }) !== null, "E12g 윈도우는 무조건 건너뛴다");
     ok2(spawned === 0, "E12g 윈도우 판정은 tmux 를 spawn 하지 않는다(실 mux 에 부작용 0)");
-    ok2(e12SkipReason("linux", () => null, () => null) !== null, "E12g tmux 가 없으면 건너뛴다");
-    ok2(e12SkipReason("darwin", () => V_PSMUX, () => null) !== null, "E12g -V 가 psmux 를 밝히면 플랫폼과 무관하게 건너뛴다");
-    ok2(e12SkipReason("linux", () => V_TMUX, () => "box-yoon-1: 1 windows (created …)") !== null, "E12g 전용 소켓 ls 에 실 세션이 보이면 격리 실패 — 건너뛴다");
-    ok2(e12SkipReason("linux", () => V_TMUX, () => null) === null, "E12g 진짜 tmux + 새 소켓('no server running') 이면 돈다");
-    ok2(e12SkipReason("linux", () => V_TMUX, () => "") === null, "E12g 전용 소켓이 비어 있으면(0 세션) 돈다");
+    ok2(e12SkipReason("linux", () => null, () => null, FG) !== null, "E12g tmux 가 없으면 건너뛴다");
+    ok2(e12SkipReason("darwin", () => V_PSMUX, () => null, FG) !== null, "E12g -V 가 psmux 를 밝히면 플랫폼과 무관하게 건너뛴다");
+    let fgAsked = 0;
+    ok2(e12SkipReason("linux", () => V_TMUX, () => "box-yoon-1: 1 windows (created …)", () => { fgAsked++; return "sleep"; }) !== null, "E12g 전용 소켓 ls 에 실 세션이 보이면 격리 실패 — 건너뛴다");
+    ok2(fgAsked === 0, "E12g 격리가 안 되는 mux 에선 대조군 세션도 띄우지 않는다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => null, FG) === null, "E12g 진짜 tmux + 새 소켓('no server running') 이면 돈다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => "", FG) === null, "E12g 전용 소켓이 비어 있으면(0 세션) 돈다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => null, () => "sh") !== null, "E12g 대조군 set -m 자식도 셸로 보이면(gVisor) 건너뛴다 — 런처 탓이 아니다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => null, () => "") === null, "E12g 대조군을 못 봤으면(tmux 가 안 떴다) 건너뛰지 않는다 — 커널 탓으로 돌려 런처 시험을 끄지 않는다");
   }
   // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
   //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼
@@ -640,6 +667,18 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     }, () => {
       const probe = spawnSync("tmux", ["-S", E12_SOCK, "list-sessions"], { encoding: "utf8" });
       return probe.status === 0 ? (probe.stdout || "") : null;
+    }, () => {
+      //  끝에 명령을 하나 더 둬야 sh 가 sleep 을 exec 로 바꿔치지 않고 자식으로 띄운다(그래야 전면이 옮겨 가는지를 본다).
+      const t = (...a: string[]): string => (spawnSync("tmux", ["-S", E12_SOCK, ...a], { encoding: "utf8" }).stdout || "").trim();
+      let seen = "";
+      try {
+        t("new-session", "-d", "-s", "e12ctl", "-x", "80", "-y", "24", "sh", "-c", "set -m; sleep 30; exit $?");
+        for (let i = 0; i < 50 && seen !== "sleep"; i++) {
+          seen = t("display-message", "-p", "-t", "e12ctl", "#{pane_current_command}");
+          if (seen !== "sleep") spawnSync("sleep", ["0.1"]);
+        }
+        return seen;
+      } finally { t("kill-server"); }
     });
     if (skip) console.log(`skip E12 (${skip})`);
     else {
@@ -725,6 +764,28 @@ t("[#2439] runtimeChoice 가 tmux 옵션에서 rows.push 까지 이어진다", (
   //   원시값을 그대로 올리고(runtimeRaw), 생성은 두 축의 값을 한 자리에서 정해 표식 목록에 넘긴다.
   //   원시값을 안 올리면 codex 모드가 세 낱말로 접혀 사라지고, 판정이 다시 «배포 기본 추측» 으로 돌아간다(#3982 의 뿌리).
   assert.match(src, /runtimeRaw: runtimeRaw \|\| ""/, "중간 객체가 표식 원시값을 그대로 올린다");
-  assert.match(src, /runtimeRaw: p\.runtimeRaw/, "★ rows.push 가 원시값도 담는다");
+  assert.match(src, /runtimeRaw: p\.runtimeRaw/, "★ 중간 객체가 원시값도 담는다");
+  //  ★★ #4135 — **최종 행까지** 와야 뜻이 있다. 중간 객체까지만 오면 화면·배달이 «표식 없음» 으로 읽어 배포
+  //   기본으로 되돌아간다(실측 2026-09-26: 터미널로 뜬 세션을 목록이 app-server 라고 말했다 — 노드 세션도 같은 코드).
+  //   그래서 «rows.push 가 담는다» 만 재던 이 표에 **sessions.push** 를 따로 세운다(다섯 자리 중 마지막 칸).
+  assert.match(src, /\.\.\.\(r\.runtimeChoice \? \{ runtimeChoice: r\.runtimeChoice \} : \{\}\)/, "★ 최종 행이 runtimeChoice 를 담는다");
+  assert.match(src, /\.\.\.\(r\.runtimeRaw \? \{ runtimeRaw: r\.runtimeRaw \} : \{\}\)/, "★★ 최종 행이 표식 원시값을 담는다(이게 없어서 판정이 배포 기본으로 되돌아갔다)");
   assert.match(src, /sessionMetaCmds\(id, \{[\s\S]*?runtime: chatRuntime \? "chat" : codexModeStampFor\(/, "생성이 두 축의 모드를 한 표식으로 남긴다");
+});
+
+// ── codex 시작 «Update available» 창을 **세션 만들 때** 없앤다 (#4135 후속, 실측 2026-09-26) ──────
+//  ⚠ 이 배선이 빠지면 증상이 조용하다: 세션은 뜨고, 목록은 정상이고, 사람만 «codex 를 직접 쳐야 실행된다» 를 본다
+//   (그 창에 Enter 가 들어가면 `npm install -g` 가 EACCES 로 실패해 codex 가 그 자리에서 끝난다 — 라이브 캡처).
+//   그래서 «폴더 신뢰 옆에서, 훅 신뢰보다 먼저» 라는 자리까지 함께 못박는다.
+t("[#4135] 세션 생성이 codex 업데이트 검사를 끈다(폴더 신뢰와 같은 seam · 훅 신뢰보다 먼저)", () => {
+  const here = new URL(".", import.meta.url).pathname.replace(/\/dist\//, "/src/");
+  const src = readFileSync(join(here, "sessions.ts"), "utf8");
+  assert.match(src, /await ensureCodexUpdateCheckOff\(io, configFile\);/, "★ 그 세션이 실제로 쓸 설정 파일에 심는다");
+  const off = src.indexOf("await ensureCodexUpdateCheckOff(");
+  const hooks = src.indexOf("await ensureCodexHooksTrusted(");
+  assert.ok(off > 0 && hooks > off, "업데이트 검사 끄기가 훅 신뢰(app-server 를 띄운다)보다 먼저다");
+  //  두 번째 겹 — 그 창이 이미 떠 있으면 Escape 로 닫는다(Enter 는 codex 를 죽인다).
+  const fp = readFileSync(join(here, "session-first-prompt.ts"), "utf8");
+  assert.match(fp, /Update now\|Skip until next version/, "판정은 번호 선택지 줄로만 한다(배너 문안이 아니다)");
+  assert.match(fp, /sendKeyToSession\(id, "Escape"\)/, "★ 닫는 키는 Escape 다");
 });

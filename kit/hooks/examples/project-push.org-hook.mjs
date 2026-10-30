@@ -88,6 +88,7 @@ function executionSessionId(input, env = process.env) {
   const native = String((input && (input.session_id || input.sessionId)) || "").trim();
   const harness = String(env.LIVELY_HARNESS || "claude").trim().toLowerCase();
   if (native && harness === "codex" && SID_RE.test(`codex-${native}`)) return `codex-${native}`;
+  if (native && harness === "cursor" && SID_RE.test(`cursor-${native}`)) return `cursor-${native}`;   // #4927 cursor-adapter
   if (native && harness === "claude" && SID_RE.test(`claude-${native}`)) return `claude-${native}`;
   const codex = String(env.CODEX_THREAD_ID || env.CODEX_SESSION_ID || "").trim();
   if (codex && SID_RE.test(`codex-${codex}`)) return `codex-${codex}`;
@@ -150,11 +151,15 @@ async function askServer(jfetch, execId, nodeId) {
     if (j.sync === undefined) return null;          // 구 서버(node 파라미터 미지원) → 캐시로 폴백
     const folder = String(j.folder || "").trim();
     const mode = SYNC_MODES.includes(String(j.sync || "")) ? String(j.sync) : "none";
-    // folder_abs_path = 사람이 `lively init` 으로 명시 바인딩한 절대경로. 없으면 이 노드의 canonical 슬롯.
-    const abs = j.folder_abs_path ? String(j.folder_abs_path) : (folder ? path.join(sharedRoot(), folder) : null);
+    // folder_abs_path = 사람이 `lively init` 으로 명시 바인딩한 절대경로. 없으면 라이블리 소유 슬롯인데, 그 자리는
+    //  **서버가 세션 행에서 읽은 session_dir**(이 세션이 실제로 도는 프로젝트 폴더, #4135)이 먼저고, 그것도 없으면
+    //  이 노드의 canonical 슬롯(<shared root>/<folder>)을 env 로 조립한다(옛 루트가 env 에 남은 세션이 엉뚱한 폴더를 봤다).
+    const abs = j.folder_abs_path ? String(j.folder_abs_path)
+      : j.session_dir ? String(j.session_dir)
+      : (folder ? path.join(sharedRoot(), folder) : null);
     if (!abs) return { projectId: null };
-    // slot = 라이블리가 소유하는 자리(없으면 만들어도 된다). false = 사람이 init 한 자기 폴더 — 없으면 만들지 않는다
-    //  (지운 폴더를 빈 껍데기로 되살리면 "여기 프로젝트가 산다"는 거짓 신호가 남는다).
+    // slot = 라이블리가 소유하는 자리(없으면 만들어도 된다 — session_dir 도 여기 든다). false = 사람이 init 한 자기 폴더 —
+    //  없으면 만들지 않는다(지운 폴더를 빈 껍데기로 되살리면 "여기 프로젝트가 산다"는 거짓 신호가 남는다).
     return { projectId: pid, projDir: abs, mode, slot: !j.folder_abs_path };
   } catch { return null; }
 }
@@ -219,13 +224,21 @@ function readLedger(projDir) {
       return Object.fromEntries(Object.entries(v).map(([kk, vv]) => [nk(kk), vv]));   // 구 원장(NFD 키)도 여기서 접힌다
     };
     return { files: pick("files"), tombs: pick("tombs") };
-  } catch { return { files: {}, tombs: {} }; }   // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe)
+  } catch (e) {
+    // 없음·깨짐 → 빈 원장 = 보호도 삭제전파도 안 함(fail-safe). bad = 파일은 있는데 못 읽었다(쓰는 중·깨짐) —
+    //  빈 원장 위에 «덧쓰기»를 하면 다른 기준선·묘비가 다 지워지므로, 덧쓰기만 하는 자리(healBaselines)는 이때 쓰지 않는다(#4609).
+    return { files: {}, tombs: {}, bad: !(e && e.code === "ENOENT") };
+  }
 }
 function writeLedger(projDir, files, tombs) {
+  // 임시 파일 → rename(#4609). 그 자리에 바로 쓰면 같은 폴더의 다른 받기·올리기가 쓰다 만 원장을 읽어 «빈 원장»으로
+  //  보고, 그 위에 쓰면서 다른 기준선·묘비를 지운다(묘비가 지워지면 중앙에서 지운 문서를 다시 올린다 — #3787 진동).
+  const file = path.join(projDir, ".lively", "sync-ledger.json");
+  const tmp = `${file}.${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
   try {
-    fs.writeFileSync(path.join(projDir, ".lively", "sync-ledger.json"),
-      JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
-  } catch { /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
+    fs.writeFileSync(tmp, JSON.stringify({ v: 2, at: new Date().toISOString(), files, tombs: tombs || {} }, null, 2) + "\n");
+    fs.renameSync(tmp, file);
+  } catch { try { fs.unlinkSync(tmp); } catch { /* */ } /* 실패는 무해 — 원장 없음은 fail-safe 쪽이다 */ }
 }
 /** 로컬 파일이 이 기준선과 **바이트 동일한 그 파일**인가 — pull·push 가 mtime 을 서버 값으로 맞추므로 정확히 일치한다. */
 function sameAsBaseline(st, base) {
@@ -401,11 +414,24 @@ async function localFiles(base) {
     }
     if (f.size === s.size && f.mtime <= s.mtime) continue;           // 로컬이 서버와 같거나 더 옛것 → 할 일 없음
     // 여기부터 로컬이 서버와 다르다. 서버가 우리 기준선 이후로 바뀌었으면 **남이 고친 것**이다.
-    if (s.mtime > lastPull) { conflicts.push({ path: f.path, why: "서버도 우리가 마지막으로 받은 뒤에 바뀜(남의 작업일 수 있음)", server_mtime: s.mtime, local_mtime: f.mtime, last_pull: lastPull }); continue; }
+    //  ★ 기준선은 둘이다 (#4135, 2026-09-28).
+    //   ① 원장의 그 파일 항목 — «마지막으로 양쪽이 일치한 서버 버전»(받았거나 · **우리가 올렸거나**, 위 ⑧ 이 적는다).
+    //      서버 사본이 지금도 그 (mtime,size) 그대로면 그 뒤로 아무도 안 고쳤다 → 로컬 수정분을 올려도 남의 작업이 안 사라진다.
+    //   ② 워터마크(last_pull) — 원장에 항목이 없는 파일의 근거(종전 규칙 그대로).
+    //  종전엔 ②만 봤다. 그러면 **우리가 올린 파일**은 서버 mtime(= 우리가 올린 시각)이 last_pull 보다 늘 뒤라, 그 파일을 한 번 더
+    //  고치면 «남이 고쳤을 수 있음» 으로 보고 영영 안 올렸다. pull 은 로컬이 기준선과 다른 파일이 있으면 수렴을 못 해 last_pull 을
+    //  못 올리고, push 는 last_pull 이 낮아 못 올리는 맞물림이라 스스로 풀리지도 않았다.
+    //  (실측: 프로젝트 4135 — 마커에 last_pull 없음 · 시안 HTML 의 첫 판만 올라가 있고 고친 판 셋이 하루 동안 충돌로 남음.
+    //   사람은 자료 칸에서 깨진 첫 판을 봤다.)
+    const held = ledger[key];
+    const serverIsBaseline = !!held && typeof held.mtime === "number" && held.mtime === s.mtime && held.size === s.size;
+    if (!serverIsBaseline && s.mtime > lastPull) { conflicts.push({ path: f.path, why: "서버도 우리가 마지막으로 받은 뒤에 바뀜(남의 작업일 수 있음)", server_mtime: s.mtime, local_mtime: f.mtime, last_pull: lastPull }); continue; }
     push.push(f);                                                    // 로컬만 바뀜 → 안전하게 올린다
   }
 
   // 7) 판정 — 지울 것. **원장에 있는 것만** 후보다(= pull 이 실제로 받아준 것 = '한때 우리가 들고 있던 것').
+  //    (#4609 부터 pull 은 «바이트가 같다고 확인한» 로컬 파일도 원장에 적는다 — 같은 경로에 같은 내용이면 받은 파일과
+  //     같게 본다. 그 로컬 파일을 지우면 여기서 서버본 삭제가 전파된다.)
   const del = [], ledgerDrop = [], ledgerDropAfterPush = [];
   if (complete) {
     for (const [p, baseline] of Object.entries(ledger)) {
@@ -444,8 +470,9 @@ async function localFiles(base) {
       //  push 가 자기 업로드를 '남의 변경'으로 오인해 **영구 거짓 충돌**을 낸다. 같은 파일 두 번 고치는 게 안 된다는 뜻.
       const meta2 = await r.json().catch(() => ({}));
       if (typeof meta2.mtime === "number") {
-        const t = new Date(meta2.mtime);
-        try { fs.utimesSync(f.abs, t, t); } catch { /* 실패해도 아래 기준선이 안 맞을 뿐 — 다음 pull 이 바로잡는다 */ }
+        // 초 단위 수 + 0.5ms 로 찍는다 — Date 를 넘기면 Node 18~22 에서 절반쯤이 1ms 내려 찍혀 «받은 그대로» 판정이
+        //  어긋난다(#4609 실측, pull 훅 stampMtime 과 같은 이유).
+        try { const s = (meta2.mtime + 0.5) / 1000; fs.utimesSync(f.abs, s, s); } catch { /* 실패해도 아래 기준선이 안 맞을 뿐 — 다음 pull 이 바로잡는다 */ }
         ledgerSet[nk(f.path)] = { mtime: meta2.mtime, size: typeof meta2.size === "number" ? meta2.size : f.size };
       } else {
         // 구 게이트웨이(mtime 미반환) → 기준선을 **모른다**. 거짓 기준선을 적느니 지운다(원장 없음 = fail-safe).

@@ -21,23 +21,29 @@ import { stateDir } from "./ops/state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import { registerNotifyRoutes } from "./v6/notify-routes.js";
+import { registerBrowserRoutes } from "./browser/routes.js";   // #4993 AI·사람 공용 브라우저 — 화면 쪽 스트림·답
 import { resolveNotifyRoutes } from "./v6/notify-scope.js";
 import type { LivelyUser } from "./context.js";
 import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
 import { viewerOf } from "./capabilities/principal.js";
+import { runWithAppReadScope, assertAppContextSafeTool } from "./apps/app-context.js";   // #5100 앱 맥락 범위 — 앱 토큰 REST 호출을 그 앱의 읽기 범위 안에서
 import { wrap, HttpError } from "./http/rest-util.js";
 import { DANGEROUS_SCOPES, type Scope } from "./auth/scopes.js";
 import { sessionOrBearer } from "./auth/http-auth.js";
 import { sessionFromHeaders, readOnlyFromHeaders, incognitoFromHeaders } from "./org/auth/agent-identity.js"; // #852 세션 · #1007 읽기전용/인코그니토
+import { requireSessionWriter } from "./sessions/session-identity-guard.js";   // #4135 — 남의 세션에서 다른 사람 로그인으로 쓰는 것을 멈춘다
 import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword, hasCredential } from "./auth/local-accounts.js";
 import { activeProviders } from "./auth/providers.js";
+import { ssoLogoutRedirect } from "./auth/logout-redirect.js";
 import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO)은 Enterprise — 미탑재면 local 만 남는다
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
+import { registerAppFrontRoutes } from "./apps/app-front-routes.js"; // #4480 v2-1 — 앱 주소 앞단(CP 라우터)이 부르는 기계 엔드포인트(redeem · me · page · #4482 lively)
+import { registerAppJobRoutes } from "./apps/app-jobs-routes.js"; // #4486 v2-7 — 앱 백그라운드 작업의 콜백(함수 안 검사 층 → 시작 확인 · 박동 · 결과)
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -84,7 +90,11 @@ export function assetReloadPolicy(raw: string | undefined): "auto" | "notify" {
 
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
   // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
+  //  앱 서버 토큰(#4483)은 기본으로 403 이다(fail-closed — 여기 라우트를 더해도 닫힌 채로 생긴다). 사람 신원과 함께 받는 자리는
+  //  아래 능력 REST 마운트(mwCap) 하나뿐이고, 거기선 requireAppTool 이 그 앱 동의로 도구를 좁힌다. 비밀번호 바꾸기·로그인 수단 같은
+  //  mw(null) 라우트는 앱 동의 게이트를 안 타므로 앱 서버 코드가 방문자 이름으로 부르면 안 된다(격리 리뷰 지적).
   const authResolve = sessionOrBearer(verifier);
+  const authCap = sessionOrBearer(verifier, { appServer: true });
 
   // scope 게이트(세션·bearer 공통). null=인증만. fail-closed(미인증 401 / 권한부족 403).
   const requireScope = (scope: Scope | null): express.RequestHandler => (req, res, next) => {
@@ -97,6 +107,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   };
 
   const mw = (scope: Scope | null): express.RequestHandler[] => [authResolve, requireScope(scope)];
+  /** 능력 REST 마운트 전용 — 앱 서버 토큰을 «그 구성원 ∩ 앱 동의» 주체로 바꿔 받는 유일한 자리. */
+  const mwCap = (scope: Scope | null): express.RequestHandler[] => [authCap, requireScope(scope)];
 
   // ── 테넌트 하우스키핑 틱(#1437 중앙 모드) ──────────────────────────────────
   // 요청별 테넌시에서는 부팅 하우스키핑·스케줄러가 전부 꺼진다(요청 밖엔 테넌트 컨텍스트가 없다 —
@@ -123,7 +135,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     // #1631 — 리브 2턴(증류 지시). 자체호스팅은 background-sweeps 가 1분마다 돌리지만 그 스텝은
     //  요청별 테넌시에서 통째로 꺼진다(gate:'scheduler') — 되살리는 자리가 여기다. 이게 없으면
     //  매니지드 고객은 처음 설정 뒤 1턴(현황 보고)만 받고 **2턴이 영영 안 와서 레인이 안 세워진다.**
-    //  후보 목록은 신원 전역이라 어느 테넌트의 틱으로 불러도 전부 훑는다(내부 가드가 동시 실행을 막는다).
+    //  ⚠ #4851 실측 — 매니지드의 구성원 표는 워크스페이스마다 갈려 있어(행 수준 격리) 이 틱은 **이 워크스페이스의 후보만** 본다.
+    //   그래서 스윕은 등록부가 모르는 후보를 이 틱의 워크스페이스로 다룬다(second-turn.secondTurnTenant). 내부 가드가 동시 실행을 막는다.
     await step("liv-second-turn", async () => {
       const { sweepLivSecondTurn } = await import("./org/liv/second-turn-sweep.js");
       return await sweepLivSecondTurn();
@@ -132,12 +145,55 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     //  몇 개를 왜 안 걷었나"를 볼 수 있어야 한다. 리퍼는 정책이 0 이면 로그 한 줄 없이 no-op 으로
     //  돌아가므로, "ok" 만 보내면 **한 번도 안 돈 것과 돌았지만 걷을 게 없던 것이 구분되지 않는다**
     //  (#2148 실측: 매니지드에서 이 리퍼가 도는지조차 아무도 몰랐다).
+    // #4226 — 워크스페이스가 만든 앱의 데이터를 하루 한 번 떠 둔다(7일 보관). 멱등 — 20시간 안에 뜬 앱은 건너뛴다.
+    //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
+    await step("app-data-snapshot", async () => {
+      const { runDailyAppSnapshots } = await import("./apps/app-snapshot.js");
+      return await runDailyAppSnapshots();
+    });
+    // #4778 — 앱을 지울 때 보관으로 옮긴 앱 폴더 중 보관 기간(앱 데이터와 같은 7일)이 지난 것을 지운다. 기록 표만 먼저 보고 지울 것이
+    //  있을 때만 파일을 만진다 — 보관이 없는 워크스페이스는 파일 작업 헬퍼를 깨우지 않는다. 자가호스팅은 부팅 정비 타이머가 같은 함수를 부른다.
+    await step("app-folder-archive", async () => {
+      const { pruneAppFolderArchives } = await import("./apps/app-folder-archive.js");
+      return await pruneAppFolderArchives();
+    });
+    // #4481 — 앱 판 묶음: 옛 판을 파일 목록 + 저장소로 옮기고 · 30일 지난 옛 코어 호환 사본을 비우고 · 안 쓰는 파일을 정리한다(6시간에 한 번).
+    //  자가호스팅은 부팅 정비 타이머(boot/housekeeping)가 같은 함수를 부른다.
+    await step("app-bundles", async () => {
+      const { runAppBundleHousekeeping } = await import("./apps/app-bundle-migrate.js");
+      return await runAppBundleHousekeeping();
+    });
+    // #4484 — 앱 서버: 자동 멈춤 감시(5분 호출 · 실행 시간 → 동시 실행 0) · 죽은 빌드 걷기 · 옛 빌드 zip 정리. 앱 서버가 꺼진 배포면 «disabled».
+    await step("app-servers", async () => {
+      const { runAppServerHousekeeping } = await import("./apps/app-server-watch.js");
+      return await runAppServerHousekeeping();
+    });
     await step("session-reaper", () => reapIdleSessions());
+    // #4695 T5 — 하네스 종료 규칙(완료+안 봄 N분 · 질의+안 봄 M분). 주로는 요청에 얹은 정비(30초)와 마감 깨움이 돌리고, 이 틱(5분)은
+    //  아무도 안 쓰는 테넌트의 받침이다. 셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다.
+    //  #4697 T7 — 이 틱의 판은 워크스페이스당 한 줄을 남긴다(7일 측정 — «왜 안 껐나» 분포. logStopRuleTick 머리말).
+    await step("session-stop-rule", async () => {
+      const rule = await import("./sessions/session-stop-rule.js");
+      const r = await rule.sweepSessionStopRule();
+      rule.logStopRuleTick(r);
+      return r;
+    });
+    // #5043 — 원격 PC(멤버 노드) 하네스 종료 규칙. 주로는 요청에 얹은 정비(1분)와 마감 깨움이 돌리고, 이 틱(5분)은 받침이다.
+    //  노드가 없는 워크스페이스는 곧바로 «no-nodes» 를 돌려준다(DB 무접촉). 판은 워크스페이스당 한 줄(컴퓨터별 건너뛴 이유 · 판정 분포)을 남긴다.
+    await step("node-stop-rule", async () => {
+      const rule = await import("./sessions/node-stop-rule.js");
+      const r = await rule.sweepNodeStopRule();
+      rule.logNodeStopRuleTick(r);
+      return r;
+    });
     // #2509 압박 회수 — **박스 전역**이라 이 틱과 스코프가 다르다. CP 는 이 엔드포인트를 **running 테넌트마다**
     //  부르므로(lvly-cloud control/src/tenanttick.ts), 그대로 두면 전역 판정이 테넌트 수만큼 돈다.
     //  그 함수가 시간으로 스스로 잠그니(PRESSURE_SWEEP_MIN_INTERVAL_MS) 몇 번을 불려도 간격당 한 번만 실제로 돈다 —
     //  결과의 `throttled` 가 "이번 호출은 남이 이미 돌렸다"를 말한다(안 돈 것과 구분돼야 한다).
     await step("session-pressure-reaper", () => reapPressureSessions());
+    // #4783 — 사유 없이 사라진 판을 확답으로 확인해 «고장(lost)» 으로 적는다(세션 노드·컨테이너 고장). 매니지드만 돈다 —
+    //  셀프호스트(세션 컨테이너 없음)에선 그 함수가 곧바로 «꺼짐» 을 돌려준다. 근거는 세션마다의 tmux 확답뿐이다(session-end-lost 머리말).
+    await step("session-end-lost", async () => (await import("./sessions/session-end-lost.js")).sweepLostSessions());
     res.json({ ok: true, steps: out });
   }));
 
@@ -191,12 +247,23 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.redirect(302, exchangeLandingPath(req.query?.to));
   }));
 
+  // ── 앱 주소 앞단의 기계 엔드포인트(#4480 v2-1) — /api/app-front/{redeem,me,page}. **사람 로그인을 타지 않는다**:
+  //  앱 주소(<앱>-<워크스페이스>.lvly.app)의 앞단(CP 라우터)만 부르고, 그 문은 `x-lvly-app-front` 서명이다(테넌트 헤더만으론 부족 —
+  //  그 헤더는 인터넷의 모든 요청에 붙는다). 매니지드가 아니거나 LIVELY_APP_DOMAIN 이 없으면 404(자가호스팅 무회귀). 본문은 apps/app-front-routes.ts.
+  registerAppFrontRoutes(app);
+  // ── 앱 백그라운드 작업의 콜백(#4486 v2-7) — /api/app-jobs/:id/{claim,tick,result}. 함수 안 검사 층이 부른다(사람 로그인이 아니라
+  //  그 함수의 앱 서버 토큰 + 작업 비밀). #5053 AI 도구 동기 부르기의 시작 확인 /api/app-calls/:id/claim 도 같은 자격. 본문은 apps/app-jobs-routes.ts.
+  registerAppJobRoutes(app, verifier);
+
+  // IdP 로 로그인한 세션이면 redirect(IdP 로그아웃 문)를 함께 준다 — 브라우저가 그리로 가야 IdP 세션까지 끝난다.
+  //  그 외 로그인은 종전 응답 {ok:true} 그대로다(auth/logout-redirect.ts).
   app.post("/api/ui/logout", wrap(async (req, res) => {
     const sid = parseSessionCookie(req.headers.cookie);
-    if (sid) await revokeSession(sid);
+    const ended = sid ? await revokeSession(sid) : null;
     res.setHeader("Set-Cookie", clearSessionCookie());
     res.setHeader("Cache-Control", "no-store");
-    res.json({ ok: true });
+    const redirect = await ssoLogoutRedirect(ended, () => gatewayUrlForRequest(req), ee().sso);
+    res.json(redirect ? { ok: true, redirect } : { ok: true });
   }));
 
   // 본인 비번 변경 — 세션/토큰 인증 필요. 현재 비번 확인 후 교체(8자+).
@@ -261,22 +328,28 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", m4a: "audio/mp4",
     pdf: "application/pdf",
   };
-  app.get("/api/ui/notion-assets/:file", ...mw(null), wrap(async (req, res) => {
+  //  #5012 — 리니어 첨부(data/linear-assets)도 같은 규칙으로 내보낸다. 폴더를 정하는 법만 다르다.
+  const serveAsset = (assetDirOf: () => Promise<string>) => wrap(async (req, res) => {
     const file = String(req.params.file ?? "");
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,120}$/.test(file) || file.includes("..")) {
       res.status(400).json({ error: "잘못된 첨부 파일 이름" }); return;
     }
-    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
-    let dir = process.env.NOTION_ASSET_DIR || "";
-    try {
-      const { resolveConnectorConfig } = await import("./connectors/config.js");
-      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
-    } catch { /* config 계층 실패 → env/기본 폴백 */ }
-    const assetDir = dir || stateDir("notion-assets");
+    const assetDir = await assetDirOf();
     const full = path.resolve(assetDir, file);
     if (full !== path.join(assetDir, file)) { res.status(400).json({ error: "잘못된 경로" }); return; }
     const fsMod = await import("node:fs");
-    if (!fsMod.existsSync(full)) { res.status(404).json({ error: "첨부 파일 없음" }); return; }
+    if (!fsMod.existsSync(full)) {
+      // #5012 — 크기 상한으로 일부러 안 받은 첨부면 이유와 원본 위치를 글로 답한다(본문은 이미 이 주소를 가리킨다).
+      const { readSkipMarker, skipNotice } = await import("./connectors/asset-limits.js");
+      const skipped = readSkipMarker(assetDir, file);
+      if (skipped) {
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "private, no-store");
+        res.status(200).type("text/plain; charset=utf-8").send(skipNotice(skipped));
+        return;
+      }
+      res.status(404).json({ error: "첨부 파일 없음" }); return;
+    }
     const ext = (file.match(/\.([A-Za-z0-9]{1,8})$/)?.[1] ?? "").toLowerCase();
     const inlineType = ASSET_INLINE_TYPES[ext];
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -284,7 +357,17 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Content-Type", inlineType ?? "application/octet-stream");
     res.setHeader("Content-Disposition", inlineType ? "inline" : `attachment; filename="${file}"`);
     fsMod.createReadStream(full).on("error", () => { if (!res.headersSent) res.status(404).json({ error: "첨부 파일 없음" }); }).pipe(res);
+  });
+  app.get("/api/ui/notion-assets/:file", ...mw(null), serveAsset(async () => {
+    // 커넥터와 같은 해소 순서: org_connector(관리탭) → env → 기본. config 계층 캐시라 요청당 DB 부하 0.
+    let dir = process.env.NOTION_ASSET_DIR || "";
+    try {
+      const { resolveConnectorConfig } = await import("./connectors/config.js");
+      dir = (await resolveConnectorConfig("notion")).asset_dir || dir;
+    } catch { /* config 계층 실패 → env/기본 폴백 */ }
+    return dir || stateDir("notion-assets");
   }));
+  app.get("/api/ui/linear-assets/:file", ...mw(null), serveAsset(async () => stateDir("linear-assets")));
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {
@@ -312,9 +395,19 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       }
       // #1780: 앱 세션 토큰이면 그 앱 grant 의 도구 allowlist 로 축소(MCP 핸들러와 같은 판정 — 표면 간 일관). 일반 세션은 통과.
       await requireAppTool(user, cap.name);
+      //  #5100: 맥락 범위를 선언한 앱 토큰이면 범위를 못 지키는 도구(휴지통 · 실행 취소 · 사용 내역 등)는 핸들러 전에 403 — 거절 기록은 여기서(source web).
+      await assertAppContextSafeTool(user, cap.name, "web");
+      // #4135 — 기록의 주인은 세션을 연 사람이다. MCP 어댑터와 **같은 판정**을 REST 에도 건다(리뷰 지적): 스크립트는 토큰과
+      //  x-lively-session 을 실어 작업 기록을 REST 로 남기는데(activity_log 가 그 용도로 두 표면에 열려 있다), 공용 컴퓨터의
+      //  로그인으로 남의 세션을 말하면 MCP 와 똑같이 틀린 이름이 남는다. 헤더가 없는 요청(웹 화면 등)은 판정하지 않는다.
+      {
+        const claimed = sessionFromHeaders(req.headers);
+        if (claimed && isReadOnlyBlocked(cap)) await requireSessionWriter(user.userId, claimed);
+      }
       // /api/ui 응답은 전부 비공개(토큰 발급 평문 포함) — 프록시/브라우저 캐시 금지.
       res.setHeader("Cache-Control", "no-store");
-      res.json(await cap.handler(input, user, {
+      //  #5100 앱 맥락 범위 — 앱 토큰(앱 서버 · 앱 작업이 부르는 REST)이면 그 앱의 읽기 범위 안에서 돌린다. 앱 토큰이 아니면 그대로.
+      res.json(await runWithAppReadScope(user, () => cap.handler(input, user, {
         source: "web",
         actor: user.userId || user.email,
         // 세션(#852) — REST(스크립트)도 x-lively-session 을 실으면 MCP 와 같은 규칙으로 기록된다(형식 검증 + 소비처 canAttach).
@@ -326,11 +419,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
         readOnly, // #1007 — me 가 반환(모드 관측). 강제는 위 게이트가 이미 수행.
         incognito, // #1007+ — me 가 mode 반환
         viewer: viewerOf(user), // #1291 — 열람 신원. MCP 어댑터와 같은 규칙(v2: admin 도 특권이 아니다 — 우회는 긴급열람으로만).
-      }));
+      })));
     });
     for (const path of mount.paths) {
-      if (mount.method === "GET") app.get(path, ...mw(cap.scope), handler);
-      else app.post(path, ...mw(cap.scope), handler);
+      if (mount.method === "GET") app.get(path, ...mwCap(cap.scope), handler);
+      else app.post(path, ...mwCap(cap.scope), handler);
     }
   }
 
@@ -397,6 +490,10 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  #4054 — 받는 자리는 «워크스페이스 + 사람»(notify-scope.ts). 다른 워크스페이스는 `?all=1`(데스크톱 앱)일 때만.
   registerNotifyRoutes(app, mw("memory"), (req) => userOf(req)?.userId || "",
     (req, me, all) => resolveNotifyRoutes(userOf(req), me, all));
+
+  // ── AI 와 사람이 같이 쓰는 브라우저(#4993) — 데스크톱 앱 화면이 명령을 받는 스트림(SSE) + 답·상태 자리. ──
+  //  AI 쪽 표면은 capability(browser_*), 이건 화면 쪽 배관이다(src/browser/routes.ts 머리말).
+  registerBrowserRoutes(app, mw("memory"), (req) => userOf(req));   // #4993 — 툴과 같은 문(memory · 알림 스트림과 같다)
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

@@ -48,7 +48,7 @@ t("★ A1 pane 이 셸이어도 '종료됨'이 아니다 — app-server 세션�
   assert.equal(agentState({ ...base }, OFF), "exited");
 });
 
-t("★ A2 탭을 안 보고 있어도 'offline' 이 아니다 — 이 세션의 기본 화면은 터미널이 아니다", () => {
+t("★ A2 탭을 안 보고 있어도 'offline' 이 아니다 — app-server 세션은 pane 상태와 무관하다", () => {
   assert.equal(agentState({ ...base, offline: false, attached: 0, asPhase: "idle" }, ON), "idle");
   assert.equal(agentState({ ...base, offline: false, attached: 0 }, OFF), "offline");
 });
@@ -112,7 +112,7 @@ t("★ B2 화면은 «모를 때» 를 **행이 실어 준 값으로만** 판정
   assert.ok(!/harness \|\| ''\) === 'codex'/.test(fn), "하네스 이름으로 «대화창» 을 추측하지 않는다(기본이 뒤집혔다)");
 });
 
-t("B3 추정이 틀린 배포(tmux)에서는 행이 오는 즉시 터미널로 되돌린다 — 한 방향만 마감하면 반쪽이다", () => {
+t("B3 명시적으로 터미널을 고른 세션은 행이 갱신돼도 그 보기로 돌아온다", () => {
   const src = readSrc("web/session-chat.ts");
   //  ⚠ 2026-09-08 — 조건이 `opts.terminalSrc && isBox`(마운트 시점 값 둘)에서 `hasTerm()`(지금의 행)으로 바뀌었다.
   //   그 둘이 얼어 있으면 이 줄도 함께 막혀, 목록 한 틱의 «중단됨» blip 에 붙은 탭이 영영 대화창에 갇혔다.

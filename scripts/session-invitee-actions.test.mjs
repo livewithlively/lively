@@ -1,4 +1,4 @@
-// #3870 — 초대받은 사람에게도 [세션 옮기기]가 선다(stage 판 — 세션 복제 #4135 는 main 에만 있다) (원준 2026-09-30: «세션에 초대받은 다른 사람은 왜 세션 복제·
+// #3870 — 초대받은 사람에게도 [세션 옮기기]·[세션 복제]가 선다 (원준 2026-09-30: «세션에 초대받은 다른 사람은 왜 세션 복제·
 //  세션 옮기기 버튼이 안 보임?» → «둘 다 되게 해봐»).
 //
 // 화면의 단추 판정 셋(문패 [세션 옮기기] · 우클릭 「프로젝트 바꾸기·떼기」 · [⋯ ▸ 이 세션 ▸ 프로젝트])은 한 술어
@@ -28,6 +28,7 @@ globalThis.matchMedia = () => ({ matches: false, addEventListener: noop });
 const imp = (p) => import(pathToFileURL(join(root, p)).href);
 const { state } = await imp("public/app/lib/state.js");
 const views = await imp("public/app/v2/views.js");
+const ctx = await imp("public/app/v2/ctx-shell.js");
 state.me = { userId: "yoon" };
 
 // 세션 한 줄 — 목록이 주는 모양(owned 는 서버 판정 · raw 는 원본 행).
@@ -41,6 +42,14 @@ eq(views.canMoveSess(sess()), true, "①★초대받은 사람에게 [세션 옮
 eq(views.canMoveSess(sess({ raw: { invites: [] } })), false, "①초대받지 않은 남에겐 안 선다");
 eq(views.canMoveSess(sess({ owned: true, raw: { owner: "yoon", invites: [] } })), true, "①주인은 종전대로");
 eq(views.isInvitedSess(sess({ owned: true, raw: { owner: "yoon", invites: ["yoon"] } })), false, "①주인은 «초대받은 사람» 이 아니다 — 복제 창의 안내가 주인에게 안 뜬다");
+
+// ── 복제(canForkSess) ──
+eq(ctx.canForkSess(sess()), true, "②★초대받은 사람에게 [세션 복제]가 선다");
+eq(ctx.canForkSess(sess({ owned: true, raw: { invites: [] } })), false,
+  "②★관리자(owned 참)라도 초대받지 않았으면 안 선다 — 누르면 반드시 거절되는 단추");
+eq(ctx.canForkSess(sess({ live: true, alive: false })), false, "②초대받았어도 끝난 세션엔 안 선다(«이어서 열기» 가 먼저)");
+eq(ctx.canForkSess(sess({ raw: { appId: "writer" } })), false, "②초대받았어도 앱 세션엔 안 선다");
+eq(ctx.canForkSess(sess({ raw: { harness: "grok" } })), false, "②초대받았어도 복제 수단이 없는 AI 엔 안 선다");
 
 console.log(`\n${pass} passed`);
 process.exit(0);

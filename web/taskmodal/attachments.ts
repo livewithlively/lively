@@ -34,7 +34,7 @@ function pjvtmAttachments(d, t, refresh) {
       listBox.append(el('div', { class: 'pjv-tm-att' },
         el('span', { class: 'pjv-tm-att-ico', 'aria-hidden': 'true', text: '📎' }),
         el('button', { class: 'pjv-tm-att-name', type: 'button', text: f.name,
-          // shareBase(=프로젝트 폴더 경로)를 넘겨야 뷰어에 [⛶ 전체화면]·[🔗 링크 복사]가 생긴다(#1436).
+          // shareBase(=프로젝트 폴더 경로)를 넘겨야 뷰어에 [↗ 자료 보기]·[🔗 링크 복사]가 생긴다(#1436 · #4672).
           //  첨부도 프로젝트 폴더 안의 실제 파일이라 같은 주소축(root=shared + path)으로 가리킬 수 있다.
           onclick: () => openFileViewer(pid, rel, f.name, refresh, base, d.project && d.project.folder) }),
         el('span', { class: 'pjv-tm-att-size', text: fmtSize(f.size) }),

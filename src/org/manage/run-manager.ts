@@ -10,6 +10,7 @@ import {
 } from "../store/managers.js";
 import {
   detectMismatch, detectOutdated, findContradictionCandidates, findCodeDriftCandidates,
+  findCodeDriftKnowledgeCandidates, type CodeDriftCandidate, type CodeDriftKnowledgeCandidate,
 } from "./detectors.js";
 import { isApplicableAction } from "./action-whitelist.js";
 import { logger } from "../../log.js";
@@ -18,7 +19,73 @@ export interface ManagerRunResult {
   manager: string; kind: string;
   found?: number; created?: number; repeated?: number; applied?: number;
   candidates?: number; enqueued?: boolean; task_id?: number;
+  /** 레포별로 갈라 낸 위탁들(코드 비교). */
+  task_ids?: number[];
   skipped?: string; error?: string;
+  /** 레포별 위탁 중 일부 레포가 태스크조차 못 만든 사유(코드 비교) — 나머지 레포는 돌았으므로 error 와 칸을 나눈다(repoEnqueueFailure). */
+  partial_error?: string;
+}
+
+/** 접수 결과 요약에서 실패 사유 한 줄 — 미배정 요약은 error 가 아니라 reason 에 싣는다(_headless.ts). 둘 다 없으면 기본 문구. */
+function errorOf(summary: unknown): string {
+  const s = (summary ?? {}) as { error?: unknown; reason?: unknown };
+  for (const v of [s.error, s.reason]) if (typeof v === "string" && v.trim()) return v;
+  return "헤드리스 접수 실패";
+}
+
+/**
+ * 관리기 결과 묶음 → 크론 잡 status(순수).
+ *  · 전멸(모든 관리기가 error — 배정 단계에서 실패해 태스크가 큐에 남은 경우도 포함) → `error` — 크론 브레이커(scheduler/cron-breaker.ts)가 세는 유일한 실패 낱말이다.
+ *    헤드리스 접수 잡이 접수 status 를 그대로 내는 것(_headless.ts)과 같은 의미다. 감시는 id 가 있으면 그 결과로 따로 판정한다.
+ *  · 일부만 실패 → `warn` — 잡은 돌았고 산출물에 실패가 섞였다는 뜻(카나리 액션과 같은 관례). 관리기 하나 안에서
+ *    레포 일부만 접수에 실패한 경우(partial_error)도 여기다 — error 로 올리면 레포 하나가
+ *    임계 주수만큼 계속 깨질 때 나머지 레포 비교까지 브레이커가 끈다. 브레이커는 이걸
+ *    성공으로 보고 카운터를 0 으로 돌린다. 한 관리기만 계속 깨지는 것은 크론 감시(ops/cron-watch.ts)가
+ *    요약의 레인 error 로 따로 잡는다(delegatedWork 의 entryErrors).
+ *  · 그 외 → `ok`. skipped(볼 것 없음)는 실패가 아니다.
+ *  주 1회 잡이면 브레이커는 임계(engine.ts DEFAULT_MAX_FAIL_STREAK 또는 잡의 max_fail_streak) 회수만큼의 **주** 동안
+ *   연속 전멸해야 잡을 끈다 — 그 전에 사람에게 닿는 신호는 크론 감시 알림이다.
+ */
+export function statusForManagerResults(results: readonly Pick<ManagerRunResult, "error" | "partial_error">[]): "ok" | "warn" | "error" {
+  const has = (v: unknown): boolean => typeof v === "string" && v.length > 0;
+  const failed = results.filter((r) => has(r.error)).length;
+  if (failed && failed === results.length) return "error";
+  return failed || results.some((r) => has(r.partial_error)) ? "warn" : "ok";
+}
+
+/**
+ * 위탁 접수 결과에서 태스크 id(없으면 undefined) — 중첩 skip 이면 **도는 중인 이전 태스크**의 id 다.
+ *  반환값에 싣는 이유: 크론 잡 요약(org_cron.last_summary)이 곧 이 반환값이고, 크론 감시(ops/cron-watch.ts)는 그 id 로
+ *  위탁의 실제 결과를 읽어 잡 상태를 판정한다. 안 실으면 접수 시점의 ok 만 보여 실패·복구 알림이 회차마다 번갈아 나간다.
+ */
+function taskIdOf(summary: unknown): number | undefined {
+  const n = Number((summary as Record<string, unknown> | null)?.task_id);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
+/** 코드 비교 관리기의 레포 하나 접수 결과 — 후보 수와 접수 요약(task_id·error·reason …)을 펼쳐 싣는다. */
+export interface RepoEnqueue { repo?: string; status?: string; task_id?: unknown; error?: unknown; reason?: unknown; [k: string]: unknown }
+
+/**
+ * 레포별 접수 결과 → 관리기 결과에 실을 실패 칸(순수).
+ *  ★ 확정 실패 = status error 인데 위탁 id 가 없는 레포 — 태스크조차 못 만들어(실행 하네스 해소·태스크 생성 실패) 감시가
+ *   기다릴 id 도 없다. id 가 있는 error 는 **배정 단계** 실패(적합 노드 없음 등)라 태스크가 큐에 남아 노드가 오면 돈다 —
+ *   확정하지 않고 크론 감시가 그 id 의 결과로 판정한다(ops/cron-watch.ts delegatedWork 의 task_id+error 규칙).
+ *  · 전 레포 error → `error`(전멸 — 모순 관리기의 접수 실패와 같은 칸). id 가 있으면 task_ids 로 함께 실린다.
+ *  · 확정 실패가 일부 → `partial_error`(감시가 실패로 센다). 전멸인데 확정 실패가 섞였으면 둘 다 싣는다 —
+ *    id 있는 error 를 감시가 기다리는 동안 id 없는 레포의 실패가 묻히지 않게.
+ */
+export function repoEnqueueFailure(repos: readonly RepoEnqueue[]): Pick<ManagerRunResult, "error" | "partial_error"> {
+  const failed = repos.filter((r) => r.status === "error");
+  if (!failed.length) return {};
+  const lost = failed.filter((r) => !taskIdOf(r));
+  const msg = (xs: readonly RepoEnqueue[]): string =>
+    `레포 ${xs.length}/${repos.length} 접수 실패: ` + xs.map((r) => `${r.repo}: ${errorOf(r)}`).join(" · ");
+  const all = failed.length === repos.length;
+  return {
+    ...(all ? { error: msg(failed) } : {}),
+    ...(lost.length && !(all && lost.length === failed.length) ? { partial_error: msg(lost) } : {}),
+  };
 }
 
 /**
@@ -66,42 +133,65 @@ export async function runManager(
         extra: { manager: m.key, candidates: cands.length },
       });
       await recordManagerRun(m.id, r.status, r.summary);
-      return { ...base, candidates: cands.length, enqueued: true };
+      const taskId = taskIdOf(r.summary);
+      //  접수 실패는 던지지 않고 status 로 돌아온다(_headless.enqueueHeadlessTask) — error 로 싣지 않으면
+      //   statusForManagerResults 와 크론 감시가 둘 다 ok 로 읽는다. 태스크가 이미 만들어졌으면(배정 단계 실패 — 큐에
+      //   남아 노드가 오면 돈다) id 도 함께 싣는다: 감시는 id 있는 error 를 확정하지 않고 그 위탁의 결과로 판정한다.
+      if (r.status === "error") return { ...base, candidates: cands.length, error: errorOf(r.summary), ...(taskId ? { task_id: taskId } : {}) };
+      return { ...base, candidates: cands.length, enqueued: true, ...(taskId ? { task_id: taskId } : {}) };
     }
 
-    const all = await findCodeDriftCandidates(m, m.batch_size);
-    // 레포가 안 붙은 도메인은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
+    // ⚠ **후보는 둘이다**(#3579). 종전엔 도메인 정의(category.should)만 봤는데, 이 종류의 이름은
+    //  «지식 ↔ 코드 비교» 이고 관리기 설정도 지식 필터(match_types)로 쓰이고 있었다 — 설정이 약속하는 것과
+    //  구현이 보는 것이 갈라져 있었다. 그래서 «지식이 «이 함수가 X 를 막는다» 고 적었는데 그 심볼이 코드에
+    //  없다» 는 자리를 아무도 안 봤다(실측: 08-28 지식이 적은 defaultWorkspaceId 가 열흘간 코드에 없었다).
+    const allCats = await findCodeDriftCandidates(m, m.batch_size);
+    const allDocs = await findCodeDriftKnowledgeCandidates(m, m.batch_size);
+    // 레포가 안 붙은 것은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
     //  AI 가 '코드를 못 찾겠다'만 보고하거나, 더 나쁘게는 **읽지도 않고 추측한다**. 비교할 is 가 없는 것과 같다.
-    const cands = all.filter((c) => c.repos.length > 0);
-    if (!cands.length) {
-      const why = all.length
-        ? `정의는 있으나 레포가 연결된 도메인이 없음(${all.length}개 후보 중 0개). 「분류체계」 앱에서 분류에 레포를 지정하세요`
-        : "정의(should)와 코드가 함께 있는 도메인 없음";
+    const cands = allCats.filter((c) => c.repos.length > 0);
+    const docs = allDocs.filter((d) => d.repos.length > 0);
+    if (!cands.length && !docs.length) {
+      const why = allCats.length
+        ? `정의는 있으나 레포가 연결된 도메인이 없음(${allCats.length}개 후보 중 0개). 「분류체계」 앱에서 분류에 레포를 지정하세요`
+        : "정의(should)·지식과 코드가 함께 있는 도메인 없음";
       await recordManagerRun(m.id, "ok", { candidates: 0, note: why });
       return { ...base, candidates: 0, skipped: why };
     }
 
     // 레포 단위로 갈라 접수한다(#1419 T8) — 헤드리스 태스크는 **작업 cwd 가 레포 하나**다.
-    //  여러 레포의 도메인을 한 배치에 섞으면 그중 하나만 워크트리가 준비되고 나머지는 코드를 못 읽는다.
-    const byRepo = new Map<string, typeof cands>();
-    for (const c of cands) {
-      const repo = c.repos[0]; // 도메인에 레포가 여럿이면 첫 번째(정렬 고정) — 나머지는 다음 주기에 다루기보다
-      //  지금은 대표 레포로 본다(도메인이 레포 경계를 넘는 경우는 드물고, 넘으면 도메인 정의를 쪼개는 게 맞다).
-      const list = byRepo.get(repo) ?? [];
-      list.push(c);
-      byRepo.set(repo, list);
-    }
+    //  여러 레포의 대상을 한 배치에 섞으면 그중 하나만 워크트리가 준비되고 나머지는 코드를 못 읽는다.
+    type Group = { cats: CodeDriftCandidate[]; docs: CodeDriftKnowledgeCandidate[] };
+    const byRepo = new Map<string, Group>();
+    const slot = (repo: string): Group => {
+      const g = byRepo.get(repo) ?? { cats: [], docs: [] };
+      byRepo.set(repo, g);
+      return g;
+    };
+    // 도메인에 레포가 여럿이면 첫 번째(정렬 고정) — 대표 레포로 본다(도메인이 레포 경계를 넘는 경우는
+    //  드물고, 넘으면 도메인 정의를 쪼개는 게 맞다).
+    for (const c of cands) slot(c.repos[0]).cats.push(c);
+    for (const d of docs) slot(d.repos[0]).docs.push(d);
 
-    const out: unknown[] = [];
+    const out: RepoEnqueue[] = [];
+    const taskIds: number[] = [];
     for (const [repo, group] of byRepo) {
-      const r = await enqueue(buildCodeDriftPrompt(m, group), {
+      const n = group.cats.length + group.docs.length;
+      const r = await enqueue(buildCodeDriftPrompt(m, group.cats, group.docs), {
         harness: m.harness, model: m.model, effort: m.effort, requester: m.requester, repo,
-        extra: { manager: m.key, repo, candidates: group.length },
+        extra: { manager: m.key, repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length },
       });
-      out.push({ repo, candidates: group.length, ...(r.summary as object) });
+      out.push({ repo, candidates: n, categories: group.cats.length, knowledge: group.docs.length, status: r.status, ...(r.summary as object) });
+      const taskId = taskIdOf(r.summary);
+      if (taskId) taskIds.push(taskId);
     }
-    await recordManagerRun(m.id, "ok", { repos: out });
-    return { ...base, candidates: cands.length, enqueued: true };
+    //  레포별 접수 실패를 결과에 싣는다 — 일부 레포만 실패해도 그 레포의 비교는 이번 주에 빠지므로 감시(cron-watch
+    //   delegatedWork)가 실패로 센다. 무엇을 어느 칸에 싣는지(전멸=error · 태스크도 못 만든 레포=partial_error ·
+    //   큐에 남은 배정 실패는 id 로 판정)는 repoEnqueueFailure 머리말.
+    await recordManagerRun(m.id, out.some((o) => o.status === "error") ? "error" : "ok", { repos: out });
+    return { ...base, candidates: cands.length + docs.length,
+      ...(taskIds.length ? { enqueued: true, task_ids: taskIds } : {}),
+      ...repoEnqueueFailure(out) };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
     await recordManagerRun(m.id, "error", { error: msg });
@@ -166,22 +256,41 @@ function buildContradictionPrompt(m: ManagerRow, cands: Array<{ a: string; a_tit
 }
 
 /** 지식↔코드 괴리 프롬프트 — 정의(should)와 실제 코드를 대조하게 한다. */
-function buildCodeDriftPrompt(m: ManagerRow, cands: Array<{ key: string; name: string | null; should: string; repos: string[]; unit_count: number }>): string {
+function buildCodeDriftPrompt(
+  m: ManagerRow,
+  cands: Array<{ key: string; name: string | null; should: string; repos: string[]; unit_count: number }>,
+  docs: Array<{ name: string; title: string | null; repos: string[] }> = [],
+): string {
   const list = cands.map((c, i) =>
     `${i + 1}) ${c.key}${c.name ? ` (${c.name})` : ""} — 매핑 코드 ${c.unit_count}건`).join(" / ");
+  const docList = docs.map((d, i) => `${i + 1}) ${d.name}${d.title ? ` — ${d.title.slice(0, 60)}` : ""}`).join(" / ");
   const crit = m.criteria_md?.trim() ? `이 조직의 판단 기준: ${m.criteria_md.trim().replace(/\s+/g, " ")}. ` : "";
   // 레포는 그룹 단위로 하나다(호출자가 갈라 넘긴다) — 작업 cwd 가 곧 그 레포의 워크트리라고 알려 준다.
-  const repo = cands[0]?.repos[0] ?? "";
-  return `도메인 **정의(should) ↔ 실제 코드(is)** 괴리 점검 배치야(관리기 '${m.label || m.key}'). ` +
-    `대상 도메인: ${list}. ` +
-    `⚠ **지금 작업 폴더가 레포 '${repo}' 의 워크트리다** — 클론하지 말고 여기서 바로 Read/Grep 해. ` +
+  const repo = cands[0]?.repos[0] ?? docs[0]?.repos[0] ?? "";
+  const catPart = cands.length ? `**A. 도메인 정의(should) ↔ 코드**. 대상: ${list}. ` +
     `① 각 도메인을 category_get 으로 열어 정의·범위·규칙(should)을 정확히 읽어. ` +
-    `② 그 도메인에 매핑된 코드를 실제로 확인해 — 작업 폴더에서 Read/Grep 으로 구현을 보고, 필요하면 map_code_unit 매핑도 참고해. ${crit}` +
+    `② 매핑된 코드를 실제로 확인해 — 작업 폴더에서 Read/Grep, 필요하면 map_code_unit 매핑도 참고. ` +
     `③ **괴리의 정의**: 정의가 하겠다고 적어 둔 것을 코드가 안 하거나, 코드가 하는 일이 정의에 없거나, 정의의 규칙을 코드가 어기는 것. ` +
     `구현 세부(변수명·파일 배치)는 괴리가 아니다. 정의가 낡아 보이면 그것도 괴리다(코드가 맞고 정의가 틀린 경우). ` +
-    `④ 괴리만 org_manager_finding_report 로 보고: manager_key='${m.key}', target_kind='category', target_ref=(도메인 key), ` +
-    `severity, summary=무엇이 어긋나는지 한 줄, evidence=**정의의 어느 문장 ↔ 코드의 어느 파일:라인**을 짝지어 인용(필수). ` +
-    `⑤ 괴리가 없으면 보고하지 말고 그 사실을 요약해. 확신이 없으면 보고하지 마 — 거짓 경보가 큐를 죽인다.`;
+    `보고 시 target_kind='category', target_ref=(도메인 key). ` : "";
+  // ⚠ 지식 축(#3579) — 이 관리기의 이름이 «지식 ↔ 코드» 인데 종전엔 도메인만 봤다. 실측 사고: 지식이
+  //  «defaultWorkspaceId() 로 고쳤다» 고 적어 뒀는데 그 심볼이 어느 커밋에도 없었고 열흘간 아무도 몰랐다.
+  const docPart = docs.length ? `**B. 지식 ↔ 코드**. 대상: ${docList}. ` +
+    `① 각 지식을 knowledge_get 으로 열어 **코드의 동작·가드·불변식을 서술하는 문장**을 찾아. ` +
+    `② 그 서술이 지금 코드에서 성립하는지 작업 폴더에서 Read/Grep 으로 확인해. ` +
+    `특히 지식이 **이름을 대며** «이 함수·가드·설정 키가 X 를 한다» 고 적었으면 그 심볼이 실제로 있는지 본다 ` +
+    `— 없으면 «고쳤다고 적혔는데 코드에 없는» 자리다(이 관리기가 존재하는 이유). ` +
+    `③ ⚠ **과거를 서술하는 문장은 괴리가 아니다** — 이 레포는 «종전엔 이랬다 → 그래서 이렇게 바꿨다» 를 ` +
+    `본문에 남기는 관례가 있다. 옛 동작의 인용·실측 로그·시점이 박힌 수치는 현재 주장이 아니다. ` +
+    `«지금 이렇다» 고 말하는 문장만 본다. ` +
+    `보고 시 target_kind='knowledge', target_ref=(지식 name). ` : "";
+  return `**문서(정의·지식) ↔ 실제 코드(is)** 괴리 점검 배치야(관리기 '${m.label || m.key}'). ` +
+    `⚠ **지금 작업 폴더가 레포 '${repo}' 의 워크트리다** — 클론하지 말고 여기서 바로 Read/Grep 해. ` +
+    catPart + docPart + crit +
+    `괴리만 org_manager_finding_report 로 보고해: manager_key='${m.key}', 위에 적은 target_kind·target_ref, ` +
+    `severity, summary=무엇이 어긋나는지 한 줄, evidence=**문서의 어느 문장 ↔ 코드의 어느 파일:라인**을 짝지어 인용(필수 — ` +
+    `심볼이 아예 없으면 «grep 결과 0건» 을 그 자리에 적어). ` +
+    `괴리가 없으면 보고하지 말고 그 사실을 요약해. 확신이 없으면 보고하지 마 — 거짓 경보가 큐를 죽인다.`;
 }
 
 /** 크론·수동 실행 공용 진입 — key 또는 id 로 하나 실행. */

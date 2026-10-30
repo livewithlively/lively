@@ -16,7 +16,7 @@ type KnowledgeUnmappedInput = z.infer<z.ZodObject<typeof knowledgeUnmappedInput>
 export const knowledgeUnmapped: Capability = {
   name: "knowledge_unmapped",
   title: "미분류 지식 인박스",
-  description: "카테고리가 하나도 없는 active 지식 목록(최근순). 커넥터 미러(노션 등)는 카테고리를 안 써서 여기 쌓인다 — 미분류 지식은 recall 라우터의 INNER JOIN 에서 소환 불가라 편입 대상. 분류기가 여기서 드레인해 knowledge_propose_category 로 카테고리를 제안한다(map_unmapped→map_code_unit 의 지식판). 본문 미포함(포인터).",
+  description: "카테고리가 하나도 없는 active 지식 목록(최근순). 커넥터 미러(노션 등)는 카테고리를 안 써서 여기 쌓인다 — 미분류 지식은 recall 라우터의 INNER JOIN 에서 소환 불가라 편입 대상. 증류기의 «카테고리 붙이기» 레인(classify_knowledge 크론)이 여기서 드레인해 knowledge_propose_category 로 카테고리를 제안한다(map_unmapped→map_code_unit 의 지식판). 본문 미포함(포인터).",
   scope: "memory",
   input: knowledgeUnmappedInput,
   expose: {
@@ -34,7 +34,7 @@ type KnowledgeClassificationsInput = z.infer<z.ZodObject<typeof knowledgeClassif
 export const knowledgeClassifications: Capability = {
   name: "knowledge_classifications",
   title: "proposed 분류 검토 인박스",
-  description: "분류기(knowledge_propose_category)가 제안한 mapped_by='llm'·state='proposed' 카테고리 분류 목록(confidence 낮은 순 — 가장 검토 필요한 것 먼저, NULL 최우선). 각 항목에 제안 카테고리(key·이름)·confidence·evidence 포함(본문 미포함, 포인터). 사람이 한 화면에서 확정(knowledge_link_category state=confirmed)·재분류(다른 카테고리)·반려(unlink→미분류 복귀)하는 검토 큐. 미분류 인박스(knowledge_unmapped)의 다음 단계.",
+  description: "증류기의 «카테고리 붙이기» 레인(knowledge_propose_category)이 제안한 mapped_by='llm'·state='proposed' 카테고리 분류 목록(confidence 낮은 순 — 가장 검토 필요한 것 먼저, NULL 최우선). 각 항목에 제안 카테고리(key·이름)·confidence·evidence 포함(본문 미포함, 포인터). 사람이 한 화면에서 확정(knowledge_link_category state=confirmed)·재분류(다른 카테고리)·반려(unlink→미분류 복귀)하는 검토 큐. 미분류 인박스(knowledge_unmapped)의 다음 단계.",
   scope: "memory",
   input: knowledgeClassificationsInput,
   expose: {
@@ -94,7 +94,7 @@ type KnowledgeProposeCategoryInput = z.infer<z.ZodObject<typeof knowledgePropose
 export const knowledgeProposeCategory: Capability = {
   name: "knowledge_propose_category",
   title: "지식 카테고리 제안(LLM)",
-  description: "미분류 지식에 카테고리를 제안한다(mapped_by='llm', evidence 필수). 이미 카테고리가 있으면 건너뛴다(사람/기존 분류 불가침 — 덮지 않는다). state 미지정 시 confidence≥0.8 면 confirmed, 아니면 proposed. proposed 도 소비쿼리(state<>'rejected')에 즉시 잡혀 발견·소환된다. 분류기(classify_knowledge)가 도메인 should 를 읽고 판단해 호출하는 툴 — 사람이 쓰는 knowledge_link_category(교체 시맨틱)와 다르다.",
+  description: "미분류 지식에 카테고리를 제안한다(mapped_by='llm', evidence 필수). 이미 카테고리가 있으면 건너뛴다(사람/기존 분류 불가침 — 덮지 않는다). state 미지정 시 confidence≥0.8 면 confirmed, 아니면 proposed. proposed 도 소비쿼리(state<>'rejected')에 즉시 잡혀 발견·소환된다. 증류기의 «카테고리 붙이기» 레인(classify_knowledge 크론)이 도메인 should 를 읽고 판단해 호출하는 툴 — 사람이 쓰는 knowledge_link_category(교체 시맨틱)와 다르다.",
   scope: "memory",
   input: knowledgeProposeCategoryInput,
   expose: {

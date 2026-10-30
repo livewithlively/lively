@@ -247,6 +247,19 @@ async function loadOAuthClient(authKind: string): Promise<{ client_id: string; c
     return typeof ci.client_id === "string" && ci.client_id ? { client_id: ci.client_id, ...(typeof ci.client_secret === "string" && ci.client_secret ? { client_secret: ci.client_secret } : {}) } : null;
   } catch { return null; }
 }
+/** 슬랙 앱 준비 — 다른 앱의 *Ready(githubAppReady·notionPublicReady·linearAppReady …)와 같은 모양(#4970 — 슬랙만 없어서
+ *  «앱을 먼저 등록해야 하나»를 연결을 시작해 봐야(startSlackConsent 의 throw) 알 수 있었다).
+ *  [연결](me_oauth_connect {server:"slack"})이 지나는 관문을 그대로 잰다: ① 조직 MCP 서버 행 `slack`(proxy · oauth · slack_oauth) —
+ *  슬랙은 다른 앱과 달리 이 행이 있어야 동의를 시작한다(없으면 404 «proxy MCP 서버 없음»; 셀프호스트엔 자동으로 안 심긴다) ·
+ *  ② 매니지드는 CP 릴레이, 셀프호스트는 금고의 Slack 앱 client(gateway 슬롯 <auth_kind> / oauth:client — 매니페스트로 만든 앱의 Client ID·Secret).
+ *  콜백 주소(gateway_url)·금고 키는 모든 앱 공통 전제라 여기서 재지 않는다(org_connect_status 가 따로 싣는다). */
+export async function slackAppReady(): Promise<boolean> {
+  const srv = await getMcpServer("slack").catch(() => null);
+  if (!srv || srv.mode !== "proxy" || srv.auth_mode !== "oauth" || !isSlackOAuthKind(srv.auth_kind)) return false;
+  if (process.env.SLACK_OAUTH_RELAY_URL?.trim()) return true;
+  const c = await loadOAuthClient(srv.auth_kind ?? "slack_oauth");
+  return !!(c?.client_id && c.client_secret);
+}
 async function startSlackConsent(memberId: string, serverName: string, srv: { authKind: string; scopeKey: string }, redirectUrl: string): Promise<ConsentStart> {
   const existing = await getMemberSecret(memberOwner(memberId), srv.authKind, srv.scopeKey);
   if (decodeTokenBlob(existing?.secret)) return { authorized: true };

@@ -59,7 +59,10 @@ test("★★ A3 노드 릴레이 업로드가 **절대경로**로 답한다 — 
   const src = read("src/terminal/terminal-files.ts");
   const at = src.indexOf('app.put("/api/ui/terminal/sessions/:id/file"');
   assert.ok(at > 0, "업로드 PUT 라우트를 찾지 못했다");
-  const body = src.slice(at, at + 2600);
+  //  ⚠ 고정 폭으로 자르지 않는다 — 라우트가 자라면 검사 범위가 조용히 밀려 «통과»가 거짓이 된다
+  //   (#3787 에서 게이트웨이 정본 갈래가 들어오자 릴레이 코드가 2600자 창 밖으로 나가 빨간불이 났다).
+  const end = src.indexOf("\n  app.", at + 1);
+  const body = src.slice(at, end > 0 ? end : src.length);
   assert.doesNotMatch(body, /res\.json\(\{ ok: true, path: rel \}\)/,
     "★상대경로로 답한다 — 에이전트 cwd 가 세션 루트와 다르면 «파일이 없다» 가 된다(로컬 분기는 절대경로를 준다)");
   assert.match(body, /nodeRpc<\{ path\?: string \}>/,

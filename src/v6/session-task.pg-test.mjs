@@ -12,6 +12,7 @@ const { itemsPool } = await import(`${DIST}/db/client.js`);
 const st = await import(`${DIST}/v6/session-task.js`);
 const es = await import(`${DIST}/v6/execution-session-store.js`);
 const { relabelSession } = await import(`${DIST}/terminal/session-relabel.js`);
+const ps = await import(`${DIST}/v6/project-store.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -198,16 +199,16 @@ try {
     chk("D13 맡은 태스크가 없으면 상태 변경은 null·무변경", r === null && JSON.stringify(await tasksOf(P1)) === before, JSON.stringify({ r }));
   }
 
-  // ── N1·N2 이름 승계 — 자동으로 만든 태스크만, 사람이 손댔으면 물러난다 ──
+  // ── N1·N2 이름 승계 — 자동으로 만든 태스크만, 사람이 손댔으면 물러난다(#4418 — 판정은 출처 칸. 표는 session-naming.pg-test) ──
   {
     await bind(S(16), A, P1);
     const t = await st.ensureSessionTask({ sessionId: S(16), owner: A, name: "사이드바 검색창 제거" });
-    const r1 = await st.renameSessionTaskForLabel({ sessionId: S(16), owner: A, name: "검색창 제거", expectName: "사이드바 검색창 제거" });
+    const r1 = await st.renameSessionTaskForLabel({ sessionId: S(16), owner: A, name: "검색창 제거" });
     const row1 = await taskRow(t.id);
     chk("N1 세션이 더 나은 이름을 등록하면 태스크 이름이 한 번 따라간다", r1?.name === "검색창 제거" && (await tasksOf(P1)).some((x) => x.id === t.id && x.name === "검색창 제거"),
       JSON.stringify({ r1, row1 }));
-    await itemsPool.query(`UPDATE project SET name='사람이 고친 이름' WHERE id=$1`, [t.id]);
-    const r2 = await st.renameSessionTaskForLabel({ sessionId: S(16), owner: A, name: "또 다른 이름", expectName: "검색창 제거" });
+    await ps.updateTask(t.id, { name: "사람이 고친 이름" }, { actor: A, source: "web" });
+    const r2 = await st.renameSessionTaskForLabel({ sessionId: S(16), owner: A, name: "또 다른 이름" });
     chk("N2 사람이 태스크 이름을 고쳤으면 승계가 물러난다", r2 === null && (await tasksOf(P1)).some((x) => x.id === t.id && x.name === "사람이 고친 이름"), JSON.stringify({ r2 }));
   }
 

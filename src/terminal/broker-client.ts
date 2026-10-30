@@ -11,9 +11,9 @@
 //
 // ── 전송은 하나 ───────────────────────────────────────────────────────────────
 //  · 유닉스 소켓 — 헤더도 접두도 없다. 신원이 «어느 소켓으로 들어왔나» 라서다(그 테넌트에만 bind mount). 노드 박스의 세션 호스트가 쓴다.
-//  ⚠ 허브 전송(중앙 게이트웨이 → 허브 `/t/<slug>` · HMAC 토큰)은 #2600 T3-a(2026-09-14)로 걷었다.
+//  ⚠ 허브 전송(중앙 게이트웨이 → 허브 `/t/<slug>` · HMAC 토큰 · 세션 지목 `x-lvly-session`)은 #2600 T3-a(2026-09-14)로 걷었다.
 //   코어에서 그 전송을 쓰던 것은 게이트웨이의 그림자 대조 하나뿐이었다. 허브의 그 계약 자체는 서버 쪽(lvly-cloud)에 남는다 —
-//   게이트웨이의 중계(`tmux-relay.cjs`)가 아직 쓴다(#2600 T3-c 가 tmux 명령형을 걷는다).
+//   게이트웨이의 중계(`tmux-relay.cjs`)·세션 exec 중계가 아직 쓴다(#2600 T3-c 가 tmux 명령형을 걷는다).
 //
 // ── 규율 ───────────────────────────────────────────────────────────────────────
 //  ⚠ 환경변수를 읽지 않는다 — 전송 설정은 **인자로만** 받는다(코어 규율: 토폴로지 env 는 exec-topology 하나만 읽는다.
@@ -39,6 +39,14 @@ export interface BrokerClient {
   /** 컨테이너 안에서 argv 를 돌려 세 칸을 받는다. 절대 throw 하지 않는다 — 실패는 TmuxOutcome 으로(머리말 규율). */
   execCapture(container: string, argv: string[]): Promise<TmuxOutcome>;
 }
+
+/**
+ * 목록 범위 헤더(#3797 T7) — lvly-cloud `sessionroute.LIST_SCOPE_HEADER` / `LIST_SCOPE_NODE` 와 **같은
+ *  이름·같은 값**이어야 한다. 브로커는 `isNodeScoped(h)` 로 정확히 이 문자열만 본다: 한 글자만 달라도
+ *  판정이 거짓이 되어 **조용히 클러스터 전역으로 되돌아간다**(오류가 아니라 «전부 답함» 으로 보인다).
+ */
+export const LIST_SCOPE_HEADER = "x-lvly-list-scope";
+export const LIST_SCOPE_NODE = "node";
 
 /**
  * 프레임 하나의 길이 상한. 도커 raw 스트림의 길이 칸은 uint32 라 잘못된 바이트가 «4GiB 를 기다려라» 로 읽힐 수 있다 —
@@ -79,13 +87,22 @@ interface Reply { status: number; body: string }
 
 const fail = (stderr: string): TmuxOutcome => ({ code: 1, stdout: "", stderr });
 
-export function makeBrokerClient(t: BrokerTransport, opts?: { timeoutMs?: number }): BrokerClient {
+export function makeBrokerClient(
+  t: BrokerTransport,
+  /**
+   * `listScope: "node"` 면 목록 요청에만 범위 헤더를 싣는다 — 세션 호스트가 «자기 노드 것만» 보고하는
+   *  근거다. 기본(미지정)은 브로커의 종전 동작(클러스터 전역)이다.
+   * ⚠ **exec 3단에는 안 싣는다.** 브로커의 exec 라우팅은 세션 축(라우트 파일)이라 범위와 무관하고,
+   *  거기 실으면 «그 세션이 다른 노드에 있을 때» 를 우리가 모르게 막는다.
+   */
+  opts?: { timeoutMs?: number; listScope?: "node" | "cluster" },
+): BrokerClient {
   const timeoutMs = opts?.timeoutMs ?? 15_000;
 
   /** 요청-응답 한 번. 비-2xx 도 resolve(호출자가 상태로 갈린다) · 전송 오류·타임아웃은 reject. */
-  const call = (method: "GET" | "POST", path: string, body?: unknown): Promise<Reply> => new Promise((resolve, reject) => {
+  const call = (method: "GET" | "POST", path: string, body?: unknown, extra?: Record<string, string>): Promise<Reply> => new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body);
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...extra };
     if (data !== null) { headers["content-type"] = "application/json"; headers["content-length"] = String(Buffer.byteLength(data)); }
     //  agent:false — 연결을 재사용하지 않는다. 요청 하나가 연결 하나다(keep-alive 소켓이 남아 서버 종료를 붙드는 일이 없다).
     const rq = http.request({ socketPath: t.socketPath, agent: false, method, path, headers, timeout: timeoutMs }, (rs) => {
@@ -138,7 +155,8 @@ export function makeBrokerClient(t: BrokerTransport, opts?: { timeoutMs?: number
 
   return {
     async listSessions() {
-      const r = await call("GET", "/lvly/sessions");
+      const r = await call("GET", "/lvly/sessions", undefined,
+        opts?.listScope === "node" ? { [LIST_SCOPE_HEADER]: LIST_SCOPE_NODE } : undefined);
       if (r.status < 200 || r.status >= 300) throw new Error(`broker sessions ${r.status}: ${r.body.slice(0, 200)}`);
       let j: unknown;
       try { j = JSON.parse(r.body); } catch (e) { throw new Error(`broker sessions 본문이 JSON 이 아니다: ${(e as Error).message}`); }

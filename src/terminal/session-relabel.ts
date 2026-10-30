@@ -50,7 +50,7 @@ export interface RelabelResult {
 
 const TASK_HINT =
   "이 세션이 맡은 태스크입니다(프로젝트 보드에 보입니다). 요청받은 일을 끝내면(검증까지 마치고) " +
-  "`session_task {status:\"done\"}` 로 완료 처리하세요 — 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.";
+  "`session_task {status:\"done\"}` 로 완료 처리하세요(`reason` 에 끝낸 내용 한 줄) — 같은 세션에서 후속 작업을 시작하면 `{status:\"in_progress\"}`.";
 
 /** 결과에 태스크를 얹는다 — 조회 실패는 조용히 무시(이름짓기는 실패를 만들지 않는다). */
 function withTask(r: RelabelResult, task: (SessionTask & { created: boolean }) | null): RelabelResult {
@@ -89,9 +89,6 @@ export async function relabelSession(
   }
 
   // ① 걸쇠 — 원자적. 지면 여기서 끝(tmux 미접촉).
-  //  ⚠ 직전 이름을 **걸쇠 전에** 읽어 둔다(#4084) — 태스크 이름 승계가 «그때 우리가 넣은 이름 그대로인가» 로
-  //   판정하기 때문이다(shouldRenameSessionTask). 걸쇠 뒤에 읽으면 이미 새 이름이라 늘 «사람이 손댔다» 가 된다.
-  const prevLabel = await getSessionState(id).then((st) => st?.label ?? null).catch(() => null);
   const won = await claimSessionLabel(id, label, source, me);
   if (!won) {
     // 미러 행이 아예 없을 수도 있다(구 세션·managed·미러 실패) — 그건 '졌다'와 다르지만 결과는 같다: 그냥 둔다.
@@ -118,10 +115,15 @@ export async function relabelSession(
   //  ★ 만드는 자리는 여기가 **아니다**(2026-09-20 정정) — 세션이 프로젝트에 붙는 순간 관문이 만든다
   //   (session-launch.ts attachLaunchTask). 그 자리는 서버가 반드시 지나지만 여기는 «AI 가 툴을 불러 주면» 이라
   //   조건부였다(실측: 프로젝트 세션 6개 중 3개만 생성). 여기서 남는 일은 둘이다:
-  //   ⓐ **이름 승계** — 방금 지은 이름으로 태스크 이름을 한 번 따라 바꾼다(사람이 손댄 태스크는 그대로 둔다).
+  //   ⓐ **이름 승계** — 방금 지은 이름으로 태스크 이름을 한 번 따라 바꾼다. 이 세션이 **스스로 만든** 태스크만이다 —
+  //      사람이 만든 태스크·사람이 고른 태스크·사람이 이름을 고친 태스크는 그대로 둔다(#4418 — 판정은 태스크의 이름 출처 칸).
   //   ⓑ **보장(폴백)** — 관문을 안 지난 세션(이 기능 전에 열린 세션·잇기가 실패한 세션)엔 지금이라도 만든다.
   //  프로젝트 밖 세션은 null. 출처로 가르지 않는다 — 사람이 웹에서 이름을 붙여도 그 세션의 일은 생긴 것이다.
-  await renameSessionTaskForLabel({ sessionId: id, owner: me, name: label, expectName: prevLabel }).catch(() => null);
-  const task = await ensureSessionTask({ sessionId: id, owner: me, name: label });
+  //  ⚠ 순서 — **보장(이어받기 포함) 먼저, 승계는 그다음**(#4418). 새 id 로 되살린 세션은 옛 세션의 태스크를 ensureSessionTask 가
+  //   이어받기 전까지 맡은 태스크가 없다 — 승계를 먼저 부르면 «태스크 없음» 으로 건너뛰어, 이어받은 태스크가 첫 지시를 자른 이름에
+  //   남는다. 방금 이 이름으로 만든 태스크면 승계는 같은 이름이라 아무것도 안 한다.
+  const ensured = await ensureSessionTask({ sessionId: id, owner: me, name: label });
+  const renamed = await renameSessionTaskForLabel({ sessionId: id, owner: me, name: label }).catch(() => null);
+  const task = ensured && renamed && renamed.id === ensured.id ? { ...ensured, name: renamed.name } : ensured;
   return withTask({ ok: true, applied: true, label, source }, task);
 }

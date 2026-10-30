@@ -17,6 +17,7 @@ import {
   toVectorLiteral,
 } from "./embedding-provider.js";
 import { memAvailableMb } from "../ops/host-mem.js"; // #1059 백필 pre-flight 메모리 게이트
+import { unitEmbeddingText } from "../org/collect/unit-find-plan.js";   // #4744 수집 단위 설명 벡터의 글(순수)
 
 export type BackfillMode = "pending" | "model-changed" | "all";
 //  pending      = embedding_vector IS NULL 인 active 행만(신규/미임베딩 보강 — 처음 켤 때).
@@ -82,6 +83,17 @@ export const SESSION_CARD_TARGET: EmbeddingTarget = {
   activeFilter: "card <> ''",
   selectCols: "card_id, card",
   buildText: (r) => embeddingInputText({ body_md: (r as { card?: string | null }).card }),
+};
+
+// 수집 단위의 설명 벡터(#4213 T12 #4744 «단위 찾기») — «앱 종류 이름» + 설명 + 연결된 맥락(org/collect/unit-find-plan.unitEmbeddingText).
+//  모으지 않기로 한 단위는 «가져올 곳» 으로 권하지 않으므로 대상이 아니다. 설명이 바뀌면 unit-store.updateUnit 이 벡터를 비운다.
+export const COLLECT_UNIT_TARGET: EmbeddingTarget = {
+  name: "collect_unit",
+  table: "collect_unit",
+  idCol: "id",
+  activeFilter: "state <> 'excluded'",
+  selectCols: "id, app, kind, name, description, meta",
+  buildText: (r) => unitEmbeddingText(r as { app: string; kind: string; name: string | null; description: string | null; meta?: Record<string, unknown> | null }),
 };
 
 export interface BackfillProgress { total: number; done: number }
@@ -317,7 +329,7 @@ export async function runAutoBackfillSweep(): Promise<void> {
         return;
       }
     }
-    for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET, CATEGORY_TARGET, SESSION_CARD_TARGET]) {
+    for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET, CATEGORY_TARGET, SESSION_CARD_TARGET, COLLECT_UNIT_TARGET]) {
       if (isBackfillPaused()) break; // 스윕 도중 일시중지되면 남은 타깃으로 넘어가지 않는다(실행 중 잡은 shouldStop 으로 이미 중단).
       let pending = 0;
       try { pending = (await countEmbeddingBacklog(target)).pending; } catch { continue; }

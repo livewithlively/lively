@@ -228,22 +228,37 @@ function fakeDeps(over: Partial<DiscardDeps> = {}): { deps: DiscardDeps; log: st
   const log: string[] = [];
   const deps: DiscardDeps = {
     boundSessions: async () => 0,
+    returnAttachments: async (moves) => { log.push(`return:${moves.length}`); return { returned: moves.length, failed: 0, left: [] }; },
     deleteProject: async (id) => { log.push(`delete:${id}`); },
     trashProject: async (id) => { log.push(`trash:${id}`); },
     ...over,
   };
   return { deps, log };
 }
+// 테스트에서 첨부 한 건의 모양만 필요하다(돌려놓기 자체는 attach-relocate.test 가 잰다).
+const MOVE = { from: "personal:wonjoon-jang/uploads/a.png", to: "project:4274/a.png" } as unknown as NonNullable<ShellHandle["moves"]>[number];
 
-test("#4302 붙은 세션 0 → 프로젝트를 지운다", async () => {
+test("#4302 붙은 세션 0 · 첨부 없음 → 프로젝트를 지운다(첨부 되돌리기는 부르지 않는다)", async () => {
   const { deps, log } = fakeDeps();
   assert.equal(await discardShellProject(SHELL, "507", deps), "delete");
   assert.deepEqual(log, ["delete:4274"]);
 });
 
+test("#4302 첨부가 있으면 **먼저 돌려놓고** 지운다", async () => {
+  const { deps, log } = fakeDeps();
+  assert.equal(await discardShellProject({ ...SHELL, moves: [MOVE] }, "507", deps), "delete");
+  assert.deepEqual(log, ["return:1", "delete:4274"]);
+});
+
+test("#4302 첨부를 못 돌려놓았으면 지우지 않고 휴지통으로(파일이 그 폴더에만 있다)", async () => {
+  const { deps, log } = fakeDeps({ returnAttachments: async () => ({ returned: 0, failed: 1, left: [MOVE.from] }) });
+  assert.equal(await discardShellProject({ ...SHELL, moves: [MOVE] }, "507", deps), "trash");
+  assert.deepEqual(log, ["trash:4274"]);
+});
+
 test("#4302 세션이 이미 이 프로젝트에 붙었으면(뒷단계 실패) 아무것도 안 건드린다", async () => {
   const { deps, log } = fakeDeps({ boundSessions: async () => 1 });
-  assert.equal(await discardShellProject(SHELL, "mirror 실패", deps), "keep");
+  assert.equal(await discardShellProject({ ...SHELL, moves: [MOVE] }, "mirror 실패", deps), "keep");
   assert.deepEqual(log, []);
 });
 

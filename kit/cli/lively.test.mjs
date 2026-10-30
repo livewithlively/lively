@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
-import { WIN } from "../testlib/os-sandbox.mjs";
+import { WIN, writeTgz } from "../testlib/os-sandbox.mjs";
 import { offlineLivelyEnv } from "../testlib/os-sandbox.mjs";
 // CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
 const SHIM = WIN ? "lively.cmd" : "lively";
@@ -61,7 +61,8 @@ function makeBundle(version, { corrupt = false, mcpServers = [] } = {}) {
   writeFileSync(join(lv, "kit-version"), version + "\n");
   if (corrupt) writeFileSync(join(stage, ".claude", "hooks", "session-preload.mjs"), "export const x = (((;\n");
   const tgz = join(BOX, `bundle-${version}.tgz`);
-  execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
+  if (WIN) writeTgz(stage, tgz);   // 윈도우는 tar.exe 로 묶지 않는다 — os-sandbox.mjs writeTgz 주석
+  else execFileSync("tar", ["-czf", tgz, "-C", stage, "."], { stdio: "ignore" });
   return readFileSync(tgz);
 }
 
@@ -85,6 +86,12 @@ const server = createServer((req, res) => {
       .end(JSON.stringify({ id: "tester", display_name: "테스터", email: "t@example.com" }));
   } else if (path === "/api/ui/org/preview") {
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ context: "# 테스트 컨텍스트\n" }));
+  } else if (path === "/api/ui/org/runner/assets") {
+    // #5013 — 설치가 대화 시작 훅을 기다리지 않고 조직 스킬을 미리 받는지(③)를 보려고 스킬 하나를 내준다.
+    serving.assetHits = (serving.assetHits || 0) + 1;
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ assets: [
+      { id: "org-preload-skill", kind: "skill", description: "설치 직후 미리 받는 스킬", body: "# 미리 받기\n", content_hash: "h-preload-1", frontmatter: {} },
+    ] }));
   } else if (path === "/api/ui/me/local-mode") {
     serving.localModeQueries.push(req.url || "");
     if (serving.localModeStatus !== 200) { res.writeHead(serving.localModeStatus).end(); return; }
@@ -220,6 +227,14 @@ try {
     check("③ 설치 — 훅 · CLI · 심 · 버전 스탬프",
       stamped === "v-aaa" && hooks && cli && shim,
       `stamp=${stamped} hooks=${hooks} cli=${cli} shim=${shim}\n${r.err.slice(-400)}`);
+    // #5013 — 대화를 한 번도 안 열었는데 조직 스킬이 이미 하네스 자리에 있어야 한다(스킬 목록을 대화 시작 때 한 번만
+    //  읽는 하네스는 그래야 첫 대화에 보인다). 이 테스트에선 어떤 훅도 돌지 않으므로 파일이 있으면 설치가 받은 것이다.
+    const preloaded = existsSync(join(H.home, ".claude", "skills", "org-preload-skill", "SKILL.md"));
+    check("③ 설치 — 조직 스킬 미리 받기(대화 시작 전)",
+      (serving.assetHits || 0) >= 1 && preloaded,
+      `assetHits=${serving.assetHits || 0} preloaded=${preloaded}\n${r.err.slice(-400)}`);
+    // 받기 스크립트는 claude 몫에서 stdout 에 재로드 JSON 을 낸다 — 설치의 stdout(앱 모드에선 NDJSON 이벤트 줄)에 새면 안 된다.
+    check("③ 설치 — 미리 받기 출력이 CLI stdout 에 안 샘", !r.out.includes("reloadSkills"), r.out.slice(-300));
   }
 
   // ④ **MCP 등록 인자** — 이 CLI(registerClaudeMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
@@ -718,6 +733,32 @@ try {
     check('⑳ onboarding --print — claude "온보딩 도와줘" 로 소환', r.stderr.includes('claude "온보딩 도와줘"'), JSON.stringify(r.stderr));
     const r2 = await pExecFile(process.execPath, [CLI, "onboarding", "메모리만", "정리", "--print"]);
     check("⑳ onboarding — 초기 프롬프트 override", r2.stderr.includes('claude "메모리만 정리"'), JSON.stringify(r2.stderr));
+  }
+
+  // ㉑ 새 PC 의 첫 로그인 — 부트스트랩은 lively.mjs **한 파일만** 놓으므로 cmd-node.mjs 가 아직 없다(데스크톱 앱 setup 이 정확히 이 순서).
+  //   옮길 노드(node-agent.env)도 없으면 «노드를 새 게이트웨이로 옮기지 못했습니다» 경고를 내지 않는다 — 처음 설치마다 앱에 노란 경고가 떴다(2026-10-23 실측).
+  //   노드가 등록된 PC 라면 그 경고는 여전히 필요하다(다시 `lively node --daemon` 하라는 안내).
+  {
+    const bootDir = join(BOX, "boot-only");
+    mkdirSync(bootDir, { recursive: true });
+    writeFileSync(join(bootDir, "lively.mjs"), readFileSync(CLI));
+    const loginFrom = async (h) => {
+      const r = await pExecFile(process.execPath, [join(bootDir, "lively.mjs"), "login", "--gateway", GW, "--token", TOKEN], {
+        env: { ...process.env, ...offlineLivelyEnv(), HOME: h.home, LIVELY_HOME: h.home, CLAUDE_CONFIG_DIR: join(h.home, ".claude"), PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "" },
+        timeout: 60000,
+      });
+      return r.stderr;
+    };
+    const fresh = newHome("h-boot-fresh");
+    const errFresh = await loginFrom(fresh);
+    check("㉑ 새 PC 첫 로그인(cmd-node.mjs 없음 · 노드 없음) — 노드 경고 없음",
+      !errFresh.includes("노드를 새 게이트웨이로 옮기지 못했습니다") && existsSync(join(fresh.home, ".lively", "token")), errFresh.slice(-300));
+    const withNode = newHome("h-boot-node");
+    mkdirSync(join(withNode.home, ".lively"), { recursive: true });
+    writeFileSync(join(withNode.home, ".lively", "node-agent.env"), "LIVELY_NODE_ID=n-test\n");
+    const errNode = await loginFrom(withNode);
+    check("㉑ 노드가 등록된 PC(cmd-node.mjs 없음) — 노드 경고는 그대로 낸다",
+      errNode.includes("노드를 새 게이트웨이로 옮기지 못했습니다"), errNode.slice(-300));
   }
 } finally {
   server.close();

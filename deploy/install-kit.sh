@@ -7,7 +7,8 @@ set -euo pipefail
 #   무엇: 멤버 로컬 설치(/install 번들)와 **동일한 end-state**를, 게이트웨이=localhost 로, OS-무관 경로로.
 #       (멤버는 `curl <게이트웨이>/cli | sh` → lively CLI 로 깐다. 박스는 토큰·경로가 달라 이 스크립트로.)
 #   결과: ~/.lively/{token,gateway-url,context.md,hooks/…} + ~/.claude/settings.json(훅 비파괴 머지)
-#         + `claude mcp add lively`(user scope). → 호스트에서 켜는 모든 claude 세션이 lively-aware.
+#         + ~/.claude.json 의 mcpServers 에 lively(user scope) — register-clients.sh → mcp-register.mjs 가 파일로 쓴다
+#           (`claude mcp add` 를 부르지 않는다, #2476). → 호스트에서 켜는 모든 claude 세션이 lively-aware.
 #         + ~/.lively/{lib,bin}/lively — **lively CLI 도 함께 깔린다**(#864). user-install.mjs 가 번들의
 #           cli/lively.mjs 를 설치하므로 박스도 공짜로 얻는다 → 박스에서 `lively status`/`lively doctor` 사용 가능.
 #
@@ -15,15 +16,16 @@ set -euo pipefail
 #   env(선택): LIVELY_GATEWAY(기본 http://localhost:$PORT) · LIVELY_TOKEN(기본 .env AUTH_TOKENS_JSON 첫 키)
 #             KIT_HARNESS(기본 claude; codex 도 깔려면 'claude,codex')
 #
-# ⚠ 현재는 호스트 단일 claude 인증/토큰을 공유한다(세션 = 'agent' 신원). 프로필별 다른 클코 계정은
-#   프로젝트 #269 태스크 #271 에서. (배포 런북 참조)
+# ⚠ 호스트 설치(기본)는 .env 의 에이전트 토큰 하나를 ~/.lively/token 으로 공유한다(세션 = 'agent' 신원).
+#   멤버별 신원은 프로필 모드가 따로 준다 — 게이트웨이(src/terminal/profiles.ts provisionProfile)가 멤버 토큰으로
+#   KIT_PROFILE_ONLY=1 을 붙여 이 스크립트를 부르고, 그 토큰은 프로필 .claude.json 에만 굽는다(아래 1단계).
 # ─────────────────────────────────────────────────────────────────────────────
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$DIR/lib/common.sh"
 
 require_cmd curl; require_cmd node
-command -v claude >/dev/null 2>&1 || die "claude CLI 없음 — 중앙박스 세션용. 먼저 설치(npm i -g @anthropic-ai/claude-code)."
+command -v claude >/dev/null 2>&1 || die "claude CLI 없음 — 중앙박스 세션용. 먼저 설치(curl -fsSL https://claude.ai/install.sh | bash — 네이티브 설치, #1023)."
 
 PORT="${PORT:-8080}"
 GW="${LIVELY_GATEWAY:-http://localhost:${PORT}}"; GW="${GW%/}"
@@ -65,7 +67,7 @@ ok "발행 번들 다운로드·전개 ($(du -h "$TMP/bundle.tgz" | cut -f1))"
 node "$TMP/setup/user-install.mjs" --allow-host-effects --harness "$HARNESS"
 ok "user-level 설치(~/.lively + ~/.claude/settings.json 훅 머지)"
 
-# 4) MCP 등록(lively + org_mcp_server) — 번들의 register-clients.sh(OS-무관, claude CLI).
+# 4) MCP 등록(lively + org_mcp_server) — 번들의 register-clients.sh(OS-무관, node 로 설정 파일에 직접 쓴다 — CLI 불요).
 LIVELY_TOKEN="$TOKEN" STORE_URL="${GW}/mcp" bash "$TMP/setup/register-clients.sh"
 ok "MCP 등록 완료"
 

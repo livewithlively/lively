@@ -12,11 +12,12 @@
 //   · 모듈 레벨 캐시(system 별, 프로세스당 1회 로드) — clickup 처럼 매 요청마다 토큰을 읽어도 DB 부하 0.
 //     커넥터는 서브프로세스(run-sync/run-push)로 짧게 살다 죽으므로 stale 우려 없음.
 import { itemsPool } from "../db/client.js";
+import { logger } from "../log.js";
 import { isEncrypted, tryDecryptSecret } from "../org/credentials/secret-box.js";
 import { resolveSlackTokenSource, vaultReader } from "../org/credentials/slack-token-source.js";
 import { resolveNotionTokenSource, notionVaultReader } from "../org/credentials/notion-token-source.js";
 import { resolveFigmaTokenSource, figmaVaultReader } from "../org/credentials/figma-token-source.js";
-import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
+import { resolvePlainTokenSource, plainVaultReader, CLICKUP_TOKEN_KIND, CLICKUP_TOKEN_SPEC, ZOTERO_TOKEN_KIND, ZOTERO_TOKEN_SPEC } from "../org/credentials/plain-token-source.js";
 import { resolveGithubTokenSource, githubVaultDeps } from "../org/credentials/github-token-source.js";
 import { resolveGitlabTokenSource, gitlabVaultDeps } from "../org/credentials/gitlab-token-source.js";
 import { resolveLinearTokenSource, linearVaultDeps } from "../org/credentials/linear-token-source.js";
@@ -53,7 +54,7 @@ export interface ConnectorSpec {
 // ── 단일 진실원천 — 커넥터별 설정 필드. env 이름은 종전 .env.example 과 정확히 일치(byte-identical). ──
 export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
   // 슬랙은 **두 모드**다(#1531) — 어느 토큰을 넣었는지가 곧 모드다.
-  //  · 유저 토큰(xoxp-) = 검색 스윕 — 봇 초대 없이 **전 공개채널**. 비공개는 원리적으로 못 본다.
+  //  · 유저 토큰(xoxp-) = 공개채널 기록 스윕(conversations.history, #5040) — 봇 초대 없이 **전 공개채널**. 비공개는 가져오지 않는다.
   //  · 봇 토큰(xoxb-)   = 멤버십 스윕 — **봇이 초대된 채널만**, 대신 **비공개 채널이 들어온다**.
   //  둘은 배타가 아니라 상보라 보통 수집기를 둘 만든다(공개 전체 1개 + 비공개 담당 봇 1개). 커서는
   //  인스턴스별로 갈리므로(#1419) 서로의 진행을 밀지 않는다. 한 수집기에 둘 다 넣으면 유저 토큰이 이긴다.
@@ -61,10 +62,10 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '자료 가져오기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
+      intro: "가장 쉬운 길: [외부 앱 연결 ▸ Slack] 에서 계정을 연결한 뒤 '자료 가져오기'를 켜면 이 수집기가 자동으로 만들어집니다(토큰 칸 비움, '토큰 출처'가 그 연결을 가리킴). 아래는 토큰을 직접 넣는 경우입니다. 토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 공개 채널 기록을 읽어 봇 초대 없이 전 공개채널을 모읍니다(비공개는 가져오지 않습니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
-        "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': search:read, channels:read, users:read, users:read.email → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",
+        "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': channels:history, channels:read, users:read, users:read.email(파일까지 받으려면 files:read) → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",
         "[비공개 채널을 수집할 때] 같은 화면 'Bot Token Scopes': groups:history, groups:read, channels:history, channels:read, users:read (+첨부까지 받으려면 files:read) → 재설치 → 'Bot User OAuth Token'(xoxb-…) 을 아래 Bot Token 에 저장",
         "봇 토큰은 **초대된 채널만** 읽습니다 — 대상 채널에서 /invite @봇이름 으로 초대하세요(초대 안 된 채널은 조용히 빠집니다)",
         "모니터링·알람 등 노이즈 채널은 '제외 채널'에, 봇이 초대된 채널 중 일부만 원하면 '대상 채널'에 적으세요.",
@@ -74,11 +75,11 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
     fields: [
       // ⚠ required 를 뗀 이유: 봇 전용 수집기는 유저 토큰이 **없는 것이 정상**이다. 대신 커넥터가 부팅 때
       //  "둘 중 하나는 있어야 한다"를 검사하고 어느 쪽을 넣어야 하는지 알려준다(빈 값 = 조용한 무수집 방지).
-      { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, label: "User Token", hint: "xoxp-... — 검색 스윕(전 공개채널). 비공개 채널을 원하면 아래 Bot Token 을 쓰세요" },
+      { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, label: "User Token", hint: "xoxp-... — 초대 없이 전 공개채널(channels:history·channels:read). 비공개 채널을 원하면 아래 Bot Token 을 쓰세요" },
       { key: "bot_token", env: "SLACK_BOT_TOKEN", secret: true, label: "Bot Token", hint: "xoxb-... — 봇이 초대된 채널만 수집(**비공개 채널 포함**). User Token 을 함께 넣으면 그쪽이 우선합니다" },
       // #1881 — 붙여넣기 대신 금고에서: [Slack 연결]로 저장된 토큰을 그대로 쓴다. 값이 있으면 위 두 칸·env 를 덮어쓴다.
-      { key: "token_source", env: "SLACK_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Slack 연결]로 저장한 계정(공개채널 검색 수집) · bot = Lively 봇(초대된 채널·비공개 포함, 워크스페이스가 둘이면 bot:<team_id>) · 비우면 위 토큰 칸을 씁니다" },
-      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "모을 채널 — 채널명·id 를 공백·쉼표로 구분(비우면 전체). 검색 모드(개인 연결)·봇 모드 **둘 다** 적용됩니다(#2243)" },
+      { key: "token_source", env: "SLACK_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [Slack 연결]로 저장한 계정(초대 없이 공개채널 수집) · bot = Lively 봇(초대된 채널·비공개 포함, 워크스페이스가 둘이면 bot:<team_id>) · 비우면 위 토큰 칸을 씁니다" },
+      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "모을 채널 — 채널명·id 를 공백·쉼표로 구분(비우면 전체). 개인 연결(공개 채널)·봇 모드 **둘 다** 적용됩니다(#2243)" },
       { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
       { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
     ],
@@ -123,6 +124,8 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "exclude_pages", env: "NOTION_EXCLUDE_PAGES", secret: false, label: "제외 페이지", picker: "notion_pages", hint: "여기 지정한 페이지·DB 와 그 하위 전체를 싱크에서 제외(쉼표구분). 루트 안의 특정 서브트리를 빼거나 전체 공유 중 일부만 뺄 때. 이미 싱크된 항목은 다음 전체 싱크에서 자동 보관 처리(제외 해제 시 복원)" },
       { key: "comments", env: "NOTION_COMMENTS", secret: false, label: "댓글 수집", hint: "page(기본: 페이지 단위) | all(블록 단위, 고비용) | off" },
       { key: "asset_dir", env: "NOTION_ASSET_DIR", secret: false, label: "첨부 파일 저장 경로", hint: "이미지/파일 다운로드 디렉터리 (기본 ./data/notion-assets)" },
+      // #5012 — 셀프호스트 디스크 보호. 동영상 몇 개가 첨부 용량의 대부분을 차지한다(위시스트 실측 0.5% 파일 = 74% 용량).
+      { key: "asset_max_mb", env: "NOTION_ASSET_MAX_MB", secret: false, label: "첨부 크기 상한(MB)", hint: "이보다 큰 첨부는 받아 두지 않고 원본 링크 안내만 남깁니다(기본 50). 디스크 여유가 전체의 15%(최소 5GB) 아래로 내려가도 받지 않습니다" },
       { key: "api_version", env: "NOTION_API_VERSION", secret: false, label: "API 버전", hint: "기본 2025-09-03 (data_source 분리)" },
     ],
   },
@@ -211,6 +214,7 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "token", env: "LINEAR_TOKEN", secret: true, label: "토큰", hint: "lin_api_… 개인 API 키도 됩니다 — 아래 '토큰 출처'를 쓰면 비워 둡니다" },
       { key: "token_source", env: "LINEAR_TOKEN_SOURCE", secret: false, label: "토큰 출처", hint: "member:<구성원 id> = 그 사람이 [자료 가져오기]에서 연결한 라이블리 Linear 앱 토큰 · 비우면 위 토큰 칸을 씁니다" },
       { key: "teams", env: "LINEAR_TEAMS", secret: false, label: "팀", hint: "팀 키(예 ENG PRD) — 공백·쉼표로 여러 개. 비우면 워크스페이스 전체" },
+      { key: "asset_max_mb", env: "LINEAR_ASSET_MAX_MB", secret: false, label: "첨부 크기 상한(MB)", hint: "이보다 큰 첨부(이미지·영상)는 받아 두지 않고 원래 링크를 남깁니다(기본 50). 디스크 여유가 전체의 15%(최소 5GB) 아래로 내려가도 받지 않습니다" },
       { key: "include_documents", env: "LINEAR_INCLUDE_DOCUMENTS", secret: false, label: "문서 포함", hint: "on(기본) | off — Linear Documents" },
       //  #2243 3차 — 앱 상세의 «언제부터». 첫 수집(커서 없음)에서 이 날짜를 하한으로 쓴다. 이후엔 커서가 이기므로
       //   과거를 더 읽으려면 전량 다시 읽기가 필요하다(화면이 그 말을 한다).
@@ -328,6 +332,32 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       { key: "file_keys", env: "FIGMA_FILE_KEYS", secret: false, label: "파일 링크", hint: "피그마 파일 주소를 그대로 붙여넣으세요(여러 개면 공백·줄바꿈으로 구분). 파일 키만 적어도 됩니다" },
       { key: "team_ids", env: "FIGMA_TEAM_IDS", secret: false, label: "팀 id", hint: "팀 전체를 훑습니다 — figma.com/files/team/<여기>/… 주소에서 복사(피그마는 팀 id 를 API 로 주지 않습니다). 팀이 여럿이면 수집기를 팀당 하나 두는 편이 낫습니다" },
       { key: "exclude_files", env: "FIGMA_EXCLUDE_FILES", secret: false, label: "제외 파일", hint: "이름에 이 조각이 들어간 파일은 건너뜁니다(예: archive 백업) — 공백·쉼표 구분" },
+    ],
+  },
+  // Zotero — 수집 단위는 **논문 한 편**(서지 + 그 논문에 단 주석·노트)이다. 연구자의 생각은 서지가 아니라 주석·노트에 있다
+  //  (connectors/zotero.ts 머리말). 범위는 라이브러리(개인·그룹)와 컬렉션, 종류는 주석·노트·전문 색인·자동 태그를 켜고 끈다.
+  zotero: {
+    system: "zotero",
+    label: "Zotero",
+    guide: {
+      intro: "Zotero 는 연구자가 논문을 모으고 PDF 에 하이라이트·코멘트를 다는 곳입니다. 라이블리는 논문마다 서지·초록과 그 논문에 단 주석·노트를 한 자료로 묶어 가져옵니다. 키는 zotero.org 에서 만드는 개인 API 키를 씁니다.",
+      steps: [
+        "zotero.org/settings/keys 를 엽니다(로그인 필요) ▸ [Create new private key] — 설정 메뉴 이름은 계정마다 «Feeds/API»·«Security» 로 다르게 보여 주소로 가는 편이 확실합니다",
+        "Personal Library 의 «Allow library access» 와 «Allow notes access» 를 켭니다 — 노트 권한이 없으면 노트가 빠집니다. 연구실 그룹도 모으려면 Default Group Permissions 를 «Read Only» 로 둡니다",
+        "[Save Key] 를 누르면 나오는 키를 아래 'API 키' 칸에 저장합니다. (이미 [외부 앱 연결 ▸ Zotero]에 저장해 뒀다면 키 칸을 비우고 '키 출처'에 member:<내 구성원 id> 를 적으세요)",
+        "모을 라이브러리를 정합니다 — 비우면 이 키가 읽을 수 있는 라이브러리 전부(개인 + 그룹)입니다. 좁히려면 users/<id> · groups/<id> 를 적고, 컬렉션만 모으려면 컬렉션 key 를 적습니다(컬렉션을 적으면 그 컬렉션만 — 다른 라이브러리를 통째로 함께 모으려면 라이브러리 칸에도 적습니다).",
+      ],
+      url: "https://www.zotero.org/settings/keys/new",
+    },
+    fields: [
+      { key: "token", env: "ZOTERO_API_KEY", secret: true, label: "API 키", hint: "zotero.org/settings/keys 에서 만든 개인 키. 아래 '키 출처'를 쓰면 비워 둡니다" },
+      { key: "token_source", env: "ZOTERO_TOKEN_SOURCE", secret: false, label: "키 출처", hint: "org = 관리탭 자격 금고의 조직 공용 zotero_token · member:<구성원 id> = 그 사람이 [외부 앱 연결 ▸ Zotero]에 저장한 키 · 비우면 위 키 칸을 씁니다" },
+      { key: "libraries", env: "ZOTERO_LIBRARIES", secret: false, label: "라이브러리", hint: "users/<id> · groups/<id> (공백 구분, 그룹 주소 그대로도 됩니다). 비우면 이 키가 읽을 수 있는 라이브러리 전부" },
+      { key: "collections", env: "ZOTERO_COLLECTIONS", secret: false, label: "컬렉션", hint: "컬렉션 key(8자) — 넣으면 그 컬렉션(하위 포함)만 모읍니다. 다른 라이브러리를 통째로 함께 모으려면 위 라이브러리 칸에도 적으세요. 비우면 라이브러리 전체" },
+      { key: "include_annotations", env: "ZOTERO_INCLUDE_ANNOTATIONS", secret: false, label: "주석", hint: "PDF 하이라이트·코멘트 — on/off (기본 on)" },
+      { key: "include_notes", env: "ZOTERO_INCLUDE_NOTES", secret: false, label: "노트", hint: "논문 노트·독립 노트 — on/off (기본 on)" },
+      { key: "include_fulltext", env: "ZOTERO_INCLUDE_FULLTEXT", secret: false, label: "전문 색인", hint: "Zotero 가 색인한 본문 텍스트 — on/off (기본 off · 논문당 3만 자까지)" },
+      { key: "include_auto_tags", env: "ZOTERO_INCLUDE_AUTO_TAGS", secret: false, label: "자동 태그", hint: "DB 에서 가져올 때 붙은 주제어 — on/off (기본 off · 손으로 단 태그는 늘 모읍니다)" },
     ],
   },
 };
@@ -450,6 +480,19 @@ export function resolveConnectorConfig(system: string): Promise<Record<string, s
   return p;
 }
 
+// 🔴 이 폴백을 **조용히** 하지 않는다. 폴백 자체는 옳다(테이블 부재 배포도 돌아야 한다). 문제는 침묵이었다 —
+//  테넌트 바인딩 누락으로 DB 가 42704 로 거부한 것이 「토큰 미설정」 에러로 표면화되어, 원인을 «토큰 문제» 로
+//  오진하게 만들었다(2026-09-21 실측: 아웃바운드 크론이 매 틱 죽는데 토큰은 멀쩡했다). 동작은 그대로 두고
+//  **왜 env 로 떨어졌는지**만 남긴다 — 설정 캐시 세대당 (system, 계층) 별 1회(resetConnectorConfigCache 가 함께 비운다).
+const _warnedConfigRead = new Set<string>();
+function warnConfigReadFailed(system: string, table: string, e: unknown, collectorId?: number): void {
+  const key = `${system}:${table}`;
+  if (_warnedConfigRead.has(key)) return;
+  _warnedConfigRead.add(key);
+  logger.warn({ system, table, collectorId, err: (e as Error)?.message ?? String(e) },
+    "커넥터 설정을 DB 에서 읽지 못해 다음 계층으로 폴백합니다 — 토큰이 비어 보이면 이 원인부터 보세요");
+}
+
 async function loadConnectorConfig(
   system: string, bound: CollectorBinding | null,
 ): Promise<Record<string, string | undefined>> {
@@ -468,7 +511,7 @@ async function loadConnectorConfig(
       const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
         `SELECT config, secrets FROM org_collector WHERE id=$1`, [bound.id]);
       if (r.rows[0]) { dbConfig = r.rows[0].config ?? {}; dbSecrets = r.rows[0].secrets ?? {}; }
-    } catch { /* 테이블 부재(마이그레이션 전) → 아래 레거시 경로로 */ }
+    } catch (e) { warnConfigReadFailed(system, "org_collector", e, bound.id); /* 테이블 부재(마이그레이션 전) → 아래 레거시 경로로 */ }
   }
   // ② 레거시 기본 인스턴스(org_connector) — **바인딩이 없을 때만** 본다.
   //  ⚠ 바인딩이 있으면 이 층을 건너뛴다. 안 그러면 새로 만든 수집기(아직 토큰 미입력)가 기존 기본 인스턴스의
@@ -482,7 +525,7 @@ async function loadConnectorConfig(
       const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
         `SELECT config, secrets FROM org_connector WHERE system=$1`, [system]);
       if (r.rows[0]) { legacyConfig = r.rows[0].config ?? {}; legacySecrets = r.rows[0].secrets ?? {}; }
-    } catch { /* 테이블 부재/DB 미연결 → 전량 env 폴백 */ }
+    } catch (e) { warnConfigReadFailed(system, "org_connector", e); /* 테이블 부재/DB 미연결 → 전량 env 폴백 */ }
   }
 
   for (const f of spec.fields) {
@@ -533,6 +576,14 @@ async function loadConnectorConfig(
       out.api_token = r.token;
     }
   }
+  // ── Zotero 키 출처 — 같은 규약(출처를 명시했으면 그 출처만). 개인 API 키 평문.
+  if (system === "zotero" && out.token_source) {
+    const r = await resolvePlainTokenSource(out.token_source, plainVaultReader(ZOTERO_TOKEN_KIND), ZOTERO_TOKEN_SPEC);
+    if (r) {
+      if (r.warning) console.warn(`zotero token_source: ${r.warning}`);
+      out.token = r.token;
+    }
+  }
   // ── GitHub 토큰 출처(#2247) — 같은 규약. 묶음/정적·만료 갱신은 http_proxy 와 같은 부품(github-token-source.ts).
   if (system === "github" && out.token_source) {
     const r = await resolveGithubTokenSource(out.token_source, out.host ?? "github.com", githubVaultDeps);
@@ -577,5 +628,6 @@ async function loadConnectorConfig(
 
 /** 테스트/재설정용 — 해소 캐시 무효화(관리탭에서 config 갱신 후 등). */
 export function resetConnectorConfigCache(): void {
+  _warnedConfigRead.clear(); // 캐시 세대가 바뀌면 warn 도 다시 한 번 낼 수 있어야 한다(재발 은폐 방지).
   _cache.clear();
 }

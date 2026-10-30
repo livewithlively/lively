@@ -18,8 +18,6 @@
  */
 export type AxisState = 'on' | 'off' | 'skip' | 'soon' | 'none';
 
-/** 목록에서 이 앱이 어느 묶음에 서나. «half» = 한쪽만 켜고 나머지는 아직 안 정했다. */
-export type CardState = 'on' | 'half' | 'off' | 'soon';
 
 /** «안 쓴다»고 정한 축의 키 — `<앱키>:use` · `<앱키>:get`. */
 export function skipKey(app: string, axis: 'use' | 'get'): string { return `${app}:${axis}`; }
@@ -35,7 +33,7 @@ export function skipKey(app: string, axis: 'use' | 'get'): string { return `${ap
  */
 export const COLLECT_PRESET_APP: Record<string, string> = {
   slack: 'slack', notion: 'notion', github: 'github', gitlab: 'gitlab', linear: 'linear',
-  figma: 'figma', clickup: 'clickup', outlook: 'outlook',
+  figma: 'figma', clickup: 'clickup', outlook: 'outlook', zotero: 'zotero',
   gdrive: 'google', google_drive: 'google', gmail: 'google', gcal: 'google', google_calendar: 'google',
 };
 
@@ -45,9 +43,14 @@ export const COLLECT_PRESET_APP: Record<string, string> = {
  *  말하므로, 목록도 같은 말을 해야 한다. 칸을 지우지 않는 이유는 상세와 같다 — 틀이 흔들리면 앱마다 다른
  *  화면이 된다.
  */
-export const COLLECT_APPS: readonly string[] = ['slack', 'notion', 'google', 'linear', 'gitlab', 'figma', 'clickup', 'github', 'outlook'];
+export const COLLECT_APPS: readonly string[] = ['slack', 'notion', 'google', 'linear', 'gitlab', 'figma', 'clickup', 'github', 'outlook', 'zotero'];
 
-export interface CollectorLike { preset_key?: string | null; enabled?: boolean | null }
+export interface CollectorLike { preset_key?: string | null; enabled?: boolean | null; config?: Record<string, unknown> | null }
+/**
+ * 수집기가 **사람마다 하나**인 앱(서버 member-collect perMember — Zotero: 모으는 것이 그 사람의 라이브러리).
+ *  이런 앱은 남의 수집기가 켜져 있어도 내 것은 안 모인다 — 목록이 «켜짐» 이라 말하면 거짓 초록이다. 그래서 내 것만 센다.
+ */
+export const PER_MEMBER_COLLECT: ReadonlySet<string> = new Set(['zotero']);
 /** 앱 하나에 걸린 수집기 셈 — 켜진 것 · 만들어는 뒀지만 꺼진 것. */
 export interface CollectTally { on: number; off: number }
 
@@ -56,12 +59,14 @@ export interface CollectTally { on: number; off: number }
  *  ⚠ 앱마다 `/api/ui/org/<app>/collect` 를 부르면 목록 한 장에 여덟 번 왕복이다 — 목록은 한 번만 묻는다.
  *   (그 창구들은 상세가 쓴다: 상세는 한 앱만 그리고 토글·범위까지 다뤄야 해서 그 앱의 전체 상태가 필요하다.)
  */
-export function collectTally(rows: readonly CollectorLike[] | null | undefined): Map<string, CollectTally> {
+export function collectTally(rows: readonly CollectorLike[] | null | undefined, me?: string | null): Map<string, CollectTally> {
   const out = new Map<string, CollectTally>();
   for (const r of rows ?? []) {
     const raw = String(r?.preset_key ?? '').trim();
     if (!raw) continue;
     const app = COLLECT_PRESET_APP[raw] ?? raw;
+    //  사람마다 하나인 앱은 내 연결로 도는 것만(token_source=member:<나>). 나를 모르면 세지 않는다(켜졌다고 말하지 않는 쪽).
+    if (PER_MEMBER_COLLECT.has(app) && String(r?.config?.token_source ?? '') !== `member:${me ?? ''}`) continue;
     const cur = out.get(app) ?? { on: 0, off: 0 };
     if (r?.enabled) cur.on += 1; else cur.off += 1;
     out.set(app, cur);
@@ -108,22 +113,6 @@ export function appAxes(key: string, use: AxisState, tally: Map<string, CollectT
   //  수집기가 실제로 돌고 있으면 «켜짐» 이 이긴다 — 명단에 없더라도 사실이 먼저다(표가 낡아도 거짓말하지 않는다).
   const get: AxisState = getOn > 0 ? 'on' : !has ? 'none' : declined('get') ? 'skip' : 'off';
   return { use: useSt, get, getOn };
-}
-
-/**
- * 목록에서 이 앱이 어느 묶음에 서나 — 네 갈래.
- *  ★ 하나도 안 켰으면 «연결할 수 있는 앱», **하나만 켰고 나머지를 아직 안 정했으면 «연결 중»**,
- *   켠 것이 있고 남은 게 없으면 «연결 완료».
- *  «연결 중»을 따로 세우는 이유(원준 2026-09-20): 수집기는 흔히 저절로 생기므로 «둘 중 하나만 켜진» 상태가
- *   기본값처럼 흔한데, 종전엔 그게 «연결됨»과 한 칸에 섞여 **덜 끝난 것이 끝난 것처럼** 보였다. 끝내는 길은
- *   둘이다 — 나머지를 켜거나, «안 쓴다»고 정하거나. 둘 다 «연결 완료»로 간다(정한 것은 미완이 아니다).
- *  ⚠ 준비 중이 연결 여부보다 앞선다 — 목록의 뜻이 «라이블리가 이걸 내밀고 있나» 이기 때문이다(#2243).
- *   그래도 카드는 제 두 축을 사실대로 말한다(뺏지 않는다).
- */
-export function listBucket(axes: AppAxes, soon: boolean): CardState {
-  if (soon) return 'soon';
-  if (axes.use !== 'on' && axes.get !== 'on') return 'off';
-  return pendingAxes(axes).length ? 'half' : 'on';
 }
 
 /**

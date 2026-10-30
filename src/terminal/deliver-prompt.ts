@@ -115,14 +115,37 @@ export async function deliverPromptToNode(
   return { ok: true };
 }
 
+export const SESSION_NOT_FOUND = "없거나 접근할 수 없는 세션입니다";
+
+/**
+ * **사람 요청**으로 세션에 글을 넣는 한 통로 — POST …/sessions/:id/prompt 라우트와 앱 화면의 chat-send(#4594)가 같이 쓴다.
+ *  접근 판정이 여기 있다(deliverPrompt 는 서버 내부 호출도 타므로 판정이 없다): «정말 저쪽 기계인가»(remoteNodeOfSession — #2600 T2 d6)로
+ *  갈라 노드면 nodeCanAttach, 아니면 canAttach. 두 호출부가 판정을 따로 베끼면 하나만 고쳐지는 날이 온다 — 그래서 한 함수다.
+ */
+export async function deliverPromptForMember(sessionId: string, memberId: string, text: string): Promise<DeliverResult> {
+  if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
+  const { remoteNodeOfSession, nodeCanAttach } = await import("../node/registry.js");
+  const { canAttach } = await import("./terminal-sessions.js");
+  const nodeId = (await remoteNodeOfSession(sessionId, sessionGone)) ?? "";
+  if (nodeId) {
+    const v = await nodeCanAttach(nodeId, sessionId, memberId);
+    if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+  } else if (!(await canAttach(sessionId, memberId))) {
+    throw new HttpError(404, SESSION_NOT_FOUND);
+  }
+  return deliverPrompt(sessionId, text, { owner: memberId, nodeId });
+}
+
 export async function deliverPrompt(sessionId: string, text: string, opts?: {
   owner?: string | null; nodeId?: string | null; firstPromptTrustOk?: boolean;
 }): Promise<DeliverResult> {
   if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
   const owner = opts?.owner ?? null;
+  //  #2600 T2 d6 — 좌표를 안 준 호출(리브 2턴 등)도 «정말 저쪽 기계인가» 로 가른다(remoteNodeOfSession — 라우트와 같은 함수).
+  //   세션 호스트 좌표를 노드로 읽으면 매니지드 세션의 말이 아웃박스를 건너뛴다(routes.ts 프롬프트 라우트 머리말).
   const nodeId = opts?.nodeId !== undefined
     ? (opts.nodeId || "")
-    : await import("../node/registry.js").then(({ nodeOfSession }) => nodeOfSession(sessionId) || "");
+    : ((await import("../node/registry.js").then(({ remoteNodeOfSession }) => remoteNodeOfSession(sessionId, sessionGone))) ?? "");
   let stateLoaded = false;
   let st: Awaited<ReturnType<typeof getSessionState>> | undefined;
   const loadState = async (): Promise<Awaited<ReturnType<typeof getSessionState>>> => {
@@ -176,7 +199,12 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
         if (!e.conn.send(text)) throw new ClaudeChatUnavailable("opencode 에 말을 걸지 못했습니다");
         r = { convId: e.convId };
       } else {
-        r = await sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: localState?.claude_session_id || null });
+        //  #4427 — 판(pane)의 claude 와 같은 판정(claude-ai-connectors-policy). 프로세스를 처음 띄울 때만 뜻이 있어,
+        //   이미 살아 있는 런타임이면 정책을 다시 읽지 않는다(메시지마다 DB 왕복을 늘리지 않게).
+        const { isClaudeChatLive } = await import("./harness-io/claude-chat-runtime.js");
+        const { claudeAiConnectorsBlocked } = await import("./claude-ai-connectors-policy.js");
+        const blockClaudeAiConnectors = !isClaudeChatLive(sessionId) && await claudeAiConnectorsBlocked(harnessKey);
+        r = await sendClaudeChat({ sessionId, harness: harnessKey, text, cwd: dir, osUser, convId: localState?.claude_session_id || null, blockClaudeAiConnectors });
       }
       //  ★ **대화 id 를 적는다.** 화면이 대화 파일을 찾는 유일한 단서가 이 매핑이다(chat-routes:
       //   «매핑이 없으면 404 가 정답이다 — 폴더의 최신 파일을 집지 않는다»). 종전엔 세션 **안에서** 도는
@@ -242,7 +270,7 @@ export async function deliverPrompt(sessionId: string, text: string, opts?: {
   return deliverPromptToNode({ harness: harnessKey, stamp: await nodeSessionStamp(nodeId, sessionId) }, {
     chatSend: () => nodeRpc(nodeId, "chatSend", { id: sessionId, text, harness: harnessKey }),
     inject: opts?.firstPromptTrustOk === undefined
-      ? () => injectPrompt(sessionId, text)
+      ? () => injectPrompt(sessionId, text, { harness: harnessKey })
       : async () => {
         await nodeRpc(nodeId, "injectFirstPrompt", {
           id: sessionId, harness: harnessKey, text, trustOk: opts.firstPromptTrustOk,

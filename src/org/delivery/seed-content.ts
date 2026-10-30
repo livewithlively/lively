@@ -17,12 +17,13 @@
 //  멱등: 두 번째 실행부터는 전부 present → 0 삽입. 새 디폴트가 추가되면 그 행만 다음 update(재기동)에 유입된다.
 //  비치명: 시딩 실패는 게이트웨이 기동을 막지 않는다(호출부가 .catch — baseline 시드와 동일 best-effort).
 import { itemsPool } from "../../db/client.js";
-import { getOrgHook, upsertOrgHook, assetContentHash,
+import { getOrgHook, upsertOrgHook, moveOrgHookSort, assetContentHash,
   type WriteCtx, type HookHarness } from "../store.js";
 import { DEFAULT_HOOKS, DEFAULT_SKILLS, DEFAULT_KNOWLEDGE } from "./default-content.js";
+import { lockedSkillsNow, lockedSkillIds } from "./connect-skills.js";
 import { logger } from "../../log.js";
 
-export interface SeedResult { hooks: number; skills: number; knowledge: number; knowledgeRetired?: number }
+export interface SeedResult { hooks: number; skills: number; knowledge: number; knowledgeRetired?: number; lockedSkills?: number }
 
 // 은퇴한 시드 지식 — 더는 시드가 아닌(예: 스킬로 이동한) 이름. seedDefaultContent 가 손 안 댄 시드행
 //  (updated_by='system')만 회수해 orphan/이중출처를 막는다(#878). 이동 시 여기 이름을 넣는다.
@@ -30,11 +31,19 @@ const RETIRED_SEED_KNOWLEDGE: string[] = ["project-closeout-routine"]; // → pr
 
 // 기본값이 «꺼짐 → 켜짐» 으로 바뀐 시드 훅 — 손 안 댄 기존 설치도 따라오게 한다(아래 승격 블록).
 //  · session-log-capture(#1752, 대표 결정 2026-08-18)
-//  · project-pull-turn·project-push·project-push-tool(#3787) — 「프로젝트 세션이면 그 프로젝트 자료가 cwd 에
+//  · project-pull-turn·project-pull-tool·project-push·project-push-tool(#3787) — 「프로젝트 세션이면 그 프로젝트 자료가 cwd 에
 //    있다」는 계약이 **실행 위치와 무관하게** 성립해야 한다. 종전엔 이 셋이 기본 꺼짐이라 로컬 노드 세션은
 //    공유폴더를 영영 못 받고(웹에서 붙인 첨부가 세션에 안 감 → AI 가 근처 다른 파일로 답하는 무음 오답),
 //    만든 산출물도 웹 자료함에 안 올라갔다. 매니지드(colocated)는 셋 다 즉시 no-op 이라 비용이 안 붙는다.
-const PROMOTE_ENABLED = new Set(["session-log-capture", "project-pull-turn", "project-push", "project-push-tool"]);
+const PROMOTE_ENABLED = new Set(["session-log-capture",
+  "project-pull-turn", "project-pull-tool", "project-push", "project-push-tool", "project-push-turn", "project-push-start"]);
+
+// 기본 sort 가 옮겨진 시드 훅 — 행의 sort 가 **옛 기본값 그대로**일 때만 새 기본값으로 따라간다.
+//  run-custom 은 sort 가 같은 훅을 동시에 돌린다. 아래 둘은 옛 기본값(0)에서 짝 훅과 같은 묶음이 되어 겹쳐 돌면 안 된다:
+//  · project-pull-turn — 첫 지시에서 project-auto-bind(0)가 프로젝트를 붙인 **뒤에** 받아야 그 턴에 자료가 온다.
+//  · project-push-tool — project-pull-tool(0)과 같은 폴더의 동기화 원장을 통째로 다시 써서, 겹치면 한쪽 기록이 덮인다.
+//  아래 표의 값이 그 옛 기본값이다. 옛 기본값이 아닌 행은 이 블록이 손대지 않는다.
+const LEGACY_SEED_SORT: Record<string, number> = { "project-pull-turn": 0, "project-push-tool": 0 };
 
 export async function seedDefaultContent(): Promise<SeedResult> {
   const ctx: WriteCtx = { actor: "system", source: "migration" };
@@ -78,6 +87,11 @@ export async function seedDefaultContent(): Promise<SeedResult> {
         }, ctx);
         res.hooks++;
         continue;
+      }
+      //  sort 한 칸만 옮긴다(moveOrgHookSort) — upsertOrgHook 은 updated_by 를 'system' 으로 덮어, 사람이 끈 훅을 위 승격
+      //  블록이 다음 부팅에 다시 켠다. continue 하지 않는다: 소스도 바뀐 릴리스면 아래 일반 경로가 같은 부팅에 이어서 갱신한다.
+      if (Object.hasOwn(LEGACY_SEED_SORT, h.id) && before.sort === LEGACY_SEED_SORT[h.id] && h.sort !== before.sort) {
+        if (await moveOrgHookSort(h.id, before.sort, h.sort, ctx)) { res.hooks++; before.sort = h.sort; }
       }
       // 기존 행 — 소스가 실제로 달라졌을 때만 갱신.
       //  ⚠ 종전엔 `updated_by='system'`(손 안 댄 시드)까지 요구했다. #1836 에서 시드 훅이 **편집 불가**가 되면서
@@ -130,6 +144,14 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     }
   }
 
+  // ── 잠긴 연결 스킬(#4970) — **무조건 코드 판으로 맞춘다**(손 댄 행도). 규칙은 seedLockedSkills 머리말. ──
+  try {
+    const n = await seedLockedSkills();
+    if (n) res.lockedSkills = n;
+  } catch (err) {
+    logger.warn({ err }, "잠긴 연결 스킬 시딩 실패(건너뜀) — 배포는 코드 판으로 계속된다");
+  }
+
   // ── 지식(knowledge) — 신규는 삽입, **손 안 댄 시드는 갱신**(category-less general) ──
   //
   //  ⚠ 시맨틱 변경(#813): 종전엔 `ON CONFLICT (name) DO NOTHING` 이라 **기존 박스는 영원히 옛 본문**이었다.
@@ -179,8 +201,45 @@ export async function seedDefaultContent(): Promise<SeedResult> {
     }
   }
 
-  if (res.hooks || res.skills || res.knowledge || res.knowledgeRetired) {
+  if (res.hooks || res.skills || res.knowledge || res.knowledgeRetired || res.lockedSkills) {
     logger.info(res, "디폴트 콘텐츠 시딩(신규=삽입 · 손 안 댄 시드=갱신 · 은퇴 시드=회수)");
   }
   return res;
+}
+
+/**
+ * 잠긴 연결 스킬(#4970) — DB 행을 **무조건 코드 판으로 맞춘다**(손 댄 행도). 바뀐 행 수를 돌려준다(같으면 0 — 멱등).
+ *
+ *  외부 앱 연결 스킬은 라이블리가 배포하고 조직이 고치지 못한다(connect-skills.ts). 그래서 기본 스킬의 «손 안 댄 것만 갱신»이
+ *   아니라 시드 훅(#1836)처럼 코드가 정본이다 — 본문·설명·라벨은 물론 켜짐·대상 구성원까지 코드 값으로 되돌린다(잠긴 스킬엔
+ *   조직의 결정이 없다). 판(매니지드/셀프호스트)은 이 게이트웨이의 배포 방식을 따른다.
+ *  배포 자체는 이 행에 기대지 않는다 — materializer 응답(org_runner_assets)이 코드 판을 직접 싣는다. 이 행은 관리 화면·감사·
+ *   구성원 화면이 같은 것을 보게 맞추는 정리다. 실제로 달라졌을 때만 UPDATE(불필요한 version bump 방지).
+ *  seedDefaultContent 와 따로 둔 이유: 이 함수는 잠긴 스킬 행과 그 개인 설정만 만진다 — PG 통합 테스트가 다른 시드(지식·훅)로
+ *   공유 테스트 DB 를 더럽히지 않고 이것만 돌릴 수 있게(전체 시딩을 돌렸더니 시드 지식 3건이 뒤 테스트의 미분류 수를 바꿨다).
+ */
+export async function seedLockedSkills(): Promise<number> {
+  let changed = 0;
+  for (const s of lockedSkillsNow()) {
+    const r = await itemsPool.query(
+      `INSERT INTO org_harness_asset(id, kind, label, harness, description, summary, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,NULL,NULL,true,$9,1,$10,'system',now(),'system')
+       ON CONFLICT (tenant_id, id) DO UPDATE
+         SET kind = EXCLUDED.kind, label = EXCLUDED.label, harness = EXCLUDED.harness, description = EXCLUDED.description,
+             summary = EXCLUDED.summary, body = EXCLUDED.body, frontmatter = EXCLUDED.frontmatter,
+             target_members = NULL, paired_hook_id = NULL, enabled = true, sort = EXCLUDED.sort,
+             content_hash = EXCLUDED.content_hash, version = org_harness_asset.version + 1, updated_at = now(), updated_by = 'system'
+       WHERE org_harness_asset.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+          OR org_harness_asset.label IS DISTINCT FROM EXCLUDED.label
+          OR org_harness_asset.summary IS DISTINCT FROM EXCLUDED.summary
+          OR org_harness_asset.sort IS DISTINCT FROM EXCLUDED.sort
+          OR org_harness_asset.enabled IS DISTINCT FROM true
+          OR org_harness_asset.target_members IS NOT NULL
+          OR org_harness_asset.paired_hook_id IS NOT NULL`,
+      [s.id, s.kind, s.label, s.harness, s.description, s.summary, s.body, JSON.stringify(s.frontmatter), s.sort, s.content_hash]);
+    changed += r.rowCount ?? 0;
+  }
+  // 잠기기 전에 남은 개인 설정(켜기/끄기)은 이제 아무 뜻이 없다(배포가 무시한다) — 화면이 «내가 꺼 둠»을 보여 주지 않게 정리.
+  await itemsPool.query(`DELETE FROM org_asset_pref WHERE target_kind = 'harness_asset' AND ref_id = ANY($1::text[])`, [lockedSkillIds()]);
+  return changed;
 }

@@ -14,6 +14,16 @@ import pg from "pg";
 export const POOL_CLIENT_WAIT_MS = 60_000;
 const rawPool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 20, connectionTimeoutMillis: POOL_CLIENT_WAIT_MS });
 
+// 유휴 연결 오류(DB 재시작·관리자 종료·DROP DATABASE … FORCE)는 풀이 'error' 이벤트로 알린다. 리스너가 없으면
+//  Node 가 그 이벤트를 throw 로 바꿔 **프로세스가 통째로 죽는다** — 게이트웨이면 uncaughtException → 재기동(열린
+//  터미널 attach 가 전부 끊긴다), 시험이면 크래시(#4501: app-sql-e2e.pg-test 가 항목 전부 ok 뒤 정리 단계에서 죽어
+//  머지 대기열을 떨어뜨렸다 — pool.end() 는 소켓이 닫히기 전에 끝나 DROP DATABASE FORCE 가 그 연결을 끊는다).
+//  pg-pool 은 오류 난 클라이언트를 이미 풀에서 뺐으므로 다음 요청은 새 연결을 맺는다 — 여기서는 기록만 한다.
+//  ⚠ leaf 계약(R10)상 logger 를 import 하지 않는다 → console(게이트웨이 stdout/stderr = logs/gateway.log).
+rawPool.on("error", (err: Error & { code?: string }) => {
+  console.warn(`[db] 유휴 연결 오류 — 그 연결을 버리고 계속한다: ${err.code ?? ""} ${err.message}`.replace(/ {2,}/g, " "));
+});
+
 // ── DB 주소가 없으면 접속을 시도하지 않는다 (#2457) ──────────────────────────
 //
 // pg 는 connectionString 이 비면 **libpq 기본값(localhost:5432)** 으로 붙는다. 그래서 이 모듈을
@@ -221,6 +231,14 @@ function bindingSql(local: boolean): TenantBindingSql | null {
 
 export function tenantBindingSql(): TenantBindingSql | null {
   return bindingSql(true);
+}
+
+/**
+ * 지금 풀이 거는 테넌트 id(바인딩이 꺼져 있거나 못 찾으면 null) — 전역 풀 밖의 별도 풀(앱 자유 SQL 전용 풀, #4226)이
+ *  **같은 값**으로 행 격리 설정을 걸 때 쓴다. 두 풀이 서로 다른 테넌트를 보는 일이 없게 리졸버를 한 곳에서 읽는다.
+ */
+export function boundTenantId(): string | null {
+  return resolver?.() ?? null;
 }
 
 // ── ★★ 고정 바인딩은 **여기서 자가 설치**한다 ────────────────────────────────

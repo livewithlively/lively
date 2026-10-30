@@ -102,11 +102,22 @@ if (L && P && F) {
     "C3 리브 카드도 같은 규칙으로 나뉜다 — 조각 'now:liv' · 나머지 'liv' · 접힘은 한 장만");
   ok(planNowCards([R("a"), R("b", { project: { id: 2 } })], () => false, NOW).every((c) => c.liv === false && c.pkey !== "liv"), "C4 워커 줄이 없으면 리브 카드가 안 선다");
 
-  //  (stage 판) 접힘 재료 거르개(F1 · F2)는 projectPastRows 가 있는 main 에서만 잰다 — stage 의 카드엔 그 접힘이 아직 없다.
+  const { projectPastRows } = F;
+  const S = (id, o = {}) => ({ id, projectId: null, lastSeen: 1, ...o });
+  const all = [S("h1"), S("w1", { task: full }), S("h2", { lastSeen: 5 }), S("w2", { task: full, lastSeen: 9 }), S("t", { task: full, trashedAt: "2026-10-01" }), S("p", { projectId: 3 })];
+  const ids = (r) => r.rows.map((x) => x.id);
+  eq([ids(projectPastRows(all, 0, new Set(), 12, (s) => isLooseLivWork(s))), ids(projectPastRows(all, 0, new Set(), 12, (s) => !isLooseLivWork(s)))], [["w2", "w1"], ["h2", "h1"]],
+    "F1 ★★ 거르개를 주면 그 술어를 지나는 것만 — 워커와 사람 세션이 서로의 접힘에 안 들어간다(휴지통은 여전히 빠진다)");
+  eq(ids(projectPastRows(all, 0, new Set(), 12)), ["w2", "h2", "h1", "w1"], "F1 거르개를 안 주면 전부(종전 그대로)");
+  eq(ids(projectPastRows(all, 0, new Set(["w2"]), 12, (s) => isLooseLivWork(s))), ["w1"], "F1 이미 줄로 선 것은 거르개와 무관하게 빠진다");
+  const placed = [S("pw", { task: full, standId: 4551 }), S("ph", { projectId: 4551 }), S("lw", { task: full, standId: null }), S("hx", { projectId: 4551, standId: 1 })];
+  eq([ids(projectPastRows(placed, 4551, new Set(), 12)).sort(), ids(projectPastRows(placed, 0, new Set(), 12)), ids(projectPastRows(placed, 1, new Set(), 12))], [["hx", "ph", "pw"], ["lw"], []],
+    "F2 ★★ 접힘은 «설 자리» 로 묶는다 — 시킨 프로젝트의 카드가 끝난 워커를 들고, 사람 세션은 소속으로만 묶인다(standId 를 안 본다)");
 }
 
 // ───────────────────────── W. 배선 ─────────────────────────
-const VIEWS = code(read("web/v2/views.ts")), MAIN = code(read("web/v2/main.ts")), SIDE = code(read("web/v2/side.ts"));
+// #4865 — 세션 행 조립(mergeSessions)·isMineSess 는 views.ts 에서 v2/sess-merge.ts 로 내려갔다(views.ts 는 다시 내보낸다) — 둘을 함께 본다.
+const VIEWS = code(read("web/v2/views.ts") + "\n" + read("web/v2/sess-merge.ts")), MAIN = code(read("web/v2/main.ts")), SIDE = code(read("web/v2/side.ts"));
 ok(/projectId: r\.projectId \? Number\(r\.projectId\) : null,\s*task: taskMarkOf\(r\.task\),/.test(VIEWS) && !/standingProjectId/.test(VIEWS),
   "W1 ★★ 세션을 짤 때 표식만 읽는다 — **소속(projectId)은 서버가 준 그대로다**(파생값으로 덮으면 보관 · 휴지통이 워커를 건드린다)");
 ok(/placeLivWork\(sessions, new Set\(projects\.map\(\(p\) => Number\(p\.id\)\)\)\);/.test(MAIN)
@@ -119,10 +130,10 @@ ok(destructive.every((b) => b.length > 0 && !/sideProjectId|standId/.test(b)) &&
 ok(/if \(s && s\.task\) \{ icon = 'liv'; ask = livWorkNote\(s\.task\); livTitle = livWorkName\(s\.label, s\.task\); liv = isLooseLivWork\(s\);/.test(MAIN)
   && /title: \(!page \|\| page === 'dashboard'\) \? '새 작업' : \(livTitle \|\| info\.title\)/.test(MAIN) && /owner, ask, liv \};/.test(MAIN),
   "W2 홈 줄 얼굴 — 워커는 리브 그림 · 이름 · 둘째 줄 · 묶음 표식을 싣는다");
-ok(/const sid = sideProjectId\(s\);\s*const p = sid \? last!\.data\.projects\.find\(\(x\) => x\.id === sid\) : null;/.test(SIDE) && /title: mark \? livWorkName\(s\.label, mark\) : t\.main,/.test(SIDE) && /icon: mark \? 'liv' : 'chat',/.test(SIDE) && /liv: isLooseLivWork\(s\),/.test(SIDE),
+ok(/const sid = sideProjectId\(s\);\s*const p = sid \? last!\.data\.projects\.find\(\(x\) => x\.id === sid\) : null;/.test(SIDE) && /title: mark \? livWorkName\(s\.label, mark\) : t\.main,/.test(SIDE) && /icon: mark \? 'liv' : (bld \? 'buildsess' : )?'chat',/.test(SIDE) && /liv: isLooseLivWork\(s\),/.test(SIDE),
   "W3 카드 접힘 안의 줄(sessAsInst)도 같은 얼굴이다 — 홈 줄과 접힌 줄이 다른 말을 하지 않는다");
-ok(/c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME/.test(SIDE) && /glyph\(g\.id \? 'proj' : g\.liv \? 'liv' : 'projNone', 'v2-pg-ic'\)/.test(SIDE),
-  "W4 ★ 카드 — 리브 묶음 이름 · 리브 그림(stage 판 — 접힘 재료 거르개는 main 에서만 잰다)");
+ok(/c\.liv \? LIV_BUCKET_NAME : NO_PROJECT_NAME/.test(SIDE) && /g\.id \? undefined : \(s\) => isLooseLivWork\(s\) === g\.liv\)/.test(SIDE) && /glyph\(g\.id \? 'proj' : g\.liv \? 'liv' : 'projNone', 'v2-pg-ic'\)/.test(SIDE),
+  "W4 ★ 카드 — 리브 묶음 이름 · 리브 그림 · 접힘 재료를 둘로 가른다(프로젝트 카드는 거르지 않는다)");
 
 // ───────────────────────── R. 런타임 — 실제 side.ts 를 크롬에서 ─────────────────────────
 //   R1 프로젝트 없는 워커 줄은 「리브가 한 일」 카드에, 사람 세션은 「기타 (미분류)」 카드에 선다
@@ -189,6 +200,9 @@ else {
     const w1 = R.liv && R.liv.rows.find((r) => r[0] === "ROW-w1"), h1 = R.none && R.none.rows.find((r) => r[0] === "ROW-h1");
     ok(!!w1 && !!h1 && !!w1[1] && w1[1] !== h1[1] && !!R.liv.headIc && R.liv.headIc !== R.none.headIc && R.liv.headIc !== R.p5.headIc,
       "R3 워커 줄 · 리브 카드 머리는 다른 줄 · 다른 카드와 다른 그림(리브)이다");
+    ok(!!R.liv && ["리브 작업 #9"].every((n) => names(R.liv).filter((x) => x === n).length === 2) && !names(R.liv).includes("PAST-ph1")
+      && !!R.none && names(R.none).includes("PAST-ph1") && !names(R.none).some((n) => /리브 작업/.test(n)),
+      "R4 ★★ 접힘 — 끝난 워커는 리브 카드에만(«리브 작업 #N» 이름으로), 끝난 사람 세션은 「기타」 카드에만", JSON.stringify([names(R.liv), names(R.none)]));
     ok(!!R.p5 && names(R.p5).includes("ROW-w5") && names(R.p5).includes("ROW-s5") && !names(R.liv).includes("ROW-w5"),
       "R5 ★ 시킨 프로젝트가 있는 워커는 그 프로젝트 카드 안에 선다", JSON.stringify(names(R.p5)));
   }

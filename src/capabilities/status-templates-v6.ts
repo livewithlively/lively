@@ -128,7 +128,9 @@ const statusTemplateSetDefaultV6: Capability = {
 // 참고 노출 — 기본 템플릿 단건(선택). index 로 충분해 별도 미노출.
 void getDefaultStatusTemplate;
 
+// 순서가 곧 REST 마운트 순서다 — `…/status-templates/set-default` 는 `…/status-templates/:id`(update)보다 먼저 와야 한다
+//  (#4226 rest-shadow 가드가 잡음 — 뒤에 있으면 :id 가 "set-default" 를 템플릿 id 로 받는다).
 export const statusTemplateV6Capabilities: Capability[] = [
-  statusTemplateIndexV6, statusTemplateCreateV6, statusTemplateUpdateV6,
-  statusTemplateDeleteV6, statusTemplateSetDefaultV6,
+  statusTemplateIndexV6, statusTemplateCreateV6, statusTemplateSetDefaultV6, statusTemplateUpdateV6,
+  statusTemplateDeleteV6,
 ];

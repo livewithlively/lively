@@ -13,6 +13,7 @@ import { tenantSlug } from "./catalog.js";
 import { execTopology } from "../exec-topology.js";   // #2599 T2 — 중계 설정의 단일 출처
 import { PROBE_JS, type PathProbe } from "./path-jail.js";   // #3668 T1 — 경로 해소 한 줄(판정은 path-jail.confined)
 import { sessionSpawnArgv } from "./session-exec.js";   // #3668 T2 — 프로그램 실행 op 의 두 번째 자리(세션 컨테이너)
+import { collectText } from "./stream-text.js";   // #4135 — 조각을 모아 한 번에 UTF-8 로(경계에 걸린 한글이 깨지지 않게)
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 // 심링크(#1744): dirent 의 isDirectory() 는 링크에 대해 **항상 false** 라, 폴더를 가리키는 링크가 '파일'로 나왔다
@@ -110,10 +111,11 @@ function memberSpawn(at: ExecAt, argv: string[], stdio: Array<"ignore" | "pipe">
   return spawn(full[0], full.slice(1), { stdio });
 }
 // 자식 stderr 를 문자열로 수집(진단). 스트림 null 이면 no-op.
+//  ⚠ stdout·stderr 모두 **조각을 모았다가 한 번에** 푼다(stream-text) — 조각마다 글자로 바꾸면 64KB 경계에 걸린 한글이
+//   깨져 «같은 내용인데 다르다» 가 된다(#4135 — AGENTS.md 가 8초마다 다시 쓰이던 원인).
 function collectErr(c: ChildProcess): { get: () => string } {
-  let err = "";
-  c.stderr?.on("data", (d) => (err += d));
-  return { get: () => err.trim() };
+  const err = collectText(c.stderr);
+  return { get: () => err.get().trim() };
 }
 
 export interface LsEntry { name: string; type: "dir" | "file"; size: number; mtime: number; link?: boolean; linkTarget?: string; }
@@ -130,12 +132,11 @@ export function memberLs(osUser: string, absPath: string): Promise<LsEntry[]> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", LS_JS, absPath], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member ls exit ${code}`));
-      try { resolve(JSON.parse(out || "[]") as LsEntry[]); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "[]") as LsEntry[]); } catch (e) { reject(e as Error); }
     });
   });
 }
@@ -151,43 +152,51 @@ export function memberShOut(osUser: string, script: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["sh", "-c", script], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
-    c.on("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err.get() || `member sh exit ${code}`))));
+    c.on("close", (code) => (code === 0 ? resolve(out.get()) : reject(new Error(err.get() || `member sh exit ${code}`))));
   });
 }
 
 // 멤버 uid 로 node 한 줄(고정 리터럴)을 돌리고 stdin JSON → stdout JSON 을 받는다(#1719 session-project — 세션 폴더 안
 //  마커·링크·셔틀을 격리 홈(700)에 쓰려면 이 통로뿐이다). 스크립트는 우리 코드의 **고정 리터럴**, 값은 전부 stdin JSON.
-export function memberNodeJson<T>(osUser: string, js: string, input: unknown): Promise<T> {
+//  opts.timeoutMs — 그 안에 안 끝나면 자식을 끝내고(SIGTERM) 실패로 돌려준다(사람이 기다리는 조회용 — #4672 같은 이름 후보).
+//   중계 너머의 프로세스까지 멈춘다는 보장은 아니다 — 스크립트가 스스로 시간 상한을 지는 것이 먼저고, 이것은 기다리는 쪽의 안전판이다.
+export function memberNodeJson<T>(osUser: string, js: string, input: unknown, opts: { timeoutMs?: number } = {}): Promise<T> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", js], ["pipe", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
-    c.on("error", reject);
+    const out = collectText(c.stdout);
+    let timer: NodeJS.Timeout | null = null;
+    c.on("error", (e) => { if (timer) clearTimeout(timer); reject(e); });
     if (!c.stdin) return reject(new Error("member node: no stdin"));
+    if (opts.timeoutMs) timer = setTimeout(() => { c.kill(); reject(new Error(`member node: ${opts.timeoutMs}ms 안에 끝나지 않음`)); }, opts.timeoutMs);
     c.stdin.on("error", reject);
     c.stdin.end(JSON.stringify(input));
     c.on("close", (code) => {
+      if (timer) clearTimeout(timer);
       if (code !== 0) return reject(new Error(err.get() || `member node exit ${code}`));
-      try { resolve(JSON.parse(out || "null") as T); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "null") as T); } catch (e) { reject(e as Error); }
     });
   });
 }
 
-// mtime(ms, floor) — 프로젝트 저장소(#4064)의 파일 도장이 멤버 경계에서도 로컬과 같은 자로 나오게(main #947 과 같은 필드).
+/**
+ * 격리 멤버 uid 로 stat. mtime(ms, floor)까지 준다 — 업로드 응답의 **결과 도장**이 그 값이어야
+ *  up-sync 훅이 로컬 mtime 을 맞추고 원장 기준선으로 적는다(#3787: 게이트웨이 fsp.stat 은 700 홈을 못 읽어
+ *  개인 폴더 업로드만 도장이 비어 있었다). 필드 보탬이라 size·file·dir 만 읽던 호출부엔 무영향.
+ *  ⚠ 자는 `Math.floor(mtimeMs)` — 매니페스트·원장·프로젝트 라우트와 **같아야** 한다(round 로 재면 같은 파일이
+ *   두 값으로 갈려 «바뀌었다» 오판이 난다, #762).
+ */
 export function memberStat(osUser: string, absPath: string): Promise<{ size: number; file: boolean; dir: boolean; mtime?: number } | null> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", STAT_JS, absPath], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member stat exit ${code}`));
-      try { resolve(JSON.parse(out || "null")); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "null")); } catch (e) { reject(e as Error); }
     });
   });
 }
@@ -199,12 +208,11 @@ export function memberPathProbe(osUser: string, base: string, target: string): P
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", PROBE_JS, base, target], ["ignore", "pipe", "pipe"]);
     const err = collectErr(c);
-    let out = "";
-    c.stdout?.on("data", (d) => (out += d));
+    const out = collectText(c.stdout);
     c.on("error", reject);
     c.on("close", (code) => {
       if (code !== 0) return reject(new Error(err.get() || `member realpath exit ${code}`));
-      try { resolve(JSON.parse(out || "null") as PathProbe); } catch (e) { reject(e as Error); }
+      try { resolve(JSON.parse(out.get() || "null") as PathProbe); } catch (e) { reject(e as Error); }
     });
   });
 }
@@ -384,5 +392,32 @@ export function memberWriteSecretFile(osUser: string, absPath: string, data: str
     stdin.on("error", reject);
     stdin.end(data);
     c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member secret write exit ${code}`))));
+  });
+}
+
+/** 임시 비밀 스크립트(memberWriteTempSecret) — 시험이 진짜 셸로 돌려 본다(폴더 0700 · 파일 0600 · 실패하면 만든 폴더를 남기지 않는다). */
+export const MEMBER_TEMP_SECRET_SCRIPT = 'umask 077; d=$(mktemp -d "${TMPDIR:-/tmp}/lvly-job.XXXXXXXX") || exit 1; '
+  + 'if cat > "$d/boot"; then printf "%s" "$d/boot"; exit 0; fi; rm -f -- "$d/boot"; rmdir -- "$d"; exit 1';
+
+/**
+ * 비밀을 그 멤버만 여는 **새 임시 폴더**(mktemp -d — 0700 · 추측할 수 없는 이름) 안 파일(0600)에 두고 그 경로를 돌려준다(#5082 박스 위
+ *  작업 판의 부트 비밀). 경로를 부르는 쪽이 정하지 않는다 — 그 멤버가 폴더를 새로 만들므로 남이 미리 심어 둔 파일 · 링크에 쓸 일이 없다.
+ *  값은 stdin 이다(argv · 프로세스 목록에 안 남는다 — memberWriteSecretFile 과 같은 규약). 읽는 쪽이 파일과 폴더를 지운다.
+ */
+export function memberWriteTempSecret(osUser: string, data: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", MEMBER_TEMP_SECRET_SCRIPT], ["pipe", "pipe", "pipe"]);
+    const err = collectErr(c);
+    const out = collectText(c.stdout);
+    c.on("error", reject);
+    const stdin = c.stdin;
+    if (!stdin) return reject(new Error("member temp secret: no stdin"));
+    stdin.on("error", reject);
+    stdin.end(data);
+    c.on("close", (code) => {
+      const p = out.get().trim();
+      if (code === 0 && p.startsWith("/") && p.endsWith("/boot")) return resolve(p);
+      reject(new Error(err.get() || `member temp secret exit ${code}`));
+    });
   });
 }

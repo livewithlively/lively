@@ -104,8 +104,12 @@ test("[#3752-④ 엣지11] ★ 배선 — 복원은 «모름» 에서 기본 409
   //  ⚠ 순서가 계약이다: false(살아있음)면 already 로 끝나고, null 은 force 없이는 409 다.
   assert.match(src, /if \(goneVerdict === false\) \{ res\.json\(\{ ok: true, already: true, id \}\); return; \}/,
     "라이브 경합 방어(확답으로 살아있음 → already)가 사라졌다");
-  assert.match(src, /if \(goneVerdict === null && !force\) \{[\s\S]{0,300}?HttpError\(409/,
+  //  #3870 — 그 409 를 만드는 자리가 `stateUnknownRestore` 헬퍼로 모였다(세 군데가 같은 문구·같은 canForce 를
+  //   내야 해서). 계약은 그대로다: null 갈래는 force 없이는 **던진다**.
+  assert.match(src, /if \(goneVerdict === null && !force\) \{[\s\S]{0,300}?throw stateUnknownRestore\(/,
     "«모름» 을 조용히 already 로 접거나, force 없이 강제 복원하고 있다");
+  assert.match(src, /function stateUnknownRestore\([\s\S]{0,400}?HttpError\(409[\s\S]{0,400}?body: \{ canForce: true \}/,
+    "그 409 가 409 가 아니거나, 화면이 [강제로 되살리기] 를 그릴 근거(canForce)를 안 싣는다");
   assert.match(src, /const force = req\.query\.force === "1"/, "사람의 선택을 받는 입구가 없다");
 });
 
@@ -113,7 +117,10 @@ test("[#3752-④ 엣지11ᵇ] ★ 배선 — 화면의 [이어서 열기] 가 40
   //  종전엔 이 버튼이 already 를 받고 «잠시 뒤 다시 눌러 주세요» 만 반복했다 — 그 «잠시 뒤» 는 오지 않는다.
   const src = srcOf("../../web/session-chat.ts");
   assert.match(src, /pd\.forceRestore \? '\?force=1' : ''/, "사람이 고른 뒤에도 force 를 안 싣는다");
-  assert.match(src, /e\?\.status === 409 && !pd\.forceRestore/, "409(상태 불명)를 다른 실패와 같이 다룬다");
+  //  #3870 — 판정이 «상태코드 409» 에서 «서버가 실은 canForce» 로 좁혀졌다. 같은 라우트의 409 중 노드
+  //   오프라인·무응답·좌표없음은 force 로 안 풀려서, 상태코드만 보면 헛 버튼이 선다(그리고 그 헛 버튼을
+  //   **다른 화면들**은 아예 못 그렸다 — 그게 #3870 의 본체다).
+  assert.match(src, /canForceRestore\(e\) && !pd\.forceRestore/, "409(상태 불명)를 다른 실패와 같이 다룬다");
   //  ⚠ 기본값으로 force 를 싣지 않는다 — 자동 경로가 옛 세션을 둘로 만들지 않게(#835).
   assert.doesNotMatch(src, /restore\?force=1`/, "force 가 기본 경로에 박혀 있다");
 });

@@ -22,6 +22,8 @@
 import type { GitCredentialSecret } from "../org/credentials/git-credential-store.js";   // 타입 전용 — 런타임 간선 아님
 import type { ExecAt } from "../terminal/terminal-member-fs.js";                        // 타입 전용 — 런타임 간선 아님
 import type { LivelyUser } from "../context.js";                                        // 타입 전용 — 런타임 간선 아님
+import type { NodeOp } from "../node/protocol.js";                                       // 타입 전용 — 런타임 간선 아님
+import type { SessionHostTargetWhy } from "../node/self-node.js";                        // 타입 전용 — 런타임 간선 아님
 // ⚠ 위 「런타임 import 금지」의 유일한 예외(#2599 T2). exec-topology 는 **import 가 0 인 순수 잎**이고
 //  이 번들에 이미 실려 있다(terminal-isolation·sessions·session-state 가 쓴다) — 즉 이 간선은 번들에
 //  아무것도 더 끌어오지 않는다. 그 불변식(잎의 순수함)은 exec-topology-single-source 시험 S3 가 지킨다.
@@ -55,10 +57,49 @@ export interface GatewayCapabilities {
     ensure: (user: LivelyUser, key: string) => Promise<string>;
     drop: (user: LivelyUser | null, key: string) => Promise<void>;
   };
+  /**
+   * 아웃박스가 한 걸음(보기·누르기·치기)을 **세션 호스트에 맡길 재료** (#2600 T2 d6 · #3773) — 호스트 고르기(사유 포함)·노드 RPC·목록 소유 판정.
+   *  셋 다 `node/registry` 에 있고 registry 는 노드 연결·스냅샷·노드 스토어를 끌고 온다. 그런데 아웃박스(`session-outbox` → `outbox-exec`)는
+   *  `terminal/sessions` 의 첫 지시 간선으로 노드 번들에 **부채로 실려 있어서**, registry 를 import 하는 순간 모듈 12개가 번들에 들어온다(실측).
+   *  노드에서는 아웃박스가 돌지 않는다(DB 가 없어 행이 안 생긴다). 게이트웨이에서 등록이 빠지면 호스트를 못 골라 **종전 경로(게이트웨이 tmux)** 로
+   *  배달한다 — 기능은 살아 있고 d6 계수만 줄지 않는다.
+   */
+  outboxHost?: {
+    pick: (sessionId: string, op: NodeOp) => { host: string | null; why: SessionHostTargetWhy };
+    rpc: (host: string, op: NodeOp, args: Record<string, unknown>) => Promise<unknown>;
+    defersHere: () => boolean;
+  };
+  /**
+   * 세션 작업 폴더의 공개범위 판정(#4687) — 공유 루트에서 고른 폴더가 안 보이거나 그 **아래**에 그 사람이 못 보는 곳
+   *  (잠긴 프로젝트 폴더·잠긴 공유 폴더)이 있으면 던진다(404·403). DB 를 탄다 → 게이트웨이 전용.
+   *  노드 에이전트에는 등록이 없어 undefined 이고 호출부(createSession)는 판정 없이 지나간다 — 노드 세션의 subpath 는
+   *  그 컴퓨터의 경로라 서버의 공유 폴더와 뜻이 다르다(routes.ts 홈 입구의 #4551 노드 제외와 같은 판단).
+   */
+  assertSessionCwdVisible?: (user: LivelyUser, rootKey: string, subpath: string) => Promise<void>;
+  /**
+   * 세션에 붙인 앱 폴더(#4684) — createSession 이 세션 컨테이너를 청할 때 실을 «붙어 있어야 할 앱» 목록(붙은 앱 기록 × 붙인 사람의
+   *  동의 × 앱 상태)과, 새 id 복원 때 옛 세션의 붙은 앱을 새 id 로 넘기기. DB 를 탄다 → 게이트웨이 전용.
+   *  노드 에이전트에는 등록이 없어 undefined 이고 호출부는 목록을 싣지 않는다(브로커가 앱 폴더를 건드리지 않는다).
+   */
+  sessionAppFolders?: {
+    listFor: (sessionId: string) => Promise<string[]>;
+    carry: (fromId: string, toId: string) => Promise<number>;
+    /** 승계한 뒤 만들기가 실패했을 때 — 한 번도 안 뜬 그 id 의 붙은 앱 기록을 지운다. */
+    drop: (sessionId: string) => Promise<number>;
+    /** 만든 직후 — 확보 응답의 앱 폴더 결과를 남기고(#4786 — 못 읽은 목록은 undefined), 실은 목록과 지금 목록이 다르면 한 번 더 맞춘다(기다리지 않는다). */
+    afterCreate: (sessionId: string, sent: readonly string[] | undefined, madeApps?: unknown, ensureStartedAt?: number) => void;
+  };
+  /**
+   * 이 워크스페이스가 구성원 AI 계정(Claude) 커넥터를 쓰나(#4213 T6 #4427 — org_runtime_config.allow_member_ai_connectors).
+   *  «allowed» 가 아니면(blocked · unknown) createSession·대화 런타임이 claude 에 claude.ai 커넥터를 싣지 않는다 —
+   *  판정은 terminal/claude-ai-connectors-policy.ts 한 곳(fail-closed). DB 를 탄다 → 게이트웨이 전용. 노드 에이전트에는 등록이 없어
+   *  undefined 이고 그 판정은 «막지 않음» 이다 — 노드 세션은 그 사람 컴퓨터의 Claude 라 이 정책은 안내문으로만 닿는다.
+   */
+  memberAiConnectorsPolicy?: () => Promise<"allowed" | "blocked" | "unknown">;
 }
 
 /** 선언된 능력 이름 — 배선 가드가 이 목록으로 index.ts 를 검사한다(추가하면 가드가 자동으로 요구한다). */
-export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat"] as const;
+export const GATEWAY_CAPABILITY_NAMES = ["materializeMemberGit", "resolveGitSecret", "leaseGitSecretForNode", "kitSeedDeps", "mintAppToken", "materializeAppAssets", "harnessSeat", "outboxHost", "assertSessionCwdVisible", "sessionAppFolders", "memberAiConnectorsPolicy"] as const;
 
 const caps: GatewayCapabilities = {};
 

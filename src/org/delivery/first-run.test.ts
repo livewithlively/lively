@@ -3,7 +3,7 @@
 //  그 오판정이 다시 나지 않도록, '흔적이 하나라도 있으면 홈'을 케이스로 고정한다.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isFirstRun, isWelcomePending } from "./first-run.js";
+import { isFirstRun, isWelcomePending, onboardingLockSession, ONBOARDING_LOCK_MS } from "./first-run.js";
 
 test("아무 흔적도 없는 사람만 처음 설정을 본다", () => {
   assert.equal(isFirstRun({ onboardedAt: null, shownAt: null, welcomeInProgress: false, everCalledMcp: false, everHadSession: false }), true);
@@ -126,4 +126,45 @@ test("R6 deferredAt 을 안 주는 옛 호출부는 '안 미룸'으로 본다", 
 test("아직 안 보여준 사람은 하다 만 자리가 흔적을 이긴다(#2207 유지)", () => {
   // 온보딩이 스스로 흔적을 만든다(「내 컴퓨터에 잇기」→ MCP 호출) — 그래도 하던 자리로 돌아가야 한다.
   assert.equal(isFirstRun({ onboardedAt: null, shownAt: null, welcomeInProgress: true, everCalledMcp: true, everHadSession: true }), true);
+});
+
+// ── #5058 — 처음 설정은 리브 대화(앱 연결)까지가 한 덩어리다. 끝나기 전엔 화면이 그 세션을 지킨다.
+const DONE = "2026-10-27T12:00:00Z";
+const T0 = Date.parse(DONE);
+const OPENED = "2026-10-27T12:00:05Z";
+const base = { onboarded_at: DONE, welcome: { done_at: DONE, connect_at: DONE }, liv_session: { id: "box-liv", at: OPENED } };
+test("L1 [연결할게요]로 끝냈고 그때 연 리브 세션이 있고 리브가 끝 표식을 안 찍었으면 그 세션을 지킨다", () => {
+  assert.equal(onboardingLockSession(base, T0 + 60_000), "box-liv");
+});
+test("L2 [나중에 할게요]로 끝냈으면(connect_at 없음) 리브 세션이 있어도 잠그지 않는다 — 레일 [리브]로 연 세션이 처음 설정이 되면 안 된다", () => {
+  assert.equal(onboardingLockSession({ ...base, welcome: { done_at: DONE } }, T0 + 60_000), null);
+});
+test("L3 리브가 «처음 연결·처음 수집 끝» 을 찍었으면 풀린다", () => {
+  assert.equal(onboardingLockSession({ ...base, welcome: { ...base.welcome, collect_done_at: DONE } }, T0), null);
+});
+test("L4 [연결할게요] 뒤 [나중에 할게요]를 눌렀으면 풀린다 — 그 전의 미룸은 세지 않는다", () => {
+  assert.equal(onboardingLockSession({ ...base, welcome_deferred_at: "2026-10-27T12:05:00Z" }, T0), null);
+  assert.equal(onboardingLockSession({ ...base, welcome_deferred_at: "2026-10-27T11:00:00Z" }, T0), "box-liv");
+});
+test("L5 상한이 지나면 풀린다 — 리브가 표식을 못 찍어도 영영 갇히지 않는다", () => {
+  assert.equal(onboardingLockSession(base, T0 + ONBOARDING_LOCK_MS + 1), null);
+});
+test("L6 처음 설정을 안 끝냈거나 세션 좌표가 없으면 잠그지 않는다", () => {
+  assert.equal(onboardingLockSession({ ...base, onboarded_at: null }, T0), null);
+  assert.equal(onboardingLockSession({ ...base, liv_session: null }, T0), null);
+  assert.equal(onboardingLockSession({ onboarded_at: DONE }, T0), null);
+  assert.equal(onboardingLockSession(null, T0), null);
+});
+test("L6b [연결할게요] 한참 뒤에 연 세션 · 그 전부터 있던 세션은 그 처음 설정의 대화가 아니다", () => {
+  assert.equal(onboardingLockSession({ ...base, liv_session: { id: "box-later", at: "2026-10-27T12:30:00Z" } }, T0 + 40 * 60_000), null);
+  assert.equal(onboardingLockSession({ ...base, liv_session: { id: "box-old", at: "2026-10-20T09:00:00Z" } }, T0), null);
+  assert.equal(onboardingLockSession({ ...base, liv_session: { id: "box-liv" } }, T0), null);
+});
+test("L7 방금 보낸 처음 설정은 새로고침·창 닫기 뒤에도 다시 연다 — 하루가 지났거나 미뤘으면 아니다", () => {
+  const shown = "2026-10-27T12:00:00Z", t = Date.parse(shown);
+  const f = { onboardedAt: null, shownAt: shown, welcomeInProgress: false, everCalledMcp: false, everHadSession: false };
+  assert.equal(isFirstRun({ ...f, now: t + 5 * 60_000 }), true);
+  assert.equal(isFirstRun({ ...f, now: t + ONBOARDING_LOCK_MS + 1 }), false);
+  assert.equal(isFirstRun({ ...f, deferredAt: "2026-10-27T12:01:00Z", now: t + 60_000 }), false);
+  assert.equal(isFirstRun({ ...f, onboardedAt: "2026-10-27T12:02:00Z", now: t + 60_000 }), false);
 });

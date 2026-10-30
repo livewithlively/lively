@@ -61,6 +61,7 @@ async function oidcConfigFromDb(): Promise<OidcConfig | null> {
       allowedDomains: s.allowed_domains,
       label: s.label || defaultOidcLabel(s.issuer),
       trustUnverifiedEmail: s.trust_unverified_email,
+      idpLogout: s.idp_logout,
       scopes: oidcScopes(),
     };
   } catch (err) {
@@ -79,6 +80,8 @@ export interface OidcDiscovery {
   token_endpoint: string;
   jwks_uri: string;
   issuer: string;
+  // 선택 항목(OIDC RP-Initiated Logout 1.0) — 없는 IdP 도 있다(구글은 안 준다). 없으면 로그아웃이 웹 세션만 끝낸다.
+  end_session_endpoint?: string;
 }
 
 const HTTP_TIMEOUT_MS = 10_000;
@@ -107,6 +110,9 @@ export async function discover(cfg: OidcConfig): Promise<OidcDiscovery> {
     token_endpoint: doc.token_endpoint,
     jwks_uri: doc.jwks_uri,
     issuer: doc.issuer ?? cfg.issuer,
+    // https 만 받는다 — 로그아웃 때 id_token(개인정보)을 이 주소의 쿼리로 보내므로, issuer 와 같은 기준을 둔다.
+    ...(typeof doc.end_session_endpoint === "string" && /^https:\/\//i.test(doc.end_session_endpoint)
+      ? { end_session_endpoint: doc.end_session_endpoint } : {}),
   };
   discoveryCache = { issuer: cfg.issuer, at: now, doc: full };
   return full;
@@ -251,10 +257,11 @@ export function buildAuthorizeUrl(
 }
 
 // 인가코드 → id_token. client_secret 은 요청 바디로만 나가고 절대 로그에 남기지 않는다.
+//  검증한 원문 idToken 도 함께 돌려준다 — 로그아웃 때 IdP 에 id_token_hint 로 되돌려 줄 재료다(oidc-logout.ts).
 export async function exchangeCode(
   cfg: OidcConfig, disc: OidcDiscovery,
   args: { code: string; redirectUri: string; codeVerifier: string; nonceHash: string },
-): Promise<IdTokenClaims> {
+): Promise<{ claims: IdTokenClaims; idToken: string }> {
   const res = await fetch(disc.token_endpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
@@ -274,7 +281,8 @@ export async function exchangeCode(
   }
   const tok = (await res.json()) as { id_token?: string };
   if (!tok.id_token) throw new Error("토큰 응답에 id_token 이 없다");
-  return verifyIdToken(tok.id_token, cfg, disc, args.nonceHash);
+  const claims = await verifyIdToken(tok.id_token, cfg, disc, args.nonceHash);
+  return { claims, idToken: tok.id_token };
 }
 
 // 로그인에 쓸 이메일 확정 — 신원의 전부다. 여기서 느슨해지면 남의 계정으로 들어갈 수 있다.

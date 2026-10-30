@@ -14,9 +14,10 @@
 //  (4b) ~/.config/opencode/      ← plugin/lively.js 삭제 + opencode.json 의 mcp.lively·managed permission 키 제거 + AGENTS.md 블록 제거.
 //  (4c) ~/.gemini/               ← config/plugins/lively/ 통째 삭제(전부 우리 파일) + antigravity-cli/settings.json 의 managed 승인 규칙 제거.
 //  (4d) ~/.grok/                 ← hooks/lively-grok.json·rules/lively.md 삭제(전부 우리 파일) + config.toml 의 lively-managed 센티넬 블록 제거.
+//  (4e) ~/.cursor/               ← hooks.json 의 cursor-adapter 엔트리 · mcp.json 의 원장 서버(설치 전 사용자 값 복원) · cli-config.json 의 원장 승인 규칙만 제거.
 //  (5) ~/.lively/               ← 기본 휴지통 이동(~/.lively.removed-<stamp>, 되돌릴 수 있음). --purge 면 하드 삭제.
 //
-// 사용법: node setup/user-uninstall.mjs --allow-host-effects [--dry-run] [--purge] [--harness claude|codex|opencode|antigravity|grok|all] [--yes]
+// 사용법: node setup/user-uninstall.mjs --allow-host-effects [--dry-run] [--purge] [--harness claude|codex|opencode|antigravity|grok|cursor|all] [--yes]
 //   (보통은 uninstall-mac.sh 가 호출. 직접 실행해도 동일.)
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 리다이렉트(라이브 보호). 미지정 시 os.homedir().
 
@@ -46,6 +47,18 @@ const AGY_HOOKS = join(GEMINI, "config", "hooks.json");   // 훅은 글로벌 �
 const GROK = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
 const GROK_HOOKS_FILE = join(GROK, "hooks", "lively-grok.json");
 const GROK_RULES_FILE = join(GROK, "rules", "lively.md");
+// cursor(#4927) — 설치기와 같은 계산: hooks.json·mcp.json 은 ~/.cursor 고정, cli-config.json 만
+//  CURSOR_CONFIG_DIR > $XDG_CONFIG_HOME/cursor > ~/.cursor(LIVELY_HOME 격리 시 env 무시).
+const CURSOR = join(HOME, ".cursor");
+const CURSOR_CLI_DIR = process.env.LIVELY_HOME ? CURSOR
+  : (String(process.env.CURSOR_CONFIG_DIR || "").trim()
+    || (String(process.env.XDG_CONFIG_HOME || "").trim() ? join(String(process.env.XDG_CONFIG_HOME).trim(), "cursor") : CURSOR));
+const CURSOR_HOOKS = join(CURSOR, "hooks.json");
+const CURSOR_MCP = join(CURSOR, "mcp.json");
+const CURSOR_CLI_CONFIG = join(CURSOR_CLI_DIR, "cli-config.json");
+// 우리 훅 엔트리의 정체성 — 설치기 isOurCursorHook 과 같은 규칙(설치↔제거 대칭).
+const isOurCursorHook = (e) => !!e && typeof e === "object" && !Array.isArray(e)
+  && typeof e.command === "string" && /[/\\]\.lively[/\\]hooks[/\\]cursor-adapter\.mjs\b/.test(e.command);
 
 const args = process.argv.slice(2);
 const DRY = args.includes("--dry-run");
@@ -361,6 +374,30 @@ function uninstallHarnessAssets(harness) {
   log(`  ✓ ${harness} 하네스 자산 ${removed}개 제거`);
 }
 
+// «여기 연결» 커맨드(#5016) — 설치기의 writeConnectCommands 가 깐 파일만 지운다(표식 줄로 우리 것인지 확인).
+//  같은 이름이어도 표식이 없으면 사용자 파일이라 보존한다. 클로드 폴더는 설치기와 같은 계산(CLAUDE_CONFIG_DIR 우선, 샌드박스 밖이면 무시).
+const CONNECT_MARK = "lively-managed: record-scope(#5016)";   // user-install.mjs CONNECT_MARK 와 같은 리터럴(설치↔제거 대칭)
+const claudeDirForRemove = () => {
+  const ccd = String(process.env.CLAUDE_CONFIG_DIR || "").trim();
+  if (!ccd) return join(HOME, ".claude");
+  if (!process.env.LIVELY_HOME) return ccd;
+  const norm = (p) => { const x = String(p || "").replace(/[\\/]+/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? x.toLowerCase() : x; };
+  const c = norm(ccd), r = norm(process.env.LIVELY_HOME);
+  return (c === r || c.startsWith(r + "/")) ? ccd : join(HOME, ".claude");
+};
+export function removeConnectCommands(dir, label) {
+  let removed = 0;
+  for (const id of ["lively-connect", "lively-disconnect"]) {
+    const f = join(dir, `${id}.md`);
+    let cur = "";
+    try { cur = readFileSync(f, "utf8"); } catch { continue; }
+    if (!cur.includes(CONNECT_MARK)) continue;
+    if (DRY) { log(`  [dry-run] ${label} ${id}.md 제거 예정`); continue; }
+    try { rmSync(f, { force: true }); removed++; } catch { /* fail-soft */ }
+  }
+  if (removed) log(`  ✓ ${label} «여기 연결» 커맨드 ${removed}개 제거`);
+}
+
 // (4.5) 서버 하네스 관측에서 이 머신 제거(#893) — ~/.lively 삭제 **전에**. 삭제 후엔 machine-id·토큰이 사라져
 //  못 부른다. 재설치 시 새 machine-id 가 생겨 서버에 같은 host 가 중복으로 남는 걸 막는다(haruui 사례). 비치명.
 async function syncServerHarnessRemove() {
@@ -532,9 +569,88 @@ function uninstallGrokWiring() {
   //  읽었을 뿐이다. claude 하네스 제거(uninstallAutoApprove)가 함께 돌면 그때 걷힌다(--harness all 경로).
 }
 
+// (4e) Cursor — user-install.mjs installCursor 의 역연산(#4927). 전부 **우리 것만** 걷는다:
+//  hooks.json 의 우리 엔트리 · mcp.json 의 원장 이름(덮기 전 사용자 값이 있으면 되돌림) · cli-config.json 의 원장 규칙.
+function readJsonObj(path) {
+  try { const v = JSON.parse(readFileSync(path, "utf8")); return (v && typeof v === "object" && !Array.isArray(v)) ? v : null; }
+  catch { return null; }
+}
+function uninstallCursorWiring() {
+  // ① ~/.cursor/hooks.json — 우리 엔트리만 제거(사용자 훅 보존). 남는 게 version 뿐이면 파일을 지운다(백업됨).
+  if (existsSync(CURSOR_HOOKS)) {
+    const cur = readJsonObj(CURSOR_HOOKS);
+    if (!cur) log("  ⚠️ ~/.cursor/hooks.json 파싱 실패 — 수동으로 cursor-adapter.mjs 엔트리 제거 필요");
+    else {
+      const hooks = (cur.hooks && typeof cur.hooks === "object" && !Array.isArray(cur.hooks)) ? { ...cur.hooks } : {};
+      let removed = 0;
+      for (const [ev, arr] of Object.entries(hooks)) {
+        if (!Array.isArray(arr)) continue;
+        const kept = arr.filter((e) => !isOurCursorHook(e));
+        removed += arr.length - kept.length;
+        if (kept.length === arr.length) continue;
+        if (kept.length) hooks[ev] = kept; else delete hooks[ev];
+      }
+      if (!removed) log("  · ~/.cursor/hooks.json — lively 엔트리 없음. 무수정");
+      else if (DRY) log(`  [dry-run] ~/.cursor/hooks.json — lively 엔트리 ${removed}개 제거 예정(사용자 훅 보존)`);
+      else {
+        backup(CURSOR_HOOKS, "cursor-hooks.uninstall.bak");
+        const next = { ...cur, hooks };
+        const onlyOurs = !Object.keys(hooks).length && Object.keys(next).every((k) => k === "version" || k === "hooks");
+        try {
+          if (onlyOurs) rmSync(CURSOR_HOOKS, { force: true });
+          else writeFileSync(CURSOR_HOOKS, JSON.stringify(next, null, 2) + "\n");
+          log(`  ✓ ~/.cursor/hooks.json — lively 엔트리 ${removed}개 제거(사용자 훅 보존, 백업됨)`);
+        } catch (e) { log(`  ⚠️ hooks.json 정리 실패: ${e.message}`); }
+      }
+    }
+  } else log("  · ~/.cursor/hooks.json 없음 — 건너뜀");
+  // ② ~/.cursor/mcp.json — 원장(managed-cursor-mcp.json)의 이름만. 설치 전 같은 이름의 사용자 값이 있었으면 되돌린다.
+  let ledger = []; try { ledger = JSON.parse(readFileSync(join(LIVELY, "managed-cursor-mcp.json"), "utf8")); if (!Array.isArray(ledger)) ledger = []; } catch { /* 없음 = 불가침 */ }
+  if (existsSync(CURSOR_MCP) && ledger.length) {
+    const cur = readJsonObj(CURSOR_MCP);
+    const msBad = !!cur && cur.mcpServers !== undefined && (!cur.mcpServers || typeof cur.mcpServers !== "object" || Array.isArray(cur.mcpServers));
+    if (!cur || msBad) log(`  ⚠️ ~/.cursor/mcp.json ${cur ? "의 mcpServers 가 객체가 아님" : "파싱 실패"} — 무수정(수동으로 lively 서버 제거 필요)`);
+    else {
+      let ub = {}; try { ub = JSON.parse(readFileSync(join(LIVELY, "cursor-mcp-user-backup.json"), "utf8")) || {}; } catch { /* */ }
+      const ms = { ...(cur.mcpServers || {}) };
+      for (const name of ledger) {
+        if (ub[name] && typeof ub[name] === "object") ms[name] = ub[name];   // 설치 전 사용자 값 복원
+        else delete ms[name];
+      }
+      if (DRY) log(`  [dry-run] ~/.cursor/mcp.json — ${ledger.join(", ")} 제거 예정(사용자 서버 보존)`);
+      else {
+        backup(CURSOR_MCP, "cursor-mcp.uninstall.bak");
+        try {
+          writeFileSync(CURSOR_MCP, JSON.stringify({ ...cur, mcpServers: ms }, null, 2) + "\n");
+          // 원장·복원본은 되돌린 뒤 걷는다 — 남겨 두면 재설치 때 '이미 스냅샷함'으로 읽혀 그 뒤 바뀐 사용자 값을 못 잡는다.
+          for (const f of ["managed-cursor-mcp.json", "cursor-mcp-user-backup.json"]) { try { rmSync(join(LIVELY, f), { force: true }); } catch { /* */ } }
+          log(`  ✓ ~/.cursor/mcp.json — ${ledger.join(", ")} 제거(사용자 서버 보존, 백업됨)`);
+        } catch (e) { log(`  ⚠️ mcp.json 정리 실패: ${e.message}`); }
+      }
+    }
+  } else log(`  · ~/.cursor/mcp.json — ${existsSync(CURSOR_MCP) ? "lively 원장 없음" : "없음"}. 무수정`);
+  // ③ cli-config.json — 원장(managed-cursor-permission.json)의 규칙만 permissions.allow 에서 걷는다.
+  let managed = []; try { managed = JSON.parse(readFileSync(join(LIVELY, "managed-cursor-permission.json"), "utf8")); if (!Array.isArray(managed)) managed = []; } catch { /* */ }
+  if (existsSync(CURSOR_CLI_CONFIG) && managed.length) {
+    const cur = readJsonObj(CURSOR_CLI_CONFIG);
+    if (!cur || !cur.permissions || !Array.isArray(cur.permissions.allow)) log("  · Cursor cli-config.json — 승인 목록 없음/파싱 실패. 무수정");
+    else {
+      const set = new Set(managed);
+      const allow = cur.permissions.allow.filter((e) => !set.has(e));
+      if (allow.length === cur.permissions.allow.length) log("  · Cursor cli-config.json — lively 승인 규칙 없음. 무수정");
+      else if (DRY) log("  [dry-run] Cursor cli-config.json — lively 승인 규칙 제거 예정(사용자 규칙 보존)");
+      else {
+        backup(CURSOR_CLI_CONFIG, "cursor-cli-config.uninstall.bak");
+        try { writeFileSync(CURSOR_CLI_CONFIG, JSON.stringify({ ...cur, permissions: { ...cur.permissions, allow } }, null, 2) + "\n"); log("  ✓ Cursor cli-config.json — lively 승인 규칙 제거(사용자 규칙 보존, 백업됨)"); }
+        catch (e) { log(`  ⚠️ cli-config.json 정리 실패: ${e.message}`); }
+      }
+    }
+  }
+}
+
 // 설치 하네스 감지(센티넬/훅 존재). rc 블록 존재도 함께 본다.
 function detect() {
-  const out = { claude: false, codex: false, opencode: false, antigravity: false, grok: false, rc: false };
+  const out = { claude: false, codex: false, opencode: false, antigravity: false, grok: false, cursor: false, rc: false };
   const sp = join(HOME, ".claude", "settings.json");
   if (existsSync(sp)) { try { const h = (JSON.parse(readFileSync(sp, "utf8")).hooks) || {}; out.claude = Object.values(h).some((es) => Array.isArray(es) && es.some((e) => Array.isArray(e?.hooks) && e.hooks.some((x) => String(x?.command || "").includes(LIVELY_HOOK_MARK)))); } catch { /* */ } }
   const cp = join(CODEX, "config.toml");
@@ -543,6 +659,13 @@ function detect() {
   out.antigravity = existsSync(AGY_PLUGIN);
   out.grok = existsSync(GROK_HOOKS_FILE)
     || (existsSync(join(GROK, "config.toml")) && (() => { try { return readFileSync(join(GROK, "config.toml"), "utf8").includes(GRK_BEGIN); } catch { return false; } })());
+  // cursor(#4927) — hooks.json 에 우리 엔트리가 있거나, MCP 원장이 있다(훅 배선이 보류된 구번들 설치도 MCP 는 걷어야 한다).
+  out.cursor = (() => {
+    const h = existsSync(CURSOR_HOOKS) ? readJsonObj(CURSOR_HOOKS) : null;
+    const hooks = h && h.hooks && typeof h.hooks === "object" ? h.hooks : {};
+    if (Object.values(hooks).some((arr) => Array.isArray(arr) && arr.some(isOurCursorHook))) return true;
+    return existsSync(join(LIVELY, "managed-cursor-mcp.json"));
+  })();
   for (const f of [".zshrc", ".bashrc", ".bash_profile", ".profile"]) { const rc = join(HOME, f); if (existsSync(rc)) { try { const t = readFileSync(rc, "utf8"); if (t.includes(RC_BEGIN) || t.includes(PATH_NODE_BEGIN) || t.includes(PATH_CLI_BEGIN)) { out.rc = true; break; } } catch { /* */ } } }
   return out;
 }
@@ -554,11 +677,12 @@ async function main() {
   // 하네스 제거 표 — 감지·제거·라벨을 한 줄로(#1689). 종전엔 claude/codex 가 want/if/문구 네 곳에 하드코딩돼
   //  opencode 가 이 경로(실제 `lively uninstall` 이 타는 경로)에서 통째로 빠져 있었다.
   const HARNESS_REMOVE = {
-    claude: () => { uninstallClaudeSettings(); uninstallAutoApprove(); cleanupEmptyClaudeSettings(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); },
-    codex: () => { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); },
-    opencode: () => { uninstallOpencodeWiring(); uninstallHarnessAssets("opencode"); },
-    antigravity: () => { uninstallAntigravityWiring(); uninstallHarnessAssets("antigravity"); },
-    grok: () => { uninstallGrokWiring(); uninstallHarnessAssets("grok"); },
+    claude: () => { uninstallClaudeSettings(); uninstallAutoApprove(); cleanupEmptyClaudeSettings(); deregisterClaudeMcp(); deregisterExtraMcp(); uninstallHarnessAssets("claude"); removeConnectCommands(join(claudeDirForRemove(), "commands"), "Claude"); },
+    codex: () => { uninstallCodexConfig(); uninstallCodexAgents(); deregisterCodexMcp(); uninstallHarnessAssets("codex"); removeConnectCommands(join(CODEX, "prompts"), "Codex"); },
+    opencode: () => { uninstallOpencodeWiring(); uninstallHarnessAssets("opencode"); removeConnectCommands(join(OPENCODE, "command"), "OpenCode"); },
+    antigravity: () => { uninstallAntigravityWiring(); uninstallHarnessAssets("antigravity"); removeConnectCommands(join(GEMINI, "config", "workflows"), "Antigravity"); },
+    grok: () => { uninstallGrokWiring(); uninstallHarnessAssets("grok"); removeConnectCommands(join(GROK, "commands"), "Grok"); },
+    cursor: () => { uninstallCursorWiring(); uninstallHarnessAssets("cursor"); removeConnectCommands(join(CURSOR, "commands"), "Cursor"); },
   };
   const ALL = Object.keys(HARNESS_REMOVE);
   const want = harnessArg === "all" ? ALL : [harnessArg];

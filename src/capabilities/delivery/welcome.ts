@@ -22,7 +22,7 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-import type { LivJoin } from "../../org/store/members.js";
+import type { SetupWelcome } from "../../org/liv/setup-status.js";
 
 /** 갈래 후보 상한 — 서랍이 열 개를 넘으면 고르는 일이 일이 된다. */
 const MAX_DRAWERS = 10;
@@ -263,6 +263,18 @@ export const welcomeCapabilities: Capability[] = [
       return welcomeSnapshot(userId);
     }),
 
+  //  (#5167) 처음 설정에서 올린 파일이 지식이 되기까지의 단계 — 화면 구석의 진행 띠가 이것만 말한다(org/liv/setup-status.ts).
+  //   setup:null = 말할 것 없음(파일을 안 올렸다 · 리브가 오지 않는 갈래). 못 읽으면 오류로 답한다 — 화면은 단계를 그대로 두고 다시 묻는다.
+  restRead("me_welcome_setup", "처음 설정 뒤 정리 단계",
+    "처음 설정에서 올린 파일이 지식이 되기까지 지금 어느 단계인가 — 올리는 중 · 리브가 곧 시작 · 규칙 세우는 중 · 정리 중(남은 수) · 자격 승인 필요 · 끝 · 멈춤.",
+    [{ method: "GET", paths: ["/api/ui/me/welcome/setup"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile } = await import("../../org/store.js");
+      return { setup: await welcomeSetup(userId, (await getLivProfile(userId)).welcome ?? null) };
+    }),
+
   // ── ② LLM 분석 ───────────────────────────────────────────────────────────
   restRead("me_welcome_analyze", "올린 자료를 AI 가 본다",
     "방금 올린 자료의 **파일 목록을 실제로 AI 에게 보여** 자료함 서랍을 제안받는다. 리브 턴과 같은 길로 " +
@@ -362,14 +374,14 @@ export const welcomeCapabilities: Capability[] = [
       const dir = path.join(abs, ".lively-task", input.id);
       const { tailTask } = await import("../../node/tasks.js");
       const from = Number.isFinite(input.from) && input.from >= 0 ? Math.floor(input.from) : 0;
-      const t = await tailTask(dir, from) as { chunk?: string; done?: boolean; exit?: number | null; next?: number };
+      const t = await tailTask(dir, from, osUser) as { chunk?: string; done?: boolean; exit?: number | null; next?: number };
       // ⚠ 판정은 **스트림 전체**에서 읽는다. 화면은 진행을 이어 읽느라 from 을 앞으로 밀어서,
       //  끝났을 때의 조각에는 정작 답이 안 들어 있다(실측 2026-08-26: AI 는 제대로 답했는데
       //  화면은 "판정을 읽지 못했다"로 떨어졌다 — 우리 읽기 쪽 결함이었다).
       //  done 일 때 한 번 더 처음부터 읽는 비용은 턴 하나 분량이라 무시할 만하다.
       if (!t.done) return { ...t, drawers: [] };
       const full = from > 0
-        ? await tailTask(dir, 0) as { chunk?: string }
+        ? await tailTask(dir, 0, osUser) as { chunk?: string }
         : t;
       return { ...t, drawers: parseDrawers(lastAssistantText(String(full.chunk ?? ""))) };
     }, false, {
@@ -431,9 +443,11 @@ export const welcomeCapabilities: Capability[] = [
         return t;
       };
 
-      //  (#1631) **합류자인가 — 서버가 스스로** 정한다(처음 설정 현황과 같은 판정). 화면이 보낸 값은 받지 않는다 —
-      //   받으면 초대로 들어온 사람이 요청 한 줄로 팀 구조를 바꾸고 리브를 띄울 수 있다.
-      const joining = await currentJoinFact(userId);
+      //  (#4970) 팀의 구조를 만들 수 있는가는 **관리 권한**이 정한다 — «누가 먼저 왔나»(합류 판정)가 아니다. 종전 판정은 셀프호스트
+      //   기본 워크스페이스에서 등록부가 답을 못 해 인원수로 폴백했고, 관리자 계정을 먼저 만든 회사에서 대표가 합류자로 읽혔다.
+      //   권한은 서버가 아는 사실이다 — 화면이 보낸 값은 받지 않는다(받으면 요청 한 줄로 팀 구조를 바꿀 수 있다).
+      const { isAdmin } = await import("../principal.js");
+      const admin = isAdmin(user);
 
       // ── 부를 이름 ──
       const nickname = s(input.name, 80);
@@ -459,12 +473,13 @@ export const welcomeCapabilities: Capability[] = [
           "/api/tenant/account-name", { name: nickname });
       }
 
-      // ── 팀의 구조(갈래·증류기·레인·묶음) — 워크스페이스를 연 사람만 만든다(#1631, 원준 결정 2026-09-13) ──
-      //  초대로 들어온 사람은 팀이 이미 만들어 둔 것을 쓴다. 그 사람의 답(직무·용도)으로 팀 묶음을 심거나 레인을 세우면
+      // ── 팀의 구조(갈래·증류기·레인·묶음) — 관리 권한이 있는 사람만 만든다(#4970 · 종전 #1631 «워크스페이스를 연 사람만») ──
+      //  권한 없는 구성원은 팀이 이미 만들어 둔 것을 쓴다. 그 사람의 답(직무·용도)으로 팀 묶음을 심거나 레인을 세우면
       //   신입의 처음 설정이 팀 설정을 바꾼다(리뷰 §3-2 ②). 이름·하는 일·완료 표식·진행 지우기는 아래에서 그대로 한다.
+      //  (#4970) 처음 설정은 이제 서랍을 묻지 않는다(인사 → 이름 → 외부 앱 연결) — 화면이 보내는 drawers 가 비어 있어 사실상 묶음 시드만 남는다.
       const created: string[] = [];
       const skipped: string[] = [];
-      if (!joining.is_join) {
+      if (admin) {
         // ── 자료함 갈래 ── 사람이 승인한 것만 만든다. 이미 있으면 건너뛴다(다시 눌러도 안전).
         const wanted = Array.isArray(input.drawers) ? input.drawers.slice(0, MAX_DRAWERS) : [];
         const existing = new Set((await listCategories(null).catch(() => [] as Array<{ key?: string }>)).map((c) => String(c.key ?? "")));
@@ -511,8 +526,8 @@ export const welcomeCapabilities: Capability[] = [
           } catch (e) { console.warn(`[welcome] 레인 뼈대를 만들지 못했습니다: ${(e as Error)?.message ?? e}`); }
         }
         // ── 묶음 시드(#1631) ── 갈래(카테고리)는 금세 열 개를 넘는다. 그때 화면이 한 줄로 늘어서면 «내 일» 이 안 보인다.
-        //  그래서 그 사람의 무대·직무에서 나온 묶음(3~5칸)을 미리 넣어 둔다(v6/category-groups.ts — 판정 질문·전순서·받침 칸을 갖춰
-        //  「기타」가 없다). 묶음보다 먼저 생긴 카테고리(서랍·계정 서버 기본 카테고리)도 이 자리에서 그 칸들에 넣는다(placeUngroupedCategories).
+        //  그래서 그 사람의 무대·직무에서 나온 세 칸 묶음을 미리 넣어 둔다(v6/category-groups.ts — 세 갈래의 분할이라
+        //  「기타」가 없다). 묶음보다 먼저 생긴 카테고리(서랍·계정 서버 기본 카테고리)도 이 자리에서 세 칸에 넣는다(placeUngroupedCategories).
         //  묶음은 **화면에서만 보이는 층**이라 분류·증류·소환은 한 칸도 안 바뀐다.
         //  ⚠ 멱등: 이미 묶음이 있으면 아무것도 안 한다(사람이 고친 이름·순서를 덮지 않는다).
         //  ⚠ 비치명: 못 만들어도 처음 설정은 끝난 것이다 — 묶음은 나중에 화면·리브가 언제든 만들 수 있다.
@@ -523,15 +538,15 @@ export const welcomeCapabilities: Capability[] = [
       }
 
       // ── 업무 방식과 결정 ── 리브의 기억이 사는 자리에 남긴다(다음 세션의 리브가 이걸 읽는다).
-      //  (#3872, 원준 결정 2026-09-14) 워크스페이스 용도는 그 자리를 연 사람이 정한다 — 초대로 들어온 사람의 답은 용도가 되지 않는다.
-      //   welcome.stage 는 workspacePurposeStage 가 «먼저 답한 사람» 순으로 읽는 칸이라, 합류자에게는 화면이 보낸 값 대신
-      //   지금의 용도(아무도 안 정했으면 null)를 적는다. 화면은 합류자에게 용도를 묻지 않지만 주소(?scene=)·판정 전 틈으로 올 수 있다.
+      //  (#3872, 원준 결정 2026-09-14) 워크스페이스 용도는 그 자리를 정할 수 있는 사람이 정한다 — (#4970) 관리 권한이 없는 사람의 답은 용도가 되지 않는다.
+      //   welcome.stage 는 workspacePurposeStage 가 «먼저 답한 사람» 순으로 읽는 칸이라, 권한 없는 사람에게는 보낸 값 대신
+      //   지금의 용도(아무도 안 정했으면 null)를 적는다. (#4970) 처음 설정 화면은 용도를 더는 묻지 않는다 — 옛 화면·직접 호출만 보낸다.
       const { WORK_ASIS_SEP, workspacePurposeStage } = await import("../../org/store/members.js");
       const { currentTenant } = await import("../../org/tenant-context.js");
       const job = s(input.job, 200);
-      const stage = joining.is_join
-        ? await workspacePurposeStage(currentTenant()?.id ?? null).catch(() => null)
-        : s(input.stage, 40);
+      const stage = admin
+        ? s(input.stage, 40)
+        : await workspacePurposeStage(currentTenant()?.id ?? null).catch(() => null);
       const nowline = s(input.nowline, 300);
       const firstOrder = s(input.first_order, 400);
       const asis = [stage ? STAGE_LABEL[stage] ?? stage : null, job].filter(Boolean).join(WORK_ASIS_SEP) || null;
@@ -557,27 +572,53 @@ export const welcomeCapabilities: Capability[] = [
       //   welcome 만 찍으면 다음 부팅에 first_run 이 여전히 true 라 처음 설정이 또 뜬다.
       //  (#1631) 이미 열린 리브 세션이 있으면 그 좌표를 지킨다 — welcome 은 통째로 덮이는 필드라 여기서 안 실으면 사라진다.
       const { getLivProfile: readLiv } = await import("../../org/store.js");
-      const priorSession = (await readLiv(userId).catch(() => null))?.welcome?.session_id ?? null;
+      const priorWelcome = (await readLiv(userId).catch(() => null))?.welcome ?? null;
+      const priorSession = priorWelcome?.session_id ?? null;
+      //  같은 리브 세션을 다시 쓰는 반영(처음 설정을 다시 눌렀다)이면 그 세션에 이미 찍힌 진행 표식과 갈래를 지킨다 — welcome 은 통째로
+      //   덮이는 칸이라 안 실으면 사라지고, 사라지면 2턴이 같은 세션에 또 나간다(처음 수집 끝·증류 지시·포기). 판정은 org/liv/welcome-marks.ts.
+      //  (#4970) 새로 끝내는 사람에게는 리브 세션이 없다 — 갈래(flow)를 적지 않는다(리브 2턴 후보가 되지 않는다).
+      const { carryWelcomeProgress, composeWelcomeMarks } = await import("../../org/liv/welcome-marks.js");
+      const keep = carryWelcomeProgress(priorWelcome);
+      //  (#5060) 올린 파일이 지식이 되는 길 — 처음 설정에서 파일을 올렸으면 2턴(증류 지시)이 그 파일로 카테고리·정리 규칙을 세운다.
+      //   갈래(flow)는 화면이 고른 다음 걸음(next)으로 정한다: [연결할게요] = connect(연결 대화가 끝나면 같은 세션에 2턴 — 세션 id 는
+      //   me_liv_open from:"welcome" 이 적는다) · [나중에 할게요] + 올린 파일 = files(올리기가 끝나면 스윕이 리브 세션을 새로 열어 2턴).
+      //   ⚠ 관리 권한이 있는 사람만 — 2턴은 팀의 카테고리를 만든다(위 #4970 «팀의 구조»와 같은 선).
+      //   ⚠ files 는 서버에서 띄울 AI 가 있을 때만 — 없으면 새로 열 세션이 없어 스윕이 한 번 실패하고 포기할 뿐이다(싼 판정: 자격 파일).
+      const nowIso = new Date().toISOString();
+      //  로그인한 AI 는 2턴 후보(관리 권한)일 때만 잰다(자격 파일 — 싼 판정). 잰 것은 welcome.harnesses 로 남긴다 — 2턴 스윕이 리브 세션을
+      //   새로 열 때 그 자리에서 로그인을 못 재면 이 AI 로 연다(코덱스만 이은 사람에게 claude 세션이 열리던 것, 원준님 2026-10-30).
+      const loggedAi = admin
+        ? await (async () => {
+          const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
+          return memberLoggedInHarnessesAny(userId).catch(() => [] as string[]);
+        })()
+        : [];
+      const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+      //  서버 AI(files 갈래의 조건) = 헤드리스 규약을 아는 하네스에 로그인돼 있다.
+      const serverAi = input.next === "later" && (input.upload === "running" || input.upload === "done")
+        && loggedAi.some((k) => HEADLESS_KEYS.includes(k));
+      const fresh = welcomeFlowMarks({ admin, next: input.next, upload: input.upload, serverAi, now: nowIso });
       const profile = await appendLivProfile(userId, {
-        welcome: { done_at: new Date().toISOString(), drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null },
+        //  갈래·2턴 표식은 옮겨 실은 것(keep)이 이기고, 이번에 새로 올린 파일의 표식은 fresh 가 이긴다(composeWelcomeMarks).
+        //  (#5058) connect_at — [연결할게요]로 끝냈다는 표식. 셸은 이 표식이 있고 리브가 처음 수집 끝을 찍기 전까지 그 대화를 지킨다
+        //   (first-run.ts onboardingLockSession). [나중에 할게요]로 끝내면 적지 않는다 — 그 사람은 잠기지 않는다.
+        welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...composeWelcomeMarks(fresh, keep),
+          connect_at: input.connect === true ? nowIso : null, harnesses: loggedAi.length ? loggedAi : (priorWelcome?.harnesses ?? null) },
         onboarded: true,
       });
+      //  (#5167) 파일 갈래인데 올리기가 이미 끝났다 — 리브를 정비 주기(매니지드 5분)까지 기다리게 하지 않고 지금 연다.
+      //   스윕이 판정한다(같은 함수 · 같은 멱등 표식). 늦거나 실패해도 다음 정비가 같은 일을 한다 — 기다리지 않는다.
+      if (profile.welcome?.flow === "files" && profile.welcome?.upload_done_at) {
+        void import("../../org/liv/second-turn-sweep.js").then(({ kickLivSecondTurn }) => kickLivSecondTurn()).catch(() => { /* 다음 정비가 한다 */ });
+      }
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
       //  ⚠ 비치명: 못 지워도 끝난 것은 끝난 것이다(GET 이 done 일 때 progress 를 내주지 않는다).
       const { setLivWelcomeProgress } = await import("../../org/store.js");
       await setLivWelcomeProgress(userId, null).catch(() => { /* 비치명 */ });
-      // ── 리브 킥오프(#1631) ── 처음 설정이 끝났으니 리브 세션을 열고 1턴(현황 보고)을 넣는다. 화면은 응답의 liv.href 로 간다.
-      //  ⚠ 비치명: 리브가 못 떠도(AI 미로그인·세션 한도 등) 처음 설정은 끝난 것이다 — 사람이 답한 것은 이미 반영됐다.
-      //   사유는 liv.error 로 싣는다(감추지 않는다). 다시 눌러도 세션을 또 열지 않는다(priorSession 재사용).
-      //  (#1631, 원준 결정 2026-09-13) 초대로 들어온 사람에게는 리브를 띄우지 않는다 — 세션도 1턴도 2턴도 없다
-      //   (2턴 스윕은 welcome.session_id 가 있는 사람만 본다). 건너뛴 이유는 liv.reason 으로 싣고, 화면이 마무리 문구를
-      //   가를 판정(joining)도 함께 돌려준다.
-      const liv = joining.is_join
-        ? { session_id: null, href: null, reason: "join" }
-        : await kickoffLivAfterWelcome(user, { priorSession, drawers: created, firstOrder, decisions, work: profile.work ?? null,
-          purpose: stage ? STAGE_PURPOSE[stage] ?? stage : null });
-      const welcome = profile.welcome ? { ...profile.welcome, session_id: liv.session_id ?? profile.welcome.session_id ?? null } : null;
-      return { ok: true, created, skipped, welcome, liv, joining: { is_join: joining.is_join, via: joining.via } };
+      //  (#4970) 리브 킥오프는 없다 — 처음 설정이 끝나며 리브 세션을 저절로 열던 길(#1631 → #4213 T13)을 걷었다.
+      //   외부 앱 연결은 사람이 [연결할게요]를 눌렀을 때 me_liv_open 이 리브 세션에 맡긴다(없으면 로그인한 AI 로 연다 — #4970 «리브 = 세션 하나»).
+      //  flow(#5060) — 정리 지시(리브 2턴)가 어느 갈래로 오는가. 화면은 이 값으로만 «리브가 정리해 둘게요» 를 말한다(약속을 지어내지 않게).
+      return { ok: true, created, skipped, welcome: profile.welcome ?? null, flow: profile.welcome?.flow ?? null };
     }, false, {
       name: z.string().optional().describe("이렇게 불러 주세요(닉네임)"),
       stage: z.string().optional().describe("company|solo|study (옛 academy|student 도 받는다)"),
@@ -588,168 +629,50 @@ export const welcomeCapabilities: Capability[] = [
       share: z.string().optional().describe("me|team|dept|ext — 자료를 보는 범위"),
       nowline: z.string().optional().describe("시간을 가장 많이 쓰는 일"),
       first_order: z.string().optional().describe("첫 지시로 고른 문장"),
+      upload: z.enum(["running", "done"]).optional()
+        .describe("(#5060) 처음 설정에서 파일 올리기를 시작했나 — running = 아직 올라가는 중(끝나면 me_liv_profile_set upload_done) · done = 다 올렸다"),
+      next: z.enum(["connect", "later"]).optional()
+        .describe("(#5060) 처음 설정의 마지막 고름 — connect = 외부 앱 연결 대화로 간다 · later = 나중에(올린 파일이 있으면 정리 세션이 따로 열린다)"),
+      connect: z.boolean().optional().describe("(#5058) [연결할게요]로 끝냈다 — 이어지는 리브 대화(앱 연결)까지가 처음 설정이다"),
     }),
 ];
 
-//  ⚠ 두 표를 나눠 둔 이유 — 1단 답은 **두 곳**으로 간다.
-//   · STAGE_LABEL → work.asis(계정 층): "이 사람이 하는 일". 워크스페이스가 둘이어도 한 벌이라 사람 말로 적는다.
-//   · STAGE_PURPOSE → welcome.stage(워크스페이스 층): "이 자리가 담는 것". 워크스페이스마다 다르다.
-//   한 표로 합치면 #2265 가 고친 덮어쓰기가 그대로 되살아난다.
+/**
+ * (순수, #5060) 처음 설정 반영이 welcome 에 찍을 갈래·올리기 표식. 화면이 보낸 값(next·upload)은 **모양만** 믿는다 — 모르는 값은 없는 것.
+ *  · connect — 관리 권한 + [연결할게요]. 세션 id 는 연결 대화를 연 뒤 me_liv_open(from:"welcome")이 적는다.
+ *  · files   — 관리 권한 + [나중에 할게요] + 올린 파일 + 서버에서 띄울 AI. 올리기가 끝나면 스윕이 리브 세션을 새로 연다.
+ *  · 그 밖   — null(정리 지시 없음). 올리기 표식은 갈래와 무관하게 남긴다(2턴이 기다릴 근거).
+ */
+export function welcomeFlowMarks(i: { admin: boolean; next: unknown; upload: unknown; serverAi: boolean; now: string }):
+  { flow: "connect" | "files" | null; upload_started_at: string | null; upload_done_at: string | null } {
+  const upload = i.upload === "running" || i.upload === "done" ? i.upload : null;
+  const flow = !i.admin ? null
+    : i.next === "connect" ? "connect"
+    : i.next === "later" && upload && i.serverAi ? "files"
+    : null;
+  return { flow, upload_started_at: upload ? i.now : null, upload_done_at: upload === "done" ? i.now : null };
+}
+
+//  ⚠ 1단 답은 **두 곳**으로 간다 — 사람 말(STAGE_LABEL)은 work.asis(계정 층: "이 사람이 하는 일"), 답 그대로의 key 는
+//   welcome.stage(워크스페이스 층: "이 자리가 담는 것"). 한 칸에 합치면 #2265 가 고친 덮어쓰기가 그대로 되살아난다.
+//   (#4970) 리브 1턴에 싣던 자리 이름 표(STAGE_PURPOSE)는 킥오프와 함께 걷었다.
 const STAGE_LABEL: Record<string, string> = {
   company: "회사·조직에서 팀과 함께 일한다", solo: "1인·프리랜서로 여러 일을 한다",
   study: "학업·연구를 한다",
   academy: "학교·연구실에서 연구한다", student: "학생으로 수업·시험·진로를 준비한다",
 };
-export const STAGE_PURPOSE: Record<string, string> = {
-  company: "회사·팀 업무", solo: "내 사업·프리랜스", study: "학업·연구",
-  //  옛 값(#1631 이전에 답한 사람)도 같은 자리를 가리킨다 — 화면에서만 사라졌다.
-  academy: "학업·연구", student: "학업·연구",
-};
 const SHARE_LABEL: Record<string, string> = {
   me: "나만 본다", team: "우리 팀이 같이 본다", dept: "여러 부서와 나눈다", ext: "고객·외부에 낸다",
 };
 
-// ── 합류 사실(#1631, 원준 결정 2026-09-13) ─────────────────────────────────────────
-//  처음 설정의 갈래는 인원수가 아니라 **«초대로 들어왔나»** 가 정한다. 종전 판정(자기 계정으로 들어오는 사람 ≥ 2)은
-//   동료가 먼저 들어와 있으면 워크스페이스를 만든 사람도 «합류자» 로 읽었다.
-//  · 매니지드 — 계정 서버가 안다(POST /api/tenant/membership → { ok, is_creator, joined_via, account_existed }).
-//    처음 설정 현황은 **폴링 자리**라 매번 묻지 않는다: 첫 성공 값을 워크스페이스 층(liv_profile.join)에 남기고 재사용한다.
-//    못 물으면(대상 없음·404·502·시간 초과·계약과 다른 모양) **저장하지 않고** 종전 판정(인원수)으로 폴백한다 — 다음 조회가 다시 묻는다.
-//  · 셀프호스트 — 등록부(gw_workspace.owner_member)가 안다. primary(등록부 판정 없음)는 인원수 폴백.
-//    «초대 전부터 계정이 있었나» 는 이 사람이 다른 워크스페이스에서 처음 설정을 끝낸 적이 있나로 본다.
-export type JoinVia = "creator" | "invite";
-export interface JoinFact { is_join: boolean; via: JoinVia | null; existing_account: boolean | null }
-export interface JoinFactDeps {
-  managed: boolean;
-  /** 이 워크스페이스 층에 남아 있는 합류 사실(liv_profile.join). */
-  stored: { via?: unknown; existing_account?: unknown } | null | undefined;
-  /** 계정 서버에 묻는다 — 물을 대상이 없으면 null, 실패면 던진다. */
-  askCp: () => Promise<unknown>;
-  /** 첫 성공 값을 남긴다. */
-  save: (j: LivJoin) => Promise<unknown>;
-  /** 셀프호스트 등록부 판정 — primary·등록부 없음이면 null. */
-  registryVia: () => Promise<JoinVia | null>;
-  /** 셀프호스트 — 이 사람이 다른 워크스페이스에서 처음 설정을 끝낸 적이 있나. */
-  onboardedElsewhere: () => Promise<boolean>;
-  /** 폴백 재료 — 이 워크스페이스를 자기 계정으로 쓰는 사람 수(countWorkspacePeople). */
-  people: number;
-  now: () => string;
-}
-
-const isVia = (v: unknown): v is JoinVia => v === "creator" || v === "invite";
-
-/** 계정 서버 답 → 합류 사실. 계약과 다른 모양이면 null — 지어내지 않는다(via 만 맞고 account_existed 가 없어도 버린다). */
-export function parseMembership(raw: unknown): { via: JoinVia; existing_account: boolean } | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const r = raw as Record<string, unknown>;
-  //  ⚠ 판정의 축은 joined_via 다(«초대로 들어왔나»). is_creator 는 주인을 넘겨받은 뒤 joined_via 와 갈릴 수 있어 판정에 쓰지 않는다.
-  if (r.ok !== true || !isVia(r.joined_via) || typeof r.account_existed !== "boolean") return null;
-  return { via: r.joined_via, existing_account: r.account_existed };
-}
-
-/** 합류 사실 판정 — 의존은 주입한다(welcome-join.test.ts 가 표로 잡는다). 던지지 않는다. */
-export async function resolveJoinFact(d: JoinFactDeps): Promise<JoinFact> {
-  const byPeople = (existing: boolean | null): JoinFact => ({ is_join: d.people >= 2, via: null, existing_account: existing });
-  if (d.managed) {
-    const s = d.stored;
-    if (s && isVia(s.via) && typeof s.existing_account === "boolean") {
-      return { is_join: s.via === "invite", via: s.via, existing_account: s.existing_account };
-    }
-    let got: { via: JoinVia; existing_account: boolean } | null = null;
-    try { got = parseMembership(await d.askCp()); } catch { got = null; }
-    if (!got) return byPeople(null);
-    //  저장이 실패해도 이번 판정은 쓴다 — 값이 틀린 게 아니라 못 남긴 것뿐이고, 다음 조회가 다시 묻는다.
-    await Promise.resolve().then(() => d.save({ ...got, at: d.now() })).catch(() => { /* 비치명 */ });
-    return { is_join: got.via === "invite", via: got.via, existing_account: got.existing_account };
-  }
-  const [via, elsewhere] = await Promise.all([
-    d.registryVia().catch(() => null),
-    d.onboardedElsewhere().catch(() => null),
-  ]);
-  if (via) return { is_join: via === "invite", via, existing_account: elsewhere };
-  return byPeople(elsewhere);
-}
-
-/** 계정 서버를 못 물었을 때 다시 묻기까지 기다리는 시간. 처음 설정 화면은 읽는 동안 1.5초마다 현황을 되묻는다 —
- *  계정 서버가 느리거나 죽어 있으면 조회마다 제한 시간(5초)을 다 기다리게 되므로, 실패한 사람은 잠시 폴백으로만 답한다(저장은 안 한다). */
-const CP_JOIN_RETRY_MS = 60_000;
-const cpJoinRetryAt = new Map<string, number>();
-
-/** 지금 요청의 워크스페이스에서 이 사람의 합류 사실 — resolveJoinFact 에 실제 의존을 꽂는다. */
-async function joinFactFor(userId: string, liv: { join?: unknown } | null, people: number): Promise<JoinFact> {
-  const { managedMode, registryModeActive } = await import("../../org/tenancy/state.js");
-  const { currentTenant } = await import("../../org/tenant-context.js");
-  const tenant = currentTenant();
-  const retryKey = `${tenant?.slug ?? ""}|${userId}`;
-  return resolveJoinFact({
-    managed: managedMode(),
-    stored: (liv?.join ?? null) as JoinFactDeps["stored"],
-    people,
-    now: () => new Date().toISOString(),
-    askCp: async () => {
-      if ((cpJoinRetryAt.get(retryKey) ?? 0) > Date.now()) return null;
-      const { resolveCpTarget, callCp } = await import("./managed-cp.js");
-      try {
-        //  계정 id·slug 는 callCp 가 서버 신원에서 싣는다(화면이 보내는 값이 아니다).
-        const t = await resolveCpTarget({ userId, email: "", scopes: [], projects: [] } as unknown as LivelyUser, { optional: true });
-        if (!t) return null;
-        const r = await callCp(t, "/api/tenant/membership", {}, { timeoutMs: 5_000 });
-        cpJoinRetryAt.delete(retryKey);
-        return r;
-      } catch (e) {
-        //  백오프 표는 «잠깐 쉬기» 라 오래 들고 있을 이유가 없다 — 쌓일 때 이미 지난 항목을 걷는다(격리 리뷰 2026-09-13).
-        if (cpJoinRetryAt.size > 200) { const now = Date.now(); for (const [k, at] of cpJoinRetryAt) if (at <= now) cpJoinRetryAt.delete(k); }
-        cpJoinRetryAt.set(retryKey, Date.now() + CP_JOIN_RETRY_MS);
-        throw e;
-      }
-    },
-    save: async (j) => {
-      const { setLivJoin } = await import("../../org/store/members.js");
-      await setLivJoin(userId, j);
-    },
-    registryVia: async () => {
-      if (!registryModeActive()) return null;
-      const { PRIMARY_TENANT_ID, getWorkspaceBySlug } = await import("../../org/tenancy/registry.js");
-      //  primary 는 요청 맥락이 없다(tenant-middleware) — 거기는 등록부가 «누가 만들었나» 를 말해 주지 않으니 폴백한다.
-      if (!tenant || tenant.id === PRIMARY_TENANT_ID) return null;
-      const w = await getWorkspaceBySlug(tenant.slug);
-      if (!w) return null;
-      return w.owner_member === userId ? "creator" : "invite";
-    },
-    onboardedElsewhere: async () => {
-      const { onboardedInOtherWorkspace } = await import("../../org/store/members.js");
-      return onboardedInOtherWorkspace(userId, tenant?.id ?? null);
-    },
-  });
-}
-
-/** 반영(me_welcome_apply)이 스스로 판정할 때 — 처음 설정 현황과 같은 재료를 같은 규칙으로 읽는다. */
-async function currentJoinFact(userId: string): Promise<JoinFact> {
-  const { getLivProfile, countWorkspacePeople } = await import("../../org/store.js");
-  const { managedMode } = await import("../../org/tenancy/state.js");
-  const [liv, people] = await Promise.all([
-    getLivProfile(userId).catch(() => null),
-    countWorkspacePeople({ managed: managedMode() }).catch(() => 0),
-  ]);
-  return joinFactFor(userId, liv, Number(people) || 0);
-}
-
 /**
- * (#1631) 처음 설정 현황 **실측** — GET /api/ui/me/welcome 의 본문이자 리브 1턴 프롬프트의 재료.
- *  한 함수라야 화면과 리브가 **같은 숫자**를 본다(따로 조립하면 둘이 어긋난 채로 각자 옳다고 말한다).
+ * (#1631) 처음 설정 현황 **실측** — GET /api/ui/me/welcome 의 본문.
  *  테넌트 축은 호출 컨텍스트(요청의 워크스페이스)가 정한다 — 여기서 고르지 않는다.
  */
 export async function welcomeSnapshot(userId: string) {
   const { getMember, getLivProfile } = await import("../../org/store.js");
   const { listSources, countSources } = await import("../../v6/source-store.js");
   const { listCategories } = await import("../../v6/category-store.js");
-  //  #3872·#1631 — 팀 소개의 숫자(인원)와 합류 판정의 폴백 재료. 판정 자체는 아래 joinFactFor(«초대로 들어왔나»).
-  const { countWorkspacePeople, getOrgProfile } = await import("../../org/store.js");
-  //  (#1631) 이 워크스페이스의 용도를 먼저 정한 사람의 값 — 합류자는 물려받고, 없을 때만 묻는다.
-  const { workspacePurposeStage } = await import("../../org/store/members.js");
-  const { currentTenant } = await import("../../org/tenant-context.js");
-  const { countKnowledge } = await import("../../v6/knowledge-store.js");
-  const { managedMode } = await import("../../org/tenancy/state.js");
 
   // AI 가 이어져 있나 — **분석을 누르기 전에** 알아야 한다. 안 그러면 사람이 «읽어 주세요» 를 누르고
   //  나서야 거절을 본다.
@@ -759,54 +682,34 @@ export async function welcomeSnapshot(userId: string) {
   //   setup-token 리스는 **그 프로필이 없는 자리**(남의 노드 위탁)에서 쓰는 보조 수단이라, 그걸로 판정하면
   //   웹 터미널에서 이미 로그인한 사람을 «AI 안 이었음» 으로 잘못 막는다.
   //  ⚠ 여기는 **폴링 자리**다(화면이 온보딩 내내 되묻는다) — 로그인 프로브(실측 4.3초·상한 25초)를 붙이면
-  //   조회마다 네트워크 왕복이 붙는다. 그래서 싼 판정(자격 파일)만 쓴다. 자격 파일이 없는 하네스를 구하는
-  //   일은 **결정 지점**에서 한 번만 한다 — 아래 kickoffLivAfterWelcome 참조(#1631). ai-login.test ⑥ 이 지킨다.
+  //   조회마다 네트워크 왕복이 붙는다. 그래서 싼 판정(자격 파일)만 쓴다. 자격 파일이 없는 하네스까지 재는
+  //   일은 **결정 지점**에서 한 번만 한다 — (#4970) 리브 세션을 새로 열 때(me_liv_open). ai-login.test ⑥ 이 지킨다.
   const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
   const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
 
-  const [member, liv, entries, total, cats, loggedIn, people, others, orgProfile, knowledgeN, wsStage] = await Promise.all([
+  const [member, liv, entries, total, cats, loggedIn] = await Promise.all([
     getMember(userId),
     getLivProfile(userId),
     //  ⚠ 뷰어는 **이 사람**이다(2026-09-12) — 종전엔 null(특권)이라 팀 워크스페이스에 갓 들어온 구성원에게도
-    //   남이 올린 비공개 자료의 제목이 최대 200건 실려 나갔다(처음 설정 화면·리브 1턴 프롬프트 양쪽).
+    //   남이 올린 비공개 자료의 제목이 최대 200건 실려 나갔다.
     listSources({ limit: SAMPLE_CAP, offset: 0 }, userId).catch(() => [] as Array<Record<string, unknown>>),
     countSources({}, userId).catch(() => 0),
     listCategories(null).catch(() => [] as Array<Record<string, unknown>>),
     memberLoggedInHarnessesAny(userId).catch(() => [] as string[]),
-    //  ⚠ «사람» 은 자기 계정으로 들어오는 사람만이다(countWorkspacePeople 주석) — 명부 전체를 세면 매니지드가 모든
-    //   워크스페이스에 심는 운영 계정(admin/ops@lvly.io) 때문에 **혼자 쓰는 개인 워크스페이스도 «구성원 2명 팀»** 이 된다
-    //   (2026-09-13 실측). 조회 실패는 0 으로 접혀 합류자 갈래가 안 열릴 뿐 화면은 종전대로 뜬다.
-    countWorkspacePeople({ managed: managedMode() }).catch(() => 0),
-    //  #3872(2026-09-14) — 팀 소개가 말하는 수(joining.others_count)는 **나를 뺀** 사람이다. 보는 사람까지 세면 혼자 쓰던 워크스페이스에
-    //   초대로 들어온 사람이 «구성원 2명» 을 본다(신고: 개인 워크스페이스에 한 명이 합류하자 «구성원 2명»). member_count 는 나를 포함한
-    //   전체로 남는다(합류 판정 폴백). 뺄셈이 아니라 id 로 뺀다 — 보는 사람이 잣대에 안 걸리는 경우(신원이 아직 안 심김)에 남의 한 명을 지우지 않게.
-    countWorkspacePeople({ managed: managedMode(), except: userId }).catch(() => 0),
-    getOrgProfile().catch(() => null as { display_name?: string | null; name?: string | null } | null),
-    //  #3872 — 설치가 심은 사용 설명서(시드 런북 3건)는 «팀이 쌓은 지식» 이 아니다. 그걸 세어 «지식 3건 — 합류 전에
-    //   만들어진 것이라 당신이 쓴 건 아닙니다» 라고 읽어 줬다(2026-09-13 실측, 개인 워크스페이스).
-    countKnowledge({ excludeSeed: true }, userId).catch(() => 0),
-    workspacePurposeStage(currentTenant()?.id ?? null).catch(() => null),
   ]);
+  //  (#4970) 합류 판정(joining — «초대로 들어왔나»)·팀 소개 숫자는 걷었다. 처음 설정은 첫 관리자·합류자를 가르지 않는다(인사 → 이름 →
+  //   외부 앱 연결) — 갈림은 연결 스킬 안에서 서비스별 등록 상태 × 관리 권한으로 한다. 계정 서버 membership 조회도 함께 사라졌다.
   // 헤드리스 규약을 아는 하네스로만 센다 — 로그인했어도 헤드리스로 못 돌리면 분석이 안 된다.
   const aiHarnesses = loggedIn.filter((k) => HEADLESS_KEYS.includes(k));
   const rows = (entries as Array<{ kind?: string | null; title?: string | null }>);
   const done = !!(liv.welcome?.done_at || liv.onboarded_at);
-  //  인원 수 — «자기 계정으로 들어오는 사람» 만 센다(위 countWorkspacePeople). 팀 소개의 숫자이자, 합류 사실을 못 물었을 때의 폴백이다.
-  const humans = Number(people) || 0;
-  const wsName = (orgProfile?.display_name || orgProfile?.name || "").trim();
-  //  (#1631, 원준 결정 2026-09-13) 처음 설정의 갈래는 **«초대로 들어왔나»** 가 정한다(인원수가 아니다 — joinFactFor 머리말).
-  //   매니지드는 첫 성공 값을 저장해 두고 재사용하므로 이 폴링 자리에서 계정 서버를 매번 부르지 않는다.
-  const join = await joinFactFor(userId, liv, humans);
   return {
     done,   // 어느 표식이든 하나면 끝난 것(#2039 와 합류)
-    //  합류자 화면의 재료(#3872·#1631). is_join=false 면 종전(내 공간을 여는 사람) 그대로다.
-    //   existing_account — 초대 전부터 계정이 있었나(설치 장면을 보일지). 모르면 null 이고, 화면은 true 일 때만 보인다.
-    joining: { is_join: join.is_join, via: join.via, existing_account: join.existing_account, member_count: humans, others_count: Number(others) || 0, workspace_name: wsName || null, knowledge_n: Number(knowledgeN) || 0 },
-    //  (#1631) 이 워크스페이스의 용도가 **이미 정해져 있나**(먼저 답한 사람의 welcome.stage). 합류자는 있으면 물려받고 없을 때만 묻는다.
-    workspace_purpose: (wsStage as string | null) ?? null,
     done_at: liv.welcome?.done_at ?? null,
     // #2171 — **보여준 적 있나**(끝냈나와 별개). 자동 진입은 이 표식으로 평생 한 번만 한다.
     shown_at: liv.welcome_shown_at ?? null,
+    //  (#5060) 처음 설정을 데스크톱 앱 안에서 마지막으로 연 시각 — 브라우저에서 [앱 받기]를 누른 탭이 이 값으로 «앱에서 이어 하는 중» 을 안다.
+    desktop_seen_at: liv.desktop_seen_at ?? null,
     //  하다 만 자리(#2207) — 이 값이 있으면 화면은 **이름부터가 아니라 그 장면부터** 다시 연다.
     //  ⚠ 끝낸 사람에게는 내주지 않는다. 남아 있는 옛 진행이 «이어서 하기» 로 되살아나면
     //   이미 끝낸 설정을 다시 하게 된다(끝냈다는 사실이 진행보다 세다).
@@ -834,78 +737,24 @@ export async function welcomeSnapshot(userId: string) {
 export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
 
 /**
- * (#1631) 처음 설정 직후 리브 세션을 연다 — me_welcome_apply 의 마지막 걸음.
- *  · (원준 2026-09-14) **진짜 세션**(createSession, kind=task)을 연다. 헤드리스 대화 턴은 매니지드 게이트웨이에서 로컬 워커를
- *    못 띄워 500 이 나므로 폐기했다 — createSession 은 세션 호스트로 떠 매니지드에서도 된다(실측 2026-09-15).
- *    화면은 그 세션을 대화 보기로 열고(session-chat livKickoff), 지시문(첫 프롬프트)은 숨긴다.
- *  · (#4032) 그 세션이 **리브 탭의 세션**이다 — 화면은 리브 탭(href «#/liv»)으로 가고 리브 탭이 그 세션 대화창을 붙인다.
- *  · 이미 띄운 세션(priorSession)이 있으면 **다시 띄우지 않고** 그 좌표를 돌려준다(다시 눌러도 안전).
- *  · 1턴 프롬프트는 welcomeSnapshot(화면과 같은 실측) + 이 반영이 남긴 결정 + 이 워크스페이스의 수집기 목록으로 조립한다.
- *  · 어떤 실패도 던지지 않는다 — { error } 로 돌려주고 온보딩은 성공으로 끝난다(사람이 답한 것은 이미 반영됐다).
+ * (#5167) 처음 설정 뒤 단계 — 판정은 setupStatus(순수), 여기는 재료만 읽는다. 파일을 안 올렸거나 안 끝났으면 아무것도 읽지 않는다.
+ *  화면 구석 띠가 몇 시간 폴링하는 자리라 처음 설정 현황(welcomeSnapshot — 자료 200건·집계)과 떼어 따로 연다(GET /api/ui/me/welcome/setup).
+ *  · 남은 자료 = 올린 파일을 받는 켜진 정리마다의 남은 수 합(증류기 배정과 같은 질의). 그런 정리가 없으면 null.
+ *  · 자격 막힘 = 이 사람 자격 때문에 정리 잡이 멈춘 흔적이 있고, 그 뒤 되살린 자격이 없다(headlessStatusFor 의 failure — 연결 뒤 실패만 남는다).
  */
-export async function kickoffLivAfterWelcome(user: LivelyUser, o: {
-  priorSession: string | null;
-  drawers: string[];
-  firstOrder: string | null;
-  decisions: Array<{ what: string; why?: string }>;
-  work: { asis?: string; tobe?: string } | null;
-  /** 이 워크스페이스의 용도(1단 답의 사람 말). 1턴 프롬프트 맨 위에 실린다(#1631). */
-  purpose?: string | null;
-}): Promise<{ session_id: string | null; href: string | null; harness?: string; reused?: boolean; error?: string; reason?: string }> {
-  const userId = user?.userId;
-  if (!userId) return { session_id: null, href: null, error: "인증된 사용자가 아닙니다" };
-  try {
-    const { listCollectors, appendLivProfile } = await import("../../org/store.js");
-    const { buildFirstTurnPrompt } = await import("../../org/liv/first-turn.js");
-    const { livKickoff, LIV_HREF } = await import("../../org/liv/kickoff.js");
-    const { planLivKickoff } = await import("../../org/liv/kickoff-plan.js");
-    const [snap, collectors] = await Promise.all([
-      welcomeSnapshot(userId),
-      listCollectors().catch(() => [] as Array<{ label: string; preset_key: string; enabled: boolean; sync_interval_sec: number }>),
-    ]);
-    //  #1631 — 화면·게이트·1턴 프롬프트가 **같은 사실**을 봐야 한다. `snap.ai_harnesses` 는 폴링용이라 자격
-    //   **파일**이 있는 하네스만 센다 — 제미나이(antigravity)는 자격 파일이 없어 구조적으로 빠진다. 그대로
-    //   쓰면, 화면이 «Gemini 로그인이 확인됐어요» 라고 확정해 준 사람에게 리브를 **안 열어 준다**(planLivKickoff
-    //   가 skip). 여기는 온보딩당 한 번뿐이라 정확한 쪽을 쓴다 — 파일 표가 빌 때만 프로브가 돌고, 하나라도
-    //   있으면 프로브 0회다(무회귀).
-    const { memberUsableHarnesses } = await import("../../terminal/profiles.js");
-    const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
-    const usable = (await memberUsableHarnesses(userId).catch(() => snap.ai_harnesses))
-      .filter((k) => HEADLESS_KEYS.includes(k));
-    const turnInput = {
-      displayName: snap.profile.display_name,
-      purpose: o.purpose ?? null,
-      work: o.work,
-      drawers: o.drawers,
-      firstOrder: o.firstOrder,
-      decisions: o.decisions,
-      uploads: snap.uploads,
-      categories: snap.categories.map((c) => ({ name: c.name })),
-      collectors: collectors.map((c) => ({ label: c.label, preset_key: c.preset_key, enabled: c.enabled, sync_interval_sec: c.sync_interval_sec })),
-      aiHarnesses: usable,
-      //  합류 사실은 싣지 않는다 — 초대로 들어온 사람에게는 이 킥오프 자체가 불리지 않는다(#1631, me_welcome_apply).
-    };
-    //  세션을 열까 말까는 순수 판정으로(kickoff-plan) — 재사용·AI 미연결·생성 셋뿐이다.
-    const plan = planLivKickoff(o.priorSession, usable);
-    //  (#4032) 화면은 리브 탭으로 간다 — 리브 탭이 이 워크스페이스의 리브 세션(좌표·복원 이정표)을 찾아 붙인다.
-    if (plan.action === "reuse") return { session_id: plan.sessionId, href: LIV_HREF, reused: true };
-    if (plan.action === "skip") {
-      // AI 가 안 이어져 있으면 **세션을 열지 않는다.** 열어 봐야 답을 못 해 '조용히 멈춘 창'이 된다.
-      //  처음 설정은 끝난 것으로 두고(사람이 답한 건 이미 반영됐다) 사유만 돌려준다 — 화면이 «AI 연결» 로 안내한다.
-      console.info(`[welcome] 리브 킥오프 보류(${userId}) — AI 미연결`);
-      return { session_id: null, href: null, reason: plan.reason, error: "AI 를 아직 연결하지 않아 리브 세션을 열지 않았습니다" };
-    }
-    //  (#1631, 원준 2026-09-15) 진짜 세션(createSession, kind=task)을 연다 — 지시문은 화면(session-chat livKickoff)이 숨긴다.
-    //   (#4032) 그 세션이 곧 리브 탭의 세션이다 — livKickoff 가 리브 좌표(liv_session)도 적고 화면을 리브 탭(#/liv)으로 보낸다.
-    //   surface:"chat" 문안: 이 지시문은 화면에 안 보이니 리브가 «보내 주신 지시대로» 라고 말하지 않게 한다(하네스는 claude 든 아니든 같은 문안).
-    const made = await livKickoff(user, { prompt: buildFirstTurnPrompt({ ...turnInput, harness: plan.harness, surface: "chat" }), harness: plan.harness });
-    //  세션 좌표를 welcome 에 남긴다 — 다음 반영이 이걸 보고 재사용하고, 2턴(증류 트리거)이 이 세션을 찾는다.
-    const cur = await import("../../org/store.js").then((m) => m.getLivProfile(userId)).catch(() => null);
-    if (cur?.welcome) await appendLivProfile(userId, { welcome: { ...cur.welcome, session_id: made.session_id } }).catch(() => { /* 비치명 */ });
-    return { session_id: made.session_id, href: made.href, harness: made.harness };
-  } catch (e) {
-    const msg = (e as Error)?.message ?? String(e);
-    console.warn(`[welcome] 리브 킥오프 실패(${userId}) — 처음 설정은 끝난 것으로 둔다:`, msg);
-    return { session_id: null, href: null, error: msg };
-  }
+export async function welcomeSetup(userId: string, welcome: SetupWelcome | null) {
+  const { setupStatus } = await import("../../org/liv/setup-status.js");
+  if (!welcome?.done_at || !welcome.upload_started_at) return null;
+  if (!welcome.distill_at) return setupStatus({ welcome, backlog: null, credentialBlocked: false });
+  const { listDistillers, countDistillerBacklog } = await import("../../org/distill/distiller.js");
+  const { headlessStatusFor } = await import("../../org/credentials/headless-connect.js");
+  //  ⚠ 못 읽은 것을 0 으로 접지 않는다 — 0 은 «끝» 이라 띠가 «정리했어요» 를 말하고 감시를 멈춘다(격리 리뷰 2026-10-30). 실패는 던져
+  //   라우트가 오류로 답하고, 화면은 그 단계를 그대로 둔 채 다시 묻는다.
+  const [all, hs] = await Promise.all([listDistillers(), headlessStatusFor({ memberId: userId, isAdmin: false })]);
+  //  올린 파일(local_file)을 받는 켜진 정리만 센다 — 담당 종류가 비었으면(catch-all) 받는다. 슬랙 레인이 비었다고 «끝» 이 아니다.
+  const on = all.filter((d) => d.enabled && (!d.match_kinds?.length || d.match_kinds.includes("local_file")));
+  const backlog = on.length ? (await Promise.all(on.map((d) => countDistillerBacklog(d, all)))).reduce((a, b) => a + b, 0) : null;
+  const rows = hs.harnesses;
+  const credentialBlocked = rows.some((h) => !!h.failure) && !rows.some((h) => h.connected && !h.failure);
+  return setupStatus({ welcome, backlog, credentialBlocked });
 }

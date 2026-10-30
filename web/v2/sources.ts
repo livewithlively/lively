@@ -18,11 +18,14 @@
 import { TOKEN_KEY, api, apiUrl, busy, el, errorNote, loadPeopleAvatars, personDisplayName, personFace, relTime, renderMarkdown, safeHref, state, toast } from '../core.js';
 import {
   type SrcSel, type SourcesSidePlan, type PlanNode, type PlanUploader, SRC_GROUP_SELS, sysLabel, kindLabel, isChatSys,
-  planSourcesSide, normalizeSel, sideSel, showsUploaderFilter, crumbOf, emptyTextOf, originOf, placeLine, rowGroup,
+  planSourcesSide, normalizeSel, sideSel, showsUploaderFilter, crumbOf, emptyTextOf, originOf, placeLine, rowGroup, trashDoorOf, projectFileOf,
 } from './sources-plan.js';   // #4233 들어온 길 규칙(순수)
 import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판정·렌더의 단일 소유(#/f·홈 모달과 같은 코드)
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
+import { fileLinkHash } from '../lib/sharelink.js';
 import { confirmDialog } from '../ui-primitives.js';
+import { svcLogo } from '../svc-logos.js';
+import { presetSvcKey } from '../svc-icons.js';
 
 // ── 자료 한 건(목록용 얕은 행) ─────────────────────────────────────────────
 export interface SrcRow {
@@ -350,6 +353,14 @@ async function uploadFiles(files: File[]): Promise<void> {
   if (view && mounted && document.contains(mounted)) { const k = view.key; view = null; drawFor(mounted, location.hash || '#/sources' + (k ? '?' + k : '')); }
 }
 
+/** 수집한 앱의 공식 로고(svc-logos). 원준 2026-10-30 «이상한 아이콘 만들지 말고 외부 앱 로고 그대로» — 종전엔 선 글리프로
+ *  갈음했다(슬랙·디스코드 = 말풍선, 깃허브 = 문서). 로고 표에 없는 출처(파일 · 직접 적은 글 · 도메인 위키)는 null — 호출부가 선 글리프로 떨어진다. */
+export function appLogo(system: string, cls: string): HTMLElement | null {
+  const key = presetSvcKey(system);
+  const logo = svcLogo(key);
+  return logo ? el('i', { class: cls, 'data-svc': key, 'aria-hidden': 'true' }, logo) : null;
+}
+
 const sysIconKey = (s: string): string =>
   s === 'local' ? 'disk' : s === 'authored' ? 'note' : s === 'github' || s === 'gitlab' ? 'repo'
   : s === 'slack' || s === 'discord' ? 'chat' : 'dot';
@@ -511,7 +522,8 @@ function originCell(r: SrcRow): HTMLElement {
   const o = originOf(r, (name, id) => uploaderLabel(name, id));
   const f = r.fields || {};
   const lead = o.kind === 'person' && o.id ? personFace(String(f.author_external_id || o.id), 'pava v2-srl-ava', String(f.author_name || ''))
-    : el('span', { class: 'v2-srl-sic' }, treeIcon(o.kind === 'ai' ? 'spark' : o.kind === 'note' ? 'note' : o.kind === 'app' ? sysIconKey(o.sys || '') : 'up'));
+    : (o.kind === 'app' && appLogo(o.sys || '', 'v2-srl-sic v2-srl-logo'))
+      || el('span', { class: 'v2-srl-sic' }, treeIcon(o.kind === 'ai' ? 'spark' : o.kind === 'note' ? 'note' : o.kind === 'app' ? sysIconKey(o.sys || '') : 'up'));
   return el('span', { class: 'v2-srl-src ' + o.kind, title: o.text }, lead, el('span', { class: 't', text: o.text }));
 }
 
@@ -521,7 +533,7 @@ function rowOf(r: SrcRow, sel: SrcSel): HTMLElement {
   const isFile = r.kind === 'local_file';
   const lead = isFile
     ? el('span', { class: 'v2-srl-ext ' + extClass(String(f.ext || '')), text: String(f.ext || 'file').toUpperCase().slice(0, 4) })
-    : el('span', { class: 'v2-srl-ic' }, treeIcon(sysIconKey(r.external_system || 'authored')));
+    : appLogo(r.external_system || '', 'v2-srl-ic v2-srl-logo') || el('span', { class: 'v2-srl-ic' }, treeIcon(sysIconKey(r.external_system || 'authored')));
   return el('a', {
     class: 'v2-srl-row' + (view && view.selId === r.id ? ' sel' : ''), role: 'listitem',
     href: sourcesHref(sel, r.id), 'data-id': String(r.id),
@@ -624,7 +636,9 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
       onclick: () => { void authDownload(apiUrl(dl), String(s.title || 'file')); } },
       treeIcon('down'), el('span', { text: '내려받기' })));
     //  폴더 문은 내 개인 폴더이거나 누구에게나 같은 자리(공유·프로젝트)일 때만 — 남의 개인 폴더 주소(#/f?root=personal)는 내 폴더로 풀린다.
-    if (!orig || mine) acts.append(el('a', { class: 'btn btn-sm', href: String(s.external_url), text: '폴더에서 열기' }));
+    //  파일이 든 **폴더**를 연다(라벨대로) — 파일 링크(external_url)는 이제 그 파일의 자료 보기 화면이라(#4672) 여기서 다시 열면 같은 원문이 한 번 더 선다.
+    const folderRel = co.path.includes('/') ? co.path.slice(0, co.path.lastIndexOf('/')) : '';
+    if (!orig || mine) acts.append(el('a', { class: 'btn btn-sm', href: fileLinkHash(co.root, folderRel), text: '폴더에서 열기' }));
   } else if (s.external_url && String(s.external_url).startsWith('#')) {
     acts.append(el('a', { class: 'btn btn-sm v2-src-primary', href: String(s.external_url), text: '폴더에서 열기' }));
   } else if (s.external_url) {
@@ -633,33 +647,25 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
   }
   if (derived.length) acts.append(el('span', { class: 'v2-srd-kchip', text: `지식 ${derived.length}건이 여기서 나왔어요` }));
 
-  //  휴지통으로(#3778) — 종전엔 자료 앱에 지우는 문이 아예 없었다(삭제 경로 점검 2026-09-20). 되살릴 수 있는 두 갈래에만 세운다:
-  //   · 글로 적어 둔 자료(외부 좌표 없음) → 자료 삭제(감사 스냅샷 → 휴지통 ▸ 자료 탭에서 되살림)
-  //   · 프로젝트 폴더의 파일 → 그 파일을 지운다(서버가 숨김 자리에 보관 → 같은 탭에서 파일째 되살림)
-  //   남의 시스템에서 온 것(슬랙·깃허브…)은 세우지 않는다 — 지워도 다음 수집 때 다시 들어온다. 지울 곳은 원본이다.
-  //   · 내 폴더·공유 폴더의 파일 → 그 폴더에서 지운다(#3778 후속 — 브라우즈 삭제도 이제 보관한다). ⚠ **남의** 개인 폴더 파일에는 세우지 않는다:
-  //     브라우즈 주소(root=personal)는 «보는 사람 자기» 폴더로 풀려, 같은 경로의 **내 파일**이 지워진다.
+  //  휴지통으로(#3778) — 어느 문으로 지우나는 trashDoorOf(sources-plan.ts)가 정한다.
   const extId = String(s.external_id || '');
-  const projFile = /^project:(\d+)\/(.+)$/.exec(extId);
-  const me = (state.me || {}) as { userId?: string; email?: string };
-  const myPersonal = !!co && co.root === 'personal' && [me.userId, me.email].some((k) => !!k && extId.startsWith('personal:' + k + '/'));
-  const browseFile = !!co && !projFile && (co.root === 'shared' ? extId.startsWith('shared/') : myPersonal);
-  const authoredNote = !s.external_system && !isFile;
-  if (authoredNote || (isFile && (projFile || browseFile))) {
+  const projFile = projectFileOf(extId);
+  const door = trashDoorOf(s, co, (state.me || {}) as { userId?: string; email?: string });
+  if (door) {
     const toTrash = el('button', { class: 'btn-text v2-srd-trash', type: 'button', text: '휴지통으로',
       title: '이 자료를 휴지통으로 보냅니다 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요' }) as HTMLButtonElement;
     toTrash.onclick = () => { void (async () => {
       if (!await confirmDialog({
         title: `「${String(s.title || s.name || '이 자료')}」를 휴지통으로 보낼까요?`,
         message: '자료 목록과 AI 검색에서 빠집니다. [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요.',
-        lines: [isFile ? (projFile ? '프로젝트 폴더' : co && co.root === 'personal' ? '내 폴더' : '공유 폴더') + '의 파일도 함께 빠지고, 되살리면 원래 자리로 돌아옵니다.'
+        lines: [door !== 'source' ? (door === 'project' ? '프로젝트 폴더' : co && co.root === 'personal' ? '내 폴더' : '공유 폴더') + '의 파일도 함께 빠지고, 되살리면 원래 자리로 돌아옵니다.'
           : (derived.length ? `이 자료에서 나온 지식 ${derived.length}건은 그대로 남지만, 출처 표시는 되살려도 돌아오지 않아요.` : '적어 둔 본문은 되살리면 그대로 돌아옵니다.')],
         confirmText: '휴지통으로',
       })) return;
       toTrash.disabled = true;
       try {
-        if (isFile && projFile) await api('/api/ui/v6/projects/' + projFile[1] + '/file?path=' + encodeURIComponent(projFile[2]), { method: 'DELETE' });
-        else if (isFile && co) await api('/api/ui/terminal/browse?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path), { method: 'DELETE' });
+        if (door === 'project' && projFile) await api('/api/ui/v6/projects/' + projFile.projectId + '/file?path=' + encodeURIComponent(projFile.path), { method: 'DELETE' });
+        else if (door === 'browse' && co) await api('/api/ui/terminal/browse?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(co.path), { method: 'DELETE' });
         else await api('/api/ui/sources/' + encodeURIComponent(String(s.id)) + '/delete', { method: 'POST' });
         toast('휴지통으로 보냈어요 — [휴지통] ▸ [자료] 탭에서 되살릴 수 있어요.');
         toTrash.closest('.v2-srd-sheet')?.replaceChildren(el('p', { class: 'v2-src-empty', text: '휴지통으로 보낸 자료예요.' }));
@@ -690,6 +696,8 @@ function readSheet(s: any, sel: SrcSel): HTMLElement {
       size: Number(f.bytes) || undefined,
       fetchView: () => ffetch(viewUrl),
       fetchDownload: () => ffetch(dlUrl),
+      //  #4582 md 상대경로 그림 — 공유 폴더 좌표(co)를 알 때만. 원본 주소(orig)뿐이면 폴더를 모른다.
+      ...(orig ? {} : { path: co.path, fetchRel: (p: string) => ffetch('/api/ui/terminal/browse/file?root=' + encodeURIComponent(co.root) + '&path=' + encodeURIComponent(p)) }),
       cls: { img: 'v2-srd-img', pdf: 'v2-srd-pdf', html: 'v2-srd-html', md: 'md-rendered', code: 'v2-srd-code', table: 'v2-srd-table', audio: 'v2-srd-media', video: 'v2-srd-media', msg: 'v2-srd-msg' },
       mkBtn: (label, onClick) => el('button', { class: 'btn btn-sm', type: 'button', text: label, onclick: onClick }),
     }).then((out) => { if (document.contains(bodyBox)) bodyBox.replaceChildren(out.body); })

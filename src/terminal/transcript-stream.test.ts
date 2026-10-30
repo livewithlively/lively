@@ -223,10 +223,23 @@ test("종전 불변식은 그대로다 — 죽은 세션(#1631)·가려진 대�
 // ── E9·E10·E11·E14 — 감시자가 헛돌지 않는다 ──────────────────────────────────────
 test("E9 — 노드(멤버 PC) 세션은 아예 안 지켜본다", () => {
   const w = read("src/terminal/transcript-watch.ts");
-  //  ⚠ 판정 기준은 배달과 **같아야** 한다 — «등록됐나» 로 가르면 게이트웨이가 노드로도 등록된 배포에서
-  //   이 박스의 로컬 세션까지 접힌다(#2055 실측 함정, chat-routes gateRead 가 같은 이유로 sessionGone 을 쓴다).
-  assert.match(w, /nodeOfSession\(id\)/, "노드 판정이 없다 — 파일이 저쪽에 있는 세션에 헛 재시도가 돈다");
-  assert.match(w, /sessionGone\(id\)/, "E9 — 노드 등록 여부만으로 가른다(로컬 세션까지 접힌다)");
+  //  ⚠ 판정 기준은 대화창과 **같아야** 한다 — «등록됐나» 로 가르면 게이트웨이가 노드로도 등록된 배포에서
+  //   이 박스의 로컬 세션까지 접힌다(#2055 실측 함정).
+  //  #2600 T2 d6 — 그 판정이 한 함수(`registry.remoteNodeOfSession`)로 모였다. 감시자와 대화창(gateRead)이 **같은 함수**를
+  //   부르고, 그 함수가 좌표(nodeOfSession)와 «정말 저쪽인가»(tmux 의 없음 확답 — 감시자는 seam 을 넘긴다)를 함께 본다.
+  //   그래서 이 시험도 «한 파일 안에 두 이름이 있나» 가 아니라 **그 사슬이 끊기지 않았나** 를 본다.
+  assert.match(w, /remoteNodeOfSession\(id, deps\.sessionGone\)/,
+    "노드 판정이 없거나 seam 을 우회한다 — 파일이 저쪽에 있는 세션에 헛 재시도가 돈다");
+  assert.match(read("src/terminal/chat-routes.ts"), /remoteNodeOfSession\(id, sessionGone\)/,
+    "E9 — 대화창과 감시자가 다른 기준으로 «저쪽 기계» 를 가른다");
+  const reg = read("src/node/registry.ts");
+  const at = reg.indexOf("export async function remoteNodeOfSession(");
+  assert.ok(at > 0, "remoteNodeOfSession 을 못 찾았다");
+  const body = reg.slice(at, reg.indexOf("\n}\n", at));
+  assert.match(body, /nodeOfSession\(sessionId\)/, "E9 — 좌표를 안 본다");
+  //  ⚠ 이름이 «있는가» 가 아니라 **호출부의 판정을 그대로 넘기는가** 를 본다 — `gone: async () => true` 같은 대체도
+  //   `\bgone\b` 에는 걸린다(처음 쓴 단언이 그 변이를 통과시켰다). 넘기지 않으면 감시자의 seam 도, tmux 확답도 끊긴다.
+  assert.match(body, /[\s,{]gone\s*[,}]/, "E9 — 호출부의 «없음» 확답(gone)을 그대로 안 넘긴다(노드 등록 여부만으로 가르게 된다)");
 });
 
 test("E10·E11 — 못 읽는 하네스엔 안 되걸고, «아직 없음» 에는 되건다", () => {

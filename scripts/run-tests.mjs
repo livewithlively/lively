@@ -4,8 +4,9 @@
 // 수집은 **소스 글롭 기준**이다(dist 글롭 금지 — 파일 이동·삭제 뒤 스테일 dist 산출물이
 // 남으면 옛+새 테스트를 이중 실행해 false-green/크래시가 난다):
 //   src/**/*.test.ts                     → dist/**/*.test.js 로 매핑해 실행(없으면 빌드 누락으로 실패)
-//   kit|scripts|deploy/**/*.test.mjs     → 그대로 실행
-// 제외: *.itest.mjs(수동·실DB) · *.pg-test.mjs(CI PG 전용) — scripts/README.md 테스트 계층 참조
+//   kit|scripts|deploy|desktop/**/*.test.mjs → 그대로 실행(MJS_DIRS)
+// 제외: *.itest.mjs(수동·실DB) · *.pg-test.mjs(실 PG — CI 는 test.yml 에 파일마다 등록해 돌린다. 로컬은
+//  ITEMS_DATABASE_URL 을 주고 `node <파일>` 로 직접) — scripts/README.md 테스트 계층 참조
 // 특례: dist/org/delivery/static-context.test.js 는 --env-file-if-exists=.env (종전 체인과 동일)
 //
 // ── 실행 정책 (#1431) ─────────────────────────────────────────────────────────
@@ -24,6 +25,8 @@
 //  · `--itest` 는 실 DB 를 공유하니 직렬 고정(명시적 -j 로만 덮어씀).
 //  ⚠ 병렬은 경과시간을 단정하는 테스트(예: project-provision-async 의 `elapsed < 500`)를 부하로 흔들 수 있다.
 //   그런 flake 가 보이면 -j 를 낮추지 말고 해당 테스트의 상한을 부하 내성 있게 고치는 쪽이 맞다.
+//   다만 그 상한이 **제품의 마감 동작 자체**(훅이 1.2초에 끊는다 · 예산의 70% 에서 멈춘다)라 늘리면 사양이 바뀌는 시험은
+//   머리에 `// @lively-test exclusive` 를 달아 병렬 묶음이 끝난 뒤 혼자 돌린다(#5029 — 2코어 중앙 박스에서 넷이 그랬다).
 //
 // 사용: node scripts/run-tests.mjs                    전체 실행(병렬 · 끝까지)
 //       node scripts/run-tests.mjs <부분문자열>…       경로 부분일치만(여러 개면 OR)
@@ -45,6 +48,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { snapshotRealHome, verifyRealHome, formatChanges } from "./testguard-real-home.mjs";
 import { testChildEnv } from "./test-runner-env.mjs";
+import { readHead, isSoloTest, soloLast, mayStart } from "./test-runner-schedule.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_FILE_TESTS = new Set(["dist/org/delivery/static-context.test.js"]);
@@ -143,9 +147,16 @@ if (opts.itest) {
   files = [...srcTests, ...mjsTests];
 }
 if (filters.length) files = files.filter((f) => filters.some((s) => f.includes(s)));
+// 혼자 도는 시험(`// @lively-test exclusive`, 근거는 test-runner-schedule.mjs) — 맨 뒤로 모아 병렬 묶음이 끝난 뒤 하나씩 돌린다.
+const SOLO = new Set(files.filter((f) => { try { return isSoloTest(readHead(path.join(ROOT, f))); } catch { return false; } }));
+files = soloLast(files, SOLO);
 
 if (opts.list) {
-  for (const f of files) console.log(f);
+  //  한 번에 쓰고 다 비운 뒤 끝낸다 — 줄마다 찍고 곧바로 process.exit 하면 파이프로 받는 쪽이 늦을 때 꼬리가 버려진다(리눅스 실측:
+  //   파이프 용량을 넘는 몫은 비동기로 남고 exit 이 그것을 버린다. 사용자의 파이프 총량이 한도를 넘은 기계에선 새 파이프가 4KB 라
+  //   39KB 목록도 잘린다 — 맨 뒤에 모인 혼자 도는 파일이 통째로 빠졌다, #5029 PR #1537 첫 판의 CI).
+  const listing = files.map((f) => `${f}\n`).join("");
+  await new Promise((done) => process.stdout.write(listing, done));
   process.exit(0);
 }
 if (!files.length) {
@@ -248,10 +259,15 @@ if (jobs === 1) {
   };
 
   let next = 0;
+  let soloAnnounced = false;
   await new Promise((resolve) => {
     const pump = () => {
-      while (!interrupted && !(opts.failFast && failed) && live.size < jobs && next < files.length) {
+      while (!interrupted && !(opts.failFast && failed) && next < files.length && mayStart(SOLO.has(files[next]), live.size, jobs)) {
         const idx = next++;
+        if (SOLO.has(files[idx]) && !soloAnnounced) {
+          soloAnnounced = true;
+          console.log(`— 혼자 도는 시험 ${files.length - idx}건(벽시계 마감 단언 · @lively-test exclusive) — 하나씩 돌린다`);
+        }
         const f = files[idx];
         if (missing.has(f)) {
           record(idx, { f, ms: 0, status: 1, signal: null, missing: true });

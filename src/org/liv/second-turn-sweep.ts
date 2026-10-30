@@ -1,28 +1,48 @@
 // 리브 2턴 스윕(#1631) — 자체호스팅은 하우스키핑이 1분마다, **매니지드는 CP 가 테넌트마다 두드리는
 //  하우스키핑 틱**(/api/ops/housekeeping/tick)이 부른다. 판정(decideSecondTurn)이 fire 면 그 세션에 증류 지시를 넣는다.
 //
-//  · 후보 = org_member.liv_profile.welcome 에 session_id 는 있고 distill_at·distill_gave_up_at 이 없는 사람(신원 전역 표).
-//  · 그 세션의 워크스페이스는 gw_session_map(workspaceForSession)이 정본이다 — liv_profile 엔 워크스페이스 축이 없다(#2265).
-//    수집기·잡 조회는 그 테넌트 컨텍스트 안에서 한다. 매핑이 없으면 primary(단일 테넌트) 로 본다.
+//  · 후보 = org_member.liv_profile.welcome 에 session_id 는 있고 distill_at·distill_gave_up_at 이 없는 사람.
+//    (#5060) 파일 갈래(flow='files')는 세션 없이도 후보다 — 판정이 reopen(새로 열기)을 내면 리브 세션을 열고 2턴을 첫 지시로 넣는다.
+//    ⓘ 그 사이에 사람이 리브를 열어 리브 세션이 이미 있으면(currentLivSessionId) 새로 열지 않고 **그 세션에** 넣는다 — 리브는 세션 하나다
+//     (#4970 «리브 = 세션 하나»). 일하는 중이면 판정이 기다린다(turn1-running). 쉬는 대화에 정리 지시가 한 턴 들어오는 것은 의도다.
+//    ⚠ 매니지드에선 그 표가 워크스페이스마다 갈려 있다(행 수준 격리) — 틱이 보는 후보는 그 틱 워크스페이스의 사람이다(#4851 실측).
+//  · 일하는 워크스페이스는 secondTurnTenant(second-turn.ts)가 고른다 — 세션 등록부(workspaceForSession) → welcome 이 사는 칸(by_workspace 키) →
+//    배포 규칙의 기본값(매니지드 = 지금 틱의 워크스페이스 · 자체호스팅 = primary). 수집기·잡·세션·아웃박스 조회와 표식이 모두 그 안에서 돈다.
+//    ⚠ 종전엔 등록부가 모르면 곧장 primary 였다 — 매니지드는 등록부가 비어 있어 표식이 늘 실패하고 2턴이 primary 아웃박스로 갔다(#4851).
 //  · 배달은 라우트와 같은 함수(deliverPrompt) — 박스면 아웃박스(입력창 확인·에코), codex app-server 면 프로토콜, 노드면 릴레이.
 //  · 실패는 삼키지 않는다: 쏘지 못한 이유는 로그에, 포기는 distill_gave_up_at + distill_note 로 프로필에 남는다.
 import { logger } from "../../log.js";
-import { buildSecondTurnPrompt, decideSecondTurn, turnGroupInputs } from "./second-turn.js";
+import { buildSecondTurnPrompt, decideSecondTurn, secondTurnTenant, sweepSlot, turnGroupInputs, type TenantRef } from "./second-turn.js";
 import { onceAtATime } from "../../util/once-at-a-time.js";
+import { managedMode } from "../tenancy/state.js";
+import { currentTenant } from "../tenant-context.js";
 
 // 동시 호출 가드(#1631) — 매니지드는 **테넌트마다** 틱이 들어오는데 후보 목록은 신원 전역(org_member)이라
 //  같은 후보를 여러 틱이 동시에 본다. `distill_at` 은 배달 **뒤에** 찍히므로 그 사이가 겹치면 같은 세션에
 //  2턴이 두 번 들어간다. 근거·한계는 util/once-at-a-time.ts 머리말.
+//  ⓘ #4851 실측: 매니지드의 org_member 는 워크스페이스마다 갈려 있어(행 수준 격리) 실제로는 틱마다 그 워크스페이스의 후보만 본다 —
+//   그래서 매니지드는 워크스페이스마다 한 칸으로 나눈다(second-turn sweepSlot). 칸이 하나면 앞 스윕과 겹친 워크스페이스의 틱이 매 주기 건너뛰어진다.
 export const sweepLivSecondTurn = onceAtATime(
   () => runSweep(),
   () => ({ fired: 0, waited: 0, gaveUp: 0, failed: 0 }),
+  () => sweepSlot(managedMode(), currentTenant()?.id),
 );
+
+/**
+ * (#5167) 정비 주기를 기다리지 않고 지금 한 번 판정한다 — 처음 설정 반영·«다 올렸다» 신호를 받은 요청이 부른다.
+ *  매니지드는 정비가 워크스페이스마다 5분 주기라(lvly-cloud tenanttick) 다 올린 사람이 리브를 0~5분 말없이 기다렸다(실측 3분 21초).
+ *  요청 컨텍스트(그 워크스페이스) 안에서 부르므로 스윕이 같은 칸을 본다. 응답을 기다리지 않는다 — 늦거나 실패하면 다음 정비가 같은 일을 한다
+ *  (판정·표식이 멱등이고, 동시 호출은 onceAtATime 이 가른다).
+ */
+export function kickLivSecondTurn(): void {
+  void sweepLivSecondTurn().catch((err) => logger.warn({ err }, "리브 2턴 — 즉시 판정 실패(다음 정비가 다시 한다)"));
+}
 
 async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: number; failed: number }> {
   const { listLivSecondTurnCandidates, appendLivProfile, getLivProfile, listCollectors } = await import("../store.js");
   const { listSessionsRaw } = await import("../../terminal/terminal-sessions.js");
-  const { listOutbox } = await import("../../sessions/session-outbox.js");
-  const { workspaceForSession, PRIMARY_TENANT_ID, PRIMARY_SLUG } = await import("../tenancy/registry.js");
+  const { listOutboxReconciled } = await import("../../sessions/outbox-late-echo.js");
+  const { workspaceForSession, listWorkspaces, PRIMARY_TENANT_ID, PRIMARY_SLUG } = await import("../tenancy/registry.js");
   const { withTenant } = await import("../tenant-context.js");
   const { listCronJobs } = await import("../cron-store.js");
   const { collectorJobId } = await import("../store/collectors.js");
@@ -50,20 +70,42 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
     const hit = m.get(sid);
     if (hit) return hit;
     // 목록엔 없지만 tmux 엔 있다(노드 세션·목록 필터 밖) → 상태를 모르는 채로 살아 있음. 없다고 확인되면 null.
-    const gone = await sessionGone(sid).catch(() => false);
+    const gone = await withTenant(tenant, () => sessionGone(sid)).catch(() => false);   // #4851 — 매니지드는 세션 자리를 워크스페이스 이름으로 찾는다
     return gone ? null : { working: false, agentState: "unknown" };
   };
 
+  //  지금 이 스윕을 부른 요청의 워크스페이스(매니지드 = 하우스키핑 틱의 워크스페이스 · 자체호스팅 타이머 = 없음).
+  const reqTenant = currentTenant();
+  const current: TenantRef | null = reqTenant ? { id: reqTenant.id, slug: reqTenant.slug } : null;
+  const managed = managedMode();
+  //  등록부(자체호스팅 다중 워크스페이스)는 그 칸이 지금 워크스페이스가 아닐 때만 한 번 읽는다(매니지드엔 등록부가 없다 — 빈 목록).
+  let registry: TenantRef[] | null = null;
+  const registryOnce = async (): Promise<TenantRef[]> =>
+    (registry ??= (await listWorkspaces().catch(() => [])).map((w) => ({ id: String(w.id), slug: String(w.slug) })));
+
   for (const c of candidates) {
-    //  워크스페이스는 킥오프 세션의 워크스페이스 맵이 말한다(복원된 세션도 같은 워크스페이스에 선다).
-    const kickSid = String(c.welcome.session_id);
-    const ws = await workspaceForSession(kickSid).catch(() => null);
-    const tenant = ws ? { id: ws.id, slug: ws.slug } : { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG };
+    //  워크스페이스(#4851 secondTurnTenant) — 킥오프 세션의 등록부 → welcome 이 사는 칸 → 배포 기본값(복원된 세션도 같은 워크스페이스에 선다).
+    //  (#5060) 파일 갈래는 킥오프 세션이 없다(null) — 등록부로 워크스페이스를 못 찾으니 welcome 칸·배포 기본값으로 간다.
+    const kickSid = c.welcome.session_id ? String(c.welcome.session_id) : null;
+    const ws = kickSid ? await workspaceForSession(kickSid).catch(() => null) : null;
+    const welcomeWs = c.workspace_id ?? null;
+    const tenant = secondTurnTenant({
+      mapped: ws ? { id: ws.id, slug: ws.slug } : null,
+      welcomeWs,
+      registry: !ws && welcomeWs && current?.id !== welcomeWs ? await registryOnce() : [],
+      current, managed,
+      primary: { id: PRIMARY_TENANT_ID, slug: PRIMARY_SLUG },
+    });
+    if (!tenant) {
+      //  매니지드인데 welcome 칸이 이 틱의 워크스페이스가 아니다 — 덮어 쓰면 표식이 다른 칸에 찍혀 후보가 안 빠진다. 건너뛰고 남긴다(secondTurnTenant 머리말).
+      logger.warn({ member: c.id, session: kickSid, welcomeWs, ws: current?.slug ?? null }, "리브 2턴 — welcome 칸이 이 워크스페이스가 아니다(건너뜀)");
+      out.failed++; continue;
+    }
     //  (#4032) 2턴은 **지금의 리브 세션**에 넣는다 — 리브 탭이 킥오프 세션을 되살렸으면 새 id 다(복원 이정표).
     //   옛 id 만 보면 «사라졌다» 로 읽고 새 세션을 또 열어, 사람이 이어 가던 대화를 두고 2턴이 딴 세션에 간다.
     //   좌표를 못 읽으면 킥오프 id 그대로 — 종전 판정(사라졌으면 reopen)으로 떨어진다.
     const sid = (await withTenant(tenant, () => currentLivSessionId(c.id)).catch(() => null)) ?? kickSid;
-    const s = await sessionIn(tenant, sid);
+    const s = sid ? await sessionIn(tenant, sid) : null;
     // 수집기와 그 잡의 마지막 실행 — 그 워크스페이스 안에서 읽는다.
     const collectors = await withTenant(tenant, async () => {
       const cols = await listCollectors().catch(() => []);
@@ -72,7 +114,9 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       return cols.map((col) => ({ label: col.label, preset_key: col.preset_key, enabled: col.enabled, lastRunAt: lastRun.get(collectorJobId(col.id)) ?? null }));
     }).catch((err) => { logger.warn({ err, member: c.id, ws: tenant.slug }, "리브 2턴 — 수집기 조회 실패(다음 tick 재시도)"); return null; });
     if (!collectors) { out.failed++; continue; }
-    const outboxPending = s ? (await listOutbox(sid).catch(() => [])).length : 0;
+    //  #4851 — 기록과 다시 대조한 목록으로 센다(«미확인» 이지만 기록엔 이미 들어간 1턴을 «안 들어갔다» 로 세지 않게 — outboxPending 머리말).
+    //   그 워크스페이스 안에서 묻는다 — 아웃박스도 워크스페이스마다 갈려 있다(종전엔 컨텍스트 밖·남의 틱 컨텍스트에서 물었다).
+    const outboxPending = s && sid ? (await withTenant(tenant, () => listOutboxReconciled(sid)).catch(() => [])).length : 0;
 
     const d = decideSecondTurn({
       welcome: c.welcome,
@@ -86,7 +130,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       //  포기 표식도 그 워크스페이스 칸에 찍는다(#2265) — 밖에서 쓰면 후보에서 안 빠져 매 tick 다시 판정된다.
       await withTenant(tenant, () => appendLivProfile(c.id, { welcome: { ...c.welcome, distill_gave_up_at: new Date(now).toISOString(), distill_note: d.reason } }))
         .catch((err) => logger.warn({ err, member: c.id }, "리브 2턴 — 포기 기록 실패"));
-      logger.info({ member: c.id, session: sid, reason: d.reason }, "리브 2턴 — 포기");
+      logger.info({ member: c.id, session: sid, ws: tenant.slug, reason: d.reason }, "리브 2턴 — 포기");
       out.gaveUp++; continue;
     }
     //  일하는 형태·직무(#1631) — 2턴이 카테고리를 만들 재료다(자료가 0건이면 이것뿐이다). 후보 행에는 welcome 만 있어 따로 읽는다.
@@ -126,6 +170,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
         firstOrder: c.welcome.first_order ?? null,
         collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) > done0 })),
         partial: true, waitedMin: Math.max(0, Math.round((now - done0) / 60_000)),
+        uploaded: !!c.welcome.upload_started_at, uploading: !!c.welcome.upload_started_at && !c.welcome.upload_done_at,
       });
       const stampedAt = new Date(now).toISOString();
       try {
@@ -134,13 +179,16 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
           await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt } });
         });
         const { livKickoff } = await import("./kickoff.js");
-        const made = await withTenant(tenant, () => livKickoff({ userId: c.id, email: "", scopes: [], projects: [] } as never, { prompt: prompt0 }));
+        const made = await withTenant(tenant, () => livKickoff({ userId: c.id, email: "", scopes: [], projects: [] } as never,
+          //  처음 설정 때 로그인돼 있던 AI(welcome.harnesses) — 스윕 자리에서 로그인을 못 재도 그 사람이 이은 AI 로 연다(claude 로 접지 않는다).
+          { prompt: prompt0, remembered: c.welcome.harnesses ?? null }));
         await withTenant(tenant, async () => {
           const cur = await getLivProfile(c.id).catch(() => null);
           await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt,
-            session_id: made.session_id, distill_at: stampedAt, distill_note: "reopened" } });
+            session_id: made.session_id, distill_at: stampedAt, distill_note: d.reason === "files" ? "files-opened" : "reopened" } });
         });
-        logger.info({ member: c.id, gone: sid, session: made.session_id }, "리브 2턴 — 세션이 사라져 새로 열고 배달");
+        logger.info({ member: c.id, gone: sid, session: made.session_id, reason: d.reason }, d.reason === "files"
+          ? "리브 2턴 — 올린 파일을 정리할 리브 세션을 새로 열고 배달" : "리브 2턴 — 세션이 사라져 새로 열고 배달");
         out.fired++;
       } catch (err) {
         await withTenant(tenant, async () => {
@@ -153,6 +201,8 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       }
       continue;
     }
+    //  fire 는 살아 있는 세션이 있을 때만 나온다(판정) — 세션 id 가 없으면 넣을 자리가 없다(#5060 파일 갈래의 방어선).
+    if (!sid) { out.failed++; continue; }
     // fire — 프롬프트를 조립해 그 세션에 넣는다. 배달 성공(큐 등록 포함)이면 distill_at 을 찍는다(멱등: 다음 tick 엔 후보에서 빠진다).
     const done = Date.parse(String(c.welcome.done_at));
     const prompt = buildSecondTurnPrompt({
@@ -162,6 +212,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
       firstOrder: c.welcome.first_order ?? null,
       collectors: collectors.map((x) => ({ label: x.label, preset_key: x.preset_key, enabled: x.enabled, ran: !!x.lastRunAt && Date.parse(x.lastRunAt) >= done })),
       partial: d.partial, waitedMin: d.waitedMin,
+      uploaded: !!c.welcome.upload_started_at, uploading: !!c.welcome.upload_started_at && !c.welcome.upload_done_at,
     });
     try {
       await withTenant(tenant, () => deliverPrompt(sid, prompt, { owner: c.id }));
@@ -171,7 +222,7 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
         const cur = await getLivProfile(c.id).catch(() => null);
         await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_at: new Date(now).toISOString(), distill_note: d.partial ? "partial" : null } });
       });
-      logger.info({ member: c.id, session: sid, partial: d.partial, waitedMin: d.waitedMin }, "리브 2턴 — 증류 지시 주입");
+      logger.info({ member: c.id, session: sid, ws: tenant.slug, partial: d.partial, waitedMin: d.waitedMin }, "리브 2턴 — 증류 지시 주입");
       out.fired++;
     } catch (err) {
       out.failed++;

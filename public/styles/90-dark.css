@@ -123,6 +123,8 @@
   --gi-c-src:   #E08A1E;  --gi-c-tags:  #E37EA3;  --gi-c-ctx:   #10ACD3;  --gi-c-sess:  #949EAF;
   --gi-c-learn: #E7845B;  --gi-c-web:   #5DA3E6;  --gi-c-liv:   #16B48C;  --gi-c-term:  #8E9EBC;
   --gi-c-sys:   #909EB8;  --gi-c-apps:  #909EB8;  --gi-c-bell:  #D0A1E4;
+  --gi-c-deck:  #E8737F;
+  --gi-c-builder: #C084FC;
   --v2-pad-field: rgba(26, 36, 54, .62);
   --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
@@ -246,6 +248,8 @@
   --gi-c-src:   #E08A1E;  --gi-c-tags:  #E37EA3;  --gi-c-ctx:   #10ACD3;  --gi-c-sess:  #949EAF;
   --gi-c-learn: #E7845B;  --gi-c-web:   #5DA3E6;  --gi-c-liv:   #16B48C;  --gi-c-term:  #8E9EBC;
   --gi-c-sys:   #909EB8;  --gi-c-apps:  #909EB8;  --gi-c-bell:  #D0A1E4;
+  --gi-c-deck:  #E8737F;
+  --gi-c-builder: #C084FC;
   --v2-pad-field: rgba(26, 36, 54, .62);
   --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
@@ -294,6 +298,13 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .cxr, :root:not([data-theme="light"]) .cxrp { --run-c: #3987e5; --run-d: #d95926; --run-x: #e0605f; --run-z: #3a4660; }
   :root:not([data-theme="light"]) .cxr-tip, :root:not([data-theme="light"]) .cxr-pop { --run-c: #3987e5; --run-d: #d95926; --run-x: #e0605f; }
+}
+/*  자료 사이드바 앱 줄 · 자료 목록 원천 칸의 로고(.v2-ptl-logo · .v2-srl-logo)도 GitHub·Linear 단색-검정 마크를 전경 잉크로(위 #2247 과 같은 근거). */
+:root[data-theme="dark"] :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="github"] svg path,
+:root[data-theme="dark"] :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="linear"] svg path { fill: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="github"] svg path,
+  :root:not([data-theme="light"]) :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="linear"] svg path { fill: var(--ink); }
 }
 /*  #4135 — 자동 실행 패널 줄 로고(.cxr-tile)도 GitHub·Linear 단색-검정 마크를 전경 잉크로(위 #2247 과 같은 근거). */
 :root[data-theme="dark"] .cxr-tile[data-svc="github"] svg path,

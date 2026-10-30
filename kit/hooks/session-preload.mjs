@@ -15,7 +15,7 @@
 //        + [라이브 현황 (게이트웨이, 토큰 필요)]. 어느 쪽이든 있으면 주입, 둘 다 없으면 무동작(fail-open).
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +23,9 @@ import { fileURLToPath } from "node:url";
 //  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
 //   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
-import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { harness, isForeignGrokInvocation, isForeignCursorInvocation, sessionTokenFromFile } from "./harness-registry.mjs";
 import { hostEffects } from "./host-effects-port.mjs";
+import { syncScopeSettings, decideRecordScope, sessionDirOf, outsideNotice, markStartedOutside, clearStartedOutside } from "./record-scope.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const spawn = (...args) => hostEffects.spawn(...args);
@@ -41,7 +42,8 @@ const SCOPE_HDRS = {
 
 // grok compat 이중발화 가드(#1701) — grok 은 ~/.claude/settings.json 의 우리 훅을 기본값으로 그대로 실행한다.
 //  그 사본이면 조용히 비켜선다(정본은 grok-adapter 가 LIVELY_HARNESS=grok 으로 스폰하는 경로).
-if (isForeignGrokInvocation()) process.exit(0);
+// #4927 — Cursor 도 같은 compat 로 이 훅을 돌린다(CLI 는 끌 수 없다). 정본은 cursor-adapter 가 LIVELY_HARNESS=cursor 로 띄우는 경로.
+if (isForeignGrokInvocation() || isForeignCursorInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
@@ -123,7 +125,8 @@ const pickCred = (envName, pluginKey, fileVal) => {
 };
 
 // OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
-const TOKEN = OFF ? "" : pickCred("LIVELY_TOKEN", "TOKEN", readLocal("token"));
+//  #4135 — 세션 토큰 파일이 있으면 그것이 먼저다(게이트웨이가 이 세션 앞으로 나중에 실어 준 정본 — harness-registry sessionTokenFile 머리말).
+const TOKEN = OFF ? "" : (sessionTokenFromFile("hook", homedir(), (p) => readFileSync(p, "utf8")) || pickCred("LIVELY_TOKEN", "TOKEN", readLocal("token")));
 
 const GW = (pickCred("LIVELY_GATEWAY_URL", "GATEWAY_URL", readLocal("gateway-url")) || "http://localhost:8080").replace(/\/$/, "");
 
@@ -131,7 +134,7 @@ const GW = (pickCred("LIVELY_GATEWAY_URL", "GATEWAY_URL", readLocal("gateway-url
 //  그 파일을 전제로 REST 를 호출**하기 때문이다(예: curl -H "Bearer $(cat ~/.lively/token)").
 //  ⚠ 실측(2026-08-04): `sensitive: true` 인 userConfig 값은 **훅 프로세스 env 로 오지 않는다**(공식 문서의
 //   "All values are exported to hook processes" 와 다르다 — 비민감 값만 왔다). 그래서 실제로 이 함수가 굳히는 건
-//   gateway-url 이고, **토큰은 플러그인의 bin/login.mjs(디바이스 코드)가 직접 쓴다.** 아래 로직은 키 종류를 가리지
+//   gateway-url 이고, **토큰은 플러그인의 scripts/login.mjs(디바이스 코드)가 직접 쓴다.** 아래 로직은 키 종류를 가리지
 //   않으므로 향후 sensitive 전달이 열려도 그대로 동작한다.
 //  소유권 규칙: **플러그인이 만든 파일만 플러그인이 갱신한다.** 키트가 깐 파일은 절대 덮지 않는다(설치 경로 충돌 방지).
 //   → plugin-managed.json 에 이 훅이 만든 파일명을 남겨 그걸로 판정한다. 그 목록에 없는 기존 파일은 건드리지 않는다.
@@ -279,11 +282,44 @@ export function reconcileCodexAutoApprove(want) {
   } catch { return false; }                                  // fail-soft
 }
 
+// auto-approve reconcile(Cursor CLI, #4927) — claude·codex 와 같은 결과를 매 세션 낸다. 표면은 cli-config.json 의
+//  permissions.allow 이고 규칙 문법은 `Mcp(<server>:<tool>)`(번들 실측). 회수 원장은 설치기와 **같은 파일**
+//  (managed-cursor-permission.json) — 둘이 다른 원장을 쓰면 한쪽이 넣은 규칙을 다른 쪽이 영영 못 걷는다.
+//  ⚠ 파일이 없으면 만들지 않는다 — CLI 가 첫 실행에 스스로 만든다(만들어진 뒤의 세션이 채운다). IDE 의 승인 허용목록은
+//   파일 표면이 없어 여기서 못 다룬다(정직 표기 — 지식 cursor-harness-judgment-4927).
+//  ⚠ 타입이 틀리면 CLI 가 파일을 .bad 로 옮기고 기본값으로 갈아끼운다(실측) — permissions 가 객체가 아니거나 allow·deny 가
+//   배열이 아니면 손대지 않는다(user-install mergeCursorPermissions 와 같은 규칙).
+export function reconcileCursorAutoApprove(dir, want, file = harness("cursor").autoApprove.file(homedir())) {
+  try {
+    if (!existsSync(file)) return false;
+    let cur; try { cur = JSON.parse(readFileSync(file, "utf8")); } catch { return false; }
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
+    const p0 = cur.permissions;
+    if (p0 !== undefined && (!p0 || typeof p0 !== "object" || Array.isArray(p0))) return false;   // 객체가 아니면 손대지 않는다(설치기와 같은 규칙)
+    const perms = p0 || {};
+    if ((perms.allow !== undefined && !Array.isArray(perms.allow)) || (perms.deny !== undefined && !Array.isArray(perms.deny))) return false;
+    const allow = Array.isArray(perms.allow) ? perms.allow : [];
+    const rules = [];
+    for (const full of want) { const p = managedAutoApproveParts(full); if (p) rules.push(`Mcp(${p.server}:${p.tool})`); }
+    const prevPath = join(dir, "managed-cursor-permission.json");
+    let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
+    const wantSet = new Set(rules); const prevSet = new Set(prev);
+    const next = allow.filter((e) => !(prevSet.has(e) && !wantSet.has(e)));   // 우리가 넣었다 뺀 것만 회수(사용자 규칙 보존)
+    for (const e of rules) if (!next.includes(e)) next.push(e);
+    if (JSON.stringify(next) === JSON.stringify(allow) && prev.join("\u0000") === rules.join("\u0000")) return false;   // 변화 없음
+    cur.permissions = { ...perms, allow: next, ...(Array.isArray(perms.deny) ? {} : { deny: [] }) };
+    writeFileSync(file, JSON.stringify(cur, null, 2) + "\n");
+    writeFileSync(prevPath, JSON.stringify(rules, null, 2));
+    return true;
+  } catch { return false; }                                  // fail-soft
+}
+
 // auto-approve reconcile 전략 — 표의 autoApprove.kind → 실제 반영 함수. 여기 없는 kind 는 no-op 이고,
 //  그건 "그 하네스는 아직 자동승인 배선이 없다"를 뜻한다(조용히 claude 표면에 쓰는 것보다 안전하다).
 const AUTO_APPROVE = {
   "settings-allow": (dir, want) => reconcileClaudeAutoApprove(dir, want),
   "toml-approval": (_dir, want) => reconcileCodexAutoApprove(want),
+  "cursor-cli-allow": (dir, want) => reconcileCursorAutoApprove(dir, want),
 };
 
 // kit 훅 중복 dedup(자기치유 확장, #742) — 설치 세대 간 command 표기 드리프트(`node` vs `"node"` vs 번들 런타임
@@ -487,12 +523,56 @@ async function refreshRuntimeConfig() {
 // 이 트리거가 session-preload 안에 있는 이유: **전원에게 이미 배선된 훅이 이것뿐**이다. 새 훅을 추가하면
 //  그걸 배선하려고 또 수동 업데이트가 필요해진다(닭-달걀). 여기 두면 앞으로의 모든 키트 변경 — 새 훅,
 //  새 이벤트 배선, 설치기 수정 — 이 손 안 대고 흐른다.
+// ── MCP 등록이 비었나 — 버전이 같아도 봐야 하는 단 하나 (#1079 후속) ─────────
+//  self-update 안에는 «최신이어도 MCP 등록 정합은 맞춘다» 는 분기가 이미 있다(reconcileClaudeMcp).
+//  그런데 아래 게이트가 **버전이 다를 때만** self-update 를 띄우므로, 버전이 그대로인 한 그 분기는
+//  **도달할 수 없는 죽은 코드**다. 그 사이에 등록이 사라지면 스스로 못 돌아온다.
+//
+//  실측 2026-09-04(매니지드 lively-46e3): 전송 계층 결함으로 `~/.claude.json` 이 깨졌고, 클로드 코드가
+//   그 파일을 손상으로 판정해 설정을 **초기화**하면서 `mcpServers` 가 통째로 날아갔다. 키트 버전은 최신
+//   그대로라 self-update 가 안 떴고, 세션을 다시 열어도 lively 툴이 0개인 채였다 — 사람이 손으로 돌려야
+//   복구됐다. 등록을 지우는 주체는 우리가 아니어도(하네스·사고·사람) 되살리는 자리는 여기뿐이다.
+//
+//  비용 — 정상 세션에선 작은 JSON 읽기 한 번이다(네트워크·토큰 무관). 있으면 즉시 false.
+//  ⚠ 경로 계산은 self-update 의 claudeUserConfigPaths() 와 **같은 규칙**이다(CLAUDE_CONFIG_DIR 우선,
+//   존재하는 것을 전부 본다 — 훅과 클코가 서로 다른 파일을 볼 수 있다, #1079). 그쪽이 바뀌면 여기도 바꾼다.
+//  파손된 설정은 **판단 보류**다 — self-update 도 파손 파일은 안 건드린다(덮어써 날리지 않기 위해).
+export function claudeMcpMissing() {
+  try {
+    const cands = [];
+    if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
+    cands.push(join(homedir(), ".claude.json"));
+    for (const p of new Set(cands)) {
+      if (!existsSync(p)) continue;                 // 설정이 없다 = 클로드를 안 쓰거나 설치 전 — 여기 몫이 아니다
+      let conf;
+      try { conf = JSON.parse(readFileSync(p, "utf8")); } catch { continue; }   // 파손 → 판단 보류
+      if (!conf || typeof conf !== "object") continue;
+      if (!(conf.mcpServers && conf.mcpServers.lively)) return true;            // 하나라도 비면 되살려야 한다
+    }
+    return false;
+  } catch { return false; }                          // fail-soft — 판단 못 하면 종전대로 무동작
+}
+
+// ── 새 하네스 확인 주기 (#4927) ───────────────────────────────────────────────
+//  버전이 같아도 업데이터를 가끔 띄운다 — «새로 깐 하네스» 배선 확인. 실측(2026-10-22 상민님 윈도우 PC): 키트가 최신인 PC 에
+//   Cursor 를 나중에 깔았더니, 버전이 같으면 업데이터를 안 띄우는 탓에 다음 키트 판까지 Cursor 가 라이블리와 안 붙었다.
+//  판정(배선 신호·PATH·IDE 존재·«한 번이라도 배선됐나» 기록)은 업데이터 한 곳(self-update freshHarnesses)에 두고 여기선 주기만
+//   정한다 — 새 하네스가 없으면 업데이터는 파일 몇 개만 보고 끝난다(내려받기 0). 세션이 몰려도 5분에 한 번(도장 파일 시각).
+const FRESH_CHECK_MS = 5 * 60 * 1000;
+export function freshCheckDue(now = Date.now(), file = join(homedir(), ".lively", "fresh-harness-check")) {
+  try { if (now - statSync(file).mtimeMs < FRESH_CHECK_MS) return false; } catch { /* 도장 없음 = 할 때다 */ }
+  try { writeFileSync(file, ""); } catch { /* 못 찍으면 다음 세션도 띄운다 — 업데이터 자체가 가볍다 */ }
+  return true;
+}
+
 function maybeSelfUpdate(remoteVersion) {
   try {
     if (!remoteVersion || typeof remoteVersion !== "string") return; // 게이트웨이가 버전을 안 줌 → 무동작
     if (process.env.LIVELY_NO_AUTO_UPDATE === "1") return;
     if (hookDisabled("self_update")) return;                          // 어드민 토글
-    if (readLocal("kit-version") === remoteVersion) return;           // 최신 — 대부분의 세션이 여기서 끝
+    //  최신이면 대부분의 세션이 여기서 끝난다 — 예외 둘: **MCP 등록이 비어 있으면**(claudeMcpMissing 머리말: 그 상태는 스스로
+    //   못 돌아온다) · **새 하네스 확인 때가 되면**(freshCheckDue — 5분에 한 번).
+    if (readLocal("kit-version") === remoteVersion && !claudeMcpMissing() && !freshCheckDue()) return;
     const runner = join(homedir(), ".lively", "hooks", "self-update.mjs");
     if (!existsSync(runner)) return;                                  // 구형 kit — 수동 업데이트가 경로
     const argv = [runner, "--to", remoteVersion];
@@ -590,11 +670,63 @@ function safeExit(code = 0) {
   if (typeof t.unref === "function") t.unref();
 }
 
+// 훅 입력(JSON)을 짧게 읽는다 — 기록 범위 판정에 세션 폴더(cwd)와 세션 id 가 필요하다(클로드·코덱스가 싣는다).
+//  ⚠ 이 훅은 원래 stdin 을 안 읽었다(hang 원천 차단). 그래서 상한을 짧게 두고, 못 읽으면 빈 입력으로 간다 —
+//   그때는 CLAUDE_PROJECT_DIR·LIVELY_SESSION_DIR·프로세스 cwd 가 폴더를 정한다(record-scope.mjs sessionDirOf).
+function readHookInput(ms = 300) {
+  return new Promise((resolveIn) => {
+    let buf = "", done = false;
+    const fin = () => { if (done) return; done = true; try { resolveIn(JSON.parse(buf || "{}") || {}); } catch { resolveIn({}); } };
+    try {
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => { buf += c; if (buf.length > 262144) fin(); });
+      process.stdin.on("end", fin);
+      process.stdin.on("error", fin);
+      const t = setTimeout(fin, ms);
+      if (typeof t.unref === "function") t.unref();
+    } catch { fin(); }
+  });
+}
+
+// 플러그인 설치인가(#5016 알림 문구용) — 이 훅이 플러그인 트리(<root>/hooks/ 옆에 .claude-plugin/plugin.json)에서 돌거나
+//  CLAUDE_PLUGIN_ROOT 가 실렸으면 그렇다. 키트 설치는 ~/.lively/hooks/ 라 옆에 plugin.json 이 없다.
+const PLUGIN_INSTALL = (() => {
+  if (String(process.env.CLAUDE_PLUGIN_ROOT || "").trim()) return true;
+  try { return existsSync(join(dirname(dirname(fileURLToPath(import.meta.url))), ".claude-plugin", "plugin.json")); } catch { return false; }
+})();
+
+// 기록 범위(#5016) — 작업 폴더 밖에서 켠 세션이면 인코그니토와 같다. 판정 규칙은 record-scope.mjs 머리말.
+//  여기서만 하는 일 둘: ① 이 컴퓨터 설정을 서버와 맞춘다(세션 id·폴더·대화는 안 보낸다 — 범위 밖이어도 이 조회는 해야
+//  웹에서 새로 등록한 폴더가 그 폴더의 세션에 닿는다) ② 범위 밖이면 사람에게 한 줄 + AI 에게 안내를 남기고 끝낸다.
+//  키트 자가 업데이트는 기록이 아니라서 범위 밖에서도 띄운다 — 안 그러면 이 기능의 고침도 그 컴퓨터에 영영 안 닿는다.
+//  라이블리가 띄운 세션(SPAWNED)은 판정할 것이 없다(언제나 켬) — 입력도 안 읽고 종전 경로 그대로 간다.
+async function scopeGate() {
+  const input = await readHookInput();
+  const lively = join(homedir(), ".lively");
+  let kitVersion = null;
+  if (TOKEN) {
+    const r = await syncScopeSettings({ lively, gw: GW, token: TOKEN, send: fetch, timeoutMs: 1500 }).catch(() => ({ ok: false }));
+    if (r.ok) kitVersion = r.kit_version;
+  }
+  const sid = String(input.session_id || input.sessionId || "");
+  const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
+  if (d.inScope) { clearStartedOutside(sid); return false; }   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
+  //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
+  const n = outsideNotice({ dir: d.dir, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL });
+  // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
+  //  코덱스(0.157) SessionStart 출력 스키마도 같은 두 칸을 받는다. 그 밖의 어댑터는 이 출력을 버리거나 본문만 꺼낸다.
+  process.stdout.write(JSON.stringify({ systemMessage: n.user, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");
+  markStartedOutside(sid);    // 이 세션에서 폴더를 등록하면 다음 지시 때 run-custom 이 맥락을 한 번 넣는다
+  maybeSelfUpdate(kitVersion);
+  return true;
+}
+
 // 전체 하드 타임박스 4.5s — 어느 경로든 exit 0
 // 출력 = [정적 org-context(게이트웨이 우선, 로컬 폴백)]. 라이브 현황 블록은 폐기(v6 — 구 item/curate 모델 기반이라 제거).
 async function main() {
   if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
   mirrorPluginCreds();                                   // 플러그인 설치면 자격을 ~/.lively 에도 굳힌다(#1473). 키트 설치면 무동작.
+  if (!SPAWNED && await scopeGate().catch(() => false)) { safeExit(0); return; }   // 기록 범위 밖(#5016) — 아래 전부 건너뜀
   // 레포 준비 실패 통지(#1155) — 로컬 마커만 읽으므로 토큰 유무와 무관하게 항상 계산한다(무토큰 세션도 코드는 필요하다).
   const repoNotice = repoStatusNotice();
   if (!TOKEN) { emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n"))); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)

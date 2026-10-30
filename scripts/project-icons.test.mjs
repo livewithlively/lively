@@ -129,7 +129,8 @@ let omniIcon = null, binProjIcon = null;
   }
   ok(!/folderIcon\(/.test(BINS), "Q2 휴지통에 옛 폴더 그림 부품(folderIcon)이 남아 있지 않다");
   const app = cut(SIDE, "function appRowEl(", "\n}\n");
-  ok(/glyph\(inst\.project && !inst\.project\.self \? projGlyph\(11\) : 'projNone', 'v2-app-inst-ask-ic'\)/.test(app), "Q2 홈 고정 세션 둘째 줄(11px) = 작은 과녁, 프로젝트가 없으면 점선 원");
+  //  #3870(2026-10-17) — 둘째 줄 붓이 projLineEl 로 한 자리가 됐다(고정·초대·날짜 카드 공통).
+  ok(/glyph\(has \? projGlyph\(11\) : 'projNone', 'v2-app-inst-ask-ic'\)/.test(cut(SIDE, "function projLineEl(", "\n}\n")), "Q2 홈 세션 둘째 줄(11px) = 작은 과녁, 프로젝트가 없으면 점선 원");
   ok(/glyph\(projGlyph\(12\), 'v2-app-inst-project-ic'\)/.test(app), "Q2 홈 고정 세션의 프로젝트 단추(12px) = 작은 과녁");
   ok(/l\.pid \? glyph\(projGlyph\(16\), 'v2-ptl-ic'\) : glyph\('projNone', 'v2-ptl-ic'\)/.test(cut(SIDE, "function renderSessions(", "\n}\n")), "Q2 세션 목록 사이드바의 프로젝트 줄(16px) = 과녁, 없으면 점선 원");
   ok(/k\.startsWith\('p:'\) \? \[ICONS\.proj\]/.test(TABS) && !/k\.startsWith\('p:'\) \? \[ICONS\.folder\]/.test(TABS), "Q2 탭(15px)의 프로젝트 = 과녁");
@@ -172,7 +173,10 @@ let pjv = null, dash = null;
   ok(!/pnIcon\((ic|d\.icon|tabIcon\(t\)), /.test(PANES), "Q4 우측 사이드바 부품 그림을 크기 규칙 없이 그리는 자리가 없다");
   ok((PTASK.match(/pnIcon\(projGlyph\(13\), 'pn-i sm'\)/g) || []).length === 2 && /class: 'pn-tk-head-row' \}, pnIcon\(projGlyph\(13\)/.test(PTASK) && /class: 'pj-modal-h' \}, pnIcon\(projGlyph\(13\)/.test(PTASK), "Q4 「프로젝트」 칸 머리 · 크게 보기 머리(13px) = 작은 과녁(projGlyph(13))");
   ok((PTASK.match(/class: 'pn-empty' \}, pnIcon\(projGlyph\(26\), 'pn-i big'\)/g) || []).length === 2, "Q4 「프로젝트」 칸 빈 화면 둘(26px) = 과녁(projGlyph(26))");
-  ok(/glyph: d\.icon,/.test(PANES) && /tile\(app\.glyph, appColor\(it\.type\)\)/.test(DOCK), "Q4 독 타일은 부품 표의 이름(proj)을 그대로 그린다(64 칸 타일이라 큰 과녁)");
+  //  #4592 — 붙은 앱 칸만 그 앱의 얼굴(face)로 선다. 얼굴이 없는 칸(부품 전부)은 종전대로 부품 표의 이름을 그대로 그린다.
+  ok(/glyph: d\.icon,/.test(PANES) && /tile\(face \? appGlyphName\(face\) : app\.glyph, color\)/.test(DOCK) && /const color = face \|\| appColor\(it\.type\);/.test(DOCK)
+    && /const face = it\.type === 'sessapp' \? host\.face\?\.\('sessapp'\) \|\| null : null;/.test(DOCK),
+    "Q4 독 타일은 부품 표의 이름(proj)을 그대로 그린다(64 칸 타일이라 큰 과녁) — 얼굴은 붙은 앱 칸에만");
   {
     const files = [];
     const walk = (dir) => { for (const n of readdirSync(join(root, dir))) { const p = dir + "/" + n; if (statSync(join(root, p)).isDirectory()) walk(p); else if (/\.ts$/.test(n)) files.push(p); } };

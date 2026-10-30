@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
+# `curl … | sh` 로 붙이면 우분투·데비안의 /bin/sh(dash)가 이 파일을 읽어 아래 pipefail 에서 «Illegal option» 으로
+#  죽는다(#4501 실측: ubuntu:24.04·debian:bookworm). 안내는 `| bash` 다 — 잘못 붙였을 때 알아볼 말로 멈춘다(POSIX 문법).
+if [ -z "${BASH_VERSION:-}" ]; then echo "✗ 이 설치 스크립트는 bash 로 실행합니다 — 명령 끝의 'sh' 를 'bash' 로 바꿔 다시 실행하세요." >&2; exit 1; fi
 set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────────────
 # Lively 설치 부트스트랩 — "코드 없이 한 줄".
 #
-#   curl -fsSL <bootstrap-url> | PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+#   curl -fsSL https://raw.githubusercontent.com/livewithlively/lively/main/deploy/bootstrap.sh | PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… bash
 #   (또는 내려받아: PUBLIC_URL=… bash deploy/bootstrap.sh)
 #
 # 설계: '코드 획득'(이 스크립트, 교체 가능) 과 '설치'(deploy/install.sh, 전달 방식 무관) 를 분리한다.

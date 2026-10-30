@@ -7,6 +7,7 @@ import type { Capability } from "./types.js";
 import {
   createField, updateField, deleteField, setFieldValue, listFieldCatalog,
 } from "../v6/task-field-store.js";
+import { assertNoContentSecrets } from "./content-secrets.js";
 
 function body(req: any): Record<string, unknown> { return (req.body ?? {}) as Record<string, unknown>; }
 function actorOf(user: any, ctx: any): string | null { return ctx?.actor ?? user?.userId ?? null; }
@@ -41,6 +42,7 @@ const fieldCreateV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단(필드 이름·선택지)
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try {
       return { field: await createField(input.projectId, { field_type: input.field_type, name: input.name ?? input.field_type, config: input.config, list_id: input.list_id ?? null }, writeCtx) };
@@ -67,6 +69,7 @@ const fieldUpdateV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단(필드 이름·선택지)
     const { id, ...patch } = input;
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try { return { field: await updateField(id, patch, writeCtx) }; }
@@ -114,6 +117,7 @@ const fieldValueSetV6: Capability = {
       } }],
   },
   handler: async (input: any, user: any, ctx: any) => {
+    assertNoContentSecrets(input);   // #4501 평문 시크릿 차단(텍스트 필드 값)
     const writeCtx = { actor: actorOf(user, ctx), source: ctx?.source ?? "web" };
     try { return { value: await setFieldValue(input.taskId, input.fieldId, input.value, writeCtx) }; }
     catch (e: any) { throw new HttpError(400, e?.message ?? "필드값 수정 실패"); }

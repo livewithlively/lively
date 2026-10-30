@@ -60,6 +60,18 @@ export async function insertCronJob(v: CronJobInsert): Promise<CronJobRow> {
   return r.rows[0];
 }
 
+// 없을 때만 만든다(#4052) — 같은 id 가 이미 있으면 **아무것도 바꾸지 않고** null. 기본값 시딩용:
+//  사람이 꺼 둔 잡·주기를 바꾼 잡을 되살리거나 덮지 않는다(upsert 와 다른 점). 충돌 대상은 테넌트 복합 키라 비워 둔다.
+export async function insertCronJobIfAbsent(v: CronJobInsert): Promise<CronJobRow | null> {
+  const r = await itemsPool.query(
+    `INSERT INTO org_cron(id,label,action,params,interval_sec,cron_expr,enabled,note,run_once,created_by,updated_by)
+     VALUES($1,$2,$3,$4,$5,$6,COALESCE($7,true),$8,COALESCE($9,false),$10,$10)
+     ON CONFLICT DO NOTHING RETURNING *`,
+    [v.id, v.label, v.action, v.params,
+     v.interval_sec, v.cron_expr, v.enabled, v.note, v.run_once, v.actor]);
+  return r.rows[0] ?? null;
+}
+
 // 정의 upsert — **실행 이력(last_run_at·next_run_at)을 보존**하며 정의만 갈아 끼운다(#1780 v2 §7-1, 설계 R2-O5).
 //  앱 재설치/업그레이드의 크론 재전개가 종전엔 delete+insert 라 last_run_at 이 사라져 interval 잡이 **즉시 due**
 //  가 됐다(예정 외 실행). enabled 는 INSERT 와 같은 규칙(null=true) 이고, 켜는 방향이면 사람이 켤 때(updateCronJob)

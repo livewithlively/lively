@@ -15,9 +15,10 @@
 import { SHELL_CMDS } from "./phase.js";
 import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
-import { sendKeysToSession, sendKeyToSession, sendDownToSession } from "./send-keys.js";
+import { sendKeysToSession, sendKeyToSession, sendDownToSession, pastesFor, oneLineOf, startsWithKey, type SendKeysOpts } from "./send-keys.js";
+import { submitGuard, SUBMIT_POLL_MS } from "./submit-check.js";   // #4818 — 넣은 뒤 입력칸에 우리 글이 남았나
 
-export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
+export type FirstPromptStep = "wait" | "accept-trust" | "dismiss-update" | "send" | "give-up";
 
 // 하단 라이브 UI 영역만 본다(phase.ts detectAwaiting 과 같은 이유 — 전사(과거 대화)가 위에 남아 있다).
 const TAIL_LINES = 14;
@@ -42,6 +43,22 @@ const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\
 //   ①구 claude 문안 ②"is this a project you created/trust" ③**선택지 줄** `[❯>] N. Yes, … trust …`(문안이 바뀌어도
 //   '기본 선택 Yes' 는 남는다). ③은 줄머리에 앵커돼 있어 본문이 trust 를 언급하는 것만으로는 안 걸린다(오탐 방지).
 const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)|is this a project you (created|trust)|\bTrust this folder\b|(^|\n)[ \t]*[❯›>]?[ \t]*\d*[.)]?[ \t]*(Yes,[^\n]*\btrust\b|Trust and continue)/i;
+// codex 시작 «업데이트 하시겠습니까» 창 — **Enter 를 절대 보내면 안 되는 창**(실측 2026-09-26, 매니지드 라이브 pane):
+//
+//      ✨ Update available! 0.149.1 -> 0.157.1
+//    › 1. Update now (runs `npm install -g @openai/codex`)
+//      2. Skip
+//      3. Skip until next version
+//      Press enter to continue
+//
+//  커서가 **1번**에 있다. Enter 면 `npm install -g` 가 돌고, 테넌트 이미지의 전역 prefix 는 root 소유라
+//  EACCES(exit 243)로 실패한 뒤 **codex 가 그대로 끝난다** → pane 이 셸이 되고 사람은 «내가 직접 codex 라고
+//  쳐야 실행된다» 를 본다. 실측으로 **Escape** 는 창만 닫고 codex 를 그대로 띄운다(입력칸 준비됨).
+//  ⚠ 창이 아예 안 뜨게 하는 것이 첫 겹이다(codex-update-check.ts — 설정 루트 키). 이 층은 그 키가 아직
+//   안 심긴 홈·사람이 되돌린 홈을 위한 **두 번째 겹**이다.
+//  ⚠ 판정은 **번호 선택지 줄**로만 한다(TRUST_DIALOG 와 같은 교리) — standalone 설치본은 같은 문안을
+//   «비차단 배너» 로만 띄우고 입력칸이 살아 있다(실측). 배너에 Escape 를 쏘면 사람이 치던 것이 지워질 수 있다.
+const UPDATE_OPTION = /^[ \t]*[❯›>]?[ \t]*\d+[.)][ \t]*(Update now|Skip until next version)\b/im;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
@@ -132,6 +149,10 @@ export function firstPromptStep(i: { pane: string; harness: string; paneCmd: str
   if (i.elapsedMs > i.maxMs) return "give-up";
   const tail = tailOf(i.pane);
   const tailText = tail.join("\n");
+  //  ★ 업데이트 창을 **신뢰 대화상자보다 먼저** 본다 — codex 는 그 둘을 이 순서로 띄운다(실측). trustOk 와
+  //   무관하다: 여기서 하는 답은 «업데이트 안 함» 이고, 그건 사람의 보안 결정이 아니라 우리가 이미 내린 결정이다
+  //   (이미지의 계약은 «업데이트 = 이미지 재빌드» 다). 그리고 그 창을 그냥 두면 첫 지시가 영영 안 들어간다.
+  if (UPDATE_OPTION.test(tailText)) return "dismiss-update";
   if (TRUST_DIALOG.test(tailText)) return i.trustOk ? "accept-trust" : "wait";
   // 하네스가 화면 판정을 선언했으면(#1719 계약 축 screen) 그것이 정본이다 — 휴리스틱보다 먼저.
   //  auth(로그인·인증 검증)에 넣으면 거부돼 사라지고(antigravity 실측 — "아직 인증 확인중" 거부), dialog 에 넣으면
@@ -164,13 +185,42 @@ export interface FirstPromptRuntime {
   peek: (id: string) => Promise<{ pane: string; paneCmd: string }>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
-  send: (id: string, text: string) => Promise<void>;
+  /** `opts.paste` — 붙여넣기로 싣는다(#4818 · send-keys 규약 ⑤ — Claude Code 만) */
+  send: (id: string, text: string, opts?: SendKeysOpts) => Promise<void>;
   trustKeys: TrustKeys;
 }
 
-/** 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다. */
-export interface TrustKeys { down: (id: string, times: number) => Promise<void>; enter: (id: string) => Promise<void> }
-const TMUX_TRUST_KEYS: TrustKeys = { down: sendDownToSession, enter: (id) => sendKeyToSession(id, "Enter") };
+/**
+ * 신뢰 대화상자에 보낼 키 — 시험은 tmux 없이 이걸 바꿔 끼운다.
+ *  `esc` 는 **없어도 된다**(#4135 후속) — 아웃박스의 원격 호스트 칸은 키 RPC 모양이 «내리기+Enter» 로 고정이고
+ *  (호스트 번들은 따로 갱신된다), 모르는 걸음을 보내면 그 칸이 통째로 게이트웨이로 강등된다. 없으면 종전대로
+ *  기다린다 — 그 세션은 codex 설정 층(codex-update-check.ts)이 애초에 그 창을 안 띄운다.
+ */
+export interface TrustKeys {
+  down: (id: string, times: number) => Promise<void>;
+  enter: (id: string) => Promise<void>;
+  esc?: (id: string) => Promise<void>;
+}
+/** 이 호스트의 tmux 로 누르는 키 — 아웃박스 실행 자리의 게이트웨이 칸도 같은 키를 쓴다(`sessions/outbox-exec`, #3773). */
+export const TMUX_TRUST_KEYS: TrustKeys = {
+  down: sendDownToSession,
+  enter: (id) => sendKeyToSession(id, "Enter"),
+  esc: (id) => sendKeyToSession(id, "Escape"),
+};
+
+/** 업데이트 창을 닫을 때 Escape 를 보내는 횟수 상한 — 판이 바뀌어 안 닫히면 폴마다 쏘지 않는다(빈 입력칸 Escape 는 무해하지만 무의미하다). */
+export const UPDATE_ESC_MAX = 2;
+
+/**
+ * codex 시작 «업데이트» 창을 **Escape 로** 닫는다 (#4135 후속 · 실측 2026-09-26).
+ *  Enter 를 보내지 않는 이유는 UPDATE_OPTION 머리말에 있다(1번 = npm 설치 = 그 자리에서 codex 즉사).
+ * @returns `dismissed` — 키를 보냈다(결과는 다음 폴에서 화면으로 본다) · `unsupported` — 이 자리엔 Escape 걸음이 없다.
+ */
+export async function dismissUpdatePrompt(id: string, keys: TrustKeys = TMUX_TRUST_KEYS): Promise<"dismissed" | "unsupported"> {
+  if (!keys.esc) return "unsupported";
+  await keys.esc(id).catch(() => { /* 다음 폴에서 다시 본다 */ });
+  return "dismissed";
+}
 
 /**
  * 신뢰 대화상자를 **화면을 읽고** 수락한다 — «Yes» 까지 내린 뒤 Enter (#3626 · #3949).
@@ -220,6 +270,7 @@ export async function injectFirstPromptWithRuntime(
   const t0 = runtime.now();
   let peekFailureSince: number | null = null;
   let acceptedTrust = false;
+  let escPressed = 0;        // #4135 후속 — 업데이트 창에 보낸 Escape 횟수(UPDATE_ESC_MAX 까지)
   let saidHolding = false;
   let saidUnreadable = false;
   for (;;) {
@@ -247,6 +298,15 @@ export async function injectFirstPromptWithRuntime(
       saidHolding = true;
       console.warn(`[terminal] 첫 지시 대기 중(${id}) — ${Math.round(FIRST_PROMPT_BOOT_MS / 1000)}초 안에 입력창이 안 떴다. 첫 실행 안내·로그인이 끝나 입력창이 뜨면 넣는다(최대 ${Math.round(maxMs / 60_000)}분).`);
     }
+    if (step === "dismiss-update" && escPressed < UPDATE_ESC_MAX) {
+      //  ★ #4135 후속 — 이 창엔 **Escape** 다(실측). Enter 면 «1. Update now» 가 골라지고 npm 설치가 실패해
+      //   codex 가 그 자리에서 끝난다. 상한을 두는 이유는 판이 바뀌어 안 닫힐 때 폴마다 쏘지 않기 위해서다.
+      escPressed++;
+      if (escPressed === 1) console.warn(`[terminal] codex 업데이트 창을 닫는다(${id}) — Escape(업데이트 안 함). 이미지 계약상 세션 안에서 업데이트하지 않는다.`);
+      await dismissUpdatePrompt(id, runtime.trustKeys);
+      await runtime.sleep(pollMs);
+      continue;
+    }
     if (step === "accept-trust" && !acceptedTrust) {
       //  ★ #3626 — **화면을 읽고** «Yes» 로 옮긴 뒤 Enter(acceptTrustDialog — 아웃박스와 같은 함수, #3949).
       //   기본 선택이 Yes 라는 전제는 틀렸다. 못 읽으면 **아무것도 안 누르고** 기다린다 — 잘못 누르면 하네스가 종료되고
@@ -263,9 +323,52 @@ export async function injectFirstPromptWithRuntime(
       continue;
     }
     if (step === "send") {
-      await runtime.send(id, text);
+      await runtime.send(id, text, pastesFor(harness) ? { paste: true } : undefined);
+      if (harness === "claude") await watchSubmit(id, text, runtime);
       return true;
     }
     await runtime.sleep(booting ? pollMs : HOLD_POLL_MS);
   }
+}
+
+/** 첫 지시를 넣은 뒤 입력칸을 지켜보는 시간(#4818) — 아웃박스의 에코 창 하나와 같다. 응답을 막지 않는다(createSession 이 `void` 로 띄운다). */
+export const FIRST_SUBMIT_WATCH_MS = 15_000;
+
+/**
+ * 첫 지시가 아닌 지시도 넣은 뒤 지킨다(#4852) — 노드의 sendKeys(멤버 PC 세션에 대화창이 보낸 말 · 크론 주입)와 게이트웨이 로컬 주입은
+ *  종전엔 치고 끝이었다. 보이지 않는 글자·제어 글자가 섞인 지시는 Claude Code 가 첫 Enter 를 «검토 후 Enter» 로 멈추는데(실측), 그 길엔
+ *  지킴이가 없어 사람이 Enter 를 눌러야 했다. 같은 지킴이(watchSubmit)를 뒤에서 돌린다.
+ *  · 붙여넣은 글(`pasted` — Claude Code 세션)만 지킨다 — 다른 하네스의 입력칸 문법은 모른다. 키로 시작하는 글(설정 명령)은 뺀다: 붙여넣지 않고
+ *    쳤고(send-keys LEADING_KEY), 그 뒤의 확인창은 따로 본다(#4772).
+ *  · 부른 쪽을 막지 않는다 — 돌려준 약속은 기다리지 않아도 된다(시험만 기다린다 · 지키지 않으면 null). 지킴이가 던져도 보낸 것은 되돌리지 않고 한 줄 남긴다.
+ */
+export function guardAfterSend(
+  id: string, text: string, pasted: boolean,
+  runtime: Pick<FirstPromptRuntime, "peek" | "sleep" | "now" | "trustKeys"> = { peek, sleep, now: Date.now, trustKeys: TMUX_TRUST_KEYS },
+): Promise<void> | null {
+  if (!pasted || startsWithKey(text)) return null;
+  return watchSubmit(id, text, runtime).catch((e) => {
+    console.warn(`[terminal] 넣은 지시를 지키다 멈췄다(${id}) — 보낸 것은 그대로다: ${(e as Error)?.message ?? e}`);
+  });
+}
+
+/**
+ * 넣은 뒤 FIRST_SUBMIT_WATCH_MS 동안 입력칸을 본다(#4818 — submit-check 머리말): 우리 글이 그대로 남아 있으면 Enter 를 더 누른다.
+ *  아웃박스와 달리 에코 확인이 없어 «창 끝 Enter» 는 없다 — 화면이 우리 글을 보여 줄 때만 누른다.
+ *  ⚠ 일찍 끝내지 않는다: 바쁜 Claude Code 는 글을 읽기 전까지 빈 입력칸을 그대로 보여 준다(«비었다» 가 «제출됐다» 가 아닌 구간).
+ *  누르기 직전에 한 번 더 본다(confirmBeforePress — #4852): 본 때와 누를 때 사이(한 박자)에 사람이 제 글을 치기 시작했으면 그 글을 제출하지 않는다.
+ *   걸음이 둘이 되지만 이 자리는 RPC 상한을 세지 않는다(아웃박스 지킴이는 한 박자 한 걸음 그대로).
+ */
+async function watchSubmit(id: string, text: string, runtime: Pick<FirstPromptRuntime, "peek" | "sleep" | "now" | "trustKeys">): Promise<void> {
+  const guard = submitGuard({
+    peek: async () => { try { return { ok: true, pane: (await runtime.peek(id)).pane }; } catch { return { ok: false }; } },
+    enter: () => runtime.trustKeys.enter(id),
+    now: runtime.now,
+  }, oneLineOf(text), { confirmBeforePress: true });
+  const until = runtime.now() + FIRST_SUBMIT_WATCH_MS;
+  while (runtime.now() < until) {
+    await runtime.sleep(SUBMIT_POLL_MS);
+    await guard.tick();
+  }
+  if (guard.presses()) console.warn(`[terminal] 지시가 입력칸에 남아 Enter 를 ${guard.presses()}번 더 눌렀다(${id}) — 제출 확인 #4818`);
 }

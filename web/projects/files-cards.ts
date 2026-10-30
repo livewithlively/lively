@@ -23,7 +23,7 @@ function projShareRel(shareBase, rel): string | null {
 //   종전엔 이 함수가 자기 화이트리스트(TEXT_EXTS)를 갖고 있어 홈 팀공유폴더 모달과 답이 갈렸다 —
 //   .csv 는 여기선 textarea 원문(저기선 표), .mp4·.mp3 는 여기선 '미지원'(저기선 재생), 코드 파일은 스타일 없음.
 //   판정이 두 벌이면 반드시 갈라진다. 이 함수는 이제 '오버레이에 담는 것'과 '버튼 모양'만 정한다.
-//  이 화면이 새로 얻은 것: **csv·tsv 표 · 음성·영상 재생 · 코드 스타일·json 정렬 · html 렌더** + [⛶ 전체화면].
+//  이 화면이 새로 얻은 것: **csv·tsv 표 · 음성·영상 재생 · 코드 스타일·json 정렬 · html 렌더** + [↗ 자료 보기](#4672 — 자료 보기 화면을 새 탭으로).
 //  오버레이인 이유: 프로젝트 상세의 공유 폴더는 페이지 안 인라인 섹션이라 '제자리 전환'할 컨테이너가 없다
 //   (홈은 이미 모달 안이라 제자리 전환이 자연스럽다). 문맥이 실제로 달라서 남는 차이다.
 async function openFileViewer(id, rel, name, reload, base, shareBase?) {
@@ -42,6 +42,7 @@ async function openFileViewer(id, rel, name, reload, base, shareBase?) {
       name, size: undefined,
       fetchView: () => authFetch(url),
       fetchDownload: () => authFetch(url + '&download=1'),
+      path: rel, fetchRel: (p) => authFetch(B + id + '/file?path=' + encodeURIComponent(p)),   // #4582 md 상대경로 그림
       // 기존 크기 규칙(14-files-upload.css .proj-file-*)을 보존하려고 화면 클래스를 함께 얹는다.
       cls: { img: 'proj-file-img', pdf: 'proj-file-pdf', html: 'proj-file-pdf', md: 'proj-file-md', code: 'proj-file-edit', msg: 'admin-hint' },
       mkBtn,
@@ -57,8 +58,8 @@ async function openFileViewer(id, rel, name, reload, base, shareBase?) {
   if (out.wide) box.classList.add('ov-box-wide');
   box.append(el('div', { class: 'ov-actions' },
     ...out.tools,
-    // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. 좌표를 모르면 버튼 없음(죽은 링크 금지).
-    shareRel ? el('a', { class: 'btn btn-ghost', href: fileLinkUrl('shared', shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면' }) : null,
+    // ↗ 자료 보기 — 같은 파일을 자료 보기 화면(#/f, #4672 — 미리보기 · 정보 · 내려받기)으로 새 탭에 연다. 좌표를 모르면 버튼 없음(죽은 링크 금지).
+    shareRel ? el('a', { class: 'btn btn-ghost', href: fileLinkUrl('shared', shareRel), target: '_blank', rel: 'noopener', title: '자료 보기(새 탭) — 미리보기 · 정보 · 내려받기', text: '↗ 자료 보기' }) : null,
     shareRel ? el('button', { class: 'btn btn-ghost', type: 'button', text: '🔗 링크 복사', onclick: () => copyFileLink('shared', shareRel, 'file') }) : null,
     el('button', { class: 'btn btn-ghost', type: 'button', text: '다운로드', onclick: () => authDownload(url + '&download=1', name) }),
     el('button', { class: 'btn btn-ghost', type: 'button', text: '닫기', onclick: () => back.remove() })));
@@ -148,7 +149,7 @@ function renameEntry(id, rel, name, isDir, reload, base) {
     const nm = nameIn.value.trim();
     if (!nm || nm === name) { back.remove(); return; }
     saveBtn.disabled = true;
-    try { await api(B + id + '/rename', { method: 'POST', body: JSON.stringify({ path: rel, name: nm }) }); back.remove(); toast('이름을 변경했습니다'); reload(); }
+    try { await api(B + id + '/file/rename', { method: 'POST', body: JSON.stringify({ path: rel, name: nm }) }); back.remove(); toast('이름을 변경했습니다'); reload(); }
     catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
   saveBtn.onclick = go;
@@ -168,4 +169,4 @@ async function deleteEntry(id, rel, name, isDir, reload, base) {
   catch (e) { toast('실패 — ' + e.message, true); }
 }
 
-export { openFileViewer, projFileCardEl, projFileRowEl, projUpCardEl };
+export { deleteEntry, openFileViewer, projFileCardEl, projFileRowEl, projUpCardEl, renameEntry };

@@ -2,10 +2,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS,
+  decideSecondTurn, buildSecondTurnPrompt, turnGroupInputs, SECOND_TURN_MAX_WAIT_MS, TURN1_DELIVERY_TTL_MS, CONNECT_FLOW_MAX_WAIT_MS, UPLOAD_MAX_WAIT_MS, CONNECT_BIND_GRACE_MS,
   type SecondTurnState, type SecondTurnInput,
 } from "./second-turn.js";
-import { GROUP_SETS, genericRuleLine, groupRuleLine, groupSetDefFor, groupSetFor } from "../../v6/category-groups.js";
+import { readFileSync } from "node:fs";
+import { GROUP_SETS } from "../../v6/category-groups.js";
+import * as turnNs from "./second-turn.js";
 
 const DONE = Date.parse("2026-08-29T05:00:00Z");
 const st = (over: Partial<SecondTurnState> = {}): SecondTurnState => ({
@@ -80,8 +82,8 @@ const GROUPS = [
   { key: "plan", name: "정하는 일", hint: "무엇을 왜 만들기로 했는지" },
   { key: "align", name: "팀과 맞춘 것", hint: "사람과 오간 기록" },
 ];
-//  묶음이 없을 때 리브가 먼저 만들 칸 — 이 사람(디자인)의 룰 테이블 집합(v8: 디자인·콘텐츠·미디어).
-const INTENDED = groupSetFor(null, "디자인").map(({ key, name, hint }) => ({ key, name, hint }));
+//  묶음이 없을 때 리브가 먼저 만들 세 칸 — 이 사람(디자인)의 룰 테이블 집합.
+const INTENDED = GROUP_SETS["디자인"].map(({ key, name, hint }) => ({ key, name, hint }));
 const pin = (over: Partial<SecondTurnInput> = {}): SecondTurnInput => ({
   displayName: "수아", work: "회사·조직에서 팀과 함께 일한다 · 디자인", groups: GROUPS, intended: INTENDED, ungrouped: [], drawers: ["산출물", "기록"], firstOrder: "지난 시안 리뷰 피드백만 모아 줘",
   collectors: [{ label: "슬랙 #design", preset_key: "slack", enabled: true, ran: true }, { label: "노션", preset_key: "notion", enabled: true, ran: false }],
@@ -227,8 +229,25 @@ test("㉖′ 경계 — 빈 문자열도 «없음» 이다(빈 따옴표를 싣�
 });
 test("㉙ 서랍이 이미 있는 사람에게도 카테고리 단계는 똑같이 나온다 — 조건부 단계가 아니다", () => {
   const p = buildSecondTurnPrompt(pin({ drawers: ["산출물", "기록"] }));
-  assert.match(p, /서랍 산출물 · 기록/);
+  assert.match(p, /카테고리 후보 산출물 · 기록/);
   assert.match(p, /카테고리를 만든다 — 이 단계는 건너뛰지 않는다/);
+});
+//  #5062 — 리브가 «첫 서랍 '운영·인프라'를 이 정의로 만들까요? … 첫 자동 정리 배치를 다시 실행» 이라고 물었다.
+//   지시문·스킬이 «서랍»·«레인»·«배치» 를 내부 낱말로 쓰니 리브가 그 말을 그대로 사람에게 옮겼다. 원준: «처음 보는 사람은 이해가 되겠니?»
+test("㉛ 지시문은 «서랍» 을 내부 낱말로도 쓰지 않고, 묻는 문장이 처음 보는 사람에게 읽히게 하라고 못박는다", () => {
+  const p = buildSecondTurnPrompt(pin({ drawers: ["산출물"] }));
+  const leaks = p.split("\n").filter((l) => l.includes("서랍") && !l.includes("«서랍»이라고 하지 않는다"));
+  assert.deepEqual(leaks, [], "«서랍» 이 사람에게 쓰지 말라는 줄 밖에서 나온다");
+  assert.match(p, /처음 보는 사람도 알아들어야 한다/);
+  assert.match(p, /고르면 각각 무슨 일이 생기는지/);
+});
+test("㉜ 시드 liv-distill 도 «서랍» 을 쓰지 않는다 — 스킬의 예문이 리브의 입버릇이 된다", async () => {
+  const { DEFAULT_SKILLS } = await import("../delivery/default-content.js");
+  const skill = DEFAULT_SKILLS.find((s) => s.id === "liv-distill")!;
+  const leaks = [skill.body, skill.description, skill.label ?? ""].join("\n").split("\n")
+    .filter((l) => l.includes("서랍") && !l.includes("«서랍»") && !l.startsWith("- 나쁜 예"));
+  assert.deepEqual(leaks, []);
+  assert.match(skill.body, /처음 보는 사람도 알아들어야 한다/);
 });
 test("㉚ 시드 liv-distill 의 절차 번호가 1~12 로 이어지고, «N단계» 참조가 실제 단계를 가리킨다", async () => {
   const { DEFAULT_SKILLS } = await import("../delivery/default-content.js");
@@ -267,24 +286,6 @@ test("㉘ 시드 liv-distill 도 같은 단계를 갖는다 — 지시문과 스
   assert.match(b, /`group`/);
   assert.match(b, /새 묶음을 만들지 않는다/);
   assert.match(b, /화면에서만/);                        // 묶음이 분류·검색에 안 쓰인다는 경계
-  //  v8(#1812) — 기준은 자리마다 다르고 지시문의 «가르는 기준:» 줄을 따른다. 옛 보편 축 문장이 남으면 4·5칸 집합에서 리브가 칸을 잘못 고른다.
-  assert.doesNotMatch(b, /누가 만들었나|첫째 칸|둘째 칸|셋째 칸|세 칸/);
-  assert.match(b, /«가르는 기준:» 줄/);
-  assert.match(b, /카테고리는 그 안에 모일 자료 대부분이 해당하는 칸/);
-  assert.match(b, /내용이 대부분 한 칸이면 그 칸/);
-  assert.doesNotMatch(b, /본업 칸에 둔다/);              // 고루 걸칠 때의 자리는 지시문 줄이 정한다 — 스킬이 따로 정하면 줄과 어긋난다(R4)
-});
-test("㊳ 지시문이 «가르는 기준» 줄이 스킬보다 우선한다고 못박는다 — 옛 스킬이 남은 워크스페이스(v8 #1812)", () => {
-  const p = buildSecondTurnPrompt(pin());
-  assert.match(p, /«가르는 기준:» 줄이 스킬보다 우선한다/);
-  //  범위는 묶음 문장뿐 — 옛 스킬을 통째로 버리면 미리보기·증류 잡·catch-all 이 사라진다(R4).
-  assert.match(p, /그 문장들만/);
-  assert.match(p, /나머지 절차[^」]*그대로 따른다/);
-});
-test("㊴ 첫 지시 답에 source_link_knowledge 를 걸라고 하지 않는다 — 스킬(⛔)과 같은 말(R4)", () => {
-  const p = buildSecondTurnPrompt(pin());
-  assert.doesNotMatch(p, /`knowledge_save` \+ `source_link_knowledge`/);
-  assert.match(p, /`source_link_knowledge` 는 \*\*걸지 않는다\*\*/);
 });
 
 // ── 묶음(#1631, 2026-09-12 원준 결정) — 카테고리를 만들 때 묶음도 함께 정한다 ──────────────
@@ -307,7 +308,7 @@ test("㉛′ 이미 있는 카테고리를 쓸 때도 묶음이 비어 있으면
 });
 //  (#1631, 2026-09-14) ㉜ 를 뒤집는다 — 종전엔 «묶음이 없으면 단락을 싣지 않는다» 였고, 그 판에서 리브는 묶음 없는
 //   카테고리를 에러 없이 만들었다(실측 lively-agent-2-6a84: 서버의 하드 규칙은 묶음이 있어야 켜진다). 이제는 먼저 만들게 한다.
-test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만든다» — 이 사람 자리의 칸을 그대로 싣는다", () => {
+test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만든다» — 이 사람 직무의 세 칸을 그대로 싣는다", () => {
   const p = buildSecondTurnPrompt(pin({ groups: [] }));
   assert.match(p, /묶음부터 만든다/);
   assert.match(p, /`category_group_upsert`/);
@@ -315,14 +316,6 @@ test("㉜ 묶음이 아직 없으면 단락을 빼지 않고 «묶음부터 만�
   assert.match(p, /`group`/);                          // 만든 뒤엔 category_create 의 group 에 넣는다
   assert.doesNotMatch(p, /새 묶음을 만들지 마라/);        // 없는 묶음 안에서 고르라고 하지 않는다
   assert.ok(p.indexOf("category_group_upsert") < p.indexOf("org_distiller_upsert"), "묶음 만들기가 증류기 단계보다 뒤에 있다");
-  //  v8(#1812) — 가르는 기준은 그 자리의 판정 질문이다(보편 «누가 만들었나» 가 아니다).
-  assert.ok(p.includes(groupRuleLine(groupSetDefFor(null, "디자인"))), "그 자리의 판정 질문·받침 칸이 안 실렸다");
-  assert.doesNotMatch(p, /내 손에서 나온 것 →/);      // 옛 보편 축의 판정 문장이 묶음 기준으로 실리지 않는다
-});
-test("㊲ 사람이 이름을 고친 묶음이면 일반 기준 문장 — 어느 자리의 판정 질문도 지어 붙이지 않는다(v8 #1812)", () => {
-  const p = buildSecondTurnPrompt(pin());           // GROUPS = 사람이 만든 이름(정하는 일 · 팀과 맞춘 것)
-  assert.ok(p.includes(genericRuleLine(GROUPS)));
-  for (const set of Object.values(GROUP_SETS)) assert.ok(!p.includes(set.ask), "알아보지 못한 묶음에 어느 자리의 판정 질문이 붙었다");
 });
 test("㉝ 묶음 밖 카테고리가 있으면 이름을 싣고 0개로 끝내게 한다", () => {
   const p = buildSecondTurnPrompt(pin({ ungrouped: [{ key: "work", name: "업무 프로젝트" }, { key: "people", name: "사람·조직" }] }));
@@ -335,16 +328,163 @@ test("㉞ 묶음이 있고 묶음 밖이 없으면 종전 문구 그대로 — �
   assert.doesNotMatch(p, /묶음부터 만든다/);
   assert.doesNotMatch(p, /묶음 밖 카테고리 \d+개/);
 });
-test("㉟ 직무를 못 골라 intended 도 비었으면 기본 칸으로 — 그래도 단락은 빠지지 않는다", () => {
+test("㉟ 직무를 못 골라 intended 도 비었으면 기본 세 칸으로 — 그래도 단락은 빠지지 않는다", () => {
   const p = buildSecondTurnPrompt(pin({ groups: [], intended: [] }));
   assert.match(p, /묶음부터 만든다/);
-  for (const g of groupSetFor(null, null)) assert.ok(p.includes(g.name), `기본 칸 ${g.name} 이 없다`);
+  for (const g of GROUP_SETS.default) assert.ok(p.includes(g.name), `기본 칸 ${g.name} 이 없다`);
 });
-test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건너뛰었으면 학업 칸(회사 기본이 아니다)", () => {
+test("㊱ 2턴 묶음 재료 — 무대를 넘긴다: 학업인데 직무를 건너뛰었으면 학부생 세 칸(회사 기본이 아니다)", () => {
   const gi = turnGroupInputs({ stage: "study", workAsis: "학업·연구를 한다", sep: " · " });
-  assert.deepEqual(gi.intended.map((g) => g.name), groupSetFor(null, "수업·과제·팀플").map((g) => g.name));
+  assert.deepEqual(gi.intended.map((g) => g.name), GROUP_SETS["학부생"].map((g) => g.name));
   const gi2 = turnGroupInputs({ stage: "company", workAsis: "회사·조직에서 팀과 함께 일한다 · 디자인", sep: " · " });
   assert.equal(gi2.job, "디자인");
-  assert.deepEqual(gi2.intended.map((g) => g.name), groupSetFor(null, "디자인·콘텐츠·미디어").map((g) => g.name));
-  assert.ok(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length >= 3);   // 재료가 없어도 빈손 없음
+  assert.deepEqual(gi2.intended.map((g) => g.name), GROUP_SETS["디자인"].map((g) => g.name));
+  assert.equal(turnGroupInputs({ stage: null, workAsis: null, sep: " · " }).intended.length, 3);   // 재료가 없어도 빈손 없음
+});
+
+// ── #4851 — 하루가 지난 2턴은 쏘지 않는다(stale). 사양·엣지 표: 지식 outbox-echo-typed-window-4851 §사양 의 H 행. ──
+const DAY = 24 * 60 * 60_000;
+test("★ H1 세션이 살아 쉬는 중 · 수집 끝 — 처음 설정 뒤 정확히 하루면 쏘고, 그 1ms 뒤는 쏘지 않고 포기(stale)", () => {
+  assert.equal(decideSecondTurn(st({ now: DONE + DAY })).action, "fire");
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1 })), { action: "giveup", reason: "stale" });
+});
+test("H2 하루가 지났는데 세션이 일하는 중 — 기다리지 않고 포기(stale)", () => {
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, session: { working: true, agentState: "busy" } })), { action: "giveup", reason: "stale" });
+});
+test("H3 앞선 판정은 그대로 — 하루가 지나도 세션이 없으면 session-gone · 1턴이 안 들어갔으면 turn1-never-delivered", () => {
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, session: null })), { action: "giveup", reason: "session-gone" });
+  assert.deepEqual(decideSecondTurn(st({ now: DONE + DAY + 1, outboxPending: 1 })), { action: "giveup", reason: "turn1-never-delivered" });
+  //  상한 상수가 사양(하루)과 같다 — 옛 판엔 없다(네임스페이스로 읽어 그 행만 빨간불).
+  assert.equal((turnNs as { SECOND_TURN_STALE_MS?: number }).SECOND_TURN_STALE_MS, DAY);
+});
+
+// ── #4213 T13 — 1턴 갈래(flow)에 따른 2턴 판정. 사양 scratchpad spec.md §C 의 표(S1~S9) 행마다 한 검사. ──
+//  · 합류자(join)는 2턴이 없다 — 팀의 서랍·정리 규칙을 합류자 세션이 새로 세우지 않는다(다른 판정보다 먼저).
+//  · 설치자 «처음 연결»(connect)은 리브가 처음 수집 끝(collect_done_at)을 찍을 때까지, 그러나 90분까지만 기다린다.
+const MIN = 60_000;
+const cw = (extra: Record<string, unknown>, at: number, over: Partial<SecondTurnState> = {}): SecondTurnState =>
+  st({ welcome: { done_at: new Date(DONE).toISOString(), session_id: "box-a-1", ...extra }, now: DONE + at, ...over });
+
+test("S1 합류자 — 세션이 쉬어도 2턴을 건너뛴다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "join" }, 10 * MIN)), { action: "skip", reason: "join" });
+});
+test("S2 합류자 — 이미 쏜 표식이 있어도 이유는 «합류자» 다(먼저 판정)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "join", distill_at: new Date(DONE).toISOString() }, 10 * MIN)), { action: "skip", reason: "join" });
+});
+test("S3 처음 연결 — 리브가 처음 수집 끝을 안 찍었으면 세션이 쉬어도 기다린다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 10 * MIN)), { action: "wait", reason: "connecting" });
+});
+test("S4 처음 연결 — 처음 수집 끝이 찍혔으면 종전 판정으로 쏜다", () => {
+  const d = decideSecondTurn(cw({ flow: "connect", collect_done_at: new Date(DONE + 9 * MIN).toISOString() }, 10 * MIN));
+  assert.equal(d.action, "fire");
+});
+test("S5 처음 연결 — 정확히 상한(90분)이면 신호 없이도 기다리지 않는다(경계)", () => {
+  assert.equal(CONNECT_FLOW_MAX_WAIT_MS, 90 * MIN);
+  const d = decideSecondTurn(cw({ flow: "connect" }, CONNECT_FLOW_MAX_WAIT_MS));
+  assert.deepEqual(d, { action: "fire", partial: false, waitedMin: 90 });
+});
+test("S5′ 처음 연결 — 상한 1초 전이면 아직 기다린다(경계)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, CONNECT_FLOW_MAX_WAIT_MS - 1000)), { action: "wait", reason: "connecting" });
+});
+test("S6 처음 연결 대기 중 세션이 사라지면 다시 열지 않고 기다린다(사람이 리브 탭으로 되살릴 수 있다)", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 30 * MIN, { session: null })), { action: "wait", reason: "connecting" });
+});
+test("S6′ 상한이 지났는데 세션이 없으면 종전대로 한 번 다시 연다(1턴 배달 상한 안)", () => {
+  assert.ok(CONNECT_FLOW_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "다시 여는 길이 남도록 처음 연결 상한이 1턴 배달 상한보다 짧아야 한다");
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect" }, 95 * MIN, { session: null })), { action: "reopen", reason: "session-gone" });
+});
+test("S7 갈래 없는 옛 행은 종전과 같다 — 쉬면 쏜다", () => {
+  assert.equal(decideSecondTurn(cw({}, 10 * MIN)).action, "fire");
+});
+test("S8 처음 수집 끝이 찍혀도 리브가 일하는 중이면 기다린다", () => {
+  const d = decideSecondTurn(cw({ flow: "connect", collect_done_at: new Date(DONE).toISOString() }, 10 * MIN, { session: { working: true, agentState: "busy" } }));
+  assert.deepEqual(d, { action: "wait", reason: "turn1-running" });
+});
+test("S9 처음 수집 끝이 null(명시)이면 찍히지 않은 것이다", () => {
+  assert.deepEqual(decideSecondTurn(cw({ flow: "connect", collect_done_at: null }, 10 * MIN)), { action: "wait", reason: "connecting" });
+});
+test("S10 후보 조회가 합류자 행을 뺀다 — 영원히 안 쏠 행이 done_at 순 LIMIT 앞자리를 차지하지 않게", () => {
+  const SRC = readFileSync(new URL("../store/members.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+  const fn = SRC.slice(SRC.indexOf("export async function listLivSecondTurnCandidates"), SRC.indexOf("ORDER BY welcome->>'done_at' ASC LIMIT 200"));
+  assert.match(fn, /AND COALESCE\(welcome->>'flow', ''\) <> 'join'/);
+});
+test("S11 2턴 지시가 Claude 커넥터로 모은 곳(수집 단위)을 다시 읽고 설명·성격을 채우게 한다(설계 §3)", () => {
+  const p = buildSecondTurnPrompt({ displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 5 });
+  assert.match(p, /`collect_units`\(Claude 커넥터로 모으는 곳 — 수집 단위\)/);
+  assert.match(p, /`collect_unit_update` 로 손본다/);
+  //  (격리 리뷰 2026-10-17) 사람이 처음 연결 대화에서 정한 모을지·공개범위를 2턴이 묻지 않고 뒤집지 않는다 — 설명·메타·주기만 묻지 않는다.
+  assert.match(p, /모을지\(`state`\)와 공개범위\(`visibility`\)는 처음 연결 대화에서 사람이 정한 것이다 — 뒤집지 않는다/);
+  assert.doesNotMatch(p, /`state:\"excluded\"`/, "2턴이 묻지 않고 단위를 빼라는 지시가 남았다");
+  //  (T12 #4744 와 맞물림) 활동량·주기는 서버가 글 빈도로 잰다 — 2턴이 interval_sec·activity 를 쓰라고 하면 자동 주기가 멈춘다.
+  assert.doesNotMatch(p, /`interval_sec` 를 맞춘다|activity: 하루 평균/, "2턴이 서버가 재는 주기·활동량을 손으로 쓰게 한다");
+  assert.match(p, /`description`\(이 단위에서 오가는 일/);
+});
+
+// ── #5060 처음 설정에서 올린 파일 → 정리 지시(2턴) ─────────────────────────────────
+//  엣지 표:
+//   U1 갈래 없음 · 세션 없음                         → skip no-kickoff(무회귀)
+//   U2 files · 세션 없음 · 올리기 끝                  → reopen files(새로 연다)
+//   U3 files · 올리기 중 · 상한 전                    → wait uploading
+//   U4 files · 올리기 중 · 상한 지남                  → reopen files(있는 것으로 시작)
+//   U5 connect · 연결 끝 찍힘 · 올리기 중             → wait uploading(반쯤 올라온 표본으로 짜지 않는다)
+//   U6 connect · 연결 끝 · 올리기 끝                  → fire
+//   U7 files · 이미 한 번 열었다 · 세션 없음          → giveup session-gone-again(무한 재생성 금지)
+//   U8 files · 2시간 넘음 · 세션 없음                 → giveup stale
+//   U9 files · 세션 id 없음 · 그 사람 리브 세션이 살아 있다 → fire(새로 열지 않고 그 세션에)
+//   U10 상한 순서 — 올리기 대기 상한 < 1턴 배달 상한(그 뒤엔 새로 여는 길이 닫힌다)
+//   P1 지시문 — 올린 파일이 있으면 local-files 를 켜서 끝내라 · 올리는 중이면 지금 있는 것으로 · 둘 다 없으면 그 줄 없음
+const FW = (o: Record<string, unknown> = {}) => ({ done_at: new Date(DONE).toISOString(), ...o }) as never;
+test("U1 갈래 없음 · 세션 없음 — 종전대로 skip", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW(), session: null })), { action: "skip", reason: "no-kickoff" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "connect" }), session: null })), { action: "skip", reason: "no-kickoff" },
+    "connect 갈래는 세션 id 가 적혀야 후보다(연결 대화를 못 열었으면 정리 지시도 없다)");
+});
+test("U2 files · 세션 없음 · 올리기 끝 — 새로 연다", () => {
+  const w = FW({ flow: "files", upload_started_at: "a", upload_done_at: "b" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null })), { action: "reopen", reason: "files" });
+});
+test("U3·U4 files · 올리기 중 — 상한 전엔 기다리고, 상한이 지나면 연다", () => {
+  const w = FW({ flow: "files", upload_started_at: "a" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + UPLOAD_MAX_WAIT_MS - 1 })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + UPLOAD_MAX_WAIT_MS })), { action: "reopen", reason: "files" });
+});
+test("U5·U6 connect · 연결 끝 — 올리기가 끝나야 쏜다", () => {
+  const base = { flow: "connect", session_id: "box-a-1", collect_done_at: "c", upload_started_at: "a" };
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW(base) })), { action: "wait", reason: "uploading" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ ...base, upload_done_at: "b" }) })), { action: "fire", partial: false, waitedMin: 1 });
+});
+test("U7·U8 files — 한 번 연 뒤 또 없거나 2시간이 넘으면 포기", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files", distill_reopened_at: "r" }), session: null })), { action: "giveup", reason: "session-gone-again" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files" }), session: null, now: DONE + TURN1_DELIVERY_TTL_MS + 1 })), { action: "giveup", reason: "stale" });
+});
+test("U9 files · 그 사람 리브 세션이 살아 있으면 — 새로 열지 않고 그 세션에 쏜다", () => {
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "files" }) })), { action: "fire", partial: false, waitedMin: 1 });
+});
+test("U10 올리기 대기 상한은 1턴 배달 상한보다 짧다", () => {
+  assert.ok(UPLOAD_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "같거나 길면 상한에서 새로 열 길이 이미 닫혀 있다(올린 파일이 영영 정리되지 않는다)");
+});
+test("P1 지시문 — 올린 파일 · 올리는 중 줄", () => {
+  const base: SecondTurnInput = { displayName: null, work: null, groups: [], intended: [], ungrouped: [], drawers: [], firstOrder: null, collectors: [], partial: false, waitedMin: 3 };
+  const none = buildSecondTurnPrompt(base);
+  assert.ok(!none.includes("local-files"), "올린 파일이 없으면 그 줄을 싣지 않는다");
+  const up = buildSecondTurnPrompt({ ...base, uploaded: true });
+  assert.ok(up.includes("`local-files`") && up.includes("켜서 끝낸다"), "올린 파일이 있으면 로컬 증류기를 켜서 끝내라고 못박는다");
+  assert.ok(!up.includes("아직 다 올라오지 않았다"));
+  const ing = buildSecondTurnPrompt({ ...base, uploaded: true, uploading: true });
+  assert.ok(ing.includes("아직 다 올라오지 않았다") && ing.includes("지금 있는 것으로 시작"));
+});
+
+//  (#5060 격리 리뷰) 연결 대화가 끝내 안 묶인 «처음 연결» 갈래
+//   C1 연결 갈래 · 세션 없음 · 올린 파일 · 유예 안 → wait connecting(곧 묶인다 — 세션을 하나 더 세우지 않는다)
+//   C2 같은데 유예 지남 → reopen files(올린 파일이 영영 정리되지 않는 길을 막는다)
+//   C3 연결 갈래 · 세션 없음 · 올린 파일 없음 · 유예 지남 → skip no-kickoff(정리할 것도, 이어 갈 대화도 없다)
+//   C4 C2 인데 그 사람 리브 세션이 살아 있다 → fire(그 세션에)
+test("C1~C4 연결 대화가 안 묶인 처음 연결 갈래", () => {
+  const w = FW({ flow: "connect", upload_started_at: "a", upload_done_at: "b" });
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + CONNECT_BIND_GRACE_MS - 1 })), { action: "wait", reason: "connecting" }, "C1");
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, session: null, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "reopen", reason: "files" }, "C2");
+  assert.deepEqual(decideSecondTurn(st({ welcome: FW({ flow: "connect" }), session: null, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "skip", reason: "no-kickoff" }, "C3");
+  assert.deepEqual(decideSecondTurn(st({ welcome: w, now: DONE + CONNECT_BIND_GRACE_MS })), { action: "fire", partial: false, waitedMin: 10 }, "C4");
+  assert.ok(CONNECT_BIND_GRACE_MS < UPLOAD_MAX_WAIT_MS && UPLOAD_MAX_WAIT_MS < TURN1_DELIVERY_TTL_MS, "유예 < 올리기 상한 < 1턴 배달 상한");
 });

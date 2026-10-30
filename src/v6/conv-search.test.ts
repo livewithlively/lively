@@ -453,19 +453,6 @@ test("[N3] rankConvAggsCounted 는 층이 매겨진 세션 전부를 돌려준�
   assert.deepEqual(r.judged.map((a) => a.session_id).sort(), ["s0", "s1", "s2", "s3", "s4"]);
 });
 
-// ── #4530 배포 뒤 — 한 글자 낱말은 다른 있어야 하는 낱말이 둘 이상이면 없어도 되는 낱말 ──
-test("[N4] 한 글자 낱말 — 다른 낱말이 둘 이상이면 없어도 되는 낱말 · 둘뿐이면 그대로 · 따옴표·숫자 한 자는 그대로", () => {
-  const opt = (q: string): string[] => parseQueryTerms(q).filter((t) => t.optional).map((t) => t.t);
-  assert.deepEqual(opt("미리 보기 환경이 안 뜸"), ["안", "뜸"]);
-  assert.deepEqual(opt("폰 터미널 사진 첨부"), ["폰"]);
-  assert.deepEqual(opt("폰에서 터미널 사진 첨부"), [], "조사가 붙은 한 글자(«폰에서»)는 조사를 떼지 않으므로(한 글자로 줄지 않는다) 그대로 있어야 하는 낱말");
-  assert.deepEqual(opt("앱 삭제"), [], "낱말이 둘뿐이면 한 글자도 있어야 하는 낱말이다");
-  assert.deepEqual(opt("앱"), []);
-  assert.deepEqual(opt('터미널 사진 "폰"'), [], "따옴표로 묶으면 그대로 찾는다");
-  assert.deepEqual(opt("터미널 사진 3"), [], "숫자 한 자는 번호일 수 있다");
-  assert.deepEqual(opt("a 터미널 사진"), ["a"]);
-});
-
 // #4553 — 맞은 말 검색의 세션 거르개(세션 이력 앱의 사이드바에서 고른 범위). 원준 2026-10-05 «A안으로 고고».
 //  엣지 표(스크래치패드 spec-side.md V): V1 없음 = 거르지 않음 · V2 빈 목록 = 빈 목록(결과 없음) · V3 틀린 것은 400 감 ·
 //   V4 중복은 한 번 · V5 경계(정확히 상한 개). 저장 쪽(그 세션의 말만)은 session-history.pg-test.mjs M19~M23 이 SQL 로 잰다.
@@ -494,4 +481,17 @@ test("[V5] 경계 — 정확히 상한 개는 받고, 하나 더 많으면 틀�
   assert.equal(parseSessionIds([...ids, "one-more"]).ok, false);
   assert.equal(SESSION_ID_RE.test("x".repeat(64)), true);
   assert.equal(SESSION_ID_RE.test("x".repeat(65)), false);
+});
+
+// ── #4530 배포 뒤 — 한 글자 낱말은 다른 있어야 하는 낱말이 둘 이상이면 없어도 되는 낱말 ──
+test("[N4] 한 글자 낱말 — 다른 낱말이 둘 이상이면 없어도 되는 낱말 · 둘뿐이면 그대로 · 따옴표·숫자 한 자는 그대로", () => {
+  const opt = (q: string): string[] => parseQueryTerms(q).filter((t) => t.optional).map((t) => t.t);
+  assert.deepEqual(opt("미리 보기 환경이 안 뜸"), ["안", "뜸"]);
+  assert.deepEqual(opt("폰 터미널 사진 첨부"), ["폰"]);
+  assert.deepEqual(opt("폰에서 터미널 사진 첨부"), [], "조사가 붙은 한 글자(«폰에서»)는 조사를 떼지 않으므로(한 글자로 줄지 않는다) 그대로 있어야 하는 낱말");
+  assert.deepEqual(opt("앱 삭제"), [], "낱말이 둘뿐이면 한 글자도 있어야 하는 낱말이다");
+  assert.deepEqual(opt("앱"), []);
+  assert.deepEqual(opt('터미널 사진 "폰"'), [], "따옴표로 묶으면 그대로 찾는다");
+  assert.deepEqual(opt("터미널 사진 3"), [], "숫자 한 자는 번호일 수 있다");
+  assert.deepEqual(opt("a 터미널 사진"), ["a"]);
 });

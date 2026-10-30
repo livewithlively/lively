@@ -17,7 +17,7 @@
 //  판정 잣대는 새로 만들지 않는다 — context-pipeline 의 *Health 한 벌(stageHealthLevels)을 그대로 쓴다(#1841 규율).
 //  데이터도 새 API 없이 조립한다: /org/pipeline(수치·잡) + /org/collectors + /sources/tree + /knowledge + /org/sections
 //   + /terminal/sessions. 뒤 다섯은 **장식**이라 실패해도 지도는 선다(try/catch — 수치만으로도 그림이 된다).
-import { api, el, fmtNum, relTime } from './core.js';
+import { api, el, fmtNum, hasScope, relTime, toast } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthLevels } from './context-pipeline.js';
 import { presetSvcKey, svcTile } from './svc-icons.js';
@@ -25,6 +25,7 @@ import { svcLogo } from './svc-logos.js';
 import { appGlassIcon } from './v2/glass-icon.js';   // 리프 모듈(#3830) — 셸 레지스트리를 물지 않는다
 import { runsPanel, type RunFilter } from './context-runs.js';   // #4172 지도 아래 「자동 실행」(#4135 3판 — 날짜·기간·자세히 보기)
 import { icon as lineIcon } from './v2/icons.js';
+import { AI_LOGO, AI_BRAND, AI_ORDER } from './lib/ai-logos.js';   // #5147 AI 세션 역의 실물 — 이 계정에 연결된 AI 로고
 
 const fmt = (n: any) => (Number.isFinite(Number(n)) ? fmtNum(Number(n)) : '—');
 
@@ -50,21 +51,26 @@ function sourceFace(system: string, container: string | null): { label: string; 
 }
 
 // ── 표지: 흐름 지도 ─────────────────────────────────────────────────────────
-export async function renderContextMap(box: HTMLElement): Promise<void> {
+export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLElement | null>): Promise<void> {
   box.replaceChildren(skeleton('맥락 현황을 읽는 중'));
-  let d: any = null;
-  try { d = await api('/api/ui/org/pipeline'); } catch (e) {
-    box.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '현황을 불러오지 못했습니다 — ' + (e as Error).message })));
-    return;
-  }
+  //  #5147 — 수치(/org/pipeline)와 장식 다섯을 **함께** 읽는다. 종전엔 수치를 다 받은 뒤에야 장식을 읽기 시작했다.
+  const pipeP = api('/api/ui/org/pipeline');
+  pipeP.catch(() => { /* 아래 await 가 처리한다 — 처리 안 된 거부 경고만 막는다 */ });
   // 장식 데이터(실물 미니어처) — 실패해도 지도는 선다.
-  const [colD, treeD, knowD, secD, sessD] = await Promise.all([
+  const decoP = Promise.all([
     api('/api/ui/org/collectors').catch(() => null),
     api('/api/ui/sources/tree').catch(() => null),
     api('/api/ui/knowledge?' + new URLSearchParams({ limit: '3', orderBy: 'updated_at', light: '1', lifecycle: 'active,pending', injection: 'recalled' })).catch(() => null),
     api('/api/ui/org/sections').catch(() => null),
     api('/api/ui/terminal/sessions?includeProjects=1').catch(() => null),
+    api('/api/ui/me/ai-accounts').catch(() => null),
   ]);
+  let d: any = null;
+  try { d = await pipeP; } catch (e) {
+    box.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '현황을 불러오지 못했습니다 — ' + (e as Error).message })));
+    return;
+  }
+  const [colD, treeD, knowD, secD, sessD, aiD] = await decoP;
   const st = (d && d.stages) || {};
   const gates = (d && d.gates) || {};
   const lv = stageHealthLevels(d);
@@ -103,7 +109,11 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   const startDocs = secD && secD.sections ? Object.keys(secD.sections).length : null;
   const sessions: any[] = (sessD && sessD.sessions) || [];
   const busy = sessions.filter((s) => s && (s.agentState === 'busy' || s.agentState === 'waiting')).length;
-  const searchable = Math.max(0, Number(st.distill?.output || 0) - Number(st.classify?.backlog || 0));
+  //  #4194 — 미분류 지식은 소환되지 않는다. 그 수는 증류기의 카테고리 붙이기가 들고 있다(stages.distill.knowledge ·
+  //   배포 중 옛 게이트웨이면 옛 모양 stages.classify).
+  const fill = st.distill?.knowledge || st.classify || null;
+  const fillN = Number(fill?.backlog || 0);
+  const searchable = Math.max(0, Number(st.distill?.output || 0) - fillN);
 
   // ── 역 넷(장소 = 흰 카드) — 같은 해부 4칸: 문패(앱 아이콘 · 이름 · 수) / 정의 / 실물 / 발치 ──
   //  #3830(2026-09-10 원준): 장소 카드는 **그 장소로** 간다 — 외부 앱→[외부 앱 연결] · 자료→[자료] 앱 · 지식→레일 [위키] ·
@@ -149,17 +159,31 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
           el('b', { class: 'cxm-kn-t', text: k.title || k.name }),
           k.lifecycle === 'pending' ? el('span', { class: 'pill pill-warn', text: '승인 대기' }) : el('span', { class: 'cxm-kn-m', text: relTime(k.updated_at) })))
       : [el('span', { class: 'cxm-empty', text: '아직 지식이 없습니다' })]));
-  const classifyEvery = st.classify?.job?.any_enabled ? '자동 분류 ' + intervalText(st.classify.job.interval_sec) : '자동 분류 꺼짐';
+  //  발치 첫 칸 — 미분류 지식이 있으면 그 수(검색에 안 잡히는 것)를, 없으면 조용히 «모두 칸에 들어 있음».
+  const fillFoot = fillN ? '미분류 지식 ' + fmt(fillN) + '건' : '모두 카테고리에 들어 있음';
   const stKnow = station({ href: '#/knowledge', go: { section: 'wiki', route: '#/knowledge' }, icon: 'wiki', name: '지식', v: fmt(st.distill?.output), unit: '건',
-    def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(st.classify?.categories) + '칸에 정리됩니다', x: knowX,
-    foot: classifyEvery, lv: lv.distill });
+    def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(d?.taxonomy?.categories ?? st.classify?.categories) + '칸에 정리됩니다', x: knowX,
+    foot: fillFoot, lv: lv.distill });
 
-  const aiX = el('span', { class: 'cxm-sess' },
-    el('span', { class: 'cxm-sess-u', text: '지난 미팅 정리해줘' }),
-    el('span', { class: 'cxm-sess-row' },
-      el('i', { class: 'cxm-sess-ai', 'aria-hidden': 'true' }, svcLogo('claude-headless') || el('span', { text: 'AI' })),
-      el('span', { class: 'cxm-sess-a' }, el('span', { text: '팀이 쌓은 지식으로 답합니다 ' }), el('i', { class: 'cxm-sess-ref', text: '지식 참조' }))));
-  const stAI = station({ href: '#/terminal', go: { section: 'sess', route: '#/terminal' }, icon: 'chat', name: 'AI 세션', v: sessD ? fmt(busy) : '—', unit: '작업 중', def: '시작할 때 읽고, 대화 중에 검색해 씁니다', x: aiX,
+  //  #5147(원준 2026-10-30) — 실물은 **이 계정에 연결된 AI 의 로고**다(외부 앱 역이 연결된 앱 로고를 보이는 것과 같은 모양).
+  //   종전의 대화 한 토막 그림은 어느 AI 가 붙어 있는지 말하지 않았다. 누르면 그 AI 들을 연결하는 [AI 계정 연결] 창으로 간다.
+  //   «연결됨» 은 서버가 자격을 확인한 것(loggedIn === true)만 — 확인 못 한 것(null)은 연결됐다고 말하지 않는다.
+  const aiOn: string[] = (((aiD && aiD.accounts) || []) as any[])
+    .filter((a: any) => a && a.loggedIn === true && AI_LOGO[a.key])
+    .map((a: any) => String(a.key))
+    .sort((a, b) => AI_ORDER.indexOf(a) - AI_ORDER.indexOf(b));
+  //  타일 바탕은 외부 앱 타일과 같이 브랜드 색을 옅게 깐다(--svc-brand — 34-service-logins.css). 로고 표(lib/ai-logos.ts)의 채움 색과 같다.
+  //  ⚠ --svc-brand 는 타일의 **글자색**이기도 하다. ChatGPT · Grok 마크는 currentColor 로 그려지는 단색 마크라, 브랜드 초록(#10A37F)을
+  //   주면 마크가 초록으로 칠해졌다(원준 2026-10-30 «실제 로고랑 다르다»). 단색 마크는 본문 잉크(--ink)를 준다 — 라이트에선 검정, 다크에선 흰색.
+  const AI_TILE_BRAND: Record<string, string> = { claude: '#D97757', codex: 'var(--ink)', antigravity: '#4285F4', grok: 'var(--ink)' };
+  const aiTile = (key: string) => {
+    const t = el('span', { class: 'svc-tile', title: (AI_BRAND[key] || key) + ' 연결됨', style: AI_TILE_BRAND[key] ? '--svc-brand:' + AI_TILE_BRAND[key] : null });
+    t.innerHTML = AI_LOGO[key];   // 정적 SVG 문자열(lib/ai-logos.ts) — 사람이 넣은 값이 아니다
+    return t;
+  };
+  const aiX = el('span', { class: 'cxm-svts' },
+    ...(aiOn.length ? aiOn.map(aiTile) : [el('span', { class: 'cxm-empty', text: '연결된 AI 가 없습니다. 눌러서 연결하세요' })]));
+  const stAI = station({ href: '#/system/me-ai', go: { route: '#/system/me-ai', meAi: true }, icon: 'chat', name: 'AI 세션', v: sessD ? fmt(busy) : '—', unit: '작업 중', def: '시작할 때 읽고, 대화 중에 검색해 씁니다', x: aiX,
     foot: '검색 대상 ' + fmt(searchable) + '건' + (startDocs !== null ? ' · 항상 읽는 것 ' + fmt(startDocs) : '') });
 
   // ── 기계 셋(선로 위 어두운 칩) — 이름 · 수 · 상태 배지 · 살아 있는 점 + 주기 ──
@@ -167,7 +191,7 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   //   주입규칙은 거를 기록이 없어 종전처럼 그 탭으로 간다.
   const machine = (o: { href: string; name: string; s: string; pill: string; k: 'ok' | 'warn' | 'dn'; live: boolean; sched: string; extra?: HTMLElement | null; filter?: 'c' | 'd' }) =>
     el(o.filter ? 'button' : 'a', o.filter
-      ? { type: 'button', class: 'cxm-mc is-' + o.filter, 'aria-pressed': 'false', title: o.name + ' 기록을 아래에서 보기 — 한 번 더 누르면 전체' }
+      ? { type: 'button', class: 'cxm-mc is-' + o.filter, 'aria-pressed': 'false', title: o.name + ' 기록을 아래에서 보기 — 한 번 더 누르면 전체 · 두 번 빠르게 누르면 ' + o.name + ' 설정으로 갑니다' }
       : { class: 'cxm-mc', href: o.href },
       el('span', { class: 'cxm-mc-n' }, lineIcon('gear', 'cxm-mc-ic'), el('span', { text: o.name })),
       el('span', { class: 'cxm-mc-s', text: o.s }),
@@ -177,12 +201,15 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
       o.filter ? el('span', { class: 'cxm-mc-hint', text: '누르면 아래에서' }) : null);
   const jobLine = (job: any) => !job ? '자동 실행 없음' : (!job.any_enabled ? '자동 실행 꺼짐' : intervalText(job.interval_sec) + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행'));
   const collectOn = Number(st.collect?.enabled || 0) > 0 && !!st.collect?.job?.any_enabled;
-  const mcCollect = machine({ href: '#/context/sources', name: '수집기', s: fmt(st.collect?.configured) + ' · 켜짐 ' + fmt(st.collect?.enabled),
+  const mcCollectHref = '#/context/sources', mcDistillHref = '#/context/distill';
+  const mcCollect = machine({ href: mcCollectHref, name: '수집기', s: fmt(st.collect?.configured) + ' · 켜짐 ' + fmt(st.collect?.enabled),
     pill: collectOn ? '켜짐' : '꺼짐', k: collectOn ? 'ok' : 'dn', live: collectOn, sched: jobLine(st.collect?.job), filter: 'c' });
   const distillOn = Number(st.distill?.enabled || 0) > 0 && !!st.distill?.job?.any_enabled;
-  const mcDistill = machine({ href: '#/context/distill', name: '증류기', s: fmt(st.distill?.configured) + ' · 켜짐 ' + fmt(st.distill?.enabled),
+  const mcDistill = machine({ href: mcDistillHref, name: '증류기', s: fmt(st.distill?.configured) + ' · 켜짐 ' + fmt(st.distill?.enabled),
     pill: pending ? '승인 ' + fmt(pending) + ' 대기' : (distillOn ? '켜짐' : '꺼짐'), k: pending ? 'warn' : (distillOn ? 'ok' : 'dn'), live: distillOn, sched: jobLine(st.distill?.job),
-    extra: blindEl, filter: 'd' });
+    filter: 'd' });
+  //  사각지대 배지는 다 읽히면 제자리(안내 문구 앞)에 선다 — 그 수를 세는 데 시간이 걸려도 지도는 먼저 선다(#5147).
+  void blind?.then((b) => { if (b && mcDistill.isConnected) mcDistill.insertBefore(b, mcDistill.querySelector('.cxm-mc-hint')); });
   const mcInject = machine({ href: '#/context/deliver', name: '주입규칙', s: (startDocs !== null ? '시작 문서 ' + fmt(startDocs) + ' · ' : '') + '검색', pill: '켜짐', k: 'ok', live: true, sched: '세션 시작마다' });
 
   // ── 관(선로) — 기계가 도는 구간만 흐른다 ──
@@ -215,31 +242,92 @@ export async function renderContextMap(box: HTMLElement): Promise<void> {
   };
   mcCollect.addEventListener('click', pick('c'));
   mcDistill.addEventListener('click', pick('d'));
+  //  #5147(원준 2026-10-29) — 한 번 누르면 아래 기록을 거르고(그대로), **두 번 빠르게 누르면 그 기계의 설정 탭**으로 간다.
+  //   두 번 누르는 동안 click 도 두 번 와서 거름이 켜졌다 꺼지지만, 곧바로 화면을 떠나므로 그대로 둔다.
+  //   (한 번 누름을 늦춰 두 번 누름과 가르면 한 번 누름이 그만큼 굼떠진다 — 자주 쓰는 쪽을 늦추지 않는다.)
+  mcCollect.addEventListener('dblclick', () => { location.hash = mcCollectHref; });
+  mcDistill.addEventListener('dblclick', () => { location.hash = mcDistillHref; });
+  //  #5147(원준 2026-10-30) — 「자동 실행」 머리에 «지금 수집» · «지금 증류». 주기를 기다리지 않고 한 번 돌린다.
+  //   새 경로를 만들지 않는다 — 수집기 설정의 [지금 수집](수집기마다 /sync, 비동기)과 증류기 설정의 [지금 한 번 실행](/cron/:id/run)을 그대로 부른다.
+  if (hasScope('memory')) {
+    const now = runNowButtons(collectors, [st.distill?.job, fill?.job], () => panel.reload());
+    panel.root.querySelector('.cxr-head .cxr-more-link')?.before(now);
+  }
+  const fillWarn = distillFillWarn(fill?.job, fillN);
+  if (fillWarn) panel.root.querySelector('.cxr-sched')?.append(fillWarn);
 
   root.append(
     el('p', { class: 'cxm-cap' }, el('b', { text: '흐름 지도' }),
-      el('span', { text: '자료가 지식이 되어 AI 에 닿기까지 — 흰 카드는 장소, 어두운 칩은 그 사이에서 도는 기계입니다. 선이 흐르면 그 기계가 돌고 있는 것이고, 기계를 누르면 아래에 그 기계의 기록이 나옵니다' })),
+      el('span', { text: '자료가 지식이 되어 AI 에 닿기까지 — 흰 카드는 장소, 어두운 칩은 그 사이에서 도는 기계입니다. 선이 흐르면 그 기계가 돌고 있는 것이고, 기계를 누르면 아래에 그 기계의 기록이 나오고, 두 번 누르면 그 기계의 설정으로 갑니다' })),
     lane,
     panel.root);
   box.replaceChildren(root);
 }
 
-let blindEl: HTMLElement | null = null;
-// 사각지대 — 어느 증류기에도 안 걸리는 자료. 있으면 증류기 칩 발치에 한 줄(renderContextMap 이 그리기 전에 준비).
-async function prepareBlindspot(): Promise<void> {
-  blindEl = null;
+// 사각지대 — 어느 증류기에도 안 걸리는 자료. 있으면 증류기 칩 발치에 한 줄.
+//  #5147 — 종전엔 이 수를 다 센 뒤에야 지도를 그렸다(/org/distillers 실측 3초 = 표지가 3초 동안 빈 화면). 이제 지도와 함께 읽기 시작하고,
+//   지도가 먼저 선 뒤 수가 오면 칩에 붙인다.
+async function loadBlindspot(): Promise<HTMLElement | null> {
   try {
     const r: any = await api('/api/ui/org/distillers');
     const n = Number(r?.coverage?.uncovered || 0);
-    if (n > 0) blindEl = el('span', { class: 'cxm-mc-x', title: '어느 증류기에도 안 걸리는 자료 — 이대로 두면 영영 지식이 되지 않습니다', text: '사각지대 ' + fmtNum(n) });
-  } catch { blindEl = null; }
+    return n > 0 ? el('span', { class: 'cxm-mc-x', title: '어느 증류기에도 안 걸리는 자료 — 이대로 두면 영영 지식이 되지 않습니다', text: '사각지대 ' + fmtNum(n) }) : null;
+  } catch { return null; }
 }
-// renderContextMap 을 감싸 사각지대를 먼저 준비한다 — 셸은 이 이름 하나만 부른다.
+// 셸은 이 이름 하나만 부른다.
 export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
-  await prepareBlindspot();
-  await renderContextMap(box);
+  await renderContextMap(box, loadBlindspot());
 }
 
+/**
+ * «지금 수집» · «지금 증류» 단추 한 쌍(#5147).
+ *  · 지금 수집 = **연결된** 수집기(지도의 외부 앱 역과 같은 판정 — 켜져 있고 자격이 있다) 전부에 /sync. 비동기라 곧바로 돌아온다.
+ *  · 지금 증류 = 증류 단계의 켜진 자동 실행(자료 → 지식 · 카테고리 붙이기)을 한 번씩(설정 화면의 [지금 한 번 실행]과 같다). 배치를 접수만 하고 곧바로 돌아온다(헤드리스 접수).
+ *  돌릴 것이 없으면 단추를 끄고 이유를 툴팁으로 말한다 — 눌러 놓고 아무 일도 없는 단추를 두지 않는다.
+ */
+function runNowButtons(collectors: any[], jobs: any[], after: () => void): HTMLElement {
+  const btn = (text: string) => el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text }) as HTMLButtonElement;
+  const bc = btn('지금 수집'), bd = btn('지금 증류');
+  const ids = Array.from(new Set(jobs.filter((j) => j && j.id && j.any_enabled).map((j) => String(j.id))));
+  if (!collectors.length) { bc.disabled = true; bc.title = '연결된 수집기가 없습니다'; }
+  else bc.title = '연결된 수집기 ' + collectors.length + '개가 지금 한 번 가져옵니다';
+  if (!ids.length) { bd.disabled = true; bd.title = '증류 자동 실행이 꺼져 있습니다. 증류기 설정에서 켜세요'; }
+  else bd.title = '증류기를 지금 한 번 돌립니다. 끝나면 아래 기록에 나옵니다';
+  const busy = (b: HTMLButtonElement, label: string | null, text: string) => { b.disabled = !!label; b.textContent = label || text; };
+
+  bc.addEventListener('click', async () => {
+    busy(bc, '수집 시작 중…', '지금 수집');
+    const rs = await Promise.allSettled(collectors.map((c) => api('/api/ui/org/collectors/' + c.id + '/sync', { method: 'POST', body: '{}' })));
+    const ok = rs.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+    const already = ok.filter((r) => r.value && r.value.already_running).length;
+    const fail = rs.length - ok.length;
+    const started = ok.length - already;
+    toast((started ? '수집기 ' + started + '개가 수집을 시작했습니다' : '새로 시작한 수집이 없습니다')
+      + (already ? ' · ' + already + '개는 이미 수집 중입니다' : '') + (fail ? ' · ' + fail + '개는 시작하지 못했습니다' : ''), fail > 0 && !started);
+    busy(bc, null, '지금 수집');
+    setTimeout(after, 4000);   // 수집은 뒤에서 돈다 — 기록 줄이 생길 즈음 한 번 다시 읽는다
+  });
+
+  bd.addEventListener('click', async () => {
+    busy(bd, '증류 시작 중…', '지금 증류');
+    const rs = await Promise.allSettled(ids.map((id) => api('/api/ui/cron/' + encodeURIComponent(id) + '/run', { method: 'POST' })));
+    const bad = rs.filter((r) => r.status === 'rejected' || (r.value && (r.value.status || r.value.last_status) === 'error')).length;
+    toast(bad ? '증류를 실행했지만 ' + bad + '건이 오류로 끝났습니다. 아래 기록에서 확인하세요' : '증류를 시작했습니다. 끝나면 아래 기록에 나옵니다', bad > 0);
+    busy(bd, null, '지금 증류');
+    after();
+  });
+  return el('span', { class: 'cxr-now' }, bc, bd);
+}
+
+/**
+ * 증류는 한 단계, 잡은 둘이다(#4194) — 자료 → 지식 잡이 패널 머리의 «증류» 주기를 대표하고, 카테고리 붙이기 잡이 꺼졌거나 없는데
+ *  **미분류 지식이 있으면** 그 사실만 한 조각 덧붙인다(칩을 따로 세우면 «수집 · 증류 · 분류 · 점검» 네 단계 줄이 되살아난다).
+ */
+function distillFillWarn(fillJob: any, fillN: number): HTMLElement | null {
+  if (!(fillN > 0 && (!fillJob || !fillJob.any_enabled))) return null;
+  return el('span', { class: 'cxh-job-x', title: '미분류 지식 ' + fmtNum(fillN) + '건 — 카테고리 붙이기 자동 실행이 ' + (!fillJob ? '없습니다' : '꺼져 있습니다'),
+    text: '카테고리 붙이기 ' + (!fillJob ? '미등록' : '꺼짐') });
+}
 function intervalText(sec: any): string {
   const n = Number(sec) || 0;
   if (!n) return '';
@@ -286,9 +374,16 @@ export function inboxCount(d: any): number {
 //  이 화면은 새 셸의 앱 액자(iframe) 안에서 산다. 다른 앱·구역은 액자 밖이라 location.hash 로는 못 간다 — 셸이 듣는
 //  postMessage 로 한 줄 올린다(main.ts: `lively:open-route` 는 그 주소의 탭을 열고, `lively:open-section` 은 레일
 //  구역을 고른 뒤 그 구역이 두고 간 자리로 간다). 액자 밖(클래식 셸)이면 그냥 주소로 간다.
-type ShellDest = { route: string; section?: 'wiki' | 'sess' };
+//  meAi(#5147) — [AI 계정 연결] 은 탭이 아니라 **창**이다. 새 셸은 주소 `#/me/ai` 를 받으면 그 창을 열고 주소를 되돌린다
+//   (v2/main.ts ME_AI_ROUTE). 액자와 셸은 같은 오리진이라 셸의 주소를 직접 바꾼다. 클래식은 [내 AI 계정] 패널 주소로 간다.
+type ShellDest = { route: string; section?: 'wiki' | 'sess'; meAi?: boolean };
 function goShell(d: ShellDest): void {
   const framed = (() => { try { return window.parent && window.parent !== window; } catch { return false; } })();
+  if (d.meAi) {
+    if (framed) { try { window.parent.location.hash = '#/me/ai'; return; } catch { /* 셸이 안 받으면 아래 */ } }
+    location.hash = '#/system/me-ai';
+    return;
+  }
   if (framed) {
     try {
       window.parent.postMessage(d.section ? { type: 'lively:open-section', section: d.section } : { type: 'lively:open-route', href: d.route }, location.origin);

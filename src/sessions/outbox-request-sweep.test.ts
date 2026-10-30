@@ -5,8 +5,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { withTenant } from "../org/tenant-context.js";
+import { JOB_SESSION_ID_RE } from "../agent-jobs/plan.js";
 import { outboxRequestSweepMiddleware, resetSweepDebounce, shouldSweep, jobIntervalMs, sweptKeys, sweptAt,
-  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS, CONV_INDEX_SWEEP_MS,
+  SWEEP_JOBS, SWEEP_MIN_INTERVAL_MS, AWAITING_SWEEP_INTERVAL_MS, TEN_MIN_MS, SIX_HOURS_MS, TASK_TICK_MS, META_HEAL_SWEEP_MS, CONV_INDEX_SWEEP_MS, STOP_RULE_SWEEP_MS, NODE_STOP_RULE_SWEEP_MS,
   type SweepJob } from "./outbox-request-sweep.js";
 
 let pass = 0;
@@ -195,18 +196,39 @@ t("[F14] 정비 결과를 로그에 펼쳐 찍는다 — «돌았다»만 찍으
 });
 
 // ── G1~G7 · 남은 정비를 표에 올린 뒤 (#2246) ────────────────────────────────
-t("[G1] 표에 아홉 정비가 있고 첫 목격에 전부 발사한다", () => {
+t("[G1] 표에 열 정비가 있고 첫 목격에 전부 발사한다", () => {
   resetSweepDebounce();
   //  일곱 = background-sweeps 여덟 중 파괴적인 reapIdleSessions 를 뺀 수 · 하나 = 위탁 배차(별도 스텝).
+  //  #3892 — 세션 호스트 스냅샷 표식 되채우기(session-meta-heal)가 테넌트 정비로 하나 늘었다. 목록 소유가 호스트로 넘어간
+  //   테넌트에선 게이트웨이 collectSessions 의 되채우기가 안 불려, 요청에 얹는 것 말고 닿는 길이 없다.
   const perTenant = SWEEP_JOBS.filter((j) => (j.scope ?? "tenant") === "tenant");
   //  #1631(2026-09-14) — 묶음 보정(category-group-backfill)이 테넌트 정비로 하나 늘었다. 처음 설정 뒤 묶음 0개로 남은
   //   워크스페이스를 채우는 일이라 그 워크스페이스 컨텍스트 안에서만 돌 수 있고, 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다.
+  //  #4067 — 로그인 판 정리(login-job-reap)가 테넌트 정비로 하나 늘었다. 작업 행이 그 워크스페이스 것이라(RLS) 그 컨텍스트
+  //   안에서만 돌 수 있고, 판이 버려졌을 때(사람이 떠남·응답 끊김) 멈추게 하는 길이 요청에 얹는 것뿐이다.
   //  #4517 — 대화 검색 색인(conv-index)이 테넌트 정비로 하나 늘었다. 세션 기록·색인이 그 워크스페이스 것이라(RLS) 그 컨텍스트
   //   안에서만 돌 수 있고, 매니지드에선 배포 직후 밀린 옛 기록을 줍는 길이 요청에 얹는 것뿐이다.
   //  #4530 — 세션 요약 카드(session-card)가 테넌트 정비로 하나 늘었다. 카드도 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만
   //   돌 수 있고, 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다(세션을 뜻으로 찾는 재료가 여기서만 만들어진다).
-  assert.equal(perTenant.length, 12, "테넌트 정비 열둘(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 묶음 보정 + 대화 색인 + 세션 요약 카드)");
-  assert.equal(SWEEP_JOBS.length, 13, "전역 하나(task-dispatch)가 더 있다");
+  //  #4695 T5 — 하네스 종료 규칙(session-stop-rule)이 테넌트 정비로 하나 늘었다. 세션 목록·장부·얼굴 줄이 그 워크스페이스 것이고,
+  //   시계가 분 단위라(N 기본 3) CP 틱(5분)만으로는 모자란다 — 파괴적 정비의 예외다([G4b]).
+  //  #4490 — 작업 컨테이너 감시(agent-job-sweep)가 테넌트 정비로 하나 늘었다. 작업 행·동시 상한이 그 워크스페이스 것이라(RLS)
+  //   그 컨텍스트 안에서만 돌 수 있고, 사람이 아무도 없을 때 끊긴 작업을 끝내는 길이 요청(CP 60초 · 판의 박동)에 얹는 것뿐이다.
+  //  #4786 — 앱 폴더 주기 재조정(app-folders)이 테넌트 정비로 하나 늘었다. 세션 · 붙은 앱 · 맞춘 기록이 그 워크스페이스 것이고(RLS)
+  //   브로커 중계도 그 워크스페이스로 가므로 그 컨텍스트 안에서만 돌 수 있다 — 매니지드에선 요청에 얹는 것 말고 닿는 길이 없다.
+  //  #4488 — 앱 AI 실행 정비(ai-run-sweep)가 테넌트 정비로 하나 늘었다. 실행 행이 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만 돌고,
+  //   작업 컨테이너에 붙은 실행을 작업 상태에 맞추는 안전망 · 게이트웨이가 죽어 끝맺지 못한 단발을 끝내는 길이 요청에 얹는 것뿐이다. DB 행만 바꾼다(파괴적 동작 없음).
+  //  #4828 — 작업 기록 보존 정리(job-record-prune)가 테넌트 정비로 하나 늘었다. 작업 행도 보존 기간 설정도 그 워크스페이스 것이라(RLS)
+  //   그 컨텍스트 안에서만 지울 수 있다. DB 행만 지운다(컨테이너 · 토큰은 작업 컨테이너 감시가 먼저 걷는다 — 걷기 전 행은 안 지운다).
+  //  #4486 — 앱 백그라운드 작업 감시(app-job-sweep)와 그 기록 보존(app-job-prune)이 테넌트 정비로 둘 늘었다. 작업 행 · 동시 상한이 그
+  //   워크스페이스 것이라(RLS) 그 컨텍스트 안에서만 돌고, 사람이 없을 때 기다린 작업을 부르고 끊긴 작업을 끝내는 길이 요청(CP 60초 · 검사 층의
+  //   박동)에 얹는 것뿐이다. DB 행과 함수 비동기 부르기만 한다(함수 안에서 도는 작업을 멈추지 않는다 — 파괴적 동작 없음).
+  //  #5043 — 원격 PC 하네스 종료 규칙(node-stop-rule)이 테넌트 정비로 하나 늘었다. 노드 스냅샷·장부·정책이 그 워크스페이스 것이고,
+  //   시계가 분 단위(완료 기본 30분)라 CP 틱(5분)만으로는 거칠다 — 위 하네스 종료 규칙과 같은 파괴적 예외의 같은 판단([G4b]).
+  //  #5053 — 앱 서버 동기 부르기 기록 정리(app-call-sweep)가 테넌트 정비로 하나 늘었다. 부르기 행이 그 워크스페이스 것이라(RLS) 그 컨텍스트 안에서만
+  //   닫고 지울 수 있다. DB 행만 바꾼다(파괴적 동작 없음).
+  assert.equal(perTenant.length, 23, "테넌트 정비 스물셋(background-sweeps 일곱 + 아웃박스 + 빌트인앱 시딩 + 표식 되채우기 + 묶음 보정 + 로그인 판 정리 + 대화 색인 + 세션 요약 카드 + 하네스 종료 규칙 + 원격 PC 하네스 종료 규칙 + 작업 컨테이너 감시 + 앱 폴더 주기 재조정 + 앱 AI 실행 정비 + 작업 기록 보존 정리 + 앱 백그라운드 작업 감시 + 그 기록 보존 + 앱 서버 동기 부르기 기록)");
+  assert.equal(SWEEP_JOBS.length, 24, "전역 하나(task-dispatch)가 더 있다");
   asManaged(() => { run(); });
   //  ⚠ 전역 정비의 키는 `<정비>:*` 다 — 전부 `키:테넌트` 로 가정하면 안 된다.
   assert.deepEqual(sweptKeys().sort(),
@@ -224,9 +246,20 @@ t("[G2] 각 정비의 주기가 원래 하우스키핑과 같은 값이다 — �
     "session-state-backfill": SWEEP_MIN_INTERVAL_MS, // 종전 5분
     "task-dispatch": TASK_TICK_MS,                   // 종전 task-scheduler 의 TICK_MS(5초)
     "builtin-app-seed": SIX_HOURS_MS,                // 코드 소유 앱은 롤 때만 바뀐다
+    "session-meta-heal": META_HEAL_SWEEP_MS,         // #3892 — 새 정비(원래 하우스키핑에 없던 것). 되채우기 쿨다운과 같은 60초
     "category-group-backfill": TEN_MIN_MS,           // #1631 — 새 정비. 워크스페이스마다 결론이 나면 다시 안 보므로 주기는 «늦지 않을 정도» 면 된다
+    "login-job-reap": META_HEAL_SWEEP_MS,            // #4067 — 새 정비. 판 무응답 상한(2분)보다 짧아야 버려진 판이 제때 멈춘다
     "conv-index": CONV_INDEX_SWEEP_MS,               // #4517 — 새 정비. 밀린 대화 색인을 1분마다 한 판(판마다 상한)
     "session-card": CONV_INDEX_SWEEP_MS,             // #4530 — 새 정비. 대화 색인과 같은 박자로 그 뒤를 따라간다(판마다 30개 · 6초)
+    "session-stop-rule": STOP_RULE_SWEEP_MS,         // #4695 T5 — 새 정비. 대기 알림과 같은 30초(시계가 분 단위 — «N분 ± 이 주기»)
+    "node-stop-rule": NODE_STOP_RULE_SWEEP_MS,       // #5043 — 새 정비. 컴퓨터마다 RPC 를 묻는 판이라 1분(완료 기본 30분 시계엔 넉넉하다)
+    "agent-job-sweep": STOP_RULE_SWEEP_MS,           // #4490 — 새 정비. 판 무응답 상한(90초)보다 짧아야 끊긴 작업이 제때 끝난다
+    "app-folders": SWEEP_MIN_INTERVAL_MS,            // #4786 — 새 정비. 사건 경로가 놓친 앱 폴더 맞추기를 아웃박스 회수와 같은 5분마다 다시 본다
+    "ai-run-sweep": STOP_RULE_SWEEP_MS,              // #4488 — 새 정비. 작업 감시와 같은 박자로 그 뒤를 따라간다(작업이 끝난 뒤 실행 행을 맞춘다)
+    "job-record-prune": SIX_HOURS_MS,                // #4828 — 새 정비. 일 단위 보존이라 세션 기록 정리(session-log-reap)와 같은 6시간
+    "app-job-sweep": STOP_RULE_SWEEP_MS,             // #4486 — 새 정비. 박동 없음 상한(90초)보다 짧아야 끊긴 작업이 제때 끝나고, 기다린 작업이 30초 안에 불린다
+    "app-job-prune": SIX_HOURS_MS,                   // #4486 — 새 정비. 일 단위 보존(30일)이라 작업 기록 보존 정리(job-record-prune)와 같은 6시간
+    "app-call-sweep": TEN_MIN_MS,                    // #5053 — 새 정비. 끝맺지 못한 부르기를 닫는 기록 정리(신원 수명은 판정이 따로 막는다)라 10분이면 넉넉하다
   };
   for (const j of SWEEP_JOBS) assert.equal(j.intervalMs, want[j.key], `${j.key} 의 주기가 다르다`);
   assert.deepEqual(Object.keys(want).sort(), SWEEP_JOBS.map((j) => j.key).sort(), "표와 기대가 같은 집합이어야 한다");
@@ -252,6 +285,28 @@ t("[G4] 파괴적 정비(reapIdleSessions)는 표에 없다 — tmux 를 죽이�
   assert.ok(!SWEEP_JOBS.some((j) => j.key.includes("reap-idle") || j.key.includes("idle-reap")));
   //  ⚠ 그 짝인 백필은 **있어야** 한다 — 없으면 그 세션들이 회수 면역이면서 복원도 안 된다.
   assert.ok(SWEEP_JOBS.some((j) => j.key === "session-state-backfill"), "회수 전 백필은 올려야 한다");
+});
+t("[G4b] 하네스·컨테이너를 끄는 정비는 셋 — 하네스 종료 규칙(#4690 · 사람 세션) · 원격 PC 하네스 종료 규칙(#5043 · 그 후속) · 작업 컨테이너 감시(#4490 · `job-` 만). 넷째가 생기면 새 판단이다", () => {
+  const src = readFileSync(SRC, "utf8");
+  const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
+  assert.ok(SWEEP_JOBS.some((j) => j.key === "session-stop-rule" && (j.scope ?? "tenant") === "tenant"), "테넌트 정비로 올라가 있어야 한다");
+  assert.match(table, /#4690/, "예외의 근거(그 판단의 주인)를 표 주석에 남긴다");
+  //  #5043 — 원격 PC 판도 같은 판단의 후속이다(상민님 2026-10-27 «원격 PC 도 매니지드처럼»). 근거를 표 주석에 남긴다.
+  assert.ok(SWEEP_JOBS.some((j) => j.key === "node-stop-rule" && (j.scope ?? "tenant") === "tenant"), "원격 PC 판도 테넌트 정비다");
+  assert.match(table, /#5043/, "원격 PC 판의 근거를 표 주석에 남긴다");
+  //  끄는 정비가 셋이 되면 그건 새 판단이다 — 이 시험이 먼저 빨개져야 한다. 매처는 두 꼴(stop·reap·kill · agent-job)을 다 잡는다
+  //   (종전 매처는 `agent-job-sweep` 을 못 잡아 «하나» 가 둘이 된 뒤에도 참이었다 — 격리 리뷰).
+  const killers = SWEEP_JOBS.filter((j) => /stop|reap-idle|idle-reap|kill|agent-job/.test(j.key)).map((j) => j.key).sort();
+  assert.deepEqual(killers, ["agent-job-sweep", "node-stop-rule", "session-stop-rule"]);
+});
+t("[G4c] 작업 컨테이너 감시(#4490)는 테넌트 정비다 — 걷는 것은 자기가 띄운 `job-` 컨테이너뿐(행동은 agent-jobs service.test R3 · launch.test K1)", () => {
+  const src = readFileSync(SRC, "utf8");
+  const table = src.slice(src.indexOf("export const SWEEP_JOBS"), src.indexOf("const lastSweep"));
+  assert.ok(SWEEP_JOBS.some((j) => j.key === "agent-job-sweep" && (j.scope ?? "tenant") === "tenant"), "테넌트 정비로 올라가 있어야 한다");
+  assert.match(table, /#4490/, "그 판단의 주인을 표 주석에 남긴다");
+  //  작업 세션 id 꼴은 사람 세션 id 와 겹치지 않는다 — 걷기가 그 꼴로 가른다(사람 세션 id 를 받지 않는다).
+  assert.ok(JOB_SESSION_ID_RE.test("job-1-0123abcd"));
+  for (const human of ["box-alice-1", "box-sangmin-yoon-3f2a", "job-x"]) assert.ok(!JOB_SESSION_ID_RE.test(human), human);
 });
 t("[G5] 정비 키가 겹치지 않는다 — 겹치면 디바운스가 공유돼 하나가 굶는다", () => {
   const keys = SWEEP_JOBS.map((j) => j.key);
@@ -330,7 +385,6 @@ t("[H7] 전역 정비는 있던 tickTasksAllTenants 를 부른다 — 여기서 
   assert.doesNotMatch(src, /assignQueued|runningCountByNode/, "배차 로직을 여기서 다시 쓰면 원본과 갈라진다");
 });
 
-console.log(`outbox-request-sweep: ${pass} passed`);
 
 // ── I: 빌트인 앱 시딩 (#2246 후속) ───────────────────────────────────────────
 //  실측: 테넌트 8개 중 7개가 org_app=0 → ai-session 알림이 전이를 감지하고도 전부 거절됐다.
@@ -366,3 +420,30 @@ t("[I5] 테넌트가 둘이면 **각각** 시드된다 — 전역 디바운스�
   assert.equal(shouldSweep("builtin-app-seed", "tenant-B", now, SIX_HOURS_MS), true,
     "다른 테넌트인데 첫 시딩이 막혔다 — 그 테넌트는 앱을 못 받는다");
 });
+
+// ── H1~H3 · 하우스키핑이 도는 배포에도 거는 정비 (#5082) ─────────────────────────────
+//  이 표는 셀프호스트 · registry 에서 무동작이다(maybeSweep) — 박스 위 작업(LIVELY_AGENT_JOBS=host)의 감시 · 보존 · 앱 AI 실행 정비가
+//   거기서 돌 길은 하우스키핑뿐이다(격리 리뷰 · 막을 것). 표시(housekeeping)와 하우스키핑의 배선을 함께 본다.
+t("[H1] 하우스키핑에도 거는 정비는 넷 — 작업 감시 · 작업 기록 보존 · 앱 AI 실행 정비 · 앱 도구 부르기 정비(#5053)", () => {
+  assert.deepEqual(SWEEP_JOBS.filter((j) => j.housekeeping).map((j) => j.key).sort(), ["agent-job-sweep", "ai-run-sweep", "app-call-sweep", "job-record-prune"]);
+  for (const j of SWEEP_JOBS.filter((x) => x.housekeeping)) assert.equal(j.scope ?? "tenant", "tenant", `${j.key} 은 워크스페이스마다 돈다`);
+});
+
+t("[H2] 하우스키핑은 표시가 붙은 정비를 그 표의 정의 · 그 표의 주기로 워크스페이스마다 건다(두 벌로 쓰지 않는다)", () => {
+  const hk = readFileSync("src/boot/housekeeping.ts", "utf8");
+  const body = hk.slice(hk.indexOf("function startBackgroundSweeps"), hk.indexOf("export const SCHEMA_ONLY_LAST_STEP"));
+  assert.match(body, /import\("\.\.\/sessions\/outbox-request-sweep\.js"\)/, "표를 불러와야 한다");
+  assert.match(body, /SWEEP_JOBS\.filter\(\(j\) => j\.housekeeping\)/, "표시로 골라야 한다(키를 다시 적으면 이름이 바뀔 때 말없이 빠진다)");
+  assert.match(body, /perTenant\(job\.key, job\.run\)/, "워크스페이스마다 · 그 표의 run 그대로");
+  assert.match(body, /m\.jobIntervalMs\(job, process\.env\)/, "주기도 그 표의 것(조정 env 포함)");
+  assert.match(body, /setInterval\(\(\) => \{ void run\(\); \}, every\)/, "주기마다 돈다");
+});
+
+t("[H3] 하우스키핑에 그 넷을 따로 또 걸지 않는다 — 두 번 돌지 않는다", () => {
+  const hk = readFileSync("src/boot/housekeeping.ts", "utf8");
+  for (const k of ["agent-job-sweep", "job-record-prune", "ai-run-sweep", "app-call-sweep", "sweepAgentJobs", "pruneAgentJobRecords", "sweepAiRuns", "sweepAppCalls"]) {
+    assert.ok(!hk.includes(`"${k}"`) && !hk.includes(`.${k}(`), `하우스키핑이 ${k} 를 따로 부른다`);
+  }
+});
+
+console.log(`outbox-request-sweep: ${pass} passed`);

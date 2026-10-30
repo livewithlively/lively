@@ -29,9 +29,17 @@
 .sw-hint[hidden] { display: none; }
 
 /* ── 문패 버튼 ── */
-.sw-btn { padding: 0 8px; }
+/* 문패의 옆 단추([＋ 세션]·[프로젝트 상세])와 **같은 높이 · 같은 테두리**로 선다(#4135, 원준 2026-09-27: «지혼자 사이즈가 옆이랑 달라서 어색하다»).
+   종전엔 위아래 여백이 0 이라 글리프 높이만큼만 섰다(≈17px — 옆은 27px).
+   · 높이: 그 줄에 맞춰 늘인다(align-self: stretch) — 옆 단추의 글자 크기·여백이 바뀌어도 따라간다.
+   · 폭: 높이와 같게(정사각). 높이 = 한 줄(1lh) + 위아래 여백 10 + 테두리 2 이므로 폭도 같은 식으로 적는다.
+     ⚠ aspect-ratio 로는 안 된다 — flex 줄에서 늘어난 높이는 폭을 정한 **뒤에** 나와서, 폭이 글리프 폭(15px)으로 남는다(실측). */
+.sw-btn { align-self: stretch; box-sizing: border-box; width: 27px; width: calc(1lh + 12px); min-width: 0; padding: 0; justify-content: center; }
+.pn-door-r .sw-btn { border-color: var(--line-net); }
+.pn-door-r .sw-btn:hover { border-color: var(--blue); background: var(--bg-tint); }
+.pn-door-r .sw-btn:hover .sw-btn-i { color: var(--blue); }
 .sw-btn[hidden] { display: none; }
-.sw-btn-i { font-size: 14px; line-height: 1; color: var(--muted-2); }
+.sw-btn-i { font-size: 15px; line-height: 1; color: var(--muted-2); }
 .sw-btn.on .sw-btn-i { color: var(--blue); }
 
 /* ── 켜고 끄는 팝오버 ──
@@ -107,11 +115,40 @@
      z-index 55 = 레일 · 왼쪽 사이드바 위, 레일 메뉴(.v2-ws-menu 60 · .v2-wspop 70) · 팝오버(.dash-pop 80) · 모달 아래. */
   .pn-body.cm > .pn-col {
     position: fixed; z-index: 55; grid-column: auto; grid-row: auto;
-    right: var(--cm-r, 24px); bottom: var(--cm-b, 24px); width: var(--cm-w, 420px); height: var(--cm-h, 560px);
+    right: var(--cm-r, 24px); bottom: var(--cm-b, 24px); width: var(--cm-w, 320px); height: var(--cm-h, 240px);
     overflow: hidden; background: var(--bg);
     border: 1px solid var(--line-net); border-radius: 14px;
     box-shadow: 0 24px 64px rgba(var(--shadow-ink), .26), 0 2px 8px rgba(var(--shadow-ink), .10);
   }
+  /* ── 비침(원준 2026-09-30) ──
+     카드인 동안 안쪽(칸 · 세션 화면 · 터미널 액자 · 카드 단추)은 늘 투명하고 바탕은 카드 한 곳만 칠한다 — 그래야
+     또렷 ↔ 비침이 카드 바탕색 하나로 바뀐다. 터미널 액자 안의 바탕은 terminal.ts 가 «glass» 를 받아 비운다(side-card.ts).
+     또렷 = 마우스가 카드 위에 있다(:hover — 액자 위에서도 조상의 :hover 가 선다) · 사람이 카드를 골랐다(cm-live).
+     ★ 바탕 16% · 흐림 7px(원준 2026-10-01 «투명화가 제대로 안 된다»). 첫 판(30% · 22px)은 뒤가 하얗게 뭉개져 사실상 흰
+       카드로 보였다. 7px 은 뒤의 모양·색은 남기고 잔 글씨만 뭉갠다 — 겹쳐서 지저분해지는 것은 뒤의 잔 글씨이므로 그것만 지운다.
+       글자 둘레에는 바탕색 테두리(halo)를 둘러 어두운 곳 위에서도 읽히게 한다(터미널 액자에 drop-shadow — 비울 때만).
+     또렷해질 때는 바탕이 **바로** 찬다(전환 없음) — 흐림은 그 순간 풀리므로, 바탕이 천천히 차면 그 사이 날 글씨가 비친다(리뷰 지적).
+     비칠 때는 천천히(0.35초) — 흐림이 먼저 걸리고 바탕이 빠진다. */
+  .pn-body.cm > .pn-col { transition: box-shadow .2s ease, border-color .2s ease; }
+  .pn-body.cm > .pn-col > .pn-pane,
+  .pn-body.cm > .pn-col .sc-wrap,
+  .pn-body.cm > .pn-col .sc-term-frame,
+  .pn-body.cm > .pn-col .cm-ctl { background: transparent; }
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) {
+    background: color-mix(in srgb, var(--bg) 16%, transparent);
+    -webkit-backdrop-filter: blur(7px) saturate(1.2);
+    backdrop-filter: blur(7px) saturate(1.2);
+    border-color: color-mix(in srgb, var(--line-net) 70%, transparent);
+    box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16), 0 1px 3px rgba(var(--shadow-ink), .06);
+    transition: background-color .35s ease, box-shadow .35s ease, border-color .35s ease;
+  }
+  /* 머리줄(이름 · 연결 상태 · 단추)은 조금 더 칠한다 — 뒤에 밝은 타일이 오면 어두운 테마의 흐린 단추가 묻혔다(2026-10-01 실측). 본문(터미널)만 비친다. */
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-head { border-bottom-color: color-mix(in srgb, var(--line) 55%, transparent); background: color-mix(in srgb, var(--bg) 55%, transparent); }
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .sc-term-frame {
+    filter: drop-shadow(0 0 1px color-mix(in srgb, var(--bg) 95%, transparent)) drop-shadow(0 0 2px color-mix(in srgb, var(--bg) 80%, transparent));
+  }
+  .pn-body.cm:not(.cm-live) > .pn-col:not(:hover) .cm-ctl { border-left-color: color-mix(in srgb, var(--line) 55%, transparent); }
+
   /* 아래 칸(타임라인 등)은 카드에 넣지 않는다. 접힘 상태는 그대로 두고 보이기만 끈다. */
   .pn-body.cm > .pn-col > .pn-pane[data-zone="bottom"],
   .pn-body.cm > .pn-col > .v2-split-y { display: none; }
@@ -125,6 +162,15 @@
   .pn-body.cm > .pn-col .sc-head .sc-act-files,
   .pn-body.cm > .pn-col .sc-head .sc-pair-sep,
   .pn-body.cm > .pn-col .sc-head .sc-pair > .sc-act { display: none; }
+  /*  작은 카드 · 알약은 세션 이름이 먼저다(2026-10-11 프리뷰 실측: 알약 260 에서 이름 칸이 0px, 카드 320 에서 «그 우리 ...»).
+      카드에서는 태스크 번호 · 이름 바꾸기 연필(카드에서 이름은 ⋯ 메뉴로 바꾼다) · 정상일 때의 «연결됨» 을 뺀다 — 끊기면 그대로 보인다.
+      알약은 ⋯ 도 뺀다(펴면 다시 있다). */
+  .pn-body.cm > .pn-col .sc-head .sc-title-no,
+  .pn-body.cm > .pn-col .sc-head .sc-title-btn > svg,
+  .pn-body.cm > .pn-col .sc-head .sc-title-penbtn,
+  .pn-body.cm.cm-fold > .pn-col .sc-head .sc-head-r > .sc-act { display: none; }
+  /*  :has 는 따로 — 모르는 브라우저는 선택자 목록 전체를 버리므로 위 규칙과 섞지 않는다. */
+  .pn-body.cm > .pn-col .sc-head .sc-pair:has(> .sc-termstat.ok) { display: none; }
 
   .cm-ctl { position: absolute; top: 9px; right: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 2px; padding-left: 6px; border-left: 1px solid var(--line); background: var(--bg); }
   .cm-ctl[hidden] { display: none; }
@@ -132,11 +178,9 @@
   .cm-ic:hover { background: var(--bg-tint-2); color: var(--ink); }
   .cm-ic:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   .cm-ic .pn-i.sm { width: 15px; height: 15px; }
-  .cm-fold-b .pn-i { transform: rotate(90deg); }                       /* 펴져 있을 때: 아래를 가리킨다(접기) */
-  .pn-body.cm-fold .cm-fold-b .pn-i { transform: rotate(-90deg); }     /* 접혀 있을 때: 위를 가리킨다(펴기) */
 
   /* ── 접었을 때: 머리줄만 남는다 ── */
-  .pn-body.cm.cm-fold > .pn-col { height: auto; max-height: var(--cm-h, 560px); }
+  .pn-body.cm.cm-fold > .pn-col { height: auto; max-height: var(--cm-h, 240px); }
   .pn-body.cm.cm-fold > .pn-col .sc-wrap > :not(.sc-head) { display: none; }
   .pn-body.cm.cm-fold > .pn-col .sc-head { border-bottom: 0; }
 
@@ -154,8 +198,9 @@
   .cm-grip:hover { background: color-mix(in srgb, var(--blue) 22%, transparent); }
   .cm-grip:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: 14px 0 0 0; background: color-mix(in srgb, var(--blue) 22%, transparent); }
 
-  /* 카드가 뷰어 오른쪽 아래의 배율 단추를 가린다(2026-09-27 실측). 카드 상태에서는 배율 단추를 왼쪽 아래에 둔다. */
-  .pn-body.cm > .pn-pane[data-zone="side"] .pn-zoom { right: auto; left: 12px; }
+  /* 카드가 뷰어 아래 모서리의 배율 단추를 가린다(2026-09-27 실측). 배율 단추는 카드 **반대쪽** 아래에 둔다 —
+     카드가 오른쪽에 있으면 왼쪽, 왼쪽에 있으면(세션 쪽 기본 자리, 2026-10-09) 제자리(오른쪽). side-card.ts 가 cm-card-left 를 건다. */
+  .pn-body.cm:not(.cm-card-left) > .pn-pane[data-zone="side"] .pn-zoom { right: auto; left: 12px; }
 }
 /* 카드를 옮기거나 크기를 바꾸는 동안: 포인터가 액자(iframe)에 빠지지 않게, 글자가 선택되지 않게. */
 body.cm-dragging, body.cm-dragging * { user-select: none; }

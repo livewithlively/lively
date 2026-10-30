@@ -108,6 +108,15 @@ export const SESSION_ENV_GROUPS: readonly SessionEnvGroup[] = [
       "LIVELY_TASK_WS(제 뜻이 따로 있는 값) 스니핑으로 되돌아간다. 라벨일 뿐이라 비밀·권한과 무관.",
   },
   {
+    title: "세션 이름 출처",
+    names: ["LIVELY_SESSION_LABEL_SOURCE"],
+    keep: "keep",
+    why:
+      "#4418 — 이 세션 이름을 누가 지었나(id|rule|agent|human). 이름짓기 안내 훅이 이미 정해진 이름(human·agent)이면 세션 " +
+      "이름짓기를 안내하지 않는다. 미보존이면 격리 세션에서만 그 안내가 나간다(서버 걸쇠가 흡수해 이름은 안 바뀌고, 첫 턴에 헛 툴콜 하나가 는다). " +
+      "라벨일 뿐이라 비밀·권한과 무관.",
+  },
+  {
     title: "워크스페이스 소속",
     names: ["LVLY_TENANT_SLUG"],
     keep: "keep",
@@ -115,6 +124,15 @@ export const SESSION_ENV_GROUPS: readonly SessionEnvGroup[] = [
       "#1437 v1 5단계 — pane 안의 훅이 x-lively-workspace 헤더로 되보내는 소속. 미보존이면 헤더가 빈 값으로 " +
       "확장돼 **primary 로 폴백**한다(남의 워크스페이스에 쓰는 게 아니라, 자기 워크스페이스를 잃는다). " +
       "슬러그는 공개 식별자라 비밀 아님. 단일 테넌트 배포에서는 코어가 아예 안 싣는다(무회귀).",
+  },
+  {
+    title: "붙을 게이트웨이",
+    names: ["LIVELY_GATEWAY_URL"],
+    keep: "keep",
+    why:
+      "#4012 T5 — 위탁 판 안의 하네스·MCP·훅이 **어느 게이트웨이에 붙을지**. 미보존이면 판이 `~/.lively/gateway-url` " +
+      "로 폴백해, 한 박스에 게이트웨이가 둘이거나 앱 로그인이 다른 곳을 가리킬 때 **남의 워크스페이스에 붙는다**" +
+      "(2026-09-16 실사고: olddev 83개 테넌트의 증류가 운영 워크스페이스에 썼다). 공개 주소라 비밀 아님.",
   },
   {
     title: "실행 모드",

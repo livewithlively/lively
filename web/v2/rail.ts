@@ -3,7 +3,9 @@
 //  슬랙 데스크톱 좌측 탭 레일을 그대로 옮긴다(헬프센터 스크린샷 2장 + 원준님 스크린샷으로 대조):
 //   ⓪ 워크스페이스 — **타일 한 장 + 뒤에 겹친 타일**(스택). 누르면 슬랙과 같은 흰 팝오버:
 //      [아이콘 · 이름 · 부제] 목록(지금 것은 고리) · ＋ 워크스페이스 추가 · 「레일 숨기기/펼치기」(패널 아이콘).
-//   ① 구역 — 홈 · 확인할 것(배지) · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·내 활동·나중에 자리.
+//   ① 구역 — 홈 · AI 세션 · 프로젝트 · 위키 · 리브. 슬랙의 홈·DM·나중에 자리.
+//      ⚠ [확인할 것] 구역은 걷었다(#4180, 회의 2026-09-21) — 사이드바와 겹치고 세션 알림만 쌓여 들어갈 이유가 없었다.
+//       이제 「확인할 것」의 입구는 **홈 머리줄의 종**(notify-bell.ts)이고, 화면은 #/inbox 그대로다.
 //      고른 구역이 곧 **사이드바의 내용**이다(side.ts). 리브만 구역이 아니라 '갈 곳'이다 — 리브 화면은
 //      대화 한 장이라 사이드바가 바뀔 이유가 없다(활성 표시는 주소로 판정).
 //   ② 최근 연 앱 — 헤어라인 아래. 맥 독의 '최근 사용' 구간. 5차: 꾹 눌러 위로 끌어 올리면 ①에 고정되고, ①은 끌어서 순서를 바꾼다.
@@ -17,9 +19,10 @@
 //  ⚠ 구역은 **사람이 고를 때만** 바뀐다. 주소를 따라 저절로 바꾸면, 홈 목록에서 세션 하나를 여는 순간
 //   사이드바가 통째로 [AI 세션]으로 갈아엎여 방금 보던 목록이 사라진다. 슬랙도 DM 탭에서 대화를 열어도
 //   탭은 DM 에 머문다. 그래서 구역은 이 모듈의 상태이고 브라우저에 기억한다.
+import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { el, focusMovedIntoFrame, navOn, personName, profileAvatar, state, toast } from '../core.js';
 import { deviceStore, shellPrefStore, shellPrefsPush } from './shell-prefs.js';   // #2460 — 레일 순서는 계정, 접힘은 이 기기
-import { APPS, appHref, openLaunchpad, RECENT_STORE_KEY, type AppDef } from './apps.js';
+import { APPS, appHref, installedAppDefs, openLaunchpad, primeInstalledApps, RECENT_STORE_KEY, type AppDef } from './apps.js';
 import { icon } from './icons.js';
 import { appGlyphName } from '../lib/icon-paths.js';
 import { openMeModal } from './me-modal.js';
@@ -32,15 +35,20 @@ import { aiLoginScopeHint } from './ai-login-scope.js';   // #2476 — «AI 로�
 import { inboxSection, openMemberModal } from './ws-people.js';   // #1875 — 구성원 모달·나에게 온 초대
 import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크스페이스 설정 모달
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
-import { railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
+import { installedRecentKey, isInstalledRecentKey, mergeRailOrder, railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
+import { sectionShown, type SideOwner } from '../lib/side-owner.js';   // #4632 — 이 화면에 서는 구역(구역과 같은 문은 그 구역 · 세션 화면에 위키는 홈)
 
-export type RailSection = 'home' | 'inbox' | 'sess' | 'proj' | 'wiki';
+export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
 export interface RailHooks {
-  /** 배지·개수 — 확인할 것 · 작업 중 세션 · 진행 중 프로젝트. */
-  counts?: () => { inbox: number; busy: number; projects: number };
+  /** 개수 — 작업 중 세션 · 진행 중 프로젝트(구역 드롭다운의 부제). 알림 수는 레일이 아니라 홈의 종이 말한다(#4180). */
+  counts?: () => { busy: number; projects: number };
   /** 지금 화면의 활성 키(main.ts activeKey) — 구역이 아닌 '갈 곳'(리브)의 활성 표시에 쓴다. */
   activeKey?: () => string;
+  /** #4632 지금 화면의 사이드바 주인(lib/side-owner) — 앱 화면이면(구역 목록이 아니면) 구역 칸은 켜지지 않는다. 없으면 종전대로. */
+  sideOwner?: () => SideOwner;
+  /** #5011 지금 화면이 설치한 앱(#/i/<인스턴스>)이면 그 앱 id — 활성 키는 'app:' 뿐이라 어느 앱인지 모른다. 레일의 그 앱 칸을 켠다. */
+  installedAppId?: () => string | null;
   /** 구역이 바뀌었다 — 사이드바를 다시 그리고 그 구역의 첫 화면으로 간다. */
   onSection?: (sec: RailSection, opts: { navigate: boolean }) => void;
   /** 레일을 숨기거나 되살렸다 — 사이드바도 같이 다시 그린다(숨김에만 머리·발치에 워크스페이스·구역·앱·나가 선다). */
@@ -53,15 +61,16 @@ export interface RailHooks {
 export interface SecDef { key: RailSection; label: string; tab: string | null; icon: string }
 const SECTIONS: SecDef[] = [
   { key: 'home', label: '홈', tab: null, icon: 'home' },
-  { key: 'inbox', label: '확인할 것', tab: null, icon: 'inbox' },
-  { key: 'sess', label: 'AI 세션', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26)
+  //  'inbox'(확인할 것)는 #4180 에서 뺐다 — 저장된 구역·순서에 남은 옛 키는 init()·normalizeOrder 가 조용히 떨어뜨린다.
+  { key: 'sess', label: '세션 목록', tab: 'terminal', icon: 'chat' },   // 말풍선 — 사이드바 세션 행과 같은 붓(원준 2026-08-26). 이름은 #4233(원준 2026-09-27)에서 「AI 세션」에서 바뀌었다 — 이 구역은 «지금까지 만든 세션을 모아 보고 찾는 자리» 다
   { key: 'proj', label: '프로젝트', tab: 'projects2', icon: 'proj' },
   { key: 'wiki', label: '위키', tab: 'knowledge', icon: 'wiki' },
 ];
 //  구역이 아닌 '갈 곳' — 누르면 그 화면으로 가지만 사이드바는 바뀌지 않는다. 활성은 주소(activeKey)로 판정.
 interface LinkDef { key: string; label: string; route: string; tab: string | null; icon: string }
 const LINKS: LinkDef[] = [
-  { key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' },
+  //  #4970 — 리브 진입점은 숨김(lib/liv-entry.ts 한 곳에서 켜고 끈다). 저장된 순서에 남은 'liv' 키는 init()·normalizeOrder 가 조용히 떨어뜨린다.
+  ...(LIV_ENTRY_VISIBLE ? [{ key: 'liv', label: '리브', route: '#/liv', tab: 'liv', icon: 'liv' }] : []),
   //  ⚠ 자료(#2423)는 여기 없다 — 한때 있었고 걷었다(원준 2026-08-31): "고정해서 보이지 않고 맥락관리·사용가이드
   //   저 위계정도로 앱에서만 보이고, 눌러서 최근에 나오다가, 원하면 독에 고정하고 싶으면 하는 방식".
   //   즉 **레일에 줄을 얻는 것은 사람이 정한다.** 새 앱을 이 표에 더하면 그 결정을 우리가 대신 내리는 것이다 —
@@ -156,6 +165,8 @@ export function reloadRailPrefs(): void {
 //   그때 기본값 'home' 을 돌려주면 부른 쪽은 '사람이 홈을 골랐다'로 읽는다. 실측(#2061): 위키에서 새로고침했는데
 //   되살아난 탭이 홈 자리로 기록돼 [홈] 이 기억하던 세션을 잃었다.
 export function railSection(): RailSection { init(); return section; }
+/** 지금 화면에 **서는** 구역 — 기억한 구역에서 이 화면의 것이 아닌 구역만 비킨다(lib/side-owner sectionShown). 사이드바 · 레일 켜짐 · 폰 탭 바가 같은 값을 쓴다. */
+export function railShownSection(): RailSection { init(); return sectionShown(hooks.activeKey?.() || '', section); }
 /** 레일이 숨겨져 있는가 — 좁은 폭에선 늘 '아니오'(거기선 CSS 가 레일을 아이콘으로 세운다). */
 export function railIsHidden(): boolean { return hidden && !window.matchMedia(NARROW_MQ).matches; }
 
@@ -204,15 +215,24 @@ function recentForRail(n: number): AppDef[] {
   try { const v = JSON.parse(localStorage.getItem(RECENT_STORE_KEY) || '[]'); if (Array.isArray(v)) keys = v.filter((x) => typeof x === 'string'); }
   catch (_) { /* 기록이 없으면 표 순서로 채운다 */ }
   //  hidden(#2199): 문이 다른 곳에 있는 앱 · 구역과 같은 문 · 이미 메인에 고정한 앱 · 꺼진 앱은 설 수 없다.
-  const eligible = APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key) && !order.includes(a.key) && (!a.tab || navOn(a.tab)));
+  //  #4769 설치한 앱(구성원 앱 — 팀 채널 · 장표 수정)도 선다. 앱 표 뒤에 서고, 기록(`i:` 키)에 있는 것만 들어온다(railRecentKeys 가 거른다).
+  //  #5011 독에 고정한 설치 앱은 최근 칸에 또 서지 않는다(앱 표의 앱과 같은 규칙).
+  const eligible = [...APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key) && !order.includes(a.key) && (!a.tab || navOn(a.tab))),
+    ...installedAppDefs().filter((a) => !order.includes(a.key))];
   //  칸 순서는 연 순서가 아니라 앱 표 순서다(#3870) — 누를 때마다 칸이 섞이면 방금 누른 자리에 딴 앱이 선다.
   return railRecentKeys(keys, eligible.map((a) => a.key), n).map((k) => eligible.find((a) => a.key === k) as AppDef);
 }
 /** 지금 켜질 칸 하나(#3870) — 앱 화면이면 기억한 구역은 꺼진다. 레일과 구역 드롭다운이 같은 잣대를 쓴다. */
 function litKey(): string {
-  return railLitKey(hooks.activeKey?.() || '', section, LINKS.map((l) => l.key),
-    APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key)).map((a) => a.key));
+  //  #4632 — 앱 화면(설정 · 확인할 것 · 앱 인스턴스처럼 레일에 제 칸이 없는 앱)에선 구역 칸을 켜지 않는다(owner — lib/rail-lit).
+  //  #5011 — 설치한 앱의 화면(#/i/…)은 활성 키가 'app:' 하나라, 셸이 알려 준 앱 id 로 그 앱의 칸(`i:<id>`)을 켠다.
+  const inst = hooks.installedAppId?.() || null;
+  const ak = inst ? installedRecentKey(inst) : hooks.activeKey?.() || '';
+  return railLitKey(ak, railShownSection(), LINKS.map((l) => l.key),
+    [...APPS.filter((a) => !a.hidden && !SEC_APP_KEYS.has(a.key)).map((a) => a.key), ...installedAppDefs().map((a) => a.key)], hooks.sideOwner?.());
 }
+/** 레일에서 켜진 구역 — 앱 화면이면 ''(폰 아래 탭 바가 같은 잣대로 켠다). */
+export function railLitSection(): RailSection | '' { init(); const k = litKey(); return SECTIONS.some((s) => s.key === k) ? (k as RailSection) : ''; }
 
 // ── 워크스페이스 — 스택 타일 + 슬랙식 팝오버 ─────────────────────────────────
 function wsTile(w: { name: string; kind: string }, cls: string): HTMLElement {
@@ -577,7 +597,7 @@ async function refreshSpaces(): Promise<void> {
 /** 레일을 숨겼을 때 사이드바 머리의 **구역 드롭다운**(안 B) — 메인 그룹 순서 그대로(구역 · 리브 · 고정한 앱) + 「레일 펼치기」. */
 export function openSectionMenu(anchor: HTMLElement): void {
   if (popEl) { closePopover(); return; }
-  const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
+  const c = hooks.counts?.() || { busy: 0, projects: 0 };
   const lit = litKey();
   const row = (key: string, label: string, ic: string, on: boolean, extra: HTMLElement | null, run: () => void): HTMLElement =>
     el('button', { class: 'v2-secdd-row' + (on ? ' on' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(on),
@@ -587,8 +607,7 @@ export function openSectionMenu(anchor: HTMLElement): void {
     ...mainEntries().map((m) => {
       if (m.kind === 'sec') {
         const s = m.sec;
-        const extra = s.key === 'inbox' && c.inbox ? el('span', { class: 'v2-rail-bd', text: String(c.inbox) })
-          : s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
+        const extra = s.key === 'sess' && c.busy ? el('span', { class: 'v2-secdd-m', text: `${c.busy} 작업 중` })
           : s.key === 'proj' && c.projects ? el('span', { class: 'v2-secdd-m', text: String(c.projects) }) : null;
         return row(s.key, s.label, s.icon, lit === s.key, extra, () => setRailSection(s.key, { navigate: true }));
       }
@@ -612,7 +631,11 @@ const motion = (): boolean => !window.matchMedia('(prefers-reduced-motion: reduc
 
 function defaultOrder(): string[] { return [...SECTIONS.map((s) => s.key), ...LINKS.map((l) => l.key)]; }
 function isSecKey(k: string): boolean { return SECTIONS.some((s) => s.key === k) || LINKS.some((l) => l.key === k); }
-function canPin(k: string): boolean { return !isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k && !a.hidden); }   // hidden 은 저장된 순서에서도 떨어진다(normalizeOrder)
+//  #5011 설치한 앱(`i:<id>`)도 고정한다. 저장된 순서를 읽는 때(부팅)엔 설치 앱 목록이 아직 없어 키 꼴만 본다 — 목록으로 거르면
+//   부팅마다 고정이 지워진다. 목록에 없는 키(지운 앱 · 아직 목록이 안 옴)는 순서에 남되 그리지 않는다(mainEntries).
+function canPin(k: string): boolean { return isInstalledRecentKey(k) || (!isSecKey(k) && !SEC_APP_KEYS.has(k) && APPS.some((a) => a.key === k && !a.hidden)); }   // hidden 은 저장된 순서에서도 떨어진다(normalizeOrder)
+/** 앱 표의 앱 또는 설치한 앱 — 레일 칸의 키로 찾는다. */
+function appOf(key: string): AppDef | null { return APPS.find((a) => a.key === key) || installedAppDefs().find((a) => a.key === key) || null; }
 /** 저장된 순서에서 믿을 수 있는 것만 남기고, 표에 새로 생긴 구역은 뒤에 잇는다. */
 function normalizeOrder(list: unknown): string[] {
   const seen = new Set<string>(); const out: string[] = [];
@@ -634,7 +657,7 @@ function mainEntries(): MainEntry[] {
     if (s) { if (!s.tab || navOn(s.tab)) out.push({ key, kind: 'sec', sec: s }); continue; }
     const l = LINKS.find((x) => x.key === key);
     if (l) { if (!l.tab || navOn(l.tab) !== false) out.push({ key, kind: 'link', link: l }); continue; }
-    const a = APPS.find((x) => x.key === key);
+    const a = appOf(key);
     if (a && !a.hidden && (!a.tab || navOn(a.tab))) out.push({ key, kind: 'app', app: a });
   }
   return out;
@@ -806,7 +829,7 @@ function finish(d: Drag, x: number, y: number): void {
     //  들었다가 그 자리에서 놓았다 — 손가락이면 메뉴(우클릭이 없는 자리), 마우스면 보통의 클릭이 이어진다
     if (d.type !== 'mouse') {
       swallowClick();
-      const a = APPS.find((q) => q.key === d.key);
+      const a = appOf(d.key);
       if (a && d.kind !== 'sec') dockMenu(x, y, a, d.kind === 'pin');
     }
     land(d, () => endDrag(d));
@@ -818,10 +841,11 @@ function finish(d: Drag, x: number, y: number): void {
     return;
   }
   if (d.kind === 'recent' && !d.inMain) { land(d, () => endDrag(d)); return; }   // 제자리로 — 최근 칸의 순서는 자동이다
-  //  메인 그룹의 지금 DOM 순서가 곧 새 순서 — 최근 앱이 올라와 있으면 거기서 고정된다
+  //  메인 그룹의 지금 DOM 순서가 곧 새 순서 — 최근 앱이 올라와 있으면 거기서 고정된다.
+  //   #5011 화면에 안 선 고정(목록이 아직 안 온 설치 앱 · 꺼진 앱)은 저장 순서의 제자리를 지킨다(lib/rail-lit mergeRailOrder).
   const main = host?.querySelector('.v2-rail-main');
-  const keys = main ? (Array.from(main.children) as HTMLElement[]).map((c) => c.dataset.key || '').filter(Boolean) : order;
-  land(d, () => endDrag(d, () => saveOrder(keys)));
+  const keys = main ? (Array.from(main.children) as HTMLElement[]).map((c) => c.dataset.key || '').filter(Boolean) : null;
+  land(d, () => endDrag(d, () => saveOrder(keys ? mergeRailOrder(order, keys) : order)));
 }
 function abort(d: Drag): void {
   d.out = false; d.ghost?.classList.remove('out');
@@ -900,6 +924,7 @@ export function mountRail(el0: HTMLElement, h?: RailHooks): void {
   window.addEventListener('pointerup', releasePress, true);
   window.addEventListener('pointercancel', releasePress, true);
   drawRail();
+  void primeInstalledApps().then(() => drawRail());   // #4769 설치한 앱 목록이 오면 기록의 `i:` 키가 이름 · 그림을 얻는다
 }
 
 export function drawRail(): void {
@@ -907,7 +932,6 @@ export function drawRail(): void {
   init();
   if (drag && drag.lifted) return;   // 끌던 중엔 다시 그리지 않는다 — DOM 을 갈아엎으면 손에 든 것이 사라진다(endDrag 가 그린다)
   if (pressing) { drawOwed = true; return; }   // 누르는 중 — 갈아 끼우면 click 이 사라진다(위 releasePress 가 뗀 뒤 그린다)
-  const c = hooks.counts?.() || { inbox: 0, busy: 0, projects: 0 };
   //  켜지는 칸은 **하나**다(#3870) — 앱 화면으로 가도 구역은 기억에 남지만(사이드바가 그 구역을 계속 그린다) 켜지진 않는다.
   //   종전엔 구역을 기억(section)만 보고 켜서, 홈에서 분류체계를 열면 홈과 분류체계가 함께 켜져 보였다.
   const lit = litKey();
@@ -935,7 +959,7 @@ export function drawRail(): void {
     it.dataset.app = a.key; it.dataset.kind = kind;
     it.title = a.title + (kind === 'pin' ? ' — 독에 고정됨 · 꾹 눌러 끌면 순서, 레일 밖으로 끌어내면 빼기' : ' — 최근에 연 앱 · 꾹 눌러 위로 끌어 올리면 고정');
     it.addEventListener('contextmenu', (e) => { e.preventDefault(); if (drag?.lifted) return; dockMenu(e.clientX, e.clientY, a, kind === 'pin'); });
-    wireDrag(it, a.key, kind);
+    wireDrag(it, a.key, kind);   // #5011 설치한 앱(팀 채널 …)도 끌어 고정 · 순서 · 빼기가 된다
     return it;
   };
 
@@ -945,11 +969,8 @@ export function drawRail(): void {
     let it: HTMLElement;
     if (m.kind === 'sec') {
       const s = m.sec; const on = lit === s.key;
-      //  확인할 것 — 슬랙 '내 활동'의 그 배지. 아이콘 귀퉁이에 숫자.
-      const extra = s.key === 'inbox' && c.inbox
-        ? el('span', { class: 'v2-rail-bd', text: String(c.inbox), role: 'img', 'aria-label': `확인할 것 ${c.inbox}건` })
-        : null;
-      it = item(s.key, s.label, s.icon, on, extra, () => setRailSection(s.key, { navigate: true }));
+      //  구역 아이콘엔 배지가 없다 — 앰버 숫자 배지는 종전 [확인할 것] 하나였고, 그 자리는 홈의 종으로 갔다(#4180).
+      it = item(s.key, s.label, s.icon, on, null, () => setRailSection(s.key, { navigate: true }));
     } else {
       const l = m.link;
       it = item(l.key, l.label, l.icon, lit === l.key, null, () => { location.hash = l.route; }, l.route);

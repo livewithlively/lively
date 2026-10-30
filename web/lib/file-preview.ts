@@ -9,11 +9,11 @@
 //  사용자는 "왜 여기선 표로 나오고 저기선 안 나오지"를 버그로 신고한다. 그래서 **판정·렌더·툴바 동작**을
 //  여기 한 곳으로 모으고, 각 화면은 '어디에 놓을지'와 '버튼을 어떤 모양으로 그릴지'만 정한다.
 //  → 세 소비자: 홈 폴더 브라우저(dash/widget-folders) · 프로젝트 파일 뷰어(projects/files-cards) ·
-//    공유 링크 전체페이지(filepage). 각각의 장점이 이제 셋 다에 있다.
+//    파일 링크의 자료 보기 화면(filepage — #4672). 각각의 장점이 이제 셋 다에 있다.
 //
 // ## 화면별로 남는 차이 (의도된 것)
 //  ① 놓이는 자리 — 프로젝트는 오버레이 모달(섹션이 인라인이라 제자리 전환할 컨테이너가 없다),
-//     홈은 브라우저 모달 안 제자리 전환, 공유 링크는 전체페이지. 이건 문맥이 실제로 달라서다.
+//     홈은 브라우저 모달 안 제자리 전환, 파일 링크는 자료 보기 화면(정보 칸 옆 본문). 이건 문맥이 실제로 달라서다.
 //  ② 크기 — 컨테이너가 다르니 max-height 등이 다르다. `cls` 로 화면별 클래스를 덧붙여 기존 규칙을 보존한다
 //     (공유 클래스 `fp-*` 가 기본, 화면 클래스가 크기를 덮는다). ⚠ 기존 셀렉터는 지우지 않는다 —
 //     scripts/check-css-drops.mjs 가 HEAD 셀렉터 유실을 실패로 잡는다(2026-06-30 사고 재발 방지).
@@ -286,6 +286,30 @@ function looksText(bytes: Uint8Array): string | null {
   try { const s = new TextDecoder('euc-kr').decode(bytes); return s.includes('�') ? null : s; } catch { return null; }
 }
 
+/**
+ * md 안 상대경로를 파일 자리 기준으로 푼다(#4582) — `joinRel('docs/a.md', '../img/b.png') === 'img/b.png'`.
+ *  루트 위로 올라가면 null(서버 감옥이 어차피 거절하지만, 엉뚱한 자리를 묻지 않는다).
+ */
+function joinRel(filePath: string, rel: string): string | null {
+  const lead = String(filePath || '').startsWith('/') ? '/' : '';   // 절대경로로 연 파일(세션 파일 등)은 절대경로로 묻는다
+  const parts = String(filePath || '').split('/').filter(Boolean);
+  parts.pop();   // 파일 이름을 떼고 폴더만
+  for (const seg of String(rel).split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { if (!parts.length) return null; parts.pop(); } else parts.push(seg);
+  }
+  return parts.length ? lead + parts.join('/') : null;
+}
+
+/** renderMarkdown 의 imgFetch — 파일 좌표(path)와 받는 법(fetchRel)이 둘 다 있을 때만 만든다. */
+function mdImgFetch(path: string | undefined, fetchRel: ((p: string) => Promise<Response>) | undefined): ((rel: string) => Promise<Response>) | null {
+  if (path == null || !fetchRel) return null;
+  return (rel: string) => {
+    const p = joinRel(path, rel);
+    return p ? fetchRel(p) : Promise.reject(new Error('out of root'));
+  };
+}
+
 export interface PreviewHost {
   /** 파일 이름(확장자 판정·표시용). */
   name: string;
@@ -295,6 +319,11 @@ export interface PreviewHost {
   fetchView: () => Promise<Response>;
   /** 원본 응답(상한 우회 — 미디어 전용). */
   fetchDownload: () => Promise<Response>;
+  /** #4582 — md 가 거는 상대경로 그림(`![](img/a.png)`)을 받는다. 인자는 **이 파일 폴더 기준으로 이미 푼** 경로(joinRel).
+   *  없으면 상대경로 그림은 종전처럼 브라우저가 앱 주소 기준으로 풀어 깨진다 — 파일 좌표를 아는 화면은 반드시 준다. */
+  fetchRel?: (path: string) => Promise<Response>;
+  /** fetchRel 이 받을 경로의 기준 — 이 파일의 (루트 기준) 경로. */
+  path?: string;
   /** 화면별 추가 클래스(기존 크기 규칙 보존). 키: img·pdf·html·md·code·table·audio·video·msg */
   cls?: Record<string, string>;
   /** PDF 뷰어 파라미터(예 '#navpanes=0&toolbar=1&view=FitH'). 기본 '#toolbar=1&view=FitH'. */
@@ -496,7 +525,7 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
   //   그 세 가지를 셸이 대신하는 다리를 건다(문서마다 저장 이름 공간이 다르다). 안 주면 종전과 같다.
   const bridged = (f: any): any => { if (host.bridgeNs) attachFrameBridge(f, host.bridgeNs); return f; };
   const rendered = (): any => (isMd
-    ? el('article', { class: 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : '') }, renderMarkdown(text))
+    ? el('article', { class: 'md-rendered fp-md' + (cls.md ? ' ' + cls.md : '') }, renderMarkdown(text, { imgFetch: mdImgFetch(host.path, host.fetchRel) }))
     : isHtml
       ? bridged(htmlFrame(text, name, cls.html))
       : codeBlock(text, ext, cls.code));
@@ -535,5 +564,5 @@ async function buildFilePreview(host: PreviewHost): Promise<PreviewOut> {
 
 export {
   ARCHIVE_EXTS, AUDIO_MIME, IMG_MIME, MEDIA_MAX, OFFICE_EXTS, PREVIEW_CODE, PREVIEW_IMG, PREVIEW_TABLE, PREVIEW_TEXT, RISKY_IMG, VIDEO_MIME,
-  buildFilePreview, codeBlock, fileExtOf, htmlFrame, parseDelimited, tablePreview,
+  buildFilePreview, codeBlock, fileExtOf, htmlFrame, joinRel, mdImgFetch, parseDelimited, tablePreview,
 };

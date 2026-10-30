@@ -2,8 +2,14 @@
 //  재배선한다. db/client.ts 가 모듈 로드 시점에 env 를 읽어 풀을 만들므로 **그 어떤 import 보다 먼저**여야
 //  한다(ESM 은 import 순서대로 실행). 상태파일이 없으면 아무것도 하지 않는다(단일 워크스페이스 종전 그대로).
 import "./boot/tenancy-env.js";
+//  (#4970) 셀프호스트 — 세션·화면 안 로그인·설치 확인이 그 사용자 몫 프로그램 폴더(~/.local/bin 의 claude 등)를 찾게 PATH 를 잇는다.
+//   tmux 서버가 이 프로세스의 PATH 를 물려받으므로 무엇이든 띄우기 전이어야 한다(boot/user-bin-path.ts 머리말).
+import "./boot/user-bin-path.js";
 import express from "express";
+import compression from "compression";
+import { compressionFilter } from "./http/compress.js";
 import { BearerVerifier } from "./auth/bearer.js";
+import { registerLlmProxyRoutes } from "./ai-runs/routes.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
 import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
@@ -18,6 +24,9 @@ import { finishConsent, abandonConsent, describeMicrosoftConsentError, MICROSOFT
 import { parseInstallCallback } from "./org/credentials/github-app.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
 import { domainmapWebhookRouter } from "./domainmap/webhook.js";
+import { fileUrlRouter } from "./files/signed-routes.js";   // #4673 서명 주소 받는 곳
+import { appFrontServerRouter } from "./apps/app-front-routes.js";   // #4485 앱 서버 쓰기 요청(본문 날것)
+import { liveSignedRouteDeps } from "./files/files-live.js";
 import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
@@ -35,6 +44,7 @@ import { readStageSync } from "./ops/stage-sync-status.js";   // #2116 — dev �
 import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy, diskThresholds } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
+import { registerServerExecutor } from "./apps/app-mcp-server-executor.js";   // #5053 앱 선언 MCP 도구의 server 실행기
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
 import { schemaBootPhase, schemaBootChangedAt } from "./boot/boot-state.js";   // #2578 — /readyz 의 schema 신호
 import { loadEnterprise } from "./enterprise/load.js";
@@ -102,9 +112,25 @@ console.log(`[boot] ${installTenantBinding()}`);
   const { mintAppToken } = await import("./apps/principal.js");
   const { materializeAppAssets } = await import("./apps/session-assets-gateway.js");
   const { ensureHarnessSeat, dropProbeSeat } = await import("./terminal/ai-login-run.js");   // #3668 T3
-  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode,
+  //  #3773 — 아웃박스는 노드 번들에 부채로 실려 registry 를 끌어오지 못한다. 호스트 재료(고르기·RPC·소유 판정)는 registry 한 곳의 것을 여기서 꽂는다.
+  const { sessionHostTargetFor, nodeRpc, gatewayDefersHere } = await import("./node/registry.js");
+  //  #4687 — 세션 작업 폴더의 공개범위 판정. 열람 신원은 링크·MCP 와 같은 규칙(viewerOf)으로 잰다 — 사람과 그 사람의 AI 가 같은 답.
+  const { assertSessionCwdVisibleTo } = await import("./v6/shared-folder-store.js");
+  const { viewerOf } = await import("./capabilities/principal.js");
+  //  #4684 — 세션에 붙인 앱 폴더(확보에 실을 목록 · 새 id 복원 때 넘기기).
+  const { folderAppsFor, afterSessionCreate } = await import("./apps/session-app-folders.js");
+  const { carrySessionApps, dropSessionApps } = await import("./apps/session-apps.js");
+  //  #4427 — 구성원 AI 계정(Claude) 커넥터 정책(allowed 가 아니면 claude 세션에 claude.ai 커넥터를 싣지 않는다 — fail-closed).
+  const { memberAiConnectorsPolicy } = await import("./org/store/member-ai-connectors.js");
+  registerGatewayCapabilities({ materializeMemberGit, resolveGitSecret, leaseGitSecretForNode, memberAiConnectorsPolicy,
     mintAppToken, materializeAppAssets: materializeAppAssets as never,
     harnessSeat: { ensure: ensureHarnessSeat, drop: dropProbeSeat },
+    outboxHost: { pick: sessionHostTargetFor, rpc: nodeRpc, defersHere: gatewayDefersHere },
+    assertSessionCwdVisible: (user, rootKey, subpath) => assertSessionCwdVisibleTo(viewerOf(user), rootKey, subpath),
+    sessionAppFolders: {
+      listFor: (id) => folderAppsFor(id), carry: (from, to) => carrySessionApps(from, to), drop: (id) => dropSessionApps(id),
+      afterCreate: (id, sent, made, at) => { void afterSessionCreate(id, sent, made, at); },
+    },
     kitSeedDeps: { getMember, buildBundle: async () => (await buildInstallBundle(SEED_HARNESSES)).buffer } });
 }
 
@@ -125,14 +151,46 @@ app.use(tenantContextMiddleware(process.env, lookupWorkspace, workspaceForSessio
 //   · 하우스키핑이 도는 배포(자가호스팅·registry)에선 **무동작** — 이중 실행을 막는다.
 app.use(outboxRequestSweepMiddleware());
 
+// 웹 화면이 받는 응답을 압축한다(#4989). 1Mbps 폰 실측(상민님 2026-10-25): 터미널 스트림은 멀쩡한데 사이드바·세션 목록이
+//  한참 걸렸다 — 첫 판에 받는 목록이 압축 없이 수 MB 였고(세션 목록 618KB → gzip 73KB), 화면 코드도 압축 없이 나갔다.
+//  ⚠ 웹 화면의 두 자리(/api/ui · /ui)에만 건다 — MCP · LLM 프록시 · 앱 서버 중계는 자기 규칙으로 흐르는 표면이라 건드리지 않는다.
+//  ⚠ 조금씩 흘려 보내는 응답(SSE · ndjson 대화 흐름)은 압축하지 않는다 — 압축기는 창을 채울 때까지 모아 두므로 실시간이 멈춘다.
+//   그래서 «통째로 한 번에 나가는» 형식만 고른다(compressionFilter). 받는 쪽이 Accept-Encoding 을 안 보내면 원문 그대로다.
+app.use(["/api/ui", "/ui"], compression({ filter: compressionFilter }));
+
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
 // bearer 인증 밖(구 :7700 과 동일 — HMAC 자체가 fail-closed 인증). raw 파싱은 라우터 내부 소유.
 app.use("/api/webhook", domainmapWebhookRouter());
 
+// 서명 주소 받는 곳(#4673 — GET·HEAD·PUT /api/files/s/<토큰>). 역시 전역 express.json() **이전**: PUT 본문이 그대로 파일 바이트라
+//  앱이 `Content-Type: application/json` 으로 JSON 파일을 올리면 전역 파서가 먼저 본문을 먹어 빈 파일이 된다(다른 업로드 입구는
+//  octet-stream 으로만 와서 이 일이 없었다). 인증 미들웨어 밖이다 — 토큰 서명이 자격이고, 판정은 쓰는 순간 다시 탄다(files/signed-routes).
+app.use("/api/files/s", fileUrlRouter(liveSignedRouteDeps));
+
+// 앱 서버의 쓰기 요청(#4485 앱 v2-6 — POST·PUT·PATCH·DELETE /api/app-front/server?path=…). 역시 전역 express.json() **이전**: 앱이 받는 본문은
+//  보낸 바이트 그대로여야 한다(JSON 이면 전역 파서가 먼저 먹는다). 문은 앞단 기계 헤더(x-lvly-app-front) — 사람 로그인을 타지 않는다(apps/app-front-routes.ts).
+app.use("/api/app-front/server", ...appFrontServerRouter());
+
+// 앱 inline 설치(#4224)만 본문 상한을 올린다 — 파일 묶음(매니페스트·HTML·스킬)을 본문에 싣는다(풀어서 8MB, base64 여유 포함 12MB).
+//  전역보다 **먼저** 마운트해야 한다: 먼저 파싱한 쪽이 이기고(body-parser 는 이미 읽은 본문을 건너뛴다) 전역 1MB 가 413 을 내지 않는다.
+app.use("/api/ui/apps/install", express.json({ limit: "12mb" }));
+//  #4225 app_save(구성원 저장) — 화면 + 데이터 앱뿐이라(스킬·worker 번들 없음) 4MB 로 충분하다(화면 한 장 상한 2MB).
+app.use("/api/ui/apps/save", express.json({ limit: "4mb" }));
+//  #4488 LLM 프록시(/api/llm/anthropic/*) — 본문을 바이트 그대로 위로 흘린다(앱 · Claude Code 가 보낸 JSON 을 다시 직렬화하지 않는다 · 1MB 를 넘는다).
+app.use("/api/llm/anthropic", express.raw({ type: () => true, limit: "32mb" }));
+//  #4993 브라우저 답(데스크톱 앱 화면 → 게이트웨이) — 스크린샷(base64 JPEG)이 실린다. 보이는 영역 한 장은 수백 KB 지만
+//   큰 화면·고해상도에서 1MB 를 넘을 수 있어 이 경로만 올린다(전역보다 먼저 — 위 apps/install 과 같은 이유).
+//   ⚠ 인증보다 앞에서 파싱하므로 토큰 머리글이 없는 요청은 **읽기 전에** 돌려보낸다(익명 요청이 큰 본문을 파싱시키지 못하게 — #4993 격리 리뷰).
+//   상한 4MB — 스크린샷 한 장은 긴 변 1568px JPEG 라 수백 KB 다(읽기·본문·JS 결과도 화면 쪽 상한이 그 아래다).
+app.use("/api/ui/browser/host/reply",
+  (req, res, next) => { if (/^Bearer\s+\S/i.test(String(req.headers.authorization || ""))) next(); else res.status(401).json({ error: "토큰 머리글(Authorization: Bearer)로만 답할 수 있습니다" }); },
+  express.json({ limit: "4mb" }));
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();
+//  #4488 LLM 프록시 — 실행 토큰 · 앱 서버 토큰(고급 길)으로 Anthropic Messages API 를 흘려 보낸다(ai-runs/routes.ts).
+registerLlmProxyRoutes(app, verifier);
 // /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가
 //  로그인 지점을 못 찾는다). 공개 주소가 미설정이면 종전 401 그대로.
 const auth = bearerWithResourceMetadata(verifier);
@@ -197,14 +255,18 @@ app.use(oauthAuthorizationServer());
 
 // MCP 전송 계층 — /mcp POST/GET/DELETE + 요청별 서버 조립(무상태/sessioned). 본문·불변식은 boot/mcp-transport.ts.
 registerMcpTransport(app, auth);
+// 앱이 선언한 MCP 도구의 실행기(#5050 틀 · #5053 server) — 설치 검사 · 목록 · 부르기가 이 등록부를 본다(한 번만).
+registerServerExecutor();
 
 // 멤버 설치 — 토큰게이트 curl 모델(git clone 대체). 인증된 멤버 토큰이면 그 조직의 발행 아티팩트를
-//  tar.gz 로 동적 생성해 스트림한다(DB→materialize→generator→tar). 설치 한 줄:
+//  tar.gz 로 동적 생성해 스트림한다(kit generator 의 buildKitBundle 을 in-process 로 불러 부트스트랩만 조립 → tar —
+//  조직 콘텐츠는 번들에 굽지 않고 설치 시·세션마다 라이브로 받는다, src/org/delivery/publish.ts). 설치 한 줄:
 //    curl -fsSL <GW>/cli | sh          (→ lively CLI 가 /install 번들을 받아 설치)
 //  격리 모델: **조직당 1 게이트웨이+DB 인스턴스**(배포 유형화 T1~T5, 멀티테넌트 SaaS 제외). 따라서 org-content
 //  테이블에 org_id 컬럼이 없고 모든 멤버 토큰이 그 단일 조직 묶음을 받는다 — 이건 설계상 의도다.
 //  ⚠️ 만약 한 게이트웨이를 여러 조직이 공유하도록 바꾼다면 org_id 격리(스키마+모든 쿼리 필터)가 선행 필수.
-app.get("/install", auth, async (_req, res) => {
+//  #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 작업 AI)는 /install 을 못 쓴다(앱 도구 게이트 밖 · 요청마다 묶음을 만든다). 그 밖은 /mcp 와 같다.
+app.get("/install", bearerWithResourceMetadata(verifier, "deny"), async (_req, res) => {
   try {
     const { buffer } = await buildInstallBundle("claude");
     res.setHeader("Content-Type", "application/gzip");

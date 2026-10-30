@@ -20,11 +20,11 @@
 //  (구) #1584 — 좌측 사이드바. #1841 에서 가로 머리 3층으로 뒤집혔고, 이번엔 그 3층에서 알약 층을 걷는다.
 import { api, el, hasScope, sv } from './core.js';
 import { skeleton } from './ui-primitives.js';
-import { stageHealthLevels } from './context-pipeline.js';
+import { stageHealthDetails } from './context-pipeline.js';
 import { inboxCount, renderContextInbox, renderContextMapScreen } from './context-map.js';   // #762 표지(흐름 지도) + 확인할 것
 import { renderRunsPage } from './context-runs-page.js';   // #4135 3판 — 자동 실행 기록(현황의 「자세히 보기」)
-import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 import { renderCollectors } from './context-collectors.js';
+import { renderClaudeRunsScreen } from './context-claude-runs.js';   // #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기
 import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
@@ -32,6 +32,7 @@ import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료
 import { ingestPolicyPanel } from './review.js';                       // 지식 검토 정책(#638) — 증류기 화면의 「사람 승인」 절
 import { DELIVER_ALIAS, DELIVER_PAGES, renderDeliver } from './context-deliver.js';   // #5159 AI 주입 설정 — 왼쪽 목차 + 세부 페이지
 import { loadAdmin } from './admin-rerender.js';
+import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
 
 /** 관리탭 패널이 요구하는 admin 데이터 — 없으면 빈 객체(패널이 자기 API 로 그린다). */
@@ -87,11 +88,13 @@ const STAGES: CtxStage[] = [
       { key: 'collectors', label: '수집기', draw: (b) => sourcesScreen(b) },
       { key: 'presets', label: '새 소스 만들기', draw: (b) => presetsScreen(b) },
       { key: 'source-vis', label: '자료를 볼 사람', adminOnly: true, draw: async (b) => { await sourceVisPolicyPanel(b); } },
+      //  #4213 T11 — 수집 실행 지표(실패율·메모리)와 수집 세션 크기. 수집기 설정 화면 맨 위 한 줄(입구)은 걷어냈다 — 주소로 연다.
+      { key: 'claude', label: 'Claude 커넥터 수집', adminOnly: true, draw: (b) => renderClaudeRunsScreen(b) },
     ],
   },
   {
     key: 'distill', label: CTX_TAB.distill,
-    hint: '자료를 읽고 지식으로 정리하는 자동 규칙 — 채널·팀마다 기준을 다르게 여러 개',
+    hint: '지식을 완성하는 자동 규칙 — 자료를 읽어 지식으로 쓰고, 미분류 지식에는 카테고리를 붙입니다',
     items: [{ key: 'distillers', label: '증류기', draw: (b) => distillScreen(b) }],
   },
   //  카테고리 탭은 #4233(원준 2026-09-26)에서 「분류체계」 앱으로 나갔다. 옛 주소는 renderContext 초입에서 그 앱으로 보낸다.
@@ -109,18 +112,22 @@ const STAGES: CtxStage[] = [
 ];
 
 // ── 화면 조립 — 한 탭 = 한 화면. 여러 패널을 세로로 쌓는다(각자 실패는 자기 자리에서). ──────────
+//  패널은 **함께** 그린다(#5147) — 자리(host)를 먼저 순서대로 세워 두므로 늦게 끝난 패널도 제자리에 선다.
+//   종전엔 한 패널이 다 그려져야 다음 패널이 읽기 시작해, 화면 시간이 패널 시간의 합이었다.
 async function stack(b: HTMLElement, parts: Array<(h: HTMLElement) => Promise<void> | void>): Promise<void> {
   const hosts = parts.map(() => el('div', { class: 'ctx-stacked' }));
   b.replaceChildren(...hosts);
-  for (let i = 0; i < parts.length; i++) {
-    try { await parts[i](hosts[i]); }
+  await Promise.all(parts.map(async (part, i) => {
+    try { await part(hosts[i]); }
     catch (e) { hosts[i].replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + (e as Error).message }))); }
-  }
+  }));
 }
 
 /** 수집기 — 목록 하나. 「새 소스 만들기」(직접 정의하는 방식)는 만들기 흐름 안의 링크로만 들어간다(#3830 — 비개발자
  *  화면에서 개발자용 입구를 상시 카드로 세우지 않는다). */
 async function sourcesScreen(b: HTMLElement): Promise<void> {
+  //  #4213 T11 의 맨 위 한 줄(Claude 커넥터 수집 최근 7일 요약)은 원준 2026-10-30 요청으로 걷어냈다 — "통째로 날려".
+  //   지표·크기 화면 자체(#/context/sources/claude)는 그대로 둔다.
   await stack(b, [(h) => renderCollectors(h)]);
 }
 
@@ -174,6 +181,9 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   // 증류기 설정(#/context/distill/<key>)은 **이 셸 밖**의 전용 페이지다(#1564).
   if (isDistillerDetailPath(sub, sub2)) { await distillerPage(view, String(sub2)); return; }
 
+  //  #4194 — 옛 「분류기」 자리(#/context/topics/classifiers · classify/classifiers · category/classifiers)는 증류기 탭의
+  //   카테고리 붙이기 절로 간다(북마크·알림·문서의 옛 링크). LEGACY_ITEM 이 'categories' 로 보내던 것을 여기서 먼저 가로챈다.
+  if (sub2 === 'classifiers' && (sub === 'topics' || sub === 'classify' || sub === 'category')) { location.replace('#/context/distill'); return; }
   //  #4233. 카테고리 탭(과 그 옛 이름 topics · classify)은 분류체계 앱이 됐다. 셸 창을 그 앱으로 옮긴다(taxonomy-link.ts).
   if (sub === 'category' || sub === 'topics' || sub === 'classify') { openTaxonomyApp(); return; }
   // 옛 주소(단계 이름)로 들어오면 새 자리로 조용히 옮긴다 — 북마크·문서·화면 안 링크 보존.
@@ -225,7 +235,9 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   //   앱 이름은 탭 줄 왼쪽 문패로 들어가고(세로 구분선 하나), 탭이 그 오른쪽에 잇는다. 정의 한 줄(hint)은
   //   화면 안 캡션으로 내려간다 — 현황은 지도 캡션이 그 일을 이미 하고, 나머지 탭은 아래 renderContext 가 붙인다.
   const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': CTX_APP_NAME });
-  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
+  //  #5147(원준 2026-10-30) — 앱 이름은 **첫 화면(실시간 현황)으로 가는 링크**다. 종전엔 글자뿐이라, 처음 화면으로 돌아가려는 사람이
+  //   이 이름을 누르고 아무 일도 안 일어나는 일이 반복됐다(앱 이름 = 그 앱의 처음 화면, 웹의 로고 링크와 같은 약속).
+  tabs.append(el('a', { class: 'ctx-hd-app', href: '#/context', title: CTX_TAB.home + '으로 갑니다' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
   for (const s of STAGES) {
     if (s.tray || s.parent) continue;   // 확인할 것 — 아래 트레이가 대신 선다 · 하위 화면은 탭이 아니다
     const on = s.key === selStage.key || s.key === selStage.parent;
@@ -252,8 +264,8 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   return el('div', { class: 'pjv-board-header ctx-board-header' }, tabs);
 }
 
-/** 건강 점을 붙일 수 있는 탭 — 파이프라인 단계에 대응하는 탭만(현황·AI 전달은 판정이 없다). 점검 탭은 #4173 으로 비웠다 — 점도 없다.
- *  카테고리 탭은 #4233 에서 분류체계 앱으로 나갔다. */
+/** 건강 점을 붙일 수 있는 탭 — 판정이 있는 탭만(현황·AI 전달은 판정이 없다). 카테고리 탭은 기준표(정의 빈 칸)를 잰다(#4194). */
+//  점검 탭은 #4173 으로 비웠다 — 판정할 것이 없으니 점도 없다.
 const HEALTH_TAB: Record<string, 'collect' | 'distill'> = {
   sources: 'collect', distill: 'distill',
 };
@@ -262,14 +274,15 @@ const HEALTH_TAB: Record<string, 'collect' | 'distill'> = {
 async function paintStageHealth(view: HTMLElement): Promise<void> {
   let d: any;
   try { d = await api('/api/ui/org/pipeline'); } catch { return; }
-  const lv = stageHealthLevels(d);
+  const hs = stageHealthDetails(d);
   for (const [tabKey, stageKey] of Object.entries(HEALTH_TAB)) {
     const dotEl = view.querySelector('.ctx-vtab[data-stage="' + tabKey + '"] .ctx-vtab-dot') as HTMLElement | null;
     if (!dotEl || !dotEl.isConnected) continue;
-    const level = (lv as any)[stageKey];
-    if (level === 'ok') { dotEl.remove(); continue; }
-    dotEl.classList.add('is-' + level);
-    dotEl.title = level === 'note' ? '살펴볼 것이 있습니다' : level === 'warn' ? '확인이 필요합니다' : '멈춰 있습니다';
+    const h = hs[stageKey];
+    if (h.level === 'ok') { dotEl.remove(); continue; }
+    dotEl.classList.add('is-' + h.level);
+    //  툴팁은 **그 문장** — 증류 탭은 두 종류(자료 → 지식 · 카테고리 붙이기)를 함께 판정하므로 어느 쪽 사정인지 말해야 한다(#4194).
+    dotEl.title = h.line || (h.level === 'note' ? '살펴볼 것이 있습니다' : h.level === 'warn' ? '확인이 필요합니다' : '멈춰 있습니다');
   }
   const trayN = view.querySelector('.ctx-vtab-tray .ctx-tray-n') as HTMLElement | null;
   if (trayN) {

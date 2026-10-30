@@ -311,10 +311,23 @@ t("B1 앱 드래그 관측 후 Cmd+C → ^C 정확히 1회", async () => {
   assert.equal(h.term._keyHandler(h.kev({ key: "c", metaKey: true })), false);
   assert.equal(cnt03(h), 1);
 });
+t("B1b Windows 앱 드래그 관측 후 Ctrl+C → Cmd+C와 같은 안전 복사 브리지", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  drag(h);
+  assert.equal(h.term._keyHandler(h.kev({ key: "c", ctrlKey: true })), false);
+  assert.equal(cnt03(h), 1);
+});
 t("B2 관측 없음 + Cmd+C → ^C 0건(앱 종료 사고 차단)", async () => {
   const h = await makeCtx();
   h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
   assert.equal(h.term._keyHandler(h.kev({ key: "c", metaKey: true })), false);
+  assert.equal(cnt03(h), 0);
+});
+t("B2b Windows 관측 없음 + Ctrl+C는 중단 키로 그대로 둔다", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  assert.equal(h.term._keyHandler(h.kev({ key: "c", ctrlKey: true })), true);
   assert.equal(cnt03(h), 0);
 });
 t("B3 드래그 후 일반 타이핑 → 관측 해제 → ^C 0건", async () => {
@@ -597,7 +610,7 @@ t("O1 OSC52 수신(비사파리) → 비동기 쓰기에 그 텍스트", async (
   assert.deepEqual(h.writeTexts, ["복사텍스트"]);
 });
 t("O2 사파리: 복사 의도 제스처의 사전 커밋이 OSC52 로 resolve, 직접 쓰기 없음", async () => {
-  const h = await makeCtx({ safari: true, writeTextOk: false });
+  const h = await makeCtx({ safari: true, mac: true, writeTextOk: false });
   h.mod.setupClipboard(); h.mod.setupOscClipboard();
   h.term.modes.mouseTrackingMode = "any";
   drag(h);
@@ -858,6 +871,15 @@ t("L11 친 만큼 되돌린다(한글은 글자 수로)", async () => {
   h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
   assert.equal(h.inputs().pop(), "\x7f\x7f");
 });
+t("L11b ⌘⇧Z는 웹이 되돌린 실제 텍스트를 다시 넣는다", async () => {
+  const h = await makeCtx({ mac: true });
+  h.mod.setupClipboard();
+  h.mod.handleTermData("안녕");
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true }));
+  await sleep(1);
+  h.term._keyHandler(h.kev({ key: "z", metaKey: true, shiftKey: true }));
+  assert.deepEqual(h.inputs(), ["안녕", "\x7f\x7f", "안녕"]);
+});
 t("L12 설정을 끄면 Shift+← 를 가로채지 않는다(vim 처럼 제 기능이 있는 앱)", async () => {
   const h = await makeCtx({ mac: true, prefs: { lineSelect: false } });
   h.mod.setupClipboard();
@@ -997,7 +1019,12 @@ const fakeApp = (h: Harness, text: string, cols = 40): FakeApp => {
 // 앱 커서를 p 로 옮겨 둔다(장면 준비 — 웹을 거치지 않는 앱 안 이동)
 const placeAt = (h: Harness, app: FakeApp, p: number): void => { app.pos = p; h.sent.push(JSON.stringify({ t: "i", d: "" })); h.sent.length = 0; };
 const key = (h: Harness, k: string, mods: Record<string, unknown> = {}): unknown => h.term._keyHandler(h.kev({ key: k, ...mods }));
-const settle = (): Promise<void> => sleep(400);   // 여러 행 지우기는 앱 커서를 걸어 본 뒤라 비동기다
+//  여러 행 지우기는 앱 커서를 걸어 본 뒤라 비동기다. 고정 400ms 만 기다리면 바쁜 CI 러너에서 걷기가 덜 끝난 채 검사해 흔들렸다
+//   (M4). 그래서 결과가 나올 때까지 기다리고(상한 5초), 나온 뒤에도 400ms 더 둬서 «더 지우는» 회귀를 종전만큼 잡는다.
+const settle = async (done: () => boolean): Promise<void> => {
+  for (const until = Date.now() + 5000; !done() && Date.now() < until;) await sleep(20);
+  await sleep(400);
+};
 
 t("M1 ★Shift+Enter 로 나눈 두 줄: Shift+↑ 두 번 → ⌘X 로 두 줄이 다 잘리고 클립보드엔 줄바꿈까지", async () => {
   const h = await makeCtx({ mac: true });
@@ -1006,8 +1033,8 @@ t("M1 ★Shift+Enter 로 나눈 두 줄: Shift+↑ 두 번 → ⌘X 로 두 줄�
   key(h, "ArrowUp", { shiftKey: true });          // 둘째 줄 머리
   key(h, "ArrowUp", { shiftKey: true });          // 첫 줄 머리(줄을 넘는다)
   assert.equal(app.pos, 0, "커서가 입력 맨 앞까지 올라갔다");
-  key(h, "c", { metaKey: true }); key(h, "Backspace");   // stage 판엔 ⌘X 가 없다(main a2a08c8c) — 같은 뜻의 복사+지우기
-  await settle();
+  key(h, "x", { metaKey: true });
+  await settle(() => app.text === "");
   assert.equal(app.text, "", "두 줄이 모두 잘렸다");
   assert.equal(h.execData.pop(), "첫줄 입니다\n둘째 줄", "클립보드엔 줄바꿈 그대로");
 });
@@ -1020,8 +1047,8 @@ t("M2 ★공백에서 접힌 긴 입력(숨은 공백 1): Shift+↑ → ⌘X 로
   assert.ok(r0 >= 1, "장면 전제: 입력이 두 행 이상으로 접혔다");
   for (let i = 0; i < Array.from(text).length; i++) key(h, "ArrowLeft", { shiftKey: true });
   assert.notEqual(h.term.buffer.active.cursorY, r0, "선택이 행을 넘었다");
-  key(h, "c", { metaKey: true }); key(h, "Backspace");   // stage 판엔 ⌘X 가 없다(main a2a08c8c) — 같은 뜻의 복사+지우기
-  await settle();
+  key(h, "x", { metaKey: true });
+  await settle(() => app.text === "앞글 ");
   assert.equal(app.text, "앞글 ", "선택한 글자만 정확히 잘렸다");
   assert.equal(h.execData.pop(), text, "접힌 자리의 공백까지 복사된다");
 });
@@ -1034,7 +1061,7 @@ t("M3 ★한글이 칸이 모자라 끊긴 입력(숨은 글자 0): 중간부터
   key(h, "ArrowUp", { shiftKey: true });
   assert.equal(app.pos, 0);
   key(h, "Backspace");
-  await settle();
+  await settle(() => app.text === "자차");
   assert.equal(app.text, "자차", "끝 두 글자만 남는다(하나라도 더 지우면 «차» 만 남거나 빈다)");
 });
 t("M4 커서가 선택의 오른끝(Shift+→ 로 행을 넘어 잡음)이어도 정확히 — 앵커 앞 글자는 살아 있다", async () => {
@@ -1045,7 +1072,7 @@ t("M4 커서가 선택의 오른끝(Shift+→ 로 행을 넘어 잡음)이어도
   for (let i = 11; i < Array.from(app.text).length; i++) key(h, "ArrowRight", { shiftKey: true });
   assert.ok(h.term.buffer.active.cursorY >= 1, "장면 전제: 선택이 행을 넘었다");
   key(h, "Delete");
-  await settle();
+  await settle(() => app.text === "keep this; ");
   assert.equal(app.text, "keep this; ", "앵커 앞은 그대로");
 });
 t("M5 여러 행 선택 위에 글자를 치면 지운 뒤 그 글자 — 걷는 길 중간에 박히지 않는다", async () => {
@@ -1054,7 +1081,7 @@ t("M5 여러 행 선택 위에 글자를 치면 지운 뒤 그 글자 — 걷는
   const app = fakeApp(h, "one\ntwo");
   key(h, "ArrowUp", { shiftKey: true }); key(h, "ArrowUp", { shiftKey: true });
   assert.equal(key(h, "Z"), false, "키는 삼킨다(지운 뒤 우리가 보낸다)");
-  await settle();
+  await settle(() => app.text === "Z");
   assert.equal(app.text, "Z");
 });
 t("M6 ★앱 커서가 안 움직이면(목록이 떠 있는 등) 아무것도 지우지 않는다", async () => {
@@ -1063,7 +1090,7 @@ t("M6 ★앱 커서가 안 움직이면(목록이 떠 있는 등) 아무것도 �
   const app = fakeApp(h, "one\ntwo");
   key(h, "ArrowUp", { shiftKey: true }); key(h, "ArrowUp", { shiftKey: true });
   app.frozen = true;
-  key(h, "Backspace");
+  key(h, "x", { metaKey: true });
   await sleep(1800);
   assert.ok(!h.inputs().some((d) => d.includes("\x7f") || d.includes("\x1b[3~")), "지우기 바이트 0");
   assert.equal(app.text, "one\ntwo");

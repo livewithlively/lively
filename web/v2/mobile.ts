@@ -12,17 +12,20 @@
 //  ── 폰(≤640px, #4088 원준 2026-09-19 "슬랙 웹·모바일 뷰 참고 — 반응형이 아니라 레이아웃을 다시") ────────────
 //   태블릿까지는 위 서랍 셸이 맞는데, 폰에선 왼쪽 끝 레일(56px)이 폭의 14% 를 늘 먹고 서랍은 그 옆에 쪽문처럼 열렸다.
 //   슬랙 모바일 문법으로 바꾼다:
-//   · **아래 탭 바**(.v2-mtabs) 가 구역을 맡는다 — [홈] [확인할 것] [AI 세션] [프로젝트] [위키] [더보기]. 레일은 없다.
+//   · **아래 탭 바**(.v2-mtabs) 가 구역을 맡는다 — [홈] [AI 세션] [프로젝트] [위키] [더보기]. 레일은 없다.
+//     ([확인할 것] 탭은 #4180 에서 뺐다 — 레일과 같은 표(railSections)를 읽으므로 저절로 빠졌고, 알림은 홈의 종이 든다.
+//      폰에선 종을 누르면 「확인할 것」 화면(#/inbox)이 열린다. [더보기] 판에도 한 줄 둔다 — 다른 구역에서도 갈 수 있게.)
 //   · 구역 탭을 누르면 그 구역의 **목록이 화면 한 장**으로 선다(사이드바 서랍을 전폭으로) — 슬랙의 「홈」탭이 채널 목록인 것과
 //     같다. 목록에서 하나를 고르면 본문이 전폭으로 열리고, 같은 탭을 다시 누르면 목록으로 돌아온다.
 //   · [더보기] = 슬랙의 「더보기」 — 리브·자료·맥락 관리·사용 가이드 같은 앱과 [내 프로필·환경설정] 이 아래 판(.v2-msheet)으로.
 //   · 맨 윗줄은 [☰] [검색 전폭] [타임라인] 한 줄 — 뒤로·앞으로는 브라우저 몫이라 폰에선 뺀다(CSS, 50-mobile.css).
 //   JS 짝은 이 파일, CSS 짝은 public/styles/50-mobile.css(≤640 블록). 문턱은 PHONE_MQ 하나다.
+import { LIV_ENTRY_VISIBLE } from '../lib/liv-entry.js';   // #4970 리브 진입점 숨김
 import { el, personName, state, sv } from '../core.js';
 import { ICONS, icon } from './icons.js';
 import { appHref, appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { openMeModal } from './me-modal.js';
-import { railSection, railSections, setRailSection, type RailSection } from './rail.js';
+import { railLitSection, railSections, setRailSection, type RailSection } from './rail.js';
 
 export const MOBILE_MQ = '(max-width: 900px)';   // = 40-v2.css 모바일 블록의 문턱(종전 우패널 숨김 문턱과 같다 — 태블릿 세로 포함)
 export const PHONE_MQ = '(max-width: 640px)';    // = 50-mobile.css 폰 블록의 문턱 — 아래 탭 바가 서는 폭
@@ -41,8 +44,12 @@ export interface MobileChrome {
   setAside(on: boolean): void;
   /** 우측 서랍을 연다 — 곁칸에 무언가를 실었을 때(미리보기). 데스크톱에선 상주 열이라 할 일이 없다. */
   openAside(): void;
-  /** 사이드바 서랍을 연다 — 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 세션 머리줄의 ≡ 가 이걸 부른다(#4229 후속). */
+  /** 사이드바 서랍을 연다 — 폰 세션 화면은 맨 윗줄(☰)을 걷으므로 세션 머리줄의 ≡ 가 이걸 부른다(#4229 후속). 사이드바가 없는 앱에선 열지 않는다(setSide). */
   openSide(): void;
+  /** 지금 화면(앱)에 사이드바가 있나(#4632) — false 면 좁은 폭(≤900)에서 ☰ 를 걷고 서랍을 열지 않는다. 넓은 폭의 그 단추(레일 여닫이)는 그대로다.
+   *  원준 2026-10-19 «아니 각자 앱 사이드바로» — ☰ 는 그 앱의 사이드바만 연다. 사이드바가 없는 앱에서 구역 목록을 대신 띄우지 않는다
+   *  (다른 데로 가는 길은 태블릿은 레일, 폰은 아래 탭 바다). 부르지 않은 셸은 종전대로(있다). */
+  setSide(on: boolean): void;
   /** 사이드바 서랍 여닫이(☰) — 데스크톱 앱에선 이 단추가 창 맨 윗줄 맨 왼쪽으로 간다(#1954 3차). */
   menuBtn: HTMLElement;
   /** 우측 서랍 여닫이([타임라인]) — 브라우저 셸은 이 단추도 창 맨 윗줄 오른쪽 끝으로 옮긴다(#4088). */
@@ -53,11 +60,15 @@ export interface MobileChrome {
   setAsideTarget(target: HTMLElement | null): void;
   /** 문턱(≤900)을 넘나들 때 — 셸이 활성 탭의 크롬(서랍 단추)을 다시 맞춘다. 돌려주는 함수로 뗀다. */
   onChange(fn: () => void): () => void;
-  /** 아래 탭 바의 켜짐·배지를 지금 상태로 맞춘다 — 레일을 다시 그릴 때(main.ts drawSide) 함께 부른다. */
-  syncTabs(counts?: { inbox?: number }): void;
+  /** 아래 탭 바의 켜짐을 지금 상태로 맞춘다 — 레일을 다시 그릴 때(main.ts drawSide) 함께 부른다. */
+  syncTabs(): void;
   closeAll(): void;
   isMobile(): boolean;
   isPhone(): boolean;
+  /** 폰 아래 탭 바로 연 구역 목록(서랍)의 구역 — 그 서랍이 열려 있는 동안만. 사람이 고른 목록이라 지금 화면의 앱 사이드바보다 앞선다(#4632). */
+  sheetSection(): RailSection | null;
+  /** 탭 바로 연 구역 목록 서랍이 닫혔다 — 셸이 사이드바를 다시 그려 지금 화면(앱)의 것으로 되돌린다. 안 그리면 다음 ☰ 에 그 구역 목록이 남는다. */
+  onSheetClosed(fn: () => void): void;
 }
 
 /** #v2-root 에 모바일 크롬을 단다. bar 는 root 맨 앞, scrim·tabs 는 맨 뒤에 호출자가 끼운다(그리드 열 순서를 안 건드리게). */
@@ -92,6 +103,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   type Which = 'side' | 'aside';
   let open: Which | null = null;
   let sheetOpen = false;
+  let sheetSec: RailSection | null = null;   // 탭 바로 연 구역 목록 — 서랍을 닫거나 ☰ 로 열면 지운다
+  let sideOn = true;   // 지금 화면(앱)에 사이드바가 있나(setSide) — 없으면 좁은 폭의 ☰ 를 걷는다
+  const sheetEndFns = new Set<() => void>();
   const paint = (): void => {
     root.classList.toggle('m-side', open === 'side');
     root.classList.toggle('m-aside', open === 'aside');
@@ -107,7 +121,9 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     if (!open && !sheetOpen) return;
     const was = open;
     const wasSheet = sheetOpen;
-    open = null; sheetOpen = false; paint();
+    const hadSheet = !!sheetSec;
+    open = null; sheetOpen = false; sheetSec = null; paint();
+    if (hadSheet) for (const f of sheetEndFns) { try { f(); } catch (_) { /* 다시 그리기가 깨져도 닫기는 끝난다 */ } }
     //  [더보기] 판도 같은 규칙 — Esc 로 닫았으면 초점을 연 단추([더보기])로 돌려준다(판이 hidden 이 되면 초점이 body 로 떨어진다).
     if (!was) { if (wasSheet && returnFocus && moreBtn) moreBtn.focus({ preventScroll: true }); return; }
     const panel = was === 'side' ? side : (asideTarget || aside);
@@ -122,7 +138,14 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     // 사이드바 트리는 수백 행 — 지금 보는 행이 보이게 살짝 굴린다(열린 뒤라야 굴릴 스크롤 상자가 화면 안에 있다).
     if (w === 'side') { const on = side.querySelector<HTMLElement>('.v2-tree .on'); if (on) on.scrollIntoView({ block: 'center' }); }
   };
-  menuBtn.addEventListener('click', () => (open === 'side' ? closeAll() : openOne('side')));
+  //  사이드바가 없는 앱이면 좁은 폭의 ☰ 를 걷는다 — 걷는 것은 CSS 다(47-v2-rail.css .v2-mbar-menu.no-side, ≤900 만). 넓은 폭의 같은 단추(레일 여닫이, main.ts)는
+  //   그대로 서야 해서 hidden 이 아니라 문턱 안에서만 듣는 표지로 둔다 — 회전 · 창 크기 바꾸기로 문턱을 넘나들어도 JS 없이 맞는다.
+  const paintMenu = (): void => { menuBtn.classList.toggle('no-side', !sideOn); };
+  menuBtn.addEventListener('click', () => {   // ☰ = 지금 화면(앱)의 사이드바 — 없는 앱이면 아무것도 안 연다
+    if (open === 'side') { closeAll(); return; }
+    if (!sideOn) return;
+    sheetSec = null; openOne('side');
+  });
   asideBtn.addEventListener('click', () => (open === 'aside' ? closeAll() : openOne('aside')));
   scrim.addEventListener('click', () => closeAll());
   document.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Escape' && (open || sheetOpen)) { e.stopPropagation(); closeAll(true); } }, true);
@@ -143,7 +166,6 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
   //  ⚠ 여기서는 구역만 다룬다 — 독에 고정한 앱·최근 앱은 폰에선 [더보기] 판이 맡는다(탭 바는 여섯을 넘기지 않는다).
   const tabs = el('nav', { class: 'v2-mtabs', 'aria-label': '구역' }) as HTMLElement;
   const sheet = el('div', { class: 'v2-msheet', hidden: true, role: 'dialog', 'aria-label': '더보기' }) as HTMLElement;
-  let inboxCount = 0;
   const secBtns = new Map<RailSection, HTMLButtonElement>();
   let moreBtn: HTMLButtonElement | null = null;
   const tabIcon = (name: string): SVGElement => icon(name, 'v2-mtab-ic');
@@ -151,12 +173,13 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     sv('circle', { cx: '5', cy: '12', r: '1.4' }), sv('circle', { cx: '12', cy: '12', r: '1.4' }), sv('circle', { cx: '19', cy: '12', r: '1.4' }));
   function onSectionTap(sec: RailSection): void {
     if (!isPhone()) return;
-    //  홈·확인할 것은 **화면**이다(목록이 아니라) — 그 화면으로 간다. 이미 그 구역이면 setRailSection 이 changed=false 라
+    //  홈은 **화면**이다(목록이 아니라) — 그 화면으로 간다. 이미 그 구역이면 setRailSection 이 changed=false 라
     //   navigate 를 명시해야 주소가 옮겨진다(같은 탭을 다시 눌러 첫 화면으로 돌아오는 손짓).
-    if (sec === 'home' || sec === 'inbox') { closeAll(); setRailSection(sec, { navigate: true }); return; }
+    if (sec === 'home') { closeAll(); setRailSection(sec, { navigate: true }); return; }
     //  AI 세션·프로젝트·위키는 **목록**이다 — 사이드바(그 구역의 목록)를 화면 한 장으로 연다. 같은 탭을 다시 누르면 닫는다.
-    if (railSection() === sec && open === 'side') { closeAll(); return; }
+    if (open === 'side' && sheetSec === sec) { closeAll(); return; }   // 그 구역의 목록을 띄워 둔 채 같은 탭을 다시 눌렀다
     sheetOpen = false;
+    sheetSec = sec;   // 먼저 적는다 — setRailSection 이 사이드바를 다시 그리는데, 그때 이 구역의 목록이 서야 한다(앱 화면 · 구역과 같은 문 위에서도)
     setRailSection(sec, { navigate: false });
     openOne('side');
   }
@@ -165,12 +188,13 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     const rows: HTMLElement[] = [];
     const row = (ic: SVGElement, label: string, attrs: Record<string, unknown>, tag: 'a' | 'button' = 'a'): HTMLElement =>
       el(tag, { class: 'v2-msheet-row', ...(tag === 'button' ? { type: 'button' } : {}), ...attrs }, ic, el('span', { class: 'v2-msheet-t', text: label }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-msheet-go', 'aria-hidden': 'true' }, sv('path', { d: 'M9 6l6 6-6 6' }))) as HTMLElement;
-    rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));
+    rows.push(row(tabIcon('bell'), '확인할 것', { href: '#/inbox' }));   // #4180 — 홈 밖에서도 가는 길 하나
+    if (LIV_ENTRY_VISIBLE) rows.push(row(tabIcon('liv'), '리브', { href: '#/liv' }));   // #4970 — 리브 진입점 숨김(lib/liv-entry.ts)
     for (const a of visibleApps()) { if (skip.has(a.key)) continue; rows.push(row(appIcon(a.icon, 'v2-mtab-ic'), a.title, { href: appHref(a) })); }
     rows.push(row(tabIcon('link'), '외부 앱 연결', { href: '#/connect' }));
     rows.push(row(tabIcon('apps'), '모든 앱', { onclick: () => { closeAll(); openLaunchpad(); } }, 'button'));
     const me: any = state.me || {};
-    rows.push(row(tabIcon('gear'), (personName(me) || '나') + ' — 내 프로필 · 환경설정', { onclick: () => { closeAll(); openMeModal({}); } }, 'button'));
+    rows.push(row(tabIcon('gear'), (personName(me) || '나') + '(내 프로필 · 환경설정)', { onclick: () => { closeAll(); openMeModal({}); } }, 'button'));
     sheet.replaceChildren(
       el('div', { class: 'v2-msheet-h' }, el('span', { class: 'v2-msheet-ht', text: '더보기' }),
         el('button', { class: 'v2-msheet-x', type: 'button', 'aria-label': '닫기', onclick: () => closeAll() }, icon('x', 'v2-mtab-ic'))),
@@ -201,21 +225,13 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     paintTabs();
   }
   function paintTabs(): void {
-    const sec = railSection();
+    const sec = (open === 'side' && sheetSec) || railLitSection();   // 앱 화면이면 어느 구역도 안 켠다(레일과 같은 잣대)
     for (const [k, b] of secBtns) {
       const on = !sheetOpen && k === sec;
       b.classList.toggle('on', on);
       b.setAttribute('aria-current', on ? 'page' : 'false');
-      if (k === 'inbox') {
-        let bd = b.querySelector<HTMLElement>('.v2-mtab-bd');
-        if (inboxCount > 0) {
-          if (!bd) { bd = el('span', { class: 'v2-mtab-bd', role: 'img' }) as HTMLElement; b.querySelector('.v2-mtab-icw')?.append(bd); }
-          bd.textContent = inboxCount > 99 ? '99+' : String(inboxCount);
-          bd.setAttribute('aria-label', `확인할 것 ${inboxCount}건`);
-        } else if (bd) bd.remove();
-      }
-      //  목록을 여는 구역만 «펼침» 상태를 갖는다 — 같은 자리를 다시 누르면 닫힌다는 손짓. 홈·확인할 것은 화면으로 가는 단추라 그 속성이 없다.
-      if (k === 'home' || k === 'inbox') b.removeAttribute('aria-expanded');
+      //  목록을 여는 구역만 «펼침» 상태를 갖는다 — 같은 자리를 다시 누르면 닫힌다는 손짓. 홈은 화면으로 가는 단추라 그 속성이 없다.
+      if (k === 'home') b.removeAttribute('aria-expanded');
       else b.setAttribute('aria-expanded', String(open === 'side' && k === sec));
     }
     if (moreBtn) { moreBtn.classList.toggle('on', sheetOpen); moreBtn.setAttribute('aria-expanded', String(sheetOpen)); }
@@ -240,13 +256,23 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
 
   return {
     bar, scrim, tabs, isMobile, isPhone, closeAll: () => closeAll(),
+    //  ⚠ 서랍이 열렸는지(open)로 거르지 않는다 — 탭을 누르면 사이드바를 먼저 그리고(setRailSection → drawSide) 서랍은 그다음에 연다.
+    //   그 그리기에서 null 이면 서랍에 앱 사이드바가 선다(폰 실측). 닫으면(closeAll) · ☰ 로 열면 지워지므로 이 값이 남아 있는 동안은 탭으로 연 서랍이다.
+    sheetSection: () => sheetSec,
+    onSheetClosed(fn: () => void): void { sheetEndFns.add(fn); },
     adoptStrip(el0: HTMLElement, restore: () => void): void { strip = { el: el0, restore }; placeStrip(); },
     setAside(on: boolean): void {
       asideBtn.hidden = !on;
       if (!on && open === 'aside') closeAll();
     },
     openAside(): void { if (isMobile() && !asideBtn.hidden && open !== 'aside') openOne('aside'); },
-    openSide(): void { if (open !== 'side') openOne('side'); },
+    openSide(): void { if (open !== 'side' && sideOn) openOne('side'); },
+    setSide(on: boolean): void {
+      sideOn = on;
+      paintMenu();
+      //  ☰ 로 연 서랍(그 앱의 사이드바)이 남아 있으면 닫는다. 탭 바로 연 구역 목록(sheetSec)은 사람이 고른 것이라 둔다.
+      if (!on && open === 'side' && !sheetSec) closeAll();
+    },
     setAsideKind(kind: 'timeline' | 'panes'): void {
       const panes = kind === 'panes';
       asideBtn.classList.toggle('is-panes', panes);
@@ -255,8 +281,7 @@ export function mountMobileChrome(root: HTMLElement, side: HTMLElement, aside: H
     },
     setAsideTarget(target: HTMLElement | null): void { asideTarget = target; },
     onChange(fn: () => void): () => void { changeFns.add(fn); return () => { changeFns.delete(fn); }; },
-    syncTabs(counts?: { inbox?: number }): void {
-      if (counts && typeof counts.inbox === 'number') inboxCount = counts.inbox;
+    syncTabs(): void {
       //  구역 표가 바뀌었을 수 있다(navOn 토글) — 개수가 다르면 다시 짓는다.
       if (secBtns.size !== railSections().length) buildTabs(); else paintTabs();
     },

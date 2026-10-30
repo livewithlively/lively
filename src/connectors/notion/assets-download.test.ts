@@ -12,11 +12,15 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import * as assets from "./assets.js";
+import { SKIP_SUFFIX } from "../asset-limits.js";
 import type { Traversal } from "./state.js";
 
 const MB = 1024 * 1024;
 const BIG = 256 * MB;
 const ZEROS = Buffer.alloc(MB);
+// #5012 — 시험 기계의 실제 디스크와 무관하게(맥미니는 94% 찼다) 하한에 안 걸리는 가짜 디스크. 하한 자체는 N4 가 잰다.
+const ROOMY = () => ({ bsize: 1, blocks: 1e15, bavail: 1e15 });
+const LOW = () => ({ bsize: 1, blocks: 100 * 1024 ** 3, bavail: 1024 ** 3 }); // 100GB 중 1GB 남음 — 하한(15GB) 아래
 const hits = new Map<string, number>();
 const hit = (k: string) => { const n = (hits.get(k) ?? 0) + 1; hits.set(k, n); return n; };
 
@@ -53,6 +57,11 @@ const server = http.createServer((req, res) => {
       return pump();
     }
     case "empty": res.writeHead(200, { "content-length": "0" }); return res.end();
+    case "huge-declared": // 크기 헤더가 상한을 넘는다 — 본문은 보내지 않아도 된다
+      res.writeHead(200, { "content-type": "video/mp4", "content-length": String(60 * MB) });
+      return res.end();
+    case "undeclared": return drip(Array.from({ length: 8 }, () => "x".repeat(512)), 5); // 크기 헤더 없이 4KB
+    case "exact": res.writeHead(200, { "content-length": "4096" }); return res.end("y".repeat(4096));
     case "flaky": if (n === 1) return halfThenDrop(); return drip(["WHOLE", "BODY!"], 5);
     case "drop": return halfThenDrop();
     case "file": // 서명 만료 흉내 — sig=old 는 403, sig=new 는 200
@@ -103,7 +112,7 @@ async function scenario(name: string, fn: () => Promise<void>): Promise<void> {
 
 await scenario("E1 여러 조각 본문 → 최종 파일 = 본문 · 조각 없음 · 받은 바이트 집계", async () => {
   const before = bytes();
-  await within(10_000, assets.downloadAsset(t, job("e1.bin", `${base}/chunks`), dir, { idleMs: 2_000 }));
+  await within(10_000, assets.downloadAsset(t, job("e1.bin", `${base}/chunks`), dir, { idleMs: 2_000, statfs: ROOMY }));
   assert.equal(fs.readFileSync(path.join(dir, "e1.bin"), "utf8"), "aaabbbccc");
   assert.deepEqual(parts(), []);
   assert.equal(hits.get("chunks"), 1, "서버가 한 번만 불려야 한다");
@@ -115,7 +124,7 @@ await scenario("E2 256MB 본문 → 받는 동안 RSS 증가 < 100MB · 파일 �
   let peak = base0;
   const iv = setInterval(() => { peak = Math.max(peak, process.memoryUsage.rss()); }, 5);
   try {
-    await within(120_000, assets.downloadAsset(t, job("e2.bin", `${base}/big`), dir, { idleMs: 10_000 }));
+    await within(120_000, assets.downloadAsset(t, job("e2.bin", `${base}/big`), dir, { idleMs: 10_000, statfs: ROOMY, maxBytes: 2 * BIG }));
   } finally { clearInterval(iv); }
   assert.equal(fs.statSync(path.join(dir, "e2.bin")).size, BIG);
   const grew = (peak - base0) / MB;
@@ -124,13 +133,13 @@ await scenario("E2 256MB 본문 → 받는 동안 RSS 증가 < 100MB · 파일 �
 });
 
 await scenario("E3 0바이트 → 실패 · 최종·조각 없음", async () => {
-  await assert.rejects(within(15_000, assets.downloadAsset(t, job("e3.bin", `${base}/empty`), dir, { idleMs: 2_000 })));
+  await assert.rejects(within(15_000, assets.downloadAsset(t, job("e3.bin", `${base}/empty`), dir, { idleMs: 2_000, statfs: ROOMY })));
   assert.equal(fs.existsSync(path.join(dir, "e3.bin")), false);
   assert.deepEqual(parts(), []);
 });
 
 await scenario("E4 첫 시도 중간 끊김 → 재시도로 온전한 파일", async () => {
-  await within(15_000, assets.downloadAsset(t, job("e4.bin", `${base}/flaky`), dir, { idleMs: 2_000 }));
+  await within(15_000, assets.downloadAsset(t, job("e4.bin", `${base}/flaky`), dir, { idleMs: 2_000, statfs: ROOMY }));
   assert.equal(fs.readFileSync(path.join(dir, "e4.bin"), "utf8"), "WHOLEBODY!");
   assert.equal(hits.get("flaky"), 2);
   assert.deepEqual(parts(), []);
@@ -138,14 +147,14 @@ await scenario("E4 첫 시도 중간 끊김 → 재시도로 온전한 파일", 
 
 await scenario("E5 매번 중간 끊김 → 실패 · 기존 파일 그대로 · 조각 없음", async () => {
   fs.writeFileSync(path.join(dir, "e5.bin"), "OLD");
-  await assert.rejects(within(15_000, assets.downloadAsset(t, job("e5.bin", `${base}/drop`), dir, { idleMs: 2_000 })));
+  await assert.rejects(within(15_000, assets.downloadAsset(t, job("e5.bin", `${base}/drop`), dir, { idleMs: 2_000, statfs: ROOMY })));
   assert.equal(fs.readFileSync(path.join(dir, "e5.bin"), "utf8"), "OLD");
   assert.equal(hits.get("drop"), 3, "세 번 시도해야 한다");
   assert.deepEqual(parts(), []);
 });
 
 await scenario("E6 403 → 재발급 URL 로 성공", async () => {
-  await within(15_000, assets.downloadAsset(t, job("e6.pdf", `${base}/file/doc.pdf?sig=old`, { blockId: "b1" }), dir, { idleMs: 2_000 }));
+  await within(15_000, assets.downloadAsset(t, job("e6.pdf", `${base}/file/doc.pdf?sig=old`, { blockId: "b1" }), dir, { idleMs: 2_000, statfs: ROOMY }));
   assert.equal(fs.readFileSync(path.join(dir, "e6.pdf"), "utf8"), "FRESH");
   assert.equal(hits.get("file?sig=old"), 1);
   assert.equal(hits.get("file?sig=new"), 1);
@@ -154,7 +163,7 @@ await scenario("E6 403 → 재발급 URL 로 성공", async () => {
 
 await scenario("E7 헤더 뒤 멈춤 → 유휴 한도로 끊고 제한 시간 안에 실패", async () => {
   const t0 = Date.now();
-  await assert.rejects(within(20_000, assets.downloadAsset(t, job("e7.bin", `${base}/stall`), dir, { idleMs: 300 })),
+  await assert.rejects(within(20_000, assets.downloadAsset(t, job("e7.bin", `${base}/stall`), dir, { idleMs: 300, statfs: ROOMY })),
     (err: Error) => /멈춤/.test(err.message)); // 바깥 시한이 아니라 유휴 한도가 끊었고, 로그에 그 사유가 남는다
   assert.ok(Date.now() - t0 < 10_000, `너무 오래 기다렸다 ${Date.now() - t0}ms`);
   assert.equal(hits.get("stall"), 3);
@@ -164,7 +173,7 @@ await scenario("E7 헤더 뒤 멈춤 → 유휴 한도로 끊고 제한 시간 �
 
 await scenario("E7b 헤더도 안 옴 → 유휴 한도로 끊고 제한 시간 안에 실패", async () => {
   const t0 = Date.now();
-  await assert.rejects(within(20_000, assets.downloadAsset(t, job("e7b.bin", `${base}/silent`), dir, { idleMs: 300 })),
+  await assert.rejects(within(20_000, assets.downloadAsset(t, job("e7b.bin", `${base}/silent`), dir, { idleMs: 300, statfs: ROOMY })),
     (err: Error) => /멈춤/.test(err.message));
   assert.ok(Date.now() - t0 < 10_000, `너무 오래 기다렸다 ${Date.now() - t0}ms`);
   assert.equal(hits.get("silent"), 3);
@@ -172,9 +181,41 @@ await scenario("E7b 헤더도 안 옴 → 유휴 한도로 끊고 제한 시간 
 });
 
 await scenario("E8 계속 들어오는 느린 본문(전체 1.8초 > 유휴 0.6초) → 성공", async () => {
-  await within(20_000, assets.downloadAsset(t, job("e8.bin", `${base}/slow`), dir, { idleMs: 600 }));
+  await within(20_000, assets.downloadAsset(t, job("e8.bin", `${base}/slow`), dir, { idleMs: 600, statfs: ROOMY }));
   assert.equal(fs.readFileSync(path.join(dir, "e8.bin"), "utf8"), "s".repeat(12));
   assert.equal(hits.get("slow"), 1, "끊지 말고 한 번에 받아야 한다");
+});
+
+// ── #5012 크기 상한 · 디스크 하한 — 사양 표 N1~N4(N5 는 위 E2: 상한을 올린 수집기가 256MB 를 스트리밍으로 받는다) ──
+const isSkip = (reason: string) => (err: Error & { reason?: string }) => err?.name === "Error" && err.reason === reason;
+const marker = (f: string) => path.join(dir, f + SKIP_SUFFIX);
+
+await scenario("N1 크기 헤더가 상한을 넘으면 받지 않는다 — 파일·조각 없음 · 건너뜀 표시(원본 노션 주소) · 재시도 없음", async () => {
+  await assert.rejects(within(10_000, assets.downloadAsset(t, job("n1.mp4", `${base}/huge-declared`, { pageId: "aaaaaaaa-0000-4000-8000-000000000001" }), dir,
+    { idleMs: 2_000, statfs: ROOMY, maxBytes: 50 * MB })), isSkip("too_large"));
+  assert.equal(fs.existsSync(path.join(dir, "n1.mp4")), false);
+  assert.deepEqual(parts(), []);
+  assert.equal(hits.get("huge-declared"), 1, "상한은 재시도할 실패가 아니다");
+  const info = JSON.parse(fs.readFileSync(marker("n1.mp4"), "utf8")) as { source: string; bytes: number };
+  assert.equal(info.source, "https://www.notion.so/aaaaaaaa000040008000000000000001");
+  assert.equal(info.bytes, 60 * MB);
+});
+await scenario("N2 크기 헤더 없이 받는 도중 상한을 넘으면 끊는다 — 파일·조각 없음 · 표시", async () => {
+  await assert.rejects(within(10_000, assets.downloadAsset(t, job("n2.bin", `${base}/undeclared`), dir,
+    { idleMs: 2_000, statfs: ROOMY, maxBytes: 1024 })), isSkip("too_large"));
+  assert.equal(fs.existsSync(path.join(dir, "n2.bin")), false);
+  assert.deepEqual(parts(), []);
+  assert.equal(fs.existsSync(marker("n2.bin")), true);
+});
+await scenario("N3 크기가 상한과 정확히 같으면 받는다", async () => {
+  await within(10_000, assets.downloadAsset(t, job("n3.bin", `${base}/exact`), dir, { idleMs: 2_000, statfs: ROOMY, maxBytes: 4096 }));
+  assert.equal(fs.statSync(path.join(dir, "n3.bin")).size, 4096);
+  assert.equal(fs.existsSync(marker("n3.bin")), false);
+});
+await scenario("N4 디스크 여유가 하한 아래면 받지 않는다 — 표시도 남기지 않는다(공간이 생기면 다시 받는다)", async () => {
+  await assert.rejects(within(10_000, assets.downloadAsset(t, job("n4.bin", `${base}/exact`), dir, { idleMs: 2_000, statfs: LOW })), isSkip("disk_floor"));
+  assert.equal(fs.existsSync(path.join(dir, "n4.bin")), false);
+  assert.equal(fs.existsSync(marker("n4.bin")), false);
 });
 
 server.closeAllConnections();

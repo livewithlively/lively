@@ -52,7 +52,7 @@ ok(!/리브가 만듦/.test(COL + DIS) && !/cxc-liv/.test(COL + DIS), "W2 화면
 ok(/madeBy\(liv, /.test(COL) && (DIS.match(/madeBy\(liv, /g) || []).length === 2, "W3 수집기 행 · 증류기 카드 · 꺼 둔 증류기 행이 같은 부품을 부른다");
 ok(/\(liv \? ' ' \+ LIV_ROW : ''\)/.test(COL) && /\(liv \? ' ' \+ LIV_CARD : ''\)/.test(DIS) && /\(liv \? ' ' \+ LIV_ROW : ''\)/.test(DIS), "W4 리브 것인 행 · 카드에만 리브 바탕이 붙는다");
 ok(/livSum\(collectors\.length, countLiv\(collectors, isLivMade\)\)/.test(COL), "W5 수집기 머리 요약은 제목 옆 개수와 같은 목록에서 센다");
-ok(/livSum\(distillers\.length, countLiv\(distillers, isLivMadeDistiller\)\)/.test(DIS), "W5 증류기 머리 요약은 제목 옆 개수와 같은 목록에서 센다(stage 판 — 이 가지에는 카테고리 증류기가 목록에 없다)");
+ok(/livSum\(distillers\.length \+ lanes\.length, countLiv\(distillers, isLivMadeDistiller\)\)/.test(DIS), "W5 증류기 머리 요약은 두 종류를 합친 수에서 센다");
 
 const C03 = css(read("public/styles/03-components.css")), C31 = css(read("public/styles/31-context-pipeline.css"));
 const BASE = css(read("public/styles/01-base.css")), DARK = css(read("public/styles/90-dark.css"));

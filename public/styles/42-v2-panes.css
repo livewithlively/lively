@@ -12,6 +12,7 @@
 /* 사이드바 열의 폭 = 적어 둔 폭(--pn-side-w)과 상한 가운데 작은 쪽(#3870). 상한 = 격자 폭 - 세션 최소 폭 360px - 손잡이 6px,
    하한 220px(web/lib/side-card-geom.ts sideCap 과 같은 식). 상한을 **그릴 때** 맞추므로 격자가 잠깐 좁아져도 적어 둔 폭은
    깎이지 않고, 격자가 다시 넓어지면 제 폭으로 돌아온다. */
+/* --pn-side-w 의 340 은 곁칸 기본 폭 SIDE_DEF(web/lib/side-card-geom.ts)를 옮겨 적은 첫 페인트 값이다 — 스크립트가 곧 덮는다. 바꾸면 같이 바꾼다. */
 .pn-body { --pn-side-w: 340px; --pn-side-fit: min(var(--pn-side-w), max(220px, calc(100% - 366px))); position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--pn-side-fit); background: var(--line); }
 .pn-body.no-side { grid-template-columns: minmax(0, 1fr) 0 0; }
 /* 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로.
@@ -179,6 +180,34 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-move:hover .pn-i { color: var(--blue); }
 .pn-move:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 @media (max-width: 600px) { .pn-move { padding: 0 6px; } .pn-move-t { display: none; } }
+/* [세션 복제](#4135, 원준 2026-09-27) — [세션 옮기기] 와 같은 단추(.pn-move)이고 그 앞에 선다. 둘 사이 간격만 좁힌다
+   (.pn-move 의 왼쪽 여백 4px + 줄 간격 7px 가 두 번 들어가면 두 단추가 남남처럼 떨어진다). */
+.pn-fork + .pn-move { margin-left: -1px; }
+/* 문패가 좁으면(창이 좁거나 곁칸을 넓혔을 때) 세션 단추 둘의 글자를 접어 **제목에 자리를 돌려준다**. 폭은 창이 아니라 문패를
+   잰다(@container) — 곁칸을 넓히면 창은 그대로인데 문패만 좁아진다. 단추가 하나 늘면서 1024px 창(문패 626px)에서 제목이
+   한 글자 폭으로 눌렸다(스테이지 실측). 접은 뒤의 이름은 aria-label·title 이 말한다(≤600px 창의 기존 규칙과 같은 모양). */
+.pn-door { container-type: inline-size; container-name: pndoor; }
+@container pndoor (max-width: 820px) { .pn-move { padding: 0 6px; } .pn-move .pn-move-t { display: none; } }
+/* 확인 창 — anchoredPopover 는 자리만 잡는다(배경·테두리·그림자는 패널이 갖는다, 45-v2-side-swap.css .sw-pop 과 같은 규약). */
+.fk-pop { width: 340px; padding: 16px 16px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(var(--shadow-ink), .16);
+  /* 한글은 낱말 단위로 줄을 바꾼다 — 글자 단위면 «만듭니/다.» 처럼 끝 글자 하나가 다음 줄로 떨어진다(스테이지 실측). */
+  word-break: keep-all; overflow-wrap: anywhere; }
+.fk-h b { font-size: 14px; color: var(--ink); }
+.fk-name { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fk-sub { margin: 10px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink); }
+.fk-list { margin: 8px 0 0; padding: 8px 10px; list-style: none; display: flex; flex-direction: column; gap: 6px;
+  border-radius: 9px; background: var(--bg-tint); }
+.fk-list li { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; line-height: 1.5; color: var(--ink-sub); }
+.fk-list li .pn-i { flex: none; margin-top: 3px; color: var(--blue); }
+.fk-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-sub); }
+.fk-note.bad { color: var(--danger); }
+.fk-note[hidden] { display: none; }
+.fk-act { margin-top: 12px; display: flex; justify-content: flex-end; gap: 8px; }
+.fk-go { gap: 6px; }
+.fk-go .pn-i { color: currentColor; }
+.fk-go[disabled], .fk-act .btn[disabled] { opacity: .6; cursor: default; }
+@media (max-width: 600px) { .fk-pop { width: min(340px, calc(100vw - 24px)); } }
 .pn-title { margin: 0; min-width: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
 /* 제목이 다시 왼쪽 끝이다(원준 2026-09-03, 순서 = 이름 › 번호 › 상태) — 링크 판의 좌측 패딩 8px 만큼
    당겨 **글자**가 문패 왼쪽에 딱 맞게 선다(패딩까지 맞추면 글자가 8px 안쪽으로 들어가 보인다). */
@@ -326,7 +355,6 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
   border: 1px solid var(--line-net); border-radius: 999px; background: var(--bg); font-size: 11px; color: var(--muted-head); }
 .pn-att-c svg { flex: none; color: var(--muted-2); }
 .pn-att-c .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pn-att-c.wait { opacity: .6; }   /* 같은 배치에서 차례를 기다리는 칩(#5091) */
 .pn-att-x { flex: none; width: 15px; height: 15px; border: 0; border-radius: 50%; background: none; color: var(--muted-2); font-size: 9px; line-height: 1; cursor: pointer; }
 .pn-att-x:hover { background: var(--bg-punch); color: var(--ink); }
 .pn-newpane.drop-active { outline: 2px dashed var(--blue); outline-offset: -6px; }
@@ -355,6 +383,13 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-fcsep { flex: none; font-size: 11px; color: var(--muted-3); }
 .pn-frow1 .pn-fine { flex: none; }
 .pn-frow1 .pn-fine.sel { color: var(--blue); font-weight: 700; }
+/* #4882 자료 앱의 위젯 — 경로 첫 칸에 자료 앱의 얼굴(폴더 · 자료 색), 줄 끝에 자료 앱으로 가는 문. */
+.pn-fcrumb.app { display: inline-flex; align-items: center; gap: 4px; }
+.pn-fcrumb.app > span { overflow: hidden; text-overflow: ellipsis; }
+.pn-fapp-ic { flex: none; stroke: var(--gi-c-src); }
+.pn-fapp { flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 6px; background: none; color: var(--muted-2); cursor: pointer; }
+.pn-fapp:hover { background: var(--bg-punch); color: var(--ink); }
 
 .pn-files:focus-visible .pn-fbody { box-shadow: inset 0 0 0 2px rgba(45,107,240,.28); border-radius: 9px; }   /* 키보드로 들어왔을 때만 — 이 칸이 키를 받는다 */
 
@@ -583,7 +618,8 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 
 /* ══ 프로젝트 설정 창 ═══════════════════════════════════════════════════════ */
 .pn-modal-back { position: fixed; inset: 0; z-index: 60; background: rgba(var(--shadow-ink), .34); }
-.pn-modal { position: fixed; z-index: 61; top: 0; right: 0; bottom: 0; width: min(520px, 94vw); display: flex; flex-direction: column;
+/* 오른쪽 시트는 창 맨 윗줄까지 올라가 닫기 X 가 윈도우 창 단추(닫기) 밑에 깔렸다 — 안쪽 위를 비운다(40-v2.css .v2-studio 설명 · #4480) */
+.pn-modal { position: fixed; z-index: 61; top: 0; right: 0; bottom: 0; padding-top: var(--v2-desk-tb, 0px); width: min(520px, 94vw); display: flex; flex-direction: column;
   background: var(--bg); box-shadow: -18px 0 48px rgba(var(--shadow-ink), .20); }
 .pn-modal-h { flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 18px 13px; border-bottom: 1px solid var(--line); }
 .pn-modal-h h2 { margin: 0; font-size: 16px; font-weight: 800; flex: 1; }
@@ -721,7 +757,57 @@ html.pn-tab-dragging .pn-tabwrap:hover:not(.dragging) { background: none; }
 .pn-zoom.is-fit .pn-zoom-lbl { color: var(--blue); }
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
+
+/* ── AI 와 같이 쓰는 브라우저(#4993) — webview 는 칸 안이 아니라 body 아래 «브라우저 층»에 산다(v2/browser-tabs.ts) ──
+   층은 상자를 만들지 않는다(display: contents) — 탭마다 제 자리의 쌓임 높이로 뿌리 맥락에서 겨루게. 위치·크기·배율은
+   층이 매 틀 인라인으로 준다. 여기 규칙은 «모양»과 «끌기 보호»뿐이다. */
+.bt-layer { display: contents; }
+.bt-view { display: flex; border: 0; background: #fff; }
+/* 셸에서 시작한 끌기(경계·탭·글 선택)가 webview 위를 지나면 webview 가 마우스를 삼켜 끌기가 끊긴다 — 누르는 동안만 손을 뗀다. */
+.bt-layer.bt-passive .bt-view,
+body.v2-splitting-x .bt-view, body.v2-splitting-y .bt-view, body.cm-dragging .bt-view { pointer-events: none !important; }
+/* 겹침 판 — webview 와 같은 자리, 한 칸 위. 판 자체는 클릭을 통과시키고 안의 알약·안내만 받는다. */
+.bt-overlay { pointer-events: none; box-sizing: border-box; border-radius: 0; transition: box-shadow .2s ease; }
+.bt-overlay > * { pointer-events: auto; }
+/* AI 가 지금 이 탭을 조작하는 중 — 테두리 한 줄로 알린다(사람이 무엇이 움직이는지 안다). */
+.bt-overlay.bt-ai-on { box-shadow: inset 0 0 0 2px var(--purple); }
+.pn-web-live .pn-webstage { background: transparent; }
+/* 빈 탭 안내 — 겹침 판 가운데(webview 위). */
+.pn-web-empty { position: absolute; inset: 0; display: grid; place-content: center; gap: 6px; padding: 24px; text-align: center; background: var(--surface); pointer-events: none; }
+.pn-web-empty[hidden] { display: none; }
+.pn-web-empty-h { margin: 0; font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.pn-web-empty-p { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; max-width: 320px; }
+/* 주소줄의 AI 표시 — 누르면 이 탭의 AI 조작을 멈춘다(사람은 계속 쓴다). */
+.pn-web-ai { flex: none; height: 24px; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--purple) 45%, var(--line)); border-radius: 999px;
+  background: color-mix(in srgb, var(--purple) 10%, var(--bg)); color: var(--purple-text); font: inherit; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+.pn-web-ai[hidden] { display: none; }
+.pn-web-ai.busy::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: var(--purple); vertical-align: 1px; animation: pn-web-ai-pulse 1s ease-in-out infinite; }
+.pn-web-ai.paused { border-color: color-mix(in srgb, var(--red, #E5484D) 45%, var(--line)); background: color-mix(in srgb, var(--red, #E5484D) 9%, var(--bg)); color: var(--red, #C8333A); }
+@keyframes pn-web-ai-pulse { 50% { opacity: .25; } }
+/* 사람에게 넘기기 — AI 가 부탁한 일(로그인·인증)과 [완료]. 주소줄 바로 아래(무대를 덮지 않게 무대를 밀어낸다). */
+.pn-web-handoff { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, var(--purple) 30%, var(--line));
+  background: color-mix(in srgb, var(--purple) 8%, var(--bg)); font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+.pn-web-handoff[hidden] { display: none; }
+.pn-web-ho-h { flex: none; font-weight: 800; color: var(--purple-text); }
+.pn-web-ho-t { flex: 1; min-width: 160px; word-break: keep-all; }
+.pn-web-ho-acts { flex: none; display: inline-flex; gap: 6px; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+/* ── 웹 판 원격 화면(#4993 (A)) — 데스크톱 앱 탭의 스크린샷을 그리고, 누르고 쓰는 것을 그 탭으로 보낸다(web/v2/remote-web.ts) ──
+   그림은 무대 안에 통째로 맞춰 넣는다(가로 · 세로 중 먼저 닿는 쪽, 가운데) — 무대가 구르지 않아야 휠이 전부 원격 페이지로 간다
+   (무대가 구르는데 휠을 막으면 세로로 긴 그림 아래에 영영 못 닿는다 — 격리 리뷰). 좌표는 그림 상자로 재므로 맞춤과 무관하다.
+   글은 숨긴 입력칸(sink)이 받는다 — 칸은 편집 칸이 아니라 한글 조합이 안 일어난다. 16px — 아이폰은 16px 미만 입력칸에
+   초점이 가면 화면을 확대한다(50-mobile.css 머리말). */
+.pn-remote-stage { overflow: hidden; }
+.pn-remote-img { position: absolute; inset: 0; margin: auto; display: block; max-width: 100%; max-height: 100%; width: auto; height: auto;
+  user-select: none; -webkit-user-select: none; -webkit-user-drag: none; cursor: default; }
+.pn-remote-sink { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; margin: 0; resize: none; overflow: hidden; pointer-events: none; font-size: 16px; }
+.pn-remote-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px;
+  text-align: center; font-size: 13px; line-height: 1.6; color: var(--muted); background: var(--surface); word-break: keep-all; }
+.pn-remote-msg[hidden] { display: none; }
+/* 아래 줄은 두 줄까지 — 긴 안내가 여러 줄로 서면 그림 칸이 줄어 같은 휠이 더 멀리 갔다(전문은 title). */
+.pn-remote-note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 화면이 굴리기를 따라오는 중 — 누르면 안 간다(«그림이 멈춘 뒤 다시»). 커서로 미리 알린다. */
+.pn-web-remote[data-behind] .pn-remote-img { cursor: progress; }
 /* ⚠ position: relative — 배율 알약이 이 칸의 오른쪽 아래에 선다(무대 안에 두면 내용과 함께 굴러간다). */
 .pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; position: relative; }
 /* ── 뷰어 무대 — 펴 놓은 것이 서는 자리 (#762) ─────────────────────────────────
@@ -785,39 +871,53 @@ webview.pn-webframe { display: flex; }
 .pn-apps-cur { font-size: 12.5px; }
 .pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
 
-/* ── 세션 오른쪽 앱 칸(#4225) — 세션에 붙은 앱. 붙은 게 없으면 칸도 손잡이도 없다(세션만 남는다) ──
-   세션 부품 안에서 세션 화면(.pn-stage) 옆에 선다: 곁칸 배치는 프로젝트 한 벌이라 세션마다 다른 앱을 못 담는다
-   (session-app-dock.ts 머리말). 폭은 손잡이로 끌고(--pn-appdock-w, 기억된다), 좁은 화면에선 아래로 내려간다. */
-.pn-stagerow { flex: 1; min-height: 0; display: flex; overflow: hidden; }
-.pn-stagerow > .pn-stage { flex: 1; min-width: 0; }
-.pn-stagerow > .pn-appdock-split { width: 6px; flex: none; }
-.pn-appdock-split[hidden] { display: none; }
-.pn-appdock { flex: none; width: var(--pn-appdock-w, 460px); max-width: 72%; min-width: 0; display: flex; flex-direction: column;
-  border-left: 1px solid var(--line); background: var(--surface); }
-.pn-appdock[hidden] { display: none; }
-.pn-appdock-h { flex: none; display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 5px 6px 5px 8px;
-  border-bottom: 1px solid var(--line); background: var(--gray-bg-2); }
-.pn-appdock-tabs { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-.pn-appdock-tab { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 5px 10px; border: 1px solid transparent;
+/* ── 붙은 앱 탭(#4225) — 지금 세션에 붙은 앱 화면이 곁칸의 탭 하나로 선다. 여럿 붙었으면 안에 작은 탭 줄 ── */
+.pn-sessapp { display: flex; flex-direction: column; overflow: hidden; }
+.pn-sessapp-tabs { flex: none; display: flex; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); overflow-x: auto; scrollbar-width: none; }
+.pn-sessapp-tabs[hidden] { display: none; }
+.pn-sessapp-tab { display: inline-flex; align-items: center; gap: 6px; max-width: 200px; padding: 4px 10px; border: 1px solid transparent;
   border-radius: 8px; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
-.pn-appdock-tab span { overflow: hidden; text-overflow: ellipsis; }
-.pn-appdock-tab .pn-i { width: 14px; height: 14px; flex: none; color: var(--blue); }
-.pn-appdock-tab:hover { background: var(--bg-tint); }
-.pn-appdock-tab.on { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 700; }
-.pn-appdock-acts { flex: none; display: flex; gap: 4px; }
-.pn-appdock-x { width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted-2);
-  font-size: 18px; line-height: 1; cursor: pointer; }
-.pn-appdock-x:hover { background: var(--bg-punch); color: var(--coral-text); }
-.pn-appdock-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
-.pn-appdock-body > .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
-.pn-appdock-wait { padding: 16px; }
-.pn-appdock-info { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-.pn-appdock-tbl { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
-@media (max-width: 900px) {
-  .pn-stagerow.with-app { flex-direction: column; }
-  .pn-stagerow > .pn-appdock-split { display: none; }
-  .pn-appdock { width: auto; max-width: none; height: 55%; border-left: 0; border-top: 1px solid var(--line); }
-}
+.pn-sessapp-tab span { overflow: hidden; text-overflow: ellipsis; }
+.pn-sessapp-tab .pn-i { width: 14px; height: 14px; flex: none; color: var(--blue); }
+.pn-sessapp-tab:hover { background: var(--bg-tint); }
+.pn-sessapp-tab.on { background: var(--bg); border-color: var(--line); color: var(--ink); font-weight: 700; }
+.pn-sessapp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.pn-sessapp-body > .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
+.pn-sessapp-wait { padding: 16px; }
+.pn-sessapp-info { padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.pn-sessapp-tbl { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+
+/* ── 붙은 앱 탭 머리줄 · ⋯ 메뉴 · 방금 고침 띠(#4600 — 각자 AI 에게 시켜 고쳐 쓰는 앱) ──
+   머리줄은 앱이 하나여도 선다: «이 앱은 고칠 수 있다» 를 알려 주는 자리가 이것뿐이다. 띠는 app_save·app_revert 뒤 60초. */
+.pn-sessapp-head { flex: none; display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); font-size: 12.5px; color: var(--ink); }
+.pn-sessapp-head[hidden] { display: none; }
+.pn-sessapp-head .pn-i { color: var(--blue); }
+.pn-sessapp-head .pn-sp { flex: 1; min-width: 0; }
+.pn-sessapp-title { font-weight: 700; min-width: 0; }
+.pn-sessapp-ver { flex: none; font-size: 10.5px; font-weight: 800; color: var(--muted-head); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.pn-sessapp-more { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted-head); cursor: pointer; }
+.pn-sessapp-more:hover { background: var(--bg-tint); color: var(--ink); }
+.pn-sessapp-more .pn-i { color: inherit; }
+.pn-sessapp-band { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 6px 5px 10px; border-bottom: 1px solid var(--line-note); background: var(--bg-note); color: var(--blue-deep); font-size: 11.5px; font-weight: 700; }
+.pn-sessapp-band[hidden] { display: none; }
+.pn-sessapp-band-t { flex: 1; min-width: 0; }
+.pn-sessapp-band-b { flex: none; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--blue-deep); background: var(--bg); border: 1px solid var(--line-note); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.pn-sessapp-band-b:hover { background: var(--bg-sel); }
+.pn-sessapp-band-x { flex: none; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--muted-head); cursor: pointer; }
+.pn-sessapp-band-x:hover { background: var(--bg-tint); }
+
+/* ── 앱 고치기 설정 창(#4225) — 누가 이 앱을 고칠 수 있나(기본 전원 · 지정한 사람만) ── */
+.pn-editpol { width: min(460px, 94vw); }
+.pn-editpol .pn-modal-b { display: flex; flex-direction: column; gap: 10px; }
+.pn-editpol-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.pn-editpol-opt:has(input:checked) { border-color: var(--blue); background: var(--bg-sel); }
+.pn-editpol-opt > span { display: flex; flex-direction: column; gap: 2px; }
+.pn-editpol-opt input { margin-top: 3px; }
+.pn-editpol-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; padding: 4px 2px; border-top: 1px solid var(--line-row); }
+.pn-editpol-list[hidden] { display: none; }
+.pn-editpol-person { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.pn-editpol-person:hover { background: var(--bg-tint); }
+.pn-editpol-person .pn-fine { margin-left: auto; font-size: 11px; }
 
 /* ══ 지식 읽기 — 그 칸 안에서 (#4443 원준 10-05 «오른쪽에서 칸 튀어나오듯이 … 하지말고 그냥 곁칸에서 마크다운 이쁘게») ══
    목록과 읽기는 한 칸의 두 화면이다(.pn-kn.reading). 본문은 위키와 같은 렌더러 · 같은 모양(md-rendered)을 사이드바 폭으로 줄인다. */
@@ -860,7 +960,7 @@ webview.pn-webframe { display: flex; }
 
 /* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
 /*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
-.pn-door-sep { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+/* (문패 구분선은 #3778 로 죽었다 — 얼굴·공유가 세션 머리줄로 내려가면서 가를 것이 없어졌다.) */
 .pn-door-btn { gap: 6px; }
 .pn-door-btn svg { width: 15px; height: 15px; }
 .pn-door-r .btn-primary.pn-door-btn { box-shadow: 0 1px 2px rgba(45,107,240,.30), 0 2px 8px rgba(45,107,240,.16); }
@@ -922,7 +1022,18 @@ webview.pn-webframe { display: flex; }
 .pn-share-row { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 6px; border: none; background: none;
   border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 12.5px; color: inherit; text-align: left; }
 .pn-share-row:hover { background: var(--bg-tint); }
+/* Enter 가 고를 한 줄(#3778, 2026-09-10) — 무엇이 담길지 **누르기 전에** 보이게. 키 표식(↵)이 그 약속을 말한다. */
+.pn-share-row.on { background: var(--bg-tint-2); box-shadow: inset 0 0 0 1px var(--line-note); }
+.pn-share-kbd { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--blue);
+  background: var(--bg); border: 1px solid var(--line-net); border-radius: 4px; padding: 0 5px; line-height: 16px; }
 .pn-share-act { display: flex; justify-content: flex-end; gap: 6px; }
+/* #3870 — 빈 찾기칸에서 ↵ = 저장. 그때 ↵ 표식은 목록 줄이 아니라 저장 단추에 붙는다(한 번에 한 자리). */
+.pn-share-save { display: inline-flex; align-items: center; gap: 6px; }
+.pn-share-kbd--btn { margin-left: 0; color: inherit; background: transparent; border-color: currentColor; opacity: .85; }
+.pn-share-hint { color: var(--muted); }
+/* 초대받은 사람의 나가기 — 되돌리기가 내 손에 없는 동작이라 붉은 글자(채운 단추까지는 아니다 · 확인 창이 한 번 더 묻는다). */
+.pn-share-leave { color: var(--danger); }
+.pn-share-leave:hover { color: var(--danger-deep); background: var(--danger-bg); }
 
 /* ── 타임라인 찾기 칸 (#762) ─────────────────────────────────────────────────
    머리 바의 [최신순][자세히] 과 같은 급이라 높이·반경을 맞춘다(28 · 8). 좁은 칸에서는 이 칸이 먼저 줄고
@@ -945,3 +1056,36 @@ input.pn-ffind { flex: 0 1 200px; min-width: 96px; height: 28px; padding: 0 9px;
 .pn-fic.pv { width: 44px; height: 36px; flex: none; aspect-ratio: auto; border-radius: 6px; overflow: hidden; position: relative; }
 .pn-fic.pv .pn-i { width: 15px; height: 15px; }
 .pn-frow2.pv { align-items: center; gap: 10px; }
+
+/* ── 곁칸 «태스크» 3차(#4135, 2026-09-26) — 허브 태스크 위젯·프로젝트 탭과 같은 결: 줄 36 · 이름 13.5 · 묶음 머리 13/800 · 상태 원 16 실선 ·
+   «＋ 세션 열기» 칩은 줄마다 늘 서지 않고 올릴 때만(맡은 세션 칩 .on 은 상태를 나르므로 늘). ── */
+.pn-tk-head { padding: 12px 14px 10px; gap: 8px; }
+.pn-tk-name { font-size: 14px; }
+.pn-tk-count { font-size: 12.5px; }
+.pn-tk-fold { height: 34px; padding: 0 14px; gap: 8px; }
+.pn-tk-fold-l { font-size: 12.5px; }
+.pn-tk-fold-ex { font-size: 12.5px; }
+.pn-tk-card { margin: 10px 12px 4px; padding: 12px 14px; border-radius: 12px; gap: 8px; }
+.pn-tk-card-h { font-size: 12px; }
+.pn-tk-card-n { font-size: 14.5px; }
+.pn-tk-card-m, .pn-tk-card-a .pn-fine { font-size: 12.5px; }
+.pn-tk-gh { padding: 14px 14px 4px; font-size: 13px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pn-tk-gh .n { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+.pn-tk-row { min-height: 36px; padding: 0 14px; gap: 10px; }
+.pn-tk-row + .pn-tk-row { border-top: 1px solid var(--line-row); }
+.pn-tk-row:hover, .pn-tk-row.open { background: var(--bg-tint); }
+.pn-tk-row:hover + .pn-tk-row, .pn-tk-row.open + .pn-tk-row { border-top-color: transparent; }
+.pn-tk-rname { height: 36px; font-size: 13.5px; }
+.pn-tk-sub-n { font-size: 13px; }
+.pn-tk-row.sub { min-height: 32px; }
+.pn-tk-st { width: 16px; height: 16px; border-style: solid; }
+.pn-tk-st.doing { border-style: solid; }
+.pn-tk-st.done::after { left: 4px; top: 1.2px; width: 3.6px; height: 7.5px; }
+.pn-tk-st.static { width: 14px; height: 14px; }
+.pn-tk-chip { font-size: 11.5px; line-height: 18px; padding: 1px 9px 1px 8px; }
+.pn-tk-chip:not(.on) { display: none; }
+.pn-tk-row:hover .pn-tk-chip, .pn-tk-row.open .pn-tk-chip, .pn-tk-row:focus-within .pn-tk-chip { display: inline-flex; }
+@media (hover: none) { .pn-tk-chip { display: inline-flex; } }
+.pn-tk-detail { padding: 6px 14px 14px 40px; }
+.pn-tk-add { margin: 10px 12px 12px; height: 36px; padding: 0 12px; border-radius: 10px; }
+.pn-tk-add .pn-tk-add-in { font-size: 13px; }

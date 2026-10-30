@@ -5,7 +5,7 @@
 //  PROF_* · profChips · parseMyProfile 은 내 프로필 창의 [AI 개인화] 탭(v2/me-modal.ts)이 함께 쓴다 —
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
 //   (관리탭 [내 AI 설정]의 규칙 폼은 그 창으로 옮겨 가며 걷었다 — #1843·#1898.)
-import { api, apiUrl, el, errorNote, logout, markShellSwitch, personName, profileAvatar, setPersonAvatar, setUiModeOverride, state, toast, uiText, uiMode, usernameAnchor } from './core.js';
+import { api, apiUrl, el, errorNote, logout, markShellSwitch, personName, profileAvatar, replaceKids, setPersonAvatar, setUiModeOverride, state, toast, uiMode, uiText, usernameAnchor } from './core.js';
 import { THEME_ORDER, applyToOpenTabs, harnessThemeSync, setApplyToOpenTabs, setHarnessThemeSync, setThemePref, themePref, type ThemePref } from './theme.js'; // #1683 화면 테마 · AI 세션 동기화
 import { field, skeleton } from './ui-primitives.js';
 
@@ -15,10 +15,11 @@ import { field, skeleton } from './ui-primitives.js';
 //  canonical markdown 으로 직렬화한다. 다시 열면 그 markdown 을 파싱해 선택을 복원한다(parseMyProfile).
 //  데이터: GET /api/ui/me/profile 1회 → 저장 POST /api/ui/me/profile(id 는 서버가 principal 로 강제 — 타인 편집 불가).
 const PROF_DEV = [
-  { v: '비개발', label: '비개발', hint: '코드는 직접 안 봐요 — 기술용어는 풀어서, 결론·근거 위주로' },
-  { v: '기초', label: '기초', hint: '코드를 읽고 따라갈 수 있어요 — 핵심 코드는 보여주되 설명을 곁들여' },
-  { v: '능숙', label: '능숙', hint: '직접 짜고 방향도 제시해요 — 코드 중심으로 적당히 깊게' },
-  { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
+  //  hint 는 화면 설명이자 저장 때 AI 에 주입되는 문장이다(«- 개발 이해도: 라벨 — hint»). 파싱은 라벨 앞머리만 본다(parseMyProfile).
+  { v: '비개발', label: '비개발', hint: '코드를 직접 보지 않습니다. AI는 기술 용어를 풀어서 설명하고 결론과 근거 위주로 답합니다.' },
+  { v: '기초', label: '기초', hint: '코드를 읽고 따라갈 수 있습니다. AI는 핵심 코드를 보여 주고 설명을 곁들입니다.' },
+  { v: '능숙', label: '능숙', hint: '코드를 직접 작성하고 방향도 정합니다. AI는 코드 중심으로 적당한 깊이로 답합니다.' },
+  { v: '전문', label: '전문', hint: '아키텍처와 리뷰까지 깊게 봅니다. AI는 군더더기 없이 기술적으로 답합니다.' },
 ];
 const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '위트 있는 존댓말'];
 // 사용 언어 — 내 AI 가 답하는 언어. 프리셋 칩 + '직접 입력'(목록 밖 언어). tone/dev 와 달리 언어는 장꼬리라 자유입력을 허용한다.
@@ -189,51 +190,23 @@ function avatarEditor(data, nameInput) {
   const charIn = el('input', { type: 'text', maxlength: '3', value: charState, placeholder: '글자', style: 'width:70px; text-align:center; font-weight:700;' });
   charIn.addEventListener('input', () => { charState = charIn.value; render(); });
   const AVA_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b', '#0ea5e9', '#14b8a6', '#f97316', '#8b5cf6'];
-  const isHex = (v: string) => /^#[0-9a-fA-F]{6}$/.test(v);
-  //  ── 색 고르기(원준 2026-09-20: "저거 말고도 연속적으로 원하는 색 다 할 수 있도록") ────────────
-  //   12칸 표는 **지름길**로 남기고, 그 옆에 색상환을 둔다. 네이티브 <input type="color"> 라 OS 의
-  //   스펙트럼·스포이드가 그대로 뜬다 — 우리가 색상환을 그리면 그 둘을 잃는다. 값은 서버가 이미 받는
-  //   #rrggbb 그대로라(members.ts upsertMember 가 같은 정규식으로 검증) 서버 변경이 없다.
-  //  ⚠ 프리셋만 다시 그린다(swHost) — 색상환이 열려 있는 동안 그 input 노드가 DOM 에서 빠지면
-  //   OS 창이 닫힌다. 그래서 색 고르개·hex 칸은 **다시 그리는 범위 밖**에 두고 값만 갈아끼운다.
-  const swHost = el('div', { class: 'pjv-sw-host' });
-  const pick = el('input', { type: 'color', value: isHex(colorState) ? colorState : '#6c8cff',
-    'aria-label': '배경색 직접 고르기' }) as HTMLInputElement;
-  const pickWrap = el('label', { class: 'pjv-sw pjv-sw-pick', title: '원하는 색 고르기' }, pick);
-  const hexIn = el('input', { type: 'text', class: 'pjv-hex', maxlength: '7', placeholder: '#RRGGBB',
-    spellcheck: 'false', autocomplete: 'off', 'aria-label': '배경색 코드' }) as HTMLInputElement;
-  const colorRow = el('div', { class: 'pjv-color-swatches' }, swHost, pickWrap, hexIn);
+  const colorRow = el('div', { class: 'pjv-color-swatches' });
   const paintColors = () => {
     const auto = el('button', { type: 'button', class: 'pjv-sw pjv-sw-none' + (colorState ? '' : ' on'), title: '자동(이름 해시색)', text: 'A' });
     auto.onclick = () => { colorState = ''; paintColors(); render(); };
-    swHost.replaceChildren(auto, ...AVA_COLORS.map((c) => {
+    colorRow.replaceChildren(auto, ...AVA_COLORS.map((c) => {
       const sw = el('button', { type: 'button', class: 'pjv-sw' + (colorState === c ? ' on' : ''), style: 'background:' + c, title: c });
       sw.onclick = () => { colorState = c; paintColors(); render(); };
       return sw;
     }));
-    const custom = !!colorState && !AVA_COLORS.includes(colorState);
-    pickWrap.classList.toggle('on', custom);
-    pickWrap.style.background = custom ? colorState : '';
-    if (isHex(colorState)) pick.value = colorState;
-    //  치는 중에는 손대지 않는다 — 여섯 자리를 채우는 동안 커서가 튀면 칠 수가 없다.
-    if (document.activeElement !== hexIn) hexIn.value = custom ? colorState : '';
   };
-  pick.addEventListener('input', () => { colorState = pick.value.toLowerCase(); paintColors(); render(); });
-  hexIn.addEventListener('input', () => {
-    let v = hexIn.value.trim();
-    if (v && v[0] !== '#') { v = '#' + v; hexIn.value = v; }
-    //  여섯 자리가 다 찼을 때만 반영한다 — 한 글자 지울 때마다 아바타 색이 튀지 않게.
-    if (isHex(v)) { colorState = v.toLowerCase(); paintColors(); render(); }
-  });
-  hexIn.addEventListener('blur', () => { paintColors(); });   // 덜 친 값은 되돌린다
   paintColors(); render();
   const node = el('div', {},
     el('div', { class: 'prof-ava-row' }, preview,
       el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
-        el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.')))),
+        el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('정사각형 이미지를 권장합니다. 사진이 없으면 아래 글자와 배경색으로 만들고, 글자를 비워 두면 이름의 첫 글자를 씁니다.')))),
     el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
-      el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
-      el('p', { class: 'prof-hint', style: 'margin:6px 0 0' }, ...uiText('사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요. A 는 이름에서 색을 자동으로 정하고, 색상환을 누르면 원하는 색을 그대로 고를 수 있어요.'))));
+      el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow)));
   const payload = () => {
     const out: any = { avatar_char: charState.trim() || null, avatar_color: colorState || null };
     if (avatarState !== undefined) out.avatar = avatarState;   // 미변경이면 아예 안 보낸다 → 서버 보존
@@ -297,7 +270,7 @@ export async function openMyProfileModal(): Promise<void> {
     saveBtn.disabled = false;
   });
 
-  bodyWrap.replaceChildren(
+  replaceKids(bodyWrap,
     el('p', { class: 'admin-hint', style: 'margin:0 0 14px' }, ...uiText('이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.')),
     field('프로필 사진', ava.node),
     field('이름', nameIn),
@@ -333,15 +306,16 @@ function companyLoginRow(logins: any): any {
       kids.push(off);
       // 비밀번호가 없으면 해제 자체가 막힌다(로그인 수단이 0이 된다) — 누르기 전에 이유를 알려준다.
       kids.push(el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText(st.hasPassword
-        ? '해제하면 이메일·비밀번호로만 로그인해요.'
-        : '해제하려면 먼저 비밀번호를 설정하세요 — 지금 해제하면 로그인할 수단이 없어져요.')));
+        ? '해제하면 이메일과 비밀번호로만 로그인합니다.'
+        : '해제하려면 먼저 비밀번호를 설정하세요. 지금 해제하면 로그인할 방법이 없어집니다.')));
     } else {
-      const on = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: label + ' 연결' });
+      const acct = /계정$/.test(label) ? label : label + ' 계정';
+      const on = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: acct + ' 연결' });
       on.addEventListener('click', () => {
         location.href = apiUrl('/api/ui/auth/oidc/start') + '?link=1&to=' + encodeURIComponent('/ui/' + (location.hash || ''));
       });
       kids.push(on, el('span', { class: 'admin-hint', style: 'margin:0' },
-        ...uiText('연결하면 다음부터 버튼 한 번으로 로그인해요. 이메일이 달라도 괜찮아요.')));
+        ...uiText('연결하면 다음 로그인부터 ' + acct + '으로 로그인할 수 있습니다. ' + acct + ' 이메일이 라이블리 이메일과 달라도 연결할 수 있습니다.')));
     }
     row.replaceChildren(...kids);
   };
@@ -399,33 +373,18 @@ function themePrefRow(): any {
       onclick: () => { setThemePref(k); paint(); } })));
   };
   paint();
-  //  ⚠ 설명은 **그 줄 바로 밑에** 붙인다(2026-09-20, 원준: "흐름이 이해가 안가"). 종전엔 칸 둘 아래에
-  //   그 둘을 «첫째 칸 · 둘째 칸» 으로 되짚는 문단이 있어, 읽는 사람이 줄과 문단을 눈으로 맞춰야 했다.
-  //   아래 칸은 위 칸에 딸린 것이므로 들여쓰고, 위가 꺼지면 같이 잠근다(새 셸 [화면] 탭과 같은 규칙).
   const cb = el('input', { type: 'checkbox', style: 'margin:0', ...(harnessThemeSync() ? { checked: '' } : {}),
-    onchange: (e: any) => { setHarnessThemeSync(!!e.target.checked); syncSub(); } }) as HTMLInputElement;
+    onchange: (e: any) => setHarnessThemeSync(!!e.target.checked) }) as HTMLInputElement;
   // 열린 탭 일괄 적용(#1683 후속2) — 클래식 셸엔 탭이 없어 **설정만 여기서** 하고, 실제 밀기는 새 셸이 한다.
   //  값을 브라우저에 함께 두므로 어느 화면에서 켜도 다른 화면이 그 뜻을 따른다.
   const tabsCb = el('input', { type: 'checkbox', style: 'margin:0', ...(applyToOpenTabs() ? { checked: '' } : {}),
     onchange: (e: any) => setApplyToOpenTabs(!!e.target.checked) }) as HTMLInputElement;
-  const subRow = el('div', { style: 'margin-left:20px' },
-    el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, tabsCb,
-      el('span', { style: 'font-size:13px' }, ...uiText('이미 열려 있는 세션도 바로 바꾸기'))),
-    el('p', { class: 'admin-hint', style: 'margin:2px 0 0 26px' },
-      ...uiText('테마를 바꾸는 순간 지금 열려 있는 세션에도 바꾸라고 보냅니다. 되는 AI 와 안 되는 AI 가 있어서, 몇 개를 바꿨고 무엇이 안 됐는지 알려 드립니다.')));
-  const syncSub = (): void => {
-    const off = !harnessThemeSync();
-    tabsCb.disabled = off;
-    subRow.style.opacity = off ? '.55' : '';
-    subRow.title = off ? '「AI 세션도 같은 테마로」 를 켜면 쓸 수 있습니다' : '';
-  };
-  syncSub();
   wrap.append(seg,
-    el('div', {},
-      el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, cb,
-        el('span', { style: 'font-size:13px' }, ...uiText('AI 세션도 같은 테마로'))),
-      el('p', { class: 'admin-hint', style: 'margin:2px 0 0 26px' },
-        ...uiText('세션을 새로 열 때, 그 안에서 도는 AI(Claude Code 등)도 이 테마로 시작합니다. 끄면 AI 가 자기 설정에 저장해 둔 테마를 씁니다.'))),
-    subRow);
+    el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, cb,
+      el('span', { style: 'font-size:13px' }, ...uiText('새로 여는 AI 세션도 이 테마로 띄웁니다.'))),
+    el('label', { style: 'display:flex; align-items:center; gap:8px; cursor:pointer;' }, tabsCb,
+      el('span', { style: 'font-size:13px' }, ...uiText('현재 열린 탭도 모두 함께 바꿉니다.'))),
+    el('p', { class: 'admin-hint', style: 'margin:0' },
+      ...uiText('첫째 칸을 끄면 각 AI 하네스가 저장해 둔 테마를 그대로 씁니다. 둘째 칸을 켜면 지금 열려 있는 세션 탭의 하네스까지 그 자리에서 바꿉니다 — 하네스마다 지원 여부가 달라, 바꾼 개수와 못 바꾼 이유를 알려드려요.')));
   return wrap;
 }

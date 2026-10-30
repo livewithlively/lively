@@ -125,8 +125,7 @@ if (ask) {
 // ───────────────────────── W. 배선 ─────────────────────────
 const SIDE = code(read("web/v2/side.ts"));
 const kids = cut(SIDE, "function projListKids(", "function projGrpCard(");
-//  ⚠ stage 전용: 이 브랜치에는 #3870(projCardRows)이 없다 — rest 는 나누기의 나머지 그대로다.
-ok(/const pins = splitHomePins\(shown, projPinnedId\);/.test(kids) && /const rest = pins\.rest;/.test(kids)
+ok(/const pins = splitHomePins\(shown, projPinnedId\);/.test(kids) && /const rest = projCardRows\(pins\.rest\);/.test(kids)
   && /if \(pinnedRows\.length\) kids\.push\(pinCard\(pinnedRows, o\)\);/.test(kids),
   "W1a ★프로젝트별 축: 잎 모듈로 나누고, 고정한 세션은 「고정」 세션 카드(pinCard)에 선다 — 카드 밖 줄이 없다");
 const card = cut(SIDE, "function projGrpCard(", "function cardPastHead(");
@@ -134,14 +133,17 @@ ok(/const pinIn = pinnedFirst\(g\.rows\)\.filter\(\(r\) => r\.pinned\);/.test(ca
   && /\.\.\.pinIn\.map\(row\),\s*\.\.\.fold\.now\.map\(row\)/.test(card),
   "W1b ★카드 안 고정 줄은 맨 위에 서고 「지난 세션」 뒤로 접히지 않는다");
 const pc = cut(SIDE, "function pinCard(", "\n}");
-ok(/projLine: true/.test(pc) && /v2-pg--pins/.test(pc) && !/v2-pg-row/.test(pc), "W1c 「고정」 세션 카드는 머리가 없고, 줄 둘째 칸이 소속 프로젝트다");
+//  #3870(원준 2026-10-17) — 둘째 줄은 자리와 무관하게 늘 소속 프로젝트(projLineEl). 종전 projLine 옵션은 걷혔다.
+ok(/one: false/.test(pc) && /v2-pg--pins/.test(pc) && !/v2-pg-row/.test(pc) && !/projLine: true/.test(pc)
+  && /inst\.icon === 'chat'\s*\?\s*projLineEl\(inst\)/.test(cut(SIDE, "function appRowEl(", "\n}\n")),
+  "W1c 「고정」 세션 카드는 머리가 없고, 줄 둘째 칸이 소속 프로젝트다(모든 두 줄 세션 줄과 같은 붓 projLineEl)");
 const al = cut(SIDE, "function appListKids(", "\n}\n");
 const sx = cut(SIDE, "function sessAxisKids(", "\n}\n");
 ok(/groupProj \? projListKids\(shown, o\) : sessAxisKids\(shown, o\)/.test(al) && /if \(kids\.length\) return kids;/.test(al),
   "W2a 세션별 축은 sessAxisKids 로 그린다 · 빈 화면은 그린 것으로 가른다(#3870 E2 그대로)");
-//  ⚠ stage 전용: #3870 이 없어 자기 화면 줄 판정은 () => false 로 준다.
-ok(/const plan = planSessAxis\(shown, projPinnedId, \(\) => false\);/.test(sx) && /text: PINNED_BUCKET/.test(sx) && /kids\.push\(pinCard\(plan\.pinRows, o\)\)/.test(sx)
-  && /projGroups\(plan\.cardRows, false, false\)/.test(sx) && /projGrpCard\(g, o, false\)/.test(sx) && /kids\.push\(dayCard\(d\.group, d\.rows, o, i\)\)/.test(sx),
+ok(/const plan = planSessAxis\(shown, projPinnedId, \(r\) => projCardRows\(\[r\]\)\.length === 0\);/.test(sx) && /text: PINNED_BUCKET/.test(sx) && /kids\.push\(pinCard\(plan\.pinRows, o\)\)/.test(sx)
+  && /projGroups\(plan\.cardRows, false, false\)/.test(sx) && /projGrpCard\(g, o, false, standingSess\)/.test(sx) && /kids\.push\(dayCard\(d\.group, d\.rows, o, i\)\)/.test(sx)
+  && (sx.match(/projCardRows/g) || []).length === 1,
   "W2b ★세션별 축도 같은 「고정」 층(세션 카드 + 고정한 프로젝트 카드, 자리 기억은 안 건드림) · 나머지는 날짜 카드");
 const dc = cut(SIDE, "function dayCard(", "\n}");
 ok(dc.length > 0 && !/projCardRows|filter\(/.test(dc) && /data-anch': `day:\$\{seq\}:\$\{group\}`/.test(dc),
@@ -167,9 +169,9 @@ ok(/if \(key\.startsWith\(NOW_CARD\)\) \{ if \(wasOpen\) nowClosed\.add\(key\); 
   "W7c 조각 카드 접기·펴기는 페이지 수명(nowClosed)만 — 영속 기억(grpClosed·grpOpened)에 안 적힌다");
 ok(/pinBtn\(g\.pkey,/.test(cut(SIDE, "function projGrpHead(", "function grpFacesEl(")) && !/pinBtn\(g\.key,/.test(SIDE),
   "W7d 압정은 프로젝트 키(pkey)로 — 조각 카드에서 눌러도 그 프로젝트가 고정된다");
-ok(/g\.now \? \{ now: [^}]*folded: \[\], open: false \}/.test(card)
+ok(/g\.now \? \{ now: [^}]*folded: \[\], open: false \}/.test(card) && /const extra = !g\.fold \? \{ rows: \[\], total: 0 \}/.test(card)
   && /pastSet\.has\(g\.pkey\)/.test(card) && !/pastSet\.has\(g\.key\)/.test(card) && /cardPastHead\(g\.pkey,/.test(card),
-  "W7e ★조각 카드는 줄을 접지 않고, 「지난 세션」 통은 프로젝트 키로 본다(stage 판 — 카드에 «지난 세션 전량» 이 아직 없어 fold 배선은 main 에서만 잰다)");
+  "W7e ★조각 카드는 줄을 접지 않고, 「지난 세션」은 잎 모듈이 고른 카드(fold)만 든다(한 프로젝트에 접힘은 한 번)");
 const tp = cut(SIDE, "function togglePin(", "\n}\n");
 ok(/repaintList\(\);/.test(tp) && !/if \(groupProj\) repaintList\(\);/.test(tp), "W5 프로젝트 압정은 두 축 모두 다시 그린다(세션별 축도 이 핀을 쓴다)");
 const CSS = read("public/styles/47-v2-rail.css");

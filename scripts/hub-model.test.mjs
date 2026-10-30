@@ -1,0 +1,185 @@
+// scripts/hub-model.test.mjs — 프로젝트 허브 위젯의 순수 모델(web/projects/detail-hub-model.ts) 사양 테스트 (#4135 5판 시안).
+//  컴파일 산출물 public/app/projects/detail-hub-model.js 를 그대로 import 한다(DOM 무의존 — hub-layout.test.mjs 동형).
+import test from "node:test";
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const M = await import(join(root, "public/app/projects/detail-hub-model.js"));
+
+const NOW = new Date(2026, 8, 25, 12, 0, 0).getTime();   // 2026-09-25 정오(로컬)
+const d = (days) => { const x = new Date(NOW + days * 86400000); return x.getFullYear() + "-" + String(x.getMonth() + 1).padStart(2, "0") + "-" + String(x.getDate()).padStart(2, "0"); };
+const T = (id, status, extra = {}) => ({ id, name: "t" + id, status, ...extra });
+
+test("#1 보기 설정 정규화 — 모르는 값·깨진 저장본은 기본(상태 묶기 · 전체 · 담당자)", () => {
+  assert.deepEqual(M.normalizeTasksPref(null), M.TASKS_PREF_DEFAULT);
+  assert.deepEqual(M.normalizeTasksPref({ group: "x", filter: 3, col: "tags" }), M.TASKS_PREF_DEFAULT);
+  assert.deepEqual(M.normalizeTasksPref({ group: "none", filter: "mine", col: "due" }), { group: "none", filter: "mine", col: "due" });
+});
+
+test("#2 폭 → 열 — 1칸은 설정한 열 하나(기본 담당자), 2칸은 담당자·마감일, 3칸은 셋 다", () => {
+  assert.deepEqual(M.taskColsFor(1, M.TASKS_PREF_DEFAULT), ["assignee"]);
+  assert.deepEqual(M.taskColsFor(1, { ...M.TASKS_PREF_DEFAULT, col: "priority" }), ["priority"]);
+  assert.deepEqual(M.taskColsFor(2, M.TASKS_PREF_DEFAULT), ["assignee", "due"]);
+  assert.deepEqual(M.taskColsFor(3, M.TASKS_PREF_DEFAULT), ["assignee", "due", "priority"]);
+});
+
+test("#3 줄 예산 — 한 칸에 묶음 하나면 2줄 이상, 세 칸이면 열 줄 넘게, 세로가 늘면 단조 증가, 최소 1", () => {
+  assert.ok(M.rowsBudget(1, 1) >= 2, String(M.rowsBudget(1, 1)));
+  assert.ok(M.rowsBudget(3, 2) >= 12, String(M.rowsBudget(3, 2)));
+  let prev = 0; for (let h = 1; h <= 6; h++) { const c = M.rowsBudget(h, 2); assert.ok(c >= prev); prev = c; }
+  assert.equal(M.rowsBudget(1, 9), 1);
+  // 실제 픽셀을 넘지 않는다: 줄 × 33 + 묶음 크롬 + 위젯 크롬 ≤ 칸 높이
+  for (let h = 1; h <= 6; h++) for (const g of [1, 2]) assert.ok(M.rowsBudget(h, g) * M.HUB_ROW_PX + g * M.HUB_GROUP_PX + M.HUB_CHROME_PX <= h * 276 - 16 + M.HUB_ROW_PX, h + "×" + g);
+});
+
+test("#4 묶음별 줄 나누기 — 앞 묶음부터, 있는 묶음엔 최소 1줄, 넘치는 묶음은 «더» 줄 자리를 비운다", () => {
+  assert.deepEqual(M.splitRows([2, 10], 9), [2, 6]);       // 진행 중 2 전부 + 할 일 7 중 6(마지막은 «더»)
+  assert.deepEqual(M.splitRows([0, 5], 3), [0, 2]);        // 빈 묶음은 0
+  assert.deepEqual(M.splitRows([5, 5], 2), [1, 1]);        // 한 줄뿐이면 그 줄이 «더»
+  assert.deepEqual(M.splitRows([3, 3], 10), [3, 3]);       // 남으면 그대로
+  assert.deepEqual(M.splitRows([], 5), []);
+});
+
+test("#5 마감 판정 — 이번 주 = 오늘부터 7일 안(지난 것 포함, 완료 제외) · 마감 지남 수", () => {
+  const ts = [T(1, "todo", { due_date: d(-2) }), T(2, "todo", { due_date: d(3) }), T(3, "todo", { due_date: d(9) }), T(4, "done", { due_date: d(-1) }), T(5, "todo")];
+  assert.deepEqual(M.dueThisWeek(ts, NOW).map((t) => t.id), [1, 2]);
+  assert.equal(M.overdueCount(ts, NOW), 1);
+  // 새벽 03:00(로컬) — UTC 날짜로 «오늘» 을 잡으면 어제가 오늘이 된다(KST 00~09시). 어제 마감은 지난 것이다.
+  const dawn = new Date(2026, 8, 25, 3, 0, 0).getTime();
+  assert.equal(M.isOverdue({ id: 9, status: "todo", due_date: "2026-09-24" }, dawn), true, "새벽에도 어제 마감은 지남");
+  assert.equal(M.isOverdue({ id: 9, status: "todo", due_date: "2026-09-25" }, dawn), false, "오늘 마감은 아직");
+  assert.equal(M.todayStart(dawn), new Date(2026, 8, 25).getTime());
+});
+
+test("#6 크기별 묶음 — 1×1 내 것·열림 / 2×1 이번 주 마감 / 3×1 열림 한 묶음 / 그 밖 진행 중·할 일(완료는 어디에도 없다)", () => {
+  const ts = [T(1, "in_progress", { assignee: "me" }), T(2, "todo", { assignee: "you" }), T(3, "todo", { assignee: "me", due_date: d(1) }), T(4, "done", { assignee: "me" })];
+  const g11 = M.taskGroupsFor(ts, 1, 1, M.TASKS_PREF_DEFAULT, "me", NOW);
+  assert.equal(g11.length, 1); assert.equal(g11[0].label, "내 것 · 열림"); assert.deepEqual(g11[0].tasks.map((t) => t.id), [1, 3]);
+  const g11x = M.taskGroupsFor(ts, 1, 1, M.TASKS_PREF_DEFAULT, "", NOW);
+  assert.equal(g11x[0].label, "열림"); assert.deepEqual(g11x[0].tasks.map((t) => t.id), [1, 2, 3]);
+  const g21 = M.taskGroupsFor(ts, 2, 1, M.TASKS_PREF_DEFAULT, "me", NOW);
+  assert.equal(g21[0].label, "이번 주 마감"); assert.deepEqual(g21[0].tasks.map((t) => t.id), [3]);
+  const g13 = M.taskGroupsFor(ts, 1, 3, M.TASKS_PREF_DEFAULT, "me", NOW);
+  assert.deepEqual(g13.map((g) => g.label), ["진행 중", "할 일"]); assert.deepEqual(g13[1].tasks.map((t) => t.id), [2, 3]);
+  const g31 = M.taskGroupsFor(ts, 3, 1, M.TASKS_PREF_DEFAULT, "me", NOW);
+  assert.equal(g31.length, 1); assert.equal(g31[0].label, "열림"); assert.deepEqual(g31[0].tasks.map((t) => t.id), [1, 2, 3], "3×1 은 한 묶음, 진행 중 먼저");
+  const gNone = M.taskGroupsFor(ts, 2, 2, { group: "none", filter: "mine", col: "assignee" }, "me", NOW);
+  assert.equal(gNone.length, 1); assert.deepEqual(gNone[0].tasks.map((t) => t.id), [1, 3]);
+  for (const g of [...g11, ...g21, ...g13, ...g31, ...gNone]) assert.ok(g.tasks.every((t) => t.status !== "done"), "완료는 안 그린다");
+});
+
+test("#7 바닥 줄 글 — 1×1 «… N개 더», 1×N 마감 지남·완료 접힘, 2×1 이번 주, 그 밖 열림·마감 지남", () => {
+  const ts = [T(1, "todo", { due_date: d(-3) }), T(2, "todo"), T(3, "todo"), T(4, "done")];
+  assert.equal(M.tasksFootText(ts, 1, 1, 2, NOW), "… 1개 더");
+  assert.equal(M.tasksFootText(ts, 1, 1, 3, NOW), "열림 3");
+  assert.equal(M.tasksFootText(ts, 1, 1, 1, NOW, 18), "… 17개 더", "1×1 «더» 는 그 묶음(내 것·열림) 기준");
+  assert.equal(M.tasksFootText(ts, 1, 3, 3, NOW), "마감 지남 1 · 완료 1 는 접힘");
+  assert.equal(M.tasksFootText(ts, 2, 1, 1, NOW), "이번 주 마감 1 · 마감 지남 1");
+  assert.equal(M.tasksFootText(ts, 3, 2, 3, NOW), "열림 3 · 마감 지남 1 · 완료 1 는 접힘");
+});
+
+test("#8 세션 — 태스크 색인(세션 하나에 태스크 하나) · 마지막 활동(초 단위 created 도 ms 로) · 정렬(순위 → 최근)", () => {
+  const idx = M.sessionTaskIndex([{ id: 10, name: "A", sessions: [{ id: "s1" }, { id: "s2" }] }, { id: 11, name: "B", sessions: [{ id: "s1" }] }]);
+  assert.deepEqual(idx.get("s1"), { id: 10, name: "A" }); assert.equal(idx.get("s3"), undefined);
+  assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000 }), 1790000000000);
+  assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000, lastActive: 1790000500000 }), 1790000500000, "서버 응답의 마지막 작업 필드는 lastActive");
+  assert.equal(M.sessionLastActivity({ id: "x", created: 1790000000, lastActive: 1790000500000, lastAttached: 1790000900000 }), 1790000900000);
+  const ss = [{ id: "a", created: 1 }, { id: "b", created: 3 }, { id: "c", created: 2 }];
+  assert.deepEqual(M.sortSessions(ss, (s) => (s.id === "c" ? 0 : 1)).map((s) => s.id), ["c", "b", "a"]);
+});
+
+test("#9 세션 묶음 — 1×N 사용 중·최근 / 1행 한 묶음 / 2×2 이상 태스크 붙음·없음", () => {
+  const ss = [{ id: "a" }, { id: "b" }, { id: "c" }];
+  const live = (s) => s.id === "a", has = (s) => s.id !== "c";
+  assert.deepEqual(M.sessionGroupsFor(ss, 1, 3, live, has).map((g) => [g.label, g.sessions.length]), [["사용 중", 1], ["최근", 2]]);
+  assert.deepEqual(M.sessionGroupsFor(ss, 3, 1, live, has).map((g) => [g.label, g.sessions.length]), [["세션", 3]]);
+  assert.deepEqual(M.sessionGroupsFor(ss, 2, 2, live, has).map((g) => [g.label, g.sessions.length]), [["태스크에 붙은 세션", 2], ["태스크 없는 세션", 1]]);
+});
+
+test("#10 본문·코멘트 — 안 읽은 수(내 것 제외) · 글자 수(기호·공백 제외)", () => {
+  assert.equal(M.unreadComments([{ id: 1, actor: "a" }, { id: 5, actor: "me" }, { id: 7, actor: "b" }], 3, "me"), 1);
+  assert.equal(M.unreadComments([], 0, "me"), 0);
+  assert.equal(M.bodyCharCount("# 제목\n\n본문 **굵게** [링크](x) `코드`"), "제목본문굵게링크x코드".length);
+});
+
+test("#11 폴더 — 최근 순 파일(폴더 제외 · mtime 내림 · 같으면 이름순)", () => {
+  const items = [{ name: "b", type: "file", mtime: 5 }, { name: "d", type: "dir", mtime: 9 }, { name: "a", type: "file", mtime: 5 }, { name: "c", type: "file", mtime: 7 }];
+  assert.deepEqual(M.recentFiles(items, 2).map((f) => f.name), ["c", "a"]);
+  assert.deepEqual(M.splitDirs(items).dirs.map((f) => f.name), ["d"]);
+});
+
+test("#12 타임라인 — 요약 가르기 · 최근에 일한 사람부터 · 날 × 사람 판(기록 있는 날만) · «그 밖» 열 · 짧은 때", () => {
+  assert.deepEqual(M.splitSummary("웹 페이지 수정 - 허브 공유 폴더를 곁칸과 같게"), { kind: "웹 페이지 수정", text: "허브 공유 폴더를 곁칸과 같게" });
+  assert.deepEqual(M.splitSummary("배포 - A - B"), { kind: "배포", text: "A - B" }, "첫 구분자에서만 가른다");
+  assert.deepEqual(M.splitSummary("구분자 없는 요약"), { kind: "", text: "구분자 없는 요약" });
+  assert.deepEqual(M.splitSummary("이 앞머리는 스물네 자를 훌쩍 넘어가서 중분류로 보기 어렵다 - 내용").kind, "", "앞머리가 길면 가르지 않는다");
+  assert.deepEqual(M.splitSummary(null), { kind: "", text: "" });
+  const at = (h) => new Date(NOW - h * 3600e3).toISOString();
+  const acts = [
+    { id: 1, author_person: "wj", created_at: at(1) },        // 오늘
+    { id: 2, author_person: "sm", created_at: at(3) },        // 오늘
+    { id: 3, author_person: "sm", created_at: at(4) },        // 오늘
+    { id: 4, author_person: "sm", created_at: at(5) },        // 오늘
+    { id: 5, author_person: "wj", committed_at: at(26) },     // 어제
+    { id: 6, author_person: "kk", created_at: at(24 * 3 + 1) }, // 9/22
+    { id: 7, author_person: "", created_at: at(2) },          // 사람 없음 → 빠진다
+    { id: 8, author_person: "wj", created_at: "" },           // 때 없음 → 빠진다
+  ];
+  assert.deepEqual(M.peopleByRecency(acts), ["wj", "sm", "kk"], "많이 한 순(sm 3건)이 아니라 가장 최근에 일한 순");
+  assert.deepEqual(M.boardCols(["wj", "sm", "kk"], 3), [{ key: "wj", ids: ["wj"] }, { key: "sm", ids: ["sm"] }, { key: "kk", ids: ["kk"] }]);
+  assert.deepEqual(M.boardCols(["wj", "sm", "kk"], 2), [{ key: "wj", ids: ["wj"] }, { key: "others", ids: ["sm", "kk"] }], "열이 모자라면 마지막 열이 나머지를 모은다");
+  assert.deepEqual(M.boardCols(["wj", "sm"], 0), [{ key: "others", ids: ["wj", "sm"] }], "열은 최소 하나");
+  const days = M.boardDays(acts, M.boardCols(["wj", "sm", "kk"], 3));
+  assert.deepEqual(days.map((d) => d.key), ["2026-09-25", "2026-09-24", "2026-09-22"], "기록 있는 날만 · 최근 날부터(9/23 은 없다)");
+  assert.deepEqual(days[0].cells.map((c) => c.map((a) => a.id)), [[1], [2, 3, 4], []]);
+  assert.deepEqual(days[1].cells.map((c) => c.map((a) => a.id)), [[5], [], []]);
+  assert.deepEqual(days[2].cells.map((c) => c.map((a) => a.id)), [[], [], [6]]);
+  assert.deepEqual(M.recentByCol(acts, M.boardCols(["wj", "sm", "kk"], 2), 2).map((c) => c.map((a) => a.id)), [[1, 5], [2, 3]], "열마다 최근 둘 — «그 밖» 열은 그 사람들을 합쳐서");
+  assert.deepEqual(M.dayParts(NOW - 3600e3, NOW), { main: "오늘", sub: "금 9/25" });
+  assert.deepEqual(M.dayParts(NOW - 86400e3, NOW), { main: "어제", sub: "목 9/24" });
+  assert.deepEqual(M.dayParts(NOW - 86400e3 * 3, NOW), { main: "9/22", sub: "화" });
+  assert.equal(M.whenShort(new Date(2026, 8, 25, 9, 5).getTime(), NOW), "09:05");
+  assert.equal(M.whenShort(new Date(2026, 8, 24, 18, 50).getTime(), NOW), "어제 18:50");
+  assert.equal(M.whenShort(new Date(2026, 8, 20, 18, 50).getTime(), NOW), "9/20");
+  assert.equal(M.whenShort(0, NOW), "");
+  assert.deepEqual([200, 536, 617, 850, 2000].map((w) => M.boardMaxCols(w)), [1, 2, 2, 3, 4], "열 폭 236 이상 · 1~4열");
+  assert.equal(M.feedDayLabel(NOW - 60e3, NOW), "오늘"); assert.equal(M.feedDayLabel(NOW - 86400e3, NOW), "어제"); assert.equal(M.feedDayLabel(NOW - 86400e3 * 3, NOW), "9/22");
+  const ti = M.taskIndex([{ id: 10, name: "a", subtasks: [{ id: 11, name: "a-1", subtasks: [{ id: 12, name: "a-1-1" }] }] }, { id: 20, name: "b" }]);
+  assert.deepEqual([...ti.keys()], [10, 11, 12, 20]); assert.equal(ti.get(12).name, "a-1-1");
+});
+
+test("#13 노드 이름 — 없으면 «중앙», 세션 호스트(sesshost-…)는 «서버», 그 밖은 노드 이름에서 .local 을 뗀다", () => {
+  assert.equal(M.nodeLabel(null), "중앙");
+  assert.equal(M.nodeLabel({ id: "sesshost-lively-46e3-i-02addbf327f377c99", name: "sesshost-lively-46e3-i-02addbf327f377c99" }), "서버");
+  assert.equal(M.nodeLabel({ id: "laibeulliui-macmini", name: "laibeulliui-Macmini.local" }), "laibeulliui-Macmini");
+  assert.equal(M.nodeLabel({ id: "x" }), "x");
+});
+
+test("#14 피드 날 머리 — 오늘·어제는 요일과 날짜까지, 그 전은 M/D 만", () => {
+  assert.equal(M.feedDayHead(NOW - 60e3, NOW), "오늘 금 9/25");
+  assert.equal(M.feedDayHead(NOW - 86400e3, NOW), "어제 목 9/24");
+  assert.equal(M.feedDayHead(NOW - 86400e3 * 3, NOW), "9/22");
+});
+
+test("#15 본문 안내문 들어내기 — 서버가 쓴 첫 인용(자동 생성·사람이 만듦)은 칩이 되고 본문에서 빠진다 · 임시 이름 안내는 뒤 두 문단까지 · 마커 주석 제거", () => {
+  const a = M.splitBodyNotes("> 새 작업 창에서 **사람이 이름을 지어** 만든 프로젝트입니다 — 이 세션의 작업 폴더가 이 프로젝트 폴더입니다.\n\n## 첫 지시(원문)\n\n본문");
+  assert.equal(a.notes.length, 1); assert.equal(a.notes[0].kind, "named"); assert.ok(!a.notes[0].text.includes("**")); assert.equal(a.rest, "## 첫 지시(원문)\n\n본문");
+  const b = M.splitBodyNotes("> ⚙ 세션을 열 때 **자동 생성**된 프로젝트입니다 — 첫 지시가 없어 이름이 임시값입니다.\n\n이 세션의 작업 폴더가 이 프로젝트 폴더이고, 여기서 남기는 지식이 귀속됩니다.\n무엇을 하는 일인지 정해지면 제목·본문·분류를 보강하세요.\n\n<!-- lively:auto-created-from-first-prompt -->");
+  assert.equal(b.notes.length, 1); assert.equal(b.notes[0].kind, "auto-empty"); assert.ok(b.notes[0].text.includes("작업 폴더")); assert.equal(b.rest, "");
+  const c = M.splitBodyNotes("> ⚙ 세션의 첫 지시에서 **자동 생성**된 프로젝트입니다 — 제목·본문·분류는 작업이 구체화되면 보강됩니다.\n\n## 첫 지시(원문)\n\nx");
+  assert.equal(c.notes[0].kind, "auto-first"); assert.equal(c.rest, "## 첫 지시(원문)\n\nx");
+  const d = M.splitBodyNotes("> 그냥 인용문\n\n본문"); assert.equal(d.notes.length, 0); assert.equal(d.rest, "> 그냥 인용문\n\n본문");
+});
+
+test("#16 검색 미리보기 다듬기 — 줄 번호(L12:) · 제목 기호 · 굵게·코드 기호 · [[위키 링크]] 를 걷고 줄 사이는 « … » 하나로, n 자에서 끊는다", () => {
+  const raw = "L1: # 대시보드(#/dashboard) '대시보드 편집' — 위젯 피커 ⋯ L3: …d-home-cockpit-617]] 1단계(3열 고정 프리셋)가 **2단계** 로 [[dashboard-layout-swap]] ⋯ L6: ##";
+  const t = M.searchSnippet(raw, 400);
+  assert.ok(!/L\d+:/.test(t), t); assert.ok(!t.includes("]]"), t); assert.ok(!t.includes("… …"), t);
+  assert.ok(!t.includes("**"), t); assert.ok(!t.includes("[["), t); assert.ok(!/(^|\s)#{1,6}(\s|$)/.test(t), t);
+  assert.ok(t.startsWith("대시보드(#/dashboard)"), t); assert.ok(t.includes(" … "), t); assert.ok(!t.endsWith("…"), t);
+  assert.equal(M.searchSnippet("L5: - **프로젝트 상세** `openFolderGrid` 모달", 100), "프로젝트 상세 openFolderGrid 모달");
+  assert.equal(M.searchSnippet("가나다라마바사", 4), "가나다라…");
+  assert.equal(M.searchSnippet(null, 10), "");
+});

@@ -13,7 +13,7 @@ import { HttpError, clampPage } from "../rest-util.js";
 import type { Capability, CapabilityCtx } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
-import { assertKnowledgeWritable } from "./shared.js";
+import { assertKnowledgeWritable, assertKnowledgeHistoryInAppContext } from "./shared.js";
 import {
   listKnowledgeHistory, getKnowledgeHistoryEntry, getKnowledgeSnapshot,
 } from "../../v6/knowledge-history-store.js";
@@ -27,7 +27,9 @@ import { GUIDE_SECTION_DEFAULTS } from "../../org/delivery/knowledge-index.js";
 // 이력은 그 문서의 옛 본문이다 — 지금 그 문서를 못 보는 사람에겐 **없는 문서와 같은 문구**로 답한다(존재 은닉).
 //  ⚠ 판정 기준은 감사 스냅샷 안의 옛 visibility 가 아니라 **현재 knowledge 행**이다. 스냅샷 기준으로 열면
 //   open 이었다가 members 로 잠긴 문서의 과거 본문이 그대로 샌다(잠금이 소급되지 않는 구멍).
-async function assertHistoryReadable(name: string, ctx?: CapabilityCtx): Promise<void> {
+//  #5100 — 앱 맥락 범위가 걸린 요청은 그 판정을 먼저 지난다(지운 문서의 이력은 닫는다 · 범위 밖 문서는 knowledge_get 과 같은 403).
+async function assertHistoryReadable(name: string, user: LivelyUser, ctx: CapabilityCtx | undefined, tool: string): Promise<void> {
+  await assertKnowledgeHistoryInAppContext(name, ctx?.viewer ?? null, user, ctx, tool);
   if (!(await canSeeKnowledge(name, ctx?.viewer ?? null))) throw new HttpError(404, `지식 '${name}' 없음`);
 }
 
@@ -68,9 +70,9 @@ export const knowledgeHistory: Capability = {
         };
       } }],
   },
-  handler: async (input: KnowledgeHistoryInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: KnowledgeHistoryInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     const name = String(input.name);
-    await assertHistoryReadable(name, ctx);
+    await assertHistoryReadable(name, user, ctx, "knowledge_history");
     // MCP 기본은 10건 — 에이전트의 용도는 '최근에 누가 뭘 고쳤나' 확인이라 50건은 컨텍스트만 먹는다.
     //  웹 패널은 종전대로 50건(스크롤 한 화면). 명시 limit 은 어느 쪽이든 그대로 존중한다.
     const { limit, offset } = clampPage(input, ctx?.source === "mcp" ? 10 : 50, 200);
@@ -100,9 +102,9 @@ export const knowledgeHistoryEntry: Capability = {
         audit_id: Number(req.params?.audit_id),
       }) }],
   },
-  handler: async (input: KnowledgeHistoryEntryInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: KnowledgeHistoryEntryInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     const name = String(input.name);
-    await assertHistoryReadable(name, ctx);
+    await assertHistoryReadable(name, user, ctx, "knowledge_history_entry");
     const id = Number(input.audit_id);
     if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, "audit_id 는 양의 정수");
     // 스토어가 (name, id) 로 조회한다 — id 만으로 열면 남의 문서 감사행을 id 추측으로 읽을 수 있다.
@@ -142,6 +144,8 @@ export const knowledgeRevert: Capability = {
     //  #783 검토 게이트(사람이 판단한다)가 무의미해진다. 되돌리기는 사람의 판단이다.
     if (ctx?.source === "mcp") throw new HttpError(403, "되돌리기는 사람(웹)만 가능합니다");
     const name = String(input.name);
+    //  #5100 — 되돌리기는 이력의 옛 본문을 다시 쓴다(지운 문서면 되살린다). 이력 읽기와 같은 앱 맥락 범위 판정을 먼저 지난다.
+    await assertKnowledgeHistoryInAppContext(name, ctx?.viewer ?? null, user, ctx, "knowledge_revert");
     // 쓰기 게이트 = 읽기 게이트와 같은 판정(shared.ts) — 안 보이는 문서는 되돌릴 수도 없다.
     await assertKnowledgeWritable(name, ctx?.viewer ?? null);
     if (!(await canSeeKnowledge(name, ctx?.viewer ?? null))) throw new HttpError(404, `지식 '${name}' 없음`);

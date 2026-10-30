@@ -20,6 +20,16 @@ import { livHomeMode } from "../../org/delivery/liv-home.js";
 /** 화면이 한 번에 보여주는 카드 수. 전부 나열하면 아무것도 안 된다. */
 const TOP = 3;
 
+/**
+ * 리브 화면(단독) 절대 주소 — 커서 같은 로컬 AI 가 사람에게 «이 링크에서 넣어 주세요» 로 줄 링크(#4970). 물음 카드가 거기 뜬다.
+ *  사람에게 주는 링크라 절대 주소다(상대 주소는 사람이 못 누른다). 게이트웨이 주소를 모르면 null.
+ */
+async function livBoardUrl(): Promise<string | null> {
+  const { gatewayUrl } = await import("../../gateway-url.js");
+  const base = await gatewayUrl().catch(() => null);
+  return base ? `${String(base).replace(/\/+$/, "")}/ui/#/liv?board=1` : null;
+}
+
 export const livCapabilities: Capability[] = [
   // ⚠ `mode`/`reason` 은 **더는 홈을 갈아치우는 데 쓰이지 않는다.** 리브가 홈을 덮던 설계를 걷어내고
   //  독립 페이지(#/liv)로 분리했다(대표 결정 — 기대한 화면이 아닌 게 뜨는 건 그 자체로 고장으로 읽힌다).
@@ -143,21 +153,30 @@ export const livCapabilities: Capability[] = [
       const welcomeSeen = input.welcome_seen === true; // #2171 — 처음 설정으로 **보냈다**는 표식(끝냈다와 별개)
       // #2232 — [나중에 할게요] 미룸. **세 값**이다: true=미룸 · false=미룸 해제(화면을 다시 열었다) · 미지정=건드리지 않음.
       const welcomeDeferred = typeof input.welcome_deferred === "boolean" ? input.welcome_deferred : undefined;
-      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred 중 하나는 있어야 합니다");
+      const collectDone = input.collect_done === true;   // #4213 T13 — 리브가 «처음 연결·처음 수집 끝» 을 찍는다(2턴 신호)
+      const uploadDone = input.upload_done === true;     // #5060 — 화면의 백그라운드 올리기가 다 비었다(2턴이 기다리던 신호)
+      const desktopSeen = input.desktop_seen === true;   // #5060 — 처음 설정을 데스크톱 앱 안에서 열었다(브라우저 탭이 접히는 신호)
+      if (!workIn && !decIn && !dclIn && !onboarded && !welcomeSeen && welcomeDeferred === undefined && !collectDone && !uploadDone && !desktopSeen) throw new HttpError(400, "work · decision · declined · onboarded · welcome_seen · welcome_deferred · collect_done · upload_done · desktop_seen 중 하나는 있어야 합니다");
       const declinedKey = dclIn ? str(dclIn.key, 80) : undefined;
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
       if (decIn && !decWhat) throw new HttpError(400, "decision 에는 what 이 필요합니다");
-      return {
-        profile: await appendLivProfile(userId, {
-          work: workIn ? { asis: str(workIn.asis, 2000), tobe: str(workIn.tobe, 2000), by: workIn.by === "self" ? "self" : "ai", at: now } : undefined,
-          decision: decIn ? { at: now, what: decWhat as string, why: str(decIn.why, 1000), by: str(decIn.by, 60) ?? "liv" } : undefined,
-          declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
-          onboarded,
-          welcomeSeen,
-          welcomeDeferred,
-        }),
-      };
+      const profile = await appendLivProfile(userId, {
+        work: workIn ? { asis: str(workIn.asis, 2000), tobe: str(workIn.tobe, 2000), by: workIn.by === "self" ? "self" : "ai", at: now } : undefined,
+        decision: decIn ? { at: now, what: decWhat as string, why: str(decIn.why, 1000), by: str(decIn.by, 60) ?? "liv" } : undefined,
+        declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
+        onboarded,
+        welcomeSeen,
+        welcomeDeferred,
+        collectDone,
+        uploadDone,
+        desktopSeen,
+      });
+      //  (#5167) «다 올렸다» 를 받았다 — 파일 갈래면 리브를 정비 주기까지 기다리게 하지 않고 지금 연다(kickLivSecondTurn 머리말).
+      if (uploadDone && profile.welcome?.flow === "files") {
+        void import("../../org/liv/second-turn-sweep.js").then(({ kickLivSecondTurn }) => kickLivSecondTurn()).catch(() => { /* 다음 정비가 한다 */ });
+      }
+      return { profile };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
       //  `curl` 로 남기라고 시켰는데, v1 채팅에서 셸을 막으면서(#1665 안전선) 그 길이 끊겼다.
       //  도구가 없으면 리브는 "알게 된 것"을 어디에도 못 남기고, 다음 대화의 리브가 그걸 모른다 —
@@ -177,6 +196,15 @@ export const livCapabilities: Capability[] = [
       welcome_deferred: z.boolean().optional()
         .describe("사람이 [나중에 할게요] 로 처음 설정을 **미뤘다**는 표식(#2232). true 면 하다 만 자리가 있어도 자동으로 끌고 가지 않고 " +
           "홈의 «이어서 하기»로만 안내한다. false 면 미룸을 푼다(사람이 처음 설정을 다시 연 순간)."),
+      collect_done: z.boolean().optional()
+        .describe("(리브) 처음 연결·처음 수집을 끝냈다는 표식(#4213 T13 — liv-connect 마지막 걸음). 찍히면 카테고리·정리 규칙을 세우는 " +
+          "증류 지시(2턴)가 이 대화에 이어서 온다. 첫 보고·다음 연결 제안·초대 제안까지 마친 뒤에 찍는다. 처음 찍힌 시각을 지킨다."),
+      upload_done: z.boolean().optional()
+        .describe("(화면) 처음 설정에서 시작한 파일 올리기가 끝났다는 표식(#5060). 리브(AI)가 찍는 값이 아니다 — 화면의 백그라운드 올리기가 " +
+          "다 비면 찍는다. 처음 설정에서 올리기를 시작한 칸에만 남고, 처음 찍힌 시각을 지킨다."),
+      desktop_seen: z.boolean().optional()
+        .describe("(화면) 처음 설정을 데스크톱 앱 안에서 열었다는 표식(#5060). 리브(AI)가 찍는 값이 아니다. 마지막 시각을 남기고, " +
+          "브라우저에서 [앱 받기]를 누른 사람의 탭이 그 값을 보고 «앱에서 이어 하고 있어요» 로 접힌다."),
     }),
 
   // ── 리브가 나에 대해 아는 것을 **화면이 읽는다**(#1843) ──────────────────────────────
@@ -213,8 +241,9 @@ export const livCapabilities: Capability[] = [
   //   - 사람은 리브 화면을 벗어나지 않는다(탭 이동·경로 안내 자체가 사라진다).
   //   - 넣을 자리는 **서버가 저장해 둔 요청**에서만 온다 — 브라우저가 대상을 바꿔 보낼 수 없다.
   restRead("me_liv_ask_secret", "자격 입력칸 띄우기",
-    "리브가 사람에게 받아야 하는 자격 하나를 **요청**한다 — 리브 화면에 안전 입력칸이 뜬다. " +
-    "⚠ 시크릿을 대화로 받지 마라. 사람에게 다른 탭·메뉴로 가라고 하지도 마라. 이 도구를 쓰면 그 자리에서 끝난다. " +
+    "리브가 사람에게 받아야 하는 자격 하나를 **요청**한다 — 리브 세션 대화창의 입력칸 바로 위(와 리브 화면)에 안전 입력칸이 뜬다. " +
+    "⚠ 시크릿을 대화로 받지 마라. 사람에게 다른 탭·메뉴로 가라고 하지도 마라. 웹의 리브 세션이면 이 도구를 쓰면 그 자리에서 끝난다. " +
+    "커서 같은 로컬 AI 처럼 그 입력칸이 안 보이는 자리라면 응답의 board_url 을 사람에게 주고 «이 링크에서 넣어 주세요» 라고 하라(값은 대화로 받지 않는다). " +
     "값은 화면이 받아 곧바로 금고로 넣고, 너는 값을 보지 못한다(설정됐는지 여부만 확인된다).",
     [{ method: "POST", paths: ["/api/ui/me/liv-secret-ask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -253,7 +282,7 @@ export const livCapabilities: Capability[] = [
         hint: str(input.hint, 120) ?? f.hint ?? undefined,
       };
       await setLivSecretAsk(userId, ask);
-      return { ask };
+      return { ask, board_url: await livBoardUrl() };
       // ⚠ **MCP 로 노출한다**(mcp=true). 리브가 쓰라고 만든 도구인데 도구 목록에 없으면 못 쓴다 —
       //  실측: 리브가 ToolSearch 를 세 번 돌리고 REST 경로를 세 번 추측하느라 96초를 태웠고,
       //  그 사이 사람에게는 "칸이 떴을 거예요"라고 먼저 말해 버렸다(아직 안 떴는데).
@@ -298,9 +327,19 @@ export const livCapabilities: Capability[] = [
   //   없는 말을 지어내야 해서 어렵고, 답이 제각각이라 우리도 개선점을 못 뽑는다. 고르게 하면 둘 다 풀린다.
   //  ⚠ `key` 는 통계의 축이다 — 문구를 다듬어도 key 는 바꾸지 마라(집계가 갈라진다).
   restRead("me_liv_ask_choice", "객관식으로 묻기",
-    "리브 화면에 **고르는 질문**을 띄운다. 사람이 고르면 그 답이 구조화돼 쌓이고(통계), 너에게도 전달된다. " +
+    "리브 화면(리브 세션 대화창의 입력칸 바로 위 · 리브 화면)에 **고르는 질문**을 띄운다. 사람이 고르면 그 답이 구조화돼 쌓이고(통계), 너에게도 전달된다. " +
+    "커서 같은 로컬 AI 처럼 그 자리가 안 보이면 응답의 board_url 을 사람에게 준다. " +
     "⚠ 사람에게 자유서술을 시키지 마라 — 없는 말을 지어내는 건 어렵다. 선택지를 주는 게 기본이다. " +
-    "목록에 없을 수 있으면 allow_other 로 탈출구를 열어라(거기 적히는 것이 다음에 만들 커넥터 후보다).",
+    "목록에 없을 수 있으면 allow_other 로 탈출구를 열어라(거기 적히는 것이 다음에 만들 커넥터 후보다). " +
+    //  #5058 원준님 2026-10-27 — 리브가 «현재 Codex 로그인을 암호화 금고에 연결할까요? 자동 정리 작업이 무인으로 실행되려면
+    //   codex_auth_json 자격이 필요합니다» 를 띄웠다. 처음 온 사람은 무엇을 고르는지도, 그게 중요한지도 모른다.
+    "⚠ question·why·label·hint 는 **개발을 모르는 사람이 읽는 말**로 쓴다. 내부 이름(도구·자격 kind·필드 이름 — 예: codex_auth_json)과 " +
+    "전문용어(금고·자격·무인·헤드리스·증류·하네스·토큰·스코프)를 쓰지 말고, 고르면 **그 사람에게 무엇이 달라지는지**를 말한다. " +
+    "예: «현재 Codex 로그인을 금고에 연결할까요?» 가 아니라 «화면을 닫아 두셔도 모은 자료를 계속 정리해 둘까요?» · why «지금 로그인한 ChatGPT 계정으로 정리합니다. " +
+    "로그인 정보는 잠긴 보관함에 암호로 바꿔 둡니다.» · 선택지 «네, 계속 정리해 주세요»(hint «권장 — 끄면 제가 이 대화에 있을 때만 정리합니다») / «아니요, 지금은 됐어요». " +
+    //  #5062 — 리브가 «첫 서랍 ‘운영·인프라’를 이 정의로 만들까요?» 를 띄웠다. 앞 맥락이 있어야 뜻이 서는 말도 같은 병이다.
+    "질문은 이 대화를 처음 보는 사람이 그것만 보고 알아들어야 한다 — 무엇을 정하는지·왜 지금 묻는지·고르면 각각 무슨 일이 생기는지. " +
+    "«서랍»·«레인»·«배치» 같은 화면에 없는 말, «첫 ○○»·«이 정의로»·«다시 실행» 처럼 앞 맥락이 있어야 뜻이 서는 말을 쓰지 마라.",
     [{ method: "POST", paths: ["/api/ui/me/liv-choice-ask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
@@ -330,7 +369,7 @@ export const livCapabilities: Capability[] = [
         options, multi: input.multi === true, allow_other: input.allow_other === true,
       };
       await setLivSecretAsk(userId, ask);
-      return { ask };
+      return { ask, board_url: await livBoardUrl() };
     }, true, {
       key: z.string().optional().describe("통계 축이 되는 안정된 key(예: context_sources). 문구가 바뀌어도 유지한다."),
       question: z.string().optional().describe("사람에게 보일 질문 한 줄."),
@@ -420,7 +459,8 @@ export const livCapabilities: Capability[] = [
   //  종전 설계는 노드를 켜고 그 PC 를 훑는 것이었는데, 컴맹에게 설치·노드 등록을 시키는 값이 너무 크다.
   //  파일 몇 개면 끝나는 일이면 **끌어다 놓는 게 훨씬 간편하다**(대표 판단).
   restRead("me_liv_ask_upload", "파일 올리기 요청",
-    "리브 화면에 **파일 올리는 자리**를 띄운다. 사람이 올린 파일은 자료(source)로 저장돼 증류 대상이 된다. " +
+    "리브 화면(리브 세션 대화창의 입력칸 바로 위 · 리브 화면)에 **파일 올리는 자리**를 띄운다. 사람이 올린 파일은 자료(source)로 저장돼 증류 대상이 된다. " +
+    "커서 같은 로컬 AI 처럼 그 자리가 안 보이면 응답의 board_url 을 사람에게 준다. " +
     "⚠ 로컬 폴더를 뒤지려 하지 마라 — 파일 몇 개면 이게 훨씬 간편하다. 글자 파일만 된다(문서·메모·마크다운·CSV).",
     [{ method: "POST", paths: ["/api/ui/me/liv-upload-ask"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -435,7 +475,7 @@ export const livCapabilities: Capability[] = [
         accept_hint: String(input.accept_hint ?? "").trim().slice(0, 120) || undefined,
       };
       await setLivSecretAsk(userId, ask);
-      return { ask };
+      return { ask, board_url: await livBoardUrl() };
     }, true, {
       label: z.string().optional().describe("올리는 자리의 이름(예: 회의록 파일)."),
       why: z.string().optional().describe("왜 필요한지 한 줄."),

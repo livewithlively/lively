@@ -202,7 +202,7 @@ function openBackfill(reload) {
   (async () => {
     try {
       const d = await api('/api/ui/source-vis-policy/backfill', { method: 'POST', body: JSON.stringify({}) });
-      out.replaceChildren(
+      replaceKids(out,
         el('div', { class: 'svp-warn' },
           el('b', { text: `${d.locked}건이 새로 잠깁니다` }),
           el('span', { text: `검사 ${d.scanned}건 · 이미 잠김 ${d.already_locked}건 · 규칙 없음 ${d.no_rule}건` })),
