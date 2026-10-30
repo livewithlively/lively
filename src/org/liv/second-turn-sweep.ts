@@ -28,6 +28,16 @@ export const sweepLivSecondTurn = onceAtATime(
   () => sweepSlot(managedMode(), currentTenant()?.id),
 );
 
+/**
+ * (#5167) 정비 주기를 기다리지 않고 지금 한 번 판정한다 — 처음 설정 반영·«다 올렸다» 신호를 받은 요청이 부른다.
+ *  매니지드는 정비가 워크스페이스마다 5분 주기라(lvly-cloud tenanttick) 다 올린 사람이 리브를 0~5분 말없이 기다렸다(실측 3분 21초).
+ *  요청 컨텍스트(그 워크스페이스) 안에서 부르므로 스윕이 같은 칸을 본다. 응답을 기다리지 않는다 — 늦거나 실패하면 다음 정비가 같은 일을 한다
+ *  (판정·표식이 멱등이고, 동시 호출은 onceAtATime 이 가른다).
+ */
+export function kickLivSecondTurn(): void {
+  void sweepLivSecondTurn().catch((err) => logger.warn({ err }, "리브 2턴 — 즉시 판정 실패(다음 정비가 다시 한다)"));
+}
+
 async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: number; failed: number }> {
   const { listLivSecondTurnCandidates, appendLivProfile, getLivProfile, listCollectors } = await import("../store.js");
   const { listSessionsRaw } = await import("../../terminal/terminal-sessions.js");

@@ -640,7 +640,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     const { headlessStatusFor, headlessAdminFor } = await import("../org/credentials/headless-connect.js");
     res.setHeader("Cache-Control", "no-store");
     //  «정할 수 있나» 도 저장과 같은 판정이다 — 데스크톱의 관리자에게도 버튼·안내가 맞게 나온다.
-    res.json(await headlessStatusFor({ memberId: me, isAdmin: await headlessAdminFor(userOf(req), me) }));
+    //  needed(#5167) — 이 서버의 자동 정리가 **따로 받은 자격으로만** 도나(매니지드 중앙 샌드박스). 처음 설정 AI 연결 화면이
+    //   이 값이 참일 때만 그 자격을 함께 받는다 — 자체호스팅은 노드의 로그인 프로필로 돌아 따로 받을 것이 없다.
+    const { sandboxAvailable } = await import("../node/sandbox-task.js");
+    res.json({ ...(await headlessStatusFor({ memberId: me, isAdmin: await headlessAdminFor(userOf(req), me) })), needed: sandboxAvailable() });
   }));
   //  [이 워크스페이스의 실행 멤버로 정하기] — 연결은 됐는데 실행 멤버가 비어 있을 때 사람이 스스로 마무리한다.
   //   대상은 언제나 요청한 본인이다(몸통의 멤버 id 를 읽지 않는다 — claimRunnerFromScreen 머리말).

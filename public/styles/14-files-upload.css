@@ -161,6 +161,9 @@
 .bgup-text { flex: 1; min-width: 0; }
 .bgup-btn { flex: none; font: inherit; font-size: 12px; color: var(--ink-sub); background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
 .bgup-btn:hover { color: var(--ink); border-color: var(--muted); }
+/* #5167 둘째 줄 — 다 올린 뒤 리브·정리 단계. 링크도 단추와 같은 모양이다. */
+.bgup-setup { margin-top: 6px; }
+a.bgup-btn { text-decoration: none; }
 .bgup-track { margin-top: 7px; height: 3px; border-radius: 2px; background: var(--bg-tint); overflow: hidden; }
 .bgup-track i { display: block; height: 100%; background: var(--blue); transition: width .3s ease; }
 @media (max-width: 600px) { .bgup { left: 16px; right: 16px; width: auto; } }

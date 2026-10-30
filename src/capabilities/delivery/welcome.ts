@@ -22,6 +22,7 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
+import type { SetupWelcome } from "../../org/liv/setup-status.js";
 
 /** 갈래 후보 상한 — 서랍이 열 개를 넘으면 고르는 일이 일이 된다. */
 const MAX_DRAWERS = 10;
@@ -260,6 +261,18 @@ export const welcomeCapabilities: Capability[] = [
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       return welcomeSnapshot(userId);
+    }),
+
+  //  (#5167) 처음 설정에서 올린 파일이 지식이 되기까지의 단계 — 화면 구석의 진행 띠가 이것만 말한다(org/liv/setup-status.ts).
+  //   setup:null = 말할 것 없음(파일을 안 올렸다 · 리브가 오지 않는 갈래). 못 읽으면 오류로 답한다 — 화면은 단계를 그대로 두고 다시 묻는다.
+  restRead("me_welcome_setup", "처음 설정 뒤 정리 단계",
+    "처음 설정에서 올린 파일이 지식이 되기까지 지금 어느 단계인가 — 올리는 중 · 리브가 곧 시작 · 규칙 세우는 중 · 정리 중(남은 수) · 자격 승인 필요 · 끝 · 멈춤.",
+    [{ method: "GET", paths: ["/api/ui/me/welcome/setup"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile } = await import("../../org/store.js");
+      return { setup: await welcomeSetup(userId, (await getLivProfile(userId)).welcome ?? null) };
     }),
 
   // ── ② LLM 분석 ───────────────────────────────────────────────────────────
@@ -593,6 +606,11 @@ export const welcomeCapabilities: Capability[] = [
           connect_at: input.connect === true ? nowIso : null, harnesses: loggedAi.length ? loggedAi : (priorWelcome?.harnesses ?? null) },
         onboarded: true,
       });
+      //  (#5167) 파일 갈래인데 올리기가 이미 끝났다 — 리브를 정비 주기(매니지드 5분)까지 기다리게 하지 않고 지금 연다.
+      //   스윕이 판정한다(같은 함수 · 같은 멱등 표식). 늦거나 실패해도 다음 정비가 같은 일을 한다 — 기다리지 않는다.
+      if (profile.welcome?.flow === "files" && profile.welcome?.upload_done_at) {
+        void import("../../org/liv/second-turn-sweep.js").then(({ kickLivSecondTurn }) => kickLivSecondTurn()).catch(() => { /* 다음 정비가 한다 */ });
+      }
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.
       //  ⚠ 비치명: 못 지워도 끝난 것은 끝난 것이다(GET 이 done 일 때 progress 를 내주지 않는다).
       const { setLivWelcomeProgress } = await import("../../org/store.js");
@@ -717,3 +735,26 @@ export async function welcomeSnapshot(userId: string) {
   };
 }
 export type WelcomeSnapshot = Awaited<ReturnType<typeof welcomeSnapshot>>;
+
+/**
+ * (#5167) 처음 설정 뒤 단계 — 판정은 setupStatus(순수), 여기는 재료만 읽는다. 파일을 안 올렸거나 안 끝났으면 아무것도 읽지 않는다.
+ *  화면 구석 띠가 몇 시간 폴링하는 자리라 처음 설정 현황(welcomeSnapshot — 자료 200건·집계)과 떼어 따로 연다(GET /api/ui/me/welcome/setup).
+ *  · 남은 자료 = 올린 파일을 받는 켜진 정리마다의 남은 수 합(증류기 배정과 같은 질의). 그런 정리가 없으면 null.
+ *  · 자격 막힘 = 이 사람 자격 때문에 정리 잡이 멈춘 흔적이 있고, 그 뒤 되살린 자격이 없다(headlessStatusFor 의 failure — 연결 뒤 실패만 남는다).
+ */
+export async function welcomeSetup(userId: string, welcome: SetupWelcome | null) {
+  const { setupStatus } = await import("../../org/liv/setup-status.js");
+  if (!welcome?.done_at || !welcome.upload_started_at) return null;
+  if (!welcome.distill_at) return setupStatus({ welcome, backlog: null, credentialBlocked: false });
+  const { listDistillers, countDistillerBacklog } = await import("../../org/distill/distiller.js");
+  const { headlessStatusFor } = await import("../../org/credentials/headless-connect.js");
+  //  ⚠ 못 읽은 것을 0 으로 접지 않는다 — 0 은 «끝» 이라 띠가 «정리했어요» 를 말하고 감시를 멈춘다(격리 리뷰 2026-10-30). 실패는 던져
+  //   라우트가 오류로 답하고, 화면은 그 단계를 그대로 둔 채 다시 묻는다.
+  const [all, hs] = await Promise.all([listDistillers(), headlessStatusFor({ memberId: userId, isAdmin: false })]);
+  //  올린 파일(local_file)을 받는 켜진 정리만 센다 — 담당 종류가 비었으면(catch-all) 받는다. 슬랙 레인이 비었다고 «끝» 이 아니다.
+  const on = all.filter((d) => d.enabled && (!d.match_kinds?.length || d.match_kinds.includes("local_file")));
+  const backlog = on.length ? (await Promise.all(on.map((d) => countDistillerBacklog(d, all)))).reduce((a, b) => a + b, 0) : null;
+  const rows = hs.harnesses;
+  const credentialBlocked = rows.some((h) => !!h.failure) && !rows.some((h) => h.connected && !h.failure);
+  return setupStatus({ welcome, backlog, credentialBlocked });
+}

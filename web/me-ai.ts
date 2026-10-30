@@ -400,6 +400,8 @@ function myAiSection(detail) {
 }
 
 export {
+  //  #5167 — 처음 설정 «AI 연결» 장면이 «사람 없이 도는 작업» 자격 칸을 **이 부품 그대로** 쓴다(발급 규칙이 한 곳에만 있게).
+  headlessParts,
   //  #1898 — 내 프로필 창([AI 계정 연결] 탭)이 **이 카드를 그대로** 쓴다. 로그인 세션을 여는 규칙
   //  (claude 는 그 하네스로 · codex 는 셸 + device-auth)이 여기 한 곳에만 있어야 한다.
   myAiAccountsCard,
