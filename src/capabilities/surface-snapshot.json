@@ -1493,7 +1493,7 @@
   "rest": [
    "POST /api/ui/me/liv-secret-ask"
   ],
-  "input_hash": "8a95e0e48664c1f0"
+  "input_hash": "faddfe6281848cbd"
  },
  {
   "name": "me_liv_put_secret",

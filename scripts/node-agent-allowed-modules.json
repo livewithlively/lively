@@ -37,6 +37,7 @@
   "dist/org/credentials/git-auth-prepare.js",
   "dist/org/credentials/git-credential-materialize.js",
   "dist/org/credentials/github-repo-url.js",
+  "dist/org/credentials/member-secret-rules.js",
   "dist/org/delivery/liv-secret.js",
   "dist/org/ingest/redact.js",
   "dist/org/liv/folder.js",

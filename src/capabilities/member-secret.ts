@@ -7,8 +7,9 @@ import { HttpError } from "./rest-util.js";
 import { secretsEnabled } from "../org/credentials/secret-box.js";
 import {
   GATEWAY_OWNER, memberOwner, listMemberSecretsPublic, listSecretsByKindPublic,
-  setMemberSecret, deleteMemberSecret, getMemberSecret,
+  setMemberSecret, deleteMemberSecret, getMemberSecret, type MemberSecretPublic,
 } from "../org/credentials/member-secret-store.js";
+import { selfCredentialTargetVerdict } from "../org/credentials/member-secret-rules.js";
 import { verifyCredential, verifierExists } from "../org/credentials/credential-verify.js";
 import { CODEX_AUTH_KIND, CREDENTIAL_SECRET_MAX, parseCodexAuth } from "../org/credentials/codex-auth.js";
 import { lastAuthFailureFor } from "../node/auth-failure-response.js"; // #1675 ③ 자격 건강 상태
@@ -63,6 +64,53 @@ function metaOf(v: unknown): Record<string, unknown> {
   return v as Record<string, unknown>;
 }
 
+/**
+ * 본인 금고에 자격을 넣는 **유일한 길** — me_credential_set 과 리브 안전 입력칸(me_liv_put_secret)이 같이 부른다.
+ *  두 입구가 따로 저장하면 값 검사·암호화 키 확인·저장 뒤 부작용(Zotero 도구 묶음) 중 하나가 한쪽에서 빠진다.
+ *  owner 는 인자로 받지 않는다 — 언제나 memberId 본인 칸이다(남의 칸에 넣는 건 관리자 org_credential_set 의 일).
+ *  meta 는 교체다(병합 아님). 값만 바꾸려는 호출자는 기존 meta·label 을 읽어 넘긴다.
+ */
+export async function saveOwnCredential(
+  memberId: string,
+  i: { kind: unknown; scope_key?: unknown; secret?: unknown; meta: Record<string, unknown>; label: string | null },
+): Promise<{ credential: MemberSecretPublic }> {
+  const v = selfCredentialTargetVerdict(i.kind, i.scope_key);
+  if (!v.ok) {
+    if (v.reason === "no-kind") throw new HttpError(400, "kind 는 필수입니다");
+    // ⚠ aws_role_arn 은 멤버 개인 등록 금지(관리자 org_credential 전용) — 게이트웨이 공용 신원이 가정할 role 을
+    //  멤버가 지정하면 confused-deputy/권한상승. AWS 단기자격은 me_aws_credentials 로 발급받는다(role 은 org 만).
+    if (v.reason === "admin-only") {
+      throw new HttpError(403, `${String(i.kind).trim().toLowerCase()} 은 개인 자격으로 등록할 수 없습니다 — 관리자가 통합 자격(org)으로만 등록합니다. AWS 단기자격은 me_aws_credentials 로 발급받으세요.`);
+    }
+    throw new HttpError(400, v.reason === "bad-kind"
+      ? "자격 kind 형식 오류(소문자·숫자·_ 1~40자)"
+      : "자격 scope_key 형식 오류(영숫자·._:- 120자 이내)");
+  }
+  //  ⚠ 형식·길이 검사가 **암호화 키 확인보다 먼저**다 — 틀린 값은 어떤 배포에서든 틀린 값이다.
+  const secret = validateMemberSecret(v.kind, i.secret);
+  if (secret !== null && secret.trim() && !secretsEnabled()) {
+    throw new HttpError(400, "시크릿 암호화 키(CONNECTOR_SECRET_KEY) 미설정 — 자격을 저장할 수 없습니다");
+  }
+  const owner = memberOwner(memberId);
+  const cred = await setMemberSecret(owner, v.kind, v.scope_key, { secret, meta: i.meta, label: i.label }, memberId);
+  //  키를 저장한 순간 그 키를 쓰는 AI 도구가 있게 한다 — Zotero 는 원격 MCP 가 없어 이 REST 묶음이 «내 계정으로 직접 사용»의 전부다.
+  //   없으면 키 칸은 수집에만 쓰이는 반쪽 표면이 된다(피그마 #1881 이 한 번 겪은 «토큰 칸은 있는데 도구 0개»).
+  //   Outlook 이 연결 직후 묶음을 심는 것(#4211)과 같은 함수 — 관리자가 꺼 둔 도구는 되살리지 않는다. best-effort.
+  if (v.kind === "zotero_token" && secret) {
+    try { await ensureHttpToolPresetGroup("zotero", { actor: memberId, source: "zotero-key" }); }
+    catch (e) { logger.warn({ err: (e as Error)?.message }, "Zotero 도구 묶음 준비 실패(무시) — org_http_tool_preset_apply {key:'zotero'} 로 다시 심을 수 있다"); }
+    //  Zotero 도구는 개인 라이브러리를 userID 로 부른다(users/<id>/…). 그 id 를 아는 길은 `/keys/current` 뿐인데 그 응답엔
+    //   키 원문이 실려 도구로 낼 수 없다 — 그래서 저장하는 이 자리에서 한 번 물어 비밀 아닌 meta 에 id·이름만 남긴다.
+    const who = await zoteroKeyOwner(secret).catch(() => null);
+    if (who) {
+      const again = await setMemberSecret(owner, v.kind, v.scope_key,
+        { secret, meta: { ...i.meta, user_id: who.user_id, username: who.username }, label: i.label }, memberId);
+      return { credential: again };
+    }
+  }
+  return { credential: cred };
+}
+
 const SET_INPUT = {
   kind: z.string().describe(KIND_DESC),
   scope_key: z.string().optional().describe("같은 kind 다중 대상 구분(예 gitlab host). 단일이면 생략"),
@@ -98,38 +146,9 @@ const meCredentialSet: Capability = {
   handler: async (input, user) => {
     if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
     const i = (input ?? {}) as Record<string, unknown>;
-    if (!s(i.kind)) throw new HttpError(400, "kind 는 필수입니다");
-    // ⚠ aws_role_arn 은 멤버 개인 등록 금지(관리자 org_credential 전용) — 게이트웨이 공용 신원이 가정할 role 을
-    //  멤버가 지정하면 confused-deputy/권한상승. AWS 단기자격은 me_aws_credentials 로 발급받는다(role 은 org 만).
-    if (s(i.kind).toLowerCase() === "aws_role_arn") {
-      throw new HttpError(403, "aws_role_arn 은 개인 자격으로 등록할 수 없습니다 — 관리자가 통합 자격(org)으로만 등록합니다. AWS 단기자격은 me_aws_credentials 로 발급받으세요.");
-    }
-    //  ⚠ 형식·길이 검사가 **암호화 키 확인보다 먼저**다 — 틀린 값은 어떤 배포에서든 틀린 값이다.
-    const secret = validateMemberSecret(s(i.kind), i.secret);
-    if (secret !== null && secret.trim() && !secretsEnabled()) {
-      throw new HttpError(400, "시크릿 암호화 키(CONNECTOR_SECRET_KEY) 미설정 — 자격을 저장할 수 없습니다");
-    }
-    const cred = await setMemberSecret(
-      memberOwner(user.userId), i.kind, i.scope_key,
-      { secret, meta: metaOf(i.meta), label: s(i.label, 200) || null },
-      user.userId,
-    );
-    //  키를 저장한 순간 그 키를 쓰는 AI 도구가 있게 한다 — Zotero 는 원격 MCP 가 없어 이 REST 묶음이 «내 계정으로 직접 사용»의 전부다.
-    //   없으면 키 칸은 수집에만 쓰이는 반쪽 표면이 된다(피그마 #1881 이 한 번 겪은 «토큰 칸은 있는데 도구 0개»).
-    //   Outlook 이 연결 직후 묶음을 심는 것(#4211)과 같은 함수 — 관리자가 꺼 둔 도구는 되살리지 않는다. best-effort.
-    if (s(i.kind).toLowerCase() === "zotero_token" && secret) {
-      try { await ensureHttpToolPresetGroup("zotero", { actor: user.userId, source: "zotero-key" }); }
-      catch (e) { logger.warn({ err: (e as Error)?.message }, "Zotero 도구 묶음 준비 실패(무시) — org_http_tool_preset_apply {key:'zotero'} 로 다시 심을 수 있다"); }
-      //  Zotero 도구는 개인 라이브러리를 userID 로 부른다(users/<id>/…). 그 id 를 아는 길은 `/keys/current` 뿐인데 그 응답엔
-      //   키 원문이 실려 도구로 낼 수 없다 — 그래서 저장하는 이 자리에서 한 번 물어 비밀 아닌 meta 에 id·이름만 남긴다.
-      const who = await zoteroKeyOwner(secret).catch(() => null);
-      if (who) {
-        const again = await setMemberSecret(memberOwner(user.userId), i.kind, i.scope_key,
-          { secret, meta: { ...metaOf(i.meta), user_id: who.user_id, username: who.username }, label: s(i.label, 200) || null }, user.userId);
-        return { credential: again };
-      }
-    }
-    return { credential: cred };
+    return saveOwnCredential(user.userId, {
+      kind: s(i.kind), scope_key: i.scope_key, secret: i.secret, meta: metaOf(i.meta), label: s(i.label, 200) || null,
+    });
   },
 };
 // #1881 F9 — 붙여넣은 토큰이 **실제로 되는지** 저장 직후 한 번 물어본다.
