@@ -10,18 +10,24 @@
 //   ② **오른쪽 = 고른 페이지 하나만.** 페이지마다 머리(제목 · 훅 이벤트 이름 · 스위치) + 2단 상자. 한 화면 안에 든다.
 //   ③ 주소는 `#/context/deliver/<page>` — 목차를 눌러도 셸을 다시 그리지 않고 제자리에서 바꾸며 주소만 맞춘다(runs 필터와 같은 수법).
 //  저장 경로(API)는 하나도 안 바꿨다 — 바뀐 건 화면이다(#837 불변식).
+//
+//  #5159 후속(원준 2026-10-30) — 「MCP 도구」 묶음을 더했다(기본 제공 · 사내 API · 외부 도구 서버). 목차의 두 축은
+//   «하네스가 시점마다 자동으로 실행하는 것(훅 — 세션 주입)» 과 «AI 가 필요할 때 골라 부르는 것(MCP 도구)» 이다.
+//   새 분류 축은 만들지 않았다 — 도구 쪽 세 칸은 관리 ▸ AI 도구의 서브탭(출처) 그대로다. 왜 여기인가는 context-tools.ts 머리.
 import { api, el, hasScope, replaceKids } from './core.js';
-import { injectionMap, injectionStatus, type InjectionMoment } from './admin-injection.js';
+import { injectionMap, injectionStatus, otherHookCount, type InjectionMoment } from './admin-injection.js';
+import { renderToolPage, toolsStatus, type ToolPage } from './context-tools.js';
 import { embeddingsEditor } from './admin-embeddings.js';
 import { visibilityAxesPanel } from './visibility-axes.js';
 import { sourceVisPolicyPanel } from './source-vis-policy.js';
 import { loadAdmin } from './admin-rerender.js';
 import { dlvBox, dlvHead } from './lib/dlv.js';
 
-export type DeliverPage = InjectionMoment | 'search' | 'access';
+export type DeliverPage = InjectionMoment | ToolPage | 'search' | 'access';
 
-type NavItem = { key: DeliverPage; label: string; admin?: boolean; flow?: boolean };
-const GROUPS: Array<{ label: string; admin?: boolean; items: NavItem[] }> = [
+//  admin = 관리자만(GET 부터 관리자 몫) · runtime = 훅·툴 관리 권한(org overview 의 canRuntime — 도구 목록은 이 권한에만 온다).
+type NavItem = { key: DeliverPage; label: string; admin?: boolean; runtime?: boolean; flow?: boolean };
+const GROUPS: Array<{ label: string; admin?: boolean; runtime?: boolean; items: NavItem[] }> = [
   {
     label: '세션 주입',
     items: [
@@ -30,6 +36,15 @@ const GROUPS: Array<{ label: string; admin?: boolean; items: NavItem[] }> = [
       { key: 'stop', label: '세션 종료', flow: true },
       { key: 'kit', label: '키트 자동 업데이트' },
       { key: 'events', label: '기타 이벤트' },
+    ],
+  },
+  {
+    //  AI 가 골라 부르는 도구 — 관리 ▸ AI 도구의 세 서브탭과 같은 칸(출처). 등록·자격·allowlist 는 거기 남는다.
+    label: 'MCP 도구', runtime: true,
+    items: [
+      { key: 'builtin', label: '기본 제공 도구', runtime: true },
+      { key: 'api', label: '사내 API 도구', runtime: true },
+      { key: 'mcp', label: '외부 도구 서버', admin: true },
     ],
   },
   {
@@ -52,12 +67,15 @@ type Status = { on: boolean | null; meta: string };
 export async function renderDeliver(host: HTMLElement, first: DeliverPage): Promise<void> {
   const data = await loadAdmin().catch(() => ({} as any));
   const isAdmin = hasScope('admin');
-  const visible = (i: NavItem) => !i.admin || isAdmin;
-  let cur: DeliverPage = DELIVER_PAGES.some((i) => i.key === first && visible(i)) ? first : 'start';
+  const isRuntime = !!data.canRuntime;
+  const allowed = (i: NavItem) => (!i.admin || isAdmin) && (!i.runtime || isRuntime);
+  let cur: DeliverPage = DELIVER_PAGES.some((i) => i.key === first && allowed(i)) ? first : 'start';
+  //  「기타 이벤트」는 세 시점 밖의 훅이 있을 때만 선다 — 지금 그 페이지에 있으면(주소로 들어왔으면) 그대로 둔다.
+  const visible = (i: NavItem) => allowed(i) && (i.key !== 'events' || otherHookCount(data) > 0 || i.key === cur);
 
-  // 목차 상태 — 주입 시점은 관리 데이터에서 바로, 검색·공개범위는 자기 API 에서 뒤늦게(목차를 늦추지 않는다).
+  // 목차 상태 — 주입 시점·도구는 관리 데이터에서 바로, 검색·공개범위는 자기 API 에서 뒤늦게(목차를 늦추지 않는다).
   const status: Partial<Record<DeliverPage, Status>> = {};
-  const fillInjection = () => Object.assign(status, injectionStatus(data));
+  const fillInjection = () => Object.assign(status, injectionStatus(data), toolsStatus(data));
   fillInjection();
 
   const nav = el('nav', { class: 'dlv-nav', 'aria-label': 'AI 주입 설정' });
@@ -65,7 +83,7 @@ export async function renderDeliver(host: HTMLElement, first: DeliverPage): Prom
   replaceKids(host, el('div', { class: 'dlv' }, nav, panel));
 
   function paintNav() {
-    replaceKids(nav, ...GROUPS.filter((g) => !g.admin || isAdmin).map((g) => el('div', { class: 'dlv-nav-g' },
+    replaceKids(nav, ...GROUPS.filter((g) => (!g.admin || isAdmin) && (!g.runtime || isRuntime)).map((g) => el('div', { class: 'dlv-nav-g' },
       el('div', { class: 'dlv-nav-h', text: g.label }),
       ...g.items.filter(visible).map((i) => {
         const s = status[i.key];
@@ -133,6 +151,7 @@ export async function renderDeliver(host: HTMLElement, first: DeliverPage): Prom
       void sourceVisPolicyPanel(svpHost, { bare: true, onChange: refresh });
       return;
     }
+    if (cur === 'builtin' || cur === 'api' || cur === 'mcp') { renderToolPage(panel, cur, data, onChange); return; }
     injectionMap(panel, data, { only: cur, onChange });
   }
 
