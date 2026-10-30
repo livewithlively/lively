@@ -32,3 +32,16 @@ test("★★ 리브 킥오프 세션은 보기 판정(chatHome)에서 대화가 
   assert.match(CHAT, /setMode\(chatFirstView \|\| warmFirst \? 'chat' : 'term'\);/, "열 때의 기본 보기가 chatFirstView 를 안 본다");
   assert.match(CHAT, /mode === 'chat' && !chatHome\(\) && String\(target\.raw\?\.chatMode \|\| ''\) === 'tmux' && hasTerm\(\)\) setMode\('term'\)/, "목록 갱신이 chatHome 과 무관하게 터미널로 되돌린다");
 });
+
+//  원준님 2026-10-30 «터미널로 보기를 눌러도 조금 있으면 다시 대화창이 됨» — 킥오프 세션은 chatHome() 이 참이라, 사람이 연 터미널을
+//   «고른 화면»(modeChosen)으로 적지 않으면 다음 목록 갱신(`!modeChosen && mode === 'term' && chatHome()`)이 대화창으로 되돌린다.
+test("★★ 사람이 누른 «터미널로»·멈춘 세션의 자동 터미널은 고른 화면으로 적는다 — 목록 갱신이 대화창으로 되돌리지 않는다", () => {
+  assert.match(CHAT, /function openTermChosen\(\): void \{ modeChosen = true; setMode\('term'\); \}/, "고른 터미널을 적는 함수가 없다");
+  //  빈 대화 안내의 [터미널로 보기] · 전달 대기의 [터미널 열기] · 터미널이 있어야 하는 동작(termAct) · 멈춘 세션의 자동 열기
+  assert.match(CHAT, /text: canType\(\) \? '터미널로 보기' : '터미널에서 이유 보기', onclick: openTermChosen \}/, "★ 빈 대화 안내의 [터미널로 보기]가 고른 화면으로 안 적는다");
+  assert.match(CHAT, /text: '터미널 열기', onclick: openTermChosen \}/, "전달 대기의 [터미널 열기]가 고른 화면으로 안 적는다");
+  assert.match(CHAT, /if \(mode !== 'term'\) openTermChosen\(\);/, "termAct 가 고른 화면으로 안 적는다");
+  assert.match(CHAT, /autoTermOpened = true;\n\s*openTermChosen\(\);/, "멈춘 세션의 자동 터미널이 곧 대화창으로 되돌려진다");
+  //  되돌리는 자리는 modeChosen 을 본다(이 전제가 깨지면 위 적기가 소용없다).
+  assert.match(CHAT, /if \(!modeChosen && mode === 'term' && chatHome\(\)\) setMode\('chat'\);/, "목록 갱신의 대화창 되돌리기가 고른 화면을 안 본다");
+});

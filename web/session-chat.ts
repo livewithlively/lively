@@ -1301,6 +1301,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (held && held.isConnected && document.activeElement !== held) held.focus({ preventScroll: true });
   }
 
+  /** 사람이 누른 «터미널로» — 고른 화면으로 적는다(modeChosen). ⚠ setMode('term') 만 부르면 다음 목록 갱신이 chatHome()(킥오프 세션)을 보고
+   *   곧바로 대화창으로 되돌린다(원준님 2026-10-30 «터미널로 보기를 눌러도 조금 있으면 다시 대화창이 됨»). [보기] 메뉴와 같은 규약이다. */
+  function openTermChosen(): void { modeChosen = true; setMode('term'); }
   function setMode(m: 'term' | 'chat'): void {
     //  #4794 — 화면을 누가 정했다(사람 · 다른 갈래) — 숨겨 붙이던 판은 여기서 끝난다.
     const wasWarm = !!termWarm;
@@ -1513,7 +1516,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   /** 터미널이 있어야 하는 동작 — 닫혀 있으면 먼저 연다(막다른 버튼 금지). 아직 안 뜬 프레임이면 뜰 때까지 담아 둔다. */
   function termAct(cmd: string): void {
     if (!hasTerm()) { toast('이 세션에는 터미널이 없어요.'); return; }
-    if (mode !== 'term') setMode('term');
+    if (mode !== 'term') openTermChosen();
     if (termReady) termSend(cmd); else termQueue.push({ cmd });
   }
   const onTermMsg = (ev: MessageEvent): void => {
@@ -2148,7 +2151,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (stuck) {
       pd.state.replaceChildren(
         el('span', { text: '전달 대기 중 — 입력창이 아직 안 떠요. 로그인이 필요한 상태일 수 있어요. ' }),
-        ...(hasTerm() ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => setMode('term') })] : []));
+        ...(hasTerm() ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: openTermChosen })] : []));
       maybeAutoOpenTerminal();
       return;
     }
@@ -2162,7 +2165,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (mode === 'term') { autoTermOpened = true; return; }        // 이미 터미널이 떠 있다 — 로그인 화면이 보인다
     if (curUuid || recs.some((r) => r.evs.length)) return;        // 대화가 보이고 있다 — 알림 줄이면 충분
     autoTermOpened = true;
-    setMode('term');
+    openTermChosen();   // 로그인 화면을 보라고 연 것이다 — 목록 갱신이 대화창으로 되돌리면 그 화면을 다시 잃는다
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
   }
   /** #3689 — 오래 못 닿는 세션을 사람이 되살린다. 복원은 지금 서빙 노드에 다시 앉힌다(routes.ts) — #4694 이후 대개 **같은 id** 라
@@ -2367,7 +2370,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //   세션에만 버튼을 뒀는데, 정작 그 안내가 필요한 것은 **죽은 세션**이다(래퍼가 사유를 pane 에 적어 두고
       //   세션은 살려 둔다 — catalog.ts). 말만 하고 길이 없으면 막다른 길이다.
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
-        hasTerm() && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: () => setMode('term') }) : null));
+        hasTerm() && !chatFirst() ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: canType() ? '터미널로 보기' : '터미널에서 이유 보기', onclick: openTermChosen }) : null));
       paintState();
       // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
       if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
