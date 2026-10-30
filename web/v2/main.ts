@@ -10,6 +10,7 @@
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { reviewResumeTarget } from './review-resume.js';   // #4632 ③ 앱 화면 새로고침 복귀
 import { renderOnboarding, onboardingDone, markWelcomeSeen } from './onboarding.js'; // #/welcome 처음 설정(#1813·#2171)
+import { resumeSetupWatch } from './setup-watch.js'; // #5167 처음 설정 뒤 정리 진행 띠
 import { outlookAdminConsentBox } from './outlook-admin.js';   // #4211 — 관리자 허용에 막힌 복귀 화면의 다음 한 걸음
 import { $view, api, el, state, takeShellSwitch, toast } from '../core.js';
 import { EMBEDDED } from './embed.js';   // #1898 — 끼워 넣은 판은 셸 전환 도장을 소비하지 않는다
@@ -930,6 +931,8 @@ export async function bootV2(): Promise<void> {
   //   실린 우리 주소(web-url.ts 가 embed=1 을 붙인다)가 먼저 부팅하면 그 도장을 대신 소비해 창이
   //   **프레임 안에** 뜬다 — 바깥 사람은 아무것도 못 보고 도장만 사라진다.
   if (!EMBEDDED && takeShellSwitch()) openMeModal({ tab: 'look' });
+  //  (#5167) 처음 설정에서 올린 파일이 지식이 되기까지 — 이 브라우저가 그 처음 설정을 끝냈으면(표지) 새로고침 뒤에도 구석 띠로 잇는다.
+  if (!EMBEDDED) resumeSetupWatch();
 }
 
 /**

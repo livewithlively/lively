@@ -126,10 +126,34 @@ await t("F3 이 서버에서 띄울 수 있는(설치된) AI 만 줄로 — inst
   assert.match(OB, /aiNone: '/, "띄울 AI 가 하나도 없을 때 할 말이 없다");
 });
 
-await t("F4 [다음]은 연결된 AI 가 하나라도 있을 때만 켜진다", () => {
-  assert.match(AI, /onRows: \(anyConnected\) => \{ next\.hidden = false; next\.disabled = !anyConnected; S\.serverAi = anyConnected; save\(\); \}/, "연결 없이 [다음]이 켜진다 — 외부 앱 연결이 AI 없이 시작된다");
-  assert.match(OAI, /hooks\.onRows\(\[\.\.\.items\.values\(\)\]\.some\(\(it\) => it\.a\.loggedIn === true\)\)/, "«연결됨» 판정이 loggedIn === true 가 아니다(모름을 연결로 접는다)");
+//  F4(#5167 개정) — [다음]은 «다 된» AI 가 있어야 켠다. 매니지드는 자동 정리가 따로 받은 자격으로만 돌아, 로그인만 하고 넘어간 사람은
+//   리브가 규칙을 다 세워도 정리 잡이 자격 없음으로 멈췄다(2026-10-30 lively-agent-5·-2 실측). 판정 표(aiStepReady):
+//   R1 로그인 없음 → 안 켠다 · R2 클로드 로그인 · 현황 모름 → 안 켠다 · R3 클로드 로그인 · 자격 불필요(자체호스팅) → 켠다
+//   R4 클로드 로그인 · 자격 필요 · 없음 → 안 켠다 · R5 같은데 승인함 → 켠다 · R6 화면에서 못 받는 AI(제미나이)만 로그인 → 켠다(막아도 해 줄 게 없다)
+//   R7 클로드 미승인 · 코덱스 승인 → 켠다(하나면 된다) · R8 로그인 모름(null) → 안 켠다
+await t("F4 [다음]은 다 된 AI 가 하나라도 있을 때만 켜진다 — 로그인 + (필요하면) 자동 정리 승인(#5167)", () => {
+  assert.match(AI, /onRows: \(ready\) => \{ next\.hidden = false; next\.disabled = !ready; S\.serverAi = ready; save\(\); \}/, "다 되지 않았는데 [다음]이 켜진다");
+  assert.match(OAI, /hooks\.onRows\(ready\(\)\)/, "줄을 그린 뒤 판정을 안 다시 잰다");
+  assert.doesNotMatch(OAI, /hooks\.onRows\(\[\.\.\.items\.values\(\)\]\.some\(\(\w+\) => \w+\.a\.loggedIn === true\)\)/, "★ 옛 판정(로그인만)이 남아 있다");
   assert.match(OB, /<button class="ob-btn ob-btn-pri" id="aiNext" disabled>/, "처음부터 켜져 있다");
+  const m = OAI_RAW.match(/export function aiStepReady\([^)]*\): boolean \{([\s\S]*?)\n\}/);
+  assert.ok(m, "aiStepReady 를 못 찾았다 — 검사가 헛돈다");
+  type Row = { key: string; loggedIn: boolean | null };
+  type Hl = { needed: boolean; ok: Set<string> } | null;
+  const ready = new Function("HEADLESS_INLINE", "rows", "hl", m![1]!) as (h: Record<string, true>, rows: Row[], hl: Hl) => boolean;
+  const H = { claude: true, codex: true } as Record<string, true>;
+  const need = (...ok: string[]): Hl => ({ needed: true, ok: new Set(ok) });
+  assert.equal(ready(H, [{ key: "claude", loggedIn: false }], need()), false, "R1");
+  assert.equal(ready(H, [{ key: "claude", loggedIn: true }], null), false, "R2 현황을 모르는데 켠다");
+  assert.equal(ready(H, [{ key: "claude", loggedIn: true }], { needed: false, ok: new Set() }), true, "R3 자체호스팅을 막는다");
+  assert.equal(ready(H, [{ key: "claude", loggedIn: true }], need()), false, "★ R4 자동 정리 자격 없이 넘어간다");
+  assert.equal(ready(H, [{ key: "claude", loggedIn: true }], need("claude")), true, "R5");
+  assert.equal(ready(H, [{ key: "antigravity", loggedIn: true }], need()), true, "R6 화면에서 못 받는 AI 를 막는다");
+  assert.equal(ready(H, [{ key: "claude", loggedIn: true }, { key: "codex", loggedIn: true }], need("codex")), true, "R7");
+  assert.equal(ready(H, [{ key: "claude", loggedIn: null }], need("claude")), false, "R8 모름을 로그인으로 접는다");
+  //  승인 칸은 [내 AI 계정]과 같은 부품(발급 규칙이 한 곳) — 묻는 곳은 needed 를 싣는 현황 라우트.
+  assert.match(OAI, /headlessParts\(row, /, "승인 칸을 따로 지어낸다");
+  assert.match(OAI, /api\('\/api\/ui\/me\/headless'\)/, "자동 정리 자격 현황을 안 묻는다");
 });
 
 await t("F5 «PC에서 쓰는 AI로» — 다음 장면으로 가고, [연결할게요]가 서버 세션 대신 «쓰는 AI 에서 하기» 를 그린다", () => {
@@ -236,6 +260,96 @@ await t("F8·G2 격리 박스 — 로그인 전에 그 사람 서버 계정을 �
   const hw = hl.indexOf("await awaitMemberSeat(seatDeps(req));"), hs = hl.indexOf("const seat = await loginSeat(req);");
   assert.ok(hw > 0 && hs > hw, "★ 헤드리스 로그인 시작이 계정 준비를 안 기다린다 — 같은 틈");
   assert.match(prep, /if \(state === 'preparing' \|\| \(!state && sawPreparing\)\) \{\s*sawPreparing = true;/, "★ «준비하는 중» 뒤 한 번 못 물으면 목록을 그린다(거짓 «공용 계정» 이 되살아난다)");
+});
+
+// ── P. (#5167) 처음 설정 뒤 «올린 파일이 지식이 되기까지» — 진행 띠 · 리브 즉시 열기 · 리브보다 먼저 정리하지 않기 ─────────────
+//  계기: 2026-10-30 lively-agent-5(75개 → 자료 11 · mp3 64)·agent-2(295개) 실측. 띠가 «다 올렸어요» 뒤 사라지고, 리브는 3분 21초 말없이 기다렸고,
+//   정리 잡은 자격 없음으로 멈춘 줄 아무도 몰랐다. 단계 판정은 org/liv/setup-status.test 가 잰다 — 여기는 화면 문구와 배선.
+//   P1 단계마다 둘째 줄: waiting·working·organizing·needs-ai 는 띠를 걷지 않는다(keep) · needs-ai 는 [내 AI 계정]으로 · done·stopped 는 걷어도 된다
+//   P2 이 브라우저가 올리는 중이면 uploading 은 첫째 줄이 말한다(둘째 줄 없음) · 아니면 이어 올리는 법을 말한다
+//   P3 남은 자료 수를 그대로 말한다 · 단계가 없으면(null) 걷는다
+//   P4 올리기 줄 — 자료로 안 만든 것이 있으면 그 수와 «파일은 그대로» 를 말한다 · 없으면 붙이지 않는다
+//   P5 배선 — 처음 설정 끝 → 띠 시작 · 셸 부팅 → 표지로 이어 보기 · 반영·«다 올렸다» → 리브 즉시 판정 · 증류 → 처음 설정 대기면 쉰다
+const SW_RAW = readFileSync(new URL("../../../web/v2/setup-watch.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+const BG_RAW = readFileSync(new URL("../../../web/v2/bg-upload.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
+const fnBody = (src: string, sig: RegExp): string => {
+  const m = src.match(sig);
+  assert.ok(m, `${sig} 를 못 찾았다 — 검사가 헛돈다`);
+  return m![1]!;
+};
+type Line = { text: string; href?: string; label?: string; keep: boolean } | null;
+const setupLine = new Function("s", "uploadingHere",
+  fnBody(SW_RAW, /export function setupLine\(s: SetupStatus \| null, uploadingHere: boolean\): BgSetupLine \| null \{([\s\S]*?)\n\}/)) as
+  (s: { phase: string; session_id: string | null; backlog: number | null; note: string | null } | null, here: boolean) => Line;
+const S = (phase: string, backlog: number | null = null) => ({ phase, session_id: "box-x-1", backlog, note: null });
+
+await t("P1 단계마다 둘째 줄 — 진행 중이면 띠를 안 걷는다 · 자격이 막히면 [내 AI 계정]으로", () => {
+  for (const ph of ["waiting", "connecting", "working", "organizing", "needs-ai"]) {
+    const l = setupLine(S(ph, 3), false);
+    assert.ok(l && l.text.length > 10, `${ph} 에 할 말이 없다`);
+    assert.equal(l!.keep, true, `★ ${ph} 인데 띠가 저절로 걷힌다 — 사람이 또 기다리는 이유를 모른다`);
+  }
+  assert.equal(setupLine(S("needs-ai"), false)?.href, "#/me/ai", "★ 멈췄는데 승인할 곳으로 안 데려간다");
+  assert.equal(setupLine(S("working"), false)?.href, "#/liv", "리브 대화로 가는 길이 없다");
+  assert.equal(setupLine(S("done", 0), false)?.keep, false, "끝났는데 띠가 남는다");
+  assert.equal(setupLine(S("stopped"), false)?.keep, false);
+});
+
+await t("P2 uploading — 이 브라우저가 올리는 중이면 비우고, 아니면 이어 올리는 법을 말한다", () => {
+  assert.equal(setupLine(S("uploading"), true), null, "첫째 줄과 같은 말을 두 번 한다");
+  const l = setupLine(S("uploading"), false);
+  assert.ok(l && /다시 올리면/.test(l.text) && l.keep, "★ 창을 닫았다 온 사람에게 이어 올리는 법을 안 말한다");
+});
+
+await t("P3 남은 자료 수를 그대로 · 단계 없음은 걷는다", () => {
+  assert.match(setupLine(S("organizing", 286), false)!.text, /286개/, "남은 수를 안 말한다");
+  assert.equal(setupLine(null, false), null);
+});
+
+await t("P4 올리기 줄 — 자료로 안 만든 것의 수와 «파일은 그대로»", () => {
+  const body = fnBody(BG_RAW, /export function uploadLineText\(s: BgUploadState\): string \{([\s\S]*?)\n\}/);
+  const line = new Function("fmt", "s", body) as (f: (n: number) => string, s: Record<string, unknown>) => string;
+  const fmt = (n: number) => n.toLocaleString("ko-KR");
+  const base = { total: 75, done: 75, failed: 0, skipped: 0, running: false };
+  assert.match(line(fmt, { ...base, notSource: 64 }), /75개를 다 올렸어요.*64개는.*자료로 만들지 않았어요.*그대로/, "★ mp3 64개가 왜 자료가 아닌지 말하지 않는다");
+  assert.doesNotMatch(line(fmt, { ...base, notSource: 0 }), /자료로 만들지/, "없는 것을 말한다");
+  assert.match(line(fmt, { ...base, done: 12, running: true, notSource: 0 }), /12 \/ 75.*닫으면 멈춰요/, "올리는 중에 창을 닫으면 멈춘다는 걸 안 말한다");
+  assert.match(BG_RAW, /resolve\(\{ notSource: notSourceOf\(xhr\.responseText\) \}\)/, "서버의 skipped 를 안 읽는다");
+});
+
+await t("P5 배선 — 띠 시작·이어 보기 · 리브 즉시 판정 · 리브보다 먼저 정리하지 않기", () => {
+  const fin = OB.slice(OB.indexOf("async function finishOnboarding("), OB.indexOf("async function connectYes(") > 0 ? OB.indexOf("async function connectYes(") : undefined);
+  assert.match(fin, /if \(S\.uploaded\) startSetupWatch\(\);/, "★ 처음 설정을 파일과 함께 끝냈는데 띠가 안 이어진다");
+  const MAIN = code(readFileSync(new URL("../../../web/v2/main.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
+  assert.match(MAIN, /if \(!EMBEDDED\) resumeSetupWatch\(\);/, "새로고침하면 띠가 끊긴다");
+  const APPLY_ALL = WELCOME.slice(WELCOME.indexOf('restRead("me_welcome_apply"'));
+  assert.match(APPLY_ALL, /if \(profile\.welcome\?\.flow === "files" && profile\.welcome\?\.upload_done_at\) \{\s*void import\("\.\.\/\.\.\/org\/liv\/second-turn-sweep\.js"\)\.then\(\(\{ kickLivSecondTurn \}\) => kickLivSecondTurn\(\)\)/,
+    "★ 다 올리고 끝냈는데 리브가 정비 주기(최대 5분)를 기다린다");
+  const LIV = code(readFileSync(new URL("./liv.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
+  assert.match(LIV, /if \(uploadDone && profile\.welcome\?\.flow === "files"\) \{\s*void import\("\.\.\/\.\.\/org\/liv\/second-turn-sweep\.js"\)\.then\(\(\{ kickLivSecondTurn \}\) => kickLivSecondTurn\(\)\)/,
+    "★ «다 올렸다» 를 받고도 리브가 정비 주기를 기다린다");
+  const DIS = code(readFileSync(new URL("../../scheduler/actions/distill.js", import.meta.url).pathname.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), "utf8"));
+  const pick = DIS.slice(DIS.indexOf("async function pickDistillerBatch("));
+  const hold = pick.indexOf("await onboardingHoldsDistill()");
+  assert.ok(hold > 0 && hold < pick.indexOf("listDistillers"), "★ 리브가 규칙을 세우기 전에 기본 증류가 올린 파일을 먼저 집는다");
+  assert.match(pick, /if \(!\(typeof params\.distiller === "string" && params\.distiller\.trim\(\)\) && await onboardingHoldsDistill\(\)\)/,
+    "이름으로 부른 레인(사람·리브가 세운 것)까지 쉬게 한다");
+  assert.match(DIS, /setupHoldsDistill\(c\.welcome, now\)/, "쉬는 판정을 setup-status 한 자리에서 안 한다");
+});
+
+//   P6 (격리 리뷰 2026-10-30) 못 읽은 것을 «끝» 으로 읽지 않는다 — 서버는 남은 수 실패를 0 으로 접지 않고, 화면은 오류면 단계를 그대로 둔 채 다시 묻는다
+await t("P6 못 읽음 ≠ 끝 — 서버는 0 으로 접지 않고, 화면은 오류에 띠를 안 바꾼다", () => {
+  const setupFn = WELCOME.slice(WELCOME.indexOf("export async function welcomeSetup("));
+  assert.ok(setupFn.length > 200, "welcomeSetup 을 못 찾았다 — 검사가 헛돈다");
+  assert.doesNotMatch(setupFn.slice(0, 1500), /\.catch\(\(\) => (0|null)\)/, "★ 남은 수·자격 조회 실패를 0·null 로 접는다 — 띠가 «정리했어요» 를 말하고 감시를 멈춘다");
+  assert.match(setupFn, /d\.match_kinds\.includes\("local_file"\)/, "올린 파일을 안 받는 정리(슬랙 등)가 비었다고 «끝» 이라 한다");
+  assert.match(WELCOME, /paths: \["\/api\/ui\/me\/welcome\/setup"\]/, "가벼운 단계 조회 라우트가 없다 — 띠가 무거운 현황 조회를 몇 시간 폴링한다");
+  const SW = code(SW_RAW);
+  const tick = SW.slice(SW.indexOf("async function tick("), SW.indexOf("const poke ="));
+  const onErr = tick.slice(tick.indexOf("catch (_) {"), tick.indexOf("if (!watching) return;", tick.indexOf("catch (_) {")));
+  assert.ok(onErr.length > 10, "tick 의 오류 갈래를 못 찾았다 — 검사가 헛돈다");
+  assert.doesNotMatch(onErr, /bgSetupLine|setFlag\(false\)|watching = false/, "★ 한 번 못 읽었다고 띠를 지우거나 감시를 그친다");
+  assert.match(tick, /api\('\/api\/ui\/me\/welcome\/setup'\)/, "단계 조회 라우트를 안 쓴다");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

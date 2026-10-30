@@ -99,12 +99,36 @@ async function applyPromptOverride(params: Record<string, unknown>, b: DistillBa
   return composeDistillPrompt(typeof params.prompt === "string" ? params.prompt : "", b.prompt, b.targeting);
 }
 
+// (#5167) 이 워크스페이스에 리브의 처음 정리를 기다리는 사람이 있나. 후보 목록(리브 2턴)은 요청 컨텍스트의 워크스페이스로 걸러지고,
+//  자체호스팅 다중 워크스페이스는 welcome 이 사는 칸으로 한 번 더 거른다 — 컨텍스트가 없으면(타이머) 칸이 정해지지 않은 옛 최상위 welcome 만 본다
+//  (다른 워크스페이스의 대기가 이 워크스페이스 정리를 세우지 않게). 못 읽으면 쉬지 않는다(정리를 멈추는 쪽이 더 나쁘다).
+async function onboardingHoldsDistill(): Promise<boolean> {
+  try {
+    const { listLivSecondTurnCandidates } = await import("../../org/store.js");
+    const { setupHoldsDistill } = await import("../../org/liv/setup-status.js");
+    const { currentTenant } = await import("../../org/tenant-context.js");
+    const here = currentTenant()?.id ?? null;
+    const now = Date.now();
+    return (await listLivSecondTurnCandidates())
+      .some((c) => (here ? !c.workspace_id || c.workspace_id === here : !c.workspace_id) && setupHoldsDistill(c.welcome, now));
+  } catch (e) {
+    logger.warn({ err: e }, "증류 — 처음 설정 대기 판정 실패(쉬지 않고 진행)");
+    return false;
+  }
+}
+
 // 이번 실행에서 돌릴 증류기·배치를 정한다.
 //  · params.distiller 지정 → 그 하나(없으면 error — 오타를 조용히 삼키지 않는다).
 //  · 미지정 → enabled 증류기 전부(배정 순서). one=true 면 그중 잔량 있는 첫 하나만.
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
   Promise<{ batches: DistillBatch[]; considered: number; error?: string; skipped?: string }> {
+  //  (#5167) 처음 설정을 막 끝낸 사람이 있고 리브가 아직 정리 지시를 안 받았으면 쉰다 — 기본 증류가 올린 파일을 카테고리 없이 먼저
+  //   집으면 리브가 세울 레인이 빈손이 된다(org/liv/setup-status.ts 머리말). 리브가 지시를 받거나(distill_at) 하루가 지나면 풀린다.
+  //   레인을 이름으로 부른 잡(params.distiller)은 쉬지 않는다 — 그런 잡은 사람이나 리브가 그 레인을 골라 세운 것이다.
+  if (!(typeof params.distiller === "string" && params.distiller.trim()) && await onboardingHoldsDistill()) {
+    return { batches: [], considered: 0, skipped: "처음 설정 직후 — 리브가 카테고리·정리 규칙을 세운 뒤 시작합니다" };
+  }
   const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge, listStrandedSources, buildStrandedTargeting, isAutoDisabledLane, oneAudienceGroup } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 

@@ -161,19 +161,22 @@ export const livCapabilities: Capability[] = [
       if (dclIn && !declinedKey) throw new HttpError(400, "declined 에는 key 가 필요합니다");
       const decWhat = decIn ? str(decIn.what, 500) : undefined;
       if (decIn && !decWhat) throw new HttpError(400, "decision 에는 what 이 필요합니다");
-      return {
-        profile: await appendLivProfile(userId, {
-          work: workIn ? { asis: str(workIn.asis, 2000), tobe: str(workIn.tobe, 2000), by: workIn.by === "self" ? "self" : "ai", at: now } : undefined,
-          decision: decIn ? { at: now, what: decWhat as string, why: str(decIn.why, 1000), by: str(decIn.by, 60) ?? "liv" } : undefined,
-          declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
-          onboarded,
-          welcomeSeen,
-          welcomeDeferred,
-          collectDone,
-          uploadDone,
-          desktopSeen,
-        }),
-      };
+      const profile = await appendLivProfile(userId, {
+        work: workIn ? { asis: str(workIn.asis, 2000), tobe: str(workIn.tobe, 2000), by: workIn.by === "self" ? "self" : "ai", at: now } : undefined,
+        decision: decIn ? { at: now, what: decWhat as string, why: str(decIn.why, 1000), by: str(decIn.by, 60) ?? "liv" } : undefined,
+        declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
+        onboarded,
+        welcomeSeen,
+        welcomeDeferred,
+        collectDone,
+        uploadDone,
+        desktopSeen,
+      });
+      //  (#5167) «다 올렸다» 를 받았다 — 파일 갈래면 리브를 정비 주기까지 기다리게 하지 않고 지금 연다(kickLivSecondTurn 머리말).
+      if (uploadDone && profile.welcome?.flow === "files") {
+        void import("../../org/liv/second-turn-sweep.js").then(({ kickLivSecondTurn }) => kickLivSecondTurn()).catch(() => { /* 다음 정비가 한다 */ });
+      }
+      return { profile };
       // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
       //  `curl` 로 남기라고 시켰는데, v1 채팅에서 셸을 막으면서(#1665 안전선) 그 길이 끊겼다.
       //  도구가 없으면 리브는 "알게 된 것"을 어디에도 못 남기고, 다음 대화의 리브가 그걸 모른다 —
