@@ -34,10 +34,22 @@ export interface LivelyUser {
   // 앱이 선언한 MCP 도구를 게이트웨이가 앱 서버로 부른 동안의 호출이면 그 부르기 번호(#5053) — 앱의 SDK 가 «돌기 신원» 을 실어 부른 것
   //  (apps/app-server-call.ts resolveCallRunPrincipal). 그때 userId 는 도구를 부른 사람이고 appServer 도 true 다.
   appCallId?: number;
+  // 도구 상한(auth_token.tool_ceiling) — 앱 AI 작업 토큰이 앱의 작업별 허용 목록(매니페스트 ai.tools)을 싣는다. 있으면 그 이름들만 부를 수 있다
+  //  (앱 동의와 둘 다 — apps/principal.appToolAllowed · 세션 배관 면제보다 앞선다). MCP 도구 목록에서도 그 밖은 감춘다(server.buildServer).
+  toolCeiling?: readonly string[];
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.
 // (src/auth/bearer.ts 의 verifyAccessToken 이 여기에 LivelyUser 를 넣는다)
+/**
+ * 이 주체의 도구가 모두 앱 도구 게이트(apps/principal.appToolAllowed)로만 다니나 — 앱 서버 급 주체(#4891)이거나 도구 상한이 실린 토큰(ai.tools).
+ *  이런 주체는 그 게이트를 타는 문(능력 REST · /mcp)에서만 받고(auth/http-auth.appPrincipalGate), 제품 DB 도구도 그 게이트를 탄다(tools/db).
+ *  빈 상한([])도 상한이다 — 길이가 아니라 있음으로 본다.
+ */
+export function confinedToAppTools(user: Pick<LivelyUser, "appServer" | "toolCeiling"> | undefined): boolean {
+  return user?.appServer === true || user?.toolCeiling != null;
+}
+
 export function resolveUser(extra: unknown): LivelyUser {
   const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)?.authInfo;
   const user = authInfo?.extra as LivelyUser | undefined;

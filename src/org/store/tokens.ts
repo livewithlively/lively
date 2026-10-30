@@ -32,29 +32,39 @@ export async function mintToken(input: {
    *  통과 도구(EXEMPT)가 꺼진다(apps/principal). appId 와 함께만 — 없으면 던진다.
    */
   appServerPrincipal?: boolean;
+  /**
+   * 이 토큰으로 부를 수 있는 도구 상한(정확한 이름) — 앱 AI 작업 토큰이 앱의 작업별 허용 목록(ai.tools)을 싣는다. 앱 동의와 둘 다 통과해야 한다
+   *  (apps/principal.appToolAllowed). 생략 · null = 상한 없음(종전). appId 와 함께만 — 없으면 던진다(앱 동의 판정을 타지 않는 토큰에 걸면 뜻이 없다).
+   *  ★ 칸(auth_token.tool_ceiling)은 상한이 있을 때만 적는다 — 롤 창(새 게이트웨이가 먼저 · 마이그레이션은 끝에)에 다른 토큰의 발급이 «없는 칸» 으로
+   *   깨지지 않게. 상한을 실은 발급은 그때 실패한다(작업이 돌지 않는다 — 닫힌 쪽).
+   */
+  toolCeiling?: readonly string[] | null;
 }, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null }> {
   if (input.appServerPrincipal === true && !input.appId) throw new Error("앱 서버 급 토큰은 앱 토큰(appId)이어야 한다");
+  if (input.toolCeiling != null && !input.appId) throw new Error("도구 상한은 앱 토큰(appId)에만 건다");
   const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
   const tokenHash = sha256(token);
   const ttl = input.expiresInSec != null && Number.isFinite(input.expiresInSec) && input.expiresInSec > 0
     ? Math.floor(input.expiresInSec) : null;
   // 만료는 DB now() 기준으로 계산한다 — 검증(verifyDbToken)도 DB now() 라 시계가 하나로 유지된다.
+  const ceiling = input.toolCeiling != null ? JSON.stringify([...input.toolCeiling]) : null;
   const r = await exec.query(
     `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by,
-                            client_id, resource, app_id, expires_at, follow_member_scopes, app_server_principal)
+                            client_id, resource, app_id, expires_at, follow_member_scopes, app_server_principal${ceiling != null ? ", tool_ceiling" : ""})
        VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$11,
-              now() + ($10::int * interval '1 second'), $12, $13)
+              now() + ($10::int * interval '1 second'), $12, $13${ceiling != null ? ", $14::jsonb" : ""})
      RETURNING expires_at`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null,
      input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl), input.appId ?? null,
-     input.followMemberScopes === true, input.appServerPrincipal === true],
+     input.followMemberScopes === true, input.appServerPrincipal === true, ...(ceiling != null ? [ceiling] : [])],
   );
   await audit("auth_token", input.userId, "mint",
     null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId,
             clientId: input.clientId ?? null, resource: input.resource ?? null,
-            followMemberScopes: input.followMemberScopes === true }, actor, source, client);
+            followMemberScopes: input.followMemberScopes === true,
+            ...(input.toolCeiling != null ? { toolCeiling: [...input.toolCeiling] } : {}) }, actor, source, client);
   const expiresAt = (r.rows[0] as { expires_at: string | null } | undefined)?.expires_at ?? null;
   return { token, tokenHash, expiresAt: expiresAt ? new Date(expiresAt) : null };
 }
@@ -208,6 +218,8 @@ export interface DbTokenIdentity {
   appId: string | null;      // 앱 세션 토큰이면 그 앱 id(#1780). null = 일반 토큰. requireAppTool 이 도구를 축소한다.
   /** #4891 — 앱 서버 급 주체(auth_token.app_server_principal). 켜진 토큰만 싣는다 — LivelyUser.appServer 로 그대로 간다(bearer.ts). */
   appServer?: true;
+  /** 도구 상한(auth_token.tool_ceiling). 걸린 토큰만 싣는다 — LivelyUser.toolCeiling 으로 그대로 간다(bearer.ts). */
+  toolCeiling?: string[];
 }
 
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
@@ -226,6 +238,10 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
               t.scopes AS token_scopes, m.scopes AS member_scopes, t.projects,
               t.follow_member_scopes AS follow_member_scopes,
               t.client_id, t.resource, t.app_id, t.app_server_principal, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch,
+              -- 도구 상한은 칸 이름으로 고르지 않고 행에서 꺼낸다 — 롤 창(새 게이트웨이가 먼저 · 마이그레이션은 끝에)에 칸이 아직 없어도
+              --  이 인증 쿼리가 «없는 칸» 으로 깨지지 않게(칸이 없으면 NULL — 그 칸을 단 토큰도 없다). 칸이 모든 배포에 생긴 뒤에는
+              --  t.tool_ceiling 으로 바꿔도 된다(롤 창이 지난 다음 정리 때 — 인증 핫패스에서 행 전체를 JSON 으로 만들지 않게).
+              to_jsonb(t) -> 'tool_ceiling' AS tool_ceiling,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
         WHERE t.token_hash=$1 AND t.revoked_at IS NULL
@@ -237,7 +253,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
       follow_member_scopes: boolean | null;
       client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
-      app_live: boolean | null; app_server_principal: boolean | null;
+      app_live: boolean | null; app_server_principal: boolean | null; tool_ceiling: unknown;
     } | undefined;
     if (!row) return null;
     // JSONB scopes/projects 는 런타임에 무엇이든 될 수 있다(마이그레이션 버그·손상) → 보안 경계에서
@@ -258,6 +274,12 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     //  #4891 — 앱 서버 급 표시는 앱 토큰에만 뜻이 있다. 앱 없이 켜져 있으면(있어선 안 되는 행) 받지 않는다 — 앱 도구 게이트가 안 걸린다.
     const appServer = row.app_server_principal === true;
     if (appServer && !row.app_id) return null;
+    //  도구 상한 — 앱 토큰에만 뜻이 있다(앱 없이 걸려 있으면 받지 않는다). 글 배열이 아니면(손상) 빈 상한 — 아무 도구도 허락하지 않는다(닫힌 쪽).
+    //   칸의 JSON null 은 SQL NULL 과 구분되지 않아(to_jsonb) «상한 없음» 이다 — 쓰는 쪽(mintToken)은 배열만 적는다.
+    const ceilingRaw = row.tool_ceiling;
+    const toolCeiling = ceilingRaw == null ? null
+      : Array.isArray(ceilingRaw) && ceilingRaw.every((x) => typeof x === "string") ? (ceilingRaw as string[]) : [];
+    if (toolCeiling != null && !row.app_id) return null;
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
     return {
@@ -266,6 +288,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       resource: row.resource ?? null,
       appId: row.app_id ?? null,
       ...(appServer ? { appServer: true as const } : {}),
+      ...(toolCeiling != null ? { toolCeiling } : {}),
       // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
       expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
     };

@@ -17,6 +17,7 @@ import { parseAppManifest, assertInstallableManifest, appAssetId, webRootOf, typ
 import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
 import { assertAppMcpToolsInstallable } from "./app-mcp-decl.js";
 import { hashAppPackage } from "./package-hash.js";
+import { toolAllowed } from "./grant.js";
 import { AI_INSTRUCTIONS_MAX_BYTES, instructionsText } from "./app-job-instructions.js";
 import type { DeployItem } from "./install.js";
 
@@ -62,6 +63,7 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   //  #5082 작업별 지시 파일(ai.instructions)도 같은 까닭으로 여기서 확정한다 — 작업을 띄울 때 «파일 없음» 을 처음 알면 그 작업이 실패로 끝난다.
   await checkAiInstructions(manifest, root);
   checkAiMcpOnly(manifest);
+  checkAiTools(manifest);
 
   // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
   const declared = planDeclaredComponents(manifest);
@@ -131,6 +133,27 @@ function checkAiMcpOnly(m: LivelyAppManifest): void {
   const names = new Set((m.ai?.jobs ?? []).map((j) => j.name));
   for (const job of list) {
     if (!names.has(job)) throw new HttpError(400, `매니페스트 오류 [ai.mcp_only]: ai.jobs 에 선언한 작업 이름이 아닙니다: ${job}`);
+  }
+}
+
+/**
+ * ai.tools 의 뜻 — 키는 선언한 작업 이름, 도구는 글롭이 아닌 정확한 이름이고 앱이 요청하는 도구(permissions.tools — 앱 서버 · AI 실행 등이
+ *  저절로 더한 것 포함 — 와 ext_tools, 동의가 받는 범위와 같다 · grant.resolveGrant)에 맞아야 한다. 글롭이 생각보다 넓게 열리지 않게 하고
+ *  (허용 목록은 좁히는 장치다), 요청하지 않은 도구 이름의 오타를 잡는다. 요청이 글롭(knowledge_*)이면 그 안의 오타 · 대소문자 차이는 못 잡는다 —
+ *  그 도구가 목록에서 빠질 뿐이다(닫힌 쪽). 판정은 대소문자까지 정확히 본다(principal.appToolAllowed).
+ *  모양은 parseAppManifest 가 보고, 뜻은 설치 · 판 저장 때만 본다(저장된 매니페스트를 다시 읽는 자리를 막지 않게 — ai.mcp_only 와 같다).
+ */
+function checkAiTools(m: LivelyAppManifest): void {
+  const map = m.ai?.tools;
+  if (!map) return;
+  const names = new Set((m.ai?.jobs ?? []).map((j) => j.name));
+  const declared = [...(m.permissions?.tools ?? []), ...(m.permissions?.ext_tools ?? [])];
+  for (const [job, tools] of Object.entries(map)) {
+    if (!names.has(job)) throw new HttpError(400, `매니페스트 오류 [ai.tools]: ai.jobs 에 선언한 작업 이름이 아닙니다: ${job}`);
+    for (const t of tools) {
+      if (!/^[a-z0-9][a-z0-9_.-]{0,127}$/i.test(t)) throw new HttpError(400, `매니페스트 오류 [ai.tools.${job}]: 도구 이름은 글롭 없이 정확히 적습니다: ${t}`);
+      if (!toolAllowed(declared, t)) throw new HttpError(400, `매니페스트 오류 [ai.tools.${job}]: permissions.tools · ext_tools 에 없는 도구입니다(앱이 동의를 받을 수 없다): ${t}`);
+    }
   }
 }
 

@@ -226,3 +226,87 @@ test("mcp_only S3 없거나 빈 목록이면 종전대로 적재된다", async (
     await rm(d, { recursive: true });
   }
 });
+
+// ── ai.tools — 작업별 라이블리 도구 허용 목록의 뜻(도구 허용 목록 사양 T2 · T3 · T4) — 설치 · 판 저장(적재) 때 본다 ──
+//  (a) 키는 ai.jobs[].name 에 선언된 작업 이름 · (b) 도구 이름은 글롭이 아닌 정확한 이름(글자 · 숫자 · _ . -, 128자 이내)
+//  · (c) 앱이 요청하는 도구(permissions.tools · ext_tools — 글롭 포함 · ai_runs · web.server 가 더하는 도구 포함)에 맞아야 한다.
+//  이게 틀리면: 오타 · 글롭 · 요청하지 않은 도구가 조용히 저장돼 그 작업의 에이전트가 쓸 수 있는 도구가 0 이 되거나(아무도 모른 채),
+//  다른 작업 이름의 목록이 걸리지 않아 그 작업이 앱 동의 전체(store_sql 등)를 쥔 채 돈다.
+const TOOLS = (tools: unknown, o: { permissions?: Record<string, unknown>; jobs?: unknown[]; web?: unknown; cron?: unknown[] } = {}) => MANIFEST({
+  permissions: o.permissions ?? { tools: ["store_sql", "knowledge_search", "knowledge_get"] },
+  ai: { jobs: o.jobs ?? [{ name: "answer" }, { name: "lookup" }], tools },
+  ...(o.web === undefined ? {} : { web: o.web }),
+  ...(o.cron === undefined ? {} : { jobs: o.cron }),
+});
+const toolsOfLoaded = (m: unknown): unknown => (m as { ai?: { tools?: unknown } }).ai?.tools;
+/** 적재가 되면 실린 ai.tools 를 돌려준다(안 되면 그 오류를 그대로 던진다 — 통과해야 할 경우가 왜 막혔는지 보이게). */
+async function loadTools(manifest: string): Promise<unknown> {
+  const d = await stage({ "lively-app.json": manifest });
+  try { return toolsOfLoaded((await loadAppPackage(d)).manifest); } finally { await rm(d, { recursive: true }); }
+}
+async function rejects400(manifest: string, what: string): Promise<void> {
+  const d = await stage({ "lively-app.json": manifest });
+  try { await assert.rejects(() => loadAppPackage(d), is400, what); } finally { await rm(d, { recursive: true }); }
+}
+
+test("T2 통과 — 선언한 작업 이름 · 요청한 도구의 정확한 이름이면 적재되고 목록이 그대로 실린다(작업 여럿)", async () => {
+  const tools = { answer: ["store_sql", "knowledge_search"], lookup: ["knowledge_get"] };
+  assert.deepEqual(await loadTools(TOOLS(tools)), tools);
+});
+
+test("T2(a) 키가 ai.jobs 에 선언한 작업 이름이 아니면 400 — 오타 · 작업 선언 없음 · 크론 작업 키", async () => {
+  await rejects400(TOOLS({ answer: ["store_sql"], answr: ["store_sql"] }), "선언한 이름 사이의 오타 하나");
+  await rejects400(TOOLS({ summarize: ["store_sql"] }), "선언 안 한 이름 하나뿐");
+  await rejects400(MANIFEST({ permissions: { tools: ["store_sql"] }, ai: { tools: { answer: ["store_sql"] } } }), "ai.jobs 없이 tools 만");
+  await rejects400(TOOLS({ agg: ["store_sql"] }, { cron: [{ key: "agg", schedule: "0 * * * *", run: { kind: "headless", prompt: "x" } }] }),
+    "크론 작업 키는 ai.jobs 의 작업 이름이 아니다");
+});
+
+test("T2(b) 글롭은 400 — 요청한 도구에 같은 글롭이 있어도(정확한 이름만 받는다)", async () => {
+  await rejects400(TOOLS({ answer: ["knowledge_*"] }, { permissions: { tools: ["knowledge_*"] } }), "knowledge_*");
+  await rejects400(TOOLS({ answer: ["*"] }, { permissions: { tools: ["*"] } }), "*");
+  await rejects400(TOOLS({ answer: ["store_sql", "store_*"] }, { permissions: { tools: ["store_*"] } }), "정확한 이름 사이의 글롭 하나");
+});
+
+test("T2(b) 이름 꼴 — 글자 · 숫자 · _ . - 만, 128자 이내(경계: 128 통과 · 129 는 요청 글롭에 맞아도 400)", async () => {
+  //  요청 글롭 a* · x* 는 이 이름들에 모두 맞는다 — (c) 가 아니라 (b) 만 갈리게.
+  const perm = { tools: ["a*", "x*"] };
+  assert.deepEqual(await loadTools(TOOLS({ answer: ["a.b-c_1", "x" + "y".repeat(127), "aB9"] }, { permissions: perm })),
+    { answer: ["a.b-c_1", "x" + "y".repeat(127), "aB9"] }, "허용 글자(대문자 · 숫자 포함) · 128자(경계-최대)");
+  await rejects400(TOOLS({ answer: ["x" + "y".repeat(128)] }, { permissions: perm }), "129자(경계-위)");
+  for (const bad of ["a b", "a/b", "a:b", "a\nb", "a\u0000b", "a,b", ""]) {
+    await rejects400(TOOLS({ answer: [bad] }, { permissions: perm }), `이름 꼴 밖: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T2(c) 앱이 요청하는 도구에 맞지 않으면 400(오타로 본다) · 요청 글롭에 맞으면 통과", async () => {
+  await rejects400(TOOLS({ answer: ["db_query"] }), "요청하지 않은 도구");
+  await rejects400(TOOLS({ answer: ["store_sql", "store_sqll"] }), "요청한 도구 사이의 오타 하나");
+  await rejects400(TOOLS({ answer: ["knowledgesearch"] }, { permissions: { tools: ["knowledge_*"] } }), "요청 글롭에 맞지 않는 이름");
+  assert.deepEqual(await loadTools(TOOLS({ answer: ["knowledge_search", "knowledge_get"] }, { permissions: { tools: ["knowledge_*"] } })),
+    { answer: ["knowledge_search", "knowledge_get"] }, "요청 글롭(knowledge_*)에 맞는 정확한 이름");
+});
+
+test("T2(c) ai_runs: true · web.server 가 저절로 더하는 도구도 요청한 도구다 — 선언이 없으면 같은 이름이 400", async () => {
+  assert.deepEqual(await loadTools(TOOLS({ answer: ["app_ai_run_get", "app_ai_runs"] }, { permissions: { ai_runs: true } })),
+    { answer: ["app_ai_run_get", "app_ai_runs"] }, "ai_runs: true 가 더한 도구");
+  assert.deepEqual(await loadTools(TOOLS({ answer: ["app_job_start", "app_job_get"] }, { permissions: { tools: [] }, web: { server: {} } })),
+    { answer: ["app_job_start", "app_job_get"] }, "web.server 가 더한 도구");
+  await rejects400(TOOLS({ answer: ["app_ai_run_get"] }, { permissions: { tools: [] } }), "ai_runs 없이 AI 실행 도구");
+  await rejects400(TOOLS({ answer: ["app_job_start"] }, { permissions: { tools: [] } }), "서버 없이 작업 도구");
+});
+
+test("T2(c) ext_tools 로 요청한 프록시 도구도 요청한 도구다(동의가 받는 범위와 같다) — 어느 쪽에도 없으면 400", async () => {
+  assert.deepEqual(await loadTools(TOOLS({ answer: ["knowledge_get", "ext__slack__send"] }, { permissions: { tools: ["knowledge_get"], ext_tools: ["ext__slack__*"] } })),
+    { answer: ["knowledge_get", "ext__slack__send"] }, "ext_tools 글롭(ext__slack__*)에 맞는 정확한 이름");
+  await rejects400(TOOLS({ answer: ["ext__notion__read"] }, { permissions: { tools: ["knowledge_get"], ext_tools: ["ext__slack__*"] } }), "ext_tools 글롭에 맞지 않는 프록시 도구");
+});
+
+test("T3·T4 빈 배열(도구 0) · ai.tools 없음 · 일부 작업만 목록 — 종전처럼 적재된다", async () => {
+  assert.deepEqual(await loadTools(TOOLS({ answer: [] })), { answer: [] }, "빈 배열도 뜻이 있다 — 그대로 실린다");
+  const d = await stage({ "lively-app.json": MANIFEST({ ai: { jobs: [{ name: "answer" }] } }) });
+  const loaded = await loadAppPackage(d);
+  assert.ok(loaded.manifest, "ai.tools 가 없는 앱은 종전대로 적재");
+  await rm(d, { recursive: true });
+  assert.deepEqual(await loadTools(TOOLS({ lookup: ["knowledge_get"] })), { lookup: ["knowledge_get"] }, "목록이 없는 작업(answer)이 있어도 된다");
+});
