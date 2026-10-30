@@ -25,6 +25,7 @@ import { svcLogo } from './svc-logos.js';
 import { appGlassIcon } from './v2/glass-icon.js';   // 리프 모듈(#3830) — 셸 레지스트리를 물지 않는다
 import { runsPanel, type RunFilter } from './context-runs.js';   // #4172 지도 아래 「자동 실행」(#4135 3판 — 날짜·기간·자세히 보기)
 import { icon as lineIcon } from './v2/icons.js';
+import { AI_LOGO, AI_BRAND, AI_ORDER } from './lib/ai-logos.js';   // #5147 AI 세션 역의 실물 — 이 계정에 연결된 AI 로고
 
 const fmt = (n: any) => (Number.isFinite(Number(n)) ? fmtNum(Number(n)) : '—');
 
@@ -62,13 +63,14 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
     api('/api/ui/knowledge?' + new URLSearchParams({ limit: '3', orderBy: 'updated_at', light: '1', lifecycle: 'active,pending', injection: 'recalled' })).catch(() => null),
     api('/api/ui/org/sections').catch(() => null),
     api('/api/ui/terminal/sessions?includeProjects=1').catch(() => null),
+    api('/api/ui/me/ai-accounts').catch(() => null),
   ]);
   let d: any = null;
   try { d = await pipeP; } catch (e) {
     box.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '현황을 불러오지 못했습니다 — ' + (e as Error).message })));
     return;
   }
-  const [colD, treeD, knowD, secD, sessD] = await decoP;
+  const [colD, treeD, knowD, secD, sessD, aiD] = await decoP;
   const st = (d && d.stages) || {};
   const gates = (d && d.gates) || {};
   const lv = stageHealthLevels(d);
@@ -163,12 +165,23 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
     def: '증류를 통과해 남은 것입니다. 카테고리 ' + fmt(d?.taxonomy?.categories ?? st.classify?.categories) + '칸에 정리됩니다', x: knowX,
     foot: fillFoot, lv: lv.distill });
 
-  const aiX = el('span', { class: 'cxm-sess' },
-    el('span', { class: 'cxm-sess-u', text: '지난 미팅 정리해줘' }),
-    el('span', { class: 'cxm-sess-row' },
-      el('i', { class: 'cxm-sess-ai', 'aria-hidden': 'true' }, svcLogo('claude-headless') || el('span', { text: 'AI' })),
-      el('span', { class: 'cxm-sess-a' }, el('span', { text: '팀이 쌓은 지식으로 답합니다 ' }), el('i', { class: 'cxm-sess-ref', text: '지식 참조' }))));
-  const stAI = station({ href: '#/terminal', go: { section: 'sess', route: '#/terminal' }, icon: 'chat', name: 'AI 세션', v: sessD ? fmt(busy) : '—', unit: '작업 중', def: '시작할 때 읽고, 대화 중에 검색해 씁니다', x: aiX,
+  //  #5147(원준 2026-10-30) — 실물은 **이 계정에 연결된 AI 의 로고**다(외부 앱 역이 연결된 앱 로고를 보이는 것과 같은 모양).
+  //   종전의 대화 한 토막 그림은 어느 AI 가 붙어 있는지 말하지 않았다. 누르면 그 AI 들을 연결하는 [AI 계정 연결] 창으로 간다.
+  //   «연결됨» 은 서버가 자격을 확인한 것(loggedIn === true)만 — 확인 못 한 것(null)은 연결됐다고 말하지 않는다.
+  const aiOn: string[] = (((aiD && aiD.accounts) || []) as any[])
+    .filter((a: any) => a && a.loggedIn === true && AI_LOGO[a.key])
+    .map((a: any) => String(a.key))
+    .sort((a, b) => AI_ORDER.indexOf(a) - AI_ORDER.indexOf(b));
+  //  타일 바탕은 외부 앱 타일과 같이 브랜드 색을 옅게 깐다(--svc-brand — 34-service-logins.css). 로고 표(lib/ai-logos.ts)의 채움 색과 같다.
+  const AI_TILE_BRAND: Record<string, string> = { claude: '#D97757', codex: '#10A37F', antigravity: '#4285F4', grok: '#191919' };
+  const aiTile = (key: string) => {
+    const t = el('span', { class: 'svc-tile', title: (AI_BRAND[key] || key) + ' 연결됨', style: AI_TILE_BRAND[key] ? '--svc-brand:' + AI_TILE_BRAND[key] : null });
+    t.innerHTML = AI_LOGO[key];   // 정적 SVG 문자열(lib/ai-logos.ts) — 사람이 넣은 값이 아니다
+    return t;
+  };
+  const aiX = el('span', { class: 'cxm-svts' },
+    ...(aiOn.length ? aiOn.map(aiTile) : [el('span', { class: 'cxm-empty', text: '연결된 AI 가 없습니다. 눌러서 연결하세요' })]));
+  const stAI = station({ href: '#/system/me-ai', go: { route: '#/system/me-ai', meAi: true }, icon: 'chat', name: 'AI 세션', v: sessD ? fmt(busy) : '—', unit: '작업 중', def: '시작할 때 읽고, 대화 중에 검색해 씁니다', x: aiX,
     foot: '검색 대상 ' + fmt(searchable) + '건' + (startDocs !== null ? ' · 항상 읽는 것 ' + fmt(startDocs) : '') });
 
   // ── 기계 셋(선로 위 어두운 칩) — 이름 · 수 · 상태 배지 · 살아 있는 점 + 주기 ──
@@ -313,9 +326,16 @@ export function inboxCount(d: any): number {
 //  이 화면은 새 셸의 앱 액자(iframe) 안에서 산다. 다른 앱·구역은 액자 밖이라 location.hash 로는 못 간다 — 셸이 듣는
 //  postMessage 로 한 줄 올린다(main.ts: `lively:open-route` 는 그 주소의 탭을 열고, `lively:open-section` 은 레일
 //  구역을 고른 뒤 그 구역이 두고 간 자리로 간다). 액자 밖(클래식 셸)이면 그냥 주소로 간다.
-type ShellDest = { route: string; section?: 'wiki' | 'sess' };
+//  meAi(#5147) — [AI 계정 연결] 은 탭이 아니라 **창**이다. 새 셸은 주소 `#/me/ai` 를 받으면 그 창을 열고 주소를 되돌린다
+//   (v2/main.ts ME_AI_ROUTE). 액자와 셸은 같은 오리진이라 셸의 주소를 직접 바꾼다. 클래식은 [내 AI 계정] 패널 주소로 간다.
+type ShellDest = { route: string; section?: 'wiki' | 'sess'; meAi?: boolean };
 function goShell(d: ShellDest): void {
   const framed = (() => { try { return window.parent && window.parent !== window; } catch { return false; } })();
+  if (d.meAi) {
+    if (framed) { try { window.parent.location.hash = '#/me/ai'; return; } catch { /* 셸이 안 받으면 아래 */ } }
+    location.hash = '#/system/me-ai';
+    return;
+  }
   if (framed) {
     try {
       window.parent.postMessage(d.section ? { type: 'lively:open-section', section: d.section } : { type: 'lively:open-route', href: d.route }, location.origin);
