@@ -103,6 +103,25 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS knowledge_lex_posting_doc_idx ON knowledge_lex_posting(doc_id);
   `);
 
+  // ── knowledge_search_log — 에이전트 · 세션의 지식 찾기 기록(#5201). 무엇을 찾았고 무엇이 나왔고 무엇을 열었나. ──
+  //  서버에 이 기록이 없어 지금까지는 맥 한 대의 세션 파일로만 검색 품질을 쟀다. 사람 화면 ⌘K 는 search_log 가 따로 있다 — 그쪽은 «한 번의 찾기에
+  //  한 줄» 이고 이쪽은 «호출 한 번에 한 줄» 이다. 쓰는 곳은 v6/knowledge-search-log-store.ts. 보존 기간이 지난 줄은 session-log-reap 박자로 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_search_log(
+      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+      member TEXT,
+      session_id TEXT,
+      tool TEXT NOT NULL,      -- 'search' · 'grep' · 'similar' · 'get'
+      route TEXT,              -- 어떤 길로 찾았나 — v6/knowledge-search.ts KnowledgeSearchRoute · similar 는 'vector'
+      q TEXT,                  -- 검색어(200자까지). get 은 비어 있다
+      names TEXT[],            -- 돌려준 지식 앞 10건(get 은 연 지식 1건)
+      n INT,                   -- 돌려준 건수
+      ms INT);
+    CREATE INDEX IF NOT EXISTS knowledge_search_log_ts_idx ON knowledge_search_log(ts);
+    CREATE INDEX IF NOT EXISTS knowledge_search_log_session_idx ON knowledge_search_log(session_id, ts) WHERE session_id IS NOT NULL;
+  `);
+
   // ── knowledge_revision — 지식 '수정' 검토 큐(#783). 신규 지식은 lifecycle='pending' 으로 격리되지만, ──
   //  기존 active 지식의 수정은 그렇게 못 한다(pending 으로 내리면 이미 승인된 라이브 지식이 검색·주입에서 사라진다).
   //  그래서 수정은 본문과 분리된 이 테이블로 검토한다 — 인입정책 action_update(org_ingest_policy)가 mode 를 정한다:

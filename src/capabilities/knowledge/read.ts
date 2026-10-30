@@ -13,7 +13,8 @@ import {
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 상세 조회는 '검토 대기 중인 수정이 있나'를 함께 알린다(덧쓰기 사고 방지).
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
-import type { SimilarDiag } from "../../v6/knowledge-search.js";
+import type { SearchRouteDiag, SimilarDiag } from "../../v6/knowledge-search.js";
+import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   // #5201 세션의 지식 찾기 기록
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
@@ -135,19 +136,20 @@ export const knowledgeGrep: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/knowledge/search"], parse: parseGrepQuery }],
   },
-  handler: async (input: KnowledgeGrepInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: KnowledgeGrepInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const t0 = Date.now();
     const viewer = ctx?.viewer ?? null;   // 공개범위(#1291) — 스니펫도 본문 조각이라 목록보다 더 셀 수 없다
     const plain = input.plain === true;   // #4530 화면 검색 — 글자 그대로(정규식 아님 · 조사 · 구절)
     const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(없는 카테고리는 400)
     if (input.mode === "count") {
       return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain, categories }, viewer) };
     }
-    return {
-      mode: input.mode ?? "snippets",
-      entries: await searchKnowledge(input.q, {
-        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories,
-      }, viewer),
-    };
+    const route: SearchRouteDiag = {};
+    const entries = await searchKnowledge(input.q, {
+      injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories,
+    }, viewer, route);
+    if (isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "grep", member: user.userId, session: ctx?.session, route: route.route, q: input.q, names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
+    return { mode: input.mode ?? "snippets", entries };
   },
 };
 
@@ -200,19 +202,21 @@ export const knowledgeSearch: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSearchInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const t0 = Date.now();
     const viewer = ctx?.viewer ?? null;
     const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(두 채널 모두 후보부터)
+    const route: SearchRouteDiag = {};
     const entries = await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, categories,
-    }, viewer);
+    }, viewer, route);
     //  #4213 T12 #4744 검색 실패 보조 안내 — 결과가 없거나 약하면 «가져올 곳»(아직 지식이 안 된 원문 자료 → 그것도 없으면 질문한 사람이
     //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
     //   **세션이 부른 검색에만**(허용 목록) — MCP, 또는 세션 헤더(x-lively-session)를 실은 REST. 웹 화면의 «의미검색» · 앱 화면 다리
     //   (app-ui · app-front — 세션이 아니다)에는 계산하지 않는다(리뷰 2026-10-17). 안내는 늘 질문한 사람 자신의 공개범위로만 찾는다
     //   (특권 열람 신원으로 찾지 않는다 — collectHintFor). 앱 세션 토큰(user.appId — 앱 서버 호출 포함)은 길(MCP · REST)을 가리지 않고 뺀다 —
     //   그 앱이 동의받은 도구는 knowledge_search 뿐일 수 있는데 안내는 자료 제목·단위 이름을 싣는다(앱 동의 경계 · 리뷰 2026-10-17).
-    const forSession = !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
-    if (!forSession || !user?.userId) return { entries };
+    if (!isSessionCall(user, ctx) || !user?.userId) return { entries };
+    void logKnowledgeSearch({ tool: "search", member: user.userId, session: ctx?.session, route: route.route, q: input.q, names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
     const deadline = Date.now() + HINT_BUDGET_MS;
     const hint = await withinMs(HINT_BUDGET_MS, async () => {
       const { collectHintFor } = await import("../../org/collect/unit-find.js");
@@ -221,6 +225,11 @@ export const knowledgeSearch: Capability = {
     return hint ? { entries, collect_hint: hint } : { entries };
   },
 };
+
+/** 세션이 부른 호출인가 — MCP, 또는 세션 헤더를 실은 REST. 웹 화면 · 앱 토큰(앱 서버 호출 포함)은 아니다. 검색 실패 안내와 찾기 기록이 같은 판정을 쓴다. */
+function isSessionCall(user: LivelyUser, ctx?: CapabilityCtx): boolean {
+  return !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
+}
 
 /** «가져올 곳» 을 만드는 데 쓰는 시간 상한 — 원문 자료 찾기는 DB 쪽에서도 이보다 짧게 끊는다(unit-find LOOSE_TIMEOUT_MS). */
 const HINT_BUDGET_MS = 1500;
@@ -279,6 +288,7 @@ export const knowledgeSimilar: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSimilarInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const t0 = Date.now();
     if (!input.name && !input.text) throw new Error("name 또는 text 중 하나가 필요합니다");
     const viewer = ctx?.viewer ?? null;
     // 기준 문서(name)도 볼 수 있어야 한다 — 안 보이는 문서의 임베딩으로 이웃을 훑는 건 그 문서를 지렛대 삼아
@@ -293,6 +303,8 @@ export const knowledgeSimilar: Capability = {
       name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
       injection: input.injection, provenance: input.provenance, categories,
     }, viewer, diag);
+    //  글로 찾은 것만 남긴다(자동 소환 훅이 이 길이다). name 기준은 저장 전 중복 확인 · 관련 패널이다.
+    if (input.text && isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "similar", member: user.userId, session: ctx?.session, route: "vector", names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
     return { entries, ...diag };
   },
 };
@@ -409,6 +421,7 @@ export const knowledgeGet: Capability = {
     if (!(await canSeeKnowledge(String(input.name), ctx?.viewer ?? null))) throw new Error(`지식 '${input.name}' 없음`);
     const knowledge = await getKnowledge(input.name, ctx?.viewer ?? null);
     if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
+    if (isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "get", member: user.userId, session: ctx?.session, names: [input.name] });
     // #783 이 지식에 검토 대기 중인 수정이 있으면 함께 알린다 — staged 면 "지금 보는 본문은 옛 승인본"이라는 뜻이라
     //  사람·에이전트가 그 사실을 모르고 덧쓰면 안 된다(웹 문서화면은 이 값으로 배너를 띄운다).
     const pendingRev = await pendingRevisionFor(input.name);

@@ -110,7 +110,9 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
       .then((cfg) => import("../v6/session-log-store.js")
         .then((m) => m.reapSessionLogs(cfg.session_share.retention_days)))
       //  검색 기록(#4530)도 같은 박자로 — 180일 넘은 검색어를 지운다. 앞의 정리가 실패해도 이건 돈다.
-      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ })) },
+      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ }))
+      //  세션의 지식 찾기 기록(#5201)도 — 90일 넘은 줄을 지운다.
+      .finally(() => import("../v6/knowledge-search-log-store.js").then((m) => m.reapKnowledgeSearchLog()).catch(() => { /* 다음 판에 다시 */ })) },
   // 세션 제목 소급 채움(#905 C1) — 멱등이고 다 채우면 no-op. 원래는 부팅 35초 후 1회였는데,
   //  요청에 얹는 세계에는 '부팅 1회'가 없다 — 긴 주기로 두면 같은 뜻이 된다(다 채우면 아무것도 안 한다).
   { key: "session-title-backfill", intervalMs: SIX_HOURS_MS,
