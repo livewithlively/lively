@@ -26,6 +26,11 @@
 //   E18 없는 이름 토글 = 404
 //   E19 경계 — 칸을 안 실은 신규 저장은 검색 대상(true)
 //   E20 되돌리기(content_undo) — set_searchable 을 되돌리면 이전 값
+//   E21 벡터가 있는 검색 대상을 저장(knowledge_save 길)으로 끈다 — 표시 false · 벡터 비워짐
+//   E22 지우고 휴지통에서 되살려도 검색 제외가 남는다
+//   E23 검색 제외에 벡터가 남아 있으면(끌 때 비우기 실패) — 유사의 기준이 안 되고(빈 결과) 스윕이 걷는다 · c 자동 스윕도(pending 0 이어도)
+//   E16b all 모드(전량 재임베딩) — 배치 도중 대상에서 빠진 행 때문에 뒤 행을 건너뛰지 않는다(done = 다음 배치 OFFSET)
+//   (E11 에 덧붙임) 소환 설정 토글은 갱신 시각을 안 올린다(props_ui 토글과 같은 까닭)
 import pg from "pg";
 import http from "node:http";
 
@@ -188,8 +193,10 @@ try {
   // ── E11 · E12 벡터 있던 검색 대상 C 를 끈다 ──
   chk("E11 전제: C 는 벡터가 있다", await hasVec(C));
   const updatedAt = async (name) => (await q(`SELECT updated_at::text AS t FROM knowledge WHERE name=$1`, [name]))[0].t;   // µs 까지(문자열)
+  const at0 = await updatedAt(C);
   const offC = await kst.setKnowledgeSearchable(C, false, ctx);
   chk("E11 끄기 = changed:true · 표시 false", offC.changed === true && (await flagOf(C)) === false);
+  chk("E11 소환 설정 토글은 갱신 시각을 안 올린다(최신 순 목록을 밀어올리지 않게)", (await updatedAt(C)) === at0, `${at0} → ${await updatedAt(C)}`);
   chk("E11 끄면 벡터를 비운다", !(await hasVec(C)));
   chk("E11 감사 set_searchable 1건", (await auditCount(C, "set_searchable")) === 1);
   const at1 = await updatedAt(C);
@@ -270,6 +277,45 @@ try {
   chk("E21 전제: A 는 벡터가 있다", await hasVec(A));
   await kst.upsertKnowledge({ name: A, body_md: `검색 대상 본문 ${LEX}`, searchable: false }, ctx);
   chk("E21 저장으로 끈 A: 표시 false · 벡터 비워짐", (await flagOf(A)) === false && !(await hasVec(A)));
+
+  // ── E22 지우고 휴지통에서 되살려도 검색 제외가 남는다(복원은 삭제 때 스냅샷을 다시 넣는다) ──
+  const Dn = `${TAG}-del`;
+  await kst.upsertKnowledge({ name: Dn, title: "지울 D", body_md: "지우고 되살린다", type: "reference", category: CK, searchable: false }, ctx);
+  await kst.deleteKnowledge(Dn, ctx);
+  chk("E22 전제: 지워졌다", (await flagOf(Dn)) === undefined);
+  const snap = (await q(`SELECT before FROM org_content_audit WHERE entity='knowledge' AND entity_key=$1 AND op='delete' ORDER BY id DESC LIMIT 1`, [Dn]))[0]?.before;
+  await kst.restoreKnowledge(snap, ctx);
+  chk("E22 되살린 문서도 검색 제외", (await flagOf(Dn)) === false);
+
+  // ── E23 검색 제외에 벡터가 남아 있으면(끌 때 비우기 실패 등) — 유사의 기준이 되지 않고, 스윕이 걷는다 ──
+  await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [Dn, lit(basis(0))]);
+  chk("E23 유사(name=남은 벡터를 가진 검색 제외) = 빈 결과", (await ks.findSimilarKnowledge({ name: Dn, limit: 10 }, VIEWER)).length === 0);
+  await sweep();
+  chk("E23 스윕이 검색 제외에 남은 벡터를 걷는다", !(await hasVec(Dn)));
+
+  // ── E16b all 모드(전량 재임베딩): 배치 도중 대상에서 빠진 행 때문에 뒤 행을 건너뛰지 않는다(done = 다음 배치 OFFSET) ──
+  //  배치 2 · 새 모델 «fake2» 로 전량을 다시 굽는다. 가장 최근 행 X 가 첫 배치에 들고, 임베딩 도중 검색 제외가 된다.
+  const X = `${TAG}-allx`;
+  await kst.upsertKnowledge({ name: X, title: "전량 X", body_md: "zqrace 전량 재임베딩 도중 빠진다", type: "reference", category: CK }, ctx);
+  await q(`UPDATE knowledge SET updated_at='2030-01-01T00:00:00Z' WHERE name=$1`, [X]);   // 정렬(updated_at DESC) 맨 앞 = 첫 배치
+  await q(`UPDATE org_runtime_config SET embedding_config = embedding_config || '{"batch_size": 2, "model": "fake2"}'::jsonb WHERE id=1`);
+  raceHook = async () => { await kst.setKnowledgeSearchable(X, false, { actor: "pgt-race", source: "web" }); };
+  const firedBefore = raceFired;
+  const all = await eb.runEmbeddingBackfill({ mode: "all" });
+  chk("E16b 배선: all 모드가 돌았고 임베딩 도중 훅이 불렸다", all.ok === true && raceFired === firedBefore + 1, JSON.stringify(all));
+  const stale = await q(`SELECT name FROM knowledge WHERE lifecycle='active' AND searchable AND embedding_model IS DISTINCT FROM 'fake2'`);
+  chk("E16b 대상 행은 하나도 건너뛰지 않고 새 모델로 다시 구워졌다", stale.length === 0, JSON.stringify(names(stale)));
+  chk("E16b 도중에 빠진 X 에는 벡터가 없다", !(await hasVec(X)));
+
+  // ── E23c 자동 스윕(10분 주기·부팅·nudge)도 걷는다 — 채울 것(pending)이 없어 백필 잡을 안 띄우는 스윕에서도 ──
+  //  E16b 뒤라 대상 행은 모두 벡터가 있다(pending 0) — 그래서 이 스윕이 걷는 길은 잡이 아니라 스윕 자신이다.
+  chk("E23c 전제: 채울 것이 없다", (await eb.countEmbeddingBacklog(eb.KNOWLEDGE_TARGET)).pending === 0);
+  await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [Dn, lit(basis(0))]);
+  await q(`UPDATE org_runtime_config SET embedding_backfill_paused=false,
+             embedding_config = embedding_config || '{"backfill_min_available_mb": 0}'::jsonb WHERE id=1`);
+  await eb.runAutoBackfillSweep();
+  await q(`UPDATE org_runtime_config SET embedding_backfill_paused=true WHERE id=1`);
+  chk("E23c 자동 스윕이 검색 제외에 남은 벡터를 걷는다", !(await hasVec(Dn)));
 } catch (e) {
   fail++; console.error("FAIL 예외 —", e);
 } finally {

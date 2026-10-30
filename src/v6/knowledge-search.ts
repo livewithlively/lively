@@ -278,7 +278,8 @@ export async function findSimilarKnowledge(
   let selfName: string | null = null;
   if (opts.name) {
     selfName = opts.name;
-    const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1`, [opts.name]);
+    //  #5169 검색 제외 문서는 기준이 되지 않는다 — 벡터가 없어야 하지만(끌 때 비운다) 비우기가 best-effort 라 표시로도 막는다.
+    const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1 AND searchable`, [opts.name]);
     vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 대상에 임베딩 없으면 null → []
   } else if (opts.text && opts.text.trim()) {
     const qe = await embedQuery(opts.text);

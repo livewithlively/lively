@@ -568,25 +568,28 @@ export async function setKnowledgeWiki(name: string, isWiki: boolean, ctx?: Writ
   return after;
 }
 
-// 검색 제외 토글(#5169 · 이슈 #1619) — searchable 만 갱신(본문·메타 불변, version 안 올림 — set_wiki 와 같은 급의 뷰 설정).
+// 검색 제외 토글(#5169 · 이슈 #1619) — searchable 만 갱신. 내용이 아니라 소환 설정이라 version·updated_at 을 안 올린다
+//  (props_ui 토글과 같은 까닭 — 최신 순 목록·도메인 소환 대표 지식의 순서를 설정 토글이 밀어올리지 않게).
 //  false 면 벡터도 비운다: 검색 표면은 searchable 로 거르지만, 벡터를 쓰는 다른 곳(중복 탐지·분류 어긋남)이 남은 벡터로
 //  이 문서를 계속 보지 않게. 비우기는 플래그와 따로 한다 — 벡터 칸이 없는 DB(임베딩 스키마 건너뜀)에서도 토글은 돼야 한다.
 //  true 로 돌아오면 비어 있는 벡터를 스윕이 채운다(곧바로 한 번 깨운다).
-//  값이 같으면 갱신 시각·감사를 남기지 않는다(changed:false) — 앱이 문서를 다시 올릴 때마다 같은 값을 보내도 이력이 쌓이지 않게.
+//  값이 같으면 감사를 남기지 않는다(changed:false) — 앱이 문서를 다시 올릴 때마다 같은 값을 보내도 이력이 쌓이지 않게.
+//  읽고 판정하고 쓰는 사이를 행 잠금으로 묶는다(patchKnowledgeFields 와 같은 꼴) — 거의 동시에 온 끄기·켜기가 둘 다 옛 값을
+//  읽으면 뒤엣것이 «같은 값» 으로 끝나 나중 의도가 사라진다.
 export async function setKnowledgeSearchable(name: string, searchable: boolean, ctx?: WriteCtx): Promise<{ knowledge: KnowledgeRow; changed: boolean }> {
-  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
-  if (!before) throw new Error(`지식 '${name}' 없음`);
-  let after = before;
-  const changed = before.searchable !== searchable;
-  if (changed) {
-    after = await one(itemsPool,
-      `UPDATE knowledge SET searchable=$2, updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`, [name, searchable]);
-    await auditKnowledge(name, "set_searchable", before, after, ctx);
-  }
+  const r = await withTx(async (client) => {
+    const before = await one(client, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1 FOR UPDATE`, [name]) as KnowledgeRow | undefined;
+    if (!before) throw new Error(`지식 '${name}' 없음`);
+    if (before.searchable === searchable) return { knowledge: before, changed: false };
+    const after = await one(client,
+      `UPDATE knowledge SET searchable=$2 WHERE name=$1 RETURNING ${K_COLS}`, [name, searchable]) as KnowledgeRow;
+    await auditKnowledge(name, "set_searchable", before, after, ctx, client);
+    return { knowledge: after, changed: true };
+  });
   //  같은 값이어도 false 면 비운다(멱등) — 어떤 길로든 벡터가 남아 있으면 이 호출이 바로잡는다.
   if (!searchable) await clearEmbedding(KNOWLEDGE_TARGET, name);
-  else if (changed) nudgeAutoBackfill();
-  return { knowledge: after, changed };
+  else if (r.changed) nudgeAutoBackfill();
+  return r;
 }
 
 // 제목만 갱신(#1442) — 본문 불변. `knowledge_save` 는 body_md 가 필수라 제목 한 줄을 고치려면 전문을

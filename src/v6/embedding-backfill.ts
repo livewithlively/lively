@@ -32,6 +32,7 @@ export interface EmbeddingTarget {
   activeFilter: string;                                // 백필 대상 행 필터(SQL boolean) — knowledge="lifecycle='active'", project="TRUE"
   selectCols: string;                                  // buildText 에 필요한 SELECT 컬럼들(idCol 포함)
   buildText: (row: Record<string, unknown>) => string; // 행 → 임베딩 입력 텍스트
+  purgeFilter?: string;                                // 벡터를 **두면 안 되는** 행(SQL boolean) — 스윕마다 남은 벡터를 걷는다(#5169)
 }
 
 // 지식: 제목+요약+본문(기존 동작 그대로). idCol='name', active 만.
@@ -43,6 +44,9 @@ export const KNOWLEDGE_TARGET: EmbeddingTarget = {
   activeFilter: "lifecycle='active' AND searchable",
   selectCols: "name, title, summary, body_md",
   buildText: (r) => embeddingInputText(r as { title?: string | null; summary?: string | null; body_md?: string | null }),
+  //  검색 제외에 남은 벡터 — 끌 때 비우지만(clearEmbedding) best-effort 라 그때 실패했으면 대상 밖이라 아무도 다시 안 본다.
+  //   벡터를 쓰는 다른 곳(중복 탐지·분류 어긋남)이 그 벡터로 이 문서를 계속 보지 않게 스윕이 걷는다(부분 인덱스 knowledge_unsearchable_idx).
+  purgeFilter: "NOT searchable",
 };
 
 // 프로젝트(project·task·subtask 통합 테이블): name+description. idCol='id'(int), lifecycle 컬럼 없음 → 전 행 대상(TRUE).
@@ -166,6 +170,7 @@ export async function runEmbeddingBackfill(opts: {
   // 스키마 보장(pgvector 확장 + 컬럼/인덱스). 부재면 graceful false.
   const schemaOk = await ensureEmbeddingSchema(itemsPool, cfg.dimensions, target.table);
   if (!schemaOk) return { ok: false, embedded: 0, reason: "schema", model: provider.model, dimensions: provider.dimensions };
+  await purgeExcludedVectors(target);   // #5169 — 엔드포인트가 죽어 있어도 걷는다(임베딩을 부르지 않는다)
 
   // 엔드포인트 헬스 — reachable + 차원 일치(잘못된 base_url/model 조기 차단).
   if (!(await provider.isAvailable())) {
@@ -198,6 +203,7 @@ export async function runEmbeddingBackfill(opts: {
       if (opts.shouldStop?.()) break;
       // 재진입 안전: all 은 이미 처리한 행을 다시 잡으므로 OFFSET 으로 진행(같은 배치 무한루프 방지).
       //  pending/model-changed 는 UPDATE 로 조건에서 빠지므로 OFFSET 0 으로 항상 '남은 것'의 앞을 집는다.
+      //  ⚠ 그래서 all 모드의 done 은 OFFSET 이다 — 아래에서 «실제로 쓴 행» 만 센다(#5169, 그 줄 주석).
       const offset = mode === "all" ? done : 0;
       const { rows } = await itemsPool.query(
         `SELECT ${target.selectCols} FROM ${target.table}
@@ -220,6 +226,8 @@ export async function runEmbeddingBackfill(opts: {
              WHERE ${target.idCol}=$1 AND (${target.activeFilter})`,
           [(rows[i] as Record<string, unknown>)[target.idCol], toVectorLiteral(vec), provider.model],
         );
+        //  안 쓴 행(대상에서 빠짐)은 세지 않는다 — all 모드에서 done 은 다음 배치의 OFFSET 인데 그 행은 다음 SELECT 에서도 빠진다.
+        //   세면 줄어든 집합에 OFFSET 이 하나 더 걸려 뒤의 행 하나를 영영 건너뛴다(옛 모델 벡터가 남는다).
         if (res.rowCount) done++;
       }
       opts.onProgress?.({ total: Math.max(total, done), done });
@@ -335,6 +343,7 @@ export async function runAutoBackfillSweep(): Promise<void> {
     }
     for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET, CATEGORY_TARGET, SESSION_CARD_TARGET, COLLECT_UNIT_TARGET]) {
       if (isBackfillPaused()) break; // 스윕 도중 일시중지되면 남은 타깃으로 넘어가지 않는다(실행 중 잡은 shouldStop 으로 이미 중단).
+      await purgeExcludedVectors(target);   // #5169 — 채울 것이 없어 잡을 안 띄우는 스윕에서도 걷는다
       let pending = 0;
       try { pending = (await countEmbeddingBacklog(target)).pending; } catch { continue; }
       if (pending === 0) continue;
@@ -388,6 +397,19 @@ export async function clearEmbedding(target: EmbeddingTarget, id: string | numbe
     );
   } catch (e) {
     console.warn(`[embeddings] 벡터 비우기 실패(best-effort) ${target.name}#${id}: ${(e as Error)?.message}`);
+  }
+}
+
+// 벡터를 두면 안 되는 행(target.purgeFilter)에 남은 벡터를 걷는다(#5169). best-effort — 실패해도 스윕·백필을 막지 않고 다음 스윕이 다시 본다.
+async function purgeExcludedVectors(target: EmbeddingTarget): Promise<void> {
+  if (!target.purgeFilter) return;
+  try {
+    await itemsPool.query(
+      `UPDATE ${target.table} SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL
+         WHERE (${target.purgeFilter}) AND embedding_vector IS NOT NULL`,
+    );
+  } catch (e) {
+    console.warn(`[embeddings] 남은 벡터 걷기 실패(best-effort) ${target.name}: ${(e as Error)?.message}`);
   }
 }
 
