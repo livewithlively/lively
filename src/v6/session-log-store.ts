@@ -533,6 +533,8 @@ export async function backfillSessionTitles(limit = 500): Promise<number> {
 //  · 단일 문장(modifying CTE)이라 원자적 — 지운 세션의 청크만 정확히 함께 삭제(활성 세션의 옛 청크는 안 건드림).
 export async function reapSessionLogs(retentionDays: number): Promise<{ logs: number; chunks: number }> {
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) return { logs: 0, chunks: 0 };
+  //  #5201 세션의 지식 찾기 기록도 이 보존기간을 넘기지 않는다(그 표 자체의 90일보다 짧을 때). 검색어는 대화에서 나온 글이다.
+  await itemsPool.query(`DELETE FROM knowledge_search_log WHERE session_id IS NOT NULL AND ts < now() - ($1 * interval '1 day')`, [retentionDays]);
   const r = await itemsPool.query(
     `WITH reaped AS (
        DELETE FROM session_log WHERE updated_at < now() - ($1 * interval '1 day')
@@ -601,6 +603,8 @@ export async function purgeSessionLog(nodeId: string, sessionId: string, purgedB
           AND NOT EXISTS (SELECT 1 FROM session s WHERE s.session_id = sp.session_id)`, [ids]);
     // #2233 — 대화 사슬(어느 박스가 이 대화를 돌렸나)도 함께 지운다. 남겨 두면 완전 삭제한 대화가 다른 세션
     //  화면의 사슬에 이름으로 남는다(내용은 이미 없지만, '있었다'는 사실 자체가 지우기로 한 것이다).
+    // #5201 — 그 대화를 돌린 박스의 지식 찾기 기록(검색어)도. 그 표의 세션 칸은 대화가 아니라 박스라, 박스의 줄을 통째로 지운다(박스의 다른 대화 몫까지 지워져도 기록일 뿐이다).
+    await client.query(`DELETE FROM knowledge_search_log WHERE session_id IN (SELECT box_id FROM org_session_conv WHERE conv_uuid = ANY($1))`, [ids]);
     await client.query(`DELETE FROM org_session_conv WHERE conv_uuid = ANY($1)`, [ids]);
     // 묘비 — 이 좌표는 다시 받지 않는다. 없으면 워터마크가 0으로 돌아간 자리에 캡처 훅이 전문을 다시 올려
     //  지운 것이 부활한다(세션이 아직 살아 있을 때 특히). 서브에이전트 좌표도 각각 세운다(각자 append 대상이다).

@@ -138,9 +138,13 @@ To run the gateway in a container too: `docker compose --profile gateway up -d -
 
 ## Vector/hybrid search (optional — #172)
 
-Knowledge search has two tools: **`knowledge_grep`** (exact text · regex matching, ripgrep-style — always works) + **`knowledge_search`** (semantic · natural-language **hybrid** — fuses vector embeddings ∪ lexical grep with **RRF** (`Σ 1/(rank+60)`)). It retrieves by meaning even when the words don't appear verbatim in the body.
+Knowledge search has two tools: **`knowledge_search`** (the default for finding — fuses lexical **BM25** ∪ vector embeddings with **RRF** (`Σ 1/(rank+60)`); takes natural language, keywords, or identifiers) + **`knowledge_grep`** (literal match · regex · counts, ripgrep-style — always works). It retrieves by meaning even when the words do not appear verbatim.
 
-**Off by default** — until embeddings are turned on, `knowledge_search` automatically falls back to grep (no downtime · backward compatible). Turning it on is opt-in:
+The lexical index lives in plain tables with no extension (`knowledge_lex_doc` · `knowledge_lex_posting` — tokenizer rules in `src/v6/knowledge-lex.ts`). A housekeeping sweep aligns it with `knowledge` every minute; until 98% of documents are indexed, or if the SQL fails, search falls back to the grep channel. These are derived tables — empty both together and the sweep rebuilds them. If you change the tokenizer rules, bump `LEX_RULES_VERSION`. Queries containing identifiers (issue numbers, file paths) use the lexical channel alone.
+
+Session searches and reads are recorded in `knowledge_search_log` (90 days, or the session retention period if shorter · deleted with a full session purge · the auto-recall path stores no query text). The built-in `db_query` source cannot read it.
+
+**Embeddings are off by default** — until they are turned on, `knowledge_search` uses the lexical channel alone (no downtime · backward compatible). Turning it on is opt-in:
 
 ```bash
 # 1) .env: EMBEDDINGS_PROVIDER=http  (default sidecar = Ollama bge-m3, OpenAI-compatible /v1/embeddings)
@@ -153,8 +157,7 @@ npm run build && node --env-file-if-exists=.env scripts/backfill-embeddings.mjs
 - **Requires pgvector** — the `vector` extension in the items DB (`ITEMS_DATABASE_URL`). At boot it idempotently creates `CREATE EXTENSION IF NOT EXISTS vector` + `knowledge.embedding_vector vector(N)` + an HNSW (cosine) index (if permissions or the extension are missing, it warns and uses **lexical fallback** — nothing breaks).
 - **Inference seam = config-over-code (swap models freely).** provider/base_url/model/dimensions/auth_env are set in `org_runtime_config.embedding_config` (web · DB, no restart) or `.env` `EMBEDDINGS_*` (bootstrap seed) — the DB wins. **The contract is OpenAI-compatible `/v1/embeddings`**, so you can switch to OpenAI · local TEI/vLLM · a customer's own endpoint by changing only base_url. For secrets, `EMBEDDINGS_AUTH_ENV` = only the environment variable **name** (the value isn't stored).
 - **Changing models:** change `EMBEDDINGS_MODEL` → `docker compose exec embeddings ollama pull <model>` → if the dimensions differ, also change `EMBEDDINGS_DIMENSIONS` and run `scripts/backfill-embeddings.mjs --all`. The default bge-m3 (1024d, multilingual) can be swapped losslessly for KURE-v1 (same 1024d → re-embedding only) for stronger Korean.
-- To turn it off: `EMBEDDINGS_PROVIDER=off` (or org_runtime_config provider=off) → back to grep immediately.
-- Korean morphological FTS (mecab-ko) and a reranker for the lexical channel are follow-ups (the lexical channel is currently ILIKE token-AND · regex, handling the exact-match half of RRF).
+- To turn it off: `EMBEDDINGS_PROVIDER=off` (or org_runtime_config provider=off) → back to the lexical channel immediately.
 
 ## How "control by permissions" is actually implemented (free-form SQL safeguards)
 

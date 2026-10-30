@@ -359,7 +359,9 @@ function startBackgroundSweeps(): void {
   setInterval(() => {
     void perTenant("session-log-reap", () => getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days))
       //  검색 기록(#4530)도 같은 박자로 — 180일 넘은 검색어를 지운다. 앞의 정리가 실패해도 이건 돈다.
-      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ })));
+      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ }))
+      //  세션의 지식 찾기 기록(#5201)도 — 90일 넘은 줄을 지운다.
+      .finally(() => import("../v6/knowledge-search-log-store.js").then((m) => m.reapKnowledgeSearchLog()).catch(() => { /* 다음 판에 다시 */ })));
   }, 6 * 60 * 60_000).unref();
   // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
   setTimeout(() => { void perTenant("session-title-backfill", () => backfillSessionTitles()); }, 35_000).unref();

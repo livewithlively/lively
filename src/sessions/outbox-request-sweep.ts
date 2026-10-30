@@ -64,6 +64,8 @@ export const SIX_HOURS_MS = 6 * 60 * 60_000;
 /** 대화 검색 색인 정비 주기(#4517). 업로드 직후 색인이 따로 있어 이건 **밀린 것**(배포 직후 옛 기록 · 놓친 업로드)을 줍는 몫이다 —
  *  한 판에 SWEEP_MAX_BYTES 까지만 풀므로 1분마다 돌면 한 사람 몫(실측 2GB 대)이 십여 분 안에 따라잡힌다. */
 export const CONV_INDEX_SWEEP_MS = 60_000;
+/** 지식 낱말 색인 정비 주기(#5201). 저장 길 밖의 쓰기가 낱말 검색에 잡히기까지의 지연이다. 한 판 상한은 knowledge-lex-store 의 LEX_SWEEP_BUDGET_MS. */
+export const KNOWLEDGE_LEX_SWEEP_MS = 60_000;
 /** 하네스 종료 규칙(#4695 T5) 판정 주기. 시계가 분 단위(N 기본 3분)라 «N분 ± 이 주기» 가 실제 끄는 시각이 된다 — 대기 알림과 같은 30초. */
 export const STOP_RULE_SWEEP_MS = 30_000;
 /**
@@ -89,6 +91,10 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  provider off 면 설정 조회 후 no-op 이라 켜 두어도 비용이 없다.
   { key: "embedding-backfill", intervalMs: TEN_MIN_MS,
     run: () => import("../v6/embedding-backfill.js").then((m) => m.runAutoBackfillSweep()) },
+  // 지식 낱말 색인(#5201) — 저장 길은 nudge 로 곧바로 맞고, 커넥터 미러 · 수정 승인 · 세션 기록처럼 다른 쓰기 길과 밀린 것을 이 정비가 줍는다.
+  //  밀린 것이 없으면 조회 한 번이다. 셀프호스트도 같은 정의로 돈다(housekeeping).
+  { key: "knowledge-lex", intervalMs: KNOWLEDGE_LEX_SWEEP_MS, housekeeping: true,
+    run: () => import("../v6/knowledge-lex-store.js").then((m) => m.sweepKnowledgeLex()) },
   // device-auth 리퍼(#880) — 만료 1h 지난 pending 정리(user_code 회수). 실측 2건 잔존.
   { key: "device-auth-reap", intervalMs: TEN_MIN_MS,
     run: () => import("../org/auth/device-auth.js").then((m) => m.reapDeviceAuth()) },
@@ -104,7 +110,9 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
       .then((cfg) => import("../v6/session-log-store.js")
         .then((m) => m.reapSessionLogs(cfg.session_share.retention_days)))
       //  검색 기록(#4530)도 같은 박자로 — 180일 넘은 검색어를 지운다. 앞의 정리가 실패해도 이건 돈다.
-      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ })) },
+      .finally(() => import("../v6/search-log-store.js").then((m) => m.reapSearchLog()).catch(() => { /* 다음 판에 다시 */ }))
+      //  세션의 지식 찾기 기록(#5201)도 — 90일 넘은 줄을 지운다.
+      .finally(() => import("../v6/knowledge-search-log-store.js").then((m) => m.reapKnowledgeSearchLog()).catch(() => { /* 다음 판에 다시 */ })) },
   // 세션 제목 소급 채움(#905 C1) — 멱등이고 다 채우면 no-op. 원래는 부팅 35초 후 1회였는데,
   //  요청에 얹는 세계에는 '부팅 1회'가 없다 — 긴 주기로 두면 같은 뜻이 된다(다 채우면 아무것도 안 한다).
   { key: "session-title-backfill", intervalMs: SIX_HOURS_MS,

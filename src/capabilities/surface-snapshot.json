@@ -2454,7 +2454,7 @@
   "rest": [
    "GET /api/ui/knowledge/semantic"
   ],
-  "input_hash": "1770cb4d4670be03"
+  "input_hash": "08b82e5be661004b"
  },
  {
   "name": "knowledge_similar",

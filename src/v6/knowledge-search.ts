@@ -2,17 +2,20 @@
 //  분리 이유: CRUD 와 완전히 다른 관심사(질의 계획·벡터·랭킹)인데 한 파일에 있어 검색 튜닝 diff 가 저장 경로와
 //  충돌했다. 공개 표면은 그대로 — knowledge-store.ts 가 이 모듈을 재수출하므로 기존 호출부는 무수정.
 //  공용 조각(가시성 술어·아이콘 표현식)은 knowledge-common.ts, grep 매처·RRF 상수는 search-util.ts.
+import type { PoolClient } from "pg";
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, withTx } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
   type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst, titleFirst,
-  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedQuery,
+  RRF_K, HYBRID_CANDIDATES, HNSW_EF_SEARCH, activeEmbeddingProvider, embedQuery,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
 import { parseQueryTerms, requiredTerms } from "./query-terms.js";   // #4744 검색 실패 보조 안내의 낱말 판정(군말 빼기)
 import { knowledgeVisWhere, K_ICON_EXPR } from "./knowledge-common.js";
 import { knowledgeCategoryRestriction, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 category 인자 · 앱 맥락 범위
+import { bm25Sql, hasIdentifier, lexQueryTerms } from "./knowledge-lex.js";   // #5201 낱말 채널
+import { lexReady } from "./knowledge-lex-store.js";
 
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
 //  grep 매처(parseGrep/grepWhere)·스니펫 빌더(grepSnippet)는 search-util.ts 로 분리(#631, project 검색과 공유).
@@ -43,14 +46,34 @@ function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: s
   //   종전엔 key 로 찾으면 **그 key 를 본문에 인용한 다른 문서**만 나오고 정작 그 문서는 안 나왔다.
   //  #5169 검색 제외(searchable=false)는 여기서 뺀다 — grep·count·하이브리드 렉시컬이 모두 이 자리를 지난다(벡터 쪽은 rrfSearch).
   //   사람 화면(⌘K · 링크 고르기)만 includeUnsearchable 로 남긴다(KnowledgeSearchFilter 주석).
-  const wh: string[] = [grepWhere(["k.name", "k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
+  return [grepWhere(["k.name", "k.title", "k.body_md"], plan, params), ...searchFilterSql(opts, params)].join(" AND ");
+}
+
+/** 낱말이 아닌 거르기(수명 · 검색 제외 · 주입 · 출처 · 카테고리) — grep 과 BM25 낱말 채널이 같은 조건으로 후보를 고른다. */
+function searchFilterSql(opts: { injection?: string; provenance?: string; categories?: readonly number[] | null; includeUnsearchable?: boolean }, params: unknown[]): string[] {
+  const wh: string[] = [`k.lifecycle='active'`];
   if (!opts.includeUnsearchable) wh.push(`k.searchable`);
   if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
   if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
   //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위 — knowledgeCategoryRestriction). 후보를 고르는 이 자리에서 건다 —
   //   하이브리드의 렉시컬 후보(상위 N)가 제한 밖 문서로 채워지면 최종 술어만으로는 결과가 빈다.
   if (opts.categories) wh.push(knowledgeInCategoriesSql(opts.categories, params, "k"));
-  return wh.join(" AND ");
+  return wh;
+}
+
+/** 어떤 길로 찾았나(#5201) — 기록(knowledge_search_log)이 호출마다 남긴다. */
+export type KnowledgeSearchRoute = "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
+export interface SearchRouteDiag { route?: KnowledgeSearchRoute }
+
+/**
+ * 이 찾기가 쓸 BM25 낱말(#5201) — 쓸 수 없으면 null.
+ *  사람 화면(plain · includeUnsearchable)은 글자 그대로 찾는 약속이고 색인에 없는 검색 제외 문서도 찾으므로 종전 길이다.
+ *  색인이 덜 찼으면(lexReady) 종전 grep 채널로 간다 — 찾을 수 있던 문서가 잠깐 안 나오면 안 된다.
+ */
+async function bm25Terms(qstr: string, opts: { plain?: boolean; includeUnsearchable?: boolean }): Promise<string[] | null> {
+  if (opts.plain || opts.includeUnsearchable) return null;
+  const terms = lexQueryTerms(qstr);
+  return terms.length && await lexReady() ? terms : null;
 }
 
 /** 지식 검색이 받는 공통 거르기 — categories(#5100)는 카테고리 id 목록(category 인자를 풀어 넣는다 · 앱 맥락 범위는 여기서 교집합으로 더해진다). */
@@ -88,21 +111,34 @@ export async function searchKnowledge(
   qstr: string,
   opts: KnowledgeSearchFilter & { limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean } = {},
   viewer?: Viewer,
+  diag?: SearchRouteDiag,
 ): Promise<KnowledgeSearchRow[]> {
   const withBody = opts.mode !== "names";   // names 모드는 body_md/스니펫 불필요 — 더 얕게 조회
   const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
   const categories = await knowledgeCategoryRestriction(viewer, opts.categories);
-  const { result: rows, plan } = await grepExec(qstr, async (p) => {
+  //  #5201 무엇이 맞나는 grep 규칙 그대로 두고, 같은 급 안의 **순서만** BM25 로 — 종전 최신순은 본문에 낱말이 스친 최근 문서가 위에 섰다
+  //   (grep 으로 친 검색어 75개 판정 nDCG@5 0.535 → 0.602). 정규식으로 친 검색어(grep 호출의 65%)도 낱말로 나눠 같은 순서를 쓴다.
+  const terms = await bm25Terms(qstr, opts);
+  if (diag) diag.route = terms ? "bm25-order" : "grep";
+  const find = (bmTerms: readonly string[] | null) => grepExec(qstr, async (p) => {
     const params: unknown[] = [];
     const where = grepWhereSql(p, { ...opts, categories }, params);
     // 렉시컬 채널은 정확 스캔이라 술어를 WHERE 에 그대로 건다(벡터 채널과 달리 리콜 붕괴가 없다 — rrfSearch 주석 참조).
     const vis = await knowledgeVisWhere(viewer, params);
     const first = exactFirst("k.name", qstr, "name", params);   // key 의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     const tf = titleFirst("k.title", p, params);                // 제목에 모든 낱말이 든 것이 본문만 스친 최근 문서에 잘리지 않게(#4530)
+    const bm = bmTerms ? bm25Sql(bmTerms, params, vis) : null;
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool,
-      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT $${params.length}`, params);
+      `${bm ? `WITH ${bm} ` : ""}SELECT ${sel} FROM knowledge k ${bm ? "LEFT JOIN bm ON bm.name = k.name " : ""}WHERE ${where} AND ${vis}
+       ORDER BY ${first}${tf}${keptFirst(opts)}${bm ? "bm.score DESC NULLS LAST, " : ""}k.updated_at DESC LIMIT $${params.length}`, params);
   }, { plain: opts.plain });
+  const { result: rows, plan } = await find(terms).catch((e) => {
+    if (!terms) throw e;
+    console.warn(`[knowledge-lex] BM25 순서 실패 — 최신순으로: ${(e as Error)?.message}`);   // 순서 때문에 grep 이 죽으면 안 된다
+    if (diag) diag.route = "grep";
+    return find(null);
+  });
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, icon: r.icon ?? null, ...flagOf(opts, r) };
@@ -121,16 +157,31 @@ export async function hybridSearchKnowledge(
   qstr: string,
   opts: KnowledgeSearchFilter & { limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean } = {},
   viewer?: Viewer,
+  diag?: SearchRouteDiag,
 ): Promise<KnowledgeSearchRow[]> {
-  //  질의 임베딩은 한 자리(embedQuery — 기억·동시 요청 공유·짧은 상한, #4530). off·실패 → grep 그대로(하위호환).
+  const terms = await bm25Terms(qstr, opts);
+  //  #5201 식별자가 든 질의는 낱말 채널만 쓴다(근거는 hasIdentifier 주석). 임베딩도 부르지 않는다. 식별자 조각까지 하나도 안 맞을 때만 아래로 내려간다.
+  const idOnly = !!terms && hasIdentifier(qstr);
+  if (idOnly) {
+    try {
+      const rows = await rrfSearch(qstr, null, terms, opts, viewer);
+      if (rows.length) { if (diag) diag.route = "lexical"; return rows; }
+    } catch (e) {
+      console.warn(`[knowledge-lex] 낱말 검색 실패 — 하이브리드로: ${(e as Error)?.message}`);
+    }
+  }
+  //  질의 임베딩은 한 자리(embedQuery — 기억·동시 요청 공유·짧은 상한, #4530). off·실패면 낱말 채널만, 그것도 없으면 grep 그대로(하위호환).
   const qe = await embedQuery(qstr);
   const qvec = qe.vec;
-  if (!qvec) return searchKnowledge(qstr, opts, viewer);               // off · 쿼리 임베딩 실패 → 폴백
+  if (!qvec && !terms) return searchKnowledge(qstr, opts, viewer, diag);   // off · 쿼리 임베딩 실패 + 색인 없음 → 폴백
+  if (!qvec && idOnly) { if (diag) diag.route = "lexical"; return []; }    // 낱말 채널은 방금 돌았다
   try {
-    return await rrfSearch(qstr, qvec, opts, viewer);
+    const rows = await rrfSearch(qstr, qvec, terms, opts, viewer);
+    if (diag) diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical";
+    return rows;
   } catch (e) {
     console.warn(`[embeddings] 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
-    return searchKnowledge(qstr, opts, viewer);                        // pgvector 컬럼 부재 등 → 폴백
+    return searchKnowledge(qstr, opts, viewer, diag);                  // pgvector 컬럼 부재 등 → 폴백
   }
 }
 
@@ -189,6 +240,17 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
 }
 
 /**
+ * 벡터 근사탐색을 넓혀 돌린다(#5201). 기본 hnsw.ef_search=40 이면 LIMIT 이 50 이어도 40건까지만 나오고, 행 보안 · 술어로 걸러지는 행이 그 40칸을 먼저 먹는다
+ *  (공용 DB 에서는 다른 워크스페이스 문서도 같은 인덱스에 있다). 값은 트랜잭션 안에서만 산다 — SET LOCAL.
+ */
+async function withHnswScan<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
+  return withTx(async (c) => {
+    await c.query(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
+    return fn(c);
+  });
+}
+
+/**
  * 벡터 채널 후보 CTE(이름 vec) — 카테고리 제한(#5100)이 있으면 **제한 안 행만 먼저 떠서(MATERIALIZED) 정확히 잰다**.
  *  HNSW 근사탐색(ORDER BY <=> … LIMIT)에 조건을 얹으면 탐색 목록(ef_search) 안에서만 사후로 걸러져, 제한 밖 이웃이 그 목록을 채울 때
  *  결과가 통째로 빈다(#1291 R2-#6 — 공개범위 술어를 후보에 안 넣는 까닭과 같은 현상). 범위를 선언한 앱은 바로 그 모양이다 — 범위 밖
@@ -210,15 +272,18 @@ function vecChannel(vecWhere: string, qp: string, candP: string, restricted: boo
 }
 
 // RRF 융합 = SQL 한 방(쿼리 임베딩은 JS 에서 계산해 $n::vector 로 주입). lex/vec CTE 각 후보 → row_number rank → RRF 점수.
+//  terms 가 있으면 낱말 채널이 BM25(#5201), 없으면 종전 grep 이다. qvec 이 없으면 낱말 채널 하나로 순위만 낸다.
 async function rrfSearch(
-  qstr: string, qvec: number[],
+  qstr: string, qvec: number[] | null, terms: readonly string[] | null,
   opts: KnowledgeSearchFilter & { limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean },
   viewer?: Viewer,
 ): Promise<KnowledgeSearchRow[]> {
   const withBody = opts.mode !== "names";
   const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
   const limit = Math.min(opts.limit ?? 20, 100);
-  const plan = opts.plain ? parsePlainGrep(qstr) : parseGrep(qstr);
+  const parsed = opts.plain ? parsePlainGrep(qstr) : parseGrep(qstr);
+  //  BM25 는 조사를 뗀 꼴로 맞으니 스니펫도 그 꼴로 줄을 찾는다(«임베딩을» → «임베딩» 만 든 줄). 정규식으로 친 글은 그 정규식 그대로.
+  const plan = terms && parsed.mode === "tokens" ? parsePlainGrep(qstr) : parsed;
   //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위) — 두 후보 CTE 에 건다(아래 «⚠ 공개범위 술어» 와 반대인 까닭은 vecChannel 주석).
   const categories = await knowledgeCategoryRestriction(viewer, opts.categories);
   const params: unknown[] = [];
@@ -227,38 +292,48 @@ async function rrfSearch(
   //   벡터 채널이 HNSW 근사탐색이라 후보 단계에서 걸러내면, 이웃 상위 N 개가 비가시 문서로 채워졌을 때
   //   결과가 통째로 비는 리콜 붕괴가 난다(#1291 R2-#6). 최종 필터로도 이름·본문은 DB 밖으로 안 나가므로 누출은 없다.
   //   (렉시컬 채널만 미리 걸러도 되지만, 술어를 두 군데 쓰면 한쪽만 고치는 사본 결함이 생긴다 — 한 곳으로 모은다.)
-  const lexWhere = grepWhereSql(plan, { ...opts, categories }, params);
-  // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
-  //  #5169 검색 제외는 벡터가 없지만 술어로도 뺀다 — 비우기 전의 벡터가 남아 있어도 결과에 안 나오게(렉시컬 grepWhereSql 과 같은 규칙).
-  const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
-  if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
-  if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
-  if (categories) vecWh.push(knowledgeInCategoriesSql(categories, params, "k"));
-  const vecWhere = vecWh.join(" AND ");
-  params.push(toVectorLiteral(qvec)); const qp = `$${params.length}::vector`;   // 쿼리 벡터(lex/vec 양쪽 참조 가능)
+  const lexWhere = terms ? "" : grepWhereSql(parsed, { ...opts, categories }, params);
+  const bmFilters = terms ? searchFilterSql({ ...opts, categories }, params).join(" AND ") : "";
   params.push(HYBRID_CANDIDATES); const candP = `$${params.length}`;
+  // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
+  //  ⚠ 질의 벡터가 없으면 이 자리를 통째로 건너뛴다 — SQL 에 안 쓰는 매개변수를 넘기면 Postgres 가 타입을 못 정해 거부한다.
+  let vecCte = "";
+  if (qvec) {
+    //  #5169 검색 제외는 벡터가 없지만 술어로도 뺀다 — 비우기 전의 벡터가 남아 있어도 결과에 안 나오게(렉시컬 grepWhereSql 과 같은 규칙).
+    const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
+    if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
+    if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
+    if (categories) vecWh.push(knowledgeInCategoriesSql(categories, params, "k"));
+    params.push(toVectorLiteral(qvec));   // 쿼리 벡터
+    vecCte = `${vecChannel(vecWh.join(" AND "), `$${params.length}::vector`, candP, categories !== null)},`;
+  }
   params.push(RRF_K); const kP = `$${params.length}`;
   const vis = await knowledgeVisWhere(viewer, params);   // 최종 SELECT 전용(위 후보 CTE 주석 참조)
   params.push(limit); const limP = `$${params.length}`;
   const first = exactFirst("k.name", qstr, "name", params);
   //  렉시컬 순위도 «제목에 모든 낱말이 든 것 먼저» (#4530) — 종전엔 최신순뿐이라 RRF 에 «제목이 맞았다» 는 신호가 하나도 없었다.
-  const tf = titleFirst("k.title", plan, params);
-  const sql = `
-    WITH lex AS (
+  const tf = terms ? "" : titleFirst("k.title", parsed, params);
+  const lexChannel = terms ? `${bm25Sql(terms, params, vis)},
+    lex AS (
+      SELECT k.name, row_number() OVER (ORDER BY ${first}b.score DESC, k.updated_at DESC) AS rank
+      FROM bm b JOIN knowledge k ON k.name = b.name WHERE ${bmFilters} ORDER BY ${first}b.score DESC, k.updated_at DESC LIMIT ${candP}
+    )` : `lex AS (
       SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC) AS rank
       FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT ${candP}
-    ),
-    ${vecChannel(vecWhere, qp, candP, categories !== null)},
+    )`;
+  const sql = `
+    WITH ${lexChannel},
+    ${vecCte}
     fused AS (
       SELECT name, SUM(1.0/(${kP} + rank)) AS score
-      FROM (SELECT name, rank FROM lex UNION ALL SELECT name, rank FROM vec) u
+      FROM (SELECT name, rank FROM lex${qvec ? " UNION ALL SELECT name, rank FROM vec" : ""}) u
       GROUP BY name
     )
     SELECT ${sel}, f.score::float8 AS score
     FROM fused f JOIN knowledge k ON k.name=f.name
     WHERE ${vis}
     ORDER BY ${first}f.score DESC LIMIT ${limP}`;
-  const rows = await q(itemsPool, sql, params);
+  const rows = qvec ? await withHnswScan((db) => q(db, sql, params)) : await q(itemsPool, sql, params);
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null, ...flagOf(opts, r) };
@@ -358,7 +433,7 @@ export async function findSimilarKnowledge(
       WHERE ${vis}
       ORDER BY k.similarity DESC
       LIMIT ${limP}`;
-    const rows = await q(itemsPool, sql, params);
+    const rows = await withHnswScan((db) => q(db, sql, params));
     return rows.map((r) => ({
       name: r.name, title: r.title, injection: r.injection, provenance: r.provenance,
       is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at,

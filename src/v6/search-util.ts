@@ -185,6 +185,7 @@ export function previewBody(body: string): string { return body.slice(0, PREVIEW
 // ── RRF(Reciprocal Rank Fusion) 상수 — 하이브리드 검색(벡터 ∪ 렉시컬)에서 공유. ──
 export const RRF_K = 60;         // RRF 상수(Azure 기본). Σ 1/(k+rank) — 두 채널 모두 상위면 가산.
 export const HYBRID_CANDIDATES = 50; // 각 채널(렉시컬·벡터) 후보 수 → 융합 후 limit 로 컷.
+export const HNSW_EF_SEARCH = 200;   // 벡터 근사탐색 폭(#5201) — 기본 40 은 후보 수보다 작다(knowledge-search withHnswScan).
 
 // ── 임베딩 provider 접근자 — config 가 켜졌을 때만 provider, off(기본)면 null. org_runtime_config.embedding_config 직접 읽음(무순환). ──
 //  off → null → 쓰기·검색 모두 no-op/렉시컬 폴백. 지식·프로젝트 스토어가 공유. 설계 [[vector-search-172-design-pluggable-seam-oss]].

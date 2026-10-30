@@ -6,6 +6,7 @@
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
 import type { Pool } from "pg";
 import { ensureCheck, redefineCheck } from "../../org/schema/ddl-util.js";
+import { TENANT_DEFAULT_EXPR } from "../../db/tenant-column.js";
 
 export async function initV6Knowledge(pool: Pool): Promise<void> {
   // ── 3) knowledge — 구 knowledge_unit 대체. kind(R/K/H/W) **폐기**(직교축으로 분리). ──
@@ -75,6 +76,50 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS knowledge_provenance_idx ON knowledge(provenance);
     CREATE INDEX IF NOT EXISTS knowledge_lifecycle_idx ON knowledge(lifecycle);
     CREATE INDEX IF NOT EXISTS knowledge_parent_idx ON knowledge(parent_name);
+  `);
+
+  // ── knowledge_lex_doc · knowledge_lex_posting — 지식 낱말 색인(BM25 · #5201). 언제든 knowledge 에서 다시 만들 수 있는 파생 표다. ──
+  //  규칙은 v6/knowledge-lex.ts, 쓰기는 v6/knowledge-lex-store.ts(정비 스윕 · 저장 뒤 그 문서)가 맡는다. 활성 · 검색 대상 지식만 들어간다.
+  //  doc_id 를 쓰는 까닭 — 지식 이름을 낱말 행마다 두면 표와 인덱스가 곱절이 된다(문서 2,760개에 낱말 행 189만).
+  //  ⚠ tenant_id 를 표에 직접 적는 까닭 — 자동으로 붙이면 기본키가 (term, doc_id) 로 남아, 공용 DB 에서 낱말 하나를 찾을 때 모든 워크스페이스의 행을 훑는다.
+  //   INCLUDE(tf) 는 인덱스만 읽고 끝내기 위해서다. 외래키는 두지 않는다 — 낱말 행 수만큼 검사가 붙고, 이 표는 지우고 다시 만들어도 된다.
+  //  source_updated_at = 색인할 때의 knowledge.updated_at. 스윕은 이 값으로 밀린 문서를 가른다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_lex_doc(
+      tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR},
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      doc_len INT NOT NULL,
+      content_hash TEXT NOT NULL,
+      rules_version INT NOT NULL DEFAULT 1,
+      source_updated_at TIMESTAMPTZ NOT NULL,
+      UNIQUE (tenant_id, name));
+    CREATE TABLE IF NOT EXISTS knowledge_lex_posting(
+      tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR},
+      term TEXT NOT NULL,
+      doc_id BIGINT NOT NULL,
+      tf INT NOT NULL,
+      PRIMARY KEY (tenant_id, term, doc_id) INCLUDE (tf));
+    CREATE INDEX IF NOT EXISTS knowledge_lex_posting_doc_idx ON knowledge_lex_posting(doc_id);
+  `);
+
+  // ── knowledge_search_log — 에이전트 · 세션의 지식 찾기 기록(#5201). 무엇을 찾았고 무엇이 나왔고 무엇을 열었나. ──
+  //  서버에 이 기록이 없어 지금까지는 맥 한 대의 세션 파일로만 검색 품질을 쟀다. 사람 화면 ⌘K 는 search_log 가 따로 있다 — 그쪽은 «한 번의 찾기에
+  //  한 줄» 이고 이쪽은 «호출 한 번에 한 줄» 이다. 쓰는 곳은 v6/knowledge-search-log-store.ts. 보존 기간이 지난 줄은 session-log-reap 박자로 지운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_search_log(
+      id BIGSERIAL PRIMARY KEY,
+      ts TIMESTAMPTZ NOT NULL DEFAULT now(),
+      member TEXT,
+      session_id TEXT,
+      tool TEXT NOT NULL,      -- 'search' · 'grep' · 'similar' · 'get'
+      route TEXT,              -- 어떤 길로 찾았나 — v6/knowledge-search.ts KnowledgeSearchRoute · similar 는 'vector'
+      q TEXT,                  -- 검색어(200자까지). get 은 비어 있다
+      names TEXT[],            -- 돌려준 지식 앞 10건(get 은 연 지식 1건)
+      n INT,                   -- 돌려준 건수
+      ms INT);
+    CREATE INDEX IF NOT EXISTS knowledge_search_log_ts_idx ON knowledge_search_log(ts);
+    CREATE INDEX IF NOT EXISTS knowledge_search_log_session_idx ON knowledge_search_log(session_id, ts) WHERE session_id IS NOT NULL;
   `);
 
   // ── knowledge_revision — 지식 '수정' 검토 큐(#783). 신규 지식은 lifecycle='pending' 으로 격리되지만, ──

@@ -13,7 +13,8 @@ import {
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 상세 조회는 '검토 대기 중인 수정이 있나'를 함께 알린다(덧쓰기 사고 방지).
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
-import type { SimilarDiag } from "../../v6/knowledge-search.js";
+import type { SearchRouteDiag, SimilarDiag } from "../../v6/knowledge-search.js";
+import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   // #5201 세션의 지식 찾기 기록
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
@@ -123,10 +124,10 @@ export const knowledgeGrep: Capability = {
   title: "지식 grep",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(세션 첫 동작)
   description:
-    "지식 제목/본문을 **grep**(텍스트 패턴 매칭)한다 — 의미검색 아님. 단어가 본문에 그대로 등장해야 잡힌다(대소문자 무시). " +
-    "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +
-    "OR·부분일치 등은 **POSIX 정규식**으로(예: `벡터|vector`, `task_\\w+`). " +
-    "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
+    "지식 이름/제목/본문을 **글자 그대로** 찾는다(grep) — 찾기의 기본은 knowledge_search 다. 이 도구는 **정규식 · «이 낱말이 전부 든 문서» · 건수(count)** 가 필요할 때 쓴다. " +
+    "낱말이 글에 그대로 등장해야 잡힌다(대소문자 무시). 공백으로 나눈 낱말은 **모두** 들어 있어야 한다(AND, 순서무관) — 하나라도 없으면 0건이다. " +
+    "POSIX 정규식도 된다(예: `task_\\w+`). 여러 낱말 중 아무거나 찾으려고 `a|b|c` 로 잇지 마라 — knowledge_search 는 낱말이 일부만 맞아도 맞은 만큼 순위를 매긴다. " +
+    "자연어 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 순서는 이름 정확일치 → 제목에 낱말 전부 → 낱말 점수(BM25). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
     "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C). " +
     "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 잡히지 않는다 — 그 문서 안의 낱말 찾기는 knowledge_list(category, q).",
   scope: "memory",
@@ -135,27 +136,28 @@ export const knowledgeGrep: Capability = {
     mcp: true,
     rest: [{ method: "GET", paths: ["/api/ui/knowledge/search"], parse: parseGrepQuery }],
   },
-  handler: async (input: KnowledgeGrepInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+  handler: async (input: KnowledgeGrepInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const t0 = Date.now();
     const viewer = ctx?.viewer ?? null;   // 공개범위(#1291) — 스니펫도 본문 조각이라 목록보다 더 셀 수 없다
     const plain = input.plain === true;   // #4530 화면 검색 — 글자 그대로(정규식 아님 · 조사 · 구절)
     const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(없는 카테고리는 400)
     if (input.mode === "count") {
       return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain, categories }, viewer) };
     }
-    return {
-      mode: input.mode ?? "snippets",
-      entries: await searchKnowledge(input.q, {
-        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories,
-      }, viewer),
-    };
+    const route: SearchRouteDiag = {};
+    const entries = await searchKnowledge(input.q, {
+      injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories,
+    }, viewer, route);
+    if (isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "grep", member: user.userId, session: ctx?.session, route: route.route, q: input.q, names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
+    return { mode: input.mode ?? "snippets", entries };
   },
 };
 
-// 하이브리드 검색(벡터검색 #172) — 벡터 임베딩 + 렉시컬 grep RRF 융합. grep(정확 매칭)과 직교: 의미·자연어 회수용.
+// 하이브리드 검색(벡터검색 #172) — 벡터 임베딩 + 낱말(BM25 #5201, 색인 전엔 grep) RRF 융합. 찾기의 기본 — grep 은 글자 그대로의 일치 · 정규식 · 건수용.
 //  org/schema.ts 가 'knowledge_search' 이름을 이 벡터검색 도구로 예약해 둠(구 knowledge_search→grep 개명 후). MCP 전용.
 //  임베딩 off(기본)면 자동으로 렉시컬(grep)로 폴백 → 켜기 전에도 안전하게 동작(동작 == grep).
 const knowledgeSearchInput = {
-  q: z.string().min(1).describe("자연어 질문 또는 키워드 — 의미 유사도로 검색(grep 과 달리 문장 가능)"),
+  q: z.string().min(1).describe("자연어 질문 · 키워드 나열 · 식별자(이슈 번호 · 파일 · 함수 이름) — 문장도 낱말도 된다"),
   injection: z.enum(["always", "recalled"]).optional(),
   provenance: z.enum(["authored", "observed"]).optional(),
   limit: z.number().int().min(1).max(100).optional(),
@@ -169,11 +171,11 @@ export const knowledgeSearch: Capability = {
   title: "지식 검색(하이브리드)",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — grep 과 함께 상시(의미검색이 #172 의 헤드라인 능력)
   description:
-    "지식을 **의미 기반 하이브리드 검색**한다 — 벡터 임베딩(의미 유사) + 렉시컬 grep 을 RRF 로 융합. " +
-    "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 찾아낸다(단어가 본문에 그대로 없어도 잡힘). " +
-    "임베딩 미설정 환경에선 자동으로 grep(렉시컬)으로 폴백한다(안전). " +
+    "지식을 찾는 **기본 도구**다 — 낱말 검색(BM25)과 뜻 검색(벡터 임베딩)을 RRF 로 합친다. " +
+    "**자연어 질문 · 키워드 나열 · 다른 표현** 모두 여기로 찾는다. 낱말이 일부만 맞아도 맞은 만큼 순위가 매겨지고, 낱말이 본문에 그대로 없어도 뜻으로 잡힌다. 조사는 떼고 맞춘다. " +
+    "이슈 번호 · 파일 경로 · 함수 이름 같은 식별자가 들어 있으면 낱말 검색만 쓴다(뜻 검색은 식별자를 못 찾는다). 임베딩 미설정 환경에선 낱말 검색만 쓴다. " +
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
-    "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본). " +
+    "**글자 그대로의 일치 · 정규식 · 건수**가 필요할 때만 knowledge_grep 을 써라. mode=names(이름·제목만)·snippets(기본). " +
     "결과가 없거나 약하면(뜻도 멀고 낱말도 안 맞으면) 세션의 호출 응답에 collect_hint(가져올 곳)가 붙는다 — sources(아직 지식이 안 된 원문 자료 — source_get 으로 먼저 본다) " +
     "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다). " +
     "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 나오지 않는다(knowledge_get 으로 이름을 불러 읽는다).",
@@ -200,19 +202,21 @@ export const knowledgeSearch: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSearchInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const t0 = Date.now();
     const viewer = ctx?.viewer ?? null;
     const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(두 채널 모두 후보부터)
+    const route: SearchRouteDiag = {};
     const entries = await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, categories,
-    }, viewer);
+    }, viewer, route);
     //  #4213 T12 #4744 검색 실패 보조 안내 — 결과가 없거나 약하면 «가져올 곳»(아직 지식이 안 된 원문 자료 → 그것도 없으면 질문한 사람이
     //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
     //   **세션이 부른 검색에만**(허용 목록) — MCP, 또는 세션 헤더(x-lively-session)를 실은 REST. 웹 화면의 «의미검색» · 앱 화면 다리
     //   (app-ui · app-front — 세션이 아니다)에는 계산하지 않는다(리뷰 2026-10-17). 안내는 늘 질문한 사람 자신의 공개범위로만 찾는다
     //   (특권 열람 신원으로 찾지 않는다 — collectHintFor). 앱 세션 토큰(user.appId — 앱 서버 호출 포함)은 길(MCP · REST)을 가리지 않고 뺀다 —
     //   그 앱이 동의받은 도구는 knowledge_search 뿐일 수 있는데 안내는 자료 제목·단위 이름을 싣는다(앱 동의 경계 · 리뷰 2026-10-17).
-    const forSession = !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
-    if (!forSession || !user?.userId) return { entries };
+    if (!isSessionCall(user, ctx) || !user?.userId) return { entries };
+    void logKnowledgeSearch({ tool: "search", member: user.userId, session: ctx?.session, route: route.route, q: input.q, names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
     const deadline = Date.now() + HINT_BUDGET_MS;
     const hint = await withinMs(HINT_BUDGET_MS, async () => {
       const { collectHintFor } = await import("../../org/collect/unit-find.js");
@@ -221,6 +225,11 @@ export const knowledgeSearch: Capability = {
     return hint ? { entries, collect_hint: hint } : { entries };
   },
 };
+
+/** 세션이 부른 호출인가 — MCP, 또는 세션 헤더를 실은 REST. 웹 화면 · 앱 토큰(앱 서버 호출 포함)은 아니다. 검색 실패 안내와 찾기 기록이 같은 판정을 쓴다. */
+function isSessionCall(user: LivelyUser, ctx?: CapabilityCtx): boolean {
+  return !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
+}
 
 /** «가져올 곳» 을 만드는 데 쓰는 시간 상한 — 원문 자료 찾기는 DB 쪽에서도 이보다 짧게 끊는다(unit-find LOOSE_TIMEOUT_MS). */
 const HINT_BUDGET_MS = 1500;
@@ -279,6 +288,7 @@ export const knowledgeSimilar: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSimilarInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const t0 = Date.now();
     if (!input.name && !input.text) throw new Error("name 또는 text 중 하나가 필요합니다");
     const viewer = ctx?.viewer ?? null;
     // 기준 문서(name)도 볼 수 있어야 한다 — 안 보이는 문서의 임베딩으로 이웃을 훑는 건 그 문서를 지렛대 삼아
@@ -293,6 +303,8 @@ export const knowledgeSimilar: Capability = {
       name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
       injection: input.injection, provenance: input.provenance, categories,
     }, viewer, diag);
+    //  글로 찾은 것만 남긴다(자동 소환 훅이 이 길이다). name 기준은 저장 전 중복 확인 · 관련 패널이다.
+    if (input.text && isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "similar", member: user.userId, session: ctx?.session, route: "vector", names: entries.map((e) => e.name), n: entries.length, ms: Date.now() - t0 });
     return { entries, ...diag };
   },
 };
@@ -409,6 +421,7 @@ export const knowledgeGet: Capability = {
     if (!(await canSeeKnowledge(String(input.name), ctx?.viewer ?? null))) throw new Error(`지식 '${input.name}' 없음`);
     const knowledge = await getKnowledge(input.name, ctx?.viewer ?? null);
     if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
+    if (isSessionCall(user, ctx)) void logKnowledgeSearch({ tool: "get", member: user.userId, session: ctx?.session, names: [input.name] });
     // #783 이 지식에 검토 대기 중인 수정이 있으면 함께 알린다 — staged 면 "지금 보는 본문은 옛 승인본"이라는 뜻이라
     //  사람·에이전트가 그 사실을 모르고 덧쓰면 안 된다(웹 문서화면은 이 값으로 배너를 띄운다).
     const pendingRev = await pendingRevisionFor(input.name);
