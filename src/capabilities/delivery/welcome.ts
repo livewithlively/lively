@@ -572,21 +572,25 @@ export const welcomeCapabilities: Capability[] = [
       //   ⚠ 관리 권한이 있는 사람만 — 2턴은 팀의 카테고리를 만든다(위 #4970 «팀의 구조»와 같은 선).
       //   ⚠ files 는 서버에서 띄울 AI 가 있을 때만 — 없으면 새로 열 세션이 없어 스윕이 한 번 실패하고 포기할 뿐이다(싼 판정: 자격 파일).
       const nowIso = new Date().toISOString();
-      //  서버 AI 는 files 갈래 후보일 때만 잰다(자격 파일 — 싼 판정).
-      const serverAi = admin && input.next === "later" && (input.upload === "running" || input.upload === "done")
+      //  로그인한 AI 는 2턴 후보(관리 권한)일 때만 잰다(자격 파일 — 싼 판정). 잰 것은 welcome.harnesses 로 남긴다 — 2턴 스윕이 리브 세션을
+      //   새로 열 때 그 자리에서 로그인을 못 재면 이 AI 로 연다(코덱스만 이은 사람에게 claude 세션이 열리던 것, 원준님 2026-10-30).
+      const loggedAi = admin
         ? await (async () => {
           const { memberLoggedInHarnessesAny } = await import("../../terminal/profiles.js");
-          const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
-          return (await memberLoggedInHarnessesAny(userId).catch(() => [] as string[])).some((k) => HEADLESS_KEYS.includes(k));
+          return memberLoggedInHarnessesAny(userId).catch(() => [] as string[]);
         })()
-        : false;
+        : [];
+      const { HEADLESS_KEYS } = await import("../../node/headless-harness.js");
+      //  서버 AI(files 갈래의 조건) = 헤드리스 규약을 아는 하네스에 로그인돼 있다.
+      const serverAi = input.next === "later" && (input.upload === "running" || input.upload === "done")
+        && loggedAi.some((k) => HEADLESS_KEYS.includes(k));
       const fresh = welcomeFlowMarks({ admin, next: input.next, upload: input.upload, serverAi, now: nowIso });
       const profile = await appendLivProfile(userId, {
         //  갈래·2턴 표식은 옮겨 실은 것(keep)이 이기고, 이번에 새로 올린 파일의 표식은 fresh 가 이긴다(composeWelcomeMarks).
         //  (#5058) connect_at — [연결할게요]로 끝냈다는 표식. 셸은 이 표식이 있고 리브가 처음 수집 끝을 찍기 전까지 그 대화를 지킨다
         //   (first-run.ts onboardingLockSession). [나중에 할게요]로 끝내면 적지 않는다 — 그 사람은 잠기지 않는다.
         welcome: { done_at: nowIso, drawers: created, first_order: firstOrder, session_id: priorSession, stage: stage || null, ...composeWelcomeMarks(fresh, keep),
-          connect_at: input.connect === true ? nowIso : null },
+          connect_at: input.connect === true ? nowIso : null, harnesses: loggedAi.length ? loggedAi : (priorWelcome?.harnesses ?? null) },
         onboarded: true,
       });
       //  하다 만 자리(#2207)는 여기서 걷는다 — 끝난 사람에게 «이어서 하기» 가 남아 있으면 안 된다.

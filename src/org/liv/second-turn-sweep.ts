@@ -169,7 +169,9 @@ async function runSweep(): Promise<{ fired: number; waited: number; gaveUp: numb
           await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt } });
         });
         const { livKickoff } = await import("./kickoff.js");
-        const made = await withTenant(tenant, () => livKickoff({ userId: c.id, email: "", scopes: [], projects: [] } as never, { prompt: prompt0 }));
+        const made = await withTenant(tenant, () => livKickoff({ userId: c.id, email: "", scopes: [], projects: [] } as never,
+          //  처음 설정 때 로그인돼 있던 AI(welcome.harnesses) — 스윕 자리에서 로그인을 못 재도 그 사람이 이은 AI 로 연다(claude 로 접지 않는다).
+          { prompt: prompt0, remembered: c.welcome.harnesses ?? null }));
         await withTenant(tenant, async () => {
           const cur = await getLivProfile(c.id).catch(() => null);
           await appendLivProfile(c.id, { welcome: { ...(cur?.welcome ?? c.welcome), distill_reopened_at: stampedAt,
