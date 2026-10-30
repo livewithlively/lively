@@ -23,7 +23,8 @@ import { execReadQuery, enrichSchemaError, requireSelfSourceAllowed, unknownTabl
  *  이 셋은 능력 레지스트리 밖이라 scope(db · db:<소스>)만 봐 왔다. 앱 세션 토큰(사람의 하네스)은 종전대로 scope 만 — 새 길만 닫는다(격리 리뷰).
  */
 export async function requireDbToolForAppServer(user: LivelyUser, name: string): Promise<void> {
-  if (user.appServer === true) await requireAppTool(user, name);
+  //  도구 상한이 실린 토큰(앱 AI 작업 — ai.tools)도 같은 게이트를 탄다 — 상한 밖의 DB 도구를 부르지 못하게.
+  if (user.appServer === true || user.toolCeiling) await requireAppTool(user, name);
 }
 
 // db 직접등록 툴(capability 레지스트리 밖) — 등록 정의 단일 출처(#1313 R24).

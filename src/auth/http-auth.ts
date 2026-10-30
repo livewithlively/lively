@@ -27,11 +27,13 @@ export type AppPrincipalGateMode = "cap" | "mcp" | "deny";
  * (순수) 이 주체를 이 문에서 어떻게 하나(#4483 · #4891) — next(그대로) · resolve(사람 신원으로 바꾼다) · deny(403).
  *  · 앱 서버 토큰(멤버 없는 날 토큰): 능력 REST 에서만 resolve, 그 밖은 deny.
  *  · 앱 서버 급 주체(검증이 appServer 를 켠 토큰): 능력 REST · /mcp 는 next(앱 도구 게이트가 지킨다), 그 밖은 deny.
+ *  · 도구 상한이 실린 토큰(앱 AI 작업 — 매니페스트 ai.tools): 같다. 상한은 앱 도구 게이트(principal.appToolAllowed)에서만 지켜지므로
+ *    그 게이트를 안 타는 문(세션 · 파일 · 프로젝트 · 노드 길)에서 받으면 상한 밖의 일을 하게 된다.
  *  · 그 밖(사람 · 일반 앱 토큰 · 세션 쿠키): next.
  */
 export function appPrincipalGate(user: LivelyUser | undefined, mode: AppPrincipalGateMode): "next" | "resolve" | "deny" {
   if (isAppServerToken(user)) return mode === "cap" ? "resolve" : "deny";
-  if (user?.appServer === true) return mode === "deny" ? "deny" : "next";
+  if (user?.appServer === true || user?.toolCeiling) return mode === "deny" ? "deny" : "next";
   return "next";
 }
 //  #5100 — 앱 토큰 요청은 여기서 그 앱의 읽기 범위 안으로 들어간다(v6/read-scope.ts). 능력 어댑터 밖의 맨 라우트(터미널 파일 · 프로젝트 ·
@@ -47,7 +49,7 @@ function appServerGate(mode: AppPrincipalGateMode): (req: express.Request, res: 
     const verdict = appPrincipalGate(user, mode);
     if (verdict === "next") { nextInAppScope(user, next); return; }
     if (verdict === "deny") {
-      res.status(403).json({ error: user?.appServer === true
+      res.status(403).json({ error: user?.appServer === true || user?.toolCeiling
         ? "앱 작업 토큰은 앱 도구(능력 API · MCP)에서만 씁니다"
         : "앱 서버 토큰은 앱 데이터·도구 API(/api/ui/…)에서 사람 신원과 함께만 씁니다" });
       return;

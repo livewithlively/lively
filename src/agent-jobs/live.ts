@@ -104,9 +104,11 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     jobSystem: async (job) => (await import("./store.js")).agentJobAppInstructions(job.id),
     //  «라이블리 MCP 만» 표시 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적었다 · 판이 뜰 때 다시 고르지 않는다).
     jobMcpOnly: async (job) => (await import("./store.js")).agentJobMcpOnly(job.id),
+    //  작업별 라이블리 도구 허용 목록 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판의 ai.tools 로 적었다). 판이 뜰 때 작업 토큰의 상한이 된다.
+    jobToolAllowlist: async (job) => (await import("./store.js")).agentJobToolAllowlist(job.id),
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
-    mintMcpToken: async (job) => {
+    mintMcpToken: async (job, { toolCeiling }) => {
       const ttlSec = job.timeout_sec + MCP_TOKEN_SLACK_SEC;
       //  #5081 공용 시트 작업은 보낸 사람의 이름으로 굽는다(plan.jobIdentityMember) — 시트 계정 이름이면 물은 사람이 시트의 권한을 빌린다.
       const shared = await sharedSeatJob(job);
@@ -117,9 +119,12 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
         //   동의를 거뒀거나 앱이 꺼졌으면 던진다 → 그 작업은 돌지 않는다(service.onBoot).
         const { mintAppToken } = await import("../apps/principal.js");
         //   #4891 — 홈 없는 작업 · #5081 공용 시트 작업은 앱 서버 급 주체(plan.jobAppTokenOpts) — 사람 이름의 세션 · 파일 · 계정 길을 열지 않는다.
-        const t = await mintAppToken(who, job.app_id, "agent-job", jobAppTokenOpts(job, ttlSec, shared));
+        //   도구 상한(ai.tools)이 있으면 토큰에 싣는다 — 앱 동의와 둘 다 통과해야 부를 수 있다(principal.appToolAllowed).
+        const t = await mintAppToken(who, job.app_id, "agent-job", { ...jobAppTokenOpts(job, ttlSec, shared), toolCeiling });
         return { token: t.token, tokenHash: t.tokenHash };
       }
+      //  도구 상한은 앱 작업에만 뜻이 있다(앱 동의 판정을 타는 토큰) — 앱 아닌 작업에 실려 있으면 굽지 않는다(상한 없이 띄우지 않게).
+      if (toolCeiling != null) throw new Error("도구 상한이 실린 작업인데 앱 작업이 아닙니다");
       if (!who) return null;
       //  사람이 직접 시킨 작업 — 그 사람의 세션 토큰과 같은 급(멤버 권한을 따라간다 · 작업 상한만큼만 산다).
       const { getMember } = await import("../org/store/members.js");

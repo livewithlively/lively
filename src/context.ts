@@ -34,6 +34,9 @@ export interface LivelyUser {
   // 앱이 선언한 MCP 도구를 게이트웨이가 앱 서버로 부른 동안의 호출이면 그 부르기 번호(#5053) — 앱의 SDK 가 «돌기 신원» 을 실어 부른 것
   //  (apps/app-server-call.ts resolveCallRunPrincipal). 그때 userId 는 도구를 부른 사람이고 appServer 도 true 다.
   appCallId?: number;
+  // 도구 상한(auth_token.tool_ceiling) — 앱 AI 작업 토큰이 앱의 작업별 허용 목록(매니페스트 ai.tools)을 싣는다. 있으면 그 이름들만 부를 수 있다
+  //  (앱 동의와 둘 다 — apps/principal.appToolAllowed · 세션 배관 면제보다 앞선다). MCP 도구 목록에서도 그 밖은 감춘다(server.buildServer).
+  toolCeiling?: readonly string[];
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

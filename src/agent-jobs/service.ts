@@ -69,7 +69,9 @@ export interface AgentJobDeps {
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
   /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
-  mintMcpToken(job: AgentJobRow): Promise<{ token: string; tokenHash: string } | null>;
+  /** 작업 AI 의 라이블리 신원(MCP 토큰)을 굽는다. toolCeiling 은 그 작업의 도구 상한(작업 행 tool_allowlist — 앱의 ai.tools) · null 이면 상한 없음.
+   *  필수 인자다 — 빠뜨리면 그 작업이 앱 동의 전체로 돈다(컴파일이 잡게). */
+  mintMcpToken(job: AgentJobRow, opts: { toolCeiling: readonly string[] | null }): Promise<{ token: string; tokenHash: string } | null>;
   /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
    *  at — 판이 보는 게이트웨이 주소와 실을 워크스페이스(#5082 paneView — 프록시도 그 아래 · 그 워크스페이스로). */
   jobEnv?(job: AgentJobRow, at: { gateway: string; workspace: string | null }): Promise<Record<string, string>>;
@@ -79,6 +81,9 @@ export interface AgentJobDeps {
   /** «라이블리 MCP 만» 작업인가(작업 행 mcp_only — 앱 AI 실행이 접수 때 부른 사람의 판의 ai.mcp_only 로 적는다). 그렇다면 판이 내장 도구를 끈다.
    *  던지면 그 작업은 돌지 않는다(내장 도구를 연 채 띄우지 않는다). 필수다 — 배선이 빠지면 그 작업들이 도구를 연 채 돈다(컴파일이 잡게). */
   jobMcpOnly(job: AgentJobRow): Promise<boolean>;
+  /** 작업별 라이블리 도구 허용 목록(작업 행 tool_allowlist — 앱 AI 실행이 접수 때 부른 사람의 판의 ai.tools 로 적는다). null = 좁히지 않음.
+   *  판이 뜰 때 작업 토큰의 도구 상한으로 싣는다. 던지면 그 작업은 돌지 않는다(앱 동의 전체로 띄우지 않는다). 필수다(jobMcpOnly 와 같은 까닭). */
+  jobToolAllowlist(job: AgentJobRow): Promise<string[] | null>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   /**
@@ -225,6 +230,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   let resumeConv: string | null = null;
   let resumeJobId: number | null = null;
   let mcpOnly = false;
+  let toolAllowlist: string[] | null = null;
 
   if (input.resume_job_id !== undefined && input.resume_job_id !== null) {
     const rid = Number(input.resume_job_id);
@@ -240,6 +246,8 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     //  앞 작업이 «라이블리 MCP 만» 이었으면 이어받는 작업도 그렇다 — 앱 AI 실행이 MCP 만으로 시작한 대화를 이 길로 이어도 내장 도구를 열지 않는다.
     //   못 읽으면 던진다(값을 모른 채 도구를 연 작업으로 넣지 않는다).
     mcpOnly = await d.jobMcpOnly(prev);
+    //  도구 허용 목록도 앞 작업의 것을 잇는다(같은 까닭 — 이 길로 이어도 앱 동의 전체로 열지 않는다). 못 읽으면 던진다.
+    toolAllowlist = await d.jobToolAllowlist(prev);
   } else {
     if (input.app_id !== undefined && input.app_id !== null && input.app_id !== "") {
       const a = String(input.app_id);
@@ -267,6 +275,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
     sharedSeat: false, // 이 길은 본인 구독뿐이다(#5081 공용 시트는 앱 AI 실행 — ai-runs — 으로만 생긴다)
     mcpOnly,           // 이어받는 작업이면 앞 작업의 값 · 새 작업은 false(ai.mcp_only 는 작업 이름을 다는 앱 AI 실행의 것이다)
+    toolAllowlist,     // 같다 — 이어받는 작업이면 앞 작업의 목록 · 새 작업은 null(ai.tools 도 앱 AI 실행의 것이다)
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
@@ -381,7 +390,8 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   if (!booted) throw new HttpError(409, "이미 시작한 작업입니다");   // 두 판이 겹쳐 물었다 — 먼저 온 쪽만
   let t: { token: string; tokenHash: string } | null = null;
   let why = "실행 계정이 활성 구성원이 아닙니다";
-  try { t = await d.mintMcpToken(booted); } catch (e) { why = String((e as Error)?.message ?? e); }
+  //  도구 상한(작업별 허용 목록)을 먼저 읽는다 — 못 읽으면 토큰을 굽지 않는다(앱 동의 전체로 띄우지 않는다 · 아래 «신원을 못 만들었다» 와 같은 길).
+  try { t = await d.mintMcpToken(booted, { toolCeiling: await d.jobToolAllowlist(booted) }); } catch (e) { why = String((e as Error)?.message ?? e); }
   if (!t) {
     logger.warn({ job: booted.id, err: why }, "[agent-job] 작업 AI 의 라이블리 신원을 못 만들었다 — 돌리지 않는다");
     const ended = await d.store.finishAgentJob(booted.id, { status: "failed", error: `작업 AI 의 신원을 만들지 못했습니다: ${why}`.slice(0, 600), from: ["running"] });

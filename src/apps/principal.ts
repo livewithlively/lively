@@ -28,7 +28,8 @@ export async function mintAppToken(
   memberId: string, appId: string, actor?: string,
   //  #4490 — 작업 컨테이너는 작업 상한만큼만 살 토큰을 받고(ttlSec), 끝날 때 해시로 폐기한다(tokenHash). 생략하면 종전 그대로.
   //  #4891 — appServerPrincipal: 주체를 앱 서버 급으로(능력 API · /mcp 에서만 · 무조건 통과 도구 없음 — tokens.mintToken 머리말).
-  opts: { ttlSec?: number; appServerPrincipal?: boolean } = {},
+  //  도구 상한(toolCeiling) — 앱 AI 작업의 작업별 허용 목록(ai.tools · agent-jobs/service.onBoot). 생략 · null 이면 앱 동의 전체(종전).
+  opts: { ttlSec?: number; appServerPrincipal?: boolean; toolCeiling?: readonly string[] | null } = {},
 ): Promise<{ token: string; expiresAt: Date | null; tokenHash: string }> {
   const app = await getApp(appId);
   //  #4667 — 남이 만들고 있는(나만 보는) 앱으로는 세션을 못 연다(없는 앱과 같다).
@@ -41,6 +42,7 @@ export async function mintAppToken(
     userId: memberId, memberId, scopes: grant.scopes,
     label: `app:${appId}`, appId, expiresInSec: opts.ttlSec && opts.ttlSec > 0 ? Math.min(opts.ttlSec, APP_TOKEN_TTL_SEC) : APP_TOKEN_TTL_SEC,
     ...(opts.appServerPrincipal === true ? { appServerPrincipal: true } : {}),
+    ...(opts.toolCeiling != null ? { toolCeiling: opts.toolCeiling } : {}),
   }, actor ?? "app-spawn", "terminal-sessions");
   return { token, expiresAt, tokenHash };
 }
@@ -110,6 +112,9 @@ export function decideAppTool(appId: string | undefined, tools: string[] | null,
 
 /** 이 유저(앱 세션이면 user.appId 존재)가 이 도구를 호출할 수 있나. 일반 세션(appId 없음)은 항상 true. */
 export async function appToolAllowed(user: LivelyUser, toolName: string): Promise<boolean> {
+  //  도구 상한(앱 AI 작업 토큰 — 매니페스트 ai.tools)은 무엇보다 먼저 본다: 정확한 이름이 목록에 있어야 한다. 세션 배관 면제(EXEMPT)도 상한을 넘지 못한다 —
+  //   작업 AI 는 키트 훅이 꺼져(runner.claudeJobArgv) 배관을 쓰지 않는다. 상한 안이어도 아래 앱 동의를 또 통과해야 한다.
+  if (user.toolCeiling && !user.toolCeiling.includes(toolName)) return false;
   if (!user.appId) return true; // DB 조회 없이 빠르게 통과(일반 세션 핫패스)
   const tools = await grantTools(user.appId, user.userId);
   //  #4483 앱 서버 주체(제3자 서버 코드가 방문자 이름으로 부른다)는 세션 배관 면제를 안 탄다 — 훅 소스·자산 본문·회사 컨텍스트를

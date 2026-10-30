@@ -764,6 +764,76 @@ try {
     await cleanup();
   }
 
+  // ── I3. 도구 허용 목록(ai.tools · 도구 허용 목록 사양 T30) — 목록이 있는 작업은 행에 남고 따로 읽는다 · 손상 · 칸이 아직 없을 때(롤 창) ──────────
+  //  이게 틀리면: 판이 뜰 때 상한을 못 읽어 목록을 둔 작업이 앱 동의 전체를 쥔 토큰으로 돌거나(목록 유실), 손상된 칸이 «좁히지 않음» 으로 읽히거나,
+  //  롤 창에서 목록 없는 작업까지 «없는 칸» 으로 막히거나, 목록을 둔 작업이 목록 없이 들어간다.
+  {
+    await cleanup();
+    const appJob = (who, extra = {}) => job(who, { appId: "crm", projectId: null, cwd: "/work/apps/crm", ...extra });
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const listed = await st.insertAgentJob(appJob("alice", { toolAllowlist: ["store_sql", "knowledge_search"] }), ROOMY);
+    const empty = await st.insertAgentJob(appJob("bob", { toolAllowlist: [] }), ROOMY);
+    const none = await st.insertAgentJob(appJob("carol", { toolAllowlist: null }), ROOMY);
+    const rd = {
+      listed: await st.agentJobToolAllowlist(listed.row.id), empty: await st.agentJobToolAllowlist(empty.row.id), none: await st.agentJobToolAllowlist(none.row.id),
+      rawListed: (await row(listed.row.id)).tool_allowlist, rawEmpty: (await row(empty.row.id)).tool_allowlist, rawNone: (await row(none.row.id)).tool_allowlist,
+    };
+    chk("TA1 T30 목록이 있는 작업 — 그 목록이 작업 행에 남고 읽기가 그대로 돌려준다 · 빈 목록은 빈 목록 · null 은 null",
+      same(rd.listed, ["store_sql", "knowledge_search"]) && same(rd.rawListed, ["store_sql", "knowledge_search"])
+        && same(rd.empty, []) && same(rd.rawEmpty, []) && rd.none === null && rd.rawNone === null,
+      JSON.stringify(rd));
+    const plain = await st.insertAgentJob(job("plain"), ROOMY);   // 목록 칸을 아예 주지 않은 종전 접수(옛 호출)
+    chk("TA1b T30 목록 칸을 주지 않은 종전 접수도 null 로 읽힌다", (await st.agentJobToolAllowlist(plain.row.id)) === null && (await row(plain.row.id)).tool_allowlist === null);
+    const odd = {};
+    for (const id of [2 ** 40, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      try { odd[String(id)] = await st.agentJobToolAllowlist(id); } catch (e) { odd[String(id)] = `던짐: ${e?.message ?? e}`; }
+    }
+    chk("TA2 T30 없는 작업 id · 0 · 음수 · 정수가 아닌 id 는 null(던지지 않는다)", Object.values(odd).every((v) => v === null), JSON.stringify(odd));
+    //  손상 — 칸의 값이 문자열 배열이 아니면 빈 목록(아무것도 허락하지 않음). 좁히지 않음(null)으로 읽히면 안 된다.
+    const broken = {};
+    for (const [i, bad] of ['"store_sql"', '{"answer":["store_sql"]}', "[1]", '["store_sql", 2]', '[["store_sql"]]', "[null]", "true", "3"].entries()) {
+      const b = await st.insertAgentJob(appJob(`broken${i}`, { toolAllowlist: ["store_sql"] }), ROOMY);
+      await itemsPool.query(`UPDATE org_agent_job SET tool_allowlist=$2::jsonb WHERE id=$1`, [b.row.id, bad]);
+      try { broken[bad] = await st.agentJobToolAllowlist(b.row.id); } catch (e) { broken[bad] = `던짐: ${e?.message ?? e}`; }
+    }
+    chk("TA3 T30 칸의 값이 문자열 배열이 아니면(손상) 빈 목록으로 읽는다", Object.values(broken).every((v) => same(v, [])), JSON.stringify(broken));
+    const all = await st.insertAgentJob(job("all", { accountMember: `${REQ}seat`, appId: "crm", projectId: null, cwd: "/work/apps/crm", sharedSeat: true,
+      appInstructions: "공용 시트 지시", mcpOnly: true, toolAllowlist: ["knowledge_get"] }), ROOMY);
+    chk("TA4 T30 공용 시트 표시 · 지시 · «MCP 만» · 목록을 함께 넣어도 각자 제자리에 남는다",
+      (await st.agentJobSharedSeat(all.row.id)) === true && (await st.agentJobAppInstructions(all.row.id)) === "공용 시트 지시"
+        && (await st.agentJobMcpOnly(all.row.id)) === true && same(await st.agentJobToolAllowlist(all.row.id), ["knowledge_get"]));
+    await cleanup();
+    //  롤 창 — 새 코드가 마이그레이션보다 먼저 받는 동안 작업 행에 목록 칸이 아직 없다.
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS tool_allowlist`);
+    try {
+      let p0 = null, p0err = null;
+      try { p0 = await st.insertAgentJob(appJob("roll", { toolAllowlist: null }), ROOMY); } catch (e) { p0err = e; }
+      let pOld = null, pOldErr = null;
+      try { pOld = await st.insertAgentJob(job("rollold"), ROOMY); } catch (e) { pOldErr = e; }
+      let read = "읽지 않음";
+      try { read = p0?.row ? await st.agentJobToolAllowlist(p0.row.id) : "접수 실패"; } catch (e) { read = `던짐: ${e?.message ?? e}`; }
+      chk("TA5 T30 칸이 없을 때 — 목록 없는 작업의 접수는 종전처럼 되고(null · 칸을 안 준 옛 호출 모두) 읽기는 null",
+        !!p0?.row && !!pOld?.row && read === null, JSON.stringify({ p0: !!p0?.row, p0err: p0err?.message, pOld: !!pOld?.row, pOldErr: pOldErr?.message, read }));
+      const tries = {};
+      for (const [what, list] of [["목록", ["store_sql"]], ["빈 목록", []]]) {
+        const who = `rolllist${what === "목록" ? 1 : 0}`;
+        let err = null;
+        try { await st.insertAgentJob(appJob(who, { toolAllowlist: list }), ROOMY); } catch (e) { err = e; }
+        const made = (await itemsPool.query(`SELECT count(*)::int AS n FROM org_agent_job WHERE requester=$1`, [`${REQ}${who}`])).rows[0].n;
+        tries[what] = { code: err?.code ?? null, made };
+      }
+      chk("TA6 T30 칸이 없을 때 — 목록이 있는 작업(빈 목록 포함)의 접수는 «없는 칸»(42703)으로 실패하고 그 작업은 만들어지지 않는다",
+        Object.values(tries).every((x) => x.code === "42703" && x.made === 0), JSON.stringify(tries));
+      let claimed = [], claimErr = null;
+      try { claimed = await st.claimAgentJobs(WIDE, mint); } catch (e) { claimErr = e; }
+      chk("TA7 T30 칸이 없을 때 — 받은 목록 없는 작업은 종전처럼 자리를 받는다(무회귀)",
+        !!p0?.row && claimed.some((g) => g.row.id === p0.row.id), JSON.stringify({ claimed: claimed.map((g) => g.row.id), err: claimErr?.message }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS tool_allowlist JSONB`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;

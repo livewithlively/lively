@@ -445,3 +445,63 @@ test("mcp_only S3 없거나 빈 목록이면 종전대로 통과(«MCP 만» 작
   assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } })) ?? [], []);
   assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly([]))) ?? [], []);
 });
+
+// ── ai.tools — 작업별 라이블리 도구 허용 목록(도구 허용 목록 사양 T1 · T3 · T4) ──
+//  모양(작업 이름 → 도구 이름 글 배열 · 배열마다 64개까지)만 본다 — 뜻(선언한 작업 · 정확한 이름 · 요청한 도구 · T2)은 설치 · 판 저장 때 loader 가 본다.
+//  이게 틀리면: 저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 400 으로 막히거나, 모양이 틀린 목록이 저장돼 작업 토큰이 엉뚱하게 좁혀진다.
+import { toolsOf } from "./app-job-tools.js";
+const withTools = (tools: unknown): Record<string, unknown> => ({ ...base(), ai: { jobs: [{ name: "answer" }, { name: "lookup" }], tools } });
+const toolsIn = (m: unknown): unknown => (m as { ai?: { tools?: unknown } }).ai?.tools;
+const toolsErr = (e: unknown): boolean => e instanceof HttpError && e.status === 400 && /매니페스트|형식|tools/.test(e.message);
+const toolNames = (n: number): string[] => Array.from({ length: n }, (_, i) => `tool_${i}`);
+
+test("T1 ai.tools — 작업 이름 → 도구 이름 배열이 그대로 실린다(작업 여럿)", () => {
+  const tools = { answer: ["store_sql", "knowledge_search"], lookup: ["knowledge_get"] };
+  assert.deepEqual(toolsIn(parseAppManifest(withTools(tools))), tools);
+});
+
+test("T1 배열마다 64개(경계-최대)까지 통과", () => {
+  assert.deepEqual(toolsIn(parseAppManifest(withTools({ answer: toolNames(64), lookup: toolNames(64) }))), { answer: toolNames(64), lookup: toolNames(64) });
+});
+
+test("T1 65개(경계-위)면 매니페스트 오류 — 다른 작업의 배열이 짧아도", () => {
+  assert.throws(() => parseAppManifest(withTools({ answer: toolNames(65) })), toolsErr);
+  assert.throws(() => parseAppManifest(withTools({ answer: ["store_sql"], lookup: toolNames(65) })), toolsErr);
+});
+
+test("T1 작업의 값이 배열이 아니면 매니페스트 오류", () => {
+  for (const bad of ["store_sql", { store_sql: true }, { 0: "store_sql", length: 1 }, 1, true, null]) {
+    assert.throws(() => parseAppManifest(withTools({ answer: bad })), toolsErr, `배열 아님: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T1 도구 이름이 문자열이 아닌 원소가 있으면 매니페스트 오류", () => {
+  for (const bad of [[1], [null], [["store_sql"]], [{ name: "store_sql" }], ["store_sql", 2]]) {
+    assert.throws(() => parseAppManifest(withTools({ answer: bad })), toolsErr, `문자열 아닌 원소: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T1 ai.tools 가 객체가 아니면(글 · 배열 · 수) 매니페스트 오류", () => {
+  for (const bad of ["store_sql", ["store_sql"], [["answer", ["store_sql"]]], 3]) {
+    assert.throws(() => parseAppManifest(withTools(bad)), toolsErr, `객체 아님: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("T1 뜻(T2)은 보지 않는다 — 선언 안 한 작업 이름 · 글롭 · 이름 꼴 밖 · 요청하지 않은 도구 · 작업 선언이 없어도 저장된 그대로 읽힌다", () => {
+  const odd = { gone: ["store_*", "not requested", "a".repeat(200)], answer: ["never_requested_tool"] };
+  assert.deepEqual(toolsIn(parseAppManifest({ ...base(), ai: { jobs: [], tools: odd } })), odd, "작업 선언이 빈 앱");
+  assert.deepEqual(toolsIn(parseAppManifest({ ...base(), ai: { tools: { answer: ["store_sql"] } } })), { answer: ["store_sql"] }, "ai.jobs 가 아예 없는 앱");
+});
+
+test("T3 빈 배열(도구 0)도 그대로 실린다 — 목록 읽기에서 null 이 아니라 빈 목록", () => {
+  const m = parseAppManifest(withTools({ answer: [] }));
+  assert.deepEqual(toolsIn(m), { answer: [] });
+  assert.deepEqual(toolsOf(m, "answer"), [], "빈 목록 = 라이블리 도구를 하나도 쓰지 못한다");
+});
+
+test("T4 ai.tools 가 없거나 그 작업 이름이 키에 없으면 좁히지 않는다(종전 매니페스트 무회귀)", () => {
+  const none = parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } });
+  assert.equal(toolsOf(none, "answer"), null);
+  assert.equal(toolsOf(parseAppManifest(base()), "answer"), null, "ai 칸 자체가 없는 앱");
+  assert.equal(toolsOf(parseAppManifest(withTools({ lookup: ["knowledge_get"] })), "answer"), null, "다른 작업만 목록이 있다");
+});
