@@ -1287,12 +1287,6 @@ a.cxc-name:hover { color: var(--blue); }
 .rvp-one-sp { flex: 1; }
 
 /* ── #4213 T11 Claude 커넥터 수집 — 지표 + 수집 세션 크기(web/context-claude-runs.ts) ─────────────── */
-.cxcr-entry { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); text-decoration: none; font-size: 13px; }
-.cxcr-entry:hover { border-color: var(--blue); }
-.cxcr-entry > b { font-size: 13px; font-weight: 800; }
-.cxcr-entry-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
-.cxcr-entry-facts .is-fail { color: var(--danger-deep); font-weight: 700; }
-.cxcr-entry-go { margin-left: auto; color: var(--blue); font-weight: 700; white-space: nowrap; }
 .cxcr { min-width: 0; }
 .cxcr-periods { display: flex; gap: 6px; flex-wrap: wrap; }
 .cxcr-body { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
