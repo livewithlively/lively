@@ -19,6 +19,7 @@ import type { PoolClient } from "pg";
 import { boundTenantId, itemsPool, one, q, withTx } from "../db/client.js";
 import { LEX_RULES_VERSION, lexDocText, lexTermFreq, lexTokens } from "./knowledge-lex.js";
 import { CHUNK_RULES_VERSION, type KnowledgeChunk, chunkKnowledge } from "./knowledge-chunk.js";
+import { embedChunksSoon } from "./embedding-backfill.js";
 
 /** 한 판의 시간 상한 — 공용 DB 를 오래 붙들지 않게. 밀린 것은 다음 판(1분 뒤)이 잇는다(문서 2,760개는 서너 판이면 끝난다). */
 export const LEX_SWEEP_BUDGET_MS = 20_000;
@@ -130,7 +131,9 @@ async function syncChunks(c: PoolClient, d: { name: string; title: string | null
 
 /** 저장 뒤 그 문서를 곧바로 맞춘다 — 기다리지 않고 던지지 않는다. 실패하면 스윕이 줍는다. */
 export function syncKnowledgeLexSoon(name: string): void {
-  void syncKnowledgeLex(name).catch((e) => console.warn(`[knowledge-lex] 색인 실패(스윕이 다시) ${name}: ${(e as Error)?.message}`));
+  void syncKnowledgeLex(name)
+    .then((r) => { if (r === "indexed") embedChunksSoon(name); })
+    .catch((e) => console.warn(`[knowledge-lex] 색인 실패(스윕이 다시) ${name}: ${(e as Error)?.message}`));
 }
 
 const sweeping = new Set<string>();

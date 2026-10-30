@@ -420,6 +420,51 @@ export async function sweepChunkEmbeddings(now: () => number = Date.now): Promis
 /** 시험 전용 — 쉬는 시각을 비운다. */
 export function __resetChunkRetry(): void { chunkRetryAt.clear(); }
 
+// ── 저장 직후 그 문서의 조각(#5204) ──
+//  정비는 10분에 한 번이라, 조각으로 찾기 시작하면 방금 쓴 문서가 그동안 뜻으로 안 찾힌다(문서 벡터는 저장이 곧바로 깨운다). 저장이 바꾼 조각만 곧바로 채운다.
+//  · 그 문서만 본다 — 저장이 잦아도 밀린 일을 건드리지 않아 판 상한이 뚫리지 않는다. 하루 상한은 같이 쓴다.
+//  · 뒤 조각부터다(끝 덧붙임). 상한을 넘는 나머지는 정비가 줍는다.
+//  · 프로세스에서 한 번에 하나씩 돈다 — 임베딩 서버는 한 줄이다. 줄이 길면 버린다(정비가 줍는다).
+//    Promise 사슬이라 부른 자리의 워크스페이스 문맥이 그대로 이어진다.
+const CHUNK_FRESH_MAX = 40;
+const CHUNK_FRESH_QUEUE = 20;
+let freshTail: Promise<unknown> = Promise.resolve();
+let freshWaiting = 0;
+
+async function embedDocChunks(name: string): Promise<number> {
+  if (Date.now() < (chunkRetryAt.get(boundTenantId() ?? "") ?? 0) || await refreshBackfillPausedFromDb()) return 0;
+  const provider = resolveEmbeddingProvider(await resolveConfigFromDb());
+  if (!provider) return 0;
+  const room = Math.min(CHUNK_FRESH_MAX, await chunkEmbedRoom());
+  if (room === 0) return 0;
+  const t = KNOWLEDGE_CHUNK_TARGET;
+  const { rows } = await itemsPool.query(
+    `SELECT ${t.selectCols} FROM ${t.table} WHERE name=$1 AND embedding_vector IS NULL AND ${t.activeFilter} ORDER BY seq DESC LIMIT $2`, [name, room]);
+  let done = 0;
+  for (let i = 0; i < rows.length; i += t.batchMax ?? 4) {
+    const part = rows.slice(i, i + (t.batchMax ?? 4));
+    const vecs = await provider.embed(part.map((r) => t.buildText(r as Record<string, unknown>)));
+    for (let j = 0; j < part.length; j++) {
+      if (!vecs[j]?.length) continue;
+      const res = await itemsPool.query(
+        `UPDATE ${t.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1 AND (${t.activeFilter})`,
+        [(part[j] as Record<string, unknown>).id, toVectorLiteral(vecs[j]), provider.model]);
+      done += res.rowCount ?? 0;
+    }
+  }
+  return done;
+}
+
+/** 저장 뒤 그 문서의 빈 조각을 곧 채운다 — 기다리지 않고 던지지 않는다. 실패하면 정비가 줍는다. */
+export function embedChunksSoon(name: string): void {
+  if (freshWaiting >= CHUNK_FRESH_QUEUE) return;
+  freshWaiting++;
+  freshTail = freshTail
+    .then(() => embedDocChunks(name))
+    .catch((e) => console.warn(`[embeddings] 저장 직후 조각 임베딩 실패(정비가 다시) ${name}: ${(e as Error)?.message}`))
+    .finally(() => { freshWaiting--; });
+}
+
 // ── 쓰기 경로 → pending 마킹(#1053) — 저장/수정 때 임베딩 HTTP(느린 CPU 백엔드는 건당 수십 초)를 인라인 호출하지 ──
 //  않는다. 대신 행의 벡터를 비워 'pending'(embedding_vector IS NULL) 풀로 되돌리고, 백그라운드 드레인
 //  (runAutoBackfillSweep)이 배치로 채운다 — 저장은 즉시 반환. 커넥터 미러의 knowledge 리셋 idiom(connector-mirror.ts)과 동형.

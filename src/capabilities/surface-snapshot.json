@@ -986,6 +986,16 @@
   "input_hash": "5a5bfb491e88557b"
  },
  {
+  "name": "org_embeddings_chunk_search",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/embeddings/chunk-search"
+  ],
+  "input_hash": "b8724fce31395713"
+ },
+ {
   "name": "org_mcp_servers",
   "scope": null,
   "mcp": true,
@@ -4313,6 +4323,16 @@
    "POST /api/ui/recall/route"
   ],
   "input_hash": "0ada1cb252b03de4"
+ },
+ {
+  "name": "knowledge_recall",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/knowledge/recall"
+  ],
+  "input_hash": "88f06d592b6612a0"
  },
  {
   "name": "me_credentials",

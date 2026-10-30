@@ -143,6 +143,8 @@ Docker: `docker compose up -d` 는 스토어(items-db, pgvector)만 띄운다 �
 
 지식 조각(`knowledge_chunk` — 절마다 벡터 하나, 규칙 `src/v6/knowledge-chunk.ts`)도 같은 스윕이 맞춘다. 글이 같은 조각은 벡터를 그대로 쓴다. 빈 벡터는 정비가 10분마다 100건, 최근 24시간 7,000건(`LIVELY_CHUNK_EMBED_DAILY_MAX`)까지 채운다. ⚠ 문서 벡터는 문서 앞 8,000자만 임베딩 서버로 보내지만 조각은 **검색 대상 문서의 본문 전체**(문서당 1,000조각까지)를 보낸다 — 외부 엔드포인트를 쓰는 배포는 전송 범위가 넓어진다. 끄는 길은 임베딩을 끄거나 일시중지하는 것이다. 차원을 바꾸면 다른 임베딩 칸처럼 `knowledge_chunk.embedding_vector` 도 손으로 다시 만든다.
 
+찾기(`knowledge_search`)와 자동 소환(`POST /api/ui/knowledge/recall`, 시드 훅 `knowledge-recall`)은 조각의 98% 에 지금 모델의 벡터가 있으면 조각으로 찾고, 그 전에는 문서 벡터로 찾는다(`src/v6/knowledge-chunk-search.ts`). 소환의 기준선 · 건수 · 질의는 서버가 정하고, 기준선을 잰 모델(bge-m3)이 아니면 소환은 문서 벡터로 남는다. 저장이 바꾼 조각은 곧바로 임베딩한다(문서당 40개까지 · 나머지는 정비가). 소환 훅은 짧은 프롬프트를 앞 턴과 묶어 찾으려고 사람이 친 글 앞 300자를 임시 폴더(`lively-hooks`, 나만 읽는 파일)에 하루 남긴다. 되돌리기는 `org_embeddings_chunk_search {enabled:false}` 다 — 30초 안에 문서 벡터로 돌아가고 조각 색인과 임베딩은 계속 돈다. 지금 상태는 `org_embeddings_status` 의 `chunk_backlog` · `chunk_search` 에 나온다.
+
 세션의 찾기 · 열람은 `knowledge_search_log` 에 남는다(90일, 세션 보존기간이 더 짧으면 그 기간 · 세션 완전 삭제 때 함께 지움 · 자동 소환 길은 글을 남기지 않음). `db_query` 내장 소스로는 읽을 수 없다.
 
 **임베딩은 기본 off** — 켜기 전엔 `knowledge_search` 가 낱말 채널만 쓴다(무중단·하위호환). 켜는 건 opt-in:

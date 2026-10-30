@@ -30,7 +30,7 @@ const WRITES = [
   "category_update", "source_save",
 ];
 const READS = ["knowledge_get", "knowledge_list", "knowledge_grep"];
-const POST_BUT_READ = ["recall_route", "project_find_by_origin_v6", "repo_discover", "repo_check", "org_guide_preview", "org_distiller_preview", "session_project_context_applied", "file_url", "link_preview"];
+const POST_BUT_READ = ["recall_route", "knowledge_recall", "project_find_by_origin_v6", "repo_discover", "repo_check", "org_guide_preview", "org_distiller_preview", "session_project_context_applied", "file_url", "link_preview"];
 const MCP_ONLY_READ = ["context_overview", "debt_list", "source_artifact"];
 const KEEP = ["broker_run", "delegate_run", "delegate_cancel"];
 
@@ -211,6 +211,7 @@ t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == �
   //    **전달 확인(ACK)**(#1867). 사용자 데이터가 아니라 진단값(applied_revision, 단조 증가)만 바뀌고, 읽기전용 세션에도
   //    문맥 주입은 일어나므로 ACK 를 막으면 그 세션은 영영 '미적용'으로 보인다. 본문은 GET project-context 가 준다.
   //  · file_url — 파일 서명 주소를 **준다**(#4673). 주는 것만으로는 스토어가 안 바뀐다 — 받기(GET) 주소는 읽기전용 세션에서도 읽기다.
+  //  · knowledge_recall — 자동 소환(#5204). 매 프롬프트 훅이 부른다. POST 인 것은 프롬프트가 쿼리 문자열에 다 안 들어가서일 뿐, 스토어를 바꾸지 않는다(찾기 기록 한 줄은 knowledge_search 와 같다).
   //  · link_preview — 남의 페이지를 **읽어** 카드 재료를 준다(#4769). POST 인 것은 주소가 길어서일 뿐, 스토어를 바꾸지 않는다 — 읽기전용 세션에서도 읽기다.
   //    올리기(PUT) 주소는 자료를 만드는 쓰기라 핸들러가 읽기전용이면 403 으로 막는다(files/file-url.ts mintFileUrl · readOnly).
   //  · browser_status / browser_screenshot / browser_read / browser_text / browser_console — AI 브라우저(#4993)를 **보기만** 한다.
@@ -218,7 +219,7 @@ t("불변식: POST 마운트인데 읽기전용에서 안 막히는 집합 == �
   //    (browser_navigate·act·fill·eval·tabs·handoff)은 쓰기로 남아 읽기전용 세션에서 소거된다 — 사람이 열어 둔 탭을 볼 수만 있다.
   assert.deepEqual(notBlockedPost, [
     "broker_run", "browser_console", "browser_read", "browser_screenshot", "browser_status", "browser_text",
-    "delegate_cancel", "delegate_run", "file_url", "link_preview", "org_distiller_preview", "org_guide_preview",
+    "delegate_cancel", "delegate_run", "file_url", "knowledge_recall", "link_preview", "org_distiller_preview", "org_guide_preview",
     "project_find_by_origin_v6", "recall_route", "repo_check", "repo_discover", "session_project_context_applied",
   ]);
 });

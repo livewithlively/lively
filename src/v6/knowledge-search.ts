@@ -15,6 +15,7 @@ import { knowledgeVisWhere, K_ICON_EXPR } from "./knowledge-common.js";
 import { knowledgeCategoryRestriction, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 category 인자 · 앱 맥락 범위
 import { bm25Sql, hasIdentifier, lexQueryTerms } from "./knowledge-lex.js";   // #5201 낱말 채널
 import { lexReady } from "./knowledge-lex-store.js";
+import { type ChunkIndex, chunkIndex, chunkSnippet, chunkVecChannel, withChunkScan } from "./knowledge-chunk-search.js";   // #5204 조각 벡터 채널
 
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
 //  grep 매처(parseGrep/grepWhere)·스니펫 빌더(grepSnippet)는 search-util.ts 로 분리(#631, project 검색과 공유).
@@ -61,7 +62,7 @@ function searchFilterSql(opts: { injection?: string; provenance?: string; catego
 }
 
 /** 어떤 길로 찾았나(#5201) — 기록(knowledge_search_log)이 호출마다 남긴다. */
-export type KnowledgeSearchRoute = "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
+export type KnowledgeSearchRoute = "hybrid-chunk" | "hybrid-chunk-grep" | "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
 export interface SearchRouteDiag { route?: KnowledgeSearchRoute }
 
 /**
@@ -149,7 +150,8 @@ export async function searchKnowledge(
 // ── 하이브리드 검색(knowledge_search, 벡터검색 #172) — 벡터(cosine) ∪ 렉시컬(grep) RRF 융합. ──
 //  · 임베딩 off / 쿼리 임베딩 실패 / SQL 실패 → 전부 searchKnowledge(렉시컬)로 폴백(하위호환·safe-by-construction).
 //  · grep 과 다른 점: 단어가 본문에 그대로 없어도 의미 유사로 회수(벡터 채널). 정확 토큰/정규식은 knowledge_grep.
-//  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 벡터-only 매치는 grepSnippet 이 본문 앞부분 미리보기로 폴백.
+//  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 조각으로 맞으면 그 절을 보여 주고(chunkSnippet), 문서 벡터로만 맞으면 grepSnippet 이 본문 앞부분 미리보기로 폴백.
+//  · 벡터 채널은 조각이 준비되면 조각(#5204 — knowledge-chunk-search.ts), 아니면 문서 벡터다.
 //  RRF_K/HYBRID_CANDIDATES 는 search-util.ts 에서 import(project 검색과 공유).
 
 export async function hybridSearchKnowledge(
@@ -174,6 +176,16 @@ export async function hybridSearchKnowledge(
   const qvec = qe.vec;
   if (!qvec && !terms) return searchKnowledge(qstr, opts, viewer, diag);   // off · 쿼리 임베딩 실패 + 색인 없음 → 폴백
   if (!qvec && idOnly) { if (diag) diag.route = "lexical"; return []; }    // 낱말 채널은 방금 돌았다
+  const ix = qvec ? await chunkIndex() : null;
+  if (ix) {
+    try {
+      const rows = await rrfSearch(qstr, qvec, terms, opts, viewer, ix);
+      if (diag) diag.route = terms ? "hybrid-chunk" : "hybrid-chunk-grep";
+      return rows;
+    } catch (e) {
+      console.warn(`[embeddings] 조각 검색 실패 — 문서 벡터로: ${(e as Error)?.message}`);
+    }
+  }
   try {
     const rows = await rrfSearch(qstr, qvec, terms, opts, viewer);
     if (diag) diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical";
@@ -186,7 +198,7 @@ export async function hybridSearchKnowledge(
 
 /**
  * (#4213 T12 #4744 검색 실패 보조 안내) 하이브리드 검색이 돌려준 지식이 질의와 얼마나 맞나 — RRF 점수는 순위라 «약하다» 를 말하지 못해서
- *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
+ *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(찾기가 조각을 쓰면 조각 기준 · 임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
  *  lexical = 그 가운데 질의 낱말이 (부르는 쪽이 정한 수만큼 — termsNeeded · 큰따옴표 구절은 늘) 이름·제목·본문에 든 지식이 있나(knowledge_grep
  *  plain 규칙 — 조사를 뗀 꼴 · 군말은 없어도 됨). 낱말이 맞으면 topSim 은 재지 않는다(null). 돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진
  *  것이다. 질의 임베딩은 검색과 같은 원문(qstr)으로 묻어 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억) — 낱말은 termsQuery 에서 뽑는다.
@@ -229,8 +241,10 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
   try {
     const qe = await embedQuery(qstr);
     if (qe.vec) {
+      //  찾기가 조각으로 찾았으면 조각으로 잰다 — 끝 절로만 맞는 문서는 문서 벡터가 멀어, 맞는 1위가 있어도 «약하다» 가 된다.
+      const ix = await chunkIndex();
       const r = await one(itemsPool,
-        `SELECT max(1 - (embedding_vector <=> $1::vector))::float8 AS s FROM knowledge WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
+        `SELECT max(1 - (embedding_vector <=> $1::${ix ? ix.cast : "vector"}))::float8 AS s FROM ${ix ? "knowledge_chunk" : "knowledge"} WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
         [toVectorLiteral(qe.vec), list]) as { s?: number | null } | undefined;
       topSim = r?.s == null ? null : Number(r.s);
     }
@@ -265,6 +279,7 @@ async function rrfSearch(
   qstr: string, qvec: number[] | null, terms: readonly string[] | null,
   opts: KnowledgeSearchFilter & { limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean },
   viewer?: Viewer,
+  ix: ChunkIndex | null = null,
 ): Promise<KnowledgeSearchRow[]> {
   const withBody = opts.mode !== "names";
   const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
@@ -288,12 +303,15 @@ async function rrfSearch(
   let vecCte = "";
   if (qvec) {
     //  #5169 검색 제외는 벡터가 없지만 술어로도 뺀다 — 비우기 전의 벡터가 남아 있어도 결과에 안 나오게(렉시컬 grepWhereSql 과 같은 규칙).
-    const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
+    const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`];
     if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
     if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
     if (categories) vecWh.push(knowledgeInCategoriesSql(categories, params, "k"));
     params.push(toVectorLiteral(qvec));   // 쿼리 벡터
-    vecCte = `${vecChannel(vecWh.join(" AND "), `$${params.length}::vector`, candP, categories !== null)},`;
+    const qp = `$${params.length}`;
+    vecCte = ix
+      ? `${chunkVecChannel(ix, vecWh.join(" AND "), qp, candP, vecWh.length > 2)},`
+      : `${vecChannel([...vecWh, `k.embedding_vector IS NOT NULL`].join(" AND "), `${qp}::vector`, candP, categories !== null)},`;
   }
   params.push(RRF_K); const kP = `$${params.length}`;
   const vis = await knowledgeVisWhere(viewer, params);   // 최종 SELECT 전용(위 후보 CTE 주석 참조)
@@ -309,6 +327,7 @@ async function rrfSearch(
       SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC) AS rank
       FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT ${candP}
     )`;
+  const matched = !!ix && !!qvec && withBody;   // 맞은 절을 함께 읽는다(스니펫)
   const sql = `
     WITH ${lexChannel},
     ${vecCte}
@@ -317,15 +336,20 @@ async function rrfSearch(
       FROM (SELECT name, rank FROM lex${qvec ? " UNION ALL SELECT name, rank FROM vec" : ""}) u
       GROUP BY name
     )
-    SELECT ${sel}, f.score::float8 AS score
+    SELECT ${sel}, f.score::float8 AS score${matched ? `, c.start_line, c.path, c.body, v.rank AS vec_rank, l.rank AS lex_rank` : ""}
     FROM fused f JOIN knowledge k ON k.name=f.name
+    ${matched ? `LEFT JOIN vec v ON v.name = f.name LEFT JOIN knowledge_chunk c ON c.id = v.chunk_id LEFT JOIN lex l ON l.name = f.name` : ""}
     WHERE ${vis}
     ORDER BY ${first}f.score DESC LIMIT ${limP}`;
-  const rows = qvec ? await withHnswScan((db) => q(db, sql, params)) : await q(itemsPool, sql, params);
+  const rows = !qvec ? await q(itemsPool, sql, params)
+    : ix ? await withChunkScan(ix, (db) => q(db, sql, params))
+    : await withHnswScan((db) => q(db, sql, params));
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null, ...flagOf(opts, r) };
-    if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
+    //  뜻으로 올라온 문서는 맞은 절을 보여 준다 — 낱말이 스친 줄보다 왜 나왔는지가 잘 보인다. 낱말 순위가 더 높거나 context(ripgrep -C)를 달라고 했으면 맞은 줄이다.
+    const byMeaning = r.body != null && !opts.context && (r.lex_rank == null || Number(r.vec_rank) <= Number(r.lex_rank));
+    if (withBody) base.snippet = byMeaning ? chunkSnippet(r) : grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });
 }

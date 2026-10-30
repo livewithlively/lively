@@ -9,12 +9,13 @@ import {
   startBackfillJob, getBackfillJob, countEmbeddingBacklog, countByMode, runAutoBackfillSweep, setBackfillPausedCache, PROJECT_TARGET, KNOWLEDGE_CHUNK_TARGET,
   type BackfillMode
 } from "../../v6/embedding-backfill.js";
+import { chunkIndex, recallUsesChunks, resetChunkIndex } from "../../v6/knowledge-chunk-search.js";
 import { actorOf, restWork } from "./shared.js";
 
 export const embeddingsCapabilities: Capability[] = [
   // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──
   restWork("org_embeddings_status", "임베딩(벡터검색) 상태",
-    "임베딩 설정(embedding_config) + 기존 지식 백로그(미임베딩 수) + 지식 조각 백로그(chunk_backlog — 자동으로만 채운다 · 하루 상한이 있다) + 진행 중 백필 잡 상태.",
+    "임베딩 설정(embedding_config) + 기존 지식 백로그(미임베딩 수) + 지식 조각 백로그(chunk_backlog — 자동으로만 채운다 · 하루 상한이 있다) + 조각 검색 상태(chunk_search — enabled 스위치 · active 지금 쓰는 중 · recall 자동 소환도 쓰는 중 · vector_type · iterative_scan) + 진행 중 백필 잡 상태.",
     [{ method: "GET", paths: ["/api/ui/org/embeddings"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();
@@ -26,7 +27,9 @@ export const embeddingsCapabilities: Capability[] = [
       }))().catch(() => null);
       // config_source(#688): db(관리탭)·db-off(명시적 끄기)·env(.env 시드)·off — UI 가 설정 출처를 안내.
       // backfill_paused(#1060): 자동 백필 일시중지 여부(knowledge·project 공통 스위치) — UI 가 배너·백필버튼 게이트에 쓴다.
-      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, chunk_backlog, job: getBackfillJob(), backfill_paused: cfg.embedding_backfill_paused };
+      const ix = await chunkIndex();
+      const chunk_search = { enabled: cfg.knowledge_chunk_search, active: !!ix, recall: recallUsesChunks(ix), vector_type: ix?.cast ?? null, iterative_scan: ix?.iterative ?? null };
+      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, chunk_backlog, chunk_search, job: getBackfillJob(), backfill_paused: cfg.embedding_backfill_paused };
     }),
   restWork("org_embeddings_backfill", "기존 지식 임베딩(백필) 실행",
     "이미 저장된 지식을 배치로 임베딩(뒤늦게 켠 경우). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/embeddings 폴링. 이미 실행 중이면 409.",
@@ -93,5 +96,20 @@ export const embeddingsCapabilities: Capability[] = [
       return { paused, job: getBackfillJob(), project_job: getBackfillJob(PROJECT_TARGET) };
     }, {
       paused: z.boolean().describe("true=자동 백필 일시중지(실행 중 잡도 다음 배치에서 중단) · false=재개(즉시 1회 드레인). DB 영속(#1060)"),
+    }),
+
+  // ── 지식 조각 검색 되돌리기(#5204) ──
+  //  찾기가 나빠졌다는 신호가 오면 코드를 되돌리지 않고 이 스위치로 문서 벡터로 돌아간다. 조각 색인 · 임베딩은 계속 돌아 다시 켜면 곧바로 쓴다.
+  restWork("org_embeddings_chunk_search", "지식 조각 검색 켜기/끄기",
+    "찾기(knowledge_search)와 자동 소환이 조각 벡터를 쓸지 정한다. enabled=false 면 30초 안에 문서 벡터로 돌아간다(낱말 색인은 그대로 · 조각 색인과 임베딩은 계속 돈다). DB 영속. 상태는 org_embeddings_status 의 chunk_search.",
+    [{ method: "POST", paths: ["/api/ui/org/embeddings/chunk-search"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      if (typeof input.enabled !== "boolean") throw new HttpError(400, "enabled 는 boolean 이어야 합니다");
+      await updateRuntimeConfig({ knowledge_chunk_search: input.enabled }, actorOf(user), ctx?.source ?? "web",
+        { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null });
+      resetChunkIndex();
+      return { enabled: input.enabled, active: !!(await chunkIndex()) };
+    }, {
+      enabled: z.boolean().describe("true=조각 벡터로 찾는다(기본 · 조각의 98% 에 벡터가 있을 때만 실제로 쓴다) · false=문서 벡터로 찾는다"),
     }),
 ];
