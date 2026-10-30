@@ -25,7 +25,7 @@ const agentJobRunInput = {
   timeout_min: z.number().int().positive().optional().describe("실행 시간 상한(분) — 생략하면 워크스페이스 기본, 넘으면 최대로 접는다"),
   model: z.string().max(64).optional().describe("하네스 모델(sonnet·opus·haiku 또는 전체 id). 생략하면 그 사람 기본"),
   label: z.string().optional().describe(`짧은 이름(목록에 보인다). ${softCapHint(SOFT_CAPS.agent_job_run!.label!)}`),
-  resume_job_id: z.number().int().positive().optional().describe("이 끝난 작업의 대화를 이어받는다(갈라서 잇는다 — 새 대화 id · 앞 작업의 대화는 그대로 · 같은 사람·같은 앱 · 작업 폴더도 그 작업 것)"),
+  resume_job_id: z.number().int().positive().optional().describe("이 끝난 작업의 대화를 이어받는다(갈라서 잇는다 — 새 대화 id · 앞 작업의 대화는 그대로 · 같은 사람·같은 앱 · 작업 폴더도 그 작업 것 · 앞 작업이 «라이블리 MCP 만»(앱 ai.mcp_only)이었으면 이 작업도 내장 도구 없이 돈다)"),
 };
 
 const agentJobRun: Capability = {

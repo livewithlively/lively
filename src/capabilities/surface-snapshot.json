@@ -5624,7 +5624,7 @@
   "rest": [
    "POST /api/ui/ai-runs"
   ],
-  "input_hash": "ab6178e8ac14eee6"
+  "input_hash": "3d22611bc509f4a2"
  },
  {
   "name": "app_ai_run_get",
@@ -5774,7 +5774,7 @@
   "rest": [
    "POST /api/ui/agent-jobs"
   ],
-  "input_hash": "9add423ffeb85ac7"
+  "input_hash": "1c99b94efae8cdcd"
  },
  {
   "name": "agent_job_get",

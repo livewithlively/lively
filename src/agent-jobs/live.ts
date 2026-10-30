@@ -102,6 +102,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     jobEnv: async (job, at) => { const ai = await import("../ai-runs/live.js"); return (await import("../ai-runs/service.js")).bootEnvForJob(job, await ai.liveAiRunDeps(), at); },
     //  #5082 앱 판 지시 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적었다 · 판이 뜰 때 다시 고르지 않는다).
     jobSystem: async (job) => (await import("./store.js")).agentJobAppInstructions(job.id),
+    //  «라이블리 MCP 만» 표시 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적었다 · 판이 뜰 때 다시 고르지 않는다).
+    jobMcpOnly: async (job) => (await import("./store.js")).agentJobMcpOnly(job.id),
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job) => {

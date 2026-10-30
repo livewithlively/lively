@@ -626,6 +626,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //   하네스 시스템 지시로 싣는다(작업 폴더 지시는 읽지 않는다). 접수 때 정해지고 바뀌지 않는다 — 형식 재시도도 같은 글을 싣는다.
   //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts APP_INSTRUCTIONS_COL).
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_instructions TEXT`);
+  //  mcp_only — 앱이 «라이블리 MCP 만» 으로 선언한 작업(ai.mcp_only). 판이 내장 도구를 끄고 앱 토큰의 MCP 만 싣는다(runner.claudeJobArgv).
+  //   접수 때 정해지고 바뀌지 않는다 — 이어받기 · 형식 재시도도 같은 값. ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다(agent-jobs/store.ts MCP_ONLY_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS mcp_only BOOLEAN NOT NULL DEFAULT false`);
   //  #5101 transcript — API 키 작업의 하네스 대화 기록(gzip). API 키 작업은 이 작업만의 빈 설정 폴더에서 돌고 그 폴더는 끝나면 지워져, 그 대화를
   //   이어받는 작업(형식 재시도 · 앱의 이어받기)이 읽을 기록이 남지 않는다 — 판이 끝에 올리고 이어받는 작업의 첫 말이 돌려받는다(agent-jobs/plan.TRANSCRIPT_GZ_MAX).
   //   transcript_conv = 그 기록의 대화 id · transcript_bytes = 풀었을 때 크기. 보존은 정책 transcript_keep_days(지나면 비운다 · 행은 남는다).

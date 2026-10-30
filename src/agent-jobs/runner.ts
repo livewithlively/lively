@@ -333,17 +333,27 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *  · 이어받기는 늘 갈라서 잇는다(`--fork-session` · #5101) — 앞 작업의 대화 파일은 그대로 두고 새 대화 id 로 이어 쓴다. 같은 대화를 잇는 작업이 둘 겹쳐도
  *    한 파일에 같이 쓰지 않고, 앞 실행에서 몇 번이든 다시 갈라 이을 수 있다(실측 2026-10-29 · claude 2.1.312: 새 id · 앞 파일 내용 그대로 ·
  *    요청에 앞 대화가 다 실림 — 빈 설정 폴더에 되돌려 놓은 기록에서도 같다).
+ *  · 앱이 «라이블리 MCP 만» 으로 선언한 작업(mcpOnly — 매니페스트 ai.mcp_only)은 내장 도구를 끄고 MCP 는 그대로 싣는다(`--tools ""` + `--mcp-config`).
+ *    `--dangerously-skip-permissions` 로 도는 판은 실행 계정이 읽을 수 있는 박스의 다른 폴더(다른 프로젝트 · 앱)까지 읽고 셸을 돌린다 — 앱 토큰으로 좁힌
+ *    도구만 쓰게 해야 하는 앱(예: 정답지가 같은 박스에 있는 질의응답 앱)은 이 길밖에 없다. 실측(2026-10-30, claude 2.1.314): init 이벤트 tools 가
+ *    MCP 도구만(mcp__t__ping) · 그 도구는 그대로 불린다.
+ *    작업 폴더 설정도 읽지 않는다(`--setting-sources user` — 지시가 없어도). 도구를 꺼도 작업 폴더의 .claude/settings*.json 은 셸 명령을 돌릴 수 있다
+ *    (apiKeyHelper 등 — 실측 2026-10-30, claude 2.1.314: tools [] 인데 그 명령이 돌고, user 만 주면 돌지 않는다). 앱 폴더는 구성원 · 작업 AI 가 고칠 수 있다.
+ *    ⚠ 위 앱 판 지시의 ⚠ 와 같이 user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 그 계정으로 도는 다른 작업(도구가 열린 작업)이 그 settings 에
+ *     apiKeyHelper 를 심으면 이 작업도 그 명령을 돌린다. «MCP 만» 은 이 작업의 AI 를 막는 것이지, 같은 계정의 다른 작업이 남긴 설정까지 막지는 않는다.
  */
-export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean }): string[] {
+export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean; mcpOnly?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
   return [
     "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
     "--settings", JSON.stringify({ disableAllHooks: true }),
     "--strict-mcp-config",
     //  #4488 단발 — 도구 없이 글만(`--tools ""` = 내장 도구 전부 끔 · 실측 2026-10-16 claude 2.1.301: init 이벤트 tools []). 파일 · 셸에 닿지 않는다.
-    ...(o.bare ? ["--tools", ""] : []),
+    //  MCP 만 쓰는 작업도 같은 인자다 — 단발과 달리 아래 --mcp-config 는 남는다.
+    ...(o.bare || o.mcpOnly ? ["--tools", ""] : []),
     ...(o.mcp ? ["--mcp-config", MCP_CONFIG_PLACEHOLDER] : []),
-    ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER, "--setting-sources", "user"] : []),
+    ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER] : []),
+    ...(o.system || o.mcpOnly ? ["--setting-sources", "user"] : []),
     ...(o.model ? ["--model", o.model] : []),
     ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];

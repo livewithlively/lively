@@ -55,6 +55,11 @@ export interface SubmitJobInput {
    *  필수다 — 형식 재시도가 빠뜨리면 그 턴은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다.
    */
   appInstructions: string | null;
+  /**
+   * 앱이 «라이블리 MCP 만» 으로 선언한 작업(ai.mcp_only) — 작업 행에 적어 판이 내장 도구를 끄고 앱 토큰의 MCP 만 싣는다(runner.claudeJobArgv).
+   *  필수다 — 접수하는 자리(첫 접수 · 이어받기 · 형식 재시도)가 하나라도 빠뜨리면 그 턴은 내장 도구를 연 채 박스의 폴더에 닿는다.
+   */
+  mcpOnly: boolean;
 }
 
 /**
@@ -65,7 +70,7 @@ export function agentJobOfRun(j: SubmitJobInput, o: { cwd: string; resumeConvers
   return {
     requester: j.requester, accountKind: j.accountKind, accountMember: j.accountMember, appId: j.appId, projectId: j.projectId, cwd: o.cwd,
     harness: "claude", model: j.model, label: j.label, prompt: j.prompt, resumeConversation: o.resumeConversation, resumeJobId: j.resumeJobId,
-    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat, appInstructions: j.appInstructions,
+    timeoutSec: o.timeoutSec, bare: j.bare, homeless: j.homeless, sharedSeat: j.sharedSeat, appInstructions: j.appInstructions, mcpOnly: j.mcpOnly,
   };
 }
 
@@ -100,6 +105,11 @@ export interface AiRunDeps {
   instructions?(app: OrgApp, who: Viewer, job: string): Promise<string | null>;
   /** #5082 그 작업 행에 실린 앱 판 지시(agent-jobs/store.agentJobAppInstructions) — 형식 재시도가 같은 글을 싣는다. 없으면 null. */
   jobInstructions?(jobId: number): Promise<string | null>;
+  /** 그 작업 이름이 «부른 사람(주소)의 판» 의 ai.mcp_only 에 있나(apps/app-job-mcp-only.resolveJobMcpOnly). 앱을 볼 수 없으면 던진다.
+   *  필수다 — 배선이 빠지면 «MCP 만» 으로 선언한 작업이 내장 도구를 연 채 돈다(빠진 배선을 컴파일이 잡게 · 앱 판 지시의 선택 배선과 다르다). */
+  mcpOnly(app: OrgApp, who: Viewer, job: string): Promise<boolean>;
+  /** 그 작업 행의 «라이블리 MCP 만» 표시(agent-jobs/store.agentJobMcpOnly) — 이어받기 · 형식 재시도가 싣는다. 필수다(위와 같은 까닭). */
+  jobMcpOnly(jobId: number): Promise<boolean>;
   /** 지금 열린 프록시 호출 수를 세는 자리(워크스페이스 동시 상한). */
   inflight: { take(key: string, max: number): boolean; release(key: string): void; count(key: string): number };
   rate: RateWindow;
@@ -390,6 +400,12 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   const instructions = resume && executor === "job" && resume.parent.job_id != null
     ? (d.jobInstructions ? await d.jobInstructions(resume.parent.job_id) : null)
     : jobName && d.instructions ? await d.instructions(app, viewerOf(user, who), jobName) : null;
+  //  «라이블리 MCP 만»(ai.mcp_only) — 앱 판 지시와 같은 판 · 같은 때 읽는다. 에이전트 작업만 뜻이 있다(단발은 원래 도구가 없다).
+  //   이어받기는 조이는 쪽만 따른다 — 앞 작업이 MCP 만이었으면 그대로(같은 대화를 그 사이 연 도구로 잇지 않는다), 앞 작업이 열려 있었어도
+  //   지금 판이 MCP 만이면 MCP 만(앱이 나중에 선언해도 열린 대화가 열린 채 이어지지 않는다).
+  const mcpOnly = executor === "job" && kind !== "single"
+    && ((resume != null && resume.parent.job_id != null && await d.jobMcpOnly(resume.parent.job_id))
+      || (!!jobName && await d.mcpOnly(app, viewerOf(user, who), jobName)));
 
   const n: NewAiRun = {
     appId, requester: who.member, requesterKind: who.kind, source: ctx.source ?? null, jobName, kind,
@@ -424,14 +440,15 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
         prompt: jobPrompt(row, input.files, { resumed: !!resume }), timeoutMin: typeof input.timeout_min === "number" ? input.timeout_min : null, bare: kind === "single",
         //  #5101 — 앞 실행의 마지막 작업(형식 재시도가 있었으면 그 작업)의 대화를 갈라 잇는다(runner.claudeJobArgv --fork-session).
         resumeJobId: resume ? resume.parent.job_id : null,
-        homeless, sharedSeat, appInstructions: instructions,
+        homeless, sharedSeat, appInstructions: instructions, mcpOnly,
       }, user);
       await d.store.setAiRunJob(row.id, job.id);
     } catch (e) {
       //  #5082 롤 창 — 공용 DB 마이그레이션 전이면 작업 행에 지시 칸이 없다(agent-jobs/store APP_INSTRUCTIONS_COL). 막힌 게 아니라 준비 중이다 —
-      //   실행 행에도 DB 원문(«column … does not exist») 대신 그 까닭을 적는다.
-      const rollGap = !!instructions && (e as { code?: string })?.code === "42703";
-      const notReady = "앱 지시를 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요";
+      //   실행 행에도 DB 원문(«column … does not exist») 대신 그 까닭을 적는다. «라이블리 MCP 만» 칸(MCP_ONLY_COL)도 같다.
+      const rollGap = (!!instructions || mcpOnly) && (e as { code?: string })?.code === "42703";
+      const carried = instructions && mcpOnly ? "앱 지시 · 도구 제한을" : instructions ? "앱 지시를" : "앱 도구 제한을";
+      const notReady = `${carried} 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요`;
       const why = e instanceof Error ? e.message : String(e);
       await d.store.finishAiRun(row.id, { status: "failed", result: null, error: rollGap ? notReady : `작업 컨테이너에 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);
       if (rollGap) throw new HttpError(503, notReady);
@@ -614,6 +631,8 @@ export async function syncRun(run: AiRunRow, d: AiRunDeps): Promise<AiRunRow | n
         homeless: job.homeless === true, sharedSeat: await d.store.aiRunSharedSeat(run.id),
         //  #5082 — 앱 판 지시도 원래 작업의 것 그대로 싣는다(지금 판으로 다시 고르지 않는다 · 같은 글이라 잠금도 같이 걸린다).
         appInstructions: d.jobInstructions ? await d.jobInstructions(job.id) : null,
+        //  «라이블리 MCP 만» 도 원래 작업 행의 값 그대로(빠뜨리면 재시도 턴이 내장 도구를 연 채 돈다 · 못 읽으면 재시도를 보내지 않는다).
+        mcpOnly: await d.jobMcpOnly(job.id),
       }, { userId: run.requester, email: "", scopes: [], projects: ["*"] } as LivelyUser);
       if (await d.store.retryAiRun(run.id, retry.id)) { logger.info({ run: run.id, job: retry.id }, "[ai-run] 형식에 맞게 다시 — 재시도 작업"); return d.store.getAiRun(run.id); }
     } catch (e) {

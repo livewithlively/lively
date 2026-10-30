@@ -105,6 +105,9 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     //  #5082 앱 판 지시 — 부른 사람(주소)의 판에서 그 작업 이름의 지시 파일(apps/app-job-instructions) · 형식 재시도는 원래 작업 행에 실린 글.
     instructions: async (app, who, job) => (await import("../apps/app-job-instructions.js")).resolveJobInstructions(app, who, job),
     jobInstructions: async (jobId) => (await import("../agent-jobs/store.js")).agentJobAppInstructions(jobId),
+    //  «라이블리 MCP 만»(ai.mcp_only) — 앱 판 지시와 같은 판에서 읽고 · 이어받기 · 형식 재시도는 원래 작업 행의 값.
+    mcpOnly: async (app, who, job) => (await import("../apps/app-job-mcp-only.js")).resolveJobMcpOnly(app, who, job),
+    jobMcpOnly: async (jobId) => (await import("../agent-jobs/store.js")).agentJobMcpOnly(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,

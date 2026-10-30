@@ -61,6 +61,7 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   const runtimeAsset = await readRuntimeEntry(manifest, root);
   //  #5082 작업별 지시 파일(ai.instructions)도 같은 까닭으로 여기서 확정한다 — 작업을 띄울 때 «파일 없음» 을 처음 알면 그 작업이 실패로 끝난다.
   await checkAiInstructions(manifest, root);
+  checkAiMcpOnly(manifest);
 
   // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
   const declared = planDeclaredComponents(manifest);
@@ -117,6 +118,19 @@ async function checkAiInstructions(m: LivelyAppManifest, root: string): Promise<
     if (text === null) throw new HttpError(400, `${where} 의 지시 파일이 UTF-8 글(NUL 없이)이 아닙니다: ${rel}`);
     //  빈 지시는 «지시를 실었다» 가 아니다 — 비어도 선언이 있으면 작업 폴더 지시를 안 읽는 쪽으로 돌지만 단발엔 아무것도 안 실려 두 길이 갈린다(격리 리뷰 N1).
     if (!text.trim()) throw new HttpError(400, `${where} 의 지시 파일이 비어 있습니다: ${rel}`);
+  }
+}
+
+/**
+ * 작업별 «라이블리 MCP 만»(ai.mcp_only) — 선언한 작업 이름(ai.jobs)만. 오타 난 이름은 어느 작업에도 걸리지 않아 그 작업이 내장 도구를 연 채
+ *  돈다(앱은 막았다고 믿는다) — 설치 · 판 저장에서 거절한다. 모양은 parseAppManifest 가, 뜻은 여기서만 본다(checkAiInstructions 와 같다).
+ */
+function checkAiMcpOnly(m: LivelyAppManifest): void {
+  const list = m.ai?.mcp_only;
+  if (!list) return;
+  const names = new Set((m.ai?.jobs ?? []).map((j) => j.name));
+  for (const job of list) {
+    if (!names.has(job)) throw new HttpError(400, `매니페스트 오류 [ai.mcp_only]: ai.jobs 에 선언한 작업 이름이 아닙니다: ${job}`);
   }
 }
 
