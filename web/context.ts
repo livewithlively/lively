@@ -235,7 +235,9 @@ function buildHeader(selStage: CtxStage): HTMLElement {
   //   앱 이름은 탭 줄 왼쪽 문패로 들어가고(세로 구분선 하나), 탭이 그 오른쪽에 잇는다. 정의 한 줄(hint)은
   //   화면 안 캡션으로 내려간다 — 현황은 지도 캡션이 그 일을 이미 하고, 나머지 탭은 아래 renderContext 가 붙인다.
   const tabs = el('div', { class: 'pjv-vtabs ctx-vtabs', role: 'tablist', 'aria-label': CTX_APP_NAME });
-  tabs.append(el('span', { class: 'ctx-hd-app' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
+  //  #5147(원준 2026-10-30) — 앱 이름은 **첫 화면(실시간 현황)으로 가는 링크**다. 종전엔 글자뿐이라, 처음 화면으로 돌아가려는 사람이
+  //   이 이름을 누르고 아무 일도 안 일어나는 일이 반복됐다(앱 이름 = 그 앱의 처음 화면, 웹의 로고 링크와 같은 약속).
+  tabs.append(el('a', { class: 'ctx-hd-app', href: '#/context', title: CTX_TAB.home + '으로 갑니다' }, ctxAppIcon(), el('span', { text: CTX_APP_NAME })));
   for (const s of STAGES) {
     if (s.tray || s.parent) continue;   // 확인할 것 — 아래 트레이가 대신 선다 · 하위 화면은 탭이 아니다
     const on = s.key === selStage.key || s.key === selStage.parent;
