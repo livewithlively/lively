@@ -17,7 +17,7 @@
 //  ① 준비 한 덩이(단순 질의 프로토콜 — 여러 문장): BEGIN [READ ONLY] · 행 격리 값(app.tenant_id) · 시간·메모리 상한 ·
 //     search_path=pg_catalog · standard_conforming_strings=on(검사기의 렉서와 DB 렉서를 같게 고정) · SET LOCAL ROLE <앱 역할>
 //  ② 사용자 문장(확장 프로토콜 — 값은 바인딩, DB 도 여러 문장을 거부한다) — 묶음이면 문장마다 한 번
-//     id 를 직접 넣은 문장(INSERT … OVERRIDING SYSTEM VALUE) 뒤엔 그 표의 id 시퀀스를 맞추는 한 덩이를 더 보낸다(#5172 idResyncSql)
+//     id 를 직접 넣은 문장(INSERT … OVERRIDING SYSTEM VALUE)이 행을 넣었으면 그 표의 id 시퀀스를 맞추는 한 덩이를 더 보낸다(#5172 idResyncSql)
 //  ③ COMMIT(쓰기·잠금)/ROLLBACK(읽기)
 //  SET LOCAL 이라 트랜잭션이 끝나면 Postgres 가 전부 되돌린다 — 다음 차례가 앱 역할을 물려받지 않는다.
 //  ⚠ 역할로 내려가는 게 **사용자 SQL 보다 먼저**다. ① 이 실패하면(어느 한 줄이라도) ② 는 보내지 않는다.
@@ -421,6 +421,8 @@ function prepSql(rw: boolean, tenantId: string, role: string, l: AppSqlLimits): 
   ].join(";\n");
 }
 
+/** idResyncSql 에 끼우는 표 이름 — 인용한 «스키마.표». 앱 id 는 숫자로 시작할 수 있어(store-ddl physicalAppPrefix) IDENT 보다 넓다. */
+const QUOTED_REL = /^"[a-z0-9_]+"\."[a-z0-9_]+"$/;
 /**
  * id 를 직접 넣은 문장 뒤(#5172) — 그 표의 id 시퀀스를 **앞으로만** 맞춘다(왕복 1번 · 두 문장). 직접 넣은 id 는 시퀀스를 올리지
  *  않아, 그대로 두면 다음 평범한 INSERT 가 그 id 를 받아 기본 키가 부딪친다(23505 — 넣은 id 수만큼 차례로).
@@ -434,7 +436,6 @@ function prepSql(rw: boolean, tenantId: string, role: string, l: AppSqlLimits): 
  *   번호를 먼저 받거나(23505 → 409) 위치를 읽고 옮기는 찰나에 끼어 시퀀스가 그만큼 되돌 수 있다. 옮기기는 표가 조용할 때 한다.
  *  rel 은 qualifiedAppTable 이 만든 인용 이름이다 — 끼우기 전에 모양을 한 번 더 본다.
  */
-const QUOTED_REL = /^"[a-z0-9_]+"\."[a-z0-9_]+"$/;
 function idResyncSql(rel: string): string {
   if (!QUOTED_REL.test(rel)) throw new HttpError(500, "id 시퀀스를 맞출 표 이름이 모양에 맞지 않습니다");
   const lit = `'${rel}'`;

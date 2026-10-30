@@ -479,6 +479,13 @@ try {
     chk("D21 E14b 잠금 대기 상한 안이면 뒤 문장도 된다 — 시퀀스는 큰 쪽(3000) 뒤로(3001)",
       saw2 && held2 === null && waited2 === null && await has(2500) && await has(3000) && n7 === 3001, JSON.stringify({ saw2, held2: held2?.message, waited2: waited2?.message, n7 }));
 
+    //  E18 숫자로 시작하는 앱 id(물리 이름 "9seq__items") — 표 이름 모양 확인이 이런 앱도 받는다.
+    await ensureAppTables("9seq", [{ table: "items", columns: [{ name: "v", type: "text" }] }], { schema: SA, strict: true, sqlRole: true, report: emptyTableReport() });
+    const o9 = { app: "9seq", tables: ["items"] };
+    const put9 = await errOf(run("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (70, 'a')", [], o9));
+    const next9 = await errOf(run("INSERT INTO items (v) VALUES ('b') RETURNING id", [], o9).then((r) => { if (Number(r.rows[0]?.id) !== 71) throw new Error(`id ${r.rows[0]?.id}`); }));
+    chk("D21 E18 숫자로 시작하는 앱 id 도 원래 id 로 넣고 맞춘다(70 → 다음 71)", put9 === null && next9 === null, JSON.stringify({ put9: put9?.message, next9: next9?.message }));
+
     await su.query(`ALTER TABLE "${SA}"."seq__plain" ALTER COLUMN id DROP IDENTITY`);
     const ensured = await errOf(ensureAppSqlRole("seq", ["items", "plain"], SA));
     const noSeq = await errOf(runS("INSERT INTO plain (id, v) OVERRIDING SYSTEM VALUE VALUES (42, 'p')"));
