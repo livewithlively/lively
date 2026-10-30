@@ -2,12 +2,13 @@
 //  분리 이유: CRUD 와 완전히 다른 관심사(질의 계획·벡터·랭킹)인데 한 파일에 있어 검색 튜닝 diff 가 저장 경로와
 //  충돌했다. 공개 표면은 그대로 — knowledge-store.ts 가 이 모듈을 재수출하므로 기존 호출부는 무수정.
 //  공용 조각(가시성 술어·아이콘 표현식)은 knowledge-common.ts, grep 매처·RRF 상수는 search-util.ts.
+import type { PoolClient } from "pg";
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, withTx } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
   type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst, titleFirst,
-  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedQuery,
+  RRF_K, HYBRID_CANDIDATES, HNSW_EF_SEARCH, activeEmbeddingProvider, embedQuery,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
 import { parseQueryTerms, requiredTerms } from "./query-terms.js";   // #4744 검색 실패 보조 안내의 낱말 판정(군말 빼기)
@@ -189,6 +190,17 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
 }
 
 /**
+ * 벡터 근사탐색을 넓혀 돌린다(#5201). 기본 hnsw.ef_search=40 이면 LIMIT 이 50 이어도 40건까지만 나오고, 행 보안 · 술어로 걸러지는 행이 그 40칸을 먼저 먹는다
+ *  (공용 DB 에서는 다른 워크스페이스 문서도 같은 인덱스에 있다). 값은 트랜잭션 안에서만 산다 — SET LOCAL.
+ */
+async function withHnswScan<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
+  return withTx(async (c) => {
+    await c.query(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
+    return fn(c);
+  });
+}
+
+/**
  * 벡터 채널 후보 CTE(이름 vec) — 카테고리 제한(#5100)이 있으면 **제한 안 행만 먼저 떠서(MATERIALIZED) 정확히 잰다**.
  *  HNSW 근사탐색(ORDER BY <=> … LIMIT)에 조건을 얹으면 탐색 목록(ef_search) 안에서만 사후로 걸러져, 제한 밖 이웃이 그 목록을 채울 때
  *  결과가 통째로 빈다(#1291 R2-#6 — 공개범위 술어를 후보에 안 넣는 까닭과 같은 현상). 범위를 선언한 앱은 바로 그 모양이다 — 범위 밖
@@ -258,7 +270,7 @@ async function rrfSearch(
     FROM fused f JOIN knowledge k ON k.name=f.name
     WHERE ${vis}
     ORDER BY ${first}f.score DESC LIMIT ${limP}`;
-  const rows = await q(itemsPool, sql, params);
+  const rows = await withHnswScan((db) => q(db, sql, params));
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null, ...flagOf(opts, r) };
@@ -358,7 +370,7 @@ export async function findSimilarKnowledge(
       WHERE ${vis}
       ORDER BY k.similarity DESC
       LIMIT ${limP}`;
-    const rows = await q(itemsPool, sql, params);
+    const rows = await withHnswScan((db) => q(db, sql, params));
     return rows.map((r) => ({
       name: r.name, title: r.title, injection: r.injection, provenance: r.provenance,
       is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at,
