@@ -10,6 +10,7 @@ import { restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임.
 import { markEmbeddingPending, clearEmbedding, nudgeAutoBackfill, KNOWLEDGE_TARGET } from "./embedding-backfill.js";
+import { syncKnowledgeLexSoon } from "./knowledge-lex-store.js";
 // 검색 공용 유틸(#631 분리) — grep 매처를 목록 필터(knowledgeListFilter)가 knowledge_grep 과 같은 의미로 쓴다.
 import { parseGrep, grepWhere } from "./search-util.js";
 import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./visibility.js";
@@ -528,6 +529,7 @@ export async function upsertKnowledge(
     if (!searchable) await clearEmbedding(KNOWLEDGE_TARGET, name);
     else if (newEmbedText && (!before || newEmbedText !== oldEmbedText)) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
     else if (!wasSearchable) nudgeAutoBackfill();
+    syncKnowledgeLexSoon(name);   // #5201 낱말 색인 — 저장하자마자 이름으로 찾는 길. 놓쳐도 스윕이 맞춘다
     return materializeWikiLinksBestEffort(name, input.body_md);
   };
   if (opts.deferPost) return { ...after, post };
