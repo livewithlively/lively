@@ -299,6 +299,13 @@
   :root:not([data-theme="light"]) .cxr, :root:not([data-theme="light"]) .cxrp { --run-c: #3987e5; --run-d: #d95926; --run-x: #e0605f; --run-z: #3a4660; }
   :root:not([data-theme="light"]) .cxr-tip, :root:not([data-theme="light"]) .cxr-pop { --run-c: #3987e5; --run-d: #d95926; --run-x: #e0605f; }
 }
+/*  자료 사이드바 앱 줄 · 자료 목록 원천 칸의 로고(.v2-ptl-logo · .v2-srl-logo)도 GitHub·Linear 단색-검정 마크를 전경 잉크로(위 #2247 과 같은 근거). */
+:root[data-theme="dark"] :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="github"] svg path,
+:root[data-theme="dark"] :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="linear"] svg path { fill: var(--ink); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="github"] svg path,
+  :root:not([data-theme="light"]) :is(.v2-ptl-logo, .v2-srl-logo)[data-svc="linear"] svg path { fill: var(--ink); }
+}
 /*  #4135 — 자동 실행 패널 줄 로고(.cxr-tile)도 GitHub·Linear 단색-검정 마크를 전경 잉크로(위 #2247 과 같은 근거). */
 :root[data-theme="dark"] .cxr-tile[data-svc="github"] svg path,
 :root[data-theme="dark"] .cxr-tile[data-svc="linear"] svg path { fill: var(--ink); }

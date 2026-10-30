@@ -24,6 +24,8 @@ import { buildFilePreview } from '../lib/file-preview.js';   // 미리보기 판
 import { authDownload, authUploadProgress } from '../projects/files-upload.js';
 import { fileLinkHash } from '../lib/sharelink.js';
 import { confirmDialog } from '../ui-primitives.js';
+import { svcLogo } from '../svc-logos.js';
+import { presetSvcKey } from '../svc-icons.js';
 
 // ── 자료 한 건(목록용 얕은 행) ─────────────────────────────────────────────
 export interface SrcRow {
@@ -351,6 +353,14 @@ async function uploadFiles(files: File[]): Promise<void> {
   if (view && mounted && document.contains(mounted)) { const k = view.key; view = null; drawFor(mounted, location.hash || '#/sources' + (k ? '?' + k : '')); }
 }
 
+/** 수집한 앱의 공식 로고(svc-logos). 원준 2026-10-30 «이상한 아이콘 만들지 말고 외부 앱 로고 그대로» — 종전엔 선 글리프로
+ *  갈음했다(슬랙·디스코드 = 말풍선, 깃허브 = 문서). 로고 표에 없는 출처(파일 · 직접 적은 글 · 도메인 위키)는 null — 호출부가 선 글리프로 떨어진다. */
+export function appLogo(system: string, cls: string): HTMLElement | null {
+  const key = presetSvcKey(system);
+  const logo = svcLogo(key);
+  return logo ? el('i', { class: cls, 'data-svc': key, 'aria-hidden': 'true' }, logo) : null;
+}
+
 const sysIconKey = (s: string): string =>
   s === 'local' ? 'disk' : s === 'authored' ? 'note' : s === 'github' || s === 'gitlab' ? 'repo'
   : s === 'slack' || s === 'discord' ? 'chat' : 'dot';
@@ -512,7 +522,8 @@ function originCell(r: SrcRow): HTMLElement {
   const o = originOf(r, (name, id) => uploaderLabel(name, id));
   const f = r.fields || {};
   const lead = o.kind === 'person' && o.id ? personFace(String(f.author_external_id || o.id), 'pava v2-srl-ava', String(f.author_name || ''))
-    : el('span', { class: 'v2-srl-sic' }, treeIcon(o.kind === 'ai' ? 'spark' : o.kind === 'note' ? 'note' : o.kind === 'app' ? sysIconKey(o.sys || '') : 'up'));
+    : (o.kind === 'app' && appLogo(o.sys || '', 'v2-srl-sic v2-srl-logo'))
+      || el('span', { class: 'v2-srl-sic' }, treeIcon(o.kind === 'ai' ? 'spark' : o.kind === 'note' ? 'note' : o.kind === 'app' ? sysIconKey(o.sys || '') : 'up'));
   return el('span', { class: 'v2-srl-src ' + o.kind, title: o.text }, lead, el('span', { class: 't', text: o.text }));
 }
 
@@ -522,7 +533,7 @@ function rowOf(r: SrcRow, sel: SrcSel): HTMLElement {
   const isFile = r.kind === 'local_file';
   const lead = isFile
     ? el('span', { class: 'v2-srl-ext ' + extClass(String(f.ext || '')), text: String(f.ext || 'file').toUpperCase().slice(0, 4) })
-    : el('span', { class: 'v2-srl-ic' }, treeIcon(sysIconKey(r.external_system || 'authored')));
+    : appLogo(r.external_system || '', 'v2-srl-ic v2-srl-logo') || el('span', { class: 'v2-srl-ic' }, treeIcon(sysIconKey(r.external_system || 'authored')));
   return el('a', {
     class: 'v2-srl-row' + (view && view.selId === r.id ? ' sel' : ''), role: 'listitem',
     href: sourcesHref(sel, r.id), 'data-id': String(r.id),

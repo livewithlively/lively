@@ -41,7 +41,7 @@ import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES, isDotState, rowDotCls } from '../session-status.js';   // #3778 2판 — 목록 줄의 점은 «나를 기다리는 것» 셋만
 import { lastAsk, watchLastAsk } from './last-ask.js';   // #2016 6차 — 세션 행 둘째 줄 '내 마지막 말'
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
+import { appLogo, selKey as srcSelKey, sourcesFindInput, sourcesFindShown, sourcesHref, sourcesSideData, sourcesSideCount, sourcesUploadPick, toggleSourcesFind, uploaderLabel } from './sources.js';   // #2423 자료 앱 사이드바 재료(#4233 3판: 조립은 여기)
 import { isChatSys, sysLabel as srcSysLabel, type SrcSel } from './sources-plan.js';
 import { loadTaxonomy, openForm as openTaxForm, openGroupManager, taxonomyData } from './taxonomy.js';   // #4233 분류체계 앱 사이드바 재료
 import { sideOwnerOf, type SideOwner } from '../lib/side-owner.js';   // #4632 사이드바는 지금 화면의 앱 것 — 구역 · 앱 제 것 · 없음
@@ -1322,10 +1322,9 @@ function footLink(href: string, icon: Parameters<typeof glyph>[0], text: string,
 //  줄 수는 위키와 같은 줄 나누기(fitWikiList): 사람 줄이 한 묶음, 앱마다 자리 줄이 한 묶음. 앱 줄과 만든 자료 두 줄은 늘 선다.
 //  카드 머리를 누르면 그 갈래 전체가 가운데 목록에 선다(AI 세션 사이드바의 카드 머리와 같은 쓰임). 켜진 줄 옮기기는 sources.ts paintSideActive.
 const srcMore = new Set<string>();
-const SRC_APP_IC: Record<string, string> = {
-  slack: 'chat', discord: 'chat', github: 'code', gitlab: 'code', linear: 'check', clickup: 'check', figma: 'pen',
-  notion: 'doc', gdrive: 'doc', 'domain-wiki': 'doc', gmail: 'mailopen', outlook: 'mailopen', zotero: 'doc',
-};
+//  앱 줄의 그림 = 그 앱의 공식 로고(sources.ts appLogo). 로고 표에 없는 출처(도메인 위키 등)만 선 아이콘으로 떨어진다.
+const SRC_APP_IC: Record<string, string> = { 'domain-wiki': 'doc' };
+const srcAppMark = (system: string): Element => appLogo(system, 'v2-ptl-logo') || icon(SRC_APP_IC[system] || 'link', 'v2-ptl-ic');
 function renderSourcesSection(): void {
   if (!last) return;
   const { host } = last;
@@ -1402,7 +1401,7 @@ function renderSourcesSection(): void {
     //  ② 수집한 자료: 앱 줄, 그 아래 자리 줄(채널 · 저장소).
     const colKids: HTMLElement[] = [];
     for (const a of apps) {
-      colKids.push(line({ system: a.system }, icon(SRC_APP_IC[a.system] || 'link', 'v2-ptl-ic'), srcSysLabel(a.system), a.n, ' v2-ss-app', `${srcSysLabel(a.system)}에서 가져온 자료`));
+      colKids.push(line({ system: a.system }, srcAppMark(a.system), srcSysLabel(a.system), a.n, ' v2-ss-app', `${srcSysLabel(a.system)}에서 가져온 자료`));
       const key = 'app:' + a.system;
       const full = srcMore.has(key);
       const shown = full ? a.containers : a.containers.slice(0, alloc[key] ?? a.containers.length);
