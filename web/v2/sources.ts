@@ -173,16 +173,25 @@ function drawFor(host: HTMLElement, hash: string): void {
   paintSideActive();
 }
 
+/** 이 칸에 지금 자료 화면이 서 있나. 화면은 늘 칸의 바로 아래에 `.v2-src` 하나로 선다(drawFor).
+ *  ⚠ #5170 — 칸(셸 tab.center)은 탭이 홈 · 세션으로 옮겨 가도 **문서에 그대로 남는다**(tabs.ts: 탭마다 그릇 한 벌을 숨겼다 보였다).
+ *   문서에 있는지만 물으면, 자료 → 홈 → 세션으로 이어 간 탭에서 다시 자료를 열 때 이 듣개가 그 **세션 화면을 자료로 덮었다**
+ *   (셸은 자료를 새 탭에 따로 그리므로 덮인 쪽 목록은 뼈대에서 멈춘다 — 원준 2026-10-30 실측: 세션 줄을 누르면 「모든 자료 ·
+ *   왼쪽에서 자료를 고르세요」). 분류체계 · 가이드 · 앱빌더가 이미 묻는 것(ownsHost)을 자료도 묻는다. */
+function ownsHost(host: HTMLElement): boolean {
+  return host.isConnected && !!host.querySelector(':scope > .v2-src');
+}
+
 window.addEventListener('hashchange', () => {
-  if (!mounted || !document.contains(mounted)) { mounted = null; view = null; return; }
+  if (!mounted || !ownsHost(mounted)) { mounted = null; view = null; return; }   // 그 칸은 이제 다른 화면의 것이다 — 셸에 맡긴다
   if (location.hash === lastDrawn) return;                // 셸이 이미 그린 뒤면 두 번 그리지 않는다
   drawFor(mounted, location.hash);
 });
 
-//  ↑↓ — 목록을 훑는다. 입력 칸에 쓰는 중이면 건드리지 않는다.
+//  ↑↓ — 목록을 훑는다. 입력 칸에 쓰는 중이면 건드리지 않는다. 숨은 탭의 자료는 훑지 않는다(보고 있는 다른 탭의 키를 가로채지 않게).
 window.addEventListener('keydown', (e) => {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-  if (!mounted || !view || !document.contains(mounted)) return;
+  if (!mounted || !view || !ownsHost(mounted) || mounted.closest('[hidden]')) return;
   const t = e.target as HTMLElement | null;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
   const rows = [...view.listBox.querySelectorAll<HTMLAnchorElement>('.v2-srl-row')].filter((r) => !r.hidden);
@@ -350,7 +359,7 @@ async function uploadFiles(files: File[]): Promise<void> {
   if (!ok) return;
   toast(`${ok}개를 올렸습니다 — 올린 순간부터 AI 가 읽을 수 있어요.`);
   void fetchTree().then(() => sideRedraw?.()).catch(() => { /* 다음 그리기에 온다 */ });
-  if (view && mounted && document.contains(mounted)) { const k = view.key; view = null; drawFor(mounted, location.hash || '#/sources' + (k ? '?' + k : '')); }
+  if (view && mounted && ownsHost(mounted)) { const k = view.key; view = null; drawFor(mounted, location.hash || '#/sources' + (k ? '?' + k : '')); }
 }
 
 /** 수집한 앱의 공식 로고(svc-logos). 원준 2026-10-30 «이상한 아이콘 만들지 말고 외부 앱 로고 그대로» — 종전엔 선 글리프로
