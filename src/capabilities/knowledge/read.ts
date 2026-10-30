@@ -124,10 +124,10 @@ export const knowledgeGrep: Capability = {
   title: "지식 grep",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — deferred 금지, 상시 로드(세션 첫 동작)
   description:
-    "지식 제목/본문을 **grep**(텍스트 패턴 매칭)한다 — 의미검색 아님. 단어가 본문에 그대로 등장해야 잡힌다(대소문자 무시). " +
-    "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +
-    "OR·부분일치 등은 **POSIX 정규식**으로(예: `벡터|vector`, `task_\\w+`). " +
-    "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
+    "지식 이름/제목/본문을 **글자 그대로** 찾는다(grep) — 찾기의 기본은 knowledge_search 다. 이 도구는 **정규식 · «이 낱말이 전부 든 문서» · 건수(count)** 가 필요할 때 쓴다. " +
+    "낱말이 글에 그대로 등장해야 잡힌다(대소문자 무시). 공백으로 나눈 낱말은 **모두** 들어 있어야 한다(AND, 순서무관) — 하나라도 없으면 0건이다. " +
+    "POSIX 정규식도 된다(예: `task_\\w+`). 여러 낱말 중 아무거나 찾으려고 `a|b|c` 로 잇지 마라 — knowledge_search 는 낱말이 일부만 맞아도 맞은 만큼 순위를 매긴다. " +
+    "자연어 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 순서는 이름 정확일치 → 제목에 낱말 전부 → 낱말 점수(BM25). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
     "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C). " +
     "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 잡히지 않는다 — 그 문서 안의 낱말 찾기는 knowledge_list(category, q).",
   scope: "memory",
@@ -153,11 +153,11 @@ export const knowledgeGrep: Capability = {
   },
 };
 
-// 하이브리드 검색(벡터검색 #172) — 벡터 임베딩 + 렉시컬 grep RRF 융합. grep(정확 매칭)과 직교: 의미·자연어 회수용.
+// 하이브리드 검색(벡터검색 #172) — 벡터 임베딩 + 낱말(BM25 #5201, 색인 전엔 grep) RRF 융합. 찾기의 기본 — grep 은 글자 그대로의 일치 · 정규식 · 건수용.
 //  org/schema.ts 가 'knowledge_search' 이름을 이 벡터검색 도구로 예약해 둠(구 knowledge_search→grep 개명 후). MCP 전용.
 //  임베딩 off(기본)면 자동으로 렉시컬(grep)로 폴백 → 켜기 전에도 안전하게 동작(동작 == grep).
 const knowledgeSearchInput = {
-  q: z.string().min(1).describe("자연어 질문 또는 키워드 — 의미 유사도로 검색(grep 과 달리 문장 가능)"),
+  q: z.string().min(1).describe("자연어 질문 · 키워드 나열 · 식별자(이슈 번호 · 파일 · 함수 이름) — 문장도 낱말도 된다"),
   injection: z.enum(["always", "recalled"]).optional(),
   provenance: z.enum(["authored", "observed"]).optional(),
   limit: z.number().int().min(1).max(100).optional(),
@@ -171,11 +171,11 @@ export const knowledgeSearch: Capability = {
   title: "지식 검색(하이브리드)",
   meta: { "anthropic/alwaysLoad": true },   // 회수 진입점 — grep 과 함께 상시(의미검색이 #172 의 헤드라인 능력)
   description:
-    "지식을 **의미 기반 하이브리드 검색**한다 — 벡터 임베딩(의미 유사) + 렉시컬 grep 을 RRF 로 융합. " +
-    "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 찾아낸다(단어가 본문에 그대로 없어도 잡힘). " +
-    "임베딩 미설정 환경에선 자동으로 grep(렉시컬)으로 폴백한다(안전). " +
+    "지식을 찾는 **기본 도구**다 — 낱말 검색(BM25)과 뜻 검색(벡터 임베딩)을 RRF 로 합친다. " +
+    "**자연어 질문 · 키워드 나열 · 다른 표현** 모두 여기로 찾는다. 낱말이 일부만 맞아도 맞은 만큼 순위가 매겨지고, 낱말이 본문에 그대로 없어도 뜻으로 잡힌다. 조사는 떼고 맞춘다. " +
+    "이슈 번호 · 파일 경로 · 함수 이름 같은 식별자가 들어 있으면 낱말 검색만 쓴다(뜻 검색은 식별자를 못 찾는다). 임베딩 미설정 환경에선 낱말 검색만 쓴다. " +
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
-    "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본). " +
+    "**글자 그대로의 일치 · 정규식 · 건수**가 필요할 때만 knowledge_grep 을 써라. mode=names(이름·제목만)·snippets(기본). " +
     "결과가 없거나 약하면(뜻도 멀고 낱말도 안 맞으면) 세션의 호출 응답에 collect_hint(가져올 곳)가 붙는다 — sources(아직 지식이 안 된 원문 자료 — source_get 으로 먼저 본다) " +
     "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다). " +
     "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 나오지 않는다(knowledge_get 으로 이름을 불러 읽는다).",
