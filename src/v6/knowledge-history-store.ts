@@ -35,7 +35,7 @@ const UPDATE_CHANGED_SQL =
 //  set_visibility(#1561)도 여기 둔다 — 접근통제 변경이라 중요도는 높지만 **본문이 안 바뀌므로** 내용 축에
 //  섞으면 '누가 본문을 고쳤나'가 다시 흐려진다. 화면에서는 메타 중에서도 눈에 띄게 라벨링한다.
 export const META_OPS = [
-  "link_category", "unlink_category", "propose_category", "set_lifecycle", "set_wiki",
+  "link_category", "unlink_category", "propose_category", "set_lifecycle", "set_wiki", "set_searchable",
   "move", "set_props_ui", "set_fields", "set_visibility", "link_knowledge", "unlink_knowledge", "link_source", "unlink_source",
 ] as const;
 

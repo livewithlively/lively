@@ -16,10 +16,10 @@ import { knowledgeCategoryRestriction, knowledgeInCategoriesSql } from "./read-s
 
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
 //  grep 매처(parseGrep/grepWhere)·스니펫 빌더(grepSnippet)는 search-util.ts 로 분리(#631, project 검색과 공유).
-const K_GREP_SEL = ["name", "title", "body_md", "injection", "provenance", "is_wiki", "summary", "updated_at"]
+const K_GREP_SEL = ["name", "title", "body_md", "injection", "provenance", "is_wiki", "summary", "updated_at", "searchable"]
   .map((c) => "k." + c).join(", ") + `, ${K_ICON_EXPR}`;
 // names 모드 — body_md 도 미조회(스니펫 불필요). 발견용 메타만(가장 얕게).
-const K_GREP_NAMES_SEL = ["name", "title", "injection", "provenance", "is_wiki", "summary", "updated_at"]
+const K_GREP_NAMES_SEL = ["name", "title", "injection", "provenance", "is_wiki", "summary", "updated_at", "searchable"]
   .map((c) => "k." + c).join(", ") + `, ${K_ICON_EXPR}`;
 
 // grep — title/body_md 매칭(정규식 또는 토큰 AND) → 매치 줄 스니펫(전문 X, body_md 미포함). 전문은 getKnowledge.
@@ -31,16 +31,20 @@ export interface KnowledgeSearchRow {
   summary: string | null; updated_at: string; snippet?: string;  // names 모드는 snippet 생략
   score?: number;  // 하이브리드 검색(knowledge_search)의 RRF 점수 — grep(searchKnowledge)은 미설정
   icon?: string | null;  // 페이지 아이콘(#657, props_ui->>'icon') — 검색 결과 행 표시용
+  searchable?: boolean;  // #5169 사람 화면 호출(includeUnsearchable)에만 싣는다 — 화면이 «검색 제외» 표시를 그린다(에이전트 응답 모양은 그대로)
 }
 export type KnowledgeGrepMode = "snippets" | "names" | "count";
 // 공통 WHERE(grep 매처 + lifecycle='active' + injection/provenance). params 에 push 하고 절 문자열 반환.
-function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: string; categories?: readonly number[] | null }, params: unknown[]): string {
+function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: string; categories?: readonly number[] | null; includeUnsearchable?: boolean }, params: unknown[]): string {
   //  ⚠ **name(=key)도 본다** — grepWhereSql 은 grep·count·하이브리드의 렉시컬 채널이 **전부** 지나는 한 자리다.
   //   (2026-08-25: 같은 취지로 knowledge-store 의 *목록* 필터도 고쳤는데, 검색은 그 자리가 아니라 여기다 —
   //    고치고도 dev 에서 안 나아져서 잡았다. 지식 검색의 WHERE 는 이 함수 하나뿐이니 여기가 정본이다.)
   //   key 는 사람이 실제로 옮겨 적는 이름이다(위키링크 `[[key]]` · 주소 `#/k/<key>` · knowledge_get 인자).
   //   종전엔 key 로 찾으면 **그 key 를 본문에 인용한 다른 문서**만 나오고 정작 그 문서는 안 나왔다.
+  //  #5169 검색 제외(searchable=false)는 여기서 뺀다 — grep·count·하이브리드 렉시컬이 모두 이 자리를 지난다(벡터 쪽은 rrfSearch).
+  //   사람 화면(⌘K · 링크 고르기)만 includeUnsearchable 로 남긴다(KnowledgeSearchFilter 주석).
   const wh: string[] = [grepWhere(["k.name", "k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
+  if (!opts.includeUnsearchable) wh.push(`k.searchable`);
   if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
   if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
   //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위 — knowledgeCategoryRestriction). 후보를 고르는 이 자리에서 건다 —
@@ -50,7 +54,19 @@ function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: s
 }
 
 /** 지식 검색이 받는 공통 거르기 — categories(#5100)는 카테고리 id 목록(category 인자를 풀어 넣는다 · 앱 맥락 범위는 여기서 교집합으로 더해진다). */
-export interface KnowledgeSearchFilter { injection?: string; provenance?: string; categories?: readonly number[] | null }
+export interface KnowledgeSearchFilter {
+  injection?: string; provenance?: string; categories?: readonly number[] | null;
+  /** #5169 사람이 화면에서 글로 찾을 때(⌘K · 링크 고르기)만 true — 검색 제외 지식도 글자로 찾고 행에 searchable 을 싣는다.
+   *  벡터 채널은 그대로 뺀다(벡터가 없다). 에이전트 길에는 이 값이 없다 — 화면 전용 op knowledge_screen_search(expose.mcp:false)만 켠다. */
+  includeUnsearchable?: boolean;
+}
+
+/** 사람 화면의 글자 순위 — 같은 급(이름·제목 일치 다음)이면 검색 대상을 먼저 둔다. 재집계 문서는 길고 자주 다시 올라와 «최신 순»
+ *  만으로는 받아 오는 창(LIMIT)을 먼저 채운다. 화면이 최신 순으로 다시 늘어놓아도 창 안에 드는 것을 지킨다. 에이전트 길에는 조각이 없다. */
+const keptFirst = (opts: { includeUnsearchable?: boolean }): string => (opts.includeUnsearchable ? "k.searchable DESC, " : "");
+/** 사람 화면 호출에만 행에 표시를 싣는다(에이전트 응답 모양은 그대로). */
+const flagOf = (opts: { includeUnsearchable?: boolean }, r: { searchable?: boolean }): { searchable?: boolean } =>
+  (opts.includeUnsearchable ? { searchable: r.searchable } : {});
 
 // mode='count' — 본문/스니펫 없이 매치 총건수만(페이징·존재확인용).
 export async function countKnowledgeGrep(
@@ -85,11 +101,11 @@ export async function searchKnowledge(
     const tf = titleFirst("k.title", p, params);                // 제목에 모든 낱말이 든 것이 본문만 스친 최근 문서에 잘리지 않게(#4530)
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool,
-      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY ${first}${tf}k.updated_at DESC LIMIT $${params.length}`, params);
+      `SELECT ${sel} FROM knowledge k WHERE ${where} AND ${vis} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT $${params.length}`, params);
   }, { plain: opts.plain });
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
-      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, icon: r.icon ?? null };
+      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, icon: r.icon ?? null, ...flagOf(opts, r) };
     if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });
@@ -213,7 +229,8 @@ async function rrfSearch(
   //   (렉시컬 채널만 미리 걸러도 되지만, 술어를 두 군데 쓰면 한쪽만 고치는 사본 결함이 생긴다 — 한 곳으로 모은다.)
   const lexWhere = grepWhereSql(plan, { ...opts, categories }, params);
   // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
-  const vecWh: string[] = [`k.lifecycle='active'`, `k.embedding_vector IS NOT NULL`];
+  //  #5169 검색 제외는 벡터가 없지만 술어로도 뺀다 — 비우기 전의 벡터가 남아 있어도 결과에 안 나오게(렉시컬 grepWhereSql 과 같은 규칙).
+  const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
   if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
   if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
   if (categories) vecWh.push(knowledgeInCategoriesSql(categories, params, "k"));
@@ -228,8 +245,8 @@ async function rrfSearch(
   const tf = titleFirst("k.title", plan, params);
   const sql = `
     WITH lex AS (
-      SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}k.updated_at DESC) AS rank
-      FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}k.updated_at DESC LIMIT ${candP}
+      SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC) AS rank
+      FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT ${candP}
     ),
     ${vecChannel(vecWhere, qp, candP, categories !== null)},
     fused AS (
@@ -244,7 +261,7 @@ async function rrfSearch(
   const rows = await q(itemsPool, sql, params);
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
-      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null };
+      provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null, ...flagOf(opts, r) };
     if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });
@@ -276,7 +293,8 @@ export async function findSimilarKnowledge(
   let selfName: string | null = null;
   if (opts.name) {
     selfName = opts.name;
-    const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1`, [opts.name]);
+    //  #5169 검색 제외 문서는 기준이 되지 않는다 — 벡터가 없어야 하지만(끌 때 비운다) 비우기가 best-effort 라 표시로도 막는다.
+    const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1 AND searchable`, [opts.name]);
     vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 대상에 임베딩 없으면 null → []
   } else if (opts.text && opts.text.trim()) {
     const qe = await embedQuery(opts.text);
@@ -292,7 +310,8 @@ export async function findSimilarKnowledge(
     //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위) — 후보 단계에서 건다(아래 MATERIALIZED 갈래 · vecChannel 주석과 같은 까닭).
     const categories = await knowledgeCategoryRestriction(viewer, opts.categories);
     const params: unknown[] = [vecLiteral]; const qp = `$1::vector`;     // $1 = 쿼리 벡터(거리·유사도·정렬에 공유)
-    const wh: string[] = [`k.lifecycle='active'`, `k.embedding_vector IS NOT NULL`];
+    //  #5169 검색 제외는 이웃 후보에서 뺀다 — 자동 소환 훅(knowledge-recall)·⌘K «뜻 비슷»·문서의 관련 지식이 모두 이 길이다.
+    const wh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
     if (selfName) { params.push(selfName); wh.push(`k.name <> $${params.length}`); }
     if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
     if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
@@ -398,13 +417,14 @@ export async function findRecommendedKnowledge(
     //  벡터 인덱스의 ORDER BY … LIMIT 경로를 애초에 안 탄다(=근사탐색 사후필터가 아니라 정확 스캔) → 리콜 붕괴 없음.
     const vis = await knowledgeVisWhere(viewer, params);
     // 포함 조건 = (벡터 임계 통과) OR (같은 카테고리) — 카테고리는 임계 미달도 구제. score 로 정렬(가산점 반영), 동점은 최신순.
+    //  #5169 검색 제외는 뺀다 — 카테고리 구제는 벡터가 없어도 고르므로 술어가 없으면 그대로 섞인다(도메인 소환 훅 leaf 가 이 길).
     const sql = `
       SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
              ${simExpr}::float8 AS similarity,
              ${sharesExpr} AS shares_category,
              (COALESCE(${simExpr}, 0) + CASE WHEN ${sharesExpr} THEN ${boostP}::float8 ELSE 0 END)::float8 AS score
       FROM knowledge k
-      WHERE k.lifecycle='active' AND NOT (k.name = ANY(${exclP}))
+      WHERE k.lifecycle='active' AND k.searchable AND NOT (k.name = ANY(${exclP}))
         AND ( ${simExpr} >= ${minP} OR ${sharesExpr} )
         AND ${vis}
       ORDER BY score DESC, k.updated_at DESC

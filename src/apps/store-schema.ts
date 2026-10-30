@@ -9,9 +9,9 @@ import pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import { appRoleName } from "../org/tenancy/activate.js";
 import { TENANT_DEFAULT_EXPR } from "../db/tenant-column.js";
-import { physicalTableName, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, columnArchiveName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
+import { physicalTableName, physicalAppPrefix, columnDefs, parseColumnType, assertIdent, appSchemaName, archiveSchemaName, archivedTableName, columnArchiveName, SHARED_APP_SCHEMA, appSqlRoleName, appIndexName, APP_INDEX_PREFIX,
   APP_CHECK_PREFIX, APP_FK_PREFIX, APP_KEY_PREFIX, appConstraintName, defaultLiteralText, DEFAULT_EXPRS, type StoreColumn, type StoreIndex } from "./store-ddl.js";
-import { ensureAppSqlParser, checkExpressionSync } from "./app-sql.js";
+import { ensureAppSqlParser, checkExpressionSync, expressionColumnsSync } from "./app-sql.js";
 import { randomBytes } from "node:crypto";
 import { currentTenant } from "../org/tenant-context.js";
 import { HttpError } from "../http-error.js";
@@ -97,7 +97,7 @@ export interface AppTableReport {
   created: string[];                                                        // 새로 만든 테이블(선언 이름)
   added_columns: Array<{ table: string; column: string; type: string }>;    // 매니페스트에 늘어 ADD COLUMN 한 칸
   type_mismatches: Array<{ table: string; column: string; declared: string; actual: string; reason?: string }>; // 타입이 달라도 바꾸지 못한 칸
-  added_indexes: Array<{ table: string; columns: string[]; unique: boolean }>;  // #4226 새로 만든 선언 인덱스
+  added_indexes: Array<{ table: string; columns: string[]; unique: boolean; where?: string }>;  // #4226 새로 만든 선언 인덱스(where — 조건부)
   dropped_indexes: Array<{ table: string; index: string }>;                      // #4226 선언에서 빠져 지운 인덱스(라이블리가 만든 것만)
   /** #4226 자유 SQL 이 내려갈 앱 역할 — 만들었으면 ok, 못 만들었으면 그 까닭(설치는 계속된다 · store_sql 만 막힌다). */
   sql_role?: { ok: boolean; error?: string };
@@ -126,6 +126,7 @@ export const emptyTableReport = (): AppTableReport => ({
  *   · 새 칸의 «값이 꼭 있어야 하는데 기본값이 없는» 상태(기본값 없는 not_null · not_null 칸의 기본값 빼기)는 미룬다 — 그 코드의 INSERT 는 새 칸을 빼고 넣는다
  *   · 같은 값이 들어가는 기본값이 있는 새 칸의 unique · 외래키는 미룬다 — 그 코드의 INSERT 마다 같은 값이 들어간다
  *   · 미룬 이름 바꾸기의 새 이름(아직 없는 칸) · 미룬 형 바꾸기의 칸에 걸린 규칙(인덱스 · 검사 · 외래키 · 기본값)도 미룬다
+ *   · 외래키가 가리킬 칸(references.column)이 지키는 칸 · 미룬 칸이면 그 외래키도 미룬다 — 가리킬 칸의 유일 키를 더하는 일이 그 칸을 조이는 일이다
  *  "existing"(공유 표)은 미룬 일이 영영 오지 않으므로 옛 검사 · 외래키를 걷지도 않는다 — 매니페스트로는 더하기만 된다(깨는 변경은 SQL 마이그레이션).
  */
 export type ProtectColumns = ReadonlyMap<string, ReadonlySet<string>> | "existing";
@@ -260,16 +261,19 @@ async function narrowPrimaryKey(c: Q, schema: string, physical: string, rel: str
   }
 }
 
-/** 외래키가 가리킬 (tenant_id, id) 유일 키를 보장한다(#4483) — 기본 키가 이미 그 모양(공유 표)이면 그것을 쓴다. 만들었으면 true. */
-async function ensureTenantIdKey(c: Q, schema: string, physical: string): Promise<boolean> {
+/** 외래키가 가리킬 (tenant_id, 칸) 유일 키를 보장한다(#4483) — 칸은 보통 id, references.column 이면 그 칸.
+ *  기본 키 · 유일 제약이 이미 그 모양(공유 표의 기본 키 등)이면 그것을 쓴다. 만들었으면 true.
+ *  id 의 키 이름은 종전 그대로(이미 깔린 앱의 제약을 다시 만들지 않게), 다른 칸은 칸 이름을 섞는다. */
+async function ensureTenantIdKey(c: Q, schema: string, physical: string, column: string = "id"): Promise<boolean> {
   const has = (await c.query(
     `SELECT 1 FROM pg_constraint con
       WHERE con.conrelid = to_regclass($1) AND con.contype IN ('p', 'u')
         AND (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
-              WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)) = ARRAY['id', 'tenant_id']`,
-    [`${qi(schema)}.${qi(physical)}`])).rowCount;
+              WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)) = $2::text[]`,
+    [`${qi(schema)}.${qi(physical)}`, [column, "tenant_id"].sort()])).rowCount;
   if (has) return false;
-  await c.query(`ALTER TABLE ${qi(schema)}.${qi(physical)} ADD CONSTRAINT ${qi(appConstraintName(APP_KEY_PREFIX, schema, physical))} UNIQUE (tenant_id, id)`);
+  const name = column === "id" ? appConstraintName(APP_KEY_PREFIX, schema, physical) : appConstraintName(APP_KEY_PREFIX, schema, physical, column);
+  await c.query(`ALTER TABLE ${qi(schema)}.${qi(physical)} ADD CONSTRAINT ${qi(name)} UNIQUE (tenant_id, ${qi(column)})`);
   return true;
 }
 
@@ -291,15 +295,24 @@ export function mergeReport(into: AppTableReport, from: AppTableReport): void {
  */
 async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel: string, spec: AppTableSpec, tenantScoped: boolean, report?: AppTableReport, guard: Guard = NO_GUARD): Promise<void> {
   const want = new Map<string, StoreIndex>();
+  //  조건부 인덱스(where) — 검사 식과 같은 검사기를 지난다(그 표의 칸만 · 위험 함수 · 다른 표 · 파라미터 거부). 이름에 조건이 들어가
+  //   조건을 바꾸면 옛 인덱스를 지우고 새로 만든다.
+  if ((spec.indexes ?? []).some((ix) => ix.where !== undefined)) await ensureAppSqlParser();
+  const tableCols = ["id", "created_at", ...spec.columns.map((c) => c.name)];
   const add = (ix: StoreIndex): void => {
     const cols = ix.columns.map((c) => (c === "id" || c === "created_at" ? c : assertIdent("column", c)));
-    const norm = { columns: cols, unique: !!ix.unique };
+    const norm: StoreIndex = { columns: cols, unique: !!ix.unique };
+    if (ix.where !== undefined) {
+      try { norm.where = checkExpressionSync(ix.where, tableCols); }
+      catch (e) { throw e instanceof HttpError ? new HttpError(e.status, e.message.replace("검사 식(check)", `인덱스 조건(where — ${spec.table})`)) : e; }
+    }
     want.set(appIndexName(schema, physical, norm, tenantScoped), norm);
   };
   for (const ix of spec.indexes ?? []) add(ix);
   for (const c of spec.columns) {
     if (c.unique) add({ columns: [c.name], unique: true });
-    if (c.references && !(spec.indexes ?? []).some((ix) => ix.columns[0] === c.name)) add({ columns: [c.name], unique: false });
+    //  조건부 인덱스는 일부 행만 담아 외래키 조회를 대신하지 못한다.
+    if (c.references && !(spec.indexes ?? []).some((ix) => ix.columns[0] === c.name && ix.where === undefined)) add({ columns: [c.name], unique: false });
   }
   const haveRows = (await db.query(
     `SELECT i.relname AS name, x.indisunique AS uniq,
@@ -324,21 +337,34 @@ async function syncDeclaredIndexes(db: Q, schema: string, physical: string, rel:
   const sameValueDefault = (col: string): boolean => { const d = now?.get(col)?.default; return d != null && !UNIQUE_SAFE_DEFAULTS.has(d); };
   for (const [name, ix] of want) {
     if (have.has(name)) continue;
-    const label = `${ix.unique ? "unique " : ""}인덱스 더하기 ${spec.table}(${ix.columns.join(",")})`;
-    //  미룬 이름 바꾸기의 새 이름은 아직 없다 · 미룬 형 바꾸기의 칸은 옛 형이다 — 그 칸의 인덱스는 칸과 함께 공개할 때.
-    if (ix.columns.some((c) => guard.pending(c))) { guard.defer(label); continue; }
+    const label = `${ix.unique ? "unique " : ""}인덱스 더하기 ${spec.table}(${ix.columns.join(",")})${ix.where !== undefined ? ` 조건 ${ix.where}` : ""}`;
+    //  미룬 이름 바꾸기의 새 이름은 아직 없다 · 미룬 형 바꾸기의 칸은 옛 형이다 — 그 칸의 인덱스는(조건에서만 쓰는 칸도) 칸과 함께 공개할 때.
+    if ([...ix.columns, ...(ix.where !== undefined ? expressionColumnsSync(ix.where) : [])].some((c) => guard.pending(c))) { guard.defer(label); continue; }
     if (ix.unique && ix.columns.some((c) => guard.has(c) || (guard.any && sameValueDefault(c)))) { guard.defer(label); continue; }
     const cols = [...(tenantScoped ? ["tenant_id"] : []), ...ix.columns].map(qi).join(", ");
+    //  조건은 검사 식처럼 괄호 안에 줄바꿈을 붙여 넣는다 — 식 끝의 `-- 주석` 이 닫는 괄호를 먹지 않게.
+    const cond = ix.where !== undefined ? ` WHERE (${ix.where}\n)` : "";
+    //  인덱스에 못 쓰는 조건(불변이 아닌 함수 · 집계 · 서브쿼리 · 집합 반환 함수 · 칸 형과 안 맞는 식)은 검사기를 지나도 DB 가 거절한다 — 고칠 사람이 할 일이라 400(검사 식과 같다).
+    const run = async (sql: string) => {
+      try { return await db.query(sql); }
+      catch (e) {
+        const code = String((e as { code?: string })?.code ?? "");
+        if (ix.where !== undefined && /^(42|22|0A)/.test(code)) {
+          throw new HttpError(400, `'${spec.table}' 의 인덱스 조건 «${ix.where}» 를 쓸 수 없습니다(${(e as Error).message}) — 이 표의 칸과 불변(IMMUTABLE) 함수만 씁니다(now() · 집계 · 서브쿼리는 안 됩니다)`, { cause: e });
+        }
+        throw e;
+      }
+    };
     if (ix.unique) {
-      const dup = Number((await db.query(
-        `SELECT count(*)::bigint AS n FROM (SELECT 1 FROM ${rel} WHERE ${ix.columns.map((c) => `${qi(c)} IS NOT NULL`).join(" AND ")}
+      const dup = Number((await run(
+        `SELECT count(*)::bigint AS n FROM (SELECT 1 FROM ${rel} WHERE ${ix.columns.map((c) => `${qi(c)} IS NOT NULL`).join(" AND ")}${ix.where !== undefined ? ` AND (${ix.where}\n)` : ""}
            GROUP BY ${cols} HAVING count(*) > 1) d`)).rows[0]?.n ?? 0);
       if (dup > 0) {
-        throw new HttpError(409, `'${spec.table}' 에 ${ix.columns.join(", ")} 값이 겹치는 묶음이 ${dup}개 있어 unique 를 걸 수 없습니다 — 겹친 행을 고치거나 지운 뒤 다시 설치하세요`);
+        throw new HttpError(409, `'${spec.table}' 에 ${ix.columns.join(", ")} 값이 겹치는 묶음이 ${dup}개 있어 unique 를 걸 수 없습니다${ix.where !== undefined ? `(조건 ${ix.where})` : ""} — 겹친 행을 고치거나 지운 뒤 다시 설치하세요`);
       }
     }
-    await db.query(`CREATE ${ix.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${qi(name)} ON ${rel} (${cols})`);
-    report?.added_indexes.push({ table: spec.table, columns: ix.columns, unique: !!ix.unique });
+    await run(`CREATE ${ix.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${qi(name)} ON ${rel} (${cols})${cond}`);
+    report?.added_indexes.push({ table: spec.table, columns: ix.columns, unique: !!ix.unique, ...(ix.where !== undefined ? { where: ix.where } : {}) });
   }
 }
 
@@ -425,6 +451,19 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
       await commentArchive(c, archive, name, { app_id: owner.appId, table: spec.table, column: d, rows, at: now.toISOString(), reason: owner.reason });
       archivedAs = `${archive}.${name}`;
     }
+    //  references.column 으로 이 칸을 가리키던 외래키(다른 표 · lvfk_)는 칸의 유일 키에 기대므로 먼저 뗀다 — 아직 선언돼 있으면
+    //   외래키 단계가 다시 건다(그때 가리킬 칸이 없으면 선언 검사가 이미 400 으로 막았다). 사람이 만든 외래키면 지우기가 실패해 알린다.
+    const deps = (await c.query(
+      `SELECT n.nspname, cl.relname, con.conname FROM pg_constraint con
+         JOIN pg_class cl ON cl.oid = con.conrelid JOIN pg_namespace n ON n.oid = cl.relnamespace
+        WHERE con.confrelid = to_regclass($1) AND con.contype = 'f' AND starts_with(con.conname, $2)
+          AND (SELECT a.attnum FROM pg_attribute a WHERE a.attrelid = con.confrelid AND a.attname = $3) = ANY (con.confkey)`,
+      [rel, APP_FK_PREFIX, d])).rows;
+    for (const fk of deps) {
+      await c.query(`ALTER TABLE ${qi(String(fk.nspname))}.${qi(String(fk.relname))} DROP CONSTRAINT ${qi(String(fk.conname))}`);
+      //  외래키 단계에서는 이미 떼어져 있어 잡히지 않는다 — 공개 미리 보기가 말하도록 여기서 싣는다.
+      report.constraints.push({ table: String(fk.relname).slice(physicalAppPrefix(owner.appId).length + 2), kind: "foreign_key", action: "removed" });
+    }
     await c.query(`ALTER TABLE ${rel} DROP COLUMN ${qi(d)}`);
     report.dropped_columns.push({ table: spec.table, column: d, rows, archived_as: archivedAs });
   }
@@ -460,6 +499,17 @@ async function syncColumns(c: Q, schema: string, physical: string, rel: string, 
         WHERE con.conrelid = to_regclass($1) AND con.contype = 'c' AND starts_with(con.conname, $2) AND a.attname = $3`,
       [rel, APP_CHECK_PREFIX, col.name])).rows;
     for (const d of deps) await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT ${qi(String(d.conname))}`);
+    //  그 칸을 조건(where)에서 쓰는 라이블리 인덱스(lvix_)도 같다 — 인덱스 동기화가 새 형 · 새 조건으로 다시 만든다.
+    const partials = (await c.query(
+      `SELECT DISTINCT i.relname FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+         JOIN pg_depend dep ON dep.classid = 'pg_class'::regclass AND dep.objid = x.indexrelid AND dep.refclassid = 'pg_class'::regclass AND dep.refobjid = x.indrelid
+         JOIN pg_attribute a ON a.attrelid = x.indrelid AND a.attnum = dep.refobjsubid
+        WHERE x.indrelid = to_regclass($1) AND x.indpred IS NOT NULL AND starts_with(i.relname, $2) AND a.attname = $3`,
+      [rel, APP_INDEX_PREFIX, col.name])).rows;
+    for (const ix of partials) {
+      await c.query(`DROP INDEX ${qi(schema)}.${qi(String(ix.relname))}`);
+      report.dropped_indexes.push({ table: spec.table, index: String(ix.relname) });
+    }
     await c.query(`ALTER TABLE ${rel} ALTER COLUMN ${qi(col.name)} TYPE ${ty.sql} USING ${qi(col.name)}::${ty.sql}`);
     report.converted_columns.push({ table: spec.table, column: col.name, from: cur.type, to: ty.canonical });
   }
@@ -664,20 +714,22 @@ async function sameDefault(c: Q, schema: string, type: string, def: string, cur:
 }
 
 /**
- * 외래키(#4483) — 같은 앱 표의 id 를 가리킨다. 표가 워크스페이스·테넌트를 가로지르지 않게 **(tenant_id, 칸) → (tenant_id, id)**
+ * 외래키(#4483) — 같은 앱 표의 id(또는 references.column 의 칸)를 가리킨다. 표가 워크스페이스·테넌트를 가로지르지 않게 **(tenant_id, 칸) → (tenant_id, id)**
  *  복합 키로 건다(외래키 확인은 행 격리 정책을 건너뛰므로 tenant_id 를 키에 넣어야 다른 테넌트 행을 가리킬 수 없다).
  *  on_delete 'set null' 은 그 칸만 NULL 로(PG 15+ `SET NULL (칸)` — tenant_id 는 NOT NULL 이라 통째로 NULL 이 될 수 없다).
  *  라이블리가 만든 것(lvfk_)만 맞추고 지운다. 이미 가리킬 곳이 없는 행이 있으면 몇 행인지 세어 409.
  */
-async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD): Promise<void> {
+async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTableSpec, report: AppTableReport, guard: Guard = NO_GUARD, targetGuard: (table: string) => Guard = () => NO_GUARD): Promise<void> {
   const physical = physicalTableName(appId, spec.table);
   const rel = `${qi(schema)}.${qi(physical)}`;
-  const want = new Map<string, { col: string; target: string; onDelete: string }>();
+  const want = new Map<string, { col: string; table: string; target: string; onDelete: string; tcol: string }>();
   for (const col of spec.columns) {
     if (!col.references) continue;
     const target = physicalTableName(appId, col.references.table);
     const onDelete = col.references.on_delete ?? "no action";
-    want.set(appConstraintName(APP_FK_PREFIX, schema, physical, col.name, target, onDelete), { col: col.name, target, onDelete });
+    //  가리킬 칸(references.column) — 없으면 id. id 면 이름이 종전 그대로(이미 깔린 앱의 외래키를 다시 만들지 않게).
+    const tcol = col.references.column === undefined || col.references.column === "id" ? "id" : assertIdent("column", col.references.column);
+    want.set(appConstraintName(APP_FK_PREFIX, schema, physical, col.name, target, onDelete, ...(tcol === "id" ? [] : [tcol])), { col: col.name, table: col.references.table, target, onDelete, tcol });
   }
   const haveRows = (await c.query(
     `SELECT con.conname, array(SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)) AS cols
@@ -704,20 +756,48 @@ async function syncForeignKeys(c: Q, appId: string, schema: string, spec: AppTab
     //   미룬 칸(이름 바꾸기의 새 이름 — 아직 없다 · 형 바꾸기를 미룬 칸)의 외래키도 칸과 함께 공개할 때.
     if (guard.has(w.col) || guard.pending(w.col) || (cols?.get(w.col)?.default ?? null) !== null) { guard.defer(`외래키 더하기 ${spec.table}.${w.col}`); continue; }
     const trel = `${qi(schema)}.${qi(w.target)}`;
-    if (await ensureTenantIdKey(c, schema, w.target)) {
+    //  references.column — 가리킬 칸이 지키는 칸이면 유일 키를 더하는 일이 그 칸을 조이는 일이고(그 칸의 unique 도 미뤄졌다), 미룬 칸은 아직 없거나 옛 형이다 — 칸과 함께 공개할 때.
+    //   다른 판의 코드가 쓰는 표의 새 칸에 같은 값이 들어가는 기본값이 있으면 그 INSERT 마다 같은 값이 들어간다(syncDeclaredIndexes 의 sameValueDefault 와 같다).
+    if (w.tcol !== "id") {
+      const tg = targetGuard(w.table);
+      const def = tg.any ? (await columnsOf(c, trel)).get(w.tcol)?.default : null;
+      if (tg.has(w.tcol) || tg.pending(w.tcol) || (def != null && !UNIQUE_SAFE_DEFAULTS.has(def))) { tg.defer(`외래키 더하기 ${spec.table}.${w.col} → ${w.table}.${w.tcol}`); continue; }
+    }
+    if (await ensureTenantIdKey(c, schema, w.target, w.tcol)) {
       report.constraints.push({ table: spec.columns.find((x) => x.name === w.col)?.references?.table ?? w.target, kind: "unique", action: "added" });
     }
     const orphans = Number((await c.query(
       `SELECT count(*)::bigint AS n FROM ${rel} r WHERE r.${qi(w.col)} IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM ${trel} t WHERE t.tenant_id = r.tenant_id AND t.id = r.${qi(w.col)})`)).rows[0]?.n ?? 0);
+          AND NOT EXISTS (SELECT 1 FROM ${trel} t WHERE t.tenant_id = r.tenant_id AND t.${qi(w.tcol)} = r.${qi(w.col)})`)).rows[0]?.n ?? 0);
     if (orphans > 0) {
       const tTable = spec.columns.find((x) => x.name === w.col)?.references?.table;
-      throw new HttpError(409, `'${spec.table}.${w.col}' 에 '${tTable}' 에 없는 id 를 가리키는 행이 ${orphans}개 있어 외래키를 걸 수 없습니다 — 그 행을 고치거나 지운 뒤 다시 설치하세요`);
+      throw new HttpError(409, `'${spec.table}.${w.col}' 에 '${tTable}' 에 없는 ${w.tcol} 를 가리키는 행이 ${orphans}개 있어 외래키를 걸 수 없습니다 — 그 행을 고치거나 지운 뒤 다시 설치하세요`);
     }
     const action = w.onDelete === "set null" ? `SET NULL (${qi(w.col)})` : w.onDelete.toUpperCase();
-    await c.query(`ALTER TABLE ${rel} ADD CONSTRAINT ${qi(name)} FOREIGN KEY (tenant_id, ${qi(w.col)}) REFERENCES ${trel} (tenant_id, id) ON DELETE ${action}`);
+    await c.query(`ALTER TABLE ${rel} ADD CONSTRAINT ${qi(name)} FOREIGN KEY (tenant_id, ${qi(w.col)}) REFERENCES ${trel} (tenant_id, ${qi(w.tcol)}) ON DELETE ${action}`);
     report.constraints.push({ table: spec.table, column: w.col, kind: "foreign_key", action: "added" });
   }
+}
+
+/**
+ * references.column 이 기대던 유일 키(lvuq_ · id 밖의 칸) 중 기대는 외래키가 없어진 것을 걷는다 — 남겨 두면 선언에서 unique 를 뺀 뒤에도 그 칸이 겹친 값을 거절하고,
+ *  앱은 이것을 지울 길이 없다. 칸의 unique 선언은 lvix_ 인덱스가 따로 진다. (tenant_id, id) 키는 종전대로 둔다(id 는 어차피 유일하다).
+ */
+async function dropUnusedColumnKeys(db: Q, appId: string, schema: string, spec: AppTableSpec, opts: { lockMs?: number; statementMs?: number }, report?: AppTableReport): Promise<void> {
+  const rel = `${qi(schema)}.${qi(physicalTableName(appId, spec.table))}`;
+  const rows = (await db.query(
+    `SELECT con.conname FROM pg_constraint con
+      WHERE con.conrelid = to_regclass($1) AND con.contype = 'u' AND starts_with(con.conname, $2)
+        AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey) AND a.attname = 'id')
+        AND NOT EXISTS (SELECT 1 FROM pg_constraint f WHERE f.contype = 'f' AND f.conindid = con.conindid)`,
+    [rel, APP_KEY_PREFIX])).rows;
+  if (!rows.length) return;
+  await inTx(db, async (c) => {
+    await c.query(`SET LOCAL lock_timeout = '${msOr(opts.lockMs, ddlLockMs())}ms'`);
+    await c.query(`SET LOCAL statement_timeout = '${msOr(opts.statementMs, DDL_STATEMENT_MS)}ms'`);
+    for (const r of rows) await c.query(`ALTER TABLE ${rel} DROP CONSTRAINT IF EXISTS ${qi(String(r.conname))}`);
+  });
+  report?.constraints.push(...rows.map(() => ({ table: spec.table, kind: "unique" as const, action: "removed" as const })));
 }
 
 // ── 앱 자유 SQL 역할(#4226) ─────────────────────────────────────────────────────────────
@@ -947,7 +1027,8 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
       }
       // 외래키 — 가리키는 표까지 다 생긴 뒤에. 가리키는 표가 실패했으면 그 표의 외래키도 건너뛴다(실패로 남는다).
       for (const t of tables) {
-        if (!ok.has(t.table) || !t.columns.some((c) => c.references)) continue;
+        //  references 가 하나도 안 남은 표도 맞춘다 — 남은 외래키를 떼어야 한다.
+        if (!ok.has(t.table)) continue;
         if (late()) { fail(t.table, lateErr()); continue; }
         const missing = [...new Set(t.columns.filter((c) => c.references && !ok.has(c.references.table)).map((c) => c.references!.table))];
         if (missing.length) { fail(t.table, new Error(`외래키가 가리키는 표(${missing.join(", ")})를 만들지 못했습니다`), missing); continue; }
@@ -956,10 +1037,18 @@ export async function ensureAppTables(appId: string, tables: AppTableSpec[], opt
           await inTx(db, async (c) => {
             await c.query(`SET LOCAL lock_timeout = '${msOr(opts.lockMs, ddlLockMs())}ms'`);
             await c.query(`SET LOCAL statement_timeout = '${msOr(opts.statementMs, DDL_STATEMENT_MS)}ms'`);
-            await syncForeignKeys(c, appId, schema, t, local, guardFor(t.table, guarded.get(t.table), local, { shared, pending: pendingOf.get(t.table) }));
+            const guardOf = (table: string): Guard => guardFor(table, guarded.get(table), local, { shared, pending: pendingOf.get(table) });
+            await syncForeignKeys(c, appId, schema, t, local, guardOf(t.table), guardOf);
           });
           if (report) { report.constraints.push(...local.constraints); report.deferred.push(...local.deferred); }
         } catch (err) { fail(t.table, err); }
+      }
+      //  기댄 외래키가 없어진 유일 키 — 외래키를 다 맞춘 뒤에야 안다. 지키는 표는 공개할 때 걷는다(초안 동안 떼어 둔 외래키가 공개 때 다시 쌓지 않게 · 공유 표는 옛 외래키처럼 걷지 않는다).
+      for (const t of tables) {
+        if (failures.length) break;
+        if (guarded.has(t.table) || !ok.has(t.table) || late()) continue;
+        try { await dropUnusedColumnKeys(db, appId, schema, t, opts, report); }
+        catch (err) { fail(t.table, err); }
       }
       return done;
     };

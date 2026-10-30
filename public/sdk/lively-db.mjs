@@ -32,7 +32,7 @@ import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/pg-proxy";
 
-export const LIVELY_DB_SDK_VERSION = "3";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487)
+export const LIVELY_DB_SDK_VERSION = "4";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487) · 4 = generateDrizzleSchema 의 references.column
 const IDENTITY_HEADER = "x-lively-identity";
 
 /** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · index(묶음에서 몇 번째 문장인지, 0부터). */
@@ -392,8 +392,10 @@ export function generateDrizzleSchema(manifest) {
       let src = columnSource(c);
       if (c.references) {
         const od = c.references.on_delete ? `, { onDelete: ${JSON.stringify(c.references.on_delete)} }` : "";
-        src += `.references(() => ${camel(c.references.table)}.id${od})`;
-        refs.push({ child: v, parent: camel(c.references.table), col: camel(c.name), name: camel(c.name.replace(/_id$/, "")) });
+        //  가리킬 칸(references.column — 글자 코드 등) · 없으면 id. 관계 이름은 칸 이름에서 «_id» · «_<가리킬 칸>» 을 뗀 것.
+        const tc = c.references.column && c.references.column !== "id" ? c.references.column : "id";
+        src += `.references(() => ${camel(c.references.table)}.${camel(tc)}${od})`;
+        refs.push({ child: v, parent: camel(c.references.table), col: camel(c.name), tcol: camel(tc), name: camel(c.name.replace(new RegExp(`_${tc}$`), "")) });
       }
       lines.push(`  ${camel(c.name)}: ${src},`);
     }
@@ -403,7 +405,7 @@ export function generateDrizzleSchema(manifest) {
   const byTable = new Map();
   for (const r of refs) {
     if (!byTable.has(r.child)) byTable.set(r.child, []);
-    byTable.get(r.child).push(`${r.name}: one(${r.parent}, { fields: [${r.child}.${r.col}], references: [${r.parent}.id] })`);
+    byTable.get(r.child).push(`${r.name}: one(${r.parent}, { fields: [${r.child}.${r.col}], references: [${r.parent}.${r.tcol}] })`);
     if (!byTable.has(r.parent)) byTable.set(r.parent, []);
     byTable.get(r.parent).push(`${r.child}: many(${r.child})`);
   }

@@ -33,6 +33,7 @@ const unit = (over: Partial<KnowledgeRow>): KnowledgeRow => ({
   summary: over.summary ?? null,
   is_wiki: over.is_wiki ?? false,
   is_folder: over.is_folder ?? false,   // #592 폴더 노드 — 인덱스 조립엔 무관(기본 false)
+  searchable: over.searchable ?? true,  // #5169 검색 제외 — 인덱스 조립엔 무관(기본 검색 대상)
 });
 
 const category = (over: Partial<CategoryMapEntry>): CategoryMapEntry =>

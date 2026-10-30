@@ -223,6 +223,8 @@ const dataColumnSchema = z.object({
   check: z.string().min(1).max(1000).optional(),     // 검사 식 — 설치 때 검사기가 해석한다(그 표의 칸만 · 위험 함수 거부)
   references: z.object({
     table: z.string().regex(IDENT_RE, "references.table 은 같은 앱의 테이블 이름"),
+    //  가리킬 칸 — 없으면 id. 그 표에서 unique 로 선언한 칸이고 형이 같아야 한다(글자 코드로 잇는 표 — 예 `code`).
+    column: z.string().regex(IDENT_RE, "references.column 은 가리킬 표의 칸 이름").optional(),
     on_delete: z.enum(["cascade", "set null", "restrict", "no action"]).optional(),
   }).strict().optional(),
   values: z.array(z.string().min(1).max(200)).min(1).max(200).optional(),   // type: enum 의 값
@@ -234,6 +236,9 @@ const dataColumnSchema = z.object({
 const dataIndexSchema = z.object({
   columns: z.array(z.string().regex(/^[a-z_][a-z0-9_]{0,62}$/, "인덱스 칸 이름은 소문자 영숫자/_")).min(1).max(8),
   unique: z.boolean().default(false),
+  //  조건부 인덱스 — 조건에 맞는 행만 담는다(그 표의 칸만 쓰는 식 하나 · 설치 때 검사기가 해석한다).
+  //   unique 와 함께면 «조건에 맞는 행끼리만» 겹치지 않는다(예 열린 판은 칸마다 하나 — `valid_to IS NULL`).
+  where: z.string().min(1).max(1000).optional(),
 }).strict();
 
 const dataTableSchema = z.object({
@@ -510,7 +515,8 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
       }
       if (c.references) {
         if (!tableNames.has(c.references.table)) throw new HttpError(400, `${where(c.name)}: references.table '${c.references.table}' 는 이 앱이 선언한 테이블이 아닙니다`);
-        if (!ty.integer) throw new HttpError(400, `${where(c.name)}: references 칸은 정수형(int · bigint · int4 · smallint)이어야 합니다 — 가리키는 표의 id 와 맞춥니다`);
+        //  id 를 가리키면 정수형 — 다른 칸(references.column)을 가리키면 그 칸과 같은 형인지 아래(표를 다 읽은 뒤)에서 본다.
+        if ((c.references.column ?? "id") === "id" && !ty.integer) throw new HttpError(400, `${where(c.name)}: references 칸은 정수형(int · bigint · int4 · smallint)이어야 합니다 — 가리키는 표의 id 와 맞춥니다`);
         if (c.references.on_delete === "set null" && c.not_null) throw new HttpError(400, `${where(c.name)}: on_delete 'set null' 과 not_null 은 함께 쓸 수 없습니다`);
       }
       if (c.renamed_from !== undefined && (c.renamed_from === c.name || t.columns.some((o) => o.name === c.renamed_from))) {
@@ -532,9 +538,26 @@ export function parseAppManifest(raw: unknown): LivelyAppManifest {
         if (!cols.has(c)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: '${c}' 는 이 테이블의 칸이 아닙니다`);
       }
       if (new Set(ix.columns).size !== ix.columns.length) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 칸을 두 번 적었습니다(${ix.columns.join(", ")})`);
-      const key = `${ix.unique ? "u" : "i"}:${ix.columns.join(",")}`;
+      if (ix.where !== undefined && /;/.test(ix.where)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: where 는 식 하나입니다(세미콜론 없이)`);
+      const key = `${ix.unique ? "u" : "i"}:${ix.columns.join(",")}${ix.where !== undefined ? `:${ix.where}` : ""}`;
       if (seen.has(key)) throw new HttpError(400, `매니페스트 오류 [data.tables.${t.name}.indexes]: 같은 인덱스가 두 번 있습니다(${ix.columns.join(", ")})`);
       seen.add(key);
+    }
+    //  references.column — 가리킬 칸이 그 표에 있고, unique(칸의 unique 또는 그 칸 하나짜리 조건 없는 unique 인덱스)이며, 형이 같아야 한다.
+    //   외래키는 가리키는 쪽 값이 늘 하나로 정해져야 걸린다(Postgres 는 대상 칸에 유일 제약을 요구한다).
+    for (const c of t.columns) {
+      const tc = c.references?.column;
+      if (!c.references || tc === undefined || tc === "id") continue;
+      const loc = `매니페스트 오류 [data.tables.${t.name}.columns.${c.name}]`;
+      const target = m.data.tables.find((x) => x.name === c.references!.table)!;
+      const tcol = target.columns.find((x) => x.name === tc);
+      if (!tcol) throw new HttpError(400, `${loc}: references.column '${tc}' 는 '${target.name}' 의 칸이 아닙니다`);
+      const uniq = tcol.unique === true || target.indexes.some((ix) => ix.unique && ix.where === undefined && ix.columns.length === 1 && ix.columns[0] === tc);
+      if (!uniq) throw new HttpError(400, `${loc}: references.column '${target.name}.${tc}' 는 unique 로 선언한 칸이어야 합니다(칸의 unique: true 또는 그 칸 하나짜리 unique 인덱스)`);
+      const a = parseColumnType(c.type), b = parseColumnType(tcol.type);
+      if (a.array || b.array || a.canonical !== b.canonical) {
+        throw new HttpError(400, `${loc}: 형(${c.type})이 가리키는 칸 '${target.name}.${tc}' 의 형(${tcol.type})과 같아야 합니다`);
+      }
     }
   }
   assertUniqueKeys("sections", m.sections.map((s) => s.key));

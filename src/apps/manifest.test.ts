@@ -272,6 +272,43 @@ for (const [what, tables] of REJECTS_4483) {
   });
 }
 
+// ── 글자 칸을 가리키는 외래키(references.column) · 조건부 인덱스(where) ─────────────────────────────────
+test("references.column · indexes.where 를 받는다 — unique 칸(칸의 unique 또는 그 칸 하나짜리 unique 인덱스)을 같은 형으로", () => {
+  const m = parseAppManifest(withTables([
+    { name: "issuers", columns: [{ name: "code", type: "text", unique: true }] },
+    { name: "items", columns: [{ name: "code", type: "varchar(20)" }], indexes: [{ columns: ["code"], unique: true }] },
+    T([
+      { name: "issuer_code", type: "text", references: { table: "issuers", column: "code", on_delete: "cascade" } },
+      { name: "item_code", type: "varchar(20)", references: { table: "items", column: "code" } },
+      { name: "issuer_id", type: "bigint", references: { table: "issuers", column: "id" } },
+      { name: "address", type: "text" }, { name: "valid_to", type: "timestamptz" },
+    ], { indexes: [{ columns: ["address"], unique: true, where: "valid_to IS NULL" }, { columns: ["address"], unique: false }] }),
+  ]));
+  const t = m.data.tables[2];
+  assert.equal(t.columns[0].references?.column, "code");
+  assert.equal(t.columns[2].references?.column, "id");
+  assert.equal(t.indexes[0].where, "valid_to IS NULL");
+  assert.equal(t.indexes[1].where, undefined);
+});
+
+const REJECTS_REF_COLUMN: Array<[string, unknown[]]> = [
+  ["가리킬 칸이 그 표에 없음", [{ name: "c", columns: [{ name: "code", type: "text", unique: true }] }, T([{ name: "a", type: "text", references: { table: "c", column: "nope" } }])]],
+  ["가리킬 칸이 unique 가 아님", [{ name: "c", columns: [{ name: "code", type: "text" }] }, T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["조건부 unique 인덱스만 있는 칸", [{ name: "c", columns: [{ name: "code", type: "text" }, { name: "live", type: "bool" }], indexes: [{ columns: ["code"], unique: true, where: "live" }] },
+    T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["여러 칸 unique 인덱스에 든 칸", [{ name: "c", columns: [{ name: "code", type: "text" }, { name: "kind", type: "text" }], indexes: [{ columns: ["code", "kind"], unique: true }] },
+    T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["형이 다름(text → varchar(20))", [{ name: "c", columns: [{ name: "code", type: "varchar(20)", unique: true }] }, T([{ name: "a", type: "text", references: { table: "c", column: "code" } }])]],
+  ["배열 칸", [{ name: "c", columns: [{ name: "code", type: "text", unique: true }] }, T([{ name: "a", type: "text[]", references: { table: "c", column: "code" } }])]],
+  ["column 을 id 로 적었는데 글자 칸", [{ name: "c", columns: [{ name: "code", type: "text", unique: true }] }, T([{ name: "a", type: "text", references: { table: "c", column: "id" } }])]],
+  ["인덱스 where 에 세미콜론", [T([{ name: "a", type: "text" }], { indexes: [{ columns: ["a"], where: "a IS NULL; DROP TABLE x" }] })]],
+];
+for (const [what, tables] of REJECTS_REF_COLUMN) {
+  test(`references.column · where 거부 — ${what}`, () => {
+    assert.throws(() => parseAppManifest(withTables(tables)), /매니페스트 오류/, what);
+  });
+}
+
 // ── #4481 여러 파일 앱의 화면 폴더(web.root) — 최상위 칸이라 옛 코어(이 칸을 모름)로 되돌려도 매니페스트가 읽힌다 ─────────────
 test("#4481 web.root — 최상위 web 칸 · 정규 상대경로 · 맨 위는 \"\" · 틀린 꼴은 null", () => {
   const m = parseAppManifest({ ...base(), web: { root: "./dist/" } });
