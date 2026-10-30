@@ -31,7 +31,7 @@ t("TW4 토큰 굽기 — 상한이 앱 토큰 발급에 실리고, 앱 아닌 �
 
 t("TW5 /mcp — 토큰의 상한이 도구 목록(buildServer)에 넘어간다 · 검증한 상한이 사람(LivelyUser)에 실린다", () => {
   assert.match(read("boot/mcp-transport.ts"), /buildServer\(overrides, alwaysLoad, harness, readOnly, incognito, appId, user\?\.toolCeiling \?\? null\)/);
-  assert.match(read("org/store/tokens.ts"), /\.\.\.\(toolCeiling \? \{ toolCeiling \} : \{\}\),/);
+  assert.match(read("org/store/tokens.ts"), /\.\.\.\(toolCeiling != null \? \{ toolCeiling \} : \{\}\),/);
   //  bearer 는 검증 결과를 펼쳐(…identity) 사람으로 옮긴다 — 칸을 하나씩 고르는 꼴로 바뀌면 상한이 빠진다.
   assert.match(read("auth/bearer.ts"), /const \{ clientId, resource, expiresAt, appId, \.\.\.identity \} = dbUser;/);
   assert.match(read("auth/bearer.ts"), /\.\.\.identity, tokenSource: "db"/);
@@ -40,7 +40,8 @@ t("TW5 /mcp — 토큰의 상한이 도구 목록(buildServer)에 넘어간다 �
 t("TW6 작업 행 — 쓰기는 목록이 있을 때 그 칸에, 읽기는 같은 칸(TOOL_ALLOWLIST_COL)이다", () => {
   const store = read("agent-jobs/store.ts");
   assert.match(store, /export const TOOL_ALLOWLIST_COL = "tool_allowlist";/);
-  assert.match(store, /\$\{tools != null \? `, \$\{TOOL_ALLOWLIST_COL\}` : ""\}/);
+  assert.match(store, /\$\{toolsRef \? `, \$\{TOOL_ALLOWLIST_COL\}` : ""\}/);
+  assert.match(store, /\$\{toolsRef \? `, \$\{toolsRef\}::jsonb` : ""\}/);
   assert.match(store, /SELECT \$\{TOOL_ALLOWLIST_COL\} AS t FROM org_agent_job WHERE id=\$1/);
 });
 

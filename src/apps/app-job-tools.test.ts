@@ -215,4 +215,10 @@ await t("T8 설치된 매니페스트에 그 작업의 목록이 없고 걸린 �
   assert.deepEqual(await resolveJobTools(broken.app, who("bob"), "answer", broken.d), [], "손상된 목록은 빈 목록(아무것도 허락하지 않음)");
 });
 
+await t("T9 ai.tools 자체가 객체가 아니면(이 칸이 생기기 전 passthrough 로 저장된 다른 뜻의 값) 선언 없음 — 작업 하나의 목록이 틀린 것(빈 목록)과 다르다", () => {
+  for (const tools of ["x", ["answer"], 3, null]) assert.equal(toolsOf({ ai: { jobs: [{ name: "answer" }], tools } }, "answer"), null, JSON.stringify(tools));
+  assert.deepEqual(toolsOf({ ai: { tools: { answer: "x" } } }, "answer"), [], "작업의 목록이 틀리면 닫는다");
+  assert.equal(toolsOf({ ai: { tools: ["a"] } }, "0"), null, "배열의 자리 «0» 을 작업 이름으로 읽지 않는다");
+});
+
 console.log(`# ${pass} pass`);

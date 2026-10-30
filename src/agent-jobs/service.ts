@@ -68,8 +68,8 @@ export interface AgentJobDeps {
   assertJobAllowed(job: Pick<AgentJobRow, "id" | "app_id" | "account_member" | "account_kind" | "requester" | "project_id" | "cwd">): Promise<void>;
   /** 이 게이트웨이가 판의 말을 듣기 시작한 시각(프로세스 시작, ms) — 재기동 직후 무응답 판정을 보류하는 기준. */
   listeningSince(): number;
-  /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유. */
-  /** 작업 AI 의 라이블리 신원(MCP 토큰)을 굽는다. toolCeiling 은 그 작업의 도구 상한(작업 행 tool_allowlist — 앱의 ai.tools) · null 이면 상한 없음.
+  /** 작업 AI 의 라이블리 MCP 토큰 — 앱 작업이면 앱 토큰(구성원 권한 ∩ 앱 동의), 아니면 그 멤버 토큰. 만료 = 작업 상한 + 여유.
+   *  toolCeiling 은 그 작업의 도구 상한(작업 행 tool_allowlist — 앱의 ai.tools) · null 이면 상한 없음.
    *  필수 인자다 — 빠뜨리면 그 작업이 앱 동의 전체로 돈다(컴파일이 잡게). */
   mintMcpToken(job: AgentJobRow, opts: { toolCeiling: readonly string[] | null }): Promise<{ token: string; tokenHash: string } | null>;
   /** 하네스에 더 줄 env(#4488 — API 키 실행의 프록시 주소 · 실행 토큰 · 빈 설정 폴더). 없으면 빈 객체. 던지면 그 작업은 돌지 않는다.
@@ -390,8 +390,12 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   if (!booted) throw new HttpError(409, "이미 시작한 작업입니다");   // 두 판이 겹쳐 물었다 — 먼저 온 쪽만
   let t: { token: string; tokenHash: string } | null = null;
   let why = "실행 계정이 활성 구성원이 아닙니다";
+  let toolCeiling: string[] | null = null;
   //  도구 상한(작업별 허용 목록)을 먼저 읽는다 — 못 읽으면 토큰을 굽지 않는다(앱 동의 전체로 띄우지 않는다 · 아래 «신원을 못 만들었다» 와 같은 길).
-  try { t = await d.mintMcpToken(booted, { toolCeiling: await d.jobToolAllowlist(booted) }); } catch (e) { why = String((e as Error)?.message ?? e); }
+  try {
+    toolCeiling = await d.jobToolAllowlist(booted);
+    t = await d.mintMcpToken(booted, { toolCeiling });
+  } catch (e) { why = String((e as Error)?.message ?? e); }
   if (!t) {
     logger.warn({ job: booted.id, err: why }, "[agent-job] 작업 AI 의 라이블리 신원을 못 만들었다 — 돌리지 않는다");
     const ended = await d.store.finishAgentJob(booted.id, { status: "failed", error: `작업 AI 의 신원을 만들지 못했습니다: ${why}`.slice(0, 600), from: ["running"] });
@@ -439,7 +443,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
   const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: `${view.gateway}/mcp`,
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
-  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0, mcpOnly }, "[agent-job] 판이 섰다");
+  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0, mcpOnly, toolCeiling: toolCeiling == null ? null : toolCeiling.length }, "[agent-job] 판이 섰다");
   return {
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
     argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),

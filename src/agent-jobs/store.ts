@@ -143,13 +143,13 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
     const mcpOnly = j.mcpOnly === true;
     const tools = Array.isArray(j.toolAllowlist) ? JSON.stringify(j.toolAllowlist) : null;
+    //  더하는 칸의 값 — 아래 VALUES 의 $1..$15 뒤에 넣는 차례대로 자리 번호를 받는다(칸 차례와 값 차례가 같게 한 자리에서).
     const extra: string[] = [];
-    if (instr != null) extra.push(instr);
-    const instrAt = instr != null ? 16 : 0;
-    if (tools != null) extra.push(tools);
-    const toolsAt = tools != null ? 15 + extra.length : 0;
-    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instr != null ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${tools != null ? `, ${TOOL_ALLOWLIST_COL}` : ""}`;
-    const extraVals = `${shared ? ", true" : ""}${instr != null ? `, $${instrAt}` : ""}${mcpOnly ? ", true" : ""}${tools != null ? `, $${toolsAt}::jsonb` : ""}`;
+    const param = (v: string): string => { extra.push(v); return `$${15 + extra.length}`; };
+    const instrRef = instr != null ? param(instr) : null;
+    const toolsRef = tools != null ? param(tools) : null;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
                                  resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
@@ -201,7 +201,8 @@ export async function agentJobAppInstructions(id: number): Promise<string | null
  * 작업별 라이블리 도구 허용 목록(org_agent_job.tool_allowlist)도 COLS 에 넣지 않고 따로 읽는다(agentJobToolAllowlist) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
  *  목록이 있는 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
  *  ★ 롤 창에 목록을 실은 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 앱 동의 전체로 돌지 않는다(닫힌 쪽). 부르는 쪽이 503 으로 다시 보내라고 한다.
- *  칸의 값이 글 배열이 아니면(손상) 빈 목록 — 아무 도구도 허락하지 않는다(닫힌 쪽).
+ *  칸의 값이 글 배열이 아니면(손상) 빈 목록 — 아무 도구도 허락하지 않는다(닫힌 쪽). 칸의 JSON null 은 SQL NULL 과 같이 읽혀 «좁히지 않음» 이다
+ *  (쓰는 쪽은 배열만 적는다). 잘못된 id 도 null 이다 — 부르는 쪽은 모두 DB 에서 읽은 작업 행의 id 를 넘긴다(형제 함수들과 같다).
  */
 export const TOOL_ALLOWLIST_COL = "tool_allowlist";
 export async function agentJobToolAllowlist(id: number): Promise<string[] | null> {

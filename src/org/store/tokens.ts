@@ -239,7 +239,8 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
               t.follow_member_scopes AS follow_member_scopes,
               t.client_id, t.resource, t.app_id, t.app_server_principal, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch,
               -- 도구 상한은 칸 이름으로 고르지 않고 행에서 꺼낸다 — 롤 창(새 게이트웨이가 먼저 · 마이그레이션은 끝에)에 칸이 아직 없어도
-              --  이 인증 쿼리가 «없는 칸» 으로 깨지지 않게(칸이 없으면 NULL — 그 칸을 단 토큰도 없다).
+              --  이 인증 쿼리가 «없는 칸» 으로 깨지지 않게(칸이 없으면 NULL — 그 칸을 단 토큰도 없다). 칸이 모든 배포에 생긴 뒤에는
+              --  t.tool_ceiling 으로 바꿔도 된다(롤 창이 지난 다음 정리 때 — 인증 핫패스에서 행 전체를 JSON 으로 만들지 않게).
               to_jsonb(t) -> 'tool_ceiling' AS tool_ceiling,
               (SELECT bool_and(a.enabled AND a.status = 'active') FROM org_app a WHERE a.id = t.app_id) AS app_live
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
@@ -274,10 +275,11 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const appServer = row.app_server_principal === true;
     if (appServer && !row.app_id) return null;
     //  도구 상한 — 앱 토큰에만 뜻이 있다(앱 없이 걸려 있으면 받지 않는다). 글 배열이 아니면(손상) 빈 상한 — 아무 도구도 허락하지 않는다(닫힌 쪽).
+    //   칸의 JSON null 은 SQL NULL 과 구분되지 않아(to_jsonb) «상한 없음» 이다 — 쓰는 쪽(mintToken)은 배열만 적는다.
     const ceilingRaw = row.tool_ceiling;
     const toolCeiling = ceilingRaw == null ? null
       : Array.isArray(ceilingRaw) && ceilingRaw.every((x) => typeof x === "string") ? (ceilingRaw as string[]) : [];
-    if (toolCeiling && !row.app_id) return null;
+    if (toolCeiling != null && !row.app_id) return null;
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
     return {
@@ -286,7 +288,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       resource: row.resource ?? null,
       appId: row.app_id ?? null,
       ...(appServer ? { appServer: true as const } : {}),
-      ...(toolCeiling ? { toolCeiling } : {}),
+      ...(toolCeiling != null ? { toolCeiling } : {}),
       // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
       expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
     };

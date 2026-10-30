@@ -138,7 +138,9 @@ function checkAiMcpOnly(m: LivelyAppManifest): void {
 
 /**
  * ai.tools 의 뜻 — 키는 선언한 작업 이름, 도구는 글롭이 아닌 정확한 이름이고 앱이 요청하는 도구(permissions.tools — 앱 서버 · AI 실행 등이
- *  저절로 더한 것 포함 — 와 ext_tools, 동의가 받는 범위와 같다 · grant.resolveGrant)에 들어 있어야 한다. 오타가 조용히 «쓸 수 없는 도구»가 되거나, 글롭이 생각보다 넓게 열리지 않게(허용 목록은 좁히는 장치다).
+ *  저절로 더한 것 포함 — 와 ext_tools, 동의가 받는 범위와 같다 · grant.resolveGrant)에 맞아야 한다. 글롭이 생각보다 넓게 열리지 않게 하고
+ *  (허용 목록은 좁히는 장치다), 요청하지 않은 도구 이름의 오타를 잡는다. 요청이 글롭(knowledge_*)이면 그 안의 오타 · 대소문자 차이는 못 잡는다 —
+ *  그 도구가 목록에서 빠질 뿐이다(닫힌 쪽). 판정은 대소문자까지 정확히 본다(principal.appToolAllowed).
  *  모양은 parseAppManifest 가 보고, 뜻은 설치 · 판 저장 때만 본다(저장된 매니페스트를 다시 읽는 자리를 막지 않게 — ai.mcp_only 와 같다).
  */
 function checkAiTools(m: LivelyAppManifest): void {

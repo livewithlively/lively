@@ -41,6 +41,15 @@ export interface LivelyUser {
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.
 // (src/auth/bearer.ts 의 verifyAccessToken 이 여기에 LivelyUser 를 넣는다)
+/**
+ * 이 주체의 도구가 모두 앱 도구 게이트(apps/principal.appToolAllowed)로만 다니나 — 앱 서버 급 주체(#4891)이거나 도구 상한이 실린 토큰(ai.tools).
+ *  이런 주체는 그 게이트를 타는 문(능력 REST · /mcp)에서만 받고(auth/http-auth.appPrincipalGate), 제품 DB 도구도 그 게이트를 탄다(tools/db).
+ *  빈 상한([])도 상한이다 — 길이가 아니라 있음으로 본다.
+ */
+export function confinedToAppTools(user: Pick<LivelyUser, "appServer" | "toolCeiling"> | undefined): boolean {
+  return user?.appServer === true || user?.toolCeiling != null;
+}
+
 export function resolveUser(extra: unknown): LivelyUser {
   const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)?.authInfo;
   const user = authInfo?.extra as LivelyUser | undefined;

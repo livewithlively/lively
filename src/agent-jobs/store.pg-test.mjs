@@ -804,6 +804,7 @@ try {
         && (await st.agentJobMcpOnly(all.row.id)) === true && same(await st.agentJobToolAllowlist(all.row.id), ["knowledge_get"]));
     await cleanup();
     //  롤 창 — 새 코드가 마이그레이션보다 먼저 받는 동안 작업 행에 목록 칸이 아직 없다.
+    //  ⚠ 시험용 DB 전용 — 칸을 지웠다 되살리면 값은 NULL 로 돌아온다(목록이 실린 작업 행이 있는 DB 에서 돌리면 그 목록이 사라진다).
     await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS tool_allowlist`);
     try {
       let p0 = null, p0err = null;

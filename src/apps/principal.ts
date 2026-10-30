@@ -110,11 +110,12 @@ export function decideAppTool(appId: string | undefined, tools: string[] | null,
   return toolAllowed(tools, toolName);
 }
 
-/** 이 유저(앱 세션이면 user.appId 존재)가 이 도구를 호출할 수 있나. 일반 세션(appId 없음)은 항상 true. */
+/** 이 유저가 이 도구를 호출할 수 있나 — 도구 상한(toolCeiling)이 있으면 그 안의 이름만, 그다음 앱 세션(user.appId 있음)은 그 앱 동의로 좁힌다.
+ *  상한도 앱도 없는 일반 세션은 항상 true. */
 export async function appToolAllowed(user: LivelyUser, toolName: string): Promise<boolean> {
   //  도구 상한(앱 AI 작업 토큰 — 매니페스트 ai.tools)은 무엇보다 먼저 본다: 정확한 이름이 목록에 있어야 한다. 세션 배관 면제(EXEMPT)도 상한을 넘지 못한다 —
-  //   작업 AI 는 키트 훅이 꺼져(runner.claudeJobArgv) 배관을 쓰지 않는다. 상한 안이어도 아래 앱 동의를 또 통과해야 한다.
-  if (user.toolCeiling && !user.toolCeiling.includes(toolName)) return false;
+  //   작업 AI 는 키트 훅이 꺼져(runner.claudeJobArgv) 배관을 쓰지 않는다. 상한 안이어도 아래 앱 동의를 또 통과해야 한다. 빈 상한([])은 아무것도 허락하지 않는다.
+  if (user.toolCeiling != null && !user.toolCeiling.includes(toolName)) return false;
   if (!user.appId) return true; // DB 조회 없이 빠르게 통과(일반 세션 핫패스)
   const tools = await grantTools(user.appId, user.userId);
   //  #4483 앱 서버 주체(제3자 서버 코드가 방문자 이름으로 부른다)는 세션 배관 면제를 안 탄다 — 훅 소스·자산 본문·회사 컨텍스트를
@@ -124,6 +125,10 @@ export async function appToolAllowed(user: LivelyUser, toolName: string): Promis
 
 /** requireScope 옆에서 부르는 게이트. 앱 세션이 허용 밖 도구를 부르면 403. */
 export async function requireAppTool(user: LivelyUser, toolName: string): Promise<void> {
+  //  상한 밖은 앱 동의 밖과 고칠 곳이 달라 말을 나눈다 — 앱 제작자가 매니페스트 ai.tools 를 고치면 된다.
+  if (user.toolCeiling != null && !user.toolCeiling.includes(toolName)) {
+    throw new HttpError(403, `이 작업은 '${toolName}' 도구를 쓸 수 없습니다(앱이 이 작업에 허용한 도구 밖 — 매니페스트 ai.tools)`);
+  }
   if (!(await appToolAllowed(user, toolName))) {
     throw new HttpError(403, `이 앱 세션은 '${toolName}' 도구를 쓸 수 없습니다(앱 권한 밖)`);
   }

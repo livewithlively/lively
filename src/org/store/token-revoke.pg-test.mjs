@@ -394,6 +394,7 @@ try {
       JSON.stringify(chain));
 
     // ── T23 롤 창 — 토큰 표에 상한 칸이 아직 없는 DB(마이그레이션 전). 끝나면 칸을 되살린다(CI 는 같은 DB 로 다음 단계를 돈다) ──
+    //  ⚠ 시험용 DB 전용 — 칸을 지웠다 되살리면 값은 NULL 로 돌아온다. 상한이 걸린 토큰이 살아 있는 DB 에서 돌리면 그 상한이 사라진다.
     const before = await mintT("pgtest-tc-pre-old", { appId: TC_APP });
     await itemsPool.query(`ALTER TABLE auth_token DROP COLUMN IF EXISTS tool_ceiling`);
     try {

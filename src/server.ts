@@ -80,9 +80,10 @@ export function buildServer(
   const orig = server.registerTool.bind(server);
   server.registerTool = ((name: string, config: unknown, handler: ToolHandler) => {
     if (overrides?.get(name) === false) return undefined;
-    //  (1b) 도구 상한(앱 AI 작업 토큰)이 있으면 그 밖의 도구는 등록하지 않는다 — capability · db · dynamic 등록이 모두 여길 지난다.
-    //   표면 감추기일 뿐이고 경계는 핸들러의 requireAppTool(apps/principal.appToolAllowed 의 상한 판정)이다.
-    if (toolCeiling && !toolCeiling.includes(name)) return undefined;
+    //  (1b) 도구 상한(앱 AI 작업 토큰)이 있으면 그 밖의 도구는 등록하지 않는다 — capability · db · 동적 · 프록시 등록이 모두 여길 지난다
+    //   (buildServer 가 돌아간 뒤의 등록도). 이 서버(/mcp)에서는 등록하지 않은 도구는 부를 수도 없다. 다른 토큰으로 만든 서버를 이어 쓰거나
+    //   능력 REST 로 부르는 길의 경계는 핸들러의 requireAppTool(apps/principal 의 상한 판정)이다. 빈 상한([])은 아무것도 등록하지 않는다.
+    if (toolCeiling != null && !toolCeiling.includes(name)) return undefined;
     const tag = (config as { _meta?: Record<string, unknown> } | undefined)?._meta?.[TOOL_APP_META_KEY];
     const cb = typeof handler === "function" ? instrument(name, handler, harness, typeof tag === "string" ? tag : null) : handler;
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);

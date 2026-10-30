@@ -6,7 +6,7 @@
 import type express from "express";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { BearerVerifier } from "./bearer.js";
-import type { LivelyUser } from "../context.js";
+import { confinedToAppTools, type LivelyUser } from "../context.js";
 import { parseSessionCookie, userFromSession } from "./sessions.js";
 import { resourceIds } from "./resource-id.js";
 import { isAppServerToken, resolveAppServerPrincipal } from "../apps/app-server-auth.js";
@@ -33,7 +33,7 @@ export type AppPrincipalGateMode = "cap" | "mcp" | "deny";
  */
 export function appPrincipalGate(user: LivelyUser | undefined, mode: AppPrincipalGateMode): "next" | "resolve" | "deny" {
   if (isAppServerToken(user)) return mode === "cap" ? "resolve" : "deny";
-  if (user?.appServer === true || user?.toolCeiling) return mode === "deny" ? "deny" : "next";
+  if (confinedToAppTools(user)) return mode === "deny" ? "deny" : "next";
   return "next";
 }
 //  #5100 — 앱 토큰 요청은 여기서 그 앱의 읽기 범위 안으로 들어간다(v6/read-scope.ts). 능력 어댑터 밖의 맨 라우트(터미널 파일 · 프로젝트 ·
@@ -49,7 +49,7 @@ function appServerGate(mode: AppPrincipalGateMode): (req: express.Request, res: 
     const verdict = appPrincipalGate(user, mode);
     if (verdict === "next") { nextInAppScope(user, next); return; }
     if (verdict === "deny") {
-      res.status(403).json({ error: user?.appServer === true || user?.toolCeiling
+      res.status(403).json({ error: confinedToAppTools(user)
         ? "앱 작업 토큰은 앱 도구(능력 API · MCP)에서만 씁니다"
         : "앱 서버 토큰은 앱 데이터·도구 API(/api/ui/…)에서 사람 신원과 함께만 씁니다" });
       return;

@@ -14,7 +14,9 @@ import { hasPendingDraft, type Viewer } from "./visibility.js";
 
 /**
  * (순수) 그 작업 이름의 허용 목록 — 없으면 null(좁히지 않음). 빈 배열은 «도구 없음»이라는 뜻이 있다.
- *  저장된 매니페스트를 읽는 자리라 던지지 않는다 — 모양이 틀리면(배열이 아님 · 글이 아닌 원소) 빈 목록(아무것도 허락하지 않음)으로 닫는다.
+ *  저장된 매니페스트를 읽는 자리라 던지지 않는다 — 그 작업의 목록 모양이 틀리면(배열이 아님 · 글이 아닌 원소) 빈 목록(아무것도 허락하지 않음)으로 닫는다.
+ *  ai.tools 자체가 객체가 아니면(이 칸이 생기기 전 passthrough 로 저장된 다른 뜻의 값) 선언이 없는 것으로 본다(종전) — 지금은 매니페스트 읽기가
+ *  그런 값을 받지 않는다(manifest.aiSchema).
  */
 export function toolsOf(manifest: unknown, job: string | null | undefined): string[] | null {
   if (!job) return null;
@@ -42,8 +44,9 @@ export interface JobToolsDeps {
 }
 
 /**
- * 그 사람(주소)의 판에서 그 작업의 허용 목록을 읽는다 — 앱을 볼 수 없으면 404.
- *  설치된 매니페스트에 그 작업의 목록이 없고 따로 볼 초안도 없는 앱은 판을 읽지 않는다(그 사람이 볼 판도 같은 매니페스트다 · app-job-mcp-only 와 같다).
+ * 그 사람(주소)이 보는 앱 판에서 그 작업의 허용 목록을 읽는다 — 판을 읽었는데 그 사람이 앱을 볼 수 없으면 404.
+ *  설치된 매니페스트에 그 작업의 목록이 없고 따로 볼 초안도 없는 앱은 판을 읽지 않고 null 이다(그 사람이 볼 판도 같은 매니페스트다 ·
+ *  app-job-mcp-only 와 같다). 볼 수 있는지는 접수(ai-runs/service.submitRun)가 앞에서 이미 본다.
  */
 export async function resolveJobTools(app: OrgApp, who: Viewer, job: string | null | undefined, deps?: JobToolsDeps): Promise<string[] | null> {
   if (!job) return null;

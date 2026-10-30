@@ -4,9 +4,11 @@
 //  이게 틀리면: 작업 AI 가 상한 밖 도구(store_sql · db_query …)를 목록에서 보고 부르려 들거나, 상한 안 도구가 목록에서 사라져 작업이 못 돈다.
 //  (토큰의 상한이 이 인자로 오는 배선 — /mcp 전송 — 은 이 시험 밖이다.)
 import assert from "node:assert/strict";
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "../server.js";
+import type { LivelyUser } from "../context.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -79,6 +81,52 @@ await t("T28·T3 빈 상한([])이면 도구를 하나도 등록하지 않는다
   for (const appId of [null, "crm"]) {
     const got = await listed(appId, []);
     assert.deepEqual(got.names, [], `appId ${appId}: ${JSON.stringify(got.names.slice(0, 5))}`);
+  }
+});
+
+//  아래 둘은 격리 리뷰가 짚은 길 — 목록 감추기는 서버를 만들 때의 상한을 따르므로, 다른 토큰이 만든 서버를 이어 쓰면 목록은 다 보일 수 있다.
+//   그때의 경계는 핸들러가 이 요청의 신원(상한)으로 보는 판정이다. 그리고 buildServer 가 돌아간 뒤에 오는 등록(동적 · 프록시 도구)도 감추기를 지난다.
+
+/** 서버에 클라이언트를 붙이되, 모든 요청에 이 신원을 싣는다(/mcp 전송이 req.auth 로 싣는 것과 같은 자리 — authInfo.extra). */
+async function connectAs(server: ReturnType<typeof buildServer>, who: LivelyUser): Promise<Client> {
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  const send = clientSide.send.bind(clientSide);
+  (clientSide as unknown as { send: typeof send }).send = (msg, opts) =>
+    send(msg, { ...(opts ?? {}), authInfo: { token: "x", clientId: who.userId, scopes: who.scopes, extra: who } } as never);
+  await server.connect(serverSide);
+  const client = new Client({ name: "tool-ceiling-test", version: "0.0.0" });
+  await client.connect(clientSide);
+  return client;
+}
+const callText = async (client: Client, name: string, args: Record<string, unknown>): Promise<string> =>
+  JSON.stringify(await client.callTool({ name, arguments: args }).catch((e: Error) => ({ threw: e.message })));
+
+await t("T24 다른 토큰(상한 없음)이 만든 서버를 상한 토큰이 이어 써도 — 목록엔 보여도 부르면 핸들러가 상한으로 거절한다", async () => {
+  const server = buildServer(undefined, undefined, undefined, undefined, undefined, "crm", null);
+  const who: LivelyUser = { userId: "m1", email: "", scopes: ["items", "memory", "db"], projects: ["*"], appId: "crm", toolCeiling: ["knowledge_search"] };
+  const client = await connectAs(server, who);
+  try {
+    const names = (await client.listTools()).tools.map((x) => x.name);
+    assert.ok(names.includes("db_query") && names.includes("store_sql"), "관측 장치 — 상한 없이 만든 서버는 다 등록한다");
+    for (const [name, args] of [["db_query", { sql: "select 1" }], ["store_sql", { sql: "select 1" }], ["knowledge_get", { name: "x" }]] as const) {
+      assert.match(await callText(client, name, args), /앱이 이 작업에 허용한 도구 밖/, name);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
+await t("T28 buildServer 가 돌아간 뒤에 오는 등록(동적 · 프록시 도구)도 상한 밖이면 목록에 없고 부를 수도 없다", async () => {
+  const server = buildServer(undefined, undefined, undefined, undefined, undefined, "crm", ["knowledge_search", "ext__ok__tool"]);
+  server.registerTool("ext__ok__tool", { description: "상한 안", inputSchema: { a: z.string().optional() } }, async () => ({ content: [{ type: "text" as const, text: "ok" }] }));
+  server.registerTool("ext__bad__tool", { description: "상한 밖", inputSchema: { a: z.string().optional() } }, async () => ({ content: [{ type: "text" as const, text: "BAD" }] }));
+  const client = await connectAs(server, { userId: "m1", email: "", scopes: [], projects: ["*"], appId: "crm", toolCeiling: ["knowledge_search", "ext__ok__tool"] });
+  try {
+    assert.deepEqual(sorted((await client.listTools()).tools.map((x) => x.name)), ["ext__ok__tool", "knowledge_search"]);
+    const bad = await callText(client, "ext__bad__tool", {});
+    assert.ok(!bad.includes("BAD"), `상한 밖 도구가 불렸다: ${bad}`);
+  } finally {
+    await client.close();
   }
 });
 

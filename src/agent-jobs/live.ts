@@ -104,7 +104,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     jobSystem: async (job) => (await import("./store.js")).agentJobAppInstructions(job.id),
     //  «라이블리 MCP 만» 표시 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 함께 적었다 · 판이 뜰 때 다시 고르지 않는다).
     jobMcpOnly: async (job) => (await import("./store.js")).agentJobMcpOnly(job.id),
-    //  작업별 라이블리 도구 허용 목록 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람의 판의 ai.tools 로 적었다). 판이 뜰 때 작업 토큰의 상한이 된다.
+    //  작업별 라이블리 도구 허용 목록 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람이 보는 앱 판의 ai.tools 로 적었다).
+    //   작업 판(실행면)이 뜰 때 작업 토큰의 도구 상한이 된다.
     jobToolAllowlist: async (job) => (await import("./store.js")).agentJobToolAllowlist(job.id),
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
