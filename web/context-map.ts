@@ -173,7 +173,9 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
     .map((a: any) => String(a.key))
     .sort((a, b) => AI_ORDER.indexOf(a) - AI_ORDER.indexOf(b));
   //  타일 바탕은 외부 앱 타일과 같이 브랜드 색을 옅게 깐다(--svc-brand — 34-service-logins.css). 로고 표(lib/ai-logos.ts)의 채움 색과 같다.
-  const AI_TILE_BRAND: Record<string, string> = { claude: '#D97757', codex: '#10A37F', antigravity: '#4285F4', grok: '#191919' };
+  //  ⚠ --svc-brand 는 타일의 **글자색**이기도 하다. ChatGPT · Grok 마크는 currentColor 로 그려지는 단색 마크라, 브랜드 초록(#10A37F)을
+  //   주면 마크가 초록으로 칠해졌다(원준 2026-10-30 «실제 로고랑 다르다»). 단색 마크는 본문 잉크(--ink)를 준다 — 라이트에선 검정, 다크에선 흰색.
+  const AI_TILE_BRAND: Record<string, string> = { claude: '#D97757', codex: 'var(--ink)', antigravity: '#4285F4', grok: 'var(--ink)' };
   const aiTile = (key: string) => {
     const t = el('span', { class: 'svc-tile', title: (AI_BRAND[key] || key) + ' 연결됨', style: AI_TILE_BRAND[key] ? '--svc-brand:' + AI_TILE_BRAND[key] : null });
     t.innerHTML = AI_LOGO[key];   // 정적 SVG 문자열(lib/ai-logos.ts) — 사람이 넣은 값이 아니다
