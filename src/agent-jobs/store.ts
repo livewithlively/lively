@@ -114,6 +114,12 @@ export interface NewAgentJob {
    *  필수다(homeless · sharedSeat 와 같은 까닭) — 접수하는 자리가 빠뜨리면 그 작업이 내장 도구를 연 채 돈다.
    */
   mcpOnly: boolean;
+  /**
+   * 앱이 그 작업의 에이전트가 쓸 라이블리 도구를 좁힌 허용 목록(매니페스트 ai.tools) — 판이 뜰 때 작업 토큰의 도구 상한으로 싣는다
+   *  (service.onBoot → mintMcpToken). null = 좁히지 않음 · 빈 배열 = 도구 없음. 앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 준다
+   *  (이어받기 · 형식 재시도는 앞 작업 행 것). 필수다(mcpOnly 와 같은 까닭) — 접수하는 자리가 빠뜨리면 그 작업이 앱 동의 전체로 돈다.
+   */
+  toolAllowlist: string[] | null;
 }
 
 /**
@@ -132,18 +138,24 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
     //  #5082 app_instructions 칸도 같은 까닭으로 지시가 있을 때만 적는다(APP_INSTRUCTIONS_COL 머리말).
-    //  mcp_only 칸도 같다 — MCP 만 쓰는 작업일 때만 적는다(MCP_ONLY_COL 머리말).
+    //  mcp_only 칸도 같다 — MCP 만 쓰는 작업일 때만 적는다(MCP_ONLY_COL 머리말). tool_allowlist 칸도 목록이 있을 때만(TOOL_ALLOWLIST_COL 머리말).
     const shared = j.sharedSeat === true;
     const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
     const mcpOnly = j.mcpOnly === true;
-    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instr != null ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}`;
-    const extraVals = `${shared ? ", true" : ""}${instr != null ? ", $16" : ""}${mcpOnly ? ", true" : ""}`;
+    const tools = Array.isArray(j.toolAllowlist) ? JSON.stringify(j.toolAllowlist) : null;
+    //  더하는 칸의 값 — 아래 VALUES 의 $1..$15 뒤에 넣는 차례대로 자리 번호를 받는다(칸 차례와 값 차례가 같게 한 자리에서).
+    const extra: string[] = [];
+    const param = (v: string): string => { extra.push(v); return `$${15 + extra.length}`; };
+    const instrRef = instr != null ? param(instr) : null;
+    const toolsRef = tools != null ? param(tools) : null;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
                                  resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15${extraVals}) RETURNING ${COLS}`,
       [j.requester, j.accountKind, j.accountMember, j.appId, j.projectId, j.cwd, j.harness, j.model, j.label, j.prompt,
-        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, ...(instr != null ? [instr] : [])]);
+        j.resumeConversation, j.resumeJobId, j.timeoutSec, j.bare === true, j.homeless === true, ...extra]);
     return { row: norm(rows[0])! };
   });
 }
@@ -179,6 +191,27 @@ export async function agentJobAppInstructions(id: number): Promise<string | null
     const r = await q(itemsPool, `SELECT ${APP_INSTRUCTIONS_COL} AS t FROM org_agent_job WHERE id=$1`, [id]);
     const t = r[0]?.t;
     return typeof t === "string" && t !== "" ? t : null;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * 작업별 라이블리 도구 허용 목록(org_agent_job.tool_allowlist)도 COLS 에 넣지 않고 따로 읽는다(agentJobToolAllowlist) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  목록이 있는 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 목록을 실은 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 앱 동의 전체로 돌지 않는다(닫힌 쪽). 부르는 쪽이 503 으로 다시 보내라고 한다.
+ *  칸의 값이 글 배열이 아니면(손상) 빈 목록 — 아무 도구도 허락하지 않는다(닫힌 쪽). 칸의 JSON null 은 SQL NULL 과 같이 읽혀 «좁히지 않음» 이다
+ *  (쓰는 쪽은 배열만 적는다). 잘못된 id 도 null 이다 — 부르는 쪽은 모두 DB 에서 읽은 작업 행의 id 를 넘긴다(형제 함수들과 같다).
+ */
+export const TOOL_ALLOWLIST_COL = "tool_allowlist";
+export async function agentJobToolAllowlist(id: number): Promise<string[] | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const r = await q(itemsPool, `SELECT ${TOOL_ALLOWLIST_COL} AS t FROM org_agent_job WHERE id=$1`, [id]);
+    const t = r[0]?.t;
+    if (t == null) return null;
+    return Array.isArray(t) && t.every((x) => typeof x === "string") ? (t as string[]) : [];
   } catch (e) {
     if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
     throw e;

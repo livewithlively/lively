@@ -703,6 +703,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   사람 홈 없는 작업 컨테이너의 작업 AI 토큰이 쓴다 — 그 AI 를 부린 것은 앱 서버 코드라 사람의 다른 길(세션 · 파일 · 계정)을 열지 않는다.
   //   app_id 없이는 뜻이 없다(검증이 거부한다 — tokens.verifyDbToken).
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_server_principal BOOLEAN NOT NULL DEFAULT false;`);
+  //  tool_ceiling — 이 토큰으로 부를 수 있는 도구 상한(JSON 글 배열, 정확한 이름). 앱 AI 작업 토큰이 앱의 작업별 허용 목록(ai.tools)을 싣는다.
+  //   앱 동의와 둘 다 통과해야 한다(apps/principal.appToolAllowed). NULL = 상한 없음. 배열이 아니면 아무것도 허락하지 않는다(tokens.verifyDbToken).
+  await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS tool_ceiling JSONB;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS auth_token_app_idx ON auth_token(app_id) WHERE app_id IS NOT NULL;`);
   //  org_session_state.app_id — 세션이 어느 앱으로 떴나(desired-state 미러).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS app_id TEXT;`);

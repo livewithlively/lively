@@ -33,7 +33,8 @@ async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   //  sessioned 모드는 initialize 시점 토큰으로 서버를 굽는데 앱 토큰의 appId 는 세션 동안 불변이라 안전(경계는 핸들러 재판정).
   const user = (req as unknown as { auth?: { extra?: LivelyUser } }).auth?.extra;
   const appId = user?.appId ?? null;
-  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito, appId);
+  //  도구 상한(앱 AI 작업 토큰 — ai.tools)이 있으면 그 밖의 도구를 tools/list 에서 감춘다. 경계는 핸들러의 requireAppTool(상한 판정)이다.
+  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito, appId, user?.toolCeiling ?? null);
   // 인코그니토면 외부 프록시·동적 툴도 노출하지 않는다(ext__*·http_proxy 도 lively 게이트웨이 표면 — 클린룸이면 전부 차단).
   if (!incognito) {
     try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
