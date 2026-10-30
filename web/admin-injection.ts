@@ -22,7 +22,7 @@ const HANDLED = ['SessionStart', ...WORK_EVENTS, 'Stop'];
 // 이벤트 → 사람 말. 훅 목록의 묶음 제목이 이걸 쓴다(이벤트 이름은 옆에 그대로 붙인다 — 검색·대조용).
 const EVENT_LABEL: Record<string, string> = {
   SessionStart: '세션이 열릴 때', UserPromptSubmit: '메시지를 보낼 때마다', PreToolUse: '도구를 쓰기 직전',
-  PostToolUse: '도구를 쓴 직후', Stop: '턴이 끝날 때',
+  PostToolUse: '도구를 쓴 직후', Stop: '턴이 끝날 때', PreCompact: '대화를 압축하기 직전',
 };
 
 /** 세부 페이지 키 — URL `#/context/deliver/<key>` 와 같다. */

@@ -140,6 +140,25 @@ const INJECTIONS = new Set(["always", "recalled"]);
   ok("cwd 싱크 훅 4종이 기본 켜짐 + push 가 Stop·PostToolUse 양쪽에 걸림(#3787)");
 }
 
+// ── #5197 — 자동 소환의 주입 기록은 압축 때 비워진다. 그 판이 빠지면 압축으로 사라진 지식이 그 대화에 다시는 안 온다. ──
+//  PreCompact 여야 한다: 주입이 되는 세 하네스(claude·codex·cursor)에 다 있는 이벤트다(cursor 엔 PostCompact 가 없다).
+{
+  const recall = DEFAULT_HOOKS.find((x) => x.id === "knowledge-recall")!;
+  const compact = DEFAULT_HOOKS.find((x) => x.id === "knowledge-recall-compact");
+  assert.ok(compact, "압축 판 knowledge-recall-compact 가 시드에 없음");
+  assert.equal(compact!.event, "PreCompact", "압축 판은 PreCompact 여야 한다");
+  assert.equal(compact!.source_code, recall.source_code, "두 판은 **같은 소스**여야 한다 — 복제하면 기록 열쇠가 갈라져 비우기가 조용히 빗나간다");
+  assert.equal(compact!.harness, recall.harness, "두 판의 하네스가 다르면 주입만 되고 안 비워지는 하네스가 생긴다");
+  assert.equal(compact!.enabled, true, "압축 판이 기본 꺼짐이면 압축 뒤 재주입이 사라진다");
+  // 소환 블록은 프로젝트 규칙 앞에 나와야 한다. 러너가 출력을 sort·id 순으로 잇고, 합친 출력이 길면 하네스가 앞부분만 보여 준다
+  //  (claude 는 1만 자를 넘으면 앞 2KB 미리보기, cursor 어댑터는 앞 9,500자). 뒤에 붙으면 첫 턴 소환이 통째로 묻히는데,
+  //  기록에는 «넣음» 으로 남아 그 대화에 다시 오지 않는다(실측: 잘린 52건 중 소환이 묻힌 18건, 16건이 첫 사람 턴).
+  const agents = DEFAULT_HOOKS.find((x) => x.id === "project-agents-inject")!;
+  assert.ok(recall.sort < agents.sort || (recall.sort === agents.sort && recall.id < agents.id),
+    `knowledge-recall(sort ${recall.sort}) 이 project-agents-inject(sort ${agents.sort}) 뒤에 나온다 — 긴 AGENTS.md 에 묻힌다`);
+  ok("자동 소환 압축 판이 PreCompact · 같은 소스 · 같은 하네스 · 기본 켜짐 + 소환 블록이 프로젝트 규칙 앞(#5197)");
+}
+
 // ── 앞뒤가 있는 시드 훅 짝은 sort 가 **엄격히** 달라야 한다 — 러너는 같은 sort 를 동시에 돌린다. ──
 //  같으면 둘이 겹쳐 돌아, 같은 동기화 원장을 다시 쓰는 짝은 한쪽 기록이 덮이고(push-tool/pull-tool),
 //  프로젝트가 붙기 전에 받고·규칙을 싣는 짝은 첫 지시 턴을 빈손으로 지나간다(auto-bind 뒤의 둘).

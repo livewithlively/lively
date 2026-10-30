@@ -29,9 +29,11 @@ const EX_DIR = path.join(here, "..", "kit", "hooks", "examples");
 //  project-pull-tool: 같은 pull 을 PostToolUse 에서도 돈다(#3787 — 사람 지시 없이 오래 도는 세션은
 //   SessionStart·UserPromptSubmit 만으로는 턴 내내 새 자료를 못 받는다). 그 판은 최소 간격을 탄다.
 //   훅 본문이 stdin 의 hook_event_name 으로 두 판을 구분한다(PostToolUse 판은 변경 선검사·자기제한을 탄다).
+//  knowledge-recall-compact: 같은 소환 훅을 PreCompact 에서도 돈다(#5197 — 압축되면 그 대화의 주입 기록을 비운다).
 const SOURCE_ALIAS = {
   "project-push-tool": "project-push", "project-push-turn": "project-push", "project-push-start": "project-push",
   "project-pull-tool": "project-pull-turn",
+  "knowledge-recall-compact": "knowledge-recall",
 };
 
 // 예제 파일이 있는 훅만 대상 — 없는 훅(delegate-router 등)은 DB 캡처본을 그대로 둔다.
