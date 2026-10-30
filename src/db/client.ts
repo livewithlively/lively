@@ -271,10 +271,12 @@ export const one = async (db: Db, sql: string, params: unknown[] = []): Promise<
 
 // 단일 트랜잭션 헬퍼 — ingest/refresh/merge/sync 가 사용. store-core 의
 // connect→BEGIN→COMMIT/ROLLBACK→release 패턴과 동일(중도 실패 시 전체 롤백).
-export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+//  isolation 은 BEGIN 에 싣는다 — 위 체크아웃 래퍼가 BEGIN 바로 뒤에 테넌트 바인딩(SELECT)을 보내므로, fn 안의
+//  SET TRANSACTION 은 «이미 쿼리가 돌았다» 로 거절된다(#5172 앱 데이터 떠 두기 — 한 시점의 사본).
+export async function withTx<T>(fn: (client: pg.PoolClient) => Promise<T>, opts: { isolation?: "repeatable read" } = {}): Promise<T> {
   const client = await itemsPool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query(opts.isolation === "repeatable read" ? "BEGIN ISOLATION LEVEL REPEATABLE READ" : "BEGIN");
     const out = await fn(client);
     await client.query("COMMIT");
     return out;

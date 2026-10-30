@@ -71,35 +71,41 @@ export async function snapshotAppData(appId: string, reason: SnapshotReason, now
   }
   //  ★ 한 번 떠 두기 = 한 트랜잭션(격리 리뷰 2026-09-30). 묶음마다 따로 커밋하면 중간에 실패했을 때 앞 묶음만 남아
   //   «정상 떠 두기» 로 보이고, 그걸로 되돌리면 나머지 행이 지워진다(실측). 실패면 아무것도 남기지 않는다.
+  //  #5172 한 시점(REPEATABLE READ) — 조각 사이에 앱이 쓰는 행에 흔들리지 않아 «담은 행 = 표의 행» 을 확인할 수 있고,
+  //   표끼리도 같은 시점이라 외래키로 이어진 표를 함께 되돌릴 때 어긋나지 않는다.
   const counted = await withTx(async (client) => {
     const done: Array<{ table: string; rows: number }> = [];
     for (const { table, rel } of present) {
       done.push({ table, rows: await snapshotTable(client, appId, table, rel, reason, now) });
     }
     return done;
-  });
+  }, { isolation: "repeatable read" });
   return { ...out, taken_at: now.toISOString(), tables: counted };
 }
 
-/** 테이블 하나를 1,000행 묶음으로 떠 둔다(주어진 트랜잭션 안에서). 반환 = 행 수. */
+/** 테이블 하나를 1,000행 묶음으로 떠 둔다(주어진 트랜잭션 안에서). 반환 = 행 수.
+ *  #5172 가장 작은 id 부터 넘긴다 — 원래 id 로 넣기가 열려 0·음수 id 도 생긴다(종전엔 id > 0 부터라 그 행이 빠졌고,
+ *   그 사본으로 되돌리면 그 행이 지워졌다). 끝에 담은 행이 표의 행과 같은지 본다 — 같은 시점이라 정확히 같아야 한다. */
 async function snapshotTable(client: { query: typeof itemsPool.query }, appId: string, table: string, rel: string, reason: SnapshotReason, now: Date): Promise<number> {
-  let last = 0n, chunk = 0, rows = 0;
+  let last: string | null = null, chunk = 0, rows = 0;
   for (;;) {
-    const r = await client.query(
-      `WITH t AS (SELECT * FROM ${rel} WHERE id > $1 ORDER BY id LIMIT ${CHUNK}),
+    const r: { rows: Array<{ last?: unknown; n?: unknown }> } = await client.query(
+      `WITH t AS (SELECT * FROM ${rel} WHERE $1::bigint IS NULL OR id > $1::bigint ORDER BY id LIMIT ${CHUNK}),
             ins AS (
               INSERT INTO org_app_snapshot(app_id, taken_at, table_name, chunk, reason, row_count, rows)
               SELECT $2, $3, $4, $5, $6, (SELECT count(*) FROM t), (SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM t)
                WHERE $5 = 0 OR EXISTS (SELECT 1 FROM t)
               RETURNING row_count)
        SELECT (SELECT max(id) FROM t)::text AS last, (SELECT row_count FROM ins) AS n`,
-      [last.toString(), appId, now, table, chunk, reason]);
+      [last, appId, now, table, chunk, reason]);
     const n = Number(r.rows[0]?.n ?? 0);
     rows += n;
     if (n < CHUNK) break;
-    last = BigInt(String(r.rows[0]?.last ?? "0"));
+    last = String(r.rows[0]?.last);
     chunk++;
   }
+  const all = Number((await client.query(`SELECT count(*)::bigint AS n FROM ${rel}`)).rows[0]?.n ?? 0);
+  if (all !== rows) throw new Error(`'${table}' 떠 둔 행(${rows})이 표의 행(${all})과 다릅니다 — 떠 두기를 취소했습니다`);
   return rows;
 }
 

@@ -295,7 +295,7 @@ test("P10c 원래 id 로 넣기(#5172 E1·E3) — INSERT … OVERRIDING SYSTEM V
   assert.equal(moved.setsId, true);
   assert.deepEqual(moved.targets, ["conversations"]);
   assert.equal((await plan("INSERT INTO contacts (id, name) OVERRIDING SYSTEM VALUE VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name")).setsId, true);
-  // 시퀀스를 건드리지 않는 문장은 아니다 — OVERRIDING USER VALUE 는 넘긴 id 를 버리고 시퀀스를 쓴다
+  // 시퀀스를 맞출 필요가 없는 문장은 setsId 가 false 다 — OVERRIDING USER VALUE 는 넘긴 id 를 버리고 시퀀스를 쓴다
   for (const sql of ["INSERT INTO contacts (name) VALUES ('a')", "INSERT INTO contacts (id, name) OVERRIDING USER VALUE VALUES (5, 'a')",
     "UPDATE contacts SET name = 'b' WHERE id = 1", "DELETE FROM contacts WHERE id = 1", "SELECT * FROM contacts"]) {
     assert.equal((await plan(sql)).setsId, false, sql);

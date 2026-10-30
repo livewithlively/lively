@@ -164,10 +164,12 @@ export function assertMatchIdent(name: string): string {
   return assertIdent("column", n);
 }
 
-/** match 의 id 값 — 0 이상의 정수(숫자 또는 숫자 문자열)만. 아니면 DB 가 22P02 로 던져 500 이 된다 — 그 전에 400 으로 말한다. */
+/** match 의 id 값 — bigint 범위의 정수(숫자 또는 숫자 문자열)만. 아니면 DB 가 22P02·22003 으로 던져 500 이 된다 — 그 전에 400 으로 말한다.
+ *  #5172 원래 id 로 넣기(OVERRIDING SYSTEM VALUE)가 열려 0·음수·19자리 id 도 생긴다 — 그 행도 match 로 집을 수 있어야 한다. */
+const BIGINT_MIN = -(2n ** 63n), BIGINT_MAX = 2n ** 63n - 1n;
 export function assertMatchId(value: unknown): string {
   const v = typeof value === "number" ? (Number.isSafeInteger(value) ? String(value) : "") : typeof value === "string" ? value.trim() : "";
-  if (!/^\d{1,18}$/.test(v)) throw new HttpError(400, "match 의 id 는 0 이상의 정수여야 합니다");
+  if (!/^-?\d{1,19}$/.test(v) || BigInt(v) < BIGINT_MIN || BigInt(v) > BIGINT_MAX) throw new HttpError(400, "match 의 id 는 bigint 범위의 정수여야 합니다");
   return v;
 }
 

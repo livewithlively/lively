@@ -169,12 +169,18 @@ test("assertIdent — 쓰는 쪽(row·set)은 여전히 id·created_at 을 거�
   for (const r of ["id", "created_at"]) assert.throws(() => assertIdent("column", r), /예약된 컬럼명/);
 });
 
-test("assertMatchId — 0 이상의 정수(숫자·숫자 문자열)만 · 그 밖은 400", () => {
+test("assertMatchId — bigint 범위의 정수(숫자·숫자 문자열)만 · 그 밖은 400 (#5172 원래 id 의 0·음수·19자리도 집는다)", () => {
   assert.equal(assertMatchId(12), "12");
   assert.equal(assertMatchId("12"), "12");
   assert.equal(assertMatchId(" 7 "), "7");
   assert.equal(assertMatchId(0), "0");
-  for (const bad of [-1, 1.5, "1 or 1=1", "abc", "", null, undefined, {}, [1], "tmp1712345", Number.MAX_SAFE_INTEGER + 2, "1234567890123456789"]) {
+  assert.equal(assertMatchId(-5), "-5");
+  assert.equal(assertMatchId("-5"), "-5");
+  assert.equal(assertMatchId("1234567890123456789"), "1234567890123456789");
+  assert.equal(assertMatchId("9223372036854775807"), "9223372036854775807");      // bigint 최댓값 — 경계
+  assert.equal(assertMatchId("-9223372036854775808"), "-9223372036854775808");    // bigint 최솟값 — 경계
+  for (const bad of [1.5, "1 or 1=1", "abc", "", null, undefined, {}, [1], "tmp1712345", Number.MAX_SAFE_INTEGER + 2,
+    "9223372036854775808", "-9223372036854775809", "12345678901234567890", "--1", "+1", "1e3", "-"]) {
     assert.throws(() => assertMatchId(bad), (e: unknown) => (e as { status?: number }).status === 400, `받으면 안 되는 값: ${String(bad)}`);
   }
 });
