@@ -499,10 +499,13 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxm-cap > span { font-size: 13px; color: var(--muted); word-break: keep-all; }
 /* 바닥 한 판 — 지도 전체를 한 덩어리로 묶는다(카드 일곱이 허공에 흩어져 있던 것이 산만함의 절반이었다). */
 .cxm-floor { padding: 20px; border-radius: 16px; background: var(--bg-tint); }
-.cxm-lane { display: flex; align-items: stretch; gap: 0; overflow-x: auto; }
+.cxm-lane { display: flex; align-items: stretch; justify-content: center; gap: 0; overflow-x: auto; }
 
 /* ── 역(장소) — 흰 카드. 해부 4칸: 문패(유리 아이콘·이름·수) / 정의 / 실물 / 발치 ── */
-.cxm-st { flex: 1 1 0; min-width: 176px; display: flex; flex-direction: column; align-items: stretch;
+/*  #5147(원준 2026-10-30) — 넓은 창에서 늘어날 몫은 **역보다 관(기계가 선 구간)** 이 더 갖는다. 종전엔 역만 늘고 관은
+    134px 고정이라, 흰 카드는 쓸데없이 길어지고 기계 칩과 화살표는 카드 사이에 끼어 «어디를 거쳐 가는지» 가 안 읽혔다.
+    역 : 관 = 3 : 2 로 늘리되 역은 340px, 관은 300px 에서 멈추고, 남는 폭은 양옆으로 비운다(justify-content: center). */
+.cxm-st { flex: 3 1 0; min-width: 176px; max-width: 340px; display: flex; flex-direction: column; align-items: stretch;
   padding: 14px 14px 12px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--surface);
   text-decoration: none; color: inherit; transition: border-color .15s, box-shadow .15s; }
 .cxm-st:hover { border-color: var(--blue); box-shadow: 0 4px 14px color-mix(in srgb, var(--ink) 8%, transparent); }
@@ -524,9 +527,10 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .cxm-empty { font-size: 11.5px; color: var(--muted); text-align: center; word-break: keep-all; }
 
 /* 실물 ① 외부 앱 — **공식 서비스 로고**(svc-icons .svc-tile). 글자 한 자로 흉내내지 않는다(원준 2026-08-21 그 지적). */
-.cxm-svts { display: grid; grid-template-columns: repeat(3, 30px); gap: 8px; justify-content: center; align-content: center; height: 100%; }
-.cxm-svts .svc-tile { width: 30px; height: 30px; border-radius: 9px; }
-.cxm-svts .svc-tile svg { width: 18px; height: 18px; }
+/*  #5147 — 30px 에선 로고가 너무 작았다(원준 2026-10-30). 실물 칸 높이(118px) 안에 두 줄(40 + 10 + 40)이 든다. */
+.cxm-svts { display: grid; grid-template-columns: repeat(3, 40px); gap: 10px; justify-content: center; align-content: center; height: 100%; }
+.cxm-svts .svc-tile { width: 40px; height: 40px; border-radius: 11px; }
+.cxm-svts .svc-tile svg { width: 24px; height: 24px; }
 /* 빈 글이 든 칸은 격자를 푼다(#4233). 세 칸 격자(30px)에 글을 넣으면 한 칸에 갇혀 한 낱말씩 줄이 바뀐다. */
 .cxm-svts:has(.cxm-empty) { display: flex; align-items: center; justify-content: center; padding: 0 6px; }
 /* 실물 ② 자료 — 출처별 원문 수(자료 앱 나무와 같은 숫자). */
@@ -546,21 +550,10 @@ a.ctx-preview-t:hover { color: var(--blue); }
   height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .cxm-kn-t { font-size: 11.5px; font-weight: 800; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cxm-kn-m { font-size: 11px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
-/* 실물 ④ AI 세션 — 대화 한 토막. 답하는 쪽에 그 AI 의 마크가 선다. */
-.cxm-sess { display: flex; flex-direction: column; gap: 6px; justify-content: center; height: 100%; }
-.cxm-sess-u { align-self: flex-end; max-width: 88%; padding: 5px 9px; border-radius: 9px 9px 2px 9px;
-  background: var(--bg-tint-2); font-size: 11px; font-weight: 700; color: var(--ink); }
-.cxm-sess-row { display: flex; align-items: flex-start; gap: 6px; }
-.cxm-sess-ai { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
-  background: var(--bg-tint); font-style: normal; font-size: 9px; font-weight: 800; color: var(--muted-head); }
-.cxm-sess-ai svg { display: block; width: 12px; height: 12px; }
-.cxm-sess-a { min-width: 0; padding: 5px 9px; border-radius: 9px 9px 9px 2px; border: 1px solid var(--line);
-  background: var(--bg); font-size: 11px; color: var(--ink-sub); line-height: 1.45; }
-.cxm-sess-ref { display: inline-block; margin-left: 2px; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px;
-  background: var(--bg); font-style: normal; font-size: 9.5px; font-weight: 800; color: var(--blue); white-space: nowrap; }
+/* 실물 ④ AI 세션 — 이 계정에 연결된 AI 의 로고(#5147). 외부 앱과 같은 .cxm-svts 격자를 쓴다. */
 
 /* ── 관(선로) + 기계 칩 ── */
-.cxm-duct { flex: none; width: 134px; position: relative; }
+.cxm-duct { flex: 2 1 0; min-width: 134px; max-width: 300px; position: relative; }
 .cxm-wire { position: absolute; left: -2px; right: -2px; top: calc(50% - 1px); height: 3px; border-radius: 2px; }
 .cxm-wire.is-still { background: repeating-linear-gradient(90deg, var(--line-net-2) 0 8px, transparent 8px 14px); }
 /*  도는 구간 — 파선이 오른쪽으로 흐른다. 장식 모션이 아니라 **상태의 표현**이라 이 규칙만 애니메이션을 갖는다. */
@@ -571,9 +564,10 @@ a.ctx-preview-t:hover { color: var(--blue); }
 @keyframes cxm-flow { from { background-position: 0 0; } to { background-position: 22px 0; } }
 .cxm-arr { position: absolute; right: -3px; top: calc(50% - 6px); width: 13px; height: 13px;
   fill: none; stroke: var(--node-blue-soft); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.cxm-duct-c { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; }
+.cxm-duct-c { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex;
+  width: clamp(116px, 66%, 172px); }   /* 관이 넓어지면 기계 칩도 함께 커진다(#5147) */
 /*  기계 — 어두운 판 위 밝은 글자(--chip-dark 는 라이트·다크 양쪽에서 '떠 있는 판'이다, ui-design-system-v2 §2.7). */
-.cxm-mc { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 116px;
+.cxm-mc { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%;
   padding: 10px 8px 9px; border-radius: 11px; background: var(--chip-dark); color: var(--on-fill);
   text-align: center; text-decoration: none; box-shadow: 0 4px 14px rgba(var(--shadow-ink), .14);
   transition: box-shadow .15s, transform .15s; }
@@ -873,13 +867,13 @@ a.cxr-row .cxr-t { white-space: nowrap; }
 
 /*  창이 좁아지면 **관을 먼저 줄인다**(정보가 가장 적은 칸) — 역 넷이 먼저 눌리면 실물이 잘린다.
     1280·1180 실측에서 각각 40px·140px 씩 넘치던 것이 이 두 단계로 0 이 된다. */
-@media (max-width: 1400px) { .cxm-duct { width: 112px; } .cxm-st { min-width: 168px; } }
+@media (max-width: 1400px) { .cxm-duct { min-width: 112px; } .cxm-st { min-width: 168px; } }
 /*  ⚠ 좁아질 때 **이름은 절대 줄이지 않는다** — 처음엔 이름·수가 한 줄이라 1180 에서 「지.」·「AI …」로 잘렸다
     (실측). 이름은 그 역의 정체다. 그래서 문패를 두 줄로 접는다: [아이콘 이름] / [수]. */
 @media (max-width: 1240px) {
-  .cxm-duct { width: 96px; }
+  .cxm-duct { min-width: 96px; }
   .cxm-st { min-width: 156px; padding: 12px 12px 10px; }
-  .cxm-mc { width: 104px; }
+  .cxm-duct-c { width: 104px; }
   .cxm-st-h { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 8px; align-items: center; min-height: 0; }
   .cxm-st-gi { width: 24px; height: 24px; grid-row: 1; }
   .cxm-st-t { grid-column: 2; grid-row: 1; }
