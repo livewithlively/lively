@@ -276,8 +276,8 @@ export const livCapabilities: Capability[] = [
         if (!v.ok) {
           if (v.reason === "admin-only") throw new HttpError(403, "그 자격은 본인이 넣을 수 없습니다 — 관리자가 통합 자격으로만 넣습니다");
           if (v.reason === "no-master-key") throw new HttpError(409, "이 게이트웨이는 자격을 안전하게 보관할 수 없습니다(마스터키 미설정) — 운영자에게 알려주세요");
-          throw new HttpError(400, v.reason === "bad-kind"
-            ? "vault_kind 형식 오류(소문자·숫자·_ 1~40자)" : "vault_scope 형식 오류(영숫자·._:- 120자 이내)");
+          throw new HttpError(400, v.reason === "no-kind" ? "vault_kind 가 필요합니다"
+            : v.reason === "bad-kind" ? "vault_kind 형식 오류(소문자·숫자·_ 1~40자)" : "vault_scope 형식 오류(영숫자·._:- 120자 이내)");
         }
         const ask = {
           at: new Date().toISOString(), kind: "secret" as const,

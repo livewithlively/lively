@@ -65,7 +65,7 @@ export function askTargetChoice(input: Record<string, unknown>):
 
 export type VaultAskVerdict =
   | { ok: true; vault_kind: string; vault_scope: string }
-  | { ok: false; reason: "bad-kind" | "bad-scope" | "admin-only" | "no-master-key" };
+  | { ok: false; reason: "no-kind" | "bad-kind" | "bad-scope" | "admin-only" | "no-master-key" };
 
 /**
  * 리브가 요청자 본인 금고의 이 칸을 요청해도 되는가 — me_credential_set 이 거절할 칸은 여기서도 거절한다.
@@ -73,7 +73,7 @@ export type VaultAskVerdict =
  */
 export function vaultAskVerdict(kind: unknown, scope: unknown, secretsEnabled: boolean): VaultAskVerdict {
   const v = selfCredentialTargetVerdict(kind, scope);
-  if (!v.ok) return { ok: false, reason: v.reason === "no-kind" ? "bad-kind" : v.reason };
+  if (!v.ok) return { ok: false, reason: v.reason };
   if (!secretsEnabled) return { ok: false, reason: "no-master-key" };
   return { ok: true, vault_kind: v.kind, vault_scope: v.scope_key };
 }
@@ -187,6 +187,8 @@ export function askStillOpen(
     //  이미 차 있던 칸을 다시 묻는 건 **교체** 요청이다(토큰 재발급). 값이 있다는 것만으로 닫으면 그 칸은 영영 안 뜬다 —
     //   요청 뒤에 채워졌을 때만 끝난 일로 본다. 시각을 모르면 종전처럼 «차 있으면 끝» 으로 읽는다.
     //   updated_at 은 DB 드라이버가 Date 로 줄 수 있다 — 문자열로 바꿔 파싱하면 밀리초가 잘려 같은 초의 저장을 놓친다.
+    //   ask.at 은 앱 시계, updated_at 은 DB 시계다. DB 시계가 뒤처지면 요청 직후 다른 경로로 채운 값이 «요청 전» 으로 읽혀 칸이 남는다
+    //   — 리브 입력칸으로 넣으면 put 이 요청을 직접 지우므로 주 흐름은 영향이 없다.
     const ms = (v: unknown): number => (v == null || v === "" ? NaN : new Date(v as string).getTime());
     const asked = ms(ask?.at), filled = ms(row.updated_at);
     return Number.isFinite(asked) && Number.isFinite(filled) ? filled < asked : false;

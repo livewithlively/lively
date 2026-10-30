@@ -35,7 +35,6 @@ import {
   askTargetVerdict, askStillOpen, askTargetChoice, vaultAskVerdict, vaultAskLabel, askTargetOf, livSecretPutPlan,
   type AskTargetCollector,
 } from "./liv-secret.js";
-import { selfCredentialTargetVerdict } from "../credentials/member-secret-rules.js";
 
 // 마스터키 없는 게이트웨이로 고정한다 — 핸들러 시험(V4)이 409 를 기대한다.
 delete process.env.CONNECTOR_SECRET_KEY;
@@ -190,16 +189,8 @@ t("[V8] 금고 칸은 요청 뒤에 채워졌을 때만 닫는다", () => {
   assert.equal(askStillOpen({ collector_id: 1, field: "token" }, [col()], [row({})]), true);
 });
 
-t("[V9] me_credential_set 의 대상 판정과 같은 함수다", () => {
-  assert.deepEqual(selfCredentialTargetVerdict("", ""), { ok: false, reason: "no-kind" });
-  assert.deepEqual(selfCredentialTargetVerdict(" AWS_ROLE_ARN", ""), { ok: false, reason: "admin-only" });
-  assert.deepEqual(selfCredentialTargetVerdict("Slack_Bot_Token", " T1 "), { ok: true, kind: "slack_bot_token", scope_key: "T1" });
-  for (const [k, sc] of [["aws_role_arn", ""], ["bad kind!", ""], ["github_pat", "a b"], ["github_pat", "h.example.com"]] as const) {
-    const a = selfCredentialTargetVerdict(k, sc);
-    const b = vaultAskVerdict(k, sc, true);
-    assert.equal(a.ok, b.ok, `${k}/${sc}`);
-    if (!a.ok && !b.ok) assert.equal(a.reason, b.reason, `${k}/${sc}`);
-  }
+t("[V9] scope 만 주고 kind 를 빠뜨리면 형식 오류가 아니라 «kind 없음» 이다", () => {
+  assert.deepEqual(vaultAskVerdict("", "T1", true), { ok: false, reason: "no-kind" });
 });
 
 // ── 핸들러 — 거절은 DB 에 닿기 전에 난다(그래서 DB 없이 잰다) ─────────────────
@@ -212,17 +203,17 @@ t("[V9] me_credential_set 의 대상 판정과 같은 함수다", () => {
   const rejects = (cap: typeof ask, input: Record<string, unknown>, status: number, label: string) =>
     assert.rejects(() => cap.handler(input, user) as Promise<unknown>, (e: any) => e?.status === status, label);
 
-  await ta("[H1] 둘 다 / 둘 다 없음 → 400", async () => {
-    await rejects(ask, { collector_id: 1, field: "token", vault_kind: "slack_bot_token" }, 400, "둘 다");
-    await rejects(ask, { label: "x" }, 400, "둘 다 없음");
-  });
-  await ta("[H2] 금고 대상 형식 위반 → 400 · 관리자 전용 kind → 403", async () => {
-    await rejects(ask, { vault_kind: "bad kind!" }, 400, "kind 형식");
-    await rejects(ask, { vault_kind: "github_pat", vault_scope: "a b" }, 400, "scope 형식");
-    await rejects(ask, { vault_kind: "aws_role_arn" }, 403, "관리자 전용");
-  });
-  await ta("[H3] 마스터키 미설정 → 409(수집기 대상과 같은 답)", async () => {
-    await rejects(ask, { vault_kind: "slack_bot_token" }, 409, "마스터키");
+  await ta("[H1] 요청 거절의 상태코드 — 대상 배타 400 · 형식 400 · 관리자 전용 403 · 마스터키 미설정 409", async () => {
+    const cases: Array<[Record<string, unknown>, number, string]> = [
+      [{ collector_id: 1, field: "token", vault_kind: "slack_bot_token" }, 400, "둘 다"],
+      [{ label: "x" }, 400, "둘 다 없음"],
+      [{ vault_scope: "T1" }, 400, "kind 없음"],
+      [{ vault_kind: "bad kind!" }, 400, "kind 형식"],
+      [{ vault_kind: "github_pat", vault_scope: "a b" }, 400, "scope 형식"],
+      [{ vault_kind: "aws_role_arn" }, 403, "관리자 전용"],
+      [{ vault_kind: "slack_bot_token" }, 409, "마스터키(수집기 대상과 같은 답)"],
+    ];
+    for (const [input, status, label] of cases) await rejects(ask, input, status, label);
   });
   await ta("[H4] me_credential_set 도 같은 판정으로 거절한다 — 공백 낀 관리자 전용 kind 포함", async () => {
     await rejects(meSet, { kind: " aws_role_arn", secret: "x" }, 403, "공백 우회");
