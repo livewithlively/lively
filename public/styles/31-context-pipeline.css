@@ -1447,15 +1447,67 @@ a.cxc-name:hover { color: var(--blue); }
 .dlv-token-b { flex: 1; min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 8px; font-size: 13px; color: var(--ink-sub); }
 .dlv-token-b b { color: var(--ink); font-weight: 700; }
 
-/* 커스텀 훅 — 모노 이름 + 하네스·매처. 기타 이벤트 페이지는 두 칸으로 흘린다. */
+/* 커스텀 훅 — 전체 폭 한 줄씩(#5159 후속): 이름(모노) + 조건 / 하는 일 한 줄 · 오른쪽에 출처 배지 + 켜짐.
+   작업 중처럼 이벤트가 여럿이면 이벤트마다 묶음 제목(.dlv-hooks-g)이 선다. */
 .dlv-hooks { display: flex; flex-direction: column; }
-.dlv-hooks-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; padding-top: 6px; padding-bottom: 6px; }
-.dlv-hook { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; padding: 7px 0; border-top: 1px solid var(--line-row); min-width: 0; }
-.dlv-hooks > .dlv-hook:first-child { border-top: 0; }
-.dlv-hooks-2 > .dlv-hook:nth-child(2) { border-top: 0; }
-.dlv-hook-id { font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
-.dlv-hook-m { font-size: 12px; color: var(--muted-head); overflow-wrap: anywhere; }
-.dlv-hook.off .dlv-hook-id { color: var(--ink-sub); }
+.dlv-hooks-g { display: flex; align-items: center; gap: 8px; margin: 14px 0 2px; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+  font-size: 13px; font-weight: 800; color: var(--ink); }
+.dlv-hooks-g:first-child { margin-top: 2px; }
+.dlv-hook { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line-row); min-width: 0; }
+.dlv-hooks > .dlv-hook:first-child, .dlv-hooks-g + .dlv-hook { border-top: 0; }
+.dlv-hook-b { flex: 1 1 auto; min-width: 0; }
+.dlv-hook-t { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.dlv-hook-id { flex: none; font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); overflow-wrap: anywhere; }
+.dlv-hook-m { min-width: 0; font-size: 12px; color: var(--muted-head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlv-hook-s { margin-top: 1px; font-size: 13px; color: var(--ink-sub); word-break: keep-all; }
+.dlv-hook-a { flex: none; display: flex; align-items: center; gap: 8px; }
+.dlv-hook-st { min-width: 2.2em; font-size: 12.5px; font-weight: 700; color: var(--green-ink, var(--ink)); text-align: right; }
+.dlv-hook-st.off { color: var(--muted); font-weight: 600; }
+.dlv-hook.off .dlv-hook-id, .dlv-hook.off .dlv-hook-s { color: var(--muted); }
+/* 출처·성질 배지 — 낮은 대비의 알약. is-warn 은 주의(자동승인). */
+.dlv-tag { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-tint);
+  font-size: 11.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; }
+.dlv-tag.is-warn { border-color: transparent; background: var(--bg-note); color: var(--coral); }
+/* 세션 종료 「언제 뜨나」 — 세 단계를 한 줄로(넓을 때). */
+.dlv-steps-row { flex-direction: row; flex-wrap: wrap; gap: 4px 28px; }
+.dlv-steps-row > li { flex: 1 1 200px; }
+/* 작업 중 편집 칸 — 셋이면 마지막 하나는 한 줄을 다 쓴다. */
+.dlv-grid-2 > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* MCP 도구 — 검색 + 전체 폭 목록. 줄 = 이름(모노)·표시 이름 / 설명 한 줄 · 오른쪽에 성질 + 스위치. */
+/* 목록 머리 — 찾기 칸 + 정렬 세그먼트(사용 많은 순 · 이름순) + 횟수 뜻. */
+.dlv-lbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 0 0 8px; }
+.dlv-search { flex: 1 1 260px; min-width: 0; box-sizing: border-box; }
+.dlv-seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-tint); }
+.dlv-seg-b { height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: none; font: inherit; font-size: 12.5px; font-weight: 700;
+  color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.dlv-seg-b[aria-pressed="true"] { background: var(--bg); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+.dlv-seg-b:disabled { opacity: .45; cursor: default; }
+.dlv-lbar-n { font-size: 12px; color: var(--muted-head); white-space: nowrap; }
+.dlv-uses { min-width: 4.5em; font-size: 12.5px; font-weight: 700; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dlv-uses:empty { display: none; }
+.dlv-tools { display: flex; flex-direction: column; }
+.dlv-tool { border-top: 1px solid var(--line-row); min-width: 0; }
+.dlv-tools > .dlv-tool:first-child { border-top: 0; }
+.dlv-tool[hidden] { display: none; }
+.dlv-tool-main { display: flex; align-items: center; gap: 12px; padding: 9px 0; min-width: 0; }
+.dlv-tool-b { flex: 1 1 auto; min-width: 0; }
+.dlv-tool-n { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none;
+  font: inherit; text-align: left; color: var(--ink); cursor: pointer; }
+.dlv-tool-n.is-static { cursor: default; }
+.dlv-tool-n code { flex: none; font: 700 12.5px/1.5 "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--ink); }
+.dlv-tool-n span { min-width: 0; font-size: 12.5px; color: var(--muted-head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.dlv-tool-n:hover code { color: var(--blue); }
+.dlv-tool-s { margin-top: 1px; font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dlv-tool-a { flex: none; display: flex; align-items: center; gap: 10px; }
+.dlv-tool-m { font-size: 12px; color: var(--muted-head); white-space: nowrap; }
+.dlv-tool.off .dlv-tool-n code, .dlv-tool.off .dlv-tool-s { color: var(--muted); }
+.dlv-sel { height: 30px; font-size: 12.5px; }
+.dlv-chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; cursor: pointer; }
+.dlv-chk input { margin: 0; }
+.dlv-tool-more { margin: 0 0 10px; padding: 8px 12px; border-left: 2px solid var(--line); }
+.dlv-tool-more[hidden] { display: none; }
+.dlv-tool-desc { margin: 0 0 8px; font-size: 12.5px; color: var(--ink-sub); white-space: pre-wrap; word-break: keep-all; }
 
 /* 외부 맥락 툴 — 접두어 추가 칩 */
 .dlv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
@@ -1496,8 +1548,10 @@ a.cxc-name:hover { color: var(--blue); }
   .dlv-nav-i { flex: none; min-height: 40px; }
   .dlv-nav-t, .dlv-nav-m { white-space: nowrap; }
   .dlv-nav-i.flow + .dlv-nav-i.flow::before { display: none; }
-  .dlv-grid-2, .dlv-hooks-2 { grid-template-columns: minmax(0, 1fr); }
-  .dlv-hooks-2 > .dlv-hook:nth-child(2) { border-top: 1px solid var(--line-row); }
+  .dlv-grid-2 { grid-template-columns: minmax(0, 1fr); }
+  /* 도구 줄 — 오른쪽 조작이 아래 줄로 내려간다. */
+  .dlv-tool-main { flex-wrap: wrap; row-gap: 6px; }
+  .dlv-tool-a { flex: 1 1 100%; min-width: 0; flex-wrap: wrap; row-gap: 6px; }
 }
 @media (max-width: 640px) {
   .dlv-ph { flex-wrap: wrap; }
