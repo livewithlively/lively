@@ -230,7 +230,9 @@ try {
     ui: { pages: [{ key: "main", title: "x", entry: "ui/index.html" }] } }) }, { path: "ui/index.html", content: "<p>x</p>" }];
   await cap("org_app_install").handler({ source: { kind: "inline", files: raceFiles } }, admin, ctx);
   const rsql = (text, params) => cap("store_sql").handler({ sql: text, params }, { userId: "pgt-admin", appId: "snap-race" }, ctx);
-  await rsql("INSERT INTO big(v) SELECT 'x' || g FROM generate_series(1, 300000) g");
+  for (let k = 0; k < 3; k++) {                                          // 30만 행 — 문장 5초 상한 안쪽으로 나눠 넣는다(느린 CI)
+    await rsql("INSERT INTO big(v) SELECT 'x' || g FROM generate_series($1::int, $2::int) g", [k * 100000 + 1, (k + 1) * 100000]);
+  }
   await rsql("INSERT INTO small(n) SELECT g FROM generate_series(1, 5) g");
   const smallRel = qualifiedAppTable(SHARED_APP_SCHEMA, "snap-race", "small");
   const ddl = new pg.Client({ connectionString: dsnFor(DB) }); await ddl.connect();
