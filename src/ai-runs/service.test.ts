@@ -125,6 +125,9 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
     memberFacts: async (m) => (m.startsWith("app-server:") ? { active: false, elevated: false } : w.members[m] ?? { active: true, elevated: false }),
+    //  «MCP 만» 값(필수 의존성) — 기본은 종전 작업. 필요한 시험이 덮어 쓴다(withMcpOnly · withJobMcpOnly).
+    mcpOnly: async () => false,
+    jobMcpOnly: async () => false,
   };
   return { w, d };
 }
@@ -348,13 +351,13 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
 // ── S5c 작업 접수 → 작업 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다) ──
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, mcpOnly: false };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   const homeless = agentJobOfRun({ ...base, homeless: true, sharedSeat: false }, o);
   assert.deepEqual(homeless, {
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
     model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true, sharedSeat: false,
-    appInstructions: null,
+    appInstructions: null, mcpOnly: false,
   });
   //  #5082 — 앱 판 지시도 그대로 옮긴다(빠지면 그 작업은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다).
   assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appInstructions: "판 지시" }, o).appInstructions, "판 지시");
@@ -1117,6 +1120,288 @@ function withInstructions(d: AiRunDeps, o: { missing?: boolean } = {}): Asked[] 
   assert.deepEqual(w.llm[1]!.messages!.map((m) => m.content), ["요약해", "답1", "다시"], "앞 대화를 엮은 채로");
   assert.equal(asked.length, 2); assert.equal(asked[1]!.job, "summarize", "작업 이름은 앞 실행 것");
   ok("R20 이어받는 단발 — 지금 판의 앱 판 지시를 다시 읽어 앞 system 뒤에(작업 이름은 앞 실행 것)");
+}
+
+// ══ 앱 AI 작업의 «라이블리 MCP 만»(매니페스트 ai.mcp_only) — 접수(사양 S4 · S6 · S9~S16 · S12b · S13b) ══
+//  가짜 판 읽기: on 에 든 작업 이름만 «MCP 만» — on 을 바꾸면 «그 사이 판이 바뀜». 부른 것(앱 · 판을 고르는 사람 · 작업)을 적는다.
+//  가짜 작업 행 읽기: 접수된 차례(101, 102 …)대로 그 작업에 실린 값.
+//  이게 틀리면: 선언한 작업이 내장 도구를 연 채 돌거나, 이어받기가 «MCP 만» 대화를 연 도구로 잇거나, 값을 모른 채 작업을 넣는다.
+type McpAsked = { app: string; who: Viewer; job: string };
+function withMcpOnly(d: AiRunDeps, names: string[] = ["summarize"]): { asked: McpAsked[]; on: Set<string> } {
+  const asked: McpAsked[] = [];
+  const on = new Set(names);
+  d.mcpOnly = async (a, who, job) => { asked.push({ app: a.id, who, job }); return on.has(job); };
+  return { asked, on };
+}
+function withJobMcpOnly(w: World, d: AiRunDeps): number[] {
+  const read: number[] = [];
+  d.jobMcpOnly = async (id) => { read.push(id); return w.submitted[id - 101]?.mcpOnly === true; };
+  return read;
+}
+//  한 사람이 여러 실행을 열어 둔다(기본 동시 상한 2).
+const ROOMY = (): Partial<World> => ({ policy: { ...DEFAULT_AI_RUN_POLICY, max_running_per_member: 20 } });
+const SUB = (): Partial<World> => ({ ...ROOMY(), settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+
+{
+  const { w, d } = world(ROOMY());
+  const m = withMcpOnly(d);
+  const u = appUser("alice", "crm");
+  const r = await submitRun({ prompt: "조사해", agent: true, job: "summarize" }, u, { source: "app-ui" }, d);
+  assert.equal(r.executor, "job");
+  assert.equal(w.submitted[0]!.mcpOnly, true, "부른 사람의 판에서 그 작업이 «MCP 만»");
+  assert.deepEqual(m.asked.map((a) => [a.app, a.job, a.who.userId]), [["crm", "summarize", "alice"]]);
+  m.on.clear();
+  await submitRun({ prompt: "조사해", agent: true, job: "summarize" }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[1]!.mcpOnly, false, "그 판의 목록에 없으면 false");
+  m.on.add("summarize");
+  await submitRun({ prompt: "조사해", agent: true }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[2]!.mcpOnly, false, "작업 이름이 없으면 false");
+  assert.equal(m.asked.length, 2, "작업 이름이 없는 실행은 판을 읽지 않는다");
+  ok("mcp_only S10 에이전트 실행 — 작업 이름이 부른 사람의 판에서 ai.mcp_only 에 있으면 «MCP 만» = true · 없으면 false · 작업 이름이 없으면 false(판을 읽지 않음)");
+}
+
+{
+  //  앱 주소 · 앱 서버로 들어온 호출은 그 주소의 판 — 앱 판 지시와 같은 사람 · 같은 주소로 고른다.
+  const { w, d } = world(ROOMY());
+  const m = withMcpOnly(d);
+  const instr = withInstructions(d);
+  const alice = appUser("alice", "crm");
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, alice, { source: "app-ui" }, d);
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, { ...alice, appAddress: "pub" } as LivelyUser, { source: "app-front" }, d);
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, { ...alice, appServer: true, appAddress: "draft" } as LivelyUser, { source: "app-server" }, d);
+  assert.deepEqual(m.asked.map((a) => [a.app, a.who.userId, a.who.address ?? null]), [["crm", "alice", null], ["crm", "alice", "pub"], ["crm", "alice", "draft"]]);
+  const viewer = (v: Viewer) => [v.userId, [...(v.scopes ?? [])], v.address ?? null];
+  assert.deepEqual(m.asked.map((a) => viewer(a.who)), instr.map((a) => viewer(a.who)), "앱 판 지시와 같은 판을 고른다");
+  assert.deepEqual(w.submitted.map((j) => j.mcpOnly), [true, true, true]);
+  ok("mcp_only S4 부른 사람의 판 — 앱 판 지시와 같은 사람 · 같은 주소(주소 없음 · 공개 주소 · 앱 서버의 초안 주소)로 고른다");
+}
+
+{
+  const { w, d } = world(SUB());
+  d.mcpOnly = async () => { throw new HttpError(404, "앱을 찾을 수 없습니다"); };
+  await fails(submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d), 404);
+  assert.equal(w.submitted.length, 0, "값을 모른 채 작업을 보내지 않는다");
+  ok("mcp_only S6 부른 사람이 앱을 볼 수 없으면(판 읽기 404) 접수하지 않는다");
+}
+
+{
+  const { w, d } = world(SUB());
+  const m = withMcpOnly(d);
+  await submitRun({ prompt: "조사해", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  w.jobs.get(101)!.status = "running";
+  assert.equal((await syncRun(w.runs.get(1)!, d))!.status, "running");
+  doneJob(w, 101, C1);
+  assert.equal((await syncRun((await d.store.getAiRun(1))!, d))!.status, "done");
+  assert.equal(w.submitted[0]!.mcpOnly, true);
+  assert.equal(m.asked.length, 1, "도는 동안 · 끝날 때 다시 고르지 않는다");
+  ok("mcp_only S11 값은 접수 때 한 번 읽는다");
+}
+
+{
+  const { w, d } = world(SUB());
+  withMcpOnly(d);
+  withJobMcpOnly(w, d);
+  await submitRun({ prompt: "요약", job: "summarize", schema }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  assert.equal(w.submitted[0]!.bare, true, "단발 + 구독 → 작업 컨테이너(관측 장치)");
+  assert.equal(w.submitted[0]!.mcpOnly, false, "단발은 원래 도구가 없다");
+  doneJob(w, 101, C1, "형식 밖 글");
+  assert.equal((await syncRun(w.runs.get(1)!, d))!.retries, 1, "형식 재시도가 나갔다(관측 장치)");
+  assert.equal(w.submitted[1]!.bare, true);
+  assert.equal(w.submitted[1]!.mcpOnly, false, "단발의 형식 재시도도");
+  ok("mcp_only S9 단발 실행은 작업 이름이 «MCP 만» 이어도 작업 접수 값 false(형식 재시도도)");
+}
+
+{
+  //  (가) 앞 작업이 «MCP 만» — 그 사이 판이 목록에서 뺐어도 true(같은 대화를 연 도구로 잇지 않는다).
+  const { w, d } = world(SUB());
+  const m = withMcpOnly(d);
+  const read = withJobMcpOnly(w, d);
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "조사해", job: "summarize", agent: true }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[0]!.mcpOnly, true);
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  m.on.clear();
+  await submitRun({ prompt: "근거가 틀렸다 — 다시", resume_run_id: 1 }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[1]!.resumeJobId, 101, "앞 작업의 대화를 잇는다(관측 장치)");
+  assert.equal(w.submitted[1]!.mcpOnly, true, `앞 작업 값이 true 면 true — 읽은 작업: ${JSON.stringify(read)}`);
+  ok("mcp_only S12(가) 이어받는 에이전트 작업 — 앞 작업이 «MCP 만» 이면 지금 판이 뺐어도 «MCP 만»");
+}
+
+{
+  //  (나) 앞 작업은 «MCP 만» 이 아니었는데 그 사이 앱이 선언했다 — 앞 실행의 작업 이름이 지금 부른 사람의 판의 목록에 있으면 true.
+  const { w, d } = world(SUB());
+  const m = withMcpOnly(d, []);
+  withJobMcpOnly(w, d);
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "조사해", job: "summarize", agent: true }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[0]!.mcpOnly, false);
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  m.on.add("summarize");
+  await submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[1]!.resumeJobId, 101, "앞 작업의 대화를 잇는다(관측 장치)");
+  assert.equal(w.submitted[1]!.mcpOnly, true, "앱이 나중에 선언했어도 열린 채 잇지 않는다");
+  const last = m.asked.at(-1)!;
+  assert.deepEqual([last.app, last.job, last.who.userId], ["crm", "summarize", "alice"], "앞 실행의 작업 이름을 지금 부른 사람의 판에서 본다");
+  //  둘 다 아니면 false — 앞 작업 false · 지금 판에도 없다.
+  const n = world(SUB());
+  withMcpOnly(n.d, []);
+  withJobMcpOnly(n.w, n.d);
+  await submitRun({ prompt: "조사해", job: "summarize", agent: true }, u, { source: "app-ui" }, n.d);
+  doneJob(n.w, 101, C1);
+  await syncRun(n.w.runs.get(1)!, n.d);
+  await submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, n.d);
+  assert.equal(n.w.submitted[1]!.resumeJobId, 101);
+  assert.equal(n.w.submitted[1]!.mcpOnly, false, "둘 다 아니면 false");
+  ok("mcp_only S12(나) 이어받는 에이전트 작업 — 앞 작업이 아니어도 앞 실행의 작업 이름이 지금 판의 목록에 있으면 «MCP 만» · 둘 다 아니면 false");
+}
+
+{
+  //  앞 실행에 작업 이름이 없으면 (나)는 없다 — 무엇을 물어도 «MCP 만» 인 판이어도 false.
+  const { w, d } = world(SUB());
+  let asked = 0;
+  d.mcpOnly = async () => { asked++; return true; };
+  withJobMcpOnly(w, d);
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "조사해", agent: true }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[0]!.mcpOnly, false, "작업 이름이 없는 실행(관측 장치)");
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  await submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[1]!.resumeJobId, 101);
+  assert.equal(w.submitted[1]!.mcpOnly, false);
+  assert.equal(asked, 0, "S10 작업 이름이 없는 실행은 판을 읽지 않는다");
+  ok("mcp_only S12 앞 실행에 작업 이름이 없으면 (나)는 없다 — 앞 작업 값(false) 그대로 · 판을 읽지 않음");
+}
+
+{
+  //  앞 작업의 값을 못 읽으면 값을 모른 채 넣지 않는다. 지금 판은 목록에서 뺐다 — 앞 작업 값을 읽어야만 정해지는 자리.
+  const { w, d } = world(SUB());
+  const m = withMcpOnly(d);
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "조사해", job: "summarize", agent: true }, u, { source: "app-ui" }, d);
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  m.on.clear();
+  d.jobMcpOnly = async () => { throw new Error("작업 행의 «MCP 만» 칸을 읽지 못했습니다(가짜)"); };
+  await assert.rejects(submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, d));
+  assert.equal(w.runs.size, 1, "실행 행을 만들지 않는다");
+  assert.equal(w.submitted.length, 1, "작업을 보내지 않는다");
+  ok("mcp_only S12b 이어받기에서 앞 작업의 값을 못 읽으면 접수 실패 — 실행 행 · 작업 없음");
+}
+
+{
+  //  원래 작업 true · 그 사이 판이 뺐다 → 재시도도 true.
+  const { w, d } = world(SUB());
+  const m = withMcpOnly(d);
+  const read = withJobMcpOnly(w, d);
+  await submitRun({ prompt: "요약", job: "summarize", agent: true, schema }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  m.on.clear();
+  doneJob(w, 101, C1, "형식 밖 글");
+  assert.equal((await syncRun(w.runs.get(1)!, d))!.retries, 1, "형식 재시도가 나갔다(관측 장치)");
+  assert.equal(w.submitted[1]!.resumeJobId, 101);
+  assert.equal(w.submitted[1]!.mcpOnly, true, `원래 작업에 실린 값 그대로 — 읽은 작업: ${JSON.stringify(read)}`);
+  //  원래 작업 false · 그 사이 판이 선언했다 → 재시도도 false(재시도는 원래 작업 값 그대로).
+  const r = world(SUB());
+  const rm = withMcpOnly(r.d, []);
+  withJobMcpOnly(r.w, r.d);
+  await submitRun({ prompt: "요약", job: "summarize", agent: true, schema }, appUser("alice", "crm"), { source: "app-ui" }, r.d);
+  rm.on.add("summarize");
+  doneJob(r.w, 101, C1, "형식 밖 글");
+  await syncRun(r.w.runs.get(1)!, r.d);
+  assert.equal(r.w.submitted.length, 2, "형식 재시도가 나갔다(관측 장치)");
+  assert.equal(r.w.submitted[1]!.mcpOnly, false, "지금 판이 «MCP 만» 이어도 원래 작업 값");
+  ok("mcp_only S13 형식 재시도 — 원래 작업에 실린 «MCP 만» 값 그대로(양방향)");
+}
+
+{
+  const { w, d } = world(SUB());
+  withMcpOnly(d);
+  await submitRun({ prompt: "요약", job: "summarize", agent: true, schema }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  d.jobMcpOnly = async () => { throw new Error("작업 행의 «MCP 만» 칸을 읽지 못했습니다(가짜)"); };
+  doneJob(w, 101, C1, "형식 밖 글");
+  await syncRun(w.runs.get(1)!, d).catch(() => undefined);   // 끝 상태만 본다(동기화가 알리는 길은 사양 밖)
+  const row = (await d.store.getAiRun(1))!;
+  assert.equal(w.submitted.length, 1, "재시도 작업을 보내지 않는다");
+  assert.equal(row.status, "failed", "재시도 없이 실패로 끝난다");
+  assert.equal((row.result as { text?: string } | null)?.text, "형식 밖 글", "원문은 결과에 남는다");
+  ok("mcp_only S13b 형식 재시도 때 원래 작업의 값을 못 읽으면 재시도를 보내지 않고 실패(원문은 결과에)");
+}
+
+{
+  //  롤 창 — 새 게이트웨이가 마이그레이션보다 먼저 받는 동안 작업 행에 칸이 아직 없다(42703). 까닭 글은 무엇이 실려 기다려야 하는지 밝힌다.
+  const caught = async (p: Promise<unknown>): Promise<HttpError> => {
+    try { await p; } catch (e) { assert.ok(e instanceof HttpError, `HttpError 를 기대 — ${String(e)}`); return e; }
+    return assert.fail("거절되지 않았다");
+  };
+  const roll = (): HttpError => Object.assign(new HttpError(500, 'column "mcp_only" of relation "agent_job" does not exist'), { code: "42703" });
+  const cases: Array<{ what: string; mcp: boolean; instr: boolean; has: RegExp[]; not: RegExp[] }> = [
+    { what: "«MCP 만» 만", mcp: true, instr: false, has: [/도구 제한/], not: [/앱 지시/] },
+    { what: "앱 판 지시만", mcp: false, instr: true, has: [/앱 지시/], not: [/도구 제한/] },
+    { what: "둘 다", mcp: true, instr: true, has: [/도구 제한/, /앱 지시/], not: [] },
+  ];
+  for (const c of cases) {
+    const { w, d } = world(SUB());
+    withMcpOnly(d, c.mcp ? ["summarize"] : []);
+    if (c.instr) withInstructions(d);
+    w.submitThrows = roll();
+    const err = await caught(submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d));
+    assert.equal(err.status, 503, `${c.what}: ${err.message}`);
+    const row = w.runs.get(1)!;
+    assert.equal(row.status, "failed", c.what);
+    assert.match(row.error ?? "", /배포 중/, `${c.what} — 실행 행에는 DB 원문 대신 «배포 중» 까닭`);
+    assert.doesNotMatch(row.error ?? "", /does not exist/, c.what);
+    for (const re of c.has) {
+      assert.match(err.message, re, `${c.what} — 503 이 무엇이 실렸는지 밝힌다`);
+      assert.match(row.error ?? "", re, `${c.what} — 실행 행이 무엇이 실렸는지 밝힌다`);
+    }
+    for (const re of c.not) {
+      assert.doesNotMatch(err.message, re, `${c.what} — 싣지 않은 것은 말하지 않는다(503)`);
+      assert.doesNotMatch(row.error ?? "", re, `${c.what} — 싣지 않은 것은 말하지 않는다(실행 행)`);
+    }
+  }
+  //  «MCP 만» 도 지시도 없는 작업 — 같은 실패라도 원래 오류 그대로 · «MCP 만» 작업이라도 없는 칸(42703)이 아닌 실패는 그대로.
+  const { w, d } = world(SUB());
+  const m = withMcpOnly(d, []);
+  const u = appUser("alice", "crm");
+  w.submitThrows = roll();
+  await fails(submitRun({ prompt: "x", agent: true }, u, { source: "app-ui" }, d), 500, /does not exist/);
+  await fails(submitRun({ prompt: "x", agent: true, job: "summarize" }, u, { source: "app-ui" }, d), 500, /does not exist/);
+  m.on.add("summarize");
+  w.submitThrows = new HttpError(429, "작업 대기열이 찼습니다");
+  await fails(submitRun({ prompt: "x", agent: true, job: "summarize" }, u, { source: "app-ui" }, d), 429, /대기열/);
+  ok("mcp_only S14 롤 창 — 실린 것이 있는 작업만 503 · 까닭 글이 «도구 제한» / «앱 지시» / 둘 다를 밝힌다 · 실행 행은 실패(배포 중) · 둘 다 없는 작업 · 다른 실패는 원래 오류");
+}
+
+{
+  const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false };
+  const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
+  assert.equal(agentJobOfRun({ ...base, mcpOnly: true }, o).mcpOnly, true, "빠지면 «MCP 만» 작업이 내장 도구를 연 채 돈다");
+  assert.equal(agentJobOfRun({ ...base, mcpOnly: false }, o).mcpOnly, false);
+  ok("mcp_only S15 작업 접수 → 작업 행이 «MCP 만» 값을 그대로 옮긴다");
+}
+
+{
+  //  값을 읽는 자리 · 접수 입력의 «MCP 만» 값은 필수 — 배선이 빠진 고정값은 타입 검사가 막는다(빠진 배선이 조용히 «도구 열림» 이 되지 않게).
+  const { w, d } = world(SUB());
+  const needsDeps = (_: AiRunDeps): void => undefined;
+  needsDeps(d);
+  // @ts-expect-error 판 읽기(mcpOnly)가 빠졌다
+  needsDeps({ ...d, mcpOnly: undefined });
+  // @ts-expect-error 작업 행 읽기(jobMcpOnly)가 빠졌다
+  needsDeps({ ...d, jobMcpOnly: undefined });
+  //  고정값의 기본(false 를 돌려주는 자리) — 설치된 매니페스트가 선언했어도 값은 판 읽기가 정한다.
+  d.getApp = async (id) => app(id, { ai: { jobs: [{ name: "summarize" }], mcp_only: ["summarize"] } });
+  await submitRun({ prompt: "x", agent: true, job: "summarize" }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  assert.equal(w.submitted.length, 1, "작업을 보냈다(관측 장치)");
+  assert.equal(w.submitted[0]!.mcpOnly, false);
+  const needsJob = (_: SubmitJobInput): void => undefined;
+  needsJob(w.submitted[0]!);
+  // @ts-expect-error 접수 입력의 «MCP 만» 값도 필수다
+  needsJob({ ...w.submitted[0]!, mcpOnly: undefined });
+  ok("mcp_only S16 값을 읽는 자리 · 접수 입력의 «MCP 만» 값은 필수(빠지면 타입 검사) · false 를 돌려주는 자리면 false");
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);

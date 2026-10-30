@@ -185,3 +185,44 @@ test("L1b ai.instructions 가 링크로 묶음 밖 파일을 가리키면 거절
   await rm(d, { recursive: true });
   await rm(outside, { recursive: true });
 });
+
+// ── ai.mcp_only — 라이블리 MCP 만 쓰는 작업(사양 S1 · S3) — 선언한 작업 이름인지는 설치 · 판 저장(적재) 때 본다 ──
+//  이게 틀리면: 오타가 조용히 무시돼 그 작업이 내장 도구(셸 · 파일 · 웹)를 연 채 돈다.
+const MCP_ONLY = (mcpOnly: unknown) => MANIFEST({ ai: { jobs: [{ name: "answer" }, { name: "lookup" }], mcp_only: mcpOnly } });
+const is400 = (e: unknown): boolean => (e as { status?: unknown }).status === 400;
+const mcpOnlyOfLoaded = (m: unknown): unknown => (m as { ai?: { mcp_only?: unknown } }).ai?.mcp_only;
+
+test("mcp_only S1 ai.jobs 에 선언한 이름만이면 적재된다 · 선언이 그대로 실린다(작업을 접수할 때 읽는 값)", async () => {
+  for (const names of [["answer"], ["lookup", "answer"]]) {
+    const d = await stage({ "lively-app.json": MCP_ONLY(names) });
+    const loaded = await loadAppPackage(d);
+    assert.deepEqual(mcpOnlyOfLoaded(loaded.manifest), names);
+    await rm(d, { recursive: true });
+  }
+});
+
+test("mcp_only S1 선언 안 된 이름이 하나라도 있으면 400 — 오타 · 작업 선언 없음 · 크론 작업 키(ai.jobs 가 아니다)", async () => {
+  const cases: Array<[string, string]> = [
+    ["선언한 이름 사이의 오타 하나", MCP_ONLY(["answer", "answr"])],
+    ["선언 안 한 이름 하나뿐", MCP_ONLY(["summarize"])],
+    ["ai.jobs 없이 mcp_only 만", MANIFEST({ ai: { mcp_only: ["answer"] } })],
+    ["크론 작업 키는 ai.jobs 의 작업 이름이 아니다", MANIFEST({
+      jobs: [{ key: "agg", schedule: "0 * * * *", run: { kind: "headless", prompt: "x" } }],
+      ai: { jobs: [{ name: "answer" }], mcp_only: ["agg"] },
+    })],
+  ];
+  for (const [what, manifest] of cases) {
+    const d = await stage({ "lively-app.json": manifest });
+    await assert.rejects(() => loadAppPackage(d), is400, what);
+    await rm(d, { recursive: true });
+  }
+});
+
+test("mcp_only S3 없거나 빈 목록이면 종전대로 적재된다", async () => {
+  for (const ai of [{ jobs: [{ name: "answer" }] }, { jobs: [{ name: "answer" }], mcp_only: [] }]) {
+    const d = await stage({ "lively-app.json": MANIFEST({ ai }) });
+    const loaded = await loadAppPackage(d);
+    assert.deepEqual(mcpOnlyOfLoaded(loaded.manifest) ?? [], [], JSON.stringify(ai));
+    await rm(d, { recursive: true });
+  }
+});

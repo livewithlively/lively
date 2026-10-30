@@ -367,6 +367,103 @@ await t("claudeJobArgv — 훅 끔 · 멤버 MCP 안 실음 · MCP 자리표 · 
   assert.ok(!a.includes("--setting-sources"), "지시가 없으면 종전 그대로(작업 폴더 설정을 읽는다)");
 });
 
+// ── 앱 AI 작업의 «라이블리 MCP 만»(매니페스트 ai.mcp_only) — 하네스 인자(사양 S17~S20 · S23) ──
+//  이게 틀리면: «MCP 만» 작업이 셸 · 파일 · 웹 같은 내장 도구(작업 폴더 설정의 명령까지)를 연 채 돌거나, 라이블리 MCP 까지 잃거나, 선언하지 않은 작업이 도구를 잃는다.
+/** 그 깃발들과 각각 바로 뒤 인자를 뺀 나머지 — «그것 말고는 종전 그대로» 를 대조한다. */
+const without = (a: string[], ...flags: string[]): string[] =>
+  flags.reduce((acc, f) => { const i = acc.indexOf(f); return i < 0 ? acc : [...acc.slice(0, i), ...acc.slice(i + 2)]; }, a);
+const count = (a: string[], flag: string): number => a.filter((x) => x === flag).length;
+const RESUME = "0a1b2c3d-0000-4000-8000-000000000001";
+
+await t("mcp_only S17 claudeJobArgv — «MCP 만» 은 `--tools` 바로 뒤 빈 문자열로 내장 도구를 모두 끈다 · 라이블리 MCP 자리표 · 그 밖의 인자는 종전 그대로(S23 설정 출처 말고)", () => {
+  const o = { model: "sonnet", resume: RESUME, mcp: true };
+  const a = claudeJobArgv({ ...o, mcpOnly: true });
+  const at = a.indexOf("--tools");
+  assert.ok(at > 0, JSON.stringify(a));
+  assert.equal(a[at + 1], "", "빈 문자열 인자 하나 — 도구 이름을 하나도 주지 않는다");
+  assert.equal(count(a, "--tools"), 1);
+  assert.equal(a[a.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER, "라이블리 MCP 는 그대로 싣는다");
+  for (const flag of ["-p", "--dangerously-skip-permissions", "--strict-mcp-config"]) assert.ok(a.includes(flag), flag);
+  assert.equal(a[a.indexOf("--output-format") + 1], "stream-json");
+  assert.equal(a[a.indexOf("--settings") + 1], JSON.stringify({ disableAllHooks: true }), "훅 끔 그대로");
+  assert.equal(a[a.indexOf("--model") + 1], "sonnet");
+  assert.equal(a[a.indexOf("--resume") + 1], RESUME);
+  assert.deepEqual(without(a, "--tools", "--setting-sources"), claudeJobArgv(o), "«MCP 만» 이 아닌 작업과 같다");
+  const n = claudeJobArgv({ mcp: true, mcpOnly: true });
+  assert.equal(n[n.indexOf("--tools") + 1], "");
+  assert.deepEqual(without(n, "--tools", "--setting-sources"), claudeJobArgv({ mcp: true }), "모델 · 이어받기가 없어도");
+});
+
+await t("mcp_only S18 claudeJobArgv — 단발(bare)은 종전처럼 도구 끔 + MCP 없음 · «MCP 만» 이 겹쳐도 `--tools` 는 한 번(그 밖은 단발 인자 그대로 · S23 설정 출처 말고)", () => {
+  for (const extra of [{}, { model: "sonnet" }, { resume: RESUME }]) {
+    const bare = claudeJobArgv({ ...extra, mcp: false, bare: true });
+    const both = claudeJobArgv({ ...extra, mcp: false, bare: true, mcpOnly: true });
+    assert.equal(count(both, "--tools"), 1, JSON.stringify(both));
+    assert.equal(both[both.indexOf("--tools") + 1], "");
+    assert.ok(!both.includes("--mcp-config"), "단발은 MCP 없음");
+    assert.deepEqual(without(both, "--setting-sources"), bare, JSON.stringify(extra));
+  }
+});
+
+await t("mcp_only S19 claudeJobArgv — «MCP 만» 이 아닌 에이전트 작업엔 `--tools` 가 없다(무회귀)", () => {
+  for (const o of [{ mcp: true }, { mcp: true, mcpOnly: false }, { mcp: true, mcpOnly: undefined }, { mcp: true, system: true, mcpOnly: false }, { mcp: true, model: "sonnet", resume: RESUME, mcpOnly: false }]) {
+    assert.ok(!claudeJobArgv(o).includes("--tools"), JSON.stringify(o));
+  }
+  assert.deepEqual(claudeJobArgv({ mcp: true, mcpOnly: false }), claudeJobArgv({ mcp: true }), "false 는 안 준 것과 같다");
+});
+
+await t("mcp_only S20 claudeJobArgv — 앱 판 지시와 함께 쓰면 지시 파일 자리표 · 설정 출처 user(한 번) · `--tools \"\"` 가 모두 실린다(단발 · MCP 작업 모두)", () => {
+  for (const o of [{ mcp: true }, { mcp: false, bare: true }]) {
+    const s = claudeJobArgv({ ...o, system: true, mcpOnly: true });
+    assert.equal(s[s.indexOf("--append-system-prompt-file") + 1], SYSTEM_PROMPT_PLACEHOLDER, JSON.stringify(o));
+    assert.equal(count(s, "--setting-sources"), 1, JSON.stringify(s));
+    assert.equal(s[s.indexOf("--setting-sources") + 1], "user", JSON.stringify(o));
+    assert.equal(count(s, "--tools"), 1, JSON.stringify(o));
+    assert.equal(s[s.indexOf("--tools") + 1], "", JSON.stringify(o));
+  }
+  const s = claudeJobArgv({ mcp: true, system: true, mcpOnly: true });
+  assert.equal(s[s.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+  assert.deepEqual(without(s, "--tools"), claudeJobArgv({ mcp: true, system: true }), "지시 인자는 지시만 있을 때와 같다");
+});
+
+await t("mcp_only S23 claudeJobArgv — «MCP 만» 은 앱 판 지시가 없어도 `--setting-sources user`(작업 폴더 설정이 명령을 못 돌리게) · 지시와 함께면 한 번 · 지시만이면 종전대로 · 둘 다 없으면 없다", () => {
+  const cases: Array<[Parameters<typeof claudeJobArgv>[0], number]> = [
+    [{ mcp: true, mcpOnly: true }, 1],
+    [{ mcp: true, mcpOnly: true, model: "sonnet", resume: RESUME }, 1],
+    [{ mcp: true, mcpOnly: true, system: true }, 1],
+    [{ mcp: false, bare: true, mcpOnly: true }, 1],
+    [{ mcp: false, bare: true, mcpOnly: true, system: true }, 1],
+    [{ mcp: true, system: true }, 1],
+    [{ mcp: true }, 0],
+    [{ mcp: true, mcpOnly: false }, 0],
+    [{ mcp: false, bare: true }, 0],
+  ];
+  for (const [o, want] of cases) {
+    const a = claudeJobArgv(o);
+    assert.equal(count(a, "--setting-sources"), want, `${JSON.stringify(o)} → ${JSON.stringify(a)}`);
+    if (want) assert.equal(a[a.indexOf("--setting-sources") + 1], "user", JSON.stringify(o));
+  }
+});
+
+await t("mcp_only S17·S23 판(진짜 노드) — 받은 하네스 인자의 `--tools` 와 빈 문자열 · 설정 출처를 빠뜨리지 않고 넘긴다 · 라이블리 MCP 는 자리표 대신 0600 파일로", async () => {
+  const record = path.join(tmp, "mo1.json");
+  const harness = claudeJobArgv({ mcp: true, mcpOnly: true }).slice(1);   // 판이 받는 그대로(맨 앞 claude 만 가짜 하네스로)
+  const g = await gateway({ mode: "ok", timeoutMs: 20_000, record, bootExtra: { argv: [process.execPath, FAKE, ...harness] } });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const h = JSON.parse(fs.readFileSync(record, "utf8"));
+    const at = h.argv.indexOf("--tools");
+    assert.ok(at >= 0, JSON.stringify(h.argv));
+    assert.equal(h.argv[at + 1], "", "빈 인자가 빠지면 다음 인자가 도구 목록이 된다");
+    assert.equal(h.argv[h.argv.indexOf("--setting-sources") + 1], "user");
+    assert.equal(h.argv.length, harness.length, "인자 수 그대로");
+    assert.notEqual(h.argv[h.argv.indexOf("--mcp-config") + 1], MCP_CONFIG_PLACEHOLDER);
+    assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
+    assert.equal(h.mcpMode, 0o600);
+    assert.equal(g.seen.results.length, 1);
+  } finally { await g.close(); }
+});
+
 await t("R6 결과를 올리는 동안에도 박동한다 — 게이트웨이가 결과를 늦게 받아도 «응답 없음» 으로 끊기지 않게", async () => {
   const record = path.join(tmp, "r6.json");
   const g = await gateway({ mode: "ok", timeoutMs: 20_000, resultDelayMs: 1_200, record });

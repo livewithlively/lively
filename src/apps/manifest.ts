@@ -128,10 +128,16 @@ const aiJobSchema = z.object({
 //    (ai 는 passthrough 라 옛 코어는 이 칸을 모르는 채 무시한다 — web.root 와 같은 까닭).
 //   ★ 여기는 모양(글 → 글)만 본다. 뜻(선언한 작업 이름인가 · 묶음 안 상대 경로인가 · 파일 · 크기 · 글자)은 설치 · 판 저장 때 loader 가 본다 —
 //    저장된 매니페스트를 다시 읽는 자리(동의 · 인스턴스 · 워커)가 많아, 옛 코어가 저장한 매니페스트 하나로 그 자리들이 400 으로 막히지 않게(격리 리뷰 N4 · #5050 과 같다).
+//  작업별 «라이블리 MCP 만»(ai.mcp_only — 작업 이름 목록). 에이전트 작업은 권한 묻기 없이 하네스 내장 도구(셸 · 파일 · 웹)를 다 쥐고 돌아, 실행 계정이
+//   읽을 수 있는 박스의 다른 폴더까지 닿는다. 앱 토큰으로 좁힌 도구만 쓰게 해야 하는 앱이 그 작업 이름을 여기 적으면 판이 내장 도구를 끄고 MCP 만 싣는다
+//   — 작업 폴더 설정도 읽지 않는다(도구를 꺼도 .claude/settings*.json 의 apiKeyHelper 등은 셸을 돌린다 · runner.claudeJobArgv).
+//   instructions 와 같은 자리 · 같은 까닭으로 ai 바로 아래에 두고, 뜻(선언한 작업 이름인가)은 loader 가 본다.
 const aiSchema = z.object({
   jobs: z.array(aiJobSchema).max(32).default([]),
   instructions: z.record(z.string(), z.string()).optional()
     .describe("작업 이름(ai.jobs[].name) → 앱 묶음 안 지시 파일(예: { \"answer\": \"ai/answer.md\" } · 64KiB 이하 · 비지 않은 UTF-8 글 · NUL 없이). 그 작업으로 도는 AI 실행에 게이트웨이가 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 그 파일을 시스템 지시로 싣는다 — 접수 때 한 번 읽는다. 에이전트 작업은 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다)"),
+  mcp_only: z.array(z.string()).max(32).optional()
+    .describe("내장 도구 없이 라이블리 MCP 도구만 쓰는 작업 이름(ai.jobs[].name) 목록(예: [\"answer\"]). 그 작업으로 도는 에이전트 작업은 하네스 내장 도구(셸 · 파일 읽기 · 쓰기 · 웹)를 끄고 앱 토큰의 라이블리 MCP 도구(permissions.tools · 동의로 좁혀진 것)만 본다 — 실행 계정이 읽을 수 있는 박스의 다른 폴더에 닿지 않는다. 접수 때 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 읽는다. 형식 재시도는 앞 작업의 값을 그대로 쓰고, 이어받기는 앞 작업이나 지금 판 중 하나라도 MCP 만이면 MCP 만이다. 작업 이름(job) 없이 부른 실행 · 목록에 없는 작업 이름으로 부른 실행에는 걸리지 않는다 — 앱 코드가 job 을 정해 부를 것. 단발은 원래 도구가 없다. 작업 폴더의 설정(.claude/settings*.json · CLAUDE.md)도 읽지 않는다(구독 실행은 실행 계정 홈의 ~/.claude 는 그대로 읽는다 — 같은 계정으로 도는 다른 작업이 고칠 수 있는 자리다)"),
 }).passthrough().optional();
 
 const uiPageSchema = z.object({

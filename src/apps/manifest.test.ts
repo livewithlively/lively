@@ -409,3 +409,39 @@ test("I2 다시 읽기는 뜻을 따지지 않는다 — 선언 안 한 작업 �
 test("I4 지시는 ai 바로 아래 자리다 — ai.jobs[] 안(strict)에 두면 거절(이 칸을 모르는 옛 코어가 ai 바로 아래는 무시한다 · 롤백 안전)", () => {
   assert.throws(() => parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer", instructions: "ai/answer.md" }] } }), /ai\.jobs\.0/);
 });
+
+// ── ai.mcp_only — 라이블리 MCP 만 쓰는 작업 이름(사양 S2 · S3) ──
+//  모양(글 목록 · 32개까지)만 본다 — 선언한 작업 이름인지(뜻)는 설치 · 판 저장 때 loader 가 본다(loader.test mcp_only S1).
+//  이게 틀리면: 저장된 매니페스트를 다시 읽는 자리가 400 으로 막히거나, 모양이 틀린 선언이 저장돼 그 작업이 도구를 연 채 돈다.
+const withMcpOnly = (mcpOnly: unknown): Record<string, unknown> => ({ ...base(), ai: { jobs: [{ name: "answer" }], mcp_only: mcpOnly } });
+const mcpOnlyIn = (m: unknown): unknown => (m as { ai?: { mcp_only?: unknown } }).ai?.mcp_only;
+const manifestErr = (e: unknown): boolean => e instanceof HttpError && e.status === 400 && /매니페스트|형식|mcp_only/.test(e.message);
+const names = (n: number): string[] => Array.from({ length: n }, (_, i) => `job-${i}`);
+
+test("mcp_only S2 글 목록은 그대로 실린다 · 32개(경계-최대)까지 통과", () => {
+  assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly(["answer"]))), ["answer"]);
+  assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly(names(32)))), names(32));
+});
+
+test("mcp_only S2 33개(경계-위)면 매니페스트 오류", () => {
+  assert.throws(() => parseAppManifest(withMcpOnly(names(33))), manifestErr);
+});
+
+test("mcp_only S2 배열이 아니거나 글이 아닌 항목이 있으면 매니페스트 오류", () => {
+  for (const bad of ["answer", { answer: true }, 1, true, null]) {
+    assert.throws(() => parseAppManifest(withMcpOnly(bad)), manifestErr, `배열 아님: ${JSON.stringify(bad)}`);
+  }
+  for (const bad of [[1], [null], [["answer"]], [{ name: "answer" }], ["answer", 2]]) {
+    assert.throws(() => parseAppManifest(withMcpOnly(bad)), manifestErr, `글 아닌 항목: ${JSON.stringify(bad)}`);
+  }
+});
+
+test("mcp_only S2 선언 여부는 보지 않는다 — 선언 안 한 이름 · 작업 선언이 아예 없어도 저장된 그대로 읽힌다", () => {
+  assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { jobs: [], mcp_only: ["gone"] } })), ["gone"]);
+  assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { mcp_only: ["answer", "typo"] } })), ["answer", "typo"]);
+});
+
+test("mcp_only S3 없거나 빈 목록이면 종전대로 통과(«MCP 만» 작업 없음)", () => {
+  assert.deepEqual(mcpOnlyIn(parseAppManifest({ ...base(), ai: { jobs: [{ name: "answer" }] } })) ?? [], []);
+  assert.deepEqual(mcpOnlyIn(parseAppManifest(withMcpOnly([]))) ?? [], []);
+});

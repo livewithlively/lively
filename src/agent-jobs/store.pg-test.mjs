@@ -732,6 +732,38 @@ try {
     await cleanup();
   }
 
+  // ── I2. «라이블리 MCP 만»(ai.mcp_only) — MCP 만 쓰는 작업일 때만 적고 따로 읽는다 · 칸이 아직 없을 때(롤 창) ──────────
+  {
+    await cleanup();
+    const appJob = (who, extra = {}) => job(who, { appId: "crm", projectId: null, cwd: "/work/apps/crm", ...extra });
+    const m1 = await st.insertAgentJob(appJob("alice", { mcpOnly: true }), ROOMY);
+    const m0 = await st.insertAgentJob(job("plain"), ROOMY);
+    chk("MO1 «MCP 만» — 넣은 값 그대로 읽힌다 · 보통 작업은 false(칸 기본값) · 없는 id 는 false",
+      (await st.agentJobMcpOnly(m1.row.id)) === true && (await row(m1.row.id)).mcp_only === true
+        && (await st.agentJobMcpOnly(m0.row.id)) === false && (await row(m0.row.id)).mcp_only === false
+        && (await st.agentJobMcpOnly(2 ** 40)) === false);
+    chk("MO1b 행 읽기(COLS)는 «MCP 만» 칸을 싣지 않는다 — 롤 창에서 «없는 칸» 으로 깨지지 않게", !("mcp_only" in m1.row) && !("mcp_only" in (await st.getAgentJob(m1.row.id))),
+      JSON.stringify(Object.keys(m1.row)));
+    const all = await st.insertAgentJob(job("all", { accountMember: `${REQ}seat`, appId: "crm", projectId: null, cwd: "/work/apps/crm", sharedSeat: true, appInstructions: "공용 시트 지시", mcpOnly: true }), ROOMY);
+    chk("MO1c 공용 시트 표시 · 지시 · «MCP 만» 을 함께 넣어도 자리(값 번호)가 맞는다",
+      (await st.agentJobSharedSeat(all.row.id)) === true && (await st.agentJobAppInstructions(all.row.id)) === "공용 시트 지시" && (await st.agentJobMcpOnly(all.row.id)) === true);
+    await cleanup();
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS mcp_only`);
+    try {
+      const p0 = await st.insertAgentJob(job("roll"), ROOMY);
+      const read = await st.agentJobMcpOnly(p0.row.id);
+      let mcpInsert = null;
+      try { await st.insertAgentJob(appJob("x", { mcpOnly: true }), ROOMY); } catch (e) { mcpInsert = e; }
+      const claimed = await st.claimAgentJobs(WIDE, mint);
+      chk("MO2 칸이 없을 때 — 읽기 false · 보통 접수 · 자리 주기는 돈다 · «MCP 만» 접수만 42703(내장 도구를 연 채 넣지 않는다)",
+        read === false && claimed.some((g) => g.row.id === p0.row.id) && mcpInsert?.code === "42703",
+        JSON.stringify({ read, claimed: claimed.map((g) => g.row.id), code: mcpInsert?.code }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS mcp_only BOOLEAN NOT NULL DEFAULT false`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;

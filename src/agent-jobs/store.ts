@@ -108,6 +108,12 @@ export interface NewAgentJob {
    *  (runner.claudeJobArgv). 없으면 null · 생략.
    */
   appInstructions?: string | null;
+  /**
+   * 앱이 «라이블리 MCP 만» 으로 선언한 작업(매니페스트 ai.mcp_only) — 판이 내장 도구(셸 · 파일 · 웹)를 끄고 앱 토큰의 라이블리 MCP 만 싣는다
+   *  (runner.claudeJobArgv). 앱 AI 실행이 접수 때 부른 사람의 판에서 읽어 준다(이어받기 · 형식 재시도는 앞 작업 행 것).
+   *  필수다(homeless · sharedSeat 와 같은 까닭) — 접수하는 자리가 빠뜨리면 그 작업이 내장 도구를 연 채 돈다.
+   */
+  mcpOnly: boolean;
 }
 
 /**
@@ -126,10 +132,12 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     if (!room) return { full: { queued, running } };
     //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
     //  #5082 app_instructions 칸도 같은 까닭으로 지시가 있을 때만 적는다(APP_INSTRUCTIONS_COL 머리말).
+    //  mcp_only 칸도 같다 — MCP 만 쓰는 작업일 때만 적는다(MCP_ONLY_COL 머리말).
     const shared = j.sharedSeat === true;
     const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
-    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instr != null ? `, ${APP_INSTRUCTIONS_COL}` : ""}`;
-    const extraVals = `${shared ? ", true" : ""}${instr != null ? ", $16" : ""}`;
+    const mcpOnly = j.mcpOnly === true;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instr != null ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${instr != null ? ", $16" : ""}${mcpOnly ? ", true" : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
                                  resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
@@ -173,6 +181,23 @@ export async function agentJobAppInstructions(id: number): Promise<string | null
     return typeof t === "string" && t !== "" ? t : null;
   } catch (e) {
     if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * «라이블리 MCP 만» 표시(org_agent_job.mcp_only)도 COLS 에 넣지 않고 따로 읽는다(agentJobMcpOnly) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  MCP 만 쓰는 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) false 다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 그런 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 내장 도구를 연 채 돌지 않는다(닫힌 쪽). 부르는 쪽이 503 으로 다시 보내라고 한다.
+ */
+export const MCP_ONLY_COL = "mcp_only";
+export async function agentJobMcpOnly(id: number): Promise<boolean> {
+  if (!Number.isSafeInteger(id) || id < 1) return false;
+  try {
+    const r = await q(itemsPool, `SELECT ${MCP_ONLY_COL} AS m FROM org_agent_job WHERE id=$1`, [id]);
+    return r[0]?.m === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;   // undefined_column — 마이그레이션 전(머리말)
     throw e;
   }
 }
