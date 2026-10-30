@@ -25,7 +25,7 @@ export const knowledgeCapabilities: Capability[] = [
   ...reviewCapabilities,                // #783 수정 검토 큐 · #802 검토 카운트
   ...classificationInboxCapabilities,   // #982 미분류 인박스 · #1102 proposed 분류 인박스(정적, :name 보다 먼저)
   ...readNamedCapabilities,             // knowledge_get(/knowledge/:name)
-  ...authoringCapabilities,             // save · set_lifecycle · set_wiki · delete
+  ...authoringCapabilities,             // save · set_lifecycle · set_wiki · delete · set_title · set_fields · set_searchable
   ...classificationCapabilities,        // link_category · propose_category · link
   ...wikiUiNamedCapabilities,           // #592 :name 하위 경로(props-ui · comments)
   ...historyCapabilities,               // #1546 변경 이력(/knowledge/:name/history[/:audit_id] · /revert) — :name 하위라 무충돌

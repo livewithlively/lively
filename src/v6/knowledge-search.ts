@@ -40,7 +40,8 @@ function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: s
   //    고치고도 dev 에서 안 나아져서 잡았다. 지식 검색의 WHERE 는 이 함수 하나뿐이니 여기가 정본이다.)
   //   key 는 사람이 실제로 옮겨 적는 이름이다(위키링크 `[[key]]` · 주소 `#/k/<key>` · knowledge_get 인자).
   //   종전엔 key 로 찾으면 **그 key 를 본문에 인용한 다른 문서**만 나오고 정작 그 문서는 안 나왔다.
-  const wh: string[] = [grepWhere(["k.name", "k.title", "k.body_md"], plan, params), `k.lifecycle='active'`];
+  //  #5169 검색 제외(searchable=false)는 여기서 뺀다 — grep·count·하이브리드 렉시컬이 모두 이 자리를 지난다(벡터 쪽은 rrfSearch).
+  const wh: string[] = [grepWhere(["k.name", "k.title", "k.body_md"], plan, params), `k.lifecycle='active'`, `k.searchable`];
   if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
   if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
   //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위 — knowledgeCategoryRestriction). 후보를 고르는 이 자리에서 건다 —
@@ -213,7 +214,8 @@ async function rrfSearch(
   //   (렉시컬 채널만 미리 걸러도 되지만, 술어를 두 군데 쓰면 한쪽만 고치는 사본 결함이 생긴다 — 한 곳으로 모은다.)
   const lexWhere = grepWhereSql(plan, { ...opts, categories }, params);
   // 벡터 채널 WHERE — 같은 필터(+ 임베딩 보유 행만). params 공유.
-  const vecWh: string[] = [`k.lifecycle='active'`, `k.embedding_vector IS NOT NULL`];
+  //  #5169 검색 제외는 벡터가 없지만 술어로도 뺀다 — 비우기 전의 벡터가 남아 있어도 결과에 안 나오게(렉시컬 grepWhereSql 과 같은 규칙).
+  const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
   if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
   if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
   if (categories) vecWh.push(knowledgeInCategoriesSql(categories, params, "k"));
@@ -292,7 +294,8 @@ export async function findSimilarKnowledge(
     //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위) — 후보 단계에서 건다(아래 MATERIALIZED 갈래 · vecChannel 주석과 같은 까닭).
     const categories = await knowledgeCategoryRestriction(viewer, opts.categories);
     const params: unknown[] = [vecLiteral]; const qp = `$1::vector`;     // $1 = 쿼리 벡터(거리·유사도·정렬에 공유)
-    const wh: string[] = [`k.lifecycle='active'`, `k.embedding_vector IS NOT NULL`];
+    //  #5169 검색 제외는 이웃 후보에서 뺀다 — 자동 소환 훅(knowledge-recall)·⌘K «뜻 비슷»·문서의 관련 지식이 모두 이 길이다.
+    const wh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
     if (selfName) { params.push(selfName); wh.push(`k.name <> $${params.length}`); }
     if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
     if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
@@ -398,13 +401,14 @@ export async function findRecommendedKnowledge(
     //  벡터 인덱스의 ORDER BY … LIMIT 경로를 애초에 안 탄다(=근사탐색 사후필터가 아니라 정확 스캔) → 리콜 붕괴 없음.
     const vis = await knowledgeVisWhere(viewer, params);
     // 포함 조건 = (벡터 임계 통과) OR (같은 카테고리) — 카테고리는 임계 미달도 구제. score 로 정렬(가산점 반영), 동점은 최신순.
+    //  #5169 검색 제외는 뺀다 — 카테고리 구제는 벡터가 없어도 고르므로 술어가 없으면 그대로 섞인다(도메인 소환 훅 leaf 가 이 길).
     const sql = `
       SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
              ${simExpr}::float8 AS similarity,
              ${sharesExpr} AS shares_category,
              (COALESCE(${simExpr}, 0) + CASE WHEN ${sharesExpr} THEN ${boostP}::float8 ELSE 0 END)::float8 AS score
       FROM knowledge k
-      WHERE k.lifecycle='active' AND NOT (k.name = ANY(${exclP}))
+      WHERE k.lifecycle='active' AND k.searchable AND NOT (k.name = ANY(${exclP}))
         AND ( ${simExpr} >= ${minP} OR ${sharesExpr} )
         AND ${vis}
       ORDER BY score DESC, k.updated_at DESC

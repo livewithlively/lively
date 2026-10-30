@@ -35,11 +35,12 @@ export interface EmbeddingTarget {
 }
 
 // 지식: 제목+요약+본문(기존 동작 그대로). idCol='name', active 만.
+//  #5169 검색 제외(searchable=false)는 대상이 아니다 — 이름으로만 읽는 문서라 벡터를 쓸 곳이 없다(검색·유사·추천이 모두 뺀다).
 export const KNOWLEDGE_TARGET: EmbeddingTarget = {
   name: "knowledge",
   table: "knowledge",
   idCol: "name",
-  activeFilter: "lifecycle='active'",
+  activeFilter: "lifecycle='active' AND searchable",
   selectCols: "name, title, summary, body_md",
   buildText: (r) => embeddingInputText(r as { title?: string | null; summary?: string | null; body_md?: string | null }),
 };
@@ -212,11 +213,14 @@ export async function runEmbeddingBackfill(opts: {
       for (let i = 0; i < rows.length; i++) {
         const vec = vecs[i];
         if (!vec || !vec.length) continue;
-        await itemsPool.query(
-          `UPDATE ${target.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE ${target.idCol}=$1`,
+        //  쓰는 순간에도 대상인지 다시 본다(#5169) — 임베딩은 CPU 백엔드에서 배치당 수십 초가 걸려, 그 사이 대상에서 빠진 행
+        //   (검색 제외로 바뀌어 벡터를 비운 지식 · 보관된 지식)에 벡터를 도로 써 넣으면 아무도 다시 비우지 않는다.
+        const res = await itemsPool.query(
+          `UPDATE ${target.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now()
+             WHERE ${target.idCol}=$1 AND (${target.activeFilter})`,
           [(rows[i] as Record<string, unknown>)[target.idCol], toVectorLiteral(vec), provider.model],
         );
-        done++;
+        if (res.rowCount) done++;
       }
       opts.onProgress?.({ total: Math.max(total, done), done });
     }
@@ -369,6 +373,22 @@ export async function markEmbeddingPending(
     console.warn(`[embeddings] pending 마킹 실패(best-effort, 스윕으로 보강) ${target.name}#${id}: ${(e as Error)?.message}`);
   }
   if (nudge) nudgeAutoBackfill();
+}
+
+// 벡터 비우기(#5169 검색 제외) — markEmbeddingPending 과 같은 UPDATE 지만 뜻이 다르다: 다시 채우라는 신호가 아니라
+//  «이 행에는 벡터를 두지 않는다» 이다(대상 필터 activeFilter 가 이 행을 빼므로 스윕이 다시 채우지 않는다).
+//  그래서 임베딩 설정이 꺼져 있어도 비운다 — 예전에 켜져 있을 때 채운 벡터가 남으면 벡터를 쓰는 다른 곳(중복 탐지·분류
+//  어긋남)이 이 행을 계속 본다. best-effort: 벡터 칸이 없는 DB(임베딩 스키마 건너뜀)에선 할 일이 없다.
+export async function clearEmbedding(target: EmbeddingTarget, id: string | number): Promise<void> {
+  try {
+    await itemsPool.query(
+      `UPDATE ${target.table} SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL
+         WHERE ${target.idCol}=$1 AND embedding_vector IS NOT NULL`,
+      [id],
+    );
+  } catch (e) {
+    console.warn(`[embeddings] 벡터 비우기 실패(best-effort) ${target.name}#${id}: ${(e as Error)?.message}`);
+  }
 }
 
 // nudge — 방금 생긴 pending 을 10분 주기 스윕까지 안 기다리고 곧(디바운스) 드레인한다. arm-once(고정 지연):

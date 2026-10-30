@@ -34,6 +34,7 @@ const knowledgeListInput = {
   q: z.string().optional(),
   orderBy: z.enum(["name", "updated_at"]).optional(),
   is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
+  searchable: z.boolean().optional().describe("#5169 false 면 «검색 제외» 지식만(이름으로만 읽는 문서 — 검색·자동 소환에 안 나온다) · true 면 검색 대상만. 생략하면 둘 다"),
   limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 200) — 구 200 하드캡 해제(#709)"),
   offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — limit 과 함께 상한 너머 전량 순회(#709)"),
 };
@@ -41,7 +42,8 @@ type KnowledgeListInput = z.infer<z.ZodObject<typeof knowledgeListInput>>;
 export const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. uncategorized=true 면 미분류(어느 카테고리에도 안 뜨는 지식)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
+  description: "지식을 카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. uncategorized=true 면 미분류(어느 카테고리에도 안 뜨는 지식)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709). " +
+    "목록은 검색이 아니라서 «검색 제외»(searchable=false — 검색·자동 소환에 안 나오는 문서) 지식도 나온다 — searchable=false 로 그것만 고를 수 있다.",
   scope: "memory",
   input: knowledgeListInput,
   expose: {
@@ -62,6 +64,7 @@ export const knowledgeList: Capability = {
           q: query.q ? String(query.q) : undefined,
           orderBy: query.orderBy ? String(query.orderBy) : undefined,
           is_wiki: query.is_wiki != null ? (String(query.is_wiki) === "true" || String(query.is_wiki) === "1") : undefined,
+          searchable: query.searchable != null ? (String(query.searchable) === "true" || String(query.searchable) === "1") : undefined,   // #5169
           light: query.light != null ? (String(query.light) === "true" || String(query.light) === "1") : undefined,
           limit: query.limit ? Number(query.limit) : undefined,
           offset: query.offset ? Number(query.offset) : undefined,
@@ -108,7 +111,8 @@ export const knowledgeGrep: Capability = {
     "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +
     "OR·부분일치 등은 **POSIX 정규식**으로(예: `벡터|vector`, `task_\\w+`). " +
     "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
-    "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C).",
+    "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C). " +
+    "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 잡히지 않는다 — 그 문서 안의 낱말 찾기는 knowledge_list(category, q).",
   scope: "memory",
   input: knowledgeGrepInput,
   expose: {
@@ -170,7 +174,8 @@ export const knowledgeSearch: Capability = {
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
     "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본). " +
     "결과가 없거나 약하면(뜻도 멀고 낱말도 안 맞으면) 세션의 호출 응답에 collect_hint(가져올 곳)가 붙는다 — sources(아직 지식이 안 된 원문 자료 — source_get 으로 먼저 본다) " +
-    "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다).",
+    "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다). " +
+    "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 나오지 않는다(knowledge_get 으로 이름을 불러 읽는다).",
   scope: "memory",
   input: knowledgeSearchInput,
   // MCP + REST(/api/ui/knowledge/semantic) — 웹 지식탭의 '의미검색' 토글이 소비. grep 은 /knowledge/search(불변).
@@ -249,7 +254,8 @@ export const knowledgeSimilar: Capability = {
     "주어진 지식(name) 또는 텍스트(text)와 **의미적으로 가장 가까운** 지식을 코사인 유사도(0~1)로 찾는다. " +
     "신규 저장 전 **중복 확인**이나 관련 지식 탐색용. name 을 주면 그 지식의 저장된 임베딩을 재사용(자기 자신 제외), text 를 주면 즉시 임베딩한다(택일). " +
     "min_score(0~1) 이상만, 유사도 내림차순. **임베딩이 꺼져 있거나 대상에 임베딩이 없으면 빈 결과**(자연어/키워드 검색은 knowledge_search, 정확매칭은 knowledge_grep). " +
-    "knowledge_save 는 신규 저장 시 비슷한 지식이 있으면 응답 similar 로 자동 경고한다 — 이 도구는 저장 전에 미리 확인할 때.",
+    "knowledge_save 는 신규 저장 시 비슷한 지식이 있으면 응답 similar 로 자동 경고한다 — 이 도구는 저장 전에 미리 확인할 때. " +
+    "«검색 제외»(searchable=false) 지식은 후보에서 빠지고, 기준(name)으로 주면 벡터가 없어 빈 결과다.",
   scope: "memory",
   input: knowledgeSimilarInput,
   // REST 마운트는 knowledgeGet(/knowledge/:name) **앞**에 둬야 'similar'가 :name 으로 안 잡힌다(배열 순서 — semantic 과 동형).

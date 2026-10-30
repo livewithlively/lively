@@ -9,7 +9,7 @@ import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeGateFields, setKnowledgeWiki, deleteKnowledge,
   findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
   applyKnowledgeEdits, type KnowledgeEdit,
-  setKnowledgeTitle, sessionStampListId, KnowledgeExistsError, patchKnowledgeFields,
+  setKnowledgeTitle, sessionStampListId, KnowledgeExistsError, patchKnowledgeFields, setKnowledgeSearchable,
 } from "../../v6/knowledge-store.js";
 import { isJsonObject } from "../../v6/knowledge-fields.js";
 // #4824 증류 저장 — 저장 · 원본 연결 · 공개범위를 한 트랜잭션에서(사양 R6) · 증류 배치는 원본 없이 못 쓴다(R7).
@@ -83,6 +83,9 @@ const knowledgeSaveInput = {
     .describe("#592 폴더 노드 — true 면 트리 그룹핑용 폴더(title 필수, body_md 빈 문자열 허용). 미전송 시 기존값 보존."),
   parent_name: z.string().min(1).optional()
     .describe(`#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존. ${softCapHint(CAPS.parent_name)}`),
+  searchable: z.boolean().optional()
+    .describe("#5169 검색 제외 — false 면 이 지식은 knowledge_get(이름)·knowledge_list(카테고리)·트리·링크로만 읽히고, 검색(knowledge_search·knowledge_grep·knowledge_similar·추천)·자동 소환·임베딩에서 빠진다. "
+      + "같은 사실이 검색용 문서에 이미 있는 재집계 문서·색인처럼 «이름으로만 읽는» 문서를 만들 때 싣는다(만들 때부터 임베딩하지 않는다). 미전송 시 기존값 보존(신규 기본 true). 나중에 바꾸려면 knowledge_set_searchable."),
   mode: z.enum(["replace", "append", "edit"]).optional()
     .describe("#921/#1531 replace(기본)=body_md 로 전문 교체(종전 동작) · append=body_md('조각')를 기존 본문 끝에 덧붙임(구분 빈 줄은 서버가 정규화) · edit=edits 로 본문 **일부만** 정확일치 치환(문서 중간을 고칠 때). append·edit 는 기존 지식 전용(name 필수)."),
   // #1531 edit — 문서 중간을 고치면서 전문을 되보내지 않는 유일한 길. append 는 끝에만 붙는다.
@@ -164,6 +167,8 @@ export const knowledgeSave: Capability = {
         if (lifecycle && !["active", "pending"].includes(lifecycle)) throw new HttpError(400, "lifecycle 은 active|pending (신규 저장)");
         const category = b.category != null
           ? String(Array.isArray(b.category) ? (b.category[0] ?? "") : b.category) : undefined;  // 단일(#290), 배열 오면 첫 1개
+        // #5169 검색 제외 — 불리언만 받는다. 문자열 "false" 를 조용히 버리면 «검색에서 빼라» 를 실은 저장이 검색에 그대로 남는다.
+        if (b.searchable != null && typeof b.searchable !== "boolean") throw new HttpError(400, "searchable 은 true|false");
         return {
           name: b.name ? String(b.name) : undefined,
           title: b.title ? String(b.title) : undefined,
@@ -173,6 +178,7 @@ export const knowledgeSave: Capability = {
           category,
           is_folder,
           parent_name: b.parent_name ? String(b.parent_name) : undefined,   // #592 생성 시 트리 배치(이동은 /move)
+          searchable: typeof b.searchable === "boolean" ? b.searchable : undefined,   // #5169 검색 제외(미전송 = 기존값 보존)
           mode,                                                             // #921/#1531 replace(기본)|append|edit
           edits,                                                            // #1531 edit 전용(그 외 undefined)
           // #968 변경 요약(검토 카드·기록). 길이 조정은 여기서 하지 않는다 — 핸들러 소프트캡(#1442)이 유일한
@@ -433,6 +439,14 @@ export const knowledgeSave: Capability = {
         }
       : {};
     if (gate.update === "stage") {
+      //  #5169 검색 제외는 내용이 아니라 소환 설정이다(knowledge_set_searchable 과 같은 급 — 인입 허용선을 타지 않는다). 리비전엔 실을
+      //   자리도 없어(제목·본문만) 제안과 따로 바로 반영한다 — 안 하면 «검색에서 빼라» 를 실은 저장이 조용히 무시된다.
+      const searchableOut = input.searchable === undefined ? {} : {
+        searchable: {
+          value: input.searchable, changed: (await setKnowledgeSearchable(before.name, input.searchable, writeCtx)).changed,
+          note: "검색 제외 표시(searchable)는 본문 수정 제안과 따로 바로 반영했습니다 — 검토 대상이 아닙니다.",
+        },
+      };
       // 본문 미반영 — 라이브는 옛 승인본 유지, 제안만 큐로. (같은 지식의 pending 제안은 1건으로 coalesce.)
       const revision = await proposeRevision({
         name: before.name, mode: "staged",
@@ -447,6 +461,7 @@ export const knowledgeSave: Capability = {
         ...seedSyncWarning(before.name),
         ...capped,
         ...derivedOut,
+        ...searchableOut,
         gate: {
           action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정 제안으로 접수됐습니다 — 라이브 본문은 아직 바뀌지 않았습니다(사람이 승인해야 반영). 같은 지식을 다시 저장하면 이 제안이 갱신됩니다.",
@@ -811,6 +826,48 @@ export const knowledgeSetWiki: Capability = {
   },
 };
 
+// 검색 제외 토글(#5169 · 이슈 #1619) — searchable 만 갱신. set_wiki 와 같은 급의 소환 설정이라 인입 허용선(#783)을 타지 않는다:
+//  본문·제목은 그대로이고, 검토 큐(리비전)는 이 값을 담을 자리가 없다. 공개범위 검사(assertKnowledgeWritable)는 탄다.
+//  ⚠ REST 는 불리언만 받는다 — set_wiki 처럼 `=== true` 로 읽으면 누락·"false" 문자열이 조용히 «검색 제외» 가 되어
+//   요청과 반대로 문서가 검색에서 사라진다.
+const knowledgeSetSearchableInput = {
+  name: z.string().min(1).max(64).describe("검색 제외를 켜거나 끌 지식 이름"),
+  searchable: z.boolean().describe("false = 검색 제외(이름으로만 읽힌다) · true = 다시 검색 대상"),
+};
+type KnowledgeSetSearchableInput = z.infer<z.ZodObject<typeof knowledgeSetSearchableInput>>;
+export const knowledgeSetSearchable: Capability = {
+  name: "knowledge_set_searchable",
+  title: "검색 제외 토글",
+  description:
+    "지식을 «검색 제외»로 두거나(searchable=false) 다시 검색 대상으로 돌린다(true). " +
+    "검색 제외 지식은 knowledge_get(이름 · 부분 읽기)·knowledge_list(카테고리 목록 · q 거르기)·트리·링크·WIKI 인덱스 핀으로는 종전처럼 읽히지만, " +
+    "knowledge_search·knowledge_grep·knowledge_similar·추천·자동 소환 훅·⌘K 통합검색에는 나오지 않고 임베딩도 하지 않는다(있던 벡터는 비운다). " +
+    "같은 사실이 검색용 문서에 이미 있는 재집계 문서·색인처럼 «이름으로만 읽는» 문서가 대상이다 — 검색 결과에 같은 사실이 두 번 나와 자리를 나눠 먹지 않게 한다. " +
+    "true 로 돌리면 임베딩 대기로 돌아가 곧 다시 검색에 나온다. 값이 이미 같으면 아무것도 바꾸지 않는다(changed:false). 본문·제목·version 은 그대로다. " +
+    "새로 만들 때부터 빼려면 knowledge_save 의 searchable:false 를 쓴다.",
+  scope: "memory",
+  input: knowledgeSetSearchableInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/searchable"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof b.searchable !== "boolean") throw new HttpError(400, "searchable 은 true|false 로 보내세요");
+        return { name: String(req.params?.name ?? ""), searchable: b.searchable };
+      } }],
+  },
+  handler: async (input: KnowledgeSetSearchableInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    try {
+      return await setKnowledgeSearchable(input.name, input.searchable, writeCtx);
+    } catch (e) {
+      if (/없음$/.test((e as Error).message)) throw new HttpError(404, (e as Error).message);
+      throw e;
+    }
+  },
+};
+
 // 삭제(휴지통) — 활성 목록에서 제거하되 감사 스냅샷으로 보존(content_restore 로 복원). 제거의 유일 경로
 //  (가역 숨김 '반려' 는 폐기 — 삭제가 복원가능이라 흡수). ⚠ 사람(웹)만 — 에이전트(MCP)는 403. deny pattern 은 domain_delete 동형.
 const knowledgeDeleteInput = { name: z.string().min(1).max(64) };
@@ -883,6 +940,7 @@ export const authoringCapabilities: Capability[] = [
   // #1442 knowledgeSetTitle 은 **맨 뒤**에 붙인다 — 앞에 끼우면 기존 op 들의 등록 순서(= tools/list 순 ·
   //  REST 마운트 순 · 표면 스냅샷)가 통째로 밀린다. 새 op 추가만이 표면 변화이도록 자리를 고른다.
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeSetTitle, knowledgeSetFields,
+  knowledgeSetSearchable,   // #5169 — 같은 까닭으로 맨 뒤(새 op 추가만이 표면 변화)
 ];
 // #592 트리 이동 — 원본 등록 배열에서 **맨 뒤**(다른 :name 하위 경로들 뒤)였다. 도메인은 저작이지만
 //  등록 순서(= tools/list 순 · REST 마운트 순 · 표면 스냅샷)를 바꾸지 않으려 자리를 지켜 따로 내보낸다.

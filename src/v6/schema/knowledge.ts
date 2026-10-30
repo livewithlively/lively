@@ -50,6 +50,11 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     -- WIKI 핀(2026-06-23): is_wiki=true 인 지식의 제목+메타만 가이드 위키섹션으로 항상-주입(본문 제외, 인덱스).
     --  injection(always/recalled)과 직교 — recalled 지식이되 인덱스엔 핀. 멱등 ADD COLUMN(기존 테이블 보강).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_wiki BOOLEAN NOT NULL DEFAULT false;
+    -- 검색 제외(#5169 · 이슈 #1619): searchable=false 인 지식은 이름(knowledge_get)·목록·트리·링크로만 읽히고
+    --  검색(grep·하이브리드·유사·추천)·자동 소환·임베딩에서 빠진다. 앱이 DB 에서 그려 올리는 재집계 문서·색인처럼
+    --  같은 사실이 검색용 문서에 이미 있는 것이 대상이다. lifecycle(살아 있나)·injection(항상 주입)과 직교.
+    --  기본 true 라 기존 행은 그대로다(값 없는 ADD — 재작성 없음).
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS searchable BOOLEAN NOT NULL DEFAULT true;
     -- type(2026-06-30 #290): page-type facet — 엔터프라이즈 표준 합성(DITA Concept/Reference + Diátaxis How-to/Explanation + ADR Decision + LLM위키 Entity).
     --  6종: decision|concept|how-to|reference|research|entity. NULL 허용(미분류). 옛 kind(R/K/H/W)는 폐기 — 무관. 비파괴 ADD COLUMN.
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS type TEXT;
@@ -66,6 +71,7 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_external_uidx ON knowledge(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS knowledge_injection_idx ON knowledge(injection);
     CREATE INDEX IF NOT EXISTS knowledge_wiki_idx ON knowledge(is_wiki) WHERE is_wiki;
+    CREATE INDEX IF NOT EXISTS knowledge_unsearchable_idx ON knowledge(name) WHERE NOT searchable;
     CREATE INDEX IF NOT EXISTS knowledge_provenance_idx ON knowledge(provenance);
     CREATE INDEX IF NOT EXISTS knowledge_lifecycle_idx ON knowledge(lifecycle);
     CREATE INDEX IF NOT EXISTS knowledge_parent_idx ON knowledge(parent_name);

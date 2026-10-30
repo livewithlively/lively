@@ -2434,7 +2434,7 @@
   "rest": [
    "GET /api/ui/knowledge"
   ],
-  "input_hash": "0db257f76e10fe4f"
+  "input_hash": "bef2820c26df7562"
  },
  {
   "name": "knowledge_grep",
@@ -2594,7 +2594,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "4681c4d31c0096be"
+  "input_hash": "486915572c4cbceb"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -2645,6 +2645,16 @@
    "POST /api/ui/knowledge/:name/fields"
   ],
   "input_hash": "4153f82a5d044aaf"
+ },
+ {
+  "name": "knowledge_set_searchable",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/searchable"
+  ],
+  "input_hash": "6e56031c5ac51982"
  },
  {
   "name": "knowledge_link_category",
