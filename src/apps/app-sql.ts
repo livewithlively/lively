@@ -569,6 +569,14 @@ export function checkExpressionSync(expr: string, columns: readonly string[]): s
   return text;
 }
 
+/** 검사기(checkExpressionSync)를 지난 식이 쓰는 칸 이름 — 그 식을 지금 표에서 돌릴 수 있는지(미룬 칸을 쓰는지) 가르는 데 쓴다. */
+export function expressionColumnsSync(expr: string): string[] {
+  const probe = `SELECT ${expr}\n`;
+  const refs: unknown[][] = [];
+  columnRefs(parseOne(probe, Buffer.from(probe, "utf8")).body.targetList, refs);
+  return refs.flatMap((f) => names(f) ?? []);
+}
+
 // ── 결과 상한 — DB 쪽에서 자른다 ─────────────────────────────────────────────────────────
 //  종전 db_query 실행기는 결과를 **전부 받은 뒤** 잘랐다(query-exec allRows.slice). 큰 결과 하나가 게이트웨이(전원이
 //  나눠 쓰는 메모리)를 터뜨릴 수 있어서, 앱 SQL 은 행 수와 바이트를 DB 안에서 센다:

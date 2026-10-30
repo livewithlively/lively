@@ -32,7 +32,7 @@ import { timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { drizzle } from "drizzle-orm/pg-proxy";
 
-export const LIVELY_DB_SDK_VERSION = "3";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487)
+export const LIVELY_DB_SDK_VERSION = "4";   // 2 = livelyJobs · livelyMember(req).job(#4486) · 3 = 자가호스팅 검사 층 열쇠 확인(#4487) · 4 = generateDrizzleSchema 의 references.column
 const IDENTITY_HEADER = "x-lively-identity";
 
 /** 게이트웨이가 거절한 호출 — status · body(게이트웨이 JSON) · index(묶음에서 몇 번째 문장인지, 0부터). */

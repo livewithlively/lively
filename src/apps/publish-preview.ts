@@ -51,7 +51,7 @@ function constraintLine(k: AppTableReport["constraints"][number]): string | null
   const col = k.column ? ` ${k.column} 칸` : "";
   switch (k.kind) {
     case "not_null": return `${at}${col || " 칸"}을 ${k.action === "removed" ? "비워도 되게" : "꼭 채워야 하게"} 바꿈`;
-    //  보고서의 unique 는 외래키가 가리킬 (tenant_id, id) 키뿐이다(사람이 선언한 겹침 막기는 색인으로 온다) — 데이터를 막지 않는 안쪽 일이라 싣지 않는다.
+    //  보고서의 unique 는 외래키가 가리킬 (tenant_id, id · 칸) 키뿐이다(사람이 선언한 겹침 막기는 색인으로 온다) — 더하기든 걷기든 안쪽 일이라 싣지 않는다.
     //   그 일은 바로 옆 «다른 표의 행을 가리키게 함» 줄이 알린다.
     case "unique": return null;
     case "foreign_key": return k.action === "removed" ? `${at} 다른 표 가리키기 풀기` : `${at}${col}이 다른 표의 행을 가리키게 함(가리킬 행이 없는 값은 막힘)`;
@@ -79,7 +79,7 @@ export function describeTableChanges(r: AppTableReport | null, gone: GoneTablePl
       changes.push(d.rows > 0 ? `${d.table} 표: ${d.column} 칸 지우기 — 값이 있는 ${d.rows}행은 따로 보관(앱에서는 더 안 보임)` : `${d.table} 표: ${d.column} 칸 지우기(값 없음)`);
     }
     for (const k of r.constraints) { const line = constraintLine(k); if (line) changes.push(line); }
-    for (const ix of r.added_indexes) if (ix.unique) changes.push(`${ix.table} 표: 겹치는 값 막기(${ix.columns.join(", ")})`);
+    for (const ix of r.added_indexes) if (ix.unique) changes.push(`${ix.table} 표: 겹치는 값 막기(${ix.columns.join(", ")})${ix.where !== undefined ? ` — 조건 ${ix.where} 에 맞는 행끼리` : ""}`);
     for (const c of r.type_mismatches) notes.push(`${c.table} 표: ${c.column} 칸 종류는 ${c.declared} 로 못 바꿔 그대로(${c.actual})${c.reason ? ` — ${c.reason}` : ""}`);
     for (const c of r.undeclared_columns) notes.push(`${c.table} 표: ${c.column} 칸은 새 판에 없지만 값을 지키려고 남겨 둠`);
   }
