@@ -763,6 +763,10 @@ export async function ensureAppSqlRoleOn(db: Q, schema: string, appId: string, t
     const physical = physicalTableName(appId, t);
     const rel = `${qi(schema)}.${qi(physical)}`;
     await db.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${rel} TO ${qi(role)}`);
+    //  #5172 원래 id 로 넣은 문장 뒤 실행기가 이 역할로 그 표의 id 시퀀스를 앞으로만 맞춘다(app-sql-exec idResyncSql) —
+    //   자기 표 시퀀스의 읽기(위치)·옮기기만. USAGE(nextval)는 주지 않는다. 이름은 PG 가 인용해 돌려준 그대로다.
+    const seq = (await db.query("SELECT pg_get_serial_sequence($1, 'id') AS s", [rel])).rows[0]?.s as string | null | undefined;
+    if (seq) await db.query(`GRANT SELECT, UPDATE ON SEQUENCE ${seq} TO ${qi(role)}`);
     const has = (await db.query(
       `SELECT 1 FROM pg_policies WHERE schemaname=$1 AND tablename=$2 AND policyname=$3`, [schema, physical, APP_SQL_POLICY])).rows.length > 0;
     if (!has) {
@@ -795,9 +799,11 @@ async function dropAppSqlRoleOn(db: Q, schema: string, appId: string): Promise<v
     await db.query(`DROP POLICY IF EXISTS ${qi(String(p.policyname))} ON ${qi(String(p.schemaname))}.${qi(String(p.tablename))}`);
   }
   await db.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${qi(schema)} FROM ${qi(role)}`).catch(() => undefined);
+  await db.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${qi(schema)} FROM ${qi(role)}`).catch(() => undefined);   // #5172 id 시퀀스 권한
   const archive = archiveSchemaName(schema);
   if ((await db.query("SELECT to_regnamespace($1) AS n", [archive])).rows[0]?.n) {
     await db.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${qi(archive)} FROM ${qi(role)}`).catch(() => undefined);
+    await db.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${qi(archive)} FROM ${qi(role)}`).catch(() => undefined);
   }
   await db.query(`REVOKE ALL ON SCHEMA ${qi(schema)} FROM ${qi(role)}`).catch(() => undefined);
   await db.query(`DROP ROLE IF EXISTS ${qi(role)}`);
@@ -1146,6 +1152,9 @@ export async function cleanupDroppedTables(appId: string, tables: string[], sche
           if (appRole) await c.query(`REVOKE ALL ON ${qi(archive)}.${qi(target)} FROM ${qi(appRole)}`);
           if (hasSqlRole) {
             await c.query(`REVOKE ALL ON ${qi(archive)}.${qi(target)} FROM ${qi(sqlRole)}`);
+            //  #5172 id 시퀀스 권한도 걷는다(표와 함께 보관 스키마로 옮겨 왔다) — 남아 있으면 앱을 지울 때 역할을 DROP 할 수 없다(PG 실측).
+            const seq = (await c.query("SELECT pg_get_serial_sequence($1, 'id') AS s", [`${qi(archive)}.${qi(target)}`])).rows[0]?.s as string | null | undefined;
+            if (seq) await c.query(`REVOKE ALL ON SEQUENCE ${seq} FROM ${qi(sqlRole)}`);
             //  정책도 걷는다 — 정책이 역할을 가리키고 있으면 앱을 지울 때 그 역할을 DROP 할 수 없다(PG 실측).
             await c.query(`DROP POLICY IF EXISTS ${qi(APP_SQL_POLICY)} ON ${qi(archive)}.${qi(target)}`);
           }

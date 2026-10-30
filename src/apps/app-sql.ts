@@ -25,6 +25,8 @@
 //  ④·⑤ 가 뚫리면 카탈로그(다른 워크스페이스의 스키마·테이블 이름, 정책 식)가 보인다 — 셋 다 놓치면 안 된다.
 //  ⚠ «조건 없는 UPDATE·DELETE 거부» 는 실수 방지다 — `WHERE id > 0` 처럼 모든 행을 겨냥하는 조건까지 막지는 않는다.
 //   그 뒤는 일일 떠 두기(app-snapshot)가 받친다.
+//  id 는 평소 DB 가 정하지만, 원래 id 로 넣는 INSERT … OVERRIDING SYSTEM VALUE(다른 DB 에서 옮기기·시드)도 받는다(#5172).
+//   직접 넣은 id 는 시퀀스를 올리지 않는다 — 실행기가 같은 트랜잭션에서 그 표의 id 시퀀스를 앞으로만 맞춘다(app-sql-exec idResyncSql).
 //  ⚠ 위치(location)는 **UTF-8 바이트** 오프셋이다 — 바꿔 쓰기는 바이트 위에서 한다(한글 값이 든 문장에서 글자 위치로 자르면 어긋난다).
 import { loadModule, parseSync } from "libpg-query";
 import { HttpError } from "../http-error.js";
@@ -49,6 +51,8 @@ export interface AppSqlPlan {
   tables: string[];
   /** 쓰기 대상 테이블(INSERT INTO · UPDATE · DELETE FROM) — 화면 알림에 싣는다. */
   targets: string[];
+  /** id 를 직접 넣는 INSERT(OVERRIDING SYSTEM VALUE)인가 — 실행기가 같은 트랜잭션에서 targets 표의 id 시퀀스를 앞으로만 맞춘다(#5172). */
+  setsId: boolean;
   /** 실행할 SQL — 선언 이름이 물리 이름으로 바뀐 것. 사용자 원문과 파라미터 번호($n)가 같다. 끝 세미콜론·꼬리 주석은 뗀다. */
   sql: string;
   /** SQL 이 쓰는 가장 큰 파라미터 번호($n) — params 개수와 같아야 한다. */
@@ -335,11 +339,10 @@ export function _walkTreeForTest(tree: unknown, declared: readonly string[]): vo
   walk(tree, new Set(), { declared: new Set(declared), tables: new Set(), refs: [], maxParam: 0, locks: false }, 0);
 }
 
-/** 문장 노드(어느 깊이든) — SELECT INTO · ON CONSTRAINT · OVERRIDING SYSTEM VALUE. */
+/** 문장 노드(어느 깊이든) — SELECT INTO · ON CONSTRAINT. (OVERRIDING SYSTEM VALUE 는 #5172 부터 받는다 — 계획의 setsId.) */
 function statementChecks(type: string, o: J): void {
   if (type === "SelectStmt" && isObj(o.intoClause)) bad("SELECT … INTO 는 받지 않습니다(새 테이블을 만든다) — INSERT INTO <선언 테이블> SELECT … 로 쓰세요");
   if (type === "InsertStmt") {
-    if (o.override === "OVERRIDING_SYSTEM_VALUE") bad("OVERRIDING SYSTEM VALUE 는 받지 않습니다 — id 는 DB 가 정합니다(INSERT … RETURNING id 로 받으세요)");
     const oc = isObj(o.onConflictClause) ? o.onConflictClause : null;
     if (oc && isObj(oc.infer) && oc.infer.conname) bad("ON CONFLICT ON CONSTRAINT 는 받지 않습니다 — ON CONFLICT (칸, …) 로 쓰세요(그 칸들에 unique 를 매니페스트로 선언)");
   }
@@ -508,6 +511,8 @@ export function planAppSqlSync(input: string, opts: PlanAppSqlOpts): AppSqlPlan 
     returning,
     tables: [...w.tables].sort(),
     targets: target && w.tables.has(target) ? [target] : [],
+    //  #5172 WITH 안의 쓰기는 거부하므로 id 를 직접 넣는 자리는 맨 위 INSERT 하나뿐이다.
+    setsId: kind === "insert" && body.override === "OVERRIDING_SYSTEM_VALUE",
     sql,
     paramCount: w.maxParam,
   };

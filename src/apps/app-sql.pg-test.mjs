@@ -393,6 +393,77 @@ try {
     chk(`D20 reg*·aclitem 계열 형 ${types.length}개 — 전부 거부`, types.length >= 24 && opened.length === 0, `거부되지 않은 형: ${opened.join(", ")}`);
   }
 
+  // ── D21 원래 id 로 넣기 — INSERT … OVERRIDING SYSTEM VALUE 뒤 id 시퀀스 맞춤(#5172, 엣지 E4~E15) ──
+  {
+    limits();
+    const SEQ = [{ table: "items", columns: [{ name: "v", type: "text" }] }, { table: "plain", columns: [{ name: "v", type: "text" }] }];
+    await ensureAppTables("seq", SEQ, { schema: SA, strict: true, sqlRole: true, report: emptyTableReport() });
+    const o = { app: "seq", tables: ["items", "plain"] };
+    const runS = (sql, params = [], more = {}) => run(sql, params, { ...o, ...more });
+    const put = (ids) => runS(`INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES ${ids.map((id) => `(${id}, 'x')`).join(", ")}`);
+    const nextId = async () => Number((await runS("INSERT INTO items (v) VALUES ('n') RETURNING id")).rows[0]?.id);
+    const has = async (id) => (await su.query(`SELECT 1 FROM "${SA}"."seq__items" WHERE id = $1`, [id])).rowCount === 1;
+
+    const first = await put([100, 101]);
+    const n1 = await nextId();
+    chk("D21 E4 한 번도 안 쓴 시퀀스 — id 100·101 을 넣은 뒤 평범한 INSERT 는 102(부딪치지 않는다)", first.changed === 2 && n1 === 102, JSON.stringify({ first, n1 }));
+    await put([5]);
+    const n2 = await nextId();
+    chk("D21 E5 더 작은 id(5)를 넣어도 시퀀스는 뒤로 가지 않는다 — 103", n2 === 103 && await has(5), JSON.stringify({ n2 }));
+    await runS("DELETE FROM items WHERE id = $1", [103]);
+    await put([6]);
+    const n3 = await nextId();
+    chk("D21 E6 맨 끝(103)을 지운 뒤 작은 id(6) — 지운 103 을 다시 내주지 않는다(104)", n3 === 104 && !(await has(103)), JSON.stringify({ n3 }));
+    await put([105]);
+    const n4 = await nextId();
+    chk("D21 E7 경계 — 시퀀스가 다음에 낼 바로 그 번호(105)를 직접 넣으면 평범한 INSERT 는 106", n4 === 106, JSON.stringify({ n4 }));
+
+    const b = await batch([{ sql: "INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (500, 'b1')" }, { sql: "INSERT INTO items (v) VALUES ('b2') RETURNING id" }], o);
+    chk("D21 E8 묶음 — 원래 id 로 넣은 바로 다음 문장부터 맞춰진 시퀀스를 쓴다(501)", Number(b.results[1]?.rows[0]?.id) === 501, JSON.stringify(b.results));
+    const bad9 = await errOf(batch([{ sql: "INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (900, 'c1')" },
+      { sql: "INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (100, 'dup')" }], o));
+    const after9 = await nextId();
+    chk("D21 E9 묶음이 실패하면 넣은 행도 없다(900 없음) · 그 뒤 평범한 INSERT 는 된다",
+      bad9?.status === 409 && bad9?.body?.index === 1 && !(await has(900)) && after9 > 501 && await has(after9), JSON.stringify({ bad9: bad9?.message, after9 }));
+    const zero = await runS("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE SELECT 7000, 'z' WHERE false");
+    const n5 = await nextId();
+    chk("D21 E10 0행 INSERT … SELECT — 오류 없음 · 시퀀스 그대로", zero.changed === 0 && n5 === after9 + 1, JSON.stringify({ zero, n5, after9 }));
+
+    const role = roleOf(SA, "seq");
+    const other = await errOf(runS("", [], { plan: raw(`SELECT setval('"${SA}"."memo__notes_id_seq"', 999)`, true) }));
+    chk("D21 E11 앱 역할로 다른 앱 표의 시퀀스를 옮기면 권한 거부(403)", other?.status === 403, JSON.stringify({ st: other?.status, m: other?.message }));
+    const priv = (await su.query(`SELECT has_sequence_privilege($1, $2, 'SELECT') AS s, has_sequence_privilege($1, $2, 'UPDATE') AS u, has_sequence_privilege($1, $2, 'USAGE') AS g`,
+      [role, `"${SA}"."seq__items_id_seq"`])).rows[0];
+    chk("D21 E12 앱 역할은 자기 표 id 시퀀스의 SELECT·UPDATE 만(USAGE 없음 — nextval 은 못 부른다)", priv.s === true && priv.u === true && priv.g === false, JSON.stringify(priv));
+
+    await su.query(`REVOKE ALL ON SEQUENCE "${SA}"."seq__items_id_seq" FROM "${role}"`);
+    const denied = await errOf(put([1000]));
+    await ensureAppSqlRole("seq", ["items", "plain"], SA);
+    const again = await put([1001]);
+    const n6 = await nextId();
+    chk("D21 E13 시퀀스 권한이 없던 역할(이전 판)도 다시 보장하면 받는다", denied?.status === 403 && !(await has(1000)) && again.changed === 1 && n6 === 1002,
+      JSON.stringify({ denied: denied?.status, n6 }));
+
+    // E14 같은 표를 맞추는 트랜잭션끼리 줄을 선다 — 앞 묶음이 맞춤을 마친 채 1.5초 머무는 동안 뒤 문장은 잠금 대기 상한(1초)에 걸린다.
+    const plan = (sql) => planAppSql(sql, { appId: "seq", schema: SA, tables: o.tables });
+    const holder = batch([{ plan: await plan("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (2000, 'h')") }, { plan: raw("SELECT pg_sleep(1.5)") }], o);
+    for (let i = 0; i < 60; i++) {                                     // 앞 묶음이 맞춤 잠금을 쥘 때까지(이름은 모른다 — 자문 잠금이 하나 잡혔나만 본다)
+      if ((await su.query("SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND granted")).rows[0].n > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const waited = await errOf(put([2001]));
+    const held = await errOf(holder);
+    chk("D21 E14 같은 표 맞춤은 줄을 선다 — 앞 트랜잭션이 끝나기 전엔 뒤 문장이 기다리다 409 · 그 행은 없다",
+      held === null && waited?.status === 409 && !(await has(2001)) && await has(2000), JSON.stringify({ held: held?.message, waited: waited?.status, m: waited?.message }));
+
+    await su.query(`ALTER TABLE "${SA}"."seq__plain" ALTER COLUMN id DROP IDENTITY`);
+    const ensured = await errOf(ensureAppSqlRole("seq", ["items", "plain"], SA));
+    const noSeq = await errOf(runS("INSERT INTO plain (id, v) OVERRIDING SYSTEM VALUE VALUES (42, 'p')"));
+    const plainRow = (await su.query(`SELECT 1 FROM "${SA}"."seq__plain" WHERE id = 42`)).rowCount === 1;
+    chk("D21 E15 id 시퀀스가 없는 표 — 역할 보장도, 원래 id 로 넣기도 오류 없이 된다", ensured === null && noSeq === null && plainRow,
+      JSON.stringify({ ensured: ensured?.message, noSeq: noSeq?.message }));
+  }
+
   // ── D9 ──
   {
     const role = roleOf(SA, "crm");
@@ -400,6 +471,11 @@ try {
     const archivedAs = cleaned.archived[0]?.archived_as ?? "";
     const can = archivedAs ? (await su.query("SELECT has_table_privilege($1, $2, 'SELECT') AS ok", [role, archivedAs.split(".").map((x) => `"${x}"`).join(".")])).rows[0].ok : null;
     chk("D9 보관된 테이블은 앱 역할이 못 읽는다", !!archivedAs && can === false, JSON.stringify({ cleaned, can }));
+    const seqCan = archivedAs ? (await su.query("SELECT has_sequence_privilege($1, pg_get_serial_sequence($2, 'id'), 'UPDATE') AS ok",
+      [role, archivedAs.split(".").map((x) => `"${x}"`).join(".")])).rows[0].ok : null;
+    chk("D9 E16(#5172) 보관된 테이블의 id 시퀀스도 앱 역할이 못 옮긴다(권한을 걷는다)", seqCan === false, JSON.stringify({ seqCan }));
+    //  E17(#5172) 어디선가 시퀀스 권한이 남아 있어도(보관 단계를 거치지 않은 길) 앱 제거는 역할을 지운다 — 남은 권한은 DROP ROLE 을 막는다.
+    if (archivedAs) await su.query(`GRANT UPDATE ON SEQUENCE ${(await su.query("SELECT pg_get_serial_sequence($1, 'id') AS s", [archivedAs.split(".").map((x) => `"${x}"`).join(".")])).rows[0].s} TO "${role}"`);
     await dropAppTables("crm", ["contacts"], SA);
     const gone = (await su.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [role])).rowCount === 0;
     const memoRole = (await su.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [roleOf(SA, "memo")])).rowCount === 1;

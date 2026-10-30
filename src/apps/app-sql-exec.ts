@@ -17,6 +17,7 @@
 //  ① 준비 한 덩이(단순 질의 프로토콜 — 여러 문장): BEGIN [READ ONLY] · 행 격리 값(app.tenant_id) · 시간·메모리 상한 ·
 //     search_path=pg_catalog · standard_conforming_strings=on(검사기의 렉서와 DB 렉서를 같게 고정) · SET LOCAL ROLE <앱 역할>
 //  ② 사용자 문장(확장 프로토콜 — 값은 바인딩, DB 도 여러 문장을 거부한다) — 묶음이면 문장마다 한 번
+//     id 를 직접 넣은 문장(INSERT … OVERRIDING SYSTEM VALUE) 뒤엔 그 표의 id 시퀀스를 맞추는 한 덩이를 더 보낸다(#5172 idResyncSql)
 //  ③ COMMIT(쓰기·잠금)/ROLLBACK(읽기)
 //  SET LOCAL 이라 트랜잭션이 끝나면 Postgres 가 전부 되돌린다 — 다음 차례가 앱 역할을 물려받지 않는다.
 //  ⚠ 역할로 내려가는 게 **사용자 SQL 보다 먼저**다. ① 이 실패하면(어느 한 줄이라도) ② 는 보내지 않는다.
@@ -28,6 +29,7 @@ import { logger } from "../log.js";
 import { itemsPool, boundTenantId } from "../db/client.js";
 import { SINGLE_TENANT_ID } from "../db/tenant-column.js";
 import { wrapForCaps, WRAP_COLUMNS, type AppSqlPlan } from "./app-sql.js";
+import { qualifiedAppTable } from "./store-ddl.js";
 
 // ── 상한(환경변수로 조정) ─────────────────────────────────────────────────────────────────
 export interface AppSqlLimits {
@@ -416,6 +418,26 @@ function prepSql(rw: boolean, tenantId: string, role: string, l: AppSqlLimits): 
   ].join(";\n");
 }
 
+/**
+ * id 를 직접 넣은 문장 뒤(#5172) — 그 표의 id 시퀀스를 **앞으로만** 맞춘다(왕복 1번 · 두 문장). 직접 넣은 id 는 시퀀스를 올리지
+ *  않아, 그대로 두면 다음 평범한 INSERT 가 그 id 를 받아 기본 키가 부딪친다(23505 — 넣은 id 수만큼 차례로).
+ *  앱 역할로 돈다 — 그 역할은 자기 표 id 시퀀스의 SELECT·UPDATE 만 받는다(store-schema ensureAppSqlRoleOn). 시퀀스는 서버가
+ *  표 이름으로 찾는다 — 앱 SQL 에 setval 을 여는 것이 아니다(검사기는 여전히 시퀀스 함수를 거부한다).
+ *   ① 같은 표를 맞추는 트랜잭션끼리 줄 세운다 — setval 은 트랜잭션과 무관하게 바로 반영돼, 둘이 엇갈리면 작은 값이 나중에 덮어
+ *      시퀀스가 뒤로 갈 수 있다. 잠금은 커밋·취소 때 풀린다.
+ *   ② 잠금 **다음 문장**에서 max(id) 를 읽는다(READ COMMITTED 는 문장마다 새로 본다 — 앞서 커밋된 다른 쪽 행까지 본다).
+ *      지금 위치(pg_sequence_last_value)보다 클 때만 옮긴다 — 지운 맨 끝 id 를 다시 내주지 않는다.
+ *  rel = qualifiedAppTable 이 만든 인용 이름(검사한 식별자뿐)이라 글자 그대로 끼운다.
+ */
+export function idResyncSql(rel: string): string {
+  const lit = `'${rel.replace(/'/g, "''")}'`;
+  return [
+    `SELECT pg_advisory_xact_lock(hashtextextended('lvly-app-id-seq:' || ${lit}, 0))`,
+    `SELECT setval(s.seq, s.top, true) FROM (SELECT pg_get_serial_sequence(${lit}, 'id')::regclass AS seq, (SELECT max(id) FROM ${rel}) AS top) s`
+      + " WHERE s.top > COALESCE(pg_sequence_last_value(s.seq), 0)",
+  ].join(";\n");
+}
+
 export interface AppSqlItem { plan: AppSqlPlan; params: unknown[] }
 export interface RunAppSqlOpts {
   plan: AppSqlPlan;
@@ -501,6 +523,8 @@ async function execute(o: RunAppSqlBatchOpts, batch: boolean): Promise<{ results
         const ms = Date.now() - t0;
         stats.statements++;
         stats.stmtMs.push(ms);
+        //  #5172 원래 id 로 넣었으면 같은 트랜잭션에서 시퀀스를 맞춘다 — 묶음의 다음 문장부터 맞춰진 시퀀스를 쓴다.
+        if (plan.setsId && plan.targets.length) await client.query(idResyncSql(qualifiedAppTable(o.schema, o.appId, plan.targets[0])));
         const shaped = wire ? shapeWire(plan, r, ms) : shapeResult(plan, r, ms);
         budget -= shaped.bytes;
         if (shaped.result.truncated && o.strict) {
