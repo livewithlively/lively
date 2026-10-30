@@ -159,6 +159,10 @@ async function distillRuns(since: Date, until: Date): Promise<AutoRunRow[]> {
 
 /** 한 건 펼치기 — 수집: 그 실행이 넣은/바꾼 자료·지식 / 증류: 그 배치가 만든·고친 지식(가시성 술어 그대로). */
 type RunItem = { tag: "new" | "mod"; title: string; where: string | null; href: string | null };
+// 지식 한 건의 앱 주소 — 문서 화면은 #/k/<이름> 이다(web/lib/kn-links.ts knHref 와 같은 모양).
+//  종전 #/knowledge/<이름> 은 WIKI 의 하위 화면 자리(new · review · sources …)라, 모르는 이름이면 WIKI 첫 화면으로 떨어졌다
+//  (원준 2026-10-30: "자동 실행 기록에서 새 지식을 누르면 그 지식이 아니라 위키 첫 페이지로 간다").
+const knowledgeHref = (name: string): string => "#/k/" + encodeURIComponent(name).replace(/\(/g, "%28").replace(/\)/g, "%29");
 type RunDetail = { items: RunItem[]; log?: string | null; summary?: string | null };
 async function runDetail(kind: string, id: number, user: LivelyUser): Promise<RunDetail> {
   const viewer = viewerOf(user);
@@ -198,7 +202,7 @@ async function runDetail(kind: string, id: number, user: LivelyUser): Promise<Ru
         if (s) items.push({ tag: x.op === "insert" ? "new" : "mod", title: String(s.title || "(제목 없음)"), where: s.container ? String(s.container) : null, href: "#/sources/" + s.id });
       } else {
         const kk = seenK.get(x.entity_key);
-        if (kk) items.push({ tag: x.op === "insert" ? "new" : "mod", title: String(kk.title || kk.name), where: null, href: "#/knowledge/" + encodeURIComponent(kk.name) });
+        if (kk) items.push({ tag: x.op === "insert" ? "new" : "mod", title: String(kk.title || kk.name), where: null, href: knowledgeHref(kk.name) });
       }
     }
     return { items, log };
@@ -227,7 +231,7 @@ async function runDetail(kind: string, id: number, user: LivelyUser): Promise<Ru
         WHERE ds.task_id = $1 AND ${vis} LIMIT 60`;
   const r = await itemsPool.query(q, p);
   for (const x of r.rows as any[]) {
-    items.push({ tag: x.is_new ? "new" : "mod", title: String(x.title || x.name), where: x.where_ ? String(x.where_) : null, href: "#/knowledge/" + encodeURIComponent(x.name) });
+    items.push({ tag: x.is_new ? "new" : "mod", title: String(x.title || x.name), where: x.where_ ? String(x.where_) : null, href: knowledgeHref(x.name) });
   }
   return { items, summary };
 }
