@@ -151,6 +151,27 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
       : await resolveHeadlessHarness(o.requester, o.harness ?? null);
   } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), requester: o.requester, ...extra } }; }
 
+  // 한도 소진 쉬기(#5160) — 이 계정(의뢰자×하네스)의 마지막 배치가 사용 한도로 죽었으면 풀릴 때까지 내지 않는다.
+  //  종전엔 2~3초 만에 죽을 배치를 매 주기 다시 내서 하루 413건이 실패로 쌓였다(왜 다른 장치가 못 잡는지는 quota-hold.ts 머리말).
+  //  skip 은 ok 로 돌려준다 — error 면 크론 브레이커가 잡을 꺼 버려 풀린 뒤에도 사람이 다시 켜야 한다. task_id 를 싣지 않는다
+  //   (acceptedTaskId 가 skipped 를 접수로 보지 않으니 «봤음» 표식도 안 남고, 자료는 인박스에 그대로 남아 풀린 뒤 처리된다).
+  try {
+    const { activeQuotaHold } = await import("./quota-hold.js");
+    const last = await q(itemsPool,
+      `SELECT status, concat_ws(E'\\n', result->>'summary', error) AS text, finished_at FROM org_task
+        WHERE requester=$1 AND harness=$2 AND status IN ('done','failed') AND finished_at > now() - interval '8 days'
+        ORDER BY finished_at DESC LIMIT 1`, [o.requester, harness]);
+    const row = last[0] as { status: string; text: string | null; finished_at: Date | null } | undefined;
+    const until = activeQuotaHold(row ? { status: row.status, text: row.text, finishedAt: row.finished_at } : null, Date.now());
+    if (until != null) {
+      return { status: "ok", summary: { skipped: "실행 계정 사용 한도 소진 — 풀릴 때까지 대기", hold_until: new Date(until).toISOString(), requester: o.requester, harness, ...extra } };
+    }
+  } catch (e) {
+    //  조회 실패 — 종전처럼 낸다(쉬기는 비용 절감일 뿐, 막히면 안 된다). 단 조용히 꺼지면 하루 수백 건 실패가 말없이 돌아오므로 남긴다.
+    const { logger } = await import("../../log.js");
+    logger.warn({ e: (e as Error)?.message, requester: o.requester, harness }, "한도 쉬기 조회 실패 — 쉬지 않고 접수");
+  }
+
   // 모델·추론강도 확정(#4008) — **하네스가 정해진 지금** 대입한다(왜 여기인지는 headlessRun 주석).
   //  dropped 는 «설정값이 이 하네스 것이 아니어서 기본으로 갈아탔다» 는 관측 — 잡 요약에 실어 조용히 넘어가지 않게 한다.
   const { automationFlags } = await import("../../terminal/catalog.js");
