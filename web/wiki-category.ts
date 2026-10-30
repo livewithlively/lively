@@ -524,7 +524,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       if (!d.length) body = emptyBlk();
       else if (b.type === 'highlight') body = el('div', { class: 'wk-bld-hl' }, ...d.slice(0, b.cfg.limit || 3).map((x) => wkDocCard(x, { open: openDoc, deckCap: 128, cls: 'wk-hlcard' })));
       else if (b.type === 'gallery') body = el('div', { class: 'wk-bld-gal' }, ...d.map(galCard));
-      else { body = el('div', { class: 'wk-bld-list' }); for (const x of d) body.append(wkRow(x, { open: openDoc, deck: deckLine(x.body_md || '', 92), metas: [x.is_wiki ? '인덱스' : null, x.type ? (KN_TYPE_LABEL[x.type] || x.type) : null, relTime(x.updated_at)] })); }
+      else { body = el('div', { class: 'wk-bld-list' }); for (const x of d) body.append(wkRow(x, { open: openDoc, deck: deckLine(x.body_md || '', 92), metas: [x.is_wiki ? '인덱스' : null, x.searchable === false ? '검색 제외' : null, x.type ? (KN_TYPE_LABEL[x.type] || x.type) : null, relTime(x.updated_at)] })); }
     }
     return el('div', {}, head, body);
   }

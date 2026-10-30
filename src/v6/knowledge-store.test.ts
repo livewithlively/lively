@@ -71,6 +71,22 @@ t("before 에 is_wiki 없음 → 기본 false 폴백", () => {
   assert.equal(resolveUpsertFacets({}, { injection: "recalled" }).isWiki, false);
 });
 
+// ── #5169 검색 제외(searchable)도 같은 불변식 — 앱이 문서를 다시 올릴 때 칸을 안 실어도 «검색 제외» 가 풀리면 안 된다. ──
+//  사양 E15(미전송 = 기존 보존) · E19(경계 — 신규 기본 = 검색 대상) · 명시는 덮어쓴다 · before 에 칸이 없으면(옛 스냅샷) 기본값.
+t("#5169 E15: 본문만 다시 저장(searchable 미전송) → 검색 제외(false) 보존", () => {
+  assert.equal(resolveUpsertFacets({}, { ...pinned, searchable: false }).searchable, false, "다시 올릴 때마다 검색에 도로 나오면 안 됨");
+});
+t("#5169 E19: 신규(before=null)·칸 미전송 → 검색 대상(true)", () => {
+  assert.equal(resolveUpsertFacets({}, null).searchable, true);
+});
+t("#5169: searchable 명시 → 덮어쓰기(양방향)", () => {
+  assert.equal(resolveUpsertFacets({ searchable: true }, { ...pinned, searchable: false }).searchable, true);
+  assert.equal(resolveUpsertFacets({ searchable: false }, pinned).searchable, false);
+});
+t("#5169: before 에 searchable 칸 없음(옛 스냅샷) → 기본 true 폴백", () => {
+  assert.equal(resolveUpsertFacets({}, pinned).searchable, true);
+});
+
 // ── #592: is_folder·parent_name 도 같은 불변식 — 본문만 편집(미전송)해도 폴더 플래그·트리 위치 유실 금지. ──
 const folder = { ...pinned, is_folder: true, parent_name: "parent-doc" };
 t("#592: 본문만 편집(is_folder/parent_name 미전송) → 폴더 플래그·트리 위치 보존", () => {
@@ -251,7 +267,7 @@ t("#1091 ⑦: 미분류 + 다른 조건 → 둘 다 걸리고, 미분류 술어�
 //  그래서 부작용(가짜 lister 가 받은 필터·호출 횟수·offset)으로 잠근다 — 문구 매칭이 아니라 '무엇을 물어봤나'.
 const pinRow = (name: string): KnowledgeRow => ({
   name, title: name, body_md: "", injection: "recalled", provenance: "authored", lifecycle: "active",
-  confidence: "human", source: "authored", summary: null, sort: 0, is_wiki: true, is_folder: false,
+  confidence: "human", source: "authored", summary: null, sort: 0, is_wiki: true, searchable: true, is_folder: false,
   version: 1, updated_at: "2026-07-29T00:00:00.000Z",
 });
 // 호출 인자를 기록하는 가짜 lister — pageSizes[i] = i 번째 호출이 돌려줄 행 수(부족하면 0=끝).

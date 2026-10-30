@@ -9,7 +9,7 @@ import { isJsonObject, jsonEqual, mergeFieldsPatch } from "./knowledge-fields.js
 import { restoreSnapshot, type WriteCtx } from "./content-audit.js";
 import { embeddingInputText } from "./embedding-provider.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임.
-import { markEmbeddingPending, KNOWLEDGE_TARGET } from "./embedding-backfill.js";
+import { markEmbeddingPending, clearEmbedding, nudgeAutoBackfill, KNOWLEDGE_TARGET } from "./embedding-backfill.js";
 // 검색 공용 유틸(#631 분리) — grep 매처를 목록 필터(knowledgeListFilter)가 knowledge_grep 과 같은 의미로 쓴다.
 import { parseGrep, grepWhere } from "./search-util.js";
 import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./visibility.js";
@@ -41,10 +41,11 @@ export type { KnowledgeLinkRow, WikiLinkResult } from "./knowledge-links.js";
 // visibility(#1291) — **복원이 잠금을 되살리려면 스냅샷에 들어 있어야 한다.** restoreSnapshot 은 K_COLS 에
 //  있는 키만 INSERT 하므로, 여기 없으면 삭제된 members 지식이 복원될 때 DDL 기본값(open)으로 풀린다
 //  (grant 테이블은 CASCADE 로 이미 비어 있어 되돌릴 근거도 함께 사라진다).
+// searchable(#5169 검색 제외) — 같은 이유로 여기 둔다: 복원이 «검색 제외» 를 되살려야 하고, 목록·상세가 표시를 그린다.
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
-   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, is_folder, visibility, version, created_at, updated_at, updated_by`;
+   as_of, parent_name, summary, author, source_ref, sort, is_wiki, searchable, type, is_folder, visibility, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
 // 목록 전용 경량 SELECT(#1091) — body_md 만 뺀다. 사이드바 트리·검색·홈 카드 보강은 본문을 한 글자도 안 쓰는데,
 //  전량(수백 건 × 평균 8KB)을 실어 나르고 있었다(위키 홈 첫 화면 ~4MB). 발췌(deck)를 그리는 화면만 full 을 쓴다.
@@ -54,7 +55,7 @@ export interface KnowledgeRow {
   name: string; title: string | null; body_md: string;
   injection: string; provenance: string; lifecycle: string;
   confidence: string; source: string; summary: string | null;
-  sort: number; is_wiki: boolean; is_folder: boolean; version: number; updated_at: string;
+  sort: number; is_wiki: boolean; searchable: boolean; is_folder: boolean; version: number; updated_at: string;
   [k: string]: unknown;
 }
 
@@ -65,6 +66,7 @@ export interface KnowledgeRow {
 export interface KnowledgeFilter {
   categoryId?: number; uncategorized?: boolean; injection?: string; provenance?: string;
   lifecycle?: string; q?: string; limit?: number; offset?: number; orderBy?: string; is_wiki?: boolean; type?: string;
+  searchable?: boolean;   // #5169 — false 면 «검색 제외» 지식만(어떤 문서가 빠져 있나). 미지정이면 둘 다(목록은 검색이 아니다)
   light?: boolean;   // #1091 본문(body_md) 제외 — 트리·검색·카드 보강처럼 발췌를 안 그리는 소비자용
   /** #3872 — 설치가 심은 «손 안 댄 시드»(updated_by='system', org/delivery/seed-content.ts)를 뺀다. 처음 설정의 «이미 쌓인
    *  지식 N건» 은 사람·AI 가 만든 것만 세야 한다 — 기본 탑재 사용 설명서 3건을 «팀이 쌓아 온 지식» 이라고 읽어 줬다
@@ -94,6 +96,7 @@ export function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: 
   if (f.provenance) { params.push(f.provenance); wh.push(`k.provenance=$${params.length}`); }
   if (f.type) { params.push(f.type); wh.push(`k.type=$${params.length}`); }   // #290 page-type 필터
   if (f.is_wiki != null) { params.push(f.is_wiki); wh.push(`k.is_wiki=$${params.length}`); }
+  if (f.searchable != null) { params.push(f.searchable); wh.push(`k.searchable=$${params.length}`); }   // #5169 검색 제외 거르기
   if (f.excludeSeed) wh.push(`COALESCE(k.updated_by,'') <> 'system'`);   // #3872 시드 제외(onboarding.ts 와 같은 식)
   // lifecycle: 미지정=active(격리 불변식의 뿌리 — 검색·recall·주입이 전부 이 기본값에 기댄다).
   //  #783 콤마 다중값 허용('active,pending') — WIKI 사이드바 트리가 검토 대기 지식을 배지와 함께 띄우기 위함.
@@ -268,11 +271,12 @@ export async function knowledgeTreeData(system: string, limit = 20000, viewer?: 
 export interface UpsertFacetInput {
   injection?: string; provenance?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null;
   is_folder?: boolean; parent_name?: string | null;   // #592 폴더·트리 위치 — 본문만 편집해도 유실 금지(같은 불변식)
+  searchable?: boolean;   // #5169 검색 제외 — 앱이 문서를 다시 올릴 때마다 실지 않아도 «검색 제외» 가 풀리지 않게(같은 불변식)
 }
 /** 병합 결과 — INSERT VALUES / ON CONFLICT DO UPDATE(is_wiki=EXCLUDED.is_wiki 등) 파라미터로 그대로 사용. */
 export interface ResolvedFacets {
   injection: string; provenance: string; summary: string | null; sort: number; isWiki: boolean; type: string | null;
-  isFolder: boolean; parentName: string | null;
+  isFolder: boolean; parentName: string | null; searchable: boolean;
 }
 /**
  * upsert facet 병합 규칙 — "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
@@ -291,6 +295,8 @@ export function resolveUpsertFacets(input: UpsertFacetInput, before: Record<stri
     // #592: 폴더 플래그·트리 위치도 같은 클래스 — 본문만 편집하는 저장이 폴더를 문서로 리셋하거나 트리에서 떼어내면 안 된다.
     isFolder: input.is_folder !== undefined ? input.is_folder : ((before?.is_folder as boolean) ?? false),
     parentName: input.parent_name !== undefined ? input.parent_name : ((before?.parent_name as string | null) ?? null),
+    // #5169 검색 제외 — 기본은 검색 대상(true). false 는 명시로만 생기고, 미전송 저장은 기존 값을 지킨다.
+    searchable: input.searchable !== undefined ? input.searchable : ((before?.searchable as boolean | undefined) ?? true),
   };
 }
 
@@ -424,7 +430,7 @@ export class KnowledgeExistsError extends Error {
 }
 
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null; searchable?: boolean },
   ctx?: WriteCtx,
   opts: UpsertKnowledgeOpts = {},
 ): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult; post?: () => Promise<WikiLinkResult | undefined> }> {
@@ -461,7 +467,7 @@ export async function upsertKnowledge(
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
   // injection/provenance/summary/sort/is_wiki/type/is_folder/parent_name: 명시 우선 → 없으면 기존(before) 보존 → 신규 기본값.
   //  편집 저장(본문만)이 WIKI 핀 is_wiki 등 미전송 facet 을 조용히 유실하지 않게 하는 불변식 — 단일 진실 resolveUpsertFacets(#345 회귀 방지, knowledge-store.test.ts).
-  const { injection, provenance, summary, sort, isWiki, type, isFolder, parentName } = resolveUpsertFacets(input, before);
+  const { injection, provenance, summary, sort, isWiki, type, isFolder, parentName, searchable } = resolveUpsertFacets(input, before);
   // #592 폴더: 본문 없는 트리 노드라 title 이 유일한 표시명 — 신규 폴더는 title 필수(빈 body_md 완화는 capability 쪽).
   if (!before && isFolder && !input.title?.trim()) {
     throw new Error("폴더(is_folder) 생성에는 title 이 필수입니다.");
@@ -484,19 +490,20 @@ export async function upsertKnowledge(
   // #4824 $17 visibility — INSERT 때만(ON CONFLICT DO UPDATE 는 안 건드린다). 미지정이면 종전 DDL 기본값과 같은 'open'.
   //  insertOnly 면 겹친 이름을 덮어쓰지 않는다(DO NOTHING → 행 없음 → KnowledgeExistsError).
   const ins = await db.query(
-    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by, visibility)
-     VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15,$17)
+    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by, visibility, searchable)
+     VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15,$17,$18)
      ${opts.insertOnly ? "ON CONFLICT (tenant_id, name) DO NOTHING RETURNING name" : `ON CONFLICT (tenant_id, name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
        summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
-       is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name,
+       is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name, searchable=EXCLUDED.searchable,
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`}`,
     [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
      // #638 $16 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
      input.lifecycle ?? "active",
-     opts.visibility ?? "open"]);
+     opts.visibility ?? "open",
+     searchable]);   // $18 #5169 검색 제외 — 미전송이면 기존 값(resolveUpsertFacets)
   if (opts.insertOnly && !ins.rowCount) throw new KnowledgeExistsError(name);
   const after = await one(db, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx, db);
@@ -514,8 +521,13 @@ export async function upsertKnowledge(
   // #907 본문 [[…]] → 자동 엣지. 스토어 층에 두는 이유: 리비전 승인(knowledge-revision-store)·undo 등 **모든 upsert
   //  writer** 가 본문을 바꾸면 엣지도 따라가야 한다(capability 에만 두면 그 경로들이 조용히 어긋난다).
   //  미매칭은 예외가 아니라 경고다 — 호출부가 응답에 실어 붕 뜬 링크를 알린다(#907 목표2).
+  //  #5169 검색 제외 — 벡터를 두지 않는다(남아 있던 것은 비운다). 검색 대상으로 돌아오면 비어 있는 벡터를 스윕이 채우므로
+  //   글이 그대로여도 한 번 깨운다(대상 필터 KNOWLEDGE_TARGET.activeFilter 가 searchable 을 본다).
+  const wasSearchable = (before?.searchable as boolean | undefined) !== false;
   const post = async (): Promise<WikiLinkResult | undefined> => {
-    if (newEmbedText && (!before || newEmbedText !== oldEmbedText)) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
+    if (!searchable) await clearEmbedding(KNOWLEDGE_TARGET, name);
+    else if (newEmbedText && (!before || newEmbedText !== oldEmbedText)) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
+    else if (!wasSearchable) nudgeAutoBackfill();
     return materializeWikiLinksBestEffort(name, input.body_md);
   };
   if (opts.deferPost) return { ...after, post };
@@ -554,6 +566,30 @@ export async function setKnowledgeWiki(name: string, isWiki: boolean, ctx?: Writ
     `UPDATE knowledge SET is_wiki=$2, updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`, [name, isWiki]);
   await auditKnowledge(name, "set_wiki", before, after, ctx);
   return after;
+}
+
+// 검색 제외 토글(#5169 · 이슈 #1619) — searchable 만 갱신. 내용이 아니라 소환 설정이라 version·updated_at 을 안 올린다
+//  (props_ui 토글과 같은 까닭 — 최신 순 목록·도메인 소환 대표 지식의 순서를 설정 토글이 밀어올리지 않게).
+//  false 면 벡터도 비운다: 검색 표면은 searchable 로 거르지만, 벡터를 쓰는 다른 곳(중복 탐지·분류 어긋남)이 남은 벡터로
+//  이 문서를 계속 보지 않게. 비우기는 플래그와 따로 한다 — 벡터 칸이 없는 DB(임베딩 스키마 건너뜀)에서도 토글은 돼야 한다.
+//  true 로 돌아오면 비어 있는 벡터를 스윕이 채운다(곧바로 한 번 깨운다).
+//  값이 같으면 감사를 남기지 않는다(changed:false) — 앱이 문서를 다시 올릴 때마다 같은 값을 보내도 이력이 쌓이지 않게.
+//  읽고 판정하고 쓰는 사이를 행 잠금으로 묶는다(patchKnowledgeFields 와 같은 꼴) — 거의 동시에 온 끄기·켜기가 둘 다 옛 값을
+//  읽으면 뒤엣것이 «같은 값» 으로 끝나 나중 의도가 사라진다.
+export async function setKnowledgeSearchable(name: string, searchable: boolean, ctx?: WriteCtx): Promise<{ knowledge: KnowledgeRow; changed: boolean }> {
+  const r = await withTx(async (client) => {
+    const before = await one(client, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1 FOR UPDATE`, [name]) as KnowledgeRow | undefined;
+    if (!before) throw new Error(`지식 '${name}' 없음`);
+    if (before.searchable === searchable) return { knowledge: before, changed: false };
+    const after = await one(client,
+      `UPDATE knowledge SET searchable=$2 WHERE name=$1 RETURNING ${K_COLS}`, [name, searchable]) as KnowledgeRow;
+    await auditKnowledge(name, "set_searchable", before, after, ctx, client);
+    return { knowledge: after, changed: true };
+  });
+  //  같은 값이어도 false 면 비운다(멱등) — 어떤 길로든 벡터가 남아 있으면 이 호출이 바로잡는다.
+  if (!searchable) await clearEmbedding(KNOWLEDGE_TARGET, name);
+  else if (r.changed) nudgeAutoBackfill();
+  return r;
 }
 
 // 제목만 갱신(#1442) — 본문 불변. `knowledge_save` 는 body_md 가 필수라 제목 한 줄을 고치려면 전문을

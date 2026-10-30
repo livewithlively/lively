@@ -171,15 +171,16 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/v6/search-log")) { try { LOGS.push(JSON.parse(String((opts && opts.body) || "{}"))); } catch (_) { LOGS.push({ bad: true }); } return J({ ok: true }); }
     if (p.endsWith("/api/ui/categories")) return J({ categories: [{ id: 77, key: "slack-cat", name: "슬랙 분류", should: "슬랙에서 온 것" }] });
     if (p.endsWith("/api/ui/knowledge/similar")) { await later("sim"); return J({ entries: hit ? SIM : [] }); }
-    if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
     //  A15 — 종류마다 모두 몇 개인가(줄은 20개씩만 온다)
-    if (p.endsWith("/api/ui/knowledge/search") && u.searchParams.get("mode") === "count") return J({ mode: "count", total: hit ? 254 : 0 });
+    if (p.endsWith("/api/ui/knowledge-screen/search") && u.searchParams.get("mode") === "count") return J({ mode: "count", total: hit ? 254 : 0 });
     if (p.endsWith("/api/ui/v6/projects/search") && u.searchParams.get("mode") === "count") return J({ mode: "count", total: hit ? 12 : 0 });
     //  A9 — 이름에 낱말이 든 지식 셋 + 대화로만 맞은 세션 하나(서버가 top 으로 표시)
-    if (p.endsWith("/api/ui/knowledge/search") && q.includes("보장")) return J({ entries: [1, 2, 3].map((i) => ({ name: "k-g" + i, title: "보장 문서 " + i, snippet: "", updated_at: iso(NOW - i * D) })) });
-    if (p.endsWith("/api/ui/knowledge/search") && q.includes("고장")) return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
-    if (p.endsWith("/api/ui/knowledge/search") && q.includes("꽉")) { const n = Number(u.searchParams.get("limit")) || 20; return J({ entries: Array.from({ length: n }, (_, i) => ({ name: "k-full-" + i, title: "꽉 찬 문서 " + i, snippet: "", updated_at: iso(TODAY - i * 1000) })) }); }
-    if (p.endsWith("/api/ui/knowledge/search")) { await later("know"); return J({ entries: hit ? GREP : q.includes("다른말") ? [{ name: "k-other", title: "다른말 문서", snippet: "", updated_at: iso(TODAY) }] : [] }); }
+    //  #5169 검색 제외 문서 — 사람 화면에는 표시를 달고 나온다.
+    if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("재집계")) return J({ entries: [{ name: "k-roll", title: "재집계 문서", snippet: "", searchable: false, updated_at: iso(NOW - D) }, { name: "k-plain", title: "재집계 설명", snippet: "", searchable: true, updated_at: iso(NOW - 2 * D) }] });
+    if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("보장")) return J({ entries: [1, 2, 3].map((i) => ({ name: "k-g" + i, title: "보장 문서 " + i, snippet: "", updated_at: iso(NOW - i * D) })) });
+    if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("고장")) return new Response(JSON.stringify({ error: "internal_error" }), { status: 500, headers: { "content-type": "application/json" } });
+    if (p.endsWith("/api/ui/knowledge-screen/search") && q.includes("꽉")) { const n = Number(u.searchParams.get("limit")) || 20; return J({ entries: Array.from({ length: n }, (_, i) => ({ name: "k-full-" + i, title: "꽉 찬 문서 " + i, snippet: "", updated_at: iso(TODAY - i * 1000) })) }); }
+    if (p.endsWith("/api/ui/knowledge-screen/search")) { await later("know"); return J({ entries: hit ? GREP : q.includes("다른말") ? [{ name: "k-other", title: "다른말 문서", snippet: "", updated_at: iso(TODAY) }] : [] }); }
     if (/\/api\/ui\/v6\/projects\/(similar|semantic)$/.test(p)) return J({ projects: [] });
     if (p.endsWith("/api/ui/v6/projects/search") && q.replace(/^#/, "") === "4530") return J({ projects: [
       { id: 4530, level: "project", name: "통합검색 결함 점검", status_category: "started", description: "검색 점검", updated_at: iso(NOW - D) },
@@ -325,6 +326,8 @@ async function PAGE_MAIN() {
     await search("보장");
     R.topGuar = (shape().find((g) => g.h === "가장 맞는 결과")?.rows || []).map((r) => r.t);
     R.guarRow = allRowsNow().find((r) => r.t === "대화로만 맞은 세션") || null;
+    await search("재집계");                 // #5169 검색 제외 표시
+    R.excl = shape();
     await search("슬랙");
     n0 = log.length;
     await hover("슬랙 검색 고치기");
@@ -584,7 +587,7 @@ async function PAGE_MAIN() {
     n0 = log.length;
     $(".v2-omni-more").click();
     await sleep(60); await waitFor(isSettled); await sleep(40);
-    R.moreReq = since(n0).find((x) => x.includes("/api/ui/knowledge/search")) || "";
+    R.moreReq = since(n0).find((x) => x.includes("/api/ui/knowledge-screen/search")) || "";
     R.moreRows1 = document.querySelectorAll(".v2-omni-row").length;
     //  A13 — 맨 아래 줄에서 ↓ 는 «결과 더 보기» 와 같은 일(키보드로 닿는 길)
     n0 = log.length;
@@ -592,7 +595,7 @@ async function PAGE_MAIN() {
     const lastSel = allRowsNow().find((r) => r.sel)?.t || "";
     key("ArrowDown");                                            // 맨 아래에서 한 번 더
     await sleep(60); await waitFor(isSettled); await sleep(40);
-    R.moreKey = { req: since(n0).find((x) => x.includes("/api/ui/knowledge/search") && !x.includes("mode=count")) || "", rows: document.querySelectorAll(".v2-omni-row").length, focus: document.activeElement === $(".v2-omni-in"),
+    R.moreKey = { req: since(n0).find((x) => x.includes("/api/ui/knowledge-screen/search") && !x.includes("mode=count")) || "", rows: document.querySelectorAll(".v2-omni-row").length, focus: document.activeElement === $(".v2-omni-in"),
       lastSel, sel: allRowsNow().find((r) => r.sel)?.t || "", first: allRowsNow()[0]?.t || "" };
     tabEl("all")?.click();   // 전체로 돌아온다
     await sleep(60);
@@ -788,9 +791,9 @@ check(allRows(R.def).length >= 6 && reqOf(R.defReqs, "/api/ui/v6/session-search?
 {
   const conv = reqOf(R.defReqs, "/api/ui/v6/session-search?");
   check(conv.length >= 1 && conv.every((l) => /sort=recent/.test(l)), "G1 기본 = 최신순 — 대화 요청 sort=recent", JSON.stringify(conv));
-  check(reqOf(R.defReqs, "/api/ui/knowledge/search?").some((l) => /plain=1/.test(l)) && reqOf(R.defReqs, "/api/ui/v6/projects/search?").some((l) => /plain=1/.test(l)),
+  check(reqOf(R.defReqs, "/api/ui/knowledge-screen/search?").some((l) => /plain=1/.test(l)) && reqOf(R.defReqs, "/api/ui/v6/projects/search?").some((l) => /plain=1/.test(l)),
     "G1 지식·프로젝트 글자 검색은 plain=1", JSON.stringify(R.defReqs));
-  check(!(R.defReqs || []).some((l) => /\/semantic\?/.test(l) || /\/v6\/projects\/similar\?/.test(l)) && reqOf(R.defReqs, "/api/ui/knowledge/similar?").length >= 1,
+  check(!(R.defReqs || []).some((l) => /\/semantic\?/.test(l) || /[?&]semantic=/.test(l) || /\/v6\/projects\/similar\?/.test(l)) && reqOf(R.defReqs, "/api/ui/knowledge/similar?").length >= 1,
     "G1 의미검색·프로젝트 뜻 채널은 안 부르고 지식 뜻 비슷은 부른다", JSON.stringify(R.defReqs));
 }
 // G2 배치
@@ -895,6 +898,11 @@ check(R.pvQ1?.sel === "슬랙 검색 설계" && R.pvQ2?.sel === "슬랙 검색 �
   check(k.down === "v2-omni-in" && k.typed === "v2-omni-in" && k.ime === "v2-omni-in", "A13 탭 줄에서 ↓ · 글자를 치면(한글 입력기의 첫 키 포함) 입력칸으로 돌아온다", JSON.stringify({ down: k.down, typed: k.typed, ime: k.ime }));
 }
 check(/limit=50/.test(R.moreKey?.req || "") && R.moreKey.rows > R.moreRows1 && R.moreKey.focus === true, "A13 맨 아래 줄에서 ↓ = 더 가져온다(«결과 더 보기» 와 같은 일)", JSON.stringify(R.moreKey));
+{
+  const rows = (R.excl || []).flatMap((g) => g.rows);
+  check(rows.find((r) => r.t === "재집계 문서")?.st === "검색 제외" && rows.find((r) => r.t === "재집계 설명")?.st === "",
+    "#5169 검색 제외 문서는 ⌘K 줄에 «검색 제외» 표시 · 다른 줄엔 없다", JSON.stringify(rows.map((r) => [r.t, r.st])));
+}
 check(!!R.moreKey?.lastSel && R.moreKey.sel === R.moreKey.lastSel && R.moreKey.sel !== R.moreKey.first, "A19 더 가져온 뒤에도 고른 줄은 그대로(맨 위로 돌아가지 않는다)", JSON.stringify({ last: R.moreKey?.lastSel, sel: R.moreKey?.sel, first: R.moreKey?.first }));
 check(R.sortCountReqs === 0 && R.sortReqs >= 1, "A19 정렬을 바꿔 다시 찾을 때 개수는 다시 묻지 않는다(검색어가 같다 — 줄만 다시 받는다)", JSON.stringify({ count: R.sortCountReqs, conv: R.sortReqs }));
 check(R.srcEnter?.tab === "src" && R.srcEnter.early === 0 && /결과가 다 오면 첫 줄을 엽니다/.test(R.srcEnter.note || "") && R.srcEnter.opened?.href === "#/sources/501",

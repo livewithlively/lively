@@ -9,7 +9,7 @@ import { debounce } from './files.js';
 
 // 지식 연결(#317) — 위키검색·자동추천 두 모달을 하나로. 열면 추천(관련도순)이 먼저 뜨고, 검색하면 그 너머로 좁힌다.
 //  연결 관계(필요/산출)는 칼럼에서 연 기본값을 따르되 라디오로 그 자리서 바꿀 수 있다(멘션 ≠ 항상 필요).
-//  추천=project_recommend_knowledge_v6(벡터 #172), 검색=knowledge/semantic(#1133 — 하이브리드 의미검색.
+//  추천=project_recommend_knowledge_v6(벡터 #172), 검색=knowledge-screen/search?semantic=1(#1133 — 하이브리드 의미검색 · #5169 검색 제외도 표시를 달고 찾는다.
 //  구 knowledge/search 는 리터럴 grep 이라 자연어·다른 표현이면 0건 → "검색해도 원하는 지식이 안 나옴").
 //  이미 연결된 건 클라이언트에서 제외 — 관계(필요/산출)별로 따로(#1133: required 만 알던 탓에 산출로 바꿔
 //  연결하면 이미 연결된 것도 목록에 남아 '연결했습니다' 토스트만 뜨는 무음 no-op 이 있었다).
@@ -61,7 +61,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
       : el('div', { class: 'row-title', text: m.title || m.name });
     return el('div', { class: 'ps-kn-pick-row' },
       el('a', { class: 'ps-kn-pick-main', href: '#/k/' + encodeURIComponent(m.name), target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' }, titleEl,
-        el('div', { class: 'admin-hint ps-kn-pick-snip', text: (m.snippet || '').slice(0, 90) })),
+        el('div', { class: 'admin-hint ps-kn-pick-snip', text: [m.searchable === false ? '검색 제외' : '', (m.snippet || '').slice(0, 90)].filter(Boolean).join(' · ') })),
       addBtn);
   }
 
@@ -87,7 +87,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     busy(results, el('span', { class: 'admin-hint', text: '검색 중…' }));
     let matches: any;
     // 의미검색(하이브리드 RRF, #1133) — 자연어·다른 표현도 회수. 임베딩 off 환경은 서버가 grep 으로 폴백.
-    try { matches = await api('/api/ui/knowledge/semantic?q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []); }
+    try { matches = await api('/api/ui/knowledge-screen/search?semantic=1&q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []); }
     catch (e) { results.replaceChildren(errorNote(e, '검색하지 못했습니다')); return; }
     const cand = matches.filter((m) => !linked().has(m.name));
     if (!cand.length) { results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '결과가 없거나 모두 이미 연결됨.' })); return; }

@@ -289,7 +289,7 @@ export function createRender(ctx: EditorCtx) {
       const q = qIn.value.trim();
       busy(results, el('div', { class: 'empty', text: '불러오는 중…' }));
       try {
-        const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '12', mode: 'names' }))
+        const url = q ? ('/api/ui/knowledge-screen/search?' + new URLSearchParams({ q, limit: '12', mode: 'names' }))
           : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '12', orderBy: 'updated_at', injection: 'recalled' }));
         const r = await api(url);
         const entries = (((r && r.entries) || []) as any[])
@@ -297,7 +297,8 @@ export function createRender(ctx: EditorCtx) {
         if (!entries.length) { results.replaceChildren(el('div', { class: 'empty', text: '결과 없음' })); return; }
         results.replaceChildren(...entries.map((e) => el('div', { class: 'row', role: 'button', tabindex: '0', style: 'cursor:pointer',
           onclick: () => pick(e) },
-          el('div', { class: 'row-title', text: (e.icon || '📄') + ' ' + (e.title || e.name) }))));
+          el('div', { class: 'row-title', text: (e.icon || '📄') + ' ' + (e.title || e.name) }),
+          e.searchable === false ? el('div', { class: 'row-meta', text: '검색 제외' }) : null)));
       } catch (_) { results.replaceChildren(el('div', { class: 'empty', text: '검색 실패' })); }
     }
     qIn.addEventListener('input', () => { clearTimeout(t); t = setTimeout(search, 250); });

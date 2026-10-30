@@ -5,7 +5,7 @@
 //   ../knowledge.ts 가 한다.
 import { z } from "zod";
 import { HttpError, clampPage } from "../rest-util.js";
-import type { Capability, CapabilityCtx } from "../types.js";
+import type { Capability, CapabilityCtx, RestMount } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import {
   listKnowledge, countKnowledge, getKnowledge, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
@@ -34,6 +34,7 @@ const knowledgeListInput = {
   q: z.string().optional(),
   orderBy: z.enum(["name", "updated_at"]).optional(),
   is_wiki: z.boolean().optional().describe("true 면 WIKI 인덱스 핀(is_wiki) 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 인덱스(#336)"),
+  searchable: z.boolean().optional().describe("#5169 false 면 «검색 제외» 지식만(이름으로만 읽는 문서 — 검색·자동 소환에 안 나온다) · true 면 검색 대상만. 생략하면 둘 다"),
   limit: z.number().int().min(1).max(500).optional().describe("페이지 크기(1~500, 기본 200) — 구 200 하드캡 해제(#709)"),
   offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — limit 과 함께 상한 너머 전량 순회(#709)"),
 };
@@ -41,7 +42,8 @@ type KnowledgeListInput = z.infer<z.ZodObject<typeof knowledgeListInput>>;
 export const knowledgeList: Capability = {
   name: "knowledge_list",
   title: "지식 목록",
-  description: "지식을 카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. uncategorized=true 면 미분류(어느 카테고리에도 안 뜨는 지식)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709).",
+  description: "지식을 카테고리/injection/provenance/q(grep 패턴 — knowledge_grep 과 동일 매칭)로 조회(맥락의 기록). is_wiki=true 면 WIKI 인덱스 핀(매 대화 첫머리에 깔리는 인덱스)만. uncategorized=true 면 미분류(어느 카테고리에도 안 뜨는 지식)만. limit(≤500, 기본 200)·offset 으로 페이지네이션 — 응답에 total·has_more 포함(#709). " +
+    "목록은 검색이 아니라서 «검색 제외»(searchable=false — 검색·자동 소환에 안 나오는 문서) 지식도 나온다 — searchable=false 로 그것만 고를 수 있다.",
   scope: "memory",
   input: knowledgeListInput,
   expose: {
@@ -62,6 +64,7 @@ export const knowledgeList: Capability = {
           q: query.q ? String(query.q) : undefined,
           orderBy: query.orderBy ? String(query.orderBy) : undefined,
           is_wiki: query.is_wiki != null ? (String(query.is_wiki) === "true" || String(query.is_wiki) === "1") : undefined,
+          searchable: query.searchable != null ? (String(query.searchable) === "true" || String(query.searchable) === "1") : undefined,   // #5169
           light: query.light != null ? (String(query.light) === "true" || String(query.light) === "1") : undefined,
           limit: query.limit ? Number(query.limit) : undefined,
           offset: query.offset ? Number(query.offset) : undefined,
@@ -99,6 +102,22 @@ const knowledgeGrepInput = {
   category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
 };
 type KnowledgeGrepInput = z.infer<z.ZodObject<typeof knowledgeGrepInput>>;
+// REST 쿼리 → grep 입력 — knowledge_grep 과 화면 찾기(knowledge_screen_search)가 같은 모양을 읽는다.
+const parseGrepQuery = (req: Parameters<RestMount["parse"]>[0]) => {
+  const query = (req.query ?? {}) as Record<string, unknown>;
+  const q = String(query.q ?? "").trim();
+  if (!q) throw new HttpError(400, "q(검색어)가 필요합니다");
+  return {
+    q,
+    injection: query.injection ? String(query.injection) : undefined,
+    provenance: query.provenance ? String(query.provenance) : undefined,
+    limit: query.limit ? Number(query.limit) : undefined,
+    mode: query.mode ? String(query.mode) : undefined,
+    context: query.context ? Number(query.context) : undefined,
+    ...(query.plain === "1" || query.plain === "true" ? { plain: true } : {}),
+    category: query.category ? String(query.category) : undefined,
+  };
+};
 export const knowledgeGrep: Capability = {
   name: "knowledge_grep",
   title: "지식 grep",
@@ -108,27 +127,13 @@ export const knowledgeGrep: Capability = {
     "ripgrep 처럼 써라: 좁히려면 **한 토큰**(예: `도메인맵`), 다중 키워드는 공백으로 — **모든 토큰이** 들어간 지식이 잡힌다(AND, 순서무관). " +
     "OR·부분일치 등은 **POSIX 정규식**으로(예: `벡터|vector`, `task_\\w+`). " +
     "자연어 질문 문장은 넣지 마라(그 문장이 통째로 본문에 없으면 0건). 결과는 **매치 줄 스니펫**(`L<n>: …`, 본문 전문 아님) — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
-    "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C).",
+    "mode=names(이름·제목만 싸게 넓게)·count(총건수만)·snippets(기본). context=±N 줄(스니펫에 주변 줄 포함, ripgrep -C). " +
+    "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 잡히지 않는다 — 그 문서 안의 낱말 찾기는 knowledge_list(category, q).",
   scope: "memory",
   input: knowledgeGrepInput,
   expose: {
     mcp: true,
-    rest: [{ method: "GET", paths: ["/api/ui/knowledge/search"],
-      parse: (req) => {
-        const query = (req.query ?? {}) as Record<string, unknown>;
-        const q = String(query.q ?? "").trim();
-        if (!q) throw new HttpError(400, "q(검색어)가 필요합니다");
-        return {
-          q,
-          injection: query.injection ? String(query.injection) : undefined,
-          provenance: query.provenance ? String(query.provenance) : undefined,
-          limit: query.limit ? Number(query.limit) : undefined,
-          mode: query.mode ? String(query.mode) : undefined,
-          context: query.context ? Number(query.context) : undefined,
-          ...(query.plain === "1" || query.plain === "true" ? { plain: true } : {}),
-          category: query.category ? String(query.category) : undefined,
-        };
-      } }],
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/search"], parse: parseGrepQuery }],
   },
   handler: async (input: KnowledgeGrepInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
     const viewer = ctx?.viewer ?? null;   // 공개범위(#1291) — 스니펫도 본문 조각이라 목록보다 더 셀 수 없다
@@ -170,7 +175,8 @@ export const knowledgeSearch: Capability = {
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
     "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본). " +
     "결과가 없거나 약하면(뜻도 멀고 낱말도 안 맞으면) 세션의 호출 응답에 collect_hint(가져올 곳)가 붙는다 — sources(아직 지식이 안 된 원문 자료 — source_get 으로 먼저 본다) " +
-    "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다).",
+    "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다). " +
+    "«검색 제외»(searchable=false — 이름으로만 읽는 문서) 지식은 나오지 않는다(knowledge_get 으로 이름을 불러 읽는다).",
   scope: "memory",
   input: knowledgeSearchInput,
   // MCP + REST(/api/ui/knowledge/semantic) — 웹 지식탭의 '의미검색' 토글이 소비. grep 은 /knowledge/search(불변).
@@ -249,7 +255,8 @@ export const knowledgeSimilar: Capability = {
     "주어진 지식(name) 또는 텍스트(text)와 **의미적으로 가장 가까운** 지식을 코사인 유사도(0~1)로 찾는다. " +
     "신규 저장 전 **중복 확인**이나 관련 지식 탐색용. name 을 주면 그 지식의 저장된 임베딩을 재사용(자기 자신 제외), text 를 주면 즉시 임베딩한다(택일). " +
     "min_score(0~1) 이상만, 유사도 내림차순. **임베딩이 꺼져 있거나 대상에 임베딩이 없으면 빈 결과**(자연어/키워드 검색은 knowledge_search, 정확매칭은 knowledge_grep). " +
-    "knowledge_save 는 신규 저장 시 비슷한 지식이 있으면 응답 similar 로 자동 경고한다 — 이 도구는 저장 전에 미리 확인할 때.",
+    "knowledge_save 는 신규 저장 시 비슷한 지식이 있으면 응답 similar 로 자동 경고한다 — 이 도구는 저장 전에 미리 확인할 때. " +
+    "«검색 제외»(searchable=false) 지식은 후보에서 빠지고, 기준(name)으로 주면 벡터가 없어 빈 결과다.",
   scope: "memory",
   input: knowledgeSimilarInput,
   // REST 마운트는 knowledgeGet(/knowledge/:name) **앞**에 둬야 'similar'가 :name 으로 안 잡힌다(배열 순서 — semantic 과 동형).
@@ -287,6 +294,45 @@ export const knowledgeSimilar: Capability = {
       injection: input.injection, provenance: input.provenance, categories,
     }, viewer, diag);
     return { entries, ...diag };
+  },
+};
+
+// #5169 사람이 화면에서 글로 찾을 때(⌘K · 링크 고르기 · 프로젝트 지식 고르기) — 검색 제외 지식도 찾고 행에 searchable 을 싣는다
+//  (상민님 2026-10-30 «사람 화면엔 남긴다»). 글자 찾기는 knowledge_grep, semantic 은 knowledge_search 와 같은 순위 · 공개범위 · 앱 맥락 범위다.
+//  knowledge_grep · knowledge_search 에 인자를 더하지 않고 화면 전용 op 로 둔다(expose.mcp:false — knowledge_graph 와 같은 꼴): 그 둘은 에이전트가
+//  세션마다 읽는 상시 로드 도구라 스키마에 칸이 생기면 에이전트 길이 열린다. REST 어댑터는 입력 스키마와 같은 칸만 싣는 것이 규약이다(mcp-input-schema R4).
+const knowledgeScreenSearchInput = {
+  ...knowledgeGrepInput,
+  semantic: z.boolean().optional().describe("true 면 뜻으로도 찾는다(knowledge_search 와 같은 하이브리드) · 생략하면 글자만(knowledge_grep 과 같다)"),
+};
+type KnowledgeScreenSearchInput = z.infer<z.ZodObject<typeof knowledgeScreenSearchInput>>;
+export const knowledgeScreenSearch: Capability = {
+  name: "knowledge_screen_search",
+  title: "지식 찾기(사람 화면)",
+  description: "사람이 화면에서 글로 지식을 찾는다(⌘K · 링크 고르기 · 프로젝트 지식 고르기 전용). 에이전트 검색과 달리 «검색 제외» 지식도 나오고 행에 searchable 이 실린다. 검색 제외 지식은 글자로만 찾는다(벡터가 없다).",
+  scope: "memory",
+  input: knowledgeScreenSearchInput,
+  expose: {
+    mcp: false,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge-screen/search"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        return { ...parseGrepQuery(req), ...(query.semantic === "1" || query.semantic === "true" ? { semantic: true } : {}) };
+      } }],
+  },
+  handler: async (input: KnowledgeScreenSearchInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    //  expose.mcp:false 는 MCP 등록만 막는다 — REST 는 스코프와 앱 권한(knowledge_* 글롭 포함)만 보므로 앱 토큰 · 세션 호출(에이전트)은 여기서 막는다
+    //   (knowledge_search 의 forSession 과 같은 구분). 웹 화면은 둘 다 싣지 않는다. 권한 경계가 아니라 에이전트 잡음을 막는 울타리다 —
+    //   검색 제외 문서는 같은 사람이 knowledge_list · knowledge_get 으로 이미 읽는다.
+    if (user?.appId || ctx?.session) throw new HttpError(403, "knowledge_screen_search 는 사람 화면 전용입니다 — 에이전트는 knowledge_search · knowledge_grep 을 쓰세요.");
+    const viewer = ctx?.viewer ?? null;
+    const opts = {
+      injection: input.injection, provenance: input.provenance, plain: input.plain === true,
+      categories: await categoryArg(input.category), includeUnsearchable: true,
+    };
+    if (input.mode === "count") return { mode: "count", total: await countKnowledgeGrep(input.q, opts, viewer) };
+    const find = input.semantic === true ? hybridSearchKnowledge : searchKnowledge;
+    return { mode: input.mode ?? "snippets", entries: await find(input.q, { ...opts, limit: input.limit, mode: input.mode, context: input.context }, viewer) };
   },
 };
 
@@ -397,6 +443,7 @@ export const knowledgeGet: Capability = {
 //  — /knowledge/:name 계열보다 **먼저** 마운트돼야 한다.
 export const readStaticCapabilities: Capability[] = [
   knowledgeList, knowledgeGrep, knowledgeSearch, knowledgeSimilar, knowledgeGraph, knowledgeTree,
+  knowledgeScreenSearch,   // #5169 화면 전용(맨 뒤 — 새 op 추가만이 표면 변화)
 ];
 // /knowledge/:name — 위 정적 경로가 전부 등록된 뒤에 온다.
 export const readNamedCapabilities: Capability[] = [knowledgeGet];
