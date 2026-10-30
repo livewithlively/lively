@@ -230,19 +230,25 @@ try {
     ui: { pages: [{ key: "main", title: "x", entry: "ui/index.html" }] } }) }, { path: "ui/index.html", content: "<p>x</p>" }];
   await cap("org_app_install").handler({ source: { kind: "inline", files: raceFiles } }, admin, ctx);
   const rsql = (text, params) => cap("store_sql").handler({ sql: text, params }, { userId: "pgt-admin", appId: "snap-race" }, ctx);
-  await rsql("INSERT INTO big(v) SELECT 'x' || g FROM generate_series(1, 60000) g");
+  await rsql("INSERT INTO big(v) SELECT 'x' || g FROM generate_series(1, 300000) g");
   await rsql("INSERT INTO small(n) SELECT g FROM generate_series(1, 5) g");
   const smallRel = qualifiedAppTable(SHARED_APP_SCHEMA, "snap-race", "small");
-  const raceSnapP = S.snapshotAppData("snap-race", "daily", new Date(Date.now() + 180_000)).then((v) => ({ v }), (e) => ({ e }));
-  await new Promise((r) => setTimeout(r, 150));                         // 떠 두기가 큰 표(big)를 넘기는 동안
   const ddl = new pg.Client({ connectionString: dsnFor(DB) }); await ddl.connect();
-  await ddl.query("SET lock_timeout = '20s'");
+  await ddl.query("SET lock_timeout = '30s'");
+  const raceSnapP = S.snapshotAppData("snap-race", "daily", new Date(Date.now() + 180_000)).then((v) => ({ v }), (e) => ({ e }));
+  //  떠 두기가 큰 표(big)를 읽기 시작한 것을 그 표의 ACCESS SHARE 로 확인한 순간 — 시점은 이미 고정됐고 작은 표는 아직 안 읽었다.
+  let sawBig = false;
+  for (let i = 0; i < 2000 && !sawBig; i++) {
+    sawBig = (await ddl.query(`SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+      WHERE c.relname = 'snap_race__big' AND l.mode = 'AccessShareLock' AND l.granted AND l.pid <> pg_backend_pid()`)).rowCount > 0;
+    if (!sawBig) await new Promise((r) => setTimeout(r, 2));
+  }
   const altered = await ddl.query(`ALTER TABLE ${smallRel} ALTER COLUMN n TYPE bigint`).then(() => "ok", (e) => e.message);   // int4 → int8 은 표를 다시 쓴다
   await ddl.end();
   const raceSnap = await raceSnapP;
   const smallInSnap = raceSnap.v?.tables.find((t) => t.table === "small")?.rows;
-  chk("E8 떠 두기 도중 아직 안 읽은 표를 다시 쓰는 DDL 이 끼어도 그 표가 빈 채로 담기지 않는다(5행)", altered === "ok" && smallInSnap === 5,
-    JSON.stringify({ altered, smallInSnap, err: raceSnap.e?.message }));
+  chk("E8 떠 두기 도중 아직 안 읽은 표를 다시 쓰는 DDL 이 끼어도 그 표가 빈 채로 담기지 않는다(5행)", sawBig && altered === "ok" && smallInSnap === 5,
+    JSON.stringify({ sawBig, altered, smallInSnap, err: raceSnap.e?.message }));
 } catch (e) { fail++; console.error("FAIL 예외 —", e); }
 finally {
   X.resetAppSqlLimits(env0);
