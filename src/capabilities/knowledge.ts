@@ -20,7 +20,7 @@ import { historyCapabilities } from "./knowledge/history.js";
 //  #592 정적 경로(knowledge-view-config·knowledge-comments)도 같은 규칙으로 :name 계열 **앞**에 둔다
 //  (현 Express 패턴상 세그먼트가 달라 실충돌은 없지만, 순서 규칙을 지켜 미래 경로 추가에도 안전).
 export const knowledgeCapabilities: Capability[] = [
-  ...readStaticCapabilities,            // list · grep · search · similar · graph · tree
+  ...readStaticCapabilities,            // list · grep · search · similar · graph · tree · screen_search
   ...wikiUiStaticCapabilities,          // #592 정적 경로 — /:name 계열보다 먼저
   ...reviewCapabilities,                // #783 수정 검토 큐 · #802 검토 카운트
   ...classificationInboxCapabilities,   // #982 미분류 인박스 · #1102 proposed 분류 인박스(정적, :name 보다 먼저)

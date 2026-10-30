@@ -171,7 +171,6 @@ async function PAGE_MAIN() {
     if (p.endsWith("/api/ui/v6/search-log")) { try { LOGS.push(JSON.parse(String((opts && opts.body) || "{}"))); } catch (_) { LOGS.push({ bad: true }); } return J({ ok: true }); }
     if (p.endsWith("/api/ui/categories")) return J({ categories: [{ id: 77, key: "slack-cat", name: "슬랙 분류", should: "슬랙에서 온 것" }] });
     if (p.endsWith("/api/ui/knowledge/similar")) { await later("sim"); return J({ entries: hit ? SIM : [] }); }
-    if (p.endsWith("/api/ui/knowledge/semantic")) return J({ entries: [] });
     //  A15 — 종류마다 모두 몇 개인가(줄은 20개씩만 온다)
     if (p.endsWith("/api/ui/knowledge-screen/search") && u.searchParams.get("mode") === "count") return J({ mode: "count", total: hit ? 254 : 0 });
     if (p.endsWith("/api/ui/v6/projects/search") && u.searchParams.get("mode") === "count") return J({ mode: "count", total: hit ? 12 : 0 });
@@ -794,7 +793,7 @@ check(allRows(R.def).length >= 6 && reqOf(R.defReqs, "/api/ui/v6/session-search?
   check(conv.length >= 1 && conv.every((l) => /sort=recent/.test(l)), "G1 기본 = 최신순 — 대화 요청 sort=recent", JSON.stringify(conv));
   check(reqOf(R.defReqs, "/api/ui/knowledge-screen/search?").some((l) => /plain=1/.test(l)) && reqOf(R.defReqs, "/api/ui/v6/projects/search?").some((l) => /plain=1/.test(l)),
     "G1 지식·프로젝트 글자 검색은 plain=1", JSON.stringify(R.defReqs));
-  check(!(R.defReqs || []).some((l) => /\/semantic\?/.test(l) || /\/v6\/projects\/similar\?/.test(l)) && reqOf(R.defReqs, "/api/ui/knowledge/similar?").length >= 1,
+  check(!(R.defReqs || []).some((l) => /\/semantic\?/.test(l) || /[?&]semantic=/.test(l) || /\/v6\/projects\/similar\?/.test(l)) && reqOf(R.defReqs, "/api/ui/knowledge/similar?").length >= 1,
     "G1 의미검색·프로젝트 뜻 채널은 안 부르고 지식 뜻 비슷은 부른다", JSON.stringify(R.defReqs));
 }
 // G2 배치

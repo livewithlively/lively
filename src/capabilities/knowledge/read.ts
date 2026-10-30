@@ -309,7 +309,7 @@ type KnowledgeScreenSearchInput = z.infer<z.ZodObject<typeof knowledgeScreenSear
 export const knowledgeScreenSearch: Capability = {
   name: "knowledge_screen_search",
   title: "지식 찾기(사람 화면)",
-  description: "사람이 화면에서 글로 지식을 찾는다(⌘K · 링크 고르기 · 프로젝트 지식 고르기 전용). 에이전트 검색과 달리 «검색 제외» 지식도 나오고 행에 searchable 이 실린다. 벡터로는 찾지 못한다.",
+  description: "사람이 화면에서 글로 지식을 찾는다(⌘K · 링크 고르기 · 프로젝트 지식 고르기 전용). 에이전트 검색과 달리 «검색 제외» 지식도 나오고 행에 searchable 이 실린다. 검색 제외 지식은 글자로만 찾는다(벡터가 없다).",
   scope: "memory",
   input: knowledgeScreenSearchInput,
   expose: {
@@ -322,7 +322,8 @@ export const knowledgeScreenSearch: Capability = {
   },
   handler: async (input: KnowledgeScreenSearchInput, user: LivelyUser, ctx?: CapabilityCtx) => {
     //  expose.mcp:false 는 MCP 등록만 막는다 — REST 는 스코프와 앱 권한(knowledge_* 글롭 포함)만 보므로 앱 토큰 · 세션 호출(에이전트)은 여기서 막는다
-    //   (knowledge_search 의 forSession 과 같은 구분). 웹 화면은 둘 다 싣지 않는다.
+    //   (knowledge_search 의 forSession 과 같은 구분). 웹 화면은 둘 다 싣지 않는다. 권한 경계가 아니라 에이전트 잡음을 막는 울타리다 —
+    //   검색 제외 문서는 같은 사람이 knowledge_list · knowledge_get 으로 이미 읽는다.
     if (user?.appId || ctx?.session) throw new HttpError(403, "knowledge_screen_search 는 사람 화면 전용입니다 — 에이전트는 knowledge_search · knowledge_grep 을 쓰세요.");
     const viewer = ctx?.viewer ?? null;
     const opts = {

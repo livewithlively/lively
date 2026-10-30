@@ -183,9 +183,11 @@ try {
   chk("E24 하이브리드 같은 급: 검색 대상 먼저(더 오래됐어도)", names(tie).indexOf(O) >= 0 && names(tie).indexOf(O) < names(tie).indexOf(Y), JSON.stringify(names(tie)));
   //  에이전트 도구 — MCP 길로 불러도 B 없음 · 화면 칸이 입력 스키마에 없다.
   chk("E24 에이전트 도구 입력 스키마에 화면 칸이 없다", !("semantic" in grepCap.input) && !("includeUnsearchable" in grepCap.input) && !("includeUnsearchable" in searchCap.input));
-  chk("E24 MCP 길 knowledge_grep: B 없음", !names((await grepCap.handler({ q: LEX }, dana, mcpCtx)).entries).includes(B));
+  const mcpG = names((await grepCap.handler({ q: LEX }, dana, mcpCtx)).entries);
+  chk("E24 MCP 길 knowledge_grep: A 는 나오고 B 없음", mcpG.includes(A) && !mcpG.includes(B), JSON.stringify(mcpG));
   __resetQueryEmbedCache();
-  chk("E24 MCP 길 knowledge_search: B 없음", !names((await searchCap.handler({ q: LEX }, dana, mcpCtx)).entries).includes(B));
+  const mcpS = names((await searchCap.handler({ q: LEX }, dana, mcpCtx)).entries);
+  chk("E24 MCP 길 knowledge_search: A 는 나오고 B 없음", mcpS.includes(A) && !mcpS.includes(B), JSON.stringify(mcpS));
 
   // ── E4 · E5 벡터: B 에 질의와 똑같은 «남은 벡터» 를 심는다(벡터 유무가 아니라 표시로 가르는지) ──
   await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [B, lit(basis(0))]);
