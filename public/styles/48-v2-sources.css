@@ -60,6 +60,8 @@
 .v2-srl-ava.pava { width: 18px; height: 18px; font-size: 9px; }
 .v2-srl-sic { flex: none; display: grid; place-items: center; width: 18px; color: var(--muted-2); }
 .v2-srl-src.ai .v2-srl-sic { color: var(--blue); }
+/* 수집한 자료의 앱 자리 = 공식 로고(svc-logos). 선 글리프(15px)와 같은 키로 맞춘다. */
+.v2-srl-logo svg { display: block; width: 14px; height: 14px; }
 .v2-srl-src.person:not(:has(.pava)) { color: var(--muted-2); }
 /* 「올린 사람」 거르개: 「지식이 된 것만」 칩과 같은 알약. 고르면 파란 테. */
 .v2-src-who { flex: none; max-width: 150px; height: 26px; padding: 0 22px 0 9px; border: 1px solid var(--line-net); border-radius: 999px; background: var(--surface); font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer;
