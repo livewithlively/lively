@@ -311,12 +311,13 @@ export function embeddingInputText(k: { title?: string | null; summary?: string 
 }
 
 const HNSW_MAX_DIMS = 2000; // pgvector HNSW 인덱스 차원 한계(초과 시 컬럼만 — 작은 코퍼스는 seq-scan 으로 충분)
+const HALFVEC_TABLES = new Set(["knowledge_chunk"]);
 
 // 임베딩 컬럼을 얹을 수 있는 테이블 — 내부 상수만 넘긴다(knowledge·project). SQL 인터폴레이션 안전 가드.
 // category(#1153) — 분류의 **정의(should)** 를 벡터로 둔다. 소속 지식 벡터와의 거리가 곧 '정의-내용 불일치'다.
 //  (지식·프로젝트처럼 '검색 대상'이라서가 아니라, 그 분류 안 지식을 재는 **고정점**이라서 임베딩한다.)
 //  collect_unit = 수집 단위의 설명 벡터(#4213 T12 #4744 «단위 찾기» · 검색 실패 보조 안내).
-const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category", "session_card", "collect_unit"]);   // session_card = 세션 요약 카드(#4530 «뜻으로 찾기»)
+const EMBEDDABLE_TABLES = new Set(["knowledge", "project", "category", "session_card", "collect_unit", "knowledge_chunk"]);   // session_card = 세션 요약 카드(#4530 «뜻으로 찾기»)
 
 // 가드 마이그레이션 — pgvector 확장 + <table> 임베딩 컬럼/인덱스(embedding_vector/model/updated_at + <table>_embedding_hnsw).
 //  기본 table='knowledge'. 프로젝트 등 다른 임베딩 타깃도 같은 컬럼셋을 재사용(#631).
@@ -374,12 +375,19 @@ export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, t
     return false;
   }
   try {
-    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_vector vector(${dim})`);
+    //  #5203 조각은 2바이트 소수(halfvec)로 둔다 — 조각 벡터 32,419개에서 인덱스 266MB → 89MB · 재현율 같음(측정). halfvec 이 없는 옛 pgvector(<0.7)면 vector 로 둔다 —
+    //   쓰는 쪽은 그대로다(vector → halfvec 은 암묵 변환이 있다).
+    //   칸이 이미 있으면 그 형을 따른다(인덱스 연산자가 칸의 형과 맞아야 한다).
+    const existing = (await pool.query(
+      `SELECT format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname='embedding_vector' AND NOT attisdropped`, [table])).rows[0] as { t?: string } | undefined;
+    const half = existing?.t ? existing.t === "halfvec"
+      : HALFVEC_TABLES.has(table) && ((await pool.query(`SELECT 1 FROM pg_type WHERE typname='halfvec'`)).rowCount ?? 0) > 0;
+    await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_vector ${half ? "halfvec" : "vector"}(${dim})`);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_model TEXT`);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`);
     if (dim <= HNSW_MAX_DIMS) {
       await pool.query(
-        `CREATE INDEX IF NOT EXISTS ${table}_embedding_hnsw ON ${table} USING hnsw (embedding_vector vector_cosine_ops)`,
+        `CREATE INDEX IF NOT EXISTS ${table}_embedding_hnsw ON ${table} USING hnsw (embedding_vector ${half ? "halfvec_cosine_ops" : "vector_cosine_ops"})`,
       );
     } else {
       console.warn(`[embeddings] dimensions=${dim} > ${HNSW_MAX_DIMS}: HNSW 인덱스 생략(seq-scan). 작은 코퍼스 권장.`);

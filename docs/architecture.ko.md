@@ -139,7 +139,9 @@ Docker: `docker compose up -d` 는 스토어(items-db, pgvector)만 띄운다 �
 
 지식 검색은 두 도구다: **`knowledge_search`**(찾기의 기본 — 낱말 **BM25** ∪ 벡터 임베딩을 **RRF**(`Σ 1/(rank+60)`)로 융합. 자연어든 키워드든 식별자든) + **`knowledge_grep`**(글자 그대로의 일치 · 정규식 · 건수, ripgrep 식 — 항상 동작). 단어가 본문에 그대로 없어도 의미로 회수한다.
 
-낱말 색인은 확장 없이 일반 표에 있다(`knowledge_lex_doc` · `knowledge_lex_posting` — 낱말 규칙 `src/v6/knowledge-lex.ts`). 정비 스윕이 1분마다 `knowledge` 에 맞추고, 색인이 98% 차기 전이나 SQL 이 실패하면 검색은 grep 채널로 돌아간다. 파생 표라 비워도 된다 — 두 표를 같이 비우면 스윕이 다시 만든다. 낱말 규칙을 바꾸면 `LEX_RULES_VERSION` 을 올린다. 이슈 번호 · 파일 경로 같은 식별자가 든 질의는 낱말 채널만 쓴다.
+낱말 색인은 확장 없이 일반 표에 있다(`knowledge_lex_doc` · `knowledge_lex_posting` — 낱말 규칙 `src/v6/knowledge-lex.ts`). 정비 스윕이 1분마다 `knowledge` 에 맞추고, 색인이 98% 차기 전이나 SQL 이 실패하면 검색은 grep 채널로 돌아간다. 파생 표라 비워도 된다 — `knowledge_chunk` 까지 세 표를 같이 비우면 스윕이 다시 만든다. 낱말 규칙을 바꾸면 `LEX_RULES_VERSION` 을 올린다. 이슈 번호 · 파일 경로 같은 식별자가 든 질의는 낱말 채널만 쓴다.
+
+지식 조각(`knowledge_chunk` — 절마다 벡터 하나, 규칙 `src/v6/knowledge-chunk.ts`)도 같은 스윕이 맞춘다. 글이 같은 조각은 벡터를 그대로 쓴다. 빈 벡터는 정비가 10분마다 100건, 최근 24시간 7,000건(`LIVELY_CHUNK_EMBED_DAILY_MAX`)까지 채운다. ⚠ 문서 벡터는 문서 앞 8,000자만 임베딩 서버로 보내지만 조각은 **검색 대상 문서의 본문 전체**(문서당 1,000조각까지)를 보낸다 — 외부 엔드포인트를 쓰는 배포는 전송 범위가 넓어진다. 끄는 길은 임베딩을 끄거나 일시중지하는 것이다. 차원을 바꾸면 다른 임베딩 칸처럼 `knowledge_chunk.embedding_vector` 도 손으로 다시 만든다.
 
 세션의 찾기 · 열람은 `knowledge_search_log` 에 남는다(90일, 세션 보존기간이 더 짧으면 그 기간 · 세션 완전 삭제 때 함께 지움 · 자동 소환 길은 글을 남기지 않음). `db_query` 내장 소스로는 읽을 수 없다.
 

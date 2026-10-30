@@ -101,6 +101,22 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
       tf INT NOT NULL,
       PRIMARY KEY (tenant_id, term, doc_id) INCLUDE (tf));
     CREATE INDEX IF NOT EXISTS knowledge_lex_posting_doc_idx ON knowledge_lex_posting(doc_id);
+    ALTER TABLE knowledge_lex_doc ADD COLUMN IF NOT EXISTS chunk_key TEXT;   -- 조각을 맞춘 글과 규칙의 판(content_hash:판, #5203) — 비어 있으면 아직 안 나눈 문서
+
+    -- knowledge_chunk — 지식의 절 조각과 그 벡터(#5203). 규칙은 v6/knowledge-chunk.ts, 맞추는 것은 v6/knowledge-lex-store.ts 다. 벡터 칸은 ui-vis 의 임베딩 스키마 보장이 붙인다.
+    --  이름 + 순서로 유일하게 묶지 않는다 — 조각이 앞뒤로 밀릴 때 같은 문서 안에서 순서를 맞바꾼다(문서별 잠금이 동시 쓰기를 막는다).
+    CREATE TABLE IF NOT EXISTS knowledge_chunk(
+      tenant_id uuid NOT NULL DEFAULT ${TENANT_DEFAULT_EXPR},
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      seq INT NOT NULL,
+      start_line INT NOT NULL,
+      path TEXT NOT NULL DEFAULT '',
+      prefix TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL,
+      text_hash TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS knowledge_chunk_doc_idx ON knowledge_chunk(tenant_id, name);
   `);
 
   // ── knowledge_search_log — 에이전트 · 세션의 지식 찾기 기록(#5201). 무엇을 찾았고 무엇이 나왔고 무엇을 열었나. ──

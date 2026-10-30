@@ -95,6 +95,9 @@ export const SWEEP_JOBS: readonly SweepJob[] = [
   //  밀린 것이 없으면 조회 한 번이다. 셀프호스트도 같은 정의로 돈다(housekeeping).
   { key: "knowledge-lex", intervalMs: KNOWLEDGE_LEX_SWEEP_MS, housekeeping: true,
     run: () => import("../v6/knowledge-lex-store.js").then((m) => m.sweepKnowledgeLex()) },
+  // 지식 조각 임베딩(#5203) — 조각의 빈 벡터를 판마다 조금씩 채운다. 저장이 깨우지 않고 이 표로만 돈다(그 까닭은 embedding-backfill 의 절 머리말). 셀프호스트도 같다.
+  { key: "knowledge-chunk-embed", intervalMs: TEN_MIN_MS, housekeeping: true,
+    run: () => import("../v6/embedding-backfill.js").then((m) => m.sweepChunkEmbeddings()) },
   // device-auth 리퍼(#880) — 만료 1h 지난 pending 정리(user_code 회수). 실측 2건 잔존.
   { key: "device-auth-reap", intervalMs: TEN_MIN_MS,
     run: () => import("../org/auth/device-auth.js").then((m) => m.reapDeviceAuth()) },

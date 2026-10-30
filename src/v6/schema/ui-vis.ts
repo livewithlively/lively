@@ -95,6 +95,9 @@ export async function initV6UiVis(pool: Pool): Promise<void> {
     //  같은 까닭으로 provider 와 무관하게 늘 보장한다(뜻 검색 SQL 이 컬럼 존재를 가정한다 — 없으면 글자 검색만으로 답한다).
     const okS = await ensureEmbeddingSchema(pool, ec.dimensions, "session_card");
     console.log(`[v6 schema] 세션 카드 임베딩 스키마 ${okS ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.dimensions})`);
+    // 지식 조각(#5203) — 절마다 벡터 하나. 표(knowledge_chunk)는 knowledge 조각이 만든다. 같은 까닭으로 provider 와 무관하게 늘 보장한다.
+    const okK = await ensureEmbeddingSchema(pool, ec.dimensions, "knowledge_chunk");
+    console.log(`[v6 schema] 지식 조각 임베딩 스키마 ${okK ? "준비됨" : "건너뜀(렉시컬 폴백)"} (dim=${ec.dimensions})`);
   } catch (e) {
     console.warn(`[v6 schema] 임베딩 스키마 준비 건너뜀(비치명적): ${(e as Error)?.message}`);
   }
