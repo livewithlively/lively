@@ -349,6 +349,18 @@ async function hasEmbeddingSchema(pool: pg.Pool, table: string, dim: number): Pr
   }
 }
 
+/**
+ * #5203 조각은 2바이트 소수(halfvec)로 둔다 — 조각 벡터 32,419개에서 인덱스 266MB → 89MB · 재현율 같음(측정). halfvec 이 없는 옛 pgvector(<0.7)면 vector 로 둔다 —
+ *  쓰는 쪽은 그대로다(vector → halfvec 은 암묵 변환이 있다). 칸이 이미 있으면 그 형을 따른다(인덱스 연산자가 칸의 형과 맞아야 한다).
+ */
+async function useHalfvec(pool: pg.Pool, table: string): Promise<boolean> {
+  if (!HALFVEC_TABLES.has(table)) return false;
+  const col = (await pool.query(
+    `SELECT format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname='embedding_vector' AND NOT attisdropped`, [table])).rows[0] as { t?: string } | undefined;
+  if (col?.t) return col.t === "halfvec";
+  return ((await pool.query(`SELECT 1 FROM pg_type WHERE typname='halfvec'`)).rowCount ?? 0) > 0;
+}
+
 export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, table = "knowledge"): Promise<boolean> {
   if (!EMBEDDABLE_TABLES.has(table)) {
     console.warn(`[embeddings] 알 수 없는 임베딩 테이블(${table}) — 스키마 준비 건너뜀`);
@@ -375,13 +387,7 @@ export async function ensureEmbeddingSchema(pool: pg.Pool, dimensions: number, t
     return false;
   }
   try {
-    //  #5203 조각은 2바이트 소수(halfvec)로 둔다 — 조각 벡터 32,419개에서 인덱스 266MB → 89MB · 재현율 같음(측정). halfvec 이 없는 옛 pgvector(<0.7)면 vector 로 둔다 —
-    //   쓰는 쪽은 그대로다(vector → halfvec 은 암묵 변환이 있다).
-    //   칸이 이미 있으면 그 형을 따른다(인덱스 연산자가 칸의 형과 맞아야 한다).
-    const existing = (await pool.query(
-      `SELECT format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = to_regclass($1) AND attname='embedding_vector' AND NOT attisdropped`, [table])).rows[0] as { t?: string } | undefined;
-    const half = existing?.t ? existing.t === "halfvec"
-      : HALFVEC_TABLES.has(table) && ((await pool.query(`SELECT 1 FROM pg_type WHERE typname='halfvec'`)).rowCount ?? 0) > 0;
+    const half = await useHalfvec(pool, table);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_vector ${half ? "halfvec" : "vector"}(${dim})`);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_model TEXT`);
     await pool.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_updated_at TIMESTAMPTZ`);
