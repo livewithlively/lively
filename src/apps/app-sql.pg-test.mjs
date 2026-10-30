@@ -29,6 +29,12 @@
 //  D20 카탈로그 전수 — OID 계열 형(oid · reg* · aclitem · oidvector)을 받거나 내는 pg_catalog 함수(pg_ 아님 · internal 인자 없음)는
 //      검사기가 거부하거나 «검토한 무해 목록» 에 있다 · reg*·aclitem 계열 형은 전부 거부. PG 판이 올라 새 것이 생기면 실패한다.
 //      (격리 리뷰: _regclass 배열형 · format_type · acldefault 로 다른 워크스페이스의 스키마·표·역할 이름이 읽혔다)
+//  ── #5172 ── (E 번호 = 그 태스크의 엣지 표 행)
+//  D21 원래 id 로 넣기(INSERT … OVERRIDING SYSTEM VALUE) — 뒤의 평범한 INSERT 가 부딪치지 않게 id 시퀀스를 앞으로만 맞춘다:
+//      처음 쓰는 시퀀스(RETURNING 포함) · 작은 id · 지운 맨 끝 id 다시 안 냄 · 다음 번호 경계 · 묶음 · 묶음 취소 · 0행 ·
+//      다른 앱 시퀀스 403 · 권한 범위 · 이전 판 역할 재보장 · 같은 표 맞춤 줄 세우기(기다리다 409 / 기다려서 됨) ·
+//      숫자로 시작하는 앱 id(E18) · 시퀀스 없는 표
+//  D9 덧붙임 — 보관된 표의 시퀀스 권한도 걷는다(E16) · 시퀀스 권한이 남아 있어도 앱 제거는 역할을 지운다(E17)
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -393,6 +399,102 @@ try {
     chk(`D20 reg*·aclitem 계열 형 ${types.length}개 — 전부 거부`, types.length >= 24 && opened.length === 0, `거부되지 않은 형: ${opened.join(", ")}`);
   }
 
+  // ── D21 원래 id 로 넣기 — INSERT … OVERRIDING SYSTEM VALUE 뒤 id 시퀀스 맞춤(#5172, 엣지 E4~E15) ──
+  {
+    limits();
+    const SEQ = [{ table: "items", columns: [{ name: "v", type: "text" }] }, { table: "plain", columns: [{ name: "v", type: "text" }] }];
+    await ensureAppTables("seq", SEQ, { schema: SA, strict: true, sqlRole: true, report: emptyTableReport() });
+    const o = { app: "seq", tables: ["items", "plain"] };
+    const runS = (sql, params = [], more = {}) => run(sql, params, { ...o, ...more });
+    const put = (ids) => runS(`INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES ${ids.map((id) => `(${id}, 'x')`).join(", ")}`);
+    const nextId = async () => Number((await runS("INSERT INTO items (v) VALUES ('n') RETURNING id")).rows[0]?.id);
+    const has = async (id) => (await su.query(`SELECT 1 FROM "${SA}"."seq__items" WHERE id = $1`, [id])).rowCount === 1;
+
+    //  RETURNING 을 붙여 결과 상한 감싸기(WITH 로 감싼 문장) 뒤에서도 맞춰지는지 함께 본다.
+    const first = await runS("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (100, 'x'), (101, 'x') RETURNING id");
+    const n1 = await nextId();
+    chk("D21 E4 한 번도 안 쓴 시퀀스 — id 100·101 을 넣은 뒤(RETURNING) 평범한 INSERT 는 102(부딪치지 않는다)",
+      first.changed === 2 && first.rows.map((r) => Number(r.id)).join() === "100,101" && n1 === 102, JSON.stringify({ first, n1 }));
+    await put([5]);
+    const n2 = await nextId();
+    chk("D21 E5 더 작은 id(5)를 넣어도 시퀀스는 뒤로 가지 않는다 — 103", n2 === 103 && await has(5), JSON.stringify({ n2 }));
+    await runS("DELETE FROM items WHERE id = $1", [103]);
+    await put([6]);
+    const n3 = await nextId();
+    chk("D21 E6 맨 끝(103)을 지운 뒤 작은 id(6) — 지운 103 을 다시 내주지 않는다(104)", n3 === 104 && !(await has(103)), JSON.stringify({ n3 }));
+    await put([105]);
+    const n4 = await nextId();
+    chk("D21 E7 경계 — 시퀀스가 다음에 낼 바로 그 번호(105)를 직접 넣으면 평범한 INSERT 는 106", n4 === 106, JSON.stringify({ n4 }));
+
+    const b = await batch([{ sql: "INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (500, 'b1')" }, { sql: "INSERT INTO items (v) VALUES ('b2') RETURNING id" }], o);
+    chk("D21 E8 묶음 — 원래 id 로 넣은 바로 다음 문장부터 맞춰진 시퀀스를 쓴다(501)", Number(b.results[1]?.rows[0]?.id) === 501, JSON.stringify(b.results));
+    const bad9 = await errOf(batch([{ sql: "INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (900, 'c1')" },
+      { sql: "INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (100, 'dup')" }], o));
+    const after9 = await nextId();
+    chk("D21 E9 묶음이 실패하면 넣은 행도 없다(900 없음) · 그 뒤 평범한 INSERT 는 된다",
+      bad9?.status === 409 && bad9?.body?.index === 1 && !(await has(900)) && after9 > 501 && await has(after9), JSON.stringify({ bad9: bad9?.message, after9 }));
+    const zero = await runS("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE SELECT 7000, 'z' WHERE false");
+    const n5 = await nextId();
+    chk("D21 E10 0행 INSERT … SELECT — 오류 없음 · 시퀀스 그대로", zero.changed === 0 && n5 === after9 + 1, JSON.stringify({ zero, n5, after9 }));
+
+    const role = roleOf(SA, "seq");
+    const other = await errOf(runS("", [], { plan: raw(`SELECT setval('"${SA}"."memo__notes_id_seq"', 999)`, true) }));
+    chk("D21 E11 앱 역할로 다른 앱 표의 시퀀스를 옮기면 권한 거부(403)", other?.status === 403, JSON.stringify({ st: other?.status, m: other?.message }));
+    const priv = (await su.query(`SELECT has_sequence_privilege($1, $2, 'SELECT') AS s, has_sequence_privilege($1, $2, 'UPDATE') AS u, has_sequence_privilege($1, $2, 'USAGE') AS g`,
+      [role, `"${SA}"."seq__items_id_seq"`])).rows[0];
+    //  UPDATE 는 DB 에서 nextval·setval 도 허락한다 — 앱 SQL 이 그 함수를 부르는 것은 검사기가 막는다(app-sql.test). 여기선 최소 권한만 본다.
+    chk("D21 E12 앱 역할은 자기 표 id 시퀀스에 SELECT·UPDATE 만 받는다(USAGE 는 없다)", priv.s === true && priv.u === true && priv.g === false, JSON.stringify(priv));
+
+    await su.query(`REVOKE ALL ON SEQUENCE "${SA}"."seq__items_id_seq" FROM "${role}"`);
+    const denied = await errOf(put([1000]));
+    await ensureAppSqlRole("seq", ["items", "plain"], SA);
+    const again = await put([1001]);
+    const n6 = await nextId();
+    chk("D21 E13 시퀀스 권한이 없던 역할(이전 판)도 다시 보장하면 받는다", denied?.status === 403 && !(await has(1000)) && again.changed === 1 && n6 === 1002,
+      JSON.stringify({ denied: denied?.status, n6 }));
+
+    // E14 같은 표를 맞추는 트랜잭션끼리 줄을 선다 — 앞 묶음이 맞춤을 마친 채 3초 머무는 동안 뒤 문장은 잠금 대기 상한(1초)에 걸린다.
+    const plan = (sql) => planAppSql(sql, { appId: "seq", schema: SA, tables: o.tables });
+    const waitHeld = async () => {                                     // 앞 묶음이 맞춤 잠금을 쥘 때까지(이름은 모른다 — 자문 잠금이 하나 잡혔나만 본다)
+      for (let i = 0; i < 100; i++) {
+        if ((await su.query("SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND granted")).rows[0].n > 0) return true;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return false;
+    };
+    const heldP = errOf(batch([{ plan: await plan("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (2000, 'h')") }, { plan: raw("SELECT pg_sleep(3)") }], o));
+    const saw = await waitHeld();
+    const waited = await errOf(put([2001]));
+    const held = await heldP;
+    chk("D21 E14 같은 표 맞춤은 줄을 선다 — 앞 트랜잭션이 끝나기 전엔 뒤 문장이 기다리다 409(그 까닭으로) · 그 행은 없다",
+      saw && held === null && waited?.status === 409 && /원래 id 로 넣는 다른 작업/.test(waited?.message ?? "") && !(await has(2001)) && await has(2000),
+      JSON.stringify({ saw, held: held?.message, waited: waited?.status, m: waited?.message }));
+    //  E14b 기다릴 수 있으면 된다 — 앞 트랜잭션(3000)이 커밋한 뒤 뒤 문장(2500)이 이어서 맞추고, 시퀀스는 둘 중 큰 쪽 뒤로 간다.
+    limits({ LIVELY_APP_SQL_LOCK_MS: "8000" });
+    const heldP2 = errOf(batch([{ plan: await plan("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (3000, 'h2')") }, { plan: raw("SELECT pg_sleep(1)") }], o));
+    const saw2 = await waitHeld();
+    const waited2 = await errOf(put([2500]));
+    const held2 = await heldP2;
+    const n7 = await nextId();
+    limits();
+    chk("D21 E14b 잠금 대기 상한 안이면 뒤 문장도 된다 — 시퀀스는 큰 쪽(3000) 뒤로(3001)",
+      saw2 && held2 === null && waited2 === null && await has(2500) && await has(3000) && n7 === 3001, JSON.stringify({ saw2, held2: held2?.message, waited2: waited2?.message, n7 }));
+
+    //  E18 숫자로 시작하는 앱 id(물리 이름 "9seq__items") — 표 이름 모양 확인이 이런 앱도 받는다.
+    await ensureAppTables("9seq", [{ table: "items", columns: [{ name: "v", type: "text" }] }], { schema: SA, strict: true, sqlRole: true, report: emptyTableReport() });
+    const o9 = { app: "9seq", tables: ["items"] };
+    const put9 = await errOf(run("INSERT INTO items (id, v) OVERRIDING SYSTEM VALUE VALUES (70, 'a')", [], o9));
+    const next9 = await errOf(run("INSERT INTO items (v) VALUES ('b') RETURNING id", [], o9).then((r) => { if (Number(r.rows[0]?.id) !== 71) throw new Error(`id ${r.rows[0]?.id}`); }));
+    chk("D21 E18 숫자로 시작하는 앱 id 도 원래 id 로 넣고 맞춘다(70 → 다음 71)", put9 === null && next9 === null, JSON.stringify({ put9: put9?.message, next9: next9?.message }));
+
+    await su.query(`ALTER TABLE "${SA}"."seq__plain" ALTER COLUMN id DROP IDENTITY`);
+    const ensured = await errOf(ensureAppSqlRole("seq", ["items", "plain"], SA));
+    const noSeq = await errOf(runS("INSERT INTO plain (id, v) OVERRIDING SYSTEM VALUE VALUES (42, 'p')"));
+    const plainRow = (await su.query(`SELECT 1 FROM "${SA}"."seq__plain" WHERE id = 42`)).rowCount === 1;
+    chk("D21 E15 id 시퀀스가 없는 표 — 역할 보장도, 원래 id 로 넣기도 오류 없이 된다", ensured === null && noSeq === null && plainRow,
+      JSON.stringify({ ensured: ensured?.message, noSeq: noSeq?.message }));
+  }
+
   // ── D9 ──
   {
     const role = roleOf(SA, "crm");
@@ -400,10 +502,18 @@ try {
     const archivedAs = cleaned.archived[0]?.archived_as ?? "";
     const can = archivedAs ? (await su.query("SELECT has_table_privilege($1, $2, 'SELECT') AS ok", [role, archivedAs.split(".").map((x) => `"${x}"`).join(".")])).rows[0].ok : null;
     chk("D9 보관된 테이블은 앱 역할이 못 읽는다", !!archivedAs && can === false, JSON.stringify({ cleaned, can }));
+    const seqCan = archivedAs ? (await su.query("SELECT has_sequence_privilege($1, pg_get_serial_sequence($2, 'id'), 'UPDATE') AS ok",
+      [role, archivedAs.split(".").map((x) => `"${x}"`).join(".")])).rows[0].ok : null;
+    chk("D9 E16(#5172) 보관된 테이블의 id 시퀀스도 앱 역할이 못 옮긴다(권한을 걷는다)", seqCan === false, JSON.stringify({ seqCan }));
+    //  E17(#5172) 어디선가 시퀀스 권한이 남아 있어도(보관 단계를 거치지 않은 길) 앱 제거는 역할을 지운다 — 남은 권한은 DROP ROLE 을 막는다.
+    const archivedSeq = archivedAs ? (await su.query("SELECT pg_get_serial_sequence($1, 'id') AS s", [archivedAs.split(".").map((x) => `"${x}"`).join(".")])).rows[0].s : null;
+    if (archivedSeq) await su.query(`GRANT UPDATE ON SEQUENCE ${archivedSeq} TO "${role}"`);
+    const leftover = archivedSeq ? (await su.query("SELECT has_sequence_privilege($1, $2, 'UPDATE') AS ok", [role, archivedSeq])).rows[0].ok : null;
     await dropAppTables("crm", ["contacts"], SA);
     const gone = (await su.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [role])).rowCount === 0;
     const memoRole = (await su.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [roleOf(SA, "memo")])).rowCount === 1;
     chk("D9 앱 제거(테이블 DROP) 때 그 앱 역할만 지운다", gone && memoRole, JSON.stringify({ gone, memoRole }));
+    chk("D9 E17(#5172) 보관된 표의 시퀀스 권한이 남아 있었어도 앱 제거는 역할을 지운다", leftover === true && gone, JSON.stringify({ leftover, gone }));
   }
 
   // ── D10 ──
