@@ -591,7 +591,7 @@ function openKnowledgeLinkPicker(k, reload) {
     const q = qIn.value.trim();
     busy(results, skeletonRows(2));
     try {
-      const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '15', include_unsearchable: '1' }))
+      const url = q ? ('/api/ui/knowledge-screen/search?' + new URLSearchParams({ q, limit: '15' }))
         : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '15', orderBy: 'updated_at' }));
       const r = await api(url);
       const entries = ((r && r.entries) || []).filter((e) => e.name !== k.name && !isCategoryHomeDoc(e.name));

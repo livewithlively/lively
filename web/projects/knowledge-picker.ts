@@ -87,7 +87,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     busy(results, el('span', { class: 'admin-hint', text: '검색 중…' }));
     let matches: any;
     // 의미검색(하이브리드 RRF, #1133) — 자연어·다른 표현도 회수. 임베딩 off 환경은 서버가 grep 으로 폴백.
-    try { matches = await api('/api/ui/knowledge/semantic?include_unsearchable=1&q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []); }
+    try { matches = await api('/api/ui/knowledge-screen/search?semantic=1&q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []); }
     catch (e) { results.replaceChildren(errorNote(e, '검색하지 못했습니다')); return; }
     const cand = matches.filter((m) => !linked().has(m.name));
     if (!cand.length) { results.replaceChildren(el('div', { class: 'pjv-kn-empty', text: '결과가 없거나 모두 이미 연결됨.' })); return; }

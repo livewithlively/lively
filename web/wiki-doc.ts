@@ -754,7 +754,7 @@ function openWikiSearch() {
       const seq = ++qkSeq;
       if (!q) { entries = []; sel = 0; paint(); return; }
       try {
-        const r = await api('/api/ui/knowledge/semantic?' + new URLSearchParams({ q, limit: '12', injection: 'recalled', include_unsearchable: '1' }));
+        const r = await api('/api/ui/knowledge-screen/search?' + new URLSearchParams({ q, limit: '12', injection: 'recalled', semantic: '1' }));
         if (seq !== qkSeq || closed) return;   // 그 사이 검색어가 바뀜/닫힘 — 이 결과는 폐기
         entries = ((r && r.entries) || []).filter((e) => !isCategoryHomeDoc(e.name));
         sel = 0;

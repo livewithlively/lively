@@ -2487,6 +2487,16 @@
   "input_hash": "1f1430ede859f49e"
  },
  {
+  "name": "knowledge_screen_search",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-screen/search"
+  ],
+  "input_hash": "a2ee42f9de54facd"
+ },
+ {
   "name": "knowledge_view_get",
   "scope": "memory",
   "mcp": false,

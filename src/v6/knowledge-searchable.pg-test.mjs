@@ -31,11 +31,11 @@
 //   E23 검색 제외에 벡터가 남아 있으면(끌 때 비우기 실패) — 유사의 기준이 안 되고(빈 결과) 스윕이 걷는다 · c 자동 스윕도(pending 0 이어도)
 //   E16b all 모드(전량 재임베딩) — 배치 도중 대상에서 빠진 행 때문에 뒤 행을 건너뛰지 않는다(done = 다음 배치 OFFSET)
 //   (E11 에 덧붙임) 소환 설정 토글은 갱신 시각을 안 올린다(props_ui 토글과 같은 까닭)
-//   E24 사람 화면 — REST 전용 인자가 있을 때만 검색 제외도 글자로 찾는다(grep · 건수 · 하이브리드 렉시컬) · 행에 표시 · 같은 급이면 검색 대상 먼저 ·
-//       벡터 채널은 그대로 뺀다 · 인자 없는 호출의 응답 모양은 그대로 · MCP 길(zod)은 인자를 버린다
+//   E24 사람 화면 — 화면 전용 op(knowledge_screen_search · MCP 에 없다)만 검색 제외도 글자로 찾는다(글자 · 건수 · semantic) · 행에 표시 · 같은 급이면 검색 대상 먼저(글자 · 하이브리드) ·
+//       벡터 채널은 그대로 뺀다 · 에이전트 도구의 응답 모양과 입력 스키마는 그대로 · 앱 토큰 · 세션 호출은 REST 로 와도 403
+//   E25 토글은 행 잠금 안에서 판정한다 — 다른 트랜잭션이 그 행을 바꾸는 중이면 기다렸다가 커밋된 값을 보고 판정한다
 import pg from "pg";
 import http from "node:http";
-import { z } from "zod";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
 if (!BASE) { console.error("ITEMS_DATABASE_URL(슈퍼유저 DSN)이 필요합니다"); process.exit(2); }
@@ -66,6 +66,7 @@ let pass = 0, fail = 0;
 const chk = (n, c, why = "") => { if (c) { pass++; console.log(`ok  ${n}`); } else { fail++; console.error(`FAIL ${n} — ${why}`); } };
 const q = async (sql, params = []) => (await itemsPool.query(sql, params)).rows;
 const thrown = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const capOf = (arr, n) => arr.find((c) => c.name === n);
 const names = (rows) => rows.map((r) => r.name);
 const hasVec = async (name) => (await q(`SELECT embedding_vector IS NOT NULL AS v FROM knowledge WHERE name=$1`, [name]))[0]?.v === true;
@@ -146,34 +147,45 @@ try {
   const h = await ks.hybridSearchKnowledge(LEX, { limit: 20 }, VIEWER);
   chk("E3 하이브리드 렉시컬: A 는 나오고 B 는 안 나온다", names(h).includes(A) && !names(h).includes(B), JSON.stringify(names(h)));
 
-  // ── E24 사람 화면(⌘K · 링크 고르기) — 인자가 있을 때만 검색 제외도 글자로 찾는다 ──
+  // ── E24 사람 화면(⌘K · 링크 고르기) — 화면 전용 op 만 검색 제외도 글자로 찾는다 ──
   const humanOpts = { limit: 20, includeUnsearchable: true };
   const gh = await ks.searchKnowledge(LEX, { ...humanOpts, plain: true }, VIEWER);
   const rowB = gh.find((r) => r.name === B), rowA = gh.find((r) => r.name === A);
   chk("E24 사람 화면 grep: B 가 나오고 표시 false · A 는 표시 true", rowB?.searchable === false && rowA?.searchable === true, JSON.stringify(gh.map((r) => [r.name, r.searchable])));
   chk("E24 순위: 같은 급이면 검색 대상 A 가 먼저(B 가 더 최근이어도)", names(gh).indexOf(A) < names(gh).indexOf(B), JSON.stringify(names(gh)));
-  chk("E24 인자 없는 호출의 행에는 표시 칸이 없다(에이전트 응답 모양 그대로)", g.length > 0 && !("searchable" in g[0]), JSON.stringify(Object.keys(g[0] ?? {})));
+  chk("E24 에이전트 길의 행에는 표시 칸이 없다(응답 모양 그대로)", g.length > 0 && !("searchable" in g[0]), JSON.stringify(Object.keys(g[0] ?? {})));
   chk("E24 사람 화면 건수: A·B 둘", (await ks.countKnowledgeGrep(LEX, { includeUnsearchable: true, plain: true }, VIEWER)) === 2);
   __resetQueryEmbedCache();
   const hh = await ks.hybridSearchKnowledge(LEX, humanOpts, VIEWER);
   chk("E24 사람 화면 하이브리드(렉시컬): B 가 표시를 달고 나온다", hh.find((r) => r.name === B)?.searchable === false, JSON.stringify(hh.map((r) => [r.name, r.searchable])));
   const grepCap = capOf(readStaticCapabilities, "knowledge_grep"), searchCap = capOf(readStaticCapabilities, "knowledge_search");
+  const screenCap = capOf(readStaticCapabilities, "knowledge_screen_search");
   const humanCtx = { source: "web", actor: VIEWER, viewer: VIEWER }, mcpCtx = { source: "mcp", actor: VIEWER, viewer: VIEWER };
-  const grepRest = (query) => grepCap.expose.rest[0].parse({ query, params: {} }), searchRest = (query) => searchCap.expose.rest[0].parse({ query, params: {} });
-  chk("E24 REST grep: 인자를 실으면 B 가 나온다", names((await grepCap.handler(grepRest({ q: LEX, plain: "1", include_unsearchable: "1" }), dana, humanCtx)).entries).includes(B));
-  chk("E24 REST grep 건수도 같다", (await grepCap.handler(grepRest({ q: LEX, plain: "1", mode: "count", include_unsearchable: "1" }), dana, humanCtx)).total === 2);
-  chk("E24 REST grep: 인자가 없으면 B 없음 · =0 도 없음",
-    !names((await grepCap.handler(grepRest({ q: LEX }), dana, humanCtx)).entries).includes(B)
-    && !names((await grepCap.handler(grepRest({ q: LEX, include_unsearchable: "0" }), dana, humanCtx)).entries).includes(B));
+  const screenRest = (query) => screenCap.expose.rest[0].parse({ query, params: {} });
+  chk("E24 배선: 화면 전용 op 는 MCP 에 없다(에이전트 도구 목록에 안 실린다)", !!screenCap && screenCap.expose.mcp === false);
+  chk("E24 화면 op: B 가 나오고 표시 false", (await screenCap.handler(screenRest({ q: LEX, plain: "1" }), dana, humanCtx)).entries.find((r) => r.name === B)?.searchable === false);
+  chk("E24 화면 op 건수도 같다(A·B)", (await screenCap.handler(screenRest({ q: LEX, plain: "1", mode: "count" }), dana, humanCtx)).total === 2);
   __resetQueryEmbedCache();
-  chk("E24 REST 하이브리드: 인자를 실으면 B 가 나온다", names((await searchCap.handler(searchRest({ q: LEX, include_unsearchable: "1" }), dana, humanCtx)).entries).includes(B));
-  //  MCP 와 앱 도구 다리(app-tool-call)는 핸들러 앞에서 zod 로 거른다 — 에이전트 도구에는 이 길이 없다.
-  const viaMcpGrep = z.object(grepCap.input).parse({ q: LEX, include_unsearchable: true });
-  const viaMcpSearch = z.object(searchCap.input).parse({ q: LEX, include_unsearchable: true });
-  chk("E24 MCP 길: zod 가 인자를 버린다", !("include_unsearchable" in viaMcpGrep) && !("include_unsearchable" in viaMcpSearch));
-  chk("E24 MCP 길 grep: 인자를 실어도 B 없음", !names((await grepCap.handler(viaMcpGrep, dana, mcpCtx)).entries).includes(B));
+  chk("E24 화면 op semantic: B 가 표시를 달고 나온다", (await screenCap.handler(screenRest({ q: LEX, semantic: "1" }), dana, humanCtx)).entries.find((r) => r.name === B)?.searchable === false);
+  const e24App = await thrown(() => screenCap.handler(screenRest({ q: LEX }), { ...dana, appId: "some-app" }, humanCtx));
+  const e24Sess = await thrown(() => screenCap.handler(screenRest({ q: LEX }), dana, { ...humanCtx, session: "box-pgt" }));
+  chk("E24 앱 토큰이 REST 로 부르면 403", e24App?.status === 403, String(e24App?.status ?? e24App));
+  chk("E24 세션(에이전트)이 REST 로 부르면 403", e24Sess?.status === 403, String(e24Sess?.status ?? e24Sess));
+  //  하이브리드의 같은 급 순위 — 벡터 점수가 끼지 않게 둘 다 벡터가 없는 문서로 잰다(스윕 전이라 O 는 대기 중).
+  const LEX2 = `zqtie${TAG}`, O = `${TAG}-old`, Y = `${TAG}-young`, CK2 = `zqother${TAG}`;   // 다른 카테고리 — 아래 E9 가 CK 안의 검색 제외를 센다
+  await q(`INSERT INTO category(key, name) VALUES($1,$1)`, [CK2]);
+  await kst.upsertKnowledge({ name: O, title: "오래된 검색 대상", body_md: `본문 ${LEX2}`, type: "reference", category: CK2 }, ctx);
+  await kst.upsertKnowledge({ name: Y, title: "새 재집계", body_md: `본문 ${LEX2}`, type: "reference", category: CK2, searchable: false }, ctx);
+  await q(`UPDATE knowledge SET updated_at='2026-01-01T00:00:00Z' WHERE name=$1`, [O]);
+  await q(`UPDATE knowledge SET updated_at='2026-10-30T00:00:00Z' WHERE name=$1`, [Y]);
   __resetQueryEmbedCache();
-  chk("E24 MCP 길 하이브리드: 인자를 실어도 B 없음", !names((await searchCap.handler(viaMcpSearch, dana, mcpCtx)).entries).includes(B));
+  const tie = await ks.hybridSearchKnowledge(LEX2, humanOpts, VIEWER);
+  chk("E24 하이브리드 같은 급: 검색 대상 먼저(더 오래됐어도)", names(tie).indexOf(O) >= 0 && names(tie).indexOf(O) < names(tie).indexOf(Y), JSON.stringify(names(tie)));
+  //  에이전트 도구 — MCP 길로 불러도 B 없음 · 화면 칸이 입력 스키마에 없다.
+  chk("E24 에이전트 도구 입력 스키마에 화면 칸이 없다", !("semantic" in grepCap.input) && !("includeUnsearchable" in grepCap.input) && !("includeUnsearchable" in searchCap.input));
+  chk("E24 MCP 길 knowledge_grep: B 없음", !names((await grepCap.handler({ q: LEX }, dana, mcpCtx)).entries).includes(B));
+  __resetQueryEmbedCache();
+  chk("E24 MCP 길 knowledge_search: B 없음", !names((await searchCap.handler({ q: LEX }, dana, mcpCtx)).entries).includes(B));
 
   // ── E4 · E5 벡터: B 에 질의와 똑같은 «남은 벡터» 를 심는다(벡터 유무가 아니라 표시로 가르는지) ──
   await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [B, lit(basis(0))]);
@@ -185,6 +197,10 @@ try {
   __resetQueryEmbedCache();
   const hvh = await ks.hybridSearchKnowledge(VQ, { limit: 20, includeUnsearchable: true }, VIEWER);
   chk("E24 사람 화면도 벡터 채널은 그대로 뺀다(남은 벡터로 B 가 안 나온다)", names(hvh).includes(C) && !names(hvh).includes(B), JSON.stringify(names(hvh)));
+  //  화면 op 의 두 갈래 — semantic 이면 뜻으로 찾고(C 는 벡터로만 찾힌다), 생략하면 글자만이다.
+  __resetQueryEmbedCache();
+  chk("E24 화면 op semantic=1: 벡터로만 찾히는 C 가 나온다", names((await screenCap.handler(screenRest({ q: VQ, semantic: "1" }), dana, humanCtx)).entries).includes(C));
+  chk("E24 화면 op semantic 생략: 글자만 찾는다(C 없음)", !names((await screenCap.handler(screenRest({ q: VQ }), dana, humanCtx)).entries).includes(C));
   __resetQueryEmbedCache();
   const sv = await ks.findSimilarKnowledge({ text: VQ, limit: 10 }, VIEWER);
   chk("E5 유사(text): C 는 나오고 B 는 안 나온다", names(sv).includes(C) && !names(sv).includes(B), JSON.stringify(sv.map((r) => [r.name, r.similarity])));
@@ -296,6 +312,21 @@ try {
   chk("E15b 명시 true 재저장 = 검색 대상", (await flagOf(N)) === true);
   await sweep();
   chk("E15b 스윕이 채우고 grep 에 나온다", (await hasVec(N)) && names(await ks.searchKnowledge(LEX, { limit: 20 }, VIEWER)).includes(N));
+
+  // ── E25 토글은 행 잠금 안에서 판정한다 — 다른 트랜잭션이 그 행을 바꾸는 중이면 기다렸다가 커밋된 값을 보고 판정한다 ──
+  const L = `${TAG}-lock`;
+  await kst.upsertKnowledge({ name: L, title: "잠금 L", body_md: "행 잠금 시험", type: "reference", category: CK }, ctx);
+  const holder = await itemsPool.connect();
+  await holder.query("BEGIN");
+  await holder.query(`UPDATE knowledge SET searchable=false WHERE name=$1`, [L]);
+  let settled = false;
+  const held = kst.setKnowledgeSearchable(L, false, ctx).then((r) => { settled = true; return r; });
+  await sleep(300);
+  chk("E25 행을 쥔 트랜잭션이 있으면 토글이 기다린다", settled === false);
+  await holder.query("COMMIT"); holder.release();
+  const r25 = await held;
+  chk("E25 커밋된 값을 보고 판정한다(이미 false → changed:false · 감사 없음)", r25.changed === false && (await auditCount(L, "set_searchable")) === 0,
+    JSON.stringify({ changed: r25.changed, audits: await auditCount(L, "set_searchable") }));
 
   // ── E20 되돌리기 — 사람(웹)이 끈 것을 content_undo 로 되돌리면 다시 검색 대상 ──
   const U = `${TAG}-undo`, UA = "pgt-undo";

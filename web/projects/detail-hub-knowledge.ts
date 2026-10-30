@@ -97,7 +97,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
         results.hidden = false; sw.hidden = true;
         results.replaceChildren(el('div', { class: 'pjh-stat', text: '찾는 중…' }));
         let ms: any[] = [];
-        try { ms = await api('/api/ui/knowledge/semantic?include_unsearchable=1&q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
+        try { ms = await api('/api/ui/knowledge-screen/search?semantic=1&q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
         if (my !== seq) return;
         results.replaceChildren(el('div', { class: 'pjh-grp' }, el('b', { text: '결과' }), el('span', { class: 'pjh-grp-n', text: String(ms.length) })));
         if (!ms.length) results.append(el('div', { class: 'pjh-stat', text: '찾는 지식이 없습니다 — 열어서 직접 작성할 수 있습니다.' }));

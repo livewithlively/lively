@@ -57,12 +57,12 @@ function grepWhereSql(plan: GrepPlan, opts: { injection?: string; provenance?: s
 export interface KnowledgeSearchFilter {
   injection?: string; provenance?: string; categories?: readonly number[] | null;
   /** #5169 사람이 화면에서 글로 찾을 때(⌘K · 링크 고르기)만 true — 검색 제외 지식도 글자로 찾고 행에 searchable 을 싣는다.
-   *  벡터 채널은 그대로 뺀다(벡터가 없다). 에이전트 길에는 이 값이 없다 — capabilities/knowledge/read.ts 의 REST 전용 인자. */
+   *  벡터 채널은 그대로 뺀다(벡터가 없다). 에이전트 길에는 이 값이 없다 — 화면 전용 op knowledge_screen_search(expose.mcp:false)만 켠다. */
   includeUnsearchable?: boolean;
 }
 
-/** 사람 화면의 글자 순위 — 같은 급(이름·제목 일치 다음)이면 검색 대상을 먼저 둔다. 재집계 문서는 길고 자주 다시 올라와
- *  «최신 순» 만으로는 맨 위 자리를 먼저 차지한다. 에이전트 길은 검색 제외가 아예 없으니 조각도 없다. */
+/** 사람 화면의 글자 순위 — 같은 급(이름·제목 일치 다음)이면 검색 대상을 먼저 둔다. 재집계 문서는 길고 자주 다시 올라와 «최신 순»
+ *  만으로는 받아 오는 창(LIMIT)을 먼저 채운다. 화면이 최신 순으로 다시 늘어놓아도 창 안에 드는 것을 지킨다. 에이전트 길에는 조각이 없다. */
 const keptFirst = (opts: { includeUnsearchable?: boolean }): string => (opts.includeUnsearchable ? "k.searchable DESC, " : "");
 /** 사람 화면 호출에만 행에 표시를 싣는다(에이전트 응답 모양은 그대로). */
 const flagOf = (opts: { includeUnsearchable?: boolean }, r: { searchable?: boolean }): { searchable?: boolean } =>

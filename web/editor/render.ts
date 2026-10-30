@@ -289,7 +289,7 @@ export function createRender(ctx: EditorCtx) {
       const q = qIn.value.trim();
       busy(results, el('div', { class: 'empty', text: '불러오는 중…' }));
       try {
-        const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '12', mode: 'names', include_unsearchable: '1' }))
+        const url = q ? ('/api/ui/knowledge-screen/search?' + new URLSearchParams({ q, limit: '12', mode: 'names' }))
           : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '12', orderBy: 'updated_at', injection: 'recalled' }));
         const r = await api(url);
         const entries = (((r && r.entries) || []) as any[])

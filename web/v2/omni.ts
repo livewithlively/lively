@@ -22,7 +22,7 @@
 //
 //  ── 구조: 팬아웃 ──
 //  · 대화      GET /api/ui/v6/session-search  (세션 단위 · 조사 · 고친 파일 · 맨 위 셋 표시, #4530)
-//  · 지식      GET /api/ui/knowledge/search?plain=1&include_unsearchable=1   (글자 · 제목에 든 것 먼저 · #5169 검색 제외도 표시를 달고 찾는다)
+//  · 지식      GET /api/ui/knowledge-screen/search?plain=1   (글자 · 제목에 든 것 먼저 · #5169 검색 제외도 표시를 달고 찾는다)
 //  · 프로젝트  GET /api/ui/v6/projects/search?plain=1 (글자 · 휴지통 제외 · 완료/보관/초안 표시)
 //  · 뜻 비슷   GET /api/ui/knowledge/similar           (맨 아래 묶음 전용)
 //  · 자료      GET /api/ui/sources?q=                  (칩으로만)
@@ -1136,7 +1136,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
         .then((r: any) => { full('proj', 20, (r && r.projects) || []); put('proj', ((r && r.projects) || []).map((p: any, i: number) => projRow(p, i)), my); }, fail('proj'));
     });
     call('know', 'know', () => {
-      api(`/api/ui/knowledge/search?plain=1&include_unsearchable=1&limit=${lim(20)}&q=` + qs, { signal })
+      api(`/api/ui/knowledge-screen/search?plain=1&limit=${lim(20)}&q=` + qs, { signal })
         .then((r: any) => { full('know', 20, (r && r.entries) || []); put('know', ((r && r.entries) || []).map((e: any, i: number) => knowRow(e, i)), my); }, fail('know'));
     });
     //  뜻만 비슷한 지식 — 맨 아래 묶음 전용. 글자로 이미 뜬 문서는 rebuild 가 겹치지 않게 뺀다(같은 열쇠).
@@ -1150,7 +1150,7 @@ export function omniOpen(seed?: string, opener?: Window | null): void {
     //  종류마다 모두 몇 개인가 — 줄은 20개씩만 받으므로 따로 센다(실측 0.3~0.8초). 자리 잡기를 기다리게 하지 않고, 늦게 와도 탭의 숫자만 바뀐다.
     //   기간으로 좁혔을 때는 묻지 않는다(프로젝트·지식의 기간은 화면이 거른다 — 서버 개수와 다르다). 못 세면 받은 만큼만 센다.
     if (!sinceMs && askCounts) {
-      for (const [src, url] of [['proj', '/api/ui/v6/projects/search?plain=1&mode=count&q='], ['know', '/api/ui/knowledge/search?plain=1&include_unsearchable=1&mode=count&q=']] as const) {
+      for (const [src, url] of [['proj', '/api/ui/v6/projects/search?plain=1&mode=count&q='], ['know', '/api/ui/knowledge-screen/search?plain=1&mode=count&q=']] as const) {
         api(url + qs, { signal }).then((r: any) => {
           if (my !== seq || signal.aborted || box !== mine || !r || typeof r.total !== 'number') return;
           totals.set(src, r.total);

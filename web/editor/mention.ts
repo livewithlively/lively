@@ -49,7 +49,7 @@ export function createMention(ctx: EditorCtx) {
       const q = st.mention.query.trim();
       try {
         const url = q
-          ? '/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '8', mode: 'names', injection: 'recalled', include_unsearchable: '1' })
+          ? '/api/ui/knowledge-screen/search?' + new URLSearchParams({ q, limit: '8', mode: 'names', injection: 'recalled' })
           : '/api/ui/knowledge?' + new URLSearchParams({ limit: '8', orderBy: 'updated_at', injection: 'recalled' });
         const r = await api(url);
         if (!st.mention) return;
