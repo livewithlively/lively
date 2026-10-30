@@ -841,7 +841,7 @@ export const knowledgeSetSearchable: Capability = {
   description:
     "지식을 «검색 제외»로 두거나(searchable=false) 다시 검색 대상으로 돌린다(true). " +
     "검색 제외 지식은 knowledge_get(이름 · 부분 읽기)·knowledge_list(카테고리 목록 · q 거르기)·트리·링크·WIKI 인덱스 핀으로는 종전처럼 읽히지만, " +
-    "knowledge_search·knowledge_grep·knowledge_similar·추천·자동 소환 훅·⌘K 통합검색에는 나오지 않고 임베딩도 하지 않는다(있던 벡터는 비운다). " +
+    "knowledge_search·knowledge_grep·knowledge_similar·추천·자동 소환 훅에는 나오지 않고 임베딩도 하지 않는다(있던 벡터는 비운다). 사람이 화면에서 글로 찾을 때(⌘K · 링크 고르기)는 «검색 제외» 표시를 달고 나온다. " +
     "같은 사실이 검색용 문서에 이미 있는 재집계 문서·색인처럼 «이름으로만 읽는» 문서가 대상이다 — 검색 결과에 같은 사실이 두 번 나와 자리를 나눠 먹지 않게 한다. " +
     "true 로 돌리면 임베딩 대기로 돌아가 곧 다시 검색에 나온다. 값이 이미 같으면 아무것도 바꾸지 않는다(changed:false). 본문·제목·version 은 그대로다. " +
     "새로 만들 때부터 빼려면 knowledge_save 의 searchable:false 를 쓴다.",

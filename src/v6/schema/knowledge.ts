@@ -51,7 +51,7 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     --  injection(always/recalled)과 직교 — recalled 지식이되 인덱스엔 핀. 멱등 ADD COLUMN(기존 테이블 보강).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS is_wiki BOOLEAN NOT NULL DEFAULT false;
     -- 검색 제외(#5169 · 이슈 #1619): searchable=false 인 지식은 이름(knowledge_get)·목록·트리·링크로만 읽히고
-    --  검색(grep·하이브리드·유사·추천)·자동 소환·임베딩에서 빠진다. 앱이 DB 에서 그려 올리는 재집계 문서·색인처럼
+    --  검색(grep·하이브리드·유사·추천)·자동 소환·임베딩에서 빠진다(사람 화면의 글자 찾기만 표시를 달고 남긴다). 앱이 DB 에서 그려 올리는 재집계 문서·색인처럼
     --  같은 사실이 검색용 문서에 이미 있는 것이 대상이다. lifecycle(살아 있나)·injection(항상 주입)과 직교.
     --  기본 true 라 기존 행은 그대로다(값 없는 ADD — 재작성 없음).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS searchable BOOLEAN NOT NULL DEFAULT true;

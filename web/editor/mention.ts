@@ -29,7 +29,7 @@ export function createMention(ctx: EditorCtx) {
         : items.map((it: any, idx: number) => {
           const row = el('button', { class: 'be-slash-item' + (idx === st.mention.sel ? ' on' : ''), type: 'button' },
             el('span', { class: 'be-slash-ic', text: it.icon || '📄' }),
-            el('span', { class: 'be-slash-label', text: it.title || it.name }));
+            el('span', { class: 'be-slash-label', text: (it.title || it.name) + (it.searchable === false ? ' · 검색 제외' : '') }));
           row.addEventListener('mousedown', (e) => e.preventDefault());
           row.onclick = () => applyMention(it);
           return row;
@@ -49,7 +49,7 @@ export function createMention(ctx: EditorCtx) {
       const q = st.mention.query.trim();
       try {
         const url = q
-          ? '/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '8', mode: 'names', injection: 'recalled' })
+          ? '/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '8', mode: 'names', injection: 'recalled', include_unsearchable: '1' })
           : '/api/ui/knowledge?' + new URLSearchParams({ limit: '8', orderBy: 'updated_at', injection: 'recalled' });
         const r = await api(url);
         if (!st.mention) return;

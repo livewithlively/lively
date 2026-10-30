@@ -5,7 +5,7 @@
 //  «최신 순» 으로 고르는 도메인 소환의 대표 지식, 스윕이 행을 고른 뒤 벡터를 쓰기까지의 틈. 실제 행과 실제 pgvector 거리에서만 드러난다.
 //  벡터는 가짜 임베딩 서버(이 파일 안의 HTTP — OpenAI 호환 /v1/embeddings)가 글에 든 표지로 정한다.
 //
-//  사양 · 엣지 표(이슈 #1619 완료 기준 + 열린 질문 결정: grep · ⌘K 도 뺀다):
+//  사양 · 엣지 표(이슈 #1619 완료 기준 + 열린 질문 결정 — 에이전트의 grep 은 빼고, 사람 화면(⌘K · 링크 고르기)은 표시를 달아 남긴다 · 상민님 2026-10-30):
 //   E1  grep — 같은 낱말이 든 검색 대상 A 와 검색 제외 B: A 만 나온다(전제: B 를 검색 대상으로 돌리면 B 도 나온다 — E13)
 //   E2  grep 건수 — A 만 센다(E13 뒤엔 둘)
 //   E3  하이브리드(knowledge_search) 렉시컬 채널 — B 0건
@@ -31,8 +31,11 @@
 //   E23 검색 제외에 벡터가 남아 있으면(끌 때 비우기 실패) — 유사의 기준이 안 되고(빈 결과) 스윕이 걷는다 · c 자동 스윕도(pending 0 이어도)
 //   E16b all 모드(전량 재임베딩) — 배치 도중 대상에서 빠진 행 때문에 뒤 행을 건너뛰지 않는다(done = 다음 배치 OFFSET)
 //   (E11 에 덧붙임) 소환 설정 토글은 갱신 시각을 안 올린다(props_ui 토글과 같은 까닭)
+//   E24 사람 화면 — REST 전용 인자가 있을 때만 검색 제외도 글자로 찾는다(grep · 건수 · 하이브리드 렉시컬) · 행에 표시 · 같은 급이면 검색 대상 먼저 ·
+//       벡터 채널은 그대로 뺀다 · 인자 없는 호출의 응답 모양은 그대로 · MCP 길(zod)은 인자를 버린다
 import pg from "pg";
 import http from "node:http";
+import { z } from "zod";
 
 const BASE = process.env.ITEMS_DATABASE_URL;
 if (!BASE) { console.error("ITEMS_DATABASE_URL(슈퍼유저 DSN)이 필요합니다"); process.exit(2); }
@@ -138,10 +141,39 @@ try {
   chk("E1 grep: 검색 제외 B 는 안 나온다", !names(g).includes(B), JSON.stringify(names(g)));
   chk("E2 grep 건수: A 만 센다", (await ks.countKnowledgeGrep(LEX, {}, VIEWER)) === 1);
   const gn = await ks.searchKnowledge(LEX, { limit: 20, mode: "names", plain: true }, VIEWER);   // ⌘K 가 쓰는 꼴(plain)
-  chk("E1 grep(⌘K plain · names): B 안 나온다", names(gn).includes(A) && !names(gn).includes(B), JSON.stringify(names(gn)));
+  chk("E1 grep(plain · names · 인자 없음): B 안 나온다", names(gn).includes(A) && !names(gn).includes(B), JSON.stringify(names(gn)));
   __resetQueryEmbedCache();
   const h = await ks.hybridSearchKnowledge(LEX, { limit: 20 }, VIEWER);
   chk("E3 하이브리드 렉시컬: A 는 나오고 B 는 안 나온다", names(h).includes(A) && !names(h).includes(B), JSON.stringify(names(h)));
+
+  // ── E24 사람 화면(⌘K · 링크 고르기) — 인자가 있을 때만 검색 제외도 글자로 찾는다 ──
+  const humanOpts = { limit: 20, includeUnsearchable: true };
+  const gh = await ks.searchKnowledge(LEX, { ...humanOpts, plain: true }, VIEWER);
+  const rowB = gh.find((r) => r.name === B), rowA = gh.find((r) => r.name === A);
+  chk("E24 사람 화면 grep: B 가 나오고 표시 false · A 는 표시 true", rowB?.searchable === false && rowA?.searchable === true, JSON.stringify(gh.map((r) => [r.name, r.searchable])));
+  chk("E24 순위: 같은 급이면 검색 대상 A 가 먼저(B 가 더 최근이어도)", names(gh).indexOf(A) < names(gh).indexOf(B), JSON.stringify(names(gh)));
+  chk("E24 인자 없는 호출의 행에는 표시 칸이 없다(에이전트 응답 모양 그대로)", g.length > 0 && !("searchable" in g[0]), JSON.stringify(Object.keys(g[0] ?? {})));
+  chk("E24 사람 화면 건수: A·B 둘", (await ks.countKnowledgeGrep(LEX, { includeUnsearchable: true, plain: true }, VIEWER)) === 2);
+  __resetQueryEmbedCache();
+  const hh = await ks.hybridSearchKnowledge(LEX, humanOpts, VIEWER);
+  chk("E24 사람 화면 하이브리드(렉시컬): B 가 표시를 달고 나온다", hh.find((r) => r.name === B)?.searchable === false, JSON.stringify(hh.map((r) => [r.name, r.searchable])));
+  const grepCap = capOf(readStaticCapabilities, "knowledge_grep"), searchCap = capOf(readStaticCapabilities, "knowledge_search");
+  const humanCtx = { source: "web", actor: VIEWER, viewer: VIEWER }, mcpCtx = { source: "mcp", actor: VIEWER, viewer: VIEWER };
+  const grepRest = (query) => grepCap.expose.rest[0].parse({ query, params: {} }), searchRest = (query) => searchCap.expose.rest[0].parse({ query, params: {} });
+  chk("E24 REST grep: 인자를 실으면 B 가 나온다", names((await grepCap.handler(grepRest({ q: LEX, plain: "1", include_unsearchable: "1" }), dana, humanCtx)).entries).includes(B));
+  chk("E24 REST grep 건수도 같다", (await grepCap.handler(grepRest({ q: LEX, plain: "1", mode: "count", include_unsearchable: "1" }), dana, humanCtx)).total === 2);
+  chk("E24 REST grep: 인자가 없으면 B 없음 · =0 도 없음",
+    !names((await grepCap.handler(grepRest({ q: LEX }), dana, humanCtx)).entries).includes(B)
+    && !names((await grepCap.handler(grepRest({ q: LEX, include_unsearchable: "0" }), dana, humanCtx)).entries).includes(B));
+  __resetQueryEmbedCache();
+  chk("E24 REST 하이브리드: 인자를 실으면 B 가 나온다", names((await searchCap.handler(searchRest({ q: LEX, include_unsearchable: "1" }), dana, humanCtx)).entries).includes(B));
+  //  MCP 와 앱 도구 다리(app-tool-call)는 핸들러 앞에서 zod 로 거른다 — 에이전트 도구에는 이 길이 없다.
+  const viaMcpGrep = z.object(grepCap.input).parse({ q: LEX, include_unsearchable: true });
+  const viaMcpSearch = z.object(searchCap.input).parse({ q: LEX, include_unsearchable: true });
+  chk("E24 MCP 길: zod 가 인자를 버린다", !("include_unsearchable" in viaMcpGrep) && !("include_unsearchable" in viaMcpSearch));
+  chk("E24 MCP 길 grep: 인자를 실어도 B 없음", !names((await grepCap.handler(viaMcpGrep, dana, mcpCtx)).entries).includes(B));
+  __resetQueryEmbedCache();
+  chk("E24 MCP 길 하이브리드: 인자를 실어도 B 없음", !names((await searchCap.handler(viaMcpSearch, dana, mcpCtx)).entries).includes(B));
 
   // ── E4 · E5 벡터: B 에 질의와 똑같은 «남은 벡터» 를 심는다(벡터 유무가 아니라 표시로 가르는지) ──
   await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [B, lit(basis(0))]);
@@ -150,6 +182,9 @@ try {
   const hv = await ks.hybridSearchKnowledge(VQ, { limit: 20 }, VIEWER);
   chk("E4 하이브리드 벡터: 벡터로 가까운 검색 대상 C 는 나온다(배선 — 벡터 채널이 돈다)", names(hv).includes(C), JSON.stringify(names(hv)));
   chk("E4 하이브리드 벡터: 질의와 같은 벡터를 가진 검색 제외 B 는 안 나온다", !names(hv).includes(B), JSON.stringify(names(hv)));
+  __resetQueryEmbedCache();
+  const hvh = await ks.hybridSearchKnowledge(VQ, { limit: 20, includeUnsearchable: true }, VIEWER);
+  chk("E24 사람 화면도 벡터 채널은 그대로 뺀다(남은 벡터로 B 가 안 나온다)", names(hvh).includes(C) && !names(hvh).includes(B), JSON.stringify(names(hvh)));
   __resetQueryEmbedCache();
   const sv = await ks.findSimilarKnowledge({ text: VQ, limit: 10 }, VIEWER);
   chk("E5 유사(text): C 는 나오고 B 는 안 나온다", names(sv).includes(C) && !names(sv).includes(B), JSON.stringify(sv.map((r) => [r.name, r.similarity])));

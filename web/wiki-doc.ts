@@ -146,7 +146,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
         try {
           await api('/api/ui/knowledge/' + encodeURIComponent(k.name) + '/searchable', { method: 'POST', body: JSON.stringify({ searchable: off }) });
           k.searchable = off;
-          toast(off ? '다시 검색에 나옵니다' : '검색에서 뺐습니다 — 이름(주소)이나 목록으로 엽니다');
+          toast(off ? '다시 검색에 나옵니다' : 'AI 의 검색·자동 소환에서 뺐습니다 — 사람은 ⌘K·목록으로 찾습니다');
           knInvalidateTreeCaches();
           paintPropline();
         } catch (e) { toast('실패 — ' + (e as any).message, true); }
@@ -278,7 +278,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     // #783 승인 전 지식 — 검색·주입에서 빠져 있다는 사실이 문서 자체에서 보여야 한다.
     if (k.lifecycle === 'pending') parts.push(proplineItem('🔎 검토 대기', { cls: 'warn', title: '승인 전까지 검색·세션주입·목록에 노출되지 않습니다' }));
     // #5169 검색 제외 — 같은 까닭으로 문서 자체에서 보여야 한다(검색·자동 소환에 안 나온다). 되돌리기는 ⋯ 메뉴.
-    if (k.searchable === false) parts.push(proplineItem('검색 제외', { cls: 'dim', title: '검색·비슷한 지식·자동 소환에 나오지 않습니다. 이름(주소)이나 목록으로 엽니다.' }));
+    if (k.searchable === false) parts.push(proplineItem('검색 제외', { cls: 'dim', title: 'AI 의 검색·자동 소환과 비슷한 지식에 나오지 않습니다. 사람은 ⌘K·목록·주소로 찾습니다.' }));
     // #1546 갱신 시각 = 변경 이력 진입점. 이 문서가 '언제 바뀌었나'를 이미 말하고 있는 자리라, 누르면
     //  '무엇이 바뀌었나'로 이어지는 게 자연스럽다(별도 버튼을 속성 줄에 하나 더 늘리지 않는다).
     if (k.updated_at) {
@@ -731,7 +731,8 @@ function openWikiSearch() {
       return;
     }
     list.replaceChildren(...entries.map((e, i) => {
-      const snip = String(e.snippet || '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      const snip = [e.searchable === false ? '검색 제외' : '',
+        String(e.snippet || '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 120)].filter(Boolean).join(' · ');
       const row = el('button', { class: 'qk-row' + (i === sel ? ' on' : ''), type: 'button' },
         wkTick(e),
         el('span', { class: 'qk-row-ic', text: knPageIcon(e) }),
@@ -753,7 +754,7 @@ function openWikiSearch() {
       const seq = ++qkSeq;
       if (!q) { entries = []; sel = 0; paint(); return; }
       try {
-        const r = await api('/api/ui/knowledge/semantic?' + new URLSearchParams({ q, limit: '12', injection: 'recalled' }));
+        const r = await api('/api/ui/knowledge/semantic?' + new URLSearchParams({ q, limit: '12', injection: 'recalled', include_unsearchable: '1' }));
         if (seq !== qkSeq || closed) return;   // 그 사이 검색어가 바뀜/닫힘 — 이 결과는 폐기
         entries = ((r && r.entries) || []).filter((e) => !isCategoryHomeDoc(e.name));
         sel = 0;

@@ -97,7 +97,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
         results.hidden = false; sw.hidden = true;
         results.replaceChildren(el('div', { class: 'pjh-stat', text: '찾는 중…' }));
         let ms: any[] = [];
-        try { ms = await api('/api/ui/knowledge/semantic?q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
+        try { ms = await api('/api/ui/knowledge/semantic?include_unsearchable=1&q=' + encodeURIComponent(q) + '&limit=8').then((d: any) => (d && d.entries) || []); } catch (_) { ms = []; }
         if (my !== seq) return;
         results.replaceChildren(el('div', { class: 'pjh-grp' }, el('b', { text: '결과' }), el('span', { class: 'pjh-grp-n', text: String(ms.length) })));
         if (!ms.length) results.append(el('div', { class: 'pjh-stat', text: '찾는 지식이 없습니다 — 열어서 직접 작성할 수 있습니다.' }));
@@ -105,6 +105,7 @@ export const fillKnowledge: Fill = (ctx, f, body, foot, sub) => {
           const name = knName(m);
           results.append(withMenu(el('div', { class: 'pjh-kr' }, hubIcon('doc', 13),
             el('div', { class: 'pjh-kr-b' }, el('a', { class: 'pjh-kr-t', href: '#/k/' + encodeURIComponent(name), ...KN_NEW_TAB, text: m.title || name }),
+              m.searchable === false ? el('div', { class: 'pjh-kr-s', text: '검색 제외' }) : null,
               m.snippet ? el('div', { class: 'pjh-kr-s', text: searchSnippet(m.snippet, f.modal ? 220 : 90) }) : null),
             linked.has(name) ? el('span', { class: 'pjh-kn-rel', text: '연결됨' })
               : el('button', { class: 'pjh-kn-link', type: 'button', text: '필요로 연결', onclick: (e: Event) => { e.stopPropagation(); link(name, e.currentTarget as HTMLButtonElement); } })) as HTMLElement, m, 'rec'));

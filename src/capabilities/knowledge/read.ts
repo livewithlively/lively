@@ -18,6 +18,12 @@ import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
 
+// #5169 사람 화면(⌘K · 링크 고르기)의 글자 찾기 — 검색 제외 지식도 찾고 행에 searchable 을 싣는다(상민님 2026-10-30 «사람 화면엔 남긴다»).
+//  ⚠ **REST 전용**이다: zod 입력에 두지 않는다. MCP 와 앱 도구 다리(app-tool-call)는 zod 로 거르므로 에이전트 도구에는 이 길이 없다.
+const includeUnsearchableArg = (query: Record<string, unknown>): { include_unsearchable?: true } =>
+  (query.include_unsearchable === "1" || query.include_unsearchable === "true" ? { include_unsearchable: true } : {});
+type HumanScreenArg = { include_unsearchable?: boolean };
+
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
 const knowledgeListInput = {
@@ -101,7 +107,7 @@ const knowledgeGrepInput = {
   plain: z.boolean().optional().describe("true 면 정규식으로 읽지 않고 글자 그대로 — 낱말마다 «그대로 또는 끝 조사를 뗀 꼴» 이 들어 있으면 맞음(AND), \"큰따옴표\" 는 구절. 화면 검색(⌘K)이 쓴다"),
   category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
 };
-type KnowledgeGrepInput = z.infer<z.ZodObject<typeof knowledgeGrepInput>>;
+type KnowledgeGrepInput = z.infer<z.ZodObject<typeof knowledgeGrepInput>> & HumanScreenArg;
 export const knowledgeGrep: Capability = {
   name: "knowledge_grep",
   title: "지식 grep",
@@ -131,6 +137,7 @@ export const knowledgeGrep: Capability = {
           context: query.context ? Number(query.context) : undefined,
           ...(query.plain === "1" || query.plain === "true" ? { plain: true } : {}),
           category: query.category ? String(query.category) : undefined,
+          ...includeUnsearchableArg(query),
         };
       } }],
   },
@@ -138,13 +145,14 @@ export const knowledgeGrep: Capability = {
     const viewer = ctx?.viewer ?? null;   // 공개범위(#1291) — 스니펫도 본문 조각이라 목록보다 더 셀 수 없다
     const plain = input.plain === true;   // #4530 화면 검색 — 글자 그대로(정규식 아님 · 조사 · 구절)
     const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(없는 카테고리는 400)
+    const includeUnsearchable = input.include_unsearchable === true;   // #5169 사람 화면만(REST 전용)
     if (input.mode === "count") {
-      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain, categories }, viewer) };
+      return { mode: "count", total: await countKnowledgeGrep(input.q, { injection: input.injection, provenance: input.provenance, plain, categories, includeUnsearchable }, viewer) };
     }
     return {
       mode: input.mode ?? "snippets",
       entries: await searchKnowledge(input.q, {
-        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories,
+        injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, plain, categories, includeUnsearchable,
       }, viewer),
     };
   },
@@ -162,7 +170,7 @@ const knowledgeSearchInput = {
   context: z.number().int().min(0).max(3).optional().describe("스니펫에 매치 줄 ±N 컨텍스트 줄(grep 채널 매치 시, ripgrep -C)"),
   category: z.string().min(1).max(64).optional().describe(CATEGORY_ARG_DESC),
 };
-type KnowledgeSearchInput = z.infer<z.ZodObject<typeof knowledgeSearchInput>>;
+type KnowledgeSearchInput = z.infer<z.ZodObject<typeof knowledgeSearchInput>> & HumanScreenArg;
 export const knowledgeSearch: Capability = {
   name: "knowledge_search",
   title: "지식 검색(하이브리드)",
@@ -195,6 +203,7 @@ export const knowledgeSearch: Capability = {
           mode: query.mode ? String(query.mode) : undefined,
           context: query.context ? Number(query.context) : undefined,
           category: query.category ? String(query.category) : undefined,
+          ...includeUnsearchableArg(query),
         };
       } }],
   },
@@ -203,6 +212,7 @@ export const knowledgeSearch: Capability = {
     const categories = await categoryArg(input.category);   // #5100 — 그 카테고리 안에서만(두 채널 모두 후보부터)
     const entries = await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context, categories,
+      includeUnsearchable: input.include_unsearchable === true,   // #5169 사람 화면만(REST 전용)
     }, viewer);
     //  #4213 T12 #4744 검색 실패 보조 안내 — 결과가 없거나 약하면 «가져올 곳»(아직 지식이 안 된 원문 자료 → 그것도 없으면 질문한 사람이
     //   다 보는 수집 단위 2~3개와 마지막 수집 시각)을 함께 싣는다. 시간 상한 안에서만 — 넘기면 검색 결과만 돌려준다(검색을 늦추지 않게).
