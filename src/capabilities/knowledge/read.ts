@@ -13,7 +13,8 @@ import {
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 상세 조회는 '검토 대기 중인 수정이 있나'를 함께 알린다(덧쓰기 사고 방지).
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
-import type { SearchRouteDiag, SimilarDiag } from "../../v6/knowledge-search.js";
+import type { SearchRouteDiag } from "../../v6/knowledge-search.js";
+import type { SimilarDiag } from "../../v6/knowledge-similar.js";
 import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   // #5201 세션의 지식 찾기 기록
 import { canSeeKnowledge } from "../../v6/visibility.js";
 import { assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
