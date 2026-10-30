@@ -17,6 +17,9 @@ assert.equal(acceptedTaskId({ status: "ok", summary: { task_id: 7, queued: true 
 assert.equal(acceptedTaskId({ status: "ok", summary: { skipped: "이전 실행 아직 진행 중", task_id: 100 } }), null,
   "중첩 스킵에 표식을 찍었다 — 그 task_id 는 이전 태스크의 것이라 되돌리기조차 안 걸린다");
 assert.equal(acceptedTaskId({ status: "error", summary: { task_id: 5 } }), null, "실패한 접수에 표식을 찍었다");
+//  한도 소진 쉬기(#5160, _headless.enqueueHeadlessTask) — 배치를 안 냈으니 자료가 인박스에 남아야 풀린 뒤 처리된다.
+assert.equal(acceptedTaskId({ status: "ok", summary: { skipped: "실행 계정 사용 한도 소진 — 풀릴 때까지 대기", hold_until: "2026-10-30T21:00:00.000Z" } }), null,
+  "한도 쉬기를 접수로 봤다 — 아무도 안 본 자료가 «봤음» 으로 숨는다");
 assert.equal(acceptedTaskId({ status: "ok", summary: {} }), null, "task_id 없는 결과에 표식을 찍었다(되돌릴 열쇠가 없다)");
 assert.equal(acceptedTaskId({ status: "ok" }), null, "summary 자체가 없는 결과를 접수로 봤다 — 새 축이 비어 있는 경우");
 assert.equal(acceptedTaskId(null), null);
