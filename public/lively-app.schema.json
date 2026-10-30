@@ -517,6 +517,10 @@
                               "type": "string",
                               "pattern": "^[a-z_][a-z0-9_]{0,62}$"
                             },
+                            "column": {
+                              "type": "string",
+                              "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+                            },
                             "on_delete": {
                               "type": "string",
                               "enum": [
@@ -572,6 +576,11 @@
                         "unique": {
                           "type": "boolean",
                           "default": false
+                        },
+                        "where": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 1000
                         }
                       },
                       "required": [

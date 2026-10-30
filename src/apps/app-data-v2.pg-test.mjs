@@ -21,6 +21,9 @@
 //  T10 다른 트랜잭션이 표를 잡고 있으면 표 보장은 잠금 상한(LIVELY_APP_DDL_LOCK_MS) 안에 실패한다 — 멎지 않는다 · 풀리면 된다
 //  T9 형 바꾸기 + 검사 — 옛 형을 전제로 한 검사(length(code) > 0)가 걸린 칸도 바꾼다(검사를 먼저 떼고 새 검사를 건다) ·
 //     바뀐 형에 맞지 않는 검사를 그대로 두면 503 이 아니라 400 · 그 표는 그대로
+//  T13 글자 칸을 가리키는 외래키(references.column) — (tenant_id, 칸) → (tenant_id, code) · 없는 code · 다른 워크스페이스 code 거부 ·
+//      cascade · set null · 멱등 · 가리키던 칸을 지우면 기댄 외래키를 먼저 뗀다
+//  T14 조건부 인덱스(where) — 열린 행은 칸마다 하나 · 닫힌 행은 여럿 · 멱등 · 조건을 바꾸면 다시 만든다(겹치면 409) · 조건 식 검사(400)
 import pg from "pg";
 
 const SUPER = process.env.ITEMS_DATABASE_URL;
@@ -607,6 +610,78 @@ try {
       await holder.end().catch(() => {});
       delete process.env.LIVELY_APP_DDL_LOCK_MS;
     }
+  }
+
+  // ── T13 글자 칸을 가리키는 외래키(references.column) ──
+  {
+    const tables = [
+      { table: "issuers", columns: [{ name: "code", type: "text", unique: true, not_null: true }, { name: "name", type: "text" }] },
+      { table: "cards", columns: [
+        { name: "issuer_code", type: "text", not_null: true, references: { table: "issuers", column: "code", on_delete: "cascade" } },
+        { name: "label", type: "text" },
+      ] },
+      { table: "memos", columns: [
+        { name: "issuer_code", type: "text", references: { table: "issuers", column: "code", on_delete: "set null" } },
+        { name: "body", type: "text" },
+      ] },
+    ];
+    const rep = await ensure(tables);
+    chk("T13 표 셋 · 외래키 둘 · 가리키는 표에 (tenant_id, code) 유일 키(보고서 unique added)",
+      rep.constraints.filter((c) => c.kind === "foreign_key").length === 2 && rep.constraints.some((c) => c.kind === "unique" && c.table === "issuers"), JSON.stringify(rep.constraints));
+    await run("INSERT INTO issuers(code, name) VALUES ('lotte', '롯데'), ('bc', '비씨')");
+    const ok1 = await run("INSERT INTO cards(issuer_code, label) VALUES ('lotte', '법인') RETURNING id");
+    const orphan = await errOf(run("INSERT INTO cards(issuer_code, label) VALUES ('nope', 'x')"));
+    chk("T13b 있는 code 는 된다 · 없는 code 409(23503)", ok1.changed === 1 && orphan?.status === 409 && orphan?.body?.pg_code === "23503", JSON.stringify([orphan?.status, orphan?.body?.pg_code]));
+    await run("INSERT INTO issuers(code) VALUES ('shinhan')", [], { tenant: TB });
+    const cross = await errOf(run("INSERT INTO cards(issuer_code) VALUES ('shinhan')", [], { tenant: TA }));
+    chk("T13c 다른 워크스페이스의 code 는 가리킬 수 없다(23503)", cross?.status === 409 && cross?.body?.pg_code === "23503", JSON.stringify([cross?.status, cross?.body?.pg_code]));
+    await run("INSERT INTO memos(issuer_code, body) VALUES ('lotte', '메모')");
+    await run("DELETE FROM issuers WHERE code = 'lotte'");
+    const left = (await run("SELECT count(*)::int AS n FROM cards WHERE issuer_code = 'lotte'")).rows[0].n;
+    const memo = (await run("SELECT issuer_code, body FROM memos")).rows;
+    chk("T13d cascade · set null 이 code 칸에서도 그대로", left === 0 && memo.length === 1 && memo[0].issuer_code === null, JSON.stringify({ left, memo }));
+    const fkdef = (await su.query(`SELECT pg_get_constraintdef(oid) AS d FROM pg_constraint WHERE conrelid = to_regclass($1) AND contype = 'f'`, [`"${SA}"."crm__cards"`])).rows[0]?.d ?? "";
+    chk("T13e 외래키는 (tenant_id, 칸) → (tenant_id, code)", /FOREIGN KEY \(tenant_id, issuer_code\) REFERENCES .*\(tenant_id, code\) ON DELETE CASCADE/.test(fkdef), fkdef);
+    const again = await ensure(tables);
+    chk("T13f 같은 선언 다시 — 외래키 · 유일 키 그대로(멱등)", again.constraints.length === 0, JSON.stringify(again.constraints));
+    //  가리키던 칸을 지우는 선언(외래키도 뺀다) — 그 칸의 유일 키에 기댄 외래키를 먼저 떼고 칸을 지운다(종전엔 «다른 객체가 기댄다» 로 실패)
+    const t2 = [
+      { table: "issuers", columns: [{ name: "name", type: "text" }, { name: "slug", type: "text", unique: true }], drop_columns: ["code"] },
+      { table: "cards", columns: [{ name: "issuer_code", type: "text" }, { name: "label", type: "text" }] },
+      { table: "memos", columns: [{ name: "issuer_code", type: "text" }, { name: "body", type: "text" }] },
+    ];
+    const dropped = await errOf(ensure(t2));
+    const fks = Number((await su.query(`SELECT count(*)::int AS n FROM pg_constraint WHERE contype = 'f' AND conrelid = ANY(ARRAY[to_regclass($1), to_regclass($2)])`,
+      [`"${SA}"."crm__cards"`, `"${SA}"."crm__memos"`])).rows[0].n);
+    chk("T13g 가리키던 칸을 지우는 선언 — 기댄 외래키를 먼저 떼고 칸을 지운다(실패 없음)", dropped === null && fks === 0 && !("code" in (await cols("issuers"))), String(dropped?.message));
+  }
+
+  // ── T14 조건부 인덱스(where) ──
+  {
+    const vals = { table: "vals", columns: [{ name: "address", type: "text", not_null: true }, { name: "valid_to", type: "timestamptz" }, { name: "body", type: "text" }],
+      indexes: [{ columns: ["address"], unique: true, where: "valid_to IS NULL" }] };
+    const rep = await ensure([vals]);
+    chk("T14 조건부 unique 인덱스를 만든다(보고서에 where)", rep.added_indexes.some((x) => x.unique && x.where === "valid_to IS NULL"), JSON.stringify(rep.added_indexes));
+    await run("INSERT INTO vals(address, body) VALUES ('A|lotte', '열림')");
+    await run("INSERT INTO vals(address, valid_to, body) VALUES ('A|lotte', now(), '닫힘1'), ('A|lotte', now(), '닫힘2')");
+    const dupOpen = await errOf(run("INSERT INTO vals(address, body) VALUES ('A|lotte', '또 열림')"));
+    chk("T14b 닫힌 행은 여럿 · 열린 행은 칸마다 하나(두 번째 열린 행은 409 · 23505)", dupOpen?.status === 409 && dupOpen?.body?.pg_code === "23505", JSON.stringify([dupOpen?.status, dupOpen?.body?.pg_code]));
+    const idxdef = (await su.query(`SELECT pg_get_indexdef(i.indexrelid) AS d FROM pg_index i WHERE i.indrelid = to_regclass($1) AND i.indisunique AND NOT i.indisprimary`,
+      [`"${SA}"."crm__vals"`])).rows.map((r) => r.d).join(" | ");
+    chk("T14c 인덱스 정의에 WHERE (valid_to IS NULL)", /UNIQUE INDEX lvix_\w+ ON .* \(address\) WHERE \(valid_to IS NULL\)/.test(idxdef), idxdef);
+    const again = await ensure([vals]);
+    chk("T14d 같은 선언 다시 — 인덱스 그대로(멱등)", again.added_indexes.length === 0 && again.dropped_indexes.length === 0, JSON.stringify({ a: again.added_indexes, d: again.dropped_indexes }));
+    const changed = await errOf(ensure([{ ...vals, indexes: [{ columns: ["address"], unique: true, where: "valid_to IS NOT NULL" }] }]));
+    chk("T14e 새 조건(닫힌 행끼리 하나)에 겹친 묶음이 있으면 409 · 몇 묶음인지 · 조건을 말한다",
+      changed?.status === 409 && /1개/.test(changed?.message ?? "") && /조건/.test(changed?.message ?? ""), String(changed?.message));
+    const swapped = await ensure([{ ...vals, indexes: [{ columns: ["address", "body"], unique: true, where: "valid_to IS NOT NULL" }] }]);
+    chk("T14f 조건 · 칸을 바꾸면 옛 인덱스를 지우고 새로 만든다", swapped.dropped_indexes.length === 1 && swapped.added_indexes.length === 1,
+      JSON.stringify({ a: swapped.added_indexes, d: swapped.dropped_indexes }));
+    const bad1 = await errOf(ensure([{ ...vals, indexes: [{ columns: ["address"], where: "nope IS NULL" }] }]));
+    const bad2 = await errOf(ensure([{ ...vals, indexes: [{ columns: ["address"], where: "address IN (SELECT name FROM issuers)" }] }]));
+    const bad3 = await errOf(ensure([{ ...vals, indexes: [{ columns: ["address"], where: "pg_sleep(1) IS NULL" }] }]));
+    chk("T14g 조건 식 — 없는 칸 · 다른 표 · 위험 함수는 400(인덱스 조건이라고 말한다)",
+      [bad1, bad2, bad3].every((e) => e?.status === 400 && /인덱스 조건/.test(e?.message ?? "")), JSON.stringify([bad1, bad2, bad3].map((e) => [e?.status, String(e?.message).slice(0, 110)])));
   }
 } catch (e) {
   fail++; console.error("FAIL (예외)", e);

@@ -205,6 +205,25 @@ test("S10 generateDrizzleSchema — 매니페스트의 타입·제약·외래키
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("S10b generateDrizzleSchema — 글자 칸을 가리키는 외래키(references.column)는 그 칸을 가리키고 관계 이름에서 «_<칸>» 을 뗀다", async () => {
+  const manifest = { data: { tables: [
+    { name: "issuers", columns: [{ name: "code", type: "text", unique: true, not_null: true }] },
+    { name: "cards", columns: [{ name: "issuer_code", type: "text", references: { table: "issuers", column: "code", on_delete: "cascade" } }] },
+  ] } };
+  const src = generateDrizzleSchema(manifest);
+  assert.match(src, /\.references\(\(\) => issuers\.code, \{ onDelete: "cascade" \}\)/);
+  assert.match(src, /issuer: one\(issuers, \{ fields: \[cards\.issuerCode\], references: \[issuers\.code\] \}\)/);
+  const cache = new URL("../node_modules/.cache/", import.meta.url);
+  mkdirSync(cache, { recursive: true });
+  const dir = mkdtempSync(path.join(cache.pathname, "lively-db-gen-"));
+  try {
+    const file = path.join(dir, "schema.mjs");
+    writeFileSync(file, src);
+    const s = await import(pathToFileURL(file).href);
+    assert.ok(s.cards && s.cardsRelations && s.issuersRelations, "만든 스키마가 그대로 import 된다");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("S11 livelyMember — 검사 층이 퍼센트 인코딩해 붙인 사람 머리글을 풀어 준다(한글 id · 이름) · 판 · 없으면 null · 깨진 인코딩은 그대로", () => {
   const h = (o) => ({ headers: o });
   assert.deepEqual(livelyMember(h({ "x-lively-member": encodeURIComponent("윤상민"), "x-lively-member-name": encodeURIComponent("윤 상민"), "x-lively-variant": "draft" })),

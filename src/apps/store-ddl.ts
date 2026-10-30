@@ -277,8 +277,10 @@ export function appSqlRoleName(db: string, schema: string, appId: string): strin
   return `${APP_SQL_ROLE_PREFIX}${h}`;
 }
 
-/** 매니페스트가 선언한 인덱스(#4226) — 칸 목록과 유일 여부. */
-export interface StoreIndex { columns: string[]; unique?: boolean }
+/** 매니페스트가 선언한 인덱스(#4226) — 칸 목록과 유일 여부.
+ *  where — 조건부 인덱스: 조건에 맞는 행만 담는다(그 표의 칸만 쓰는 식 하나). unique 와 함께면 «조건에 맞는 행끼리만» 겹치지 않는다
+ *   (예 «열린 판은 칸마다 하나» — `{columns:["address"], unique:true, where:"valid_to IS NULL"}`). */
+export interface StoreIndex { columns: string[]; unique?: boolean; where?: string }
 
 /**
  * 선언 인덱스의 물리 이름(순수) — `lvix_<해시 16>`. 라이블리가 만든 인덱스를 이 접두로 알아보고, 선언에서 빠지면 지운다.
@@ -286,7 +288,8 @@ export interface StoreIndex { columns: string[]; unique?: boolean }
  */
 export const APP_INDEX_PREFIX = "lvix_";
 export function appIndexName(schema: string, physical: string, idx: StoreIndex, tenantScoped: boolean): string {
-  const key = `${schema}\0${physical}\0${idx.unique ? "u" : "i"}\0${tenantScoped ? "t" : ""}\0${idx.columns.join(",")}`;
+  //  조건(where)은 있을 때만 해시에 넣는다 — 조건 없는 인덱스의 이름은 종전 그대로(이미 깔린 앱의 인덱스를 다시 만들지 않게).
+  const key = `${schema}\0${physical}\0${idx.unique ? "u" : "i"}\0${tenantScoped ? "t" : ""}\0${idx.columns.join(",")}${idx.where ? `\0w\0${idx.where}` : ""}`;
   return `${APP_INDEX_PREFIX}${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
 }
 
@@ -307,8 +310,9 @@ export interface StoreColumn {
   unique?: boolean;
   /** 이 칸에 거는 검사 식(그 표의 칸만 쓴다) — 예 `amount >= 0`. */
   check?: string;
-  /** 같은 앱의 다른 표(또는 자기 표)의 id 를 가리킨다. 칸은 정수형이어야 한다. */
-  references?: { table: string; on_delete?: OnDelete };
+  /** 같은 앱의 다른 표(또는 자기 표)의 id 를 가리킨다. 칸은 정수형이어야 한다.
+   *  column — id 대신 그 표에서 unique 로 선언한 칸을 가리킨다(형이 같아야 한다 — 예 글자 코드 `code`). */
+  references?: { table: string; column?: string; on_delete?: OnDelete };
   /** type 이 enum 일 때 허용 값. */
   values?: string[];
   /** 이 칸의 옛 이름 — 그 이름의 칸이 있고 새 이름이 없으면 이름만 바꾼다(데이터 그대로). */

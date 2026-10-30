@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { resolveColumnType, assertIdent, assertMatchIdent, assertMatchId, physicalTableName, physicalAppPrefix, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource, archiveSchemaName, archivedTableName, PG_IDENT_MAX } from "./store-ddl.js";
+import { createHash } from "node:crypto";
+import { resolveColumnType, assertIdent, assertMatchIdent, assertMatchId, physicalTableName, physicalAppPrefix, columnDefs, appSchemaName, qualifiedAppTable, isBuiltinSource, archiveSchemaName, archivedTableName, PG_IDENT_MAX, appIndexName } from "./store-ddl.js";
 
 // 「입력 × 기대」 엣지 표 — 선언형 DDL 의 방어(임의 타입·식별자·예약컬럼·앱 네임스페이스).
 
@@ -233,4 +234,15 @@ test("appConstraintName — 결정적 · 부분마다 다르다 · lvck_ 16hex",
   assert.equal(a, appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount >= 0"));
   assert.notEqual(a, appConstraintName(APP_CHECK_PREFIX, "s", "crm__orders", "c", "amount", "amount > 0"));
   assert.match(a, /^lvck_[0-9a-f]{16}$/);
+});
+
+test("appIndexName — 조건(where)이 없으면 종전 이름 그대로(깔린 앱의 인덱스를 다시 만들지 않는다) · 조건이 다르면 다른 이름", () => {
+  const old = "lvix_" + createHash("sha256").update("s\0p\0u\0\0a,b").digest("hex").slice(0, 16);
+  assert.equal(appIndexName("s", "p", { columns: ["a", "b"], unique: true }, false), old);
+  assert.equal(appIndexName("s", "p", { columns: ["a", "b"], unique: true, where: undefined }, false), old);
+  const w1 = appIndexName("s", "p", { columns: ["a", "b"], unique: true, where: "c IS NULL" }, false);
+  const w2 = appIndexName("s", "p", { columns: ["a", "b"], unique: true, where: "c IS NOT NULL" }, false);
+  assert.notEqual(w1, old);
+  assert.notEqual(w1, w2);
+  assert.match(w1, /^lvix_[0-9a-f]{16}$/);
 });
