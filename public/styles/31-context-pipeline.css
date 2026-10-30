@@ -719,6 +719,9 @@ button.cxm-mc { border: 0; font: inherit; cursor: pointer; }
 .cxr-stp-lbl small { font-size: 12px; font-weight: 600; color: var(--muted); }
 .cxr-more-link { margin-left: auto; padding: 6px 8px; border-radius: 8px; color: var(--blue); font-size: 13px; font-weight: 700; text-decoration: none; white-space: nowrap; }
 .cxr-more-link:hover { background: var(--bg-note); }
+/* «지금 수집» · «지금 증류»(#5147) — 머리 오른쪽, 「자세히 보기」 바로 앞. 자리를 오른쪽으로 미는 일은 이 묶음이 맡는다. */
+.cxr-now { margin-left: auto; display: inline-flex; gap: 6px; }
+.cxr-now + .cxr-more-link { margin-left: 0; }
 .cxr-body { position: relative; min-height: 110px; transition: opacity .2s; }
 .cxr.is-loading .cxr-body, .cxr.is-loading .cxr-feed { opacity: .45; }
 .cxr-legend .cxr-lgf { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface);

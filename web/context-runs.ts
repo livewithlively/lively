@@ -314,7 +314,7 @@ function jobText(job: any): string {
   return every + (job.last_run_at ? ' · ' + relTime(job.last_run_at) : ' · 미실행');
 }
 
-export interface RunsPanel { root: HTMLElement; setFilter(f: RunFilter): void }
+export interface RunsPanel { root: HTMLElement; setFilter(f: RunFilter): void; /** 지금 보는 기간을 다시 읽는다(#5147 «지금 수집·증류» 뒤). */ reload(): void }
 
 /** 지도 아래 패널. pipeline = 지도가 이미 받은 /org/pipeline(주기 표기). onFilter = 패널 안에서 거르기를 바꾸면 지도 칩에 알린다. */
 export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => void } = {}): RunsPanel {
@@ -436,7 +436,7 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
   requestAnimationFrame(paintSeg);
   new ResizeObserver(() => paintSeg()).observe(seg);
   void load();
-  return { root, setFilter };
+  return { root, setFilter, reload: () => { void load(); } };
 }
 
 /**

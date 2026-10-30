@@ -17,7 +17,7 @@
 //  판정 잣대는 새로 만들지 않는다 — context-pipeline 의 *Health 한 벌(stageHealthLevels)을 그대로 쓴다(#1841 규율).
 //  데이터도 새 API 없이 조립한다: /org/pipeline(수치·잡) + /org/collectors + /sources/tree + /knowledge + /org/sections
 //   + /terminal/sessions. 뒤 다섯은 **장식**이라 실패해도 지도는 선다(try/catch — 수치만으로도 그림이 된다).
-import { api, el, fmtNum, relTime } from './core.js';
+import { api, el, fmtNum, hasScope, relTime, toast } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { stageHealthLevels } from './context-pipeline.js';
 import { presetSvcKey, svcTile } from './svc-icons.js';
@@ -245,6 +245,12 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
   //   (한 번 누름을 늦춰 두 번 누름과 가르면 한 번 누름이 그만큼 굼떠진다 — 자주 쓰는 쪽을 늦추지 않는다.)
   mcCollect.addEventListener('dblclick', () => { location.hash = mcCollectHref; });
   mcDistill.addEventListener('dblclick', () => { location.hash = mcDistillHref; });
+  //  #5147(원준 2026-10-30) — 「자동 실행」 머리에 «지금 수집» · «지금 증류». 주기를 기다리지 않고 한 번 돌린다.
+  //   새 경로를 만들지 않는다 — 수집기 설정의 [지금 수집](수집기마다 /sync, 비동기)과 증류기 설정의 [지금 한 번 실행](/cron/:id/run)을 그대로 부른다.
+  if (hasScope('memory')) {
+    const now = runNowButtons(collectors, [st.distill?.job, fill?.job], () => panel.reload());
+    panel.root.querySelector('.cxr-head .cxr-more-link')?.before(now);
+  }
   const fillWarn = distillFillWarn(fill?.job, fillN);
   if (fillWarn) panel.root.querySelector('.cxr-sched')?.append(fillWarn);
 
@@ -269,6 +275,46 @@ async function loadBlindspot(): Promise<HTMLElement | null> {
 // 셸은 이 이름 하나만 부른다.
 export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
   await renderContextMap(box, loadBlindspot());
+}
+
+/**
+ * «지금 수집» · «지금 증류» 단추 한 쌍(#5147).
+ *  · 지금 수집 = **연결된** 수집기(지도의 외부 앱 역과 같은 판정 — 켜져 있고 자격이 있다) 전부에 /sync. 비동기라 곧바로 돌아온다.
+ *  · 지금 증류 = 증류 단계의 켜진 자동 실행(자료 → 지식 · 카테고리 붙이기)을 한 번씩(설정 화면의 [지금 한 번 실행]과 같다). 배치를 접수만 하고 곧바로 돌아온다(헤드리스 접수).
+ *  돌릴 것이 없으면 단추를 끄고 이유를 툴팁으로 말한다 — 눌러 놓고 아무 일도 없는 단추를 두지 않는다.
+ */
+function runNowButtons(collectors: any[], jobs: any[], after: () => void): HTMLElement {
+  const btn = (text: string) => el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text }) as HTMLButtonElement;
+  const bc = btn('지금 수집'), bd = btn('지금 증류');
+  const ids = Array.from(new Set(jobs.filter((j) => j && j.id && j.any_enabled).map((j) => String(j.id))));
+  if (!collectors.length) { bc.disabled = true; bc.title = '연결된 수집기가 없습니다'; }
+  else bc.title = '연결된 수집기 ' + collectors.length + '개가 지금 한 번 가져옵니다';
+  if (!ids.length) { bd.disabled = true; bd.title = '증류 자동 실행이 꺼져 있습니다. 증류기 설정에서 켜세요'; }
+  else bd.title = '증류기를 지금 한 번 돌립니다. 끝나면 아래 기록에 나옵니다';
+  const busy = (b: HTMLButtonElement, label: string | null, text: string) => { b.disabled = !!label; b.textContent = label || text; };
+
+  bc.addEventListener('click', async () => {
+    busy(bc, '수집 시작 중…', '지금 수집');
+    const rs = await Promise.allSettled(collectors.map((c) => api('/api/ui/org/collectors/' + c.id + '/sync', { method: 'POST', body: '{}' })));
+    const ok = rs.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+    const already = ok.filter((r) => r.value && r.value.already_running).length;
+    const fail = rs.length - ok.length;
+    const started = ok.length - already;
+    toast((started ? '수집기 ' + started + '개가 수집을 시작했습니다' : '새로 시작한 수집이 없습니다')
+      + (already ? ' · ' + already + '개는 이미 수집 중입니다' : '') + (fail ? ' · ' + fail + '개는 시작하지 못했습니다' : ''), fail > 0 && !started);
+    busy(bc, null, '지금 수집');
+    setTimeout(after, 4000);   // 수집은 뒤에서 돈다 — 기록 줄이 생길 즈음 한 번 다시 읽는다
+  });
+
+  bd.addEventListener('click', async () => {
+    busy(bd, '증류 시작 중…', '지금 증류');
+    const rs = await Promise.allSettled(ids.map((id) => api('/api/ui/cron/' + encodeURIComponent(id) + '/run', { method: 'POST' })));
+    const bad = rs.filter((r) => r.status === 'rejected' || (r.value && (r.value.status || r.value.last_status) === 'error')).length;
+    toast(bad ? '증류를 실행했지만 ' + bad + '건이 오류로 끝났습니다. 아래 기록에서 확인하세요' : '증류를 시작했습니다. 끝나면 아래 기록에 나옵니다', bad > 0);
+    busy(bd, null, '지금 증류');
+    after();
+  });
+  return el('span', { class: 'cxr-now' }, bc, bd);
 }
 
 /**
