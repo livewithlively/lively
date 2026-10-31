@@ -557,6 +557,7 @@ export async function setKnowledgeLifecycle(name: string, lifecycle: string, ctx
   const after = await one(itemsPool,
     `UPDATE knowledge SET lifecycle=$2, updated_at=now() WHERE name=$1 RETURNING ${K_COLS}`, [name, lifecycle]);
   await auditKnowledge(name, "set_lifecycle", before, after, ctx);
+  syncKnowledgeLexSoon(name);   // #5203 보관된 문서의 조각을 곧바로 걷는다
   return after;
 }
 
@@ -591,6 +592,7 @@ export async function setKnowledgeSearchable(name: string, searchable: boolean, 
   //  같은 값이어도 false 면 비운다(멱등) — 어떤 길로든 벡터가 남아 있으면 이 호출이 바로잡는다.
   if (!searchable) await clearEmbedding(KNOWLEDGE_TARGET, name);
   else if (r.changed) nudgeAutoBackfill();
+  syncKnowledgeLexSoon(name);   // #5203 검색 제외의 조각을 곧바로 걷는다(켜면 다시 나눈다)
   return r;
 }
 
