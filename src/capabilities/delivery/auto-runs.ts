@@ -284,8 +284,30 @@ async function dailyRuns(since: Date, until: Date, tz: string): Promise<{ days: 
   //  «최근 바뀐 실행» 다섯 — 수집은 창 끝 36시간만 줄 단위로 본다(창 전체를 줄로 받지 않는다).
   const recentSince = new Date(Math.max(since.getTime(), until.getTime() - 36 * 3600_000));
   const rc = await collectorRuns(recentSince, until, 3000);
-  const recent = [...rc, ...d].filter(isChanged).sort((a, b) => b.started_at.localeCompare(a.started_at)).slice(0, 5);
+  const changedAll = [...rc, ...d].filter(isChanged).sort((a, b) => b.started_at.localeCompare(a.started_at));
+  const recent = bothKinds(changedAll, 5);
   return { days: [...days.values()].sort((a, b) => a.day.localeCompare(b.day)), machines: dedupeMachines(machines), recent };
+}
+/**
+ * 앞에서 n 줄을 고르되 두 기계(수집 · 증류)가 다 서게 — 없는 쪽에 바뀐 실행이 있으면 그 최신 것이 다른 쪽의 가장 오래된 줄 자리를 받는다.
+ *  증류는 한 번에 여러 건을 바꿔 늘 앞을 차지하고, 수집은 5분마다 돌지만 대개 «새 것 없음» 이라 다섯 줄에서 사라졌다
+ *  (원준 2026-10-31: "아무리 해도 증류기만 밑에 나오는 것 같다"). 줄 수는 늘리지 않는다. xs 는 최신순이어야 한다.
+ */
+export function bothKinds<T extends { kind: "c" | "d"; started_at: string }>(xs: T[], n: number): T[] {
+  const out = xs.slice(0, n);
+  for (const k of ["c", "d"] as const) {
+    if (out.some((x) => x.kind === k)) continue;
+    const add = xs.find((x) => x.kind === k);
+    if (!add) continue;
+    if (out.length >= n) {
+      let drop = -1;
+      out.forEach((x, i) => { if (x.kind !== k && (drop < 0 || x.started_at < out[drop].started_at)) drop = i; });
+      if (drop < 0) continue;
+      out.splice(drop, 1);
+    }
+    out.push(add);
+  }
+  return out.sort((a, b) => b.started_at.localeCompare(a.started_at));
 }
 const dedupeMachines = <T extends { id: string; kind: string }>(xs: T[]): T[] => { const m = new Map<string, T>(); for (const x of xs) m.set(x.kind + ":" + x.id, x); return [...m.values()]; };
 

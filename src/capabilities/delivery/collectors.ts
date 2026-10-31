@@ -34,6 +34,15 @@ async function loadBinding(id: number): Promise<{ id: number; presetKey: string;
   if (!row) throw new HttpError(404, "수집기를 찾을 수 없습니다");
   return { id, presetKey: row.preset_key, instanceKey: row.instance_key };
 }
+/** 이미 돌던 수집 run 이 끝나기를 기다린다(5초 간격 · 30분 상한 — 넘으면 기다림을 놓고 다음으로). */
+async function waitRunEnd(runId: number): Promise<void> {
+  const until = Date.now() + 30 * 60_000;
+  while (Date.now() < until) {
+    const r = await itemsPool.query<{ status: string }>(`SELECT status FROM connector_run WHERE id=$1`, [runId]);
+    if (!r.rows[0] || r.rows[0].status !== "running") return;
+    await new Promise((res) => setTimeout(res, 5000));
+  }
+}
 
 export const collectorsReadCapabilities: Capability[] = [
   // ── 목록은 **인증만**(scope null), 편집은 admin. ──
@@ -134,6 +143,49 @@ export const collectorsCapabilities: Capability[] = [
     }, {
       id: z.number().int().positive().describe("수집기 id"),
       full: z.boolean().optional().describe("true=전체 백필(커서 무시), 기본 false=증분"),
+    }),
+
+  //  #5159(원준 2026-10-31) — 「자동 실행」 머리의 단추를 «지금 수집» · «지금 증류» 둘에서 하나로 합쳤다.
+  //   둘을 연달아 누르면 증류가 수집보다 먼저 돌아 방금 들어올 자료를 못 본다(수집은 뒤에서 수십 초~분이 걸린다).
+  //   그래서 순서를 화면이 아니라 서버가 잇는다 — 수집이 **모두** 끝난 뒤 증류를 한 번. 화면을 떠나도 이어진다.
+  //   수동 /sync 는 증류를 깨우지 않는다(크론 수집만 nudgeDistillNow 를 부른다) — 그래서 여기서 직접 부른다.
+  restWork("org_pipeline_run_now", "지금 수집한 뒤 증류(비동기)",
+    "주어진 수집기들을 지금 수집하고, 그 수집이 모두 끝나면 주어진 증류 자동 실행을 한 번씩 돌린다. 곧바로 run_id 들을 돌려주고 나머지는 뒤에서 잇는다. 이미 수집 중인 수집기는 그 수집이 끝나기를 기다린다.",
+    [{ method: "POST", paths: ["/api/ui/org/pipeline/run-now"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { collector_ids: b.collector_ids, distill_job_ids: b.distill_job_ids };
+    } }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const cids = Array.from(new Set(((input.collector_ids as number[]) || []).map(Number).filter((n) => n > 0)));
+      const want = Array.from(new Set(((input.distill_job_ids as string[]) || []).map(String).filter(Boolean)));
+      const jobs = want.length
+        ? (await itemsPool.query<{ id: string }>(`SELECT id FROM org_cron WHERE id = ANY($1::text[]) AND enabled=true`, [want])).rows.map((r) => String(r.id))
+        : [];
+      const runs: Array<{ collector_id: number; run_id: number | null; already_running: boolean; error?: string }> = [];
+      const waits: Array<Promise<unknown>> = [];
+      for (const id of cids) {
+        try {
+          const b = await loadBinding(id);
+          const run = await startConnectorRun(b.presetKey, { full: false, trigger: "manual", startedBy: actorOf(user), collectorId: b.id });
+          runs.push({ collector_id: id, run_id: run.runId, already_running: run.alreadyRunning });
+          //  이미 돌던 수집의 done 은 곧바로 풀린다(run-tracker 의 중복 가드) — 그 run 이 끝나기를 행으로 기다린다.
+          waits.push(run.alreadyRunning ? waitRunEnd(run.runId) : run.done);
+        } catch (e) {
+          runs.push({ collector_id: id, run_id: null, already_running: false, error: (e as Error)?.message ?? String(e) });
+        }
+      }
+      void (async () => {
+        await Promise.allSettled(waits);
+        void runAutoBackfillSweep().catch(() => {});
+        if (!jobs.length) return;
+        const { runCronById } = await import("../../scheduler/engine.js");
+        //  하나씩 — 자료 → 지식이 먼저 끝나야 카테고리 붙이기가 새 지식을 본다(화면이 넘기는 순서 그대로).
+        for (const j of jobs) { try { await runCronById(j); } catch (e) { logger.warn({ job: j, err: (e as Error)?.message }, "지금 수집 뒤 증류 실패(비치명)"); } }
+      })().catch(() => {});
+      return { runs, distill_after: jobs };
+    }, {
+      collector_ids: z.array(z.number().int().positive()).max(100).describe("지금 수집할 수집기 id"),
+      distill_job_ids: z.array(z.string()).max(10).optional().describe("수집이 모두 끝난 뒤 돌릴 증류 자동 실행(org_cron id). 꺼진 잡은 건너뛴다"),
     }),
 
   restWork("org_collector_discover", "수집기 스코프 목록 조회",
