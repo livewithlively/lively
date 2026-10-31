@@ -326,7 +326,7 @@
   .cxr-feed { padding: 2px 4px 6px; }
   .cxr-pk-h { grid-template-columns: 52px 30px minmax(0, 1fr) 28px; gap: 8px; }
   .cxr-pk-h > .cxr-s { display: none; }
-  .cxr-pk .cxr-pk-il, .cxr-pk-f { padding-left: 10px; }
+  .cxr-pk .cxr-pk-il, .cxr-x-in .cxr-pk-il, .cxr-pk-f { padding-left: 10px; }
   /* 3판 — 머리줄은 두 줄(날짜 이동 · 기간), 「자세히 보기」는 오른쪽 끝에 남긴다 · 줄 링크는 요약을 아래로 */
   .cxr-stepper { order: 2; }
   .cxr-stp-lbl { min-width: 150px; }

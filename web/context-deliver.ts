@@ -1,4 +1,4 @@
-// context-deliver.ts — [수집·증류 ▸ AI 주입 설정] 탭(#5159). 왼쪽 목차 + 오른쪽 세부 페이지 하나.
+// context-deliver.ts — [수집·증류 ▸ AI 주입기 설정] 탭(#5159). 왼쪽 목차 + 오른쪽 세부 페이지 하나.
 //
 //  요구 원문(원준 2026-10-29): "AI 주입 설정 칸에서 이게 세로로 쭉 늘어져 있는데 … 층위 위에 탭으로 만들든 잘 정리하고 ·
 //   너무 많이 늘어져 있는 훅들이나 이런 것들 세부 페이지를 나누든 웬만하면 한 페이지 안에 스크롤 안 해도 되게 ·
@@ -78,7 +78,7 @@ export async function renderDeliver(host: HTMLElement, first: DeliverPage): Prom
   const fillInjection = () => Object.assign(status, injectionStatus(data), toolsStatus(data));
   fillInjection();
 
-  const nav = el('nav', { class: 'dlv-nav', 'aria-label': 'AI 주입 설정' });
+  const nav = el('nav', { class: 'dlv-nav', 'aria-label': 'AI 주입기 설정' });
   const panel = el('div', { class: 'dlv-panel' });
   replaceKids(host, el('div', { class: 'dlv' }, nav, panel));
 

@@ -17,7 +17,7 @@ export const CTX_TAB = {
   sources: '수집기 설정',
   distill: '증류기 설정',
   checks: '점검 설정',
-  deliver: 'AI 주입 설정',
+  deliver: 'AI 주입기 설정',
 } as const;
 export type CtxTabKey = keyof typeof CTX_TAB;
 

@@ -28,9 +28,9 @@ import { renderClaudeRunsScreen } from './context-claude-runs.js';   // #4213 T1
 import { openTaxonomyApp } from './taxonomy-link.js';   // #4233 카테고리 탭은 분류체계 앱으로 나갔다
 import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 새 소스 만들기 — 수집기 화면의 하위 갈래
-import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 수집기 ▸ 자료를 볼 사람 (AI 주입 설정 ▸ 공개범위에도 선다)
+import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 수집기 ▸ 자료를 볼 사람 (AI 주입기 설정 ▸ 공개범위에도 선다)
 import { ingestPolicyPanel } from './review.js';                       // 지식 검토 정책(#638) — 증류기 화면의 「사람 승인」 절
-import { DELIVER_ALIAS, DELIVER_PAGES, renderDeliver } from './context-deliver.js';   // #5159 AI 주입 설정 — 왼쪽 목차 + 세부 페이지
+import { DELIVER_ALIAS, DELIVER_PAGES, renderDeliver } from './context-deliver.js';   // #5159 AI 주입기 설정 — 왼쪽 목차 + 세부 페이지
 import { loadAdmin } from './admin-rerender.js';
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
 import { ICONS } from './lib/icon-paths.js';   // #4233 선 아이콘 한 벌
@@ -195,7 +195,7 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
     return;
   }
   if (sub === 'checks' && sub2 === 'findings') { location.replace('#/context/inbox'); return; }
-  //  #5159 — AI 주입 설정의 옛 화면 키(#1618: injection · embeddings · visibility)는 세부 페이지로 넘긴다.
+  //  #5159 — AI 주입기 설정의 옛 화면 키(#1618: injection · embeddings · visibility)는 세부 페이지로 넘긴다.
   if (sub === 'deliver' && sub2 && DELIVER_ALIAS[sub2]) { location.replace('#/context/deliver/' + DELIVER_ALIAS[sub2]); return; }
   const stage = STAGES.find((s) => s.key === sub) ?? STAGES[0];
   // adminOnly 화면(#1618)은 비-admin 에게 **주소로도** 열리지 않는다 — 그 탭의 첫 볼 수 있는 화면으로 떨군다.
@@ -208,10 +208,11 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   //  정의 한 줄(#3830) — 머리에서 내려왔다. 현황은 지도가 자기 캡션을 갖고 있어 중복이라 뺀다.
   const body = el('div', { class: 'ctx-body' },
     //  현황·수집기·증류기는 화면이 자기 머리(제목 + 한 줄 설명)를 갖고 있어 정의 한 줄이 두 번 선다(#3830) — 거기선 뺀다.
-    //  AI 주입 설정(#5159)도 세부 페이지마다 자기 머리를 갖는다.
+    //  AI 주입기 설정(#5159)도 세부 페이지마다 자기 머리를 갖는다.
     ['home', 'sources', 'distill', 'runs', 'deliver'].includes(stage.key) ? null : el('p', { class: 'ctx-hint', text: stage.hint }),
     host);
-  view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap' },
+  //  data-stage — 화면별 여백을 CSS 가 고를 수 있게(#5159: 실시간 현황은 한 화면에 들게 바닥 여백을 줄인다).
+  view.replaceChildren(el('div', { class: 'pjv-board-wrap ctx-board-wrap', 'data-stage': stage.key },
     el('div', { class: 'card pjv-listboard ctx-board' }, buildHeader(stage), body)));
   void paintStageHealth(view);
 

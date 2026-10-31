@@ -588,7 +588,7 @@ function memberAccessSection(detail, data) {
 // 옮겨 간 자리 안내 — 서브탭은 남겨 두고(익숙한 길) 새 집으로 보낸다.
 function movedNote(what: string, hash: string) {
   return el('div', { class: 'card' },
-    el('p', { class: 'admin-hint' }, ...uiText(what + '은 [수집·증류 ▸ AI 주입 설정 ▸ MCP 도구]로 옮겼습니다 — 세션에 무엇이 들어가는지와 한자리에서 봅니다.')),
+    el('p', { class: 'admin-hint' }, ...uiText(what + '은 [수집·증류 ▸ AI 주입기 설정 ▸ MCP 도구]로 옮겼습니다 — 세션에 무엇이 들어가는지와 한자리에서 봅니다.')),
     el('div', { class: 'admin-actions' }, el('a', { class: 'btn btn-ghost btn-sm', href: hash, text: '그 화면으로 →' })));
 }
 function toolsSection(detail, data) {
@@ -597,7 +597,7 @@ function toolsSection(detail, data) {
     sectionHead('AI 도구', 'AI가 호출할 수 있는 도구를 관리합니다 — 사내 API 도구, 기본 제공 도구, 외부 도구 서버(MCP).', data.meaning['tool']),
     segTabs('tools', [
       { key: 'proxy', label: '사내 API 도구', show: rt, render: (h) => toolsEditor(h, data) },
-      //  #5159 후속 — 목록·켜고 끄기·주입 방식은 [수집·증류 ▸ AI 주입 설정 ▸ MCP 도구]로 옮겼다(같은 API). 두 곳에 같은 목록을 두지 않는다.
+      //  #5159 후속 — 목록·켜고 끄기·주입 방식은 [수집·증류 ▸ AI 주입기 설정 ▸ MCP 도구]로 옮겼다(같은 API). 두 곳에 같은 목록을 두지 않는다.
       { key: 'builtin', label: '기본 제공 도구', show: rt, render: (h) => h.append(movedNote('기본 제공 도구의 목록 · 켜고 끄기 · 주입 방식', '#/context/deliver/builtin')) },
       // 외부 도구 서버 = 구 [MCP 서버]. 기본 프리셋(mcp-server-presets)이 실제로 채우는 게 바로 이것이다.
       { key: 'mcp', label: '외부 도구 서버 (MCP)', show: admin, render: (h) => mcpEditor(h, data) },
