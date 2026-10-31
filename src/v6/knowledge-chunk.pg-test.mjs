@@ -24,6 +24,7 @@
 //   K17 옛 이미지가 글 해시만 올린 문서 — 조각을 다시 맞춘다
 //   K18 조각 표가 실패해도 낱말 색인은 맞춘다 · 표가 돌아오면 조각도 맞는다
 //   K19 임베딩 꺼짐 — 조각은 만들고 벡터는 안 채운다
+//   K20 정비가 같은 순간에 출발해도 — 지식 벡터 스윕을 기다렸다 돈다 · 조각 정비끼리는 줄을 선다
 import pg from "pg";
 import http from "node:http";
 
@@ -256,6 +257,18 @@ try {
   chk("K18 낱말 색인은 맞는다", (await q(`SELECT 1 FROM knowledge_lex_posting WHERE term='낱말분리시험'`)).length === 1);
   await ls.sweepKnowledgeLex();
   chk("K18 표가 돌아오면 조각도 맞는다", (await rows("k-fail")).length === 1);
+
+  // ── K20 ──
+  //  요청에 얹은 정비는 한 판에서 정비들을 한꺼번에 던진다(outbox-request-sweep maybeSweep) — 지식 벡터 스윕이 먼저 출발하고, 조각 정비가 같은 순간에 뒤따른다.
+  await q(`UPDATE org_runtime_config SET embedding_backfill_paused=false WHERE id=1`);
+  eb.__resetChunkRetry();
+  await addChunks(0, 12, "k-fail");
+  const same = await Promise.all([eb.runAutoBackfillSweep(), eb.sweepChunkEmbeddings()]);
+  chk("K20 지식 벡터 스윕과 같은 순간에 출발해도 조각을 채운다", same[1].embedded >= 12 && !same[1].skipped, JSON.stringify(same[1]));
+  await q(`UPDATE knowledge_chunk SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL WHERE name='k-fail'`);
+  await addChunks(100, 400, "k-fail");
+  const pair = await Promise.all([eb.sweepChunkEmbeddings(), eb.sweepChunkEmbeddings()]);
+  chk("K20 정비가 겹치면 줄을 서서 차례로 돈다", pair[0].embedded === 100 && pair[1].embedded === 100, JSON.stringify(pair));
 
   // ── K19 ──
   await q(`UPDATE org_runtime_config SET embedding_config=$1::jsonb WHERE id=1`, [JSON.stringify({ provider: "off", explicit: true })]);

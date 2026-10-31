@@ -376,15 +376,28 @@ export async function runAutoBackfillSweep(): Promise<void> {
 
 // ── 조각 임베딩 정비(#5203) — 첫 색인은 조각 수만 건이라 위 스윕과 떼어 놓는다. ──
 //  · 위 스윕에 넣지 않는다 — 그 스윕은 프로세스에 하나라, 조각이 도는 동안 방금 저장한 문서의 벡터를 깨우는 nudge 가 버려진다.
-//    여기는 저장이 깨우지 않고 정비표(10분)로만 돈다. 위 스윕이 시작되면 다음 배치 앞에서 멈춘다.
+//    여기는 저장이 깨우지 않고 정비표(10분)로만 돈다. 위 스윕을 보고 비키지 않는다 — 요청에 얹은 정비는 둘을 같은 순간에 던지므로 비키면 판마다 밀려 영영 안 돈다
+//    (매니지드 실측: 롤 뒤 조각 3만 개가 한 건도 안 채워졌다). 조각은 한 건씩 보내므로 같이 돌아도 서로 막지 않는다.
+//  · 조각 일은 워크스페이스를 가리지 않고 프로세스에서 한 줄로 돈다(chunkTurn) — 임베딩 서버가 한 줄이고, 비키게 하면 같은 순간에 깨는 작은 워크스페이스가 큰 워크스페이스에 밀려 굶는다.
 //  · 상한 둘 — 판마다 · 하루마다. 매니지드 임베딩은 계정 일일 상한(기본 2만)이 있고 넘으면 **질의 임베딩까지** 429 다. 상한은 워크스페이스마다 센다(계정은 코어가 모른다) —
 //    계정에 큰 워크스페이스가 둘이어도 질의 몫이 남는 값이다. 지운 행은 세지 않으므로 대략의 상한이다. 실패하면 한 시간 쉰다.
 //  · 모델이 바뀌면 옛 벡터도 대상이다(model-changed) — 상한 안에서 차례로 바뀐다.
 export const CHUNK_EMBED_DAILY_MAX = Number(process.env.LIVELY_CHUNK_EMBED_DAILY_MAX) || 7_000;
 export const CHUNK_EMBED_SWEEP_MAX = 100;
 const CHUNK_RETRY_MS = 60 * 60_000;
-let chunkSweeping = false;
+const CHUNK_QUEUE_MAX = 20;
 const chunkRetryAt = new Map<string, number>();
+let chunkTail: Promise<unknown> = Promise.resolve();
+let chunkWaiting = 0;
+
+/** 조각 일 하나를 줄 세운다. Promise 사슬이라 부른 자리의 워크스페이스 문맥이 그대로 이어진다. 줄이 길면 일을 안 받고 full 로 답한다(정비가 다음 판에 줍는다). */
+function chunkTurn<T>(work: () => Promise<T>, full: T): Promise<T> {
+  if (chunkWaiting >= CHUNK_QUEUE_MAX) return Promise.resolve(full);
+  chunkWaiting++;
+  const turn = chunkTail.then(work);
+  chunkTail = turn.catch(() => undefined).finally(() => { chunkWaiting--; });
+  return turn;
+}
 
 /** 이번 판에 임베딩해도 되는 조각 수. */
 export async function chunkEmbedRoom(): Promise<number> {
@@ -392,12 +405,10 @@ export async function chunkEmbedRoom(): Promise<number> {
   return Math.max(0, Math.min(CHUNK_EMBED_SWEEP_MAX, CHUNK_EMBED_DAILY_MAX - Number((r.rows[0] as { n: number }).n)));
 }
 
-export async function sweepChunkEmbeddings(now: () => number = Date.now): Promise<{ embedded: number; skipped?: string }> {
-  const key = boundTenantId() ?? "";
-  if (sweepRunning || chunkSweeping) return { embedded: 0, skipped: "busy" };
-  if (now() < (chunkRetryAt.get(key) ?? 0)) return { embedded: 0, skipped: "backoff" };
-  chunkSweeping = true;
-  try {
+export function sweepChunkEmbeddings(now: () => number = Date.now): Promise<{ embedded: number; skipped?: string }> {
+  return chunkTurn(async () => {
+    const key = boundTenantId() ?? "";
+    if (now() < (chunkRetryAt.get(key) ?? 0)) return { embedded: 0, skipped: "backoff" };
     if (await refreshBackfillPausedFromDb()) return { embedded: 0, skipped: "paused" };
     const cfg = await resolveConfigFromDb();
     const provider = resolveEmbeddingProvider(cfg);
@@ -408,15 +419,13 @@ export async function sweepChunkEmbeddings(now: () => number = Date.now): Promis
     if (minMb > 0 && (await memAvailableMb()) < minMb) return { embedded: 0, skipped: "memory" };
     const room = await chunkEmbedRoom();
     if (room === 0) return { embedded: 0, skipped: "budget" };
-    const r = await runEmbeddingBackfill({ mode: "model-changed", maxRows: room, shouldStop: () => isBackfillPaused() || sweepRunning }, KNOWLEDGE_CHUNK_TARGET);
+    const r = await runEmbeddingBackfill({ mode: "model-changed", maxRows: room, shouldStop: isBackfillPaused }, KNOWLEDGE_CHUNK_TARGET);
     if (!r.ok) {
       chunkRetryAt.set(key, now() + CHUNK_RETRY_MS);
       console.warn(`[embeddings] 조각 임베딩 멈춤 — 한 시간 뒤 다시: ${r.reason}`);
     }
     return { embedded: r.embedded, ...(r.ok ? {} : { skipped: r.reason ?? "error" }) };
-  } finally {
-    chunkSweeping = false;
-  }
+  }, { embedded: 0, skipped: "busy" });
 }
 /** 시험 전용 — 쉬는 시각을 비운다. */
 export function __resetChunkRetry(): void { chunkRetryAt.clear(); }
@@ -425,12 +434,7 @@ export function __resetChunkRetry(): void { chunkRetryAt.clear(); }
 //  정비는 10분에 한 번이라, 조각으로 찾기 시작하면 방금 쓴 문서가 그동안 뜻으로 안 찾힌다(문서 벡터는 저장이 곧바로 깨운다). 저장이 바꾼 조각만 곧바로 채운다.
 //  · 그 문서만 본다 — 저장이 잦아도 밀린 일을 건드리지 않아 판 상한이 뚫리지 않는다. 하루 상한은 같이 쓴다.
 //  · 뒤 조각부터다(끝 덧붙임). 상한을 넘는 나머지는 정비가 줍는다.
-//  · 프로세스에서 한 번에 하나씩 돈다 — 임베딩 서버는 한 줄이다. 줄이 길면 버린다(정비가 줍는다).
-//    Promise 사슬이라 부른 자리의 워크스페이스 문맥이 그대로 이어진다.
 const CHUNK_FRESH_MAX = 40;
-const CHUNK_FRESH_QUEUE = 20;
-let freshTail: Promise<unknown> = Promise.resolve();
-let freshWaiting = 0;
 
 async function embedDocChunks(name: string): Promise<number> {
   if (Date.now() < (chunkRetryAt.get(boundTenantId() ?? "") ?? 0) || await refreshBackfillPausedFromDb()) return 0;
@@ -455,12 +459,8 @@ async function embedDocChunks(name: string): Promise<number> {
 
 /** 저장 뒤 그 문서의 빈 조각을 곧 채운다 — 기다리지 않고 던지지 않는다. 실패하면 정비가 줍는다. */
 export function embedChunksSoon(name: string): void {
-  if (freshWaiting >= CHUNK_FRESH_QUEUE) return;
-  freshWaiting++;
-  freshTail = freshTail
-    .then(() => embedDocChunks(name))
-    .catch((e) => console.warn(`[embeddings] 저장 직후 조각 임베딩 실패(정비가 다시) ${name}: ${(e as Error)?.message}`))
-    .finally(() => { freshWaiting--; });
+  void chunkTurn(() => embedDocChunks(name), 0)
+    .catch((e) => console.warn(`[embeddings] 저장 직후 조각 임베딩 실패(정비가 다시) ${name}: ${(e as Error)?.message}`));
 }
 
 // ── 쓰기 경로 → pending 마킹(#1053) — 저장/수정 때 임베딩 HTTP(느린 CPU 백엔드는 건당 수십 초)를 인라인 호출하지 ──
