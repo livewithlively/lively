@@ -387,6 +387,8 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
       el('span', { class: 'cxr-n' }, el('b', { text: r.name, title: r.name }), kindTag(r.kind)), runSummary(r),
       el('span', { class: 'cxr-chev', 'aria-hidden': 'true', text: '›' }));
     const it: HTMLElement = el('div', { class: 'cxr-it', 'data-key': key }, a, el('div', { class: 'cxr-x' }));
+    //  누르는 순간의 포커스가 브라우저 스스로 줄을 창 안으로 굴린다 — 그 뒤 reveal 의 계산이 어긋나므로 마우스로 누를 땐 포커스를 주지 않는다(키보드 Tab 은 그대로).
+    a.addEventListener('mousedown', (e) => { if (e.button === 0 && !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)) e.preventDefault(); });
     a.addEventListener('click', (e) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault(); toggleRow(r, it);
@@ -459,14 +461,19 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
   // ── 실행 하나 펼쳐 보기 — 다른 화면으로 가지 않는다(원준 2026-10-31) ──
   //  목록이 차지하던 높이를 그대로 쓴다(세로로 늘지 않고 스크롤도 생기지 않는다). 넘치는 줄은 «외 n건» 으로 접는다.
   //  지식 · 자료 제목은 그 문서로 가는 링크다. 다시 누르거나 Esc 면 닫힌다.
-  //  · 줄을 누르면 — 그 줄 아래로 펼친다(아코디언). 펼친 줄이 목록 맨 위로 미끄러져 올라가고, 아래 줄들은 잠시 가려진다.
+  //  · 줄을 누르면 — 그 줄 아래로 살포시 펼친다(아코디언). 펼친 만큼 아래 줄이 밀려 내려가 바닥의 한두 줄만 가려진다.
+  //    원준 2026-10-31: "하나 누르면 위아래 있던 게 전부 날아가니 액션이 너무 크다 — 접혀 있던 게 살포시 펴지면서 멀리 있는 게 한두 개 사라지는 방식".
+  //    그래서 펼친 칸은 내용만큼(최대 GENTLE_MAX)이고, 목록은 펼친 칸이 보일 만큼만 굴린다(바닥 줄을 펼칠 때만 위가 조금 올라간다).
   //  · 점을 누르면 — 그 실행이 목록에 있으면 그 줄을 펼치고, 없으면 목록 자리에 그 실행 하나를 띄운다(peek).
   const detailCache = new Map<string, RunDetail | Error>();
   /** 바뀐 것 목록을 채운다 — list 는 높이가 정해진 상자 안이어야 한다(넘치는 줄을 재서 접는다). live() 가 거짓이면 그사이 닫힌 것이다. */
-  function fillDetail(r: AutoRun, list: HTMLElement, fhint: HTMLElement, detailHref: string, live: () => boolean): void {
+  function fillDetail(r: AutoRun, list: HTMLElement, fhint: HTMLElement, detailHref: string, live: () => boolean, done?: () => void): void {
     const k = r.kind, cat = r.lane === 'category';
     const fill = (d: RunDetail | Error): void => {
       if (!live()) return;
+      fill0(d); done?.();
+    };
+    const fill0 = (d: RunDetail | Error): void => {
       if (d instanceof Error) { list.replaceChildren(el('li', { class: 'is-empty', text: '내용을 불러오지 못했습니다 — ' + d.message })); return; }
       if (!r.ok) { list.replaceChildren(el('li', { class: 'cxr-pk-err', text: String(r.err || '실패') })); fhint.textContent = ''; return; }
       const its = cat ? d.items.filter((i) => i.tag === 'mod') : d.items;
@@ -496,43 +503,72 @@ export function runsPanel(pipeline: any, opts: { onFilter?: (f: RunFilter) => vo
   const unlockFeed = (): void => { feed.style.height = ''; feed.classList.remove('is-lock'); feed.scrollTop = 0; };
 
   //  ① 줄 펼치기(아코디언)
+  const GENTLE_MAX = 200, LOADING_H = 40;
   let openIt: HTMLElement | null = null, openRun: AutoRun | null = null;
-  /** now = 애니메이션 없이 곧바로. keepLock = 목록 높이 잠금을 그대로 둔다(다른 줄로 옮겨 펼칠 때 — 접히는 중의 높이를 재지 않게). */
+  /** 펼친 칸이 목록 창 안에 들게 — 이미 보이면 굴리지 않는다. 펼치는 중엔 아직 굴릴 거리가 없어 scrollTo 가 묶이므로 그동안만 바닥에 그 높이를 빌려 둔다. */
+  function reveal(it: HTMLElement, h: number, shift = 0): void {
+    const a = it.querySelector<HTMLElement>('.cxr-row')!;
+    //  모두 «다 펼치고 다 접힌 뒤» 의 자리로 잰다 — 위의 줄이 접히는 중이면 지금 보이는 자리도 그만큼 올라간다.
+    const top = it.offsetTop - shift, bottom = top + a.offsetHeight + h + 6;
+    let want = Math.max(0, feed.scrollTop - shift);
+    if (bottom > want + feed.clientHeight) want = bottom - feed.clientHeight;
+    if (top < want) want = Math.max(0, top - 2);
+    if (want === feed.scrollTop && !shift) return;
+    //  접힘(앞 줄)과 펼침(이 줄)이 겹치는 동안 목록 길이가 잠깐 줄어 스크롤이 끝에 눌린다 — 그 사이만 바닥을 빌려 둔다.
+    feed.style.paddingBottom = h + shift + 'px';
+    feed.scrollTo({ top: want, behavior: REDUCE() ? 'auto' : 'smooth' });
+    setTimeout(() => { feed.style.paddingBottom = ''; }, 360);
+  }
+  /** now = 애니메이션 없이 곧바로. keepLock = 다른 줄로 옮겨 펼치는 중 — 목록 잠금을 풀지도, 맨 위로 되감지도 않는다. */
   function foldRow(now: boolean, keepLock = false): void {
     const it = openIt; if (!it) return;
     openIt = null; openRun = null;
     const x = it.querySelector<HTMLElement>('.cxr-x'), a = it.querySelector('.cxr-row');
-    it.classList.remove('is-open'); a?.setAttribute('aria-expanded', 'false'); markDot(null);
+    it.classList.remove('is-open'); a?.setAttribute('aria-expanded', 'false'); if (!keepLock) markDot(null);
     if (now || REDUCE()) {
       if (x) { x.style.transition = 'none'; x.style.height = ''; x.replaceChildren(); void x.offsetHeight; x.style.transition = ''; }
       if (!keepLock) unlockFeed();
       return;
     }
     if (x) x.style.height = '0px';
-    feed.scrollTo({ top: 0, behavior: 'smooth' });
-    setTimeout(() => { if (openIt || peekKey) return; if (x) { x.style.height = ''; x.replaceChildren(); } unlockFeed(); }, 320);
+    if (!keepLock) feed.scrollTo({ top: 0, behavior: 'smooth' });
+    setTimeout(() => {
+      if (x && !it.classList.contains('is-open')) { x.style.height = ''; x.replaceChildren(); }
+      if (!openIt && !peekKey) unlockFeed();
+    }, 320);
   }
   function toggleRow(r: AutoRun, it: HTMLElement): void {
     if (openIt === it) { foldRow(false); return; }
     unpeek(false);
-    if (openIt) foldRow(true, true);
+    //  옮겨 펼칠 때 — 앞 줄도 함께 스르르 접힌다. 그 줄이 위에 있었으면 이 줄은 접히는 만큼 올라가니 그만큼 빼고 잰다.
+    let shift = 0;
+    if (openIt) {
+      if (openIt.compareDocumentPosition(it) & Node.DOCUMENT_POSITION_FOLLOWING) shift = openIt.querySelector<HTMLElement>('.cxr-x')?.offsetHeight || 0;
+      foldRow(false, true);
+    }
     lockFeed();
     const x = it.querySelector<HTMLElement>('.cxr-x')!, a = it.querySelector<HTMLElement>('.cxr-row')!;
-    //  펼친 칸 높이 = 잠근 목록 높이 − 이 줄 — 펼친 줄이 맨 위로 올라가면 목록 자리를 꼭 채운다.
-    const h = Math.max(96, feed.clientHeight - a.offsetHeight - 8);
+    //  넘치는 줄은 이 높이에 맞춰 «외 n건» 으로 접는다 — 실제로 펼치는 높이는 채운 뒤 내용만큼.
+    const cap = Math.max(LOADING_H, Math.min(GENTLE_MAX, feed.clientHeight - a.offsetHeight - 8));
     const detailHref = runsHref({ from: dayOf(r.t), to: dayOf(r.t), run: r });
     const list: HTMLElement = el('ul', { class: 'cxrp-il cxr-pk-il' }, el('li', { class: 'is-empty', text: '불러오는 중…' }));
     const fhint: HTMLElement = el('span', { class: 'cxr-pk-hint' });
-    x.replaceChildren(el('div', { class: 'cxr-x-in', style: `height:${h}px` }, list,
-      el('div', { class: 'cxr-pk-f' }, fhint, el('a', { class: 'cxr-more-link', href: detailHref, text: '자세히 보기 →' }))));
+    const inner: HTMLElement = el('div', { class: 'cxr-x-in', style: `height:${cap}px` }, list,
+      el('div', { class: 'cxr-pk-f' }, fhint, el('a', { class: 'cxr-more-link', href: detailHref, text: '자세히 보기 →' })));
+    x.replaceChildren(inner);
     openIt = it; openRun = r;
     it.classList.add('is-open'); a.setAttribute('aria-expanded', 'true'); markDot(r.key);
-    x.style.height = '0px'; void x.offsetHeight; x.style.height = h + 'px';
-    //  펼침과 미끄러짐을 함께 — 펼치는 중엔 아직 스크롤할 거리가 없어 scrollTo 가 0 에 묶인다. 그동안만 바닥에 그 높이를 빌려 둔다.
-    feed.style.paddingBottom = h + 'px';
-    feed.scrollTo({ top: it.offsetTop - 2, behavior: REDUCE() ? 'auto' : 'smooth' });
-    setTimeout(() => { feed.style.paddingBottom = ''; }, 360);
-    fillDetail(r, list, fhint, detailHref, () => openIt === it);
+    x.style.height = '0px'; void x.offsetHeight;
+    let filled = false;
+    fillDetail(r, list, fhint, detailHref, () => openIt === it, () => {
+      filled = true;
+      inner.style.height = 'auto'; list.style.flex = 'none';
+      const h = Math.min(inner.offsetHeight, cap);
+      list.style.flex = ''; inner.style.height = h + 'px';
+      x.style.height = h + 'px';
+      reveal(it, h, shift); shift = 0;
+    });
+    if (!filled) { x.style.height = LOADING_H + 'px'; reveal(it, LOADING_H, shift); shift = 0; }
   }
 
   //  ② 점 — 목록에 있으면 그 줄을, 없으면 목록 자리에 하나(peek)
