@@ -27,3 +27,15 @@ export function openRouteFirstPrompt(m: unknown): { sid: string; text: string } 
   if (!sid || typeof text !== 'string' || !text.trim() || text.length > FIRST_PROMPT_MAX) return null;
   return { sid, text };
 }
+
+/** 액자 안 클래식 화면이 모르는 주소면 셸로 넘길 해시를, 아는 주소(또는 홈)면 null — #5159(원준 2026-10-31).
+ *  수집·증류 화면의 «새 자료» 링크(`#/sources/<id>`)는 셸에만 있는 주소다. 액자 안에서 누르면 액자 주소만 바뀌고 클래식 라우터가
+ *  모르는 주소라 홈(대시보드)으로 떨어졌다 — "슬랙 pdf 를 누르니 홈 화면이 보이는 곳으로 간다". 링크마다 고치지 않고 라우터 입구에서
+ *  «모르는 주소는 셸에게» 한 번으로 막는다. known = 클래식 라우터가 그리는 첫 칸들(main.ts CLASSIC_PAGES). */
+export function classicHandoff(hash: string, known: ReadonlySet<string>): string | null {
+  const h = String(hash || '');
+  if (!h.startsWith('#/')) return null;
+  const page = h.slice(2).split(/[/?#]/)[0];
+  if (!page || known.has(page)) return null;
+  return h;
+}
