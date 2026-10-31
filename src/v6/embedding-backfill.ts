@@ -105,7 +105,8 @@ export const COLLECT_UNIT_TARGET: EmbeddingTarget = {
 
 // 지식 조각(#5203): 절마다 벡터 하나. 표(knowledge_chunk)는 낱말 색인 스윕이 맞추고 여기는 빈 벡터를 채운다. 채우는 정비는 따로 돈다(sweepChunkEmbeddings).
 //  조각은 활성 · 검색 대상 문서에만 있어야 하지만 표를 맞추기까지 틈이 있다 — 그 틈에 보관 · 검색 제외된 글을 임베딩 서버로 보내지 않게 문서를 다시 본다.
-//  임베딩 서버는 한 줄로 처리한다 — 배치가 크면 그동안 질의(자동 소환 · 검색)가 뒤에서 기다린다. 조각 수만큼 몰리므로 요청을 작게 끊는다(CPU 건당 약 0.7초 × 4 < 훅 상한 4초).
+//  임베딩 서버는 한 건씩 처리한다 — 한 요청에 여러 건을 실으면 그 요청이 끝날 때까지 질의(자동 소환 · 검색)가 뒤에서 기다린다. 조각 수만큼 몰리므로 한 건씩 보낸다. 처리량은 같다.
+//   실측(x86 4 vCPU · bge-m3): 2,000자 조각 1건 5.5초 · 4건을 한 요청으로 22초 — 그동안 소환 질의가 전부 훅 상한 4초를 넘겼다.
 export const KNOWLEDGE_CHUNK_TARGET: EmbeddingTarget = {
   name: "knowledge_chunk",
   table: "knowledge_chunk",
@@ -113,7 +114,7 @@ export const KNOWLEDGE_CHUNK_TARGET: EmbeddingTarget = {
   activeFilter: "EXISTS (SELECT 1 FROM knowledge k WHERE k.name = knowledge_chunk.name AND k.lifecycle='active' AND k.searchable)",
   selectCols: "id, prefix, body",
   buildText: (r) => chunkEmbedText(r as { prefix?: string | null; body?: string | null }),
-  batchMax: 4,
+  batchMax: 1,
 };
 
 export interface BackfillProgress { total: number; done: number }
@@ -441,16 +442,13 @@ async function embedDocChunks(name: string): Promise<number> {
   const { rows } = await itemsPool.query(
     `SELECT ${t.selectCols} FROM ${t.table} WHERE name=$1 AND embedding_vector IS NULL AND ${t.activeFilter} ORDER BY seq DESC LIMIT $2`, [name, room]);
   let done = 0;
-  for (let i = 0; i < rows.length; i += t.batchMax ?? 4) {
-    const part = rows.slice(i, i + (t.batchMax ?? 4));
-    const vecs = await provider.embed(part.map((r) => t.buildText(r as Record<string, unknown>)));
-    for (let j = 0; j < part.length; j++) {
-      if (!vecs[j]?.length) continue;
-      const res = await itemsPool.query(
-        `UPDATE ${t.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1 AND (${t.activeFilter})`,
-        [(part[j] as Record<string, unknown>).id, toVectorLiteral(vecs[j]), provider.model]);
-      done += res.rowCount ?? 0;
-    }
+  for (const r of rows) {
+    const [vec] = await provider.embed([t.buildText(r as Record<string, unknown>)]);
+    if (!vec?.length) continue;
+    const res = await itemsPool.query(
+      `UPDATE ${t.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1 AND (${t.activeFilter})`,
+      [(r as Record<string, unknown>).id, toVectorLiteral(vec), provider.model]);
+    done += res.rowCount ?? 0;
   }
   return done;
 }
