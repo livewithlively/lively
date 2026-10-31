@@ -1,14 +1,13 @@
-// v6 knowledge 검색(#1313 R21 — knowledge-store 에서 분리) — grep(렉시컬)·하이브리드(RRF)·유사·추천.
+// v6 knowledge 검색(#1313 R21 — knowledge-store 에서 분리) — grep(렉시컬)·하이브리드(RRF). 유사·추천은 knowledge-similar.ts.
 //  분리 이유: CRUD 와 완전히 다른 관심사(질의 계획·벡터·랭킹)인데 한 파일에 있어 검색 튜닝 diff 가 저장 경로와
 //  충돌했다. 공개 표면은 그대로 — knowledge-store.ts 가 이 모듈을 재수출하므로 기존 호출부는 무수정.
 //  공용 조각(가시성 술어·아이콘 표현식)은 knowledge-common.ts, grep 매처·RRF 상수는 search-util.ts.
-import type { PoolClient } from "pg";
 import { itemsPool } from "../db/client.js";
-import { q, one, withTx } from "../db/client.js";
+import { q, one } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
-  type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst, titleFirst,
-  RRF_K, HYBRID_CANDIDATES, HNSW_EF_SEARCH, activeEmbeddingProvider, embedQuery,
+  type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, exactFirst, titleFirst,
+  RRF_K, HYBRID_CANDIDATES, embedQuery, withHnswScan,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
 import { parseQueryTerms, requiredTerms } from "./query-terms.js";   // #4744 검색 실패 보조 안내의 낱말 판정(군말 빼기)
@@ -16,6 +15,7 @@ import { knowledgeVisWhere, K_ICON_EXPR } from "./knowledge-common.js";
 import { knowledgeCategoryRestriction, knowledgeInCategoriesSql } from "./read-scope.js";   // #5100 category 인자 · 앱 맥락 범위
 import { bm25Sql, hasIdentifier, lexQueryTerms } from "./knowledge-lex.js";   // #5201 낱말 채널
 import { lexReady } from "./knowledge-lex-store.js";
+import { type ChunkIndex, chunkIndex, chunkSnippet, chunkVecChannel, withChunkScan } from "./knowledge-chunk-search.js";   // #5204 조각 벡터 채널
 
 // grep 결과 SELECT — 전문(body_md)은 스니펫 계산용으로만 가져오고 응답에선 뺀다. 무관 메타(external_* 등)는 아예 미조회.
 //  grep 매처(parseGrep/grepWhere)·스니펫 빌더(grepSnippet)는 search-util.ts 로 분리(#631, project 검색과 공유).
@@ -62,7 +62,7 @@ function searchFilterSql(opts: { injection?: string; provenance?: string; catego
 }
 
 /** 어떤 길로 찾았나(#5201) — 기록(knowledge_search_log)이 호출마다 남긴다. */
-export type KnowledgeSearchRoute = "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
+export type KnowledgeSearchRoute = "hybrid-chunk" | "hybrid-chunk-grep" | "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
 export interface SearchRouteDiag { route?: KnowledgeSearchRoute }
 
 /**
@@ -150,7 +150,8 @@ export async function searchKnowledge(
 // ── 하이브리드 검색(knowledge_search, 벡터검색 #172) — 벡터(cosine) ∪ 렉시컬(grep) RRF 융합. ──
 //  · 임베딩 off / 쿼리 임베딩 실패 / SQL 실패 → 전부 searchKnowledge(렉시컬)로 폴백(하위호환·safe-by-construction).
 //  · grep 과 다른 점: 단어가 본문에 그대로 없어도 의미 유사로 회수(벡터 채널). 정확 토큰/정규식은 knowledge_grep.
-//  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 벡터-only 매치는 grepSnippet 이 본문 앞부분 미리보기로 폴백.
+//  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 조각으로 맞으면 그 절을 보여 주고(chunkSnippet), 문서 벡터로만 맞으면 grepSnippet 이 본문 앞부분 미리보기로 폴백.
+//  · 벡터 채널은 조각이 준비되면 조각(#5204 — knowledge-chunk-search.ts), 아니면 문서 벡터다.
 //  RRF_K/HYBRID_CANDIDATES 는 search-util.ts 에서 import(project 검색과 공유).
 
 export async function hybridSearchKnowledge(
@@ -175,6 +176,16 @@ export async function hybridSearchKnowledge(
   const qvec = qe.vec;
   if (!qvec && !terms) return searchKnowledge(qstr, opts, viewer, diag);   // off · 쿼리 임베딩 실패 + 색인 없음 → 폴백
   if (!qvec && idOnly) { if (diag) diag.route = "lexical"; return []; }    // 낱말 채널은 방금 돌았다
+  const ix = qvec ? await chunkIndex() : null;
+  if (ix) {
+    try {
+      const rows = await rrfSearch(qstr, qvec, terms, opts, viewer, ix);
+      if (diag) diag.route = terms ? "hybrid-chunk" : "hybrid-chunk-grep";
+      return rows;
+    } catch (e) {
+      console.warn(`[embeddings] 조각 검색 실패 — 문서 벡터로: ${(e as Error)?.message}`);
+    }
+  }
   try {
     const rows = await rrfSearch(qstr, qvec, terms, opts, viewer);
     if (diag) diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical";
@@ -187,7 +198,7 @@ export async function hybridSearchKnowledge(
 
 /**
  * (#4213 T12 #4744 검색 실패 보조 안내) 하이브리드 검색이 돌려준 지식이 질의와 얼마나 맞나 — RRF 점수는 순위라 «약하다» 를 말하지 못해서
- *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
+ *  절대값 둘을 따로 잰다: topSim = 그 지식들과 질의 벡터의 코사인 유사도 최고값(찾기가 조각을 쓰면 조각 기준 · 임베딩이 꺼졌거나 못 물었거나 벡터가 아직 없으면 null) ·
  *  lexical = 그 가운데 질의 낱말이 (부르는 쪽이 정한 수만큼 — termsNeeded · 큰따옴표 구절은 늘) 이름·제목·본문에 든 지식이 있나(knowledge_grep
  *  plain 규칙 — 조사를 뗀 꼴 · 군말은 없어도 됨). 낱말이 맞으면 topSim 은 재지 않는다(null). 돌려준 지식(이름)만 보므로 공개범위는 이미 걸러진
  *  것이다. 질의 임베딩은 검색과 같은 원문(qstr)으로 묻어 방금 검색이 기억해 둔 것을 다시 쓴다(embedQuery 기억) — 낱말은 termsQuery 에서 뽑는다.
@@ -230,24 +241,15 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
   try {
     const qe = await embedQuery(qstr);
     if (qe.vec) {
+      //  찾기가 조각으로 찾았으면 조각으로 잰다 — 끝 절로만 맞는 문서는 문서 벡터가 멀어, 맞는 1위가 있어도 «약하다» 가 된다.
+      const ix = await chunkIndex();
       const r = await one(itemsPool,
-        `SELECT max(1 - (embedding_vector <=> $1::vector))::float8 AS s FROM knowledge WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
+        `SELECT max(1 - (embedding_vector <=> $1::${ix ? ix.cast : "vector"}))::float8 AS s FROM ${ix ? "knowledge_chunk" : "knowledge"} WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
         [toVectorLiteral(qe.vec), list]) as { s?: number | null } | undefined;
       topSim = r?.s == null ? null : Number(r.s);
     }
   } catch { topSim = null; }
   return { topSim, lexical };
-}
-
-/**
- * 벡터 근사탐색을 넓혀 돌린다(#5201). 기본 hnsw.ef_search=40 이면 LIMIT 이 50 이어도 40건까지만 나오고, 행 보안 · 술어로 걸러지는 행이 그 40칸을 먼저 먹는다
- *  (공용 DB 에서는 다른 워크스페이스 문서도 같은 인덱스에 있다). 값은 트랜잭션 안에서만 산다 — SET LOCAL.
- */
-async function withHnswScan<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
-  return withTx(async (c) => {
-    await c.query(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
-    return fn(c);
-  });
 }
 
 /**
@@ -277,6 +279,7 @@ async function rrfSearch(
   qstr: string, qvec: number[] | null, terms: readonly string[] | null,
   opts: KnowledgeSearchFilter & { limit?: number; mode?: KnowledgeGrepMode; context?: number; plain?: boolean },
   viewer?: Viewer,
+  ix: ChunkIndex | null = null,
 ): Promise<KnowledgeSearchRow[]> {
   const withBody = opts.mode !== "names";
   const sel = withBody ? K_GREP_SEL : K_GREP_NAMES_SEL;
@@ -300,12 +303,15 @@ async function rrfSearch(
   let vecCte = "";
   if (qvec) {
     //  #5169 검색 제외는 벡터가 없지만 술어로도 뺀다 — 비우기 전의 벡터가 남아 있어도 결과에 안 나오게(렉시컬 grepWhereSql 과 같은 규칙).
-    const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
+    const vecWh: string[] = [`k.lifecycle='active'`, `k.searchable`];
     if (opts.injection) { params.push(opts.injection); vecWh.push(`k.injection=$${params.length}`); }
     if (opts.provenance) { params.push(opts.provenance); vecWh.push(`k.provenance=$${params.length}`); }
     if (categories) vecWh.push(knowledgeInCategoriesSql(categories, params, "k"));
     params.push(toVectorLiteral(qvec));   // 쿼리 벡터
-    vecCte = `${vecChannel(vecWh.join(" AND "), `$${params.length}::vector`, candP, categories !== null)},`;
+    const qp = `$${params.length}`;
+    vecCte = ix
+      ? `${chunkVecChannel(ix, vecWh.join(" AND "), qp, candP, vecWh.length > 2)},`
+      : `${vecChannel([...vecWh, `k.embedding_vector IS NOT NULL`].join(" AND "), `${qp}::vector`, candP, categories !== null)},`;
   }
   params.push(RRF_K); const kP = `$${params.length}`;
   const vis = await knowledgeVisWhere(viewer, params);   // 최종 SELECT 전용(위 후보 CTE 주석 참조)
@@ -321,6 +327,7 @@ async function rrfSearch(
       SELECT k.name, row_number() OVER (ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC) AS rank
       FROM knowledge k WHERE ${lexWhere} ORDER BY ${first}${tf}${keptFirst(opts)}k.updated_at DESC LIMIT ${candP}
     )`;
+  const matched = !!ix && !!qvec && withBody;   // 맞은 절을 함께 읽는다(스니펫)
   const sql = `
     WITH ${lexChannel},
     ${vecCte}
@@ -329,191 +336,20 @@ async function rrfSearch(
       FROM (SELECT name, rank FROM lex${qvec ? " UNION ALL SELECT name, rank FROM vec" : ""}) u
       GROUP BY name
     )
-    SELECT ${sel}, f.score::float8 AS score
+    SELECT ${sel}, f.score::float8 AS score${matched ? `, c.start_line, c.path, c.body, v.rank AS vec_rank, l.rank AS lex_rank` : ""}
     FROM fused f JOIN knowledge k ON k.name=f.name
+    ${matched ? `LEFT JOIN vec v ON v.name = f.name LEFT JOIN knowledge_chunk c ON c.id = v.chunk_id LEFT JOIN lex l ON l.name = f.name` : ""}
     WHERE ${vis}
     ORDER BY ${first}f.score DESC LIMIT ${limP}`;
-  const rows = qvec ? await withHnswScan((db) => q(db, sql, params)) : await q(itemsPool, sql, params);
+  const rows = !qvec ? await q(itemsPool, sql, params)
+    : ix ? await withChunkScan(ix, (db) => q(db, sql, params))
+    : await withHnswScan((db) => q(db, sql, params));
   return rows.map((r) => {
     const base: KnowledgeSearchRow = { name: r.name, title: r.title, injection: r.injection,
       provenance: r.provenance, is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at, score: Number(r.score), icon: r.icon ?? null, ...flagOf(opts, r) };
-    if (withBody) base.snippet = grepSnippet(r.body_md ?? "", plan, opts.context);
+    //  뜻으로 올라온 문서는 맞은 절을 보여 준다 — 낱말이 스친 줄보다 왜 나왔는지가 잘 보인다. 낱말 순위가 더 높거나 context(ripgrep -C)를 달라고 했으면 맞은 줄이다.
+    const byMeaning = r.body != null && !opts.context && (r.lex_rank == null || Number(r.vec_rank) <= Number(r.lex_rank));
+    if (withBody) base.snippet = byMeaning ? chunkSnippet(r) : grepSnippet(r.body_md ?? "", plan, opts.context);
     return base;
   });
-}
-
-// ── 유사 지식(벡터검색 #172) — 코사인 유사도(0~1) 기반 최근접. 저장-시 중복감지·관련패널의 프리미티브. ──
-//  · raw 유사도 = 1 - (embedding_vector <=> qvec) (pgvector <=> 는 코사인 거리 → 1-거리 = 코사인 유사도).
-//    RRF score(랭크 기반, hybridSearch)와 달리 **절대 임계 비교 가능**(중복 판정 등) — 이게 proactive·dedup 의 열쇠.
-//  · 입력: name(기존 지식 → 저장된 임베딩 재사용, 재임베딩 불요) 또는 text(임시 텍스트 → 즉시 임베딩). name 우선.
-//  · 임베딩 off / 대상 임베딩 없음 / 쿼리 임베딩 실패 / SQL 실패 → 빈 배열(graceful — 호출부는 "유사 없음"으로 처리).
-//  previewBody(식별용 미리보기)는 search-util.ts 에서 import.
-
-export interface KnowledgeSimilarRow {
-  name: string; title: string | null;
-  injection: string; provenance: string; is_wiki: boolean;
-  summary: string | null; updated_at: string;
-  similarity: number;   // 0~1 코사인 유사도(높을수록 유사)
-  snippet?: string;     // 본문 앞부분 미리보기(식별용)
-}
-/** 유사 검색이 «없음» 을 답한 까닭(#4530) — 화면이 «관련 없음» 과 «못 물어봄» 을 다르게 말하게. 호출부가 넘긴 객체에 채운다. */
-export interface SimilarDiag { embeddings?: "off"; degraded?: boolean }
-export async function findSimilarKnowledge(
-  opts: { name?: string; text?: string; limit?: number; minScore?: number; injection?: string; provenance?: string; categories?: readonly number[] | null } = {},
-  viewer?: Viewer,
-  diag?: SimilarDiag,
-): Promise<KnowledgeSimilarRow[]> {
-  // 1) 쿼리 벡터 리터럴 확보 — name(저장된 벡터 재사용, 재임베딩 불요) 또는 text(즉시 임베딩).
-  let vecLiteral: string | null = null;
-  let selfName: string | null = null;
-  if (opts.name) {
-    selfName = opts.name;
-    //  #5169 검색 제외 문서는 기준이 되지 않는다 — 벡터가 없어야 하지만(끌 때 비운다) 비우기가 best-effort 라 표시로도 막는다.
-    const r = await one(itemsPool, `SELECT embedding_vector::text AS v FROM knowledge WHERE name=$1 AND searchable`, [opts.name]);
-    vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 대상에 임베딩 없으면 null → []
-  } else if (opts.text && opts.text.trim()) {
-    const qe = await embedQuery(opts.text);
-    if (qe.status === "off") { if (diag) diag.embeddings = "off"; return []; }   // off → 유사 없음(꺼졌다고 말한다)
-    if (!qe.vec) { if (diag) diag.degraded = true; return []; }                   // 쿼리 임베딩 실패·시간 초과 → 빈 결과 + «못 물어봄»
-    vecLiteral = toVectorLiteral(qe.vec);
-  }
-  if (!vecLiteral) return [];
-  // 2) 최근접 — 코사인 거리 오름차순. 자기 자신·미임베딩·비활성 제외. minScore(코사인 유사도) 이상만.
-  const limit = Math.min(Math.max(opts.limit ?? 5, 1), 50);
-  const minScore = typeof opts.minScore === "number" ? opts.minScore : 0;
-  try {
-    //  #5100 카테고리 제한(category 인자 ∩ 앱 맥락 범위) — 후보 단계에서 건다(아래 MATERIALIZED 갈래 · vecChannel 주석과 같은 까닭).
-    const categories = await knowledgeCategoryRestriction(viewer, opts.categories);
-    const params: unknown[] = [vecLiteral]; const qp = `$1::vector`;     // $1 = 쿼리 벡터(거리·유사도·정렬에 공유)
-    //  #5169 검색 제외는 이웃 후보에서 뺀다 — 자동 소환 훅(knowledge-recall)·⌘K «뜻 비슷»·문서의 관련 지식이 모두 이 길이다.
-    const wh: string[] = [`k.lifecycle='active'`, `k.searchable`, `k.embedding_vector IS NOT NULL`];
-    if (selfName) { params.push(selfName); wh.push(`k.name <> $${params.length}`); }
-    if (opts.injection) { params.push(opts.injection); wh.push(`k.injection=$${params.length}`); }
-    if (opts.provenance) { params.push(opts.provenance); wh.push(`k.provenance=$${params.length}`); }
-    if (categories) wh.push(knowledgeInCategoriesSql(categories, params, "k"));
-    params.push(minScore); const minP = `$${params.length}`;
-    // 후보는 요청 건수보다 넓게 뽑는다(공개범위 필터 여유분) — 상한은 실용 캡.
-    params.push(Math.min(limit * 10, 500)); const candP = `$${params.length}`;
-    params.push(limit); const limP = `$${params.length}`;
-    const vis = await knowledgeVisWhere(viewer, params);
-    // ⚠ 공개범위 술어를 **후보 스캔(cand)에 넣지 않는다** — 이 스캔이 곧 HNSW 근사탐색(ORDER BY <=> … LIMIT)이라,
-    //  거기에 술어를 얹으면 탐색목록(ef_search) 안에서만 사후 필터돼 결과가 통째로 비는 리콜 붕괴가 난다(#1291 R2-#6).
-    //  대신 후보를 넓게 뜬 뒤 바깥에서 거른다. minScore 는 거리와 단조라 후보 안에 남겨도 같은 문제가 없다(순서상 뒤).
-    //  cand 가 k.visibility 를 실어야 바깥 술어(knowledgeVisSql, 별칭 k)가 그대로 붙는다.
-    //  #5100 카테고리 제한이 있으면 제한 안 행의 이름 · 벡터만 먼저 떠서(MATERIALIZED) 정확히 재고, 가까운 후보에만 본문을 붙인다 —
-    //   근사탐색 사후 필터로 결과가 비는 일을 막는다(vecChannel 주석). 본문까지 떠 두면 범위가 클 때 그만큼 메모리를 쓴다(격리 리뷰 N7).
-    //   제한이 없으면 종전 그대로(cand 가 곧 HNSW 근사탐색).
-    const cand = categories ? `kpool AS MATERIALIZED (
-        SELECT k.name, k.embedding_vector FROM knowledge k WHERE ${wh.join(" AND ")}
-      ),
-      near AS (
-        SELECT p.name, (1 - (p.embedding_vector <=> ${qp}))::float8 AS similarity
-        FROM kpool p
-        WHERE (1 - (p.embedding_vector <=> ${qp})) >= ${minP}
-        ORDER BY p.embedding_vector <=> ${qp}
-        LIMIT ${candP}
-      ),
-      cand AS (
-        SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
-               k.visibility, n.similarity
-        FROM near n JOIN knowledge k ON k.name = n.name
-      )` : `cand AS (
-        SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
-               k.visibility,
-               (1 - (k.embedding_vector <=> ${qp}))::float8 AS similarity
-        FROM knowledge k
-        WHERE ${wh.join(" AND ")} AND (1 - (k.embedding_vector <=> ${qp})) >= ${minP}
-        ORDER BY k.embedding_vector <=> ${qp}
-        LIMIT ${candP}
-      )`;
-    const sql = `
-      WITH ${cand}
-      SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md, k.similarity
-      FROM cand k
-      WHERE ${vis}
-      ORDER BY k.similarity DESC
-      LIMIT ${limP}`;
-    const rows = await withHnswScan((db) => q(db, sql, params));
-    return rows.map((r) => ({
-      name: r.name, title: r.title, injection: r.injection, provenance: r.provenance,
-      is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at,
-      similarity: Number(r.similarity), snippet: previewBody(r.body_md ?? ""),
-    }));
-  } catch (e) {
-    console.warn(`[embeddings] 유사 지식 조회 실패: ${(e as Error)?.message}`);
-    if (diag) diag.degraded = true;
-    return [];                                                          // pgvector 부재 등 → 빈 결과(저장·검색 무손상)
-  }
-}
-
-// ── 추천(카테고리 인지, 벡터검색 #172) — 의미 유사도 + 카테고리 공유 가산점·구제. 프로젝트 필요지식 추천의 코어. ──
-//  순수 벡터보다 나은 점: 사람이 큐레이션한 카테고리는 강한 관련 신호 → ① 같은 카테고리면 가산점(boost)으로 상위로,
-//  ② 임계(minScore) 미달이어도 같은 카테고리면 구제(rescue)해 포함, ③ 임베딩 off 여도 카테고리만으로 추천 가능(graceful).
-//  score = 코사인유사도 + (카테고리 공유 ? boost : 0). 단일 랭킹 리스트 + shares_category 태그(왜 추천인지).
-export interface KnowledgeRecommendRow extends KnowledgeSimilarRow {
-  shares_category: boolean;  // 주어진 카테고리와 공유(가산점·구제 대상)
-  score: number;             // 정렬 기준 = similarity + 카테고리 가산점
-}
-const CATEGORY_BOOST = 0.15; // 같은 카테고리 공유 시 코사인유사도에 더하는 가산점(bge-m3 스케일 기준 보수적)
-export async function findRecommendedKnowledge(
-  opts: { text?: string; categoryIds?: number[]; exclude?: string[]; limit?: number; minScore?: number; categoryBoost?: number } = {},
-  viewer?: Viewer,
-): Promise<KnowledgeRecommendRow[]> {
-  const cats = (opts.categoryIds ?? []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
-  // 쿼리 임베딩(텍스트 있고 provider on 일 때만). 실패/off → null → 카테고리만으로 추천(graceful).
-  let qvec: number[] | null = null;
-  if (opts.text && opts.text.trim()) {
-    const provider = await activeEmbeddingProvider();
-    if (provider) {
-      try { const [v] = await provider.embed([opts.text.slice(0, 8000)]); qvec = v && v.length ? v : null; } catch { qvec = null; }
-    }
-  }
-  if (!qvec && !cats.length) return [];   // 의미·카테고리 둘 다 신호 없음 → 추천 불가
-  const exclude = opts.exclude ?? [];
-  const minScore = typeof opts.minScore === "number" ? opts.minScore : 0.4;
-  const boost = typeof opts.categoryBoost === "number" ? opts.categoryBoost : CATEGORY_BOOST;
-  const limit = Math.min(Math.max(opts.limit ?? 8, 1), 50);
-  try {
-    const params: unknown[] = [];
-    // similarity 식 — qvec 있을 때만 벡터 참조(off 면 NULL → 카테고리 경로만).
-    let simExpr = "NULL";
-    if (qvec) { params.push(toVectorLiteral(qvec)); simExpr = `(1 - (k.embedding_vector <=> $${params.length}::vector))`; }
-    // 카테고리 공유 식 — cats 있을 때만(rejected 매핑 제외). 없으면 false → 순수 벡터(가산점·구제 없음).
-    let sharesExpr = "false";
-    if (cats.length) {
-      params.push(cats);
-      sharesExpr = `EXISTS(SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name AND kc.state<>'rejected' AND kc.category_id = ANY($${params.length}::int[]))`;
-    }
-    params.push(exclude); const exclP = `$${params.length}::text[]`;
-    params.push(minScore); const minP = `$${params.length}`;
-    params.push(boost); const boostP = `$${params.length}`;
-    params.push(limit); const limP = `$${params.length}`;
-    // 공개범위(#1291) — 여기는 WHERE 에 직접 걸어도 안전하다: 정렬키가 순수 거리(<=>)가 아니라 가산점을 얹은 score 라
-    //  벡터 인덱스의 ORDER BY … LIMIT 경로를 애초에 안 탄다(=근사탐색 사후필터가 아니라 정확 스캔) → 리콜 붕괴 없음.
-    const vis = await knowledgeVisWhere(viewer, params);
-    // 포함 조건 = (벡터 임계 통과) OR (같은 카테고리) — 카테고리는 임계 미달도 구제. score 로 정렬(가산점 반영), 동점은 최신순.
-    //  #5169 검색 제외는 뺀다 — 카테고리 구제는 벡터가 없어도 고르므로 술어가 없으면 그대로 섞인다(도메인 소환 훅 leaf 가 이 길).
-    const sql = `
-      SELECT k.name, k.title, k.injection, k.provenance, k.is_wiki, k.summary, k.updated_at, k.body_md,
-             ${simExpr}::float8 AS similarity,
-             ${sharesExpr} AS shares_category,
-             (COALESCE(${simExpr}, 0) + CASE WHEN ${sharesExpr} THEN ${boostP}::float8 ELSE 0 END)::float8 AS score
-      FROM knowledge k
-      WHERE k.lifecycle='active' AND k.searchable AND NOT (k.name = ANY(${exclP}))
-        AND ( ${simExpr} >= ${minP} OR ${sharesExpr} )
-        AND ${vis}
-      ORDER BY score DESC, k.updated_at DESC
-      LIMIT ${limP}`;
-    const rows = await q(itemsPool, sql, params);
-    return rows.map((r) => ({
-      name: r.name, title: r.title, injection: r.injection, provenance: r.provenance,
-      is_wiki: r.is_wiki, summary: r.summary, updated_at: r.updated_at,
-      similarity: r.similarity == null ? 0 : Number(r.similarity),
-      shares_category: !!r.shares_category, score: Number(r.score),
-      snippet: previewBody(r.body_md ?? ""),
-    }));
-  } catch (e) {
-    console.warn(`[embeddings] 추천 지식 조회 실패: ${(e as Error)?.message}`);
-    return [];
-  }
 }

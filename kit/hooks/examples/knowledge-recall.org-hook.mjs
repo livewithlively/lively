@@ -2,8 +2,8 @@
 // org_hook 소스 (event=UserPromptSubmit·PreCompact, harness=all) — 시드 훅 knowledge-recall · knowledge-recall-compact.
 //  ⚠ 키트 번들 파일 아님. run-custom.mjs 가 매 세션 게이트웨이에서 fetch 해 임시 .mjs(ESM)로 실행한다.
 //  하는 일: 입력 프롬프트와 **의미적으로 가까운 팀 지식 인덱스**를 주입(벡터검색 #172, proactive 회수).
-//   게이트웨이 /api/ui/knowledge/similar(text, min_score) 로 **절대 관련도 게이팅** → 무관 프롬프트엔 무주입(노이즈 억제).
-//  불변식: 절대 세션을 막지 않는다(무조건 exit 0). **본문 아님** — 제목·소환키·유사도·1줄 스니펫 인덱스만(본문은 knowledge_get).
+//   게이트웨이 /api/ui/knowledge/recall(text, prev) 이 **절대 관련도 게이팅** → 무관 프롬프트엔 무주입(노이즈 억제). 기준선·건수·질의는 서버가 정한다(#5204 — 되돌릴 때 훅을 안 바꿔도 된다).
+//  불변식: 절대 세션을 막지 않는다(무조건 exit 0). **본문 아님** — 제목·소환키·맞은 절의 자리·1줄 스니펫 인덱스만(본문은 knowledge_get).
 //  run-custom.mjs(2026-06-26~)가 UserPromptSubmit stdout 을 additionalContext 로 주입(SessionStart 와 동형).
 //  #5197 — 사람 프롬프트에만 소환하고, 같은 대화에 이미 넣은 지식은 다시 넣지 않는다. 같은 소스가 PreCompact 로도 등록된다
 //   (knowledge-recall-compact) — 압축되면 주입 내용이 대화에서 사라지므로 그 대화의 기록을 비운다. 훅 본문이 stdin 의
@@ -23,8 +23,6 @@ const SCOPE_HDRS = {
 };
 
 
-const MIN_SCORE = 0.6;        // 이 코사인 유사도 이상만 — 게이팅(관련 없으면 아무것도 안 함). bge-m3 기준 0.5는 모호질문에 턱걸이 노이즈가 새서 0.6으로 상향(2026-06-26).
-const LIMIT = 4;              // 주입 최대 건수(인덱스이므로 적게)
 const MIN_PROMPT_CHARS = 12;  // 너무 짧은 프롬프트(ok/네/yes 등)는 스킵(노이즈·낭비 방지)
 const FETCH_MS = 4000;
 // 사람이 쓰지 않은 입력 — 작업 완료 알림·서브에이전트 보고·세션 간 메시지(#5197). 주입 턴의 86%가 여기 붙었고 같은 턴 열람률은
@@ -46,6 +44,39 @@ const seenFileOf = (input) => {
 };
 const readSeen = (file) => { try { return new Set(fs.readFileSync(file, "utf8").split("\n").filter(Boolean)); } catch { return new Set(); } };
 
+// 앞 턴 사람 말(#5204) — «응 그걸로 해» 같은 짧은 프롬프트는 그것만으로 찾을 수 없어 게이트웨이가 앞에 붙여 묻는다. 대화 기록 파일의 꼴은 하네스마다 달라 훅이 따로 기억한다.
+//  주입 기록과 같은 열쇠 · 같은 폴더다 — 열쇠를 못 정하면 앞 턴 없이 묻는다.
+//  ⚠ 사람이 친 글(앞 300자)이 파일에 남는다. 그래서 — 폴더가 나만 쓰는 폴더일 때만 읽고 쓴다(공용 /tmp 에서 남이 먼저 만든 폴더면 안 쓴다 · 링크도 그래서 막힌다) ·
+//   파일은 나만 읽는다 · 하루 지난 파일은 새 세션의 첫 프롬프트가 지운다.
+const PREV_CHARS = 300;
+const PREV_KEEP_MS = 24 * 60 * 60_000;
+const prevFileOf = (seenFile) => (seenFile ? seenFile.replace(/\.recall-seen$/, ".recall-prev") : null);
+const ownDir = () => {
+  try {
+    fs.mkdirSync(SEEN_DIR, { recursive: true, mode: 0o700 });
+    const s = fs.lstatSync(SEEN_DIR);
+    return s.isDirectory() && (typeof process.getuid !== "function" || (s.uid === process.getuid() && (s.mode & 0o022) === 0));
+  } catch { return false; }
+};
+const dropStalePrev = () => {
+  try {
+    for (const f of fs.readdirSync(SEEN_DIR)) {
+      const p = path.join(SEEN_DIR, f);
+      if (f.endsWith(".recall-prev") && Date.now() - fs.statSync(p).mtimeMs > PREV_KEEP_MS) fs.rmSync(p, { force: true });
+    }
+  } catch { /* 못 지우면 다음 세션이 다시 본다 */ }
+};
+const readPrev = (file) => {
+  try { return fs.readFileSync(file, "utf8"); }
+  catch { dropStalePrev(); return ""; }   // 파일이 없다 = 이 세션의 첫 프롬프트
+};
+//  앞 n 자 — 서로게이트 쌍을 가르지 않는다(짝 잃은 글자는 임베딩 서버가 거절할 수 있다).
+const head = (s, n) => { const c = s.charCodeAt(n - 1); return s.slice(0, c >= 0xd800 && c <= 0xdbff ? n - 1 : n); };
+const writePrev = (file, text) => {
+  try { fs.writeFileSync(file, head(text, PREV_CHARS), { mode: 0o600 }); }
+  catch { /* 못 적으면 다음 턴이 앞 턴 없이 나갈 뿐이다 */ }
+};
+
 (async () => {
   // 1) 프롬프트 — UserPromptSubmit stdin JSON 의 prompt
   const stdinData = await new Promise((resolve) => {
@@ -63,9 +94,12 @@ const readSeen = (file) => { try { return new Set(fs.readFileSync(file, "utf8").
     return;
   }
   const prompt = String(input.prompt || "").trim();
-  if (prompt.length < MIN_PROMPT_CHARS) return;                 // 짧음 → 스킵
   if (prompt.startsWith("/") || prompt.startsWith("!")) return; // 슬래시·뱅 커맨드 → 스킵
   if (NOT_HUMAN.test(prompt)) return;                           // 알림·메시지 → 스킵
+  const prevFile = seenFile && ownDir() ? prevFileOf(seenFile) : null;
+  const prev = prevFile ? readPrev(prevFile) : "";
+  if (prevFile && prompt) writePrev(prevFile, prompt);          // 짧아서 건너뛰는 턴도 다음 턴에는 앞 턴이다
+  if (prompt.length < MIN_PROMPT_CHARS) return;                 // 짧음 → 스킵
 
   // 2) 게이트웨이 base + 토큰 (run-custom/session-preload 와 동일 출처)
   const HOME = process.env.LIVELY_HOME || os.homedir();
@@ -75,12 +109,15 @@ const readSeen = (file) => { try { return new Set(fs.readFileSync(file, "utf8").
   let base = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080");
   base = base.replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, "");
 
-  // 3) 의미 유사 지식 회수(절대 관련도 게이팅) — knowledge_similar(text, min_score). 무관/임베딩 off → 빈 결과.
+  // 3) 의미 유사 지식 회수(절대 관련도 게이팅) — knowledge_recall. 무관/임베딩 off → 빈 결과.
   let entries = [];
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), FETCH_MS);
   try {
-    const qs = new URLSearchParams({ text: prompt.slice(0, 2000), min_score: String(MIN_SCORE), limit: String(LIMIT) });
-    const res = await fetch(`${base}/api/ui/knowledge/similar?${qs}`, { signal: ctl.signal, headers: { authorization: "Bearer " + token, ...SCOPE_HDRS } });
+    const res = await fetch(`${base}/api/ui/knowledge/recall`, {
+      method: "POST", signal: ctl.signal,
+      headers: { authorization: "Bearer " + token, "content-type": "application/json", ...SCOPE_HDRS },
+      body: JSON.stringify({ text: head(prompt, 2000), ...(prev ? { prev } : {}) }),
+    });
     if (!res.ok) return;
     const j = await res.json();
     entries = Array.isArray(j && j.entries) ? j.entries : [];
@@ -93,11 +130,12 @@ const readSeen = (file) => { try { return new Set(fs.readFileSync(file, "utf8").
   if (seenFile) { const seen = readSeen(seenFile); entries = entries.filter((e) => !seen.has(e.name)); }
   if (!entries.length) return;
 
-  // 5) 인덱스만 주입(본문 아님). 제목·소환키(name)·유사도·1줄 스니펫.
+  // 5) 인덱스만 주입(본문 아님). 제목·소환키(name)·맞은 절의 자리·1줄 스니펫. 문서 벡터로 찾았으면(조각 색인이 덜 찼거나 되돌렸을 때) 자리 대신 유사도다.
+  //  절의 자리를 싣는 까닭(#5204): 같은 후보를 세 형식으로 보여 판정시키면 일치 절을 보여 준 형식의 유의미 열람이 84.9% → 90.3% 로 올랐고 무관 열람은 구간 안이었다.
   const lines = entries.map((e) => {
-    const pct = Math.round((Number(e.similarity) || 0) * 100);
+    const where = e.line ? `L${e.line}` + (e.section ? ` «${e.section}»` : "") : `유사도 ${Math.round((Number(e.similarity) || 0) * 100)}%`;
     const snip = String(e.snippet || "").replace(/\s+/g, " ").trim().slice(0, 100);
-    return `- ${e.title || e.name} (${e.name}) · 유사도 ${pct}%` + (snip ? `\n  ${snip}` : "");
+    return `- ${e.title || e.name} (${e.name}) · ${where}` + (snip ? `\n  ${snip}` : "");
   });
   const body =
     "[관련 팀 지식 — Lively 컨텍스트 저장소(자동 검색)]\n" +

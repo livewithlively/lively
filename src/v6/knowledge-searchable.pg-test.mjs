@@ -54,6 +54,7 @@ const { initAllSchemas } = await import(`${D}/boot/schemas.js`);
 await initAllSchemas({ quiet: true });
 const { itemsPool } = await import(`${D}/db/client.js`);
 const ks = await import(`${D}/v6/knowledge-search.js`);
+const ksim = await import(`${D}/v6/knowledge-similar.js`);
 const kst = await import(`${D}/v6/knowledge-store.js`);
 const eb = await import(`${D}/v6/embedding-backfill.js`);
 const { routeRecall } = await import(`${D}/v6/recall-router.js`);
@@ -204,17 +205,17 @@ try {
   chk("E24 화면 op semantic=1: 벡터로만 찾히는 C 가 나온다", names((await screenCap.handler(screenRest({ q: VQ, semantic: "1" }), dana, humanCtx)).entries).includes(C));
   chk("E24 화면 op semantic 생략: 글자만 찾는다(C 없음)", !names((await screenCap.handler(screenRest({ q: VQ }), dana, humanCtx)).entries).includes(C));
   __resetQueryEmbedCache();
-  const sv = await ks.findSimilarKnowledge({ text: VQ, limit: 10 }, VIEWER);
+  const sv = await ksim.findSimilarKnowledge({ text: VQ, limit: 10 }, VIEWER);
   chk("E5 유사(text): C 는 나오고 B 는 안 나온다", names(sv).includes(C) && !names(sv).includes(B), JSON.stringify(sv.map((r) => [r.name, r.similarity])));
 
   // ── E12b 같은 값(false)으로 토글해도 남은 벡터는 비운다 → E5b 유사(name=B) 빈 결과 ──
   const sameB = await kst.setKnowledgeSearchable(B, false, ctx);
   chk("E12b 같은 값 토글 = changed:false", sameB.changed === false);
   chk("E12b 같은 값이어도 남은 벡터는 비운다", !(await hasVec(B)));
-  chk("E5b 유사(name=B): 벡터가 없어 빈 결과", (await ks.findSimilarKnowledge({ name: B, limit: 10 }, VIEWER)).length === 0);
+  chk("E5b 유사(name=B): 벡터가 없어 빈 결과", (await ksim.findSimilarKnowledge({ name: B, limit: 10 }, VIEWER)).length === 0);
 
   // ── E6 추천(카테고리 구제 — 벡터 없이 고른다) ──
-  const rec = await ks.findRecommendedKnowledge({ categoryIds: [catId], limit: 10 }, VIEWER);
+  const rec = await ksim.findRecommendedKnowledge({ categoryIds: [catId], limit: 10 }, VIEWER);
   chk("E6 추천: 같은 카테고리의 검색 대상 A 는 나온다(배선)", names(rec).includes(A), JSON.stringify(names(rec)));
   chk("E6 추천: 같은 카테고리의 검색 제외 B 는 안 나온다", !names(rec).includes(B), JSON.stringify(names(rec)));
 
@@ -357,7 +358,7 @@ try {
 
   // ── E23 검색 제외에 벡터가 남아 있으면(끌 때 비우기 실패 등) — 유사의 기준이 되지 않고, 스윕이 걷는다 ──
   await q(`UPDATE knowledge SET embedding_vector=$2::vector WHERE name=$1`, [Dn, lit(basis(0))]);
-  chk("E23 유사(name=남은 벡터를 가진 검색 제외) = 빈 결과", (await ks.findSimilarKnowledge({ name: Dn, limit: 10 }, VIEWER)).length === 0);
+  chk("E23 유사(name=남은 벡터를 가진 검색 제외) = 빈 결과", (await ksim.findSimilarKnowledge({ name: Dn, limit: 10 }, VIEWER)).length === 0);
   await sweep();
   chk("E23 스윕이 검색 제외에 남은 벡터를 걷는다", !(await hasVec(Dn)));
 

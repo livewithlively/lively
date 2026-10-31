@@ -78,6 +78,7 @@ export interface OrgRuntimeConfig {
   session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=true(#1752 — 명시 false 만 끔). 관리탭 ▸ 세션 공유.
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
   embedding_backfill_paused: boolean; // #1060 — 자동 임베딩 백필 스윕 일시중지. true=부팅·주기·sync후·nudge 스윕 no-op + 실행 중 잡 중단. DB 영속(재시작에도 유지).
+  knowledge_chunk_search: boolean; // #5204 — 지식 조각 검색 되돌리기. false=찾기 · 자동 소환이 문서 벡터로(조각 색인 · 임베딩은 계속 돈다).
   inject_ontology_guide: boolean; // #1245 — 온톨로지 가이드(제품 소유 섹션, 코드 단일 출처) 주입 여부. 본문 편집은 불가 — 이 토글만 org 가 정한다.
   oidc_config: OidcSettings; // #1520 외부 IdP 웹 로그인 — 관리탭 설정(DB). 비면 env(OIDC_*) 시드. client_secret 은 암호문만.
   ui_nav: UiNavConfig; // #1454 S2 — 상단 탭 게이팅. {} = 전부 노출(현행). tabs 에 **명시적 false 인 탭만** 숨김(프론트 navOn 이 해석).
@@ -156,7 +157,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, knowledge_chunk_search, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -196,6 +197,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     session_share: resolveSessionShare(row?.session_share), // #905 C1 — 구 DB(컬럼 부재)면 기본값(enabled=false)
     hook_grace_ms: graceMsSafe(row?.hook_grace_ms), // #1008 — 컬럼 부재/NULL 이면 null(무제한)
     embedding_backfill_paused: row?.embedding_backfill_paused === true, // #1060 — 컬럼 부재(구 DB)면 undefined → false(평소대로 자동 백필)
+    knowledge_chunk_search: row?.knowledge_chunk_search !== false, // #5204 — 기본 켜짐
     inject_ontology_guide: row?.inject_ontology_guide !== false, // #1245 — 컬럼 부재(구 DB)면 켜짐(hooks 와 같은 '없으면 on' 규약)
     ui_nav: uiNavSafe(row?.ui_nav), // #1454 S2 — 잡값/부재면 {} = 전부 노출(현행)
     announcement: announcementSafe(row?.announcement), // #1454 S3 — 잡값/부재면 null = 미표시(현행)
@@ -235,6 +237,7 @@ export async function updateRuntimeConfig(
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
     embedding_backfill_paused?: boolean;
+    knowledge_chunk_search?: boolean;
     inject_ontology_guide?: boolean;
     ui_nav?: UiNavConfig;
     announcement?: UiAnnouncement | null;
@@ -267,6 +270,7 @@ export async function updateRuntimeConfig(
   const hookGraceMs = patch.hook_grace_ms !== undefined ? patch.hook_grace_ms : before.hook_grace_ms;
   // #1060 — 자동 백필 일시중지 플래그. before 는 이미 정규화된 boolean 이라 되써도 안전(relay/grace 와 동일 화이트리스트 idiom).
   const embeddingBackfillPaused = patch.embedding_backfill_paused !== undefined ? patch.embedding_backfill_paused : before.embedding_backfill_paused;
+  const knowledgeChunkSearch = patch.knowledge_chunk_search !== undefined ? patch.knowledge_chunk_search : before.knowledge_chunk_search;   // #5204 — 같은 idiom
   // #1245 — 온톨로지 가이드 주입 토글. 단순 boolean(되쓰기 안전 — relay/grace/backfill 과 동일 idiom).
   const injectOntologyGuide = patch.inject_ontology_guide !== undefined ? patch.inject_ontology_guide : before.inject_ontology_guide;
   // #1454 S2~S5 — 매니지드 표면 노브 4종. before 는 이미 safe-fold 된 값이고 fold(기본값) == 컬럼 DEFAULT 라
@@ -369,8 +373,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, knowledge_chunk_search, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, worker_policy, context_job_policy, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$33,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,$31::jsonb,$32::jsonb,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -380,7 +384,7 @@ export async function updateRuntimeConfig(
        session_memory_policy=EXCLUDED.session_memory_policy, session_reclaim_policy=EXCLUDED.session_reclaim_policy,
        delegate_policy=EXCLUDED.delegate_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
-       embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
+       embedding_backfill_paused=EXCLUDED.embedding_backfill_paused, knowledge_chunk_search=EXCLUDED.knowledge_chunk_search,
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url, worker_policy=EXCLUDED.worker_policy,
@@ -390,7 +394,7 @@ export async function updateRuntimeConfig(
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy)],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl, JSON.stringify(workerPolicy), JSON.stringify(contextJobPolicy), knowledgeChunkSearch],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();

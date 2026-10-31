@@ -128,8 +128,8 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
       ts TIMESTAMPTZ NOT NULL DEFAULT now(),
       member TEXT,
       session_id TEXT,
-      tool TEXT NOT NULL,      -- 'search' · 'grep' · 'similar' · 'get'
-      route TEXT,              -- 어떤 길로 찾았나 — v6/knowledge-search.ts KnowledgeSearchRoute · similar 는 'vector'
+      tool TEXT NOT NULL,      -- 'search' · 'grep' · 'similar' · 'recall' · 'get'
+      route TEXT,              -- 어떤 길로 찾았나 — v6/knowledge-search.ts KnowledgeSearchRoute · similar 는 'vector' · recall 은 'chunk' 또는 'vector'
       q TEXT,                  -- 검색어(200자까지). get 은 비어 있다
       names TEXT[],            -- 돌려준 지식 앞 10건(get 은 연 지식 1건)
       n INT,                   -- 돌려준 건수

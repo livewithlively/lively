@@ -13,7 +13,7 @@
 //   K6  보관 · 검색 제외 · 삭제 — 조각이 사라진다 · 다시 활성으로 — 다시 생긴다
 //   K7  조각이 없는 문서(chunk_key 비어 있음 · 규칙 판이 옛것) — 스윕이 조각만 만든다(낱말 행은 안 건드린다)
 //   K8  벡터 칸은 halfvec · 인덱스는 halfvec_cosine_ops · 코사인 질의가 된다
-//   K9  백필 — 빈 벡터를 채운다 · 한 요청 4건 이하 · maxRows 에서 멈춘다
+//   K9  백필 — 빈 벡터를 채운다 · 한 요청에 한 건씩 · maxRows 에서 멈춘다
 //   K10 지식 벡터 스윕은 조각을 안 건드린다 — 저장이 깨우는 스윕이 조각에 묶이지 않는다
 //   K11 조각 정비 — 한 판 100건 · 다음 판이 잇는다 · 하루 상한이면 건너뛴다 · 일시중지를 지킨다
 //   K12 임베딩 서버가 실패하면(429 등) 한 시간 쉰다 — 다음 호출은 서버를 부르지 않는다
@@ -24,6 +24,7 @@
 //   K17 옛 이미지가 글 해시만 올린 문서 — 조각을 다시 맞춘다
 //   K18 조각 표가 실패해도 낱말 색인은 맞춘다 · 표가 돌아오면 조각도 맞는다
 //   K19 임베딩 꺼짐 — 조각은 만들고 벡터는 안 채운다
+//   K20 정비가 같은 순간에 출발해도 — 지식 벡터 스윕을 기다렸다 돈다 · 조각 정비끼리는 줄을 선다
 import pg from "pg";
 import http from "node:http";
 
@@ -167,8 +168,8 @@ try {
   sizes.length = 0;
   const total = Number((await eb.countEmbeddingBacklog(eb.KNOWLEDGE_CHUNK_TARGET)).pending);
   const r9 = await eb.runEmbeddingBackfill({ mode: "pending", maxRows: 10 }, eb.KNOWLEDGE_CHUNK_TARGET);
-  chk("K9 maxRows 에서 멈춘다", r9.ok && r9.embedded >= 10 && r9.embedded <= 13, JSON.stringify(r9));
-  chk("K9 한 요청 4건 이하(설정이 16 이어도)", sizes.length > 0 && Math.max(...sizes) <= 4, JSON.stringify(sizes));
+  chk("K9 maxRows 에서 멈춘다", r9.ok && r9.embedded === 10, JSON.stringify(r9));
+  chk("K9 한 요청에 한 건씩(설정이 16 이어도)", sizes.length > 0 && Math.max(...sizes) === 1, JSON.stringify(sizes));
   chk("K9 남은 것은 대기로 남는다", Number((await eb.countEmbeddingBacklog(eb.KNOWLEDGE_CHUNK_TARGET)).pending) === total - r9.embedded);
   chk("K9 벡터와 모델이 써진다", (await q(`SELECT embedding_model FROM knowledge_chunk WHERE embedding_vector IS NOT NULL LIMIT 1`))[0]?.embedding_model === "fake");
 
@@ -184,7 +185,7 @@ try {
   chk("K11 판 상한", (await eb.chunkEmbedRoom()) === eb.CHUNK_EMBED_SWEEP_MAX);
   const s11 = await eb.sweepChunkEmbeddings();
   const f1 = await filled();
-  chk("K11 한 판은 100건 안팎까지", f1 >= 100 && f1 <= 103 && s11.embedded === f1, JSON.stringify([s11, f1]));
+  chk("K11 한 판은 100건까지", f1 === 100 && s11.embedded === f1, JSON.stringify([s11, f1]));
   await eb.sweepChunkEmbeddings();
   chk("K11 다음 판이 잇는다", (await filled()) >= 200, String(await filled()));
   await q(`UPDATE org_runtime_config SET embedding_backfill_paused=true WHERE id=1`);
@@ -216,7 +217,7 @@ try {
   chk("K13 상태가 옛 모델 벡터도 대기로 센다", st.chunk_backlog && Number(st.chunk_backlog.pending) >= 260 && Number(st.chunk_backlog.total) >= Number(st.chunk_backlog.pending), JSON.stringify(st.chunk_backlog));
   await eb.sweepChunkEmbeddings();
   const moved13 = Number((await q(`SELECT count(*)::int AS n FROM knowledge_chunk WHERE embedding_model='fake' AND name='k-many'`))[0].n);
-  chk("K13 모델이 바뀌면 옛 벡터도 다시 채운다", moved13 >= 100 && moved13 <= 103, String(moved13));
+  chk("K13 모델이 바뀌면 옛 벡터도 다시 채운다", moved13 === 100, String(moved13));
 
   // ── K14 ──
   await q(`UPDATE knowledge_chunk SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL`);
@@ -256,6 +257,18 @@ try {
   chk("K18 낱말 색인은 맞는다", (await q(`SELECT 1 FROM knowledge_lex_posting WHERE term='낱말분리시험'`)).length === 1);
   await ls.sweepKnowledgeLex();
   chk("K18 표가 돌아오면 조각도 맞는다", (await rows("k-fail")).length === 1);
+
+  // ── K20 ──
+  //  요청에 얹은 정비는 한 판에서 정비들을 한꺼번에 던진다(outbox-request-sweep maybeSweep) — 지식 벡터 스윕이 먼저 출발하고, 조각 정비가 같은 순간에 뒤따른다.
+  await q(`UPDATE org_runtime_config SET embedding_backfill_paused=false WHERE id=1`);
+  eb.__resetChunkRetry();
+  await addChunks(0, 12, "k-fail");
+  const same = await Promise.all([eb.runAutoBackfillSweep(), eb.sweepChunkEmbeddings()]);
+  chk("K20 지식 벡터 스윕과 같은 순간에 출발해도 조각을 채운다", same[1].embedded >= 12 && !same[1].skipped, JSON.stringify(same[1]));
+  await q(`UPDATE knowledge_chunk SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL WHERE name='k-fail'`);
+  await addChunks(100, 400, "k-fail");
+  const pair = await Promise.all([eb.sweepChunkEmbeddings(), eb.sweepChunkEmbeddings()]);
+  chk("K20 정비가 겹치면 줄을 서서 차례로 돈다", pair[0].embedded === 100 && pair[1].embedded === 100, JSON.stringify(pair));
 
   // ── K19 ──
   await q(`UPDATE org_runtime_config SET embedding_config=$1::jsonb WHERE id=1`, [JSON.stringify({ provider: "off", explicit: true })]);

@@ -1,7 +1,7 @@
 // v6 knowledge 데이터 접근 — 구 knowledge_unit 대체(kind 폐기 → injection/provenance 직교축).
 //  injection=always(규칙·페르소나, 항상 주입) | recalled(검색 소환). provenance=authored | observed(외부 미러).
 //  knowledge_category(n:n)로 카테고리 매핑. 감사 org_content_audit(entity='knowledge'). 갱신 시 version+1.
-//  검색(grep·하이브리드·유사·추천)은 knowledge-search.ts, 링크·위키링크·그래프는 knowledge-links.ts 로 분리(#1313 R21).
+//  검색(grep·하이브리드)은 knowledge-search.ts, 유사·추천은 knowledge-similar.ts, 링크·위키링크·그래프는 knowledge-links.ts 로 분리(#1313 R21).
 //  둘 다 아래에서 **재수출**한다 — 이 모듈이 지식 표면의 배럴이라 기존 호출부(40+)는 무수정이다.
 import { itemsPool } from "../db/client.js";
 import { q, one, withTx, type Db } from "../db/client.js";
@@ -23,13 +23,11 @@ import { listKnowledgeLinks, materializeWikiLinksBestEffort, type WikiLinkResult
 export { PUBLIC_VIEWER } from "./visibility.js";
 // 같은 이유로 슬러그·가시성 술어는 knowledge-common.ts(#1313 R21) — 기존 import 경로는 이 재수출로 유지.
 export { slugify, knowledgeVisWhere } from "./knowledge-common.js";
-// 검색(#1313 R21) — 구현은 knowledge-search.ts. 표면은 종전 그대로.
-export {
-  countKnowledgeGrep, searchKnowledge, hybridSearchKnowledge, findSimilarKnowledge, findRecommendedKnowledge,
-} from "./knowledge-search.js";
-export type {
-  KnowledgeSearchRow, KnowledgeGrepMode, KnowledgeSimilarRow, KnowledgeRecommendRow,
-} from "./knowledge-search.js";
+// 검색(#1313 R21) — 구현은 knowledge-search.ts · knowledge-similar.ts. 표면은 종전 그대로.
+export { countKnowledgeGrep, searchKnowledge, hybridSearchKnowledge } from "./knowledge-search.js";
+export { findSimilarKnowledge, findRecommendedKnowledge } from "./knowledge-similar.js";
+export type { KnowledgeSearchRow, KnowledgeGrepMode } from "./knowledge-search.js";
+export type { KnowledgeSimilarRow, KnowledgeRecommendRow } from "./knowledge-similar.js";
 // 링크·위키링크·그래프(#1313 R21) — 구현은 knowledge-links.ts. 표면은 종전 그대로.
 export {
   linkKnowledge, unlinkKnowledge, listKnowledgeLinks, resolveWikiLinkTargets, materializeWikiLinks,

@@ -2,8 +2,9 @@
 //  knowledge(#172)·project(#631)가 공유한다. 컬럼/테이블 불가지론(cols 인자·target 파라미터) — 특정 엔티티에 묶이지 않는다.
 //  · grep 매처/스니펫은 순수(DB 불요) → 유닛테스트 가능(search-util.test.ts).
 //  · activeEmbeddingProvider 만 DB(org_runtime_config)를 읽는다(무순환: embedding-provider 는 store 미import 유지 → 여기로 뺀다).
+import type { PoolClient } from "pg";
 import { itemsPool } from "../db/client.js";
-import { one } from "../db/client.js";
+import { one, withTx } from "../db/client.js";
 import { type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvider } from "./embedding-provider.js";
 import { type QueryTerm, parseQueryTerms, termPatterns } from "./query-terms.js";
 
@@ -185,7 +186,18 @@ export function previewBody(body: string): string { return body.slice(0, PREVIEW
 // ── RRF(Reciprocal Rank Fusion) 상수 — 하이브리드 검색(벡터 ∪ 렉시컬)에서 공유. ──
 export const RRF_K = 60;         // RRF 상수(Azure 기본). Σ 1/(k+rank) — 두 채널 모두 상위면 가산.
 export const HYBRID_CANDIDATES = 50; // 각 채널(렉시컬·벡터) 후보 수 → 융합 후 limit 로 컷.
-export const HNSW_EF_SEARCH = 200;   // 벡터 근사탐색 폭(#5201) — 기본 40 은 후보 수보다 작다(knowledge-search withHnswScan).
+export const HNSW_EF_SEARCH = 200;   // 벡터 근사탐색 폭(#5201) — 기본 40 은 후보 수보다 작다(withHnswScan).
+
+/**
+ * 벡터 근사탐색을 넓혀 돌린다(#5201). 기본 hnsw.ef_search=40 이면 LIMIT 이 50 이어도 40건까지만 나오고, 행 보안 · 술어로 걸러지는 행이 그 40칸을 먼저 먹는다
+ *  (공용 DB 에서는 다른 워크스페이스 문서도 같은 인덱스에 있다). 값은 트랜잭션 안에서만 산다 — SET LOCAL.
+ */
+export async function withHnswScan<T>(fn: (db: PoolClient) => Promise<T>): Promise<T> {
+  return withTx(async (c) => {
+    await c.query(`SET LOCAL hnsw.ef_search = ${HNSW_EF_SEARCH}`);
+    return fn(c);
+  });
+}
 
 // ── 임베딩 provider 접근자 — config 가 켜졌을 때만 provider, off(기본)면 null. org_runtime_config.embedding_config 직접 읽음(무순환). ──
 //  off → null → 쓰기·검색 모두 no-op/렉시컬 폴백. 지식·프로젝트 스토어가 공유. 설계 [[vector-search-172-design-pluggable-seam-oss]].

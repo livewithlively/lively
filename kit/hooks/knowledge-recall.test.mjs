@@ -26,7 +26,9 @@ const HOOK = path.resolve(process.argv[2] || path.join(here, "examples", "knowle
 const RUNNER = path.join(here, "run-custom.mjs");
 
 let pass = 0, fail = 0;
-const check = async (name, fn) => {
+const check = async (name, optsOrFn, maybeFn) => {
+  const fn = maybeFn ?? optsOrFn;
+  if (maybeFn && optsOrFn.skip) { console.log(`skip ${name}`); return; }
   try { await fn(); pass++; console.log(`ok  ${name}`); }
   catch (e) { fail++; console.error(`FAIL ${name} — ${String(e?.message || e).split("\n")[0]}`); }
 };
@@ -38,17 +40,19 @@ let reply = { status: 200, names: FOUR };
 let hooksFor = () => [];
 let runtime = null;
 const hits = [];
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const u = new URL(req.url || "/", "http://test");
   const json = (status, body) => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(body)); };
   if (u.pathname === "/api/ui/org/runner/hooks") {
     json(200, { hooks: hooksFor(u.searchParams.get("event")), relay_decisions: ["deny", "ask", "defer"], concurrent: false, runtime });
     return;
   }
-  if (u.pathname !== "/api/ui/knowledge/similar") { json(404, {}); return; }
-  hits.push({ text: u.searchParams.get("text"), min_score: u.searchParams.get("min_score"), limit: u.searchParams.get("limit"), auth: req.headers.authorization || "" });
+  if (u.pathname !== "/api/ui/knowledge/recall" || req.method !== "POST") { json(404, {}); return; }
+  let raw = "";
+  for await (const c of req) raw += c;
+  hits.push({ ...JSON.parse(raw || "{}"), auth: req.headers.authorization || "" });
   if (reply.status !== 200) { json(reply.status, {}); return; }
-  json(200, { entries: reply.names.map(K) });
+  json(200, { entries: reply.names.map(reply.at ?? K) });
 });
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
@@ -157,13 +161,13 @@ await check("#10 일부만 새 지식 → 새 지식만, 순위 순서대로", a
   assert.equal(await ask(sid), "");
 });
 
-await check("#11 이미 넣은 지식이 있어도 요청 건수는 4 그대로(빈자리를 안 채운다)", async () => {
+await check("#11 이미 넣은 지식이 있어도 요청은 그대로다(빈자리를 안 채운다 · 기준선과 건수는 서버가 정한다)", async () => {
   scene();
   const sid = newSid();
   await ask(sid);
   await ask(sid);
-  assert.deepEqual(hits.map((h) => h.limit), ["4", "4"]);
-  assert.deepEqual(hits.map((h) => h.min_score), ["0.6", "0.6"]);
+  assert.equal(hits.length, 2);
+  assert.ok(hits.every((h) => h.limit === undefined && h.min_score === undefined && h.exclude === undefined), JSON.stringify(hits));
 });
 
 await check("#12 다른 session_id → 다시 주입", async () => {
@@ -247,7 +251,7 @@ await check("#21 기록 파일이 빈 파일 → 주입", async () => {
   const sid = newSid();
   await ask(sid, undefined, { tmpDir: own });
   const dir = path.join(own, "lively-hooks");
-  const files = fs.readdirSync(dir);
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".recall-seen"));
   assert.equal(files.length, 1, "전제: 기록 파일 하나");
   await fsp.writeFile(path.join(dir, files[0]), "");
   assert.deepEqual(injected(await ask(sid, undefined, { tmpDir: own })), FOUR);
@@ -314,6 +318,124 @@ await check("#29 서브에이전트 호출은 부모 기록을 읽지도 쓰지�
   // 자식의 압축은 부모 기록을 지우지 않는다.
   await hook({ session_id: sid, agent_id: "c1", hook_event_name: "PreCompact", trigger: "auto" });
   assert.equal(await ask(sid), "", "자식의 압축이 부모 기록을 지웠다");
+});
+
+// ── 맞은 절의 자리(#5204) ──────────────────────────────────────────────────────────
+await check("#31 조각으로 찾으면 줄 · 절 경로가 실리고 유사도는 안 실린다", async () => {
+  scene();
+  reply = { status: 200, names: ["a"], at: (n) => ({ ...K(n), line: 12, section: "배포 › 순서", snippet: "맞은 절의 글" }) };
+  const out = await ask(newSid());
+  assert.ok(out.includes("- 제목 a (a) · L12 «배포 › 순서»\n  맞은 절의 글"), out);
+  assert.ok(!out.includes("유사도"), out);
+});
+
+await check("#32 경로가 없는 절은 줄만 싣는다", async () => {
+  scene();
+  reply = { status: 200, names: ["a"], at: (n) => ({ ...K(n), line: 1, section: "" }) };
+  assert.ok((await ask(newSid())).includes("(a) · L1\n"));
+});
+
+await check("#33 문서 벡터로 찾으면(줄이 없으면) 유사도를 싣는다", async () => {
+  scene();
+  reply = { status: 200, names: ["a"] };
+  assert.ok((await ask(newSid())).includes("(a) · 유사도 70%"));
+});
+
+// ── 앞 턴 사람 말(#5204) ───────────────────────────────────────────────────────────
+await check("#34 둘째 턴에 앞 턴 사람 말을 실어 보낸다 · 첫 턴은 없다", async () => {
+  scene();
+  const sid = newSid();
+  await ask(sid, "첫째 턴의 사람 말입니다");
+  await ask(sid, "둘째 턴의 사람 말입니다");
+  assert.deepEqual(hits.map((h) => [h.text, h.prev]), [["첫째 턴의 사람 말입니다", undefined], ["둘째 턴의 사람 말입니다", "첫째 턴의 사람 말입니다"]]);
+});
+
+await check("#35 짧아서 건너뛴 턴도 다음 턴에는 앞 턴이다", async () => {
+  scene();
+  const sid = newSid();
+  await ask(sid, "응 해줘");
+  await ask(sid, "그럼 다음 단계로 가자");
+  assert.deepEqual(hits.map((h) => h.prev), ["응 해줘"]);
+});
+
+await check("#36 알림 · 슬래시 명령은 앞 턴을 바꾸지 않는다", async () => {
+  scene();
+  const sid = newSid();
+  await ask(sid, "사람이 친 앞 턴의 말입니다");
+  await ask(sid, "<task-notification>\n<status>completed</status>\n</task-notification>");
+  await ask(sid, "/review 이 변경을 살펴봐 주세요");
+  await ask(sid, "이제 다음 프롬프트입니다");
+  assert.deepEqual(hits.map((h) => h.prev), [undefined, "사람이 친 앞 턴의 말입니다"]);
+});
+
+await check("#37 앞 턴은 300자만 · 세션마다 따로 · 서브에이전트는 읽지도 쓰지도 않는다", async () => {
+  scene();
+  const a = newSid(), b = newSid();
+  await ask(a, "가".repeat(500));
+  await ask(b, "다른 세션의 첫 턴입니다");
+  await hook({ session_id: a, agent_id: "c1", hook_event_name: "UserPromptSubmit", prompt: "서브에이전트의 프롬프트입니다" });
+  await ask(a, "같은 세션의 둘째 턴입니다");
+  assert.deepEqual(hits.map((h) => h.prev), [undefined, undefined, undefined, "가".repeat(300)]);
+});
+
+await check("#38 앞 턴 기록을 못 씀 · 깨진 기록 → 소환은 그대로 · exit 0", async () => {
+  scene();
+  const blocked = path.join(root, "tmp-blocked-prev");
+  await fsp.mkdir(blocked);
+  await fsp.writeFile(path.join(blocked, "lively-hooks"), "not a dir");
+  const sid = newSid();
+  await ask(sid, undefined, { tmpDir: blocked });
+  assert.deepEqual(injected(await ask(sid, undefined, { tmpDir: blocked })), FOUR);
+  assert.ok(hits.every((h) => h.prev === undefined));
+});
+
+await check("#40 남도 쓸 수 있는 폴더면 앞 턴을 읽지도 쓰지도 않는다 · 소환은 그대로", { skip: process.platform === "win32" }, async () => {
+  scene();
+  const own = path.join(root, "tmp-open");
+  const dir = path.join(own, "lively-hooks");
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.chmod(dir, 0o777);
+  const sid = newSid();
+  await fsp.writeFile(path.join(dir, `${sid}.recall-prev`), "남이 심어 둔 글");
+  assert.deepEqual(injected(await ask(sid, undefined, { tmpDir: own })), FOUR);
+  assert.equal(hits[0].prev, undefined, "심어 둔 글을 게이트웨이로 보냈다");
+  assert.equal(fs.readFileSync(path.join(dir, `${sid}.recall-prev`), "utf8"), "남이 심어 둔 글", "남의 폴더에 프롬프트를 적었다");
+});
+
+await check("#41 새 세션의 첫 프롬프트가 하루 지난 앞 턴 기록을 지운다 · 최근 것은 둔다", { skip: process.platform === "win32" }, async () => {
+  scene();
+  const own = path.join(root, "tmp-stale");
+  const dir = path.join(own, "lively-hooks");
+  await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
+  const oldF = path.join(dir, "old.recall-prev"), newF = path.join(dir, "recent.recall-prev"), seenF = path.join(dir, "old.recall-seen");
+  for (const f of [oldF, newF, seenF]) await fsp.writeFile(f, "x");
+  const past = new Date(Date.now() - 25 * 60 * 60_000);
+  await fsp.utimes(oldF, past, past);
+  await fsp.utimes(seenF, past, past);
+  await ask(newSid(), undefined, { tmpDir: own });
+  assert.deepEqual([fs.existsSync(oldF), fs.existsSync(newF), fs.existsSync(seenF)], [false, true, true]);
+});
+
+await check("#42 프롬프트 · 앞 턴을 자를 때 서로게이트 쌍을 가르지 않는다", async () => {
+  scene();
+  const sid = newSid();
+  await ask(sid, `${"가".repeat(299)}😀 뒤`);
+  await ask(sid, `${"가".repeat(1999)}😀 뒤`);
+  const isWell = (s) => !/[\ud800-\udbff](?![\udc00-\udfff])/.test(s);
+  assert.equal(hits[1].prev, "가".repeat(299));
+  assert.equal(hits[1].text, "가".repeat(1999));
+  assert.ok(isWell(hits[0].text) && isWell(hits[1].text));
+});
+
+await check("#39 기록 파일은 나만 읽는다", { skip: process.platform === "win32" }, async () => {
+  scene();
+  const own = path.join(root, "tmp-mode");
+  await fsp.mkdir(own);
+  await ask(newSid(), undefined, { tmpDir: own });
+  const dir = path.join(own, "lively-hooks");
+  const f = fs.readdirSync(dir).find((x) => x.endsWith(".recall-prev"));
+  assert.ok(f, "앞 턴 기록이 없다");
+  assert.equal(fs.statSync(path.join(dir, f)).mode & 0o077, 0);
 });
 
 // ── 실제 러너 경유 — 게이트웨이가 내려 준 훅을 러너가 돌리는 그 길 ─────────────────

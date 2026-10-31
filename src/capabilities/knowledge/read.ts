@@ -13,10 +13,11 @@ import {
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 상세 조회는 '검토 대기 중인 수정이 있나'를 함께 알린다(덧쓰기 사고 방지).
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
-import type { SearchRouteDiag, SimilarDiag } from "../../v6/knowledge-search.js";
+import type { SearchRouteDiag } from "../../v6/knowledge-search.js";
+import type { SimilarDiag } from "../../v6/knowledge-similar.js";
 import { logKnowledgeSearch } from "../../v6/knowledge-search-log-store.js";   // #5201 세션의 지식 찾기 기록
 import { canSeeKnowledge } from "../../v6/visibility.js";
-import { assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
+import { isSessionCall, assertKnowledgeVisible, assertKnowledgeInAppContext, categoryArg, CATEGORY_ARG_DESC } from "./shared.js";
 import { isAdmin } from "../principal.js";
 
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
@@ -174,7 +175,7 @@ export const knowledgeSearch: Capability = {
     "지식을 찾는 **기본 도구**다 — 낱말 검색(BM25)과 뜻 검색(벡터 임베딩)을 RRF 로 합친다. " +
     "**자연어 질문 · 키워드 나열 · 다른 표현** 모두 여기로 찾는다. 낱말이 일부만 맞아도 맞은 만큼 순위가 매겨지고, 낱말이 본문에 그대로 없어도 뜻으로 잡힌다. 조사는 떼고 맞춘다. " +
     "이슈 번호 · 파일 경로 · 함수 이름 같은 식별자가 들어 있으면 낱말 검색만 쓴다(뜻 검색은 식별자를 못 찾는다). 임베딩 미설정 환경에선 낱말 검색만 쓴다. " +
-    "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
+    "결과는 **스니펫**(본문 전문 아님) + RRF score 다. 뜻으로 맞으면 맞은 절을 `L<n>: «절 경로» 글` 꼴로 보여 준다 — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit, L<n> 을 그대로 offset 으로). " +
     "**글자 그대로의 일치 · 정규식 · 건수**가 필요할 때만 knowledge_grep 을 써라. mode=names(이름·제목만)·snippets(기본). " +
     "결과가 없거나 약하면(뜻도 멀고 낱말도 안 맞으면) 세션의 호출 응답에 collect_hint(가져올 곳)가 붙는다 — sources(아직 지식이 안 된 원문 자료 — source_get 으로 먼저 본다) " +
     "또는 그것도 없을 때 units(부르는 사람이 다 볼 수 있는 수집 단위 2~3개 · 마지막 수집 시각 · 그 커넥터 — 마지막 수집 이후의 새 글이 필요하면 그 커넥터로 직접 한번 찾아본다). " +
@@ -225,11 +226,6 @@ export const knowledgeSearch: Capability = {
     return hint ? { entries, collect_hint: hint } : { entries };
   },
 };
-
-/** 세션이 부른 호출인가 — MCP, 또는 세션 헤더를 실은 REST. 웹 화면 · 앱 토큰(앱 서버 호출 포함)은 아니다. 검색 실패 안내와 찾기 기록이 같은 판정을 쓴다. */
-function isSessionCall(user: LivelyUser, ctx?: CapabilityCtx): boolean {
-  return !user?.appId && (ctx?.source === "mcp" || (ctx?.source === "web" && !!ctx?.session));
-}
 
 /** «가져올 곳» 을 만드는 데 쓰는 시간 상한 — 원문 자료 찾기는 DB 쪽에서도 이보다 짧게 끊는다(unit-find LOOSE_TIMEOUT_MS). */
 const HINT_BUDGET_MS = 1500;
