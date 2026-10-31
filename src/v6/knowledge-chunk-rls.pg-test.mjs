@@ -12,6 +12,7 @@
 //   R5 하루 상한은 워크스페이스마다 센다
 //   R6 스윕 · 저장 직후 임베딩 · 정비가 자기 워크스페이스 행만 쓴다
 //   R7 다른 워크스페이스 값으로 조각 행을 고치거나 지울 수 없다
+//   R8 한 워크스페이스의 백필 일시중지가 다른 워크스페이스를 멈추지 않는다 · 마지막 정비 결과도 워크스페이스마다
 import pg from "pg";
 import http from "node:http";
 import { execFileSync } from "node:child_process";
@@ -168,6 +169,13 @@ try {
   chk("R7 다른 워크스페이스 행을 지우지 못한다", hit.rowCount === 0 && Number((await owner(`SELECT count(*)::int AS n FROM knowledge_chunk WHERE tenant_id=$1 AND name='r-b-only'`, [TB]))[0].n) === 1);
   const up = await inTenant(TA, () => itemsPool.query(`UPDATE knowledge_chunk SET body='변조' WHERE name='r-b-only'`));
   chk("R7 다른 워크스페이스 행을 고치지 못한다", up.rowCount === 0);
+  // ── R8 ──
+  await owner(`UPDATE org_runtime_config SET embedding_backfill_paused=true WHERE tenant_id=$1`, [TB]);
+  chk("R8 전제 — 다른 워크스페이스는 안 멈췄다", (await inTenant(TA, () => eb.refreshBackfillPausedFromDb())) === false);
+  chk("R8 일시중지한 워크스페이스", (await inTenant(TB, () => eb.refreshBackfillPausedFromDb())) === true && (await inTenant(TB, () => eb.isBackfillPaused())) === true);
+  chk("R8 다른 워크스페이스는 그대로다", (await inTenant(TA, () => eb.isBackfillPaused())) === false);
+  await inTenant(TB, () => eb.sweepChunkEmbeddings());
+  chk("R8 마지막 정비 결과가 섞이지 않는다", (await inTenant(TB, () => eb.lastChunkSweep()))?.skipped === "paused" && (await inTenant(TA, () => eb.lastChunkSweep()))?.skipped !== "paused");
 } catch (e) {
   fail++; console.error("FAIL 예외", e);
 } finally {
