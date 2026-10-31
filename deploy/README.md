@@ -129,7 +129,7 @@ Off by default (search = grep fallback). Once the provider is on, the gateway fi
 
 - **Existing box, one shot:** `bash deploy/enable-embeddings.sh` — start the local Ollama sidecar (bge-m3) → `.env` `EMBEDDINGS_PROVIDER=http` → restart the gateway → backfill existing knowledge. On a 4GB box the RAM guard stops it (→ upsize / external endpoint / `FORCE=1`).
   - External endpoint (no sidecar): `EMBEDDINGS_BASE_URL=<host> EMBEDDINGS_MODEL=<m> [EMBEDDINGS_AUTH_ENV=<name-of-env-var-holding-the-key>] bash deploy/enable-embeddings.sh --external`
-- **Web UI (admins):** the ‘의미 검색 (임베딩)’ (semantic search / embeddings) section under [수집 · 증류 ▸ AI 주입 설정] (Collect · Distill ▸ AI injection settings) — save provider/base_url/model/dim (no restart) + the [기존 지식 임베딩(백필)] (embed existing knowledge / backfill) button (with progress) + pause/resume of the automatic backfill.
+- **Web UI (admins):** the ‘의미 검색 (임베딩)’ (semantic search / embeddings) section under [수집 · 증류 ▸ AI 주입기 설정] (Collect · Distill ▸ AI injection settings) — save provider/base_url/model/dim (no restart) + the [기존 지식 임베딩(백필)] (embed existing knowledge / backfill) button (with progress) + pause/resume of the automatic backfill.
 - **From the start:** `WITH_EMBEDDINGS=1 bash deploy/install.sh`.
 
 Turning it off: `bash deploy/disable-embeddings.sh` (provider off + sidecar down — vector data is kept). Swapping models: after changing `EMBEDDINGS_MODEL`, run `node --env-file-if-exists=.env scripts/backfill-embeddings.mjs --model-changed` (`--all` if the dimension differs).

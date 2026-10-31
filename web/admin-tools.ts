@@ -30,7 +30,7 @@ function toolsEditor(detail, data) {
     ? { name: '', kind: 'http_proxy', enabled: true, auto_approve: false, title: '', description: '', scope: 'items', method: 'GET', url: '', auth_env: '', input_schema: '', note: '' }
     : proxyTools.find((t) => t.name === sel);
   if (editing) toolForm(right, editing, data, detail, sel === '__new__');
-  // 빌트인 토글은 #837 에서 [기본 제공 도구] 서브탭으로, #5159 후속에서 [수집·증류 ▸ AI 주입 설정 ▸ MCP 도구]로 옮겼다.
+  // 빌트인 토글은 #837 에서 [기본 제공 도구] 서브탭으로, #5159 후속에서 [수집·증류 ▸ AI 주입기 설정 ▸ MCP 도구]로 옮겼다.
   else right.append(
     el('p', { class: 'admin-hint' }, ...uiText('사내 API를 AI가 호출할 수 있는 도구로 등록합니다. 저장 즉시(재설치 없이) 구성원 AI가 쓸 수 있습니다. 호출은 아래 [외부 호출 안전범위]에 등록한 호스트로만 나가고, 인증은 환경변수 이름으로만 지정합니다.')));
   const pol = data.toolPolicy || { url_allowlist: [], allowed_auth_envs: [] };

@@ -202,9 +202,15 @@ function faceStack(d): HTMLElement {
 function statsStrip(cov, onN: number, total: number) {
   const tile = (n: string, l: string, k = '') => el('div', { class: 'dsl-stat' + (k ? ' ' + k : '') },
     el('b', { class: 'dsl-stat-n num', text: n }), el('span', { class: 'dsl-stat-l', text: l }));
+  const unread = (cov.distillers || []).reduce((n: number, d: { backlog?: number }) => n + (d.backlog || 0), 0) + (cov.uncovered || 0);
+  const passed = Math.max(0, (cov.total_undistilled || 0) - unread);
   const strip = el('div', { class: 'dsl-stats' },
     tile(onN + ' / ' + total, '켜진 증류기'),
-    tile((cov.total_undistilled || 0).toLocaleString() + '건', '아직 읽지 않은 자료'),
+    //  #5159(원준 2026-10-31: "4,686건 아직 읽지 않은 자료 왜 이렇게 많지?") — total_undistilled 는 «지식에 안 이어진 자료» 전부라
+    //   증류기가 이미 읽고 «지식감 아님» 으로 넘긴 것(올린 사진 · 코드 · 로그 파일이 대부분)까지 센다. 실제 남은 일은 레인 잔량 + 사각지대다.
+    //   둘을 갈라 보인다 — 읽을 것과 읽고 넘긴 것이 한 숫자면 «증류가 밀렸다» 로 읽힌다.
+    tile(unread.toLocaleString() + '건', '아직 읽지 않은 자료', unread > 0 ? '' : 'is-ok'),
+    tile(passed.toLocaleString() + '건', '읽었지만 지식으로 안 만든 자료'),
     tile((cov.uncovered || 0).toLocaleString() + '건', '어느 증류기도 읽지 않는 자료', cov.uncovered > 0 ? 'is-warn' : 'is-ok'));
   if (cov.uncovered > 0 && onN > 0 && (cov.uncovered_channels || []).length) {
     const issue = el('div', { class: 'cxc-issue cxc-issue-block' },

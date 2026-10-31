@@ -1,5 +1,5 @@
 // #4233 앱 「맥락 관리」 의 새 이름(원준 2026-09-27, 고르기 검토판 결과).
-//  앱 「수집 · 증류」 · 첫 탭 「실시간 현황」 · 탭 「수집기 설정」「증류기 설정」「점검 설정」「AI 주입 설정」 · 「자동 실행 기록」은 그대로.
+//  앱 「수집 · 증류」 · 첫 탭 「실시간 현황」 · 탭 「수집기 설정」「증류기 설정」「점검 설정」「AI 주입기 설정」 · 「자동 실행 기록」은 그대로.
 //  주소(#/context/…) · 키 · 식별자 · 주석은 안 바꾼다. 바뀌는 것은 사람에게 보이는 글이다.
 //
 //  사양 · 엣지 표(spec-failfirst):
@@ -31,7 +31,7 @@
 //   H1 화면 제목(h3.cxc-title)이 탭 이름과 같다: 수집기 설정 화면은 CTX_TAB.sources, 증류기 설정 화면은 CTX_TAB.distill 을 읽는다
 //   H2 어느 화면 제목도 옛 탭 이름(현황 · 수집기 · 증류기 · 점검 · AI 전달)을 글자로 적지 않는다(수집 · 증류의 화면 파일 전부)
 //   H3 제목 옆 수는 무엇의 수인지 적는다(«수집기 8개»). 제목이 «… 설정» 이라 수만 있으면 무엇을 센 것인지 모른다
-//   H4 제목이 없는 화면(점검 설정 · AI 주입 설정)은 탭 설명 한 줄이 제목 자리에 선다. 그 글에 긴 줄표가 없다
+//   H4 제목이 없는 화면(점검 설정 · AI 주입기 설정)은 탭 설명 한 줄이 제목 자리에 선다. 그 글에 긴 줄표가 없다
 //   P1 다른 화면의 안내문이 탭 이름을 두 번 잇달아 적지 않는다(자리 표기 바로 뒤에 같은 탭 이름이 또 나오지 않는다)
 //   P2 화면 고르기 설명 두 줄(새 화면 · 클래식)에 긴 줄표가 없다
 //   P3 화면 글이 탭을 옛 이름 칩([점검] · [수집기] · [증류기] · [현황] · [AI 전달])으로 가리키지 않는다
@@ -100,7 +100,7 @@ ok(!!names && !names.__error, "T0 이름 잣대가 잎 모듈(web/lib/ctx-names.
 if (names && !names.__error) {
   const { CTX_APP_NAME, CTX_TAB, CTX_OLD_NAMES, ctxPath, ctxTrail } = names;
   ok(CTX_APP_NAME === "수집 · 증류", "T1 앱 이름 = «수집 · 증류»", String(CTX_APP_NAME));
-  const want = { home: "실시간 현황", runs: "자동 실행 기록", inbox: "확인할 것", sources: "수집기 설정", distill: "증류기 설정", checks: "점검 설정", deliver: "AI 주입 설정" };
+  const want = { home: "실시간 현황", runs: "자동 실행 기록", inbox: "확인할 것", sources: "수집기 설정", distill: "증류기 설정", checks: "점검 설정", deliver: "AI 주입기 설정" };
   ok(JSON.stringify(CTX_TAB) === JSON.stringify(want), "T2 탭 이름 일곱 개가 고른 그대로다", JSON.stringify(CTX_TAB));
   ok(ctxPath("sources") === "[수집 · 증류 ▸ 수집기 설정]" && ctxPath() === "[수집 · 증류]"
     && ctxPath("distill", "카테고리 붙이기") === "[수집 · 증류 ▸ 증류기 설정 ▸ 카테고리 붙이기]" && ctxTrail("distill") === "수집 · 증류 ▸ 증류기 설정",
@@ -130,7 +130,7 @@ const uitext = await load("web/lib/uitext.ts");
 ok(!!uitext && !uitext.__error && typeof uitext.uiKeyCls === "function", "C0 칩 잣대(web/lib/uitext.ts)를 읽었다", uitext && uitext.__error ? uitext.__error : "");
 if (uitext && typeof uitext.uiKeyCls === "function") {
   const solid = (label) => uitext.uiKeyCls("md-uikey-opt", label).split(" ").includes("md-uikey-solid");
-  ok(solid("수집 · 증류") && solid("AI 주입 설정") && solid(" 실시간 현황 "), "C1 공백이 있어도 짧은 이름은 한 덩어리다");
+  ok(solid("수집 · 증류") && solid("AI 주입기 설정") && solid(" 실시간 현황 "), "C1 공백이 있어도 짧은 이름은 한 덩어리다");
   const L12 = "가나 다라 마바 사아자", L13 = "가나 다라 마바 사아자차";
   ok(L12.length === 12 && L13.length === 13 && !solid("수집 · 증류 ▸ 증류기 설정 ▸ 카테고리 붙이기") && solid(L12) && !solid(L13), "C2 12자를 넘는 공백 있는 라벨은 흐른다(경계: 12자 한 덩어리 · 13자 흐름)", [solid(L12), solid(L13)].join(","));
   ok(solid("연결·데이터·자료함·설정값모음") && solid("저장"), "C3 공백 없는 라벨은 길어도 한 덩어리다");
@@ -222,12 +222,12 @@ function titlesOf(src, name) {
   };
   visit(sf);
   const shown = ["checks", "deliver"].map((k) => [k, hints[k] || ""]);
-  ok(shown.every(([, h]) => h.length > 10 && !h.includes("—")), "H4 제목 자리에 서는 탭 설명(점검 설정 · AI 주입 설정)에 긴 줄표가 없다", shown.map(([k, h]) => `  ${k}: ${h}`).join("\n"));
+  ok(shown.every(([, h]) => h.length > 10 && !h.includes("—")), "H4 제목 자리에 서는 탭 설명(점검 설정 · AI 주입기 설정)에 긴 줄표가 없다", shown.map(([k, h]) => `  ${k}: ${h}`).join("\n"));
 }
 
 // ── P. 안내문 ────────────────────────────────────────────────────────────────
 {
-  const TABS = ["실시간 현황", "수집기 설정", "증류기 설정", "점검 설정", "AI 주입 설정"];
+  const TABS = ["실시간 현황", "수집기 설정", "증류기 설정", "점검 설정", "AI 주입기 설정"];
   //  자리 표기(ctxPath · ctxTrail)를 쓰는 파일의 문자열에 탭 이름이 글자로 또 있으면, 표기 바로 뒤에 같은 말이 되풀이된다.
   const dup = [];
   for (const f of walkTs(join(root, "web"))) {
@@ -264,7 +264,7 @@ ok(webFound.length === 0, `R1 web/ 화면 글에 옛 이름 0건(지금 ${webFou
 
 //  사람에게 닿는 서버 글. 로그 · 주석 · 시험 · 자동 생성물(default-content.ts 의 스킬 본문)은 대상이 아니다.
 const SERVER = ["src/scheduler/registry.ts", "src/org/delivery/onboarding.ts", "src/org/manage/run-manager.ts", "src/capabilities/delivery/pipeline.ts", "src/capabilities/delivery/runtime-config.ts",
-  "deploy/bootstrap-baseline.mjs"];   // 새 조직에 심는 기본 주입문(사람이 [AI 주입 설정]에서 본다)
+  "deploy/bootstrap-baseline.mjs"];   // 새 조직에 심는 기본 주입문(사람이 [AI 주입기 설정]에서 본다)
 const srvFound = listOf(SERVER.map((p) => join(root, p)));
 ok(srvFound.length === 0, `R2 사람에게 닿는 서버 글에 옛 이름 0건(지금 ${srvFound.length}건)`, srvFound.join("\n"));
 
@@ -272,7 +272,7 @@ ok(srvFound.length === 0, `R2 사람에게 닿는 서버 글에 옛 이름 0건(
 ok(!!docs && !docs.__error && Array.isArray(docs.DOC_PAGES), "D0 도움말 원고를 읽었다", docs && docs.__error ? docs.__error : "");
 if (docs && Array.isArray(docs.DOC_PAGES)) {
   const page = docs.DOC_PAGES.find((p) => p.slug === "context");
-  const tabs = ["실시간 현황", "수집기 설정", "증류기 설정", "점검 설정", "AI 주입 설정"];
+  const tabs = ["실시간 현황", "수집기 설정", "증류기 설정", "점검 설정", "AI 주입기 설정"];
   ok(!!page && page.title === "수집 · 증류" && page.md.startsWith("# 수집 · 증류") && tabs.every((t) => page.md.includes(t)),
     "D1 도움말 context 쪽: 제목이 새 이름이고 탭 다섯 개를 새 이름으로 적는다", page ? page.title + " / 빠진 탭: " + tabs.filter((t) => !page.md.includes(t)).join(", ") : "쪽 없음");
   const stale = [];
