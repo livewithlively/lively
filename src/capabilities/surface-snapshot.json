@@ -1127,6 +1127,16 @@
   "input_hash": "4f06b4e0a6d2d369"
  },
  {
+  "name": "org_pipeline_run_now",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/pipeline/run-now"
+  ],
+  "input_hash": "7272b62987de18ab"
+ },
+ {
   "name": "org_collector_discover",
   "scope": "memory",
   "mcp": true,
