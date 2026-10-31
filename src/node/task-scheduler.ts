@@ -33,6 +33,7 @@ import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker, cronLaneFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
 import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
+import { reclaimTaskWorktree, type TaskWorktreeRef } from "./task-worktree-reclaim.js";
 import {
   sandboxAvailable, isContextJob, isSandboxTaskDir, schedulingRoute, spawnSandboxTask, checkSandboxTask,
   stopSandboxTask, reapSandboxTask, SandboxBusyError, SANDBOX_HARNESSES, sandboxDataRoot,
@@ -159,6 +160,17 @@ async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reac
   }
 }
 
+// 위탁 워크트리 회수 — 세션이 걷힌 **뒤에** 부른다(작업 중인 폴더를 지우지 않게). 중앙(게이트웨이 박스)만 한다:
+//  원격 노드의 워크트리는 그 PC 의 파일이라 중앙이 지울 통로가 없고, 그쪽은 `lively reclaim` 몫이다.
+//  지울지·말지는 reclaimTaskWorktree 가 정한다(미커밋·미푸시·남의 워크트리·작업 중 세션이면 남긴다).
+//  호출부는 기다리지 않는다 — 큰 레포는 지우는 데 수십 초가 걸리고, 그동안 tick 의 다른 위탁 감시가 멈추면 안 된다.
+async function reclaimCentralWorktree(t: TaskWorktreeRef & { node_id: string | null }): Promise<void> {
+  if (t.node_id !== CENTRAL_NODE_ID || !t.repo) return;
+  const r = await reclaimTaskWorktree(t);
+  if (r.removed) logger.info({ task: t.id, wt: r.worktree }, "위탁 워크트리 회수");
+  else if (r.reason) logger.info({ task: t.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지");
+}
+
 /**
  * 회수기용 kill 한 번(#2622 ⓐ) — **멱등 회수**.
  *
@@ -183,6 +195,8 @@ async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
     return decideReap(r.done, null, r.why, r.reached);
   }
   const r = await killTaskAnywhere(t);
+  //  실패 판은 사후 검시용으로 세션과 함께 워크트리도 남겨 뒀다 — 보존 상한이 세션을 걷는 이 자리가 워크트리의 끝이다.
+  if (r.gone) void reclaimCentralWorktree(t).catch((err) => logger.warn({ err, task: t.id }, "위탁 워크트리 회수 오류(비치명)"));
   // 확답을 구하는 건 **kill 이 실패했을 때뿐**이다 — 성공했으면 RPC 를 한 번 더 쏠 이유가 없다.
   const gone = r.gone || !t.node_id || t.node_id === CENTRAL_NODE_ID || !t.session_id
     ? null
@@ -238,8 +252,10 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
     await harvestSandboxReturn(t);
     await reapSandboxTask(String(t.task_dir), !ok).catch(() => { /* 회수기가 다시 본다 */ });
   } else if (ok && t.session_id && t.node_id) {
-    if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
-    else await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* 노드 이탈 등 */ });
+    if (t.node_id === CENTRAL_NODE_ID) {
+      await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
+      void reclaimCentralWorktree(t).catch((err) => logger.warn({ err, task: t.id }, "위탁 워크트리 회수 오류(비치명)"));
+    } else await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* 노드 이탈 등 */ });
   }
   logger.info({ task: t.id, ok, node: t.node_id, auth: auth?.label ?? null }, "위탁 태스크 종결");
 

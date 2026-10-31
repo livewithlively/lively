@@ -170,6 +170,8 @@ export interface FailedTaskRow extends ReapableSession {
   task_dir?: string | null;
   /** #4012 T2 — codex 판이면 치우기 전에 갱신된 자격을 거둔다. */
   harness?: string | null;
+  /** 위탁이 레포를 지정했으면 그 이름 — 세션을 걷은 뒤 워크트리도 회수한다(task-worktree-reclaim). */
+  repo?: string | null;
   /** 지금까지 연속 실패 횟수(result.session_reap_fails). 없으면 0. */
   reap_fails?: number;
   /** 이 시각 전에는 다시 시도하지 않는다(result.session_reap_next_at, ISO). */
@@ -184,7 +186,7 @@ async function listUnreapedFailed(): Promise<FailedTaskRow[]> {
   //  ⚠ fails/next_at 은 **텍스트로 꺼내 JS 에서 판다.** SQL 에서 ::int·::timestamptz 로 캐스팅하면 값이
   //   한 번이라도 오염됐을 때 **조회 전체가 죽어** 회수가 통째로 멈춘다(우리가 쓰는 칸이라도 그 위험은 진다).
   const r = await itemsPool.query(
-    `SELECT id, node_id, session_id, requester, task_dir, harness, finished_at,
+    `SELECT id, node_id, session_id, requester, task_dir, harness, finished_at, repo,
             result->>'session_reap_fails'   AS reap_fails_txt,
             result->>'session_reap_next_at' AS reap_next_at
        FROM org_task
