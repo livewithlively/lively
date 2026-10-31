@@ -5,6 +5,7 @@
 //  import 방향: main → 각 탭 모듈(단방향). **역으로 어떤 모듈도 main 을 import 하지 않는다** — 그러면
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
+import { classicHandoff, openRouteMsg } from './lib/open-route.js';
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, logout, markSecretInput, navOn, personName, profileAvatar, showGate, state } from './core.js';
 import { claimLocalOwner } from './lib/local-owner.js';   // #2460 — 이 브라우저의 기억은 누구 것인가(사람 축)
 import { watchStaleShell } from './gen-watch.js';   // #1841 — 앱 창이 낡은 판을 영영 들고 있던 것
@@ -98,8 +99,27 @@ const NAV_PAGE_TAB = {
 //  ⚠ 클래식 페이지는 그래도 살아 있다 — 새 셸이 ?embed=1 로 같은 index.html 을 iframe 에 실어 '앱'으로 띄운다.
 let uiV2Active = false;
 
+//  클래식 라우터가 그리는 첫 칸 — 아래 route() 의 `page === '…'` 갈래와 같아야 한다(scripts/open-route.test.mjs 가 대조한다).
+//   액자 안에서 이 밖의 주소로 가면 셸의 주소다 — 셸 탭으로 넘기고 액자는 보던 화면에 둔다(#5159, classicHandoff).
+const CLASSIC_PAGES: ReadonlySet<string> = new Set(['activate', 'categories', 'context', 'dashboard', 'domainmap', 'f', 'install', 'k', 'k-edit',
+  'knowledge', 'learn', 'liv', 'onboarding', 'projects', 'projects2', 'sessions', 'start', 'system', 'terminal', 'trash']);
+let lastClassicHash = '';
+const inShellFrame = (): boolean => { try { return document.body.classList.contains('embed') && window.parent !== window; } catch { return false; } };
+
 async function route() {
   if (uiV2Active) return;
+  //  #5159 — 액자 안에서 셸에만 있는 주소(#/sources/<id> 등)로 왔으면 셸이 그 탭을 열게 넘기고, 액자 주소는 보던 자리로 되돌린다.
+  //   이 갈림은 정리(투어 · 피크 · 모달 닫기 · body 레이아웃 표지)보다 **앞**이어야 한다 — 보던 화면을 건드리지 않고 그대로 둔다.
+  //   처음 실린 주소부터 모르는 주소면(되돌아갈 자리가 없다) 종전대로 아래 폴백이 그린다.
+  if (lastClassicHash && inShellFrame()) {
+    const fwd = classicHandoff(location.hash, CLASSIC_PAGES);
+    if (fwd) {
+      try { window.parent.postMessage(openRouteMsg(fwd), location.origin); } catch { /* 셸이 없으면 아래 replace 만 */ }
+      history.replaceState(null, '', lastClassicHash);
+      return;
+    }
+  }
+  lastClassicHash = location.hash || '#/dashboard';
   // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
   //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
   //  (#761) 투어 정리는 이 가드 '뒤'에서 — 피크 개폐만으로는 진행 중 둘러보기를 죽이지 않는다(본문도 그대로니까).
