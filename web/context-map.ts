@@ -7,7 +7,7 @@
 //
 //  #3830 에서 바뀐 것 — 원준: "순서가 [외부앱] -수집기-> [자료] -증류기-> [지식] -주입규칙-> [AI 세션] 이거라는게
 //   잘 드러나게 고도화 … 사이즈감·덩어리감·진행되는 느낌은 좋은데 산만하다 … 슬랙이랑 노션 아이콘은 어디 갔어".
-//   · **장소 넷과 기계 셋을 재질로 가른다** — 장소(외부 앱·자료·지식·AI 세션)는 흰 카드, 기계(수집기·증류기·주입규칙)는
+//   · **장소 넷과 기계 셋을 재질로 가른다** — 장소(외부 앱·자료·지식·AI 세션)는 흰 카드, 기계(수집기·증류기·AI 주입기)는
 //     선로 위 어두운 칩(--chip-dark). 종전엔 수집기가 역(장소)이어서 사용자 모델과 어긋났다.
 //   · **역마다 앱 아이콘 문패** — 런치패드·홈과 같은 그림(appGlassIcon: 타일 + 선 아이콘, #4233)이라 "이 역이 곧 그 앱"으로 읽힌다.
 //   · **외부 앱의 실물은 공식 서비스 로고**(svc-icons svcTile) — 글자 한 자(#·N·G)로 흉내내지 않는다.
@@ -188,7 +188,7 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
 
   // ── 기계 셋(선로 위 어두운 칩) — 이름 · 수 · 상태 배지 · 살아 있는 점 + 주기 ──
   //  #4135 2판(원준 2026-09-25): 수집기·증류기 칩은 **탭으로 가지 않고** 아래 「자동 실행」 패널을 그 기계로 거른다(filter 를 주면 버튼).
-  //   주입규칙은 거를 기록이 없어 종전처럼 그 탭으로 간다.
+  //   AI 주입기은 거를 기록이 없어 종전처럼 그 탭으로 간다.
   const machine = (o: { href: string; name: string; s: string; pill: string; k: 'ok' | 'warn' | 'dn'; live: boolean; sched: string; extra?: HTMLElement | null; filter?: 'c' | 'd' }) =>
     el(o.filter ? 'button' : 'a', o.filter
       ? { type: 'button', class: 'cxm-mc is-' + o.filter, 'aria-pressed': 'false', title: o.name + ' 기록을 아래에서 보기 — 한 번 더 누르면 전체 · 두 번 빠르게 누르면 ' + o.name + ' 설정으로 갑니다' }
@@ -210,7 +210,7 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
     filter: 'd' });
   //  사각지대 배지는 다 읽히면 제자리(안내 문구 앞)에 선다 — 그 수를 세는 데 시간이 걸려도 지도는 먼저 선다(#5147).
   void blind?.then((b) => { if (b && mcDistill.isConnected) mcDistill.insertBefore(b, mcDistill.querySelector('.cxm-mc-hint')); });
-  const mcInject = machine({ href: '#/context/deliver', name: '주입규칙', s: (startDocs !== null ? '시작 문서 ' + fmt(startDocs) + ' · ' : '') + '검색', pill: '켜짐', k: 'ok', live: true, sched: '세션 시작마다' });
+  const mcInject = machine({ href: '#/context/deliver', name: 'AI 주입기', s: (startDocs !== null ? '시작 문서 ' + fmt(startDocs) + ' · ' : '') + '검색', pill: '켜짐', k: 'ok', live: true, sched: '세션 시작마다' });
 
   // ── 관(선로) — 기계가 도는 구간만 흐른다 ──
   const duct = (mc: HTMLElement, flowing: boolean) =>

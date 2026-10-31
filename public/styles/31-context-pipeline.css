@@ -346,6 +346,16 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-board-wrap { max-width: none; }
 .ctx-board { margin-bottom: 18px; }
 .ctx-board .ctx-body { max-width: none; padding: 6px 0 28px; }
+/* 실시간 현황(#5159, 원준 2026-10-31) — 바닥 여백 셋(main 64 · 카드 18 · 본문 28)이 겹쳐 110px 이 남아 화면이 괜히 스크롤됐다.
+   이 화면은 지도 + 자동 실행 한 판이 전부라 바닥을 줄여 한 화면에 들게 한다. 다른 화면은 그대로. */
+body[data-route="context"] main:has(> * > .ctx-board-wrap[data-stage="home"]), body[data-route="context"] main:has(> .ctx-board-wrap[data-stage="home"]) { padding-bottom: 4px; }
+.ctx-board-wrap[data-stage="home"] > .ctx-board { margin-bottom: 0; }
+.ctx-board-wrap[data-stage="home"] .ctx-body { padding-top: 12px; padding-bottom: 2px; }
+/*  1440×900(셸 안 858) 에 «자동 실행» 다섯 줄까지 들게 — 지도↔패널 사이(14 + 16), 지도 안 위아래(20), 패널 머리(13)를 조금씩 줄인다. */
+.ctx-board-wrap[data-stage="home"] .cxm { gap: 10px; }
+.ctx-board-wrap[data-stage="home"] .cxm-floor { padding-top: 14px; padding-bottom: 14px; }
+.ctx-board-wrap[data-stage="home"] .cxr { margin-top: 0; }
+.ctx-board-wrap[data-stage="home"] .cxr > .cxr-head { padding-top: 9px; padding-bottom: 9px; }
 .ctx-board .ctx-body > .section-head:first-child { margin-top: 8px; }
 .ctx-crumb-leaf { display: inline-flex; align-items: center; gap: 7px; }
 .ctx-crumb-ic { width: 17px; height: 17px; color: var(--ink-sub); flex: none; stroke-width: var(--ic-stroke); }
@@ -743,6 +753,17 @@ a.cxr-row.is-sum .cxr-n .cxr-dot { flex: none; }
 a.cxr-row.is-sum .cxr-s { color: var(--muted); }
 /* 점을 누르면 — 목록 자리에 그 실행의 내용(#5159). 높이는 목록이 쓰던 그대로(스크립트가 잠근다), 넘치는 줄은 «외 n건» */
 .cxr-feed.is-peek { overflow: hidden; }
+.cxr-feed.is-lock { overflow: hidden; }
+/* 줄을 누르면 그 아래로 펼친다(#5159 원준 2026-10-31) — 목록 높이는 잠그고, 펼친 줄이 맨 위로 미끄러져 올라간다 */
+.cxr-x { height: 0; overflow: hidden; transition: height .3s cubic-bezier(.2,.8,.2,1); }
+.cxr-x-in { box-sizing: border-box; display: flex; flex-direction: column; }
+.cxr-x-in .cxr-pk-il { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 4px 10px 0 126px; }
+.cxr-x-in .cxr-pk-il li.is-more a { color: var(--blue); font-weight: 700; }
+.cxr-x-in .cxr-pk-il li.cxr-pk-err { color: var(--danger-deep); font-weight: 700; white-space: normal; }
+.cxr-it.is-open > a.cxr-row { background: var(--bg-tint); }
+a.cxr-row .cxr-chev { transition: transform .25s cubic-bezier(.2,.8,.2,1); }
+.cxr-it.is-open > a.cxr-row .cxr-chev { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .cxr-x, a.cxr-row .cxr-chev { transition: none; } }
 .cxr-pk { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; animation: cxr-in .3s cubic-bezier(.2,.8,.2,1) both; }
 .cxr-pk-h { display: grid; grid-template-columns: 74px 30px minmax(0, 1fr) auto 28px; gap: 12px; align-items: center; padding: 8px 10px;
   border-radius: 10px; background: var(--bg-tint); }
@@ -1116,7 +1137,7 @@ a.cxc-name:hover { color: var(--blue); }
 /* ══ 증류기 목록 4차(#3830) — 흐름 카드: [읽는 곳] ══▶ [남길 기준] ══▶ [지식이 가는 곳] ═══════════════
  *  표지 지도의 문법(흰 역 · 선로 · 켜진 구간만 흐름)을 증류기 한 장 안에 그대로 옮겼다. 증류기가 무엇을 하는 기계인지
  *  글이 아니라 그림이 먼저 말한다. 색은 상태점·리브 표식·흐르는 선로 셋뿐. */
-.dsl-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 2px 0 18px; }
+.dsl-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 2px 0 18px; }
 .dsl-stat { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
 .dsl-stat-n { font-size: 22px; font-weight: 800; letter-spacing: -.4px; color: var(--ink); line-height: 1.15; }
 .dsl-stat-l { font-size: 12px; font-weight: 600; color: var(--muted-head); }
@@ -1368,7 +1389,7 @@ a.cxc-name:hover { color: var(--blue); }
   .cxcr-day > .cxcr-muted { display: none; }
 }
 
-/* ── AI 주입 설정(#5159) — 왼쪽 목차 + 오른쪽 세부 페이지 하나 ───────────────────────────────
+/* ── AI 주입기 설정(#5159) — 왼쪽 목차 + 오른쪽 세부 페이지 하나 ───────────────────────────────
  *  고치기 전 실측(1440×900): 다섯 시점 + 의미 검색 + 공개범위 둘을 한 판에 세로로 쌓아 5,577px.
  *  목차가 층위를 맡고(세션 주입 ▸ 시작 → 작업 중 → 종료 · 키트 · 기타 / 검색 · 공개범위), 오른쪽은 고른
  *  페이지 하나만 2단으로 그려 한 화면에 들인다. 토큰만 쓴다. radius 6/8/12/999. */
