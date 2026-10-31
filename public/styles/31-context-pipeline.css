@@ -737,6 +737,23 @@ a.cxr-row { box-sizing: border-box; display: grid; grid-template-columns: 74px 3
 a.cxr-row:hover { background: var(--bg-tint); }
 a.cxr-row .cxr-t { white-space: nowrap; }
 .cxr-chev { font-size: 16px; line-height: 1; color: var(--muted-3); }
+/* 기계 한 줄 요약(#5159) — 바뀐 실행이 없어도 그 기계가 돌았다는 사실을 다섯 줄 안에 남긴다 */
+a.cxr-row.is-sum .cxr-n b { font-weight: 600; color: var(--ink-sub); }
+a.cxr-row.is-sum .cxr-n .cxr-dot { flex: none; }
+a.cxr-row.is-sum .cxr-s { color: var(--muted); }
+/* 점을 누르면 — 목록 자리에 그 실행의 내용(#5159). 높이는 목록이 쓰던 그대로(스크립트가 잠근다), 넘치는 줄은 «외 n건» */
+.cxr-feed.is-peek { overflow: hidden; }
+.cxr-pk { box-sizing: border-box; display: flex; flex-direction: column; height: 100%; animation: cxr-in .3s cubic-bezier(.2,.8,.2,1) both; }
+.cxr-pk-h { display: grid; grid-template-columns: 74px 30px minmax(0, 1fr) auto 28px; gap: 12px; align-items: center; padding: 8px 10px;
+  border-radius: 10px; background: var(--bg-tint); }
+.cxr-pk-x { width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; display: grid; place-items: center; }
+.cxr-pk-x:hover { background: var(--gray-bg); color: var(--ink); }
+.cxr-pk .cxr-pk-il { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 4px 10px 0 126px; }
+.cxr-pk .cxr-pk-il li.is-more a { color: var(--blue); font-weight: 700; }
+.cxr-pk .cxr-pk-il li.cxr-pk-err { color: var(--danger-deep); font-weight: 700; white-space: normal; }
+.cxr-pk-f { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 0 2px 126px; }
+.cxr-pk-hint { font-size: 12px; color: var(--muted-3); }
+.cxr-pk-f .cxr-more-link { margin-left: auto; }
 .cxr-btn { display: inline-flex; align-items: center; gap: 4px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface);
   font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); text-decoration: none; cursor: pointer; transition: background .2s; }
 .cxr-btn:hover { background: var(--bg-tint); }
