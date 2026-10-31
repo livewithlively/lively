@@ -13,10 +13,10 @@
 //   K6  보관 · 검색 제외 · 삭제 — 조각이 사라진다 · 다시 활성으로 — 다시 생긴다
 //   K7  조각이 없는 문서(chunk_key 비어 있음 · 규칙 판이 옛것) — 스윕이 조각만 만든다(낱말 행은 안 건드린다)
 //   K8  벡터 칸은 halfvec · 인덱스는 halfvec_cosine_ops · 코사인 질의가 된다
-//   K9  백필 — 빈 벡터를 채운다 · 한 요청에 한 건씩 · maxRows 에서 멈춘다
+//   K9  정비 — 빈 벡터를 채운다 · 한 요청에 한 건씩
 //   K10 지식 벡터 스윕은 조각을 안 건드린다 — 저장이 깨우는 스윕이 조각에 묶이지 않는다
 //   K11 조각 정비 — 한 판 100건 · 다음 판이 잇는다 · 하루 상한이면 건너뛴다 · 일시중지를 지킨다
-//   K12 임베딩 서버가 실패하면(429 등) 한 시간 쉰다 — 다음 호출은 서버를 부르지 않는다
+//   K12 일일 상한(429)이면 한 시간 쉰다 — 다음 호출은 서버를 부르지 않는다 · 서버 오류(500)는 판만 접고 다음 판에 다시 한다
 //   K13 모델이 바뀌면 옛 벡터도 대상이다 · 상태가 그 수를 말한다
 //   K14 보관된 문서의 조각은 표에 남아 있어도 임베딩하지 않는다(글을 서버로 보내지 않는다)
 //   K15 임베딩 칸이 사라져도 정비가 칸을 되살리고 채운다
@@ -24,7 +24,9 @@
 //   K17 옛 이미지가 글 해시만 올린 문서 — 조각을 다시 맞춘다
 //   K18 조각 표가 실패해도 낱말 색인은 맞춘다 · 표가 돌아오면 조각도 맞는다
 //   K19 임베딩 꺼짐 — 조각은 만들고 벡터는 안 채운다
-//   K20 정비가 같은 순간에 출발해도 — 지식 벡터 스윕을 기다렸다 돈다 · 조각 정비끼리는 줄을 선다
+//   K20 정비가 같은 순간에 출발해도 — 지식 벡터 스윕을 안 기다리고 돈다 · 조각 정비끼리는 줄을 선다
+//   K21 글 하나가 거절되면 — 그 조각만 건너뛰고 판은 잇는다 · 다시 안 집는다 · 저장 직후 임베딩도 안 막힌다 · 상태가 말한다 · 글이 바뀌면 다시 한다 · 값이 잘못된 벡터도 같다
+//   K22 서버가 모든 글을 거절하면 — 글 탓으로 표시하지 않는다
 import pg from "pg";
 import http from "node:http";
 
@@ -59,12 +61,15 @@ const DIMS = Number(dimRow?.d) > 0 ? Number(dimRow.d) : 1024;
 const basis = (i) => Array.from({ length: DIMS }, (_, j) => (j === i ? 1 : 0));
 const sizes = [];
 let failStatus = 0;
+let rejectRe = null;
+let badVector = null;
 const server = http.createServer((req, res) => {
   let body = ""; req.on("data", (c) => { body += c; });
   req.on("end", () => {
     const input = (JSON.parse(body || "{}").input ?? []);
     sizes.push(input.length);
-    if (failStatus) { res.writeHead(failStatus, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "limit" })); return; }
+    if (failStatus || (rejectRe && input.some((t) => rejectRe.test(String(t))))) { res.writeHead(failStatus || 400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "limit" })); return; }
+    if (badVector && input.some((t) => badVector.re.test(String(t)))) { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: input.map((t, index) => ({ index, embedding: badVector.v })) })); return; }
     res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ data: input.map((t, index) => ({ index, embedding: basis(3) })) }));
   });
 });
@@ -80,6 +85,7 @@ const save = (name, title, body) => kst.upsertKnowledge({ name, title, body_md: 
 const rows = (name) => q(`SELECT id, seq, start_line, path, prefix, body, embedding_vector IS NOT NULL AS has FROM knowledge_chunk WHERE name=$1 ORDER BY seq`, [name]);
 const fill = (name) => q(`UPDATE knowledge_chunk SET embedding_vector=$1::vector, embedding_model='fake', embedding_updated_at=now() WHERE name=$2`, ["[" + basis(3).join(",") + "]", name]);
 const settle = async (name) => { await sleep(60); await ls.syncKnowledgeLex(name); };
+const until = async (fn) => { for (let i = 0; i < 100; i++) { if (await fn()) return true; await sleep(30); } return false; };
 
 try {
   // ── K1 ──
@@ -167,10 +173,9 @@ try {
   await addChunks(0, 30);
   sizes.length = 0;
   const total = Number((await eb.countEmbeddingBacklog(eb.KNOWLEDGE_CHUNK_TARGET)).pending);
-  const r9 = await eb.runEmbeddingBackfill({ mode: "pending", maxRows: 10 }, eb.KNOWLEDGE_CHUNK_TARGET);
-  chk("K9 maxRows 에서 멈춘다", r9.ok && r9.embedded === 10, JSON.stringify(r9));
-  chk("K9 한 요청에 한 건씩(설정이 16 이어도)", sizes.length > 0 && Math.max(...sizes) === 1, JSON.stringify(sizes));
-  chk("K9 남은 것은 대기로 남는다", Number((await eb.countEmbeddingBacklog(eb.KNOWLEDGE_CHUNK_TARGET)).pending) === total - r9.embedded);
+  const r9 = await eb.sweepChunkEmbeddings();
+  chk("K9 빈 조각을 채운다", r9.embedded === total && Number((await eb.countEmbeddingBacklog(eb.KNOWLEDGE_CHUNK_TARGET)).pending) === 0, JSON.stringify([r9, total]));
+  chk("K9 한 요청에 한 건씩(설정이 16 이어도)", sizes.length === total && Math.max(...sizes) === 1, JSON.stringify(sizes));
   chk("K9 벡터와 모델이 써진다", (await q(`SELECT embedding_model FROM knowledge_chunk WHERE embedding_vector IS NOT NULL LIMIT 1`))[0]?.embedding_model === "fake");
 
   // ── K10 ──
@@ -202,13 +207,19 @@ try {
   // ── K12 ──
   failStatus = 429; sizes.length = 0;
   const s12 = await eb.sweepChunkEmbeddings();
-  chk("K12 서버가 막으면 멈춘다", !!s12.skipped && s12.skipped !== "busy" && (await filled()) >= 200, JSON.stringify(s12));
+  chk("K12 서버가 막으면 멈춘다 · 까닭을 남긴다", s12.skipped === "error" && /429/.test(s12.reason ?? "") && (await filled()) >= 200, JSON.stringify(s12));
   const called = sizes.length; failStatus = 0;
   const s12b = await eb.sweepChunkEmbeddings();
   chk("K12 쉬는 동안은 서버를 안 부른다", s12b.skipped === "backoff" && sizes.length === called, JSON.stringify(s12b));
   const later = Date.now() + 2 * 60 * 60_000;
   chk("K12 한 시간 뒤 다시 돈다", (await eb.sweepChunkEmbeddings(() => later)).embedded > 0);
   eb.__resetChunkRetry();
+  await addChunks(500, 505);
+  failStatus = 500;
+  const s12c = await eb.sweepChunkEmbeddings();
+  failStatus = 0; sizes.length = 0;
+  const s12d = await eb.sweepChunkEmbeddings();
+  chk("K12 서버 오류는 판만 접고 다음 판에 다시 한다", s12c.skipped === "error" && s12d.embedded > 0 && sizes.length > 0, JSON.stringify([s12c, s12d]));
 
   // ── K13 ──
   await q(`UPDATE knowledge_chunk SET embedding_vector=$1::vector, embedding_model='old-model', embedding_updated_at=now() - interval '2 days' WHERE name='k-many'`, ["[" + basis(3).join(",") + "]"]);
@@ -269,6 +280,42 @@ try {
   await addChunks(100, 400, "k-fail");
   const pair = await Promise.all([eb.sweepChunkEmbeddings(), eb.sweepChunkEmbeddings()]);
   chk("K20 정비가 겹치면 줄을 서서 차례로 돈다", pair[0].embedded === 100 && pair[1].embedded === 100, JSON.stringify(pair));
+
+  // ── K21 ──
+  const rej = await save("k-rej", "거절 시험", "# 앞 절\n앞 글\n\n# 거절 절\n거절글 이 든 절\n\n# 뒤 절\n뒤 글");
+  await settle("k-rej");
+  await q(`UPDATE knowledge_chunk SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL WHERE name='k-rej'`);
+  rejectRe = /거절글/;
+  const s21 = await eb.sweepChunkEmbeddings();
+  const r21 = await rows("k-rej");
+  chk("K21 그 조각만 건너뛰고 판은 잇는다", !s21.skipped && r21.filter((x) => x.has).length === 2 && !r21.find((x) => x.path === "거절 절").has, JSON.stringify([s21, r21.map((x) => [x.path, x.has])]));
+  chk("K21 쉬지 않는다", (await eb.sweepChunkEmbeddings()).skipped === undefined);
+  sizes.length = 0;
+  await eb.sweepChunkEmbeddings();
+  chk("K21 거절한 조각을 다시 안 집는다", sizes.length === 0, JSON.stringify(sizes));
+  const st21 = await embeddingsCapabilities.find((x) => x.name === "org_embeddings_status").handler({}, { userId: "x", scopes: ["admin"] }, { source: "web" });
+  chk("K21 상태가 말한다", st21.chunk_backlog.rejected === 1 && Number(st21.chunk_backlog.pending) === 0 && st21.chunk_sweep?.at && st21.chunk_sweep.skipped === undefined, JSON.stringify([st21.chunk_backlog, st21.chunk_sweep]));
+  await save("k-rej", "거절 시험", "# 앞 절\n앞 글\n\n# 거절 절\n고친 글\n\n# 뒤 절\n뒤 글");
+  rejectRe = null;
+  await settle("k-rej");
+  await until(async () => (await rows("k-rej")).every((x) => x.has));
+  chk("K21 글이 바뀌면 다시 한다 · 저장 직후 임베딩이 그대로 돈다", (await rows("k-rej")).every((x) => x.has), JSON.stringify(await rows("k-rej")));
+  for (const [label, v] of [["null", Array(DIMS).fill(null)], ["0", Array(DIMS).fill(0)], ["빈", []]]) {
+    await q(`INSERT INTO knowledge_chunk(name, seq, start_line, body, text_hash) VALUES('k-rej', 900, 1, $1, $2)`, [`이상벡터 ${label}`, `bad-${label}`]);
+    badVector = { re: /이상벡터/, v };
+    const sb = await eb.sweepChunkEmbeddings();
+    badVector = null;
+    const row = (await q(`SELECT embedding_model, embedding_vector IS NOT NULL AS has FROM knowledge_chunk WHERE text_hash=$1`, [`bad-${label}`]))[0];
+    chk(`K21 값이 잘못된 벡터(${label})도 건너뛴다`, !sb.skipped && row.embedding_model === "rejected" && row.has === false, JSON.stringify([sb, row]));
+    await q(`DELETE FROM knowledge_chunk WHERE text_hash=$1`, [`bad-${label}`]);
+  }
+
+  // ── K22 ──
+  await q(`UPDATE knowledge_chunk SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL WHERE name='k-rej'`);
+  failStatus = 400;
+  const s22 = await eb.sweepChunkEmbeddings();
+  failStatus = 0;
+  chk("K22 서버가 모든 글을 거절하면 글 탓으로 표시하지 않는다", s22.skipped === "error" && Number((await q(`SELECT count(*)::int AS n FROM knowledge_chunk WHERE embedding_model='rejected'`))[0].n) === 0, JSON.stringify(s22));
 
   // ── K19 ──
   await q(`UPDATE org_runtime_config SET embedding_config=$1::jsonb WHERE id=1`, [JSON.stringify({ provider: "off", explicit: true })]);

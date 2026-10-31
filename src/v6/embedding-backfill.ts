@@ -10,6 +10,7 @@
 import { boundTenantId, itemsPool } from "../db/client.js";
 import {
   type EmbeddingConfig,
+  type EmbeddingProvider,
   resolveEmbeddingConfig,
   resolveEmbeddingProvider,
   ensureEmbeddingSchema,
@@ -34,7 +35,6 @@ export interface EmbeddingTarget {
   selectCols: string;                                  // buildText 에 필요한 SELECT 컬럼들(idCol 포함)
   buildText: (row: Record<string, unknown>) => string; // 행 → 임베딩 입력 텍스트
   purgeFilter?: string;                                // 벡터를 **두면 안 되는** 행(SQL boolean) — 스윕마다 남은 벡터를 걷는다(#5169)
-  batchMax?: number;                                   // 한 요청의 건수 상한 — 임베딩 레인을 오래 쥐지 않게(cfg.batch_size 보다 작으면 이 값)
 }
 
 // 지식: 제목+요약+본문(기존 동작 그대로). idCol='name', active 만.
@@ -103,18 +103,17 @@ export const COLLECT_UNIT_TARGET: EmbeddingTarget = {
   buildText: (r) => unitEmbeddingText(r as { app: string; kind: string; name: string | null; description: string | null; meta?: Record<string, unknown> | null }),
 };
 
-// 지식 조각(#5203): 절마다 벡터 하나. 표(knowledge_chunk)는 낱말 색인 스윕이 맞추고 여기는 빈 벡터를 채운다. 채우는 정비는 따로 돈다(sweepChunkEmbeddings).
+// 지식 조각(#5203): 절마다 벡터 하나. 표(knowledge_chunk)는 낱말 색인 스윕이 맞추고 빈 벡터는 정비가 채운다(sweepChunkEmbeddings).
 //  조각은 활성 · 검색 대상 문서에만 있어야 하지만 표를 맞추기까지 틈이 있다 — 그 틈에 보관 · 검색 제외된 글을 임베딩 서버로 보내지 않게 문서를 다시 본다.
-//  임베딩 서버는 한 건씩 처리한다 — 한 요청에 여러 건을 실으면 그 요청이 끝날 때까지 질의(자동 소환 · 검색)가 뒤에서 기다린다. 조각 수만큼 몰리므로 한 건씩 보낸다. 처리량은 같다.
-//   실측(x86 4 vCPU · bge-m3): 2,000자 조각 1건 5.5초 · 4건을 한 요청으로 22초 — 그동안 소환 질의가 전부 훅 상한 4초를 넘겼다.
+//  임베딩 서버가 끝내 거절한 조각은 표시해 두고 다시 집지 않는다(CHUNK_REJECTED).
+const CHUNK_REJECTED = "rejected";
 export const KNOWLEDGE_CHUNK_TARGET: EmbeddingTarget = {
   name: "knowledge_chunk",
   table: "knowledge_chunk",
   idCol: "id",
-  activeFilter: "EXISTS (SELECT 1 FROM knowledge k WHERE k.name = knowledge_chunk.name AND k.lifecycle='active' AND k.searchable)",
-  selectCols: "id, prefix, body",
+  activeFilter: `embedding_model IS DISTINCT FROM '${CHUNK_REJECTED}' AND EXISTS (SELECT 1 FROM knowledge k WHERE k.name = knowledge_chunk.name AND k.lifecycle='active' AND k.searchable)`,
+  selectCols: "id, name, seq, prefix, body",
   buildText: (r) => chunkEmbedText(r as { prefix?: string | null; body?: string | null }),
-  batchMax: 1,
 };
 
 export interface BackfillProgress { total: number; done: number }
@@ -177,7 +176,6 @@ export async function runEmbeddingBackfill(opts: {
   mode?: BackfillMode;
   onProgress?: (p: BackfillProgress) => void;
   shouldStop?: () => boolean;
-  maxRows?: number;   // 이만큼 채우면 멈춘다(#5203 조각의 하루 상한) — 남은 것은 다음 판이 잇는다
 } = {}, target: EmbeddingTarget = KNOWLEDGE_TARGET): Promise<BackfillResult> {
   const mode: BackfillMode = opts.mode ?? "pending";
   const cfg = await resolveConfigFromDb();
@@ -200,7 +198,7 @@ export async function runEmbeddingBackfill(opts: {
   // 배치 = provider 요청 단위(cfg.batch_size). DB fetch 배치 == 임베딩 요청 == 커밋 단위로 맞춘다(#602):
   //  배치마다 UPDATE 커밋되므로 죽음/재배포에도 채운 만큼 살아남고(재진입 안전), 요청당 시간이 타임아웃 안에 든다.
   //  provider 는 같은 cfg 로 생성돼 요청도 batch 크기 → 보통 배치당 1요청(느리면 provider 가 내부에서 반으로 축소 재시도).
-  const batch = Math.min(cfg.batch_size, target.batchMax ?? cfg.batch_size);
+  const batch = cfg.batch_size;
 
   // 대상 필터 — 기본 IS NULL, model-changed 면 모델 불일치도, all 이면 전부.
   const params: unknown[] = [];
@@ -218,7 +216,6 @@ export async function runEmbeddingBackfill(opts: {
   try {
     for (;;) {
       if (opts.shouldStop?.()) break;
-      if (opts.maxRows !== undefined && done >= opts.maxRows) break;
       // 재진입 안전: all 은 이미 처리한 행을 다시 잡으므로 OFFSET 으로 진행(같은 배치 무한루프 방지).
       //  pending/model-changed 는 UPDATE 로 조건에서 빠지므로 OFFSET 0 으로 항상 '남은 것'의 앞을 집는다.
       //  ⚠ 그래서 all 모드의 done 은 OFFSET 이다 — 아래에서 «실제로 쓴 행» 만 센다(#5169, 그 줄 주석).
@@ -263,18 +260,20 @@ export async function runEmbeddingBackfill(opts: {
 //   (a) REST 토글이 setBackfillPausedCache 로 즉시 반영(→ 실행 중 잡이 다음 배치에서 협조적 중단),
 //   (b) 스윕 진입의 refreshBackfillPausedFromDb 가 DB 로 재수화(부팅 스윕이 영속 상태를 픽업).
 //  게이트웨이는 단일 프로세스(스윕·REST 핸들러 동거)라 캐시가 정합적이다(스케줄러 게이트: LIVELY_NO_SCHEDULER).
-let pausedCache = false;
-export function isBackfillPaused(): boolean { return pausedCache; }
-export function setBackfillPausedCache(paused: boolean): void { pausedCache = paused; }
+//  ⚠ 워크스페이스마다 따로 기억한다 — 매니지드 게이트웨이는 한 프로세스가 모든 워크스페이스를 돌려서, 한 값이면 일시중지한 워크스페이스 하나가 남의 백필까지 멈춘다.
+const pausedCache = new Map<string, boolean>();
+const pausedKey = (): string => boundTenantId() ?? "";
+export function isBackfillPaused(): boolean { return pausedCache.get(pausedKey()) === true; }
+export function setBackfillPausedCache(paused: boolean): void { pausedCache.set(pausedKey(), paused); }
 // DB 의 일시중지 플래그를 읽어 캐시에 반영하고 반환. 컬럼/테이블 부재(구 DB)면 캐시 불변(기본 false=평소대로 자동 백필 — 하위호환).
 export async function refreshBackfillPausedFromDb(): Promise<boolean> {
   try {
     const r = await itemsPool.query(`SELECT embedding_backfill_paused FROM org_runtime_config WHERE id=1`);
-    pausedCache = (r.rows[0] as { embedding_backfill_paused?: unknown } | undefined)?.embedding_backfill_paused === true;
+    setBackfillPausedCache((r.rows[0] as { embedding_backfill_paused?: unknown } | undefined)?.embedding_backfill_paused === true);
   } catch {
     /* 컬럼/테이블 부재(임베딩 미도입/구 DB) → 캐시 유지(기본 false). 스윕은 계속 돈다. */
   }
-  return pausedCache;
+  return isBackfillPaused();
 }
 
 // ── 인프로세스 백필 잡(웹 UI 트리거) — 게이트웨이 프로세스 내 단일 실행. 진행률은 폴링(GET /api/ui/org/embeddings 등). ──
@@ -378,10 +377,14 @@ export async function runAutoBackfillSweep(): Promise<void> {
 //  · 위 스윕에 넣지 않는다 — 그 스윕은 프로세스에 하나라, 조각이 도는 동안 방금 저장한 문서의 벡터를 깨우는 nudge 가 버려진다.
 //    여기는 저장이 깨우지 않고 정비표(10분)로만 돈다. 위 스윕을 보고 비키지 않는다 — 요청에 얹은 정비는 둘을 같은 순간에 던지므로 비키면 판마다 밀려 영영 안 돈다
 //    (매니지드 실측: 롤 뒤 조각 3만 개가 한 건도 안 채워졌다). 조각은 한 건씩 보내므로 같이 돌아도 서로 막지 않는다.
+//  · 한 요청에 한 건씩 보낸다 — 임베딩 서버는 한 건씩 처리해서, 여러 건을 실으면 그 요청이 끝날 때까지 질의(자동 소환 · 검색)가 뒤에서 기다린다. 처리량은 같다.
+//    실측(x86 4 vCPU · bge-m3 · 실제 조각 길이): 임베딩이 도는 동안 소환 질의가 훅 상한 4초를 넘긴 비율이 4건씩이면 87%, 1건씩이면 19%.
 //  · 조각 일은 워크스페이스를 가리지 않고 프로세스에서 한 줄로 돈다(chunkTurn) — 임베딩 서버가 한 줄이고, 비키게 하면 같은 순간에 깨는 작은 워크스페이스가 큰 워크스페이스에 밀려 굶는다.
 //  · 상한 둘 — 판마다 · 하루마다. 매니지드 임베딩은 계정 일일 상한(기본 2만)이 있고 넘으면 **질의 임베딩까지** 429 다. 상한은 워크스페이스마다 센다(계정은 코어가 모른다) —
-//    계정에 큰 워크스페이스가 둘이어도 질의 몫이 남는 값이다. 지운 행은 세지 않으므로 대략의 상한이다. 실패하면 한 시간 쉰다.
-//  · 모델이 바뀌면 옛 벡터도 대상이다(model-changed) — 상한 안에서 차례로 바뀐다.
+//    계정에 큰 워크스페이스가 둘이어도 질의 몫이 남는 값이다. 지운 행은 세지 않으므로 대략의 상한이다.
+//  · 조각 하나 때문에 정비가 멈추면 안 된다 — 그 글만 거절당하면(4xx · 값이 잘못된 벡터) 표시하고 넘어간다. 서버가 막힌 것이면(429 · 5xx · 연결 실패) 판을 접고 다음 판에 다시 한다.
+//    일일 상한(429)일 때만 한 시간 쉰다 — 쉬는 동안에는 저장 직후 임베딩도 안 돈다(매니지드 실측: 조각 하나의 400 이 저장 직후 임베딩까지 한 시간 막았다).
+//  · 모델이 바뀌면 옛 벡터도 대상이다 — 상한 안에서 차례로 바뀐다.
 export const CHUNK_EMBED_DAILY_MAX = Number(process.env.LIVELY_CHUNK_EMBED_DAILY_MAX) || 7_000;
 export const CHUNK_EMBED_SWEEP_MAX = 100;
 const CHUNK_RETRY_MS = 60 * 60_000;
@@ -405,26 +408,76 @@ export async function chunkEmbedRoom(): Promise<number> {
   return Math.max(0, Math.min(CHUNK_EMBED_SWEEP_MAX, CHUNK_EMBED_DAILY_MAX - Number((r.rows[0] as { n: number }).n)));
 }
 
-export function sweepChunkEmbeddings(now: () => number = Date.now): Promise<{ embedded: number; skipped?: string }> {
+/** 임베딩 서버가 끝내 거절한 조각 수. */
+export async function countRejectedChunks(): Promise<number> {
+  const r = await itemsPool.query(`SELECT count(*)::int AS n FROM knowledge_chunk WHERE embedding_model = $1`, [CHUNK_REJECTED]);
+  return Number((r.rows[0] as { n: number }).n);
+}
+
+class ChunkVectorInvalid extends Error {}
+/** 이 글만 문제인가 — 400 · 413 · 422, 또는 값이 잘못된 벡터. 인증(401 · 403) · 상한(429) · 서버 오류는 글 탓이 아니다. */
+function isRejectedInput(e: unknown): boolean {
+  return e instanceof ChunkVectorInvalid || /embedding endpoint (400|413|422)/.test(String((e as Error)?.message ?? ""));
+}
+
+/** 조각 한 건을 임베딩해 쓴다. 글이 거절당하면 표시하고 0 을 돌려준다 — 서버가 건강할 때만이다(서버가 모든 글을 거절하는 고장이면 전부 표시돼 버린다). */
+async function embedOneChunk(provider: EmbeddingProvider, row: Record<string, unknown>): Promise<number> {
+  const t = KNOWLEDGE_CHUNK_TARGET;
+  try {
+    const [vec] = await provider.embed([t.buildText(row)]);
+    if (!vec?.length || !vec.every(Number.isFinite) || !vec.some((x) => x !== 0)) throw new ChunkVectorInvalid("벡터가 비었거나 수가 아니다");
+    const res = await itemsPool.query(
+      `UPDATE ${t.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1 AND (${t.activeFilter})`,
+      [row.id, toVectorLiteral(vec), provider.model]);
+    return res.rowCount ?? 0;
+  } catch (e) {
+    if (!isRejectedInput(e) || !(await provider.isAvailable())) throw e;
+    console.warn(`[embeddings] 조각 건너뜀 ${String(row.name)}#${String(row.seq)}: ${(e as Error)?.message}`);
+    await itemsPool.query(`UPDATE ${t.table} SET embedding_model=$2 WHERE id=$1`, [row.id, CHUNK_REJECTED]);
+    return 0;
+  }
+}
+
+export interface ChunkSweepResult { embedded: number; skipped?: string; reason?: string }
+const lastSweep = new Map<string, ChunkSweepResult & { at: string }>();
+/** 이 워크스페이스의 마지막 조각 정비 결과 — 조용히 안 도는 것을 상태 화면에서 보려고 둔다. 프로세스가 뜬 뒤 아직 안 돌았으면 null. */
+export function lastChunkSweep(): (ChunkSweepResult & { at: string }) | null { return lastSweep.get(boundTenantId() ?? "") ?? null; }
+
+async function chunkSweep(now: () => number): Promise<ChunkSweepResult> {
+  const key = boundTenantId() ?? "";
+  if (now() < (chunkRetryAt.get(key) ?? 0)) return { embedded: 0, skipped: "backoff" };
+  if (await refreshBackfillPausedFromDb()) return { embedded: 0, skipped: "paused" };
+  const cfg = await resolveConfigFromDb();
+  const provider = resolveEmbeddingProvider(cfg);
+  if (!provider) return { embedded: 0, skipped: "off" };
+  //  조각 수를 세기 전에 칸을 보장한다 — 칸이 없는 채로 세면 실패가 «할 일 없음» 으로 보여 영영 안 채운다.
+  const t = KNOWLEDGE_CHUNK_TARGET;
+  if (!(await ensureEmbeddingSchema(itemsPool, cfg.dimensions, t.table))) return { embedded: 0, skipped: "schema" };
+  const minMb = cfg.backfill_min_available_mb;
+  if (minMb > 0 && (await memAvailableMb()) < minMb) return { embedded: 0, skipped: "memory" };
+  const room = await chunkEmbedRoom();
+  if (room === 0) return { embedded: 0, skipped: "budget" };
+  const { rows } = await itemsPool.query(
+    `SELECT ${t.selectCols} FROM ${t.table}
+      WHERE ${t.activeFilter} AND (embedding_vector IS NULL OR embedding_model IS DISTINCT FROM $1)
+      ORDER BY updated_at DESC NULLS LAST LIMIT $2`, [provider.model, room]);
+  let embedded = 0;
+  try {
+    for (const row of rows) embedded += await embedOneChunk(provider, row as Record<string, unknown>);
+    return { embedded };
+  } catch (e) {
+    const reason = String((e as Error)?.message ?? e).slice(0, 200);
+    if (/embedding endpoint 429/.test(reason)) chunkRetryAt.set(key, now() + CHUNK_RETRY_MS);
+    console.warn(`[embeddings] 조각 임베딩 판을 접음: ${reason}`);
+    return { embedded, skipped: "error", reason };
+  }
+}
+
+export function sweepChunkEmbeddings(now: () => number = Date.now): Promise<ChunkSweepResult> {
   return chunkTurn(async () => {
-    const key = boundTenantId() ?? "";
-    if (now() < (chunkRetryAt.get(key) ?? 0)) return { embedded: 0, skipped: "backoff" };
-    if (await refreshBackfillPausedFromDb()) return { embedded: 0, skipped: "paused" };
-    const cfg = await resolveConfigFromDb();
-    const provider = resolveEmbeddingProvider(cfg);
-    if (!provider) return { embedded: 0, skipped: "off" };
-    //  조각 수를 세기 전에 칸을 보장한다 — 칸이 없는 채로 세면 실패가 «할 일 없음» 으로 보여 영영 안 채운다.
-    if (!(await ensureEmbeddingSchema(itemsPool, cfg.dimensions, KNOWLEDGE_CHUNK_TARGET.table))) return { embedded: 0, skipped: "schema" };
-    const minMb = cfg.backfill_min_available_mb;
-    if (minMb > 0 && (await memAvailableMb()) < minMb) return { embedded: 0, skipped: "memory" };
-    const room = await chunkEmbedRoom();
-    if (room === 0) return { embedded: 0, skipped: "budget" };
-    const r = await runEmbeddingBackfill({ mode: "model-changed", maxRows: room, shouldStop: isBackfillPaused }, KNOWLEDGE_CHUNK_TARGET);
-    if (!r.ok) {
-      chunkRetryAt.set(key, now() + CHUNK_RETRY_MS);
-      console.warn(`[embeddings] 조각 임베딩 멈춤 — 한 시간 뒤 다시: ${r.reason}`);
-    }
-    return { embedded: r.embedded, ...(r.ok ? {} : { skipped: r.reason ?? "error" }) };
+    const r = await chunkSweep(now);
+    lastSweep.set(boundTenantId() ?? "", { ...r, at: new Date(now()).toISOString() });
+    return r;
   }, { embedded: 0, skipped: "busy" });
 }
 /** 시험 전용 — 쉬는 시각을 비운다. */
@@ -446,14 +499,7 @@ async function embedDocChunks(name: string): Promise<number> {
   const { rows } = await itemsPool.query(
     `SELECT ${t.selectCols} FROM ${t.table} WHERE name=$1 AND embedding_vector IS NULL AND ${t.activeFilter} ORDER BY seq DESC LIMIT $2`, [name, room]);
   let done = 0;
-  for (const r of rows) {
-    const [vec] = await provider.embed([t.buildText(r as Record<string, unknown>)]);
-    if (!vec?.length) continue;
-    const res = await itemsPool.query(
-      `UPDATE ${t.table} SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1 AND (${t.activeFilter})`,
-      [(r as Record<string, unknown>).id, toVectorLiteral(vec), provider.model]);
-    done += res.rowCount ?? 0;
-  }
+  for (const row of rows) done += await embedOneChunk(provider, row as Record<string, unknown>);
   return done;
 }
 
