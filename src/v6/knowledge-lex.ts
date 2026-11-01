@@ -96,34 +96,34 @@ const K1 = 1.2;
 const B = 0.75;
 
 /**
- * BM25 점수를 내는 CTE 묶음(lv · lp · ls · ldf · bm). 마지막 `bm` 이 (name, score)다 — 낱말이 하나라도 맞은 문서만 나온다.
+ * BM25 점수를 내는 CTE 묶음(ls · lp · bm). 마지막 `bm` 이 (name, score)다 — 낱말이 하나라도 맞은 문서만 나온다.
  *  WITH 뒤에 그대로 이어 붙인다. 수명 · 거르기는 호출부가 knowledge 와 이어 건다.
  *
  *  ⚠ vis(공개범위 술어 — knowledgeVisWhere, 별칭 k)를 **통계까지** 건다. 문서 수 · 평균 길이 · 낱말 빈도에 볼 수 없는 문서가 들어가면 그 사람이 받는 순서와 점수가
  *   «숨은 문서에 이 낱말이 있다» 에 따라 달라진다 — 공개 문서 둘을 잣대로 낱말 존재를 한 비트씩 물을 수 있다(격리 리뷰 재현). «그 단어가 든 문서가 3건 있다»
  *   는 것 자체가 새는 정보라 건수에 공개범위를 건 것(countKnowledgeGrep)과 같은 까닭이다. 그래서 통계는 사람마다 다르다.
  *  ⚠ tenant_id 를 직접 적는 까닭 — 표의 기본키가 (tenant_id, term, doc_id) 라 앞 칸을 주어야 인덱스를 탄다. 행 보안이 없는 단일 테넌트 배포에서도 같다.
+ *  ⚠ **중첩 반복을 끈 문장에서만 쓴다**(knowledge-search withoutNestloop). 플래너가 워크스페이스 행 수를 잘못 짚으면 이 모양도 낱말 행마다 문서를 훑는다 — 이 함수 혼자서는 안전하지 않다.
+ *   문서를 CTE 로 뽑아 잇지 않고 낱말 빈도를 윈도로 세는 까닭은, 끈 뒤에도 CTE 를 이으면 느려서다(공용 표 재현 · 표본 60 · p50: CTE 를 잇는 모양 384ms · 이 모양 20ms).
  */
 export function bm25Sql(terms: readonly string[], params: unknown[], vis: string): string {
   params.push([...terms]);
   const tp = `$${params.length}::text[]`;
-  const docs = vis === "TRUE"
-    ? `SELECT id, name, doc_len FROM knowledge_lex_doc WHERE tenant_id = ${TENANT_DEFAULT_EXPR}`
-    : `SELECT d.id, d.name, d.doc_len FROM knowledge_lex_doc d JOIN knowledge k ON k.name = d.name WHERE d.tenant_id = ${TENANT_DEFAULT_EXPR} AND ${vis}`;
-  return `lv AS MATERIALIZED (${docs}),
-    lp AS MATERIALIZED (
-      SELECT p.term, p.doc_id, p.tf FROM knowledge_lex_posting p JOIN lv ON lv.id = p.doc_id
-       WHERE p.tenant_id = ${TENANT_DEFAULT_EXPR} AND p.term = ANY(${tp})
+  const seenJoin = vis === "TRUE" ? "" : "JOIN knowledge k ON k.name = d.name";
+  const seen = vis === "TRUE" ? "" : ` AND ${vis}`;
+  return `ls AS MATERIALIZED (
+      SELECT count(*)::float8 AS n, GREATEST(avg(d.doc_len), 1)::float8 AS avgdl
+        FROM knowledge_lex_doc d ${seenJoin} WHERE d.tenant_id = ${TENANT_DEFAULT_EXPR}${seen}
     ),
-    ls AS (SELECT count(*)::float8 AS n, GREATEST(avg(doc_len), 1)::float8 AS avgdl FROM lv),
-    ldf AS (SELECT term, count(*)::float8 AS df FROM lp GROUP BY term),
+    lp AS (
+      SELECT d.name, d.doc_len, p.tf, count(*) OVER (PARTITION BY p.term)::float8 AS df
+        FROM knowledge_lex_posting p JOIN knowledge_lex_doc d ON d.id = p.doc_id ${seenJoin}
+       WHERE p.tenant_id = ${TENANT_DEFAULT_EXPR} AND p.term = ANY(${tp})${seen}
+    ),
     bm AS (
-      SELECT d.name,
-             SUM(ln(1 + (s.n - f.df + 0.5) / (f.df + 0.5)) * p.tf * ${K1 + 1} / (p.tf + ${K1} * (1 - ${B} + ${B} * d.doc_len / s.avgdl)))::float8 AS score
-        FROM lp p
-        JOIN ldf f ON f.term = p.term
-        JOIN lv d ON d.id = p.doc_id
-       CROSS JOIN ls s
-       GROUP BY d.name
+      SELECT p.name,
+             SUM(ln(1 + (s.n - p.df + 0.5) / (p.df + 0.5)) * p.tf * ${K1 + 1} / (p.tf + ${K1} * (1 - ${B} + ${B} * p.doc_len / s.avgdl)))::float8 AS score
+        FROM lp p CROSS JOIN ls s
+       GROUP BY p.name
     )`;
 }

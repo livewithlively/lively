@@ -100,11 +100,16 @@ test("BM25 SQL — 낱말 배열을 매개변수로 넘기고 값을 글에 넣�
   assert.ok(!sql.includes("a'b"));
 });
 
-test("BM25 SQL — 공개범위 술어가 통계의 바탕(lv)에 걸린다", () => {
+test("BM25 SQL — 공개범위 술어가 문서 수 · 평균 길이와 낱말 빈도에 모두 걸린다", () => {
   const sql = bm25Sql(["a"], [], "k.visibility = 'open'");
-  const lv = sql.slice(0, sql.indexOf("lp AS"));
-  assert.ok(lv.includes("JOIN knowledge k") && lv.includes("k.visibility = 'open'"), lv);
-  assert.ok(/ls AS \(SELECT count\(\*\)::float8 AS n, GREATEST\(avg\(doc_len\), 1\)::float8 AS avgdl FROM lv\)/.test(sql));
-  assert.ok(sql.includes("JOIN lv d ON"));
+  const stats = sql.slice(0, sql.indexOf("lp AS"));
+  const postings = sql.slice(sql.indexOf("lp AS"), sql.indexOf("bm AS"));
+  for (const part of [stats, postings]) assert.ok(part.includes("JOIN knowledge k") && part.includes("k.visibility = 'open'"), part);
   assert.ok(!bm25Sql(["a"], [], "TRUE").includes("JOIN knowledge k"), "볼 수 있는 것이 전부면 이어 붙이지 않는다");
+});
+
+test("BM25 SQL — 낱말 행을 문서 CTE 와 잇지 않고 통계 한 행만 곁들인다", () => {
+  const sql = bm25Sql(["a"], [], "k.visibility = 'open'");
+  assert.ok(!/JOIN (lv|ldf)\b/.test(sql), sql);
+  assert.ok(/FROM lp p CROSS JOIN ls s/.test(sql));
 });
