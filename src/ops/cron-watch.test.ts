@@ -105,7 +105,7 @@ const st = (o: Record<string, string>): Map<string, BatchTaskState> => new Map(O
 // ── 레인 목록 키가 실제 액션의 요약 키와 같다(배선) — 액션이 모양을 바꾸면 감시가 조용히 못 알아본다 ──
 {
   const src = (p: string): string => readFileSync(new URL(p, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
-  assert.match(src("../scheduler/actions/distill.ts"), /summary: \{ batches: out \}/, "증류 레인 요약 키");
+  assert.match(src("../scheduler/actions/distill.ts"), /summary: \{ batches: out\b/, "증류 레인 요약 키");
   assert.match(src("../scheduler/actions/classify.ts"), /summary: \{ classifiers: out \}/, "분류 레인 요약 키");
   assert.match(src("../scheduler/actions/manage.ts"), /summary: \{ managers: out \}/, "관리 요약 키");
   assert.deepEqual([...DELEGATION_LISTS].sort(), ["batches", "classifiers", "managers"]);

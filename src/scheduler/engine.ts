@@ -159,10 +159,12 @@ async function tick(): Promise<void> {
 }
 
 // 즉시 실행(온디맨드 'refresh now') — cron_run_now capability 가 호출. 스케줄과 무관하게 1회.
-export async function runCronById(id: string): Promise<{ status: string; summary: unknown }> {
+//  params(#5235) — **이번 1회에만** 잡 params 위에 얹는 값이다. 잡 행은 바꾸지 않는다.
+export async function runCronById(id: string, params?: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const rows = await q(itemsPool, `SELECT * FROM org_cron WHERE id=$1`, [id]);
   if (!rows.length) return { status: "error", summary: { error: "no such cron job: " + id } };
-  return executeAndRecord(rows[0]);
+  const job = rows[0] as CronJob;
+  return executeAndRecord(params ? { ...job, params: { ...(job.params ?? {}), ...params } } : job);
 }
 
 let timer: NodeJS.Timeout | null = null;

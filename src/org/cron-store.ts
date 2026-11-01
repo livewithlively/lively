@@ -47,8 +47,8 @@ export async function listCronJobs(): Promise<CronJobRow[]> {
 }
 
 // 존재 확인 — upsert 분기(신규 INSERT vs 기존 UPDATE) 판정용. 없으면 undefined.
-export async function getCronJob(id: string): Promise<{ id: string } | undefined> {
-  return (await itemsPool.query(`SELECT id FROM org_cron WHERE id=$1`, [id])).rows[0];
+export async function getCronJob(id: string): Promise<{ id: string; action: string; params: Record<string, unknown> | null } | undefined> {
+  return (await itemsPool.query(`SELECT id, action, params FROM org_cron WHERE id=$1`, [id])).rows[0];
 }
 
 export async function insertCronJob(v: CronJobInsert): Promise<CronJobRow> {
