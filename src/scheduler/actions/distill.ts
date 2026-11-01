@@ -88,6 +88,9 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
   return { status: "ok", summary: { batches: out, ...(params.lanes_only === true ? { lanes_only: true } : {}) } };
 }
 
+/** 증류 잡의 액션 — 이 파일이 그 실행을 정의한다. */
+export const DISTILL_ACTIONS: ReadonlySet<string> = new Set(["distill_sources", "distill_sources_headless"]);
+
 /** 이번 실행이 낼 것 — 맡은 레인이 없는 자료(unassigned)를 따로 말한다. 없으면 null. */
 export interface DistillRunPlan {
   lanes: Array<{ distiller: string; sources: number; backlog: number }>;
@@ -97,7 +100,7 @@ export interface DistillRunPlan {
 }
 
 /**
- * 이 실행을 접수하지 않고 무엇이 나갈지만 말한다(#5235 · cron_run_now dry_run).
+ * 이 실행을 접수하지 않고 무엇이 나갈지만 말한다(#5235 · cron_run_plan).
  *
  *  레인을 지정하지 않은 잡은 맡은 레인이 없는 자료도 기본 기준으로 함께 낸다. 반만 켜도 나머지가 굶지 않게 한 의도된 동작이고(#1631)
  *   바꾸지 않는다. 다만 그걸 **돌린 뒤에야** 알 수 있었다 — 고객사 첫 세팅에서 레인 하나를 시범으로 돌리자 슬랙 자료 50건이 기본 기준 배치로
@@ -110,12 +113,13 @@ export async function planDistillRun(action: string, params: Record<string, unkn
   let unassigned: DistillRunPlan["unassigned"] = null;
   let notice: string | null = null;
   if (fallback) {
-    const { countStrandedSources, countUndistilled } = await import("../../org/distill/distiller.js");
-    //  레인이 하나도 없으면 폴백은 판정 기록을 안 보는 전역 인박스를 읽는다(종전 동작) — 세는 것도 실행이 쓰는 쪽을 따른다.
-    //   기록을 빼고 세면 이번 5건 · 전체 0건 같은 말이 나온다(실측). 이번 건수는 실제 배치이므로 전체는 그 아래로 내려가지 않는다.
+    //  실행이 집는 쪽과 같은 술어로 센다 — 레인이 있으면 방치 판정, 레인이 하나도 없으면 전역 폴백(판정 기록을 안 보고, 링크가 하나라도 있으면 뺀다).
+    //   갈리면 «이번 5건 · 전체 0건» 이나 나가지 않을 자료까지 «남은 N건» 으로 말하게 된다(둘 다 실측).
     const claiming = pick.claiming ?? [];
-    const total = claiming.length ? await countStrandedSources(claiming) : await countUndistilled(null);
-    unassigned = { sources: fallback.ids.length, total: Math.max(fallback.ids.length, total) };
+    const total = claiming.length
+      ? await (await import("../../org/distill/distiller.js")).countStrandedSources(claiming)
+      : await (await import("../../v6/source-store.js")).countUndistilledSources();
+    unassigned = { sources: fallback.ids.length, total };
     notice = `맡은 증류기가 없는 자료 ${unassigned.sources}건(앞으로 나갈 전체 ${unassigned.total}건)이 기본 기준으로 나갑니다 — 증류기 몫만 돌리려면 lanes_only=true 로 실행하세요.`;
   }
   return { lanes, unassigned, notice, skipped: pick.skipped ?? null, error: pick.error ?? null };

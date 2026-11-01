@@ -6,7 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { listCronJobs, getCronJob, insertCronJob, updateCronJob, deleteCronJob } from "../org/cron-store.js";
 import { runCronById, CRON_ACTIONS, CRON_ACTION_KEYS } from "../scheduler/index.js";
-import { planDistillRun } from "../scheduler/actions/distill.js";
+import { planDistillRun, DISTILL_ACTIONS } from "../scheduler/actions/distill.js";
 import { isValidCron } from "../scheduler/cron-expr.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 cron_expr 해석 기준 시간대(폼 힌트용)
 
@@ -128,39 +128,61 @@ const cronDelete: Capability = {
   },
 };
 
-/** dry_run·lanes_only 를 쓸 수 있는 잡 — 다른 잡에 주면 조용히 무시하지 않고 거절한다(무시하면 시범 삼아 준 값이 안 듣고 그냥 돈다). */
-const DISTILL_RUN_ACTIONS = new Set(["distill_sources", "distill_sources_headless"]);
+/** 증류 잡이 아니면 거절한다 — 모르는 값을 조용히 넘기면 시범 삼아 준 값이 안 듣고 그냥 돈다. */
+async function distillJob(id: string): Promise<{ action: string; params: Record<string, unknown> | null }> {
+  const job = await getCronJob(id);
+  if (!job) throw new HttpError(404, `잡 '${id}' 이(가) 없습니다`);
+  if (!DISTILL_ACTIONS.has(job.action)) throw new HttpError(400, `증류 잡에만 쓸 수 있습니다 — '${id}' 의 액션은 ${job.action} 입니다`);
+  return job;
+}
 
 const cronRunNow: Capability = {
   name: "cron_run_now",
   title: "스케줄 잡 즉시 실행",
   description: "스케줄 잡을 주기와 무관하게 지금 1회 실행(온디맨드 'refresh now'). 결과 요약 반환. 이미 실행 중이면 skip. " +
     "⚠ 증류 잡(distill_sources·distill_sources_headless)을 레인 지정 없이 돌리면 켜진 레인뿐 아니라 **맡은 레인이 없는 자료도 기본 기준으로 함께 나간다**. " +
-    "시범 실행이면 먼저 dry_run=true 로 무엇이 나가는지 보고, 레인 몫만 돌리려면 lanes_only=true 로 실행한다.",
+    "시범 실행이면 먼저 cron_run_plan 으로 무엇이 나가는지 보고, 레인 몫만 돌리려면 lanes_only=true 로 실행한다.",
   scope: "memory",
   input: {
     id: z.string(),
-    dry_run: z.boolean().optional().describe("증류 잡 전용 — 접수하지 않고 이번 실행이 낼 것만 돌려준다(plan.lanes · plan.unassigned · plan.notice). AI 를 부르지 않고 잡 기록도 안 바뀐다."),
-    lanes_only: z.boolean().optional().describe("증류 잡 전용 — 이번 1회는 켜진 레인 몫만 낸다. 맡은 레인이 없는 자료는 빠진다(잡 설정은 안 바뀐다). 증류가 아닌 잡에 주면 400."),
+    lanes_only: z.boolean().optional().describe("증류 잡 전용 — 이번 1회는 켜진 레인 몫만 낸다. 맡은 레인이 없는 자료는 빠진다(잡 설정은 안 바뀌고, 켜 둔 자동 실행은 다음 주기에 그 자료를 낸다). 증류가 아닌 잡에 주면 400."),
   },
   expose: {
     mcp: true,
-    rest: [{ method: "POST", paths: ["/api/ui/cron/:id/run"], parse: (req) => {
-      const b = (req.body ?? {}) as Record<string, unknown>;
-      return { id: req.params?.id, dry_run: b.dry_run === true, lanes_only: b.lanes_only === true };
-    } }],
+    rest: [{ method: "POST", paths: ["/api/ui/cron/:id/run"], parse: (req) => ({ id: req.params?.id, lanes_only: (req.body as { lanes_only?: unknown } | undefined)?.lanes_only === true }) }],
   },
   handler: async (input: any) => {
     const id = parseCronId(input.id);
-    const dryRun = input.dry_run === true, lanesOnly = input.lanes_only === true;
-    if (!dryRun && !lanesOnly) return runCronById(id);
-    const job = await getCronJob(id);
-    if (!job) throw new HttpError(404, `잡 '${id}' 이(가) 없습니다`);
-    if (!DISTILL_RUN_ACTIONS.has(job.action)) throw new HttpError(400, `dry_run·lanes_only 는 증류 잡에만 쓸 수 있습니다 — '${id}' 의 액션은 ${job.action} 입니다`);
-    const extra = lanesOnly ? { lanes_only: true } : {};
-    if (dryRun) return { status: "dry_run", id, action: job.action, plan: await planDistillRun(job.action, { ...(job.params ?? {}), ...extra }) };
-    return runCronById(id, extra);
+    if (input.lanes_only !== true) return runCronById(id);
+    await distillJob(id);
+    return runCronById(id, { lanes_only: true });
   },
 };
 
-export const cronCapabilities: Capability[] = [cronList, cronSet, cronDelete, cronRunNow];
+//  (#5235) ⚠ 미리보기를 cron_run_now 의 인자로 얹지 **않는다**. 옛 코어는 모르는 인자를 떨구고 그 요청을 실제 실행으로 처리한다 —
+//   배포·롤백 중 새 화면이 옛 게이트웨이를 만나면 «무엇이 나가는지 보려던» 호출이 곧 배치 접수가 되고, 확인창 없이 기본 기준 배치가 나간다.
+//   안전장치가 그 사고를 일으키는 셈이다. 이름이 다르면 옛 코어는 없는 도구·404 로 멈추고 화면은 실행하지 않는다.
+//   다른 동작은 다른 이름으로(delivery/classifiers.ts 머리말 · #4194).
+const cronRunPlan: Capability = {
+  name: "cron_run_plan",
+  title: "증류 잡 실행 계획",
+  description: "증류 잡(distill_sources·distill_sources_headless)을 지금 돌리면 무엇이 나갈지만 돌려준다 — 접수하지 않고 AI 도 안 부르며 잡 기록도 안 바뀐다. " +
+    "plan.lanes = 레인별 이번 배치 · plan.unassigned = 맡은 레인이 없어 기본 기준으로 나갈 자료(sources 이번 · total 앞으로 나갈 전체, 없으면 null) · plan.notice · plan.skipped(안 도는 이유). " +
+    "판정은 실행과 같은 코드다. 증류가 아닌 잡이면 400, 없는 잡이면 404.",
+  scope: "memory",
+  input: {
+    id: z.string(),
+    lanes_only: z.boolean().optional().describe("true 면 cron_run_now 를 lanes_only 로 돌렸을 때의 계획을 본다"),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/cron/:id/run-plan"], parse: (req) => ({ id: req.params?.id, lanes_only: req.query?.lanes_only === "true" }) }],
+  },
+  handler: async (input: any) => {
+    const id = parseCronId(input.id);
+    const job = await distillJob(id);
+    return { id, action: job.action, plan: await planDistillRun(job.action, { ...(job.params ?? {}), ...(input.lanes_only === true ? { lanes_only: true } : {}) }) };
+  },
+};
+
+export const cronCapabilities: Capability[] = [cronList, cronSet, cronDelete, cronRunNow, cronRunPlan];

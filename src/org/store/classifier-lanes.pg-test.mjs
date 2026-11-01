@@ -267,6 +267,14 @@ try {
     await removeOp.handler({ id: Number(byId.id) }, { userId: "test" }, {});
     chk("⑥-삭제 id 로 지워도 행이 실제로 사라진다", (await rows(n("rm-by-id"))) === 0, `rows=${await rows(n("rm-by-id"))}`);
 
+    //  같은 뿌리 — 수정 저장이 고친 레인을 돌려준다. 종전엔 문자열 id 로 다시 찾다 null 이 되어 응답의 레인이 비었다.
+    const edited = await cls.upsertClassifier({ key: n("th-low"), label: "이름 고침" }, "test", "test");
+    chk("⑥-수정 저장소가 고친 행을 돌려준다", edited?.label === "이름 고침" && typeof edited?.id === "number", JSON.stringify(edited));
+    const upsertOp = classifiersCapabilities.find((c) => c.name === "org_distiller_category_upsert");
+    const viaTool = await upsertOp.handler({ key: n("th-low"), label: "한 번 더" }, { userId: "test" }, {});
+    chk("⑥-수정 도구 응답에 레인이 있다", viaTool?.classifier?.label === "한 번 더" && viaTool?.lane?.key === n("th-low"), JSON.stringify(viaTool).slice(0, 160));
+    chk("⑥-id 목록의 id 도 숫자다", (await cls.listClassifiers()).every((c) => typeof c.id === "number"), "");
+
     //  이미 카테고리가 있으면 건드리지 않는다 — 문턱을 낮춰도 기존 판정 불가침은 그대로다.
     const skip = await ks.proposeKnowledgeCategory(n("t1"), cat, { evidence: "다시", confidence: 0.1 }, { actor: "test", source: "test" });
     chk("⑥-불가침 이미 카테고리가 있으면 건너뛴다", skip.applied === false && skip.skipped === "already_has_category", JSON.stringify(skip));

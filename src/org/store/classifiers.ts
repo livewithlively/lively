@@ -78,19 +78,28 @@ export function scopeWhere(r: ClassifierRow, params: unknown[]): string {
   return w.join(" AND ");
 }
 
+/**
+ * DB 행 → ClassifierRow. id 를 여기서 숫자로 맞춘다(#5235).
+ *  ⚠ id 는 BIGSERIAL 이라 드라이버가 **문자열**로 주는데 타입은 number 라 컴파일러가 못 잡는다. 그 값을 getClassifier 에 되넘기면
+ *   key 로 찾다 못 찾아 null 이 된다 — 삭제가 아무것도 안 지운 채 { ok: true } 로 끝났고(화면엔 «삭제했습니다»), 수정 응답의 레인이 null 이었다.
+ */
+function toRow(r: unknown): ClassifierRow {
+  const row = r as ClassifierRow;
+  row.id = Number(row.id);
+  row.scope_text = scopeText(row);
+  return row;
+}
+
 export async function listClassifiers(): Promise<ClassifierRow[]> {
   const rows = await q(itemsPool, `SELECT ${COLS} FROM org_classifier ORDER BY priority DESC, id`);
-  return rows.map((r) => { const row = r as ClassifierRow; row.scope_text = scopeText(row); return row; });
+  return rows.map(toRow);
 }
 
 export async function getClassifier(idOrKey: number | string): Promise<ClassifierRow | null> {
   const rows = typeof idOrKey === "number"
     ? await q(itemsPool, `SELECT ${COLS} FROM org_classifier WHERE id=$1`, [idOrKey])
     : await q(itemsPool, `SELECT ${COLS} FROM org_classifier WHERE key=$1`, [idOrKey]);
-  if (!rows[0]) return null;
-  const row = rows[0] as ClassifierRow;
-  row.scope_text = scopeText(row);
-  return row;
+  return rows[0] ? toRow(rows[0]) : null;
 }
 
 /**
@@ -302,9 +311,7 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
 }
 
 export async function removeClassifier(id: number, actor?: string, source?: string): Promise<void> {
-  //  ⚠ Number() 를 빼지 마라(#5235) — id 는 BIGSERIAL 이라 조회한 행의 값은 런타임에 문자열이다(타입은 number 라 컴파일러가 못 잡는다).
-  //   문자열로 넘기면 getClassifier 가 key 로 찾다 못 찾고, 아무것도 안 지운 채 { ok: true } 로 끝난다 — 화면엔 «삭제했습니다» 가 뜬다.
-  const cur = await getClassifier(Number(id));
+  const cur = await getClassifier(id);
   if (!cur) return;
   // seen 은 FK CASCADE 로 함께 사라진다. 이미 만들어진 분류 제안은 남는다(지식의 자산이지 분류기의 것이 아니다).
   await itemsPool.query(`DELETE FROM org_classifier WHERE id=$1`, [id]);

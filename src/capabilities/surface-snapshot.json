@@ -3922,7 +3922,17 @@
   "rest": [
    "POST /api/ui/cron/:id/run"
   ],
-  "input_hash": "631e4d1d9a4ff63b"
+  "input_hash": "7e3dfb45ed67a0f0"
+ },
+ {
+  "name": "cron_run_plan",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/cron/:id/run-plan"
+  ],
+  "input_hash": "c55c5e0068a50942"
  },
  {
   "name": "list_unmapped",

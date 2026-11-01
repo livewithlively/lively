@@ -5,7 +5,9 @@
 //  왜 이 계층인가: 두 결함 다 «저장은 200 인데 동작이 안 바뀐다» 였다. 판정 함수만 재면 그 함수가 저장 경로에 어떻게 이어졌는지를
 //   못 잰다(빈 값을 «비우려는 저장» 으로 보느냐, 현재 값을 되돌려 보낸 것으로 보느냐가 upsertDistiller 안에 있다). 그래서 실제 행으로 잰다.
 //   ② 레인 목적지 — D 번호는 사양의 행. 응답이 아니라 **다시 읽은 행**으로 단언한다.
-//   ③ 실행 전 안내·레인 몫만 — R 번호는 사양의 행. 무엇이 나갔는지는 요약 문구가 아니라 **접수된 org_task 행**으로 단언한다.
+//   ③ 실행 계획·레인 몫만 — R 번호는 사양의 행. 무엇이 나갔는지는 요약 문구가 아니라 **접수된 org_task 행**으로 단언한다.
+//
+//  ⚠ 이 시험은 격리를 위해 켜진 레인을 모두 끄고 활성 자료를 모두 숨겼다가 되돌린다 — DB 이름이 `_test` 로 끝나지 않으면 시작하지 않는다.
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/items/store.js`);
 const { upsertDistiller } = await import(`${DIST}/org/store/ingest.js`);
@@ -17,7 +19,9 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 
 const cronRunNow = cronCapabilities.find((c) => c.name === "cron_run_now");
+const cronRunPlan = cronCapabilities.find((c) => c.name === "cron_run_plan");
 const run = (input) => cronRunNow.handler(input);
+const plan = (input) => cronRunPlan.handler(input);
 const refused = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
 
 const T = "t5235";                       // 이 시험만의 접두 — 남의 레인·축·자료와 안 섞인다
@@ -60,11 +64,19 @@ async function cleanup() {
   await itemsPool.query(`DELETE FROM source WHERE external_system LIKE $1`, [`${T}%`]);
   await itemsPool.query(`DELETE FROM org_cron WHERE id LIKE $1`, [`${T}%`]);
   await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [MEMBER]);
+  await itemsPool.query(`DELETE FROM knowledge WHERE name LIKE $1`, [`${T}%`]);
   //  레인을 켜면 upsertDistiller 가 전체 잡을 마련한다(#2415) — 이 시험이 만들게 한 잡만 지운다.
   if (cronBefore) await itemsPool.query(`DELETE FROM org_cron WHERE NOT (id = ANY($1::text[]))`, [cronBefore]);
   if (parkedLanes.length) await itemsPool.query(`UPDATE org_distiller SET enabled=true WHERE id = ANY($1::bigint[])`, [parkedLanes]);
   if (parkedSources.length) await itemsPool.query(`UPDATE source SET lifecycle='active' WHERE id = ANY($1::int[])`, [parkedSources]);
   parkedLanes = []; parkedSources = [];
+}
+
+const dbName = (await itemsPool.query(`SELECT current_database() AS n`)).rows[0].n;
+if (!/_test$/.test(dbName)) {
+  console.error(`이 시험은 남의 레인을 끄고 자료를 숨겼다가 되돌린다 — DB '${dbName}' 은(는) 시험용이 아니라 시작하지 않습니다(이름이 _test 로 끝나야 한다)`);
+  await itemsPool.end().catch(() => {});
+  process.exit(1);
 }
 
 try {
@@ -168,7 +180,7 @@ try {
 
   //  전제 — 켜진 레인이 없을 때: 자료를 넣기 전에는 아무것도 안 나간다.
   {
-    const r = await run({ id: JOB, dry_run: true });
+    const r = await plan({ id: JOB });
     chk("전제 자료가 없으면 나갈 것이 없다", r.plan.lanes.length === 0 && r.plan.unassigned === null, JSON.stringify(r.plan));
   }
 
@@ -178,11 +190,11 @@ try {
 
   // R1 · R2
   {
-    const r = await run({ id: JOB, dry_run: true });
+    const r = await plan({ id: JOB });
     const l = r.plan.lanes.find((x) => x.distiller === `${T}-lane`);
     chk("R1 레인 몫을 말한다", r.plan.lanes.length === 1 && l?.sources === 2 && l?.backlog === 2, JSON.stringify(r.plan));
     chk("R1b 기본 기준으로 나갈 자료를 말한다", r.plan.unassigned?.sources === 3 && r.plan.unassigned?.total === 3, JSON.stringify(r.plan));
-    chk("R1c 응답 상태는 dry_run — 실행과 헷갈리지 않는다", r.status === "dry_run", r.status);
+    chk("R1c 계획은 실행 결과를 말하지 않는다", r.status === undefined && r.summary === undefined, JSON.stringify(r).slice(0, 120));
     chk("R1d 고를 길을 말한다", /lanes_only/.test(String(r.plan.notice)), String(r.plan.notice));
     chk("R2 접수된 위탁 0건", (await tasks()).length === 0, JSON.stringify(await tasks()));
     const job = (await itemsPool.query(`SELECT last_run_at, last_status FROM org_cron WHERE id=$1`, [JOB])).rows[0];
@@ -215,21 +227,21 @@ try {
     chk("R3c 요약이 레인 몫만 돌렸다고 말한다", r.summary?.lanes_only === true, JSON.stringify(r.summary));
     const saved = (await itemsPool.query(`SELECT params FROM org_cron WHERE id=$1`, [JOB])).rows[0].params;
     chk("R3d 잡 설정은 안 바뀐다(이번 1회뿐)", !("lanes_only" in saved), JSON.stringify(saved));
-    const after = await run({ id: JOB, dry_run: true });
+    const after = await plan({ id: JOB });
     chk("R3e 다음 실행 안내에 그 자료가 그대로 있다", after.plan.unassigned?.sources === 3, JSON.stringify(after.plan));
   }
 
   // R5
   {
     await clearRuns();
-    const r = await run({ id: JOB, dry_run: true, lanes_only: true });
-    chk("R5 dry_run + lanes_only → 맡은 레인 없는 자료를 뺀 계획", r.plan.unassigned === null && r.plan.lanes.length === 1, JSON.stringify(r.plan));
+    const r = await plan({ id: JOB, lanes_only: true });
+    chk("R5 lanes_only 의 계획 → 맡은 레인 없는 자료를 뺀 계획", r.plan.unassigned === null && r.plan.lanes.length === 1, JSON.stringify(r.plan));
   }
 
   // R8 — 레인이 전부 맡으면 묻지 않는다
   {
     await upsertDistiller({ key: `${T}-all`, enabled: true, thread_aware: false, batch_size: 10, batch_max_msgs: 100, criteria_md: "넓은 레인", priority: -100 }, "test", "test");
-    const r = await run({ id: JOB, dry_run: true });
+    const r = await plan({ id: JOB });
     chk("R8 맡은 레인 없는 자료 0건 → unassigned 없음", r.plan.unassigned === null && r.plan.notice === null, JSON.stringify(r.plan));
     await itemsPool.query(`DELETE FROM org_distiller WHERE key=$1`, [`${T}-all`]);
   }
@@ -237,8 +249,8 @@ try {
   // R9 — 레인 몫이 없고 맡은 레인 없는 자료만 남았다
   {
     await lane({ match_system: `${T}-sys-none` });
-    const plan = (await run({ id: JOB, dry_run: true })).plan;
-    chk("R9 전제 — 레인 몫 0건 · 기본 기준 자료는 있다", plan.lanes.length === 0 && plan.unassigned?.sources === 5, JSON.stringify(plan));
+    const before = (await plan({ id: JOB })).plan;
+    chk("R9 전제 — 레인 몫 0건 · 기본 기준 자료는 있다", before.lanes.length === 0 && before.unassigned?.sources === 5, JSON.stringify(before));
     await clearRuns();
     const r = await run({ id: JOB, lanes_only: true });
     chk("R9b lanes_only → 접수 0건", (await tasks()).length === 0, JSON.stringify(await tasks()));
@@ -248,20 +260,20 @@ try {
 
   // R12 — 한 레인에 묶인 잡은 애초에 기본 기준 배치를 안 낸다
   {
-    const r = await run({ id: PIN_JOB, dry_run: true });
+    const r = await plan({ id: PIN_JOB });
     chk("R12 묶인 잡 → 그 레인만 · unassigned 없음", r.plan.lanes.length === 1 && r.plan.unassigned === null, JSON.stringify(r.plan));
   }
 
   // R10 · R11 — 듣지 않을 값을 조용히 받지 않는다
   {
-    for (const opt of [{ dry_run: true }, { lanes_only: true }]) {
-      const e = await refused(() => run({ id: OTHER_JOB, ...opt }));
-      chk(`R10 증류가 아닌 잡에 ${Object.keys(opt)[0]} → 400`, e?.status === 400, String(e?.status ?? e));
+    for (const [label, call] of [["계획", () => plan({ id: OTHER_JOB })], ["lanes_only", () => run({ id: OTHER_JOB, lanes_only: true })]]) {
+      const e = await refused(call);
+      chk(`R10 증류가 아닌 잡에 ${label} → 400`, e?.status === 400, String(e?.status ?? e));
     }
     const job = (await itemsPool.query(`SELECT last_run_at FROM org_cron WHERE id=$1`, [OTHER_JOB])).rows[0];
     chk("R10b 거절되면 그 잡은 안 돈다", job.last_run_at === null, JSON.stringify(job));
-    const e = await refused(() => run({ id: `${T}-none`, dry_run: true }));
-    chk("R11 없는 잡 → 404", e?.status === 404, String(e?.status ?? e));
+    const e = await refused(() => plan({ id: `${T}-none` }));
+    chk("R11 없는 잡의 계획 → 404", e?.status === 404, String(e?.status ?? e));
     const r = await run({ id: `${T}-none` });
     chk("R11b 옵션 없는 호출의 종전 응답은 그대로", r.status === "error", JSON.stringify(r));
   }
@@ -269,7 +281,7 @@ try {
   // R13 — 배치 상한 경계
   {
     await mkSources(`${T}-sys-many`, 48);   // 맡은 레인 없는 자료 3 + 48 = 51
-    const r = await run({ id: JOB, dry_run: true });
+    const r = await plan({ id: JOB });
     chk("R13 51건 → 이번 50건 · 전체 51건", r.plan.unassigned?.sources === 50 && r.plan.unassigned?.total === 51, JSON.stringify(r.plan.unassigned));
     await itemsPool.query(`DELETE FROM source WHERE external_system=$1`, [`${T}-sys-many`]);
   }
@@ -278,7 +290,7 @@ try {
   {
     const welcome = { flow: "files", done_at: new Date().toISOString(), upload_started_at: new Date().toISOString() };
     await itemsPool.query(`INSERT INTO org_member(id, display_name, state, kind, liv_profile) VALUES($1, $1, 'active', 'human', $2::jsonb)`, [MEMBER, JSON.stringify({ welcome })]);
-    const r = await run({ id: JOB, dry_run: true });
+    const r = await plan({ id: JOB });
     chk("R14 처음 설정 대기 → 나갈 것 없음 · 이유를 말한다", r.plan.lanes.length === 0 && r.plan.unassigned === null && /처음 설정/.test(String(r.plan.skipped)), JSON.stringify(r.plan));
     await itemsPool.query(`DELETE FROM org_member WHERE id=$1`, [MEMBER]);
   }
@@ -287,30 +299,38 @@ try {
   {
     await itemsPool.query(`UPDATE org_distiller SET enabled=false WHERE key LIKE $1`, [`${T}%`]);
     await clearRuns();
-    const r = await run({ id: JOB, dry_run: true });
+    const r = await plan({ id: JOB });
     chk("R6 켜진 레인 없음 → 전부 기본 기준 자료", r.plan.lanes.length === 0 && r.plan.unassigned?.sources === 5 && r.plan.unassigned?.total === 5, JSON.stringify(r.plan));
     const lo = await run({ id: JOB, lanes_only: true });
     chk("R7 lanes_only → 접수 0건", (await tasks()).length === 0, JSON.stringify(await tasks()));
     chk("R7b «미증류 자료 없음» 이라고 거짓말하지 않는다", /켜진 증류기가 없어/.test(String(lo.summary?.skipped)) && !/미증류 자료 없음/.test(String(lo.summary?.skipped)), JSON.stringify(lo.summary));
-    const dry = await run({ id: JOB, dry_run: true, lanes_only: true });
-    chk("R7c dry_run 도 같은 이유를 말한다", /켜진 증류기가 없어/.test(String(dry.plan.skipped)), JSON.stringify(dry.plan));
+    const dry = await plan({ id: JOB, lanes_only: true });
+    chk("R7c 계획도 같은 이유를 말한다", /켜진 증류기가 없어/.test(String(dry.plan.skipped)), JSON.stringify(dry.plan));
     //  레인이 없는 폴백은 판정 기록을 안 본다 — 한 번 돌린 뒤에도 같은 자료가 다시 나간다. 전체 건수가 이번 건수 아래로 내려가면 거짓이다.
     await run({ id: JOB });
     await clearRuns();
     await itemsPool.query(`INSERT INTO org_stranded_seen(source_id, task_id) SELECT id, NULL FROM source WHERE external_system LIKE $1`, [`${T}%`]);
-    const again = await run({ id: JOB, dry_run: true });
-    chk("R6c 판정 기록이 있어도 이번 건수 ≤ 전체 건수", again.plan.unassigned?.sources === 5 && again.plan.unassigned?.total === 5, JSON.stringify(again.plan.unassigned));
+    const again = await plan({ id: JOB });
+    chk("R6c 판정 기록이 있어도 이번 건수 = 전체 건수", again.plan.unassigned?.sources === 5 && again.plan.unassigned?.total === 5, JSON.stringify(again.plan.unassigned));
+    //  증류 뒤 갱신된 자료 — 전역 폴백은 링크가 하나라도 있으면 안 집는다. 그 자료까지 «남은 N건» 으로 세면 나가지 않을 것을 나간다고 말한다.
+    await itemsPool.query(`INSERT INTO knowledge(name, title, body_md, provenance, lifecycle) VALUES($1, $1, '본문', 'authored', 'active')`, [`${T}-k`]);
+    await itemsPool.query(`INSERT INTO knowledge_source(name, source_id, relation) VALUES($1, $2, 'derived_from')`, [`${T}-k`, freeIds[0]]);
+    await itemsPool.query(`UPDATE source SET updated_at = now() + interval '1 hour' WHERE id=$1`, [freeIds[0]]);
+    const linked = await plan({ id: JOB });
+    chk("R6d 증류 뒤 갱신된 자료는 이번에도 전체에도 안 든다", linked.plan.unassigned?.sources === 4 && linked.plan.unassigned?.total === 4, JSON.stringify(linked.plan.unassigned));
   }
 
   // REST 어댑터 — 본문을 안 보낸 종전 호출(POST /cron/:id/run)이 그대로 돈다.
   {
     const parse = cronRunNow.expose.rest[0].parse;
-    const empty = parse({ params: { id: "x" } });
-    chk("REST 본문 없음 → 두 값 다 꺼짐", empty.dry_run === false && empty.lanes_only === false, JSON.stringify(empty));
-    const on = parse({ params: { id: "x" }, body: { dry_run: true, lanes_only: true } });
-    chk("REST 본문의 값을 읽는다", on.dry_run === true && on.lanes_only === true, JSON.stringify(on));
-    const str = parse({ params: { id: "x" }, body: { dry_run: "false" } });
-    chk("REST 불리언이 아닌 값은 꺼짐", str.dry_run === false, JSON.stringify(str));
+    chk("REST 본문 없음 → 꺼짐", parse({ params: { id: "x" } }).lanes_only === false, "");
+    chk("REST 본문의 값을 읽는다", parse({ params: { id: "x" }, body: { lanes_only: true } }).lanes_only === true, "");
+    chk("REST 불리언이 아닌 값은 꺼짐", parse({ params: { id: "x" }, body: { lanes_only: "true" } }).lanes_only === false, "");
+    const rest = cronRunPlan.expose.rest[0];
+    chk("계획은 GET 이다 — 쓰기가 아니고 읽기 전용 세션에서도 된다", rest.method === "GET" && rest.paths[0] === "/api/ui/cron/:id/run-plan", JSON.stringify(rest.paths));
+    chk("REST 쿼리의 값을 읽는다", rest.parse({ params: { id: "x" }, query: { lanes_only: "true" } }).lanes_only === true && rest.parse({ params: { id: "x" }, query: {} }).lanes_only === false, "");
+    //  옛 코어는 모르는 인자를 떨구고 실제로 실행한다 — 미리보기를 실행 도구의 인자로 얹으면 배포·롤백 중 미리보기가 곧 실행이 된다.
+    chk("미리보기는 실행 도구의 인자가 아니다", !("dry_run" in cronRunNow.input), Object.keys(cronRunNow.input).join(","));
   }
 } catch (e) {
   bad("예외", (e && e.stack) || String(e));
