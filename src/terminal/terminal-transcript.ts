@@ -354,6 +354,31 @@ function cosine(a: number[], b: number[]): number {
   return (na && nb) ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
 }
 interface Doc { sessionId: string; label: string; projectId: number; text: string; ts: string; lexScore: number; lexMatched: boolean; sim: number; }
+// 사람이 기다리는 검색이다 — 임베딩은 이 예산 안에서만 기다린다(요청당 시간 상한 기본 300초와 별개). 임베딩 서버가 백필로 밀려 있으면 몇 분씩 매달리기 때문이다.
+//  넘기면 모은 데까지로 답한다. 이미 보낸 요청은 끊지 않는다 — 늦게 온 프롬프트 벡터는 기억해 다음 검색이 쓴다.
+export const PROMPT_EMBED_BUDGET_MS = 20_000;
+/** 시험 전용 — 이 글의 벡터를 기억하고 있나. */
+export const __promptEmbedded = (text: string): boolean => promptEmbedCache.has(text);
+/** 질의 벡터를 얻고, 있으면 texts() 의 프롬프트 벡터를 예산 안에서 기억에 채운다. 질의 벡터를 못 얻으면 null(렉시컬로 답한다). */
+export async function embedPromptsWithin(provider: EmbeddingProvider, query: string, texts: () => string[], budgetMs = PROMPT_EMBED_BUDGET_MS): Promise<number[] | null> {
+  const until = Date.now() + budgetMs;
+  const inTime = async <T>(p: Promise<T>): Promise<T | null> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), Math.max(0, until - Date.now())); });
+    try { return await Promise.race([p, late]); } finally { if (timer) clearTimeout(timer); }
+  };
+  let qEmb: number[] | null = null;
+  try { qEmb = (await inTime(provider.embed([query])))?.[0] || null; } catch { qEmb = null; }
+  if (!qEmb) return null;
+  const uniq = [...new Set(texts())];
+  const BATCH = 128;
+  for (let i = 0; i < uniq.length && Date.now() < until; i += BATCH) {
+    const chunk = uniq.slice(i, i + BATCH);
+    const stored = provider.embed(chunk).then((vecs) => { chunk.forEach((t, j) => { if (vecs[j]) cacheEmb(t, vecs[j]); }); });
+    try { await inTime(stored); } catch { /* 이 배치 스킵 → 렉시컬만 */ }
+  }
+  return qEmb;
+}
 export async function searchPromptsHybrid(sessions: Array<{ id: string; label: string; dir: string; projectId?: number }>, q: string, provider: EmbeddingProvider, limit = 120, embedBudget = 500): Promise<{ results: SearchHit[]; total: number; truncated: boolean; partial: boolean; semantic: boolean }> {
   const query = (q || "").trim();
   if (!query) return { results: [], total: 0, truncated: false, partial: false, semantic: false };
@@ -369,20 +394,10 @@ export async function searchPromptsHybrid(sessions: Array<{ id: string; label: s
   }
   if (!docs.length) return { results: [], total: 0, truncated: false, partial: false, semantic: true };
   // 쿼리 임베딩(실패 시 렉시컬로 폴백 신호 = semantic:false 로 라우트가 처리하도록 예외 throw 하지 않고 빈 sim)
-  let qEmb: number[] | null = null;
-  try { qEmb = (await provider.embed([query]))[0] || null; } catch { qEmb = null; }
-  if (qEmb) {
-    // 캐시 안 된 프롬프트를 최신순으로 예산만큼 임베딩(배치) — 첫 검색만 비용, 이후 캐시.
-    const uncached = docs.filter((d) => d.text && !promptEmbedCache.has(d.text))
-      .sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, embedBudget).map((d) => d.text);
-    const uniq = [...new Set(uncached)];
-    const BATCH = 128;
-    for (let i = 0; i < uniq.length; i += BATCH) {
-      const chunk = uniq.slice(i, i + BATCH);
-      try { const vecs = await provider.embed(chunk); chunk.forEach((t, j) => { if (vecs[j]) cacheEmb(t, vecs[j]); }); } catch { /* 이 배치 스킵 → 렉시컬만 */ }
-    }
-    for (const d of docs) { const e = promptEmbedCache.get(d.text); if (e) d.sim = cosine(qEmb, e); }
-  }
+  //  캐시 안 된 프롬프트를 최신순으로 예산만큼 임베딩(배치) — 첫 검색만 비용, 이후 캐시.
+  const qEmb = await embedPromptsWithin(provider, query, () => docs.filter((d) => d.text && !promptEmbedCache.has(d.text))
+    .sort((a, b) => (b.ts || "").localeCompare(a.ts || "")).slice(0, embedBudget).map((d) => d.text));
+  if (qEmb) for (const d of docs) { const e = promptEmbedCache.get(d.text); if (e) d.sim = cosine(qEmb, e); }
   // 채널별 랭크 → RRF 융합. 후보 = 렉시컬 전부(AND) ∪ 시맨틱 상위(SIM_FLOOR 이상).
   const byLex = docs.filter((d) => d.lexMatched).sort((a, b) => b.lexScore - a.lexScore);
   const bySim = docs.filter((d) => d.sim >= SIM_FLOOR).sort((a, b) => b.sim - a.sim).slice(0, SEM_TOPN);
