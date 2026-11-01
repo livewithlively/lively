@@ -14,9 +14,12 @@ import { distillRunAsk, distillRunBody } from './lib/distill-run-ask.js';
  *  ⚠ 계획은 실행 경로(/run)가 아니라 이름이 다른 경로(/run-plan)로 읽는다 — 옛 게이트웨이는 모르는 인자를 떨구고 실제로 실행한다(cron.ts 주석).
  */
 export async function confirmDistillRun(jobId: string): Promise<{ lanes_only?: true } | null> {
-  const r: any = await api(`/api/ui/cron/${encodeURIComponent(jobId)}/run-plan`);
+  const STOP = '무엇이 나갈지 읽지 못해 실행하지 않았습니다';
+  let r: any;
+  try { r = await api(`/api/ui/cron/${encodeURIComponent(jobId)}/run-plan`); }
+  catch (e) { throw new Error(`${STOP} — ${(e as Error).message}`); }
   const a = distillRunAsk(r?.plan);
-  if (a.ask === 'unknown') throw new Error('무엇이 나갈지 읽지 못해 실행하지 않았습니다');
+  if (a.ask === 'unknown') throw new Error(STOP);
   if (a.ask === 'none') return distillRunBody(a, { confirmed: true });
   const restLine = a.rest ? [`남은 ${fmtNum(a.rest)}건은 다음 실행부터 이어서 나갑니다.`] : [];
 

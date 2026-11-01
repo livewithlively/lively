@@ -291,7 +291,7 @@ export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
  *  (#5235) 증류까지 도는 경우 기본 기준으로 함께 나갈 자료를 누르기 전에 묻는다 — distillJobId 가 그 판정을 읽을 잡이다.
  *   ⚠ 지금 있는 자료로 답한다. 이번 수집이 새로 가져올 자료는 세지 못한다(그래서 툴팁이 그 사실을 함께 말한다).
  */
-function runNowButtons(collectors: any[], jobs: any[], after: () => void, distillJobId?: string): HTMLElement {
+export function runNowButtons(collectors: any[], jobs: any[], after: () => void, distillJobId?: string): HTMLElement {
   const ids = Array.from(new Set(jobs.filter((j) => j && j.id && j.any_enabled).map((j) => String(j.id))));
   const nc = collectors.length, nd = ids.length;
   const label = nc && nd ? '지금 수집·증류' : nc ? '지금 수집' : '지금 증류';

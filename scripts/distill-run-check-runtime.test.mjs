@@ -10,6 +10,7 @@
 //  Q7 ★ 옛 게이트웨이(계획 경로 404) → 창 없이 **실행 0건** · 실패 알림. 배포·롤백 중 새 화면이 옛 코어를 만나는 자리다.
 //  Q8 ★ 계획 응답에 plan 이 없음(200) → 실행 0건 · 실패 알림. «모름» 을 «물을 것 없음» 으로 접지 않는다.
 //  Q9 Esc 로 닫아도 취소다.
+//  Q10 [지금 수집·증류] 도 같다 — 취소 → 요청 0건 · 체크 끈 채 실행 → lanes_only · ★ 옛 게이트웨이 → 요청 0건 · 알림.
 //
 // 왜 런타임인가: 취소 뒤 실행이 안 나가는지 · 체크 기본값이 무엇인지는 소스 모양으로 안 보인다. 소스 정규식 시험은 이 동작을 뒤집는
 //  변이 다섯에 전부 초록이었다(#5235 격리 리뷰). 카드와 확인창을 esbuild 로 묶어 헤드리스 크롬에 올리고 fetch 만 대역으로 준다.
@@ -34,7 +35,7 @@ if (!chrome) {
 // 실제 소스 그대로 — 대역은 fetch 하나뿐.
 const bundle = buildSync({
   stdin: {
-    contents: "export { stageJobCard } from './web/context-stage-job.ts';\nexport { confirmDistillRun } from './web/distill-run-check.ts';\n",
+    contents: "export { stageJobCard } from './web/context-stage-job.ts';\nexport { confirmDistillRun } from './web/distill-run-check.ts';\nexport { runNowButtons } from './web/context-map.ts';\n",
     resolveDir: ROOT, loader: "ts", sourcefile: "distill-run-check-entry.ts",
   },
   bundle: true, format: "iife", globalName: "DRC", platform: "browser", target: "es2020",
@@ -47,13 +48,14 @@ writeFileSync(bundlePath, bundle);
 const html = `<!doctype html><html lang="en"><meta charset="utf-8"><style>body{display:none}</style><body>
 <div id="host"></div><div id="toasts"></div><pre id="out"></pre>
 <script>
-window.__runs = []; window.__plans = 0; window.__plan = null;
+window.__runs = []; window.__plans = 0; window.__plan = null; window.__runNow = [];
 const J = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
 window.fetch = async (url, opts = {}) => {
   const u = String(url);
   const m = String(opts.method || 'GET').toUpperCase();
   if (/\\/api\\/ui\\/cron\\/[^/?]+\\/run-plan/.test(u)) { window.__plans++; return J(window.__plan.body, window.__plan.status); }
   if (/\\/api\\/ui\\/cron\\/[^/?]+\\/run/.test(u) && m === 'POST') { window.__runs.push(String(opts.body || '')); return J({ status: 'ok' }); }
+  if (u.includes('/api/ui/org/pipeline/run-now') && m === 'POST') { window.__runNow.push(JSON.parse(opts.body || '{}')); return J({ runs: [], distill_after: [] }); }
   if (u.includes('/api/ui/cron')) return J({ jobs: [{ id: 'distill-sources-headless', label: 'x', action: 'distill_sources_headless', params: {}, interval_sec: 1800, enabled: true, note: '', last_run_at: null, last_status: null, created_by: 'alice', sort: 0 }] });
   if (u.includes('/api/ui/me/headless')) return J({ runner: { member: 'alice', source: 'db' } });
   if (u.includes('/api/ui/dash/members')) return J({ members: [{ id: 'alice', display_name: 'Alice Kim' }] });
@@ -63,6 +65,8 @@ window.fetch = async (url, opts = {}) => {
 <script src="drc.js"></script>
 <script>
 const MK = ['DRC' + 'RESULT:', ':DRC' + 'END'];
+//  알림 문구는 한국어다 — 덤프가 엔티티·인코딩을 거쳐도 깨지지 않게 \\u 로 적어 둔다.
+const asc = (s) => String(s).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
 (async () => {
   const R = {};
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -96,7 +100,23 @@ const MK = ['DRC' + 'RESULT:', ':DRC' + 'END'];
     await wait(60);
     R[name] = Object.assign(info, { runs: window.__runs.slice(), plans: window.__plans,
       left: !!document.querySelector('.ov-confirm'), btnBack: !btn.disabled,
-      failed: [...document.querySelectorAll('#toasts .toast')].some((t) => t.classList.contains('coral')) });
+      failed: [...document.querySelectorAll('#toasts .toast')].some((t) => t.classList.contains('coral')),
+      toast: [...document.querySelectorAll('#toasts .toast')].map((t) => asc(t.textContent)).join(' | ') });
+  };
+  //  [지금 수집·증류] — 지도 없이 단추만 세운다(수집기 없음 · 증류 자동 실행 하나).
+  const sceneNow = async (name, plan, act) => {
+    window.__runNow = []; window.__plans = 0; window.__plan = PLAN[plan];
+    document.getElementById('toasts').replaceChildren();
+    const wrap = DRC.runNowButtons([], [{ id: 'distill-lanes', any_enabled: true }], () => {}, 'distill-lanes');
+    host.replaceChildren(wrap);
+    const btn = wrap.querySelector('button');
+    btn.click();
+    await wait(60);
+    const box = document.querySelector('.ov-confirm');
+    if (box) await act(box);
+    await wait(60);
+    R[name] = { hadDialog: !!box, posts: window.__runNow.slice(), plans: window.__plans, btnBack: !btn.disabled,
+      failed: [...document.querySelectorAll('#toasts .toast')].some((t) => t.classList.contains('coral')) };
   };
   const ok = (box) => box.querySelector('.btn-primary').click();
   const cancel = (box) => box.querySelector('.btn-ghost').click();
@@ -109,6 +129,9 @@ const MK = ['DRC' + 'RESULT:', ':DRC' + 'END'];
   await scene('q7', 'gone', async () => {});
   await scene('q8', 'empty', async () => {});
   await scene('q9', 'choose', async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
+  await sceneNow('n1', 'choose', cancel);
+  await sceneNow('n2', 'choose', ok);
+  await sceneNow('n3', 'gone', async () => {});
   document.getElementById('out').textContent = MK[0] + JSON.stringify(R) + MK[1];
 })().catch((e) => { document.getElementById('out').textContent = MK[0] + JSON.stringify({ error: String((e && e.stack) || e) }) + MK[1]; });
 </script>`;
@@ -147,11 +170,23 @@ assert.deepEqual(R.q6.runs, ["{}"], "Q6 실행하면 그대로 나간다");
 assert.equal(R.q7.hadDialog, false, "Q7 옛 게이트웨이 — 물을 재료가 없다");
 assert.deepEqual(R.q7.runs, [], "★ Q7 옛 게이트웨이를 만나면 실행하지 않는다");
 assert.equal(R.q7.failed, true, "★ Q7 실패를 알린다 — 조용히 멈추지 않는다");
+const un = (s) => s.replace(/\\u([0-9a-f]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+assert.match(un(R.q7.toast), /실행하지 않았습니다/, "Q7 안전 정지다 — 실행하다 실패한 것이 아니라 안 돌렸다고 말한다");
 assert.equal(R.q7.btnBack, true, "Q7 단추가 돌아온다");
 
 assert.deepEqual(R.q8.runs, [], "★ Q8 계획이 없으면 실행하지 않는다 — «모름» 을 «물을 것 없음» 으로 접지 않는다");
 assert.equal(R.q8.failed, true, "★ Q8 실패를 알린다");
 
 assert.deepEqual(R.q9.runs, [], "Q9 Esc 도 취소다");
+
+for (const k of ["n1", "n2", "n3"]) assert.equal(R[k].plans, 1, `${k} 계획을 한 번 읽었다`);
+assert.equal(R.n1.hadDialog, true, "Q10 [지금 수집·증류] 도 묻는다");
+assert.deepEqual(R.n1.posts, [], "★ Q10 취소하면 파이프라인이 안 돈다");
+assert.equal(R.n1.btnBack, true, "Q10 단추가 돌아온다");
+assert.equal(R.n2.posts.length, 1, "Q10 실행하면 한 번 보낸다");
+assert.equal(R.n2.posts[0].lanes_only, true, "★ Q10 체크를 끈 채 실행 → 증류기 몫만");
+assert.deepEqual(R.n2.posts[0].distill_job_ids, ["distill-lanes"], "Q10 증류 잡을 함께 보낸다");
+assert.deepEqual(R.n3.posts, [], "★ Q10 옛 게이트웨이를 만나면 파이프라인을 안 돌린다");
+assert.equal(R.n3.failed, true, "★ Q10 실패를 알린다");
 
 console.log("ok  증류 확인창 — 취소·체크 기본값·옛 게이트웨이에서 실행이 안 나간다");

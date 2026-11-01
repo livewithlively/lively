@@ -12,6 +12,8 @@ const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/items/store.js`);
 const { upsertDistiller } = await import(`${DIST}/org/store/ingest.js`);
 const { cronCapabilities } = await import(`${DIST}/capabilities/cron.js`);
+const { DISTILL_ACTIONS } = await import(`${DIST}/scheduler/actions/distill.js`);
+const { CRON_ACTION_KEYS } = await import(`${DIST}/scheduler/registry.js`);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -331,6 +333,7 @@ try {
     chk("REST 쿼리의 값을 읽는다", rest.parse({ params: { id: "x" }, query: { lanes_only: "true" } }).lanes_only === true && rest.parse({ params: { id: "x" }, query: {} }).lanes_only === false, "");
     //  옛 코어는 모르는 인자를 떨구고 실제로 실행한다 — 미리보기를 실행 도구의 인자로 얹으면 배포·롤백 중 미리보기가 곧 실행이 된다.
     chk("미리보기는 실행 도구의 인자가 아니다", !("dry_run" in cronRunNow.input), Object.keys(cronRunNow.input).join(","));
+    chk("증류 액션 목록이 실제 액션을 가리킨다", [...DISTILL_ACTIONS].every((a) => CRON_ACTION_KEYS.includes(a)), [...DISTILL_ACTIONS].join(","));
   }
 } catch (e) {
   bad("예외", (e && e.stack) || String(e));
