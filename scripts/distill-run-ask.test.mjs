@@ -63,6 +63,9 @@ test('W3 체크를 끈 채 실행하면 증류기 몫만 나간다 — 읽지 �
   assert.match(check, /el\('input', \{ type: 'checkbox', id: 'distill-run-unassigned' \}\)/);
   assert.doesNotMatch(check, /id: 'distill-run-unassigned', checked/, '기본값이 켜져 있다');
   assert.match(check, /return withRest\.checked \? \{\} : \{ lanes_only: true \};/);
+  //  이번 1회만 뺀다 — 켜 둔 자동 실행은 다음 주기에 그대로 내보낸다. 그 사실을 숨기면 «뺐다» 고 믿게 된다.
+  assert.match(check, /이번 실행에서만 뺍니다/);
+  assert.match(check, /다음 주기에 나갑니다/);
 });
 
 // ── 사실과 반대이던 문구가 돌아오지 않는다 ─────────────────────────────────────

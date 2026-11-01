@@ -35,7 +35,8 @@ export async function confirmDistillRun(jobId: string): Promise<{ lanes_only?: t
     lines: [`증류기 ${fmtNum(a.laneCount)}개가 자료 ${fmtNum(a.laneSources)}건을 읽습니다.`, ...restLine],
     extra: el('label', { class: 'ov-confirm-opt', for: 'distill-run-unassigned' }, withRest,
       el('span', { class: 'n', text: '맡은 증류기가 없는 자료도 함께 실행합니다' }),
-      el('span', { class: 'h', text: '끄면 증류기 몫만 실행합니다' })),
+      //  (#5235) 이번 1회만 뺀다는 것을 말한다 — «뺐다» 고 믿었는데 켜 둔 자동 실행이 다음 주기에 그대로 내보내면 같은 사고다.
+      el('span', { class: 'h', text: '끄면 이번 실행에서만 뺍니다. 자동 실행이 켜져 있으면 다음 주기에 나갑니다' })),
     confirmText: '실행',
   });
   if (!ok) return null;
