@@ -30,7 +30,7 @@ const aiRunInput = {
   prompt: z.string().min(1).max(PROMPT_MAX).describe("AI 에게 줄 지시(전문). 단발이면 LLM 한 번, 에이전트 작업이면 하네스(claude -p)의 첫 말"),
   system: z.string().max(20_000).optional().describe("시스템 지시(선택)"),
   schema: z.record(z.unknown()).optional().describe("결과 JSON Schema(선택) — 주면 게이트웨이가 형식 지시를 붙이고 답을 검사한다. 어긋나면 «형식에 맞게 다시» 1회, 그래도 어긋나면 원문을 붙여 실패. 맞으면 result.json"),
-  job: z.string().regex(JOB_NAME_RE).optional().describe("작업 이름(매니페스트 ai.jobs 에 선언한 것) — 작업별 실행 계정을 쓴다. 생략하면 앱별 > 워크스페이스 기본값. 그 작업이 ai.instructions 를 선언했으면 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 지시 파일을 접수 때 읽어 시스템 지시로 싣는다 — 에이전트 작업은 그때 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다. 그 작업이 ai.mcp_only 에 있으면 에이전트 작업은 하네스 내장 도구(셸 · 파일 · 웹)를 끄고 라이블리 MCP 도구만 쓴다 — job 을 생략하거나 목록에 없는 작업이면 내장 도구가 열린다"),
+  job: z.string().regex(JOB_NAME_RE).optional().describe("작업 이름(매니페스트 ai.jobs 에 선언한 것) — 작업별 실행 계정을 쓴다. 생략하면 앱별 > 워크스페이스 기본값. 그 작업이 ai.instructions 를 선언했으면 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 지시 파일을 접수 때 읽어 시스템 지시로 싣는다 — 에이전트 작업은 그때 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다. 그 작업이 ai.mcp_only 에 있으면 에이전트 작업은 하네스 내장 도구(셸 · 파일 · 웹)를 끄고 라이블리 MCP 도구만 쓴다 — job 을 생략하거나 목록에 없는 작업이면 내장 도구가 열린다. 그 작업이 ai.tools 에 도구 목록을 두었으면 에이전트 작업의 라이블리 토큰은 그 목록 안의 도구만 쓴다(앱 동의와 둘 다) — job 을 생략하거나 목록을 두지 않은 작업이면 앱 동의 전체다"),
   model: z.string().regex(MODEL_RE).optional().describe("모델(선택). 단발은 워크스페이스 기본 모델, 에이전트 작업은 하네스 기본"),
   label: z.string().optional().describe(`짧은 이름(목록에 보인다). ${softCapHint(SOFT_CAPS.app_ai_run!.label!)}`),
   files: z.array(z.string().max(512)).max(50).optional().describe("관련 파일(작업 폴더 기준) — 주면 **에이전트 작업**(작업 컨테이너 · 파일 · 도구)이 된다"),

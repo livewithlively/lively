@@ -9,7 +9,7 @@ import { AuditWriteError, collectSubjectKeys, persistAccessBestEffort, persistAc
 import { getSourceConfig, listSourceConfigs, resolveSourceName, refreshSources } from "../db/sources.js";
 import { refreshPolicy, getSourcePolicy, resolveMaskedAttrs, getMaskStyleMap, getSubjectColSet, resolveSubjectAttrs, resolveUnmaskKeys, peekMaskedSrcKeyToCol } from "../db/policy.js";
 import { planMaskTargets, applyRowMasking, type FieldMeta, type MaskStyle } from "../db/mask.js";
-import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess, type LivelyUser } from "../context.js";
+import { resolveUser, requireDbSource, canAccessDbSource, hasAnyDbAccess, confinedToAppTools, type LivelyUser } from "../context.js";
 import { requireAppTool } from "../apps/principal.js";
 
 import { SELF_SOURCE } from "../db/self-source.js";
@@ -19,11 +19,12 @@ import { suggestSimilarNames, filterTableNames } from "../db/schema-hint.js";
 import { execReadQuery, enrichSchemaError, requireSelfSourceAllowed, unknownTableMessage, type DbQueryResult } from "../db/query-exec.js";
 
 /**
- * #4891 — 앱 서버 급 주체(앱 서버 코드가 부린 사람 홈 없는 작업 AI)는 DB 도구도 앱 도구 게이트(그 앱 동의의 도구 목록)를 탄다.
- *  이 셋은 능력 레지스트리 밖이라 scope(db · db:<소스>)만 봐 왔다. 앱 세션 토큰(사람의 하네스)은 종전대로 scope 만 — 새 길만 닫는다(격리 리뷰).
+ * 앱 도구 게이트로만 다니는 주체(context.confinedToAppTools — #4891 앱 서버 급 주체 · 도구 상한이 실린 앱 AI 작업 토큰)는 DB 도구도 그 게이트
+ *  (그 앱 동의의 도구 목록 · 도구 상한)를 탄다. 이 셋은 능력 레지스트리 밖이라 scope(db · db:<소스>)만 봐 왔다. 앱 세션 토큰(사람의 하네스)은
+ *  종전대로 scope 만 — 새 길만 닫는다(격리 리뷰). 이름은 #4891 때 지은 것이다.
  */
 export async function requireDbToolForAppServer(user: LivelyUser, name: string): Promise<void> {
-  if (user.appServer === true) await requireAppTool(user, name);
+  if (confinedToAppTools(user)) await requireAppTool(user, name);
 }
 
 // db 직접등록 툴(capability 레지스트리 밖) — 등록 정의 단일 출처(#1313 R24).

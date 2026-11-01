@@ -108,6 +108,9 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     //  «라이블리 MCP 만»(ai.mcp_only) — 앱 판 지시와 같은 판에서 읽고 · 이어받기 · 형식 재시도는 원래 작업 행의 값.
     mcpOnly: async (app, who, job) => (await import("../apps/app-job-mcp-only.js")).resolveJobMcpOnly(app, who, job),
     jobMcpOnly: async (jobId) => (await import("../agent-jobs/store.js")).agentJobMcpOnly(jobId),
+    //  작업별 라이블리 도구 허용 목록(ai.tools) — 같은 판에서 읽고 · 이어받기는 겹치는 것만 · 형식 재시도는 원래 작업 행의 목록.
+    toolAllowlist: async (app, who, job) => (await import("../apps/app-job-tools.js")).resolveJobTools(app, who, job),
+    jobToolAllowlist: async (jobId) => (await import("../agent-jobs/store.js")).agentJobToolAllowlist(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,

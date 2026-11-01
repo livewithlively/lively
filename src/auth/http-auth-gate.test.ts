@@ -34,6 +34,36 @@ t("G3 앱 세션 토큰 · 사람 · 신원 없음은 어느 문에서도 그대
   for (const u of [appSession, human, undefined]) assert.deepEqual(MODES.map((m) => appPrincipalGate(u, m)), ["next", "next", "next"], JSON.stringify(u));
 });
 
+// ── 도구 허용 목록(ai.tools) T29 — 도구 상한이 실린 주체(작업 AI 의 앱 토큰)는 앱 도구 게이트를 타는 문(능력 REST · /mcp)에서만 받는다 ──
+//  이게 틀리면: 상한을 받은 작업 AI 토큰이 세션 · 파일 · 프로젝트 · 노드 · /install 처럼 앱 도구 게이트를 타지 않는 문으로 상한 밖의 일을 한다.
+const ceiled = who({ appId: "crm", toolCeiling: ["knowledge_search"] });         // 상한이 실린 앱 토큰(앱 서버 급 아님)
+const ceiledEmpty = who({ appId: "crm", toolCeiling: [] });                     // 빈 상한 — 라이블리 도구 0
+const ceiledServer = who({ appId: "crm", appServer: true, toolCeiling: ["store_sql"] });
+
+t("T29 도구 상한이 실린 앱 토큰 — 능력 REST(cap) · /mcp 는 그대로(next) · 그 밖의 문은 거부(deny) — 앱 서버 급 주체와 같은 대우", () => {
+  assert.deepEqual(MODES.map((m) => appPrincipalGate(ceiled, m)), ["next", "next", "deny"]);
+  assert.deepEqual(MODES.map((m) => appPrincipalGate(ceiled, m)), MODES.map((m) => appPrincipalGate(jobAi, m)), "앱 서버 급 주체와 같은 판정");
+});
+
+t("T29 빈 상한([])도 상한이다 — 그 밖의 문은 거부", () => {
+  assert.deepEqual(MODES.map((m) => appPrincipalGate(ceiledEmpty, m)), ["next", "next", "deny"]);
+});
+
+t("T29 상한이 앱 서버 급 표시와 함께여도 같은 판정(next · next · deny)", () => {
+  assert.deepEqual(MODES.map((m) => appPrincipalGate(ceiledServer, m)), ["next", "next", "deny"]);
+});
+
+t("T29 상한이 실린 주체는 앱 없이도 그 밖의 문에서 거부 — 상한은 «toolCeiling 이 있음» 하나로 가른다", () => {
+  assert.deepEqual(MODES.map((m) => appPrincipalGate(who({ toolCeiling: ["knowledge_search"] }), m)), ["next", "next", "deny"]);
+});
+
+t("T29 상한이 없는 일반 앱 토큰 · 사람은 종전대로 어느 문에서나 next(무회귀) — 상한 칸만 다른 같은 주체와 대조", () => {
+  for (const u of [appSession, human]) {
+    assert.deepEqual(MODES.map((m) => appPrincipalGate(u, m)), ["next", "next", "next"], JSON.stringify(u));
+    assert.equal(appPrincipalGate({ ...u, toolCeiling: ["x"] }, "deny"), "deny", `같은 주체에 상한만 실으면 거부(관측 장치): ${JSON.stringify(u)}`);
+  }
+});
+
 t("G4 문 배선 — /mcp 는 mcp 갈래 · /install 은 deny · 능력 REST 만 cap · 그 밖 sessionOrBearer 는 deny", () => {
   const SRC = readFileSync(new URL("../../src/auth/http-auth.ts", import.meta.url), "utf8");
   const mcp = SRC.slice(SRC.indexOf("export function bearerWithResourceMetadata("), SRC.indexOf("export function sessionOrBearer("));
@@ -72,11 +102,11 @@ t("G6 표시가 토큰까지 가는 사슬 — 작업 AI 토큰 옵션(plan.jobA
   const read = (rel: string): string => readFileSync(new URL(`../../src/${rel}`, import.meta.url), "utf8");
   //  #5081 — 공용 시트 작업도 같은 사슬을 탄다: 표시(shared)가 토큰 옵션까지 가고, 토큰 주체는 plan.jobIdentityMember(공용 시트면 보낸 사람)다.
   const live = read("agent-jobs/live.ts");
-  assert.match(live, /const t = await mintAppToken\(who, job\.app_id, "agent-job", jobAppTokenOpts\(job, ttlSec, shared\)\);/);
+  assert.match(live, /const t = await mintAppToken\(who, job\.app_id, "agent-job", \{ \.\.\.jobAppTokenOpts\(job, ttlSec, shared\), toolCeiling \}\);/);
   assert.match(live, /const who = jobIdentityMember\(job, shared\);/);
   assert.match(read("apps/principal.ts"), /\.\.\.\(opts\.appServerPrincipal === true \? \{ appServerPrincipal: true \} : \{\}\),/);
   const tok = read("org/store/tokens.ts");
-  assert.match(tok, /input\.followMemberScopes === true, input\.appServerPrincipal === true\]/);
+  assert.match(tok, /input\.followMemberScopes === true, input\.appServerPrincipal === true, \.\.\.\(ceiling != null \? \[ceiling\] : \[\]\)\]/);
   assert.match(tok, /\.\.\.\(appServer \? \{ appServer: true as const \} : \{\}\),/);
   assert.match(read("ai-runs/live.ts"), /svc\.enqueueAgentJob\(ai\.agentJobOfRun\(j, \{/);
 });
