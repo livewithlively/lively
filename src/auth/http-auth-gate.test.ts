@@ -102,7 +102,7 @@ t("G6 표시가 토큰까지 가는 사슬 — 작업 AI 토큰 옵션(plan.jobA
   const read = (rel: string): string => readFileSync(new URL(`../../src/${rel}`, import.meta.url), "utf8");
   //  #5081 — 공용 시트 작업도 같은 사슬을 탄다: 표시(shared)가 토큰 옵션까지 가고, 토큰 주체는 plan.jobIdentityMember(공용 시트면 보낸 사람)다.
   const live = read("agent-jobs/live.ts");
-  assert.match(live, /const t = await mintAppToken\(who, job\.app_id, "agent-job", \{ \.\.\.jobAppTokenOpts\(job, ttlSec, shared\), toolCeiling \}\);/);
+  assert.match(live, /const t = await mintAppToken\(who, job\.app_id, "agent-job", \{ \.\.\.jobAppTokenOpts\(job, ttlSec, shared \|\| appServerOwn\), toolCeiling \}\);/);
   assert.match(live, /const who = jobIdentityMember\(job, shared\);/);
   assert.match(read("apps/principal.ts"), /\.\.\.\(opts\.appServerPrincipal === true \? \{ appServerPrincipal: true \} : \{\}\),/);
   const tok = read("org/store/tokens.ts");

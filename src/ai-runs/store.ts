@@ -287,7 +287,8 @@ export async function tokensUsedTodayByApp(appId: string): Promise<number> {
 }
 /**
  * 오늘(UTC) 앱 서버가 본인 구독으로 보낸 실행이 쓴 토큰(#1639 · plan.isAppServerOwn · 공용 시트로 돈 실행은 뺀다) — 구독 작업은 프록시를 지나지 않아 org_app_llm_call 에
- *  안 남는다. 끝난 실행이 행에 적은 입력 + 출력만 센다(도는 중인 실행은 아직 값이 없다 · 캐시 토큰은 행에 없다).
+ *  안 남는다. 실행 행의 입력 + 출력 칸만 센다 — 캐시 토큰(result.usage 안) · 도는 중인 실행 · 보고 없이 끝난 실행(시간 초과 · 취소)은 안 들어가 프록시 합(네 종류)보다 적게
+ *  센다. 구독은 워크스페이스 돈이 아니라서 앱이 뒤에서 쓰는 양의 바깥 끝만 잡는다.
  */
 export async function appServerOwnTokensToday(appId: string): Promise<number> {
   const r = await itemsPool.query(

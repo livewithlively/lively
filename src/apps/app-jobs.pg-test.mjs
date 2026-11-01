@@ -521,8 +521,13 @@ try {
   await q(`INSERT INTO org_session_state(id, owner, kind) VALUES('box-pgt-alice-aaaaaaaa','pgt-alice','human'),('box-pgt-alice-bbbbbbbb','pgt-alice','task')`);
   const viaOf = async (session) => (await capStart.handler({ app_id: "notes", route: "/api/jobs/run" }, person(), { source: "mcp", session })).id;
   const [noSession, humanS, taskS, unknownS, externalS] = [await viaOf(undefined), await viaOf("box-pgt-alice-aaaaaaaa"), await viaOf("box-pgt-alice-bbbbbbbb"), await viaOf("box-pgt-alice-cccccccc"), await viaOf("claude-1234")];
-  const flags = [await js.appJobUnattended(noSession), await js.appJobUnattended(humanS), await js.appJobUnattended(taskS), await js.appJobUnattended(unknownS), await js.appJobUnattended(externalS)];
-  chk("U1 능력 app_job_start — 세션 없음 · 사람 세션 · 외부 실행 id 는 false · 위탁 세션 · 모르는 세션은 true", JSON.stringify(flags) === JSON.stringify([false, false, true, true, false]), JSON.stringify(flags));
+  //  작업 AI 의 토큰 — 세션을 안 실어도 그 토큰으로 정해진다(그 작업 행의 토큰 지문 앞자리를 실은 주체).
+  const JOB_TOK = "ab12cd34ef56";
+  await q(`INSERT INTO org_agent_job(status, requester, account_kind, account_member, cwd, prompt, timeout_sec, mcp_token_hash) VALUES('running','pgt-alice','subscription','pgt-alice','/work/shared/project/1','일',600,$1)`, [JOB_TOK + "0".repeat(52)]);
+  const viaJobToken = (await capStart.handler({ app_id: "notes", route: "/api/jobs/run" }, { ...person(), tokenHashPrefix: JOB_TOK }, { source: "mcp" })).id;
+  await q(`DELETE FROM org_agent_job WHERE mcp_token_hash=$1`, [JOB_TOK + "0".repeat(52)]);
+  const flags = [await js.appJobUnattended(noSession), await js.appJobUnattended(humanS), await js.appJobUnattended(taskS), await js.appJobUnattended(unknownS), await js.appJobUnattended(externalS), await js.appJobUnattended(viaJobToken)];
+  chk("U1 능력 app_job_start — 세션 없음 · 사람 세션 · 외부 실행 id 는 false · 위탁 세션 · 모르는 세션 · 작업 AI 의 토큰은 true", JSON.stringify(flags) === JSON.stringify([false, false, true, true, false, true]), JSON.stringify(flags));
   chk("U1b 표시는 칸 묶음 밖이다(행 읽기에 안 실린다 — 롤 창)", !("unattended" in (await js.getAppJob(taskS))) && !("unattended" in (await js.getAppJob(taskS, { view: true }))), Object.keys(await js.getAppJob(taskS)).join());
   await resetJobs();
   const marked = await svc.startAppJob({ app_id: "notes", route: "/api/jobs/run" }, person(), { unattended: true }, deps);

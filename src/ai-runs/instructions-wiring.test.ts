@@ -21,7 +21,7 @@ t("W3 판 부트 — 판이 받는 시스템 지시는 작업 행에 실린 글�
 });
 
 t("W4 접수가 지시를 작업 행으로 넘긴다 — 접수 매핑(agentJobOfRun)과 작업 행 쓰기(insertAgentJob)", () => {
-  assert.match(read("ai-runs/service.ts"), /sharedSeat: j\.sharedSeat, appInstructions: j\.appInstructions,/);
+  assert.match(read("ai-runs/service.ts"), /sharedSeat: j\.sharedSeat, appServerOwn: j\.appServerOwn, appInstructions: j\.appInstructions,/);
   assert.match(read("ai-runs/live.ts"), /svc\.enqueueAgentJob\(ai\.agentJobOfRun\(j, \{/);
   assert.match(read("agent-jobs/store.ts"), /const instr = typeof j\.appInstructions === "string" && j\.appInstructions !== "" \? j\.appInstructions : null;/);
 });

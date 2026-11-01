@@ -627,7 +627,7 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   asked = 0;
   assert.equal(await callerUnattended({ member: "alice" }, counted), false, "U6 세션을 안 실은 연결(claude.ai · 개인 PC) — 가릴 길이 없어 사람으로");
   assert.equal(await callerUnattended({ member: "alice", session: "  " }, counted), false, "U6 빈 값");
-  assert.equal(await callerUnattended({ member: "alice", session: "claude-11111111" }, counted), false, "U7 외부 실행 id — 게이트웨이가 띄우지 않은 하네스");
+  assert.equal(await callerUnattended({ member: "alice", session: "claude-11111111" }, counted), false, "U7 외부 실행 id — 라이블리가 띄우지 않은 Claude Code 의 프록시가 싣는 값(개인 PC 의 사람)");
   assert.equal(await callerUnattended({ member: "alice", session: "cursor-abc" }, counted), false, "U7 외부 실행 id(cursor)");
   assert.equal(asked, 0, "U6 · U7 은 세션을 조회하지 않는다");
   ok("S28 사람이 보지 않는 자리 — 작업 토큰 · 기계 세션 · 모르는 세션 · 조회 실패는 참 · 세션 없음 · 외부 실행 id 는 거짓");

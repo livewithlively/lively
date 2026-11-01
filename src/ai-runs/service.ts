@@ -18,9 +18,10 @@
 //   (제안자 = 물은 사람 · 그 사람이 못 보는 것은 작업도 못 본다 — agent-jobs/live.mintMcpToken). 시트 홈은 구성원 모두가 함께 쓰므로 앱 폴더에서만 돈다.
 //  앱 서버가 보낸 본인 요청(#1639 · 상민 2026-11-02): 앱 서버가 실은 사람 신원이 구독 주인 본인이면 그 구독으로 돈다 — 자리는 그 사람의 홈(Claude 로그인이
 //   거기 있다 · 홈 없는 자리엔 구독 로그인이 없다). 공용 시트와 같은 울타리다: 앱 폴더에서만 · 작업 AI 토큰은 앱 서버 급(그 사람 ∩ 앱 동의) · 홈에 키트를 새로 심지
-//   않는다 · 앱당 하루 토큰 상한을 탄다. 그 신원이 사람이 보지 않는 자리(위탁 · 상시 세션 · 작업 AI)에서 왔으면 거절한다(callerUnattended).
-//   ★ 백그라운드 작업(돌기 신원)당 실행 수 상한은 두지 않는다 — 사람당 동시(기본 2) · 앱당 분당(30) · 앱당 하루 토큰이 이미 묶고, 작업도 15분에 끝난다.
-//    앞단 서명 신원도 수명(최대 15분) 동안 같은 꼴이라 작업에만 건 상한은 그쪽을 못 막는다.
+//   않는다. 다른 것 둘 — 시트의 «기본 권한뿐» 조건은 없다(제 계정에 제 질문이다 · 높은 권한 구성원도 된다) · 앱당 하루 토큰 상한을 탄다(공용 시트는 안 탄다).
+//   그 신원이 사람이 보지 않는 자리(세션을 밝힌 위탁 · 상시 세션 · 작업 AI)에서 왔으면 거절한다(callerUnattended).
+//   ★ 백그라운드 작업(돌기 신원)당 실행 수 상한은 두지 않는다 — 사람당 동시(기본 2) · 앱당 분당(30) · 앱당 하루 토큰이 이미 묶는다. 작업 한 번은 15분이고 작업이 다음
+//    작업을 시작하면 깊이 3까지 이어진다. 앞단 서명 신원도 수명(최대 15분) 동안 같은 꼴이라 작업에만 건 상한은 그쪽을 못 막는다.
 //  관리자는 남의 실행의 상태·오류만 본다(지시·답은 보낸 사람 것 — 작업 컨테이너와 같은 규칙).
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
@@ -251,7 +252,10 @@ async function sessionTieOf(ctx: { session?: string }, who: { member: string; ki
  *  그 행에 남기고, 앱 서버가 그 신원으로 본인 구독 실행을 보낼 때 읽는다(AiRunDeps.appServerUnattended · plan.subscriptionRefusal).
  *  · 작업 AI 의 토큰 — 작업이 앱 도구를 거쳐 작업을 낳으면 사람 없이 구독이 끝없이 돈다(submitRun 머리의 거절이 못 보는 길이다 · 그 호출은 앱 서버 토큰으로 온다).
  *  · 사람 세션이 아닌 세션(위탁 · 크론 · 상시 · 앱 · 로그인) · 모르는 세션(조회 실패 포함) — sessionTieOf · subscriptionRefusal 의 tie 와 같은 자.
- *  · 세션을 안 실은 연결(claude.ai · 개인 PC)과 외부 실행 id(`claude-…` — 게이트웨이가 띄우지 않은 하네스)는 가릴 길이 없어 사람으로 본다(subscriptionRefusal 머리말 한계 ③과 같다).
+ *  · 세션을 안 실은 연결(claude.ai)은 가릴 길이 없어 사람으로 본다(subscriptionRefusal 머리말 한계 ③과 같다). 세션은 그 연결이 밝힌 값이라 밝히지 않으면 걸러지지 않는다.
+ *  · 외부 실행 id(`claude-…`)도 사람으로 본다. 라이블리가 띄우지 않은 Claude Code 의 MCP 프록시가 자기 세션 id 로 싣는 값이라(kit/cli/lively-mcp-gateway.mjs sessionHeaderValue)
+ *    개인 PC 에서 사람이 쓰는 가장 흔한 모양이다. 게이트웨이에 상태 행이 없어 사람과 자동화를 가릴 길이 없고, 막으면 그 사람이 자기 구독으로 자기 앱을 못 쓴다.
+ *    게이트웨이가 띄운 세션은 늘 `box-…` 를 실어 위탁 · 상시 세션은 여기 들지 않는다. ⚠ 사람의 앱 화면 경로(sessionTieOf)는 같은 id 를 «모르는 세션» 으로 거절한다 — 이 판정이 그보다 넓다.
  */
 export async function callerUnattended(c: { member: string; tokenHashPrefix?: string | undefined; session?: string | undefined }, d: Pick<AiRunDeps, "isJobToken" | "sessionTie">): Promise<boolean> {
   if (c.tokenHashPrefix && (await d.isJobToken(c.tokenHashPrefix))) return true;
@@ -394,7 +398,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //  #5081 공용 시트 — 지정(두 동의)이 있으면 시트 계정과 보낸 사람의 사실을 모은다. 켜져 있으면(plan.seatShared) 본인 · 초대 조건 대신 «활성 구성원» 을 본다.
   const seat = await seatTermsOf(settings, account, who, d);
   const sharedSeat = account.kind === "subscription" && !!seat && seatShared(seat.facts);
-  //  #1639 앱 서버가 보낸 본인 요청 — 공용 시트가 켜진 구독이면 공용 시트의 자리로 돈다(시트 홈 · 시트 상한). 사람이 보지 않는 자리에서 온 신원이면 아래에서 거절된다.
+  //  #1639 앱 서버가 보낸 본인 요청 — 사람이 보지 않는 자리에서 온 신원이면 아래에서 거절된다. 공용 시트가 켜진 구독이면 이 갈래가 아니다(시트 홈 · 시트 상한 · #5081 그대로).
   const appServerOwn = !sharedSeat && isAppServerOwn({ requester: who.member, requester_kind: who.kind, account_kind: account.kind, account_member: account.kind === "subscription" ? account.member : null });
   const unattended = appServerOwn && (await d.appServerUnattended(user));
   const refusal = subscriptionRefusal(account, { ...who, unattended }, await sessionTieOf(ctx, who, account, d), seat);
@@ -407,7 +411,7 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   //  #4891 — 앱 서버가 보낸 에이전트 작업(파일 · 도구)은 사람 홈 없는 작업 컨테이너에서 돈다(사람의 자격 · 토큰이 든 홈을 앱 서버 코드에 주지 않는다).
   //   작업 폴더는 그 앱 폴더뿐 — 프로젝트 폴더는 사람 경계(공개범위)다. 구독은 아래 두 예외 말고는 위에서 이미 거절됐다 — 한 겹 더 본다.
   //   #5081 예외 — 공용 시트는 앱 서버의 사람 대리 요청도 시트 계정의 홈(Claude 로그인)에서 돈다(홈 없는 자리엔 구독 로그인이 없다 · 상민 2026-10-28).
-  //   #1639 예외 — 앱 서버가 보낸 본인 요청도 그 사람의 홈(Claude 로그인)에서 돈다. 그 사람이 이 앱에 자기 구독을 걸었다(plan.accountSetRefusal — 본인만 건다).
+  //   #1639 예외 — 앱 서버가 보낸 본인 요청도 그 사람의 홈(Claude 로그인)에서 돈다. 실행 계정에 구독을 거는 것은 그 사람 본인이다(plan.accountSetRefusal).
   const homeless = executor === "job" && who.kind === "app_server" && !sharedSeat && !appServerOwn;
   if (homeless && account.kind !== "api_key") throw new HttpError(403, "앱 서버가 보낸 에이전트 작업은 워크스페이스 API 키로만 돕니다", { body: { code: ACCOUNT_UNAVAILABLE } });
   //  이어받기는 앞 실행의 작업 폴더를 그대로 쓴다 — 사람이 프로젝트 폴더에서 돌린 대화를 앱 서버가 · 공용 시트로 잇지 못한다(그 자리는 앱 폴더뿐이다).

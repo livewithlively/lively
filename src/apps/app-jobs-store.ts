@@ -87,7 +87,6 @@ export async function getAppJob(id: number, o: { view?: boolean } = {}): Promise
   return norm(r.rows[0] as Record<string, unknown> | undefined);
 }
 
-/** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(없으면 null). 칸 묶음(LIGHT) 밖이라 따로 읽는다 — 그 작업의 돌기 신원을 풀 때만. */
 /** #1639 이 작업의 사람 신원이 사람이 보지 않는 자리에서 왔나 — 칸이 아직 없으면(42703 · 롤 창) 아니다(칸이 없으면 그 표시를 단 행도 없다). */
 export async function appJobUnattended(id: number): Promise<boolean> {
   try {
@@ -99,6 +98,7 @@ export async function appJobUnattended(id: number): Promise<boolean> {
   }
 }
 
+/** #5053 앱 선언 MCP 도구가 시작한 작업의 권한 상한(없으면 null). 칸 묶음(LIGHT) 밖이라 따로 읽는다 — 그 작업의 돌기 신원을 풀 때만. */
 export async function jobScopeCeiling(id: number): Promise<string[] | null> {
   const r = await itemsPool.query(`SELECT scope_ceiling FROM org_app_job WHERE id=$1`, [id]);
   const v = (r.rows[0] as { scope_ceiling?: unknown } | undefined)?.scope_ceiling;

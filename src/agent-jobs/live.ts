@@ -16,7 +16,8 @@
 //   (items · context · memory)만 가진 전용 계정이어야 한다(ai-runs/plan.seatShared).
 //  #1639 앱 서버가 보낸 본인 구독 작업: 자리는 물은 사람 본인의 홈(로그인이 거기 있다), 작업 AI 의 토큰은 그 사람 ∩ 앱 동의 · 앱 서버 급이다 — 그 AI 를 부린 것은 앱
 //   서버 코드다. 키트 · git 자격을 새로 심지 않는다(launch.ts · launch-host.ts). 첫 줄의 한계는 여기도 같다 — 내장 도구가 열린 작업의 AI 는 그 사람의 Claude 로그인 ·
-//   (도커 실행면이 아니면) 홈에 닿는다. 그 사람이 이 앱에 자기 구독을 건 것이 그 신뢰의 근거이고(ai-runs/plan.accountSetRefusal — 본인만 건다), 앱이 ai.mcp_only 로 닫을 수 있다.
+//   (도커 실행면이 아니면) 홈에 닿는다. 공용 시트의 «기본 권한뿐» 조건도 없다. 앱 화면에서 보낸 구독 실행과 같은 신뢰이고, 근거는 실행 계정에 구독을 거는 것이 그 사람
+//   본인이라는 것이다(ai-runs/plan.accountSetRefusal). 내장 도구를 끄는 ai.mcp_only 는 앱이 고르는 칸이라 사람 쪽 보호가 아니다.
 import crypto from "node:crypto";
 import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
