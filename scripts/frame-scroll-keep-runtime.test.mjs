@@ -42,6 +42,10 @@ const DOCS = {
 // 자리 재기 — 문서 쪽 탐침(시험 전용). 칸 문서는 #m 의 자리를 잰다.
 const PROBE = `<script>addEventListener('message',function(e){if(e.data&&e.data.probe){var m=document.getElementById('m');`
   + `parent.postMessage({probe:1,y:m?m.scrollTop:scrollY,h:m?m.scrollHeight:document.documentElement.scrollHeight},'*')}})<\/script>`;
+// 되돌리기 꼬리에 온 도약 — 셸이 자리를 답하면 되돌리기가 돈 바로 뒤에 맨 위로 뛴다(사람 입력 없음). 리눅스 크롬의 숨김→보임 도약이 이 꼬리에 겹친 것과 같다.
+const JUMP = `<script>addEventListener('message',function(e){if(e.data&&e.data.op==='pos'&&e.data.pos)setTimeout(function(){scrollTo(0,0)},0)})<\/script>`;
+// 도약을 되돌려도 안 닿는 자리 — 문서가 잠깐 짧아져(자리가 0 으로 밀리고 scroll 이 온다) 되돌리기가 실패했다가 다시 길어진다. 숨긴 동안 되돌리기가 안 닿는 것과 같은 꼴이다.
+const SHRINK = `<script>addEventListener('message',function(e){if(e.data&&e.data.shrink){var c=document.body.firstElementChild;c.style.height='10px';setTimeout(function(){c.style.height='6000px'},300)}})<\/script>`;
 // 시험 페이지 — 뷰어가 하는 일 그대로: htmlFrame 과 같은 sandbox · withScrollKeeper · attachFrameBridge(파일 이름 공간)
 //  ⚠ 페이지 스크립트에 문서 글을 심을 땐 `</` 를 끊는다 — 안 그러면 문서 속 </script> 가 이 페이지의 스크립트를 닫는다.
 const js = (v) => JSON.stringify(v).replace(/<\//g, "<\\/");
@@ -50,18 +54,30 @@ const PAGE = `<!doctype html><html><body style="margin:0"><div id="wrap" style="
 import { attachFrameBridge, withScrollKeeper } from '/frame-bridge.js';
 const DOCS = ${js(DOCS)};
 const PROBE = ${js(PROBE)};
+const JUMP = ${js(JUMP)};
+const SHRINK = ${js(SHRINK)};
 const KEEP = ${JSON.stringify(KEEP)};
 const kind = new URLSearchParams(location.search).get('kind');
-let frame = null, off = () => {};
-window.mk = () => {
+let frame = null, off = () => {}, holdPos = 0;
+//  시험 장치 — 문서가 다 읽힌 뒤에 자리를 답한다. 그래야 되돌리기가 첫 걸음에 끝나 꼬리로 들어간다(덜 읽힌 문서면 100ms 뒤 다시 되돌려 도약을 지운다).
+addEventListener('message', (e) => {
+  if (!holdPos || !e.data || e.data.op !== 'pos-get' || e.data.held) return;
+  e.stopImmediatePropagation();
+  const init = { data: { ...e.data, held: 1 }, source: e.source };
+  setTimeout(() => dispatchEvent(new MessageEvent('message', init)), holdPos);
+});
+window.mk = (jump) => {
+  holdPos = jump ? 300 : 0;
   off(); if (frame) frame.remove();
   frame = document.createElement('iframe');
   frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals');
   frame.style.cssText = 'width:600px;height:400px;border:0';
-  frame.srcdoc = KEEP ? withScrollKeeper(DOCS[kind] + PROBE) : DOCS[kind] + PROBE;
+  const doc = DOCS[kind] + PROBE + SHRINK + (jump ? JUMP : '');
+  frame.srcdoc = KEEP ? withScrollKeeper(doc) : doc;
   off = attachFrameBridge(frame, '4523:' + kind + '.html');
   document.getElementById('wrap').append(frame);
 };
+window.shrink = () => { frame.contentWindow.postMessage({ shrink: 1 }, '*'); return true; };
 window.probe = () => new Promise((res) => {
   const h = (e) => { if (frame && e.source === frame.contentWindow && e.data && e.data.probe) { removeEventListener('message', h); res(e.data); } };
   addEventListener('message', h);
@@ -93,6 +109,7 @@ const child = spawn(chrome, [
 let pass = 0;
 const ok = (cond, name, info) => { assert.ok(cond, name + "  " + JSON.stringify(info)); pass++; console.log(`ok  ${name}  ${JSON.stringify(info)}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const RESET_QUIET = 1600;   // 프레임 스크립트의 RESET_QUIET_MS(1500) 보다 조금 길게
 let ws = null;
 try {
   const pf = path.join(dir, "profile", "DevToolsActivePort");
@@ -182,6 +199,20 @@ try {
     await tall(); await sleep(900);
     const mine = await y();
     ok(mine !== far, `R${++n} late: 되돌리는 도중 사람이 굴리면 되돌리기를 멈춘다`, { far, mine });
+    //  숨김→보임의 (0,0) 도약을 놓치는 두 자리(R4 · R14 가 CI 리눅스 크롬에서 가끔 0 으로 남던 까닭) — 크롬마다 도약이 다르니 도약을 문서가 직접 낸다.
+    //  ① 되돌리기 꼬리(restoring)에 온 scroll 은 버려진다 — 꼬리가 끝날 때 다시 본다. 곧바로 재면 도약 전의 자리를 잡으니 꼬리가 지난 뒤에 잰다.
+    await cdp("Page.navigate", { url: `${origin}/p.html?kind=win` }); await ready(); await tall();
+    await rollTo(1500);
+    await sleep(RESET_QUIET);          // 휠이 다 멎은 뒤에 잰다 · 사람 입력 직후의 0 은 사람 것으로 치므로 조용한 시간도 지나야 한다
+    const w0 = await stable();
+    await settle("win", w0);
+    await ev("mk(true)"); await sleep(700);   // 자리 답(300ms) · 꼬리(50ms)가 지난 뒤
+    const w1 = await stable();
+    ok(w1 === w0, `R${++n} win: 되돌리기 꼬리에 브라우저가 맨 위로 뛰어도 보던 자리`, { w0, w1 });
+    //  ② 되돌려도 안 닿으면(문서가 잠깐 짧다 — 숨긴 동안 배치가 없는 것과 같은 꼴) 다음 그림 때 다시 한다.
+    await ev("shrink()");
+    const w2 = await until(y, (v) => v === w0);
+    ok(w2 === w0, `R${++n} win: 되돌려도 안 닿은 도약은 닿을 수 있게 되면 되돌린다`, { w0, w2 });
   }
 } finally {
   try { ws?.close(); } catch (_) { /* noop */ }

@@ -197,8 +197,14 @@ export function browserDeps(): BridgeDeps {
  *    는 둘 다 안 온다 — 2026-10-01 도커 Chromium 실측, CI 에서 처음 드러남). 그 0 을 적으면 보던 자리가 지워진다. 그래서
  *    **사람 입력(휠·키·누르기·터치) 없이** 0 이 아닌 자리에서 (0,0) 으로 뛴 것은 브라우저의 배치 초기화로 보고 되돌린다.
  *    사람이 맨 위로 올리면 늘 입력이 먼저 온다(RESET_QUIET_MS 안) — 그건 그대로 적는다.
+ *  · ★ 그 도약은 두 자리에서 놓칠 수 있다(CI 리눅스 크롬에서 가끔 «숨겼다 보여도 0» 으로 남던 것 — back 이 맡는다):
+ *    ① 되돌리는 꼬리(restoring)에 온 scroll 은 버려진다 — 숨긴 격리 프레임의 타이머는 초 단위로 늦춰져 그 꼬리가 다시 보일 때까지 이어질 수 있다.
+ *       그래서 꼬리가 끝날 때 자리를 한 번 더 본다.
+ *    ② 숨긴 동안엔 배치가 없어 되돌려도 안 닿고, 보일 때 scroll 이 다시 온다는 보장이 없다 — 안 닿으면 다음 그림 때 다시 한다
+ *       (requestAnimationFrame 은 숨긴 동안 돌지 않으니 다시 보일 때 깨어난다).
  */
 const RESET_QUIET_MS = 1500;   // 마지막 사람 입력 뒤 이만큼 조용하면 (0,0) 도약은 사람 것이 아니다(트랙패드 관성 스크롤도 휠 이벤트를 계속 낸다)
+const RESET_RETRY_FRAMES = 120;   // 도약을 되돌리지 못했을 때 다시 해 볼 그림 수(약 2초) — 정말 닿을 수 없는 자리(문서가 줄었다)면 여기서 손을 뗀다
 const SCROLL_KEEPER_JS = `(function(){try{
 if(window.__lvPosKeeper||window.parent===window)return;window.__lvPosKeeper=1;
 var P=window.parent,D=document,rec=null,tmr=0,restoring=false,handsOn=false,lastIn=0;
@@ -209,11 +215,12 @@ function tgt(p){return p?byPath(p):root();}
 function at(p){var e=tgt(p);return e?{x:e.scrollLeft,y:e.scrollTop}:null;}
 function go(q){var e=tgt(q.p);if(!e)return false;if(!q.p)window.scrollTo(q.x,q.y);else{e.scrollLeft=q.x;e.scrollTop=q.y;}var c=at(q.p);return !!c&&Math.abs(c.y-q.y)<2&&Math.abs(c.x-q.x)<2;}
 function send(){tmr=0;if(rec)try{P.postMessage({lv:'rv',op:'pos-set',pos:rec},'*');}catch(_){}}
+function back(q,n){if(rec!==q||!(q.x||q.y)||Date.now()-lastIn<=${RESET_QUIET_MS})return;var c=at(q.p);if(!c||c.x||c.y)return;restoring=true;var ok=go(q);setTimeout(function(){restoring=false;},50);if(!ok&&n<${RESET_RETRY_FRAMES})requestAnimationFrame(function(){back(q,n+1);});}
 D.addEventListener('scroll',function(ev){if(restoring)return;var t=ev.target,r;
  if(t===D||t===D.documentElement||t===D.body&&t===root()){var c=root();r={x:c.scrollLeft,y:c.scrollTop};}
  else if(t&&t.nodeType===1&&t.clientHeight>=innerHeight*0.5){var p=pathOf(t);if(!p)return;r={x:t.scrollLeft,y:t.scrollTop,p:p};}
  else return;
- if(rec&&!r.x&&!r.y&&(rec.x||rec.y)&&(rec.p||'')===(r.p||'')&&Date.now()-lastIn>${RESET_QUIET_MS}){var q=rec;restoring=true;go(q);setTimeout(function(){restoring=false;},50);return;}
+ if(rec&&!r.x&&!r.y&&(rec.x||rec.y)&&(rec.p||'')===(r.p||'')&&Date.now()-lastIn>${RESET_QUIET_MS}){back(rec,0);return;}
  rec=r;if(!tmr)tmr=setTimeout(send,250);},true);
 function hands(){handsOn=true;restoring=false;lastIn=Date.now();}
 ['wheel','touchstart','pointerdown','keydown'].forEach(function(n){addEventListener(n,hands,{capture:true,passive:true});});
@@ -221,7 +228,7 @@ addEventListener('pagehide',function(){if(tmr){clearTimeout(tmr);send();}});
 addEventListener('resize',function(){if(!rec||restoring)return;var q=rec;setTimeout(function(){var c=at(q.p);if(c&&c.y===0&&c.x===0&&(q.y>0||q.x>0)){restoring=true;go(q);setTimeout(function(){restoring=false;},50);}},0);});
 addEventListener('message',function(ev){var d=ev.data;if(ev.source!==P||!d||d.lv!=='rv'||d.op!=='pos'||!d.pos||handsOn)return;
  var q=d.pos,t0=Date.now();if(!(q.y>0||q.x>0))return;rec=q;restoring=true;
- (function step(){if(handsOn){restoring=false;return;}var ok=go(q);if((ok&&D.readyState==='complete')||Date.now()-t0>4000){setTimeout(function(){restoring=false;},50);return;}setTimeout(step,100);})();});
+ (function step(){if(handsOn){restoring=false;return;}var ok=go(q);if((ok&&D.readyState==='complete')||Date.now()-t0>4000){setTimeout(function(){restoring=false;back(q,0);},50);return;}setTimeout(step,100);})();});
 P.postMessage({lv:'rv',op:'pos-get'},'*');
 }catch(_){}})();`;
 
