@@ -274,6 +274,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     timeoutSec: timeoutSecOf(input.timeout_min, p),
     homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
     sharedSeat: false, // 이 길은 본인 구독뿐이다(#5081 공용 시트는 앱 AI 실행 — ai-runs — 으로만 생긴다)
+    appServerOwn: false, // 앱 서버는 이 길로 못 온다(assertMaySubmit) — #1639 앱 서버의 본인 구독도 앱 AI 실행으로만 생긴다
     mcpOnly,           // 이어받는 작업이면 앞 작업의 값 · 새 작업은 false(ai.mcp_only 는 작업 이름을 다는 앱 AI 실행의 것이다)
     toolAllowlist,     // 같다 — 이어받는 작업이면 앞 작업의 목록 · 새 작업은 null(ai.tools 도 앱 AI 실행의 것이다)
   }, p, d);

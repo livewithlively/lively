@@ -4,7 +4,7 @@ import { HttpError } from "../http-error.js";
 import { logger } from "../log.js";
 import type { LivelyUser } from "../context.js";
 import { RateWindow } from "../apps/app-chat-send.js";
-import { PROXY_TOKEN_PREFIX, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
+import { PROXY_TOKEN_PREFIX, callerUnattended, type AiRunDeps, type ResumeTarget, type SubmitJobInput } from "./service.js";
 import { parseAccountSettings } from "./plan.js";
 
 /** 워크스페이스 Anthropic API 키의 자격 금고 kind(org_credential_set kind=anthropic_api_key · owner=gateway). */
@@ -156,8 +156,19 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     isAdmin,
     isJobToken: async (prefix) => (await import("../agent-jobs/store.js")).isAgentJobToken(prefix),
     memberFacts: memberFactsOf,
+    //  #1639 — 앞단 서명 신원(사람의 브라우저 요청)에는 행이 없다. 도구 부르기 · 백그라운드 작업의 돌기 신원은 시작할 때 잰 표시를 읽는다.
+    appServerUnattended: async (user) => {
+      if (user.appCallId != null) return (await import("../apps/app-server-call-store.js")).appCallUnattended(user.appCallId);
+      if (user.appJobId != null) return (await import("../apps/app-jobs-store.js")).appJobUnattended(user.appJobId);
+      return false;
+    },
   };
   return cached;
+}
+
+/** #1639 이 호출이 사람이 보지 않는 자리에서 왔나(service.callerUnattended) — 앱 도구 · 백그라운드 작업의 시작이 재서 그 행에 남긴다. */
+export async function appCallerUnattended(c: { member: string; tokenHashPrefix?: string | undefined; session?: string | undefined }): Promise<boolean> {
+  return callerUnattended(c, await liveAiRunDeps());
 }
 
 /**

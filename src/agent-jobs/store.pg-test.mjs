@@ -476,6 +476,36 @@ try {
     await cleanup();
   }
 
+  // ── O. 앱 서버의 본인 구독(#1639) — 표시는 그 작업일 때만 적고 따로 읽는다 · 칸이 아직 없을 때(롤 창) ───────────────────────
+  {
+    await cleanup();
+    const own = (who) => job(who, { accountMember: `${REQ}${who}`, appId: "crm", projectId: null, cwd: "/work/apps/crm", appServerOwn: true });
+    const o1 = await st.insertAgentJob(own("alice"), ROOMY);
+    const o0 = await st.insertAgentJob(job("plain"), ROOMY);
+    chk("O1 표시 — 넣으면 true · 보통 작업은 false · 없는 id 는 false",
+      (await st.agentJobAppServerOwn(o1.row.id)) === true && (await row(o1.row.id)).app_server_own === true
+        && (await st.agentJobAppServerOwn(o0.row.id)) === false && (await row(o0.row.id)).app_server_own === false && (await st.agentJobAppServerOwn(2 ** 40)) === false);
+    chk("O1b 행 읽기(COLS)는 그 칸을 싣지 않는다 — 롤 창에서 «없는 칸» 으로 깨지지 않게", !("app_server_own" in o1.row) && !("app_server_own" in (await st.getAgentJob(o1.row.id))),
+      JSON.stringify(Object.keys(o1.row)));
+    await cleanup();
+    //  O2 칸이 아직 없을 때 — 표시 읽기는 false(던지지 않음) · 보통 접수 · 자리 주기 · 행 읽기는 그대로 · 표시를 단 접수만 «없는 칸». 끝나면 같은 DDL 로 되돌린다.
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS app_server_own`);
+    try {
+      const p0 = await st.insertAgentJob(job("roll"), ROOMY);
+      const read = await st.agentJobAppServerOwn(p0.row.id);
+      let ownInsert = null;
+      try { await st.insertAgentJob(own("x"), ROOMY); } catch (e) { ownInsert = e; }
+      const claimed = await st.claimAgentJobs(WIDE, mint);
+      const again = await st.getAgentJob(p0.row.id);
+      chk("O2 칸이 없을 때 — 표시 읽기 false · 보통 접수 · 자리 주기 · 행 읽기는 돈다 · 표시를 단 접수만 42703",
+        read === false && claimed.some((g) => g.row.id === p0.row.id) && again?.id === p0.row.id && ownInsert?.code === "42703",
+        JSON.stringify({ read, claimed: claimed.map((g) => g.row.id), again: again?.id, code: ownInsert?.code }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS app_server_own BOOLEAN NOT NULL DEFAULT false`);
+    }
+    await cleanup();
+  }
+
   // ── TR. API 키 작업의 대화 기록(#5101) — 도는 API 키 작업만 적힌다 · 바이트 그대로 · 정리는 끝난 지 N일 지난 기록만(행은 남음) · 칸이 아직 없을 때(롤 창) ──
   {
     await cleanup();

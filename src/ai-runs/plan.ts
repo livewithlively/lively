@@ -6,6 +6,7 @@
 //   · 실행 자리 = 작업 종류 × 실행 계정: 단발 + API 키 → LLM 프록시(컨테이너 없음) · 그 밖(단발+구독 · 에이전트 전부) → 작업 컨테이너(executorFor).
 //   · 구독은 «그 사람 본인(그 세션의 AI 포함) · 그 사람 세션에 초대받아 함께 보는 사람» 의 요청에만(#4423 · 상민 2026-10-19) — subscriptionRefusal.
 //     예외 하나 — 공용 시트(#5081 · 상민 2026-10-28): 관리자가 지정하고 그 계정 본인이 동의한 구독은 워크스페이스 구성원 누구의 요청이든 받는다.
+//     앱 서버가 보낸 요청은 물은 사람이 구독 주인 본인일 때만(#1639 · 상민 2026-11-02) — 앱 서버 코드가 아니라 그 사람이 물은 것이다(isAppServerOwn).
 //   · 결과 형식: 스키마를 보내면 프롬프트 끝에 형식 지시 → 끝난 출력 규칙 검사 → 어긋나면 «형식에 맞게 다시» 1회 → 그래도 어긋나면 원문 붙여 실패.
 //   · 이어받기(#5101): 앱이 끝난 실행 하나의 대화를 이어받아 다시 시킨다(새 실행 행) — resumeRefusal · resumeInputError · resumeHistory(맨 아래).
 export type AiRunStatus = "queued" | "running" | "done" | "failed" | "canceled";
@@ -192,12 +193,24 @@ export function executorFor(kind: RunKind, account: AiAccount): Executor {
  *  구성원이 아니라(앱 서버 id) requesterActive 에서 걸린다. 작업 AI 자신의 토큰은 부르는 쪽(service.submitRun)이 그 전에 거절한다.
  *  ⚠ #4491 이 자동화를 «만든 사람 id + 앱 서버» 꼴로 열면 이 판정을 그대로 통과한다 — 그때 자동화 주체를 가르는 표지를 LivelyUser 에 두고
  *   여기서 거절해야 한다(«자동화는 계속 거절» · 상민 2026-10-28).
+ *
+ *  앱 서버가 보낸 본인 요청(#1639 · 상민 2026-11-02): 앱 서버가 실은 사람 신원이 구독 주인 본인이면 받는다. 구독은 본인만 건다(accountSetRefusal) — 이 앱을
+ *   내 구독으로 돌리겠다고 정한 사람이 그 앱을 부른 것이라 한 사람의 사용이다. 남의 요청 · 사람 신원 없는 앱 서버 호출은 그대로 거절한다.
+ *   requester.unattended 면 거절 — 그 신원이 위탁 · 크론 · 상시 세션이나 작업 AI 가 앱 도구를 부른 호출에서 왔으면 사람 없이 구독이 도는 모양(#4423)이다.
+ *   ⚠ #4491 이 자동화를 «만든 사람 id + 앱 서버» 꼴로 열 때 이 갈래도 그대로 통과한다 — 그 자동화의 호출은 unattended 를 달아야 한다.
+ *   ⚠ 앱 서버의 세 신원 중 앞단 서명 신원(`v1`)은 앱이 받아 두었다가 수명(최대 15분) 안에서 다시 쓸 수 있다 — «답한 뒤 무효» 는 도구 부르기 신원(`lvsr1`)만이다.
+ *    모두 사람당 동시 · 앱당 분당 · 앱당 하루 토큰 상한을 탄다(service.submitRun).
  */
 /** 요청이 매인 세션(ctx.session)의 사실 — 주인 · 보낸 사람이 들어갈 수 있나 · 사람 세션인가(kind human — 위탁·상시·앱·로그인 세션이 아니다). */
 export interface SessionTie { owner: string | null; participant: boolean; human: boolean }
+/**
+ * 구독 판정의 요청자 — member = 보낸 사람(앱 서버가 실은 사람 신원이면 그 사람). unattended(#1639) = 앱 서버가 실은 그 신원이 사람이 보지 않는 자리
+ *  (위탁 · 상시 세션 · 작업 AI)에서 왔다(service.callerUnattended). 앱 서버의 본인 구독 판정만 본다.
+ */
+export interface RunRequester { member: string; kind: "member" | "app_server"; unattended?: boolean }
 const MACHINE_SESSION_REFUSAL = "이 요청이 매인 세션을 확인할 수 없거나 사람이 보는 세션이 아닙니다(위탁 · 상시 · 앱 세션) — 구독은 사람이 보는 세션에서만 쓸 수 있어요. 자동화는 워크스페이스 API 키가 필요합니다";
 export function subscriptionRefusal(
-  account: AiAccount, requester: { member: string; kind: "member" | "app_server" }, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
+  account: AiAccount, requester: RunRequester, tie: SessionTie | null | undefined, seat?: SeatTerms | null,
 ): string | null {
   if (account.kind !== "subscription") return null;
   if (seat && seatShared(seat.facts)) {
@@ -208,13 +221,24 @@ export function subscriptionRefusal(
   //  지정은 됐는데 높은 권한 때문에 공용으로 안 쓰는 계정 — 거절 문장에 까닭을 붙인다(그대로 두면 «초대받은 사람만» 으로 읽혀 무엇을 고칠지 모른다).
   const elevatedSeat = seat?.facts.consented && seat.facts.active && seat.facts.elevated
     ? ` ${account.member}님 계정은 공용 시트로 지정됐지만 높은 권한(관리자 · 실행 · DB · 코드)이 있어 공용으로 쓰지 않습니다 — 기본 권한(items · context · memory)만 가진 전용 계정을 공용 시트로 지정하세요.` : "";
-  if (requester.kind !== "member") return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 구독은 사람이 보낸 요청에만 쓸 수 있어요. 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 앱 서버가 사람 신원을 실어 보낸 요청도 받습니다).${elevatedSeat}`;
+  if (requester.kind !== "member") {
+    if (requester.member !== account.member) return `이 앱의 실행 계정은 ${account.member}님 구독입니다 — 앱 서버가 보낸 요청은 물은 사람이 그 구독의 주인 본인일 때만 쓸 수 있어요(${requester.member} 은(는) 주인이 아닙니다). 그 밖의 앱 서버 · 자동화는 워크스페이스 API 키가 필요합니다(관리자와 그 계정 본인이 공용 시트로 지정한 구독은 앱 서버가 사람 신원을 실어 보낸 요청도 받습니다).${elevatedSeat}`;
+    return requester.unattended === true ? MACHINE_SESSION_REFUSAL : null;
+  }
   //  세션에 매인 요청인데 그 세션을 모르거나(fail-closed) 사람 세션이 아니면(위탁·크론 헤드리스 task · 상시 managed · 앱 · 로그인) 구독 주인 본인의 토큰이라도 거절 —
   //  사람 없이 구독이 도는 모양(#4423 · 격리 리뷰 blocking 1). 세션 헤더가 없는 본인 토큰은 가릴 길이 없어 본인으로 통과한다(머리말 한계 ③).
   if (tie && (tie.owner === null || !tie.human)) return MACHINE_SESSION_REFUSAL;
   if (requester.member === account.member) return null;
   if (tie && tie.owner === account.member && tie.participant) return null;
   return `이 앱의 실행 계정은 ${account.member}님 구독인데 ${requester.member}님이 보냈습니다 — 구독은 본인, 또는 ${account.member}님 세션에 초대받은 사람이 그 세션에서 보낸 요청에만 쓸 수 있어요(워크스페이스 API 키를 등록하면 누구의 요청이든 돕니다).${elevatedSeat}`;
+}
+
+/**
+ * (순수) 앱 서버가 보낸, 물은 사람 본인의 구독 실행인가(#1639) — 실행 행의 사실만 본다(접수 · 형식 재시도 · 공개 모양이 같은 자를 쓴다).
+ *  공용 시트 계정이 앱 서버를 거쳐 제 시트로 물은 실행도 말 그대로 참이다 — 공용 시트의 자리로 돌지는 접수가 따로 가른다(service.submitRun).
+ */
+export function isAppServerOwn(r: { requester: string; requester_kind: string; account_kind: string; account_member: string | null }): boolean {
+  return r.requester_kind === "app_server" && r.account_kind === "subscription" && r.account_member === r.requester;
 }
 
 /**

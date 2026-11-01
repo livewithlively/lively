@@ -1143,7 +1143,7 @@ await t("X4 보기 — 본인 · 앱 화면은 그 앱의 제 작업만 · 관�
 async function endedJob(w: World, prompt: string, endedAgoDays: number): Promise<number> {
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: null, projectId: 1, cwd: "/work/shared/project/1",
-    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false, sharedSeat: false, mcpOnly: false, toolAllowlist: null,
+    harness: "claude", model: null, label: null, prompt, resumeConversation: null, resumeJobId: null, timeoutSec: 900, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   }, { ...w.policy, max_queued: 500 });
   assert.ok("row" in r);
   const row = w.rows.get(r.row.id)!;
@@ -1265,7 +1265,7 @@ await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(
   const w = world();
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true, sharedSeat: false, mcpOnly: false, toolAllowlist: null,
+    model: null, label: null, prompt: "앱 서버가 보낸 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: true, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   }, w.policy, w.deps);
   assert.equal(row.homeless, true);
   assert.equal(publicJob(row, { own: true }).homeless, true);
@@ -1278,7 +1278,7 @@ await t("HL3 홈 없는 작업(#4891) — 접수 표시가 행 · 보기 응답(
 await t("SS1 공용 시트(#5081) — 배차가 시트 묶음을 자리 주기에 넘긴다(보낸 사람당 + 시트 전체) · 못 읽으면 빈 묶음 · 사람 도구 접수는 표시 false", async () => {
   const shared = (requester: string): NewAgentJob => ({
     requester, accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: `${requester} 의 질문`, resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true, mcpOnly: false, toolAllowlist: null,
+    model: null, label: null, prompt: `${requester} 의 질문`, resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   });
   const w = world();
   w.policy = { ...w.policy, max_running: 4, max_running_per_member: 1, max_running_per_service_seat: 2 };
@@ -1309,7 +1309,7 @@ await t("SS2 공용 시트(#5081) 작업 보기 — 시트 계정(구독 주인)
   const w = world();
   const r = await w.deps.store.insertAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "앨리스의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true, mcpOnly: false, toolAllowlist: null,
+    model: null, label: null, prompt: "앨리스의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: true, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   }, w.policy);
   assert.ok("row" in r);
   const id = r.row.id;
@@ -1324,7 +1324,7 @@ await t("SS2 공용 시트(#5081) 작업 보기 — 시트 계정(구독 주인)
   //  공용 시트가 아닌 구독(초대받은 사람이 주인 세션에서 보냄)은 주인이 여전히 보고 끊는다.
   const inv = await w.deps.store.insertAgentJob({
     requester: "bob", accountKind: "subscription", accountMember: "seat", appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: null, label: null, prompt: "밥의 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, mcpOnly: false, toolAllowlist: null,
+    model: null, label: null, prompt: "밥의 일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   }, { ...w.policy, max_queued: 50 });
   assert.ok("row" in inv);
   assert.equal((await getAgentJobFor(inv.row.id, human("seat"), w.deps)).status, "queued", "공용 시트가 아닌 구독 주인은 본다");
@@ -1378,7 +1378,7 @@ async function keyJob(w: World, o: { account?: "api_key" | "subscription"; resum
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: account, accountMember: account === "subscription" ? "alice" : null, appId: null, projectId: 1, cwd: "/work/shared/project/1",
     harness: "claude", model: null, label: null, prompt: "일", resumeConversation: o.resumeConv ?? null, resumeJobId: o.resumeJobId ?? null, timeoutSec: 900,
-    homeless: false, sharedSeat: false, mcpOnly: false, toolAllowlist: null,
+    homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   }, w.policy, w.deps);
   await w.drain(0);
   return { id: row.id, boot: w.launched.find((x) => x.id === row.id)!.boot };
@@ -1607,7 +1607,7 @@ await t("mcp_only S22·S16 값을 읽는 자리(jobMcpOnly) · 접수 입력의 
   const needsJob = (_: NewAgentJob): void => undefined;
   const job: NewAgentJob = {
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
-    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, mcpOnly: false, toolAllowlist: null,
+    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null,
   };
   needsJob(job);
   // @ts-expect-error 접수 입력에 «MCP 만» 값이 없다
@@ -1652,7 +1652,7 @@ await t("mcp_only S18 단발(bare) 작업 — «MCP 만» 이어도 `--tools` �
     w.deps.jobMcpOnly = async () => mcpOnly;
     const row = await enqueueAgentJob({
       requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
-      model: null, label: null, prompt: "요약", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, bare: true, mcpOnly, toolAllowlist: null,
+      model: null, label: null, prompt: "요약", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, bare: true, mcpOnly, toolAllowlist: null,
     }, w.policy, w.deps);
     await w.drain(0);
     return (await onBoot(row.id, w.launched.find((x) => x.id === row.id)!.boot, w.deps)).argv;
@@ -1682,7 +1682,7 @@ async function priorJob(w: World, mcpOnly: boolean): Promise<number> {
   w.usable.add("alice:memo");
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
-    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, mcpOnly, toolAllowlist: null,
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly, toolAllowlist: null,
   }, w.policy, w.deps);
   Object.assign(w.rows.get(row.id)!, { status: "done", conversation_id: "0a1b2c3d-0000-4000-8000-00000000000a" });
   return row.id;
@@ -1734,7 +1734,7 @@ async function toolJob(w: World, list: string[] | null): Promise<{ id: number; b
   w.usable.add("alice:memo");
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
-    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, mcpOnly: false,
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
     toolAllowlist: list,
   }, w.policy, w.deps);
   await w.drain(0);
@@ -1794,7 +1794,7 @@ await t("T21·T17 토큰 굽기의 상한 인자 · 작업 행의 목록 읽기(
   const needsJob = (_: NewAgentJob): void => undefined;
   const job: NewAgentJob = {
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
-    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, mcpOnly: false,
+    model: null, label: null, prompt: "일", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
     toolAllowlist: null,
   };
   needsJob(job);
@@ -1808,7 +1808,7 @@ async function priorToolJob(w: World, list: string[] | null): Promise<number> {
   w.usable.add("alice:memo");
   const row = await enqueueAgentJob({
     requester: "alice", accountKind: "subscription", accountMember: "alice", appId: "memo", projectId: null, cwd: "/work/apps/memo", harness: "claude",
-    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, mcpOnly: false,
+    model: null, label: null, prompt: "앱 AI 실행의 질문", resumeConversation: null, resumeJobId: null, timeoutSec: 600, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false,
     toolAllowlist: list,
   }, w.policy, w.deps);
   Object.assign(w.rows.get(row.id)!, { status: "done", conversation_id: "0a1b2c3d-0000-4000-8000-00000000000b" });

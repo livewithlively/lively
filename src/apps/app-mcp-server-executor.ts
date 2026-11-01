@@ -42,10 +42,13 @@ export const serverExecutor: AppMcpExecutor = {
     if ("error" in r) throw new HttpError(400, `이 도구의 선언이 이 게이트웨이와 맞지 않습니다 — ${r.error}`, { body: { code: "tool_invalid" } });
     const flow = await import("./app-server-call.js");
     const app = { id: c.app.id, view: c.app.view, variant: c.app.variant };
+    //  #1639 부른 자리가 사람이 보지 않는 곳인가(위탁 · 상시 세션 · 작업 AI) — 부르기 · 작업 행에 남긴다. 앱 서버가 그 돌기 신원으로 구독을 쓰지 못하게.
+    const { appCallerUnattended } = await import("../ai-runs/live.js");
+    const unattended = await appCallerUnattended({ member: c.caller.userId, tokenHashPrefix: c.caller.tokenHashPrefix, session: c.caller.session });
     if (c.tool.run.background === true) {
       const out = await flow.runServerToolJob({
         app, tool: c.tool.name, route: r.route, args: c.args,
-        caller: { userId: c.caller.userId, scopes: c.caller.scopes, tokenScopes: c.caller.tokenScopes, ...(c.caller.tokenHashPrefix ? { tokenHashPrefix: c.caller.tokenHashPrefix } : {}) },
+        caller: { userId: c.caller.userId, scopes: c.caller.scopes, tokenScopes: c.caller.tokenScopes, ...(c.caller.tokenHashPrefix ? { tokenHashPrefix: c.caller.tokenHashPrefix } : {}), unattended },
         ...(c.signal ? { signal: c.signal } : {}), ...(c.progress ? { progress: c.progress } : {}),
       });
       if (!out.done) return { data: pendingJobText(out.jobId, out.waitedSec), meta: { "lively/job_id": out.jobId, "lively/pending": true } };
@@ -53,7 +56,7 @@ export const serverExecutor: AppMcpExecutor = {
     }
     const { reply, timeoutS } = await flow.callAppServerRoute({
       app, purpose: "mcp_tool", tool: c.tool.name, route: r.route, level: c.tool.level,
-      body: JSON.stringify(c.args), caller: { userId: c.caller.userId, name: c.caller.name, scopes: c.caller.scopes }, maxBytes: REPLY_KEEP_BYTES,
+      body: JSON.stringify(c.args), caller: { userId: c.caller.userId, name: c.caller.name, scopes: c.caller.scopes, unattended }, maxBytes: REPLY_KEEP_BYTES,
     });
     return resultOf(toolReplyOf(reply, timeoutS));
   },

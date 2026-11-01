@@ -22,6 +22,8 @@ export interface AppMcpCaller {
   /** tokenScopes ∩ grant.scopes — 앱이 이 사람 이름으로 할 수 있는 상한(앱 화면 도구 다리 runAppTool 의 축소와 같은 교집합). */
   scopes: string[];
   oauthClientId?: string;
+  /** 부른 연결이 밝힌 세션(x-lively-session · 형식만 검증 — 없으면 세션 밖). 사람이 보는 자리인지는 쓰는 쪽이 가린다(ai-runs/service.callerUnattended). */
+  session?: string;
   /** 감사 상관용 토큰 지문 앞자리(비밀 아님). */
   tokenHashPrefix?: string;
 }

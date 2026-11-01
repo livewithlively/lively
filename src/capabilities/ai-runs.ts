@@ -1,7 +1,7 @@
 // 앱 AI 실행 도구 (#4488 앱 v2-9) — 입구 하나 `app_ai_run`(= 앱 주소 `/_lively/ai/runs`) + 보기 · 목록 · 취소 · 대상 · 실행 계정 설정 · 상한.
 //  흐름·판정은 ai-runs/service.ts(살아 있는 의존은 live.ts), 여기는 입력과 표면뿐이다.
 //  앱 화면은 다리(/api/ui/apps/:id/tool-call)나 앱 주소의 /_lively/ai/*(#4482 app-front-api)로 부른다 — 매니페스트 permissions.ai_runs 를 선언하고 사람이 동의해야 한다.
-//  앱 서버는 능력 REST(/api/ui/ai-runs · 앱 서버 토큰 + 사람 신원)로 부른다 — 실행 계정이 구독이면 거절된다(구독은 사람이 앱 화면에서 보낸 것만).
+//  앱 서버는 능력 REST(/api/ui/ai-runs · 앱 서버 토큰 + 사람 신원)로 부른다 — 실행 계정이 구독이면 물은 사람이 그 구독의 주인 본인일 때만 받는다(#1639 · plan.subscriptionRefusal).
 //   예외: 공용 시트(#5081 — app_ai_service_seat_set 으로 관리자 승인 + 본인 동의)는 앱 서버가 사람 신원을 실어 보낸 요청도 받는다.
 import { z } from "zod";
 import type { Capability } from "./types.js";
@@ -51,7 +51,8 @@ const appAiRun: Capability = {
   title: "앱 AI 실행",
   description:
     "앱의 AI 작업 입구 하나(/_lively/ai/runs). 프롬프트(+결과 스키마 · 파일 · 작업 이름)를 보내면 게이트웨이가 실행 계정(작업별 > 앱별 > 워크스페이스 기본값 — API 키 또는 본인 구독)과 자리를 고른다: " +
-    "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만 — 앱 서버 · 자동화는 API 키. " +
+    "단발+API 키는 LLM 프록시(몇 초), 그 밖은 작업 컨테이너. {id,status,result} — 끝나면 result.text(스키마면 result.json). 구독은 그 사람 본인(그 세션의 AI 포함)과 그 사람 세션에 초대받은 사람이 그 세션에서 보낸 요청만. " +
+    "앱 서버가 보낸 요청은 물은 사람이 그 구독의 주인 본인일 때만(사람 신원 · 앱 폴더에서만 · 작업 AI 의 토큰은 그 사람 ∩ 앱 동의 · 응답 app_server_own · 위탁 · 상시 세션이나 작업 AI 가 부른 도구에서 온 신원은 거절) — 그 밖의 앱 서버 · 자동화는 API 키. " +
     "공용 시트(관리자 승인 + 그 계정 본인 동의 — app_ai_service_seat_set)로 지정된 구독은 워크스페이스 구성원 누구의 요청이든 받는다(앱 서버가 사람 신원을 실어 보낸 요청 포함 · 앱 폴더에서만 · 작업 AI 의 라이블리 신원은 물은 사람). " +
     "실행 계정이 없으면 409 account_unavailable. 상한: 앱당 분당 · 사람당 동시 · 앱당 하루 토큰(app_ai_limits). " +
     "이어받기: 앱이 답을 검사하고 어긋나면 resume_run_id + prompt(사유)로 그 대화를 잇는 새 실행을 보낸다(응답 resume{of,root,depth,reason}).",
@@ -82,7 +83,7 @@ const appAiRunGet: Capability = {
 const appAiRuns: Capability = {
   name: "app_ai_runs",
   title: "앱 AI 실행 목록",
-  description: "내 AI 실행 목록(최근 것부터 · 요약 — 전문은 app_ai_run_get). 앱 화면에서 부르면 그 앱의 내 실행만, 관리자는 워크스페이스 전체(남의 것은 상태·오류만). status · app_id 로 좁힌다.",
+  description: "내 AI 실행 목록(최근 것부터 · 요약 — 전문은 app_ai_run_get). 앱 화면에서 부르면 그 앱의 내 실행만, 관리자는 워크스페이스 전체(남의 것은 상태·오류만). status · app_id 로 좁힌다. 앱 서버가 내 구독으로 돌린 실행은 app_server_own:true 다.",
   scope: null,
   input: { app_id: z.string().optional(), status: z.string().optional().describe("queued · running · done · failed · canceled"), limit: z.number().int().min(1).max(100).optional() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-runs"], parse: (req) => {
@@ -149,7 +150,7 @@ const accountInput = {
 const appAiAccountSet: Capability = {
   name: "app_ai_account_set",
   title: "앱 AI 실행 계정 정하기",
-  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자 · 책임자는 제 앱을 워크스페이스 API 키로 돌리게도 할 수 있다 — 앱당 하루 토큰 상한이 울타리). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 예외: 공용 시트로 켜진 구독(app_ai_service_seat_set — 관리자 승인 + 본인 동의)은 관리자가 어느 자리에든 건다. 기본 모델은 관리자. 배포 없이 바로 먹는다.",
+  description: "AI 실행 계정을 정한다 — 워크스페이스 기본값(app_id 없음 · 관리자만) · 앱별(app_id) · 작업별(app_id + job — 관리자 또는 그 앱의 책임자 · 책임자는 제 앱을 워크스페이스 API 키로 돌리게도 할 수 있다 — 앱당 하루 토큰 상한이 울타리). 구독은 **그 사람 본인만** 자기 구독을 건다(관리자도 남의 구독을 못 고른다 — #4423). 내 구독을 앱에 걸면 그 앱 서버가 내 신원으로 보낸 요청도 내 구독 · 내 자리(Claude 로그인)에서 돈다 — 믿는 앱에만 건다. 예외: 공용 시트로 켜진 구독(app_ai_service_seat_set — 관리자 승인 + 본인 동의)은 관리자가 어느 자리에든 건다. 기본 모델은 관리자. 배포 없이 바로 먹는다.",
   scope: null,
   input: accountInput,
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/ai-account"], parse: (req) => pickBody((req.body ?? {}) as Record<string, unknown>, Object.keys(accountInput)) }] },

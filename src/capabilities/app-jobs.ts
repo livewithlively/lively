@@ -40,7 +40,12 @@ const appJobStart: Capability = {
       return out;
     } }],
   },
-  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => (await svc()).startAppJob(input, user, { source: ctx?.source }),
+  handler: async (input: Record<string, unknown>, user: LivelyUser, ctx) => {
+    //  #1639 시작한 자리가 사람이 보지 않는 곳이면(위탁 · 상시 세션 · 작업 AI) 작업 행에 남긴다 — 그 돌기 신원으로는 구독을 쓰지 못한다.
+    const { appCallerUnattended } = await import("../ai-runs/live.js");
+    const unattended = await appCallerUnattended({ member: user.userId, tokenHashPrefix: user.tokenHashPrefix, session: ctx?.session });
+    return (await svc()).startAppJob(input, user, { source: ctx?.source, unattended });
+  },
 };
 
 const appJobGet: Capability = {

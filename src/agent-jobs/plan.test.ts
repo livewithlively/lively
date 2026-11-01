@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
-  convIdOf, parseBootFailure, bootFailureError, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, sharedSeatJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE,
+  convIdOf, parseBootFailure, bootFailureError, appServerOwnJobRefusal, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, sharedSeatJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE,
   TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts, TRANSCRIPT_NOTE_MAX,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
@@ -86,6 +86,22 @@ t("E2 토큰 옵션 — 공용 시트 · 홈 없음은 앱 서버 급 · 둘 다
   assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900, true), { ttlSec: 900, appServerPrincipal: true });
   assert.deepEqual(jobAppTokenOpts({ homeless: true }, 900, false), { ttlSec: 900, appServerPrincipal: true });
   assert.deepEqual(jobAppTokenOpts({ homeless: false }, 900, false), { ttlSec: 900 });
+});
+t("O1 앱 서버의 본인 구독 작업이 될 수 있나(#1639) — 구독 · 본인 · 앱 작업 · 프로젝트 없음 · 그 앱 폴더", () => {
+  type J = Parameters<typeof appServerOwnJobRefusal>[0];
+  const job: J = { account_kind: "subscription", account_member: "alice", requester: "alice", app_id: "crm", project_id: null, cwd: "/work/apps/crm" };
+  assert.equal(appServerOwnJobRefusal(job), null);
+  const rows: Array<[Partial<J>, RegExp]> = [
+    [{ account_kind: "api_key", account_member: null }, /구독 실행만/],
+    [{ account_member: null }, /구독 실행만/],
+    [{ requester: "bob" }, /구독 주인 본인이 물은 것/],
+    [{ app_id: null }, /앱 작업이어야/],
+    [{ app_id: "Bad_Id" }, /앱 작업이어야/],
+    [{ project_id: 3, cwd: "/work/shared/project/3" }, /프로젝트 폴더/],
+    [{ cwd: "/work/apps/other" }, /그 앱 폴더/],
+    [{ cwd: "/work/apps/crm/sub" }, /그 앱 폴더/],
+  ];
+  for (const [o, re] of rows) assert.match(appServerOwnJobRefusal({ ...job, ...o }) ?? "", re, JSON.stringify(o));
 });
 t("G1 공용 시트 작업을 아직 돌려도 되나 — 모양(구독 · 앱 · 프로젝트 없음 · 그 앱 폴더) · 지정 · 시트(활성 · 기본 권한뿐) · 보낸 사람(활성)", () => {
   type J = Parameters<typeof sharedSeatJobRefusal>[0];

@@ -1,7 +1,7 @@
 // 앱 AI 실행 — 순수 판정 엣지 표 P1~P14(#4488 앱 v2-9 · 사양 spec.md). 실행: npm run build && node dist/ai-runs/plan.test.js
 //  이게 틀리면: 작업별 설정이 앱별에 밀리거나, 구독이 남의 요청을 처리하거나(#4423), 단발이 컨테이너로 가거나, 스키마 어긋남을 맞음으로 읽는다.
 import assert from "node:assert/strict";
-import {
+import { isAppServerOwn,
   accountSetRefusal, executorFor, extractJson, judgeOutput, overDailyBudget, parseAccountSettings, resolveAccount, resumeHistory, resumeInputError, resumeLabel,
   resumeRefusal, runKindOf, runStatusOfJob, schemaInputError, schemaInstruction, seatElevated, seatShared, seatState, serviceSeatChange, serviceSeatConsented,
   subscriptionRefusal, validateJsonSchema, waitSecOf, LABEL_MAX, WAIT_MAX_SEC,
@@ -48,6 +48,29 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   ok("P5~P6 작업 종류 · 실행 자리 표(§3-E)");
 }
 
+// ── P16 앱 서버가 보낸 본인 요청(#1639 · 엣지 표 O1~O8) — 물은 사람이 구독 주인 본인이면 받는다 · 사람이 보지 않는 자리에서 온 신원 · 남 · 사람 신원 없는 앱 서버는 거절 ──
+{
+  const sub = { kind: "subscription" as const, member: "alice" };
+  const own = { member: "alice", kind: "app_server" as const };
+  assert.equal(subscriptionRefusal(sub, own, null), null, "O1 앱 서버 · 주인 본인 → 받는다");
+  assert.equal(subscriptionRefusal(sub, { ...own, unattended: false }, null), null, "O1 표시가 false 여도 같다");
+  assert.match(subscriptionRefusal(sub, { ...own, unattended: true }, null)!, /사람이 보는 세션/, "O2 사람이 보지 않는 자리에서 온 신원 → 거절");
+  assert.match(subscriptionRefusal(sub, { member: "bob", kind: "app_server" }, null)!, /주인 본인일 때만/, "O3 남 → 거절");
+  assert.match(subscriptionRefusal(sub, { member: "bob", kind: "app_server", unattended: true }, null)!, /주인 본인일 때만/, "O3 남이면 표시와 무관하게 주인 거절 문장");
+  assert.match(subscriptionRefusal(sub, { member: "app-server:t:crm", kind: "app_server" }, null)!, /주인 본인일 때만/, "O4 사람 신원 없는 앱 서버 → 거절");
+  assert.equal(subscriptionRefusal({ kind: "api_key" }, { ...own, unattended: true }, null), null, "O5 API 키는 표시와 무관");
+  assert.equal(subscriptionRefusal(sub, { member: "alice", kind: "member", unattended: true }, null), null, "O6 표시는 앱 서버 판정만 본다(사람의 요청은 tie 로 가른다)");
+  const on = { consented: true, active: true, elevated: false };
+  assert.equal(subscriptionRefusal(sub, own, null, { facts: on, requesterActive: true }), null, "O7 공용 시트로 켜진 구독 — 시트 판정으로(본인도)");
+  assert.equal(subscriptionRefusal(sub, { member: "bob", kind: "app_server" }, null, { facts: on, requesterActive: true }), null, "O7 공용 시트면 남의 앱 서버 대리도(#5081 그대로)");
+  const row = { requester: "alice", requester_kind: "app_server", account_kind: "subscription", account_member: "alice" };
+  assert.equal(isAppServerOwn(row), true, "O8 앱 서버 · 구독 · 본인");
+  assert.equal(isAppServerOwn({ ...row, requester_kind: "member" }), false, "O8 사람이 보낸 것");
+  assert.equal(isAppServerOwn({ ...row, account_kind: "api_key", account_member: null }), false, "O8 API 키");
+  assert.equal(isAppServerOwn({ ...row, account_member: "bob" }), false, "O8 남의 구독");
+  ok("P16 앱 서버의 본인 구독 — 받음 · 사람이 보지 않는 자리 거절 · 남 · 사람 신원 없음 거절 · 공용 시트 판정 그대로 · 행 판정");
+}
+
 // ── P7 구독 선(#4423 · 상민 2026-10-19) — 본인(어느 길이든) · 그 사람 세션에 초대받은 사람(그 세션에서) · 사람이 아니면 거절 ──
 {
   const sub = { kind: "subscription" as const, member: "alice" };
@@ -55,8 +78,8 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(subscriptionRefusal({ kind: "api_key" }, bob, null), null, "API 키는 누구 요청이든");
   assert.equal(subscriptionRefusal(sub, alice, null), null, "본인 — 세션 매임 없이(앱 화면 · 도구 · REST 모두)");
   assert.equal(subscriptionRefusal(sub, alice, { owner: "carol", participant: true, human: true }), null, "본인이면 매인 세션이 남의 것이어도 본인");
-  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, null)!, /앱 서버/, "앱 서버 대리는 거절");
-  assert.match(subscriptionRefusal(sub, { member: "alice", kind: "app_server" }, { owner: "alice", participant: true, human: true })!, /앱 서버/);
+  assert.match(subscriptionRefusal(sub, { member: "bob", kind: "app_server" }, null)!, /앱 서버/, "앱 서버 대리 — 물은 사람이 주인이 아니면 거절");
+  assert.match(subscriptionRefusal(sub, { member: "bob", kind: "app_server" }, { owner: "alice", participant: true, human: true })!, /앱 서버/, "주인의 세션에 초대받은 것은 앱 서버 판정과 무관");
   assert.match(subscriptionRefusal(sub, bob, null)!, /초대받은 사람/, "남 — 세션 매임 없음");
   assert.equal(subscriptionRefusal(sub, bob, { owner: "alice", participant: true, human: true }), null, "남 — alice 세션에 초대받아 그 세션에서 보냄");
   assert.match(subscriptionRefusal(sub, bob, { owner: "alice", participant: false, human: true })!, /초대받은 사람/, "alice 세션이지만 들어갈 수 없는 사람");

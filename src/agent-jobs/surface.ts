@@ -58,8 +58,9 @@ export interface PaneView { cwd: string; gateway: string; workspace: string | nu
 /**
  * 띄울 때 실행면에 넘기는 것(#5081). 필수다 — 빠뜨린 자리가 공용 시트 작업의 시트 홈에 키트 · git 자격을 심지 않게.
  *  sharedSeat = 공용 시트로 도는 작업(그 홈은 구성원 누구의 지시든 닿는 자리라 사람 세션용 준비를 하지 않는다 — launch.ts · launch-host.ts).
+ *  appServerOwn = #1639 앱 서버가 보낸 본인 구독 작업(앱 서버 코드가 시킨 일이 그 사람의 라이블리 토큰 · git 자격을 홈에 새로 심지 않게 — 같은 두 자리).
  */
-export interface JobLaunchOpts { sharedSeat: boolean }
+export interface JobLaunchOpts { sharedSeat: boolean; appServerOwn: boolean }
 
 export interface JobSurface {
   readonly kind: JobSurfaceKind;

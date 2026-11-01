@@ -21,7 +21,7 @@ export interface AiRunPolicy {
   single_timeout_sec: number;
   /** 단발 실행의 출력 토큰 상한(max_tokens). 앱이 더 달라고 해도 이 값으로 접는다. */
   max_output_tokens: number;
-  /** 한 앱이 하루(UTC)에 쓸 수 있는 토큰(입력+출력 · 프록시 경로만 센다). 0 = 끔. */
+  /** 한 앱이 하루(UTC)에 쓸 수 있는 토큰(입력+출력 · 프록시 경로 + 앱 서버가 본인 구독으로 보낸 실행 #1639 를 센다). 0 = 끔. */
   daily_tokens_per_app: number;
   /**
    * #5101 한 질문(처음 실행)을 이어받을 수 있는 횟수 — 앱 서버가 답을 검사하고 사유를 붙여 다시 시키는 것(resume_run_id)의 게이트웨이 상한.
