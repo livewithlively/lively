@@ -6,6 +6,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { listCronJobs, getCronJob, insertCronJob, updateCronJob, deleteCronJob } from "../org/cron-store.js";
 import { runCronById, CRON_ACTIONS, CRON_ACTION_KEYS } from "../scheduler/index.js";
+import { planDistillRun } from "../scheduler/actions/distill.js";
 import { isValidCron } from "../scheduler/cron-expr.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 cron_expr 해석 기준 시간대(폼 힌트용)
 
@@ -127,17 +128,39 @@ const cronDelete: Capability = {
   },
 };
 
+/** dry_run·lanes_only 를 쓸 수 있는 잡 — 다른 잡에 주면 조용히 무시하지 않고 거절한다(무시하면 시범 삼아 준 값이 안 듣고 그냥 돈다). */
+const DISTILL_RUN_ACTIONS = new Set(["distill_sources", "distill_sources_headless"]);
+
 const cronRunNow: Capability = {
   name: "cron_run_now",
   title: "스케줄 잡 즉시 실행",
-  description: "스케줄 잡을 주기와 무관하게 지금 1회 실행(온디맨드 'refresh now'). 결과 요약 반환. 이미 실행 중이면 skip.",
+  description: "스케줄 잡을 주기와 무관하게 지금 1회 실행(온디맨드 'refresh now'). 결과 요약 반환. 이미 실행 중이면 skip. " +
+    "⚠ 증류 잡(distill_sources·distill_sources_headless)을 레인 지정 없이 돌리면 켜진 레인뿐 아니라 **맡은 레인이 없는 자료도 기본 기준으로 함께 나간다**. " +
+    "시범 실행이면 먼저 dry_run=true 로 무엇이 나가는지 보고, 레인 몫만 돌리려면 lanes_only=true 로 실행한다.",
   scope: "memory",
-  input: { id: z.string() },
+  input: {
+    id: z.string(),
+    dry_run: z.boolean().optional().describe("증류 잡 전용 — 접수하지 않고 이번 실행이 낼 것만 돌려준다(plan.lanes · plan.unassigned · plan.notice). AI 를 부르지 않고 잡 기록도 안 바뀐다."),
+    lanes_only: z.boolean().optional().describe("증류 잡 전용 — 이번 1회는 켜진 레인 몫만 낸다. 맡은 레인이 없는 자료는 빠진다(잡 설정은 안 바뀐다). 증류가 아닌 잡에 주면 400."),
+  },
   expose: {
     mcp: true,
-    rest: [{ method: "POST", paths: ["/api/ui/cron/:id/run"], parse: (req) => ({ id: req.params?.id }) }],
+    rest: [{ method: "POST", paths: ["/api/ui/cron/:id/run"], parse: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return { id: req.params?.id, dry_run: b.dry_run === true, lanes_only: b.lanes_only === true };
+    } }],
   },
-  handler: async (input: any) => runCronById(parseCronId(input.id)),
+  handler: async (input: any) => {
+    const id = parseCronId(input.id);
+    const dryRun = input.dry_run === true, lanesOnly = input.lanes_only === true;
+    if (!dryRun && !lanesOnly) return runCronById(id);
+    const job = await getCronJob(id);
+    if (!job) throw new HttpError(404, `잡 '${id}' 이(가) 없습니다`);
+    if (!DISTILL_RUN_ACTIONS.has(job.action)) throw new HttpError(400, `dry_run·lanes_only 는 증류 잡에만 쓸 수 있습니다 — '${id}' 의 액션은 ${job.action} 입니다`);
+    const extra = lanesOnly ? { lanes_only: true } : {};
+    if (dryRun) return { status: "dry_run", id, action: job.action, plan: await planDistillRun(job.action, { ...(job.params ?? {}), ...extra }) };
+    return runCronById(id, extra);
+  },
 };
 
 export const cronCapabilities: Capability[] = [cronList, cronSet, cronDelete, cronRunNow];

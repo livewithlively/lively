@@ -1144,7 +1144,7 @@
   "rest": [
    "POST /api/ui/org/pipeline/run-now"
   ],
-  "input_hash": "7272b62987de18ab"
+  "input_hash": "d9df0adf5218ea95"
  },
  {
   "name": "org_collector_discover",
@@ -1264,7 +1264,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "eca1f0a5ec9e48f2"
+  "input_hash": "a9b97ff4a5afeb00"
  },
  {
   "name": "org_distiller_remove",
@@ -3922,7 +3922,7 @@
   "rest": [
    "POST /api/ui/cron/:id/run"
   ],
-  "input_hash": "e9f5a6623f0f7ef5"
+  "input_hash": "631e4d1d9a4ff63b"
  },
  {
   "name": "list_unmapped",

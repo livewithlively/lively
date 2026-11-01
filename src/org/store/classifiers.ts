@@ -302,7 +302,9 @@ export async function upsertClassifier(input: ClassifierUpsertInput, actor?: str
 }
 
 export async function removeClassifier(id: number, actor?: string, source?: string): Promise<void> {
-  const cur = await getClassifier(id);
+  //  ⚠ Number() 를 빼지 마라(#5235) — id 는 BIGSERIAL 이라 조회한 행의 값은 런타임에 문자열이다(타입은 number 라 컴파일러가 못 잡는다).
+  //   문자열로 넘기면 getClassifier 가 key 로 찾다 못 찾고, 아무것도 안 지운 채 { ok: true } 로 끝난다 — 화면엔 «삭제했습니다» 가 뜬다.
+  const cur = await getClassifier(Number(id));
   if (!cur) return;
   // seen 은 FK CASCADE 로 함께 사라진다. 이미 만들어진 분류 제안은 남는다(지식의 자산이지 분류기의 것이 아니다).
   await itemsPool.query(`DELETE FROM org_classifier WHERE id=$1`, [id]);

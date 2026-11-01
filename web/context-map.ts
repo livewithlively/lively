@@ -23,6 +23,7 @@ import { stageHealthLevels } from './context-pipeline.js';
 import { presetSvcKey, svcTile } from './svc-icons.js';
 import { svcLogo } from './svc-logos.js';
 import { appGlassIcon } from './v2/glass-icon.js';   // 리프 모듈(#3830) — 셸 레지스트리를 물지 않는다
+import { confirmDistillRun } from './distill-run-check.js';   // #5235 기본 기준으로 함께 나갈 자료를 누르기 전에
 import { runsPanel, type RunFilter } from './context-runs.js';   // #4172 지도 아래 「자동 실행」(#4135 3판 — 날짜·기간·자세히 보기)
 import { icon as lineIcon } from './v2/icons.js';
 import { AI_LOGO, AI_BRAND, AI_ORDER } from './lib/ai-logos.js';   // #5147 AI 세션 역의 실물 — 이 계정에 연결된 AI 로고
@@ -250,7 +251,7 @@ export async function renderContextMap(box: HTMLElement, blind?: Promise<HTMLEle
   //  #5147(원준 2026-10-30) — 「자동 실행」 머리에 주기를 기다리지 않고 한 번 돌리는 단추.
   //   #5159(원준 2026-10-31) — 둘(수집 · 증류)을 하나로 합쳤다. 순서(수집이 끝난 뒤 증류)는 서버가 잇는다(runNowButtons 머리말).
   if (hasScope('memory')) {
-    const now = runNowButtons(collectors, [st.distill?.job, fill?.job], () => panel.reload());
+    const now = runNowButtons(collectors, [st.distill?.job, fill?.job], () => panel.reload(), st.distill?.job?.id);
     panel.root.querySelector('.cxr-head .cxr-more-link')?.before(now);
   }
   const fillWarn = distillFillWarn(fill?.job, fillN);
@@ -271,7 +272,8 @@ async function loadBlindspot(): Promise<HTMLElement | null> {
   try {
     const r: any = await api('/api/ui/org/distillers');
     const n = Number(r?.coverage?.uncovered || 0);
-    return n > 0 ? el('span', { class: 'cxm-mc-x', title: '어느 증류기에도 안 걸리는 자료 — 이대로 두면 영영 지식이 되지 않습니다', text: '사각지대 ' + fmtNum(n) }) : null;
+    //  (#5235) 종전 설명은 «이대로 두면 영영 지식이 되지 않습니다» 였는데 #1631 뒤로 사실이 아니다 — 기본 기준으로 나간다.
+    return n > 0 ? el('span', { class: 'cxm-mc-x', title: '맡은 증류기가 없는 자료입니다 — 자동 실행이 돌 때마다 증류기의 기준이 아니라 기본 기준으로 지식이 됩니다', text: '사각지대 ' + fmtNum(n) }) : null;
   } catch { return null; }
 }
 // 셸은 이 이름 하나만 부른다.
@@ -286,20 +288,24 @@ export async function renderContextMapScreen(box: HTMLElement): Promise<void> {
  *  /org/pipeline/run-now 가 **연결된** 수집기(지도의 외부 앱 역과 같은 판정) 전부를 돌리고, 모두 끝나면 증류(자료 → 지식 ·
  *  카테고리 붙이기)를 한 번씩. 곧바로 돌아오고 나머지는 뒤에서 잇는다 — 화면을 떠나도 이어진다.
  *  돌릴 것이 한쪽뿐이면 그 이름(«지금 수집» 또는 «지금 증류»)으로, 둘 다 없으면 단추를 끄고 이유를 툴팁으로 말한다.
+ *  (#5235) 증류까지 도는 경우 기본 기준으로 함께 나갈 자료를 누르기 전에 묻는다 — distillJobId 가 그 판정을 읽을 잡이다.
+ *   ⚠ 지금 있는 자료로 답한다. 이번 수집이 새로 가져올 자료는 세지 못한다(그래서 툴팁이 그 사실을 함께 말한다).
  */
-function runNowButtons(collectors: any[], jobs: any[], after: () => void): HTMLElement {
+function runNowButtons(collectors: any[], jobs: any[], after: () => void, distillJobId?: string): HTMLElement {
   const ids = Array.from(new Set(jobs.filter((j) => j && j.id && j.any_enabled).map((j) => String(j.id))));
   const nc = collectors.length, nd = ids.length;
   const label = nc && nd ? '지금 수집·증류' : nc ? '지금 수집' : '지금 증류';
   const b = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: label }) as HTMLButtonElement;
   if (!nc && !nd) { b.disabled = true; b.title = '연결된 수집기도, 켜진 증류 자동 실행도 없습니다'; }
-  else b.title = nc && nd ? '연결된 수집기 ' + nc + '개가 지금 가져오고, 모두 끝나면 증류가 이어서 한 번 돕니다'
+  else b.title = nc && nd ? '연결된 수집기 ' + nc + '개가 지금 가져오고, 모두 끝나면 증류가 이어서 한 번 돕니다. 맡은 증류기가 없는 자료는 기본 기준으로 함께 나갑니다'
     : nc ? '연결된 수집기 ' + nc + '개가 지금 한 번 가져옵니다(증류 자동 실행이 꺼져 있어 증류는 하지 않습니다)'
     : '연결된 수집기가 없어 증류만 지금 한 번 돌립니다';
   b.addEventListener('click', async () => {
     b.disabled = true; b.textContent = '시작하는 중…';
     try {
-      const r: any = await api('/api/ui/org/pipeline/run-now', { method: 'POST', body: JSON.stringify({ collector_ids: collectors.map((c) => Number(c.id)), distill_job_ids: ids }) });
+      const opt = distillJobId && ids.includes(String(distillJobId)) ? await confirmDistillRun(String(distillJobId)) : {};
+      if (opt === null) return;   // 사람이 멈췄다 — 단추는 finally 가 되돌린다
+      const r: any = await api('/api/ui/org/pipeline/run-now', { method: 'POST', body: JSON.stringify({ collector_ids: collectors.map((c) => Number(c.id)), distill_job_ids: ids, ...opt }) });
       const runs: any[] = (r && r.runs) || [];
       const fail = runs.filter((x) => x.error).length, already = runs.filter((x) => x.already_running).length, started = runs.length - fail - already;
       const then = nd ? (nc ? ' 수집이 모두 끝나면 증류가 이어서 돕니다' : ' 증류를 시작했습니다') : '';

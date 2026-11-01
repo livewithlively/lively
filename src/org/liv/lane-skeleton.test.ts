@@ -1,7 +1,7 @@
 // 레인 뼈대 — 사양 엣지 표(scratchpad/spec-lane-skeleton.md) 행마다 한 검사.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { planLaneSkeleton, lookbackFromCadence, laneKeyFor, CATCH_ALL_KEY, keepDrawerTarget } from "./lane-skeleton.js";
+import { planLaneSkeleton, lookbackFromCadence, laneKeyFor, CATCH_ALL_KEY, drawerOfLane, settleDrawerTarget } from "./lane-skeleton.js";
 
 const D = (...keys: string[]) => keys.map((k) => ({ key: k, name: `서랍 ${k}` }));
 
@@ -58,37 +58,83 @@ test("⑪ 경계 — 49자 key 는 48자로 잘린다", () => {
   assert.equal(laneKeyFor("x".repeat(48)), "liv-" + "x".repeat(48));
 });
 
-// ── 서랍 레인의 목적지를 잃지 않는다 (#1631, 2026-08-31 감사 실측) ────────────────────────────
-//  실측: 뼈대가 `(null) → d-21c2235a7d` 로 넣은 목적지를, 리브가 그 레인을 **켜면서** `→ (null)` 로 지웠다.
-//   레인은 켜졌는데 목적지가 없다 = 그 레인이 만든 지식이 사람이 승인한 서랍에 안 들어간다.
-test("① 목적지가 비면 키에서 되살린다 — 서랍 레인은 키가 곧 목적지다", () => {
-  assert.equal(keepDrawerTarget("liv-d-21c2235a7d", null), "d-21c2235a7d");
-  assert.equal(keepDrawerTarget("liv-d-21c2235a7d", ""), "d-21c2235a7d");
-  assert.equal(keepDrawerTarget("liv-d-21c2235a7d", "   "), "d-21c2235a7d");
+// ── 서랍 레인의 목적지 (#1631 · #5235) ────────────────────────────────────────────────────────
+//  실측 #1631: 뼈대가 `(null) → d-21c2235a7d` 로 넣은 목적지를, 리브가 그 레인을 **켜면서** `→ (null)` 로 지웠다.
+//  실측 #5235: 없는 서랍이 키에서 되살아났고(`liv-product-thread`), 비우는 저장은 200 인데 아무것도 안 바뀌었다.
+//  표의 D 번호는 #5235 사양의 행이다. 실 upsert 경로는 org/distill/lane-settings.pg-test.mjs 가 재고, 여기는 판정 표를 잠근다.
+const STATES = new Map<string, string>([["a", "active"], ["b", "active"], ["dep", "deprecated"], ["d-21c2235a7d", "active"], ["product-plans", "active"]]);
+const settle = (key: string | null, given: string | null, clearing = false, states: Map<string, string> = STATES) =>
+  settleDrawerTarget({ key, given, clearing, stateOf: (k) => states.get(k) });
+
+test("관측 장치 — 표가 실제로 갈린다(세 결과가 다 나온다)", () => {
+  assert.deepEqual(settle("liv-a", null), { target: "a" });
+  assert.deepEqual(settle("liv-x", null), { target: null });
+  assert.deepEqual(settle("liv-a", null, true), { refuse: "a" });
 });
 
-test("② 명시된 목적지는 그대로 둔다 — 레인을 다른 서랍으로 옮기는 것은 정당하다", () => {
-  assert.equal(keepDrawerTarget("liv-d-21c2235a7d", "d-other"), "d-other");
+test("D1·D10 서랍이 있고 목적지가 비면 키에서 채운다 — 빈 값 모양은 가리지 않는다", () => {
+  for (const blank of [null, "", "   "]) assert.deepEqual(settle("liv-d-21c2235a7d", blank), { target: "d-21c2235a7d" }, JSON.stringify(blank));
 });
 
-test("③ 안전망(catch-all)은 목적지가 없는 것이 설계다 — 되살리지 않는다", () => {
-  assert.equal(keepDrawerTarget(CATCH_ALL_KEY, null), null);
-  assert.equal(keepDrawerTarget(CATCH_ALL_KEY, ""), null);
+test("D2·D12 서랍이 없으면 지어내지 않는다 — 종전엔 없는 카테고리가 박혔다", () => {
+  assert.deepEqual(settle("liv-product-thread", null), { target: null });
+  assert.deepEqual(settle("liv-x", ""), { target: null });
 });
 
-test("④ 리브 레인이 아니면 관여하지 않는다 — 프리셋·손수 만든 증류기의 뜻을 바꾸지 않는다", () => {
-  assert.equal(keepDrawerTarget("local-files", null), null);
-  assert.equal(keepDrawerTarget("issue-threads", ""), null);
-  assert.equal(keepDrawerTarget(null, null), null);
-  assert.equal(keepDrawerTarget("", null), null);
+test("D3·D4·D11 서랍이 없으면 비우기가 먹는다 — 없는 서랍이 박힌 레인을 고치는 길이다", () => {
+  assert.deepEqual(settle("liv-x", null, true), { target: null });
+  assert.deepEqual(settle("liv-x", "", true), { target: null });
 });
 
-test("⑤ 아스키 서랍키도 같은 규칙 — laneKeyFor 의 역이다", () => {
+test("D5·D6·D8·D18 서랍이 있는데 비우려 하면 거절한다 — 조용히 되살리면 저장이 듣지 않는다", () => {
+  for (const blank of [null, "", "   "]) assert.deepEqual(settle("liv-a", blank, true), { refuse: "a" }, JSON.stringify(blank));
+});
+
+test("D9 이미 빈 목적지를 되돌려 보낸 저장은 거절하지 않고 되살린다 — 스위치 저장이 막히면 안 된다", () => {
+  assert.deepEqual(settle("liv-a", null, false), { target: "a" });
+});
+
+test("D13·D14·D20 비어 있지 않으면 그대로다 — 옮기기는 정당하고, 명시값 검증은 이 판정의 일이 아니다", () => {
+  assert.deepEqual(settle("liv-a", "b"), { target: "b" });
+  assert.deepEqual(settle("liv-a", "b", true), { target: "b" });
+  assert.deepEqual(settle("liv-x", "ghost"), { target: "ghost" }, "없는 값이 박힌 레인의 무관한 저장을 막지 않는다");
+  assert.deepEqual(settle("liv-a", "  b  "), { target: "b" }, "공백은 다듬는다");
+});
+
+test("D15 비활성 서랍은 없는 서랍과 같다 — 되살리지 않고 비우기가 먹는다", () => {
+  assert.deepEqual(settle("liv-dep", null, true), { target: null });
+  assert.deepEqual(settle("liv-dep", null), { target: null });
+});
+
+test("D16 안전망은 목적지가 없는 것이 설계다 — 같은 이름의 카테고리가 있어도 관여하지 않는다", () => {
+  const withCatchAll = new Map(STATES).set("catch-all", "active");
+  assert.deepEqual(settle(CATCH_ALL_KEY, null, true, withCatchAll), { target: null });
+  assert.deepEqual(settle(CATCH_ALL_KEY, "", false, withCatchAll), { target: null });
+});
+
+test("D17 서랍 레인이 아니면 관여하지 않는다 — 프리셋·손수 만든 증류기의 뜻을 바꾸지 않는다", () => {
+  assert.deepEqual(settle("local-files", null, true), { target: null });
+  assert.deepEqual(settle("issue-threads", "", false), { target: null });
+  assert.deepEqual(settle(null, null, true), { target: null });
+  assert.deepEqual(settle("", null), { target: null });
+});
+
+test("D19 'liv-' 뒤가 비면 되살릴 것이 없다 — 지어내지 않는다", () => {
+  assert.deepEqual(settle("liv-", null, true), { target: null });
+  assert.deepEqual(settle("liv-   ", null), { target: null });
+  assert.equal(drawerOfLane("liv-"), null);
+  assert.equal(drawerOfLane(CATCH_ALL_KEY), null);
+  assert.equal(drawerOfLane("plain"), null);
+  assert.equal(drawerOfLane(null), null);
+});
+
+test("D21 카테고리가 하나도 없는 워크스페이스 — 어떤 키도 되살리지 않는다", () => {
+  assert.deepEqual(settle("liv-a", null, false, new Map()), { target: null });
+  assert.deepEqual(settle("liv-a", null, true, new Map()), { target: null });
+});
+
+test("laneKeyFor 의 역 — 뼈대가 만든 키에서 같은 서랍을 읽는다", () => {
   const drawer = "product-plans";
-  assert.equal(keepDrawerTarget(laneKeyFor(drawer), null), drawer);
-});
-
-test("⑥ 'liv-' 뒤가 비면 되살릴 것이 없다 — 지어내지 않는다", () => {
-  assert.equal(keepDrawerTarget("liv-", null), null);
-  assert.equal(keepDrawerTarget("liv-   ", null), null);
+  assert.equal(drawerOfLane(laneKeyFor(drawer)), drawer);
+  assert.deepEqual(settle(laneKeyFor(drawer), null), { target: drawer });
 });

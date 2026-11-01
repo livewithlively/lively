@@ -845,22 +845,50 @@ export async function listProposedClassifications(limit = 200, viewer?: Viewer):
 
 // ── LLM 분류 제안(#982, map_code_unit 의 지식판) — 미분류 지식에 카테고리를 mapped_by='llm'+evidence 로 건다. ──
 //  linkKnowledgeCategory 와 결정적 차이 3가지: ① DELETE 안 함(replace 아님 — 사람 분류 불가침) ② mapped_by='llm' ③ **이미 카테고리 행이 있으면 no-op**.
-//  state: 명시하면 그대로, 아니면 confidence≥0.8 → 'confirmed' 아니면 'proposed'. 소비쿼리는 state<>'rejected' 라 proposed 만으로 즉시 발견된다.
+//  state: 명시하면 그대로, 아니면 서버가 문턱으로 정한다(confidence≥문턱 → 'confirmed' 아니면 'proposed' — confirmThresholdFor). 소비쿼리는 state<>'rejected' 라 proposed 만으로 즉시 발견된다.
+/** 어느 레인도 배치로 낸 적 없는 지식의 확정 문턱 — org_classifier.confirm_threshold 의 기본값과 같다. */
+export const DEFAULT_CONFIRM_THRESHOLD = 0.8;
+
+/**
+ * 이 지식의 제안을 확정할 문턱(#5235) — 그 지식을 배치로 낸 «카테고리 붙이기» 레인의 confirm_threshold.
+ *
+ *  종전엔 레인 문턱이 프롬프트 문구로만 갔고 판정은 고정 0.8 이었다. 고객사 실측: 문턱 0.4 로 저장해도 confidence 0.7 이
+ *   proposed 로 남았다 — 저장은 200 인데 설정이 안 듣는다. 사람이 검토하지 않는 조직에선 검토 대기만 쌓인다.
+ *  ⚠ 어느 레인인지 LLM 에게 묻지 않는다. 인자로 받으면 LLM 이 빠뜨리는 순간 조용히 0.8 로 돌아가 같은 결함이 된다.
+ *   배치를 내는 시점에 서버가 org_classifier_seen 에 적은 기록을 읽는다(markClassifierSeen — LLM 자기보고가 아니다).
+ *  여러 레인이 봤으면(기준·우선순위를 바꿔 다시 낸 경우) 가장 최근 배치의 레인이다. 낸 레인이 없으면 기본 문턱.
+ */
+async function confirmThresholdFor(name: string): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT c.confirm_threshold
+       FROM org_classifier_seen s JOIN org_classifier c ON c.id = s.classifier_id
+      WHERE s.knowledge_name = $1
+      ORDER BY s.seen_at DESC, s.classifier_id DESC LIMIT 1`, [name]);
+  const t = r.rows[0]?.confirm_threshold;
+  return t === undefined || t === null ? DEFAULT_CONFIRM_THRESHOLD : Number(t);
+}
+
 export async function proposeKnowledgeCategory(
   name: string, categoryId: number,
   opts: { evidence: string; confidence?: number | null; state?: string }, ctx?: WriteCtx,
-): Promise<{ applied: boolean; state: string; skipped?: string }> {
-  const state = opts.state ?? ((opts.confidence ?? 0) >= 0.8 ? "confirmed" : "proposed");
+): Promise<{ applied: boolean; state: string; threshold?: number; skipped?: string }> {
+  let state = opts.state;
+  let threshold: number | undefined;
+  if (!state) {
+    threshold = await confirmThresholdFor(name);
+    //  확신도가 없으면 판정할 재료가 없다 — 문턱이 0 이어도 자동 확정하지 않는다.
+    state = opts.confidence != null && opts.confidence >= threshold ? "confirmed" : "proposed";
+  }
   // 분류기는 '빈 자리'만 채운다 — 이미 카테고리 행(어떤 state 든)이 있으면 건너뛴다(single_uq 위반 방지 + 사람/기존 판정 불가침).
   const ex = await itemsPool.query(`SELECT 1 FROM knowledge_category WHERE name=$1 LIMIT 1`, [name]);
-  if (ex.rowCount) return { applied: false, state, skipped: "already_has_category" };
+  if (ex.rowCount) return { applied: false, state, threshold, skipped: "already_has_category" };
   await itemsPool.query(
     `INSERT INTO knowledge_category(name, category_id, mapped_by, confidence, state, evidence, created_at)
      VALUES($1,$2,'llm',$3,$4,$5,now())
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state, confidence=EXCLUDED.confidence, evidence=EXCLUDED.evidence, mapped_by='llm'`,
     [name, categoryId, opts.confidence ?? null, state, opts.evidence]);
-  await auditKnowledge(name, "propose_category", null, { category_id: categoryId, state, mapped_by: "llm", confidence: opts.confidence ?? null }, ctx);
-  return { applied: true, state };
+  await auditKnowledge(name, "propose_category", null, { category_id: categoryId, state, mapped_by: "llm", confidence: opts.confidence ?? null, threshold: threshold ?? null }, ctx);
+  return { applied: true, state, threshold };
 }
 
 // ════════ #976/#984 지식 발행표식(knowledge_publication) — authored 지식을 외부 피드로 투영한 좌표(external_* 과 직교). ════════
