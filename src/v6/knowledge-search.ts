@@ -3,7 +3,7 @@
 //  충돌했다. 공개 표면은 그대로 — knowledge-store.ts 가 이 모듈을 재수출하므로 기존 호출부는 무수정.
 //  공용 조각(가시성 술어·아이콘 표현식)은 knowledge-common.ts, grep 매처·RRF 상수는 search-util.ts.
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, withTx } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
   type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, exactFirst, titleFirst,
@@ -76,6 +76,28 @@ async function bm25Terms(qstr: string, opts: { plain?: boolean; includeUnsearcha
   return terms.length && await lexReady() ? terms : null;
 }
 
+/**
+ * BM25 점수를 한 문장으로 따로 낸다(#5234). 이 문장에만 중첩 반복을 끈다 — 공용 표에서 플래너가 워크스페이스 행 수를 1로 짚으면 낱말 행마다 문서를 처음부터 훑는다
+ *  (매니지드 실측: 시간이 낱말 행 수에 정비례 · 1만 6,807행 6.1초. 같은 조건을 재현해 끄면 표본 p95 990ms → 19ms). 통계가 어떻든 문서를 해시로 잇는다.
+ *  찾기 본문까지 끄면 지식 · 조각 표를 통째로 읽으므로 범위를 여기로 좁히고, 본문 쿼리는 결과만 받는다(bmCte).
+ */
+async function lexScores(terms: readonly string[], viewer?: Viewer): Promise<{ names: string[]; scores: number[] }> {
+  const params: unknown[] = [];
+  const vis = await knowledgeVisWhere(viewer, params);
+  const sql = `WITH ${bm25Sql(terms, params, vis)} SELECT array_agg(name) AS names, array_agg(score) AS scores FROM bm`;
+  const rows = await withTx(async (c) => {
+    await c.query(`SET LOCAL enable_nestloop = off`);
+    return q(c, sql, params);
+  });
+  return { names: rows[0]?.names ?? [], scores: rows[0]?.scores ?? [] };
+}
+
+/** lexScores 의 결과를 본문 쿼리의 bm(name, score) CTE 로 — bm25Sql 의 bm 과 같은 모양이다. */
+function bmCte(scored: { names: string[]; scores: number[] }, params: unknown[]): string {
+  params.push(scored.names, scored.scores);
+  return `bm AS (SELECT * FROM unnest($${params.length - 1}::text[], $${params.length}::float8[]) AS u(name, score))`;
+}
+
 /** 지식 검색이 받는 공통 거르기 — categories(#5100)는 카테고리 id 목록(category 인자를 풀어 넣는다 · 앱 맥락 범위는 여기서 교집합으로 더해진다). */
 export interface KnowledgeSearchFilter {
   injection?: string; provenance?: string; categories?: readonly number[] | null;
@@ -127,7 +149,7 @@ export async function searchKnowledge(
     const vis = await knowledgeVisWhere(viewer, params);
     const first = exactFirst("k.name", qstr, "name", params);   // key 의 주인이 LIMIT 에 잘리지 않게(exactFirst 주석)
     const tf = titleFirst("k.title", p, params);                // 제목에 모든 낱말이 든 것이 본문만 스친 최근 문서에 잘리지 않게(#4530)
-    const bm = bmTerms ? bm25Sql(bmTerms, params, vis) : null;
+    const bm = bmTerms ? bmCte(await lexScores(bmTerms, viewer), params) : null;
     params.push(Math.min(opts.limit ?? 20, 100));
     return q(itemsPool,
       `${bm ? `WITH ${bm} ` : ""}SELECT ${sel} FROM knowledge k ${bm ? "LEFT JOIN bm ON bm.name = k.name " : ""}WHERE ${where} AND ${vis}
@@ -319,7 +341,7 @@ async function rrfSearch(
   const first = exactFirst("k.name", qstr, "name", params);
   //  렉시컬 순위도 «제목에 모든 낱말이 든 것 먼저» (#4530) — 종전엔 최신순뿐이라 RRF 에 «제목이 맞았다» 는 신호가 하나도 없었다.
   const tf = terms ? "" : titleFirst("k.title", parsed, params);
-  const lexChannel = terms ? `${bm25Sql(terms, params, vis)},
+  const lexChannel = terms ? `${bmCte(await lexScores(terms, viewer), params)},
     lex AS (
       SELECT k.name, row_number() OVER (ORDER BY ${first}b.score DESC, k.updated_at DESC) AS rank
       FROM bm b JOIN knowledge k ON k.name = b.name WHERE ${bmFilters} ORDER BY ${first}b.score DESC, k.updated_at DESC LIMIT ${candP}
