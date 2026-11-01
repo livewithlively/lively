@@ -108,8 +108,8 @@ test("BM25 SQL — 공개범위 술어가 문서 수 · 평균 길이와 낱말 
   assert.ok(!bm25Sql(["a"], [], "TRUE").includes("JOIN knowledge k"), "볼 수 있는 것이 전부면 이어 붙이지 않는다");
 });
 
-test("BM25 SQL — 임시 결과끼리 잇지 않는다", () => {
+test("BM25 SQL — 낱말 행을 문서 CTE 와 잇지 않고 통계 한 행만 곁들인다", () => {
   const sql = bm25Sql(["a"], [], "k.visibility = 'open'");
-  assert.ok(!/JOIN (lv|lp|ldf)\b/.test(sql), sql);
-  assert.ok(/FROM lp p CROSS JOIN ls s/.test(sql), "통계 한 행만 곁들인다");
+  assert.ok(!/JOIN (lv|ldf)\b/.test(sql), sql);
+  assert.ok(/FROM lp p CROSS JOIN ls s/.test(sql));
 });

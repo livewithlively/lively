@@ -30,11 +30,11 @@
 //   X23 스윕 시간 상한 — 상한을 넘으면 멈추고 다음 판이 잇는다
 //   X24 BM25 SQL 이 실패해도 grep 은 답한다
 //   X25 통계에 볼 수 없는 문서가 안 들어간다 — 숨은 문서가 있든 없든 다른 사람이 받는 순서 · 점수가 같다(hybrid · grep) · 특권 신원의 순서는 달라진다(양성 대조)
-//   X29 실행 계획이 나빠도 — 해시 · 병합 조인을 꺼도 낱말 행마다 문서 목록을 훑지 않는다(잇는 조건으로 버리는 행이 없다) · 공개범위가 걸려도 같다
-//   X30 찾기 · grep 의 BM25 문장은 중첩 반복을 끈 트랜잭션에서 돈다 · 끄기가 본문 쿼리로 새지 않는다
 //   X26 낱말 규칙의 판이 다른 문서는 스윕이 다시 만든다
 //   X27 저장 — 스윕 없이 곧 찾힌다
 //   X28 세션 완전 삭제 · 보존기간 — 그 박스의 찾기 기록도 지운다
+//   X29 BM25 문장 — 통계가 있어도 중첩 반복을 끄면 잇는 조건으로 버리는 행이 없다 · 공개범위가 걸려도 같다 · 음성 대조: 해시와 병합 조인을 끄면 버리는 행이 생긴다
+//   X30 찾기 · grep 의 BM25 문장은 중첩 반복을 끈 트랜잭션에서 돈다 · 하이브리드 본문은 끄지 않는다 · 끄기가 트랜잭션 밖으로 새지 않는다
 import pg from "pg";
 import http from "node:http";
 
@@ -346,17 +346,22 @@ try {
   chk("X25 숨은 문서가 늘어도 다른 사람의 순서 · 점수가 같다(하이브리드)", JSON.stringify(before.s) === JSON.stringify(after.s), JSON.stringify([before.s, after.s]));
   chk("X25 숨은 문서가 늘어도 다른 사람의 순서가 같다(grep)", JSON.stringify(before.g) === JSON.stringify(after.g), JSON.stringify([before.g, after.g]));
   chk("X25 BM25 점수가 같다", JSON.stringify(beforeS) === JSON.stringify(afterS), JSON.stringify([beforeS, afterS]));
+  chk("X25 특권 신원은 통계에 든다(양성 대조)", adminBefore[0].score !== adminAfter[0].score, JSON.stringify([adminBefore[0], adminAfter[0]]));
 
   // ── X29 ──
-  const worstPlan = (who) => withTx(async (c) => {
-    await c.query(`SET LOCAL enable_hashjoin = off`); await c.query(`SET LOCAL enable_mergejoin = off`);
+  await q(`ANALYZE knowledge_lex_doc`); await q(`ANALYZE knowledge_lex_posting`); await q(`ANALYZE knowledge`);
+  const planOf = (who, ...settings) => withTx(async (c) => {
+    for (const s of settings) await c.query(`SET LOCAL ${s}`);
     const p = []; const vis = await kc.knowledgeVisWhere(who, p);
     const r = await c.query(`EXPLAIN (ANALYZE, FORMAT JSON) WITH ${lx.bm25Sql(lx.lexQueryTerms(`잣대알파 잣대베타`), p, vis)} SELECT name, score FROM bm`, p);
     return r.rows[0]["QUERY PLAN"][0].Plan;
   });
   const dropped = (n) => (n["Rows Removed by Join Filter"] ?? 0) + (n.Plans ?? []).reduce((sum, x) => sum + dropped(x), 0);
-  chk("X29 나쁜 계획에서도 낱말 행마다 문서를 훑지 않는다", dropped(await worstPlan(null)) === 0, String(dropped(await worstPlan(null))));
-  chk("X29 공개범위가 걸려도 같다", dropped(await worstPlan(stranger)) === 0, String(dropped(await worstPlan(stranger))));
+  for (const [lab, who] of [["특권", null], ["공개범위", stranger]]) {
+    const off = dropped(await planOf(who, "enable_nestloop = off")), worst = dropped(await planOf(who, "enable_hashjoin = off", "enable_mergejoin = off"));
+    chk(`X29 ${lab} — 중첩 반복을 끄면 잇는 조건으로 버리는 행이 없다`, off === 0, String(off));
+    chk(`X29 ${lab} — 음성 대조: 해시와 병합 조인을 끄면 버리는 행이 생긴다`, worst > 0, String(worst));
+  }
 
   // ── X30 ──
   const statements = async (run) => {
@@ -372,14 +377,17 @@ try {
     try { await run(); } finally { itemsPool.connect = connect; for (const [c, query] of spied) c.query = query; }
     return log;
   };
-  for (const [lab, run] of [["찾기", () => search(`잣대알파 잣대베타 문장으로`)], ["grep", () => grep(`잣대알파 잣대베타`)]]) {
-    const log = await statements(run);
+  const NO_NEST = /SET LOCAL enable_nestloop = off/;
+  const hybridLog = await statements(() => search(`잣대알파 잣대베타 문장으로`));
+  const grepLog = await statements(() => grep(`잣대알파 잣대베타`));
+  for (const [lab, log] of [["찾기", hybridLog], ["grep", grepLog]]) {
     const i = log.findIndex((t) => t.includes("lp AS"));
-    chk(`X30 ${lab} — BM25 문장 바로 앞에서 중첩 반복을 끈다`, i > 0 && /SET LOCAL enable_nestloop = off/.test(log[i - 1]) && log.slice(0, i).at(-2) === "BEGIN", JSON.stringify(log.slice(0, i + 1).map((t) => t.slice(0, 50))));
+    chk(`X30 ${lab} — BM25 문장 바로 앞에서 중첩 반복을 끈다`, i > 1 && NO_NEST.test(log[i - 1]) && log[i - 2] === "BEGIN", JSON.stringify(log.slice(0, i + 1).map((t) => t.slice(0, 50))));
   }
-  const nested = await withTx(async (c) => (await c.query(`SHOW enable_nestloop`)).rows[0].enable_nestloop);
-  chk("X30 끄기가 트랜잭션 밖으로 새지 않는다", nested === "on", nested);
-  chk("X25 특권 신원은 통계에 든다(양성 대조)", adminBefore[0].score !== adminAfter[0].score, JSON.stringify([adminBefore[0], adminAfter[0]]));
+  const bmAt = hybridLog.findIndex((t) => t.includes("lp AS")), bodyAt = hybridLog.findIndex((t) => t.includes("fused AS"));
+  chk("X30 하이브리드 본문은 끄지 않는다", bodyAt > bmAt && !hybridLog.slice(bmAt + 1, bodyAt).some((t) => NO_NEST.test(t)), JSON.stringify(hybridLog.map((t) => t.slice(0, 40))));
+  const nestAfter = await withTx(async (c) => (await c.query(`SHOW enable_nestloop`)).rows[0].enable_nestloop);
+  chk("X30 끄기가 트랜잭션 밖으로 새지 않는다", nestAfter === "on", nestAfter);
 
   // ── X26 ──
   await settled();
