@@ -11,7 +11,7 @@ import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings, ResumeLink } from "./plan.js";
 import type { Viewer } from "../apps/visibility.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, cancelRunFor, composeSystem, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, callerUnattended, cancelRunFor, composeSystem, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -23,6 +23,8 @@ interface World {
   runs: Map<number, AiRunRow>; calls: NewLlmCall[]; jobs: Map<number, AgentJobRow>; submitted: SubmitJobInput[]; llm: SingleShotInput[]; canceled: number[];
   settings: AiAccountSettings; key: string | null; policy: AiRunPolicy; llmReply: (i: SingleShotInput, n: number) => SingleShotOutput; submitThrows?: HttpError;
   usedToday: number; inflightCount: number;
+  /** #1639 오늘 앱 서버의 본인 구독 실행이 쓴 토큰(가짜) · 이 앱 서버 호출의 사람 신원이 사람이 보지 않는 자리에서 왔나 · 그것을 몇 번 물었나 · 못 읽음. */
+  ownTokensToday: number; unattended: boolean; unattendedAsks: number; unattendedThrows?: boolean;
   /**
    * #5081 구성원 표(가짜) — 없는 이름은 활성 · 기본 권한뿐(앱 서버 id 는 늘 아님). 작업마다 · 실행마다 공용 시트 표시.
    *  실행 표시는 행 모양(COLS)에 없고 따로 읽는다(store.RUN_SHARED_SEAT_COL) — 가짜도 행 밖 지도로 둔다.
@@ -45,6 +47,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
   const w: World = {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
     llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), runShared: new Map(),
+    ownTokensToday: 0, unattended: false, unattendedAsks: 0,
     resumeLinks: new Map(), jobTranscripts: new Set(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
@@ -93,6 +96,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async appConversations() { return []; },
       async insertLlmCall(c) { w.calls.push(c); },
       async tokensUsedTodayByApp() { return w.usedToday; },
+      async appServerOwnTokensToday() { return w.ownTokensToday; },
     },
     policy: async () => w.policy,
     accountSettings: async () => w.settings,
@@ -125,6 +129,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     isAdmin: (u) => (u.scopes ?? []).includes("admin"),
     isJobToken: async (prefix) => prefix === "jobtok",
     memberFacts: async (m) => (m.startsWith("app-server:") ? { active: false, elevated: false } : w.members[m] ?? { active: true, elevated: false }),
+    appServerUnattended: async () => { w.unattendedAsks++; if (w.unattendedThrows) throw new Error("표시를 못 읽었다(가짜)"); return w.unattended; },
     //  «MCP 만» 값(필수 의존성) — 기본은 종전 작업. 필요한 시험이 덮어 쓴다(withMcpOnly · withJobMcpOnly).
     mcpOnly: async () => false,
     jobMcpOnly: async () => false,
@@ -356,18 +361,19 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
     prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, mcpOnly: false, toolAllowlist: null };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
-  const homeless = agentJobOfRun({ ...base, homeless: true, sharedSeat: false }, o);
+  const homeless = agentJobOfRun({ ...base, homeless: true, sharedSeat: false, appServerOwn: false }, o);
   assert.deepEqual(homeless, {
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
-    model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true, sharedSeat: false,
+    model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true, sharedSeat: false, appServerOwn: false,
     appInstructions: null, mcpOnly: false, toolAllowlist: null,
   });
   //  #5082 — 앱 판 지시도 그대로 옮긴다(빠지면 그 작업은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다).
-  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appInstructions: "판 지시" }, o).appInstructions, "판 지시");
-  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false }, o).homeless, false);
+  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appServerOwn: false, appInstructions: "판 지시" }, o).appInstructions, "판 지시");
+  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appServerOwn: false }, o).homeless, false);
   //  #5081 — 공용 시트 표시도 그대로 옮긴다(빠지면 물은 사람의 작업이 시트 계정의 이름으로 돈다).
-  assert.equal(agentJobOfRun({ ...base, accountKind: "subscription", accountMember: "seat", homeless: false, sharedSeat: true }, o).sharedSeat, true);
-  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false }, o).sharedSeat, false);
+  assert.equal(agentJobOfRun({ ...base, accountKind: "subscription", accountMember: "seat", homeless: false, sharedSeat: true, appServerOwn: false }, o).sharedSeat, true);
+  assert.equal(agentJobOfRun({ ...base, accountKind: "subscription", accountMember: "alice", homeless: false, sharedSeat: false, appServerOwn: true }, o).appServerOwn, true, "#1639 앱 서버의 본인 구독 표시가 작업 행으로 간다");
+  assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appServerOwn: false }, o).sharedSeat, false);
   ok("S5c 작업 접수 → 작업 행이 홈 없는 표시 · 공용 시트 표시를 그대로 옮긴다");
 }
 
@@ -484,6 +490,147 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
   await fails(submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-front" }, roll.d), 503, /잠시 뒤 다시/);
   assert.equal(roll.w.submitted.length, 0, "작업을 보내지 않는다");
   ok("S26 공용 시트 — 구성원 누구나 · 앱 서버 사람 대리 · 시트 자리(홈 없는 자리 아님) · 표시 · 남는 거절(비활성 · 앱 서버 id · 기계 세션 · 작업 토큰) · 앱 폴더만 · 높은 권한/비활성 시트는 공용 아님 · 재시도도 같은 자리 · targets · 시트 계정은 남의 실행을 못 봄");
+}
+
+// ── S27 앱 서버가 보낸 본인 요청(#1639 · 엣지 표 a~q) — 물은 사람이 구독 주인 본인이면 그 구독으로 · 공용 시트와 같은 울타리 · 남 · 사람이 보지 않는 자리는 거절 ──
+{
+  const mine = { default: { kind: "subscription" as const, member: "alice" } };
+  const srv = (id = "alice", extra: Partial<LivelyUser> = {}): LivelyUser => member(id, { appId: "crm", appServer: true, ...extra });
+  //  a 에이전트 작업 — 접수 · 자리는 그 사람(구독) · 홈 없는 자리 아님 · 공용 시트 아님 · 표시가 작업까지 · 응답에 «앱 서버 경유 · 본인 구독»
+  const a = world({ settings: mine, key: null });
+  const ra = await submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, a.d);
+  const ja = a.w.submitted.at(-1)!;
+  assert.equal(ra.requester, "alice"); assert.equal(ra.requester_kind, "app_server"); assert.deepEqual(ra.account, { kind: "subscription", member: "alice" }); assert.equal(ra.app_server_own, true);
+  assert.equal(ja.requester, "alice"); assert.equal(ja.accountKind, "subscription"); assert.equal(ja.accountMember, "alice");
+  assert.equal(ja.appServerOwn, true); assert.equal(ja.homeless, false, "구독 로그인은 그 사람의 홈에 있다"); assert.equal(ja.sharedSeat, false); assert.equal(ja.projectId, null);
+  assert.equal(a.w.unattendedAsks, 1, "사람이 보지 않는 자리인지 묻는다");
+  //  b 단발 — 구독 단발은 작업 컨테이너(bare) · 프록시로 안 간다 · 표시 그대로
+  const b = world({ settings: mine, key: null });
+  const rb = await submitRun({ prompt: "x" }, srv(), { source: "web" }, b.d);
+  assert.equal(rb.executor, "job"); assert.equal(b.w.submitted.at(-1)!.bare, true); assert.equal(b.w.submitted.at(-1)!.appServerOwn, true); assert.equal(b.w.llm.length, 0);
+  //  c 프로젝트 폴더 — 사람 경계다 · 행도 작업도 안 남는다
+  const c = world({ settings: mine, key: null });
+  await fails(submitRun({ prompt: "x", agent: true, project_id: 12 }, srv(), { source: "web" }, c.d), 400, /앱 폴더에서만/);
+  assert.equal(c.w.runs.size, 0); assert.equal(c.w.submitted.length, 0);
+  //  d 사람이 보지 않는 자리에서 온 신원 → 403 · 행 없음
+  const dd = world({ settings: mine, key: null, unattended: true });
+  await fails(submitRun({ prompt: "x", agent: true }, srv("alice", { appCallId: 7 }), { source: "web" }, dd.d), 403, /사람이 보는 세션/, "account_unavailable");
+  assert.equal(dd.w.runs.size, 0); assert.equal(dd.w.submitted.length, 0);
+  //  e 남의 구독 → 403 · 표시를 묻지 않는다(주인이 아니면 볼 까닭이 없다)
+  const e = world({ settings: mine, key: null });
+  await fails(submitRun({ prompt: "x", agent: true }, srv("bob"), { source: "web" }, e.d), 403, /주인 본인일 때만/, "account_unavailable");
+  assert.equal(e.w.unattendedAsks, 0); assert.equal(e.w.runs.size, 0);
+  //  f 사람 신원 없는 앱 서버 → 403
+  const f = world({ settings: mine, key: null });
+  await fails(submitRun({ prompt: "x", agent: true }, srv("app-server:t:crm"), { source: "web" }, f.d), 403, /주인 본인일 때만/, "account_unavailable");
+  //  g 작업 AI 자신의 토큰 → 그 전에 거절(본인 구독이어도)
+  const g = world({ settings: mine, key: null });
+  await fails(submitRun({ prompt: "x", agent: true }, srv("alice", { tokenHashPrefix: "jobtok" }), { source: "web" }, g.d), 403, /작업 안에서는/);
+  //  h API 키 · 앱 서버 에이전트 — 종전대로 홈 없는 자리(표시 없음 · 표시를 묻지 않음 · 응답 칸 없음)
+  const h = world();
+  const rh = await submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, h.d);
+  assert.equal(h.w.submitted.at(-1)!.homeless, true); assert.equal(h.w.submitted.at(-1)!.appServerOwn, false); assert.equal(h.w.unattendedAsks, 0); assert.equal("app_server_own" in rh, false);
+  //  i 공용 시트로 켜진 구독을 그 계정 본인이 앱 서버로 물음 — 공용 시트의 자리(본인 구독 갈래가 아니다)
+  const NOW = "2026-11-02T00:00:00.000Z";
+  const seat = world({ settings: { default: { kind: "subscription", member: "seat" }, service_seats: { seat: { admin: { by: "root", at: NOW }, member: { at: NOW } } } }, key: null });
+  await submitRun({ prompt: "x", agent: true }, srv("seat"), { source: "web" }, seat.d);
+  assert.equal(seat.w.submitted.at(-1)!.sharedSeat, true); assert.equal(seat.w.submitted.at(-1)!.appServerOwn, false); assert.equal(seat.w.unattendedAsks, 0, "공용 시트는 이 표시를 쓰지 않는다(#5081 그대로)");
+  //  j 사람이 앱 화면에서 본인 구독 — 종전 그대로(표시 없음 · 표시를 묻지 않음 · 응답 칸 없음 · 프로젝트 폴더도 됨)
+  const human = world({ settings: mine, key: null });
+  const rj = await submitRun({ prompt: "x", agent: true, project_id: 12 }, appUser("alice", "crm"), { source: "app-ui" }, human.d);
+  assert.equal(human.w.submitted.at(-1)!.appServerOwn, false); assert.equal(human.w.submitted.at(-1)!.projectId, 12); assert.equal(human.w.unattendedAsks, 0); assert.equal("app_server_own" in rj, false);
+  //  k 앱당 하루 토큰 — 프록시 합 + 본인 구독 실행 합이 상한이면 429 · 작업 안 보냄 · 경계 아래는 받는다 · 상한 0 은 끔
+  const budget = { ...DEFAULT_AI_RUN_POLICY, daily_tokens_per_app: 1000 };
+  const k1 = world({ settings: mine, key: null, policy: budget, usedToday: 600, ownTokensToday: 400 });
+  await fails(submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, k1.d), 429, /오늘 토큰 상한/);
+  assert.equal(k1.w.runs.size, 0); assert.equal(k1.w.submitted.length, 0);
+  const k2 = world({ settings: mine, key: null, policy: budget, usedToday: 600, ownTokensToday: 399 });
+  await submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, k2.d);
+  assert.equal(k2.w.submitted.length, 1, "상한 아래는 받는다");
+  const k3 = world({ settings: mine, key: null, policy: { ...budget, daily_tokens_per_app: 0 }, ownTokensToday: 10_000_000 });
+  await submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, k3.d);
+  assert.equal(k3.w.submitted.length, 1, "0 = 끔");
+  //   사람이 앱 화면에서 본인 구독으로 보낸 실행 · 공용 시트는 이 상한을 안 탄다(종전 그대로)
+  const k4 = world({ settings: mine, key: null, policy: budget, usedToday: 5000, ownTokensToday: 5000 });
+  await submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, k4.d);
+  assert.equal(k4.w.submitted.length, 1, "사람의 구독 실행은 하루 토큰 상한을 안 탄다");
+  //   API 키 갈래는 프록시 합만 본다(본인 구독 합을 더하지 않는다 — 종전 그대로)
+  const k5 = world({ policy: budget, usedToday: 999, ownTokensToday: 5000 });
+  await submitRun({ prompt: "x" }, appUser("alice", "crm"), { source: "app-ui" }, k5.d);
+  assert.equal(k5.w.runs.size, 1, "API 키 갈래는 프록시 합만");
+  //  l 사람당 동시 상한 — 그대로 탄다
+  const l = world({ settings: mine, key: null, policy: { ...DEFAULT_AI_RUN_POLICY, max_running_per_member: 1 } });
+  await submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, l.d);
+  await fails(submitRun({ prompt: "y", agent: true }, srv(), { source: "web" }, l.d), 429, /이미 1개 돌고 있습니다/);
+  //  m 형식 재시도 — 재시도 작업도 같은 자리 · 같은 표시(홈 없는 자리로 내려앉지 않는다)
+  const m = world({ settings: mine, key: null });
+  await submitRun({ prompt: "요약", schema }, srv(), { source: "web" }, m.d);
+  const first = m.w.jobs.get(101)!; first.status = "done"; first.conversation_id = "conv-1"; first.result = { text: "형식 밖 글" };
+  assert.equal((await syncRun(m.w.runs.get(1)!, m.d))!.retries, 1, "재시도가 나갔다(관측 장치)");
+  const jm = m.w.submitted[1]!;
+  assert.equal(jm.appServerOwn, true, "재시도도 앱 서버의 본인 구독"); assert.equal(jm.homeless, false); assert.equal(jm.sharedSeat, false); assert.equal(jm.resumeJobId, 101);
+  //   공용 시트로 돈 실행의 재시도는 본인 구독 표시를 달지 않는다
+  seat.w.runs.get(1)!.schema = schema;
+  const sj = seat.w.jobs.get(101)!; sj.status = "done"; sj.conversation_id = "conv-2"; sj.result = { text: "형식 밖 글" };
+  await syncRun(seat.w.runs.get(1)!, seat.d);
+  assert.equal(seat.w.submitted[1]!.sharedSeat, true); assert.equal(seat.w.submitted[1]!.appServerOwn, false, "공용 시트 재시도");
+  //  n 이어받기 — 앱 서버가 시작한 대화를 앱 서버가 잇는다 · 같은 자리 · 판정은 지금 다시(그 사이 신원이 사람 없는 자리면 거절)
+  const n = world({ settings: mine, key: null });
+  await submitRun({ prompt: "Q", agent: true }, srv(), { source: "web" }, n.d);
+  Object.assign(n.w.jobs.get(101)!, { status: "done", conversation_id: "conv-3", result: { text: "답" } });
+  await syncRun(n.w.runs.get(1)!, n.d);
+  n.w.settings = {};   // 앱 설정이 바뀌어도 그 대화의 계정 그대로
+  const rn = await submitRun({ prompt: "고쳐", resume_run_id: 1 }, srv(), { source: "web" }, n.d);
+  assert.equal(n.w.submitted[1]!.appServerOwn, true); assert.equal(n.w.submitted[1]!.homeless, false); assert.equal(rn.app_server_own, true);
+  n.w.unattended = true;
+  await fails(submitRun({ prompt: "또", resume_run_id: 1 }, srv(), { source: "web" }, n.d), 403, /사람이 보는 세션/, "account_unavailable");
+  //  o 롤 창 — 작업 칸이 아직 없으면 503(잠시 뒤 다시) · 실행 행은 DB 원문 대신 까닭을 적고 끝난다
+  const o = world({ settings: mine, key: null, submitThrows: Object.assign(new Error('column "app_server_own" of relation "org_agent_job" does not exist'), { code: "42703" }) as unknown as HttpError });
+  await fails(submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, o.d), 503, /잠시 뒤 다시/);
+  assert.equal(o.w.runs.get(1)!.status, "failed"); assert.match(String(o.w.runs.get(1)!.error), /본인 구독 표시를 실은 실행을 받을 준비/); assert.doesNotMatch(String(o.w.runs.get(1)!.error), /column/);
+  //  p targets — 접수와 같은 판정(본인 · 사람이 보지 않는 자리 · 남 · 표시를 못 읽음)
+  const tp = await targetsFor(srv(), {}, a.d, {});
+  assert.equal((tp.account as { available: boolean }).available, true); assert.equal((tp.account as { shared_seat: boolean }).shared_seat, false);
+  const tu = await targetsFor(srv(), {}, dd.d, {});
+  assert.equal((tu.account as { available: boolean }).available, false); assert.match(String((tu.account as { reason: string }).reason), /사람이 보는 세션/);
+  const tb = await targetsFor(srv("bob"), {}, a.d, {});
+  assert.equal((tb.account as { available: boolean }).available, false); assert.match(String((tb.account as { reason: string }).reason), /주인 본인일 때만/);
+  const te = world({ settings: mine, key: null, unattendedThrows: true });
+  const tt = await targetsFor(srv(), {}, te.d, {});
+  assert.equal((tt.account as { available: boolean }).available, false, "표시를 못 읽으면 쓸 수 없음 쪽으로(대상 보기는 던지지 않는다)");
+  //   접수는 표시를 못 읽으면 던진다(구독을 열지 않는다)
+  await assert.rejects(submitRun({ prompt: "x", agent: true }, srv(), { source: "web" }, te.d), /표시를 못 읽었다/);
+  assert.equal(te.w.runs.size, 0);
+  //  q 보기 — 구독 주인(= 보낸 사람)이 지시까지 본다 · 앱 서버도 제 앱의 그 실행을 본다 · 목록 칸으로 가려 본다
+  const v = await getRunFor(1, member("alice"), a.d);
+  assert.equal(v.app_server_own, true); assert.equal(v.prompt, "x");
+  const vs = await getRunFor(1, srv(), a.d);
+  assert.equal(vs.prompt, "x");
+  const ls = await listRunsFor({}, member("alice"), a.d);
+  assert.equal((ls.runs as Array<Record<string, unknown>>)[0]!.app_server_own, true);
+  await fails(getRunFor(1, srv("bob"), a.d), 404);
+  ok("S27 앱 서버의 본인 구독 — 접수(에이전트 · 단발) · 자리 · 표시 · 앱 폴더만 · 사람이 보지 않는 자리 · 남 · 사람 신원 없음 · 작업 토큰 거절 · API 키 · 공용 시트 · 사람 요청 무회귀 · 하루 토큰 · 사람당 동시 · 형식 재시도 · 이어받기 · 롤 창 · targets · 보기");
+}
+
+// ── S28 사람이 보지 않는 자리(#1639 · 엣지 표 U1~U7) — 앱 도구 · 백그라운드 작업을 시작할 때 재는 값 ──
+{
+  const { d } = world({ sessions: { "box-human": { owner: "alice", members: [] }, "box-task": { owner: "alice", members: [], human: false } } });
+  let asked = 0;
+  const counted = { isJobToken: d.isJobToken, sessionTie: async (s: string, m: string) => { asked++; return d.sessionTie(s, m); } };
+  assert.equal(await callerUnattended({ member: "alice", tokenHashPrefix: "jobtok", session: "box-human" }, counted), true, "U1 작업 AI 의 토큰 — 사람 세션을 밝혀도");
+  assert.equal(asked, 0, "U1 토큰으로 정해지면 세션을 보지 않는다");
+  assert.equal(await callerUnattended({ member: "alice", session: "box-human" }, counted), false, "U2 사람 세션");
+  assert.equal(await callerUnattended({ member: "alice", session: "box-task" }, counted), true, "U3 위탁 · 상시 세션");
+  assert.equal(await callerUnattended({ member: "alice", session: "box-nobody" }, counted), true, "U4 모르는 세션 — 막는 쪽");
+  const down = { isJobToken: d.isJobToken, sessionTie: async () => { throw new Error("상태를 못 읽었다"); } };
+  assert.equal(await callerUnattended({ member: "alice", session: "box-human" }, down), true, "U5 조회 실패 — 막는 쪽");
+  asked = 0;
+  assert.equal(await callerUnattended({ member: "alice" }, counted), false, "U6 세션을 안 실은 연결(claude.ai · 개인 PC) — 가릴 길이 없어 사람으로");
+  assert.equal(await callerUnattended({ member: "alice", session: "  " }, counted), false, "U6 빈 값");
+  assert.equal(await callerUnattended({ member: "alice", session: "claude-11111111" }, counted), false, "U7 외부 실행 id — 라이블리가 띄우지 않은 Claude Code 의 프록시가 싣는 값(개인 PC 의 사람)");
+  assert.equal(await callerUnattended({ member: "alice", session: "cursor-abc" }, counted), false, "U7 외부 실행 id(cursor)");
+  assert.equal(asked, 0, "U6 · U7 은 세션을 조회하지 않는다");
+  ok("S28 사람이 보지 않는 자리 — 작업 토큰 · 기계 세션 · 모르는 세션 · 조회 실패는 참 · 세션 없음 · 외부 실행 id 는 거짓");
 }
 
 // ── S15~S19 동기화 — 작업 상태를 따라간다 · 형식 판정 · 재시도 1회 ──
@@ -1379,7 +1526,7 @@ const SUB = (): Partial<World> => ({ ...ROOMY(), settings: { default: { kind: "s
 
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, toolAllowlist: null };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, toolAllowlist: null };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   assert.equal(agentJobOfRun({ ...base, mcpOnly: true }, o).mcpOnly, true, "빠지면 «MCP 만» 작업이 내장 도구를 연 채 돈다");
   assert.equal(agentJobOfRun({ ...base, mcpOnly: false }, o).mcpOnly, false);
@@ -1642,7 +1789,7 @@ async function resumedTools(prev: string[] | null, now: string[] | null, o: { jo
 
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, mcpOnly: false };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   assert.deepEqual(agentJobOfRun({ ...base, toolAllowlist: ["store_sql", "knowledge_search"] }, o).toolAllowlist, ["store_sql", "knowledge_search"], "빠지면 목록을 둔 작업이 앱 동의 전체를 쥔다");
   assert.deepEqual(agentJobOfRun({ ...base, toolAllowlist: [] }, o).toolAllowlist, [], "빈 목록은 빈 목록");

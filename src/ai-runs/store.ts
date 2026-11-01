@@ -285,6 +285,19 @@ export async function tokensUsedTodayByApp(appId: string): Promise<number> {
        FROM org_app_llm_call WHERE app_id=$1 AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, [appId]);
   return Number(r.rows[0]?.n ?? 0);
 }
+/**
+ * 오늘(UTC) 앱 서버가 본인 구독으로 보낸 실행이 쓴 토큰(#1639 · plan.isAppServerOwn · 공용 시트로 돈 실행은 뺀다) — 구독 작업은 프록시를 지나지 않아 org_app_llm_call 에
+ *  안 남는다. 실행 행의 입력 + 출력 칸만 센다 — 캐시 토큰(result.usage 안) · 도는 중인 실행 · 보고 없이 끝난 실행(시간 초과 · 취소)은 안 들어가 프록시 합(네 종류)보다 적게
+ *  센다. 구독은 워크스페이스 돈이 아니라서 앱이 뒤에서 쓰는 양의 바깥 끝만 잡는다.
+ */
+export async function appServerOwnTokensToday(appId: string): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT COALESCE(sum(COALESCE(input_tokens, 0)::bigint + COALESCE(output_tokens, 0)::bigint), 0)::bigint AS n
+       FROM org_app_ai_run
+      WHERE app_id=$1 AND requester_kind='app_server' AND account_kind='subscription' AND account_member=requester AND NOT shared_seat
+        AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`, [appId]);
+  return Number(r.rows[0]?.n ?? 0);
+}
 
 // ── 워크스페이스 설정 칸(org_runtime_config.app_ai_policy · app_ai_account) — 관리 도구만 쓴다(agent_job_policy 와 같은 꼴). 읽기 실패는 던진다. ──
 export async function aiRunPolicyRow(): Promise<Record<string, unknown>> {

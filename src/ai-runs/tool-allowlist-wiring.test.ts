@@ -24,7 +24,7 @@ t("TW3 판 부트 · 사람이 보내는 작업의 이어받기 — 작업 행�
 t("TW4 토큰 굽기 — 상한이 앱 토큰 발급에 실리고, 앱 아닌 작업에 실려 있으면 굽지 않는다", () => {
   const live = read("agent-jobs/live.ts");
   assert.match(live, /mintMcpToken: async \(job, \{ toolCeiling \}\) => \{/);
-  assert.match(live, /mintAppToken\(who, job\.app_id, "agent-job", \{ \.\.\.jobAppTokenOpts\(job, ttlSec, shared\), toolCeiling \}\)/);
+  assert.match(live, /mintAppToken\(who, job\.app_id, "agent-job", \{ \.\.\.jobAppTokenOpts\(job, ttlSec, shared \|\| appServerOwn\), toolCeiling \}\)/);
   assert.match(live, /if \(toolCeiling != null\) throw new Error\(/);
   assert.match(read("apps/principal.ts"), /\.\.\.\(opts\.toolCeiling != null \? \{ toolCeiling: opts\.toolCeiling \} : \{\}\),/);
 });

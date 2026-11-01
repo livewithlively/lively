@@ -26,6 +26,7 @@
 //  관리자는 남의 작업의 상태·오류만 본다 — 프롬프트·답·진행 꼬리는 보낸 사람 것이다(작업은 그 사람의 홈·지식으로 돈다).
 //  #5081 공용 시트 작업(앱 AI 실행이 접수 — ai-runs)은 예외다: 자리(홈 · Claude 로그인)는 시트 계정, 작업 AI 의 라이블리 신원은 보낸 사람(앱 서버 급)이다.
 //   시트 지정을 거두거나 시트 계정이 높은 권한을 얻거나 보낸 사람이 구성원이 아니게 되면 위와 같이 띄우지 않고 · 멈춘다(live.assertJobAllowed).
+//  #1639 앱 서버가 보낸 본인 구독 작업(앱 AI 실행이 접수 — ai-runs)도 예외다: 자리는 물은 사람 본인의 홈, 작업 AI 의 토큰은 앱 서버 급이다. 이 입구(agent_job_run)는 그대로 앱 서버를 거절한다.
 //
 //  ⚠ 청/녹 두 슬롯이 같은 작업을 볼 수 있다 — 상태 전이는 전부 store 의 «지금 상태가 이것일 때만» 쓰기로 한 번만 넘어간다.
 import { HttpError } from "../http-error.js";
@@ -274,6 +275,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     timeoutSec: timeoutSecOf(input.timeout_min, p),
     homeless: false,   // 사람이 보낸 작업은 그 사람의 자리(홈)에서 돈다
     sharedSeat: false, // 이 길은 본인 구독뿐이다(#5081 공용 시트는 앱 AI 실행 — ai-runs — 으로만 생긴다)
+    appServerOwn: false, // 앱 서버는 이 길로 못 온다(assertMaySubmit) — #1639 앱 서버의 본인 구독도 앱 AI 실행으로만 생긴다
     mcpOnly,           // 이어받는 작업이면 앞 작업의 값 · 새 작업은 false(ai.mcp_only 는 작업 이름을 다는 앱 AI 실행의 것이다)
     toolAllowlist,     // 같다 — 이어받는 작업이면 앞 작업의 목록 · 새 작업은 null(ai.tools 도 앱 AI 실행의 것이다)
   }, p, d);

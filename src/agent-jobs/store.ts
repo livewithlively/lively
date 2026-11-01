@@ -104,6 +104,11 @@ export interface NewAgentJob {
    */
   sharedSeat: boolean;
   /**
+   * #1639 앱 서버가 보낸, 물은 사람 본인의 구독 작업 — 자리는 그 사람의 홈(로그인)이고 공용 시트와 같은 울타리다(앱 폴더만 · 작업 AI 토큰은 앱 서버 급 · 키트를 심지 않는다).
+   *  필수다(homeless · sharedSeat 와 같은 까닭 — 빠지면 앱 서버가 부린 AI 가 그 사람 이름의 세션 · 파일 · 계정 길을 연다).
+   */
+  appServerOwn: boolean;
+  /**
    * #5082 앱 판 지시 — 판이 하네스 시스템 지시로 싣는 글(앱 AI 실행이 접수 때 읽어 준다). 있으면 작업 폴더의 지시 · 설정을 읽지 않는다
    *  (runner.claudeJobArgv). 없으면 null · 생략.
    */
@@ -139,7 +144,9 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
     //  #5082 app_instructions 칸도 같은 까닭으로 지시가 있을 때만 적는다(APP_INSTRUCTIONS_COL 머리말).
     //  mcp_only 칸도 같다 — MCP 만 쓰는 작업일 때만 적는다(MCP_ONLY_COL 머리말). tool_allowlist 칸도 목록이 있을 때만(TOOL_ALLOWLIST_COL 머리말).
+    //  #1639 app_server_own 칸도 같은 까닭으로 그 작업일 때만 적는다(APP_SERVER_OWN_COL 머리말).
     const shared = j.sharedSeat === true;
+    const appServerOwn = j.appServerOwn === true;
     const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
     const mcpOnly = j.mcpOnly === true;
     const tools = Array.isArray(j.toolAllowlist) ? JSON.stringify(j.toolAllowlist) : null;
@@ -148,8 +155,8 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     const param = (v: string): string => { extra.push(v); return `$${15 + extra.length}`; };
     const instrRef = instr != null ? param(instr) : null;
     const toolsRef = tools != null ? param(tools) : null;
-    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}`;
-    const extraVals = `${shared ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}`;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${appServerOwn ? `, ${APP_SERVER_OWN_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${appServerOwn ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
                                  resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
@@ -214,6 +221,23 @@ export async function agentJobToolAllowlist(id: number): Promise<string[] | null
     return Array.isArray(t) && t.every((x) => typeof x === "string") ? (t as string[]) : [];
   } catch (e) {
     if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
+/**
+ * #1639 앱 서버의 본인 구독 표시(org_agent_job.app_server_own)도 COLS 에 넣지 않고 따로 읽는다(agentJobAppServerOwn) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  그 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) false 다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 그런 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다(닫힌 쪽) — 부르는 쪽이 503 으로 다시 보내라고 한다.
+ */
+export const APP_SERVER_OWN_COL = "app_server_own";
+export async function agentJobAppServerOwn(id: number): Promise<boolean> {
+  if (!Number.isSafeInteger(id) || id < 1) return false;
+  try {
+    const r = await q(itemsPool, `SELECT ${APP_SERVER_OWN_COL} AS own FROM org_agent_job WHERE id=$1`, [id]);
+    return r[0]?.own === true;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return false;   // undefined_column — 마이그레이션 전(머리말)
     throw e;
   }
 }

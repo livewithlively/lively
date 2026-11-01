@@ -84,6 +84,27 @@ try {
   const used = await st.tokensUsedTodayByApp(APP);
   chk("T7 하루 토큰 — 입력+출력+캐시 읽기·쓰기 · 오늘 · 그 앱만", used === 10, String(used));
 
+  // ── T7b 앱 서버의 본인 구독이 쓴 토큰(#1639) — 앱 서버 · 구독 · 본인 · 공용 시트 아님 · 오늘 · 그 앱만 · 도는 중인 실행(값 없음)은 0 으로 ──
+  const ownRun = async (over = {}, toks = [10, 20]) => {
+    const r = await st.insertAiRun(base({ requester: `${REQ}own`, requesterKind: "app_server", accountKind: "subscription", accountMember: `${REQ}own`, executor: "job", status: "queued", ...over }));
+    if (toks) await st.finishAiRun(r.id, { status: "done", result: { text: "답" }, error: null, inputTokens: toks[0], outputTokens: toks[1] });
+    return r;
+  };
+  await ownRun();                                                                                   // 30 — 센다
+  await ownRun({}, null);                                                                           // 도는 중 — 값 없음
+  await ownRun({}, [5, null]);                                                                      //  5 — 한쪽만 있어도 센다
+  await ownRun({ requesterKind: "member" });                                                        // 사람이 앱 화면에서 — 안 센다
+  await ownRun({ requester: `${REQ}other` });                                                       // 남의 구독(앱 서버) — 안 센다
+  await ownRun({ accountKind: "api_key", accountMember: null, requester: `${REQ}own` });            // API 키 — 안 센다(프록시 계측이 센다)
+  await ownRun({ sharedSeat: true });                                                               // 공용 시트로 돈 실행 — 안 센다
+  await ownRun({ appId: `${APP}other` });                                                           // 다른 앱 — 안 센다
+  const oldOwn = await ownRun();                                                                    // 어제 — 안 센다
+  await itemsPool.query(`UPDATE org_app_ai_run SET created_at = now() - interval '2 days' WHERE id=$1`, [oldOwn.id]);
+  const ownUsed = await st.appServerOwnTokensToday(APP);
+  chk("T7b 앱 서버의 본인 구독 토큰 — 입력+출력 · 앱 서버 · 구독 · 본인 · 공용 시트 아님 · 오늘 · 그 앱만", ownUsed === 35, String(ownUsed));
+  chk("T7c 프록시 하루 토큰은 그대로 — 실행 행을 더하지 않는다", (await st.tokensUsedTodayByApp(APP)) === 10, String(await st.tokensUsedTodayByApp(APP)));
+  await itemsPool.query(`DELETE FROM org_app_ai_run WHERE app_id LIKE $1 AND requester LIKE $2`, [`${APP}%`, `${REQ}o%`]);
+
   // ── T8 목록 — 앱 · 사람 · 상태 필터 · 요지 200자 · has_result ──
   const list = await st.listAiRuns({ appId: APP, requester: `${REQ}a`, status: null, limit: 10 });
   const done = await st.listAiRuns({ appId: APP, requester: null, status: "done", limit: 10 });

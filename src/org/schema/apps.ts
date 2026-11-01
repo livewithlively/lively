@@ -321,6 +321,9 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //   권한 상한(부른 연결의 권한 ∩ 그 사람의 앱 동의 — 앱이 시작한 작업은 시작한 주체의 권한을 물려받는다). 다른 작업은 NULL.
   //   돌기 신원을 풀 때 source 'mcp-tool' 인 작업만 이 칸을 따로 읽는다(apps/app-jobs.ts resolveJobRunPrincipal — 칸 묶음 밖이라 롤 창에도 다른 작업이 안 깨진다).
   await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS scope_ceiling TEXT[];`);
+  //  #1639 unattended — 이 작업의 사람 신원이 사람이 보지 않는 자리(위탁 · 상시 세션 · 작업 AI)에서 왔다. 그 신원으로는 구독을 쓰지 못한다(ai-runs/service.callerUnattended).
+  //   시작할 때 정해지고 바뀌지 않는다 · 작업이 시작한 작업은 물려받는다. ⚠ 칸 묶음(LIGHT)에 넣지 않고 그 작업일 때만 적고 따로 읽는다(apps/app-jobs-store.ts 머리말 — 롤 창).
+  await pool.query(`ALTER TABLE org_app_job ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false;`);
   //  org_app_call(#5053 앱 v2-42) — 게이트웨이가 앱 서버의 라우트 하나를 **동기로** 부른 한 건(지금은 앱이 선언한 MCP 도구 · run.kind "server").
   //   흐름: dispatched(함수를 불렀다 · call_hash = 그 부르기의 한 번 쓰는 비밀) → running(검사 층이 claim — run_hash = 도는 동안의 신원) → done · failed
   //   (게이트웨이가 답을 다 받았을 때 · 하우스키핑이 끝맺지 못한 줄을 닫는다). 판정은 apps/app-server-call-plan.ts · 흐름은 apps/app-server-call.ts.
@@ -352,6 +355,8 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
       ended_at TIMESTAMPTZ
     );
   `);
+  //  #1639 unattended — org_app_job 의 같은 칸과 같은 뜻(사람이 보지 않는 자리에서 부른 도구). ⚠ COLS 에 넣지 않는다(apps/app-server-call-store.ts — 롤 창).
+  await pool.query(`ALTER TABLE org_app_call ADD COLUMN IF NOT EXISTS unattended BOOLEAN NOT NULL DEFAULT false;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_call_open_idx ON org_app_call(id) WHERE status IN ('dispatched','running');`);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_call_ended_idx ON org_app_call(ended_at) WHERE ended_at IS NOT NULL;`);
   //  #4791 org_app_server_build.keep_until — 걷은 함수가 쓰던 빌드의 정리 유예(그때까지 30일 정리에서 뺀다 · 되돌리면 빌드 없이 다시 만든다).

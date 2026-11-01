@@ -66,7 +66,7 @@ import { BOOT_SOURCE, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV } from 
 import { JobLaunchError, redactSecret, stepFailure } from "./launch.js";
 import { hostGateway, hostJobDir, type HostJobDir } from "./launch-host.js";
 import type { AgentJobRow } from "./store.js";
-import type { PaneView } from "./surface.js";
+import type { JobLaunchOpts, PaneView } from "./surface.js";
 
 /** 작업 컨테이너 라벨 — 박스의 작업 컨테이너를 앱 서버 · 사람 것과 가른다. */
 export const JOB_CONTAINER_LABEL = "lvly.agent-job";
@@ -436,7 +436,7 @@ export function hideBoxPaths(msg: string, paths: Iterable<string>): string {
  *  가리고(hideBoxPaths), 원문은 게이트웨이 로그에만 남긴다. 오류의 종류 · 일시 표시는 그대로 둔다(글만 바꾼다).
  */
 export async function launchDockerJob(
-  job: AgentJobRow, bootSecret: string, deps?: DockerLaunchDeps, o: { sharedSeat?: boolean } = {},
+  job: AgentJobRow, bootSecret: string, deps?: DockerLaunchDeps, o: Partial<JobLaunchOpts> = {},
 ): Promise<{ container: string }> {
   const known: string[] = [];
   try { return await launchDockerJobIn(job, bootSecret, deps, o, known); }
@@ -453,7 +453,7 @@ export async function launchDockerJob(
 }
 
 async function launchDockerJobIn(
-  job: AgentJobRow, bootSecret: string, deps: DockerLaunchDeps | undefined, o: { sharedSeat?: boolean }, known: string[],
+  job: AgentJobRow, bootSecret: string, deps: DockerLaunchDeps | undefined, o: Partial<JobLaunchOpts>, known: string[],
 ): Promise<{ container: string }> {
   const sid = job.session_id;
   if (!sid || !JOB_SESSION_ID_RE.test(sid)) throw new JobLaunchError("세션 id 가 없는 작업입니다");
@@ -545,7 +545,7 @@ async function launchDockerJobIn(
     //  docker run 은 env 파일을 띄울 때 한 번 읽는다(--restart no) — 곧바로 지워 비밀을 디스크에 남기지 않는다.
     await d.removeEnvFile(env.file).catch(() => undefined);
   }
-  logger.info({ job: job.id, session: sid, container: name, runsAs: place.runsAs, uid: place.uid, memoryMb, claudeDir: !!place.claude, sharedSeat: o.sharedSeat === true, homeless },
+  logger.info({ job: job.id, session: sid, container: name, runsAs: place.runsAs, uid: place.uid, memoryMb, claudeDir: !!place.claude, sharedSeat: o.sharedSeat === true, appServerOwn: o.appServerOwn === true, homeless },
     "[agent-job] 작업 컨테이너를 띄웠다(도커)");
   return { container: name };
 }

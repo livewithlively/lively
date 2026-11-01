@@ -95,9 +95,11 @@ export function jobIdentityMember(job: { account_kind: string; account_member: s
  *  무조건 통과 도구가 꺼진다(auth/http-auth · apps/principal). 그 AI 를 부린 것은 앱 서버 코드라 사람 이름으로 세션 · 파일 · 계정 길을 열지 않게.
  *  #5081 공용 시트 작업도 앱 서버 급이다 — 물은 사람의 이름으로 굽지만 그 사람의 홈이 아니라 함께 쓰는 시트 홈에서 돈다. 그 자리에서 물은 사람의
  *   이름으로 세션(그 사람의 홈이 붙는다) · 파일 · 계정 길을 열지 않게.
+ *  #1639 앱 서버가 보낸 본인 구독 작업도 앱 서버 급이다 — 그 AI 를 부린 것은 앱 서버 코드다(홈 없는 작업과 같은 까닭).
+ *  appServerGrade = 공용 시트 작업 · 앱 서버의 본인 구독 작업(행의 표시를 읽어 부르는 쪽이 준다).
  */
-export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number, sharedSeat = false): { ttlSec: number; appServerPrincipal?: true } {
-  return job.homeless === true || sharedSeat ? { ttlSec, appServerPrincipal: true } : { ttlSec };
+export function jobAppTokenOpts(job: { homeless: boolean }, ttlSec: number, appServerGrade = false): { ttlSec: number; appServerPrincipal?: true } {
+  return job.homeless === true || appServerGrade ? { ttlSec, appServerPrincipal: true } : { ttlSec };
 }
 
 /**
@@ -110,6 +112,19 @@ export function homelessJobRefusal(job: { homeless?: boolean; account_kind: stri
   if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "홈 없는 작업은 앱 작업만 됩니다";
   if (job.project_id != null) return "홈 없는 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
   if (job.cwd !== appFolderCwd(job.app_id)) return "홈 없는 작업의 작업 폴더는 그 앱 폴더여야 합니다";
+  return null;
+}
+
+/**
+ * (순수) 앱 서버의 본인 구독 작업이 될 수 있나(#1639) — 구독 실행 · 보낸 사람이 구독 주인 본인 · 앱 작업 · 프로젝트 없음 · 작업 폴더가 그 앱 폴더. 어기면 사유, 맞으면 null.
+ *  접수(ai-runs/service.submitRun)가 이미 거른다 — 행이 달라졌거나 표시가 잘못 붙은 작업이 사람의 홈에서 돌지 않게 띄우기 직전 · 도는 동안 다시 본다(live.assertJobAllowed).
+ */
+export function appServerOwnJobRefusal(job: { account_kind: string; account_member: string | null; requester: string; app_id: string | null; project_id: number | null; cwd: string }): string | null {
+  if (job.account_kind !== "subscription" || !job.account_member) return "앱 서버의 본인 구독 작업은 구독 실행만 됩니다";
+  if (job.account_member !== job.requester) return `앱 서버의 본인 구독 작업은 구독 주인 본인이 물은 것이어야 합니다(주인 ${job.account_member} · 보낸 사람 ${job.requester})`;
+  if (!job.app_id || !APP_ID_RE.test(job.app_id)) return "앱 서버의 본인 구독 작업은 앱 작업이어야 합니다";
+  if (job.project_id != null) return "앱 서버의 본인 구독 작업은 프로젝트 폴더에서 돌 수 없습니다(앱 폴더에서만)";
+  if (job.cwd !== appFolderCwd(job.app_id)) return "앱 서버의 본인 구독 작업의 작업 폴더는 그 앱 폴더여야 합니다";
   return null;
 }
 
