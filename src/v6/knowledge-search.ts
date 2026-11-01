@@ -7,7 +7,7 @@ import { q, one } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
   type GrepPlan, parseGrep, parsePlainGrep, grepWhere, grepExec, grepSnippet, previewBody, exactFirst, titleFirst,
-  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedQuery,
+  RRF_K, HYBRID_CANDIDATES, embedQuery,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
 import { parseQueryTerms, requiredTerms } from "./query-terms.js";   // #4744 검색 실패 보조 안내의 낱말 판정(군말 빼기)
@@ -367,13 +367,8 @@ export async function findRecommendedKnowledge(
 ): Promise<KnowledgeRecommendRow[]> {
   const cats = (opts.categoryIds ?? []).map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0);
   // 쿼리 임베딩(텍스트 있고 provider on 일 때만). 실패/off → null → 카테고리만으로 추천(graceful).
-  let qvec: number[] | null = null;
-  if (opts.text && opts.text.trim()) {
-    const provider = await activeEmbeddingProvider();
-    if (provider) {
-      try { const [v] = await provider.embed([opts.text.slice(0, 8000)]); qvec = v && v.length ? v : null; } catch { qvec = null; }
-    }
-  }
+  //  embedQuery 를 지난다(#4530) — 백필과 같은 시간 상한(기본 300초)을 타면 임베딩 서버가 밀릴 때 프로젝트 생성·자동 소환이 그만큼 매달린다.
+  const qvec = opts.text && opts.text.trim() ? (await embedQuery(opts.text)).vec : null;
   if (!qvec && !cats.length) return [];   // 의미·카테고리 둘 다 신호 없음 → 추천 불가
   const exclude = opts.exclude ?? [];
   const minScore = typeof opts.minScore === "number" ? opts.minScore : 0.4;
