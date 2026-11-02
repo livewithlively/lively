@@ -19,7 +19,7 @@ const check = (name, cond, detail = "") => {
 
 // ── 상류(게이트웨이) 스텁 ──────────────────────────────────────────────────
 //  받은 요청을 전부 기록한다(헤더 포함) — 신원·하네스 stamp 단언의 관측 장치.
-function startUpstream({ tools = [], sse = true, dripList = false } = {}) {
+function startUpstream({ tools = [], sse = true, dripList = false, holdOpen = false, noEol = false } = {}) {
   const seen = [];
   const srv = createServer((req, res) => {
     let body = "";
@@ -37,6 +37,16 @@ function startUpstream({ tools = [], sse = true, dripList = false } = {}) {
         const iv = setInterval(() => res.write(": ka\n"), 300);
         res.on("close", () => clearInterval(iv));
         setTimeout(() => { clearInterval(iv); res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: state.tools } })}\n\n`); }, 3000);
+        return;
+      }
+      //  holdOpen: 응답 프레임을 쓰고 연결을 닫지 않는다(E35) · noEol: 응답을 줄끝 없이 쓰고 닫는다(E36).
+      if (msg.method === "tools/call" && (holdOpen || noEol)) {
+        const data = `data: ${JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: `called:${msg.params?.name}` }] } })}`;
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        if (noEol) { res.end(data); return; }
+        res.write(`event: message\n${data}\n\n`);
+        const t = setTimeout(() => res.end(), 7000);   // 다리가 끝을 기다리면 시험이 먼저 실패하고, 이 뒤에 스텁이 닫힌다
+        res.on("close", () => clearTimeout(t));
         return;
       }
       const slow = ["slow_progress", "slow_silent", "slow_stall", "slow_split", "slow_endless"];
@@ -550,6 +560,27 @@ try {
     const r = await p.waitFor(341, 6000);
     const ms = Date.now() - t0;
     check("E34 흘러오는 tools/list 도 목록 시한에 끊고 스냅샷으로 답한다", Array.isArray(r?.result?.tools) && ms < 2600, `ms=${ms} r=${JSON.stringify(r)?.slice(0, 200)}`);
+    await p.end(); await up.close();
+  }
+  // E35 — 응답 프레임이 온 뒤 상류가 연결을 닫지 않아도 거기서 읽기를 멈추고 곧바로 답한다.
+  //  시각에 기대지 않으려고 응답 없음 시한이 긴 도구(delegate_run · 50초)로 잰다 — 끝을 기다리면 시험 시한 안에 답이 오지 않는다.
+  {
+    const up = await startUpstream({ tools: T(["delegate_run"]), holdOpen: true });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 351, method: "tools/call", params: { name: "delegate_run", arguments: { wait_sec: 20 } } });
+    const r = await p.waitFor(351, 5000);
+    check("E35 응답 뒤 연결이 열려 있어도 곧바로 답한다(끝을 기다리지 않는다)", r?.result?.content?.[0]?.text === "called:delegate_run" && !r?.result?.isError, `r=${JSON.stringify(r)}`);
+    await p.end(); await up.close();
+  }
+  // E36 — 응답이 줄끝 없이 끝나도 받는다(마지막 조각 · 통째로 읽던 때와 같다).
+  {
+    const up = await startUpstream({ tools: T(["no_eol"]), noEol: true });
+    setGw(up.url);
+    const p = startProxy(serveMcpGateway);
+    p.send({ jsonrpc: "2.0", id: 361, method: "tools/call", params: { name: "no_eol", arguments: {} } });
+    const r = await p.waitFor(361, 5000);
+    check("E36 줄끝 없이 끝난 응답도 받는다", r?.result?.content?.[0]?.text === "called:no_eol" && !r?.result?.isError, `r=${JSON.stringify(r)}`);
     await p.end(); await up.close();
   }
   // ── E24 피어(하네스) 소멸 = 이 프로세스가 죽어야 하는 유일한 경우 (#2213 릭 회귀) ──────────
