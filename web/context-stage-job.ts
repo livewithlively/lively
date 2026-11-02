@@ -231,7 +231,9 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
       if (body === null) { run.disabled = false; run.textContent = '지금 한 번 실행'; return; }
       const r = await api(`/api/ui/cron/${encodeURIComponent(job.id)}/run`, { method: 'POST', body: JSON.stringify(body) });
       const st = (r && (r.status || r.last_status)) || 'ok';
-      toast(st === 'error' ? '실행했지만 오류가 났습니다 — 마지막 실행 상태를 보세요' : `${spec.stage}를 한 번 실행했습니다`, st === 'error');
+      toast(st === 'error' ? '실행했지만 오류가 났습니다 — 마지막 실행 상태를 보세요'
+        : st === 'skipped' ? '다른 실행이 끝나지 않아 이번에는 돌지 않았습니다 — 잠시 뒤 다시 눌러 주세요'
+        : `${spec.stage}를 한 번 실행했습니다`, st === 'error');
       rerender();
     } catch (e) { toast('실행 실패 — ' + (e as Error).message, true); run.disabled = false; run.textContent = '지금 한 번 실행'; }
   });

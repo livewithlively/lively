@@ -32,9 +32,17 @@ import { confirmDistillRun } from './distill-run-check.js';   // #5235 기본 �
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 import { LIV_CARD, LIV_ROW, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
 import { countLiv } from './lib/liv-mark.js';
+import { laneJobNote } from './lib/lane-job-note.js';   // #5235 레인을 돌릴 자동 실행이 생겼는지 · 없는지
 import { fillLaneEditor, fillLaneRetired, renderFillJob } from './distill-fill.js';    // #4194 카테고리 붙이기(옛 「분류기」) — #4135 부터 따로 절을 두지 않고 같은 목록의 카드다
 import { type RunsByMachine, distillerToday, fetchRecentRuns, machineRuns, machineSum, recentLine } from './context-machine-runs.js';   // #4135 카드 안의 최근 실행
 import { CTX_APP_NAME, CTX_TAB } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+
+//  저장 알림 — 레인을 돌릴 자동 실행이 새로 생겼거나 없으면 함께 말한다(#5235). 길어서 평소보다 오래 띄운다.
+function savedToast(res: any, done: string): void {
+  const note = laneJobNote(res?.job_plan);
+  if (!note) { toast(done); return; }
+  toast(`${done}. ${note.text}`, note.warn, 9000);
+}
 
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'local_file', 'other'];
@@ -256,7 +264,7 @@ function distillerCard(d, st, catName, rerender, runs: import('./context-runs.js
   sw.checked = !!d.enabled;
   sw.addEventListener('change', async () => {
     const next = sw.checked; sw.disabled = true;
-    try { await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: next }) }); toast(next ? '켰습니다' : '껐습니다'); rerender(); }
+    try { savedToast(await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: next }) }), next ? '켰습니다' : '껐습니다'); rerender(); }
     catch (e) { toast(e.message, true); sw.checked = !next; sw.disabled = false; }
   });
   acts.append(sw, el('a', { class: 'btn btn-ghost btn-sm', href: pageHref(d.key), text: '설정' }));
@@ -376,7 +384,7 @@ function distillerRowCompact(d, st, catName, rerender) {
   const sw = el('input', { type: 'checkbox', class: 'cxc-sw', role: 'switch', 'aria-label': `${d.label || d.key} 켜기` }) as HTMLInputElement;
   sw.addEventListener('change', async () => {
     sw.disabled = true;
-    try { await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: true }) }); toast('켰습니다'); rerender(); }
+    try { savedToast(await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify({ ...settable(d), enabled: true }) }), '켰습니다'); rerender(); }
     catch (e) { toast(e.message, true); sw.checked = false; sw.disabled = false; }
   });
   acts.append(sw, el('a', { class: 'btn btn-ghost btn-sm', href: pageHref(d.key), text: '설정' }));
@@ -913,16 +921,16 @@ function editorPage(d, isNew: boolean): HTMLElement {
     if (body.key === NEW_KEY) { showStep('basic'); toast("'new' 는 주소에서 '새 증류기'를 뜻해 식별자로 쓸 수 없습니다", true); (keyIn as HTMLInputElement).focus(); return; }
     (saveBtn as HTMLButtonElement).disabled = true;
     try {
-      await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify(body) });
+      const res: any = await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify(body) });
       if (isNew) {
         // 만든 즉시 그 증류기의 주소로 — replace 라 뒤로가기가 '/new'(빈 폼)로 되돌아가지 않는다.
         //  해시가 바뀌므로 라우터가 이 페이지를 저장된 값으로 다시 그린다.
         dirtyGuard = null;
-        toast('증류기를 만들었습니다');
+        savedToast(res, '증류기를 만들었습니다');
         location.replace(pageHref(body.key));
         return;
       }
-      toast('저장했습니다');
+      savedToast(res, '저장했습니다');
       titleEl.textContent = body.label || body.key;
       markClean();
     } catch (e) { toast('실패 — ' + e.message, true); }
