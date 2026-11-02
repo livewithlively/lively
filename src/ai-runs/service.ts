@@ -34,6 +34,7 @@ import { narrowAllowlist } from "../apps/app-job-tools.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { EFFORT_LEVELS, RUNNER_GATEWAY_URL, isEffort, type Effort } from "../agent-jobs/runner.js";
+import { STEPS_MAX } from "../agent-jobs/plan.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import {
@@ -826,14 +827,27 @@ async function sharedSeatRunFor(r: Pick<AiRunRow, "id" | "requester" | "account_
   return d.store.aiRunSharedSeat(r.id);
 }
 
+/**
+ * 실행의 도구 호출 단계(작업 행 — 곁기록이라 못 읽은 쪽은 빼고 준다 · 실행 보기를 막지 않는다).
+ *  형식 재시도(syncRun · 한 번)는 실행을 재시도 작업으로 갈아 끼운다(job_id) — 앞 작업의 단계를 앞에 잇는다. 도구를 쓴 턴은 대개 앞 작업이라, 안 이으면 재시도가 나가는 순간 목록이 빈다.
+ *  이어받은 실행의 앞 작업(retries 0 의 resume_job_id)은 다른 실행의 것이라 잇지 않는다.
+ */
+async function runSteps(jobId: number, retries: number, d: AiRunDeps): Promise<unknown[]> {
+  const read = async (id: number): Promise<unknown[]> => (await d.jobSteps(id).catch(() => null)) ?? [];
+  const last = await read(jobId);
+  if (retries < 1) return last;
+  const first = (await d.getJob(jobId).catch(() => null))?.resume_job_id;
+  return first != null ? [...await read(first), ...last].slice(-STEPS_MAX) : last;
+}
+
 export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   let row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
   const shared = row ? await sharedSeatRunFor(row, user, d) : false;
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
   const own = isOwnRun(row, user, shared);
-  //  작업 컨테이너 실행이면 작업 행의 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다. 없거나 읽지 못하면 빈 배열.
-  const steps = own && row.executor === "job" && row.job_id != null ? ((await d.jobSteps(row.job_id).catch(() => null)) ?? []) : null;
+  //  작업 컨테이너 실행이면 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다.
+  const steps = own && row.executor === "job" && row.job_id != null ? await runSteps(row.job_id, row.retries, d) : null;
   return publicRun(row, { own, withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id), steps });
 }
 

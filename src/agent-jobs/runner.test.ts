@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { BOOT_SOURCE, RUNNER_SOURCE, MCP_CONFIG_PLACEHOLDER, CONFIG_DIR_PLACEHOLDER, SYSTEM_PROMPT_PLACEHOLDER, JOB_BOOT_ENV, JOB_ID_ENV, JOB_PORT_ENV, JOB_WS_ENV, TMUX_ARG_MAX, RUNNER_GATEWAY, EFFORT_LEVELS, claudeJobArgv } from "./runner.js";
+import { parseSteps } from "./plan.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => {
@@ -253,6 +254,7 @@ await t("ST1 도구 호출 단계 — tool_use 를 본 때 시작 · 같은 id �
     assert.equal(read.input, "plain");
     assert.equal(read.ended_at, null, "끝나지 않은 호출");
     assert.ok(!JSON.stringify(steps).includes("도구 결과 글은 싣지 않는다"), "도구 결과 글은 싣지 않는다");
+    assert.deepEqual(parseSteps(steps), steps, "판이 보낸 모양을 게이트웨이 해석이 그대로 받는다 — 키 이름이 어긋나면 단계가 말없이 버려진다");
     assert.ok(g.seen.ticks.length >= 1 && g.seen.ticks.every((k) => Array.isArray(k.steps)), "박동에도 단계가 실린다");
   } finally { await g.close(); }
 });
