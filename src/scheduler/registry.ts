@@ -27,6 +27,7 @@ export interface CronJob {
   cron_expr?: string | null;
   run_once?: boolean;
   last_run_at?: string | null;
+  updated_at?: string | null; // 마지막 저장 시각 — 시각형 1회성은 그 뒤의 첫 매치에 돈다(#5235 · cron-due.ts).
   created_by?: string | null; // #1058 agent_headless 의 의뢰자 폴백(params.requester 미설정 시).
   // #1675 ④ 서킷 브레이커 — 연속 실패 횟수와 그 잡의 자동 정지 임계(0=끔). 구 DB(컬럼 부재)면 undefined.
   fail_streak?: number | null;

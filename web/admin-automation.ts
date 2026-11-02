@@ -5,6 +5,7 @@ import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle } from './admin-widgets.js';
 import { cronOwner } from './cron-owner.js';   // 잡 → 전용 화면 매핑(#1618 후속, 단일 출처)
 import { ctxPath } from './lib/ctx-names.js';   // #4233 앱 · 탭 이름은 한 곳에서
+import { firstRunNote } from './lib/first-run-note.js';   // #5235 시각을 준 1회성이 언제 도는지
 
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
@@ -35,7 +36,7 @@ async function cronPanel(detail, data) {
     // fix#75: 주기 표시만 사람 단위로 — 60 배수는 분, 3600 배수는 시간(원값 괄호 병기). 저장·입력 단위(초)는 그대로.
     const fmtInterval = (s) => (s >= 3600 && s % 3600 === 0) ? ('매 ' + (s / 3600) + '시간(' + s + '초)')
       : (s >= 60 && s % 60 === 0) ? ('매 ' + (s / 60) + '분') : ('매 ' + s + '초');
-    const sched = j.run_once ? '한 번만 (1회성)' : (j.cron_expr ? ('cron: ' + j.cron_expr) : fmtInterval(j.interval_sec || 0));
+    const sched = j.run_once ? (j.cron_expr ? ('한 번만 · cron: ' + j.cron_expr) : '한 번만 (1회성)') : (j.cron_expr ? ('cron: ' + j.cron_expr) : fmtInterval(j.interval_sec || 0));
     const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
     const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
     // 주인 화면(#1618 후속) — 이 잡을 소유한 전용 화면이 있으면 그 자리를 밝히고 링크한다.
@@ -198,7 +199,7 @@ async function openCronForm(job, actions, reload, tz) {
     paramsWrap,
     psBlock('주기 (초)', '이 간격마다 실행(최소 60). cron식이 있으면 그게 우선.', intervalInp),
     psBlock('cron식 (선택)', '벽시계 스케줄 — 시각은 ' + tz + ' 기준입니다. 예: 0 9 * * 1-5 = 평일 ' + tz + ' 09:00. 비우면 주기초.', cronInp),
-    psBlock('한 번만 실행', '체크 시 주기·cron 무시 → 1회 실행 후 자동으로 꺼짐(반복 안 함). 부트스트랩 등 일회성 잡용.', el('label', { class: 'inline' }, onceChk, el('span', { text: ' run once (1회 실행 후 비활성)' }))),
+    psBlock('한 번만 실행', '1회 실행 후 자동으로 꺼짐(반복 안 함). cron식이 있으면 저장 뒤 첫 매치에, 없으면 다음 틱에 돕니다. 부트스트랩 등 일회성 잡용.', el('label', { class: 'inline' }, onceChk, el('span', { text: ' run once (1회 실행 후 비활성)' }))),
     psBlock('연속 실패 시 자동 중지', '이 횟수만큼 잇달아 실패하면 잡이 스스로 멈추고 알림을 보냅니다. 한 번이라도 성공하면 0으로 돌아갑니다. 0을 넣으면 이 잡은 자동으로 멈추지 않습니다.', breakerInp),
     psBlock('켬', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 활성화' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
@@ -216,7 +217,13 @@ async function openCronForm(job, actions, reload, tz) {
       //  저장한 순간 그 잡의 폭주 보호가 조용히 꺼진다 — 0 은 사람이 **명시적으로 골랐을 때만** 0 이어야 한다.
       max_fail_streak: breakerRaw === '' ? 5 : Math.max(0, Math.min(100, Math.round(Number(breakerRaw) || 0))) };
     saveBtn.disabled = true;
-    try { await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '잡을 추가했습니다' : '저장했습니다'); back.remove(); reload(); }
+    try {
+      const r: any = await api('/api/ui/cron', { method: 'POST', body: JSON.stringify(body) });
+      const done = isNew ? '잡을 추가했습니다' : '저장했습니다';
+      const note = firstRunNote(r?.first_run_at, tz);   // #5235 지난 날짜를 넣으면 다음 해를 조용히 기다린다 — 저장할 때 보이게 한다
+      if (note) toast(`${done}. ${note.text}`, note.warn, 9000); else toast(done);
+      back.remove(); reload();
+    }
     catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
   };
 }

@@ -8,6 +8,17 @@ import type { DistillerRow } from "../../org/distill/distiller.js";
 //  fire-and-forget(주입까지가 잡 책임 — 증류는 세션이 수 분에 걸쳐 knowledge_save+source_link_knowledge 로 수행).
 //  멱등: 지식화된 자료는 knowledge_source 링크가 생겨 다음 배치의 source_undistilled 에서 빠진다(수렴).
 export async function runDistillInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
+  return oneDispatchAtATime(() => injectBatch(params));
+}
+
+// #5235 — 증류 잡은 한 번에 하나만 배치를 낸다. 앞 잡이 판정을 기록한 뒤에 다음 잡이 고른다(왜 = org/distill/dispatch-lock.ts).
+//  차례를 못 얻으면 실패가 아니라 «안 돌았다» 다. deferred 는 엔진이 실행으로 기록하지 않는다(engine.executeAndRecord) — 잡은 due 로 남아 다음 틱이 다시 본다.
+export async function oneDispatchAtATime(run: () => Promise<{ status: string; summary: unknown }>, opts?: { waitMs?: number }): Promise<{ status: string; summary: unknown }> {
+  const { withDistillDispatch } = await import("../../org/distill/dispatch-lock.js");
+  return (await withDistillDispatch(run, opts)) ?? { status: "deferred", summary: { skipped: "다른 증류 잡이 배치를 내는 중이라 이번에는 돌지 않았습니다" } };
+}
+
+async function injectBatch(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const sessionRef = params.session ? String(params.session) : "";
   if (!sessionRef) return { status: "error", summary: { error: "타깃 상시 세션 미설정 — 관리탭 스케줄러에서 상시 세션을 선택하세요." } };
 
@@ -43,10 +54,16 @@ export async function runDistillInject(params: Record<string, unknown>): Promise
 // #1289 자료 distill 헤드리스판 — 증류기별로 **각각** 헤드리스 배치를 접수한다(세션판과 달리 병렬 가능).
 //  중첩 방지 마커를 증류기별로 갈라(cron:<job>#<key>) 한 증류기의 전 배치가 다른 증류기를 막지 않게 한다.
 export async function runDistillHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
+  return oneDispatchAtATime(() => enqueueBatches(params, jobId, createdBy));
+}
+
+async function enqueueBatches(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
   const pick = await pickDistillerBatch(params, { one: false });
   if (pick.error) return { status: "error", summary: { error: pick.error } };
   if (pick.skipped) return { status: "ok", summary: { skipped: pick.skipped } };
   if (!pick.batches.length) return idleSummary(pick.considered, {});
+  const { laneMarker } = await import("../../org/distill/lanes.js");
+  const jobs = await distillJobIdsSafe();
   const out: unknown[] = [];
   for (const b of pick.batches) {
     // 실행 계정 우선순위: **증류기 설정 > 잡 params**(#4052 — 분류·관리와 같게) > 워크스페이스 실행 멤버(#4012 T1) > 잡 created_by.
@@ -61,7 +78,10 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
       prompt: await applyPromptOverride(params, b), requester, jobId,
       harness: headlessHarness(params, b),
       ...headlessRun(b, params),
-      marker: b.key ? "cron:" + jobId + "#" + b.key : undefined,
+      marker: b.key ? laneMarker(jobId, b.key) : undefined,
+      //  (#5235) 한 레인의 배치는 **어느 잡에서든** 한 번에 하나다 — 표식이 잡마다 달라 옛 중첩 가드는 다른 잡의 배치를 못 봤다.
+      //   이 목록은 증류 잡만 담는다. 표식 뒷부분만 비교하면 key 공간이 따로인 카테고리 레인(둘 다 default 가 있다)까지 막는다.
+      guardMarkers: b.key ? jobs.map((id) => laneMarker(id, String(b.key))) : undefined,
       // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
       nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },
@@ -290,6 +310,14 @@ async function idleSummary(considered: number, extra: Record<string, unknown>): 
   return { status: "ok", summary: {
     skipped: "켜진 증류기가 이미 판정함(처리 중) — 새로 낼 배치 없음",
     undistilled, stranded: 0, distillers: considered, ...extra } };
+}
+
+// 증류 잡 id 전부(꺼진 잡 포함 — 꺼도 이미 나간 배치는 돈다). 못 읽으면 빈 목록 — 자기 표식만 보는 종전 가드로 돌아간다.
+async function distillJobIdsSafe(): Promise<string[]> {
+  try {
+    const { readDistillJobs } = await import("../../org/distill/ensure-job.js");
+    return (await readDistillJobs()).map((j) => j.id);
+  } catch { return []; }
 }
 
 // 전용 잡이 맡은 증류기 — 잡 목록을 못 읽으면 아무것도 빼지 않는다(종전 동작: 전체 잡이 켜진 증류기 전부를 집는다).

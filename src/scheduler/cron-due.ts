@@ -30,8 +30,8 @@ export interface CronDueInput {
  * 이 시각형 잡이 지금 due 인가.
  *
  *  · 잘못된 expr → 아님(검증은 cron_set 이 한다. 종전과 같다).
- *  · 한 번도 안 돌았으면 → **due**. `run_once` 가 이미 같은 규율이다(engine.ts: "아직 안 돌았으면 due").
- *    그래야 새로 만든 시각형 잡의 **첫 실행**도 틱 격자에 기대지 않는다.
+ *  · 한 번도 안 돌았으면 → **due**. 그래야 새로 만든 시각형 잡의 **첫 실행**도 틱 격자에 기대지 않는다.
+ *    반복 잡만의 규칙이다 — 1회성은 그 한 번이 전부라 시각을 지켜야 한다(아래 runOnceDue).
  *  · last 가 파싱 불가면 → **아님**. «모름» 을 due 로 접으면 매 틱 실행 폭주가 된다 —
  *    engine.ts 가 정확히 그 사고를 주석으로 기록해 뒀다("last_run_at 이 안 써지면 … 30초마다 돈다").
  *  · last 가 미래(시계 되돌림)면 그 기준의 다음 매치도 미래라 자연히 아님이 된다.
@@ -45,4 +45,33 @@ export function cronDue(inp: CronDueInput): boolean {
   if (!Number.isFinite(lastMs)) return false;
   const next = nextCronTime(parsed, new Date(lastMs), inp.tz);
   return next !== null && next.getTime() <= inp.now;
+}
+
+export interface RunOnceDueInput {
+  /** 5필드 cron 표현식. 없으면 시각을 정하지 않은 1회성이다. */
+  expr?: string | null;
+  lastRunAt?: string | null;
+  /** 이 잡을 마지막으로 저장한 시각(org_cron.updated_at) — 시각형 1회성은 그 뒤의 첫 매치에 돈다. */
+  savedAt?: string | null;
+  now: number;
+  tz?: string;
+}
+
+/**
+ * 1회성(run_once) 잡이 지금 due 인가 (#5235).
+ *
+ *  종전엔 시각을 안 보고 «안 돌았으면 due» 였다. 저장은 200 인데 시각이 안 들었다 — 4분 간격으로 시각을 준 1회성 잡 30개가
+ *   다음 틱에 전부 queued 가 됐다(실측 2026-11-02).
+ *
+ *  · 이미 돌았으면 → 아님.
+ *  · 시각이 없으면 → due(다음 틱 · 종전 동작).
+ *  · 시각이 있으면 → **저장한 뒤의 첫 매치**가 지났을 때. 기준을 «안 돌았다» 가 아니라 저장 시각으로 잡아야
+ *    반복 잡의 첫 실행 규칙(cronDue 의 «한 번도 안 돌았으면 due»)을 타지 않는다.
+ *  · 저장 시각을 모르면 → 아님. 시각을 지키는 것이 이 잡의 뜻이라 «모름» 을 due 로 접지 않는다(컬럼은 NOT NULL 이라 실제로는 안 온다).
+ */
+export function runOnceDue(inp: RunOnceDueInput): boolean {
+  if (inp.lastRunAt) return false;
+  if (!inp.expr) return true;
+  if (inp.savedAt == null || String(inp.savedAt).trim() === "") return false;
+  return cronDue({ expr: inp.expr, lastRunAt: inp.savedAt, now: inp.now, tz: inp.tz });
 }
