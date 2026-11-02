@@ -412,6 +412,15 @@ export async function listStrandedSources(enabled: DistillerRow[], limit = 50, r
   return q(itemsPool, sql, values);
 }
 
+/** 기본 기준 배치가 앞으로 집을 자료 수 — listStrandedSources 와 같은 술어·같은 신원을 상한 없이 센다(#5235 실행 전 안내). */
+export async function countStrandedSources(enabled: DistillerRow[], requester?: string | null): Promise<number> {
+  const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
+  const p = new Params();
+  const where = strandedWhereSql(enabled, p, viewer);
+  const rows = await q(itemsPool, `SELECT count(*)::int AS n FROM source s WHERE ${where}`, p.values);
+  return Number(rows[0]?.n ?? 0);
+}
+
 /** 지금 이 워크스페이스에 남아 있는 미증류 자료 수 — «없다» 고 말하기 전에 실제로 세려고 쓴다. */
 export async function countUndistilled(requester?: string | null): Promise<number> {
   const viewer = await resolveSourceViewer(requester || PUBLIC_VIEWER);
@@ -841,7 +850,7 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-// 커버리지 — 증류기별 잔량 + **어느 증류기에도 안 걸리는 자료**(그대로 두면 영영 증류 안 되는 사각지대).
+// 커버리지 — 증류기별 잔량 + **어느 증류기에도 안 걸리는 자료**(사각지대 — 레인을 지정하지 않은 잡이 돌 때 기본 기준으로 나간다 · #1631).
 //  관리탭이 이걸 그대로 보여준다: "증류기를 켰는데 왜 안 줄지?" 를 묻기 전에 사각지대가 먼저 보이도록.
 export async function distillerCoverage(): Promise<DistillerCoverage> {
   const all = await listDistillers();

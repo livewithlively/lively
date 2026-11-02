@@ -78,19 +78,28 @@ export function scopeWhere(r: ClassifierRow, params: unknown[]): string {
   return w.join(" AND ");
 }
 
+/**
+ * DB 행 → ClassifierRow. id 를 여기서 숫자로 맞춘다(#5235).
+ *  ⚠ id 는 BIGSERIAL 이라 드라이버가 **문자열**로 주는데 타입은 number 라 컴파일러가 못 잡는다. 그 값을 getClassifier 에 되넘기면
+ *   key 로 찾다 못 찾아 null 이 된다 — 삭제가 아무것도 안 지운 채 { ok: true } 로 끝났고(화면엔 «삭제했습니다»), 수정 응답의 레인이 null 이었다.
+ */
+function toRow(r: unknown): ClassifierRow {
+  const row = r as ClassifierRow;
+  row.id = Number(row.id);
+  row.scope_text = scopeText(row);
+  return row;
+}
+
 export async function listClassifiers(): Promise<ClassifierRow[]> {
   const rows = await q(itemsPool, `SELECT ${COLS} FROM org_classifier ORDER BY priority DESC, id`);
-  return rows.map((r) => { const row = r as ClassifierRow; row.scope_text = scopeText(row); return row; });
+  return rows.map(toRow);
 }
 
 export async function getClassifier(idOrKey: number | string): Promise<ClassifierRow | null> {
   const rows = typeof idOrKey === "number"
     ? await q(itemsPool, `SELECT ${COLS} FROM org_classifier WHERE id=$1`, [idOrKey])
     : await q(itemsPool, `SELECT ${COLS} FROM org_classifier WHERE key=$1`, [idOrKey]);
-  if (!rows[0]) return null;
-  const row = rows[0] as ClassifierRow;
-  row.scope_text = scopeText(row);
-  return row;
+  return rows[0] ? toRow(rows[0]) : null;
 }
 
 /**

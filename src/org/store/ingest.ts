@@ -5,7 +5,7 @@ import { HttpError } from "../../http-error.js";
 import { invalidateIngestPolicyCache } from "../ingest/ingest-policy-load.js";   // #783 정책 쓰기 → 캐시 즉시 무효화(스위치가 곧바로 먹게)
 import { audit } from "./audit.js";
 import { bumpCoverageVersion } from "../distill/coverage-version.js";   // #5147 레인 쓰기 → 커버리지 캐시 무효화
-import { keepDrawerTarget } from "../liv/lane-skeleton.js";   // #1631 — 서랍 레인의 목적지를 잃지 않는다
+import { drawerOfLane, settleDrawerTarget } from "../liv/lane-skeleton.js";   // #1631 · #5235 — 서랍 레인의 목적지
 
 // ════════ 자동 인입 허용선 정책 — org_ingest_policy (프로젝트 #638) ════════
 //  distill/mirror 가 지식을 auto(즉시 active)|confirm(pending 격리→검토 큐)|drop(미적재) 중 어디로 보낼지 오너가 조절.
@@ -285,6 +285,20 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
   const pick = <T>(k: keyof DistillerUpsertInput, next: T): T =>
     pickDistillerField(input as Record<string, unknown>, before0, k as string, next);
 
+  //  목적지(#1631 · #5235) — 서랍 레인의 빈 목적지는 되살리거나 거절한다. 판정은 settleDrawerTarget 이 한다(왜·표 = 그 머리말).
+  //   위의 명시값 검증과 달리 **비었을 때** 도는 판정이라 여기서 따로 부른다 — 비어 있지 않으면 카테고리 표를 안 읽는다.
+  const laneKey = key || (before0?.key as string | undefined) || null;
+  const pickedTarget = pick("target_category", normText(input.target_category));
+  const stateByKey = !normText(pickedTarget) && drawerOfLane(laneKey) ? await categoryStateByKey() : new Map<string, string>();
+  const settled = settleDrawerTarget({
+    key: laneKey, given: pickedTarget, stateOf: (k) => stateByKey.get(k),
+    clearing: input.target_category !== undefined && !normText(input.target_category)
+      && (!before0 || !!normText(before0.target_category as string | null | undefined)),
+  });
+  if ("refuse" in settled) {
+    throw new HttpError(400, `레인 '${laneKey}' 은(는) key 가 곧 목적지라 카테고리 '${settled.refuse}' 로 정해져 있어 목적지를 비울 수 없습니다 — 다른 카테고리로 옮기려면 그 카테고리를 목적지로 넣고, AI 가 내용으로 고르게 하려면 'liv-' 로 시작하지 않는 key 로 새 증류기를 만드세요.`);
+  }
+
   const mode = pick("mode", input.mode ?? "headless") as string;
   if (!["headless", "session"].includes(mode)) throw new Error("mode 는 headless|session");
   const sessionRef = pick("session_ref", normText(input.session_ref));
@@ -314,11 +328,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
     lookback_days: lookback,
     criteria_md: pick("criteria_md", normText(input.criteria_md)),
     format_md: pick("format_md", normText(input.format_md)),
-    //  #1631 — 서랍 레인(liv-<서랍key>)은 **키가 곧 목적지**다. 빈 목적지로 저장되면 그 레인이 만든 지식이
-    //   사람이 승인한 서랍에 안 들어간다(실측 2026-08-31: 리브가 레인을 켜면서 d-21c2235a7d → null 로 지웠다).
-    //   비었을 때만 키에서 되살린다 — 다른 서랍을 명시하면 그 뜻을 존중하고, 안전망은 비우는 것이 설계다.
-    target_category: keepDrawerTarget(key || (before0?.key as string | undefined) || null,
-      pick("target_category", normText(input.target_category))),
+    target_category: settled.target,
     default_type: pick("default_type", normText(input.default_type)),
     name_prefix: pick("name_prefix", normText(input.name_prefix)),
     thread_aware: pick("thread_aware", input.thread_aware ?? true),

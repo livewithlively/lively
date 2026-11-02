@@ -1134,7 +1134,7 @@
   "rest": [
    "POST /api/ui/org/pipeline/run-now"
   ],
-  "input_hash": "7272b62987de18ab"
+  "input_hash": "d9df0adf5218ea95"
  },
  {
   "name": "org_collector_discover",
@@ -1254,7 +1254,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "eca1f0a5ec9e48f2"
+  "input_hash": "a9b97ff4a5afeb00"
  },
  {
   "name": "org_distiller_remove",
@@ -3892,7 +3892,17 @@
   "rest": [
    "POST /api/ui/cron/:id/run"
   ],
-  "input_hash": "e9f5a6623f0f7ef5"
+  "input_hash": "7e3dfb45ed67a0f0"
+ },
+ {
+  "name": "cron_run_plan",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/cron/:id/run-plan"
+  ],
+  "input_hash": "c55c5e0068a50942"
  },
  {
   "name": "list_unmapped",

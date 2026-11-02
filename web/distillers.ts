@@ -28,6 +28,7 @@ import { icon as lineIcon } from './v2/icons.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 import { isWholeDistillJob } from './lib/stage-job-pick.js';
+import { confirmDistillRun } from './distill-run-check.js';   // #5235 기본 기준으로 함께 나갈 자료를 누르기 전에
 import { runConfig } from './context-run-config.js';    // #4008 제공자·모델·추론강도 공용 선택기
 import { LIV_CARD, LIV_ROW, livMark, livSum, madeBy } from './liv-mark.js';   // #4135 «리브가 세팅한 것» 공통 표시
 import { countLiv } from './lib/liv-mark.js';
@@ -198,7 +199,9 @@ function faceStack(d): HTMLElement {
   return wrap;
 }
 
-// ── 현황 띠 — 숫자 셋. 어느 증류기도 안 읽는 자료가 있으면 그 칸이 경고색이 된다. ──
+// ── 현황 띠 — 숫자 셋. 맡은 증류기가 없는 자료가 있으면 그 칸이 경고색이 된다. ──
+//  (#5235) 종전 문구는 «어느 증류기도 읽지 않는다 · 이대로 두면 지식이 되지 않는다» 였는데 #1631 뒤로 사실이 아니다 — 자동 실행이 돌면
+//   기본 기준으로 나간다. 화면이 반대로 말해서, 증류기 하나를 시범으로 돌린 사람이 이 자료가 함께 나가는 것을 예상할 수 없었다.
 function statsStrip(cov, onN: number, total: number) {
   const tile = (n: string, l: string, k = '') => el('div', { class: 'dsl-stat' + (k ? ' ' + k : '') },
     el('b', { class: 'dsl-stat-n num', text: n }), el('span', { class: 'dsl-stat-l', text: l }));
@@ -211,11 +214,11 @@ function statsStrip(cov, onN: number, total: number) {
     //   둘을 갈라 보인다 — 읽을 것과 읽고 넘긴 것이 한 숫자면 «증류가 밀렸다» 로 읽힌다.
     tile(unread.toLocaleString() + '건', '아직 읽지 않은 자료', unread > 0 ? '' : 'is-ok'),
     tile(passed.toLocaleString() + '건', '읽었지만 지식으로 안 만든 자료'),
-    tile((cov.uncovered || 0).toLocaleString() + '건', '어느 증류기도 읽지 않는 자료', cov.uncovered > 0 ? 'is-warn' : 'is-ok'));
+    tile((cov.uncovered || 0).toLocaleString() + '건', '맡은 증류기가 없는 자료', cov.uncovered > 0 ? 'is-warn' : 'is-ok'));
   if (cov.uncovered > 0 && onN > 0 && (cov.uncovered_channels || []).length) {
     const issue = el('div', { class: 'cxc-issue cxc-issue-block' },
-      el('b', { text: '이 채널들은 어느 증류기도 읽지 않습니다' }),
-      el('span', { text: ' — 이대로 두면 지식이 되지 않습니다. 어느 증류기의 「읽을 채널」에 넣거나, 안전망 증류기를 켜세요.' }),
+      el('b', { text: '이 채널들은 맡은 증류기가 없습니다' }),
+      el('span', { text: ' — 자동 실행이 돌 때마다 증류기의 기준이 아니라 기본 기준으로 지식이 됩니다. 기준을 정하려면 어느 증류기의 「읽을 채널」에 넣거나, 안전망 증류기를 켜세요.' }),
       el('div', { class: 'cxc-chips' }, ...cov.uncovered_channels.map((c) => el('span', { class: 'pill', text: (c.channel || '(채널 없음)') + ' · ' + c.n.toLocaleString() }))));
     return el('div', {}, strip, issue);
   }
@@ -1017,6 +1020,7 @@ async function runJobCard(rerender) {
     //  #4052 후속 — 켜진 레인 전부를 접수하는 전체 잡을 대표로 보인다. 처음 설정이 심은 local-files 전용 잡(10분)이
     //   목록 앞에 오면 카드가 그 주기로 말하고, 끌 때 그 잡만 꺼져 나머지 레인은 계속 돌았다.
     prefer: isWholeDistillJob,
+    beforeRun: (job) => confirmDistillRun(String(job.id)),
     // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
     unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
       ? '지금 등록된 증류 자동 실행은 늘 켜 둔 AI 세션이 있어야 도는 옛 방식인데, 그 세션이 정해져 있지 않습니다 — 이대로 켜면 매번 실패합니다.'

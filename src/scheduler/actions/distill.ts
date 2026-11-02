@@ -2,6 +2,7 @@
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
 import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { logger } from "../../log.js";
+import type { DistillerRow } from "../../org/distill/distiller.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
 //  fire-and-forget(주입까지가 잡 책임 — 증류는 세션이 수 분에 걸쳐 knowledge_save+source_link_knowledge 로 수행).
@@ -84,7 +85,44 @@ export async function runDistillHeadless(params: Record<string, unknown>, jobId:
     else if (acceptedId != null) await markStrandedSeenSafe(b.ids, acceptedId);
     out.push({ distiller: b.key, status: r.status, ...(r.summary as Record<string, unknown>) });
   }
-  return { status: "ok", summary: { batches: out } };
+  return { status: "ok", summary: { batches: out, ...(params.lanes_only === true ? { lanes_only: true } : {}) } };
+}
+
+/** 증류 잡의 액션 — 이 파일이 그 실행을 정의한다. */
+export const DISTILL_ACTIONS: ReadonlySet<string> = new Set(["distill_sources", "distill_sources_headless"]);
+
+/** 이번 실행이 낼 것 — 맡은 레인이 없는 자료(unassigned)를 따로 말한다. 없으면 null. */
+export interface DistillRunPlan {
+  lanes: Array<{ distiller: string; sources: number; backlog: number }>;
+  /** sources = 이번 기본 기준 배치 · total = 앞으로 그 배치들이 집을 전체. */
+  unassigned: { sources: number; total: number } | null;
+  notice: string | null; skipped: string | null; error: string | null;
+}
+
+/**
+ * 이 실행을 접수하지 않고 무엇이 나갈지만 말한다(#5235 · cron_run_plan).
+ *
+ *  레인을 지정하지 않은 잡은 맡은 레인이 없는 자료도 기본 기준으로 함께 낸다. 반만 켜도 나머지가 굶지 않게 한 의도된 동작이고(#1631)
+ *   바꾸지 않는다. 다만 그걸 **돌린 뒤에야** 알 수 있었다 — 고객사 첫 세팅에서 레인 하나를 시범으로 돌리자 슬랙 자료 50건이 기본 기준 배치로
+ *   붙어 나가 손으로 취소했다. 판정은 실행과 같은 pickDistillerBatch 하나다. 안내용 판정을 따로 두면 말과 실행이 갈린다.
+ */
+export async function planDistillRun(action: string, params: Record<string, unknown>): Promise<DistillRunPlan> {
+  const pick = await pickDistillerBatch(params, { one: action === "distill_sources" });
+  const lanes = pick.batches.filter((b) => b.key).map((b) => ({ distiller: String(b.key), sources: b.ids.length, backlog: b.backlog }));
+  const fallback = pick.batches.find((b) => !b.key);
+  let unassigned: DistillRunPlan["unassigned"] = null;
+  let notice: string | null = null;
+  if (fallback) {
+    //  실행이 집는 쪽과 같은 술어로 센다 — 레인이 있으면 방치 판정, 레인이 하나도 없으면 전역 폴백(판정 기록을 안 보고, 링크가 하나라도 있으면 뺀다).
+    //   갈리면 «이번 5건 · 전체 0건» 이나 나가지 않을 자료까지 «남은 N건» 으로 말하게 된다(둘 다 실측).
+    const claiming = pick.claiming ?? [];
+    const total = claiming.length
+      ? await (await import("../../org/distill/distiller.js")).countStrandedSources(claiming)
+      : await (await import("../../v6/source-store.js")).countUndistilledSources();
+    unassigned = { sources: fallback.ids.length, total };
+    notice = `맡은 증류기가 없는 자료 ${unassigned.sources}건(앞으로 나갈 전체 ${unassigned.total}건)이 기본 기준으로 나갑니다 — 증류기 몫만 돌리려면 lanes_only=true 로 실행하세요.`;
+  }
+  return { lanes, unassigned, notice, skipped: pick.skipped ?? null, error: pick.error ?? null };
 }
 
 interface DistillBatch {
@@ -122,7 +160,7 @@ async function onboardingHoldsDistill(): Promise<boolean> {
 //  · 미지정 → enabled 증류기 전부(배정 순서). one=true 면 그중 잔량 있는 첫 하나만.
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
-  Promise<{ batches: DistillBatch[]; considered: number; error?: string; skipped?: string }> {
+  Promise<{ batches: DistillBatch[]; considered: number; error?: string; skipped?: string; claiming?: DistillerRow[] }> {
   //  (#5167) 처음 설정을 막 끝낸 사람이 있고 리브가 아직 정리 지시를 안 받았으면 쉰다 — 기본 증류가 올린 파일을 카테고리 없이 먼저
   //   집으면 리브가 세울 레인이 빈손이 된다(org/liv/setup-status.ts 머리말). 리브가 지시를 받거나(distill_at) 하루가 지나면 풀린다.
   //   레인을 이름으로 부른 잡(params.distiller)은 쉬지 않는다 — 그런 잡은 사람이나 리브가 그 레인을 골라 세운 것이다.
@@ -162,7 +200,10 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //  «맡은» 레인 = 켜진 레인 + 자격 실패로 자동 정지된 레인. 배치는 켜진 레인만 내고,
   //   폴백 판정·방치 계산은 맡은 레인 기준으로 한다(isAutoDisabledLane 머리주석).
   const claiming = all.filter((d) => d.enabled || isAutoDisabledLane(d));
+  //  (#5235) 사람이 손으로 돌릴 때 고르는 값 — 이번 실행은 켜진 레인 몫만 낸다. 기본 기준 배치(아래 두 곳)를 내지 않는다.
+  const lanesOnly = params.lanes_only === true;
   if (!claiming.length) {
+    if (lanesOnly) return { batches: [], considered: 0, skipped: "켜진 증류기가 없어 낼 자료가 없습니다 — 증류기 몫만 돌리는 실행이라 기본 기준으로도 내지 않았습니다" };
     // 폴백 — 증류기 미등록/전부 꺼짐: 구 전역 인박스 + 기본 프롬프트(종전 동작 그대로).
     const { listUndistilledSources } = await import("../../v6/source-store.js");
     let inbox: Record<string, unknown>[];
@@ -173,7 +214,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       distillerId: null, key: null, ids: inbox.map((s) => Number(s.id)), backlog: inbox.length,
       prompt: buildDistillPrompt(inbox.length, policySummary), targeting: null,
       requester: null, harness: null, model: null, effort: null,
-    }], considered: 0 };
+    }], considered: 0, claiming };
   }
 
   //  #4052 후속 — 전용 잡이 켜진 증류기는 **그 잡이** 맡는다(예: 처음 설정이 심은 local-files 전용 10분 잡).
@@ -204,7 +245,7 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   //   실측: 자료 12건이 방치된 채 잡은 매번 «정상» 이었다(원준님 매니지드 워크스페이스).
   //  ⚠ «인박스가 비었다» 가 아니라 «어느 켜진 레인의 **스코프에도** 안 든다» 로 재야 한다.
   //   인박스는 이미 판정(seen)한 것을 빼므로, 처리 중인 자료까지 방치로 세면 **두 번 증류**하게 된다.
-  if (!batches.length || !opt.one) {
+  if (!lanesOnly && (!batches.length || !opt.one)) {
     //  #4824 — 한 배치 = 볼 수 있는 사람이 같은 자료(oneAudienceGroup · 나머지는 다음 배치로). 기록·대상 지정이 같은 집합을 쓴다.
     const stranded = await listStrandedSources(claiming, 50, null).then(oneAudienceGroup).catch(() => [] as Record<string, unknown>[]);
     if (stranded.length) {
@@ -226,7 +267,9 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
       });
     }
   }
-  return { batches, considered: enabled.length };
+  //  (#5235) 여기서 idleSummary 로 넘기면 «stranded: 0» 이라고 말하게 된다 — 뺀 것이지 없는 것이 아니다.
+  if (lanesOnly && !batches.length) return { batches, considered: enabled.length, skipped: "켜진 증류기 몫에 새로 낼 자료가 없습니다 — 맡은 증류기가 없는 자료는 이번 실행에서 뺐습니다" };
+  return { batches, considered: enabled.length, claiming };
 }
 
 //  «할 일 없음» 을 말하기 전에 **실제로 센다**(#1631, 원준님 2026-08-31).

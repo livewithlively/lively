@@ -153,7 +153,7 @@ export const collectorsCapabilities: Capability[] = [
     "주어진 수집기들을 지금 수집하고, 그 수집이 모두 끝나면 주어진 증류 자동 실행을 한 번씩 돌린다. 곧바로 run_id 들을 돌려주고 나머지는 뒤에서 잇는다. 이미 수집 중인 수집기는 그 수집이 끝나기를 기다린다.",
     [{ method: "POST", paths: ["/api/ui/org/pipeline/run-now"], parse: (req) => {
       const b = (req.body ?? {}) as Record<string, unknown>;
-      return { collector_ids: b.collector_ids, distill_job_ids: b.distill_job_ids };
+      return { collector_ids: b.collector_ids, distill_job_ids: b.distill_job_ids, lanes_only: b.lanes_only === true };
     } }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const cids = Array.from(new Set(((input.collector_ids as number[]) || []).map(Number).filter((n) => n > 0)));
@@ -180,12 +180,13 @@ export const collectorsCapabilities: Capability[] = [
         if (!jobs.length) return;
         const { runCronById } = await import("../../scheduler/engine.js");
         //  하나씩 — 자료 → 지식이 먼저 끝나야 카테고리 붙이기가 새 지식을 본다(화면이 넘기는 순서 그대로).
-        for (const j of jobs) { try { await runCronById(j); } catch (e) { logger.warn({ job: j, err: (e as Error)?.message }, "지금 수집 뒤 증류 실패(비치명)"); } }
+        for (const j of jobs) { try { await runCronById(j, input.lanes_only === true ? { lanes_only: true } : undefined); } catch (e) { logger.warn({ job: j, err: (e as Error)?.message }, "지금 수집 뒤 증류 실패(비치명)"); } }
       })().catch(() => {});
       return { runs, distill_after: jobs };
     }, {
       collector_ids: z.array(z.number().int().positive()).max(100).describe("지금 수집할 수집기 id"),
       distill_job_ids: z.array(z.string()).max(10).optional().describe("수집이 모두 끝난 뒤 돌릴 증류 자동 실행(org_cron id). 꺼진 잡은 건너뛴다"),
+      lanes_only: z.boolean().optional().describe("true 면 이번 증류는 켜진 증류기 몫만 낸다 — 맡은 증류기가 없는 자료는 뺀다(cron_run_now 의 lanes_only 와 같다)"),
     }),
 
   restWork("org_collector_discover", "수집기 스코프 목록 조회",

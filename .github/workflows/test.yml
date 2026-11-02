@@ -323,6 +323,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/store/classifier-lanes.pg-test.mjs
+      # ⑤-b3 증류 레인 설정이 실제로 듣는지(#5235) — liv- 키 레인의 목적지(비우기·되살리기·없는 서랍)를 다시 읽은 행으로, 레인을 지정하지 않은
+      #    증류 실행의 계획(cron_run_plan)·lanes_only 를 접수된 org_task 행으로 잰다. 두 결함 다 «저장은 200 인데 안 듣는다» 라 응답으로는 못 잡는다.
+      - name: 증류 레인 설정 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/distill/lane-settings.pg-test.mjs
       # ⑤-c 수집 판(#3994 T3) — 매니지드에서 수집을 게이트웨이 밖 일시 유닛으로 뺀 경로의 **run 행 상태 전이**.
       #    판 엔트리를 실제 프로세스로 띄우고(수집 자식까지 진짜 run-sync), 게이트웨이 경로는 가짜 op 소켓 앞에서 돌린다.
       #    «판 먼저·행 나중» · 자기 행을 본 뒤에만 수집 · 끝 기록은 running 행에만 · 취소는 행을 먼저 닫는다 ·

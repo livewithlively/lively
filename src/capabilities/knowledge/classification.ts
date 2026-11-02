@@ -94,7 +94,7 @@ type KnowledgeProposeCategoryInput = z.infer<z.ZodObject<typeof knowledgePropose
 export const knowledgeProposeCategory: Capability = {
   name: "knowledge_propose_category",
   title: "지식 카테고리 제안(LLM)",
-  description: "미분류 지식에 카테고리를 제안한다(mapped_by='llm', evidence 필수). 이미 카테고리가 있으면 건너뛴다(사람/기존 분류 불가침 — 덮지 않는다). state 미지정 시 confidence≥0.8 면 confirmed, 아니면 proposed. proposed 도 소비쿼리(state<>'rejected')에 즉시 잡혀 발견·소환된다. 증류기의 «카테고리 붙이기» 레인(classify_knowledge 크론)이 도메인 should 를 읽고 판단해 호출하는 툴 — 사람이 쓰는 knowledge_link_category(교체 시맨틱)와 다르다.",
+  description: "미분류 지식에 카테고리를 제안한다(mapped_by='llm', evidence 필수). 이미 카테고리가 있으면 건너뛴다(사람/기존 분류 불가침 — 덮지 않는다). state 미지정 시 서버가 정한다 — confidence 가 그 지식을 배치로 낸 «카테고리 붙이기» 레인의 confirm_threshold(레인이 낸 지식이 아니면 0.8) 이상이면 confirmed, 아니면 proposed(응답의 threshold 가 쓰인 문턱). proposed 도 소비쿼리(state<>'rejected')에 즉시 잡혀 발견·소환된다. 증류기의 «카테고리 붙이기» 레인(classify_knowledge 크론)이 도메인 should 를 읽고 판단해 호출하는 툴 — 사람이 쓰는 knowledge_link_category(교체 시맨틱)와 다르다.",
   scope: "memory",
   input: knowledgeProposeCategoryInput,
   expose: {
