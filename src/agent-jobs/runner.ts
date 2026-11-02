@@ -316,6 +316,16 @@ else {
 export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
 
 /**
+ * 하네스의 생각 깊이(`claude -p --effort <level>`)가 받는 값 — 실측(2026-11-02, claude 2.1.316 `claude --help`: low, medium, high, xhigh, max).
+ *  앱 AI 실행이 받는 값(capabilities/ai-runs 의 effort)과 판이 하네스에 넘기는 값이 이 한 목록이다. 사람 세션 폼 · 위탁의 화이트리스트가 쓰는
+ *  claude 하네스 카탈로그(terminal/catalog.ts 의 --effort 선택지)와 같은 다섯 값이다 — 하네스가 값을 늘려 한쪽만 고치면 ai-runs/effort-wiring.test EI0 가 잡는다.
+ */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORT_LEVELS)[number];
+/** (순수) 하네스가 받는 effort 값인가 — 목록 밖의 글(플래그처럼 보이는 것 포함)이 하네스 인자에 들어가지 않게. */
+export const isEffort = (v: unknown): v is Effort => typeof v === "string" && (EFFORT_LEVELS as readonly string[]).includes(v);
+
+/**
  * (순수) 작업용 claude 인자.
  *  · `-p` + stream-json — 진행을 줄마다 읽고 마지막 result 이벤트로 답을 받는다(위탁 HEADLESS 표와 같은 규약).
  *  · `--dangerously-skip-permissions` — 사람이 승인할 자리가 없다(무인).
@@ -341,9 +351,13 @@ export const MODEL_RE = /^[a-z0-9][a-z0-9.\-\[\]]{1,63}$/i;
  *    (apiKeyHelper 등 — 실측 2026-10-30, claude 2.1.314: tools [] 인데 그 명령이 돌고, user 만 주면 돌지 않는다). 앱 폴더는 구성원 · 작업 AI 가 고칠 수 있다.
  *    ⚠ 위 앱 판 지시의 ⚠ 와 같이 user(실행 계정 홈의 ~/.claude)는 그대로 읽는다 — 그 계정으로 도는 다른 작업(도구가 열린 작업)이 그 settings 에
  *     apiKeyHelper 를 심으면 이 작업도 그 명령을 돌린다. «MCP 만» 은 이 작업의 AI 를 막는 것이지, 같은 계정의 다른 작업이 남긴 설정까지 막지는 않는다.
+ *  · effort(앱 AI 실행이 준 생각 깊이 — `--effort <level>`)는 준 작업에만 싣는다. 안 주면 인자가 없다(하네스 · 실행 계정의 기본 그대로).
+ *    같은 에이전트를 깊이만 바꿔 재 보는 앱(정책 질의응답의 high · xhigh · max 비교)이 이 인자로 잰다 — 빠지면 모든 판이 기본 깊이로 돌아 비교가 거짓이 된다.
+ *    단발(bare)도 싣는다 — 구독 단발도 작업 컨테이너의 하네스로 돈다. 값은 EFFORT_LEVELS 중 하나만(모델 이름과 같은 까닭 — 접수가 이미 거르지만 여기서 한 번 더).
  */
-export function claudeJobArgv(o: { model?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean; mcpOnly?: boolean }): string[] {
+export function claudeJobArgv(o: { model?: string | null; effort?: string | null; resume?: string | null; mcp: boolean; bare?: boolean; system?: boolean; mcpOnly?: boolean }): string[] {
   if (o.model && !MODEL_RE.test(o.model)) throw new Error(`모델 이름 형식 밖: ${JSON.stringify(o.model)}`);
+  if (o.effort && !isEffort(o.effort)) throw new Error(`effort 값 형식 밖: ${JSON.stringify(o.effort)} — ${EFFORT_LEVELS.join(" · ")} 중 하나`);
   return [
     "claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
     "--settings", JSON.stringify({ disableAllHooks: true }),
@@ -355,6 +369,7 @@ export function claudeJobArgv(o: { model?: string | null; resume?: string | null
     ...(o.system ? ["--append-system-prompt-file", SYSTEM_PROMPT_PLACEHOLDER] : []),
     ...(o.system || o.mcpOnly ? ["--setting-sources", "user"] : []),
     ...(o.model ? ["--model", o.model] : []),
+    ...(o.effort ? ["--effort", o.effort] : []),
     ...(o.resume ? ["--resume", o.resume, "--fork-session"] : []),
   ];
 }

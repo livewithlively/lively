@@ -865,6 +865,74 @@ try {
     await cleanup();
   }
 
+  // ── I4. 생각 깊이(effort — 앱 AI 실행의 `claude -p --effort`) — 값을 준 작업만 행에 남고 따로 읽는다 · 손상 · 칸이 아직 없을 때(롤 창) ──────────
+  //  이게 틀리면: 판이 뜰 때 깊이를 못 읽어 앱이 준 깊이가 기본 깊이로 바뀌거나, 손상된 칸이 말없이 기본 깊이로 읽히거나,
+  //  롤 창에서 깊이 없는 작업까지 «없는 칸» 으로 막히거나, 깊이를 준 작업이 깊이 없이 들어간다.
+  {
+    await cleanup();
+    const appJob = (who, extra = {}) => job(who, { appId: "crm", projectId: null, cwd: "/work/apps/crm", ...extra });
+    const levels = ["low", "medium", "high", "xhigh", "max"];
+    const made = {};
+    for (const lv of levels) made[lv] = await st.insertAgentJob(appJob(`ef-${lv}`, { effort: lv }), ROOMY);
+    const none = await st.insertAgentJob(appJob("ef-null", { effort: null }), ROOMY);
+    const plain = await st.insertAgentJob(job("ef-plain"), ROOMY);   // effort 칸을 아예 주지 않은 종전 접수(옛 호출)
+    const rd = {};
+    for (const lv of levels) rd[lv] = [await st.agentJobEffort(made[lv].row.id), (await row(made[lv].row.id)).effort];
+    chk("EF1 값을 준 작업 — 그 값이 작업 행에 남고 읽기가 그대로 돌려준다(다섯 값) · null · 칸을 주지 않은 종전 접수는 null",
+      levels.every((lv) => rd[lv][0] === lv && rd[lv][1] === lv)
+        && (await st.agentJobEffort(none.row.id)) === null && (await row(none.row.id)).effort === null
+        && (await st.agentJobEffort(plain.row.id)) === null && (await row(plain.row.id)).effort === null,
+      JSON.stringify(rd));
+    chk("EF1b 행 읽기(COLS)는 effort 칸을 싣지 않는다 — 롤 창에서 «없는 칸» 으로 깨지지 않게",
+      !("effort" in made.max.row) && !("effort" in (await st.getAgentJob(made.max.row.id))), JSON.stringify(Object.keys(made.max.row)));
+    const odd = {};
+    for (const id of [2 ** 40, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      try { odd[String(id)] = await st.agentJobEffort(id); } catch (e) { odd[String(id)] = `던짐: ${e?.message ?? e}`; }
+    }
+    chk("EF2 없는 작업 id · 0 · 음수 · 정수가 아닌 id 는 null(던지지 않는다)", Object.values(odd).every((v) => v === null), JSON.stringify(odd));
+    const broken = {};
+    for (const [i, bad] of ["ultra", "HIGH", " high", "", "--dangerously-skip-permissions"].entries()) {
+      const b = await st.insertAgentJob(appJob(`ef-broken${i}`, { effort: "high" }), ROOMY);
+      await itemsPool.query(`UPDATE org_agent_job SET effort=$2 WHERE id=$1`, [b.row.id, bad]);
+      try { broken[JSON.stringify(bad)] = await st.agentJobEffort(b.row.id); } catch (e) { broken[JSON.stringify(bad)] = /effort/.test(String(e?.message)) ? "던짐" : `다른 오류: ${e?.message}`; }
+    }
+    chk("EF3 칸의 값이 다섯 값 밖이면(손상 · 이 판이 모르는 값) 던진다 — 기본 깊이(null)로 읽지 않는다", Object.values(broken).every((v) => v === "던짐"), JSON.stringify(broken));
+    const all = await st.insertAgentJob(job("ef-all", { accountMember: `${REQ}seat`, appId: "crm", projectId: null, cwd: "/work/apps/crm", sharedSeat: true,
+      appInstructions: "공용 시트 지시", mcpOnly: true, toolAllowlist: ["knowledge_get"], effort: "xhigh" }), ROOMY);
+    const instrOnly = await st.insertAgentJob(appJob("ef-instr", { appInstructions: "지시만", effort: "low" }), ROOMY);
+    chk("EF4 공용 시트 표시 · 지시 · «MCP 만» · 목록 · effort 를 함께 넣어도(값 번호가 이어져도) 각자 제자리에 남는다",
+      (await st.agentJobSharedSeat(all.row.id)) === true && (await st.agentJobAppInstructions(all.row.id)) === "공용 시트 지시"
+        && (await st.agentJobMcpOnly(all.row.id)) === true && JSON.stringify(await st.agentJobToolAllowlist(all.row.id)) === JSON.stringify(["knowledge_get"])
+        && (await st.agentJobEffort(all.row.id)) === "xhigh"
+        && (await st.agentJobAppInstructions(instrOnly.row.id)) === "지시만" && (await st.agentJobEffort(instrOnly.row.id)) === "low");
+    await cleanup();
+    //  롤 창 — 새 코드가 마이그레이션보다 먼저 받는 동안 작업 행에 effort 칸이 아직 없다.
+    //  ⚠ 시험용 DB 전용 — 칸을 지웠다 되살리면 값은 NULL 로 돌아온다(깊이가 실린 작업 행이 있는 DB 에서 돌리면 그 값이 사라진다).
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS effort`);
+    try {
+      let p0 = null, p0err = null;
+      try { p0 = await st.insertAgentJob(appJob("ef-roll", { effort: null }), ROOMY); } catch (e) { p0err = e; }
+      let pOld = null, pOldErr = null;
+      try { pOld = await st.insertAgentJob(job("ef-rollold"), ROOMY); } catch (e) { pOldErr = e; }
+      let read = "읽지 않음";
+      try { read = p0?.row ? await st.agentJobEffort(p0.row.id) : "접수 실패"; } catch (e) { read = `던짐: ${e?.message ?? e}`; }
+      chk("EF5 칸이 없을 때 — 깊이 없는 작업의 접수는 종전처럼 되고(null · 칸을 안 준 옛 호출 모두) 읽기는 null",
+        !!p0?.row && !!pOld?.row && read === null, JSON.stringify({ p0: !!p0?.row, p0err: p0err?.message, pOld: !!pOld?.row, pOldErr: pOldErr?.message, read }));
+      let err = null;
+      try { await st.insertAgentJob(appJob("ef-rollmax", { effort: "max" }), ROOMY); } catch (e) { err = e; }
+      const madeRoll = (await itemsPool.query(`SELECT count(*)::int AS n FROM org_agent_job WHERE requester=$1`, [`${REQ}ef-rollmax`])).rows[0].n;
+      chk("EF6 칸이 없을 때 — 깊이를 준 작업의 접수는 «없는 칸»(42703)으로 실패하고 그 작업은 만들어지지 않는다(기본 깊이로 들어가지 않는다)",
+        err?.code === "42703" && madeRoll === 0, JSON.stringify({ code: err?.code, made: madeRoll }));
+      let claimed = [], claimErr = null;
+      try { claimed = await st.claimAgentJobs(WIDE, mint); } catch (e) { claimErr = e; }
+      chk("EF7 칸이 없을 때 — 받은 깊이 없는 작업은 종전처럼 자리를 받는다(무회귀)",
+        !!p0?.row && claimed.some((g) => g.row.id === p0.row.id), JSON.stringify({ claimed: claimed.map((g) => g.row.id), err: claimErr?.message }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS effort TEXT`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;

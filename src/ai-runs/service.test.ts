@@ -11,7 +11,8 @@ import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings, ResumeLink } from "./plan.js";
 import type { Viewer } from "../apps/visibility.js";
-import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, callerUnattended, cancelRunFor, composeSystem, getRunFor, listRunsFor, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
+import { EFFORT_LEVELS, type Effort } from "../agent-jobs/runner.js";
+import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, callerUnattended, cancelRunFor, composeSystem, getRunFor, listRunsFor, publicRun, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -35,6 +36,11 @@ interface World {
    *  (API 키 작업의 이어받기 판정 · live.resumeTargetOf 와 같은 뜻). resumeCols42703 = 롤 창(칸이 아직 없다).
    */
   resumeLinks: Map<number, ResumeLink>; jobTranscripts: Set<number>; resumeCols42703?: boolean;
+  /**
+   * 생각 깊이(가짜) — 실행 행 · 작업 행의 effort 칸(둘 다 COLS 밖이라 행 모양에 없다 · store.RUN_EFFORT_COL · agent-jobs/store.EFFORT_COL).
+   *  effortCol42703 = 롤 창(실행 행에 칸이 아직 없다 — effort 를 실은 접수만 42703).
+   */
+  runEfforts: Map<number, string | null>; jobEfforts: Map<number, Effort | null>; effortCol42703?: boolean;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -48,7 +54,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
     llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), runShared: new Map(),
     ownTokensToday: 0, unattended: false, unattendedAsks: 0,
-    resumeLinks: new Map(), jobTranscripts: new Set(), ...o,
+    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const countedResumes = (root: number): number => [...w.resumeLinks.entries()].filter(([id, l]) => {
@@ -59,15 +65,17 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     store: {
       async insertAiRun(n: NewAiRun) {
         if (n.resume && w.resumeCols42703) throw Object.assign(new Error('column "resume_of" of relation "org_app_ai_run" does not exist'), { code: "42703" });
+        if (n.effort && w.effortCol42703) throw Object.assign(new Error('column "effort" of relation "org_app_ai_run" does not exist'), { code: "42703" });
         const id = ++seq;
         if (n.resume) w.resumeLinks.set(id, { ...n.resume });
         const row: AiRunRow = { id, status: n.status, app_id: n.appId, requester: n.requester, requester_kind: n.requesterKind, source: n.source, job_name: n.jobName, kind: n.kind,
           account_kind: n.accountKind, account_member: n.accountMember, executor: n.executor, job_id: null, model: n.model, label: n.label, prompt: n.prompt, system_prompt: n.systemPrompt,
           schema: n.schema, result: null, error: null, session_note: null, proxy_token_hash: null, retries: 0, input_tokens: null, output_tokens: null,
           created_at: new Date(), started_at: n.status === "running" ? new Date() : null, ended_at: null, updated_at: new Date() };
-        w.runs.set(id, row); w.runShared.set(id, n.sharedSeat === true); return { ...row };
+        w.runs.set(id, row); w.runShared.set(id, n.sharedSeat === true); w.runEfforts.set(id, n.effort ?? null); return { ...row };
       },
       async aiRunSharedSeat(id) { return w.runShared.get(id) === true; },
+      async aiRunEffort(id) { return w.runEfforts.get(id) ?? null; },
       async aiRunResumeLink(id) { const l = w.resumeLinks.get(id); return l ? { ...l } : null; },
       //  SQL(store.RESUME_COUNTED)과 같은 뜻 — 그 질문의 이어받기 중 띄우지도 못한 시도(작업 실행 · 작업 행 없음 · 실패)는 빼고 센다(실 Postgres 는 store.pg-test T18).
       async resumeCountOfRoot(root) { return countedResumes(root); },
@@ -91,7 +99,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
       async listAiRuns(f) {
         const shared = (r: AiRunRow): boolean => w.runShared.get(r.id) === true;
         return [...w.runs.values()].filter((r) => (!f.appId || r.app_id === f.appId) && (!f.requester || r.requester === f.requester || (r.account_kind === "subscription" && r.account_member === f.requester && !shared(r))))
-          .map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null, shared_seat: shared(r) } as unknown as AiRunSummaryRow));
+          .map((r) => ({ ...r, prompt_preview: r.prompt.slice(0, 20), has_result: r.result !== null, shared_seat: shared(r), effort: w.runEfforts.get(r.id) ?? null } as unknown as AiRunSummaryRow));
       },
       async appConversations() { return []; },
       async insertLlmCall(c) { w.calls.push(c); },
@@ -103,7 +111,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     apiKey: async () => w.key,
     getApp: async (id) => app(id, { ai: { jobs: [{ name: "summarize" }] } }),
     assertAppUsable: async () => undefined,
-    submitJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.submitted.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: j.model, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null, homeless: j.homeless === true, account_kind: j.accountKind, resume_job_id: j.resumeJobId } as unknown as AgentJobRow); w.jobShared.set(id, j.sharedSeat === true); return { id }; },
+    submitJob: async (j) => { if (w.submitThrows) throw w.submitThrows; w.submitted.push(j); const id = ++jseq; w.jobs.set(id, { id, status: "queued", model: j.model, project_id: j.projectId, timeout_sec: 600, conversation_id: null, result: null, error: null, homeless: j.homeless === true, account_kind: j.accountKind, resume_job_id: j.resumeJobId } as unknown as AgentJobRow); w.jobShared.set(id, j.sharedSeat === true); w.jobEfforts.set(id, j.effort); return { id }; },
     getJob: async (id) => w.jobs.get(id) ?? null,
     //  live.resumeTargetOf 와 같은 뜻 — 대화 id 가 있어야 · API 키 작업이면 게이트웨이가 보관한 기록까지.
     resumeTarget: async (id) => {
@@ -136,6 +144,8 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     //  도구 허용 목록(ai.tools · 필수 의존성) — 기본은 종전 작업(목록 없음 = null). 필요한 시험이 덮어 쓴다(withTools · withJobTools).
     toolAllowlist: async () => null,
     jobToolAllowlist: async () => null,
+    //  작업 행의 생각 깊이(필수 의존성) — 접수 때 그 작업 행에 실린 값 그대로(live 의 agent-jobs/store.agentJobEffort 와 같은 뜻 · 종전 작업은 null).
+    jobEffort: async (id) => w.jobEfforts.get(id) ?? null,
   };
   return { w, d };
 }
@@ -359,13 +369,13 @@ const schema = { type: "object", required: ["n"], properties: { n: { type: "inte
 // ── S5c 작업 접수 → 작업 행(#4891) — 홈 없는 표시를 그대로 옮긴다(빠지면 앱 서버의 에이전트 작업이 사람 홈에서 돈다) ──
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, mcpOnly: false, toolAllowlist: null };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, mcpOnly: false, toolAllowlist: null, effort: null };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   const homeless = agentJobOfRun({ ...base, homeless: true, sharedSeat: false, appServerOwn: false }, o);
   assert.deepEqual(homeless, {
     requester: "alice", accountKind: "api_key", accountMember: null, appId: "crm", projectId: null, cwd: "/work/apps/crm", harness: "claude",
     model: "m", label: "l", prompt: "p", resumeConversation: "conv-1", resumeJobId: 7, timeoutSec: 300, bare: false, homeless: true, sharedSeat: false, appServerOwn: false,
-    appInstructions: null, mcpOnly: false, toolAllowlist: null,
+    appInstructions: null, mcpOnly: false, toolAllowlist: null, effort: null,
   });
   //  #5082 — 앱 판 지시도 그대로 옮긴다(빠지면 그 작업은 지시 · 잠금 없이 작업 폴더의 CLAUDE.md 를 읽는다).
   assert.equal(agentJobOfRun({ ...base, homeless: false, sharedSeat: false, appServerOwn: false, appInstructions: "판 지시" }, o).appInstructions, "판 지시");
@@ -1526,7 +1536,7 @@ const SUB = (): Partial<World> => ({ ...ROOMY(), settings: { default: { kind: "s
 
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, toolAllowlist: null };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, toolAllowlist: null, effort: null };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   assert.equal(agentJobOfRun({ ...base, mcpOnly: true }, o).mcpOnly, true, "빠지면 «MCP 만» 작업이 내장 도구를 연 채 돈다");
   assert.equal(agentJobOfRun({ ...base, mcpOnly: false }, o).mcpOnly, false);
@@ -1789,7 +1799,7 @@ async function resumedTools(prev: string[] | null, now: string[] | null, o: { jo
 
 {
   const base = { requester: "alice", accountKind: "api_key" as const, accountMember: null, appId: "crm", projectId: null, model: "m", label: "l",
-    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false };
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: 7, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, effort: null };
   const o = { cwd: "/work/apps/crm", resumeConversation: "conv-1", timeoutSec: 300 };
   assert.deepEqual(agentJobOfRun({ ...base, toolAllowlist: ["store_sql", "knowledge_search"] }, o).toolAllowlist, ["store_sql", "knowledge_search"], "빠지면 목록을 둔 작업이 앱 동의 전체를 쥔다");
   assert.deepEqual(agentJobOfRun({ ...base, toolAllowlist: [] }, o).toolAllowlist, [], "빈 목록은 빈 목록");
@@ -1816,6 +1826,250 @@ async function resumedTools(prev: string[] | null, now: string[] | null, o: { jo
   // @ts-expect-error 접수 입력의 목록 칸도 필수다
   needsJob({ ...w.submitted[0]!, toolAllowlist: undefined });
   ok("T17 판의 목록 읽기 · 작업 행의 목록 읽기 · 접수 입력의 목록 칸은 필수(빠지면 타입 검사) · null 을 돌려주는 자리면 null");
+}
+
+// ══ 생각 깊이(effort — 하네스 `claude -p --effort`) — 접수 · 기록 · 이어받기 · 형식 재시도 · 롤 창 ══
+//  가짜 작업 행 읽기(jobEffort)는 접수 때 그 작업 행에 실린 값을 돌려준다(w.jobEfforts — live 의 agent-jobs/store.agentJobEffort 와 같은 뜻).
+//  이게 틀리면: 앱이 준 깊이가 말없이 사라져(프록시가 삼킴 · 이어받기 · 형식 재시도가 잃음) 깊이를 견주는 앱이 같은 깊이의 답을 서로 다른 깊이로 잰 줄 알거나,
+//  롤 창에 칸이 없다고 깊이를 빼고 돌리거나, 보기 · 목록이 준 깊이를 보여 주지 않는다.
+const caughtHttp = async (p: Promise<unknown>): Promise<HttpError> => {
+  try { await p; } catch (e) { assert.ok(e instanceof HttpError, `HttpError 를 기대 — ${String(e)}`); return e; }
+  return assert.fail("거절되지 않았다");
+};
+
+{
+  const { w, d } = world(ROOMY());
+  const u = appUser("alice", "crm");
+  //  REST 어댑터의 enum 가드는 쉼표 글을 나눠 낱낱이 보고 원래 값을 그대로 넘긴다 — «high,max» · «high,» 는 여기 서비스 검사가 막는 자리다.
+  for (const bad of ["ultra", "HIGH", " high", "high ", "--dangerously-skip-permissions", "high,max", "high,", 3, true, ["high"], ["high", "max"], { level: "high" }]) {
+    await fails(submitRun({ prompt: "x", agent: true, effort: bad }, u, { source: "app-ui" }, d), 400, /effort 는 low · medium · high · xhigh · max 중 하나입니다/);
+  }
+  assert.equal(w.runs.size, 0, "거절된 요청이 실행 행을 남기지 않는다");
+  assert.equal(w.submitted.length, 0, "작업을 보내지 않는다");
+  for (const none of [undefined, null, ""]) {
+    const r = await submitRun({ prompt: "x", agent: true, effort: none }, u, { source: "app-ui" }, d);
+    assert.equal(r.effort, null, `${JSON.stringify(none)} → 안 준 것`);
+  }
+  assert.deepEqual(w.submitted.map((j) => j.effort), [null, null, null], "생략 · null · 빈 글(REST 의 생략 관례)은 안 준 것 — 하네스 기본");
+  ok("effort E1 입력 — 다섯 값 밖(다른 낱말 · 대문자 · 공백 · 플래그 · 글 아닌 값)은 400(행 · 작업 없음) · 생략 · null · 빈 글은 안 준 것");
+}
+
+{
+  //  단발 + 워크스페이스 API 키 → 프록시 — 하네스가 없어 effort 를 받을 자리가 없다. 말없이 버리지 않고 400.
+  const { w, d } = world();
+  const u = appUser("alice", "crm");
+  for (const effort of EFFORT_LEVELS) {
+    const err = await caughtHttp(submitRun({ prompt: "요약해", effort }, u, { source: "app-ui" }, d));
+    assert.equal(err.status, 400, `${effort}: ${err.message}`);
+    for (const re of [/effort/, /작업 컨테이너/, /LLM 프록시/]) assert.match(err.message, re, `${effort} — 까닭 글`);
+  }
+  await settle();
+  assert.equal(w.runs.size, 0, "실행 행을 만들지 않는다");
+  assert.equal(w.llm.length, 0, "LLM 을 부르지 않는다");
+  assert.equal(w.calls.length, 0, "계측도 없다");
+  const plain = await submitRun({ prompt: "요약해" }, u, { source: "app-ui" }, d);
+  assert.equal(plain.executor, "proxy", "같은 요청에서 effort 만 빼면 프록시로 돈다(관측 장치)");
+  assert.equal(plain.effort, null);
+  await settle();
+  assert.equal(w.runs.get(1)!.status, "done");
+  //  끝난 프록시 실행을 이어받으며 effort 를 주어도 같다(이어받기는 앞 실행의 자리 — 프록시 그대로).
+  await fails(submitRun({ prompt: "다시", resume_run_id: 1, effort: "high" }, u, { source: "app-ui" }, d), 400, /작업 컨테이너/);
+  assert.equal(w.runs.size, 1, "이어받기 행을 넣지 않는다");
+  ok("effort E2 프록시(단발 + API 키) 실행에 effort 를 주면 400(작업 컨테이너 실행만) — 행 · LLM 호출 없음 · 이어받기도 · effort 를 빼면 그대로 돈다");
+}
+
+{
+  const { w, d } = world(ROOMY());
+  const u = appUser("alice", "crm");
+  const r = await submitRun({ prompt: "조사해", agent: true, effort: "xhigh", model: "opus" }, u, { source: "app-ui" }, d);
+  assert.equal(r.executor, "job");
+  assert.equal(w.submitted[0]!.effort, "xhigh", "작업 행으로 간다(판이 하네스 인자로 싣는다)");
+  assert.equal(w.jobEfforts.get(101), "xhigh");
+  assert.equal(w.runEfforts.get(1), "xhigh", "실행 행에도 기록한다");
+  assert.equal(r.effort, "xhigh", "접수 응답");
+  const keys = Object.keys(r);
+  assert.equal(keys[keys.indexOf("model") + 1], "effort", `model 옆에 싣는다: ${keys.join(",")}`);
+  const got = await getRunFor(1, u, d);
+  assert.deepEqual([got.model, got.effort], ["opus", "xhigh"], "하나 보기(app_ai_run_get)");
+  const adm = await getRunFor(1, admin("root"), d);
+  assert.equal(adm.effort, "xhigh", "관리자 보기에도(model 과 같은 상태 칸 — 지시 · 답이 아니다)");
+  assert.ok(!("result" in adm), "관리자는 여전히 답을 못 본다(관측 장치)");
+  await submitRun({ prompt: "조사해", agent: true }, u, { source: "app-ui" }, d);
+  const list = (await listRunsFor({}, u, d)).runs as Array<Record<string, unknown>>;
+  const byId = new Map(list.map((x) => [x.id, x]));
+  assert.deepEqual([byId.get(1)?.effort, byId.get(2)?.effort], ["xhigh", null], "목록(app_ai_runs)도 — 안 준 실행은 null");
+  const lkeys = Object.keys(list[0]!);
+  assert.equal(lkeys[lkeys.indexOf("model") + 1], "effort", "목록도 model 옆");
+  //  단발 + 구독 → 작업 컨테이너(bare) — 하네스로 돌아 effort 를 받는다.
+  const s = world(SUB());
+  const r2 = await submitRun({ prompt: "요약", effort: "low" }, appUser("alice", "crm"), { source: "app-ui" }, s.d);
+  assert.equal(r2.executor, "job");
+  assert.equal(s.w.submitted[0]!.bare, true, "단발(도구 없음) 작업(관측 장치)");
+  assert.equal(s.w.submitted[0]!.effort, "low");
+  assert.equal(r2.effort, "low");
+  ok("effort E3 작업 컨테이너 실행 — 작업 행(하네스)과 실행 행(기록)에 같은 값 · 접수 응답 · 보기 · 관리자 보기 · 목록에 model 옆으로 · 구독 단발도 받는다");
+}
+
+{
+  const { w, d } = world(SUB());
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "x", agent: true, effort: "medium" }, u, { source: "app-ui" }, d);
+  const c = await cancelRunFor(1, u, d);
+  assert.deepEqual(w.canceled, [101], "작업을 끊었다(관측 장치)");
+  assert.equal(c.effort, "medium", "취소 응답도 같은 모양");
+  ok("effort E3b 취소 응답(app_ai_run_cancel)도 effort 를 싣는다");
+}
+
+/** 이어받기 한 판 — 앞 실행(에이전트 · 구독)을 앞 깊이로 접수해 끝내고, 그 대화를 이어받는다(given 을 주면 그 값으로). */
+async function resumedEffort(prev: Effort | null, given?: Effort): Promise<{ w: World; d: AiRunDeps; r: Record<string, unknown> }> {
+  const { w, d } = world(SUB());
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "조사해", agent: true, ...(prev ? { effort: prev } : {}) }, u, { source: "app-ui" }, d);
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  const r = await submitRun({ prompt: "근거가 틀렸다 — 다시", resume_run_id: 1, ...(given ? { effort: given } : {}) }, u, { source: "app-ui" }, d);
+  return { w, d, r };
+}
+
+{
+  const carry = await resumedEffort("max");
+  assert.equal(carry.w.submitted[1]!.resumeJobId, 101, "앞 작업의 대화를 잇는다(관측 장치)");
+  assert.equal(carry.w.submitted[1]!.effort, "max", "안 주면 앞 작업 행의 깊이");
+  assert.equal(carry.w.runEfforts.get(2), "max", "이어받은 실행 행에도 기록");
+  assert.equal(carry.r.effort, "max", "접수 응답");
+  //  이어받은 실행을 또 이어도 — 줄 끝(이어받은 작업 행)의 깊이.
+  doneJob(carry.w, 102, C2);
+  await syncRun(carry.w.runs.get(2)!, carry.d);
+  await submitRun({ prompt: "또 다시", resume_run_id: 2 }, appUser("alice", "crm"), { source: "app-ui" }, carry.d);
+  assert.equal(carry.w.submitted[2]!.resumeJobId, 102);
+  assert.equal(carry.w.submitted[2]!.effort, "max", "줄을 따라 잇는다");
+  const over = await resumedEffort("max", "low");
+  assert.equal(over.w.submitted[1]!.effort, "low", "주면 그 값(model 처럼 — 같은 대화를 다른 깊이로 다시)");
+  assert.equal(over.w.runEfforts.get(2), "low");
+  assert.equal((await resumedEffort(null, "high")).w.submitted[1]!.effort, "high", "앞 실행에 깊이가 없었어도 주면 그 값");
+  const none = await resumedEffort(null);
+  assert.equal(none.w.submitted[1]!.effort, null, "둘 다 없으면 null(하네스 기본)");
+  assert.equal(none.r.effort, null);
+  ok("effort E4 이어받기 — 안 주면 앞 작업 행의 깊이(줄을 따라) · 주면 그 값 · 둘 다 없으면 null · 실행 행 · 응답도 같은 값");
+}
+
+{
+  //  앞 깊이는 앞 «작업 행»(하네스가 실제로 받은 값)에서 읽는다 — model 의 이어받기(resumeTarget.model)와 같은 출처.
+  const { w, d } = world(SUB());
+  const u = appUser("alice", "crm");
+  await submitRun({ prompt: "조사해", agent: true, effort: "max" }, u, { source: "app-ui" }, d);
+  doneJob(w, 101, C1);
+  await syncRun(w.runs.get(1)!, d);
+  const read: number[] = [];
+  d.jobEffort = async (id) => { read.push(id); return id === 101 ? "medium" : null; };
+  await submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, d);
+  assert.deepEqual(read, [101], "앞 실행의 작업 행을 읽는다");
+  assert.equal(w.submitted[1]!.effort, "medium", "작업 행의 값");
+  //  못 읽으면(던짐) 접수 실패 — 깊이를 모른 채 기본 깊이로 잇지 않는다.
+  d.jobEffort = async () => { throw new Error("작업 행의 effort 칸을 읽지 못했습니다(가짜)"); };
+  await assert.rejects(submitRun({ prompt: "다시", resume_run_id: 1 }, u, { source: "app-ui" }, d), /effort/);
+  assert.equal(w.runs.size, 2, "이어받기 행을 넣지 않는다");
+  assert.equal(w.submitted.length, 2, "작업을 보내지 않는다");
+  //  새 값을 주면 앞 값을 읽지 않고 그 값으로 돈다.
+  await submitRun({ prompt: "다시", resume_run_id: 1, effort: "low" }, u, { source: "app-ui" }, d);
+  assert.equal(w.submitted[2]!.effort, "low");
+  ok("effort E5 이어받기 — 앞 작업 행에서 읽는다 · 못 읽으면 접수 실패(행 · 작업 없음) · 새 값을 주면 읽지 않는다");
+}
+
+{
+  //  형식 재시도 — 원래 작업 행의 깊이 그대로(재시도 턴이 기본 깊이로 돌지 않게).
+  const a = world(SUB());
+  await submitRun({ prompt: "요약", agent: true, schema, effort: "high" }, appUser("alice", "crm"), { source: "app-ui" }, a.d);
+  doneJob(a.w, 101, C1, "형식 밖 글");
+  assert.equal((await syncRun(a.w.runs.get(1)!, a.d))!.retries, 1, "형식 재시도가 나갔다(관측 장치)");
+  assert.equal(a.w.submitted[1]!.resumeJobId, 101);
+  assert.equal(a.w.submitted[1]!.effort, "high", "원래 작업 행의 깊이 그대로");
+  //  단발 + 구독(bare)의 재시도도 같다 · 깊이가 없던 작업은 재시도도 null.
+  const b = world(SUB());
+  await submitRun({ prompt: "요약", schema, effort: "xhigh" }, appUser("alice", "crm"), { source: "app-ui" }, b.d);
+  doneJob(b.w, 101, C1, "형식 밖 글");
+  await syncRun(b.w.runs.get(1)!, b.d);
+  assert.deepEqual(b.w.submitted.map((j) => [j.bare, j.effort]), [[true, "xhigh"], [true, "xhigh"]]);
+  const c = world(SUB());
+  await submitRun({ prompt: "요약", agent: true, schema }, appUser("alice", "crm"), { source: "app-ui" }, c.d);
+  doneJob(c.w, 101, C1, "형식 밖 글");
+  await syncRun(c.w.runs.get(1)!, c.d);
+  assert.equal(c.w.submitted.length, 2, "형식 재시도가 나갔다(관측 장치)");
+  assert.equal(c.w.submitted[1]!.effort, null);
+  //  원래 작업 행의 깊이를 못 읽으면 재시도를 보내지 않고 원문을 붙여 실패한다.
+  const e = world(SUB());
+  await submitRun({ prompt: "요약", agent: true, schema, effort: "high" }, appUser("alice", "crm"), { source: "app-ui" }, e.d);
+  e.d.jobEffort = async () => { throw new Error("작업 행의 effort 칸을 읽지 못했습니다(가짜)"); };
+  doneJob(e.w, 101, C1, "형식 밖 글");
+  await syncRun(e.w.runs.get(1)!, e.d).catch(() => undefined);
+  assert.equal(e.w.submitted.length, 1, "재시도 작업을 보내지 않는다");
+  assert.equal((await e.d.store.getAiRun(1))!.status, "failed", "재시도 없이 실패로 끝난다");
+  ok("effort E6 형식 재시도 — 원래 작업 행의 깊이 그대로(에이전트 · 단발 · 없으면 null) · 못 읽으면 재시도 없이 실패");
+}
+
+{
+  //  롤 창 ① — 실행 행에 effort 칸이 아직 없다(store.RUN_EFFORT_COL 머리말). 칸이 없다고 effort 를 빼고 넣지 않는다 — 503.
+  const { w, d } = world({ ...ROOMY(), effortCol42703: true });
+  const u = appUser("alice", "crm");
+  const err = await caughtHttp(submitRun({ prompt: "x", agent: true, effort: "max" }, u, { source: "app-ui" }, d));
+  assert.equal(err.status, 503, err.message);
+  assert.match(err.message, /effort 를 실은 실행을 받을 준비가 아직 안 됐습니다\(배포 중\)/);
+  assert.equal(w.runs.size, 0, "실행 행이 없다");
+  assert.equal(w.submitted.length, 0, "작업을 보내지 않는다(기본 깊이로 돌지 않는다)");
+  const r = await submitRun({ prompt: "x", agent: true }, u, { source: "app-ui" }, d);
+  assert.equal(r.status, "queued", "effort 를 안 준 실행은 칸이 없어도 돈다(무회귀)");
+  assert.equal(w.submitted[0]!.effort, null);
+  ok("effort E7 롤 창(실행 행의 칸 없음) — effort 를 실은 접수만 503 «배포 중» · 행 · 작업 없음 · effort 없는 접수는 그대로");
+}
+
+{
+  //  롤 창 ② — 작업 행에 effort 칸이 아직 없다(agent-jobs/store.EFFORT_COL 머리말). 503 · 실행 행에는 DB 원문 대신 «배포 중».
+  const roll = (): HttpError => Object.assign(new HttpError(500, 'column "effort" of relation "org_agent_job" does not exist'), { code: "42703" });
+  const { w, d } = world(SUB());
+  const u = appUser("alice", "crm");
+  w.submitThrows = roll();
+  const err = await caughtHttp(submitRun({ prompt: "x", agent: true, effort: "xhigh" }, u, { source: "app-ui" }, d));
+  assert.equal(err.status, 503, err.message);
+  assert.match(err.message, /effort 를 실은 실행을 받을 준비가 아직 안 됐습니다\(배포 중\)/);
+  assert.doesNotMatch(err.message, /도구 제한|앱 지시/, "싣지 않은 것은 말하지 않는다");
+  const row = w.runs.get(1)!;
+  assert.equal(row.status, "failed");
+  assert.match(row.error ?? "", /배포 중/, "실행 행에는 DB 원문 대신 «배포 중» 까닭");
+  assert.doesNotMatch(row.error ?? "", /does not exist/);
+  //  effort 를 안 준 작업 — 같은 실패라도 원래 오류 그대로 · effort 가 있어도 없는 칸(42703)이 아닌 실패는 그대로.
+  await fails(submitRun({ prompt: "x", agent: true }, u, { source: "app-ui" }, d), 500, /does not exist/);
+  w.submitThrows = new HttpError(429, "작업 대기열이 찼습니다");
+  await fails(submitRun({ prompt: "x", agent: true, effort: "xhigh" }, u, { source: "app-ui" }, d), 429, /대기열/);
+  ok("effort E8 롤 창(작업 행의 칸 없음) — effort 를 실은 작업만 503 · 실행 행 «배포 중» · effort 없는 작업 · 다른 실패는 원래 오류");
+}
+
+{
+  const base = { requester: "alice", accountKind: "subscription" as const, accountMember: "alice", appId: "crm", projectId: null, model: null, label: "l",
+    prompt: "p", timeoutMin: 5, bare: false, resumeJobId: null, appInstructions: null, homeless: false, sharedSeat: false, appServerOwn: false, mcpOnly: false, toolAllowlist: null };
+  const o = { cwd: "/work/apps/crm", resumeConversation: null, timeoutSec: 300 };
+  for (const effort of [...EFFORT_LEVELS, null]) assert.equal(agentJobOfRun({ ...base, effort }, o).effort, effort, `빠지면 그 작업이 기본 깊이로 돈다 — ${effort}`);
+  ok("effort E9 작업 접수 입력 → 작업 행 변환이 깊이를 그대로 옮긴다(null 은 null)");
+}
+
+{
+  //  값을 읽는 자리 · 접수 입력의 effort 칸 · 공개 모양의 effort 는 필수 — 배선이 빠진 고정값은 타입 검사가 막는다(빠진 배선이 조용히 «기본 깊이» 가 되지 않게).
+  const { w, d } = world(SUB());
+  const needsDeps = (_: AiRunDeps): void => undefined;
+  needsDeps(d);
+  // @ts-expect-error 작업 행의 깊이 읽기(jobEffort)가 빠졌다
+  needsDeps({ ...d, jobEffort: undefined });
+  await submitRun({ prompt: "x", agent: true }, appUser("alice", "crm"), { source: "app-ui" }, d);
+  const needsJob = (_: SubmitJobInput): void => undefined;
+  needsJob(w.submitted[0]!);
+  // @ts-expect-error 접수 입력의 effort 칸도 필수다
+  needsJob({ ...w.submitted[0]!, effort: undefined });
+  // @ts-expect-error 목록 밖 값은 타입이 막는다
+  needsJob({ ...w.submitted[0]!, effort: "ultra" });
+  const row = w.runs.get(1)!;
+  assert.equal(publicRun(row, { own: true, effort: "high" }).effort, "high");
+  // @ts-expect-error 실행을 돌려주는 자리는 effort 를 빠뜨릴 수 없다
+  void publicRun(row, { own: true });
+  ok("effort E10 작업 행의 깊이 읽기 · 접수 입력의 effort 칸 · 공개 모양의 effort 는 필수(빠지면 타입 검사)");
 }
 
 console.log(`ai-runs service.test: ${pass} passed`);

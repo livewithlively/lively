@@ -39,7 +39,7 @@ import {
   jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
   PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX,
 } from "./plan.js";
-import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type RunnerJob } from "./runner.js";
+import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type Effort, type RunnerJob } from "./runner.js";
 import { BROKER_GATEWAY, type PaneView } from "./surface.js";
 import type { AgentJobAuthRow, AgentJobRow, AgentJobSummaryRow, NewAgentJob } from "./store.js";
 
@@ -85,6 +85,9 @@ export interface AgentJobDeps {
   /** 작업별 라이블리 도구 허용 목록(작업 행 tool_allowlist — 앱 AI 실행이 접수 때 부른 사람의 판의 ai.tools 로 적는다). null = 좁히지 않음.
    *  판이 뜰 때 작업 토큰의 도구 상한으로 싣는다. 던지면 그 작업은 돌지 않는다(앱 동의 전체로 띄우지 않는다). 필수다(jobMcpOnly 와 같은 까닭). */
   jobToolAllowlist(job: AgentJobRow): Promise<string[] | null>;
+  /** 하네스 생각 깊이(작업 행 effort — 앱 AI 실행이 접수 때 받은 값). null = 하네스 기본. 판이 하네스 인자(`--effort`)로 싣는다.
+   *  던지면 그 작업은 돌지 않는다(받은 깊이를 모른 채 기본 깊이로 띄우지 않는다). 필수다 — 배선이 빠지면 그 작업들이 말없이 기본 깊이로 돈다. */
+  jobEffort(job: AgentJobRow): Promise<Effort | null>;
   /** 작업이 끝나 걷을 때(#4488 — 그 작업에 붙은 AI 실행 행을 맞춘다). 던지지 않는다. */
   onJobEnded?(job: Pick<AgentJobRow, "id">): Promise<void>;
   /**
@@ -232,6 +235,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
   let resumeJobId: number | null = null;
   let mcpOnly = false;
   let toolAllowlist: string[] | null = null;
+  let effort: Effort | null = null;
 
   if (input.resume_job_id !== undefined && input.resume_job_id !== null) {
     const rid = Number(input.resume_job_id);
@@ -249,6 +253,9 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     mcpOnly = await d.jobMcpOnly(prev);
     //  도구 허용 목록도 앞 작업의 것을 잇는다(같은 까닭 — 이 길로 이어도 앱 동의 전체로 열지 않는다). 못 읽으면 던진다.
     toolAllowlist = await d.jobToolAllowlist(prev);
+    //  생각 깊이(effort)도 앞 작업의 값을 잇는다 — 앱 AI 실행이 정한 깊이로 시작한 대화를 이 길로 이으면 같은 깊이로 돈다(이 입구는 effort 를 받지 않는다).
+    //   못 읽으면 던진다(값을 모른 채 기본 깊이로 넣지 않는다).
+    effort = await d.jobEffort(prev);
   } else {
     if (input.app_id !== undefined && input.app_id !== null && input.app_id !== "") {
       const a = String(input.app_id);
@@ -278,6 +285,7 @@ export async function submitAgentJob(input: SubmitInput, user: LivelyUser, d: Ag
     appServerOwn: false, // 앱 서버는 이 길로 못 온다(assertMaySubmit) — #1639 앱 서버의 본인 구독도 앱 AI 실행으로만 생긴다
     mcpOnly,           // 이어받는 작업이면 앞 작업의 값 · 새 작업은 false(ai.mcp_only 는 작업 이름을 다는 앱 AI 실행의 것이다)
     toolAllowlist,     // 같다 — 이어받는 작업이면 앞 작업의 목록 · 새 작업은 null(ai.tools 도 앱 AI 실행의 것이다)
+    effort,            // 같다 — 이어받는 작업이면 앞 작업의 깊이 · 새 작업은 null(하네스 기본 — effort 는 앱 AI 실행이 받는다)
   }, p, d);
   //  접수 응답에 지시를 되싣지 않는다(보낸 쪽이 이미 안다 · 앱 화면 응답이 커지지 않게).
   return publicJob(row, { own: true, position: await d.store.queuePosition(row.id).catch(() => null) });
@@ -416,11 +424,13 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //   놓는다 — plan.TRANSCRIPT_GZ_MAX 머리말). 없거나 다른 대화의 기록이면 돌리지 않는다(하네스가 «대화 없음» 으로 곧바로 죽는 것보다 까닭이 분명하다).
   //  #5082 — 앱 판 지시(ai.instructions — 작업 행에 실린 글)도 여기서 읽는다. 못 읽으면 신원 · env 와 같은 규칙(돌리지 않는다).
   //  «라이블리 MCP 만» 표시(ai.mcp_only — 작업 행)도 같다 — 못 읽으면 내장 도구를 연 채 띄우지 않고 돌리지 않는다(닫힌 쪽).
+  //  생각 깊이(effort — 작업 행)도 같다 — 못 읽으면(손상 값 포함) 기본 깊이로 띄우지 않고 돌리지 않는다.
   let env: Record<string, string> = {};
   let view: PaneView = { cwd: booted.cwd, gateway: BROKER_GATEWAY, workspace: null };
   let transcript: { conv: string; gz: string } | null = null;
   let system: string | null = null;
   let mcpOnly = false;
+  let effort: Effort | null = null;
   try {
     if (d.paneView) view = await d.paneView(booted);
     env = d.jobEnv ? await d.jobEnv(booted, { gateway: view.gateway, workspace: view.workspace }) : {};
@@ -433,6 +443,10 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     }
     system = d.jobSystem ? await d.jobSystem(booted) : null;
     mcpOnly = await d.jobMcpOnly(booted);
+    effort = await d.jobEffort(booted);
+    //  깊이를 정한 작업은 물려받은 CLAUDE_CODE_EFFORT_LEVEL 을 지운다 — 하네스는 그 변수를 `--effort` 보다 앞세운다(실측 claude 2.1.316: 변수 low + 인자 max →
+    //   요청 low). 박스 · tmux · 컨테이너 환경에 그 변수가 있으면 요청한 깊이가 말없이 바뀐다. 빈 값은 판이 «그 변수를 지워라»로 읽는다(runner).
+    if (effort) env = { ...env, CLAUDE_CODE_EFFORT_LEVEL: "" };
   } catch (e) {
     const why = String((e as Error)?.message ?? e);
     logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
@@ -445,10 +459,10 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
   //  단발(bare)은 MCP 도 싣지 않는다 — 도구 없이 글만.
   const mcp: Record<string, unknown> | null = booted.bare ? null : { mcpServers: { lively: { type: "http", url: `${view.gateway}/mcp`,
     headers: { Authorization: `Bearer ${t.token}`, ...(slug ? { "x-lively-workspace": slug } : {}) } } } };
-  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0, mcpOnly, toolCeiling: toolCeiling == null ? null : toolCeiling.length }, "[agent-job] 판이 섰다");
+  logger.info({ job: booted.id, session: booted.session_id, bare: booted.bare, account: booted.account_kind, appInstructions: system ? system.length : 0, mcpOnly, toolCeiling: toolCeiling == null ? null : toolCeiling.length, effort }, "[agent-job] 판이 섰다");
   return {
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
-    argv: claudeJobArgv({ model: booted.model, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),
+    argv: claudeJobArgv({ model: booted.model, effort, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
     timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
     //  #5101 API 키 작업(#5082 도커 실행면이면 구독 작업도)만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더 · 덮은 projects/ 가 끝나면 사라진다 ·

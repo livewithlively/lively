@@ -81,7 +81,7 @@ export function routeAppFrontApi(method: string, path: string, body: unknown, qu
   // #4488 AI 실행 — 입구 하나와 그 둘레(보기 · 목록 · 취소 · 대상). app_id 는 주소가 정한다(본문의 app_id 는 받지 않는다).
   if (path === "/ai/targets") return m === "GET" || m === "HEAD" ? { kind: "tool", name: "app_ai_targets", args: {} } : "method";
   if (path === "/ai/runs") {
-    if (m === "POST") return { kind: "tool", name: "app_ai_run", args: pick(b, ["prompt", "system", "schema", "job", "model", "label", "files", "project_id", "agent", "timeout_min", "wait", "resume_run_id", "reason"]) };
+    if (m === "POST") return { kind: "tool", name: "app_ai_run", args: pick(b, ["prompt", "system", "schema", "job", "model", "effort", "label", "files", "project_id", "agent", "timeout_min", "wait", "resume_run_id", "reason"]) };
     if (m === "GET" || m === "HEAD") return { kind: "tool", name: "app_ai_runs", args: { ...(query.status ? { status: query.status } : {}), ...(query.limit ? { limit: Number(query.limit) } : {}) } };
     return "method";
   }
