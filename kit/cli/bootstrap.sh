@@ -28,12 +28,18 @@ case "$MODE" in cloud) ;; *) MODE="gateway" ;; esac
 # ⚠ LIVELY_HOME 은 **HOME 리다이렉트**다(.lively 디렉터리가 아니라) — user-install/uninstall/self-update 와 같은 계약.
 LIVELY_DIR="${LIVELY_HOME:-$HOME}/.lively"
 NODE_DIR="$LIVELY_DIR/runtime"
-NODE_FALLBACK="v22.14.0"   # nodejs.org/dist/index.json 해석 실패 시 폴백(공식 LTS · 실재 확인됨)
+# 전용 런타임은 «최신 LTS» 가 아니라 **CI 가 재는 줄의 최신 LTS** 다 — CLI·훅·MCP 심이 이 node 로 도는데 시험은 그 줄에서만 돈다.
+#  실측(2026-11-02): v26 이 LTS 가 되자(10-28) 새 설치가 시험한 적 없는 줄로 넘어갔고, 기본 Ubuntu WSL 이미지에서 깨졌다 — v26 은
+#  libatomic.so.1 을 요구하는데 그 이미지엔 없다(v24·v22 는 요구하지 않는다). 줄을 올릴 땐 .github/workflows/test.yml 과
+#  bootstrap.ps1 을 함께 올린다(bootstrap-node-gate 시험이 셋의 일치를 고정한다).
+NODE_LINE="22"
+NODE_FALLBACK="v22.14.0"   # nodejs.org/dist/index.json 해석 실패 시 폴백(같은 줄 · 실재 확인됨)
 NODE_MIN_MAJOR=20          # CLI·훅이 요구하는 최소 Node — package.json engines(">=20") · lively.mjs 의 NODE_MIN_MAJOR 와 같은 계약.
 
 say()  { printf '%s\n' "$*" >&2; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*" >&2; }
 info() { printf '  \033[2m·\033[0m %s\n' "$*" >&2; }
+warn() { printf '  \033[33m⚠\033[0m %s\n' "$*" >&2; }
 die()  { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
 case "$GW" in
@@ -121,7 +127,8 @@ else
     *) die "지원하지 않는 CPU: $(uname -m) — Node 를 직접 설치한 뒤(https://nodejs.org) 다시 실행하세요." ;;
   esac
   NVER="$(curl -fsSL --max-time 15 https://nodejs.org/dist/index.json 2>/dev/null \
-        | tr '}' '\n' | grep -m1 '"lts":"' | sed -E 's/.*"version":"(v[0-9][0-9.]*)".*/\1/' || true)"
+        | tr '}' '\n' | grep "\"version\":\"v${NODE_LINE}\\." | grep -m1 '"lts":"' \
+        | sed -E 's/.*"version":"(v[0-9][0-9.]*)".*/\1/' || true)"
   case "${NVER:-}" in v[0-9]*) ;; *) NVER="$NODE_FALLBACK" ;; esac
   # 해석이 어긋나 최소 버전 미만을 집어오면 이 수정이 통째로 무의미해진다 — 그 땐 폴백(고정 LTS)으로.
   NMAJ="$(printf '%s' "${NVER#v}" | cut -d. -f1)"
@@ -138,6 +145,8 @@ else
   trap 'exit 143' TERM
   info "Node ${NVER} (${NARCH}) 내려받는 중… (~30MB · 관리자 권한 불필요)"
   RT_FAIL=""
+  RT_FIX="네트워크를 확인하고 다시 실행하세요. 계속 안 되면 Node ${NODE_MIN_MAJOR} 이상을 직접 설치한 뒤(https://nodejs.org) 다시 실행하세요."
+  RT_RETRY="네트워크를 확인하고"
   if curl -fsSL --max-time 300 "https://nodejs.org/dist/${NVER}/${BASE}.tar.gz" -o "$TMP/node.tgz"; then
     # 무결성 검증(공급망 위생): SHASUMS256 을 받으면 **불일치 시 중단**. 못 받으면 TLS 다운로드로 진행(경고).
     #  ⚠ 불일치는 WSL 이어도 시스템 node 로 물러서지 않는다 — 내려받기 실패와 달리 변조 신호다.
@@ -157,14 +166,20 @@ else
     rm -rf "${NODE_DIR:?}/$BASE"
     # 풀고 **이 기계에서 실제로 도는지 본 뒤에만** current 를 건다. 받은 것이 프록시가 돌려준 HTML 이거나 여기서 못 도는
     #  바이너리(musl·낡은 glibc)면 current 가 깨진 node 를 가리키고, 심·훅이 전부 그 node 를 쓰게 된다(#5041 격리 리뷰).
-    if tar -xzf "$TMP/node.tgz" -C "$NODE_DIR" 2>/dev/null && node_usable "$NODE_DIR/$BASE/bin/node"; then
+    if ! tar -xzf "$TMP/node.tgz" -C "$NODE_DIR" 2>/dev/null; then
+      RT_FAIL="내려받은 Node 를 풀지 못했습니다"
+    elif node_usable "$NODE_DIR/$BASE/bin/node"; then
       ln -sfn "$NODE_DIR/$BASE" "$NODE_DIR/current"   # 버전 무관 안정 경로(심·훅·uninstall 이 참조)
       NODE="$NODE_DIR/current/bin/node"
       ok "Node 설치 완료: ~/.lively/runtime/$BASE ($("$NODE" -v))"
     else
-      rm -rf "${NODE_DIR:?}/$BASE"
-      RT_FAIL="내려받은 Node 를 풀거나 실행하지 못했습니다"
+      # 왜 못 도는지는 node 만 안다 — 네트워크 탓으로 돌리면 사람이 엉뚱한 곳을 본다(실측: libatomic.so.1 없음을 «네트워크를 확인» 으로 안내했다).
+      RT_WHY="$("$NODE_DIR/$BASE/bin/node" -v 2>&1 >/dev/null | head -n 1 || true)"
+      RT_FAIL="내려받은 Node 가 이 컴퓨터에서 실행되지 않습니다${RT_WHY:+ ($RT_WHY)}"
+      RT_FIX="Node ${NODE_MIN_MAJOR} 이상을 직접 설치한 뒤(https://nodejs.org) 다시 실행하세요."
+      RT_RETRY="위 오류를 해결하고"
     fi
+    if [ -n "$RT_FAIL" ]; then rm -rf "${NODE_DIR:?}/$BASE"; fi
   else
     RT_FAIL="Node 다운로드 실패"
   fi
@@ -173,9 +188,9 @@ else
     if [ "$PREFER_OWN" = 1 ] && node_usable "$SYS_NODE"; then
       # WSL 인데 전용 런타임을 못 깔았다 — 시스템 node 로 계속한다(종전 동작). 훅·MCP 가 PATH 에 기대게 되니 다시 하라고 남긴다.
       NODE="$SYS_NODE"
-      info "$RT_FAIL — 시스템 node($("$NODE" -v))로 계속합니다. Cursor 에서 라이블리가 붙지 않으면 네트워크를 확인하고 이 명령을 다시 실행하세요."
+      warn "$RT_FAIL — 시스템 node($("$NODE" -v))로 계속합니다. Cursor 에서 라이블리가 붙지 않으면 $RT_RETRY 이 명령을 다시 실행하세요."
     else
-      die "$RT_FAIL — 네트워크를 확인하고 다시 실행하세요. 계속 안 되면 Node ${NODE_MIN_MAJOR} 이상을 직접 설치한 뒤(https://nodejs.org) 다시 실행하세요."
+      die "$RT_FAIL — $RT_FIX"
     fi
   fi
 fi

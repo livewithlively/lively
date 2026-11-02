@@ -105,11 +105,13 @@ if (Test-NodeUsable $SYS_NODE) {
 } else {
   Say-OldSysNode "라이블리 전용 런타임을 설치합니다(시스템 node 는 그대로 둡니다)."
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-  $fallback = "v22.14.0"   # 폴백(공식 LTS · 실재 확인됨)
+  # 전용 런타임은 CI 가 재는 줄의 최신 LTS 다(bootstrap.sh NODE_LINE 과 같은 값 · bootstrap-node-gate 시험이 고정).
+  $NODE_LINE = 22
+  $fallback = "v22.14.0"   # 폴백(같은 줄 · 실재 확인됨)
   $ver = $fallback
   try {
     $idx = Invoke-RestMethod -UseBasicParsing -TimeoutSec 15 "https://nodejs.org/dist/index.json"
-    $lts = $idx | Where-Object { $_.lts } | Select-Object -First 1
+    $lts = $idx | Where-Object { $_.lts -and ([string]$_.version).StartsWith("v$NODE_LINE.") } | Select-Object -First 1
     if ($lts.version) { $ver = $lts.version }
   } catch { Info "Node 버전 목록 조회 실패 — 폴백 $ver 사용" }
   # 해석이 어긋나 최소 버전 미만을 집어오면 이 수정이 통째로 무의미해진다 — 그 땐 폴백(고정 LTS)으로.
