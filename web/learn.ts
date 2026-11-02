@@ -280,11 +280,12 @@ function localGuideNodes(gw, slot, data, opts?: any) {
       ' 창은 나중에 ', el('b', { text: '처음 claude 를 켤 때' }), ' 따로 떠요 — 위 라이블리 승인과는 다른 계정·다른 시점입니다.'));
 
   const verify = installStep(3, '잘 됐는지 확인하기',
-    el('p', { class: 'step-p' }, '같은 창에 아래를 입력하고 ', kbd('Enter'), ' 를 누르세요.'),
+    el('p', { class: 'step-p' }, '새 터미널 창을 열고 아래를 입력한 뒤 ', kbd('Enter'), ' 를 누르세요.'),
     cmdLine('lively status'),
     el('p', { class: 'step-note' }, '게이트웨이 ', el('b', { text: '도달 OK' }), ' · 내 이름 · ',
       el('b', { text: 'MCP 등록 ✓' }), ' 가 보이면 성공이에요. ',
-      '이제 어느 폴더에서든 ', el('code', { class: 'md-code', text: 'claude' }), ' 를 켜면 회사 맥락이 따라옵니다. ',
+      '쓰는 폴더에서 ', el('code', { class: 'md-code', text: 'lively work-root add' }), ' 를 한 번 실행하면, 그 폴더에서 ',
+      el('code', { class: 'md-code', text: 'claude' }), ' 를 켤 때 회사 맥락이 따라옵니다. ',
       '(자동 주입은 ', el('b', { text: '다음 세션부터' }), ' 적용됩니다.)'),
     el('p', { class: 'step-note' }, '뭔가 이상하면 ', el('code', { class: 'md-code', text: 'lively doctor' }),
       ' — 무엇이 잘못됐고 어떻게 고치는지 알려 줍니다.'));
