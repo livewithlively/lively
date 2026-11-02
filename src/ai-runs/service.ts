@@ -144,6 +144,8 @@ export interface AiRunDeps {
   /** 그 작업 행의 생각 깊이(agent-jobs/store.agentJobEffort) — 이어받기(안 주면) · 형식 재시도가 싣는다. 못 읽으면 던진다.
    *  필수다 — 배선이 빠지면 이어받은 턴 · 재시도 턴이 말없이 기본 깊이로 돈다. */
   jobEffort(jobId: number): Promise<Effort | null>;
+  /** 그 작업 행의 도구 호출 단계(agent-jobs/store.agentJobSteps) — 작업 실행 하나 보기가 싣는다. 없으면 null. */
+  jobSteps(jobId: number): Promise<unknown[] | null>;
   /** 지금 열린 프록시 호출 수를 세는 자리(워크스페이스 동시 상한). */
   inflight: { take(key: string, max: number): boolean; release(key: string): void; count(key: string): number };
   rate: RateWindow;
@@ -830,8 +832,8 @@ export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Pro
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
   const own = isOwnRun(row, user, shared);
-  //  작업 컨테이너 실행이면 작업 행의 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다. 읽지 못하면 빼고 준다.
-  const steps = own && row.executor === "job" && row.job_id != null ? ((await d.getJob(row.job_id).catch(() => null))?.steps ?? []) : null;
+  //  작업 컨테이너 실행이면 작업 행의 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다. 없거나 읽지 못하면 빈 배열.
+  const steps = own && row.executor === "job" && row.job_id != null ? ((await d.jobSteps(row.job_id).catch(() => null)) ?? []) : null;
   return publicRun(row, { own, withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id), steps });
 }
 

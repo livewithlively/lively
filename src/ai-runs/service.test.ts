@@ -41,6 +41,8 @@ interface World {
    *  effortCol42703 = 롤 창(실행 행에 칸이 아직 없다 — effort 를 실은 접수만 42703).
    */
   runEfforts: Map<number, string | null>; jobEfforts: Map<number, Effort | null>; effortCol42703?: boolean;
+  /** 작업 행의 도구 호출 단계(가짜 — COLS 밖 칸 · agent-jobs/store.STEPS_COL) · 그 읽기가 던지나. */
+  jobSteps: Map<number, unknown[]>; jobStepsThrows?: boolean;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -54,7 +56,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
     llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), runShared: new Map(),
     ownTokensToday: 0, unattended: false, unattendedAsks: 0,
-    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), ...o,
+    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), jobSteps: new Map(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const countedResumes = (root: number): number => [...w.resumeLinks.entries()].filter(([id, l]) => {
@@ -146,6 +148,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     jobToolAllowlist: async () => null,
     //  작업 행의 생각 깊이(필수 의존성) — 접수 때 그 작업 행에 실린 값 그대로(live 의 agent-jobs/store.agentJobEffort 와 같은 뜻 · 종전 작업은 null).
     jobEffort: async (id) => w.jobEfforts.get(id) ?? null,
+    jobSteps: async (id) => { if (w.jobStepsThrows) throw new Error("단계를 못 읽었다(가짜)"); return w.jobSteps.get(id) ?? null; },
   };
   return { w, d };
 }
@@ -1052,9 +1055,13 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   const jobId = w.runs.get(runId)!.job_id!;
   assert.deepEqual((await getRunFor(runId, u, d)).steps, [], "아직 단계가 없으면 빈 배열");
   const step = { id: "toolu_1", name: "mcp__lively__knowledge_get", input: "{\"name\":\"policy-index\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: "2026-11-02T08:00:00.420Z", is_error: false };
-  (w.jobs.get(jobId) as any).steps = [step];
+  w.jobSteps.set(jobId, [step]);
   assert.deepEqual((await getRunFor(runId, u, d)).steps, [step], "도는 동안에도 작업 행의 단계를 싣는다");
   assert.ok(!("steps" in (await getRunFor(runId, admin("root"), d))), "관리자(남)는 상태만 — 단계 없음");
+  w.jobStepsThrows = true;
+  const seen = await getRunFor(runId, u, d);
+  assert.deepEqual(seen.steps, [], "단계를 못 읽어도 실행 보기는 된다 — 빈 배열");
+  assert.equal(seen.id, runId);
   const { d: d2 } = world();
   await submitRun({ prompt: "단발" }, u, { source: "app-ui" }, d2); await settle();
   assert.ok(!("steps" in (await getRunFor(1, u, d2))), "단발(프록시) 실행엔 단계 칸이 없다");

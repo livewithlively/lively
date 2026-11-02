@@ -35,8 +35,6 @@ export interface AgentJobRow {
   mcp_token_hash: string | null;
   conversation_id: string | null;
   output_tail: string;
-  /** 도구 호출 단계(판이 박동 · 결과에 싣는다 — plan.ts AgentJobStep). 판이 아직 보내지 않았거나 옛 판이면 null. 손으로 지은 행(시험)은 빠뜨려도 된다. */
-  steps?: AgentJobStep[] | null;
   result: Record<string, unknown> | null;
   exit_code: number | null;
   error: string | null;
@@ -54,7 +52,7 @@ export interface AgentJobRow {
 }
 
 const COLS = `id, status, requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
-  resume_conversation, resume_job_id, timeout_sec, bare, homeless, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail, steps,
+  resume_conversation, resume_job_id, timeout_sec, bare, homeless, session_id, boot_hash, fail_hash, secret_hash, mcp_token_hash, conversation_id, output_tail,
   result, exit_code, error, cancel_requested, cancel_reason, attempts, created_at, claimed_at, started_at, last_tick_at, ended_at, reaped`;
 
 const norm = (r: Record<string, unknown> | undefined): AgentJobRow | null =>
@@ -335,6 +333,33 @@ export async function agentJobTranscriptConv(id: number): Promise<string | null>
     throw e;
   }
 }
+
+/**
+ * 도구 호출 단계(org_agent_job.steps — 판이 박동 · 결과에 싣는 plan.AgentJobStep 목록)도 COLS 에 넣지 않고 따로 읽고 쓴다 — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  칸이 아직 없으면(42703) 적지 않고(false) · 없는 것으로 읽는다(null). 도는 작업에만 적는다 — 결과 보고는 끝내기 전에 적어, 끝난 작업의 단계는 바뀌지 않는다.
+ */
+export const STEPS_COL = "steps";
+export async function setAgentJobSteps(id: number, steps: AgentJobStep[]): Promise<boolean> {
+  try {
+    const r = await q(itemsPool, `UPDATE org_agent_job SET ${STEPS_COL}=$2::jsonb, updated_at=now() WHERE id=$1 AND status='running' RETURNING id`, [id, JSON.stringify(steps)]);
+    return r.length > 0;
+  } catch (e) {
+    if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+/** 그 작업의 도구 호출 단계 — 판이 아직 보내지 않았거나(옛 판 · 도구를 안 씀) 없는 작업이면 null. */
+export async function agentJobSteps(id: number): Promise<AgentJobStep[] | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const v = (await q(itemsPool, `SELECT ${STEPS_COL} AS s FROM org_agent_job WHERE id=$1`, [id]))[0]?.s;
+    return Array.isArray(v) ? v as AgentJobStep[] : null;
+  } catch (e) {
+    if (undefinedColumn(e)) return null;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
 /**
  * 보존 기간(정책 transcript_keep_days)이 지난 대화 기록을 비운다 — 행은 남는다(행째 지우기는 keep_days · pruneAgentJobs). 돌려주는 것: 비운 행 수.
  *  끝난 작업만(도는 작업의 기록은 끝난 뒤에야 센다). keepDays 0 = 보관 안 함 — 끝난 작업의 기록을 모두 비운다(관리자가 보관을 끈 뒤 남은 것). 음수는 아무것도 안 한다.
@@ -469,11 +494,10 @@ export async function setAgentJobMcpToken(id: number, tokenHash: string): Promis
  * 박동 — 진행 꼬리·대화 id 를 싣는다. 도는 작업에만. 돌려주는 것: 취소 요청 여부(행이 없거나 끝났으면 null).
  *  첫 박동이 시작 실패 보고 비밀(fail_hash)을 지운다(#4829) — 박동한 판은 살아 있으니 «시작하지 못했다» 로 끝낼 길을 닫는다.
  */
-export async function tickAgentJob(id: number, o: { tail: string; conversationId: string | null; steps?: AgentJobStep[] | null }): Promise<{ cancel: boolean } | null> {
-  //  steps 는 판이 보낸 때만 덮는다(옛 판 · 빠뜨림이면 그대로 둔다).
+export async function tickAgentJob(id: number, o: { tail: string; conversationId: string | null }): Promise<{ cancel: boolean } | null> {
   const rows = await q(itemsPool,
-    `UPDATE org_agent_job SET last_tick_at=now(), output_tail=$2, conversation_id=COALESCE($3, conversation_id), steps=COALESCE($4::jsonb, steps), fail_hash=NULL, updated_at=now()
-      WHERE id=$1 AND status='running' RETURNING cancel_requested`, [id, o.tail, o.conversationId, o.steps ? JSON.stringify(o.steps) : null]);
+    `UPDATE org_agent_job SET last_tick_at=now(), output_tail=$2, conversation_id=COALESCE($3, conversation_id), fail_hash=NULL, updated_at=now()
+      WHERE id=$1 AND status='running' RETURNING cancel_requested`, [id, o.tail, o.conversationId]);
   return rows.length ? { cancel: rows[0].cancel_requested === true } : null;
 }
 
@@ -490,8 +514,6 @@ export async function finishAgentJob(id: number, o: {
   exitCode?: number | null;
   conversationId?: string | null;
   tail?: string | null;
-  /** 도구 호출 단계 — 준 때만 덮는다. */
-  steps?: AgentJobStep[] | null;
   from?: readonly AgentJobStatus[];
   silentSec?: number | null;
 }): Promise<AgentJobRow | null> {
@@ -501,14 +523,13 @@ export async function finishAgentJob(id: number, o: {
     `UPDATE org_agent_job SET status=$2,
             error = CASE WHEN $2 = 'canceled' AND cancel_reason IS NOT NULL THEN cancel_reason ELSE $3 END,
             result=COALESCE($4::jsonb, result), exit_code=COALESCE($5, exit_code),
-            conversation_id=COALESCE($6, conversation_id), output_tail=COALESCE($7, output_tail), steps=COALESCE($10::jsonb, steps),
+            conversation_id=COALESCE($6, conversation_id), output_tail=COALESCE($7, output_tail),
             ended_at=now(), boot_hash=NULL, fail_hash=NULL, updated_at=now(),
             reaped = (session_id IS NULL AND mcp_token_hash IS NULL)
       WHERE id=$1 AND status = ANY($8::text[])
         AND ($9::int IS NULL OR COALESCE(last_tick_at, started_at, claimed_at, created_at) < now() - make_interval(secs => $9::int))
       RETURNING ${COLS}`,
-    [id, o.status, o.error ?? null, o.result ? JSON.stringify(o.result) : null, o.exitCode ?? null, o.conversationId ?? null, o.tail ?? null, from, silent,
-     o.steps ? JSON.stringify(o.steps) : null]);
+    [id, o.status, o.error ?? null, o.result ? JSON.stringify(o.result) : null, o.exitCode ?? null, o.conversationId ?? null, o.tail ?? null, from, silent]);
   return norm(rows[0]);
 }
 
@@ -577,7 +598,7 @@ export async function markAgentJobReaped(id: number): Promise<void> {
 
 export interface AgentJobListFilter { requester?: string | null; appId?: string | null; status?: string | null; limit: number }
 /** 목록 한 줄 — 프롬프트·결과 전문·진행 꼬리·비밀 해시는 싣지 않는다(목록 100건이면 수십 MB 가 된다). 답은 앞머리만. */
-export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "steps" | "result" | "boot_hash" | "fail_hash" | "secret_hash" | "mcp_token_hash"> & {
+export type AgentJobSummaryRow = Omit<AgentJobRow, "prompt" | "output_tail" | "result" | "boot_hash" | "fail_hash" | "secret_hash" | "mcp_token_hash"> & {
   result_preview: string | null;
   has_result: boolean;
 };
