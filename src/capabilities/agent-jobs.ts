@@ -59,7 +59,7 @@ const agentJobGet: Capability = {
   name: "agent_job_get",
   title: "에이전트 작업 보기",
   description: "에이전트 작업 하나의 상태·결과 — status(queued·starting·running·done·failed·timeout·canceled) · result(text·is_error·num_turns·cost_usd·usage) · error · " +
-    "output_tail(진행 요지) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
+    "output_tail(진행 요지) · steps(도구 호출 — [{id, name, input(앞 160자), started_at, ended_at, is_error}] · 최근 200개 · 도구 결과 글은 없다) · conversation_id(이어받기용) · queue_position(대기 중일 때 앞에 몇 건). 보낸 사람 본인(앱 화면이면 그 앱의 작업)만 다 보고, 관리자는 남의 작업의 상태·오류만 본다.",
   scope: "context",
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/agent-jobs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },

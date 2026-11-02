@@ -78,7 +78,8 @@ const appAiRunGet: Capability = {
   name: "app_ai_run_get",
   title: "앱 AI 실행 보기",
   description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · model · effort(요청한 생각 깊이 — 실제로 쓴 깊이는 모델 · 계정 설정에 따라 낮을 수 있다 · 없으면 null) · result(text · json · model · usage · duration_ms · retries) · error · " +
-    "resume(이어받은 실행이면 {of: 이어받은 실행 · root: 처음 실행 · depth: 몇 번째 · reason}, 아니면 null). 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
+    "resume(이어받은 실행이면 {of: 이어받은 실행 · root: 처음 실행 · depth: 몇 번째 · reason}, 아니면 null) · " +
+    "steps(작업 컨테이너 실행의 도구 호출 — [{id, name, input(앞 160자), started_at, ended_at(끝나지 않았으면 null), is_error}] · 최근 200개 · 도는 동안에도 늘어난다 · 도구 결과 글은 없다). 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
   scope: null,
   input: { id: z.number().int().positive() },
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/ai-runs/:id"], parse: (req) => ({ id: idOfParam(req) }) }] },

@@ -207,10 +207,12 @@ function head(r: AiRunRow | AiRunSummaryRow, effort: string | null): Record<stri
  *  resume(#5101) — 이 실행이 이어받은 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭). 준 자리(접수 · 하나 보기)에만 싣는다 — 까닭은 지시처럼 보낸 사람에게만.
  *  effort — 실행 행의 기록(store.aiRunEffort). 필수다 — 실행을 돌려주는 자리(접수 · 보기 · 취소)가 빠뜨리면 준 깊이가 없는 것처럼 보인다.
  */
-export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null; effort: string | null }): Record<string, unknown> {
+export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null; effort: string | null; steps?: unknown[] | null }): Record<string, unknown> {
   return {
     ...head(r, o.effort),
     ...(o.own ? { result: r.result, session_note: r.session_note } : { has_result: r.result !== null }),
+    //  작업 컨테이너 실행의 도구 호출 단계(작업 행 steps — 이름 · 입력 앞머리 · 시작 · 끝 · 오류). 본인에게만, 하나 보기(getRunFor)가 줄 때만.
+    ...(o.own && Array.isArray(o.steps) ? { steps: o.steps } : {}),
     ...(o.own && o.withPrompt ? { prompt: r.prompt, system: r.system_prompt, schema: r.schema } : {}),
     ...(o.resume !== undefined ? { resume: o.resume ? { of: o.resume.of, root: o.resume.root, depth: o.resume.depth, ...(o.own ? { reason: o.resume.reason } : {}) } : null } : {}),
   };
@@ -827,7 +829,10 @@ export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Pro
   const shared = row ? await sharedSeatRunFor(row, user, d) : false;
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id) });
+  const own = isOwnRun(row, user, shared);
+  //  작업 컨테이너 실행이면 작업 행의 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다. 읽지 못하면 빼고 준다.
+  const steps = own && row.executor === "job" && row.job_id != null ? ((await d.getJob(row.job_id).catch(() => null))?.steps ?? []) : null;
+  return publicRun(row, { own, withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id), steps });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {

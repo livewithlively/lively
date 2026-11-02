@@ -1043,6 +1043,24 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   ok("R12 하나 보기 — resume 줄 · 까닭은 보낸 사람만");
 }
 
+// ── ST3 하나 보기 — 작업 컨테이너 실행은 작업 행의 도구 호출 단계를 본인에게만 싣는다 · 단계가 없으면 빈 배열 · 단발(프록시)엔 없음 ──
+{
+  const { w, d } = world();
+  const u = appUser("alice", "crm");
+  const run = await submitRun({ prompt: "Q", agent: true }, u, { source: "app-ui" }, d); await settle();
+  const runId = Number(run.id);
+  const jobId = w.runs.get(runId)!.job_id!;
+  assert.deepEqual((await getRunFor(runId, u, d)).steps, [], "아직 단계가 없으면 빈 배열");
+  const step = { id: "toolu_1", name: "mcp__lively__knowledge_get", input: "{\"name\":\"policy-index\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: "2026-11-02T08:00:00.420Z", is_error: false };
+  (w.jobs.get(jobId) as any).steps = [step];
+  assert.deepEqual((await getRunFor(runId, u, d)).steps, [step], "도는 동안에도 작업 행의 단계를 싣는다");
+  assert.ok(!("steps" in (await getRunFor(runId, admin("root"), d))), "관리자(남)는 상태만 — 단계 없음");
+  const { d: d2 } = world();
+  await submitRun({ prompt: "단발" }, u, { source: "app-ui" }, d2); await settle();
+  assert.ok(!("steps" in (await getRunFor(1, u, d2))), "단발(프록시) 실행엔 단계 칸이 없다");
+  ok("ST3 하나 보기 — 도구 호출 단계는 작업 실행 · 본인만");
+}
+
 // ── R13 롤 창 — 이어받기 칸이 아직 없으면 503(다시 보내라) · 작업을 띄우지 않는다 · 새 질문은 그대로 돈다 ──
 {
   const { w, d } = world({ resumeCols42703: true });

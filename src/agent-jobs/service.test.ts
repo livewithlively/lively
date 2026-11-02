@@ -13,7 +13,7 @@ import {
   enqueueAgentJob, publicJob,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
-import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX } from "./plan.js";
+import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX, STEP_INPUT_MAX, STEPS_MAX } from "./plan.js";
 import { EFFORT_LEVELS, MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE, SYSTEM_PROMPT_PLACEHOLDER, type Effort } from "./runner.js";
 import { hashJobSecret, secretMatches, type AgentJobRow, type NewAgentJob } from "./store.js";
 import { DEFAULT_AGENT_JOB_POLICY, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
@@ -155,7 +155,7 @@ function world(): World {
     async tickAgentJob(id, o) {
       const r = rows.get(id);
       if (!r || r.status !== "running") return null;
-      Object.assign(r, { last_tick_at: new Date(now), output_tail: o.tail, conversation_id: o.conversationId ?? r.conversation_id, fail_hash: null });
+      Object.assign(r, { last_tick_at: new Date(now), output_tail: o.tail, conversation_id: o.conversationId ?? r.conversation_id, fail_hash: null, ...(o.steps ? { steps: o.steps } : {}) });
       return { cancel: r.cancel_requested };
     },
     async finishAgentJob(id, o) {
@@ -170,7 +170,7 @@ function world(): World {
       Object.assign(r, {
         status: o.status, error: o.status === "canceled" && r.cancel_reason ? r.cancel_reason : (o.error ?? null),
         result: o.result ?? r.result, exit_code: o.exitCode ?? r.exit_code,
-        conversation_id: o.conversationId ?? r.conversation_id, output_tail: o.tail ?? r.output_tail, ended_at: new Date(now), boot_hash: null, fail_hash: null,
+        conversation_id: o.conversationId ?? r.conversation_id, output_tail: o.tail ?? r.output_tail, ...(o.steps ? { steps: o.steps } : {}), ended_at: new Date(now), boot_hash: null, fail_hash: null,
         reaped: r.session_id === null && r.mcp_token_hash === null,
       });
       return { ...r };
@@ -535,6 +535,26 @@ await t("박동 — 비밀이 맞을 때만 · 진행 꼬리·대화 id 를 싣�
   assert.equal(w.rows.get(id)!.conversation_id, "0a1b2c3d-0000-4000-8000-000000000001");
   await w.deps.store.requestCancelAgentJob(id);
   assert.deepEqual(await onTick(id, job.secret, {}, w.deps), { cancel: true });
+});
+
+await t("ST2 도구 호출 단계 — 박동 · 결과가 판이 보낸 단계를 걸러 적고(안 보내면 그대로) · 본인 보기에만 싣는다 · 판에 상한을 넘긴다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.equal((job as any).stepsMax, STEPS_MAX);
+  assert.equal((job as any).stepInputMax, STEP_INPUT_MAX);
+  const s1 = { id: "toolu_1", name: "mcp__lively__knowledge_search", input: "{\"q\":\"x\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false };
+  await onTick(id, job.secret, { tail: "진행", steps: [s1, { name: "", started_at: "x" }] }, w.deps);
+  assert.deepEqual(w.rows.get(id)!.steps, [s1], "모양이 틀린 단계는 버린다");
+  await onTick(id, job.secret, { tail: "진행 2" }, w.deps);
+  assert.deepEqual(w.rows.get(id)!.steps, [s1], "단계를 안 보낸 박동(옛 판)은 저장된 단계를 덮지 않는다");
+  const done1 = { ...s1, ended_at: "2026-11-02T08:00:01.500Z" };
+  await onResult(id, job.secret, { exit_code: 0, result: { text: "답", is_error: false }, steps: [done1] }, w.deps);
+  const row = w.rows.get(id)!;
+  assert.deepEqual(row.steps, [done1]);
+  assert.deepEqual(publicJob(row, { own: true }).steps, [done1], "본인 보기에 싣는다");
+  assert.ok(!("steps" in publicJob(row, { own: false })), "남(관리자)에게는 싣지 않는다");
+  assert.deepEqual(publicJob({ ...row, steps: null }, { own: true }).steps, [], "단계가 없으면 빈 배열");
 });
 
 await t("X2 결과 — 끝 상태와 답을 적고, 걷기는 조금 뒤(kill · 토큰 폐기), 다음 대기 작업을 띄운다", async () => {

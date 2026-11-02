@@ -76,6 +76,19 @@ process.stdin.on("end", () => {
   out({ type: "assistant", message: { content: [{ type: "text", text: "일하는 중" }, { type: "tool_use", name: "Bash" }] } });
   process.stderr.write("fake stderr line\\n");
   if (process.env.FAKE_MODE === "hang") { setInterval(() => {}, 1000); return; }
+  if (process.env.FAKE_MODE === "tools") {
+    //  도구 호출 단계 — 두 호출을 내고 150ms 뒤 결과(하나는 오류 · 모르는 id 하나)를 돌려준 다음, 끝나지 않는 호출 하나를 더 낸다.
+    out({ type: "assistant", message: { content: [
+      { type: "tool_use", id: "toolu_1", name: "mcp__lively__knowledge_search", input: { q: "검색어", limit: 20 } },
+      { type: "tool_use", id: "toolu_2", name: "mcp__lively__knowledge_get", input: { name: "x".repeat(400) } }] } });
+    setTimeout(() => {
+      out({ type: "user", message: { role: "user", content: [
+        { type: "tool_result", tool_use_id: "toolu_1", content: "도구 결과 글은 싣지 않는다" },
+        { type: "tool_result", tool_use_id: "toolu_2", is_error: true, content: "없는 문서" },
+        { type: "tool_result", tool_use_id: "toolu_unknown", content: "모르는 호출" }] } });
+      out({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_3", name: "Read", input: "plain" }] } });
+    }, 150);
+  }
   setTimeout(() => {
     out({ type: "result", subtype: "success", is_error: false, result: "끝난 답", num_turns: 2, duration_ms: 42, total_cost_usd: 0.01, usage: { input_tokens: 3 }, session_id: "0a1b2c3d-0000-4000-8000-000000000001" });
     process.exit(1);   // 답을 내고 1 로 끝나는 하네스도 있다 — 판은 종료코드를 그대로 보고한다
@@ -95,7 +108,7 @@ interface Seen {
 
 /** 가짜 게이트웨이 — 시나리오별 응답. */
 async function gateway(o: {
-  mode: "ok" | "hang"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
+  mode: "ok" | "hang" | "tools"; timeoutMs: number; cancelAfterTicks?: number; resultFailFirst?: boolean; resultDelayMs?: number; record: string;
   /** 부트 200 의 본문을 이 글로(JSON 아님) · 판 본체 코드를 이것으로(곧바로 던지는 본체) · 시작 실패 보고에 답하지 않기 · 머리만 주고 멈추기. */
   bootRaw?: string; runnerCode?: string; failedHang?: boolean; failedStall?: boolean;
   /** #5101 부트 응답에 더할 칸(transcriptMax · transcript …) · 하네스 env 에 더할 것(CLAUDE_CONFIG_DIR 자리표 · 가짜 하네스 모드). */
@@ -216,6 +229,31 @@ await t("R2 정상 — 박동 · 결과 한 번(답·대화 id·종료코드) ·
     assert.deepEqual(JSON.parse(h.mcp), { mcpServers: { lively: { type: "http", url: "x" } } });
     assert.equal(h.mcpMode, 0o600);
     assert.ok(!fs.existsSync(h.argv[1]), "판이 끝나면 임시 폴더(프롬프트·MCP 파일)를 지운다");
+  } finally { await g.close(); }
+});
+
+await t("ST1 도구 호출 단계 — tool_use 를 본 때 시작 · 같은 id 의 tool_result 를 본 때 끝 · 오류 · 입력 앞머리만(결과 글 없음) · id 없는 · 끝나지 않은 호출은 끝 없음 · 박동과 결과에 함께", async () => {
+  const record = path.join(tmp, "st1.json");
+  const g = await gateway({ mode: "tools", timeoutMs: 20_000, record });
+  try {
+    assert.equal(await runBoot(g.port), 0);
+    const r = g.seen.results[0] as Record<string, any>;
+    const steps = r.steps as Array<Record<string, any>>;
+    assert.deepEqual(steps.map((s) => s.name), ["Bash", "mcp__lively__knowledge_search", "mcp__lively__knowledge_get", "Read"]);
+    const [bash, search, get, read] = steps;
+    assert.equal(bash.id, null);
+    assert.equal(bash.ended_at, null, "id 없는 호출은 결과와 짝지을 수 없다");
+    assert.equal(search.id, "toolu_1");
+    assert.equal(search.input, JSON.stringify({ q: "검색어", limit: 20 }));
+    assert.equal(search.is_error, false);
+    const took = Date.parse(search.ended_at) - Date.parse(search.started_at);
+    assert.ok(took >= 100 && took < 5_000, `호출 시간 ${took}ms`);
+    assert.equal(get.is_error, true);
+    assert.equal(get.input.length, 160, "입력은 앞머리만");
+    assert.equal(read.input, "plain");
+    assert.equal(read.ended_at, null, "끝나지 않은 호출");
+    assert.ok(!JSON.stringify(steps).includes("도구 결과 글은 싣지 않는다"), "도구 결과 글은 싣지 않는다");
+    assert.ok(g.seen.ticks.length >= 1 && g.seen.ticks.every((k) => Array.isArray(k.steps)), "박동에도 단계가 실린다");
   } finally { await g.close(); }
 });
 

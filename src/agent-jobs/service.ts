@@ -35,8 +35,8 @@ import type { LivelyUser } from "../context.js";
 import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
-  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
-  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, STEP_INPUT_MAX, STEPS_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
+  jobSessionId, noNul, parseBootFailure, parseRunnerReport, parseSteps, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
   PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type Effort, type RunnerJob } from "./runner.js";
@@ -188,13 +188,13 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
 }
 
 /**
- * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 답·진행 꼬리는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
+ * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 답·진행 꼬리·도구 호출 단계는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
  *  프롬프트는 본인이 하나 보기(agent_job_get)로 물을 때만(withPrompt) — 접수·취소 응답엔 싣지 않는다(최대 10만 자).
  */
 export function publicJob(r: AgentJobRow, o: { own: boolean; withPrompt?: boolean; position?: number | null }): Record<string, unknown> {
   return {
     ...jobHead(r),
-    ...(o.own ? { result: r.result, output_tail: r.output_tail } : { has_result: r.result !== null }),
+    ...(o.own ? { result: r.result, output_tail: r.output_tail, steps: r.steps ?? [] } : { has_result: r.result !== null }),
     ...(o.own && o.withPrompt ? { prompt: r.prompt } : {}),
     ...(o.position != null ? { queue_position: o.position } : {}),
   };
@@ -464,7 +464,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
     argv: claudeJobArgv({ model: booted.model, effort, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
-    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
+    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX, stepsMax: STEPS_MAX, stepInputMax: STEP_INPUT_MAX,
     //  #5101 API 키 작업(#5082 도커 실행면이면 구독 작업도)만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더 · 덮은 projects/ 가 끝나면 사라진다 ·
     //   관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면 앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
     ...(bundledTranscript(booted.account_kind, d) && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
@@ -548,7 +548,7 @@ export async function onTick(id: number, presented: string, body: unknown, d: Ag
   await authed(id, presented, "secret", d);
   const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   const tail = typeof b.tail === "string" ? noNul(b.tail).slice(-TAIL_MAX) : "";
-  const r = await d.store.tickAgentJob(id, { tail, conversationId: convIdOf(b.conversation_id) });
+  const r = await d.store.tickAgentJob(id, { tail, conversationId: convIdOf(b.conversation_id), steps: parseSteps(b.steps) });
   if (!r) throw new HttpError(410, "끝난 작업입니다");
   return r;
 }
@@ -564,7 +564,7 @@ export async function onResult(id: number, presented: string, body: unknown, d: 
     truncated: (rep.result.text?.length ?? 0) >= RESULT_TEXT_MAX,
   } : null;
   const ended = await d.store.finishAgentJob(id, {
-    status: out.status, error: out.error, result, exitCode: rep.exit_code, conversationId: rep.conversation_id, tail: rep.tail, from: ["running"],
+    status: out.status, error: out.error, result, exitCode: rep.exit_code, conversationId: rep.conversation_id, tail: rep.tail, steps: rep.steps ?? null, from: ["running"],
   });
   if (!ended) throw new HttpError(410, "끝난 작업입니다");
   logger.info({ job: id, status: out.status }, "[agent-job] 결과");
