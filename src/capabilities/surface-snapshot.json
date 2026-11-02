@@ -413,7 +413,7 @@
   "rest": [
    "POST /api/ui/org/member/reset-password"
   ],
-  "input_hash": "4ed624ebe4f60b35"
+  "input_hash": "160459e1264b1b93"
  },
  {
   "name": "org_member_remove",
