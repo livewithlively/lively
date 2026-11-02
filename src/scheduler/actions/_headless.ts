@@ -120,6 +120,8 @@ export function headlessHarness(params: Record<string, unknown>, cfg?: { harness
 //   종전(flags 를 통째로 받던 시절)엔 여기에 이미 굳은 `--model` 이 들어와, 하네스가 모르면 조용히 버려지고
 //   CLI 계정 기본(=가장 비싼 모델)으로 돌았다. 그 자리를 닫는 것이 이 함수의 새 책임이다.
 export async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; harness?: string | null; model?: string | null; effort?: string | null; extra?: Record<string, unknown>; marker?: string; nodePref?: string | null;
+  // #5235 — 같은 일을 다른 잡도 낼 수 있을 때 그 잡들의 표식. 이 중 하나라도 대기·실행 중이면 건너뛴다(marker 는 늘 본다).
+  guardMarkers?: string[];
   // #4012 T3 — 실행 프로필. 'context' = 기본 제공 맥락 잡(증류·분류·관리) — 샌드박스 op 가 있는 박스에서는 중앙 샌드박스로만 간다.
   execProfile?: string | null;
 }): Promise<{ status: string; summary: unknown }> {
@@ -130,7 +132,8 @@ export async function enqueueHeadlessTask(o: { prompt: string; requester: string
   // 중첩 방지 — 이전 실행분이 아직 대기/실행 중이면 이번 주기는 건너뛴다(분류의 '인박스 비면 skip' 과 같은 결의 idempotency).
   try {
     const inflight = await q(itemsPool,
-      `SELECT id, status FROM org_task WHERE requester_session=$1 AND status IN ('queued','running') ORDER BY id DESC LIMIT 1`, [marker]);
+      `SELECT id, status FROM org_task WHERE requester_session = ANY($1::text[]) AND status IN ('queued','running') ORDER BY id DESC LIMIT 1`,
+      [[marker, ...(o.guardMarkers ?? [])]]);
     if (inflight.length) return { status: "ok", summary: { skipped: "이전 실행 아직 진행 중", task_id: inflight[0].id, task_status: inflight[0].status, ...extra } };
   } catch { /* org_task 부재 등 — 계속 진행(생성 시점에 다시 실패하면 그때 보고) */ }
 

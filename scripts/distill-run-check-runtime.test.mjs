@@ -11,6 +11,7 @@
 //  Q8 ★ 계획 응답에 plan 이 없음(200) → 실행 0건 · 실패 알림. «모름» 을 «물을 것 없음» 으로 접지 않는다.
 //  Q9 Esc 로 닫아도 취소다.
 //  Q10 [지금 수집·증류] 도 같다 — 취소 → 요청 0건 · 체크 끈 채 실행 → lanes_only · ★ 옛 게이트웨이 → 요청 0건 · 알림.
+//  Q11 ★ 서버가 안 돌았다고 답하면(status=skipped) 돌았다고 말하지 않는다.
 //
 // 왜 런타임인가: 취소 뒤 실행이 안 나가는지 · 체크 기본값이 무엇인지는 소스 모양으로 안 보인다. 소스 정규식 시험은 이 동작을 뒤집는
 //  변이 다섯에 전부 초록이었다(#5235 격리 리뷰). 카드와 확인창을 esbuild 로 묶어 헤드리스 크롬에 올리고 fetch 만 대역으로 준다.
@@ -48,13 +49,13 @@ writeFileSync(bundlePath, bundle);
 const html = `<!doctype html><html lang="en"><meta charset="utf-8"><style>body{display:none}</style><body>
 <div id="host"></div><div id="toasts"></div><pre id="out"></pre>
 <script>
-window.__runs = []; window.__plans = 0; window.__plan = null; window.__runNow = [];
+window.__runs = []; window.__plans = 0; window.__plan = null; window.__runNow = []; window.__runStatus = 'ok';
 const J = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
 window.fetch = async (url, opts = {}) => {
   const u = String(url);
   const m = String(opts.method || 'GET').toUpperCase();
   if (/\\/api\\/ui\\/cron\\/[^/?]+\\/run-plan/.test(u)) { window.__plans++; return J(window.__plan.body, window.__plan.status); }
-  if (/\\/api\\/ui\\/cron\\/[^/?]+\\/run/.test(u) && m === 'POST') { window.__runs.push(String(opts.body || '')); return J({ status: 'ok' }); }
+  if (/\\/api\\/ui\\/cron\\/[^/?]+\\/run/.test(u) && m === 'POST') { window.__runs.push(String(opts.body || '')); return J({ status: window.__runStatus }); }
   if (u.includes('/api/ui/org/pipeline/run-now') && m === 'POST') { window.__runNow.push(JSON.parse(opts.body || '{}')); return J({ runs: [], distill_after: [] }); }
   if (u.includes('/api/ui/cron')) return J({ jobs: [{ id: 'distill-sources-headless', label: 'x', action: 'distill_sources_headless', params: {}, interval_sec: 1800, enabled: true, note: '', last_run_at: null, last_status: null, created_by: 'alice', sort: 0 }] });
   if (u.includes('/api/ui/me/headless')) return J({ runner: { member: 'alice', source: 'db' } });
@@ -129,6 +130,9 @@ const asc = (s) => String(s).replace(/[\\u0080-\\uffff]/g, (c) => '\\\\u' + c.ch
   await scene('q7', 'gone', async () => {});
   await scene('q8', 'empty', async () => {});
   await scene('q9', 'choose', async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
+  window.__runStatus = 'skipped';
+  await scene('q11', 'none', async () => {});
+  window.__runStatus = 'ok';
   await sceneNow('n1', 'choose', cancel);
   await sceneNow('n2', 'choose', ok);
   await sceneNow('n3', 'gone', async () => {});
@@ -178,6 +182,11 @@ assert.deepEqual(R.q8.runs, [], "★ Q8 계획이 없으면 실행하지 않는�
 assert.equal(R.q8.failed, true, "★ Q8 실패를 알린다");
 
 assert.deepEqual(R.q9.runs, [], "Q9 Esc 도 취소다");
+
+assert.match(un(R.q1.toast), /한 번 실행했습니다/, "Q11 배선 — 정상 실행은 돌았다고 말한다");
+assert.deepEqual(R.q11.runs, ["{}"], "Q11 실행 요청은 나갔다");
+assert.doesNotMatch(un(R.q11.toast), /한 번 실행했습니다/, "★ Q11 안 돌았는데 돌았다고 말한다");
+assert.match(un(R.q11.toast), /돌지 않았습니다/, "★ Q11 안 돌았다고 말한다");
 
 for (const k of ["n1", "n2", "n3"]) assert.equal(R[k].plans, 1, `${k} 계획을 한 번 읽었다`);
 assert.equal(R.n1.hadDialog, true, "Q10 [지금 수집·증류] 도 묻는다");

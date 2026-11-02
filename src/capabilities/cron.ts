@@ -7,7 +7,7 @@ import type { Capability } from "./types.js";
 import { listCronJobs, getCronJob, insertCronJob, updateCronJob, deleteCronJob } from "../org/cron-store.js";
 import { runCronById, CRON_ACTIONS, CRON_ACTION_KEYS } from "../scheduler/index.js";
 import { planDistillRun, DISTILL_ACTIONS } from "../scheduler/actions/distill.js";
-import { isValidCron } from "../scheduler/cron-expr.js";
+import { isValidCron, nextCronTime, parseCron } from "../scheduler/cron-expr.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 cron_expr 해석 기준 시간대(폼 힌트용)
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -38,6 +38,15 @@ const cronList: Capability = {
   }),
 };
 
+//  시각형 1회성이 언제 도는지 — 이미 지난 날짜를 넣으면 다음 해를 조용히 기다리게 되니 저장 응답에서 보이게 한다(#5235).
+async function firstRunOf(job: Record<string, unknown>): Promise<{ first_run_at?: string | null }> {
+  const expr = typeof job.cron_expr === "string" ? job.cron_expr : "";
+  //  꺼진 잡은 말하지 않는다 — 켜는 저장이 기준 시각을 옮긴다.
+  if (!job.run_once || job.enabled === false || job.last_run_at || !isValidCron(expr)) return {};
+  const next = nextCronTime(parseCron(expr), new Date(), await orgTimezone());
+  return { first_run_at: next ? next.toISOString() : null };
+}
+
 const cronSet: Capability = {
   name: "cron_set",
   title: "스케줄 잡 생성/수정",
@@ -45,7 +54,9 @@ const cronSet: Capability = {
     "스케줄 잡을 upsert(id 기준). action 은 등록된 액션 레지스트리(CRON_ACTIONS) 중 하나(임의 셸 불가). " +
     "스케줄 2모드: cron_expr(절대 벽시계 5필드, 예 '0 9 * * 1-5')가 있으면 그게 우선, 없으면 interval_sec(상대, 최소 60s). " +
     "⚠ cron_expr 은 **조직 시간대**(org_profile.timezone, 기본 Asia/Seoul — cron_list 의 timezone)의 벽시계로 해석된다(UTC·서버 로컬 아님). " +
-    "cron_expr=\"\"(빈문자열)로 보내면 interval 모드로 되돌림. params=액션 인자(예: refresh_repo→{repo}, connector_sync→{system}). 커스텀 잡은 이걸로 추가.",
+    "cron_expr=\"\"(빈문자열)로 보내면 interval 모드로 되돌림. " +
+    "run_once=true 면 한 번 돈 뒤 스스로 꺼진다 — cron_expr 가 있으면 저장 뒤 첫 매치에 돌고(응답 first_run_at 으로 언제인지 확인한다 · 이미 지난 날짜를 주면 다음 해다), 없으면 다음 틱에 돈다. " +
+    "params=액션 인자(예: refresh_repo→{repo}, connector_sync→{system}). 커스텀 잡은 이걸로 추가.",
   scope: "memory",
   input: {
     id: z.string(),
@@ -54,7 +65,7 @@ const cronSet: Capability = {
     params: z.record(z.unknown()).optional(),
     interval_sec: z.number().int().min(60).optional(),
     cron_expr: z.string().max(120).optional(),
-    run_once: z.boolean().optional(), // true = 1회 실행 후 자동 비활성(반복 안 함). interval/cron 무시.
+    run_once: z.boolean().optional(), // true = 1회 실행 후 자동 비활성(반복 안 함). cron_expr 가 있으면 저장 뒤 첫 매치에, 없으면 다음 틱에.
     enabled: z.boolean().optional(),
     note: z.string().max(2000).optional(),
     // #1675 ④ — 이 잡이 연속 몇 번 실패하면 스스로 멈출지. 0=이 잡만 브레이커 끔.
@@ -98,7 +109,7 @@ const cronSet: Capability = {
         enabled: input.enabled ?? null, note: input.note ?? null, run_once: input.run_once ?? null,
         max_fail_streak: input.max_fail_streak ?? null, actor,
       });
-      return { job };
+      return { job, ...(await firstRunOf(job)) };
     }
     const job = await updateCronJob({
       id, label: input.label ?? null, action: input.action ?? null,
@@ -107,7 +118,7 @@ const cronSet: Capability = {
       enabled: input.enabled ?? null, note: input.note ?? null, run_once: input.run_once ?? null,
       max_fail_streak: input.max_fail_streak ?? null, actor,
     });
-    return { job };
+    return { job, ...(await firstRunOf(job)) };
   },
 };
 
@@ -141,7 +152,8 @@ const cronRunNow: Capability = {
   title: "스케줄 잡 즉시 실행",
   description: "스케줄 잡을 주기와 무관하게 지금 1회 실행(온디맨드 'refresh now'). 결과 요약 반환. 이미 실행 중이면 skip. " +
     "⚠ 증류 잡(distill_sources·distill_sources_headless)을 레인 지정 없이 돌리면 켜진 레인뿐 아니라 **맡은 레인이 없는 자료도 기본 기준으로 함께 나간다**. " +
-    "시범 실행이면 먼저 cron_run_plan 으로 무엇이 나가는지 보고, 레인 몫만 돌리려면 lanes_only=true 로 실행한다.",
+    "시범 실행이면 먼저 cron_run_plan 으로 무엇이 나가는지 보고, 레인 몫만 돌리려면 lanes_only=true 로 실행한다. " +
+    "증류 잡은 다른 증류 잡이 배치를 내는 중이면 최대 1분 기다리고, 그래도 차례가 안 오면 실행하지 않고 status=skipped 로 돌아온다.",
   scope: "memory",
   input: {
     id: z.string(),

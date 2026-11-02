@@ -79,12 +79,13 @@ export async function runConnectorSync(params: Record<string, unknown>): Promise
  * 증류 잡을 지금 한 번 돌린다 — 수집 직후의 «이어달리기».
  *  fire-and-forget: 수집 잡의 성패에 영향을 주지 않는다(증류가 실패해도 수집은 성공이다).
  *  중복 방지는 스케줄러가 이미 한다(engine 의 running 집합) — 여기서 또 잠그지 않는다.
+ *  1회성 잡은 깨우지 않는다(#5235) — due 판정 없이 돌리므로 정한 시각보다 먼저 돌고 소모된다. 때가 되면 틱이 돌린다.
  */
-async function nudgeDistillNow(): Promise<void> {
+export async function nudgeDistillNow(): Promise<void> {
   try {
     const { q, itemsPool } = await import("../../db/client.js");
     const rows = await q(itemsPool,
-      `SELECT id FROM org_cron WHERE enabled=true AND action IN ('distill_sources_headless','distill_sources')`);
+      `SELECT id FROM org_cron WHERE enabled=true AND NOT run_once AND action IN ('distill_sources_headless','distill_sources')`);
     if (!rows.length) return;
     const { runCronById } = await import("../engine.js");
     for (const r of rows) { try { await runCronById(String((r as Record<string, unknown>).id)); } catch { /* 한 잡의 실패가 나머지를 막지 않는다 */ } }

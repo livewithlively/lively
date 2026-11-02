@@ -6,6 +6,7 @@ import { invalidateIngestPolicyCache } from "../ingest/ingest-policy-load.js";  
 import { audit } from "./audit.js";
 import { bumpCoverageVersion } from "../distill/coverage-version.js";   // #5147 레인 쓰기 → 커버리지 캐시 무효화
 import { drawerOfLane, settleDrawerTarget } from "../liv/lane-skeleton.js";   // #1631 · #5235 — 서랍 레인의 목적지
+import type { LaneJobPlan } from "../distill/ensure-job.js";
 
 // ════════ 자동 인입 허용선 정책 — org_ingest_policy (프로젝트 #638) ════════
 //  distill/mirror 가 지식을 auto(즉시 active)|confirm(pending 격리→검토 큐)|drop(미적재) 중 어디로 보낼지 오너가 조절.
@@ -203,16 +204,19 @@ export function pickDistillerField<T>(
 
 // #2415 — 켜진 채로 저장된 증류기는 **그것을 돌릴 잡**이 있어야 한다. 없으면 마련한다(정책은 distill/ensure-job.ts).
 //  실패는 삼킨다: 증류기 저장은 이미 끝났고, 잡 정비 실패가 그것을 되돌릴 이유는 아니다.
-async function ensureJobForEnabled(row: Record<string, unknown>, actor?: string): Promise<void> {
-  if (!row?.enabled) return;
+//  (#5235) 결과를 돌려준다 — 잡이 새로 생기거나 돌릴 잡이 없는 것을 저장한 사람이 몰랐다(고객사 첫 세팅 실측).
+async function ensureJobForEnabled(row: Record<string, unknown>, actor?: string): Promise<LaneJobPlan | null> {
+  if (!row?.enabled) return null;
   const key = String(row.key ?? "").trim();
-  if (!key) return;
+  if (!key) return null;
   try {
-    const { ensureDistillJob } = await import("../distill/ensure-job.js");
+    const { ensureDistillJob, laneJobPlan } = await import("../distill/ensure-job.js");
     const plan = await ensureDistillJob(key, actor ?? null);
     if (plan.action !== "none") console.info(`[distill] 증류기 '${key}' 를 켜며 잡 정비: ${plan.action} — ${plan.reason}`);
+    return laneJobPlan(plan);
   } catch (e) {
     console.warn(`[distill] 증류기 '${key}' 잡 정비 실패: ${(e as Error)?.message ?? e}`);
+    return null;
   }
 }
 
@@ -246,6 +250,11 @@ async function categoryStateByKey(): Promise<Map<string, string>> {
 }
 
 export async function upsertDistiller(input: DistillerUpsertInput, actor?: string, source?: string): Promise<Record<string, unknown>> {
+  return (await saveDistiller(input, actor, source)).row;
+}
+
+/** upsertDistiller + 이 레인을 돌릴 잡(job_plan) — 저장한 사람에게 응답으로 말하는 자리만 쓴다(#5235). 켜진 채 저장했을 때만 있다. */
+export async function saveDistiller(input: DistillerUpsertInput, actor?: string, source?: string): Promise<{ row: Record<string, unknown>; job_plan: LaneJobPlan | null }> {
   // 대상 행 — id 우선, 없으면 key(멱등 upsert: 같은 key 로 다시 저장하면 갱신).
   let targetId = input.id ?? null;
   const key = normText(input.key);
@@ -374,8 +383,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        input.enabled !== undefined && Boolean(input.enabled) !== Boolean(before.enabled)]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
     bumpCoverageVersion();
-    await ensureJobForEnabled(r.rows[0], actor);
-    return r.rows[0];
+    return { row: r.rows[0], job_plan: await ensureJobForEnabled(r.rows[0], actor) };
   }
 
   const r = await itemsPool.query(
@@ -396,8 +404,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
      vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null, vals.harness]);
   await audit("org_distiller", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
   bumpCoverageVersion();
-  await ensureJobForEnabled(r.rows[0], actor);
-  return r.rows[0];
+  return { row: r.rows[0], job_plan: await ensureJobForEnabled(r.rows[0], actor) };
 }
 
 export async function removeDistiller(idOrKey: number | string, actor?: string, source?: string): Promise<void> {

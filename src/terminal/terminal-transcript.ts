@@ -375,7 +375,8 @@ export async function embedPromptsWithin(provider: EmbeddingProvider, query: str
   for (let i = 0; i < uniq.length && Date.now() < until; i += BATCH) {
     const chunk = uniq.slice(i, i + BATCH);
     const stored = provider.embed(chunk).then((vecs) => { chunk.forEach((t, j) => { if (vecs[j]) cacheEmb(t, vecs[j]); }); });
-    try { await inTime(stored); } catch { /* 이 배치 스킵 → 렉시컬만 */ }
+    //  예산이 끝났으면(null) 여기서 멈춘다 — 타이머는 Date.now() 기준 until 보다 1ms 일찍 깰 수 있어 위 for 조건만으로는 뒤 배치가 새 나간다.
+    try { if ((await inTime(stored)) === null) break; } catch { /* 이 배치 스킵 → 렉시컬만 */ }
   }
   return qEmb;
 }
