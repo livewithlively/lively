@@ -189,7 +189,8 @@ export interface SubmitInput {
 }
 
 // ── 공개 모양 ──
-/** effort — 그 실행에 준 생각 깊이(실행 행의 기록 · store.RUN_EFFORT_COL — 행 모양 밖이라 부르는 쪽이 따로 읽어 준다 · 없으면 null). model 옆에 싣는다. */
+/** effort — 그 실행에 요청한 생각 깊이(실행 행의 기록 · store.RUN_EFFORT_COL — 행 모양 밖이라 부르는 쪽이 따로 읽어 준다 · 없으면 null). model 옆에 싣는다.
+ *  하네스가 실제로 쓴 깊이가 아니다 — 모델이 받지 않는 깊이는 하네스가 낮추거나 빼고, 하네스 기록(stream-json)에는 쓴 깊이 칸이 없어 게이트웨이가 확인할 수 없다. */
 function head(r: AiRunRow | AiRunSummaryRow, effort: string | null): Record<string, unknown> {
   return {
     id: r.id, status: r.status, app_id: r.app_id, requester: r.requester, requester_kind: r.requester_kind, job: r.job_name, kind: r.kind,
@@ -373,7 +374,8 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
   const label = rawLabel ? rawLabel.slice(0, LABEL_MAX) : null;
   const model = typeof input.model === "string" && input.model.trim() ? input.model.trim() : null;
   if (model && !MODEL_RE.test(model)) throw new HttpError(400, "model 이름 형식이 아닙니다");
-  //  생각 깊이 — 생략 · null · ""(REST 의 생략 관례)는 안 준 것. 다섯 값 밖이면 400 — MCP · REST · 앱 주소는 입력 스키마가 먼저 거르고, 여기는 그 밖의 길까지 본다.
+  //  생각 깊이 — 생략 · null · ""(REST 의 생략 관례)는 안 준 것. 다섯 값 밖이면 400. MCP · 앱 주소는 입력 스키마가 먼저 거르지만, REST 어댑터의 enum 가드는
+  //   쉼표 글(«high,max»)과 배열을 낱낱이 보고 원래 값을 넘긴다 — 그 꼴은 여기가 실제로 막는 자리다(service.test effort E1).
   let effort: Effort | null = null;
   if (input.effort !== undefined && input.effort !== null && input.effort !== "") {
     if (!isEffort(input.effort)) throw new HttpError(400, `effort 는 ${EFFORT_LEVELS.join(" · ")} 중 하나입니다`);
@@ -541,7 +543,9 @@ export async function submitRun(input: SubmitInput, user: LivelyUser, ctx: { sou
       //   #1639 앱 서버의 본인 구독 표시 칸(APP_SERVER_OWN_COL)도 같다. effort 칸(EFFORT_COL)도 같다(받은 깊이를 버리고 기본 깊이로 돌리지 않는다).
       const toolsLimited = mcpOnly || toolAllowlist != null;
       const rollGap = (!!instructions || toolsLimited || appServerOwn || runEffort != null) && (e as { code?: string })?.code === "42703";
-      const carried = appServerOwn ? "앱 서버의 본인 구독 표시를" : instructions && toolsLimited ? "앱 지시 · 도구 제한을" : instructions ? "앱 지시를" : toolsLimited ? "앱 도구 제한을" : "effort 를";
+      //  effort 를 함께 실었으면 그것도 적는다(앞선 것 하나만 적으면 effort 를 함께 실은 실행이 «앱 지시를…»으로만 보였다).
+      const base = appServerOwn ? "앱 서버의 본인 구독 표시를" : instructions && toolsLimited ? "앱 지시 · 도구 제한을" : instructions ? "앱 지시를" : toolsLimited ? "앱 도구 제한을" : null;
+      const carried = base && runEffort ? `${base.replace(/[을를]$/, "")} · effort 를` : base ?? "effort 를";
       const notReady = `${carried} 실은 실행을 받을 준비가 아직 안 됐습니다(배포 중) — 잠시 뒤 다시 보내세요`;
       const why = e instanceof Error ? e.message : String(e);
       await d.store.finishAiRun(row.id, { status: "failed", result: null, error: rollGap ? notReady : `작업 컨테이너에 보내지 못했습니다: ${why}`.slice(0, 600) }).catch(() => null);

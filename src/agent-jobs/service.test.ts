@@ -1894,6 +1894,7 @@ await t("effort F1 판이 뜰 때 그 작업 행의 깊이를 읽어 하네스 �
       assert.deepEqual(read, [id], `그 작업의 행을 읽는다 — ${what}`);
       assert.equal(count(job.argv, "--effort"), 1, what);
       assert.equal(job.argv[job.argv.indexOf("--effort") + 1], effort, what);
+      assert.equal(job.env.CLAUDE_CODE_EFFORT_LEVEL, "", `물려받은 깊이 변수를 지운다(하네스가 인자보다 앞세운다) — ${what}`);
       assert.equal(w.rows.get(id)!.status, "running", what);
     }
   }
@@ -1906,6 +1907,7 @@ await t("effort F1b 깊이가 없는 작업(행 읽기 null — 사람 도구로
   const job = await onBoot(id, boot, w.deps);
   assert.deepEqual(read, [id], "그 작업의 행을 읽는다(관측 장치)");
   assert.ok(!job.argv.includes("--effort"), JSON.stringify(job.argv));
+  assert.ok(!("CLAUDE_CODE_EFFORT_LEVEL" in job.env), "깊이를 정하지 않은 작업은 환경을 건드리지 않는다(종전 그대로)");
   assert.equal(w.inserted.at(-1)!.effort, null, "사람 도구로 보낸 새 작업은 null(effort 는 앱 AI 실행이 받는다)");
 });
 

@@ -34,7 +34,8 @@ const aiRunInput = {
   job: z.string().regex(JOB_NAME_RE).optional().describe("작업 이름(매니페스트 ai.jobs 에 선언한 것) — 작업별 실행 계정을 쓴다. 생략하면 앱별 > 워크스페이스 기본값. 그 작업이 ai.instructions 를 선언했으면 부른 사람(앱 주소 · 앱 서버면 그 주소)의 판에서 지시 파일을 접수 때 읽어 시스템 지시로 싣는다 — 에이전트 작업은 그때 작업 폴더의 CLAUDE.md · .claude/(skills · agents · commands · settings)를 읽지 않는다. 그 작업이 ai.mcp_only 에 있으면 에이전트 작업은 하네스 내장 도구(셸 · 파일 · 웹)를 끄고 라이블리 MCP 도구만 쓴다 — job 을 생략하거나 목록에 없는 작업이면 내장 도구가 열린다. 그 작업이 ai.tools 에 도구 목록을 두었으면 에이전트 작업의 라이블리 토큰은 그 목록 안의 도구만 쓴다(앱 동의와 둘 다) — job 을 생략하거나 목록을 두지 않은 작업이면 앱 동의 전체다"),
   model: z.string().regex(MODEL_RE).optional().describe("모델(선택). 단발은 워크스페이스 기본 모델, 에이전트 작업은 하네스 기본"),
   effort: z.enum(EFFORT_LEVELS).optional().describe(
-    "하네스 생각 깊이(선택 · claude -p --effort) — 작업 컨테이너에서 도는 실행(에이전트 작업 · 구독으로 도는 단발)만 받는다. 단발 + 워크스페이스 API 키(LLM 프록시)에 주면 400. 생략하면 하네스 기본"),
+    "하네스 생각 깊이(선택 · claude -p --effort) — 작업 컨테이너에서 도는 실행(에이전트 작업 · 구독으로 도는 단발)만 받는다. 단발 + 워크스페이스 API 키(LLM 프록시)에 주면 400. 생략하면 하네스 기본. " +
+    "요청한 깊이다 — 고른 모델이 받지 않는 깊이는 하네스가 낮추거나 빼고(예: 옛 모델 id), 실행 계정의 설정(maxEffortLevel)이 상한을 둘 수 있다. 실행 기록의 effort 도 요청한 값이다"),
   label: z.string().optional().describe(`짧은 이름(목록에 보인다). ${softCapHint(SOFT_CAPS.app_ai_run!.label!)}`),
   files: z.array(z.string().max(512)).max(50).optional().describe("관련 파일(작업 폴더 기준) — 주면 **에이전트 작업**(작업 컨테이너 · 파일 · 도구)이 된다"),
   project_id: z.number().int().positive().optional().describe("이 프로젝트 폴더에서 돈다(에이전트 작업 · 앱 폴더는 .lively/apps/<앱> 에 붙는다)"),
@@ -76,7 +77,7 @@ const appAiRun: Capability = {
 const appAiRunGet: Capability = {
   name: "app_ai_run_get",
   title: "앱 AI 실행 보기",
-  description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · model · effort(준 생각 깊이 · 없으면 null) · result(text · json · model · usage · duration_ms · retries) · error · " +
+  description: "AI 실행 하나의 상태·결과 — status(queued·running·done·failed·canceled) · model · effort(요청한 생각 깊이 — 실제로 쓴 깊이는 모델 · 계정 설정에 따라 낮을 수 있다 · 없으면 null) · result(text · json · model · usage · duration_ms · retries) · error · " +
     "resume(이어받은 실행이면 {of: 이어받은 실행 · root: 처음 실행 · depth: 몇 번째 · reason}, 아니면 null). 보낸 사람 본인(앱 화면이면 그 앱의 실행)만 다 보고, 관리자는 남의 실행의 상태·오류만.",
   scope: null,
   input: { id: z.number().int().positive() },

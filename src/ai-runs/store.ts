@@ -3,6 +3,7 @@
 import type pg from "pg";
 import { itemsPool, withTx } from "../db/client.js";
 import type { AiAccountSettings, AiRunStatus, Executor, ResumeLink, RunKind } from "./plan.js";
+import type { Effort } from "../agent-jobs/runner.js";
 
 export interface AiRunRow {
   id: number;
@@ -55,7 +56,7 @@ export interface NewAiRun {
   /** #5101 이어받은 실행이면 그 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭) — 없으면(새 질문) 생략 · null. RUN_RESUME_COLS 머리말(롤 창). */
   resume?: ResumeLink | null;
   /** 하네스 생각 깊이(작업 컨테이너 실행만 — 실행에 쓰는 값은 작업 행의 것이고 이것은 기록) — 없으면 생략 · null. RUN_EFFORT_COL 머리말(롤 창). */
-  effort?: string | null;
+  effort?: Effort | null;
 }
 
 /** 실행 행 하나를 넣는 SQL(insertAiRun · insertResumedAiRun 이 같은 글을 쓴다). */
@@ -64,7 +65,7 @@ function insertRunSql(n: NewAiRun): { sql: string; args: unknown[] } {
   //  #5101 이어받기 칸 넷도 같은 까닭으로 이어받은 실행일 때만 적는다(RUN_RESUME_COLS 머리말). effort 칸도 값을 준 실행일 때만(RUN_EFFORT_COL 머리말).
   const shared = n.sharedSeat === true;
   const rs = n.resume ?? null;
-  const effort = typeof n.effort === "string" && n.effort !== "" ? n.effort : null;
+  const effort = n.effort ?? null;
   const args: unknown[] = [n.status, n.appId, n.requester, n.requesterKind, n.source, n.jobName, n.kind, n.accountKind, n.accountMember, n.executor, n.model, n.label, n.prompt,
     n.systemPrompt, n.schema ? JSON.stringify(n.schema) : null, ...(rs ? [rs.of, rs.root, rs.depth, rs.reason] : [])];
   //  effort 의 자리 번호는 앞 값들 뒤다(이어받기 칸이 있으면 $20, 없으면 $16).

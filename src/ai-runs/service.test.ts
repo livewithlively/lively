@@ -1840,7 +1840,8 @@ const caughtHttp = async (p: Promise<unknown>): Promise<HttpError> => {
 {
   const { w, d } = world(ROOMY());
   const u = appUser("alice", "crm");
-  for (const bad of ["ultra", "HIGH", " high", "high ", "--dangerously-skip-permissions", 3, true, ["high"], { level: "high" }]) {
+  //  REST 어댑터의 enum 가드는 쉼표 글을 나눠 낱낱이 보고 원래 값을 그대로 넘긴다 — «high,max» · «high,» 는 여기 서비스 검사가 막는 자리다.
+  for (const bad of ["ultra", "HIGH", " high", "high ", "--dangerously-skip-permissions", "high,max", "high,", 3, true, ["high"], ["high", "max"], { level: "high" }]) {
     await fails(submitRun({ prompt: "x", agent: true, effort: bad }, u, { source: "app-ui" }, d), 400, /effort 는 low · medium · high · xhigh · max 중 하나입니다/);
   }
   assert.equal(w.runs.size, 0, "거절된 요청이 실행 행을 남기지 않는다");

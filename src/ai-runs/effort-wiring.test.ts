@@ -1,6 +1,6 @@
 // 생각 깊이(effort — 하네스 `claude -p --effort`)의 입력 표면과 운영 배선.
-//  ① 입력 — MCP 는 SDK 가 z.object(input) 로 거르고, REST 는 어댑터의 enum 가드(capabilities/index.restMounts)가 거른다. 두 길 모두 다섯 값 밖이면
-//   핸들러 전에 400 이어야 한다(서비스의 검사는 그 밖의 길까지 보는 한 겹 더 — service.test effort E1).
+//  ① 입력 — MCP 는 SDK 가 z.object(input) 로 거르고, REST 는 어댑터의 enum 가드(capabilities/index.restMounts)가 낱말 하나짜리 틀린 값을 거른다.
+//   쉼표 글 · 배열은 그 가드를 지나 서비스의 검사가 막는다(service.test effort E1 — 그 꼴은 서비스가 실제 경계다).
 //  ② 배선 — 값을 읽는 의존은 필수라(타입 검사) 줄이 빠지면 빌드가 막지만, 같은 꼴(Promise<Effort | null>)의 다른 함수로 잘못 이으면 타입 검사도
 //   서비스 시험도 초록인 채 그 작업들이 말없이 기본 깊이로 돈다. 그래서 배선 줄을 소스에서 직접 본다(tool-allowlist-wiring.test 와 같은 꼴).
 //   칸 쓰기 · 읽기의 실제 길과 롤 창은 실 PG(agent-jobs store.pg-test · ai-runs store.pg-test)가 본다.

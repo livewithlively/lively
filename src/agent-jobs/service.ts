@@ -444,6 +444,9 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     system = d.jobSystem ? await d.jobSystem(booted) : null;
     mcpOnly = await d.jobMcpOnly(booted);
     effort = await d.jobEffort(booted);
+    //  깊이를 정한 작업은 물려받은 CLAUDE_CODE_EFFORT_LEVEL 을 지운다 — 하네스는 그 변수를 `--effort` 보다 앞세운다(실측 claude 2.1.316: 변수 low + 인자 max →
+    //   요청 low). 박스 · tmux · 컨테이너 환경에 그 변수가 있으면 요청한 깊이가 말없이 바뀐다. 빈 값은 판이 «그 변수를 지워라»로 읽는다(runner).
+    if (effort) env = { ...env, CLAUDE_CODE_EFFORT_LEVEL: "" };
   } catch (e) {
     const why = String((e as Error)?.message ?? e);
     logger.warn({ job: booted.id, err: why }, "[agent-job] 판 환경을 못 만들었다 — 돌리지 않는다");
