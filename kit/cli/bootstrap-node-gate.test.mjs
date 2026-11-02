@@ -44,6 +44,11 @@ const OLD = { ver: "v16.20.2", major: 16 };  // 고객 박스에서 채택돼 �
 const NEW = { ver: "v22.11.0", major: 22 };  // 최소 이상
 const EXACT = { ver: "v20.0.0", major: 20 }; // 정확히 최소 — `>` vs `>=` 오프바이원 방지
 const GATEWAY = "http://127.0.0.1:9";        // 닫힌 포트(discard) — 여기로 나가는 건 우리 서버 호출
+const NODE_WHY = "node: error while loading shared libraries: libatomic.so.1"; // 이 기계에서 못 도는 node 가 말하는 이유(실측 문구)
+// CI 가 재는 Node 줄 — 설치가 깔 판의 기준(#5259). 구현이 아니라 CI 설정에서 읽는다.
+const CI_YML = readFileSync(join(ROOT, ".github", "workflows", "test.yml"), "utf8");
+const CI_LINES = [...new Set([...CI_YML.matchAll(/node-version:\s*['"]?(\d+)/g)].map((m) => m[1]))];
+const LINE = CI_LINES[0];
 
 // ── 스텁 유틸 ────────────────────────────────────────────────────────────────
 const q = (s) => JSON.stringify(s); // 임시경로엔 $·백틱이 없으므로 sh 에서도 안전한 인용
@@ -92,8 +97,10 @@ function grepTree(root, needle) {
 //  돌린다) 엣지①~④가 «WSL 이 아닌 박스» 를 재게 한다. WSL 시나리오는 WSL_DISTRO_NAME(실제 WSL 이 거는 값)이나 LIVELY_WSL=1.
 // os: null(실제 uname) | "Linux" | "Darwin" — uname 스텁. WSL 판정은 리눅스에서만 성립하므로(#5041) WSL 시나리오는 맥에서
 //  돌려도 «리눅스» 로 보이게 한다. tarball: null(받기 실패 — 종전) | "junk"(200 으로 HTML 을 받음 — 프록시 페이지)
-//  | "unrunnable"(풀리지만 이 기계에서 안 도는 node — musl·낡은 glibc) | "sigint"(받는 중 사람이 Ctrl-C).
-function runScenario(label, { systemNode = null, runtime = null, wslEnv = { LIVELY_WSL: "0" }, os = null, tarball = null }) {
+//  | "unrunnable"(풀리지만 이 기계에서 안 도는 node — musl·낡은 glibc) | "unrunnable-why"(같은데 node 가 stderr 로 이유를 말한다)
+//  | "sigint"(받는 중 사람이 Ctrl-C). index: null(목록 받기 실패 — 종전) | 배포 목록 배열(nodejs.org/dist/index.json 내용).
+//  tarFail: 받은 파일을 풀 때 tar 가 낼 오류(디스크 부족 등 — 받기는 성공했는데 풀기만 실패하는 자리).
+function runScenario(label, { systemNode = null, runtime = null, wslEnv = { LIVELY_WSL: "0" }, os = null, tarball = null, index = null, tarFail = null }) {
   const box = mkdtempSync(join(tmpdir(), `bootstrap-gate-${label}-`));
   const home = join(box, "home");
   const bin = join(box, "stub-bin");
@@ -105,23 +112,28 @@ function runScenario(label, { systemNode = null, runtime = null, wslEnv = { LIVE
   const pkgLog = join(box, "pkg.log");     // 시스템 변경 도구 호출
   const sysLog = join(box, "sys-node.log");// 시스템 node 호출 인자
   const ownLog = join(box, "own-node.log");// 전용 런타임 node 호출 인자
+  const indexFile = join(box, "index.json");// 배포 목록 스텁이 돌려줄 내용
+  if (index) writeFileSync(indexFile, JSON.stringify(index));
 
   // 네트워크 스텁 — URL 만 적고 실패(7=couldn't connect). 실제 다운로드는 절대 일어나지 않는다.
   //  tarball 을 고르면 node 배포 아카이브(.tar.gz) 주소에서만 그 흉내를 낸다(-o 자리에 쓰고 0 · 또는 부모 셸에 SIGINT).
+  const brokenNode = tarball === "unrunnable-why" ? `echo '${NODE_WHY}' >&2; exit 127` : "exit 1";
   const fakeTarball = !tarball ? "" : tarball === "sigint" ? `kill -INT "$PPID"; exit 130`
     : tarball === "junk" ? `printf '<html>proxy login</html>' > "$out"; exit 0`
       : [`b=$(basename "$url" .tar.gz); d=$(mktemp -d); mkdir -p "$d/$b/bin"`,
-        `printf '#!/bin/sh\\nexit 1\\n' > "$d/$b/bin/node"; chmod 755 "$d/$b/bin/node"`,
+        `printf '#!/bin/sh\\n%s\\n' ${q(brokenNode)} > "$d/$b/bin/node"; chmod 755 "$d/$b/bin/node"`,
         `tar -czf "$out" -C "$d" "$b"; rm -rf "$d"; exit 0`].join("\n");
   for (const t of ["curl", "wget"]) {
     stub(join(bin, t), [
       `url=""; out=""`,
       `while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; http://*|https://*) url="$1"; printf '%s\\n' "$1" >> ${q(netLog)}; shift ;; *) shift ;; esac; done`,
+      index ? `case "$url" in */index.json) cat ${q(indexFile)}; exit 0 ;; esac` : "",
       fakeTarball ? `case "$url" in *.tar.gz)\n${fakeTarball}\n;; esac` : "",
       `exit 7`,
     ].join("\n"));
   }
   if (os) stub(join(bin, "uname"), `case "$1" in -m) echo x86_64 ;; *) echo ${q(os)} ;; esac`);
+  if (tarFail) stub(join(bin, "tar"), `echo ${q(`tar: ${tarFail}`)} >&2\nexit 2`);
   // 시스템 변경 도구 스텁 — 불리면 로그만 남기고 실패. (R3: 시스템 Node 를 깔거나 올리려 들면 여기 찍힌다)
   for (const t of ["sudo", "brew", "apt-get", "apt", "yum", "dnf", "pacman", "port", "nvm", "n", "volta", "fnm", "asdf"]) {
     stub(join(bin, t), `printf '%s %s\\n' ${q(t)} "$*" >> ${q(pkgLog)}\nexit 1`);
@@ -215,7 +227,16 @@ const W9b = runScenario("W9b", { systemNode: null, runtime: null, os: "Linux", t
 const W10 = runScenario("W10", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Linux", tarball: "unrunnable" }); // 풀리지만 안 도는 node
 const W11 = runScenario("W11", { systemNode: NEW, runtime: null, wslEnv: WSL, os: "Darwin" });                     // 맥에 떠도는 WSL_DISTRO_NAME
 const W12 = runScenario("W12", { systemNode: NEW, runtime: OLD, wslEnv: WSL, os: "Linux" });                       // current 가 못 쓰는 node(v16)
-const ALL = [A, B, C, D, E, W1, W2, W3, W4, W5, W6, W7, W8, W9, W9b, W10, W11, W12];
+// #5259 — 설치는 CI 가 재는 줄의 최신 LTS 를 받는다 · 못 도는 이유를 숨기지 않는다. 사양 표의 행마다 하나.
+const release = (version, lts) => ({ version, date: "2026-10-28", files: ["linux-x64"], lts });
+const L1 = runScenario("L1", { index: [release("v26.13.0", "Lithium"), release("v24.22.2", "Krypton"), release(`v${LINE}.23.4`, "Jod"), release(`v${LINE}.23.3`, "Jod")] });
+const L2 = runScenario("L2", { index: [release("v26.13.0", "Lithium"), release(`v${LINE}.99.0`, false), release("v24.22.2", "Krypton")] }); // 그 줄의 LTS 가 없다
+const L3 = runScenario("L3", { index: [release(`v${LINE}0.1.0`, "Other"), release(`v${LINE}.23.4`, "Jod")] });                               // 경계: 숫자가 이어지는 다른 줄
+const M1 = runScenario("M1", { os: "Linux", tarball: "unrunnable-why" });                                     // 실행 실패 · 물러설 node 없음
+const M2 = runScenario("M2", { systemNode: NEW, wslEnv: WSL, os: "Linux", tarball: "unrunnable-why" });      // 실행 실패 · WSL · 시스템 node 있음
+const M3 = runScenario("M3", { os: "Linux", tarball: "unrunnable" });                                         // 실행 실패인데 이유를 말하지 않음
+const M6 = runScenario("M6", { os: "Linux", tarball: "junk", tarFail: "write failed: No space left on device" });   // 풀기 실패 · tar 가 이유를 말함
+const ALL = [A, B, C, D, E, W1, W2, W3, W4, W5, W6, W7, W8, W9, W9b, W10, W11, W12, L1, L2, L3, M1, M2, M3, M6];
 // current 링크 자체가 남아 있나(가리키는 곳이 없어도 링크면 남은 것) · 전용 런타임 자리에 받다 만 node-* 폴더가 남았나
 const hasCurrentLink = (s) => { try { lstatSync(join(s.rtDir, "current")); return true; } catch { return false; } };
 const leftoverRuntimes = (s) => (existsSync(s.rtDir) ? readdirSync(s.rtDir).filter((n) => /^node-v/.test(n)) : []);
@@ -375,6 +396,47 @@ try {
   check("W12 — current 가 못 쓰는 node(v16)를 가리키면 그 링크를 걷는다(받지 못해도 깨진 링크를 남기지 않는다)",
     reachedCli(W12) && !hasCurrentLink(W12) && W12.ownCalls.every((l) => !/\.(m|c)?js(\s|$)/.test(l)),
     `reachedCli=${reachedCli(W12)} current=${hasCurrentLink(W12)} ownRuns=${JSON.stringify(W12.ownCalls.slice(0, 3))}`);
+
+  // ── #5259 설치가 깔 판 — CI 가 재는 줄의 최신 LTS ──────────────────────────────
+  const fetchedVersions = (s) => s.urls.map((u) => (u.match(/\/(v\d+\.\d+\.\d+)\/node-v/) || [])[1]).filter(Boolean);
+  check("배선 CI 가 재는 Node 줄을 하나로 읽었다", CI_LINES.length === 1 && /^\d+$/.test(LINE || ""), `읽은 줄=${JSON.stringify(CI_LINES)}`);
+  check("배선 L 시나리오가 배포 목록을 실제로 받으러 갔다(목록 스텁이 살아 있다)",
+    [L1, L2, L3].every((s) => s.urls.some((u) => u.endsWith("/index.json"))), JSON.stringify(L1.urls));
+  check("L1 ★ 더 새 LTS 가 있어도 CI 가 재는 줄의 최신 LTS 를 받는다",
+    fetchedVersions(L1).length > 0 && fetchedVersions(L1).every((v) => v === `v${LINE}.23.4`), JSON.stringify(fetchedVersions(L1)));
+  check("L2 ★ 그 줄의 LTS 가 목록에 없으면 그 줄의 고정 폴백을 받는다(다른 줄·LTS 아닌 판을 받지 않는다)",
+    fetchedVersions(L2).length > 0 && fetchedVersions(L2).every((v) => v.startsWith(`v${LINE}.`) && v !== `v${LINE}.99.0`), JSON.stringify(fetchedVersions(L2)));
+  check("L3 경계 — 숫자가 이어지는 다른 줄을 같은 줄로 치지 않는다",
+    fetchedVersions(L3).length > 0 && fetchedVersions(L3).every((v) => v === `v${LINE}.23.4`), JSON.stringify(fetchedVersions(L3)));
+  check("L4 목록을 못 받으면 그 줄의 고정 폴백을 받는다",
+    fetchedVersions(D).length > 0 && fetchedVersions(D).every((v) => v.startsWith(`v${LINE}.`)), JSON.stringify(fetchedVersions(D)));
+  {
+    const sh = readFileSync(BOOTSTRAP, "utf8");
+    const ps1 = readFileSync(join(HERE, "bootstrap.ps1"), "utf8");
+    const of = (src, re) => (src.match(re) || [])[1];
+    const lines = { sh: of(sh, /^NODE_LINE="(\d+)"/m), ps1: of(ps1, /\$NODE_LINE = (\d+)/) };
+    const fallbacks = { sh: of(sh, /^NODE_FALLBACK="v(\d+)\./m), ps1: of(ps1, /\$fallback = "v(\d+)\./) };
+    check("L5 CI·bootstrap.sh·bootstrap.ps1 의 줄이 같다(CI 를 올리면 설치도 함께 올린다)",
+      lines.sh === LINE && lines.ps1 === LINE, `CI=${LINE} ${JSON.stringify(lines)}`);
+    check("L5 고정 폴백도 그 줄에 속한다", fallbacks.sh === LINE && fallbacks.ps1 === LINE, `CI=${LINE} ${JSON.stringify(fallbacks)}`);
+  }
+
+  // ── #5259 런타임 실패의 원인 — 못 도는 이유를 네트워크 탓으로 돌리지 않는다 ──────────
+  check("M1 ★ 받았지만 못 도는 node · 물러설 node 없음 → 멈추고 node 가 말한 이유를 보여 준다",
+    M1.r.status !== 0 && !reachedCli(M1) && M1.err.includes(NODE_WHY), `exit=${M1.r.status} reachedCli=${reachedCli(M1)} stderr=${JSON.stringify(M1.err.slice(-300))}`);
+  check("M1 ★ 네트워크 탓을 하지 않는다 · 직접 설치는 CI 가 재는 줄로 안내한다(기본 LTS 로 보내면 같은 실패로 돌아간다)",
+    !M1.err.includes("네트워크") && (M1.err.split("\n").find((l) => l.includes(NODE_WHY)) || "").includes(`Node ${LINE} `), JSON.stringify(M1.err.slice(-300)));
+  check("M2 ★ WSL · 시스템 node 가 있으면 계속하되 이유를 보여 주고 네트워크 탓을 하지 않는다",
+    reachedCli(M2) && M2.err.includes(NODE_WHY) && !M2.err.includes("네트워크"), `reachedCli=${reachedCli(M2)} stderr=${JSON.stringify(M2.err.slice(-300))}`);
+  check("M2 ★ 물러서는 일은 경고로 눈에 띄게 알린다(훅·MCP 가 PATH 에 기대게 된다)",
+    (M2.err.split("\n").find((l) => l.includes(NODE_WHY)) || "").includes("⚠"), JSON.stringify(M2.err.slice(-300)));
+  check("M3 이유가 비었으면 빈 칸을 남기지 않는다(멈추기는 그대로)",
+    M3.r.status !== 0 && !reachedCli(M3) && !/\(\s*\)/.test(M3.err), JSON.stringify(M3.err.slice(-300)));
+  check("M4 내려받기 실패는 네트워크 안내를 유지한다", D.err.includes("네트워크"), JSON.stringify(D.err.slice(-300)));
+  check("M6 풀기 실패는 tar 가 말한 이유를 보여 준다(디스크 부족을 네트워크 문제로 읽지 않게)",
+    M6.r.status !== 0 && !reachedCli(M6) && M6.err.includes("No space left on device"), JSON.stringify(M6.err.slice(-300)));
+  check("M5 풀기 실패(HTML)도 네트워크·직접 설치 안내를 유지한다",
+    W9b.err.includes("네트워크") && new RegExp(`(^|[^\\d.])${MIN_MAJOR}([^\\d]|$)`).test(W9b.err), JSON.stringify(W9b.err.slice(-300)));
 
   // ── R6 최소 버전 값이 여러 설치 표면에서 일치하는가 ─────────────────────────
   // 구현을 읽지 않고도 검증되도록 관용적인 두 형태만 뽑는다:
