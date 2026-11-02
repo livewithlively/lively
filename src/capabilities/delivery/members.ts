@@ -11,6 +11,7 @@ import { unbindMemberIdentities, workspacePersonIds } from "../../org/store/memb
 import { managedMode } from "../../org/tenancy/state.js";
 import { itemsPool } from "../../db/client.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials } from "../../auth/local-accounts.js";
+import { chooseTempPassword } from "../../auth/temp-password.js";
 // #697 매핑 소급 — 관리탭 멤버 매핑(person_identity) 변경을 이미 미러된 데이터에 즉시 재해소.
 import { reresolveMirrorMembers } from "../../v6/connector-mirror.js";
 import { logger } from "../../log.js";
@@ -152,9 +153,10 @@ export const membersCapabilities: Capability[] = [
       scopes: z.array(z.string()).optional().describe("권한 scope: items|context|memory|db|code|admin|runtime"),
       sort: z.number().optional(),
     }),
-  // ── 구성원 비밀번호 재설정 — 임시 비번 1회 반환(관리자가 멤버에게 전달). 첫 로그인 후 변경 권장(must_change). ──
+  // ── 구성원 비밀번호 재설정 — 임시 비번(관리자가 정하거나 자동 발급). 첫 로그인 후 변경 권장(must_change). ──
+  //  관리자가 정해 주면(여러 사람을 같은 임시 비번으로 한꺼번에 열 때 등) 응답에 다시 싣지 않는다(auth/temp-password.ts).
   restOnly("org_member_reset_password", "구성원 비밀번호 재설정",
-    "구성원의 로컬 로그인 비밀번호를 임시 비번으로 재설정한다(1회 반환). 멤버는 이 비번으로 로그인 후 변경한다.",
+    "구성원의 로컬 로그인 비밀번호를 임시 비번으로 재설정한다. password 를 주면 그 비번으로(관리자가 정한 임시 비번 · 응답에 다시 싣지 않는다), 없으면 자동 발급해 1회 반환한다. 어느 쪽이든 멤버는 이 비번으로 로그인 후 변경한다(첫 로그인 후 변경 권장).",
     [{ method: "POST", paths: ["/api/ui/org/member/reset-password"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = slug(input.id, "id");
@@ -162,11 +164,12 @@ export const membersCapabilities: Capability[] = [
       if (!m) throw new HttpError(404, "구성원을 찾을 수 없습니다");
       if (m.kind !== "human") throw new HttpError(400, "사람(human) 구성원만 로그인 계정을 가질 수 있습니다");
       if (!m.email) throw new HttpError(400, "이메일이 없어 로그인 계정을 만들 수 없습니다 — 먼저 구성원에 이메일을 설정하세요");
-      const password = generateInitialPassword();
+      const { password, echo } = chooseTempPassword(input.password, generateInitialPassword);
       await setMemberPassword(id, password, { mustChange: true, actor: actorOf(user) });
-      return { id, password };
+      return echo ? { id, password } : { id, mustChange: true };
     }, {
       id: z.string().describe("구성원 id(불변 내부키) — human 이고 이메일이 있어야 로그인 계정이 성립"),
+      password: z.string().optional().describe("관리자가 정한 임시 비번(8~128자 · 제어 문자 없음) — 주면 그 비번으로 바꾸고 응답에 다시 싣지 않는다. 생략하면 자동 발급(1회 반환). 어느 쪽이든 첫 로그인 후 변경 권장"),
     }),
   restOnly("org_member_remove", "구성원 제거",
     "org_member 에서 구성원을 제거한다(person 행은 참조무결성 위해 보존).",
