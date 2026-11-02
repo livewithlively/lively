@@ -2,6 +2,7 @@
 //  미증류 source(slack/gmail 등 raw)를 LLM 이 지식으로 자동증류 — 증류기(#1289) 스코프·기준·형식 + 배치 선정 로직 포함.
 import { resolveSessionTmux, injectToSession, resolveJobRunner, explicitRunner, HEADLESS_REQUESTER_MISSING, headlessRun, headlessHarness, enqueueHeadlessTask } from "./_headless.js";
 import { logger } from "../../log.js";
+import { BINARY_TRIAGE_RULE } from "../../org/distill/binary-triage.js";
 import type { DistillerRow } from "../../org/distill/distiller.js";
 
 // 자료 distill 주입(#541) — map_unmapped 의 자료판. 미증류 source 가 있을 때만 상시세션에 distill 프롬프트 주입.
@@ -399,7 +400,7 @@ function buildDistillPrompt(count: number, policySummary: string, targeted = fal
     (targeted
       ? `② 위에 지정된 대상 자료만 다뤄 — 목록을 새로 조회하지 마(source_undistilled 금지). `
       : `② source_undistilled 로 아직 지식화 안 된 자료 목록을 가져와(최근순). `) +
-    `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — 스텁의 filename·mime·channel 로 **볼 가치부터 판단**하고(밈·UI캡처·스크린샷 등 노이즈면 fetch 없이 skip), 가치 있으면 source_artifact(source_id)로 원본을 임시경로에 받아 그 path 를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 내용을 확보해(unavailable=삭제/이동이면 skip). 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
+    `③ 각 자료를 source_get(id)으로 전문을 읽어. 본문이 '[BINARY]' 로 시작하면 바이너리(PDF·이미지 등, 내용 미추출) — ${BINARY_TRIAGE_RULE} 얻은 전문(또는 텍스트 자료 본문)이 재사용 가능한 지식(결정·합의·사실·런북·중요정보)인지 판단해. ` +
     `④ 가치 있으면 knowledge_similar 로 중복 확인 → 없으면 knowledge_save 로 증류(명확한 제목+전문, 어느 자료에서 왔는지 명시, category=내용에 맞는 도메인, type 지정). ` +
     `⑤ ⚠ 자동화 허용선 — 저장 전 이 지식을 정책에 대입해 lifecycle 을 정해. ${policySummary} lifecycle='pending' 으로 저장하면 오너 검토 큐로 격리돼(승인 전엔 검색·주입에 안 뜸), 승인되면 active. drop 이면 저장하지 마(skip). ` +
     `⑥ knowledge_save 에 derived_from:[이 지식이 나온 자료 id 전부] 를 꼭 실어 — 저장과 자료↔지식 연결이 한 번에 된다(따로 source_link_knowledge 를 부르지 마). 잠긴 자료(볼 수 있는 사람만)의 내용은 더 넓게 보이는 기존 지식에 합치지 말고 새 지식으로 따로 써(합치면 서버가 409 로 거절한다). ` +

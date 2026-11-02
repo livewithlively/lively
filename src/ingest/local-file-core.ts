@@ -62,7 +62,8 @@ const TEXT_EXT = new Set([
   "swift", "sh", "bash", "zsh", "ps1", "sql", "css", "scss", "less", "vue", "svelte", "dart", "r", "scala", "lua", "pl",
 ]);
 // Claude Read 가 네이티브로 읽는 것(PDF·이미지) — [BINARY] 스텁 → 증류 세션이 source_artifact 로 on-demand.
-const VISION_EXT = new Set(["pdf", "png", "jpg", "jpeg", "gif", "webp"]);
+//  HEIC 는 원본 그대로 자료가 되고, 읽을 때 source_artifact 가 JPEG 로 바꾼다(아이폰 사진이 등록조차 안 되던 자리).
+const VISION_EXT = new Set(["pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "heif"]);
 // 읽을 방법이 없는 문서 형식 — 스텁은 남기되 "fetch 해도 소용없다"를 적는다(증류 요약에 안내가 찍히게).
 //  ⚠ .hwp 는 2026-09-09 에 여기서 빠졌다(#3778) — OLE2 컨테이너를 열고 BodyText 레코드를 풀면 본문이 나온다
 //   (connectors/hwp.ts). 「읽을 방법이 없다」가 사실이 아니었던 것이지 형식이 바뀐 게 아니다.
@@ -75,7 +76,7 @@ const UNREADABLE_EXT: Record<string, string> = {
 const SKIP_EXT = new Set([
   "exe", "dll", "so", "dylib", "app", "pkg", "msi", "dmg", "iso", "bin", "img", "jar", "war", "class", "o", "a", "lib", "pyc",
   "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "lz4", "zst",
-  "mp4", "mov", "avi", "mkv", "webm", "mp3", "m4a", "wav", "flac", "aac", "ogg", "wma", "heic", "tif", "tiff", "bmp", "psd", "ai",
+  "mp4", "mov", "avi", "mkv", "webm", "mp3", "m4a", "wav", "flac", "aac", "ogg", "wma", "tif", "tiff", "bmp", "psd", "ai",
   "db", "sqlite", "sqlite3", "lock", "map", "woff", "woff2", "ttf", "otf", "eot", "ico", "icns",
 ]);
 const SKIP_DIRS = new Set(["node_modules", "__pycache__"]);
@@ -121,7 +122,7 @@ export function localFileUrl(root: LocalRoot, rel: string, folder?: string | nul
 }
 
 const MIME: Record<string, string> = {
-  pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", heic: "image/heic", heif: "image/heif",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

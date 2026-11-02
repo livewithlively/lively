@@ -269,14 +269,17 @@ const sourceUndistilled: Capability = {
 // 바이너리 자료([BINARY] 스텁 — PDF·이미지 등)의 원본을 on-demand 로 임시경로에 받아 돌려준다(#541). distill 세션이
 //  Read(Claude 네이티브 PDF·이미지 파싱)해 내용 확보. 커넥터가 sync 시 전량 저장(eager)하지 않아 스토리지 절약 —
 //  distill 이 볼 가치 있다고 판단한 것만 이 도구로 페치. 삭제/이동/미지원이면 에러(→ 그 자료 skip).
-const sourceArtifactInput = { source_id: z.number().int().positive() };
+const sourceArtifactInput = {
+  source_id: z.number().int().positive(),
+  preview: z.boolean().optional().describe("true 면 PNG·JPEG·HEIC 를 긴 변 768px 로 줄인 JPEG 로 준다 — 파일명으로 값어치를 모르는 사진을 싸게 한 번 볼 때. 내용을 읽으려면 preview 없이 다시 부른다"),
+};
 type SourceArtifactInput = z.infer<z.ZodObject<typeof sourceArtifactInput>>;
 const sourceArtifact: Capability = {
   name: "source_artifact",
   mutates: false, // 읽기전용(#1007): MCP전용 읽기 — 자료 원본을 임시경로에 받아 경로 반환(스토어 쓰기 없음). 파생 신호 부재라 명시.
   title: "자료 원본(on-demand)",
   description:
-    "바이너리 자료([BINARY] 스텁 — PDF·이미지 등)의 원본을 커넥터에서 on-demand 로 내려받아 짧은 TTL 임시경로에 저장하고 그 경로를 돌려준다({path,mime,bytes,expires_at}). distill 세션이 이 경로를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 실제 내용을 확보한다. 원본이 삭제/이동/권한상실이면 unavailable 에러(→ 그 자료 skip). 저장은 transient(수 시간 GC) — 커넥터 무관 공용(slack/gdrive/…).",
+    "바이너리 자료([BINARY] 스텁 — PDF·이미지 등)의 원본을 커넥터에서 on-demand 로 내려받아 짧은 TTL 임시경로에 저장하고 그 경로를 돌려준다({path,mime,bytes,expires_at}). distill 세션이 이 경로를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 실제 내용을 확보한다. 원본이 삭제/이동/권한상실이면 unavailable 에러(→ 그 자료 skip). HEIC 는 JPEG 로 바꿔 준다. 저장은 transient(수 시간 GC) — 커넥터 무관 공용(slack/gdrive/…).",
   scope: "memory",
   input: sourceArtifactInput,
   expose: { mcp: true, rest: false }, // MCP 전용 — 서버-로컬 경로 반환(같은 호스트의 distill 세션이 Read).
@@ -286,7 +289,7 @@ const sourceArtifact: Capability = {
     await assertSourceInAppContext(input.source_id, ctx?.viewer ?? null, user, ctx, "source_artifact");   // #5100 앱 맥락 범위 — 같은 까닭
     await assertSourceVisible(input.source_id, ctx?.viewer ?? null);
     const { materializeSourceArtifact } = await import("../v6/source-artifact.js");
-    return await materializeSourceArtifact(input.source_id);
+    return await materializeSourceArtifact(input.source_id, { preview: input.preview });
   },
 };
 
