@@ -10,6 +10,7 @@
 //    다른 증류기 몫을 침범한다.
 //  · **빈 설정이 지시 공백이 되면 안 된다** — 조직 공통 기본으로 메운다. 배타인 두 지시를 동시에 보내지 않는다.
 import assert from "node:assert/strict";
+import { BINARY_TRIAGE_RULE } from "./binary-triage.js";
 import {
   Params, distillerScopeSql, distillerExclusiveSql, higherThan, isAutoDisabledLane,
   buildDistillerPrompt, describeScope, composeDistillPrompt,
@@ -1145,3 +1146,16 @@ t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) —
   assert.notEqual(audienceGroupKey({ visibility: 'members', aud_key: '' }), audienceGroupKey(open1));
   console.log('ok  #4824 배치: 볼 수 있는 사람이 같은 자료끼리');
 }
+
+t("[BINARY] 판정: AI 세션 파일만 머리줄에 표시 · 이름 모르는 사진은 미리보기 · 절차에 규칙이 실린다", () => {
+  const made = buildSourceDigest([{ id: 1, title: 'a.png', body_md: '[BINARY]', fields: { entry: 'generated' } }]);
+  const human = buildSourceDigest([{ id: 2, title: 'IMG_1.jpg', body_md: '[BINARY]', fields: { entry: 'upload' } }]);
+  const slack = buildSourceDigest([{ id: 3, title: 'b.png', body_md: '[BINARY]', fields: {} }]);
+  assert.ok(made.includes("AI 세션이 만든 파일"));
+  assert.ok(!human.includes("AI 세션이 만든 파일"));
+  assert.ok(!slack.includes("AI 세션이 만든 파일"), "표시가 없으면 사람 자료로 본다 — 슬랙 그림이 밀려나지 않게");
+  assert.ok(BINARY_TRIAGE_RULE.includes("preview:true"));
+  assert.ok(BINARY_TRIAGE_RULE.includes("이름만으로 skip 하지 말고"));
+  const procedure = distillerSectionViews(mk(), SOPT).find((x) => x.id === "procedure")!;
+  assert.ok(JSON.stringify(procedure).includes("preview:true"));
+});
