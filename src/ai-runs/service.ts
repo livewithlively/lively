@@ -34,6 +34,7 @@ import { narrowAllowlist } from "../apps/app-job-tools.js";
 import type { AiRunPolicy } from "../org/policies/ai-run-policy.js";
 import type { AgentJobRow, NewAgentJob } from "../agent-jobs/store.js";
 import { EFFORT_LEVELS, RUNNER_GATEWAY_URL, isEffort, type Effort } from "../agent-jobs/runner.js";
+import { STEPS_MAX } from "../agent-jobs/plan.js";
 import { RateWindow } from "../apps/app-chat-send.js";
 import { isExternalExecutionSessionId } from "../org/auth/agent-identity.js";
 import {
@@ -144,6 +145,8 @@ export interface AiRunDeps {
   /** 그 작업 행의 생각 깊이(agent-jobs/store.agentJobEffort) — 이어받기(안 주면) · 형식 재시도가 싣는다. 못 읽으면 던진다.
    *  필수다 — 배선이 빠지면 이어받은 턴 · 재시도 턴이 말없이 기본 깊이로 돈다. */
   jobEffort(jobId: number): Promise<Effort | null>;
+  /** 그 작업 행의 도구 호출 단계(agent-jobs/store.agentJobSteps) — 작업 실행 하나 보기가 싣는다. 없으면 null. */
+  jobSteps(jobId: number): Promise<unknown[] | null>;
   /** 지금 열린 프록시 호출 수를 세는 자리(워크스페이스 동시 상한). */
   inflight: { take(key: string, max: number): boolean; release(key: string): void; count(key: string): number };
   rate: RateWindow;
@@ -207,10 +210,12 @@ function head(r: AiRunRow | AiRunSummaryRow, effort: string | null): Record<stri
  *  resume(#5101) — 이 실행이 이어받은 줄(어느 실행 · 처음 실행 · 몇 번째 · 까닭). 준 자리(접수 · 하나 보기)에만 싣는다 — 까닭은 지시처럼 보낸 사람에게만.
  *  effort — 실행 행의 기록(store.aiRunEffort). 필수다 — 실행을 돌려주는 자리(접수 · 보기 · 취소)가 빠뜨리면 준 깊이가 없는 것처럼 보인다.
  */
-export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null; effort: string | null }): Record<string, unknown> {
+export function publicRun(r: AiRunRow, o: { own: boolean; withPrompt?: boolean; resume?: ResumeLink | null; effort: string | null; steps?: unknown[] | null }): Record<string, unknown> {
   return {
     ...head(r, o.effort),
     ...(o.own ? { result: r.result, session_note: r.session_note } : { has_result: r.result !== null }),
+    //  작업 컨테이너 실행의 도구 호출 단계(작업 행 steps — 이름 · 입력 앞머리 · 시작 · 끝 · 오류). 본인에게만, 하나 보기(getRunFor)가 줄 때만.
+    ...(o.own && Array.isArray(o.steps) ? { steps: o.steps } : {}),
     ...(o.own && o.withPrompt ? { prompt: r.prompt, system: r.system_prompt, schema: r.schema } : {}),
     ...(o.resume !== undefined ? { resume: o.resume ? { of: o.resume.of, root: o.resume.root, depth: o.resume.depth, ...(o.own ? { reason: o.resume.reason } : {}) } : null } : {}),
   };
@@ -822,12 +827,28 @@ async function sharedSeatRunFor(r: Pick<AiRunRow, "id" | "requester" | "account_
   return d.store.aiRunSharedSeat(r.id);
 }
 
+/**
+ * 실행의 도구 호출 단계(작업 행 — 곁기록이라 못 읽은 쪽은 빼고 준다 · 실행 보기를 막지 않는다).
+ *  형식 재시도(syncRun · 한 번)는 실행을 재시도 작업으로 갈아 끼운다(job_id) — 앞 작업의 단계를 앞에 잇는다. 도구를 쓴 턴은 대개 앞 작업이라, 안 이으면 재시도가 나가는 순간 목록이 빈다.
+ *  이어받은 실행의 앞 작업(retries 0 의 resume_job_id)은 다른 실행의 것이라 잇지 않는다.
+ */
+async function runSteps(jobId: number, retries: number, d: AiRunDeps): Promise<unknown[]> {
+  const read = async (id: number): Promise<unknown[]> => (await d.jobSteps(id).catch(() => null)) ?? [];
+  const last = await read(jobId);
+  if (retries < 1) return last;
+  const first = (await d.getJob(jobId).catch(() => null))?.resume_job_id;
+  return first != null ? [...await read(first), ...last].slice(-STEPS_MAX) : last;
+}
+
 export async function getRunFor(id: number, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {
   let row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAiRun(id) : null;
   const shared = row ? await sharedSeatRunFor(row, user, d) : false;
   if (!row || !canSeeRun(row, user, d, shared)) throw new HttpError(404, "없는 실행입니다");
   if (row.executor === "job" && !isEndedRun(row.status)) row = (await syncRun(row, d)) ?? row;
-  return publicRun(row, { own: isOwnRun(row, user, shared), withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id) });
+  const own = isOwnRun(row, user, shared);
+  //  작업 컨테이너 실행이면 도구 호출 단계를 함께 준다(본인만) — 도는 동안에도 판의 박동마다 늘어난다.
+  const steps = own && row.executor === "job" && row.job_id != null ? await runSteps(row.job_id, row.retries, d) : null;
+  return publicRun(row, { own, withPrompt: true, resume: await d.store.aiRunResumeLink(row.id), effort: await d.store.aiRunEffort(row.id), steps });
 }
 
 export async function listRunsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AiRunDeps): Promise<Record<string, unknown>> {

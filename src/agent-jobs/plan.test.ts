@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   planClaims, sweepDecision, timeoutSecOf, finalOutcome, parseRunnerReport, jobSessionId, appFolderCwd, projectFolderCwd,
   convIdOf, parseBootFailure, bootFailureError, appServerOwnJobRefusal, homelessJobRefusal, jobAppTokenOpts, jobIdentityMember, sharedSeatJobRefusal, HOMELESS_OS_USER, JOB_SESSION_ID_RE,
-  TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts, TRANSCRIPT_NOTE_MAX,
+  TIMEOUT_GRACE_SEC, RESULT_TEXT_MAX, TAIL_MAX, type RunnerReport, type SharedSeatJobFacts, type SweepFacts, TRANSCRIPT_NOTE_MAX, parseSteps, STEP_INPUT_MAX, STEPS_MAX,
 } from "./plan.js";
 import { memberSlug, osUsername } from "../terminal/terminal-isolation.js";
 import { seatShared } from "../ai-runs/plan.js";
@@ -283,9 +283,26 @@ t("P1 판 보고는 칸마다 거르고 자른다 — 대화 id 모양 · 긴 �
   assert.deepEqual(r.result?.usage, { input_tokens: 5 });
   assert.equal(r.stderr_tail, "");
   assert.equal(r.tail.length, TAIL_MAX);
-  assert.deepEqual(parseRunnerReport(null), { exit_code: null, signal: null, stopped: null, conversation_id: null, model: null, result: null, stderr_tail: "", tail: "", transcript_note: null });
+  assert.deepEqual(parseRunnerReport(null), { exit_code: null, signal: null, stopped: null, conversation_id: null, model: null, result: null, stderr_tail: "", tail: "", transcript_note: null, steps: null });
   const uuid = "0A1B2C3D-0000-4000-8000-000000000000";
   assert.equal(convIdOf(uuid), uuid.toLowerCase());
+});
+
+t("P2 도구 호출 단계 — 모양이 맞는 것만(이름 · 시작 시각) · 칸마다 자르고 거른다 · 최근 STEPS_MAX 개 · 배열이 아니면 null(저장된 단계를 덮지 않게)", () => {
+  assert.equal(parseSteps(undefined), null);
+  assert.equal(parseSteps("x"), null);
+  assert.equal(parseSteps({ name: "x" }), null);
+  assert.deepEqual(parseSteps([]), []);
+  const ok = { id: "toolu_1", name: "mcp__lively__knowledge_search", input: "{\"q\":\"검색어\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: "2026-11-02T08:00:01.250Z", is_error: false };
+  const odd = { id: 7, name: "z\u0000", input: "i".repeat(500), started_at: "2026-11-02T17:00:02+09:00", ended_at: "모름", is_error: "yes" };
+  const out = parseSteps([ok, { name: "", started_at: ok.started_at }, { name: "x" }, { name: "y", started_at: "어제" }, null, [1], { name: 3, started_at: ok.started_at }, odd]);
+  assert.deepEqual(out, [ok, { id: null, name: "z", input: "i".repeat(STEP_INPUT_MAX), started_at: "2026-11-02T08:00:02.000Z", ended_at: null, is_error: false }]);
+  const many = Array.from({ length: STEPS_MAX + 5 }, (_, i) => ({ name: `t${i}`, started_at: ok.started_at }));
+  const m = parseSteps(many)!;
+  assert.equal(m.length, STEPS_MAX);
+  assert.equal(m[0].name, "t5", "넘치면 최근 것만 남긴다");
+  assert.equal(parseRunnerReport({ steps: [ok] }).steps?.length, 1);
+  assert.equal(parseRunnerReport({}).steps, null);
 });
 
 // ── 이름 · 자리 ──────────────────────────────────────────────────────────────

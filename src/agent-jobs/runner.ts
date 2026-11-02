@@ -89,6 +89,9 @@ export interface RunnerJob {
   tailMax: number;
   resultMax: number;
   stderrMax: number;
+  /** 도구 호출 단계 — 싣는 최근 단계 수 · 단계 하나의 입력 앞머리 길이(plan.ts STEPS_MAX · STEP_INPUT_MAX). 없으면(옛 게이트웨이) 판의 기본값. */
+  stepsMax?: number;
+  stepInputMax?: number;
   /**
    * #5101 API 키 작업(과 #5082 도커 실행면의 구독 작업) — 끝에 대화 기록 묶음(설정 폴더 projects/ 아래 파일 전부 · gzip)을 올린다(/transcript · 결과보다
    *  먼저). 그 작업의 빈 설정 폴더(구독 작업은 덮은 projects/)는 끝나면 사라져, 올리지 않으면 그 대화를 이어받을 수 없다. 압축한 크기가 이 값을 넘으면
@@ -254,6 +257,23 @@ const saveTranscript = async () => {
 };
 const tail = [];
 const pushTail = (s) => { tail.push(String(s).slice(0, 2000)); let n = tail.reduce((a, x) => a + x.length + 1, 0); while (tail.length > 1 && n > J.tailMax) { n -= tail.shift().length + 1; } };
+// 도구 호출 단계 — tool_use 를 본 때 시작, 같은 id 의 tool_result 를 본 때 끝(하네스가 줄을 내는 대로 읽으므로 그 사이가 곧 호출에 걸린 시간이다).
+//  이름 · 입력 앞머리 · 시각 · 오류만 싣는다(도구 결과 글은 싣지 않는다). 최근 STEPS_MAX 개만 — 넘치면 오래된 것부터 버린다. 박동 · 결과에 함께 보낸다.
+const STEPS_MAX = J.stepsMax > 0 ? J.stepsMax : 200, STEP_INPUT_MAX = J.stepInputMax > 0 ? J.stepInputMax : 160;
+const steps = [], stepById = new Map();
+const preview = (v) => { let t = ""; try { t = typeof v === "string" ? v : JSON.stringify(v); } catch (e) {} return String(t == null ? "" : t).slice(0, STEP_INPUT_MAX); };
+const onToolUse = (c) => {
+  const st = { id: typeof c.id === "string" ? c.id : null, name: String(c.name || "?").slice(0, 120), input: preview(c.input), started_at: new Date().toISOString(), ended_at: null, is_error: false };
+  steps.push(st);
+  if (st.id) stepById.set(st.id, st);
+  while (steps.length > STEPS_MAX) { const old = steps.shift(); if (old.id) stepById.delete(old.id); }
+};
+const onToolResult = (c) => {
+  const st = typeof c.tool_use_id === "string" ? stepById.get(c.tool_use_id) : null;
+  if (!st || st.ended_at) return;
+  st.ended_at = new Date().toISOString();
+  st.is_error = c.is_error === true;
+};
 const onLine = (line) => {
   if (!line.trim()) return;
   events++;
@@ -263,8 +283,11 @@ const onLine = (line) => {
   if (ev && ev.type === "assistant" && ev.message && Array.isArray(ev.message.content)) {
     for (const c of ev.message.content) {
       if (c && c.type === "text" && c.text) pushTail(c.text);
-      else if (c && c.type === "tool_use") pushTail("▸ " + c.name);
+      else if (c && c.type === "tool_use") { pushTail("▸ " + c.name); onToolUse(c); }
     }
+  }
+  if (ev && ev.type === "user" && ev.message && Array.isArray(ev.message.content)) {
+    for (const c of ev.message.content) if (c && c.type === "tool_result") onToolResult(c);
   }
 };
 let child;
@@ -291,14 +314,14 @@ const finish = async (code, signal) => {
     usage: last.usage && typeof last.usage === "object" ? last.usage : null,
   } : null;
   await saveTranscript();
-  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null }, 24);
+  await call("result", { exit_code: code, signal: signal || null, stopped, conversation_id: conv, model, result: r, stderr_tail: errTail.slice(-J.stderrMax), tail: tail.join("\n"), transcript_note: tNote ? tNote.slice(-1000) : null, steps }, 24);
   clearInterval(ticker);
   try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
   process.exit(0);
 };
 const deadline = setTimeout(() => kill("timeout"), J.timeoutMs);
 const ticker = setInterval(async () => {
-  const r = await call("tick", { events, tail: tail.join("\n"), conversation_id: conv, model }, 1);
+  const r = await call("tick", { events, tail: tail.join("\n"), conversation_id: conv, model, steps }, 1);
   if (r && (r.cancel === true || r.gone === true)) kill("canceled");
 }, J.tickMs);
 if (!child) { finish(127, null); }

@@ -35,9 +35,9 @@ import type { LivelyUser } from "../context.js";
 import { resolveAgentJobPolicy, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 import { isAppScreenSource } from "../apps/app-screen-sources.js";
 import {
-  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
-  jobSessionId, noNul, parseBootFailure, parseRunnerReport, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
-  PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX,
+  LABEL_MAX, PROMPT_MAX, RESULT_TEXT_MAX, STDERR_TAIL_MAX, STEP_INPUT_MAX, STEPS_MAX, TAIL_MAX, TICK_MS, appFolderCwd, bootFailureError, convIdOf, finalOutcome, isEnded,
+  jobSessionId, noNul, parseBootFailure, parseRunnerReport, parseSteps, projectFolderCwd, sharedSeatJobRefusal, sweepDecision, timeoutSecOf, APP_ID_RE, JOB_SESSION_ID_RE,
+  PRUNE_BATCH, PRUNE_ROUNDS_MAX, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX, type AgentJobStep,
 } from "./plan.js";
 import { MODEL_RE, RUNNER_SOURCE, claudeJobArgv, type Effort, type RunnerJob } from "./runner.js";
 import { BROKER_GATEWAY, type PaneView } from "./surface.js";
@@ -49,7 +49,7 @@ export interface AgentJobDeps {
   store: Pick<Store, "insertAgentJob" | "claimAgentJobs" | "getAgentJob" | "getAgentJobAuth" | "bootAgentJob" | "setAgentJobMcpToken" | "tickAgentJob"
     | "finishAgentJob" | "requeueAgentJob" | "requestCancelAgentJob" | "openAgentJobs" | "markAgentJobReaped" | "listAgentJobs" | "queuePosition"
     | "isAgentJobToken" | "newJobSecret" | "secretMatches" | "pruneAgentJobs" | "failBootAgentJob" | "agentJobPolicyRow" | "agentJobSharedSeat"
-    | "setAgentJobTranscript" | "agentJobTranscript" | "agentJobTranscriptConv" | "pruneAgentJobTranscripts">;
+    | "setAgentJobTranscript" | "agentJobTranscript" | "agentJobTranscriptConv" | "pruneAgentJobTranscripts" | "setAgentJobSteps" | "agentJobSteps">;
   policy(): Promise<AgentJobPolicy>;
   /** 작업 판을 띄울 수 있는 배포인가(매니지드 브로커 · 셀프호스트 박스 위 실행면 — surface.ts). */
   available(): Promise<boolean>;
@@ -190,11 +190,13 @@ function jobHead(r: AgentJobSummaryRow | AgentJobRow): Record<string, unknown> {
 /**
  * 앱이 보는 작업 모양 — 비밀은 늘 빼고, 답·진행 꼬리는 보낸 사람 본인(own)에게만 싣는다(관리자는 상태·오류만 — 머리말).
  *  프롬프트는 본인이 하나 보기(agent_job_get)로 물을 때만(withPrompt) — 접수·취소 응답엔 싣지 않는다(최대 10만 자).
+ *  도구 호출 단계도 하나 보기가 읽어 줄 때만(steps — 행 밖 칸 · store.STEPS_COL) · 본인에게만 · 없으면 빈 배열.
  */
-export function publicJob(r: AgentJobRow, o: { own: boolean; withPrompt?: boolean; position?: number | null }): Record<string, unknown> {
+export function publicJob(r: AgentJobRow, o: { own: boolean; withPrompt?: boolean; position?: number | null; steps?: AgentJobStep[] | null }): Record<string, unknown> {
   return {
     ...jobHead(r),
     ...(o.own ? { result: r.result, output_tail: r.output_tail } : { has_result: r.result !== null }),
+    ...(o.own && o.steps !== undefined ? { steps: o.steps ?? [] } : {}),
     ...(o.own && o.withPrompt ? { prompt: r.prompt } : {}),
     ...(o.position != null ? { queue_position: o.position } : {}),
   };
@@ -464,7 +466,7 @@ export async function onBoot(id: number, presented: string, d: AgentJobDeps): Pr
     id: booted.id, secret: callback.secret, code: RUNNER_SOURCE,
     argv: claudeJobArgv({ model: booted.model, effort, resume: booted.resume_conversation, mcp: !booted.bare, bare: booted.bare, system: !!system, mcpOnly }),
     prompt: booted.prompt, mcp, env, cwd: view.cwd, ...(system ? { system } : {}),
-    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX,
+    timeoutMs: booted.timeout_sec * 1000, tickMs: TICK_MS, tailMax: TAIL_MAX, resultMax: RESULT_TEXT_MAX, stderrMax: STDERR_TAIL_MAX, stepsMax: STEPS_MAX, stepInputMax: STEP_INPUT_MAX,
     //  #5101 API 키 작업(#5082 도커 실행면이면 구독 작업도)만 — 끝에 대화 기록 묶음을 올린다(빈 설정 폴더 · 덮은 projects/ 가 끝나면 사라진다 ·
     //   관리자가 보관을 껐으면 안 올린다) · 이어받는 작업이면 앞 기록을 되돌려 놓는다(풀기 상한은 둘 다).
     ...(bundledTranscript(booted.account_kind, d) && (await transcriptKept(d)) ? { transcriptMax: TRANSCRIPT_GZ_MAX } : {}),
@@ -550,7 +552,14 @@ export async function onTick(id: number, presented: string, body: unknown, d: Ag
   const tail = typeof b.tail === "string" ? noNul(b.tail).slice(-TAIL_MAX) : "";
   const r = await d.store.tickAgentJob(id, { tail, conversationId: convIdOf(b.conversation_id) });
   if (!r) throw new HttpError(410, "끝난 작업입니다");
+  await saveSteps(id, parseSteps(b.steps), d);
   return r;
+}
+
+/** 판이 보낸 도구 호출 단계를 적는다 — 곁기록이라 못 적어도 박동 · 결과 보고를 막지 않는다(결과 보고가 실패하면 답이 사라진다). 안 보냈거나(옛 판) 비었으면 그대로 둔다. */
+async function saveSteps(id: number, steps: AgentJobStep[] | null | undefined, d: AgentJobDeps): Promise<void> {
+  if (!steps?.length) return;
+  await d.store.setAgentJobSteps(id, steps).catch((e) => logger.warn({ err: e, job: id }, "[agent-job] 도구 호출 단계를 적지 못했다"));
 }
 
 /** 판의 마지막 보고 — 상태·답을 적고, 조금 뒤 걷고, 다음 대기 작업을 띄운다. */
@@ -563,6 +572,7 @@ export async function onResult(id: number, presented: string, body: unknown, d: 
     duration_ms: rep.result.duration_ms, cost_usd: rep.result.cost_usd, usage: rep.result.usage, model: rep.model,
     truncated: (rep.result.text?.length ?? 0) >= RESULT_TEXT_MAX,
   } : null;
+  await saveSteps(id, rep.steps, d);   // 끝내기 전에 — 끝난 작업으로 보인 뒤에는 단계가 바뀌지 않는다(적기는 도는 작업에만)
   const ended = await d.store.finishAgentJob(id, {
     status: out.status, error: out.error, result, exitCode: rep.exit_code, conversationId: rep.conversation_id, tail: rep.tail, from: ["running"],
   });
@@ -730,7 +740,9 @@ export async function getAgentJobFor(id: number, user: LivelyUser, d: AgentJobDe
   const row = Number.isSafeInteger(id) && id > 0 ? await d.store.getAgentJob(id) : null;
   if (!row || !canSeeJob(row, user, await sharedSeatJobFor(row, user, d))) throw new HttpError(404, "없는 작업입니다");
   const position = row.status === "queued" ? await d.store.queuePosition(row.id).catch(() => null) : null;
-  return publicJob(row, { own: row.requester === memberOf(user), withPrompt: true, position });
+  const own = row.requester === memberOf(user);
+  const steps = own ? await d.store.agentJobSteps(row.id).catch(() => null) : null;
+  return publicJob(row, { own, withPrompt: true, position, steps });
 }
 
 export async function listAgentJobsFor(f: { app_id?: unknown; status?: unknown; limit?: unknown }, user: LivelyUser, d: AgentJobDeps): Promise<Record<string, unknown>> {

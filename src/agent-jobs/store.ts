@@ -3,7 +3,7 @@
 //  상태를 바꾸는 쓰기는 전부 «지금 상태가 이것일 때만» 조건을 단다 — 청/녹 두 슬롯·감시·판 보고가 겹쳐도 한 번만 넘어간다.
 import crypto from "node:crypto";
 import { itemsPool, q, withTx } from "../db/client.js";
-import { planClaims, PRUNE_BATCH, type AgentJobStatus, type ClaimCandidate } from "./plan.js";
+import { planClaims, PRUNE_BATCH, type AgentJobStatus, type AgentJobStep, type ClaimCandidate } from "./plan.js";
 import { EFFORT_LEVELS, isEffort, type Effort } from "./runner.js";
 import { AGENT_JOB_POLICY_RANGE, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
@@ -333,6 +333,33 @@ export async function agentJobTranscriptConv(id: number): Promise<string | null>
     throw e;
   }
 }
+
+/**
+ * 도구 호출 단계(org_agent_job.steps — 판이 박동 · 결과에 싣는 plan.AgentJobStep 목록)도 COLS 에 넣지 않고 따로 읽고 쓴다 — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  칸이 아직 없으면(42703) 적지 않고(false) · 없는 것으로 읽는다(null). 도는 작업에만 적는다 — 결과 보고는 끝내기 전에 적어, 끝난 작업의 단계는 바뀌지 않는다.
+ */
+export const STEPS_COL = "steps";
+export async function setAgentJobSteps(id: number, steps: AgentJobStep[]): Promise<boolean> {
+  try {
+    const r = await q(itemsPool, `UPDATE org_agent_job SET ${STEPS_COL}=$2::jsonb, updated_at=now() WHERE id=$1 AND status='running' RETURNING id`, [id, JSON.stringify(steps)]);
+    return r.length > 0;
+  } catch (e) {
+    if (undefinedColumn(e)) return false;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+/** 그 작업의 도구 호출 단계 — 판이 아직 보내지 않았거나(옛 판 · 도구를 안 씀) 없는 작업이면 null. */
+export async function agentJobSteps(id: number): Promise<AgentJobStep[] | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  try {
+    const v = (await q(itemsPool, `SELECT ${STEPS_COL} AS s FROM org_agent_job WHERE id=$1`, [id]))[0]?.s;
+    return Array.isArray(v) ? v as AgentJobStep[] : null;
+  } catch (e) {
+    if (undefinedColumn(e)) return null;   // 마이그레이션 전(머리말)
+    throw e;
+  }
+}
+
 /**
  * 보존 기간(정책 transcript_keep_days)이 지난 대화 기록을 비운다 — 행은 남는다(행째 지우기는 keep_days · pruneAgentJobs). 돌려주는 것: 비운 행 수.
  *  끝난 작업만(도는 작업의 기록은 끝난 뒤에야 센다). keepDays 0 = 보관 안 함 — 끝난 작업의 기록을 모두 비운다(관리자가 보관을 끈 뒤 남은 것). 음수는 아무것도 안 한다.

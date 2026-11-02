@@ -13,7 +13,7 @@ import {
   enqueueAgentJob, publicJob,
   REAP_DELAY_MS, REAP_GIVE_UP_MS, MAX_LAUNCH_ATTEMPTS, LAUNCH_RETRY_GAP_SEC, stoppedReason, type AgentJobDeps,
 } from "./service.js";
-import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX } from "./plan.js";
+import { planClaims, TRANSCRIPT_GZ_MAX, TRANSCRIPT_RAW_MAX, STEP_INPUT_MAX, STEPS_MAX, type AgentJobStep } from "./plan.js";
 import { EFFORT_LEVELS, MCP_CONFIG_PLACEHOLDER, RUNNER_SOURCE, SYSTEM_PROMPT_PLACEHOLDER, type Effort } from "./runner.js";
 import { hashJobSecret, secretMatches, type AgentJobRow, type NewAgentJob } from "./store.js";
 import { DEFAULT_AGENT_JOB_POLICY, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
@@ -78,6 +78,10 @@ interface World {
   /** #5101 API 키 작업의 대화 기록(COLS 밖 칸 — 행 모양에 없다) · 기록 정리가 넘긴 보존 일수들. */
   transcripts: Map<number, { conv: string; gz: Buffer; raw: number }>;
   prunedTranscriptsWith: number[];
+  /** 도구 호출 단계(COLS 밖 칸 — 행 모양에 없다) · 적기 · 읽기가 던지나. */
+  steps: Map<number, AgentJobStep[]>;
+  stepsWriteThrows: boolean;
+  stepsReadThrows: boolean;
   drain(maxMs?: number): Promise<void>;
 }
 /** 가짜 작업 토큰 해시 — 진짜처럼 64자 16진(작업 토큰 판별이 앞자리로 대조한다). */
@@ -223,6 +227,17 @@ function world(): World {
       w.transcripts.set(id, { conv, gz, raw });
       return true;
     },
+    //  실 SQL(store.setAgentJobSteps)의 조건을 흉내 낸다 — 도는 작업에만(조건 자체는 store.pg-test 블록 I5).
+    async setAgentJobSteps(id, steps) {
+      if (w.stepsWriteThrows) throw new Error("db 가 잠깐 막혔다");
+      if (rows.get(id)?.status !== "running") return false;
+      w.steps.set(id, steps);
+      return true;
+    },
+    async agentJobSteps(id) {
+      if (w.stepsReadThrows) throw new Error("db 가 잠깐 막혔다");
+      return w.steps.get(id) ?? null;
+    },
     async agentJobTranscript(id) { const x = w.transcripts.get(id); return x ? { conv: x.conv, gz: x.gz } : null; },
     async agentJobTranscriptConv(id) { return w.transcripts.get(id)?.conv ?? null; },
     async pruneAgentJobTranscripts(days, batch = 1000) {
@@ -238,6 +253,7 @@ function world(): World {
     mintError: null, onMint: null, beforeFinish: null, beforeFailBoot: null, policyRowError: false, claims: 0, claimSeats: [], inserted: [], sharedSeats: new Set<string>(), listening: 0, bootRace: false, available: true,
     policy: { ...DEFAULT_AGENT_JOB_POLICY }, usable: new Set<string>(), inactive: new Set<string>(), projects: new Set<string>(), prunedWith: [],
     transcripts: new Map(), prunedTranscriptsWith: [],
+    steps: new Map(), stepsWriteThrows: false, stepsReadThrows: false,
     setNow: (ms: number) => { now = ms; },
   });
   w.deps = {
@@ -535,6 +551,55 @@ await t("박동 — 비밀이 맞을 때만 · 진행 꼬리·대화 id 를 싣�
   assert.equal(w.rows.get(id)!.conversation_id, "0a1b2c3d-0000-4000-8000-000000000001");
   await w.deps.store.requestCancelAgentJob(id);
   assert.deepEqual(await onTick(id, job.secret, {}, w.deps), { cancel: true });
+});
+
+await t("ST2 도구 호출 단계 — 박동 · 결과가 판이 보낸 단계를 걸러 적고(안 보내면 · 비었으면 그대로) · 결과는 끝내기 전에 적는다 · 본인 하나 보기에만 싣는다 · 판에 상한을 넘긴다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  assert.equal((job as any).stepsMax, STEPS_MAX);
+  assert.equal((job as any).stepInputMax, STEP_INPUT_MAX);
+  const s1 = { id: "toolu_1", name: "mcp__lively__knowledge_search", input: "{\"q\":\"x\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false };
+  await onTick(id, job.secret, { tail: "진행", steps: [s1, { name: "", started_at: "x" }] }, w.deps);
+  assert.deepEqual(w.steps.get(id), [s1], "모양이 틀린 단계는 버린다");
+  await onTick(id, job.secret, { tail: "진행 2" }, w.deps);
+  assert.deepEqual(w.steps.get(id), [s1], "단계를 안 보낸 박동(옛 판)은 저장된 단계를 덮지 않는다");
+  await onTick(id, job.secret, { tail: "진행 3", steps: [] }, w.deps);
+  assert.deepEqual(w.steps.get(id), [s1], "빈 단계는 적을 것이 없다");
+  const done1 = { ...s1, ended_at: "2026-11-02T08:00:01.500Z" };
+  await onResult(id, job.secret, { exit_code: 0, result: { text: "답", is_error: false }, steps: [done1] }, w.deps);
+  assert.deepEqual(w.steps.get(id), [done1], "결과의 단계는 끝내기 전에 적는다 — 끝난 작업엔 적기가 막힌다(가짜 · 실 SQL 모두 도는 작업에만)");
+  const row = w.rows.get(id)!;
+  assert.equal(row.status, "done");
+  assert.ok(!("steps" in row), "행 모양에는 없다(COLS 밖 — store.STEPS_COL)");
+  const mine = await getAgentJobFor(id, human("alice"), w.deps);
+  assert.deepEqual(mine.steps, [done1], "본인 하나 보기에 싣는다");
+  assert.ok(!("steps" in (await getAgentJobFor(id, human("root", ["context", "admin"]), w.deps))), "남(관리자)에게는 싣지 않는다");
+  assert.ok(!("steps" in publicJob(row, { own: true })), "읽지 않은 자리(접수 · 취소 응답)는 칸을 싣지 않는다 — 빈 배열로 거짓말하지 않는다");
+  assert.ok(!("steps" in publicJob(row, { own: false, steps: [done1] })), "남에게는 넘겨도 싣지 않는다");
+  assert.deepEqual(publicJob(row, { own: true, steps: null }).steps, [], "단계가 없으면 빈 배열");
+});
+
+await t("ST2b 단계는 곁기록이다 — 못 적어도 박동 · 결과가 그대로 가고(답이 사라지지 않는다) · 못 읽어도 하나 보기가 된다", async () => {
+  const w = world();
+  const { id, boot } = await startedJob(w);
+  const job = await onBoot(id, boot, w.deps);
+  const s = { id: "toolu_1", name: "Read", input: "", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false };
+  const warned: string[] = [];
+  const warn = logger.warn;
+  (logger as { warn: unknown }).warn = (_o: unknown, m: string) => { warned.push(m); };
+  try {
+    w.stepsWriteThrows = true;
+    assert.deepEqual(await onTick(id, job.secret, { tail: "진행", steps: [s] }, w.deps), { cancel: false });
+    assert.equal(w.rows.get(id)!.output_tail, "진행");
+    const out = await onResult(id, job.secret, { exit_code: 0, result: { text: "답", is_error: false }, steps: [s] }, w.deps);
+    assert.deepEqual(out, { ok: true, status: "done" });
+    assert.equal((w.rows.get(id)!.result as { text?: string })?.text, "답");
+    assert.equal(w.steps.has(id), false);
+    assert.equal(warned.filter((m) => /단계를 적지 못했다/.test(m)).length, 2, "못 적은 사실은 로그에 남긴다");
+  } finally { (logger as { warn: unknown }).warn = warn; }
+  w.stepsReadThrows = true;
+  assert.deepEqual((await getAgentJobFor(id, human("alice"), w.deps)).steps, [], "못 읽으면 빈 배열");
 });
 
 await t("X2 결과 — 끝 상태와 답을 적고, 걷기는 조금 뒤(kill · 토큰 폐기), 다음 대기 작업을 띄운다", async () => {

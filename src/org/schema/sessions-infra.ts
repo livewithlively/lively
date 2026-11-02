@@ -635,6 +635,9 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  tool_allowlist — 앱이 그 작업의 에이전트가 쓸 라이블리 도구를 좁힌 목록(ai.tools · JSON 글 배열). 판이 뜰 때 작업 토큰의 도구 상한으로 싣는다
   //   (agent-jobs/service.onBoot → auth_token.tool_ceiling). NULL = 좁히지 않음.
   await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS tool_allowlist JSONB`);
+  //  도구 호출 단계 — 판이 박동 · 결과에 싣는 최근 도구 호출(이름 · 입력 앞머리 · 시작 · 끝 · 오류 — agent-jobs/plan.ts AgentJobStep). 자기 작업 · 실행 보기가 준다.
+  //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽고 쓴다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts STEPS_COL).
+  await pool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS steps JSONB`);
   //  effort — 앱 AI 실행이 준 하네스 생각 깊이(`claude -p --effort` · agent-jobs/runner.EFFORT_LEVELS). 판이 하네스 인자로 싣는다(runner.claudeJobArgv).
   //   NULL = 하네스 기본. 접수 때 정해지고 바뀌지 않는다 — 이어받기 · 형식 재시도는 앞 작업의 값을 잇는다.
   //   ⚠ 코드는 이 칸을 COLS 에 넣지 않고 따로 읽는다 — 롤 창에서 칸이 아직 없을 때(agent-jobs/store.ts EFFORT_COL).

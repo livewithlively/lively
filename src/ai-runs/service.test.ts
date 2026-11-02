@@ -10,6 +10,7 @@ import { DEFAULT_AI_RUN_POLICY, type AiRunPolicy } from "../org/policies/ai-run-
 import type { AiRunRow, AiRunSummaryRow, NewAiRun, NewLlmCall } from "./store.js";
 import type { SingleShotInput, SingleShotOutput } from "./anthropic.js";
 import type { AiAccountSettings, ResumeLink } from "./plan.js";
+import { STEPS_MAX } from "../agent-jobs/plan.js";
 import type { Viewer } from "../apps/visibility.js";
 import { EFFORT_LEVELS, type Effort } from "../agent-jobs/runner.js";
 import { CONFIG_DIR_PLACEHOLDER, PROXY_BASE_IN_CONTAINER, agentJobOfRun, bootEnvForJob, callerUnattended, cancelRunFor, composeSystem, getRunFor, listRunsFor, publicRun, submitRun, syncRun, targetsFor, type AiRunDeps, type SubmitJobInput } from "./service.js";
@@ -41,6 +42,8 @@ interface World {
    *  effortCol42703 = 롤 창(실행 행에 칸이 아직 없다 — effort 를 실은 접수만 42703).
    */
   runEfforts: Map<number, string | null>; jobEfforts: Map<number, Effort | null>; effortCol42703?: boolean;
+  /** 작업 행의 도구 호출 단계(가짜 — COLS 밖 칸 · agent-jobs/store.STEPS_COL) · 그 읽기가 던지나. */
+  jobSteps: Map<number, unknown[]>; jobStepsThrows?: boolean;
 }
 const member = (id: string, extra: Partial<LivelyUser> = {}): LivelyUser => ({ userId: id, email: `${id}@x`, scopes: ["context"], projects: ["*"], ...extra });
 const appUser = (id: string, app: string): LivelyUser => member(id, { appId: app });
@@ -54,7 +57,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     runs: new Map(), calls: [], jobs: new Map(), submitted: [], llm: [], canceled: [], settings: {}, sessions: {}, key: "sk-ws", policy: { ...DEFAULT_AI_RUN_POLICY },
     llmReply: () => okText("답"), usedToday: 0, inflightCount: 0, members: {}, jobShared: new Map(), runShared: new Map(),
     ownTokensToday: 0, unattended: false, unattendedAsks: 0,
-    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), ...o,
+    resumeLinks: new Map(), jobTranscripts: new Set(), runEfforts: new Map(), jobEfforts: new Map(), jobSteps: new Map(), ...o,
   };
   const ended = (s: string): boolean => s === "done" || s === "failed" || s === "canceled";
   const countedResumes = (root: number): number => [...w.resumeLinks.entries()].filter(([id, l]) => {
@@ -146,6 +149,7 @@ function world(o: Partial<World> = {}): { w: World; d: AiRunDeps } {
     jobToolAllowlist: async () => null,
     //  작업 행의 생각 깊이(필수 의존성) — 접수 때 그 작업 행에 실린 값 그대로(live 의 agent-jobs/store.agentJobEffort 와 같은 뜻 · 종전 작업은 null).
     jobEffort: async (id) => w.jobEfforts.get(id) ?? null,
+    jobSteps: async (id) => { if (w.jobStepsThrows) throw new Error("단계를 못 읽었다(가짜)"); return w.jobSteps.get(id) ?? null; },
   };
   return { w, d };
 }
@@ -1041,6 +1045,64 @@ const C1 = "11111111-1111-4111-8111-111111111111", C2 = "22222222-2222-4222-8222
   assert.equal((await getRunFor(1, u, d)).resume, null);
   assert.deepEqual((await getRunFor(2, admin("root"), d)).resume, { of: 1, root: 1, depth: 1 }, "관리자는 까닭을 못 본다");
   ok("R12 하나 보기 — resume 줄 · 까닭은 보낸 사람만");
+}
+
+// ── ST3 하나 보기 — 작업 컨테이너 실행은 작업 행의 도구 호출 단계를 본인에게만 싣는다 · 단계가 없으면 빈 배열 · 단발(프록시)엔 없음 ──
+{
+  const { w, d } = world();
+  const u = appUser("alice", "crm");
+  const run = await submitRun({ prompt: "Q", agent: true }, u, { source: "app-ui" }, d); await settle();
+  const runId = Number(run.id);
+  const jobId = w.runs.get(runId)!.job_id!;
+  assert.deepEqual((await getRunFor(runId, u, d)).steps, [], "아직 단계가 없으면 빈 배열");
+  const step = { id: "toolu_1", name: "mcp__lively__knowledge_get", input: "{\"name\":\"policy-index\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: "2026-11-02T08:00:00.420Z", is_error: false };
+  w.jobSteps.set(jobId, [step]);
+  assert.deepEqual((await getRunFor(runId, u, d)).steps, [step], "도는 동안에도 작업 행의 단계를 싣는다");
+  assert.ok(!("steps" in (await getRunFor(runId, admin("root"), d))), "관리자(남)는 상태만 — 단계 없음");
+  w.jobStepsThrows = true;
+  const seen = await getRunFor(runId, u, d);
+  assert.deepEqual(seen.steps, [], "단계를 못 읽어도 실행 보기는 된다 — 빈 배열");
+  assert.equal(seen.id, runId);
+  const { d: d2 } = world();
+  await submitRun({ prompt: "단발" }, u, { source: "app-ui" }, d2); await settle();
+  assert.ok(!("steps" in (await getRunFor(1, u, d2))), "단발(프록시) 실행엔 단계 칸이 없다");
+  ok("ST3 하나 보기 — 도구 호출 단계는 작업 실행 · 본인만");
+}
+
+// ── ST3b 형식 재시도 — 실행이 재시도 작업으로 갈아타도 앞 작업의 단계가 남는다 · 앞 작업 → 재시도 순서 · 최근 STEPS_MAX 개 · 이어받은 실행의 앞 작업은 잇지 않는다 ──
+{
+  const { w, d } = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  const u = appUser("alice", "crm");
+  const step = (name: string) => ({ id: name, name, input: "", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false });
+  await submitRun({ prompt: "요약", schema }, u, { source: "app-ui" }, d);
+  const j1 = w.jobs.get(101)!; j1.status = "done"; j1.conversation_id = "conv-1"; j1.result = { text: "글" };
+  await syncRun(w.runs.get(1)!, d);
+  assert.equal(w.runs.get(1)!.job_id, 102, "시험 전제 — 재시도 작업으로 갈아탔다");
+  w.jobSteps.set(101, [step("앞")]);
+  assert.deepEqual((await getRunFor(1, u, d)).steps, [step("앞")], "재시도가 아직 도구를 안 썼어도 앞 작업의 단계가 남는다");
+  w.jobSteps.set(102, [step("뒤")]);
+  assert.deepEqual((await getRunFor(1, u, d)).steps, [step("앞"), step("뒤")], "앞 작업 → 재시도 순서");
+  const j2 = w.jobs.get(102)!; j2.status = "done"; j2.conversation_id = "conv-1"; j2.result = { text: '{"n": 7}' };
+  assert.equal((await syncRun(w.runs.get(1)!, d))!.status, "done");
+  assert.deepEqual((await getRunFor(1, u, d)).steps, [step("앞"), step("뒤")], "끝난 실행도 같다");
+  const getJob = d.getJob;
+  d.getJob = async () => { throw new Error("작업 행을 못 읽었다(가짜)"); };   // 끝난 실행이라 syncRun 은 돌지 않는다 — 이 읽기는 앞 작업 찾기뿐이다
+  assert.deepEqual((await getRunFor(1, u, d)).steps, [step("뒤")], "앞 작업을 못 찾아도 뒤 단계는 준다");
+  d.getJob = getJob;
+  const many = (tag: string, n: number) => Array.from({ length: n }, (_, i) => step(`${tag}${i}`));
+  w.jobSteps.set(101, many("앞", 150));
+  w.jobSteps.set(102, many("뒤", 100));
+  const capped = (await getRunFor(1, u, d)).steps as Array<{ name: string }>;
+  assert.equal(capped.length, STEPS_MAX);
+  assert.equal(capped[0].name, "앞50", "넘치면 최근 것만 남긴다");
+  assert.equal(capped[STEPS_MAX - 1].name, "뒤99");
+  const plain = world({ settings: { default: { kind: "subscription", member: "alice" } }, key: null });
+  await submitRun({ prompt: "요약", agent: true }, u, { source: "app-ui" }, plain.d);
+  const pj = plain.w.jobs.get(101)!; pj.resume_job_id = 999;
+  plain.w.jobSteps.set(999, [step("다른 실행")]);
+  plain.w.jobSteps.set(101, [step("내 실행")]);
+  assert.deepEqual((await getRunFor(1, u, plain.d)).steps, [step("내 실행")], "이어받은 실행의 앞 작업은 다른 실행의 것이다 — 잇지 않는다");
+  ok("ST3b 형식 재시도 — 앞 작업의 단계를 잇는다");
 }
 
 // ── R13 롤 창 — 이어받기 칸이 아직 없으면 503(다시 보내라) · 작업을 띄우지 않는다 · 새 질문은 그대로 돈다 ──

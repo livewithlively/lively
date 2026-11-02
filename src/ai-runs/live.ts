@@ -113,6 +113,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     jobToolAllowlist: async (jobId) => (await import("../agent-jobs/store.js")).agentJobToolAllowlist(jobId),
     //  생각 깊이(effort) — 이어받기(안 주면) · 형식 재시도는 원래 작업 행의 값(판이 하네스에 실은 그 값).
     jobEffort: async (jobId) => (await import("../agent-jobs/store.js")).agentJobEffort(jobId),
+    //  작업 행의 도구 호출 단계 — 작업 실행 하나 보기가 싣는다.
+    jobSteps: async (jobId) => (await import("../agent-jobs/store.js")).agentJobSteps(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,

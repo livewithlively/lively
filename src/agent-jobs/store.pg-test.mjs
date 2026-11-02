@@ -933,6 +933,64 @@ try {
     await cleanup();
   }
 
+  // ── I5. 도구 호출 단계(steps) — 도는 작업에만 따로 적고 따로 읽는다 · 실 jsonb · 칸이 아직 없을 때(롤 창) ──────────
+  //  이게 틀리면: 끝난 작업의 단계가 뒤늦은 보고로 바뀌거나, 칸이 jsonb 로 받지 못하는 글에 박동 · 결과가 500 이 되거나,
+  //  롤 창에서 작업 행의 모든 읽기 · 쓰기가 «없는 칸» 으로 깨져 그 사이 끝난 작업의 답이 사라진다(SHARED_SEAT_COL 머리말).
+  {
+    await cleanup();
+    const { parseSteps } = await import(`${DIST}/agent-jobs/plan.js`);
+    const { isDeepStrictEqual: same } = await import("node:util");
+    const s1 = { id: "toolu_1", name: "mcp__lively__knowledge_search", input: "{\"q\":\"검색어\"}", started_at: "2026-11-02T08:00:00.000Z", ended_at: null, is_error: false };
+    const id = await running("st");
+    chk("ST1 아직 안 적은 작업의 단계는 null", (await st.agentJobSteps(id)) === null);
+    const wrote = await st.setAgentJobSteps(id, [s1]);
+    chk("ST2 도는 작업 — 적고 그대로 읽는다", wrote === true && same(await st.agentJobSteps(id), [s1]), JSON.stringify({ wrote, got: await st.agentJobSteps(id) }));
+    chk("ST2b 행 읽기(COLS)는 단계 칸을 싣지 않는다 — 롤 창에서 «없는 칸» 으로 깨지지 않게 · 감시 · 자리 주기가 큰 칸을 읽지 않게",
+      !("steps" in (await st.getAgentJob(id))), JSON.stringify(Object.keys(await st.getAgentJob(id))));
+    const s2 = { ...s1, ended_at: "2026-11-02T08:00:01.250Z" };
+    await st.tickAgentJob(id, { tail: "진행", conversationId: null });
+    chk("ST3 박동은 단계를 건드리지 않는다", same(await st.agentJobSteps(id), [s1]));
+    chk("ST4 다시 적으면 덮는다(판은 늘 전체를 보낸다)", (await st.setAgentJobSteps(id, [s2])) === true && same(await st.agentJobSteps(id), [s2]));
+    const fin = await st.finishAgentJob(id, { status: "done", result: { text: "답" }, from: ["running"] });
+    const late = await st.setAgentJobSteps(id, [s1]);
+    chk("ST5 끝난 작업엔 적지 않는다 · 적힌 단계는 남는다", fin?.status === "done" && late === false && same(await st.agentJobSteps(id), [s2]), JSON.stringify({ late }));
+    const q0 = await add("st-queued");
+    chk("ST6 아직 안 도는 작업 · 없는 작업엔 적지 않는다", (await st.setAgentJobSteps(q0, [s1])) === false && (await st.setAgentJobSteps(2 ** 40, [s1])) === false);
+    const odd = {};
+    for (const x of [2 ** 40, 0, -1, 1.5, Number.NaN]) { try { odd[String(x)] = await st.agentJobSteps(x); } catch (e) { odd[String(x)] = `던짐: ${e?.message ?? e}`; } }
+    chk("ST7 없는 작업 id · 0 · 음수 · 정수가 아닌 id 는 null(던지지 않는다)", Object.values(odd).every((v) => v === null), JSON.stringify(odd));
+    const rough = await running("st-rough");
+    const nasty = parseSteps([{ id: "x\u0000y", name: "도구\u0000", input: `${"\u{1F600}".repeat(79)}\ud83d`, started_at: s1.started_at, ended_at: "2026-11-02T17:00:02+09:00" }]);
+    let roughErr = null;
+    try { await st.setAgentJobSteps(rough, nasty); } catch (e) { roughErr = e; }
+    const back = await st.agentJobSteps(rough);
+    chk("ST8 판이 보낸 값(NUL · 잘린 대리쌍)도 parseSteps 를 지나면 jsonb 가 받는다 — 박동 · 결과가 500 이 되지 않게",
+      roughErr === null && back?.[0]?.name === "도구" && back?.[0]?.id === "xy" && !/[\ud800-\udbff](?![\udc00-\udfff])/.test(back?.[0]?.input ?? "\ud800"), JSON.stringify({ err: roughErr?.message, back }));
+    await cleanup();
+    //  롤 창 — 새 코드가 마이그레이션보다 먼저 받는 동안 작업 행에 단계 칸이 아직 없다. 작업 한 건의 길(접수 → 자리 → 부트 → 박동 → 끝)을 다 지나 본다.
+    //  ⚠ 시험용 DB 전용 — 칸을 지웠다 되살리면 값이 사라진다.
+    await itemsPool.query(`ALTER TABLE org_agent_job DROP COLUMN IF EXISTS steps`);
+    try {
+      let rid = null, path = "접수 전";
+      const steps = {};
+      try {
+        rid = await running("st-roll"); path = "부트까지";
+        steps.tick = await st.tickAgentJob(rid, { tail: "진행", conversationId: null }); path = "박동까지";
+        steps.write = await st.setAgentJobSteps(rid, [s1]);
+        steps.read = await st.agentJobSteps(rid);
+        steps.row = (await st.getAgentJob(rid))?.id === rid;
+        steps.fin = (await st.finishAgentJob(rid, { status: "done", result: { text: "답" }, from: ["running"] }))?.status; path = "끝까지";
+        steps.list = (await st.listAgentJobs({ requester: `${REQ}st-roll`, appId: null, status: null, limit: 5 })).length;
+      } catch (e) { steps.err = `${e?.code ?? ""} ${e?.message ?? e}`; }
+      chk("ST9 칸이 없을 때 — 접수 · 자리 주기 · 부트 · 박동 · 행 읽기 · 끝내기 · 목록이 종전처럼 돌고 · 적기는 false · 읽기는 null(답이 사라지지 않는다)",
+        path === "끝까지" && steps.tick?.cancel === false && steps.write === false && steps.read === null && steps.row === true && steps.fin === "done" && steps.list === 1 && !steps.err,
+        JSON.stringify({ path, ...steps }));
+    } finally {
+      await itemsPool.query(`ALTER TABLE org_agent_job ADD COLUMN IF NOT EXISTS steps JSONB`);
+    }
+    await cleanup();
+  }
+
   // ── J. 상한 고치기(관리자 도구 agent_job_limits_set) — 실제 DB 의 그 칸으로 ──────────────────
   {
     const caps = (await import(`${DIST}/capabilities/agent-jobs.js`)).agentJobCapabilities;
