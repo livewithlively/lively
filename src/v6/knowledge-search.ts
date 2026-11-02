@@ -64,7 +64,12 @@ function searchFilterSql(opts: { injection?: string; provenance?: string; catego
 
 /** 어떤 길로 찾았나(#5201) — 기록(knowledge_search_log)이 호출마다 남긴다. */
 export type KnowledgeSearchRoute = "hybrid-chunk" | "hybrid-chunk-grep" | "hybrid" | "hybrid-grep" | "lexical" | "grep" | "bm25-order";
-export interface SearchRouteDiag { route?: KnowledgeSearchRoute }
+export interface SearchRouteDiag {
+  route?: KnowledgeSearchRoute;
+  /** 벡터 채널이 무엇을 썼나 — 조각으로 찾았으면 그때 쓴 조각 판정(chunkIndex 결과), 문서 벡터로 찾았으면 null, 벡터 채널이 돌지 않았으면 없다(undefined).
+   *  약함 판정이 같은 벡터로 재게 그대로 넘긴다(knowledgeSearchStrength). null 과 없음은 뜻이 다르다 — 넘길 때 `?? null` 로 접지 마라. */
+  chunkIndex?: ChunkIndex | null;
+}
 
 /**
  * 이 찾기가 쓸 BM25 낱말(#5201) — 쓸 수 없으면 null.
@@ -205,11 +210,13 @@ export async function hybridSearchKnowledge(
   const qvec = qe.vec;
   if (!qvec && !terms) return searchKnowledge(qstr, opts, viewer, diag);   // off · 쿼리 임베딩 실패 + 색인 없음 → 폴백
   if (!qvec && idOnly) { if (diag) diag.route = "lexical"; return []; }    // 낱말 채널은 방금 돌았다
-  const ix = qvec ? await chunkIndex() : null;
+  //  조각을 쓸지는 이 찾기가 볼 범위(카테고리 제한)의 조각으로 잰다(chunkIndex 주석). 범위는 아래 rrfSearch 가 같은 인자로 다시 묻는다(요청 안에서 앱 범위는 한 번만 푼다).
+  //   범위를 못 읽으면 여기서 그대로 실패한다 — 종전에도 rrfSearch · searchKnowledge 가 같은 오류를 다시 던져 찾기가 실패했다(범위 없이 찾지 않는다).
+  const ix = qvec ? await chunkIndex({ categories: await knowledgeCategoryRestriction(viewer, opts.categories) }) : null;
   if (ix) {
     try {
       const rows = await rrfSearch(qstr, qvec, terms, opts, viewer, ix);
-      if (diag) diag.route = terms ? "hybrid-chunk" : "hybrid-chunk-grep";
+      if (diag) { diag.route = terms ? "hybrid-chunk" : "hybrid-chunk-grep"; diag.chunkIndex = ix; }
       return rows;
     } catch (e) {
       console.warn(`[embeddings] 조각 검색 실패 — 문서 벡터로: ${(e as Error)?.message}`);
@@ -217,7 +224,7 @@ export async function hybridSearchKnowledge(
   }
   try {
     const rows = await rrfSearch(qstr, qvec, terms, opts, viewer);
-    if (diag) diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical";
+    if (diag) { diag.route = qvec ? (terms ? "hybrid" : "hybrid-grep") : "lexical"; if (qvec) diag.chunkIndex = null; }
     return rows;
   } catch (e) {
     console.warn(`[embeddings] 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
@@ -234,7 +241,9 @@ export async function hybridSearchKnowledge(
  *  **던지지 않는다**(검색 응답을 막지 않는다) — 못 재면 {topSim:null, lexical:false}(약한 쪽 — 보조 안내가 붙는 쪽)로 답한다.
  */
 export async function knowledgeSearchStrength(qstr: string, names: readonly string[],
-  opts: { termsQuery?: string; termsNeeded?: (n: number) => number } = {}): Promise<{ topSim: number | null; lexical: boolean }> {
+  opts: { termsQuery?: string; termsNeeded?: (n: number) => number;
+    /** 그 찾기의 벡터 채널이 쓴 것(SearchRouteDiag.chunkIndex) — 주면(null 포함) 그대로 따른다. 없으면 워크스페이스 전체로 잰다(범위를 모르는 호출). */
+    chunkIndex?: ChunkIndex | null } = {}): Promise<{ topSim: number | null; lexical: boolean }> {
   const list = [...new Set(names)].slice(0, 100);
   if (!list.length) return { topSim: null, lexical: false };
   //  낱말 먼저 — 맞은 지식이 있으면 «강함» 이라 의미 거리는 재지 않는다(임베딩을 부르지 않는다 · 3차 리뷰).
@@ -271,7 +280,8 @@ export async function knowledgeSearchStrength(qstr: string, names: readonly stri
     const qe = await embedQuery(qstr);
     if (qe.vec) {
       //  찾기가 조각으로 찾았으면 조각으로 잰다 — 끝 절로만 맞는 문서는 문서 벡터가 멀어, 맞는 1위가 있어도 «약하다» 가 된다.
-      const ix = await chunkIndex();
+      //   카테고리를 지정한 찾기는 범위의 조각으로 켜지므로 워크스페이스 전체 판정과 다를 수 있다 — 찾기가 넘긴 것을 따른다.
+      const ix = opts.chunkIndex !== undefined ? opts.chunkIndex : await chunkIndex();
       const r = await one(itemsPool,
         `SELECT max(1 - (embedding_vector <=> $1::${ix ? ix.cast : "vector"}))::float8 AS s FROM ${ix ? "knowledge_chunk" : "knowledge"} WHERE name = ANY($2::text[]) AND embedding_vector IS NOT NULL`,
         [toVectorLiteral(qe.vec), list]) as { s?: number | null } | undefined;

@@ -6,6 +6,12 @@
 //  ── 언제 조각을 쓰나(chunkIndex) ──
 //   스위치가 켜져 있고(org_runtime_config.knowledge_chunk_search — 되돌리기) 조각의 98% 에 지금 모델의 벡터가 있을 때다. 첫 색인은 하루 상한 때문에 며칠 걸리고 모델을 바꾸면
 //   다시 채운다. 그동안은 문서 벡터로 찾는다 — 찾을 수 있던 문서가 잠깐 안 나오면 안 된다. 찾기와 소환의 바깥 모양은 같다.
+//   98% 는 그 찾기가 볼 범위에서 잰다 — 카테고리 제한이 있는 찾기 · 소환(category 인자 · 앱 범위 · 둘의 교집합)은 그 카테고리에 든 지식의 조각만 센다.
+//   제한이 없으면 워크스페이스 전체다. 그래서 두 방향으로 달라진다.
+//    · 범위 밖에 큰 묶음(조각 수만 개)이 새로 들어와도 다 찬 범위는 조각으로 계속 찾는다 — 워크스페이스 전체로 재면 그 묶음이 다 임베딩될 때까지(하루 상한으로 며칠) 문서 벡터로 돌아갔다.
+//    · 범위 안에 큰 묶음이 들어오면 워크스페이스 전체가 98% 를 넘어도 그 범위는 문서 벡터로 찾는다 — 벡터가 아직 없는 범위 안 문서를 벡터 채널이 놓치지 않게.
+//   둘 다 «찾을 수 있던 문서가 잠깐 안 나오면 안 된다» 를 그 찾기가 실제로 보는 범위에서 지키는 것이다.
+//   상태 도구(org_embeddings_status 의 chunk_search.active)는 워크스페이스 전체 기준이다 — 범위마다 어느 길로 찾았는지는 찾기 기록(knowledge_search_log route)에 남는다.
 //
 //  ── 공용 인덱스 ──
 //   공용 DB 는 한 HNSW 에 모든 워크스페이스의 조각이 있고 행 보안은 인덱스 탐색 뒤에 걸린다. 실제 조각 벡터를 다섯 워크스페이스로 나눠 FORCE RLS 로 재면(비중 0.3~53%) 작은 쪽은
@@ -28,6 +34,7 @@ const CHUNK_CANDIDATES = 200;
 const CHUNK_EF_SEARCH = 400;
 const CHUNK_READY_RATIO = 0.98;
 const CHUNK_READY_TTL_MS = 30_000;
+const CHUNK_READY_MAX = 1_000;   // 기억 칸은 워크스페이스 × 범위(카테고리 조합)마다 생긴다 — 넘치면 비운다(30초 기억이라 비워도 다시 잴 뿐이다).
 
 //  자동 소환 — 측정해 정한 값 그대로다(바꾸면 다시 잰다). 조각 최고값은 문서 벡터보다 높게 나와 기준선도 다르다.
 //  기준선은 그 모델의 코사인 분포에서 잰 값이라 다른 모델에는 쓰지 않는다 — 다른 모델은 찾기만 조각으로 하고(순위만 쓴다) 소환은 문서 벡터 그대로다.
@@ -56,27 +63,39 @@ export function iterativeScanSupported(version: string | null | undefined): bool
 /** 자동 소환이 조각을 쓰나 — 기준선을 잰 모델일 때만이다. */
 export const recallUsesChunks = (ix: ChunkIndex | null): boolean => !!ix && RECALL_CHUNK_MODELS.test(ix.model);
 
-/** 조각으로 찾아도 되나 — 안 되면 null(문서 벡터로 찾는다). 워크스페이스마다 30초 기억한다. 표나 칸이 없어도 던지지 않는다. */
-export async function chunkIndex(now: () => number = Date.now): Promise<ChunkIndex | null> {
-  const key = boundTenantId() ?? "";
+/**
+ * 조각으로 찾아도 되나 — 안 되면 null(문서 벡터로 찾는다). 워크스페이스 · 범위마다 30초 기억한다. 표나 칸이 없어도 던지지 않는다.
+ *  categories = 그 찾기의 카테고리 제한(knowledgeCategoryRestriction 결과). 주면 그 카테고리에 든 지식(살아 있고 검색 대상인 것 — 찾기 후보와 같은 술어)의
+ *   조각만 센다(머리말 «언제 조각을 쓰나»). null 이면 종전대로 조각 표 전부다 — 보관 · 검색 제외 문서의 조각은 낱말 색인 스윕이 곧 지우므로(knowledge-lex-store)
+ *   스윕 뒤에는 두 셈이 같은 술어가 된다. 빈 목록(범위가 아무것도 허락하지 않음)은 null 과 다르다 — 셀 조각이 없어 null 을 돌려준다(그 찾기는 어차피 아무것도 못 찾는다).
+ */
+export async function chunkIndex(opts: { categories?: readonly number[] | null; now?: () => number } = {}): Promise<ChunkIndex | null> {
+  const now = opts.now ?? Date.now;
+  const scope = opts.categories ? [...new Set(opts.categories.map(Number))].sort((a, b) => a - b) : null;
+  const key = `${boundTenantId() ?? ""}\u0000${scope ? scope.join(",") : "*"}`;
   const hit = ready.get(key);
   if (hit && now() - hit.at < CHUNK_READY_TTL_MS) return hit.value;
   let value: ChunkIndex | null = null;
   try {
     const model = (await activeEmbedding())?.provider.model;
     if (model) {
+      const params: unknown[] = [model];
+      const from = scope
+        ? `knowledge_chunk c JOIN knowledge k ON k.name = c.name WHERE k.lifecycle='active' AND k.searchable AND ${knowledgeInCategoriesSql(scope, params, "k")}`
+        : `knowledge_chunk c`;
       const r = await one(itemsPool,
         `SELECT (SELECT knowledge_chunk_search FROM org_runtime_config WHERE id=1) AS enabled,
                 (SELECT format_type(atttypid, NULL) FROM pg_attribute WHERE attrelid = to_regclass('knowledge_chunk') AND attname='embedding_vector' AND NOT attisdropped) AS vtype,
                 (SELECT extversion FROM pg_extension WHERE extname='vector') AS ver,
                 count(*)::int AS total,
-                count(*) FILTER (WHERE embedding_vector IS NOT NULL AND embedding_model = $1)::int AS have
-           FROM knowledge_chunk`, [model]) as { enabled: boolean | null; vtype: string | null; ver: string | null; total: number; have: number };
+                count(*) FILTER (WHERE c.embedding_vector IS NOT NULL AND c.embedding_model = $1)::int AS have
+           FROM ${from}`, params) as { enabled: boolean | null; vtype: string | null; ver: string | null; total: number; have: number };
       if (r.enabled !== false && r.vtype && r.total > 0 && r.have >= r.total * CHUNK_READY_RATIO) {
         value = { cast: r.vtype === "halfvec" ? "halfvec" : "vector", iterative: iterativeScanSupported(r.ver), model };
       }
     }
   } catch { value = null; }
+  if (ready.size >= CHUNK_READY_MAX) ready.clear();
   ready.set(key, { value, at: now() });
   return value;
 }
@@ -158,14 +177,16 @@ export async function recallKnowledge(input: { text: string; prev?: string | nul
     diag.route = "vector";
     return findSimilarKnowledge({ text: headChars(input.text, RECALL_DOC_QUERY_CHARS), limit: RECALL_LIMIT, minScore: RECALL_DOC_MIN }, viewer, diag);
   };
-  const ix = await chunkIndex();
+  //  앱 범위가 있으면 그 카테고리의 조각으로 98% 를 잰다 — 소환이 그 안만 보기 때문이다(chunkIndex 주석). 범위를 못 읽으면 문서 벡터로(종전처럼).
+  let categories: readonly number[] | null;
+  try { categories = await knowledgeCategoryRestriction(viewer); } catch { return byDoc(); }
+  const ix = await chunkIndex({ categories });
   if (!ix || !recallUsesChunks(ix)) return byDoc();
   const qe = await embedQuery(recallQueryText(input.text, input.prev));
   if (qe.status === "off") { diag.embeddings = "off"; return []; }
   if (!qe.vec) { diag.degraded = true; return []; }
   diag.route = "chunk";
   try {
-    const categories = await knowledgeCategoryRestriction(viewer);
     const params: unknown[] = [toVectorLiteral(qe.vec)];
     const wh = [`k.lifecycle='active'`, `k.searchable`];
     if (categories) wh.push(knowledgeInCategoriesSql(categories, params, "k"));

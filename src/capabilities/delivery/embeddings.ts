@@ -15,7 +15,7 @@ import { actorOf, restWork } from "./shared.js";
 export const embeddingsCapabilities: Capability[] = [
   // ── 임베딩(벡터검색 #172) 상태 + 기존 지식 백필 ──
   restWork("org_embeddings_status", "임베딩(벡터검색) 상태",
-    "임베딩 설정(embedding_config) + 기존 지식 백로그(미임베딩 수) + 지식 조각 백로그(chunk_backlog — 자동으로만 채운다 · 하루 상한이 있다) + 마지막 조각 정비 결과(chunk_sweep) + 조각 검색 상태(chunk_search — enabled 스위치 · active 지금 쓰는 중 · recall 자동 소환도 쓰는 중 · vector_type · iterative_scan) + 진행 중 백필 잡 상태.",
+    "임베딩 설정(embedding_config) + 기존 지식 백로그(미임베딩 수) + 지식 조각 백로그(chunk_backlog — 자동으로만 채운다 · 하루 상한이 있다) + 마지막 조각 정비 결과(chunk_sweep) + 조각 검색 상태(chunk_search — enabled 스위치 · active 지금 쓰는 중(워크스페이스 전체 조각 기준 — 카테고리를 지정한 찾기 · 앱 범위 안의 소환은 그 카테고리 조각의 98% 로 따로 켜진다) · recall 자동 소환도 쓰는 중 · vector_type · iterative_scan) + 진행 중 백필 잡 상태.",
     [{ method: "GET", paths: ["/api/ui/org/embeddings"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();
@@ -111,6 +111,6 @@ export const embeddingsCapabilities: Capability[] = [
       resetChunkIndex();
       return { enabled: input.enabled, active: !!(await chunkIndex()) };
     }, {
-      enabled: z.boolean().describe("true=조각 벡터로 찾는다(기본 · 조각의 98% 에 벡터가 있을 때만 실제로 쓴다) · false=문서 벡터로 찾는다"),
+      enabled: z.boolean().describe("true=조각 벡터로 찾는다(기본 · 그 찾기가 볼 범위의 조각 98% 에 벡터가 있을 때만 실제로 쓴다 — 카테고리를 지정한 찾기는 그 카테고리 조각으로 잰다) · false=문서 벡터로 찾는다"),
     }),
 ];

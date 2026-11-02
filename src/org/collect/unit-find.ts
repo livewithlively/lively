@@ -17,6 +17,7 @@ import { toVectorLiteral } from "../../v6/embedding-provider.js";
 import { sourceVisWhere } from "../../v6/source-store.js";
 import { parseQueryTerms, termAltPatterns, termPatterns } from "../../v6/query-terms.js";
 import { knowledgeSearchStrength } from "../../v6/knowledge-search.js";
+import type { ChunkIndex } from "../../v6/knowledge-chunk-search.js";
 import { connectorOfApp } from "./unit-store.js";
 import {
   HINT_SOURCES, HINT_UNITS, cleanQuery, knowledgeTermsNeeded, knowledgeWeak, termsNeeded, textMatchScore, unitHaystack, unitHintText, unitMatch,
@@ -247,6 +248,8 @@ export async function collectHintFor(input: {
   q: string; names: readonly string[]; member: string | null; isAdmin: boolean; now?: number;
   /** 이 시각(ms)이 지나면 더 묻지 않는다 — 부르는 쪽(knowledge_search)이 기다리는 상한. 지나서 끝난 일은 버려지므로 미리 멈춘다. */
   deadline?: number;
+  /** 그 찾기의 벡터 채널이 쓴 것(SearchRouteDiag.chunkIndex) — 약함을 같은 벡터로 잰다. 없으면 워크스페이스 전체로 잰다. */
+  chunkIndex?: ChunkIndex | null;
 }): Promise<CollectHint | null> {
   //  raw = 검색과 **글자 하나 다르지 않은** 원문(질의 임베딩 기억의 열쇠가 글 그대로다 — 앞뒤 공백도 지우지 않는다) · q = 문장부호를 뗀 글(낱말 판정 ·
   //   원문 자료 찾기).
@@ -256,7 +259,7 @@ export async function collectHintFor(input: {
   //  안내는 질문한 사람의 것이다 — 사람이 없으면(내부 호출) 만들지 않는다. 자료·단위 모두 그 사람 자신의 공개범위로만 찾는다.
   if (!q || !input.member) return null;
   try {
-    const strength = await knowledgeSearchStrength(raw, input.names, { termsQuery: q, termsNeeded: knowledgeTermsNeeded });
+    const strength = await knowledgeSearchStrength(raw, input.names, { termsQuery: q, termsNeeded: knowledgeTermsNeeded, chunkIndex: input.chunkIndex });
     const w = knowledgeWeak({ count: input.names.length, topSim: strength.topSim, lexical: strength.lexical });
     if (!w.weak || !w.reason) return null;
     const base = { reason: w.reason, knowledge: { top_similarity: strength.topSim == null ? null : Math.round(strength.topSim * 1000) / 1000, lexical: strength.lexical } };

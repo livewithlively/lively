@@ -341,6 +341,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/knowledge-chunk-search.pg-test.mjs
+      # ⑤-b1e2 조각을 쓸지 범위별로 잰다 — 카테고리를 지정한 찾기 · 앱 범위 안의 소환은 그 카테고리 조각의 98% 로 켜진다(다른 카테고리의 큰 묶음을 기다리지 않는다).
+      #    조각 · 카테고리 연결 · 공개범위가 한 셈에 묶여 있어 실제 pgvector 로 본다.
+      - name: 조각 검색 범위별 준비 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/v6/knowledge-chunk-scope.pg-test.mjs
       # ⑤-b1f 조각 색인 · 찾기의 워크스페이스 격리(#5204) — 벡터 후보에 워크스페이스 조건이 없어 행 보안이 격리의 전부다. 앱 역할 + FORCE RLS 로 본다.
       - name: 조각 워크스페이스 격리 PG 통합 테스트
         if: ${{ !cancelled() && steps.deps.outcome == 'success' }}

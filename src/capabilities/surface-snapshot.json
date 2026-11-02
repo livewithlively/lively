@@ -993,7 +993,7 @@
   "rest": [
    "POST /api/ui/org/embeddings/chunk-search"
   ],
-  "input_hash": "b8724fce31395713"
+  "input_hash": "34f81246ef82b147"
  },
  {
   "name": "org_mcp_servers",
