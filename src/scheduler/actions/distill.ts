@@ -80,8 +80,10 @@ async function enqueueBatches(params: Record<string, unknown>, jobId: string, cr
       ...headlessRun(b, params),
       marker: b.key ? laneMarker(jobId, b.key) : undefined,
       //  (#5235) 한 레인의 배치는 **어느 잡에서든** 한 번에 하나다 — 표식이 잡마다 달라 옛 중첩 가드는 다른 잡의 배치를 못 봤다.
+      //   맡은 레인이 없는 배치도 같다. 판정 기록은 접수가 끝나야 남아서(acceptedTaskId) 배정이 실패하는 동안엔 줄만으로 못 막는다 —
+      //   다음 잡이 같은 자료를 또 집는다(실측: 노드가 없는 CI).
       //   이 목록은 증류 잡만 담는다. 표식 뒷부분만 비교하면 key 공간이 따로인 카테고리 레인(둘 다 default 가 있다)까지 막는다.
-      guardMarkers: b.key ? jobs.map((id) => laneMarker(id, String(b.key))) : undefined,
+      guardMarkers: jobs.map((id) => (b.key ? laneMarker(id, b.key) : "cron:" + id)),
       // node(#1881) — 실행 노드 고정(예: "central" = 게이트웨이 박스). 비우면 스케줄러 자유 배정(램 여유 순).
       nodePref: typeof params.node === "string" && params.node.trim() ? params.node.trim() : null,
       extra: { distiller: b.key, undistilled: b.ids.length, backlog: b.backlog },

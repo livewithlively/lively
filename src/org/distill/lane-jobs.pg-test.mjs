@@ -218,7 +218,6 @@ try {
     chk("L1 배선 — 두 잡 다 돌았다", a.status === "ok" && b.status === "ok", JSON.stringify([a.status, b.status]));
     chk("L1b ★ 같은 레인 위탁은 하나다", laneTasks.length === 1, JSON.stringify(laneTasks.map((t) => t.marker)));
     chk("L1c ★ 같은 자료가 두 위탁에 안 들었다", inPrompts(rows, ids).length === 0, JSON.stringify(inPrompts(rows, ids)));
-    chk("L1d 판정 기록은 한 벌", (await laneSeen(ids)) === ids.length, String(await laneSeen(ids)));
   }
 
   //  L3 — 앞 잡의 위탁이 도는 동안 새 자료가 왔다. 다른 잡이 그 레인의 다음 배치를 내면 레인이 두 배치로 돈다.
@@ -258,7 +257,7 @@ try {
     const rows = await tasks();
     chk("L5 ★ 같은 key 의 카테고리 레인 위탁은 자료 레인을 안 막는다", rows.some((t) => t.marker === `cron:${JOB_B}#${LANE}`), JSON.stringify(rows.map((t) => t.marker)));
   }
-  //  L2 — 맡은 레인이 없는 자료. 표식이 cron:<잡> 이라 레인 가드가 안 듣는다 — 줄이 막아야 한다.
+  //  L2 — 맡은 레인이 없는 자료. 위탁을 받을 노드가 없는 면(CI)에선 접수가 끝나지 않아 판정 기록이 안 남는다 — 줄이 아니라 가드가 막아야 한다.
   {
     await clearRuns();
     const free = await mkSources(SYS_FREE, 3);
@@ -277,6 +276,11 @@ try {
     const after = (await tasks()).filter((t) => !t.marker.includes("#"));
     chk("L8 ★ 앞 배치가 도는 잡은 기본 기준 배치도 새로 안 낸다(자기 표식 가드)", after.length === before, JSON.stringify(after.map((t) => t.marker)));
     chk("L8b 건너뛴 자료에 판정 기록이 안 남는다", Number((await itemsPool.query(`SELECT count(*)::int AS n FROM org_stranded_seen WHERE source_id = ANY($1::int[])`, [extra])).rows[0].n) === 0, JSON.stringify(r.summary).slice(0, 160));
+    //  L9 — 배정이 실패해 판정 기록이 없는 상태. 줄은 지나가므로 가드만 남는다.
+    await itemsPool.query(`DELETE FROM org_stranded_seen WHERE source_id IN (SELECT id FROM source WHERE external_system LIKE $1)`, [`${T}%`]);
+    await run(owner === JOB_A ? JOB_B : JOB_A);
+    const noSeen = (await tasks()).filter((t) => !t.marker.includes("#"));
+    chk("L9 ★ 판정 기록이 없어도 다른 잡이 기본 기준 배치를 또 안 낸다", noSeen.length === before, JSON.stringify(noSeen.map((t) => t.marker)));
   }
   //  L6 — 전용 잡이 켜진 레인은 전체 잡이 안 집는다(#4052 그대로). 줄이 이 규칙을 바꾸지 않는다.
   {
