@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import { itemsPool, q, withTx } from "../db/client.js";
 import { planClaims, PRUNE_BATCH, type AgentJobStatus, type ClaimCandidate } from "./plan.js";
+import { EFFORT_LEVELS, isEffort, type Effort } from "./runner.js";
 import { AGENT_JOB_POLICY_RANGE, type AgentJobPolicy } from "../org/policies/agent-job-policy.js";
 
 export interface AgentJobRow {
@@ -125,6 +126,11 @@ export interface NewAgentJob {
    *  (이어받기 · 형식 재시도는 앞 작업 행 것). 필수다(mcpOnly 와 같은 까닭) — 접수하는 자리가 빠뜨리면 그 작업이 앱 동의 전체로 돈다.
    */
   toolAllowlist: string[] | null;
+  /**
+   * 하네스 생각 깊이(`--effort` · runner.EFFORT_LEVELS) — 앱 AI 실행이 받아 준다(이어받기 · 형식 재시도 · agent_job_run 이어받기는 앞 작업 행 것). null = 하네스 기본.
+   *  필수다 — 접수하는 자리가 하나라도 빠뜨리면 그 턴은 말없이 기본 깊이로 돈다(깊이를 견주는 앱의 비교가 거짓이 된다).
+   */
+  effort: Effort | null;
 }
 
 /**
@@ -144,19 +150,21 @@ export async function insertAgentJob(j: NewAgentJob, p: Pick<AgentJobPolicy, "ma
     //  #5081 shared_seat 칸은 공용 시트 작업일 때만 적는다 — SHARED_SEAT_COL 머리말(롤 창에서 다른 작업의 접수가 «없는 칸» 으로 깨지지 않게).
     //  #5082 app_instructions 칸도 같은 까닭으로 지시가 있을 때만 적는다(APP_INSTRUCTIONS_COL 머리말).
     //  mcp_only 칸도 같다 — MCP 만 쓰는 작업일 때만 적는다(MCP_ONLY_COL 머리말). tool_allowlist 칸도 목록이 있을 때만(TOOL_ALLOWLIST_COL 머리말).
-    //  #1639 app_server_own 칸도 같은 까닭으로 그 작업일 때만 적는다(APP_SERVER_OWN_COL 머리말).
+    //  #1639 app_server_own 칸도 같은 까닭으로 그 작업일 때만 적는다(APP_SERVER_OWN_COL 머리말). effort 칸도 값을 준 작업일 때만(EFFORT_COL 머리말).
     const shared = j.sharedSeat === true;
     const appServerOwn = j.appServerOwn === true;
     const instr = typeof j.appInstructions === "string" && j.appInstructions !== "" ? j.appInstructions : null;
     const mcpOnly = j.mcpOnly === true;
     const tools = Array.isArray(j.toolAllowlist) ? JSON.stringify(j.toolAllowlist) : null;
+    const effort = j.effort ? j.effort : null;
     //  더하는 칸의 값 — 아래 VALUES 의 $1..$15 뒤에 넣는 차례대로 자리 번호를 받는다(칸 차례와 값 차례가 같게 한 자리에서).
     const extra: string[] = [];
     const param = (v: string): string => { extra.push(v); return `$${15 + extra.length}`; };
     const instrRef = instr != null ? param(instr) : null;
     const toolsRef = tools != null ? param(tools) : null;
-    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${appServerOwn ? `, ${APP_SERVER_OWN_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}`;
-    const extraVals = `${shared ? ", true" : ""}${appServerOwn ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}`;
+    const effortRef = effort != null ? param(effort) : null;
+    const extraCols = `${shared ? `, ${SHARED_SEAT_COL}` : ""}${appServerOwn ? `, ${APP_SERVER_OWN_COL}` : ""}${instrRef ? `, ${APP_INSTRUCTIONS_COL}` : ""}${mcpOnly ? `, ${MCP_ONLY_COL}` : ""}${toolsRef ? `, ${TOOL_ALLOWLIST_COL}` : ""}${effortRef ? `, ${EFFORT_COL}` : ""}`;
+    const extraVals = `${shared ? ", true" : ""}${appServerOwn ? ", true" : ""}${instrRef ? `, ${instrRef}` : ""}${mcpOnly ? ", true" : ""}${toolsRef ? `, ${toolsRef}::jsonb` : ""}${effortRef ? `, ${effortRef}` : ""}`;
     const rows = await q(c,
       `INSERT INTO org_agent_job(requester, account_kind, account_member, app_id, project_id, cwd, harness, model, label, prompt,
                                  resume_conversation, resume_job_id, timeout_sec, bare, homeless${extraCols})
@@ -223,6 +231,28 @@ export async function agentJobToolAllowlist(id: number): Promise<string[] | null
     if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
     throw e;
   }
+}
+
+/**
+ * 하네스 생각 깊이(org_agent_job.effort)도 COLS 에 넣지 않고 따로 읽는다(agentJobEffort) — SHARED_SEAT_COL 과 같은 까닭(롤 창).
+ *  값을 준 작업을 넣을 때만 적고(insertAgentJob), 읽을 때 칸이 아직 없으면(42703) null 이다 — 칸이 없으면 그 칸을 단 행도 없다.
+ *  ★ 롤 창에 effort 를 실은 작업을 넣으려 하면 «없는 칸» 으로 접수가 실패한다 — 말없이 기본 깊이로 돌지 않는다. 부르는 쪽이 503 으로 다시 보내라고 한다.
+ *  칸의 값이 EFFORT_LEVELS 밖이면(손상 · 이 판이 모르는 값) 던진다 — 판이 뜰 때면 그 작업은 돌지 않고(service.onBoot), 이어받기 · 형식 재시도는
+ *  그 깊이를 모른 채 잇지 않는다. 잘못된 id 는 null 이다(형제 함수들과 같다).
+ */
+export const EFFORT_COL = "effort";
+export async function agentJobEffort(id: number): Promise<Effort | null> {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  let v: unknown;
+  try {
+    v = (await q(itemsPool, `SELECT ${EFFORT_COL} AS e FROM org_agent_job WHERE id=$1`, [id]))[0]?.e;
+  } catch (e) {
+    if ((e as { code?: string })?.code === "42703") return null;   // undefined_column — 마이그레이션 전(머리말)
+    throw e;
+  }
+  if (v == null) return null;
+  if (!isEffort(v)) throw new Error(`작업 #${id} 의 effort 값이 형식 밖입니다: ${JSON.stringify(v).slice(0, 40)} — ${EFFORT_LEVELS.join(" · ")} 중 하나`);
+  return v;
 }
 
 /**

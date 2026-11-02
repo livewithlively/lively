@@ -111,6 +111,8 @@ export async function liveAiRunDeps(): Promise<AiRunDeps> {
     //  작업별 라이블리 도구 허용 목록(ai.tools) — 같은 판에서 읽고 · 이어받기는 겹치는 것만 · 형식 재시도는 원래 작업 행의 목록.
     toolAllowlist: async (app, who, job) => (await import("../apps/app-job-tools.js")).resolveJobTools(app, who, job),
     jobToolAllowlist: async (jobId) => (await import("../agent-jobs/store.js")).agentJobToolAllowlist(jobId),
+    //  생각 깊이(effort) — 이어받기(안 주면) · 형식 재시도는 원래 작업 행의 값(판이 하네스에 실은 그 값).
+    jobEffort: async (jobId) => (await import("../agent-jobs/store.js")).agentJobEffort(jobId),
     inflight,
     rate,
     tenant: appSqlTenantId,

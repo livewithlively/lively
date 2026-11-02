@@ -119,6 +119,8 @@ export async function liveAgentJobDeps(): Promise<AgentJobDeps> {
     //  작업별 라이블리 도구 허용 목록 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 부른 사람이 보는 앱 판의 ai.tools 로 적었다).
     //   작업 판(실행면)이 뜰 때 작업 토큰의 도구 상한이 된다.
     jobToolAllowlist: async (job) => (await import("./store.js")).agentJobToolAllowlist(job.id),
+    //  하네스 생각 깊이 — 작업 행에 실려 있다(앱 AI 실행이 접수 때 받은 값 · 이어받기 · 형식 재시도는 앞 작업의 값). 판이 `--effort` 로 싣는다.
+    jobEffort: async (job) => (await import("./store.js")).agentJobEffort(job.id),
     onJobEnded: async (job) => { const ai = await import("../ai-runs/live.js"); await (await import("../ai-runs/service.js")).onJobEnded(job, await ai.liveAiRunDeps()); },
     listeningSince: () => LISTENING_SINCE,
     mintMcpToken: async (job, { toolCeiling }) => {
