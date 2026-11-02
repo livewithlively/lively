@@ -34,6 +34,9 @@ t("분류: 텍스트·OOXML(+hwpx)·hwp·vision·unreadable·skip·sniff", () =>
   //  구버전 바이너리 오피스는 그대로 «읽을 수 없음» — 이쪽은 실제로 뽑을 방법이 없다.
   assert.equal(classifyLocalPath("보고.doc").kind, "unreadable");
   assert.equal(classifyLocalPath("옛문서.doc").kind, "unreadable");
+  assert.equal(classifyLocalPath("IMG_0001.HEIC").kind, "vision");   // 아이폰 원본 — 등록돼야 읽을 수 있다
+  assert.equal(classifyLocalPath("IMG_0002.heif").kind, "vision");
+  assert.equal(localMimeOf("IMG_0001.HEIC"), "image/heic");
   assert.equal(classifyLocalPath("app.dmg").kind, "skip");
   assert.equal(classifyLocalPath("음성.m4a").kind, "skip");
   assert.equal(classifyLocalPath(".DS_Store").reason, "dotfile");
