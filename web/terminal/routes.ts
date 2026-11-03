@@ -314,7 +314,7 @@ async function renderTerminal(view) {
     }
     toast(fail || unknown
       ? [done + '개 복원', unknown ? unknown + '개 상태 확인 못함' : '', fail ? fail + '개 실패' : ''].filter(Boolean).join(' · ')
-        + (unknown ? ' — 확인 못한 건 그 세션을 열어 [강제로 되살리기] 하세요' : '')
+        + (unknown ? ' — 응답 없는 세션은 하나씩 [복원]을 누르면 새로 띄워 이어 갑니다' : '')
       : (done + '개 세션을 복원했습니다 — 대화를 이어받았어요'), fail > 0 || unknown > 0);
     sel.mode = false; sel.ids.clear();
     reRender();

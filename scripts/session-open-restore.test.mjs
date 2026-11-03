@@ -313,7 +313,8 @@ const ok = (cond, name) => { assert.ok(cond, name); pass++; console.log(`ok  ${n
   const resumeBody = resume.slice(0, resume.indexOf("\n  }\n"));
   // C1 — 복원 요청만 다시 묻는다. 이어보기(v6 resume)는 멱등이 아니라(부를 때마다 «이어보기» 세션이 선다) 안 건다.
   const wr = resumeBody.indexOf("withRetry(");
-  ok(wr > 0 && /\/restore`/.test(resumeBody.slice(wr, resumeBody.indexOf(");", resumeBody.indexOf("/restore`", wr)) + 2)),
+  //  #5300 — 주소는 restorePath(id, force) 로 만든다(사람이 누른 복원은 «모름» 이면 force 로 한 번 더 — 그 요청도 같은 재시도를 탄다).
+  ok(wr > 0 && /\/restore`|restorePath\(target\.id, force\)/.test(resumeBody.slice(wr, wr + 160)),
     "⑩-C1a ★ 복원 요청(/restore)은 끊김 재시도(withRetry)를 거친다 — 롤 교대에 잘린 요청을 제자리에서 다시 묻는다");
   const v6 = resumeBody.split("\n").filter((l) => l.includes("/api/ui/v6/sessions/") && l.includes("/resume?node="));
   ok(v6.length === 1 && !/withRetry/.test(v6[0]),

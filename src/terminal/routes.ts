@@ -1834,8 +1834,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
  *  눌러도 같은 거절이 돌아오는 헛 선택지가 된다(종전 대화창의 `status === 409` 검사가 그랬다).
  */
 function stateUnknownRestore(what: string): HttpError {
-  return new HttpError(409, `${what} — 잠시 후 다시 시도하거나, `
-    + "그대로 새 세션으로 되살리려면 화면의 [강제로 되살리기] 를 눌러 주세요(대화는 이어집니다).",
+  //  ★ #5300 — 문구가 **화면의 장치를 지목하지 않는다.** 종전 «화면의 [강제로 되살리기] 를 눌러 주세요» 는 그 버튼이 없는
+  //   화면(대화창의 [이어서 대화하기]·말 걸어 되살리기)에서 그대로 토스트돼 다시 막다른 안내가 됐다(원준님 2026-11-03).
+  //   무엇을 보일지는 화면이 canForce 를 보고 정한다 — 사람이 누른 복원은 묻지 않고 force 로 다시 부른다(web/lib/restore-force.ts).
+  return new HttpError(409, `${what} — 다시 열면 새로 띄워서 대화를 이어 갑니다.`,
     { body: { canForce: true } });
 }
 

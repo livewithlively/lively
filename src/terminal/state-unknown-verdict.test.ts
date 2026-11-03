@@ -113,14 +113,15 @@ test("[#3752-④ 엣지11] ★ 배선 — 복원은 «모름» 에서 기본 409
   assert.match(src, /const force = req\.query\.force === "1"/, "사람의 선택을 받는 입구가 없다");
 });
 
-test("[#3752-④ 엣지11ᵇ] ★ 배선 — 화면의 [이어서 열기] 가 409 를 받으면 강제 복원을 제시한다", () => {
-  //  종전엔 이 버튼이 already 를 받고 «잠시 뒤 다시 눌러 주세요» 만 반복했다 — 그 «잠시 뒤» 는 오지 않는다.
+test("[#3752-④ 엣지11ᵇ → #5300] ★ 배선 — 화면의 [이어서 열기] 가 «모름» 을 받으면 묻지 않고 새로 띄운다", () => {
+  //  종전엔 이 버튼이 already 를 받고 «잠시 뒤 다시 눌러 주세요» 만 반복했다 — 그 «잠시 뒤» 는 오지 않는다(#3752 ④).
+  //  그 뒤엔 «한 번 더 누르면 강제로 되살린다» 고 두 번 누르게 했다 — #5300 에서 묻지 않는다(사람이 판단할 근거가 없다).
   const src = srcOf("../../web/session-chat.ts");
-  assert.match(src, /pd\.forceRestore \? '\?force=1' : ''/, "사람이 고른 뒤에도 force 를 안 싣는다");
-  //  #3870 — 판정이 «상태코드 409» 에서 «서버가 실은 canForce» 로 좁혀졌다. 같은 라우트의 409 중 노드
-  //   오프라인·무응답·좌표없음은 force 로 안 풀려서, 상태코드만 보면 헛 버튼이 선다(그리고 그 헛 버튼을
-  //   **다른 화면들**은 아예 못 그렸다 — 그게 #3870 의 본체다).
-  assert.match(src, /canForceRestore\(e\) && !pd\.forceRestore/, "409(상태 불명)를 다른 실패와 같이 다룬다");
+  const ru = src.slice(src.indexOf("async function restoreUnreachable("), src.indexOf("async function outboxAct("));
+  assert.match(ru, /await restoreForUser<any>\(\s*\n?\s*\(force\) => api\(restorePath\(target\.id, force\)/, "사람이 누른 [이어서 열기] 가 restoreForUser 를 안 탄다");
+  //  #3870 — 판정은 «상태코드 409» 가 아니라 «서버가 실은 canForce» 다(restoreForUser 안의 canForceRestore). 같은 라우트의 409 중
+  //   노드 오프라인·무응답·좌표없음은 force 로 안 풀려서, 상태코드만 보면 헛 재시도가 된다.
+  assert.doesNotMatch(ru, /status\s*===\s*409/, "409(상태 불명)를 상태코드로 가른다");
   //  ⚠ 기본값으로 force 를 싣지 않는다 — 자동 경로가 옛 세션을 둘로 만들지 않게(#835).
   assert.doesNotMatch(src, /restore\?force=1`/, "force 가 기본 경로에 박혀 있다");
 });

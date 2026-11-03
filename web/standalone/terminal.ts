@@ -4896,7 +4896,8 @@ function showEndedBar(o) {
     const rb = el('button', { class: 'ended-cta', text: o.restoreLabel || '다시 열기' });
     //  #3870 — force 는 «옛 것이 살아 있을 수도 있음을 알고 새로 만든다» 는 선언이라 **사람이 이 버튼을 누른 것**이
     //   곧 그 확인이다(서버가 canForce 를 준 뒤에만 이 라벨로 선다 — 아래 restoreThisSession 의 catch).
-    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(o.restoreForce); };
+    //  #5300 — 버튼은 사람이 누른 것이다(byUser) — [다시 열기] 가 «모름» 을 받아도 묻지 않고 새로 띄운다.
+    rb.onclick = () => { rb.disabled = true; rb.textContent = '여는 중…'; restoreThisSession(o.restoreForce, true); };
     bar.append(rb);
   }
   bar.append(el('a', { class: 'ended-cta', href: apiUrl('/ui/#/terminal'), target: '_blank', rel: 'noopener', text: '세션 목록 열기 →' }));
@@ -5039,7 +5040,7 @@ function showRestoringBanner(meta) {
     body: why + ' 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
 }
 // 복원 실행 — 목록 카드 [복원] 과 같은 엔드포인트. 새 세션은 새 id 를 받으므로 그 주소로 갈아탄다(현재 URL 은 죽은 id).
-async function restoreThisSession(force?) {
+async function restoreThisSession(force?, byUser?) {
   try { if (ws && ws.readyState <= 1) ws.close(); } catch (_) { /* noop */ }
   let r = null;
   try { r = await api(sUrl('/restore') + (force ? '?force=1' : ''), { method: 'POST', body: '{}' }); }
@@ -5049,11 +5050,14 @@ async function restoreThisSession(force?) {
     //   그대로 body 에 실었는데, 그 문구는 «화면의 [강제로 되살리기] 를 눌러 주세요» 라고 대화창에만 있는 버튼을
     //   지목한다 — 이 화면엔 없어서 «누르라는데 없다» 가 됐다(실측 2026-09-12, 원준님 신고).
     //   force 로 한 번 더 눌렀는데도 같은 답이면(force 참) 되풀이하지 않고 사유만 남긴다.
+    //  ★ #5300 — 사람이 누른 복원이면 **묻지 않고** 새로 띄운다(web/lib/restore-force.ts restoreForUser 머리말 — 이 번들은
+    //   그 파일을 import 못 해 같은 규칙을 여기 적는다). 화면이 스스로 건 자동 복원만 아래 배너로 사람 손을 한 번 거친다(#835).
     if (canForceRestore(e) && !force) {
+      if (byUser) { await restoreThisSession(true, true); return; }
       showEndedBar({
-        title: '상태를 확인하지 못했어요.',
-        body: '이 세션이 있는 곳이 끝난 건지 응답만 늦는 건지 모르는 상태예요. 잠시 뒤 다시 열어 보거나, 그대로 새로 열어 대화를 이어받을 수 있어요.',
-        icon: '❓', info: true, restoreBtn: true, restoreLabel: '강제로 되살리기', restoreForce: true,
+        title: '세션이 응답하지 않아요.',
+        body: '새로 띄워서 대화를 이어 갈 수 있어요.',
+        icon: '❓', info: true, restoreBtn: true, restoreLabel: '새로 띄워 이어 가기', restoreForce: true,
       });
       return;
     }

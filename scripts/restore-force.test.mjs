@@ -67,7 +67,68 @@ try {
   ok(lib.restorePath("box-a-1", false) === "/api/ui/terminal/sessions/box-a-1/restore", "P10b force=false 도 안 붙는다");
   ok(lib.restorePath("box-a-1", true) === "/api/ui/terminal/sessions/box-a-1/restore?force=1", "P10c force=true 면 ?force=1");
   ok(lib.restorePath("a/b?c").includes("a%2Fb%3Fc"), "P10d 세션 id 는 이스케이프한다(경로를 벗어나지 않게)");
-  ok(lib.RESTORE_FORCE_LABEL === "강제로 되살리기", "P10e 버튼 글자는 서버 안내 문구가 지목하는 그 이름이다");
+  //  #5300 — 서버가 더 이상 화면의 장치를 지목하지 않는다. 버튼 글자는 «무엇이 일어나나» 를 사람 말로 한다.
+  ok(lib.RESTORE_FORCE_LABEL === "새로 띄워 이어 가기", "P10e 버튼 글자는 일어날 일을 사람 말로 한다(«강제로» 같은 시스템 말 없이)");
+
+  // ── R — #5300 restoreForUser: 사람이 누른 복원은 «모름» 이면 묻지 않고 force 로 한 번 더 부른다 ──
+  //  원준님 신고(2026-11-03): «강제로 되살리기 이거 없는데?» → «사용자 입장에선 어떻게» → 묻지 말고 알아서 되살린다.
+  {
+    const run = async (answers) => {
+      const calls = []; let forcedHook = 0;
+      const call = async (force) => {
+        calls.push(force);
+        const a = answers[calls.length - 1];
+        if (a instanceof Error) throw a;
+        return a;
+      };
+      let out, thrown;
+      try { out = await lib.restoreForUser(call, () => { forcedHook++; }); } catch (e) { thrown = e; }
+      return { calls, forcedHook, out, thrown };
+    };
+    const unknown = err(409, { canForce: true });
+    {
+      const x = await run([{ ok: true, session: { id: "s2" } }]);
+      ok(show(x.calls) === "[false]" && x.out?.forced === false && x.out?.r?.session?.id === "s2" && x.forcedHook === 0,
+        "R1 첫 요청이 되면 force 없이 끝난다(한 번만 부른다)", show(x));
+    }
+    {
+      const x = await run([unknown, { ok: true, session: { id: "s3" } }]);
+      ok(show(x.calls) === "[false,true]" && x.out?.forced === true && x.out?.r?.session?.id === "s3" && x.forcedHook === 1,
+        "R2 ★ «모름»(canForce 409)이면 묻지 않고 force 로 한 번 더 부르고 forced 를 알린다", show(x));
+    }
+    {
+      const nodeOff = err(409, {});
+      const x = await run([nodeOff, { ok: true }]);
+      ok(show(x.calls) === "[false]" && x.thrown === nodeOff && x.forcedHook === 0,
+        "R3 force 로 안 풀리는 409(노드 오프라인 — canForce 없음)는 다시 부르지 않고 그 거절을 그대로 던진다", show(x.calls));
+    }
+    {
+      const boom = err(500, { canForce: true });
+      const x = await run([boom, { ok: true }]);
+      ok(show(x.calls) === "[false]" && x.thrown === boom, "R4 409 가 아닌 실패는 force 로 다시 부르지 않는다", show(x.calls));
+    }
+    {
+      const second = err(409, { canForce: true });
+      const x = await run([unknown, second, { ok: true }]);
+      ok(show(x.calls) === "[false,true]" && x.thrown === second,
+        "R5 force 로 다시 불러도 실패하면 그 실패를 던지고 세 번째는 없다(무한 반복 금지)", show(x.calls));
+    }
+    {
+      const x = await run([err(409, { canForce: "true" }), { ok: true }]);
+      ok(show(x.calls) === "[false]" && x.thrown, "R6 참값 흉내(canForce:'true')로는 force 로 가지 않는다", show(x.calls));
+    }
+    {
+      const old = Object.assign(new Error("옛 서버"), { status: 409 });
+      const x = await run([old, { ok: true }]);
+      ok(show(x.calls) === "[false]" && x.thrown === old, "R7 canForce 를 안 싣는 옛 서버의 409 는 force 로 가지 않는다(롤 순서 안전)", show(x.calls));
+    }
+    {
+      const x = await run([{ ok: true, already: true, id: "s1" }]);
+      ok(x.out?.forced === false && x.out?.r?.already === true, "R8 살아 있다(already) 는 답은 그대로 돌려준다 — force 아님", show(x.out));
+    }
+    ok(typeof lib.RESTORE_FORCED_NOTE === "string" && lib.RESTORE_FORCED_NOTE.includes("새로 띄웠어요") && lib.RESTORE_FORCED_NOTE.includes("대화는 이어집니다"),
+      "R9 새로 띄웠을 때 사람에게 할 한 줄은 «무엇이 일어났나» 와 «대화는 이어진다» 를 말한다");
+  }
 
   // ── E — HttpError 구조화 본문이 응답에 실린다 ───────────────────────────
   execFileSync(path.join(root, "node_modules/.bin/tsc"),
@@ -94,6 +155,13 @@ try {
   const routes = readFileSync(path.join(root, "src/terminal/routes.ts"), "utf8");
   ok(/function stateUnknownRestore\([\s\S]*?body: \{ canForce: true \}/.test(routes),
     "S0 «모른다» 로 멈추는 409 는 한 자리(stateUnknownRestore)에서 만들고 canForce 를 싣는다");
+  {
+    //  #5300 — 문구가 화면의 장치를 지목하면, 그 장치가 없는 화면에서 «없는 버튼을 누르라» 가 된다(이번 신고의 직접 원인).
+    const fn = routes.slice(routes.indexOf("function stateUnknownRestore("), routes.indexOf("function stateUnknownRestore(") + 900);
+    const msg = fn.slice(fn.indexOf("new HttpError(409"), fn.indexOf("{ body: { canForce: true } }"));
+    ok(msg.length > 0 && !/화면의|눌러 주세요|\[강제로 되살리기\]/.test(msg),
+      "S0b ★ «모름» 409 문구는 화면의 버튼을 지목하지 않는다", msg.trim().slice(0, 90));
+  }
   for (const [n, what] of [
     ["S1", "이 세션이 있는 컨테이너의 상태를 확인하지 못했습니다"],
     ["S2", "이 대화를 이어 도는 세션이 있는지 확인하지 못했습니다"],
@@ -126,30 +194,61 @@ try {
     ["C5 단독 터미널 부팅 게이트", "web/standalone/terminal.ts"],
     ["C6 세션 목록 일괄 복원", "web/terminal/routes.ts"],
   ]) {
-    ok(srcOf(file).includes("canForceRestore"), `${name}(${file}) 은 서버가 말한 canForce 를 본다`);
+    //  #5300 — 사람이 누른 복원은 restoreForUser 가 canForce 를 대신 본다(그 안의 판정이 위 P 표다).
+    ok(/canForceRestore|restoreForUser[<(]/.test(srcOf(file)), `${name}(${file}) 은 서버가 말한 canForce 를 본다`);
   }
   //  ⚠ 종전의 과대 판정이 되살아나지 않게 **force 게이트 그 자체**를 못박는다 — 상태코드만 보고 버튼을 세우면
   //   노드 갈래 409 에도 헛 버튼이 선다. (이 파일의 다른 409 검사(대화 파일이 그 컴퓨터에 있다는 #1744 응답)는
   //   복원과 무관하므로 건드리지 않는다 — 그래서 파일 전체가 아니라 이 게이트만 본다.)
   {
     const s = srcOf("web/session-chat.ts");
-    ok(/if \(canForceRestore\(e\) && !pd\.forceRestore\)/.test(s) && !/status\s*===\s*409\s*&&\s*!pd\.forceRestore/.test(s),
-      "C1b 대화창의 force 게이트가 상태코드가 아니라 canForce 를 본다");
+    ok(!/status\s*===\s*409/.test(s.slice(s.indexOf("async function restoreUnreachable("), s.indexOf("async function outboxAct("))),
+      "C1b 대화창의 [이어서 열기] 가 상태코드로 force 를 가르지 않는다");
   }
   //  단독 터미널은 배너가 그 선택지를 나른다 — 라벨과 force 전달이 함께 있어야 실제로 눌린다.
   {
     const s = srcOf("web/standalone/terminal.ts");
-    ok(s.includes("restoreLabel: '강제로 되살리기'") && s.includes("restoreForce: true")
-      && s.includes("restoreThisSession(o.restoreForce)"),
-      "C5b 단독 터미널 배너의 [강제로 되살리기] 가 실제로 force 를 싣고 복원을 부른다");
+    ok(s.includes("restoreLabel: '새로 띄워 이어 가기'") && s.includes("restoreForce: true")
+      && s.includes("restoreThisSession(o.restoreForce, true)"),
+      "C5b 단독 터미널 배너의 [새로 띄워 이어 가기] 가 실제로 force 를 싣고, 사람이 누른 것(byUser)으로 복원을 부른다");
+    const fn = s.slice(s.indexOf("async function restoreThisSession("), s.indexOf("async function restoreThisSession(") + 2500);
+    ok(/if \(canForceRestore\(e\) && !force\) \{\s*\n\s*if \(byUser\) \{ await restoreThisSession\(true, true\); return; \}/.test(fn),
+      "C5c ★ 단독 터미널에서 사람이 누른 복원이 «모름» 을 받으면 묻지 않고 force 로 다시 부른다(#5300)");
+    ok(!fn.includes("'강제로 되살리기'"), "C5d 단독 터미널 배너에 «강제로 되살리기» 라는 시스템 말이 남지 않았다");
   }
-  //  확인창 없이 force 로 새지 않는다 — force 는 사람이 고른 것이어야 한다(#3752 ④).
+  //  ★ #5300 — 사람이 누른 복원은 확인창 없이 restoreForUser 로 간다(묻지 않는다). 확인창 함수 자체가 없어야 한다.
   for (const [name, file] of [
     ["C2c 판 목록", "web/v2/panes-parts.ts"],
     ["C3c 세션 목록", "web/terminal/session-list.ts"],
     ["C4c 대시보드 카드", "web/dash/widget-sessions.ts"],
   ]) {
-    ok(srcOf(file).includes("confirmForceRestore"), `${name} 은 force 전에 사람에게 묻는다`);
+    const s = srcOf(file);
+    ok(/restoreForUser[<(]/.test(s) && !/await confirmForceRestore\(/.test(s), `${name} 은 묻지 않고 restoreForUser 로 되살린다`);
+  }
+  ok(!/export async function confirmForceRestore/.test(srcOf("web/session-actions.ts")), "C2d 확인창(confirmForceRestore)이 걷혔다");
+
+  // ── W — #5300 대화창: 사람의 행동만 force 로 가고, 화면이 스스로 거는 자동 복원은 확답만 믿는다(#835) ──
+  {
+    const s = srcOf("web/session-chat.ts");
+    const rs = s.slice(s.indexOf("async function resumeSession("), s.indexOf("// 목차 — 이 창에서 읽은 질문들"));
+    ok(/if \(hint\?\.byUser\) \{\s*\n\s*const out = await restoreForUser\(once,/.test(rs) && /\} else \{\s*\n\s*r = await once\(false\);/.test(rs),
+      "W1 ★ resumeSession: byUser 면 restoreForUser, 아니면 force 없이 한 번(자동 복원이 세션을 둘로 세우지 않게)");
+    ok(/toast\(canForceRestore\(e\) \? '세션이 응답하지 않아/.test(rs),
+      "W2 ★ 자동 복원이 «모름» 을 받으면 서버 원문 대신 사람이 할 다음 행동을 말한다(이번 신고의 토스트 자리)");
+    ok(/forced && !stillHere \? RESTORE_FORCED_NOTE/.test(rs), "W3 새로 띄웠으면 그 사실을 한 줄로 말한다");
+    //  사람의 행동 세 자리 — [이어서 대화하기]·멈춤 카드의 답·말 걸어 되살리기 — 가 byUser 를 싣는다.
+    ok(s.includes("btn.addEventListener('click', () => { void resumeSession(btn, { byUser: true }); });"), "W4a [이어서 대화하기] 는 사람의 행동이다");
+    ok(s.includes("void resumeSession(null, { canRestore: true, byUser: true }); } }));"), "W4b 멈춤 카드에서 답을 고른 것은 사람의 행동이다");
+    const rv = s.slice(s.indexOf("async function reviveWithPrompt("), s.indexOf("async function reviveWithPrompt(") + 1500);
+    ok(/routed = await resumeSession\(null, \{[\s\S]{0,120}?byUser: true,/.test(rv), "W4c ★ 말을 보내 되살리는 것은 사람의 행동이다");
+    //  자동 경로 세 자리(열자마자·터미널 탭·액자가 끝났다고 알림)는 byUser 를 싣지 않는다.
+    const lines = s.split("\n");
+    const autos = lines.map((l, i) => ({ l, near: lines.slice(Math.max(0, i - 3), i + 1).join("\n") }))
+      .filter((x) => x.l.includes("void resumeSession(") && x.near.includes("resumeAuto = true"))
+      .map((x) => x.l.slice(x.l.indexOf("void resumeSession(")));
+    ok(autos.length >= 3 && autos.every((a) => !a.includes("byUser")), "W5 자동 복원 자리는 byUser 를 싣지 않는다", show(autos));
+    const ru = s.slice(s.indexOf("async function restoreUnreachable("), s.indexOf("async function outboxAct("));
+    ok(ru.includes("await restoreForUser<any>(") && !ru.includes("forceRestore"), "W6 [이어서 열기](못 닿는 세션)도 두 번 누르게 하지 않고 restoreForUser 로 간다");
   }
   //  일괄은 force 를 **대신 고르지 않는다**(건별 선언이라) — 대신 몇 건이 그랬는지 말한다.
   for (const [name, file] of [["C6b", "web/terminal/routes.ts"], ["C7 대시보드 일괄", "web/dash/widget-sessions.ts"]]) {

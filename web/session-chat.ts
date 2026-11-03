@@ -57,7 +57,7 @@ import { rememberFirstPrompt, rememberUnsentDraft, takeFirstPrompt } from './v2/
 import { withRetry } from './lib/restore-retry.js';   // #3891 — 복원 요청은 끊김에만 짧게 다시 묻는다(서버 복원이 멱등이라 안전)
 import { echoedInTurns, promptHead, sameSaid, unconfirmedRow } from './lib/outbox-echo.js';   // #4819 — 기록이 이미 보여 준 말은 «미확인» 대기 말풍선으로 다시 올리지 않는다
 import { queuedSay, sayIdOf, sayOrderTs } from './lib/queued-say.js';   // #4850 — 일하는 중에 친 사람 말(끼워 넣기 줄)도 사람 말 줄처럼 그린다
-import { canForceRestore, RESTORE_FORCE_LABEL } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다
+import { canForceRestore, restoreForUser, restorePath, RESTORE_FORCED_NOTE } from './lib/restore-force.js';   // #3870 — «force 로 풀리는 모름» 인지는 서버가 말한다 · #5300 사람이 누르면 묻지 않고 새로 띄운다
 import { stopNoteOf, stopNoteWhy, stopAnswerPrompt, stopFreeAnswerPrompt, loadComposeDraft, saveComposeDraft, stopDraftSeen, markStopDraftSeen, type StopNote } from './lib/stop-note.js';   // #4695 T5 — 끄기 전에 남긴 쪽지 · 세션별 쓰던 글
 import { endedSessPhrase, sessLikeOfFacts, type EndFactsMsg } from './session-end-copy.js';   // #4783 — 꺼진 세션을 누가 끝냈나로 부른다
 import { olderLoader, olderNext, olderRequest } from './lib/older-autoload.js';   // #3778 «위로 더» 는 단추가 아니라 스크롤이 부른다
@@ -1004,7 +1004,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  codex — 다시 열면 같은 승인 창이 다시 뜬다(실측 0.162.1). 고른 답을 미리 받아 둘 이유가 없다 — 열고 그 창에서 답한다.
       body.append(el('div', { class: 'sc-stopq-hint', text: '다시 열면 같은 창이 다시 떠요 — 거기서 답해 주세요.' }));
       acts.append(el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이어서 열고 답하기',
-        onclick: () => { stopAnsweredAt = note.at; clearStopCard(); view.setNote('세션을 다시 여는 중이에요 — 열리면 같은 질문이 다시 떠요.'); void resumeSession(null, { canRestore: true }); } }));
+        onclick: () => { stopAnsweredAt = note.at; clearStopCard(); view.setNote('세션을 다시 여는 중이에요 — 열리면 같은 질문이 다시 떠요.'); void resumeSession(null, { canRestore: true, byUser: true }); } }));
       return card;
     }
     const picks = q.items.map(() => ({ labels: [] as string[] }));
@@ -1057,7 +1057,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
     const btn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '이어서 대화하기' }) as HTMLButtonElement;
-    btn.addEventListener('click', () => { void resumeSession(btn); });
+    btn.addEventListener('click', () => { void resumeSession(btn, { byUser: true }); });
     view.setFooter(el('div', { class: 'sc-bar' },
       el('span', { class: 'sc-bar-t', text: `${why}이에요 — 대화는 그대로 이어받을 수 있어요.` }), btn));
     view.busy(false);
@@ -1851,7 +1851,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     /** #3689 — «이어서 열기» 줄은 한 번만 그린다(3초 폴링마다 새 버튼을 끼우면 누른 버튼의 진행 상태가 덮인다). */
     restoreMsg?: HTMLElement; restoreBtn?: HTMLButtonElement; restoring?: boolean;
     /** #3752 ④ — 서버가 «상태를 확인하지 못했다»(409)고 답한 뒤, 사람이 한 번 더 눌러 강제 복원을 고른 상태. */
-    forceRestore?: boolean;
     /** #4819 — 서버 큐가 마지막으로 알려 준 그 행의 상태·사유. 같은 글의 말풍선이 여럿일 때 기록의 에코를 어디에 이을지 가른다. */
     status?: string; err?: string | null;
     /** #4850 — 기록에 그 말이 나타날 때까지 맨 아래에 붙들렸나(view.turn pinned). 에코 없는 말(슬래시 명령·셸)은 안 붙든다. */
@@ -2175,13 +2174,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!btn || pd.restoring) return;                 // 진행 중이면 두 번 나가지 않는다(버튼 재생성과 무관한 두 번째 가드)
     pd.restoring = true;
     const orig = btn.textContent;
-    //  #3752 ④ — 다음 문구. 강제로 고른 상태면 그 자리를 유지한다(finally 가 여기로 되돌린다).
-    let restoreTo = orig;
     btn.disabled = true; btn.textContent = '여는 중…';
     try {
-      //  #3752 ④ — 기본은 종전 그대로 확답만 믿는다. force 는 **사람이 한 번 더 누른 뒤**에만 붙는다(아래 409 갈래).
-      const q = pd.forceRestore ? '?force=1' : '';
-      const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore${q}`, { method: 'POST', body: '{}' });
+      //  ★ #5300 — 사람이 [이어서 열기] 를 눌렀다. «모름»(canForce 409)이면 **묻지 않고** 새로 띄운다(restoreForUser 머리말).
+      //   종전(#3752 ④·#3870)엔 «한 번 더 누르면 강제로 되살린다» 고 두 번 누르게 했다 — 사람이 판단할 근거가 없는 질문이었다.
+      const { r, forced } = await restoreForUser<any>(
+        (force) => api(restorePath(target.id, force), { method: 'POST', body: '{}' }),
+        () => { btn.textContent = '새로 띄우는 중…'; });
       if (r?.session) rememberCreated(r.session);
       const next = String(r?.session?.id || r?.movedTo || '');
       if (next && next !== target.id) {
@@ -2189,6 +2188,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         //   그때 «이어받기 세션» 이라고 하면 사람은 옛 대화가 붙어 있는 줄 알고 그 위에서 말을 잇는다.
         toast(r?.resumed === 'fresh'
           ? '이어받을 대화 기록이 그 컴퓨터에 없어 새 대화로 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.'
+          : forced ? '이전 세션이 응답하지 않아 새로 띄웠어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.'
           : '이어받기 세션을 열었어요 — 대기 중이던 지시는 그 세션으로 넘어갑니다.');
         if (opts.onResumed) opts.onResumed(next); else location.hash = '#/s/' + encodeURIComponent(next);
         return;
@@ -2205,25 +2205,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       //  already — 서버가 이 세션을 «아직 살아 있다(못 닿을 뿐)» 로 본다. 못 닿는 것과 끝난 것은 다르다 — 사실대로 말한다.
       toast(r?.already ? '서버가 이 세션을 아직 살아 있다고 봐요(못 닿는 것과 끝난 것은 달라요). 잠시 뒤 다시 눌러 주세요.' : '지금은 복원할 수 있는 상태가 아니에요.');
     } catch (e: any) {
-      //  #3752 ④ — 409 = «그 컨테이너의 상태를 확인하지 못했다». 종전 서버는 이 경우를 «살아 있다»(already)로 접었고,
-      //   그래서 이 버튼이 «잠시 뒤 다시 눌러 주세요» 만 반복했다 — 샌드박스가 무응답이면 사람이 개입하기 전엔
-      //   스스로 돌아오지 않으므로 그 «잠시 뒤» 는 영영 오지 않는다(실측 #3688).
-      //   이제 서버가 사실대로 409 를 주니, **사람에게 고르게 한다**: 한 번 더 누르면 강제로 되살린다.
-      //   ⚠ 두 번 누르게 하는 것이 곧 확인이다 — 옛 세션이 실은 살아 있을 수도 있음을 알고 새로 여는 선택이라
-      //    자동으로 대신 골라 주지 않는다.
-      //  ⚠ #3870 — 판정을 `status === 409` 에서 **서버가 실은 canForce** 로 좁혔다. 같은 라우트의 409 중
-      //   노드 오프라인·노드 무응답·노드 직접생성(좌표 없음)은 force 로 풀리지 않는다 — 종전 검사는 그 셋에도
-      //   버튼을 내밀어, 한 번 더 눌러도 같은 거절이 돌아오는 헛 선택지를 만들었다.
-      if (canForceRestore(e) && !pd.forceRestore) {
-        pd.forceRestore = true;
-        restoreTo = RESTORE_FORCE_LABEL;
-        toast('이 세션이 있는 컨테이너의 상태를 확인할 수 없어요. 한 번 더 누르면 대화를 이어받아 새로 되살립니다.');
-      } else {
-        toast(e?.message || '이어서 열지 못했어요.');
-      }
+      //  여기 오는 것은 force 로도 안 풀리는 거절(노드 오프라인 등)이거나, force 로 다시 불렀는데도 실패한 경우다 — 서버 사유를 그대로 말한다.
+      //  ⚠ #3870 — 같은 라우트의 409 중 노드 갈래(오프라인·무응답·좌표 없음)는 canForce 가 없어 restoreForUser 가 force 로 다시 부르지 않는다.
+      toast(e?.message || '이어서 열지 못했어요.');
     } finally {
       pd.restoring = false;
-      btn.disabled = false; btn.textContent = restoreTo;
+      btn.disabled = false; btn.textContent = orig;
     }
   }
   async function outboxAct(pd: Pending, act: 'retry' | 'discard'): Promise<void> {
@@ -2868,6 +2855,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       routed = await resumeSession(null, {
         canRestore: true,
         stayIfSame: true,
+        byUser: true,   // #5300 — 말을 보낸 것 자체가 «되살려라» 다. «모름» 이면 묻지 않고 새로 띄워 그 말을 넣는다.
         onRetry: () => { if (!destroyed) pd.state.textContent = '연결이 잠깐 끊겨 다시 여는 중…'; },
       }, async (newId, stay) => {
         //  #4996 — 같은 id 로 되살아났으면 이 화면이 그대로 이어 간다(reviveInPlace) — 옮겨 갈 화면에 첫 지시를 맡기지 않는다.
@@ -2904,13 +2892,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
    *  돌려주는 값 = **옮겨 갔나**(#3891) — 부른 쪽이 실패를 제자리에서 마감할 수 있게 한다. 종전엔 실패를 토스트로
    *  삼키고 아무것도 안 돌려줘서, 말로 되살리던 화면(reviveWithPrompt)이 «여는 중…» 에 영영 멈췄다.
    */
-  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean; onRetry?: () => void; stayIfSame?: boolean }, beforeRoute?: (newId: string, stay: boolean) => Promise<void>): Promise<boolean> {
+  async function resumeSession(btn?: HTMLButtonElement | null, hint?: { canRestore?: boolean; onRetry?: () => void; stayIfSame?: boolean; byUser?: boolean }, beforeRoute?: (newId: string, stay: boolean) => Promise<void>): Promise<boolean> {
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
       let nextId = '';
       let moved = '';                            // #2231 — 이 세션은 이미 이어졌다(서버가 알려준 새 id)
       let revivedInPlace = false;                // #4694 — 서버가 새 세션이 아니라 **이 id 그대로** 다시 띄웠다
+      let forced = false;                        // #5300 — «모름» 이라 묻지 않고 새로 띄웠다(사람의 행동일 때만)
       // ⚠ hint.canRestore — **프레임이 방금 서버에게 들은 말**이다(lively-term-gone). 종전엔 이 분기가 목록 행의
       //  restorable 만 봤는데, 목록은 좌표를 접으면서 그 값을 못 받는 경우가 있다(session-merge.ts) — 그래서
       //  되살릴 좌표(desired-state)가 멀쩡히 있는 세션이 **대화록 기반 이어받기**로 흘렀고, 서버는 그 대화의 cwd 를
@@ -2920,9 +2909,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (isBox() && (target.raw?.restorable || hint?.canRestore)) {
         //  ★ #3891 — **끊긴 실패에만** 짧게 다시 묻는다(restore-retry.ts). 수 초짜리 이 요청은 롤 교대에 잘린다.
         //   다시 물어도 안전한 건 서버 복원이 같은 대화를 둘로 만들지 않아서다(restore-adopt.ts) — 아래 이어보기엔 안 건다.
-        const r: any = await withRetry(
-          () => api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' }),
+        const once = (force: boolean): Promise<any> => withRetry(
+          () => api(restorePath(target.id, force), { method: 'POST', body: '{}' }),
           { stop: () => destroyed, onRetry: () => { hint?.onRetry?.(); if (btn) btn.textContent = '다시 여는 중…'; } });
+        //  ★ #5300 — 사람이 누르거나 말을 보냈으면 «모름»(canForce 409)에서 **묻지 않고** 새로 띄운다(restoreForUser 머리말).
+        //   종전엔 여기서 서버 문구(«화면의 [강제로 되살리기] 를 눌러 주세요»)를 그대로 토스트했는데 이 화면엔 그 버튼이 없었다.
+        //   화면이 스스로 거는 자동 복원(byUser 없음)은 종전대로 확답만 믿는다(#835) — 아래 catch 가 사람 말로 다음 할 일을 알린다.
+        let r: any;
+        if (hint?.byUser) {
+          const out = await restoreForUser(once, () => { if (btn) btn.textContent = '새로 띄우는 중…'; });
+          r = out.r; forced = out.forced;
+        } else {
+          r = await once(false);
+        }
         if (r?.session) rememberCreated(r.session);
         // #2231 — `movedTo` = "그 id 는 이미 이어졌고, 대화는 이 새 세션에서 돌고 있다". 종전엔 이 경우 서버가
         //  404(`복원할 세션 상태가 없습니다`)를 냈고 화면은 거기서 멈췄다 — 낡은 탭·두 번째로 누른 칸이 전부
@@ -2956,6 +2955,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         return true;
       }
       toast(moved && moved !== target.id ? '이 세션은 이미 이어져 있어요 — 이어진 세션으로 옮겼습니다.'
+        : forced && !stillHere ? RESTORE_FORCED_NOTE
         : revivedInPlace ? '세션을 다시 띄웠어요 — 대화가 이어집니다.'
         : stillHere ? '서버가 이 세션을 아직 살아 있다고 봐요 — 그대로 다시 붙습니다. 화면이 바뀌지 않으면 잠시 뒤 다시 보내 주세요.'
         : '이어받기 세션을 열었어요.');
@@ -2967,7 +2967,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       else location.hash = '#/s/' + encodeURIComponent(nextId);
       return true;
     } catch (e: any) {
-      toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
+      //  #5300 — 자동 복원이 «모름» 을 받았다. 서버 원문(옛 서버는 «화면의 [강제로 되살리기]» 를 지목한다)을 그대로 내지 않고
+      //   사람이 할 수 있는 다음 행동을 말한다 — 말을 보내거나 [이어서 대화하기] 를 누르면 위 byUser 갈래가 새로 띄운다.
+      toast(canForceRestore(e) ? '세션이 응답하지 않아 아직 열지 못했어요 — 말을 보내거나 [이어서 대화하기] 를 누르면 새로 띄워 이어 갑니다.'
+        : (e?.message || '이어받기 세션을 만들지 못했습니다.'));
       // ⚠ **자동** 복원 실패는 잠근 채로 둔다(#1834 후속) — 종전엔 여기서 풀어 줘, 실패가 반복되는 동안
       //  (노드가 잠깐 오프라인인 때 등) 같은 화면이 계속 되살리기를 시도했다. 사람이 버튼을 누르면 다시 된다.
       if (btn) { resumeAuto = false; btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
