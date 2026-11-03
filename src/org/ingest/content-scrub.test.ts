@@ -232,6 +232,11 @@ t("S6 한국어 «계정» 키만 짝으로 본다", () => {
   assert.deepEqual(scrubDeep({ 계정: "kim / abc123" }), { 계정: `kim / ${M.password}` });
 });
 
+t("S7 뼈대 키라도 값이 메일이면 메일이다(메일함은 보낸 사람 메일을 id 로 쓴다)", () => {
+  const v = { author_external_id: "kim@x.io", id: "m-123", labelIds: ["INBOX", "kim@x.io"], internetMessageId: "<CA1@mail.example.com>", thread_ts: "1785.0001" };
+  assert.deepEqual(scrubDeep(v), { author_external_id: M.email, id: "m-123", labelIds: ["INBOX", M.email], internetMessageId: M.email, thread_ts: "1785.0001" });
+});
+
 // ════════ 원장 줄이기 ════════
 t("R1 노션 — 블록·댓글·속성 원문은 빼고 원장 시각은 남긴다(입력 불변)", () => {
   const raw = { page: { id: "p", last_edited_time: "2026-11-01T00:00:00.000Z", properties: { PW: {} } }, blocks: [1], comments: [2], property_items: {} };
