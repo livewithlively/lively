@@ -96,7 +96,10 @@ export const collectorsCapabilities: Capability[] = [
         sync_interval_sec: input.sync_interval_sec === undefined ? undefined : Number(input.sync_interval_sec),
         output_mode: input.output_mode === undefined ? undefined : str(input.output_mode, "output_mode", 20),
         output_config: (input.output_config ?? undefined) as Record<string, unknown> | undefined,
-        pii_scrub: input.pii_scrub === undefined || input.pii_scrub === null ? undefined : input.pii_scrub === true,
+        //  REST 본문은 zod 를 안 거친다 — "false" 같은 문자열을 거짓으로 읽어 가림이 조용히 꺼지지 않게, 참/거짓이 아니면 거절한다.
+        pii_scrub: input.pii_scrub === undefined || input.pii_scrub === null ? undefined
+          : typeof input.pii_scrub === "boolean" ? input.pii_scrub
+          : (() => { throw new HttpError(400, "pii_scrub 은 true 또는 false 여야 합니다"); })(),
         sort: input.sort === undefined ? undefined : Number(input.sort),
         note: input.note === undefined ? undefined : (input.note === null || input.note === "" ? null : str(input.note, "note", 500)),
       }, actorOf(user), "web");

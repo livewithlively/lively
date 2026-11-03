@@ -18,6 +18,9 @@
 //   W9 가림 켠 수집기 + 클릭업 작업(되쓰는 미러) → 가리지 않음
 //   W10 수집기 저장 → pii_scrub 켬 · output_config 만 바꿔도 유지 · 끄면 꺼짐
 //   W11 소급 스윕 시간 상한 0 → 아무것도 안 하고 남은 수를 돌려준다
+//   W12 표식이 한 번도 없던 옛 자료(이 변경 전 적재분, 새 글 없음) → legacySystem 을 주면 가림 · 안 주면 그대로
+//   W13 가림 켠 메일함 수집(지메일 꼴) → 원장 payload 없음 · 보낸 사람 id(메일) 가림 · person 신원층에 고객 메일 없음
+//   W14 클릭업 수집기에 가림 켜기 → 거절
 import crypto from "node:crypto";
 const DIST = new URL("../../../dist", import.meta.url).href.replace(/\/$/, "");
 const { itemsPool } = await import(`${DIST}/db/client.js`);
@@ -26,6 +29,7 @@ const { withCollector } = await import(`${DIST}/connectors/config.js`);
 const { sweepScrubBacklog, SCRUB_MARK } = await import(`${DIST}/v6/mirror/mirror-scrub.js`);
 const { SCRUB_LABELS: M } = await import(`${DIST}/org/ingest/content-scrub.js`);
 const { upsertCollector, listCollectors } = await import(`${DIST}/org/store/collectors.js`);
+const { ingestItems } = await import(`${DIST}/items/store.js`);
 
 delete process.env.ANTHROPIC_API_KEY;   // 미러의 LLM 분류를 끈다(본문을 밖으로 보내지 않는다 · 결정적)
 
@@ -37,6 +41,8 @@ const chk = (n, c, why) => (c ? ok(n) : bad(n, why || ""));
 const TAG = `scr${crypto.randomBytes(3).toString("hex")}`;
 const INST = `${TAG}-ws`;               // 이 시험의 외부 인스턴스(워크스페이스)
 const INST2 = `${TAG}-ws2`;             // 다른 워크스페이스
+const INST3 = `${TAG}-ws3`;             // 표식이 한 번도 없던 옛 자료의 워크스페이스(W12)
+const LEGACY_SYS = `${TAG}chat`;        // W12 전용 앱 이름 — 다른 시험·실데이터의 옛 행을 건드리지 않게
 const CLAIM = `notion:${TAG}`;          // 이 시험 수집기의 표식(collectorClaimKey 꼴 = 프리셋:인스턴스)
 const SCLAIM = `slack:${TAG}`;
 const OTHER = `notion:${TAG}-other`;
@@ -107,8 +113,8 @@ const audits = async (entity, key) => (await itemsPool.query(
   `SELECT op, before, after FROM org_content_audit WHERE entity=$1 AND entity_key=$2 ORDER BY at, id`, [entity, key])).rows;
 
 async function cleanup() {
-  const ks = (await itemsPool.query(`SELECT name FROM knowledge WHERE external_instance = ANY($1::text[]) OR name LIKE $2`, [[INST, INST2], `${TAG}%`])).rows.map((r) => r.name);
-  const ss = (await itemsPool.query(`SELECT id::text AS id FROM source WHERE external_instance = ANY($1::text[])`, [[INST, INST2]])).rows.map((r) => r.id);
+  const ks = (await itemsPool.query(`SELECT name FROM knowledge WHERE external_instance = ANY($1::text[]) OR name LIKE $2`, [[INST, INST2, INST3], `${TAG}%`])).rows.map((r) => r.name);
+  const ss = (await itemsPool.query(`SELECT id::text AS id FROM source WHERE external_instance = ANY($1::text[])`, [[INST, INST2, INST3]])).rows.map((r) => r.id);
   const ps = (await itemsPool.query(`SELECT id::text AS id FROM project WHERE external_instance = ANY($1::text[])`, [[INST, INST2]])).rows.map((r) => r.id);
   await itemsPool.query(`DELETE FROM org_content_audit WHERE (entity='knowledge' AND entity_key = ANY($1::text[])) OR (entity='source' AND entity_key = ANY($2::text[])) OR (entity='project' AND entity_key = ANY($3::text[]))`, [ks, ss, ps]);
   await itemsPool.query(`DELETE FROM knowledge WHERE name = ANY($1::text[])`, [ks]);
@@ -117,6 +123,10 @@ async function cleanup() {
   const cs = (await itemsPool.query(`SELECT id FROM org_collector WHERE key LIKE $1`, [`${TAG}%`])).rows.map((r) => Number(r.id));
   for (const id of cs) await itemsPool.query(`DELETE FROM org_cron WHERE id=$1`, [`collector-${id}`]).catch(() => {});
   await itemsPool.query(`DELETE FROM org_collector WHERE key LIKE $1`, [`${TAG}%`]);
+  const pids = (await itemsPool.query(`SELECT person_id FROM person_identity WHERE system='gmail' AND instance=$1`, [INST])).rows.map((r) => r.person_id);
+  await itemsPool.query(`DELETE FROM person_identity_audit WHERE system='gmail' AND person_id = ANY($1::text[])`, [pids]).catch(() => {});
+  await itemsPool.query(`DELETE FROM person_identity WHERE system='gmail' AND instance=$1`, [INST]);
+  await itemsPool.query(`DELETE FROM person WHERE id = ANY($1::text[])`, [pids]).catch(() => {});
 }
 
 try {
@@ -257,6 +267,66 @@ try {
     const p = (await itemsPool.query(`SELECT name, description, fields FROM project WHERE external_system='clickup' AND external_instance=$1 AND external_id=$2`, [INST, `${TAG}-t9`])).rows[0];
     chk("W9 ★클릭업 작업 설명은 원문 그대로(가린 설명이 원본을 덮지 않게)", p && p.description.includes(PW) && p.name.includes(PHONE) && p.fields._pii_scrub === undefined,
       JSON.stringify(p && { d: p.description }));
+  }
+
+  // ── W12 표식이 한 번도 없던 옛 자료 ──
+  {
+    const ins = await itemsPool.query(
+      `INSERT INTO source(kind, title, body_md, fields, provenance, external_system, external_instance, external_id, sync_state)
+       VALUES('other', '옛 메시지', $1, '{}'::jsonb, 'observed', $2, $3, $4, '{}'::jsonb) RETURNING id, updated_at::text AS updated_at`,
+      [`고객 ${MAIL} ${PHONE}`, LEGACY_SYS, INST3, `${TAG}-legacy`]);
+    const id = ins.rows[0].id;
+    const claim = `${LEGACY_SYS}:${TAG}`;              // 이 수집기는 아직 아무 행에도 표식을 안 남겼다(조용한 채널)
+    const a = await sweepScrubBacklog(itemsPool, { claimKey: claim });
+    const s0 = (await itemsPool.query(`SELECT body_md FROM source WHERE id=$1`, [id])).rows[0];
+    chk("W12 legacySystem 없이는 그대로(누구 것인지 모르는 옛 행)", a.source === 0 && s0.body_md.includes(MAIL), JSON.stringify(a));
+    const b = await sweepScrubBacklog(itemsPool, { claimKey: claim, legacySystem: LEGACY_SYS });
+    const s1 = (await itemsPool.query(`SELECT body_md, fields, updated_at::text AS updated_at FROM source WHERE id=$1`, [id])).rows[0];
+    chk("W12 ★legacySystem 을 주면 새 글이 없어도 옛 자료를 가린다(updated_at 그대로)", b.source === 1 && leaks(s1).length === 0
+      && s1.fields._pii_scrub === SCRUB_MARK && s1.updated_at === ins.rows[0].updated_at, JSON.stringify({ b, leaks: leaks(s1) }));
+  }
+
+  // ── W13 메일함 수집(지메일 꼴) — 신원층(person)까지 보려면 적재 입구(ingestItems)로 넣어야 한다(미러 직행은 신원 해소를 안 탄다) ──
+  {
+    const MAIL2 = "lee.ctrl@example-test.io";
+    const gmailItem = (id, from) => ({
+      type: "message",
+      provenance: { category: "messenger", system: "gmail", instance: INST, external_id: id, external_url: "https://mail.google.com/mail/u/0/#all/x" },
+      actor: { external_id: from, display_name: "고객", email: from },
+      title: "문의", body: "본문", occurred_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T00:00:00.000Z", fields: {}, raw: { id },
+    });
+    //  대조군 — 가림을 끈 적재는 보낸 사람을 신원층에 남긴다(관측 장치가 살아 있는지: 아니면 아래 «0건» 은 아무것도 안 본 것이다)
+    await ingestItems([gmailItem(`${TAG}-g0`, MAIL2)], { claimKey: `gmail:${TAG}` });
+    const ctrl = (await itemsPool.query(`SELECT count(*)::int AS n FROM person_identity WHERE system='gmail' AND (external_id=$1 OR email=$1)`, [MAIL2])).rows[0].n;
+    chk("W13 배선 — 가림을 끈 적재는 보낸 사람을 신원층에 남긴다(대조군)", ctrl === 1, `person_identity ${ctrl}건`);
+    const it = {
+      type: "message",
+      provenance: { category: "messenger", system: "gmail", instance: INST, external_id: `${TAG}-g1`, external_url: "https://mail.google.com/mail/u/0/#all/x" },
+      actor: { external_id: MAIL, display_name: "고객 김", email: MAIL },
+      title: "견적 문의", body: `안녕하세요. 연락처 ${PHONE} 입니다.`,
+      occurred_at: "2026-10-01T00:00:00.000Z", updated_at: "2026-10-01T00:00:00.000Z",
+      fields: { threadId: "t1", labelIds: ["INBOX"], snippet: `연락처 ${PHONE}` },
+      raw: { id: `${TAG}-g1`, threadId: "t1", labelIds: ["INBOX"], snippet: `연락처 ${PHONE}`,
+             payload: { headers: [{ name: "From", value: MAIL }], parts: [{ body: { data: Buffer.from(`PW: ${PW}`).toString("base64url") } }] } },
+    };
+    await withCollector({ ...ON, presetKey: "gmail" }, () => ingestItems([it], { claimKey: `gmail:${TAG}` }));
+    const r = (await itemsPool.query(`SELECT body_md, fields, raw FROM source WHERE external_system='gmail' AND external_instance=$1 AND external_id=$2`, [INST, `${TAG}-g1`])).rows[0];
+    const b64 = Buffer.from(`PW: ${PW}`).toString("base64url");
+    const person = (await itemsPool.query(`SELECT count(*)::int AS n FROM person_identity WHERE system='gmail' AND (external_id=$1 OR email=$1)`, [MAIL])).rows[0].n;
+    chk("W13 배선 — 메일이 자료로 적재됐다", !!r, "");
+    chk("W13 ★원장 payload(머리·base64 본문)가 없다", r && r.raw.payload === undefined && !JSON.stringify(r).includes(b64), JSON.stringify(r && r.raw));
+    chk("W13 ★보낸 사람 id·메일을 가리고 이름은 남긴다 · 행 어디에도 민감값 없음", r && r.fields.author_external_id === M.email && r.fields.author_email === M.email
+      && r.fields.author_name === "고객 김" && leaks(r).length === 0, JSON.stringify(r && { f: r.fields, leaks: leaks(r) }));
+    chk("W13 ★person 신원층에 고객 메일이 남지 않는다", person === 0, `person_identity ${person}건`);
+  }
+
+  // ── W14 클릭업 수집기에 가림 켜기 → 거절 ──
+  {
+    let err = null;
+    try { await upsertCollector({ preset_key: "clickup", key: `${TAG}-cu`, instance_key: `${TAG}-cu`, enabled: false, pii_scrub: true }, "test", "test"); }
+    catch (e) { err = String(e?.message ?? e); }
+    const made = (await itemsPool.query(`SELECT count(*)::int AS n FROM org_collector WHERE key=$1`, [`${TAG}-cu`])).rows[0].n;
+    chk("W14 ★클릭업에 가림을 켜면 거절되고 수집기도 안 생긴다", !!err && made === 0, JSON.stringify({ err, made }));
   }
 
   // ── W10 수집기 저장 ──

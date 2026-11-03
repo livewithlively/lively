@@ -11,7 +11,10 @@
 //  ── 이미 모은 것(소급) ──
 //   노션 «가속 전체 점검» 은 원장 시각이 같으면 페이지를 다시 내보내지 않는다(notion-post.observeNotionRows). 그래서 켜기만 해서는
 //   바뀌지 않은 문서가 영영 그대로다. sweepScrubBacklog 가 DB 안에서 다시 가린다 — 외부 API 를 다시 부르지 않는다.
-//   범위 = 이 수집기의 표식(sync_state.seen_by.<수집기>)이 있는 행 + 같은 외부 인스턴스에서 아무도 맡지 않은 행(수집 제외로 풀린 옛 행).
+//   범위 = 이 수집기의 표식(sync_state.seen_by.<수집기>)이 있는 행 + 같은 외부 인스턴스에서 아무도 맡지 않은 행(수집 제외로 풀린 옛 행)
+//    + (legacySystem 을 주면) 그 앱에서 표식이 **한 번도** 없던 행 — 자료 미러는 이 변경 전엔 표식을 안 남겼다. 조용한 채널·메일함은
+//      새 글이 없어 영영 표식이 안 생기므로, 표식만 기다리면 옛 자료가 끝내 그대로다(격리 리뷰가 잡음). 호출자(run-sync)는
+//      «같은 앱에서 가림을 끈 다른 켜진 수집기가 없을 때» 만 준다 — 있으면 그 행이 누구 것인지 몰라 남의 설정을 덮게 된다.
 //   다른 수집기가 맡은 행은 건드리지 않는다(그 수집기의 설정이 있다).
 //
 //  ── 이력 ──
@@ -133,18 +136,22 @@ async function claimedInstances(db: PgRunner, table: Table, claimKey: string): P
 }
 
 //  대상 행 — 외부 미러(observed · external_id)만. 사람이 쓴 지식·자료는 수집기의 것이 아니다.
+//   $5 = legacySystem(없으면 NULL) — 그 앱에서 표식이 한 번도 없던 행(seen_by·unclaimed_since 둘 다 없음)까지.
 function pendingWhere(table: Table): string {
   return `${table}.external_id IS NOT NULL AND ${table}.provenance = 'observed'
       AND (${table}.fields->>'${SCRUB_MARK_KEY}') IS DISTINCT FROM $1::text
       AND ((${table}.sync_state->'seen_by') ? $2::text
            OR (COALESCE(${table}.sync_state->'seen_by', '{}'::jsonb) = '{}'::jsonb
-               AND (${table}.external_system, ${table}.external_instance) IN (SELECT * FROM unnest($3::text[], $4::text[]))))`;
+               AND (${table}.external_system, ${table}.external_instance) IN (SELECT * FROM unnest($3::text[], $4::text[])))
+           OR ($5::text IS NOT NULL AND ${table}.external_system = $5::text
+               AND COALESCE(${table}.sync_state->'seen_by', '{}'::jsonb) = '{}'::jsonb
+               AND ${table}.sync_state->'unclaimed_since' IS NULL))`;
 }
 
-async function countPending(db: PgRunner, table: Table, claimKey: string, inst: { systems: string[]; instances: string[] }): Promise<number> {
-  if (!inst.systems.length) return 0;
+async function countPending(db: PgRunner, table: Table, claimKey: string, inst: { systems: string[]; instances: string[] }, legacySystem: string | null): Promise<number> {
+  if (!inst.systems.length && !legacySystem) return 0;
   const r = await db.query(`SELECT count(*)::int AS n FROM ${table} WHERE ${pendingWhere(table)}`,
-    [SCRUB_MARK, claimKey, inst.systems, inst.instances]);
+    [SCRUB_MARK, claimKey, inst.systems, inst.instances, legacySystem]);
   return Number((r.rows[0] as { n: number } | undefined)?.n ?? 0);
 }
 
@@ -155,8 +162,9 @@ async function countPending(db: PgRunner, table: Table, claimKey: string, inst: 
  *  자료는 updated_at 을 올리지 않는다 — 그건 증류 인박스의 «내용이 바뀌었다» 신호라(#1289), 올리면 전량을 다시 증류한다.
  */
 export async function sweepScrubBacklog(
-  pool: pg.Pool, opts: { claimKey: string; budgetMs?: number; batch?: number },
+  pool: pg.Pool, opts: { claimKey: string; budgetMs?: number; batch?: number; legacySystem?: string | null },
 ): Promise<ScrubBacklogResult> {
+  const legacySystem = opts.legacySystem || null;
   const budgetMs = opts.budgetMs ?? 180_000;
   const batch = Math.max(1, Math.min(opts.batch ?? 200, 1000));
   const t0 = Date.now();
@@ -166,7 +174,7 @@ export async function sweepScrubBacklog(
   for (const table of ["knowledge", "source"] as const) {
     const inst = await claimedInstances(pool, table, opts.claimKey);
     insts[table] = inst;
-    if (!inst.systems.length) continue;                    // 이 수집기가 이 표에 남긴 행이 아직 없다
+    if (!inst.systems.length && !legacySystem) continue;   // 이 수집기가 이 표에 남긴 행이 아직 없다
     for (;;) {
       if (Date.now() - t0 >= budgetMs) { res.stopped = "budget"; break; }
       const client = await pool.connect();
@@ -175,8 +183,8 @@ export async function sweepScrubBacklog(
         await client.query("BEGIN");
         const rows = (await client.query(
           `SELECT ${KEY_COL[table]}::text AS key, title, body_md, fields, raw, external_system FROM ${table}
-            WHERE ${pendingWhere(table)} ORDER BY ${KEY_COL[table]} LIMIT $5 FOR UPDATE SKIP LOCKED`,
-          [SCRUB_MARK, opts.claimKey, inst.systems, inst.instances, batch])).rows as Array<{
+            WHERE ${pendingWhere(table)} ORDER BY ${KEY_COL[table]} LIMIT $6 FOR UPDATE SKIP LOCKED`,
+          [SCRUB_MARK, opts.claimKey, inst.systems, inst.instances, legacySystem, batch])).rows as Array<{
             key: string; title: string | null; body_md: string | null; fields: Record<string, unknown> | null;
             raw: unknown; external_system: string | null }>;
         n = rows.length;
@@ -220,7 +228,7 @@ export async function sweepScrubBacklog(
   }
   for (const table of ["knowledge", "source"] as const) {
     const inst = insts[table] ?? await claimedInstances(pool, table, opts.claimKey);
-    res.remaining += await countPending(pool, table, opts.claimKey, inst);
+    res.remaining += await countPending(pool, table, opts.claimKey, inst, legacySystem);
   }
   return res;
 }

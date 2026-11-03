@@ -141,9 +141,15 @@ process.exit(failed ? 1 : 0);
 
 // ── #5308 가림 소급 — 이 수집기가 맡은 행 중 아직 안 가린 것을 DB 안에서 가린다(v6/mirror/mirror-scrub). ──
 //  비치명: 실패해도 수집은 계속한다(다음 run 이 다시 한다). 시간 상한(기본 3분)까지만 — 남으면 다음 run 이 잇는다.
-async function runScrubBacklog(claimKey: string): Promise<void> {
+async function runScrubBacklog(claimKey: string, system: string): Promise<void> {
   try {
-    const r = await sweepScrubBacklog(itemsPool, { claimKey });
+    //  표식이 한 번도 없던 옛 행(이 변경 전 적재분)까지 맡아도 되나 — 같은 프리셋에서 가림을 끈 **다른 켜진** 수집기가 없을 때만.
+    //   있으면 그 행이 누구 것인지 몰라 남의 설정(가리지 말라)을 덮게 된다. 그땐 표식이 생기는 대로(새 글·전체 점검) 잡는다.
+    const b = boundCollector();
+    const others = b ? Number((await itemsPool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM org_collector WHERE preset_key=$1 AND id<>$2 AND enabled AND NOT pii_scrub`,
+      [b.presetKey, b.id])).rows[0]?.n ?? 0) : 1;
+    const r = await sweepScrubBacklog(itemsPool, { claimKey, legacySystem: others === 0 ? system : null });
     const line = { claimKey, knowledge: r.knowledge, source: r.source, audit: r.audit, remaining: r.remaining, masks: r.masks, stopped: r.stopped };
     logger.info(line, "가림 소급");
     orphan?.note(JSON.stringify({ level: 30, ...line, msg: "가림 소급" }));
@@ -164,7 +170,7 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
   const claimKey = collectorClaimKey(system);
   // #5308 가림을 켠 수집기 — 이미 모은 행을 먼저 가린다(원본이 안 바뀌면 다시 안 들어오므로 기다리면 영영 그대로다).
   //  수집보다 먼저 두는 이유: 실패로 일찍 끝나는 갈래가 여럿이라 끝에 두면 건너뛴다. 순서는 상관없다 — 미러도 옛 행을 만나면 스스로 가린다.
-  if (boundCollector()?.piiScrub) await runScrubBacklog(claimKey);
+  if (boundCollector()?.piiScrub) await runScrubBacklog(claimKey, system);
   const cursor = await getConnectorState(system, instance);
   const prevIso = (cursor as { max_updated_iso?: unknown } | null)?.max_updated_iso;
   const prevMs = typeof prevIso === "string" && prevIso ? Date.parse(prevIso) : 0;

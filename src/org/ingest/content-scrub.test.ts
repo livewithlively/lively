@@ -1,3 +1,4 @@
+// @lively-test exclusive — D1·D2 가 시간을 잰다(제곱 비용 회귀를 잡는 상한이라, 병렬 부하에서 재면 흔들린다).
 // 수집 가림(#5308) 사양 시험 — 엣지 표의 행마다 단언(행 번호 = 사양의 번호). 값은 전부 지어낸 것이다(실 고객 값 없음).
 //  실행: npm run build && node dist/org/ingest/content-scrub.test.js
 //
@@ -246,6 +247,12 @@ t("R3 그 밖의 앱·원장 없음은 그대로", () => {
   assert.deepEqual(minimizeRaw("notion", { database: { id: "d" } }), { database: { id: "d" } });
 });
 
+t("R4 지메일 — base64 본문·머리를 담은 payload 는 빼고 식별자·미리보기는 남긴다", () => {
+  const raw = { id: "m1", threadId: "t1", labelIds: ["INBOX"], snippet: "회신 kim@x.io", payload: { headers: [{ name: "From", value: "kim@x.io" }], parts: [{ body: { data: "UFc6IHF3ZXIxMjM0" } }] } };
+  assert.deepEqual(minimizeRaw("gmail", raw), { id: "m1", threadId: "t1", labelIds: ["INBOX"], snippet: "회신 kim@x.io" });
+  assert.deepEqual(scrubDeep(minimizeRaw("gmail", raw)), { id: "m1", threadId: "t1", labelIds: ["INBOX"], snippet: `회신 ${M.email}` });
+});
+
 // ════════ 감사 스냅샷 ════════
 t("N1 이력 스냅샷 — 글 칸만 가리고, 바뀐 게 없으면 같은 객체", () => {
   const snap = { name: "notion-x", title: "고객", body_md: "PW: abc123", provenance: "observed" };
@@ -277,6 +284,19 @@ t("D1 적대 입력도 선형에 가깝다(각 1초 미만)", () => {
     const ms = Date.now() - t0;
     assert.ok(ms < 1000, `${ms}ms — ${s.slice(0, 20)}…`);
   }
+});
+
+t("D2 일치가 8만 개인 글(고객 명단 내보내기)도 1.5초 미만 — 위치 모음이 제곱으로 커지지 않는다", () => {
+  //  실측(맥미니): 이분 탐색 판 ~0.36초 · 선형 스캔 판 ~2.8초 — 상한은 그 사이다(옛 판은 여기서 빨개진다).
+  const rows = Array.from({ length: 40_000 }, (_, i) => `| 고객${i} | u${i}@ex.com | 010-1234-${String(i % 10_000).padStart(4, "0")} |`);
+  const big = ["| 이름 | 메일 | 전화 |", "| --- | --- | --- |", ...rows].join("\n");
+  const c = emptyScrubCounts();
+  const t0 = Date.now();
+  const out = scrubText(big, c);
+  const ms = Date.now() - t0;
+  assert.ok(ms < 1500, `${ms}ms`);
+  assert.equal(c.email + c.phone, 80_000);
+  assert.ok(!out.includes("@ex.com") && !out.includes("010-1234-"));
 });
 
 console.log(`\ncontent-scrub: ${pass} ok`);

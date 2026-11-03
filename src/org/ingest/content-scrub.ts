@@ -148,21 +148,29 @@ function phoneLike(s: string): boolean {
 
 interface Span { s: number; e: number; k: ScrubKind }
 
+/** 시작 위치로 정렬된 채 유지되는 겹치지 않는 구간 모음 — 겹침 판정·포함 판정을 이분 탐색으로(메일 수만 개 든 내보내기도 n·log n). */
 class Spans {
   readonly list: Span[] = [];
+  /** s 보다 시작이 큰 첫 구간의 자리. */
+  private upper(pos: number): number {
+    let lo = 0, hi = this.list.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (this.list[mid].s <= pos) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
   add(s: number, e: number, k: ScrubKind): boolean {
     if (!(e > s)) return false;
-    for (const x of this.list) if (s < x.e && x.s < e) return false;   // 먼저 잡은 쪽이 이긴다
-    this.list.push({ s, e, k });
+    const i = this.upper(s);                                  // 먼저 잡은 쪽이 이긴다 — 앞·뒤 이웃과만 겹칠 수 있다
+    if (i > 0 && this.list[i - 1].e > s) return false;
+    if (i < this.list.length && this.list[i].s < e) return false;
+    this.list.splice(i, 0, { s, e, k });
     return true;
   }
   covers(pos: number): boolean {
-    for (const x of this.list) if (pos >= x.s && pos < x.e) return true;
-    return false;
+    const i = this.upper(pos);
+    return i > 0 && this.list[i - 1].e > pos;
   }
   apply(text: string, counts?: ScrubCounts): string {
     if (!this.list.length) return text;
-    this.list.sort((a, b) => a.s - b.s);
     let out = "", at = 0;
     for (const sp of this.list) {
       out += text.slice(at, sp.s) + SCRUB_LABELS[sp.k];
@@ -173,9 +181,11 @@ class Spans {
   }
 }
 
+/** pos 가 [a,b) 구간들(시작 순·겹침 없음 — URL 은 앞에서부터 찾으므로 그렇다) 안에 있나 — 이분 탐색. */
 function inRanges(pos: number, ranges: Array<[number, number]>): boolean {
-  for (const [a, b] of ranges) if (pos >= a && pos < b) return true;
-  return false;
+  let lo = 0, hi = ranges.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (ranges[mid][0] <= pos) lo = mid + 1; else hi = mid; }
+  return lo > 0 && ranges[lo - 1][1] > pos;
 }
 
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`\])|]+/gi;
@@ -519,6 +529,7 @@ export function scrubText(input: string, counts?: ScrubCounts): string {
   detectTables(input, spans);
   detectUrlUserinfo(input, spans);
   detectAccountPairs(input, spans, claimedKeys);
+  claimedKeys.sort((a, b) => a[0] - b[0]);                 // 두 정규식이 따로 모았다 — 이분 탐색 전에 순서를 맞춘다
   detectCli(input, spans);
   detectKeyValues(input, spans, urls, claimedKeys);
   detectKeyedContacts(input, spans, urls);
@@ -587,9 +598,12 @@ export function scrubDeep<T>(v: T, counts?: ScrubCounts): T {
 //   따로다(슬랙 blocks 도 같다). 글 단위 탐지로는 조각에 남은 값을 못 잡는다. 이 칸들은 커넥터가 «원장» 으로만 남기고 읽는 코드가
 //   없다(노션 델타 원장이 읽는 것은 page/database 의 last_edited_time · data_sources 뿐 — notion-post.loadNotionLedger,
 //   증류는 body_md 만 읽는다). 그래서 남기지 않는다. 같은 내용은 본문(body_md)과 정규화 속성(fields.notion.properties)에 가려진 채 있다.
+//   지메일 원장의 payload 는 머리(보낸·받는 사람)와 본문을 base64 로 담는다 — 글 탐지가 못 읽는 인코딩이라 남기면 그대로 저장된다.
+//   (첨부 원본 받기는 외부 id 로 다시 받는다 — 원장을 읽지 않는다.)
 const RAW_CONTENT_PATHS: Readonly<Record<string, ReadonlyArray<readonly string[]>>> = {
   notion: [["blocks"], ["comments"], ["property_items"], ["page", "properties"]],
   slack: [["blocks"]],
+  gmail: [["payload"]],
 };
 
 /** 가림을 켠 수집기의 원장에서 내용 사본을 뺀다(경로를 따라 얕은 복사 — 입력은 건드리지 않는다). */

@@ -9,6 +9,7 @@ import { orgTimezone } from "../org/timezone.js";
 import {
   mirrorExternalToV6,
 } from "../v6/connector-mirror.js";
+import { scrubOn } from "../v6/mirror/mirror-scrub.js";
 
 // 통합 DB 전역 풀 — 생성부는 db/client.ts 로 이동(#1313 R10, pg 외 무의존 leaf). 여기 재수출은
 // 구 소비자·dist 참조 스크립트 호환 shim — 신규 코드는 db/client.js 를 직결한다.
@@ -327,7 +328,9 @@ export async function ingestItems(
   try {
     for (const it of items) {
       // person 신원 해소(ku.author 와 별개 신원층 — 보존). 결과는 person 테이블 적재로 끝(ku 미러는 author 슬러그 사용).
-      if (it.actor?.external_id) {
+      //  #5308 가림을 켠 수집기는 메일 꼴 id 의 행위자(메일함 수집의 보낸 사람 = 고객)를 신원층에 남기지 않는다 —
+      //   person·person_identity_audit 에 고객 메일 주소가 원문으로 쌓인다. 미러는 이 결과를 쓰지 않는다(위 주석).
+      if (it.actor?.external_id && !(scrubOn() && String(it.actor.external_id).includes("@"))) {
         await resolveActor(
           client, it.provenance.system, it.provenance.instance ?? null,
           { ...it.actor, external_id: it.actor.external_id }, actorCache,
