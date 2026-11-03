@@ -55,6 +55,7 @@ import { loadThinTrail } from '../session-trail.js';   // #2233 — 팝아웃 �
 import { makeSplitter } from './split.js';
 import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, routeSticky, type ShellTab, type TabsApi } from './tabs.js';
+import { SESS_TITLE_CHANNEL, applySessTitleMsg, sessTitleMsg, syncDocTitle } from '../lib/doc-title.js';   // #5301 — 브라우저 탭 제목 = 지금 보는 화면의 이름
 import { rememberFirstPrompt } from './quick-session.js';   // #4906 — 액자에서 만든 세션의 첫 지시를 이 문서의 기억으로 옮긴다
 import { openRouteFirstPrompt } from '../lib/open-route.js';
 import { WS_SWITCH_KEY, workspaceInfo } from './switcher.js';   // #2171 — 워크스페이스 전환 부팅에는 자동 진입하지 않는다 · #4054 배너 윗줄 이름
@@ -671,10 +672,15 @@ export async function bootV2(): Promise<void> {
       try { await renameSession(id, name, tab); toast('세션 이름을 바꿨어요.'); }
       catch (e: any) { toast('이름을 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true); }
     },
+    //  #5301 브라우저 탭 제목 — 세션 창을 여럿 띄워 두면 탭이 전부 «Lively Context»(index.html 의 고정 제목)라 구분이 안 됐다.
+    //   탭 기계가 이름을 다시 매길 때마다(목록 도착 · 이름 고치기 · 탭 전환 · 주소 이동 · 8초 틱) 지금 보는 화면의 이름을 제목 앞에 둔다.
+    //   세션이면 사이드바에 보이는 그 이름이다. 팝아웃 창(?solo=1)도 같은 셸이라 같이 맞는다(규칙은 lib/doc-title.ts 머리말).
+    onRetitled: (tab) => syncDocTitle(document, tab),
   });
   //  저장돼 있던 탭 이름을 **첫 그림 전에** 기억으로 옮긴다(sessNames) — 켠 직후엔 세션 목록이 아직 안 왔으므로,
   //  이 한 줄이 없으면 탭 줄도 좌측 목록도 첫 판을 전부 `세션 1d14b3` 으로 그린다(그리고 그 값이 저장된다).
   seedSessNamesFromTabs();
+  listenSessTitles();   // #5301 — 숨은 창의 브라우저 탭 제목을 다른 창이 알게 된 새 이름으로 맞춘다(아래 함수 머리말)
   if (!TABS_OFF) {
     // 탭 줄의 제자리 — 데스크톱 앱이면 창 맨 윗줄(타이틀바), 아니면 가운데 열 맨 위.
     //  (탭 패널들은 tabs.ts 가 이미 가운데·우패널에 붙였다 — 옮기는 건 '줄' 하나뿐이다.)
@@ -1238,10 +1244,11 @@ const sessNames: Map<string, string> = (() => {
   } catch { return new Map(); }
 })();
 let nameSaveTimer = 0;
-/** 이 세션을 뭐라고 불렀는지 기억한다. titleFor 는 매 paint 마다 불리므로 **값이 바뀔 때만** 저장한다. */
-function rememberSessName(id: string, name: string): void {
+/** 이 세션을 뭐라고 불렀는지 기억한다. titleFor 는 매 paint 마다 불리므로 **값이 바뀔 때만** 저장한다.
+ *  @returns 기억이 바뀌었나(새 이름이었나) — titleFor 가 그때만 다른 창에 알린다(#5301 announceSessName). */
+function rememberSessName(id: string, name: string): boolean {
   const n = String(name || '').trim();
-  if (!id || !n || isSessIdFallback(n) || sessNames.get(id) === n) return;
+  if (!id || !n || isSessIdFallback(n) || sessNames.get(id) === n) return false;
   sessNames.delete(id);   // 다시 넣어 '최근'으로 — 넘칠 때 오래된 것부터 버린다
   sessNames.set(id, n);
   while (sessNames.size > NAME_MAX) sessNames.delete(sessNames.keys().next().value as string);
@@ -1249,6 +1256,27 @@ function rememberSessName(id: string, name: string): void {
   nameSaveTimer = window.setTimeout(() => {
     try { localStorage.setItem(NAME_STORE, JSON.stringify(Object.fromEntries(sessNames))); } catch { /* 못 남겨도 이번 화면은 된다 */ }
   }, 400);
+  return true;
+}
+// ── 숨은 창의 브라우저 탭 제목 (#5301) ───────────────────────────────────────
+//  숨은 창은 목록을 새로 받지 않는다(8초 틱 · 스트림 · refreshSideSoon 모두 document.hidden 이면 쉰다). 그래서 다른 창을 보는 동안
+//   그 창이 보던 세션의 이름이 정해지거나 바뀌면(첫 턴에 AI 가 짓는 이름 · 사람이 고친 이름) 브라우저 탭 제목이 옛 이름에 머문다.
+//  보이는 창이 **서버 목록에서** 새 이름을 알게 된 순간(titleFor 의 세션 갈래) 그 세션 하나의 이름을 같은 브라우저의 다른 창에 알리고,
+//   숨은 창은 그걸 받아 **제목만** 맞춘다(무엇을 받고 무엇을 버리나는 lib/doc-title.ts applySessTitleMsg). 서버는 부르지 않는다(숨은 창은
+//   쉰다는 약속 그대로). 돌아오면 visibilitychange 가 목록을 받아 제자리로 맞춘다.
+//  ⚠ 이름 기억 저장본(localStorage)의 storage 사건을 쓰지 않는다. 창마다 제 사본 통째로 덮어써서 새 값이 더 오래된 이름일 수 있다.
+let sessTitleChan: BroadcastChannel | null = null;
+function announceSessName(id: string, name: string): void {
+  try { sessTitleChan?.postMessage(sessTitleMsg(id, name)); } catch { /* 못 알려도 그 창은 돌아올 때 맞춘다 */ }
+}
+function listenSessTitles(): void {
+  if (sessTitleChan || typeof BroadcastChannel !== 'function') return;   // 통로가 없는 브라우저 — 숨은 창 맞추기만 빠진다
+  try { sessTitleChan = new BroadcastChannel(SESS_TITLE_CHANNEL); } catch { return; }
+  sessTitleChan.onmessage = (ev: MessageEvent) => {
+    const tab = tabsApi?.current() || null;
+    const k = tab ? routeKey(tab.route) : '';
+    applySessTitleMsg(ev.data, { hidden: document.hidden, tab, sessionId: k.startsWith('s:') ? k.slice(2) : '', doc: document });
+  };
 }
 const recallSessName = (id: string): string => sessNames.get(id) || '';
 // ── 목록에 없는 세션의 **소속까지** (#2022) ────────────────────────────────────────
@@ -1421,7 +1449,8 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
     //   빌려 온다. 그 값을 기억에 넣으면 다음 콜드 스타트마다 그게 이름으로 되살아난다 — 실측 2026-08-27:
     //   좌측 목록에 「작성」·「구현 전 논의 사항」·「Session names loading incorrectly」(하네스가 지은 영어 제목)
     //   가 세션 이름 자리에 떠 있었다. 화면에 쓰는 건 그대로 두되, **굳히지는 않는다**.
-    if (t.named) rememberSessName(sid, title);   // 목록에서 사라진 뒤에도 이 이름을 쓴다
+    //  목록에서 사라진 뒤에도 이 이름을 쓴다. 새 이름이면 다른 창에도 알린다 — 그 세션을 보던 숨은 창이 브라우저 탭 제목을 맞춘다(#5301).
+    if (t.named && rememberSessName(sid, title)) announceSessName(sid, title);
     // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
     return { title, noAside: !SOLO, state: dotCls(s.stateKey) };
   }

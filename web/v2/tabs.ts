@@ -64,6 +64,10 @@ export interface TabsHooks {
   canRename?(tab: ShellTab): boolean;
   /** 탭에서 고친 이름을 서버에 반영 — 실패 알림은 호출자가 낸다. */
   onRename?(tab: ShellTab, name: string): Promise<void>;
+  /** 탭 이름을 다시 매겼다(paint 끝) — 셸이 탭 밖에서 그 이름을 쓰는 자리(브라우저 탭 제목, #5301)를 맞춘다.
+   *  active = 지금 보이는 탭(아직 아무 탭도 안 켰으면 null). 이름이 바뀌는 길(목록 도착 · 이름 고치기 · 탭 전환 · 주소 이동)이
+   *  전부 paint 를 지나므로, 여기 한 자리만 걸면 빠지는 길이 없다. */
+  onRetitled?(active: ShellTab | null): void;
 }
 
 //  ⚠ 서버로 올리지 않는다(#2460) — 열린 창은 **그 기기의 사실**이다. 노트북에서 연 탭이 사무실
@@ -440,6 +444,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
     const on = scroll.querySelector('.v2-tab.on') as HTMLElement | null;
     if (on && scroll.scrollWidth > scroll.clientWidth) on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    hooks.onRetitled?.(activeTab);   // #5301 — 위 루프가 고친 이름(t.title)으로 브라우저 탭 제목을 맞춘다
   }
 
   /** [모든 탭] — 전문 이름으로 찾아가는 목록. 줄에서 잘린 이름을 여기서는 통째로 본다. */
