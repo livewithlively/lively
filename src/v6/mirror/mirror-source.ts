@@ -51,7 +51,11 @@ export async function mirrorSourceV6(
   const fields: Record<string, unknown> = { ...baseFields, _item_type: it.type, ...g.mark };
   if (it.container_ref) fields.container_ref = it.container_ref;
   if (it.container_name) fields.container_name = pgText(g.text(String(it.container_name)));
-  if (it.actor?.external_id) fields.author_external_id = it.actor.external_id;
+  //  보낸 사람 id — 메일 수집은 메일 주소가 곧 id 다(email-as-external_id). 가림을 켜면 메일 꼴인 id 도 가린다(슬랙 U… 같은 id 는 그대로).
+  if (it.actor?.external_id) {
+    const aid = String(it.actor.external_id);
+    fields.author_external_id = g.on && aid.includes("@") ? g.deep({ author_email: aid }).author_email : aid;
+  }
   if (it.actor?.display_name) fields.author_name = pgText(g.text(String(it.actor.display_name)));
   //  보낸 사람 메일 — 메일함 수집이면 고객 메일이다. 가림을 켜면 이름(author_name)만 남는다.
   if (it.actor?.email) fields.author_email = pgText(g.deep({ author_email: String(it.actor.email) }).author_email);

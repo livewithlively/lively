@@ -8,6 +8,9 @@ import { asRec, notionFetch, paginate, PAGE_SIZE } from "./client.js";
 import type { Rec } from "./client.js";
 import { dbNode, dsOwnerDb, pageNode, titleOfPage } from "./state.js";
 import type { PageNode, Traversal } from "./state.js";
+import { boundCollector } from "../config.js";
+import { redactString } from "../../org/ingest/redact.js";
+import { scrubText } from "../../org/ingest/content-scrub.js";
 
 // 델타 증분(#586) 인덱싱 지연 안전창 — 노션 search 는 eventually-consistent 라 방금 편집분이 늦게 인덱싱될 수 있다.
 //  커서보다 이만큼 과거까지 스캔하되, 원장(last_edited 동등) 대조로 기수집분은 0비용 스킵 → 지연이 이 창 안이면 유실 없음.
@@ -237,7 +240,10 @@ export async function discoverDelta(t: Traversal, sinceMs: number): Promise<void
     if (!node.page) node.page = p;
     node.forceChanged = true;
     // 무제 문서는 저장 제목이 플레이스홀더('(제목 없음)') — 원문 '' 와 그대로 비교하면 매 편집이 개명 오탐(리뷰).
-    const renamed = led != null && led.title !== (titleOfPage(p) || "(제목 없음)");
+    //  #5308 가림을 켠 수집기는 원장 제목이 «가린 모양» 이다(미러가 저장 전에 가린다) — 지금 제목도 같은 모양으로 바꿔 비교한다.
+    //   안 그러면 제목에 연락처가 든 행은 고칠 때마다 개명으로 보여, 소속 DB 전체와 역링크 페이지를 매번 다시 받는다.
+    const liveTitle = titleOfPage(p) || "(제목 없음)";
+    const renamed = led != null && led.title !== (boundCollector()?.piiScrub ? scrubText(redactString(liveTitle)) : liveTitle);
     const ptype = String(asRec(p.parent).type ?? "");
     if (ptype === "data_source_id" || ptype === "database_id") {
       const rawPid = normalizeNotionId(String(asRec(p.parent).data_source_id ?? asRec(p.parent).database_id ?? ""));
