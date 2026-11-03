@@ -580,11 +580,22 @@ function walk(v: unknown, kind: KeyKind | null, counts?: ScrubCounts): unknown {
     else if (o.type === "email" && !objKind) objKind = "email";
     const out: Record<string, unknown> = {};
     for (const [k, val] of Object.entries(o)) {
-      if (STRUCT_KEYS.has(k) || STRUCT_KEY_RE.test(k)) { out[k] = val; continue; }
+      if (STRUCT_KEYS.has(k) || STRUCT_KEY_RE.test(k)) { out[k] = idLeaf(val, counts); continue; }
       out[k] = walk(val, classifyKey(k) ?? objKind, counts);
     }
     return out;
   }
+  return v;
+}
+
+/**
+ * 뼈대 키의 값 — 그대로 두되, **메일이면 메일이다.** 메일함 수집은 보낸 사람 메일을 id 로 쓴다(email-as-external_id →
+ *  fields.author_external_id). 숫자·UUID·슬랙 ts 같은 진짜 식별자에는 «@» 가 없으니 건드릴 일이 없다(격리 리뷰가 잡은 구멍:
+ *  소급 스윕이 옛 메일 행의 이 칸을 그대로 둔 채 «가렸다» 표시만 달았다).
+ */
+function idLeaf(v: unknown, counts?: ScrubCounts): unknown {
+  if (typeof v === "string") return v.includes("@") ? scrubLeaf(v, "email", counts) : v;
+  if (Array.isArray(v)) return v.map((x) => (typeof x === "string" && x.includes("@") ? scrubLeaf(x, "email", counts) : x));
   return v;
 }
 

@@ -273,8 +273,9 @@ try {
   {
     const ins = await itemsPool.query(
       `INSERT INTO source(kind, title, body_md, fields, provenance, external_system, external_instance, external_id, sync_state)
-       VALUES('other', '옛 메시지', $1, '{}'::jsonb, 'observed', $2, $3, $4, '{}'::jsonb) RETURNING id, updated_at::text AS updated_at`,
-      [`고객 ${MAIL} ${PHONE}`, LEGACY_SYS, INST3, `${TAG}-legacy`]);
+       VALUES('other', '옛 메시지', $1, $5::jsonb, 'observed', $2, $3, $4, '{}'::jsonb) RETURNING id, updated_at::text AS updated_at`,
+      //  메일함 꼴 — 보낸 사람 메일이 id 로도 들어 있다(email-as-external_id · 이 변경 전 미러가 그대로 남긴 칸)
+      [`고객 ${MAIL} ${PHONE}`, LEGACY_SYS, INST3, `${TAG}-legacy`, JSON.stringify({ author_external_id: MAIL, author_email: MAIL, author_name: "고객" })]);
     const id = ins.rows[0].id;
     const claim = `${LEGACY_SYS}:${TAG}`;              // 이 수집기는 아직 아무 행에도 표식을 안 남겼다(조용한 채널)
     const a = await sweepScrubBacklog(itemsPool, { claimKey: claim });
@@ -282,7 +283,8 @@ try {
     chk("W12 legacySystem 없이는 그대로(누구 것인지 모르는 옛 행)", a.source === 0 && s0.body_md.includes(MAIL), JSON.stringify(a));
     const b = await sweepScrubBacklog(itemsPool, { claimKey: claim, legacySystem: LEGACY_SYS });
     const s1 = (await itemsPool.query(`SELECT body_md, fields, updated_at::text AS updated_at FROM source WHERE id=$1`, [id])).rows[0];
-    chk("W12 ★legacySystem 을 주면 새 글이 없어도 옛 자료를 가린다(updated_at 그대로)", b.source === 1 && leaks(s1).length === 0
+    chk("W12 ★legacySystem 을 주면 새 글이 없어도 옛 자료를 가린다(보낸 사람 id 까지 · updated_at 그대로)", b.source === 1 && leaks(s1).length === 0
+      && s1.fields.author_external_id === M.email && s1.fields.author_name === "고객"
       && s1.fields._pii_scrub === SCRUB_MARK && s1.updated_at === ins.rows[0].updated_at, JSON.stringify({ b, leaks: leaks(s1) }));
   }
 

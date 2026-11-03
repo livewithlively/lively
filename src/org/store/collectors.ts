@@ -13,6 +13,7 @@ import { encryptSecret, secretsEnabled } from "../credentials/secret-box.js";
 import { collectorPresetCatalog, type ResolvedPreset } from "./collector-presets.js";
 import { audit } from "./audit.js";
 import { managedMode } from "../tenancy/state.js";
+import { HttpError } from "../../http-error.js";
 
 /** 관리탭용 수집기 뷰 — 시크릿 '값'은 절대 담기지 않는다(설정 여부만). */
 export interface CollectorView {
@@ -235,7 +236,7 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
   const piiScrub = input.pii_scrub ?? (cur?.pii_scrub === true);
   //  #5308 클릭업은 작업 설명을 원본에 되쓰는 양방향 미러라 가림을 걸지 않는다(v6/mirror/mirror-scrub 머리말) — 켜 두면 목록에
   //   «가림» 표시만 뜨고 실제로는 아무것도 안 가려지는 거짓 안심이 된다. 그래서 켜는 것 자체를 받지 않는다.
-  if (piiScrub && presetKey === "clickup") throw new Error("클릭업 수집기는 가림을 켤 수 없습니다 — 작업 설명을 클릭업에 되쓰는 양방향 미러라 가린 글이 원본을 덮을 수 있습니다");
+  if (piiScrub && presetKey === "clickup") throw new HttpError(400, "클릭업 수집기는 가림을 켤 수 없습니다 — 작업 설명을 클릭업에 되쓰는 양방향 미러라 가린 글이 원본을 덮을 수 있습니다");
   const sort = Number(input.sort ?? cur?.sort ?? 0) || 0;
 
   let id: number;
