@@ -1258,15 +1258,12 @@ function rememberSessName(id: string, name: string): boolean {
   }, 400);
   return true;
 }
-// ── 숨은 창의 브라우저 탭 제목 (#5301) ───────────────────────────────────────
-//  숨은 창은 목록을 새로 받지 않는다(8초 틱 · 스트림 · refreshSideSoon 모두 document.hidden 이면 쉰다). 그래서 다른 창을 보는 동안
-//   그 창이 보던 세션의 이름이 정해지거나 바뀌면(첫 턴에 AI 가 짓는 이름 · 사람이 고친 이름) 브라우저 탭 제목이 옛 이름에 머문다.
-//  보이는 창이 **서버 목록에서** 새 이름을 알게 된 순간(titleFor 의 세션 갈래) 그 세션 하나의 이름을 같은 브라우저의 다른 창에 알리고,
-//   숨은 창은 그걸 받아 **제목만** 맞춘다(무엇을 받고 무엇을 버리나는 lib/doc-title.ts applySessTitleMsg). 서버는 부르지 않는다(숨은 창은
-//   쉰다는 약속 그대로). 돌아오면 visibilitychange 가 목록을 받아 제자리로 맞춘다.
-//  ⚠ 이름 기억 저장본(localStorage)의 storage 사건을 쓰지 않는다. 창마다 제 사본 통째로 덮어써서 새 값이 더 오래된 이름일 수 있다.
+// ── 숨은 창의 브라우저 탭 제목 (#5301) — 왜 · 무엇을 받고 버리나는 lib/doc-title.ts «숨은 창에 새 이름 알리기» ──────────
+//  보이는 창이 목록에서 새 이름을 알게 된 순간(titleFor 의 세션 갈래) 그 세션 하나의 이름을 알리고, 숨은 창은 제목만 맞춘다.
 let sessTitleChan: BroadcastChannel | null = null;
 function announceSessName(id: string, name: string): void {
+  //  숨은 창은 알리지 않는다 — 목록을 새로 받지 않으니 그 창이 아는 이름은 낡았을 수 있다. 알리는 창은 늘 목록이 새것인 창이다.
+  if (document.hidden) return;
   try { sessTitleChan?.postMessage(sessTitleMsg(id, name)); } catch { /* 못 알려도 그 창은 돌아올 때 맞춘다 */ }
 }
 function listenSessTitles(): void {

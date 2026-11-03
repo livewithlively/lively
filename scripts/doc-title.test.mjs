@@ -19,7 +19,7 @@
 //  R7 ★목록에 아직 없는 세션은 저장된 이름(id 꼬리 아님) · R8 이름을 모르는 세션은 `세션 <id꼬리>` · R9 줄바꿈 이름은 한 줄
 //  R10 보던 탭을 닫으면 옮겨 간 탭의 이름 · R11 홈 · R12 이름이 그대로면 <title> 을 다시 안 쓴다(대조: 바꾸면 쓴다)
 //  R13 onRetitled 를 안 준 엔진도 깨지지 않는다 · B1 진짜 BroadcastChannel 알림 + 숨음 → 맞춘다 · B2 보임 → 그대로
-//  W 셸 배선(아래 각 줄)
+//  W 셸 배선(아래 각 줄 — 알리는 쪽은 보이는 창만 W4″)
 //
 // fail-first: `SRC_ROOT=<고치기 전 트리>` 로 돌리면 그 트리의 lib/doc-title.ts · tabs.ts · main.ts 를 잰다. 런타임 절의 제목 맞추기 함수만은
 //  이 트리(ROOT)의 것을 쓴다 — 고치기 전 탭 기계가 그걸 **부르지 않는다**는 것이 곧 빨강이다.
@@ -121,6 +121,10 @@ if (!existsSync(DT_SRC)) {
     && /applySessTitleMsg\(ev\.data, \{ hidden: document\.hidden, tab, sessionId: k\.startsWith\('s:'\) \? k\.slice\(2\) : '', doc: document \}\)/.test(listen),
     "W4 받는 쪽은 통로가 없으면 조용히 빠지고, 받은 말은 숨음 · 지금 세션 · 이 문서로 applySessTitleMsg 에 넘긴다", show(listen.slice(0, 500)));
   ok(/sessTitleChan\?\.postMessage\(sessTitleMsg\(id, name\)\)/.test(main), "W4′ 알리는 쪽도 통로가 없으면 조용히 빠진다(?.)");
+  const n0 = main.indexOf("function announceSessName("), n1 = main.indexOf("\n}", n0);
+  const announce = n0 >= 0 && n1 > n0 ? main.slice(n0, n1) : "";
+  ok(/if \(document\.hidden\) return;/.test(announce) && announce.indexOf("if (document.hidden) return;") < announce.indexOf("postMessage"),
+    "W4″ 숨은 창은 알리지 않는다 — 목록을 새로 받지 않아 그 창이 아는 이름은 낡았을 수 있다", show(announce));
   const bootAt = main.indexOf("export async function bootV2");
   ok(bootAt >= 0 && main.indexOf("listenSessTitles();", bootAt) > bootAt && main.indexOf("listenSessTitles();") > bootAt,
     "W5 귀는 셸 시작(bootV2)에서만 연다(main.ts 의 맨 위 코드는 클래식 화면에서도 불려 온다)");
