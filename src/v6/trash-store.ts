@@ -115,7 +115,9 @@ export async function getDeleteSnapshot(entity: string, key: string): Promise<Re
 // ── 파기(#3778 — 설계는 #1850 trash-flow-redesign 계약 1, 8/24 에 한 번 만들었다가 되돌린 것을 되살린다) ─────────
 //  **본문만 지우고 행은 남긴다.** 그 키의 **모든** 감사 행(delete 만이 아니라 insert·update·link 의 before/after 전부 —
 //  지식 변경이력이 같은 표를 읽는다)을 비운다. 호출자가 op='purge' 행을 하나 남긴다 — «누가 언제 파기했다»는 남고 내용은 어디에도 없다.
-//  ⚠ org_content_audit 를 UPDATE 하는 곳은 이 함수와 session-footprint-store.blankAuditSnapshots 둘뿐이다 — 늘리지 마라.
+//  ⚠ org_content_audit 를 UPDATE 하는 곳은 이 함수 · session-footprint-store.blankAuditSnapshots · mirror/mirror-scrub.scrubAuditHistory
+//   셋뿐이다 — 늘리지 마라. 앞의 둘은 내용을 비우고(파기), 셋째는 수집 가림(#5308)이 옛 본문의 연락처·비밀번호를 같은 규칙으로 가린다
+//   (행·op·시각은 그대로 — 이력에서 값이 보이거나 되돌리기로 돌아오지 않게).
 //  전제: 지금 삭제 상태(최신 op='delete')여야 한다 — 살아 있는 것을 파기하면 «지웠는데 살아 있는» 모순이 된다. 호출자가 isDeletedNow 로 확인한다.
 //  지식은 **두 축**을 함께 비운다 — 항상-주입 섹션은 같은 문서가 entity='org_section' 으로도 감사된다(섹션 편집·삭제, org/store/sections.ts).
 //   한 축만 비우면 «완전히 지웠다» 는 문서의 본문이 다른 축의 before/after 에 그대로 남는다(지식 변경이력도 두 축을 함께 읽는다 — HISTORY_ENTITIES).

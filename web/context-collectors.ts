@@ -176,7 +176,9 @@ function collectorRow(c: any, presets: any[], reload: () => void, canEdit: boole
   const title = el('div', { class: 'cxc-t' },
     el('span', { class: 'cxc-name', text: c.label || c.key }),
     el('span', { class: 'cxc-state' + (c.enabled ? ' is-on' : '') },
-      el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: c.enabled ? '켜짐' : '꺼짐' })));
+      el('span', { class: 'cxc-state-dot', 'aria-hidden': 'true' }), el('span', { text: c.enabled ? '켜짐' : '꺼짐' })),
+    // #5308 — 가림을 켠 수집기는 목록에서 바로 보이게(열어 보지 않고도 «이건 가려서 들어온다» 를 안다).
+    c.pii_scrub ? el('span', { class: 'cxc-tag', text: '연락처·비밀번호 가림', title: '메일·전화번호·주민번호·카드번호와 비밀번호 값을 가려서 저장합니다.' }) : null);
 
   // 마지막 자리 — 실패했으면 **여기에** 원인과 조치가 선다(원준 2026-09-27 «3행으로 빼지 말고 기존 2행 안에»).
   //  실패가 아니면 마지막 실행의 결과(새 자료 · 바뀐 자료), 어제부터 돈 적이 없으면 종전 문구.
@@ -404,6 +406,15 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
 
   const noteIn = el('input', { type: 'text', class: 'cxc-in', value: c?.note ?? '', placeholder: '선택 사항' }) as HTMLInputElement;
 
+  // 연락처·비밀번호 가림(#5308) — 기본 설정에 둔다(무엇이 저장되는지를 정하는 칸이라 접어 두지 않는다).
+  //  클릭업은 뺀다: 작업 설명을 원본에 되쓰는 양방향 미러라, 가린 설명이 원본의 실제 연락처를 지울 수 있다(서버도 걸지 않는다).
+  const scrubSupported = preset.key !== 'clickup';
+  const scrubChk = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  scrubChk.checked = !!c?.pii_scrub;
+  const scrubField = scrubSupported ? el('div', { class: 'cxc-field' },
+    el('label', { class: 'cxc-check' }, scrubChk, ' 연락처·비밀번호 가리기 — 메일·전화번호·주민번호·카드번호와 비밀번호 값을 가려서 저장합니다'),
+    el('p', { class: 'cxc-hint', text: '가린 자리에는 «[가림: 메일]»처럼 종류만 남습니다. 켜면 이미 모은 것도 다음 수집 때 가리고, 원본(노션·슬랙 등)은 그대로 둡니다.' })) : null;
+
   // ── 머리 — 무엇의 설정인가 + (리브가 만든 것이면) 어디서 왔는지. ──
   box.append(el('div', { class: 'cxc-ed-head' },
     el('span', { class: 'cxc-ed-tt' }, el('b', { class: 'cxc-ed-t', text: isNew ? `새 수집기 — ${preset.label}` : '수집기 설정' }),
@@ -435,6 +446,7 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
     F('이름', null, labelIn),
     ...basicEls,
     F('얼마나 자주', '자주 가져올수록 최신이지만 외부 서비스 호출도 늘어납니다.', intervalSel),
+    scrubField,
     isNew ? el('label', { class: 'cxc-check' }, enabledChk, ' 만들자마자 켜기 — 위 주기로 자동 수집합니다') : null);
   box.append(basic);
 
@@ -477,6 +489,7 @@ function collectorEditor(c: any | null, presets: any[], reload: () => void, newP
         sync_interval_sec: Number(intervalSel.value),
         output_mode: outSel.value,
         output_config: catIn.value.trim() ? { target_category: catIn.value.trim() } : {},
+        ...(scrubSupported ? { pii_scrub: scrubChk.checked } : {}),
         note: noteIn.value.trim() || null,
       }) });
       toast(isNew ? '수집기를 만들었습니다' : '저장했습니다');
