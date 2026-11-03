@@ -1114,7 +1114,7 @@
   "rest": [
    "POST /api/ui/org/collectors"
   ],
-  "input_hash": "ac5204e4f6c7dd9d"
+  "input_hash": "e29446e3c9011cd9"
  },
  {
   "name": "org_collector_sync_run",

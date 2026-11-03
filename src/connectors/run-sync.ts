@@ -26,7 +26,8 @@ import { loadEnterprise } from "../enterprise/load.js";
 import { connectors } from "./index.js";
 import { runClickupSync } from "./clickup/sync.js";
 import { CURSOR_EPSILON_MS, planCursorWrite } from "./sync-cursor.js";
-import { bindCollector, collectorClaimKey, collectorInstanceKey } from "./config.js";
+import { bindCollector, boundCollector, collectorClaimKey, collectorInstanceKey } from "./config.js";
+import { mirrorScrubStats, sweepScrubBacklog } from "../v6/mirror/mirror-scrub.js";
 import { logger } from "../log.js";
 import { installOrphanGuard, type OrphanGuard } from "./orphan-guard.js";
 
@@ -88,8 +89,8 @@ if (Number.isFinite(runRowId) && runRowId > 0) {
 if (collectorId) {
   const cr = await itemsPool.query<{
     preset_key: string; instance_key: string; enabled: boolean;
-    output_mode: string; output_config: Record<string, unknown> | null; version: number;
-  }>(`SELECT preset_key, instance_key, enabled, output_mode, output_config, version FROM org_collector WHERE id=$1`, [collectorId]);
+    output_mode: string; output_config: Record<string, unknown> | null; version: number; pii_scrub: boolean | null;
+  }>(`SELECT preset_key, instance_key, enabled, output_mode, output_config, version, pii_scrub FROM org_collector WHERE id=$1`, [collectorId]);
   const row = cr.rows[0];
   if (!row) { logger.error({ collectorId }, "수집기를 찾을 수 없습니다 — 삭제됐거나 잘못된 id"); process.exit(1); }
   if (row.preset_key !== name) {
@@ -101,8 +102,9 @@ if (collectorId) {
     outputMode: (row.output_mode ?? "preset") as never,
     outputConfig: row.output_config ?? {},
     version: Number(row.version),
+    piiScrub: row.pii_scrub === true,
   });
-  logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key, output: row.output_mode },
+  logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key, output: row.output_mode, piiScrub: row.pii_scrub === true },
     "수집기 인스턴스 바인딩");
 }
 
@@ -137,6 +139,19 @@ const failed = name === "clickup" ? await runClickupSync({ fullFlag }) : await r
 await orphan?.finish(failed ? 1 : 0);
 process.exit(failed ? 1 : 0);
 
+// ── #5308 가림 소급 — 이 수집기가 맡은 행 중 아직 안 가린 것을 DB 안에서 가린다(v6/mirror/mirror-scrub). ──
+//  비치명: 실패해도 수집은 계속한다(다음 run 이 다시 한다). 시간 상한(기본 3분)까지만 — 남으면 다음 run 이 잇는다.
+async function runScrubBacklog(claimKey: string): Promise<void> {
+  try {
+    const r = await sweepScrubBacklog(itemsPool, { claimKey });
+    const line = { claimKey, knowledge: r.knowledge, source: r.source, audit: r.audit, remaining: r.remaining, masks: r.masks, stopped: r.stopped };
+    logger.info(line, "가림 소급");
+    orphan?.note(JSON.stringify({ level: 30, ...line, msg: "가림 소급" }));
+  } catch (e) {
+    logger.warn({ err: (e as Error)?.message ?? String(e), claimKey }, "가림 소급 실패(비치명) — 다음 run 이 다시 한다");
+  }
+}
+
 // ── generic 증분 — clickup 외 모든 커넥터(slack/discord/notion/…). 커넥터 SPI backfill({since}) 를 커서로 몰아 증분화. ──
 //  instance = 수집기 인스턴스의 커서 네임스페이스(#1419 T1). 바인딩이 없으면 종전 그대로 '_'(레거시 단일).
 //   수집기가 여럿이면 여기서 갈린다 — 같은 슬랙이라도 인스턴스마다 자기 커서를 갖는다. 갈라 두지 않으면
@@ -147,6 +162,9 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
   const instance = collectorInstanceKey();
   // 수집기 표식(#4059) — 적재가 미러 행에 남기고, 후처리 스윕이 «내 몫» 을 가르는 값. 둘이 같은 값을 써야 한다.
   const claimKey = collectorClaimKey(system);
+  // #5308 가림을 켠 수집기 — 이미 모은 행을 먼저 가린다(원본이 안 바뀌면 다시 안 들어오므로 기다리면 영영 그대로다).
+  //  수집보다 먼저 두는 이유: 실패로 일찍 끝나는 갈래가 여럿이라 끝에 두면 건너뛴다. 순서는 상관없다 — 미러도 옛 행을 만나면 스스로 가린다.
+  if (boundCollector()?.piiScrub) await runScrubBacklog(claimKey);
   const cursor = await getConnectorState(system, instance);
   const prevIso = (cursor as { max_updated_iso?: unknown } | null)?.max_updated_iso;
   const prevMs = typeof prevIso === "string" && prevIso ? Date.parse(prevIso) : 0;
@@ -208,6 +226,8 @@ async function runGenericSync(system: string, conn: import("./types.js").Connect
     system, mode: incremental ? "incremental" : "full",
     ingested, mirrorFailures, cursorIso: plan.advance ? new Date(maxMs).toISOString() : (typeof prevIso === "string" ? prevIso : null),
     cursorAdvanced: plan.advance, retryPending: post?.retryIds?.length ?? 0,
+    // #5308 가림을 켠 수집기면 이번 run 에 미러가 가린 건수(제목·본문) — [기록] 에서 «가림이 도는가» 를 보는 자리.
+    ...(boundCollector()?.piiScrub ? { scrub: mirrorScrubStats() } : {}),
   };
   logger.info(summary, "generic 싱크 완료");
   orphan?.note(JSON.stringify({ level: 30, ...summary, msg: "generic 싱크 완료" })); // 부모를 잃었으면 pino 줄은 사라진다 — 요약은 여기로

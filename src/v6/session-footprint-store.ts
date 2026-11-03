@@ -243,6 +243,7 @@ export async function sessionFootprint(nodeId: string, sessionId: string, owner?
 // ── 실제 삭제 ───────────────────────────────────────────────────────────────
 
 // 감사 스냅샷 비우기 — **행은 남기고 내용만 비운다**(원준 결정 2026-08-23).
+//  ⚠ org_content_audit 를 UPDATE 하는 셋 중 하나다(trash-store.purgeDeleted 의 주석이 목록을 쥔다 — 늘리지 마라).
 //  행까지 지우면 '누가 언제 지웠나'라는 감사 자체가 사라져 운영이 눈을 잃는다. 반대로 내용을 남기면
 //  "지웠는데 본문이 감사 테이블에 그대로"가 되어 파기 요구의 답이 못 된다 — 그 사이가 이것이다.
 async function blankAuditSnapshots(client: { query: (sql: string, p: unknown[]) => Promise<unknown> }, entity: string, keys: string[]): Promise<void> {

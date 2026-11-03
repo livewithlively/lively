@@ -108,6 +108,10 @@ export async function initCollectorRegistry(pool: Pool): Promise<void> {
     -- 같은 프리셋의 두 수집기가 같은 커서 네임스페이스를 쓰면 서로의 진행을 덮어쓴다 — DB가 막는다.
     CREATE UNIQUE INDEX IF NOT EXISTS org_collector_instance_uq ON org_collector(preset_key, instance_key);
     CREATE INDEX IF NOT EXISTS org_collector_enabled_idx ON org_collector(enabled, preset_key);
+    -- #5308 연락처·비밀번호 가림 — 켜면 이 수집기가 모은 자료·지식을 저장 전에 가린다(v6/mirror/mirror-scrub).
+    --  output_config 에 넣지 않고 칸을 따로 둔다: 수집기 저장은 output_config 를 통째로 바꿔서(화면은 분류 하나만 보낸다)
+    --  분류를 고치는 순간 가림이 조용히 꺼진다. 기본 false = 종전 동작(값 없는 추가라 재작성 없음).
+    ALTER TABLE org_collector ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
   `);
 }
 

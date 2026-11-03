@@ -1,7 +1,7 @@
 // 지식 미러(notion 등 K류 → knowledge) — #1313 R20 으로 connector-mirror.ts 에서 verbatim 이관.
 //  external 좌표 upsert(mirrorKnowledgeV6) · domain-wiki name-키 upsert · domain-wiki 삭제 전파 스윕.
 import type pg from "pg";
-import { redactDeep, redactString } from "../../org/ingest/redact.js";
+import { mirrorGuard, scrubAuditHistory } from "./mirror-scrub.js";
 // unitName/normalizeExternalInstance 는 external-identity 가 SoT(구 미러와 byte-identical 슬러그·정규화 공유).
 import { unitName, normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import { classifyIngest } from "../../org/ingest/ingest-classify.js";
@@ -39,13 +39,14 @@ export async function mirrorKnowledgeV6(
   client: pg.PoolClient, it: RawItem, system: string, externalId: string, claimKey?: string,
 ): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
-  // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹.
-  const title = it.title == null ? null : pgText(redactString(String(it.title)));
-  const body = pgText(redactString(String(it.body ?? "")));
-  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
+  // 🔴H1 redact — 쓰기 전 평문 시크릿 마스킹. 수집기가 가림(#5308)을 켰으면 연락처·비밀번호도 가린다(mirror-scrub).
+  const g = mirrorGuard(system);
+  const title = it.title == null ? null : pgText(g.text(String(it.title), true));
+  const body = pgText(g.text(String(it.body ?? ""), true));
+  const baseFields = pgDeep(g.deep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
   // 구 미러처럼 원 item.type 을 fields._item_type 에 가산 보존(type 필터 무손실 복원용 — v6 에 kind 없음).
-  const fields = { ...baseFields, _item_type: it.type };
-  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
+  const fields = { ...baseFields, _item_type: it.type, ...g.mark };
+  const raw = it.raw == null ? null : pgDeep(g.raw(it.raw));
   const author = `connector:${system}`;
   // #551 아카이브 전파 — 원본이 아카이브/휴지통이면 lifecycle='archived'(기본 목록에서 숨고 보존). 신규 lifecycle 은 아래 정책으로.
   const isArchived = baseFields.archived === true || baseFields.in_trash === true;
@@ -54,12 +55,14 @@ export async function mirrorKnowledgeV6(
 
   // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. insert=항상 1건, no-op 재싱크=audit 생략. ──
   const prev = await client.query(
-    `SELECT name, title, body_md FROM knowledge
+    `SELECT name, title, body_md, fields->>'_pii_scrub' AS scrub_mark FROM knowledge
      WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
     [system, instance, externalId],
   );
-  const prevRow = prev.rows[0] as { name: string; title: string | null; body_md: string } | undefined;
+  const prevRow = prev.rows[0] as { name: string; title: string | null; body_md: string; scrub_mark: string | null } | undefined;
   const isInsert = !prevRow;
+  //  #5308 가리지 않은 채 쌓인 행을 처음 가릴 때 — 그 행의 옛 이력도 가린다(이력·되돌리기로 값이 돌아오지 않게).
+  if (prevRow && g.prevUnscrubbed(prevRow.scrub_mark)) await scrubAuditHistory(client, "knowledge", [prevRow.name]);
   const contentChanged = isInsert
     || (prevRow.title ?? null) !== (title ?? null)
     || (prevRow.body_md ?? "") !== (body ?? "");
@@ -135,10 +138,11 @@ export async function mirrorKnowledgeV6(
   await applyCollectorTargetCategory(client, finalName, isInsert);
 
   if (contentChanged) {
-    const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
+    const beforeSnap = isInsert ? null : { name: finalName, title: g.prev(prevRow!.title), body_md: g.prev(prevRow!.body_md) };
     const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author, lifecycle };  // #638/#656 lifecycle 관측(insert 시 정확) — 검토 대시 auto/pending 집계용
     await auditConnector(client, "knowledge", finalName, isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
   }
+  g.done();
   return true;
 }
 
@@ -154,18 +158,20 @@ export async function mirrorKnowledgeV6(
 export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem, system: string, externalId: string): Promise<boolean> {
   const instance = normalizeExternalInstance(it.provenance.instance);
   const name = externalId;                                   // 슬러그 = name = external_id
-  const title = it.title == null ? null : pgText(redactString(String(it.title)));
-  const body = pgText(redactString(String(it.body ?? "")));
-  const baseFields = pgDeep(redactDeep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
-  const fields = { ...baseFields, _item_type: it.type };
-  const raw = it.raw == null ? null : pgDeep(redactDeep(it.raw));
+  const g = mirrorGuard(system);                             // #5308 수집기 가림 — mirrorKnowledgeV6 와 같은 규칙
+  const title = it.title == null ? null : pgText(g.text(String(it.title), true));
+  const body = pgText(g.text(String(it.body ?? ""), true));
+  const baseFields = pgDeep(g.deep(it.fields && typeof it.fields === "object" ? it.fields : {})) as Record<string, unknown>;
+  const fields = { ...baseFields, _item_type: it.type, ...g.mark };
+  const raw = it.raw == null ? null : pgDeep(g.raw(it.raw));
   const author = `connector:${system}`;
   const sort = typeof it.sort === "number" && Number.isFinite(it.sort) ? Math.trunc(it.sort) : null;
 
   // 감사 노이즈 게이트 — name 으로 기존 행 조회(제목/본문 실변경 시에만 audit).
-  const prev = await client.query(`SELECT name, title, body_md FROM knowledge WHERE name=$1`, [name]);
-  const prevRow = prev.rows[0] as { name: string; title: string | null; body_md: string } | undefined;
+  const prev = await client.query(`SELECT name, title, body_md, fields->>'_pii_scrub' AS scrub_mark FROM knowledge WHERE name=$1`, [name]);
+  const prevRow = prev.rows[0] as { name: string; title: string | null; body_md: string; scrub_mark: string | null } | undefined;
   const isInsert = !prevRow;
+  if (prevRow && g.prevUnscrubbed(prevRow.scrub_mark)) await scrubAuditHistory(client, "knowledge", [prevRow.name]);
   const contentChanged = isInsert
     || (prevRow.title ?? null) !== (title ?? null)
     || (prevRow.body_md ?? "") !== (body ?? "");
@@ -199,10 +205,11 @@ export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem
   const finalName = (r.rows[0] as { name: string }).name;
   await applyCollectorTargetCategory(client, finalName, isInsert);
   if (contentChanged) {
-    const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
+    const beforeSnap = isInsert ? null : { name: finalName, title: g.prev(prevRow!.title), body_md: g.prev(prevRow!.body_md) };
     const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author, lifecycle: "active" };
     await auditConnector(client, "knowledge", finalName, isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
   }
+  g.done();
   return true;
 }
 
