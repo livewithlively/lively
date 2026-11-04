@@ -6,6 +6,7 @@ import { BrowserRelay, BrowserRelayError, MAX_HOSTS_PER_KEY, MAX_PENDING_PER_KEY
 import { registerBrowserRoutes } from "./routes.js";
 import { browserMcpContent } from "../capabilities/browser.js";
 import type { LivelyUser } from "../context.js";
+import { subscribeNotify, type NotifyEvent } from "../v6/notify-bus.js";
 
 // ── 브라우저 중계 (#4993) — 사양·엣지 표(E·R·M 행)는 scratch spec 과 같은 번호다 ─────────────
 //  단언은 문구가 아니라 부작용으로 한다: 화면에 밀린 프레임 · 기다리는 명령 수 · 붙은 화면 수 · end 호출 · taken.
@@ -353,24 +354,45 @@ test("R4~R7 스트림 — hello · 상태 반영 · cmd 받고 reply 로 답 · 
   }
 });
 
+test("R10 브라우저 표시 — 같은 사람의 실시간 스트림에 정확한 세션·탭을 싣고, 구독자가 없어도 명령은 성공한다", async () => {
+  const relay = new BrowserRelay();
+  const got: NotifyEvent[] = [];
+  const sub = subscribeNotify([{ ws: "primary", member: "alice", label: { slug: "primary", name: "", current: true, via: "same" } }], (ev) => got.push(ev));
+  const s = await server(() => ({ userId: "alice" }), relay);
+  try {
+    const first = await post(s.base, "/api/ui/browser/host/reveal", { session: "box-s-12345678", tab: 2 });
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { ok: true, delivered: 1 });
+    assert.equal(got.length, 1);
+    assert.deepEqual(got[0].type === "browser" ? { type: got[0].type, kind: got[0].kind, session: got[0].session, tab: got[0].tab } : null,
+      { type: "browser", kind: "reveal", session: "box-s-12345678", tab: "2" });
+    sub.close();
+    assert.deepEqual(await (await post(s.base, "/api/ui/browser/host/reveal", { session: "box-s-12345678", tab: "3" })).json(), { ok: true, delivered: 0 });
+  } finally { sub.close(); await s.close(); }
+});
+
 test("R1~R3 신원 없음 401 · 앱 토큰/앱 서버 403 · 형식 불량 400 — 화면은 하나도 안 붙는다", async () => {
   const relay = new BrowserRelay();
   let who: Partial<LivelyUser> | null = null;
   const s = await server(() => who, relay);
   try {
-    for (const path of ["/api/ui/browser/host/reply", "/api/ui/browser/host/state"]) assert.equal((await post(s.base, path, { host: "host-aaaa1", id: "x" })).status, 401, path);
+    for (const path of ["/api/ui/browser/host/reply", "/api/ui/browser/host/state", "/api/ui/browser/host/reveal"]) assert.equal((await post(s.base, path, { host: "host-aaaa1", id: "x" })).status, 401, path);
     assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`)).status, 401);
     for (const u of [{ userId: "alice", appId: "app-x" }, { userId: "alice", appServer: true }]) {
       who = u;
       assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`)).status, 403);
       assert.equal((await post(s.base, "/api/ui/browser/host/reply", { host: "host-aaaa1", id: "x" })).status, 403);
       assert.equal((await post(s.base, "/api/ui/browser/host/state", { host: "host-aaaa1" })).status, 403);
+      assert.equal((await post(s.base, "/api/ui/browser/host/reveal", { session: "box-s-12345678", tab: 1 })).status, 403);
     }
     who = { userId: "alice" };
     assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=${encodeURIComponent("bad id!")}`)).status, 400);
     assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream`)).status, 400);
     assert.equal((await post(s.base, "/api/ui/browser/host/reply", { host: "host-aaaa1" })).status, 400);
     assert.equal((await post(s.base, "/api/ui/browser/host/state", { host: "short" })).status, 400);
+    for (const body of [{ session: "bad", tab: 1 }, { session: "box-s-12345678", tab: 0 }, { session: "box-s-12345678", tab: "x" }, { session: "box-s-12345678", tab: "1e2" }]) {
+      assert.equal((await post(s.base, "/api/ui/browser/host/reveal", body)).status, 400);
+    }
     assert.equal(relay.hostCount(), 0);
   } finally { await s.close(); }
 });
@@ -384,6 +406,7 @@ test("R9 토큰 머리글(Authorization) 없이 온 요청은 신원이 있어�
     assert.equal((await getStream(`${s.base}/api/ui/browser/host/stream?host=host-aaaa1`, false)).status, 401);
     assert.equal((await post(s.base, "/api/ui/browser/host/state", { host: "host-aaaa1" }, false)).status, 401);
     assert.equal((await post(s.base, "/api/ui/browser/host/reply", { host: "host-aaaa1", id: "x" }, false)).status, 401);
+    assert.equal((await post(s.base, "/api/ui/browser/host/reveal", { session: "box-s-12345678", tab: 1 }, false)).status, 401);
     assert.equal(relay.hostCount(), 0);
   } finally { await s.close(); }
 });

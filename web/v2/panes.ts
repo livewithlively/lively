@@ -52,6 +52,8 @@ import { beginTabDrag, cancelTabDrag, consumeDragClick, type DragBar, type TabDr
 import { seedTasksTab } from '../lib/task-pane.js';   // #4084 — 저장된 배치에 «태스크» 탭을 한 번만 들인다
 import { hasBrowserSurface } from './browser-surface.js';
 import { onTabEvent, slotOfKey, tabsOfSession } from './browser-tabs.js';   // #4993 AI 가 쓰는 탭 → 그 세션의 웹 칸
+import { onBrowserEvent } from './live-sync.js';
+import { browserRevealSlot } from '../lib/browser-reveal.js';
 import { EMBEDDED } from './embed.js';
 import { openProjSettings } from './proj-settings.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
@@ -953,6 +955,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const offReveal = liveBrowser ? onTabEvent((ev) => {
     if (ev.type !== 'reveal' || dead || (curSession() || '') !== ev.session) return;
     const slot = ev.slot as TabKey;
+    const z = (['side', 'main', 'bottom'] as Zone[]).find((zz) => lay[zz].includes(slot));
+    if (!z) { addTab('side', slot); return; }
+    bringUp(z, slot);
+  }) : null;
+  // 브라우저 호스트와 이 셸이 다른 데스크톱 창이면 로컬 탭 사건이 건너오지 않는다.
+  // 같은 사람의 서버 사건을 받아 정확한 세션·탭 칸을 연다. live-sync 가 마운트 직전 사건도 짧게 재생한다.
+  const offRemoteReveal = liveBrowser ? onBrowserEvent((ev) => {
+    if (dead) return;
+    const slot = browserRevealSlot(ev, curSession()) as TabKey | null;
+    if (!slot) return;
     const z = (['side', 'main', 'bottom'] as Zone[]).find((zz) => lay[zz].includes(slot));
     if (!z) { addTab('side', slot); return; }
     bringUp(z, slot);
@@ -1948,6 +1960,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (typeof narrowMq.removeEventListener === 'function') narrowMq.removeEventListener('change', onNarrow); else (narrowMq as any).removeListener(onNarrow);
       wrap.removeEventListener('pn:open-web', onOpenWeb);
       offReveal?.();   // #4993
+      offRemoteReveal?.();   // #5317 — 다른 창의 브라우저 호스트 표시 사건
       wrap.removeEventListener(SHOW_SESSAPP_EVT, onShowSessApp);
       wrap.removeEventListener(VIEWER_EVT, onOpenViewer);
       window.removeEventListener('message', onMsg);

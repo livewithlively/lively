@@ -29,6 +29,7 @@
 import { TOKEN_KEY, apiUrl } from '../core.js';
 import { parseSse, retryDelay, stableConnection } from './sse.js';
 import { setViewers, type Viewer } from './presence.js';
+import { BrowserRevealHub, type BrowserRevealEvent } from '../lib/browser-reveal.js';
 
 /** 서버가 미는 세션 전이 한 건(src/v6/notify-bus.ts NotifySessionEvent 와 같은 모양). */
 export interface LiveSessionEvent {
@@ -62,6 +63,12 @@ const appListeners = new Set<(ev: LiveAppEvent) => void>();
 export function onAppEvent(fn: (ev: LiveAppEvent) => void): () => void {
   appListeners.add(fn);
   return () => { appListeners.delete(fn); };
+}
+
+const browserRevealHub = new BrowserRevealHub();
+/** 다른 창의 브라우저 호스트가 요청한 웹 칸 표시를 받는다. 마운트 직전 사건은 짧게 재생한다. */
+export function onBrowserEvent(fn: (ev: BrowserRevealEvent) => void): () => void {
+  return browserRevealHub.subscribe(fn);
 }
 
 let started = false;
@@ -127,7 +134,7 @@ async function connect(onChange: () => void): Promise<void> {
       const { value, done } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
-      const out = parseSse<LiveSessionEvent>(buf);
+      const out = parseSse<LiveSessionEvent | LiveAppEvent | BrowserRevealEvent>(buf);
       buf = out.rest;
       // 모르는 종류가 늘어도 **다시 읽으면 그만**이므로 종류를 좁혀 거르지 않는다 — 거르면 나중에 새 사건이 조용히 무시된다.
       //  예외는 앱 사건 하나(#4225): 사이드바에 보일 것이 바뀌지 않는다(AI 가 행을 쓸 때마다 목록을 다시 읽을 까닭이 없다).
@@ -137,6 +144,9 @@ async function connect(onChange: () => void): Promise<void> {
       for (const ev of out.events) {
         if (ev && ev.type === 'app') {
           for (const fn of [...appListeners]) { try { fn(ev as unknown as LiveAppEvent); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ } }
+        } else if (ev && ev.type === 'browser') {
+          const b = ev as BrowserRevealEvent;
+          if (b.kind === 'reveal' && b.session && b.tab) browserRevealHub.push(b);
         } else if (ev && ev.type === 'presence') {
           const p = ev as unknown as { session?: string; viewers?: Viewer[] };
           if (p.session) setViewers(p.session, p.viewers);
