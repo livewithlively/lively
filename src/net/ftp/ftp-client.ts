@@ -159,13 +159,29 @@ export class FtpSession {
     done.catch(() => {}); // 명령이 먼저 실패하면 아래 catch 가 처리한다 — 처리되지 않은 거절로 프로세스를 흔들지 않게
     try {
       await this.cmdExpect("LIST", [125, 150], "목록을 받지 못했습니다");
-      await done;
-      await this.expect([226, 250], "목록 전송이 끝나지 않았습니다");
     } catch (e) {
       data.destroy();
       throw e;
     }
+    try {
+      await done;
+      await this.expect([226, 250], "목록 전송이 끝나지 않았습니다");
+    } catch (e) {
+      data.destroy();
+      throw this.poison(e);
+    }
     return Buffer.concat(chunks).toString("latin1");
+  }
+
+  /**
+   * 전송이 시작된(150) 뒤 데이터 단계에서 실패하면 세션을 버린다. 서버의 늦은 종료 응답(426·226)이 큐에 남아
+   *  다음 명령이 직전 명령의 응답을 읽게 되기 때문이다(응답이 한 칸씩 밀린다). fatal 로 던져 색인(crawl)도 멈추게 한다.
+   */
+  private poison(e: unknown): FtpError {
+    const err = new FtpError(`데이터 전송 중 실패 — 이 세션은 더 쓸 수 없습니다: ${e instanceof Error ? e.message : String(e)}`, null, true);
+    this.fail(err);
+    this.sock.destroy();
+    return err;
   }
 
   /**
@@ -187,7 +203,10 @@ export class FtpSession {
       // 받는 쪽이 오류 없이 destroy 하면 end·error 가 오지 않는다 — close 로도 끝내야 done 이 영영 걸리지 않는다
       data.once("close", () => reject(new FtpError("데이터 연결이 전송 완료 전에 닫혔습니다")));
     });
-    const done = ended.then(() => this.expect([226, 250], "파일 전송이 끝나지 않았습니다")).then(() => undefined);
+    const done = ended.then(() => this.expect([226, 250], "파일 전송이 끝나지 않았습니다")).then(
+      () => undefined,
+      (e: unknown) => { throw this.poison(e); },
+    );
     done.catch(() => {}); // 호출자가 stream 오류를 먼저 받아 done 을 기다리지 않을 수 있다
     return { stream: data, done };
   }

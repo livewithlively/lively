@@ -11,6 +11,10 @@ import { parseSessionCookie, userFromSession } from "../../auth/sessions.js";
 import { logger } from "../../log.js";
 import { decodeRawPath, isSafeRawPath, displayPath } from "../ftp/ftp-list.js";
 import { NasConfigError, openNasSession, NAS_DOWNLOAD_PATH } from "./nas-access.js";
+import { FtpError } from "../ftp/ftp-client.js";
+
+// 파일명에 고객 이름이 흔해 경로 원문은 로그에 남기지 않는다. 같은 파일인지는 해시로 대조한다.
+const hashPath = (raw: string): string => createHash("sha256").update(raw, "latin1").digest("hex").slice(0, 16);
 
 export function contentDisposition(display: string): string {
   const base = display.slice(display.lastIndexOf("/") + 1) || "download";
@@ -49,13 +53,14 @@ export function registerNasDownloadRoute(app: express.Express): void {
         res.setHeader("Content-Disposition", contentDisposition(shown));
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
-        // 파일명에 고객 이름이 흔해 경로 원문은 로그에 남기지 않는다. 같은 파일인지는 해시로 대조한다.
-        const pathHash = createHash("sha256").update(raw, "latin1").digest("hex").slice(0, 16);
-        logger.info({ member: user.userId, ftpUser: username, pathHash }, "[nas] 파일 내려받기");
+        logger.info({ member: user.userId, ftpUser: username, pathHash: hashPath(raw) }, "[nas] 파일 내려받기");
         res.on("close", () => { if (!res.writableFinished) stream.destroy(new Error("내려받는 쪽이 연결을 끊었습니다")); });
         stream.pipe(res);
         await done;
       } catch (e) {
+        if (!(e instanceof FtpError && e.code === 550)) {
+          logger.warn({ err: e, member: user.userId, pathHash: hashPath(raw) }, "[nas] 내려받기 실패");
+        }
         if (!res.headersSent) res.status(404).json({ error: "파일을 열지 못했습니다(없거나 내 계정으로 열 수 없습니다)" });
         else res.destroy();
       } finally {

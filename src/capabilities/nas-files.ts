@@ -103,7 +103,7 @@ const nasFind: Capability = {
       ]);
       if (waited === "failed" && !state.result) rethrow(await building.catch((e: unknown) => e), memberId);
       if (waited === "timeout" && !state.result) {
-        return { indexing: true, message: "NAS 파일명 색인을 만드는 중입니다. 1~2분 뒤 같은 검색을 다시 부르세요.", note: BODY_NOTE };
+        return { indexing: true, message: "NAS 파일명 색인을 만드는 중입니다(다른 사람 색인이 먼저 돌고 있으면 더 걸립니다). 몇 분 뒤 같은 검색을 다시 부르세요.", note: BODY_NOTE };
       }
     }
     const state = nasIndexCache.get(key);

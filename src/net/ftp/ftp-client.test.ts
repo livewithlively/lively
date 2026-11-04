@@ -22,7 +22,7 @@ const LIST_BODY = Buffer.concat([
 const FILE_RAW = Buffer.concat([DIR_RAW, Buffer.from("/"), EUCKR_MUNSEO, Buffer.from(".bin")]);
 const FILE_BYTES = Buffer.from(Array.from({ length: 70_000 }, (_, i) => (i * 7) % 256));
 
-interface ServerOpts { silentAfterGreeting?: boolean; listFinal?: string; slowDataMs?: number }
+interface ServerOpts { silentAfterGreeting?: boolean; listFinal?: string; slowDataMs?: number; stallFirstListMs?: number }
 interface FakeServer {
   port: number;
   log: Buffer[]; // 받은 명령 원본 바이트(CRLF 제외)
@@ -82,6 +82,7 @@ async function startServer(opts: ServerOpts = {}): Promise<FakeServer> {
       send(`${final}\r\n`);
     };
 
+    let stalled = false;
     const handle = async (cmd: Buffer) => {
       log.push(cmd);
       if (opts.silentAfterGreeting) return;
@@ -96,6 +97,16 @@ async function startServer(opts: ServerOpts = {}): Promise<FakeServer> {
         if (p.equals(DIR_RAW) || p.equals(Buffer.from("/"))) { cwd = p; send("250 Directory successfully changed.\r\n"); }
         else send("550 Failed to change directory.\r\n");
       } else if (startsWith(cmd, "PASV")) await openPasv();
+      else if (startsWith(cmd, "LIST") && opts.stallFirstListMs && !stalled) {
+        // 전송을 시작(150)해 놓고 데이터를 보내지 않다가, 한참 뒤 실패 응답을 늦게 보낸다
+        stalled = true;
+        send("150 Here comes the directory listing.\r\n");
+        const c = await dataSock!;
+        dataSock = null;
+        await new Promise((r) => setTimeout(r, opts.stallFirstListMs));
+        c.destroy();
+        send("426 Failure writing network stream.\r\n");
+      }
       else if (startsWith(cmd, "LIST")) await sendData(LIST_BODY, opts.listFinal ?? "226 Directory send OK.");
       else if (startsWith(cmd, "RETR ")) {
         if (resolvePath(arg(cmd, "RETR")).equals(FILE_RAW)) await sendData(FILE_BYTES, "226 Transfer complete.");
@@ -236,6 +247,17 @@ await t("받는 쪽이 스트림을 중간에 끊으면 done 이 timeoutMs 를 �
     await within(done.then(() => "ok", () => "rejected"), 1_500, "abort settle");
     await s.close();
   } finally { await slow.close(); }
+});
+
+await t("전송 시작(150) 뒤 데이터 단계가 실패하면 그 세션은 더 쓸 수 없다(fatal) — 응답이 밀린 채 다음 명령을 보내지 않는다", async () => {
+  const st = await startServer({ stallFirstListMs: 600 });
+  try {
+    const s = await FtpSession.connect({ host: "127.0.0.1", port: st.port, user: "u1", password: "good", timeoutMs: 300 });
+    await assert.rejects(() => s.list("/"));
+    await new Promise((r) => setTimeout(r, 700)); // 서버의 늦은 426 이 도착할 시간
+    await assert.rejects(() => s.list("/"), (e: unknown) => e instanceof FtpError && e.fatal === true);
+    await s.close();
+  } finally { await st.close(); }
 });
 
 await t("close: QUIT 을 보내고 연결을 닫는다", async () => {
