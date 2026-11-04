@@ -10,20 +10,22 @@ import { resolveIngestPolicy } from "../../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../../org/ingest/ingest-policy-load.js";
 import { auditConnector, auditLifecycleSweep, claimSyncStateSql, pgDeep, pgText } from "./mirror-common.js";
 import { boundCollector } from "../../connectors/config.js";
+import { acceptableNameHint, collectorCategoryFor } from "./output-rules.js";
 import { isNoopResync, type MirrorRowNow } from "./resync-noop.js";
 
 /**
  * 수집기 '지식 직행'의 대상 분류 적용(#1419 T3) — output_config.target_category.
+ *  경로 규칙(output_config.category_rules)이 있으면 그 첫 일치가 먼저다 — 한 레포의 문서가 여러 도메인에 걸칠 때
+ *  (제품 문서 레포: 카드 · 지출관리 · 그로스 …) 카테고리 하나로는 전부 한 축에 몰린다. 판정은 output-rules.ts.
  *
  *  ⚠ **신규 삽입에만** 건다. 이 파일의 오랜 불변식이 "재싱크는 사람이 부여한 분류·핀을 지우지 않는다"이고,
  *   매 싱크마다 분류를 다시 박으면 사람이 옮겨 놓은 지식이 다음 싱크에 원위치로 끌려간다.
  *  mapped_by='rule'(사람도 LLM도 아닌 설정에서 온 것) · state='confirmed'(관리자가 명시한 값이라 제안이 아니다).
  *  분류 key 가 실재하지 않으면 조용히 넘어간다 — 오타 하나로 수집 전체를 멈추게 하지 않는다.
  */
-async function applyCollectorTargetCategory(client: pg.PoolClient, name: string, isInsert: boolean): Promise<void> {
+async function applyCollectorTargetCategory(client: pg.PoolClient, name: string, isInsert: boolean, itemPath?: string): Promise<void> {
   if (!isInsert) return;
-  const cfg = boundCollector()?.outputConfig;
-  const key = typeof cfg?.target_category === "string" ? cfg.target_category.trim() : "";
+  const key = collectorCategoryFor(boundCollector()?.outputConfig, itemPath);
   if (!key) return;
   try {
     await client.query(
@@ -100,7 +102,8 @@ export async function mirrorKnowledgeV6(
   //  #669 임베딩: 미러는 쓰기훅(embedKnowledgeBestEffort=knowledge_save 경로) 밖이라, 제목/본문 실변경($16) 시
   //   embedding_* 를 리셋해 pending(IS NULL) 풀로 되돌린다(신규 insert 는 어차피 NULL) → 게이트웨이 자동 pending
   //   백필(runAutoBackfillSweep)이 재임베딩. 리셋 없인 갱신분이 옛 텍스트의 스테일 벡터로 남아 백필이 영영 못 잡는다.
-  const name = prevRow?.name ?? unitName(system, externalId);
+  //  name_hint(경로 모드 등)는 신규에만 — 재싱크는 이미 가진 이름을 바꾸지 않는다(사람이 건 링크 · 핀이 이름에 붙어 있다).
+  const name = prevRow?.name ?? acceptableNameHint(it.name_hint) ?? unitName(system, externalId);
   const parentName = it.parent_external_id ? unitName(system, it.parent_external_id) : null;
   //  무변경 재싱크 — 판(version) · updated_at 을 올리지 않고 last_synced_at(삭제 전파 스윕의 근거) · 수집기 표식만 갱신한다.
   //   true 를 돌려준다: 이 항목은 «관측됐다» — 인입 수가 0 이면 스윕을 건너뛰는 안전장치가 무변경 run 에서 잘못 서지 않게.
@@ -153,7 +156,7 @@ export async function mirrorKnowledgeV6(
      lifecycle, sort, contentChanged, claimKey ?? null],
   );
   const finalName = (r.rows[0] as { name: string }).name;
-  await applyCollectorTargetCategory(client, finalName, isInsert);
+  await applyCollectorTargetCategory(client, finalName, isInsert, it.path);
 
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
@@ -218,7 +221,7 @@ export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem
      author, sort, contentChanged],
   );
   const finalName = (r.rows[0] as { name: string }).name;
-  await applyCollectorTargetCategory(client, finalName, isInsert);
+  await applyCollectorTargetCategory(client, finalName, isInsert, it.path);
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
     const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author, lifecycle: "active" };
