@@ -35,6 +35,9 @@ export type Act =
   | { k: 'copy' }                                     // 선택을 클립보드로
   | { k: 'cut' }                                      // 선택을 복사한 뒤 지운다
   | { k: 'selectInput' } | { k: 'selectAll' }        // ⌘A 첫 번=입력, 다음 번=터미널 전체
+  //  #5332 — 입력 **전체**의 처음·끝(여러 줄 입력). 앱에 그 자리로 가는 키가 없어(Codex·Claude 둘 다 실측 #3870) terminal.ts 가
+  //   앱 커서를 방향키로 걸어 간다(walkCursor). extendInput=선택을 그 끝까지 넓힘(⌘⇧↑/↓) · caretInput=캐럿만 옮김(⌘↑/↓).
+  | { k: 'extendInput'; dir: Dir } | { k: 'caretInput'; dir: Dir }
   | { k: 'undo' } | { k: 'redo' };
 
 // 앱이 이미 아는 조작들의 바이트. 셸(readline)·Claude Code 가 같은 뜻으로 받는 것만 골랐다.
@@ -89,16 +92,18 @@ export function decideKey(e: KeyLike, c: LineEditCtx): Act {
     if (c.mac) {
       if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
       if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
-      if (key === 'ArrowUp') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
-      if (key === 'ArrowDown') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      //  ⌘↑/↓ 는 macOS 글 상자 관례대로 **입력 전체**의 처음·끝(#5332 — 종전엔 ⌘←/→ 와 같은 «지금 줄» 이었다).
+      if (key === 'ArrowUp') return shift ? { k: 'extendInput', dir: -1 } : { k: 'caretInput', dir: -1 };
+      if (key === 'ArrowDown') return shift ? { k: 'extendInput', dir: 1 } : { k: 'caretInput', dir: 1 };
       if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killHead, kill: true };
       if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.killTail, kill: true };
     } else {
       // Windows 관례: Ctrl+←/→ = 단어, Ctrl+Home/End = 입력줄 경계, Ctrl+⌫/Delete = 단어 삭제.
       if (key === 'ArrowLeft') return shift ? { k: 'extend', seq: SEQ.wordLeft, unit: 'word', dir: -1 } : { k: 'send', seq: SEQ.wordLeft };
       if (key === 'ArrowRight') return shift ? { k: 'extend', seq: SEQ.wordRight, unit: 'word', dir: 1 } : { k: 'send', seq: SEQ.wordRight };
-      if (key === 'Home') return shift ? { k: 'extend', seq: SEQ.home, unit: 'line', dir: -1 } : { k: 'send', seq: SEQ.home };
-      if (key === 'End') return shift ? { k: 'extend', seq: SEQ.end, unit: 'line', dir: 1 } : { k: 'send', seq: SEQ.end };
+      //  Ctrl+Home/End = 입력 **전체**의 처음·끝(#5332 — Windows 글 상자 관례. 줄 경계는 Shift 없는 Home/End 가 그대로 한다).
+      if (key === 'Home') return shift ? { k: 'extendInput', dir: -1 } : { k: 'caretInput', dir: -1 };
+      if (key === 'End') return shift ? { k: 'extendInput', dir: 1 } : { k: 'caretInput', dir: 1 };
       if (key === 'Backspace') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelBack, kill: true };
       if (key === 'Delete') return c.hasSel ? { k: 'del' } : { k: 'send', seq: SEQ.wordDelForward, kill: true };
     }

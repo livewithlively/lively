@@ -2259,6 +2259,84 @@ function selectWholeTerminal(): void {
   try { term.selectAll(); } catch (_) { /* noop */ }
 }
 
+// ── 입력 **전체**의 처음·끝 (#5332) ─────────────────────────────────────────────────
+//  원준님 2026-11-04: «클로드에서는 되는 ⌘A 등으로 입력중인 글자 선택하거나 오려붙이거나 … 코덱스엔 클로드만큼 반영 안 돼 있다».
+//  Claude Code 전체화면은 #4406 판(app-select)이 입력 전체를 다룬다. 그 밖(Codex·Claude 인라인)은 이 판 — 종전엔 ⌘A·⌘⇧↑/↓·⌘↑/↓ 가
+//  전부 Ctrl+A/E(= **지금 줄**)라 여러 줄 입력에서 그 줄 머리·끝에서 멈췄다. 앱엔 입력 처음·끝으로 가는 키가 없다(#3870 실측 — 두 앱 다
+//  Ctrl+Home·M-< 무반응) → 입력칸의 두 끝을 화면에서 찾고, 앱 커서를 방향키로 **걸어** 간다(walkCursor — 하한씩 보내고 다시 재므로 넘치지 않는다).
+//  입력칸 = 커서 행에서 위로 «› / ❯» 첫 행까지(사이 행은 전부 두 칸 들여쓰기) + 아래로 두 칸 들여쓴 이어지는 행들(빈 행에서 끝 — 그 아래가 발치).
+//  못 찾거나(셸·목록·대화상자) 빈 입력칸(흐린 안내문)이면 null — 부른 쪽이 종전 «지금 줄» 동작으로 물러난다.
+function isContRow(y: number): boolean {
+  const c0 = cellAt(y, 0), c1 = cellAt(y, 1);
+  return blankCh(c0) && blankCh(c1) && rowEnd(y) > 2;
+}
+function inputBounds(): { start: Pos; end: Pos } | null {
+  const c = cursorPos();
+  if (!c) return null;
+  let top = -1;
+  for (let y = c.y; y >= Math.max(0, c.y - SEL_MAX_ROWS); y--) {
+    if (isPromptRow(y)) { top = y; break; }
+    if (!isContRow(y) && !(y === c.y && blankCh(cellAt(y, 0)) && blankCh(cellAt(y, 1)))) return null;
+  }
+  if (top < 0) return null;
+  if (/^\d+[.)]\s/.test(bufRowText(top).slice(2))) return null;          // 번호 메뉴(대화상자) — 입력칸이 아니다
+  const head = cellAt(top, 2);
+  if (top === c.y && c.x <= 2 && (!head || blankCh(head) || isDimAt(top, 2))) {
+    if (!isContRow(top + 1)) return null;                                // 빈 입력칸(안내문은 흐리게 그려진다)
+  }
+  let bot = Math.max(top, c.y);
+  while (bot + 1 - top <= SEL_MAX_ROWS && isContRow(bot + 1)) bot++;
+  return { start: { x: 2, y: top }, end: { x: Math.max(2, rowEnd(bot)), y: bot } };
+}
+function isDimAt(y: number, x: number): boolean {
+  try { const ln = term.buffer.active.getLine(y); const cell = ln && ln.getCell(x); return !!(cell && cell.isDim()); } catch (_) { return false; }
+}
+function snapRows(c: Pos): Map<number, string> {
+  const snap = new Map<number, string>();
+  let top = 0;
+  try { top = term.buffer.active.baseY; } catch (_) { /* noop */ }
+  for (let y = Math.max(top, c.y - SEL_MAX_ROWS); y <= c.y + SEL_MAX_ROWS && y < top + term.rows; y++) snap.set(y, bufRowText(y));
+  return snap;
+}
+/** 선택을 입력 처음(dir<0)·끝(dir>0)까지 넓힌다 — 앵커는 그대로(없으면 지금 자리), 커서를 그 끝까지 걷는다. 걷는 동안 선택 모양은 목표까지로 고정. */
+async function extendSelToInput(dir: -1 | 1): Promise<void> {
+  const b = inputBounds(), c = cursorPos();
+  if (!b || !c) { extendSel(dir < 0 ? SEQ.home : SEQ.end); return; }   // 입력칸을 못 찾았다 — 종전 «지금 줄»
+  if (!selAnchor) { selAnchor = { x: c.x, y: c.y, snap: snapRows(c) }; dlog('sel-on', 'x=' + c.x + ' y=' + c.y); }
+  const goal = dir < 0 ? b.start : b.end;
+  const a = { x: selAnchor.x, y: selAnchor.y };
+  const d = cmpPos(a, goal);
+  if (!d) return;
+  const [s, e] = d < 0 ? [a, goal] : [goal, a];
+  selBusy = { y: s.y, x0: s.x, y1: e.y, x1: e.x, curAtEnd: d < 0 };
+  drawSel();
+  let net: number | null = null;
+  try { net = await walkCursor(goal); } finally { selBusy = null; }
+  if (net === null) { toast('입력의 끝을 찾지 못했어요', true); dlog('sel-walk', 'input-fail dir=' + dir); }
+  drawSel();
+}
+/** ⌘A — 입력이 여러 행이면 입력 전체(앵커=끝, 커서를 처음까지 걷는다). 한 행이면 종전 그대로(Home/End). */
+function selectWholeInput(): void {
+  const b = inputBounds();
+  if (!b || b.start.y === b.end.y) { selectCurrentInput(); return; }
+  clearSel('select-input');
+  selAnchor = { x: b.end.x, y: b.end.y, snap: snapRows(b.end) };
+  inputSelectArmed = true;
+  dlog('sel-on', 'input rows=' + (b.end.y - b.start.y + 1));
+  void extendSelToInput(-1);
+}
+/** ⌘↑/↓ — 캐럿만 입력 처음·끝으로(선택은 거둔다). */
+async function caretToInput(dir: -1 | 1): Promise<void> {
+  clearSel('caret-input');
+  const b = inputBounds();
+  if (!b) { sendInput(dir < 0 ? SEQ.home : SEQ.end); return; }
+  const goal = dir < 0 ? b.start : b.end;
+  const c = cursorPos();
+  if (!c || !cmpPos(c, goal)) return;
+  selBusy = { y: c.y, x0: c.x, y1: c.y, x1: c.x, curAtEnd: true };   // 걷는 동안 키를 받지 않는다(빈 선택 — 칠하지 않는다)
+  try { await walkCursor(goal); } finally { selBusy = null; removeSelEls(); }
+}
+
 // ── 마우스는 pane 의 것이다 (#4406) ────────────────────────────────────────────────
 //  누름·끌기·놓기를 여기서 가로채지 않는다. 웹이 하는 일은 하나 — 사람이 마우스를 쓰기 시작하면 키보드로 세운 우리
 //  선택(Shift+방향키, 위 selAnchor)을 거둔다. 그 뒤의 선택은 마우스를 받은 쪽이 그린다.
@@ -2648,7 +2726,9 @@ function handleLineEditKey(e: any): boolean {
   if (act.k === 'redo') { doRedo(); return true; }
   if (act.k === 'copy') { copySel(); return true; }
   if (act.k === 'cut') { copySel(); deleteSel(); return true; }
-  if (act.k === 'selectInput') { selectCurrentInput(); return true; }
+  if (act.k === 'selectInput') { selectWholeInput(); return true; }
+  if (act.k === 'extendInput') { void extendSelToInput(act.dir); return true; }
+  if (act.k === 'caretInput') { void caretToInput(act.dir); return true; }
   if (act.k === 'selectAll') { selectWholeTerminal(); return true; }
   if (act.k === 'del') { deleteSel(); return true; }
   if (act.k === 'send') {

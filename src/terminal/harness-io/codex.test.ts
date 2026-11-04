@@ -2,7 +2,7 @@
 //  줄 원문은 전부 실측 rollout 에서 딴 것(필드 축약만) — 지어내지 않는다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseCodex } from "./codex.js";
+import { parseCodex, codexComposerState } from "./codex.js";
 import type { ChatAssistantLine, ChatSystemLine, ChatUserLine } from "./chat-line.js";
 
 let pass = 0;
@@ -161,6 +161,49 @@ t("[E17] 실측 rollout 파일 한 벌 — 사람이 친 말만 순서대로 나
   assert.ok(users[1].startsWith("답 없이 이 주소만"), users[1]);
   assert.equal(users[2], "1부터 20까지 천천히 세어줘");
   assert.ok(!users.some((u) => u.includes("AGENTS.md instructions")), "주입문이 사람 말로 새어 나왔다");
+});
+
+t("E11b #5332 thread_settings_applied.reasoning_effort → assistant 줄의 effort(상단 «지금» 칸)", () => {
+  //  실측 0.166.0 rollout: `/model --reasoning=high` 뒤 다음 thread_settings_applied 에 reasoning_effort:"high"
+  const text = [
+    L({ timestamp: "t", type: "event_msg", payload: { type: "thread_settings_applied", thread_settings: { model: "gpt-6-luna", reasoning_effort: "high" } } }),
+    L({ timestamp: "t", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] } }),
+  ].join("\n") + "\n";
+  const a = parseCodex(text, {}).lines[0] as ChatAssistantLine;
+  assert.equal(a.message.model, "gpt-6-luna");
+  assert.equal(a.effort, "high");
+  //  없으면 칩을 지어내지 않는다
+  const b = parseCodex(L({ timestamp: "t", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] } }) + "\n", {}).lines[0] as ChatAssistantLine;
+  assert.equal(b.effort, undefined);
+});
+
+//  #5332 — 입력칸 판정. 화면은 전부 codex-cli 0.166.0 을 tmux 에 띄워 capture-pane 으로 딴 그대로다(경로만 줄임).
+const BANNER = ["", "  >_ OpenAI Codex (v0.166.0)", "     /tmp/cx", "", "  /review - review any changes and find issues", "", ""];
+const FOOT = "  GPT-6-Luna low · /tmp/cx                                     ⚠ 2 warnings · f2 to view";
+t("C1 빈 입력칸(안내문) → empty — 처음·이어 묻기 두 안내문", () => {
+  assert.equal(codexComposerState([...BANNER, "› Ask Codex to do anything", "", FOOT, ""].join("\n")), "empty");
+  assert.equal(codexComposerState([...BANNER, "› Ask a follow-up question", "", FOOT].join("\n")), "empty");
+  assert.equal(codexComposerState([...BANNER, "› Ask Codex to do any…", "", FOOT].join("\n")), "empty");
+});
+t("C2 한 줄 치던 글 → draft", () => {
+  assert.equal(codexComposerState([...BANNER, "› hello draft", "", FOOT].join("\n")), "draft");
+});
+t("C3 여러 줄(Ctrl+J) 치던 글 → draft — 둘째 줄이 두 칸 들여쓰기", () => {
+  assert.equal(codexComposerState([...BANNER, "› line one", "  line two", "", FOOT].join("\n")), "draft");
+});
+t("C4 턴이 도는 중 — 대화 기록의 «› 사람 말» 이 아니라 맨 아래 입력칸을 본다", () => {
+  const busy = [...BANNER, "› Run this shell command: sleep 15; echo ok", "", "", "• Working (4s • esc to interrupt) · Running hooks", "", "", "› Ask Codex to do anything", "", FOOT];
+  assert.equal(codexComposerState(busy.join("\n")), "empty");
+  const busyDraft = [...BANNER, "› Run this shell command: sleep 15; echo ok", "", "", "• Working (5s • esc to interrupt) · Running hooks", "", "", "› typing while busy", "", "  tab to queue message                                   100% context left"];
+  assert.equal(codexComposerState(busyDraft.join("\n")), "draft");
+});
+t("C5 입력칸이 없거나(셸·부팅) 번호 메뉴(대화상자)면 unknown — 아무것도 넣지 않는 쪽", () => {
+  assert.equal(codexComposerState("user@box ~ % \n"), "unknown");
+  assert.equal(codexComposerState(["  Select Model and Effort", "  1. GPT-6.1-Sol   Latest", "› 5. GPT-5.6-Terra (current)", "  enter select · esc back"].join("\n")), "unknown");
+  assert.equal(codexComposerState(""), "unknown");
+});
+t("C6 발치가 빈 줄 없이 바로 붙어도 그걸 이어지는 줄로 읽지 않는다", () => {
+  assert.equal(codexComposerState(["› Ask Codex to do anything", "  GPT-6-Luna low · /tmp", "  ? for shortcuts"].join("\n")), "empty");
 });
 
 console.log(`harness-io/codex: ${pass} passed`);
