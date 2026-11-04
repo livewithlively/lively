@@ -213,3 +213,18 @@ test("S3-1·2 앱 사건 — 같은 워크스페이스·같은 사람만 받고,
   assert.deepEqual(got[0].ws, label("ws-a", true));
   a.close(); b.close();
 });
+
+test("S4 브라우저 표시 사건 — 같은 주소 규칙으로 흐르고 세션·탭 본문은 그대로 보존된다", () => {
+  const got: NotifyEvent[] = [];
+  const mine = subscribeNotify(own("ws-a", "alice"), (e) => got.push(e));
+  const other = subscribeNotify(own("ws-a", "bob"), () => { throw new Error("다른 사람이 받았다"); });
+  const n = publishNotify({ ws: "ws-a", member: "alice" }, {
+    type: "browser", kind: "reveal", session: "box-a-12345678", tab: "7", key: "b:1", ts: 1,
+  });
+  assert.equal(n, 1);
+  assert.equal(got.length, 1);
+  assert.deepEqual(got[0].type === "browser" ? { type: got[0].type, kind: got[0].kind, session: got[0].session, tab: got[0].tab } : null,
+    { type: "browser", kind: "reveal", session: "box-a-12345678", tab: "7" });
+  assert.deepEqual(got[0].ws, label("ws-a", true));
+  mine.close(); other.close();
+});
