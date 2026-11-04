@@ -87,10 +87,12 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
     const body = new ReadableStream({ start(c) { push = (s) => c.enqueue(new TextEncoder().encode(s)); finish = () => c.close(); } });
     return { status: 200, ok: true, body };
   };
-  const { startLiveSync, onAppEvent } = await import(join(root, "public/app/v2/live-sync.js"));
+  const { startLiveSync, onAppEvent, onBrowserEvent } = await import(join(root, "public/app/v2/live-sync.js"));
   let changes = 0;
   const apps = [];
+  const browsers = [];
   const off = onAppEvent((ev) => apps.push(ev));
+  const offBrowser = onBrowserEvent((ev) => browsers.push(ev));
   startLiveSync(() => { changes++; });
   for (let i = 0; i < 20 && !push; i++) await tick();
   ok(fetches === 1 && push, "S6 스트림에 붙었다(배선 — 아래가 vacuous 가 아니다)");
@@ -104,7 +106,17 @@ globalThis.location = { origin: "http://x", pathname: "/ui/", search: "", hash: 
   eq([apps.length, changes], [1, 1], "S6-2 세션 사건은 종전대로 사이드바를 다시 읽게 한다");
   push(app("attach") + sess); await tick(); await tick();
   eq([apps.length, changes], [2, 2], "S6-3 섞여 오면 앱 칸 + 사이드바 한 번");
+  const browser = `event: browser\ndata: ${JSON.stringify({ type: "browser", kind: "reveal", session: "box-a", tab: "2", key: "b:box-a:2:1", ts: Date.now() })}\n\n`;
+  push(browser); await tick(); await tick();
+  eq([browsers.length, browsers[0] && browsers[0].session, browsers[0] && browsers[0].tab, changes], [1, "box-a", "2", 2],
+    "S6-4 브라우저 표시 사건은 웹 칸으로만 — 사이드바를 다시 읽지 않는다");
+  const replayed = [];
+  const offReplay = onBrowserEvent((ev) => replayed.push(ev));
+  eq([replayed.length, replayed[0] && replayed[0].key], [1, "b:box-a:2:1"],
+    "S6-5 곁칸이 늦게 서도 최근 브라우저 표시 사건을 즉시 재생한다");
+  offReplay();
   off();
+  offBrowser();
   push(app("detach")); await tick(); await tick();
   eq(apps.length, 2, "S6 해지한 청취자는 더 안 받는다");
   document.hidden = true;            // 끊긴 뒤 다시 붙지 않게(재연결은 보이는 화면에서만)

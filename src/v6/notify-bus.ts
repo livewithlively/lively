@@ -104,8 +104,24 @@ export interface NotifyPresenceEvent {
   ws?: NotifyWorkspace;
 }
 
+/**
+ * 브라우저 사건(#5317) — 세션의 AI 가 사람과 같이 쓰는 브라우저를 쓰기 시작했다.
+ * 브라우저 호스트와 사람이 보고 있는 셸이 다른 창·기기여도, 현재 세션의 오른쪽 웹 칸을 열기 위해 서버를 건넌다.
+ * 배너 사건이 아니다 — 데스크톱 앱은 `type !== "session"` 을 거른다.
+ */
+export interface NotifyBrowserEvent {
+  type: "browser";
+  kind: "reveal";
+  session: string;
+  /** AI 가 고른 탭 번호. 없거나 잘못된 값이면 받는 화면은 첫 웹 칸을 연다. */
+  tab: string;
+  key: string;
+  ts: number;
+  ws?: NotifyWorkspace;
+}
+
 /** 버스가 싣는 사건 — 종류(type)로 가른다. SSE 이벤트 이름도 이 값이다(notify-routes.ts). */
-export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent;
+export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent | NotifyBrowserEvent;
 
 /**
  * 구독 하나가 받는 자리 — «이 워크스페이스에서 난, 이 조건에 맞는 사건».
