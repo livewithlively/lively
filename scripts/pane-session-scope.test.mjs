@@ -104,19 +104,6 @@ ok(isEmbedded("?embed=0") === false && isEmbedded("?embed=x") === false && isEmb
     "E5 떠날 때 같은 자리에서 끊는다");
 }
 
-// ══ AI 브라우저 표시 — 브라우저 호스트와 현재 셸이 다른 창이어도 현재 세션만 ════════
-{
-  ok(/import \{ onBrowserEvent \} from '\.\/live-sync\.js'/.test(PANES),
-    "E34 서버를 건넌 브라우저 표시 사건을 셸이 듣는다");
-  const reveal = slice(PANES, "const showBrowserSlot = (session: string, slot: TabKey): void => {", "\n  /** 이 세션을 보러 왔는데");
-  ok(/\(curSession\(\) \|\| ''\) !== session/.test(reveal),
-    "E34 ★ 브라우저 표시 사건은 현재 보고 있는 세션과 같을 때만 웹 칸을 연다");
-  ok(/onBrowserEvent\(\(ev\)/.test(reveal) && /n === 1 \? 'web' : `web#\$\{n\}`/.test(reveal),
-    "E35 탭 번호를 첫 웹 칸 또는 같은 번호의 웹 칸으로 옮긴다");
-  ok(/offRemoteReveal\?\.\(\)/.test(PANES),
-    "E36 곁칸을 떠날 때 서버 브라우저 사건 구독을 끊는다");
-}
-
 // ══ 터미널이 넘겨 오는 링크 — 내 탭의 프레임에서 온 것만 ══════════════════════════
 {
   const msg = slice(PANES, "const onMsg = (e: MessageEvent)", "window.addEventListener('message', onMsg)");

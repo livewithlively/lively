@@ -17,8 +17,6 @@ import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { browserRelay, relayKey, BrowserRelayError, NO_HOST_MESSAGE, APP_PRINCIPAL_REFUSAL, isAppPrincipal } from "../browser/relay.js";
-import { publishNotify } from "../v6/notify-bus.js";
-import { hereSlug } from "../v6/notify-scope.js";
 
 const tabField = z.string().max(16).optional().describe("탭 번호(browser_tabs 가 주는 tab). 생략하면 이 세션이 지금 쓰는 탭");
 
@@ -35,28 +33,8 @@ function guard(user: LivelyUser): string {
 }
 
 /** 중계 오류 → HTTP 상태(REST)와 그대로의 문구(MCP isError). 문구가 곧 AI 의 다음 행동이라 고치지 않는다. */
-export function browserRevealTarget(op: string, a: Record<string, unknown>, session: string | null | undefined): { session: string; tab: string } | null {
-  const sid = String(session || "").trim();
-  if (!sid) return null;
-  if (op === "status") return null;
-  if (op === "tabs") {
-    const action = String(a.action || "list");
-    if (action !== "new" && action !== "select") return null;
-  }
-  const tab = /^\d+$/.test(String(a.tab || "")) ? String(a.tab) : "1";
-  return { session: sid, tab };
-}
-
 async function run(user: LivelyUser, ctx: CapabilityCtx | undefined, op: string, args: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
   const key = guard(user);
-  const reveal = browserRevealTarget(op, args, ctx?.session);
-  if (reveal) {
-    const ts = Date.now();
-    publishNotify({ ws: hereSlug(), member: user.userId }, {
-      type: "browser", kind: "reveal", ...reveal,
-      key: `b:${reveal.session}:${reveal.tab}:${ts}`, ts,
-    });
-  }
   try {
     return await browserRelay.call(key, { op, session: ctx?.session ?? null, args }, timeoutMs);
   } catch (e) {

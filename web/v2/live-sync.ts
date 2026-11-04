@@ -64,29 +64,6 @@ export function onAppEvent(fn: (ev: LiveAppEvent) => void): () => void {
   return () => { appListeners.delete(fn); };
 }
 
-/** 브라우저 호스트와 현재 셸이 다른 창이어도 이 세션의 웹 칸을 열라는 서버 사건(#5317). */
-export interface LiveBrowserEvent {
-  type: 'browser';
-  kind: 'reveal';
-  session: string;
-  tab: string;
-  key?: string;
-  ts?: number;
-}
-const browserListeners = new Set<(ev: LiveBrowserEvent) => void>();
-const recentBrowser = new Map<string, LiveBrowserEvent>();
-const BROWSER_REPLAY_MS = 5 * 60_000;
-/** 브라우저 표시 사건을 받는다. 곁칸보다 사건이 먼저 왔으면 최근 사건을 즉시 재생해 순간 신호 유실을 막는다. */
-export function onBrowserEvent(fn: (ev: LiveBrowserEvent) => void): () => void {
-  browserListeners.add(fn);
-  const now = Date.now();
-  for (const [session, ev] of recentBrowser) {
-    if (!ev.ts || now - ev.ts > BROWSER_REPLAY_MS) { recentBrowser.delete(session); continue; }
-    try { fn(ev); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ }
-  }
-  return () => { browserListeners.delete(fn); };
-}
-
 let started = false;
 let ctl: AbortController | null = null;
 let timer = 0;
@@ -160,12 +137,6 @@ async function connect(onChange: () => void): Promise<void> {
       for (const ev of out.events) {
         if (ev && ev.type === 'app') {
           for (const fn of [...appListeners]) { try { fn(ev as unknown as LiveAppEvent); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ } }
-        } else if (ev && ev.type === 'browser') {
-          const b = ev as unknown as LiveBrowserEvent;
-          if (b.kind === 'reveal' && b.session) {
-            recentBrowser.set(b.session, b);
-            for (const fn of [...browserListeners]) { try { fn(b); } catch { /* 한 칸의 오류가 다른 칸을 막지 않는다 */ } }
-          }
         } else if (ev && ev.type === 'presence') {
           const p = ev as unknown as { session?: string; viewers?: Viewer[] };
           if (p.session) setViewers(p.session, p.viewers);
