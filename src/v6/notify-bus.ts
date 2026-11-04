@@ -104,8 +104,23 @@ export interface NotifyPresenceEvent {
   ws?: NotifyWorkspace;
 }
 
+/**
+ * 브라우저 표시 사건(#5317) — 브라우저 호스트가 다른 데스크톱 창에서 탭을 조작해도
+ * 그 세션을 보여 주는 셸이 같은 탭의 웹 칸을 오른쪽에 연다. 배너 사건이 아니다.
+ */
+export interface NotifyBrowserEvent {
+  type: "browser";
+  kind: "reveal";
+  session: string;
+  /** 브라우저 탭 번호. 첫 탭은 "1"이고 웹 칸 열쇠로 바꿀 때만 web/web#N으로 만든다. */
+  tab: string;
+  key: string;
+  ts: number;
+  ws?: NotifyWorkspace;
+}
+
 /** 버스가 싣는 사건 — 종류(type)로 가른다. SSE 이벤트 이름도 이 값이다(notify-routes.ts). */
-export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent;
+export type NotifyEvent = NotifySessionEvent | NotifyAppEvent | NotifyPresenceEvent | NotifyBrowserEvent;
 
 /**
  * 구독 하나가 받는 자리 — «이 워크스페이스에서 난, 이 조건에 맞는 사건».
