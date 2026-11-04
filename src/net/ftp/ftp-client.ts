@@ -17,8 +17,9 @@ export interface FtpConnectOpts {
   timeoutMs?: number;
 }
 
+/** fatal = 제어 연결이 죽어 이 세션으로는 더 할 수 없다(폴더 하나의 거절과 구분 — 색인이 남은 폴더를 «실패»로 세지 않게). */
 export class FtpError extends Error {
-  constructor(message: string, readonly code: number | null = null) { super(message); this.name = "FtpError"; }
+  constructor(message: string, readonly code: number | null = null, readonly fatal = false) { super(message); this.name = "FtpError"; }
 }
 
 interface Reply { code: number; text: string }
@@ -33,9 +34,12 @@ export class FtpSession {
 
   private constructor(private readonly sock: net.Socket, private readonly host: string, private readonly timeoutMs: number) {
     sock.on("data", (chunk: Buffer) => this.onData(chunk.toString("latin1")));
-    sock.on("error", (e) => this.fail(e));
-    sock.on("close", () => this.fail(new FtpError("FTP 제어 연결이 닫혔습니다")));
-    sock.setTimeout(timeoutMs, () => { this.fail(new FtpError("FTP 서버 응답 시간 초과")); sock.destroy(); });
+    sock.on("error", (e) => this.fail(new FtpError(`FTP 연결 오류: ${e.message}`, null, true)));
+    sock.on("close", () => this.fail(new FtpError("FTP 제어 연결이 닫혔습니다", null, true)));
+    // 응답을 기다리는 동안에만 시계를 건다(next). 상시로 걸면 RETR·LIST 의 데이터가 흐르는 동안 제어 연결이 조용해
+    //  timeoutMs 를 넘는 전송이 중간에 끊긴다. 데이터 연결은 openData 가 따로 idle 시계를 건다.
+    sock.on("timeout", () => { this.fail(new FtpError("FTP 서버 응답 시간 초과", null, true)); sock.destroy(); });
+    sock.setTimeout(timeoutMs);
   }
 
   static async connect(o: FtpConnectOpts): Promise<FtpSession> {
@@ -64,6 +68,7 @@ export class FtpSession {
       const w = this.waiters.shift();
       if (w) w.resolve(r); else this.replies.push(r);
     }
+    if (!this.waiters.length) this.sock.setTimeout(0);
   }
 
   // 완결된 응답 하나를 버퍼에서 떼어 낸다. 여러 줄 응답은 `123-` 로 시작해 `123 ` 줄에서 끝난다(RFC 959 §4.2).
@@ -101,6 +106,7 @@ export class FtpSession {
     const queued = this.replies.shift();
     if (queued) return Promise.resolve(queued);
     if (this.dead) return Promise.reject(this.dead);
+    this.sock.setTimeout(this.timeoutMs);
     return new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
   }
 
@@ -178,6 +184,8 @@ export class FtpSession {
     const ended = new Promise<void>((resolve, reject) => {
       data.once("end", resolve);
       data.once("error", reject);
+      // 받는 쪽이 오류 없이 destroy 하면 end·error 가 오지 않는다 — close 로도 끝내야 done 이 영영 걸리지 않는다
+      data.once("close", () => reject(new FtpError("데이터 연결이 전송 완료 전에 닫혔습니다")));
     });
     const done = ended.then(() => this.expect([226, 250], "파일 전송이 끝나지 않았습니다")).then(() => undefined);
     done.catch(() => {}); // 호출자가 stream 오류를 먼저 받아 done 을 기다리지 않을 수 있다
@@ -189,6 +197,7 @@ export class FtpSession {
       if (!this.dead) this.send("QUIT");
     } catch { /* 이미 닫힘 */ }
     this.sock.end();
-    this.sock.destroy();
+    // QUIT 이 나갈 틈을 주고, 서버가 닫지 않으면 끊는다
+    setTimeout(() => this.sock.destroy(), 1_000).unref();
   }
 }

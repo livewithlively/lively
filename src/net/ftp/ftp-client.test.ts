@@ -22,7 +22,7 @@ const LIST_BODY = Buffer.concat([
 const FILE_RAW = Buffer.concat([DIR_RAW, Buffer.from("/"), EUCKR_MUNSEO, Buffer.from(".bin")]);
 const FILE_BYTES = Buffer.from(Array.from({ length: 70_000 }, (_, i) => (i * 7) % 256));
 
-interface ServerOpts { silentAfterGreeting?: boolean; listFinal?: string }
+interface ServerOpts { silentAfterGreeting?: boolean; listFinal?: string; slowDataMs?: number }
 interface FakeServer {
   port: number;
   log: Buffer[]; // 받은 명령 원본 바이트(CRLF 제외)
@@ -65,7 +65,20 @@ async function startServer(opts: ServerOpts = {}): Promise<FakeServer> {
       send("150 Opening BINARY mode data connection\r\n");
       const c = await dataSock;
       dataSock = null;
-      await new Promise<void>((res) => c.end(payload, () => res()));
+      if (opts.slowDataMs) {
+        // 데이터를 나눠 천천히 보낸다 — 그동안 제어 연결엔 아무 바이트도 오지 않는다
+        const parts = 8;
+        const size = Math.ceil(payload.length / parts);
+        for (let k = 0; k < parts; k++) {
+          if (c.destroyed) return;
+          c.write(payload.subarray(k * size, (k + 1) * size));
+          await new Promise((r) => setTimeout(r, opts.slowDataMs! / parts));
+        }
+        if (c.destroyed) return;
+        await new Promise<void>((res) => c.end(() => res()));
+      } else {
+        await new Promise<void>((res) => c.end(payload, () => res()));
+      }
       send(`${final}\r\n`);
     };
 
@@ -198,6 +211,31 @@ await t("timeoutMs 안에 응답이 없으면 FtpError", async () => {
   await assert.rejects(within(connectTo(silent, "good", 300), 3_000, "connect timeout"), FtpError);
   assert.ok(Date.now() - started < 2_500);
   await silent.close();
+});
+
+await t("전송이 timeoutMs 보다 오래 걸려도 데이터가 흐르는 동안엔 실패하지 않는다", async () => {
+  const slow = await startServer({ slowDataMs: 900 });
+  try {
+    const s = await FtpSession.connect({ host: "127.0.0.1", port: slow.port, user: "u1", password: "good", timeoutMs: 300 });
+    const { stream, done } = await s.retr(latin1(FILE_RAW));
+    const chunks: Buffer[] = [];
+    stream.on("data", (c: Buffer) => chunks.push(c));
+    await within(done, 5_000, "slow retr");
+    assert.ok(Buffer.concat(chunks).equals(FILE_BYTES));
+    await s.close();
+  } finally { await slow.close(); }
+});
+
+await t("받는 쪽이 스트림을 중간에 끊으면 done 이 timeoutMs 를 기다리지 않고 끝난다", async () => {
+  const slow = await startServer({ slowDataMs: 2_000 });
+  try {
+    const s = await FtpSession.connect({ host: "127.0.0.1", port: slow.port, user: "u1", password: "good", timeoutMs: 10_000 });
+    const { stream, done } = await s.retr(latin1(FILE_RAW));
+    await new Promise((r) => stream.once("data", r));
+    stream.destroy(new Error("client closed"));
+    await within(done.then(() => "ok", () => "rejected"), 1_500, "abort settle");
+    await s.close();
+  } finally { await slow.close(); }
 });
 
 await t("close: QUIT 을 보내고 연결을 닫는다", async () => {

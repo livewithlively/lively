@@ -6,6 +6,7 @@
 //  ⚠ 남는 길: 사람과 브라우저를 같이 쓰는 데스크톱 앱의 AI 브라우저 도구는 그 사람의 쿠키로 이 주소를 열 수 있다.
 //   그래서 늘 attachment 로 내려보내 화면에 그리지 않게 한다(브라우저 도구가 읽는 것은 화면이다). 이걸 지우면 그 길이 열린다.
 import type express from "express";
+import { createHash } from "node:crypto";
 import { parseSessionCookie, userFromSession } from "../../auth/sessions.js";
 import { logger } from "../../log.js";
 import { decodeRawPath, isSafeRawPath, displayPath } from "../ftp/ftp-list.js";
@@ -14,7 +15,9 @@ import { NasConfigError, openNasSession, NAS_DOWNLOAD_PATH } from "./nas-access.
 export function contentDisposition(display: string): string {
   const base = display.slice(display.lastIndexOf("/") + 1) || "download";
   const ascii = base.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+  // RFC 5987 attr-char 밖인 ! ' ( ) * 도 퍼센트 인코딩한다(encodeURIComponent 가 남기는 문자들)
+  const ext = encodeURIComponent(base).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${ext}`;
 }
 
 export function registerNasDownloadRoute(app: express.Express): void {
@@ -35,7 +38,8 @@ export function registerNasDownloadRoute(app: express.Express): void {
         opened = await openNasSession(user.userId);
       } catch (e) {
         const status = e instanceof NasConfigError ? e.status : 502;
-        res.status(status).json({ error: e instanceof Error ? e.message : String(e) });
+        if (!(e instanceof NasConfigError)) logger.warn({ err: e, member: user.userId }, "[nas] 내려받기 접속 실패");
+        res.status(status).json({ error: e instanceof NasConfigError ? e.message : "NAS 에 접속하지 못했습니다" });
         return;
       }
       const { session, username } = opened;
@@ -45,12 +49,14 @@ export function registerNasDownloadRoute(app: express.Express): void {
         res.setHeader("Content-Disposition", contentDisposition(shown));
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
-        logger.info({ member: user.userId, ftpUser: username, path: shown }, "[nas] 파일 내려받기");
-        res.on("close", () => { if (!res.writableFinished) stream.destroy(); });
+        // 파일명에 고객 이름이 흔해 경로 원문은 로그에 남기지 않는다. 같은 파일인지는 해시로 대조한다.
+        const pathHash = createHash("sha256").update(raw, "latin1").digest("hex").slice(0, 16);
+        logger.info({ member: user.userId, ftpUser: username, pathHash }, "[nas] 파일 내려받기");
+        res.on("close", () => { if (!res.writableFinished) stream.destroy(new Error("내려받는 쪽이 연결을 끊었습니다")); });
         stream.pipe(res);
         await done;
       } catch (e) {
-        if (!res.headersSent) res.status(404).json({ error: `파일을 열지 못했습니다: ${e instanceof Error ? e.message : String(e)}` });
+        if (!res.headersSent) res.status(404).json({ error: "파일을 열지 못했습니다(없거나 내 계정으로 열 수 없습니다)" });
         else res.destroy();
       } finally {
         await session.close();

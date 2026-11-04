@@ -86,6 +86,18 @@ await t("crawl: list 실패 폴더는 failedDirs 를 늘리고 나머지는 계�
   assert.ok(!r.entries.some((e) => e.raw.startsWith("/A/")));
 });
 
+await t("crawl: 접속 자체가 죽은 오류(fatal)면 남은 폴더를 실패로 세지 않고 crawl 이 거부된다", async () => {
+  const dead = Object.assign(new Error("FTP 제어 연결이 닫혔습니다"), { fatal: true });
+  let calls = 0;
+  const list = async (dir: string) => {
+    calls++;
+    if (dir === "/") return "drwxr-xr-x 2 ftp ftp 4096 Jan 01  2024 a\r\ndrwxr-xr-x 2 ftp ftp 4096 Jan 01  2024 b\r\n";
+    throw dead;
+  };
+  await assert.rejects(() => crawl(list, "/"), (e: unknown) => e === dead);
+  assert.equal(calls, 2, "첫 fatal 에서 멈춘다");
+});
+
 await t("crawl: maxDirs·maxEntries·deadlineMs 에 닿으면 멈추고 truncated 에 까닭", async () => {
   // 넓은 트리: 루트 아래 폴더 10개, 각 폴더에 파일 3개
   const wide: Record<string, string[]> = { "/": Array.from({ length: 10 }, (_, i) => dirLine(`d${i}`)) };
@@ -262,6 +274,25 @@ await t("NasIndexCache: 진행 중인 키는 버리지 않는다", async () => {
   d.resolve(result("busy"));
   await pending;
   assert.equal(c.isFresh("busy"), true);
+});
+
+await t("NasIndexCache.build: 동시에 도는 색인 만들기는 상한(2)까지, 넘는 것은 앞이 끝나야 시작", async () => {
+  const c = new NasIndexCache(() => 0, 2);
+  let running = 0, peak = 0;
+  const gates: Array<() => void> = [];
+  const run = () => new Promise<CrawlResult>((res) => {
+    running++; peak = Math.max(peak, running);
+    gates.push(() => { running--; res({ entries: [], dirs: 0, truncated: null, failedDirs: 0 }); });
+  });
+  const ps = ["a", "b", "c"].map((k) => c.build(k, run));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(gates.length, 2, "셋째는 아직 시작 안 함");
+  gates.shift()!();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(gates.length, 2, "하나 끝나자 셋째 시작");
+  while (gates.length) gates.shift()!();
+  await Promise.all(ps);
+  assert.equal(peak, 2);
 });
 
 console.log(`\n${pass} passed, ${failed.length} failed`);

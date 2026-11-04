@@ -8,6 +8,7 @@ import { getMemberSecret, resolveMemberSecret, GATEWAY_OWNER } from "../../org/c
 import { FtpSession } from "../ftp/ftp-client.js";
 import { encodeRawPath } from "../ftp/ftp-list.js";
 import { NasIndexCache } from "./nas-index.js";
+import { currentTenant } from "../../org/tenant-context.js";
 
 export const NAS_SERVER_KIND = "nas_ftp_server";
 export const NAS_LOGIN_KIND = "nas_ftp";
@@ -56,7 +57,8 @@ export async function openNasSession(memberId: string): Promise<{ session: FtpSe
 /** 프로세스 하나에 하나 — 구성원별 파일명 색인. */
 export const nasIndexCache = new NasIndexCache();
 
-export const nasIndexKey = (memberId: string, username: string): string => `${memberId}\u0000${username}`;
+// 테넌트도 키에 넣는다 — 중앙 모드에서 구성원 id 공간이 테넌트마다 따로일 수 있다(같은 프로세스 캐시를 나눠 쓴다).
+export const nasIndexKey = (memberId: string, username: string): string => `${currentTenant()?.id ?? "_"}\u0000${memberId}\u0000${username}`;
 
 export const NAS_DOWNLOAD_PATH = "/api/ui/me/nas/file";
 

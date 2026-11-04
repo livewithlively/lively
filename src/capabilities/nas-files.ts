@@ -5,7 +5,8 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import { HttpError } from "./rest-util.js";
 import { logger } from "../log.js";
-import { absoluteUrl } from "../gateway-url.js";
+import { gatewayUrl } from "../gateway-url.js";
+import { FtpError } from "../net/ftp/ftp-client.js";
 import { parseListing, displayPath, encodeRawPath, decodeRawPath, isSafeRawPath } from "../net/ftp/ftp-list.js";
 import { crawl, searchEntries, type NasEntry, type CrawlResult } from "../net/nas/nas-index.js";
 import { NasConfigError, openNasSession, resolveNasLogin, resolveNasServer, nasIndexCache, nasIndexKey, nasDownloadPath } from "../net/nas/nas-access.js";
@@ -15,20 +16,27 @@ export const FIRST_INDEX_WAIT_MS = 20_000;
 
 const BODY_NOTE = "파일 본문은 이 도구로 읽지 않습니다. download_url 은 사람이 라이블리에 로그인한 브라우저에서 열어 내려받습니다.";
 
-function rethrow(e: unknown): never {
+// 소켓 오류 원문(사설 IP·포트)은 AI 세션으로 보내지 않고 로그에만 남긴다.
+function rethrow(e: unknown, memberId?: string): never {
   if (e instanceof NasConfigError) throw new HttpError(e.status, e.message);
   if (e instanceof HttpError) throw e;
-  throw new HttpError(502, `NAS 접속 실패: ${e instanceof Error ? e.message : String(e)}`);
+  if (e instanceof FtpError && e.code === 530) {
+    throw new HttpError(403, "NAS 로그인 실패 — 내 nas_ftp 자격의 아이디·비밀번호를 확인하세요(me_credential_set)");
+  }
+  if (e instanceof FtpError && e.code === 550) throw new HttpError(404, "NAS 에 그 폴더가 없거나 내 계정으로 열 수 없습니다");
+  logger.warn({ err: e, member: memberId }, "[nas] NAS 접속 실패");
+  throw new HttpError(502, "NAS 에 접속하지 못했습니다 — 잠시 뒤 다시 시도하세요");
 }
 
-async function toItem(e: Pick<NasEntry, "raw" | "path" | "type" | "size" | "mtime">) {
+// 링크의 절대 주소 base 는 응답마다 한 번만 구한다(gatewayUrl 이 조직 프로필을 DB 에서 읽는다).
+function toItem(e: Pick<NasEntry, "raw" | "path" | "type" | "size" | "mtime">, base: string | null) {
   return {
     path: e.path,
     type: e.type,
     size: e.size,
     mtime: e.mtime,
     p: encodeRawPath(e.raw),
-    download_url: e.type === "file" ? await absoluteUrl(nasDownloadPath(e.raw)) : null,
+    download_url: e.type === "file" ? (base ?? "") + nasDownloadPath(e.raw) : null,
   };
 }
 
@@ -75,7 +83,7 @@ const nasFind: Capability = {
     try {
       await resolveNasServer();
       username = (await resolveNasLogin(memberId)).username;
-    } catch (e) { rethrow(e); }
+    } catch (e) { rethrow(e, memberId); }
     const key = nasIndexKey(memberId, username);
     if (i.refresh || !nasIndexCache.isFresh(key)) {
       const building = nasIndexCache.build(key, async () => {
@@ -93,7 +101,7 @@ const nasFind: Capability = {
         building.then(() => "done" as const, () => "failed" as const),
         new Promise<"timeout">((r) => setTimeout(() => r("timeout"), FIRST_INDEX_WAIT_MS).unref()),
       ]);
-      if (waited === "failed" && !state.result) rethrow(new Error(state.error ?? "색인 실패"));
+      if (waited === "failed" && !state.result) rethrow(await building.catch((e: unknown) => e), memberId);
       if (waited === "timeout" && !state.result) {
         return { indexing: true, message: "NAS 파일명 색인을 만드는 중입니다. 1~2분 뒤 같은 검색을 다시 부르세요.", note: BODY_NOTE };
       }
@@ -101,10 +109,12 @@ const nasFind: Capability = {
     const state = nasIndexCache.get(key);
     const r = state.result!;
     const found = searchEntries(r.entries, i.q, { under: i.under, type: i.type, limit: i.limit });
+    const base = await gatewayUrl();
     return {
       total: found.total,
-      items: await Promise.all(found.items.map(toItem)),
-      index: { ...indexInfo(r, state.builtAt), refreshing: !!state.building },
+      items: found.items.map((e) => toItem(e, base)),
+      // 다시 만들기가 실패하면 직전 색인으로 답하되 그 사실을 last_error 로 알린다
+      index: { ...indexInfo(r, state.builtAt), refreshing: !!state.building, last_error: state.error },
       note: BODY_NOTE,
     };
   },
@@ -143,12 +153,13 @@ const nasList: Capability = {
     try {
       const { session } = await openNasSession(user.userId);
       try { body = await session.list(dir); } finally { await session.close(); }
-    } catch (e) { rethrow(e); }
+    } catch (e) { rethrow(e, user.userId); }
     const join = (name: string) => (dir === "/" ? `/${name}` : `${dir}/${name}`);
     const entries = parseListing(body)
       .filter((e) => e.type === "file" || e.type === "dir")
       .map((e) => ({ raw: join(e.name), path: displayPath(join(e.name)), type: e.type as "file" | "dir", size: e.size, mtime: e.mtime }));
-    return { path: displayPath(dir), items: await Promise.all(entries.map(toItem)), note: BODY_NOTE };
+    const base = await gatewayUrl();
+    return { path: displayPath(dir), items: entries.map((e) => toItem(e, base)), note: BODY_NOTE };
   },
 };
 

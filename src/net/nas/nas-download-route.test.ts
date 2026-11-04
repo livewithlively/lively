@@ -16,6 +16,7 @@ await t("contentDisposition: 마지막 마디를 파일명으로, ASCII 대체 �
     ["/a/b/report.pdf", "report.pdf", "report.pdf"],
     ["/문서/보고서 2024.hwp", "___ 2024.hwp", encodeURIComponent("보고서 2024.hwp")],
     ['/x/a"b\\c.txt', "a_b_c.txt", encodeURIComponent('a"b\\c.txt')],
+    ["/x/약정서(1)'s*!.pdf", "___(1)'s*!.pdf", encodeURIComponent("약정서(1)'s*!.pdf")],
   ];
   for (const [path, ascii, pct] of cases) {
     const v = contentDisposition(path);
@@ -24,7 +25,7 @@ await t("contentDisposition: 마지막 마디를 파일명으로, ASCII 대체 �
     const star = /filename\*=UTF-8''([^;\s]+)/.exec(v);
     assert.ok(star, `${path} → ${v}`);
     assert.equal(decodeURIComponent(star![1]), decodeURIComponent(pct), path);
-    assert.match(star![1], /^[A-Za-z0-9%!'()*._~-]+$/, "퍼센트 인코딩 밖 문자 없음");
+    assert.match(star![1], /^[A-Za-z0-9%._~-]+$/, "RFC 5987 attr-char 밖 문자 없음");
   }
 });
 

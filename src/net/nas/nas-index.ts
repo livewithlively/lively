@@ -54,7 +54,9 @@ export async function crawl(list: DirLister, root = "/", limits: CrawlLimits = D
     let items: FtpListEntry[];
     try {
       items = parseListing(await list(dir));
-    } catch {
+    } catch (e) {
+      // 접속이 죽은 오류면 남은 폴더도 전부 실패한다 — 그걸 «권한 없는 폴더»로 세면 반쪽 색인이 성공으로 12시간 캐시된다
+      if ((e as { fatal?: unknown } | null)?.fatal === true) throw e;
       failedDirs++;
       continue;
     }
@@ -113,6 +115,8 @@ export interface IndexState {
 export const INDEX_TTL_MS = 12 * 60 * 60_000;
 /** 동시에 들고 있는 구성원 색인 수 — 넘으면 가장 오래된 것을 버린다(메모리 상한). */
 export const INDEX_MAX_MEMBERS = 10;
+/** 동시에 도는 색인 만들기 수 — 한 번에 여러 명이 처음 부르면 그만큼 FTP 세션이 10분까지 열린다. 넘으면 줄을 선다. */
+export const INDEX_MAX_CONCURRENT_BUILDS = 2;
 
 /**
  * 구성원별 색인을 들고 있다가 낡으면 다시 만든다. 같은 구성원의 색인 만들기는 한 번에 하나다.
@@ -120,7 +124,18 @@ export const INDEX_MAX_MEMBERS = 10;
  */
 export class NasIndexCache {
   private states = new Map<string, IndexState>();
-  constructor(private readonly now: () => number = Date.now) {}
+  private running = 0;
+  private queue: Array<() => void> = [];
+  constructor(private readonly now: () => number = Date.now, private readonly maxConcurrent = INDEX_MAX_CONCURRENT_BUILDS) {}
+
+  private async slot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running >= this.maxConcurrent) await new Promise<void>((r) => this.queue.push(r));
+    this.running++;
+    try { return await fn(); } finally {
+      this.running--;
+      this.queue.shift()?.();
+    }
+  }
 
   get(key: string): IndexState {
     let s = this.states.get(key);
@@ -141,7 +156,7 @@ export class NasIndexCache {
   build(key: string, run: () => Promise<CrawlResult>): Promise<CrawlResult> {
     const s = this.get(key);
     if (s.building) return s.building;
-    const p = run().then(
+    const p = this.slot(run).then(
       (r) => { s.result = r; s.builtAt = this.now(); s.error = null; return r; },
       (e: unknown) => { s.error = e instanceof Error ? e.message : String(e); throw e; },
     ).finally(() => { s.building = null; });
@@ -152,6 +167,7 @@ export class NasIndexCache {
 
   drop(key: string): void { this.states.delete(key); }
 
+  // 상한은 키 수로 센다. 진행 중인 키는 버리지 않으므로 잠깐 넘을 수 있다(동시 색인 수만큼).
   // keep = 방금 넣은 키. 아직 builtAt 이 없어 «가장 오래된 것»으로 보이지만, 곧 색인을 만들 자리라 버리면 안 된다.
   private evict(keep: string): void {
     while (this.states.size > INDEX_MAX_MEMBERS) {
