@@ -10,6 +10,7 @@ import { resolveIngestPolicy } from "../../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../../org/ingest/ingest-policy-load.js";
 import { auditConnector, auditLifecycleSweep, claimSyncStateSql, pgDeep, pgText } from "./mirror-common.js";
 import { boundCollector } from "../../connectors/config.js";
+import { isNoopResync, type MirrorRowNow } from "./resync-noop.js";
 
 /**
  * 수집기 '지식 직행'의 대상 분류 적용(#1419 T3) — output_config.target_category.
@@ -53,12 +54,15 @@ export async function mirrorKnowledgeV6(
   const sort = typeof it.sort === "number" && Number.isFinite(it.sort) ? Math.trunc(it.sort) : null;
 
   // ── 감사 노이즈 게이트 — external 좌표로 기존 행을 읽어 본문/제목 비교. insert=항상 1건, no-op 재싱크=audit 생략. ──
+  //  무변경 판정(resync-noop.ts)이 DO UPDATE 가 쓰는 칸을 전부 대조하므로 그 칸들을 함께 읽는다.
   const prev = await client.query(
-    `SELECT name, title, body_md FROM knowledge
+    `SELECT name, title, body_md, injection, provenance, confidence, source, lifecycle, external_url, occurred_at,
+            parent_external_id, parent_name, fields, raw, sort
+       FROM knowledge
      WHERE external_system=$1 AND external_instance=$2 AND external_id=$3`,
     [system, instance, externalId],
   );
-  const prevRow = prev.rows[0] as { name: string; title: string | null; body_md: string } | undefined;
+  const prevRow = prev.rows[0] as (MirrorRowNow & { name: string; body_md: string }) | undefined;
   const isInsert = !prevRow;
   const contentChanged = isInsert
     || (prevRow.title ?? null) !== (title ?? null)
@@ -71,8 +75,12 @@ export async function mirrorKnowledgeV6(
   if (isArchived) lifecycle = "archived";
   else if (isInsert) {
     // #653 유키(ANTHROPIC_API_KEY) 시 classifyIngest 로 category(area)·민감 라벨 판정 → 4축 정책. 무키면 호출 안 함(system·provenance 축만, 오버헤드 0).
+    //  그 판정은 정책 규칙의 category·sensitive 축에만 쓰인다 — 그 축을 보는 켜진 규칙이 없으면 결과가 버려지므로 부르지 않는다.
+    //   (전량을 다시 읽는 커넥터의 첫 싱크는 신규가 수천 건이라, 버려질 분류 호출이 그만큼 나간다.)
+    const policyRules = await getIngestPolicyRules();
+    const needsCls = policyRules.some((r) => r.enabled !== false && (r.match_category || r.match_sensitive));
     let clsCategory: string | null = null, clsSensitive: string | null = null;
-    if (process.env.ANTHROPIC_API_KEY) {
+    if (process.env.ANTHROPIC_API_KEY && needsCls) {
       try { const cls = await classifyIngest({ text: body, source: `${it.type}:${system}`, externalSystem: system }); clsCategory = cls.area; clsSensitive = cls.sensitive; }
       catch { /* 분류 실패 → null(system·provenance 축만으로 폴백) */ }
     }
@@ -81,7 +89,7 @@ export async function mirrorKnowledgeV6(
     //  actor_kind='connector' 축은 두지 않는다 — 미러는 provenance='observed' 로 이미 결정론적으로 식별된다.
     const action = resolveIngestPolicy(
       { provenance: "observed", system, category: clsCategory, channel: null, sensitive: clsSensitive },
-      await getIngestPolicyRules()).create;
+      policyRules).create;
     if (action === "drop") return false;   // 오너 정책상 이 출처는 위키화하지 않음(원본은 외부에 잔존)
     lifecycle = action === "confirm" ? "pending" : "active";
   } else lifecycle = "active"; // 재싱크: VALUES 미반영(ON CONFLICT CASE 가 기존 lifecycle 보존)
@@ -94,6 +102,19 @@ export async function mirrorKnowledgeV6(
   //   백필(runAutoBackfillSweep)이 재임베딩. 리셋 없인 갱신분이 옛 텍스트의 스테일 벡터로 남아 백필이 영영 못 잡는다.
   const name = prevRow?.name ?? unitName(system, externalId);
   const parentName = it.parent_external_id ? unitName(system, it.parent_external_id) : null;
+  //  무변경 재싱크 — 판(version) · updated_at 을 올리지 않고 last_synced_at(삭제 전파 스윕의 근거) · 수집기 표식만 갱신한다.
+  //   true 를 돌려준다: 이 항목은 «관측됐다» — 인입 수가 0 이면 스윕을 건너뛰는 안전장치가 무변경 run 에서 잘못 서지 않게.
+  if (prevRow && isNoopResync(prevRow, {
+    title, body_md: body, source: system, archived: isArchived, external_url: it.provenance.external_url ?? null,
+    occurred_at: it.occurred_at ?? null, parent_external_id: it.parent_external_id ?? null, parent_name: parentName,
+    fields, raw, sort,
+  })) {
+    await client.query(
+      `UPDATE knowledge SET last_synced_at=now(),
+              sync_state=CASE WHEN $2::text IS NULL THEN knowledge.sync_state ELSE ${claimSyncStateSql("knowledge.sync_state", "$2")} END
+        WHERE name=$1`, [prevRow.name, claimKey ?? null]);
+    return true;
+  }
   const r = await client.query(
     `INSERT INTO knowledge(
         name, title, body_md, injection, provenance, lifecycle, confidence, source,
