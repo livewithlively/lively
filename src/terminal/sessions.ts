@@ -753,6 +753,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       if (harness.autoModeArgv) cmd.push(...harness.autoModeArgv);
       else if (harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
       appliedFlags[AUTO_MODE_FLAG] = "1";
+    } else if (String(input.flags?.[AUTO_MODE_FLAG] ?? "") === "0") {
+      //  (#5321) 화면이 «확인 후 실행» 을 골랐다 — 기기 설정(Claude defaultMode=auto 등)이 그 선택을 조용히 이기지 않게 argv 로 못 박는다.
+      if (harness.askModeArgv) cmd.push(...harness.askModeArgv);
+      appliedFlags[AUTO_MODE_FLAG] = "0";
     }
     // 화면 테마(#1683 후속) + 상시세션 사용량 statusLine — claude 는 둘을 한 --settings 로 합쳐 얹는다(managed 만
     //  statusLine 주입 — 사람 세션 footer 불변). 사람 설정 파일은 건드리지 않는다(harnessSettingsArgv 주석).

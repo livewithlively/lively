@@ -570,6 +570,10 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     //  #5058 오토모드 — 승인을 하네스가 스스로 검토하되 샌드박스는 남는 자리(리브 세션이 쓴다). 실측: claude --help · codex-cli 0.164.0 --help.
     ok2((HARNESSES.find((h) => h.key === "claude")?.autoModeArgv || []).join(" ") === "--permission-mode auto", "E13g Claude 오토모드는 --permission-mode auto");
     ok2((codex?.autoModeArgv || []).join(" ") === "--approve-for-me", "E13h Codex 오토모드는 --approve-for-me(샌드박스 workspace-write 유지)");
+    //  #5321 확인 후 실행도 argv 로 못 박는다 — 기기 설정(~/.claude defaultMode=auto · ~/.codex approvals_reviewer)이 화면의 선택을 이기지 않게.
+    ok2((HARNESSES.find((h) => h.key === "claude")?.askModeArgv || []).join(" ") === "--permission-mode manual", "E13j Claude 확인 후 실행은 --permission-mode manual");
+    ok2((codex?.askModeArgv || []).join(" ") === '-c approvals_reviewer="user"', "E13k Codex 확인 후 실행은 승인 검토자를 사람으로");
+    ok2(HARNESSES.every((h) => !h.askModeArgv || !!h.autoModeArgv), "E13l 확인 후 실행을 못 박는 하네스는 오토모드도 말한다(세 칸이 짝으로 선다)");
     ok2(HARNESSES.every((h) => h.key === "shell" || !!h.bin), "E13f 셸 말고는 실행 파일이 반드시 있다");
     // 어느 하네스든 '하네스 기본'을 고를 수 있어야 낡은 모델 문자열에 사용자가 묶이지 않는다.
     const modelFlags = HARNESSES.flatMap((h) => h.flags.filter((f) => f.name === "--model"));
