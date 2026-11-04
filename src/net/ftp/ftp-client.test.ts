@@ -245,6 +245,8 @@ await t("받는 쪽이 스트림을 중간에 끊으면 done 이 timeoutMs 를 �
     await new Promise((r) => stream.once("data", r));
     stream.destroy(new Error("client closed"));
     await within(done.then(() => "ok", () => "rejected"), 1_500, "abort settle");
+    // 중도 끊김 뒤 세션은 버려진다 — 늦은 응답이 다음 명령에 섞이지 않게
+    await assert.rejects(() => s.list("/"), (e: unknown) => e instanceof FtpError && e.fatal === true);
     await s.close();
   } finally { await slow.close(); }
 });

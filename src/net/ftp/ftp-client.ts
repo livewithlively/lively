@@ -191,18 +191,20 @@ export class FtpSession {
   async retr(rawPath: string): Promise<{ stream: Readable; done: Promise<void> }> {
     if (!isSafeRawPath(rawPath)) throw new FtpError("쓸 수 없는 경로입니다");
     const data = await this.openData();
-    try {
-      await this.cmdExpect(`RETR ${rawPath}`, [125, 150], "파일을 열지 못했습니다");
-    } catch (e) {
-      data.destroy();
-      throw e;
-    }
+    // RETR 응답을 기다리는 사이에 데이터 연결이 닫혀도 놓치지 않게 명령 전에 듣는다
     const ended = new Promise<void>((resolve, reject) => {
       data.once("end", resolve);
       data.once("error", reject);
       // 받는 쪽이 오류 없이 destroy 하면 end·error 가 오지 않는다 — close 로도 끝내야 done 이 영영 걸리지 않는다
       data.once("close", () => reject(new FtpError("데이터 연결이 전송 완료 전에 닫혔습니다")));
     });
+    ended.catch(() => {});
+    try {
+      await this.cmdExpect(`RETR ${rawPath}`, [125, 150], "파일을 열지 못했습니다");
+    } catch (e) {
+      data.destroy();
+      throw e;
+    }
     const done = ended.then(() => this.expect([226, 250], "파일 전송이 끝나지 않았습니다")).then(
       () => undefined,
       (e: unknown) => { throw this.poison(e); },

@@ -47,20 +47,30 @@ export function registerNasDownloadRoute(app: express.Express): void {
         return;
       }
       const { session, username } = opened;
+      let clientGone = false;
+      let current: { destroy(err?: Error): void } | null = null;
+      // retr 가 끝나기 전에 끊겨도 스트림을 닫을 수 있게 먼저 듣는다
+      res.on("close", () => {
+        if (res.writableFinished) return;
+        clientGone = true;
+        current?.destroy(new Error("내려받는 쪽이 연결을 끊었습니다"));
+      });
       try {
         const { stream, done } = await session.retr(raw);
+        current = stream;
+        if (clientGone) stream.destroy(new Error("내려받는 쪽이 연결을 끊었습니다"));
         res.setHeader("Content-Type", "application/octet-stream");
         res.setHeader("Content-Disposition", contentDisposition(shown));
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
         logger.info({ member: user.userId, ftpUser: username, pathHash: hashPath(raw) }, "[nas] 파일 내려받기");
-        res.on("close", () => { if (!res.writableFinished) stream.destroy(new Error("내려받는 쪽이 연결을 끊었습니다")); });
         stream.pipe(res);
         await done;
       } catch (e) {
-        if (!(e instanceof FtpError && e.code === 550)) {
-          logger.warn({ err: e, member: user.userId, pathHash: hashPath(raw) }, "[nas] 내려받기 실패");
-        }
+        // 사람이 받다가 취소한 것은 경고가 아니다. 오류 원문은 서버 응답 문구를 담을 수 있어 이름·코드만 남긴다.
+        const brief = { name: e instanceof Error ? e.name : "unknown", code: e instanceof FtpError ? e.code : null, fatal: e instanceof FtpError ? e.fatal : null };
+        if (clientGone) logger.info({ member: user.userId, pathHash: hashPath(raw) }, "[nas] 내려받기 취소");
+        else if (!(e instanceof FtpError && e.code === 550)) logger.warn({ ...brief, member: user.userId, pathHash: hashPath(raw) }, "[nas] 내려받기 실패");
         if (!res.headersSent) res.status(404).json({ error: "파일을 열지 못했습니다(없거나 내 계정으로 열 수 없습니다)" });
         else res.destroy();
       } finally {
