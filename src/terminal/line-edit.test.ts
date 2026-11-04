@@ -49,10 +49,13 @@ t("A7 ⌘A 첫 번은 입력 전체 선택, 웹 선택이 있으면 두 번째�
   assert.deepEqual(decideKey(k("a", { metaKey: true }), { ...MAC, inputActive: false }), { k: "pass" });
 });
 t("A8 ⌘↑/⌘↓는 입력의 처음·끝 이동, ⇧를 더하면 같은 경계까지 선택 확장", () => {
-  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true }), MAC), { k: "send", seq: SEQ.home });
-  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true }), MAC), { k: "send", seq: SEQ.end });
-  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
-  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+  //  #5332 — «지금 줄» 이 아니라 **입력 전체**의 경계다(여러 줄 입력에서 종전엔 그 줄 머리·끝에서 멈췄다).
+  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true }), MAC), { k: "caretInput", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true }), MAC), { k: "caretInput", dir: 1 });
+  assert.deepEqual(decideKey(k("ArrowUp", { metaKey: true, shiftKey: true }), MAC), { k: "extendInput", dir: -1 });
+  assert.deepEqual(decideKey(k("ArrowDown", { metaKey: true, shiftKey: true }), MAC), { k: "extendInput", dir: 1 });
+  //  ⌘←/→ 는 그대로 «지금 줄»
+  assert.deepEqual(decideKey(k("ArrowLeft", { metaKey: true, shiftKey: true }), MAC), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
 });
 t("A9 ⌥Fn⌫는 커서 뒤 한 단어를 지운다", () => {
   assert.deepEqual(decideKey(k("Delete", { altKey: true }), MAC), { k: "send", seq: SEQ.wordDelForward, kill: true });
@@ -62,10 +65,10 @@ t("A10 Windows Ctrl+A도 첫 번은 입력 전체 선택, 다음 번은 터미�
   assert.deepEqual(decideKey(k("a", { ctrlKey: true }), WINSEL), { k: "selectAll" });
 });
 t("A11 Windows Ctrl+Home/End와 Ctrl+Shift+Home/End는 입력 경계 이동·선택이다", () => {
-  assert.deepEqual(decideKey(k("Home", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.home });
-  assert.deepEqual(decideKey(k("End", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.end });
-  assert.deepEqual(decideKey(k("Home", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.home, unit: "line", dir: -1 });
-  assert.deepEqual(decideKey(k("End", { ctrlKey: true, shiftKey: true }), WIN), { k: "extend", seq: SEQ.end, unit: "line", dir: 1 });
+  assert.deepEqual(decideKey(k("Home", { ctrlKey: true }), WIN), { k: "caretInput", dir: -1 });
+  assert.deepEqual(decideKey(k("End", { ctrlKey: true }), WIN), { k: "caretInput", dir: 1 });
+  assert.deepEqual(decideKey(k("Home", { ctrlKey: true, shiftKey: true }), WIN), { k: "extendInput", dir: -1 });
+  assert.deepEqual(decideKey(k("End", { ctrlKey: true, shiftKey: true }), WIN), { k: "extendInput", dir: 1 });
 });
 t("A12 Windows Ctrl+좌우·Ctrl+Shift+좌우는 단어 이동·선택이다", () => {
   assert.deepEqual(decideKey(k("ArrowLeft", { ctrlKey: true }), WIN), { k: "send", seq: SEQ.wordLeft });

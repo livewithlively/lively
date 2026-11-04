@@ -43,6 +43,7 @@ import { firstPromptStep, acceptTrustDialog, dismissUpdatePrompt, UPDATE_ESC_MAX
 import { codexChatMode } from "../terminal/codex-chat-mode.js";
 import { confirmRuntimeSwitch } from "../terminal/runtime-switch-confirm.js";   // #4772 — 전환 확인창을 눌러 준다
 import { harnessIo } from "../terminal/harness-io/adapter.js";
+import { codexComposerState, CODEX_DRAFT_REFUSAL, CODEX_NOT_READY_REFUSAL } from "../terminal/harness-io/codex.js";   // #5332 — codex 설정 명령은 빈 입력칸에만
 import { locateTranscript, ownerHomes } from "../terminal/harness-io/locate.js";
 import { localTranscriptFs, transcriptFsFor, type TranscriptFs } from "../terminal/harness-io/transcript-fs.js";
 import { sessionOsUser } from "../terminal/profiles.js";
@@ -410,7 +411,7 @@ async function deliverLoop(sessionId: string): Promise<void> {
     //   이 세션의 대화에 도달할 수 없다.
     //  이 폴백의 의도는 원래 "로그인 전이라 서버를 못 여는 경우에도 지시가 큐에 남는다"(sessions.ts)인데,
     //  나르는 수단이 send-keys 하나뿐이라 그 의도가 성립한 적이 없다. 수단을 하나 더 준다.
-    //  ⚠ control(설정 슬래시 명령)은 여기 올 수 없다 — codex 는 runtimeCmd 가 없어 /runtime 이 409 로 막는다.
+    //  ⚠ control(설정 슬래시 명령)은 이 통로로 보내지 않는다 — 아래 분기에서 마감한다(#5332).
     // 갈린 **결과**를 한 줄 남긴다 — 나중에 "이 지시가 왜 저쪽으로 갔나"를 묻게 될 자리다(#2169).
     //  ⚠ 이 로그가 없어서 codex 배달은 **성공 시 무음**이었다: 세션이 열려도 `docker logs` 에 아무것도
     //   안 뜨고, 어디로 갔는지는 DB 를 읽어 추론해야 했다(실측 2026-08-27 — 그 경로를 쓴 내가 몰랐다).
@@ -423,6 +424,9 @@ async function deliverLoop(sessionId: string): Promise<void> {
     const transport = deliveryTransport(harness, stamp);
     logger.info({ sessionId, seq: row.seq, harness, transport }, "outbox: 전송수단");
     if (transport === "codex-chat") {
+      //  #5332 — 설정 명령(control)은 대화 모드(app-server) codex 에 보낼 수 없다: 그 통로는 **모델에게 보내는 말**이라
+      //   `/model …` 이 사람의 메시지로 나간다. 라우트가 409 로 이 문장을 그대로 사람에게 보인다.
+      if (row.kind === "control") { await mark(row.id, "failed", "대화 모드로 연 Codex 세션은 여기서 모델·추론강도를 바꿀 수 없어요 — 터미널로 넘긴 뒤 다시 골라 주세요"); continue; }
       if (await deliverViaCodexChat(sessionId, st, row, settleStall)) return;
       continue;
     }
@@ -436,6 +440,18 @@ async function deliverLoop(sessionId: string): Promise<void> {
     if (ready !== "ready") {
       if (await settleStall(ready)) return;
       continue;
+    }
+
+    //  #5332 — codex 설정 명령은 입력칸이 **비었다고 확인될 때만** 넣는다(codex.ts codexComposerState 머리말 — 치던 글이 있으면
+    //   명령이 그 뒤에 붙어 한 메시지로 나가고, 치워 둘 키는 없다). 못 넣으면 그 까닭을 그대로 마감한다(라우트가 409 로 보인다).
+    if (row.kind === "control" && harness === "codex") {
+      const seen = await exec.peek();
+      const comp = seen.ok ? codexComposerState(seen.pane) : "unknown";
+      if (comp !== "empty") {
+        logger.info({ sessionId, seq: row.seq, comp }, "outbox: codex 설정 명령을 넣지 않음(입력칸이 비어 있지 않다)");
+        await mark(row.id, "failed", comp === "draft" ? CODEX_DRAFT_REFUSAL : CODEX_NOT_READY_REFUSAL);
+        continue;
+      }
     }
 
     // 준비 확인됨 — 보낸다. 여기서부터는 **재전송하지 않는다**(중복 위험 — 파일 머리말).

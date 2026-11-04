@@ -862,7 +862,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         await handoff(hcat, flags);
         return;
       }
-      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/runtime`, { method: 'POST', body: JSON.stringify({ [a]: v }) }) as { pending?: boolean };
+      //  #5332 — 두 축을 한 줄로 바꾸는 하네스(codex)는 모델만 바꾸면 추론강도가 그 모델의 기본으로 돌아간다(실측). 그래서 모델을 바꿀 때
+      //   지금 강도가 새 모델에서도 유효하면 함께 싣는다(서버가 `/model <모델> --reasoning=<강도>` 한 줄로 친다). 유효하지 않으면 모델만 —
+      //   그 모델의 기본 강도로 뜬다(예: Sol Ultra → Luna).
+      const body: Record<string, string> = { [a]: v };
+      if (a === 'model' && hcat.runtime?.both) {
+        const keep = nowVal('effort');
+        if (keep && effortChoices(hcat, v).includes(keep)) body.effort = keep;
+      }
+      const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/runtime`, { method: 'POST', body: JSON.stringify(body) }) as { pending?: boolean };
       // 값은 「」로 감싼다 — 'sonnet'처럼 한글이 아닌 값에 조사를 직접 붙이면 읽는 소리에 따라 '로/으로'가 갈려
       //  어느 쪽을 써도 어색해진다. 「」 뒤의 '으로'는 그 문제를 안 만든다(session-form 의 「지난번 그대로」와 같은 표기).
       //  pending = 아직 큐에 있다(세션이 로그인·대화상자에 멈춰 있는 경우) — '바꿨다'고 말하지 않는다.
@@ -871,7 +879,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         ? `${AXIS[a].obj} 「${said}」으로 바꾸라고 걸어 뒀어요 — AI 입력창이 뜨면 들어갑니다.`
         : `${AXIS[a].obj} 「${said}」으로 바꿨어요.`;
       view.setNote(msg);
-      if (!r?.pending) { picked[a] = { v, was: a === 'model' ? obsModel : obsEffort }; paintRun(); }
+      if (!r?.pending) {
+        picked[a] = { v, was: a === 'model' ? obsModel : obsEffort };
+        if (body.effort && a === 'model') picked.effort = { v: body.effort, was: obsEffort };
+        paintRun();
+      }
       // 내가 띄운 안내만 지운다 — 그 사이에 다른 안내가 올라왔으면 그걸 지우면 안 된다(먼저 건 타이머가 나중 걸 지웠다).
       window.setTimeout(() => { if (!destroyed && view.noteEl.textContent === msg) view.setNote(''); }, 3000);
     } catch (e: any) {

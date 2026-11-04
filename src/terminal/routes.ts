@@ -354,7 +354,8 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
         //  (서버는 오토모드를 autoApproveFlag 로 올려 버리므로, 모르는 하네스에 «오토» 를 보내면 자동 승인이 된다).
         hasAutoMode: !!h.autoModeArgv, hasAskMode: !!h.askModeArgv,
         effortsByModel: h.effortsByModel,
-        runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
+        //  both(#5332) — 두 축을 한 줄로 바꾸는 하네스. codex 는 모델만 바꾸면 강도가 그 모델 기본으로 돌아가므로, 화면이 모델을 바꿀 때 지금 강도를 함께 싣는다.
+        runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort, both: !!h.runtimeCmd?.both },
       })),
       members,
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
@@ -1340,6 +1341,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (!choices.includes(w.v)) throw new HttpError(400, `${h.label} 가 아는 ${w.ko}가 아닙니다: ${w.v}`);
       cmds.push(make(w.v));
     }
+    //  #5332 — 두 축을 한 줄로 바꾸는 명령이 있으면(codex `/model <모델> --reasoning=<강도>`) 그 한 줄만 친다. 명령이 하나면
+    //   «연속 주입은 증발한다»(#1758)·확인창 사이에 끼는 일(#4772)이 애초에 없다. 그 모델이 그 강도를 받는지는 카탈로그로 본다.
+    const both = h.runtimeCmd?.both;
+    const wm = want.find((w) => w.axis === "model")?.v, we = want.find((w) => w.axis === "effort")?.v;
+    if (both && wm && we) {
+      const ok = h.effortsByModel?.[wm];
+      if (ok && !ok.includes(we)) throw new HttpError(400, `${wm} 모델은 ${we} 추론강도를 지원하지 않습니다`);
+      cmds.splice(0, cmds.length, both(wm, we));
+    }
     res.setHeader("Cache-Control", "no-store");
 
     //  ★ #2439 — **대화 런타임 세션은 pane 이 셸이다.** 그 tmux 에 `/model …` 을 타이핑하면
@@ -1371,6 +1381,14 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
         },
         enter: async (): Promise<void> => { await nodeRpc(nodeId, "outboxStep", { step: "keys", id: req.params.id, down: 0, enter: true }).catch(() => undefined); },
       };
+      //  #5332 — codex 는 입력칸이 비었다고 확인될 때만 친다(아웃박스와 같은 판정 — codex.ts codexComposerState). 그 컴퓨터의 화면을
+      //   못 읽으면(옛 번들) 종전대로 친다 — 읽을 수 있는데 비어 있지 않으면 치지 않는다(치면 사람의 글과 한 메시지로 나간다).
+      if (h.key === "codex") {
+        const { codexComposerState, CODEX_DRAFT_REFUSAL, CODEX_NOT_READY_REFUSAL } = await import("./harness-io/codex.js");
+        const seen = await nodeSwitchExec.peek();
+        const comp = seen.ok ? codexComposerState(String(seen.pane ?? "")) : "empty";
+        if (comp !== "empty") throw new HttpError(409, comp === "draft" ? CODEX_DRAFT_REFUSAL : CODEX_NOT_READY_REFUSAL);
+      }
       for (const c of typed) {
         try { await injectPrompt(req.params.id, c); }
         catch (e) {
@@ -1393,7 +1411,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  '바꿨다/못 바꿨다'를 그 자리에서 말할 수 있다. 아직 대기 중이면 그 사실 그대로(pending) 돌려준다 —
     //  로그인 화면에 멈춘 세션은 뜨는 즉시 배달자가 넣는다(아웃박스가 들고 있다).
     const done = await waitOutboxSettled(ids, 8_000);
-    if (done.failed) throw new HttpError(409, `바꾸지 못했어요 — ${done.failed}`);
+    //  #5332 — 아웃박스가 «넣지 않은 까닭» 을 사람 말로 적어 둔 경우(codex 입력칸에 치던 글 등)는 그 문장 그대로 보인다.
+    if (done.failed) throw new HttpError(409, /[가-힣]/.test(done.failed) ? done.failed : `바꾸지 못했어요 — ${done.failed}`);
     res.json({ ok: true, harness: h.key, sent: cmds, pending: !done.settled });
   }));
   // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
