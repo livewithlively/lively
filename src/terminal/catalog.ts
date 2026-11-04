@@ -180,6 +180,14 @@ export interface Harness {
    *  없으면 오토모드를 청한 세션은 autoApproveFlag 로 뜬다(«오토모드 이상»). 실측 근거는 각 행 주석.
    */
   autoModeArgv?: string[];
+  /**
+   * (#5321) 그 하네스의 **확인 후 실행**을 argv 로 못 박는다 — 세션 표식 @auto_mode="0" 일 때 붙인다.
+   *  표식이 없으면(복원·구 호출자) 종전대로 아무것도 안 붙여 하네스의 기기 설정을 따른다.
+   *  왜 필요한가: 기기 설정이 하네스마다 따로 논다(실측 2026-11-04 맥미니 — ~/.claude settings defaultMode=auto 라 Claude 는
+   *  묻지 않고, ~/.codex config approvals_reviewer=user 라 Codex 는 명령마다 물었다). 화면의 「실행 승인」 값이 곧 실제 동작이
+   *  되려면 세 칸(확인·오토·자동) 모두 argv 로 말해야 한다.
+   */
+  askModeArgv?: string[];
   /** 모델마다 허용 추론강도가 다를 때 UI가 잘못된 조합을 만들지 않게 하는 표. 미지정 모델은 --effort 전체 선택지를 쓴다. */
   effortsByModel?: Record<string, string[]>;
   // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
@@ -237,6 +245,7 @@ export const HARNESSES: Harness[] = [
     key: "claude", label: "Claude Code", bin: "claude", provider: { id: "anthropic", label: "Anthropic" },
     autoApproveFlag: "--dangerously-skip-permissions",
     autoModeArgv: ["--permission-mode", "auto"],   // 실측(claude --help): --permission-mode choices acceptEdits·auto·bypassPermissions·manual·dontAsk·plan
+    askModeArgv: ["--permission-mode", "manual"],   // (#5321) 실측(claude --help 2026-11-04) — 같은 choices 의 manual
     flags: [
       // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
       // 2026-08-24 Claude Code 2.1.241 --help 가 현행 별칭으로 fable·opus·sonnet 을 직접 안내한다.
@@ -273,6 +282,9 @@ export const HARNESSES: Harness[] = [
     //  실측(codex-cli 0.164.0 --help): «Route approval requests through automatic review using the workspace-write sandbox».
     //   TUI 의 Shift+Tab 은 이게 아니다 — 기본 ↔ 계획(Plan) 모드 전환이다(권한은 /permissions).
     autoModeArgv: ["--approve-for-me"],
+    //  (#5321) 확인 후 실행 — 승인 검토자를 사람으로 못 박는다(config.toml 의 approvals_reviewer 가 auto_review 여도 이 세션은 묻는다).
+    //   실측(codex-cli 0.166.0): /status 가 «Approve for me» ↔ 기본을 이 키로 가른다.
+    askModeArgv: ["-c", 'approvals_reviewer="user"'],
     // 2026-08-24 Codex CLI 0.149.1 기준 현행 카탈로그. gpt-5.5를 기본 표기로 남기면
     // 새 세션 화면에서 5.6 계열을 애초에 고를 수 없어, 실제 설치본보다 UI가 뒤처진다.
     // default 의 뜻(#3778 개정) — 새 세션 화면이 **이 값을 골라 둔다**(그리고 그대로 넘긴다). 종전엔 표기용이라

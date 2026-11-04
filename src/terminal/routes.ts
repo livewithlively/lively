@@ -350,6 +350,9 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
         //  이걸로 선택지를 만든다. 종전엔 그 버튼이 claude 고정이라 codex 사용자가 눌러도 claude 세션이 떴다.
         login: harnessHasCredential(h.key),
         hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
+        // (#5321) 「실행 승인」 세 칸 — 오토모드·확인 후 실행을 argv 로 말할 수 있는 하네스인가. 없으면 화면이 그 칸을 잠근다
+        //  (서버는 오토모드를 autoApproveFlag 로 올려 버리므로, 모르는 하네스에 «오토» 를 보내면 자동 승인이 된다).
+        hasAutoMode: !!h.autoModeArgv, hasAskMode: !!h.askModeArgv,
         effortsByModel: h.effortsByModel,
         runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
       })),
