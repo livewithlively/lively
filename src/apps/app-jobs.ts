@@ -54,6 +54,13 @@ export function liveAppJobDeps(): AppJobDeps {
 /** 감시가 한 번에 보는 열린 작업 — 한 판의 줄 수 · 판 수 상한. */
 const SWEEP_PAGE_SIZE = 200, SWEEP_MAX_PAGES = 25;
 
+/**
+ * 작업을 시작한 자리(작업 행 source) — 시작 확인(onJobClaim)이 돌려주고 검사 층이 앱에 x-lively-job-source 로 넘긴다.
+ *  app-ui(라이블리 화면 안의 앱 — 다리 org_app_tool_call) · app-front(앱 주소로 연 앱 화면 — /_lively/*) · mcp(MCP 도구 부르기 — AI 세션 포함) ·
+ *  web(능력 REST POST /api/ui/app-jobs — 사람 토큰 · 웹 로그인) · app-server(앱 서버 코드 — SDK livelyJobs) · app-job(작업 안에서 시작한 작업) ·
+ *  mcp-tool(앱이 선언한 MCP 도구에서 비롯된 작업 — 아래 MCP_TOOL_JOB_SOURCE) · person(자리를 말하지 않은 사람 호출).
+ *  화면 두 자리는 apps/app-screen-sources.ts 한 벌이다. ⓘ 이것은 «어느 입구로 왔나» 다 — app-ui 다리는 REST 라 그 사람의 토큰으로도 부를 수 있다.
+ */
 const actorSource = (user: LivelyUser, source?: string): string =>
   user.appServer ? (user.appJobId ? "app-job" : "app-server") : source ?? (user.appId ? "app-ui" : "person");
 /**
@@ -263,7 +270,8 @@ const conflict = (reason: string, message: string): HttpError => new HttpError(4
 
 /**
  * 시작 확인 — 그 앱의 함수가 · 부른 그 작업의 · 그 부르기 비밀로 · 아직 시작 안 했고 · 취소 안 됐을 때만 한 번 넘긴다.
- *  넘기면 돌기 신원과 작업을 시작한 사람 · 판 · 시간 상한(검사 층이 앱에 넘길 것). 아니면 401 · 404 · 409(앱 코드에 닿기 전에 끝).
+ *  넘기면 돌기 신원과 작업을 시작한 사람 · 판 · 시간 상한 · 시작한 자리(source — actorSource 의 값 · 옛 행은 null)(검사 층이 앱에 넘길 것).
+ *  아니면 401 · 404 · 409(앱 코드에 닿기 전에 끝).
  */
 //  ⓘ claim 응답이 오다 끊기면(서버는 시작으로 적었는데 검사 층이 못 받음) 다시 묻는 claim 은 409 claimed 를 받고 앱을 부르지 않는다 —
 //   작업은 running 으로 남았다가 90초 뒤 감시가 «응답을 멈췄습니다» 로 끝낸다. 두 번 도는 것보다 안전한 쪽을 골랐다(같은 비밀에 새 돌기 신원을
@@ -297,7 +305,7 @@ export async function onJobClaim(id: number, caller: JobCaller, secret: string):
   logger.info({ app: j.app_id, job: id, attempt: j.attempts }, "[app-jobs] 작업 시작(#4486)");
   return {
     job: id, run: jobCredential("run", id, run.secret), member: member.id, member_name: member.display_name ?? member.id,
-    variant: claimed.variant, timeout_s: claimed.timeout_s, tick_s: JOB_TICK_SEC,
+    variant: claimed.variant, timeout_s: claimed.timeout_s, tick_s: JOB_TICK_SEC, source: claimed.source ?? null,
   };
 }
 
