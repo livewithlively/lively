@@ -1,10 +1,12 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { browserCapabilities, browserPlainContent, UNTRUSTED_HEAD } from "./browser.js";
+import { browserCapabilities, browserPlainContent, browserRevealTarget, UNTRUSTED_HEAD } from "./browser.js";
 import { browserRelay, relayKey, NO_HOST_MESSAGE, type BrowserCmd } from "../browser/relay.js";
 import { HttpError } from "./rest-util.js";
 import type { LivelyUser } from "../context.js";
 import type { Capability } from "./types.js";
+import { subscribeNotify, type NotifyEvent } from "../v6/notify-bus.js";
+import { hereSlug } from "../v6/notify-scope.js";
 
 // ── 브라우저 툴 (#4993) — 사양·엣지 표 C 행 ───────────────────────────────────
 //  싱글턴 중계(browserRelay)에 가짜 화면을 붙여, 툴이 무엇을 밀었는지(op·session·args)와 어떤 오류를 냈는지만 본다.
@@ -16,6 +18,42 @@ const cap = (name: string): Capability => {
 };
 const alice = { userId: "alice", email: "", scopes: [], projects: ["*"] } as LivelyUser;
 const status = (e: unknown) => (e instanceof HttpError ? e.status : -1);
+
+test("C13 웹 사용 표시 대상 — 세션의 읽기·조작과 탭 생성·선택만 오른쪽 웹 칸을 연다", () => {
+  const sid = "box-s-12345678";
+  const rows: Array<[string, Record<string, unknown>, string | null | undefined, { session: string; tab: string } | null]> = [
+    ["navigate", { url: "https://x.test" }, sid, { session: sid, tab: "1" }],
+    ["read", { tab: "2" }, sid, { session: sid, tab: "2" }],
+    ["act", { action: "click", tab: "03" }, sid, { session: sid, tab: "03" }],
+    ["tabs", { action: "new" }, sid, { session: sid, tab: "1" }],
+    ["tabs", { action: "select", tab: "4" }, sid, { session: sid, tab: "4" }],
+    ["tabs", { action: "list" }, sid, null],
+    ["tabs", { action: "close", tab: "2" }, sid, null],
+    ["status", {}, sid, null],
+    ["read", { tab: "wrong" }, sid, { session: sid, tab: "1" }],
+    ["act", { action: "click" }, null, null],
+    ["navigate", {}, "  ", null],
+  ];
+  for (const [op, args, session, want] of rows) {
+    assert.deepEqual(browserRevealTarget(op, args, session), want, `${op} ${JSON.stringify(args)} ${String(session)}`);
+  }
+});
+
+test("C14 브라우저 명령은 현재 구성원의 서버 스트림에 표시 사건을 한 번 발행한다", async () => {
+  const h = host("host-cap-c14", (c) => ({ ok: true, result: c.op === "tabs" ? { tabs: [] } : { done: true } }));
+  const got: NotifyEvent[] = [];
+  const ws = hereSlug();
+  const sub = subscribeNotify([{ ws, member: "alice", label: { slug: ws, name: "", current: true, via: "same" } }], (ev) => got.push(ev));
+  try {
+    await cap("browser_navigate").handler({ url: "https://x.test", tab: "2" }, alice, { session: "box-s-12345678" });
+    assert.equal(got.length, 1);
+    assert.deepEqual({ type: got[0].type, kind: "kind" in got[0] ? got[0].kind : null, session: "session" in got[0] ? got[0].session : null, tab: "tab" in got[0] ? got[0].tab : null },
+      { type: "browser", kind: "reveal", session: "box-s-12345678", tab: "2" });
+    await cap("browser_status").handler({}, alice, { session: "box-s-12345678" });
+    await cap("browser_tabs").handler({ action: "list" }, alice, { session: "box-s-12345678" });
+    assert.equal(got.length, 1, "상태·탭 목록 확인이 사람의 화면을 빼앗았다");
+  } finally { sub.close(); h.detach(); }
+});
 
 /** 가짜 화면 — 받은 명령을 기록하고, 정해 둔 답을 바로 돌려준다. */
 function host(id: string, answer: (c: BrowserCmd) => { ok: boolean; result?: unknown; error?: string } = () => ({ ok: true, result: { done: true } })) {
