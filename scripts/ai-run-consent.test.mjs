@@ -448,6 +448,58 @@ test('X1 ★ 설정을 못 읽었으면(null/undefined) 특정 계정을 단정�
   }
 });
 
+// ── API 키로 정해 뒀는데 등록된 키가 없을 때 ─────────────────────────────────
+//  서버는 이 실행을 409 «이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없습니다» 로 막는다(src/ai-runs/service.ts submitRun).
+//  실행 계정 설정(app_ai_account_set kind=api_key)은 키 등록을 보지 않고 받는다 — 키를 나중에 지워도 이 꼴이 된다.
+const KEY_MISSING = '등록된 키가 없어 지금은 AI 실행이 되지 않아요';
+const SHORT_KEY_MISSING = '워크스페이스 API 키(등록된 키 없음';
+
+test('K1 ★ 워크스페이스 기본값이 API 키인데 등록된 키가 없으면 «API 키로 돌아요» 가 아니라 AI 실행이 되지 않는다고 말한다', () => {
+  const t = run({ settings: { default: apiKey() }, api_key_registered: false }, ME);
+  has(t, KEY_MISSING);
+  lacks(t, API);
+  lacks(t, MINE);
+});
+
+test('K2 ★ 앱별 계정이 API 키인데 등록된 키가 없어도 같다', () => {
+  const t = run({ settings: { apps: { [APP]: { default: apiKey() } } }, api_key_registered: false }, ME);
+  has(t, KEY_MISSING);
+  lacks(t, API);
+});
+
+test('K3 앱별 API 키가 워크스페이스 기본값(남의 구독)을 이긴 채로 키가 없으면 — 키 없음 한 문장 · 그분 구독 문장 없음', () => {
+  const t = run({ settings: { default: sub(KIM), apps: { [APP]: { default: apiKey() } } }, api_key_registered: false }, ME);
+  has(t, KEY_MISSING);
+  lacks(t, othersRuns(KIM));
+  lacks(t, MIXED);
+});
+
+test('K4 ★ 작업마다 다를 때 등록된 키가 없는 API 키 계정은 «워크스페이스 API 키(등록된 키 없음…)» 로 늘어놓는다', () => {
+  const t = run({ settings: { apps: { [APP]: { default: sub(KIM), jobs: { nightly: apiKey() } } } }, api_key_registered: false }, ME);
+  has(t, MIXED);
+  has(t, shortOthers(KIM));
+  has(t, SHORT_KEY_MISSING);
+});
+
+test('K5 앱 계정과 작업 계정이 모두 API 키(키 없음)면 같은 계정이다 — «작업마다» 가 아니라 키 없음 한 문장', () => {
+  const t = run({ settings: { apps: { [APP]: { default: apiKey(), jobs: { a: apiKey() } } } }, api_key_registered: false }, ME);
+  has(t, KEY_MISSING);
+  lacks(t, MIXED);
+  once(t, KEY_MISSING);
+});
+
+test('K6 대조 — 키가 등록돼 있으면 같은 설정이 «워크스페이스 API 키로 돌아요» 다', () => {
+  const t = run({ settings: { apps: { [APP]: { default: apiKey() } } }, api_key_registered: true }, ME);
+  has(t, API);
+  lacks(t, KEY_MISSING);
+});
+
+test('K7 키 등록 여부 칸이 빠졌으면 등록 안 됨으로 본다 — 계정을 안 정했을 때 «계정 없음» 으로 보는 기준과 같다', () => {
+  const t = run({ settings: { apps: { [APP]: { default: apiKey() } } } }, ME);
+  has(t, KEY_MISSING);
+  lacks(t, API);
+});
+
 // ── 화면 배선 (소스 글 검사) ─────────────────────────────────────────────────
 const CONSENT = 'web/v2/app-session.ts';
 

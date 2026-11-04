@@ -43,10 +43,12 @@ function resolve(s: AiAccountSnapshot, appId: string, job: string | null): AiRun
 }
 
 //  mine_seat = 내 구독이 켜진 공용 시트다 — 서버는 구성원 누구의 요청이든 이 구독으로 돌린다(plan.ts subscriptionRefusal 의 공용 시트 갈래).
-type Kind = 'none' | 'api_key' | 'mine' | 'mine_seat' | 'seat' | 'seat_off' | 'other';
+//  api_key_missing = API 키로 정해 뒀는데 등록된 키가 없다 — 서버는 그 실행을 409 로 막는다(service.ts submitRun «…API 키인데 등록된 키가 없습니다»).
+//   실행 계정 설정(app_ai_account_set kind=api_key)은 키 등록을 보지 않고 받고, 키를 나중에 지워도 이 꼴이 된다. 등록 여부는 위 resolve 의 마지막 단계와 같은 기준(참일 때만).
+type Kind = 'none' | 'api_key' | 'api_key_missing' | 'mine' | 'mine_seat' | 'seat' | 'seat_off' | 'other';
 function kindOf(a: AiRunAccount | null, s: AiAccountSnapshot, meId: string): Kind {
   if (!a) return 'none';
-  if (a.kind === 'api_key') return 'api_key';
+  if (a.kind === 'api_key') return s.api_key_registered ? 'api_key' : 'api_key_missing';
   const seat = (s.seats ?? []).find((x) => x && x.member === a.member);
   if (meId && a.member === meId) return seat?.on ? 'mine_seat' : 'mine';
   if (seat) return seat.on ? 'seat' : 'seat_off';
@@ -58,6 +60,7 @@ function sentence(k: Kind, member: string): string {
   switch (k) {
     case 'none': return '지금은 이 앱의 실행 계정이 정해지지 않아 AI 실행이 되지 않아요(관리자가 정합니다).';
     case 'api_key': return '워크스페이스 API 키로 돌아요(워크스페이스가 비용을 내요). 내 Claude 구독은 쓰지 않아요.';
+    case 'api_key_missing': return '이 앱의 실행 계정은 워크스페이스 API 키인데 등록된 키가 없어 지금은 AI 실행이 되지 않아요(관리자가 키를 등록합니다).';
     case 'mine': return `내 Claude 구독으로 돌아요(${MINE_ONLY}).`;
     case 'mine_seat': return '내 Claude 구독으로 돌아요. 이 구독은 워크스페이스 공용 계정으로 지정돼 있어 구성원 누구의 요청이든 이 구독으로 돌아요.';
     case 'seat': return `워크스페이스 공용 계정(${member})의 Claude 구독으로 돌아요. 내 Claude 구독은 쓰지 않아요.`;
@@ -71,6 +74,7 @@ function label(k: Kind, member: string): string {
   switch (k) {
     case 'none': return '정해지지 않음(AI 실행 안 됨)';
     case 'api_key': return '워크스페이스 API 키';
+    case 'api_key_missing': return '워크스페이스 API 키(등록된 키 없음 · AI 실행 안 됨)';
     case 'mine': return '내 Claude 구독';
     case 'mine_seat': return '내 Claude 구독(공용 계정)';
     case 'seat': return `공용 계정(${member})`;
