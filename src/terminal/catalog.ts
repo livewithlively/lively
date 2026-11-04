@@ -225,11 +225,16 @@ export interface Harness {
   forkArgv?: (id: string) => string[];
   // 이미 떠 있는 세션의 모델·추론강도를 바꾸는 **타이핑 한 줄**(#1758 세션 대화창). 세션은 이미 argv 로 떴으므로
   //  플래그로는 못 바꾼다 — 사람이 터미널에서 치는 것과 같은 슬래시 명령을 주입하는 수밖에 없다(POST …/runtime).
-  //  ⚠ **인자를 받는 명령이 실증된 하네스에만 둔다.** codex 의 `/models`·opencode 의 `/model` 은 고르는 팝업이라
-  //   인자를 안 받고(실측: codex 바이너리에 `/model <arg>` 문자열 없음, 추론강도는 키보드 단축키), antigravity 는
+  //  ⚠ **인자를 받는 명령이 실증된 하네스에만 둔다.** opencode 의 `/model` 은 고르는 팝업이라 인자를 안 받고, antigravity 는
   //   슬래시로 바꾸는 경로가 확인되지 않았다. 없는 하네스도 화면 선택기는 보이되, 같은 프로세스에 거짓 명령을 넣지 않고
   //   같은 작업 자리의 새 프로세스로 맥락을 넘긴다(session-chat.ts handoff).
-  runtimeCmd?: { model?: (v: string) => string; effort?: (v: string) => string };
+  //   codex 는 0.157 무렵까지 팝업뿐이었으나 0.166 은 인자를 받는다(#5332 실측 — 아래 codex 행).
+  //  both — 두 축을 **한 줄**로 바꾸는 명령(있으면 둘을 함께 바꿀 때 이것 하나만 친다). codex 의 `/model <모델>` 은 추론강도를
+  //   그 모델의 기본으로 되돌리므로, 화면은 모델을 바꿀 때 지금 강도를 함께 실어 이 한 줄로 보낸다(#5332 실측).
+  runtimeCmd?: { model?: (v: string) => string; effort?: (v: string) => string; both?: (model: string, effort: string) => string };
+  // TUI 로 띄울 때 **늘** 붙이는 인자(#5332). 이어 열기·복제 서브커맨드 뒤에 붙는다(codex `resume`/`fork` 도 같은 옵션을 받는다 — --help 확인).
+  //  대화 런타임·app-server·로그인 세션(pane 이 셸)에는 붙지 않는다 — 그 길은 이 cmd 를 실행하지 않는다.
+  tuiArgv?: string[];
   // 터미널 입력칸에 **치던 글을 잠깐 치워 두는 키**(원준 2026-10-10: «메시지를 치다가 모델이나 effort 를 바꾸면 제대로 안 돼 …
   //  치던 내용은 유지된 채로 바꾸고 싶다»). runtimeCmd 는 입력칸에 한 줄을 쳐서 제출하므로, 사람이 치던 글이 있으면 그 뒤에
   //  `/model …` 이 붙어 한 덩어리로 나갔다. 이 키를 명령 **앞에** 붙여 보내면 하네스가 치던 글을 치워 두었다가 명령이
@@ -292,19 +297,40 @@ export const HARNESSES: Harness[] = [
     //  ⚠ 낡은 문자열에 사용자가 묶이는 것은 여전히 막는다 — 화면은 이 값을 **기억에 저장하지 않는다**(사람이
     //   직접 고른 값만 저장). 그래서 codex 가 기본을 올려 이 줄을 고치면, 손대지 않은 사람은 그대로 따라온다.
     flags: [
-      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.6-sol" },
+      //  #5332 — 2026-11-04 codex-cli 0.166.0 `codex debug models` 실측(visibility=list 만): 6.1-sol · 6-sol · 6-luna 가 새로 생기고
+      //   gpt-5.5 · 5.4 · 5.4-mini 는 목록에서 빠졌다(`/model gpt-5.4` → «Model 'gpt-5.4' is unavailable»). 없어진 모델을 남기면 고르는 즉시 실패한다.
+      //   기본은 그 CLI 가 «Latest workhorse» 라 부르는 맨 윗줄. 무인 자동화 기본(AUTOMATION_DEFAULTS)은 비용 결정이라 여기서 따라 바꾸지 않는다.
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"], default: "gpt-6.1-sol" },
       // Codex CLI는 현재 launch-time reasoning effort를 config로 받는다. 일반 --effort 플래그가 아니라
       // session 생성기에서 별도 argv로 정규화한다. UI 계약은 다른 하네스와 동일하게 유지한다.
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max", "ultra"], default: "medium" },
     ],
-    effortsByModel: {
+    effortsByModel: {   // `codex debug models` 의 supported_reasoning_levels 그대로(0.166.0)
+      "gpt-6.1-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
+      "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
       "gpt-5.6-sol": ["low", "medium", "high", "xhigh", "max", "ultra"],
       "gpt-5.6-terra": ["low", "medium", "high", "xhigh", "max", "ultra"],
       "gpt-5.6-luna": ["low", "medium", "high", "xhigh", "max"],
-      "gpt-5.5": ["low", "medium", "high", "xhigh"],
-      "gpt-5.4": ["low", "medium", "high", "xhigh"],
-      "gpt-5.4-mini": ["low", "medium", "high", "xhigh"],
     },
+    // #5332 실측(codex-cli 0.166.0, tmux) — 떠 있는 세션에서 그 자리에서 바뀐다(새 세션으로 넘길 일이 아니다):
+    //   `/model gpt-6.1-sol`                  → «Model changed to gpt-6.1-sol medium for this session only» (강도는 그 모델 기본으로 되돌아간다)
+    //   `/model --reasoning=xhigh`            → 모델은 그대로 강도만
+    //   `/model gpt-5.6-terra --reasoning=high` → 둘 다 한 줄로
+    //   `/model gpt-5.4 high`                 → «Unexpected argument 'high'. Use '--reasoning=<level>'» (강도는 꼭 --reasoning=)
+    //   턴이 도는 중에 쳐도 곧바로 바뀐다. 확인창은 없다(claude 의 #4772 와 다르다).
+    //  ⚠ 치워 두기 키(runtimeDraftStash)는 **없다** — codex 입력칸엔 치워 두기가 없고, Ctrl+C 는 빈 입력칸이면 **codex 를 끈다**(실측).
+    //   그래서 입력칸에 치던 글이 있으면 아웃박스가 명령을 넣지 않고 알린다(codex.ts composerState · session-outbox).
+    runtimeCmd: {
+      model: (v) => `/model ${v}`,
+      effort: (v) => `/model --reasoning=${v}`,
+      both: (m, e) => `/model ${m} --reasoning=${e}`,
+    },
+    // #5332 — codex 0.16x 는 기본이 **전체화면(alt 화면) + 마우스 보고(1003+SGR)** 다(실측 0.166.0: alternate_on=1 mouse_any_flag=1).
+    //  그러면 웹 터미널의 끌기가 앱으로 가 브라우저 선택이 안 되고, 앱이 고른 글은 Ctrl+C 로만 복사되는데 그 복사는 **세션이 도는 기계의
+    //  클립보드**로 간다(실측: pbpaste 에 들어감 — 사람 브라우저엔 안 온다). 웹이 codex 에 맞춰 둔 것(#1155 입력줄 선택·⌘C·휠)은
+    //  전부 0.153~0.157 의 인라인 화면(alt 0 · 마우스 0) 위에서 실측됐다 → 그 모양으로 띄운다. `--no-alt-screen` 이면 alt 0 · 마우스 0.
+    tuiArgv: ["--no-alt-screen"],
     loginCmd: "codex logout && codex login --device-auth",
     // 온보딩은 만료 복구가 아니라 **첫 로그인**이라 logout 을 앞세우지 않는다(지울 자격이 없다).
     //  브라우저가 있는 자리는 `codex login` 이 알아서 창을 열고, 없으면 codex 가 device-auth 로 내려간다.
@@ -963,7 +989,7 @@ export function harnessResumeCommand(harnessKey: string, convId: string): string
   const h = HARNESSES.find((x) => x.key === harnessKey);
   const id = String(convId || "");
   if (!h?.resumeArgv || !RESUME_ID_RE.test(id)) return "";
-  return [h.bin || h.key, ...h.resumeArgv(id)].join(" ");
+  return [h.bin || h.key, ...h.resumeArgv(id), ...(h.tuiArgv ?? [])].join(" ");   // #5332 — TUI 로 뜨는 길이라 tuiArgv 도 붙는다
 }
 
 /**
