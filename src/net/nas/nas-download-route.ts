@@ -63,7 +63,8 @@ export function registerNasDownloadRoute(app: express.Express): void {
         res.setHeader("Content-Disposition", contentDisposition(shown));
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Content-Type-Options", "nosniff");
-        logger.info({ member: user.userId, ftpUser: username, pathHash: hashPath(raw) }, "[nas] 파일 내려받기");
+        // 접근 기록이다 — 이미 취소된 요청은 한 바이트도 안 나가므로 «내려받기»로 세지 않는다
+        if (!clientGone) logger.info({ member: user.userId, ftpUser: username, pathHash: hashPath(raw) }, "[nas] 파일 내려받기");
         stream.pipe(res);
         await done;
       } catch (e) {

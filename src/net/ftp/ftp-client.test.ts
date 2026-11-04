@@ -22,7 +22,7 @@ const LIST_BODY = Buffer.concat([
 const FILE_RAW = Buffer.concat([DIR_RAW, Buffer.from("/"), EUCKR_MUNSEO, Buffer.from(".bin")]);
 const FILE_BYTES = Buffer.from(Array.from({ length: 70_000 }, (_, i) => (i * 7) % 256));
 
-interface ServerOpts { silentAfterGreeting?: boolean; listFinal?: string; slowDataMs?: number; stallFirstListMs?: number }
+interface ServerOpts { silentAfterGreeting?: boolean; listFinal?: string; slowDataMs?: number; stallFirstListMs?: number; closeDataBeforeRetrReply?: boolean }
 interface FakeServer {
   port: number;
   log: Buffer[]; // 받은 명령 원본 바이트(CRLF 제외)
@@ -108,6 +108,14 @@ async function startServer(opts: ServerOpts = {}): Promise<FakeServer> {
         send("426 Failure writing network stream.\r\n");
       }
       else if (startsWith(cmd, "LIST")) await sendData(LIST_BODY, opts.listFinal ?? "226 Directory send OK.");
+      else if (startsWith(cmd, "RETR ") && opts.closeDataBeforeRetrReply) {
+        // 응답(150)을 보내기 전에 데이터 연결을 RST 로 끊는다 — 클라이언트는 RETR 응답을 기다리는 중에 error·close 를 받는다
+        const c = await dataSock!;
+        dataSock = null;
+        c.resetAndDestroy();
+        await new Promise((r) => setTimeout(r, 100));
+        send("150 Opening BINARY mode data connection\r\n");
+      }
       else if (startsWith(cmd, "RETR ")) {
         if (resolvePath(arg(cmd, "RETR")).equals(FILE_RAW)) await sendData(FILE_BYTES, "226 Transfer complete.");
         else send("550 Failed to open file.\r\n");
@@ -260,6 +268,17 @@ await t("전송 시작(150) 뒤 데이터 단계가 실패하면 그 세션은 �
     await assert.rejects(() => s.list("/"), (e: unknown) => e instanceof FtpError && e.fatal === true);
     await s.close();
   } finally { await st.close(); }
+});
+
+await t("RETR 응답을 기다리는 사이 데이터 연결이 끊겨도(RST) 프로세스가 죽지 않고 done 이 fatal 로 끝난다", async () => {
+  const cs = await startServer({ closeDataBeforeRetrReply: true });
+  try {
+    const s = await FtpSession.connect({ host: "127.0.0.1", port: cs.port, user: "u1", password: "good", timeoutMs: 10_000 });
+    const { done } = await s.retr(latin1(FILE_RAW));
+    const r = await within(done.then(() => "ok", (e: unknown) => (e instanceof FtpError && e.fatal ? "fatal" : "other")), 1_500, "early close settle");
+    assert.equal(r, "fatal");
+    await s.close();
+  } finally { await cs.close(); }
 });
 
 await t("close: QUIT 을 보내고 연결을 닫는다", async () => {
