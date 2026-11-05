@@ -849,3 +849,21 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   #v2-root.side-closed > .v2-side { overflow: hidden; visibility: hidden; border-right: 0; }
   #v2-root.side-closed > .v2-side + .v2-split-x { overflow: hidden; }
 }
+
+/* ── #5319 KRDS 글자 단계 — 레일 · 사이드바 목록(원준 2026-11-05 4차 확정) ─────────────────────────────────────────
+   레일 이름 13/500(켜진 칸 700) · 묶음 이름 13/700 · 줄 이름 15/500 · 둘째 줄 13 · 바닥 세 단추 13/500. 줄 높이는 글자를 따라 24 + 20.
+   넓은 화면만 — 태블릿 · 폰 레일은 자기 크기(위 @media)를 쓴다. */
+@media (min-width: 901px) {
+  .v2-rail.closed .v2-rail-t { font-size: 13px; font-weight: 500; line-height: 1.5; }
+  .v2-rail.closed .v2-rail-it.on .v2-rail-t { font-weight: 700; }
+  .v2-app-group, .v2-home-cards .v2-app-group { font-size: 13px; font-weight: 700; line-height: 1.5; }
+  .v2-home-cards .v2-app-inst:not(.v2-app-inst--past) .v2-app-inst-title,
+  .v2-home-cards .v2-pg--rows .v2-app-inst--past .v2-app-inst-title { font-size: 15px; font-weight: 500; line-height: 1.5; }
+  .v2-home-cards .v2-app-inst.on:not(.v2-app-inst--past) .v2-app-inst-title { font-weight: 700; }
+  .v2-app-inst-meta, .v2-app-inst-ask, .v2-app-inst-pj { font-size: 13px; }
+  .v2-home-cards .v2-pg--rows .v2-app-inst:not(.v2-app-inst--1) { grid-template-rows: 24px 20px; padding-top: 4px; padding-bottom: 4px; }
+  .v2-home-cards .v2-pg--rows .v2-app-inst-ask, .v2-home-cards .v2-pg--rows .v2-app-inst-pj { line-height: 20px; }
+  .v2-home-cards .v2-pg--rows .v2-app-inst-close, .v2-home-cards .v2-pg--rows .v2-app-inst-pin, .v2-home-cards .v2-pg--rows .v2-app-inst-trash { top: 5px; }
+  .v2-home-cards .v2-older { font-size: 15px; font-weight: 500; }
+  .v2-dock-t { font-size: 13px; font-weight: 500; }
+}

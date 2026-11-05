@@ -1112,6 +1112,11 @@ input.pn-ffind { flex: 0 1 200px; min-width: 96px; height: 28px; padding: 0 9px;
   .pn-door.in-sess .pn-door-btn { height: 26px; padding-top: 0; padding-bottom: 0; font-size: 12px; }
   .pn-door.in-sess .btn-ghost.pn-door-btn { border-color: transparent; color: var(--ink-sub); }
   .pn-door.in-sess .btn-ghost.pn-door-btn:hover { border-color: var(--line-net); }
+  /* 4차 KRDS(원준 2026-11-05) — 프로젝트 이름 17/700 · 번호 · 상태 15 · 단추 15/500(칠한 [새 세션] 700). 줄 높이는 그대로(30px 단추). */
+  .pn-door.in-sess .pn-title { font-size: 17px; line-height: 1.5; }
+  .pn-door.in-sess .pn-eyebrow { font-size: 15px; }
+  .pn-door.in-sess .pn-door-btn { height: 30px; font-size: 15px; font-weight: 500; }
+  .pn-door.in-sess .btn-primary.pn-door-btn { font-weight: 700; }
 }
 .pn-door-side { display: inline-grid; place-items: center; width: 30px; height: 30px; margin-left: 2px; padding: 0; flex: none;
   border: 0; border-radius: 8px; background: none; color: var(--muted-head); cursor: pointer; }
