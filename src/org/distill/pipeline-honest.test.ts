@@ -86,9 +86,9 @@ test("②-c 방치 배치는 대상을 못박는다 — 기록하는 집합과 �
   //   자료가 판정 기록돼 인박스에서 영구히 빠진다. 켜진 레인 몫 침범도 같이 일어난다.
   assert.match(DISTILLER, /export function buildStrandedTargeting\(/, "방치 배치의 대상 지정부가 없다");
   assert.match(DISTILLER, /source_undistilled 를 부르지 마/, "전역 목록 재조회를 금지하지 않는다");
-  assert.match(ACTION, /const strandedTargeting = buildStrandedTargeting\(stranded\)/, "방치 배치가 대상 지정을 안 만든다");
+  assert.match(ACTION, /const strandedTargeting = buildStrandedTargeting\(stranded, lockEnforced\)/, "방치 배치가 대상 지정을 안 만든다");
   //  override 없는 배치는 composeDistillPrompt 가 targeting 을 붙이지 않으므로 프롬프트에 직접 얹어야 한다.
-  assert.match(ACTION, /prompt: strandedTargeting \+ "\\n\\n" \+ buildDistillPrompt\(stranded\.length, policySummary, true\)/,
+  assert.match(ACTION, /prompt: strandedTargeting \+ "\\n\\n" \+ buildDistillPrompt\(stranded\.length, policySummary, true, lockEnforced\)/,
     "대상 지정을 프롬프트에 얹지 않는다 — targeting 필드만 채우면 override 없는 배치엔 안 붙는다");
   //  본문 ② 단계가 여전히 전역 조회를 지시하면 대상 지정과 모순된다.
   assert.match(ACTION, /targeted\s*\?\s*`② 위에 지정된 대상 자료만 다뤄/, "지정 배치에서도 전역 조회를 지시한다");
