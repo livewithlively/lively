@@ -657,31 +657,66 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 /* 세션 이름 뒤의 번호(#nnnn — 이 세션이 맡은 태스크 번호, 원준 2026-10-10). 프로젝트 문패의 번호(.pn-eyebrow .mono)와 같은 무게다. */
 .sc-title-no { flex: none; margin-left: 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }
 
-/* ── #5319 큰 머리(칸 셸의 세션 화면 — session-chat.ts bigHead, 원준 2026-11-04 v2 확정안) ─────────────────
+/* ── #5319 큰 머리(칸 셸의 세션 화면 — session-chat.ts bigHead) — 4차 1안(원준 2026-11-05) ─────────────────
    이 화면의 제목은 **세션 이름**이다(위 문패는 «어느 프로젝트 안인가» 만 작게 말한다 — 42-v2-panes.css .pn-door.in-sess).
-   왼쪽은 두 줄: [● 이름 · 얼굴 · 배지] / [#번호 · 연결 상태 | 화면 복구 · 하네스 알약]. 오른쪽은 글자 단추 줄([자료] [복제] [옮기기] ⋯).
+   넓은 화면은 두 줄 격자(36px × 2, 사이 8 · 위아래 16 = 112px + 아랫선 → 곁칸 머리 줄 독과 같은 높이 --pn-bighead-h):
+     왼쪽 위  [● 이름 #번호 · 얼굴 · 배지]        오른쪽 위  [자료 · 복제 · 옮기기 · ⋯]
+     왼쪽 아래 [연결 상태 | 화면 복구 · 노드]      오른쪽 아래 [모델 · 추론강도]
+   하네스 고르기는 머리줄에 안 둔다 — [⋯ ▸ 이 세션 설정] 이 같은 선택기를 데려간다(openMore borrowRun).
+   글자는 KRDS 크기표(이름 24/700 · 조작 15/500 · 번호 17/500)를 따른다. 단추 · 선택기는 **테두리를 미리 그리지 않는다**
+   (원준 2026-11-05 «네모 박스 너무 구린데» — 쉴 때는 글자만, 손을 얹으면 옅은 바탕). 누르는 자리는 36px 그대로.
    좁은 폭(≤900)·카드에서는 종전처럼 한 줄로 접힌다(아래). */
 .sc-head-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
 .sc-head-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .sc-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
-.sc-sub-no:empty { display: none; }
-.sc-sub-no .sc-title-no { margin-left: 0; }
 .sc-act-fork, .sc-act-move { display: inline-flex; align-items: center; gap: 4px; }
 .sc-act-fork[hidden], .sc-act-move[hidden] { display: none; }
 @media (min-width: 901px) {
-  .sc-head--big { align-items: flex-start; padding: 14px 18px 10px 24px; }
-  .sc-head--big .sc-head-top { gap: 10px; }
-  .sc-head--big .sc-title { font-size: 28px; font-weight: 800; letter-spacing: -.02em; line-height: 1.25; }
-  .sc-head--big .sc-title-in { font-size: 24px; }
-  .sc-head--big .sc-titlebox { min-width: 10ch; }
-  .sc-head--big .sc-head-r { padding-top: 7px; }
+  .pn-body:not(.cm) .sc-head.sc-head--big { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 36px 36px;
+    column-gap: 24px; row-gap: 8px; align-items: center; padding: 16px 24px 16px 32px; }   /* 높이는 42-v2-panes.css(--pn-bighead-h) */
+  .pn-body:not(.cm) .sc-head--big > .sc-head-l, .pn-body:not(.cm) .sc-head--big .sc-head-main { display: contents; }
+  .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1; gap: 12px; min-width: 0; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub { grid-row: 2; grid-column: 1; gap: 12px; font-size: 15px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-head-r { grid-row: 1; grid-column: 2; justify-self: end; gap: 4px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top { grid-row: 2; grid-column: 2; justify-self: end; gap: 4px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-h { display: none; }
+  /* 이름 — KRDS 제목 24 · 굵기 700 · 줄 높이 150% · 자간 0. */
+  .pn-body:not(.cm) .sc-head--big .sc-title, .pn-body:not(.cm) .sc-head--big button.sc-title { font-size: 24px; font-weight: 700; letter-spacing: 0; line-height: 1.5; }
+  .pn-body:not(.cm) .sc-head--big .sc-title-in { font-size: 24px; font-weight: 700; }
+  .pn-body:not(.cm) .sc-head--big .sc-titlebox { min-width: 10ch; }
+  .pn-body:not(.cm) .sc-head--big .sc-title-no { margin-left: 10px; font-size: 17px; font-weight: 500; color: var(--muted); }
+  .pn-body:not(.cm) .sc-head--big .sc-title-pen { width: 18px; height: 18px; }
+  .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { width: 32px; height: 32px; }
+  .pn-body:not(.cm) .sc-head--big .v2-dot { width: 10px; height: 10px; }
+  /* 얼굴 — 28px(KRDS 아이콘 단계 사이, 이니셜 13px). 묶음 높이 32. */
+  .pn-body:not(.cm) .sc-head--big .sc-faces { height: 32px; margin-block: 0; padding: 0 4px; }
+  .pn-body:not(.cm) .sc-head--big .sc-face { width: 28px; height: 28px; font-size: 13px; }
+  /* 조작 단추 · 연결 상태 · 선택기 — 한 벌: 36px · 15px/500 · 테두리 없음 · 모서리 6(KRDS 높이×1/8 → 짝수). */
+  .pn-body:not(.cm) .sc-head--big .sc-act { height: 36px; padding: 0 10px; font-size: 15px; font-weight: 500; color: var(--ink-sub);
+    border: 0; border-radius: 6px; gap: 6px; }
+  .pn-body:not(.cm) .sc-head--big .sc-act:hover { color: var(--ink); background: var(--bg-punch); }
+  .pn-body:not(.cm) .sc-head--big .sc-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .pn-body:not(.cm) .sc-head--big .sc-act-on { color: var(--blue); background: var(--bg-tint); }
+  .pn-body:not(.cm) .sc-head--big .sc-act-ic { width: 20px; height: 20px; }
+  .pn-body:not(.cm) .sc-head--big .sc-head-r > .sc-act:last-child { width: 36px; padding: 0; justify-content: center; font-size: 20px; }   /* ⋯ */
+  .pn-body:not(.cm) .sc-head--big .sc-pair, .pn-body:not(.cm) .sc-head--big .sc-pair:hover { border: 0; gap: 4px; }
+  .pn-body:not(.cm) .sc-head--big .sc-pair-sep { height: 16px; margin: 0 4px; }
+  .pn-body:not(.cm) .sc-head--big .sc-termstat { height: 36px; padding: 0; font-size: 15px; }
+  .pn-body:not(.cm) .sc-head--big .sc-termstat.ok { color: var(--ok-ink); }   /* KRDS 글자 대비 4.5:1 — --mint-deep 은 흰 바탕에서 3.2:1 이었다 */
+  .pn-body:not(.cm) .sc-head--big .sc-pair .sc-act { padding: 0 8px; }
+  .pn-body:not(.cm) .sc-head--big .sc-run { font-size: 13px; padding: 2px 10px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel { height: 36px; max-width: 220px; padding: 0 28px 0 10px; font-size: 15px; font-weight: 500;
+    color: var(--ink-sub); border: 0; border-radius: 6px; background-position: calc(100% - 15px) 52%, calc(100% - 10px) 52%; background-size: 5px 5px, 5px 5px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--bg-punch); }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip { height: 36px; display: inline-flex; align-items: center; padding: 0 10px; font-size: 15px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip[hidden], .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel[hidden] { display: none; }
 }
 @media (max-width: 900px) {
   .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
 }
-/* 카드(세션을 곁칸 위 작은 창으로 띄운 때) — 한 줄 머리 그대로. 세션 단추 둘은 ⋯ 와 세션 우클릭에 있다. */
+/* 카드(세션을 곁칸 위 작은 창으로 띄운 때) — 한 줄 머리 그대로(위 두 줄 격자는 .pn-body:not(.cm) 에만). 세션 단추 둘은 ⋯ 와 세션 우클릭에 있다. */
 .pn-body.cm > .pn-col .sc-head--big { align-items: center; padding-top: 9px; padding-bottom: 8px; }
 .pn-body.cm > .pn-col .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
 .pn-body.cm > .pn-col .sc-head--big .sc-title { font-size: 13.5px; letter-spacing: 0; }
-.pn-body.cm > .pn-col .sc-head--big .sc-head-r { padding-top: 0; }
 .pn-body.cm > .pn-col .sc-head .sc-act-fork, .pn-body.cm > .pn-col .sc-head .sc-act-move { display: none; }

@@ -5,12 +5,15 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── 골격 ── */
-.pn-wrap { --pn-head-h: 42px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.pn-wrap { --pn-head-h: 42px; --pn-bighead-h: 113px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 /* #4443 — **머리 줄 높이는 한 값**(원준 2026-09-30: "상단 탭 부분 높이 … 터미널 세션의 상단 바 부분이랑 같게 맞춰라"). 곁칸 탭 줄과
    세션 머리줄(.sc-head)이 같은 --pn-head-h 를 읽어, 두 열의 아래선이 한 줄로 이어진다(종전 37px vs 42px 로 5px 어긋나 있었다). */
 @media (min-width: 901px) { .pn-wrap .sc-head { height: var(--pn-head-h); min-height: 0; padding-top: 0; padding-bottom: 0; } }
-/* #5319 큰 머리(세션 이름 28px + 아랫줄)는 두 줄이라 위 한 줄 높이에 묶지 않는다 — 곁칸 머리 줄도 독이 서서 같은 높이가 아니다. */
+/* #5319 큰 머리는 두 줄이라 위 한 줄 높이에 묶지 않는다. 넓은 화면(카드 아님)은 --pn-bighead-h(113 = 16 + 36 + 8 + 36 + 16 + 아랫선)로
+   못 박고(36-chat.css 큰 머리 격자) 곁칸 머리 줄 독(42-v2-dock.css .dock-top)도 같은 값을 읽어 두 열의 아랫선이 한 줄로 잇는다(원준 2026-11-05).
+   아래 auto 는 카드(.pn-body.cm)의 한 줄 머리 몫이다. */
 @media (min-width: 901px) { .pn-wrap .sc-head.sc-head--big { height: auto; min-height: var(--pn-head-h); padding-top: 14px; padding-bottom: 10px; } }
+@media (min-width: 901px) { .pn-body:not(.cm) .sc-head.sc-head--big { height: var(--pn-bighead-h); min-height: 0; padding-top: 16px; padding-bottom: 16px; } }
 /* 사이드바 열의 폭 = 적어 둔 폭(--pn-side-w)과 상한 가운데 작은 쪽(#3870). 상한 = 격자 폭 - 세션 최소 폭 360px - 손잡이 6px,
    하한 220px(web/lib/side-card-geom.ts sideCap 과 같은 식). 상한을 **그릴 때** 맞추므로 격자가 잠깐 좁아져도 적어 둔 폭은
    깎이지 않고, 격자가 다시 넓어지면 제 폭으로 돌아온다. */
