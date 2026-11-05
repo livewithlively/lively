@@ -62,7 +62,6 @@ import { loadThinTrail } from '../session-trail.js';
 import type { TlOut } from '../timeline.js';
 import { isAbs, pathOpenPlans, pickTailHit, slash, type PathOpenPlan } from '../lib/path-open.js';
 import { type Sess, type V2Data } from './views.js';
-import { icon } from './icons.js';
 import { doorProjectName } from '../lib/door-name.js';   // #2579 — 문패 이름은 셸 목록이 정본(판이 든 사본은 안 늙는다)
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 문패를 다시 그리지 않는다
 import { appGlyphName, glyphAt } from '../lib/icon-paths.js';   // #4233 «프로젝트» 부품 그림을 그 자리 크기에 맞춘다(13px 이하 = 작은 과녁)
@@ -109,6 +108,8 @@ export interface PanesHandle {
   /** 그 종류의 탭을 보이게 한다 — 있으면 켜고(접힌 칸·서랍은 편다), 없으면 곁칸에 만든다. 세션 머리줄 [자료]가 부른다.
    *  ⚠ «보이게 해 두기» 로 되풀이해 부르지 말 것 — 이미 보이고 켜져 있으면 «다시 누른 것» 이라 처음으로 간다(자료 = 맨 위 폴더, #4443). */
   showPart(type: PartType): void;
+  /** #5319 우측 사이드바(곁칸)를 접거나 편다 — 문패 맨 오른쪽 단추와 ⌘⌥B 가 같은 길. 좁은 폭(서랍)에선 아무 일도 안 한다. */
+  toggleSide(): void;
 }
 
 // ── 배치 ────────────────────────────────────────────────────────────────────
@@ -742,6 +743,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const mainPane = makePane('main');
   const bottomPane = makePane('bottom');
   const sidePane = makePane('side');
+  //  #5319 곁칸 머리 줄 = 독(원준 2026-11-04 «독이랑 위에 하나로 합치자»). 넓은 화면에선 탭 줄 대신 독이 이 자리에 가로로 서고,
+  //   그 오른쪽에 켜진 앱 이름 · [열린 탭 ∨] 가 붙는다(paintPane). 좁은 폭(서랍)은 종전대로 탭 줄 + 바닥 독.
+  const dockSlot = el('div', { class: 'pn-dock-slot' }) as HTMLElement;
+  sidePane.bar.prepend(dockSlot);
+  const dockTop = (): boolean => !narrow();
 
   // 세로 경계(가운데|곁칸) · 가로 경계(가운데|아래 칸) — 폭·높이는 split.ts 가 기억한다.
   // 곁칸 경계 — 상한·부호를 side-swap 이 정한다(#1819). 곁칸이 왼쪽으로 가면 같은 손잡이의 부호가 반대가 된다.
@@ -1587,13 +1593,29 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // 손잡이는 띠 **밖**이라 탭이 몇 개가 되든 밀려나지 않는다(위 makePane 주석). [모두 보기]는 탭이 둘 이상일
     //  때만 만들고, 실제로 보이는 건 띠가 넘칠 때뿐이다(syncMore).
     // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 넣으면 'null' 이 글자로 찍힌다.
-    pane.tail.replaceChildren(...[
-      pane.tabs.childElementCount > 1 ? moreBtn(zone) : null,
-      sessionOnly || zone === 'bottom' ? null : addBtn(zone),   // #4443 아래 칸에는 새로 열지 않는다(남은 옛 탭만 보인다)
-      hideBtn,
-    ].filter(Boolean) as HTMLElement[]);
-    // 세션만 든 칸에는 탭도 손잡이도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
-    pane.bar.hidden = pane.tabs.childElementCount === 0 && pane.tail.childElementCount === 0;
+    //  #5319 넓은 화면의 곁칸 머리 줄은 독이다(dockSlot) — 탭 띠 · 접기는 감추고 켜진 앱 이름 · [열린 탭 ∨] · [＋](앱 서랍)만 남긴다.
+    //   독의 아이콘(누르면 그 앱 · 여럿이면 돌아가며)이 탭 띠를, 문패의 접기 단추(⌘⌥B)가 접기를 맡는다. 독의 [모든 앱] 칸은 이 줄에선
+    //   세우지 않는다 — [＋] 와 같은 일이다(한 줄에 «앱 더하기» 가 둘이면 무엇이 다른지 읽히지 않는다).
+    //   탭 띠는 그대로 채워 둔다(부품을 살려 두는 길 · 탭 끌어 놓기가 그 띠를 읽는다) — 보이기만 CSS 가 끈다(42-v2-dock.css).
+    const top = zone === 'side' && dockTop();
+    pane.root.classList.toggle('dock-top', top);
+    if (top) {
+      sideHide = null;
+      pane.tail.replaceChildren(...[
+        el('span', { class: 'pn-dock-name', text: act ? tabName(act) : '' }),
+        pane.tabs.childElementCount ? moreBtn(zone) : null,
+        sessionOnly ? null : addBtn(zone),
+      ].filter(Boolean) as HTMLElement[]);
+      pane.bar.hidden = false;
+    } else {
+      pane.tail.replaceChildren(...[
+        pane.tabs.childElementCount > 1 ? moreBtn(zone) : null,
+        sessionOnly || zone === 'bottom' ? null : addBtn(zone),   // #4443 아래 칸에는 새로 열지 않는다(남은 옛 탭만 보인다)
+        hideBtn,
+      ].filter(Boolean) as HTMLElement[]);
+      // 세션만 든 칸에는 탭도 손잡이도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
+      pane.bar.hidden = pane.tabs.childElementCount === 0 && pane.tail.childElementCount === 0;
+    }
     //  마우스로 막 닫은 줄이면 얼려 둔 폭 그대로(다음 × 가 커서 밑에 남는다), 아니면 새로 잰다.
     if (pane.frozen) applyFreeze(pane); else fit(pane);
     // 켜진 탭이 띠 밖으로 밀려 있으면 끌어온다(셸 탭 줄과 같은 문법 — tabs.ts). 'nearest' 라 이미 보이면 안 움직인다.
@@ -1607,10 +1629,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (!act) {
       let ph = pane.bodyEl.querySelector('.pn-pane-empty') as HTMLElement | null;
       if (!ph) {
-        ph = el('div', { class: 'pn-pane-empty' },
-          el('p', { class: 'pn-fine', text: '이 칸이 비어 있어요 — 위의 ＋ 로 넣을 것을 고르세요.' })) as HTMLElement;
+        ph = el('div', { class: 'pn-pane-empty' }, el('p', { class: 'pn-fine' })) as HTMLElement;
         pane.bodyEl.append(ph);
       }
+      const hint = '이 칸이 비어 있어요 — 위의 ＋ 로 넣을 것을 고르세요.';
+      const p = ph.querySelector('p') as HTMLElement | null;
+      if (p && p.textContent !== hint) p.textContent = hint;
       ph.hidden = false;
     } else {
       const ph = pane.bodyEl.querySelector('.pn-pane-empty') as HTMLElement | null;
@@ -1641,7 +1665,16 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (b && b.getAttribute('style') !== ac) { b.setAttribute('style', ac); wrapEl.style.setProperty('--ac', `var(--gi-c-${tabColor(key)})`); }
       wrapEl.classList.toggle('on', key === act);
     }
+    //  #5319 머리 줄 독 옆의 켜진 앱 이름도 같이(뷰어가 다른 파일을 폈다).
+    const nm = pane.tail.querySelector('.pn-dock-name') as HTMLElement | null;
+    if (nm) nm.textContent = act ? tabName(act) : '';
     fit(pane);
+  }
+
+  /** #5319 우측 사이드바 접기 · 펴기 — 문패 단추 · ⌘⌥B. 칸 머리의 접기(sideHide)와 같은 일을 양방향으로 한다. */
+  function toggleSideZone(): void {
+    if (narrow() || dead) return;
+    lay.sideOn = !lay.sideOn; saveLayout(); saveView({ sideOn: lay.sideOn }); paintAll();
   }
 
   function paintAll(): void {
@@ -1652,7 +1685,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     //  좁은 폭: 곁칸은 서랍이라 **접힘(sideOn)과 무관하게** 서 있고(보이기는 CSS m-aside 가 정한다), 아래 칸은 접혀 들어갔다.
     sidePane.root.hidden = n ? false : !lay.sideOn;
     splitX.hidden = !lay.sideOn;
-    sideReopen.hidden = n || lay.sideOn;
+    //  #5319 — 접힌 곁칸을 펴는 길은 문패 맨 오른쪽 단추(paintDoor sideTg)다. 떠 있는 손잡이는 문패가 없을 때만(지금은 늘 있다) — 자리만 남긴다.
+    sideReopen.hidden = true;
     bottomPane.root.hidden = !bShow;
     splitY.hidden = !bShow;
     paintPane('main'); paintPane('side'); paintPane('bottom');
@@ -1678,29 +1712,20 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     titleEdit.paid();
     const p = pj();
     const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
-    // ── [세션 옮기기] (#3778, 원준 2026-09-19: «[⋯] 안에만 있지 말고 밖에도 빼놓은 버튼이 있고 싶다») ──
-    //  자리는 꼬리표(#번호 · 상태) 바로 뒤다 — 그 꼬리표가 곧 «이 세션이 지금 어디 있나» 이고, 단추는 그걸 바꾼다.
-    //  ⚠ 이름에 **«세션»** 을 넣는다: 이 줄은 프로젝트를 말하는 줄이라 «바꾸기» 만 두면 «프로젝트를 바꾼다(다른
-    //   프로젝트로 간다)» 로 읽힌다 — 옮겨지는 것은 지금 보는 세션이다(문패 [공유] 가 프로젝트 공유로 읽혔던 것과
-    //   같은 함정, 원준 2026-09-09). 세션이 없는 새 세션 자리·남의 세션이면 단추를 안 단다([⋯] 과 같은 조건).
+    //  ⚠ #5319 — [세션 복제] · [세션 옮기기] 는 문패에서 내려가 **세션 머리줄**(session-chat.ts forkBtn · moveBtn)에 선다
+    //   (원준 2026-11-04 v2 확정안: 문패는 프로젝트를 말하고, 세션에 하는 일은 세션 머리줄이 쥔다). 술어 · 실행은 그대로(셸 main.ts mountSession).
     const sid = curSession();
-    const move = sid && opts.onMoveSession && opts.canMoveSession?.(sid)
-      ? el('button', { class: 'pn-move', type: 'button', 'aria-label': loose ? '이 세션을 프로젝트에 붙이기' : '이 세션을 다른 프로젝트로 옮기기',
-          title: loose ? '이 세션을 프로젝트에 붙입니다' : '이 세션을 다른 프로젝트로 옮기거나 프로젝트에서 뗍니다',
-          onclick: () => opts.onMoveSession!(sid) },
-          icon('sessMove', 'pn-i sm'), el('span', { class: 'pn-move-t', text: loose ? '프로젝트에 붙이기' : '세션 옮기기' }))   // #4233 — 칸 옮기기(moveto)와 나눈다
-      : null;
-    // ── [세션 복제] (#4135, 원준 2026-09-27: «세션 옮기기 버튼 … 비슷한 느낌으로, 이 세션 내용을 아는 새로운 세션») ──
-    //  [세션 옮기기] 와 같은 꼴·같은 자리 규칙(내 세션에만). 옮기기보다 **앞**에 선다 — 둘 다 «이 세션» 에 하는 일이고,
-    //  하나 더 만드는 일이 자리를 바꾸는 일보다 먼저 읽히는 편이 순서에 맞다(만든 뒤에 옮긴다).
-    const fork = sid && opts.onForkSession && opts.canForkSession?.(sid)
-      ? el('button', { class: 'pn-move pn-fork', type: 'button', 'aria-label': '이 세션을 복제하기',
-          title: '지금까지의 대화를 아는 새 세션을 하나 더 만듭니다. 이 세션은 그대로 남습니다.',
-          onclick: (e: MouseEvent) => opts.onForkSession!(sid, e.currentTarget as HTMLElement) },
-          icon('copy', 'pn-i sm'), el('span', { class: 'pn-move-t', text: '세션 복제' }))
-      : null;
-    // 세션을 보는 중인지 표시한다. 데스크톱 문패 크기는 프로젝트 화면과 같고, 폰에서만 이 표식으로 문패를 접는다(50-mobile.css).
+    // 세션을 보는 중인지 표시한다. 폰은 이 표식으로 문패를 접고(50-mobile.css), #5319 부터 데스크톱은 문패를 한 줄 작은 글씨로
+    //  낮춘다 — 이 화면의 제목은 세션 이름이고(머리줄이 크게 쓴다), 문패는 «어느 프로젝트 안인가» 만 말한다(42-v2-panes.css .pn-door.in-sess).
     door.classList.toggle('in-sess', !!sid);
+    //  #5319 우측 사이드바 접기 · 펴기 — 문패 맨 오른쪽(원준 2026-11-04 «사이드바 다 접거나 펴는거 언제든 쉽게»). 좁은 폭은 서랍이라 없다.
+    const left = isLeft();
+    const sideTg = narrow() ? null : el('button', {
+      class: 'pn-door-side' + (lay.sideOn ? ' on' : ''), type: 'button', 'aria-pressed': String(lay.sideOn),
+      title: (lay.sideOn ? sideLabels(left).hideTitle : sideLabels(left).reopenTitle) + ' (⌘⌥B)',
+      'aria-label': lay.sideOn ? sideLabels(left).hideAria : sideLabels(left).reopenAria,
+      onclick: () => toggleSideZone(),
+    }, pnIcon(left ? 'panel' : 'panelR', 'pn-i'));
     door.replaceChildren(
       el('div', { class: 'pn-door-l' },
         // ⭐ 순서는 **이름 › 번호 › 상태**(원준 2026-09-03: "프로젝트 이름이 제일 왼쪽으로 가야 밸런스가 맞는다").
@@ -1711,8 +1736,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         el('div', { class: 'pn-eyebrow' },
           loose ? el('span', { text: '아직 어느 프로젝트에도 붙지 않았어요.' }) : el('span', { class: 'mono', text: '#' + p.id }),
           loose ? null : el('span', { class: 'sep', text: '·' }),
-          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }),
-          fork, move)),
+          loose ? null : el('span', { class: 'pn-state ' + st.c, text: st.t }))),
       el('div', { class: 'pn-door-r' },
         // ⭐ #3778 — 얼굴 줄과 [공유] 는 여기 없다. **세션의 머리줄**(session-chat.ts sc-head)로 내려갔다.
         //  이 줄의 왼쪽은 프로젝트 이름인데 그 둘만 세션에 작용해서, 한 줄이 «프로젝트 → 세션 → 프로젝트» 로
@@ -1725,11 +1749,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         //  흰 문패 위에서 회색 글자로 흩어졌고, 나란히 있으니 무엇이 주된 동작인지도 말하지 않았다.
         //  그래서 **크기·글자크기는 그대로 두고 채움만** 바꾼다 — 이 칸에서 사람이 제일 자주 하는 일(세션 열기)은
         //  칠한 버튼, 가끔 보는 것(상세)은 테두리 버튼. 위계가 색으로 먼저 읽힌다.
-        swap ? swap.button() : null,
-        el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('sessNew', 'pn-i sm'), el('span', { text: '세션' })),   // #4233 — 새 세션 = 말풍선과 더하기
+        //  #5319 순서 = [프로젝트 상세] · ⇄ · [새 세션] · 접기(원준 2026-11-04 v2 확정안) — 칠한 단추(가장 자주 하는 일)가 접기 바로 앞, 맨 끝에 선다.
         // 이름은 '정보'가 아니라 **프로젝트 상세** — 개요 부품을 없앤 뒤로 본문·할 일·상태를 보는 유일한 입구다.
         //  '정보'만 있으면 무엇에 대한 정보인지 안 말해 준다(원준 2026-08-20).
-        loose ? null : el('button', { class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button', title: '본문·할 일·상태·이름을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '프로젝트 상세' }))));
+        loose ? null : el('button', { class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button', title: '본문·할 일·상태·이름을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '프로젝트 상세' })),
+        swap ? swap.button() : null,
+        el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('sessNew', 'pn-i sm'), el('span', { text: '새 세션' })),   // #4233 — 새 세션 = 말풍선과 더하기
+        sideTg));
   }
 
   // ── 문패 제목 = **프로젝트 전체 화면으로 가는 문**(원준 2026-08-26) ─────────────────
@@ -1925,6 +1951,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     narrow: () => narrow(),
     //  #4443 폰 · 눕힌 폰의 서랍엔 독을 안 세운다. 서랍 위 탭 줄과 그 [＋](앱 서랍)가 같은 일을 하고, 앱 화면이 그 높이를 쓴다.
     off: () => handsetMq.matches,
+    //  #5319 넓은 화면에선 곁칸 머리 줄에 선다(dockSlot) — 이음매 · 곁칸 아래는 좁은 폭(서랍)에서만.
+    top: () => (dockTop() ? dockSlot : null),
   });
 
   applyView();          // 첫 그림 전에 이 세션의 폭·높이·접힘을 입힌다(swap 이 선 뒤라 상한 판정이 산다)
@@ -1955,6 +1983,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   return {
     newSession,
     showPart,
+    toggleSide: () => toggleSideZone(),
     repaintDoor(): void { paintDoor(); },
     destroy(): void {
       if (typeof narrowMq.removeEventListener === 'function') narrowMq.removeEventListener('change', onNarrow); else (narrowMq as any).removeListener(onNarrow);

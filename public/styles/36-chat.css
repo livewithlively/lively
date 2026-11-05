@@ -656,3 +656,32 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 
 /* 세션 이름 뒤의 번호(#nnnn — 이 세션이 맡은 태스크 번호, 원준 2026-10-10). 프로젝트 문패의 번호(.pn-eyebrow .mono)와 같은 무게다. */
 .sc-title-no { flex: none; margin-left: 6px; font-size: 12.5px; font-weight: 500; color: var(--muted); white-space: nowrap; }
+
+/* ── #5319 큰 머리(칸 셸의 세션 화면 — session-chat.ts bigHead, 원준 2026-11-04 v2 확정안) ─────────────────
+   이 화면의 제목은 **세션 이름**이다(위 문패는 «어느 프로젝트 안인가» 만 작게 말한다 — 42-v2-panes.css .pn-door.in-sess).
+   왼쪽은 두 줄: [● 이름 · 얼굴 · 배지] / [#번호 · 연결 상태 | 화면 복구 · 하네스 알약]. 오른쪽은 글자 단추 줄([자료] [복제] [옮기기] ⋯).
+   좁은 폭(≤900)·카드에서는 종전처럼 한 줄로 접힌다(아래). */
+.sc-head-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.sc-head-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sc-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
+.sc-sub-no:empty { display: none; }
+.sc-sub-no .sc-title-no { margin-left: 0; }
+.sc-act-fork, .sc-act-move { display: inline-flex; align-items: center; gap: 4px; }
+.sc-act-fork[hidden], .sc-act-move[hidden] { display: none; }
+@media (min-width: 901px) {
+  .sc-head--big { align-items: flex-start; padding: 14px 18px 10px 24px; }
+  .sc-head--big .sc-head-top { gap: 10px; }
+  .sc-head--big .sc-title { font-size: 28px; font-weight: 800; letter-spacing: -.02em; line-height: 1.25; }
+  .sc-head--big .sc-title-in { font-size: 24px; }
+  .sc-head--big .sc-titlebox { min-width: 10ch; }
+  .sc-head--big .sc-head-r { padding-top: 7px; }
+}
+@media (max-width: 900px) {
+  .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
+}
+/* 카드(세션을 곁칸 위 작은 창으로 띄운 때) — 한 줄 머리 그대로. 세션 단추 둘은 ⋯ 와 세션 우클릭에 있다. */
+.pn-body.cm > .pn-col .sc-head--big { align-items: center; padding-top: 9px; padding-bottom: 8px; }
+.pn-body.cm > .pn-col .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }
+.pn-body.cm > .pn-col .sc-head--big .sc-title { font-size: 13.5px; letter-spacing: 0; }
+.pn-body.cm > .pn-col .sc-head--big .sc-head-r { padding-top: 0; }
+.pn-body.cm > .pn-col .sc-head .sc-act-fork, .pn-body.cm > .pn-col .sc-head .sc-act-move { display: none; }

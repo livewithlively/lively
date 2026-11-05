@@ -203,7 +203,7 @@ const isFullRoute = (route: string): boolean => parseRoute(route).segs[0] === 'f
 // 프로젝트 화면(#1757) 핸들 — **탭마다 하나**. 탭이 다른 화면으로 가거나 닫힐 때 destroy(리브 턴 폴링 정지).
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
-const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void; repaintDoor?(): void }>();
+const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void; repaintDoor?(): void; toggleSide?(): void }>();
 // 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
 //  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
 //  8초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
@@ -418,6 +418,12 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
         // 자동 복원은 **보이는 탭에서만**, 복원 뒤 이동은 **그 탭만**(#1834 후속 — session-chat.ts isVisible/onResumed 주석).
         isVisible: () => tabsApi?.current() === tab,
         onResumed: (nid) => resumedInTab(tab, nid),
+        //  #5319 — 문패에 있던 [세션 복제] · [세션 옮기기] 가 세션 머리줄로 내려왔다(원준 2026-11-04 v2 확정안). 실행 · 술어는 문패 때와 같다.
+        bigHead: true,
+        onFork: (anchor) => forkSession(anchor, sid),
+        canFork: (t) => { const s = data.sessions.find((x) => x.id === t.id) || findSess(sid); return !!s && canForkSess(s); },   // 문패 canForkSession 과 같은 찾기
+        onMove: () => openProjectMoveModal(sid, tab),
+        moveLabel: projectId === 0 ? '프로젝트에 붙이기' : '옮기기',
       });
       tab.chat = h;      // 20초 목록 갱신이 이 핸들로 상태를 흘려보낸다
       return h;
@@ -590,18 +596,25 @@ export async function bootV2(): Promise<void> {
     //   되찾는 길을 또 만들어야 했다 — 접히는 것은 레일 하나뿐이고 사이드바는 폭 손잡이로만 조절한다.
     //   좁은 폭에선 mobile.ts 가 서랍을 여닫는다(그쪽 핸들러는 isMobile() 가드가 있어 여기서 겹치지 않는다).
     //  #4533 — 사이드바를 손잡이로 닫아 둔 채 레일까지 걷혀 있으면 ☰ 는 **둘을 함께** 연다(toggleDock).
+    //  ★ #5319(원준 2026-11-04 «사이드바 다 접거나 펴는거 언제든 쉽게 가능하게») — 넓은 폭의 ☰ 는 이제 **왼쪽 사이드바**를 접고 편다(⌘B).
+    //   레일 여닫기는 ⌘⇧S 와 구역 드롭다운의 「레일 펼치기」가 맡는다. 우측 사이드바는 문패 맨 오른쪽 단추(⌘⌥B), 둘 다는 ⌘\.
     mobile.menuBtn.addEventListener('click', () => {
       if (window.matchMedia(MOBILE_MQ).matches) return;   // 좁은 폭 = 서랍(mobile.ts 담당)
-      toggleDock();
+      toggleSideBar();
     });
-    //  ⌘⇧S — 슬랙의 '워크스페이스 스위처 표시'와 같은 자리(레일 펼치기). 입력 중에는 가로채지 않는다.
+    //  ⌘⇧S — 슬랙의 '워크스페이스 스위처 표시'와 같은 자리(레일 펼치기). ⌘B · ⌘⌥B · ⌘\ — 사이드바 접기 · 펴기(#5319).
+    //   입력 중(글 칸 · 편집기 — 편집기의 ⌘B 는 굵게다)에는 가로채지 않는다. 좁은 폭(서랍)에선 사이드바 단축키를 쓰지 않는다.
     document.addEventListener('keydown', (e) => {
-      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey) return;
-      if ((e.key || '').toLowerCase() !== 's') return;
+      if (!(e.metaKey || e.ctrlKey)) return;
       const t = e.target as HTMLElement | null;
       if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-      e.preventDefault();
-      toggleDock();
+      const k = (e.key || '').toLowerCase();
+      const code = e.code || '';
+      if (e.shiftKey && !e.altKey && k === 's') { e.preventDefault(); toggleDock(); return; }
+      if (e.shiftKey || window.matchMedia(MOBILE_MQ).matches) return;
+      //  ⌥ 를 누르면 맥은 key 를 다른 글자(∫)로 바꾼다 — 글쇠 자리(code)로 본다.
+      if (code === 'KeyB' || k === 'b') { e.preventDefault(); if (e.altKey) toggleRightSide(); else toggleSideBar(); return; }
+      if (!e.altKey && (code === 'Backslash' || k === '\\')) { e.preventDefault(); toggleBothSides(); }
     });
     //  즐겨찾기는 [프로젝트] 착지를 정하는 재료다(#2061) — 구역에 들어간 뒤 당기면 첫 진입이 답을 못 기다린다. 미리 당겨 둔다.
     loadFavLists();
@@ -2918,12 +2931,12 @@ function showSessAll(opts?: { keepDrawer?: boolean }): void {
   if (tabsApi.current() !== hit) tabsApi.activate(hit);
   paintSessAll(hit);
 }
-/** ☰ 의 뜻이 바뀌었다(사이드바 접기 → 레일 여닫기) — 툴팁·aria 도 그 뜻으로 맞춘다. */
+/** ☰ 의 뜻 — #5319 부터 넓은 폭에선 **왼쪽 사이드바 접기 · 펴기**(⌘B). 툴팁·aria 도 그 뜻으로 맞춘다. */
 function syncRailBtn(): void {
   if (!mobile) return;
-  const hid = railIsHidden();
-  mobile.menuBtn.setAttribute('aria-expanded', String(!hid));
-  mobile.menuBtn.title = (hid ? (sideIsClosed() ? '레일·사이드바 펼치기' : '레일 펼치기') : '레일 숨기기') + ' — ⌘⇧S';
+  const closed = sideIsClosed();
+  mobile.menuBtn.setAttribute('aria-expanded', String(!closed));
+  mobile.menuBtn.title = (closed ? '사이드바 펴기' : '사이드바 접기') + ' — ⌘B';
 }
 
 // ── 사이드바 닫힘(#4533) — 폭 손잡이를 하한 밑으로 끌면 닫히고, ☰ 가 되찾는다 ──────────────────────
@@ -2951,6 +2964,19 @@ function toggleDock(): void {
   if (railIsHidden() && sideIsClosed()) setSideClosed(false);
   toggleRail();
   syncRailBtn();
+}
+/** #5319 ☰ · ⌘B — 왼쪽 사이드바를 접고 편다. 레일까지 숨어 있으면 펼 때 레일은 그대로 둔다(사이드바 머리의 구역 드롭다운이 레일을 되살린다). */
+function toggleSideBar(): void { setSideClosed(!sideIsClosed()); }
+/** #5319 ⌘⌥B — 지금 탭의 우측 사이드바(칸 셸 곁칸)를 접고 편다. 칸 셸이 아닌 화면(홈 · 앱)엔 곁칸이 없어 아무 일도 안 한다. */
+function toggleRightSide(): void { const t = tabsApi?.current(); const v = t ? projViews.get(t) : null; v?.toggleSide?.(); }
+/** #5319 ⌘\ — 양쪽 다. 하나라도 열려 있으면 둘 다 접고, 둘 다 접혀 있으면 둘 다 편다(맥 앱들의 «사이드바 모두 가리기»). */
+function toggleBothSides(): void {
+  const t = tabsApi?.current(); const v = t ? projViews.get(t) : null;
+  const right = !!t && !!v && !!t.center.querySelector('.pn-body:not(.no-side)');
+  const anyOpen = !sideIsClosed() || right;
+  if (anyOpen) { if (!sideIsClosed()) setSideClosed(true); if (right) v?.toggleSide?.(); return; }
+  setSideClosed(false);
+  if (v && t?.center.querySelector('.pn-body.no-side')) v.toggleSide?.();
 }
 
 function drawSide(): void {
