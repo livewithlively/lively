@@ -267,18 +267,20 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
 //  #5319 독 아래 탭 줄(2026-11-05 — 뷰어 여럿 중 하나를 고를 수 없었다 · «탭 사이즈가 충분히 크게»).
 {
   const TABS_LIB = read("web/lib/pane-tabs.ts");
-  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions' && \(counts\.get\(tabBase\(k\)\) \?\? 0\) >= 2;/.test(PANES_TS)
+  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions' && \(isFileTab\(k\) \|\| \(counts\.get\(tabBase\(k\)\) \?\? 0\) >= 2\);/.test(PANES_TS)
+    && /&& !\(!narrow\(\) && isFileTab\(k\) && lay\.side\.includes\(k\)\)\);/.test(PANES_TS)
     && /const sub = top && list\.some\(inSub\);/.test(PANES_TS)
     && /w\.classList\.toggle\('pn-sub-off', top && !inSub\(k\)\)/.test(PANES_TS)
     && /classList\.contains\('pn-tabwrap'\) && !n\.classList\.contains\('pn-sub-off'\)/.test(PANES_TS),
-    "W16k 독 아래 탭 줄 = 둘 이상 떠 있는 앱의 탭만(켜진 앱과 무관) — 하나뿐인 앱은 독 아이콘이 곧 탭이라 다시 세우지 않는다 · 숨은 탭은 폭을 나눠 갖지 않는다");
+    "W16k 독 아래 탭 줄 = 파일(뷰어) 탭은 하나라도 · 다른 앱은 둘 이상 떴을 때(켜진 앱과 무관) — 독엔 [뷰어] 칸이 없다 · 하나뿐인 앱은 독 아이콘이 곧 탭 · 숨은 탭은 폭을 나눠 갖지 않는다");
   check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto; grid-template-rows: calc\(var\(--pn-bighead-h, 113px\) - 1px\) 53px;/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub \.pn-tab \{[^}]*font-size: 15px;/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub \.pn-tabwrap\.on::after \{ content: "";/.test(DOCK_CSS)
     && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar:not\(\.shrunk\):not\(\.has-more\) \.pn-tab-more \{ display: none; \}/.test(DOCK_CSS),
     "W16l 독 아래 탭 줄 — 격자(독 줄 높이 그대로 · 그 아래 53px) · 글자 15px · 켜진 탭 밑줄 · [∨] 는 줄이 넘칠 때만");
-  check(/export const SUB_TAB_METRICS: Metrics = \{ icon: 120, minLabel: 120,/.test(TABS_LIB)
+  check(/export const SUB_TAB_METRICS: Metrics = \{ icon: 56, minLabel: 168,/.test(TABS_LIB)
     && /const met = sub \? SUB_TAB_METRICS : TAB_METRICS;/.test(PANES_TS)
+    && /if \(sub && plan\.mode === 'icons'\) \{/.test(PANES_TS)
     && /p\.bar\.classList\.toggle\('compact', plan\.mode === 'icons' && !sub\);/.test(PANES_TS),
     "W16m 독 아래 탭 줄은 아이콘으로 접지 않는다 — 뷰어 여럿이 같은 아이콘만 남으면 어느 파일인지 모른다(이름을 남긴 채 미끄러진다)");
   check(/function edgeFade\(sc: HTMLElement\): void \{/.test(PANES_TS) && /dockSlot\.addEventListener\('wheel'/.test(PANES_TS)

@@ -667,6 +667,11 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       p.bar.classList.add('shrunk');                            // ⌄ 가 선다 — 그 폭을 뺀 줄에 다시 앉힌다
       plan = planTabs(tabsIn, room(p.tabs.clientWidth), met);
     }
+    //  큰 탭 줄은 아이콘 폭으로 접는 대신 이름을 남긴 바닥 폭(minLabel)에서 멈추고 줄이 미끄러진다.
+    if (sub && plan.mode === 'icons') {
+      const pw = plan.widths;
+      plan = { ...plan, widths: tabsIn.map((t, i) => (t.active && !t.pinned ? pw[i] : Math.min(Math.max(met.icon, Math.ceil(t.natural)), met.minLabel))) };
+    }
     wraps.forEach((w, i) => { w.style.width = plan.widths[i] + 'px'; });
     p.bar.classList.toggle('compact', plan.mode === 'icons' && !sub);
     fitTitles(p);
@@ -1631,12 +1636,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const top = zone === 'side' && dockTop();
     pane.root.classList.toggle('dock-top', top);
     //  #5319 독 아래 탭 줄(2026-11-05 — 뷰어를 여럿 띄우면 독의 [뷰어] 한 칸이 돌아가며 보여 줄 뿐 «그 파일» 을 골라 갈 수 없었다).
-    //   독 아이콘은 앱 하나에 한 칸이다. 그래서 **둘 이상 떠 있는 앱의 탭**만 독 아래 한 줄에 큰 글씨로 세운다 — 독이 하나하나 가리키지
-    //   못하는 것만. 켜진 앱과 무관하게 선다: 자료를 보다가 PDF 셋 중 둘째로 한 번에 간다(자료 ↔ 파일 오가기). 하나뿐인 앱은 독 아이콘이
-    //   곧 그 탭이라 이 줄에 다시 세우지 않는다(같은 것이 두 번 서지 않게).
+    //   독 = 앱(한 앱에 한 칸), 이 줄 = **파일**과 여럿 뜬 앱의 하나하나. 뷰어(파일) 탭은 하나라도 늘 이 줄에 서고 독에는 [뷰어] 칸을
+    //   세우지 않는다(dockKeys — 같은 것이 두 번 서지 않게, 그리고 곁칸이 좁을 때 독이 넘치지 않게). 다른 앱은 둘 이상 떴을 때만 이 줄에
+    //   선다(하나면 독 아이콘이 곧 그 탭이다). 켜진 앱과 무관하게 선다: 자료를 보다가 PDF 셋 중 둘째로 한 번에 간다(자료 ↔ 파일 오가기).
     const counts = new Map<string, number>();
     for (const k of list) counts.set(tabBase(k), (counts.get(tabBase(k)) ?? 0) + 1);
-    const inSub = (k: TabKey): boolean => tabBase(k) !== 'sessions' && (counts.get(tabBase(k)) ?? 0) >= 2;
+    const inSub = (k: TabKey): boolean => tabBase(k) !== 'sessions' && (isFileTab(k) || (counts.get(tabBase(k)) ?? 0) >= 2);
     const sub = top && list.some(inSub);
     pane.root.classList.toggle('dock-sub', sub);
     for (const [k, w] of tabNodes(pane)) w.classList.toggle('pn-sub-off', top && !inSub(k));
@@ -1953,7 +1958,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   //  여기(모든 선언이 끝난 뒤 · 첫 그림 직전)에 세운다 — 독은 세우자마자 한 번 그리며 tabName(tabTitles) 까지 읽는다.
   //  독이 아는 «떠 있는 것» = 곁칸 + 아래 칸의 탭(좁은 폭이면 서랍의 줄). 하나만 사는 앱이 아래 칸에 있으면 곁칸에 둘째를 세우지 않고 그리로 간다.
   //  옛 [앱] 부품(설치 앱 목록)은 독에 세우지 않는다 — 독의 [더보기]가 같은 일을 한다(둘을 나란히 두면 같은 격자 아이콘 둘이 선다, 실측).
-  const dockKeys = (): TabKey[] => (narrow() ? zoneTabs('side') : [...lay.side, ...lay.bottom]).filter((k) => tabBase(k) !== 'sessions' && tabBase(k) !== 'apps');
+  //  #5319 넓은 화면의 곁칸 뷰어(파일) 탭은 독 아래 탭 줄이 하나하나 맡는다(paintPane inSub) — 독엔 [뷰어] 칸을 세우지 않는다.
+  const dockKeys = (): TabKey[] => (narrow() ? zoneTabs('side') : [...lay.side, ...lay.bottom])
+    .filter((k) => tabBase(k) !== 'sessions' && tabBase(k) !== 'apps' && !(!narrow() && isFileTab(k) && lay.side.includes(k)));
   const dockApps = (): DockApp[] => PART_DEFS.filter((d) => d.type !== 'sessions').map((d) => ({
     type: d.type, name: d.name, glyph: d.icon, hint: d.hint, multi: !!d.multi,
     //  프로젝트 없는 세션 화면엔 공유 폴더·지식·할 일·리브가 없다([+] 목록과 같은 규칙).
