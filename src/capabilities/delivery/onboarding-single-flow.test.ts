@@ -89,10 +89,14 @@ await t("E17 [연결할게요] — 반영 성공 뒤에만 연결 세션 문 · 
   assert.match(OPEN, /api\('\/api\/ui\/me\/liv\/open', \{ method: 'POST'/, "리브에게 일 맡기기 문을 안 부른다");
 });
 
-await t("E18 리브 진입점 네 자리가 한 스위치를 본다 — (PR3) 켜짐: 레일 [리브]는 남고 도착지가 리브 세션이다", () => {
+await t("E18 리브 진입점 세 자리가 한 스위치를 본다 — 켜짐 · 레일엔 [리브]가 없다(#5319)", () => {
   const SW = readFileSync(new URL("../../../web/lib/liv-entry.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8");
-  assert.match(SW, /export const LIV_ENTRY_VISIBLE: boolean = true;/, "★ 스위치가 없거나 꺼져 있다 — 리브로 들어가는 문이 없다(상민님 결정 2026-10-22 «레일 [리브] 줄은 남긴다»)");
-  for (const f of ["rail.ts", "side.ts", "mobile.ts", "me-modal.ts"]) {
+  assert.match(SW, /export const LIV_ENTRY_VISIBLE: boolean = true;/, "★ 스위치가 없거나 꺼져 있다 — 리브로 들어가는 문이 없다(상민님 결정 2026-10-22)");
+  //  #5319(원준 2026-11-04 «세션 목록 프로젝트 위키 리브 사이드바 다 빼버려도 될거같음») — 레일은 홈 + 최근 앱 4칸이다.
+  //   리브는 사이드바 바로가기 · 폰 · 내 정보 창으로 닿는다(아래 셋). 레일에 리브 링크가 다시 생기면 여기서 잡힌다.
+  const RAIL = code(readFileSync(new URL("../../../web/v2/rail.ts", import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
+  assert.doesNotMatch(RAIL, /'#\/liv'/, "레일에 리브 링크가 돌아왔다 — #5319 이후 레일엔 리브 줄이 없다");
+  for (const f of ["side.ts", "mobile.ts", "me-modal.ts"]) {
     const src = code(readFileSync(new URL(`../../../web/v2/${f}`, import.meta.url).pathname.replace("/dist/", "/src/"), "utf8"));
     assert.match(src, /LIV_ENTRY_VISIBLE/, `${f} 가 스위치를 안 본다`);
     //  스위치 밖에 남은 리브 링크가 없어야 한다 — '#/liv' 가 나오는 줄은 전부 스위치와 같은 줄이거나 그 조건 안이다.
