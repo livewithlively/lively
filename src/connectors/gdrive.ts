@@ -28,6 +28,15 @@ const MAX_PAGES = 20; // 페이지네이션 상한(무한 루프/폭주 방지) 
 const REQ_INTERVAL_MS = 50; // 자발적 스로틀 — Drive 쿼터는 넉넉하나 100초창(per-user) 버스트 선제 회피
 const MAX_RETRY = 5; // 429/일시 오류 재시도 횟수
 const MAX_BODY_CHARS = 1_000_000; // 본문 저장 상한(~1MB) — 병적으로 큰 텍스트/export 로부터 메모리 보호
+// 파일 하나의 본문 추출(재시도·본문 수신 포함)에 쓰는 시간 상한. 넘기면 본문만 비우고 메타는 남긴다.
+//  ⚠ 없으면 export 가 응답 없이 매달릴 때 러너의 무출력 정체 감지(15분)가 run 을 죽이고, 커서가 그 파일 앞에 묶여
+//  매 run 이 같은 파일에서 다시 죽는다 — 자주 편집되는 대형 Sheets 의 csv export 가 5xx·수 분 지연을 반복한 실제 사례.
+//  정체 감지 한도보다 충분히 짧아야 한다. GDRIVE_BODY_TIMEOUT_MS 로 덮어쓸 수 있다.
+const BODY_TIMEOUT_MS_DEFAULT = 120_000;
+function bodyTimeoutMs(): number {
+  const v = Number(process.env.GDRIVE_BODY_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : BODY_TIMEOUT_MS_DEFAULT;
+}
 const MAX_BINARY_BYTES = 30_000_000; // OOXML 텍스트 추출용 바이너리 다운로드 상한(~30MB) — 메모리 보호(초과 시 메타만)
 const BINARY_MARKER = "[BINARY]"; // 통합 distill 프롬프트가 이 마커를 감지해 source_artifact(source_id) 로 on-demand 페치(slack 과 공용 계약).
 
@@ -123,15 +132,17 @@ export function buildFilesQuery(opts: { since?: string; folderIds?: string[] } =
 //  토큰은 매 시도마다 googleAccessToken 에서 획득(만료 60s 여유 캐시 + 자동 재발급) — 1시간 넘는 백필도 만료 없이 통과.
 let lastReqAt = 0;
 
-async function driveFetch(url: string, accept = "application/json"): Promise<Response> {
+//  signal 을 주면 재시도 전체와 본문 수신까지 한 상한으로 묶인다(시도마다 새로 재지 않는다).
+async function driveFetch(url: string, accept = "application/json", signal?: AbortSignal): Promise<Response> {
   for (let attempt = 0; attempt <= MAX_RETRY; attempt++) {
+    if (signal?.aborted) throw signal.reason;   // 백오프 대기 중 상한을 넘겼으면 다음 시도를 내지 않는다
     // 자발적 스로틀: 직전 요청과 최소 간격 유지(선제 rate limit 회피).
     const wait = lastReqAt + REQ_INTERVAL_MS - Date.now();
     if (wait > 0) await sleep(wait);
     lastReqAt = Date.now();
 
     const token = await googleAccessToken(SYSTEM);
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, accept } });
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, accept }, signal });
 
     // rate limit: 429 → Retry-After(초) 만큼 대기 후 재시도.
     if (res.status === 429) {
@@ -200,7 +211,7 @@ export function buildBinaryStub(file: DriveFile): string {
 // 본문 추출 — mimeType 분기. 비대상/실패는 undefined 반환(메타데이터는 항상 보존).
 //  결정적 텍스트(네이티브 export·text/*·OOXML)는 sync 시점에 body_md 로 추출. PDF/이미지는 [BINARY] 메타-스텁만
 //  (다운로드·저장 X) → distill 이 source_artifact 로 on-demand 페치. 그 외 바이너리는 메타만(undefined).
-async function fetchBodyText(file: DriveFile): Promise<string | undefined> {
+async function fetchBodyText(file: DriveFile, signal?: AbortSignal): Promise<string | undefined> {
   const mime = file.mimeType ?? "";
   const id = encodeURIComponent(file.id);
 
@@ -210,7 +221,7 @@ async function fetchBodyText(file: DriveFile): Promise<string | undefined> {
     if (!out) return undefined; // 폴더/드로잉/폼 등 텍스트 export 비대상 → 메타만
     // supportsAllDrives: 공유 드라이브의 네이티브 문서도 export 되도록(없으면 404 가능) — list 트라이펙타와 정합.
     const p = new URLSearchParams({ mimeType: out, supportsAllDrives: "true" });
-    const res = await driveFetch(`${API_BASE}/files/${id}/export?${p.toString()}`, out);
+    const res = await driveFetch(`${API_BASE}/files/${id}/export?${p.toString()}`, out, signal);
     // ⚠ Docs export 는 서버측 10MB 상한 등으로 실패 가능 → 본문만 비우고 메타는 보존.
     if (!res.ok) {
       await res.text().catch(() => "");
@@ -224,7 +235,7 @@ async function fetchBodyText(file: DriveFile): Promise<string | undefined> {
   // 2) 비네이티브 텍스트(text/*·application/json) → 원본 다운로드(alt=media).
   //    ⚠ 요청 fields 에 size 가 없어 사전 크기 판정 불가 → 다운로드 후 MAX_BODY_CHARS 로 절단(저장 보호).
   if (mime.startsWith("text/") || mime === "application/json") {
-    const res = await driveFetch(`${API_BASE}/files/${id}?alt=media&supportsAllDrives=true`, "*/*");
+    const res = await driveFetch(`${API_BASE}/files/${id}?alt=media&supportsAllDrives=true`, "*/*", signal);
     if (!res.ok) {
       await res.text().catch(() => "");
       console.warn(`gdrive: 다운로드 실패(본문 생략, 메타 보존) ${file.id} ${mime}: ${res.status}`);
@@ -239,7 +250,7 @@ async function fetchBodyText(file: DriveFile): Promise<string | undefined> {
   //    on-demand 대상 아님(sync 추출이 정답). 파싱 실패/빈 결과/깨진 추출은 undefined 로 폴백(메타 보존).
   const ooxml = ooxmlKindFromMime(mime);
   if (ooxml) {
-    const res = await driveFetch(`${API_BASE}/files/${id}?alt=media&supportsAllDrives=true`, "*/*");
+    const res = await driveFetch(`${API_BASE}/files/${id}?alt=media&supportsAllDrives=true`, "*/*", signal);
     if (!res.ok) {
       await res.text().catch(() => "");
       console.warn(`gdrive: OOXML 다운로드 실패(본문 생략, 메타 보존) ${file.id} ${mime}: ${res.status}`);
@@ -309,7 +320,9 @@ async function folderNameOf(id: string | undefined): Promise<string> {
   let name = "";
   try {
     const params = new URLSearchParams({ fields: "name", supportsAllDrives: "true" });
-    const res = await driveFetch(`${API_BASE}/files/${encodeURIComponent(fid)}?${params.toString()}`, "application/json");
+    const res = await driveFetch(
+      `${API_BASE}/files/${encodeURIComponent(fid)}?${params.toString()}`, "application/json", AbortSignal.timeout(bodyTimeoutMs()),
+    );
     if (res.ok) name = String(((await res.json()) as { name?: string })?.name ?? "").trim();
   } catch (e) {
     console.warn(`gdrive: 폴더명 조회 실패(채널 없이 진행) ${fid}: ${(e as Error).message}`);
@@ -388,7 +401,14 @@ async function* backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     for (const file of data.files ?? []) {
       if (!file.id) continue; // id 없는 이례적 레코드 방어
       try {
-        const body = await fetchBodyText(file);
+        let body: string | undefined;
+        const bodySignal = AbortSignal.timeout(bodyTimeoutMs());
+        try {
+          body = await fetchBodyText(file, bodySignal);
+        } catch (e) {
+          if (!bodySignal.aborted) throw e;
+          console.warn(`gdrive: 본문 추출 시간 초과(${bodyTimeoutMs()}ms) — 본문 생략, 메타 보존 ${file.id} ${file.mimeType ?? ""}`);
+        }
         const container = await folderNameOf(file.parents?.[0]);   // 채널(#2416) — 폴더당 1회 캐시
         yield toRawItem(file, { body, container });
       } catch (e) {
