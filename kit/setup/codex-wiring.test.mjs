@@ -143,7 +143,7 @@ let toml = install();
   writeFileSync(join(HOME, ".codex", "auth.json"), JSON.stringify({ tokens: { account_id: "acct-other-test" } }));
   runInstall();
   const after = readFileSync(CODEX_POLICY, "utf8");
-  mode === 0o600 && before === after && !before.includes("acct-enrolled-test")
+  (process.platform === "win32" || mode === 0o600) && before === after && !before.includes("acct-enrolled-test")
     ? ok("①b 계정 정책 0600 · 원문 미저장 · 재설치 자동 덮어쓰기 없음")
     : bad("①b 계정 정책", `mode=${mode.toString(8)} stable=${before === after} raw=${before.includes("acct-enrolled-test")}`);
 }
