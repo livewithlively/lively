@@ -278,6 +278,9 @@ export interface CodeDriftKnowledgeCandidate {
   repos: string[]; category_keys: string[]; updated_at: string | null;
 }
 
+/** Postgres undefined_table — 선택 기능의 테이블이 없는 배포를 오류와 구분한다. */
+const UNDEFINED_TABLE = "42P01";
+
 export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
   const params: unknown[] = [];
   const conds = scopeConds(m, params, "k");
@@ -301,13 +304,11 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
       repos: (r.repos as string[]) ?? [], category_keys: (r.category_keys as string[]) ?? [],
       updated_at: r.updated_at ? String(r.updated_at) : null,
     }));
-  } catch {
-    return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
+  } catch (e) {
+    if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
+    throw e;
   }
 }
-
-/** Postgres undefined_table — 선택 기능의 테이블이 없는 배포를 오류와 구분한다. */
-const UNDEFINED_TABLE = "42P01";
 
 export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Promise<CodeDriftCandidate[]> {
   const params: unknown[] = [];

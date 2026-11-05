@@ -234,7 +234,7 @@ export async function applyAction(action: unknown, actor: string): Promise<boole
         [name, to, `관리기 자동 보정(${actor})`]);
       await auditKnowledge(name, "link_category",
         cur ? { category_id: Number(cur.category_id), state: cur.state, mapped_by: cur.mapped_by } : null,
-        { category_id: to, state: "confirmed", mapped_by: "rule" }, undefined, client);
+        { category_id: to, state: "confirmed", mapped_by: "rule" }, { actor }, client);
       await client.query("COMMIT");
       return true;
     } catch (e) {

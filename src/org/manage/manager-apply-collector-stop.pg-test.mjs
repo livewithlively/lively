@@ -31,11 +31,15 @@ const know = async (name, categoryId) => {
 };
 const rowsOf = async (name) => (await q(`SELECT category_id, mapped_by, state FROM knowledge_category WHERE name=$1`, [name])).rows;
 
+//  정리 대상 — 중간에 예외가 나도 finally 가 지우도록 바깥에 둔다(CI 의 같은 DB 를 다른 pg-test 가 쓴다).
+const made = { runs: [], collectors: [], units: [], knowledge: [] };
+
 try {
   // ── A1 · A2 ──
   const a = await cat("a"), b = await cat("b"), c = await cat("c");
   const k1 = `${TAG}-k1`;
   await know(k1, a);
+  made.knowledge.push(k1);
   const moved = await applyAction({ op: "move_category", name: k1, from_category_id: a, to_category_id: b }, "pg-test");
   const r1 = await rowsOf(k1);
   chk("A1 분류 보정이 적용된다", moved === true, `applyAction=${moved}`);
@@ -52,6 +56,7 @@ try {
   const noCode = await cat("dn", "코드가 아직 없는 도메인");
   const unit = Number((await q(`INSERT INTO code_unit(repo_id, kind, path, label, created_at, updated_at)
                                 VALUES(NULL, 'file', $1, $1, now(), now()) RETURNING id`, [`${TAG}/a.ts`])).rows[0].id);
+  made.units.push(unit);
   await q(`INSERT INTO mapping(target_kind, target_id, category_id, origin, status, created_at, updated_at)
            VALUES('code_unit', $1, $2, 'human', 'confirmed', now(), now())`, [unit, withCode]);
   const cands = await findCodeDriftCandidates({ match_categories: [`${TAG}-dw`, `${TAG}-dn`] }, 10);
@@ -64,26 +69,31 @@ try {
   const mk = async (suffix) => Number((await q(
     `INSERT INTO org_collector(key, preset_key, instance_key, label, enabled, config, secrets, sync_interval_sec, output_mode, output_config, sort)
      VALUES($1, 'slack', $1, $1, true, '{}'::jsonb, '{}'::jsonb, 600, 'preset', '{}'::jsonb, 0) RETURNING id`, [`${TAG}-${suffix}`])).rows[0].id);
-  const off = await mk("off"), other = await mk("keep");
+  const off = await mk("off"); made.collectors.push(off);
+  const other = await mk("keep"); made.collectors.push(other);
   //  pid 는 살아 있는 프로세스가 아닌 값 — 취소는 «행을 닫는다» 경로를 탄다.
   const run = async (collectorId) => Number((await q(
     `INSERT INTO connector_run(system, collector_id, mode, trigger, status, started_at, pid)
      VALUES('slack', $1, 'full', 'cron', 'running', now(), 2147483646) RETURNING id`, [collectorId])).rows[0].id);
-  const runOff = await run(off), runOther = await run(other);
+  const runOff = await run(off); made.runs.push(runOff);
+  const runOther = await run(other); made.runs.push(runOther);
   await upsertCollector({ id: off, enabled: false }, "pg-test", "test");
   const st = async (id) => (await q(`SELECT status FROM connector_run WHERE id=$1`, [id])).rows[0]?.status;
   chk("C1 끈 수집기의 진행 중 실행이 canceled 로 닫힌다", (await st(runOff)) === "canceled", await st(runOff));
   chk("C1 다른 수집기의 실행은 그대로다", (await st(runOther)) === "running", await st(runOther));
 
-  await q(`DELETE FROM connector_run WHERE id = ANY($1::bigint[])`, [[runOff, runOther]]);
-  await q(`DELETE FROM org_cron WHERE id LIKE 'collector-%' AND id IN ($1, $2)`, [`collector-${off}`, `collector-${other}`]);
-  await q(`DELETE FROM org_collector WHERE id = ANY($1::int[])`, [[off, other]]);
-  await q(`DELETE FROM mapping WHERE target_kind='code_unit' AND target_id=$1`, [unit]);
-  await q(`DELETE FROM code_unit WHERE id=$1`, [unit]);
-  await q(`DELETE FROM knowledge WHERE name=$1`, [k1]);
-  await q(`DELETE FROM category WHERE key LIKE $1`, [`${TAG}-%`]);
 } catch (e) {
   bad("예외", e?.stack ?? String(e));
+} finally {
+  const leftover = (e) => console.warn(`정리 실패 — 시험 데이터가 남았을 수 있다: ${e?.message ?? e}`);
+  const ids = made.collectors.map(String);
+  await q(`DELETE FROM connector_run WHERE id = ANY($1::bigint[])`, [made.runs]).catch(leftover);
+  await q(`DELETE FROM org_cron WHERE id = ANY($1::text[])`, [ids.flatMap((id) => [`collector-${id}`, `collector-${id}-full`])]).catch(leftover);
+  await q(`DELETE FROM org_collector WHERE id = ANY($1::int[])`, [made.collectors]).catch(leftover);
+  await q(`DELETE FROM mapping WHERE target_kind='code_unit' AND target_id = ANY($1::int[])`, [made.units]).catch(leftover);
+  await q(`DELETE FROM code_unit WHERE id = ANY($1::int[])`, [made.units]).catch(leftover);
+  await q(`DELETE FROM knowledge WHERE name = ANY($1::text[])`, [made.knowledge]).catch(leftover);
+  await q(`DELETE FROM category WHERE key LIKE $1`, [`${TAG}-%`]).catch(leftover);
 }
 
 console.log(`\n${pass} pass, ${fail} fail`);
