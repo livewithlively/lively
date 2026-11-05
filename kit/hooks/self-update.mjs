@@ -33,6 +33,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { hostEffects } from "./host-effects-port.mjs";
+import { isOurShimEntry, livelyStdioEntry } from "./stdio-launch.mjs";
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const fetch = (...args) => hostEffects.fetch(...args);
@@ -339,15 +340,17 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   // ⚠ 헤더 세트는 register-clients.sh(scripts/·kit/setup/)·kit/cli/lively.mjs 와 **동일하게 유지**(lively.test.mjs ④ 가 4곳 parity 강제).
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
   //  (stdio 프록시로 가면 이 헤더들은 프록시가 상류 호출에 붙인다 — 같은 이름·같은 값, 출처만 설정→env/토큰파일.)
+  //  Windows 는 심 대신 node 직결(stdio-launch.mjs 머리말 — 배치 실행이 막힌 PC 에서 심이 못 뜬다).
+  const stdio = (sub) => livelyStdioEntry({ win: process.platform === "win32", shim, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs"), sub });
   want["lively"] = canProxy
-    ? { type: "stdio", command: shim, args: ["mcp"], env: {} }
+    ? stdio("mcp")
     : { type: "http", url: `${gw}/mcp`, headers: {
         Authorization: `Bearer ${token}`,
         "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
         "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
         "x-lively-workspace": "${LVLY_TENANT_SLUG:-}", // #1750 S3 — 셀프호스트 다중 워크스페이스 소속(없으면 primary)
       } };
-  want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
+  want["lively-local"] = stdio("mcp-local");
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.
   try {
     const raw = JSON.parse(readFileSync(join(LIVELY, "mcp-servers.json"), "utf8"));
@@ -370,6 +373,13 @@ function reconcileOneClaudeConfig(cj, gw, token) {
     // #1079 — additive 무손실의 **유일한 예외**: 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
     //  이건 '멤버 값 덮어쓰기'가 아니라 **우리가 심은 항목의 전송방식 교정**이다(같은 게이트웨이·같은 신원·같은 툴 이름).
     //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
+    // 두 번째 예외 — 우리가 심은 심 직결형(lively.cmd)을 node 직결로 옮긴다. 사람이 바꾼 항목(command·args 가 다름)은 그대로 둔다.
+    if ((name === "lively" || name === "lively-local") && entry.type === "stdio" && entry.command !== shim
+        && isOurShimEntry(cur, shim, entry.args[entry.args.length - 1])) {
+      servers[name] = entry; added++;
+      log(`MCP 실행 형태 교정: ${name} 심 → node 직결(배치 실행이 막힌 PC 대응, 다음 세션 적용)`);
+      continue;
+    }
     if (name === "lively" && canProxy && cur.type !== "stdio") {
       servers[name] = entry; added++;
       log("MCP transport 마이그레이션: lively http 직결 → stdio 프록시(#1079, 다음 세션 적용)");

@@ -284,8 +284,12 @@ try {
     // (c) self-update.mjs — 기존 멤버를 재설치 없이 옮기는 4번째 동기화 지점. stdio 마이그레이션과,
     //  롤백 시 살아나는 종전 헤더 계약을 **둘 다** 알고 있어야 한다.
     const selfUp = readFileSync(join(REPO, "kit", "hooks", "self-update.mjs"), "utf8");
+    //  stdio 항목 모양은 stdio-launch.mjs 가 만든다(Windows node 직결 규칙과 한 곳) — 비 Windows 모양이 CLI 와 같은지 값으로 본다.
+    const { livelyStdioEntry } = await import(pathToFileURL(join(REPO, "kit", "hooks", "stdio-launch.mjs")).href);
+    const suEntry = livelyStdioEntry({ win: false, shim: shimPath, nodeExe: "", cliPath: "", sub: "mcp" });
     check("④ self-update.mjs 가 stdio 마이그레이션 + 롤백용 헤더 계약을 모두 안다(parity)",
-      /args:\s*\["mcp"\]/.test(selfUp)
+      /stdio\("mcp"\)/.test(selfUp)
+        && suEntry.command === shimPath && JSON.stringify(suEntry.args) === '["mcp"]'
         && selfUp.includes('"x-lively-session": "${LIVELY_SESSION_ID:-}"')
         && selfUp.includes('"x-lively-mode": "${LIVELY_MODE:-}"'),
       "self-update.mjs 가 stdio 마이그레이션 또는 헤더 계약 중 하나를 모른다(drift)");

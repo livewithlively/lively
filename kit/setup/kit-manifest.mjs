@@ -38,6 +38,7 @@ export const HOOK_SCRIPTS = [
   "record-nudge.mjs",          // work-flag 가 import 하는 모듈(#4219 기록 넛지)
   "bg-jobs.mjs",               // work-flag 가 import 하는 모듈(#4588 열린 백그라운드 작업 수)
   "record-scope.mjs",          // 기록 범위 판정(#5016) — 훅들과 MCP 프록시(../hooks/ 로 찾아온다)·CLI 가 함께 쓰는 단 한 곳
+  "stdio-launch.mjs",          // self-update 가 import 하는 모듈 — Windows 에서 MCP 를 심 대신 node 직결로 등록하는 규칙
   "opencode-plugin.js",
   "antigravity-adapter.mjs",
   "grok-adapter.mjs",

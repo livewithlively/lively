@@ -911,17 +911,30 @@ function backupUserMcp(name) {
 //
 //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
 //   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
+/**
+ * (순수) `claude mcp add … <name>` 뒤에 붙일 command+args. Windows 는 심(lively.cmd) 대신 node.exe 로 lively.mjs 를 바로 띄운다 —
+ *  보안 솔루션이 배치 실행을 막는 PC 에서 심이 «액세스가 거부되었습니다» 로 못 뜨고 그 심을 가리키는 MCP 도 함께 죽는다(2026-11-05).
+ *  ⚠ kit/hooks/stdio-launch.mjs livelyStdioEntry 와 같은 규칙이다(self-update 가 그쪽으로 기존 등록을 교정한다).
+ *   여기서 그 파일을 import 하지 않는 이유: 부트스트랩이 CLI 만 새로 받으면 옛 훅 폴더와 짝이 안 맞아 CLI 가 통째로 못 뜬다.
+ */
+export function livelyStdioLaunch({ win, shim, nodeExe, cliPath, sub }) {
+  const n = String(nodeExe || "");
+  if (win && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(n) && /[\\/]node\.exe$/i.test(n)) return [n, cliPath, sub];
+  return [shim, sub];
+}
+
 // 한 config dir 에 전부 등록한다. 대상 열거는 claudeMcpTargets, 여기선 '그 한 곳에 무엇을 넣나' 만.
 function registerClaudeMcpIn(target, gw) {
   const cd = target.configDir;
   const at = cd ? ` [${target.label}]` : "";
   const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
   let registered = 0, failed = 0;
+  const launch = (sub) => livelyStdioLaunch({ win: WIN, shim, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs"), sub });
 
   // lively 본체 — **로컬 stdio 프록시**(`lively mcp`)로 등록한다(#1079).
   runClaudeIn(cd, ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
-    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", ...launch("mcp")], { quiet: true });
     ok(`MCP 등록: lively${at} (stdio 프록시 → ${gw}/mcp)`);
     registered++;
   } catch (e) { fail(`MCP 등록 실패(lively${at}): ${e.message}`); failed++; }
@@ -931,7 +944,7 @@ function registerClaudeMcpIn(target, gw) {
   //  매 세션 최신 → 코드가 바뀌어도 재등록 불필요(툴 목록 자체를 바꿀 때만 여기 add 가 다시 태운다).
   runClaudeIn(cd, ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
   try {
-    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", ...launch("mcp-local")], { quiet: true });
     ok(`MCP 등록: lively-local${at} (stdio · 로컬조작)`);
     registered++;
   } catch (e) { fail(`MCP 등록 실패(lively-local${at}): ${e.message}`); failed++; }
