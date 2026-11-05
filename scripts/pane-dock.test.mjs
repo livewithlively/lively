@@ -74,12 +74,15 @@ eq([D.dragScale(36, 50, -4), D.dragScale(36, 50, 0)], [1.28, 1.39], "SC5b 들어
 eq([D.dragScale(36, 36, 1.8), D.dragScale(36, 36, 2.2), D.dragScale(36, 36, -1.8)], [1, 1.06, 1], "SC6 경계 — 보통 ±0.05 는 보통으로 붙는다, 0.06 은 그대로");
 
 // 고정 목록 (N1–N5)
-const known = (t) => ["tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
-eq(D.readDockPins(null, known), ["tasks", "files", "knowledge", "web", "timeline"], "N1 정한 적 없으면 기본 다섯");
+const known = (t) => ["console", "tasks", "files", "knowledge", "web", "timeline", "liv", "preview"].includes(t);
+eq(D.readDockPins(null, known), ["console", "tasks", "files", "knowledge", "web"], "N1 정한 적 없으면 기본 다섯 — 콘솔이 맨 앞, 타임라인은 없다(#5319 원준 2026-11-05)");
+eq(D.readDockPins(["tasks", "files", "knowledge", "web", "timeline"], known), ["console", "tasks", "files", "knowledge", "web"], "N1b 옛 기본 다섯을 그대로 적어 둔 목록은 새 기본값을 따른다");
+eq(D.readDockPins(["tasks", "files", "knowledge", "web", "timeline"], (t) => t !== "console"), ["tasks", "files", "knowledge", "web", "timeline"], "N1d 콘솔이 없는 판이면 옛 목록 그대로(옮겨 갈 곳이 없다)");
+eq(D.readDockPins(["files", "tasks", "knowledge", "web", "timeline"], known), ["files", "tasks", "knowledge", "web", "timeline"], "N1c 순서를 바꿔 둔 목록(사람이 고른 것)은 그대로");
 eq(D.readDockPins(["~"], known), [], "N2 «다 뺐다» 표식이면 빈 독(기본으로 돌아가지 않는다)");
 eq(D.readDockPins(["web", "bogus", "web", "files"], known), ["web", "files"], "N3 모르는 종류·중복은 걷고 순서는 지킨다");
-eq(D.readDockPins(["bogus"], known), ["tasks", "files", "knowledge", "web", "timeline"], "N4 전부 모르는 종류(부품이 사라짐)면 기본값");
-eq(D.readDockPins(null, (t) => t !== "timeline"), ["tasks", "files", "knowledge", "web"], "N4b 기본값에서도 모르는 종류는 걷는다");
+eq(D.readDockPins(["bogus"], known), ["console", "tasks", "files", "knowledge", "web"], "N4 전부 모르는 종류(부품이 사라짐)면 기본값");
+eq(D.readDockPins(null, (t) => t !== "console"), ["tasks", "files", "knowledge", "web"], "N4b 기본값에서도 모르는 종류는 걷는다");
 eq(D.writeDockPins([]), ["~"], "N5 빈 목록은 표식으로 적는다(저장소가 빈 목록을 «적은 적 없음»으로 지우므로)");
 eq(D.readDockPins(D.writeDockPins([]), known), [], "N5b 표식을 적고 다시 읽으면 빈 독");
 
@@ -95,12 +98,12 @@ eq(D.movePin(["a", "b"], "z", 1), ["a", "z", "b"], "T3b 고정 안 된 것을 �
 const all = () => true;
 const loose = (t) => !["tasks", "files", "knowledge", "liv"].includes(t);
 const dp = D.dockPins(null, all, loose);
-eq([dp.base, dp.shown], [["tasks", "files", "knowledge", "web", "timeline"], ["web", "timeline"]], "B2 저장 없음 · 좁힌 화면 — base 는 기본 다섯, 보이는 것은 고를 수 있는 둘");
-eq(D.togglePin(dp.base, "web"), ["tasks", "files", "knowledge", "timeline"], "B2b 좁힌 화면에서 웹을 빼도 안 보이는 고정 셋은 남는다(리뷰 실측: [timeline] 하나만 남았다)");
+eq([dp.base, dp.shown], [["console", "tasks", "files", "knowledge", "web"], ["console", "web"]], "B2 저장 없음 · 좁힌 화면 — base 는 기본 다섯, 보이는 것은 고를 수 있는 둘");
+eq(D.togglePin(dp.base, "web"), ["console", "tasks", "files", "knowledge"], "B2b 좁힌 화면에서 웹을 빼도 안 보이는 고정 셋은 남는다(리뷰 실측: [timeline] 하나만 남았다)");
 eq(D.dockPins(["tasks", "files"], all, loose).shown, [], "B3 고정이 전부 이 화면에서 못 고르는 것이면 빈 독 — 기본값으로 채우지 않는다(안 보이는 것 ≠ 없어진 것)");
 eq(D.dockPins(["tasks", "files"], all, loose).base, ["tasks", "files"], "B3b 그래도 base 는 적힌 그대로");
 eq(D.dockPins(["~"], all, loose), { base: [], shown: [] }, "B4 «다 뺐다» 표식이면 둘 다 빈 목록");
-eq(D.dockPins(["gone"], (t) => t !== "gone", all).base, ["tasks", "files", "knowledge", "web", "timeline"], "B5 적힌 것이 전부 없어진 종류(부품이 사라진 판)면 base 는 기본값");
+eq(D.dockPins(["gone"], (t) => t !== "gone", all).base, ["console", "tasks", "files", "knowledge", "web"], "B5 적힌 것이 전부 없어진 종류(부품이 사라진 판)면 base 는 기본값");
 eq(D.movePinBefore(["a", "b", "c", "d"], "a", "d"), ["b", "c", "a", "d"], "B6 놓은 자리 = 바로 뒤의 고정 앱 앞");
 eq(D.movePinBefore(["a", "b", "c"], "a", null), ["b", "c", "a"], "B6b 뒤가 없으면(null) 맨 뒤");
 eq(D.movePinBefore(["a", "b", "c"], "a", "zz"), ["b", "c", "a"], "B6c 없는 이웃이면 맨 뒤(자리를 잃지 않는다)");
@@ -257,9 +260,21 @@ check(/if \(home === 'top'\) return;\s+\/\/[^\n]*\n\s*if \(t\.closest\('\.pn-doc
   "W16b 머리 줄 독은 붙박이 — 독 끌기 · 크기 끌기 · 접기 · 확대가 없고, 본문이 비킬 여백도 없다");
 check(/if \(home === 'top'\) return \[\{ label: '고정한 앱 되돌리기'/.test(DOCK) && /home === 'top' \? 'bottom'/.test(DOCK) && /\.pn-dock-tip\[data-side="bottom"\]/.test(read("public/styles/42-v2-dock.css")),
   "W16c 머리 줄 독의 설정은 고정 되돌리기 하나 · 이름표는 아래로");
-check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && /el\('span', \{ class: 'pn-dock-name', text: act \? tabName\(act\) : '' \}\)/.test(PANES_TS)
-  && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-tabs \{ display: none; \}/.test(read("public/styles/42-v2-dock.css")),
-  "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 켜진 앱 이름 · [열린 탭 ∨] · [＋] 만 남긴다");
+check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-name/.test(PANES_TS)
+  && /const dup = new Set\(list\.map\(tabBase\)\)\.size < list\.length;\n\s*pane\.tail\.replaceChildren\(\.\.\.\[\n\s*dup \? moreBtn\(zone\) : null,/.test(PANES_TS)
+  && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-tabs \{ display: none; \}/.test(DOCK_CSS),
+  "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 [열린 탭 ∨](한 앱이 둘 넘게 떴을 때만) · [＋] 만 남긴다 — 켜진 앱 이름은 아이콘 아래 이름표가 말한다");
+//  #5319 4차(원준 2026-11-05) — 머리 줄 독 = 세션 머리줄과 같은 높이 · 이름표 · 선반 없음 · 아이콘 40~56.
+check(/\.pn-pane\.dock-top > \.pn-tabbar \{ height: var\(--pn-bighead-h, 113px\);/.test(DOCK_CSS)
+  && /\.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ height: var\(--pn-bighead-h\);/.test(PANES_CSS) && /--pn-bighead-h: 113px;/.test(PANES_CSS),
+  "W16f 곁칸 머리 줄 독과 세션 큰 머리가 같은 높이(--pn-bighead-h)를 읽는다 — 두 열의 아랫선이 한 줄");
+check(/\.pn-dock\[data-home="top"\] \.pn-dock-shelf \{[^}]*background: none;[^}]*box-shadow: none; \}/.test(DOCK_CSS)
+  && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;[^}]*font-size: 15px;/.test(DOCK_CSS)
+  && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on \.pn-dock-lb \{ font-weight: 700;/.test(DOCK_CSS)
+  && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on::after \{ content: "";/.test(DOCK_CSS)
+  && /el\('span', \{ class: 'pn-dock-lb', 'aria-hidden': 'true', text: name \}\)/.test(DOCK)
+  && /top: \{ min: 40, max: 56 \}/.test(DOCK) && /if \(dragging \|\| ctxIsOpen\(\) \|\| home === 'top'\) return;/.test(DOCK),
+  "W16g 머리 줄 독 — 선반(유리 상자) 없음 · 아이콘 아래 이름표 15px · 켜진 앱은 굵게 + 밑줄(색만으로 말하지 않는다) · 아이콘 40~56 · 꼬리 이름표는 안 띄운다");
 check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\s+const mb = moreBtn\(\);/.test(DOCK) && /sessionOnly \? null : addBtn\(zone\),\n\s*\]\.filter/.test(PANES_TS),
   "W16e 머리 줄엔 «앱 더하기» 가 하나 — 독의 [모든 앱] 칸 대신 줄 끝 [＋](앱 서랍)");
 console.log(`\n${pass} ok · ${fail} fail`);

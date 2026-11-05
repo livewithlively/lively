@@ -1593,7 +1593,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     // 손잡이는 띠 **밖**이라 탭이 몇 개가 되든 밀려나지 않는다(위 makePane 주석). [모두 보기]는 탭이 둘 이상일
     //  때만 만들고, 실제로 보이는 건 띠가 넘칠 때뿐이다(syncMore).
     // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 넣으면 'null' 이 글자로 찍힌다.
-    //  #5319 넓은 화면의 곁칸 머리 줄은 독이다(dockSlot) — 탭 띠 · 접기는 감추고 켜진 앱 이름 · [열린 탭 ∨] · [＋](앱 서랍)만 남긴다.
+    //  #5319 넓은 화면의 곁칸 머리 줄은 독이다(dockSlot) — 탭 띠 · 접기는 감추고 [열린 탭 ∨] · [＋](앱 서랍)만 남긴다.
+    //   4차(원준 2026-11-05): 켜진 앱 이름은 독 아이콘 아래 이름표가 말한다. [∨] 는 한 앱이 둘 넘게 떴을 때만 — 아니면 독 아이콘이 탭 하나하나다.
     //   독의 아이콘(누르면 그 앱 · 여럿이면 돌아가며)이 탭 띠를, 문패의 접기 단추(⌘⌥B)가 접기를 맡는다. 독의 [모든 앱] 칸은 이 줄에선
     //   세우지 않는다 — [＋] 와 같은 일이다(한 줄에 «앱 더하기» 가 둘이면 무엇이 다른지 읽히지 않는다).
     //   탭 띠는 그대로 채워 둔다(부품을 살려 두는 길 · 탭 끌어 놓기가 그 띠를 읽는다) — 보이기만 CSS 가 끈다(42-v2-dock.css).
@@ -1601,9 +1602,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     pane.root.classList.toggle('dock-top', top);
     if (top) {
       sideHide = null;
+      const dup = new Set(list.map(tabBase)).size < list.length;
       pane.tail.replaceChildren(...[
-        el('span', { class: 'pn-dock-name', text: act ? tabName(act) : '' }),
-        pane.tabs.childElementCount ? moreBtn(zone) : null,
+        dup ? moreBtn(zone) : null,
         sessionOnly ? null : addBtn(zone),
       ].filter(Boolean) as HTMLElement[]);
       pane.bar.hidden = false;
@@ -1665,9 +1666,6 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       if (b && b.getAttribute('style') !== ac) { b.setAttribute('style', ac); wrapEl.style.setProperty('--ac', `var(--gi-c-${tabColor(key)})`); }
       wrapEl.classList.toggle('on', key === act);
     }
-    //  #5319 머리 줄 독 옆의 켜진 앱 이름도 같이(뷰어가 다른 파일을 폈다).
-    const nm = pane.tail.querySelector('.pn-dock-name') as HTMLElement | null;
-    if (nm) nm.textContent = act ? tabName(act) : '';
     fit(pane);
   }
 

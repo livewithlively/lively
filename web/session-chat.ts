@@ -329,8 +329,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ⚠ 이름 고치기(#1719)는 살아 있다 — pane 이름이 없으면(셸·방금 뜬 세션) 제목이 곧 세션 이름이라 **그 자리에서**
   //   고치고, pane 이름이 제목을 차지했으면 [⋯ ▸ 세션 이름 바꾸기]가 같은 편집기를 제목 자리에 연다.
   const titleHost = el('span', { class: 'sc-titlebox' });
-  //  #5319 큰 머리의 아랫줄 — [#번호 · 연결 상태 | 화면 복구]. bigHead 가 아니면 없다(번호는 이름 뒤, 연결 상태는 오른쪽 조작부 — 종전 그대로).
-  const subNo: HTMLElement | null = opts.bigHead ? el('span', { class: 'sc-sub-no' }) : null;
   let titleText = target.label;
   //  사람이 지은 이름인가(lib/sess-name.ts human) — 여기서 방금 고쳤으면 목록이 따라오기 전에도 참이다.
   let titleHuman = target.raw?.labelSource === 'human';
@@ -362,8 +360,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintTitleName();
     const no = Number(target.raw?.taskNo || 0);
     const noEl = no > 0 ? el('span', { class: 'sc-title-no mono', text: '#' + no, title: '이 세션이 맡은 태스크 번호입니다.' }) : null;
-    //  #5319 큰 머리 — 번호는 이름 아래 한 줄(subNo)로 내려간다.
-    if (opts.bigHead) { if (subNo) replaceKids(subNo, noEl); return; }
+    //  #5319 큰 머리도 번호는 **이름 바로 뒤**다(원준 2026-11-05 «#nnnn 이거는 세션 이름 바로 옆에») — 종전 v2 는 이름 아랫줄로 내렸다.
     if (noEl) titleHost.append(noEl);
   }
   function paintTitleName(): void {                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
@@ -559,14 +556,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     opts.bigHead ? null : fixPair,   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다(큰 머리면 이름 아랫줄)
     moreBtn);
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
-  //  #5319 큰 머리 — 왼쪽은 두 줄: [● 이름 · 얼굴 · 배지] 위, [#번호 · 연결 상태 | 화면 복구 · 하네스 알약] 아래.
+  //  #5319 큰 머리(4차 1안, 원준 2026-11-05) — 두 줄 격자. 왼쪽 위 [● 이름 #번호 · 얼굴 · 배지], 왼쪽 아래 [연결 상태 | 화면 복구 · 노드],
+  //   오른쪽 위 [자료 · 복제 · 옮기기 · ⋯], 오른쪽 아래 [모델 · 추론강도](runTop — 아래에서 맨 뒤에 붙인다). 하네스 고르기는 [⋯ ▸ 이 세션 설정] 에만.
   const head = el('div', { class: 'sc-head' + (opts.bigHead ? ' sc-head--big' : ''), 'data-ctx': 'session', 'data-sid': first.id },
     opts.bigHead
       ? el('div', { class: 'sc-head-l' },
         sideBtn,
         el('div', { class: 'sc-head-main' },
           el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge),
-          el('div', { class: 'sc-sub' }, subNo, fixPair, el('span', { class: 'sc-meta' }, runEl))))
+          el('div', { class: 'sc-sub' }, fixPair, el('span', { class: 'sc-meta' }, runEl))))
       : el('div', { class: 'sc-head-l' },
         //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
         //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
@@ -607,7 +605,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ★ 이 묶음에 이름을 둔다 — [⋯] 설정 창이 열릴 때 **선택기를 복제하지 않고 그 자리로 데려갔다가**
   //   닫을 때 여기로 되돌리기 때문이다(openMore). 배선이 하나뿐이라 두 자리가 갈릴 일이 없다.
   const runTop = el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort) as HTMLElement;
-  head.insertBefore(runTop, headR);
+  //  #5319 큰 머리는 오른쪽 둘째 줄(조작 단추 아래)이라 맨 뒤 — 초점 순서도 위 줄 다음이 된다.
+  if (opts.bigHead) head.append(runTop); else head.insertBefore(runTop, headR);
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).

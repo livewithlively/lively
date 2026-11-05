@@ -120,10 +120,13 @@ export function refreshDocks(): void { for (const fn of [...live]) fn(false); }
 
 const M = DOCK_METRICS;
 const GAP = 4;
-/** 아이콘 한 변 — 이음매는 22~32(짧은 알약), 곁칸 아래는 곁칸 폭을 따라 26~48(floatIconSize). */
-const SIZE = { seam: { min: 22, max: 32 }, float: { min: 26, max: 48 }, top: { min: 22, max: 32 } } as const;
-/** 머리 줄 독 옆에 남겨 둘 폭 — [열린 탭 ∨] 30 · [＋] 30 · 줄 안 여백 · 켜진 앱 이름의 최소 몫(이름은 모자라면 말줄임, 42-v2-dock.css 와 짝). */
-const TOP_RESERVE = 120;
+/** 아이콘 한 변 — 이음매는 22~32(짧은 알약), 곁칸 아래는 곁칸 폭을 따라 26~48(floatIconSize).
+ *  머리 줄은 40~56(#5319 4차, 원준 2026-11-05 «사이즈 더 키워야» — 아이콘 아래 이름표 15px 를 단다, 칸 폭 = 아이콘 + TOP_LABEL). */
+const SIZE = { seam: { min: 22, max: 32 }, float: { min: 26, max: 48 }, top: { min: 40, max: 56 } } as const;
+/** 머리 줄 독 옆에 남겨 둘 폭 — [＋] 40 · 사이 4 · 줄 안 여백 8×2(42-v2-dock.css 와 짝). [열린 탭 ∨] 는 한 앱이 둘 넘게 떴을 때만 서고, 그땐 줄이 옆으로 민다. */
+const TOP_RESERVE = 60;
+/** 머리 줄 독 칸의 폭 = 아이콘 + 이만큼 — 이름표(«프로젝트» 15px ≈ 56px)가 이웃과 붙지 않을 몫. */
+const TOP_LABEL = 8;
 /** 크기 배율로 키울 때의 위 끝 — 그 자리에 «들어가는» 가장 큰 크기를 잴 때 최대 제한 대신 쓴다(lib scaledIcon 의 cap). */
 const SIZE_CAP = 64;
 /** 손잡이를 두 번 누른 것으로 보는 사이(ms — macOS · 윈도 기본 두 번 누르기 간격) · 거리(px). */
@@ -270,7 +273,7 @@ export function mountDock(host: DockHost): DockHandle {
     //  자리가 정한 크기(보통) · 그 자리에 들어가는 가장 큰 크기 → 사람이 고른 배율을 입힌다(lib scaledIcon, 원준 10-20 «사이즈 조절»).
     //  머리 줄 독은 곁칸 폭에서 이름 · [∨] 몫을 뺀 만큼 — 손잡이 · 확대 몫은 없다. 그래도 안 들어가면 줄 안에서 옆으로 민다(CSS).
     const fit = (max: number): number => (home === 'top'
-      ? floatIconSize(Math.max(0, W - TOP_RESERVE), n, { min: SIZE.top.min, max, gap: GAP, pad: M.pad, margin: 0, extra })
+      ? floatIconSize(Math.max(0, W - TOP_RESERVE - TOP_LABEL), n, { min: SIZE.top.min, max, gap: TOP_LABEL, pad: 0, margin: 0, extra })
       : home === 'float'
         ? floatIconSize(W, n, { min: SIZE.float.min, max, gap: GAP, pad: M.pad + 2, margin: M.margin, extra: extra + (host.narrow() ? 0 : HANDLE_FLOAT), grow })
         : fitIconSize(n, Math.max(0, (geom!.bottom - geom!.top) * 0.8), { min: SIZE.seam.min, max, gap: GAP + DOT_ROW, pad: M.pad + 4, grow: Math.round(SIZE.seam.max * grow), extra: extra + (host.narrow() ? 0 : HANDLE) }));
@@ -395,7 +398,9 @@ export function mountDock(host: DockHost): DockHandle {
       'aria-pressed': String(it.active),
     },
     el('span', { class: 'pn-dock-ic' }, tile(face ? appGlyphName(face) : app.glyph, color)),
-    el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' }, ...Array.from({ length: Math.min(3, n) }, () => el('i')))) as HTMLElement;
+    el('span', { class: 'pn-dock-dots', 'aria-hidden': 'true' }, ...Array.from({ length: Math.min(3, n) }, () => el('i'))),
+    //  #5319 이름표 — 머리 줄 독에서만 보인다(아이콘 아래 15px · 켜진 앱은 굵게 + 밑줄, 42-v2-dock.css). 다른 자리는 꼬리 달린 이름표(showTip).
+    el('span', { class: 'pn-dock-lb', 'aria-hidden': 'true', text: name })) as HTMLElement;
     b.dataset.name = name;
     b.addEventListener('click', (e) => onItemClick(e as MouseEvent, it, app));
     //  우클릭 · 메뉴 키(≣ · ⇧F10) · 손가락 길게 누르기 — 셋 다 셸의 메뉴 엔진(ctx-registry)이 받아 이 단추의 행을 띄운다.
@@ -482,7 +487,7 @@ export function mountDock(host: DockHost): DockHandle {
   // ── 이름표 — 꼬리 달린 말풍선(macOS 독) ─────────────────────────────────────
   //  곁칸 아래 독은 아이콘 위에, 이음매 독은 **세션 쪽**으로(곁칸은 앱이 열리는 자리라 비워 둔다). 끌거나 메뉴가 떠 있는 동안엔 안 띄운다.
   function showTip(b: HTMLElement): void {
-    if (dragging || ctxIsOpen()) return;
+    if (dragging || ctxIsOpen() || home === 'top') return;          // 머리 줄 독은 이름이 아이콘 아래 늘 보인다 — 같은 말을 또 띄우지 않는다
     tipFor = b;
     tip.textContent = b.dataset.name || '';
     tip.dataset.side = tipSide();

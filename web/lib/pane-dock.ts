@@ -66,8 +66,11 @@ export function clampScale(v: number): number {
 export function effectiveHome(p: Pick<DockPrefs, 'home'>, hasSeam: boolean): DockHome { return hasSeam ? p.home : 'float'; }
 
 // ── 독에 고정한 앱 ───────────────────────────────────────────────────────────
-//  한 번도 정한 적이 없으면 기본 다섯(프로젝트 · 자료 · 지식 · 웹 · 타임라인). 곁칸 기본 폭 340px 에 떠 있는 독이 확대까지 품고 들어가는 수다.
-export const DOCK_PINS_DEFAULT: readonly string[] = ['tasks', 'files', 'knowledge', 'web', 'timeline'];
+//  한 번도 정한 적이 없으면 기본 다섯(콘솔 · 프로젝트 · 자료 · 지식 · 웹). 곁칸 기본 폭 340px 에 이름표 단 아이콘이 들어가는 수다.
+//  #5319(원준 2026-11-05) — 콘솔이 맨 앞(«위키나 프로젝트보다도 콘솔이 더 자주 보일 것»), 타임라인은 뺐다(«저 쓸데없는거 좀 빼버리자»).
+export const DOCK_PINS_DEFAULT: readonly string[] = ['console', 'tasks', 'files', 'knowledge', 'web'];
+/** 옛 기본 다섯 — 이것과 **똑같이** 적힌 목록은 사람이 고른 것이 아니라 옛 기본값을 적어 둔 것으로 보고 새 기본값을 따른다. */
+const DOCK_PINS_LEGACY: readonly string[] = ['tasks', 'files', 'knowledge', 'web', 'timeline'];
 /** «다 뺐다»의 표식 — 저장소는 빈 목록을 «적은 적 없음»으로 지운다(shell-prefs writeStore). 그대로 두면 다 뺀 독이 다음에 기본 다섯으로 돌아온다. */
 export const DOCK_EMPTY = '~';
 
@@ -75,6 +78,8 @@ export const DOCK_EMPTY = '~';
 export function readDockPins(stored: unknown, known: (type: string) => boolean): string[] {
   const dflt = DOCK_PINS_DEFAULT.filter(known);
   if (!Array.isArray(stored)) return dflt;
+  //  옛 기본 다섯을 그대로 적어 둔 목록 → 새 기본값(콘솔이 이 판에 있을 때만 — 없으면 옮겨 갈 까닭이 없다).
+  if (known(DOCK_PINS_DEFAULT[0]) && stored.length === DOCK_PINS_LEGACY.length && stored.every((x, i) => x === DOCK_PINS_LEGACY[i])) return dflt;
   if (stored.length === 1 && stored[0] === DOCK_EMPTY) return [];
   const out: string[] = [];
   for (const x of stored) if (typeof x === 'string' && x !== DOCK_EMPTY && known(x) && !out.includes(x)) out.push(x);
