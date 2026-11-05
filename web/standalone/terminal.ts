@@ -16,6 +16,8 @@ import {                                  // #4406 Claude Code 입력칸 선택 
   boxFingerprint, cmpPos as asCmp, lineEnd, decideAppSelKey, isTypingKey, versionAtLeast, APP_SELECT_MIN, // asCmp — #1155 의 cmpPos({x,y})와 다른 자리 모양({row,col})
 } from './app-select.js';
 import type { Screen as AsScreen, Box as AsBox, Pos as AsPos, Motion as AsMotion } from './app-select.js';
+import { UploadBook, fmtBytes, upPercent, upStatusText } from './upload-queue.js';   // #5361 올리기 진행 표시 — 같은 파일·이름 예약(순수 판정)
+import type { UpJob } from './upload-queue.js';
 
 // xterm.js 는 CDN 클래식 스크립트로 먼저 로드된다(terminal.html) — 번들 대상이 아니라 전역으로 온다.
 declare const Terminal: any;
@@ -853,6 +855,7 @@ export function __injectRefsForTest(refs: Record<string, any>): void {
   if ('panesEl' in refs) panesEl = refs.panesEl;
   if ('explorerEl' in refs) explorerEl = refs.explorerEl;
   if ('echoWaitMs' in refs) ECHO_WAIT_MS = refs.echoWaitMs;
+  if ('uploadDoneMs' in refs) UPLOAD_DONE_MS = refs.uploadDoneMs;
 }
 let curDir = '';
 let sessionProjectId = 0; // 프로젝트 세션이면 그 id(loadSessionMeta 가 채움) — 업로드 위치를 뭐라 부를지 가른다(#1235)
@@ -1959,28 +1962,190 @@ function showDropHint() {
   ok.focus();
 }
 
+// ── 올리기 진행 표시(#5361) ────────────────────────────────────────────────────────────────
+//  신고(원준 2026-11-05): 257MB 녹화 파일을 끌어다 놓았더니 «업로드 중…» 알림(toast — 2.8초 뒤 무조건 지운다)만 잠깐 뜨고
+//   다 올라갈 때까지 아무 표시가 없었다. 올라가는지 몰라 같은 파일을 다시 놓았고, 두 업로드가 같은 이름으로 가서 경로가
+//   입력창에 두 번 들어갔다. 그래서:
+//   · 올리는 동안 사라지지 않는 칸(.upq) — 파일 이름·크기·퍼센트·[취소]. fetch 는 업로드 진행률을 주지 않아 XHR 로 보낸다
+//     (putWithProgress). 다 올리면 «다 올렸어요» 로 바꾸고 UPLOAD_DONE_MS 뒤 걷는다. 못 올리면 이유를 남기고 사람이 [닫기]로 걷는다.
+//   · 같은 파일(이름·크기·수정 시각)이 올라가는 중이면 다시 올리지 않고 알린다 · 함께 올라가는 같은 이름은 번호를 달리 준다
+//     (판정은 upload-queue.ts — 순수, 시험이 직접 부른다).
+//   · 올리는 동안 창을 닫거나 새로고침하려 하면 브라우저가 묻는다(guardUploadUnload).
+//  칸은 터미널 판(#panes) 오른쪽 아래에 둔다 — 폰에선 입력 바(#mdock)가 #panes 아래의 형제라 판의 오른쪽 아래가 곧 «입력 바
+//   바로 위»다(화면 고정 자리면 바를 덮는다). 세션 그리드의 칸(iframe)에서도 그 칸 안에 선다.
+//  끊겨도 반쯤 쓴 파일은 남지 않는다 — 서버는 임시 파일에 받다가 다 받은 뒤에야 이름을 바꾼다(src/terminal/upload-file.ts).
+const upBook = new UploadBook();
+const upUi = new Map<number, { row: any; nameEl: any; pctEl: any; bar: any; fill: any; sub: any; btn: any; ctl: AbortController | null; hideT: any }>();
+let upqEl: any = null;
+let UPLOAD_DONE_MS = 4000;   // 다 올린 줄을 걷는 시간 — 시험이 줄인다(__injectRefsForTest)
+
+function upqPanel() {
+  const host = panesEl || document.body;
+  if (!upqEl) upqEl = el('div', { class: 'upq', role: 'region', 'aria-label': '파일 올리기' });
+  if (!host.contains(upqEl)) host.append(upqEl);
+  return upqEl;
+}
+function paintUpload(job: UpJob) {
+  let u = upUi.get(job.id);
+  if (!u) {
+    const nameEl = el('span', { class: 'upq-name' });
+    const pctEl = el('span', { class: 'upq-pct' });
+    const fill = el('i');
+    const bar = el('div', { class: 'upq-bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, fill);
+    const sub = el('span', { class: 'upq-sub' });
+    const btn = el('button', { class: 'upq-btn', type: 'button' });
+    //  눌러도 터미널 입력 초점을 뺏지 않는다(누른 뒤 바로 이어 칠 수 있게) — click 은 그대로 온다.
+    btn.addEventListener('mousedown', (e) => e.preventDefault());
+    btn.addEventListener('click', () => upButton(job));
+    const row = el('div', { class: 'upq-row' }, el('div', { class: 'upq-head' }, nameEl, pctEl), bar, el('div', { class: 'upq-foot' }, sub, btn));
+    u = { row, nameEl, pctEl, bar, fill, sub, btn, ctl: null, hideT: null };
+    upUi.set(job.id, u);
+    upqPanel().append(row);
+  }
+  const pct = job.state === 'done' ? 100 : upPercent(job.loaded, job.size);
+  const finishing = job.state === 'send' && job.size > 0 && job.loaded >= job.size;
+  u.row.setAttribute('data-state', job.state);
+  u.nameEl.textContent = job.name;
+  u.nameEl.setAttribute('title', job.name);
+  u.pctEl.textContent = job.state === 'send' ? pct + '%' : fmtBytes(job.size);
+  u.fill.style.width = (job.state === 'fail' ? 100 : pct) + '%';
+  u.bar.setAttribute('aria-valuenow', String(pct));
+  u.sub.textContent = upStatusText(job);
+  //  [취소]는 기다리는 중·보내는 중에만. 다 보내고 서버가 저장을 마치는 동안은 멈춰도 파일이 남을 수 있어 감춘다(거짓 약속을 하지 않는다).
+  const act = job.state === 'wait' || (job.state === 'send' && !finishing) ? '취소' : job.state === 'done' || job.state === 'fail' ? '닫기' : '';
+  u.btn.textContent = act;
+  u.btn.setAttribute('title', act === '취소' ? '올리기 취소' : '알림 닫기');
+  u.btn.hidden = !act;
+}
+function dropUpRow(job: UpJob) {
+  const u = upUi.get(job.id);
+  if (!u) return;
+  if (u.hideT) clearTimeout(u.hideT);
+  u.row.remove();
+  upUi.delete(job.id);
+  if (!upUi.size && upqEl) upqEl.remove();
+}
+function upButton(job: UpJob) {
+  if (job.state === 'wait') { job.state = 'cancel'; upBook.release(job); dropUpRow(job); guardUploadUnload(); toast('올리기를 취소했어요 — ' + job.name); return; }
+  if (job.state === 'send') { const u = upUi.get(job.id); if (u && u.ctl) u.ctl.abort(); return; }   // 마무리는 sendUpload 의 catch 가 한다
+  dropUpRow(job);   // 다 올렸다·못 올렸다 — 사람이 닫는다
+}
+function upDone(job: UpJob, note: string) {
+  job.state = 'done'; job.note = note || ''; job.loaded = job.size;
+  paintUpload(job);
+  const u = upUi.get(job.id);
+  if (u) u.hideT = setTimeout(() => dropUpRow(job), UPLOAD_DONE_MS);
+}
+
+// 올리는 동안 창을 닫거나 새로고침하려 하면 브라우저가 한 번 묻는다(올리던 파일은 거기서 멈춘다). 도는 동안만 건다.
+//  데스크톱 앱에선 걸지 않는다 — Electron 은 beforeunload 를 묻지 않고 **조용히** 닫기를 취소해, 트레이 [종료]·업데이트
+//  재시작이 아무 말 없이 안 먹는 앱이 된다(web/v2/bg-upload.ts 와 같은 규칙 · #5060).
+const onUploadUnload = (e) => { e.preventDefault(); e.returnValue = ''; return ''; };
+let unloadGuarded = false;
+function guardUploadUnload() {
+  const on = upBook.busy() && !inDesktopApp();
+  if (on === unloadGuarded) return;
+  unloadGuarded = on;
+  if (on) window.addEventListener('beforeunload', onUploadUnload);
+  else window.removeEventListener('beforeunload', onUploadUnload);
+}
+
+// 못 올린 이유(사람이 읽는 문장). 게이트웨이가 낸 오류엔 늘 {error} 본문이 붙는다 — 그대로 쓴다. 본문 없는 403·407·451 은
+//  게이트웨이가 쓰지 않는 응답이라 그 사이(내 PC 보안 프로그램·사내 프록시)에서 막힌 것이다(#1272 — files-upload.ts upFailMsg).
+const UP_NOT_OURS = [403, 407, 451];
+function upFailText(status, bodyErr) {
+  if (bodyErr) return String(bodyErr);
+  if (!status) return '네트워크 연결이 끊겼어요.';
+  return '서버가 오류를 돌려줬어요(' + status + ').' + (UP_NOT_OURS.indexOf(status) >= 0 ? ' 게이트웨이가 보낸 응답이 아니에요. 내 PC 보안 프로그램이나 사내 프록시가 막은 것으로 보여요.' : '');
+}
+// 진행률이 보이는 PUT — fetch 는 업로드 진행률을 주지 않는다(그래서 종전엔 끝날 때까지 아무 표시가 없었다). XHR 의
+//  upload.onprogress 로 보낸 바이트를 받는다. 주소·인증은 fetchAuth 와 같은 규칙(apiUrl 접두사 + authHeaders).
+//  ⚠ Content-Type 은 octet-stream 으로 박는다 — 비우면 브라우저가 File.type 으로 채우는데, .json 파일이면 게이트웨이 전역
+//   express.json 이 본문을 먼저 삼킨다(web/projects/files-upload.ts authUpload 머리말 · #1870).
+//  signal 이 끊기면 xhr.abort() 로 **보내는 중인 바이트까지** 멈추고 이름이 'AbortError' 인 오류로 거절한다.
+function putWithProgress(path, file, onProgress, signal?): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const abortErr = () => { const e = new Error('올리기를 취소했어요'); e.name = 'AbortError'; return e; };
+    if (signal && signal.aborted) { reject(abortErr()); return; }
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', apiUrl(path));
+    const h = authHeaders({ 'Content-Type': 'application/octet-stream' });
+    for (const k of Object.keys(h)) xhr.setRequestHeader(k, h[k]);
+    const onAbort = () => xhr.abort();
+    if (signal) signal.addEventListener('abort', onAbort);
+    if (xhr.upload) xhr.upload.onprogress = (ev) => { if (ev && ev.lengthComputable) onProgress(ev.loaded, ev.total); };
+    xhr.onload = () => {
+      let j = null;
+      try { j = JSON.parse(xhr.responseText); } catch (_) { /* 본문 없음 */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(j);
+      else reject(new Error(upFailText(xhr.status, j && j.error)));
+    };
+    xhr.onerror = () => reject(new Error(upFailText(0, '')));
+    xhr.onabort = () => reject(abortErr());
+    xhr.onloadend = () => { if (signal) signal.removeEventListener('abort', onAbort); };
+    xhr.send(file);
+  });
+}
+
+// 올릴 파일을 대기열에 세우고 칸에 줄을 그린다(동기 — 같은 파일 판정이 await 사이로 새지 않게). 같은 폴더로 같은 파일이
+//  이미 올라가는 중이면 세우지 않고 알린 뒤 null — 그 줄을 잠깐 반짝여 어디서 올라가는지 보여 준다.
+//  keyFile — 같은 파일 판정에 쓸 원본(폰 첨부는 HEIC 를 JPEG 로 바꿔 올리므로 사람이 고른 원본으로 판정한다).
+function queueUpload(file, dir: string, name: string, keyFile?): UpJob | null {
+  const { job, dup } = upBook.claim(keyFile || file, dir, name);
+  if (dup) {
+    toast('이미 올리고 있는 파일이에요 — ' + job.name);
+    const u = upUi.get(job.id);
+    if (u) { u.row.classList.add('upq-flash'); setTimeout(() => u.row.classList.remove('upq-flash'), 1200); }
+    return null;
+  }
+  job.size = Number(file && file.size) || 0;   // 칸이 말하는 크기는 실제로 보내는 파일의 것
+  paintUpload(job);
+  guardUploadUnload();
+  return job;
+}
+// 세운 파일 하나를 보낸다 — 진행률을 칸에 그리고, 끝나면 서버 응답(JSON, 못 읽으면 {})을, 취소·실패면 null 을 준다.
+//  어느 쪽이든 장부에서 빼고 창 닫기 경고를 다시 잰다. 실패 줄은 사람이 닫을 때까지 남는다(이유를 읽어야 한다).
+async function sendUpload(job: UpJob, file, rel: string): Promise<any> {
+  if (job.state !== 'wait') return null;   // 차례를 기다리는 동안 취소됐다
+  const u = upUi.get(job.id);
+  const ctl = new AbortController();
+  if (u) u.ctl = ctl;
+  job.state = 'send'; job.loaded = 0;
+  paintUpload(job);
+  try {
+    const j = await putWithProgress(sUrl('/file?path=' + encodeURIComponent(rel)), file, (loaded) => {
+      if (job.state !== 'send') return;
+      job.loaded = job.size > 0 ? Math.min(loaded, job.size) : loaded;
+      paintUpload(job);
+    }, ctl.signal);
+    return j || {};
+  } catch (e) {
+    if (e && e.name === 'AbortError') { job.state = 'cancel'; dropUpRow(job); toast('올리기를 취소했어요 — ' + job.name); }
+    else { job.state = 'fail'; job.error = (e && e.message) || ''; paintUpload(job); }
+    return null;
+  } finally {
+    if (u) u.ctl = null;
+    upBook.release(job);
+    guardUploadUnload();
+  }
+}
+
 // uploads/ 안에서 겹치지 않는 이름 — 원래 이름을 그대로 쓰되, 이미 있으면 '이름-2.png' 로 번호를 올린다(#1235).
 //  왜 타임스탬프(20260729-143022-) 를 안 쓰나: 그 접두어가 통째로 입력창에 꽂혀 경로를 길게 만들고, 사람이 자기 파일을
 //  못 알아본다. 덮어쓰기(서버 PUT 은 그냥 쓴다)는 막아야 하므로 조회로 회피한다 — 목록을 못 읽으면(폴더 없음 등)
-//  겹칠 것도 없다고 보고 그대로 쓴다.
-async function uniqueUploadName(name) {
-  const taken = new Set();
+//  이미 있는 이름은 없다고 본다.
+//  ★ #5361 — 목록엔 **다 올라간** 파일만 있다. 올리는 중인 파일의 이름도 예약으로 쳐야 함께 놓은 같은 이름이 서로를
+//   덮지 않는다(UploadBook.reserve). 목록을 받은 뒤 고르기·예약은 한 틱 안에 끝난다 — 두 파일이 같은 이름을 집을 틈이 없다.
+async function uniqueUploadName(job: UpJob) {
+  const taken = new Set<string>();
   try {
     const d = await api(sUrl('/ls?path=' + encodeURIComponent('uploads')));
     for (const it of (d.items || [])) taken.add(it.name);
-  } catch (_) { return name; }
-  if (!taken.has(name)) return name;
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  for (let i = 2; i < 1000; i++) { const c = stem + '-' + i + ext; if (!taken.has(c)) return c; }
-  return stem + '-' + Math.floor(Math.random() * 1e6) + ext;
+  } catch (_) { /* 목록을 못 읽었다 — 올리는 중인 이름만 피한다 */ }
+  return upBook.reserve(job, taken);
 }
-// 이미지/파일을 작업폴더(cwd)의 uploads/ 로 업로드하고 그 경로를 입력창에 꽂는다. 웹 터미널은 이미지 바이트를
-//  텍스트 스트림으로 못 흘리므로(터미널=텍스트), 파일로 올리고 경로를 입력해 안에서 도는 에이전트가 읽게 한다.
-//  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
-async function dropFileToAgent(file) {
-  if (!file) return;
+// 끌어놓은 파일의 이름 — 경로 조각을 떼고 쓸 수 없는 글자를 밑줄로 바꾼다. 확장자가 없으면 형식에서 붙인다(붙여넣은 이미지).
+function dropName(file) {
   // ★ #3870 — **맥에서 온 한글 파일명이 통째로 `_` 가 되던 것.** 맥 파일시스템(APFS/HFS+)은 파일명을 NFD 로
   //  들고 있어 `file.name` 이 «경진대회» = ㄱ+ㅕ+ㅇ… (자모 U+1100~U+11FF) 로 온다. 아래 허용집합의 `가-힣` 은
   //  **완성형 음절**(U+AC00~U+D7A3)이라 그 자모가 한 글자도 안 맞고, 이름 전체가 밑줄로 치환됐다
@@ -1988,16 +2153,22 @@ async function dropFileToAgent(file) {
   //  서버는 이미 NFC 정본으로 쓰므로(#1278b nfcPath) 여기서 미리 합치는 것이 그 규약과 같은 자다.
   let name = (file.name || 'pasted').normalize('NFC').split(/[/\\]/).pop().replace(/[^\w.\-가-힣]/g, '_');
   if (!/\.[a-z0-9]+$/i.test(name)) name += '.' + (((file.type || '').split('/')[1]) || 'png');
-  name = await uniqueUploadName(name);
+  return name;
+}
+// 이미지/파일을 작업폴더(cwd)의 uploads/ 로 업로드하고 그 경로를 입력창에 꽂는다. 웹 터미널은 이미지 바이트를
+//  텍스트 스트림으로 못 흘리므로(터미널=텍스트), 파일로 올리고 경로를 입력해 안에서 도는 에이전트가 읽게 한다.
+//  자동 전송 안 함 — 사용자가 설명을 덧붙여 Enter. (업로드 PUT 가 상위 폴더를 자동 생성.)
+//  세우기(queueUpload, 동기)와 올리기(runDrop)를 나눈 이유(#5361): 여러 파일을 한 번에 놓으면 모두 먼저 칸에 세워
+//   «차례를 기다리고 있어요» 로 보이게 하고, 그 사이 같은 파일을 다시 놓아도 알아본다.
+async function runDrop(job: UpJob, file) {
+  if (job.state !== 'wait') return;
+  const name = await uniqueUploadName(job);
+  if (job.state !== 'wait') return;   // 이름을 고르는 사이 취소됐다
+  paintUpload(job);
   const rel = 'uploads/' + name;
-  toast('업로드 중… ' + name);
-  let abs = rel; // 폴백: 서버가 절대경로를 안 주면 기존처럼 상대경로
-  try {
-    const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(rel)), { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-    const j = await res.json().catch(() => null);
-    if (!res.ok) { throw new Error((j && j.error) || ('' + res.status)); }
-    if (j && j.path) abs = j.path; // 서버가 준 절대경로 — 클코 cwd 가 세션 루트와 달라도 바로 찾음
-  } catch (e) { toast('업로드 실패 — ' + e.message, true); return; }
+  const j = await sendUpload(job, file, rel);
+  if (!j) return;
+  const abs = j.path || rel; // 서버가 준 절대경로 — 클코 cwd 가 세션 루트와 달라도 바로 찾음(안 주면 종전처럼 상대경로)
   // 절대경로엔 공백·한글이 흔해(프로젝트 폴더명) 작은따옴표로 감싼다(내부 ' 는 '\'' 로 이스케이프). 전송은 사용자가.
   const quoted = "'" + abs.replace(/'/g, "'\\''") + "'";
   // ★ #4229 — 폰(모바일 입력 바가 켜진 상태)에선 경로를 PTY 가 아니라 **입력 바의 글 상자**에 넣는다. 폰의 글은 그 상자에서
@@ -2008,8 +2179,20 @@ async function dropFileToAgent(file) {
   // 알림은 파일명 기준으로 말한다(#1235) — 절대경로는 입력창에 이미 보이고, 사람이 자기가 넣은 걸 알아보는 단서는 이름이다.
   //  ⚠ 입력창 표시 자체를 파일명으로 바꿀 수는 없다: sendInput 은 PTY 로 바이트를 흘릴 뿐이고 그 줄을 그리는 건
   //   클로드 코드 TUI 라, 화면에 보이는 문자열이 곧 클로드가 받는 문자열이다(표시만 갈아끼울 층이 없다).
-  toast('첨부: ' + name + (toDock ? ' — 경로가 입력칸에 들어갔어요(설명 적고 보내기)' : ' — 경로가 입력창에 들어갔어요(설명 적고 Enter)'));
+  upDone(job, toDock ? '경로를 입력칸에 넣었어요. 설명을 적고 보내세요.' : '경로를 입력창에 넣었어요. 설명을 적고 Enter 를 누르세요.');
   if (explorerLoaded) loadDir(curDir);
+}
+// keyFile — 같은 파일 판정에 쓸 원본(queueUpload 머리말).
+async function dropFileToAgent(file, keyFile?) {
+  if (!file) return;
+  const job = queueUpload(file, 'uploads', dropName(file), keyFile);
+  if (job) await runDrop(job, file);
+}
+// 한 번에 놓은 여러 파일 — 모두 먼저 세우고 하나씩 올린다. 순서대로 — 경로가 놓은 순서로 입력창에 들어간다.
+async function dropFilesToAgent(files) {
+  const jobs: Array<[UpJob, any]> = [];
+  for (const f of files) { if (!f) continue; const job = queueUpload(f, 'uploads', dropName(f)); if (job) jobs.push([job, f]); }
+  for (const [job, f] of jobs) await runDrop(job, f);
 }
 // ── 입력줄 선택·되돌리기 (#3778 · 여러 줄 #3870) ────────────────────────────────────────
 //  앱에 없는 두 기능을 «앱이 이미 아는 조작»만으로 합성한다. 판정 규칙은 line-edit.ts(순수), 여기서는
@@ -3741,15 +3924,16 @@ function insertIntoComposer(text) {
   return true;
 }
 // 폰에서 고른 사진·파일을 하나씩 올린다(#4229). 끌어놓기와 같은 함수(dropFileToAgent)를 타므로 올라가는 자리(uploads/)·
-//  이름 규칙·경로 삽입이 데스크톱과 같다. 순서대로 — 동시에 올리면 겹치는 이름 판정(uniqueUploadName)이 서로를 못 본다.
+//  이름 규칙·경로 삽입·진행 칸(#5361)이 데스크톱과 같다. 순서대로 — 경로가 고른 순서로 글 상자에 들어간다.
 //  아주 큰 파일(폰이면 대개 동영상)은 한 번 묻는다 — 셀룰러로 몇 분이 걸리고 AI 가 읽지도 못한다.
+//  같은 파일 판정은 사람이 고른 원본(f)으로 한다 — HEIC 를 JPEG 로 바꾼 파일은 고를 때마다 새 파일이다.
 const ATTACH_ASK_BYTES = 50 * 1024 * 1024;
 export async function attachFilesToAgent(files) {
   for (const f of [...(files || [])]) {
     if (!f) continue;
     if (f.size > ATTACH_ASK_BYTES && typeof confirm === 'function'
       && !confirm((f.name || '파일') + ' 은 ' + Math.round(f.size / 1048576) + 'MB 예요. 올릴까요? (AI 는 사진·문서만 읽어요)')) continue;
-    await dropFileToAgent(await prepareAttachment(f));
+    await dropFileToAgent(await prepareAttachment(f), f);
   }
 }
 // iOS 사진 보관함은 보통 JPEG 로 바꿔 주지만, 파일 앱에서 고르면 HEIC 가 그대로 온다 — AI 는 HEIC 를 못 읽는다.
@@ -3894,13 +4078,17 @@ async function downloadFile(p, name) {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   } catch (e) { toast('다운로드 실패: ' + e.message, true); }
 }
-async function uploadFile(file, dir) {
-  const rel = (dir ? dir + '/' : '') + file.name;
-  const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(rel)), { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
-  if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('' + res.status)); }
-}
+// 파일 탐색기의 [업로드]·끌어놓기 — 지금 보는 폴더로 원래 이름 그대로 올린다(같은 이름의 파일은 덮어쓴다 — 종전 그대로).
+//  진행은 터미널 끌어놓기와 같은 칸이 보여 준다(#5361 — 종전엔 다 올라간 뒤에야 «업로드: 이름» 알림 하나뿐이었다).
+//  예약(reserve)에 서버 목록을 넘기지 않는 이유: 덮어쓰기가 이 입구의 약속이다. 함께 올라가는 같은 이름만 피한다.
 async function uploadMany(files, dir) {
-  for (const f of files) { try { await uploadFile(f, dir); toast('업로드: ' + f.name); } catch (e) { toast('업로드 실패: ' + f.name + ' — ' + e.message, true); } }
+  const jobs: Array<[UpJob, any]> = [];
+  for (const f of files) { if (!f) continue; const job = queueUpload(f, dir, f.name); if (job) jobs.push([job, f]); }
+  for (const [job, f] of jobs) {
+    if (job.state !== 'wait') continue;
+    upBook.reserve(job, []);
+    if (await sendUpload(job, f, (dir ? dir + '/' : '') + job.name)) upDone(job, '');
+  }
   loadDir(curDir);
 }
 function startUpload() {
@@ -3966,7 +4154,7 @@ export function setupTermDrop() {
     const files = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if (!files.length) return;
     e.preventDefault(); off();
-    for (const f of files) await dropFileToAgent(f);
+    await dropFilesToAgent(files);
   });
 }
 
