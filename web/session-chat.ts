@@ -251,6 +251,17 @@ export interface SessionChatOpts {
    *  MISSING_GRACE 번 이어지면 안전망 주기(POLL_SAFETY_MS)로 물러난다 — 멈추지는 않는다(뜨는 중인 세션은 그 답이 «아직 없음» 이다).
    *  읽히면 · 통보가 오면 다시 촘촘히. 죽은 세션의 403 만 그만 묻는다. 일반 세션 화면은 종전대로 묻는다. */
   slowOnMissing?: boolean;
+  /** #5319 머리줄 [복제] — 이 세션의 대화를 아는 새 세션을 하나 더 만든다(셸 forkSession). 프로젝트 문패에 있던 [세션 복제]가
+   *  세션 머리줄로 내려왔다(원준 2026-11-04 v2 확정안 — 문패는 프로젝트만, 세션에 하는 일은 세션 머리줄). canFork 가 참일 때만 선다. */
+  onFork?: (anchor: HTMLElement) => void;
+  canFork?: (t: SessionChatTarget) => boolean;
+  /** #5319 머리줄 [옮기기] — 이 세션을 다른 프로젝트로 옮기거나 뗀다(셸 프로젝트 옮기기 창). 문패의 [세션 옮기기]가 내려왔다. */
+  onMove?: () => void;
+  canMove?: (t: SessionChatTarget) => boolean;
+  /** [옮기기] 글자 — 프로젝트 없는 세션은 «프로젝트에 붙이기». */
+  moveLabel?: string;
+  /** #5319 큰 머리 — 세션 이름이 이 화면의 제목이다(크게), 번호(#nnnn) · 연결 상태 · [화면 복구]는 이름 아래 한 줄로 내린다. 칸 셸만 켠다. */
+  bigHead?: boolean;
 }
 const MISSING_GRACE = 10;
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
@@ -318,6 +329,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ⚠ 이름 고치기(#1719)는 살아 있다 — pane 이름이 없으면(셸·방금 뜬 세션) 제목이 곧 세션 이름이라 **그 자리에서**
   //   고치고, pane 이름이 제목을 차지했으면 [⋯ ▸ 세션 이름 바꾸기]가 같은 편집기를 제목 자리에 연다.
   const titleHost = el('span', { class: 'sc-titlebox' });
+  //  #5319 큰 머리의 아랫줄 — [#번호 · 연결 상태 | 화면 복구]. bigHead 가 아니면 없다(번호는 이름 뒤, 연결 상태는 오른쪽 조작부 — 종전 그대로).
+  const subNo: HTMLElement | null = opts.bigHead ? el('span', { class: 'sc-sub-no' }) : null;
   let titleText = target.label;
   //  사람이 지은 이름인가(lib/sess-name.ts human) — 여기서 방금 고쳤으면 목록이 따라오기 전에도 참이다.
   let titleHuman = target.raw?.labelSource === 'human';
@@ -348,7 +361,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (renaming) return;
     paintTitleName();
     const no = Number(target.raw?.taskNo || 0);
-    if (no > 0) titleHost.append(el('span', { class: 'sc-title-no mono', text: '#' + no, title: '이 세션이 맡은 태스크 번호입니다.' }));
+    const noEl = no > 0 ? el('span', { class: 'sc-title-no mono', text: '#' + no, title: '이 세션이 맡은 태스크 번호입니다.' }) : null;
+    //  #5319 큰 머리 — 번호는 이름 아래 한 줄(subNo)로 내려간다.
+    if (opts.bigHead) { if (subNo) replaceKids(subNo, noEl); return; }
+    if (noEl) titleHost.append(noEl);
   }
   function paintTitleName(): void {                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
     const tip = [idLabel(titleText) ? '' : titleText, target.id].filter(Boolean).join(' · ');   // 이름 없는 세션은 id 를 두 번 쓰지 않는다
@@ -516,19 +532,46 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ★ 연결 상태와 [화면 복구] 는 **한 덩어리**다(원준 2026-09-10) — «지금 어떤가»와 «그걸 고치는 단추»라
   //   서로를 설명한다. 테두리 하나를 같이 쓰므로 손을 얹으면 둘이 함께 뜬다.
   const fixPair = el('span', { class: 'sc-pair' }, termStatusEl, el('span', { class: 'sc-pair-sep', 'aria-hidden': 'true' }), fixBtn);
+  //  #5319 [복제] · [옮기기] — 프로젝트 문패에서 내려왔다(문패는 프로젝트를 말하고, 세션에 하는 일은 세션 머리줄이 쥔다).
+  //   [자료] 와 같은 글자 단추(.sc-act). 누가 볼 수 있나는 셸의 술어(canFork · canMove)가 정하고, 행이 바뀔 때마다 다시 잰다(paintActs).
+  const forkBtn = opts.onFork ? el('button', { class: 'btn-text sc-act sc-act-fork', type: 'button', hidden: true,
+    title: '지금까지의 대화를 아는 새 세션을 하나 더 만듭니다. 이 세션은 그대로 남습니다.', 'aria-label': '이 세션 복제하기',
+    onclick: (e: MouseEvent) => opts.onFork!(e.currentTarget as HTMLElement) },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.copy })),
+    el('span', { text: '복제' })) as HTMLButtonElement : null;
+  const moveText = opts.moveLabel || '옮기기';
+  const moveBtn = opts.onMove ? el('button', { class: 'btn-text sc-act sc-act-move', type: 'button', hidden: true,
+    title: moveText === '옮기기' ? '이 세션을 다른 프로젝트로 옮기거나 프로젝트에서 뗍니다' : '이 세션을 프로젝트에 붙입니다',
+    'aria-label': moveText === '옮기기' ? '이 세션을 다른 프로젝트로 옮기기' : '이 세션을 프로젝트에 붙이기',
+    onclick: () => opts.onMove!() },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.sessMove })),
+    el('span', { text: moveText })) as HTMLButtonElement : null;
+  function paintActs(): void {
+    if (forkBtn) forkBtn.hidden = !opts.canFork?.(target);
+    if (moveBtn) moveBtn.hidden = !opts.canMove?.(target);
+  }
+  paintActs();
   const headR = el('div', { class: 'sc-head-r' },
     opts.onOpenFiles ? filesGoBtn : null,
     appGoBtn,
     opts.onToggleFiles ? filesBtn : null,
-    fixPair,            // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다
+    forkBtn, moveBtn,
+    opts.bigHead ? null : fixPair,   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다(큰 머리면 이름 아랫줄)
     moreBtn);
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
-  const head = el('div', { class: 'sc-head', 'data-ctx': 'session', 'data-sid': first.id },
-    el('div', { class: 'sc-head-l' },
-      //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
-      //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
-      sideBtn, dot, titleHost, facesEl, chatBadge,
-      el('span', { class: 'sc-meta' }, runEl)),
+  //  #5319 큰 머리 — 왼쪽은 두 줄: [● 이름 · 얼굴 · 배지] 위, [#번호 · 연결 상태 | 화면 복구 · 하네스 알약] 아래.
+  const head = el('div', { class: 'sc-head' + (opts.bigHead ? ' sc-head--big' : ''), 'data-ctx': 'session', 'data-sid': first.id },
+    opts.bigHead
+      ? el('div', { class: 'sc-head-l' },
+        sideBtn,
+        el('div', { class: 'sc-head-main' },
+          el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge),
+          el('div', { class: 'sc-sub' }, subNo, fixPair, el('span', { class: 'sc-meta' }, runEl))))
+      : el('div', { class: 'sc-head-l' },
+        //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
+        //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
+        sideBtn, dot, titleHost, facesEl, chatBadge,
+        el('span', { class: 'sc-meta' }, runEl)),
     headR);
 
   const chatHost = el('div', { class: 'sc-chat' });
@@ -3227,6 +3270,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
     paintState();
     paintFaces();                               // 소유·초대·세션 id 가 바뀌면 얼굴 줄과 그 뒤의 공유 대상도 함께 바뀐다
+    paintActs();                                // #5319 [복제] · [옮기기] — 살아 있음 · 소유가 바뀌면 설 수 있는지도 바뀐다
     if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
     //  #4783 — 목록이 **끝난 사유**까지 실어 오면(서버가 끝낸 자리에서 적은 확정 사실 — 흔들리는 관측이 아니다) 액자의 신호를
     //   기다리지 않고 걷는다. 액자는 이제 어떤 끝이든 알려 오지만(handOffToShell), 그 신호가 늦거나 빠진 판에도 조작 못 하는 터미널이 남지 않게.

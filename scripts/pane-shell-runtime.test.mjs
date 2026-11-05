@@ -229,7 +229,7 @@ async function PAGE_MAIN() {
     await viewer("readme.md"); b.B3b = snap();
     //  B2 끌기 — 포인터로(R4 와 같은 손). 곁칸 → 아래 칸 줄(막힘), 아래 칸 → 곁칸 줄(된다)
     const dragTo = async (z, k, toZone) => {
-      const w = wrapOf(z, k); const r0 = w.getBoundingClientRect(); const bar = $(`#app .pn-pane[data-zone="${toZone}"] .pn-tabs`).getBoundingClientRect();
+      const w = wrapOf(z, k); const r0 = w.getBoundingClientRect(); const bar = $(`#app .pn-pane[data-zone="${toZone}"] .pn-tabbar`).getBoundingClientRect();   // #5319 곁칸은 띠 대신 독이 선 줄 — 줄에 놓는다
       const P = (type, x, y) => (type === "pointerdown" ? w.querySelector(".pn-tab") : window).dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: type === "pointerup" ? 0 : 1, pointerId: 7, pointerType: "mouse" }));
       const x0 = r0.left + r0.width / 2, y0 = r0.top + r0.height / 2, x1 = bar.left + Math.min(40, bar.width / 2), y1 = bar.top + bar.height / 2;
       P("pointerdown", x0, y0); P("pointermove", x0 + 8, y0 + 30); P("pointermove", (x0 + x1) / 2, (y0 + y1) / 2); P("pointermove", x1, y1); await sleep(30);
@@ -322,7 +322,8 @@ async function PAGE_MAIN() {
     let root = filesRoot(); await waitFor(() => fpOrder(root).length > 0); await enterDocs(root);
     h.showPart("files"); await sleep(200); o.H1 = crumb(root);
     await enterDocs(root);
-    $('#app .pn-pane[data-zone="side"] .pn-pane-hide').click(); await sleep(100); o.collapsed = !shown(zone("side"));
+    //  #5319 넓은 화면의 곁칸 접기는 문패 맨 오른쪽 단추(⌘⌥B)다 — 곁칸 머리 줄은 독이 쓴다.
+    $('#app .pn-door-side').click(); await sleep(100); o.collapsed = !shown(zone("side"));
     h.showPart("files"); await sleep(200); o.H2a = { side: shown(zone("side")), crumb: crumb(filesRoot()) };
     await clk(tabBtn("side", "프로젝트")); h.showPart("files"); await sleep(200); o.H2b = { act: actTab("side"), crumb: crumb(filesRoot()) };
   } catch (e) { R.errH = String(e && e.stack || e); }

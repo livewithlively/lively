@@ -53,7 +53,7 @@ import { SIDE_BOOT_BARS, sideTruthReady } from '../lib/side-boot.js';   // #3870
 import { createFavSaver, listFavMsg } from '../lib/list-fav.js';   // #3870 — 리스트 즐겨찾기: 셸 ↔ 액자 알림 한 줄 · 연달아 누를 때의 저장 순서
 import { editHold } from '../lib/edit-hold.js';   // #3870 — 이름 칸이 열린 동안 목록을 다시 그리지 않고, 건너뛴 그리기는 끝난 뒤 갚는다
 import { dotCls, findSessIn, isArchivedProj, isLiveSess, isLooseTrashedSess, isMineSess, isPastSess, isTrashedProj, isTrashedSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
-import { orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
+import { isPastDay, orderCards, PRIORITY_GROUP, pruneHolds, QUIET_RANK, stepCardHold, type CardHold } from './hold-rules.js';   // #3856 — 카드 자리 자물쇠(순수)
 import { HOSTING_GROUP, INVITED_GROUP, splitInvited } from '../lib/invited-up.js';   // #3870 — 「초대받은 세션」·「초대한 세션」 층
 import { NOW_CARD, pinnedFirst, planNowCards, planSessAxis, splitHomePins } from '../lib/home-pins.js';   // #4233 — 「고정」 나누기(고정한 단위가 그대로 움직인다 · 순수) · #4551 — 「지금 볼 것」 조각 카드
 import { migratePinKeys } from './pin-migrate.js';   // #2402 — 복원으로 id 가 바뀔 때 핀을 옮기는 규칙(순수·값검증)
@@ -136,6 +136,7 @@ const cardHolds = new Map<string, CardHold>();
 
 let openSet = new Set<string>();
 const pastSet = new Set<string>();          // '지난 세션'을 펴 둔 프로젝트 — **페이지 수명만**(위 주석)
+let olderOpen = false;                      // #5319 「이전 날짜」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
 let allOpen = false;                        // 「전체 프로젝트」 펼침 — 페이지 수명만(새로 열면 늘 접힘)
 let binsPinned = false;                     // 아카이브·휴지통 행을 발치에 고정(#1851) — 브라우저에 기억
 let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
@@ -934,15 +935,38 @@ function projListKids(shown: SideInstance[], o: RowOpts = {}): HTMLElement[] {
     for (const g of pinnedGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
   if (inv.invited.length || inv.hosting.length) { kids.push(...invitedLayer(inv, o)); lastBucket = inv.hosting.length ? HOSTING_GROUP : INVITED_GROUP; }
+  //  #5319 어제와 그 앞 날짜의 카드는 「이전 날짜 n」 한 줄 뒤로 접는다(olderFold). n = 접힌 프로젝트 카드 수.
+  const older: HTMLElement[] = [];
+  let olderN = 0;
   for (const g of groups) {
     if (g.pinned) continue;                         // 이미 위 「고정」 층에 섰다
+    const past = isPastDay(g.bucket);
+    const into = past ? older : kids;
+    if (past) olderN += 1;
     if (g.bucket && g.bucket !== lastBucket) {
-      kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
+      into.push(el('div', { class: 'v2-app-group', role: 'presentation', text: g.bucket }) as HTMLElement);
       lastBucket = g.bucket;
     }
-    kids.push(projGrpCard(g, o, false, standingSess));
+    into.push(projGrpCard(g, o, false, standingSess));
   }
+  olderFold(kids, older, olderN, `프로젝트 ${olderN}개`);
   return kids;
+}
+
+/** #5319 「이전 날짜 n」 — 어제와 그 앞 날짜 묶음을 한 줄로 접어 목록 끝에 단다(원준 2026-11-04 v2 확정안).
+ *  펼침은 이 페이지 동안만(「지난 세션」 접힘과 같은 규율 — 저장하지 않는다). 위에 선 것이 하나도 없으면 펴 둔다 —
+ *  접어 두면 목록이 이 한 줄뿐이라, 펴야 비로소 무엇이든 보인다(카드의 «앞면이 없으면 접힘을 편다» 와 같은 규율). */
+function olderFold(kids: HTMLElement[], older: HTMLElement[], n: number, what: string): void {
+  if (!older.length) return;
+  const open = olderOpen || !kids.length;
+  kids.push(el('button', {
+    class: 'v2-pg-past v2-older' + (open ? ' open' : ''), type: 'button', 'aria-expanded': String(open),
+    title: open ? '이전 날짜 접기' : `어제와 그 전에 쓴 ${what} — 눌러서 펴요`,
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); olderOpen = !open; repaintList(); },
+  },
+  el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
+  el('span', { class: 'n', text: '이전 날짜' }), el('span', { class: 'v2-cnt', text: String(n) })) as HTMLElement);
+  if (open) kids.push(...older);
 }
 
 /** 프로젝트 카드 한 장 — 머리글 + (펼쳤으면) 그 안의 세션들.
@@ -1074,10 +1098,17 @@ function sessAxisKids(shown: SideInstance[], o: RowOpts): HTMLElement[] {
     for (const g of pinGrps) kids.push(projGrpCard(g, o, false, standingSess));
   }
   if (inv.invited.length || inv.hosting.length) kids.push(...invitedLayer(inv, o));
+  //  #5319 어제와 그 앞 날짜는 「이전 날짜 n」 한 줄 뒤로(olderFold). n = 접힌 세션 줄 수.
+  const older: HTMLElement[] = [];
+  let olderN = 0;
   plan.dated.forEach((d, i) => {
-    if (d.group) kids.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
-    kids.push(dayCard(d.group, d.rows, o, i));
+    const past = isPastDay(d.group);
+    const into = past ? older : kids;
+    if (past) olderN += d.rows.length;
+    if (d.group) into.push(el('div', { class: 'v2-app-group', role: 'presentation', text: d.group }) as HTMLElement);
+    into.push(dayCard(d.group, d.rows, o, i));
   });
+  olderFold(kids, older, olderN, `세션 ${olderN}개`);
   return kids;
 }
 

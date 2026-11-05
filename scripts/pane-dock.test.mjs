@@ -238,7 +238,7 @@ check([".pn-fbody", ".pn-knlist", ".pn-knr-scroll", ".pn-tl .tl-scroll", ".pn-pr
   && [".pn-tk", ".pn-liv"].every((c) => lifts.includes(c)) && /\.pn-pane\[data-zone="side"\] \.pn-ed-ta \{ padding-bottom: calc\(12px \+ var\(--pn-dock-b, 0px\)\); \}/.test(PANES_CSS),
   "W13b 목록 상자(자료 · 지식 목록 · 지식 읽기 · 타임라인 · 미리보기 · 뷰어 · 앱 · 세션 파일)는 끝에만 독 두께만큼 빈 자리 · 입력칸 앱(프로젝트 · 리브)은 앱 끝에 · 고치기 칸은 아래 안 여백", JSON.stringify({ lists, lifts }));
 //  곁칸 아래 독에도 손잡이(원준 10-02 «이음새 있을 때랑 똑같이») — 서랍만 없다 · 크기와 놓일 자리 윤곽이 손잡이 몫을 안다.
-check(/if \(!host\.narrow\(\)\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
+check(/if \(!host\.narrow\(\) && home !== 'top'\) kids\.push\(handleEl\(home\)\);/.test(DOCK) && !/if \(home === 'seam' && !host\.narrow\(\)\) kids\.push\(handleEl/.test(DOCK)
   && /extra: extra \+ \(host\.narrow\(\) \? 0 : HANDLE_FLOAT\), grow \}/.test(DOCK) && /SEP \+ HANDLE_FLOAT;\n\s*const fit = \(max: number\): number => floatIconSize\(W, n, \{[^}]*extra, grow/.test(DOCK) && /const w = Math\.min\(W - 2 \* M\.margin, floatWidth\(n, s, extra\)\)/.test(DOCK),
   "W14 손잡이는 이음매 · 곁칸 아래 둘 다(서랍만 없다) — 곁칸 아래 크기와 끌 때의 윤곽이 손잡이 몫(HANDLE_FLOAT)을 셈한다");
 //  곁칸 아래 좌우 자리(원준 10-07) — 자리 · 끌어 놓기 · 윤곽이 모두 규칙(floatCenter · floatAt)을 타고, 자리를 못 정했으면 열쇠째 안 적는다.
@@ -246,5 +246,21 @@ check(/st\.left = floatCenter\(host\.narrow\(\) \? DOCK_DEFAULTS\.fx : prefs\.fx
 check(/const fx = floatAt\([^;]*f\.lo, f\.hi\);\n\s*if \(fx !== undefined\) target\.fx = fx;/.test(DOCK), "W15b 끌어 놓은 좌우 자리는 규칙(floatAt)이 정한다 — 못 정하면 열쇠째 뺀다(undefined 를 적으면 옛 자리가 지워진다)");
 check(/floatCenter\(t\.fx \?\? prefs\.fx, f\.lo, f\.hi\) - w \/ 2/.test(DOCK), "W15c 놓일 자리 윤곽도 같은 좌우 자리에 그린다");
 check(/const half = w \/ 2 \+ \(magOn\(\) \? \(MAG_GROW \* s\) \/ 2 : 0\) \+ M\.margin;/.test(DOCK), "W15d 좌우 구간은 확대로 불어날 몫(양쪽 반씩)과 바깥 여백을 남긴다 — 끝에 둔 독을 확대해도 곁칸 테두리에서 안 잘린다");
+//  #5319 머리 줄 독(원준 2026-11-04 «독이랑 위에 하나로 합치자») — 넓은 화면은 곁칸 맨 위 줄에 붙박이로 선다.
+const PANES_TS = read("web/v2/panes.ts");
+check(/topSlot = host\.narrow\(\) \? null : host\.top\?\.\(\) \?\? null;/.test(DOCK) && /home = topSlot \? 'top' : effectiveHome\(prefs, !!geom\);/.test(DOCK)
+  && /top: \(\) => \(dockTop\(\) \? dockSlot : null\),/.test(PANES_TS) && /const dockTop = \(\): boolean => !narrow\(\);/.test(PANES_TS),
+  "W16 넓은 화면의 독은 곁칸 머리 줄(dockSlot)에 선다 — 좁은 폭(서랍)만 종전 자리");
+check(/if \(home === 'top'\) return;\s+\/\/[^\n]*\n\s*if \(t\.closest\('\.pn-dock-sep'\)\) \{ beginResize\(e\); return; \}/.test(DOCK)
+  && /minNow = prefs\.min && !host\.narrow\(\) && home !== 'top';/.test(DOCK) && /&& !minNow && home !== 'top';/.test(DOCK)
+  && /const z = h && h !== 'top' \? dockInset\(h, size, M, minNow\)/.test(DOCK),
+  "W16b 머리 줄 독은 붙박이 — 독 끌기 · 크기 끌기 · 접기 · 확대가 없고, 본문이 비킬 여백도 없다");
+check(/if \(home === 'top'\) return \[\{ label: '고정한 앱 되돌리기'/.test(DOCK) && /home === 'top' \? 'bottom'/.test(DOCK) && /\.pn-dock-tip\[data-side="bottom"\]/.test(read("public/styles/42-v2-dock.css")),
+  "W16c 머리 줄 독의 설정은 고정 되돌리기 하나 · 이름표는 아래로");
+check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && /el\('span', \{ class: 'pn-dock-name', text: act \? tabName\(act\) : '' \}\)/.test(PANES_TS)
+  && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-tabs \{ display: none; \}/.test(read("public/styles/42-v2-dock.css")),
+  "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 켜진 앱 이름 · [열린 탭 ∨] · [＋] 만 남긴다");
+check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\s+const mb = moreBtn\(\);/.test(DOCK) && /sessionOnly \? null : addBtn\(zone\),\n\s*\]\.filter/.test(PANES_TS),
+  "W16e 머리 줄엔 «앱 더하기» 가 하나 — 독의 [모든 앱] 칸 대신 줄 끝 [＋](앱 서랍)");
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);
