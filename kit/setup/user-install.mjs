@@ -503,8 +503,12 @@ function agentsMerge(existing, ctx) {
 //   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다).
 export const CONNECT_MARK = "lively-managed: record-scope(#5016)";
 const CONNECT_IDS = ["lively-connect", "lively-disconnect"];
-export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN }) {
-  const cli = `lively(PATH 에 없으면 ${shim})`;
+export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) }) {
+  //  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
+  //   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
+  const direct = win && nodeBin !== "node" ? `& "${nodeBin}" "${cliPath}"` : "";
+  const cli = direct ? `(PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고) ${direct} 를 lively 대신 쓰는` : `lively(PATH 에 없으면 ${shim})`;
+  const lv = direct || "lively";
   //  자리표시 `$ARGUMENTS` 는 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스)에서 두 번 쓰면 «경로(~/w)를, 비었거나 `~/w` 그대로면…»
   //  처럼 스스로 모순이 된다. 치환 안 하는 하네스를 위해 «달러로 시작하는 글자 그대로면 없는 것» 을 말로만 덧붙인다.
   const session = "이 세션을 연 폴더(세션 시작 때 라이블리가 «작업 폴더 밖» 안내에 적어 준 폴더 — 없으면 지금 작업 폴더)";
@@ -515,7 +519,7 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
       body: [
         "이 폴더를 이 컴퓨터의 라이블리 작업 폴더로 등록하라.",
         "",
-        `1. 셸에서 ${cli} 명령을 실행하라: \`lively work-root add "<폴더>"\``,
+        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root add "<폴더>"\``,
         `   ${folderRule}`,
         "2. 실행 결과를 사람에게 한두 줄로 전하라. 등록됐으면 «다음 메시지부터 이 폴더에서 라이블리가 연결됩니다» 라고 알려라. 실패했으면 결과에 나온 이유를 그대로 전하라.",
       ].join("\n") },
@@ -523,7 +527,7 @@ export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "
       body: [
         "이 폴더를 이 컴퓨터의 라이블리 작업 폴더 목록에서 빼라.",
         "",
-        `1. 셸에서 ${cli} 명령을 실행하라: \`lively work-root remove "<폴더>"\``,
+        `1. 셸에서 ${cli} 명령을 실행하라: \`${lv} work-root remove "<폴더>"\``,
         `   ${folderRule}`,
         "2. 실행 결과를 사람에게 전하라. «등록된 다른 폴더 아래라서 켜져 있다» 는 답이면 그 폴더 이름과 함께 그대로 전하고, 그 폴더를 뺄지 사람에게 물어라.",
       ].join("\n") },

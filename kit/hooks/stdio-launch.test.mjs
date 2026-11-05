@@ -17,7 +17,7 @@ mkdirSync(process.env.CLAUDE_CONFIG_DIR, { recursive: true });
 
 const { livelyStdioEntry, isOurShimEntry } = await import(pathToFileURL(join(HERE, "stdio-launch.mjs")));
 const { livelyStdioLaunch } = await import(pathToFileURL(join(HERE, "..", "cli", "lively.mjs")));
-const { winNodeBin, winNodeToken } = await import(pathToFileURL(join(HERE, "..", "setup", "user-install.mjs")));
+const { winNodeBin, winNodeToken, connectCommandFiles } = await import(pathToFileURL(join(HERE, "..", "setup", "user-install.mjs")));
 
 const SHIM = "C:\\Profiles\\홍길동\\.lively\\bin\\lively.cmd";
 const CLI = "C:\\Profiles\\홍길동\\.lively\\lib\\lively.mjs";
@@ -76,4 +76,26 @@ test("훅용 node — 절대경로 node.exe 는 forward-slash 로, 그 밖은 �
 test("훅 명령 첫 토큰 — 맨몸 node 는 종전 문자열 그대로, 절대경로는 따옴표", () => {
   assert.equal(winNodeToken("node"), "node");
   assert.equal(winNodeToken("C:/Program Files/nodejs/node.exe"), '"C:/Program Files/nodejs/node.exe"');
+});
+
+test("«여기 연결» 커맨드 — Windows 에서 node 경로를 알면 심을 거치지 않는 명령을 준다", () => {
+  const NODE = "C:/Profiles/홍길동/.lively/runtime/node-v22.14.0-win-x64/node.exe";
+  const LIB = "C:/Profiles/홍길동/.lively/lib/lively.mjs";
+  const SHIM_P = "C:\\Profiles\\홍길동\\.lively\\bin\\lively.cmd";
+  for (const format of ["claude", "codex", "cursor"]) {
+    const files = connectCommandFiles({ format, shim: SHIM_P, win: true, nodeBin: NODE, cliPath: LIB });
+    for (const f of files) {
+      const verb = f.id === "lively-connect" ? "add" : "remove";
+      assert.ok(f.text.includes(`"${NODE}" "${LIB}" work-root ${verb} "<폴더>"`), `${format}/${f.id}: node 직결 명령 없음`);
+      assert.ok(!f.text.includes(`\`lively work-root ${verb}`), `${format}/${f.id}: 심 명령이 남아 있음`);
+    }
+  }
+  // node 경로를 모르면(맨몸 node)·Windows 가 아니면 종전 명령 그대로
+  for (const o of [{ win: true, nodeBin: "node" }, { win: false, nodeBin: NODE }]) {
+    for (const f of connectCommandFiles({ format: "claude", shim: SHIM_P, cliPath: LIB, ...o })) {
+      const verb = f.id === "lively-connect" ? "add" : "remove";
+      assert.ok(f.text.includes(`\`lively work-root ${verb} "<폴더>"\``), `${JSON.stringify(o)}/${f.id}: 종전 명령 없음`);
+      assert.ok(!f.text.includes(LIB), `${JSON.stringify(o)}/${f.id}: node 직결이 섞임`);
+    }
+  }
 });
