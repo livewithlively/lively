@@ -175,6 +175,11 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-act-app { display: none; }
 @media (max-width: 900px) { .sc-act-app:not([hidden]) { display: inline-flex; align-items: center; gap: 4px; min-width: 0; } }
 .sc-act-app-t { max-width: 7em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ⚠ 머리줄의 글자는 **줄을 바꾸지 않는다**(원준 2026-11-05 실측: 읽기 전용 칩 «Anthropic · Claude Code» 가 세 줄 · «높음» 이 세로 두 줄로
+   쌓였다). 칩 · 단추는 flex 항목이라 자리가 모자라면 글자째 접혔다 — 줄이지 않고(flex: none) 접지도 않는다(nowrap). 자리가 모자라면
+   제목이 …로 줄고, 그다음은 아래 @container 사다리가 칸째 접는다. */
+.sc-head .sc-act, .sc-head .dt-chip, .sc-head .sc-termstat, .sc-head .sc-title-no { white-space: nowrap; }
+.sc-run-top > .dt-chip, .sc-head-r > .sc-act { flex: none; }
 /* 연결 상태 + [화면 복구] 한 덩어리 — 테두리를 **묶음이** 쥐고 안쪽 단추는 제 테두리를 안 그린다.
    손을 얹으면 둘이 함께 뜬다: «지금 어떤가»와 «그걸 고치는 단추»가 한 몸이라는 걸 모양이 말한다. */
 .sc-pair { display: inline-flex; align-items: center; gap: 0; flex: none;
@@ -675,7 +680,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head.sc-head--big { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 36px 36px;
     column-gap: 24px; row-gap: 8px; align-items: center; padding: 16px 24px 16px 32px; }   /* 높이는 42-v2-panes.css(--pn-bighead-h) */
   .pn-body:not(.cm) .sc-head--big > .sc-head-l, .pn-body:not(.cm) .sc-head--big .sc-head-main { display: contents; }
-  .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1; gap: 12px; min-width: 0; }
+  .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1; gap: 12px; min-width: 0; overflow: hidden; }   /* 넘치면 제 칸 안에서 — 오른쪽 단추 위로 안 번진다 */
   .pn-body:not(.cm) .sc-head--big .sc-sub { grid-row: 2; grid-column: 1; gap: 12px; font-size: 15px; overflow: hidden; }   /* 넘치면 제 칸 안에서 잘린다 — 오른쪽 선택기 위에 겹치지 않게 */
   .pn-body:not(.cm) .sc-head--big > .sc-head-r { grid-row: 1; grid-column: 2; justify-self: end; gap: 4px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top { grid-row: 2; grid-column: 2; justify-self: end; gap: 4px; }
@@ -684,7 +689,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big .sc-title, .pn-body:not(.cm) .sc-head--big button.sc-title { font-size: 24px; font-weight: 700; letter-spacing: 0; line-height: 1.5; }
   .pn-body:not(.cm) .sc-head--big button.sc-title { padding-block: 0; }
   .pn-body:not(.cm) .sc-head--big .sc-title-in { font-size: 24px; font-weight: 700; }
-  .pn-body:not(.cm) .sc-head--big .sc-titlebox { min-width: 10ch; }
+  .pn-body:not(.cm) .sc-head--big .sc-titlebox { min-width: 0; }   /* 좁아지면 이름이 …로 준다(줄은 안 바꾼다) — 오른쪽은 @container 사다리가 먼저 접는다 */
   .pn-body:not(.cm) .sc-head--big .sc-title-no { margin-left: 10px; font-size: 17px; font-weight: 500; color: var(--muted); }
   .pn-body:not(.cm) .sc-head--big .sc-title-pen { width: 18px; height: 18px; }
   .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { width: 32px; height: 32px; }

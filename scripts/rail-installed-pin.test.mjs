@@ -67,5 +67,21 @@ const mainTs = read("web/v2/main.ts");
 check(/installedAppId: \(\) => \{ const t = tabsApi\?\.current\(\); return t && \/\^#\\\/i\\\/\/\.test\(t\.route\) \? t\.appId : null; \}/.test(mainTs),
   "W9 셸이 #/i/… 화면에서만 그 탭의 앱 id 를 레일에 알려 준다(세션 화면의 appId 는 넘기지 않는다)");
 
+//  #5319 4차(원준 2026-11-05 «홈과 자료 이거 두 개를 맨 위에 고정된 앱으로») — 자료를 홈 바로 뒤에 기기당 한 번 고정한다.
+//   #2423 청소(옛 기본값의 자료 내리기)보다 뒤에 돌고, 정본이 도착하면 그 한 번만 정본에도 끼운다(그 뒤 사람이 빼면 그대로).
+{
+  const railTs = read("web/v2/rail.ts");
+  const initAt = railTs.indexOf("if (!localStorage.getItem(SRC_UNPIN_STORE))"), pinAt = railTs.indexOf("if (!localStorage.getItem(SRC_PIN_STORE))");
+  check(initAt > 0 && pinAt > initAt && /const SRC_PIN_STORE = deviceStore\('lively_v2_rail_src_pinned_5319'\);/.test(railTs),
+    "P1 자료 고정은 기기당 한 번 · #2423 청소 뒤에 돈다");
+  check(/out\.splice\(h >= 0 \? h \+ 1 : 0, 0, 'sources'\);/.test(railTs) && /if \(list\.includes\('sources'\)\) return \[\.\.\.list\];/.test(railTs),
+    "P2 자리는 홈 바로 뒤(홈이 없으면 맨 앞) · 이미 있으면 그대로");
+  check(/const pinNow = pinnedSrcThisLoad;\n\s*pinnedSrcThisLoad = false;\n\s*if \(pinNow && !order\.includes\('sources'\)\)/.test(railTs),
+    "P3 정본이 도착하면 이번 로드에 처음 고정한 경우에만 정본에도 끼운다 — 다시 읽기마다 사람의 빼기를 되돌리지 않는다");
+  const sideTs = read("web/v2/side.ts");
+  check(!/v2-langtg/.test(sideTs) && /function retireScreenLang\(\): void \{ if \(screenLangOn\(\)\) setScreenLang\(false\); \}/.test(sideTs) && /function navRow\(\): HTMLElement \{\n\s*retireScreenLang\(\);/.test(sideTs),
+    "P4 맨 윗줄 «EN» 알약은 없다 — 켜 둔 채 남은 영어 보기는 한 번 끈다(끌 문이 없어졌으므로)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

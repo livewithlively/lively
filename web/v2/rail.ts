@@ -105,6 +105,17 @@ const RECENT_N = 4;
 //   다른 기기에서 처음 열 때 한 번 더 앞으로 오는 것뿐이다.
 const RECENT_SEED_STORE = deviceStore('lively_v2_rail_recent_seed');
 const SEED_APPS = ['terminal', 'projects2', 'knowledge'];
+//  #5319 4차(원준 2026-11-05 «홈과 자료 이거 두 개를 맨 위에 고정된 앱으로 만들자») — 자료를 홈 바로 뒤에 **한 번** 고정했다는 이 기기의 표식.
+//   #2423(2026-08-31)에 자료를 독에서 내렸던 결정을 사람이 되돌렸다. 한 번만 한다 — 그 뒤 사람이 다시 빼면 그 결정이 산다(위 SRC_UNPIN_STORE 와 같은 꼴).
+const SRC_PIN_STORE = deviceStore('lively_v2_rail_src_pinned_5319');
+/** 자료를 홈 바로 뒤(없으면 맨 앞)에 끼운 순서 — 이미 있으면 그대로. */
+function withSourcesPinned(list: readonly string[]): string[] {
+  if (list.includes('sources')) return [...list];
+  const out = [...list];
+  const h = out.indexOf('home');
+  out.splice(h >= 0 ? h + 1 : 0, 0, 'sources');
+  return out;
+}
 const NARROW_MQ = '(max-width: 900px)';   // mobile.ts MOBILE_MQ 와 같은 값 — 좁은 폭에선 레일이 늘 아이콘으로 선다(47-v2-rail.css)
 
 let section: RailSection = 'home';
@@ -116,6 +127,8 @@ let inited = false;
 let cleanedSrcThisLoad = false;
 //  이번 로드의 init() 이 #5319 구역 셋을 최근 기록에 끼웠나 — 같은 까닭으로 정본이 도착하면 거기에도 한 번 더 끼운다.
 let seededRecentThisLoad = false;
+//  이번 로드의 init() 이 #5319 자료 고정을 했나 — 정본(서버)이 도착하면 거기에도 한 번 더 끼우고 올린다.
+let pinnedSrcThisLoad = false;
 /** 구역 셋을 최근 기록 맨 앞에 끼운다(#5319) — 이미 있던 자리는 빼고 앞으로. 캐시만 고친다(올리는 것은 부르는 쪽). */
 function seedRecent(): boolean {
   let cur: string[] = [];
@@ -151,6 +164,13 @@ function init(): void {
       localStorage.setItem(SRC_UNPIN_STORE, '1');
       cleanedSrcThisLoad = true;   // ⚠ 아래 reloadRailPrefs 주석 — 정본이 도착한 뒤 한 번 더 내려야 실제로 내려간다
       if (order.includes('sources')) { order = order.filter((k) => k !== 'sources'); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
+    }
+    //  #5319 4차 — 자료를 홈 뒤에 **한 번** 고정한다. 위 #2423 청소(옛 기본값의 흔적 내리기)보다 **뒤에** 둔다 — 같은 로드에서 청소가 이걸 지우지 않게.
+    if (!localStorage.getItem(SRC_PIN_STORE)) {
+      localStorage.setItem(SRC_PIN_STORE, '1');
+      pinnedSrcThisLoad = true;
+      cleanedSrcThisLoad = false;   // 이번 로드의 #2423 청소는 정본에 다시 하지 않는다(사람이 방금 자료를 고정하라고 했다)
+      if (!order.includes('sources')) { order = normalizeOrder(withSourcesPinned(order)); localStorage.setItem(MAIN_STORE, JSON.stringify(order)); }
     }
     localStorage.removeItem('lively_v2_rail_open');   // 232px 펼침 모드(2차)의 기억 — 이제 뜻이 없다
     //  #5319 — 구역 셋을 최근 칸의 기본값으로 **한 번** 세운다(위 RECENT_SEED_STORE). 첫 동기 전이라 서버엔 아직 안 올라간다(shellPrefsPush 가드) —
@@ -193,6 +213,14 @@ export function reloadRailPrefs(): void {
     order = order.filter((k) => k !== 'sources');
     try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
     shellPrefsPush();   // 정본에도 내려야 다른 기기·다음 로드가 다시 밀어 넣지 않는다
+  }
+  //  #5319 4차 — 이번 로드에 처음 자료를 고정했다면 정본에도 한 번(그 뒤 다시 읽기는 사람이 정한 순서를 그대로 둔다).
+  const pinNow = pinnedSrcThisLoad;
+  pinnedSrcThisLoad = false;
+  if (pinNow && !order.includes('sources')) {
+    order = normalizeOrder(withSourcesPinned(order));
+    try { localStorage.setItem(MAIN_STORE, JSON.stringify(order)); } catch (_) { /* 이번 화면은 된다 */ }
+    shellPrefsPush();
   }
   drawRail();
 }
