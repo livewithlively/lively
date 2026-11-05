@@ -29,7 +29,7 @@
 // 토큰 값은 절대 출력/로깅하지 않는다.
 import {
   readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync,
-  existsSync, statSync, openSync, closeSync, accessSync, constants as FSC,
+  existsSync, statSync, openSync, closeSync, accessSync, renameSync, constants as FSC,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { hostEffects } from "./host-effects-port.mjs";
@@ -380,7 +380,8 @@ function reconcileOneClaudeConfig(cj, gw, token) {
     // 두 번째 예외 — 우리가 심은 심 직결형(lively.cmd)을 node 직결로 옮긴다. 사람이 바꾼 항목(command·args 가 다름)은 그대로 둔다.
     if ((name === "lively" || name === "lively-local") && entry.type === "stdio" && entry.command !== shim
         && stdioLaunch && stdioLaunch.isOurShimEntry(cur, shim, entry.args[entry.args.length - 1])) {
-      servers[name] = entry; added++;
+      //  사람이 붙인 env 는 이월한다 — command·args 만 우리 것이라고 판정했으므로 그 밖의 값은 멤버 값이다.
+      servers[name] = { ...entry, env: (cur.env && typeof cur.env === "object" && !Array.isArray(cur.env)) ? cur.env : entry.env }; added++;
       log(`MCP 실행 형태 교정: ${name} 심 → node 직결(배치 실행이 막힌 PC 대응, 다음 세션 적용)`);
       continue;
     }
@@ -400,7 +401,15 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   }
   if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
   conf.mcpServers = servers;
-  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); }
+  //  임시 파일에 쓰고 이름을 바꾼다 — Claude Code 는 반쯤 쓰인 .claude.json 을 손상으로 보고 mcpServers 를 통째로
+  //  비운 적이 있다(session-preload 머리말, mcp-register.mjs writeJsonAtomic 과 같은 이유). Windows 는 그 파일이 열려 있으면
+  //  rename 이 EPERM 으로 실패할 수 있어 그때만 직접 쓰기로 물러난다(종전 동작).
+  try {
+    const body = JSON.stringify(conf, null, 2) + "\n";
+    const tmp = `${cj}.lvly-tmp`;
+    try { writeFileSync(tmp, body); renameSync(tmp, cj); }
+    catch { try { rmSync(tmp, { force: true }); } catch { /* 무시 */ } writeFileSync(cj, body); }
+  }
   catch (e) { log(`MCP reconcile 쓰기 실패(무시) ${cj}: ${(e && e.message) || e}`); return; }
   // #1079 — **쓴 뒤 되읽어 확인한다.** "로그는 고쳤다는데 화면은 그대로"였던 실측 사고 때, 로그만으로는
   //  무엇이 잘못됐는지(다른 파일을 고쳤나·되돌려졌나) 구분할 수 없었다. 여기서 확인하면 다음 진단이 한 줄로 끝난다.
