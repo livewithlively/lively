@@ -40,6 +40,7 @@ import { openCurrentWsSettings } from './ws-settings.js';   // #2188 — 워크�
 import { wsStatus } from '../lib/ws-status.js';   // #4122 — 행 상태(온라인·오프라인·만드는 중)의 정본
 import { installedRecentKey, isInstalledRecentKey, mergeRailOrder, railLitKey, railRecentKeys } from '../lib/rail-lit.js';   // #3870 — 레일은 한 칸만 켠다(앱 화면에선 구역이 꺼진다) · 최근 칸은 누른다고 섞이지 않는다
 import { sectionShown, type SideOwner } from '../lib/side-owner.js';   // #4632 — 이 화면에 서는 구역(구역과 같은 문은 그 구역 · 세션 화면에 위키는 홈)
+import { omniKeyHint } from '../lib/omni-chord.js';   // #5319 레일 [검색] 칸의 단축키 이름 — 검색칸 · 우클릭 메뉴와 같은 이름
 
 export type RailSection = 'home' | 'sess' | 'proj' | 'wiki';
 
@@ -56,6 +57,8 @@ export interface RailHooks {
   onSection?: (sec: RailSection, opts: { navigate: boolean }) => void;
   /** 레일을 숨기거나 되살렸다 — 사이드바도 같이 다시 그린다(숨김에만 머리·발치에 워크스페이스·구역·앱·나가 선다). */
   onLayout?: () => void;
+  /** #5319 4차 1안 — 레일 맨 위 [검색] 칸(사이드바를 접었을 때만 선다 — 47-v2-rail.css). 통합검색을 연다. */
+  onSearch?: () => void;
 }
 
 // ── 구역 표 ──────────────────────────────────────────────────────────────────
@@ -1015,7 +1018,14 @@ export function drawRail(): void {
   document.getElementById('v2-root')?.classList.toggle('rail-hidden', hidden);
 
   // ⓪ 워크스페이스
-  const top = el('div', { class: 'v2-rail-top' }, el('div', { class: 'v2-rail-ws' }, stackTile()));
+  //  #5319 4차 1안(원준 2026-11-05) — 사이드바를 접으면 [‹][›][검색] 줄이 창을 가로질러 한 줄을 통째로 먹었다(«검색이 굉장히 중요하긴 하지만
+  //   저게 저렇게 한 줄을 통채로 차지할 이유가 없다»). 접힌 동안은 검색이 레일 맨 위(워크스페이스 아래) 칸으로 온다. 늘 그려 두고 CSS 가
+  //   사이드바가 접혔을 때만 세운다(47-v2-rail.css) — 접고 펼 때마다 레일을 다시 그리지 않게. 사이드바가 펴져 있으면 검색칸은 사이드바 맨 위다.
+  const search = el('button', {
+    class: 'v2-rail-it v2-rail-search', type: 'button', 'data-key': 'search', title: '통합검색 — ' + omniKeyHint(/mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '')),
+    'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.(),
+  }, icon('search', 'v2-rail-ic'), el('span', { class: 'v2-rail-t', text: '검색' }));
+  const top = el('div', { class: 'v2-rail-top' }, el('div', { class: 'v2-rail-ws' }, stackTile()), search);
 
   // 항목 한 붓 — 아이콘 위, 이름 아래.
   const item = (key: string, label: string, ic: string, on: boolean, extra: HTMLElement | null, onclick: () => void, href?: string): HTMLElement =>

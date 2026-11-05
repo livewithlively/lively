@@ -277,5 +277,22 @@ check(/\.pn-dock\[data-home="top"\] \.pn-dock-shelf \{[^}]*background: none;[^}]
   "W16g 머리 줄 독 — 선반(유리 상자) 없음 · 아이콘 아래 이름표 15px · 켜진 앱은 굵게 + 밑줄(색만으로 말하지 않는다) · 아이콘 40~56 · 꼬리 이름표는 안 띄운다");
 check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\s+const mb = moreBtn\(\);/.test(DOCK) && /sessionOnly \? null : addBtn\(zone\),\n\s*\]\.filter/.test(PANES_TS),
   "W16e 머리 줄엔 «앱 더하기» 가 하나 — 독의 [모든 앱] 칸 대신 줄 끝 [＋](앱 서랍)");
+//  #5319 4차 스테이지(원준 2026-11-05 «어이없게 잘리는 것 없도록») — 큰 머리는 칸 셋: 둘째 줄 선택기 폭이 첫 줄 이름을 굶기지 않는다.
+{
+  const CHAT_CSS = read(path.join(root, "public/styles/36-chat.css"));
+  check(/\.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto auto;[^}]*column-gap: 0;/.test(CHAT_CSS)
+    && /\.sc-head--big \.sc-head-top \{ grid-row: 1; grid-column: 1 \/ 3;/.test(CHAT_CSS)
+    && /\.sc-head--big > \.sc-head-r \{ grid-row: 1; grid-column: 3;[^}]*margin-left: 24px; \}/.test(CHAT_CSS)
+    && /\.sc-head--big > \.sc-run-top \{ grid-row: 2; grid-column: 2 \/ 4;[^}]*margin-left: 24px; \}/.test(CHAT_CSS),
+    "W16h 큰 머리 칸 셋 — 첫 줄 이름 [1~2] · 단추 [3], 둘째 줄 연결 상태 [1] · 선택기 [2~3]");
+  check(/\.sc-head--big \.sc-sub \.sc-termstat:not\(\[hidden\]\) \{ display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;/.test(CHAT_CSS)
+    && /\.sc-head--big \.sc-title-t \{ min-width: 3em; \}/.test(CHAT_CSS)
+    && /@container schead \(max-width: 520px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big > \.sc-run-top \.sc-ax-me:not\(\[hidden\]\) \{ display: none; \} \}/.test(CHAT_CSS)
+    && /@container schead \(max-width: 460px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big \.sc-faces \{ display: none; \} \}/.test(CHAT_CSS),
+    "W16i 좁은 칸 — 연결 상태는 …로 줄고(잘려 나가지 않는다) · 이름은 세 글자 바닥 · 접는 차례 680 복제·옮기기 → 520 선택기 → 480 자료 → 460 얼굴");
+  const TERM_HTML = read(path.join(root, "public/terminal.html"));
+  check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
+    "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");
+}
 console.log(`\n${pass} ok · ${fail} fail`);
 if (fail) process.exit(1);

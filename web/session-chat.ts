@@ -1592,6 +1592,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!m || m.type !== 'lively-term-status') return;
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c.cmd, c.text); }
     termStatusEl.textContent = String(m.text || '');
+    termStatusEl.title = termStatusEl.textContent;   // 좁은 칸에선 …로 줄어든다(36-chat.css #5319) — 손을 얹으면 전체 글
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     const stCls = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : '';
     //  #4794 — 숨겨 붙이는 동안 액자가 «끝났다»(end — 종료 배너)를 말하면 기다리지 않고 터미널로 넘긴다(그 배너를 봐야 한다 · 종전 화면).

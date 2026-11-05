@@ -867,3 +867,22 @@ button.v2-kedit { border: 0; background: none; font-family: inherit; line-height
   .v2-home-cards .v2-older { font-size: 15px; font-weight: 500; }
   .v2-dock-t { font-size: 13px; font-weight: 500; }
 }
+
+/* ── #5319 4차 1안(원준 2026-11-05) — 사이드바를 접으면 검색이 레일 맨 위로 온다 ──────────────────────────
+   종전(①-d, 43-v2-topbar-search.css)엔 접는 순간 [‹][›][검색] 줄이 창을 가로질러 본문 · 우측 사이드바가 42px 을 잃었다
+   («검색이 굉장히 중요하긴 하지만 저게 저렇게 한 줄을 통채로 차지할 이유가 없다»). 사이드바가 펴져 있으면 검색칸은 사이드바 맨 위 그대로다.
+   [검색] 칸은 늘 그려 두고(rail.ts) 여기서만 세운다 — 브라우저(topbar-web)에서 사이드바가 접혔고 레일이 보일 때.
+   데스크톱 앱은 창 맨 윗줄(타이틀바)이 [‹][›][검색] 을 그대로 들고 있어 세우지 않는다. 좁은 폭(≤900)은 서랍이라 해당 없다. */
+.v2-rail-search { display: none; }
+@media (min-width: 901px) {
+  #v2-root.topbar-web.side-closed:not(.rail-hidden) .v2-rail-search { display: flex; margin: 2px auto 4px; }
+  /*  줄은 ①-b 처럼 레일 칸 위에만 — ☰ 하나만 든다. 본문 · 손잡이 · 우측 사이드바는 다시 맨 위부터 선다. */
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-topbar {
+    grid-column: 1 / 3; border-bottom: 0; border-right: 0; background: var(--rail-bg);
+  }
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-topbar > .v2-side-nav { display: none; }
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-side + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-main,
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-main + .v2-split-x,
+  #v2-root.has-topbar.topbar-web.side-closed:not(.rail-hidden) > .v2-aside { grid-row: 1 / -1; }
+}
