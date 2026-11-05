@@ -128,6 +128,7 @@
   --v2-pad-field: rgba(26, 36, 54, .62);
   --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
+  --rail-bg: #1B2944;
 
   color-scheme: dark;
 }
@@ -253,6 +254,7 @@
   --v2-pad-field: rgba(26, 36, 54, .62);
   --v2-pad-field-line: rgba(234, 240, 250, .15);
   --tint-ink: 234, 240, 250;
+  --rail-bg: #1B2944;
 
   color-scheme: dark;
   }

@@ -217,7 +217,9 @@ let pjv = null, dash = null;
 // ── Q9 옮기기 ──
 {
   ok(/label: s\.projectId \? '프로젝트 바꾸기·떼기' : '프로젝트 연결', icon: 'sessMove'/.test(cut(CTX, "function sessionMenu(", "\n}\n")), "Q9 우클릭 「프로젝트 바꾸기·떼기 · 프로젝트 연결」 = sessMove");
-  ok(/icon\('sessMove', 'pn-i sm'\), el\('span', \{ class: 'pn-move-t', text: loose \? '프로젝트에 붙이기' : '세션 옮기기' \}\)/.test(PANES), "Q9 우측 사이드바 [세션 옮기기 · 프로젝트에 붙이기] = sessMove");
+  //  #5319 — [세션 옮기기] 는 프로젝트 문패에서 세션 머리줄로 내려왔다(session-chat.ts moveBtn · 이름은 셸 main.ts 가 준다).
+  ok(/class: 'btn-text sc-act sc-act-move'[\s\S]{0,600}?d: ICONS\.sessMove/.test(read("web/session-chat.ts"))
+    && /moveLabel: projectId === 0 \? '프로젝트에 붙이기' : '옮기기'/.test(read("web/v2/main.ts")), "Q9 세션 머리줄 [옮기기 · 프로젝트에 붙이기] = sessMove");
   ok(/label: `\$\{toZone\[z\]\} 보내기`, icon: 'moveto'/.test(PANES) && /label: '위치', icon: 'moveto'/.test(read("web/v2/pane-dock.ts")), "Q9 칸(탭) 옮기기는 moveto 그대로");
   {
     const files = [];
@@ -238,7 +240,7 @@ let pjv = null, dash = null;
   ok(/label: '같은 프로젝트에 새 세션', icon: 'sessNew'/.test(cut(SIDE, "export function sessionCtxRows(", "\n}\n")), "Q10 세션 우클릭 「같은 프로젝트에 새 세션」 = sessNew");
   ok(/\{ label: '새 세션', icon: 'sessNew'/.test(cut(SIDE, "export function projectCtxRows(", "\n}\n")), "Q10 프로젝트 우클릭 「새 세션」 = sessNew");
   ok(/kind === 'new' \? \[ICONS\.sessNew\]/.test(TABS), "Q10 새 세션 탭 = sessNew");
-  ok(/pnIcon\('sessNew', 'pn-i sm'\), el\('span', \{ text: '세션' \}\)/.test(PANES), "Q10 우측 사이드바 문의 [세션] = sessNew");
+  ok(/pnIcon\('sessNew', 'pn-i sm'\), el\('span', \{ text: '새 세션' \}\)/.test(PANES), "Q10 프로젝트 문패의 [새 세션] = sessNew");   // #5319 [세션] → [새 세션]
   dash = await loadWithStubs("web/dash/icons.ts");
   ok(!!dash && typeof dash.dashSessAddIcon === "function" && dOf(dash.dashSessAddIcon()) === ICONS.sessNew, "Q10 대시보드 [새 세션] = sessNew(값으로 불러 본다)");
   const SEL = read("web/projects/selection.ts");

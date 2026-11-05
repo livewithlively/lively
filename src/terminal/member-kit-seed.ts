@@ -43,6 +43,7 @@ import { memberSh, memberStat, memberWriteFrom, execAt, type ExecAt } from "./te
 import { mintCentralBoxToken, userSlug, ownerId } from "./profiles.js";
 import { gatewayCapability } from "../sessions/gateway-capabilities.js";   // #2165 — DB·번들 생성은 게이트웨이 능력이다
 import { MEMBER_HOME_BASE } from "./terminal-transcript.js";
+import { currentTenant } from "../org/tenant-context.js";
 import type { LivelyUser } from "../context.js";
 import { logger } from "../log.js";
 
@@ -53,8 +54,12 @@ const SEED_TIMEOUT_MS = 90_000;
 
 // 프로세스 내 1회 판정 — 같은 멤버의 동시 세션 생성이 시딩을 두 번 돌리지 않게(성공 여부와 무관하게
 //  in-flight 는 공유, 성공만 seeded 에 남는다 — 실패는 다음 생성이 다시 시도).
+//  열쇠는 «워크스페이스 + osUser» 다(#5352). 중앙 게이트웨이 하나가 여러 워크스페이스를 서비스하는데 osUser
+//  (`box_<slug>`)는 사람마다 같아서, 사람 이름만 열쇠로 쓰면 한 워크스페이스에서 심은 기록이 다른 워크스페이스의
+//  빈 홈까지 «이미 심었다» 로 건너뛰게 했다 — 재기동 뒤 두 번째 워크스페이스부터 lively MCP 없이 떴다.
 const seeded = new Set<string>();
 const inflight = new Map<string, Promise<void>>();
+const seedKey = (osUser: string): string => `${currentTenant()?.id ?? ""}\u0000${osUser}`;
 
 /** 홈 경로(실행 환경 기준) — provision-member 와 같은 규약(/home/box_<slug>). 베이스는 terminal-transcript 의
  *  MEMBER_HOME_BASE seam 을 공유(기본 /home · 테스트가 LIVELY_MEMBER_HOME_BASE 로 옮긴다). */
@@ -127,17 +132,18 @@ export async function ensureMemberKitSeeded(user: LivelyUser, at: ExecAt, inject
   const deps = injected ?? registryDeps();
   if (!deps) return;   // 노드 — 게이트웨이 능력이 없다(여기까진 애초에 안 온다)
   const memberId = ownerId(user);
-  if (!memberId || seeded.has(osUser)) return;
-  let p = inflight.get(osUser);
+  const key = seedKey(osUser);
+  if (!memberId || seeded.has(key)) return;
+  let p = inflight.get(key);
   if (!p) {
     p = (async (): Promise<void> => {
       const home = homeOf(osUser);
       // 빠른 경로 — 이미 심겼다(재기동 후 첫 세션도 stat 1회로 끝).
       const mk = await memberStat(osUser, `${home}/${MARKER}`).catch(() => null);
-      if (mk?.file) { seeded.add(osUser); return; }
+      if (mk?.file) { seeded.add(key); return; }
       const member = await deps.getMember(memberId);
       if (!member) return; // 에이전트/비멤버 — 키트 대상 아님(로컬 lazy provision 과 같은 판정)
-      logger.info({ osUser }, "멤버 홈 키트 시딩 시작(중계 배포 첫 세션)");
+      logger.info({ osUser, tenant: currentTenant()?.slug }, "멤버 홈 키트 시딩 시작(중계 배포 첫 세션)");
       // ① 토큰 — stdin 으로만. umask 077 → .lively 700 · token 600 (provision-member 와 동일 권한).
       const token = await deps.mintToken(memberId, member.scopes || [], userSlug(user));
       await memberSh(osUser, `umask 077; mkdir -p "${home}/.lively"; cat > "${home}/.lively/token"`, token);
@@ -148,11 +154,11 @@ export async function ensureMemberKitSeeded(user: LivelyUser, at: ExecAt, inject
       await memberWriteFrom(osUser, `${home}/${BUNDLE_TMP}`, Readable.from(buffer), BUNDLE_MAX_BYTES);
       //  ★ 여기만 세션 컨테이너다 — 이 한 줄이 조직 번들의 코드를 실행한다(위 «자리가 둘이다»).
       await memberSh(at, installScript(home));
-      seeded.add(osUser);
-      logger.info({ osUser }, "멤버 홈 키트 시딩 완료(settings.json 훅 + lively MCP=멤버 토큰)");
+      seeded.add(key);
+      logger.info({ osUser, tenant: currentTenant()?.slug }, "멤버 홈 키트 시딩 완료(settings.json 훅 + lively MCP=멤버 토큰)");
     })();
-    inflight.set(osUser, p);
-    p.finally(() => inflight.delete(osUser)).catch(() => { /* 아래 caller catch 와 동일 — unhandled 방지 */ });
+    inflight.set(key, p);
+    p.finally(() => inflight.delete(key)).catch(() => { /* 아래 caller catch 와 동일 — unhandled 방지 */ });
   }
   // 상한 — 시딩이 어떤 이유로든 매달리면 세션 생성까지 같이 매달린다. 상한 초과는 포기(best-effort)하되
   //  in-flight 는 계속 돌게 둔다(다음 세션은 마커/inflight 로 이어받는다).
