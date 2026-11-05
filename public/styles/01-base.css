@@ -146,6 +146,16 @@
   --dark-2:        #1C3962;  /* (theme-invariant) 위와 한 쌍 */
   --dark-sub:      #AEBFD8;  /* (theme-invariant) 위 어두운 면 **위의 글자** — 면이 안 변하니 글자도 안 변한다 */
   --dark-foot:     #7C8DA8;  /* (theme-invariant) 위와 한 쌍 */
+  /* ── #5319 네이비 레일(원준 2026-11-04 «네이비로 하는데 … 밑에있는거 아이콘이랑 글자 색이 그대로 묻히던데 체크해»).
+     면(--rail-bg)만 테마마다 다르고, 그 위 글자·선은 늘 밝은 잉크라 테마 불변이다 — 레일 안의 모든 글자·아이콘·선은 이 토큰만 쓴다
+     (01-base 의 --ink · --muted 계열을 쓰면 라이트에서 네이비 위 네이비로 묻힌다). 대비(WCAG, 계산값) — #15233B 위 fg 9.2 · muted 5.8 · 켜진 칸 위 흰 글자 9.8 · 다크 #1B2944 위 fg 8.6. ── */
+  --rail-bg:       #15233B;
+  --rail-fg:       rgba(255, 255, 255, .74);  /* (theme-invariant) 레일 위 글자·아이콘 */
+  --rail-fg-on:    #FFFFFF;                   /* (theme-invariant) 레일 위 켜진·손 얹은 칸 */
+  --rail-muted:    rgba(255, 255, 255, .56);  /* (theme-invariant) 레일 위 작은 머리글 */
+  --rail-hover:    rgba(255, 255, 255, .08);  /* (theme-invariant) 레일 칸 손 얹음 면 */
+  --rail-on:       rgba(255, 255, 255, .15);  /* (theme-invariant) 레일 켜진 칸 면 */
+  --rail-line:     rgba(255, 255, 255, .13);  /* (theme-invariant) 레일 안 구분선 */
 }
 
 /* ── §2 베이스 타이포 ── */

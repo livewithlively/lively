@@ -142,9 +142,19 @@ const sx = cut(SIDE, "function sessAxisKids(", "\n}\n");
 ok(/groupProj \? projListKids\(shown, o\) : sessAxisKids\(shown, o\)/.test(al) && /if \(kids\.length\) return kids;/.test(al),
   "W2a 세션별 축은 sessAxisKids 로 그린다 · 빈 화면은 그린 것으로 가른다(#3870 E2 그대로)");
 ok(/const plan = planSessAxis\(shown, projPinnedId, \(r\) => projCardRows\(\[r\]\)\.length === 0\);/.test(sx) && /text: PINNED_BUCKET/.test(sx) && /kids\.push\(pinCard\(plan\.pinRows, o\)\)/.test(sx)
-  && /projGroups\(plan\.cardRows, false, false\)/.test(sx) && /projGrpCard\(g, o, false, standingSess\)/.test(sx) && /kids\.push\(dayCard\(d\.group, d\.rows, o, i\)\)/.test(sx)
+  && /projGroups\(plan\.cardRows, false, false\)/.test(sx) && /projGrpCard\(g, o, false, standingSess\)/.test(sx) && /into\.push\(dayCard\(d\.group, d\.rows, o, i\)\)/.test(sx)
   && (sx.match(/projCardRows/g) || []).length === 1,
   "W2b ★세션별 축도 같은 「고정」 층(세션 카드 + 고정한 프로젝트 카드, 자리 기억은 안 건드림) · 나머지는 날짜 카드");
+//  #5319(원준 2026-11-04 v2 확정안) — 어제와 그 앞 날짜는 두 축 모두 「이전 날짜 n」 한 줄 뒤로 접힌다.
+{
+  const pl = cut(SIDE, "function projListKids(", "\n}\n");
+  ok(/const into = past \? older : kids;/.test(sx) && /olderFold\(kids, older, olderN, `세션 \$\{olderN\}개`\)/.test(sx)
+    && /const past = isPastDay\(g\.bucket\);/.test(pl) && /olderFold\(kids, older, olderN, `프로젝트 \$\{olderN\}개`\)/.test(pl),
+    "W2c 세션별 · 프로젝트별 축 모두 지난 날짜 묶음을 「이전 날짜 n」 뒤로 접는다");
+  const of = cut(SIDE, "function olderFold(", "\n}\n");
+  ok(/const open = olderOpen \|\| !kids\.length;/.test(of) && /if \(open\) kids\.push\(\.\.\.older\);/.test(of) && /'aria-expanded': String\(open\)/.test(of),
+    "W2d 위에 선 것이 없으면 펴 두고, 펼침은 aria-expanded 로 말한다");
+}
 const dc = cut(SIDE, "function dayCard(", "\n}");
 ok(dc.length > 0 && !/projCardRows|filter\(/.test(dc) && /data-anch': `day:\$\{seq\}:\$\{group\}`/.test(dc),
   "W2c 날짜 카드는 받은 줄을 거르지 않고 다 그린다 · 앵커에 구간 순번(같은 이름 두 구간이 겹치지 않게)");

@@ -223,10 +223,38 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-adraw-f .btn-text { display: inline-flex; align-items: center; gap: 6px; }
 .pn-adraw-flip { transform: scaleY(-1); }   /* «아래 칸» — 위 막대 창(window)을 뒤집어 아래 막대 */
 
+/* ── #5319 머리 줄 독(넓은 화면) — 곁칸 맨 위 줄에 가로로 선 유리 알약(원준 2026-11-04 «독이랑 위에 하나로 합치자»).
+   줄 = [독 알약] [켜진 앱 이름 · 열린 탭 ∨ · ＋]. 탭 띠 · 접기는 감춘다 — 독의 아이콘 · 문패의 접기(⌘⌥B)가 같은 일을 한다.
+   독의 [모든 앱] 칸은 이 줄에선 안 세운다([＋] 앱 서랍과 같은 일).
+   줄 안의 붙박이라 손잡이 · 끌어 옮기기 · 확대 · 접기 · 크기 끌기가 없다(아이콘 순서 끌기 · 끌어내 빼기는 된다).
+   이름표는 줄 **아래로**(곁칸 안) 내려온다. 좁은 폭(서랍)은 종전대로 탭 줄 + 바닥 독. ── */
+.pn-dock-slot { display: none; }
+.pn-pane.dock-top > .pn-tabbar { height: auto; min-height: var(--pn-head-h, 42px); align-items: center; gap: 8px; padding: 6px 6px 6px 10px; }
+.pn-pane.dock-top > .pn-tabbar > .pn-tabs { display: none; }
+.pn-pane.dock-top > .pn-tabbar > .pn-dock-slot { display: flex; flex: 0 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  padding: 2px 2px 6px; margin: -2px -2px -6px; }   /* 알약 그늘이 잘리지 않을 몫 — 줄 높이는 그대로 */
+.pn-pane.dock-top > .pn-tabbar > .pn-tabtail { flex: 1 1 auto; min-width: 34px; justify-content: flex-end; align-items: center; gap: 2px; padding-right: 0; }
+.pn-dock-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px 0 4px;
+  font-size: 12.5px; font-weight: 700; color: var(--ink-sub); }
+.pn-pane.dock-top .pn-tab-more { display: inline-flex; width: 30px; height: 30px; border-radius: 8px; }
+.pn-pane.dock-top .pn-tab-add { width: 30px; height: 30px; border-radius: 8px; }
+.pn-dock[data-home="top"] .pn-dock-shelf:empty { display: none; }
+.pn-dock[data-home="top"] { position: relative; width: auto; height: auto; pointer-events: auto; }
+.pn-dock[data-home="top"] .pn-dock-shelf { position: relative; left: auto; flex-direction: row; align-items: flex-end; cursor: default;
+  padding: 5px 6px 3px; border-radius: calc((var(--dk-s, 30px) + 8px) * .36);
+  box-shadow: inset 0 0 0 .5px color-mix(in srgb, var(--surface) 70%, transparent), inset 0 1px 0 var(--gi-tile-line), 0 2px 8px -2px rgba(var(--shadow-ink), .14); }
+.pn-dock[data-home="top"] .pn-dock-sep { width: 5px; margin: 3px 0 8px; cursor: default;
+  background: linear-gradient(to right, transparent 2px, var(--sl) 2px 3px, transparent 3px); }
+/* 새로 열 때 — 줄 밖으로 튀지 않고 제자리에서 살짝 부푼다(알약 안 여백 안에서). */
+@keyframes pn-dock-pop { 0%, 100% { transform: none; } 35% { transform: scale(1.14); } 70% { transform: scale(.97); } }
+.pn-dock[data-home="top"] .pn-dock-it.bounce .pn-dock-ic { animation: pn-dock-pop .5s cubic-bezier(.3, .6, .35, 1); }
+.pn-dock-tip[data-side="bottom"] { translate: -50% 0; }
+.pn-dock-tip[data-side="bottom"]::after { left: calc(50% + var(--ax, 0px)); top: -4px; margin-left: -4.5px; }
+
 /* ── 좁은 폭(서랍) — 끌기·확대 없음 ── */
 .pn-dock.narrow .pn-dock-shelf { cursor: default; }
 
 @media (prefers-reduced-motion: reduce) {
   .pn-dock, .pn-dock-ic, .pn-dock-shelf, .pn-dock-more, .pn-dock-preview, .pn-dock-tile-ic { transition: none !important; }
-  .pn-dock-it.bounce .pn-dock-ic, .pn-dock-ghost.poof, .pn-dock-more.open .pn-dock-more-grid, .pn-dock-tip, .pn-adraw { animation: none !important; }
+  .pn-dock-it.bounce .pn-dock-ic, .pn-dock[data-home="top"] .pn-dock-it.bounce .pn-dock-ic, .pn-dock-ghost.poof, .pn-dock-more.open .pn-dock-more-grid, .pn-dock-tip, .pn-adraw { animation: none !important; }
 }

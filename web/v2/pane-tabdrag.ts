@@ -54,6 +54,8 @@ const SLOP = 5;
 const BAND = 18;
 
 const spanOf = (n: HTMLElement): Span => { const r = n.getBoundingClientRect(); return { left: r.left, width: r.width }; };
+/** 탭 띠가 화면에 서 있나 — 넓은 화면의 곁칸은 띠를 감추고 독이 그 줄에 선다(#5319, 42-v2-dock.css .pn-pane.dock-top). */
+const stripShown = (tabs: HTMLElement): boolean => tabs.getClientRects().length > 0;
 const inRect = (r: DOMRect, x: number, y: number, pad = 0): boolean => x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
 const tabEls = (tabs: HTMLElement): HTMLElement[] => [...tabs.children].filter((n) => n.classList.contains('pn-tabwrap')) as HTMLElement[];
 
@@ -155,7 +157,8 @@ function floatMove(d: Drag, x: number, y: number): void {
   let t: Target | null = null;
   for (const b of d.host.bars()) {
     if (b.zone === d.zone || !d.host.canGo(d.key, d.zone, b.zone)) continue;
-    if (inRect(b.bar.getBoundingClientRect(), x, y, 6)) { t = { zone: b.zone, at: dropSlot(tabEls(b.tabs).map(spanOf), x), bar: b }; break; }
+    //  #5319 띠가 감춰진 줄(넓은 화면의 곁칸 머리 줄 = 독)에 놓으면 맨 끝 — 끼울 자리를 잴 탭이 화면에 없다.
+    if (inRect(b.bar.getBoundingClientRect(), x, y, 6)) { t = { zone: b.zone, at: stripShown(b.tabs) ? dropSlot(tabEls(b.tabs).map(spanOf), x) : tabEls(b.tabs).length, bar: b }; break; }
     if (inRect(b.pane.getBoundingClientRect(), x, y)) { t = { zone: b.zone, at: tabEls(b.tabs).length, bar: b }; break; }
   }
   showTarget(d, t, x, y);
@@ -169,7 +172,7 @@ function showTarget(d: Drag, t: Target | null, x: number, y: number): void {
   //  끼울 자리 세로선 — 줄 위에 있을 때만(본문 위면 줄 전체가 파랗게 = 맨 끝).
   const barR = t.bar.bar.getBoundingClientRect();
   const els = tabEls(t.bar.tabs);
-  if (!inRect(barR, x, y, 6) || !els.length) { d.caret?.remove(); d.caret = null; return; }
+  if (!inRect(barR, x, y, 6) || !els.length || !stripShown(t.bar.tabs)) { d.caret?.remove(); d.caret = null; return; }
   const at = Math.min(t.at, els.length);
   const edge = at < els.length ? els[at].getBoundingClientRect().left : els[els.length - 1].getBoundingClientRect().right;
   if (!d.caret) { d.caret = document.createElement('div'); d.caret.className = 'pn-tab-caret'; d.caret.setAttribute('aria-hidden', 'true'); }

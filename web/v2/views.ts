@@ -465,6 +465,14 @@ export interface SessionViewOpts {
   livAsks?: boolean;
   /** 못 읽는 기록(403 · 404)에 촘촘히 되묻지 않는다 — session-chat.ts slowOnMissing 주석(앱빌더 시험 세션). */
   slowOnMissing?: boolean;
+  /** #5319 머리줄 [복제] · [옮기기] — 프로젝트 문패에서 내려온 세션 단추(session-chat.ts onFork · onMove 주석). 칸 셸이 준다. */
+  onFork?: (anchor: HTMLElement) => void;
+  /** [복제] 를 세울지 — 셸이 우클릭 메뉴와 같은 술어(ctx-shell canForkSess)로 답한다(views 가 ctx-shell 을 부르면 순환이라 셸이 넘긴다). */
+  canFork?: (t: SessionChatTarget) => boolean;
+  onMove?: () => void;
+  moveLabel?: string;
+  /** #5319 큰 머리(session-chat.ts bigHead) — 칸 셸의 세션 화면. */
+  bigHead?: boolean;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
@@ -514,6 +522,13 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     chatHome: vopts.chatHome,
     livAsks: vopts.livAsks,
     slowOnMissing: vopts.slowOnMissing,
+    //  #5319 [복제] · [옮기기] — 술어는 문패 · 우클릭과 같은 한 벌(canForkSess · canMoveSess)을 지금의 행으로 다시 잰다.
+    onFork: vopts.onFork,
+    canFork: vopts.canFork,
+    onMove: vopts.onMove,
+    canMove: (t) => canMoveSess(t),
+    moveLabel: vopts.moveLabel,
+    bigHead: vopts.bigHead,
   });
 }
 
