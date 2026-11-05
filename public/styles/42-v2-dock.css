@@ -241,6 +241,34 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
 .pn-pane.dock-top .pn-tab-more { display: inline-flex; width: 40px; height: 40px; border-radius: 8px; }
 .pn-pane.dock-top .pn-tab-add { width: 40px; height: 40px; border-radius: 8px; }
 .pn-pane.dock-top .pn-tab-more svg, .pn-pane.dock-top .pn-tab-add svg { width: 20px; height: 20px; }
+/* ── #5319 독 아래 탭 줄 — 둘 이상 떠 있는 앱의 탭만(panes.ts paintPane dock-sub) ──────────────────────────────
+   2026-11-05: 뷰어를 여럿 띄우면 독의 [뷰어] 한 칸이 돌아가며 보여 줄 뿐 그 파일을 골라 갈 수 없었다 · «가시성 감안해서 탭 사이즈가 충분히 크게».
+   독 줄 높이(--pn-bighead-h)는 그대로 — 이 줄의 윗선이 세션 머리줄 아랫선과 한 줄로 잇는다. 격자로 세운다(flex-wrap 이면 독 아이콘이
+   많을 때 [＋] 가 둘째 줄로 떨어진다). 탭은 KRDS 크기: 높이 40 · 글자 15/500 · 아이콘 18. 쉴 때는 글자만, 켜진 탭 = 굵게 + 밑줄 3px
+   (독 이름표와 같은 말 — 색만으로 말하지 않는다). 아이콘으로 접지 않고 이름을 남긴 채 미끄러진다(lib/pane-tabs SUB_TAB_METRICS). */
+.pn-pane.dock-top.dock-sub > .pn-tabbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: calc(var(--pn-bighead-h, 113px) - 1px) 53px;
+  height: auto; column-gap: 4px; }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-dock-slot { grid-row: 1; grid-column: 1; }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabtail { grid-row: 1; grid-column: 2; }
+.pn-pane.dock-top.dock-sub > .pn-tabbar > .pn-tabs { display: flex; grid-row: 2; grid-column: 1 / -1; margin: 0 -8px; padding: 0 8px; gap: 4px;
+  align-items: stretch; border-top: 1px solid var(--line); }
+.pn-pane.dock-top > .pn-tabbar > .pn-tabs > .pn-tabwrap.pn-sub-off { display: none; }
+.pn-pane.dock-top.dock-sub > .pn-tabbar:not(.shrunk):not(.has-more) .pn-tab-more { display: none; }
+.pn-pane.dock-top > .pn-tabbar.has-more > .pn-tabtail { box-shadow: none; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap { height: auto; margin: 6px 0; border-radius: 6px; background: none; box-shadow: none; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap:hover { background: var(--bg-punch); }
+.pn-pane.dock-top.dock-sub .pn-tabwrap.on { background: none; box-shadow: none; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap.on::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -6px; height: 3px;
+  border-radius: 2px 2px 0 0; background: var(--ink); pointer-events: none; }
+.pn-pane.dock-top.dock-sub .pn-tab { gap: 8px; padding: 0 12px 0 10px; font-size: 15px; font-weight: 500; line-height: 1.5; color: var(--ink-sub); }
+.pn-pane.dock-top.dock-sub .pn-tabwrap:hover .pn-tab { color: var(--ink); }
+.pn-pane.dock-top.dock-sub .pn-tabwrap.on .pn-tab { font-weight: 700; color: var(--ink); }
+.pn-pane.dock-top.dock-sub .pn-tabwrap.pinned .pn-tab { gap: 8px; padding: 0 12px 0 10px; justify-content: flex-start; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap.pinned .pn-tab-t { display: block; }
+.pn-pane.dock-top.dock-sub .pn-tab-lead { width: 26px; height: 26px; border-radius: 8px; }
+.pn-pane.dock-top.dock-sub .pn-tab-lead .pn-i.sm { width: 18px; height: 18px; }
+.pn-pane.dock-top.dock-sub .pn-tab-x { left: 11px; margin-top: -12px; width: 24px; height: 24px; border-radius: 6px; }
+.pn-pane.dock-top.dock-sub .pn-tab-x .pn-i { width: 14px; height: 14px; }
 .pn-dock[data-home="top"] .pn-dock-shelf:empty { display: none; }
 .pn-dock[data-home="top"] { position: relative; width: auto; height: 100%; pointer-events: auto; }
 .pn-dock[data-home="top"] .pn-dock-shelf { position: relative; left: auto; height: 100%; flex-direction: row; align-items: flex-end; gap: 0; cursor: default;
