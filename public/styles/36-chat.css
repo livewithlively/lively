@@ -677,19 +677,27 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-act-fork, .sc-act-move { display: inline-flex; align-items: center; gap: 4px; }
 .sc-act-fork[hidden], .sc-act-move[hidden] { display: none; }
 @media (min-width: 901px) {
-  .pn-body:not(.cm) .sc-head.sc-head--big { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 36px 36px;
-    column-gap: 24px; row-gap: 8px; align-items: center; padding: 16px 24px 16px 32px; }   /* 높이는 42-v2-panes.css(--pn-bighead-h) */
+  /* 칸은 셋이다 — 두 줄이 오른쪽 폭을 나눠 갖지 않게(실측 2026-11-05: 둘째 줄 모델 · 추론강도 폭만큼 첫 줄 이름이 굶었다).
+     첫 줄: 이름 [1~2] · 단추 [3]   둘째 줄: 연결 상태 [1] · 선택기 [2~3]. 셋째 칸은 단추 폭, 둘째 칸은 선택기가 그보다 넓은 만큼만 선다.
+     칸 사이 24 는 오른쪽 두 덩이의 margin-left 다(column-gap 을 쓰면 빈 둘째 칸에도 틈이 한 번 더 붙는다). */
+  .pn-body:not(.cm) .sc-head.sc-head--big { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 36px 36px;
+    column-gap: 0; row-gap: 8px; align-items: center; padding: 16px 24px 16px 32px; }   /* 높이는 42-v2-panes.css(--pn-bighead-h) */
   .pn-body:not(.cm) .sc-head--big > .sc-head-l, .pn-body:not(.cm) .sc-head--big .sc-head-main { display: contents; }
-  .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1; gap: 12px; min-width: 0; overflow: hidden; }   /* 넘치면 제 칸 안에서 — 오른쪽 단추 위로 안 번진다 */
+  .pn-body:not(.cm) .sc-head--big .sc-head-top { grid-row: 1; grid-column: 1 / 3; gap: 12px; min-width: 0; overflow: hidden; }   /* 넘치면 제 칸 안에서 — 오른쪽 단추 위로 안 번진다 */
   .pn-body:not(.cm) .sc-head--big .sc-sub { grid-row: 2; grid-column: 1; gap: 12px; font-size: 15px; overflow: hidden; }   /* 넘치면 제 칸 안에서 잘린다 — 오른쪽 선택기 위에 겹치지 않게 */
-  .pn-body:not(.cm) .sc-head--big > .sc-head-r { grid-row: 1; grid-column: 2; justify-self: end; gap: 4px; }
-  .pn-body:not(.cm) .sc-head--big > .sc-run-top { grid-row: 2; grid-column: 2; justify-self: end; gap: 4px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-head-r { grid-row: 1; grid-column: 3; justify-self: end; gap: 4px; margin-left: 24px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-run-top { grid-row: 2; grid-column: 2 / 4; justify-self: end; gap: 4px; margin-left: 24px; }
+  /* 둘째 줄 왼쪽이 모자라면 연결 상태 글이 …로 준다([화면 복구]는 그대로) — 칸 밖으로 잘려 나가지 않게. 전체 글은 title 에(session-chat.ts). */
+  .pn-body:not(.cm) .sc-head--big .sc-sub > .sc-pair { flex: 0 1 auto; min-width: 0; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub .sc-termstat:not([hidden]) { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; line-height: 36px; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub .sc-pair > .sc-act { flex: none; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-h { display: none; }
   /* 이름 — KRDS 제목 24 · 굵기 700 · 줄 높이 150% · 자간 0. */
   .pn-body:not(.cm) .sc-head--big .sc-title, .pn-body:not(.cm) .sc-head--big button.sc-title { font-size: 24px; font-weight: 700; letter-spacing: 0; line-height: 1.5; }
   .pn-body:not(.cm) .sc-head--big button.sc-title { padding-block: 0; }
   .pn-body:not(.cm) .sc-head--big .sc-title-in { font-size: 24px; font-weight: 700; }
   .pn-body:not(.cm) .sc-head--big .sc-titlebox { min-width: 0; }   /* 좁아지면 이름이 …로 준다(줄은 안 바꾼다) — 오른쪽은 @container 사다리가 먼저 접는다 */
+  .pn-body:not(.cm) .sc-head--big .sc-title-t { min-width: 3em; }   /* …가 붙어도 두세 글자는 남는다 */
   .pn-body:not(.cm) .sc-head--big .sc-title-no { margin-left: 10px; font-size: 17px; font-weight: 500; color: var(--muted); }
   .pn-body:not(.cm) .sc-head--big .sc-title-pen { width: 18px; height: 18px; }
   .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { width: 32px; height: 32px; }
@@ -717,10 +725,20 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top span.dt-chip { line-height: 36px; padding: 0 10px; font-size: 15px; }   /* display 는 안 준다 — 숨김 규칙(.sc-ax-h · @container)을 이기면 안 된다 */
 }
-/* 세션 칸이 좁으면(곁칸을 넓힌 때) 오른쪽 열이 이름을 굶긴다 — [복제] · [옮기기] 를 먼저 접는다. 둘은 [⋯] 와 세션 우클릭에 그대로 있고
-   자주 쓰는 단추가 아니다(자료 · 연결 상태 · 화면 복구 · ⋯ 는 폭으로 안 사라진다 — 위 사다리). 모델 · 추론강도는 620 에서(③). */
+/* 세션 칸이 좁으면(곁칸을 넓힌 때) 접는 차례 — 이름이 마지막까지 버틴다(실측 2026-11-05: 세션 칸 400px 에서 이름이 «U» 한 글자까지 줄었다).
+   ① ≤680 [복제] · [옮기기] — [⋯] 와 세션 우클릭에 그대로 있다
+   ② ≤520 모델 · 추론강도 — 둘째 줄에 제 자리가 있어 한 줄 머리의 620(위 ③)보다 늦게 접는다. [⋯ ▸ 이 세션 설정] 에 그대로 있다
+   ③ ≤480 [자료] · 이름 옆 연필 — 자료는 곁칸 독에 늘 있고, 이름은 눌러도 고쳐진다. 좌우 여백도 준다
+   ④ ≤460 얼굴
+   연결 상태 · [화면 복구] · [⋯] 는 폭으로 안 사라진다. */
 @media (min-width: 901px) {
   @container schead (max-width: 680px) { .pn-body:not(.cm) .sc-head--big .sc-act-fork, .pn-body:not(.cm) .sc-head--big .sc-act-move { display: none; } }
+  @container schead (max-width: 620px) { .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-me:not([hidden]) { display: block; } }
+  @container schead (max-width: 520px) { .pn-body:not(.cm) .sc-head--big > .sc-run-top .sc-ax-me:not([hidden]) { display: none; } }
+  @container schead (max-width: 480px) {
+    .pn-body:not(.cm) .sc-head--big .sc-act-files, .pn-body:not(.cm) .sc-head--big .sc-title-pen, .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { display: none; }
+    .pn-body:not(.cm) .sc-head.sc-head--big { padding-left: 20px; padding-right: 16px; } }
+  @container schead (max-width: 460px) { .pn-body:not(.cm) .sc-head--big .sc-faces { display: none; } }
 }
 @media (max-width: 900px) {
   .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }

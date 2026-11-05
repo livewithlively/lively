@@ -83,5 +83,18 @@ check(/installedAppId: \(\) => \{ const t = tabsApi\?\.current\(\); return t && 
     "P4 맨 윗줄 «EN» 알약은 없다 — 켜 둔 채 남은 영어 보기는 한 번 끈다(끌 문이 없어졌으므로)");
 }
 
+//  #5319 4차 1안(원준 2026-11-05) — 사이드바를 접으면 검색이 레일 맨 위로 오고, 맨 윗줄은 창을 가로지르지 않는다(레일이 보일 때).
+{
+  const railTs = read("web/v2/rail.ts"), mainTs2 = read("web/v2/main.ts"), railCss = read("public/styles/47-v2-rail.css");
+  check(/class: 'v2-rail-it v2-rail-search'[\s\S]*?onclick: \(\) => hooks\.onSearch\?\.\(\)/.test(railTs) && /el\('div', \{ class: 'v2-rail-top' \}, el\('div', \{ class: 'v2-rail-ws' \}, stackTile\(\)\), search\)/.test(railTs)
+    && /onSearch: \(\) => omniOpen\(\),\s+\/\/ #5319/.test(mainTs2),
+    "P5 레일 맨 위(워크스페이스 아래) [검색] 칸이 통합검색을 연다");
+  check(/\.v2-rail-search \{ display: none; \}/.test(railCss) && /#v2-root\.topbar-web\.side-closed:not\(\.rail-hidden\) \.v2-rail-search \{ display: flex;/.test(railCss)
+    && /#v2-root\.has-topbar\.topbar-web\.side-closed:not\(\.rail-hidden\) > \.v2-topbar \{\s+grid-column: 1 \/ 3;/.test(railCss)
+    && /side-closed:not\(\.rail-hidden\) > \.v2-topbar > \.v2-side-nav \{ display: none; \}/.test(railCss)
+    && /side-closed:not\(\.rail-hidden\) > \.v2-main,[\s\S]*?\{ grid-row: 1 \/ -1; \}/.test(railCss),
+    "P6 [검색] 칸은 브라우저에서 사이드바를 접었을 때만 서고, 그때 맨 윗줄은 레일 칸 위에만(☰) — 본문 · 우측 사이드바는 맨 위부터. 레일까지 걷으면 종전 전폭 줄(☰ 를 잃지 않게)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
