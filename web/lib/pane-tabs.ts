@@ -138,6 +138,9 @@ export interface Metrics {
   activeMin: number;
 }
 export const TAB_METRICS: Metrics = { icon: 34, minLabel: 64, max: 184, activeMax: 220, activeMin: 120 };
+/** #5319 독 아래 큰 탭 줄(15px · 40px) — 아이콘으로 접지 않는다(icon = minLabel): 뷰어 여럿이 같은 아이콘만 남으면 어느 파일인지 모른다.
+ *  모자라면 이름을 남긴 채(아이콘 + 한글 네 글자쯤) 줄이 가로로 미끄러진다. */
+export const SUB_TAB_METRICS: Metrics = { icon: 120, minLabel: 120, max: 280, activeMax: 340, activeMin: 180 };
 /**
  * 탭을 «보이게» 할 때 어느 칸에서 켜나 — **닫힌 아래 칸(터미널 밑)은 펼치지 않는다**, 곁칸으로 옮겨 켠다.
  *  원준(2026-10-01): «타임라인 쟨 왜 터미널 밑에서 갑자기 앱이 튀어나와. 밑에서 나오는거 없게해줘» — 옛 기본 배치가 타임라인을

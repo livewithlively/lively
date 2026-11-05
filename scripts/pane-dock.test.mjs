@@ -261,9 +261,27 @@ check(/if \(home === 'top'\) return;\s+\/\/[^\n]*\n\s*if \(t\.closest\('\.pn-doc
 check(/if \(home === 'top'\) return \[\{ label: '고정한 앱 되돌리기'/.test(DOCK) && /home === 'top' \? 'bottom'/.test(DOCK) && /\.pn-dock-tip\[data-side="bottom"\]/.test(read("public/styles/42-v2-dock.css")),
   "W16c 머리 줄 독의 설정은 고정 되돌리기 하나 · 이름표는 아래로");
 check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-name/.test(PANES_TS)
-  && /const dup = new Set\(list\.map\(tabBase\)\)\.size < list\.length;\n\s*pane\.tail\.replaceChildren\(\.\.\.\[\n\s*dup \? moreBtn\(zone\) : null,/.test(PANES_TS)
+  && /pane\.tail\.replaceChildren\(\.\.\.\[\n\s*sub \? moreBtn\(zone\) : null,/.test(PANES_TS)
   && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-tabs \{ display: none; \}/.test(DOCK_CSS),
-  "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 [열린 탭 ∨](한 앱이 둘 넘게 떴을 때만) · [＋] 만 남긴다 — 켜진 앱 이름은 아이콘 아래 이름표가 말한다");
+  "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 [열린 탭 ∨](독 아래 줄이 섰을 때만) · [＋] 만 남긴다 — 켜진 앱 이름은 아이콘 아래 이름표가 말한다");
+//  #5319 독 아래 탭 줄(2026-11-05 — 뷰어 여럿 중 하나를 고를 수 없었다 · «탭 사이즈가 충분히 크게»).
+{
+  const TABS_LIB = read("web/lib/pane-tabs.ts");
+  check(/const inSub = \(k: TabKey\): boolean => tabBase\(k\) !== 'sessions' && \(counts\.get\(tabBase\(k\)\) \?\? 0\) >= 2;/.test(PANES_TS)
+    && /const sub = top && list\.some\(inSub\);/.test(PANES_TS)
+    && /w\.classList\.toggle\('pn-sub-off', top && !inSub\(k\)\)/.test(PANES_TS)
+    && /classList\.contains\('pn-tabwrap'\) && !n\.classList\.contains\('pn-sub-off'\)/.test(PANES_TS),
+    "W16k 독 아래 탭 줄 = 둘 이상 떠 있는 앱의 탭만(켜진 앱과 무관) — 하나뿐인 앱은 독 아이콘이 곧 탭이라 다시 세우지 않는다 · 숨은 탭은 폭을 나눠 갖지 않는다");
+  check(/\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto; grid-template-rows: calc\(var\(--pn-bighead-h, 113px\) - 1px\) 53px;/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tab \{[^}]*font-size: 15px;/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub \.pn-tabwrap\.on::after \{ content: "";/.test(DOCK_CSS)
+    && /\.pn-pane\.dock-top\.dock-sub > \.pn-tabbar:not\(\.shrunk\):not\(\.has-more\) \.pn-tab-more \{ display: none; \}/.test(DOCK_CSS),
+    "W16l 독 아래 탭 줄 — 격자(독 줄 높이 그대로 · 그 아래 53px) · 글자 15px · 켜진 탭 밑줄 · [∨] 는 줄이 넘칠 때만");
+  check(/export const SUB_TAB_METRICS: Metrics = \{ icon: 120, minLabel: 120,/.test(TABS_LIB)
+    && /const met = sub \? SUB_TAB_METRICS : TAB_METRICS;/.test(PANES_TS)
+    && /p\.bar\.classList\.toggle\('compact', plan\.mode === 'icons' && !sub\);/.test(PANES_TS),
+    "W16m 독 아래 탭 줄은 아이콘으로 접지 않는다 — 뷰어 여럿이 같은 아이콘만 남으면 어느 파일인지 모른다(이름을 남긴 채 미끄러진다)");
+}
 //  #5319 4차(원준 2026-11-05) — 머리 줄 독 = 세션 머리줄과 같은 높이 · 이름표 · 선반 없음 · 아이콘 40~56.
 check(/\.pn-pane\.dock-top > \.pn-tabbar \{ height: var\(--pn-bighead-h, 113px\);/.test(DOCK_CSS)
   && /\.pn-body:not\(\.cm\) \.sc-head\.sc-head--big \{ height: var\(--pn-bighead-h\);/.test(PANES_CSS) && /--pn-bighead-h: 113px;/.test(PANES_CSS),
