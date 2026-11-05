@@ -12,7 +12,8 @@ import {
 import {
   listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, listSourceChannels, buildDistillerPrompt,
   distillerSectionViews, measureFilterImpact, mergeDraftDistiller,
-  describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
+  describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller,
+  requeueDistillerSeen, REQUEUE_MAX_TASKS
 } from "../../org/distill/distiller.js";
 import { actorOf, restRead, restWork } from "./shared.js";
 import { ensureLocalFilesDistiller, LOCAL_DISTILLER_KEY } from "../../org/distill/local-preset.js";
@@ -218,7 +219,7 @@ export const ingestDistillersCapabilities: Capability[] = [
       effort: z.string().nullable().optional().describe("추론강도. 비우면 그 하네스의 자동화 기본값(claude=low · codex=medium · antigravity=high · grok=medium)."),
       requester: z.string().nullable().optional(),
       note: z.string().nullable().optional(),
-      reset_seen: z.boolean().optional().describe("판정 이력 초기화 — 이 증류기가 '보고 버린' 자료를 다시 인박스에 올린다(기준을 바꿔 재검토할 때). 이미 증류된 자료는 그대로 제외되므로 중복 증류는 없다."),
+      reset_seen: z.boolean().optional().describe("판정 이력 초기화 — 이 증류기가 '보고 버린' 자료를 다시 인박스에 올린다(기준을 바꿔 재검토할 때). 이미 증류된 자료는 그대로 제외되므로 중복 증류는 없다. 특정 배치만 되돌리려면 org_distiller_requeue."),
     }),
   restWork("org_distiller_remove", "증류기 삭제(자료 레인)",
     "자료 레인 1개 삭제(id 또는 key). 이미 증류된 지식은 그대로 남는다(증류기는 생산 설비지 지식의 소유자가 아니다). " +
@@ -237,6 +238,32 @@ export const ingestDistillersCapabilities: Capability[] = [
     }, {
       id: z.number().int().positive().optional(),
       key: z.string().optional(),
+    }),
+  restWork("org_distiller_requeue", "증류 배치 다시 처리(배치 단위)",
+    "고른 증류 배치가 «판정함» 으로 남긴 자료를 인박스에 되돌린다 — 레인 전체를 비우는 reset_seen 대신 그 배치만. " +
+    "배치가 일을 못 하고도 성공으로 끝난 경우(판 안에 도구가 없었다·인증이 깨졌다 등)에 쓴다 — 실패로 끝난 배치는 서버가 이미 되돌린다. " +
+    "고르기: task_ids(배치 id 목록) 또는 requester+since(+until·distiller). 둘 다 없거나 시각이 ISO 8601 이 아니면 400. 성공(done)으로 끝난 배치만 대상이다. " +
+    `한 번에 배치 ${REQUEUE_MAX_TASKS}개까지. 지식이 이미 연결된 자료는 건드리지 않는다(kept_with_knowledge). ` +
+    "dry_run=true(기본)면 셈만 하고 지우지 않는다 — 먼저 셈을 보고 dry_run=false 로 실행한다.",
+    [{ method: "POST", paths: ["/api/ui/org/distillers/requeue"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>) => {
+      const ids = Array.isArray(input.task_ids) ? input.task_ids.map(Number) : null;
+      const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+      try {
+        return await requeueDistillerSeen({
+          taskIds: ids, requester: str(input.requester), since: str(input.since), until: str(input.until), distillerKey: str(input.distiller),
+        }, input.dry_run !== false);
+      } catch (e) {
+        if (e instanceof RangeError) throw new HttpError(400, e.message);
+        throw e;
+      }
+    }, {
+      task_ids: z.array(z.number().int().positive()).optional().describe("되돌릴 배치(위탁 task) id 목록"),
+      requester: z.string().optional().describe("이 의뢰자(구성원 id)의 배치만 — since 와 함께"),
+      since: z.string().optional().describe("이 시각 이후 접수된 배치(ISO 8601)"),
+      until: z.string().optional().describe("이 시각 전에 접수된 배치(ISO 8601)"),
+      distiller: z.string().optional().describe("이 레인 key 의 배치만"),
+      dry_run: z.boolean().optional().describe("기본 true — 셈만 한다. false 면 지운다"),
     }),
   restWork("org_distiller_preview", "증류기 미리보기(자료 레인)",
     "(자료 레인 전용 — 카테고리 붙이기 레인은 org_distiller_category_preview.) " +
