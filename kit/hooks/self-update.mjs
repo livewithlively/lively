@@ -33,7 +33,9 @@ import {
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { hostEffects } from "./host-effects-port.mjs";
-import { isOurShimEntry, livelyStdioEntry } from "./stdio-launch.mjs";
+// 동적 import 다 — 이 파일은 자가 치유 경로라, 옆 모듈이 없는 훅 폴더(부분 복사·옛 설치)에서도 떠서 다음 번들을 받아야 한다.
+//  없으면 종전 심 직결 항목을 쓰고 교정을 건너뛴다.
+const stdioLaunch = await import("./stdio-launch.mjs").catch(() => null);
 
 const execFileSync = (...args) => hostEffects.execFileSync(...args);
 const fetch = (...args) => hostEffects.fetch(...args);
@@ -341,7 +343,9 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
   //  (stdio 프록시로 가면 이 헤더들은 프록시가 상류 호출에 붙인다 — 같은 이름·같은 값, 출처만 설정→env/토큰파일.)
   //  Windows 는 심 대신 node 직결(stdio-launch.mjs 머리말 — 배치 실행이 막힌 PC 에서 심이 못 뜬다).
-  const stdio = (sub) => livelyStdioEntry({ win: process.platform === "win32", shim, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs"), sub });
+  const stdio = (sub) => stdioLaunch
+    ? stdioLaunch.livelyStdioEntry({ win: process.platform === "win32", shim, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs"), sub })
+    : { type: "stdio", command: shim, args: [sub], env: {} };
   want["lively"] = canProxy
     ? stdio("mcp")
     : { type: "http", url: `${gw}/mcp`, headers: {
@@ -375,7 +379,7 @@ function reconcileOneClaudeConfig(cj, gw, token) {
     //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
     // 두 번째 예외 — 우리가 심은 심 직결형(lively.cmd)을 node 직결로 옮긴다. 사람이 바꾼 항목(command·args 가 다름)은 그대로 둔다.
     if ((name === "lively" || name === "lively-local") && entry.type === "stdio" && entry.command !== shim
-        && isOurShimEntry(cur, shim, entry.args[entry.args.length - 1])) {
+        && stdioLaunch && stdioLaunch.isOurShimEntry(cur, shim, entry.args[entry.args.length - 1])) {
       servers[name] = entry; added++;
       log(`MCP 실행 형태 교정: ${name} 심 → node 직결(배치 실행이 막힌 PC 대응, 다음 세션 적용)`);
       continue;
