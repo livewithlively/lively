@@ -281,6 +281,10 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
     && /const met = sub \? SUB_TAB_METRICS : TAB_METRICS;/.test(PANES_TS)
     && /p\.bar\.classList\.toggle\('compact', plan\.mode === 'icons' && !sub\);/.test(PANES_TS),
     "W16m 독 아래 탭 줄은 아이콘으로 접지 않는다 — 뷰어 여럿이 같은 아이콘만 남으면 어느 파일인지 모른다(이름을 남긴 채 미끄러진다)");
+  check(/function edgeFade\(sc: HTMLElement\): void \{/.test(PANES_TS) && /dockSlot\.addEventListener\('wheel'/.test(PANES_TS)
+    && /if \(zone === 'side'\) \{ dock\?\.sync\(\); if \(top\) requestAnimationFrame\(revealDockOn\); \}/.test(PANES_TS)
+    && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-dock-slot\.fade-r, \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs\.fade-r \{/.test(DOCK_CSS),
+    "W16n 옆으로 미는 줄(독 · 독 아래 탭) — 잘린 쪽 끝은 흐리고 · 세로 휠로 밀고 · 켜진 앱은 보이는 자리로 끌어온다(반쯤 잘린 이름표가 깨진 것으로 읽히지 않게)");
 }
 //  #5319 4차(원준 2026-11-05) — 머리 줄 독 = 세션 머리줄과 같은 높이 · 이름표 · 선반 없음 · 아이콘 40~56.
 check(/\.pn-pane\.dock-top > \.pn-tabbar \{ height: var\(--pn-bighead-h, 113px\);/.test(DOCK_CSS)

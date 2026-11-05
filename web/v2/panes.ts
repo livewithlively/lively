@@ -625,6 +625,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   /** 띠가 넘치는가 — 넘칠 때만 손잡이 왼쪽 그늘을 켠다(안 넘치면 군더더기다). */
   function syncMore(p: Pane): void {
     p.bar.classList.toggle('has-more', p.tabs.scrollWidth > p.tabs.clientWidth + 1);
+    edgeFade(p.tabs);
+  }
+  /** #5319 옆으로 미는 줄(머리 줄 독 · 독 아래 탭 줄)의 잘린 쪽 끝을 흐린다 — 반쯤 잘린 이름표가 «깨진 것» 이 아니라 «더 있다» 로 읽히게. */
+  function edgeFade(sc: HTMLElement): void {
+    const max = sc.scrollWidth - sc.clientWidth;
+    sc.classList.toggle('fade-l', max > 1 && sc.scrollLeft > 1);
+    sc.classList.toggle('fade-r', max > 1 && max - sc.scrollLeft > 1);
   }
   //  #5319 머리 줄 독 아래 탭 줄은 켜진 앱의 탭만 세운다 — 나머지(pn-sub-off)는 폭을 나눠 갖지 않는다.
   const wrapsOf = (p: Pane): HTMLElement[] => [...p.tabs.children].filter((n) => n.classList.contains('pn-tabwrap') && !n.classList.contains('pn-sub-off')) as HTMLElement[];
@@ -752,6 +759,25 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const dockSlot = el('div', { class: 'pn-dock-slot' }) as HTMLElement;
   sidePane.bar.prepend(dockSlot);
   const dockTop = (): boolean => !narrow();
+  //  곁칸 폭에 다 안 들어가면 독은 줄 안에서 옆으로 민다(pane-dock fit) — 세로 휠로도 밀고(탭 띠와 같은 문법), 잘린 쪽 끝은 흐린다.
+  dockSlot.addEventListener('wheel', (e: WheelEvent) => {
+    if (e.shiftKey || !e.deltaY || dockSlot.scrollWidth <= dockSlot.clientWidth + 1) return;
+    e.preventDefault();
+    dockSlot.scrollLeft += e.deltaY;
+  }, { passive: false });
+  dockSlot.addEventListener('scroll', () => edgeFade(dockSlot), { passive: true });
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(() => revealDockOn()); ro.observe(dockSlot); ros.push(ro); }
+  /** 켜진 앱의 독 칸이 줄 밖으로 밀려 있으면 끌어온다(이름표가 아이콘보다 넓어 양옆 12px 를 더 본다). */
+  function revealDockOn(): void {
+    const on = dockSlot.querySelector('.pn-dock-it.on') as HTMLElement | null;
+    if (on && dockSlot.scrollWidth > dockSlot.clientWidth + 1) {
+      const r = on.getBoundingClientRect();
+      const b = dockSlot.getBoundingClientRect();
+      if (r.right + 12 > b.right) dockSlot.scrollLeft += r.right + 12 - b.right;
+      else if (r.left - 12 < b.left) dockSlot.scrollLeft -= b.left - (r.left - 12);
+    }
+    edgeFade(dockSlot);
+  }
 
   // 세로 경계(가운데|곁칸) · 가로 경계(가운데|아래 칸) — 폭·높이는 split.ts 가 기억한다.
   // 곁칸 경계 — 상한·부호를 side-swap 이 정한다(#1819). 곁칸이 왼쪽으로 가면 같은 손잡이의 부호가 반대가 된다.
@@ -1655,7 +1681,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       const ph = pane.bodyEl.querySelector('.pn-pane-empty') as HTMLElement | null;
       if (ph) ph.hidden = true;
     }
-    if (zone === 'side') dock?.sync();   // #4443 — 떠 있는 탭·켜진 탭이 바뀌면 독의 점·켜짐도 맞춘다
+    if (zone === 'side') { dock?.sync(); if (top) requestAnimationFrame(revealDockOn); }   // #4443 — 떠 있는 탭·켜진 탭이 바뀌면 독의 점·켜짐도 맞춘다
   }
 
   /** 탭 **띠만** 다시 그린다 — 부품이 자기 이름을 바꿨을 때(뷰어가 다른 파일을 폈을 때) 쓴다.
