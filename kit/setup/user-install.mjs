@@ -80,14 +80,15 @@ export function winNodeBin(execPath) {
   const p = String(execPath || "");
   return /^(?:[A-Za-z]:[\\/]|\\\\)/.test(p) && /[\\/]node\.exe$/i.test(p) ? fwd(p) : "node";
 }
-/** (순수) 명령줄 첫 토큰 — 맨몸 `node` 는 종전 문자열 그대로(재설치 멱등), 절대경로는 공백에 대비해 따옴표로 감싼다. */
-export const winNodeToken = (bin) => (bin === "node" ? "node" : `"${bin}"`);
+/** (순수) 훅 명령줄 첫 토큰. 하네스마다 훅을 돌리는 셸이 다르다(git-bash · cmd · PowerShell). PowerShell 은 따옴표로 시작하는 줄을
+ *  실행이 아니라 문자열로 읽으므로 따옴표를 쓰지 않는다 — 공백이 든 경로면 맨몸 `node`(종전 문자열 그대로)로 둔다. */
+export const winNodeToken = (bin) => (bin === "node" || /\s/.test(bin) ? "node" : bin);
 const hookAbs = (script) => fwd(join(LIVELY, "hooks", script));
 const WIN = process.platform === "win32";
 // #355: 훅은 하네스가 실행하는 셸의 PATH 로 `node` 를 찾는다 → node 를 갓 설치했거나 rc 를 아직 source 안 한
 //  셸에서 claude/codex 를 켜면 'node: command not found' 로 훅이 죽는다(페르소나 미주입·Stop 게이트 무작동).
 //  부트스트랩한 번들 node(~/.lively/runtime/current/bin/node — 안정 심링크)가 있으면 그 절대경로로 호출해
-//  실행 셸 PATH 와 무관하게 만든다. 없으면(시스템 node) 기존대로 PATH 의 `node`. (Windows 는 User PATH 로 처리 — bare 유지.)
+//  실행 셸 PATH 와 무관하게 만든다. 없으면(시스템 node) 기존대로 PATH 의 `node`. Windows 는 아래 NODEBIN 주석.
 const bundledNode = join(LIVELY, "runtime", "current", "bin", "node");
 // Windows 는 설치를 돌리는 node(process.execPath)의 절대경로를 쓴다 — 심(lively.cmd)이 고르는 것과 같은 node 다
 //  (번들 런타임이 있으면 부트스트랩·심이 그걸로 이 설치기를 띄운다). 맨몸 `node` 는 User PATH 에 기대는데,
@@ -1460,7 +1461,7 @@ const isOurCursorHook = (e) => !!e && typeof e === "object" && !Array.isArray(e)
 
 // 어댑터 호출 command — **절대경로**로 쓴다($HOME 확장에 기대지 않는다). Cursor 가 command 를 어떤 셸로 돌리든
 //  (POSIX sh·윈도우 PowerShell — 포럼 실측: 윈도우 훅이 셸 불일치로 전 툴을 막은 사례) 경로가 그대로 성립한다.
-//  #355 — POSIX 는 번들 node 절대경로(실행 셸 PATH 무관). 윈도우는 claude 와 같은 bare `node`(User PATH).
+//  #355 — POSIX 는 번들 node 절대경로(실행 셸 PATH 무관). 윈도우는 claude 와 같은 winNode()(설치를 돌린 node.exe 절대경로).
 const cursorHookCmd = (event) => WIN
   ? `${winNode()} "${hookAbs(CURSOR_ADAPTER)}" ${event}`
   : `"${NODEBIN}" "${hookAbs(CURSOR_ADAPTER)}" ${event}`;

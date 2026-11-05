@@ -73,9 +73,11 @@ test("훅용 node — 절대경로 node.exe 는 forward-slash 로, 그 밖은 �
   for (const bad of ["node", "", undefined, "/usr/bin/node", "C:\\tools\\bun.exe", "node.exe"]) assert.equal(winNodeBin(bad), "node", String(bad));
 });
 
-test("훅 명령 첫 토큰 — 맨몸 node 는 종전 문자열 그대로, 절대경로는 따옴표", () => {
+test("훅 명령 첫 토큰 — 따옴표 없이 절대경로, 공백 든 경로·맨몸 node 는 종전 `node`", () => {
+  // PowerShell 은 따옴표로 시작하는 줄을 실행하지 않는다 — 첫 토큰에 따옴표를 쓰지 않는다
+  assert.equal(winNodeToken("C:/Profiles/홍길동/.lively/runtime/node-v22.14.0-win-x64/node.exe"), "C:/Profiles/홍길동/.lively/runtime/node-v22.14.0-win-x64/node.exe");
+  assert.equal(winNodeToken("C:/Program Files/nodejs/node.exe"), "node");
   assert.equal(winNodeToken("node"), "node");
-  assert.equal(winNodeToken("C:/Program Files/nodejs/node.exe"), '"C:/Program Files/nodejs/node.exe"');
 });
 
 test("«여기 연결» 커맨드 — Windows 에서 node 경로를 알면 심을 거치지 않는 명령을 준다", () => {
