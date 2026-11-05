@@ -127,7 +127,7 @@ makeBundle();
 let toml = install();
 {
   const b = serverBlock(toml, "lively") || "";
-  const cmd = /^command = "[^"]*node"$/m.test(b);
+  const cmd = /^command = "[^"]*node(?:\.exe)?"$/m.test(b);
   const args = /^args = \[.*codex-account-gate\.mjs.*"--".*lively(?:\.cmd)?.*"mcp"\]$/m.test(b);
   const noUrl = !/^url = /m.test(b);
   // stamp 가 없으면 게이트웨이가 코덱스 세션을 claude 로 집계한다(프록시 UA 기본값이 claude-code).
@@ -143,7 +143,7 @@ let toml = install();
   writeFileSync(join(HOME, ".codex", "auth.json"), JSON.stringify({ tokens: { account_id: "acct-other-test" } }));
   runInstall();
   const after = readFileSync(CODEX_POLICY, "utf8");
-  mode === 0o600 && before === after && !before.includes("acct-enrolled-test")
+  (process.platform === "win32" || mode === 0o600) && before === after && !before.includes("acct-enrolled-test")
     ? ok("①b 계정 정책 0600 · 원문 미저장 · 재설치 자동 덮어쓰기 없음")
     : bad("①b 계정 정책", `mode=${mode.toString(8)} stable=${before === after} raw=${before.includes("acct-enrolled-test")}`);
 }
@@ -333,7 +333,10 @@ makeBundle({ mcpServers: [{ name: "acme-local", transport: "stdio", command: "ac
 }
 
 // ── ④c 추가 stdio MCP도 custom CODEX_HOME의 계정으로 판정 ──────────────────
-{
+//  설치기는 조직 command 를 공백으로 쪼갠다 — node·샌드박스 경로에 공백이 있으면 이 픽스처가 성립하지 않는다.
+if (/\s/.test(process.execPath + SANDBOX)) {
+  console.log("skip ④c node·샌드박스 경로에 공백 — 공백 분할 command 픽스처를 만들 수 없다");
+} else {
   const target = join(SANDBOX, "org-mcp-target.mjs");
   const marker = join(SANDBOX, "org-mcp-ran");
   writeFileSync(target, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");\n`);
