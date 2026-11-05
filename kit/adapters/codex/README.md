@@ -33,7 +33,7 @@ LIVELY_HARNESS = "codex"
 - Even if the gateway is unreachable at boot, stdio is a local process, so it doesn't get stuck as failed for the whole session (#1079).
 - The token never goes into the config file — the proxy reads `~/.lively/token` on every call (so even if `LIVELY_TOKEN` in the rc is stale, it won't silently connect as an old identity — the codex version of #916).
 - **`env.LIVELY_HARNESS` is required.** Through the proxy the UA is ours, so this stamp is the entire harness signal (without it the gateway counts codex sessions as claude — #182).
-- If the proxy file is missing (older bundle) or the rollback switch is set (`~/.lively/mcp-transport` = `http`), it falls back to the old direct http connection (`url` + `bearer_token_env_var` + a static `x-lively-harness` header). In that case the session and mode features are lost.
+- Codex never falls back to a direct http connection. The account gate has to wrap the stdio proxy, so if the proxy file is missing (older bundle) the lively MCP is not registered, and the rollback switch (`~/.lively/mcp-transport` = `http`) is ignored for Codex.
 - On the stdio path, the local-operations MCP `[mcp_servers.lively-local]` (`args = ["mcp-local"]` — repo and worktree tools) is included as well (#1884, parity with claude's `lively-local`).
 
 **Additional MCP servers** (admin tab org_mcp_server → bundle `.lively/mcp-servers.json`): stdio servers use `command` (a string) + `args` (an array).

@@ -2,10 +2,14 @@
 //  (행의 상태 · op 에 나간 요청 · 뒤로 미룬 치우기 · 저장·설치 호출). 문구는 사람이 읽는 것만 본다.
 //  행 번호(K…)는 스크래치패드 spec-4067-core.md 의 엣지 표다. 실 SQL 의 같은 규칙은 scripts/login-job-store.itest.mjs 가 본다.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   startLoginJob, loginJobLoginState, loginJobHeadlessState, pasteLoginJob, cancelLoginJob,
   onLoginJobTick, onLoginJobResult, onLoginJobEnd, sweepLoginJobs, staleReason, checkLoginResult, resetLoginJobCaches,
+  codexAccountPolicyFromAuthText, INSTALL_LOGIN_JS,
   UI_IDLE_MS, MAX_AGE_MS, UNIT_DEAD_MS, RECENT_MS, REAP_DELAY_MS, PROFILE_CACHE_MS, PROFILE_RETRY_MS, UNSUPPORTED_TTL_MS,
   SCREEN_MAX, STALE_MESSAGE, LOGIN_PROFILE, type LoginJobDeps,
 } from "./login-job.js";
@@ -183,6 +187,58 @@ async function captureLogs<T>(fn: () => Promise<T>): Promise<{ out: T | undefine
     catch (e) { return { out: undefined, err: e, lines: lines.join("\n") }; }
   } finally { Object.assign(logger, keep); }
 }
+
+await t("Codex 로그인 적용 — 로그인 전 설치 뒤 계정 정책 생성 · 기존 등록 정책은 보존", () => {
+  const home = mkdtempSync(join(tmpdir(), "lively-login-policy-"));
+  try {
+    mkdirSync(join(home, ".lively"), { recursive: true });
+    const enrolledAuth = JSON.stringify({ tokens: { account_id: "enrolled-account" } });
+    const enrolledPolicy = codexAccountPolicyFromAuthText(enrolledAuth);
+    assert.ok(enrolledPolicy, "ChatGPT account id에서 정책을 만들 수 있어야 한다");
+    const run = (auth: string, policy: ReturnType<typeof codexAccountPolicyFromAuthText>) => spawnSync(
+      process.execPath, ["-e", INSTALL_LOGIN_JS], {
+        input: JSON.stringify({ home, files: [{ path: ".codex/auth.json", content: auth }], account: null, codexPolicy: policy }),
+        encoding: "utf8",
+      },
+    );
+    const first = run(enrolledAuth, enrolledPolicy);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(JSON.parse(first.stdout).codexPolicy, "created");
+    const policyPath = join(home, ".lively", "codex-account.json");
+    const installed = readFileSync(policyPath, "utf8");
+    assert.deepEqual(JSON.parse(installed), enrolledPolicy);
+    assert.ok(!installed.includes("enrolled-account"), "정책 파일에 account id 원문을 쓰지 않는다");
+
+    const otherAuth = JSON.stringify({ tokens: { account_id: "other-account" } });
+    const second = run(otherAuth, codexAccountPolicyFromAuthText(otherAuth));
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(JSON.parse(second.stdout).codexPolicy, "existing");
+    assert.equal(readFileSync(policyPath, "utf8"), installed, "재로그인으로 등록 정책을 자동 덮어쓰지 않는다");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+await t("Codex 계정 정책 — 게이트웨이가 만든 지문을 키트 게이트가 같은 계정으로 받아들인다", async () => {
+  //  account id 추출은 login-job.ts 와 kit/setup/codex-account-gate.mjs 에 따로 있다(kit 은 tsconfig rootDir 밖이라 공유 import 불가).
+  //  한쪽만 바뀌면 웹 로그인으로 만든 정책을 게이트가 거절해 Codex 의 Lively 훅·MCP 가 조용히 꺼진다.
+  const gateUrl = new URL("../../kit/setup/codex-account-gate.mjs", import.meta.url).href;   // src/·dist/ 모두 두 단계 아래
+  const { evaluateCodexAccountGate } = await import(gateUrl) as {
+    evaluateCodexAccountGate: (o: { authText: string; policyText: string }) => { allowed: boolean; reason: string };
+  };
+  const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
+  for (const auth of [
+    { tokens: { account_id: " direct-account " } },
+    { tokens: { access_token: jwt({ "https://api.openai.com/auth": { chatgpt_account_id: "namespaced-account" } }) } },
+    { id_token: jwt({ account_id: "top-level-account" }) },
+  ]) {
+    const authText = JSON.stringify(auth);
+    const policy = codexAccountPolicyFromAuthText(authText);
+    assert.ok(policy, authText);
+    assert.deepEqual(evaluateCodexAccountGate({ authText, policyText: JSON.stringify(policy) }), { allowed: true, reason: "match" }, authText);
+  }
+  assert.equal(codexAccountPolicyFromAuthText(JSON.stringify({ OPENAI_API_KEY: "sk-x" })), null, "API 키 로그인은 계정 경계를 만들지 않는다");
+});
 
 // ── 시작 ─────────────────────────────────────────────────────────────────────
 

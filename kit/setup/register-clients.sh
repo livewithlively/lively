@@ -29,11 +29,10 @@ fi
 
 
 echo "▶ Codex — 이 스크립트는 codex 를 건드리지 않습니다."
-echo "   codex 배선(MCP + 훅 + AGENTS.md)은 setup/user-install.mjs --harness codex 가 통째로 담당합니다:"
+echo "   codex 배선(MCP + 훅)은 setup/user-install.mjs --harness codex 가 통째로 담당합니다:"
 echo "     node setup/user-install.mjs --allow-host-effects --harness codex"
-echo "   (#1475 부터 claude 와 같은 stdio 프록시로 등록되므로 x-lively-session·x-lively-mode 도 함께 실립니다 —"
-echo "    codex 의 http_headers 는 정적값이라 http 직결로는 그 둘을 보낼 수 없었습니다."
-echo "    수동 http 직결이 필요하면 ~/.lively/mcp-transport 에 http 를 적고 재설치하세요.)"
+echo "   (설치 때 로그인돼 있던 ChatGPT 계정에서만 켜지도록 계정 게이트를 거친 stdio 프록시로 등록합니다."
+echo "    게이트를 거칠 수 없는 http 직결은 codex 에 등록하지 않으며, ~/.lively/mcp-transport=http 도 codex 에서는 무시됩니다.)"
 
 echo
 echo "▶ openclaw — openclaw.json 의 mcpServers 에 추가 (\${LIVELY_TOKEN} 은 환경변수 참조 — 토큰 값을 직접 적지 말 것):"
