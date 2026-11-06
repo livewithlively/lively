@@ -354,20 +354,21 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
     "W16s 머리줄 3-B — 둘 다 되면 [복제·옮기기 ▾] 하나(메뉴에서 고른다) · 하나만 되면 그 단추 · 넓은 화면은 첫 줄 오른쪽 [연결 상태 | 화면 복구] [⋯], 둘째 줄 왼쪽 얼굴 · [자료] │ [복제·옮기기] · 이전 단추 모양(쉴 땐 글자, 올리면 테두리 알약 + 파란 글자)");
   check(/\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: none; \}/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-it \{ width: calc\(var\(--dk-s, 44px\) \+ 8px\); gap: 0; padding: 0 0 8px; \}/.test(DOCK_CSS)
-    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ height: var\(--pn-dock-row\); \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ height: var\(--pn-dock-row\); align-items: center; \}/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-position: 0 var\(--pn-dock-row\), 0 0; row-gap: 0; \}/.test(DOCK_CSS)
     && /\.pn-wrap \.pn-pane\.dock-top:not\(\.dock-sub\) > \.pn-tabbar > \.pn-dock-slot \{ align-items: center; \}/.test(DOCK_CSS)
     && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;/.test(DOCK_CSS),
-    "W16t #5319 A안 — 머리 줄 독 타일 44 · 이름표는 평소 숨기고 올리면 말풍선 · 독 줄 60 + 파일 줄 53 = 113(세션 머리줄) · 파일 줄 없으면 113 안 세로 가운데 · 옛 규칙은 지우지 않고 덮는다");
+    "W16t #5319 A안 — 머리 줄 독 타일 44 · 이름표는 평소 숨기고 올리면 말풍선 · 독 줄 = 세션 머리줄 높이(타일 세로 가운데) · 탭 줄 53 은 그 선 아래로 · 옛 규칙은 지우지 않고 덮는다");
   const GRIP = read(path.join(root, "web/v2/head-grip.ts"));
   check(/export const HEAD_H = \{ def: 113, min: 80, max: 150 \} as const;/.test(GRIP)
     && /head\.append\(runTop, headGrip\(\)\)/.test(SC) && /sidePane\.bar\.append\(subActs, headGrip\(\)\);/.test(read(path.join(root, "web/v2/panes.ts")))
     && /applyHeadH\(wrap, savedHeadH\(\)\);/.test(read(path.join(root, "web/v2/panes.ts")))
     && /\.pn-wrap \{ --hd-r: clamp\(32px, calc\(\(var\(--pn-bighead-h\) - 15px\) \/ 2\), 36px\); --hd-b: var\(--hd-r\); \}/.test(PANES_CSS)
     && /grid-template-rows: var\(--hd-r, 36px\) var\(--hd-r, 36px\);/.test(CHAT_CSS)
-    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub \{ --pn-dock-row: max\(38px, calc\(var\(--pn-bighead-h, 113px\) - 54px\)\);/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub \{ --pn-dock-row: calc\(var\(--pn-bighead-h, 113px\) - 1px\); --pn-file-row: 53px;/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-head-grip \{ bottom: auto; top: calc\(var\(--pn-dock-row\) - 5px\); \}/.test(DOCK_CSS)
     && /if \(home === 'top'\) pane\.style\.setProperty\('--pn-dk-s', size \+ 'px'\);/.test(DOCK),
-    "W16u 머리 줄 높이 손잡이(#5319) — 80~150(기본 113) 한 값(--pn-bighead-h)을 세션 큰 머리 · 곁칸 독 줄이 같이 읽는다 · 줄 36→32.5 · 독 줄 max(38, H-54) · 타일은 폭 · 높이 중 작은 쪽");
+    "W16u 머리 줄 높이 손잡이(#5319) — 80~150(기본 113) 한 값(--pn-bighead-h)을 세션 큰 머리 · 곁칸 독 줄이 같이 읽는다 · 줄 36→32.5 · 독 줄 = H-1 · 탭 줄 53 은 선 아래 · 손잡이는 그 선 위");
   const TERM_HTML = read(path.join(root, "public/terminal.html"));
   check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
     "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");
