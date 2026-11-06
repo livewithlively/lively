@@ -676,10 +676,12 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
 .sc-act-fork, .sc-act-move { display: inline-flex; align-items: center; gap: 4px; }
 .sc-act-fork[hidden], .sc-act-move[hidden] { display: none; }
-/* #5319 3-B — 둘째 줄 왼쪽 묶음(넓은 화면에서만 차 있다 — 폰은 종전 자리로 돌린다: session-chat.ts placeHead) · 묶은 [복제·옮기기 ▾] */
+/* #5319 3-B — 둘째 줄 왼쪽 두 묶음(넓은 화면에서만 차 있다 — 폰은 종전 자리로 돌린다: session-chat.ts placeHead) · 묶은 [복제·옮기기 ▾] */
 .sc-sub-lead { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.sc-sub-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .sc-sub-sep { width: 1px; height: 12px; background: var(--line-net); flex: none; }
 .sc-sub-lead:empty, .sc-sub-lead:empty + .sc-sub-sep { display: none; }
+.sc-sub-acts:empty, .sc-sub-sep[hidden] { display: none; }
 .sc-act-duo { display: inline-flex; align-items: center; gap: 4px; }
 .sc-act-duo[hidden] { display: none; }
 .sc-act-duo::after { content: ""; width: 0; height: 0; margin-left: 2px; border-left: 4.5px solid transparent; border-right: 4.5px solid transparent; border-top: 5px solid currentColor; opacity: .6; }
@@ -747,9 +749,14 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:hover:not(:disabled) { color: var(--blue); border-color: var(--line-net); background-color: transparent; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top .dt-chip-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
   .pn-body:not(.cm) .sc-head--big > .sc-run-top span.dt-chip { line-height: 36px; padding: 0 10px; font-size: 15px; }   /* display 는 안 준다 — 숨김 규칙(.sc-ax-h · @container)을 이기면 안 된다 */
-  /* #5319 3-B(원준 2026-11-06) — 둘째 줄 왼쪽: [얼굴 ＋] [자료] │ 연결 상태 | 화면 복구. 오른쪽 위엔 [복제·옮기기 ▾] · [⋯] 만. */
+  /* #5319 3-B(원준 2026-11-06) — 첫 줄 오른쪽 [연결 상태 | 화면 복구] [⋯] · 둘째 줄 왼쪽 [얼굴 ＋] [자료] │ [복제·옮기기 ▾].
+     자주 누르는 [화면 복구] 가 오른쪽 위(«마우스가 주로 오른쪽에서 놀거같으니까»). 연결 상태 글은 오른쪽 위에선 12em 에서 …로 준다 —
+     첫 줄의 남는 폭은 이름 것이라(위 격자: 셋째 칸이 max-content 를 먼저 가져간다) 글을 안 자르면 이름이 굶는다. 온전한 글은 title 에. */
   .pn-body:not(.cm) .sc-head--big .sc-sub-lead { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+  .pn-body:not(.cm) .sc-head--big .sc-sub-acts { display: inline-flex; align-items: center; gap: 4px; flex: none; }
   .pn-body:not(.cm) .sc-head--big .sc-sub-sep { height: 18px; }
+  .pn-body:not(.cm) .sc-head--big > .sc-head-r > .sc-pair { flex: 0 1 auto; min-width: 0; }
+  .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { display: block; min-width: 0; max-width: 12em; overflow: hidden; text-overflow: ellipsis; line-height: 34px; }
 }
 /* 세션 칸이 좁으면(곁칸을 넓힌 때) 접는 차례 — 이름이 마지막까지 버틴다(실측 2026-11-05: 세션 칸 400px 에서 이름이 «U» 한 글자까지 줄었다).
    ① ≤680 [복제] · [옮기기] — [⋯] 와 세션 우클릭에 그대로 있다
@@ -771,6 +778,8 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   @container schead (max-width: 760px) {
     .pn-body:not(.cm) .sc-head--big .sc-act-files > span { display: none; }
     .pn-body:not(.cm) .sc-head--big .sc-act-files { width: 36px; padding: 0; justify-content: center; } }
+  /* ≤600 오른쪽 위 연결 상태 글은 6.5em(«재연결 중…» 까지) — 첫 줄 폭을 이름에 돌려준다. «연결됨» 은 늘 다 보인다 */
+  @container schead (max-width: 600px) { .pn-body:not(.cm) .sc-head--big > .sc-head-r .sc-termstat:not([hidden]) { max-width: 6.5em; } }
 }
 @media (max-width: 900px) {
   .sc-head--big .sc-head-main { flex-direction: row; align-items: center; gap: 8px; }

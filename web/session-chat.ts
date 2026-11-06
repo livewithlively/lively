@@ -546,6 +546,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  #5319 3-B(원준 2026-11-06 «복제나 옮기기를 좀 하나로 묶어서 하고 그거 누르면 그 다음에 둘 중 하나를 고르게») — 둘 다 되면
   //   [복제·옮기기 ▾] 한 단추가 서고, 누르면 두 줄 메뉴(이름 + 한 줄 설명)에서 고른다. 하나만 되면 그 단추가 메뉴 없이 그대로 선다.
   //   이름은 안에 든 둘을 그대로 말한다 — «세션 ▾» 은 바로 옆 [⋯](이 세션에 할 수 있는 것들)와 같은 말이라 메뉴가 둘로 읽혔다(목업 v3).
+  const subSep = el('span', { class: 'sc-sub-sep', 'aria-hidden': 'true' });   // 둘째 줄 «얼굴 · 자료 │ 복제·옮기기» 의 금 — paintActs 가 켜고 끈다
   const duoBtn = forkBtn && moveBtn ? el('button', { class: 'btn-text sc-act sc-act-duo', type: 'button', hidden: true,
     title: '이 세션을 복제하거나 다른 프로젝트로 옮깁니다', 'aria-haspopup': 'menu', 'aria-label': '복제 · 옮기기',
     onclick: () => openDuo() },
@@ -577,6 +578,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (duoBtn) duoBtn.hidden = !duo;
     if (forkBtn) forkBtn.hidden = !f || duo;
     if (moveBtn) moveBtn.hidden = !m || duo;
+    subSep.hidden = !(f || m);   // 둘째 줄 왼쪽 «얼굴 · 자료 │ 복제·옮기기» 의 세로 금 — 오른쪽이 비면(남의 세션) 금도 없다
   }
   paintActs();
   const headR = el('div', { class: 'sc-head-r' },
@@ -589,26 +591,36 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
   //  #5319 큰 머리(4차 1안, 원준 2026-11-05) — 두 줄 격자. 왼쪽 위 [● 이름 #번호 · 얼굴 · 배지], 왼쪽 아래 [연결 상태 | 화면 복구 · 노드],
   //   오른쪽 위 [자료 · 복제 · 옮기기 · ⋯], 오른쪽 아래 [모델 · 추론강도](runTop — 아래에서 맨 뒤에 붙인다). 하네스 고르기는 [⋯ ▸ 이 세션 설정] 에만.
-  //  #5319 3-B(원준 2026-11-06) — 넓은 화면(>900)의 큰 머리는 얼굴 · [자료] 를 둘째 줄 왼쪽(subLead)으로 내린다:
-  //   [얼굴 ＋] [자료] │ 연결 상태 | 화면 복구. 오른쪽 위엔 [복제·옮기기 ▾] · [⋯] 만 남는다. 폰(≤900)은 머리가 떠 있는 한 줄이라
-  //   종전 자리(얼굴 = 이름 옆, 자료 = 오른쪽 단추 군)로 되돌린다 — 폭이 문턱을 넘나들면 그때 옮긴다(placeHead).
+  //  #5319 3-B(원준 2026-11-06) — 넓은 화면(>900)의 큰 머리는 두 줄이다:
+  //   첫 줄  [● 이름 #번호] ……………………… [연결 상태 | 화면 복구] [⋯]
+  //   둘째 줄 [얼굴 ＋] [자료] │ [복제·옮기기 ▾] ……… [모델 · 추론강도]
+  //   자주 누르는 [화면 복구] 가 오른쪽 위다(원준 «마우스가 주로 오른쪽에서 놀거같으니까 자주 누르는 버튼은 오른쪽에») — 처음 3-B 는
+  //   [복제·옮기기] 가 오른쪽 위, 연결 상태가 둘째 줄 왼쪽이었다. 폰(≤900)은 머리가 떠 있는 한 줄이라 종전 자리(얼굴 = 이름 옆,
+  //   자료·복제·옮기기 = 오른쪽 단추 군, 연결 상태 = 아랫줄)로 되돌린다 — 폭이 문턱을 넘나들면 그때 옮긴다(placeHead).
   const topRow = el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge);
   const subLead = el('span', { class: 'sc-sub-lead' });
+  const subActs = el('span', { class: 'sc-sub-acts' });
+  const metaEl = el('span', { class: 'sc-meta' }, runEl);
+  const subEl = el('div', { class: 'sc-sub' }, subLead, subSep, subActs, fixPair, metaEl);
   const wideMq = opts.bigHead && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)') : null;
   const leadParts = (): HTMLElement[] => [opts.onOpenFiles ? filesGoBtn : null, appGoBtn].filter((n): n is HTMLButtonElement => !!n);
+  const sessActs = (): HTMLElement[] => [duoBtn, forkBtn, moveBtn].filter((n): n is HTMLButtonElement => !!n);
   function placeHead(): void {
     if (!wideMq) return;
-    if (wideMq.matches) subLead.append(facesEl, ...leadParts());
-    else { topRow.insertBefore(facesEl, chatBadge); headR.prepend(...leadParts()); }
+    if (wideMq.matches) { subLead.append(facesEl, ...leadParts()); subActs.append(...sessActs()); headR.insertBefore(fixPair, moreBtn); }
+    else {
+      topRow.insertBefore(facesEl, chatBadge);
+      headR.prepend(...leadParts());
+      for (const b of sessActs()) headR.insertBefore(b, moreBtn);
+      subEl.insertBefore(fixPair, metaEl);
+    }
   }
   wideMq?.addEventListener('change', placeHead);
   const head = el('div', { class: 'sc-head' + (opts.bigHead ? ' sc-head--big' : ''), 'data-ctx': 'session', 'data-sid': first.id },
     opts.bigHead
       ? el('div', { class: 'sc-head-l' },
         sideBtn,
-        el('div', { class: 'sc-head-main' },
-          topRow,
-          el('div', { class: 'sc-sub' }, subLead, el('span', { class: 'sc-sub-sep', 'aria-hidden': 'true' }), fixPair, el('span', { class: 'sc-meta' }, runEl))))
+        el('div', { class: 'sc-head-main' }, topRow, subEl))
       : el('div', { class: 'sc-head-l' },
         //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
         //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
