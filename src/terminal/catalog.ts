@@ -235,6 +235,10 @@ export interface Harness {
   // TUI 로 띄울 때 **늘** 붙이는 인자(#5332). 이어 열기·복제 서브커맨드 뒤에 붙는다(codex `resume`/`fork` 도 같은 옵션을 받는다 — --help 확인).
   //  대화 런타임·app-server·로그인 세션(pane 이 셸)에는 붙지 않는다 — 그 길은 이 cmd 를 실행하지 않는다.
   tuiArgv?: string[];
+  // TUI 로 띄울 때 붙이되 **그 판이 아는 경우에만** 붙이는 인자(#5332). 런처가 세션이 도는 기계에서 `<bin> --help` 를 보고
+  //  그 낱말이 있으면 argv 끝에 붙인다(harnessLaunchArgv · LAUNCH_PROBE). 판을 게이트웨이에서 미리 알 길이 없어서다 —
+  //  세션 컨테이너·노드마다 설치본이 다르고, 모르는 인자를 주면 하네스가 기동하자마자 죽는다(codex 0.155 이하에 `--no-daemon`).
+  tuiProbeArgv?: string[];
   // 터미널 입력칸에 **치던 글을 잠깐 치워 두는 키**(원준 2026-10-10: «메시지를 치다가 모델이나 effort 를 바꾸면 제대로 안 돼 …
   //  치던 내용은 유지된 채로 바꾸고 싶다»). runtimeCmd 는 입력칸에 한 줄을 쳐서 제출하므로, 사람이 치던 글이 있으면 그 뒤에
   //  `/model …` 이 붙어 한 덩어리로 나갔다. 이 키를 명령 **앞에** 붙여 보내면 하네스가 치던 글을 치워 두었다가 명령이
@@ -335,6 +339,17 @@ export const HARNESSES: Harness[] = [
     //  클립보드**로 간다(실측: pbpaste 에 들어감 — 사람 브라우저엔 안 온다). 웹이 codex 에 맞춰 둔 것(#1155 입력줄 선택·⌘C·휠)은
     //  전부 0.153~0.157 의 인라인 화면(alt 0 · 마우스 0) 위에서 실측됐다 → 그 모양으로 띄운다. `--no-alt-screen` 이면 alt 0 · 마우스 0.
     tuiArgv: ["--no-alt-screen"],
+    // #5332 — **공유 백그라운드 서버(daemon)를 쓰지 않는다.** 0.156 부터 TUI 는 시작할 때 CODEX_HOME 마다 하나인 app-server
+    //  daemon 에 붙고(없으면 띄운다), 그 daemon 은 **스스로 최신판으로 올라간다**(daemon-updater — 실측 2026-11-06 매니지드:
+    //  이미지 핀은 0.157.1 인데 daemon 이 0.167.0 으로 올라감). 그러면 0.157.1 TUI 가 기능 설정이 다르다며 시작 창을 띄운다:
+    //      Background server has incompatible feature settings
+    //      This session requires api_key_model_discovery to be disabled
+    //      1. Run without daemon this time / 2. Restart with these settings / › 3. Cancel
+    //  첫 지시가 그 창 앞에서 멈추고(아웃박스 `sending` 고착 — 매니지드 실측), 2번은 같은 daemon 에 붙은 **다른 세션들의 일을 끊는다**.
+    //  라이블리 세션은 각자 자기 TUI 가 자기 대화를 쥐는 전제라(codex-as-supervisor.ts 머리말 — daemon 을 안 쓰는 이유) 세션마다
+    //  내장 app-server 로 띄운다: `--no-daemon` («Run without the shared background server, even if it is already running»).
+    //  0.156.0 에 처음 생겼다(0.155.0 바이너리엔 없음 — 실측) → 그 아래 판에 주면 «unexpected argument» 로 즉사하므로 **판이 알 때만**.
+    tuiProbeArgv: ["--no-daemon"],
     loginCmd: "codex logout && codex login --device-auth",
     // 온보딩은 만료 복구가 아니라 **첫 로그인**이라 logout 을 앞세우지 않는다(지울 자격이 없다).
     //  브라우저가 있는 자리는 `codex login` 이 알아서 창을 열고, 없으면 codex 가 device-auth 로 내려간다.
@@ -996,6 +1011,25 @@ export function harnessResumeCommand(harnessKey: string, convId: string): string
   return [h.bin || h.key, ...h.resumeArgv(id), ...(h.tuiArgv ?? [])].join(" ");   // #5332 — TUI 로 뜨는 길이라 tuiArgv 도 붙는다
 }
 
+// ── 판이 아는 인자만 붙이기 (#5332 — Harness.tuiProbeArgv) ──
+//  런처 스크립트의 `shift` 바로 뒤(그때 "$1" 이 실행 파일이다)에 끼우는 줄들. 값은 카탈로그 리터럴이고 아래 모양만 통과시켜
+//  스크립트에 그대로 적는다(따옴표·공백·셸 문자가 들어올 수 없다). 붙이는 자리는 argv **끝** — 이어 열기 인자 수(nres)로
+//  자르는 LAUNCH_STOP_SH ② 갈래도 그 뒤의 인자는 그대로 두므로 새 대화로 다시 띄울 때도 따라간다.
+//  `--help` 를 못 읽으면(실행 파일 없음 등) grep 이 실패해 안 붙인다 — 이어지는 "$@" 가 종전대로 127 안내를 낸다.
+const PROBE_FLAG_RE = /^--[a-z][a-z0-9-]{0,40}$/;
+export function launchProbeLines(flags: readonly string[]): string[] {
+  return flags.filter((f) => PROBE_FLAG_RE.test(f))
+    .map((f) => `if "$1" --help 2>/dev/null | grep -qF -- '${f}'; then set -- "$@" '${f}'; fi`);
+}
+function withProbe(script: string, flags: readonly string[]): string {
+  const lines = launchProbeLines(flags);
+  if (!lines.length) return script;
+  const rows = script.split("\n");
+  const at = rows.findIndex((r) => /shift [0-9]/.test(r));
+  if (at < 0) return script;
+  return [...rows.slice(0, at + 1), ...lines, ...rows.slice(at + 1)].join("\n");
+}
+
 /**
  * @param opts.stopRule  하네스 종료 규칙을 따르는 세션인가(#4695 — 매니지드 ∧ STOP_RULE_HARNESSES). 참이면 런처 ①②③(LAUNCH_STOP_SH).
  * @param opts.resumeArgc 실행 파일 바로 뒤에 붙은 이어 열기 인자 수(②가 빼는 수). 0 이면 ② 는 없다.
@@ -1007,11 +1041,14 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
   // 영향을 받지 않는 cmd.exe를 명시한다. 실제 하네스 argv는 계속 raw argv 직접 실행 경계를 탄다.
   if (platform === "win32") return argv.length ? argv : ["cmd.exe", "/K"];
   if (!argv.length) return argv;
+  //  #5332 — 그 하네스 자신을 TUI 로 띄울 때만 판 확인 줄을 끼운다(argv[0] 이 그 실행 파일). 시험·대역 명령(`sh -c …`)엔 안 붙는다.
+  const h = HARNESSES.find((x) => x.key === harnessKey);
+  const probe = h?.tuiProbeArgv?.length && argv[0] === (h.bin || h.key) ? h.tuiProbeArgv : [];
   if (opts.stopRule && STOP_RULE_HARNESSES.has(harnessKey)) {
     const nres = Number.isInteger(opts.resumeArgc) && (opts.resumeArgc as number) > 0 ? String(opts.resumeArgc) : "0";
-    return ["sh", "-c", LAUNCH_STOP_SH, "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), nres, ...argv];
+    return ["sh", "-c", withProbe(LAUNCH_STOP_SH, probe), "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), nres, ...argv];
   }
-  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), ...argv];
+  return ["sh", "-c", withProbe(LAUNCH_SH, probe), "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), ...argv];
 }
 
 // 로그인 전용 세션(#1516) — 관리탭 [연결된 AI 계정]의 [로그인]이 여는 세션.
