@@ -203,6 +203,12 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/node/task-mark-running.pg-test.mjs
+      # 노드 토큰 회전 — 겹친 회전에서 «살아 있는 노드 토큰 = org_node 에 붙은 하나» (기대값 비교 갱신).
+      - name: 노드 토큰 회전 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/node/node-token-rotate.pg-test.mjs
       # ④-d1d 작업 컨테이너 작업 행(#4490) — 목으로는 못 보는 것: **동시 상한·대기열 상한이 테넌트 잠금 안의 셈이고, 일회용 부트 · 한 번만
       #    끝남 · 무응답 재확인 · 일시 실패 되돌리기 · 고른 뒤 끝난 행 넘기지 않기가 UPDATE 한 문장의 조건이다**. 병렬로 부르고(청/녹 두 슬롯)
       #    다른 트랜잭션으로 잠금·행을 쥐어 순서를 고정한 뒤 행을 되읽어 판정한다. 조건을 지우면 빨개지는 것을 확인했다.
@@ -298,6 +304,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/v6/category-delete-guard.pg-test.mjs
+      # ⑤-a3 관리기 분류 보정 적용(지식당 분류 1행 유니크와 만나는 교체) · code_drift 후보(mapping 조인) ·
+      #    수집기 끄기가 진행 중 실행을 닫는가 — 셋 다 SQL 이 실제 스키마와 만날 때만 드러난다.
+      - name: 관리기 적용·수집기 끄기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/manage/manager-apply-collector-stop.pg-test.mjs
       # ⑤-b 자료 접기·지식 롤업(나무·목록·총계 공용 술어)의 의미와 모양 — 실패 양식이 크래시가 아니라
       #    «화면 숫자만 틀림» 또는 «결과는 같은데 수백 초»다. 접기 단위(대화 1건)·지식 롤업(답글→루트)·
       #    fail-open(부모 미수집)이 전부 SQL 조건이라 목으로는 검증 대상 자체가 빠지고, 느린 모양으로 되돌아가도
@@ -543,6 +556,13 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/capabilities/knowledge/set-fields.pg-test.mjs
+      # ⑤-m3b 증류 배치 단위 되돌리기 — 고르기 술어(done·의뢰자·기간·레인 key 정확 일치)와 지식 보호 배제절, 지운 자료의
+      #    인박스 재등장은 SQL 로만 정해진다. 유닛 페이크는 고르기 WHERE 를 평가하지 못한다(그 파일 머리말).
+      - name: 증류 배치 되돌리기 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/distill/requeue-seen.pg-test.mjs
       # ⑤-n 개인 해제(break-glass) — 위와 같은 경계의 **예외** 경로다. 해제가 실제로 열리는가보다
       #    «해제가 끝나면 닫히는가 · 남의 것은 안 열리는가» 가 중요한데 그것도 SQL 조건이다.
       - name: 가시성 개인 해제 PG 통합 테스트

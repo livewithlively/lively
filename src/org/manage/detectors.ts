@@ -278,6 +278,9 @@ export interface CodeDriftKnowledgeCandidate {
   repos: string[]; category_keys: string[]; updated_at: string | null;
 }
 
+/** Postgres undefined_table — 선택 기능의 테이블이 없는 배포를 오류와 구분한다. */
+const UNDEFINED_TABLE = "42P01";
+
 export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: number): Promise<CodeDriftKnowledgeCandidate[]> {
   const params: unknown[] = [];
   const conds = scopeConds(m, params, "k");
@@ -301,8 +304,9 @@ export async function findCodeDriftKnowledgeCandidates(m: ManagerRow, limit: num
       repos: (r.repos as string[]) ?? [], category_keys: (r.category_keys as string[]) ?? [],
       updated_at: r.updated_at ? String(r.updated_at) : null,
     }));
-  } catch {
-    return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
+  } catch (e) {
+    if ((e as { code?: string })?.code === UNDEFINED_TABLE) return [];   // category_repo 부재(레포를 안 쓰는 배포) — 볼 것이 없다
+    throw e;
   }
 }
 
@@ -313,13 +317,19 @@ export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Pro
   params.push(limit);
   const limP = `$${params.length}`;
 
-  // code_unit 매핑은 도메인맵 쪽 테이블이라 없을 수 있다 — 없으면 빈 결과로 떨어진다(에러 아님).
+  // 코드유닛→카테고리는 mapping.category_id 에 있다(code_unit 엔 카테고리 컬럼이 없다 — 도메인맵 목록 listProductDomains 와 같은 조인).
+  //  도메인맵 테이블이 아예 없는 배포만 빈 결과로 본다. 그 밖의 오류(컬럼 이름 착오 등)를 삼키면 관리기가 status ok 로
+  //  매번 후보 0건을 내며 조용히 죽으므로 run_managers 의 오류 기록으로 올린다.
   try {
     const rows = await q(itemsPool, `
       SELECT c.id AS category_id, c.key, c.name, c.should, c.updated_at AS should_updated,
              COALESCE((SELECT ARRAY_AGG(cr.repo ORDER BY cr.repo) FROM category_repo cr WHERE cr.category_id=c.id), ARRAY[]::text[]) AS repos,
-             (SELECT count(*)::int FROM code_unit cu WHERE cu.category_id = c.id) AS unit_count,
-             (SELECT max(cu.updated_at) FROM code_unit cu WHERE cu.category_id = c.id) AS code_updated
+             (SELECT count(*)::int FROM mapping m JOIN code_unit cu ON cu.id = m.target_id
+               WHERE m.category_id = c.id AND m.target_kind = 'code_unit' AND m.status <> 'rejected'
+                 AND COALESCE(cu.state, 'active') = 'active') AS unit_count,
+             (SELECT max(cu.updated_at) FROM mapping m JOIN code_unit cu ON cu.id = m.target_id
+               WHERE m.category_id = c.id AND m.target_kind = 'code_unit' AND m.status <> 'rejected'
+                 AND COALESCE(cu.state, 'active') = 'active') AS code_updated
         FROM category c
        WHERE ${conds.join(" AND ")}
        ORDER BY c.updated_at DESC
@@ -333,7 +343,8 @@ export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Pro
         should_updated: r.should_updated ? String(r.should_updated) : null,
         code_updated: r.code_updated ? String(r.code_updated) : null,
       }));
-  } catch {
-    return []; // code_unit 부재(도메인맵 미사용 배포) — 이 관리기는 할 일이 없다
+  } catch (e) {
+    if ((e as { code?: string })?.code === UNDEFINED_TABLE) return []; // 도메인맵 미사용 배포 — 이 관리기는 할 일이 없다
+    throw e;
   }
 }
