@@ -374,6 +374,13 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
     && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-head-grip \{ bottom: auto; top: calc\(var\(--pn-dock-row\) - 5px\); \}/.test(DOCK_CSS)
     && /if \(home === 'top'\) pane\.style\.setProperty\('--pn-dk-s', size \+ 'px'\);/.test(DOCK),
     "W16u 머리 줄 높이 손잡이(#5319) — 52~150(기본 113) 한 값(--pn-bighead-h)을 세션 큰 머리 · 곁칸 독 줄이 같이 읽는다 · 80 아래는 한 줄 머리(hd-one) · 독 줄 = H-1 · 탭 줄 53 은 선 아래 · 손잡이는 그 선 위");
+  check(/export const HANG_BELOW = 105;/.test(GRIP) && /wrap\.classList\.toggle\('hd-hang', \(h \?\? HEAD_H\.def\) < HANG_BELOW\);/.test(GRIP)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub \{ --pn-file-row: 44px; --pn-tab-h: 34px; --pn-dock-row: calc\(var\(--pn-bighead-h, 113px\) - 1px - var\(--pn-file-row\)\); --pn-dk-cap: calc\(var\(--pn-dock-row\) - 8px\); \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-image: none; \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ box-sizing: border-box; padding-top: clamp\(0px, calc\(var\(--pn-bighead-h, 113px\) - 105px\), 8px\); \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-tabs > \.pn-tabwrap \{ margin-block: 3px 7px; \}/.test(DOCK_CSS)
+    && /\.pn-wrap:not\(\.hd-hang\) \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-head-grip \{ top: auto; bottom: 0; \}/.test(DOCK_CSS),
+    "W16v ② 탭 줄을 머리 높이 안으로(#5319 원준 «세로로 너무 길다») — 105 이상이면 독 줄 68(위 8 + 타일 52 + 밑줄 8) + 탭 줄 44(탭 34) = 선 안 113 · 타일은 안 줄인다(cap = 독 줄 - 8) · 두 줄 사이 선 없음 · 손잡이는 아랫선 · 105 아래는 hd-hang 으로 옛 규칙(탭 줄이 선 아래)");
   const TERM_HTML = read(path.join(root, "public/terminal.html"));
   check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
     "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");
