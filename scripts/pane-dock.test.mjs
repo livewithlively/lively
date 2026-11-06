@@ -320,7 +320,7 @@ check(/\.pn-dock\[data-home="top"\] \.pn-dock-shelf \{[^}]*background: none;[^}]
   && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on \.pn-dock-lb \{ font-weight: 700;/.test(DOCK_CSS)
   && /\.pn-dock\[data-home="top"\] \.pn-dock-it\.on::after \{ content: "";/.test(DOCK_CSS)
   && /el\('span', \{ class: 'pn-dock-lb', 'aria-hidden': 'true', text: name \}\)/.test(DOCK)
-  && /top: \{ min: 40, max: 56 \}/.test(DOCK) && /if \(dragging \|\| ctxIsOpen\(\) \|\| home === 'top'\) return;/.test(DOCK),
+  && /top: \{ min: 34, max: 44 \}/.test(DOCK) && /if \(dragging \|\| ctxIsOpen\(\)\) return;/.test(DOCK),
   "W16g 머리 줄 독 — 선반(유리 상자) 없음 · 아이콘 아래 이름표 15px · 켜진 앱은 굵게 + 밑줄(색만으로 말하지 않는다) · 아이콘 40~56 · 꼬리 이름표는 안 띄운다");
 check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\s+const mb = moreBtn\(\);/.test(DOCK) && /sessionOnly \? null : addBtn\(zone\),\n\s*\]\.filter/.test(PANES_TS),
   "W16e 머리 줄엔 «앱 더하기» 가 하나 — 독의 [모든 앱] 칸 대신 줄 끝 [＋](앱 서랍)");
@@ -348,6 +348,13 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
     && /\.pn-body:not\(\.cm\) \.sc-head--big \.sc-act:hover \{ color: var\(--blue\); border-color: var\(--line-net\);/.test(CHAT_CSS)
     && /@container schead \(max-width: 640px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big \.sc-act-duo-t \{ display: none; \} \}/.test(CHAT_CSS),
     "W16s 머리줄 3-B — 둘 다 되면 [복제·옮기기 ▾] 하나(메뉴에서 고른다) · 하나만 되면 그 단추 · 넓은 화면은 첫 줄 오른쪽 [연결 상태 | 화면 복구] [⋯], 둘째 줄 왼쪽 얼굴 · [자료] │ [복제·옮기기] · 이전 단추 모양(쉴 땐 글자, 올리면 테두리 알약 + 파란 글자)");
+  check(/\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: none; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top \.pn-dock\[data-home="top"\] \.pn-dock-it \{ width: calc\(var\(--dk-s, 44px\) \+ 8px\); gap: 0; padding: 0 0 8px; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar > \.pn-dock-slot \{ height: 59px; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top\.dock-sub > \.pn-tabbar \{ background-position: 0 59px, 0 0; \}/.test(DOCK_CSS)
+    && /\.pn-wrap \.pn-pane\.dock-top:not\(\.dock-sub\) > \.pn-tabbar > \.pn-dock-slot \{ align-items: center; \}/.test(DOCK_CSS)
+    && /\.pn-dock\[data-home="top"\] \.pn-dock-lb \{ display: block;/.test(DOCK_CSS),
+    "W16t #5319 A안 — 머리 줄 독 타일 44 · 이름표는 평소 숨기고 올리면 말풍선 · 독 줄 60 + 파일 줄 53 = 113(세션 머리줄) · 파일 줄 없으면 113 안 세로 가운데 · 옛 규칙은 지우지 않고 덮는다");
   const TERM_HTML = read(path.join(root, "public/terminal.html"));
   check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
     "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");
