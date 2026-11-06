@@ -156,6 +156,20 @@ test("훅 명령 첫 토큰 — 따옴표 없이 절대경로, 공백 든 경로
   assert.equal(winNodeToken("node"), "node");
 });
 
+test("훅 명령 첫 토큰 — 셸 메타문자·유니코드 따옴표·공백류가 하나라도 든 경로는 종전 `node`", () => {
+  //  git-bash · cmd · PowerShell 이 따옴표 없는 첫 토큰을 글자 그대로 받지 않는 문자들(C4·C5·C2)
+  const at = (ch) => `C:/Users/a${ch}b/.lively/runtime/node-v22.14.0-win-x64/node.exe`;
+  for (const ch of ["(", ")", "&", ";", "'", '"', "$", "^", ",", "%", "!", "=", "#", "@", "+", "[", "]", "{", "}", "`",
+    "\u2018", "\u2019", "\u201C", "\u201D", "\u2013", "\u2014", " ", "\t", "\u00A0"]) {
+    assert.equal(winNodeToken(at(ch)), "node", JSON.stringify(ch));
+  }
+  assert.equal(winNodeToken("C:/Program Files (x86)/nodejs/node.exe"), "node");
+  // C6 경계 — 8.3 짧은 이름의 `~` 는 세 셸 모두 글자 그대로다
+  assert.equal(winNodeToken("C:/Users/HONGGI~1/.lively/runtime/node-v22.14.0-win-x64/node.exe"), "C:/Users/HONGGI~1/.lively/runtime/node-v22.14.0-win-x64/node.exe");
+  // C7 부재 — 빈 값은 맨몸 node
+  assert.equal(winNodeToken(""), "node");
+});
+
 test("«여기 연결» 커맨드 — Windows 에서 node 경로를 알면 심을 거치지 않는 명령을 준다", () => {
   const NODE = "C:/Profiles/홍길동/.lively/runtime/node-v22.14.0-win-x64/node.exe";
   const LIB = "C:/Profiles/홍길동/.lively/lib/lively.mjs";

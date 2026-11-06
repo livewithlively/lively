@@ -81,8 +81,10 @@ export function winNodeBin(execPath) {
   return /^(?:[A-Za-z]:[\\/]|\\\\)/.test(p) && /[\\/]node\.exe$/i.test(p) ? fwd(p) : "node";
 }
 /** (순수) 훅 명령줄 첫 토큰. 하네스마다 훅을 돌리는 셸이 다르다(git-bash · cmd · PowerShell). PowerShell 은 따옴표로 시작하는 줄을
- *  실행이 아니라 문자열로 읽으므로 따옴표를 쓰지 않는다 — 공백이 든 경로면 맨몸 `node`(종전 문자열 그대로)로 둔다. */
-export const winNodeToken = (bin) => (bin === "node" || /\s/.test(bin) ? "node" : bin);
+ *  실행이 아니라 문자열로 읽으므로 따옴표를 쓰지 않는다 — 그래서 세 셸 어디서도 글자 그대로인 문자로만 된 경로만 쓰고,
+ *  그 밖(공백 · `( ) & ; ' " $ ^ , % ! = # @ + [ ] { }` · 백틱 · 유니코드 따옴표·대시 등)이 든 경로면 맨몸 `node`(종전 문자열 그대로)로 둔다.
+ *  허용 = 글자·숫자(한글 등 포함) · `.` `_` `-` `~` `/` `:`. */
+export const winNodeToken = (bin) => (bin !== "node" && /^[\p{L}\p{M}\p{N}._~\/:-]+$/u.test(bin) ? bin : "node");
 const hookAbs = (script) => fwd(join(LIVELY, "hooks", script));
 const WIN = process.platform === "win32";
 // #355: 훅은 하네스가 실행하는 셸의 PATH 로 `node` 를 찾는다 → node 를 갓 설치했거나 rc 를 아직 source 안 한
