@@ -264,6 +264,13 @@ check(/const top = zone === 'side' && dockTop\(\);/.test(PANES_TS) && !/pn-dock-
   && /\[열린 탭 ∨\] 은 세우지 않는다[^\n]*\n\s*pane\.tail\.replaceChildren\(\.\.\.\[\n\s*sessionOnly \? null : addBtn\(zone\),/.test(PANES_TS)
   && /\.pn-pane\.dock-top > \.pn-tabbar > \.pn-tabs \{ display: none; \}/.test(DOCK_CSS),
   "W16d 머리 줄 독이면 곁칸 탭 띠를 감추고 [＋] 만 남긴다([열린 탭 ∨] 없음 — 독 아래 탭 줄이 하나하나를 다 보인다) · 켜진 앱 이름은 아이콘 아래 이름표가 말한다");
+{
+  const RAIL_CSS = read("public/styles/47-v2-rail.css");
+  check(/\.pn-body:not\(\.cm\) \.sc-head--big \.sc-titlebox \.sc-title-t \{ max-width: 22em; \}/.test(read("public/styles/36-chat.css")),
+    "W16q 큰 머리 제목은 칸이 넓어도 한글 22자 안팎(22em)에서 멈추고 …로 끊는다 — 닿는 데까지 늘이지 않는다");
+  check(/\.v2-rail-stack \.v2-wscard-big \{[^}]*width: 40px; height: 40px;/.test(RAIL_CSS) && /\.v2-rail\.closed \.v2-rail-me \.v2-ava \{ width: 36px; height: 36px;/.test(RAIL_CSS),
+    "W16r 레일 워크스페이스 타일 40px · 내 아바타 36px — 레일 칸(63×58) 사이에서 점처럼 뜨지 않게");
+}
 //  #5319 독 아래 탭 줄(2026-11-05 — 뷰어 여럿 중 하나를 고를 수 없었다 · «탭 사이즈가 충분히 크게»).
 {
   const TABS_LIB = read("web/lib/pane-tabs.ts");

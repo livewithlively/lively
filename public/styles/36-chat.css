@@ -698,6 +698,9 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .pn-body:not(.cm) .sc-head--big .sc-title-in { font-size: 24px; font-weight: 700; }
   .pn-body:not(.cm) .sc-head--big .sc-titlebox { min-width: 0; }   /* 좁아지면 이름이 …로 준다(줄은 안 바꾼다) — 오른쪽은 @container 사다리가 먼저 접는다 */
   .pn-body:not(.cm) .sc-head--big .sc-title-t { min-width: 3em; }   /* …가 붙어도 두세 글자는 남는다 */
+  /* #5319(원준 2026-11-06 «제목이 많이 길어지더라도 하드하게 끊어버리는 적당한 위치 · 무작정 닿는데까지 늘이지말고») — 칸이 넓어도
+     한글 22자 안팎(22em = 24px 제목에서 528px)에서 멈추고 …로 끊는다. 오른쪽 단추 군과의 사이에 늘 여백이 남는다. 온전한 이름은 툴팁. */
+  .pn-body:not(.cm) .sc-head--big .sc-titlebox .sc-title-t { max-width: 22em; }
   .pn-body:not(.cm) .sc-head--big .sc-title-no { margin-left: 10px; font-size: 17px; font-weight: 500; color: var(--muted); }
   .pn-body:not(.cm) .sc-head--big .sc-title-pen { width: 18px; height: 18px; }
   .pn-body:not(.cm) .sc-head--big .sc-title-penbtn { width: 32px; height: 32px; }
