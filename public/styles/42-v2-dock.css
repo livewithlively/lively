@@ -283,6 +283,9 @@ html.pn-dock-dragging iframe, html.pn-dock-dragging webview { pointer-events: no
   .pn-sub-acts .pn-ed-bar .pn-fine { display: none; }
   .pn-sub-acts .pn-sub-more:not([hidden]) { display: inline-flex; }
 }
+/* 자리를 비워 두는 것은 켜진 탭뿐 — 다른 탭은 이름만큼(좁은 곁칸에서 한 개라도 더 보이게). 올리면 × 가 이름 끝 위에 바탕색 조각을 깔고 선다. */
+.pn-pane.dock-top.dock-sub .pn-tabwrap:not(.on) .pn-tab { padding-right: 14px; }
+.pn-pane.dock-top.dock-sub .pn-tabwrap:not(.on) .pn-tab-x { background: var(--bg-punch); box-shadow: -8px 0 8px var(--bg-punch); }
 /* 파일 탭의 × — 탭 **오른쪽 끝**(크롬 · VS Code). 왼쪽 아이콘 자리에 두니 켜진 탭의 × 가 앞 탭 이름 바로 뒤에 붙어 «앞 탭의 ×» 로
    읽혔다(실측). 켜진 탭은 늘 보이고(지금 보는 것을 어디서 닫는지) 다른 탭은 올리면 — 자리는 늘 비워 둬 올려도 이름이 밀리지 않는다.
    마우스로 닫으면 오른쪽 탭이 닫힌 탭의 폭을 물려받아 그 × 가 바로 커서 밑에 온다(panes.ts closeTab — 연달아 닫기). 아이콘은 늘 선다. */
