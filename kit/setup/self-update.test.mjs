@@ -5,7 +5,10 @@
 //  실행: node kit/setup/self-update.test.mjs   (npm test 체인에 포함)
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import {
+  copyFileSync, cpSync, mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync,
+  chmodSync, statSync, lstatSync, symlinkSync, readdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { promisify } from "node:util";
@@ -631,6 +634,75 @@ try {
     const bare = freshHome(null);
     await runUpdater(bare);
     (!existsSync(join(bare, ".claude.json"))) ? ok("⑮c .claude.json 없으면 미생성(무접촉)") : bad("⑮c 무접촉", ".claude.json 이 생성됨");
+
+    // ⑮h — .claude.json 은 사람이 쓰는 설정 파일이다. 바꿔 쓸 때 파일의 모습(권한·링크·읽기 전용·남의 임시 파일)은
+    //  종전 «제자리 덮어쓰기» 와 같아야 한다 — 임시 파일+rename 은 그 넷을 모두 조용히 바꿀 수 있다.
+    //  --mcp-only 경로로 잰다(네트워크·설치 없이 reconcile 쓰기만 탄다). 빈 mcpServers 라 쓰기가 반드시 일어난다.
+    {
+      const empty = JSON.stringify({ mcpServers: {} }, null, 2) + "\n";
+      const reconciled = (p) => { try { return !!JSON.parse(readFileSync(p, "utf8")).mcpServers["lively-local"]; } catch { return false; } };
+      const leftovers = (dir) => readdirSync(dir).filter((f) => /\.lvly-.*\.tmp$/.test(f));
+      // A4 — 다른 업데이터가 고정 이름(<cj>.lvly-tmp)으로 쓰는 중인 임시 파일을 덮거나 지우지 않는다(잠금 밖에서도 도는 경로다).
+      {
+        const h = freshHome("v-mcp");
+        const cj = join(h, ".claude.json");
+        writeFileSync(cj, empty);
+        const foreign = `${cj}.lvly-tmp`;
+        writeFileSync(foreign, "다른 업데이터가 쓰는 중\n");
+        await runUpdater(h, {}, ["--mcp-only"]);
+        const kept = readIf(foreign) === "다른 업데이터가 쓰는 중";
+        (reconciled(cj) && kept && !leftovers(h).length)
+          ? ok("⑮h 남의 임시 파일(고정 이름)을 덮거나 지우지 않는다 + 찌꺼기 없음")
+          : bad("⑮h 임시 파일 충돌", `reconciled=${reconciled(cj)} foreignKept=${kept} leftovers=${leftovers(h).join(",")}`);
+      }
+      //  POSIX 권한·링크 계약 — 윈도우엔 mode 비트가 없고(ACL) 링크 생성에 권한이 든다. root 는 읽기 전용을 무시한다.
+      if (WIN || process.getuid?.() === 0) console.log("skip ⑮h-b1~e — 윈도우·root 는 POSIX mode·읽기 전용 계약이 성립하지 않는다");
+      else {
+        // A1·A2 — 원본 mode 유지(0600 강제가 아니라 원본 그대로 — 0640 이 그 둘을 가른다).
+        //  0664 는 umask(022)가 깎는 비트가 있는 원본이다 — 새 파일을 만들 때 mode 를 줘도 umask 에 깎이므로 따로 맞춰야 한다.
+        for (const [mode, tag] of [[0o600, "b1"], [0o640, "b2"], [0o664, "b3"]]) {
+          const h = freshHome("v-mcp");
+          const cj = join(h, ".claude.json");
+          writeFileSync(cj, empty);
+          chmodSync(cj, mode);
+          await runUpdater(h, {}, ["--mcp-only"]);
+          const got = statSync(cj).mode & 0o777;
+          (reconciled(cj) && got === mode && !leftovers(h).length)
+            ? ok(`⑮h-${tag} 쓰기 후 원본 권한 유지(${mode.toString(8)})`)
+            : bad(`⑮h-${tag} 권한 유지`, `reconciled=${reconciled(cj)} mode=${got.toString(8)} (원본 ${mode.toString(8)}) leftovers=${leftovers(h).join(",")}`);
+        }
+        // A3 — 심볼릭 링크(dotfiles 관리)는 링크로 남고 가리키는 파일이 갱신된다.
+        {
+          const h = freshHome("v-mcp");
+          const dot = join(h, "dotfiles");
+          mkdirSync(dot, { recursive: true });
+          const real = join(dot, "claude.json");
+          writeFileSync(real, empty);
+          chmodSync(real, 0o600);
+          symlinkSync(real, join(h, ".claude.json"));
+          await runUpdater(h, {}, ["--mcp-only"]);
+          const stillLink = lstatSync(join(h, ".claude.json")).isSymbolicLink();
+          const realMode = statSync(real).mode & 0o777;
+          (stillLink && reconciled(real) && realMode === 0o600 && !leftovers(h).length && !leftovers(dot).length)
+            ? ok("⑮h-d 심볼릭 링크 유지 — 가리키는 파일만 갱신(권한 그대로)")
+            : bad("⑮h-d 심볼릭 링크", `stillLink=${stillLink} reconciled=${reconciled(real)} mode=${realMode.toString(8)} leftovers=${[...leftovers(h), ...leftovers(dot)].join(",")}`);
+        }
+        // A5 — 읽기 전용으로 잠가 둔 파일은 건드리지 않는다(rename 은 그 잠금을 우회한다 — 종전 덮어쓰기는 여기서 실패했다).
+        {
+          const h = freshHome("v-mcp");
+          const cj = join(h, ".claude.json");
+          writeFileSync(cj, empty);
+          chmodSync(cj, 0o444);
+          await runUpdater(h, {}, ["--mcp-only"]);
+          const same = readFileSync(cj, "utf8") === empty;
+          const got = statSync(cj).mode & 0o777;
+          chmodSync(cj, 0o644);   // 정리가 막히지 않게
+          (same && got === 0o444 && !leftovers(h).length)
+            ? ok("⑮h-e 읽기 전용 .claude.json 은 내용·권한 그대로")
+            : bad("⑮h-e 읽기 전용", `same=${same} mode=${got.toString(8)} leftovers=${leftovers(h).join(",")}`);
+        }
+      }
+    }
 
     // ⑯ #2255 — **grok 만 배선된 머신**도 자동 업데이트가 그 하네스로 돈다.
     //  종전엔 installedHarnesses() 가 claude·codex·opencode·antigravity 넷만 봐서, grok 단독 머신은 목록이

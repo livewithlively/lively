@@ -29,9 +29,10 @@
 // 토큰 값은 절대 출력/로깅하지 않는다.
 import {
   readFileSync, writeFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync,
-  existsSync, statSync, openSync, closeSync, accessSync, renameSync, constants as FSC,
+  existsSync, statSync, openSync, closeSync, accessSync, renameSync, realpathSync, chmodSync, constants as FSC,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { hostEffects } from "./host-effects-port.mjs";
 // 동적 import 다 — 이 파일은 자가 치유 경로라, 옆 모듈이 없는 훅 폴더(부분 복사·옛 설치)에서도 떠서 다음 번들을 받아야 한다.
 //  없으면 종전 심 직결 항목을 쓰고 교정을 건너뛴다.
@@ -325,6 +326,33 @@ function reconcileClaudeMcp(gw, token) {
   }
 }
 
+// ~/.claude.json 은 사람이 쓰는 설정 파일이다 — 바꿔 쓰되 파일의 모습(권한·링크)은 종전 덮어쓰기 때와 같게 둔다.
+//  · 원자적 — 같은 폴더의 임시 파일에 쓰고 이름을 바꾼다. Claude Code 는 반쯤 쓰인 .claude.json 을 손상으로 보고
+//    mcpServers 를 통째로 비운 적이 있다(session-preload claudeMcpMissing 머리말).
+//  · 권한 — 새 파일은 umask(보통 0644)로 생긴다. 원본 mode(못 읽으면 0600)를 그대로 준다(헤더·토큰이 실릴 수 있는 파일이다).
+//    쓰기 권한이 없는 파일(읽기 전용으로 잠가 둔 것)은 rename 이 그 잠금을 우회하므로 건드리지 않는다 — 종전 덮어쓰기도 거기서 실패했다.
+//  · 심볼릭 링크 — 링크가 아니라 가리키는 파일을 바꾼다(dotfiles 관리 등). 링크 자리에 rename 하면 링크가 일반 파일이 된다.
+//  · 임시 파일 이름에 pid·난수 — reconcile 은 잠금 밖(최신 경로·--mcp-only)에서도 돌아, 동시에 뜬 업데이터 둘이 같은 이름이면
+//    서로의 임시 파일을 덮거나 지운다. "wx" 로 만들어 이미 있는 파일(·링크)을 따라 쓰지 않는다.
+//  rename 이 실패하면(Windows 는 대상이 열려 있으면 EPERM 일 수 있다) 임시 파일을 지우고 직접 덮어쓴다 — 그 한 번은 원자적이지
+//   않지만 종전 동작이고, 있는 파일에 쓰므로 권한·링크는 그대로다. ⚠ Windows 의 rename 은 원본 ACL 을 옮기지 않는다(폴더 상속 ACL).
+function writeUserConfig(path, body) {
+  let target = path;
+  try { target = realpathSync(path); } catch { /* 못 풀면 그 경로 그대로 */ }
+  accessSync(target, FSC.W_OK);   // 읽기 전용이면 여기서 던진다 → 호출자가 로그만 남기고 건너뛴다
+  let mode = 0o600;
+  try { mode = statSync(target).mode & 0o777; } catch { /* 못 읽으면 0600 */ }
+  const tmp = `${target}.lvly-${process.pid}-${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(tmp, body, { mode, flag: "wx" });
+    try { chmodSync(tmp, mode); } catch { /* umask 를 못 걷어도 mode 보다 넓게 열리지는 않는다 */ }
+    renameSync(tmp, target);
+  } catch {
+    try { rmSync(tmp, { force: true }); } catch { /* 무시 */ }
+    writeFileSync(target, body);
+  }
+}
+
 function reconcileOneClaudeConfig(cj, gw, token) {
   let conf;
   try { conf = JSON.parse(readFileSync(cj, "utf8")); } catch { return; } // 파손/못읽음 → 안전 skip(덮어쓰지 않음)
@@ -401,15 +429,7 @@ function reconcileOneClaudeConfig(cj, gw, token) {
   }
   if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
   conf.mcpServers = servers;
-  //  임시 파일에 쓰고 이름을 바꾼다 — Claude Code 는 반쯤 쓰인 .claude.json 을 손상으로 보고 mcpServers 를 통째로
-  //  비운 적이 있다(session-preload 머리말, mcp-register.mjs writeJsonAtomic 과 같은 이유). Windows 는 그 파일이 열려 있으면
-  //  rename 이 EPERM 으로 실패할 수 있어 그때만 직접 쓰기로 물러난다(종전 동작).
-  try {
-    const body = JSON.stringify(conf, null, 2) + "\n";
-    const tmp = `${cj}.lvly-tmp`;
-    try { writeFileSync(tmp, body); renameSync(tmp, cj); }
-    catch { try { rmSync(tmp, { force: true }); } catch { /* 무시 */ } writeFileSync(cj, body); }
-  }
+  try { writeUserConfig(cj, JSON.stringify(conf, null, 2) + "\n"); }
   catch (e) { log(`MCP reconcile 쓰기 실패(무시) ${cj}: ${(e && e.message) || e}`); return; }
   // #1079 — **쓴 뒤 되읽어 확인한다.** "로그는 고쳤다는데 화면은 그대로"였던 실측 사고 때, 로그만으로는
   //  무엇이 잘못됐는지(다른 파일을 고쳤나·되돌려졌나) 구분할 수 없었다. 여기서 확인하면 다음 진단이 한 줄로 끝난다.
