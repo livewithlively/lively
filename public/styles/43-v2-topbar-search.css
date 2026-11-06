@@ -197,6 +197,12 @@
 .v2-omnib-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-omnib-k { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; letter-spacing: .02em;
   padding: 1px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted-2); background: var(--canvas); }
+/* #5319 KRDS(원준 2026-11-05 4차) — 검색 글자 15 · ⌘K 13(가장 작은 단계). 칸 높이 32(창 줄 안). 폰은 자기 크기(50-mobile). */
+@media (min-width: 901px) {
+  .v2-omnib, #v2-root.has-topbar > .v2-topbar > .v2-side-nav .v2-omnib { height: 32px; font-size: 15px; }
+  .v2-omnib-ic { width: 16px; height: 16px; }
+  .v2-omnib-k { font-size: 13px; letter-spacing: 0; }
+}
 
 /* ════════════════════════════════════════════════════════════════════════
    ③ 통합검색(스포트라이트) — 목록 + 미리보기 두 칸(#4530 안 A, 원준 2026-10-04 «A안으로 가자»).

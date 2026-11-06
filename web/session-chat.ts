@@ -68,6 +68,7 @@ import { watchShown } from './lib/shown.js';   // #5398 — 이 화면이 지금
 import { onViewers, viewersOf, viewersFresh, noteActivity, SESSION_VIEW_EVENT, type Viewer } from './v2/presence.js';
 import { PHONE_MQ } from './v2/mobile.js';   // 폰 문턱 하나(50-mobile.css 폰 블록과 같은 값) — ⋯ 의 폰 전용 줄을 가른다(#4229 후속)
 import { openSharePopover, shareSessOf } from './v2/share-session.js';
+import { headGrip } from './v2/head-grip.js';   // #5319 — 큰 머리 아랫선 손잡이(곁칸 머리 줄과 같은 높이를 민다)
 
 
 // ── 자동복원 연쇄 상한 판정 (#1820 후속) — 순수 함수(스토리지·DOM 의존 없음) ────────────────────
@@ -330,8 +331,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ⚠ 이름 고치기(#1719)는 살아 있다 — pane 이름이 없으면(셸·방금 뜬 세션) 제목이 곧 세션 이름이라 **그 자리에서**
   //   고치고, pane 이름이 제목을 차지했으면 [⋯ ▸ 세션 이름 바꾸기]가 같은 편집기를 제목 자리에 연다.
   const titleHost = el('span', { class: 'sc-titlebox' });
-  //  #5319 큰 머리의 아랫줄 — [#번호 · 연결 상태 | 화면 복구]. bigHead 가 아니면 없다(번호는 이름 뒤, 연결 상태는 오른쪽 조작부 — 종전 그대로).
-  const subNo: HTMLElement | null = opts.bigHead ? el('span', { class: 'sc-sub-no' }) : null;
   let titleText = target.label;
   //  사람이 지은 이름인가(lib/sess-name.ts human) — 여기서 방금 고쳤으면 목록이 따라오기 전에도 참이다.
   let titleHuman = target.raw?.labelSource === 'human';
@@ -363,8 +362,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     paintTitleName();
     const no = Number(target.raw?.taskNo || 0);
     const noEl = no > 0 ? el('span', { class: 'sc-title-no mono', text: '#' + no, title: '이 세션이 맡은 태스크 번호입니다.' }) : null;
-    //  #5319 큰 머리 — 번호는 이름 아래 한 줄(subNo)로 내려간다.
-    if (opts.bigHead) { if (subNo) replaceKids(subNo, noEl); return; }
+    //  #5319 큰 머리도 번호는 **이름 바로 뒤**다(원준 2026-11-05 «#nnnn 이거는 세션 이름 바로 옆에») — 종전 v2 는 이름 아랫줄로 내렸다.
     if (noEl) titleHost.append(noEl);
   }
   function paintTitleName(): void {                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
@@ -547,33 +545,93 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     onclick: () => opts.onMove!() },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.sessMove })),
     el('span', { text: moveText })) as HTMLButtonElement : null;
+  //  #5319 3-B(원준 2026-11-06 «복제나 옮기기를 좀 하나로 묶어서 하고 그거 누르면 그 다음에 둘 중 하나를 고르게») — 둘 다 되면
+  //   [복제·옮기기 ▾] 한 단추가 서고, 누르면 두 줄 메뉴(이름 + 한 줄 설명)에서 고른다. 하나만 되면 그 단추가 메뉴 없이 그대로 선다.
+  //   이름은 안에 든 둘을 그대로 말한다 — «세션 ▾» 은 바로 옆 [⋯](이 세션에 할 수 있는 것들)와 같은 말이라 메뉴가 둘로 읽혔다(목업 v3).
+  const subSep = el('span', { class: 'sc-sub-sep', 'aria-hidden': 'true' });   // 둘째 줄 «얼굴 · 자료 │ 복제·옮기기» 의 금 — paintActs 가 켜고 끈다
+  const duoBtn = forkBtn && moveBtn ? el('button', { class: 'btn-text sc-act sc-act-duo', type: 'button', hidden: true,
+    title: '이 세션을 복제하거나 다른 프로젝트로 옮깁니다', 'aria-haspopup': 'menu', 'aria-label': '복제 · 옮기기',
+    onclick: () => openDuo() },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.copy })),
+    el('span', { class: 'sc-act-duo-t', text: '복제·옮기기' })) as HTMLButtonElement : null;
+  let duoClose: (() => void) | null = null;
+  let duoPanel: HTMLElement | null = null;
+  function openDuo(): void {
+    if (!duoBtn) return;
+    if (duoPanel?.isConnected) { duoClose?.(); return; }   // 다시 누르면 닫는다
+    const pick = (run: () => void) => () => { duoClose?.(); run(); };
+    const row = (icon: string, name: string, desc: string, run: () => void): HTMLElement =>
+      el('button', { class: 'sc-duo-it', type: 'button', role: 'menuitem', onclick: pick(run) },
+        sv('svg', { viewBox: '0 0 24 24', class: 'sc-duo-ic', 'aria-hidden': 'true' }, sv('path', { d: icon })),
+        el('span', { class: 'sc-duo-tx' }, el('b', { text: name }), el('span', { text: desc }))) as HTMLElement;
+    const panel = el('div', { class: 'sc-duo-pop', role: 'menu', 'aria-label': '복제 · 옮기기' },
+      row(ICONS.copy, '복제', '지금까지의 대화를 아는 세션을 하나 더', () => opts.onFork!(duoBtn)),
+      row(ICONS.sessMove, moveText, moveText === '옮기기' ? '다른 프로젝트로 옮기거나 프로젝트에서 떼요' : '이 세션을 프로젝트에 붙여요', () => opts.onMove!())) as HTMLElement;
+    duoPanel = panel;
+    duoClose = anchoredPopover(duoBtn, panel);
+    //  단추가 오른쪽 끝이라 판의 오른쪽 끝을 단추에 맞춘다(왼쪽에 맞추면 곁칸 위로 넘어간다).
+    const r = duoBtn.getBoundingClientRect();
+    panel.style.left = Math.max(8, Math.min(r.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+    (panel.querySelector('button') as HTMLButtonElement | null)?.focus();
+  }
   function paintActs(): void {
-    if (forkBtn) forkBtn.hidden = !opts.canFork?.(target);
-    if (moveBtn) moveBtn.hidden = !opts.canMove?.(target);
+    const f = !!opts.canFork?.(target), m = !!opts.canMove?.(target);
+    const duo = !!duoBtn && f && m;
+    if (duoBtn) duoBtn.hidden = !duo;
+    if (forkBtn) forkBtn.hidden = !f || duo;
+    if (moveBtn) moveBtn.hidden = !m || duo;
+    subSep.hidden = !(f || m);   // 둘째 줄 왼쪽 «얼굴 · 자료 │ 복제·옮기기» 의 세로 금 — 오른쪽이 비면(남의 세션) 금도 없다
   }
   paintActs();
   const headR = el('div', { class: 'sc-head-r' },
     opts.onOpenFiles ? filesGoBtn : null,
     appGoBtn,
     opts.onToggleFiles ? filesBtn : null,
-    forkBtn, moveBtn,
+    duoBtn, forkBtn, moveBtn,
     opts.bigHead ? null : fixPair,   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다(큰 머리면 이름 아랫줄)
     moreBtn);
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
-  //  #5319 큰 머리 — 왼쪽은 두 줄: [● 이름 · 얼굴 · 배지] 위, [#번호 · 연결 상태 | 화면 복구 · 하네스 알약] 아래.
+  //  #5319 큰 머리(4차 1안, 원준 2026-11-05) — 두 줄 격자. 왼쪽 위 [● 이름 #번호 · 얼굴 · 배지], 왼쪽 아래 [연결 상태 | 화면 복구 · 노드],
+  //   오른쪽 위 [자료 · 복제 · 옮기기 · ⋯], 오른쪽 아래 [모델 · 추론강도](runTop — 아래에서 맨 뒤에 붙인다). 하네스 고르기는 [⋯ ▸ 이 세션 설정] 에만.
+  //  #5319 3-B(원준 2026-11-06) — 넓은 화면(>900)의 큰 머리는 두 줄이다:
+  //   첫 줄  [● 이름 #번호] ……………………… [연결 상태 | 화면 복구] [⋯]
+  //   둘째 줄 [얼굴 ＋] [자료] │ [복제·옮기기 ▾] ……… [모델 · 추론강도]
+  //   자주 누르는 [화면 복구] 가 오른쪽 위다(원준 «마우스가 주로 오른쪽에서 놀거같으니까 자주 누르는 버튼은 오른쪽에») — 처음 3-B 는
+  //   [복제·옮기기] 가 오른쪽 위, 연결 상태가 둘째 줄 왼쪽이었다. 폰(≤900)은 머리가 떠 있는 한 줄이라 종전 자리(얼굴 = 이름 옆,
+  //   자료·복제·옮기기 = 오른쪽 단추 군, 연결 상태 = 아랫줄)로 되돌린다 — 폭이 문턱을 넘나들면 그때 옮긴다(placeHead).
+  const topRow = el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge);
+  const subLead = el('span', { class: 'sc-sub-lead' });
+  const subActs = el('span', { class: 'sc-sub-acts' });
+  const metaEl = el('span', { class: 'sc-meta' }, runEl);
+  //  ⚠ fixPair(연결 칩 · 화면 복구)는 **큰 머리일 때만** 여기 — 작은 머리는 headR 에 이미 들어 있고, el() 이 자식을 **옮기므로** 여기 넣으면
+  //   붙지 않는 subEl 로 떨어져 칩이 DOM 에서 사라진다(scripts/term-warm-runtime.test.mjs W18 이 잡았다).
+  const subEl = el('div', { class: 'sc-sub' }, subLead, subSep, subActs, ...(opts.bigHead ? [fixPair] : []), metaEl);
+  const wideMq = opts.bigHead && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)') : null;
+  const leadParts = (): HTMLElement[] => [opts.onOpenFiles ? filesGoBtn : null, appGoBtn].filter((n): n is HTMLButtonElement => !!n);
+  const sessActs = (): HTMLElement[] => [duoBtn, forkBtn, moveBtn].filter((n): n is HTMLButtonElement => !!n);
+  function placeHead(): void {
+    if (!wideMq) return;
+    if (wideMq.matches) { subLead.append(facesEl, ...leadParts()); subActs.append(...sessActs()); headR.insertBefore(fixPair, moreBtn); }
+    else {
+      topRow.insertBefore(facesEl, chatBadge);
+      headR.prepend(...leadParts());
+      for (const b of sessActs()) headR.insertBefore(b, moreBtn);
+      subEl.insertBefore(fixPair, metaEl);
+    }
+  }
+  wideMq?.addEventListener('change', placeHead);
   const head = el('div', { class: 'sc-head' + (opts.bigHead ? ' sc-head--big' : ''), 'data-ctx': 'session', 'data-sid': first.id },
     opts.bigHead
       ? el('div', { class: 'sc-head-l' },
         sideBtn,
-        el('div', { class: 'sc-head-main' },
-          el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge),
-          el('div', { class: 'sc-sub' }, subNo, fixPair, el('span', { class: 'sc-meta' }, runEl))))
+        el('div', { class: 'sc-head-main' }, topRow, subEl))
       : el('div', { class: 'sc-head-l' },
         //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
         //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
         sideBtn, dot, titleHost, facesEl, chatBadge,
         el('span', { class: 'sc-meta' }, runEl)),
     headR);
+  placeHead();
 
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });
@@ -608,7 +666,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  ★ 이 묶음에 이름을 둔다 — [⋯] 설정 창이 열릴 때 **선택기를 복제하지 않고 그 자리로 데려갔다가**
   //   닫을 때 여기로 되돌리기 때문이다(openMore). 배선이 하나뿐이라 두 자리가 갈릴 일이 없다.
   const runTop = el('span', { class: 'dt-chips sc-run-top' }, chipProv, selHarness, chipModel, selModel, chipEffort, selEffort) as HTMLElement;
-  head.insertBefore(runTop, headR);
+  //  #5319 큰 머리는 오른쪽 둘째 줄(조작 단추 아래)이라 맨 뒤 — 초점 순서도 위 줄 다음이 된다.
+  if (opts.bigHead) head.append(runTop, headGrip()); else head.insertBefore(runTop, headR);
   const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
@@ -1621,6 +1680,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (!m || m.type !== 'lively-term-status') return;
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c.cmd, c.text); }
     termStatusEl.textContent = String(m.text || '');
+    termStatusEl.title = termStatusEl.textContent;   // 좁은 칸에선 …로 줄어든다(36-chat.css #5319) — 손을 얹으면 전체 글
     termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
     const stCls = m.cls ? String(m.cls).replace(/[^a-z]/g, '') : '';
     //  #4794 — 숨겨 붙이는 동안 액자가 «끝났다»(end — 종료 배너)를 말하면 기다리지 않고 터미널로 넘긴다(그 배너를 봐야 한다 · 종전 화면).
@@ -3364,7 +3424,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     viewMode() { return viewNow(); },
     reshown() { reshown(); },
     revivedHere() { return !destroyed && revivedAt > 0 && Date.now() - revivedAt < REVIVE_TRUST_MS && !goneByFrame; },
-    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); shownWatch.stop(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); shownWatch.stop(); offViewers(); offAppDoor?.(); wideMq?.removeEventListener('change', placeHead); duoClose?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

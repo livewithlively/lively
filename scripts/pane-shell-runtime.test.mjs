@@ -557,9 +557,9 @@ check(down(a.lastClosed), "A6 아래 칸의 마지막 탭을 닫으면 빈 칸�
 check(!!a.reset && down(a.reset.b) && J(a.reset.bottom) === "[]" && J(a.reset.side) === J(["콘솔", "자료", "프로젝트", "지식"]), "A7 «기본 배치로» — 아래 칸이 비고 숨는다 · 곁칸 = 콘솔 · 자료 · 프로젝트 · 지식", a.reset);
 check(down(a.remembered), "A8 다른 세션의 «열림» 기억 + 빈 내용 → 아무것도 안 올라온다", a.remembered);
 const B0 = ["timeline", "web", "editor"];
-check(!!b.start && J(b.start.bottom) === J(B0) && up(b.start.up) && J(b.start.side) === J(["files", "knowledge"]), "B0 (배선) 옛 배치 — 아래 칸에 타임라인 · 웹 · 뷰어가 보인다", b.start);
-check(b.moreItem === true && !!b.B1 && J(b.B1.bottom) === J(B0) && J(b.B1.side) === J(["files", "knowledge", "web#2"]) && b.B1.actSide === "web#2", "B1 아래 칸 «웹 하나 더» — 새 웹 탭은 곁칸에 서고 켜진다 · 아래 칸 그대로", { item: b.moreItem, B1: b.B1 });
-check(!!b.B3 && J(b.B3.bottom) === J(B0) && b.B3.side.length === 4 && /^editor#\d+$/.test(b.B3.side[3]) && b.B3.actSide === b.B3.side[3], "B3 열린 아래 칸에 뷰어가 있어도 다른 파일의 새 뷰어는 곁칸에 선다", b.B3);
+check(!!b.start && J(b.start.bottom) === J(B0) && up(b.start.up) && J(b.start.side) === J(["console", "files", "knowledge"]), "B0 (배선) 옛 배치 — 아래 칸에 타임라인 · 웹 · 뷰어가 보인다 · 기본 앱 콘솔이 앞에 선다(#5319)", b.start);
+check(b.moreItem === true && !!b.B1 && J(b.B1.bottom) === J(B0) && J(b.B1.side) === J(["console", "files", "knowledge", "web#2"]) && b.B1.actSide === "web#2", "B1 아래 칸 «웹 하나 더» — 새 웹 탭은 곁칸에 서고 켜진다 · 아래 칸 그대로", { item: b.moreItem, B1: b.B1 });
+check(!!b.B3 && J(b.B3.bottom) === J(B0) && b.B3.side.length === 5 && /^editor#\d+$/.test(b.B3.side[4]) && b.B3.actSide === b.B3.side[4], "B3 열린 아래 칸에 뷰어가 있어도 다른 파일의 새 뷰어는 곁칸에 선다", b.B3);
 check(!!b.B3b && J(b.B3b.bottom) === J(B0) && J(b.B3b.side) === J(b.B3 && b.B3.side) && b.B3b.actBottom === "editor", "B3b 같은 파일을 다시 열면 아래 칸의 그 뷰어를 켠다 — 새 탭 없음 · 옮기지 않음", b.B3b);
 check(b.litToBottom === false && !!b.B2 && J(b.B2.bottom) === J(B0) && b.B2.side.includes("knowledge"), "B2 곁칸 탭을 끌어 아래 칸 줄에 놓아도 아무 일 없다 — 놓기 표시도 안 뜬다", { lit: b.litToBottom, B2: b.B2 });
 check(b.litToSide === true && !!b.B2w && J(b.B2w.bottom) === J(["timeline", "editor"]) && b.B2w.side.includes("web"), "B2w (배선) 아래 칸의 옛 탭은 끌어서 곁칸으로 옮길 수 있다 — 끌기 장치가 실제로 돈다", { lit: b.litToSide, B2w: b.B2w });
@@ -567,13 +567,13 @@ check(!!b.B4closed && J(b.B4closed.bottom) === J(["editor"]) && b.reopen1 === tr
   "B4 아래 칸에서 닫은 탭을 다시 열면 곁칸 맨 끝으로 돌아온다 · 아래 칸 다른 탭 그대로", { closed: b.B4closed, B4: b.B4 });
 check(b.lastKey === "editor" && !!b.B4bClosed && down(b.B4bClosed.up) && b.reopen2 === true && !!b.B4b && J(b.B4b.bottom) === "[]" && down(b.B4b.up) && b.B4b.side.at(-1) === "editor" && b.B4b.actSide === "editor",
   "B4b 마지막 탭(경계)을 닫고 다시 열어도 아래 칸은 다시 서지 않는다 — 곁칸 맨 끝으로", { closed: b.B4bClosed, B4b: b.B4b });
-check(!!b.B3c0 && J(b.B3c0.side) === J(["files"]) && down(b.B3c0.up) && !!b.B3c && J(b.B3c.bottom) === J(["timeline"]) && down(b.B3c.up) && J(b.B3c.side) === J(["files", "editor"]) && b.B3c.actSide === "editor",
+check(!!b.B3c0 && J(b.B3c0.side) === J(["console", "files"]) && down(b.B3c0.up) && !!b.B3c && J(b.B3c.bottom) === J(["timeline"]) && down(b.B3c.up) && J(b.B3c.side) === J(["console", "files", "editor"]) && b.B3c.actSide === "editor",
   "B3c 닫힌 아래 칸에 그 파일의 뷰어가 있으면 펼치지 않고 그 뷰어만 곁칸으로 데려와 켠다(남은 타임라인은 닫힌 칸에 그대로)", { before: b.B3c0, after: b.B3c });
-check(!!b.B50 && J(b.B50.side) === J(["files", "editor#2"]) && b.reopen5 === true && !!b.B5 && down(b.B5.up) && J(b.B5.bottom) === J(["timeline"]) && b.B5.side.includes("editor") && b.B5.actSide === "editor" && !b.B5.side.includes("editor#2"),
+check(!!b.B50 && J(b.B50.side) === J(["console", "files", "editor#2"]) && b.reopen5 === true && !!b.B5 && down(b.B5.up) && J(b.B5.bottom) === J(["timeline"]) && b.B5.side.includes("editor") && b.B5.actSide === "editor" && !b.B5.side.includes("editor#2"),
   "B5 다시 열 탭과 같은 파일의 뷰어가 닫힌 아래 칸에 있으면 — 펼치지 않고 그 뷰어를 곁칸으로 데려와 켠다", { before: b.B50, after: b.B5 });
-check(!!b.B6 && down(b.B6.up) && J(b.B6.bottom) === "[]" && J(b.B6.side) === J(["files", "knowledge", "timeline", "web"]) && !!b.B6store && J(b.B6store.p9) === "[]" && J(b.B6store.p7) === J(["timeline", "web"]),
+check(!!b.B6 && down(b.B6.up) && J(b.B6.bottom) === "[]" && J(b.B6.side) === J(["console", "files", "knowledge", "timeline", "web"]) && !!b.B6store && J(b.B6store.p9) === "[]" && J(b.B6store.p7) === J(["timeline", "web"]),
   "B6 저장한 적 없는 프로젝트가 옛 아래 칸을 물려받으면 — 아래 칸은 서지 않고 그 탭은 곁칸 뒤에 · 원래 프로젝트(p7)는 그대로", { ui: b.B6, store: b.B6store });
-check(b.N1narrow === true && !!b.N1 && J(b.N1.bottom) === J(["timeline", "editor"]) && b.N1.side.length === 2 && /^editor#\d+$/.test(b.N1.side[1]),
+check(b.N1narrow === true && !!b.N1 && J(b.N1.bottom) === J(["timeline", "editor"]) && b.N1.side.length === 3 && /^editor#\d+$/.test(b.N1.side[2]),
   "N1 좁은 폭 — 저장된 아래 칸은 그대로, 새 뷰어는 곁칸 배치에 적힌다", { narrow: b.N1narrow, N1: b.N1 });
 check(!!m.store && J(m.store.last) === "[]" && J(m.store.p7) === "[]" && J(m.store.p8) === J(["timeline"]) && m.store.seeded?.bottom === 1 && J(m.store.side) === J(["console", "files", "knowledge"]) && m.store.seeded?.apps === 1 && m.store.seeded?.console === 1, "M1 옛 기본을 걷는다 — 열린 프로젝트(p8)는 그대로 · «앱» 탭도 한 번 걷는다 · 콘솔은 한 번 앞에 선다(#4876)", m.store);
 check(down(m.b), "M2 이 세션이 «열림» 을 기억해도 걷은 뒤엔 아무것도 안 올라온다", m.b);
@@ -587,12 +587,13 @@ check(h.H1 === "자료", "H1 머리줄 [자료] — 보이고 켜져 있으면 �
 check(h.collapsed === true && !!h.H2a && h.H2a.side && h.H2a.crumb === "자료/docs" && !!h.H2b && h.H2b.act === "자료" && h.H2b.crumb === "자료/docs", "H2 곁칸이 접혀 있거나 다른 탭이 켜져 있으면 보이게만(폴더 그대로)", { a: h.H2a, b: h.H2b });
 check(i.count === 2 && i.first === "자료" && i.second === "자료/docs", "I1 자료가 둘이면 누른 탭의 자료만 맨 위로", i);
 //  (#4970) 옛 «리브»(프로젝트 대화)는 이름이 «프로젝트 대화» 다 — «리브» 는 워크스페이스 담당자(리브 세션의 곁칸 livdesk, [+] 로 못 넣는다)만 가리킨다.
-const WANT = ["콘솔", "자료", "세션 파일", "지식", "프로젝트", "타임라인", "프로젝트 대화", "지난 세션", "웹", "미리보기"];
-check(J(d.sideTabs) === J(["자료"]) && !!d.open && d.open.has && d.open.focus && d.open.top >= 0 && d.open.top <= 12 && d.open.inPane, "AD1 [＋] = 앱 서랍 — [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점", d.open);
+//  (#5319) 콘솔은 기본 앱이라 늘 열려 있고 하나뿐(multi 아님) — 서랍에는 서지 않는다(«콘솔은 늘 열려 있어요»). 곁칸은 콘솔이 앞.
+const WANT = ["자료", "세션 파일", "지식", "프로젝트", "타임라인", "프로젝트 대화", "지난 세션", "웹", "미리보기"];
+check(J(d.sideTabs) === J(["콘솔", "자료"]) && !!d.open && d.open.has && d.open.focus && d.open.top >= 0 && d.open.top <= 12 && d.open.inPane, "AD1 [＋] = 앱 서랍 — [＋] 바로 아래 · 곁칸 안 · 열리면 검색칸에 초점", d.open);
 const s1 = (d.secs || [])[0] || { tiles: [] }, s2 = (d.secs || [])[1] || { tiles: [] };
 check(J((d.secs || []).map((x) => x.t)) === J(["사이드바 앱", "이 세션에 붙이기"]) && J(s1.tiles.map((x) => x.n)) === J(WANT) && s1.tiles.every((x) => x.gi && !x.off)
-  && s1.tiles.filter((x) => x.plus).map((x) => x.n).join() === "자료" && s1.tiles[0].sel && s1.tiles.filter((x) => x.sel).length === 1 && /^콘솔/.test(d.desc0 || ""),
-  "AD2 묶음 둘 — «사이드바 앱» 열(콘솔이 앞 · 독과 같은 타일 · 이미 열린 자료엔 ＋ · 첫 타일이 Enter 의 과녁 · 설명 한 줄)", { secs: d.secs && d.secs.map((x) => [x.t, x.tiles.map((y) => y.n + (y.plus ? "+" : "") + (y.sel ? "*" : "") + (y.off ? "~" : ""))]), desc: d.desc0 });
+  && s1.tiles.filter((x) => x.plus).map((x) => x.n).join() === "자료" && s1.tiles[0].sel && s1.tiles.filter((x) => x.sel).length === 1 && /^자료/.test(d.desc0 || ""),
+  "AD2 묶음 둘 — «사이드바 앱» 열(콘솔은 늘 열려 있어 서랍에 없다 · 독과 같은 타일 · 이미 열린 자료엔 ＋ · 첫 타일이 Enter 의 과녁 · 설명 한 줄)", { secs: d.secs && d.secs.map((x) => [x.t, x.tiles.map((y) => y.n + (y.plus ? "+" : "") + (y.sel ? "*" : "") + (y.off ? "~" : ""))]), desc: d.desc0 });
 check(J(s2.tiles.map((x) => x.n)) === J(["메모", "보고서 점검표"]) && s2.tiles.every((x) => x.off && !x.sel) && s2.note === "세션을 열면 붙일 수 있어요",
   "AD2b «이 세션에 붙이기» — 화면 · 데이터가 있는 설치 앱만(시스템 · ai-session · 도구만 · 꺼짐 제외) · 세션이 없으면 흐리고 고를 수 없다", s2);
 check(d.noNewTab === true, "AD3 «새 탭으로 여는 앱» 도, «앱» 칸도 없다 — 여기서 여는 것은 모두 사이드바에 선다");
@@ -600,7 +601,7 @@ check(!!d.typed && J(d.typed.tiles) === J(["타임라인*"]) && /^타임라인/.
   "AD4 치면 거르고 Enter 로 연다 — 그 칸에 탭 · 서랍 닫힘", { typed: d.typed, entered: d.entered });
 check(d.imeKept === true, "AD5 한글 조합 중의 Enter 는 열지 않는다(글자 확정)");
 check(!!d.none && d.none.tiles === 0 && d.none.desc === "「zzz」에 맞는 앱이 없어요.", "AD6 없는 이름 — 타일 없이 안내 한 줄", d.none);
-check(!!d.arrows && d.arrows.first === "콘솔" && d.arrows.now === "자료" && /^자료 하나 더/.test(d.arrows.desc || "") && d.backToInput === true, "AD7 ↓ 로 타일에 들어가 → 로 옮기면 설명이 따라간다 · 첫 줄에서 ↑ 면 검색칸", { arrows: d.arrows, back: d.backToInput });
+check(!!d.arrows && d.arrows.first === "자료" && d.arrows.now === "세션 파일" && /^세션 파일/.test(d.arrows.desc || "") && d.backToInput === true, "AD7 ↓ 로 타일에 들어가 → 로 옮기면 설명이 따라간다 · 첫 줄에서 ↑ 면 검색칸", { arrows: d.arrows, back: d.backToInput });
 check(/^웹/.test(d.hover || "") && !!d.more && d.more.closed && d.more.tabs.includes("자료 2"), "AD8 올리면 그 앱의 설명 · 이미 열린 자료를 누르면 «자료 2» 가 선다", { hover: d.hover, more: d.more });
 check(d.esc === true, "AD9 Esc 로 닫힌다");
 check(t.enabled === true && t.note === "AI 도 같이 써요 · 누르면 사이드바에 붙어요" && /^메모/.test(t.desc || "") && t.closed === true && J(t.calls) === J([{ sid: "s1", body: { app_id: "memo" } }]),
