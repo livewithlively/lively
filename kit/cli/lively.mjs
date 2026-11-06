@@ -919,9 +919,30 @@ function backupUserMcp(name) {
  */
 export function livelyStdioLaunch({ win, shim, nodeExe, cliPath, sub }) {
   const n = String(nodeExe || "");
-  if (win && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(n) && /[\\/]node\.exe$/i.test(n)) return [n, cliPath, sub];
+  if (win && isAbsWinNodeExe(n)) return [n, cliPath, sub];
   return [shim, sub];
 }
+const isAbsWinNodeExe = (n) => /^(?:[A-Za-z]:[\\/]|\\\\)/.test(n) && /[\\/]node\.exe$/i.test(n);
+
+/**
+ * (순수) 작업 폴더 등록 명령 한 줄 — 위 livelyStdioLaunch 와 같은 기준으로, 윈도우에서 node 절대경로를 알면 심 대신 node 로 lively.mjs 를
+ *  바로 부른다. 같은 PC 에서 `lively`(=lively.cmd)는 «액세스가 거부되었습니다» 로 막혀도 키트 전용 node.exe 는 뜬다(2026-11-05, 배치 실행 차단 PC).
+ *  dir 은 작은따옴표로 감싸 붙이고, 작은따옴표·제어문자가 든 이름이면 빼고 낸다(그 폴더에서 실행하는 꼴).
+ *  ⚠ kit/hooks/record-scope.mjs workRootAddCommand 와 같은 규칙이다 — import 하지 않는 이유는 livelyStdioLaunch 와 같다.
+ *   두 곳이 같은 값을 내는지 install-scope-notice.test.mjs 가 한 표로 잰다.
+ */
+export function workRootAddCommand({ win, nodeExe, cliPath, dir = "" }) {
+  const n = String(nodeExe || ""), d = String(dir || "");
+  const arg = d && !/['\u0000-\u001f\u007f]/.test(d) ? ` '${d}'` : "";
+  if (win && isAbsWinNodeExe(n)) return `& "${n.replace(/\\/g, "/")}" "${String(cliPath).replace(/\\/g, "/")}" work-root add${arg}`;
+  return `lively work-root add${arg}`;
+}
+/** (순수) 사람에게 보이는 «작업 폴더 등록» 안내. node 직결형이면 긴 셸 명령보다 AI 세션 안의 /lively-connect 를 먼저 말한다. */
+export function workRootAddHint(opts) {
+  const cmd = workRootAddCommand(opts);
+  return cmd.startsWith("& ") ? `/lively-connect(AI 세션 안, 코덱스는 /prompts:lively-connect) 또는 PowerShell 의 ${cmd}` : cmd;
+}
+const addHint = () => workRootAddHint({ win: WIN, nodeExe: process.execPath, cliPath: join(LIVELY, "lib", "lively.mjs") });
 
 // 한 config dir 에 전부 등록한다. 대상 열거는 claudeMcpTargets, 여기선 '그 한 곳에 무엇을 넣나' 만.
 function registerClaudeMcpIn(target, gw) {
@@ -1177,9 +1198,9 @@ export function launchNames(harnesses = []) {
  *  종전 «아무 폴더에서든» 은 기본값이 «작업 폴더에서만» 이 된 뒤 거짓이 됐다 — 배선은 ✓ 인데 일반 폴더에선 맥락이 안 들어온다.
  *  scope 가 없으면 아직 모른다(설치 시드가 못 닿음 · 구 게이트웨이) — 지금은 켜져 있어도 서버 기본값이 «작업 폴더에서만» 이라 첫 세션에
  *  사본을 받으면 일반 폴더가 꺼진다(record-scope.mjs 머리말). 그래서 단정하지 않는다. needsRoot 면 등록 명령을 함께 보여 준다. */
-export function launchNotice(label, { scope = null, roots = 0 } = {}) {
+export function launchNotice(label, { scope = null, roots = 0, hint = addHint() } = {}) {
   if (scope === "anywhere") return { line: `이제 아무 폴더에서든 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
-  if (!scope) return { line: `이제 ${label} 를 켜면 회사 맥락이 따라옵니다. 일반 폴더에서 꺼져 있으면 그 폴더에서 lively work-root add 를 실행하세요.`, needsRoot: false };
+  if (!scope) return { line: `이제 ${label} 를 켜면 회사 맥락이 따라옵니다. 일반 폴더에서 꺼져 있으면 그 폴더에서 ${hint} 를 실행하세요.`, needsRoot: false };
   if (roots > 0) return { line: `이제 작업 폴더(${roots}개)에서 ${label} 를 켜면 회사 맥락이 따라옵니다.`, needsRoot: false };
   return { line: `아직 작업 폴더가 없어, 일반 폴더에서는 ${label} 를 켜도 회사 맥락이 들어오지 않습니다.`, needsRoot: true };
 }
@@ -1188,7 +1209,7 @@ export async function sayLaunchNotice(harnesses, out = say) {
   const launch = launchNotice(launchNames(harnesses).map(bold).join(" · "), (await recordScopeState()) || {});
   out(`  ${launch.line}`);
   if (!launch.needsRoot) return;
-  out(`  쓰는 폴더에서 한 번 실행하세요: ${bold("lively work-root add")}`);
+  out(`  쓰는 폴더에서 한 번 실행하세요: ${bold(addHint())}`);
   out(dim("  (모든 폴더에서 켜려면: lively scope anywhere — 개인 폴더의 대화도 워크스페이스에 기록됩니다)"));
 }
 
@@ -2465,7 +2486,7 @@ async function cmdStatus(opts) {
       say(dim("     (opencode 는 ~/.claude/skills 도 함께 읽습니다 — 위 수치는 opencode 전용 자리에 심은 것만 셉니다)"));
     }
   }
-  if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold("lively work-root add"));
+  if (sc?.scope && !sc.inScope) say(dim("  → 이 폴더에선 라이블리가 꺼져 있습니다. 쓰는 폴더에서: ") + bold(addHint()));
 }
 
 async function cmdDoctor(opts) {
@@ -2620,7 +2641,7 @@ async function cmdDoctor(opts) {
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
   chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
   // 꺼진 폴더는 고장이 아니라 설정이다 — 실패로 세지 않되, «모두 정상» 인데 맥락이 안 들어오는 일이 없게 값을 보여 준다.
-  if (st.recordScope?.scope) chk("기록 범위", true, scopeSummary(st.recordScope, (ok) => (ok ? "켜짐" : "꺼짐 — 쓰는 폴더에서: lively work-root add")));
+  if (st.recordScope?.scope) chk("기록 범위", true, scopeSummary(st.recordScope, (ok) => (ok ? "켜짐" : `꺼짐 — 쓰는 폴더에서: ${addHint()}`)));
 
   if (opts.json) { jsonOut({ status: st, checks }); return; }
   say(`\n${bold("라이블리 진단")}\n`);
@@ -2891,7 +2912,7 @@ async function cmdWorkRoot(rest) {
     say(dim("  라이블리 프로젝트 폴더(.lively/project.json)와 라이블리가 띄운 세션은 등록하지 않아도 켜집니다."));
     const here = sessionFolderOf(rs);
     const d = rs.decideRecordScope({ env: process.env, dir: here, lively: LIVELY });
-    say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(" — 등록: lively work-root add")}`);
+    say(`지금 폴더(${here}): ${d.inScope ? green("켜짐") : yellow("꺼짐")}${d.inScope ? "" : dim(` — 등록: ${addHint()}`)}`);
     return;
   }
   if (sub !== "add" && sub !== "remove") die("사용법: lively work-root [list | add [경로] | remove [경로]]", 2);

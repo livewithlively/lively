@@ -712,7 +712,7 @@ async function scopeGate() {
   const d = decideRecordScope({ env: process.env, dir: sessionDirOf({ env: process.env, input, cwd: process.cwd(), harness: HARNESS }), lively });
   if (d.inScope) { clearStartedOutside(sid); return false; }   // 이어 연 세션이 이제 범위 안이면 시작 주입이 맞는다 — 늦은 주입 표식은 걷는다
   //  플러그인만 깐 클로드엔 /lively-connect 도 lively CLI 도 없다 — 안내가 웹 화면을 가리키게 한다(PLUGIN_INSTALL 머리말).
-  const n = outsideNotice({ dir: d.dir, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL });
+  const n = outsideNotice({ dir: d.dir, harness: harness(HARNESS).id || "claude", plugin: PLUGIN_INSTALL, lively });
   // 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). 클로드는 시작 배너 아래에 보여 준다(2.1.310 실측),
   //  코덱스(0.157) SessionStart 출력 스키마도 같은 두 칸을 받는다. 그 밖의 어댑터는 이 출력을 버리거나 본문만 꺼낸다.
   process.stdout.write(JSON.stringify({ systemMessage: n.user, hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: n.ai } }) + "\n");

@@ -3,7 +3,7 @@
 //  배경(실측 2026-11-02): 기록 범위 기본값이 «작업 폴더에서만» 이 된 뒤에도 설치 끝 문구는 «아무 폴더에서든 맥락이 따라온다» 였고,
 //   status 는 배선만 봐서 전부 ✓ 였다. 그래서 사람은 연결됐다고 믿는데 일반 폴더의 세션엔 «라이블리 꺼짐» 만 들어갔다.
 //   또 `curl … | sh` 뒤 같은 창에서 안내대로 `lively status` 를 치면 `command not found` 가 나온다.
-//  N 설치 끝 안내(판정과의 일치 포함 · 실제 `lively install` 끝은 lively.test ③) · P setup 끝의 PATH 안내 · S status · D doctor.
+//  N 설치 끝 안내(판정과의 일치 포함 · 실제 `lively install` 끝은 lively.test ③) · W 윈도 node 직결 등록 안내 · P setup 끝의 PATH 안내 · S status · D doctor.
 //  ⚠ 안내가 판정과 어긋나는지는 **실제 판정 함수**로 잰다 — 문구만 맞추면 판정이 바뀔 때 또 거짓이 된다.
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { closedPath, nodeOnlyDir, noBrowserEnv, sandboxEnv } from "../testlib/os-sandbox.mjs";
 import * as rs from "../hooks/record-scope.mjs";
-import { launchNotice, setupDoneHints } from "./lively.mjs";
+import { launchNotice, setupDoneHints, workRootAddCommand, workRootAddHint } from "./lively.mjs";
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const CLI = join(HERE, "lively.mjs");
@@ -56,6 +56,35 @@ try {
   const n4 = launchNotice("Cursor", { scope: WORK_FOLDERS, roots: 1 });
   check("N4 경계 — 작업 폴더 1개면 재촉하지 않는다", !anyPlace(n4) && !n4.needsRoot, JSON.stringify(n4));
   check("N5 값을 안 줘도 멈추지 않는다(판정 모듈이 없는 옛 설치의 빈 값)", launchNotice("Cursor").line.includes("Cursor"), "");
+
+  // ── W. 배치 실행이 막힌 윈도우 PC(2026-11-05) — 등록 안내가 lively.cmd 대신 node 를 바로 부른다 ─────────────
+  //  CLI 와 훅(record-scope.mjs)은 서로 import 하지 않고 같은 규칙을 두 벌 둔다 — 같은 입력에 같은 명령을 내는지 여기서 맞대 본다.
+  //  기대값 표 자체는 kit/hooks/record-scope.test.mjs W1.
+  const NODE = "C:\\Profiles\\me\\.lively\\runtime\\node-v22.11.0-win-x64\\node.exe";
+  const CLI_JS = "C:\\Profiles\\me\\.lively\\lib\\lively.mjs";
+  const same = [
+    { win: true, nodeExe: NODE, cliPath: CLI_JS },
+    { win: true, nodeExe: NODE, cliPath: CLI_JS, dir: "C:\\work\\my proj" },
+    { win: true, nodeExe: NODE, cliPath: CLI_JS, dir: "C:\\work\\it's" },
+    { win: true, nodeExe: "D:/rt/NODE.EXE", cliPath: CLI_JS },
+    { win: true, nodeExe: "\\\\srv\\rt\\node.exe", cliPath: CLI_JS },
+    { win: true, nodeExe: "node", cliPath: CLI_JS, dir: "C:\\w\\p" },
+    { win: true, nodeExe: "rt\\node.exe", cliPath: CLI_JS },
+    { win: true, nodeExe: "C:\\rt\\node", cliPath: CLI_JS },
+    { win: false, nodeExe: NODE, cliPath: CLI_JS },
+    { win: false, nodeExe: "/usr/bin/node", cliPath: "/home/me/.lively/lib/lively.mjs", dir: "/home/me/a b" },
+    { win: false, nodeExe: "/usr/bin/node", cliPath: "/x", dir: "/home/me/it's" },
+  ];
+  for (const o of same) {
+    const a = workRootAddCommand(o), b = rs.workRootAddCommand(o);
+    check(`W1 CLI·훅 등록 명령이 같다 — ${JSON.stringify(o)}`, a === b, `cli=${a} hook=${b}`);
+  }
+  const direct = rs.workRootAddCommand({ win: true, nodeExe: NODE, cliPath: CLI_JS });
+  const winHint = workRootAddHint({ win: true, nodeExe: NODE, cliPath: CLI_JS });
+  check("W2 ★ 윈도 node 직결 — /lively-connect 를 먼저, 셸 명령은 node 직접 호출", winHint.startsWith("/lively-connect") && winHint.endsWith(direct) && !winHint.includes("lively work-root"), winHint);
+  check("W2 그 밖엔 종전 명령 그대로", workRootAddHint({ win: false, nodeExe: "/usr/bin/node", cliPath: "/x" }) === "lively work-root add");
+  const wn = launchNotice("Cursor", { scope: null, roots: 0, hint: winHint });
+  check("W3 설치 끝 안내도 같은 안내를 쓴다", wn.line.includes(winHint) && !wn.line.includes("lively work-root"), wn.line);
 
   // 일관성 — 안내가 «등록 필요» 라고 하는 곳은 실제 판정도 꺼져 있고, 아니라고 하는 곳은 켜져 있다.
   const plain = mkdir("plain-work");

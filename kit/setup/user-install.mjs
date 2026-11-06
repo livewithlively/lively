@@ -503,11 +503,12 @@ function agentsMerge(existing, ctx) {
 //   claude·grok·opencode·antigravity = frontmatter(description) + 본문 · codex = 본문만(frontmatter 가 프롬프트로 샌다)
 //   · cursor = 첫 줄이 제목(frontmatter 를 해석하지 않는다).
 export const CONNECT_MARK = "lively-managed: record-scope(#5016)";
+//  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
+//   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
+const directCli = ({ win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) } = {}) => (win && nodeBin !== "node" ? `& "${nodeBin}" "${cliPath}"` : "");
 const CONNECT_IDS = ["lively-connect", "lively-disconnect"];
 export function connectCommandFiles({ format, shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"), win = WIN, nodeBin = NODEBIN, cliPath = fwd(join(LIVELY, "lib", "lively.mjs")) }) {
-  //  Windows 에서 node 절대경로를 알면 심을 거치지 않는 명령을 준다 — 배치 실행이 막힌 PC 에선 `lively`(=lively.cmd)가
-  //   «액세스가 거부되었습니다» 로 못 뜬다(kit/hooks/stdio-launch.mjs 머리말과 같은 사고).
-  const direct = win && nodeBin !== "node" ? `& "${nodeBin}" "${cliPath}"` : "";
+  const direct = directCli({ win, nodeBin, cliPath });
   const cli = direct ? `(PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고) ${direct} 를 lively 대신 쓰는` : `lively(PATH 에 없으면 ${shim})`;
   const lv = direct || "lively";
   //  자리표시 `$ARGUMENTS` 는 한 번만 쓴다 — 치환하는 하네스(클로드·코덱스)에서 두 번 쓰면 «경로(~/w)를, 비었거나 `~/w` 그대로면…»
@@ -564,7 +565,7 @@ export function writeConnectCommands(dir, format, label) {
       wrote++;
     }
     if (wrote) console.log(`  ✓ ${label} «여기 연결» 커맨드(${CONNECT_IDS.join("·")})`);
-  } catch (e) { console.log(`  · ${label} «여기 연결» 커맨드 설치 실패(무해 — 셸의 lively work-root add 로 대신): ${e.message}`); }
+  } catch (e) { console.log(`  · ${label} «여기 연결» 커맨드 설치 실패(무해 — 셸의 ${directCli() || "lively"} work-root add 로 대신): ${e.message}`); }
 }
 // Windows: `env` 프리픽스 불가 → 하네스는 argv 로. Mac/Linux: 기존 env 형 유지(idempotency 키 안정).
 const codexHookCmd = (script) => WIN

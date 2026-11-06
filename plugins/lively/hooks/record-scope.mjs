@@ -336,15 +336,38 @@ export async function changeScopeSettings({ lively, gw, token, send, machineId =
   return { synced: false, settings: readScopeFile(lively) };
 }
 
+// ── 작업 폴더 등록 명령 ──────────────────────────────────────────────────────
+//  배치 실행이 막힌 윈도우 PC 에선 `lively`(=lively.cmd)가 «액세스가 거부되었습니다» 로 못 뜨지만 키트 전용 node.exe 는 뜬다
+//  (2026-11-05, 배치 실행 차단 PC). 그래서 node 절대경로를 알면 심을 거치지 않고 node 로 lively.mjs 를 부르는 명령을 준다 —
+//  MCP 등록(stdio-launch.mjs)·/lively-connect 본문(setup/user-install.mjs connectCommandFiles)과 같은 기준이다.
+//  ⚠ kit/cli/lively.mjs workRootAddCommand 와 같은 규칙이다 — CLI 는 이 파일을 정적 import 하지 않는다(부트스트랩이 CLI 만 새로
+//   받으면 옛 훅 폴더와 짝이 안 맞는다). 두 곳이 같은 값을 내는지 kit/cli/install-scope-notice.test.mjs 가 한 표로 잰다.
+const fwdSlash = (p) => String(p).replace(/\\/g, "/");
+/** 등록 명령 한 줄. dir 은 작은따옴표로 감싸 붙이고, 작은따옴표·제어문자가 든 이름이면 빼고 낸다(그 폴더에서 실행하는 꼴). */
+export function workRootAddCommand({ win = WIN, nodeExe = process.execPath, cliPath = join(livelyDirOf(), "lib", "lively.mjs"), dir = "" } = {}) {
+  const n = String(nodeExe || ""), d = String(dir || "");
+  const arg = d && !/['\u0000-\u001f\u007f]/.test(d) ? ` '${d}'` : "";
+  if (win && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(n) && /[\\/]node\.exe$/i.test(n)) return `& "${fwdSlash(n)}" "${fwdSlash(cliPath)}" work-root add${arg}`;
+  return `lively work-root add${arg}`;
+}
+//  `& ` 는 PowerShell 의 호출 연산자라 Git Bash·cmd 에선 문법 오류다 — 하네스가 어느 셸로 돌릴지 몰라 둘 다 말한다.
+const PS_NOTE = "PowerShell 이면 그대로, 다른 셸이면 맨 앞 «& » 를 빼고";
+const isDirect = (cmd) => cmd.startsWith("& ");
+/** MCP 프록시가 범위 밖 도구 호출에 돌려주는 «셸로 등록하는 법» 한 구절 — 위 등록 명령 그대로. */
+export function workRootAddVia(opts = {}) {
+  const cmd = workRootAddCommand(opts);
+  return isDirect(cmd) ? `셸의 \`${cmd}\`(${PS_NOTE})` : `셸의 \`${cmd}\``;
+}
+
 // ── 범위 밖 알림 ─────────────────────────────────────────────────────────────
-/** 이 하네스에서 «여기 연결» 을 부르는 말 — 클로드 슬래시 커맨드 · 코덱스 커스텀 프롬프트 · 그 밖은 CLI.
+/** 이 하네스에서 «여기 연결» 을 부르는 말 — 클로드 슬래시 커맨드 · 코덱스 커스텀 프롬프트 · 그 밖은 CLI(addCmd).
  *  플러그인만 깐 클로드(키트 없음)엔 커맨드도 CLI 도 없다 — 웹 화면을 가리킨다. */
-export function connectHint(harness = "claude", { plugin = false } = {}) {
+export function connectHint(harness = "claude", { plugin = false, addCmd = workRootAddCommand() } = {}) {
   const h = String(harness || "claude").toLowerCase();
   if (plugin) return "웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 폴더를 등록";
   if (h === "claude") return "/lively-connect";
   if (h === "codex") return "/prompts:lively-connect";
-  return "`lively work-root add`";
+  return `\`${addCmd}\``;
 }
 
 // 안내문에 그대로 넣어도 되는 폴더 이름인가 — 따옴표·백틱·달러·제어문자가 든 이름은 AI 가 읽는 지시문과
@@ -352,14 +375,18 @@ export function connectHint(harness = "claude", { plugin = false } = {}) {
 //  역슬래시는 받는다(윈도 경로 구분자) — 명령은 작은따옴표로 감싸 bash·Git Bash·PowerShell 이 글자 그대로 받는다.
 const safeDir = (d) => !!d && /^[^\u0000-\u001f\u007f"'`$]+$/.test(d) && d.length <= MAX_ROOT_LEN;
 
-/** 범위 밖 세션 시작 알림 — 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext). */
-export function outsideNotice({ dir = "", harness = "claude", plugin = false } = {}) {
-  const hint = connectHint(harness, { plugin });
+/** 범위 밖 세션 시작 알림 — 사람에게 한 줄(systemMessage) + AI 에게 안내(additionalContext).
+ *  win·nodeExe·lively 는 등록 명령의 꼴을 정한다(workRootAddCommand) — 시험만 바꿔 넣는다. */
+export function outsideNotice({ dir = "", harness = "claude", plugin = false, win = WIN, nodeExe = process.execPath, lively = livelyDirOf() } = {}) {
+  const add = (d = "") => workRootAddCommand({ win, nodeExe, cliPath: join(lively, "lib", "lively.mjs"), dir: d });
+  const hint = connectHint(harness, { plugin, addCmd: add() });
   const user = plugin ? `[라이블리] 작업 폴더가 아니라 꺼져 있습니다 · 여기서 쓰려면 ${hint}하세요` : `[라이블리] 작업 폴더가 아니라 꺼져 있습니다 · 여기서 쓰려면 ${hint}`;
   const where = safeDir(dir) ? `이 세션을 연 폴더(\`${dir}\`)는` : "이 세션을 연 폴더는";
+  const run = safeDir(dir) ? `\`${add(dir)}\`` : `이 폴더에서 \`${add()}\``;
+  const shellNote = isDirect(add()) ? `(${PS_NOTE} 실행한다. 배치 실행이 막힌 PC 에서도 되도록 \`lively\` 대신 node 로 바로 부르는 꼴이다)` : "";
   const how = plugin
     ? `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 웹 «내 스킬·훅 ▸ 내 컴퓨터별 연결»에서 이 컴퓨터의 작업 폴더에 등록하라고 안내하라 — 다음 세션부터 연결된다.`
-    : `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${safeDir(dir) ? `\`lively work-root add '${dir}'\`` : "이 폴더에서 `lively work-root add`"} 를 실행하라 — 이 폴더가 작업 폴더로 등록되고 이 세션도 다음 메시지부터 연결된다.`;
+    : `사람이 이 폴더에서 라이블리를 쓰고 싶다고 하면 ${hint} 를 안내하거나, 사람의 요청에 따라 셸에서 ${run} 를 실행하라${shellNote} — 이 폴더가 작업 폴더로 등록되고 이 세션도 다음 메시지부터 연결된다.`;
   const ai = [
     "## 라이블리 꺼짐 — 작업 폴더 밖 (#5016)",
     `${where} 이 컴퓨터의 라이블리 작업 폴더가 아니어서 라이블리가 꺼져 있다 — 회사 맥락 주입·기록·대화 업로드·라이블리 도구가 이 세션엔 없다.`,
