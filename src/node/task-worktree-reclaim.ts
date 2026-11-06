@@ -21,6 +21,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { AsyncResource } from "node:async_hooks";
 import { applyReclaim, baseRepoOf, checkWorktree, isInside, type ReclaimResult, type WorktreeCheck } from "../ops/workspace-reclaim.js";
 import { OPEN_TASK_STATUSES, workspaceTaskRows } from "./task-store.js";
 
@@ -182,4 +183,58 @@ export async function reclaimTaskWorktree(t: TaskWorktreeRef, deps: ReclaimDeps 
   } catch (e) {
     return keep(`회수 중 오류: ${errText(e)}`, true);
   }
+}
+
+// ── 직렬 대기열 ──────────────────────────────────────────────────────────────────────────
+//  회수 한 건은 tmux 세션 목록 + git status·rev-list·worktree remove(큰 레포면 수십 초)다. 호출부(task-scheduler 의 finish·
+//  회수기)가 건마다 기다리지 않고 띄우면 회수기 묶음만큼 동시에 돈다 — 그래서 **한 번에 하나**만 돌린다.
+
+export type EnqueueVerdict = "queued" | "duplicate" | "full";
+
+export interface SerialQueue {
+  /**
+   * 넣는다 — 같은 key 가 대기·실행 중이면 `duplicate`, 대기+실행이 cap 이상이면 `full`(받지 않는다).
+   *  job 은 **넣은 쪽의 비동기 문맥**(테넌트 등 AsyncLocalStorage)으로 돈다. 넣는 호출은 job 을 그 자리에서 시작하지 않는다.
+   */
+  enqueue(key: string, job: () => Promise<unknown>): EnqueueVerdict;
+  /** 대기 + 실행 중인 수. */
+  size(): number;
+  /** 대기열이 다 빌 때 풀린다(시험용). */
+  idle(): Promise<void>;
+}
+
+export function createSerialQueue(o: { cap: number; onError?: (err: unknown, key: string) => void }): SerialQueue {
+  const waiting = new Map<string, () => Promise<unknown>>();
+  let running: string | null = null;
+  let draining: Promise<void> | null = null;
+  const size = (): number => waiting.size + (running === null ? 0 : 1);
+
+  async function drain(): Promise<void> {
+    await null;   // 넣은 쪽의 호출 스택에서 job 을 시작하지 않는다
+    for (let next = waiting.entries().next(); !next.done; next = waiting.entries().next()) {
+      const [key, job] = next.value;
+      waiting.delete(key);
+      running = key;
+      try { await job(); }
+      catch (err) {
+        try { o.onError?.(err, key); } catch { /* 보고가 실패해도 대기열은 계속 돈다 */ }
+      } finally { running = null; }
+    }
+    //  ⚠ 마지막 «비었음» 확인과 **같은 동기 구간**에서 내린다 — 그 사이에 끼어든 enqueue 가 깨우기를 잃지 않게.
+    draining = null;
+  }
+
+  return {
+    enqueue(key, job) {
+      if (running === key || waiting.has(key)) return "duplicate";
+      if (size() >= o.cap) return "full";
+      //  처리 루프는 처음 넣은 쪽의 문맥에서 돈다. job 을 넣는 순간의 문맥에 묶지 않으면 B 워크스페이스의 회수가 A 의
+      //   테넌트로 DB(위탁 상태·세션 desired)를 읽는다 — itemsPool 의 테넌트 바인딩이 AsyncLocalStorage 를 본다.
+      waiting.set(key, AsyncResource.bind(job));
+      if (!draining) draining = drain();
+      return "queued";
+    },
+    size,
+    idle: () => draining ?? Promise.resolve(),
+  };
 }

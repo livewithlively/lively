@@ -33,7 +33,7 @@ import { nodeHarnesses } from "./protocol.js";
 import { detectAuthFailure, cronJobIdFromMarker, cronLaneFromMarker } from "./task-failure.js";
 import { handleAuthFailure } from "./auth-failure-response.js";
 import { reapFailedTaskSessions, decideReap, type FailedTaskRow, type ReapAttempt } from "./failed-session-reaper.js";
-import { reclaimTaskWorktree, type TaskWorktreeRef } from "./task-worktree-reclaim.js";
+import { reclaimTaskWorktree, createSerialQueue, type TaskWorktreeRef, type SerialQueue, type EnqueueVerdict } from "./task-worktree-reclaim.js";
 import {
   sandboxAvailable, isContextJob, isSandboxTaskDir, schedulingRoute, spawnSandboxTask, checkSandboxTask,
   stopSandboxTask, reapSandboxTask, SandboxBusyError, SANDBOX_HARNESSES, sandboxDataRoot,
@@ -160,16 +160,45 @@ async function killTaskAnywhere(t: SessionCoords): Promise<{ gone: boolean; reac
   }
 }
 
-// 위탁 워크트리 회수 — 세션이 걷힌 **뒤에** 부른다(작업 중인 폴더를 지우지 않게). 중앙(게이트웨이 박스)만 한다:
-//  원격 노드의 워크트리는 그 PC 의 파일이라 중앙이 지울 통로가 없고, 그쪽은 `lively reclaim` 몫이다.
-//  지울지·말지는 reclaimTaskWorktree 가 정한다(미커밋·미푸시·남의 워크트리·작업 중 세션·같은 폴더의 끝나지 않은 위탁이면 남긴다).
-//  호출부는 기다리지 않는다 — 큰 레포는 지우는 데 수십 초가 걸리고, 그동안 tick 의 다른 위탁 감시가 멈추면 안 된다.
-async function reclaimCentralWorktree(t: TaskWorktreeRef & { node_id: string | null }): Promise<void> {
-  if (t.node_id !== CENTRAL_NODE_ID || !t.repo) return;
-  const r = await reclaimTaskWorktree(t);
-  if (r.removed) logger.info({ task: t.id, wt: r.worktree }, "위탁 워크트리 회수");
-  else if (r.undetermined) logger.warn({ task: t.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지 — 상태를 읽지 못했다");
-  else if (r.reason) logger.info({ task: t.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지");
+// 위탁 워크트리 회수 대기열 — **한 번에 하나**. 회수 한 건이 tmux 세션 목록 + git status·rev-list·worktree remove(큰 레포면
+//  수십 초)라, 건마다 기다리지 않고 띄우면 회수기 묶음만큼 동시에 돈다(보존 상한을 줄이면 한 tick 에 워크스페이스마다 최대 200건).
+//  호출부(finish·회수기)는 넣기만 하고 기다리지 않는다 — 그동안 tick 의 다른 위탁 감시가 멈추면 안 된다.
+//  상한을 넘치면 받지 않는다: 회수기 쪽은 다음 회차에 다시 집고(deferReapWhenQueueFull), 성공 종결 쪽은 다시 집는 자리가 없어
+//  그 워크트리가 남는다(새는 쪽 — 안전하다). 상한 200 = 보존 상한 최대치(KEEP_FAILED_MAX)를 한꺼번에 줄여도 한 워크스페이스 몫은 들어간다.
+const WORKTREE_RECLAIM_QUEUE_CAP = 200;
+const worktreeReclaimQueue = createSerialQueue({
+  cap: WORKTREE_RECLAIM_QUEUE_CAP,
+  onError: (err, key) => logger.warn({ err, task: key }, "위탁 워크트리 회수 오류(비치명)"),
+});
+
+/**
+ * 위탁 워크트리 회수를 대기열에 넣는다 — finish·회수기 공용 입구. 세션이 걷힌 **뒤에** 부른다(작업 중인 폴더를 지우지 않게).
+ *  중앙(게이트웨이 박스)만 한다: 원격 노드의 워크트리는 그 PC 의 파일이라 중앙이 지울 통로가 없고, 그쪽은 `lively reclaim` 몫이다.
+ *  지울지·말지는 reclaimTaskWorktree 가 정한다(미커밋·미푸시·남의 워크트리·작업 중 세션·같은 폴더의 끝나지 않은 위탁이면 남긴다).
+ *  반환 `skip` = 넣을 것이 없다(중앙에서 돈 레포 지정 위탁이 아니다). 같은 위탁이 이미 들어 있으면 `duplicate`.
+ */
+export function queueCentralWorktreeReclaim(
+  t: TaskWorktreeRef & { node_id: string | null }, queue: SerialQueue = worktreeReclaimQueue,
+): EnqueueVerdict | "skip" {
+  if (t.node_id !== CENTRAL_NODE_ID || !t.repo) return "skip";
+  const ref: TaskWorktreeRef = { id: t.id, repo: t.repo, task_dir: t.task_dir };   // 행 전체를 대기열에 붙들지 않는다
+  //  키는 문자열 — pg 는 BIGSERIAL 을 문자열로 준다(withAssignClaim 과 같은 이유: 숫자 키가 섞이면 중복 제거가 샌다).
+  return queue.enqueue(String(t.id), async () => {
+    const r = await reclaimTaskWorktree(ref);
+    if (r.removed) logger.info({ task: ref.id, wt: r.worktree }, "위탁 워크트리 회수");
+    else if (r.undetermined) logger.warn({ task: ref.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지 — 상태를 읽지 못했다");
+    else if (r.reason) logger.info({ task: ref.id, wt: r.worktree, reason: r.reason }, "위탁 워크트리 유지");
+  });
+}
+
+/**
+ * 회수기 판정에 워크트리 대기열 만석을 반영한다(순수). 세션을 걷었어도 «걷힘» 으로 표시하면 그 행은 다시 집히지 않고
+ *  (listUnreapedFailed 가 session_reaped 행을 뺀다) 워크트리도 영영 안 걷힌다 — 그래서 «아직» 으로 돌려 백오프 뒤 다시 집게 한다.
+ *  reached=false 라 포기 상한에도 안 걸린다(대기열이 비면 풀리는 일이다). 다시 집을 때의 kill 은 이미 없는 세션이라 멱등이다.
+ */
+export function deferReapWhenQueueFull(attempt: ReapAttempt, queued: EnqueueVerdict | "skip"): ReapAttempt {
+  if (queued !== "full" || !attempt.done) return attempt;
+  return { done: false, reached: false, why: `세션은 걷었으나 워크트리 회수 대기열이 가득 차(${WORKTREE_RECLAIM_QUEUE_CAP}건) 다음 회차로 미룬다` };
 }
 
 /**
@@ -197,12 +226,12 @@ async function reapKill(t: FailedTaskRow): Promise<ReapAttempt> {
   }
   const r = await killTaskAnywhere(t);
   //  실패 판은 사후 검시용으로 세션과 함께 워크트리도 남겨 뒀다 — 보존 상한이 세션을 걷는 이 자리가 워크트리의 끝이다.
-  if (r.gone) void reclaimCentralWorktree(t).catch((err) => logger.warn({ err, task: t.id }, "위탁 워크트리 회수 오류(비치명)"));
+  const queued = r.gone ? queueCentralWorktreeReclaim(t) : "skip";
   // 확답을 구하는 건 **kill 이 실패했을 때뿐**이다 — 성공했으면 RPC 를 한 번 더 쏠 이유가 없다.
   const gone = r.gone || !t.node_id || t.node_id === CENTRAL_NODE_ID || !t.session_id
     ? null
     : await nodeSessionGone(t.node_id, t.session_id).catch(() => null);
-  return decideReap(r.gone, gone, r.why, r.reached);
+  return deferReapWhenQueueFull(decideReap(r.gone, gone, r.why, r.reached), queued);
 }
 
 // 실패 세션 회수 tick(#1675 ①) — 보존 상한(개수·TTL) 밖의 실패 세션을 걷는다.
@@ -255,7 +284,9 @@ async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary
   } else if (ok && t.session_id && t.node_id) {
     if (t.node_id === CENTRAL_NODE_ID) {
       await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
-      void reclaimCentralWorktree(t).catch((err) => logger.warn({ err, task: t.id }, "위탁 워크트리 회수 오류(비치명)"));
+      if (queueCentralWorktreeReclaim(t) === "full") {
+        logger.warn({ task: t.id, cap: WORKTREE_RECLAIM_QUEUE_CAP }, "위탁 워크트리 회수 대기열 만석 — 이 워크트리는 남긴다(성공 종결은 다시 집는 자리가 없다)");
+      }
     } else await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* 노드 이탈 등 */ });
   }
   logger.info({ task: t.id, ok, node: t.node_id, auth: auth?.label ?? null }, "위탁 태스크 종결");

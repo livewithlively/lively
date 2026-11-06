@@ -8,9 +8,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, existsSync, rmSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  taskWorktreePath, reclaimTaskWorktree, defaultReclaimDeps,
+  taskWorktreePath, reclaimTaskWorktree, defaultReclaimDeps, createSerialQueue,
   type ReclaimDeps, type TaskWorktreeRef, type WorkspaceTaskRow,
 } from "./task-worktree-reclaim.js";
+import { withTenant, currentTenant } from "../org/tenant-context.js";
 import type { WorktreeCheck, ReclaimPlan, ReclaimResult } from "../ops/workspace-reclaim.js";
 
 const WS = "/w/delegated/task-7";
@@ -238,6 +239,127 @@ for (const [why, rows, blocker] of [
   assert.equal(r.removed, false);
   assert.equal(r.undetermined, true, "위탁 상태 조회 실패를 정상 유지로 보고했다");
   assert.ok(r.reason?.includes("boom-db"), `조회 오류가 reason 에 없다: ${r.reason}`);
+}
+
+// ── ⑧ 직렬 대기열 — 한 번에 하나 · 넣은 순서 · 같은 키 중복 제거 · 상한 · 오류 격리 · 넣은 쪽 문맥 ──
+function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => { open = resolve; });
+  return { promise, open };
+}
+const settle = async (): Promise<void> => { for (let i = 0; i < 5; i++) await new Promise<void>((r) => setImmediate(r)); };
+
+// ⑧-1 서로 다른 세 건을 한꺼번에 넣어도 동시에 도는 건 하나, 넣은 순서대로 전부 끝난다
+{
+  const q = createSerialQueue({ cap: 10 });
+  const log: string[] = [];
+  let active = 0, peak = 0;
+  const gates = { a: gate(), b: gate(), c: gate() };
+  for (const k of ["a", "b", "c"] as const) {
+    assert.equal(q.enqueue(k, async () => {
+      active++; peak = Math.max(peak, active); log.push(`start-${k}`);
+      await gates[k].promise;
+      log.push(`end-${k}`); active--;
+    }), "queued", `${k} 를 받지 않았다`);
+  }
+  await settle();
+  assert.deepEqual(log, ["start-a"], `첫 건이 끝나기 전에 다른 건이 시작됐다: ${log}`);
+  gates.c.open(); gates.b.open();   // 뒤 건의 문을 먼저 열어도 순서는 넣은 순서다
+  await settle();
+  assert.deepEqual(log, ["start-a"], `앞 건이 안 끝났는데 뒤 건이 시작됐다: ${log}`);
+  gates.a.open();
+  await q.idle();
+  assert.deepEqual(log, ["start-a", "end-a", "start-b", "end-b", "start-c", "end-c"], `넣은 순서대로 하나씩 돌지 않았다: ${log}`);
+  assert.equal(peak, 1, `동시에 ${peak}건이 돌았다 — 큰 레포 회수가 한꺼번에 터진다`);
+  assert.equal(q.size(), 0, "다 끝났는데 남은 건이 있다");
+}
+
+// ⑧-2·3·4 같은 키: 대기 중이면 duplicate · 실행 중이면 duplicate · 끝난 뒤면 다시 받는다
+{
+  const q = createSerialQueue({ cap: 10 });
+  const runs: string[] = [];
+  const hold = gate(), started = gate();
+  q.enqueue("a", async () => { runs.push("a"); started.open(); await hold.promise; });
+  assert.equal(q.enqueue("b", async () => { runs.push("b"); }), "queued");
+  assert.equal(q.enqueue("b", async () => { runs.push("b-dup"); }), "duplicate", "대기 중인 같은 위탁을 또 받았다");
+  await started.promise;
+  assert.equal(q.enqueue("a", async () => { runs.push("a-dup"); }), "duplicate", "실행 중인 같은 위탁을 또 받았다");
+  hold.open();
+  await q.idle();
+  assert.deepEqual(runs, ["a", "b"], `같은 위탁이 두 번 돌았다: ${runs}`);
+  assert.equal(q.enqueue("a", async () => { runs.push("a-again"); }), "queued", "끝난 위탁을 다시 받지 않았다");
+  await q.idle();
+  assert.deepEqual(runs, ["a", "b", "a-again"], `끝난 뒤 다시 받은 건이 돌지 않았다: ${runs}`);
+}
+
+// ⑧-5 상한 경계(cap=2): 실행 1 + 대기 0 → 받음, 실행 1 + 대기 1 → full. 비면 다시 받는다
+{
+  const q = createSerialQueue({ cap: 2 });
+  const hold = gate(), started = gate();
+  assert.equal(q.enqueue("a", async () => { started.open(); await hold.promise; }), "queued");
+  await started.promise;
+  assert.equal(q.size(), 1, "실행 중인 건이 셈에 안 들어갔다");
+  assert.equal(q.enqueue("b", async () => {}), "queued", "상한 직전(실행 1)인데 받지 않았다");
+  assert.equal(q.size(), 2, "대기 중인 건이 셈에 안 들어갔다");
+  assert.equal(q.enqueue("c", async () => {}), "full", "상한(실행 1 + 대기 1 = 2)인데 받았다");
+  assert.equal(q.size(), 2, "full 로 거절한 건이 셈에 들어갔다");
+  hold.open();
+  await q.idle();
+  assert.equal(q.enqueue("c", async () => {}), "queued", "비었는데 다시 받지 않았다");
+  await q.idle();
+}
+
+// ⑧-6 한 건이 던져도 다음 건은 돌고, 오류는 그 키와 함께 보고된다
+{
+  const errs: Array<[string, string]> = [];
+  const q = createSerialQueue({ cap: 10, onError: (e, k) => errs.push([k, (e as Error).message]) });
+  const ran: string[] = [];
+  q.enqueue("bad", async () => { throw new Error("boom-job"); });
+  q.enqueue("good", async () => { ran.push("good"); });
+  await q.idle();
+  assert.deepEqual(ran, ["good"], "앞 건의 오류가 대기열을 멈췄다");
+  assert.deepEqual(errs, [["bad", "boom-job"]], `오류가 키와 함께 보고되지 않았다: ${JSON.stringify(errs)}`);
+}
+
+// ⑧-7 처리는 처음 넣은 쪽(A 워크스페이스)의 문맥에서 시작됐어도, B 문맥에서 넣은 건은 B 문맥으로 돈다
+//  (어긋나면 B 의 회수가 A 테넌트로 위탁 상태·세션 desired 를 읽는다 — itemsPool 의 테넌트 바인딩이 AsyncLocalStorage 를 본다)
+{
+  const q = createSerialQueue({ cap: 10 });
+  const seen: Record<string, string | null> = {};
+  const hold = gate();
+  withTenant({ id: "tenant-a", slug: "a" }, () => {
+    q.enqueue("a", async () => { await hold.promise; seen.a = currentTenant()?.id ?? null; });
+  });
+  withTenant({ id: "tenant-b", slug: "b" }, () => {
+    q.enqueue("b", async () => { await null; seen.b = currentTenant()?.id ?? null; });
+  });
+  q.enqueue("none", async () => { seen.none = currentTenant()?.id ?? null; });
+  hold.open();
+  await q.idle();
+  assert.deepEqual(seen, { a: "tenant-a", b: "tenant-b", none: null }, `넣은 쪽 문맥으로 돌지 않았다: ${JSON.stringify(seen)}`);
+}
+
+// ⑧-8 넣는 호출은 job 을 그 자리에서 시작하지 않는다(호출부 — finish·회수기 — 는 넣고 곧바로 다음 일로 간다)
+{
+  const q = createSerialQueue({ cap: 10 });
+  let started = false;
+  q.enqueue("x", async () => { started = true; });
+  assert.equal(started, false, "넣는 호출 안에서 job 이 시작됐다");
+  await q.idle();
+  assert.equal(started, true, "넣은 job 이 끝내 돌지 않았다");
+}
+
+// ⑧-9 다 비운 뒤 새로 넣어도 다시 돈다(처리 루프가 끝난 뒤의 깨우기)
+{
+  const q = createSerialQueue({ cap: 10 });
+  const ran: string[] = [];
+  q.enqueue("1", async () => { ran.push("1"); });
+  await q.idle();
+  await settle();
+  q.enqueue("2", async () => { ran.push("2"); });
+  await q.idle();
+  await settle();
+  assert.deepEqual(ran, ["1", "2"], `비운 뒤 넣은 건이 돌지 않았다: ${ran}`);
 }
 
 // ── 실제 git — 가짜 의존성은 kit 판정을 통째로 대신하므로, 지키는 경우는 실제 레포로 끝에서 끝까지 본다 ──
