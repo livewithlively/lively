@@ -543,34 +543,79 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     onclick: () => opts.onMove!() },
     sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.sessMove })),
     el('span', { text: moveText })) as HTMLButtonElement : null;
+  //  #5319 3-B(원준 2026-11-06 «복제나 옮기기를 좀 하나로 묶어서 하고 그거 누르면 그 다음에 둘 중 하나를 고르게») — 둘 다 되면
+  //   [복제·옮기기 ▾] 한 단추가 서고, 누르면 두 줄 메뉴(이름 + 한 줄 설명)에서 고른다. 하나만 되면 그 단추가 메뉴 없이 그대로 선다.
+  //   이름은 안에 든 둘을 그대로 말한다 — «세션 ▾» 은 바로 옆 [⋯](이 세션에 할 수 있는 것들)와 같은 말이라 메뉴가 둘로 읽혔다(목업 v3).
+  const duoBtn = forkBtn && moveBtn ? el('button', { class: 'btn-text sc-act sc-act-duo', type: 'button', hidden: true,
+    title: '이 세션을 복제하거나 다른 프로젝트로 옮깁니다', 'aria-haspopup': 'menu', 'aria-label': '복제 · 옮기기',
+    onclick: () => openDuo() },
+    sv('svg', { viewBox: '0 0 24 24', class: 'sc-act-ic', 'aria-hidden': 'true' }, sv('path', { d: ICONS.copy })),
+    el('span', { class: 'sc-act-duo-t', text: '복제·옮기기' })) as HTMLButtonElement : null;
+  let duoClose: (() => void) | null = null;
+  let duoPanel: HTMLElement | null = null;
+  function openDuo(): void {
+    if (!duoBtn) return;
+    if (duoPanel?.isConnected) { duoClose?.(); return; }   // 다시 누르면 닫는다
+    const pick = (run: () => void) => () => { duoClose?.(); run(); };
+    const row = (icon: string, name: string, desc: string, run: () => void): HTMLElement =>
+      el('button', { class: 'sc-duo-it', type: 'button', role: 'menuitem', onclick: pick(run) },
+        sv('svg', { viewBox: '0 0 24 24', class: 'sc-duo-ic', 'aria-hidden': 'true' }, sv('path', { d: icon })),
+        el('span', { class: 'sc-duo-tx' }, el('b', { text: name }), el('span', { text: desc }))) as HTMLElement;
+    const panel = el('div', { class: 'sc-duo-pop', role: 'menu', 'aria-label': '복제 · 옮기기' },
+      row(ICONS.copy, '복제', '지금까지의 대화를 아는 세션을 하나 더', () => opts.onFork!(duoBtn)),
+      row(ICONS.sessMove, moveText, moveText === '옮기기' ? '다른 프로젝트로 옮기거나 프로젝트에서 떼요' : '이 세션을 프로젝트에 붙여요', () => opts.onMove!())) as HTMLElement;
+    duoPanel = panel;
+    duoClose = anchoredPopover(duoBtn, panel);
+    //  단추가 오른쪽 끝이라 판의 오른쪽 끝을 단추에 맞춘다(왼쪽에 맞추면 곁칸 위로 넘어간다).
+    const r = duoBtn.getBoundingClientRect();
+    panel.style.left = Math.max(8, Math.min(r.right - panel.offsetWidth, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+    (panel.querySelector('button') as HTMLButtonElement | null)?.focus();
+  }
   function paintActs(): void {
-    if (forkBtn) forkBtn.hidden = !opts.canFork?.(target);
-    if (moveBtn) moveBtn.hidden = !opts.canMove?.(target);
+    const f = !!opts.canFork?.(target), m = !!opts.canMove?.(target);
+    const duo = !!duoBtn && f && m;
+    if (duoBtn) duoBtn.hidden = !duo;
+    if (forkBtn) forkBtn.hidden = !f || duo;
+    if (moveBtn) moveBtn.hidden = !m || duo;
   }
   paintActs();
   const headR = el('div', { class: 'sc-head-r' },
     opts.onOpenFiles ? filesGoBtn : null,
     appGoBtn,
     opts.onToggleFiles ? filesBtn : null,
-    forkBtn, moveBtn,
+    duoBtn, forkBtn, moveBtn,
     opts.bigHead ? null : fixPair,   // 보이기는 setMode 가 정한다 — 늦게 붙는 터미널에도 자리가 남게 항상 DOM 에 둔다(큰 머리면 이름 아랫줄)
     moreBtn);
   //  #3784 — 머리줄 우클릭 = 이 세션의 메뉴(사이드바 행과 같은 것). 표만 단다 — 셸 배선이 읽는다.
   //  #5319 큰 머리(4차 1안, 원준 2026-11-05) — 두 줄 격자. 왼쪽 위 [● 이름 #번호 · 얼굴 · 배지], 왼쪽 아래 [연결 상태 | 화면 복구 · 노드],
   //   오른쪽 위 [자료 · 복제 · 옮기기 · ⋯], 오른쪽 아래 [모델 · 추론강도](runTop — 아래에서 맨 뒤에 붙인다). 하네스 고르기는 [⋯ ▸ 이 세션 설정] 에만.
+  //  #5319 3-B(원준 2026-11-06) — 넓은 화면(>900)의 큰 머리는 얼굴 · [자료] 를 둘째 줄 왼쪽(subLead)으로 내린다:
+  //   [얼굴 ＋] [자료] │ 연결 상태 | 화면 복구. 오른쪽 위엔 [복제·옮기기 ▾] · [⋯] 만 남는다. 폰(≤900)은 머리가 떠 있는 한 줄이라
+  //   종전 자리(얼굴 = 이름 옆, 자료 = 오른쪽 단추 군)로 되돌린다 — 폭이 문턱을 넘나들면 그때 옮긴다(placeHead).
+  const topRow = el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge);
+  const subLead = el('span', { class: 'sc-sub-lead' });
+  const wideMq = opts.bigHead && typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 901px)') : null;
+  const leadParts = (): HTMLElement[] => [opts.onOpenFiles ? filesGoBtn : null, appGoBtn].filter((n): n is HTMLButtonElement => !!n);
+  function placeHead(): void {
+    if (!wideMq) return;
+    if (wideMq.matches) subLead.append(facesEl, ...leadParts());
+    else { topRow.insertBefore(facesEl, chatBadge); headR.prepend(...leadParts()); }
+  }
+  wideMq?.addEventListener('change', placeHead);
   const head = el('div', { class: 'sc-head' + (opts.bigHead ? ' sc-head--big' : ''), 'data-ctx': 'session', 'data-sid': first.id },
     opts.bigHead
       ? el('div', { class: 'sc-head-l' },
         sideBtn,
         el('div', { class: 'sc-head-main' },
-          el('div', { class: 'sc-head-top' }, dot, titleHost, facesEl, chatBadge),
-          el('div', { class: 'sc-sub' }, fixPair, el('span', { class: 'sc-meta' }, runEl))))
+          topRow,
+          el('div', { class: 'sc-sub' }, subLead, el('span', { class: 'sc-sub-sep', 'aria-hidden': 'true' }), fixPair, el('span', { class: 'sc-meta' }, runEl))))
       : el('div', { class: 'sc-head-l' },
         //  ★ 얼굴 스택은 **세션 이름 바로 오른쪽**이다(원준 2026-09-10) — «이 세션은 무엇이고 누가 보나»가
         //   한 덩어리로 읽힌다. 종전엔 오른쪽 조작부에 섞여 있어 조작 단추처럼 보였다.
         sideBtn, dot, titleHost, facesEl, chatBadge,
         el('span', { class: 'sc-meta' }, runEl)),
     headR);
+  placeHead();
 
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });
@@ -3324,7 +3369,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     viewMode() { return viewNow(); },
     reshown() { reshown(); },
     revivedHere() { return !destroyed && revivedAt > 0 && Date.now() - revivedAt < REVIVE_TRUST_MS && !goneByFrame; },
-    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
+    destroy() { destroyed = true; if (termHold !== null) clearTimeout(termHold); endTermWarm(false); offSessInput(); livDock?.destroy(); if (pollTimer) clearTimeout(pollTimer); olderAuto.destroy(); stopWatchOutbox(); offEvents(); offViewers(); offAppDoor?.(); wideMq?.removeEventListener('change', placeHead); duoClose?.(); live?.destroy(); tasksDock?.destroy(); window.removeEventListener('message', onTermMsg); view.destroy(); },
   };
 }
 

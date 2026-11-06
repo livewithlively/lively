@@ -337,6 +337,15 @@ check(/if \(home !== 'top'\) \{\s+if \(items\.length\) kids\.push\(sepEl\(\)\);\
     && /@container schead \(max-width: 520px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big > \.sc-run-top \.sc-ax-me:not\(\[hidden\]\) \{ display: none; \} \}/.test(CHAT_CSS)
     && /@container schead \(max-width: 460px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big \.sc-faces \{ display: none; \} \}/.test(CHAT_CSS),
     "W16i 좁은 칸 — 연결 상태는 …로 줄고(잘려 나가지 않는다) · 이름은 세 글자 바닥 · 접는 차례 680 복제·옮기기 → 520 선택기 → 480 자료 → 460 얼굴");
+  const SC = read(path.join(root, "web/session-chat.ts"));
+  check(/const duo = !!duoBtn && f && m;/.test(SC) && /if \(forkBtn\) forkBtn\.hidden = !f \|\| duo;/.test(SC)
+    && /row\(ICONS\.copy, '복제', '지금까지의 대화를 아는 세션을 하나 더'/.test(SC)
+    && /if \(wideMq\.matches\) subLead\.append\(facesEl, \.\.\.leadParts\(\)\);/.test(SC)
+    && /el\('div', \{ class: 'sc-sub' \}, subLead, el\('span', \{ class: 'sc-sub-sep'/.test(SC)
+    && /\.pn-body:not\(\.cm\) \.sc-head--big \.sc-act \{[^}]*border: 1px solid transparent; border-radius: 999px;/.test(CHAT_CSS)
+    && /\.pn-body:not\(\.cm\) \.sc-head--big \.sc-act:hover \{ color: var\(--blue\); border-color: var\(--line-net\);/.test(CHAT_CSS)
+    && /@container schead \(max-width: 640px\) \{ \.pn-body:not\(\.cm\) \.sc-head--big \.sc-act-duo-t \{ display: none; \} \}/.test(CHAT_CSS),
+    "W16s 머리줄 3-B — 둘 다 되면 [복제·옮기기 ▾] 하나(메뉴에서 고른다) · 하나만 되면 그 단추 · 넓은 화면은 얼굴 · [자료] 가 둘째 줄 왼쪽 · 이전 단추 모양(쉴 땐 글자, 올리면 테두리 알약 + 파란 글자)");
   const TERM_HTML = read(path.join(root, "public/terminal.html"));
   check(/#term-host \{[^}]*padding: 6px 8px; box-sizing: content-box; \}/.test(TERM_HTML) && /\* \{ box-sizing: border-box; \}/.test(TERM_HTML),
     "W16j 터미널 #term-host 는 content-box — FitAddon 이 안쪽 여백까지 칸으로 읽어 맨 아랫줄을 최대 12px 자르던 것(확인 대기 줄이 높이를 바꾸면 드러났다)");
